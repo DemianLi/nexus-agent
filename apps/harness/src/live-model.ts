@@ -16,6 +16,8 @@ import {
 } from '@nexus/core';
 import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
 import { CHECKPOINT_DEPTH_EXCEEDED } from './checkpoint-serde.js';
+import { classifyInbandError } from './inband-error.js';
+import type { InbandFailure } from './inband-error.js';
 
 import { assertUsableApiKey, INVALID_CREDENTIAL_CODE } from './api-key.js';
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
@@ -420,7 +422,8 @@ const failureRequestIds = new WeakMap<object, string>();
  * | 其餘（404、408、410、418、422、425…） | `HTTP_<狀態>` |
  *
  * **不在這張表裡的規則**：`insufficient_quota` 與配額的名字（429 也可能是 `QUOTA`）、上下文溢出（400 也可能是
- * `CONTEXT_WINDOW_EXCEEDED`）——它們要看狀態以外的東西，由 {@link classifyTurnFailure} 排在這張表前面。
+ * `CONTEXT_WINDOW_EXCEEDED`）——它們要看狀態以外的東西，由 {@link classifyTurnFailure} 排在這張表前面。串流內信封的字樣與 `type`
+ * 另有一支梯子（{@link classifyInbandError}，#1805），它的結果翻回這張表認得的狀態。
  *
  * @param status - HTTP 狀態。
  * @returns 失敗碼。
@@ -497,46 +500,29 @@ function firstEventError(buffered: string, ended: boolean): Record<string, unkno
 }
 
 /**
- * 那個錯誤信封要當成哪個 HTTP 狀態碼。
+ * 那個錯誤信封要當成哪個 HTTP 狀態碼。梯子本體在 `inband-error.ts` 的 {@link classifyInbandError}（#1805）。
  *
- * **只認結構化的數字碼，認不出來就 500。** 500 不是保守的預設，是**照 dsh 抄的**：
- * 它的 `providerError` 在沒有 HTTP 狀態碼可看時（`status === undefined`，正是串流內
- * 錯誤的情形）落到 `code = 'SERVER'`（`packages/llm/llm-deepseek/src/transport.ts:35`，`687f282e`），
- * 而 `SERVER` 在預設可重試集裡（`llm/src/retry-policy.ts:18`）。翻成我們的載體就是
- * `500`，經 {@link failureCodeOfStatus} 記成 `SERVER`、可重試。
+ * **照 dsh 的 `providerError` 分類，再翻回一個載體狀態。** dsh 的串流內信封不帶狀態
+ * （`packages/llm/llm-deepseek/src/sse.ts:25`，`687f282e`：`providerError(event, undefined)`），只看 `error.type`、字串型的
+ * `error.code` 與訊息字樣，依序 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`，
+ * 都對不上就兜底 `SERVER`（`packages/llm/llm-deepseek/src/transport.ts:22-35`）。翻成我們的載體：`AUTH` 是 401（或信封自己的 403）、
+ * `QUOTA` 402、`RATE_LIMIT` 429、`INVALID_REQUEST` 400（或信封自己的 413）、兜底 500，經 {@link failureCodeOfStatus} 回到同一個碼；
+ * `SERVER` 在預設可重試集裡（`llm/src/retry-policy.ts:18`），其餘不在。`CONTEXT_WINDOW_EXCEEDED` 沒有對應的狀態，載體是 400，
+ * 串流中段那一格靠 `classifyTurnFailure` 的 `overflow` 旗標、監看那一格直接取梯子的碼，見 {@link classifyInbandError}。
  *
- * 只收 400–599：Response 的建構子不讓 204／304 帶 body，而一個「錯誤」本來也不該是 2xx。
+ * 只收 400–599 的數字碼：Response 的建構子不讓 204／304 帶 body，而一個「錯誤」本來也不該是 2xx。
  *
- * **與 dsh 的偏離（理由 1，#1778 補登記）**：上面「落到 500」只抄了 dsh 的**兜底**，認數字碼這一步 dsh 沒有。dsh 的
- * 串流內信封（`packages/llm/llm-deepseek/src/sse.ts:25`，`687f282e`：`providerError(event, undefined)`）完全不帶狀態，
- * 只看 `error.type`／字串 `error.code`／訊息文字分類，兜底是 `SERVER`。我們這裡讀信封裡**數字**的 `code`／`status`
- * 當成 HTTP 狀態，再交給 {@link failureCodeOfStatus}；不讀 `error.type`。理由：基座（OpenAI SDK／LangChain 的重試與分類）
- * 整條路只看 `status`，第一則事件就是信封的那種端點（#516）必須翻成帶狀態的 HTTP 回應基座才認得出來；中段的信封為了
- * 與它同一個碼（見下一段）而共用這一支。後果：中段信封帶 `{ code: 429 }` 我們記 `RATE_LIMIT`，dsh 要看 `type`；
- * 信封只有 `type: 'authentication_error'` 沒有數字碼，我們記 `SERVER`（可重試），dsh 記 `AUTH`。端點實際會送哪一種
- * 沒有量過，要不要補讀 `type` 另開卡。
+ * **與 dsh 的偏離（理由 1，#1778 補登記、#1805 縮小）**：信封裡**數字**的 `code`／`status` 我們當成 dsh 的 `status` 餵進同一條梯子，
+ * dsh 沒有這一步。理由：基座（OpenAI SDK／LangChain 的重試與分類）整條路只看 `status`，第一則事件就是信封的那種端點（#516）
+ * 必須翻成帶狀態的 HTTP 回應基座才認得出來。數字碼與 `type`／字樣同時出現時照梯子的順序（每階是「或」）：
+ * `{ code: 503, type: 'authentication_error' }` 記 `AUTH`（#1805 之前記 `SERVER`）。
  *
- * **兩種投遞方式共用這一支**（#1437）：第一則事件是信封時，這裡決定翻出來的 HTTP 回應的狀態；第一則事件之後的信封
+ * **三處共用這一支**（#1437）：第一則事件是信封時，這裡決定翻出來的 HTTP 回應的狀態；第一則事件之後的信封
  * （{@link createInbandWatcher}）與 SDK 在串流中段拋的、沒有 `status` 的 `APIError`（{@link classifyTurnFailure}）讀同一支，
- * 所以同一個信封不論在串流的哪一格出現都是同一個狀態、同一個碼。
+ * 所以同一個信封不論在串流的哪一格出現都是同一個碼；上下文超窗那一碼，第一則事件那條例外（見 {@link classifyInbandError}）。
  */
 function inbandStatus(envelope: Record<string, unknown>): number {
-  return inbandErrorStatus(envelope.error as Record<string, unknown>);
-}
-
-/** {@link inbandStatus} 的核心：直接吃信封裡的那個 `error` 物件（SDK 的 `APIError.error` 就是它）。 */
-function inbandErrorStatus(error: Record<string, unknown>): number {
-  for (const candidate of [error.code, error.status]) {
-    if (
-      typeof candidate === 'number' &&
-      Number.isInteger(candidate) &&
-      candidate >= 400 &&
-      candidate <= 599
-    ) {
-      return candidate;
-    }
-  }
-  return 500;
+  return classifyInbandError(envelope.error as Record<string, unknown>).status;
 }
 
 /**
@@ -738,12 +724,11 @@ function createInbandWatcher(
       if (event.includes('"error"')) {
         const envelope = firstEventError(event, true);
         if (envelope !== undefined) {
-          // 同一支分類器（#1437）：信封的狀態碼走 {@link failureCodeOfStatus}，`insufficient_quota` 之類走欄位。
-          // 沒有數字碼的信封記 `SERVER`（照 dsh 的 `providerError`），與第一則事件那條一致。
-          const status = inbandStatus(envelope);
+          // 同一支梯子（#1437、#1805）：與 `turn/failed` 那一格讀同一個 {@link classifyInbandError}，碼直接取它的結果。
+          const failure = classifyInbandError(envelope.error as Record<string, unknown>);
           report({
-            code: classifyInbandEnvelope(envelope, status).code,
-            status,
+            code: failure.code,
+            status: failure.status,
             ...(requestId !== undefined && { requestId }),
           });
           watching = false;
@@ -1774,20 +1759,6 @@ function isConnectionLink(link: object, modelCall: boolean): boolean {
   return modelCall && typeof code === 'string' && NETWORK_ERROR_CODES.has(code);
 }
 
-/**
- * 把一則串流內錯誤信封用同一支分類器分類（給第一則事件之後的監看用，#1437）。
- *
- * 造一個形狀同 SDK 在串流中段拋的那顆（`status` 補上、`error`／`code`／`type` 取自信封）的物件餵給
- * {@link classifyTurnFailure}，所以 `insufficient_quota`、狀態表、溢出以外的欄位規則全部共用，不在監看那裡另寫一份。
- */
-function classifyInbandEnvelope(envelope: Record<string, unknown>, status: number): LlmFailure {
-  const inner = envelope.error as Record<string, unknown>;
-  const message = typeof inner.message === 'string' ? inner.message : '串流內回報了錯誤';
-  return classifyTurnFailure(
-    Object.assign(new Error(message), { status, error: inner, code: inner.code, type: inner.type }),
-  );
-}
-
 /** 這一輪因為巢狀太深而失敗的碼（#1668），見 {@link classifyTurnFailure}「巢狀太深」。不在預設可重試集：同一份歷史重打一樣深。 */
 export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
 
@@ -1812,7 +1783,7 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * | 400、413 | `INVALID_REQUEST` | 否 |
  * | ≥ 500 | `SERVER` | 是 |
  * | 其他有狀態的（404、408、410、418、422、425…） | `HTTP_<狀態>` | 否 |
- * | 模型呼叫拋的、串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：信封的數字碼（400–599）照上面幾列；沒有數字碼 | 照上面；`SERVER` | 照上面；是 |
+ * | 模型呼叫拋的、串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：照 dsh 的梯子（`inband-error.ts`，#1805）——信封的數字碼（400–599）、`error.type`、字串 `error.code` 與訊息字樣，依 `AUTH`、`QUOTA`、`RATE_LIMIT`、`CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER` 的順序，每階是「或」；全對不上又沒有數字碼 | 照梯子的碼；全對不上 `SERVER` | 照該碼（`SERVER` 是） |
  * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}），或模型呼叫的錯誤鏈上有 {@link TIMEOUT_ERROR_CODES} 的碼 | `TIMEOUT` | 是 |
  * | 本機排隊等不到名額（`request-gate.ts` 拋的 `LocalCapacityError`，沒有送請求，#1505） | `LOCAL_CAPACITY` | 否 |
  * | 巢狀太深：任何一環的 `code` 是日誌那一關的 `session_event_depth_exceeded`（`@nexus/core` 的 `SessionEventDepthError`）或存檔點的 `checkpoint_depth_exceeded`（`checkpoint-serde.ts` 的 `CheckpointDepthError`）（#1668） | {@link NESTING_TOO_DEEP_CODE} | 否 |
@@ -1877,7 +1848,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let status: number | undefined;
   let requestId: string | undefined;
   let requestIdSearched = false;
-  let inband: number | undefined;
+  let inband: InbandFailure | undefined;
   let quota = false;
   let overflow = false;
   let timedOut = false;
@@ -1915,13 +1886,14 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
     if (code === SESSION_EVENT_DEPTH_EXCEEDED || code === CHECKPOINT_DEPTH_EXCEEDED) tooDeep = true;
     if (inband === undefined && modelCall && isInbandApiError(link)) {
       const body = (link as { error?: unknown }).error;
-      inband = inbandErrorStatus(
-        typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {},
+      inband = classifyInbandError(
+        typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : undefined,
       );
+      if (inband.overflow) overflow = true;
     }
   }
-  // 串流中段的信封沒有 HTTP 狀態：用信封自己的數字碼（沒有就 500），與第一則事件那條翻成 HTTP 回應時同一支（`inbandStatus`）。
-  if (status === undefined) status = inband;
+  // 串流中段的信封沒有 HTTP 狀態：用 dsh 梯子翻出來的載體狀態（#1805），與第一則事件那條翻成 HTTP 回應時同一支（`inbandStatus`）。
+  if (status === undefined) status = inband?.status;
 
   const code =
     quota && status !== 401 && status !== 403

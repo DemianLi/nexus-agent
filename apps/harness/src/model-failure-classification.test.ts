@@ -409,6 +409,94 @@ describe('B／C／D：串流（首事件之前與之後）', () => {
     expect(retryRows(log).map((row) => row.code)).toEqual(['SERVER', 'SERVER']);
   }, 30_000);
 
+  // #1805：照 dsh 的 `providerError`（`transport.ts:22-35`）依 `error.type`、字串 `code`、訊息字樣分類；
+  // 這幾列**都不帶數字碼**，訊息也特意避開額度／超窗字樣，所以「拿掉讀 `type`」的突變會讓 AUTH／RATE_LIMIT／INVALID_REQUEST 三列紅。
+  // `retryRows` 是監看（`createInbandWatcher`）回報的碼，`classifyTurnFailure(error)` 是 `turn/failed` 那一格，兩格要同碼；
+  // 不重打的碼（`hits` 為 1）則是監看與分類器同樣認出它不在可重試集裡才成立。
+  const typedRows: ReadonlyArray<{
+    readonly name: string;
+    readonly envelope: Record<string, unknown>;
+    readonly code: string;
+    readonly retrying: boolean;
+  }> = [
+    {
+      name: '只有 type: authentication_error',
+      envelope: { message: '金鑰不對', type: 'authentication_error' },
+      code: 'AUTH',
+      retrying: false,
+    },
+    {
+      name: '只有 type: permission_error',
+      envelope: { message: '沒有權限', type: 'permission_error' },
+      code: 'AUTH',
+      retrying: false,
+    },
+    {
+      name: '只有 type: rate_limit_error',
+      envelope: { message: '太快了', type: 'rate_limit_error' },
+      code: 'RATE_LIMIT',
+      retrying: true,
+    },
+    {
+      name: '只有 type: invalid_request_error',
+      envelope: { message: '參數錯', type: 'invalid_request_error' },
+      code: 'INVALID_REQUEST',
+      retrying: false,
+    },
+    {
+      name: '只有 type: overloaded_error',
+      envelope: { message: '忙線', type: 'overloaded_error' },
+      code: 'SERVER',
+      retrying: true,
+    },
+    {
+      name: '額度耗盡的字樣（沒有數字碼）',
+      envelope: { message: 'Your account has insufficient balance', type: 'billing' },
+      code: 'QUOTA',
+      retrying: false,
+    },
+    {
+      name: '超出上下文窗口的字樣（沒有數字碼）',
+      envelope: {
+        message: "This model's maximum context length is 8192 tokens",
+        type: 'invalid_request_error',
+      },
+      code: 'CONTEXT_WINDOW_EXCEEDED',
+      retrying: false,
+    },
+    {
+      name: '數字碼 503 又是 type: authentication_error（梯子先到的階贏）',
+      envelope: { message: '過載', type: 'authentication_error', code: 503 },
+      code: 'AUTH',
+      retrying: false,
+    },
+  ];
+
+  it.each(typedRows)(
+    '串流中段的信封：$name → $code，監看與分類器同碼',
+    async ({ envelope, code, retrying }) => {
+      cell = { kind: 'inband-mid', envelope };
+      const { log, error } = await run();
+
+      expect(classifyTurnFailure(error).code).toBe(code);
+      expect(hits).toBe(retrying ? RETRYING : 1);
+      expect(retryRows(log).map((row) => row.code)).toEqual(retrying ? [code, code] : []);
+    },
+    30_000,
+  );
+
+  it.each(typedRows)(
+    '第一則事件的信封：$name → $code（合成的 HTTP 回應帶梯子的載體狀態）',
+    async ({ envelope, code, retrying }) => {
+      cell = { kind: 'inband-first', envelope };
+      const { error } = await run();
+
+      expect(classifyTurnFailure(error).code).toBe(code);
+      expect(hits).toBe(retrying ? RETRYING : 1);
+    },
+    30_000,
+  );
+
   it('串流中段的 422 信封 → HTTP_422，不重打', async () => {
     cell = { kind: 'inband-mid', envelope: { message: '不能處理', type: 'x', code: 422 } };
     const { error } = await run();
