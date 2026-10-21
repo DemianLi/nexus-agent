@@ -1,0 +1,95 @@
+{
+  "writer": {
+    "rev": "09398dd523471a1d03852e18c7bbae6ecc672414 → today",
+    "commit": "09398dd523471a1d03852e18c7bbae6ecc672414 → fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "formatVersion": 44,
+    "released": false
+  },
+  "computedByToday": {
+    "head": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 49,
+      "eventCount": 34,
+      "types": [
+        "approval/policy",
+        "turn/start",
+        "session/title",
+        "model/start",
+        "request/system",
+        "request/header",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "compaction/summary",
+        "turn/end",
+        "session/end-seed",
+        "session/resumed",
+        "turn/start",
+        "user/message",
+        "compaction/summary",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "compaction/summary",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "today",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 45,
+      "session": "cli",
+      "computedBy": "today",
+      "summaries": [
+        {
+          "beforeCall": false
+        },
+        {
+          "beforeCall": true
+        },
+        {
+          "beforeCall": true
+        }
+      ],
+      "firstHalf": {
+        "eventCount": 17,
+        "replay": {
+          "computedBy": "09398dd523471a1d03852e18c7bbae6ecc672414",
+          "kind": "replayed",
+          "roles": [
+            "human",
+            "ai",
+            "tool",
+            "ai"
+          ]
+        }
+      }
+    }
+  ]
+}
