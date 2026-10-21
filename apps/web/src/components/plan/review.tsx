@@ -29,6 +29,7 @@ import {
   planDocument,
   planOutcomeOf,
   planReviewOf,
+  REVIEW_PLAN_ID_PREFIX,
   submittedPlanOf,
   wasAutoOpened,
 } from '@/lib/plan-review';
@@ -39,7 +40,7 @@ export const OPEN_PLAN_LABEL = '查看全文';
 
 /** 一份計劃在右側欄的身分：交出它的那次工具呼叫；審核請求沒帶的話退回那一顆中斷。 */
 export function planIdOf(review: PlanReview, interruptId: string): string {
-  return review.callId ?? `review:${interruptId}`;
+  return review.callId ?? `${REVIEW_PLAN_ID_PREFIX}${interruptId}`;
 }
 
 /**

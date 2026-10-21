@@ -55,6 +55,8 @@ import type { Publication } from '@/lib/frame-publisher';
 import { RatingsController } from '@/lib/feedback-ratings';
 import { goalPauseFailureText } from '@/lib/goal-bar';
 import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
+import { submittedPlanOf } from '@/lib/plan-review';
+import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
@@ -143,6 +145,10 @@ export interface Conversation {
    * `seq` 是日誌位置，跟軌跡投影的 `turn.seq`、歷史游標 `firstSeq` 同一套。語意見實作。
    */
   loadThrough(seq: number): Promise<void>;
+  /**
+   * 計劃分頁的旁路掃描（#1798）：從已載入那一頁的游標往前一頁一頁讀，找 `callId` 相同的那一份計劃。**不動對話窗口**。語意見實作。
+   */
+  findPlan(callId: string, signal: AbortSignal): Promise<PlanScanOutcome>;
   /**
    * 下行開好了沒。**開好之前不能送**——這條線只補送還掛著的中斷（[#728](https://github.com/DemianLi/nexus-agent/issues/728)），
    * 其他的不重播，早送的那一輪會看不到。斷了就翻回 `false`。
@@ -1023,6 +1029,53 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     [threadId, advance],
   );
 
+  /**
+   * 照 dsh `planResourceProvider`（`ui-plan/src/client/plan-resource.ts:49-73`）：`throughSeq` 固定成同一個切點，`beforeSeq` 一頁接
+   * 一頁往前，每頁自己從空的折，找 `exit_plan_mode` 而且 `callId` 相同的那一份（`submittedPlanOf`，同 dsh 的 `submittedPlan`）。
+   *
+   * - **不移動對話窗口**：不碰 `paging`／`jump`／`history`，拿到的頁也不接進條目。
+   * - **起點沿用已載入那一頁的游標**：dsh 從 follow 的 snapshot 開始，那份 snapshot 的條目就是對話窗口，計劃庫已經看過了，
+   *   不必再拿一次。頁的大小同 `loadEarlier` 不指定（dsh 的 `remote.page` 也不帶，用伺服器的預設）。
+   * - 照 dsh **不設上限**，只看 `signal`（`threadHistory` 不收 signal，所以在每次請求前後看）。某一頁沒有進展就停，同 `loadThrough`。
+   * - 換代（`historyEpoch`）回 `stale`：這一份是接在舊游標前面讀的，整份丟掉，由呼叫端從新的游標重掃。
+   */
+  const findPlan = useCallback(
+    async (callId: string, signal: AbortSignal): Promise<PlanScanOutcome> => {
+      const current = historyRef.current;
+      if (current === undefined) return { kind: 'stale' };
+      const epoch = historyEpoch.current;
+      let beforeSeq = current.firstSeq;
+      let hasMore = current.hasMore;
+      try {
+        while (hasMore) {
+          if (signal.aborted) return { kind: 'aborted' };
+          const page = await clientRef.current.threadHistory(threadId, {
+            beforeSeq,
+            throughSeq: current.throughSeq,
+          });
+          if (signal.aborted) return { kind: 'aborted' };
+          if (epoch !== historyEpoch.current) return { kind: 'stale' };
+          if (page.kind === 'rejected') return { kind: 'failed', message: page.message };
+          for (const entry of reduceAll(emptyConversation(), page.result.events).entries) {
+            if (entry.kind !== 'tool' || entry.callId !== callId) continue;
+            const plan = submittedPlanOf(entry);
+            if (plan !== undefined) return { kind: 'found', plan, firstSeq: page.result.firstSeq };
+          }
+          const before = beforeSeq;
+          beforeSeq = page.result.firstSeq;
+          hasMore = page.result.hasMore;
+          if (beforeSeq >= before) break;
+        }
+      } catch (error) {
+        if (signal.aborted) return { kind: 'aborted' };
+        if (epoch !== historyEpoch.current) return { kind: 'stale' };
+        return { kind: 'failed', message: error instanceof Error ? error.message : String(error) };
+      }
+      return { kind: 'not-found' };
+    },
+    [threadId],
+  );
+
   const seedRatings = useCallback(() => {
     void ratingsController.ensure();
   }, [ratingsController]);
@@ -1102,6 +1155,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     ...(reconnecting === undefined ? {} : { reconnecting }),
     loadEarlier,
     loadThrough,
+    findPlan,
     ...(history === undefined
       ? {}
       : {

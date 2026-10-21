@@ -3,6 +3,8 @@ import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JUMP_PAGE_MESSAGES, useConversation } from '@/hooks/use-conversation';
+import type { PlanScanOutcome } from '@/lib/plan-review';
+import { Script } from '@/test/conversation-frames';
 
 /**
  * 畫面上那段歷史碰上重連時怎麼辦（#1601）：重連時歷史被拒保留畫面（`N1345`）、「載入更早的」碰上換代整份丟掉（`N1372`）、
@@ -368,5 +370,156 @@ describe('loadThrough：往前載到指定位置為止（#1601 `N1356`）', () =
     await tick();
     await act(() => result.current.loadThrough(300));
     expect(harness.threadHistory).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('findPlan：計劃分頁的旁路掃描（#1798）', () => {
+  const PLAN = '# 改登入頁\n\n先把文案改成中文。';
+  /** 一頁裡有一輪叫了 `exit_plan_mode`（`callId` 可換）。 */
+  function planPage(callId: string, firstSeq: number, hasMore: boolean, throughSeq = 999) {
+    const script = new Script();
+    const events = [
+      script.running(),
+      script.started(callId, 'exit_plan_mode', { plan: PLAN }),
+      script.finished(callId, '同意'),
+      script.completed(),
+    ].map(({ seq: _seq, event_id: _id, ...rest }) => rest as Event);
+    return {
+      kind: 'ok',
+      result: { events, firstSeq, throughSeq, hasMore, legacy: false },
+    } as ThreadHistoryOutcome;
+  }
+  /** 掃描帶的查詢（第一頁那一次不算）。 */
+  function scanQueries(threadHistory: ReturnType<typeof scriptedClient>['threadHistory']) {
+    return threadHistory.mock.calls.slice(1).map(([, query]) => query);
+  }
+
+  it('計劃在第 3 頁：一頁接一頁往前、切點固定，回那一頁的 `firstSeq`；畫面與游標一格都不動', async () => {
+    const harness = scriptedClient([
+      page(['tail'], 500, true, 777),
+      page(['a'], 400, true, 777),
+      planPage('call_other', 300, true, 777),
+      planPage('call_plan', 200, true, 777),
+    ]);
+    const { result } = renderHook(() => useConversation({ client: harness.client, threadId: 't' }));
+    await tick();
+    const entries = result.current.state.entries;
+    const history = result.current.history;
+    let outcome: PlanScanOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.findPlan('call_plan', new AbortController().signal);
+    });
+    expect(scanQueries(harness.threadHistory)).toEqual([
+      { beforeSeq: 500, throughSeq: 777 },
+      { beforeSeq: 400, throughSeq: 777 },
+      { beforeSeq: 300, throughSeq: 777 },
+    ]);
+    expect(outcome).toMatchObject({ kind: 'found', firstSeq: 200, plan: { title: '改登入頁' } });
+    // 不移動對話窗口：條目同一份、游標沒變，之後「載入更早的」照樣從 500 往前。
+    expect(result.current.state.entries).toBe(entries);
+    expect(result.current.history).toEqual(history);
+    act(() => {
+      void result.current.loadEarlier();
+    });
+    expect(beforeSeqs(harness.threadHistory).at(-1)).toBe(500);
+  });
+
+  it('掃到 `hasMore = false` 還沒找到：回 not-found；第一頁就沒有更早的：一次都不叫', async () => {
+    const harness = scriptedClient([page(['tail'], 500, true), page(['a'], 400, false)]);
+    const { result } = renderHook(() => useConversation({ client: harness.client, threadId: 't' }));
+    await tick();
+    let outcome: PlanScanOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.findPlan('call_plan', new AbortController().signal);
+    });
+    expect(outcome).toEqual({ kind: 'not-found' });
+    expect(harness.threadHistory).toHaveBeenCalledTimes(2);
+
+    const alone = scriptedClient([page(['tail'], 500, false)]);
+    const { result: only } = renderHook(() =>
+      useConversation({ client: alone.client, threadId: 'u' }),
+    );
+    await tick();
+    await act(async () => {
+      outcome = await only.current.findPlan('call_plan', new AbortController().signal);
+    });
+    expect(outcome).toEqual({ kind: 'not-found' });
+    expect(alone.threadHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['被拒', (): ThreadHistoryOutcome => ({ kind: 'rejected', message: '這個組裝沒有落盤' })],
+    [
+      '拋錯',
+      () => Promise.reject(new Error('這個組裝沒有落盤')) as unknown as ThreadHistoryOutcome,
+    ],
+  ])('某一頁%s：回 failed 帶原因，不再往前', async (_case, answer) => {
+    const failing = deferred<ThreadHistoryOutcome>();
+    const harness = scriptedClient([page(['tail'], 500, true), failing]);
+    const { result } = renderHook(() => useConversation({ client: harness.client, threadId: 't' }));
+    await tick();
+    let outcome: PlanScanOutcome | undefined;
+    const running = result.current
+      .findPlan('call_plan', new AbortController().signal)
+      .then((value) => (outcome = value));
+    failing.resolve(answer());
+    await act(async () => {
+      await running;
+    });
+    expect(outcome).toEqual({ kind: 'failed', message: '這個組裝沒有落盤' });
+    expect(harness.threadHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it('掃到一半重連換上新的一頁：整份丟掉（stale），不再往前叫', async () => {
+    const scanned = deferred<ThreadHistoryOutcome>();
+    const harness = scriptedClient([
+      page(['tail'], 500, true),
+      scanned,
+      page(['fresh'], 600, true),
+    ]);
+    const { result } = renderHook(() => useConversation({ client: harness.client, threadId: 't' }));
+    await tick();
+    let outcome: PlanScanOutcome | undefined;
+    act(() => {
+      void result.current
+        .findPlan('call_plan', new AbortController().signal)
+        .then((value) => (outcome = value));
+    });
+    await tick();
+    harness.latest().end();
+    await tick(FIRST_RETRY_MS);
+    expect(harness.threadHistory).toHaveBeenCalledTimes(3);
+    scanned.resolve(planPage('call_plan', 400, true));
+    await tick();
+    expect(outcome).toEqual({ kind: 'stale' });
+    expect(harness.threadHistory).toHaveBeenCalledTimes(3);
+  });
+
+  it('中止：請求回來之後不再往前叫；開跑前就中止的一次都不叫', async () => {
+    const scanned = deferred<ThreadHistoryOutcome>();
+    // 第三個回應給「開跑前就中止」那一次：真的叫出去的話馬上回，不必等逾時才紅。
+    const harness = scriptedClient([page(['tail'], 500, true), scanned, page(['b'], 300, false)]);
+    const { result } = renderHook(() => useConversation({ client: harness.client, threadId: 't' }));
+    await tick();
+    const abort = new AbortController();
+    let outcome: PlanScanOutcome | undefined;
+    act(() => {
+      void result.current.findPlan('call_plan', abort.signal).then((value) => (outcome = value));
+    });
+    await tick();
+    abort.abort();
+    // 回來的這一頁就有那份計劃：請求回來時不看中止的話，會回 found。
+    scanned.resolve(planPage('call_plan', 400, true));
+    await tick();
+    expect(outcome).toEqual({ kind: 'aborted' });
+    expect(harness.threadHistory).toHaveBeenCalledTimes(2);
+
+    const early = new AbortController();
+    early.abort();
+    await act(async () => {
+      outcome = await result.current.findPlan('call_plan', early.signal);
+    });
+    expect(outcome).toEqual({ kind: 'aborted' });
+    expect(harness.threadHistory).toHaveBeenCalledTimes(2);
   });
 });

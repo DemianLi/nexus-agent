@@ -3,12 +3,15 @@
  * 同一套 markdown 渲染。照 dsh `ui-plan` 的 `PlanPreview`：唯讀、整份畫出來，區塊的名稱就是計劃標題。
  */
 
+import type { Ref } from 'react';
+
 import { MarkdownText } from '@/components/markdown-text';
 import type { PlanDocument } from '@/lib/plan-review';
 
-export function PlanPreviewTab({ plan }: { plan: PlanDocument }) {
+export function PlanPreviewTab({ plan, ref }: { plan: PlanDocument; ref?: Ref<HTMLElement> }) {
   return (
     <section
+      ref={ref}
       aria-label={plan.title}
       className="min-h-0 flex-1 overflow-y-auto px-6 py-4"
       data-testid="plan-preview"
