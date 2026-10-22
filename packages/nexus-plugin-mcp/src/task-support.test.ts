@@ -1,6 +1,6 @@
 /**
  * `execution.taskSupport: 'required'` 的工具在叫用時當場拒絕（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572) N0516），
- * 照 dsh `mcp-client/src/tools.ts:277-281`。**量在 server 那一側**：假 server 把每個收到的 `tools/call` 記到檔案（`FIXTURE_CALL_LOG`），
+ * 照 dsh `mcp-client/src/tools.ts:280`（`687f282e`）。**量在 server 那一側**：假 server 把每個收到的 `tools/call` 記到檔案（`FIXTURE_CALL_LOG`），
  * 「拒絕」的證據是檔案裡沒有那支工具，而不是 client 自己說沒送。
  *
  * CLI（plugin 自己連）與池（serve）兩條路各一組：兩邊都走 `connectGeneration`，但各自有一條紅燈，任何一邊拿掉包裝都會紅。
