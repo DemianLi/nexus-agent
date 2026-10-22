@@ -1,5 +1,5 @@
 /**
- * 圖片收下的檢查（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：檔頭認格式與寬高、四道上限、
+ * 圖片收下的檢查（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：檔頭認格式與寬高、五道上限、
  * 全有或全無。真檔（`image-fixtures.ts`）逐種對過；手組的檔頭只用來造「真檔造不出來」的邊界（超大的寬高、殘缺）。
  */
 
@@ -102,7 +102,7 @@ describe('認不出來的一律是 undefined', () => {
   });
 });
 
-describe('收下一句話的圖（四道上限、全有或全無）', () => {
+describe('收下一句話的圖（五道上限、規範 base64、全有或全無）', () => {
   const png = { mediaType: 'image/png', data: PNG_7X5, name: 'a.png' } as const;
 
   it('收得下的：位元組解開、事實從位元組認、順序與名字不變', () => {

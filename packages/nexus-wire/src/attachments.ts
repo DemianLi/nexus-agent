@@ -4,7 +4,7 @@
  * **契約**：路徑、收據的型別、送訊息帶收據的欄位、client 方法。**上傳路徑 server 端已實作**（`apps/harness` 的
  * `attachment-store.ts` 與 `wire-handler.ts`）：沒有附件儲存的組裝仍回 `not_supported`，web 據這個碼把附件列藏起來。
  * `run.start` 帶 {@link PromptAttachment} 的收下**已實作**（有附件儲存的組裝）：檔案要有這條 thread 的收據，圖要過收圖檢查與
- * 四道上限；沒有附件儲存的組裝仍回 `not_supported`。只有附件、文字是空的也收（dsh 同）。
+ * 五道上限（[#1566](https://github.com/DemianLi/nexus-agent/issues/1566) 加了單邊上限）；沒有附件儲存的組裝仍回 `not_supported`。只有附件、文字是空的也收（dsh 同）。
  *
  * 照 dsh 的 `file-upload`（`packages/client/file-upload/src/{protocol,types,http-route}.ts`，`5badb150`）：
  *

@@ -13,7 +13,8 @@
  *
  * 1. **不加 `It may be resized or re-encoded…` 那半句**（理由 1，基座表達不出來；掛在 `apps/harness/src/attachment-store.ts` 檔頭的偏離 2
  *    底下）：dsh 送的是正規化過的請求版本，那半句講的是它；我們沒有影像函式庫，送的就是原圖，寬高也就是參照記的寬高，那半句不成立。
- * 2. **沒有唯讀路徑那一支**（`normalizedAccessText`）：同 {@link offloadedImageText}，我們不替模型準備圖的唯讀副本。
+ * 2. **沒有唯讀路徑那一支**（`normalizedAccessText`；理由 1，基座表達不出來，同樣掛在偏離 2 底下）：dsh 那個路徑指的是收圖時
+ *    正規化出來的唯讀副本；我們沒有影像函式庫、不做正規化，就沒有那份副本可指，同 {@link offloadedImageText} 沒有本機路徑的那一支。
  *
  * @module
  */

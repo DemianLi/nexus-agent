@@ -2,7 +2,7 @@
  * 使用者貼的圖，收下之前的檢查（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
  *
  * `run.start` 帶的圖是內嵌 base64（`{ type: 'image', mediaType, data, name? }`，見 `@nexus/wire` 的 `PromptAttachment`）。
- * 這一支只做**驗證**：解 base64、從位元組本身認出格式與寬高、四道上限。存下來是 `AttachmentStore.saveImage`。
+ * 這一支只做**驗證**：解 base64、從位元組本身認出格式與寬高、五道上限。存下來是 `AttachmentStore.saveImage`。
  *
  * ## 五道上限（照 dsh `attachment-local/src/index.ts:34-42`，`687f282e`）
  *
@@ -237,7 +237,7 @@ function label(index: number, part: ImagePart): string {
  * 先做不解碼就知道的檢查（張數、各張與總量的位元組上限），再解碼、認格式、看像素。
  *
  * @param parts - 這一句話帶的圖，照選取順序。
- * @param limits - 四道上限，預設是出貨值。
+ * @param limits - 五道上限，預設是出貨值。
  * @returns 驗過的圖，順序不變。
  * @throws {ImageIntakeError} 任何一道不過。
  */
