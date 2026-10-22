@@ -312,6 +312,11 @@ interface LeaseContext {
   readonly pending: Set<string>;
   /** 冷讀解析快取（{@link ColdLogMemo}）。 */
   readonly coldLogs: ColdLogMemo;
+  /**
+   * 這個後端**所有同時在跑的列舉共用**的並行上限，照 dsh 的 `listLimit`（`index.ts:297-302`、`:328`）：
+   * 兩個 `list()` 同時跑，加起來也最多 `listConcurrency` 份在讀。
+   */
+  readonly listLimit: ListLimit;
 }
 
 /**
@@ -1271,30 +1276,41 @@ async function fileRevision(
 /** 列舉預設同時讀幾份，同 dsh 的 `DEFAULT_LIST_CONCURRENCY`（`index.ts:91`）。 */
 const DEFAULT_LIST_CONCURRENCY = 3;
 
+/** 把一件工作排進上限裡跑：名額滿了就照到的順序排隊。 */
+type ListLimit = <R>(task: () => Promise<R>) => Promise<R>;
+
 /**
- * 最多 `limit` 個同時跑，**全部 settle 之後**才交結果，順序同輸入。照 dsh `settleLimited`（`index.ts:225-231`）；
- * dsh 用 `p-limit`，這裡自己寫：引套件要先過 #1545 的發布年齡閘，語意相同，不算偏離。
+ * 最多 `concurrency` 件同時跑的限流器，語意同 dsh 用的 `p-limit`（`index.ts:328`）：dsh 引套件，這裡自己寫是因為
+ * 引套件要先過 #1545 的發布年齡閘。一個後端只建一個（{@link LeaseContext.listLimit}）。
  */
-async function settleLimited<T, R>(
-  limit: number,
+function createListLimit(concurrency: number): ListLimit {
+  let active = 0;
+  const queue: (() => void)[] = [];
+  const release = (): void => {
+    active -= 1;
+    queue.shift()?.();
+  };
+  return <R>(task: () => Promise<R>): Promise<R> =>
+    new Promise<R>((fulfil, reject) => {
+      const run = (): void => {
+        active += 1;
+        // 同步拋的也算失敗、照樣放掉名額。
+        void Promise.resolve().then(task).then(fulfil, reject).finally(release);
+      };
+      if (active < concurrency) run();
+      else queue.push(run);
+    });
+}
+
+/**
+ * 每一件經後端共用的上限跑，**全部 settle 之後**才交結果，順序同輸入。逐行照 dsh `settleLimited`（`index.ts:225-231`）。
+ */
+function settleLimited<T, R>(
+  limit: ListLimit,
   items: readonly T[],
   task: (item: T) => Promise<R>,
 ): Promise<PromiseSettledResult<R>[]> {
-  const results = new Array<PromiseSettledResult<R>>(items.length);
-  let next = 0;
-  const worker = async (): Promise<void> => {
-    while (next < items.length) {
-      const index = next;
-      next += 1;
-      try {
-        results[index] = { status: 'fulfilled', value: await task(items[index] as T) };
-      } catch (reason: unknown) {
-        results[index] = { status: 'rejected', reason };
-      }
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
+  return Promise.allSettled(items.map((item) => limit(() => task(item))));
 }
 
 /** settle 完的結果取值：**依輸入順序**拋第一個失敗，照 dsh `settledValues`（`index.ts:238-243`）——不是先失敗的那個。 */
@@ -1316,7 +1332,6 @@ function settledValues<R>(results: readonly PromiseSettledResult<R>[]): R[] {
 async function listStoredSessions(
   directory: string,
   context: LeaseContext,
-  concurrency: number,
   options: StoredSessionListOptions = {},
 ): Promise<StoredSessionListing> {
   const { signal } = options;
@@ -1329,10 +1344,11 @@ async function listStoredSessions(
     if (isNotFound(error)) return { sessions: [], unreadable: 0 };
     throw error;
   }
-  // 一份一份讀換成最多 `concurrency` 份同時讀（#1559 N0627），照 dsh `list`（`index.ts:532`）。每份開始前看一次 signal。
+  // 一份一份讀換成經後端共用的上限讀（#1559 N0627），照 dsh `list`（`index.ts:532`）。每份開始前看一次 signal：
+  // 被取消的列舉，排隊中的那幾份輪到時才拋（同 dsh `:297-302`）。
   const outcomes = settledValues(
     await settleLimited(
-      concurrency,
+      context.listLimit,
       names,
       async (name): Promise<StoredSessionSnapshot | 'unreadable' | undefined> => {
         signal?.throwIfAborted();
@@ -1567,6 +1583,7 @@ export interface JsonlSessionStoreOptions {
   readonly catalog?: SessionFormatCatalog;
   /**
    * 列舉時最多同時讀幾份（#1559 N0627），照 dsh 的 `listConcurrency`（`index.ts:1811`，`min(1)`）。省略即 3。
+   * 是**這個後端**的上限：同時跑的幾個 `list()` 加起來不超過它。
    * @throws `TypeError`（建構時）不是 1 以上的整數。
    */
   readonly listConcurrency?: number;
@@ -1646,6 +1663,7 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
     fs: options.fs ?? defaultStableReadFs,
     pending: new Set(),
     coldLogs: new ColdLogMemo(),
+    listLimit: createListLimit(listConcurrency),
     unavailable: (outcome) => {
       if (warned) return;
       warned = true;
@@ -1669,7 +1687,7 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
       return resumeStoredSession(directory, id, context);
     },
     list(options?: StoredSessionListOptions): Promise<StoredSessionListing> {
-      return listStoredSessions(directory, context, listConcurrency, options);
+      return listStoredSessions(directory, context, options);
     },
     open(id: string): Promise<ReadonlyStoredSession> {
       return openStoredSessionForRead(directory, id, context);

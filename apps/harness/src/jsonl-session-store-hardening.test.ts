@@ -6,7 +6,7 @@
  * - N0646 這一版讀不懂的日誌，錯誤帶 `location`（日誌的絕對路徑），訊息不帶。
  * - N0633 建構時就檢查根能不能讀。
  * - N0625 冷讀解析快取：看過立刻續接只解析一次。
- * - N0627 列舉最多同時讀 3 份，依輸入順序報第一個失敗。
+ * - N0627 同一個後端的列舉共用一個上限，加起來最多同時讀 3 份；依輸入順序報第一個失敗。
  *
  * 讀檔次數與同時在跑的數目，用 `JsonlSessionStoreOptions.fs`（只給測試換）量。
  */
@@ -313,6 +313,32 @@ describe('N0625 冷讀解析快取', () => {
     await resumed.stored.close();
   });
 
+  it('C′：stat 給不出新的 revision（時間戳粒度粗、大小剛好一樣）時，靠寫入時刪快取讀到新的那一筆', async () => {
+    const directory = await tmp();
+    // 每個路徑第一次 stat 的結果之後一直回同一份：revision 守衛看不出變化，只剩寫入時刪快取那一道。
+    const seen = new Map<string, Promise<BigIntStats>>();
+    const fs: StableReadFileSystem = {
+      stat: (path) => {
+        let stats = seen.get(path);
+        if (stats === undefined) {
+          stats = stat(path, { bigint: true }) as Promise<BigIntStats>;
+          seen.set(path, stats);
+        }
+        return stats;
+      },
+      readFile: (path) => readFile(path),
+    };
+    const store = openJsonlSessionStore({ directory, fs });
+    await seed(store, 'still');
+    await (await store.open('still', 'read')).read();
+    const resumed = await store.resume('still');
+    await resumed.stored.append([turnStart(1)]);
+    expect((await (await store.open('still', 'read')).read()).map((event) => event.seq)).toEqual([
+      0, 1,
+    ]);
+    await resumed.stored.close();
+  });
+
   it('D：撕裂的尾巴先進了快取，續接寫入前照樣截在最後一個完整行之後', async () => {
     const directory = await tmp();
     const warnings: string[] = [];
@@ -403,6 +429,32 @@ describe('N0627 列舉並行', () => {
     };
     const listing = await openJsonlSessionStore({ directory, fs }).list();
     expect(listing.sessions).toHaveLength(100);
+    expect(most).toBe(3);
+  });
+
+  it('A′：同一個後端兩個 list 同時跑，加起來同時在跑的最多 3 個', async () => {
+    const directory = await tmp();
+    await headers(directory, 30);
+    let running = 0;
+    let most = 0;
+    const tracked = async <T>(work: () => Promise<T>): Promise<T> => {
+      running += 1;
+      most = Math.max(most, running);
+      try {
+        await new Promise((done) => setTimeout(done, 1));
+        return await work();
+      } finally {
+        running -= 1;
+      }
+    };
+    const fs: StableReadFileSystem = {
+      stat: (path) => tracked(() => stat(path, { bigint: true }) as Promise<BigIntStats>),
+      readFile: (path) => tracked(() => readFile(path)),
+    };
+    const store = openJsonlSessionStore({ directory, fs });
+    const [first, second] = await Promise.all([store.list(), store.list()]);
+    expect(first.sessions).toHaveLength(30);
+    expect(second.sessions).toHaveLength(30);
     expect(most).toBe(3);
   });
 
