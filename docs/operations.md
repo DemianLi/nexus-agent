@@ -1582,7 +1582,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`models` 是模型型錄，`modelId` 必須在裡面**，不在就起不來（訊息指名那一列與那個 id）。每一筆帶 `id`、
   `contextWindow`（窗口）、`maxTokens`（這顆每一次請求送出去的輸出上限）、選配的 `input`（收哪些種類，
   `[text]` 或 `[text, image]`；這是對端點的宣告，不是檢查——宣告收圖而端點不收，請求當下才被供應商拒絕）、
-  `reasoningEfforts`（`off:` 是不推理）、`imageBudget`（一次請求收得下的圖，見「圖片額度與 `image/offload`」，沒寫不檢查）與 `compat`（關推理的 chat template 參數）。**寫 `models` 是整份取代**，
+  `reasoningEfforts`（`off:` 是不推理；寫成 `{}`、`off` 以外的等級沒給線上的寫法、或值是空字串，起動就拒絕並指名是哪一顆的哪一級，#1561）、`imageBudget`（一次請求收得下的圖，見「圖片額度與 `image/offload`」，沒寫不檢查）與 `compat`（關推理的 chat template 參數）。**寫 `models` 是整份取代**，
   不是逐筆合併：想只改預設那一筆的 `maxTokens`，要把整筆連 `reasoningEfforts` 與 `compat` 一起重述。
   出貨型錄有三筆：預設那顆；`meta/llama-3.2-11b-vision-instruct`（宣告純文字：#732 實跑量到它在**請求帶 `tools`** 時，圖在**整段對話的第一則使用者訊息**就 400「The number of image tokens (0) must be the same as the number of images (1)」（前面已有一輪往返再帶圖就正常），產品每一輪都帶 `tools`，而型錄表達不出「第一則不收」，所以寧可收件時就拒圖，也不讓最常見的路——新對話第一句帶圖——跑到一半撞 400；代價是已有歷史時它其實看得到圖卻被擋）；與看圖模型 `meta/llama-3.2-90b-vision-instruct`（帶 `tools` 也收得了圖，單次約 68–76 秒，**每次請求最多一張圖**（`imageBudget.maxImages: 1`，#1270 量到 2 張起回 400），**窗口只有 32,768**，2026-10-09 真端點量過：`max_tokens` 131072 回 400「maximum context length is 32768」）。`maxTokens` 取 4096 是選擇不是上限。**新增一筆之前先確認它吃得下自己的 `maxTokens`**——出貨那顆模型是拿「吃不吃得下
   16384」當淘汰門檻選出來的，吃不下的模型會**每一次**呼叫都失敗，沒有任何東西會擋你。
