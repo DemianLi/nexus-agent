@@ -667,6 +667,28 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
     }
   });
 
+  /**
+   * 評分服務讀到這種事件會拋 `FeedbackLogCorruptionError`（#1606）；離線掃描是另一種讀方，照舊讀、照舊數（卡上驗收 I）。
+   * 壞的那一顆跟 `feedback-wire.test.ts` 用的同一種：分數不是兩種之一、改的時間早於建的時間。
+   */
+  it('評分事件壞了（服務會拒的那種）：照讀不拋，也不算成點踩（#1606）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-bad-rating-'));
+    await writeSession(root, 'rated', [
+      turn('message'),
+      ['assistant/message', { message: { type: 'ai', data: { content: '答。', id: 'm1' } } }],
+      ['turn/end', {}],
+      [
+        'feedback/message-put',
+        { item: { messageId: 'm1', rating: 'meh', version: 'v', createdAt: 5, updatedAt: 1 } },
+      ],
+    ]);
+
+    const { logs, unreadable } = await readSessionLogs([root]);
+    expect(unreadable).toEqual([]);
+    expect(logs.map((log) => log.header.id)).toEqual(['rated']);
+    expect(scanSessionLog(logs[0]!)).toMatchObject({ negativeTurns: 0, unknownEvents: 0 });
+  });
+
   it('根目錄不存在就拋——打錯路徑不是一份空報表', async () => {
     await expect(readSessionLogs([join(tmpdir(), 'nexus-scan-不存在')])).rejects.toThrow();
   });

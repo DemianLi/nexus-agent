@@ -15,6 +15,27 @@
  * - **回覆拿掉「Anonymous user」那一行**：我們沒有匿名使用者 id（遙測的偏離二），印一個編出來的
  *   id 就是說假話。
  * - **沒有 dsh 的非同步寫入權（`enqueue`）**：我們的日誌是同步寫的，見 `FeedbackService`。
+ *
+ * ## 落盤確認與重放驗證（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)，照 dsh `687f282e`）
+ *
+ * - **評分寫進去、落了盤才回答**：put／delete 在同步段裡讀、比、append，之後 `await` 宿主提供的 `sessionDurability`
+ *   （`@nexus/session`）。它排空、讀回、比對，失敗就拋，呼叫端拿到的是錯誤，不是假的成功（dsh `:238-258`）。內容一樣的
+ *   put 與收回不存在的 delete 不記事件，但照樣確認一次（dsh `:183`、`:214`）。
+ * - **評語（`record`、`/feedback`）不等落盤**，照 dsh `command-feedback/src/index.ts:4-7`：「eager but unflushed」，回答的是記進日誌了，
+ *   不是到了磁碟。
+ * - **沒掛落盤時評分不在、評語照常**（#1606 題 2 (a)）：dsh 的 `messageFeedback` inject `sessionPersistence`（`:119`），沒掛落盤它就不在；
+ *   `sessionFeedback` 與 `/feedback` 只要 `sessions`／`commands`，照常。我們把兩個服務併成一個（`@nexus/feedback` 檔頭的偏離），所以
+ *   `sessionDurability` 是**選配**、**每次呼叫當下才讀**：沒有它時 list／put／delete 拋 `FeedbackDurabilityUnavailableError`（wire 回
+ *   `not_supported`），record 與 `/feedback` 照常。經這一列的 `ctx` 用 `optionalService` 讀（不 `inject`，dsh `packages/AGENTS.md:6`）；
+ *   列卸載之後宿主手上的快照照樣讀得到（見下面「形狀」，測試「這一列卸載之後」釘住）。
+ * - **讀到的評分事件先驗再折**（dsh `:62-73`、`:96-115`）：結構不對就拋 `FeedbackLogCorruptionError`，不折進畫面。
+ *   schema 不含 `sessionId`（「沒有 sessionId」的偏離見 `@nexus/core` 的 `feedback.ts`）；格式 10 以前以輪記的那一種
+ *   （`turn` 取代 `messageId`）照同一套規則驗。
+ * - **dsh 有、這裡不做的三條**（nexus 沒有對應的失敗，不算偏離）：
+ *   - 逐會話的 promise 鏈（dsh `:300-310`）：讀、比版本、append 都在同一個同步段，await 排在 append 之後，兩個並發的 put
+ *     交錯不了。`feedback-durability.test.ts` 的驗收 D 釘住這個前提。
+ *   - 拆卸閘（dsh `:142-147`）：宿主拿的是服務快照，列卸載之後照樣能叫（`@nexus/feedback` 檔頭的「宿主取的是快照」），沒有要關的把手。
+ *   - 冷會話那一支（dsh `:261-283`）：wire 一律在活的 thread 上操作。
  * - **沒有 `session-not-found`**：規則拿到的一定是一份活的日誌；「這條 thread 不存在」由 wire 那一
  *   側回。
  * - **兩顆套件併成一顆、兩個服務併成一個**（#1456 Q3 (a)，類別：遷移卡不改行為（暫時））：dsh 的
@@ -44,7 +65,13 @@ import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
 
 import { commandsToken } from '@nexus/commands';
-import { currentMessageFeedback, feedbackToken } from '@nexus/feedback';
+import {
+  currentMessageFeedback,
+  FEEDBACK_CATEGORIES,
+  FeedbackDurabilityUnavailableError,
+  FeedbackLogCorruptionError,
+  feedbackToken,
+} from '@nexus/feedback';
 import type {
   FeedbackRecord,
   FeedbackService,
@@ -56,9 +83,16 @@ import type {
   MessageFeedbackPutResult,
 } from '@nexus/feedback';
 import type { Context } from '@nexus/cordis';
-import { ContractService, defineManifest, injectOf, need, service } from '@nexus/sdk';
-import { loggedMessageId } from '@nexus/session';
-import type { SessionEvent, SessionLog } from '@nexus/session';
+import {
+  ContractService,
+  defineManifest,
+  injectOf,
+  need,
+  optionalService,
+  service,
+} from '@nexus/sdk';
+import { loggedMessageId, sessionDurabilityToken } from '@nexus/session';
+import type { SessionDurabilityService, SessionEvent, SessionLog } from '@nexus/session';
 import { z } from 'zod';
 
 /** `/feedback` 的命令名。 */
@@ -87,16 +121,73 @@ export type FeedbackConfig = z.infer<typeof feedbackConfigSchema>;
  */
 export type FeedbackPluginOptions = z.input<typeof feedbackConfigSchema>;
 
+/** 時間戳：非負的安全整數（dsh `:62`）。 */
+const timestamp = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+
+/** 一筆評分的共同欄位，照 dsh `:63-71` 的 `itemSchema`，目標那一格另外接。 */
+const itemFields = {
+  rating: z.enum(['positive', 'negative']),
+  note: z
+    .string()
+    .refine((note) => note.trim().length > 0)
+    .optional(),
+  category: z.enum(FEEDBACK_CATEGORIES).optional(),
+  version: z.uuid(),
+  createdAt: timestamp,
+  updatedAt: timestamp,
+};
+
+/** 評分事件的酬載。目標是一則回覆（dsh 的形狀），或格式 10 以前的一輪。 */
+const putSchema = z.object({
+  item: z
+    .union([
+      z.object({ messageId: z.string().min(1), ...itemFields }),
+      z.object({ turn: z.number().int().nonnegative(), ...itemFields }),
+    ])
+    .refine((item) => item.updatedAt >= item.createdAt),
+});
+
+/** 收回事件的酬載，照 dsh `:73`；舊日誌指名的是輪。 */
+const deleteSchema = z.union([
+  z.object({ messageId: z.string().min(1) }),
+  z.object({ turn: z.number().int().nonnegative() }),
+]);
+
 /**
- * 從日誌折出每一則回覆目前的評分，同 dsh 的 `currentItems`。舊日誌裡以輪記、對不到回覆的那幾筆不在裡面：
- * 它們沒有訊息 id 可以指名，這裡的操作也就碰不到它們。
+ * 先驗日誌裡每一顆評分事件的結構，照 dsh `currentItems` 的逐顆 `parse`（`:96-115`）。
+ *
+ * @throws {FeedbackLogCorruptionError} 任何一顆不合，訊息指名哪一顆。
+ */
+function assertFeedbackEvents(events: readonly SessionEvent[]): void {
+  for (const event of events) {
+    const schema =
+      event.type === 'feedback/message-put'
+        ? putSchema
+        : event.type === 'feedback/message-delete'
+          ? deleteSchema
+          : undefined;
+    if (schema === undefined) continue;
+    const parsed = schema.safeParse(event.data);
+    if (!parsed.success) {
+      throw new FeedbackLogCorruptionError(
+        `第 ${String(event.seq)} 顆 ${event.type} 的內容不合規則：${parsed.error.message}`,
+      );
+    }
+  }
+}
+
+/**
+ * 從日誌折出每一則回覆目前的評分，同 dsh 的 `currentItems`：**先驗再折**，壞的就拋。舊日誌裡以輪記、對不到回覆的那幾筆
+ * 不在裡面：它們沒有訊息 id 可以指名，這裡的操作也就碰不到它們。
  *
  * @param events - 一份日誌的全部事件。
  * @returns 訊息 id → 目前那一筆，依第一次評的先後。
+ * @throws {FeedbackLogCorruptionError} 有一顆評分事件結構不對。
  */
 export function currentFeedbackItems(
   events: readonly SessionEvent[],
 ): ReadonlyMap<string, MessageFeedbackItem> {
+  assertFeedbackEvents(events);
   const items = new Map<string, MessageFeedbackItem>();
   for (const { item } of currentMessageFeedback(events)) {
     if ('messageId' in item) items.set(item.messageId, item);
@@ -122,17 +213,33 @@ function isAssistantMessage(events: readonly SessionEvent[], messageId: string):
  * 建評分與評語的規則。
  *
  * @param options - 備註上限。
+ * @param durability - 每次呼叫當下取落盤確認；`undefined` 就是這個組裝沒掛落盤，評分那三個方法拋
+ *   `FeedbackDurabilityUnavailableError`。見檔頭。
  * @returns 提供成 `messageFeedback` 服務的那個。
  * @throws `maxNoteBytes` 不是正的安全整數。
  */
-export function createFeedbackService(options: FeedbackConfig): FeedbackService {
+export function createFeedbackService(
+  options: FeedbackConfig,
+  durability: () => SessionDurabilityService | undefined,
+): FeedbackService {
   const { maxNoteBytes } = options;
   if (!Number.isSafeInteger(maxNoteBytes) || maxNoteBytes < 1) {
     throw new TypeError(`回饋的 maxNoteBytes 要是正的安全整數，拿到的是 ${String(maxNoteBytes)}。`);
   }
+  /** 評分那三個方法的第一步：沒掛落盤，同 dsh 的 `messageFeedback` 根本不在。 */
+  const durable = (): SessionDurabilityService => {
+    const found = durability();
+    if (found === undefined) throw new FeedbackDurabilityUnavailableError();
+    return found;
+  };
 
   return {
-    put(log: SessionLog, request: MessageFeedbackPutRequest): MessageFeedbackPutResult {
+    // 讀、比、append 都在第一個 await 之前（同步段），理由見檔頭「dsh 有、這裡不做的三條」。
+    async put(
+      log: SessionLog,
+      request: MessageFeedbackPutRequest,
+    ): Promise<MessageFeedbackPutResult> {
+      const checkpoint = durable();
       const { note } = request;
       if (note !== undefined) {
         if (note.trim().length === 0) return { ok: false, error: { code: 'note-blank' } };
@@ -158,6 +265,8 @@ export function createFeedbackService(options: FeedbackConfig): FeedbackService 
         existing.note === note &&
         existing.category === request.category
       ) {
+        // 不記事件，但照樣確認一次（dsh `:183`）。
+        await checkpoint.checkpoint(log);
         return { ok: true, value: existing };
       }
       const now = Date.now();
@@ -171,10 +280,15 @@ export function createFeedbackService(options: FeedbackConfig): FeedbackService 
         updatedAt: existing === undefined ? now : Math.max(now, existing.updatedAt),
       };
       log.append('feedback/message-put', { item });
+      await checkpoint.checkpoint(log);
       return { ok: true, value: item };
     },
 
-    delete(log: SessionLog, request: MessageFeedbackDeleteRequest): MessageFeedbackDeleteResult {
+    async delete(
+      log: SessionLog,
+      request: MessageFeedbackDeleteRequest,
+    ): Promise<MessageFeedbackDeleteResult> {
+      const checkpoint = durable();
       const existing = currentFeedbackItems(log.events).get(request.messageId);
       if (existing !== undefined) {
         if (request.ifVersion !== existing.version) {
@@ -182,20 +296,25 @@ export function createFeedbackService(options: FeedbackConfig): FeedbackService 
         }
         log.append('feedback/message-delete', { messageId: request.messageId });
       }
+      // 收回不存在的不記事件，但照樣確認一次（dsh `:214`）。
+      await checkpoint.checkpoint(log);
       return { ok: true, value: { absent: true } };
     },
 
-    list(log: SessionLog): MessageFeedbackListResult {
+    // async：驗不過的拋錯走 rejection，不在呼叫當下同步拋。
+    async list(log: SessionLog): Promise<MessageFeedbackListResult> {
+      durable();
       return { ok: true, value: { items: [...currentFeedbackItems(log.events).values()] } };
     },
 
-    record(log: SessionLog, entry: FeedbackRecord) {
+    // 不等落盤，照 dsh（見檔頭）。
+    async record(log: SessionLog, entry: FeedbackRecord) {
       const text = entry.text?.trim() ?? '';
       log.append('feedback/record', {
         ...(text.length === 0 ? {} : { text }),
         ...(entry.category === undefined ? {} : { category: entry.category }),
       });
-      return { ok: true, value: { recorded: true } };
+      return { ok: true as const, value: { recorded: true as const } };
     },
   };
 }
@@ -203,7 +322,10 @@ export function createFeedbackService(options: FeedbackConfig): FeedbackService 
 /** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`，錯誤訊息、log 與相容層清單用）。 */
 export const name = 'feedback';
 
-/** 要的服務：`commands`，契約 `^1.0.0`。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。 */
+/**
+ * 要的服務：`commands`，契約 `^1.0.0`。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。
+ * `sessionDurability` 是選配，不放進 `inject`（dsh `packages/AGENTS.md:6`），每次呼叫當下才讀，見檔頭。
+ */
 export const inject = injectOf(need(commandsToken, '^1.0.0'));
 
 /** 設定的 schema，與 {@link manifest}.config 是同一個物件（一致性套件比對）。 */
@@ -214,7 +336,10 @@ export const manifest = defineManifest({
   version: '0.1.0',
   owner: '平台團隊',
   provides: [{ token: feedbackToken.name, version: feedbackToken.version }],
-  consumes: [{ token: commandsToken.name, range: '^1.0.0' }],
+  consumes: [
+    { token: commandsToken.name, range: '^1.0.0' },
+    { token: sessionDurabilityToken.name, range: '^1.0.0', optional: true },
+  ],
   config: feedbackConfigSchema,
   // 換程式碼要重啟行程；設定一改，下一條 thread 看到新的上限，開著的不動（#1405、決議 §3-2 第 6 條）。
   reload: { code: 'restart', config: 'next-thread' },
@@ -259,7 +384,8 @@ class MessageFeedbackService extends ContractService<FeedbackService> implements
  * @param config - 驗過的設定。
  */
 export function apply(ctx: Context, config: FeedbackConfig): void {
-  const rules = createFeedbackService(config);
+  // 落盤確認每次呼叫當下才讀（見檔頭）。
+  const rules = createFeedbackService(config, () => optionalService(ctx, sessionDurabilityToken));
   // 用 `new` 不用 `ctx.plugin(Class)`：不開子 fiber，歸屬就是這一列。建構子 `provide` 是 effect，列卸載時服務跟著撤。
   new MessageFeedbackService(ctx, rules);
   service(ctx, commandsToken).register({
@@ -268,9 +394,9 @@ export function apply(ctx: Context, config: FeedbackConfig): void {
     input: { hint: '<內容>' },
     // 那段文字由 `feedback/record` 帶著，`command/run` 不再記一次（照 dsh）。
     recordInput: false,
-    handler: ({ rawInput, sessionLog }) => {
+    handler: async ({ rawInput, sessionLog }) => {
       if (rawInput.trim().length === 0) return { kind: 'error', text: FEEDBACK_USAGE };
-      rules.record(sessionLog, { text: rawInput });
+      await rules.record(sessionLog, { text: rawInput });
       return { kind: 'success', text: `已記下對這個會話的回饋（${sessionLog.sessionId}）。` };
     },
   });

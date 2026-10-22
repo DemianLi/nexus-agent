@@ -1035,6 +1035,8 @@ async function runLaunched(
           warn: sessionLogWarn,
         })
       : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn });
+  // 落盤確認（#1606）讀回比對用的 store：樹上 `session-durability` 那一列在讀清單時依清單掛上，做法在被呼叫當下才讀它。
+  if (sessionStore !== undefined) root.tree.bindDurableStore(sessionStore);
   // 過大工具結果的暫存（#734）：根與保留天數從清單解一次；**啟動時清一次**超過保留期的會話目錄（別人改得動的根
   // 不清）。清理失敗只講一聲，不擋啟動。
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);

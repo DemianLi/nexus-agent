@@ -57,7 +57,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { StructuredTool, StructuredToolInterface } from '@langchain/core/tools';
 import type { PreStepEntry } from '@nexus/agent-loop/provider';
-import { CHANNEL_SERVICE, NEXUS_CORE_VERSION, resolveEntriesPerEntry } from '@nexus/core';
+import {
+  CHANNEL_SERVICE,
+  NEXUS_CORE_VERSION,
+  resolveEntriesPerEntry,
+  SESSION_PERSISTENCE_PLUGIN_NAME,
+} from '@nexus/core';
 import type {
   CommandDefinition,
   NexusPlugin,
@@ -1680,8 +1685,18 @@ async function loadPluginConfigOnce(
       provides: bridgeOf(entry.plugin)?.provides ?? [],
     });
   });
+  // 這一份清單掛不掛落盤（#1606）：樹在推給 Include 之前據它掛上或拿掉 `session-durability`。判準同 `settings/startup.ts` 的
+  // `startupEntryMounted`（名字對、沒停用），另加設定驗不過的也算沒掛（相容層會把它標成停用）。
+  const durable = loaded.some(
+    ({ entry }, index) =>
+      entry.plugin.name === SESSION_PERSISTENCE_PLUGIN_NAME &&
+      resolutions[index]?.disabled === false &&
+      resolutions[index]?.configError === undefined,
+  );
   const snapshot: TreeSnapshot | undefined =
-    tree === undefined ? undefined : await tree.sync(treeInputOf(source, ids, bridged));
+    tree === undefined
+      ? undefined
+      : await tree.sync({ ...treeInputOf(source, ids, bridged), durable });
   const ignoredConfig: IgnoredConfig[] = [];
   const rows = new Map<PluginEntry, { readonly id: string; readonly module: string }>();
   const plugins = loaded.map(({ row, entry }, index): PluginEntry => {

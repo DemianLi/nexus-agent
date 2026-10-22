@@ -709,6 +709,8 @@ export type {
 export {
   currentMessageFeedback,
   FEEDBACK_CATEGORIES,
+  FeedbackDurabilityUnavailableError,
+  FeedbackLogCorruptionError,
   MESSAGE_FEEDBACK_SERVICE,
 } from './feedback.js';
 export { loggedMessageId } from './logged-message.js';
@@ -816,6 +818,7 @@ export type {
   SessionPersistenceConfig,
   SessionPersistenceCoordinatorOptions,
 } from './session-persistence.js';
+export { checkpointSession } from './session-durability.js';
 export {
   attachSessionPersistence,
   DEFAULT_PERSISTENCE_WINDOW_MS,

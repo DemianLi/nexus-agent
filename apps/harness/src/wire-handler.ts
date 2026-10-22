@@ -126,7 +126,13 @@ import type {
   SessionLog,
   SessionRegistry,
 } from '@nexus/core';
-import { errorChain, FEEDBACK_CATEGORIES, ProjectionDetailError } from '@nexus/core';
+import {
+  errorChain,
+  FEEDBACK_CATEGORIES,
+  FeedbackDurabilityUnavailableError,
+  FeedbackLogCorruptionError,
+  ProjectionDetailError,
+} from '@nexus/core';
 import type { GoalId } from '@nexus/goal';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
@@ -1115,12 +1121,31 @@ function goalResponse(
   return successResponse(id, { ok: true, value: { goal: stateOf(after) } });
 }
 
-function feedbackResponse(
+/**
+ * 評分服務拋出來的錯怎麼回（#1606）。三種：
+ *
+ * - 沒掛落盤（`FeedbackDurabilityUnavailableError`）：`not_supported`，訊息原樣（#1573 Q2 (a) 拍板那句）。
+ * - 日誌裡的評分事件壞了（`FeedbackLogCorruptionError`）：`unknown_error`，「評分紀錄壞了：…」。
+ * - 其餘（落盤確認被拒、寫不進去）：寫入那兩個方法回 `unknown_error`，「評分沒存成：…」，同改名那一條的寫法；讀與評語不在這一類，原樣往外拋。
+ */
+function feedbackFailure(id: number, error: unknown, writing: boolean): unknown {
+  if (error instanceof FeedbackDurabilityUnavailableError) {
+    return errorResponse(id, 'not_supported', error.message);
+  }
+  if (error instanceof FeedbackLogCorruptionError) {
+    return errorResponse(id, 'unknown_error', `評分紀錄壞了：${error.message}`);
+  }
+  if (!writing) throw error;
+  const reason = error instanceof Error ? error.message : String(error);
+  return errorResponse(id, 'unknown_error', `評分沒存成：${reason}`);
+}
+
+async function feedbackResponse(
   thread: ThreadState | undefined,
   id: number,
   method: FeedbackMethod,
   body: unknown,
-): unknown {
+): Promise<unknown> {
   const service = thread?.feedback;
   if (thread !== undefined && service === undefined) {
     return errorResponse(id, 'not_supported', '這個組裝沒有掛回饋（@nexus/plugin-feedback）');
@@ -1142,7 +1167,7 @@ function feedbackResponse(
     if (thread === undefined || service === undefined) {
       return errorResponse(id, 'invalid_argument', '這條 thread 還沒開過，沒有會話可以記回饋');
     }
-    const result = service.record(thread.pump.sessionLog, {
+    const result = await service.record(thread.pump.sessionLog, {
       ...(typeof p.text === 'string' && { text: p.text }),
       ...(isCategory(p.category) && { category: p.category }),
     });
@@ -1154,7 +1179,11 @@ function feedbackResponse(
     if (thread === undefined || service === undefined) {
       return successResponse(id, { ok: true, value: { items: [] } });
     }
-    return successResponse(id, { ...service.list(thread.pump.sessionLog) });
+    try {
+      return successResponse(id, { ...(await service.list(thread.pump.sessionLog)) });
+    } catch (error) {
+      return feedbackFailure(id, error, false);
+    }
   }
 
   if (typeof p.messageId !== 'string' || p.messageId.length === 0) {
@@ -1168,9 +1197,13 @@ function feedbackResponse(
       return errorResponse(id, 'invalid_argument', 'feedback.delete 缺 ifVersion');
     }
     if (thread === undefined || service === undefined) return successResponse(id, notFound);
-    return successResponse(id, {
-      ...service.delete(thread.pump.sessionLog, { messageId, ifVersion: p.ifVersion }),
-    });
+    try {
+      return successResponse(id, {
+        ...(await service.delete(thread.pump.sessionLog, { messageId, ifVersion: p.ifVersion })),
+      });
+    } catch (error) {
+      return feedbackFailure(id, error, true);
+    }
   }
 
   if (
@@ -1186,14 +1219,18 @@ function feedbackResponse(
     );
   }
   if (thread === undefined || service === undefined) return successResponse(id, notFound);
-  const result = service.put(thread.pump.sessionLog, {
-    messageId,
-    rating: p.rating,
-    ...(typeof p.note === 'string' && { note: p.note }),
-    ...(isCategory(p.category) && { category: p.category }),
-    ifVersion: p.ifVersion,
-  });
-  return successResponse(id, { ...result });
+  try {
+    const result = await service.put(thread.pump.sessionLog, {
+      messageId,
+      rating: p.rating,
+      ...(typeof p.note === 'string' && { note: p.note }),
+      ...(isCategory(p.category) && { category: p.category }),
+      ifVersion: p.ifVersion,
+    });
+    return successResponse(id, { ...result });
+  } catch (error) {
+    return feedbackFailure(id, error, true);
+  }
 }
 
 /**
@@ -2112,7 +2149,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // **也不看 `slashInFlight` 與「還在跑」**：跑著、停在核准點都能評（#267 的 Q10）。
       const existing = threads.get(threadId);
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
-      return json(feedbackResponse(thread, envelope.id, method, body));
+      return json(await feedbackResponse(thread, envelope.id, method, body));
     }
     if (method === 'thread.rename') {
       // 改名（#633 第二張）：照 dsh 要這條會話是活的，所以**經 `threadFor`**（先確認它存在，免得為一個不存在的 id 建 agent）。
