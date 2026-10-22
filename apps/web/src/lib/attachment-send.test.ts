@@ -207,6 +207,56 @@ describe('prepareAttachments', () => {
       expect(readSize).not.toHaveBeenCalled();
     });
   });
+
+  describe('單張圖的單邊上限（#1861，同伺服器收圖時的 8192）', () => {
+    it('寬或高 8193：說是哪一張、尺寸與 8192，什麼都不上傳', async () => {
+      for (const size of [
+        { width: 8193, height: 1 },
+        { width: 1, height: 8193 },
+      ]) {
+        const { uploadFile } = uploader();
+        const outcome = await prepareAttachments(
+          { uploadFile },
+          't',
+          [item('doc.pdf', 'application/pdf'), item('long.png', 'image/png')],
+          async () => size,
+        );
+        expect(outcome.kind).toBe('failed');
+        const message = outcome.kind === 'failed' ? outcome.message : '';
+        expect(message).toContain('long.png');
+        expect(message).toContain(`${size.width}×${size.height}`);
+        expect(message).toContain('單邊超過 8192 像素');
+        expect(uploadFile).not.toHaveBeenCalled();
+      }
+    });
+
+    it('寬或高剛好 8192 收', async () => {
+      for (const size of [
+        { width: 8192, height: 1 },
+        { width: 1, height: 8192 },
+      ]) {
+        const outcome = await prepareAttachments(
+          { uploadFile: uploader().uploadFile },
+          't',
+          [item('a.png', 'image/png')],
+          async () => size,
+        );
+        expect(outcome.kind).toBe('ok');
+      }
+    });
+
+    it('總量與單邊都超過：先比總量，講的是百萬像素那一句（同伺服器的順序）', async () => {
+      const outcome = await prepareAttachments(
+        { uploadFile: uploader().uploadFile },
+        't',
+        [item('huge.png', 'image/png')],
+        async () => ({ width: 8200, height: 7900 }),
+      );
+      const message = outcome.kind === 'failed' ? outcome.message : '';
+      expect(message).toContain('百萬像素');
+      expect(message).not.toContain('單邊');
+    });
+  });
 });
 
 describe('attachmentRejectionText', () => {

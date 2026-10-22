@@ -7,7 +7,12 @@
  * @module
  */
 
-import { IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE } from '@nexus/wire';
+import {
+  IMAGE_MEDIA_TYPES,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES_PER_MESSAGE,
+  MAX_MESSAGE_IMAGE_BYTES,
+} from '@nexus/wire';
 import type { ImageMediaType } from '@nexus/wire';
 
 import type { UploadStates } from '@/lib/upload-state';
@@ -57,16 +62,6 @@ export function attachmentKind(file: Pick<File, 'type'>): DraftAttachment['kind'
   return imageMediaType(file) === undefined ? 'file' : 'image';
 }
 
-/**
- * 一句話所有內嵌圖片的位元組總和上限，同 dsh 的 `DEFAULT_MAX_MESSAGE_IMAGE_BYTES`
- * （`packages/attachment/attachment-local/src/index.ts:38`）。單張與張數上限在 `@nexus/wire`（`MAX_IMAGE_BYTES`、
- * `MAX_IMAGES_PER_MESSAGE`）；這一個 wire 沒有收，前端自己對著 dsh 的預設擋。
- */
-export const MAX_MESSAGE_IMAGE_BYTES = 200 * 1024 * 1024;
-
-/** **每一張圖**的像素上限（寬×高），不是整句話的總量；同 dsh 的 `DEFAULT_MAX_IMAGE_PIXELS`（`attachment-local/src/index.ts:39-40`，「one submitted image」）。讀得到尺寸時才擋。 */
-export const MAX_IMAGE_PIXELS = 64_000_000;
-
 export interface Admission {
   /** 收得進來的，照原本的順序。 */
   readonly accepted: readonly File[];
@@ -77,7 +72,8 @@ export interface Admission {
 /**
  * 前端先擋的上限（單張 20 MB、一句話 20 張、一句話圖片總量 200 MB）：新選進來的檔案逐個看，**超過的那一個不收進草稿**，
  * 並說原因；其餘照常收。超過就拒收、不縮圖（同 dsh）。不是白名單內的圖與一般檔案不受這三條管（檔案的大小由伺服器決定）。
- * 每張圖的像素上限要讀圖才知道，在送出時逐張擋（`lib/attachment-send.ts`）。
+ * 三條都是 `@nexus/wire` 那一份（`attachments.ts` 的 `MAX_IMAGE_BYTES`、`MAX_IMAGES_PER_MESSAGE`、`MAX_MESSAGE_IMAGE_BYTES`），
+ * 跟伺服器收圖時擋的是同一組。每張圖的像素總量與單邊上限要讀圖才知道，在送出時逐張擋（`lib/attachment-send.ts`）。
  *
  * @param current - 草稿裡已經有的。
  */

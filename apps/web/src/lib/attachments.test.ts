@@ -1,4 +1,5 @@
 // @vitest-environment node
+import { MAX_MESSAGE_IMAGE_BYTES } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -6,7 +7,6 @@ import {
   attachmentDetail,
   attachmentKind,
   imageMediaType,
-  MAX_MESSAGE_IMAGE_BYTES,
   fileExtension,
   formatBytes,
   serverSupportsAttachments,

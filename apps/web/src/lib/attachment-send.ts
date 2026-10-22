@@ -1,7 +1,7 @@
-import { MODEL_DOES_NOT_SUPPORT_IMAGES } from '@nexus/wire';
+import { MAX_IMAGE_DIMENSION, MAX_IMAGE_PIXELS, MODEL_DOES_NOT_SUPPORT_IMAGES } from '@nexus/wire';
 import type { PromptAttachment, UploadOutcome } from '@nexus/wire';
 
-import { formatBytes, imageMediaType, MAX_IMAGE_PIXELS } from '@/lib/attachments';
+import { formatBytes, imageMediaType } from '@/lib/attachments';
 import type { DraftAttachment } from '@/lib/attachments';
 
 /**
@@ -155,7 +155,9 @@ async function prepareOne(
 }
 
 /**
- * 準備這一句話的附件。先逐張擋像素上限（每一張各自算，不加總；圖要讀了才知道），再依序處理每一個；上傳與編碼同時進行，結果照原本的順序排。
+ * 準備這一句話的附件。先逐張擋像素總量與單邊的上限（每一張各自算，不加總；圖要讀了才知道），再依序處理每一個；上傳與編碼同時進行，
+ * 結果照原本的順序排。兩個上限都是 `@nexus/wire` 那一份，跟伺服器收圖時擋的是同一組；**先比總量、再比單邊**，同伺服器的
+ * `image-intake.ts`（照 dsh `image.ts`），兩樣都超時講的是總量那一句（#1861）。
  *
  * @param readSize - 讀圖的長寬；測試換掉。
  * @param hooks - 上傳的取消與進度（#733）。取消之後回 `cancelled`，不管那時哪些上傳已經完成或失敗。
@@ -175,6 +177,13 @@ export async function prepareAttachments(
       return {
         kind: 'failed',
         message: `「${item.file.name}」是 ${size.width}×${size.height}（約 ${megapixels} 百萬像素，${formatBytes(item.file.size)}），一張圖最多 ${MAX_IMAGE_PIXELS / 1_000_000} 百萬像素。`,
+      };
+    }
+    // 總量沒超、形狀卻太長或太寬的（例如 20000×100 的長截圖）：不擋的話送到伺服器才被拒（#1861）。
+    if (size !== undefined && Math.max(size.width, size.height) > MAX_IMAGE_DIMENSION) {
+      return {
+        kind: 'failed',
+        message: `「${item.file.name}」是 ${size.width}×${size.height}（${formatBytes(item.file.size)}），單邊超過 ${MAX_IMAGE_DIMENSION} 像素的上限。`,
       };
     }
   }
