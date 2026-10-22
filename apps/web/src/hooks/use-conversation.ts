@@ -63,12 +63,29 @@ import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
-import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
+import {
+  THREAD_PROTOCOL_ERROR_PAGE_TEXT,
+  THREAD_PROTOCOL_ERROR_TEXT,
+} from '@/lib/thread-protocol-error';
 import { threadSubagentText } from '@/lib/thread-subagent';
 import { randomUuid } from '@/lib/uuid';
 
 /** `loadThrough` 每頁至少幾則，照 dsh 的 `JUMP_PAGE_MESSAGES`（`session.ts:57`）。 */
 export const JUMP_PAGE_MESSAGES = 200;
+
+/**
+ * 往前讀歷史（`loadEarlier`、`loadThrough`、`findPlan`）拋錯時給畫面的那一句。伺服器送來看不懂的資料（`WireProtocolError`，
+ * [#1866](https://github.com/DemianLi/nexus-agent/issues/1866)）：原文只進 `console.error`，照 dsh `Session.loadOlder`／`loadThrough`
+ * （`session-controller/src/client/sessions/session.ts:418-420`、`:466-468`）在這個位置的做法；畫面講固定的一句，可以再按一次。
+ * 開線時停住那條（`halt`）是另一個位置：不再自動重連、等人按，用 `console.warn`。其他錯誤照舊回原因。
+ */
+function pagingFailureText(error: unknown): string {
+  if (error instanceof WireProtocolError) {
+    console.error(error);
+    return THREAD_PROTOCOL_ERROR_PAGE_TEXT;
+  }
+  return error instanceof Error ? error.message : String(error);
+}
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
@@ -119,7 +136,8 @@ export interface HistoryView {
   readonly loading: boolean;
   /**
    * 上一次往前翻拿不到的原因。**跟 {@link Conversation.historyError} 分開**：那一格是第一頁讀不到、畫在上方；
-   * 這一格畫在按鈕旁邊，有它就不自動載入（`earlier-pager.tsx`）。再按一次就清掉。
+   * 這一格畫在按鈕旁邊，有它就不自動載入（`earlier-pager.tsx`）。再按一次就清掉。伺服器送來看不懂的資料時是固定的一句，
+   * 不是原文（見 `pagingFailureText`）。
    */
   readonly error?: string;
   /** 最近一次往前翻接上了幾則（人打的字與模型的回覆各算一則，同 wire 一頁的單位），報讀用。 */
@@ -955,11 +973,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     } catch (error) {
       if (epoch !== historyEpoch.current) return;
       paging.current = false;
-      setHistory({
-        ...rest,
-        loading: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+      setHistory({ ...rest, loading: false, error: pagingFailureText(error) });
       return;
     }
     // **換代就整份丟掉**（#1601 `N1372`）：回應到之前重連換上了新的一頁，這一頁是接在舊游標前面的，接上去會留下補不回來的
@@ -1040,7 +1054,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             if (beforeSeq >= before) return;
           }
         } catch (error) {
-          failure = error instanceof Error ? error.message : String(error);
+          failure = pagingFailureText(error);
         } finally {
           if (jump.current === book) jump.current = undefined;
           if (epoch === historyEpoch.current) {
@@ -1110,7 +1124,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       } catch (error) {
         if (signal.aborted) return { kind: 'aborted' };
         if (epoch !== historyEpoch.current) return { kind: 'stale' };
-        return { kind: 'failed', message: error instanceof Error ? error.message : String(error) };
+        return { kind: 'failed', message: pagingFailureText(error) };
       }
       return { kind: 'not-found' };
     },
