@@ -24,6 +24,7 @@
     "gen-known-event-types": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-known-event-types.ts",
     "gen-persistence-schema": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-persistence-schema.ts",
     "lint": "eslint .",
+    "persistence-changes": "tsx --tsconfig ../../tsconfig.runtime.json src/persistence-changes.ts",
     "plugin": "tsx --tsconfig ../../tsconfig.runtime.json src/plugin-cli.ts",
     "serve": "tsx --tsconfig ../../tsconfig.runtime.json src/serve.ts",
     "serve:live": "tsx --tsconfig ../../tsconfig.runtime.json src/serve.ts --live",
@@ -34,14 +35,17 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "verify-package-invariants": "tsx --tsconfig ../../tsconfig.runtime.json src/verify-package-invariants.ts",
+    "verify-persistence-changes": "tsx --tsconfig ../../tsconfig.runtime.json src/persistence-changes.ts --check",
     "gen-tool-catalog": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-tool-catalog.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
+    "@types/js-yaml": "^4.0.9",
     "@types/semver": "^7.8.0",
     "@types/node": "^24.10.0",
     "ajv": "8.20.0",
     "eslint": "^9.39.0",
+    "js-yaml": "^4.1.0",
     "tsx": "^4.22.4",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
