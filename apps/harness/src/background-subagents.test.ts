@@ -16,7 +16,7 @@ import { join } from 'node:path';
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { LLM_FAILURE_FALLBACK_MESSAGE } from '@nexus/core';
+import { LLM_FAILURE_FALLBACK_MESSAGE, dropToolCalls } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import {
   BACKGROUND_SESSION_CONFIG_KEY,
@@ -1790,6 +1790,277 @@ describe('結算通知（#840）', () => {
     expect(settlements).toHaveLength(2);
     expect(settlements[1]?.text).toMatch(/It left no closing message\.$/);
     await host.close();
+  });
+
+  describe('收尾訊息跳過空回覆（#1565，dsh assistant-output.ts:32-40）', () => {
+    /** 撞到輸出上限、工具呼叫被清掉之後什麼都不剩的那一則——用生產者 `dropToolCalls` 造，不手寫形狀。 */
+    const truncatedToolCallOnly = (log: SessionLog): void => {
+      const truncated = new AIMessage({
+        content: '',
+        tool_calls: [{ name: 'lookup', args: {}, id: 'call-1', type: 'tool_call' }],
+        response_metadata: { finish_reason: 'length' },
+      });
+      log.append('assistant/message', { message: toLoggedMessage(dropToolCalls(truncated)) });
+    };
+
+    it('造出來的形狀真的是「沒有內容也沒有工具呼叫」（紅燈用的就是生產者的形狀）', () => {
+      const dropped = dropToolCalls(
+        new AIMessage({
+          content: '',
+          tool_calls: [{ name: 'lookup', args: {}, id: 'call-1', type: 'tool_call' }],
+        }),
+      );
+      expect(dropped.content).toHaveLength(0);
+      expect(dropped.tool_calls ?? []).toHaveLength(0);
+    });
+
+    it('最後一步撞上限、截掉的只有工具呼叫：不取代更早的回覆，收尾訊息是更早那段話', async () => {
+      const { host, settlements } = setup((_text, _signal, log) => {
+        reply(log, '我先查一下');
+        truncatedToolCallOnly(log);
+      });
+      const started = host.start({ subagent: 'worker', text: '查' });
+      await started.outcome;
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.reason).toBe('max-tokens');
+      expect(settlements[0]?.text).toMatch(/\n\nIts closing message:\n我先查一下$/);
+      await host.close();
+    });
+
+    it('只有工具呼叫的那則（沒撞上限）照樣被選中：收尾訊息仍是 It left no closing message.', async () => {
+      const { host, settlements } = setup((_text, _signal, log) => {
+        reply(log, '我先查一下');
+        log.append('assistant/message', {
+          message: toLoggedMessage(
+            new AIMessage({
+              content: '',
+              tool_calls: [{ name: 'lookup', args: {}, id: 'call-1', type: 'tool_call' }],
+            }),
+          ),
+        });
+      });
+      await host.start({ subagent: 'worker', text: '查' }).outcome;
+      expect(settlements[0]?.text).toMatch(/\n\nIt left no closing message\.$/);
+      await host.close();
+    });
+
+    it('一直只有空回覆：沒有更早的可撿，就是 It left no closing message.', async () => {
+      const { host, settlements } = setup((_text, _signal, log) => truncatedToolCallOnly(log));
+      await host.start({ subagent: 'worker', text: '查' }).outcome;
+      expect(settlements[0]?.text).toMatch(/\n\nIt left no closing message\.$/);
+      await host.close();
+    });
+
+    it('一次結算跨好幾輪（排著的輪次）：第二輪只有空回覆，收尾訊息撿第一輪的，只通知一則', async () => {
+      const hold = gate();
+      const { host, settlements } = setup(async (text, _signal, log) => {
+        if (text === 'A1') {
+          reply(log, 'A');
+          await hold.opened;
+        } else truncatedToolCallOnly(log);
+      });
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      const second = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+      await settle();
+      hold.open();
+      await Promise.all([first.outcome, second]);
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.text).toMatch(/Its closing message:\nA$/);
+      await host.close();
+    });
+
+    it('沒領走的插話排成下一輪：第二輪只有空回覆，收尾訊息撿第一輪的，只通知一則', async () => {
+      let runId = '';
+      const { host, settlements } = setup((text, _signal, log) => {
+        if (text === 'A1') {
+          reply(log, 'A');
+          // 這一輪還在跑的時候到的話是插話；fake agent 不領，所以退回成排著的下一輪。
+          void host.send({ runId, message: '欠著的話' });
+        } else truncatedToolCallOnly(log);
+      });
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      runId = first.runId;
+      await first.outcome;
+      await host.idle();
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.text).toMatch(/Its closing message:\nA$/);
+      await host.close();
+    });
+
+    it('被中斷而暫停、還有排著的：那一段沒收，繼續跑的時候收尾訊息仍撿得到暫停前的回覆', async () => {
+      const entered = gate();
+      const { host, settlements } = setup(async (text, signal, log) => {
+        if (text === 'A1') {
+          reply(log, 'A');
+          entered.open();
+          await waitAbort(signal);
+        } else truncatedToolCallOnly(log);
+      });
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      const queued = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+      await entered.opened;
+      host.interrupt(first.runId);
+      await first.outcome;
+      await settle();
+      expect(settlements).toHaveLength(0);
+      await host.submit({ runId: first.runId, subagent: 'worker', text: 'A3' });
+      await queued;
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.text).toMatch(/Its closing message:\nA$/);
+      await host.close();
+    });
+
+    it('結算之後是新的一段：上一段的回覆不撿', async () => {
+      let round = 0;
+      const { host, settlements } = setup((_text, _signal, log) => {
+        round += 1;
+        if (round === 1) reply(log, '第一段的結論');
+        else truncatedToolCallOnly(log);
+      });
+      const first = host.start({ subagent: 'worker', text: '一' });
+      await first.outcome;
+      await host.submit({ runId: first.runId, subagent: 'worker', text: '二' });
+      expect(settlements).toHaveLength(2);
+      expect(settlements[0]?.text).toMatch(/Its closing message:\n第一段的結論$/);
+      expect(settlements[1]?.text).toMatch(/It left no closing message\.$/);
+      await host.close();
+    });
+
+    it('這一輪的 turn/start 連寫都寫不進去：沒有起點可依，不撿上一段的回覆', async () => {
+      let round = 0;
+      const { host, sessions, settlements } = setup((_text, _signal, log) => {
+        round += 1;
+        if (round === 1) reply(log, '第一段的結論');
+      });
+      const first = host.start({ subagent: 'worker', text: '一' });
+      await first.outcome;
+      const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+      const append = log.append.bind(log) as (type: string, data: unknown) => unknown;
+      (log as { append: unknown }).append = (type: string, data: unknown) => {
+        if (type === 'turn/start') throw new Error('磁碟滿了');
+        return append(type, data);
+      };
+      await host.submit({ runId: first.runId, subagent: 'worker', text: '二' });
+      expect(settlements).toHaveLength(2);
+      expect(settlements[1]?.reason).toBe('error');
+      expect(settlements[1]?.text).toMatch(/It left no closing message\.$/);
+      await host.close();
+    });
+  });
+
+  describe('結算之前先落盤（#1565，dsh manager.ts:1023-1067、:1208-1218）', () => {
+    const childOf = (runId: string) => `root-1/${runId}`;
+
+    it('通知主對話之前，子代理自己的日誌已經排空到 turn/end（最後一次排空看到的是 turn/end）', async () => {
+      const { host, sessions, order } = setup((_text, _signal, log) => reply(log, '查到了'));
+      let runId = '';
+      sessions.onFlush((log) => {
+        if (log.sessionId === childOf(runId)) {
+          order.push(`flush:${log.events.at(-1)?.type}`);
+        }
+        return Promise.resolve();
+      });
+      const started = host.start({ subagent: 'worker', text: '查' });
+      runId = started.runId;
+      await started.outcome;
+      expect(order).toEqual(['flush:turn/end', `notified:${runId}`]);
+      await host.close();
+    });
+
+    it('排空失敗：只講一聲（含編號與原因），結算照發、這一輪的下場不受影響', async () => {
+      const { host, sessions, settlements, warnings } = setup((_text, _signal, log) =>
+        reply(log, '查到了'),
+      );
+      let runId = '';
+      sessions.onFlush((log) =>
+        log.sessionId === childOf(runId)
+          ? Promise.reject(new Error('磁碟滿了'))
+          : Promise.resolve(),
+      );
+      const started = host.start({ subagent: 'worker', text: '查' });
+      runId = started.runId;
+      const outcome = await Promise.race([
+        started.outcome,
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('排空失敗卡住了結算')), 3000),
+        ),
+      ]);
+      expect(outcome).toEqual({ ok: true });
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.text).toContain('查到了');
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(runId);
+      expect(warnings[0]).toContain('磁碟滿了');
+      expect(warnings[0]).toContain('結算前的最後一次落盤失敗');
+      await host.close();
+    });
+
+    it('排空期間到的話：這一輪不發結算，排成下一輪，跑完那一輪才通知、只一則', async () => {
+      const held = gate();
+      const release = gate();
+      const { host, sessions, settlements, order } = setup((text, _signal, log) =>
+        reply(log, `回覆：${text}`),
+      );
+      let runId = '';
+      let flushes = 0;
+      sessions.onFlush(async (log) => {
+        if (log.sessionId !== childOf(runId)) return;
+        flushes += 1;
+        order.push(`flush-${String(flushes)}`);
+        if (flushes === 1) {
+          held.open();
+          await release.opened;
+        }
+      });
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      runId = first.runId;
+      await held.opened;
+      // 第一輪正卡在最後一次排空：這時到的話排成下一輪。
+      const second = host.submit({ runId, subagent: 'worker', text: 'A2' });
+      await settle();
+      expect(settlements).toHaveLength(0);
+      release.open();
+      await Promise.all([first.outcome, second]);
+      expect(settlements).toHaveLength(1);
+      expect(settlements[0]?.text).toContain('回覆：A2');
+      expect(order).toEqual(['flush-1', 'flush-2', `notified:${runId}`]);
+      await host.close();
+    });
+
+    it('close() 落在排空期間：沒領走的插話不在關閉之後再跑一輪，也不發結算（同「host 關閉時欠著的話不再開跑」）', async () => {
+      const held = gate();
+      const release = gate();
+      const scripted: string[] = [];
+      let runId = '';
+      const { host, sessions, settlements, order } = setup((text, _signal, log) => {
+        scripted.push(text);
+        reply(log, `回覆：${text}`);
+        // 這一輪還在跑的時候到的話是插話；fake agent 不領，所以結算前會退回成排著的輪次。
+        if (text === 'A1') void host.send({ runId, message: '欠著的話' });
+      });
+      let flushes = 0;
+      sessions.onFlush(async (log) => {
+        if (log.sessionId !== childOf(runId)) return;
+        flushes += 1;
+        order.push(`flush-${String(flushes)}`);
+        if (flushes === 1) {
+          held.open();
+          await release.opened;
+        }
+      });
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      runId = first.runId;
+      await held.opened;
+      // 這一輪已經跑完、不在 #running，卡在最後一次排空：子代理還在 #busy。
+      order.push('close-called');
+      const closing = host.close();
+      release.open();
+      await closing;
+      await first.outcome;
+      expect(scripted).toEqual(['A1']);
+      expect(settlements).toHaveLength(0);
+      expect(order).toEqual(['flush-1', 'close-called']);
+    });
   });
 
   it('失敗、被中斷、撞到輸出上限：各自不同的摘要', async () => {

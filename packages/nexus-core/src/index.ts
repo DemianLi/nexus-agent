@@ -308,6 +308,7 @@ export type {
   UnreplayableReason,
 } from './conversation-replay.js';
 export {
+  isEmptyAssistant,
   replayConversation,
   TOOL_NOT_STARTED_TEXT,
   TOOL_OUTCOME_UNKNOWN_TEXT,
