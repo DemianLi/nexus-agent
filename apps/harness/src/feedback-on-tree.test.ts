@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionLog } from '@nexus/core';
+import { FeedbackDurabilityUnavailableError, SessionLog } from '@nexus/core';
 import { manifest as feedbackManifest } from '@nexus/plugin-feedback';
 import { effectiveReload } from '@nexus/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -106,10 +106,10 @@ async function openThread(
 type Thread = Awaited<ReturnType<typeof openThread>>;
 
 /** 這條 thread 的備註上限：送一則一定超過的備註，看服務回報的 `maxBytes`。 */
-function limitOf(thread: Thread): number | undefined {
+async function limitOf(thread: Thread): Promise<number | undefined> {
   const feedback = thread.built.feedback;
   if (feedback === undefined) return undefined;
-  const result = feedback.put(new SessionLog('limit'), {
+  const result = await feedback.put(new SessionLog('limit'), {
     messageId: 'x',
     rating: 'positive',
     note: 'x'.repeat(100_000),
@@ -181,24 +181,25 @@ describe('B：出貨清單上的 feedback 經樹進來，位置與名字不變',
     const service = tree.get('messageFeedback') as
       { provider?: string; contractVersion?: string } | undefined;
     expect(service?.provider).toBe(`include:${ID}`);
-    expect(service?.contractVersion).toBe('1.0.0');
+    expect(service?.contractVersion).toBe('2.0.0');
   }, 60000);
 
   it('經樹進來的 thread 有評分服務與 /feedback（同一份清單，沒有樹的呼叫端也一樣）', async () => {
     const { env } = home();
     const thread = await openThread(newRoot(), env);
     expect(thread.built.feedback).toBeDefined();
-    expect(limitOf(thread)).toBe(8192);
+    expect(await limitOf(thread)).toBe(8192);
     const command = thread.built.commands.find('feedback');
     expect(command).toMatchObject({ name: 'feedback', recordInput: false });
     expect(thread.built.commands.list().map((descriptor) => descriptor.name)).toContain('feedback');
     expect(await recordsAfterCommand(thread, '回答錯了')).toBe(1);
     await thread.built.dispose();
 
-    // 沒有樹的呼叫端：手搭的清單走 `mountDetached`，同一份清單、同樣的結果。
+    // 沒有樹的呼叫端：手搭的清單走 `mountDetached`，同一份清單；那一次掛載用完即丟、沒有落盤確認，所以評分存不住（#1606），
+    // 評語照常。
     const detached = await loadDefaultPlugins({ env, warn: warnNothing });
     const bare = await assemble(detached);
-    expect(limitOf(bare)).toBe(8192);
+    await expect(limitOf(bare)).rejects.toThrow(FeedbackDurabilityUnavailableError);
     expect(await recordsAfterCommand(bare, '回答錯了')).toBe(1);
     await bare.built.dispose();
   }, 60000);
@@ -254,16 +255,16 @@ describe('D：樹上那一列停用或改設定，開著的 thread 照舊，下�
     expect(second.built.commands.find('feedback')).toBeUndefined();
 
     // 開著的那條：組裝當下那一份快照在它手上，樹上那一列卸了它也照樣呼叫（決議 §3-2 第 6 條；驗收 D）。
-    expect(limitOf(first)).toBe(8192);
+    expect(await limitOf(first)).toBe(8192);
     expect(await recordsAfterCommand(first, '卸下之後還記得到')).toBe(1);
-    expect(first.built.feedback?.list(new SessionLog('l'))).toEqual({
+    expect(await first.built.feedback?.list(new SessionLog('l'))).toEqual({
       ok: true,
       value: { items: [] },
     });
 
     await changePlugin({ op: 'enable', id: ID }, { env });
     const third = await openThread(root, env);
-    expect(limitOf(third)).toBe(8192);
+    expect(await limitOf(third)).toBe(8192);
     for (const thread of [first, second, third]) await thread.built.dispose();
   }, 90000);
 
@@ -274,12 +275,12 @@ describe('D：樹上那一列停用或改設定，開著的 thread 照舊，下�
 
     await changePlugin({ op: 'config-set', id: ID, config: { maxNoteBytes: 16 } }, { env });
     const second = await openThread(root, env);
-    expect(limitOf(second)).toBe(16);
-    expect(limitOf(first)).toBe(8192);
+    expect(await limitOf(second)).toBe(16);
+    expect(await limitOf(first)).toBe(8192);
 
     await changePlugin({ op: 'config-reset', id: ID }, { env });
     const third = await openThread(root, env);
-    expect(limitOf(third)).toBe(8192);
+    expect(await limitOf(third)).toBe(8192);
     for (const thread of [first, second, third]) await thread.built.dispose();
   }, 90000);
 });
@@ -306,17 +307,17 @@ export function apply(ctx) {
 
   it('主版號不合：提供者那一列掉在 requires，訊息指名「宿主」、提供者與兩個版本；其餘列照常', async () => {
     const dir = scratch();
-    const module = write(dir, 'fb-v2.mjs', fakeProvider({ id: 'fb-v2', version: '2.0.0' }));
-    const shipped = write(dir, 'cordis.yml', `- id: fb-v2\n  name: 'file://${module}'\n`);
+    const module = write(dir, 'fb-v1.mjs', fakeProvider({ id: 'fb-v1', version: '1.4.0' }));
+    const shipped = write(dir, 'cordis.yml', `- id: fb-v1\n  name: 'file://${module}'\n`);
     const root = newRoot();
     const loaded = await loadPluginConfig({ shipped, warn: warnNothing }, { tree: root.tree });
-    const drop = loaded.dropped.find((candidate) => candidate.id === 'fb-v2');
+    const drop = loaded.dropped.find((candidate) => candidate.id === 'fb-v1');
     expect(drop?.stage).toBe('requires');
     expect(drop?.message).toContain('宿主');
     expect(drop?.message).toContain('messageFeedback');
-    expect(drop?.message).toContain('^1.0.0');
-    expect(drop?.message).toContain('include:fb-v2');
-    expect(drop?.message).toContain('2.0.0');
+    expect(drop?.message).toContain('^2.0.0');
+    expect(drop?.message).toContain('include:fb-v1');
+    expect(drop?.message).toContain('1.4.0');
     // 掉了的列的服務沒有交給任何一條 thread。
     const thread = await assembleBare(loaded);
     expect(thread.built.feedback).toBeUndefined();
@@ -325,8 +326,8 @@ export function apply(ctx) {
 
   it('同一個主版號、次版號不同：照常折進去', async () => {
     const dir = scratch();
-    const module = write(dir, 'fb-v14.mjs', fakeProvider({ id: 'fb-v14', version: '1.4.0' }));
-    const shipped = write(dir, 'cordis.yml', `- id: fb-v14\n  name: 'file://${module}'\n`);
+    const module = write(dir, 'fb-v24.mjs', fakeProvider({ id: 'fb-v24', version: '2.4.0' }));
+    const shipped = write(dir, 'cordis.yml', `- id: fb-v24\n  name: 'file://${module}'\n`);
     const root = newRoot();
     const loaded = await loadPluginConfig({ shipped, warn: warnNothing }, { tree: root.tree });
     expect(loaded.dropped).toEqual([]);
@@ -354,7 +355,7 @@ describe('F：兩列提供同一個服務、兩列登記同名命令（Q1、Q5 (
     expect(drop?.message).toContain('has been registered');
     expect(loaded.dropped.find((candidate) => candidate.id === ID)).toBeUndefined();
     const thread = await assemble(loaded);
-    expect(limitOf(thread)).toBe(8192);
+    expect(await limitOf(thread)).toBe(8192);
     await thread.built.dispose();
   }, 60000);
 
@@ -404,7 +405,7 @@ export function apply(ctx) {
       await changePlugin({ op: 'config-set', id: ID, config }, { env });
       const thread = await openThread(root, env);
       expect(thread.loaded.dropped).toEqual([]);
-      expect(limitOf(thread)).toBe(config.maxNoteBytes);
+      expect(await limitOf(thread)).toBe(config.maxNoteBytes);
       await thread.built.dispose();
     }
   }, 90000);

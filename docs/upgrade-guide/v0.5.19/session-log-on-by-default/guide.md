@@ -18,5 +18,6 @@ v0.5.19 的 `serve` 與 CLI 不給 `--session-log` 就只把會話放在記憶�
 1. 要落盤（建議）：不用動，確認 home 所在的磁碟放得下，並照 [`docs/operations.md`〈升級與回滾〉](../../../operations.md#升級與回滾)
    把 home 納入備份。
 2. 要維持只放記憶體：在清單上把 `session-persistence` 那一列停用（`plugin disable session-persistence`，或在 `--patch`
-   覆寫檔寫 `- id: session-persistence` 加 `disabled: true`）。
+   覆寫檔寫 `- id: session-persistence` 加 `disabled: true`）。評分（讚／踩）會跟著不能用，評語照收，見
+   [評分要落盤才收](../ratings-need-persistence/guide.md)。
 3. 確認：啟動輸出的 `會話日誌：<目錄>` 是你要的位置；停用時是 `會話日誌：只在記憶體裡（…）`。

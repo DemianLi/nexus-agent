@@ -11,8 +11,8 @@
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件主入口：讀法、型別、`sessionLookupToken` 與 {@link SessionLookupService} | `@nexus/sdk`，與 `@nexus/core`（單向轉出，見下） |
- * | 提供者 | 樹上一列內建列，行程級（`@nexus/session/provider`），**由宿主把「這次呼叫找哪一張註冊表」的挑法交給它** | 這個套件、`@nexus/sdk` |
- * | 消費者 | 要往「呼叫它的那一份日誌」寫的模型工具，今天是 `todo` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
+ * | 提供者 | 樹上一列內建列，行程級（`@nexus/session/provider`），**由宿主把「這次呼叫找哪一張註冊表」的挑法交給它**；落盤確認是另一列（`session-durability`，#1606），做法同樣由宿主交 | 這個套件、`@nexus/sdk` |
+ * | 消費者 | 要往「呼叫它的那一份日誌」寫的模型工具，今天是 `todo`；要等落盤的 `feedback`（選配，#1606） | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
  * ## 會話查找這個接縫（#1463 Q1 (a)、Q2 (a)）：宿主提供、呼叫當下依 thread 路由
  *
@@ -47,12 +47,13 @@
  *
  * 只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：四個讀法只有 `trajectory` 在用；
  * 兩個日誌型別（`SessionLog`、`SessionEvent`）是 `feedback` 的（#1456）；查找與 todo 的名字是 `todo` 的（#1463）；
- * `currentTurnStart`、`sourceKwargs` 與 `SessionEventMap`（`turn/start` 酬載的型別）是 `goal` 的（#1486）。
+ * `currentTurnStart`、`sourceKwargs` 與 `SessionEventMap`（`turn/start` 酬載的型別）是 `goal` 的（#1486）；
+ * `sessionDurabilityToken` 與 {@link SessionDurabilityService}（落盤確認）是 `feedback` 的（#1606）。
  *
  * @module
  */
 
-import type { SessionInstaller, SessionLookup } from '@nexus/core';
+import type { SessionInstaller, SessionLog, SessionLookup } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 
 export {
@@ -143,4 +144,37 @@ export interface SessionLookupService {
 export const sessionLookupToken = defineToken<SessionLookupService>(
   'sessionLookup',
   SESSION_LOOKUP_CONTRACT_VERSION,
+);
+
+/** 落盤確認的契約版本（semver）。 */
+export const SESSION_DURABILITY_CONTRACT_VERSION = '1.0.0';
+
+/**
+ * 落盤確認（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)）：寫進一份日誌的東西**真的到了磁碟**才放行。
+ *
+ * dsh 沒有這個服務：`message-feedback` 直接 inject `sessionPersistence` 與 `sessions`，在自己的 `withSession` 裡做這三步
+ * （`packages/feedback/message-feedback/src/index.ts:238-258`，`687f282e`）。**偏離（理由 1，基座表達不出來）**：dsh 的
+ * `ctx.sessions` 行程裡只有一份、`ctx.sessionPersistence` 開得到任何一份；我們的註冊表**每條 thread 一份**，落盤的 store
+ * 由入口持有，插件兩個都拿不到。**退到**：宿主把那三步包成一個服務提供在樹上，插件 inject 它。
+ *
+ * 宿主只在**清單上掛著落盤**時提供它（同 dsh：沒掛 `session-persistence-jsonl`，`sessionPersistence` 就不在，
+ * `message-feedback` 起不來）。
+ */
+export interface SessionDurabilityService {
+  /**
+   * 排空這一份日誌，再從存檔讀回，確認**它此刻的最後一顆**真的落盤了。
+   *
+   * **呼叫當下同步記下最後一顆**（dsh `:239`），之後才 await：一輪串流當中模型還在往同一份寫，讀回比的是叫的那一刻
+   * 的那一顆（按 `seq` 取），不是檔尾。
+   *
+   * @param log - 一條 thread 的 root 日誌。
+   * @throws 沒有排空者參與、這一份不歸任何落盤的寫者、讀回的 header 或那一顆對不上、或寫入失敗。
+   */
+  checkpoint(log: SessionLog): Promise<void>;
+}
+
+/** `sessionDurability` 服務的 token。 */
+export const sessionDurabilityToken = defineToken<SessionDurabilityService>(
+  'sessionDurability',
+  SESSION_DURABILITY_CONTRACT_VERSION,
 );

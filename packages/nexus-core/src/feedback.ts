@@ -183,9 +183,12 @@ export type FeedbackRecordResult = FeedbackSuccess<{ readonly recorded: true }>;
 /**
  * 評分與評語的規則，由 `@nexus/plugin-feedback` 提供成 {@link MESSAGE_FEEDBACK_SERVICE} 服務。
  *
- * **三個方法都是同步的，而那就是 dsh 那條 `enqueue` 的替身**：dsh 要把「讀、比、寫」包在一段
- * 非同步的寫入權裡，因為中間隔著磁碟；我們的日誌 `append` 是同步的，同一個行程裡兩次呼叫交錯
- * 不了，比對與寫入之間沒有縫。
+ * **四個方法都回 `Promise`，照 dsh**（契約 2.0.0，[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)）：評分的寫入（put／delete）
+ * 要等落盤確認（`@nexus/session` 的 `sessionDurability`）才回答，寫不進去就拋，不回假的成功；讀出來的評分事件先驗結構再折，壞的就拋
+ * {@link FeedbackLogCorruptionError}；沒掛落盤時評分那三個方法拋 {@link FeedbackDurabilityUnavailableError}。評語（`record`）照 dsh 不等落盤。
+ *
+ * **讀、比、寫仍在同一個同步段裡**，那是 dsh 那條逐會話 `enqueue` 的替身：dsh 要把它們包在一段非同步的寫入權裡，因為中間
+ * 隔著磁碟；我們的日誌 `append` 是同步的，await 排在 append 之後，兩次呼叫交錯不了比對與寫入。
  *
  * 呼叫端交進來的是**那個會話 root 的那一份日誌**——評分與評語都只寫 root。
  */
@@ -196,28 +199,31 @@ export interface FeedbackService {
    * @param request - 目標、想要的值與看到的版本。
    * @returns 目前那一筆，或一個業務碼。
    */
-  put(log: SessionLog, request: MessageFeedbackPutRequest): MessageFeedbackPutResult;
+  put(log: SessionLog, request: MessageFeedbackPutRequest): Promise<MessageFeedbackPutResult>;
   /**
    * 收回一則回覆的評分。本來就沒有也成功，而且不記。
    * @param log - 會話 root 的那一份日誌。
    * @param request - 目標與看到的版本。
    * @returns 「現在沒有了」，或版本衝突。
    */
-  delete(log: SessionLog, request: MessageFeedbackDeleteRequest): MessageFeedbackDeleteResult;
+  delete(
+    log: SessionLog,
+    request: MessageFeedbackDeleteRequest,
+  ): Promise<MessageFeedbackDeleteResult>;
   /**
    * 讀回目前的評分，照 dsh 的 `list`：web 靠它在重新整理之後把讚／踩畫回來。舊日誌裡以輪記、對不到
    * 回覆的那幾筆不在裡面（沒有畫面上的東西可以掛）。
    * @param log - 會話 root 的那一份日誌。
    * @returns 目前的評分。
    */
-  list(log: SessionLog): MessageFeedbackListResult;
+  list(log: SessionLog): Promise<MessageFeedbackListResult>;
   /**
    * 記一則對整個會話的評語。文字去掉前後空白，空的就當沒有。
    * @param log - 會話 root 的那一份日誌。
    * @param entry - 文字與分類，都可以省略。
    * @returns 記下了。
    */
-  record(log: SessionLog, entry: FeedbackRecord): FeedbackRecordResult;
+  record(log: SessionLog, entry: FeedbackRecord): Promise<FeedbackRecordResult>;
 }
 
 /** 一則訊息的文字：區塊中有無非空的 text。 */
@@ -297,6 +303,30 @@ export function currentMessageFeedback(
     }
   }
   return [...current.values()];
+}
+
+/**
+ * 日誌裡的評分事件**結構不對**（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)）：評分值不在兩種之內、時間戳倒過來、
+ * 備註全是空白……。照 dsh 的 `currentItems`（`message-feedback/src/index.ts:96-115`，`687f282e`）逐顆 `parse`、不合就拋，
+ * 不靜靜吞掉、也不折進畫面。另立一個類別，是為了讓 wire 分得出「紀錄壞了」與「沒存成」兩種失敗。
+ */
+export class FeedbackLogCorruptionError extends Error {
+  override readonly name = 'FeedbackLogCorruptionError';
+}
+
+/**
+ * 這個組裝**沒有掛落盤**，評分（list／put／delete）存不住（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606) 題 2 (a)）。
+ *
+ * 對到 dsh：`messageFeedback` inject `sessionPersistence`（`message-feedback/src/index.ts:119`），沒掛落盤它根本不在；評語
+ * （`sessionFeedback`）照常。我們兩個服務併成一個（`@nexus/feedback` 檔頭的偏離），所以由評分那三個方法各自拋這一個，wire 回
+ * `not_supported`。訊息是 #1573 Q2 (a) 拍板的那一句。
+ */
+export class FeedbackDurabilityUnavailableError extends Error {
+  override readonly name = 'FeedbackDurabilityUnavailableError';
+
+  constructor() {
+    super('這個組裝沒有掛落盤，評分存不住');
+  }
 }
 
 /**

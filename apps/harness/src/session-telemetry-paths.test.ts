@@ -39,10 +39,19 @@ import {
   shippedPlugins,
   withoutTimeContext,
 } from './fixtures.js';
+import { createFeedbackPlugin } from './feedback.fixture.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
 const shipped = withoutTimeContext(await shippedPlugins());
+/**
+ * 出貨清單，但 feedback 換成不碰磁碟的外殼（#1606）：這幾條沒有樹也沒有落盤，出貨那一列的評分會回「存不住」；這裡驗的是遙測怎麼送，
+ * 不是落盤，所以評分的落盤確認直接放行。
+ */
+const shippedWithMemoryFeedback = [
+  ...shipped.filter((entry) => entry.plugin.name !== 'feedback'),
+  createFeedbackPlugin({ maxNoteBytes: 8192 }),
+];
 
 const BASE_URL = 'http://telemetry.test';
 const silent = { log: () => undefined, error: () => undefined };
@@ -336,7 +345,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
   it('回饋之前一筆都不送；第一顆回饋送整份前綴，之後只送新的那段', async () => {
     const sink = collectingSink('feedback-only');
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
+      await createCliAgent({ live: false }, [...shippedWithMemoryFeedback, telemetryPlugin(sink)]);
     attachTelemetry(sessions);
     const seqs = () => ledgerOf(sink).map((record) => record.attributes['event.seq']);
 
@@ -344,7 +353,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       await runTurn(agent, '嗨', silent, sessionLog);
       expect(sink.records).toHaveLength(0);
 
-      feedback!.record(sessionLog, { text: '回答錯了' });
+      await feedback!.record(sessionLog, { text: '回答錯了' });
       expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
         'turn/start',
         'session/title',
@@ -356,7 +365,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       expect(seqs()).toEqual([0, 1, 2, 3]);
 
       // 第二顆只送上次交到之後的那段——上界不對的話，這裡會重送 0–3。4–6 是第二輪與補上的那則回覆。
-      const put = feedback!.put(sessionLog, {
+      const put = await feedback!.put(sessionLog, {
         messageId: ratableReply(sessionLog),
         rating: 'negative',
         ifVersion: null,
@@ -407,13 +416,13 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const sink = collectingSink('disabled');
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
+      await createCliAgent({ live: false }, [...shippedWithMemoryFeedback, telemetryPlugin(sink)]);
     attachTelemetry(sessions);
 
     try {
       await runTurn(agent, '嗨', silent, sessionLog);
       expect(warn).not.toHaveBeenCalled();
-      feedback!.record(sessionLog, { text: '回答錯了' });
+      await feedback!.record(sessionLog, { text: '回答錯了' });
       expect(warn.mock.calls).toEqual([[DISABLED_FEEDBACK_WARNING]]);
     } finally {
       await dispose();
@@ -459,15 +468,15 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     const collector = await mockCollector();
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
       await createCliAgent({ live: false }, [
-        ...shipped,
+        ...shippedWithMemoryFeedback,
         createTelemetryOtelPlugin({ mode: 'feedback-only', exporter: { url: collector.url } }),
       ]);
     attachTelemetry(sessions);
 
     try {
       await runTurn(agent, '嗨', silent, sessionLog);
-      feedback!.record(sessionLog, { text: '會話評語原文' });
-      const put = feedback!.put(sessionLog, {
+      await feedback!.record(sessionLog, { text: '會話評語原文' });
+      const put = await feedback!.put(sessionLog, {
         messageId: ratableReply(sessionLog),
         rating: 'negative',
         note: '評分備註原文',
