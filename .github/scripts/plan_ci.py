@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 # 有這些異動才值得掃 TypeScript。非 TypeScript 的檔名是刻意的窄例外（「測試會讀這個檔」）：
-# `docs/operations.md`、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`，
+# `docs/operations.md`、`docs/persistence-schema.json`（#1856）、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`，
 # 以及 web 的樣式（#1512）：`apps/web` 底下的 `.css`（讀 cascade 的護欄、build 後的 check-built-css 與瀏覽器護欄都量它）、
 # 產生顏色 token 的 `tokengen/`、build 後檢查產物的 `scripts/*.mjs`、瀏覽器護欄的測試頁 `guard/`，以及 `apps/web/index.html`
 # （內嵌的主題腳本：`src/lib/theme.test.tsx` 讀它、瀏覽器護欄的測試頁照抄它）。少了這幾條，
@@ -32,6 +32,7 @@ TS_RE = re.compile(
     r'\.(ts|tsx|mts|cts)$'
     r'|^package\.json$|^pnpm-lock\.yaml$|^tsconfig.*\.json$'
     r'|^docs/operations\.md$'
+    r'|^docs/persistence-schema\.json$'
     r'|^apps/harness/cordis(\.serve)?\.yml$'
     r'|^apps/harness/src/.*\.patch\.yml$'
     r'|^apps/web/.*\.css$|^apps/web/tokengen/|^apps/web/scripts/.*\.mjs$|^apps/web/guard/'
@@ -59,6 +60,8 @@ FULL_RES = [
         r'^apps/harness/src/(test-home\.setup\.ts|.*\.patch\.yml|.*\.fixture\.ts)$',
         # 已出貨格式的會話日誌夾具（#1529）：`session-format-fixtures.test.ts` 讀它們，副檔名不是 .ts，只改夾具時 TS_RE 看不到。
         r'^apps/harness/src/fixtures/session-format/',
+        # 持久化型別圖（#1856）：`persistence-schema.test.ts` 讀它比對原始碼，副檔名不是 .ts，只手改它的 PR TS_RE 看不到。
+        r'^docs/persistence-schema\.json$',
         r'^apps/web/(package\.json|vite\.config\..*|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',
     )
 ]

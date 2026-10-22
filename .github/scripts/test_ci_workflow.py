@@ -227,3 +227,12 @@ class SessionFormatFixtures(unittest.TestCase):
         )
         self.assertEqual(result['ts'], 'true')
         self.assertEqual(result['full'], 'true')
+
+
+class PersistenceSchema(unittest.TestCase):
+    """持久化型別圖（#1856）是 .json，只手改它的 PR 不會被 TS_RE 認成要跑測試；拿掉那兩條，比對它的新鮮度測試就靜靜不跑。"""
+
+    def test_schema_only_change_runs_full(self) -> None:
+        result = plan_ci.plan(['docs/persistence-schema.json'], 'pull_request', 'develop')
+        self.assertEqual(result['ts'], 'true')
+        self.assertEqual(result['full'], 'true')
