@@ -1446,6 +1446,7 @@ function titleLlmFor(
  * @param log - 讀那一份日誌；服務綁在它上面。
  * @param flush - 耐久檢查點。沒落盤時給一個 no-op。
  * @param warn - 排程器出事時說話的去處。
+ * @param waitForChildren - 等背景子代理停下來（#1575）。缺席＝不等（CLI、沒有背景 host 的組裝）。
  * @returns 排程器要問域的四件事。
  */
 export function goalDriverPort(
@@ -1453,6 +1454,7 @@ export function goalDriverPort(
   log: () => SessionLog,
   flush: () => Promise<void>,
   warn: (message: string) => void,
+  waitForChildren?: (signal?: AbortSignal) => Promise<boolean>,
 ): GoalDriverPort {
   return {
     // **查不到就是 `undefined`**：patch 把 goal 那一列關掉時這條路就沒有 goal 域，
@@ -1471,5 +1473,44 @@ export function goalDriverPort(
     },
     flush,
     warn: (message) => warn(`[續行] ${message}`),
+    ...(waitForChildren !== undefined && { waitForChildren }),
+    // **不經 `serviceFor`**（N0376）：訂閱與種子都不該為一條沒碰過 goal 的 thread 觸發整份日誌的重播（#1486）。
+    onActivationChanged: (listener) => goals?.onActivationChanged(log(), listener) ?? (() => {}),
+    currentActivation: () => {
+      try {
+        const goal = goals?.existingFor(log())?.get();
+        return goal === undefined
+          ? undefined
+          : { goal: { id: goal.id, revision: goal.revision, activation: goal.activation } };
+      } catch {
+        return undefined;
+      }
+    },
   };
+}
+
+/**
+ * serve 每條 thread 交給 wire handler 的 `goalDriver` 工廠（具名抽出來，#1575 W4 的紅燈）。
+ *
+ * 以前這一段是 `serve.ts` 裡的行內閉包：N0372 在產品路徑上的效果完全靠它把 `waitForChildren` 轉進 {@link goalDriverPort}，
+ * 而拿掉那一格所有測試照樣綠（實測）。抽成具名函式之後 `serve.ts` 只剩「用它」，轉呼這一層有單元測試釘住。
+ *
+ * @param goals - 這一條 thread 自己那一次組裝的 goal 域（#459）。
+ * @param warn - 排程器出事時說話的去處。
+ * @param roundCap - 續行輪數上限的有效值與來源；沒設就不帶（排程器用預設）。
+ * @returns wire handler 要的 `(log, flush, waitForChildren) => GoalDriverPort`。
+ */
+export function serveGoalDriver(
+  goals: GoalServices | undefined,
+  warn: (message: string) => void,
+  roundCap?: GoalRoundCap,
+): (
+  log: () => SessionLog,
+  flush: () => Promise<void>,
+  waitForChildren?: (signal?: AbortSignal) => Promise<boolean>,
+) => GoalDriverPort {
+  return (log, flush, waitForChildren) => ({
+    ...goalDriverPort(goals, log, flush, warn, waitForChildren),
+    ...(roundCap !== undefined && { roundCap }),
+  });
 }

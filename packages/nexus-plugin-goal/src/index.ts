@@ -59,7 +59,7 @@
  * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**；`src/` 除了從 lint 排除的 `invariant.ts` 都不 import
  * `@nexus/core`（套 #1420 的 lint 設定）。這是第一個**插件提供、宿主消費、而且狀態是逐份日誌**的服務：
  *
- * - **`goals` 由這一列提供**（`@nexus/goal` 的 token，契約 `1.0.0`）：`new` 一個繼承 `ContractService` 的類別，宿主組 thread 時把它折進
+ * - **`goals` 由這一列提供**（`@nexus/goal` 的 token，契約 `1.1.0`，`onActivationChanged` 從 1.1.0 起）：`new` 一個繼承 `ContractService` 的類別，宿主組 thread 時把它折進
  *   `registry.services`（同 #1456 的 `feedback`）。
  * - **逐份日誌的 `GoalService` 改成 lazy**：不再靠 `registry.sessions.join` 在接上日誌時建，而是第一次被問到某份 root 日誌時才建，
  *   存在 `apply` 閉包裡的 `WeakMap<SessionLog, GoalService>`。三個入口——工具（`sessionLookup.forCall` 回的 root 日誌）、`/goal`（命令執行器交的
@@ -86,7 +86,7 @@ import type { Context } from '@nexus/cordis';
 import { commandsToken } from '@nexus/commands';
 import type { CommandDefinition } from '@nexus/commands';
 import { DEFAULT_MAX_GOAL_ROUNDS, goalsToken } from '@nexus/goal';
-import type { GoalServices } from '@nexus/goal';
+import type { GoalActivationChange, GoalActivationListener, GoalServices } from '@nexus/goal';
 import { ContractService, defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { sessionLookupToken } from '@nexus/session';
 import type { SessionLog } from '@nexus/session';
@@ -219,6 +219,8 @@ export interface GoalCore {
   serviceFor(log: SessionLog): GoalService;
   /** 已經建好的；沒被問過是 `undefined`，不建、不重播。 */
   existingFor(log: SessionLog): GoalService | undefined;
+  /** 訂續行授權的變化（N0376）。**不建服務**：監聽登記在日誌上，服務之後才建也照樣通知。見 {@link GoalServices.onActivationChanged}。 */
+  onActivationChanged(log: SessionLog, listener: GoalActivationListener): () => void;
 }
 
 /**
@@ -243,17 +245,41 @@ export function createGoalCore(config: GoalConfig, seams: GoalSeams = {}): GoalC
   };
   assertGoalServiceOptions(serviceOptions);
   const services = new WeakMap<SessionLog, GoalService>();
+  // 授權變化的監聽，逐份日誌、逐次掛載（跟 `services` 同一個閉包）：列重載之後開著的 thread 掛在它組裝時拿到的那一份核心上，
+  // 新閉包只給新 thread，各掛各的。監聽不經 `serviceFor`——訂閱不該觸發 lazy 重播（#1486），而沒建過服務的日誌授權本來就是 disarmed。
+  const listeners = new WeakMap<SessionLog, Set<GoalActivationListener>>();
+  const notify = (log: SessionLog, change: GoalActivationChange): void => {
+    for (const listener of [...(listeners.get(log) ?? [])]) {
+      try {
+        listener(change);
+      } catch {
+        // 一個監聽壞了不該扳倒日誌的 append（服務是在日誌的觀察者裡呼叫這裡的），也不該餓死後面的監聽。
+      }
+    }
+  };
   return {
     serviceFor(log) {
       let existing = services.get(log);
       if (existing === undefined) {
         // 建構子同步地「讀 `log.events` 重播 → `log.subscribe`」，見 `service.ts`。
-        existing = new GoalService(log, serviceOptions);
+        existing = new GoalService(log, {
+          ...serviceOptions,
+          onActivationChanged: (change) => notify(log, change),
+        });
         services.set(log, existing);
       }
       return existing;
     },
     existingFor: (log) => services.get(log),
+    onActivationChanged(log, listener) {
+      let set = listeners.get(log);
+      if (set === undefined) {
+        set = new Set();
+        listeners.set(log, set);
+      }
+      set.add(listener);
+      return () => void set.delete(listener);
+    },
   };
 }
 
@@ -299,11 +325,13 @@ export const manifest = defineManifest({
 class GoalServicesProvider extends ContractService<GoalServices> implements GoalServices {
   readonly serviceFor: GoalServices['serviceFor'];
   readonly existingFor: GoalServices['existingFor'];
+  readonly onActivationChanged: GoalServices['onActivationChanged'];
 
   constructor(ctx: Context, core: GoalCore) {
     super(ctx, goalsToken);
     this.serviceFor = (log) => core.serviceFor(log);
     this.existingFor = (log) => core.existingFor(log);
+    this.onActivationChanged = (log, listener) => core.onActivationChanged(log, listener);
   }
 }
 

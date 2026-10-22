@@ -254,8 +254,10 @@ export type {
   GoalPauseCommand,
   GoalPauseResult,
   GoalPauseState,
+  GoalActivationPayload,
   GoalPayload,
   WireGoal,
+  WireGoalActivation,
   WireGoalBlockedReason,
   WireGoalPhase,
   WireGoalRef,
@@ -281,7 +283,14 @@ export { SUBAGENT_CATALOG } from './subagent-catalog.js';
 export type { SubagentCatalogPayload } from './subagent-catalog.js';
 export type { SubagentRunStatus, SubagentStatusPayload } from './subagent-status.js';
 export { COMPACTION } from './compaction.js';
-export { GOAL, GOAL_METHODS, GOAL_PAUSE_METHOD, GOAL_PHASES, isGoalMethod } from './goal.js';
+export {
+  GOAL,
+  GOAL_ACTIVATION,
+  GOAL_METHODS,
+  GOAL_PAUSE_METHOD,
+  GOAL_PHASES,
+  isGoalMethod,
+} from './goal.js';
 export { PLAN_MODE } from './plan-mode.js';
 export { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
 export { TITLE } from './title.js';

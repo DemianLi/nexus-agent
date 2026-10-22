@@ -132,6 +132,7 @@ import {
   eventId,
   LLM_RETRY,
   LLM_RETRY_STARTED,
+  GOAL_ACTIVATION,
   MESSAGE_DISCARD,
   SessionReferenceError,
   SUBAGENT_STATUS,
@@ -1316,6 +1317,12 @@ export class ThreadPump {
    */
   readonly #goal = new RootGoal();
   /**
+   * 續行授權現在是什麼（#1575 N0376）。行程內的狀態、不落盤：**起始是 `disarmed`**（重啟之後一定是，dsh `agent/created` 一律 disarmed），
+   * 之後只由 {@link ThreadPump.notifyGoalActivation} 改。新接上的下行補送的是「這個值＋目前的目標」，不記上一顆 frame——
+   * 目標的修訂在授權不變時也會變，記著的 frame 會過期。
+   */
+  #goalActivation: 'armed' | 'disarmed' = 'disarmed';
+  /**
    * 插件投影（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)）：單元清單與同一個折疊器（歷史路由用同一個
    * `createProjectionFold`）。`#projections` 是 root 日誌那一份的即時折疊，接上 root 時 seed。只收 root：
    * 歷史路由只讀 root，子代理的即時送出去重新整理就不見了。
@@ -1373,6 +1380,8 @@ export class ThreadPump {
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
   readonly #idleWaiters: (() => void)[] = [];
   #closed = false;
+  /** 收線時舉起：正在等背景子代理的續行排程器放手（#1575，dsh `goal-round-driver` 的 `unloading`）。 */
+  readonly #closing = new AbortController();
   /** 正在跑的那一輪；沒有就是 `undefined`（閒著、停在核准點、或排著還沒開跑）。 */
   #current: CurrentRun | undefined;
   /**
@@ -1731,6 +1740,19 @@ export class ThreadPump {
           seed(this.#subagentStatusFrame);
         }
       }
+      // **續行授權也補送**（#1575 N0376）：行程內的「現在」，歷史沒有。**有目標才送**：沒有目標時授權沒有意義（web 的格子停在 `null`）；
+      // 有目標時不論有沒有發生過變化都送——重啟之後的 thread 從沒有過 `armed → disarmed` 的邊，但畫面要拿到「不會自己跑」。
+      // 蓋新號，理由同下面那段回覆。
+      const goalNow = this.#goal.value;
+      if (!subscriber.done && goalNow !== null) {
+        const frame = this.#customFrame({
+          name: GOAL_ACTIVATION,
+          payload: {
+            goal: { id: goalNow.id, revision: goalNow.revision, activation: this.#goalActivation },
+          },
+        });
+        if (accepts(subscriber, frame)) seed(frame);
+      }
       // **還沒落盤的那則回覆也補送**（[#953](https://github.com/DemianLi/nexus-agent/issues/953) 第二刀）：它的開頭與已吐出的
       // 字在下行開之前就送完了，歷史又要等那次模型呼叫結束才有，不補的話重新整理之後這一則要等下一次重新整理才看得到。
       // **蓋的是新號、不是原本的號**：合成的字是一整塊，沒有哪一顆原始 frame 的號對得上；新號比這條線上已經排著的
@@ -1946,6 +1968,28 @@ export class ThreadPump {
     const frame = this.#customFrame({ name: SUBAGENT_STATUS, payload: { items } });
     this.#subagentStatusFrame = frame;
     this.#broadcast(frame);
+  }
+
+  /**
+   * 續行授權變了（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376，dsh `goal/activation-changed` 經 `remote-events.ts:39`
+   * 轉給 UI）：記下新值、合成一顆 `goal/activation` frame 廣播。服務那一側已經只在值真的變了才通知，這裡不再去重。
+   * 沒有目前目標時 `goal` 缺席、授權收成 `disarmed`。收線之後什麼都不做。
+   *
+   * @param change - 服務交來的變化（`GoalActivationChange`）。
+   */
+  notifyGoalActivation(change: {
+    readonly goal?: {
+      readonly id: string;
+      readonly revision: number;
+      readonly activation: 'armed' | 'disarmed';
+    };
+  }): void {
+    if (this.#closed) return;
+    this.#goalActivation = change.goal?.activation ?? 'disarmed';
+    this.#presentCustom({
+      name: GOAL_ACTIVATION,
+      payload: change.goal === undefined ? {} : { goal: { ...change.goal } },
+    });
   }
 
   /**
@@ -2251,6 +2295,7 @@ export class ThreadPump {
    */
   close(): void {
     this.#closed = true;
+    this.#closing.abort();
     this.#unobserveLogs();
     this.#projectionOut.dispose();
     // 停住的那幾件由 `#next` 收掉（#629）。**不在這裡收**：這一刻還在跑的那一輪可能之後才撞上
@@ -2287,6 +2332,7 @@ export class ThreadPump {
           () => this.#sessions.root.events,
           driver,
           driver.roundCap,
+          this.#closing.signal,
         );
         // 再問一次：`flush()` 期間人可能已經送了東西進來。`driveGoalRound` 自己看不到
         // 排隊——它只讀日誌，而排隊中的那一筆還沒寫下任何事件——所以這是唯一看得到的地方。

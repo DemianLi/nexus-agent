@@ -113,8 +113,8 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest：提供 goals（1.0.0），消費 tools／commands／sessionLookup；沒有 default 匯出', () => {
-    expect(goal.manifest.provides).toEqual([{ token: 'goals', version: '1.0.0' }]);
+  it('manifest：提供 goals（1.1.0），消費 tools／commands／sessionLookup；沒有 default 匯出', () => {
+    expect(goal.manifest.provides).toEqual([{ token: 'goals', version: '1.1.0' }]);
     expect(goal.manifest.consumes).toEqual([
       { token: 'tools', range: '^1.1.0' },
       { token: 'commands', range: '^1.1.0' },

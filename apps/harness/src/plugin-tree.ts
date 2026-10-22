@@ -156,8 +156,9 @@ export const FEEDBACK_SERVICE_RANGE = '^2.0.0';
  * `registry.services`。**它不是 #1477 條件 2 那一類**（活的 `systemPrompt` 不准折進去，因為它的段會跨 thread 越疊越多）：`goals` 的狀態是
  * 逐份 root 日誌（`WeakMap<SessionLog, GoalService>`），折進每條 thread 的是同一份服務、問的是各自的日誌；相容層的插件拿得到它，
  * 拿任何日誌去問都只是建出（或取到）那份日誌自己的一份，不會互相疊加。契約寫明只收 root 日誌。
+ * `^1.1.0`：宿主從 `1.1.0` 起訂 `onActivationChanged`（續行授權送上下行，#1575 N0376）。
  */
-export const GOALS_SERVICE_RANGE = '^1.0.0';
+export const GOALS_SERVICE_RANGE = '^1.1.0';
 
 /**
  * `permissionPresets` 服務的契約範圍（#1491 Q3 (a)）：跟 {@link FEEDBACK_SERVICE_RANGE} 同一類——插件提供、宿主消費，折進這條 thread 的

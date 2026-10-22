@@ -22,8 +22,8 @@
  * ## 不在這裡的：activation
  *
  * dsh 另有 `'armed' | 'disarmed'`，**行程內的狀態、不持久**，是否會自己續行看它，另走一條即時事件
- * （`GoalActivationChanged`）。這一顆**只有持久的那一半**：#638、#660、#661 正在改 activation 什麼時候變，等它們落地後
- * 另開一張。畫面先顯示階段與輪數，不顯示「會不會自己續行」。
+ * （`GoalActivationChanged`）。這一顆**只有持久的那一半**；續行授權走 {@link GOAL_ACTIVATION}（#1575 N0376），**不塞進
+ * {@link WireGoal}、不進歷史頁**。
  *
  * ## 少了什麼
  *
@@ -36,6 +36,38 @@
 
 /** `custom` 事件的 `data.name`：這條會話的目標現在是這樣（或沒有）。 */
 export const GOAL = 'goal';
+
+/**
+ * `custom` 事件的 `data.name`：這條會話的目標**會不會自己續行**（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376）。
+ *
+ * 照 dsh 的 `GoalActivationChanged`（`packages/goal/goal/src/types.ts:72-87`，經 `remote-events.ts:39` 轉給 UI）：**行程內的狀態、
+ * 不持久、不是日誌事件**，所以不落盤、不進歷史頁（{@link prependEntries} 不動它）、也不塞進 {@link WireGoal}。只在續行授權
+ * 真的變了（`armed` ↔ `disarmed`，值沒變不送）時送一顆；新接上的下行補送「現在」的值（dsh 的 UI 是開線先讀 `goals.get` 再訂）。
+ *
+ * ## `goalActivation` 怎麼讀（折疊器的格子，`null` 的意思）
+ *
+ * - `'armed'`：這個行程授權過，目標 active 時會自己排下一輪。
+ * - `'disarmed'`：**不會自己跑**。重啟之後、按停止、一輪出錯或撞到輸出上限之後、目標被暫停／完成／清掉，都是這個。
+ * - `null`：**還沒收到**。只有「這條 thread 沒有目標」或「frame 還在路上」會讓它停在 `null`；有目標的 thread，server 在下行開線時
+ *   一定補送一顆，所以 `goal !== null` 而 `goalActivation === null` 只是一個瞬間，不要把它畫成「會自己跑」，也不要畫成「不會」——
+ *   先什麼都不說。
+ * - 只在 `goal !== null` 時才有意義：沒有目標時 frame 缺 `goal`，格子收成 `'disarmed'`。
+ */
+export const GOAL_ACTIVATION = 'goal/activation';
+
+/** 續行授權：這個行程准不准自己排下一輪。 */
+export type WireGoalActivation = 'armed' | 'disarmed';
+
+/** {@link GOAL_ACTIVATION} 的 `payload`。沒有目前目標時 `goal` 缺席。 */
+export interface GoalActivationPayload {
+  readonly goal?: {
+    /** 目前目標的身分。 */
+    readonly id: string;
+    /** 目前目標的修訂。 */
+    readonly revision: number;
+    readonly activation: WireGoalActivation;
+  };
+}
 
 /** 目標的耐久相位。 */
 export const GOAL_PHASES = ['active', 'paused', 'blocked', 'complete'] as const;
@@ -134,5 +166,6 @@ export type GoalPauseResult =
 declare module './custom-frame.js' {
   interface CustomFramePayloads {
     [GOAL]: GoalPayload;
+    [GOAL_ACTIVATION]: GoalActivationPayload;
   }
 }
