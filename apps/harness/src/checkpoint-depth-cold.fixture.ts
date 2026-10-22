@@ -26,7 +26,7 @@ import type { Event } from '@nexus/wire';
 import { DEPTH_TRUNCATED } from './bounded-event-queue.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { projectKey } from './jsonl-session-store.js';
+import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { fakeEndpoint, hasTools, liveModelPatch } from './log-derived-history.fixture.js';
 import type { Body, Reply, WireMessage } from './log-derived-history.fixture.js';
@@ -124,7 +124,7 @@ async function start(where: Layout): Promise<RunningServe> {
 }
 
 const logFile = (where: Layout, thread: string) =>
-  join(where.logs, projectKey(process.cwd()), `${thread}.jsonl`);
+  sessionPathsIn(join(where.logs, projectKey(process.cwd())), thread).log;
 
 async function say(server: RunningServe, thread: string, prompt: string) {
   const client = await serveClient(server);

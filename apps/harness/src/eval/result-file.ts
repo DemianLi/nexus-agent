@@ -305,6 +305,7 @@ function fileName(header: EvalResultHeader): string {
   const { commit, dirty } = header.provenance;
   const where = commit === null ? 'nogit' : commit.slice(0, 7);
   const tool = header.tool.replace(':', '-');
+  // session-file-exempt: 評測結果檔，不是會話日誌。
   return `${tool}-${stamp(new Date(header.startedAt))}-${where}${dirty === true ? '-dirty' : ''}.jsonl`;
 }
 

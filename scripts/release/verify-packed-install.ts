@@ -42,6 +42,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { sessionFilenames } from '../../packages/nexus-core/src/session-filename.js';
 import { serverLogBody } from '../../apps/harness/src/server-log-line.js';
 import { fileSha256 } from './pack.js';
 import {
@@ -51,6 +52,12 @@ import {
   walkInstalledGraph,
 } from './payload.js';
 import { sbomProblems } from './sbom.js';
+
+/**
+ * CLI 那一輪 root 會話的檔名。root 的 id 固定是 `cli`，`safeBaseName` 編碼後不變；檔名照 `@nexus/core` 的那一份
+ * （#1857）。import 的是葉模組本身，不經 `@nexus/core` 的入口：發版腳本不拉整包 core 進來，同上面的 `server-log-line`。
+ */
+const CLI_SESSION = sessionFilenames('cli');
 
 /** 乾淨的子行程環境：宿主的 tsx hook、NODE_PATH 都不能替產物補洞。 */
 export function cleanEnv(home: string): NodeJS.ProcessEnv {
@@ -253,7 +260,7 @@ export function headerProblems(
   stamp: BuildStampShape | undefined,
   expectCommit?: string,
 ): string[] {
-  if (header === undefined) return ['cli 跑完沒有 cli.header.json'];
+  if (header === undefined) return [`cli 跑完沒有 ${CLI_SESSION.header}`];
   const problems: string[] = [];
   const actual = header.build?.commit;
   const stampCommit = typeof stamp?.commit === 'string' ? stamp.commit : undefined;
@@ -478,7 +485,7 @@ export async function verifyPackedInstall(
     );
     const [grepRunDir] = existsSync(grepLogs) ? readdirSync(grepLogs) : [];
     const grepLogFile =
-      grepRunDir === undefined ? undefined : join(grepLogs, grepRunDir, 'cli.jsonl');
+      grepRunDir === undefined ? undefined : join(grepLogs, grepRunDir, CLI_SESSION.log);
     problems.push(
       ...installedGrepProblems(
         grepRun,
@@ -504,7 +511,7 @@ export async function verifyPackedInstall(
     problems.push(...cliProblems);
     if (cliProblems.length === 0) {
       const [run] = existsSync(logs) ? readdirSync(logs) : [];
-      const headerPath = run === undefined ? undefined : join(logs, run, 'cli.header.json');
+      const headerPath = run === undefined ? undefined : join(logs, run, CLI_SESSION.header);
       const header =
         headerPath !== undefined && existsSync(headerPath)
           ? (JSON.parse(readFileSync(headerPath, 'utf8')) as { build?: { commit?: string | null } })
