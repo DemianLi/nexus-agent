@@ -45,7 +45,7 @@ import { buildPluginSnapshot } from './plugin-snapshot.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
-import { sessionEvents, sessionsUnder } from './session-files.fixture.js';
+import { closedSessionEvents, sessionsUnder } from './session-files.fixture.js';
 import { auditStartupEntries } from './startup-audit.js';
 import { writeFile } from 'node:fs/promises';
 
@@ -616,7 +616,7 @@ describe('三個入口各有一條（拿掉任一入口的接線要紅）', () =
     // 每次組裝一個 run 目錄，裡面只有 root 那一份（`jsonl-session-store.ts`）；經 `session-files.fixture.ts` 找（#1868）。
     const sessions = await sessionsUnder(join(dir, 'sessions'));
     expect(sessions).toHaveLength(1);
-    const kinds = (await sessionEvents(sessions[0]!)).events
+    const kinds = (await closedSessionEvents(sessions[0]!))
       .map((event) => event.type as string)
       .filter((type) => ['tool/call', 'deliverables/presented', 'tool/result'].includes(type));
     expect(kinds).toEqual(['tool/call', 'deliverables/presented', 'tool/result']);

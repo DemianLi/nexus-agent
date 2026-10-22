@@ -63,7 +63,7 @@ import { composeEntries } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import {
-  sessionEvents,
+  closedSessionEvents,
   sessionEventsOf,
   sessionsUnder as sessionFilesUnder,
 } from './session-files.fixture.js';
@@ -533,13 +533,14 @@ interface SessionOnDisk {
 
 /**
  * 日誌目錄底下（遞迴）每一份落了盤的會話，經 `session-files.fixture.ts`（#1868）。日誌還不在的那份不算：這裡要的是
- * 落了盤的事件。事件只解完整的行、不驗：要的是寫方落盤的原樣，不是讀方的修復。
+ * 落了盤的事件。事件逐行解開、不驗：要的是寫方落盤的原樣，不是讀方的修復。這裡在關檔之後才讀，尾巴是半行就拋
+ * （`closedSessionEvents`）。
  */
 async function sessionsUnder(root: string): Promise<SessionOnDisk[]> {
   const out: SessionOnDisk[] = [];
   for (const session of await sessionFilesUnder(root)) {
     if (!existsSync(session.logPath)) continue;
-    const { events } = await sessionEvents(session);
+    const events = await closedSessionEvents(session);
     out.push({ id: session.id, logPath: session.logPath, events });
   }
   return out;

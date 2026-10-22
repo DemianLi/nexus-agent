@@ -160,7 +160,7 @@ const SOURCE_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages', 'scripts']
 export const isSource = (name: string): boolean =>
   /\.(tsx?|mts|cts|[cm]?js)$/u.test(name) &&
   !/\.d\.[cm]?ts$/u.test(name) &&
-  !/\.test\.tsx?$/u.test(name);
+  !/\.test\.([cm]?[jt]sx?)$/u.test(name);
 
 /** 擁有者自己的檔整檔不掃：它們寫檔名、解 header、轉出自己都是本分。 */
 export const isOwner = (path: string): boolean =>
@@ -278,6 +278,9 @@ describe('量具自檢：每一種寫法都抓得到，註解與豁免不算', (
   it('副檔名：測試與宣告檔不掃，fixture 與 smoke 要掃', () => {
     expect(isSource('a.test.ts')).toBe(false);
     expect(isSource('a.test.tsx')).toBe(false);
+    expect(isSource('a.test.js')).toBe(false);
+    expect(isSource('a.test.mjs')).toBe(false);
+    expect(isSource('a.test.cjs')).toBe(false);
     expect(isSource('a.d.ts')).toBe(false);
     expect(isSource('a.fixture.ts')).toBe(true);
     expect(isSource('a.smoke.ts')).toBe(true);

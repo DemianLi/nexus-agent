@@ -13,6 +13,7 @@ import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
 import {
+  closedSessionEvents,
   findSession,
   rewriteSessionHeader,
   sessionEvents,
@@ -94,6 +95,17 @@ describe('事件', () => {
     expect(await sessionEvents(session)).toEqual({ events: [event(0), event(1)], complete: false });
   });
 
+  it('關檔之後才讀的：尾巴是半行就拋，不靜靜丟掉', async () => {
+    await written(root, 'cli', 2);
+    const session = await sessionOf(root, 'cli');
+    expect(await closedSessionEvents(session)).toEqual([event(0), event(1)]);
+    expect(await sessionEventsOf(root, 'cli')).toEqual([event(0), event(1)]);
+
+    await appendFile(session.logPath, '{"type":"model/usage","seq":2');
+    await expect(closedSessionEvents(session)).rejects.toThrow('最後一行只寫了一半');
+    await expect(sessionEventsOf(root, 'cli')).rejects.toThrow('最後一行只寫了一半');
+  });
+
   it('只有 header、日誌還不在：沒有事件，算完整', async () => {
     await mkdir(join(root, 'p'));
     await writeFile(
@@ -141,6 +153,31 @@ describe('改 header', () => {
     await expect(sessionOf(root, 'cli')).rejects.toThrow();
     await restore();
     expect(await readFile(path, 'utf8')).toBe(original);
+  });
+
+  it('回的字串不是 JSON 物件（null）：當成壞的 header 原樣寫入，restore 寫回原文', async () => {
+    await written(root, 'cli');
+    const path = sessionPathsIn(root, 'cli').header;
+    const original = await readFile(path, 'utf8');
+    const restore = await rewriteSessionHeader(root, 'cli', () => 'null');
+    expect(await readFile(path, 'utf8')).toBe('null');
+    await restore();
+    expect(await readFile(path, 'utf8')).toBe(original);
+  });
+
+  it('原文本身就壞了：拋，edit 不會被呼叫，檔不動', async () => {
+    await written(root, 'cli');
+    const path = sessionPathsIn(root, 'cli').header;
+    await writeFile(path, '{壞掉');
+    let called = false;
+    await expect(
+      rewriteSessionHeader(root, 'cli', (raw) => {
+        called = true;
+        return raw;
+      }),
+    ).rejects.toThrow('原本就不是 JSON 物件');
+    expect(called).toBe(false);
+    expect(await readFile(path, 'utf8')).toBe('{壞掉');
   });
 
   it('動到 version 就拋，檔不動：回物件、回解得開的字串都一樣', async () => {

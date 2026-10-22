@@ -46,7 +46,7 @@ import { buildPluginSnapshot } from './plugin-snapshot.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
-import { sessionEvents, sessionsUnder } from './session-files.fixture.js';
+import { closedSessionEvents, sessionsUnder } from './session-files.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { auditStartupEntries, REQUIRED_TREE_ENTRY_IDS } from './startup-audit.js';
@@ -759,7 +759,7 @@ async function logEventsOf(home: string): Promise<{ file: string; type: string; 
   if (!existsSync(dir)) return [];
   const out: { file: string; type: string; data: unknown }[] = [];
   for (const session of await sessionsUnder(dir)) {
-    for (const event of (await sessionEvents(session)).events)
+    for (const event of await closedSessionEvents(session))
       out.push({ file: session.logPath, type: event.type, data: event.data });
   }
   return out;

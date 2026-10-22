@@ -27,7 +27,7 @@ import { foldTurn, serveClient } from '../fixtures.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
-import { sessionEvents, sessionsUnder } from '../session-files.fixture.js';
+import { closedSessionEvents, sessionsUnder } from '../session-files.fixture.js';
 import { sessionPersistencePlugin } from '@nexus/core';
 
 import { browserSessionPlugin, DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './browser-session.js';
@@ -101,7 +101,7 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
 async function countPersistedEvents(root: string): Promise<number> {
   let total = 0;
   for (const session of await sessionsUnder(root))
-    total += (await sessionEvents(session)).events.length;
+    total += (await closedSessionEvents(session)).length;
   return total;
 }
 

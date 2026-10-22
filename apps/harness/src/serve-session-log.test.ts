@@ -27,8 +27,8 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import {
+  closedSessionEvents,
   rewriteSessionHeader,
-  sessionEvents,
   sessionEventsOf,
   sessionHeaderOf,
   sessionsUnder,
@@ -130,7 +130,7 @@ describe('serve 的 --session-log', () => {
     expect(sessions.map((session) => session.id)).toEqual(['alpha', 'beta']);
 
     for (const session of sessions) {
-      const { events } = await sessionEvents(session);
+      const events = await closedSessionEvents(session);
       expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
       expect(events.map((event) => event.type)).toContain('turn/start');
       expect(events.map((event) => event.type)).toContain('turn/end');
@@ -185,7 +185,7 @@ describe('serve 的 --session-log', () => {
     expect(sessions).toHaveLength(2);
     // 兩份都真的有內容——「開得起來」與「寫得進去」是兩件事。
     for (const session of sessions) {
-      expect((await sessionEvents(session)).events.length).toBeGreaterThan(0);
+      expect((await closedSessionEvents(session)).length).toBeGreaterThan(0);
     }
   });
 
