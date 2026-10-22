@@ -184,7 +184,11 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
         <StaticLine
           icon={OctagonAlert}
           label={ENDING_LABEL[row.reason]}
-          summary={row.reason === 'stopped' || row.reason === 'blocked' ? '' : row.summary}
+          summary={
+            row.reason === 'stopped' || row.reason === 'timed-out' || row.reason === 'blocked'
+              ? ''
+              : row.summary
+          }
           attribution={row.attribution}
           {...(row.reason === 'failed' ? { tone: 'danger' as const } : {})}
         />

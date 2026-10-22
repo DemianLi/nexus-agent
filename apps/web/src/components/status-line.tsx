@@ -34,6 +34,7 @@ import { pendingAsker } from '@/lib/approval-asker';
 import { pendingLabel } from '@/lib/pending-label';
 import { elapsedText, runningTurnStart } from '@/lib/running-turn';
 import { serverClock } from '@/lib/server-clock';
+import { STOPPED_STATUS_TEXT, TIMED_OUT_STATUS_TEXT, stoppedByTurnClock } from '@/lib/stop-cause';
 import { turnActivity } from '@/lib/turn-activity';
 
 /** 經過時間每隔多久重算一次。 */
@@ -214,8 +215,12 @@ export function StatusLine({
   }
   return (
     <p className="text-muted-foreground text-body" role="status">
-      {/* 已停止不是失敗（#276）：人按的，所以不用紅字。 */}
-      {state.status === 'stopped' ? '已停止' : '就緒'}
+      {/* 已停止不是失敗（#276）：人按的、時間到停下的都不用紅字；兩種分開講（#1631）。 */}
+      {state.status === 'stopped'
+        ? stoppedByTurnClock(state.stopCause)
+          ? TIMED_OUT_STATUS_TEXT
+          : STOPPED_STATUS_TEXT
+        : '就緒'}
     </p>
   );
 }

@@ -76,6 +76,7 @@ import { RetryNotice } from '@/components/retry-notice';
 import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
 import { useStableNames } from '@/hooks/use-stable-names';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
+import { STOPPED_FOOTER_TEXT, TIMED_OUT_FOOTER_TEXT, stoppedByTurnClock } from '@/lib/stop-cause';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { BLOCKED_HINT_TEXT } from '@/lib/archived-view';
 import { settledNoticeText } from '@/lib/queue-view';
@@ -347,8 +348,12 @@ export function Entry({
             </BubbleContent>
           </Bubble>
         )}
-        {/* 講到一半被人按了停止（#276）。不是失敗，所以不用紅字。 */}
-        {entry.stopped === true && <MessageFooter className="px-0">（已停止）</MessageFooter>}
+        {/* 講到一半被停下（#276）：人按的或時間到（#1631）。不是失敗，所以不用紅字。 */}
+        {entry.stopped === true && (
+          <MessageFooter className="px-0">
+            {stoppedByTurnClock(entry.stopCause) ? TIMED_OUT_FOOTER_TEXT : STOPPED_FOOTER_TEXT}
+          </MessageFooter>
+        )}
         {/* 這一輪寫到輸出上限被切斷（#608）。同「已停止」：不是失敗，不用紅字。 */}
         {entry.maxTokens === true && (
           <MessageFooter className="px-0">{MAX_TOKENS_NOTICE}</MessageFooter>

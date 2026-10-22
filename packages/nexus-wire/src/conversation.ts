@@ -191,6 +191,11 @@ export interface AiEntry {
    */
   readonly stopped?: true;
   /**
+   * 為什麼停（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：同 {@link ConversationState.stopCause}，跟
+   * {@link AiEntry.stopped} 一起標。舊 server 的收尾沒帶原因就沒有這一格。
+   */
+  readonly stopCause?: TurnStopCause;
+  /**
    * 那則回覆在日誌裡的訊息 id，**評分指名的就是它**（[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
    * 取自 `message-start` 的 `id`：即時的是串流層給的那個，量過等於日誌 `assistant/message` 記的；重播的由
    * server 照日誌填。沒有這一格的（日誌沒記 id）評不了。
@@ -504,6 +509,17 @@ export function isQuestionPending(pending: PendingInput): pending is PendingQues
  */
 export type ConversationStatus = 'idle' | 'running' | 'awaiting-input' | 'failed' | 'stopped';
 
+/**
+ * 一輪被中止的原因（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：pump 補在 root 那顆收尾 `lifecycle` 的
+ * `aborted` 旁邊，歷史重放也帶。**與 `@nexus/core` 的 `TurnAbortCause` 同形**（這個套件不相依 core，所以各寫一份；
+ * `conversation.test.ts` 讀 core 的原始碼把兩份釘在一起）。`hook` 的 `reason` 是穩定的機器字串，今天只有時鐘到點的
+ * `turn-timeout`；`parent` 只出現在背景子代理自己的日誌上，root 那顆收尾不會帶。
+ */
+export type TurnStopCause =
+  | { readonly kind: 'user' }
+  | { readonly kind: 'parent' }
+  | { readonly kind: 'hook'; readonly reason: string };
+
 /** 判別式的值。**與 `@nexus/core` 的兩個常數是同一組字串**，見 {@link reduceInputRequested}。 */
 export const APPROVAL_PENDING_KIND = 'approval';
 export const QUESTION_PENDING_KIND = 'question';
@@ -698,6 +714,11 @@ export interface ConversationState {
    * 規則見 `llm-retry.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly retry: WireLlmRetry | null;
+  /**
+   * 這一輪為什麼停（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：root 那顆收尾 `lifecycle` 上的 `cause`，
+   * **只在 {@link status} 是 `stopped` 時有意義**，下一輪開跑時清掉。舊 server 沒帶原因就沒有這一格，畫面照舊當人按了停止。
+   */
+  readonly stopCause?: TurnStopCause;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -2181,6 +2202,8 @@ interface LifecycleData {
   readonly error?: string;
   /** 人按了停止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
   readonly aborted?: boolean;
+  /** 為什麼停，跟 `aborted` 一起補（#1624），見 {@link TurnStopCause}。 */
+  readonly cause?: TurnStopCause;
   /** 這一輪撞到了輸出上限。同 `aborted` 由 pump 補，見 {@link AiEntry.maxTokens}。 */
   readonly maxTokens?: boolean;
   /**
@@ -2280,15 +2303,17 @@ function reduceLifecycle(
   if (data.aborted === true) {
     // **人按了停止**（#276）。先於 `failed`／`completed` 判：被切斷的那一次基座發的是 `failed`，
     // 那不是失敗。停在核准點時的收回也走這裡，所以掛著的卡片一起收掉——伺服器那側已經收回了。
-    // 還在吐字的那幾則標成被打斷，還沒有結果的工具卡收成失敗。
+    // 還在吐字的那幾則標成被打斷，還沒有結果的工具卡收成失敗。原因（#1624）照帶來的記下，沒帶就不寫。
+    const cause = data.cause === undefined ? {} : { stopCause: data.cause };
     return {
       ...state,
       status: 'stopped',
       error: undefined,
       pendings: [],
+      stopCause: data.cause,
       entries: settleUnfinishedTools(state.entries, time).map((entry) =>
         entry.kind === 'ai' && entry.streaming
-          ? { ...entry, streaming: false, stopped: true, ...timeField('settledAt', time) }
+          ? { ...entry, streaming: false, stopped: true, ...cause, ...timeField('settledAt', time) }
           : entry,
       ),
     };
@@ -2305,7 +2330,7 @@ function reduceLifecycle(
     // 其中一顆之後那個新 run 發的，而沒被答到的中斷會在同一個 run 裡帶著原本那顆 id
     // 再度發一次 `input.requested`（實測），上面的覆寫因此是冪等的。留著不清的話，
     // 旁觀的那一端會抱著一張已經被別人答掉、永遠回答不了的卡片。
-    return { ...state, pendings: [], status: 'running', error: undefined };
+    return { ...state, pendings: [], status: 'running', error: undefined, stopCause: undefined };
   }
   if (data.event === 'failed') {
     return {

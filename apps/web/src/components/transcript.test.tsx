@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
+import { STOPPED_FOOTER_TEXT, TIMED_OUT_FOOTER_TEXT } from '@/lib/stop-cause';
 import { SETTLED_NOTICE_TEXT, SETTLED_NOTICE_UNKNOWN_TEXT } from '@/lib/queue-view';
 
 /**
@@ -188,6 +189,30 @@ describe('正文空的回覆', () => {
       }),
     ]);
     expect(screen.getByTestId('ai-entry').textContent).toContain('（已停止）');
+  });
+
+  it.each([
+    ['時鐘到點', { kind: 'hook', reason: 'turn-timeout' }, TIMED_OUT_FOOTER_TEXT],
+    ['人按了停止', { kind: 'user' }, STOPPED_FOOTER_TEXT],
+    ['舊 server 沒帶原因', undefined, STOPPED_FOOTER_TEXT],
+  ] as const)('講到一半停下（#1631）：%s，底下講對的那一句、不用紅字', (_name, cause, text) => {
+    show([
+      running(),
+      start('a'),
+      say('a', '寫到一半'),
+      frame('lifecycle', [], {
+        event: 'failed',
+        graph_name: 'root',
+        aborted: true,
+        ...(cause === undefined ? {} : { cause }),
+      }),
+    ]);
+    const entry = screen.getByTestId('ai-entry');
+    const footer = within(entry).getByText(text);
+    expect(footer.className).not.toContain('text-destructive');
+    expect(entry.textContent).not.toContain(
+      text === TIMED_OUT_FOOTER_TEXT ? STOPPED_FOOTER_TEXT : TIMED_OUT_FOOTER_TEXT,
+    );
   });
 
   it('想到一半被按了停止：推理列講「思考過程」，不再是思考中', () => {
