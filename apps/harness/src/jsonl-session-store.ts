@@ -116,10 +116,17 @@
  *
  * 一份會話三個檔並排：`<base>.header.json`、`<base>.jsonl`、`<base>.lock`（`base` 見 {@link safeBaseName}）。檔名只在
  * `@nexus/core` 的 `session-filename.ts` 定義，同 dsh 的檔名只有一份定義（`packages/session/session-format/src/filename.ts:14`，
- * 跟版本目錄同一個格式層）。讀一份會話只有 {@link readSessionEntry} 這一支（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857)）：
- * 列表、唯讀打開、續接、離線掃描（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）都經過它；知道 id、要直接碰檔的
- * 量測與夾具用 {@link sessionPathsIn}。別的地方寫這兩個副檔名或 import {@link parseHeader}，
- * `session-files-single-owner.test.ts` 會紅。
+ * 跟版本目錄同一個格式層）。讀一份會話的接縫是 {@link readSessionEntry}（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857)）：
+ * 列表、唯讀打開、續接、離線掃描（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）與 `log-derived-history.fixture.ts`
+ * 都經過它。不經過它、只用到檔名的：
+ *
+ * - 知道 id、要直接碰檔的煙霧測試、`checkpoint-depth-cold.fixture.ts` 與量測（`measure/thread-list-cli.ts`，寫方）用
+ *   {@link sessionPathsIn}；
+ * - 發版驗證（`scripts/release/verify-packed-install.ts`）只 import `@nexus/core` 的檔名葉模組：發版腳本不拉整支 store 進來；
+ * - 夾具產生器（`scripts/session-format-fixtures/run-directory.ts`）要凍原樣位元組與寫入器記的版號，接縫會把 header 的
+ *   `version` 轉譯成這一版（#1856），不是它要的。
+ *
+ * 別的地方寫這兩個副檔名或 import {@link parseHeader}，`session-files-single-owner.test.ts` 會紅。
  *
  * @see [#172](https://github.com/DemianLi/nexus-agent/issues/172)
  * @module

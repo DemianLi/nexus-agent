@@ -34,10 +34,10 @@
 
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { SystemMessage } from '@langchain/core/messages';
@@ -45,12 +45,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { stringify } from 'yaml';
-import {
-  SessionRegistry,
-  parseSessionHeaderFilename,
-  replayConversation,
-  sessionFilenames,
-} from '@nexus/core';
+import { SessionRegistry, replayConversation } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import type { ConversationState, Event as WireEvent } from '@nexus/wire';
@@ -62,7 +57,7 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toolResultAsSeen } from './conversation-restore.js';
 import { foldTurn, serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
+import { projectKey, readSessionEntry, sessionPathsIn } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID, withShippedRequestBody } from './live-model.js';
 import { composeEntries } from './plugin-config.js';
 import { runServe } from './serve.js';
@@ -524,33 +519,54 @@ const finish = (events: SessionEvent[], bodies: Body[]): Run => ({
   mainBodies: bodies.filter(hasTools),
 });
 
-/**
- * 日誌目錄底下（遞迴）每一份會話的日誌本文路徑。認 header 檔名（`@nexus/core` 的那一份），日誌還不在的那份不算：
- * 這裡要的是落了盤的事件。
- */
-function sessionLogsUnder(root: string): string[] {
-  const out: string[] = [];
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        walk(join(dir, entry.name));
-        continue;
-      }
-      const base = parseSessionHeaderFilename(entry.name);
-      if (base === undefined) continue;
-      const log = join(dir, sessionFilenames(base).log);
-      if (existsSync(log)) out.push(log);
-    }
-  };
-  walk(root);
-  return out;
+/** 一份落了盤的會話：讀取接縫交出來的 header 與日誌路徑，加上逐行解開的事件。 */
+interface SessionOnDisk {
+  readonly id: string;
+  readonly logPath: string;
+  readonly events: SessionEvent[];
 }
 
-function readJsonl(file: string): SessionEvent[] {
-  return readFileSync(file, 'utf8')
+/**
+ * 經後端的讀取接縫（`readSessionEntry`，#1857）讀一份，事件逐行解開、不驗：這裡要的是寫方落盤的原樣，不是讀方的修復。
+ * 日誌還不在的那份是 `undefined`：這裡要的是落了盤的事件。
+ */
+async function sessionOnDisk(
+  directory: string,
+  filename: string,
+): Promise<SessionOnDisk | undefined> {
+  const entry = await readSessionEntry(directory, filename);
+  if (entry === undefined || !existsSync(entry.logPath)) return undefined;
+  const events = (await entry.readBody())
+    .toString('utf8')
     .split('\n')
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as SessionEvent);
+  return { id: entry.header.id, logPath: entry.logPath, events };
+}
+
+/** 日誌目錄底下（遞迴）每一份落了盤的會話。 */
+async function sessionsUnder(root: string): Promise<SessionOnDisk[]> {
+  const out: SessionOnDisk[] = [];
+  const walk = async (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        await walk(join(dir, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const session = await sessionOnDisk(dir, entry.name);
+      if (session !== undefined) out.push(session);
+    }
+  };
+  await walk(root);
+  return out;
+}
+
+/** `directory` 裡 id 是 `id` 的那一份的事件。 */
+async function eventsOf(directory: string, id: string): Promise<SessionEvent[]> {
+  const session = await sessionOnDisk(directory, basename(sessionPathsIn(directory, id).header));
+  if (session === undefined) throw new Error(`${directory} 裡沒有落了盤的會話 ${id}`);
+  return session.events;
 }
 
 /**
@@ -655,11 +671,13 @@ export async function runShippedCli(lines: string, script: Script, patchExtra = 
   } finally {
     await upstream.close();
   }
-  const files = sessionLogsUnder(logs);
+  const sessions = await sessionsUnder(logs);
   // CLI 每次一個 run 目錄，root 的 id 固定是 `cli`。
-  const rootLog = files.find((file) => file === sessionPathsIn(dirname(file), 'cli').log);
-  if (rootLog === undefined) throw new Error(`root 日誌不在 ${logs} 底下：${files.join(', ')}`);
-  return finish(readJsonl(rootLog), upstream.bodies);
+  const root = sessions.find((session) => session.id === 'cli');
+  if (root === undefined) {
+    throw new Error(`root 日誌不在 ${logs} 底下：${sessions.map((s) => s.logPath).join(', ')}`);
+  }
+  return finish(root.events, upstream.bodies);
 }
 
 /** 這一句人話之後，已經有一則收尾的 AI 訊息，而且對話回到 idle。 */
@@ -731,10 +749,7 @@ export async function runServePhases(
   } finally {
     await upstream.close();
   }
-  return finish(
-    readJsonl(sessionPathsIn(join(logs, projectKey(process.cwd())), 'alpha').log),
-    upstream.bodies,
-  );
+  return finish(await eventsOf(join(logs, projectKey(process.cwd())), 'alpha'), upstream.bodies);
 }
 
 // ---------------------------------------------------------------------------
@@ -779,10 +794,10 @@ export const rootLogOf = (run: DriverRun): LogFile => {
 export const childLogsOf = (run: DriverRun): LogFile[] =>
   run.logs.filter((log) => log.file.includes('%2f'));
 
-function readAllLogs(root: string): LogFile[] {
-  return sessionLogsUnder(root).map((file) => ({
-    file: file.slice(root.length),
-    events: readJsonl(file),
+async function readAllLogs(root: string): Promise<LogFile[]> {
+  return (await sessionsUnder(root)).map((session) => ({
+    file: session.logPath.slice(root.length),
+    events: session.events,
   }));
 }
 
@@ -857,7 +872,7 @@ export async function runServeDriver(
   }
   return {
     home,
-    logs: readAllLogs(logs),
+    logs: await readAllLogs(logs),
     bodies: upstream.bodies,
     mainBodies: upstream.bodies.filter(hasTools),
   };

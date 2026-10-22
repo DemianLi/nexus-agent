@@ -201,6 +201,11 @@ describe('量具自檢：每一種寫法都抓得到，註解與豁免不算', (
     ).toEqual([]);
   });
 
+  it('判的是匯入來源，不是識別字：從別的模組匯入同名的 parseHeader 不算', () => {
+    expect(at("import { parseHeader } from './other.js';")).toEqual([]);
+    expect(at("export { sessionLogPathOf } from '../trace/call.js';")).toEqual([]);
+  });
+
   it('只出現在註解裡的不算', () => {
     expect(at('// 讀 cli.jsonl 與 cli.header.json\nconst x = 1;')).toEqual([]);
     expect(at('/** `<base>.header.json`、`<base>.jsonl` */\nexport const x = 1;')).toEqual([]);
