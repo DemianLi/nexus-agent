@@ -25,7 +25,7 @@ import { request as httpRequest } from 'node:http';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { arch, cpus, platform, release, totalmem } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import { parseArgs } from 'node:util';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
@@ -418,7 +418,8 @@ async function main(): Promise<void> {
   const sizes = values.sizes!.split(',').map(Number);
   const skip = new Set(values.skip!.split(',').filter(Boolean));
   const runs = Number(values.runs);
-  const cwd = join(values.root, 'cwd');
+  // header 的 cwd 要是絕對路徑，`create` 當下就驗（#1559）：`--root` 給相對路徑也照樣跑。
+  const cwd = resolve(values.root, 'cwd');
   await mkdir(cwd, { recursive: true });
   if (values.filler !== undefined) await makeFiller(values.filler, Number(values['filler-gb']));
 

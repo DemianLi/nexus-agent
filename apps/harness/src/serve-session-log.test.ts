@@ -269,6 +269,15 @@ describe('serve 的 --session-log', () => {
       runServe({ argv: ['--port', '0', '--session-log', '  '], log: () => undefined, env: {} }),
     ).rejects.toThrow('--session-log 要給一個目錄路徑');
   });
+
+  // #1559 N0633：會話根讀不了在啟動時就報，不等第一條 thread 第一次寫、在背景路徑上變成一行 warn。
+  it('--session-log 指到一般檔案：起不來', async () => {
+    const file = join(await tmp('nexus-serve-file-'), 'not-a-directory');
+    await writeFile(file, '');
+    await expect(
+      runServe({ argv: ['--port', '0', '--session-log', file], log: () => undefined, env: {} }),
+    ).rejects.toThrow(expect.objectContaining({ code: 'ENOTDIR' }));
+  });
 });
 
 /** 把落盤那一列關掉的夾具（#612）。 */
@@ -532,6 +541,34 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     await stop(second);
     expect(await readFile(log, 'utf8')).toBe(before);
+  });
+
+  /**
+   * 這一版讀不懂的日誌（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) N0646）：原始檔的位置記進伺服器日誌，
+   * 讓管理員找得到；**回給瀏覽器的錯誤不帶路徑**——多人共用的主機不把目錄結構交給每一個打開那條 thread 的人。
+   */
+  it('日誌比這一版新：起不來，伺服器日誌有原始日誌的路徑，回給 client 的錯誤沒有', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+    const { header, log } = sessionPathsIn(projectDirOf(root), 'alpha');
+    const stored = JSON.parse(await readFile(header, 'utf8')) as Record<string, unknown>;
+    await writeFile(header, JSON.stringify({ ...stored, version: SESSION_LOG_FORMAT_VERSION + 1 }));
+
+    const serverLines: string[] = [];
+    const second = await start(root, [], bodyLog(serverLines));
+    const cookie = await exchangeServeToken(second.authenticatedUrl);
+    const page = await createWireClient({
+      baseUrl: second.url,
+      fetch: fetchWithCookie(cookie),
+    }).threadHistory('alpha');
+    await stop(second);
+    expect(page.kind).not.toBe('ok');
+    // 前提：client 拿到的就是那一個拒讀（訊息原樣送過去），只是不帶路徑。
+    expect(JSON.stringify(page)).toContain('是比這一版新');
+    expect(JSON.stringify(page)).not.toContain(log);
+    expect(serverLines.some((line) => line.includes(log) && line.includes('alpha'))).toBe(true);
   });
 
   it('別的把手握著：起不來；它放了之後同一台 server 重試接得回來', async () => {
