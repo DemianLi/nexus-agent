@@ -57,6 +57,15 @@ describe('全域下行的 frame', () => {
       { type: 'input-requested', threadId: 't', event: { ...REQUEST, method: 'lifecycle' } },
       { type: 'input-requested', threadId: 't' },
       { type: 'input-withdrawn', threadId: 't' },
+      // 信封不合格的 `input-requested` 丟掉（#1555）：折疊器在 `useReducer` 裡讀它的 `params`，壞的進去整個 App 白掉。
+      {
+        type: 'input-requested',
+        threadId: 't',
+        event: { type: 'event', method: 'input.requested' },
+      },
+      { type: 'input-requested', threadId: 't', event: { ...REQUEST, params: null } },
+      { type: 'input-requested', threadId: 't', event: { ...REQUEST, params: { namespace: [] } } },
+      { type: 'input-requested', threadId: 't', event: { ...REQUEST, seq: '3' } },
     ]) {
       expect(isThreadFeedFrame(frame)).toBe(false);
     }
