@@ -34,16 +34,11 @@
  *    並用當下 `develop` 那個 commit 的寫入器凍一份夾具（產生器在 `scripts/session-format-fixtures/`；細節見
  *    `docs/standards.md`〈會話日誌格式〉）。`develop → main` 的 PR 不另加 commit、tag 要發完才有，所以不能留到那一步。
  *
- * ## 待補登：同一版之內新增、沒有升版的欄位
+ * ## 同一版之內新增、沒有升版的欄位
  *
- * 這份目錄只記升版的邊。同一版之內加的選填欄位今天只寫在 `session-store.ts` 檔頭各版的「之內新增、沒有升版的欄位」小節。
- * dsh 把它們逐筆登記在 `docs/persistence-changes/README.md` 的 Compatibility rules 表上（`same-version`）；那張表要不要照
- * dsh 建，是 #1529 第五刀（升版節奏要不要改照 dsh 的同版相容審查）要決定的事，第一刀不先替它建表（PM 2026-10-21 裁決）。
- * 第五刀開工時要補登成 `same-version` 的至少兩筆：
- *
- * - `context/measure.messagesCompactable`（格式 48 之內，[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）；
- * - `llm/retry.failure.requestId` 與 `turn/failed.error.requestId`（格式 49 之內，
- *   [#1536](https://github.com/DemianLi/nexus-agent/issues/1536)，PR [#1762](https://github.com/DemianLi/nexus-agent/pull/1762)）。
+ * 這份目錄只記升版的邊。同一版之內的型別變更逐筆登記在 `docs/persistence-changes/`
+ * （[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)，由 `apps/harness/src/persistence-changes.ts` 驗、CI 擋）；
+ * 50 版以前的（32、48、49 之內）寫在基線 `2026-10-23-initial.md` 的〈相容性〉。
  *
  * @module
  */

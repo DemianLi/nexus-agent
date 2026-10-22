@@ -81,13 +81,16 @@ import type { SessionEvent } from './session-log.js';
  * 的六種一路長到今天、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
  * 分支的遷移**——讀方只能靠猜。
  *
- * **這份檔頭是格式紀錄的唯一來源**：每一版改了什麼、讀舊檔怎樣，只寫在下面這些段落。營運者讀的升級指南
+ * **升版的格式紀錄以這份檔頭為準**：每一次升版改了什麼、讀舊檔怎樣，寫在下面這些段落。同一版之內、沒有升版的型別變更登記在
+ * `docs/persistence-changes/`（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)，由 `apps/harness/src/persistence-changes.ts` 驗、CI 擋），
+ * 50 版以前的寫在那裡的基線 `2026-10-23-initial.md`。營運者讀的升級指南
  * （`docs/upgrade-guide/`，AGENTS.md「發版」〈升級指南〉）只寫要動手的事，再連到這裡，不另抄一份。
  * **偏離 dsh**（#1537 Q2 (a)，demian 2026-10-17 拍板；理由 1）：dsh 的格式紀錄是機器檢查的——
  * `docs/persistence-changes/` 逐筆一份 `.md` 加從型別抽出的 `.schema.json`、digest、`finalized/` 凍結點，
  * 由 `scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。那一套靠它自己的
  * 型別抽取工具鏈，這裡退到人寫的段落。補機器檢查排成另一張程式卡，跟 #1529 之後的遷移刀一起；撤除條件是那張卡合併。
- * 七層盤點 O-13 的「形狀不同、未登記成偏離」就是這一條。
+ * 七層盤點 O-13 的「形狀不同、未登記成偏離」就是這一條。**現況**：那張卡是 #1856，紀錄與驗證器已合（`82c95e1a`）；
+ * `finalized/` 凍結點與 `docs/session-format-status.md` 不在它的範圍（卡上〈不做什麼〉），還沒有。
  *
  * ## 2：`turn/start` 多了 `kind: 'goal'`
  *
@@ -388,36 +391,9 @@ import type { SessionEvent } from './session-log.js';
  *
  * ### 32 之內新增、沒有升版的欄位
  *
- * - **`modelCall`**（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)）：`model/end`、`model/usage`、`llm/retry`、
- *   `llm/retry-started`、`assistant/message`、`context/measure` 各多一個選填欄，值是所屬那次模型呼叫的 `model/start` 的 `seq`。
- *   **不升**：前五種不進模型；`assistant/message` 進，但新欄不左右它怎麼進。六種都不左右任何折疊，沒有任何舊讀方拿這一格做事；
- *   一台 32 的舊 runtime 讀回這份日誌，多一個不認得的欄位照舊投影，只是不知道誰屬於哪次呼叫。判準同上：寫方寫出來的東西，
- *   舊 runtime 還能不能完整正確地處理——能。**沒有這一格就是沒記**（這一版以前寫的，或寫入點不在呼叫範圍裡），讀的人標「—」，
- *   不是推位置（`indexModelCalls`）。
- * - **`outcome` 與 `usage`**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：`model/end` 與 `model/usage` 各多一個選填的
- *   `outcome`（`error`｜`aborted`，只在那次呼叫沒有正常回來時帶），`compaction/summary` 多一個選填的 `usage`（生摘要那次報的用量）。
- *   另外失敗的呼叫現在也可能寫出 `model/usage`（帶 `outcome`）。**不升**：兩個 `outcome` 與 `usage` 都是選填欄、沒有人拿它們
- *   左右重建；失敗那顆 `model/usage` 不進模型，**舊讀方照常讀它**——加總的折疊本來就該把花掉的 token 都算進去，「目前大小」讀最新一筆的
- *   也照讀（同 dsh：`contextPressure` 連 `assistant/attempt` 的用量也取樣，那份請求真的送出去過），所以一台 32 的舊 runtime
- *   讀回這份日誌的畫面與新 runtime 一樣。判準同上：寫方寫出來的東西，舊 runtime 還能不能完整正確地處理——能。**沒有這幾格就是沒記**
- *   （這一版以前寫的，或供應商沒報），讀的人標「—」，不是 0。
- * - **`approval/asked` 與 `approval/decided`**（[#1029](https://github.com/DemianLi/nexus-agent/issues/1029)）：核准的問與答各一顆，
- *   新增的**種類**、都帶 `ignorable: true`。**不升**：判準同上（寫方寫出來的東西，舊 runtime 還能不能完整正確地處理）——能，
- *   它們不進模型、不左右任何折疊，一台 32 的舊 runtime 讀回這份日誌時略過它們，畫面與新 runtime 只差側欄那一格。**沒有這兩顆
- *   就是沒記**（這一版以前寫的），讀的人標「—」，不是「沒有人被問過」。同批：核准拒絕的 `tool/result.error` 多了
- *   `APPROVAL_REJECTED_BY_USER` 等碼（`tool-events.ts`），`error` 本來就是選填，舊讀方照收。
- * - **`session/resumed`**（[#1138](https://github.com/DemianLi/nexus-agent/issues/1138)）：續接時實際載入的建置版本、插件清單與設定雜湊
- *   （形狀同 header 的那三格）。新增的**種類**、帶 `ignorable: true`。**不升**：判準同上——它不進模型、不左右任何折疊，
- *   一台 32 的舊 runtime 讀回這份日誌時略過它，只少了「後來是哪一版接手的」。**沒有這一顆就是沒記**（這一版以前續接的），
- *   讀的人拿 header 那份當答案，並知道它只是建立當下的。header 本身不動。
- * - **`turn/failed.error`**（[#434](https://github.com/DemianLi/nexus-agent/issues/434)）：`turn/failed` 多一個選填的 `error`
- *   （`{ message, code, status? }`，失敗的分類）。**不升**：判準同上——一台 32 的舊 runtime 讀回這份日誌，`turn/failed` 的每個讀者
- *   （goal 續行、歷史、統計、遙測…）只認「有這顆事件」或讀 `message`，多一個不認得的欄位照舊投影。**沒有這一格就是沒記**
- *   （這一版以前寫的），讀的人標「—」，不是 `UNKNOWN`；`UNKNOWN` 是「記了、而且不是供應商的錯」。
- * - **前景子代理日誌的第一顆 `user/message`**（[#1159](https://github.com/DemianLi/nexus-agent/issues/1159)）：基座 `task` 派出的前景子代理，
- *   子日誌出生時多寫一顆來源 `user` 的 `user/message`，內容是它收到的那句話（`task` 的 `description`）。**不升**：沒有新種類、沒有新欄位，
- *   舊 runtime 讀它就是一顆平常的 `user/message`，且前景子代理是 one-shot，沒有續接這回事。**沒有這一顆就是沒記**（這一版以前寫的前景子日誌）：
- *   從那種日誌推子代理的歷史會缺開頭那句話，讀的人要從父日誌 `tool/call` 的 `description` 補，不能當成「沒有輸入」。
+ * 移到持久化變更紀錄的基線 `docs/persistence-changes/2026-10-23-initial.md`〈相容性〉的「32 之內」（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-3）：
+ * `modelCall`（#1021）、`outcome` 與 `usage`（#1022）、`approval/asked` 與 `approval/decided`（#1029）、`session/resumed`（#1138）、
+ * `turn/failed.error`（#434）、前景子代理日誌的第一顆 `user/message`（#1159）。
  *
  * ## 33：續接把當掉那一輪的收尾寫回日誌（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）
  *
@@ -596,16 +572,8 @@ import type { SessionEvent } from './session-log.js';
  *
  * ### 48 之內新增、沒有升版的欄位
  *
- * - **`context/measure.messagesCompactable`**（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：選填的布林，
- *   `messages` 那道門檻到了的話摘不摘得到東西，web 的用量環讀它。**不升**：判準同 32 那段，前例是 #1021 的 `modelCall`——
- *   `context/measure` 不進模型、不左右任何折疊，多一個欄位不改舊讀方對其餘三格的讀法。
- *
- *   **換回舊版程式**（實測，2026-10-14，用 develop `3e1cdf27` 的程式碼讀一份帶這一格的日誌）：續接（`resume`）、唯讀打開
- *   與呼叫歸屬（`indexModelCalls`）都照常，不會拒讀、也不會報壞檔。這一格在舊版的記憶體裡原樣留著，但線上的
- *   `measure` 由逐欄手抄的 `contextMeasureData` 交出，舊版不抄它，所以 web 拿不到，用量環照沒有這一格以前的算法畫。
- *   舊版續寫進去的 `context/measure` 不帶它。不必先做任何處理。
- *
- *   **讀舊檔**：沒有這一格就是沒記（這一版以前寫的，或沒有 `messages` 門檻），不是 `false`，不補寫歷史。
+ * 移到持久化變更紀錄的基線 `docs/persistence-changes/2026-10-23-initial.md`〈相容性〉的「48 之內」（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-3）：
+ * `context/measure.messagesCompactable`（#1443）。
  *
  * ## 49：訊息帶使用者的時區（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)）
  *
@@ -627,24 +595,8 @@ import type { SessionEvent } from './session-log.js';
  *
  * ### 49 之內新增、沒有升版的欄位
  *
- * - **`llm/retry.failure.requestId` 與 `turn/failed.error.requestId`**（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)）：
- *   選填的字串，供應商回應標頭裡的請求編號（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個非空的），管理者拿它去問模型閘道
- *   「哪一次請求」。**不升**：判準同 32 那段與上面 `messagesCompactable` 的前例——它是**既有事件上的選填紀錄欄位**，不進模型、不左右
- *   任何折疊、不影響續接的行為，多一個欄位不改舊讀方對其餘欄位的讀法。
- *
- *   **換回舊版程式**（實測，2026-10-20，用 develop `959e9af7` 的程式碼，在乾淨的 worktree 裡讀一份**新版真的 serve 跑出來**的日誌：
- *   假端點回 502＋`x-request-id: gw-123`、重試一次，日誌裡 `llm/retry` 與 `turn/failed` 各有一筆帶 `requestId`，header 是 49）：
- *   唯讀打開（`open().read()`，15 筆）、續接（`resume`，15 筆、next-seq 15）與呼叫歸屬（`indexModelCalls`）都照常，不會拒讀、也不會報壞檔；
- *   `requestId` 在舊版的記憶體裡原樣留著（兩處的 `failure`／`error` 都讀得到 `gw-123`）。舊版的線上投影有沒有帶出這一格，這次沒有量。
- *   不必先做任何處理。
- *
- *   **讀舊檔**：這一格以前沒有，沒有就是沒記（沒有回應標頭的失敗：還沒收到回應就失敗（連線被拒、DNS 失敗）、供應商沒送這幾個標頭），
- *   不是空字串，不補寫歷史（`apps/harness/src/provider-request-id.test.ts` 釘住「沒有標頭就沒有這一格」）。
- *
- *   **登記方式**：先記在這裡。dsh 把這種變更逐筆登記在 `docs/persistence-changes/README.md` 的 Compatibility rules 表上
- *   （`same-version`）；那張表要不要照 dsh 建，歸 [#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第五刀（升版節奏要不要
- *   改照 dsh 的同版相容審查），第一刀不建。待補登的清單（這一筆與 48 之內的 `messagesCompactable`）在版本邊目錄的檔頭
- *   （{@link ./session-format.ts}〈待補登〉）。
+ * 移到持久化變更紀錄的基線 `docs/persistence-changes/2026-10-23-initial.md`〈相容性〉的「49 之內」（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-3）：
+ * `llm/retry.failure.requestId` 與 `turn/failed.error.requestId`（#1536）。
  *
  * ## 50：`turn/end` 的 `aborted` 多一種原因 `hook`
  *

@@ -252,7 +252,7 @@ export interface LlmFailure {
    * 供應商發的不透明請求編號，供診斷用（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)）。名字與語意照 dsh 的
    * `LlmFailure.requestId`（`packages/llm/llm/src/types.ts:41-51`）：**只收非空字串**，空字串整格不帶；管理者拿它去問模型閘道那一側
    * 「哪一次請求」。從回應標頭取（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個有的），取法在 `live-model.ts`。
-   * 格式版本不升，見 `session-store.ts` 的「49 之內新增、沒有升版的欄位」。
+   * 格式版本不升，見 `docs/persistence-changes/2026-10-23-initial.md`〈相容性〉的「49 之內」。
    */
   readonly requestId?: string;
 }
