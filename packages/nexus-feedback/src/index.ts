@@ -25,6 +25,10 @@
  *   （`@nexus/core` 的 `feedback.ts`，#278 起如此）。這張是遷移卡，驗收是行為不變：拆開要改 wire handler 讀兩個服務、
  *   也牽動列 id，是行為變更。**撤除條件**：要拆時另開卡，連同使用者 home 變更紀錄裡 `feedback` 列 id 的遷移一起處理
  *   （紀錄裡找不到 id 的 patch 只警告就跳過，停用過的列會靜靜重新啟用）。
+ *   **延伸（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606) 題 2 (a)）**：dsh 沒掛落盤時 `messageFeedback` 整個不在（它 inject
+ *   `sessionPersistence`，`message-feedback/src/index.ts:119`），`sessionFeedback` 照常。併成一個服務之後沒辦法「一半不在」，所以服務照常提供，
+ *   落盤確認（`@nexus/session` 的 `sessionDurability`）是選配：沒有它時 list／put／delete **各自**拋 `FeedbackDurabilityUnavailableError`
+ *   （wire 回 `not_supported`），`record` 照常。拆成兩個服務時這條跟著撤掉。
  * - **宿主取的是快照，不是每次呼叫讀 live**：dsh 的 gateway 每次呼叫當下讀全域 store 的 `ctx.get('messageFeedback')`
  *   （`packages/api/gateway/src/index.ts:384-399`、`:874-889`）。這裡在組 thread 時取一次，跟既有的「快照」那一類同一個理由
  *   （決議 §3-2 第 6 條：插件更新只給新對話；開著的對話不變）。
@@ -41,7 +45,12 @@ import { MESSAGE_FEEDBACK_SERVICE } from '@nexus/core';
 import type { FeedbackService } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 
-export { currentMessageFeedback, FEEDBACK_CATEGORIES } from '@nexus/core';
+export {
+  currentMessageFeedback,
+  FEEDBACK_CATEGORIES,
+  FeedbackDurabilityUnavailableError,
+  FeedbackLogCorruptionError,
+} from '@nexus/core';
 export type {
   CurrentMessageFeedback,
   FeedbackCategory,
@@ -67,8 +76,13 @@ export type {
   MessageFeedbackVersionConflict,
 } from '@nexus/core';
 
-/** 契約版本（semver）。介面破壞性改動跳 major，宿主的範圍檢查擋下不相容的提供者。 */
-export const FEEDBACK_CONTRACT_VERSION = '1.0.0';
+/**
+ * 契約版本（semver）。介面破壞性改動跳 major，宿主的範圍檢查擋下不相容的提供者。
+ *
+ * **2.0.0（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)）**：四個方法都改回 `Promise`。寫入等落盤確認才回答、讀到壞的
+ * 評分事件就拋 {@link FeedbackLogCorruptionError}，同 dsh `MessageFeedbackService` 的方法都是非同步的。
+ */
+export const FEEDBACK_CONTRACT_VERSION = '2.0.0';
 
 /**
  * `messageFeedback` 服務的 token。服務名取自 `@nexus/core` 的 `MESSAGE_FEEDBACK_SERVICE`（跨套件的位址，照 dsh 取名），

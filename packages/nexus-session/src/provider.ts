@@ -21,8 +21,14 @@
 import type { Context } from '@nexus/cordis';
 import { ContractService } from '@nexus/sdk';
 
-import { sessionLookupToken } from './index.js';
-import type { SessionInstaller, SessionLookup, SessionLookupService } from './index.js';
+import { sessionDurabilityToken, sessionLookupToken } from './index.js';
+import type {
+  SessionDurabilityService,
+  SessionInstaller,
+  SessionLog,
+  SessionLookup,
+  SessionLookupService,
+} from './index.js';
 
 /** 一位會話參與者的登記（#1491）：安裝函式，與登記它的那一列。 */
 export interface SessionParticipantEntry {
@@ -85,5 +91,29 @@ export function createSessionLookupProvider(
     Provider: SessionLookupServiceImpl,
     participants: () => [...items],
     registrations: () => items.length,
+  };
+}
+
+/**
+ * 造落盤確認的提供者（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)）。**做法由宿主交進來**：排空哪一張註冊表、
+ * 從哪一個 store 讀回，是宿主的事實。方法是自己的屬性、閉包住那支函式，同 {@link createSessionLookupProvider}：消費者在 `apply`
+ * 當下抓住服務，提供者那一列卸載之後抓住的那份仍能呼叫。
+ *
+ * @param checkpoint - 宿主的做法，見 {@link SessionDurabilityService.checkpoint}。
+ * @returns 交給 Loader 當內建列的類別。
+ */
+export function createSessionDurabilityProvider(
+  checkpoint: (log: SessionLog) => Promise<void>,
+): new (ctx: Context) => SessionDurabilityService {
+  return class SessionDurabilityServiceImpl
+    extends ContractService<SessionDurabilityService>
+    implements SessionDurabilityService
+  {
+    readonly checkpoint: (log: SessionLog) => Promise<void>;
+
+    constructor(ctx: Context) {
+      super(ctx, sessionDurabilityToken);
+      this.checkpoint = (log) => checkpoint(log);
+    }
   };
 }

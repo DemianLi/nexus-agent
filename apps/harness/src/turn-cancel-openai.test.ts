@@ -29,6 +29,8 @@ import {
 } from '@nexus/core';
 import type { SessionEvent, SessionEventMap } from '@nexus/core';
 import { createFeedbackService } from '@nexus/plugin-feedback';
+
+import { MEMORY_DURABILITY } from './feedback.fixture.js';
 import type { Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
@@ -188,11 +190,14 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
       expect(messageId).toBeDefined();
       expect(loggedMessageId(interrupted.message)).toBe(messageId);
       expect(
-        createFeedbackService({ maxNoteBytes: 64 }).put(pump.sessions.root, {
-          messageId: messageId!,
-          rating: 'negative',
-          ifVersion: null,
-        }),
+        await createFeedbackService({ maxNoteBytes: 64 }, () => MEMORY_DURABILITY).put(
+          pump.sessions.root,
+          {
+            messageId: messageId!,
+            rating: 'negative',
+            ifVersion: null,
+          },
+        ),
       ).toEqual({ ok: false, error: { code: 'target-not-found', messageId } });
 
       // 下一輪：送出去的請求依序是那句話、那半段、這句話。

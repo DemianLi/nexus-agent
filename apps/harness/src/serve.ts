@@ -937,6 +937,8 @@ async function startServer(
             warn(`[會話日誌] ${message}`);
           },
         });
+  // 落盤確認（#1606）讀回比對用的 store：樹上 `session-durability` 那一列在讀清單時依清單掛上，做法在被呼叫當下才讀它。
+  if (sessionStore !== undefined) root.tree.bindDurableStore(sessionStore);
   // **每條新 thread 的私有可寫根與唯讀共用區**（#1775）。「thread（連同它的 header）→ 放在哪裡」整台一份：新 thread 在基底底下配一個目錄，
   // 續接照 header 分類（`thread-roots.ts` 檔頭有表）。測試接縫 `workspaceRootOf` 給了就換成固定的那一支（沒有私有根，續接守衛逐字比）。
   const sharedWorkspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
