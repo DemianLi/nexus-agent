@@ -36,7 +36,6 @@ import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
-import type { Conversation } from '@/hooks/use-conversation';
 import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
 import { useAgentMention } from '@/hooks/use-agent-mention';
 import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat';
@@ -74,7 +73,8 @@ import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
 import { permissionLocked } from '@/lib/permission-presets';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
-import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
+import { connectionStall, disconnectedPlaceholder } from '@/lib/connection-stall';
+import type { ConnectionStall } from '@/lib/connection-stall';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
@@ -142,31 +142,6 @@ const MODEL_SLASH: SlashDescriptor = {
   description: '切換模型與推理強度（從下一步生效）。',
 };
 
-/** 連線停住、等人按「立刻重連」時送出框那句灰字（#1865）：跟狀態列「…已停止自動重連」與它旁邊的按鈕講同一件事。 */
-export const HALTED_PLACEHOLDER = '已停止自動重連，請按上方「立刻重連」';
-
-/** 伺服器永久不收這條下行時送出框那句灰字（#1865）：原因（子代理的對話、歷史太深）由狀態列講。 */
-export const REFUSED_PLACEHOLDER = '這條對話打不開，無法送出';
-
-/**
- * 下行沒連上、而且**不會自己接回**的那兩種（#1865），跟狀態列（`status-line.tsx`）用同一組欄位判斷，畫的東西才一致：
- *
- * - `refused`：被伺服器永久拒絕，`refusal` 有值、`reconnecting` 沒有（子代理的對話 #1708、歷史太深 #1753）。
- * - `halted`：伺服器送來看不懂的資料、停了自動重連（#1601）。**由 `refusal` 是不是 {@link THREAD_PROTOCOL_ERROR_TEXT} 判斷**：
- *   改狀態列那一句時，這裡跟著變。按了「立刻重連」、還在連的那段時間，狀態列仍講那一句，這裡也還是 `halted`。
- *
- * 其他（thread 數滿了在重試、一般斷線）回 `undefined`：背景真的在重接，「連線中…」是實話。
- */
-export function connectionStall({
-  connected,
-  refusal,
-  reconnecting,
-}: Pick<Conversation, 'connected' | 'refusal' | 'reconnecting'>): 'refused' | 'halted' | undefined {
-  if (connected || refusal === undefined) return undefined;
-  if (reconnecting === undefined) return 'refused';
-  return refusal === THREAD_PROTOCOL_ERROR_TEXT ? 'halted' : undefined;
-}
-
 /**
  * 送出框裡那句灰字。
  *
@@ -184,16 +159,12 @@ export function inputPlaceholder({
 }: {
   readonly connected: boolean;
   /** 沒連上、也不會自己接回的那兩種（{@link connectionStall}）；沒有就是在重接，講「連線中…」。 */
-  readonly stall?: 'refused' | 'halted' | undefined;
+  readonly stall?: ConnectionStall | undefined;
   readonly stoppedOnQuestion: boolean;
   /** 草稿空白、這一輪跑著、佇列裡有排著的：提示那個手勢（#710，dsh 的 `placeholder.steerQueue`）。 */
   readonly steerQueue?: boolean;
 }): string {
-  if (!connected) {
-    if (stall === 'halted') return HALTED_PLACEHOLDER;
-    if (stall === 'refused') return REFUSED_PLACEHOLDER;
-    return '連線中…';
-  }
+  if (!connected) return disconnectedPlaceholder(stall);
   if (stoppedOnQuestion) return STOPPED_QUESTION_TEXT;
   return steerQueue ? STEER_QUEUE_PLACEHOLDER : '說點什麼…';
 }
@@ -350,6 +321,7 @@ function ConversationView({
     threadId,
     status: conversation.state.subagentStatus,
     connected: conversation.connected,
+    stall: connectionStall(conversation),
     renderEntry: renderSubagentEntry,
   });
   const sessionLinks = useMemo(() => {

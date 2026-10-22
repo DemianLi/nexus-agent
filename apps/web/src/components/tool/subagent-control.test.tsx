@@ -13,6 +13,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SubagentControlContext, useSubagentControl } from '@/components/tool/subagent-control';
 import { Transcript } from '@/components/transcript';
 import { SCROLL_BUTTON_AVOID, SCROLL_BUTTON_OBSCURING } from '@/hooks/use-scroll-button-clearance';
+import { HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/lib/connection-stall';
+import type { ConnectionStall } from '@/lib/connection-stall';
 
 /**
  * 委派卡上對背景子代理說話與單獨停止（[#869](https://github.com/DemianLi/nexus-agent/issues/869)）。
@@ -93,11 +95,13 @@ function Harness({
   client,
   status,
   connected = true,
+  stall,
   entry = delegation(BACKGROUND),
 }: {
   client: WireClient;
   status: Status;
   connected?: boolean;
+  stall?: ConnectionStall;
   entry?: ToolEntry;
 }) {
   const control = useSubagentControl({
@@ -105,6 +109,7 @@ function Harness({
     threadId: 't1',
     status,
     connected,
+    stall,
     renderEntry: renderStub,
   });
   return (
@@ -257,6 +262,7 @@ describe('對它說話', () => {
         threadId: 't1',
         status: { 'bg-1': 'idle', 'bg-2': 'idle' },
         connected: true,
+        stall: undefined,
         renderEntry: renderStub,
       });
       return (
@@ -430,6 +436,34 @@ describe('各種狀態下的輸入框', () => {
     expect(input().disabled).toBe(true);
     expect(input().placeholder).toBe('連線中…');
     expect(stopButton().disabled).toBe(false);
+  });
+
+  it('主對話停住、等人按立刻重連（#1876）：佔位字跟主送出框講同一句，不說連線中', () => {
+    render(
+      <Harness
+        client={fakeClient().client}
+        status={{ 'bg-1': 'running' }}
+        connected={false}
+        stall="halted"
+      />,
+    );
+    open();
+    expect(input().disabled).toBe(true);
+    expect(input().placeholder).toBe(HALTED_PLACEHOLDER);
+  });
+
+  it('主對話被永久拒絕（#1876）：佔位字說打不開，不說連線中', () => {
+    render(
+      <Harness
+        client={fakeClient().client}
+        status={{ 'bg-1': 'idle' }}
+        connected={false}
+        stall="refused"
+      />,
+    );
+    open();
+    expect(input().disabled).toBe(true);
+    expect(input().placeholder).toBe(REFUSED_PLACEHOLDER);
   });
 });
 
