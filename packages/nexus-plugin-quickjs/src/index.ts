@@ -343,8 +343,14 @@ function fail(detail: unknown, limits: VmLimits): never {
  * 實測），host 拿到的時候 `NaN` 已經是 `null`、`Map` 已經是 `{}`、`undefined` 欄位已經不見——在 host 端檢查看不到。
  * 頂層的 `undefined` 照舊（「沒有回傳值」，同 dsh 的 `prepareCompletion` 對 `undefined` 回 `{}`）。
  *
- * 快照函式自己拋錯：VM 的資源上限（中斷、堆疊是 `InternalError`；記憶體用盡丟出來的東西 dump 是 `null`）照一般求值失敗的路走；其餘（例如 `Proxy` 的 trap 拋了）是
- * 「讀不出一份無損的值」，回 `invalid-output`，同 dsh 把快照的例外收成 `undefined`（`bootstrap.ts:171-175`）。
+ * 快照函式自己拋錯有兩種，要分流：
+ * - VM 的資源上限（中斷、堆疊是 `InternalError`；記憶體用盡丟出來的東西 dump 是 `null`）照一般求值失敗的路走（`timeout`／`exception`），
+ *   不能被當成「值不合格」——否則 getter 裡的無窮迴圈會變成 `invalid-output`，而且循環檢查壞了也會因為記憶體用盡而假綠；
+ * - 其餘（例如 `Proxy` 的 trap 拋了）是「讀不出一份無損的值」，回 `invalid-output`，同 dsh 把快照的例外收成 `undefined`（`bootstrap.ts:171-175`）。
+ *
+ * 偏離（理由 1，基座表達不出來）：dsh 的快照跑在外層行程，資源上限由行程邊界另外處理，快照拋的例外一律是「值不合格」；這裡快照跟程式
+ * 同一個 VM，interrupt 與資源上限在 VM 裡也是例外（`InternalError`），所以要先分流。這個分類靠例外的名字，程式可以偽造
+ * 同名的例外（`fail()` 本來就有的問題，[#1846](https://github.com/DemianLi/nexus-agent/issues/1846)，不在這裡處理）。
  */
 function completion(
   context: QuickJSContext,
@@ -371,7 +377,7 @@ function completion(
   return formatValue(JSON.parse(json));
 }
 
-/** `invalid-output` 的原因，字串逐字照 dsh `bootstrap.ts:172`。 */
+/** `invalid-output` 的原因，字串逐字照 dsh `bootstrap.ts:179`。 */
 const LOSSLESS_JSON_MESSAGE = 'program completion must be lossless JSON';
 
 /**

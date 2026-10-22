@@ -83,7 +83,7 @@ describe('正常的路', () => {
 
 /**
  * 完成值必須是無損的 JSON（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572) N0672），照 dsh 的 `prepareCompletion`
- * （`ptc-runtime-node/src/bootstrap.ts:163-185`）。以前 `0/0` 回 `null`、`new Map()` 回 `{}`、`{a: undefined}` 少一格，全部當成功——
+ * （`ptc-runtime-node/src/bootstrap.ts:164-188`）。以前 `0/0` 回 `null`、`new Map()` 回 `{}`、`{a: undefined}` 少一格，全部當成功——
  * 模型拿到錯的值，照著告訴使用者。
  */
 describe('完成值必須是無損的 JSON', () => {
@@ -221,6 +221,12 @@ describe('完成值必須是無損的 JSON', () => {
     it('accessor 的 getter 回合格的值：照 dsh 收下', async () => {
       expect(await runTool({}, '({ get a() { return 1; } })')).toBe('{\n  "a": 1\n}');
     });
+  });
+
+  // 快照自己撞到資源上限不是「值不合格」：getter 裡的無窮迴圈要報逾時，不能被收成 invalid-output。
+  it('快照裡的 getter 無窮迴圈：逾時，不是 invalid-output', async () => {
+    const error = await runFailing({ timeoutMs: 200 }, '({ get a() { for (;;) {} } })');
+    expect(error.kind).toBe('timeout');
   });
 
   // 快照迭代走訪、不遞迴（#1841 當初量到 5000 層以上整顆 VM 中止）。
