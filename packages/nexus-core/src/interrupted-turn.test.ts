@@ -18,6 +18,7 @@ import { sessionInvariant, CORE_INVARIANT_PACKAGE } from './invariant.js';
 import { toLoggedMessage } from './logged-message.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
+import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
 import type { ResumedStoredSession, SessionStore, StoredSession } from './session-store.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
 
@@ -357,7 +358,8 @@ function fakeStore(events: readonly SessionEvent[], options: { failAppend?: bool
     },
   };
   const resumed: ResumedStoredSession = {
-    header: { version: 1, id: 'crash', createdAt: 0 },
+    header: { version: SESSION_LOG_FORMAT_VERSION, id: 'crash', createdAt: 0 },
+    storedFormatVersion: 1,
     events,
     stored,
   };

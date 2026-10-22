@@ -99,7 +99,7 @@ function fakeReader(
       if (failure !== undefined) throw failure;
       const found = sessions[sessionId];
       if (found === undefined) throw new Error(`找不到 ${sessionId}`);
-      return found;
+      return { ...found, storedFormatVersion: SESSION_LOG_FORMAT_VERSION };
     },
   };
 }

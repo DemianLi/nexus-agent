@@ -23,7 +23,7 @@ import { resolveSessionLogDir, SESSION_LOG_OFF_DISCLOSURE } from './assembly-roo
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 function recorder(): {
   printer: { log(l: string): void; error(l: string): void };
@@ -372,7 +372,11 @@ describe('後端的兩條拒絕', () => {
   it('撞名時拒絕：不覆寫、也不續寫——開著時是租約擋，關了之後是 wx 擋', async () => {
     const root = await tmp('nexus-log-');
     const store = createJsonlSessionStore({ rootDir: root });
-    const header = { version: SESSION_LOG_FORMAT_VERSION, id: 'x', createdAt: 1 };
+    const header: StoredSessionHeader = {
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'x',
+      createdAt: 1,
+    };
     const first = store.create(header);
     await first.append([{ type: 'turn/start', seq: 0, time: 1, data: { kind: 'resume' } }]);
     const second = store.create(header);

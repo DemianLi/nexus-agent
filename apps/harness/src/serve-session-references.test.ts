@@ -6,9 +6,10 @@
  * 1. **列候選一條 agent 都不建**，連提問的那條 thread 也不建。量具是一顆只記次數的見證 plugin（`assembly-witness.fixture.ts`）。
  * 2. **跨專案**：會話根底下別格的會話列得出來，標同工作區與否。
  * 3. **沒落盤就是「不提供」**，不是空清單。
+ * 4. **快照記的是被引用那份磁碟上的版號**（#1856）：header 讀回來轉譯成這一版，`capturedFormatVersion` 仍記原版號。
  */
 
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -148,6 +149,41 @@ describe('GET /threads/:id/session-references', () => {
     // 這一輪正常收尾，不是失敗。
     expect(beta.some((event) => event.type === 'turn/failed')).toBe(false);
     expect(beta.some((event) => event.type === 'turn/end')).toBe(true);
+  });
+
+  it('被引用的是舊版寫的：落盤的快照記原版號，不是轉譯後的這一版（#1856，出貨組裝、真的落盤）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-refs-old-'));
+    const first = await start(root);
+    await driveTurn(first, 'alpha', '舊版那條提到蘋果派');
+    await first.close();
+    running = undefined;
+
+    // 把 alpha 的 header 改成上一版寫的樣子：50 是加性的，本文照上一版讀得懂。
+    const directory = join(root, projectKey(process.cwd()));
+    const headerPath = join(directory, 'alpha.header.json');
+    const older = SESSION_LOG_FORMAT_VERSION - 1;
+    const onDisk = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
+    await writeFile(headerPath, JSON.stringify({ ...onDisk, version: older }));
+
+    const second = await start(root);
+    const candidate = available(await references(second, 'beta', '')).find(
+      ({ sessionId }) => sessionId === 'alpha',
+    )!;
+    await driveTurn(second, 'beta', `接著上面那條 ${candidate.mention} 說`);
+    await second.close();
+    running = undefined;
+
+    const beta = await (await openJsonlSessionStore({ directory }).open('beta', 'read')).read();
+    const snapshot = beta.find(
+      (event) => event.type === 'user/message' && event.data.source.kind === 'session-reference',
+    ) as SessionEvent<'user/message'> | undefined;
+    expect(snapshot?.data.source).toMatchObject({
+      references: [{ sessionId: 'alpha', capturedFormatVersion: older }],
+    });
+    // 被引用的那份只被讀，沒被續接：磁碟上仍是舊版號。
+    expect((JSON.parse(await readFile(headerPath, 'utf8')) as { version: number }).version).toBe(
+      older,
+    );
   });
 
   it('清單把落盤關掉：不提供，不是空清單', async () => {
