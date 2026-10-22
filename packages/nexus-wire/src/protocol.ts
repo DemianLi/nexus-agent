@@ -40,18 +40,26 @@ import type {
 } from './attachments.js';
 import { isDeliverableMethod } from './deliverables.js';
 import { isGoalMethod } from './goal.js';
-import type { GoalMethod } from './goal.js';
+import type { GoalMethod, GoalPauseCommand } from './goal.js';
 import { isModelMethod } from './model-selection.js';
-import type { ModelMethod } from './model-selection.js';
+import type { ModelCommand, ModelMethod } from './model-selection.js';
 import { isPermissionMethod } from './permission-presets.js';
 import { WireProtocolError } from './protocol-error.js';
 import { isSubagentListMethod } from './subagent-list.js';
-import type { SubagentMention, SUBAGENT_LIST_METHOD } from './subagent-list.js';
+import type {
+  SubagentListCommand,
+  SubagentMention,
+  SUBAGENT_LIST_METHOD,
+} from './subagent-list.js';
 import { isThreadManagementMethod } from './thread-management.js';
-import type { ThreadListSets, ThreadManagementMethod } from './thread-management.js';
-import type { PermissionMethod } from './permission-presets.js';
+import type {
+  ThreadListSets,
+  ThreadManagementCommand,
+  ThreadManagementMethod,
+} from './thread-management.js';
+import type { PermissionCommand, PermissionMethod } from './permission-presets.js';
 import type { TrajectoryTurnDetail } from './trajectory.js';
-import type { DeliverableMethod } from './deliverables.js';
+import type { DeliverableCommand, DeliverableMethod } from './deliverables.js';
 
 export type {
   Channel,
@@ -609,15 +617,15 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
  *
  * 照 dsh 的 `assertExactArguments`（`packages/api/gateway/src/index.ts:1613-1640`，`687f282e`）：欄位集合要跟描述完全一致，
  * 多一格就拋 `gateway/arguments-invalid`，訊息只指名欄位、不帶值。**偏離（理由 1：基座表達不出來）**：dsh 的鍵集來自 Typert
- * 描述，這裡沒有 Typert，所以用這張表代替；型別與執行期各看各的型別，靠 `satisfies` 讓**新增 method 時編譯當場報錯**
- * （逼人在這裡登記），欄位層級則靠 `wire-handler` 那條「真的 client 送出的每個命令都不被擋」的測試。
+ * 描述，這裡沒有 Typert，所以用這張表代替。型別與執行期看同一份：`satisfies` 讓**新增 method 時編譯當場報錯**，下面的
+ * `_paramKeysAgree` 讓**每一列等於該命令 `params` 的 keyof（扣掉 {@link RPC_PARAMS_NOT_IMPLEMENTED}）**——命令型別多一格或少一格、
+ * 表漏登或多登，`tsc` 都紅。
  *
- * **只列這台 server 讀得懂的欄位。** 協定的型別上合法、但這台 server 沒實作的欄位（`run.start` 與 `input.respond` 的 `config`、
- * `metadata`，`input.respond` 的 `update`、`goto`）不在表裡：它們有值時由 server 回 `not_supported` 並指名欄位，同
- * `attachments`、`mention` 的既有模式（見 `wire-handler` 的 `PROTOCOL_PARAMS_NOT_IMPLEMENTED`），不是 `invalid_argument`。
+ * **只列這台 server 讀得懂的欄位。** 協定的型別上合法、但這台 server 沒實作的欄位在 {@link RPC_PARAMS_NOT_IMPLEMENTED}，不在這張表。
  * `input.respond` 的 `responses` 在表裡，是為了讓批次形照舊走 `not_supported`。
  *
- * 沒有參數的命令是空陣列；那一類的 `params` 省略、`{}` 都收，多一格就是多的。
+ * 沒有參數的命令是空陣列。`params` 省略時這張表不管（有些命令的型別本來就沒有 `params`，缺不缺由各命令自己決定）；
+ * 有給就要是物件，多一格就是多的。
  */
 export const RPC_PARAM_KEYS = {
   'run.start': [
@@ -655,15 +663,81 @@ export const RPC_PARAM_KEYS = {
 } as const satisfies Record<RpcMethod, readonly string[]>;
 
 /**
- * `params` 裡**這支命令不認得**的欄位名，依出現順序。`params` 不是物件（省略、`null`、陣列、字串……）就沒有欄位可數，回空陣列——
- * 那一類由各命令自己的必填檢查回錯，訊息不變。
+ * 協定型別上合法、但這台 server **沒實作**的 `params` 欄位（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)，Q2 (a)）。
+ * 有值（含空物件）就回 `not_supported` 並指名欄位，**不是** `invalid_argument`——同 `attachments`、`mention` 的既有模式：欄位在協定裡合法，
+ * 只是這台 server 沒有東西去讀它。不拒的話，客戶端以為「這一次的 config 覆寫」生效了，其實被靜靜忽略。
+ * 這些欄位不在 {@link RPC_PARAM_KEYS}；其餘不認得的欄位走 {@link unknownParamKeys}，回 `invalid_argument`。
+ */
+export const RPC_PARAMS_NOT_IMPLEMENTED = {
+  'run.start': ['config', 'metadata'],
+  'input.respond': ['update', 'goto', 'config', 'metadata'],
+} as const satisfies Partial<Record<RpcMethod, readonly string[]>>;
+
+/** 逐支命令的 `params` 型別：命令型別是聯集，所以用 `Extract` 取出那一支。 */
+type RpcCommand =
+  | RunStartCommand
+  | Extract<Command, { method: 'input.respond' }>
+  | SlashCommand
+  | RunCancelCommand
+  | QueueUpdateCommand
+  | SubagentSendCommand
+  | SubagentInterruptCommand
+  | FeedbackCommand
+  | GoalPauseCommand
+  | DeliverableCommand
+  | ModelCommand
+  | PermissionCommand
+  | SubagentListCommand
+  | ThreadManagementCommand;
+
+/**
+ * 一支命令的 `params` 有哪些鍵。`params` 是聯集時取所有分支的鍵（`input.respond` 的單一形與批次形）；沒有 `params`、或寫成
+ * `Record<string, never>`（鍵是 `string`，意思是「不收任何欄位」）的是 `never`。
+ */
+type ParamKeysOf<M extends RpcMethod> =
+  Extract<RpcCommand, { method: M }> extends infer C
+    ? C extends { readonly params: infer P }
+      ? P extends unknown
+        ? string extends keyof P
+          ? never
+          : keyof P & string
+        : never
+      : never
+    : never;
+
+type TableKeysOf<M extends RpcMethod> =
+  | (typeof RPC_PARAM_KEYS)[M][number]
+  | (M extends keyof typeof RPC_PARAMS_NOT_IMPLEMENTED
+      ? (typeof RPC_PARAMS_NOT_IMPLEMENTED)[M][number]
+      : never);
+
+/** 每支命令：`params` 的鍵與表（含沒實作的）互相包含就是 `true`，否則是那支命令的名字，下面的賦值當場編不過並指出是哪一支。 */
+type ParamKeysAgree = {
+  readonly [M in RpcMethod]: [ParamKeysOf<M>] extends [TableKeysOf<M>]
+    ? [TableKeysOf<M>] extends [ParamKeysOf<M>]
+      ? true
+      : M
+    : M;
+};
+
+/** `RPC_PARAM_KEYS` 與命令型別的 `params` 對不上，這一行就編不過；指出的是 `RpcMethod` 裡哪一支。 */
+const _paramKeysAgree: { readonly [M in RpcMethod]: true } = {} as ParamKeysAgree;
+void _paramKeysAgree;
+
+/**
+ * `params` 裡**這支命令不認得**的欄位名，依出現順序。**不含** {@link RPC_PARAMS_NOT_IMPLEMENTED} 的那幾格（那些走 `not_supported`）。
+ * `params` 不是物件（`null`、陣列、字串……）就沒有欄位可數，回空陣列；那一類由 server 在這之前以 `invalid_argument` 擋下。
  *
  * 只看自有的字串鍵（`JSON.parse` 出來的物件沒有別的）；`__proto__` 這種鍵在 JSON 裡是普通的自有鍵，照樣被數到。
  */
 export function unknownParamKeys(method: RpcMethod, params: unknown): readonly string[] {
   if (typeof params !== 'object' || params === null || Array.isArray(params)) return [];
   const allowed: readonly string[] = RPC_PARAM_KEYS[method];
-  return Object.keys(params).filter((key) => !allowed.includes(key));
+  const notImplemented: readonly string[] =
+    (RPC_PARAMS_NOT_IMPLEMENTED as Partial<Record<RpcMethod, readonly string[]>>)[method] ?? [];
+  return Object.keys(params).filter(
+    (key) => !allowed.includes(key) && !notImplemented.includes(key),
+  );
 }
 
 /** 命令的自由輸入怎麼提示：**就是 `@nexus/core` 的 `CommandInputDescriptor`**。 */

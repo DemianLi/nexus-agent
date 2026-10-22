@@ -241,7 +241,7 @@ describe('wire：params 多一格就拒', () => {
   );
 
   it.each(['run.cancel', 'slash.list', 'feedback.list', 'thread.pin'] as const)(
-    '%s：沒有參數的命令，params 省略與 {} 都收（對照：多一格才拒）',
+    '%s：params 省略或 {} 時，這道檢查不插手（各命令自己決定缺不缺）',
     async (method) => {
       const { post } = wire();
       const thread = `exact-empty-${method}`;
@@ -251,21 +251,73 @@ describe('wire：params 多一格就拒', () => {
       ]) {
         const response = (await post(thread, method, body)) as { type: string; message?: string };
         expect(response.message ?? '').not.toContain('不收這些欄位');
+        expect(response.message ?? '').not.toContain('params 要是物件');
       }
     },
   );
 
-  it('params 不是物件時這道檢查不插手：各命令自己的必填檢查照舊回原本的訊息', async () => {
+  it.each([null, 5, 'x', [1], true])(
+    '有給 params 卻不是物件（%j）：每一支命令都回 invalid_argument（dsh `args must be a plain object`）',
+    async (params) => {
+      const { post } = wire();
+      for (const method of Object.keys(RPC_PARAM_KEYS) as RpcMethod[]) {
+        const response = (await post(`exact-nonobject-${method}`, method, {
+          id: 9,
+          method,
+          params,
+        })) as ErrorBody & { id: number };
+        expect(response.type, method).toBe('error');
+        expect(response.error, method).toBe('invalid_argument');
+        expect(response.message, method).toBe(`${method} 的 params 要是物件`);
+        expect(response.id, method).toBe(9);
+      }
+    },
+  );
+
+  it('對照：同樣是 slash.list，省略 params 照收（success），給了 [1] 才被擋', async () => {
     const { post } = wire();
-    for (const params of [null, 5, 'x', [1]]) {
-      const response = (await post('exact-nonobject', 'run.start', {
-        id: 1,
-        method: 'run.start',
-        params,
-      })) as ErrorBody;
-      expect(response.error).toBe('invalid_argument');
-      expect(response.message).toBe('run.start 缺 assistant_id');
-    }
+    const omitted = (await post('exact-omit-ok', 'slash.list', {
+      id: 1,
+      method: 'slash.list',
+    })) as {
+      type: string;
+    };
+    const given = (await post('exact-omit-ok', 'slash.list', {
+      id: 2,
+      method: 'slash.list',
+      params: [1],
+    })) as ErrorBody;
+    expect(omitted.type).toBe('success');
+    expect(given.error).toBe('invalid_argument');
+  });
+
+  it('鍵名加引號：空字串鍵、含換行與控制字元的鍵都讀得出來，也不會偽造出第二行訊息', async () => {
+    const { post } = wire();
+
+    const rejected = (await post(
+      'exact-quoted',
+      'run.cancel',
+      JSON.stringify({ id: 1, method: 'run.cancel', params: { '': 1, 'a\nb': 2, 'c\u0001d': 3 } }),
+    )) as ErrorBody;
+
+    expect(rejected.error).toBe('invalid_argument');
+    expect(rejected.message).toContain('""');
+    expect(rejected.message).toContain('"a\\nb"');
+    expect(rejected.message).toContain('"c\\u0001d"');
+    expect(rejected.message).not.toContain('\n');
+  });
+
+  it('少一格不重報：run.start 缺 assistant_id 仍是各命令自己的訊息', async () => {
+    const { post } = wire();
+
+    const response = (await post('exact-missing', 'run.start', {
+      id: 1,
+      method: 'run.start',
+      params: { input: { messages: [] } },
+    })) as ErrorBody;
+
+    expect(response.error).toBe('invalid_argument');
+    expect(response.message).toBe('run.start 缺 assistant_id');
   });
 });
 
