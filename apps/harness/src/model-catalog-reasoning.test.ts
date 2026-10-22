@@ -53,6 +53,11 @@ function failureOf(run: () => unknown): string {
 describe('reasoningEfforts：寫錯的宣告在載入時拒收，指名哪一顆的哪一級', () => {
   it.each([
     ['空 dict', {}, /reasoningEfforts 是空的/],
+    [
+      '寫了 reasoningEfforts: 卻沒給值（YAML 的 null，dsh 與空 dict 併成一則）',
+      null,
+      /reasoningEfforts 是空的/,
+    ],
     ['非 off 的等級沒有線上的寫法', { low: null }, /reasoningEfforts\.low 沒有線上的寫法/],
     [
       'default 也一樣（只有 off 可以留空）',
@@ -116,8 +121,12 @@ describe('reasoningEfforts：合格的宣告照常過', () => {
     ['CLI', false],
     ['serve', true],
   ] as const)('產品實際載入的出廠設定（%s）每一筆條目都過', async (_name, serve) => {
-    const { plugins } = await loadDefaultPlugins({ env: {}, serve });
+    const { plugins, dropped } = await loadDefaultPlugins({ env: {}, serve });
+    // **live-model 那一列沒被停用**：設定驗不過時那一列會被標成停用、退回 schema 預設的 1 筆（`DEFAULT_LIVE_MODEL_ENTRY`），那一筆本身就宣告了
+    // 推理等級，下面兩句照樣綠——所以要先斷言沒有任何一列掉了，而且型錄是出廠那份（不只是退回的那一筆）。
+    expect(dropped).toEqual([]);
     const { models } = startupSetting(plugins, liveModelPlugin);
+    expect(models.length).toBeGreaterThan(1);
 
     expect(() => modelCatalogSchema.parse(models)).not.toThrow();
     // 前提：出廠設定裡真的有宣告了推理等級的條目，不然上面那句只是在驗一份沒有推理宣告的型錄。

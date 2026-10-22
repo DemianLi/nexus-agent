@@ -20,16 +20,19 @@
  * - **`compat` 收 `chatTemplateKwargs` 與 `supportsFinishReason`（#1538）。** dsh 的 `compat` 是 pi-ai 的一整組線上相容開關（系統提示放哪個角色、
  *   哪個欄位限制輸出、思考怎麼送……）；我們沒有 pi-ai 那一層，只有一個要送 chat template 參數的需求。值裡只認
  *   `{ $var: 'thinking.enabled' }` 這一個佔位符（dsh 有三個：另兩個是 `thinking.effort`、`thinking.budget`，
- *   `catalog.ts:152-160`），因為今天沒有人選推理等級或預算。
- * - **`reasoningEfforts` 的值只有 `off` 那一級有消費者。** 鍵是給人選的等級名字，`off` 是「不推理」；每會話選等級
- *   （#723）已經在 `model-selection-host.ts`，但線上的寫法只有 `off` 量過：值（線上的寫法）只有 `off` 這一級會被
- *   {@link thinkingOffBody} 讀到，其餘等級的值不會被送出去。
+ *   `catalog.ts:152-160`），因為今天沒有任何等級的線上寫法會被送出去：每會話可選的只有 `off` 與 `default`（#723，
+ *   `model-selection-host.ts`），`default` 是「不加任何設定」，沒有東西要解 `thinking.effort`、`thinking.budget`。
+ * - **`reasoningEfforts` 的值今天沒有消費者，只讀鍵。** 鍵是給人選的等級名字，`off` 是「不推理」；{@link thinkingOffBody}
+ *   只看 `off` 這個鍵在不在，不讀值，其餘等級的值也不會被送出去。
  * - **`reasoningEfforts` 的驗證只搬 dsh 的前三條（#1561）。** 照 `resolveModelReasoning`（`packages/llm/llm-pi-ai/src/catalog.ts:741-756`，
- *   `687f282e`）：空 dict、`off` 以外的等級沒有線上的寫法、值是空字串，三種都在載入時拒收，訊息指名是哪一顆模型的哪一級。
- *   **不搬**的兩件，都是隱含的 `default` 的後果，與 `model-selection-host.ts` 開頭那一條已登記的差異是同一件事，不是新的偏離：
- *   第四條「`off` 以外至少一級」（nexus 裡 `{ off: null }` 是有意義的宣告：這顆會推理、可以關掉、預設照模型自己的；dsh 沒有隱含的
- *   `default`，所以需要這一條）；鍵限制在 dsh 的 `THINKING_LEVELS`（出廠那一筆的鍵是 `off` 與 `default`，`default` 不在其中）。
- *   `thinkingLevelMap` 是 pi-ai 自己的預設行為，nexus 不經過 pi-ai，不適用。
+ *   `687f282e`）：空 dict（含 YAML 寫了 `reasoningEfforts:` 卻沒給值的 `null`，dsh `:741` 同樣把兩者併成一則）、`off` 以外的等級沒有線上的寫法、
+ *   值是空字串，三種都在載入時拒收，訊息指名是哪一顆模型的哪一級。
+ *   **形狀不同**：dsh 的 `invalid()` 回傳型別是 `never`，當場拋出，只報第一個問題（`catalog.ts:676-678`）；這裡是 zod 的 `superRefine`，
+ *   收集**所有**問題一次報完（一筆裡好幾個等級寫壞時不必改一個、重跑一次）。
+ *   **不搬**的兩件（理由 1：基座表達不出來）：nexus 沒有 pi-ai 的 `thinkingLevelMap`，`off` 以外沒有線上路徑，「`default` ＝ 不送」是最接近的
+ *   實作，隱含的 `default` 已登記在 `model-selection-host.ts` 開頭「與 dsh 的差異」第一條。後果有兩件：第四條「`off` 以外至少一級」不搬
+ *   （`{ off: null }` 是有意義的宣告：這顆會推理、可以關掉、預設照模型自己的）；鍵不限制在 dsh 的 `THINKING_LEVELS`（出廠那一筆的鍵是
+ *   `off` 與 `default`，`default` 不在其中）。`thinkingLevelMap` 本身是 pi-ai 自己的預設行為，不適用。
  * - **`chat_template_kwargs` 只有「關」那一邊會送。** pi-ai 在非 `off` 的等級底下會把 `thinking.enabled` 解成 `true`
  *   一併送出；我們的主請求今天不帶這一格（預設就是開著），只有標題這種要關推理的用途才帶（#650）。**沒有量過
  *   「明著送 `enable_thinking: true`」跟「不送」是不是等價**（這台機器沒有 key，量不了），所以保留今天的送法。
@@ -83,7 +86,13 @@ const modelEntryFields = z.strictObject({
    * 沒寫就是沒宣告。
    */
   reasoningEfforts: z
-    .union([z.literal(false), z.record(z.string(), z.string().nullable())])
+    .union([
+      z.literal(false),
+      z.record(z.string(), z.string().nullable()),
+      // YAML 寫了 `reasoningEfforts:` 卻沒給值會是 `null`。dsh 把它跟 `{}` 併成同一則訊息（`catalog.ts:741`）；這裡讓它過了欄位這一層，
+      // 由下面的 `superRefine` 帶 id 拒收（欄位層的 union 錯誤只有 `Invalid input`，沒有指名是哪一顆）。型別是 `never`：拒收之後不會有 `null` 流到消費者。
+      z.null().transform((value) => value as never),
+    ])
     .optional(),
   /**
    * 這顆模型的 tokenizer 跟 o200k 不一樣的地方，給 token 估算用（[#1102](https://github.com/DemianLi/nexus-agent/issues/1102)）。
@@ -116,7 +125,8 @@ const modelEntryFields = z.strictObject({
 export const modelEntrySchema = modelEntryFields.superRefine((entry, context) => {
   const efforts = entry.reasoningEfforts;
   if (efforts === undefined || efforts === false) return;
-  if (Object.keys(efforts).length === 0) {
+  // 欄位型別排除了 `null`（見 `reasoningEfforts` 那一格），所以比較要先放寬。
+  if ((efforts as unknown) === null || Object.keys(efforts).length === 0) {
     context.addIssue({
       code: 'custom',
       path: ['reasoningEfforts'],
