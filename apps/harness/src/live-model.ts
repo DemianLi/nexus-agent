@@ -2150,12 +2150,24 @@ export interface LiveLaunch {
    * 呼叫端讀完設定之後再呼叫它、傳 `config.apiKeyEnv`，所以那一行出現在日誌裡的位置比以前往後挪（仍在任何模型建構與請求之前）。
    */
   readonly keySourceOf: (name: string) => string | undefined;
+  /**
+   * 舊位置搬家檢查（#730）：**設定要的那把 key**（`apiKeyEnv`）每一層都找不到、而舊位置（程式碼資料夾根目錄）的 `.env` 還在時，
+   * 失敗並指名搬去哪裡；找得到、或沒有舊檔就什麼都不做（缺值由 `createLiveModel` 當場講缺哪一個）。
+   *
+   * **以名字為參數、由呼叫端讀完設定之後呼叫**（#1604，PM 更正卡面第 3 步）：檢查的觸發條件是「設定要的那把找不到」，不是「舊檔裡放了什麼」。
+   * 若在讀設定之前寫死出廠名字，`apiKeyEnv: GATEWAY_KEY`、受管檔有 `GATEWAY_KEY`、沒有 `NVIDIA_API_KEY`、而原始碼樹根目錄有一份沒被讀到的
+   * `.env`（cwd 不在根目錄時就是這樣）會被誤擋，但設定要的那把明明找得到。
+   *
+   * @param name - 設定要的那把 key 的名字（`live-model` 那一列的 `apiKeyEnv`）。
+   * @throws 那一把沒有值、而舊位置的 `.env` 還在。
+   */
+  readonly assertKeyLocated: (name: string) => void;
 }
 
 /**
  * 真模型路徑的啟動：載入兩層 `.env`（{@link loadLaunchEnv}）、建憑證服務；`store` 時並**完整檢查受管檔**
  * （權限或格式不對就起不來）。key 都找不到、而舊位置（程式碼資料夾根目錄）的 `.env` 還在時，
- * 直接失敗、指名搬去哪裡。
+ * 失敗、指名搬去哪裡——**那一步由呼叫端讀完設定之後做**（{@link LiveLaunch.assertKeyLocated}，名字是 `apiKeyEnv`，#1604）。
  *
  * **這不是 fallback。** 每一層都是明說過的來源（順序見 `credentials.ts`）；缺的變數留給
  * {@link createLiveModel} 當場失敗並指名缺哪一個。
@@ -2164,22 +2176,32 @@ export interface LiveLaunch {
  *   完全不碰受管檔（不 `stat`、不讀、不檢查，壞檔也不擋），順序是啟動環境 > 目前資料夾 `.env` > harness home `.env`。
  *   `cwd` 是「專案」那一層 `.env` 所在（省略即 `process.cwd()`）；`env` 只用來解 harness home（省略即 `process.env`）。
  *   兩層 `.env` 的值仍寫進 `process.env`（同 dsh）；受管檔的值不會。
- * @throws 壞的 `.env`、`store` 時壞的受管檔、或舊位置搬家訊息。
+ * @throws 壞的 `.env`、`store` 時壞的受管檔。
  */
 export function loadLiveLaunchEnv(options: {
   readonly store: boolean;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
+  /** 舊位置的檔案路徑（`LaunchEnvOptions.legacyFile`）；測試才傳。 */
+  readonly legacyFile?: string;
 }): LiveLaunch {
   const cwd = options.cwd ?? process.cwd();
   const home = resolveHarnessHome(options.env ?? process.env);
-  const launchEnv = loadLaunchEnv({ cwd, home });
+  const launchEnv = loadLaunchEnv({
+    cwd,
+    home,
+    ...(options.legacyFile !== undefined && { legacyFile: options.legacyFile }),
+  });
   const credentials = createCredentialService({ home, launchEnv, store: options.store });
   credentials.check();
-  // 舊位置搬家檢查仍用出廠的名字（#1604）：它跑在讀設定之前，也只為舊的出廠名字存在（舊位置的 `.env` 只可能放 `NVIDIA_API_KEY`）。
-  if (credentials.resolve(LIVE_API_KEY_ENV) === undefined) {
-    const moved = legacyEnvMovedError(launchEnv, LIVE_API_KEY_ENV, { cwd, home });
-    if (moved !== undefined) throw moved;
-  }
-  return { launchEnv, credentials, keySourceOf: (name) => describeKeySource(credentials, name) };
+  return {
+    launchEnv,
+    credentials,
+    keySourceOf: (name) => describeKeySource(credentials, name),
+    assertKeyLocated: (name) => {
+      if (credentials.resolve(name) !== undefined) return;
+      const moved = legacyEnvMovedError(launchEnv, name, { cwd, home });
+      if (moved !== undefined) throw moved;
+    },
+  };
 }

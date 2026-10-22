@@ -732,6 +732,8 @@ async function startServer(
   const liveModel = startupSetting(plugins, liveModelPlugin);
   // 這一把 key 來自哪一層（#1540 Q2 (a)）：只講名字與來源、不含值；名字是 `live-model` 那一列的 `apiKeyEnv`（#1604），所以讀完設定才印。
   // 仍排在拿到 home 鎖之後（`runServe` 先拿鎖才進 `startServer`）、任何模型建構與請求之前；日誌裡出現的順序比以前往後挪。
+  // 舊位置搬家檢查也在這裡、用同一個名字（#1604）：設定要的那把找不到、而舊位置的 `.env` 還在才失敗；在 `startServer` 裡拋，鎖與根照一般的起不來路徑收。
+  liveLaunch?.assertKeyLocated(liveModel.apiKeyEnv);
   const keySource = liveLaunch?.keySourceOf(liveModel.apiKeyEnv);
   if (keySource !== undefined) log(keySource);
   // 全機的模型請求並行閘（#1505）：起動期建一份，每條 thread 的組裝共用；沒設 `maxConcurrentRequests` 就沒有。

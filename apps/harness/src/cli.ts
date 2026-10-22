@@ -987,6 +987,8 @@ async function runLaunched(
   const liveModel = startupSetting(plugins, liveModelPlugin);
   // 這一把 key 來自哪一層（#1540）：CLI 不讀受管檔，那一行會寫明；只有名字與來源、不含值。名字是 `live-model` 那一列的 `apiKeyEnv`（#1604），
   // 所以讀完設定才印：仍在任何模型建構與請求之前，輸出裡出現的順序比以前往後挪。
+  // 舊位置搬家檢查也在這裡、用同一個名字（#1604）：設定要的那把找不到、而舊位置的 `.env` 還在才失敗。
+  liveLaunch?.assertKeyLocated(liveModel.apiKeyEnv);
   const keySource = liveLaunch?.keySourceOf(liveModel.apiKeyEnv);
   if (keySource !== undefined) printer.error(keySource);
   // 退回標題的兩個上限（#647）。`startupSetting` 照 schema 驗過，寫壞的話在跑起來之前就拋。

@@ -167,8 +167,11 @@ async function main(argv: readonly string[]): Promise<void> {
   const cases = parseCases(argv);
   const models = parseModels(argv, SURVEY_MODELS);
   const out = parseOut(argv);
-  const { credentials, launchEnv, keySourceOf } = loadLiveLaunchEnv({ store: false });
-  // 這支腳本用出廠設定（`liveModelConfigForModel`），金鑰名就是預設的（#1604）。
+  const { credentials, launchEnv, keySourceOf, assertKeyLocated } = loadLiveLaunchEnv({
+    store: false,
+  });
+  // 這支腳本用出廠設定（`liveModelConfigForModel`），金鑰名一律是預設的（#1604），搬家檢查照舊在這裡做。
+  assertKeyLocated(LIVE_API_KEY_ENV);
   const keySource = keySourceOf(LIVE_API_KEY_ENV);
   if (keySource !== undefined) console.error(keySource);
   // 對外代理（#746）：跟 CLI／serve 同一個時間點，載完環境之後、連模型之前。這支腳本跑到行程結束，不另收尾。

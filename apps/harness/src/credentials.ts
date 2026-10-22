@@ -90,7 +90,7 @@ export interface CredentialService {
 
 /**
  * 一把憑證的名字長什麼樣：環境變數形狀。受管檔 `refs` 的鍵與 `live-model` 的 `apiKeyEnv`（#1604）共用這一條，
- * 同 dsh `credentials/src/index.ts:19` 的 `REF_PATTERN`。
+ * 同 dsh `packages/credentials/credentials/src/index.ts:19` 的 `REF_PATTERN`。
  */
 export const CREDENTIAL_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 

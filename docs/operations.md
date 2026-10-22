@@ -455,7 +455,7 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 真實供應商（`--live`）的 key 預設叫 `NVIDIA_API_KEY`（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）。
 **下面寫的 `NVIDIA_API_KEY` 都是預設名字**：`cordis.yml` 的 `live-model` 那一列可以用 `apiKeyEnv` 改成別的名字
 （例如 `baseUrl` 指到公司內部閘道時叫 `GATEWAY_KEY`，[#1604](https://github.com/DemianLi/nexus-agent/issues/1604)），改過之後受管憑證檔的 `refs:`、
-啟動環境、`.env`、缺金鑰與格式錯誤的訊息、起動時那一行來源，全部換成那個名字。**每次模型請求前**才解析一次，
+啟動環境、`.env`、缺金鑰與格式錯誤的訊息、起動時那一行來源，全部換成那個名字（**例外：`eval` 與 `spike` 一律用預設名字**，它們不讀 `live-model` 那一列，見後面 `live-model` 那一列說明的「`eval` 與 `spike` 不跟這一列走」）。**每次模型請求前**才解析一次，
 依序找，先找到的算數。**兩種入口順序不同**（[#1540](https://github.com/DemianLi/nexus-agent/issues/1540)，各自照 dsh 的 Web profile 與 headless profile）：
 
 **`serve`**：

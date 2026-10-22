@@ -30,10 +30,31 @@ import { runCli } from './cli.js';
 import { ambientCredentials, CREDENTIALS_FILE } from './credentials.js';
 import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
+import {
+  DEFAULT_LIVE_MODEL_ENTRY,
+  DEFAULT_LIVE_MODEL_ID,
+  LIVE_API_KEY_ENV,
+  loadLiveLaunchEnv,
+} from './live-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
+
+/**
+ * 舊位置的 `.env`（程式碼資料夾根目錄）在這裡由測試注入：`runServe`／`runCli` 沒有這個旋鈕（真的位置由模組目錄推出來），
+ * 所以包住 `loadLaunchEnv`，有設才把 `legacyFile` 帶進去；沒設就原樣放行（那時走真的位置）。
+ */
+const legacy = vi.hoisted(() => ({ file: undefined as string | undefined }));
+vi.mock('./launch-env.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./launch-env.js')>();
+  return {
+    ...actual,
+    loadLaunchEnv: (options: Parameters<typeof actual.loadLaunchEnv>[0]) =>
+      actual.loadLaunchEnv(
+        legacy.file === undefined ? options : { ...options, legacyFile: legacy.file },
+      ),
+  };
+});
 
 const NAME = 'GATEWAY_KEY';
 /** 前 6 個字元各自獨特，拿來斷言訊息與日誌不帶值的任何片段。 */
@@ -208,6 +229,7 @@ afterEach(async () => {
   running = undefined;
   await upstream?.close();
   upstream = undefined;
+  legacy.file = undefined;
   vi.unstubAllEnvs();
   delete process.env[LIVE_API_KEY_ENV];
   delete process.env[NAME];
@@ -274,10 +296,11 @@ describe('serve：金鑰名跟著設定走', () => {
     for (const entry of [...main, ...title]) expect(entry.auth).toBe(`Bearer ${GATEWAY_VALUE}`);
   }, 60000);
 
-  it('受管檔裡沒有 GATEWAY_KEY、只有 NVIDIA_API_KEY：起不來，訊息講 GATEWAY_KEY，不講 NVIDIA_API_KEY、不帶值', async () => {
+  it('受管檔裡沒有 GATEWAY_KEY、只有 NVIDIA_API_KEY：起不來，訊息講 GATEWAY_KEY，不講 NVIDIA_API_KEY、不帶值；鎖有放，補上之後同一個 home 起得來', async () => {
     const where = layout({ apiKeyEnv: NAME });
     managedFile(where.home, LIVE_API_KEY_ENV, DECOY_VALUE);
-    const failure = await serve(where, []).then(
+    const lines: string[] = [];
+    const failure = await serve(where, lines).then(
       (started) => {
         running = started;
         return undefined;
@@ -290,6 +313,17 @@ describe('serve：金鑰名跟著設定走', () => {
     expect(failure!.message).not.toContain(LIVE_API_KEY_ENV);
     expect(failure!.message).not.toContain(DECOY_VALUE.slice(0, 6));
     expect(upstream!.seen).toEqual([]);
+    // 早期失敗（`createLiveModel` 在組裝時就拋）時，來源那一行（讀完設定之後才印，而且是在試組之前）已經印過：
+    // 這一條只釘「沒有一行講到沒有值的那一把」，不帶值的片段。
+    for (const line of lines) expect(line).not.toContain(DECOY_VALUE.slice(0, 6));
+
+    // 起不來的路徑要放 home 鎖：補上 GATEWAY_KEY 之後，同一個 home 再起一次，不被「已經有一台 serve」擋下。
+    managedFile(where.home, NAME, GATEWAY_VALUE);
+    running = await serve(where, []);
+    await oneTurn(running);
+    expect(new Set(upstream!.seen.map((entry) => entry.auth))).toEqual(
+      new Set([`Bearer ${GATEWAY_VALUE}`]),
+    );
   }, 60000);
 
   it('GATEWAY_KEY 的值中間有換行：INVALID_CREDENTIAL，訊息指名 GATEWAY_KEY 與受管檔，不講 NVIDIA_API_KEY、不帶值', async () => {
@@ -351,7 +385,7 @@ describe('一次性入口：金鑰名跟著設定走', () => {
     }
   }, 60000);
 
-  it('只有 NVIDIA_API_KEY、沒有 GATEWAY_KEY：失敗，訊息講 GATEWAY_KEY（此入口不讀受管檔那一種），不講 NVIDIA_API_KEY', async () => {
+  it('只有 NVIDIA_API_KEY、沒有 GATEWAY_KEY：失敗，訊息講 GATEWAY_KEY，不講 NVIDIA_API_KEY', async () => {
     const where = layout({ apiKeyEnv: NAME });
     managedFile(where.home, NAME, GATEWAY_VALUE);
     vi.stubEnv(LIVE_API_KEY_ENV, DECOY_VALUE);
@@ -362,10 +396,131 @@ describe('一次性入口：金鑰名跟著設定走', () => {
 
     expect(failure).toBeInstanceOf(Error);
     expect(failure!.message).toContain(`缺少環境變數 ${NAME}`);
-    expect(failure!.message).toContain('此入口不讀受管檔');
+    // 兩種訊息（缺值、舊位置搬家）共有的開頭；程式碼根目錄若有舊位置的 `.env`（主 checkout 就是），走的是搬家那一句，所以只釘共有的部分。
     expect(failure!.message).not.toContain(LIVE_API_KEY_ENV);
     expect(upstream!.seen).toEqual([]);
   }, 60000);
+});
+
+describe('舊位置搬家檢查：接線用設定的名字（#1604，從真的入口起量）', () => {
+  /** 舊位置那份檔（只要存在，沒有任何值），並讓 `loadLaunchEnv` 把它當成程式碼根目錄的 `.env`。 */
+  function plantLegacyFile(where: ReturnType<typeof layout>): string {
+    const file = join(where.cwd, 'legacy-root.env');
+    writeFileSync(file, '# 舊位置，沒有任何值\n');
+    legacy.file = file;
+    return file;
+  }
+
+  it('serve：設定要的 GATEWAY_KEY 在受管檔、沒有 NVIDIA_API_KEY、舊位置有檔：照樣起得來（把名字寫回常數就被誤擋）', async () => {
+    const where = layout({ apiKeyEnv: NAME });
+    managedFile(where.home, NAME, GATEWAY_VALUE);
+    plantLegacyFile(where);
+    running = await serve(where, []);
+    await oneTurn(running);
+
+    expect(new Set(upstream!.seen.map((entry) => entry.auth))).toEqual(
+      new Set([`Bearer ${GATEWAY_VALUE}`]),
+    );
+  }, 60000);
+
+  it('serve：設定要的 GATEWAY_KEY 找不到、舊位置有檔：搬家訊息講 GATEWAY_KEY；鎖有放，補上之後同一個 home 起得來', async () => {
+    const where = layout({ apiKeyEnv: NAME });
+    const file = plantLegacyFile(where);
+    const failure = await serve(where, []).then(
+      (started) => {
+        running = started;
+        return undefined;
+      },
+      (error: unknown) => error as Error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure!.message).toContain(`缺少環境變數 ${NAME}。舊位置 ${file}`);
+    expect(failure!.message).not.toContain(LIVE_API_KEY_ENV);
+    expect(upstream!.seen).toEqual([]);
+
+    managedFile(where.home, NAME, GATEWAY_VALUE);
+    running = await serve(where, []);
+    await oneTurn(running);
+    expect(new Set(upstream!.seen.map((entry) => entry.auth))).toEqual(
+      new Set([`Bearer ${GATEWAY_VALUE}`]),
+    );
+  }, 60000);
+
+  it('一次性入口：啟動環境有 GATEWAY_KEY、沒有 NVIDIA_API_KEY、舊位置有檔：照樣跑得起來', async () => {
+    const where = layout({ apiKeyEnv: NAME });
+    plantLegacyFile(where);
+    vi.stubEnv(NAME, GATEWAY_VALUE);
+    await cli(where, []);
+
+    expect(new Set(upstream!.seen.map((entry) => entry.auth))).toEqual(
+      new Set([`Bearer ${GATEWAY_VALUE}`]),
+    );
+  }, 60000);
+
+  it('一次性入口：設定要的 GATEWAY_KEY 找不到、舊位置有檔：搬家訊息講 GATEWAY_KEY', async () => {
+    const where = layout({ apiKeyEnv: NAME });
+    const file = plantLegacyFile(where);
+    vi.stubEnv(LIVE_API_KEY_ENV, DECOY_VALUE);
+    const failure = await cli(where, []).then(
+      () => undefined,
+      (error: unknown) => error as Error,
+    );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure!.message).toContain(`缺少環境變數 ${NAME}。舊位置 ${file}`);
+    expect(failure!.message).not.toContain(LIVE_API_KEY_ENV);
+    expect(upstream!.seen).toEqual([]);
+  }, 60000);
+});
+
+describe('舊位置搬家檢查：設定要的那把 key 找不到、舊位置的 .env 還在才失敗（#1604）', () => {
+  /** 一個 home（受管檔只有 GATEWAY_KEY）、一份舊位置的 `.env`（空的，只要存在）。 */
+  function withLegacyFile(store: boolean) {
+    const where = layout({ apiKeyEnv: NAME });
+    managedFile(where.home, NAME, GATEWAY_VALUE);
+    const legacyFile = join(where.cwd, 'legacy-root.env');
+    writeFileSync(legacyFile, '# 舊位置，沒有任何值\n');
+    return {
+      where,
+      legacyFile,
+      live: loadLiveLaunchEnv({
+        store,
+        cwd: where.cwd,
+        env: where.env,
+        legacyFile,
+      }),
+    };
+  }
+
+  it('改名＋有舊檔＋設定要的那把找得到（受管檔）：不擋；沒有 NVIDIA_API_KEY 也一樣', () => {
+    const { live } = withLegacyFile(true);
+    expect(() => live.assertKeyLocated(NAME)).not.toThrow();
+  });
+
+  it('把名字寫回常數就會誤擋（這條是上一條的反面：搬家訊息本身仍在）', () => {
+    const { live, legacyFile, where } = withLegacyFile(true);
+    expect(() => live.assertKeyLocated(LIVE_API_KEY_ENV)).toThrow(
+      `缺少環境變數 ${LIVE_API_KEY_ENV}。舊位置 ${legacyFile}`,
+    );
+    expect(() => live.assertKeyLocated(LIVE_API_KEY_ENV)).toThrow(join(where.home, '.env'));
+  });
+
+  it('設定要的那把找不到＋有舊檔：搬家訊息，名字是 GATEWAY_KEY（一次性入口不讀受管檔，所以受管檔裡有也算找不到）', () => {
+    const { live, legacyFile } = withLegacyFile(false);
+    expect(() => live.assertKeyLocated(NAME)).toThrow(`缺少環境變數 ${NAME}。舊位置 ${legacyFile}`);
+  });
+
+  it('設定要的那把找不到、沒有舊檔：不擋（缺值由建模型當場講缺哪一個）', () => {
+    const where = layout({ apiKeyEnv: NAME });
+    const live = loadLiveLaunchEnv({
+      store: true,
+      cwd: where.cwd,
+      env: where.env,
+      legacyFile: join(where.cwd, 'does-not-exist.env'),
+    });
+    expect(() => live.assertKeyLocated(NAME)).not.toThrow();
+  });
 });
 
 describe('背景子代理被指定模型時建的那一顆（`liveSubagentModelFor`，#876）', () => {

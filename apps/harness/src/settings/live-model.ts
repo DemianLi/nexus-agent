@@ -146,8 +146,9 @@
  * - **形狀**同受管檔 `refs` 的鍵與 dsh 的 `credentialRef`：環境變數形狀（`CREDENTIAL_NAME_PATTERN`），空字串、含空白、含 `=` 都拒收。
  * - dsh 的 `.role('credential-ref')` 是 schemastery 的標記，zod 沒有對應；值是名字、不是秘密，照其他欄位一樣可以出現在設定傾印裡。
  *   `.volatile()`（同一代設定熱換）不適用：這一列本來就起動期解一次。
- * - **不改**：舊位置（程式碼資料夾根目錄）`.env` 的搬家檢查（`loadLiveLaunchEnv`）仍用 `LIVE_API_KEY_ENV`——它跑在讀設定之前，
- *   也只為舊的出廠名字存在。只有一條路由，所以一列一把金鑰就是 dsh「每條路由一把」。
+ * - **舊位置（程式碼資料夾根目錄）`.env` 的搬家檢查跟著這個名字走**：`loadLiveLaunchEnv` 跑在讀設定之前，所以它不自己判斷，
+ *   交出 `assertKeyLocated(name)`，由 serve／CLI 讀完這一列之後用 `apiKeyEnv` 呼叫（「設定要的那把」找不到、舊位置的檔又在，才擋）；
+ *   `eval`／`spike` 不讀這一列，傳預設名字。只有一條路由，所以一列一把金鑰就是 dsh「每條路由一把」。
  *
  * ## 偏離四：標題要關推理，由 `createLiveModel` 依用途帶型錄條目的寫法
  *
