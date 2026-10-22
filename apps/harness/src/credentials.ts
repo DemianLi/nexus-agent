@@ -88,7 +88,11 @@ export interface CredentialService {
   check(): void;
 }
 
-const NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
+/**
+ * 一把憑證的名字長什麼樣：環境變數形狀。受管檔 `refs` 的鍵與 `live-model` 的 `apiKeyEnv`（#1604）共用這一條，
+ * 同 dsh `packages/credentials/credentials/src/index.ts:19` 的 `REF_PATTERN`。
+ */
+export const CREDENTIAL_NAME_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
 /** 不引原文的 YAML 錯誤描述：只有錯誤碼與位置。 */
 function describeYamlError(error: YAMLError): string {
@@ -135,7 +139,8 @@ export function parseCredentialsDocument(file: string, text: string): ReadonlyMa
   }
   const out = new Map<string, string>();
   for (const [name, value] of Object.entries(refs as Record<string, unknown>)) {
-    if (!NAME_PATTERN.test(name)) return fail(`refs 的鍵 "${name}" 不是環境變數形狀的名字`);
+    if (!CREDENTIAL_NAME_PATTERN.test(name))
+      return fail(`refs 的鍵 "${name}" 不是環境變數形狀的名字`);
     // 不引值：連型別都只說「不是字串」。
     if (typeof value !== 'string') return fail(`refs.${name} 要是字串`);
     if (value.length === 0) {

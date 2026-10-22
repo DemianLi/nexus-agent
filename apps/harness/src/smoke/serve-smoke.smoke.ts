@@ -30,9 +30,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { serveClient } from '../fixtures.js';
 import { projectKey, sessionPathsIn } from '../jsonl-session-store.js';
-import { DEFAULT_LIVE_BASE_URL, LIVE_API_KEY_ENV } from '../live-model.js';
+import { DEFAULT_LIVE_BASE_URL } from '../live-model.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
+import { liveModelConfigSchema } from '../settings/live-model.js';
 import { startCountingProxy } from './counting-proxy.js';
 import type { CountingProxy } from './counting-proxy.js';
 import { FILE_TOOLS, findViolations } from './violations.js';
@@ -65,8 +66,11 @@ let stopped = false;
 const SENTINEL = 'SENTINEL-不要動我\n';
 
 beforeAll(async () => {
-  if ((process.env[LIVE_API_KEY_ENV] ?? '') === '') {
-    throw new Error(`缺 ${LIVE_API_KEY_ENV}：冒煙回歸要真金鑰，缺了不跳過、直接失敗。`);
+  // 金鑰名讀解析後設定的 `apiKeyEnv`（#1604）。下面那份 patch 只寫 `baseUrl`，所以這裡就是預設名字；
+  // 改成別的名字，這一行與 patch 要一起改。
+  const apiKeyEnv = liveModelConfigSchema.parse({}).apiKeyEnv;
+  if ((process.env[apiKeyEnv] ?? '') === '') {
+    throw new Error(`缺 ${apiKeyEnv}：冒煙回歸要真金鑰，缺了不跳過、直接失敗。`);
   }
   proxy = await startCountingProxy({ upstream: DEFAULT_LIVE_BASE_URL, cap: REQUEST_CAP });
   workspace = await realpath(await mkdtemp(join(tmpdir(), 'nexus-smoke-ws-')));
