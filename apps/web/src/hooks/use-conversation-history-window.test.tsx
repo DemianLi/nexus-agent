@@ -1,9 +1,11 @@
 import type { Event, ThreadHistoryOutcome, ThreadHistoryQuery, WireClient } from '@nexus/wire';
+import { createWireClient, historyPath, streamPath, WireProtocolError } from '@nexus/wire';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { JUMP_PAGE_MESSAGES, useConversation } from '@/hooks/use-conversation';
 import type { PlanScanOutcome } from '@/lib/plan-review';
+import { THREAD_PROTOCOL_ERROR_PAGE_TEXT } from '@/lib/thread-protocol-error';
 import { Script } from '@/test/conversation-frames';
 
 /**
@@ -521,5 +523,153 @@ describe('findPlan：計劃分頁的旁路掃描（#1798）', () => {
     });
     expect(outcome).toEqual({ kind: 'aborted' });
     expect(harness.threadHistory).toHaveBeenCalledTimes(2);
+  });
+});
+
+/**
+ * **真的 `createWireClient`**，只注入 `fetch`（#1866）：歷史照 `beforeSeq` 回測試排好的頁（第一頁不帶 `beforeSeq`，鍵是 `first`），
+ * 壞資料由 client 自己的 `readHistory` 驗出來、拋 `WireProtocolError`；測試不自己丟替身。下行開著、一顆都不送。
+ */
+function wiredHistory() {
+  const pages = new Map<string, unknown>();
+  let failNext: Error | undefined;
+  const opened = vi.fn();
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    if (url.pathname === historyPath('t')) {
+      if (failNext !== undefined) {
+        const error = failNext;
+        failNext = undefined;
+        throw error;
+      }
+      const key = url.searchParams.get('beforeSeq') ?? 'first';
+      const result = pages.get(key);
+      if (result === undefined) throw new Error(`沒排好的頁：${key}`);
+      return new Response(JSON.stringify({ type: 'success', result }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }
+    if (url.pathname !== streamPath('t')) throw new Error(`沒預期的請求：${url.pathname}`);
+    opened();
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({ start: (c) => void (controller = c) });
+    init?.signal?.addEventListener('abort', () => {
+      try {
+        controller.close();
+      } catch {
+        // 已經收掉了。
+      }
+    });
+    return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+  });
+  const real = createWireClient({ baseUrl: 'http://wire.test', fetch });
+  const client: WireClient = { ...real, slashList: async () => ({ kind: 'ok', commands: [] }) };
+  return {
+    client,
+    opened,
+    /** `beforeSeq` 是 `key` 的那一頁（`first` 是第一頁）。 */
+    set: (key: number | 'first', result: unknown) => pages.set(String(key), result),
+    /** 下一次讀歷史在網路層失敗（`fetch` 拋）。 */
+    failNext: (error: Error) => (failNext = error),
+  };
+}
+
+function wirePage(runIds: readonly string[], firstSeq: number, hasMore: boolean) {
+  return {
+    events: runIds.map((id) => reply(id)),
+    firstSeq,
+    throughSeq: 999,
+    hasMore,
+    legacy: false,
+  };
+}
+
+/** 少了 `params`：`readHistory` 逐筆驗得出來的壞事件。 */
+const BROKEN_EVENT = { type: 'event', method: 'messages' };
+const brokenPage = (firstSeq: number) => ({
+  ...wirePage([], firstSeq, true),
+  events: [BROKEN_EVENT],
+});
+
+describe('往前讀歷史碰到看不懂的資料：原文只進 console.error，畫面講固定的一句（#1866）', () => {
+  function protocolErrorLogged(spy: { readonly mock: { readonly calls: readonly unknown[][] } }) {
+    return spy.mock.calls.some(([error]) => error instanceof WireProtocolError);
+  }
+
+  it('「載入更早的」：按鈕旁是固定的一句、不是原文；下行照舊開著；頁修好了再按一次照常接上', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const wire = wiredHistory();
+    wire.set('first', wirePage(['tail'], 500, true));
+    wire.set(500, brokenPage(400));
+    const { result } = renderHook(() => useConversation({ client: wire.client, threadId: 't' }));
+    await tick();
+    expect(result.current.connected).toBe(true);
+
+    await act(async () => {
+      await result.current.loadEarlier();
+    });
+    expect(result.current.history?.error).toBe(THREAD_PROTOCOL_ERROR_PAGE_TEXT);
+    expect(protocolErrorLogged(errors)).toBe(true);
+    expect(result.current.connected).toBe(true);
+    expect(wire.opened).toHaveBeenCalledTimes(1);
+
+    wire.set(500, wirePage(['a'], 400, false));
+    await act(async () => {
+      await result.current.loadEarlier();
+    });
+    expect(replies(result)).toEqual(['m-a', 'm-tail']);
+    expect(result.current.history?.error).toBeUndefined();
+    expect(result.current.history?.hasMore).toBe(false);
+  });
+
+  it('跳到某一輪（loadThrough）第二頁壞：第一頁照樣接上，按鈕旁是固定的一句', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const wire = wiredHistory();
+    wire.set('first', wirePage(['tail'], 500, true));
+    wire.set(500, wirePage(['b'], 400, true));
+    wire.set(400, brokenPage(300));
+    const { result } = renderHook(() => useConversation({ client: wire.client, threadId: 't' }));
+    await tick();
+
+    await act(async () => {
+      await result.current.loadThrough(100);
+    });
+    expect(replies(result)).toEqual(['m-b', 'm-tail']);
+    expect(result.current.history?.error).toBe(THREAD_PROTOCOL_ERROR_PAGE_TEXT);
+    expect(result.current.history?.hasMore).toBe(true);
+    expect(protocolErrorLogged(errors)).toBe(true);
+    expect(result.current.connected).toBe(true);
+  });
+
+  it('計劃分頁的掃描（findPlan）：回 failed，原因是固定的一句（卡上沒列、PM 核可併入）', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const wire = wiredHistory();
+    wire.set('first', wirePage(['tail'], 500, true));
+    wire.set(500, brokenPage(400));
+    const { result } = renderHook(() => useConversation({ client: wire.client, threadId: 't' }));
+    await tick();
+
+    let outcome: PlanScanOutcome | undefined;
+    await act(async () => {
+      outcome = await result.current.findPlan('call_plan', new AbortController().signal);
+    });
+    expect(outcome).toEqual({ kind: 'failed', message: THREAD_PROTOCOL_ERROR_PAGE_TEXT });
+    expect(protocolErrorLogged(errors)).toBe(true);
+  });
+
+  it('對照組：網路層的失敗照舊講原因，不進 console.error', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const wire = wiredHistory();
+    wire.set('first', wirePage(['tail'], 500, true));
+    const { result } = renderHook(() => useConversation({ client: wire.client, threadId: 't' }));
+    await tick();
+
+    wire.failNext(new TypeError('network down'));
+    await act(async () => {
+      await result.current.loadEarlier();
+    });
+    expect(result.current.history?.error).toContain('network down');
+    expect(result.current.history?.error).not.toBe(THREAD_PROTOCOL_ERROR_PAGE_TEXT);
+    expect(errors).not.toHaveBeenCalled();
   });
 });
