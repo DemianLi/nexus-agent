@@ -11,7 +11,7 @@
  *   指定層數（原樣 JSON 文字，不用遞迴的 `JSON.stringify`）。這是造「上限出現之前寫下的舊日誌」的做法，同 `checkpoint-serde.test.ts`。
  * - `resume <dir> <層數>`：開 serve，**第一件事**就是續接 `t<層數>`，印被拒的碼與訊息，或 `opened`。
  * - `write <dir> <層數>`：同台，假端點回一則參數 `<層數>` 層的工具呼叫，印這一輪 `turn/failed` 的碼與訊息、整份日誌有沒有 `RangeError`，
- *   以及下行有沒有一路收到 root 收尾（`downlink`：`closed` 或 `broken`，斷了不算這支腳本失敗——見 `write`）。
+ *   以及下行有沒有一路收到 root 收尾（`downlink`：`finished`＝一路收到 root 收尾、`broken`＝收尾之前就斷了，斷了不算這支腳本失敗——見 `write`）。
  *
  * **零憑證、零外部連線**：假端點在 loopback，key 是假的。
  */
@@ -124,12 +124,13 @@ async function start(where: Layout): Promise<RunningServe> {
 const logFile = (where: Layout, thread: string) =>
   join(where.logs, projectKey(process.cwd()), `${thread}.jsonl`);
 
-async function say(server: RunningServe, thread: string, prompt: string): Promise<void> {
+async function say(server: RunningServe, thread: string, prompt: string) {
   const client = await serveClient(server);
   const events = await client.openEvents(thread);
   await client.runStart(thread, prompt);
-  await foldTurn(events);
+  const state = await foldTurn(events);
   await events.return?.(undefined);
+  return state;
 }
 
 function emit(result: unknown): void {
@@ -184,9 +185,11 @@ async function write(dir: string, level: number): Promise<void> {
   const server = await start(where);
   // 下行有沒有斷要如實報，不能讓它扳倒腳本：深參數的 `messages` 事件在下行 `JSON.stringify` 時會不會爆堆疊看平台
   //（Linux 上 5000 層會，serve 記 `[下行] … 無法序列化，已斷開`，歸 #1560；macOS 上不會）。這一格要量的是日誌那一關。
-  let downlink: 'closed' | 'broken' = 'closed';
+  let downlink: 'finished' | 'broken' = 'finished';
+  let seen: { status: string; error: string | undefined } | undefined;
   try {
-    await say(server, 'w', '深:w');
+    const state = await say(server, 'w', '深:w');
+    seen = { status: state.status, error: state.error };
   } catch {
     downlink = 'broken';
   }
@@ -203,6 +206,8 @@ async function write(dir: string, level: number): Promise<void> {
   const failed = events.filter((event) => event.type === 'turn/failed');
   emit({
     downlink,
+    // 客戶端（折疊下行）在 root 收尾時看到的這一輪：狀態與 lifecycle failed 帶的文字。
+    seen,
     // 整份日誌（不只 turn/failed）有沒有留下堆疊爆掉的痕跡。
     rangeError: logText.includes('RangeError') || logText.includes('Maximum call stack'),
     failed: failed.map((event) => ({ code: event.data.error?.code, message: event.data.message })),

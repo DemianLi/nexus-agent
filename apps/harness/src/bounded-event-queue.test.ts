@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { BoundedQueue, DEFAULT_DOWNLINK_MAX_BYTES, frameBytes } from './bounded-event-queue.js';
+import {
+  BoundedQueue,
+  DEFAULT_DOWNLINK_MAX_BYTES,
+  DEPTH_TRUNCATED,
+  DOWNLINK_MAX_DEPTH,
+  boundFrame,
+  frameBytes,
+} from './bounded-event-queue.js';
 
 /**
  * 下行訂閱者的位元組有界佇列（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504) 第 3 步）的單元。
@@ -79,5 +86,90 @@ describe('BoundedQueue', () => {
     queue.clear();
     expect(queue.length).toBe(0);
     expect(queue.push('b', 10)).toBe(true);
+  });
+});
+
+/** 迭代造一條 `n` 層的陣列鏈（根算第 1 層），遞迴造的話測試自己先爆。 */
+function chain(n: number): unknown[] {
+  const root: unknown[] = [];
+  let tail = root;
+  for (let level = 1; level < n; level++) {
+    const next: unknown[] = [];
+    tail.push(next);
+    tail = next;
+  }
+  return root;
+}
+
+/** 從根往下數到第一個不是陣列的東西，數出有幾層陣列；迭代。 */
+function arrayDepth(value: unknown): number {
+  let depth = 0;
+  let current: unknown = value;
+  while (Array.isArray(current)) {
+    depth += 1;
+    current = current[0];
+  }
+  return depth;
+}
+
+describe('boundFrame（偏離 D：下行副本的巢狀深度截斷，#1560 N1384）', () => {
+  it('門檻是日誌上限的兩倍', () => {
+    expect(DOWNLINK_MAX_DEPTH).toBe(1200);
+  });
+
+  it('沒超過門檻的原樣回傳，不複製：剛好 1200 層', () => {
+    const frame = { data: chain(DOWNLINK_MAX_DEPTH - 1) }; // 外層物件 1 層 ＋ 陣列 1199 層
+    const bounded = boundFrame(frame);
+    expect(bounded.truncated).toBe(false);
+    expect(bounded.frame).toBe(frame);
+  });
+
+  it('多一層就截斷：超過的子樹換成佔位，其餘原樣；來源物件沒被改', () => {
+    const deep = chain(DOWNLINK_MAX_DEPTH); // 加上外層物件共 1201 層
+    const frame = { keep: 'x', data: deep };
+    const bounded = boundFrame(frame);
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.frame).not.toBe(frame);
+    const copy = bounded.frame as { keep: string; data: unknown[] };
+    expect(copy.keep).toBe('x');
+    // 外層物件算第 1 層，所以陣列只留 1199 層，第 1200 層的位置是佔位字串。
+    let tail: unknown = copy.data;
+    let arrays = 0;
+    while (Array.isArray(tail) && typeof tail[0] !== 'string') {
+      arrays += 1;
+      tail = tail[0];
+    }
+    expect(arrays).toBe(DOWNLINK_MAX_DEPTH - 2);
+    expect(Array.isArray(tail) ? tail[0] : tail).toBe(DEPTH_TRUNCATED);
+    expect(arrayDepth(frame.data)).toBe(DOWNLINK_MAX_DEPTH); // 來源原樣
+  });
+
+  // 兩萬層：Linux Node 22 的遞迴 JSON.stringify 約 5000 層就 RangeError（實測），macOS Node 25 不會，所以不斷言「截之前會爆」，只斷言截之後的結果。
+  it('兩萬層：截斷後算得出位元組、序列化不拋', () => {
+    const frame = { data: chain(20_000) };
+    const bounded = boundFrame(frame);
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.bytes).toBe(Buffer.byteLength(JSON.stringify(bounded.frame), 'utf8'));
+    expect(bounded.bytes).toBeGreaterThan(DOWNLINK_MAX_DEPTH);
+  });
+
+  it('不是陣列也不是純物件的值原樣留著，不算層數', () => {
+    const when = new Date(0);
+    const bounded = boundFrame({ chain: chain(DOWNLINK_MAX_DEPTH), when });
+    expect((bounded.frame as { when: Date }).when).toBe(when);
+  });
+
+  it('JSON 表達不出來的照拋，由呼叫端照偏離 C 處理：BigInt、循環參照（循環不會走不完）', () => {
+    expect(() => boundFrame({ n: 1n })).toThrow(/BigInt/u);
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    expect(() => boundFrame(loop)).toThrow(/circular/iu);
+  });
+
+  it('同一個物件出現兩次（共用）時只複製一份，深的那份也不會成倍長大', () => {
+    const shared = chain(DOWNLINK_MAX_DEPTH + 50);
+    const bounded = boundFrame({ a: shared, b: shared });
+    const copy = bounded.frame as { a: unknown; b: unknown };
+    expect(copy.a).toBe(copy.b);
   });
 });

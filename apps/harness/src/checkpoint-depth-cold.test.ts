@@ -103,7 +103,8 @@ describe('續接：新行程、預設 stack，第一個工作就是深的那一�
 
 describe('同台寫入：新行程裡模型回極深的工具參數，日誌那一關先擋', () => {
   interface Written {
-    readonly downlink: 'closed' | 'broken';
+    readonly downlink: 'finished' | 'broken';
+    readonly seen?: { readonly status: string; readonly error?: string };
     readonly rangeError: boolean;
     readonly failed: { code?: string; message?: string }[];
   }
@@ -120,19 +121,27 @@ describe('同台寫入：新行程裡模型回極深的工具參數，日誌那�
     expect(result.failed[0]!.message).toContain('日誌收不下');
     expect(result.failed[0]!.message).not.toContain('Maximum call stack');
     expect(result.rangeError).toBe(false);
-    expect(result.downlink).toBe('closed');
+    expect(result.downlink).toBe('finished');
+    expect(result.seen?.status).toBe('failed');
   }, 120_000);
 
   /**
-   * 5000 層：**只量日誌那一關**，下行的結果不斷言（斷了或正常收尾都收）。
+   * 5000 層（#1560 N1384）：同一則深參數的 `messages` 事件要走下行 `JSON.stringify`，Linux 的預設 stack 在這個層數會爆
+   * （Node 22.23.3 實測；macOS Node 25 不會）。以前是下行斷線，客戶端只看到串流斷了；現在那顆事件的下行副本在序列化之前被截斷
+   * （`bounded-event-queue.ts` 偏離 D），下行不斷，一路收到 root 的 `lifecycle failed`。
    *
-   * 為什麼不斷言下行：同一則深參數的 `messages` 事件要走下行 `JSON.stringify`，Linux 的預設 stack 在 5000 層會爆
-   * （serve 記 `[下行] thread w 有一顆 messages 事件無法序列化，已斷開 1 條下行：Maximum call stack size exceeded`，CI 上
-   * 子行程因此「下行在 root 收尾之前就斷了」），macOS 上不會。斷言任何一邊都會變成依平台而定的測試。原因與歸屬見 #1560。
-   * 日誌那一關不看平台：這一輪的 `turn/failed` 是 `NESTING_TOO_DEEP`，整份日誌裡沒有 `RangeError`。
+   * 斷言**客戶端這一側**：下行走完（`finished`）、折疊出來的狀態是 `failed`、`error` 文字是日誌那一關的訊息。**碼不在下行上**——
+   * `lifecycle failed` 只帶文字（實測，`packages/nexus-wire/src/conversation.ts` 的 failed 路徑只收 `data.error` 字串），
+   * `NESTING_TOO_DEEP` 在日誌的 `turn/failed` 與歷史裡；下行帶碼另開 #1844。日誌那一關不看平台，整份日誌沒有 `RangeError`。
+   *
+   * 這一格在 Linux 才是真的紅燈（拿掉截斷，下行 `broken`）；macOS 上下行本來就不會爆，所以平台無關的紅燈在
+   * `thread-pump-bounds.test.ts`（副本含截斷佔位）。
    */
-  it('參數 5000 層：日誌裡這一輪的 turn/failed 是 NESTING_TOO_DEEP，整份日誌沒有 RangeError（下行不斷言）', async () => {
+  it('參數 5000 層：下行不斷，客戶端收到這一輪失敗；日誌裡這一輪的 turn/failed 是 NESTING_TOO_DEEP，整份日誌沒有 RangeError', async () => {
     const result = await written(5000);
+    expect(result.downlink).toBe('finished');
+    expect(result.seen?.status).toBe('failed');
+    expect(result.seen?.error).toContain('日誌收不下');
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0]!.code).toBe('NESTING_TOO_DEEP');
     expect(result.failed[0]!.message).toContain('日誌收不下');
