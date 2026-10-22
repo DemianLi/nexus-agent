@@ -21,6 +21,7 @@ import {
   CONTEXT_MEASURE,
   formatSessionReferenceMention,
   GOAL,
+  GOAL_ACTIVATION,
   MODEL_DOES_NOT_SUPPORT_IMAGES,
   MODEL_USAGE,
   PLAN_MODE,
@@ -1480,6 +1481,7 @@ describe('目標列（#945）', () => {
     await waitFor(() => expect(bar()).toBeTruthy());
     expect(bar()!.textContent).toContain('目標：未完成');
     expect(bar()!.textContent).toContain('把登入改好');
+    // 只推了目標、沒推 activation（還沒收到，`null`）：照中性的寫，不說進行中（#1608）。
     expect(bar()!.textContent).not.toMatch(/進行中|正在跑/);
 
     downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ phase: 'paused' }))]);
@@ -1500,6 +1502,29 @@ describe('目標列（#945）', () => {
 
     downlink.push(opened[0]!, [goalFrame(downlink, null)]);
     await waitFor(() => expect(bar()).toBeNull());
+  });
+
+  it('active 時看 activation（#1608）：disarmed 講沒有在跑並給下一步，armed 寫進行中、那句消失', async () => {
+    const { downlink, opened } = await mounted();
+    const activationFrame = (activation: 'armed' | 'disarmed'): Event =>
+      downlink.customFrame(GOAL_ACTIVATION, { goal: { id: 'g1', revision: 1, activation } });
+    const hint = () => screen.queryByTestId('goal-resume-hint');
+
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal())]);
+    await waitFor(() => expect(bar()).toBeTruthy());
+    expect(hint()).toBeNull();
+
+    downlink.push(opened[0]!, [activationFrame('disarmed')]);
+    await waitFor(() => expect(hint()?.textContent).toBe('輸入 /goal resume 讓它繼續。'));
+    expect(bar()!.textContent).toContain('目標：未完成，沒有在跑');
+    expect(bar()!.getAttribute('aria-label')).toContain('/goal resume');
+    // 暫停鈕照舊只看相位（Q1 (a)）。
+    expect(screen.getByRole('button', { name: '暫停目標' })).toBeTruthy();
+
+    downlink.push(opened[0]!, [activationFrame('armed')]);
+    await waitFor(() => expect(bar()!.textContent).toContain('目標：進行中'));
+    expect(hint()).toBeNull();
+    expect(screen.getByRole('button', { name: '暫停目標' })).toBeTruthy();
   });
 
   it('輪數：開始過才畫「第 N／M 輪」；長目標單行截短而全文在 title 與無障礙名稱', async () => {
