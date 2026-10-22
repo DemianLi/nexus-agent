@@ -84,6 +84,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { getConfig } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { llmFailure, thrownMessage } from './llm-failure.js';
 import { captureModelCallSettled, withModelCall } from './model-call-scope.js';
 import type { CapturedModelCall } from './model-call-scope.js';
 import type { SessionLookup } from './registry.js';
@@ -318,13 +319,12 @@ function appendOrFail(write: () => void, original: unknown, type: string): void 
 
 /** 失敗的穩定描述：碼與狀態是 adapter 回報的，原話取自拋出來的錯誤。 */
 function failureOf(reported: StreamFailure, reason: unknown): LlmFailure {
-  const message = reason instanceof Error ? reason.message : String(reason);
-  return {
-    message,
+  return llmFailure({
+    message: thrownMessage(reason),
     code: reported.code,
-    ...(reported.status !== undefined && { status: reported.status }),
-    ...(reported.requestId !== undefined && { requestId: reported.requestId }),
-  };
+    status: reported.status,
+    requestId: reported.requestId,
+  });
 }
 
 /** {@link retryModelCall} 的周邊：往哪裡記、通知誰、聽哪個中止訊號。全部可省略。 */

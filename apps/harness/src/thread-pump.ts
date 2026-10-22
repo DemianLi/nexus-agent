@@ -96,6 +96,7 @@ import {
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
   TOOL_ABORTED_REASON,
   TOOL_ABORTED_TEXT,
+  thrownMessage,
   toolRefusal,
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
@@ -185,7 +186,7 @@ import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
 import { startTurnClock, unsettledToolNames } from './turn-clock.js';
 import type { TurnClock } from './turn-clock.js';
 // 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
-import { classifyTurnFailure } from './live-model.js';
+import { turnFailureOf } from './live-model.js';
 import {
   answerElicitation,
   declineAll,
@@ -2207,10 +2208,9 @@ export class ThreadPump {
       log.append('turn/end', { reason: ABORTED_BY_USER });
       this.#parkIfStopped();
     } catch (error) {
-      const failure = error instanceof Error ? error : new Error(String(error));
-      this.#reportTurnFailed(
-        log.append('turn/failed', { message: failure.message, error: classifyTurnFailure(error) }),
-      );
+      const failure =
+        error instanceof Error ? error : new Error(thrownMessage(error), { cause: error });
+      this.#reportTurnFailed(log.append('turn/failed', turnFailureOf(error)));
       throw failure;
     }
     // 那幾張卡照上面寫的 `tool/result` 收（#297）。**不走日誌的訂閱者**：它只認有 run 的時候，
@@ -3057,12 +3057,10 @@ export class ThreadPump {
       }
       // 失敗的原因已經以 `lifecycle failed` 上了線（實測：失敗 frame 先發、然後才拋），
       // 所以這裡不再合成一顆。下行**不關**——這條線是長期的，下一次 submit 還要用。
-      const failure = error instanceof Error ? error : new Error(String(error));
+      const failure =
+        error instanceof Error ? error : new Error(thrownMessage(error), { cause: error });
       this.#reportTurnFailed(
-        this.#sessions.root.append('turn/failed', {
-          message: failure.message,
-          error: classifyTurnFailure(error),
-        }),
+        this.#sessions.root.append('turn/failed', turnFailureOf(error)),
         claimed?.id,
       );
       this.#stopRequested = false;

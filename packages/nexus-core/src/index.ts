@@ -811,6 +811,8 @@ export {
 } from './session-format.js';
 
 export { errorChain } from './error-chain.js';
+export { LLM_FAILURE_FALLBACK_MESSAGE, llmFailure, thrownMessage } from './llm-failure.js';
+export type { LlmFailureFields } from './llm-failure.js';
 
 export type {
   SessionPersistenceConfig,
