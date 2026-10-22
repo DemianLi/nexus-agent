@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createWireClient } from './client.js';
 import type { UplinkResult } from './client.js';
 import { WIRE_CHANNELS, errorResponse, successResponse } from './protocol.js';
+import { WireProtocolError } from './protocol-error.js';
 import { WireRejectedError } from './rejected-error.js';
 import { encodeSseFrame } from './sse.js';
 import { UplinkTransportError } from './uplink-error.js';
@@ -227,6 +228,41 @@ describe('瀏覽器端的 client', () => {
       code: 'subagent_not_found',
       message: '沒有這個子代理',
     });
+  });
+
+  // 歷史裡的壞事件每次重連都抓到同一份：不驗的話它流進折疊器，那條 thread 永遠打不開（#1555）。
+  it('歷史頁裡有形狀不對的事件：threadHistory 與 subagentHistory 都拋 WireProtocolError，field 指到哪一筆', async () => {
+    const good = { type: 'event', method: 'lifecycle', params: { namespace: [], data: {} } };
+    const page = (events: unknown[]) => ({
+      events,
+      firstSeq: 0,
+      throughSeq: 0,
+      hasMore: false,
+      legacy: false,
+    });
+    const serve = (events: unknown[]) =>
+      createWireClient({
+        baseUrl: 'http://agent.test/',
+        fetch: async () => Response.json({ type: 'success', result: page(events) }),
+      });
+    const missingMethod = { type: 'event', params: { namespace: [], data: {} } };
+    const error = await serve([good, missingMethod])
+      .threadHistory('t')
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+    expect(error).toBeInstanceOf(WireProtocolError);
+    expect((error as WireProtocolError).field).toBe('events[1].method');
+    const sub = await serve([{ ...good, params: undefined }])
+      .subagentHistory('t', 'bg-0123456789ab')
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+    expect((sub as WireProtocolError).field).toBe('events[0].params');
+    // 歷史不帶 seq；合格的整頁照常回來。
+    expect(await serve([good, good]).threadHistory('t')).toMatchObject({ kind: 'ok' });
   });
 
   it('下行預設訂全部放行的 channel，回來的是解好的封包', async () => {

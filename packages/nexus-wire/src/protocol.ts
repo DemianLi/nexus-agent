@@ -44,6 +44,7 @@ import type { GoalMethod } from './goal.js';
 import { isModelMethod } from './model-selection.js';
 import type { ModelMethod } from './model-selection.js';
 import { isPermissionMethod } from './permission-presets.js';
+import { WireProtocolError } from './protocol-error.js';
 import { isSubagentListMethod } from './subagent-list.js';
 import type { SubagentMention, SUBAGENT_LIST_METHOD } from './subagent-list.js';
 import { isThreadManagementMethod } from './thread-management.js';
@@ -847,8 +848,92 @@ export type ThreadFeedFrame =
   ThreadStatusFrame | ThreadInputRequestedFrame | ThreadInputWithdrawnFrame;
 
 /**
- * 認得這一顆嗎。**client 在這裡丟掉不認得的**，見 {@link THREAD_FEED_PATH}。只驗 client 要讀的欄位，`event` 的
- * 其餘形狀不驗：server 那側（`thread-feed.ts`）照同一份 `@nexus/wire` 的型別建。
+ * 一顆下行的事件，信封哪裡不對：回第一個不對的欄位路徑與原因，都對就回 `undefined`。{@link assertWireEvent} 與 {@link isWireEvent}
+ * 共用這一支，兩邊不會各寫一份「怎麼認」。
+ *
+ * 驗的是**折疊器與發布器會讀的欄位**：`type`、`method`、`params`、`params.namespace`、`params.data`、`seq`（若有）、`event_id`（若有）。
+ * 各 `method` 的 `data` 內容照舊由 `conversation.ts` 的各 `reduceX` 驗。
+ *
+ * ## 照 dsh 的哪裡
+ *
+ * `assertSessionWireEvent`（`packages/api/session-controller/src/client/session-wire-event.ts:14-46`，`687f282e`）：拒收非物件；
+ * `seq` 不是安全非負整數（含 `-0`）；缺 `data` 或 `data` 是 `undefined`（`null` 放行）。套在 follow 的每顆與歷史頁的每筆
+ * （`transport.ts:185`、`:217`、`:233`）。
+ *
+ * ## 偏離（理由 1：基座表達不出來）
+ *
+ * - **不拒收未知欄位。** dsh 逐鍵比對信封的鍵集（`:20-33`）。我們的 `Event` 是 `@langchain/protocol` 的
+ *   `EventData & Extensible & {type, event_id?, seq?}`（`protocol.ts:311`，`@langchain/protocol@0.0.19`），協定明文允許多出的欄位；
+ *   照 dsh 拒收未知鍵會跟協定本身衝突，退到只驗折疊器會讀的欄位。
+ * - **dsh 的 `time`、`ignorable`、`surfaceOp`、`sourceEventSeqs` 不照搬。** 那是 dsh 日誌事件的信封；nexus 下行送的是協定 `Event`，
+ *   沒有這幾個欄位（時間在 `params.timestamp`，是 `@langchain/protocol` 的 `Extensible` 欄位，折疊器不讀它）。取而代之驗的是我們信封
+ *   的等價物：`type`（dsh 的 `type` 是字串）、`method`、`params.namespace`。
+ * - **錯誤類別的方向相反**，見 {@link WireProtocolError}。
+ *
+ * @param value - 解出來的一顆。
+ * @param at - 這一顆在更大的資料裡的位置（歷史頁的 `events[3]`），接在欄位路徑前面；省略就是頂層。
+ */
+function wireEventProblem(
+  value: unknown,
+  at: string | undefined,
+): { readonly field: string; readonly reason: string } | undefined {
+  const path = (field: string): string => (at === undefined ? field : `${at}.${field}`);
+  const problem = (field: string, reason: string) => ({ field: path(field), reason });
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { field: at ?? 'event', reason: '必須是物件' };
+  }
+  const event = value as Record<string, unknown>;
+  if (event['type'] !== 'event') return problem('type', "必須是 'event'");
+  if (typeof event['method'] !== 'string') return problem('method', '必須是字串');
+  const params = event['params'];
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+    return problem('params', '必須是物件');
+  }
+  const body = params as Record<string, unknown>;
+  const namespace = body['namespace'];
+  if (!Array.isArray(namespace) || !namespace.every((part) => typeof part === 'string')) {
+    return problem('params.namespace', '必須是字串陣列');
+  }
+  // 同 dsh：`data` 要有、不能是 `undefined`（`null` 放行）。JSON 裡 `undefined` 的欄位根本不會出現，所以兩種缺法是同一件事。
+  if (!Object.hasOwn(body, 'data') || body['data'] === undefined) {
+    return problem('params.data', '必須存在');
+  }
+  const seq = event['seq'];
+  if (
+    seq !== undefined &&
+    (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0 || Object.is(seq, -0))
+  ) {
+    return problem('seq', '必須是安全非負整數');
+  }
+  if (event['event_id'] !== undefined && typeof event['event_id'] !== 'string') {
+    return problem('event_id', '必須是字串');
+  }
+  return undefined;
+}
+
+/**
+ * 不合格就拋 {@link WireProtocolError}（`field` 指名哪個欄位）。規則見 {@link wireEventProblem}。
+ *
+ * @param value - 解出來的一顆。
+ * @param at - 這一顆在更大的資料裡的位置，例如歷史頁的 `events[3]`。
+ * @throws {WireProtocolError} 信封不合格。
+ */
+export function assertWireEvent(value: unknown, at?: string): asserts value is Event {
+  const found = wireEventProblem(value, at);
+  if (found !== undefined) {
+    throw new WireProtocolError(found.field, `下行事件的 ${found.field} ${found.reason}`);
+  }
+}
+
+/** {@link assertWireEvent} 的布林版：不拋，給「不認得就丟掉」的那條路用。 */
+export function isWireEvent(value: unknown): value is Event {
+  return wireEventProblem(value, undefined) === undefined;
+}
+
+/**
+ * 認得這一顆嗎。**client 在這裡丟掉不認得的**，見 {@link THREAD_FEED_PATH}。只驗 client 要讀的欄位：`input-requested` 的 `event`
+ * 要過 {@link isWireEvent}（折疊器在 `useReducer` 裡讀它的 `params`，壞的進去就是 render 錯誤、整頁白掉），其餘形狀不驗：
+ * server 那側（`thread-feed.ts`）照同一份 `@nexus/wire` 的型別建。
  */
 export function isThreadFeedFrame(value: unknown): value is ThreadFeedFrame {
   if (typeof value !== 'object' || value === null) return false;
@@ -858,8 +943,8 @@ export function isThreadFeedFrame(value: unknown): value is ThreadFeedFrame {
     case 'status':
       return typeof frame['running'] === 'boolean';
     case 'input-requested': {
-      const event = frame['event'] as { method?: unknown } | null | undefined;
-      return typeof event === 'object' && event !== null && event.method === 'input.requested';
+      const event = frame['event'];
+      return isWireEvent(event) && event.method === 'input.requested';
     }
     case 'input-withdrawn':
       return typeof frame['interruptId'] === 'string';

@@ -114,6 +114,7 @@ import {
   historyPath,
   subagentHistoryPath,
   trajectoryTurnPath,
+  assertWireEvent,
   isThreadFeedFrame,
   streamPath,
 } from './protocol.js';
@@ -637,6 +638,9 @@ function readHistory(result: unknown): ThreadHistoryResult {
   ) {
     throw new Error('GET /threads/:id/history 回了不認得的結果');
   }
+  // 每一筆事件先驗信封（#1555）：壞的在這裡拋 `WireProtocolError`，不進折疊器。**歷史裡的壞事件每次重連都抓到同一份**，
+  // 讓它流進折疊器的話，那條 thread 就永遠打不開。
+  events.forEach((event: unknown, index) => assertWireEvent(event, `events[${String(index)}]`));
   return { events: events as Event[], firstSeq, throughSeq, hasMore, legacy };
 }
 

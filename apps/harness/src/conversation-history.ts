@@ -1325,6 +1325,11 @@ export function historyPage(
     if (counted < maxMessages) continue;
     cut = at;
     // 退到那一輪的開頭，一輪不拆兩頁。
+    // **偏離 dsh（理由 1，#1555 N1372）：不收 `maxMessages: 500` 的硬上限。** dsh 的視窗湊夠 `minMessages`／`minTurns` 就停在輪開頭，
+    // 一輪長到超過 500 則才在輪中間硬切（`session.ts:54` 的 `HISTORY_PAGE_OPTIONS`，`history.ts:392-427` 的 `paginate`，`687f282e`）。
+    // 我們的較早頁是「自己從空的折、再接在前面」（`use-conversation.ts` 的 `prependEntries`），這是已登記偏離「歷史送線上 `Event`、不送
+    // 日誌事件」的後果（`@nexus/wire` `protocol.ts` 的「偏離：送的是線上的 `Event`」段）：從半輪開始的頁折不出來，所以頁不能切在一輪中間。
+    // 退到位元組上限 {@link HISTORY_PAGE_MAX_BYTES}（軟的，`fitBytes`，單獨一輪超標時 `onOversize` 叫一次）。
     while (cut > 0 && !isPageStart(window[cut]!)) cut -= 1;
     break;
   }
