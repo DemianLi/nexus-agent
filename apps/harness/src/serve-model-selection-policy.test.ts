@@ -8,7 +8,7 @@
  * 允許清單那顆模型是出廠型錄的預設那一顆，三份 patch 固定字面。
  */
 
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionEvent } from '@nexus/core';
@@ -17,6 +17,7 @@ import { foldTurn, serveClient } from './fixtures.js';
 import { projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const ON = 'src/settings/model-selection-on.patch.yml';
 const UNKNOWN = 'src/settings/model-selection-unknown.patch.yml';
@@ -52,11 +53,7 @@ async function driveTurn(server: RunningServe, threadId: string, prompt: string)
 }
 
 async function logOf(root: string, threadId: string): Promise<readonly SessionEvent[]> {
-  const body = await readFile(join(root, projectKey(process.cwd()), `${threadId}.jsonl`), 'utf8');
-  return body
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+  return sessionEventsOf(join(root, projectKey(process.cwd())), threadId);
 }
 
 const policies = (events: readonly SessionEvent[]) =>

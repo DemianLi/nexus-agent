@@ -14,7 +14,6 @@
  */
 
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { readdirSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -46,6 +45,7 @@ import { buildPluginSnapshot } from './plugin-snapshot.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
+import { closedSessionEvents, sessionsUnder } from './session-files.fixture.js';
 import { auditStartupEntries } from './startup-audit.js';
 import { writeFile } from 'node:fs/promises';
 
@@ -613,20 +613,12 @@ describe('三個入口各有一條（拿掉任一入口的接線要紅）', () =
     });
 
     expect(lines.join('\n')).toContain('收工。');
-    const sessionsDir = join(dir, 'sessions');
-    // 每次組裝一個 run 目錄，裡面是 `<base>.jsonl`（`jsonl-session-store.ts`）；root 的日誌就是那一個檔。
-    const logs = readdirSync(sessionsDir, { recursive: true, encoding: 'utf8' }).filter((name) =>
-      name.endsWith('.jsonl'),
-    );
-    expect(logs).toHaveLength(1);
-    const text = readFileSync(join(sessionsDir, logs[0]!), 'utf8');
-    const kinds = text
-      .split('\n')
-      .filter((line) => line.length > 0)
-      .map((line) => (JSON.parse(line) as { type?: string }).type)
-      .filter((type) =>
-        ['tool/call', 'deliverables/presented', 'tool/result'].includes(type ?? ''),
-      );
+    // 每次組裝一個 run 目錄，裡面只有 root 那一份（`jsonl-session-store.ts`）；經 `session-files.fixture.ts` 找（#1868）。
+    const sessions = await sessionsUnder(join(dir, 'sessions'));
+    expect(sessions).toHaveLength(1);
+    const kinds = (await closedSessionEvents(sessions[0]!))
+      .map((event) => event.type as string)
+      .filter((type) => ['tool/call', 'deliverables/presented', 'tool/result'].includes(type));
     expect(kinds).toEqual(['tool/call', 'deliverables/presented', 'tool/result']);
   }, 60000);
 

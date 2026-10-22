@@ -5,7 +5,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，CLI 走 `--live` 以外的預設（echo）。
  */
 
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -35,6 +35,7 @@ import {
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -313,10 +314,7 @@ describe('歷史：只在最新一頁帶目前的標題', () => {
 /** CLI 那一次 run 目錄裡的日誌。 */
 async function cliEvents(root: string): Promise<SessionEvent[]> {
   const [runDir] = await readdir(root);
-  return (await readFile(join(root, runDir!, 'cli.jsonl'), 'utf8'))
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+  return sessionEventsOf(join(root, runDir!), 'cli');
 }
 
 describe('CLI 那條', () => {

@@ -19,7 +19,7 @@
 
 import { createServer } from 'node:http';
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +36,7 @@ import { createNexusAgent } from './agent-factory.js';
 import { runCli } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
@@ -170,10 +171,7 @@ async function endpoint(
 
 async function cliEvents(root: string): Promise<SessionEvent[]> {
   const [runDir] = await readdir(root);
-  return (await readFile(join(root, runDir!, 'cli.jsonl'), 'utf8'))
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+  return sessionEventsOf(join(root, runDir!), 'cli');
 }
 
 describe('產品組裝：模型請求的重試政策接到了每個入口', () => {

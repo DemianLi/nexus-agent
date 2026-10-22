@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,7 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { HOME_LOCK_FILE_NAME, HomeInUseError } from './home-lock.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const serveEntry = fileURLToPath(new URL('./serve.ts', import.meta.url));
 const harnessDir = fileURLToPath(new URL('../', import.meta.url));
@@ -105,11 +106,7 @@ async function say(client: WireClient, threadId: string, prompt: string): Promis
 /** 會話根底下那一條 thread 的日誌。 */
 async function threadLog(root: string, threadId: string): Promise<readonly SessionEvent[]> {
   const [project] = await readdir(root);
-  const path = join(root, project!, `${threadId}.jsonl`);
-  return (await readFile(path, 'utf8'))
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+  return sessionEventsOf(join(root, project!), threadId);
 }
 
 function line(entry: ConversationEntry): string {

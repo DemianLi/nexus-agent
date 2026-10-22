@@ -27,6 +27,7 @@ import {
 } from './plugin-journal.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionHeaderOf } from './session-files.fixture.js';
 
 const temporary: string[] = [];
 let running: RunningServe | undefined;
@@ -128,9 +129,8 @@ async function say(server: RunningServe, thread: string): Promise<string | undef
   }
 }
 
-function header(dir: string, thread: string): { configHash?: string; plugins?: unknown[] } {
-  const path = join(dir, 'sessions', projectKey(process.cwd()), `${thread}.header.json`);
-  return JSON.parse(readFileSync(path, 'utf8')) as { configHash?: string; plugins?: unknown[] };
+async function header(dir: string, thread: string): Promise<{ configHash?: string }> {
+  return (await sessionHeaderOf(join(dir, 'sessions', projectKey(process.cwd())), thread)).header;
 }
 
 describe('serve 每條 thread 重讀清單（#1405）', () => {
@@ -167,8 +167,8 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(await say(server, 'a')).toBeUndefined();
     await h.change({ op: 'config-set', id: 'probe', config: { tag: 'two' } });
     expect(await say(server, 'b')).toBeUndefined();
-    const a = header(h.dir, 'a');
-    const b = header(h.dir, 'b');
+    const a = await header(h.dir, 'a');
+    const b = await header(h.dir, 'b');
     expect(a.configHash).toMatch(/^hmac-sha256:/u);
     expect(b.configHash).toMatch(/^hmac-sha256:/u);
     expect(b.configHash).not.toBe(a.configHash);

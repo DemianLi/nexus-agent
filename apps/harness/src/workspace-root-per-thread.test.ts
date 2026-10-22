@@ -33,6 +33,7 @@ import { exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fi
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionHeaderOf } from './session-files.fixture.js';
 
 const roots: string[] = [];
 let running: RunningServe | undefined;
@@ -115,11 +116,9 @@ async function runScript(server: RunningServe, thread: string): Promise<Delivera
   return presented;
 }
 
+/** 經 `session-files.fixture.ts` 讀這條 thread 的 header（#1868）。 */
 async function headerOf(home: string, thread: string): Promise<{ workspaceRoot?: string }> {
-  const names = await readdir(home, { recursive: true });
-  const found = names.find((name) => name.endsWith(`${thread}.header.json`));
-  if (found === undefined) throw new Error(`找不到 ${thread} 的 header`);
-  return JSON.parse(await readFile(join(home, found), 'utf8')) as { workspaceRoot?: string };
+  return (await sessionHeaderOf(home, thread)).header;
 }
 
 describe('可寫根逐條 thread：A 回 X、B 回 Y（兩個都不是 --workspace 的 D）', () => {
