@@ -63,12 +63,17 @@ function event(seq: number): SessionEvent {
 
 /** 經後端寫一份 `count` 筆的會話然後關掉。 */
 async function written(id: string, count = 1, extra: Partial<OnDiskHeader> = {}) {
-  // 版號可能不是這一版：假裝是舊的寫方寫的（`create` 照給的 header 原樣落盤）。
-  const stored = openJsonlSessionStore({ directory: dir }).create(
-    header(id, extra) as unknown as StoredSessionHeader,
-  );
+  const onDisk = header(id, extra);
+  const stored = openJsonlSessionStore({ directory: dir }).create({
+    ...onDisk,
+    version: SESSION_LOG_FORMAT_VERSION,
+  });
   await stored.append(Array.from({ length: count }, (_, seq) => event(seq)));
   await stored.close();
+  // 版號不是這一版：假裝是舊的寫方寫的。`create` 只收這一版（#1559 N0622），落盤後直接改寫 header 檔。
+  if (onDisk.version !== SESSION_LOG_FORMAT_VERSION) {
+    await writeFile(join(dir, `${id}.header.json`), JSON.stringify(onDisk));
+  }
 }
 
 /** 目錄裡每個檔的名字與內容：唯讀的兩條前後要一模一樣。 */
@@ -262,7 +267,9 @@ describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
         paths.push(path);
         return statResults.shift()!;
       },
-      readFile: async () => Buffer.from(reads.shift()!),
+      // header 也經同一個 fs 讀（#1559 N0625 的 revision 要對到同一份讀法），讀真檔；日誌本文才換成假的。
+      readFile: async (path) =>
+        path === join(dir, 'a.jsonl') ? Buffer.from(reads.shift()!) : readFile(path),
     };
     const entry = await readSessionEntry(dir, 'a.header.json', { fs });
     expect((await entry!.readBody()).toString()).toBe('hello!!!');

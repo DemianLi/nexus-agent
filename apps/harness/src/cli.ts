@@ -46,6 +46,7 @@ import {
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   resumeClosingInterruptedTurn,
+  SessionFormatUnsupportedError,
   turnReachedMaxTokens,
   type SessionLog,
 } from '@nexus/core';
@@ -1054,7 +1055,14 @@ async function runLaunched(
     resumeDir === undefined || sessionStore === undefined
       ? undefined
       : // 當掉那一輪的收尾在這裡寫回檔上（#721），下面吃 `resumed.events` 的各處拿到的已含補結。
-        await resumeClosingInterruptedTurn(sessionStore, THREAD_ID);
+        await resumeClosingInterruptedTurn(sessionStore, THREAD_ID).catch((error: unknown) => {
+          // 這一版讀不懂的日誌：原始檔在哪裡印給本機使用者（#1559 N0646）。錯誤訊息本身不帶路徑（serve 會把它送到瀏覽器），
+          // CLI 的終端機就是使用者自己的，所以在這裡補上。
+          if (error instanceof SessionFormatUnsupportedError && error.location !== undefined) {
+            printer.error(`原始日誌：${error.location.path}`);
+          }
+          throw error;
+        });
   // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
   // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
   const resumedSandbox = resumed === undefined ? undefined : recordedSandboxMode(resumed.events);

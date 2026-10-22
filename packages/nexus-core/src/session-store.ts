@@ -730,13 +730,16 @@ export interface StoredSession {
    * 盡力而為：resolve 只代表這一批被接受並排好序，**耐久要靠 {@link flush}**。
    *
    * @param events - 這一批，第一顆的 `seq` 必須等於已存的 next-seq。
-   * @throws 這一批不連續、或把手已經關掉。
+   * @throws {@link SessionHandleClosedError} 把手已經關掉。
+   * @throws {@link SessionAlreadyExistsError} 第一次實體化時，這個 id 的檔已經在了（`create` 之後才出現的競態）。
+   * @throws 這一批不連續。
    */
   append(events: readonly SessionEvent[]): Promise<void>;
   /**
    * 耐久屏障——**唯一承諾儲存的那個操作**。resolve 之後，每一筆被接受過的 append
    * 都撐得過崩潰。
    *
+   * @throws {@link SessionHandleClosedError} 把手已經關掉。
    * @throws 寫不進去。**要響亮地拒絕**：這是呼叫端唯一聽得見耐久失敗的地方。
    */
   flush(): Promise<void>;
@@ -758,8 +761,14 @@ export interface SessionStore {
   /**
    * 開一份新的已存會話。
    *
+   * **當下就驗、當下就報撞名**，照 dsh 的 `create`（`session-persistence-jsonl/src/index.ts:360-379`）：
+   * header 不是這一版寫得出來的形狀就拒，這個 id 已經建過（同一個後端還沒實體化的，或磁碟上已經有的）也拒。
+   * 寫入仍然延後到第一次 `append`／`flush`。
+   *
    * @param header - 這份存檔的元資料。
-   * @returns 它的把手。IO 延後到第一次 `append`／`flush`。
+   * @returns 它的把手。
+   * @throws `TypeError` header 不是無損的 JSON、版本不是這一版、或某一格的形狀不對。
+   * @throws {@link SessionAlreadyExistsError} 這個 id 已經建過。
    */
   create(header: StoredSessionHeader): StoredSession;
   /**
@@ -857,7 +866,8 @@ export interface ReadonlyStoredSession {
   /**
    * 讀整份本文：**實體上有效的前綴**，同續接——最後一行寫到一半不算進去、可復原的壞尾也不算進去（規則見
    * {@link SessionStore.resume}），但都不截掉、不講。只有 header 沒有本文的是零顆。
-   * 每叫一次讀一次，讀到的是叫的當下。
+   * 每叫一次讀一次，讀到的是叫的當下。後端可以把解析結果留著給緊接的續接或下一次讀用（檔案沒變才用，
+   * [#1559](https://github.com/DemianLi/nexus-agent/issues/1559)），所以交出來的事件**是凍結的、可能與別的讀方共用**，不要就地改。
    *
    * @throws {@link SessionCorruptionError} 某一行讀不懂、或 `seq` 不連續，**而且它之後還有收尾事件**（開了
    *   {@link StoredSessionReadOptions.salvage}：任何一行壞就先拋、再撿回，所以不拋）。
@@ -878,6 +888,17 @@ export interface ResumedStoredSession {
 }
 
 /**
+ * 這一版拒絕解讀的那份原始日誌在哪裡，照 dsh 的 `SessionLocation`
+ * （`packages/session/session-persistence/src/errors.ts:85-90`）：只給拒絕診斷用，讓管理員找得到那份檔。
+ */
+export interface SessionLocation {
+  /** 後端的種類，例如 `'jsonl'`。 */
+  readonly kind: string;
+  /** 那份日誌的絕對路徑。 */
+  readonly path: string;
+}
+
+/**
  * 存檔的格式版本比這一版新——**不是壞的，是讀不懂**。
  *
  * 與 {@link SessionCorruptionError} 分開，照 dsh：「数据没有损坏」。兩者混在一起的話，
@@ -891,11 +912,15 @@ export class SessionFormatUnsupportedError extends Error {
    * @param id - 哪一份會話。
    * @param version - 存檔上寫的版本，原樣。
    * @param message - 子類說明自己是怎麼發現的；省略即「版本比這一版新」。
+   * @param location - 那份日誌在哪裡（後端知道的話）。**不接進訊息**：偏離 dsh（`errors.ts:111-121` 的訊息帶路徑），
+   *   理由 2——serve 是多人共用的內網主機，訊息會原樣進協定錯誤送到瀏覽器（`wire-handler.ts` 的 `threadOrError`），
+   *   路徑只放這一格與伺服器日誌（[#1558](https://github.com/DemianLi/nexus-agent/issues/1558) Q1 (a)）。
    */
   constructor(
     readonly id: string,
     readonly version: unknown,
     message?: string,
+    readonly location?: SessionLocation,
   ) {
     super(
       message ??
@@ -922,18 +947,21 @@ export class SessionEventUnsupportedError extends SessionFormatUnsupportedError 
    * @param version - header 上寫的版本，原樣。
    * @param seq - 那一筆事件的 `seq`。
    * @param eventType - 那一筆的 `type`，原樣。
+   * @param location - 同 {@link SessionFormatUnsupportedError}。
    */
   constructor(
     id: string,
     version: unknown,
     readonly seq: number,
     readonly eventType: string,
+    location?: SessionLocation,
   ) {
     super(
       id,
       version,
       `會話 "${id}" 的第 ${seq} 筆事件種類是 ${JSON.stringify(eventType)}，這一版（格式版本 ` +
         `${SESSION_LOG_FORMAT_VERSION}）不認得它，它也沒標可忽略。檔案沒有壞，多半是更新的版本寫的。`,
+      location,
     );
   }
 }
@@ -943,8 +971,9 @@ export class SessionEventUnsupportedError extends SessionFormatUnsupportedError 
  *
  * **它有自己的型別，是因為有人要據此改走「新開一份」**：serve 碰到一條 thread 時先試著接，
  * 接不到才開新的。拿不到型別的話那一步只能比對字串、或一律改開新的——後者會讓一份壞掉
- * 或版本太新的日誌退到 `create`，撞上 `wx`，而那個失敗在協調器的背景路徑上被收成一行
- * warn：**那條 thread 的日誌就這樣沒了**。所以只有這一種失敗准退，其餘照拋。
+ * 或版本太新的日誌退到 `create`。以前那裡要等第一次寫才撞上 `wx`、在協調器的背景路徑上被收成一行
+ * warn，**那條 thread 的日誌就這樣沒了**；[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) 之後 `create` 當下就拋
+ * {@link SessionAlreadyExistsError}，不再安靜，但報的是「已經存在」而不是真正的原因。所以只有這一種失敗准退，其餘照拋。
  */
 export class SessionNotFoundError extends Error {
   override readonly name = 'SessionNotFoundError';
@@ -974,6 +1003,42 @@ export class SessionAlreadyOwnedError extends Error {
   /** @param id - 哪一份會話。 */
   constructor(readonly id: string) {
     super(`會話 "${id}" 已經有另一個寫入把手握著（多半是另一個行程還開著它），這一次不寫。`);
+  }
+}
+
+/**
+ * 這個 id 已經建過——照 dsh 的 `SessionAlreadyExistsError`（`packages/session/session-persistence/src/errors.ts:22`）。
+ *
+ * 同一個後端建過還沒實體化的、磁碟上已經有 header 或日誌的，都算。**不覆寫、也不續寫**：要接著寫的走
+ * {@link SessionStore.resume}。
+ */
+export class SessionAlreadyExistsError extends Error {
+  override readonly name = 'SessionAlreadyExistsError';
+
+  /**
+   * @param id - 哪一份會話。
+   * @param options - `cause`：實體化那一步撞上的原始錯誤（`EEXIST`）。
+   */
+  constructor(
+    readonly id: string,
+    options?: ErrorOptions,
+  ) {
+    super(`會話 "${id}" 已經存在，不覆寫也不續寫；要接著寫請續接它。`, options);
+  }
+}
+
+/**
+ * 把手已經關掉了還在用——照 dsh 的 `SessionHandleClosedError`（`packages/session/session-persistence/src/errors.ts:68-77`）。
+ *
+ * 有自己的型別，是讓呼叫方分得出「已經關了」與真正的寫入失敗，不用比對訊息字串。**訊息原文沿用型別化之前那一句**：
+ * 伺服器日誌與既有測試靠它。
+ */
+export class SessionHandleClosedError extends Error {
+  override readonly name = 'SessionHandleClosedError';
+
+  /** @param id - 哪一份會話。 */
+  constructor(readonly id: string) {
+    super(`會話 "${id}" 的把手已經關掉了。`);
   }
 }
 

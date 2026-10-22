@@ -72,6 +72,7 @@ import {
   attachSessionPersistence,
   resumeClosingInterruptedTurn,
   sessionPersistencePlugin,
+  SessionFormatUnsupportedError,
   SessionNotFoundError,
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
@@ -416,8 +417,8 @@ function routeBySurface(
  *
  * **只有「找不到」准退到新開**（{@link SessionNotFoundError}）。壞檔（壞行之後還有收尾事件的那種；
  * 尾端沒收尾的壞行是當機的尾巴，續接時丟掉、不算壞檔，#1508）、版本太新、別的行程
- * 握著都照拋：退到新開的話 `create` 會撞上已存的檔（`wx`），而那個失敗在協調器的背景路徑上
- * 被收成一行 warn——那條 thread 的日誌就這樣沒了，而且沒有人看得到。
+ * 握著都照拋：退到新開的話 `create` 會撞上已存的檔——以前要等第一次寫才撞、在協調器的背景路徑上被收成一行 warn，
+ * 那條 thread 的日誌就這樣沒了；#1559 之後 `create` 當下就拋，thread 建不起來，但拋的是「已經存在」而不是真正的原因。
  *
  * @param store - 這個專案的會話根。
  * @param threadId - 就是 root 會話的 id。
@@ -1045,6 +1046,22 @@ async function startServer(
     }
   };
 
+  /**
+   * 這一版讀不懂的日誌（{@link SessionFormatUnsupportedError}）：原始檔在哪裡記進伺服器日誌，錯原樣往外拋（#1559 N0646）。
+   * **路徑只到這裡**：錯誤訊息會進協定錯誤送到瀏覽器（`wire-handler.ts` 的 `threadOrError`），多人共用的主機不把目錄結構
+   * 交給每一個打開那條 thread 的人（偏離 dsh 的訊息帶路徑，理由 2，#1558 Q1 (a)）。
+   */
+  const noteRefusedLog =
+    (threadId: string) =>
+    (error: unknown): never => {
+      if (error instanceof SessionFormatUnsupportedError && error.location !== undefined) {
+        warn(
+          `[會話日誌] thread ${threadId} 的日誌這一版讀不了，原始日誌在 ${error.location.path}：${error.message}`,
+        );
+      }
+      throw error;
+    };
+
   // serve 自己的 `close()` 開始了沒：`/readyz` 在 server 關掉之前就要回 503（#1535）。
   let closing = false;
   // 指標的計數與取樣（#1535）：只有打開才建（關著的時候不起事件圈取樣、不計數）。thread 數與上限抓取當下才現算。
@@ -1135,7 +1152,7 @@ async function startServer(
       // 收尾寫回檔上（#721），放在它之後的話，日誌在被拒絕之前就已經被改了。「找不到」往下走（新 thread）；其他讀不了的
       // （header 壞了、權限）`coldSessionHeader` 自己就拋，這條 thread 建不起來、下一次請求重試——不吞成「不是子代理」放行。
       if (sessionStore !== undefined) {
-        const header = await coldSessionHeader(threadId);
+        const header = await coldSessionHeader(threadId).catch(noteRefusedLog(threadId));
         if (header !== undefined && isSubagentSessionHeader(header)) {
           throw new SubagentSessionError(threadId);
         }
@@ -1144,7 +1161,9 @@ async function startServer(
       // 之前就拿了寫租約，要到落盤接上之後才歸協調器收；這中間拋錯要先放掉，不然
       // `wire-handler.ts` 說好的「下一次請求重試」會撞上自己上一次留下的租約。
       const resumed =
-        sessionStore === undefined ? undefined : await resumeThread(sessionStore, threadId);
+        sessionStore === undefined
+          ? undefined
+          : await resumeThread(sessionStore, threadId).catch(noteRefusedLog(threadId));
       let handedOff = false;
       const release = async (): Promise<void> => {
         if (handedOff) return;
