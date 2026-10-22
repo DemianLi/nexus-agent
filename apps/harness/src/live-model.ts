@@ -1325,14 +1325,32 @@ export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): type
   return rewriteChatMessages(baseFetch, normalizeEmptyAssistantContent);
 }
 
+/**
+ * 這則工具訊息的 content 是不是「沒有內容」，照 dsh：`flattenText` 把文字區塊串起來，串起來是 `''` 才算空
+ * （`llm-pi-ai/src/context.ts:22-27`、`:42`）。`null`／缺席與 `''` 算空；陣列要**每一段都是文字區塊**、`text` 串起來是 `''`
+ * （空陣列也是）；陣列裡有任何一段不是文字（帶圖等）就算有內容。**只有空白的不算空**，dsh 照原樣送。
+ */
+function isEmptyToolContent(content: unknown): boolean {
+  if (content === null || content === undefined) return true;
+  if (typeof content === 'string') return content === '';
+  if (!Array.isArray(content)) return false;
+  return content.every((part: unknown) => {
+    if (typeof part !== 'object' || part === null) return false;
+    const { type, text } = part as { type?: unknown; text?: unknown };
+    return type === 'text' && text === '';
+  });
+}
+
 /** 工具結果是空的時候，送給模型的那一個字。照 dsh `llm-pi-ai/src/context.ts:42`，逐字不改。 */
 export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
 
 /**
  * 把請求裡**沒有內容**的工具訊息的 `content` 換成 {@link EMPTY_TOOL_RESULT_TEXT}（[#1562](https://github.com/DemianLi/nexus-agent/issues/1562)）。
  *
- * 空的意思同 {@link isEmptyContent}：`null`／缺席、空白字串、沒有任何一段非空白文字的陣列。**只換空的那種**：有字的結果、帶圖的陣列
- * （有一段不是文字就算有內容）、其他角色的訊息一律不碰。`tool_call_id` 與其他欄位原樣。
+ * 空的意思同 dsh（{@link isEmptyToolContent}）：`null`／缺席、`''`，或陣列全是文字區塊而串起來是 `''`。**只換「沒有內容」的那種**：
+ * 有字的結果、**只有空白的**（`'  '`、`[{ type: 'text', text: ' ' }]`；dsh 是 `content || '(no output)'`，空白字串是真值，照原樣送）、
+ * 陣列裡有任何一段不是文字（帶圖等）、其他角色的訊息一律不碰。`tool_call_id` 與其他欄位原樣。**不沿用 {@link isEmptyContent}**：
+ * 那是助手訊息 #592 量過的判準（空白算空），維持原樣，工具訊息另寫一支。
  *
  * ## 誰會送出空的工具結果
  *
@@ -1342,7 +1360,8 @@ export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
  *
  * ## 照 dsh
  *
- * `packages/llm/llm-pi-ai/src/context.ts:31-47` 的 `toolResultOf`：空的工具輸出補 `(no output)`（`:42`）。
+ * `packages/llm/llm-pi-ai/src/context.ts:31-47` 的 `toolResultOf`：空的工具輸出補 `(no output)`（`:42`，`content || '(no output)'`）；
+ * 純文字那條路先用 `flattenText`（`:22-27`，把文字區塊的 `text` 串起來）再進 `toolResultOf`（`:251`）。
  *
  * ## 偏離登記
  *
@@ -1358,7 +1377,7 @@ export function fillEmptyToolContent(messages: readonly unknown[]): readonly unk
   const next = messages.map((message) => {
     if (typeof message !== 'object' || message === null) return message;
     const tool = message as { role?: unknown; content?: unknown };
-    if (tool.role !== 'tool' || !isEmptyContent(tool.content)) return message;
+    if (tool.role !== 'tool' || !isEmptyToolContent(tool.content)) return message;
     changed = true;
     return { ...tool, content: EMPTY_TOOL_RESULT_TEXT };
   });

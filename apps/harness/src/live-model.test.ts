@@ -1571,9 +1571,15 @@ describe('fillEmptyToolContent：空的工具結果補上 (no output)（#1562）
 
   it.each([
     ['空字串', ''],
-    ['只有空白', ' \n\t '],
     ['空陣列', []],
-    ['只有空白文字區塊的陣列', [{ type: 'text', text: '  ' }]],
+    ['文字區塊的 text 串起來是空字串', [{ type: 'text', text: '' }]],
+    [
+      '好幾個空的文字區塊',
+      [
+        { type: 'text', text: '' },
+        { type: 'text', text: '' },
+      ],
+    ],
     ['null', null],
   ])('換成 (no output)，tool_call_id 與其他欄位不變：%s', (_label, content) => {
     const messages = [
@@ -1592,10 +1598,31 @@ describe('fillEmptyToolContent：空的工具結果補上 (no output)（#1562）
     ]);
   });
 
-  it('不動的：有字的結果、帶圖的陣列、別的角色的空內容——一則都沒換時回原本那個陣列', () => {
+  it('不動的：有字的結果、只有空白的結果、帶圖的陣列、別的角色的空內容——一則都沒換時回原本那個陣列', () => {
     const messages = [
       { role: 'tool', content: '做完了', tool_call_id: 'call-1' },
       { role: 'tool', content: [{ type: 'text', text: '好' }], tool_call_id: 'call-2' },
+      // 只有空白的：dsh 是 `content || '(no output)'`，空白字串是真值，照原樣送（跟助手訊息 #592 的判準不同）。
+      { role: 'tool', content: '  ', tool_call_id: 'call-4' },
+      { role: 'tool', content: ' \n\t ', tool_call_id: 'call-5' },
+      { role: 'tool', content: [{ type: 'text', text: ' ' }], tool_call_id: 'call-6' },
+      {
+        role: 'tool',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'text', text: ' ' },
+        ],
+        tool_call_id: 'call-7',
+      },
+      // 空的文字區塊加一段圖：有一段不是文字就算有內容。
+      {
+        role: 'tool',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'image_url', image_url: { url: 'x' } },
+        ],
+        tool_call_id: 'call-8',
+      },
       {
         role: 'tool',
         content: [{ type: 'image_url', image_url: { url: 'x' } }],
