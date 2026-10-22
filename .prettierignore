@@ -27,6 +27,8 @@ apps/harness/src/fixtures/session-format/
 # 持久化型別圖（#1856）：`gen-persistence-schema` 照 dsh 寫成 JSON.stringify(…, null, 2)，Prettier 會把短陣列併成一行，
 # 重產就跟版控對不上；新鮮度由 `persistence-schema.test.ts` 逐字比。
 /docs/persistence-schema.json
+# 確認紀錄的型別圖快照（#1856 ⓪b-2）：`persistence-changes` 同樣照 dsh 寫成 JSON.stringify(…, null, 2)，驗證器讀回比對摘要。
+/docs/persistence-changes/*.schema.json
 
 # vendor 的上游原始碼保持上游的格式，同步時才 diff 得出本地修改（見 vendor/README.md）。
 # 只排除 repo 根目錄那個（Cordis）；寫成 `vendor/` 會連任何一層的 vendor 目錄都排除。

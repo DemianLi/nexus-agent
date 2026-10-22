@@ -225,6 +225,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.31.0
         version: 1.31.0(@cfworker/json-schema@4.1.1)(zod@4.4.3)
+      '@types/js-yaml':
+        specifier: ^4.0.9
+        version: 4.0.9
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -237,6 +240,9 @@ importers:
       eslint:
         specifier: ^9.39.0
         version: 9.39.5(jiti@2.7.0)
+      js-yaml:
+        specifier: ^4.1.0
+        version: 4.3.2
       tsx:
         specifier: ^4.22.4
         version: 4.23.12

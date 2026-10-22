@@ -236,3 +236,16 @@ class PersistenceSchema(unittest.TestCase):
         result = plan_ci.plan(['docs/persistence-schema.json'], 'pull_request', 'develop')
         self.assertEqual(result['ts'], 'true')
         self.assertEqual(result['full'], 'true')
+
+
+class PersistenceChanges(unittest.TestCase):
+    """確認紀錄（#1856 ⓪b-2）是 .md 與 .json：只改紀錄的 PR 要全跑；驗證那格從原始碼抽型別圖、不在 import 圖上，選擇性模式也要挑到。"""
+
+    def test_record_only_change_runs_full(self) -> None:
+        for path in ('docs/persistence-changes/README.md', 'docs/persistence-changes/2026-10-23-initial.schema.json'):
+            result = plan_ci.plan([path], 'pull_request', 'develop')
+            self.assertEqual(result['ts'], 'true', path)
+            self.assertEqual(result['full'], 'true', path)
+
+    def test_verifier_test_always_runs(self) -> None:
+        self.assertIn('persistence-changes.test.ts', [Path(p).name for p in plan_ci.SUITES['harness'].always_run()])

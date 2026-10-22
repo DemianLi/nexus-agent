@@ -22,7 +22,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 # 有這些異動才值得掃 TypeScript。非 TypeScript 的檔名是刻意的窄例外（「測試會讀這個檔」）：
-# `docs/operations.md`、`docs/persistence-schema.json`（#1856）、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`，
+# `docs/operations.md`、`docs/persistence-schema.json` 與 `docs/persistence-changes/`（#1856）、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`，
 # 以及 web 的樣式（#1512）：`apps/web` 底下的 `.css`（讀 cascade 的護欄、build 後的 check-built-css 與瀏覽器護欄都量它）、
 # 產生顏色 token 的 `tokengen/`、build 後檢查產物的 `scripts/*.mjs`、瀏覽器護欄的測試頁 `guard/`，以及 `apps/web/index.html`
 # （內嵌的主題腳本：`src/lib/theme.test.tsx` 讀它、瀏覽器護欄的測試頁照抄它）。少了這幾條，
@@ -33,6 +33,7 @@ TS_RE = re.compile(
     r'|^package\.json$|^pnpm-lock\.yaml$|^tsconfig.*\.json$'
     r'|^docs/operations\.md$'
     r'|^docs/persistence-schema\.json$'
+    r'|^docs/persistence-changes/'
     r'|^apps/harness/cordis(\.serve)?\.yml$'
     r'|^apps/harness/src/.*\.patch\.yml$'
     r'|^apps/web/.*\.css$|^apps/web/tokengen/|^apps/web/scripts/.*\.mjs$|^apps/web/guard/'
@@ -62,6 +63,8 @@ FULL_RES = [
         r'^apps/harness/src/fixtures/session-format/',
         # 持久化型別圖（#1856）：`persistence-schema.test.ts` 讀它比對原始碼，副檔名不是 .ts，只手改它的 PR TS_RE 看不到。
         r'^docs/persistence-schema\.json$',
+        # 持久化型別變更的確認紀錄（#1856 ⓪b-2）：`persistence-changes.test.ts` 讀整個目錄驗歷史，只改紀錄的 PR TS_RE 看不到。
+        r'^docs/persistence-changes/',
         r'^apps/web/(package\.json|vite\.config\..*|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',
     )
 ]
@@ -151,13 +154,17 @@ class Suite:
 #   選擇性模式下這個 marker 補到的是：只改網頁的 CSS（例如換字型的 `@import`），或網頁原始碼新增一個第三方 import——
 #   兩種都會讓清單過期，而漏跑它 CI 照樣綠。改相依一定動到 `pnpm-lock.yaml`，本來就走全跑；只改某顆插件的 `package.json`、
 #   沒有任何 TypeScript 異動時 `TS_RE` 不中，整個掃描不跑，這個 marker 也補不到。
+# - harness 的持久化型別變更紀錄（#1856 ⓪b-2）：`verifyPersistenceChanges` 那格用 TypeScript 編譯器從原始碼抽型別圖，
+#   會話事件可以宣告在任何一顆套件裡，不在 import 圖上。只改某顆插件的事件酬載（選擇性模式）也要跑到它，
+#   否則「動了持久化型別卻沒寫紀錄」照樣綠。
 # - web：用 fs 讀原始碼的測試（讀的是別的檔，import 圖看不到），以及經 `readCascade` 讀樣式表的護欄（#1498 起
 #   tokens-contrast、focus-outline、shadow-alpha、font-stack 改走量具，檔案本身不再出現 readFileSync，但讀的照樣是 CSS）。
 SUITES = {
     'harness': Suite(
         'apps/harness',
         ('.test.ts',),
-        ('shippedPlugins', "'apps/web/src'", 'collectMigratedPluginViolations', 'gen-third-party-notices'),
+        ('shippedPlugins', "'apps/web/src'", 'collectMigratedPluginViolations', 'gen-third-party-notices',
+         'verifyPersistenceChanges'),
     ),
     'web': Suite('apps/web', ('.test.ts', '.test.tsx'), ('readFileSync', 'readdirSync', 'readCascade')),
 }
