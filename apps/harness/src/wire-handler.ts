@@ -1886,7 +1886,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * `GET /threads/:id/attachments/:attachmentId`（[#733](https://github.com/DemianLi/nexus-agent/issues/733)）：契約見 `@nexus/wire` 的
    * `attachmentPath`。**授權＝這條 thread 的日誌引用過它**（`referencedImage`，照 dsh `session.attachment`），不是知道 id。
    * 讀記憶體裡那份 root 日誌（含還沒落盤的），**只讀已經載入的 thread**：沒載入的一律 `attachment_not_found`，不為了讀圖建 thread。
-   * 沒引用、編號不合格式、thread 不存在不細分（見 `ATTACHMENT_NOT_FOUND`）；引用了但位元組讀不回來（儲存被清掉、大小或雜湊對不上）是 `unknown_error`。
+   * 沒引用、編號不合格式、thread 不存在不細分（見 `ATTACHMENT_NOT_FOUND`）；引用了但位元組讀不回來（儲存被清掉、大小或雜湊對不上、檔頭的媒體類型或寬高跟參照對不上，#1566）是 `unknown_error`。
    */
   async function handleAttachment(threadId: string, attachmentId: string): Promise<Response> {
     const store = options.attachments;
@@ -1947,7 +1947,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    *    （照 dsh `commands.ts:336-348`）；什麼都沒宣告照收。檢查在碰收據、解 base64 之前。
    * 2. **收據**：必須是這條 thread 發的、沒用過的；同一句話不能用兩次。**收下的那一刻就從表裡拿掉**（同步，賽跑的第二個請求拿不到），
    *    後面任何一步失敗再放回去——整句拒收，使用者可以修了重送，檔案不必重傳。
-   * 3. **圖**：四道上限與格式（`image-intake.ts`），通過才存進附件儲存。
+   * 3. **圖**：五道上限與格式（`image-intake.ts`：每張位元組、每句張數、每句總量、每張像素、每張單邊），通過才存進附件儲存。
    *
    * 不碰回應格式（`run.start` 與 `slash.run` 共用）：成功時附帶「放回收據」的 `restore`，拒收時給碼與訊息。
    *
