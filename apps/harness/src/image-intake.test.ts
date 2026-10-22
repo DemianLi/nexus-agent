@@ -1,5 +1,5 @@
 /**
- * 圖片收下的檢查（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：檔頭認格式與寬高、四道上限、
+ * 圖片收下的檢查（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：檔頭認格式與寬高、五道上限、
  * 全有或全無。真檔（`image-fixtures.ts`）逐種對過；手組的檔頭只用來造「真檔造不出來」的邊界（超大的寬高、殘缺）。
  */
 
@@ -102,7 +102,7 @@ describe('認不出來的一律是 undefined', () => {
   });
 });
 
-describe('收下一句話的圖（四道上限、全有或全無）', () => {
+describe('收下一句話的圖（五道上限、規範 base64、全有或全無）', () => {
   const png = { mediaType: 'image/png', data: PNG_7X5, name: 'a.png' } as const;
 
   it('收得下的：位元組解開、事實從位元組認、順序與名字不變', () => {
@@ -192,6 +192,58 @@ describe('收下一句話的圖（四道上限、全有或全無）', () => {
     expect(() =>
       admitImages([{ mediaType: 'image/png', data: b64(pngHeader(8001, 8000)) }]),
     ).toThrowError(expect.objectContaining({ code: 'IMAGE_TOO_MANY_PIXELS' }));
+  });
+
+  it('每張單邊上限：8192×1 剛好收，8193×1 拒（IMAGE_DIMENSION_TOO_LARGE，訊息帶上限）', () => {
+    expect(admitImages([{ mediaType: 'image/png', data: b64(pngHeader(8192, 1)) }])).toHaveLength(
+      1,
+    );
+    expect(admitImages([{ mediaType: 'image/png', data: b64(pngHeader(1, 8192)) }])).toHaveLength(
+      1,
+    );
+    for (const [width, height] of [
+      [8193, 1],
+      [1, 8193],
+      [20000, 100],
+    ] as const) {
+      expect(() =>
+        admitImages([{ mediaType: 'image/png', data: b64(pngHeader(width, height)) }]),
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'IMAGE_DIMENSION_TOO_LARGE',
+          message: expect.stringContaining('8192'),
+        }),
+      );
+    }
+  });
+
+  it('像素與單邊都超過時先報像素（同 dsh image.ts:121-126 的順序）', () => {
+    expect(() =>
+      admitImages([{ mediaType: 'image/png', data: b64(pngHeader(9000, 9000)) }]),
+    ).toThrowError(expect.objectContaining({ code: 'IMAGE_TOO_MANY_PIXELS' }));
+  });
+
+  it('不是規範的 base64：Node 解得開的別種寫法一律拒（INVALID_IMAGE），同 dsh 的 decodeCanonicalBase64', () => {
+    // 34 個位元組：最後一組是 `AA==`，補位前那個字元只有高 2 位元是資料。
+    const canonical = b64(Uint8Array.from([...pngHeader(7, 5), 0]));
+    expect(canonical.endsWith('AA==')).toBe(true);
+    expect(admitImages([{ mediaType: 'image/png', data: canonical }])).toHaveLength(1);
+    const trailingBits = `${canonical.slice(0, -3)}B==`;
+    for (const [data, same] of [
+      [trailingBits, canonical],
+      [PNG_7X5.replace('+', '-'), PNG_7X5],
+      [`${canonical.slice(0, 20)}\n${canonical.slice(20)}`, canonical],
+      [canonical.slice(0, -2), canonical],
+    ] as const) {
+      // 前提：Node 把這些照樣解成同一份位元組，擋下它們的不是「解不開」。
+      expect(data).not.toBe(same);
+      expect(Buffer.from(data, 'base64')).toEqual(Buffer.from(same, 'base64'));
+      expect(() => admitImages([{ mediaType: 'image/png', data }])).toThrowError(
+        expect.objectContaining({ code: 'INVALID_IMAGE' }),
+      );
+    }
+    // 尾端多帶位元的那種，字元集與長度都合格，只有規範檢查擋得下。
+    expect(() => admitImages([{ mediaType: 'image/png', data: trailingBits }])).toThrow(/規範/);
   });
 
   it('全有或全無：第二張不行，整句拒、不回前一張', () => {
