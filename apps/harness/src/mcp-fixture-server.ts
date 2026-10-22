@@ -72,4 +72,16 @@ server.registerTool(
   },
 );
 
+/**
+ * 回**空的** `content` 陣列的那一支（#1562）：MCP 允許工具什麼都不回（只做事、沒有可講的結果）。`projectNonText`
+ * （`packages/nexus-plugin-mcp/src/project-content.ts:66`）遇到空陣列不換，ToolMessage 的 content 留著 `[]`，模型端點收到的
+ * 工具訊息就是空的——驗收看的是下一個請求裡那則工具訊息被補成 `(no output)`。
+ */
+export const EMPTY_RESULT = 'empty_result';
+server.registerTool(
+  EMPTY_RESULT,
+  { description: '做完就好，沒有東西可以回。', inputSchema: {} },
+  () => ({ content: [] }),
+);
+
 await server.connect(new StdioServerTransport());

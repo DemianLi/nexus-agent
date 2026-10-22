@@ -27,6 +27,7 @@ import {
 import type { InbandFailure } from './inband-error.js';
 
 import { assertUsableApiKey, INVALID_CREDENTIAL_CODE } from './api-key.js';
+import { userAgent } from './attribution.js';
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
 import { GatedChatOpenAI } from './gated-chat-openai.js';
 import { LOCAL_CAPACITY_CODE } from './request-gate.js';
@@ -1324,6 +1325,56 @@ export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): type
   return rewriteChatMessages(baseFetch, normalizeEmptyAssistantContent);
 }
 
+/** 工具結果是空的時候，送給模型的那一個字。照 dsh `llm-pi-ai/src/context.ts:42`，逐字不改。 */
+export const EMPTY_TOOL_RESULT_TEXT = '(no output)';
+
+/**
+ * 把請求裡**沒有內容**的工具訊息的 `content` 換成 {@link EMPTY_TOOL_RESULT_TEXT}（[#1562](https://github.com/DemianLi/nexus-agent/issues/1562)）。
+ *
+ * 空的意思同 {@link isEmptyContent}：`null`／缺席、空白字串、沒有任何一段非空白文字的陣列。**只換空的那種**：有字的結果、帶圖的陣列
+ * （有一段不是文字就算有內容）、其他角色的訊息一律不碰。`tool_call_id` 與其他欄位原樣。
+ *
+ * ## 誰會送出空的工具結果
+ *
+ * MCP 工具可以回空的 `content` 陣列：`projectNonText`（`packages/nexus-plugin-mcp/src/project-content.ts:66`）遇到空陣列時
+ * `blocks.every(isText)` 為真、不換，ToolMessage 的 content 留著 `[]`，`@langchain/openai` 再原樣送出（`""` 或 `[]`）。
+ * 今天有沒有端點會拒收這種訊息沒有量過（助手訊息的空內容 #592 量過、真的會壞，工具訊息沒有）；dsh 一律補這個字，這裡照做。
+ *
+ * ## 照 dsh
+ *
+ * `packages/llm/llm-pi-ai/src/context.ts:31-47` 的 `toolResultOf`：空的工具輸出補 `(no output)`（`:42`）。
+ *
+ * ## 偏離登記
+ *
+ * **改在 `fetch` 這一層，不在序列化那一步**（理由 1：基座表達不出來）。dsh 在序列化時就補；`@langchain/openai` 的轉換函式
+ * （`dist/converters/completions.js:575-583` 舊路、`:475-479` 標準路）沒有可設定的地方，所以退到手上最靠近它的一格：送出前的 body，
+ * 跟 {@link normalizeEmptyAssistantContent}（#592）退到同一處、同一個理由。撤除條件：基座的轉換函式可以設定空工具結果的送法。
+ *
+ * @param messages - 請求 body 的 `messages`。
+ * @returns 換過的訊息串；沒有任何空的工具訊息時是**原本那個陣列**。
+ */
+export function fillEmptyToolContent(messages: readonly unknown[]): readonly unknown[] {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (typeof message !== 'object' || message === null) return message;
+    const tool = message as { role?: unknown; content?: unknown };
+    if (tool.role !== 'tool' || !isEmptyContent(tool.content)) return message;
+    changed = true;
+    return { ...tool, content: EMPTY_TOOL_RESULT_TEXT };
+  });
+  return changed ? next : messages;
+}
+
+/**
+ * 送出前把空的工具結果補上 `(no output)`，見 {@link fillEmptyToolContent}。
+ *
+ * @param baseFetch - 底層的 fetch。預設全域那個；測試用它換掉。
+ * @returns 一個 fetch：`/chat/completions` 的 POST、body 是 JSON 字串時補上空的工具結果，其餘原樣。
+ */
+export function withEmptyToolContent(baseFetch: typeof fetch = fetch): typeof fetch {
+  return rewriteChatMessages(baseFetch, fillEmptyToolContent);
+}
+
 /**
  * 把 `/chat/completions` 的 POST（body 是 JSON 字串）的 `messages` 交給 `rewrite` 換過再送，其餘原樣交下去。
  *
@@ -1403,19 +1454,56 @@ export function withoutAssistantName(baseFetch: typeof fetch = fetch): typeof fe
 }
 
 /**
- * 出貨的「送出前換 body」那一組：換掉空的助手內容（#592）、再去掉助手訊息的 `name`（#1392）。
+ * 出貨的「送出前換 body」那一組：換掉空的助手內容（#592）、補上空的工具結果（#1562）、再去掉助手訊息的 `name`（#1392）。
  *
  * **`createLiveModel` 與測試夾具共用這一個函式**（[#1398](https://github.com/DemianLi/nexus-agent/issues/1398)）：
  * 夾具自己組的模型（`log-derived-history.fixture.ts` 的 `model()`）要量的是出貨時線上的形狀，兩邊各疊一次的話，
  * 產品哪天多掛一格 body 改寫、夾具不會跟著變，S 系列量到的就悄悄不是出貨的樣子。要加新的一格改寫就加在這裡。
  *
- * 順序：`withoutAssistantName` 在外、`withEmptyAssistantContent` 在內——外層的請求先被去掉 `name`，
- * 再交給內層換空內容；兩格改的是不同的欄位，順序不影響結果，這裡照 #1392 之後 `createLiveModel` 原本的疊法不變。
+ * 順序：`withoutAssistantName` 在外、`withEmptyAssistantContent`、`withEmptyToolContent` 依序在內——外層的請求先被去掉 `name`，
+ * 再交給內層換空內容；三格改的是不同的訊息或欄位（助手的 `name`、助手的 `content`、工具訊息的 `content`），順序不影響結果，
+ * 這裡照 #1392 之後 `createLiveModel` 原本的疊法，新的一格放在最內層。
  *
  * @param baseFetch - 底層的 fetch。預設全域那個；`createLiveModel` 傳進最貼近底層的用量回報那一層，測試用它換掉。
  */
 export function withShippedRequestBody(baseFetch: typeof fetch = fetch): typeof fetch {
-  return withoutAssistantName(withEmptyAssistantContent(baseFetch));
+  return withoutAssistantName(withEmptyAssistantContent(withEmptyToolContent(baseFetch)));
+}
+
+/**
+ * 每個送往模型端點的請求都把 `User-Agent` 設成 {@link userAgent}（[#1562](https://github.com/DemianLi/nexus-agent/issues/1562)）：
+ * `nexus-agent/<版號> (+https://github.com/DemianLi/nexus-agent)`。閘道那一側的管理者看得出流量來自哪個產品、哪一版。
+ * 以前送出去的是基座的 `langchainjs-openai/1.0.0 (<node 版本; 平台; 架構>)`，帶著 Node 版本、作業系統與 CPU 架構。
+ *
+ * **覆寫、不是補上**：請求已經帶了的 `User-Agent`（不分大小寫）一律換掉，照 dsh pi-ai 那條路把部署標頭裡同名的 UA 濾掉再蓋上
+ * 歸屬標頭（`llm-pi-ai/src/adapter.ts:216-224`）。`init.headers` 收 `Headers`、陣列或物件，輸入是 `Request` 而 `init` 沒給標頭時
+ * 沿用 `Request` 自己的標頭——一律先轉成 `Headers` 再設，其他標頭原樣。
+ *
+ * `X-Stainless-*` 那一組（openai SDK 帶的平台標頭）不動：dsh 的 pi-ai 也是透過 openai SDK 送 completions，同樣會帶；這裡只管 dsh 有規定的 UA。
+ *
+ * ## 偏離登記
+ *
+ * **改在 `fetch` 這一層，不在組請求標頭時合進去**（理由 1：基座表達不出來）。dsh 在 adapter 組請求標頭時就把歸屬標頭合進去
+ * （`llm-pi-ai/src/adapter.ts:216-224`）。`@langchain/openai` 1.5.10 一定會把自己的 `User-Agent` 排在 `configuration.defaultHeaders`
+ * 之後蓋掉它：`normalizeHeaders` 把鍵轉成小寫，接著查的是 `normalizedHeaders["User-Agent"]`、永遠查不到，基座的 `User-Agent` 鍵就排在我們的
+ * `user-agent` 後面（`dist/utils/azure.js:89-96`）。**實測**（2026-10-17，主 checkout 的 `@langchain/openai` 1.5.10，假 fetch 記下標頭）：
+ * 不帶、帶小寫 `user-agent`、帶大寫 `User-Agent` 三種，收到的 UA 都是基座的。所以退到手上最靠近它的一格：送出前的 fetch，
+ * 跟空助手內容（#592）、助手 `name`（#1392）與空工具結果（#1562）退到同一處、同一個理由。
+ * 撤除條件：基座讓部署帶的 `User-Agent` 勝出（`defaultHeaders` 的 `User-Agent` 蓋得過基座的），就改回在 `configuration` 裡帶。
+ *
+ * 放在 fetch 疊的**最外層**：每一個交給底層的請求都帶，不管內層怎麼改 body 或包回應。
+ *
+ * @param baseFetch - 底層的 fetch。預設全域那個；測試用它換掉。
+ * @returns 一個 fetch：把每個請求的 `User-Agent` 換成 {@link userAgent}，其餘原樣交下去。
+ */
+export function withAttribution(baseFetch: typeof fetch = fetch): typeof fetch {
+  return (input, init) => {
+    const headers = new Headers(
+      init?.headers ?? (input instanceof Request ? input.headers : undefined),
+    );
+    headers.set('user-agent', userAgent());
+    return baseFetch(input, { ...init, headers });
+  };
 }
 
 /** 串流用量嗅探單行的長度上限：超過的行放棄（供應商的片段不會這麼長，上限只防暴長的怪行把記憶體吃光）。 */
@@ -1598,22 +1686,25 @@ export function createLiveModel(
 
   const fields: ChatOpenAIFields = {
     model: config.modelId,
-    // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組；與 #1538 夾在中間外層的完成檢查）：最內層是
-    // 送出前換 body 的兩格（{@link withShippedRequestBody}，夾具共用）——#592（換掉空的助手內容）與 #1392（拿掉助手訊息的 `name`），中間是 #516
-    // （串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。
+    // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組；與 #1538 夾在中間外層的完成檢查；
+    // 與最外面一層的 `User-Agent`，#1562，只改請求標頭）：最內層是
+    // 送出前換 body 的三格（{@link withShippedRequestBody}，夾具共用）——#592（換掉空的助手內容）、#1562（補上空的工具結果）與 #1392
+    // （拿掉助手訊息的 `name`），中間是 #516（串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。
     // 外層收到的是中間那層嗅完第一則事件的那份回應。
     configuration: {
       baseURL: config.baseUrl,
       // **每次請求前才解析**（openai 的 `apiKey` 收函式，實測經過 `bindTools`／`withConfig` 之後還在，
       // 見 `live-model.test.ts`）。所以受管檔改了、下一個請求就用新的，也不必把 key 放進行程的環境變數。
       apiKey: async () => resolveUsableKey(credentials, config.apiKeyEnv),
-      fetch: withStreamIdleTimeout(
-        config.streamIdleTimeoutMs,
-        // 完成檢查夾在閒置逾時與串流內錯誤之間（#1538）；型錄條目宣告 `supportsFinishReason: false`（端點不送 finish_reason）就不掛。
-        (entry.compat?.supportsFinishReason === false
-          ? (fetcher: typeof fetch) => fetcher
-          : withStreamCompletionCheck)(
-          withInbandStreamErrors(withShippedRequestBody(withStreamUsageReport())),
+      fetch: withAttribution(
+        withStreamIdleTimeout(
+          config.streamIdleTimeoutMs,
+          // 完成檢查夾在閒置逾時與串流內錯誤之間（#1538）；型錄條目宣告 `supportsFinishReason: false`（端點不送 finish_reason）就不掛。
+          (entry.compat?.supportsFinishReason === false
+            ? (fetcher: typeof fetch) => fetcher
+            : withStreamCompletionCheck)(
+            withInbandStreamErrors(withShippedRequestBody(withStreamUsageReport())),
+          ),
         ),
       ),
     },
