@@ -11,6 +11,7 @@
  */
 
 import { UPLOAD_NAME_PARAM, attachmentPath, uploadPath } from './attachments.js';
+import { WireProtocolError } from './protocol-error.js';
 import { WireRejectedError } from './rejected-error.js';
 import { UplinkTransportError } from './uplink-error.js';
 import type {
@@ -114,6 +115,7 @@ import {
   historyPath,
   subagentHistoryPath,
   trajectoryTurnPath,
+  assertWireEvent,
   isThreadFeedFrame,
   streamPath,
 } from './protocol.js';
@@ -625,18 +627,26 @@ export type TrajectoryTurnOutcome =
   | { readonly kind: 'ok'; readonly result: TrajectoryTurnDetail }
   | { readonly kind: 'rejected'; readonly code: string; readonly message: string };
 
-/** 線上回來的歷史得先驗過，理由同 {@link readDescriptors}。frame 本身交給折疊器，它本來就收別人的位元組。 */
+/**
+ * 線上回來的歷史得先驗過，理由同 {@link readDescriptors}：頁欄位五格（`events`、`firstSeq`、`throughSeq`、`hasMore`、`legacy`）與
+ * `events` 裡**每一筆的信封**（{@link assertWireEvent}）都在這裡驗，壞的拋 {@link WireProtocolError}（#1555），`field` 指名哪一格或哪一筆
+ * （`firstSeq`、`events[3].method`；`result` 本身不是物件時是 `result`）。每一筆 `params.data` 的內容不在這裡驗，交給折疊器的各 `reduceX`。
+ *
+ * **都歸成 `WireProtocolError`**：歷史裡的壞資料每次重連都抓到同一份，頁信封壞了與事件壞了是同一件事，呼叫端要能用同一個型別認出「重連沒有用」。
+ */
 function readHistory(result: unknown): ThreadHistoryResult {
+  const bad = (field: string, reason: string): WireProtocolError =>
+    new WireProtocolError(field, `GET /threads/:id/history 的 ${field} ${reason}`);
+  if (typeof result !== 'object' || result === null) throw bad('result', '必須是物件');
   const { events, firstSeq, throughSeq, hasMore, legacy } = result as Record<string, unknown>;
-  if (
-    !Array.isArray(events) ||
-    typeof firstSeq !== 'number' ||
-    typeof throughSeq !== 'number' ||
-    typeof hasMore !== 'boolean' ||
-    typeof legacy !== 'boolean'
-  ) {
-    throw new Error('GET /threads/:id/history 回了不認得的結果');
-  }
+  if (!Array.isArray(events)) throw bad('events', '必須是陣列');
+  if (typeof firstSeq !== 'number') throw bad('firstSeq', '必須是數字');
+  if (typeof throughSeq !== 'number') throw bad('throughSeq', '必須是數字');
+  if (typeof hasMore !== 'boolean') throw bad('hasMore', '必須是布林');
+  if (typeof legacy !== 'boolean') throw bad('legacy', '必須是布林');
+  // 每一筆事件先驗信封：壞的在這裡拋，不進折疊器。**歷史裡的壞事件每次重連都抓到同一份**，
+  // 讓它流進折疊器的話，那條 thread 就永遠打不開。
+  events.forEach((event: unknown, index) => assertWireEvent(event, `events[${String(index)}]`));
   return { events: events as Event[], firstSeq, throughSeq, hasMore, legacy };
 }
 

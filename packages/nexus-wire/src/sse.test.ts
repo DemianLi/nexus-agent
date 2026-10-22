@@ -5,6 +5,7 @@ import { runInNewContext } from 'node:vm';
 
 import { describe, expect, it } from 'vitest';
 import type { Event } from './protocol.js';
+import { WireProtocolError } from './protocol-error.js';
 import { decodeSseStream, encodeSseFrame } from './sse.js';
 
 /**
@@ -112,5 +113,113 @@ describe('真的 fetch 的 body', () => {
       server.closeAllConnections();
       await new Promise((resolve) => server.close(resolve));
     }
+  });
+});
+
+/**
+ * 信封驗證（[#1555](https://github.com/DemianLi/nexus-agent/issues/1555) N0758）：每一顆先驗再交出去，壞的拋 `WireProtocolError`。
+ * 以前 `as Event` 直接交出去：缺 `params` 的進折疊器炸成 `TypeError`，`"seq": "7"` 則靜靜壞掉去重。
+ */
+describe('SSE 解碼：信封驗證', () => {
+  const good = (): Record<string, unknown> => ({ ...event(1, 'messages', 'x') });
+
+  function frame(value: unknown): string {
+    return `data: ${JSON.stringify(value)}\n\n`;
+  }
+
+  async function failure(payload: string): Promise<unknown> {
+    return drain(streamOf(payload, 64)).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  }
+
+  it.each([
+    ['seq 是字串 "7"', { ...good(), seq: '7' }, 'seq'],
+    ['seq 是負數', { ...good(), seq: -1 }, 'seq'],
+    ['seq 不是整數', { ...good(), seq: 1.5 }, 'seq'],
+    ['seq 超過安全整數', { ...good(), seq: Number.MAX_SAFE_INTEGER + 1 }, 'seq'],
+    [
+      '缺 params（今天丟的是折疊器裡的 TypeError）',
+      { type: 'event', method: 'messages' },
+      'params',
+    ],
+    ['params 是陣列', { ...good(), params: [] }, 'params'],
+    ['namespace 不是陣列', { ...good(), params: { namespace: 'a', data: {} } }, 'params.namespace'],
+    [
+      'namespace 裡有非字串',
+      { ...good(), params: { namespace: ['a', 1], data: {} } },
+      'params.namespace',
+    ],
+    ['缺 data（照 dsh：data 要存在）', { ...good(), params: { namespace: [] } }, 'params.data'],
+    ['type 不是 event', { ...good(), type: 'success' }, 'type'],
+    ['method 不是字串', { ...good(), method: 1 }, 'method'],
+    ['event_id 不是字串', { ...good(), event_id: 7 }, 'event_id'],
+  ])('%s：拋 WireProtocolError，field 指名欄位', async (_label, value, field) => {
+    const error = await failure(frame(value));
+    expect(error).toBeInstanceOf(WireProtocolError);
+    expect((error as WireProtocolError).field).toBe(field);
+  });
+
+  it('seq 是 -0：拋（JSON 的 -0 解出來是 -0，dsh 同樣拒）', async () => {
+    const error = await failure(
+      `data: ${JSON.stringify(good()).replace('"seq":1', '"seq":-0')}\n\n`,
+    );
+    expect(error).toBeInstanceOf(WireProtocolError);
+    expect((error as WireProtocolError).field).toBe('seq');
+  });
+
+  it('不是 JSON：同樣是 WireProtocolError，field 是 data，原始的錯在 cause', async () => {
+    const error = await failure('data: {不是 json\n\n');
+    expect(error).toBeInstanceOf(WireProtocolError);
+    expect((error as WireProtocolError).field).toBe('data');
+    expect((error as WireProtocolError).cause).toBeInstanceOf(SyntaxError);
+  });
+
+  it('只有 data:null 之類的非物件：拋，field 是 event', async () => {
+    const error = await failure(frame(null));
+    expect((error as WireProtocolError).field).toBe('event');
+  });
+
+  it('合格的照常交出：多出的欄位不拒（協定是 Extensible）；data 是 null 放行；歷史不帶 seq', async () => {
+    const extra = { ...good(), futureField: { a: 1 } };
+    const nullData = { type: 'event', method: 'custom', params: { namespace: ['n'], data: null } };
+    const noSeq = { type: 'event', method: 'lifecycle', params: { namespace: [], data: {} } };
+    const payload = [extra, nullData, noSeq].map(frame).join('');
+    expect(await drain(streamOf(payload, 7))).toEqual([extra, nullData, noSeq]);
+  });
+
+  it('只有註解行（心跳）的 frame 吐出 0 顆，不驗、不拋', async () => {
+    expect(await drain(streamOf(': ping\n\n: connected\n\n: ping\n\n', 3))).toEqual([]);
+  });
+
+  it('壞的那一顆之前的好的照常交出；之後的不讀', async () => {
+    const payload = frame(good()) + frame({ ...good(), seq: 'x' }) + frame(good());
+    const got: Event[] = [];
+    let thrown: unknown;
+    try {
+      for await (const decoded of decodeSseStream(streamOf(payload, payload.length)))
+        got.push(decoded);
+    } catch (error) {
+      thrown = error;
+    }
+    expect(got).toHaveLength(1);
+    expect(thrown).toBeInstanceOf(WireProtocolError);
+  });
+
+  // 終止類的錯沒有人再來讀 body：不取消的話連線掛著，server 那側也收不到線已經沒人要了。
+  it('拋 WireProtocolError 的同時取消底層的串流', async () => {
+    let cancelled: unknown;
+    const bytes = new TextEncoder().encode(frame({ ...good(), seq: 'x' }));
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+      },
+      cancel(reason: unknown) {
+        cancelled = reason;
+      },
+    });
+    await expect(drain(body)).rejects.toBeInstanceOf(WireProtocolError);
+    expect(cancelled).toBeInstanceOf(WireProtocolError);
   });
 });

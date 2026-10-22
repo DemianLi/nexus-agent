@@ -325,6 +325,7 @@ export {
   UPLINK_METHODS,
   WIRE_CHANNELS,
   channelOfMethod,
+  assertWireEvent,
   commandPath,
   errorResponse,
   eventId,
@@ -334,6 +335,7 @@ export {
   isThreadFeedFrame,
   isUplinkMethod,
   isWireChannel,
+  isWireEvent,
   streamPath,
   successResponse,
 } from './protocol.js';
@@ -411,6 +413,7 @@ export type {
 export { createWireClient } from './client.js';
 export { UplinkTransportError } from './uplink-error.js';
 export { WireRejectedError } from './rejected-error.js';
+export { WireProtocolError } from './protocol-error.js';
 export type {
   RequestHeaderSnapshot,
   RequestSnapshotsView,
