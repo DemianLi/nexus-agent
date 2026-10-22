@@ -1,10 +1,13 @@
 /**
  * JSONL 後端的唯讀那兩條：`list` 與 `open(id, 'read')`（[#665](https://github.com/DemianLi/nexus-agent/issues/665)），
- * 以及給產品路徑外的讀方用的檔名配對、header 解析與會話根的格子列舉。契約見 `@nexus/core` 的 `session-store.ts`。
+ * 以及給產品路徑外的讀方用的接縫（`readSessionEntry`、`sessionPathsIn`，#1857）、header 解析與會話根的格子列舉。
+ * 契約見 `@nexus/core` 的 `session-store.ts`；檔名本身的單元測試在 `@nexus/core` 的 `session-filename.test.ts`。
  *
  * 會話都經後端寫；要壞掉、版本太新的才手寫。
  */
 
+import { existsSync } from 'node:fs';
+import type { BigIntStats } from 'node:fs';
 import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,8 +29,10 @@ import {
   parseHeader,
   parseJsonlSessionBody,
   projectKey,
-  sessionLogPathOf,
+  readSessionEntry,
+  sessionPathsIn,
 } from './jsonl-session-store.js';
+import type { SessionEntry, StableReadFileSystem } from './jsonl-session-store.js';
 
 let dir: string;
 
@@ -235,13 +240,104 @@ describe("open(id, 'read')", () => {
   });
 });
 
-describe('給產品路徑外的讀方：檔名配對與 header 解析', () => {
-  it('sessionLogPathOf：header 檔對到本文，其餘是 undefined', () => {
-    expect(sessionLogPathOf('/r/cli.header.json')).toBe('/r/cli.jsonl');
-    expect(sessionLogPathOf('/r/cli.jsonl')).toBeUndefined();
-    expect(sessionLogPathOf('/r/cli.lock')).toBeUndefined();
+/** 做出只有穩定讀用得到的幾個欄位的 stat（同 `jsonl-session-store-header-replace.test.ts`）。 */
+function stats(size: number, mtimeNs: number): BigIntStats {
+  return {
+    dev: 1n,
+    ino: 2n,
+    size: BigInt(size),
+    mtimeNs: BigInt(mtimeNs),
+    ctimeNs: BigInt(mtimeNs),
+  } as unknown as BigIntStats;
+}
+
+describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
+  it('日誌本文走穩定快照讀：讀的當下被寫了，重讀一次，交出第二次讀到的', async () => {
+    await written('a', 1);
+    const paths: string[] = [];
+    const statResults = [stats(5, 100), stats(8, 200), stats(8, 200)];
+    const reads = ['hello', 'hello!!!'];
+    const fs: StableReadFileSystem = {
+      stat: async (path) => {
+        paths.push(path);
+        return statResults.shift()!;
+      },
+      readFile: async () => Buffer.from(reads.shift()!),
+    };
+    const entry = await readSessionEntry(dir, 'a.header.json', { fs });
+    expect((await entry!.readBody()).toString()).toBe('hello!!!');
+    expect(reads).toEqual([]);
+    expect(new Set(paths)).toEqual(new Set([entry!.logPath]));
+    expect(entry!.logPath).toBe(join(dir, 'a.jsonl'));
   });
 
+  it('分類跟 list 一致：只有 header 是零顆、讀不懂與版本太新照拋、不是 header 檔或讀之前不見了是 undefined', async () => {
+    await written('good', 2);
+    await writeFile(join(dir, 'lonely.header.json'), JSON.stringify(header('lonely')));
+    await writeFile(join(dir, 'broken.header.json'), '{壞的');
+    await writeFile(
+      join(dir, 'future.header.json'),
+      JSON.stringify(header('future', { version: SESSION_LOG_FORMAT_VERSION + 1 })),
+    );
+    await writeFile(join(dir, 'moved.header.json'), JSON.stringify(header('renamed')));
+    await writeFile(join(dir, 'good.header.json.0123456789ab.tmp'), '{殘留');
+
+    const outcome = async (name: string): Promise<SessionEntry | string | undefined> => {
+      try {
+        return await readSessionEntry(dir, name);
+      } catch (error: unknown) {
+        return (error as Error).constructor.name;
+      }
+    };
+    const good = (await outcome('good.header.json')) as SessionEntry;
+    expect(good.header.id).toBe('good');
+    expect(
+      parseJsonlSessionBody('good', await good.readBody(), {
+        version: good.storedFormatVersion,
+        recovery: 'strict',
+      }).events,
+    ).toHaveLength(2);
+    const lonely = (await outcome('lonely.header.json')) as SessionEntry;
+    expect((await lonely.readBody()).byteLength).toBe(0);
+    expect(await outcome('broken.header.json')).toBe(SessionCorruptionError.name);
+    expect(await outcome('future.header.json')).toBe(SessionFormatUnsupportedError.name);
+    // 檔名基底對不上 id 不歸接縫判：交出來，列表自己算讀不懂。
+    const moved = (await outcome('moved.header.json')) as SessionEntry;
+    expect([moved.base, moved.header.id]).toEqual(['moved', 'renamed']);
+    for (const name of ['good.jsonl', 'good.lock', 'good.header.json.0123456789ab.tmp']) {
+      expect(await outcome(name)).toBeUndefined();
+    }
+    expect(await outcome('gone.header.json')).toBeUndefined();
+
+    // 同一個目錄，list 的分類：讀得到的兩份，讀不懂的三份（壞的、太新、檔名對不上）。
+    const { sessions, unreadable } = await openJsonlSessionStore({ directory: dir }).list();
+    expect(sessions.map(({ header: h }) => h.id).sort()).toEqual(['good', 'lonely']);
+    expect(unreadable).toBe(3);
+  });
+
+  it('acceptNewer 照傳給 header 的讀法：比這一版新的照讀，原版號另交', async () => {
+    await writeFile(
+      join(dir, 'future.header.json'),
+      JSON.stringify(header('future', { version: SESSION_LOG_FORMAT_VERSION + 1 })),
+    );
+    const entry = await readSessionEntry(dir, 'future.header.json', { acceptNewer: true });
+    expect(entry?.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(entry?.storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION + 1);
+  });
+});
+
+describe('sessionPathsIn', () => {
+  it('對到後端真的寫出來的檔：基底照 safeBaseName（subagent 的斜線編碼掉）', async () => {
+    await written('Alpha/sub-1', 1, { parentSession: 'Alpha' });
+    const paths = sessionPathsIn(dir, 'Alpha/sub-1');
+    expect(existsSync(paths.header)).toBe(true);
+    expect(existsSync(paths.log)).toBe(true);
+    expect(paths.lock.startsWith(dir)).toBe(true);
+    expect(paths.header).not.toContain('Alpha/sub-1');
+  });
+});
+
+describe('給產品路徑外的讀方：header 解析', () => {
   it('parseHeader：不給 id 就不比；acceptNewer 照讀比這一版新的；少了 id 或 createdAt 是壞的', () => {
     const text = (value: unknown) => JSON.stringify(value);
     expect(parseHeader(text(header('a'))).header.id).toBe('a');
