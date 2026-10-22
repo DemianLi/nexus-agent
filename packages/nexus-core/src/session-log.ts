@@ -1458,6 +1458,88 @@ export function isUnreadableSessionEvent(event: {
   return !isKnownSessionEventType(event.type) && event.ignorable !== true;
 }
 
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 一筆事件自己的資料規則，照 dsh `validateSessionEventData`（`packages/core/session/src/surface.ts:166-219`，`687f282e`）。
+ * **只放 nexus 有詞彙的兩條**（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) N0785）：
+ *
+ * - `request/header` 不帶空的 `header.tools`（dsh `:205-207`）：寫方沒有工具時整格省略（`request-snapshot.ts`）。
+ * - `tool/result` 帶了 `error` 就必須 `isError: true`（dsh `:212-218`）：`error` 只在失敗時出現。
+ *
+ * dsh 其餘幾條（developer 角色與工具增減區塊、`header.system`、空的 `adapterDefaults`）nexus 沒有那些格，不適用。不驗整份 payload。
+ * 呼叫點照 dsh：{@link SessionLog.append}（`index.ts:824`）、seed 的信封檢查（`:230`）、後端讀盤（`storage-contract.ts:95`）。
+ *
+ * @param event - 要看的那一筆，只讀 `type` 與 `data`。
+ * @param subject - 錯誤訊息裡指認是哪一筆。
+ * @throws {TypeError} 違反其中一條，訊息指出是哪一格。
+ */
+export function validateSessionEventData(
+  event: { readonly type: string; readonly data: unknown },
+  subject: string,
+): void {
+  const { data } = event;
+  if (event.type === 'request/header') {
+    if (!isJsonObject(data)) throw new TypeError(`${subject} 的 data 要是物件`);
+    const header = data['header'];
+    if (!isJsonObject(header)) throw new TypeError(`${subject} 的 data.header 要是物件`);
+    if (Array.isArray(header['tools']) && header['tools'].length === 0) {
+      throw new TypeError(`${subject} 的 data.header.tools 是空的：沒有工具時整格省略`);
+    }
+  } else if (event.type === 'tool/result') {
+    if (!isJsonObject(data)) throw new TypeError(`${subject} 的 data 要是物件`);
+    if (data['error'] !== undefined && data['isError'] !== true) {
+      throw new TypeError(`${subject} 帶了 data.error，data.isError 卻不是 true`);
+    }
+  }
+}
+
+/** 信封上的鍵，照 dsh `assertSessionEventEnvelope` 的白名單；nexus 沒有 `surfaceOp`、`sourceEventSeqs`。 */
+const SESSION_EVENT_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
+  'type',
+  'seq',
+  'time',
+  'data',
+  'ignorable',
+]);
+
+/**
+ * seed 裡一顆事件的固定信封，照 dsh `assertSessionEventEnvelope`（`packages/core/session/src/index.ts:201-243`，`687f282e`）：
+ * 鍵只准 {@link SESSION_EVENT_ENVELOPE_KEYS}；`seq` 是非負安全整數、不是 `-0`；`time` 是安全整數；`data` 要在；
+ * `ignorable` 只准 `true`。接著跑 {@link validateSessionEventData}（dsh `:230`）。dsh 之後的 `assertCurrentLlmShape`
+ * （`:232-242`）驗的是 dsh 自己的訊息詞彙，nexus 沒有對應（#1549 N0558、N0599 已劃掉）。
+ *
+ * `-0` 那一格在這裡其實擋不到東西：{@link SessionLog} 的 seed 一律先過 {@link snapshotJsonValue}，它已經拒收 `-0`
+ * （dsh 的 adopted 模式不拷，那一格才有作用）。照 dsh 逐條留著。
+ *
+ * @param value - 剛拷好的那一顆。
+ * @param index - 它在 seed 裡的位置。
+ * @throws {TypeError} 信封哪一格不對，或資料規則不過。
+ */
+function assertSessionEventEnvelope(value: unknown, index: number): asserts value is SessionEvent {
+  const subject = `seed 第 ${index} 顆`;
+  if (!isJsonObject(value)) throw new TypeError(`${subject}不是一個物件`);
+  const extra = Object.keys(value).find((key) => !SESSION_EVENT_ENVELOPE_KEYS.has(key));
+  if (extra !== undefined) {
+    throw new TypeError(`${subject}的信封有不該有的鍵 ${JSON.stringify(extra)}`);
+  }
+  const { type, seq, time } = value;
+  if (typeof type !== 'string') throw new TypeError(`${subject}的 type 要是字串`);
+  if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0 || Object.is(seq, -0)) {
+    throw new TypeError(`${subject}的 seq 要是非負的安全整數`);
+  }
+  if (typeof time !== 'number' || !Number.isSafeInteger(time)) {
+    throw new TypeError(`${subject}的 time 要是安全整數，拿到 ${String(time)}`);
+  }
+  if (value['data'] === undefined) throw new TypeError(`${subject}沒有 data`);
+  if (value['ignorable'] !== undefined && value['ignorable'] !== true) {
+    throw new TypeError(`${subject}的 ignorable 只能是 true`);
+  }
+  validateSessionEventData({ type, data: value['data'] }, `${subject}（${type}）`);
+}
+
 /**
  * **產生模型訊息的那幾種事件**——續接時 {@link ./conversation-replay.ts | replayConversation} 從日誌推回
  * 模型歷史，靠的就是這一份子聯集（[#681](https://github.com/DemianLi/nexus-agent/issues/681)）。
@@ -2027,20 +2109,22 @@ export class SessionLog implements SessionLogView {
   }
 
   /**
-   * 接上 seed：逐顆驗連續、拷、凍，最後補一顆 `session/end-seed`。
+   * 接上 seed：逐顆拷、驗信封與資料規則、驗連續、凍，最後補一顆 `session/end-seed`。順序照 dsh 的 seed
+   * （`packages/core/session/src/index.ts:644-664`，`687f282e`）：先拷成純 JSON，再驗拷出來的那一份。
    * 見 {@link SessionLogOptions.seed}。
    *
-   * @throws 某一顆的 `seq` 不等於它的位置，或帶了 JSON 表達不出來的東西。
+   * @throws 某一顆帶了 JSON 表達不出來的東西、信封或資料規則不對（`TypeError`，#1549），或 `seq` 不等於它的位置。
    */
   #adoptSeed(seed: readonly SessionEvent[]): void {
     for (const [index, event] of seed.entries()) {
-      if (event.seq !== index) {
+      const snapshot = snapshotJsonValue(event, `seed 第 ${index} 顆`);
+      assertSessionEventEnvelope(snapshot, index);
+      if (snapshot.seq !== index) {
         throw new Error(
-          `會話 "${this.#sessionId}" 的 seed 不連續：第 ${index} 顆的 seq 是 ${event.seq}。`,
+          `會話 "${this.#sessionId}" 的 seed 不連續：第 ${index} 顆的 seq 是 ${snapshot.seq}。`,
         );
       }
-      const snapshot = snapshotJsonValue(event, `seed 第 ${index} 顆`);
-      this.#events.push(deepFreeze(snapshot) as SessionEvent);
+      this.#events.push(deepFreeze(snapshot));
     }
     // 末尾的 `session/resumed` 是上一次續接寫在 end-seed 之後的，不算「有新東西」：算的話每次空轉的續接
     // 都多疊一顆 end-seed。
@@ -2098,6 +2182,7 @@ export class SessionLog implements SessionLogView {
    * @throws 會進模型的種類帶了 `options.ignorable`（{@link SessionAppendOptions.ignorable}）。
    * @throws {TypeError} `data` 帶了 JSON 無法原樣表達的東西（class 實例、函式、`undefined`、`NaN`、循環參考、
    *   `-0`、有洞或帶額外屬性的陣列、symbol 或不可列舉的鍵）——**當場拋，日誌不變**，訊息指出是哪一格。
+   * @throws {TypeError} 違反 {@link validateSessionEventData} 的資料規則（#1549）——同樣當場拋、日誌不變。
    * @throws 在某個 listener 的回呼裡被呼叫——重入防護，見 class 註解。
    */
   append<T extends SessionEventType>(
@@ -2120,6 +2205,8 @@ export class SessionLog implements SessionLogView {
       `${type} 的 data`,
       SESSION_EVENT_MAX_DEPTH,
     ) as SessionEventMap[T];
+    // 資料規則驗拷出來的那一份，推進 seq 之前（照 dsh `index.ts:824`，#1549 N0785）。
+    validateSessionEventData({ type, data: snapshot }, `會話事件 "${type}"`);
     if (this.#publishing) {
       throw new Error(
         `會話 "${this.#sessionId}" 的 append 不能在另一次 append 的回呼裡重入` +

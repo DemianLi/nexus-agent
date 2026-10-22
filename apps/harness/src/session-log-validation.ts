@@ -3,13 +3,18 @@
  *
  * 獨立成一個模組、不逐行插進讀檔的迴圈裡（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) 做法 1）：
  * 建立（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) N0622）與讀盤（#1549）共用同一支 header 驗證，
- * 兩邊才不會各說各話。今天只有 header 這一支；事件信封與事件之間的關係由 #1549 加在這裡。
+ * 兩邊才不會各說各話。事件之間的關係（{@link assertStoredRelationships}）也在這裡，讀完已接受的前綴之後跑。
+ * 事件信封與單筆資料規則不在這裡：照 dsh，信封在 core 的 seed（`@nexus/core` 的 `SessionLog`），資料規則是 core 的
+ * `validateSessionEventData`，寫入、seed、讀盤三處共用。
  *
- * 拋的是 `TypeError`，訊息說哪一格：建立那一側原樣交給呼叫方（同 dsh `materializeCreateHeader` 拋 `TypeError`），
- * 讀盤那一側由讀方換成它自己的錯誤。
+ * header 驗證拋的是 `TypeError`，訊息說哪一格：建立那一側原樣交給呼叫方（同 dsh `materializeCreateHeader` 拋 `TypeError`），
+ * 讀盤那一側由讀方換成 `SessionCorruptionError`。
  */
 
 import { isAbsolute } from 'node:path';
+
+import { SessionCorruptionError, validateSessionEventData } from '@nexus/core';
+import type { SessionEvent } from '@nexus/core';
 
 /**
  * 這一版寫得出來的 header 鍵（`@nexus/core` 的 `StoredSessionHeader`），照 dsh 的精確鍵白名單
@@ -43,24 +48,40 @@ function isCount(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
+/** {@link assertStoredHeaderFields} 的選項。 */
+export interface StoredHeaderFieldsOptions {
+  /**
+   * 不檢鍵白名單，其餘照驗。**只給讀比這一版新的 header**（`parseHeader` 的 `acceptNewer`，離線掃描）：新版的 header
+   * 可能有這一版不認得的鍵。
+   */
+  readonly allowUnknownKeys?: boolean;
+}
+
 /**
  * header 各格的形狀，照 dsh 的 `assertReleasedV4Header`（`validation.ts:19-42`）：缺必填的、多出這一版不寫的鍵、
  * 某一格型別不對，都拒。**版本是哪一版不在這裡判**：建立時要等於這一版（同 dsh 的 `encodeCurrentHeader`），讀盤時
- * 由版本邊目錄判，兩邊規則不同。
+ * 由版本邊目錄判，兩邊規則不同。讀盤那一側對到 dsh 讀 header 時的精確鍵與型別檢查（`session-format-v1-to-v2/src/codec.ts:40-75`）。
+ *
+ * **白名單讀盤也能用同一份**（#1549）：它是任何一版寫過的鍵的聯集。`StoredSessionHeader` 從第一版起只加不減，歷來就是
+ * 這 10 個鍵（#1549 對 `session-store.ts` 的歷次 commit 逐版核過）；之後加鍵要升版或過同版相容審查，比這一版新的檔在版本那一格就被擋下。
  *
  * nexus 的 header 沒有 dsh 的 `isSeeded`、`delegationDepth`、`origin`、`agentPreset`（繼承前綴歸
  * [#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），多了 `workspaceRoot`、`build`、`plugins`、`configHash`、
  * `modelEntryId`，各照 `StoredSessionHeader` 的宣告驗。
  *
  * @param header - 還沒驗過的 header。
+ * @param options - 見 {@link StoredHeaderFieldsOptions}。
  * @throws `TypeError` 哪一格不對。
  */
-export function assertStoredHeaderFields(header: unknown): void {
+export function assertStoredHeaderFields(
+  header: unknown,
+  options: StoredHeaderFieldsOptions = {},
+): void {
   if (!isRecord(header)) throw new TypeError('session header 不是一個物件');
   const missing = REQUIRED_HEADER_KEYS.find((key) => !Object.hasOwn(header, key));
   if (missing !== undefined) throw new TypeError(`session header 少了 ${missing}`);
   const unexpected = Object.keys(header).find((key) => !ALLOWED_HEADER_KEYS.has(key));
-  if (unexpected !== undefined) {
+  if (unexpected !== undefined && options.allowUnknownKeys !== true) {
     throw new TypeError(`session header 有這一版不寫的鍵 ${JSON.stringify(unexpected)}`);
   }
   if (typeof header['id'] !== 'string') throw new TypeError('session header 的 id 要是字串');
@@ -105,5 +126,56 @@ export function assertStoredHeaderFields(header: unknown): void {
         );
       }
     });
+  }
+}
+
+/**
+ * 讀回來的事件之間的關係，讀完已接受的前綴之後跑一次。照 dsh 的 `assertReleasedV4Relationships`
+ * （`session-format-v3-to-v4/src/validation.ts:110-130`；呼叫點是讀檔器收尾的 `finish()`，`session-persistence-jsonl/src/format.ts:468`）。
+ *
+ * **今天只有一條**（#1549 N0603）：同一個子代理的 `subagent/catalog` 只能登記一次（dsh `:122-127`）。兩個寫入點都在派出的
+ * 當下各寫一次、寫不進去就不落盤，重複只可能是寫壞或拼接出錯；讀方（`subagentLinkOf`）只取第一筆，後一筆會被靜靜忽略。
+ * turn、tool、模型呼叫、重試的配對由 [#1597](https://github.com/DemianLi/nexus-agent/issues/1597) 加進這一支。
+ *
+ * **過渡：「繼承區外」先等於整份日誌。** dsh 只掃 `seq >= inheritedEventCount` 的；nexus 的 header 還沒有 `seedLength`。
+ * 撤除條件：#1579 補上 `seedLength` 之後，改成只掃繼承區之後。
+ *
+ * @param id - 這份會話的 id，放進錯誤裡。
+ * @param events - 已接受的前綴，依 `seq` 排好。
+ * @throws {@link SessionCorruptionError} 同一個 `childId` 登記了兩次，訊息帶第幾行。
+ */
+export function assertStoredRelationships(id: string, events: readonly SessionEvent[]): void {
+  const children = new Set<string>();
+  for (const event of events) {
+    if (event.type !== 'subagent/catalog') continue;
+    const { childId } = event.data as { readonly childId?: unknown };
+    if (typeof childId !== 'string') continue;
+    if (children.has(childId)) {
+      throw new SessionCorruptionError(
+        id,
+        `第 ${event.seq + 1} 行的 subagent/catalog 又登記了一次子代理 ${JSON.stringify(childId)}`,
+      );
+    }
+    children.add(childId);
+  }
+}
+
+/**
+ * 讀回來的每一筆跑 core 的單筆資料規則（`validateSessionEventData`），照 dsh 後端讀盤的 `validateStoredEvents`
+ * （`session-persistence/src/storage-contract.ts:69-104`，逐筆 `adoptSessionEvent` → `validateSessionEventData`，
+ * 不過就包成損壞錯誤；呼叫點 `session-persistence-jsonl/src/index.ts:860`，續接與唯讀打開共用）。
+ * 不認得的必需種類在解析本文時已經拒了（`SessionEventUnsupportedError`），這裡不重做。
+ *
+ * @param id - 這份會話的 id，放進錯誤裡。
+ * @param events - 已接受的前綴，依 `seq` 排好。
+ * @throws {@link SessionCorruptionError} 某一筆不過，訊息帶第幾行與哪一格。
+ */
+export function assertStoredEventData(id: string, events: readonly SessionEvent[]): void {
+  for (const event of events) {
+    try {
+      validateSessionEventData(event, `第 ${event.seq + 1} 行的 ${event.type}`);
+    } catch (error: unknown) {
+      throw new SessionCorruptionError(id, error instanceof Error ? error.message : String(error));
+    }
   }
 }

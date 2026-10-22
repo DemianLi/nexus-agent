@@ -754,6 +754,7 @@ export {
   SessionEventDepthError,
   SessionLog,
   snapshotJsonValue,
+  validateSessionEventData,
 } from './session-log.js';
 
 export type {

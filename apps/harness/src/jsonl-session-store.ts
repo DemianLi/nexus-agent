@@ -174,7 +174,11 @@ import type {
 } from '@nexus/core';
 import { acquireSessionLease } from './session-lease.js';
 import type { LeaseUnavailable, SessionWriteLease, TryLock } from './session-lease.js';
-import { assertStoredHeaderFields } from './session-log-validation.js';
+import {
+  assertStoredEventData,
+  assertStoredHeaderFields,
+  assertStoredRelationships,
+} from './session-log-validation.js';
 
 /**
  * 目錄與檔案的權限。
@@ -863,6 +867,10 @@ export interface ParsedSessionHeader {
  *
  * @throws {@link SessionFormatUnsupportedError} 版本比這一版新（開了 `acceptNewer` 就不拋），或比一條 `breaking` 邊舊
  *   （`acceptNewer` 不放行這一種）。
+ * **各格的形狀與鍵白名單**與 `create` 共用（`session-log-validation.ts` 的 `assertStoredHeaderFields`，#1549），對到 dsh
+ * 讀 header 時的精確鍵與型別檢查（`session-format-v1-to-v2/src/codec.ts:40-75`）。開了 `acceptNewer` 不檢白名單：
+ * 比這一版新的 header 可能有這一版不認得的鍵。
+ *
  * @throws {@link SessionCorruptionError} 不是 JSON、欄位形狀不對、或 id 對不上。
  */
 export function parseHeader(text: string, options: ParseHeaderOptions = {}): ParsedSessionHeader {
@@ -901,6 +909,13 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Par
   }
   if (typeof value['createdAt'] !== 'number') {
     throw new SessionCorruptionError(id, 'header 沒有 createdAt');
+  }
+  // 各格的形狀與鍵白名單，與 `create` 共用同一支（#1549）。排在版本判定之後：讀不了的版本照舊報
+  // `SessionFormatUnsupportedError`，不會被這裡改判成壞檔。
+  try {
+    assertStoredHeaderFields(value, { allowUnknownKeys: options.acceptNewer === true });
+  } catch (error: unknown) {
+    throw new SessionCorruptionError(id, error instanceof Error ? error.message : String(error));
   }
   const header = {
     ...value,
@@ -1394,6 +1409,19 @@ function locate(directory: string, files: SessionFilenames): SessionLocation {
 }
 
 /**
+ * 解析好的已接受前綴，交出去之前（也是存進冷讀快取之前）的驗證（#1549），續接與唯讀打開共用，順序照 dsh：
+ * 讀檔器收尾時的關係驗證（`session-persistence-jsonl/src/format.ts:468`），再逐筆跑單筆資料規則（`index.ts:860` 的
+ * `validateStoredEvents`，之後才 `:868` 存快取）。撿回（salvage）不跑：它本來就是在處理壞檔，dsh 沒有這條路。
+ * 事件信封不在這裡驗：照 dsh 在 core 的 seed（`SessionLog`）驗。
+ *
+ * @throws {@link SessionCorruptionError} 哪一行、哪一格不對。
+ */
+function validateStoredLog(id: string, events: readonly SessionEvent[]): void {
+  assertStoredRelationships(id, events);
+  assertStoredEventData(id, events);
+}
+
+/**
  * 唯讀打開 `directory` 裡的那一份。見 {@link SessionStore.open}：**不拿租約、不截尾巴、不動 header**。
  */
 async function openStoredSessionForRead(
@@ -1433,6 +1461,7 @@ async function openStoredSessionForRead(
           location,
         });
         if (options.salvage === true) return events;
+        validateStoredLog(id, events);
         const frozen = freezeStoredEvents(events);
         coldLogs.set(id, {
           headerRevision,
@@ -1502,6 +1531,7 @@ async function resumeStoredSession(
         recovery: 'recoverable',
         location,
       });
+      validateStoredLog(id, events);
       read = { header, storedFormatVersion, events, validBytes, bodyBytes: body.byteLength };
     }
     const { header, storedFormatVersion, events, validBytes } = read;
