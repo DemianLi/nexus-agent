@@ -26,6 +26,13 @@
  *   `assertTrustedAuthority` 驗格式）。我們的 `serve` 沒有 `--host`，非 loopback 暴露沒有路徑，
  *   宣告了也沒有東西會用到。**重開條件**：`serve` 加上 `--host`——那天把 dsh 的
  *   `isTrustedAuthority` 分支與 `assertTrustedAuthority` 一起帶進來。
+ * - **沒有 TLS**（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547) 的 Q1 (a)）。dsh 的 web 可以選用 TLS
+ *   （`--tls-cert`／`--tls-key` 成對才收，`packages/bundle/web-app/src/startup.ts:69-70`、`:105`）：憑證與私鑰在綁 port
+ *   之前讀一次，讀不到、空檔、不成對都讓啟動失敗，不退回 HTTP（`packages/host/webserver/src/index.ts:257-268`、
+ *   `:461-479`）；走 TLS 時 cookie 帶 `Secure`（`packages/client/connection/src/browser-auth.ts:131-140`，`687f282e`）。
+ *   我們的 `serve` 只綁 loopback，唯一走網路的那一段是 SSH 隧道，本來就加密，加了 TLS 也保護不到東西。**重開條件**同上一條：
+ *   `serve` 加上 `--host`——那天一起帶進來，連同 `wire-server.ts` 寫死的兩處 `http://`（給 handler 的 origin 與印出來的
+ *   網址），以及 `browser-auth.ts` 檔頭「loopback 的 HTTP 所以刻意不設 `Secure`」那一句。
  * - **Origin 沒有落差。** 網頁一律由 serve 自己服務（`web-static.ts`，
  *   [#424](https://github.com/DemianLi/nexus-agent/issues/424)），開發時也一樣——Vite 不服務網頁、
  *   `pnpm dev` 只是 `vite build --watch`（[#426](https://github.com/DemianLi/nexus-agent/issues/426)）。
