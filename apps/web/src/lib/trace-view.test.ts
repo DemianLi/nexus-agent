@@ -328,6 +328,46 @@ describe('收尾', () => {
     expect(rows.at(-1)).toMatchObject({ reason: 'stopped', summary: ENDING_LABEL.stopped });
   });
 
+  it.each([
+    ['時鐘到點', { kind: 'hook', reason: 'turn-timeout' }, 'timed-out'],
+    ['人按了停止', { kind: 'user' }, 'stopped'],
+    ['舊 server 沒帶原因', undefined, 'stopped'],
+  ] as const)('講到一半停下（#1631）：%s，收尾那一列分得出來', (_name, cause, reason) => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      script.openAi('a'),
+      script.delta('a', '講到一半'),
+      script.stopped(cause),
+    ]);
+    const endings = only(state).filter((row) => row.kind === 'ending');
+    expect(endings).toHaveLength(1);
+    expect(endings[0]).toMatchObject({ reason, summary: ENDING_LABEL[reason] });
+  });
+
+  it.each([
+    ['時鐘到點', { kind: 'hook', reason: 'turn-timeout' }, 'timed-out'],
+    ['人按了停止', { kind: 'user' }, 'stopped'],
+  ] as const)(
+    '停在工具執行中停下（#1631）：%s，收尾讀 status 也分得出來',
+    (_name, cause, reason) => {
+      const script = new Script();
+      const state = reduceAll(emptyConversation(), [
+        script.running(),
+        ...script.human('history-0', '跑一下'),
+        script.started('c1', 'read_file', { file_path: 'a' }),
+        script.stopped(cause),
+      ]);
+      const rows = only(state);
+      expect(kinds(rows)).toEqual(['input', 'tool', 'ending']);
+      expect(rows[2]).toMatchObject({
+        reason,
+        key: `status:${reason}`,
+        summary: ENDING_LABEL[reason],
+      });
+    },
+  );
+
   it('停在工具執行中被按停止：沒有講到一半的回覆，收尾讀 status', () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [

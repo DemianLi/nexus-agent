@@ -362,6 +362,7 @@ export type {
   PlanReviewIntent,
   QuestionItem,
   ToolEntry,
+  TurnStopCause,
   WorkspaceChangesEntry,
 } from './conversation.js';
 export {

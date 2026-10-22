@@ -1,10 +1,11 @@
-import { emptyConversation } from '@nexus/wire';
+import { emptyConversation, reduceAll } from '@nexus/wire';
 import type { AiEntry, ConversationEntry, ConversationState, ToolEntry } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ELAPSED_TICK_MS, StatusLine } from '@/components/status-line';
 import { serverClock } from '@/lib/server-clock';
+import { STOPPED_STATUS_TEXT, TIMED_OUT_STATUS_TEXT } from '@/lib/stop-cause';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import type { Activity } from '@/components/ui/status-glyph';
@@ -118,6 +119,43 @@ describe('StatusLine 的連線那幾句（#593）', () => {
     const running: ConversationState = { ...idle, status: 'running' };
     render(<StatusLine state={running} connected recovered />);
     expect(screen.getByRole('status').textContent).toContain('執行中');
+  });
+});
+
+/** 時間到停下和人按停止分開講（#1631）：讀收尾帶的原因，折疊走真的 `reduceAll`。 */
+describe('StatusLine 停下的原因（#1631）', () => {
+  const stoppedWith = (cause?: unknown) => {
+    const script = new Script();
+    return reduceAll(emptyConversation(), [script.running(), script.stopped(cause)]);
+  };
+
+  it.each([
+    ['時鐘到點', { kind: 'hook', reason: 'turn-timeout' }, TIMED_OUT_STATUS_TEXT],
+    ['人按了停止', { kind: 'user' }, STOPPED_STATUS_TEXT],
+    [
+      '別的插件停的（認不得的 hook）',
+      { kind: 'hook', reason: 'someone-else' },
+      STOPPED_STATUS_TEXT,
+    ],
+    ['舊 server 沒帶原因', undefined, STOPPED_STATUS_TEXT],
+  ] as const)('%s', (_name, cause, text) => {
+    render(<StatusLine state={stoppedWith(cause)} connected />);
+    const status = screen.getByRole('status');
+    expect(status.textContent).toBe(text);
+    // 不是失敗（#276）：不用紅字。
+    expect(status.className).not.toContain('text-destructive');
+  });
+
+  it('下一輪開跑之後不再講時間到', () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      script.stopped({ kind: 'hook', reason: 'turn-timeout' }),
+      script.running(),
+      script.completed(),
+    ]);
+    render(<StatusLine state={state} connected />);
+    expect(screen.getByRole('status').textContent).toBe('就緒');
   });
 });
 
