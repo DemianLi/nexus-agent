@@ -28,6 +28,7 @@ import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import {
   auditStartupEntries,
+  formatActivationError,
   optionalEntriesOf,
   REQUIRED_ENTRY_IDS,
   startupErrorFrom,
@@ -456,5 +457,25 @@ describe('serve：組裝時掉了的列', () => {
       /^\[組裝\] thread "a" 這一條沒掛上：counted（file:[^）]+\/counted\.ts）掛上時失敗：/u,
     );
     expect(readFileSync(witness, 'utf8')).toBe('xxx');
+  });
+});
+
+describe('formatActivationError（#1560 N0053）', () => {
+  it('cause 鏈每一顆都在；環狀的 cause 不卡死，各出現一次', () => {
+    const a = new Error('AAA');
+    const b = new Error('BBB');
+    a.cause = b;
+    b.cause = a;
+    const text = formatActivationError(a);
+    expect(text.split('AAA')).toHaveLength(2);
+    expect(text.split('BBB')).toHaveLength(2);
+  });
+
+  it('AggregateError 的成員都寫出來，非 Error 的值轉成字串', () => {
+    const text = formatActivationError(
+      new AggregateError([new Error('成員一'), 'plain-string'], '聚合'),
+    );
+    expect(text).toContain('成員一');
+    expect(text).toContain('plain-string');
   });
 });

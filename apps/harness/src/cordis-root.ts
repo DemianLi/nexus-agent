@@ -67,7 +67,7 @@ import { createCliAgent } from './assembly-root.js';
 import type { CreateCliAgentSession } from './assembly-root.js';
 import { PluginTree } from './plugin-tree.js';
 import type { SessionLookupRegistrar } from './thread-sessions.js';
-import { auditTreeEntries } from './startup-audit.js';
+import { auditTreeEntries, bootFailure, StartupError } from './startup-audit.js';
 
 /** 相容層提供的服務名。 */
 export const ASSEMBLY_SERVICE = 'assembly';
@@ -236,6 +236,8 @@ export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
       if (booted) throw new Error('Cordis 根已經建過了');
       booted = true;
       let assembly: NexusAssembly | undefined;
+      // 兩段失敗標籤：`create` 之前是宿主準備，不是插件樹（對應 dsh `boot` 在 `mountRootInclude` 之前才換標籤）。
+      let stage = '根準備失敗';
       try {
         const root: Context = await tree.context();
         root.provide(COMPAT_HOST_SERVICE, { ...config, sessionLookup: tree.threadSessions });
@@ -248,6 +250,7 @@ export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
         // `EntryTree.create` 的型別不收 id，執行期照用（探針 `tree.ts` 的 `createEntry`）：列 id 要由我們決定。
         const create = (options: EntryOptions) =>
           root.loader.create(options as Omit<EntryOptions, 'id'>);
+        stage = '插件樹載不起來';
         await create({ id: COMPAT_ENTRY_ID, name: `cordis:${COMPAT_ENTRY_ID}` });
         await create({ id: surface, name: `cordis:${surface}` });
         await root.loader.await();
@@ -255,7 +258,9 @@ export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
         await auditTreeEntries(root.loader);
       } catch (error) {
         await dispose().catch(() => {});
-        throw error;
+        // 稽核交出的 `StartupError` 已經指名哪一列、帶 cause 全文，原樣拋；其餘標上階段並接最深一顆的堆疊（dsh `boot` 的 catch）。
+        if (error instanceof StartupError) throw error;
+        throw bootFailure(stage, error);
       }
       if (assembly === undefined) {
         await dispose();
