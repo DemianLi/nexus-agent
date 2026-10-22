@@ -40,6 +40,7 @@ import {
   reduceConversation,
   STEER_UNAVAILABLE,
   uniformDecisions,
+  WireProtocolError,
   WireRejectedError,
 } from '@nexus/wire';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -62,6 +63,7 @@ import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
+import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
 import { threadSubagentText } from '@/lib/thread-subagent';
 import { randomUuid } from '@/lib/uuid';
 
@@ -166,6 +168,8 @@ export interface Conversation {
    * 下行被伺服器明說不收、而且有一句給使用者看的話時，就是那一句；這時 {@link connectionError} 不在——server 的原文不往畫面送。
    * thread 數滿了（[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)）是暫時的：重試照舊，接回來就清掉。
    * 子代理的會話（[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）是永久的：不排重試，{@link reconnecting} 不在。
+   * 伺服器送來看不懂的資料（#1601 `N0758`）也是這一格，{@link connectionError} 同樣不在：停止自動重連，{@link reconnecting} 照樣在，
+   * 等人按 {@link reconnectNow}。
    */
   readonly refusal?: string;
   /**
@@ -174,14 +178,15 @@ export interface Conversation {
    */
   readonly connections: number;
   /**
-   * 下行斷了（或第一次就沒開成），正在自動重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）。
+   * 下行斷了（或第一次就沒開成），等著重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：多半是照退避自動重接；
+   * 伺服器送來看不懂的資料時（#1601 `N0758`）停止自動重連，只等人按 {@link reconnectNow}，這時 {@link refusal} 有那一句。
    * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
    * 回到線上才從頭算。
    */
   readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
   /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
   readonly recovered: boolean;
-  /** 不等退避，立刻重接一次，退避從頭算。沒在重接時什麼都不做。 */
+  /** 不等退避，立刻重接一次，退避從頭算；停止自動重連的（#1601）也從這裡重開。下行開著、或被永久拒絕時什麼都不做。 */
   reconnectNow(): void;
   /**
    * 上一個上行指令被拒的原因。
@@ -382,15 +387,17 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [generation, setGeneration] = useState(0);
   /**
    * 重接的帳。**放 ref 不放 state**：計時器與 `online` 事件在 effect 外面讀寫它，不需要為它重畫。
-   * `attempt` 是連續第幾次重試（接上就歸零）；`lost` 是下行現在斷著；`everConnected` 分「中斷」與「從沒連上」。
+   * `attempt` 是連續第幾次重試（接上就歸零）；`lost` 是下行現在斷著；`everConnected` 分「中斷」與「從沒連上」；
+   * `halted` 是最後一次失敗是伺服器送來看不懂的資料、停了自動重連（#1601 `N0758`）：「立刻重連」、接上、一般的斷線都清掉它。
    */
   const retry = useRef<{
     attempt: number;
     lost: boolean;
     everConnected: boolean;
+    halted: boolean;
     timer?: ReturnType<typeof setTimeout>;
     recoveredTimer?: ReturnType<typeof setTimeout>;
-  }>({ attempt: 0, lost: false, everConnected: false });
+  }>({ attempt: 0, lost: false, everConnected: false, halted: false });
   const [commandError, setCommandError] = useState<string | undefined>(undefined);
   const [attempted, setAttempted] = useState(false);
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
@@ -453,18 +460,20 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     clearTimeout(book.timer);
     book.timer = undefined;
     book.attempt = 0;
+    book.halted = false;
     setGeneration((current) => current + 1);
   }, []);
 
   // 網路回來時退避從頭算，離開時停掉排著的那一次（同 dsh：`online` 後照樣先等第 1 次的退避，不是當場接）。
+  // 停了自動重連的（`halted`）兩個事件都不管：網路回來不代表伺服器的資料變對了，同 dsh 只有載體斷線才續接。
   useEffect(() => {
     const onOnline = () => {
-      if (!retry.current.lost) return;
+      if (!retry.current.lost || retry.current.halted) return;
       retry.current.attempt = 0;
       scheduleRetry();
     };
     const onOffline = () => {
-      if (!retry.current.lost) return;
+      if (!retry.current.lost || retry.current.halted) return;
       scheduleRetry();
     };
     window.addEventListener('online', onOnline);
@@ -494,6 +503,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     const lose = (reason: string | undefined, refused?: string) => {
       const book = retry.current;
       book.lost = true;
+      // 這次是一般的斷線：`halted` 只講「最後一次失敗是看不懂的資料」，在路上那次停住過也不算數（#1601）。
+      book.halted = false;
       clearTimeout(book.recoveredTimer);
       setRecovered(false);
       setConnected(false);
@@ -516,6 +527,25 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setConnectionError(undefined);
       setRefusal(refused);
       setReconnecting(undefined);
+    };
+    /**
+     * 伺服器送來看不懂的資料（`WireProtocolError`，#1601 `N0758`）：下行的一顆、或歷史頁（頁欄位與每一筆）。**不排重試**：
+     * 歷史裡的壞資料每次重連都抓到同一份，照 dsh 的錯誤分類（`session-controller/README.md:54`）協定錯誤終止串流。
+     * `lost` 照設，「立刻重連」按得到；`halted` 擋掉 `online`／`offline` 的自動重排。原文只進 `console.warn`，不進畫面。
+     */
+    const halt = (error: WireProtocolError) => {
+      console.warn(error);
+      const book = retry.current;
+      book.lost = true;
+      book.halted = true;
+      clearTimeout(book.timer);
+      book.timer = undefined;
+      clearTimeout(book.recoveredTimer);
+      setRecovered(false);
+      setConnected(false);
+      setConnectionError(undefined);
+      setRefusal(THREAD_PROTOCOL_ERROR_TEXT);
+      setReconnecting({ wasConnected: book.everConnected, offline: false });
     };
 
     void (async () => {
@@ -564,6 +594,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         const book = retry.current;
         const wasLost = book.lost && book.everConnected;
         book.lost = false;
+        // 計時器排的那次到點、還沒換上新的一輪時，在路上那次可能才停住（#1601）：接上了就不算停著。
+        book.halted = false;
         book.attempt = 0;
         book.everConnected = true;
         setConnected(true);
@@ -600,6 +632,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (!cancelled) lose(undefined);
       } catch (error) {
         if (!cancelled) {
+          if (error instanceof WireProtocolError) {
+            halt(error);
+            return;
+          }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
           // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）。
           const permanent =
