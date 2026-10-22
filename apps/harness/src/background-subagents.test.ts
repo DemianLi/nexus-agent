@@ -2026,6 +2026,41 @@ describe('結算通知（#840）', () => {
       expect(order).toEqual(['flush-1', 'flush-2', `notified:${runId}`]);
       await host.close();
     });
+
+    it('close() 落在排空期間：沒領走的插話不在關閉之後再跑一輪，也不發結算（同「host 關閉時欠著的話不再開跑」）', async () => {
+      const held = gate();
+      const release = gate();
+      const scripted: string[] = [];
+      let runId = '';
+      const { host, sessions, settlements, order } = setup((text, _signal, log) => {
+        scripted.push(text);
+        reply(log, `回覆：${text}`);
+        // 這一輪還在跑的時候到的話是插話；fake agent 不領，所以結算前會退回成排著的輪次。
+        if (text === 'A1') void host.send({ runId, message: '欠著的話' });
+      });
+      let flushes = 0;
+      sessions.onFlush(async (log) => {
+        if (log.sessionId !== childOf(runId)) return;
+        flushes += 1;
+        order.push(`flush-${String(flushes)}`);
+        if (flushes === 1) {
+          held.open();
+          await release.opened;
+        }
+      });
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      runId = first.runId;
+      await held.opened;
+      // 這一輪已經跑完、不在 #running，卡在最後一次排空：子代理還在 #busy。
+      order.push('close-called');
+      const closing = host.close();
+      release.open();
+      await closing;
+      await first.outcome;
+      expect(scripted).toEqual(['A1']);
+      expect(settlements).toHaveLength(0);
+      expect(order).toEqual(['flush-1', 'close-called']);
+    });
   });
 
   it('失敗、被中斷、撞到輸出上限：各自不同的摘要', async () => {

@@ -1202,6 +1202,9 @@ export class BackgroundSubagentHost {
   async close(): Promise<void> {
     this.#closed = true;
     for (const job of this.#queue) this.#paused.add(job.runId);
+    // `#busy` 比 `#running` 長：一輪跑完到 `.then` 之間還有結算前的排空（#1565），這段空檔子代理已不在 `#running`，
+    // 沒領走的插話會在 `.then` 退回成排著的輪次；沒暫停的話關閉之後照樣開跑一整輪。
+    for (const runId of this.#busy) this.#paused.add(runId);
     for (const [runId, round] of this.#running) {
       this.#paused.add(runId);
       round.controller.abort();
