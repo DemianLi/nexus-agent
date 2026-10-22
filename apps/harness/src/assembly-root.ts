@@ -1488,3 +1488,29 @@ export function goalDriverPort(
     },
   };
 }
+
+/**
+ * serve 每條 thread 交給 wire handler 的 `goalDriver` 工廠（具名抽出來，#1575 W4 的紅燈）。
+ *
+ * 以前這一段是 `serve.ts` 裡的行內閉包：N0372 在產品路徑上的效果完全靠它把 `waitForChildren` 轉進 {@link goalDriverPort}，
+ * 而拿掉那一格所有測試照樣綠（實測）。抽成具名函式之後 `serve.ts` 只剩「用它」，轉呼這一層有單元測試釘住。
+ *
+ * @param goals - 這一條 thread 自己那一次組裝的 goal 域（#459）。
+ * @param warn - 排程器出事時說話的去處。
+ * @param roundCap - 續行輪數上限的有效值與來源；沒設就不帶（排程器用預設）。
+ * @returns wire handler 要的 `(log, flush, waitForChildren) => GoalDriverPort`。
+ */
+export function serveGoalDriver(
+  goals: GoalServices | undefined,
+  warn: (message: string) => void,
+  roundCap?: GoalRoundCap,
+): (
+  log: () => SessionLog,
+  flush: () => Promise<void>,
+  waitForChildren?: (signal?: AbortSignal) => Promise<boolean>,
+) => GoalDriverPort {
+  return (log, flush, waitForChildren) => ({
+    ...goalDriverPort(goals, log, flush, warn, waitForChildren),
+    ...(roundCap !== undefined && { roundCap }),
+  });
+}

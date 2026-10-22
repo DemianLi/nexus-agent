@@ -59,7 +59,7 @@
  * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**；`src/` 除了從 lint 排除的 `invariant.ts` 都不 import
  * `@nexus/core`（套 #1420 的 lint 設定）。這是第一個**插件提供、宿主消費、而且狀態是逐份日誌**的服務：
  *
- * - **`goals` 由這一列提供**（`@nexus/goal` 的 token，契約 `1.0.0`）：`new` 一個繼承 `ContractService` 的類別，宿主組 thread 時把它折進
+ * - **`goals` 由這一列提供**（`@nexus/goal` 的 token，契約 `1.1.0`，`onActivationChanged` 從 1.1.0 起）：`new` 一個繼承 `ContractService` 的類別，宿主組 thread 時把它折進
  *   `registry.services`（同 #1456 的 `feedback`）。
  * - **逐份日誌的 `GoalService` 改成 lazy**：不再靠 `registry.sessions.join` 在接上日誌時建，而是第一次被問到某份 root 日誌時才建，
  *   存在 `apply` 閉包裡的 `WeakMap<SessionLog, GoalService>`。三個入口——工具（`sessionLookup.forCall` 回的 root 日誌）、`/goal`（命令執行器交的

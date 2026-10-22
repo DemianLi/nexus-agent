@@ -437,13 +437,16 @@ export class GoalService implements GoalServiceContract {
   }
 
   /**
-   * 換授權，**值真的變了才通知**（dsh `setActivation`，`goal/src/index.ts:495-515`：值沒變不送 `:497`、折疊失敗不送 `:502`）。
+   * 換授權，**值真的變了才通知**（dsh `setActivation`，`goal/src/index.ts:495-515`：值沒變不送 `:497`、折疊失敗不送 `:503`）。
    * 通知帶換掉之後的視圖：有目前目標就帶 `{ id, revision, activation }`，沒有就缺席。
    */
   #setActivation(next: GoalActivation): void {
     if (this.#activation === next) return;
     this.#activation = next;
-    // dsh 在這裡還有「折疊失敗不送」（`:502`）：我們兩個呼叫點都到不了——`disarm` 先 `#requireHealthy` 拋、`#observe` 折壞就早退。
+    // 照 dsh `goal/src/index.ts:503`（`if (state.failure !== null) return`）：折疊失敗不送。目前到不了——`disarm` 先 `#requireHealthy` 拋、
+    // `#observe` 折壞就早退，所以兩個入口都擋在前面（dsh 自己在 `:501-502` 也留了一條同樣走不到、用 v8 ignore 標起來的守衛）。
+    /* v8 ignore next */
+    if (this.#failure !== undefined) return;
     const listener = this.#onActivationChanged;
     if (listener === undefined) return;
     const view = this.#view();

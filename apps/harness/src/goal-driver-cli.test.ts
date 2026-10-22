@@ -17,7 +17,12 @@ import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { driveGoalRounds, MAX_GOAL_ROUNDS_SOURCE, runCli, runRepl, runTurn } from './cli.js';
-import { createCliAgent, formatGoalDriverDisclosure, goalDriverPort } from './assembly-root.js';
+import {
+  createCliAgent,
+  formatGoalDriverDisclosure,
+  goalDriverPort,
+  serveGoalDriver,
+} from './assembly-root.js';
 import { parseCliArgs } from './cli.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { ROUND_CAP_BLOCK_CODE } from './goal-driver.js';
@@ -727,6 +732,35 @@ describe('goals 服務綁的是這一次組裝', () => {
         () => undefined,
       );
       expect('waitForChildren' in absent).toBe(false);
+    } finally {
+      await built.dispose();
+    }
+  });
+
+  /**
+   * **serve 交給 wire handler 的 `goalDriver` 工廠**（#1575 W4）：N0372 在產品路徑上的效果完全靠它把 `waitForChildren` 轉進
+   * `goalDriverPort`。以前它是 `serve.ts` 裡的行內閉包，拿掉那一格所有測試照樣綠；現在是具名的 `serveGoalDriver`，`serve.ts` 只用它。
+   */
+  it('serveGoalDriver：waitForChildren 原樣轉進 port，flush／warn／roundCap 也各到各的位置', async () => {
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      const warned: string[] = [];
+      const wait = (): Promise<boolean> => Promise.resolve(true);
+      const flush = (): Promise<void> => Promise.resolve();
+      const cap = { limit: 3, source: 'test' } as const;
+      const make = serveGoalDriver(built.goals, (message) => warned.push(message), cap);
+
+      const port = make(() => built.sessionLog, flush, wait);
+      expect(port.waitForChildren).toBe(wait);
+      expect(port.flush).toBe(flush);
+      expect(port.roundCap).toEqual(cap);
+      port.warn('量一下');
+      expect(warned).toEqual(['[續行] 量一下']);
+
+      // 沒給 waitForChildren（沒有背景 host）就缺席；沒設上限就不帶 roundCap。
+      const bare = serveGoalDriver(built.goals, () => undefined)(() => built.sessionLog, flush);
+      expect('waitForChildren' in bare).toBe(false);
+      expect('roundCap' in bare).toBe(false);
     } finally {
       await built.dispose();
     }

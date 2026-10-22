@@ -43,6 +43,7 @@ import {
   parseSandboxMode,
   formatGoalDriverDisclosure,
   goalDriverPort,
+  serveGoalDriver,
   resolveInvariantLogPath,
   assertLaunchPathsOutsideWorkspace,
   resolveSessionLogDir,
@@ -1403,17 +1404,10 @@ async function startServer(
         }),
         ...(invocation.goalDriver
           ? {
-              goalDriver: (
-                log: () => SessionLog,
-                flush: () => Promise<void>,
-                waitForChildren?: (signal?: AbortSignal) => Promise<boolean>,
-              ) =>
-                // **`goals` 是這一條 thread 自己那一次組裝的**：`createCliAgent` 每條
-                // thread 各跑一次（`:341`），所以兩條 thread 的目標從此分得開（#459）。
-                ({
-                  ...goalDriverPort(goals, log, flush, warn, waitForChildren),
-                  ...(goalRoundCap !== undefined && { roundCap: goalRoundCap }),
-                }),
+              // **`goals` 是這一條 thread 自己那一次組裝的**：`createCliAgent` 每條
+              // thread 各跑一次（`:341`），所以兩條 thread 的目標從此分得開（#459）。
+              // 轉進 `waitForChildren` 的那一層是具名的 `serveGoalDriver`，有自己的測試（#1575 W4）。
+              goalDriver: serveGoalDriver(goals, warn, goalRoundCap),
             }
           : {}),
         // 落盤關掉（#612）就不給：日誌只在註冊表的記憶體裡，同 CLI 那一支。
