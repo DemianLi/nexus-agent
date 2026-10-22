@@ -23,7 +23,7 @@ import { compatLayer, createCordisRoot } from './cordis-root.js';
 import { foldTurn, serveClient, shippedPlugins } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
-import { StartupError } from './startup-audit.js';
+import { describeDrop, StartupError } from './startup-audit.js';
 
 const temporary: string[] = [];
 
@@ -152,5 +152,69 @@ describe('相容層那一列起不來（驗收 E）', () => {
     expectNamed(error, 'serve');
     await settle();
     expect(delta(resources(), before)).toEqual({});
+  });
+});
+
+describe('啟動失敗的原因與階段（#1560 N0053）', () => {
+  /** 掛上時丟一個包了一層的錯：外層訊息是插件自己寫的，真正的原因在 `cause`。 */
+  function wrapped(inner: Error): void {
+    vi.spyOn(compatLayer, 'apply').mockImplementation(function () {
+      throw new Error('外層', { cause: inner });
+    });
+  }
+
+  async function bootFailure(root = createCordisRoot()): Promise<unknown> {
+    return root.boot('cli', { plugins: await shippedPlugins() }).then(
+      () => undefined,
+      (reason: unknown) => reason,
+    );
+  }
+
+  it('插件在 apply 裡包一層再丟：啟動訊息帶出內層的原因與堆疊', async () => {
+    const inner = new Error('真正原因');
+    wrapped(inner);
+    const error = await bootFailure();
+    expect(error).toBeInstanceOf(StartupError);
+    const message = (error as Error).message;
+    expect(message).toContain('外層');
+    expect(message).toContain('真正原因');
+    const frame = inner.stack?.split('\n').find((line) => /^\s+at /u.test(line));
+    expect(frame).toBeDefined();
+    expect(message).toContain(frame?.trim());
+  });
+
+  it('給管理者看的那則帶堆疊；一列的 message 與 describeDrop 還是一行，回網頁的路徑不帶', async () => {
+    wrapped(new Error('真正原因'));
+    const error = (await bootFailure()) as StartupError;
+    const drop = error.dropped.find((row) => row.id === 'nexus-compat');
+    expect(drop).toBeDefined();
+    expect(drop?.detail).toMatch(/\n\s+at /u);
+    expect(drop?.message).toBe('外層');
+    expect(describeDrop(drop!)).not.toContain('\n');
+    expect(describeDrop(drop!)).not.toMatch(/\s+at /u);
+  });
+
+  it('根準備那一段拋的錯，訊息以「根準備失敗：」開頭並接最深一顆的堆疊', async () => {
+    const root = createCordisRoot();
+    const inner = new Error('根壞了');
+    vi.spyOn(root.tree, 'context').mockRejectedValue(new Error('外層', { cause: inner }));
+    const error = await bootFailure(root);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toMatch(/^根準備失敗：外層\n/u);
+    expect((error as Error).message).toContain(inner.stack);
+    expect((error as Error).cause).toBeInstanceOf(Error);
+  });
+
+  it('插件樹那一段（loader.await 拋非 StartupError）以「插件樹載不起來：」開頭', async () => {
+    const root = createCordisRoot();
+    const original = root.tree.context.bind(root.tree);
+    vi.spyOn(root.tree, 'context').mockImplementation(async () => {
+      const context = await original();
+      vi.spyOn(context.loader, 'await').mockRejectedValue(new Error('等不到'));
+      return context;
+    });
+    const error = await bootFailure(root);
+    expect(error).not.toBeInstanceOf(StartupError);
+    expect((error as Error).message).toMatch(/^插件樹載不起來：等不到/u);
   });
 });
