@@ -45,7 +45,7 @@ export function clientOptions(config: McpConfig, elicitation: boolean): ClientCo
  * 首連那條）。池的每一代與 plugin 自己連的首連、重連都走這裡（#1824、#1572 N0516）。工具物件只包一次 {@link throwOnToolError}、
  * 不改名，留給呼叫端建自己的委派物件。
  *
- * **`execution.taskSupport: 'required'` 的工具在這裡就改成當場拒絕**，照 dsh（`mcp-client/src/tools.ts:137,:277-281`，`1517a4db`）：
+ * **`execution.taskSupport: 'required'` 的工具在這裡就改成當場拒絕**，照 dsh（`mcp-client/src/tools.ts:123` 的 `cacheMode: 'refresh'`、`:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
  * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。偏離：dsh 在自己的 bridge 裡讀 `tool.execution`，這裡的工具是
  * adapter 轉出來的，而 `@langchain/mcp-adapters` 2.0.0 轉工具時丟掉了 `execution`（`dist/tools.js` 沒有 `taskSupport` 的任何處理），
  * 所以多對 SDK client 叫一次 `tools/list`（理由 1：基座表達不出來）。
@@ -92,7 +92,7 @@ async function taskRequiredNames(sdk: SdkClient | undefined, count: number): Pro
   return names;
 }
 
-/** 讓這個工具的呼叫當場拋 dsh 那一句、不送請求（訊息逐字照抄 `tools.ts:279`）。 */
+/** 讓這個工具的呼叫當場拋 dsh 那一句、不送請求（訊息逐字照抄 `tools.ts:280`）。 */
 function rejectTaskRequired(tool: StructuredTool): void {
   const rawName = tool.name;
   (tool as unknown as { func: (...args: unknown[]) => Promise<unknown> }).func = () =>
