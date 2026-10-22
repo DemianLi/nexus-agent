@@ -8,7 +8,7 @@
 
 import { HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { REPEAT_REMINDER_MARKER } from '@nexus/core';
+import { LLM_FAILURE_FALLBACK_MESSAGE, REPEAT_REMINDER_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
@@ -174,11 +174,42 @@ describe('REPL 那條路自己排下一輪', () => {
 
     await expect(driveGoalRounds(agent, printer, log, port)).rejects.toThrow(/腳本只有/u);
     expect(log.events.map((event) => event.type)).toContain('turn/failed');
+    // #1557：`message` 與 `error.message` 是同一句。
+    const failed = log.events.find((event) => event.type === 'turn/failed')!.data as {
+      message: string;
+      error: { message: string };
+    };
+    expect(failed.error.message).toBe(failed.message);
 
     // **再問一次**：日誌上那顆 `turn/failed` 讓它回 `turn-failed`，不補排。
     const before = log.length;
     await driveGoalRounds(agent, printer, log, port);
     expect(log.length).toBe(before);
+    await stop();
+  });
+
+  it('一輪拋出 toString 會拋錯的值：turn/failed 照樣寫成（固定字、兩處同一句），原本的值原樣往外拋（#1557）', async () => {
+    const { agent, log, stop } = await build(CREATE_TURNS);
+    const { printer } = recorder();
+    const value = {
+      toString(): string {
+        throw new Error('toString 拋錯');
+      },
+    };
+    const broken = Object.create(agent, {
+      stream: { value: () => Promise.reject(value) },
+    }) as typeof agent;
+
+    await expect(runTurn(broken, '嗨', printer, log)).rejects.toBe(value);
+    const failed = log.events
+      .filter((event) => event.type === 'turn/failed')
+      .map((event) => event.data as { message: string; error: { code: string; message: string } });
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.message).toBe(LLM_FAILURE_FALLBACK_MESSAGE);
+    expect(failed[0]!.error).toMatchObject({
+      code: 'UNKNOWN',
+      message: LLM_FAILURE_FALLBACK_MESSAGE,
+    });
     await stop();
   });
 
