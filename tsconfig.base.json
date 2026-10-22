@@ -92,6 +92,7 @@
       "@nexus/skills": ["./packages/nexus-skills/src/index.ts"],
       "@nexus/skills/provider": ["./packages/nexus-skills/src/provider.ts"],
       "@nexus/system-prompt": ["./packages/nexus-system-prompt/src/index.ts"],
+      "@nexus/timeout": ["./packages/nexus-timeout/src/index.ts"],
       "@nexus/tool-result": ["./packages/nexus-tool-result/src/index.ts"],
       "@nexus/tools": ["./packages/nexus-tools/src/index.ts"],
       "@nexus/tools/provider": ["./packages/nexus-tools/src/provider.ts"],

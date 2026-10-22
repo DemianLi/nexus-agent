@@ -34,6 +34,7 @@ import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
 import type { WireHandler } from './wire-handler.js';
 import { wireRequestBodyMode } from './wire-handler.js';
+import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
 /**
  * 先收完整份的路由（JSON 路由）的本文上限：300 MiB，照 dsh `client/connection/src/http-bridge.ts` 的
@@ -49,7 +50,7 @@ export const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 2_000;
 export const MAX_MISSED_HEARTBEATS = 2;
 
 /** `setInterval` 收得下的最大間隔（毫秒）；也是 dsh 設定範圍的上界。 */
-export const MAX_SSE_HEARTBEAT_INTERVAL_MS = 2_147_483_647;
+export const MAX_SSE_HEARTBEAT_INTERVAL_MS = MAX_TIMER_DELAY_MS;
 
 const SSE_PING = ': ping\n\n';
 
