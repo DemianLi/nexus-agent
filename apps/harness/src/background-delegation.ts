@@ -212,6 +212,7 @@ export class BackgroundDelegation {
       ...(port.onStatus !== undefined && { onStatus: port.onStatus }),
       ...(port.isArchived !== undefined && { isArchived: port.isArchived }),
       ...(port.onTurnFailed !== undefined && { onTurnFailed: port.onTurnFailed }),
+      ...(port.turnClock !== undefined && { turnClock: port.turnClock }),
       ...(this.#options.maxActive !== undefined && { maxActive: this.#options.maxActive }),
       ...(this.#options.cold !== undefined && { cold: this.#options.cold }),
       ...(sandbox !== undefined && {

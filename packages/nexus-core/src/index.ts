@@ -728,6 +728,7 @@ export type {
   SessionTitleLlmMessage,
   SessionTitleModelIdentity,
   SessionTitleSource,
+  TurnAbortCause,
   TurnEndReason,
   ApprovalOutcome,
   SessionReferenceSourceEntry,

@@ -183,7 +183,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 33,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'apps/harness/src/conversation-history.ts:1137',
+    readerBranch: 'apps/harness/src/conversation-history.ts:1138',
   },
   {
     from: 33,
@@ -213,6 +213,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
   { from: 46, to: 47, kind: 'additive', ref: '#1303' },
   { from: 47, to: 48, kind: 'additive', ref: '#1335' },
   { from: 48, to: 49, kind: 'additive', ref: '#1629' },
+  { from: 49, to: 50, kind: 'additive', ref: '#1624' },
 ];
 
 /** 產品用的目錄。模組載入時就驗，不合就拋。 */

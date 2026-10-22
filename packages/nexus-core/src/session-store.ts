@@ -631,8 +631,18 @@ import type { SessionEvent } from './session-log.js';
  *   （`same-version`）；那張表要不要照 dsh 建，歸 [#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第五刀（升版節奏要不要
  *   改照 dsh 的同版相容審查），第一刀不建。待補登的清單（這一筆與 48 之內的 `messagesCompactable`）在版本邊目錄的檔頭
  *   （{@link ./session-format.ts}〈待補登〉）。
+ *
+ * ## 50：`turn/end` 的 `aborted` 多一種原因 `hook`
+ *
+ * 一輪的時鐘到點（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，`turn-timeout` 那一列）時，這一輪照停止鍵的路收尾，
+ * 日誌以 `reason: {kind:'aborted', cause:{kind:'hook', reason:'turn-timeout'}}` 收尾；root 與背景子代理的日誌都會寫。形狀照 dsh 的
+ * `AgentCancelCause`（`packages/core/session/src/types.ts:189-193`，`687f282e`）。v49 的檔直接讀：那時候沒有時鐘，`cause` 只有
+ * `user` 與 `parent`。
+ *
+ * 升版照新增詞彙的慣例（同 22），不是非升不可：讀 `aborted` 的 goal 續行與掃描只看 `reason.kind`，一樣當成「被打斷」；歷史把 `cause` 原樣帶上收尾的 frame。
+ * 版號照上面 49 那段「併行的升版」：#1579 還沒開工，這張先拿 50。**回滾的後果**同 49：被 50 碰過的 thread，49 的 runtime 打不開。
  */
-export const SESSION_LOG_FORMAT_VERSION = 49;
+export const SESSION_LOG_FORMAT_VERSION = 50;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

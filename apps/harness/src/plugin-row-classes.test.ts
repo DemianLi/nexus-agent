@@ -64,7 +64,7 @@ describe('列的分類表', () => {
   it('起動期讀的每一顆都對得上出貨的一列，名字不重複', async () => {
     const rows = await shippedRows();
     const names = STARTUP_READ_PLUGINS.map((plugin) => plugin.name);
-    expect(names).toHaveLength(19);
+    expect(names).toHaveLength(20);
     expect(new Set(names).size).toBe(names.length);
     const shipped = new Set(rows.map((row) => row.pluginName));
     expect(names.filter((name) => !shipped.has(name))).toEqual([]);

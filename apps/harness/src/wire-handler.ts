@@ -183,6 +183,7 @@ import type { ModelSelectionHost } from './model-selection-host.js';
 import type { PumpAgent, QueueAction, TurnFailedReport } from './thread-pump.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
+import type { TurnClock } from './turn-clock.js';
 import {
   ThreadActiveError,
   ThreadArchivedPinError,
@@ -474,6 +475,11 @@ export interface WireHandlerOptions {
    * **偏離登記：產品需求超出 dsh**（事件下行 dsh 沒有上限），逐點見 `bounded-event-queue.ts`。
    */
   readonly downlinkMaxBytes?: number;
+  /**
+   * 一輪的時鐘（`turn-timeout` 那一列，[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：每條 thread 的主對話與它的背景子代理
+   * 吃同一個值，見 `turn-clock.ts`。**省略即不限**，同今天。
+   */
+  readonly turnClock?: TurnClock;
   /**
    * 行程裡最多同時有幾條 thread（`thread-capacity` 那一列的 `maxThreads`，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，
    * 保險絲第 2 級）。**省略就不限**，行為與沒有這個選項時逐位元組相同。
@@ -1552,6 +1558,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           options.onTurnFailed === undefined
             ? undefined
             : (report) => options.onTurnFailed!(report),
+          options.turnClock,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -1591,6 +1598,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           ...(options.threadOrganization !== undefined && {
             isArchived: () => options.threadOrganization!.isArchived(threadId),
           }),
+          // 背景子代理的每一輪也有時鐘（#1624 的 Q-B4 (a)），同一列的值。
+          ...(options.turnClock !== undefined && { turnClock: options.turnClock }),
         }));
         // **接在最後，理由同 `cli.ts`**：上面那個口接的三件事是觀察者，落盤不改變任何人看得到什麼，
         // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。

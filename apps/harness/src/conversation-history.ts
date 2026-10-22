@@ -1123,7 +1123,8 @@ export function historyFrames(
         break;
       case 'turn/end':
         if (event.data.reason?.kind === 'aborted') {
-          close(event.time, { event: 'failed', aborted: true });
+          // 原因同即時那條（#1624）：人按停止、時鐘到點分得出來。
+          close(event.time, { event: 'failed', aborted: true, cause: event.data.reason.cause });
         } else if (event.data.reason?.kind === 'max-tokens') {
           // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
           close(event.time, { event: 'completed', maxTokens: true });

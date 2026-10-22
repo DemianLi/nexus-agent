@@ -61,6 +61,7 @@ import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { toolTextPlugin } from './settings/tool-text.js';
+import { turnTimeoutPlugin } from './settings/turn-timeout.js';
 
 /** 一列改了之後什麼時候生效。 */
 export type RowClass = 'startup-read' | 'mount-restart' | 'next-thread';
@@ -91,6 +92,7 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   downlinkPlugin,
   loggerConsolePlugin,
   goalRoundCapPlugin,
+  turnTimeoutPlugin,
 ] as readonly NexusPlugin<unknown>[];
 
 /** 表上的一格。 */

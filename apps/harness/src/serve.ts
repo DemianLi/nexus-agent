@@ -170,6 +170,8 @@ import { loggerConsolePlugin } from './settings/logger-console.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import type { GoalRoundCap } from './goal-driver.js';
+import { turnTimeoutPlugin } from './settings/turn-timeout.js';
+import type { TurnClock } from './turn-clock.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { ThreadSearch } from './thread-search.js';
@@ -752,6 +754,10 @@ async function startServer(
   const goalRoundCap: GoalRoundCap | undefined = startupEntryMounted(plugins, goalRoundCapPlugin)
     ? { limit: startupSetting(plugins, goalRoundCapPlugin).limit, source: GOAL_ROUND_CAP_SOURCE }
     : undefined;
+  // 一輪的時鐘（#1624）：主對話與背景子代理的每一輪各自起算，到點照停止鍵的路中止。關掉那一列就是不限，同 goal-round-cap 要先問掛沒掛。
+  const turnClock: TurnClock | undefined = startupEntryMounted(plugins, turnTimeoutPlugin)
+    ? { timeoutMs: startupSetting(plugins, turnTimeoutPlugin).timeoutMs }
+    : undefined;
   // 記憶體量具（#1490）：只讀只講，預設關閉（`reportIntervalMs: 0`），開了才在起動尾端起，見 `memory-gauge.ts`。
   const memoryGaugeConfig = startupSetting(plugins, memoryGaugePlugin);
   // 下行串流的心跳間隔與每條線的位元組上限（#1504）。**兩個消費點在兩處**：心跳間隔交給 `startWireServer`（socket 那一層），位元組上限交給
@@ -1051,6 +1057,7 @@ async function startServer(
     threadTitleLimits: threadTitle,
     projectionFlushMs: projectionFlush.flushMs,
     downlinkMaxBytes: downlink.maxQueuedBytes,
+    ...(turnClock !== undefined && { turnClock }),
     maxThreads: threadCapacity.maxThreads,
     // 閒置逐出（#1484，保險絲第 1 級）：**只有落盤開著、而且不是 0 才傳**。沒有落盤的日誌只在記憶體裡，撤掉就沒了；啟動時
     // 印一行講是哪一種（下面「thread 上限」那一段）。撤完重寫 `plugin-snapshot.json`：放掉 live 綁定只動記憶體，檔要這裡補。
@@ -1515,6 +1522,12 @@ async function startServer(
     `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${
       idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
     }）`,
+  );
+  // 一輪的時鐘講出來（#1624）：出廠就有值，關掉那一列是管理者明著拿掉的，兩種都印。
+  log(
+    turnClock === undefined
+      ? '一輪的時鐘：不限（turn-timeout 那一列關掉了）'
+      : `一輪的時鐘：${String(turnClock.timeoutMs)} 毫秒（主對話與背景子代理的每一輪各自起算，到點照停止鍵的路中止）`,
   );
   // 探針與指標講出來（#1535）：不印 token 本身，只印在哪個檔。
   log(

@@ -184,12 +184,24 @@ export type SessionEventType = keyof SessionEventMap;
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 
 /**
+ * 一輪被中止的原因，見 {@link TurnEndReason} 的 `aborted`。`hook` 照 dsh 的 `{ kind: 'hook'; reason: string }`
+ * （`packages/core/session/src/types.ts:189-193`，`687f282e`），`reason` 是穩定的機器字串（今天只有 `turn-timeout`）。
+ */
+export type TurnAbortCause =
+  | { readonly kind: 'user' }
+  | { readonly kind: 'parent' }
+  | { readonly kind: 'hook'; readonly reason: string };
+
+/**
  * 一輪為什麼沒有正常結束。四種：
  *
- * - **`aborted`**：被中止。原因兩種：`user`（人按了停止）與 `parent`（父代理用 `interrupt_agent` 只停這個背景
+ * - **`aborted`**：被中止。原因三種：`user`（人按了停止）、`parent`（父代理用 `interrupt_agent` 只停這個背景
  *   子代理當下那一輪，[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh 同名，
- *   `subagent/src/continuation-activation.ts:323`，`477b4f4`）。dsh 的 `hook`／`disposed` 在我們這側沒有生產者，
- *   有了再加成員。**兩種都是「這一輪被打斷」**：讀 `reason.kind === 'aborted'` 的人（goal 續行、歷史、掃描）不看 `cause`。
+ *   `subagent/src/continuation-activation.ts:323`，`477b4f4`），與 `hook`（插件中止了這一輪，`reason` 說是誰、為什麼）。
+ *   `hook` 照 dsh 的 `AgentCancelCause`（`packages/core/session/src/types.ts:189-193`，`687f282e`），生產者是一輪的時鐘
+ *   （[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，`turn-timeout` 那一列，`reason: 'turn-timeout'`）；dsh 的生產者是帳號登出
+ *   （`credentials/deepseek-account/src/account-tasks.ts:30`）。dsh 的 `disposed` 在我們這側沒有生產者，有了再加成員。
+ *   **三種都是「這一輪被打斷」**：讀 `reason.kind === 'aborted'` 的人（goal 續行、歷史、掃描）不看 `cause`。
  * - **`max-tokens`**：這一輪裡**至少一次** root 的模型回覆撞到輸出上限
  *   （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）。照 dsh 的 `'max-tokens'`
  *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
@@ -212,7 +224,7 @@ export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unava
  * `reason`，拋錯是另一顆 `turn/failed`，其餘沒有生產者。
  */
 export type TurnEndReason =
-  | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' | 'parent' } }
+  | { readonly kind: 'aborted'; readonly cause: TurnAbortCause }
   | { readonly kind: 'max-tokens' }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'blocked' };
