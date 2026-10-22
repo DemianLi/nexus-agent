@@ -43,9 +43,20 @@
  * - **為什麼是 1200**：日誌的上限是 {@link SESSION_EVENT_MAX_DEPTH}（600）；`toLoggedMessage` 的預檢門檻是它的兩倍（
  *   `nexus-core/src/logged-message.ts` 的 `PRECHECK_DEPTH`，理由：超過兩倍的訊息包進事件後一定也超過上限）。這裡取同一個數，所以被截的
  *   一定是日誌也收不下、那一輪必以 `NESTING_TOO_DEEP` 失敗的訊息，**截斷不改變哪些訊息記得進去**。同時 1200 在實測可行的 2000 層之下。
- * - **深度量法**：與 `logged-message.ts` 的 `nestingExceeds` 同形（根是容器算第 1 層，純量不算），那一份是 `nexus-core` 的私有函式、
- *   量的是 `BaseMessage` 物件而不是 frame，這裡不共用，各自一份、門檻關係如上。
- * - **撤除條件**：下行改成迭代序列化（不再遞迴），或日誌的深度上限拿掉，或事件裡的工具參數改成原始字串（同 dsh）。
+ * - **深度量法，與 `logged-message.ts` 的 `nestingExceeds` 差在哪**：走法一樣（迭代、每個物件只走一次、根是容器算第 1 層、純量不算），
+ *   差在「什麼算容器」。`nestingExceeds` 量的是 `BaseMessage`，那是 class 實例，欄位一路是 `lc_kwargs`、物件，所以**任何 `typeof` 是 `object`
+ *   的都算一層**。這裡量的是**要被 `JSON.stringify` 的 frame**：`Date`、帶 `toJSON` 的物件序列化成純量，不增加遞迴深度，也不能被複製
+ *   （複製會丟掉原型與 `toJSON`），所以只有陣列與純物件（原型是 `Object.prototype` 或 `null`）算容器、才下探，其餘原樣留著。兩邊的謂詞
+ *   不同，共用 `exceedsDepth` 就得給 `nexus-core` 加一個帶謂詞的匯出，而 `logged-message.ts` 是日誌那一條線的檔案，不在這張動。
+ *   門檻關係如上。
+ * - **輸出深度的上界**：frame 是樹（模型回的 JSON 解析出來的東西沒有共用）時，副本深度 ≤ {@link DOWNLINK_MAX_DEPTH}。有共用的子物件
+ *   （DAG；`BaseMessage` 的 `lc_kwargs` 與欄位指到同一份就是）時，{@link truncateDepth} 讓同一個來源物件只複製一份、各處共用，那一份是依
+ *   **第一次遇到**的深度截的，從較淺處再指到它時副本會比 {@link DOWNLINK_MAX_DEPTH} 深；上界是**原物件的深度**（副本是原圖的子圖，
+ *   指標要嘛照搬、要嘛換成佔位）。這時若 `JSON.stringify` 仍爆堆疊，照偏離 C 斷線，不比沒有這一層更糟。要嚴格的上界得放棄共用副本
+ *   （`JSON.stringify` 本來就會把共用的子物件各寫一遍，輸出大小也就跟著指數成長），這張不做。
+ * - **撤除條件**（只有這兩條，PR 內文同）：① 下行改成迭代序列化、不再遞迴（那時不必截斷，門檻也就不再需要）；② 事件裡的工具參數改成原始字串、
+ *   不再以 parse 後的巢狀物件進事件流（同 dsh，見上）。日誌的深度上限動了**不算**：這裡的 1200 只是借用它來保證「截斷不改變哪些訊息記得進去」，
+ *   上限拿掉、截斷仍然擋著下行那一顆的堆疊爆掉。
  *
  * @module
  */
@@ -93,7 +104,13 @@ function isContainer(value: unknown): value is object {
   return proto === Object.prototype || proto === null;
 }
 
-/** `frame` 的陣列與純物件巢狀有沒有超過 `limit` 層。迭代走訪，每個物件只走一次（循環不會走不完，只會少報）。 */
+/**
+ * `frame` 的陣列與純物件巢狀有沒有超過 `limit` 層。迭代走訪，每個物件只走一次（循環不會走不完，只會少報）。
+ *
+ * **共用的子物件會少報**：同一個物件第一次是從淺處走到的，之後從深處再指到它就跳過，所以靠共用才超過門檻的 frame 量不出來、不會截。
+ * 要量準得放棄「只走一次」（最長路徑，最壞指數成長），`nestingExceeds` 同樣少報。少報的後果是那一顆沒截就進 {@link frameBytes}，
+ * 真的深到 `JSON.stringify` 爆堆疊時照偏離 C 斷線，不比沒有這一層更糟。
+ */
 function exceedsDepth(frame: unknown, limit: number): boolean {
   const seen = new Set<object>();
   const stack: [unknown, number][] = [[frame, 1]];
@@ -112,7 +129,8 @@ function truncateDepth<T>(frame: T, limit: number): T {
   if (!isContainer(frame)) return frame;
   const copies = new Map<object, object>();
   const make = (source: object): object => {
-    const copy: object = Array.isArray(source) ? [] : {};
+    // 物件的副本用空原型：`{}` 上設一個自有的 `__proto__` 鍵會改到原型、鍵就被吃掉（同 dsh `json-stream.ts:90-94` 的做法）。
+    const copy: object = Array.isArray(source) ? [] : Object.create(null);
     copies.set(source, copy);
     return copy;
   };

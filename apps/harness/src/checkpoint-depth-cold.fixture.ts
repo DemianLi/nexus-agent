@@ -21,7 +21,9 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { WireRejectedError } from '@nexus/wire';
+import type { Event } from '@nexus/wire';
 
+import { DEPTH_TRUNCATED } from './bounded-event-queue.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
@@ -128,9 +130,20 @@ async function say(server: RunningServe, thread: string, prompt: string) {
   const client = await serveClient(server);
   const events = await client.openEvents(thread);
   await client.runStart(thread, prompt);
-  const state = await foldTurn(events);
+  // 順手記下客戶端收到的 frame 裡有沒有深度截斷的佔位（#1845 審查：沒記的話，把截斷拿掉在 macOS 上整組仍全綠）。
+  let sawTruncation = false;
+  const tapped: AsyncIterator<Event> = {
+    next: async () => {
+      const result = await events.next();
+      if (result.done !== true && JSON.stringify(result.value).includes(DEPTH_TRUNCATED)) {
+        sawTruncation = true;
+      }
+      return result;
+    },
+  };
+  const state = await foldTurn(tapped);
   await events.return?.(undefined);
-  return state;
+  return { state, sawTruncation };
 }
 
 function emit(result: unknown): void {
@@ -186,10 +199,10 @@ async function write(dir: string, level: number): Promise<void> {
   // 下行有沒有斷要如實報，不能讓它扳倒腳本：深參數的 `messages` 事件在下行 `JSON.stringify` 時會不會爆堆疊看平台
   //（Linux 上 5000 層會，serve 記 `[下行] … 無法序列化，已斷開`，歸 #1560；macOS 上不會）。這一格要量的是日誌那一關。
   let downlink: 'finished' | 'broken' = 'finished';
-  let seen: { status: string; error: string | undefined } | undefined;
+  let seen: { status: string; error: string | undefined; sawTruncation: boolean } | undefined;
   try {
-    const state = await say(server, 'w', '深:w');
-    seen = { status: state.status, error: state.error };
+    const { state, sawTruncation } = await say(server, 'w', '深:w');
+    seen = { status: state.status, error: state.error, sawTruncation };
   } catch {
     downlink = 'broken';
   }
@@ -206,7 +219,7 @@ async function write(dir: string, level: number): Promise<void> {
   const failed = events.filter((event) => event.type === 'turn/failed');
   emit({
     downlink,
-    // 客戶端（折疊下行）在 root 收尾時看到的這一輪：狀態與 lifecycle failed 帶的文字。
+    // 客戶端（折疊下行）在 root 收尾時看到的這一輪：狀態、lifecycle failed 帶的文字，以及途中有沒有收到含截斷佔位的 frame。
     seen,
     // 整份日誌（不只 turn/failed）有沒有留下堆疊爆掉的痕跡。
     rangeError: logText.includes('RangeError') || logText.includes('Maximum call stack'),

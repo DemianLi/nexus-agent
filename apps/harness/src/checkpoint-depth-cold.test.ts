@@ -104,7 +104,11 @@ describe('續接：新行程、預設 stack，第一個工作就是深的那一�
 describe('同台寫入：新行程裡模型回極深的工具參數，日誌那一關先擋', () => {
   interface Written {
     readonly downlink: 'finished' | 'broken';
-    readonly seen?: { readonly status: string; readonly error?: string };
+    readonly seen?: {
+      readonly status: string;
+      readonly error?: string;
+      readonly sawTruncation: boolean;
+    };
     readonly rangeError: boolean;
     readonly failed: { code?: string; message?: string }[];
   }
@@ -123,6 +127,11 @@ describe('同台寫入：新行程裡模型回極深的工具參數，日誌那�
     expect(result.rangeError).toBe(false);
     expect(result.downlink).toBe('finished');
     expect(result.seen?.status).toBe('failed');
+    // 2000 層超過下行門檻（1200），客戶端收到的是截斷過的副本。
+    expect(result.seen?.sawTruncation).toBe(true);
+    // 錯誤文字帶的是兩個門檻本身：下行副本 1200（`PRECHECK_DEPTH`）與日誌上限 600，兩個數字都對得上才是日誌那一關的訊息。
+    expect(result.seen?.error).toContain('1200');
+    expect(result.seen?.error).toContain('600');
   }, 120_000);
 
   /**
@@ -134,14 +143,17 @@ describe('同台寫入：新行程裡模型回極深的工具參數，日誌那�
    * `lifecycle failed` 只帶文字（實測，`packages/nexus-wire/src/conversation.ts` 的 failed 路徑只收 `data.error` 字串），
    * `NESTING_TOO_DEEP` 在日誌的 `turn/failed` 與歷史裡；下行帶碼另開 #1844。日誌那一關不看平台，整份日誌沒有 `RangeError`。
    *
-   * 這一格在 Linux 才是真的紅燈（拿掉截斷，下行 `broken`）；macOS 上下行本來就不會爆，所以平台無關的紅燈在
-   * `thread-pump-bounds.test.ts`（副本含截斷佔位）。
+   * 拿掉截斷：Linux 上下行 `broken`；macOS 上下行不會爆，但客戶端收不到截斷佔位，`sawTruncation` 那條斷言照樣紅。
    */
   it('參數 5000 層：下行不斷，客戶端收到這一輪失敗；日誌裡這一輪的 turn/failed 是 NESTING_TOO_DEEP，整份日誌沒有 RangeError', async () => {
     const result = await written(5000);
     expect(result.downlink).toBe('finished');
     expect(result.seen?.status).toBe('failed');
+    // 客戶端真的收到截斷過的那顆（不是「事件沒送」也不是「本來就沒超」）；拿掉截斷，這一條在 macOS 也紅。
+    expect(result.seen?.sawTruncation).toBe(true);
     expect(result.seen?.error).toContain('日誌收不下');
+    expect(result.seen?.error).toContain('1200');
+    expect(result.seen?.error).toContain('600');
     expect(result.failed).toHaveLength(1);
     expect(result.failed[0]!.code).toBe('NESTING_TOO_DEEP');
     expect(result.failed[0]!.message).toContain('日誌收不下');
