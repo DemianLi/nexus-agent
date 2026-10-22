@@ -2102,6 +2102,9 @@ pnpm --filter @nexus/harness run cli -- --dump-config-schema > nexus-config.sche
   退出碼就是 1**，即使文件本身照樣可用。退出碼回答的是「這份文件能不能取代原本的驗證」：`partial` 的那幾列，
   文件比實際的驗證寬，通過它不代表啟動時一定過。出貨的清單目前就有這幾列（`live-model`、`thread-title`、`present`），
   所以不帶任何 patch 跑一次退出碼也是 1。
+  `.regex()` 也算：JSON Schema 的 `pattern` 以 Unicode 語意比對，serve 用的原生 `RegExp` 不是，`.`、`\uD83D`、`i`／`s` 旗標這類寫法
+  兩邊可能判得不一樣。確定可攜的（ASCII 字元類、有界量詞、錨點等）照樣寫成 `pattern`；其餘標成 `partial`，**那條 `pattern` 不會寫進 schema**，
+  不給你一個看起來能驗、實際判得不一樣的約束。
 - **沒有 `Config` 的列是 `absent`**：欄位未知，不是禁止設定，不算不完整。
 - **指到檔案的列（`file:`）先過私有檔檢查**：別人寫得動的模組不會被 import，那一列標成 `failed`。
 - 根上的 `x-nexus` 註記帶 `complete`、`entries`（每一列的狀態、`configRef` 與轉不出來的位置）、`diagnostics`、`patchSchema`。

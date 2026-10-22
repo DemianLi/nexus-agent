@@ -133,4 +133,67 @@ describe('configToJsonSchema', () => {
     expect(result.status).toBe('partial');
     expect(result.losses.filter((loss) => loss.kind === 'refine')).toHaveLength(1);
   });
+
+  describe('pattern 的可攜檢查（#1560 N0043）', () => {
+    const one = (regex: RegExp) =>
+      configToJsonSchema(z.strictObject({ a: z.string().regex(regex) }));
+    const patternOf = (result: ReturnType<typeof configToJsonSchema>, key = 'a'): unknown =>
+      ((result.schema?.['properties'] as Record<string, Record<string, unknown>> | undefined)?.[
+        key
+      ] ?? {})['pattern'];
+
+    it('不可攜的（`.` 在兩種語意下吃的字元不同）：partial、記一筆 pattern、schema 不帶那條 pattern', () => {
+      const result = one(/^.$/);
+      expect(result.status).toBe('partial');
+      expect(result.losses).toEqual([{ kind: 'pattern', path: ['a'] }]);
+      expect(result.schema).toBeDefined();
+      expect(patternOf(result)).toBeUndefined();
+    });
+
+    it('可攜的（ASCII 字元類、有界量詞、錨點）：complete，pattern 原樣保留——mcp 的 serverName 就是這一種', () => {
+      const result = one(/^[A-Za-z0-9_-]{1,32}$/);
+      expect(result.status).toBe('complete');
+      expect(result.losses).toEqual([]);
+      expect(patternOf(result)).toBe('^[A-Za-z0-9_-]{1,32}$');
+    });
+
+    it('旗標只收空或 u：`i` 不可攜，`u` 直接可攜', () => {
+      expect(one(/^a$/i).status).toBe('partial');
+      expect(patternOf(one(/^a$/i))).toBeUndefined();
+      const unicode = one(/^.$/u);
+      expect(unicode.status).toBe('complete');
+      expect(patternOf(unicode)).toBe('^.$');
+    });
+
+    it('同一個欄位兩條 regex：只拿掉不可攜的那條，可攜的留在 allOf', () => {
+      const result = configToJsonSchema(
+        z.strictObject({
+          a: z
+            .string()
+            .regex(/^.$/)
+            .regex(/^[a-z]+$/),
+        }),
+      );
+      expect(result.status).toBe('partial');
+      expect(result.losses).toEqual([{ kind: 'pattern', path: ['a'] }]);
+      const a = (result.schema?.['properties'] as Record<string, Record<string, unknown>>)['a'];
+      expect(a?.['allOf']).toEqual([{ pattern: '^[a-z]+$' }]);
+    });
+
+    it('藏在 optional／default／陣列元素裡的也找得到，路徑照既有規則', () => {
+      const result = configToJsonSchema(
+        z.strictObject({
+          a: z.string().regex(/^.$/).optional(),
+          b: z.string().regex(/^.$/).default('x'),
+          c: z.array(z.string().regex(/^.$/)),
+        }),
+      );
+      expect(result.losses).toEqual([
+        { kind: 'pattern', path: ['a'] },
+        { kind: 'pattern', path: ['b'] },
+        { kind: 'pattern', path: ['c', '[]'] },
+      ]);
+      expect(JSON.stringify(result.schema)).not.toContain('"pattern"');
+    });
+  });
 });
