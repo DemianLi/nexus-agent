@@ -310,6 +310,11 @@ export interface Conversation {
   readonly ratings: ReadonlyMap<string, WireFeedbackItem>;
   /** 讀回評分失敗了（dsh 的 `error.load`）。下一次滑過或按下去會再試。 */
   readonly ratingsLoadFailed: boolean;
+  /**
+   * 這台伺服器不收評分（`not_supported`，[#1849](https://github.com/DemianLi/nexus-agent/issues/1849)）：讚踩停用、講原因，按下去不開對話框。
+   * 重連之後重讀，讀得到就恢復。評語（只打 `/feedback`）不受影響。
+   */
+  readonly ratingsUnsupported: boolean;
   /** 讀回這條 thread 的評分，讀過就不再讀。畫面掛在讚踩的第一次滑過或聚焦上。 */
   seedRatings(): void;
   readonly feedbackDialog?: FeedbackDialogState;
@@ -1083,6 +1088,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const rate = useCallback(
     async (messageId: string, rating: WireFeedbackRating) => {
       const loaded = await ratingsController.ensure();
+      // 伺服器不收評分（#1849）：不開對話框，免得填完送出才報錯。畫面那側已經停用了，這裡是保險（滑過與按下是同一下的觸控）。
+      if (ratingsController.view.status === 'unsupported') return;
       if (!loaded.ok || ratingsController.view.items.get(messageId)?.rating !== rating) {
         setFeedbackDialog({ target: { kind: 'reply', messageId, rating }, submitting: false });
         return;
@@ -1180,6 +1187,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     cancel,
     ratings: ratingsView.items,
     ratingsLoadFailed: ratingsView.status === 'failed',
+    ratingsUnsupported: ratingsView.status === 'unsupported',
     seedRatings,
     rate,
     submitFeedback,
