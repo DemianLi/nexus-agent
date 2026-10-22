@@ -23,6 +23,9 @@ import {
   withoutAssistantName,
   withShippedRequestBody,
   withStreamIdleTimeout,
+  EMPTY_TOOL_RESULT_TEXT,
+  fillEmptyToolContent,
+  withEmptyToolContent,
 } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
 import { liveModelConfigForModel, liveModelConfigSchema } from './settings/live-model.js';
@@ -1556,12 +1559,128 @@ describe('助手訊息不送 name（#1392）', () => {
 });
 
 /**
+ * **空的工具結果補上 `(no output)`**（[#1562](https://github.com/DemianLi/nexus-agent/issues/1562)，照 dsh `llm-pi-ai/src/context.ts:31-47`）。
+ *
+ * MCP 工具可以回空的 `content` 陣列，`@langchain/openai` 原樣送出（`""` 或 `[]`）。只換「沒有內容」的工具訊息，其餘一律不碰。
+ * 接線（真的 `runServe --live`＋夾具的 `empty_result`）在 `live-model-attribution.test.ts`。
+ */
+describe('fillEmptyToolContent：空的工具結果補上 (no output)（#1562）', () => {
+  it('字面是 dsh 的那幾個字', () => {
+    expect(EMPTY_TOOL_RESULT_TEXT).toBe('(no output)');
+  });
+
+  it.each([
+    ['空字串', ''],
+    ['空陣列', []],
+    ['文字區塊的 text 串起來是空字串', [{ type: 'text', text: '' }]],
+    [
+      '好幾個空的文字區塊',
+      [
+        { type: 'text', text: '' },
+        { type: 'text', text: '' },
+      ],
+    ],
+    ['null', null],
+  ])('換成 (no output)，tool_call_id 與其他欄位不變：%s', (_label, content) => {
+    const messages = [
+      { role: 'user', content: '嗨' },
+      { role: 'tool', content, tool_call_id: 'call-1', name: 'noop' },
+    ];
+    expect(fillEmptyToolContent(messages)).toEqual([
+      { role: 'user', content: '嗨' },
+      { role: 'tool', content: '(no output)', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+  });
+
+  it('缺席的 content 也補（沒有這個鍵）', () => {
+    expect(fillEmptyToolContent([{ role: 'tool', tool_call_id: 'call-1' }])).toEqual([
+      { role: 'tool', tool_call_id: 'call-1', content: '(no output)' },
+    ]);
+  });
+
+  it('不動的：有字的結果、只有空白的結果、帶圖的陣列、別的角色的空內容——一則都沒換時回原本那個陣列', () => {
+    const messages = [
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1' },
+      { role: 'tool', content: [{ type: 'text', text: '好' }], tool_call_id: 'call-2' },
+      // 只有空白的：dsh 是 `content || '(no output)'`，空白字串是真值，照原樣送（跟助手訊息 #592 的判準不同）。
+      { role: 'tool', content: '  ', tool_call_id: 'call-4' },
+      { role: 'tool', content: ' \n\t ', tool_call_id: 'call-5' },
+      { role: 'tool', content: [{ type: 'text', text: ' ' }], tool_call_id: 'call-6' },
+      {
+        role: 'tool',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'text', text: ' ' },
+        ],
+        tool_call_id: 'call-7',
+      },
+      // 空的文字區塊加一段圖：有一段不是文字就算有內容。
+      {
+        role: 'tool',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'image_url', image_url: { url: 'x' } },
+        ],
+        tool_call_id: 'call-8',
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'image_url', image_url: { url: 'x' } }],
+        tool_call_id: 'call-3',
+      },
+      { role: 'assistant', content: [] },
+      { role: 'user', content: '' },
+      { role: 'system', content: '' },
+      'not-an-object',
+      null,
+    ];
+    expect(fillEmptyToolContent(messages)).toBe(messages);
+  });
+
+  it('同一串裡只換空的那一則，其餘原樣、順序不變', () => {
+    const kept = { role: 'tool', content: '有字', tool_call_id: 'call-1' };
+    const out = fillEmptyToolContent([kept, { role: 'tool', content: [], tool_call_id: 'call-2' }]);
+    expect(out[0]).toBe(kept);
+    expect(out[1]).toEqual({ role: 'tool', content: '(no output)', tool_call_id: 'call-2' });
+  });
+
+  it('withEmptyToolContent：/chat/completions 的 POST 換掉；沒有空的就是同一個 init 物件；別的路徑與 GET 不碰', async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    const body = JSON.stringify({
+      messages: [{ role: 'tool', content: '', tool_call_id: 'call-1' }],
+    });
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', { method: 'POST', body });
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      messages: [{ role: 'tool', content: '(no output)', tool_call_id: 'call-1' }],
+    });
+
+    const clean = {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'tool', content: '好', tool_call_id: 'c' }] }),
+    };
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', clean);
+    expect(calls[1]!.init).toBe(clean);
+
+    const other = { method: 'POST', body };
+    await withEmptyToolContent(base)('http://h/v1/embeddings', other);
+    expect(calls[2]!.init).toBe(other);
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', { method: 'GET' });
+    expect(calls[3]!.init).toEqual({ method: 'GET' });
+  });
+});
+
+/**
  * **夾具與出貨共用的那一組 body 改寫**（[#1398](https://github.com/DemianLi/nexus-agent/issues/1398)）。
  *
  * `createLiveModel` 與 `log-derived-history.fixture.ts` 的 `model()` 都用 `withShippedRequestBody`，所以夾具量到的是出貨時線上的
- * 形狀。這裡釘住「這一組裡有哪兩格」：少了任何一格，下面那條就紅（兩格各自的細節在上面兩個 describe）。
+ * 形狀。這裡釘住「這一組裡有哪三格」：少了任何一格，下面那條就紅（三格各自的細節在上面三個 describe）。
  *
  * 突變（#1398 實測）：函式裡拿掉 `withEmptyAssistantContent` → 紅（空內容還是 `[]`）；拿掉 `withoutAssistantName` → 紅（`name` 還在）。
+ * #1562 加的第三格：拿掉 `withEmptyToolContent` → 紅（空的工具結果還是空的）。
  */
 describe('夾具與出貨共用的 body 改寫（#1398）', () => {
   const call = { id: 'call-1', type: 'function', function: { name: 'echo', arguments: '{}' } };
@@ -1575,7 +1694,7 @@ describe('夾具與出貨共用的 body 改寫（#1398）', () => {
     return { calls, base };
   }
 
-  it('同一個請求裡：空的助手內容換成 null、助手訊息的 name 拿掉，其餘原樣', async () => {
+  it('同一個請求裡：空的助手內容換成 null、空的工具結果補 (no output)、助手訊息的 name 拿掉，其餘原樣', async () => {
     const { calls, base } = recording();
     const body = JSON.stringify({
       model: 'm',
@@ -1583,6 +1702,8 @@ describe('夾具與出貨共用的 body 改寫（#1398）', () => {
         { role: 'user', content: '嗨' },
         { role: 'assistant', name: 'model', content: [], tool_calls: [call] },
         { role: 'tool', content: '結果', name: 'echo', tool_call_id: 'call-1' },
+        { role: 'assistant', name: 'model', content: [], tool_calls: [{ ...call, id: 'call-2' }] },
+        { role: 'tool', content: [], tool_call_id: 'call-2' },
         { role: 'assistant', name: 'model', content: '好。' },
       ],
     });
@@ -1595,6 +1716,8 @@ describe('夾具與出貨共用的 body 改寫（#1398）', () => {
         { role: 'assistant', content: null, tool_calls: [call] },
         // 工具訊息的 `name` 不是這一組的事（只動 `role: assistant`）。
         { role: 'tool', content: '結果', name: 'echo', tool_call_id: 'call-1' },
+        { role: 'assistant', content: null, tool_calls: [{ ...call, id: 'call-2' }] },
+        { role: 'tool', content: '(no output)', tool_call_id: 'call-2' },
         { role: 'assistant', content: '好。' },
       ],
     });
