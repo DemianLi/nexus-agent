@@ -51,10 +51,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   App,
-  connectionStall,
-  HALTED_PLACEHOLDER,
   inputPlaceholder,
-  REFUSED_PLACEHOLDER,
   RESUMED_THREAD_NOTICE,
   STOP_QUESTIONS_LABEL,
   SWITCHED_THREAD_NOTICE,
@@ -65,6 +62,7 @@ import {
   CLEAR_SEARCH_LABEL,
   UNTITLED_THREAD_LABEL,
 } from '@/components/sidebar/thread-list';
+import { connectionStall, HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/lib/connection-stall';
 import { ABORTED_BEFORE_DISPATCH_CODE, STOPPED_QUESTION_TEXT } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
@@ -4725,6 +4723,73 @@ describe('背景子代理的輸入框接線（#869）', () => {
     fake.downlink.push(fake.opened[0]!, [statusFrame([])]);
     await waitFor(() => expect(within(card).getByText('已收線')).toBeTruthy());
     expect((screen.getByLabelText('對背景子代理說話') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  /**
+   * 第一次開線吐完委派卡與狀態快照就收掉（一般的斷線），之後每次重開都拋 `reopen()` 給的錯。畫面留著那張委派卡（重連失敗不清畫面），
+   * 展開它，讀子代理面板的灰字（#1876）。
+   */
+  async function panelAfterReopenFails(reopen: () => Error): Promise<HTMLInputElement> {
+    seq = 0;
+    const fake = fakeClient([]);
+    const frames = delegated([{ runId: 'bg-1', status: 'running' }]);
+    let calls = 0;
+    const openEvents: WireClient['openEvents'] = async () => {
+      calls += 1;
+      if (calls === 1) {
+        return (async function* () {
+          yield* frames;
+        })();
+      }
+      throw reopen();
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    render(<App client={{ ...fake.client, openEvents }} />);
+    const card = await screen.findByTestId('tool-entry');
+    await waitFor(() => expect(calls).toBeGreaterThanOrEqual(2), { timeout: 5_000 });
+    fireEvent.click(within(card).getAllByRole('button')[0]!);
+    return screen.getByLabelText('對背景子代理說話') as HTMLInputElement;
+  }
+
+  const tooDeep = () => {
+    const serverMessage = '這條 thread 建不起來：日誌第 3 顆事件巢狀 3000 層，超過上限 600';
+    const body = JSON.stringify({
+      type: 'error',
+      id: null,
+      error: THREAD_HISTORY_TOO_DEEP,
+      message: serverMessage,
+    });
+    return new WireRejectedError(THREAD_HISTORY_TOO_DEEP, serverMessage, `下行被拒：${body}`);
+  };
+
+  it('重連時伺服器送來看不懂的資料（#1876）：子代理面板跟主送出框講停住那一句', async () => {
+    const input = await panelAfterReopenFails(
+      () => new WireProtocolError('params', '下行事件的 params 必須是物件'),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_PROTOCOL_ERROR_TEXT),
+    );
+    expect(input.placeholder).toBe(HALTED_PLACEHOLDER);
+  });
+
+  it('重連時歷史太深被拒（#1876）：子代理面板講打不開那一句', async () => {
+    const input = await panelAfterReopenFails(tooDeep);
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_HISTORY_TOO_DEEP_TEXT),
+    );
+    expect(input.placeholder).toBe(REFUSED_PLACEHOLDER);
+  });
+
+  it('重連時 thread 數滿了（#1876）：背景還在重試，子代理面板照舊講連線中', async () => {
+    const input = await panelAfterReopenFails(() => {
+      const message = 'thread 數已到上限 2／2；重啟 serve 才會釋放';
+      const body = JSON.stringify({ type: 'error', id: null, error: THREAD_AT_CAPACITY, message });
+      return new WireRejectedError(THREAD_AT_CAPACITY, message, `下行被拒：${body}`);
+    });
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain(THREAD_AT_CAPACITY_TEXT),
+    );
+    expect(input.placeholder).toBe('連線中…');
   });
 
   it('用量鈕的「看明細」打開成本分頁：主對話讀總帳、背景子代理各讀自己那份（#1032），不經委派卡的展開', async () => {

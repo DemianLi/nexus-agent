@@ -39,6 +39,8 @@ import type { ConversationEntry, WireClient } from '@nexus/wire';
 import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { disconnectedPlaceholder } from '@/lib/connection-stall';
+import type { ConnectionStall } from '@/lib/connection-stall';
 import {
   foldSubagentHistory,
   SUBAGENT_HISTORY_MAX_MESSAGES,
@@ -68,6 +70,8 @@ export type SubagentHistoryOutcome =
 
 export interface SubagentControl {
   readonly connected: boolean;
+  /** 沒連上、也不會自己接回的那兩種（`connectionStall`，#1876）：面板的灰字跟主對話送出框講同一句。 */
+  readonly stall?: ConnectionStall | undefined;
   /** 單則項目怎麼畫（人話、回覆、工具卡）：跟主對話同一套，由外面給。 */
   readonly renderEntry: (entry: ConversationEntry) => ReactNode;
   history(runId: string): Promise<SubagentHistoryOutcome>;
@@ -100,12 +104,15 @@ export function useSubagentControl({
   threadId,
   status,
   connected,
+  stall,
   renderEntry,
 }: {
   readonly client: WireClient;
   readonly threadId: string;
   readonly status: SubagentStatus;
   readonly connected: boolean;
+  /** 必填：漏傳的話面板在停住、被拒時又會講「連線中…」（#1876）。 */
+  readonly stall: ConnectionStall | undefined;
   readonly renderEntry: (entry: ConversationEntry) => ReactNode;
 }): SubagentControl {
   const [echoes, setEchoes] = useState<{
@@ -179,6 +186,7 @@ export function useSubagentControl({
   return useMemo(
     () => ({
       connected,
+      stall,
       renderEntry,
       history,
       stateOf: (runId) => (goneRuns.has(runId) ? 'closed' : subagentRunState(status, runId)),
@@ -186,7 +194,7 @@ export function useSubagentControl({
       send,
       interrupt,
     }),
-    [connected, renderEntry, history, status, goneRuns, current, send, interrupt],
+    [connected, stall, renderEntry, history, status, goneRuns, current, send, interrupt],
   );
 }
 
@@ -270,7 +278,9 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
   }, [state]);
 
   const sendable = canSendToSubagent(state, control.connected);
-  const placeholder = control.connected ? subagentPlaceholder(state) : '連線中…';
+  const placeholder = control.connected
+    ? subagentPlaceholder(state)
+    : disconnectedPlaceholder(control.stall);
   // 歷史已有的人話就不再畫回聲（重複）；還沒有的（送出到寫進日誌之間）留著。
   const echoes =
     history.conversation === undefined
