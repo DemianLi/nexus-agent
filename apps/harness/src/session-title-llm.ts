@@ -47,6 +47,7 @@ import { AsyncResource } from 'node:async_hooks';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { retryModelCall } from '@nexus/core';
+import { deadline } from '@nexus/timeout';
 import type {
   SessionEvent,
   SessionLog,
@@ -168,30 +169,38 @@ export async function generateThreadTitle(
   const system = titleSystemPrompt(request.config);
   const messages: SessionTitleLlmMessage[] = [{ role: 'user', content: framed }];
   const messageSeqs = request.messages.map((message) => message.seq);
-  const deadline = AbortSignal.any([request.signal, AbortSignal.timeout(request.config.timeoutMs)]);
-  request.log.append('session/title-llm-request', {
-    titleProvider: THREAD_TITLE_LLM_PLUGIN_NAME,
-    messageSeqs,
-    route: request.route,
-    system,
-    messages,
-    maxTokens: request.config.maxOutputTokens,
-  });
-  deadline.throwIfAborted();
-  const reply = await request.model.invoke([new SystemMessage(system), new HumanMessage(framed)], {
-    signal: deadline,
-  });
-  deadline.throwIfAborted();
-  const finish = (reply.response_metadata as { finish_reason?: unknown } | undefined)
-    ?.finish_reason;
-  if (finish !== 'stop') {
-    throw new Error(`標題模型沒有正常收尾：finish_reason 是 ${String(finish)}`);
+  // 整段時限與呼叫端的中止融合成一顆 signal（`@nexus/timeout`，照 dsh）；結束時 dispose，計時器不留到到期。
+  const bound = deadline(request.signal, request.config.timeoutMs, 'TITLE_LLM_TIMEOUT');
+  try {
+    request.log.append('session/title-llm-request', {
+      titleProvider: THREAD_TITLE_LLM_PLUGIN_NAME,
+      messageSeqs,
+      route: request.route,
+      system,
+      messages,
+      maxTokens: request.config.maxOutputTokens,
+    });
+    bound.signal.throwIfAborted();
+    const reply = await request.model.invoke(
+      [new SystemMessage(system), new HumanMessage(framed)],
+      {
+        signal: bound.signal,
+      },
+    );
+    bound.signal.throwIfAborted();
+    const finish = (reply.response_metadata as { finish_reason?: unknown } | undefined)
+      ?.finish_reason;
+    if (finish !== 'stop') {
+      throw new Error(`標題模型沒有正常收尾：finish_reason 是 ${String(finish)}`);
+    }
+    if ((reply.tool_calls?.length ?? 0) > 0) throw new Error('標題模型要求呼叫工具，只收文字');
+    // `text` 只串文字區塊、推理區塊不算，同 dsh 的 `BlockAssembler` 只取 `text`。
+    const title = normalizeThreadTitle(reply.text, request.maxTitleBytes);
+    if (title === '') throw new Error('標題模型沒有產生文字');
+    return { title, messageSeqs };
+  } finally {
+    bound[Symbol.dispose]();
   }
-  if ((reply.tool_calls?.length ?? 0) > 0) throw new Error('標題模型要求呼叫工具，只收文字');
-  // `text` 只串文字區塊、推理區塊不算，同 dsh 的 `BlockAssembler` 只取 `text`。
-  const title = normalizeThreadTitle(reply.text, request.maxTitleBytes);
-  if (title === '') throw new Error('標題模型沒有產生文字');
-  return { title, messageSeqs };
 }
 
 /** {@link createSessionTitleLlm} 要的東西：一個組裝一份。 */

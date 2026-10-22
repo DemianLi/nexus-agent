@@ -56,6 +56,7 @@ import type {
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
 import { SESSION_TELEMETRY_SERVICE } from '@nexus/core';
+import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 import { SeverityNumber } from '@opentelemetry/api-logs';
 import type { AnyValue, Logger } from '@opentelemetry/api-logs';
 import { OTLPLogExporter } from '@opentelemetry/exporter-logs-otlp-http';
@@ -90,9 +91,6 @@ export const DEFAULT_TELEMETRY_MODE: TelemetryMode = 'disabled';
 
 /** SDK 完整關機流程的外層預設寬限。 */
 export const DEFAULT_SHUTDOWN_TIMEOUT_MILLIS = 3_000;
-
-// Node 會把超過這個值的計時器延遲夾成一毫秒。這是執行期的協定上限，不是部署預設值。
-const MAX_TIMER_DELAY_MILLIS = 2_147_483_647;
 
 /** seam 的三級告警詞彙映到 OTel 的 severity。 */
 const SEVERITY: Record<
@@ -213,9 +211,9 @@ function assertBatchSize(size: number | undefined): void {
 }
 
 function assertShutdownTimeout(millis: number): number {
-  if (!Number.isFinite(millis) || millis <= 0 || millis > MAX_TIMER_DELAY_MILLIS) {
+  if (!Number.isFinite(millis) || millis <= 0 || millis > MAX_TIMER_DELAY_MS) {
     fail(
-      `shutdownTimeoutMillis 必須是大於 0 且不超過 ${MAX_TIMER_DELAY_MILLIS} 的有限數，` +
+      `shutdownTimeoutMillis 必須是大於 0 且不超過 ${MAX_TIMER_DELAY_MS} 的有限數，` +
         `拿到的是 ${String(millis)}`,
     );
   }

@@ -33,12 +33,13 @@
 import { z } from 'zod';
 
 import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
 /** 這一列在訊息裡叫什麼。 */
 export const THREAD_TITLE_LLM_PLUGIN_NAME = 'thread-title-llm';
 
 /** 逾時的上限：Node 計時器收得住的最大延遲，同 dsh 的 `MAX_TIMER_DELAY_MS`。 */
-export const MAX_THREAD_TITLE_LLM_TIMEOUT_MS = 2_147_483_647;
+export const MAX_THREAD_TITLE_LLM_TIMEOUT_MS = MAX_TIMER_DELAY_MS;
 
 /**
  * 五個數字，照 dsh `session-title-llm` 的 `Config`。dsh 全部必填、沒有預設值；我們的預設值就是 dsh `base` 那一列寫的值，

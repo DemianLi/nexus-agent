@@ -92,6 +92,7 @@
     "@nexus/sdk": "workspace:*",
     "@nexus/skills": "workspace:*",
     "@nexus/session": "workspace:*",
+    "@nexus/timeout": "workspace:*",
     "@nexus/tool-result": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@nexus/wire": "workspace:*",

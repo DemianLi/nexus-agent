@@ -17,6 +17,7 @@
 import { z } from 'zod';
 
 import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
 /** 這一列在訊息裡叫什麼。 */
 export const MEMORY_GAUGE_PLUGIN_NAME = 'memory-gauge';
@@ -26,9 +27,9 @@ export const MIN_MEMORY_REPORT_INTERVAL_MS = 1000;
 
 /**
  * 計時器的最大延遲（毫秒）。超過 2³¹−1 時 Node 發 `TimeoutOverflowWarning` 並把間隔改成 1 ms——一個驗得過的設定會讓日誌每毫秒寫一行。
- * 照 dsh `packages/util/timeout/src/index.ts:25` 的 `MAX_TIMER_DELAY_MS`；repo 裡 `live-model.ts`、`thread-title-llm.ts`、`wire-server.ts` 各自定義同一個數字。
+ * 就是 `@nexus/timeout` 的 `MAX_TIMER_DELAY_MS`（照 dsh `packages/util/timeout/src/index.ts:25`）；這個數字在 repo 裡只有那一份。
  */
-export const MAX_MEMORY_REPORT_INTERVAL_MS = 2_147_483_647;
+export const MAX_MEMORY_REPORT_INTERVAL_MS = MAX_TIMER_DELAY_MS;
 
 /** 用量警告門檻的範圍與預設（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)，demian 2026-10-18 拍板 Q2）。 */
 export const MIN_WARN_AT_PERCENT = 1;
