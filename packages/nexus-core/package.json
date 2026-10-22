@@ -36,6 +36,7 @@
     "vitest": "^4.1.11"
   },
   "dependencies": {
+    "@eslint-community/regexpp": "^4.12.2",
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.13",
     "@nexus/brand": "workspace:*",

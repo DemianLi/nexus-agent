@@ -106,6 +106,16 @@ describe('出貨的清單', () => {
     expect(validate([{ id: 'a b', name: '@nexus/plugin-echo' }])).toBe(true);
   });
 
+  it('出貨的列沒有 pattern 這一種不完整（#1560 N0043）', async () => {
+    const dump = await generateConfigSchema(composed());
+    for (const entry of dump['x-nexus'].entries) {
+      expect(
+        entry.losses.filter((loss) => loss.kind === 'pattern'),
+        entry.id,
+      ).toEqual([]);
+    }
+  });
+
   it('停用的列也收：也 import、也標不完整', async () => {
     const root = privateDirectory();
     const dump = await generateConfigSchema(

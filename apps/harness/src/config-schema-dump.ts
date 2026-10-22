@@ -86,6 +86,7 @@ const LOSS_LABEL: Readonly<Record<ConfigSchemaLoss['kind'], string>> = {
   preprocess: '有 preprocess',
   pipe: '有 pipe',
   unrepresentable: '是 JSON Schema 表達不了的型別',
+  pattern: '有 regex，JSON Schema 與原生 RegExp 的語意可能不同，schema 沒有帶那條 pattern',
 };
 
 function describeEntry(entry: ConfigEntry): string {

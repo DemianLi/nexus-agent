@@ -18,6 +18,14 @@
  *
  * `refine` 與 `superRefine` 在 zod 裡是同一種檢查，分不出來，一律叫 `refine`。
  *
+ * ## pattern 的可攜檢查（[#1560](https://github.com/DemianLi/nexus-agent/issues/1560) N0043）
+ *
+ * `.regex()` 在 zod 裡是一顆 `string_format` 檢查，`z.toJSONSchema` 把它的 `source` 原樣寫成 `pattern`。**但同一個 source 在兩邊的
+ * 語意不一樣**：JSON Schema 的 `pattern` 以 Unicode 語意比對，serve 用原生 `RegExp`（沒有 `u` 旗標時以 UTF-16 code unit 比對），
+ * `.`、`\uD83D`、`i`／`s` 旗標一類的寫法兩邊對同一個值可能判得不一樣。所以照 dsh 的 `createPatternCheck`
+ * （`packages/boot/app-boot/src/config-schema/pattern.ts`，`687f282e`）：只有確定可攜的才寫進 schema，其餘標 `pattern` 並**拿掉**那條
+ * `pattern`（不產生會誤導人的約束）。
+ *
  * ## 放在這裡的理由
  *
  * 轉換程式獨立成函式、放在套件裡（dsh 的轉換函式在 app-boot 套件，檢視工具是另一個套件）：命令列的規格表用它，
@@ -27,6 +35,8 @@
  * @module
  */
 
+import { RegExpParser } from '@eslint-community/regexpp';
+import type { AST } from '@eslint-community/regexpp';
 import { z } from 'zod';
 
 /** 一份 JSON Schema 2020-12 文件（或子文件）。這裡不替它定型別：消費者只是把它印出來或交給驗證器。 */
@@ -41,9 +51,10 @@ export type JsonSchemaDocument = Record<string, unknown>;
  * - `preprocess`：輸入端是轉換（`z.preprocess(fn, schema)`）。
  * - `pipe`：其餘的 `.pipe`。
  * - `unrepresentable`：JSON Schema 講不出來的型別（函式、`Date`、`Map`…），或整份轉換就拋了。
+ * - `pattern`：`.regex()` 的正則在 JSON Schema（Unicode 語意）與原生 `RegExp` 之間語意可能不同，輸出的 schema 沒有帶那條 `pattern`。
  */
 export type ConfigSchemaLossKind =
-  'refine' | 'custom' | 'transform' | 'preprocess' | 'pipe' | 'unrepresentable';
+  'refine' | 'custom' | 'transform' | 'preprocess' | 'pipe' | 'unrepresentable' | 'pattern';
 
 /** 一處轉不出來的地方：種類，加上它在設定裡的位置（空陣列即根）。 */
 export interface ConfigSchemaLoss {
@@ -147,6 +158,137 @@ function children(def: Def): readonly (readonly [string | undefined, unknown])[]
   }
 }
 
+function bmpOnly(node: AST.Node): boolean {
+  switch (node.type) {
+    case 'Character':
+      return node.value <= 0xffff && (node.value < 0xd800 || node.value > 0xdfff);
+    case 'CharacterClassRange':
+      return (
+        bmpOnly(node.min) &&
+        bmpOnly(node.max) &&
+        (node.max.value < 0xd800 || node.min.value > 0xdfff)
+      );
+    case 'CharacterClass':
+      return !node.negate && node.elements.every(bmpOnly);
+    case 'CharacterSet':
+      return (
+        (node.kind === 'digit' || node.kind === 'space' || node.kind === 'word') && !node.negate
+      );
+    case 'Quantifier':
+      return bmpOnly(node.element);
+    case 'Assertion':
+      return node.kind === 'start' || node.kind === 'end' || node.kind === 'word';
+    default:
+      return false;
+  }
+}
+
+function broadSet(node: AST.Node): boolean {
+  return (
+    node.type === 'CharacterSet' &&
+    (node.kind === 'any' ||
+      ((node.kind === 'digit' || node.kind === 'space' || node.kind === 'word') && node.negate))
+  );
+}
+
+function portableAlternative(alternative: AST.Alternative): boolean {
+  // 單獨一個沒有錨點的「寬」集合，只問「有沒有一個字元符合」，兩種語意答案一樣。
+  if (alternative.elements.length === 1 && alternative.elements.some(broadSet)) return true;
+  let broadRepetitions = 0;
+  const wordAssertion = alternative.elements.some(
+    (element) => element.type === 'Assertion' && element.kind === 'word',
+  );
+  return alternative.elements.every((element) => {
+    if (
+      element.type === 'Quantifier' &&
+      element.max === Infinity &&
+      element.min <= 1 &&
+      broadSet(element.element)
+    ) {
+      // 字界斷言與多組「寬」的重複，都看得到代理對的中點。
+      return !wordAssertion && ++broadRepetitions === 1;
+    }
+    return bmpOnly(element);
+  });
+}
+
+function signature(pattern: AST.Pattern): string {
+  const incidental = new Set(['parent', 'start', 'end', 'raw', 'references', 'resolved']);
+  return JSON.stringify(pattern, (key: string, value: unknown) =>
+    incidental.has(key) ? undefined : value,
+  );
+}
+
+const patternParser = new RegExpParser();
+
+/**
+ * 這條正則寫成 JSON Schema 的 `pattern` 之後，是不是仍然和原生 `RegExp` 判得一樣。逐行照 dsh 的 `createPatternCheck`：
+ * 用 regexpp 各以 Unicode 與非 Unicode 模式解析，兩棵 AST 要一樣，而且每個選項只能有基本多文種平面的字元、非否定的字元類、
+ * `\d\s\w`、`^$\b`，「寬」的集合（`.`、`\D` 等）最多一組無上限重複。旗標只收空或 `u`；語法錯就當不可攜。
+ *
+ * dsh 的版本是 async（動態 import regexpp）；這裡 `configToJsonSchema` 是同步的，所以頂層 import，其餘不變。
+ *
+ * @param source - `RegExp.source`。
+ * @param flags - `RegExp.flags`。
+ * @returns 可攜為 `true`。
+ */
+export function portablePattern(source: string, flags = ''): boolean {
+  if (flags !== '' && flags !== 'u') return false;
+  try {
+    const unicode = patternParser.parsePattern(source, 0, source.length, { unicode: true });
+    if (flags === 'u') return true;
+    const native = patternParser.parsePattern(source, 0, source.length, { unicode: false });
+    return (
+      signature(native) === signature(unicode) && native.alternatives.every(portableAlternative)
+    );
+  } catch (error) {
+    // 不合 Unicode 語法的寫不成標準的 pattern。
+    if (error instanceof SyntaxError) return false;
+    throw error;
+  }
+}
+
+/** 這個節點上 `.regex()` 帶的、不可攜的正則。 */
+function nonPortableRegexes(schema: unknown): RegExp[] {
+  const found: RegExp[] = [];
+  for (const check of defOf(schema).checks ?? []) {
+    const def = check._zod.def as { check: string; format?: unknown; pattern?: unknown };
+    if (
+      def.check === 'string_format' &&
+      def.format === 'regex' &&
+      def.pattern instanceof RegExp &&
+      !portablePattern(def.pattern.source, def.pattern.flags)
+    ) {
+      found.push(def.pattern);
+    }
+  }
+  return found;
+}
+
+/** `z.toJSONSchema` 的 `override`：把不可攜的那幾條 `pattern` 從這個節點的輸出拿掉（單一條在 `pattern`，多條在 `allOf`）。 */
+function dropNonPortablePatterns(ctx: {
+  readonly zodSchema: unknown;
+  readonly jsonSchema: Record<string, unknown>;
+}): void {
+  const sources = new Set(nonPortableRegexes(ctx.zodSchema).map((regex) => regex.source));
+  if (sources.size === 0) return;
+  const json = ctx.jsonSchema;
+  if (typeof json['pattern'] === 'string' && sources.has(json['pattern'])) delete json['pattern'];
+  const allOf = json['allOf'];
+  if (Array.isArray(allOf)) {
+    const kept = allOf.filter(
+      (entry: unknown) =>
+        !(
+          typeof entry === 'object' &&
+          entry !== null &&
+          sources.has((entry as { pattern?: unknown }).pattern as string)
+        ),
+    );
+    if (kept.length === 0) delete json['allOf'];
+    else json['allOf'] = kept;
+  }
+}
+
 function findLosses(root: z.ZodType): ConfigSchemaLoss[] {
   const losses: ConfigSchemaLoss[] = [];
   // 同一個節點走兩次（`lazy` 的自我參照、共用的子 schema）只報一次，也不會無窮遞迴。
@@ -158,6 +300,7 @@ function findLosses(root: z.ZodType): ConfigSchemaLoss[] {
     for (const check of def.checks ?? []) {
       if (check._zod.def.check === 'custom') losses.push({ kind: 'refine', path });
     }
+    if (nonPortableRegexes(schema).length > 0) losses.push({ kind: 'pattern', path });
     if (def.type === 'custom') losses.push({ kind: 'custom', path });
     else if (UNREPRESENTABLE_TYPES.has(def.type)) losses.push({ kind: 'unrepresentable', path });
     else if (def.type === 'transform' && parent !== 'pipe')
@@ -198,6 +341,8 @@ export function configToJsonSchema(config: z.ZodType | undefined): ConfigSchemaR
       io: 'input',
       // 轉不出來的當成「什麼都收」，配上上面的 `losses` 講清楚；不讓 zod 為了一處就整份丟掉。
       unrepresentable: 'any',
+      // 不可攜的 `pattern` 不寫進去（`findLosses` 已記一筆 `pattern`）：寫了就是一條兩邊判得不一樣的約束。
+      override: dropNonPortablePatterns,
     }) as JsonSchemaDocument;
   } catch {
     return {
