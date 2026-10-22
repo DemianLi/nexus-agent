@@ -6,15 +6,7 @@
  * 對的錯誤型別；而 serve 記「這一列掉了」只認 `AssemblyDropError`，斷言因此看**錯誤型別與紀錄**，不只比訊息。
  */
 
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -31,6 +23,7 @@ import type { JournalBody, JournalRecord } from './plugin-journal.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEvents, sessionsUnder } from './session-files.fixture.js';
 import { StartupError } from './startup-audit.js';
 
 const temporary: string[] = [];
@@ -211,16 +204,12 @@ async function subagentEvents(
   thread: string,
 ): Promise<{ type: string; data: unknown }[]> {
   for (let tries = 0; tries < 400; tries += 1) {
-    const [project] = readdirSync(sessionLog);
-    const directory = join(sessionLog, project ?? '');
-    const body = readdirSync(directory).find(
-      (name) => name.startsWith(`${thread}%2fbg-`) && name.endsWith('.jsonl'),
+    // 子代理那一份的 id 是 `<thread>/<runId>`，背景派的 runId 以 `bg-` 起頭；經 `session-files.fixture.ts` 找（#1868）。
+    const subagent = (await sessionsUnder(sessionLog)).find((session) =>
+      session.id.startsWith(`${thread}/bg-`),
     );
-    if (body !== undefined) {
-      const events = readFileSync(join(directory, body), 'utf8')
-        .split('\n')
-        .filter((line) => line.trim() !== '')
-        .map((line) => JSON.parse(line) as { type: string; data: unknown });
+    if (subagent !== undefined) {
+      const { events } = await sessionEvents(subagent);
       if (events.some((event) => event.type === 'turn/end')) return events;
     }
     await new Promise((resolve) => setTimeout(resolve, 25));

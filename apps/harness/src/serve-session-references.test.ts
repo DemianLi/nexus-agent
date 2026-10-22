@@ -20,7 +20,7 @@ import { parseSessionReferenceText } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { assemblyWitness, resetAssemblyWitness } from './assembly-witness.fixture.js';
 import { foldTurn, serveClient } from './fixtures.js';
-import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
+import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -160,7 +160,8 @@ describe('GET /threads/:id/session-references', () => {
 
     // 把 alpha 的 header 改成上一版寫的樣子：50 是加性的，本文照上一版讀得懂。
     const directory = join(root, projectKey(process.cwd()));
-    const headerPath = join(directory, 'alpha.header.json');
+    // 改的是版號，直接寫檔（#1868 裁決 Q1）。
+    const headerPath = sessionPathsIn(directory, 'alpha').header;
     const older = SESSION_LOG_FORMAT_VERSION - 1;
     const onDisk = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
     await writeFile(headerPath, JSON.stringify({ ...onDisk, version: older }));

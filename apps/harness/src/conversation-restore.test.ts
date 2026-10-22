@@ -9,7 +9,7 @@
  * 對不對。
  */
 
-import { appendFile, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -35,10 +35,12 @@ import { runCli } from './cli.js';
 import { seenRequests } from './conversation-restore.fixture.js';
 import { restoreConversation, toolResultAsSeen } from './conversation-restore.js';
 import { toAgentInvocation } from './messages.js';
+import { sessionPathsIn } from './jsonl-session-store.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { foldTurn, serveClient } from './fixtures.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const FIXTURE = fileURLToPath(new URL('./conversation-restore.patch.yml', import.meta.url));
 
@@ -63,23 +65,19 @@ const REMEMBERED = [
   'ai:工具回來了，這條線是通的。',
 ];
 
-async function readLog(path: string): Promise<SessionEvent[]> {
-  return (await readFile(path, 'utf8'))
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
-}
+/** run 目錄裡 root（`cli`）那一份的事件。 */
+const readLog = (runDir: string): Promise<SessionEvent[]> => sessionEventsOf(runDir, 'cli');
 
-/** 接在日誌尾巴上幾顆事件，`seq` 接著排——上一個行程停在那裡的樣子。 */
+/** 在 root 那一份的日誌尾巴接幾顆事件，`seq` 接著排——上一個行程停在那裡的樣子。 */
 async function appendTail(
-  logPath: string,
+  runDir: string,
   events: readonly Pick<SessionEvent, 'type' | 'data'>[],
 ): Promise<void> {
-  const next = (await readLog(logPath)).length;
+  const next = (await readLog(runDir)).length;
   const lines = events.map((event, index) =>
     JSON.stringify({ ...event, seq: next + index, time: 1 }),
   );
-  await appendFile(logPath, `${lines.join('\n')}\n`);
+  await appendFile(sessionPathsIn(runDir, 'cli').log, `${lines.join('\n')}\n`);
 }
 
 describe('CLI 的 --resume', () => {
@@ -147,15 +145,14 @@ describe('CLI 的 --resume', () => {
    */
   it('續接寫一顆 session/resumed，帶這一次的插件清單；空轉的續接不疊', async () => {
     const runDir = await firstRun();
-    const log = join(runDir, 'cli.jsonl');
     const count = async (type: string) =>
-      (await readLog(log)).filter((event) => event.type === type).length;
+      (await readLog(runDir)).filter((event) => event.type === type).length;
 
     // 兩次什麼都沒說的續接：第一次記一顆，第二次內容相同不疊，也沒有多疊一顆 `session/end-seed`。
     await cli(['--resume', runDir], '/exit\n');
     await cli(['--resume', runDir], '/exit\n');
     expect([await count('session/resumed'), await count('session/end-seed')]).toEqual([1, 1]);
-    const resumed = (await readLog(log)).filter((event) => event.type === 'session/resumed');
+    const resumed = (await readLog(runDir)).filter((event) => event.type === 'session/resumed');
     expect(resumed[0]?.ignorable).toBe(true);
     const data = resumed[0]?.data as { plugins: readonly { id?: string }[] };
     expect(data.plugins.map((row) => row.id)).toContain('request-recorder');
@@ -172,13 +169,12 @@ describe('CLI 的 --resume', () => {
    */
   it('核准政策跟著日誌走：記著 never 的日誌，續接之後不被預設的 ask 蓋回去', async () => {
     const runDir = await firstRun();
-    const log = join(runDir, 'cli.jsonl');
     const policies = async () =>
-      (await readLog(log))
+      (await readLog(runDir))
         .filter((event) => event.type === 'approval/policy')
         .map((event) => event.data);
     expect(await policies()).toEqual([{ policy: 'ask' }]);
-    await appendTail(log, [{ type: 'approval/policy', data: { policy: 'never' } }]);
+    await appendTail(runDir, [{ type: 'approval/policy', data: { policy: 'never' } }]);
 
     await cli(['--resume', runDir], '/exit\n');
     await cli(['--resume', runDir], '/exit\n');
@@ -191,7 +187,7 @@ describe('CLI 的 --resume', () => {
    */
   it('上一次停在工具跑到一半：補的是 dsh 那句「結果不明」，不是基座那句', async () => {
     const runDir = await firstRun();
-    await appendTail(join(runDir, 'cli.jsonl'), [
+    await appendTail(runDir, [
       { type: 'turn/start', data: { kind: 'message', text: '再回聲一次' } },
       { type: 'model/start', data: {} },
       {
@@ -239,7 +235,7 @@ describe('CLI 的 --resume', () => {
     await cli(['--session-log', logs], '/exit\n');
     const [entry] = await readdir(logs);
     const runDir = join(logs, entry!);
-    await appendTail(join(runDir, 'cli.jsonl'), [
+    await appendTail(runDir, [
       { type: 'turn/start', data: { kind: 'message', text: '第一句，沒得到回覆' } },
       { type: 'model/start', data: {} },
       { type: 'model/end', data: { outcome, modelCall: 1 } },
@@ -257,7 +253,7 @@ describe('CLI 的 --resume', () => {
 
   it('舊格式（一輪叫過模型卻沒有回覆）：不灌半截，模型從空的開始，講原因', async () => {
     const runDir = await firstRun();
-    await appendTail(join(runDir, 'cli.jsonl'), [
+    await appendTail(runDir, [
       { type: 'turn/start', data: { kind: 'message', text: '舊的一輪' } },
       { type: 'model/start', data: {} },
       { type: 'model/end', data: {} },

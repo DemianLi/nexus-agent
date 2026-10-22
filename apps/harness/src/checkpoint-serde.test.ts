@@ -36,7 +36,7 @@ import {
 } from './checkpoint-serde.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { projectKey } from './jsonl-session-store.js';
+import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { NESTING_TOO_DEEP_CODE } from './live-model.js';
 import { fakeEndpoint, hasTools, liveModelPatch } from './log-derived-history.fixture.js';
 import type { Body, FakeEndpoint, Reply, WireMessage } from './log-derived-history.fixture.js';
@@ -286,7 +286,7 @@ async function rig(
       cleanups.push(() => running.close());
       return running;
     },
-    logFile: (thread) => join(logs, projectKey(process.cwd()), `${thread}.jsonl`),
+    logFile: (thread) => sessionPathsIn(join(logs, projectKey(process.cwd())), thread).log,
   };
 }
 

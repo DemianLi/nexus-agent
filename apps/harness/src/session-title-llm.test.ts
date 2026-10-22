@@ -8,7 +8,7 @@
 
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -34,6 +34,7 @@ import { DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } fro
 import { loadDefaultPlugins } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 import { ensureFallbackTitle, renameThreadTitle } from './session-title.js';
 import {
   createSessionTitleLlm,
@@ -1040,10 +1041,7 @@ describe('產品路徑：serve --live', () => {
 /** CLI 那一次 run 目錄裡的日誌。 */
 async function cliEvents(root: string): Promise<SessionEvent[]> {
   const [runDir] = await readdir(root);
-  return (await readFile(join(root, runDir!, 'cli.jsonl'), 'utf8'))
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+  return sessionEventsOf(join(root, runDir!), 'cli');
 }
 
 describe('產品路徑：CLI --live', () => {

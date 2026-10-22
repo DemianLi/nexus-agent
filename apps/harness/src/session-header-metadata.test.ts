@@ -45,11 +45,12 @@ import { parse as parseYaml } from 'yaml';
 import { runCli } from './cli.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { projectKey } from './jsonl-session-store.js';
+import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
 import type { ConfigEntry } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionHeaderOf } from './session-files.fixture.js';
 import {
   CONFIG_HASH_KEY_FILE,
   CONFIG_HASH_PREFIX,
@@ -341,7 +342,7 @@ describe('CLI：寫上磁碟的 header', () => {
     const patch = writePatch(home, canaryPatch(`https://${CANARY}.invalid/v1`));
 
     const runDir = await cliRun(home, logs, ['--session-log', logs, '--patch', patch]);
-    const raw = await readFile(join(runDir, 'cli.header.json'), 'utf8');
+    const raw = await readFile(sessionPathsIn(runDir, 'cli').header, 'utf8');
     // 量的是交付物：寫上磁碟的那一行原文。
     expect(raw).not.toContain(CANARY);
     expect(raw).not.toContain('canary');
@@ -381,7 +382,7 @@ describe('CLI：寫上磁碟的 header', () => {
       printer: { log: () => undefined, error: () => undefined },
     }).catch(() => undefined);
     const [runDir] = readdirSync(logs);
-    const raw = await readFile(join(logs, runDir!, 'cli.header.json'), 'utf8');
+    const raw = await readFile(sessionPathsIn(join(logs, runDir!), 'cli').header, 'utf8');
     expect(raw).not.toContain(CANARY);
     expect(JSON.parse(raw)).toMatchObject({ modelEntryId: DEFAULT_LIVE_MODEL_ID });
   });
@@ -390,7 +391,8 @@ describe('CLI：寫上磁碟的 header', () => {
     const home = privateDir('nexus-hdr-home-');
     const logs = privateDir('nexus-hdr-logs-');
     const runDir = await cliRun(home, logs, ['--session-log', logs]);
-    const headerPath = join(runDir, 'cli.header.json');
+    // 改的是版號，直接寫檔（#1868 裁決 Q1）。
+    const headerPath = sessionPathsIn(runDir, 'cli').header;
     const written = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
     // 前提：第一次跑真的寫了這幾格。
     expectBuildShape(written);
@@ -440,9 +442,7 @@ describe('CLI：寫上磁碟的 header', () => {
     expect(errors.join('\n')).toContain('todo（@nexus/plugin-todo）設定驗不過');
 
     const [runDir] = readdirSync(logs);
-    const header = JSON.parse(
-      await readFile(join(logs, runDir!, 'cli.header.json'), 'utf8'),
-    ) as Record<string, unknown>;
+    const { header } = await sessionHeaderOf(join(logs, runDir!), 'cli');
     expect(header['plugins']).toContainEqual({
       name: '@nexus/plugin-todo',
       id: 'todo',
@@ -470,9 +470,7 @@ describe('CLI：寫上磁碟的 header', () => {
       printer: { log: () => undefined, error: (line) => errors.push(line) },
     });
     const [runDir] = readdirSync(logs);
-    const header = JSON.parse(
-      await readFile(join(logs, runDir!, 'cli.header.json'), 'utf8'),
-    ) as Record<string, unknown>;
+    const { header } = await sessionHeaderOf(join(logs, runDir!), 'cli');
     // 前提：header 真的寫了，其餘那幾格都在——少的只有雜湊。
     expectBuildShape(header);
     expect(header['plugins']).toEqual(expect.arrayContaining([expect.anything()]));
@@ -538,7 +536,10 @@ describe('serve：寫上磁碟的 header', () => {
     await running.close();
     running = undefined;
 
-    const raw = await readFile(join(root, projectKey(process.cwd()), 'alpha.header.json'), 'utf8');
+    const raw = await readFile(
+      sessionPathsIn(join(root, projectKey(process.cwd())), 'alpha').header,
+      'utf8',
+    );
     expect(raw).not.toContain(CANARY);
     const header = JSON.parse(raw) as Record<string, unknown>;
     expectBuildShape(header);
@@ -577,7 +578,8 @@ describe('serve：寫上磁碟的 header', () => {
     }
 
     await sayOnFreshServer([]);
-    const headerPath = join(root, projectKey(process.cwd()), 'alpha.header.json');
+    // 改的是版號，直接寫檔（#1868 裁決 Q1）。
+    const headerPath = sessionPathsIn(join(root, projectKey(process.cwd())), 'alpha').header;
     const written = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
     // 前提：第一台真的寫了這四格。
     expectBuildShape(written);

@@ -31,6 +31,7 @@ import { PLUGIN_JOURNAL_FILE_NAME } from './plugin-journal.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { findSession, sessionEvents } from './session-files.fixture.js';
 import { THREAD_ORGANIZATION_FILE } from './thread-organization.js';
 
 const probePatch = fileURLToPath(new URL('./home-lock-probe.patch.yml', import.meta.url));
@@ -87,26 +88,15 @@ function tree(root: string): Record<string, { readonly bytes: string; readonly m
   return out;
 }
 
-/** 某個 thread 的會話紀錄（`<threadId>.jsonl`，在 home 底下哪一層不論）最後一筆是什麼事件；檔案不在、尾巴只寫了一半都回 `undefined`。 */
-function lastEventType(root: string, threadId: string): string | undefined {
-  const walk = (dir: string): string | undefined => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        const found = walk(path);
-        if (found !== undefined) return found;
-      } else if (entry.name === `${threadId}.jsonl`) {
-        const lastLine = readFileSync(path, 'utf8').trimEnd().split('\n').at(-1) ?? '';
-        try {
-          return (JSON.parse(lastLine) as { readonly type?: string }).type;
-        } catch {
-          return undefined;
-        }
-      }
-    }
-    return undefined;
-  };
-  return walk(root);
+/**
+ * 某個 thread 的會話紀錄（在 home 底下哪一層不論，經 `session-files.fixture.ts` 找，#1868）最後一筆是什麼事件；
+ * 還沒有、尾巴只寫了一半都回 `undefined`。
+ */
+async function lastEventType(root: string, threadId: string): Promise<string | undefined> {
+  const session = await findSession(root, threadId);
+  if (session === undefined) return undefined;
+  const { events, complete } = await sessionEvents(session);
+  return complete ? events.at(-1)?.type : undefined;
 }
 
 /**
@@ -118,10 +108,10 @@ function lastEventType(root: string, threadId: string): string | undefined {
  */
 async function untilTurnEndIsOnDisk(root: string, threadId: string): Promise<void> {
   const deadline = Date.now() + 5000;
-  while (lastEventType(root, threadId) !== 'turn/end') {
+  while ((await lastEventType(root, threadId)) !== 'turn/end') {
     if (Date.now() > deadline) {
       throw new Error(
-        `第一台的 ${threadId} 紀錄 5 秒內沒寫到 turn/end（最後一筆：${lastEventType(root, threadId)}）`,
+        `第一台的 ${threadId} 紀錄 5 秒內沒寫到 turn/end（最後一筆：${await lastEventType(root, threadId)}）`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -196,11 +186,11 @@ describe('同一個 home 起兩台 serve', () => {
     const first = await start(env);
     await say(first, 'pinned');
     // 前提：用戶端已經折完這一輪，紀錄的尾巴卻還沒到——競態是真的存在，不是這個測試自己捏的。
-    expect(lastEventType(dir, 'pinned')).not.toBe('turn/end');
+    expect(await lastEventType(dir, 'pinned')).not.toBe('turn/end');
 
     await untilTurnEndIsOnDisk(dir, 'pinned');
 
-    expect(lastEventType(dir, 'pinned')).toBe('turn/end');
+    expect(await lastEventType(dir, 'pinned')).toBe('turn/end');
     // 之後不再有第一台自己的寫入：隔一段時間，指紋不變。
     const settled = tree(dir);
     await new Promise((resolve) => setTimeout(resolve, 150));

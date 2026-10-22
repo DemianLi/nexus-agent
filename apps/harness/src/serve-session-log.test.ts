@@ -21,11 +21,18 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDeliverableClient, createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
+import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import {
+  rewriteSessionHeader,
+  sessionEvents,
+  sessionEventsOf,
+  sessionHeaderOf,
+  sessionsUnder,
+} from './session-files.fixture.js';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
@@ -93,11 +100,14 @@ async function deliverableRefusal(server: RunningServe, threadId: string): Promi
   return read.result.error.message;
 }
 
-function readEvents(body: string): readonly SessionEvent[] {
-  return body
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+/** 這個專案那一格裡 `threadId` 那一份的事件，經 `session-files.fixture.ts`（#1868）。 */
+function eventsOn(root: string, threadId: string): Promise<SessionEvent[]> {
+  return sessionEventsOf(projectDirOf(root), threadId);
+}
+
+/** 同一份的日誌檔。只給要動位元組的（補行、改行、比原文）。 */
+function logOn(root: string, threadId: string): string {
+  return sessionPathsIn(projectDirOf(root), threadId).log;
 }
 
 describe('serve 的 --session-log', () => {
@@ -116,11 +126,11 @@ describe('serve 的 --session-log', () => {
     running = undefined;
 
     const runDir = await onlyProjectDir(root);
-    const files = (await readdir(runDir)).filter((name) => name.endsWith('.jsonl')).sort();
-    expect(files).toEqual(['alpha.jsonl', 'beta.jsonl']);
+    const sessions = (await sessionsUnder(runDir)).sort((a, b) => a.id.localeCompare(b.id));
+    expect(sessions.map((session) => session.id)).toEqual(['alpha', 'beta']);
 
-    for (const file of files) {
-      const events = readEvents(await readFile(join(runDir, file), 'utf8'));
+    for (const session of sessions) {
+      const { events } = await sessionEvents(session);
       expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
       expect(events.map((event) => event.type)).toContain('turn/start');
       expect(events.map((event) => event.type)).toContain('turn/end');
@@ -140,10 +150,7 @@ describe('serve 的 --session-log', () => {
     running = undefined;
 
     const runDir = await onlyProjectDir(root);
-    const header = JSON.parse(await readFile(join(runDir, 'gamma.header.json'), 'utf8')) as Record<
-      string,
-      unknown
-    >;
+    const { header } = await sessionHeaderOf(runDir, 'gamma');
     expect(header.id).toBe('gamma');
     expect(header.parentSession).toBeUndefined();
   });
@@ -174,11 +181,11 @@ describe('serve 的 --session-log', () => {
     running = undefined;
 
     const runDir = await onlyProjectDir(root);
-    const files = (await readdir(runDir)).filter((name) => name.endsWith('.jsonl'));
-    expect(files).toHaveLength(2);
-    // 兩個檔都真的有內容——「開得起來」與「寫得進去」是兩件事。
-    for (const file of files) {
-      expect(readEvents(await readFile(join(runDir, file), 'utf8')).length).toBeGreaterThan(0);
+    const sessions = await sessionsUnder(runDir);
+    expect(sessions).toHaveLength(2);
+    // 兩份都真的有內容——「開得起來」與「寫得進去」是兩件事。
+    for (const session of sessions) {
+      expect((await sessionEvents(session)).events.length).toBeGreaterThan(0);
     }
   });
 
@@ -205,9 +212,7 @@ describe('serve 的 --session-log', () => {
     expect(lines.join('\n')).toContain(`會話日誌：${projectDirOf(root)}`);
     expect(lines.join('\n')).not.toContain('只在記憶體裡');
     const runDir = await onlyProjectDir(root);
-    expect(readEvents(await readFile(join(runDir, 'delta.jsonl'), 'utf8')).length).toBeGreaterThan(
-      0,
-    );
+    expect((await sessionEventsOf(runDir, 'delta')).length).toBeGreaterThan(0);
   });
 
   it('NEXUS_AGENT_HOME 給了就落在它底下', async () => {
@@ -308,7 +313,10 @@ describe('serve：清單把落盤關掉', () => {
     running = first;
     await driveTurn(first, 'echo');
     await first.close();
-    const path = join(projectDirOf(join(homedir(), '.nexus-agent', 'sessions')), 'echo.jsonl');
+    const path = sessionPathsIn(
+      projectDirOf(join(homedir(), '.nexus-agent', 'sessions')),
+      'echo',
+    ).log;
     const before = await readFile(path, 'utf8');
 
     const second = (await runServe({
@@ -400,8 +408,8 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(second);
 
     const dir = await onlyProjectDir(root);
-    expect((await readdir(dir)).filter((name) => name.endsWith('.jsonl'))).toEqual(['alpha.jsonl']);
-    const events = readEvents(await readFile(join(dir, 'alpha.jsonl'), 'utf8'));
+    expect((await sessionsUnder(dir)).map((session) => session.id)).toEqual(['alpha']);
+    const events = await sessionEventsOf(dir, 'alpha');
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
     expect(count(events, 'session/end-seed')).toBe(1);
     expect(count(events, 'turn/start')).toBe(2);
@@ -418,8 +426,8 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await driveTurn(first, 'alpha');
     await stop(first);
 
-    const log = join(projectDirOf(root), 'alpha.jsonl');
-    const before = readEvents(await readFile(log, 'utf8'));
+    const log = logOn(root, 'alpha');
+    const before = await eventsOn(root, 'alpha');
     const tail = [
       { type: 'turn/start', data: { kind: 'message', text: '跑到一半' } },
       { type: 'tool/call', data: { callId: 'dead-1', name: 'write_file', arguments: '{}' } },
@@ -433,7 +441,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await driveTurn(third, 'alpha');
     await stop(third);
 
-    const events = readEvents(await readFile(log, 'utf8'));
+    const events = await eventsOn(root, 'alpha');
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
     const at = before.length + 2;
     expect(events.slice(at, at + 3).map((event) => event.type)).toEqual([
@@ -462,8 +470,8 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const log = join(projectDirOf(root), 'alpha.jsonl');
-    const before = readEvents(await readFile(log, 'utf8'));
+    const log = logOn(root, 'alpha');
+    const before = await eventsOn(root, 'alpha');
     expect(policies(before)).toEqual([{ policy: 'ask' }]);
 
     // 上一次跑到一半切成 never（這一步的切換入口在 `/permission`，這裡直接把那一顆寫進檔，量的是續接這一半）。
@@ -480,7 +488,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(third);
 
     // 重開兩次之後，日誌上還是 [ask, never]：續接從最後一顆起算，沒有被預設的 ask 蓋回去，也沒有每次重釘一顆。
-    const events = readEvents(await readFile(log, 'utf8'));
+    const events = await eventsOn(root, 'alpha');
     expect(policies(events)).toEqual([{ policy: 'ask' }, { policy: 'never' }]);
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
   });
@@ -490,7 +498,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const log = logOn(root, 'alpha');
     // 把這一顆從檔上拿掉，重排 seq：等於一份 #437 之前寫的日誌。
     const [header, ...rest] = (await readFile(log, 'utf8'))
       .split('\n')
@@ -504,7 +512,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const second = await start(root);
     await driveTurn(second, 'alpha');
     await stop(second);
-    const events = readEvents(await readFile(log, 'utf8'));
+    const events = await eventsOn(root, 'alpha');
     expect(policies(events)).toEqual([{ policy: 'ask' }]);
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
   });
@@ -514,7 +522,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const log = logOn(root, 'alpha');
     const lines = (await readFile(log, 'utf8')).split('\n');
     lines[0] = '{壞的';
     await writeFile(log, lines.join('\n'));
@@ -539,7 +547,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await driveTurn(second, 'alpha');
     await stop(second);
 
-    const events = readEvents(await readFile(join(projectDirOf(root), 'alpha.jsonl'), 'utf8'));
+    const events = await eventsOn(root, 'alpha');
     expect(count(events, 'turn/start')).toBe(2);
   });
 
@@ -552,16 +560,17 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const headerPath = join(projectDirOf(root), 'alpha.header.json');
-    const good = await readFile(headerPath, 'utf8');
-    await writeFile(headerPath, JSON.stringify({ ...JSON.parse(good), cwd: '/別的地方' }));
-    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const restore = await rewriteSessionHeader(projectDirOf(root), 'alpha', (header) => ({
+      ...header,
+      cwd: '/別的地方',
+    }));
+    const log = logOn(root, 'alpha');
     const before = await readFile(log, 'utf8');
 
     const second = await start(root);
     await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     expect(await readFile(log, 'utf8')).toBe(before);
-    await writeFile(headerPath, good);
+    await restore();
     await driveTurn(second, 'alpha');
     await stop(second);
   });
@@ -583,9 +592,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await driveTurn(first, 'alpha');
     await stop(first);
     // 前提：header 真的記了那一格。沒記的日誌照設計是放行的，下面那句證不了東西。
-    const headerPath = join(projectDirOf(root), 'alpha.header.json');
-    expect(JSON.parse(await readFile(headerPath, 'utf8')).workspaceRoot).toBe(workspace);
-    const log = join(projectDirOf(root), 'alpha.jsonl');
+    expect((await sessionHeaderOf(projectDirOf(root), 'alpha')).header.workspaceRoot).toBe(
+      workspace,
+    );
+    const log = logOn(root, 'alpha');
     const before = await readFile(log, 'utf8');
 
     const second = await start(root, ['--workspace', other]);
@@ -603,7 +613,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const third = await start(root, ['--workspace', workspace]);
     await driveTurn(third, 'alpha');
     await stop(third);
-    expect(count(readEvents(await readFile(log, 'utf8')), 'turn/start')).toBe(2);
+    expect(count(await eventsOn(root, 'alpha'), 'turn/start')).toBe(2);
   });
 
   /**
@@ -622,9 +632,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root, ['--workspace', workspace]);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const headerPath = join(projectDirOf(root), 'alpha.header.json');
     // 前提：第一次真的把那一格寫下去了。沒有這一條，下面兩臂的對比證不了東西。
-    expect(JSON.parse(await readFile(headerPath, 'utf8')).workspaceRoot).toBe(workspace);
+    expect((await sessionHeaderOf(projectDirOf(root), 'alpha')).header.workspaceRoot).toBe(
+      workspace,
+    );
 
     // 第一臂：header 記著根。錨過得了，於是問得到下一道閘——那個 seq 上沒有交付宣告。
     const second = await start(root, ['--workspace', workspace]);
@@ -632,11 +643,14 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(second);
 
     // 第二臂：把那一格拿掉（13 以前的日誌就長這樣），其餘原封不動。
-    const { workspaceRoot: dropped, ...rest } = JSON.parse(
-      await readFile(headerPath, 'utf8'),
-    ) as Record<string, unknown>;
-    expect(dropped).toBe(workspace);
-    await writeFile(headerPath, JSON.stringify(rest));
+    await rewriteSessionHeader(
+      projectDirOf(root),
+      'alpha',
+      ({ workspaceRoot: dropped, ...rest }) => {
+        expect(dropped).toBe(workspace);
+        return rest;
+      },
+    );
 
     const third = await start(root, ['--workspace', workspace]);
     expect(await deliverableRefusal(third, 'alpha')).toContain('header 沒記工作區根');
@@ -644,9 +658,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
 
     // **續接把 version 覆寫成今天這一版，那一格仍然不在。** 照版本號判的實作會在上一句放行，
     // 然後拿這一次的 `--workspace` 去讀一個沒人驗證過的錨——靜默錯檔，剛好是 #504 存在的理由。
-    const rewritten = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
-    expect(rewritten['version']).toBe(SESSION_LOG_FORMAT_VERSION);
-    expect(rewritten).not.toHaveProperty('workspaceRoot');
+    // 比磁碟上的版號：經接縫讀出來的 `header.version` 永遠是這一版（#1868）。
+    const rewritten = await sessionHeaderOf(projectDirOf(root), 'alpha');
+    expect(rewritten.storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(rewritten.header).not.toHaveProperty('workspaceRoot');
   });
 
   it('沙箱模式跟著回來；日誌記著模式而這一次沒給 --workspace：擋下', async () => {
@@ -685,8 +700,8 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(first);
 
     // 逐行改，只動最後一顆的 `data.mode`（命令參數裡也有 `read-only`）。
-    const log = join(projectDirOf(root), 'alpha.jsonl');
-    const events = readEvents(await readFile(log, 'utf8'));
+    const log = logOn(root, 'alpha');
+    const events = await eventsOn(root, 'alpha');
     const last = events.findLastIndex((event) => event.type === 'sandbox/mode');
     expect(events[last]).toMatchObject({ data: { mode: 'read-only' } });
     const rewritten = events.map((event, index) =>

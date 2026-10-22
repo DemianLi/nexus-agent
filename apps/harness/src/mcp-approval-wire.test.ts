@@ -31,6 +31,7 @@ import { serveClient } from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
 const HARNESS = fileURLToPath(new URL('..', import.meta.url));
@@ -85,7 +86,7 @@ interface Session {
   /** server 收到的 `tools/call`，一行一支 raw name。 */
   calls(): string[];
   /** root 日誌。 */
-  log(): SessionEvent[];
+  log(): Promise<SessionEvent[]>;
   state: ConversationState;
 }
 
@@ -111,12 +112,9 @@ async function open(
     state: emptyConversation(),
     calls: () =>
       existsSync(callLog) ? readFileSync(callLog, 'utf8').split('\n').filter(Boolean) : [],
-    log: () => {
+    log: async () => {
       const [project] = readdirSync(logs);
-      return readFileSync(join(logs, project!, `${thread}.jsonl`), 'utf8')
-        .split('\n')
-        .filter(Boolean)
-        .map((line) => JSON.parse(line) as SessionEvent);
+      return sessionEventsOf(join(logs, project!), thread);
     },
   };
 }
@@ -184,10 +182,12 @@ describe('宣告要問的工具', () => {
     ]);
     // 線上先看到核准卡，日誌稍後才落盤：等到那一筆寫進去再比。
     await expect
-      .poll(() => session.log().map((event) => event.type), { timeout: 10_000 })
+      .poll(async () => (await session.log()).map((event) => event.type), { timeout: 10_000 })
       .toContain('approval/asked');
-    expect(session.log().map((event) => event.type)).toContain('interrupt/raised');
-    expect(session.log().find((event) => event.type === 'approval/asked')?.data).toMatchObject({
+    expect((await session.log()).map((event) => event.type)).toContain('interrupt/raised');
+    expect(
+      (await session.log()).find((event) => event.type === 'approval/asked')?.data,
+    ).toMatchObject({
       toolName: RECORD,
       reason: REASON,
     });
@@ -221,18 +221,16 @@ describe('宣告要問的工具', () => {
     await until(session, awaitingApproval);
     await session.client.runStart(session.thread, '先等一下');
 
-    const spliced = (): SessionEvent | undefined =>
-      session
-        .log()
-        .find(
-          (event) =>
-            event.type === 'inbox/spliced' &&
-            event.data.inserted.some((item) => item.text === '先等一下'),
-        );
+    const spliced = async (): Promise<SessionEvent | undefined> =>
+      (await session.log()).find(
+        (event) =>
+          event.type === 'inbox/spliced' &&
+          event.data.inserted.some((item) => item.text === '先等一下'),
+      );
     await expect.poll(spliced, { timeout: 10_000 }).toBeDefined();
-    expect(spliced()?.data).toMatchObject({ target: 'next-turn' });
+    expect((await spliced())?.data).toMatchObject({ target: 'next-turn' });
     // 那一筆沒有被放行：核准之後沒有結果，也沒有開新的一輪。
-    const log = session.log();
+    const log = await session.log();
     const asked = log.findIndex((event) => event.type === 'approval/asked');
     expect(log.slice(asked).map((event) => event.type)).not.toContain('tool/result');
     expect(log.slice(asked).map((event) => event.type)).not.toContain('turn/start');
@@ -250,7 +248,7 @@ describe('對照組與政策', () => {
     expect(session.state.pendings).toEqual([]);
     expect(session.calls()).toEqual(['orders.search']);
     expect(toolEntry(session.state, SEARCH).status).toBe('done');
-    expect(session.log().some((event) => event.type === 'approval/asked')).toBe(false);
+    expect((await session.log()).some((event) => event.type === 'approval/asked')).toBe(false);
   }, 30_000);
 
   it('F：核准政策是 never：不發中斷、碼 APPROVAL_POLICY_NEVER，server 一次都沒收到', async () => {
@@ -266,14 +264,13 @@ describe('對照組與政策', () => {
     expect(toolEntry(session.state, RECORD).errorCode).toBe(APPROVAL_POLICY_NEVER);
     // 量的確實是 never 那一格：起始政策記在日誌上（日誌稍後才落盤，等到收尾那一筆再比）。
     await expect
-      .poll(() => session.log().map((event) => event.type), { timeout: 10_000 })
+      .poll(async () => (await session.log()).map((event) => event.type), { timeout: 10_000 })
       .toContain('turn/end');
     expect(
-      session
-        .log()
+      (await session.log())
         .filter((event) => event.type === 'approval/policy')
         .map((event) => event.data),
     ).toEqual([{ policy: 'never' }]);
-    expect(session.log().some((event) => event.type === 'interrupt/raised')).toBe(false);
+    expect((await session.log()).some((event) => event.type === 'interrupt/raised')).toBe(false);
   }, 30_000);
 });

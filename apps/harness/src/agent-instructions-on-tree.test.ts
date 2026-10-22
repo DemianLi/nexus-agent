@@ -14,15 +14,7 @@
  * 都讓兩條 thread 的 AGENTS.md **內容不同**，再從這一條跑；每一格都量**兩個方向**（對的有、錯的沒有）。
  */
 
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -54,6 +46,7 @@ import { buildPluginSnapshot } from './plugin-snapshot.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
+import { sessionEvents, sessionsUnder } from './session-files.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { auditStartupEntries, REQUIRED_TREE_ENTRY_IDS } from './startup-audit.js';
@@ -760,18 +753,16 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
   );
 });
 
-/** 一個 home 底下所有會話日誌（jsonl）的事件，連同它來自哪個檔。 */
-function logEventsOf(home: string): { file: string; type: string; data: unknown }[] {
+/** 一個 home 底下所有會話落了盤的事件，連同它來自哪一份的日誌檔（經 `session-files.fixture.ts`，#1868）。 */
+async function logEventsOf(home: string): Promise<{ file: string; type: string; data: unknown }[]> {
   const dir = join(home, 'sessions');
   if (!existsSync(dir)) return [];
-  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
-    .filter((name) => name.endsWith('.jsonl'))
-    .flatMap((name) =>
-      readFileSync(join(dir, name), 'utf8')
-        .split('\n')
-        .filter((line) => line.length > 0)
-        .map((line) => ({ file: name, ...(JSON.parse(line) as { type: string; data: unknown }) })),
-    );
+  const out: { file: string; type: string; data: unknown }[] = [];
+  for (const session of await sessionsUnder(dir)) {
+    for (const event of (await sessionEvents(session)).events)
+      out.push({ file: session.logPath, type: event.type, data: event.data });
+  }
+  return out;
 }
 
 describe('真的入口：runCli 與 runServe（落盤的會話日誌是證據）', () => {
@@ -795,7 +786,7 @@ describe('真的入口：runCli 與 runServe（落盤的會話日誌是證據）
         env: { [HARNESS_HOME_ENV]: home },
         cwd: workspace,
       });
-      const injected = logEventsOf(home).filter(
+      const injected = (await logEventsOf(home)).filter(
         (event) =>
           event.type === 'user/message' &&
           (event.data as { source?: { plugin?: string } }).source?.plugin ===
@@ -834,7 +825,7 @@ describe('真的入口：runCli 與 runServe（落盤的會話日誌是證據）
     } finally {
       await running.close();
     }
-    const injected = logEventsOf(home).filter(
+    const injected = (await logEventsOf(home)).filter(
       (event) =>
         event.type === 'user/message' &&
         (event.data as { source?: { plugin?: string } }).source?.plugin ===

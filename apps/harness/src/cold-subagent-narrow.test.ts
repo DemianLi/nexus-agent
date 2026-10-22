@@ -15,16 +15,7 @@
  * 另外：warn 一個子代理一個行程一行（送兩次話）；叫升級仍被拒（子代理拿不到 root 的 grant）。
  */
 
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  rmSync,
-  symlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -38,6 +29,7 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEvents, sessionsUnder } from './session-files.fixture.js';
 
 const temporary: string[] = [];
 let running: RunningServe | undefined;
@@ -170,18 +162,14 @@ async function subagentLog(
   turnEnds: number,
 ): Promise<{ runId: string; events: LoggedEvent[] }> {
   for (let tries = 0; tries < 800; tries += 1) {
-    const [project] = readdirSync(sessionLog);
-    const directory = join(sessionLog, project ?? '');
-    const body = readdirSync(directory).find(
-      (name) => name.startsWith(`${thread}%2fbg-`) && name.endsWith('.jsonl'),
+    // 子代理那一份的 id 是 `<thread>/<runId>`，背景派的 runId 以 `bg-` 起頭；經 `session-files.fixture.ts` 找（#1868）。
+    const subagent = (await sessionsUnder(sessionLog)).find((session) =>
+      session.id.startsWith(`${thread}/bg-`),
     );
-    if (body !== undefined) {
-      const events = readFileSync(join(directory, body), 'utf8')
-        .split('\n')
-        .filter((line) => line.trim() !== '')
-        .map((line) => JSON.parse(line) as LoggedEvent);
+    if (subagent !== undefined) {
+      const { events } = await sessionEvents(subagent);
       if (events.filter((event) => event.type === 'turn/end').length >= turnEnds) {
-        return { runId: body.slice(`${thread}%2f`.length, -'.jsonl'.length), events };
+        return { runId: subagent.id.slice(`${thread}/`.length), events };
       }
     }
     await new Promise((resolve) => setTimeout(resolve, 25));
