@@ -18,8 +18,8 @@
  * 直接序列化，沒有另一個實體型別（不是偏離）。
  *
  * 每個事件根照 dsh 帶 `surface` 欄位（不進指紋；dsh 的驗證器 `persistence-changes.ts:299` 拒收沒有這一格的事件根，
- * `:388`、`:397`、`:424` 用它判斷能不能同版新增）。nexus 沒有 surface 那一軸（`session-log.ts` 的
- * `ModelVisibleEventType` 說明），所以每一種都照實寫 `false`。
+ * `:388`、`:397`、`:424` 用它判斷能不能同版新增）。nexus 沒有 surface 那一軸（`session-log.ts` 講事件替換的
+ * 那段：沒有 `surfaceOp`），所以每一種都照實寫 `false`。
  *
  * 合成的根檔放在 `scripts/`（同 dsh），不在追蹤範圍裡：它的型別別名不能變成型別名與宣告位置，否則
  * `__persistence_schema_roots__.ts#EventRootN` 會進基線，而且每加一種排序靠前的事件就整批重編號。
