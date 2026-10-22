@@ -32,6 +32,11 @@
  *    收到的是主機路徑（它的檔案工具不在工作區圍欄裡）；我們的 backend 有圍欄，所以走路由。基座表達不出的是「圍欄外的絕對路徑」。
  * 2. **圖片沒有正規化／縮圖。** dsh 在收下時把圖轉成 8-bit sRGB 並縮小到 2048×2048 以內、4 MB 上下（`normalization.ts`，靠 sharp）；
  *    我們沒有影像函式庫，圖按收到的位元組原樣存（`saveImage`），超過上限的拒收而不縮（`image-intake.ts`）。送進模型的是原圖。
+ *    **類別：過渡**（[#1566](https://github.com/DemianLi/nexus-agent/issues/1566) 補標）。兩種理由都套不上：理由 1 不成立，sharp 有
+ *    linux-x64 的預編譯檔，引進來是相依與打包的成本，不是基座做不到；理由 2 不成立，這不是 dsh 射程外的產品需求。
+ *    **撤除條件**：另開卡引進影像函式庫，先確認它進得了 Release 的 tar.gz、在內網主機上裝得起來，再照 dsh `normalization.ts`
+ *    做正規化。撤除時一併撤掉跟著這條走的幾處：`image-intake.ts` 檔頭的偏離 1、2（不整張解碼、不套 EXIF 轉向），以及
+ *    `@nexus/core` `attachment-projection.ts` 檔頭把手那幾條。
  * 3. **儲存沒有逐會話目錄，但模型讀附件的路由按 thread 收窄**（理由 2，[#1773](https://github.com/DemianLi/nexus-agent/issues/1773)，#1675 Q3 (a)，
  *    demian 2026-10-20 拍板）。**儲存照 dsh**：附件根是全域內容定址（`attachments/v1`），不按會話分，同樣的內容只存一份。**路由不照 dsh**：
  *    dsh 是單人桌面，模型讀的是主機路徑、沒有路由；nexus 是一台主機多人共用，所有 web 使用者在同一個 OS 帳號底下，`0700` 分不開人
@@ -398,6 +403,9 @@ export class AttachmentStore {
     }
     // 雜湊只證明位元組是當初存的那份，不證明參照的其他欄位：日誌裡的寬高、媒體類型被改過，畫面與模型會照著錯的
     // 那份走。照 dsh `readImageFile`（`store.ts:450-458`，`687f282e`）重讀檔頭再比一次，只讀檔頭、不解碼像素。
+    // **限制**：參照的寬高是收下時用同一支 `probeImageHeader` 認的，所以今天兩邊一定對得上。哪天它改了寬高的語意（例如開始套
+    // EXIF 轉向，`image-intake.ts` 的偏離 2），所有舊參照會一起變成 `ATTACHMENT_CORRUPT`：改檔頭辨識的那張卡要一併處理舊參照
+    // （[#1566](https://github.com/DemianLi/nexus-agent/issues/1566) N0019）。
     const facts = probeImageHeader(data);
     if (
       facts === undefined ||

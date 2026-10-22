@@ -9,12 +9,14 @@
  *
  * **送出的每張圖前面有一行把手**（{@link requestImageHandleText}，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）：照 dsh 的
  * pi-ai 轉接（`packages/llm/llm-pi-ai/src/context.ts:79-89`，`687f282e`），每個 `image` 區塊先推一段文字、再推圖，模型才叫得出
- * 「哪一張」。只有真的送圖的那一支有；三種佔位字本身就是文字，不另加。和 dsh 不同的兩處：
+ * 「哪一張」。只有真的送圖的那一支有；三種佔位字本身就是文字，不另加。和 dsh 不同的三處，都是**既有偏離 2 的延伸**
+ * （`apps/harness/src/attachment-store.ts` 檔頭偏離 2「圖片沒有正規化／縮圖」，類別是過渡；撤除時這三處跟著撤）：
  *
- * 1. **不加 `It may be resized or re-encoded…` 那半句**（理由 1，基座表達不出來；掛在 `apps/harness/src/attachment-store.ts` 檔頭的偏離 2
- *    底下）：dsh 送的是正規化過的請求版本，那半句講的是它；我們沒有影像函式庫，送的就是原圖，寬高也就是參照記的寬高，那半句不成立。
- * 2. **沒有唯讀路徑那一支**（`normalizedAccessText`；理由 1，基座表達不出來，同樣掛在偏離 2 底下）：dsh 那個路徑指的是收圖時
- *    正規化出來的唯讀副本；我們沒有影像函式庫、不做正規化，就沒有那份副本可指，同 {@link offloadedImageText} 沒有本機路徑的那一支。
+ * 1. **不加 `It may be resized or re-encoded…` 那半句**：dsh 送的是正規化過的請求版本，那半句講的是它；我們不正規化，送的就是原圖，
+ *    寬高也就是參照記的寬高，那半句不成立。
+ * 2. **沒有唯讀路徑那一支**（`normalizedAccessText`）：dsh 那個路徑指的是收圖時正規化出來的唯讀副本；我們不做正規化，就沒有那份
+ *    副本可指，同 {@link offloadedImageText} 沒有本機路徑的那一支。
+ * 3. **寬高用參照記的**：dsh 用請求版本的寬高；我們沒有請求版本，原圖就是請求版本，兩者相等。
  *
  * @module
  */
