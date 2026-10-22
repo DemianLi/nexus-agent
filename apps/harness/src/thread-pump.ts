@@ -2094,6 +2094,9 @@ export class ThreadPump {
     const current = this.#current;
     if (current !== undefined) {
       this.#abortRun(current, cause);
+      // **每次都設**，不只第一次：停止之後那一輪還在等工具落定時送了一句（`submit` 會清掉這個請求），再按停止，那一句要停住
+      // （#637 的 Q2；#1831 審查 B1）。`#abortRun` 在已經中止過時什麼都不做，所以這一行不能收進去。
+      this.#stopRequested = true;
       return 'run';
     }
     if (this.#pending.size > 0 && !this.#closed) {
@@ -2134,9 +2137,13 @@ export class ThreadPump {
   /**
    * 中止正在跑的這一輪：{@link ThreadPump.cancel} 的「有一輪在跑」那一格，與一輪的時鐘到點（#1624）共用。
    *
-   * 時鐘**不經過 `cancel()`**：到點的那一刻若這一輪已經收尾、停在核准點，`cancel()` 會落到「收回」那一格，把等核准的卡收掉，
-   * 而等人的時間本來就不算在時鐘裡。這裡只認它自己那一輪；那一輪不在跑了、或已經中止過，就什麼都不做（先到的原因算數）。
-   * 一樣把 {@link ThreadPump.#stopRequested} 設起來，排著的輸入照停止鍵停住（Q-B3 (a)）。
+   * 時鐘**不經過 `cancel()`**，差在**已經中止過**的那一輪：人先按了停止、接著送了一句（`submit` 清掉停住的請求），那一輪還在
+   * 等工具落定時時鐘才到點——`cancel()` 每次都把停住的請求設回來，那一句會被一顆已經被人中止的輪的時鐘停住；這裡什麼都不做
+   * （先到的原因算數），那一句照常跑。這一輪第一次被中止時一樣把 {@link ThreadPump.#stopRequested} 設起來，排著的輸入照停止鍵停住
+   * （Q-B3 (a)）。
+   *
+   * 「只認它自己那一輪」（`#current !== current`）是防禦，今天量不出來：計時器在這一輪的 `finally` 裡、`#current` 清掉之前就同步
+   * 清掉，回呼也先查自己還算不算數，到點的回呼碰不到下一輪。
    */
   #abortRun(current: CurrentRun, cause: TurnAbortCause | undefined): void {
     if (this.#current !== current || current.controller.signal.aborted) return;

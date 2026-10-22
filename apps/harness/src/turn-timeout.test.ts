@@ -21,6 +21,7 @@ import type { GoalServices } from '@nexus/goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
+import { createMiddleware } from 'langchain';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -374,6 +375,115 @@ describe('root 那一輪到點（真 pump）', () => {
     }
   });
 
+  /**
+   * 驗收 10（關掉這一列行為與今天相同）與 #637 的 Q2：停止、送出、再停止，排著的那一句停住。**沒給時鐘**——這是停止鍵自己的行為，
+   * 不能因為停止改走 `#abortRun` 而變（#1831 審查 B1：第二次停止落在已經中止的那一輪上，`#abortRun` 直接回去，請求沒設回來）。
+   */
+  it('停止、送出、再停止（那一輪還在等工具落定）：排著的那一句停住；沒給時鐘也一樣', async () => {
+    let release!: () => void;
+    const probe: Probe = {
+      started: 0,
+      settled: 0,
+      sleepMs: 0,
+      hold: new Promise<void>((resolve) => (release = resolve)),
+    };
+    const run = await assemble(
+      [...forever(1), { content: 'B 收到。' }, { content: '多的。' }],
+      undefined,
+      [toolsPlugin(probe)],
+    );
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A' });
+      await until(() => probe.started === 1);
+      expect(run.pump.cancel()).toBe('run');
+      void run.pump.submit({ kind: 'message', text: 'B' });
+      expect(run.pump.cancel()).toBe('run');
+      release();
+      await first;
+      await run.pump.whenIdle();
+      expect(ends(run.root())).toEqual([STOPPED_END]);
+      expect(run.pump.inbox.map((item) => item.text)).toEqual(['B']);
+    } finally {
+      release();
+      await run.close();
+    }
+  });
+
+  /**
+   * 對照：時鐘那條路「已經中止就不動」。人先按停止、接著送了 B，那一輪還在等工具落定時時鐘才到點——原因照舊是 user，B 照常跑。
+   * 時鐘若走 `cancel()`（每次都把停住的請求設回來），B 會被一顆已經被人中止的輪的時鐘停住。
+   */
+  it('人停止、送出，那一輪的時鐘才到點：原因不改，排著的那一句照常跑', async () => {
+    const timers = new ManualTimers();
+    let release!: () => void;
+    const probe: Probe = {
+      started: 0,
+      settled: 0,
+      sleepMs: 0,
+      hold: new Promise<void>((resolve) => (release = resolve)),
+    };
+    const run = await assemble(
+      [...forever(1), { content: 'B 收到。' }, { content: '多的。' }],
+      { timeoutMs: TIMEOUT_MS, graceMs: GRACE_MS, timers },
+      [toolsPlugin(probe)],
+    );
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A' });
+      await until(() => probe.started === 1);
+      expect(run.pump.cancel()).toBe('run');
+      void run.pump.submit({ kind: 'message', text: 'B' });
+      timers.fire(TIMEOUT_MS);
+      release();
+      await first;
+      await until(() => ends(run.root()).length === 2);
+      await run.pump.whenIdle();
+      expect(ends(run.root())).toEqual([STOPPED_END, {}]);
+      expect(run.pump.inbox).toEqual([]);
+    } finally {
+      release();
+      await run.close();
+    }
+  });
+
+  /**
+   * 最後一次模型呼叫剛回來、圖還沒收尾就到點：後面沒有下一次模型呼叫可以擋，串流照常抽完，收尾 frame 標了中止——走的是「正常抽完
+   * 但標了中止」那一格，那一格的原因也要照時鐘記（#1831 審查 N1）。到點的那一下放在外掛的 `wrapModelCall` 裡、模型回來之後。
+   */
+  it('最後一次模型呼叫剛回來就到點：照常抽完的那一格也收成 aborted/hook', async () => {
+    const timers = new ManualTimers();
+    const fireAfterModel: PluginEntry = {
+      plugin: {
+        name: 'fire-after-model',
+        apply(registry) {
+          registry.middleware.use(
+            createMiddleware({
+              name: 'fire-after-model',
+              wrapModelCall: async (request, handler) => {
+                const response = await handler(request);
+                timers.fire(TIMEOUT_MS);
+                return response;
+              },
+            }),
+          );
+        },
+      },
+    };
+    const run = await assemble(
+      [{ content: '答完了。' }],
+      { timeoutMs: TIMEOUT_MS, graceMs: GRACE_MS, timers },
+      [fireAfterModel],
+    );
+    try {
+      await run.pump.submit({ kind: 'message', text: '問' });
+      expect(typesOf(run.root())).not.toContain('turn/failed');
+      expect(ends(run.root())).toEqual([TIMED_OUT_END]);
+      await until(() => stoppedCause(run.frames) !== undefined);
+      expect(stoppedCause(run.frames)).toEqual(HOOK);
+    } finally {
+      await run.close();
+    }
+  });
+
   it('驗收 9（Q-B3 (a)）：到點之後排著的那一句停住，下一次送出才照 FIFO 跑', async () => {
     const timers = new ManualTimers();
     const probe: Probe = { started: 0, settled: 0, sleepMs: 100 };
@@ -420,6 +530,26 @@ describe('root 那一輪到點（真 pump）', () => {
       });
       expect(ends(run.root())).toEqual([{}, {}]);
       expect(typesOf(run.root())).not.toContain('turn/failed');
+    } finally {
+      await run.close();
+    }
+  });
+
+  /** 停在核准點按停止（收回）：那顆收尾 frame 是 pump 自己合成的，也要帶原因（#1831 審查 N3）。時鐘在跑，但沒到點。 */
+  it('停在核准點按停止（收回）：合成的收尾 frame 帶原因 user', async () => {
+    const run = await assemble(
+      [{ content: '動手。', toolCalls: [{ name: 'danger', args: {} }] }, { content: '多的。' }],
+      { timeoutMs: TIMEOUT_MS, graceMs: GRACE_MS, timers: new ManualTimers() },
+      [toolsPlugin({ started: 0, settled: 0, sleepMs: 0 })],
+    );
+    try {
+      await run.pump.submit({ kind: 'message', text: '做危險的事' });
+      expect(run.pump.awaitingInput).toBe(true);
+      expect(run.pump.cancel()).toBe('withdrawn');
+      await run.pump.whenIdle();
+      expect(ends(run.root()).at(-1)).toEqual(STOPPED_END);
+      await until(() => stoppedCause(run.frames) !== undefined);
+      expect(stoppedCause(run.frames)).toEqual({ kind: 'user' });
     } finally {
       await run.close();
     }
@@ -824,6 +954,45 @@ describe('背景子代理（Q-B4 (a)）', () => {
         { reason: { kind: 'aborted', cause: { kind: 'parent' } } },
       ]);
     } finally {
+      await host.close();
+    }
+  });
+
+  /** 同 root 的驗收 7（Q-B2 (a)），背景那一輪（#1831 審查 N4）：到點之後過了寬限還沒收尾，記一行 warn，帶 run id；不丟下那一輪。 */
+  it('到點之後過了寬限還沒收尾：記一行 warn，帶 run id；放行之後照常收尾', async () => {
+    const timers = new ManualTimers();
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => (release = resolve));
+    let entered!: () => void;
+    const enteredOnce = new Promise<void>((resolve) => (entered = resolve));
+    // 不理中止訊號：模擬一顆到點之後還不肯落定的工具。
+    const agent = abortable(async () => {
+      entered();
+      await hold;
+    });
+    const warnings: string[] = [];
+    const sessions = new SessionRegistry('root-clock');
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: () => agent,
+      warn: (message) => warnings.push(message),
+      turnClock: { timeoutMs: TIMEOUT_MS, graceMs: GRACE_MS, timers },
+    });
+    try {
+      const run = host.start({ subagent: 'worker', text: '慢' });
+      await enteredOnce;
+      timers.fire(TIMEOUT_MS);
+      expect(timers.delays()).toEqual([GRACE_MS]);
+      timers.fire(GRACE_MS);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(run.runId);
+      expect(warnings[0]).toContain('到點中止之後還沒收尾');
+      release();
+      await run.outcome;
+      const log = sessions.get({ kind: 'subagent', runId: run.runId })!;
+      expect(ends(log.events)).toEqual([TIMED_OUT_END]);
+    } finally {
+      release();
       await host.close();
     }
   });
