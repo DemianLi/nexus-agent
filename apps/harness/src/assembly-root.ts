@@ -1474,5 +1474,17 @@ export function goalDriverPort(
     flush,
     warn: (message) => warn(`[續行] ${message}`),
     ...(waitForChildren !== undefined && { waitForChildren }),
+    // **不經 `serviceFor`**（N0376）：訂閱與種子都不該為一條沒碰過 goal 的 thread 觸發整份日誌的重播（#1486）。
+    onActivationChanged: (listener) => goals?.onActivationChanged(log(), listener) ?? (() => {}),
+    currentActivation: () => {
+      try {
+        const goal = goals?.existingFor(log())?.get();
+        return goal === undefined
+          ? undefined
+          : { goal: { id: goal.id, revision: goal.revision, activation: goal.activation } };
+      } catch {
+        return undefined;
+      }
+    },
   };
 }

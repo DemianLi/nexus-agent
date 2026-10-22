@@ -1561,6 +1561,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       const attached: {
         detachTitle?: SessionTitleDetach;
         unsubscribeFileSearch?: () => void;
+        unsubscribeGoalActivation?: () => void;
         fileSearch?: WorkspaceFileSearch;
         attachment?: { detach(): Promise<void> };
         persistence?: { dispose(): Promise<void> };
@@ -1589,6 +1590,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         await step('標題', () => attached.detachTitle?.());
         // **列檔索引接著收**，同 dsh 在 `agent/disposed` 上收它：中止還在背景跑的走訪，之後的查詢回空。它不寫日誌，
         // 所以排在寫得動日誌的那幾個之間哪裡都不改變誰看到什麼。
+        await step('續行授權退訂', () => attached.unsubscribeGoalActivation?.());
         await step('列檔索引退訂', () => attached.unsubscribeFileSearch?.());
         await step('列檔索引', () => attached.fileSearch?.dispose());
         // 參與者、不變量、遙測三個一起收，順序（參與者先、遙測最後）住在 `createCliAgent` 的 `attachSessions`。
@@ -1655,6 +1657,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
         late.log = pump.sessionLog;
+        // 續行授權的變化送上下行（#1575 N0376）。**先訂、再種**：訂閱不建服務；種子只讀已經建好的（thread 接上時服務可能已經在，
+        // 例如測試與手搭的組裝），沒有就是 disarmed，pump 起始值已經是。
+        attached.unsubscribeGoalActivation = driver?.onActivationChanged?.((change) =>
+          pump.notifyGoalActivation(change),
+        );
+        const seededActivation = driver?.currentActivation?.();
+        if (seededActivation !== undefined) pump.notifyGoalActivation(seededActivation);
         // 遙測、不變量、參與者一個口接完（#668）；順序與「參與者寫的會被檢查看到」的保證見 `AttachSessions`。
         // 背景子代理結算了，通知這條 thread 的主對話（#840）：閒著就叫醒它開一輪，見 `ThreadPump.notifySettled`。
         const attachment = (attached.attachment = threadAgent.attachSessions(pump.sessions, {

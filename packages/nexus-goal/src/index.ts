@@ -71,7 +71,7 @@ export {
 export { renderGoalRoundPrompt } from './prompt.js';
 
 /** 契約版本（semver）。介面破壞性改動跳 major，宿主的範圍檢查擋下不相容的提供者。 */
-export const GOALS_CONTRACT_VERSION = '1.0.0';
+export const GOALS_CONTRACT_VERSION = '1.1.0';
 
 /** `goals` 服務的名字。`registry.services` 上這個字串就是 goal 域的位址。 */
 export const GOALS_SERVICE = 'goals';
@@ -91,6 +91,21 @@ export const DEFAULT_MAX_GOAL_ROUNDS = 256;
  * 它不進日誌是 dsh 刻意的：續行授權是「這個活著的行程被誰授權過」，重放一段歷史不該讓一個沒有人在的行程自己動起來。
  */
 export type GoalActivation = 'armed' | 'disarmed';
+
+/**
+ * 續行授權變了（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376，dsh `GoalActivationChanged`，`goal/src/types.ts:72-87`）。
+ * 沒有目前目標時 `goal` 缺席（例如目標被清掉、授權跟著收回那一刻）；不帶 sessionId——一份日誌一個服務，監聽已經是逐日誌掛的。
+ */
+export interface GoalActivationChange {
+  readonly goal?: {
+    readonly id: GoalView['id'];
+    readonly revision: number;
+    readonly activation: GoalActivation;
+  };
+}
+
+/** {@link GoalServices.onActivationChanged} 的監聽。 */
+export type GoalActivationListener = (change: GoalActivationChange) => void;
 
 /** 目前的目標加上重放算出來的東西。 */
 export interface GoalView extends GoalSnapshot {
@@ -149,6 +164,19 @@ export interface GoalServices {
    * @returns 已經建好的服務，或 `undefined`。
    */
   existingFor(log: SessionLog): GoalService | undefined;
+  /**
+   * 訂這一份 root 日誌上的續行授權變化（N0376，dsh `setActivation` 的 `goal/activation-changed`）。**只在值真的變了才通知**
+   * （`armed` ↔ `disarmed`；同值不送），服務折疊壞掉時也不送。
+   *
+   * **不建服務、不重播**（理由同 {@link existingFor}：呼叫端是 pump，每條 thread 都會訂，不能因此觸發整份日誌的重播）：
+   * 監聽先登記在日誌上，服務之後才建也照樣通知。**沒建過服務的日誌授權本來就是 `disarmed`**，所以沒有要補的歷史。
+   * 監聽拋錯被吞掉，不影響日誌的 append，也不影響其他監聽。
+   *
+   * @param log - root 日誌。
+   * @param listener - 變化時呼叫。
+   * @returns 取消訂閱。
+   */
+  onActivationChanged(log: SessionLog, listener: GoalActivationListener): () => void;
 }
 
 /** `goals` 服務的 token。 */

@@ -81,7 +81,7 @@
 import { currentTurnStart, hasUnansweredInterrupt } from '@nexus/core';
 import type { GoalBlockReason, GoalId, GoalRef, SessionEvent } from '@nexus/core';
 import { renderGoalRoundPrompt } from '@nexus/goal';
-import type { GoalView } from '@nexus/goal';
+import type { GoalActivationChange, GoalActivationListener, GoalView } from '@nexus/goal';
 
 /** 上限耗盡時記的那顆 blocker 的穩定代碼。逐字照 dsh。 */
 export const ROUND_LIMIT_BLOCK_CODE = 'round-limit';
@@ -377,6 +377,16 @@ export interface GoalDriverPort {
    * 選填：沒有背景 host 的組裝（CLI、沒開背景續行）缺席，行為與以前逐字相同。
    */
   waitForChildren?(signal?: AbortSignal): Promise<boolean>;
+  /**
+   * 訂續行授權的變化（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376，dsh `goal/activation-changed`）。
+   * **不建服務**（理由同 {@link armed}）；回取消訂閱。pump 拿它送 `goal/activation` frame 給下行。選填：手搭的測試替身與 CLI 缺席。
+   */
+  onActivationChanged?(listener: GoalActivationListener): () => void;
+  /**
+   * 現在的續行授權（有服務、有目前目標才有值），**不建服務**。給 thread 接上時種一顆用（dsh 的 UI 開線先讀 `goals.get`）。
+   * 服務折疊壞掉時回 `undefined`（種不出來就不種，不拋）。選填。
+   */
+  currentActivation?(): GoalActivationChange | undefined;
   /** 排程器自己出事時說一聲。 */
   warn(message: string): void;
   /**

@@ -47,11 +47,11 @@ import type {
   WireSettleReason,
 } from './inbox.js';
 import { COMPACTION } from './compaction.js';
-import { GOAL, GOAL_PHASES } from './goal.js';
+import { GOAL, GOAL_ACTIVATION, GOAL_PHASES } from './goal.js';
 import { LLM_RETRY, LLM_RETRY_STARTED, toWireLlmRetry } from './llm-retry.js';
 import type { WireLlmRetry } from './llm-retry.js';
 import { MESSAGE_DISCARD } from './message-discard.js';
-import type { WireGoal, WireGoalPhase } from './goal.js';
+import type { WireGoal, WireGoalActivation, WireGoalPhase } from './goal.js';
 import { PLAN_MODE } from './plan-mode.js';
 import { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
 import type { WireProjection } from './projection.js';
@@ -671,10 +671,16 @@ export interface ConversationState {
   readonly subagentProjections: Readonly<Record<string, Readonly<Record<string, WireProjection>>>>;
   /**
    * 會話目前的目標與階段（#897）：最後一顆 `goal` frame 的整份值。**沒有目標（從沒建立、或清掉了、或還沒收到）就是
-   * `null`**，不分這幾種——理由與少了 dsh 的 activation 見 `goal.ts`。只算 root。它是「現在」的事，所以
+   * `null`**，不分這幾種——activation 另走 {@link ConversationState.goalActivation}，見 `goal.ts`。只算 root。它是「現在」的事，所以
    * {@link prependEntries} 不動它。
    */
   readonly goal: WireGoal | null;
+  /**
+   * 目標會不會自己續行（#1575 N0376）：最後一顆 `goal/activation` frame 的值。**還沒收到是 `null`**——有目標的 thread，下行開線時
+   * server 一定補送一顆，所以只有「沒有目標」或「frame 還在路上」會停在 `null`，讀法見 `goal.ts` 的 {@link GOAL_ACTIVATION}。
+   * 行程內的狀態、不持久，所以 {@link prependEntries} 不動它（同 {@link ConversationState.goal}）。
+   */
+  readonly goalActivation: WireGoalActivation | null;
   /**
    * 這條對話累計燒了多少 token（#574）：root 日誌每一次模型呼叫的帳加起來，**整份日誌的**，不是畫面上看得到的那幾輪。
    * 一顆都還沒收到就是 `null`；總量是兩格相加。規則見 `session-totals.ts`。它是「現在」的事，所以
@@ -737,6 +743,7 @@ export function emptyConversation(): ConversationState {
     projections: {},
     subagentProjections: {},
     goal: null,
+    goalActivation: null,
     tokenUsage: null,
     sessionStats: null,
     inbox: [],
@@ -1077,6 +1084,7 @@ const CUSTOM_REDUCERS: {
   [PROJECTION]: reduceProjection,
   [COMPACTION]: reduceCompaction,
   [GOAL]: reduceGoal,
+  [GOAL_ACTIVATION]: reduceGoalActivation,
   [TOKEN_USAGE]: reduceTokenUsage,
   [SESSION_STATS]: reduceSessionStats,
   [INBOX]: reduceInbox,
@@ -1365,6 +1373,20 @@ function reduceGoal(state: ConversationState, payload: object): ConversationStat
   if (goal === null) return { ...state, goal: null };
   const next = toWireGoal(goal);
   return next === undefined ? state : { ...state, goal: next };
+}
+
+/**
+ * `goal/activation` 的 `payload`（#1575 N0376）：`goal` 缺席＝沒有目前目標，授權收成 `disarmed`；有就取它的 `activation`。
+ * `goal` 不是物件、或 `activation` 不是 `armed`／`disarmed` 就整顆不收，留著前一份。只存 `activation`：身分與修訂由 `goal` 那一格管。
+ */
+function reduceGoalActivation(state: ConversationState, payload: object): ConversationState {
+  const { goal } = payload as { goal?: unknown };
+  if (goal === undefined) return { ...state, goalActivation: 'disarmed' };
+  if (typeof goal !== 'object' || goal === null) return state;
+  const { activation } = goal as { activation?: unknown };
+  return activation === 'armed' || activation === 'disarmed'
+    ? { ...state, goalActivation: activation }
+    : state;
 }
 
 /** `plan` 的 `payload`：投影的整個值，整份換掉。`active` 不是布林就整顆不收。 */

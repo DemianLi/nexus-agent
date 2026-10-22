@@ -48,6 +48,7 @@ import {
 } from '@nexus/goal';
 import type {
   GoalActivation,
+  GoalActivationChange,
   GoalBlockReason,
   GoalChangeMeta,
   GoalClearChangeMeta,
@@ -127,6 +128,11 @@ export interface GoalServiceOptions {
   readonly now?: () => number;
   /** 新目標的 id 怎麼來。省略即 `goal-<randomUUID()>`。同上，換得掉才驗得了。 */
   readonly newGoalId?: () => string;
+  /**
+   * 續行授權變了就叫它（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376，dsh `setActivation` 的
+   * `goal/activation-changed`）。**同步呼叫**，在授權換掉、折疊之後；值沒變不叫，折疊壞掉也不叫。丟出來的錯由呼叫端（`createGoalCore`）接住。
+   */
+  readonly onActivationChanged?: (change: GoalActivationChange) => void;
 }
 
 /**
@@ -187,6 +193,7 @@ export class GoalService implements GoalServiceContract {
   readonly #defaultMaxGoalRounds: number;
   readonly #now: () => number;
   readonly #newGoalId: () => string;
+  readonly #onActivationChanged: ((change: GoalActivationChange) => void) | undefined;
   #state: GoalFoldState = emptyGoalFoldState();
   /** 第一次重放失敗的理由，扣住之後不再往前折。 */
   #failure: string | undefined;
@@ -206,6 +213,7 @@ export class GoalService implements GoalServiceContract {
     );
     this.#now = options.now ?? (() => Date.now());
     this.#newGoalId = options.newGoalId ?? (() => `goal-${randomUUID()}`);
+    this.#onActivationChanged = options.onActivationChanged;
     // **先補歷史再收後續，兩步在同一個同步區塊裡**：`append` 先凍住監聽清單、再 push、再同步發布（`session-log.ts` 的 `append`），
     // 所以在別人的監聽回呼裡才建立也不會漏掉正在發布的那一筆、也不會把它收兩次。`subscribe` 不補發歷史。
     for (const event of log.events) this.#observe(event);
@@ -234,7 +242,7 @@ export class GoalService implements GoalServiceContract {
    */
   disarm(): GoalView | undefined {
     this.#requireHealthy();
-    this.#activation = 'disarmed';
+    this.#setActivation('disarmed');
     return this.#view();
   }
 
@@ -425,7 +433,27 @@ export class GoalService implements GoalServiceContract {
     // **每一顆 goal 變更都把授權打回 disarmed**，除非那一顆正是這次變更自己掛的邊。
     // 別人（未來的工具、另一個分頁）改動了目標，這個 process 先前拿到的續行授權就不再
     // 對得上他們改成的東西。
-    this.#activation = this.#pending?.seq === event.seq ? this.#pending.activation : 'disarmed';
+    this.#setActivation(
+      this.#pending?.seq === event.seq ? this.#pending.activation : 'disarmed',
+    );
+  }
+
+  /**
+   * 換授權，**值真的變了才通知**（dsh `setActivation`，`goal/src/index.ts:495-515`：值沒變不送 `:497`、折疊失敗不送 `:502`）。
+   * 通知帶換掉之後的視圖：有目前目標就帶 `{ id, revision, activation }`，沒有就缺席。
+   */
+  #setActivation(next: GoalActivation): void {
+    if (this.#activation === next) return;
+    this.#activation = next;
+    // dsh 在這裡還有「折疊失敗不送」（`:502`）：我們兩個呼叫點都到不了——`disarm` 先 `#requireHealthy` 拋、`#observe` 折壞就早退。
+    const listener = this.#onActivationChanged;
+    if (listener === undefined) return;
+    const view = this.#view();
+    listener(
+      view === undefined
+        ? {}
+        : { goal: { id: view.id, revision: view.revision, activation: view.activation } },
+    );
   }
 
   #requireHealthy(): void {
