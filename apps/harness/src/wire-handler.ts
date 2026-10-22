@@ -126,7 +126,13 @@ import type {
   SessionLog,
   SessionRegistry,
 } from '@nexus/core';
-import { errorChain, FEEDBACK_CATEGORIES, ProjectionDetailError } from '@nexus/core';
+import {
+  errorChain,
+  FEEDBACK_CATEGORIES,
+  FeedbackDurabilityUnavailableError,
+  FeedbackLogCorruptionError,
+  ProjectionDetailError,
+} from '@nexus/core';
 import type { GoalId } from '@nexus/goal';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
@@ -181,6 +187,7 @@ import { readProjectionChildSeeds } from './projection-children.js';
 import type { StoredThreadList } from './session-list.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
 import type { PumpAgent, QueueAction, TurnFailedReport } from './thread-pump.js';
+import { sseResponse } from './sse-response.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
 import type { TurnClock } from './turn-clock.js';
@@ -1114,12 +1121,31 @@ function goalResponse(
   return successResponse(id, { ok: true, value: { goal: stateOf(after) } });
 }
 
-function feedbackResponse(
+/**
+ * 評分服務拋出來的錯怎麼回（#1606）。三種：
+ *
+ * - 沒掛落盤（`FeedbackDurabilityUnavailableError`）：`not_supported`，訊息原樣（#1573 Q2 (a) 拍板那句）。
+ * - 日誌裡的評分事件壞了（`FeedbackLogCorruptionError`）：`unknown_error`，「評分紀錄壞了：…」。
+ * - 其餘（落盤確認被拒、寫不進去）：寫入那兩個方法回 `unknown_error`，「評分沒存成：…」，同改名那一條的寫法；讀與評語不在這一類，原樣往外拋。
+ */
+function feedbackFailure(id: number, error: unknown, writing: boolean): unknown {
+  if (error instanceof FeedbackDurabilityUnavailableError) {
+    return errorResponse(id, 'not_supported', error.message);
+  }
+  if (error instanceof FeedbackLogCorruptionError) {
+    return errorResponse(id, 'unknown_error', `評分紀錄壞了：${error.message}`);
+  }
+  if (!writing) throw error;
+  const reason = error instanceof Error ? error.message : String(error);
+  return errorResponse(id, 'unknown_error', `評分沒存成：${reason}`);
+}
+
+async function feedbackResponse(
   thread: ThreadState | undefined,
   id: number,
   method: FeedbackMethod,
   body: unknown,
-): unknown {
+): Promise<unknown> {
   const service = thread?.feedback;
   if (thread !== undefined && service === undefined) {
     return errorResponse(id, 'not_supported', '這個組裝沒有掛回饋（@nexus/plugin-feedback）');
@@ -1141,7 +1167,7 @@ function feedbackResponse(
     if (thread === undefined || service === undefined) {
       return errorResponse(id, 'invalid_argument', '這條 thread 還沒開過，沒有會話可以記回饋');
     }
-    const result = service.record(thread.pump.sessionLog, {
+    const result = await service.record(thread.pump.sessionLog, {
       ...(typeof p.text === 'string' && { text: p.text }),
       ...(isCategory(p.category) && { category: p.category }),
     });
@@ -1153,7 +1179,11 @@ function feedbackResponse(
     if (thread === undefined || service === undefined) {
       return successResponse(id, { ok: true, value: { items: [] } });
     }
-    return successResponse(id, { ...service.list(thread.pump.sessionLog) });
+    try {
+      return successResponse(id, { ...(await service.list(thread.pump.sessionLog)) });
+    } catch (error) {
+      return feedbackFailure(id, error, false);
+    }
   }
 
   if (typeof p.messageId !== 'string' || p.messageId.length === 0) {
@@ -1167,9 +1197,13 @@ function feedbackResponse(
       return errorResponse(id, 'invalid_argument', 'feedback.delete 缺 ifVersion');
     }
     if (thread === undefined || service === undefined) return successResponse(id, notFound);
-    return successResponse(id, {
-      ...service.delete(thread.pump.sessionLog, { messageId, ifVersion: p.ifVersion }),
-    });
+    try {
+      return successResponse(id, {
+        ...(await service.delete(thread.pump.sessionLog, { messageId, ifVersion: p.ifVersion })),
+      });
+    } catch (error) {
+      return feedbackFailure(id, error, true);
+    }
   }
 
   if (
@@ -1185,14 +1219,18 @@ function feedbackResponse(
     );
   }
   if (thread === undefined || service === undefined) return successResponse(id, notFound);
-  const result = service.put(thread.pump.sessionLog, {
-    messageId,
-    rating: p.rating,
-    ...(typeof p.note === 'string' && { note: p.note }),
-    ...(isCategory(p.category) && { category: p.category }),
-    ifVersion: p.ifVersion,
-  });
-  return successResponse(id, { ...result });
+  try {
+    const result = await service.put(thread.pump.sessionLog, {
+      messageId,
+      rating: p.rating,
+      ...(typeof p.note === 'string' && { note: p.note }),
+      ...(isCategory(p.category) && { category: p.category }),
+      ifVersion: p.ifVersion,
+    });
+    return successResponse(id, { ...result });
+  } catch (error) {
+    return feedbackFailure(id, error, true);
+  }
 }
 
 /**
@@ -1953,7 +1991,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     channels: readonly WireChannel[],
     signal: AbortSignal,
   ): Response {
-    return sseResponse(touchOnEnd(pump.subscribe(channels, signal), threadId), encodeSseFrame);
+    return sseResponse(touchOnEnd(pump.subscribe(channels, signal), threadId), encodeSseFrame, {
+      where: `thread ${threadId}`,
+      describe: (event) => event.method,
+      ...(options.warn !== undefined && { warn: options.warn }),
+    });
   }
 
   /**
@@ -1973,44 +2015,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
 
   /** `GET /threads/feed`（#632）：契約見 `@nexus/wire` 的 `THREAD_FEED_PATH`。不建任何一條 thread。 */
   function openFeed(signal: AbortSignal): Response {
-    return sseResponse(feed.subscribe(signal), (frame) => encodeSseData(frame.type, frame));
-  }
-
-  function sseResponse<T>(
-    events: AsyncGenerator<T, void, undefined>,
-    encode: (value: T) => string,
-  ): Response {
-    const encoder = new TextEncoder();
-    const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        // **開線就先吐一行 SSE 註解。** 沒有這一行的話，中間任何一層代理都可能把
-        // header 壓著等第一顆 body byte——實測 Vite dev server 的 proxy 正是如此：
-        // 直連拿得到 `200 text/event-stream`，經過它就一個位元組都不來，而瀏覽器那端
-        // 看起來就是永遠「連線中」。**這一行今天的依據就是那次實測**——dsh 當初的
-        // `sseResponse()` 也這樣做（「Send an SSE comment line on open so
-        // clients/proxies see a live channel」），但那個套件在 HEAD `0a53fb55` 已經
-        // 不在了，見檔頭。註解不是封包，解碼端本來就會跳過它。
-        controller.enqueue(encoder.encode(': connected\n\n'));
-      },
-      async pull(controller) {
-        const next = await events.next();
-        if (next.done === true) {
-          controller.close();
-          return;
-        }
-        controller.enqueue(encoder.encode(encode(next.value)));
-      },
-      cancel() {
-        void events.return(undefined);
-      },
-    });
-    return new Response(body, {
-      headers: {
-        'content-type': 'text/event-stream; charset=utf-8',
-        'cache-control': 'no-store',
-        // 代理層常見的 SSE 緩衝會把「串流」變成「一次吐完」，這一行是關掉它的慣例。
-        'x-accel-buffering': 'no',
-      },
+    return sseResponse(feed.subscribe(signal), (frame) => encodeSseData(frame.type, frame), {
+      where: '全域下行',
+      describe: (frame) => frame.type,
+      ...(options.warn !== undefined && { warn: options.warn }),
     });
   }
 
@@ -2141,7 +2149,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // **也不看 `slashInFlight` 與「還在跑」**：跑著、停在核准點都能評（#267 的 Q10）。
       const existing = threads.get(threadId);
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
-      return json(feedbackResponse(thread, envelope.id, method, body));
+      return json(await feedbackResponse(thread, envelope.id, method, body));
     }
     if (method === 'thread.rename') {
       // 改名（#633 第二張）：照 dsh 要這條會話是活的，所以**經 `threadFor`**（先確認它存在，免得為一個不存在的 id 建 agent）。

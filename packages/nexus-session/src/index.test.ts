@@ -21,9 +21,10 @@ describe('@nexus/session 是 @nexus/core 的單向轉出', () => {
     expect(session.sourceKwargs).toBe(core.sourceKwargs);
   });
 
-  it('值只有這幾個：七個轉出（#1486 多 `currentTurnStart`、`sourceKwargs`），加會話查找接縫自己的 token 與契約版本（#1463）', () => {
+  it('值只有這幾個：七個轉出（#1486 多 `currentTurnStart`、`sourceKwargs`），加會話查找（#1463）與落盤確認（#1606）兩個接縫各自的 token 與契約版本', () => {
     expect(Object.keys(session).sort()).toEqual([
       'REPEAT_REMINDER_MARKER',
+      'SESSION_DURABILITY_CONTRACT_VERSION',
       'SESSION_LOOKUP_CONTRACT_VERSION',
       'TODO_STATUSES',
       'currentTurnStart',
@@ -31,12 +32,15 @@ describe('@nexus/session 是 @nexus/core 的單向轉出', () => {
       'isModelVisibleEvent',
       'loggedContentBlocks',
       'loggedMessageId',
+      'sessionDurabilityToken',
       'sessionLookupToken',
       'sourceKwargs',
       'toolCallIds',
     ]);
     expect(session.sessionLookupToken.name).toBe('sessionLookup');
     expect(session.SESSION_LOOKUP_CONTRACT_VERSION).toBe('1.1.0');
+    expect(session.sessionDurabilityToken.name).toBe('sessionDurability');
+    expect(session.SESSION_DURABILITY_CONTRACT_VERSION).toBe('1.0.0');
   });
 
   it('@nexus/core 只放 peerDependencies 與 devDependencies，不進 dependencies（不能讓安裝結果出現第二份 core）', () => {

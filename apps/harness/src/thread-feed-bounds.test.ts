@@ -159,6 +159,53 @@ describe('全域下行的位元組上限', () => {
   });
 });
 
+/** 迭代造一條 `n` 層的陣列鏈。 */
+function chain(n: number): unknown[] {
+  const root: unknown[] = [];
+  let tail = root;
+  for (let level = 1; level < n; level++) {
+    const next: unknown[] = [];
+    tail.push(next);
+    tail = next;
+  }
+  return root;
+}
+
+describe('巢狀太深的 frame（偏離 D，#1560 N1384）', () => {
+  it('廣播：兩萬層的活動，線不被收掉，副本被截斷，記一行不含內容', async () => {
+    const warned: string[] = [];
+    const feed = new ThreadFeed({ warn: (message) => warned.push(message) });
+    const { pump, asPump } = fakePump('t1');
+    feed.attach(asPump);
+    const line = pullInBackground(feed);
+
+    pump.emit({ type: 'status', running: true, deep: chain(20_000) } as never);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(feed.subscriberCount).toBe(1);
+    expect(line.frames).toHaveLength(1);
+    expect(JSON.stringify(line.frames[0])).toContain('[truncated: depth]');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('截斷');
+    expect(warned[0]).toContain('t1');
+    await line.stop();
+  });
+
+  it('開線補送：深的那顆也截斷，這條線不被收掉', async () => {
+    const warned: string[] = [];
+    const feed = new ThreadFeed({ warn: (message) => warned.push(message) });
+    const { pump, asPump } = fakePump('t1');
+    feed.attach(asPump);
+    pump.pendings = [{ request: { deep: chain(20_000) } }];
+    const line = pullInBackground(feed);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(feed.subscriberCount).toBe(1);
+    expect(JSON.stringify(line.frames[0])).toContain('[truncated: depth]');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('補送');
+    await line.stop();
+  });
+});
+
 describe('createWireHandler 把上限交給全域下行', () => {
   it('downlinkMaxBytes 調到 20：全域下行第一顆狀態 frame 就超限被收，warn 經 handler 的 warn 出去', async () => {
     const warned: string[] = [];

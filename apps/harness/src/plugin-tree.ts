@@ -13,6 +13,7 @@
  * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，#1463），契約服務，一列；**宿主給挑法**（行程裡每一條活著的 thread 綁上的註冊表，`thread-sessions.ts`），不是插件登記進來的 | （dsh 沒有這一種：工具從 `exec.agent.session` 拿；偏離登記在 `@nexus/session`） |
  * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，#1466），契約服務，一列；**宿主給挑法**（同一張登記表、同一支 `pickBoundForCall`，每一筆登記同時帶這條 thread 的 fs 把手），不是插件登記進來的 | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
  * | `pre-step` | 行程級的 `agent/pre-step` 登記處（`@nexus/agent-loop/provider`，#1474），契約服務，一列；插件登記 listener，**宿主**把登記者是某一列的那幾位建成 middleware 折進每條 thread（`pre-step-middleware.ts`） | `agent/pre-step` 事件（dsh 沒有 middleware 服務；偏離登記在 `@nexus/agent-loop`） |
+ * | `session-durability` | 行程級的落盤確認（`@nexus/session/provider`，#1606），契約服務，一列；**只在清單掛著落盤時才有**（{@link TreeInput.durable}），做法由宿主給（這棵樹的註冊表登記＋{@link PluginTree.bindDurableStore} 交進來的 store） | `sessionPersistence` 服務（掛 `session-persistence-jsonl` 那一列才有；偏離登記在 `@nexus/session`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
  * | `include:<id>` | Include 底下的列，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準） | 各插件 |
  *
@@ -67,7 +68,15 @@ import type { ApprovalChannel } from '@nexus/approval-channel';
 import { createApprovalChannelProvider } from '@nexus/approval-channel/provider';
 import { createCommandsProvider } from '@nexus/commands/provider';
 import type { CommandEntry } from '@nexus/commands/provider';
-import type { CommandDefinition, FsService, ProjectionUnit, SessionLookup } from '@nexus/core';
+import { checkpointSession } from '@nexus/core';
+import type {
+  CommandDefinition,
+  FsService,
+  ProjectionUnit,
+  SessionLog,
+  SessionLookup,
+  SessionStore,
+} from '@nexus/core';
 import { Context } from '@nexus/cordis';
 import type { Message } from '@nexus/cordis';
 import Include from '@nexus/cordis-plugin-include';
@@ -80,7 +89,10 @@ import { goalsToken } from '@nexus/goal';
 import { permissionPresetsToken } from '@nexus/permission-presets';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
 import type { ServiceToken } from '@nexus/sdk';
-import { createSessionLookupProvider } from '@nexus/session/provider';
+import {
+  createSessionDurabilityProvider,
+  createSessionLookupProvider,
+} from '@nexus/session/provider';
 import type { SessionParticipantEntry } from '@nexus/session/provider';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import type { FsLookup } from '@nexus/fs';
@@ -123,6 +135,9 @@ export const FS_ROW_ID = 'fs';
  */
 export const PRE_STEP_ROW_ID = 'pre-step';
 
+/** 落盤確認那一列的 id（#1606）。 */
+export const SESSION_DURABILITY_ROW_ID = 'session-durability';
+
 /** Include 那一列的 id。 */
 export const INCLUDE_ROW_ID = 'include';
 
@@ -134,7 +149,7 @@ export const INCLUDE_ROW_ID = 'include';
  * 在取的那一處比：範圍寫在這裡，取定義套件契約版本的主版號。不合就判**提供者那一列**掉（`stage: 'requires'`），
  * 訊息的消費者寫「宿主」，指名提供者與兩個版本。
  */
-export const FEEDBACK_SERVICE_RANGE = '^1.0.0';
+export const FEEDBACK_SERVICE_RANGE = '^2.0.0';
 
 /**
  * `goals` 服務的契約範圍（#1486 Q3 (a)）：跟 {@link FEEDBACK_SERVICE_RANGE} 同一類——插件提供、宿主消費，折進這條 thread 的
@@ -251,6 +266,11 @@ export interface TreeInput {
   readonly patches: readonly Record<string, unknown>[];
   /** 這一份清單上走橋接的每一列。 */
   readonly rows: readonly TreeRowInput[];
+  /**
+   * 這一份清單掛著落盤（`session-persistence` 那一列啟用著；#1606）。**樹在推給 Include 之前**據它掛上或拿掉
+   * `session-durability` 那一列：feedback 這種要它的列在同一次收斂裡就判定好，不會先判成等不到服務。省略即沒掛。
+   */
+  readonly durable?: boolean;
 }
 
 /** 一列在樹上的結果。 */
@@ -423,6 +443,10 @@ export class PluginTree {
   #sessionLookup = createSessionLookupProvider((config) => this.#threadSessions.forCall(config));
   /** fs 查找（#1466）：同一張登記表、同一支挑法，一筆登記同時帶這條 thread 的 fs 把手；另帶行程級的「有沒有圍堵」（#1491、#1774）。 */
   #fsLookup: ReturnType<typeof createFsLookupProvider>;
+  /** 落盤的那一個 store（#1606）：入口建好之後交進來（{@link bindDurableStore}），落盤確認在被呼叫當下才讀它。 */
+  #durableStore: Pick<SessionStore, 'open'> | undefined;
+  /** `session-durability` 那一列的類別：做法閉包住這棵樹的註冊表登記與 {@link #durableStore}。 */
+  readonly #durability = createSessionDurabilityProvider((log) => this.#checkpoint(log));
   readonly #contained: boolean;
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
@@ -455,6 +479,37 @@ export class PluginTree {
       (threadId) => this.#threadSessions.fsForThread(threadId),
       this.#contained,
     );
+  }
+
+  /**
+   * 交進落盤的 store（#1606）。**清單讀完、store 建好才有**，所以晚於建樹與第一次 {@link sync}：`session-durability` 那一列在
+   * sync 時依清單掛上，做法在被呼叫當下才讀這裡；那時還沒交就拒。
+   *
+   * @param store - 入口持有的那一個（serve 整台一份、CLI 一次執行一份）。
+   */
+  bindDurableStore(store: Pick<SessionStore, 'open'>): void {
+    this.#durableStore = store;
+  }
+
+  /**
+   * 落盤確認的做法：依 root 會話 id **精確**找回那條 thread 的註冊表（{@link ThreadSessions.sessionsForThread}），核對交進來的
+   * 就是它的 root，再交給 core 的 `checkpointSession`（排空、讀回、比對）。
+   *
+   * **偏離（理由 1，基座表達不出來）**：dsh 的 `ctx.sessions` 行程裡一份，`flush(live)` 直接拿得到；我們的註冊表每條 thread 一份，
+   * 所以多一步「從日誌找回註冊表」，用的是 `session-lookup` 那一列同一張登記表。
+   */
+  async #checkpoint(log: SessionLog): Promise<void> {
+    const sessions = this.#threadSessions.sessionsForThread(log.sessionId);
+    if (sessions?.root !== log) {
+      throw new Error(
+        `會話 "${log.sessionId}" 不是這個行程裡一條活著的 thread 的 root，不是耐久的`,
+      );
+    }
+    const store = this.#durableStore;
+    if (store === undefined) {
+      throw new Error(`會話 "${log.sessionId}" 沒有落盤的 store，不是耐久的`);
+    }
+    await checkpointSession(sessions, store, log);
   }
 
   /** 這棵樹上 `fs` 那一列交出去的「有沒有圍堵」（建樹時交進來的那一份）。給測試與審計對照用。 */
@@ -512,6 +567,7 @@ export class PluginTree {
       [SESSION_LOOKUP_ROW_ID]: this.#sessionLookup.Provider,
       [FS_ROW_ID]: this.#fsLookup.Provider,
       [PRE_STEP_ROW_ID]: this.#preSteps.Provider,
+      [SESSION_DURABILITY_ROW_ID]: this.#durability,
       [INCLUDE_ROW_ID]: Include,
     });
     await this.#create(root, { id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
@@ -601,6 +657,7 @@ export class PluginTree {
       ...(this.#epoch === 0 ? {} : { epoch: this.#epoch }),
     };
     const loader = root.loader;
+    await this.#syncDurability(root, input.durable === true);
     const existing = this.#includeEntry(root);
     if (existing === undefined) {
       await this.#create(root, { id: INCLUDE_ROW_ID, name: `cordis:${INCLUDE_ROW_ID}`, config });
@@ -638,6 +695,31 @@ export class PluginTree {
       throw new PluginTreeError(`Include 那一列沒有起來，清單推不上樹：${message}`);
     }
     return this.#snapshot(root, input.rows);
+  }
+
+  /**
+   * 依這一份清單掛上或拿掉 `session-durability` 那一列（#1606）。**排在推給 Include 之前**：要它的列（feedback）在同一次收斂裡
+   * 就拿得到或拿不到，不會先被判成等不到服務、下一次讀清單才起來。清單沒變就什麼都不動。
+   */
+  async #syncDurability(root: Context, durable: boolean): Promise<void> {
+    let present = true;
+    try {
+      root.loader.resolve(SESSION_DURABILITY_ROW_ID);
+    } catch {
+      present = false;
+    }
+    if (durable === present) return;
+    if (durable) {
+      await this.#create(root, {
+        id: SESSION_DURABILITY_ROW_ID,
+        name: `cordis:${SESSION_DURABILITY_ROW_ID}`,
+      });
+    } else {
+      // 同 Include 整列重建那一條：先收 fiber、再從 Loader 拿掉。
+      await root.loader.resolve(SESSION_DURABILITY_ROW_ID).fiber?.ctx.fiber.dispose();
+      root.loader.remove(SESSION_DURABILITY_ROW_ID);
+    }
+    await root.loader.await();
   }
 
   #includeEntry(root: Context) {

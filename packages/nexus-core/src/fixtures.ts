@@ -137,10 +137,10 @@ export function fakeSink(
 /** 一份什麼都不寫的回饋規則：拿它的測試只看它佔不佔得住那個位子。 */
 export function fakeFeedback(): FeedbackService {
   return {
-    put: () => ({ ok: false, error: { code: 'target-not-found', messageId: 'm' } }),
-    delete: () => ({ ok: true, value: { absent: true } }),
-    list: () => ({ ok: true, value: { items: [] } }),
-    record: () => ({ ok: true, value: { recorded: true } }),
+    put: () => Promise.resolve({ ok: false, error: { code: 'target-not-found', messageId: 'm' } }),
+    delete: () => Promise.resolve({ ok: true, value: { absent: true } }),
+    list: () => Promise.resolve({ ok: true, value: { items: [] } }),
+    record: () => Promise.resolve({ ok: true, value: { recorded: true } }),
   };
 }
 
