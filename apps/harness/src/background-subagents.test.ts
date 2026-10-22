@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
+import { LLM_FAILURE_FALLBACK_MESSAGE } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import {
   BACKGROUND_SESSION_CONFIG_KEY,
@@ -219,6 +220,31 @@ describe('載體本身（假 agent）', () => {
     expect(await host.submit({ runId: 'o', subagent: 'open', text: '再一句' })).toMatchObject({
       ok: false,
     });
+    await settle();
+    expect(unhandled.map(String)).toEqual([]);
+    await host.close();
+  });
+
+  it('拋出來的值 toString 會拋錯：turn/failed 照樣寫成（固定字、兩處同一句），下場仍是回傳值（#1557）', async () => {
+    const hostile = {
+      toString(): string {
+        throw new Error('toString 拋錯');
+      },
+    };
+    const agent: BackgroundAgent = { streamEvents: () => Promise.reject(hostile) };
+    const { host, sessions } = make(() => agent);
+    const result = await host.submit({ runId: 'h', subagent: 'open', text: '句' });
+    expect(result.ok).toBe(false);
+    const failed = sessions
+      .get({ kind: 'subagent', runId: 'h' })!
+      .events.filter((event) => event.type === 'turn/failed')
+      .map((event) => event.data);
+    expect(failed).toEqual([
+      {
+        message: LLM_FAILURE_FALLBACK_MESSAGE,
+        error: { message: LLM_FAILURE_FALLBACK_MESSAGE, code: 'UNKNOWN' },
+      },
+    ]);
     await settle();
     expect(unhandled.map(String)).toEqual([]);
     await host.close();

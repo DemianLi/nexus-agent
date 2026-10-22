@@ -329,7 +329,7 @@ describe('重試寫進日誌', () => {
   }, 30_000);
 });
 
-describe('classifyTurnFailure（也是 llm/retry 用的那一支）：只認碼與名字，不解析訊息', () => {
+describe('classifyTurnFailure（也是 llm/retry 用的那一支）：結構化欄位優先，額度與超窗另比措辭', () => {
   it('429 → RATE_LIMIT；5xx → SERVER，狀態碼帶著', () => {
     expect(classifyTurnFailure(Object.assign(new Error('x'), { status: 429 }))).toEqual({
       message: 'x',
