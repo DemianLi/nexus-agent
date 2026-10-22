@@ -140,12 +140,19 @@ describe.each(names)('夾具 %s', (name) => {
     const listing = await openJsonlSessionStore({ directory: await copied(name) }).list();
     expect(listing.unreadable).toBe(0);
     expect(listing.sessions.map((session) => session.header.id).sort()).toEqual(ids);
+    // 列出來的 header 轉譯成這一版，原版號另交（#1856）。
+    for (const session of listing.sessions) {
+      expect(session.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+      expect(session.storedFormatVersion).toBe(expected.sessions[session.header.id]!.headerVersion);
+    }
   });
 
   it.each(ids)('唯讀打開 %s：事件、版本與推回模型的歷史等於 expected.json', async (id) => {
     const session = expected.sessions[id]!;
     const opened = await openJsonlSessionStore({ directory: await copied(name) }).open(id, 'read');
-    expect(opened.header.version).toBe(session.headerVersion);
+    // header 轉譯成這一版，磁碟上那個版號另交（#1856，照 dsh `types.ts:96-100` 加上登記的偏離）。
+    expect(opened.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(opened.storedFormatVersion).toBe(session.headerVersion);
     const events = await opened.read();
     expect(events).toHaveLength(session.eventCount);
     expect(events.map((event) => event.type)).toEqual(session.types);
@@ -159,6 +166,8 @@ describe.each(names)('夾具 %s', (name) => {
       const directory = await copied(name);
       const store = openJsonlSessionStore({ directory });
       const resumed = await resumeClosingInterruptedTurn(store, id);
+      expect(resumed.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+      expect(resumed.storedFormatVersion).toBe(expected.sessions[id]!.headerVersion);
       const next: SessionEvent = {
         type: 'turn/start',
         seq: resumed.events.length,

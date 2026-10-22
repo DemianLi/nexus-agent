@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { checkpointSession } from './session-durability.js';
 import type { SessionEvent } from './session-log.js';
 import { SessionRegistry } from './session-registry.js';
+import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
 import type { ReadonlyStoredSession, StoredSessionHeader } from './session-store.js';
 
 /** 一個只認一份存檔的唯讀 store：`events` 是叫 `read()` 當下讀到的那一份。 */
@@ -13,7 +14,8 @@ function storeOf(header: Partial<StoredSessionHeader>, events: () => readonly Se
     open(id: string): Promise<ReadonlyStoredSession> {
       opened.push(id);
       return Promise.resolve({
-        header: { version: 50, id, createdAt: 0, ...header },
+        header: { version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 0, ...header },
+        storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
         read: () => Promise.resolve(events()),
       });
     },
@@ -57,8 +59,9 @@ describe('checkpointSession（#1606）', () => {
     sessions.onFlush(() => Promise.resolve());
     const store = {
       open: () =>
-        Promise.resolve({
-          header: { version: 50, id: 'other', createdAt: 0 },
+        Promise.resolve<ReadonlyStoredSession>({
+          header: { version: SESSION_LOG_FORMAT_VERSION, id: 'other', createdAt: 0 },
+          storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
           read: () => Promise.resolve([]),
         }),
     };

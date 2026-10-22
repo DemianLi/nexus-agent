@@ -118,12 +118,19 @@ export function normalizeReferences(
 /** 精確讀一條會話：整份日誌，壞了就拋。 */
 export interface SessionReferenceReader {
   /**
+   * `storedFormatVersion` 是磁碟上那份寫的版號（`@nexus/core` 的 `ReadonlyStoredSession.storedFormatVersion`），
+   * 快照的 `capturedFormatVersion` 記它；`header.version` 已轉譯成這一版。
+   *
    * @throws 找不到、版本太新、日誌壞了；`signal` 中止時拋它的 `reason`。
    */
   read(
     sessionId: string,
     signal?: AbortSignal,
-  ): Promise<{ readonly header: StoredSessionHeader; readonly events: readonly SessionEvent[] }>;
+  ): Promise<{
+    readonly header: StoredSessionHeader;
+    readonly storedFormatVersion: number;
+    readonly events: readonly SessionEvent[];
+  }>;
 }
 
 /** 快照裡的一則。 */
@@ -476,6 +483,7 @@ export async function prepareSessionReferences(
   let sources: {
     reference: NormalizedReference;
     header: StoredSessionHeader;
+    storedFormatVersion: number;
     events: readonly SessionEvent[];
   }[];
   try {
@@ -499,7 +507,7 @@ export async function prepareSessionReferences(
   }
   if (signal !== undefined && isAborted(signal)) throw cancelled(signal);
 
-  const rendered = sources.map(({ reference, header, events }) => {
+  const rendered = sources.map(({ reference, header, storedFormatVersion, events }) => {
     const retained = retainReferencedSession(events, header, reference.label, maxReferenceBytes);
     if (retained === undefined) {
       throw new SessionReferenceError(
@@ -507,7 +515,9 @@ export async function prepareSessionReferences(
         'SESSION_REFERENCE_BUDGET_EXCEEDED',
       );
     }
-    return { ...retained, capturedFormatVersion: header.version };
+    // 記磁碟上那份的版號，不是轉譯後的 `header.version`：事件沒轉譯，原樣交到這裡（#1856；dsh 記的是後者，
+    // 偏離「引用快照的 capturedFormatVersion 記原版號」見 `@nexus/core` 的 `session-store.ts`）。
+    return { ...retained, capturedFormatVersion: storedFormatVersion };
   });
 
   const notices = omissionNotices(rendered);

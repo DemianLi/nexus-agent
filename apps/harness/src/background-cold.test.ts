@@ -99,6 +99,7 @@ function fakeStore(fixtures: readonly ColdFixture[]) {
       const fixture = byChild.get(childId)!;
       return {
         header: { id: childId, parentSession: fixture.parent ?? ROOT } as never,
+        storedFormatVersion: 0,
         events: fixture.events,
         stored: {
           close: () => {

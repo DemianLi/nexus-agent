@@ -130,6 +130,7 @@ const IGNORABLE_VOCABULARY_SINCE = 32;
 /** 一份日誌的身分：從 header 讀出來的那幾格。 */
 export interface SessionLogHeader {
   readonly id: string;
+  /** 磁碟上那份 header 寫的格式版本（`parseHeader` 的 `storedFormatVersion`），各個 `…_SINCE` 門檻比的是它。 */
   readonly version: number;
   readonly parentSession?: string;
   /** 建置版本、插件清單、設定雜湊、模型型錄 id（#1025），只留形狀對得上的那幾格；沒有就是沒記。 */
@@ -361,8 +362,9 @@ export function scanSessionLog(
  */
 function readHeader(text: string): SessionLogHeader | string {
   let header;
+  let storedFormatVersion;
   try {
-    header = parseHeader(text, { acceptNewer: true });
+    ({ header, storedFormatVersion } = parseHeader(text, { acceptNewer: true }));
   } catch (error: unknown) {
     if (error instanceof SessionCorruptionError) return error.message;
     throw error;
@@ -370,7 +372,8 @@ function readHeader(text: string): SessionLogHeader | string {
   const metadata = readSessionHeaderMetadata(header);
   return {
     id: header.id,
-    version: header.version,
+    // 版本門檻看磁碟上那份寫的版號；`header.version` 已轉譯成這一版（#1856）。
+    version: storedFormatVersion,
     ...(header.parentSession !== undefined && { parentSession: header.parentSession }),
     // 一格都沒記（30 以前的日誌）就整個不帶，報表照樣印「—」。
     ...(Object.keys(metadata).length > 0 && { metadata }),
