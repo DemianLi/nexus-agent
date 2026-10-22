@@ -62,6 +62,7 @@ export function harnessSessionsDir(env: Readonly<Record<string, string | undefin
 }
 
 /** 不變量量測記錄在 home 底下的檔名（[#976](https://github.com/DemianLi/nexus-agent/issues/976)）。 */
+// session-file-exempt: 不變量量測的紀錄檔，不是會話日誌。
 export const HARNESS_INVARIANT_LOG_FILE_NAME = 'invariant-log.jsonl';
 
 /**

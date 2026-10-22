@@ -69,6 +69,7 @@ import { z } from 'zod';
 import { syncDirectory, writeAtomic } from './atomic-file.js';
 
 /** 紀錄檔在 harness home 底下的檔名。 */
+// session-file-exempt: 插件清單的變更紀錄，不是會話日誌。
 export const PLUGIN_JOURNAL_FILE_NAME = 'plugin-journal.jsonl';
 
 /** 紀錄的格式版本。 */

@@ -66,6 +66,7 @@ import {
 import type { SessionEvent, StoredSessionHeader } from '../../packages/nexus-core/src/index.ts';
 import { historyFrames } from '../../apps/harness/src/conversation-history.ts';
 import { assertSameWorkspaceRoot } from '../../apps/harness/src/resume-guards.ts';
+import { frozenFilesOf, readEvents, readRawHeader, sessionsIn } from './run-directory.ts';
 
 /** header 的 `cwd` 記的那個目錄。 */
 const FIXTURE_CWD = '/var/tmp/nexus-session-format-cwd';
@@ -242,22 +243,6 @@ function inTree(tree: string, scratch: string, script: string, args: readonly st
   }
 }
 
-/** run 目錄裡的會話：header 與日誌兩個檔都在的。 */
-function sessionsIn(directory: string): string[] {
-  return readdirSync(directory)
-    .filter((name) => name.endsWith('.header.json'))
-    .map((name) => name.slice(0, -'.header.json'.length))
-    .filter((id) => existsSync(join(directory, `${id}.jsonl`)))
-    .sort();
-}
-
-function readEvents(directory: string, id: string): SessionEvent[] {
-  return readFileSync(join(directory, `${id}.jsonl`), 'utf8')
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
-}
-
 /** 今天的讀方的推法，`expected.json` 裡標 `today`。 */
 function todayReplay(events: readonly SessionEvent[]): unknown {
   const replay = replayConversation(events);
@@ -284,12 +269,10 @@ function freeze(
   const files = new Map<string, string>();
   const sessions: Record<string, unknown> = {};
   for (const id of sessionsIn(directory)) {
-    for (const file of [`${id}.header.json`, `${id}.jsonl`]) {
+    for (const file of frozenFilesOf(id)) {
       files.set(file, readFileSync(join(directory, file), 'utf8'));
     }
-    const header = JSON.parse(readFileSync(join(directory, `${id}.header.json`), 'utf8')) as {
-      version: number;
-    };
+    const header = readRawHeader<{ version: number }>(directory, id);
     const events = readEvents(directory, id);
     sessions[id] = {
       headerVersion: header.version,
@@ -377,9 +360,7 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
           };
         });
       case 'workspace-root': {
-        const header = JSON.parse(
-          readFileSync(join(directory, 'cli.header.json'), 'utf8'),
-        ) as StoredSessionHeader;
+        const header = readRawHeader<StoredSessionHeader>(directory, 'cli');
         let resumeWithWorkspace = 'allowed';
         try {
           assertSameWorkspaceRoot('fixture', 'cli', header, '/elsewhere');
@@ -413,9 +394,7 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
 }
 
 function headerVersion(directory: string, id: string): number {
-  return (
-    JSON.parse(readFileSync(join(directory, `${id}.header.json`), 'utf8')) as { version: number }
-  ).version;
+  return readRawHeader<{ version: number }>(directory, id).version;
 }
 
 function generate(target: Target): void {
