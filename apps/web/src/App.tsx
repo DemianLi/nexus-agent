@@ -626,6 +626,7 @@ function ConversationView({
                     ratings: conversation.ratings,
                     busy: !conversation.connected,
                     loadFailed: conversation.ratingsLoadFailed,
+                    unsupported: conversation.ratingsUnsupported,
                     onSeed: conversation.seedRatings,
                     onRate: (messageId, rating) => void conversation.rate(messageId, rating),
                   }}

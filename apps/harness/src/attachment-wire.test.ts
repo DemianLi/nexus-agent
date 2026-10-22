@@ -17,6 +17,7 @@
  */
 
 import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -314,9 +315,12 @@ describe('內嵌的圖', () => {
       await settled(events, 1);
 
       const user = requests[0]!.messages.find((m) => m.role === 'user')!;
-      const blocks = user.content as { type: string; image_url?: { url: string } }[];
-      expect(blocks.map((b) => b.type)).toEqual(['image_url', 'text']);
-      expect(blocks[0]!.image_url!.url).toBe(`data:image/png;base64,${PNG_7X5}`);
+      const blocks = user.content as { type: string; text?: string; image_url?: { url: string } }[];
+      expect(blocks.map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
+      // 圖前面一行把手（#1566）：名字與存下來的 attachmentId、寬高從位元組認的。
+      const digest = createHash('sha256').update(Buffer.from(PNG_7X5, 'base64')).digest('hex');
+      expect(blocks[0]!.text).toBe(`Image "s.png" (sha256:${digest}); request preview 7x5px.`);
+      expect(blocks[1]!.image_url!.url).toBe(`data:image/png;base64,${PNG_7X5}`);
 
       // 前提：base64 真的在這次請求裡，下面的「不在」才有意義。
       expect(requests[0]!.raw).toContain(PNG_7X5);
@@ -339,7 +343,10 @@ describe('內嵌的圖', () => {
       expect(result).toMatchObject({ type: 'success' });
       await settled(events, 1);
       const user = requests[0]!.messages.find((m) => m.role === 'user')!;
-      expect((user.content as { type: string }[]).map((b) => b.type)).toEqual(['image_url']);
+      expect((user.content as { type: string }[]).map((b) => b.type)).toEqual([
+        'text',
+        'image_url',
+      ]);
     } finally {
       await handler.close();
     }

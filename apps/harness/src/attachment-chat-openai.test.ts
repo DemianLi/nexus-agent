@@ -129,15 +129,17 @@ describe('三條出請求的路都過投影', () => {
   it('invoke（非串流，_generate）', async () => {
     await model('accepts').invoke([message()]);
     expect(bodies.at(-1)!.stream).not.toBe(true);
-    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
-    expect(userBlocks()[1]!.image_url!.url).toBe(`data:image/png;base64,${PNG_7X5}`);
+    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
+    // 圖前面一行把手（#1566，照 dsh pi-ai `context.ts:79-89`），再來才是圖。
+    expect(userBlocks()[1]!.text).toBe(`Image sha256:${'d'.repeat(64)}; request preview 7x5px.`);
+    expect(userBlocks()[2]!.image_url!.url).toBe(`data:image/png;base64,${PNG_7X5}`);
   });
 
   it('stream（串流）', async () => {
     const chunks: unknown[] = [];
     for await (const chunk of await model('accepts').stream([message()])) chunks.push(chunk);
     expect(bodies.at(-1)!.stream).toBe(true);
-    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
+    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
   });
 
   it('v3 的事件串流（_streamChatModelEvents）', async () => {
@@ -145,7 +147,7 @@ describe('三條出請求的路都過投影', () => {
       _streamChatModelEvents(m: BaseMessage[], o: object): AsyncGenerator<unknown>;
     };
     for await (const event of llm._streamChatModelEvents([message()], {})) void event;
-    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
+    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
   });
 
   it('withConfig／bindTools 建出來的新實例仍是子類，仍投影', async () => {
@@ -153,7 +155,7 @@ describe('三條出請求的路都過投影', () => {
     const configured = llm.withConfig({ stop: ['END'] });
     expect(configured).toBeInstanceOf(AttachmentChatOpenAI);
     await configured.invoke([message()]);
-    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
+    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
     const bound = llm.bindTools([
       {
         type: 'function',
@@ -161,7 +163,7 @@ describe('三條出請求的路都過投影', () => {
       },
     ]);
     await bound.invoke([message()]);
-    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
+    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
   });
 });
 
@@ -185,7 +187,7 @@ describe('投影的內容', () => {
 
   it('沒宣告：照送圖', async () => {
     await model('undeclared').invoke([message()]);
-    expect(userBlocks()[1]!.type).toBe('image_url');
+    expect(userBlocks()[2]!.type).toBe('image_url');
   });
 
   it('圖的位元組讀不到：那一步不失敗，換成「請重新附上」的一行', async () => {
@@ -197,7 +199,8 @@ describe('投影的內容', () => {
         },
       }),
     ).invoke([message()]);
-    expect(userBlocks()[1]!.type).toBe('text');
+    // 讀不到的那張沒有把手：佔位字本身就是那一塊。
+    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'text']);
     expect(userBlocks()[1]!.text).toContain('no longer available in attachment storage');
     expect(userBlocks()[1]!.text).toContain('Do not claim to have seen it');
   });
@@ -295,7 +298,7 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
   it('額度內：照常投影送出', async () => {
     await model('accepts', source(), guard).invoke([message()]);
     expect(bodies).toHaveLength(1);
-    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
+    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
   });
 
   it('被省略的圖不再佔額度：標成 offloaded 的那張換成佔位字，請求送得出去', async () => {
@@ -306,7 +309,10 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
     await model('accepts', source(), guard).invoke([
       new HumanMessage({ content: [first, second, { type: 'text', text: '請看' }] as never }),
     ]);
-    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
+    expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
+    // 被省略的那張只有佔位字；送出的那張前面才有把手。
+    expect(userBlocks()[0]!.text).toContain('image omitted to fit request image limits');
+    expect(userBlocks()[1]!.text).toBe(`Image sha256:${'f'.repeat(64)}; request preview 7x5px.`);
   });
 });
 
