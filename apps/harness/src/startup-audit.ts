@@ -227,7 +227,13 @@ export async function auditTreeEntries(loader: Loader): Promise<readonly Startup
     try {
       if (entry.disabled) continue;
     } catch (error) {
-      drops.push({ id, module, stage: 'config', message: messageOf(error) });
+      drops.push({
+        id,
+        module,
+        stage: 'config',
+        message: messageOf(error),
+        detail: formatActivationError(error),
+      });
       continue;
     }
     // `entry.fiber` 是 `registry.plugin()` 回的包裝，真的 Fiber 在 `.ctx.fiber`（探針 `tree.ts` 的 `fiberOf`）。
@@ -243,7 +249,13 @@ export async function auditTreeEntries(loader: Loader): Promise<readonly Startup
         () => new Error('狀態是 FAILED，卻沒有記下錯誤'),
         (reason: unknown) => reason,
       );
-      drops.push({ id, module, stage: 'apply', message: messageOf(error) });
+      drops.push({
+        id,
+        module,
+        stage: 'apply',
+        message: messageOf(error),
+        detail: formatActivationError(error),
+      });
     } else if (fiber.state === FIBER_PENDING) {
       const missing = missingServices(fiber);
       drops.push({
@@ -265,6 +277,57 @@ export async function auditTreeEntries(loader: Loader): Promise<readonly Startup
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 一個被拋出的值連同 `cause` 鏈與 `AggregateError` 的成員，每個 `Error` 一份堆疊，同一顆只出現一次（`seen` 防循環）。
+ * 照 dsh 的 `formatActivationError`（`packages/boot/app-boot/src/index.ts:963-979`，`687f282e`）。**插件在 `apply` 裡常把錯誤包一層
+ * 再丟**（`new Error('外層', { cause })`），只取 `message` 的話真正的原因就丟了。
+ *
+ * @param error - catch 到的值。
+ * @returns 多行文字，第一行是最外層。
+ */
+export function formatActivationError(error: unknown): string {
+  const details: string[] = [];
+  const seen = new Set<Error>();
+  const visit = (value: unknown): void => {
+    if (!(value instanceof Error)) {
+      details.push(String(value));
+      return;
+    }
+    if (seen.has(value)) return;
+    seen.add(value);
+    details.push(value.stack ?? value.message);
+    if (value.cause !== undefined) visit(value.cause);
+    if (value instanceof AggregateError) value.errors.forEach(visit);
+  };
+  visit(error);
+  return details.join('\n');
+}
+
+/**
+ * 根沒建起來時要拋的那句：`${階段}：${原因}`，原因後面接最深那一顆 `cause` 的堆疊。照 dsh `boot` 的 catch
+ * （`packages/boot/app-boot/src/index.ts:1252-1263`）。`StartupError` 不經這裡，原樣拋。
+ *
+ * @param stage - 失敗在哪一段（根準備、插件樹）。
+ * @param cause - 原本拋的值。
+ */
+export function bootFailure(stage: string, cause: unknown): Error {
+  const detail = cause instanceof Error ? cause.message : String(cause);
+  // 包一層的錯誤，真正的原因與堆疊在最深那一顆。
+  let deepest: unknown = cause;
+  const seen = new Set<Error>();
+  while (deepest instanceof Error && !seen.has(deepest) && deepest.cause !== undefined) {
+    seen.add(deepest);
+    deepest = deepest.cause;
+  }
+  const stack =
+    deepest instanceof AggregateError
+      ? `\n${deepest.stack ?? deepest.message}\n${deepest.errors.map((error) => formatActivationError(error)).join('\n')}`
+      : deepest instanceof Error && deepest !== cause
+        ? `\n${deepest.stack ?? deepest.message}`
+        : '';
+  return new Error(`${stage}：${detail}${stack}`, { cause });
 }
 
 /**
@@ -331,7 +394,14 @@ function startupDiagnostic(
   requiredCount: number,
 ): string {
   const lines = [`起不來：${String(requiredCount)} 列必掛的沒有掛上。這一次掉了的全部：`];
-  for (const drop of dropped) lines.push(dropLine(drop, required.has(drop.id)));
+  for (const drop of dropped) {
+    lines.push(dropLine(drop, required.has(drop.id)));
+    // 帶堆疊與 cause 鏈的全文縮排接在底下（dsh `startupDiagnostic` 同）；只給管理者看的這一則用，
+    // 回到網頁的路徑（`describeDrop`、失敗列的 `message`）仍是一行，照 dsh 的 `reloadDiagnostic`。
+    if (drop.detail !== undefined) {
+      lines.push(...drop.detail.split('\n').map((line) => `    ${line}`));
+    }
+  }
   return lines.join('\n');
 }
 

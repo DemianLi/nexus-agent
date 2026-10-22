@@ -1520,6 +1520,11 @@ export interface StartupDrop {
   /** 指名那一列的原因，跟今天整個拋的那一句同一句。 */
   readonly message: string;
   /**
+   * 帶堆疊與 `cause` 鏈的全文（`formatActivationError`），多行。**只有 Cordis 樹的稽核（`auditTreeEntries`）填**，且只進起不來那則
+   * 訊息（`startupDiagnostic`）；`message` 維持一行，回到網頁的路徑與警告一律只用 `message`（#1560 N0053）。
+   */
+  readonly detail?: string;
+  /**
    * 清單上那一列：設定那一步的已標成 `disabled: true`，組裝那兩步的是交給組裝的那一顆。模組那一步掉的沒有：它不在
    * 清單上，見 {@link loadPluginConfig}。
    */
