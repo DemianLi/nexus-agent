@@ -7,16 +7,23 @@ import {
   assertImageBudget,
   beginAttemptReport,
   DEFAULT_STREAM_RETRYABLE_CODES,
+  errorChain,
   isModelCallFailure,
+  llmFailure,
   markModelCallFailure,
   noteStreamFailure,
   SESSION_EVENT_DEPTH_EXCEEDED,
   streamFailureReporter,
   tagModelRoute,
+  thrownMessage,
 } from '@nexus/core';
 import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
 import { CHECKPOINT_DEPTH_EXCEEDED } from './checkpoint-serde.js';
-import { classifyInbandError } from './inband-error.js';
+import {
+  classifyInbandError,
+  isContextWindowExceededDetail,
+  isQuotaExceededDetail,
+} from './inband-error.js';
 import type { InbandFailure } from './inband-error.js';
 
 import { assertUsableApiKey, INVALID_CREDENTIAL_CODE } from './api-key.js';
@@ -155,10 +162,12 @@ export const DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS = 90_000;
 /**
  * 端點限流（HTTP 429）的判定。
  *
- * **照 dsh 的規矩認碼，不解析訊息** —— dsh 的 `HarnessError.code` 註解寫得很直白：
- * 「route on this, never by parsing `message`」。這裡的碼有兩個來源：協定上的
+ * **消費端只認碼，不解析訊息** —— dsh 的 `HarnessError.code` 註解寫得很直白：
+ * 「route on this, never by parsing `message`」，那條規矩管的是**拿到碼的一方**。**產生碼的這一層**照 dsh 的 adapter：
+ * 結構化欄位優先，額度與超窗再比措辭（`llm-deepseek/src/transport.ts:26-32`、`llm-pi-ai/src/stream.ts:44`、`:84`，見
+ * {@link classifyTurnFailure}，#1557）。這支 `isRetryableRateLimit` 是消費端：協定上的
  * `status === 429`，以及 `@langchain/core` 正規化後掛上的 `name`。兩個都認，因為
- * 包裝層數是別人家的實作細節。
+ * 包裝層數是別人家的實作細節。現在只剩 eval（`eval/compare.ts`）在用，判定照舊。
  *
  * **`insufficient_quota` 不算。** dsh 把 `QUOTA`（配額耗盡）與 `RATE_LIMIT`（限流）
  * 分成兩個碼，而且只有後者在預設可重試集裡 —— 理由一樣：配額耗盡重試幾次都一樣，
@@ -288,10 +297,10 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  * 的這個工廠。**不碰恢復那一層**——那一層基座已經有而且是對的（`context-overflow.test.ts`
  * 量過：branded 的錯誤到得了 `isContextOverflow`，埋在 `cause` 底下也認得）。
  *
- * ## 偏離登記二：這裡**解析了訊息**，而這個檔的規矩是不解析
+ * ## 偏離登記二：這裡**解析了訊息**，用來取一個數字
  *
- * {@link isRetryableRateLimit} 的檔頭寫著「照 dsh 的規矩認碼，不解析訊息」。這裡破了例，
- * 理由是**結構化欄位不夠分**：body 只給得出 `param: "max_tokens"`，那個導出來的數字**只
+ * 這個檔產生碼的那一層，結構化欄位優先、額度與超窗另比措辭（照 dsh adapter，見 {@link classifyTurnFailure}，#1557）。
+ * 這裡讀訊息是另一回事：理由是**結構化欄位不夠分**：body 只給得出 `param: "max_tokens"`，那個導出來的數字**只
  * 存在於訊息裡**。而少了它，一顆「輸出上限比我們送的 16384 小」的模型會被誤判成上下文
  * 溢出——那是一次壓縮救不回來的東西，壓幾次都一樣。
  *
@@ -445,8 +454,68 @@ function* causeLinks(error: unknown): Generator<object> {
     if (typeof current !== 'object' || current === null || seen.has(current)) return;
     seen.add(current);
     yield current;
-    current = (current as { cause?: unknown }).cause;
+    // `cause` 的存取子拋錯就停在這一環（#1557）：前面的環已經交出去了，這一環以後的當作沒有。
+    try {
+      current = (current as { cause?: unknown }).cause;
+    } catch {
+      return;
+    }
   }
+}
+
+/**
+ * 讀一環上的一個欄位；存取子拋錯就當作沒有這一格（#1557）。分類器跑在 `catch` 裡，哪一環的 getter 壞了，只有那一環的那幾格
+ * 落空，其餘照讀——同 `errorChain` 逐節點塌掉的做法。**不改成只讀自有資料屬性**：我們認的名字有的掛在原型上
+ * （`AbortSignal.timeout` 丟的 `DOMException` 的 `name`、`constructor.name`），只讀自有屬性會把它們漏掉。
+ */
+function readField(link: object, key: string): unknown {
+  try {
+    return (link as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+/** 跑一個可能拋的判斷；拋了就退回 `fallback`（分類器的每一環判斷都用它，理由同 {@link readField}）。 */
+function guarded<T>(read: () => T, fallback: T): T {
+  try {
+    return read();
+  } catch {
+    return fallback;
+  }
+}
+
+/**
+ * 拆掉基座包的 `MiddlewareError`（每一層都抄底下那一層的 `message`），回最底下那一顆。
+ *
+ * 拆掉的 `MiddlewareError` 本身可能帶著「模型呼叫」的記號（#1763）：`wrapModelCall` 的 catch 拿到的就是基座包過的那一層
+ * （`turn-cancel.ts` 標的可能是它，不是底下的供應商錯），拆掉就丟了記號，「只看結構」的模型呼叫規則（串流中段的
+ * in-band `APIError`、`ECONNRESET`…）在真的一輪裡一條都不會觸發，落到 `UNKNOWN`——所以記號一併回傳。
+ * 有層數上限，`cause` 讀不出來就停在那一層（#1557）。
+ */
+function unwrapMiddlewareError(error: unknown): { root: unknown; wrappedModelCall: boolean } {
+  let root = error;
+  let wrappedModelCall = false;
+  for (let depth = 0; depth < 100; depth += 1) {
+    if (!guarded(() => MiddlewareError.isInstance(root), false)) break;
+    if (isModelCallFailure(root)) wrappedModelCall = true;
+    const next = readField(root as object, 'cause');
+    if (next === undefined) break;
+    root = next;
+  }
+  return { root, wrappedModelCall };
+}
+
+/**
+ * 一環的 `type`、字串 `code`、`message` 接成一句，給額度與超窗的字樣比對用——照 dsh 的 `providerError`
+ * （`llm-deepseek/src/transport.ts:26-27`）：`${type} ${code（字串才算）} ${message}`。**逐環各比各的**，不跨環串接：
+ * 超窗那幾條正規式帶 `.{0,40}` 的間隔，串起來會跨環誤中。
+ */
+function wordingDetailOf(link: object): string {
+  const type = readField(link, 'type');
+  const code = readField(link, 'code');
+  const message = readField(link, 'message');
+  return `${typeof type === 'string' ? type : ''} ${typeof code === 'string' ? code : ''} ${typeof message === 'string' ? message : ''}`;
 }
 
 /**
@@ -1601,7 +1670,7 @@ export function createLiveModel(
  * **實測 2026-09-04（當時是 SDK 層 6 次、退避 1–32 秒）：`openai/gpt-oss-120b` 的 410 花了 106.7 秒才浮出來**。
  * 現在重試只看碼，這個職責退場了。）
  *
- * ## 這裡沒有破「認碼不解析訊息」那條規矩
+ * ## 這裡不讀訊息內容
  *
  * 判準是 `status === 410`，一個**碼**。`detail` 只是被**原樣搬運**到失敗訊息裡 ——
  * 沒有任何分支讀它的內容。這跟 {@link isDerivedContextOverflow} 是兩回事：那邊是拿訊息
@@ -1666,8 +1735,23 @@ export function classifyFailedAttempt(error: unknown): void {
   if (gone !== undefined) throw new Error(gone, { cause: error });
   if (isDerivedContextOverflow(error)) throw ContextOverflowError.fromError(error as Error);
   if (isAbortLike(error)) throw error;
+  // 供應商用基座認不得的說法回「超出上下文」（#1557，`Input is too long for this model` 之類）：分類器依字樣記成
+  // `CONTEXT_WINDOW_EXCEEDED`，這裡也拋 branded 的錯誤，基座的摘要恢復才認得。碼先於字樣（`AUTH`、`QUOTA`、`RATE_LIMIT` 排在超窗前面，
+  // 同 dsh），而且鏈上本來就有 `ContextOverflowError` 的不重包。
+  if (hasContextOverflowWording(error)) throw ContextOverflowError.fromError(error as Error);
   if (DEFAULT_STREAM_RETRYABLE_CODES.includes(classifyTurnFailure(error).code)) return;
   throw error;
+}
+
+/** 這一次失敗是不是「供應商用字樣說超出上下文」而分類成 `CONTEXT_WINDOW_EXCEEDED`、鏈上又還沒有 branded 的 `ContextOverflowError`。 */
+function hasContextOverflowWording(error: unknown): boolean {
+  if (classifyTurnFailure(error).code !== 'CONTEXT_WINDOW_EXCEEDED') return false;
+  let wording = false;
+  for (const link of causeLinks(error)) {
+    if (guarded(() => ContextOverflowError.isInstance(link), false)) return false;
+    if (isContextWindowExceededDetail(wordingDetailOf(link))) wording = true;
+  }
+  return wording;
 }
 
 /**
@@ -1677,7 +1761,7 @@ export function classifyFailedAttempt(error: unknown): void {
  * 在第一則事件之後的閒置逾時（#521）。
  */
 function isTimeoutLink(link: object): boolean {
-  const name = (link as { name?: unknown }).name;
+  const name = readField(link, 'name');
   return (
     name === 'StreamIdleTimeoutError' ||
     name === 'APIConnectionTimeoutError' ||
@@ -1691,8 +1775,9 @@ function isTimeoutLink(link: object): boolean {
  * （`BadRequestError`…），名字不同，不會落到這裡。
  */
 function isInbandApiError(link: object): boolean {
-  if ((link.constructor as { name?: string } | undefined)?.name !== 'APIError') return false;
-  return typeof (link as { status?: unknown }).status !== 'number';
+  const constructorName = (readField(link, 'constructor') as { name?: string } | undefined)?.name;
+  if (constructorName !== 'APIError') return false;
+  return typeof readField(link, 'status') !== 'number';
 }
 
 /**
@@ -1752,10 +1837,12 @@ const TIMEOUT_ERROR_CODES: ReadonlySet<string> = new Set([
  * 不該被記成模型的 `TRANSPORT`。
  */
 function isConnectionLink(link: object, modelCall: boolean): boolean {
-  if ((link.constructor as { name?: string } | undefined)?.name === 'APIConnectionError')
+  if (
+    (readField(link, 'constructor') as { name?: string } | undefined)?.name === 'APIConnectionError'
+  )
     return true;
   if (connectionFailures.has(link)) return true;
-  const code = (link as { code?: unknown }).code;
+  const code = readField(link, 'code');
   return modelCall && typeof code === 'string' && NETWORK_ERROR_CODES.has(code);
 }
 
@@ -1774,12 +1861,12 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * 分類、`llm/retry` 的回報、串流內信封的監看、`turn/failed` 全走它，重打與否由重試那一層**只看碼**。照 dsh 的
  * `providerError`（`packages/llm/llm-deepseek/src/transport.ts`，`5badb15`）的順序與詞彙：
  *
- * | 條件（認結構化欄位，不解析訊息） | `code` | 預設重打 |
+ * | 條件（結構化欄位優先；額度與超窗再比措辭，只在模型呼叫的錯誤鏈上，見表後） | `code` | 預設重打 |
  * | --- | --- | --- |
  * | 401、403 | `AUTH` | 否 |
- * | 402，或任何一環 `code`／`type` 是 `insufficient_quota`、或名字是 `RateLimitQuotaExhaustedError`／`InsufficientQuotaError`（要在 429 之前，它跟限流共用 429） | `QUOTA` | 否 |
+ * | 402，或任何一環 `code`／`type` 是 `insufficient_quota`、或名字是 `RateLimitQuotaExhaustedError`／`InsufficientQuotaError`、或訊息字樣是額度耗盡（`isQuotaExceededDetail`，要在 429 之前，它跟限流共用 429） | `QUOTA` | 否 |
  * | 429 | `RATE_LIMIT` | 是 |
- * | 鏈上有 `ContextOverflowError`（含伺服器導出負 `max_tokens` 那種，見 {@link isDerivedContextOverflow}） | `CONTEXT_WINDOW_EXCEEDED` | 否 |
+ * | 鏈上有 `ContextOverflowError`（含伺服器導出負 `max_tokens` 那種，見 {@link isDerivedContextOverflow}），或訊息字樣是超出模型上下文（`isContextWindowExceededDetail`） | `CONTEXT_WINDOW_EXCEEDED` | 否 |
  * | 400、413 | `INVALID_REQUEST` | 否 |
  * | ≥ 500 | `SERVER` | 是 |
  * | 其他有狀態的（404、408、410、418、422、425…） | `HTTP_<狀態>` | 否 |
@@ -1834,16 +1921,8 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * @param error - 這一輪拋出來的東西，可能已經被包過很多層。
  */
 export function classifyTurnFailure(error: unknown): LlmFailure {
-  const message = error instanceof Error ? error.message : String(error);
-  let root = error;
-  // 拆掉的 `MiddlewareError` 本身可能帶著「模型呼叫」的記號（#1763）：`wrapModelCall` 的 catch 拿到的就是基座包過的那一層
-  // （`turn-cancel.ts` 標的可能是它，不是底下的供應商錯），拆掉就丟了記號，「只看結構」的模型呼叫規則（串流中段的
-  // in-band `APIError`、`ECONNRESET`…）在真的一輪裡一條都不會觸發，落到 `UNKNOWN`。
-  let wrappedModelCall = false;
-  while (MiddlewareError.isInstance(root)) {
-    if (isModelCallFailure(root)) wrappedModelCall = true;
-    root = root.cause;
-  }
+  const message = thrownMessage(error);
+  const { root, wrappedModelCall } = unwrapMiddlewareError(error);
 
   let status: number | undefined;
   let requestId: string | undefined;
@@ -1861,31 +1940,51 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   const links = [...causeLinks(root)];
   const modelCall = wrappedModelCall || links.some((link) => isModelCallFailure(link));
   for (const link of links) {
-    const found = (link as { status?: unknown }).status;
-    if (status === undefined && typeof found === 'number') status = found;
+    // 狀態要是 100–599 的整數（#1557，dsh `LlmError` 的欄位規則）：`NaN`、`99`、`429.5` 不是狀態，當作沒有這一格。
+    const found = readField(link, 'status');
+    if (
+      status === undefined &&
+      typeof found === 'number' &&
+      Number.isInteger(found) &&
+      found >= 100 &&
+      found <= 599
+    ) {
+      status = found;
+    }
     // 供應商請求編號（#1536）：回應的標頭在錯誤鏈上某一環的 `headers`，或串流中段才斷時標在 {@link failureRequestIds}。
     // 沿鏈找到第一個帶有非空編號的環就停（錯誤鏈由外往內走，最外層帶標頭的那一環先贏）。
     if (!requestIdSearched) {
       const tagged = failureRequestIds.get(link);
-      const fromHeaders = tagged ?? requestIdOfHeaders((link as { headers?: unknown }).headers);
+      const fromHeaders =
+        tagged ?? guarded(() => requestIdOfHeaders(readField(link, 'headers')), undefined);
       if (fromHeaders !== undefined) {
         requestId = fromHeaders;
         requestIdSearched = true;
       }
     }
-    const { code, type, name } = link as { code?: unknown; type?: unknown; name?: unknown };
+    const code = readField(link, 'code');
+    const type = readField(link, 'type');
+    const name = readField(link, 'name');
     if (code === 'insufficient_quota' || type === 'insufficient_quota') quota = true;
     if (name === 'RateLimitQuotaExhaustedError' || name === 'InsufficientQuotaError') quota = true;
-    if (ContextOverflowError.isInstance(link)) overflow = true;
-    if (isTimeoutLink(link)) timedOut = true;
+    if (guarded(() => ContextOverflowError.isInstance(link), false)) overflow = true;
+    // 額度與超窗的字樣（#1557）：**只套在模型呼叫的錯誤鏈上**——dsh 的措辭比對只在 provider adapter 裡
+    // （`llm-deepseek/src/transport.ts:26-32`、`llm-pi-ai/src/stream.ts:44`、`:84`），工具 middleware 拋的錯誤文字裡出現
+    // 「out of credits」不是模型供應商說的話。結構化欄位優先（上面幾行與下面的狀態），字樣補結構化認不出來的說法。
+    if (modelCall) {
+      const detail = wordingDetailOf(link);
+      if (isQuotaExceededDetail(detail)) quota = true;
+      if (isContextWindowExceededDetail(detail)) overflow = true;
+    }
+    if (guarded(() => isTimeoutLink(link), false)) timedOut = true;
     if (modelCall && typeof code === 'string' && TIMEOUT_ERROR_CODES.has(code)) timedOut = true;
-    if (isConnectionLink(link, modelCall)) connection = true;
+    if (guarded(() => isConnectionLink(link, modelCall), false)) connection = true;
     if (name === 'EmptyResponseError') empty = true;
     if (name === 'LocalCapacityError') localCapacity = true;
     if (name === 'InvalidCredentialError') invalidCredential = true;
     if (code === SESSION_EVENT_DEPTH_EXCEEDED || code === CHECKPOINT_DEPTH_EXCEEDED) tooDeep = true;
-    if (inband === undefined && modelCall && isInbandApiError(link)) {
-      const body = (link as { error?: unknown }).error;
+    if (inband === undefined && modelCall && guarded(() => isInbandApiError(link), false)) {
+      const body = readField(link, 'error');
       inband = classifyInbandError(
         typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : undefined,
       );
@@ -1919,12 +2018,37 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
                         : connection
                           ? 'TRANSPORT'
                           : 'UNKNOWN';
-  return {
-    message,
-    code,
-    ...(status !== undefined && { status }),
-    ...(requestId !== undefined && { requestId }),
-  };
+  return llmFailure({ message, code, status, requestId });
+}
+
+/** `errorChain` 渲染不出來的節點寫的字（`@nexus/core` 的 `error-chain.ts`）。 */
+const UNRENDERABLE_VALUE = '<unrenderable value>';
+
+/**
+ * 寫 `turn/failed` 用的失敗：`message` 與 `error`（{@link LlmFailure}）兩處**同一句**（[#1557](https://github.com/DemianLi/nexus-agent/issues/1557)）。
+ * 四個寫入點（`thread-pump.ts` 兩處、`background-subagents.ts`、`cli.ts`）都用它，所以全程不會因為拋出來的東西怪（`toString` 會拋、
+ * `status` 是 `NaN`）而讓記失敗那一步自己拋錯。
+ *
+ * 碼不是 `UNKNOWN` 的，訊息維持最外層那一句：模型呼叫的失敗，最外層就是供應商的原話，對應 dsh 的 `LlmError.failure.message`。
+ * **碼是 `UNKNOWN` 的（多半是工具 middleware 的 bug、狀態錯誤）換成 {@link errorChain}**，照 dsh `agent-loop/src/agent.ts:375-381`
+ * 對非 `LlmError` 的失敗寫 `{ message: errorChain(error), code: 'UNKNOWN' }`——重新整理後的歷史看得到整條原因鏈
+ * （例如「寫入失敗: EACCES: permission denied」）。渲染的是**拆掉 `MiddlewareError` 之後**那一顆：基座每一層都抄底下那一層的
+ * `message`，直接渲染最外層會讓同一句重複十幾次。
+ *
+ * 即時那一顆 `lifecycle failed` frame 由基座發、訊息是最外層那一句，這裡不動它：`UNKNOWN` 的失敗，即時看到短句、重新整理後看到整條。
+ *
+ * @param error - catch 到的值（`unknown`，可以是任何東西）。
+ * @returns `message`（`turn/failed.message`）與 `error`（`turn/failed.error`，`error.message` 與 `message` 同一句）。
+ */
+export function turnFailureOf(error: unknown): { message: string; error: LlmFailure } {
+  const failure = classifyTurnFailure(error);
+  if (failure.code !== 'UNKNOWN') return { message: failure.message, error: failure };
+  // `errorChain` 整句塌掉（`<unrenderable value>`）時退回 `classifyTurnFailure` 那句（`thrownMessage`，壞到底是固定字）。
+  const message = guarded(() => {
+    const rendered = errorChain(unwrapMiddlewareError(error).root);
+    return rendered === '' || rendered === UNRENDERABLE_VALUE ? failure.message : rendered;
+  }, failure.message);
+  return { message, error: llmFailure({ ...failure, message }) };
 }
 
 /**

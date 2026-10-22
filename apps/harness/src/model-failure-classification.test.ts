@@ -24,6 +24,7 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MiddlewareError } from 'langchain';
+import { ContextOverflowError } from '@langchain/core/errors';
 import {
   createTurnCancelModelSignal,
   markModelCallFailure,
@@ -710,4 +711,99 @@ describe('E：不是供應商的錯，與被層層包住的供應商錯', () => 
       expect(classifyTurnFailure(quota).code).toBe('QUOTA');
     }
   });
+});
+
+// #1557（N0478）：額度與超窗的供應商措辭。dsh 的 adapter 兩條路都用措辭認（`llm-deepseek/src/transport.ts:26-32`），
+// 這裡走真的 `createLiveModel`＋`retryModelCall`＋loopback 假端點，把「只認碼」時代記成 `RATE_LIMIT`／`INVALID_REQUEST` 的說法收進來。
+describe('N0478：供應商用措辭說額度用完或超出上下文（#1557）', () => {
+  const quotaSentence =
+    'You exceeded your current quota, please check your plan and billing details.';
+
+  it('429 只在訊息裡說額度用完（沒有 insufficient_quota 碼）→ QUOTA，端點只收到 1 個請求、不重打', async () => {
+    cell = {
+      kind: 'http',
+      status: 429,
+      body: { error: { message: quotaSentence, type: 'requests' } },
+    };
+    const { log, error } = await run();
+
+    expect(hits).toBe(1);
+    expect(classifyTurnFailure(error)).toMatchObject({ code: 'QUOTA', status: 429 });
+    expect(retryRows(log)).toEqual([]);
+  });
+
+  it('反例：429 Rate limit reached for requests → 照舊 RATE_LIMIT，而且重打', async () => {
+    cell = {
+      kind: 'http',
+      status: 429,
+      body: { error: { message: 'Rate limit reached for requests', type: 'requests' } },
+    };
+    const { error } = await run();
+
+    expect(hits).toBe(RETRYING);
+    expect(classifyTurnFailure(error)).toMatchObject({ code: 'RATE_LIMIT', status: 429 });
+  }, 30_000);
+
+  it('反例：401 帶 insufficient quota 字樣 → 仍是 AUTH', async () => {
+    cell = {
+      kind: 'http',
+      status: 401,
+      body: { error: { message: 'Incorrect API key provided. insufficient quota', type: 'x' } },
+    };
+    const { error } = await run();
+
+    expect(hits).toBe(1);
+    expect(classifyTurnFailure(error)).toMatchObject({ code: 'AUTH', status: 401 });
+  });
+
+  it('400 說 Input is too long for this model. → 拋 ContextOverflowError，碼是 CONTEXT_WINDOW_EXCEEDED，不重打', async () => {
+    cell = {
+      kind: 'http',
+      status: 400,
+      body: {
+        error: { message: 'Input is too long for this model.', type: 'invalid_request_error' },
+      },
+    };
+    const { log, error } = await run();
+
+    expect(hits).toBe(1);
+    expect(ContextOverflowError.isInstance(error)).toBe(true);
+    expect(classifyTurnFailure(error)).toMatchObject({
+      code: 'CONTEXT_WINDOW_EXCEEDED',
+      status: 400,
+    });
+    expect(retryRows(log)).toEqual([]);
+  });
+
+  it('反例：400 max_tokens must be less than or equal to 16384 → INVALID_REQUEST，不是超窗', async () => {
+    cell = {
+      kind: 'http',
+      status: 400,
+      body: {
+        error: {
+          message: 'max_tokens must be less than or equal to 16384, but got 99999.',
+          type: 'invalid_request_error',
+          param: 'max_tokens',
+        },
+      },
+    };
+    const { error } = await run();
+
+    expect(hits).toBe(1);
+    expect(ContextOverflowError.isInstance(error)).toBe(false);
+    expect(classifyTurnFailure(error)).toMatchObject({ code: 'INVALID_REQUEST', status: 400 });
+  });
+
+  it.each(['inband-first', 'inband-mid'] as const)(
+    '同一句額度字樣走帶內信封（%s）→ 一樣是 QUOTA，不重打',
+    async (kind) => {
+      cell = { kind, envelope: { message: quotaSentence, type: 'requests' } };
+      const { log, error } = await run();
+
+      expect(hits).toBe(1);
+      expect(classifyTurnFailure(error).code).toBe('QUOTA');
+      expect(retryRows(log)).toEqual([]);
+    },
+    30_000,
+  );
 });

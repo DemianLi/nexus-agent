@@ -60,7 +60,7 @@ import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
 import { processLaunchEnv } from './launch-env.js';
-import { classifyTurnFailure, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import { turnFailureOf, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import type { LiveLaunch } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { runDumpConfigSchema } from './config-schema-dump.js';
@@ -574,10 +574,7 @@ export async function runTurn(
       }
     }
   } catch (error) {
-    sessionLog.append('turn/failed', {
-      message: error instanceof Error ? error.message : String(error),
-      error: classifyTurnFailure(error),
-    });
+    sessionLog.append('turn/failed', turnFailureOf(error));
     throw error;
   }
   // 撞到輸出上限的那一輪帶原因收尾（#433），判準讀的是這一輪記下的回覆，見 `@nexus/core` 的 `max-tokens.ts`。
