@@ -1594,7 +1594,7 @@ export function createLiveModel(
   // **建構時先問一次**：缺 key 在組裝當下就失敗，不等到第一個請求。這是跟 dsh 的時刻差異——dsh 只在請求當下才拋
   // （`llm-deepseek-api-key`），我們兩個時刻都拋：組裝時的那一次讓 `--live` 起不來的原因在起動時就講，
   // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
-  resolveUsableKey(credentials);
+  resolveUsableKey(credentials, config.apiKeyEnv);
 
   const fields: ChatOpenAIFields = {
     model: config.modelId,
@@ -1606,7 +1606,7 @@ export function createLiveModel(
       baseURL: config.baseUrl,
       // **每次請求前才解析**（openai 的 `apiKey` 收函式，實測經過 `bindTools`／`withConfig` 之後還在，
       // 見 `live-model.test.ts`）。所以受管檔改了、下一個請求就用新的，也不必把 key 放進行程的環境變數。
-      apiKey: async () => resolveUsableKey(credentials),
+      apiKey: async () => resolveUsableKey(credentials, config.apiKeyEnv),
       fetch: withStreamIdleTimeout(
         config.streamIdleTimeoutMs,
         // 完成檢查夾在閒置逾時與串流內錯誤之間（#1538）；型錄條目宣告 `supportsFinishReason: false`（端點不送 finish_reason）就不掛。
@@ -2113,23 +2113,26 @@ function classifyAndReportFailedAttempt(error: unknown): void {
  * （#1541，照 dsh 在轉接器取金鑰的那一刻判）。建構時與每次請求前各走一次：建構時讓 `--live` 起不來的原因在起動當場就講，
  * 請求時負責受管檔在兩個請求之間被改壞的情況。**只有空白的值不往下一層退**：資訊來自最高優先的那一層，退下去會讓人以為
  * 受管檔生效了，其實用的是別處的金鑰（`resolve` 回第一個有值的層，空白字串算有值）。
+ *
+ * @param credentials - 這次啟動的憑證服務。
+ * @param name - 金鑰的名字：`live-model` 那一列的 `apiKeyEnv`（#1604），錯誤訊息講的也是它。
  */
-function resolveUsableKey(credentials: CredentialService): string {
-  const hit = credentials.resolve(LIVE_API_KEY_ENV);
-  if (hit === undefined) throw new Error(missingKeyMessage(credentials.store));
-  return assertUsableApiKey(LIVE_API_KEY_ENV, hit);
+function resolveUsableKey(credentials: CredentialService, name: string): string {
+  const hit = credentials.resolve(name);
+  if (hit === undefined) throw new Error(missingKeyMessage(credentials.store, name));
+  return assertUsableApiKey(name, hit);
 }
 
 /**
  * 缺 key 的失敗訊息：指名缺哪一個、去哪裡放。分兩種講法（#1540）：serve 掛受管檔且它最優先；一次性入口（CLI、eval、spike）不讀受管檔，
  * 訊息明說，免得人把 key 只放受管檔、跑 `cli:live` 卻找不到原因。
  */
-function missingKeyMessage(store: boolean): string {
+function missingKeyMessage(store: boolean, name: string): string {
   return store
-    ? `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 沒有預設值也不 fallback，` +
+    ? `缺少環境變數 ${name}。真實供應商的 key 沒有預設值也不 fallback，` +
         '依序從這幾處找：harness home 的受管憑證檔（~/.nexus-agent/.credentials.yaml，chmod 600，最優先）、' +
         '啟動環境、目前資料夾的 .env、harness home 的 .env（~/.nexus-agent/.env）；欄位名見 .env.example。'
-    : `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 沒有預設值也不 fallback，` +
+    : `缺少環境變數 ${name}。真實供應商的 key 沒有預設值也不 fallback，` +
         '此入口不讀受管檔（.credentials.yaml 只有 serve 讀），依序從這幾處找：' +
         '啟動環境、目前資料夾的 .env、harness home 的 .env（~/.nexus-agent/.env）；欄位名見 .env.example。';
 }
@@ -2140,16 +2143,31 @@ export interface LiveLaunch {
   /** 這次啟動的憑證服務：模型從它取 key，每次請求前解析。 */
   readonly credentials: CredentialService;
   /**
-   * 「`NVIDIA_API_KEY` 來自哪一層」那一行（#1540）：只有名字與來源，不含值；一次性入口會寫明「此入口不讀受管檔」。
+   * 「這一把 key 來自哪一層」那一行（#1540）：只有名字與來源，不含值；一次性入口會寫明「此入口不讀受管檔」。
    * 啟動當下還沒有任何一層有值時是 `undefined`（缺 key 由 `createLiveModel` 當場失敗）。呼叫端各自印到自己的日誌。
+   *
+   * **是函式、不是字串**（#1604）：名字是 `live-model` 那一列的 `apiKeyEnv`，要等讀完設定才知道，而 {@link loadLiveLaunchEnv} 跑在讀設定之前。
+   * 呼叫端讀完設定之後再呼叫它、傳 `config.apiKeyEnv`，所以那一行出現在日誌裡的位置比以前往後挪（仍在任何模型建構與請求之前）。
    */
-  readonly keySource: string | undefined;
+  readonly keySourceOf: (name: string) => string | undefined;
+  /**
+   * 舊位置搬家檢查（#730）：**設定要的那把 key**（`apiKeyEnv`）每一層都找不到、而舊位置（程式碼資料夾根目錄）的 `.env` 還在時，
+   * 失敗並指名搬去哪裡；找得到、或沒有舊檔就什麼都不做（缺值由 `createLiveModel` 當場講缺哪一個）。
+   *
+   * **以名字為參數、由呼叫端讀完設定之後呼叫**（#1604，PM 更正卡面第 3 步）：檢查的觸發條件是「設定要的那把找不到」，不是「舊檔裡放了什麼」。
+   * 若在讀設定之前寫死出廠名字，`apiKeyEnv: GATEWAY_KEY`、受管檔有 `GATEWAY_KEY`、沒有 `NVIDIA_API_KEY`、而原始碼樹根目錄有一份沒被讀到的
+   * `.env`（cwd 不在根目錄時就是這樣）會被誤擋，但設定要的那把明明找得到。
+   *
+   * @param name - 設定要的那把 key 的名字（`live-model` 那一列的 `apiKeyEnv`）。
+   * @throws 那一把沒有值、而舊位置的 `.env` 還在。
+   */
+  readonly assertKeyLocated: (name: string) => void;
 }
 
 /**
  * 真模型路徑的啟動：載入兩層 `.env`（{@link loadLaunchEnv}）、建憑證服務；`store` 時並**完整檢查受管檔**
  * （權限或格式不對就起不來）。key 都找不到、而舊位置（程式碼資料夾根目錄）的 `.env` 還在時，
- * 直接失敗、指名搬去哪裡。
+ * 失敗、指名搬去哪裡——**那一步由呼叫端讀完設定之後做**（{@link LiveLaunch.assertKeyLocated}，名字是 `apiKeyEnv`，#1604）。
  *
  * **這不是 fallback。** 每一層都是明說過的來源（順序見 `credentials.ts`）；缺的變數留給
  * {@link createLiveModel} 當場失敗並指名缺哪一個。
@@ -2158,21 +2176,32 @@ export interface LiveLaunch {
  *   完全不碰受管檔（不 `stat`、不讀、不檢查，壞檔也不擋），順序是啟動環境 > 目前資料夾 `.env` > harness home `.env`。
  *   `cwd` 是「專案」那一層 `.env` 所在（省略即 `process.cwd()`）；`env` 只用來解 harness home（省略即 `process.env`）。
  *   兩層 `.env` 的值仍寫進 `process.env`（同 dsh）；受管檔的值不會。
- * @throws 壞的 `.env`、`store` 時壞的受管檔、或舊位置搬家訊息。
+ * @throws 壞的 `.env`、`store` 時壞的受管檔。
  */
 export function loadLiveLaunchEnv(options: {
   readonly store: boolean;
   readonly cwd?: string;
   readonly env?: NodeJS.ProcessEnv;
+  /** 舊位置的檔案路徑（`LaunchEnvOptions.legacyFile`）；測試才傳。 */
+  readonly legacyFile?: string;
 }): LiveLaunch {
   const cwd = options.cwd ?? process.cwd();
   const home = resolveHarnessHome(options.env ?? process.env);
-  const launchEnv = loadLaunchEnv({ cwd, home });
+  const launchEnv = loadLaunchEnv({
+    cwd,
+    home,
+    ...(options.legacyFile !== undefined && { legacyFile: options.legacyFile }),
+  });
   const credentials = createCredentialService({ home, launchEnv, store: options.store });
   credentials.check();
-  if (credentials.resolve(LIVE_API_KEY_ENV) === undefined) {
-    const moved = legacyEnvMovedError(launchEnv, LIVE_API_KEY_ENV, { cwd, home });
-    if (moved !== undefined) throw moved;
-  }
-  return { launchEnv, credentials, keySource: describeKeySource(credentials, LIVE_API_KEY_ENV) };
+  return {
+    launchEnv,
+    credentials,
+    keySourceOf: (name) => describeKeySource(credentials, name),
+    assertKeyLocated: (name) => {
+      if (credentials.resolve(name) !== undefined) return;
+      const moved = legacyEnvMovedError(launchEnv, name, { cwd, home });
+      if (moved !== undefined) throw moved;
+    },
+  };
 }
