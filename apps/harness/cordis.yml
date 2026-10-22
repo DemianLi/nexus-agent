@@ -644,6 +644,10 @@
   name: '#settings/live-model'
   config:
     baseUrl: 'https://integrate.api.nvidia.com/v1'
+    # 金鑰的名字（#1604，同 dsh 的 `apiKeyEnv`）：**名字**在這裡，**值**不在——值每次請求前由憑證服務按這個名字解析
+    # （受管憑證檔 `refs:`、啟動環境、`.env`，見 docs/operations.md〈金鑰放哪裡〉）。把 `baseUrl` 指到公司內部閘道時改成 `GATEWAY_KEY` 之類，
+    # 受管檔與環境裡就用那個名字；環境變數形狀。出廠就是 NVIDIA 端點的名字，不改行為。
+    apiKeyEnv: 'NVIDIA_API_KEY'
     modelId: 'nvidia/nemotron-3-super-120b-a12b'
     # 逾時拆兩格（#1251，同 dsh 的 `timeoutMs`／`streamIdleTimeoutMs`）：`timeoutMs` 管連線到第一則事件（視覺模型先吃圖，
     # 90b 實測首事件 133 秒，所以 180 秒）；`streamIdleTimeoutMs` 管第一則事件之後兩段位元組之間（90 秒，demian 拍板；

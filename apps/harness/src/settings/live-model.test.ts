@@ -69,8 +69,10 @@ const OVERRIDE_ENTRY: ModelEntry = {
   },
 };
 
-/** 覆寫用的那一組，每一格都跟預設不同。`baseUrl` 在測試裡換成 loopback 的位址。 */
+/** 覆寫用的那一組，除了 `apiKeyEnv` 每一格都跟預設不同。`baseUrl` 在測試裡換成 loopback 的位址。 */
 const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
+  // 唯一不跟預設不同的一格：這組設定要能真的建出模型（`createLiveModel`），測試裡的假 key 放在預設的名字底下。
+  apiKeyEnv: LIVE_API_KEY_ENV,
   modelId: OVERRIDE_ENTRY.id,
   models: [OVERRIDE_ENTRY],
   timeoutMs: 4321,
@@ -103,6 +105,7 @@ describe('live-model 的 schema', () => {
   it('空的 config 解出來就是 live-model.ts 那幾個預設值，型錄只有出廠那一筆', () => {
     expect(liveModelConfigSchema.parse({})).toEqual({
       baseUrl: DEFAULT_LIVE_BASE_URL,
+      apiKeyEnv: LIVE_API_KEY_ENV,
       modelId: DEFAULT_LIVE_MODEL_ID,
       models: [DEFAULT_LIVE_MODEL_ENTRY],
       timeoutMs: DEFAULT_LIVE_TIMEOUT_MS,

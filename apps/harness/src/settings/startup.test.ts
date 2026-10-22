@@ -284,6 +284,8 @@ describe('startupSetting', () => {
     // 字面值，理由同上：出貨那一列、schema 預設、`live-model.ts` 的常數是同一組數字（#545）。
     expect(startupSetting(plugins, liveModelPlugin)).toEqual({
       baseUrl: 'https://integrate.api.nvidia.com/v1',
+      // #1604：金鑰的名字，出廠寫出來、值就是預設。
+      apiKeyEnv: 'NVIDIA_API_KEY',
       modelId: 'nvidia/nemotron-3-super-120b-a12b',
       timeoutMs: 180000,
       streamIdleTimeoutMs: 90000,

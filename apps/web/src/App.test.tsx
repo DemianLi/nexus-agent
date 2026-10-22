@@ -34,6 +34,7 @@ import {
   TODOS,
   TOKEN_USAGE,
   UplinkTransportError,
+  WireProtocolError,
   WireRejectedError,
 } from '@nexus/wire';
 import {
@@ -50,7 +51,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   App,
+  connectionStall,
+  HALTED_PLACEHOLDER,
   inputPlaceholder,
+  REFUSED_PLACEHOLDER,
   RESUMED_THREAD_NOTICE,
   STOP_QUESTIONS_LABEL,
   SWITCHED_THREAD_NOTICE,
@@ -66,6 +70,7 @@ import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
+import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
@@ -815,6 +820,8 @@ describe('對話介面', () => {
       expect(screen.getByRole('status').textContent).toBe(THREAD_AT_CAPACITY_TEXT),
     );
     expect(screen.queryByText(/2／2|重啟 serve|下行被拒/)).toBeNull();
+    // 滿了是暫時的、背景在重試：送出框照舊講「連線中…」（#1865）。
+    expect(screen.getByPlaceholderText('連線中…')).toBeTruthy();
 
     fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
@@ -916,6 +923,8 @@ describe('對話介面', () => {
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toBe(THREAD_IS_SUBAGENT_TEXT),
     );
+    // 送出框不講「連線中…」：不會再接回（#1865）。
+    expect(screen.getByPlaceholderText(REFUSED_PLACEHOLDER)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
     expect(screen.queryByText(/subagent\.send|下行被拒/)).toBeNull();
     expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
@@ -942,12 +951,35 @@ describe('對話介面', () => {
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toBe(THREAD_HISTORY_TOO_DEEP_TEXT),
     );
+    // 送出框不講「連線中…」：不會再接回（#1865）。
+    expect(screen.getByPlaceholderText(REFUSED_PLACEHOLDER)).toBeTruthy();
     expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
     expect(screen.queryByText(/建不起來|下行被拒|上限 600/)).toBeNull();
     expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
     // 第一次退避最多 500ms：等過去，下行仍只開過一次。
     await new Promise((resolve) => setTimeout(resolve, 700));
     expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('伺服器送來看不懂的資料（#1601）：送出框講停住那一句；按「立刻重連」接上之後回到一般的灰字（#1865）', async () => {
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    let calls = 0;
+    const openEvents: WireClient['openEvents'] = async (...args) => {
+      calls += 1;
+      // 怎麼認出這種錯在 `use-conversation-reconnect.test.tsx` 用真的 client 驗過；這裡驗 App 的接線，拋替身就夠。
+      if (calls === 1) throw new WireProtocolError('params', '下行事件的 params 必須是物件');
+      return fake.client.openEvents(...args);
+    };
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    render(<App client={{ ...fake.client, openEvents }} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_PROTOCOL_ERROR_TEXT),
+    );
+    expect(screen.getByPlaceholderText(HALTED_PLACEHOLDER)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
   });
 
   it('下行被拒但不是滿了（#1478）：照舊講連不上與原因', async () => {
@@ -2415,6 +2447,52 @@ describe('送出框說的話', () => {
     expect(inputPlaceholder({ connected: true, stoppedOnQuestion: false })).toBe('說點什麼…');
     // 連不上時先講連不上：那時打了字也送不出去。
     expect(inputPlaceholder({ connected: false, stoppedOnQuestion: true })).toBe('連線中…');
+  });
+
+  it('沒連上、也不會自己接回時不講「連線中…」（#1865）；連上了就不看它', () => {
+    expect(inputPlaceholder({ connected: false, stall: 'halted', stoppedOnQuestion: false })).toBe(
+      HALTED_PLACEHOLDER,
+    );
+    expect(inputPlaceholder({ connected: false, stall: 'refused', stoppedOnQuestion: true })).toBe(
+      REFUSED_PLACEHOLDER,
+    );
+    expect(inputPlaceholder({ connected: true, stall: 'halted', stoppedOnQuestion: false })).toBe(
+      '說點什麼…',
+    );
+  });
+
+  it('connectionStall 跟狀態列用同一組欄位判斷（#1865）', () => {
+    const retrying = { wasConnected: true, offline: false } as const;
+    // 永久拒絕：有那一句、不重試。
+    expect(
+      connectionStall({
+        connected: false,
+        refusal: THREAD_IS_SUBAGENT_TEXT,
+        reconnecting: undefined,
+      }),
+    ).toBe('refused');
+    // 看不懂的資料：有那一句、等人按。
+    expect(
+      connectionStall({
+        connected: false,
+        refusal: THREAD_PROTOCOL_ERROR_TEXT,
+        reconnecting: retrying,
+      }),
+    ).toBe('halted');
+    // thread 數滿了在重試、一般斷線、連上了：都不是。
+    expect(
+      connectionStall({
+        connected: false,
+        refusal: THREAD_AT_CAPACITY_TEXT,
+        reconnecting: retrying,
+      }),
+    ).toBeUndefined();
+    expect(
+      connectionStall({ connected: false, refusal: undefined, reconnecting: retrying }),
+    ).toBeUndefined();
+    expect(
+      connectionStall({ connected: true, refusal: undefined, reconnecting: undefined }),
+    ).toBeUndefined();
   });
 });
 
