@@ -137,7 +137,12 @@ import {
 } from '@nexus/wire';
 import type { CustomFrameData, SubagentStatusPayload } from '@nexus/wire';
 
-import { BoundedQueue, DEFAULT_DOWNLINK_MAX_BYTES, frameBytes } from './bounded-event-queue.js';
+import {
+  BoundedQueue,
+  DEFAULT_DOWNLINK_MAX_BYTES,
+  DOWNLINK_MAX_DEPTH,
+  boundFrame,
+} from './bounded-event-queue.js';
 import { RootGoal } from './goal-wire.js';
 import { imageOffloadData } from './image-offload-wire.js';
 import {
@@ -1700,8 +1705,13 @@ export class ThreadPump {
       queue: new BoundedQueue(this.#downlinkMaxBytes),
       done: this.#closed,
     };
-    // 補送照算位元組、不判上限（`BoundedQueue.seed`）；算位元組的 `JSON.stringify` 拋錯就收掉這條線。
-    const seed = (frame: Event): void => subscriber.queue.seed(frame, frameBytes(frame));
+    // 補送照算位元組、不判上限（`BoundedQueue.seed`）；序列化拋錯（`BigInt`、循環）就收掉這條線。
+    // 深度超過 `DOWNLINK_MAX_DEPTH` 的子樹先截掉（偏離 D）：補送的那一顆照爆的話，重連之後每一次開線都會再斷一次。
+    const seed = (frame: Event): void => {
+      const bounded = boundFrame(frame);
+      if (bounded.truncated) this.#warnTruncated(frame, '開線時補送');
+      subscriber.queue.seed(bounded.frame, bounded.bytes);
+    };
     try {
       if (!subscriber.done) {
         // **照號排，不照 Map 的順序**：同 id 再度中斷時 `set` 留在原本的位置、換上新號，Map 順序就不再是發出的順序，
@@ -3801,13 +3811,18 @@ export class ThreadPump {
   }
 
   #broadcast(event: Event): void {
-    // 位元組數**廣播時算一次**，每條線共用；沒有線收這一顆就不算。
+    // 截斷與位元組數**廣播時算一次**，每條線共用；沒有線收這一顆就不算。
+    let outgoing = event;
     let bytes: number | undefined;
     for (const subscriber of this.#subscribers) {
       if (subscriber.done || !accepts(subscriber, event)) continue;
       if (bytes === undefined) {
         try {
-          bytes = frameBytes(event);
+          // 巢狀超過 `DOWNLINK_MAX_DEPTH` 的子樹先換成佔位（偏離 D）：下行不斷，之後 root 的 `lifecycle failed` 照常到。
+          const bounded = boundFrame(event);
+          if (bounded.truncated) this.#warnTruncated(event, '廣播');
+          outgoing = bounded.frame;
+          bytes = bounded.bytes;
         } catch (error: unknown) {
           // 這一顆對每條會收它的線都送不出去：只收掉那些線（沒訂這個 channel 的不受影響）、記一行，函式正常返回——
           // 錯誤不能打回產生事件的路徑（`#broadcast` 跑在 run 的事件迴圈上）。
@@ -3815,12 +3830,19 @@ export class ThreadPump {
           return;
         }
       }
-      if (subscriber.queue.push(event, bytes)) {
+      if (subscriber.queue.push(outgoing, bytes)) {
         subscriber.wake?.();
       } else {
         this.#evictSubscriber(subscriber);
       }
     }
+  }
+
+  /** 一顆事件的下行副本被深度截斷：記一行，只寫路徑、thread id、事件的 method，不寫內容。 */
+  #warnTruncated(event: Event, where: string): void {
+    this.#warn?.(
+      `[下行] thread ${this.#threadId} 有一顆 ${event.method} 事件巢狀超過 ${String(DOWNLINK_MAX_DEPTH)} 層，${where}的下行副本已截斷（日誌那一關另行判定）`,
+    );
   }
 
   /** 積壓超過上限：同步從名單拿掉（不再收、不再算進 `subscriberCount`），清空，叫醒 drain 讓它結束這條線。可重複執行。 */

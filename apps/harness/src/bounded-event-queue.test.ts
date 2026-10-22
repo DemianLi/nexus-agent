@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { BoundedQueue, DEFAULT_DOWNLINK_MAX_BYTES, frameBytes } from './bounded-event-queue.js';
+import {
+  BoundedQueue,
+  DEFAULT_DOWNLINK_MAX_BYTES,
+  DEPTH_TRUNCATED,
+  DOWNLINK_MAX_DEPTH,
+  boundFrame,
+  frameBytes,
+} from './bounded-event-queue.js';
 
 /**
  * 下行訂閱者的位元組有界佇列（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504) 第 3 步）的單元。
@@ -79,5 +86,130 @@ describe('BoundedQueue', () => {
     queue.clear();
     expect(queue.length).toBe(0);
     expect(queue.push('b', 10)).toBe(true);
+  });
+});
+
+/** 迭代造一條 `n` 層的陣列鏈（根算第 1 層），遞迴造的話測試自己先爆。 */
+function chain(n: number): unknown[] {
+  const root: unknown[] = [];
+  let tail = root;
+  for (let level = 1; level < n; level++) {
+    const next: unknown[] = [];
+    tail.push(next);
+    tail = next;
+  }
+  return root;
+}
+
+/** 從根往下數到第一個不是陣列的東西，數出有幾層陣列；迭代。 */
+function arrayDepth(value: unknown): number {
+  let depth = 0;
+  let current: unknown = value;
+  while (Array.isArray(current)) {
+    depth += 1;
+    current = current[0];
+  }
+  return depth;
+}
+
+describe('boundFrame（偏離 D：下行副本的巢狀深度截斷，#1560 N1384）', () => {
+  it('門檻是日誌上限的兩倍', () => {
+    expect(DOWNLINK_MAX_DEPTH).toBe(1200);
+  });
+
+  it('沒超過門檻的原樣回傳，不複製：剛好 1200 層', () => {
+    const frame = { data: chain(DOWNLINK_MAX_DEPTH - 1) }; // 外層物件 1 層 ＋ 陣列 1199 層
+    const bounded = boundFrame(frame);
+    expect(bounded.truncated).toBe(false);
+    expect(bounded.frame).toBe(frame);
+  });
+
+  it('多一層就截斷：超過的子樹換成佔位，其餘原樣；來源物件沒被改', () => {
+    const deep = chain(DOWNLINK_MAX_DEPTH); // 加上外層物件共 1201 層
+    const frame = { keep: 'x', data: deep };
+    const bounded = boundFrame(frame);
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.frame).not.toBe(frame);
+    const copy = bounded.frame as { keep: string; data: unknown[] };
+    expect(copy.keep).toBe('x');
+    // 外層物件算第 1 層，所以陣列只留 1199 層，第 1200 層的位置是佔位字串。
+    let tail: unknown = copy.data;
+    let arrays = 0;
+    while (Array.isArray(tail) && typeof tail[0] !== 'string') {
+      arrays += 1;
+      tail = tail[0];
+    }
+    expect(arrays).toBe(DOWNLINK_MAX_DEPTH - 2);
+    expect(Array.isArray(tail) ? tail[0] : tail).toBe(DEPTH_TRUNCATED);
+    expect(arrayDepth(frame.data)).toBe(DOWNLINK_MAX_DEPTH); // 來源原樣
+  });
+
+  // 兩萬層：Linux Node 22 的遞迴 JSON.stringify 約 5000 層就 RangeError（實測），macOS Node 25 不會，所以不斷言「截之前會爆」，只斷言截之後的結果。
+  it('兩萬層：截斷後算得出位元組、序列化不拋', () => {
+    const frame = { data: chain(20_000) };
+    const bounded = boundFrame(frame);
+    expect(bounded.truncated).toBe(true);
+    expect(bounded.bytes).toBe(Buffer.byteLength(JSON.stringify(bounded.frame), 'utf8'));
+    expect(bounded.bytes).toBeGreaterThan(DOWNLINK_MAX_DEPTH);
+  });
+
+  it('不是陣列也不是純物件的值原樣留著，不算層數', () => {
+    const when = new Date(0);
+    const bounded = boundFrame({ chain: chain(DOWNLINK_MAX_DEPTH), when });
+    expect((bounded.frame as { when: Date }).when).toBe(when);
+  });
+
+  it('JSON 表達不出來的照拋，由呼叫端照偏離 C 處理：BigInt、循環參照（循環不會走不完）', () => {
+    expect(() => boundFrame({ n: 1n })).toThrow(/BigInt/u);
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    expect(() => boundFrame(loop)).toThrow(/circular/iu);
+  });
+
+  // `{}` 上設自有的 `__proto__` 會改到原型、鍵就被吃掉；副本用空原型，鍵照原樣帶過去（同 dsh `json-stream.ts:90-94`）。
+  it('截斷的副本留得住 `__proto__` 這種鍵（資料，不是原型）', () => {
+    const frame = JSON.parse('{"__proto__":{"x":1},"inner":{"__proto__":"p"}}') as Record<
+      string,
+      unknown
+    >;
+    (frame.inner as Record<string, unknown>).deep = chain(DOWNLINK_MAX_DEPTH);
+    const bounded = boundFrame(frame);
+    expect(bounded.truncated).toBe(true);
+    const copy = bounded.frame as Record<string, unknown>;
+    expect(Object.keys(copy)).toContain('__proto__');
+    expect(Object.getOwnPropertyDescriptor(copy, '__proto__')?.value).toEqual({ x: 1 });
+    expect(Object.getOwnPropertyDescriptor(copy.inner, '__proto__')?.value).toBe('p');
+    expect(JSON.stringify(copy)).toContain('"__proto__":{"x":1}');
+  });
+
+  // 偏離 D 註解的「輸出深度上界」：frame 是樹時副本不超過門檻；有共用的子物件（DAG）時同一份副本依第一次遇到的深度截，
+  // 從較淺處再指到它，副本可以比門檻深，但不會比原物件深。這條是把註解的說法釘住，不是要保證嚴格上界。
+  it('共用的子物件：副本深度可以超過門檻，上界是原物件的深度', () => {
+    const shared = chain(1100);
+    const long = chain(200);
+    let tail = long;
+    while (tail[0] !== undefined) tail = tail[0] as unknown[];
+    tail.push(shared);
+    // `z` 是讓整顆 frame 被判超過門檻的另一條鏈；`exceedsDepth` 每個物件只走一次，單靠共用的那份量不出超過。
+    const frame = { z: chain(1300), a: long, b: shared };
+    const bounded = boundFrame(frame);
+    expect(bounded.truncated).toBe(true);
+    const originalDepth = 1 + 200 + 1100; // 外層物件、long 的 200 層、shared 的 1100 層（z 是 1 + 1300，比這條淺）
+    const copy = bounded.frame as { a: unknown[] };
+    let depth = 1;
+    let current: unknown = copy.a;
+    while (Array.isArray(current)) {
+      depth += 1;
+      current = current[0];
+    }
+    expect(depth).toBeGreaterThan(DOWNLINK_MAX_DEPTH);
+    expect(depth).toBeLessThanOrEqual(originalDepth);
+  });
+
+  it('同一個物件出現兩次（共用）時只複製一份，深的那份也不會成倍長大', () => {
+    const shared = chain(DOWNLINK_MAX_DEPTH + 50);
+    const bounded = boundFrame({ a: shared, b: shared });
+    const copy = bounded.frame as { a: unknown; b: unknown };
+    expect(copy.a).toBe(copy.b);
   });
 });

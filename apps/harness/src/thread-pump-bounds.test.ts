@@ -283,3 +283,74 @@ describe('序列化拋錯（補充 (i)）', () => {
     expect(run.outcome.rejected).toBeUndefined();
   });
 });
+
+/** 迭代造一條 `n` 層的陣列鏈。 */
+function chain(n: number): unknown[] {
+  const root: unknown[] = [];
+  let tail = root;
+  for (let level = 1; level < n; level++) {
+    const next: unknown[] = [];
+    tail.push(next);
+    tail = next;
+  }
+  return root;
+}
+
+describe('巢狀太深的事件（偏離 D，#1560 N1384）', () => {
+  // 兩萬層：Linux Node 22 上遞迴的 JSON.stringify 會爆（拿掉 `boundFrame` 就走 `#failSubscribers` 把線收掉）；macOS Node 25 不會爆，
+  // 所以紅燈靠「副本含截斷佔位」，那一條不看平台。
+  it('廣播：下行不斷，這一顆的副本被截斷、之後的事件照常，記一行且不含內容', async () => {
+    const run = await running(10_000_000);
+    await run.send(start('r1', 'run-r1'));
+    const line = join(run.pump, ['messages']);
+    open.push(line);
+    await settle();
+    expect(run.pump.subscriberCount).toBe(2);
+
+    run.feed(text('r1', '深', { deep: chain(20_000) }));
+    await until(() =>
+      line.frames.some((frame) => JSON.stringify(frame).includes('[truncated: depth]')),
+    );
+    expect(run.pump.subscriberCount).toBe(2);
+    expect(run.warned).toHaveLength(1);
+    expect(run.warned[0]).toContain('截斷');
+    expect(run.warned[0]).toContain('messages');
+    expect(run.warned[0]).toContain('bounds-root');
+    expect(run.warned[0]).not.toContain('深');
+    expect(run.outcome.rejected).toBeUndefined();
+
+    run.feed(text('r1', '之後的字'));
+    await until(() => line.frames.some((frame) => JSON.stringify(frame).includes('之後的字')));
+  });
+
+  // 開線補送走另一條路（`subscribe` 裡的 `seed`），不經 `#broadcast`：不截的話，重連之後每一次開線都會再爆一次。
+  it('開線補送：深的那顆也截斷，這條線不被收掉', async () => {
+    const run = await running(10_000_000);
+    await run.observer.close(); // 沒有線在收，廣播時不算，這顆中斷安然進到 pending
+    run.feed(
+      raw(
+        'updates',
+        {
+          values: [
+            {
+              id: 'int-1',
+              value: { actionRequests: [{ name: 'danger', args: { deep: chain(20_000) } }] },
+            },
+          ],
+        },
+        '__interrupt__',
+      ),
+    );
+    await until(() => run.pump.pendings.length > 0);
+
+    const line = run.pump.subscribe(['input']);
+    const first = await line.next();
+    expect(first.done).toBe(false);
+    expect(JSON.stringify(first.value)).toContain('[truncated: depth]');
+    expect(run.pump.subscriberCount).toBe(1);
+    expect(run.warned).toHaveLength(1);
+    expect(run.warned[0]).toContain('補送');
+    expect(run.warned[0]).toContain('截斷');
+    void line.return(undefined);
+  });
+});

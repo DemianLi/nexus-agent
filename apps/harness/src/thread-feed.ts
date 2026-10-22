@@ -18,7 +18,12 @@
 
 import type { ThreadFeedFrame } from '@nexus/wire';
 
-import { BoundedQueue, DEFAULT_DOWNLINK_MAX_BYTES, frameBytes } from './bounded-event-queue.js';
+import {
+  BoundedQueue,
+  DEFAULT_DOWNLINK_MAX_BYTES,
+  DOWNLINK_MAX_DEPTH,
+  boundFrame,
+} from './bounded-event-queue.js';
 import type { PumpActivity, ThreadPump } from './thread-pump.js';
 
 interface FeedSubscriber {
@@ -83,7 +88,9 @@ export class ThreadFeed {
           for (const event of requests) {
             // 補送照算位元組、不判上限：一開線就斷了又重連，只會再補送一次（見 `BoundedQueue.seed`）。
             const frame: ThreadFeedFrame = { type: 'input-requested', threadId, event };
-            subscriber.queue.seed(frame, frameBytes(frame));
+            const bounded = boundFrame(frame);
+            if (bounded.truncated) this.#warnTruncated(frame, '開線時補送');
+            subscriber.queue.seed(bounded.frame, bounded.bytes);
           }
         }
       } catch (error: unknown) {
@@ -114,13 +121,18 @@ export class ThreadFeed {
   }
 
   #broadcast(frame: ThreadFeedFrame): void {
-    // 位元組數**廣播時算一次**，每條線共用；沒有線在收就不算。
+    // 截斷與位元組數**廣播時算一次**，每條線共用；沒有線在收就不算。
+    let outgoing = frame;
     let bytes: number | undefined;
     for (const subscriber of this.#subscribers) {
       if (subscriber.done) continue;
       if (bytes === undefined) {
         try {
-          bytes = frameBytes(frame);
+          // 巢狀超過 `DOWNLINK_MAX_DEPTH` 的子樹先換成佔位（偏離 D，見 `bounded-event-queue.ts`）。
+          const bounded = boundFrame(frame);
+          if (bounded.truncated) this.#warnTruncated(frame, '廣播');
+          outgoing = bounded.frame;
+          bytes = bounded.bytes;
         } catch (error: unknown) {
           // 這一顆對每條線都送不出去：收掉所有在收的線、記一行，函式正常返回——
           // 錯誤不能打回產生事件的那條路徑（`pump.watch` 的回呼跑在 pump 的廣播上）。
@@ -128,12 +140,19 @@ export class ThreadFeed {
           return;
         }
       }
-      if (subscriber.queue.push(frame, bytes)) {
+      if (subscriber.queue.push(outgoing, bytes)) {
         subscriber.wake?.();
       } else {
         this.#evict(subscriber);
       }
     }
+  }
+
+  /** 一顆 frame 的下行副本被深度截斷：記一行，只寫 frame 的 type 與 thread id，不寫內容。 */
+  #warnTruncated(frame: ThreadFeedFrame, where: string): void {
+    this.#warn?.(
+      `[下行] 全域下行有一顆 ${frame.type} frame（thread ${frame.threadId}）巢狀超過 ${String(DOWNLINK_MAX_DEPTH)} 層，${where}的副本已截斷`,
+    );
   }
 
   /** 積壓超過上限：同步從名單拿掉（不再收、不再算進 `subscriberCount`），清空，叫醒 drain 讓它結束這條線。 */

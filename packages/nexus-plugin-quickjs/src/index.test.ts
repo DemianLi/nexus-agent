@@ -58,7 +58,7 @@ async function runFailing(
 describe('正常的路', () => {
   it('求值一段 JavaScript，回傳最後一個運算式的值', async () => {
     expect(await runTool({}, '1 + 1')).toBe('2');
-    expect(await runTool({}, '[1,2,3].map((n) => n * 2)')).toBe('[2,4,6]');
+    expect(await runTool({}, '[1,2,3].map((n) => n * 2)')).toBe('[\n  2,\n  4,\n  6\n]');
     expect(await runTool({}, '"哈" + "囉"')).toBe('哈囉');
   });
 
@@ -78,6 +78,221 @@ describe('正常的路', () => {
   it('兩次呼叫之間不共用狀態', async () => {
     await runTool({}, 'globalThis.留下來的 = 1');
     expect(await runTool({}, 'typeof globalThis.留下來的')).toBe('undefined');
+  });
+});
+
+/**
+ * 完成值必須是無損的 JSON（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572) N0672），照 dsh 的 `prepareCompletion`
+ * （`ptc-runtime-node/src/bootstrap.ts:164-188`）。以前 `0/0` 回 `null`、`new Map()` 回 `{}`、`{a: undefined}` 少一格，全部當成功——
+ * 模型拿到錯的值，照著告訴使用者。
+ */
+describe('完成值必須是無損的 JSON', () => {
+  const LOSSLESS = 'program completion must be lossless JSON';
+
+  it.each([
+    ['NaN', '0/0'],
+    ['Infinity', '1/0'],
+    ['-Infinity', '-1/0'],
+    ['-0', '-0'],
+    ['Map', 'new Map([[1, 2]])'],
+    ['Set', 'new Set([1])'],
+    ['Date', 'new Date(0)'],
+    ['函式', '() => 1'],
+    ['bigint', '1n'],
+    ['symbol', 'Symbol("s")'],
+    ['物件欄位是 undefined', '({ a: undefined })'],
+    ['物件欄位是函式', '({ f() {} })'],
+    ['物件裡有 NaN', '({ a: 0 / 0, b: 1 })'],
+    ['陣列裡有 undefined', '[1, undefined, 2]'],
+    ['陣列裡有 NaN', '[1, 0 / 0]'],
+    ['稀疏陣列', '[, 1]'],
+    ['陣列帶了多的屬性', '(() => { const a = [1]; a.extra = 2; return a; })()'],
+    ['accessor 的 getter 回 NaN', '({ get a() { return 0 / 0; } })'],
+    ['accessor 的 getter 回 undefined', '({ get a() { return undefined; } })'],
+    ['accessor 的 getter 拋錯', '({ get a() { throw new Error("x"); } })'],
+    [
+      '陣列索引是 accessor、getter 回 NaN',
+      '(() => { const a = []; Object.defineProperty(a, 0, { get() { return 0 / 0; }, enumerable: true }); return a; })()',
+    ],
+    ['陣列有洞又帶多的屬性', '(() => { const a = [, 1]; a.x = 1; return a; })()'],
+    ['Array 的子類', '(() => { class A extends Array {} return A.from([1, 2]); })()'],
+    ['說謊的 Proxy（trap 拋錯）', 'new Proxy({}, { ownKeys() { throw new Error("x"); } })'],
+    [
+      '原型被改掉的陣列',
+      '(() => { const a = [1]; Object.setPrototypeOf(a, Object.create(Array.prototype)); return a; })()',
+    ],
+    [
+      '陣列的洞被原型補上（索引加多的屬性湊成同樣的鍵數）',
+      '(() => { Array.prototype[0] = 5; const a = [, 1]; a.x = 1; return a; })()',
+    ],
+    ['symbol 鍵', '({ [Symbol("k")]: 1 })'],
+    [
+      '不可列舉的欄位',
+      '(() => { const o = {}; Object.defineProperty(o, "h", { value: 1 }); return o; })()',
+    ],
+    ['class 實例', '(() => { class P { constructor() { this.x = 1; } } return new P(); })()'],
+    ['循環參照', '(() => { const a = {}; a.self = a; return a; })()'],
+    ['包裝物件', 'new Number(1)'],
+    ['藏在深處的 NaN', '({ a: [{ b: [{ c: 0 / 0 }] }] })'],
+  ])('%s：拋 invalid-output，不再默默變成 null 或 {}', async (_label, code) => {
+    const error = await runFailing({}, code);
+    expect(error.kind).toBe('invalid-output');
+    expect(error.message).toBe(`code run failed (invalid-output): ${LOSSLESS}`);
+  });
+
+  it('promise 兌現的值、async 函式的回傳值一樣要檢查', async () => {
+    expect((await runFailing({}, 'Promise.resolve(0 / 0)')).kind).toBe('invalid-output');
+    expect((await runFailing({}, '(async () => new Map())()')).kind).toBe('invalid-output');
+  });
+
+  // 檢查用的內建函式在使用者的程式之前就收進閉包了。事後把其中一個改成「一律放行」，騙不了它：每一列只動一個內建函式，
+  // 配一個只有那個函式擋得住的壞值（改成讀即時綁定的話，那一列就會放行而紅）。
+  it.each([
+    [
+      'Object.getPrototypeOf',
+      'Object.getPrototypeOf = () => Object.prototype;',
+      'new Map([[1, 2]])',
+    ],
+    ['Reflect.ownKeys', 'Reflect.ownKeys = () => [];', '({ [Symbol("k")]: 1 })'],
+    [
+      'Object.prototype.propertyIsEnumerable',
+      'Object.prototype.propertyIsEnumerable = () => true;',
+      '(() => { const o = {}; Object.defineProperty(o, "h", { value: 1 }); return o; })()',
+    ],
+    [
+      'Object.prototype.hasOwnProperty',
+      'Object.prototype.hasOwnProperty = () => true; Array.prototype[0] = 5;',
+      '(() => { const a = [, 1]; a.x = 1; return a; })()',
+    ],
+    ['Number.isFinite', 'Number.isFinite = () => true;', '0 / 0'],
+    ['Object.is', 'Object.is = () => false;', '-0'],
+    [
+      'Array.isArray',
+      'Array.isArray = () => false;',
+      '(() => { const a = [1]; a.x = 2; return a; })()',
+    ],
+    [
+      'WeakSet.prototype.has',
+      'WeakSet.prototype.has = () => false;',
+      '(() => { const a = {}; a.a = a; return a; })()',
+    ],
+  ])('程式事後改掉 %s 也騙不過', async (_name, tamper, bad) => {
+    const error = await runFailing({ timeoutMs: 2_000 }, `(() => { ${tamper} return ${bad}; })()`);
+    expect(error.kind).toBe('invalid-output');
+  });
+
+  // dsh 的快照一邊驗一邊抄、只讀一次（`snapshotPtcJsonValue`）：輸出就是驗過的那一份，不再去讀活的值。
+  // 以前驗完再 dump 原本的 handle，原型上的 `toJSON` 與說謊的 Proxy 讓兩次讀到的不一樣，錯的值當成功回去（#1842 審查）。
+  describe('驗過的就是輸出的：活的值動不了手腳', () => {
+    it('Object.prototype.toJSON 改不了輸出', async () => {
+      expect(
+        await runTool(
+          {},
+          '(() => { Object.prototype.toJSON = function () { return 0 / 0; }; return { a: 1 }; })()',
+        ),
+      ).toBe('{\n  "a": 1\n}');
+    });
+
+    it('Array.prototype.toJSON 改不了輸出', async () => {
+      expect(
+        await runTool(
+          {},
+          '(() => { Array.prototype.toJSON = function () { return "x"; }; return [1, 2, 3]; })()',
+        ),
+      ).toBe('[\n  1,\n  2,\n  3\n]');
+    });
+
+    it('每個值只讀一次：getter 每讀一次換一個值，輸出就是它被讀到的那一個', async () => {
+      expect(
+        await runTool({}, '(() => { let n = 0; return { get a() { n += 1; return n; } }; })()'),
+      ).toBe('{\n  "a": 1\n}');
+    });
+
+    it('Proxy 的 get 與 getOwnPropertyDescriptor 說不同的話：不會輸出驗過之外的值', async () => {
+      const code = `(() => {
+        let reads = 0;
+        return new Proxy({ a: 1 }, {
+          get(target, key) { reads += 1; return reads === 1 ? 1 : 0 / 0; },
+        });
+      })()`;
+      expect(await runTool({}, code)).toBe('{\n  "a": 1\n}');
+    });
+
+    it('accessor 的 getter 回合格的值：照 dsh 收下', async () => {
+      expect(await runTool({}, '({ get a() { return 1; } })')).toBe('{\n  "a": 1\n}');
+    });
+  });
+
+  // 快照自己撞到資源上限不是「值不合格」：getter 裡的無窮迴圈要報逾時，不能被收成 invalid-output。
+  it('快照裡的 getter 無窮迴圈：逾時，不是 invalid-output', async () => {
+    const error = await runFailing({ timeoutMs: 200 }, '({ get a() { for (;;) {} } })');
+    expect(error.kind).toBe('timeout');
+  });
+
+  // 快照迭代走訪、不遞迴（#1841 當初量到 5000 層以上整顆 VM 中止）。
+  it('一萬層巢狀的陣列照常回得來', async () => {
+    const out = await runTool(
+      { timeoutMs: 20_000, memoryLimitBytes: 256 * 1024 * 1024 },
+      '(() => { let v = 1; for (let i = 0; i < 10000; i += 1) v = [v]; return v; })()',
+    );
+    expect(out.length).toBeGreaterThan(10_000);
+  }, 30_000);
+
+  it('stack 上限小到連快照函式都放不下：乾淨的失敗，不是 WASM abort', async () => {
+    const error = await runFailing({ maxStackSizeBytes: 1000 }, '1');
+    expect(['exception', 'timeout']).toContain(error.kind);
+  });
+
+  it('頂層的 undefined 不是失敗：仍是「沒有回傳值」', async () => {
+    expect(await runTool({}, 'undefined')).toBe('（沒有回傳值）');
+  });
+
+  it('合格的值照常成功：null、布林、有限數字、字串、空容器、原型是 null 的物件', async () => {
+    expect(await runTool({}, 'null')).toBe('null');
+    expect(await runTool({}, 'true')).toBe('true');
+    expect(await runTool({}, '-1.5')).toBe('-1.5');
+    expect(await runTool({}, '[]')).toBe('[]');
+    expect(await runTool({}, '({})')).toBe('{}');
+    expect(await runTool({}, 'Object.assign(Object.create(null), { a: 1 })')).toBe(
+      '{\n  "a": 1\n}',
+    );
+    // 同一個物件出現兩次不是循環。
+    expect(await runTool({}, '(() => { const s = [1]; return [s, s]; })()')).toBe(
+      '[\n  [\n    1\n  ],\n  [\n    1\n  ]\n]',
+    );
+  });
+});
+
+/** 非字串的結果用 dsh `renderJsonValue` 的縮排格式（`packages/core/tools/src/ptc.ts:214-281`），字串原樣。 */
+describe('結果的呈現', () => {
+  it('兩個空白縮排；字串不加引號', async () => {
+    expect(await runTool({}, '({ a: 1, b: [true, null, "x"] })')).toBe(
+      '{\n  "a": 1,\n  "b": [\n    true,\n    null,\n    "x"\n  ]\n}',
+    );
+    expect(await runTool({}, '"哈囉"')).toBe('哈囉');
+  });
+
+  it('總縮排超過 10 個字元之後的子樹改緊湊', async () => {
+    const expected = [
+      '{',
+      '  "a": {',
+      '    "b": {',
+      '      "c": {',
+      '        "d": {',
+      '          "e": {"f":1,"g":[1,2]}',
+      '        }',
+      '      }',
+      '    }',
+      '  }',
+      '}',
+    ].join('\n');
+    expect(await runTool({}, '({ a: { b: { c: { d: { e: { f: 1, g: [1, 2] } } } } } })')).toBe(
+      expected,
+    );
+  });
+
+  it('字串值與鍵走 JSON 跳脫', async () => {
+    expect(await runTool({}, '({ "a\\nb": "x\\"y" })')).toBe('{\n  "a\\nb": "x\\"y"\n}');
   });
 });
 
@@ -129,9 +344,9 @@ describe('非同步', () => {
   // `dump()` 把 promise 攤成 `{ type, value }`，而那個形狀一般物件也戴得起來——靠形狀猜
   // 的話，這兩個完全正常的回傳值會被讀成 promise。
   it.each([
-    ["({ type: 'pending' })", '{"type":"pending"}'],
-    ["({ type: 'fulfilled', value: 1 })", '{"type":"fulfilled","value":1}'],
-    ["({ type: 'rejected', error: 'x' })", '{"type":"rejected","error":"x"}'],
+    ["({ type: 'pending' })", '{\n  "type": "pending"\n}'],
+    ["({ type: 'fulfilled', value: 1 })", '{\n  "type": "fulfilled",\n  "value": 1\n}'],
+    ["({ type: 'rejected', error: 'x' })", '{\n  "type": "rejected",\n  "error": "x"\n}'],
   ])('%s 是一般物件，不是 promise', async (code, expected) => {
     expect(await runTool({}, code)).toBe(expected);
   });
