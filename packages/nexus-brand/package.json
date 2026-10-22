@@ -1,0 +1,28 @@
+{
+  "name": "@nexus/brand",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "build": "tsc --noEmit",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "eslint": "^9.39.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}
