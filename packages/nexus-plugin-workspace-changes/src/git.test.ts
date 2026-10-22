@@ -3,7 +3,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -132,6 +132,47 @@ describe('GitRunner', () => {
     });
     controller.abort();
     await expect(running).rejects.toThrow('git add was aborted');
+  });
+
+  it('後代行程握著 stdout：直接子行程一結束，run 在排空期限內回來（#1560 N1110）', async () => {
+    const dir = await directory();
+    const pidFile = join(dir, 'grandchild.pid');
+    // 背景的 sleep 繼承 stdout／stderr，git 本身印一行就結束；只聽 'close' 的話要等 sleep 把管線關掉。
+    const executable = await script(
+      dir,
+      'git',
+      `sleep 30 &\necho $! > '${pidFile}'\necho snapshot-line\nexit 0`,
+    );
+    const started = Date.now();
+    try {
+      const result = await new GitRunner(executable, { ...LIMITS, timeoutMs: 20_000 }).run([], {
+        cwd: dir,
+        signal,
+      });
+      expect(result).toMatchObject({ exitCode: 0, stdout: 'snapshot-line\n', truncated: false });
+      // TERMINATE_GRACE_MS（2 秒）加餘裕；比 sleep 的 30 秒與逾時的 20 秒都早得多。
+      expect(Date.now() - started).toBeLessThan(2_000 + 1_000);
+    } finally {
+      const pid = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim());
+      if (Number.isInteger(pid) && pid > 0) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // 已經不在。
+        }
+      }
+    }
+  }, 15_000);
+
+  it('結束後的排空期限內，後代補寫的輸出照收；管線關了就立刻結算（#1560 N1110）', async () => {
+    const dir = await directory();
+    // 背景行程在 git 結束 300ms 後才補寫一行，遠短於排空期限：exit 一到就砍管線的話這一行會丟。
+    const executable = await script(dir, 'git', '(sleep 0.3; echo late) &\necho early\nexit 0');
+    const started = Date.now();
+    const result = await new GitRunner(executable, LIMITS).run([], { cwd: dir, signal });
+    expect(result).toMatchObject({ exitCode: 0, stdout: 'early\nlate\n' });
+    // 背景行程一結束管線就關了，'close' 先到，不必等滿排空期限。
+    expect(Date.now() - started).toBeLessThan(1_500);
   });
 
   it('spawn 不起來就拋', async () => {

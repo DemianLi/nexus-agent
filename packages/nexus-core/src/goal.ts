@@ -20,20 +20,19 @@
  * @module
  */
 
+import { brandString } from '@nexus/brand';
+import type { Branded } from '@nexus/brand';
+
 /** `goal/change` 酬載的版本。**認不得的版本讓重放失敗**，不是被跳過。 */
 export const GOAL_CHANGE_VERSION = 1;
-
-declare const goalIdBrand: unique symbol;
 
 /**
  * 一個 goal 跨修訂號的身分。
  *
- * **是 branded string，不是裸 string。** dsh 用共用的 `@deepseek-ai/dsh-brand`
- * （`Branded<'GoalId'>`），我們沒有那個工具，所以就地做一個最小的——買到的是同一件事：
- * 會話 id、修訂號字串、使用者打的目標文字都塞不進這一格。要造一顆只有
- * {@link goalId} 一條路。
+ * **是 branded string，不是裸 string。** 同 dsh 的 `Branded<'GoalId'>`（共用工具 `@nexus/brand`，#1569）：
+ * 會話 id、修訂號字串、使用者打的目標文字都塞不進這一格。要造一顆只有 {@link goalId} 一條路。
  */
-export type GoalId = string & { readonly [goalIdBrand]: 'GoalId' };
+export type GoalId = Branded<'GoalId'>;
 
 /**
  * 把一串字掛上 goal id 的標記。
@@ -45,7 +44,7 @@ export type GoalId = string & { readonly [goalIdBrand]: 'GoalId' };
  * @returns 同一串字，帶著編譯期的標記。
  */
 export function goalId(raw: string): GoalId {
-  return raw as GoalId;
+  return brandString<GoalId>(raw);
 }
 
 /** 指名**剛好那一個修訂號**的 CAS 身分。 */

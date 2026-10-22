@@ -10,6 +10,7 @@
       "@nexus/agent-loop/provider": ["./packages/nexus-agent-loop/src/provider.ts"],
       "@nexus/approval-channel": ["./packages/nexus-approval-channel/src/index.ts"],
       "@nexus/approval-channel/provider": ["./packages/nexus-approval-channel/src/provider.ts"],
+      "@nexus/brand": ["./packages/nexus-brand/src/index.ts"],
       "@nexus/commands": ["./packages/nexus-commands/src/index.ts"],
       "@nexus/commands/provider": ["./packages/nexus-commands/src/provider.ts"],
       "@nexus/core": ["./packages/nexus-core/src/index.ts"],
