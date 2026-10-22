@@ -236,6 +236,26 @@ describe('評一則回覆', () => {
     expect(prompt).not.toContain('QX7');
   });
 
+  it('日誌裡有一顆壞掉的評分事件：list／put 回 unknown_error「評分紀錄壞了」，歷史照樣讀得到（#1606）', async () => {
+    const wired = await line([{ content: '答。' }]);
+    const session = await open(wired, 't', '跑。');
+    await until(session, settled(1));
+    const messageId = messageIdOf(aiEntries(session.state, 'root')[0]);
+    wired.log().append('feedback/message-put', {
+      item: { messageId, rating: 'meh', version: 'v', createdAt: 1, updatedAt: 1 },
+    } as never);
+
+    for (const outcome of [
+      await wired.client.feedbackList('t'),
+      await wired.client.feedbackPut('t', { messageId, rating: 'positive', ifVersion: null }),
+    ]) {
+      expect(outcome).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+      expect(outcome.kind === 'rejected' && outcome.message).toContain('評分紀錄壞了');
+    }
+    // 壞的只有評分：重新整理照樣拿得到這條 thread 的歷史。
+    expect((await reloaded(wired.client, 't')).entries.length).toBeGreaterThan(0);
+  });
+
   it('rating 不是 positive／negative：整顆退回 invalid_argument，連原型鏈上的名字也一樣', async () => {
     const wired = await line([{ content: '答。' }]);
     const session = await open(wired, 't', '跑。');

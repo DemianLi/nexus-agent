@@ -13,6 +13,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createFeedbackService } from '@nexus/plugin-feedback';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -28,10 +29,12 @@ import {
   recordedApprovalPolicy,
   replayConversation,
   resumeClosingInterruptedTurn,
+  SessionLog,
 } from '@nexus/core';
 import type { SessionEvent, SessionFormatCatalog } from '@nexus/core';
 
 import { historyFrames } from './conversation-history.js';
+import { MEMORY_DURABILITY } from './feedback.fixture.js';
 import { openJsonlSessionStore, parseJsonlSessionBody } from './jsonl-session-store.js';
 import { assertSameWorkspaceRoot } from './resume-guards.js';
 
@@ -209,6 +212,19 @@ describe.each(names)('夾具 %s', (name) => {
             rating: entry.item.rating,
           })),
         ).toEqual(trigger.feedback);
+        // 驗收 H（#1606）：同一份舊日誌經插件的 `list`（讀之前先過 schema）照樣讀得出來——回放驗證不能把出貨過的舊格式當成壞掉。
+        // `list` 只回以訊息記的那幾筆（以輪記的舊評分不回，#1606 之前就是這樣，這張不動），所以只比那幾筆。
+        const listed = await createFeedbackService(
+          { maxNoteBytes: 8192 },
+          () => MEMORY_DURABILITY,
+        ).list(new SessionLog(trigger.session, { seed: events }));
+        expect(
+          listed.ok && listed.value.items.map((item) => [item.messageId, item.rating]),
+        ).toEqual(
+          (trigger.feedback as { target: string; messageId?: string; rating: string }[])
+            .filter((entry) => entry.target === 'message')
+            .map((entry) => [entry.messageId, entry.rating]),
+        );
       }
       if (trigger.closers !== undefined) {
         expect(closerSummary(events)).toEqual(trigger.closers);

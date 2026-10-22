@@ -148,7 +148,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 10,
     kind: 'additive',
     ref: '#382',
-    readerBranch: 'packages/nexus-core/src/feedback.ts:283',
+    readerBranch: 'packages/nexus-core/src/feedback.ts:289',
   },
   { from: 10, to: 11, kind: 'additive', ref: '#441' },
   { from: 11, to: 12, kind: 'additive', ref: '#443' },

@@ -118,6 +118,16 @@ export class ThreadSessions implements SessionLookupRegistrar {
     return this.#live.get(threadId)?.fs;
   }
 
+  /**
+   * 依 root 會話 id（＝thread id）**精確**找回那條 thread 的會話註冊表（#1606，落盤確認用）。規則同 {@link fsForThread}：不套「只剩一筆就是它」，
+   * 沒有登記就是 `undefined`——排空別條 thread 的註冊表證明不了這一份落了盤。
+   *
+   * @param threadId - root 會話 id。
+   */
+  sessionsForThread(threadId: string): SessionRegistry | undefined {
+    return this.#live.get(threadId)?.sessions;
+  }
+
   /** 現在登記著幾條。給測試與稽核對照。 */
   get size(): number {
     return this.#live.size;
