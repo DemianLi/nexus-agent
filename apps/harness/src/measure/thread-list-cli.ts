@@ -31,7 +31,7 @@ import { parseArgs } from 'node:util';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { createWireClient, THREADS_PATH } from '@nexus/wire';
-import { openJsonlSessionStore, projectKey } from '../jsonl-session-store.js';
+import { openJsonlSessionStore, projectKey, sessionPathsIn } from '../jsonl-session-store.js';
 import { runServe } from '../serve.js';
 import { listStoredThreads } from '../session-list.js';
 
@@ -237,8 +237,9 @@ async function generate(dir: string, cell: Cell, cwd: string): Promise<number> {
         createdAt: 1_700_000_000_000 + index * 60_000,
         cwd,
       };
-      await writeFile(join(dir, `${id}.header.json`), JSON.stringify(header));
-      await writeFile(join(dir, `${id}.jsonl`), body);
+      const paths = sessionPathsIn(dir, id);
+      await writeFile(paths.header, JSON.stringify(header));
+      await writeFile(paths.log, body);
     }
     total += body.length;
   }

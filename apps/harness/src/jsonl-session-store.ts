@@ -65,17 +65,17 @@
  * - 發佈是**可重試、不撞上自己**的：`link` 一成功就記下 header 已發佈，之後的重試只補做目錄 `fsync`；
  *   日誌開成了但目錄 `fsync` 失敗，重試也沿用同一個把手，不再 `wx` 一次。跟租約的 `??=` 同一個理由。
  *
- * 偏離，登記（皆不屬於「基座表達不出來」或「產品需求超出射程」之一的，除第 2 條）：
+ * 偏離，登記（第 1 條是過渡，第 2 條是理由 1）：
  *
- * 1. **兩個檔，兩次各自原子的發佈。** dsh 一個檔、一次 `link` 涵蓋 header 與首批事件；兩檔佈局下一次 `link` 涵蓋不了。
- *    這裡把 header 檔當成「這份會話存在」的提交點：先原子發佈 header，再建日誌。中間狀態「只有 header、日誌不在或是空的」
- *    讀方今天就當成一份零事件的會話，不是新狀態。首批事件要不要立刻 `fsync` 歸 #1506（每批 `fsync`）。
- *    單檔佈局另開卡評估（#1510 Q1 (a)）。
+ * 1. **兩個檔，兩次各自原子的發佈**（**過渡**，不是合格偏離）。dsh 一個檔、一次 `link` 涵蓋 header 與首批事件；兩檔佈局下
+ *    一次 `link` 涵蓋不了。這裡把 header 檔當成「這份會話存在」的提交點：先原子發佈 header，再建日誌。中間狀態「只有
+ *    header、日誌不在或是空的」讀方今天就當成一份零事件的會話，不是新狀態。首批事件要不要立刻 `fsync` 歸 #1506（每批
+ *    `fsync`）。**撤除條件**：#1594 ③（寫方切到世代檔，header 在日誌第一行）落地。
  * 2. **Windows：照樣 `link` 發佈，不做目錄 `fsync`**（理由 1，基座表達不出來）：Node 在 Windows 上開不了目錄，
  *    也沒有 dsh 用來呼叫 `MoveFileExW` 的 FFI。判斷依據是 `process.platform === 'win32'`，**不是吞錯**；
  *    比照 `session-lease.ts` 已登記的 Windows 偏離。
- * 3. 不清當機後殘留的 `*.tmp`，同 dsh。殘留檔不會被讀方撿到：列表只認 `.header.json` 結尾，離線掃描走
- *    {@link sessionLogPathOf}，`<base>.header.json.<hex>.tmp` 兩邊都不認。
+ * 3. 不清當機後殘留的 `*.tmp`，同 dsh。殘留檔不會被讀方撿到：讀方都經 {@link readSessionEntry} 認 header 檔名
+ *    （`@nexus/core` 的 `parseSessionHeaderFilename`），`<base>.header.json.<hex>.tmp` 不認。
  *
  * ## 續接換版：header 原子取代、日誌本文穩定讀（[#1509](https://github.com/DemianLi/nexus-agent/issues/1509)）
  *
@@ -96,10 +96,10 @@
  *
  * 偏離，登記：
  *
- * 1. **header 換版用「暫存＋fsync＋rename 取代 header 檔」，不換成 dsh 的世代檔**（理由 1，基座表達不出來）：
+ * 1. **header 換版用「暫存＋fsync＋rename 取代 header 檔」，不換成 dsh 的世代檔**（**過渡**，不是合格偏離）：
  *    nexus 的落盤格式把 header 獨立成 `<base>.header.json`、檔名不帶版本，所有既存會話、離線掃描與日誌匯出共用。
- *    要照世代檔得先整個遷格式，那是另一張規模 L 的卡（#1509 Q1 (a)）。退到 dsh 自己取代既有檔用的
- *    `writeFileAtomic`，補上它 TODO 裡寫的檔案 `fsync` 與目錄 `fsync`。
+ *    要照世代檔得先整個遷格式（#1509 Q1 (a)，後來成為 #1594）。今天退到 dsh 自己取代既有檔用的 `writeFileAtomic`，
+ *    補上它 TODO 裡寫的檔案 `fsync` 與目錄 `fsync`。**撤除條件**：#1594 ③（寫方切到世代檔）落地。
  *
  * 照 dsh、不算偏離的：Windows 的 `rename` 暫時性錯誤（`EACCES`／`EBUSY`／`EPERM`）有界重試，常數同 `atomic-write:19-44`
  * （20 ms 起、上限 200 ms、8 次）。Windows 不做目錄 `fsync`，沿用 #1510 登記的偏離 2（理由 1）。
@@ -112,12 +112,21 @@
  * 用 {@link openJsonlSessionStore} 落在 `<根>/<projectKey(cwd)>` 那一格，重開之後找得回同一條
  * thread。
  *
- * ## 檔名與 header 的規則只在這裡
+ * ## 檔名與 header 的規則：檔名在 `@nexus/core`，讀法在這裡
  *
- * 一份會話三個檔並排：`<base>.header.json`、`<base>.jsonl`、`<base>.lock`（`base` 見 {@link safeBaseName}）。
- * 會碰到它們的只有這個檔：列表與搜尋走 `list`／`open(id, 'read')`，離線掃描 import {@link sessionLogPathOf} 與
- * {@link parseHeader}，同 dsh 的檔名只有一份定義（`packages/session/session-format/src/filename.ts:14`）、日誌匯出
- * import 它（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
+ * 一份會話三個檔並排：`<base>.header.json`、`<base>.jsonl`、`<base>.lock`（`base` 見 {@link safeBaseName}）。檔名只在
+ * `@nexus/core` 的 `session-filename.ts` 定義，同 dsh 的檔名只有一份定義（`packages/session/session-format/src/filename.ts:14`，
+ * 跟版本目錄同一個格式層）。讀一份會話的接縫是 {@link readSessionEntry}（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857)）：
+ * 列表、唯讀打開、續接、離線掃描（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）與 `log-derived-history.fixture.ts`
+ * 都經過它。不經過它、只用到檔名的：
+ *
+ * - 知道 id、要直接碰檔的煙霧測試、`checkpoint-depth-cold.fixture.ts` 與量測（`measure/thread-list-cli.ts`，寫方）用
+ *   {@link sessionPathsIn}；
+ * - 發版驗證（`scripts/release/verify-packed-install.ts`）只 import `@nexus/core` 的檔名葉模組：發版腳本不拉整支 store 進來；
+ * - 夾具產生器（`scripts/session-format-fixtures/run-directory.ts`）要凍原樣位元組與寫入器記的版號，接縫會把 header 的
+ *   `version` 轉譯成這一版（#1856），不是它要的。
+ *
+ * 別的地方寫這兩個副檔名或 import {@link parseHeader}，`session-files-single-owner.test.ts` 會紅。
  *
  * @see [#172](https://github.com/DemianLi/nexus-agent/issues/172)
  * @module
@@ -133,17 +142,20 @@ import {
   classifyStoredFormatVersion,
   isUnreadableSessionEvent,
   materializeAppendBatch,
+  parseSessionHeaderFilename,
   SESSION_FORMAT_CATALOG,
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
   SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
   SessionNotFoundError,
+  sessionFilenames,
 } from '@nexus/core';
 import type {
   ReadonlyStoredSession,
   ResumedStoredSession,
   SessionEvent,
+  SessionFilenames,
   SessionFormatCatalog,
   SessionStore,
   StoredSession,
@@ -155,11 +167,6 @@ import type {
 } from '@nexus/core';
 import { acquireSessionLease } from './session-lease.js';
 import type { LeaseUnavailable, SessionWriteLease, TryLock } from './session-lease.js';
-
-/** 一份會話的三個檔的副檔名。見檔頭「檔名與 header 的規則只在這裡」。 */
-const HEADER_SUFFIX = '.header.json';
-const LOG_SUFFIX = '.jsonl';
-const LOCK_SUFFIX = '.lock';
 
 /**
  * 目錄與檔案的權限。
@@ -576,7 +583,7 @@ class JsonlStoredSession implements StoredSession {
   }
 
   #logPath(): string {
-    return join(this.#directory, `${this.#base}${LOG_SUFFIX}`);
+    return join(this.#directory, sessionFilenames(this.#base).log);
   }
 
   /**
@@ -617,14 +624,14 @@ class JsonlStoredSession implements StoredSession {
     // 上一次實體化拿到租約之後才失敗的話，重試不再拿一次——那會撞上自己。
     this.#lease ??= await leaseFor(
       this.#context,
-      join(directory, `${this.#base}${LOCK_SUFFIX}`),
+      join(directory, sessionFilenames(this.#base).lock),
       this.#header.id,
     );
     const progress = this.#publish;
     // header 先發佈：日誌有內容而 header 不見，比反過來難解釋得多。暫存檔加 `link`：正式路徑上只會有不存在或完整的那份；
     // 已經在就 `EEXIST`（撞名絆索，不覆寫也不續寫）。
     if (progress.headerPublished === undefined) {
-      const headerPath = join(directory, `${this.#base}${HEADER_SUFFIX}`);
+      const headerPath = join(directory, sessionFilenames(this.#base).header);
       const temp = await writeSyncedTemp(headerPath, `${JSON.stringify(this.#header, null, 2)}\n`);
       try {
         await link(temp, headerPath);
@@ -665,7 +672,7 @@ class JsonlStoredSession implements StoredSession {
   async #materializeResumed(resume: ResumePoint): Promise<LogFileHandle> {
     if (resume.headerStale === true) {
       await replaceSyncedFile(
-        join(this.#directory, `${this.#base}${HEADER_SUFFIX}`),
+        join(this.#directory, sessionFilenames(this.#base).header),
         `${JSON.stringify(this.#header, null, 2)}\n`,
       );
       await syncDirectory(this.#directory);
@@ -785,18 +792,6 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Par
     version: SESSION_LOG_FORMAT_VERSION,
   } as unknown as StoredSessionHeader;
   return { header, storedFormatVersion: version };
-}
-
-/**
- * header 檔的路徑對到日誌本文的路徑。**不是 header 檔就是 `undefined`**。給自己走目錄的離線掃描用，它因此不必認得
- * 副檔名。
- *
- * @param headerPath - 一個檔的路徑。
- */
-export function sessionLogPathOf(headerPath: string): string | undefined {
-  return headerPath.endsWith(HEADER_SUFFIX)
-    ? `${headerPath.slice(0, -HEADER_SUFFIX.length)}${LOG_SUFFIX}`
-    : undefined;
 }
 
 /**
@@ -1036,13 +1031,86 @@ export async function readStableSnapshot(
  * 走 {@link readStableSnapshot}（#1509），順序同 dsh：先穩定讀、再解碼。
  * **不在是空的**：只有 header 是「還沒寫第一筆就當了」。
  */
-async function readBody(logPath: string): Promise<Buffer> {
+async function readBody(
+  logPath: string,
+  fs: StableReadFileSystem = defaultStableReadFs,
+): Promise<Buffer> {
   try {
-    return (await readStableSnapshot(logPath)).bytes;
+    return (await readStableSnapshot(logPath, fs)).bytes;
   } catch (error: unknown) {
     if (isNotFound(error)) return Buffer.alloc(0);
     throw error;
   }
+}
+
+/** {@link readSessionEntry} 的選項。 */
+export interface ReadSessionEntryOptions extends ParseHeaderOptions {
+  /** 讀日誌本文用的檔案系統。**只給測試換**，同 {@link readStableSnapshot}。 */
+  readonly fs?: StableReadFileSystem;
+}
+
+/** 目錄裡的一份會話：header 已經讀過，日誌本文要的時候才讀。 */
+export interface SessionEntry {
+  /** 檔名基底（{@link safeBaseName} 算出來的那個）。 */
+  readonly base: string;
+  /** 日誌本文的路徑。檔不一定在：只有 header 是「還沒寫第一筆就當了」。 */
+  readonly logPath: string;
+  /** 同 {@link ParsedSessionHeader.header}。 */
+  readonly header: StoredSessionHeader;
+  /** 同 {@link ParsedSessionHeader.storedFormatVersion}。 */
+  readonly storedFormatVersion: number;
+  /** 日誌本文的原始位元組，走 {@link readStableSnapshot}。日誌不在就是空的。 */
+  readBody(): Promise<Buffer>;
+}
+
+/**
+ * **讀一份會話的接縫**（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857)）：給一個目錄項，回 header 與日誌本文。
+ * 後端自己的列表、唯讀打開、續接，跟產品路徑外的離線掃描、夾具都經過這裡，誰也不自己 `readFile` 兩個檔。佈局換掉
+ * （#1594 ②）時，讀方只動這一支與 `@nexus/core` 的檔名模組。
+ *
+ * 只管「讀」與「讀不讀得懂」（{@link parseHeader} 拋什麼就拋什麼）。檔名基底對不上 header 記的 id 算不算讀不懂，是列表
+ * 自己的規則（`open(id)` 照 id 算檔名），不在這裡判。
+ *
+ * @param directory - 會話所在的目錄。
+ * @param filename - 目錄裡的一個檔名。
+ * @param options - 同 {@link parseHeader}，另加測試用的檔案系統。
+ * @returns 不是 header 檔，或 header 在讀目錄與讀檔之間不見了，都是 `undefined`。
+ * @throws 同 {@link parseHeader}。
+ */
+export async function readSessionEntry(
+  directory: string,
+  filename: string,
+  options: ReadSessionEntryOptions = {},
+): Promise<SessionEntry | undefined> {
+  const base = parseSessionHeaderFilename(filename);
+  if (base === undefined) return undefined;
+  let text: string;
+  try {
+    text = await readFile(join(directory, filename), 'utf8');
+  } catch (error: unknown) {
+    if (isNotFound(error)) return undefined;
+    throw error;
+  }
+  const { fs, ...parseOptions } = options;
+  const { header, storedFormatVersion } = parseHeader(text, parseOptions);
+  const logPath = join(directory, sessionFilenames(base).log);
+  return { base, logPath, header, storedFormatVersion, readBody: () => readBody(logPath, fs) };
+}
+
+/**
+ * 一份會話三個檔在 `directory` 裡的路徑。給**知道 id、要直接碰檔**的產品路徑外讀寫方（量測、夾具、煙霧測試）：
+ * 檔名照 `@nexus/core` 的那一份，基底照 {@link safeBaseName}，不自己拼。
+ *
+ * @param directory - 會話所在的目錄。
+ * @param sessionId - session id。
+ */
+export function sessionPathsIn(directory: string, sessionId: string): SessionFilenames {
+  const names = sessionFilenames(safeBaseName(sessionId));
+  return {
+    header: join(directory, names.header),
+    log: join(directory, names.log),
+    lock: join(directory, names.lock),
+  };
 }
 
 /**
@@ -1086,22 +1154,14 @@ async function listStoredSessions(
   let unreadable = 0;
   for (const name of names) {
     signal?.throwIfAborted();
-    if (!name.endsWith(HEADER_SUFFIX)) continue;
-    const base = name.slice(0, -HEADER_SUFFIX.length);
-    const headerPath = join(directory, name);
+    const base = parseSessionHeaderFilename(name);
+    if (base === undefined) continue;
+    const files = sessionFilenames(base);
     // 先記樣子再讀：兩步之間被改了的話，記下的是舊的，下一次比對時不相等，衍生的快取多讀一次而已。
-    const revision = `${await fileRevision(headerPath)}|${await fileRevision(join(directory, `${base}${LOG_SUFFIX}`))}`;
-    let text: string;
+    const revision = `${await fileRevision(join(directory, files.header))}|${await fileRevision(join(directory, files.log))}`;
+    let entry: SessionEntry | undefined;
     try {
-      text = await readFile(headerPath, 'utf8');
-    } catch (error: unknown) {
-      // 讀目錄與讀檔之間被刪掉：不是壞檔，就是不在了。
-      if (isNotFound(error)) continue;
-      throw error;
-    }
-    let parsed: ParsedSessionHeader;
-    try {
-      parsed = parseHeader(text, { catalog });
+      entry = await readSessionEntry(directory, name, { catalog });
     } catch (error: unknown) {
       if (
         error instanceof SessionCorruptionError ||
@@ -1112,11 +1172,14 @@ async function listStoredSessions(
       }
       throw error;
     }
-    if (safeBaseName(parsed.header.id) !== base) {
+    // 讀目錄與讀檔之間被刪掉：不是壞檔，就是不在了。
+    if (entry === undefined) continue;
+    if (safeBaseName(entry.header.id) !== base) {
       unreadable += 1;
       continue;
     }
-    sessions.push({ ...parsed, revision });
+    const { header, storedFormatVersion } = entry;
+    sessions.push({ header, storedFormatVersion, revision });
   }
   return { sessions, unreadable };
 }
@@ -1129,27 +1192,20 @@ async function openStoredSessionForRead(
   id: string,
   catalog: SessionFormatCatalog,
 ): Promise<ReadonlyStoredSession> {
-  const base = safeBaseName(id);
-  const headerPath = join(directory, `${base}${HEADER_SUFFIX}`);
-  let text: string;
-  try {
-    text = await readFile(headerPath, 'utf8');
-  } catch (error: unknown) {
-    if (isNotFound(error)) {
-      throw new SessionNotFoundError(
-        id,
-        `${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`,
-      );
-    }
-    throw error;
+  const { header: headerName } = sessionFilenames(safeBaseName(id));
+  const entry = await readSessionEntry(directory, headerName, { id, catalog });
+  if (entry === undefined) {
+    throw new SessionNotFoundError(
+      id,
+      `${directory} 裡沒有會話 "${id}"（找不到 ${join(directory, headerName)}）。`,
+    );
   }
-  const { header, storedFormatVersion } = parseHeader(text, { id, catalog });
-  const logPath = join(directory, `${base}${LOG_SUFFIX}`);
+  const { header, storedFormatVersion } = entry;
   return {
     header,
     storedFormatVersion,
     async read(options: StoredSessionReadOptions = {}): Promise<readonly SessionEvent[]> {
-      const body = await readBody(logPath);
+      const body = await entry.readBody();
       try {
         // 開了 salvage 的先走 strict、失敗才撿回：salvage 的語意（已登記的偏離）維持今天的樣子，不被 recoverable 搶先丟掉。
         return parseJsonlSessionBody(id, body, {
@@ -1177,8 +1233,8 @@ async function resumeStoredSession(
   id: string,
   context: LeaseContext,
 ): Promise<ResumedStoredSession> {
-  const base = safeBaseName(id);
-  const headerPath = join(directory, `${base}${HEADER_SUFFIX}`);
+  const files = sessionFilenames(safeBaseName(id));
+  const headerPath = join(directory, files.header);
   const missing = () =>
     new SessionNotFoundError(id, `${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`);
   // **先認得有這份，再拿租約**：打錯的 `--resume` 不該留下一個鎖檔。
@@ -1190,20 +1246,12 @@ async function resumeStoredSession(
   }
   // **在讀之前拿**，照 dsh：別人握著的話，該在什麼都還沒讀之前就講；也不讓兩個續接者同時換版。
   // header 換版是原子取代（#1509），唯讀的讀方不拿租約也只會看到舊的或新的完整一份。
-  const lease = await leaseFor(context, join(directory, `${base}${LOCK_SUFFIX}`), id);
+  const lease = await leaseFor(context, join(directory, files.lock), id);
   try {
-    let headerText: string;
-    try {
-      headerText = await readFile(headerPath, 'utf8');
-    } catch (error: unknown) {
-      if (isNotFound(error)) throw missing();
-      throw error;
-    }
-    const { header, storedFormatVersion } = parseHeader(headerText, {
-      id,
-      catalog: context.catalog,
-    });
-    const body = await readBody(join(directory, `${base}${LOG_SUFFIX}`));
+    const entry = await readSessionEntry(directory, files.header, { id, catalog: context.catalog });
+    if (entry === undefined) throw missing();
+    const { header, storedFormatVersion } = entry;
+    const body = await entry.readBody();
     const { events, validBytes } = parseJsonlSessionBody(id, body, {
       version: storedFormatVersion,
       recovery: 'recoverable',

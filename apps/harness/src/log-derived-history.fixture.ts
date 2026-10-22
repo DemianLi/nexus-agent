@@ -34,10 +34,10 @@
 
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { SystemMessage } from '@langchain/core/messages';
@@ -57,7 +57,7 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toolResultAsSeen } from './conversation-restore.js';
 import { foldTurn, serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { projectKey } from './jsonl-session-store.js';
+import { projectKey, readSessionEntry, sessionPathsIn } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID, withShippedRequestBody } from './live-model.js';
 import { composeEntries } from './plugin-config.js';
 import { runServe } from './serve.js';
@@ -519,11 +519,54 @@ const finish = (events: SessionEvent[], bodies: Body[]): Run => ({
   mainBodies: bodies.filter(hasTools),
 });
 
-function readJsonl(file: string): SessionEvent[] {
-  return readFileSync(file, 'utf8')
+/** 一份落了盤的會話：讀取接縫交出來的 header 與日誌路徑，加上逐行解開的事件。 */
+interface SessionOnDisk {
+  readonly id: string;
+  readonly logPath: string;
+  readonly events: SessionEvent[];
+}
+
+/**
+ * 經後端的讀取接縫（`readSessionEntry`，#1857）讀一份，事件逐行解開、不驗：這裡要的是寫方落盤的原樣，不是讀方的修復。
+ * 日誌還不在的那份是 `undefined`：這裡要的是落了盤的事件。
+ */
+async function sessionOnDisk(
+  directory: string,
+  filename: string,
+): Promise<SessionOnDisk | undefined> {
+  const entry = await readSessionEntry(directory, filename);
+  if (entry === undefined || !existsSync(entry.logPath)) return undefined;
+  const events = (await entry.readBody())
+    .toString('utf8')
     .split('\n')
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as SessionEvent);
+  return { id: entry.header.id, logPath: entry.logPath, events };
+}
+
+/** 日誌目錄底下（遞迴）每一份落了盤的會話。 */
+async function sessionsUnder(root: string): Promise<SessionOnDisk[]> {
+  const out: SessionOnDisk[] = [];
+  const walk = async (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        await walk(join(dir, entry.name));
+        continue;
+      }
+      if (!entry.isFile()) continue;
+      const session = await sessionOnDisk(dir, entry.name);
+      if (session !== undefined) out.push(session);
+    }
+  };
+  await walk(root);
+  return out;
+}
+
+/** `directory` 裡 id 是 `id` 的那一份的事件。 */
+async function eventsOf(directory: string, id: string): Promise<SessionEvent[]> {
+  const session = await sessionOnDisk(directory, basename(sessionPathsIn(directory, id).header));
+  if (session === undefined) throw new Error(`${directory} 裡沒有落了盤的會話 ${id}`);
+  return session.events;
 }
 
 /**
@@ -604,7 +647,7 @@ export async function runAssembly(
   return finish([...sessions.root.events], upstream.bodies);
 }
 
-/** 出貨路徑之一：`runCli --live`（出貨清單、出貨設定、真的落盤），日誌從 `cli.jsonl` 讀回。 */
+/** 出貨路徑之一：`runCli --live`（出貨清單、出貨設定、真的落盤），日誌從 root（`cli`）那一份讀回。 */
 export async function runShippedCli(lines: string, script: Script, patchExtra = ''): Promise<Run> {
   const upstream = await fakeEndpoint(script, false);
   const home = await mkdtemp(join(tmpdir(), 'nexus-lh-home-'));
@@ -628,17 +671,13 @@ export async function runShippedCli(lines: string, script: Script, patchExtra = 
   } finally {
     await upstream.close();
   }
-  const files: string[] = [];
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) walk(join(dir, entry.name));
-      else if (entry.name.endsWith('.jsonl')) files.push(join(dir, entry.name));
-    }
-  };
-  walk(logs);
-  const rootLog = files.find((file) => /cli\.jsonl$/.test(file));
-  if (rootLog === undefined) throw new Error(`cli.jsonl 不在 ${logs} 底下：${files.join(', ')}`);
-  return finish(readJsonl(rootLog), upstream.bodies);
+  const sessions = await sessionsUnder(logs);
+  // CLI 每次一個 run 目錄，root 的 id 固定是 `cli`。
+  const root = sessions.find((session) => session.id === 'cli');
+  if (root === undefined) {
+    throw new Error(`root 日誌不在 ${logs} 底下：${sessions.map((s) => s.logPath).join(', ')}`);
+  }
+  return finish(root.events, upstream.bodies);
 }
 
 /** 這一句人話之後，已經有一則收尾的 AI 訊息，而且對話回到 idle。 */
@@ -710,7 +749,7 @@ export async function runServePhases(
   } finally {
     await upstream.close();
   }
-  return finish(readJsonl(join(logs, projectKey(process.cwd()), 'alpha.jsonl')), upstream.bodies);
+  return finish(await eventsOf(join(logs, projectKey(process.cwd())), 'alpha'), upstream.bodies);
 }
 
 // ---------------------------------------------------------------------------
@@ -755,21 +794,11 @@ export const rootLogOf = (run: DriverRun): LogFile => {
 export const childLogsOf = (run: DriverRun): LogFile[] =>
   run.logs.filter((log) => log.file.includes('%2f'));
 
-function readAllLogs(root: string): LogFile[] {
-  const out: LogFile[] = [];
-  const walk = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) walk(join(dir, entry.name));
-      else if (entry.name.endsWith('.jsonl')) {
-        out.push({
-          file: join(dir, entry.name).slice(root.length),
-          events: readJsonl(join(dir, entry.name)),
-        });
-      }
-    }
-  };
-  walk(root);
-  return out;
+async function readAllLogs(root: string): Promise<LogFile[]> {
+  return (await sessionsUnder(root)).map((session) => ({
+    file: session.logPath.slice(root.length),
+    events: session.events,
+  }));
 }
 
 /** 睡一下。給「等某件事在背景發生」用；能用 `fold` 等狀態的就不要用它。 */
@@ -843,7 +872,7 @@ export async function runServeDriver(
   }
   return {
     home,
-    logs: readAllLogs(logs),
+    logs: await readAllLogs(logs),
     bodies: upstream.bodies,
     mainBodies: upstream.bodies.filter(hasTools),
   };

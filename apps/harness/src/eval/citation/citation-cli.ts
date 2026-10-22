@@ -332,6 +332,7 @@ async function main(): Promise<void> {
   }
   await mkdir(options.out, { recursive: true });
   const log = (line: string): void => console.log(line);
+  // session-file-exempt: 引用量測每次執行的結果紀錄，不是會話日誌。
   const runsFile = join(options.out, 'runs.jsonl');
   const previous = options.resume ? await readRuns(runsFile) : [];
   // 重跑失敗的：失敗記錄不刪，移到 failed-attempts.jsonl（PR 與報告要列失敗了幾次），runs.jsonl 只留成功的。
@@ -340,6 +341,7 @@ async function main(): Promise<void> {
   await writeFile(runsFile, all.map((record) => JSON.stringify(record) + '\n').join(''));
   if (retried.length > 0) {
     await appendFile(
+      // session-file-exempt: 引用量測失敗的執行紀錄，不是會話日誌。
       join(options.out, 'failed-attempts.jsonl'),
       retried.map((record) => JSON.stringify(record) + '\n').join(''),
     );

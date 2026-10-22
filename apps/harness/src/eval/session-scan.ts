@@ -77,12 +77,14 @@
  * @module
  */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import {
   currentMessageFeedback,
   deriveSessionStats,
   isKnownSessionEventType,
+  parseSessionHeaderFilename,
+  sessionFilenames,
   subagentLinks,
   repeatCallKey,
   repeatReminderTracks,
@@ -101,7 +103,8 @@ import type {
 // 讀的事件種類（`feedback/*`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
 // `todo/write` 不在這裡：它的事件擴充住在 core 的 `session-log.ts`（#1463 Q2 (a)）。
 import type {} from '@nexus/plugin-feedback';
-import { parseHeader, parseJsonlSessionBody, sessionLogPathOf } from '../jsonl-session-store.js';
+import { parseJsonlSessionBody, readSessionEntry } from '../jsonl-session-store.js';
+import type { SessionEntry } from '../jsonl-session-store.js';
 import {
   formatSessionHeaderMetadata,
   readSessionHeaderMetadata,
@@ -357,18 +360,10 @@ export function scanSessionLog(
 }
 
 /**
- * 讀 header 裡掃描要的那幾格。**版本比這一版新不拒絕**，見檔頭「照格式版本表態」。規則是後端那一份
- * （`jsonl-session-store.ts` 的 `parseHeader`），這裡只開 `acceptNewer`。
+ * 取 header 裡掃描要的那幾格。header 由後端的讀法讀過（{@link readSessionEntry}，開 `acceptNewer`：**版本比這一版新
+ * 不拒絕**，見檔頭「照格式版本表態」）。
  */
-function readHeader(text: string): SessionLogHeader | string {
-  let header;
-  let storedFormatVersion;
-  try {
-    ({ header, storedFormatVersion } = parseHeader(text, { acceptNewer: true }));
-  } catch (error: unknown) {
-    if (error instanceof SessionCorruptionError) return error.message;
-    throw error;
-  }
+function headerOf({ header, storedFormatVersion }: SessionEntry): SessionLogHeader {
   const metadata = readSessionHeaderMetadata(header);
   return {
     id: header.id,
@@ -383,10 +378,10 @@ function readHeader(text: string): SessionLogHeader | string {
 /**
  * 從幾個根目錄往下找每一份日誌讀進來。**唯讀**：不拿租約、不截尾巴、不改 header。
  *
- * 認檔名與讀 header 都照 JSONL 後端那一份（`jsonl-session-store.ts` 的 `sessionLogPathOf`、`parseHeader`），
+ * 認檔名、讀 header 與日誌本文都走 JSONL 後端那一支（`jsonl-session-store.ts` 的 `readSessionEntry`，本文是穩定快照讀），
  * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。不走 `SessionStore.list`：
  * 它不讀比這一版新的，也不說讀不懂的原因（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
- * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件。
+ * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，跳過。
  *
  * @param roots - 會話根、run 目錄或 projectKey 那一格，都行。
  * @returns 讀得懂的，與讀得到但讀不懂的（壞行、缺號、header 壞了）。後者不擋其餘的。
@@ -407,19 +402,25 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
         await visit(path);
         continue;
       }
-      const file = entry.isFile() ? sessionLogPathOf(path) : undefined;
-      if (file === undefined) continue;
-      const header = readHeader(await readFile(path, 'utf8'));
-      if (typeof header === 'string') {
-        unreadable.push({ file, reason: header });
-        continue;
-      }
-      let body = Buffer.alloc(0);
+      const base = entry.isFile() ? parseSessionHeaderFilename(entry.name) : undefined;
+      if (base === undefined) continue;
+      let session: SessionEntry | undefined;
       try {
-        body = await readFile(file);
+        session = await readSessionEntry(directory, entry.name, { acceptNewer: true });
       } catch (error: unknown) {
-        if ((error as { code?: unknown } | null)?.code !== 'ENOENT') throw error;
+        if (error instanceof SessionCorruptionError) {
+          unreadable.push({
+            file: join(directory, sessionFilenames(base).log),
+            reason: error.message,
+          });
+          continue;
+        }
+        throw error;
       }
+      if (session === undefined) continue;
+      const file = session.logPath;
+      const header = headerOf(session);
+      const body = await session.readBody();
       try {
         logs.push({
           file,

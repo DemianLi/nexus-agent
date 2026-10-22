@@ -29,7 +29,7 @@ import type { Event } from '@nexus/wire';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { serveClient } from '../fixtures.js';
-import { projectKey } from '../jsonl-session-store.js';
+import { projectKey, sessionPathsIn } from '../jsonl-session-store.js';
 import { DEFAULT_LIVE_BASE_URL, LIVE_API_KEY_ENV } from '../live-model.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
@@ -252,7 +252,7 @@ describe('真模型冒煙（serve --live）', () => {
     let violatedCount = 0;
     for (const entry of records) {
       const raw = await readIfExists(
-        join(logRoot, projectKey(process.cwd()), `${entry.threadId}.jsonl`),
+        sessionPathsIn(join(logRoot, projectKey(process.cwd())), entry.threadId).log,
       );
       const events =
         raw === undefined
