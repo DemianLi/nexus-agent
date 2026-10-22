@@ -62,6 +62,7 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`class-variance-authority`](https://github.com/joe-bell/cva) | Apache-2.0 |
 | [`cmdk`](https://github.com/pacocoursey/cmdk) | MIT |
 | [`cn`](https://github.com/shadcn-ui/cn) | MIT |
+| [`compression`](https://github.com/expressjs/compression) | MIT |
 | [`cosmokit`](https://github.com/shigma/cosmokit) | MIT |
 | [`deepagents`](https://github.com/langchain-ai/deepagentsjs) | MIT |
 | [`diff`](https://github.com/kpdecker/jsdiff) | BSD-3-Clause |
@@ -82,6 +83,7 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`micromark-util-classify-character`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-classify-character) | MIT |
 | [`micromark-util-sanitize-uri`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-sanitize-uri) | MIT |
 | [`micromark-util-symbol`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-symbol) | MIT |
+| [`negotiator`](https://github.com/jshttp/negotiator) | MIT |
 | [`quickjs-emscripten`](https://github.com/justjake/quickjs-emscripten) | MIT |
 | [`react`](https://github.com/react/react) | MIT |
 | [`react-dom`](https://github.com/react/react) | MIT |
@@ -114,8 +116,10 @@ OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能�
 | [`@modelcontextprotocol/server`](https://github.com/modelcontextprotocol/typescript-sdk) | Apache-2.0 |
 | [`@tailwindcss/vite`](https://github.com/tailwindlabs/tailwindcss) | MIT |
 | [`@testing-library/react`](https://github.com/testing-library/react-testing-library) | MIT |
+| [`@types/compression`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/js-yaml`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/mdast`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
+| [`@types/negotiator`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/node`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/react`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/react-dom`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |

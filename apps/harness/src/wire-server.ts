@@ -26,12 +26,23 @@
  *
  * 另外兩條偏離（偏離 B：事件下行加位元組上限；偏離 C：超限或死線只斷線、不送終止 frame）登記在
  * [`bounded-event-queue.ts`](./bounded-event-queue.ts)；C 在這裡的落點是 `destroy()` 前只記一行 warn、不寫任何 frame。
+ *
+ * ## 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）
+ *
+ * 照 dsh `packages/host/webserver/src/index.ts`（`createGzipMiddleware`，`:218-246`；接在 listener 最外層，`:443-457`）：
+ * 預設**不壓**（dsh 的 `compression` 預設 `'none'`），`compression` 選項給了才在 `handle` 外面包一層 `compression` 套件的中介層。
+ * 排除條件與 dsh 逐條相同——有 `content-range` 不壓、`text/event-stream` 不壓（壓縮緩衝會把逐顆 frame 積著，等於關掉 SSE 的即時性）、
+ * `multipart/form-data` 一律壓、其餘走 `compression.filter`；先用 `Negotiator` 在 `gzip`／`identity` 之間協商，再把結果改寫進
+ * `accept-encoding`；沒有 socket 的 response 跳過。**最後一道防線留在 `next` 裡面**（同 dsh）：壓縮層不吃 `handle` 的 rejection。
+ * 設定走 `serve` 的旗標而不是 `cordis.yml` 的列：listener 的設定（port）本來就是旗標，#1547 的 host 與 TLS 也走旗標。
  */
 
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Readable } from 'node:stream';
+import compressionMiddleware from 'compression';
+import Negotiator from 'negotiator';
 import type { WireHandler } from './wire-handler.js';
 import { wireRequestBodyMode } from './wire-handler.js';
 import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
@@ -53,6 +64,104 @@ export const MAX_MISSED_HEARTBEATS = 2;
 export const MAX_SSE_HEARTBEAT_INTERVAL_MS = MAX_TIMER_DELAY_MS;
 
 const SSE_PING = ': ping\n\n';
+
+/** gzip 等級預設值，照 dsh `DEFAULT_COMPRESSION_LEVEL`（`webserver/src/index.ts`）。 */
+export const DEFAULT_COMPRESSION_LEVEL = 1;
+
+/** 已知長度小於這個位元組數就不壓，照 dsh `DEFAULT_COMPRESSION_THRESHOLD_BYTES`；長度未知的串流可以壓。 */
+export const DEFAULT_COMPRESSION_THRESHOLD_BYTES = 1024;
+
+/** gzip 壓縮設定（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。不給 `compression` 選項就是 dsh 的 `'none'`。 */
+export interface WireCompression {
+  /** zlib 等級，0 到 9 的整數。 */
+  readonly level: number;
+  /** 已知長度小於這個值就不壓，非負整數。 */
+  readonly thresholdBytes: number;
+}
+
+/**
+ * 把 `serve` 的三個壓縮旗標驗成 {@link WireCompression}（沒打開就是 `undefined`）。驗法照 dsh 的 schema（`webserver/src/index.ts:294-296`）：
+ * 等級是 0 到 9 的整數，門檻是非負整數；不合法丟 `Error`，由呼叫端接上用法說明。
+ * **等級或門檻在沒打開 gzip 時給了也丟**：旗標悄悄被忽略比起 usage error 更難除錯。
+ */
+export function parseCompressionFlags(flags: {
+  readonly compression?: string | undefined;
+  readonly level?: string | undefined;
+  readonly threshold?: string | undefined;
+}): WireCompression | undefined {
+  const mode = flags.compression ?? 'none';
+  if (mode !== 'none' && mode !== 'gzip') {
+    throw new Error(`--compression 只收 none 或 gzip，收到 "${mode}"。`);
+  }
+  if (mode === 'none') {
+    if (flags.level !== undefined || flags.threshold !== undefined) {
+      throw new Error(
+        '--compression-level 與 --compression-threshold 要配 --compression gzip 才有意義。',
+      );
+    }
+    return undefined;
+  }
+  const level = flags.level === undefined ? DEFAULT_COMPRESSION_LEVEL : integerFlag(flags.level);
+  if (level === undefined || level > 9) {
+    throw new Error(`--compression-level 要給 0 到 9 之間的整數，收到 "${flags.level}"。`);
+  }
+  const thresholdBytes =
+    flags.threshold === undefined
+      ? DEFAULT_COMPRESSION_THRESHOLD_BYTES
+      : integerFlag(flags.threshold);
+  if (thresholdBytes === undefined) {
+    throw new Error(`--compression-threshold 要給非負整數（位元組），收到 "${flags.threshold}"。`);
+  }
+  return { level, thresholdBytes };
+}
+
+/** 只收十進位的非負整數（`1e3`、`1.5`、空字串都不收）。 */
+function integerFlag(text: string): number | undefined {
+  if (!/^\d+$/u.test(text)) return undefined;
+  const value = Number(text);
+  return Number.isSafeInteger(value) ? value : undefined;
+}
+
+type NodeMiddleware = (req: IncomingMessage, res: ServerResponse, next: () => void) => void;
+
+/**
+ * gzip 中介層，逐條照 dsh `webserver/src/index.ts:218-246`。`compression` 的型別是給 Express 的，執行期只碰
+ * node:http 的 request／response 成員。
+ */
+function createGzipMiddleware(config: WireCompression): NodeMiddleware {
+  const middleware = compressionMiddleware({
+    level: config.level,
+    threshold: config.thresholdBytes,
+    filter(request, response) {
+      if (response.getHeader('content-range') !== undefined) return false;
+      const contentType = response.getHeader('content-type');
+      if (
+        typeof contentType === 'string' &&
+        contentType.toLowerCase().startsWith('text/event-stream')
+      ) {
+        return false;
+      }
+      if (typeof contentType === 'string' && /^multipart\/form-data(?:;|$)/iu.test(contentType)) {
+        return true;
+      }
+      return compressionMiddleware.filter(request, response);
+    },
+  }) as unknown as NodeMiddleware;
+
+  return (req, res, next) => {
+    // 沒有 socket 的 response（dsh 的 Web Worker 通道）搬的是原樣位元組，不壓。
+    if ((res as { socket?: unknown }).socket === undefined) {
+      next();
+      return;
+    }
+    const encoding = new Negotiator(req).encoding(['gzip', 'identity']);
+    const gzipRequest = Object.create(req) as IncomingMessage;
+    Object.defineProperty(gzipRequest, 'headers', {
+      value: { ...req.headers, 'accept-encoding': encoding === 'gzip' ? 'gzip' : 'identity' },
+    });
+    middleware(gzipRequest, res, next);
+  };
+}
 
 export interface WireServer {
   readonly url: string;
@@ -90,6 +199,11 @@ export interface StartWireServerOptions {
    * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次。拋了也不影響回應。
    */
   readonly onResponse?: (info: { readonly path: string; readonly status: number }) => void;
+  /**
+   * 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)）。**不給就不壓**，跟今天完全一樣（dsh 的 `compression: 'none'`）。
+   * 給了之後，歷史頁、列表的 JSON 與網頁 bundle 在瀏覽器支援時壓縮再送；SSE 下行與帶 `content-range` 的回應照原樣送。見檔頭。
+   */
+  readonly compression?: WireCompression;
 }
 
 /** 先收完整份的路由，本文超過上限。 */
@@ -393,20 +507,27 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
   // **最後一道防線**，照 dsh `packages/host/webserver/src/index.ts`（`ddefc45`）：一個請求的失敗只收在那個
   // 請求上——記一筆、回 400，已經送出標頭的就斷線。沒有這一層，`handle` 的 rejection 沒人接，Node 會讓
   // 整個行程退出：同機任何人送一個畸形的請求就能把 serve 打掉（#424 審查時實測過）。
+  // 壓縮中介層只依設定建一次（同 dsh `this.gzip`）；不給就是 `undefined`，listener 直接進 `handle`。
+  const gzip =
+    options.compression === undefined ? undefined : createGzipMiddleware(options.compression);
   const server: Server = createServer((incoming, outgoing) => {
-    void handle(incoming, outgoing).catch((error: unknown) => {
-      warn(error instanceof Error ? error : new Error(String(error)), {
-        method: incoming.method ?? '',
-        path: pathnameOf(incoming.url),
+    const next = (): void => {
+      void handle(incoming, outgoing).catch((error: unknown) => {
+        warn(error instanceof Error ? error : new Error(String(error)), {
+          method: incoming.method ?? '',
+          path: pathnameOf(incoming.url),
+        });
+        if (outgoing.headersSent) {
+          outgoing.destroy();
+          return;
+        }
+        count(incoming, pathnameOf(incoming.url), 400);
+        outgoing.writeHead(400);
+        outgoing.end();
       });
-      if (outgoing.headersSent) {
-        outgoing.destroy();
-        return;
-      }
-      count(incoming, pathnameOf(incoming.url), 400);
-      outgoing.writeHead(400);
-      outgoing.end();
-    });
+    };
+    if (gzip === undefined) next();
+    else gzip(incoming, outgoing, next);
   });
 
   await new Promise<void>((resolve, reject) => {
