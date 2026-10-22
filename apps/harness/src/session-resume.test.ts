@@ -552,6 +552,24 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
     await expect(cli(['--resume', runDir])).rejects.toThrow(/檔案沒有壞，是比這一版新/);
   });
 
+  // #1559 N0646：錯誤訊息本身不帶路徑（serve 會把它送到瀏覽器），CLI 的終端機是本機使用者自己的，所以另印一行。
+  it('版本比這一版新：終端機印出原始日誌在哪裡', async () => {
+    const runDir = await firstRun();
+    const { header: headerPath, log } = sessionPathsIn(runDir, 'cli');
+    const header = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
+    await writeFile(
+      headerPath,
+      JSON.stringify({ ...header, version: SESSION_LOG_FORMAT_VERSION + 1 }),
+    );
+    const { printer, stderr } = recorder();
+    const input = new PassThrough();
+    input.end('/exit\n');
+    await expect(
+      runCli({ argv: ['--resume', runDir], input, output: new PassThrough(), printer }),
+    ).rejects.toThrow(/檔案沒有壞，是比這一版新/);
+    expect(stderr()).toContain(log);
+  });
+
   it('那個目錄裡沒有這份會話', async () => {
     await expect(cli(['--resume', logs])).rejects.toThrow(/裡沒有會話 "cli"/);
   });

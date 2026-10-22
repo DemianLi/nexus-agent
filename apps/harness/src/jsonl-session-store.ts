@@ -28,13 +28,15 @@
  *   加壓縮換到的是第二套解碼路徑，沒有人要。
  * - **寫租約照抄了**（`session-lease.ts`）：新開的在第一次實體化寫入之前拿，續接的在讀
  *   之前拿，把手關掉才放。一份會話一把，鎖檔跟日誌並排（`<base>.lock`）——理由在那個模組。
- *   `open(path, 'wx')` 仍然在：**檔案已經在就拒絕**，不覆寫也不續寫，那是 `SessionStore`
- *   檔頭說的撞名絆索，跟租約各擋一件事。
+ *   撞名跟租約各擋一件事：**撞名在 `create` 當下就報**（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559)，
+ *   照 dsh `index.ts:360-379`）——同一個後端建過還沒實體化的（行程內的 pending），或磁碟上 header、日誌任一個已經在的，
+ *   都同步拋 `SessionAlreadyExistsError`。實體化時的 `link` 與日誌的 `wx` 仍然在，**檔案已經在就拒絕**，不覆寫也不續寫：
+ *   擋的是 `create` 之後才出現的競態，撞上的 `EEXIST` 一樣換成 `SessionAlreadyExistsError`（`cause` 留著原錯）。
  *
  *   **拿租約是惰性的，所以輸的可能是先起來的那個**：一個行程還沒寫第一筆（還沒拿），另一個
  *   就 `--resume` 了同一份，後者先拿到；前者第一次寫的時候才撞上，而那一下在協調器的背景
  *   路徑上，**被收成一行 warn 而不是一個錯**。dsh 也是惰性的，所以不算偏離；只是我們的
- *   協調器讓那個後果更安靜。
+ *   協調器讓那個後果更安靜。`create` 之後才發生的撞名同樣是惰性的，後果一樣。
  *
  * ## 每批落盤、失敗截回（[#1506](https://github.com/DemianLi/nexus-agent/issues/1506)）
  *
@@ -61,7 +63,7 @@
  * - **目錄 `fsync` 的錯往外拋，不吞**（dsh `syncDirPosix`）。`plugin-journal.ts` 那支不分平台吞掉所有錯，不能拿來用：
  *   一次 `EIO` 會悄悄關掉目錄 `fsync`。
  * - **header 的目錄項落盤之後才建日誌**（`wx`，再 `fsync` 一次目錄）。反過來的話，斷電可能留下「有日誌、沒 header」：
- *   列表看不到它，同一個 id 之後再建時會在日誌那一步撞 `EEXIST`。
+ *   列表看不到它，同一個 id 之後再建時 `create` 就拒（看的是 header 與日誌兩個檔，同 dsh 的 `findLog` 看日誌）。
  * - 發佈是**可重試、不撞上自己**的：`link` 一成功就記下 header 已發佈，之後的重試只補做目錄 `fsync`；
  *   日誌開成了但目錄 `fsync` 失敗，重試也沿用同一個把手，不再 `wx` 一次。跟租約的 `??=` 同一個理由。
  *
@@ -134,8 +136,9 @@
 
 import { link, mkdir, open, readdir, readFile, rename, rm, stat, truncate } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
+import { readdirSync, statSync } from 'node:fs';
 import type { BigIntStats } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
@@ -145,11 +148,14 @@ import {
   parseSessionHeaderFilename,
   SESSION_FORMAT_CATALOG,
   SESSION_LOG_FORMAT_VERSION,
+  SessionAlreadyExistsError,
   SessionCorruptionError,
   SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
+  SessionHandleClosedError,
   SessionNotFoundError,
   sessionFilenames,
+  snapshotJsonValue,
 } from '@nexus/core';
 import type {
   ReadonlyStoredSession,
@@ -157,6 +163,7 @@ import type {
   SessionEvent,
   SessionFilenames,
   SessionFormatCatalog,
+  SessionLocation,
   SessionStore,
   StoredSession,
   StoredSessionHeader,
@@ -167,6 +174,7 @@ import type {
 } from '@nexus/core';
 import { acquireSessionLease } from './session-lease.js';
 import type { LeaseUnavailable, SessionWriteLease, TryLock } from './session-lease.js';
+import { assertStoredHeaderFields } from './session-log-validation.js';
 
 /**
  * 目錄與檔案的權限。
@@ -295,6 +303,90 @@ interface LeaseContext {
   readonly warn: (message: string) => void;
   /** 讀 header 時問的版本邊目錄（見 {@link ParseHeaderOptions.catalog}）。 */
   readonly catalog: SessionFormatCatalog;
+  /** 讀 header、日誌本文與取 revision 用的檔案系統（見 {@link JsonlSessionStoreOptions.fs}）。 */
+  readonly fs: StableReadFileSystem;
+  /**
+   * 這個後端 `create` 過、還沒實體化的 id，照 dsh 的 `JsonlBackendTracker.pending`（`storage.ts:391` 起）：只在記憶體裡，
+   * 實體化成功或還沒實體化就關掉時移掉（dsh `:473`、`:499`）。
+   */
+  readonly pending: Set<string>;
+  /** 冷讀解析快取（{@link ColdLogMemo}）。 */
+  readonly coldLogs: ColdLogMemo;
+}
+
+/**
+ * 冷讀解析快取的一筆：一份日誌在某個 revision 上解析出來的東西。續接要的不只事件，還有 header（決定要不要換版）、
+ * `validBytes` 與本文長度（決定要不要截撕裂的尾巴、截到哪）。
+ */
+interface ColdLog {
+  readonly headerRevision: string;
+  readonly logRevision: string;
+  readonly header: StoredSessionHeader;
+  readonly storedFormatVersion: number;
+  /** 深凍結過、讀方共用的那一份（照 dsh `freezeStoredEvents`，`index.ts:153-180`）。 */
+  readonly events: readonly SessionEvent[];
+  readonly validBytes: number;
+  readonly bodyBytes: number;
+}
+
+/** 冷讀解析快取最多留幾份，同 dsh 的 `COLD_LOG_MEMO_MAX_ENTRIES`（`index.ts:67`）。 */
+const COLD_LOG_MEMO_MAX_ENTRIES = 2;
+
+/**
+ * **冷讀解析快取**（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) N0625），照 dsh 的 `coldLogMemo`
+ * （`session-persistence-jsonl/src/index.ts:312`、`:615-649`、`:752`、`:799-810`、`:868-880`，`687f282e`）。
+ *
+ * 冷復活先唯讀打開檢查一次（`background-cold.ts` 的 inspect），緊接著續接又讀一次：同一份日誌整份解析兩次。
+ * 這裡記住最近兩份的解析結果，**鍵是 id，守衛是 header 與日誌兩個檔的 revision**（{@link fileRevision}，#1509 穩定讀的
+ * 那組身分）：任一個對不上就當沒有、照常讀。別的行程寫進去，revision 就變了；本後端自己寫的，寫之前先刪掉那一筆
+ * （同 dsh `:752`）。只存預設讀法（`recoverable`）的結果，`salvage` 撿回來的不存——續接不走撿回，存了會讓一份該拒的
+ * 檔靜靜續接成功（同 dsh `:860-868` 只存驗過的）。
+ *
+ * 不是持久投影快取（#725 的決定照舊）：行程內、最多兩份。常駐記憶體因此最多多出兩份日誌的大小（#1490 量測時要算進去）。
+ */
+class ColdLogMemo {
+  readonly #entries = new Map<string, ColdLog>();
+
+  /**
+   * @returns 兩個 revision 都對得上的那一筆（並把它移到最新）；對不上的順手刪掉。
+   */
+  get(id: string, headerRevision: string, logRevision: string): ColdLog | undefined {
+    const memoized = this.#entries.get(id);
+    if (memoized === undefined) return undefined;
+    this.#entries.delete(id);
+    if (memoized.headerRevision !== headerRevision || memoized.logRevision !== logRevision) {
+      return undefined;
+    }
+    this.#entries.set(id, memoized);
+    return memoized;
+  }
+
+  /** 存一筆；超過上限就淘汰最舊的（Map 的插入序）。 */
+  set(id: string, entry: ColdLog): void {
+    this.#entries.delete(id);
+    this.#entries.set(id, entry);
+    for (const oldest of this.#entries.keys()) {
+      if (this.#entries.size <= COLD_LOG_MEMO_MAX_ENTRIES) break;
+      this.#entries.delete(oldest);
+    }
+  }
+
+  /** 本後端要寫這一份了：先刪掉。 */
+  delete(id: string): void {
+    this.#entries.delete(id);
+  }
+}
+
+/** 深凍結一批解析出來的事件，照 dsh `freezeStoredEvent`（`index.ts:153-173`）：迭代、不遞迴（深物件不撞堆疊）。 */
+function freezeStoredEvents(events: SessionEvent[]): readonly SessionEvent[] {
+  const pending: object[] = [...events];
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    Object.freeze(current);
+    for (const child of Object.values(current)) {
+      if (child !== null && typeof child === 'object') pending.push(child as object);
+    }
+  }
+  return Object.freeze(events);
 }
 
 /** 拿租約；拿不到的平台講一聲、回 `undefined`。搶不到與其餘的錯照常拋。 */
@@ -496,6 +588,8 @@ class JsonlStoredSession implements StoredSession {
    * `AggregateError`，照 dsh `storage.ts:246-258`。以前關檔的錯會蓋掉落盤的錯，「哪些位元組沒落盤」就看不見了。
    */
   async #shutdown(): Promise<void> {
+    // 還沒實體化就關掉：這個 id 在這個後端上不再算建過（dsh `storage.ts:499`），同一個 id 可以再 `create`。
+    if (!this.#opened && this.#resume === undefined) this.#context.pending.delete(this.#header.id);
     const failures: unknown[] = [];
     // 第一次物化開成了日誌、但目錄 fsync 失敗又沒等到重試就關：把手還在 `#publish.log`，也要關。
     const handle = this.#handle ?? this.#publish.log;
@@ -532,8 +626,7 @@ class JsonlStoredSession implements StoredSession {
   }
 
   #assertOpen(): void {
-    if (this.#closing !== undefined)
-      throw new Error(`會話 "${this.#header.id}" 的把手已經關掉了。`);
+    if (this.#closing !== undefined) throw new SessionHandleClosedError(this.#header.id);
   }
 
   #enqueue<T>(task: () => Promise<T>): Promise<T> {
@@ -551,6 +644,8 @@ class JsonlStoredSession implements StoredSession {
    * **寫前大小取檔案現在的大小，不在記憶體裡累計**：續接截尾（{@link #materializeResumed}）會讓記憶體裡的數字對不上檔案。
    */
   async #persist(content: string): Promise<void> {
+    // 本後端要寫這一份了：冷讀快取那一筆先刪（同 dsh `index.ts:752`）。
+    this.#context.coldLogs.delete(this.#header.id);
     const handle = await this.#materialize();
     const { size: before } = await handle.stat();
     try {
@@ -602,6 +697,7 @@ class JsonlStoredSession implements StoredSession {
     this.#materializing ??= this.#open().then(
       (handle) => {
         this.#opened = true;
+        if (this.#resume === undefined) this.#context.pending.delete(this.#header.id);
         return handle;
       },
       (error: unknown) => {
@@ -637,7 +733,7 @@ class JsonlStoredSession implements StoredSession {
         await link(temp, headerPath);
       } catch (error: unknown) {
         await rm(temp, { force: true }).catch(() => undefined);
-        throw error;
+        throw this.#collision(error);
       }
       // **`link` 一成功的下一行就記**，不等目錄 fsync：目錄 fsync 拋錯之後重試再 `link`，會撞上自己的 header。
       progress.headerPublished = true;
@@ -653,12 +749,22 @@ class JsonlStoredSession implements StoredSession {
       delete progress.tempHeader;
     }
     // header 的目錄項落盤之後才建日誌。`wx`：檔案已經在就拒絕，不覆寫、也不續寫。
-    progress.log ??= await this.#context.openLog(this.#logPath(), 'wx', FILE_MODE);
+    try {
+      progress.log ??= await this.#context.openLog(this.#logPath(), 'wx', FILE_MODE);
+    } catch (error: unknown) {
+      throw this.#collision(error);
+    }
     await syncDirectory(directory);
     const handle = progress.log;
     delete progress.log;
     this.#handle = handle;
     return handle;
+  }
+
+  /** 實體化撞上 `EEXIST`：`create` 之後才出現的同名（競態），換成型別化的錯，原錯留在 `cause`。其餘原樣。 */
+  #collision(error: unknown): unknown {
+    if ((error as { code?: unknown } | null)?.code !== 'EEXIST') return error;
+    return new SessionAlreadyExistsError(this.#header.id, { cause: error });
   }
 
   /**
@@ -670,6 +776,7 @@ class JsonlStoredSession implements StoredSession {
    * 內容相同，不像 `link` 會撞上自己。
    */
   async #materializeResumed(resume: ResumePoint): Promise<LogFileHandle> {
+    this.#context.coldLogs.delete(this.#header.id);
     if (resume.headerStale === true) {
       await replaceSyncedFile(
         join(this.#directory, sessionFilenames(this.#base).header),
@@ -726,6 +833,8 @@ export interface ParseHeaderOptions {
    * **只給測試換**（同 {@link JsonlSessionStoreOptions.lock}）：把一條邊標成 `breaking`，驗舊檔經出貨的 store 被拒。
    */
   readonly catalog?: SessionFormatCatalog;
+  /** 這份日誌在哪裡：拒讀時放進 {@link SessionFormatUnsupportedError.location}（不進訊息）。不知道就不給。 */
+  readonly location?: SessionLocation;
 }
 
 /** {@link parseHeader} 交出來的東西。 */
@@ -767,7 +876,7 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Par
   if (typeof version === 'number' && Number.isSafeInteger(version) && version >= 1) {
     const verdict = classifyStoredFormatVersion(version, options.catalog ?? SESSION_FORMAT_CATALOG);
     if (verdict === 'newer' && options.acceptNewer !== true) {
-      throw new SessionFormatUnsupportedError(id, version);
+      throw new SessionFormatUnsupportedError(id, version, undefined, options.location);
     }
     if (verdict === 'older-without-migration') {
       throw new SessionFormatUnsupportedError(
@@ -775,6 +884,7 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Par
         version,
         `會話 "${id}" 的格式版本是 ${String(version)}，這一版沒有 v${String(version)} 的遷移，讀不了。` +
           `檔案沒有壞，是比這一版能接的舊。`,
+        options.location,
       );
     }
   }
@@ -816,6 +926,8 @@ export type ParseBodyOptions = (
    * 續接與預設讀取用，照 dsh 的 `SessionLogScanner` 預設（`format.ts:404`）。
    */
   readonly recovery: 'strict' | 'recoverable';
+  /** 同 {@link ParseHeaderOptions.location}：不認得的必需種類拒讀時帶上。 */
+  readonly location?: SessionLocation;
 };
 
 /** 收尾一輪的事件種類：`session-log.ts` 的 `openTurnStart` 與 `interrupted-turn.ts` 都把這兩個當收尾（Q1 (a)，#1508）。 */
@@ -907,7 +1019,13 @@ export function parseJsonlSessionBody(
       const { ignorable, seq } = value as Record<string, unknown>;
       const type = (value as Record<string, unknown>)['type'] as string;
       if (isUnreadableSessionEvent({ type, ignorable })) {
-        throw new SessionEventUnsupportedError(id, options.version, seq as number, type);
+        throw new SessionEventUnsupportedError(
+          id,
+          options.version,
+          seq as number,
+          type,
+          options.location,
+        );
       }
     }
     if (issue !== undefined) {
@@ -950,7 +1068,7 @@ function admitEvent(
   const { ignorable } = value;
   const type = value['type'] as string;
   if (options.acceptUnknownEvents !== true && isUnreadableSessionEvent({ type, ignorable })) {
-    throw new SessionEventUnsupportedError(id, options.version, index, type);
+    throw new SessionEventUnsupportedError(id, options.version, index, type, options.location);
   }
   return value as unknown as SessionEvent;
 }
@@ -959,7 +1077,12 @@ function admitEvent(
  * 中段壞掉的本文**撿回讀得懂的**：只看完整的行（最後一個換行之前），解析不動、或沒有數字的 `seq` 與 `time` 的略過。
  * 見 `@nexus/core` 的 `StoredSessionReadOptions.salvage`。
  */
-function salvageJsonlSessionBody(id: string, body: Buffer, version: unknown): SessionEvent[] {
+function salvageJsonlSessionBody(
+  id: string,
+  body: Buffer,
+  version: unknown,
+  location: SessionLocation,
+): SessionEvent[] {
   const events: SessionEvent[] = [];
   for (const line of body.toString('utf8', 0, body.lastIndexOf(0x0a) + 1).split('\n')) {
     let value: unknown;
@@ -977,7 +1100,7 @@ function salvageJsonlSessionBody(id: string, body: Buffer, version: unknown): Se
       // 撿回的是**壞行**，不是「更新的版本寫的」：不認得的必需種類照樣整份拒絕（#507）。壞行排在它前面或後面，結果
       // 不能不一樣。
       if (isUnreadableSessionEvent({ type: value['type'], ignorable: value['ignorable'] })) {
-        throw new SessionEventUnsupportedError(id, version, value['seq'], value['type']);
+        throw new SessionEventUnsupportedError(id, version, value['seq'], value['type'], location);
       }
       events.push(value as unknown as SessionEvent);
     }
@@ -1035,17 +1158,28 @@ async function readBody(
   logPath: string,
   fs: StableReadFileSystem = defaultStableReadFs,
 ): Promise<Buffer> {
+  return (await readBodySnapshot(logPath, fs)).bytes;
+}
+
+/**
+ * 同 {@link readBody}，另交證明它穩定的那次 `stat` 的身分（格式同 {@link fileRevision}，不在就是 `missing`）：冷讀快取
+ * 拿它當日誌的 revision，不另外再 `stat` 一次。
+ */
+async function readBodySnapshot(
+  logPath: string,
+  fs: StableReadFileSystem,
+): Promise<{ readonly bytes: Buffer; readonly identity: string }> {
   try {
-    return (await readStableSnapshot(logPath, fs)).bytes;
+    return await readStableSnapshot(logPath, fs);
   } catch (error: unknown) {
-    if (isNotFound(error)) return Buffer.alloc(0);
+    if (isNotFound(error)) return { bytes: Buffer.alloc(0), identity: MISSING_REVISION };
     throw error;
   }
 }
 
 /** {@link readSessionEntry} 的選項。 */
 export interface ReadSessionEntryOptions extends ParseHeaderOptions {
-  /** 讀日誌本文用的檔案系統。**只給測試換**，同 {@link readStableSnapshot}。 */
+  /** 讀 header 與日誌本文用的檔案系統。**只給測試換**，同 {@link readStableSnapshot}。 */
   readonly fs?: StableReadFileSystem;
 }
 
@@ -1084,14 +1218,14 @@ export async function readSessionEntry(
 ): Promise<SessionEntry | undefined> {
   const base = parseSessionHeaderFilename(filename);
   if (base === undefined) return undefined;
+  const { fs = defaultStableReadFs, ...parseOptions } = options;
   let text: string;
   try {
-    text = await readFile(join(directory, filename), 'utf8');
+    text = (await fs.readFile(join(directory, filename))).toString('utf8');
   } catch (error: unknown) {
     if (isNotFound(error)) return undefined;
     throw error;
   }
-  const { fs, ...parseOptions } = options;
   const { header, storedFormatVersion } = parseHeader(text, parseOptions);
   const logPath = join(directory, sessionFilenames(base).log);
   return { base, logPath, header, storedFormatVersion, readBody: () => readBody(logPath, fs) };
@@ -1113,19 +1247,62 @@ export function sessionPathsIn(directory: string, sessionId: string): SessionFil
   };
 }
 
+/** {@link fileRevision} 對「檔不在」給的那個值。 */
+const MISSING_REVISION = 'missing';
+
 /**
  * 一個檔此刻的樣子，照 dsh 的 `fileRevision`（`packages/session/session-persistence-jsonl/src/index.ts:184-192`）：
  * 裝置、inode、大小、修改與變更時間（奈秒）。不在就是 `missing`。
  */
-async function fileRevision(path: string): Promise<string> {
+async function fileRevision(
+  path: string,
+  fs: StableReadFileSystem = defaultStableReadFs,
+): Promise<string> {
   let stats: BigIntStats;
   try {
-    stats = await stat(path, { bigint: true });
+    stats = await fs.stat(path);
   } catch (error: unknown) {
-    if (isNotFound(error)) return 'missing';
+    if (isNotFound(error)) return MISSING_REVISION;
     throw error;
   }
   return identityOf(stats);
+}
+
+/** 列舉預設同時讀幾份，同 dsh 的 `DEFAULT_LIST_CONCURRENCY`（`index.ts:91`）。 */
+const DEFAULT_LIST_CONCURRENCY = 3;
+
+/**
+ * 最多 `limit` 個同時跑，**全部 settle 之後**才交結果，順序同輸入。照 dsh `settleLimited`（`index.ts:225-231`）；
+ * dsh 用 `p-limit`，這裡自己寫：引套件要先過 #1545 的發布年齡閘，語意相同，不算偏離。
+ */
+async function settleLimited<T, R>(
+  limit: number,
+  items: readonly T[],
+  task: (item: T) => Promise<R>,
+): Promise<PromiseSettledResult<R>[]> {
+  const results = new Array<PromiseSettledResult<R>>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      try {
+        results[index] = { status: 'fulfilled', value: await task(items[index] as T) };
+      } catch (reason: unknown) {
+        results[index] = { status: 'rejected', reason };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+/** settle 完的結果取值：**依輸入順序**拋第一個失敗，照 dsh `settledValues`（`index.ts:238-243`）——不是先失敗的那個。 */
+function settledValues<R>(results: readonly PromiseSettledResult<R>[]): R[] {
+  return results.map((result) => {
+    if (result.status === 'rejected') throw result.reason;
+    return result.value;
+  });
 }
 
 /**
@@ -1138,10 +1315,12 @@ async function fileRevision(path: string): Promise<string> {
  */
 async function listStoredSessions(
   directory: string,
-  catalog: SessionFormatCatalog,
+  context: LeaseContext,
+  concurrency: number,
   options: StoredSessionListOptions = {},
 ): Promise<StoredSessionListing> {
   const { signal } = options;
+  const { catalog, fs } = context;
   signal?.throwIfAborted();
   let names: string[];
   try {
@@ -1150,38 +1329,52 @@ async function listStoredSessions(
     if (isNotFound(error)) return { sessions: [], unreadable: 0 };
     throw error;
   }
+  // 一份一份讀換成最多 `concurrency` 份同時讀（#1559 N0627），照 dsh `list`（`index.ts:532`）。每份開始前看一次 signal。
+  const outcomes = settledValues(
+    await settleLimited(
+      concurrency,
+      names,
+      async (name): Promise<StoredSessionSnapshot | 'unreadable' | undefined> => {
+        signal?.throwIfAborted();
+        const base = parseSessionHeaderFilename(name);
+        if (base === undefined) return undefined;
+        const files = sessionFilenames(base);
+        // 先記樣子再讀：兩步之間被改了的話，記下的是舊的，下一次比對時不相等，衍生的快取多讀一次而已。
+        const revision = `${await fileRevision(join(directory, files.header), fs)}|${await fileRevision(join(directory, files.log), fs)}`;
+        let entry: SessionEntry | undefined;
+        try {
+          entry = await readSessionEntry(directory, name, { catalog, fs });
+        } catch (error: unknown) {
+          if (
+            error instanceof SessionCorruptionError ||
+            error instanceof SessionFormatUnsupportedError
+          ) {
+            return 'unreadable';
+          }
+          throw error;
+        }
+        // 讀目錄與讀檔之間被刪掉：不是壞檔，就是不在了。
+        if (entry === undefined) return undefined;
+        if (safeBaseName(entry.header.id) !== base) return 'unreadable';
+        const { header, storedFormatVersion } = entry;
+        return { header, storedFormatVersion, revision };
+      },
+    ),
+  );
   const sessions: StoredSessionSnapshot[] = [];
   let unreadable = 0;
-  for (const name of names) {
-    signal?.throwIfAborted();
-    const base = parseSessionHeaderFilename(name);
-    if (base === undefined) continue;
-    const files = sessionFilenames(base);
-    // 先記樣子再讀：兩步之間被改了的話，記下的是舊的，下一次比對時不相等，衍生的快取多讀一次而已。
-    const revision = `${await fileRevision(join(directory, files.header))}|${await fileRevision(join(directory, files.log))}`;
-    let entry: SessionEntry | undefined;
-    try {
-      entry = await readSessionEntry(directory, name, { catalog });
-    } catch (error: unknown) {
-      if (
-        error instanceof SessionCorruptionError ||
-        error instanceof SessionFormatUnsupportedError
-      ) {
-        unreadable += 1;
-        continue;
-      }
-      throw error;
-    }
-    // 讀目錄與讀檔之間被刪掉：不是壞檔，就是不在了。
-    if (entry === undefined) continue;
-    if (safeBaseName(entry.header.id) !== base) {
-      unreadable += 1;
-      continue;
-    }
-    const { header, storedFormatVersion } = entry;
-    sessions.push({ header, storedFormatVersion, revision });
+  for (const outcome of outcomes) {
+    if (outcome === 'unreadable') unreadable += 1;
+    else if (outcome !== undefined) sessions.push(outcome);
   }
   return { sessions, unreadable };
+}
+
+/**
+ * 拒讀診斷用的位置（#1559 N0646），照 dsh 的 `locate()`（`index.ts:345-347`）：日誌檔的絕對路徑，不碰檔案系統。
+ */
+function locate(directory: string, files: SessionFilenames): SessionLocation {
+  return { kind: 'jsonl', path: resolve(directory, files.log) };
 }
 
 /**
@@ -1190,31 +1383,54 @@ async function listStoredSessions(
 async function openStoredSessionForRead(
   directory: string,
   id: string,
-  catalog: SessionFormatCatalog,
+  context: LeaseContext,
 ): Promise<ReadonlyStoredSession> {
-  const { header: headerName } = sessionFilenames(safeBaseName(id));
-  const entry = await readSessionEntry(directory, headerName, { id, catalog });
+  const { catalog, fs, coldLogs } = context;
+  const files = sessionFilenames(safeBaseName(id));
+  const headerPath = join(directory, files.header);
+  const location = locate(directory, files);
+  // 先記樣子再讀 header（同 list）：中間被換掉的話，存進快取的是舊 revision，之後比對不相等、多讀一次而已。
+  const headerRevision = await fileRevision(headerPath, fs);
+  const entry = await readSessionEntry(directory, files.header, { id, catalog, fs, location });
   if (entry === undefined) {
-    throw new SessionNotFoundError(
-      id,
-      `${directory} 裡沒有會話 "${id}"（找不到 ${join(directory, headerName)}）。`,
-    );
+    throw new SessionNotFoundError(id, `${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`);
   }
-  const { header, storedFormatVersion } = entry;
+  const { header, storedFormatVersion, logPath } = entry;
   return {
     header,
     storedFormatVersion,
     async read(options: StoredSessionReadOptions = {}): Promise<readonly SessionEvent[]> {
-      const body = await entry.readBody();
+      if (options.salvage !== true) {
+        const memoized = coldLogs.get(
+          id,
+          await fileRevision(headerPath, fs),
+          await fileRevision(logPath, fs),
+        );
+        if (memoized !== undefined) return memoized.events;
+      }
+      const { bytes: body, identity } = await readBodySnapshot(logPath, fs);
       try {
         // 開了 salvage 的先走 strict、失敗才撿回：salvage 的語意（已登記的偏離）維持今天的樣子，不被 recoverable 搶先丟掉。
-        return parseJsonlSessionBody(id, body, {
+        const { events, validBytes } = parseJsonlSessionBody(id, body, {
           version: storedFormatVersion,
           recovery: options.salvage === true ? 'strict' : 'recoverable',
-        }).events;
+          location,
+        });
+        if (options.salvage === true) return events;
+        const frozen = freezeStoredEvents(events);
+        coldLogs.set(id, {
+          headerRevision,
+          logRevision: identity,
+          header,
+          storedFormatVersion,
+          events: frozen,
+          validBytes,
+          bodyBytes: body.byteLength,
+        });
+        return frozen;
       } catch (error: unknown) {
         if (options.salvage === true && error instanceof SessionCorruptionError) {
-          return salvageJsonlSessionBody(id, body, storedFormatVersion);
+          return salvageJsonlSessionBody(id, body, storedFormatVersion, location);
         }
         throw error;
       }
@@ -1233,13 +1449,15 @@ async function resumeStoredSession(
   id: string,
   context: LeaseContext,
 ): Promise<ResumedStoredSession> {
+  const { catalog, fs, coldLogs } = context;
   const files = sessionFilenames(safeBaseName(id));
   const headerPath = join(directory, files.header);
+  const location = locate(directory, files);
   const missing = () =>
     new SessionNotFoundError(id, `${directory} 裡沒有會話 "${id}"（找不到 ${headerPath}）。`);
   // **先認得有這份，再拿租約**：打錯的 `--resume` 不該留下一個鎖檔。
   try {
-    await stat(headerPath);
+    await fs.stat(headerPath);
   } catch (error: unknown) {
     if (isNotFound(error)) throw missing();
     throw error;
@@ -1248,15 +1466,30 @@ async function resumeStoredSession(
   // header 換版是原子取代（#1509），唯讀的讀方不拿租約也只會看到舊的或新的完整一份。
   const lease = await leaseFor(context, join(directory, files.lock), id);
   try {
-    const entry = await readSessionEntry(directory, files.header, { id, catalog: context.catalog });
-    if (entry === undefined) throw missing();
-    const { header, storedFormatVersion } = entry;
-    const body = await entry.readBody();
-    const { events, validBytes } = parseJsonlSessionBody(id, body, {
-      version: storedFormatVersion,
-      recovery: 'recoverable',
-    });
-    const droppedBytes = body.byteLength - validBytes;
+    // 冷讀快取（#1559 N0625）：**租約拿到之後**才比兩個檔的 revision——比對之後到第一次寫之前，別人寫不進來。
+    // 對上了就省掉 readFile 與解析；對不上照常讀。
+    const memoized = coldLogs.get(
+      id,
+      await fileRevision(headerPath, fs),
+      await fileRevision(join(directory, files.log), fs),
+    );
+    let read: Omit<ColdLog, 'headerRevision' | 'logRevision'>;
+    if (memoized !== undefined) {
+      read = memoized;
+    } else {
+      const entry = await readSessionEntry(directory, files.header, { id, catalog, fs, location });
+      if (entry === undefined) throw missing();
+      const { header, storedFormatVersion } = entry;
+      const { bytes: body } = await readBodySnapshot(entry.logPath, fs);
+      const { events, validBytes } = parseJsonlSessionBody(id, body, {
+        version: storedFormatVersion,
+        recovery: 'recoverable',
+        location,
+      });
+      read = { header, storedFormatVersion, events, validBytes, bodyBytes: body.byteLength };
+    }
+    const { header, storedFormatVersion, events, validBytes } = read;
+    const droppedBytes = read.bodyBytes - validBytes;
     return {
       header,
       storedFormatVersion,
@@ -1332,10 +1565,77 @@ export interface JsonlSessionStoreOptions {
   readonly openLog?: OpenLogFile;
   /** 讀 header 時問的版本邊目錄。**只給測試換**，見 {@link ParseHeaderOptions.catalog}。 */
   readonly catalog?: SessionFormatCatalog;
+  /**
+   * 列舉時最多同時讀幾份（#1559 N0627），照 dsh 的 `listConcurrency`（`index.ts:1811`，`min(1)`）。省略即 3。
+   * @throws `TypeError`（建構時）不是 1 以上的整數。
+   */
+  readonly listConcurrency?: number;
+  /**
+   * 讀 header、日誌本文與取 revision 用的檔案系統。**只給測試換**（同 {@link lock}）：數讀了幾次、同時在跑幾個、
+   * 製造讀檔失敗。寫入不經過它。
+   */
+  readonly fs?: StableReadFileSystem;
+}
+
+/**
+ * `create` 收到的 header 先驗、再拷一份（#1559 N0622），照 dsh 的 `materializeCreateHeader`
+ * （`session-persistence/src/storage-contract.ts:112-121`）加 `toHeaderLine` 的版本與欄位斷言（`format.ts:119-134` →
+ * `session-format/src/catalog.ts:110-122` → `session-format-v3-to-v4/src/codec.ts:43`）。驗過的就是要寫的那一份：
+ * 呼叫方之後改它的物件，不會改到落盤的 header。
+ *
+ * @throws `TypeError` 不是無損的 JSON、版本不是這一版、或某一格的形狀不對（{@link assertStoredHeaderFields}）。
+ */
+function materializeCreateHeader(header: StoredSessionHeader): StoredSessionHeader {
+  let snapshot: unknown;
+  try {
+    snapshot = snapshotJsonValue(header, 'session header');
+  } catch (error: unknown) {
+    throw new TypeError(
+      `session header 不是無損的 JSON：${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
+  const { version } = snapshot as { version?: unknown };
+  if (version !== SESSION_LOG_FORMAT_VERSION) {
+    throw new TypeError(
+      `session header 的 version 要是這一版（${SESSION_LOG_FORMAT_VERSION}），拿到 ${JSON.stringify(version)}`,
+    );
+  }
+  assertStoredHeaderFields(snapshot);
+  return snapshot as StoredSessionHeader;
+}
+
+/**
+ * 磁碟上這個 id 的 header 或日誌已經在了沒有（#1559 N0622）。**同步**：`SessionStore.create` 是同步介面，它的呼叫方
+ * （`sessions.observe` 的回呼）也是同步的（Q1 (a)）；dsh 建構子同樣用同步的 `readdirSync`。看兩個檔，同 dsh `findLog`
+ * 看的是日誌：「header 不在、日誌在」（首次落盤兩步之間當掉）也算建過。不在才放行，其餘的錯原樣拋。
+ */
+function existsOnDisk(directory: string, id: string): boolean {
+  const files = sessionFilenames(safeBaseName(id));
+  for (const name of [files.header, files.log]) {
+    try {
+      statSync(join(directory, name));
+      return true;
+    } catch (error: unknown) {
+      if (!isNotFound(error)) throw error;
+    }
+  }
+  return false;
 }
 
 /** 落在 `directory` 上的後端。兩個工廠差在目錄是新開的還是既有的。 */
 function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): JsonlSessionStore {
+  // 建構時就檢查根能不能讀（#1559 N0633），照 dsh `assertUsableRoot`（`index.ts:1591-1598`）：不在照常（第一次寫才建），
+  // 其餘（不是目錄、沒權限）當場拋。不然要等第一條會話第一次寫，在協調器的背景路徑上變成一行 warn。
+  try {
+    readdirSync(directory);
+  } catch (error: unknown) {
+    if (!isNotFound(error)) throw error;
+  }
+  const listConcurrency = options.listConcurrency ?? DEFAULT_LIST_CONCURRENCY;
+  if (!Number.isSafeInteger(listConcurrency) || listConcurrency < 1) {
+    throw new TypeError(`listConcurrency 要是 1 以上的整數，拿到 ${String(listConcurrency)}`);
+  }
   const warn = options.warn ?? ((message: string) => console.warn(`[會話日誌] ${message}`));
   let warned = false;
   const context: LeaseContext = {
@@ -1343,6 +1643,9 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
     warn,
     openLog: options.openLog ?? ((path, flags, mode) => open(path, flags, mode)),
     catalog: options.catalog ?? SESSION_FORMAT_CATALOG,
+    fs: options.fs ?? defaultStableReadFs,
+    pending: new Set(),
+    coldLogs: new ColdLogMemo(),
     unavailable: (outcome) => {
       if (warned) return;
       warned = true;
@@ -1355,16 +1658,21 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
   return {
     directory,
     create(header: StoredSessionHeader): StoredSession {
-      return new JsonlStoredSession(directory, header, context);
+      const snapshot = materializeCreateHeader(header);
+      if (context.pending.has(snapshot.id) || existsOnDisk(directory, snapshot.id)) {
+        throw new SessionAlreadyExistsError(snapshot.id);
+      }
+      context.pending.add(snapshot.id);
+      return new JsonlStoredSession(directory, snapshot, context);
     },
     resume(id: string): Promise<ResumedStoredSession> {
       return resumeStoredSession(directory, id, context);
     },
     list(options?: StoredSessionListOptions): Promise<StoredSessionListing> {
-      return listStoredSessions(directory, context.catalog, options);
+      return listStoredSessions(directory, context, listConcurrency, options);
     },
     open(id: string): Promise<ReadonlyStoredSession> {
-      return openStoredSessionForRead(directory, id, context.catalog);
+      return openStoredSessionForRead(directory, id, context);
     },
   };
 }

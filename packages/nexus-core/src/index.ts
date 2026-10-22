@@ -781,6 +781,7 @@ export type {
   ResumedStoredSession,
   SessionStore,
   SessionHeaderBuildMetadata,
+  SessionLocation,
   StoredSession,
   StoredSessionBuild,
   StoredSessionHeader,
@@ -792,7 +793,9 @@ export type {
 } from './session-store.js';
 export {
   SESSION_LOG_FORMAT_VERSION,
+  SessionAlreadyExistsError,
   SessionAlreadyOwnedError,
+  SessionHandleClosedError,
   SessionNotFoundError,
   SessionCorruptionError,
   SessionEventUnsupportedError,
