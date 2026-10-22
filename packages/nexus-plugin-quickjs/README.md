@@ -78,7 +78,9 @@ promise 代表它在等一個 VM 裡不存在的東西，那是永遠不會變�
 **回傳值只收無損的 JSON**（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)，照 dsh 的 `prepareCompletion`）。
 `NaN`、`Infinity`、`-0`、`Map`、函式、值為 `undefined` 的欄位、稀疏陣列、循環參照這些 JSON 表達不出來的東西，以前會默默變成
 `null`、`{}` 或少一格，模型照著講給使用者聽；現在拋 `invalid-output`。檢查**在 VM 裡**跑（純 JS、不 bridge 任何 host
-function），因為 `dump()` 交到 host 的時候值已經被 VM 的 `JSON.stringify` 改掉了。非字串的結果用 dsh `renderJsonValue` 的格式：
+function），因為 `dump()` 交到 host 的時候值已經被 VM 的 `JSON.stringify` 改掉了。驗證與輸出是**同一趟**：快照一邊驗一邊把 JSON 文字組出來、
+每個值只讀一次，host 只拿那份文字去解析，不再回頭讀原本的值——所以 `Object.prototype.toJSON`、說謊的 `Proxy` 都改不了結果（dsh 的
+`snapshotPtcJsonValue` 同樣是一趟）。走訪是迭代的，幾萬層的巢狀也回得來。非字串的結果用 dsh `renderJsonValue` 的格式：
 兩個空白縮排，總縮排超過 10 個字元的子樹改緊湊；字串原樣、沒有回傳值是「（沒有回傳值）」。
 
 ## 為什麼是 custom tool，不是 sandbox backend

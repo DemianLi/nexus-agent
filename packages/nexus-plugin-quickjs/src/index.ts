@@ -63,14 +63,14 @@ export const RUN_JAVASCRIPT_TOOL_NAME = 'run_javascript';
 
 /**
  * 程式本身失敗時分成哪幾種，詞彙照 dsh 的 `PtcRunFailure.kind`
- * （`packages/core/tools/src/types.ts:134-140`，`687f282e`）。這裡用得到其中三個：
+ * （`packages/ptc-runtime/ptc-runtime/src/types.ts:130-141` 的 `PtcRunFailure.kind`，`687f282e`）。這裡用得到其中三個：
  *
  * - `exception`：程式拋出來的，或它回傳的 promise 被 reject。記憶體、堆疊上限也走這一條——
  *   QuickJS 把它們報成 VM 裡的 `InternalError`／`RangeError`，跟程式自己拋的沒有兩樣。
  * - `timeout`：撞到 {@link QuickJsPluginOptions.timeoutMs} 被中斷；以及回傳一個永遠不會完成的
  *   promise（見 {@link runInVm}）。
  * - `invalid-output`：完成值不是無損的 JSON（`NaN`、`Infinity`、`-0`、`Map`、函式、`undefined` 欄位、
- *   稀疏陣列、循環……），見 {@link COMPLETION_CHECK_SOURCE}。
+ *   稀疏陣列、循環……），見 {@link SNAPSHOT_SOURCE}。
  */
 export type CodeRunFailureKind = 'exception' | 'timeout' | 'invalid-output';
 
@@ -219,9 +219,14 @@ function runInVm(
 
   try {
     const context = runtime.newContext();
-    // 檢查函式要在使用者的程式**之前**進 VM：它把用到的內建函式先收進閉包，程式事後改 `Array.isArray` 之類改不到它。
-    const checker = context.unwrapResult(context.evalCode(COMPLETION_CHECK_SOURCE));
+    let snapshot: QuickJSHandle | undefined;
     try {
+      // 快照函式要在使用者的程式**之前**進 VM：它把用到的內建函式先收進閉包，程式事後改 `Array.isArray` 之類改不到它。
+      // 放在收 context 的這個 `try` 裡：求值失敗（例如堆疊上限小到連它都放不下）時 context 照樣收，不留活 handle 給 `runtime.dispose()`。
+      const prepared = context.evalCode(SNAPSHOT_SOURCE);
+      if (prepared.error) return consume(context, prepared.error, (detail) => fail(detail, limits));
+      snapshot = prepared.value;
+
       const result = context.evalCode(code);
       if (result.error) return consume(context, result.error, (detail) => fail(detail, limits));
 
@@ -232,9 +237,9 @@ function runInVm(
       const pending = runtime.executePendingJobs();
       if (pending.error) return consume(context, pending.error, (detail) => fail(detail, limits));
 
-      return formatResult(context, checker, result.value, limits);
+      return formatResult(context, snapshot, result.value, limits);
     } finally {
-      checker.dispose();
+      snapshot?.dispose();
       context.dispose();
     }
   } finally {
@@ -256,14 +261,14 @@ function runInVm(
  */
 function formatResult(
   context: QuickJSContext,
-  checker: QuickJSHandle,
+  snapshot: QuickJSHandle,
   handle: QuickJSHandle,
   limits: VmLimits,
 ): string {
   const state = context.getPromiseState(handle);
 
   if (state.type === 'fulfilled' && state.notAPromise === true) {
-    return completion(context, checker, handle, limits);
+    return completion(context, snapshot, handle, limits);
   }
 
   try {
@@ -281,7 +286,7 @@ function formatResult(
     if (state.type === 'rejected') {
       return consume(context, state.error, (detail) => fail(detail, limits));
     }
-    return completion(context, checker, state.value, limits);
+    return completion(context, snapshot, state.value, limits);
   } finally {
     if (handle.alive) handle.dispose();
   }
@@ -328,111 +333,144 @@ function fail(detail: unknown, limits: VmLimits): never {
 }
 
 /**
- * 完成值的最後一關：先在 VM 裡確認它是無損的 JSON，過了才 dump、渲染。
+ * 完成值的最後一關：在 VM 裡**邊驗邊組出 JSON 文字，只讀一次**，host 只拿那份文字去 `JSON.parse` 再渲染。
+ *
+ * **為什麼不是「先檢查、再 dump 原本的 handle」。** 那樣檢查與輸出各讀一次活的值：`Object.prototype.toJSON`、`Array.prototype.toJSON`、
+ * 說謊的 `Proxy` 都能讓兩次讀到的不一樣，錯的值就被當成功回去（#1842 審查實測）。現在輸出就是檢查時讀到的那一份（dsh 的
+ * `snapshotPtcJsonValue` 同樣一邊驗一邊抄、只讀一次），原本的 handle 不再 dump。
  *
  * **檢查一定在 VM 裡做。** `QuickJSContext#dump` 對物件是在 VM 裡先 `JSON.stringify` 才交出來（`quickjs-emscripten-core@0.32.0`
  * 實測），host 拿到的時候 `NaN` 已經是 `null`、`Map` 已經是 `{}`、`undefined` 欄位已經不見——在 host 端檢查看不到。
  * 頂層的 `undefined` 照舊（「沒有回傳值」，同 dsh 的 `prepareCompletion` 對 `undefined` 回 `{}`）。
+ *
+ * 快照函式自己拋錯：VM 的資源上限（中斷、堆疊是 `InternalError`；記憶體用盡丟出來的東西 dump 是 `null`）照一般求值失敗的路走；其餘（例如 `Proxy` 的 trap 拋了）是
+ * 「讀不出一份無損的值」，回 `invalid-output`，同 dsh 把快照的例外收成 `undefined`（`bootstrap.ts:171-175`）。
  */
 function completion(
   context: QuickJSContext,
-  checker: QuickJSHandle,
+  snapshot: QuickJSHandle,
   handle: QuickJSHandle,
   limits: VmLimits,
 ): string {
-  if (context.typeof(handle) !== 'undefined') {
-    const verdict = context.callFunction(checker, context.undefined, handle);
-    if (verdict.error) {
-      handle.dispose();
-      return consume(context, verdict.error, (detail) => fail(detail, limits));
-    }
-    const lossless = context.dump(verdict.value) === true;
-    verdict.value.dispose();
-    if (!lossless) {
-      handle.dispose();
-      throw new CodeRunFailedError('invalid-output', 'program completion must be lossless JSON');
-    }
+  if (context.typeof(handle) === 'undefined') return consume(context, handle, formatValue);
+
+  const verdict = context.callFunction(snapshot, context.undefined, handle);
+  if (handle.alive) handle.dispose();
+  if (verdict.error) {
+    const detail = context.dump(verdict.error);
+    verdict.error.dispose();
+    const name = (detail as { name?: unknown } | null)?.name;
+    // 記憶體用盡時 QuickJS 丟的東西 dump 出來是 null、沒有名字也沒有訊息：那是資源上限，不是「值不合格」。
+    if (detail === null || name === 'InternalError') fail(detail, limits);
+    throw new CodeRunFailedError('invalid-output', LOSSLESS_JSON_MESSAGE);
   }
-  return consume(context, handle, formatValue);
+  const json =
+    context.typeof(verdict.value) === 'string' ? context.getString(verdict.value) : undefined;
+  verdict.value.dispose();
+  if (json === undefined) throw new CodeRunFailedError('invalid-output', LOSSLESS_JSON_MESSAGE);
+  return formatValue(JSON.parse(json));
 }
 
+/** `invalid-output` 的原因，字串逐字照 dsh `bootstrap.ts:172`。 */
+const LOSSLESS_JSON_MESSAGE = 'program completion must be lossless JSON';
+
 /**
- * 在 VM 裡跑的完成值檢查函式，規則照 dsh 的 lossless JSON 快照（`ptc-runtime-node/src/json-wire.ts:150` 的
- * `snapshotPtcJsonValue`，`687f282e`）：
+ * 在 VM 裡跑的快照函式：回一份 JSON 文字，不合格回 `undefined`。規則照 dsh 的 lossless JSON 快照（`ptc-runtime-node/src/json-wire.ts:150-233`
+ * 的 `snapshotPtcJsonValue`，`687f282e`）：
  *
  * - 只收 `null`、布林、字串、**有限且不是 `-0`** 的數字；
- * - 陣列必須是密集的、原型是 `Array.prototype`、沒有多餘屬性；
- * - 物件的原型必須是 `Object.prototype` 或 `null`，只能有可列舉的字串鍵，**不能有 symbol、不能有 accessor**；
+ * - 陣列：原型是 `Array.prototype`、自有鍵恰是索引加 `length`（沒有多餘屬性）、每個索引都是自有的（沒有洞）；
+ * - 物件：原型是 `Object.prototype` 或 `null`、自有鍵全是**可列舉的字串鍵**（沒有 symbol、沒有不可列舉的）；
+ * - 值一律用一般的取值（`obj[key]`）**讀一次**；accessor 的 getter 因此照跑一次，跟 dsh 一樣；
  * - 不能有循環；成員不能是 `undefined`、函式、`bigint`、symbol。
  *
  * **純 JS、不 bridge 任何 host function**（檔頭說的邊界寬度仍是零）。**迭代走訪、不遞迴**，所以深層巢狀不會先撞堆疊上限。
- * 用到的內建函式在 IIFE 開頭收進閉包，同 dsh 的 intrinsics：程式事後改 `Array.isArray`、`Object.prototype`
- * 上的 `value` 之類，都騙不了它。
+ * 用到的內建函式在 IIFE 開頭收進閉包，同 dsh 的 intrinsics：程式事後改 `Array.isArray`、`Object.prototype` 上的東西，騙不了它。
+ * 文字是自己拼的，**不呼叫 `JSON.stringify` 去走物件**（只對字串原始值用它做跳脫，原始值沒有 `toJSON` 查找）。
  *
  * 偏離（理由 1，基座表達不出來）：dsh 在外層行程檢查，這裡在 VM 裡檢查，見 {@link completion}。
  */
-const COMPLETION_CHECK_SOURCE = `(function () {
+const SNAPSHOT_SOURCE = `(function () {
   'use strict';
   const isArray = Array.isArray;
   const getPrototypeOf = Object.getPrototypeOf;
-  const getOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
   const ownKeys = Reflect.ownKeys;
   const apply = Reflect.apply;
   const isFinite = Number.isFinite;
   const is = Object.is;
+  const quote = JSON.stringify;
+  const toText = String;
   const objectProto = Object.prototype;
   const arrayProto = Array.prototype;
   const hasOwn = objectProto.hasOwnProperty;
+  const isEnumerable = objectProto.propertyIsEnumerable;
   const Active = WeakSet;
   const add = Active.prototype.add;
   const has = Active.prototype.has;
   const del = Active.prototype.delete;
-  return function check(root) {
+  return function snapshot(root) {
     const active = new Active();
     let top = null;
-    // 葉子回是否合格；容器合格就登記進 active、推一格走訪框架（鏈結串列，不碰 Array.prototype）。
+    let out = '';
+    // 葉子接上文字、回是否合格；容器合格就登記進 active、推一格走訪框架（鏈結串列，不碰 Array.prototype）。
     const visit = (value) => {
-      if (value === null) return true;
+      if (value === null) { out += 'null'; return true; }
       const type = typeof value;
-      if (type === 'boolean' || type === 'string') return true;
-      if (type === 'number') return isFinite(value) && !is(value, -0);
+      if (type === 'boolean') { out += value ? 'true' : 'false'; return true; }
+      if (type === 'string') { out += quote(value); return true; }
+      if (type === 'number') {
+        if (!isFinite(value) || is(value, -0)) return false;
+        out += toText(value);
+        return true;
+      }
       if (type !== 'object') return false;
       if (apply(has, active, [value])) return false;
-      const array = isArray(value);
       let keys = null;
       let count;
-      if (array) {
+      if (isArray(value)) {
         if (getPrototypeOf(value) !== arrayProto) return false;
         count = value.length;
-        // 索引加一個 length；多出來的屬性（或少了索引補不上的）數量對不起來。
+        // 索引加一個 length；多出來的屬性（或少了索引補不上的）數量對不起來，洞由逐格的 hasOwn 接住。
         if (ownKeys(value).length !== count + 1) return false;
+        out += '[';
       } else {
         const proto = getPrototypeOf(value);
         if (proto !== null && proto !== objectProto) return false;
         keys = ownKeys(value);
+        for (let i = 0; i < keys.length; i += 1) {
+          if (typeof keys[i] !== 'string' || !apply(isEnumerable, value, [keys[i]])) return false;
+        }
         count = keys.length;
+        out += '{';
       }
       apply(add, active, [value]);
       top = { parent: top, object: value, keys, count, index: 0 };
       return true;
     };
-    if (!visit(root)) return false;
+    if (!visit(root)) return undefined;
     while (top !== null) {
       const frame = top;
       if (frame.index === frame.count) {
+        out += frame.keys === null ? ']' : '}';
         apply(del, active, [frame.object]);
         top = frame.parent;
         continue;
       }
-      const key = frame.keys === null ? frame.index : frame.keys[frame.index];
+      const index = frame.index;
       frame.index += 1;
-      if (typeof key === 'symbol') return false;
-      const descriptor = getOwnPropertyDescriptor(frame.object, key);
-      if (descriptor === undefined) return false;
-      if (!apply(hasOwn, descriptor, ['value']) || descriptor.enumerable !== true) return false;
-      if (!visit(descriptor.value)) return false;
+      if (index > 0) out += ',';
+      let child;
+      if (frame.keys === null) {
+        if (!apply(hasOwn, frame.object, [index])) return undefined;
+        child = frame.object[index];
+      } else {
+        const key = frame.keys[index];
+        out += quote(key) + ':';
+        child = frame.object[key];
+      }
+      if (!visit(child)) return undefined;
     }
-    return true;
+    return out;
   };
 })()`;
 
@@ -440,8 +478,8 @@ const COMPLETION_CHECK_SOURCE = `(function () {
  * 把一個非 promise 的值翻成一句話。
  *
  * `undefined` 要有自己的講法：直接回傳等於給模型一個空回應，讀起來像工具壞了。而「這段程式沒有回傳值」是正常且常見的結果。
- * 字串原樣；其餘照 dsh 的 `renderValue`（`packages/core/tools/src/ptc.ts:282-285`，`687f282e`）。進來的已經過 {@link completion}
- * 的檢查，是無損的 JSON 值。
+ * 字串原樣；其餘照 dsh 的 `renderValue`（`packages/core/tools/src/ptc.ts:284-286`，`687f282e`）。進來的已經過 {@link completion}
+ * 的快照，是無損的 JSON 值。
  */
 function formatValue(value: unknown): string {
   if (value === undefined) return '（沒有回傳值）';
@@ -452,10 +490,10 @@ function formatValue(value: unknown): string {
 /** 無損的 JSON 值。 */
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
-/** 縮排兩個空白，同 dsh `ptc.ts:200`。 */
+/** 縮排兩個空白，同 dsh `ptc.ts:199`。 */
 const JSON_INDENT = '  ';
 
-/** 總縮排的字元上限，超過的子樹改緊湊格式，同 dsh `ptc.ts:208`：輸出大小與 JSON 大小成線性。 */
+/** 總縮排的字元上限，超過的子樹改緊湊格式，同 dsh `ptc.ts:206`：輸出大小與 JSON 大小成線性。 */
 const MAX_JSON_INDENT_CHARS = 10;
 
 type JsonRenderTask =
@@ -463,7 +501,7 @@ type JsonRenderTask =
   | { kind: 'value'; value: JsonValue; depth: number; compact: boolean };
 
 /**
- * 把一個非字串的 JSON 根渲染成文字，**逐行照抄** dsh 的 `renderJsonValue`（`ptc.ts:216-281`，`687f282e`）：兩個空白縮排，
+ * 把一個非字串的 JSON 根渲染成文字，**逐行照抄** dsh 的 `renderJsonValue`（`ptc.ts:214-281`，`687f282e`）：兩個空白縮排，
  * 總縮排超過 {@link MAX_JSON_INDENT_CHARS} 之後改緊湊；迭代走訪，不遞迴。
  */
 function renderJsonValue(value: JsonValue): string {
