@@ -14,7 +14,7 @@
  * - 串流進來、不聚合：上傳不吃記憶體。
  * - **讀與去重都重算雜湊**（`ATTACHMENT_CORRUPT`，[#1338](https://github.com/DemianLi/nexus-agent/issues/1338)）：
  *   物件路徑就是雜湊，所以讀圖時重算一次、去重碰到既有物件時重算一次，對不上就拋，不把來路不明的位元組交出去、
- *   也不讓壞物件「認領」新上傳。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結不重算內容，只比 inode：跟物件不同
+ *   也不讓壞物件「認領」新上傳。讀圖時再重讀檔頭比媒體類型與寬高（dsh `readImageFile`，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結不重算內容，只比 inode：跟物件不同
  *   （物件被刪掉重建過）就原子地換掉（[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)）。
  * - **回報參照之前逐層 fsync 目錄**（[#1528](https://github.com/DemianLi/nexus-agent/issues/1528)，dsh `store.ts:126-183`、
  *   `:272-302`、`:350-388`，`1517a4db`）：暫存檔內容 fsync 了還不夠，`link` 寫進父目錄的那一筆名字、這次新建的
@@ -32,6 +32,11 @@
  *    收到的是主機路徑（它的檔案工具不在工作區圍欄裡）；我們的 backend 有圍欄，所以走路由。基座表達不出的是「圍欄外的絕對路徑」。
  * 2. **圖片沒有正規化／縮圖。** dsh 在收下時把圖轉成 8-bit sRGB 並縮小到 2048×2048 以內、4 MB 上下（`normalization.ts`，靠 sharp）；
  *    我們沒有影像函式庫，圖按收到的位元組原樣存（`saveImage`），超過上限的拒收而不縮（`image-intake.ts`）。送進模型的是原圖。
+ *    **類別：過渡**（[#1566](https://github.com/DemianLi/nexus-agent/issues/1566) 補標）。兩種理由都套不上：理由 1 不成立，sharp 有
+ *    linux-x64 的預編譯檔，引進來是相依與打包的成本，不是基座做不到；理由 2 不成立，這不是 dsh 射程外的產品需求。
+ *    **撤除條件**：另開卡引進影像函式庫，先確認它進得了 Release 的 tar.gz、在內網主機上裝得起來，再照 dsh `normalization.ts`
+ *    做正規化。撤除時一併撤掉跟著這條走的幾處：`image-intake.ts` 檔頭的偏離 1、2（不整張解碼、不套 EXIF 轉向），以及
+ *    `@nexus/core` `attachment-projection.ts` 檔頭把手那幾條。
  * 3. **儲存沒有逐會話目錄，但模型讀附件的路由按 thread 收窄**（理由 2，[#1773](https://github.com/DemianLi/nexus-agent/issues/1773)，#1675 Q3 (a)，
  *    demian 2026-10-20 拍板）。**儲存照 dsh**：附件根是全域內容定址（`attachments/v1`），不按會話分，同樣的內容只存一份。**路由不照 dsh**：
  *    dsh 是單人桌面，模型讀的是主機路徑、沒有路由；nexus 是一台主機多人共用，所有 web 使用者在同一個 OS 帳號底下，`0700` 分不開人
@@ -61,6 +66,7 @@ import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@nex
 import { syncDirectory } from './atomic-file.js';
 import { ThreadScopedAttachmentBackend } from './attachment-route.js';
 import type { AttachmentScope } from './attachment-route.js';
+import { probeImageHeader } from './image-intake.js';
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
 import { assertPrivateFile } from './plugin-config.js';
 import type { PrivateFileRole } from './plugin-config.js';
@@ -366,8 +372,8 @@ export class AttachmentStore {
   }
 
   /**
-   * 讀一張存好的圖的位元組。大小或內容雜湊跟參照對不上（物件被換過、損毀、被截斷）就拋，不把來路不明的位元組交出去。
-   * 大小先比（便宜），再重算 sha256。
+   * 讀一張存好的圖的位元組。大小、內容雜湊或檔頭（媒體類型、寬高）跟參照對不上（物件被換過、損毀、被截斷，
+   * 或參照被改過）就拋，不把來路不明的位元組交出去。大小先比（便宜），再重算 sha256，最後重讀檔頭。
    *
    * @throws {AttachmentError} 參照不合格式、物件不在（`ATTACHMENT_STORE_FAILED`）、或內容對不上（`ATTACHMENT_CORRUPT`）。
    */
@@ -394,6 +400,20 @@ export class AttachmentStore {
     }
     if (createHash('sha256').update(data).digest('hex') !== sha256) {
       throw new AttachmentError('圖片的內容對不上它的雜湊', 'ATTACHMENT_CORRUPT');
+    }
+    // 雜湊只證明位元組是當初存的那份，不證明參照的其他欄位：日誌裡的寬高、媒體類型被改過，畫面與模型會照著錯的
+    // 那份走。照 dsh `readImageFile`（`store.ts:450-458`，`687f282e`）重讀檔頭再比一次，只讀檔頭、不解碼像素。
+    // **限制**：參照的寬高是收下時用同一支 `probeImageHeader` 認的，所以今天兩邊一定對得上。哪天它改了寬高的語意（例如開始套
+    // EXIF 轉向，`image-intake.ts` 的偏離 2），所有舊參照會一起變成 `ATTACHMENT_CORRUPT`：改檔頭辨識的那張卡要一併處理舊參照
+    // （[#1566](https://github.com/DemianLi/nexus-agent/issues/1566) N0019）。
+    const facts = probeImageHeader(data);
+    if (
+      facts === undefined ||
+      facts.mediaType !== ref.mediaType ||
+      facts.width !== ref.width ||
+      facts.height !== ref.height
+    ) {
+      throw new AttachmentError('圖片的檔頭對不上參照', 'ATTACHMENT_CORRUPT');
     }
     return data;
   }

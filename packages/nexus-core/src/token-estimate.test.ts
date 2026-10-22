@@ -9,6 +9,7 @@ import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import { Tiktoken } from 'js-tiktoken/lite';
 import o200kRanks from 'js-tiktoken/ranks/o200k_base';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { requestImageHandleText } from './attachment-projection.js';
 import { attachmentBlock, fileHandleText, fileModelPath, IMAGE_TOKENS } from './attachment-ref.js';
 import {
   estimateAnchoredTokens,
@@ -649,19 +650,21 @@ describe('附件區塊（#732）', () => {
     new HumanMessage({ content: [{ type: 'text', text: '看這個' }, ...blocks] as never });
   const baseline = estimateRequestTokens(request([withBlocks()]));
 
-  it('一張圖算固定的 IMAGE_TOKENS，跟位元組數與像素數無關', () => {
+  /** 同一則訊息、圖換成送出時它前面那一行把手（#1566）：「有圖」該等於這個加上像素那一截。 */
+  const asText = (...handles: readonly string[]) =>
+    estimateRequestTokens(request([new HumanMessage(['看這個', ...handles].join(''))]));
+
+  it('一張圖算固定的 IMAGE_TOKENS 加它前面那一行把手，像素那一截跟位元組數與像素數無關', () => {
     const one = estimateRequestTokens(
       request([withBlocks(attachmentBlock({ type: 'image', ...IMAGE_REF }))]),
     );
+    const smallRef = { ...IMAGE_REF, bytes: 10, width: 8, height: 8 };
     const small = estimateRequestTokens(
-      request([
-        withBlocks(
-          attachmentBlock({ type: 'image', ...IMAGE_REF, bytes: 10, width: 8, height: 8 }),
-        ),
-      ]),
+      request([withBlocks(attachmentBlock({ type: 'image', ...smallRef }))]),
     );
-    expect(one - baseline).toBe(IMAGE_TOKENS);
-    expect(small).toBe(one);
+    expect(one).toBe(asText(requestImageHandleText(IMAGE_REF)) + IMAGE_TOKENS);
+    expect(small).toBe(asText(requestImageHandleText(smallRef)) + IMAGE_TOKENS);
+    expect(asText(requestImageHandleText(IMAGE_REF))).toBeGreaterThan(baseline);
     const two = estimateRequestTokens(
       request([
         withBlocks(
@@ -670,13 +673,21 @@ describe('附件區塊（#732）', () => {
         ),
       ]),
     );
-    expect(two - baseline).toBe(2 * IMAGE_TOKENS);
+    const handle = requestImageHandleText(IMAGE_REF);
+    expect(two).toBe(asText(handle, handle) + 2 * IMAGE_TOKENS);
   });
 
-  it('不再把圖的區塊整塊 JSON.stringify：參照的 JSON 不進文字', () => {
+  it('被省略的圖：沒有像素那一截，也沒有把手（組請求時是一行佔位字，不計）', () => {
     const block = attachmentBlock({ type: 'image', ...IMAGE_REF });
-    const counted = estimateRequestTokens(request([withBlocks(block)])) - baseline - IMAGE_TOKENS;
-    expect(counted).toBe(0);
+    const offloaded = estimateRequestTokens(request([withBlocks({ ...block, offloaded: true })]));
+    expect(offloaded).toBe(baseline);
+  });
+
+  it('不再把圖的區塊整塊 JSON.stringify：參照的 JSON 不進文字，進的只有把手那一行', () => {
+    const block = attachmentBlock({ type: 'image', ...IMAGE_REF });
+    const counted = estimateRequestTokens(request([withBlocks(block)])) - IMAGE_TOKENS;
+    expect(counted).toBe(asText(requestImageHandleText(IMAGE_REF)));
+    expect(counted - baseline).toBeLessThan(estimateTextTokens(JSON.stringify(block)));
   });
 
   it('檔案算投影之後那一行字，不是參照的 JSON', () => {

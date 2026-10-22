@@ -317,6 +317,30 @@ describe('存一張圖（#732）', () => {
     await expect(store.readImage(ref)).rejects.toMatchObject({ code: 'ATTACHMENT_CORRUPT' });
   });
 
+  it('位元組沒動、參照的寬高或媒體類型被改過：拋 ATTACHMENT_CORRUPT（雜湊抓不到這一種，#1566）', async () => {
+    const ref = await store.saveImage({ data: PNG, ...facts });
+    for (const tampered of [
+      { ...ref, width: 8 },
+      { ...ref, height: 4 },
+      { ...ref, mediaType: 'image/jpeg' as const },
+    ]) {
+      await expect(store.readImage(tampered), JSON.stringify(tampered)).rejects.toMatchObject({
+        code: 'ATTACHMENT_CORRUPT',
+        message: expect.stringMatching(/檔頭對不上/) as unknown,
+      });
+    }
+    expect(Buffer.from(await store.readImage(ref))).toEqual(PNG);
+  });
+
+  it('存的時候就不是圖（儲存不驗內容）：讀的時候拋 ATTACHMENT_CORRUPT', async () => {
+    const text = Buffer.from('not an image at all');
+    const ref = await store.saveImage({ data: text, ...facts });
+    await expect(store.readImage(ref)).rejects.toMatchObject({
+      code: 'ATTACHMENT_CORRUPT',
+      message: expect.stringMatching(/檔頭對不上/) as unknown,
+    });
+  });
+
   describe('去重碰到既有物件也要驗', () => {
     it('壞圖物件在、同樣的圖再存一次：拋 ATTACHMENT_CORRUPT，不當成去重成功，物件不被動、暫存收乾淨', async () => {
       await store.saveImage({ data: PNG, ...facts });
