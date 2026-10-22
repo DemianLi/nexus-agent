@@ -266,6 +266,46 @@ describe('殺掉 stdio 子行程', () => {
     }
     expect(s.pids()).toEqual([]);
   }, 30_000);
+
+  /**
+   * **重連也查指引上限**（[#1824](https://github.com/DemianLi/nexus-agent/issues/1824)），照 dsh（`mcp-client/src/connection.ts:318-322`）：
+   * 每次嘗試都查，超過就算這次失敗。首連帶著沒超過的指引連上；改寫指引檔之後殺掉子行程，重連拿到的指引超過上限。
+   */
+  it('重連拿到超過上限的指引：每次嘗試都算失敗、日誌寫明上限，用完次數就放棄', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-mcp-instructions-'));
+    const file = join(dir, 'instructions');
+    // 出處標頭 21 位元組 + 一個中文字 3 位元組 = 24，沒超過 40。
+    writeFileSync(file, '短');
+    const s = server(
+      {
+        maxInstructionBytes: 40,
+        reconnect: { initialDelayMs: 20, maxDelayMs: 40, maxAttempts: 2 },
+      },
+      { FIXTURE_INSTRUCTIONS_FILE: file },
+    );
+    const { registry, dispose } = await loadPlugins([s.plugin]);
+    try {
+      expect(String(await invoke(registry, TOOL))).toContain(RELEASE_NOTE);
+      expect(loggedBy(registry)).toEqual([]);
+
+      // 21 + 30 = 51 位元組，超過 40。
+      writeFileSync(file, '字'.repeat(10));
+      killAll(s.pids());
+      await waitFor(() =>
+        loggedBy(registry).some((m) => m.includes('giving up after 2 consecutive')),
+      );
+      const attempts = loggedBy(registry).filter((m) => m.includes('connection attempt failed'));
+      expect(attempts).toHaveLength(2);
+      for (const message of attempts) {
+        expect(message).toContain('server instructions exceed maxInstructionBytes (40)');
+      }
+      await expect(invoke(registry, TOOL)).rejects.toThrow('reconnection was given up');
+    } finally {
+      await dispose();
+      rmSync(dir, { recursive: true, force: true });
+    }
+    expect(s.pids()).toEqual([]);
+  }, 30_000);
 });
 
 /**
