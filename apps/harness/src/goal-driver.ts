@@ -369,6 +369,14 @@ export interface GoalDriverPort {
   armed?(): boolean;
   /** 排隊前的耐久檢查點。沒有落盤時是 no-op。 */
   flush(): Promise<void>;
+  /**
+   * 等背景子代理停下來（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372，dsh `drive` 的
+   * `subagents.waitForChildren(agent)`）。**回 `true` 表示等過東西**，呼叫端要重新判斷；`false` 是本來就沒有在推進的。
+   * `signal` 舉起就不再等（pump 收線）。
+   *
+   * 選填：沒有背景 host 的組裝（CLI、沒開背景續行）缺席，行為與以前逐字相同。
+   */
+  waitForChildren?(signal?: AbortSignal): Promise<boolean>;
   /** 排程器自己出事時說一聲。 */
   warn(message: string): void;
   /**
@@ -401,55 +409,89 @@ export interface GoalDriverPort {
  * 同 dsh（#433）：模型一輪寫不完，自動再排一輪多半再撞一次，要人看過再決定。只收回授權、不動相位，
  * 跟上面那一條同一個動作。
  *
+ * ## 背景子代理還在推進就先等（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372）
+ *
+ * 照 dsh `drive`：檢查點之後、判上限與預約之前 `await waitForChildren`，等完複查（`goal-round-driver/src/index.ts:174-188`）。
+ * 不等的話，某一輪派出背景子代理就結束、下一個續行輪馬上排上，模型看一眼就收工，`roundsStarted` 一路加到 `round-limit`。
+ * **等過就整個重來一圈**（重讀日誌、重決定）：結算通知可能已經開了一輪，人可能已經插話或按了停止。
+ * `block`（輪數到頂）也先等再判，同 dsh 的「先等、再判上限」。
+ *
  * @param readEvents - 讀當下的事件；**每次呼叫都要重讀**，不是一份快照。
- * @param port - 域那一側的四件事。
+ * @param port - 域那一側的事。
  * @param roundCap - 操作的人給的上限。**兩次決定都帶著它，但今天那是形式
  *   上的一致而不是一條擋得住什麼的閘**：唯一能在 `flush()` 期間新踩到上限的變化是
  *   `roundsStarted` 往前走，而那同時會讓下面那道「號碼變了就重來」先攔下來。寫成只帶
  *   第一次也量不出差別——留著是因為兩次決定該問同一個問題，不是因為它今天擋得到東西。
+ * @param signal - 舉起就不再等背景子代理、這一刻不排（pump 收線；dsh 的 `unloading`）。CLI 不傳。
  * @returns 排得出來的那一輪，或這一刻不排時的 `undefined`。
  */
 export async function driveGoalRound(
   readEvents: () => readonly SessionEvent[],
   port: GoalDriverPort,
   roundCap?: GoalRoundCap,
+  signal?: AbortSignal,
 ): Promise<GoalRoundRequest | undefined> {
-  const first = decideGoalRound(readEvents(), port.goal(), roundCap);
-  if (first.kind === 'idle') {
-    // 撞到輸出上限、被人中止、拋錯：照 dsh 只在授權還在時收回（`goal-round-driver/src/index.ts:117-124`、
-    // `:246-249`、`:328-337`）。收回之後再問一次就是 `disarmed`，所以這一句冪等。
-    const revoking = REVOKING_REASONS[first.reason];
-    if (revoking !== undefined && port.goal()?.activation === 'armed') {
+  for (;;) {
+    const first = decideGoalRound(readEvents(), port.goal(), roundCap);
+    if (first.kind === 'idle') {
+      // 撞到輸出上限、被人中止、拋錯：照 dsh 只在授權還在時收回（`goal-round-driver/src/index.ts:117-124`、
+      // `:246-249`、`:328-337`）。收回之後再問一次就是 `disarmed`，所以這一句冪等。
+      const revoking = REVOKING_REASONS[first.reason];
+      if (revoking !== undefined && port.goal()?.activation === 'armed') {
+        try {
+          port.disarm();
+        } catch (error: unknown) {
+          port.warn(`${revoking}之後停用續行失敗：${errorText(error)}`);
+        }
+      }
+      return undefined;
+    }
+    if (first.kind === 'block') {
+      // **先等背景子代理、再判上限**（dsh `drive` 的順序，`:174-188`）：子代理還在跑時續行輪只會空轉，輪數照樣加。
+      // 等過就重來一圈：等的這段時間目標、授權、日誌都可能變了。
+      const waited = await waitForChildren(port, signal);
+      if (signal?.aborted === true) return undefined;
+      if (waited) continue;
+      try {
+        port.block(first.ref, first.reason);
+      } catch (error: unknown) {
+        port.warn(`記不下輪次上限的 blocker：${errorText(error)}`);
+      }
+      return undefined;
+    }
+    try {
+      await port.flush();
+    } catch (error: unknown) {
+      port.warn(`耐久檢查點失敗，停用續行：${errorText(error)}`);
       try {
         port.disarm();
-      } catch (error: unknown) {
-        port.warn(`${revoking}之後停用續行失敗：${errorText(error)}`);
+      } catch (disarmError: unknown) {
+        port.warn(`連停用續行都失敗了：${errorText(disarmError)}`);
       }
+      return undefined;
     }
-    return undefined;
+    // 檢查點之後、判定之前等子代理（dsh：`flush` → `waitForChildren` → 複查 → 判上限、預約）。等過就整個重來。
+    const waited = await waitForChildren(port, signal);
+    if (signal?.aborted === true) return undefined;
+    if (waited) continue;
+    const second = decideGoalRound(readEvents(), port.goal(), roundCap);
+    if (second.kind !== 'run' || second.round.round !== first.round.round) return undefined;
+    return second.round;
   }
-  if (first.kind === 'block') {
-    try {
-      port.block(first.ref, first.reason);
-    } catch (error: unknown) {
-      port.warn(`記不下輪次上限的 blocker：${errorText(error)}`);
-    }
-    return undefined;
-  }
+}
+
+/**
+ * {@link GoalDriverPort.waitForChildren} 的安全呼叫：缺席就是「沒有在等的」；等的過程出事只說一聲、當作沒等過
+ * （排程器不為一個輔助的等待把整條續行弄壞）。
+ */
+async function waitForChildren(port: GoalDriverPort, signal?: AbortSignal): Promise<boolean> {
+  if (port.waitForChildren === undefined) return false;
   try {
-    await port.flush();
+    return await port.waitForChildren(signal);
   } catch (error: unknown) {
-    port.warn(`耐久檢查點失敗，停用續行：${errorText(error)}`);
-    try {
-      port.disarm();
-    } catch (disarmError: unknown) {
-      port.warn(`連停用續行都失敗了：${errorText(disarmError)}`);
-    }
-    return undefined;
+    port.warn(`等背景子代理時出事，不等了：${errorText(error)}`);
+    return false;
   }
-  const second = decideGoalRound(readEvents(), port.goal(), roundCap);
-  if (second.kind !== 'run' || second.round.round !== first.round.round) return undefined;
-  return second.round;
 }
 
 /** 拿得到就拿訊息，拿不到就整個轉字串。 */

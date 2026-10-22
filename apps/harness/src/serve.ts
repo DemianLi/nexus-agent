@@ -1403,11 +1403,15 @@ async function startServer(
         }),
         ...(invocation.goalDriver
           ? {
-              goalDriver: (log: () => SessionLog, flush: () => Promise<void>) =>
+              goalDriver: (
+                log: () => SessionLog,
+                flush: () => Promise<void>,
+                waitForChildren?: (signal?: AbortSignal) => Promise<boolean>,
+              ) =>
                 // **`goals` 是這一條 thread 自己那一次組裝的**：`createCliAgent` 每條
                 // thread 各跑一次（`:341`），所以兩條 thread 的目標從此分得開（#459）。
                 ({
-                  ...goalDriverPort(goals, log, flush, warn),
+                  ...goalDriverPort(goals, log, flush, warn, waitForChildren),
                   ...(goalRoundCap !== undefined && { roundCap: goalRoundCap }),
                 }),
             }

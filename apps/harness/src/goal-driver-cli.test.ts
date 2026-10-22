@@ -704,6 +704,34 @@ describe('goals 服務綁的是這一次組裝', () => {
     }
   });
 
+  /**
+   * **`goalDriverPort` 把等子代理的口原樣交出去**（#1575）：排程器的測試都自己搭 port，這個函式的第五格沒人驅動過。
+   * 拿掉那一行展開，整套排程器測試照樣綠——這一條是它的紅燈。沒給就缺席（CLI、沒有背景 host）。
+   */
+  it('goalDriverPort 的 waitForChildren：給了原樣交出，沒給就缺席', async () => {
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      const wait = (): Promise<boolean> => Promise.resolve(true);
+      const given = goalDriverPort(
+        built.goals,
+        () => built.sessionLog,
+        () => Promise.resolve(),
+        () => undefined,
+        wait,
+      );
+      expect(given.waitForChildren).toBe(wait);
+      const absent = goalDriverPort(
+        built.goals,
+        () => built.sessionLog,
+        () => Promise.resolve(),
+        () => undefined,
+      );
+      expect('waitForChildren' in absent).toBe(false);
+    } finally {
+      await built.dispose();
+    }
+  });
+
   it('兩次 createCliAgent 各拿各的——serve 每條 thread 組裝一次', async () => {
     const first = await createCliAgent({ live: false }, shipped);
     const second = await createCliAgent({ live: false }, shipped);

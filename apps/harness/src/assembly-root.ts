@@ -1446,6 +1446,7 @@ function titleLlmFor(
  * @param log - 讀那一份日誌；服務綁在它上面。
  * @param flush - 耐久檢查點。沒落盤時給一個 no-op。
  * @param warn - 排程器出事時說話的去處。
+ * @param waitForChildren - 等背景子代理停下來（#1575）。缺席＝不等（CLI、沒有背景 host 的組裝）。
  * @returns 排程器要問域的四件事。
  */
 export function goalDriverPort(
@@ -1453,6 +1454,7 @@ export function goalDriverPort(
   log: () => SessionLog,
   flush: () => Promise<void>,
   warn: (message: string) => void,
+  waitForChildren?: (signal?: AbortSignal) => Promise<boolean>,
 ): GoalDriverPort {
   return {
     // **查不到就是 `undefined`**：patch 把 goal 那一列關掉時這條路就沒有 goal 域，
@@ -1471,5 +1473,6 @@ export function goalDriverPort(
     },
     flush,
     warn: (message) => warn(`[續行] ${message}`),
+    ...(waitForChildren !== undefined && { waitForChildren }),
   };
 }

@@ -555,3 +555,141 @@ describe('上一輪撞到輸出上限、被中止或拋錯', () => {
     expect(port.disarmed).toHaveLength(0);
   });
 });
+
+/**
+ * 背景子代理還在推進就先等（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372，dsh `goal-round-driver/src/index.ts`
+ * 的 `drive`：檢查點 → `waitForChildren` → 複查 → 判上限、預約）。接上真 pump 與真背景 host 的驗收在 `goal-driver-pump.test.ts`。
+ */
+describe('等背景子代理（N0372）', () => {
+  /** 一份記下每一步先後的 port；`waits` 是每次 `waitForChildren` 要回的值（用完回 `false`）。 */
+  function portOf(
+    goal: () => GoalView,
+    waits: readonly (boolean | (() => Promise<boolean>))[] = [],
+  ): GoalDriverPort & { readonly order: string[]; readonly warnings: string[] } {
+    const order: string[] = [];
+    const warnings: string[] = [];
+    let index = 0;
+    return {
+      order,
+      warnings,
+      goal,
+      block: (_ref, reason) => void order.push(`block:${reason.code}`),
+      disarm: () => void order.push('disarm'),
+      pause: () => {},
+      flush: () => {
+        order.push('flush');
+        return Promise.resolve();
+      },
+      warn: (message) => void warnings.push(message),
+      waitForChildren: async () => {
+        order.push('wait');
+        const next = waits[index];
+        index += 1;
+        if (next === undefined) return false;
+        return typeof next === 'function' ? next() : next;
+      },
+    };
+  }
+
+  it('檢查點之後等子代理，等過就整個重來一圈；這一圈沒等才排', async () => {
+    const port = portOf(() => view(), [true]);
+    const round = await driveGoalRound(() => logOf(SETTLED).events, port);
+    expect(round?.round).toBe(1);
+    expect(port.order).toEqual(['flush', 'wait', 'flush', 'wait']);
+  });
+
+  it('等的這段時間目標被改了（授權收回）：重來一圈讀到 disarmed，不排', async () => {
+    let goal = view();
+    const port = portOf(
+      () => goal,
+      [
+        () => {
+          goal = view({ activation: 'disarmed' });
+          return Promise.resolve(true);
+        },
+      ],
+    );
+    expect(await driveGoalRound(() => logOf(SETTLED).events, port)).toBeUndefined();
+    expect(port.order).toEqual(['flush', 'wait']);
+  });
+
+  it('等的這段時間日誌上開了一輪（結算通知喚醒的那一輪還沒收）：重來一圈讀到還在跑，不排', async () => {
+    const events: (readonly [string, unknown])[] = [...SETTLED];
+    const port = portOf(
+      () => view(),
+      [
+        () => {
+          events.push(['turn/start', { kind: 'subagent-settled' }]);
+          return Promise.resolve(true);
+        },
+      ],
+    );
+    expect(await driveGoalRound(() => logOf(events).events, port)).toBeUndefined();
+    expect(port.order).toEqual(['flush', 'wait']);
+  });
+
+  it('輪數到頂也先等、再判：等過重來，沒東西可等了才記 blocker', async () => {
+    const port = portOf(() => view({ maxGoalRounds: 2, roundsStarted: 2 }), [true]);
+    expect(await driveGoalRound(() => logOf(afterCreate(2)).events, port)).toBeUndefined();
+    expect(port.order).toEqual(['wait', 'wait', `block:${ROUND_LIMIT_BLOCK_CODE}`]);
+  });
+
+  it('輪數到頂、沒有東西可等：照今天直接 block，不補檢查點', async () => {
+    const port = portOf(() => view({ maxGoalRounds: 2, roundsStarted: 2 }));
+    await driveGoalRound(() => logOf(afterCreate(2)).events, port);
+    expect(port.order).toEqual(['wait', `block:${ROUND_LIMIT_BLOCK_CODE}`]);
+  });
+
+  it('排不出來的（沒有目標、已暫停、沒授權）不等', async () => {
+    const port = portOf(() => view({ activation: 'disarmed' }), [true]);
+    expect(await driveGoalRound(() => logOf(SETTLED).events, port)).toBeUndefined();
+    expect(port.order).toEqual([]);
+  });
+
+  it('等的時候 signal 舉起（收線）：放手，不排也不記 blocker', async () => {
+    const controller = new AbortController();
+    const run = portOf(
+      () => view(),
+      [
+        () => {
+          controller.abort();
+          return Promise.resolve(true);
+        },
+      ],
+    );
+    expect(
+      await driveGoalRound(() => logOf(SETTLED).events, run, undefined, controller.signal),
+    ).toBeUndefined();
+    expect(run.order).toEqual(['flush', 'wait']);
+
+    const second = new AbortController();
+    const block = portOf(
+      () => view({ maxGoalRounds: 2, roundsStarted: 2 }),
+      [
+        () => {
+          second.abort();
+          return Promise.resolve(false);
+        },
+      ],
+    );
+    expect(
+      await driveGoalRound(() => logOf(afterCreate(2)).events, block, undefined, second.signal),
+    ).toBeUndefined();
+    expect(block.order).toEqual(['wait']);
+  });
+
+  it('等的時候拋錯：說一聲、當作沒等過，照常往下', async () => {
+    const port = portOf(() => view(), [() => Promise.reject(new Error('壞掉了'))]);
+    const round = await driveGoalRound(() => logOf(SETTLED).events, port);
+    expect(round?.round).toBe(1);
+    expect(port.warnings).toHaveLength(1);
+    expect(port.warnings[0]).toContain('壞掉了');
+  });
+
+  it('port 沒給 waitForChildren（CLI、沒有背景 host）：與以前逐字相同', async () => {
+    const port = portOf(() => view());
+    delete (port as { waitForChildren?: unknown }).waitForChildren;
+    expect((await driveGoalRound(() => logOf(SETTLED).events, port))?.round).toBe(1);
+    expect(port.order).toEqual(['flush']);
+  });
+});

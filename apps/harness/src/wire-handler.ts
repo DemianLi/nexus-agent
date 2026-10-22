@@ -313,9 +313,14 @@ export interface ThreadAgent {
    *
    * @param log - 讀這條 thread 的 root 日誌。
    * @param flush - 排隊前的耐久檢查點。
+   * @param waitForChildren - 等背景子代理停下來（#1575）；同樣延後綁（背景 host 由 `attachSessions` 之後才拿到），沒有背景 host 時回 `false`。
    * @returns 排程器那一側。
    */
-  goalDriver?(log: () => SessionLog, flush: () => Promise<void>): GoalDriverPort;
+  goalDriver?(
+    log: () => SessionLog,
+    flush: () => Promise<void>,
+    waitForChildren?: (signal?: AbortSignal) => Promise<boolean>,
+  ): GoalDriverPort;
   /**
    * 人改目標的把手（`goal.pause`，[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）：讀目前的目標、暫停它。
    *
@@ -1601,7 +1606,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         // 讀它，而它在 pump 與協調器各自建好之後才被填上。
         //
         // **排程器第一次問這兩格是在第一輪落定的時候**，那時兩個都填好了。
-        const late: { log?: SessionLog; flush?: () => Promise<void> } = {};
+        const late: {
+          log?: SessionLog;
+          flush?: () => Promise<void>;
+          background?: BackgroundSubagentControl;
+        } = {};
         const driver = threadAgent.goalDriver?.(
           () => {
             const log = late.log;
@@ -1610,6 +1619,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             return log;
           },
           async () => void (await late.flush?.()),
+          // 沒有背景 host（沒開背景續行、CLI）就是沒有在等的；host 在 `attachSessions` 之後才有，所以也是延後綁。
+          (signal) => late.background?.whenChildrenSettled(signal) ?? Promise.resolve(false),
         );
         const pump = new ThreadPump(
           threadAgent.agent,
@@ -1702,6 +1713,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
               if (event.type === 'tool/result') fileSearch.invalidate();
             })
           : undefined;
+        late.background = attachment.background;
         const state: ThreadState = {
           pump,
           commands: threadAgent.commands,

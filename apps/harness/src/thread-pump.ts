@@ -1373,6 +1373,8 @@ export class ThreadPump {
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
   readonly #idleWaiters: (() => void)[] = [];
   #closed = false;
+  /** 收線時舉起：正在等背景子代理的續行排程器放手（#1575，dsh `goal-round-driver` 的 `unloading`）。 */
+  readonly #closing = new AbortController();
   /** 正在跑的那一輪；沒有就是 `undefined`（閒著、停在核准點、或排著還沒開跑）。 */
   #current: CurrentRun | undefined;
   /**
@@ -2251,6 +2253,7 @@ export class ThreadPump {
    */
   close(): void {
     this.#closed = true;
+    this.#closing.abort();
     this.#unobserveLogs();
     this.#projectionOut.dispose();
     // 停住的那幾件由 `#next` 收掉（#629）。**不在這裡收**：這一刻還在跑的那一輪可能之後才撞上
@@ -2287,6 +2290,7 @@ export class ThreadPump {
           () => this.#sessions.root.events,
           driver,
           driver.roundCap,
+          this.#closing.signal,
         );
         // 再問一次：`flush()` 期間人可能已經送了東西進來。`driveGoalRound` 自己看不到
         // 排隊——它只讀日誌，而排隊中的那一筆還沒寫下任何事件——所以這是唯一看得到的地方。
