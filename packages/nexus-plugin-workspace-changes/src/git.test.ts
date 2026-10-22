@@ -154,7 +154,7 @@ describe('GitRunner', () => {
       expect(Date.now() - started).toBeLessThan(2_000 + 1_000);
     } finally {
       const pid = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim());
-      if (Number.isInteger(pid) && pid > 0) {
+      if (Number.isInteger(pid) && pid > 1) {
         try {
           process.kill(pid, 'SIGKILL');
         } catch {
