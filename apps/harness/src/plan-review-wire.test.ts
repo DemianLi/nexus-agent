@@ -13,7 +13,6 @@
 import { SessionRegistry, TOOL_ABORTED_BEFORE_DISPATCH_TEXT } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import {
-  createPlanModePlugin,
   EXIT_PLAN_MODE_TOOL_NAME,
   PLAN_APPROVE_LABEL,
   PLAN_APPROVED_MESSAGE,
@@ -36,7 +35,12 @@ import { describe, expect, it, vi } from 'vitest';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import { historyFrames, historyPage } from './conversation-history.js';
-import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import {
+  emptyCommandPoint,
+  loopbackRequest,
+  TEST_BROWSER_AUTH,
+  testPlanModePlugin,
+} from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -48,6 +52,8 @@ const PLAN = '# 計劃\n\n先看再改。';
 
 interface Session {
   readonly threadId: string;
+  /** 腳本模型：`prompts` 是「模型被叫了幾次、讀到什麼」的證據。 */
+  readonly model: ScriptedChatModel;
   readonly client: WireClient;
   events: AsyncGenerator<Event, void, undefined>;
   /** 下行收到的每一顆 frame，照順序。 */
@@ -58,19 +64,24 @@ interface Session {
   close(): Promise<void>;
 }
 
-async function open(threadId: string): Promise<Session> {
+async function open(
+  threadId: string,
+  options: { readonly stepInbox?: boolean } = {},
+): Promise<Session> {
+  const model = new ScriptedChatModel({
+    turns: [
+      {
+        content: '我先規劃。',
+        toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: PLAN } }],
+      },
+      { content: '開始動手。' },
+    ],
+  });
   const built = await createNexusAgent({
-    model: new ScriptedChatModel({
-      turns: [
-        {
-          content: '我先規劃。',
-          toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: PLAN } }],
-        },
-        { content: '開始動手。' },
-      ],
-    }),
+    model,
     checkpointer: new PrunedMemorySaver(),
-    plugins: [createPlanModePlugin({ startActive: true })],
+    plugins: [testPlanModePlugin({ startActive: true })],
+    ...(options.stepInbox === true && { stepInbox: true }),
   });
   // 日誌接在 pump 自己那一份註冊表上，同 `ask-user-wire.test.ts`：另建一份的話計劃模式折的是別人。
   let sessions: SessionRegistry | undefined;
@@ -78,6 +89,7 @@ async function open(threadId: string): Promise<Session> {
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
+      ...(built.stepInbox && { stepInbox: true }),
       commands: emptyCommandPoint(),
       attachSessions: (registry, backgroundPort) => {
         sessions = registry;
@@ -94,6 +106,7 @@ async function open(threadId: string): Promise<Session> {
   await client.runStart(threadId, '幫我改一下');
   return {
     threadId,
+    model,
     client,
     events,
     frames: [],
@@ -160,6 +173,23 @@ function exitResultText(session: Session): string {
   return String((result.data.message.data as { content?: unknown }).content);
 }
 
+/** `exit_plan_mode` 最後那顆 `tool/result` 是不是失敗。 */
+function exitResultIsError(session: Session): boolean {
+  const log = session.log();
+  const callIds = new Set(
+    log.flatMap((event) =>
+      event.type === 'tool/call' && event.data.name === EXIT_PLAN_MODE_TOOL_NAME
+        ? [event.data.callId]
+        : [],
+    ),
+  );
+  const result = log
+    .filter((event) => event.type === 'tool/result' && callIds.has(event.data.callId))
+    .at(-1);
+  if (result?.type !== 'tool/result') throw new Error('日誌裡沒有 exit_plan_mode 的結果');
+  return result.data.isError;
+}
+
 describe('計劃審核在線上', () => {
   it('提問帶著 detail 與 intent 上線；同意之後模式關掉；重新整理後歷史帶得到計劃與結果', async () => {
     const session = await open('review-approve');
@@ -207,7 +237,11 @@ describe('計劃審核在線上', () => {
     await session.close();
   });
 
-  it('關掉這一題：模型收到「等使用者的訊息」，這一輪照常收尾，模式留著', async () => {
+  /**
+   * **關掉這一題 → 成功結果，這一輪在這一批工具之後收**（#1607，照 dsh `:331-341`）：工具卡 `done`、字是新的那一句、不帶
+   * `Error:`；模型只被叫了一次；收尾是正常收尾（`turn/end` 不帶理由）而不是中止，web 才不會把它畫成「停止」。
+   */
+  it('關掉這一題：成功結果、只叫一次模型、正常收尾（turn/end 不帶理由），模式留著', async () => {
     const session = await open('review-dismiss');
     const pending = await pendingReview(session);
 
@@ -218,10 +252,42 @@ describe('計劃審核在線上', () => {
     });
     await until(session, turnEnded);
 
-    expect(exitResultText(session)).toBe(`Error: ${PLAN_REVIEW_DISMISSED_MESSAGE}`);
+    expect(exitResultText(session)).toBe(PLAN_REVIEW_DISMISSED_MESSAGE);
+    expect(exitResultIsError(session)).toBe(false);
+    // 驗收 4：只叫了一次模型（以前關掉審核之後還會再叫一次，讀到「停在這裡」才停）。
+    expect(session.model.prompts).toHaveLength(1);
     // 這一輪沒有被中止：收尾那顆不帶理由，同一般跑完的一輪。
     expect(resumedTurnEnd(session)?.data).toEqual({});
     expect(recordedPlanMode(session.log()) ?? true).toBe(true);
+    // 驗收 7：線上的那張工具卡是 `done`、字逐字等於那一句。
+    const card = session.state.entries.find(
+      (entry) => entry.kind === 'tool' && entry.name === EXIT_PLAN_MODE_TOOL_NAME,
+    );
+    if (card?.kind !== 'tool') throw new Error('線上沒有 exit_plan_mode 的卡');
+    expect(card.status).toBe('done');
+    expect(card.text).toBe(PLAN_REVIEW_DISMISSED_MESSAGE);
+    await session.close();
+  });
+
+  /**
+   * **掛著插話載體（serve 的組裝）時同樣收尾**（#1607）：middleware 的 `beforeModel` 跳 `end` 會略過 step-inbox 的 `afterAgent`，
+   * 所以由 plan-mode 自己叫 `finish()` 領走插話並關窗。真的 pump 與真的 `StepInbox`：一次模型呼叫、`turn/end` 不帶理由、
+   * 卡是 `done`——窗關了之後 pump 寫 `turn/end` 不出錯。
+   */
+  it('關掉這一題（掛著插話載體）：一樣一次模型呼叫、正常收尾', async () => {
+    const session = await open('review-dismiss-inbox', { stepInbox: true });
+    const pending = await pendingReview(session);
+
+    await session.client.inputRespond(session.threadId, {
+      namespace: [...pending.namespace],
+      interrupt_id: pending.interruptId,
+      response: cancelResponse(),
+    });
+    await until(session, turnEnded);
+
+    expect(exitResultText(session)).toBe(PLAN_REVIEW_DISMISSED_MESSAGE);
+    expect(session.model.prompts).toHaveLength(1);
+    expect(resumedTurnEnd(session)?.data).toEqual({});
     await session.close();
   });
 

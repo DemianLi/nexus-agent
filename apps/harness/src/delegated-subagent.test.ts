@@ -29,12 +29,7 @@ import {
   DELEGATED_CALLER_MESSAGE,
 } from '@nexus/plugin-ask-user';
 import { createAskUserPlugin } from './ask-user.fixture.js';
-import {
-  createPlanModePlugin,
-  DEFAULT_PLAN_GUIDANCE,
-  EXIT_PLAN_MODE_TOOL_NAME,
-  NOT_IN_PLAN_MODE_MESSAGE,
-} from '@nexus/plugin-plan-mode';
+import { EXIT_PLAN_MODE_TOOL_NAME, NOT_IN_PLAN_MODE_MESSAGE } from '@nexus/plugin-plan-mode';
 import { createSubmitRecordPlugin } from './submit-record.fixture.js';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
@@ -43,6 +38,7 @@ import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { TEST_PLAN_GUIDANCE, testPlanModePlugin } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -334,7 +330,7 @@ describe('root 在計劃模式裡委派：子代理不在計劃模式', () => {
             { content: '子代理收工。' },
             { content: '根收工。' },
           ],
-          [WORKER, createPlanModePlugin({ startActive: true })],
+          [WORKER, testPlanModePlugin({ startActive: true })],
         );
         try {
           expect(run.pump.awaitingInput).toBe(false);
@@ -344,11 +340,11 @@ describe('root 在計劃模式裡委派：子代理不在計劃模式', () => {
           // 前提：root 真的在計劃模式裡——它的每次請求都夾著指引。
           expect(rootPrompts).toHaveLength(2);
           for (const prompt of rootPrompts) {
-            expect(systemText(prompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+            expect(systemText(prompt)).toContain(TEST_PLAN_GUIDANCE);
           }
           expect(subagentPrompts).toHaveLength(2);
           for (const prompt of subagentPrompts) {
-            expect(systemText(prompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
+            expect(systemText(prompt)).not.toContain(TEST_PLAN_GUIDANCE);
           }
 
           const refusal = subagentPrompts.flat().find((message) => message.getType() === 'tool');

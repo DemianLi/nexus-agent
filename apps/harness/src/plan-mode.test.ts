@@ -36,14 +36,19 @@ import { PassThrough } from 'node:stream';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { BaseMessage } from '@langchain/core/messages';
+import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
-import { APPROVAL_POLICY_NEVER, SessionRegistry } from '@nexus/core';
-import type { PluginEntry, QuestionInterruptItem, QuestionReply, SessionEvent } from '@nexus/core';
+import { HumanMessage } from '@langchain/core/messages';
+import { APPROVAL_POLICY_NEVER, SessionRegistry, STEP_INBOX_CONFIG_KEY } from '@nexus/core';
+import type {
+  PluginEntry,
+  QuestionInterruptItem,
+  QuestionReply,
+  SessionEvent,
+  StepInbox,
+} from '@nexus/core';
 import { CANCELLED_MESSAGE } from '@nexus/plugin-ask-user';
 import {
-  createPlanModePlugin,
-  DEFAULT_PLAN_GUIDANCE,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
   PLAN_ALREADY_INACTIVE_MESSAGE,
@@ -66,17 +71,32 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
 import { runRepl } from './cli.js';
-import { shippedPlugins, withoutTimeContext, withScriptedModel } from './fixtures.js';
+import {
+  shippedPlugins,
+  testPlanModePlugin,
+  withoutTimeContext,
+  withScriptedModel,
+} from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
 const shipped = withoutTimeContext(await shippedPlugins());
 
+/**
+ * 出貨清單 `plan-mode` 那一列的 `guidance`，讀 `cordis.yml`。**套件沒有預設值了**（#1607，照 dsh：部署必給），所以出貨那一句
+ * 住在 yml 裡；這一檔「指引進不進 system prompt」的案例量的就是它，不是測試自己寫的一句。
+ */
+const SHIPPED_GUIDANCE = (
+  shipped.find((entry) => entry.id === 'plan-mode')?.config as { guidance?: string } | undefined
+)?.guidance as string;
+
 /** 出貨清單上 `plan-mode` 那一列換 config，其餘不動。不給就是出貨的樣子（`startActive` 關）。 */
 function withPlanMode(config?: { startActive?: boolean; guidance?: string }): PluginEntry[] {
   return shipped.map((entry) =>
-    entry.id === 'plan-mode' && config ? { ...entry, config } : entry,
+    entry.id === 'plan-mode' && config
+      ? { ...entry, config: { guidance: SHIPPED_GUIDANCE, ...config } }
+      : entry,
   );
 }
 
@@ -100,6 +120,8 @@ interface AssembleOptions {
   readonly patch?: (plugins: PluginEntry[]) => PluginEntry[];
   readonly workspace?: string;
   readonly headless?: boolean;
+  /** 掛插話的載體（serve 才開，#710）；要配 `configurable` 裡的 `STEP_INBOX_CONFIG_KEY` handle 才有東西可領。 */
+  readonly stepInbox?: boolean;
 }
 
 /** 在產品組裝上跑：出貨清單＋這一檔要的改動＋腳本模型。 */
@@ -110,7 +132,10 @@ async function assemble(turns: readonly ScriptedTurn[], options: AssembleOptions
     { live: false, ...(options.workspace === undefined ? {} : { workspace: options.workspace }) },
     plugins,
     options.workspace,
-    options.headless === true ? { approvals: HEADLESS_APPROVALS } : {},
+    {
+      ...(options.headless === true && { approvals: HEADLESS_APPROVALS }),
+      ...(options.stepInbox === true && { stepInbox: true }),
+    },
   );
   return { ...built, model: built.model as ScriptedChatModel };
 }
@@ -159,7 +184,7 @@ describe('計劃指引進不進 system prompt', () => {
       await dispose();
     }
 
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
   });
 
   /**
@@ -180,7 +205,7 @@ describe('計劃指引進不進 system prompt', () => {
       await dispose();
     }
 
-    expect(systemPrompt(model.lastPrompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).not.toContain(SHIPPED_GUIDANCE);
   });
 
   it('部署換掉的指引就是原樣那一段', async () => {
@@ -199,7 +224,7 @@ describe('計劃指引進不進 system prompt', () => {
 
     const prompt = systemPrompt(model.lastPrompt);
     expect(prompt).toContain(guidance);
-    expect(prompt).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(prompt).not.toContain(SHIPPED_GUIDANCE);
   });
 
   /**
@@ -232,7 +257,7 @@ describe('計劃指引進不進 system prompt', () => {
 
     const prompt = systemPrompt(model.lastPrompt);
     expect(prompt).toContain('胡桃');
-    expect(prompt).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(prompt).toContain(SHIPPED_GUIDANCE);
   });
   /**
    * **這一條才是 `concat` 的絆索。**
@@ -282,7 +307,7 @@ describe('計劃指引進不進 system prompt', () => {
 
     const prompt = systemPrompt(model.lastPrompt);
     expect(prompt).toContain(marker);
-    expect(prompt).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(prompt).toContain(SHIPPED_GUIDANCE);
   });
 });
 
@@ -299,6 +324,7 @@ interface RaisedInterrupt {
 async function reviewPlan(
   threadId: string,
   reply: QuestionReply,
+  inbox?: StepInbox,
 ): Promise<{
   readonly raised: readonly RaisedInterrupt[];
   readonly after: { readonly messages: readonly BaseMessage[]; readonly __interrupt__?: unknown };
@@ -307,8 +333,14 @@ async function reviewPlan(
 }> {
   const { agent, model, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
     plan: { startActive: true },
+    ...(inbox !== undefined && { stepInbox: true }),
   });
-  const config = { configurable: { thread_id: threadId } };
+  const config = {
+    configurable: {
+      thread_id: threadId,
+      ...(inbox !== undefined && { [STEP_INBOX_CONFIG_KEY]: inbox }),
+    },
+  };
   const detach = attachSession(sessions);
   try {
     const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), config);
@@ -404,7 +436,8 @@ describe('exit_plan_mode 的結局', () => {
       .filter((type) => type === 'tool/result' || type === 'plan/mode' || type === 'model/end');
     // 第一次模型呼叫 → 工具結果 → 待關交出去 → 第二次模型呼叫。
     expect(order).toEqual(['model/end', 'tool/result', 'plan/mode', 'model/end']);
-    expect(systemPrompt(model.lastPrompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(model.prompts).toHaveLength(2);
+    expect(systemPrompt(model.lastPrompt)).not.toContain(SHIPPED_GUIDANCE);
   });
 
   /**
@@ -425,27 +458,89 @@ describe('exit_plan_mode 的結局', () => {
 
     expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: true }]);
     expect(lastToolMessage(after.messages)?.text).toBe(`Error: ${planFeedbackMessage(feedback)}`);
+    // 驗收 6：繼續規劃照舊再叫一次模型（擋「審核一結束就跳」）。
+    expect(model.prompts).toHaveLength(2);
     expect(events.some((event) => event.type === 'plan/mode')).toBe(false);
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
   });
 
   /**
-   * **關掉這一題 → 停在這裡等使用者，不是放棄、也不是停止這一輪。**
+   * **關掉這一題 → 成功結果，這一輪在這一批工具之後收**（#1607，照 dsh `:331-341` 的 `concludeTurn()`）。
    *
-   * 那句不是 `ask_user_question` 的 {@link CANCELLED_MESSAGE}（它叫模型別重問同一組），日誌上也不標
-   * `ASK_CANCELLED`：dsh 在這裡拋的是一般 `Error`。這一輪照常走完——模型收到拒絕之後還有下一步。
+   * 不是 `ask_user_question` 的 {@link CANCELLED_MESSAGE}（它叫模型別重問同一組），也不是失敗：工具卡 `done`、字不帶
+   * `Error:`。**只有一次模型呼叫**——以前這裡還有第二次，模型讀到「停在這裡」才停。
    */
-  it('關掉這一題 → 模型收到「停在這裡等使用者的訊息」，模式留著，這一輪沒有被中止', async () => {
+  it('關掉這一題 → 成功結果、只有一次模型呼叫，模式留著，這一輪沒有被中止', async () => {
     const { after, events, model } = await reviewPlan('review-dismiss', { cancelled: true });
 
-    const tool = lastToolMessage(after.messages);
-    expect(tool?.text).toBe(`Error: ${PLAN_REVIEW_DISMISSED_MESSAGE}`);
-    expect(tool?.text).not.toContain(CANCELLED_MESSAGE);
-    expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: true }]);
+    const tool = lastToolMessage(after.messages) as ToolMessage;
+    expect(tool.text).toBe(PLAN_REVIEW_DISMISSED_MESSAGE);
+    expect(tool.status).not.toBe('error');
+    expect(tool.text).not.toContain(CANCELLED_MESSAGE);
+    expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: false }]);
     expect(events.some((event) => event.type === 'plan/mode')).toBe(false);
     expect(after.__interrupt__).toBeUndefined();
+    // 驗收 4：這一輪只叫了一次模型，沒有「停在這裡」之後的第二次。
+    expect(model.prompts).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'model/end')).toHaveLength(1);
+    // 收尾是圖自己收的，不是中止；`turn/end` 不帶理由在線上那一檔量（`plan-review-wire.test.ts`）。
+    expect(events.some((event) => event.type === 'turn/end')).toBe(false);
+    // 模式還開著：模型下一輪讀到的指引還在。
+    expect(recordedPlanMode(events)).toBeUndefined();
+  });
+
+  /**
+   * **取消後、下一步之前 `next-step` 有一件輸入：這一輪繼續**（驗收 5，dsh `agent.ts:361-365`：整批工具跑完才判，
+   * `nextStep` 還有插話就不收）。這是唯一分得出「無條件直達 END」與 dsh 的一條。
+   *
+   * 人送的話走不到這裡（停在提問上時進送出佇列，`wire-handler.ts`），所以直接操作 `StepInbox` 的 handle：`finish()` 領走一件，
+   * 同機器輸入在跑著的一輪裡進 `next-step`。第二次模型呼叫要讀到那件輸入。
+   */
+  it('關掉這一題、但 next-step 還有一件輸入 → 這一輪繼續，第二次呼叫讀到那件輸入', async () => {
+    let pending: HumanMessage[] = [new HumanMessage('補一句：先不要動 lib/。')];
+    const finishCalls: number[] = [];
+    const inbox: StepInbox = {
+      claim: () => Promise.resolve([]),
+      finish: () => {
+        finishCalls.push(pending.length);
+        const taken = pending;
+        pending = [];
+        return Promise.resolve(taken);
+      },
+    };
+    const { after, events, model } = await reviewPlan(
+      'review-dismiss-inbox',
+      { cancelled: true },
+      inbox,
+    );
+
+    expect(finishCalls).toEqual([1]);
+    expect(model.prompts).toHaveLength(2);
+    const humans = (model.prompts[1] ?? [])
+      .filter((message) => message.getType() === 'human')
+      .map((message) => message.text);
+    expect(humans).toContain('補一句：先不要動 lib/。');
+    // 工具結果還是成功那一句；第二次呼叫把腳本的下一句說完了。
+    expect((lastToolMessage(after.messages) as ToolMessage).text).toBe(
+      PLAN_REVIEW_DISMISSED_MESSAGE,
+    );
     expect(events.filter((event) => event.type === 'model/end')).toHaveLength(2);
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+  });
+
+  /** 沒有插話就關窗：`finish()` 被叫一次（取代 step-inbox 被跳過的 `afterAgent`），這一輪收。 */
+  it('關掉這一題、next-step 是空的 → 收，並且關了窗（finish 叫一次）', async () => {
+    const finishCalls: number[] = [];
+    const inbox: StepInbox = {
+      claim: () => Promise.resolve([]),
+      finish: () => {
+        finishCalls.push(0);
+        return Promise.resolve([]);
+      },
+    };
+    const { model } = await reviewPlan('review-dismiss-closed', { cancelled: true }, inbox);
+
+    expect(finishCalls).toEqual([0]);
+    expect(model.prompts).toHaveLength(1);
   });
 
   /**
@@ -544,7 +639,7 @@ describe('模式狀態活得過什麼', () => {
     }
 
     // 狀態還在，所以第二輪的 prompt 也還夾著指引。
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
   });
 
   /**
@@ -598,7 +693,7 @@ describe('模式狀態活得過什麼', () => {
     expect(sessions.root.events.some((event) => event.type === 'compaction/summary')).toBe(true);
 
     expect(last).toBeDefined();
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
   });
 });
 
@@ -629,7 +724,7 @@ describe('工具目錄不隨模式變動', () => {
     const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
     const { agent, dispose } = await createNexusAgent({
       model,
-      plugins: [createEchoPlugin(), createPlanModePlugin()],
+      plugins: [createEchoPlugin(), testPlanModePlugin()],
       toolOrder: [EXIT_PLAN_MODE_TOOL_NAME, ECHO_TOOL_NAME, '<unlisted-tools>'],
     });
 
@@ -704,8 +799,8 @@ describe('/plan 這條路', () => {
     const { model, stdout } = await repl('/plan\n先想想\n/plan off\n動手吧\n/exit\n', 2);
 
     expect(model.prompts).toHaveLength(2);
-    expect(systemPrompt(model.prompts[0] ?? [])).toContain(DEFAULT_PLAN_GUIDANCE);
-    expect(systemPrompt(model.prompts[1] ?? [])).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.prompts[0] ?? [])).toContain(SHIPPED_GUIDANCE);
+    expect(systemPrompt(model.prompts[1] ?? [])).not.toContain(SHIPPED_GUIDANCE);
     // 兩句話都印給人看了——命令的結果不進模型，只進終端機。
     expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
     expect(stdout).toContain(PLAN_LEFT_MESSAGE);
@@ -771,7 +866,7 @@ describe('/plan 這條路', () => {
     });
     expect(model.prompts).toHaveLength(1);
     const first = model.prompts[0] ?? [];
-    expect(systemPrompt(first)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(first)).toContain(SHIPPED_GUIDANCE);
     expect(first.filter((message) => message.getType() === 'human').map((m) => m.text)).toEqual([
       '幫我規劃',
     ]);
@@ -786,7 +881,7 @@ describe('/plan 這條路', () => {
 
     expect(stderr).toBe('');
     expect(model.prompts).toHaveLength(1);
-    expect(systemPrompt(model.prompts[0] ?? [])).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.prompts[0] ?? [])).toContain(SHIPPED_GUIDANCE);
   });
 
   it('/plan off 之後不開輪', async () => {
