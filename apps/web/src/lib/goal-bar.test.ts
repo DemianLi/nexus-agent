@@ -2,7 +2,10 @@ import type { WireGoal } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
+  GOAL_ACTIVE_ARMED_TEXT,
+  GOAL_ACTIVE_DISARMED_TEXT,
   GOAL_PHASE_TEXT,
+  GOAL_RESUME_HINT,
   goalBarView,
   goalPauseFailureText,
   PROMPT_REJECTED_TEXT,
@@ -22,32 +25,34 @@ const goal = (patch: Partial<WireGoal> = {}): WireGoal => ({
 
 describe('goalBarView（#945）', () => {
   it('`null` 與 `complete` 不畫；其餘三個相位都畫', () => {
-    expect(goalBarView(null)).toBeUndefined();
-    expect(goalBarView(goal({ phase: 'complete' }))).toBeUndefined();
+    expect(goalBarView(null, null)).toBeUndefined();
+    expect(goalBarView(goal({ phase: 'complete' }), null)).toBeUndefined();
     for (const phase of ['active', 'paused', 'blocked'] as const) {
-      expect(goalBarView(goal({ phase }))?.phase).toBe(GOAL_PHASE_TEXT[phase]);
+      expect(goalBarView(goal({ phase }), null)?.phase).toBe(GOAL_PHASE_TEXT[phase]);
     }
   });
 
-  it('階段字不說謊：`active` 是持久相位，不寫「進行中」「正在跑」', () => {
+  it('階段字不說謊：`active` 是持久相位，activation 還沒收到（`null`）時不寫「進行中」「正在跑」', () => {
     for (const text of Object.values(GOAL_PHASE_TEXT)) {
       expect(text).not.toMatch(/進行中|正在跑|執行中/);
     }
-    expect(goalBarView(goal())?.phase).toBe('目標：未完成');
+    expect(goalBarView(goal(), null)?.phase).toBe('目標：未完成');
   });
 
   it('輪數：開始過才寫「第 N／M 輪」，`roundsStarted === 0` 不寫', () => {
-    expect(goalBarView(goal({ roundsStarted: 0 }))?.rounds).toBeUndefined();
-    expect(goalBarView(goal({ roundsStarted: 3, maxGoalRounds: 10 }))?.rounds).toBe('第 3／10 輪');
+    expect(goalBarView(goal({ roundsStarted: 0 }), null)?.rounds).toBeUndefined();
+    expect(goalBarView(goal({ roundsStarted: 3, maxGoalRounds: 10 }), null)?.rounds).toBe(
+      '第 3／10 輪',
+    );
   });
 
   it('`blocked` 才帶理由；別的相位就算帶著也不畫', () => {
     const reason = { code: 'no-progress', message: '連續兩輪沒有進展' };
-    expect(goalBarView(goal({ phase: 'blocked', blockedReason: reason }))?.blockedReason).toBe(
-      '連續兩輪沒有進展',
-    );
-    expect(goalBarView(goal({ phase: 'blocked' }))?.blockedReason).toBeUndefined();
-    expect(goalBarView(goal({ phase: 'paused', blockedReason: reason }))?.blockedReason).toBe(
+    expect(
+      goalBarView(goal({ phase: 'blocked', blockedReason: reason }), null)?.blockedReason,
+    ).toBe('連續兩輪沒有進展');
+    expect(goalBarView(goal({ phase: 'blocked' }), null)?.blockedReason).toBeUndefined();
+    expect(goalBarView(goal({ phase: 'paused', blockedReason: reason }), null)?.blockedReason).toBe(
       undefined,
     );
   });
@@ -61,13 +66,16 @@ describe('goalBarView（#945）', () => {
           message: 'Goal round was rejected before entering its step.',
         },
       }),
+      null,
     );
     expect(rejected?.blockedReason).toBe(PROMPT_REJECTED_TEXT);
     expect(PROMPT_REJECTED_TEXT).toContain('/goal resume');
     expect(rejected?.label).toContain('取消封存後請輸入 /goal resume');
     expect(
-      goalBarView(goal({ phase: 'blocked', blockedReason: { code: 'other', message: '別的理由' } }))
-        ?.blockedReason,
+      goalBarView(
+        goal({ phase: 'blocked', blockedReason: { code: 'other', message: '別的理由' } }),
+        null,
+      )?.blockedReason,
     ).toBe('別的理由');
   });
 
@@ -79,18 +87,68 @@ describe('goalBarView（#945）', () => {
         roundsStarted: 2,
         blockedReason: { code: 'x', message: '卡住了' },
       }),
+      null,
     );
     expect(view?.label).toBe('目標：受阻，很長的目標內容，第 2／256 輪，卡住了');
   });
 });
 
+describe('會不會自己續行（#1608）', () => {
+  it('active＋armed：寫「進行中」，沒有下一步那句', () => {
+    const view = goalBarView(goal(), 'armed');
+    expect(view?.phase).toBe(GOAL_ACTIVE_ARMED_TEXT);
+    expect(view?.phase).toContain('進行中');
+    expect(view?.resumeHint).toBeUndefined();
+    expect(view?.label).toBe('目標：進行中，把登入改好');
+  });
+
+  it('active＋disarmed：講它沒有在跑，並給下一步 `/goal resume`；無障礙名稱也帶那句', () => {
+    const view = goalBarView(goal({ roundsStarted: 2 }), 'disarmed');
+    expect(view?.phase).toBe(GOAL_ACTIVE_DISARMED_TEXT);
+    expect(view?.phase).toContain('沒有在跑');
+    expect(view?.phase).not.toMatch(/進行中|正在跑|執行中/);
+    expect(view?.resumeHint).toBe(GOAL_RESUME_HINT);
+    expect(GOAL_RESUME_HINT).toContain('/goal resume');
+    expect(view?.label).toBe(
+      '目標：未完成，沒有在跑，把登入改好，第 2／256 輪，輸入 /goal resume 讓它繼續。',
+    );
+  });
+
+  it('active＋null（還沒收到）：照中性的「未完成」，不說進行中、也不說沒有在跑', () => {
+    const view = goalBarView(goal(), null);
+    expect(view?.phase).toBe('目標：未完成');
+    expect(view?.phase).not.toMatch(/進行中|正在跑|執行中|沒有在跑/);
+    expect(view?.resumeHint).toBeUndefined();
+  });
+
+  it('paused、blocked、complete 不看 activation：照舊，沒有下一步那句', () => {
+    const reason = { code: 'x', message: '卡住了' };
+    for (const activation of ['armed', 'disarmed', null] as const) {
+      const paused = goalBarView(goal({ phase: 'paused' }), activation);
+      expect(paused?.phase).toBe('目標：已暫停');
+      expect(paused?.resumeHint).toBeUndefined();
+      const blocked = goalBarView(goal({ phase: 'blocked', blockedReason: reason }), activation);
+      expect(blocked?.phase).toBe('目標：受阻');
+      expect(blocked?.resumeHint).toBeUndefined();
+      expect(blocked?.blockedReason).toBe('卡住了');
+      expect(goalBarView(goal({ phase: 'complete' }), activation)).toBeUndefined();
+    }
+  });
+
+  it('暫停鈕照舊只看相位（Q1 (a)）：armed、disarmed、null 都給', () => {
+    for (const activation of ['armed', 'disarmed', null] as const) {
+      expect(goalBarView(goal(), activation)?.pausable).toBe(true);
+    }
+  });
+});
+
 describe('暫停（#1517）', () => {
   it('只有 active 給暫停鈕，不看輪數與別的欄位；paused、blocked 不給', () => {
-    expect(goalBarView(goal())?.pausable).toBe(true);
-    expect(goalBarView(goal({ roundsStarted: 3 }))?.pausable).toBe(true);
-    expect(goalBarView(goal({ phase: 'paused' }))?.pausable).toBe(false);
+    expect(goalBarView(goal(), null)?.pausable).toBe(true);
+    expect(goalBarView(goal({ roundsStarted: 3 }), null)?.pausable).toBe(true);
+    expect(goalBarView(goal({ phase: 'paused' }), null)?.pausable).toBe(false);
     expect(
-      goalBarView(goal({ phase: 'blocked', blockedReason: { code: 'x', message: '卡住了' } }))
+      goalBarView(goal({ phase: 'blocked', blockedReason: { code: 'x', message: '卡住了' } }), null)
         ?.pausable,
     ).toBe(false);
   });

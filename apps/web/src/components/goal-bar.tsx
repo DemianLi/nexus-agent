@@ -1,4 +1,4 @@
-import type { WireGoal } from '@nexus/wire';
+import type { WireGoal, WireGoalActivation } from '@nexus/wire';
 import { Pause, Target } from 'lucide-react';
 import { useId, useState } from 'react';
 
@@ -10,7 +10,10 @@ import { GOAL_PAUSE_LABEL, GOAL_PAUSE_OFFLINE_HINT, goalBarView } from '@/lib/go
  * `lib/goal-bar.ts`。
  *
  * - **只做暫停**（[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)，送 #1516 的 `goal.pause`）：恢復、編輯、清除
- *   不在這條上，建立目標在 `/goal` 斜線命令。暫停鈕在相位是 `active` 時才有（PM 定，不看 activation）。
+ *   不在這條上，建立目標在 `/goal` 斜線命令。暫停鈕在相位是 `active` 時才有（PM 定，不看 activation；
+ *   [#1608](https://github.com/DemianLi/nexus-agent/issues/1608) Q1 (a) 沿用）。
+ * - **看得出會不會自己續行**（#1608）：`active` 時階段字依 activation 分「進行中」「沒有在跑」，沒有在跑時列上多一行下一步
+ *   （`/goal resume`，同 `blocked` 理由的寫法）；activation 還沒收到照中性的寫。判斷在 `goalBarView`。
  * - **不是樂觀更新**：按下去送出，成功了也不自己改相位，等下行把目標翻成 `paused`，鈕自己消失；一輪跑著時停下來的樣子
  *   也走下行（跟按停止同一條，#1516）。送出期間停用、防連按；斷線時停用，原因放 `title`。
  * - **失敗時列留著**，列下面一句帶原因的字（目標剛被改過、已經不在進行、伺服器不支援）。下一次按再試時先收掉上一句。
@@ -23,10 +26,13 @@ import { GOAL_PAUSE_LABEL, GOAL_PAUSE_OFFLINE_HINT, goalBarView } from '@/lib/go
  */
 export function GoalBar({
   goal,
+  activation,
   connected,
   onPause,
 }: {
   readonly goal: WireGoal | null;
+  /** `ConversationState.goalActivation`（#1575）：`null` 是還沒收到。 */
+  readonly activation: WireGoalActivation | null;
   readonly connected: boolean;
   /** 送 `goal.pause`；回 `undefined` 是收下了，回字串是失敗的原因。 */
   readonly onPause: (goalId: string, revision: number) => Promise<string | undefined>;
@@ -34,7 +40,7 @@ export function GoalBar({
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState<string | undefined>(undefined);
   const failureId = useId();
-  const view = goalBarView(goal);
+  const view = goalBarView(goal, activation);
   if (view === undefined || goal === null) return null;
 
   // 帶的是按下去那一刻畫面上的那一份：server 拿修訂比對，過期就回錯，不蓋掉別人剛做的改動。
@@ -85,6 +91,11 @@ export function GoalBar({
       {view.blockedReason !== undefined && (
         <p className="mt-1 pl-6" data-testid="goal-blocked-reason">
           {view.blockedReason}
+        </p>
+      )}
+      {view.resumeHint !== undefined && (
+        <p className="mt-1 pl-6" data-testid="goal-resume-hint">
+          {view.resumeHint}
         </p>
       )}
       {failure !== undefined && (

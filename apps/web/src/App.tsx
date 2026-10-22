@@ -661,6 +661,7 @@ function ConversationView({
           {/* 目標列也在換手區外面（#945）：停在核准點時也看得到、暫停得了（#1517）；排在計劃標籤之後、待辦面板之前。 */}
           <GoalBar
             goal={conversation.state.goal}
+            activation={conversation.state.goalActivation}
             connected={conversation.connected}
             onPause={conversation.pauseGoal}
           />
