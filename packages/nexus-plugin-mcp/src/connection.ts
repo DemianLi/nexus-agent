@@ -41,8 +41,9 @@ export function clientOptions(config: McpConfig, elicitation: boolean): ClientCo
 }
 
 /**
- * 池連一代：`tools/list`、拿 SDK client、查指引上限，三步都過才算連上；任何一步拋就是這次嘗試失敗（指引超過上限也算，同 plugin
- * 自己連的那條）。工具物件只包一次 {@link throwOnToolError}、不改名，留給每份組裝建自己的委派物件。
+ * 連一代：`tools/list`、拿 SDK client、查指引上限，三步都過才算連上；任何一步拋就是這次嘗試失敗（指引超過上限也算，同 plugin
+ * 首連那條）。池的每一代與 plugin 自己連的重連都走這裡（#1824）。工具物件只包一次 {@link throwOnToolError}、不改名，留給池的
+ * 每份組裝建自己的委派物件。
  */
 export async function connectGeneration(
   client: MultiServerMCPClient,
@@ -99,13 +100,14 @@ export interface Generation {
   /** 監督者掛上的「這一代斷了」通報。 */
   onDown?: () => void;
   /**
-   * 池建的一代才有（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）：這一代 `tools/list` 列出的 adapter 工具物件
-   * （已經過 {@link throwOnToolError}、名字仍是 raw name）與帶出處標頭的指引。每份組裝照它們建自己的委派物件，不改這些物件。
+   * {@link connectGeneration} 建的一代才有（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）：這一代 `tools/list` 列出的
+   * adapter 工具物件（已經過 {@link throwOnToolError}、名字仍是 raw name）與帶出處標頭的指引。池的每份組裝照它們建自己的委派物件，
+   * 不改這些物件；plugin 自己連的重連也帶著它，但沒有人讀（那條的工具與指引在載入期定了）。
    */
   readonly listed?: Listed;
 }
 
-/** 池建的一代多帶的東西，見 {@link Generation.listed}。 */
+/** {@link connectGeneration} 建的一代多帶的東西，見 {@link Generation.listed}。 */
 export interface Listed {
   readonly tools: readonly StructuredTool[];
   readonly instructions: string;

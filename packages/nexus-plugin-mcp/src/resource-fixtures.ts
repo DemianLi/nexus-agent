@@ -6,6 +6,8 @@
  * [`modern-stdio-server.ts`](./modern-stdio-server.ts)）都靠環境變數決定要不要宣告這兩樣：
  *
  * - `FIXTURE_INSTRUCTIONS`：整段當作 `initialize` 回的 `instructions`；沒設就不回。
+ * - `FIXTURE_INSTRUCTIONS_FILE=<路徑>`：啟動時該檔案存在，就拿它的內容當指引（蓋過 `FIXTURE_INSTRUCTIONS`）；每次重連都是新子行程、
+ *   重讀一次，所以重連測試改寫這個檔就能讓重連拿到不同的指引（#1824）。
  * - `FIXTURE_EXIT_IF_FILE=<路徑>`（只有舊協議那台）：啟動時該檔案存在就立刻退出，重連測試用來讓每一次重連嘗試都失敗。
  * - `FIXTURE_PAGED=1`（只有舊協議那台）：宣告 `resources` 能力，`resources/list` 分兩頁，用來量「沒帶 cursor 由 SDK 收齊、
  *   帶了 cursor 只回那一頁」。
@@ -13,6 +15,8 @@
  *
  * 不進 `index.ts` 的匯出——它是測試素材。
  */
+
+import { existsSync, readFileSync } from 'node:fs';
 
 /** 文字資源。 */
 export const MEMO_URI = 'memo://readme';
@@ -49,7 +53,9 @@ export function resourcesRequested(): boolean {
   return process.env['FIXTURE_RESOURCES'] === '1';
 }
 
-/** 這個環境變數要求的指引；沒設是 `undefined`。 */
+/** 這個環境變數要求的指引；沒設是 `undefined`。`FIXTURE_INSTRUCTIONS_FILE` 指的檔案在就用它的內容。 */
 export function instructionsRequested(): string | undefined {
+  const file = process.env['FIXTURE_INSTRUCTIONS_FILE'];
+  if (file !== undefined && existsSync(file)) return readFileSync(file, 'utf8');
   return process.env['FIXTURE_INSTRUCTIONS'];
 }

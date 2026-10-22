@@ -35,6 +35,7 @@ import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js
 import {
   callOf,
   clientOptions,
+  connectGeneration,
   generationOf,
   instructionsOf,
   throwOnToolError,
@@ -265,14 +266,11 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
           policy,
           // 重連 = 把整個 adapter client 收掉再重新列工具：同一個 `MultiServerMCPClient` 在 `close()` 之後再 `getTools()` 會開新連線、
           // 新子行程、新的 SDK client（實測）。舊的工具物件永遠綁著死掉的 client，所以只取它們的呼叫，不取物件。
+          // 跟池共用 `connectGeneration`：每次重連都查指引上限，超過就算這次嘗試失敗，照 dsh（`mcp-client/src/connection.ts:318-322`，
+          // #1824）。新指引只拿來查，不換掉載入期定下的那一份（#1820 偏離 3）。
           async connect() {
             await client.close();
-            const calls = new Map<string, ToolCall>();
-            for (const tool of await client.getTools()) {
-              throwOnToolError(tool);
-              calls.set(tool.name, callOf(tool));
-            }
-            return generationOf(calls, await client.getClient(serverName));
+            return connectGeneration(client, config);
           },
           close: () => client.close(),
           closed: (generation) => generation.closed,
