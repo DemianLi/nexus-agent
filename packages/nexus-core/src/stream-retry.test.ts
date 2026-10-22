@@ -7,6 +7,7 @@ import { AIMessage } from '@langchain/core/messages';
 import { AsyncLocalStorageProviderSingleton } from '@langchain/core/singletons';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { captureModelCall } from './model-call-scope.js';
+import { LLM_FAILURE_FALLBACK_MESSAGE } from './llm-failure.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { SessionLog } from './session-log.js';
 import {
@@ -488,6 +489,34 @@ describe('日誌與通知（失敗當下）', () => {
     const starts = log.events.filter((event) => event.type === 'model/start');
     expect(starts).toHaveLength(2);
     expect(call.of(log)).toBe(starts[1]!.seq);
+  });
+
+  // #1557（N0471）：記重試的那一步跑在失敗路徑上，拋出來的值再怪也不能讓它自己拋錯、也不能把狀態記成 `NaN`。
+  it('失敗的值 toString 會拋錯、回報的狀態是 NaN：照樣重打，llm/retry.failure 是固定字、沒有 status', async () => {
+    const { log, run } = rig({ maxRetries: 1, initialDelayMs: 1, jitterRatio: 0 });
+    let calls = 0;
+    const hostile = {
+      toString(): string {
+        throw new Error('toString 拋錯');
+      },
+    };
+    await run(async () => {
+      calls += 1;
+      if (calls === 1) {
+        noteStreamFailure({ code: 'TRANSPORT', status: Number.NaN });
+        throw hostile;
+      }
+      return new AIMessage('好了');
+    });
+    expect(calls).toBe(2);
+    const retry = log.events.find((event) => event.type === 'llm/retry') as unknown as {
+      data: { failure: Record<string, unknown> };
+    };
+    expect(retry.data.failure).toEqual({
+      message: LLM_FAILURE_FALLBACK_MESSAGE,
+      code: 'TRANSPORT',
+    });
+    expect(Object.isFrozen(retry.data.failure)).toBe(true);
   });
 
   it('一次呼叫的所有重試共用一個 retryId，retry 逐次加一、各指回自己那一次失敗', async () => {

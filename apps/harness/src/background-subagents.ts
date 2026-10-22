@@ -62,6 +62,7 @@ import {
   appendSubagentDescriptor,
   fromLoggedMessage,
   subagentLinks,
+  thrownMessage,
   toLoggedMessage,
   turnReachedMaxTokens,
 } from '@nexus/core';
@@ -78,7 +79,7 @@ import type {
 
 import type { ColdChildStore, ColdInspection, ColdResumed } from './background-cold.js';
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
-import { classifyTurnFailure } from './live-model.js';
+import { turnFailureOf } from './live-model.js';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { declineAll, parseMcpElicitation } from './mcp-elicitation.js';
 import type { McpElicitation } from './mcp-elicitation.js';
@@ -1333,15 +1334,19 @@ export class BackgroundSubagentHost {
       outcome = { ok: true };
     } catch (error) {
       stop = 'error';
-      const message = error instanceof Error ? error.message : String(error);
+      const failure = turnFailureOf(error);
+      const { message } = failure;
       // 拿不到日誌的失敗（註冊表開不出來）沒地方記，只能講一聲。
       if (log === undefined) this.#warnFailure(job, message);
       else {
         try {
-          const failed = log.append('turn/failed', { message, error: classifyTurnFailure(error) });
+          const failed = log.append('turn/failed', failure);
           this.#notifyTurnFailed(job, log.sessionId, failed);
         } catch (appendError) {
-          this.#warnFailure(job, `${message}（連 turn/failed 都寫不進去：${String(appendError)}）`);
+          this.#warnFailure(
+            job,
+            `${message}（連 turn/failed 都寫不進去：${thrownMessage(appendError)}）`,
+          );
         }
       }
       outcome = { ok: false, error: message };

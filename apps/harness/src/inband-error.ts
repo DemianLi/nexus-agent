@@ -22,8 +22,8 @@
  * {@link InbandFailure.code}。第一則事件就是信封的那一條不靠旗標：合成的 400 回應交給 `@langchain/openai` 的轉接器，它自己認得超窗的 400，
  * 實測（`model-failure-classification.test.ts` 的 `typedRows`）也是 `CONTEXT_WINDOW_EXCEEDED`。
  *
- * **字樣偵測只套在信封上**：下面兩支照搬 dsh `isContextWindowExceededError`／`isQuotaExceededError`，這個專案其他地方的規矩是
- * 「認碼，不解析訊息」，所以不套到一般 HTTP 錯誤（那是另一個行為變更，不在 #1805）。
+ * **字樣偵測**：下面兩支照搬 dsh `isContextWindowExceededError`／`isQuotaExceededError`。#1805 只套在信封上；#1557 起
+ * `classifyTurnFailure` 也把它套到模型呼叫錯誤鏈上每一環的 `type`、`code`、`message`（dsh 的 deepseek adapter 與 pi-ai 兩條路都這樣做）。
  */
 
 /** 逐字照 dsh：`packages/llm/llm/src/error.ts:53-58`（`687f282e`）。 */
