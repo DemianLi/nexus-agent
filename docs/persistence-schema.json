@@ -7171,7 +7171,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionBuild"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:619"
+        "packages/nexus-core/src/session-store.ts:620"
       ]
     },
     {
@@ -7585,7 +7585,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:657"
+        "packages/nexus-core/src/session-store.ts:658"
       ]
     },
     {
@@ -7659,7 +7659,7 @@
         "packages/nexus-core/src/session-store.ts#SessionHeaderBuildMetadata"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:644"
+        "packages/nexus-core/src/session-store.ts:645"
       ]
     },
     {
@@ -8513,7 +8513,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionPluginRow"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:631"
+        "packages/nexus-core/src/session-store.ts:632"
       ]
     },
     {

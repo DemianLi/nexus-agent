@@ -81,16 +81,17 @@ import type { SessionEvent } from './session-log.js';
  * 的六種一路長到今天、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
  * 分支的遷移**——讀方只能靠猜。
  *
- * **升版的格式紀錄以這份檔頭為準**：每一次升版改了什麼、讀舊檔怎樣，寫在下面這些段落。同一版之內、沒有升版的型別變更登記在
- * `docs/persistence-changes/`（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)，由 `apps/harness/src/persistence-changes.ts` 驗、CI 擋），
- * 50 版以前的寫在那裡的基線 `2026-10-23-initial.md`。營運者讀的升級指南
+ * **格式紀錄在兩個地方**：50 版以前每一次升版改了什麼、讀舊檔怎樣，寫在下面這些段落。從
+ * [#1856](https://github.com/DemianLi/nexus-agent/issues/1856) 起，不論同版還是升版，每一次持久化型別變更都在
+ * `docs/persistence-changes/` 有一筆由驗證器核過的紀錄（`apps/harness/src/persistence-changes.ts`，CI 擋；50 版以前
+ * 同一版之內的新增寫在那裡的基線 `2026-10-23-initial.md`）。這份檔頭的段落是讀舊檔的敘事說明：營運者讀的升級指南
  * （`docs/upgrade-guide/`，AGENTS.md「發版」〈升級指南〉）只寫要動手的事，再連到這裡，不另抄一份。
- * **偏離 dsh**（#1537 Q2 (a)，demian 2026-10-17 拍板；理由 1）：dsh 的格式紀錄是機器檢查的——
+ * **偏離 dsh，已部分撤除**（#1537 Q2 (a)，demian 2026-10-17 拍板）：dsh 的格式紀錄是機器檢查的——
  * `docs/persistence-changes/` 逐筆一份 `.md` 加從型別抽出的 `.schema.json`、digest、`finalized/` 凍結點，
- * 由 `scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。那一套靠它自己的
- * 型別抽取工具鏈，這裡退到人寫的段落。補機器檢查排成另一張程式卡，跟 #1529 之後的遷移刀一起；撤除條件是那張卡合併。
- * 七層盤點 O-13 的「形狀不同、未登記成偏離」就是這一條。**現況**：那張卡是 #1856，紀錄與驗證器已合（`82c95e1a`）；
- * `finalized/` 凍結點與 `docs/session-format-status.md` 不在它的範圍（卡上〈不做什麼〉），還沒有。
+ * 由 `scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。這裡原本退到人寫的
+ * 段落（理由 1）；機器檢查那一半已由 #1856 補上（`82c95e1a`）。剩下 `finalized/` 凍結點與 `session-format-status.md`，
+ * **類別：過渡**（型別抽取的工具鏈已經有了，不再是理由 1；延到發版節奏定了再做），撤除條件
+ * [#1890](https://github.com/DemianLi/nexus-agent/issues/1890)。七層盤點 O-13 的「形狀不同、未登記成偏離」就是這一條的來歷。
  *
  * ## 2：`turn/start` 多了 `kind: 'goal'`
  *

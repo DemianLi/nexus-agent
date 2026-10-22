@@ -25,7 +25,9 @@
  *
  * ## 升版時要做的
  *
- * 1. 升 {@link SESSION_LOG_FORMAT_VERSION}，在 `session-store.ts` 檔頭寫那一版的段落（格式紀錄仍以那裡為準）。
+ * 1. 升 {@link SESSION_LOG_FORMAT_VERSION}，在 `session-store.ts` 檔頭寫那一版的段落（讀舊檔的敘事），並在
+ *    `docs/persistence-changes/` 寫一筆 `version-bump` 紀錄（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)，
+ *    `persistence-changes --record ID --decision version-bump`；header 版號一變，驗證器就要求這一筆）。
  * 2. 在下面的 {@link SESSION_FORMAT_EDGES} 末尾加一條 `{ from: 舊, to: 新, … }`。不加的話這個模組載入就拋。
  * 3. 讀方為舊形狀留了分支的，填 `readerBranch`，並讓 `apps/harness/src/fixtures/session-format/` 裡某一份比 `to` 舊的夾具
  *    含觸發它的事件（夾具的 `expected.json` 的 `triggers` 登記這條邊；規則測試檢查每條 `readerBranch` 都有），並在
