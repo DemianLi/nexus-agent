@@ -46,6 +46,20 @@
  *   唯一，所以後端要自己把每一次組裝隔開。這條拒絕**在續接出現之後照樣成立**：續接是另一個
  *   方法（{@link SessionStore.resume}），它明著打開一份已存的，`create` 撞到已存在的仍然
  *   拒絕——撞名照樣會響，續接不會被當成撞名。
+ * - **原版號另外交一格 `storedFormatVersion`**（{@link ReadonlyStoredSession.storedFormatVersion} 等三處；理由 1，
+ *   **類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：dsh 的邏輯 header 永遠是目前版，
+ *   舊的實體 header 走遷移鏈寫成新一代的檔、轉譯完才進介面（`packages/core/session/src/types.ts:96-100`，`687f282e`），
+ *   所以介面上沒有原版號。我們的寫方今天就地續寫加性區間，舊檔就是舊版號的那一份，讀方（本文解析、`headerStale`、
+ *   引用快照的 `capturedFormatVersion`、離線掃描的版本門檻）真的要知道它。header 照 dsh 轉譯成目前版，原版號另交這一格，
+ *   要它的讀方被型別逼著明講。**撤除條件**：[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) 的 ③
+ *   （寫方切到世代檔）落地、舊檔都經遷移成目前版之後，拿掉這一格；屆時若還有讀方需要原版號，在 ③ 的 PR 裡另外登記。
+ * - **引用快照的 `capturedFormatVersion` 記原版號**（`SessionReferenceSourceEntry.capturedFormatVersion`，寫在
+ *   `apps/harness/src/session-reference.ts`；理由 1，**類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：
+ *   dsh 記 `snapshot.session.version`（`packages/context/session-reference/src/index.ts:409`，`687f282e`），也就是目前版——
+ *   前提是 store 先把事件轉成目前版才交出去（`packages/core/session/src/types.ts:96-100`）。我們今天沒有遷移鏈
+ *   （`session-format.ts` 模組說明），交給讀方的事件是磁碟上的原樣，不是目前版的表示法，所以記原版號才對得上內容。
+ *   **撤除條件**：遷移鏈把事件轉成目前版再交給讀方的那一刀（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)
+ *   第四刀）落地時，改成照 dsh 記目前版。跟上一條的撤除條件不同，兩條分開撤。
  *
  * **跨行程的寫租約照抄了**（{@link SessionAlreadyOwnedError}）：兩個行程寫同一份會話的話
  * `seq` 會撞號，dsh 靠 `open(id, 'write')` 的所有權把第二個擋掉，我們同樣。**擋的機制是後端
@@ -689,8 +703,11 @@ export interface SessionHeaderBuildMetadata {
  * 存檔，不是對話裡發生過的事。
  */
 export interface StoredSessionHeader {
-  /** 格式版本，蓋 {@link SESSION_LOG_FORMAT_VERSION}。 */
-  readonly version: number;
+  /**
+   * 格式版本，蓋 {@link SESSION_LOG_FORMAT_VERSION}。**永遠是這一版**（照 dsh `types.ts:96-100`）：讀回來的舊檔，
+   * 後端在交出去之前就把它轉譯成這一版；磁碟上寫的那個原版號另外交，見 {@link ReadonlyStoredSession.storedFormatVersion}。
+   */
+  readonly version: typeof SESSION_LOG_FORMAT_VERSION;
   /** 這份日誌屬於誰，就是 `SessionLog.sessionId`。 */
   readonly id: string;
   /** 建立當下的 Unix 毫秒。 */
@@ -844,8 +861,10 @@ export interface StoredSessionListOptions {
  * （`packages/session/session-persistence/src/index.ts:50-59`）。`eventCount`、`sizeBytes` 是選填的，沒抄。
  */
 export interface StoredSessionSnapshot {
-  /** 存的那份 header，原樣。 */
+  /** 存的那份 header，`version` 已轉譯成這一版（見 {@link StoredSessionHeader.version}），其餘各格原樣。 */
   readonly header: StoredSessionHeader;
+  /** 磁碟上那份 header 寫的格式版本，同 {@link ReadonlyStoredSession.storedFormatVersion}。 */
+  readonly storedFormatVersion: number;
   /**
    * 不透明的變更記號，照 dsh（`index.ts:184-189`）：**只能跟同一個後端、同一個 id 的比**；相等可以當成這份沒變，
    * 不相等什麼都不承諾。給衍生的讀取快取用（按內容搜尋的索引），不參與 {@link SessionStore.open}／
@@ -875,8 +894,13 @@ export interface StoredSessionReadOptions {
 
 /** {@link SessionStore.open} 交出來的唯讀把手。 */
 export interface ReadonlyStoredSession {
-  /** 存的那份 header，原樣。 */
+  /** 存的那份 header，`version` 已轉譯成這一版（見 {@link StoredSessionHeader.version}），其餘各格原樣。 */
   readonly header: StoredSessionHeader;
+  /**
+   * 磁碟上那份 header 寫的格式版本，也就是寫它的那一版；用 `acceptNewer` 讀的可能比這一版新。本文要照它解析，
+   * 引用快照記的 `capturedFormatVersion` 與離線掃描的版本門檻也看它。dsh 介面上沒有這一格，偏離見模組說明。
+   */
+  readonly storedFormatVersion: number;
   /**
    * 讀整份本文：**實體上有效的前綴**，同續接——最後一行寫到一半不算進去、可復原的壞尾也不算進去（規則見
    * {@link SessionStore.resume}），但都不截掉、不講。只有 header 沒有本文的是零顆。
@@ -890,8 +914,10 @@ export interface ReadonlyStoredSession {
 
 /** {@link SessionStore.resume} 交出來的東西。 */
 export interface ResumedStoredSession {
-  /** 存的那份 header，**原樣**——`version` 是寫它的那一版，不是這一版。 */
+  /** 存的那份 header，`version` 已轉譯成這一版（見 {@link StoredSessionHeader.version}），其餘各格原樣。 */
   readonly header: StoredSessionHeader;
+  /** 磁碟上那份 header 寫的格式版本，**是寫它的那一版，不是這一版**。同 {@link ReadonlyStoredSession.storedFormatVersion}。 */
+  readonly storedFormatVersion: number;
   /** 讀回來的事件，照 `seq` 排、從 0 連續。拿去當 `SessionLog` 的 seed。 */
   readonly events: readonly SessionEvent[];
   /** 接著寫的把手。它的 next-seq 就是 `events.length`。 */

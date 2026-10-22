@@ -197,7 +197,11 @@ export class SessionReferenceCandidates {
   async read(
     sessionId: string,
     signal?: AbortSignal,
-  ): Promise<{ readonly header: StoredSessionHeader; readonly events: readonly SessionEvent[] }> {
+  ): Promise<{
+    readonly header: StoredSessionHeader;
+    readonly storedFormatVersion: number;
+    readonly events: readonly SessionEvent[];
+  }> {
     signal?.throwIfAborted();
     for (const directory of await this.#projectDirectories()) {
       signal?.throwIfAborted();
@@ -210,7 +214,7 @@ export class SessionReferenceCandidates {
       }
       const events = await reader.read();
       signal?.throwIfAborted();
-      return { header: reader.header, events };
+      return { header: reader.header, storedFormatVersion: reader.storedFormatVersion, events };
     }
     throw new SessionNotFoundError(sessionId, `找不到會話 ${JSON.stringify(sessionId)}`);
   }

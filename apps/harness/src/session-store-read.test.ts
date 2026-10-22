@@ -39,8 +39,16 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-function header(id: string, extra: Partial<StoredSessionHeader> = {}): StoredSessionHeader {
+/** 寫在磁碟上的 header：`version` 可以是任何一版（舊的寫方、比這一版新的寫方）。讀回來才轉譯成這一版。 */
+type OnDiskHeader = Omit<StoredSessionHeader, 'version'> & { readonly version: number };
+
+function header(id: string, extra: Partial<OnDiskHeader> = {}): OnDiskHeader {
   return { version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1, cwd: '/tmp', ...extra };
+}
+
+/** 這一版寫方給 `create` 的 header。 */
+function current(id: string): StoredSessionHeader {
+  return { ...header(id), version: SESSION_LOG_FORMAT_VERSION };
 }
 
 /** 一筆讀方收得下的事件。內容不重要，後端只驗 `type`／`time`／`seq`。 */
@@ -49,8 +57,11 @@ function event(seq: number): SessionEvent {
 }
 
 /** 經後端寫一份 `count` 筆的會話然後關掉。 */
-async function written(id: string, count = 1, extra: Partial<StoredSessionHeader> = {}) {
-  const stored = openJsonlSessionStore({ directory: dir }).create(header(id, extra));
+async function written(id: string, count = 1, extra: Partial<OnDiskHeader> = {}) {
+  // 版號可能不是這一版：假裝是舊的寫方寫的（`create` 照給的 header 原樣落盤）。
+  const stored = openJsonlSessionStore({ directory: dir }).create(
+    header(id, extra) as unknown as StoredSessionHeader,
+  );
   await stored.append(Array.from({ length: count }, (_, seq) => event(seq)));
   await stored.close();
 }
@@ -69,7 +80,7 @@ describe('list', () => {
     await written('Alpha/sub-1', 1, { parentSession: 'Alpha' });
     // create 了、一筆都還沒寫：檔案系統上沒有足跡。
     const store = openJsonlSessionStore({ directory: dir });
-    store.create(header('pending'));
+    store.create(current('pending'));
 
     const { sessions, unreadable } = await store.list();
     expect(sessions.map(({ header: h }) => h.id).sort()).toEqual(['Alpha', 'Alpha/sub-1']);
@@ -149,8 +160,9 @@ describe("open(id, 'read')", () => {
     try {
       const before = await snapshot();
       const reader = await openJsonlSessionStore({ directory: dir }).open('held', 'read');
-      // header 原樣：續接那條會把 version 改成這一版，這裡不會。
-      expect(reader.header.version).toBe(SESSION_LOG_FORMAT_VERSION - 1);
+      // 磁碟上的 header 不動（下面的 snapshot 比對）；交出來的 header 轉譯成這一版，原版號在 storedFormatVersion（#1856）。
+      expect(reader.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+      expect(reader.storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION - 1);
       expect((await reader.read()).map((e) => e.seq)).toEqual([0, 1]);
       expect(await snapshot()).toEqual(before);
     } finally {
@@ -232,11 +244,13 @@ describe('給產品路徑外的讀方：檔名配對與 header 解析', () => {
 
   it('parseHeader：不給 id 就不比；acceptNewer 照讀比這一版新的；少了 id 或 createdAt 是壞的', () => {
     const text = (value: unknown) => JSON.stringify(value);
-    expect(parseHeader(text(header('a'))).id).toBe('a');
+    expect(parseHeader(text(header('a'))).header.id).toBe('a');
     expect(() => parseHeader(text(header('a')), { id: 'b' })).toThrow(SessionCorruptionError);
     const future = text(header('f', { version: SESSION_LOG_FORMAT_VERSION + 1 }));
     expect(() => parseHeader(future)).toThrow(SessionFormatUnsupportedError);
-    expect(parseHeader(future, { acceptNewer: true }).version).toBe(SESSION_LOG_FORMAT_VERSION + 1);
+    const newer = parseHeader(future, { acceptNewer: true });
+    expect(newer.storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION + 1);
+    expect(newer.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
     expect(() => parseHeader(text({ version: 1, createdAt: 1 }))).toThrow('header 記的 id');
     expect(() => parseHeader(text({ version: 1, id: 'a' }))).toThrow('沒有 createdAt');
   });
@@ -245,7 +259,7 @@ describe('給產品路徑外的讀方：檔名配對與 header 解析', () => {
 describe('listSessionStoreDirectories', () => {
   it('認得 serve 的專案格與 CLI 的 run 目錄，照名字排；其餘略過', async () => {
     const cli = createJsonlSessionStore({ rootDir: dir });
-    const stored = cli.create(header('cli'));
+    const stored = cli.create(current('cli'));
     await stored.append([event(0)]);
     await stored.close();
     const project = join(dir, projectKey('/專案/甲'));
