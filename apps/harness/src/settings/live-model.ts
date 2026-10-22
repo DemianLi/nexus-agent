@@ -25,8 +25,9 @@
  * 不看 per-call options。逐次換只能每次重建實例。
  *
  * 所以退到 `startupSetting`：起動期解一次、往下傳一份，同 `#settings/…` 那幾列
- * （[#529](https://github.com/DemianLi/nexus-agent/issues/529) 的 A2）。key 不在這一列：它已經是逐次請求解析
- * （[#730](https://github.com/DemianLi/nexus-agent/issues/730)，`credentials.ts`），跟這裡的「起動期解一次」是兩件事。
+ * （[#529](https://github.com/DemianLi/nexus-agent/issues/529) 的 A2）。key 的**值**不在這一列：它已經是逐次請求解析
+ * （[#730](https://github.com/DemianLi/nexus-agent/issues/730)，`credentials.ts`），跟這裡的「起動期解一次」是兩件事；
+ * key 的**名字**在這一列（`apiKeyEnv`，見下一節）。
  * 重試政策（偏離二）同樣在起動期解一次、進組裝點的那一份；退避與次數的有界性已經由 `retryModelCall` 自己守，不再依賴
  * 「自己包一層 caller」。
  *
@@ -134,6 +135,20 @@
  * 我們對應的是 chat-completions，但照樣套用：URL 帶帳密就是把 key 寫進設定，而 dsh 自己那一列
  * 的註解說 key 不內嵌。
  *
+ * ## 金鑰的名字在這一列（[#1604](https://github.com/DemianLi/nexus-agent/issues/1604)，沒有偏離）
+ *
+ * 照 dsh `packages/llm/llm-deepseek-api-key/src/config.ts:9-39`：`apiKeyEnv` 是設定欄位（`credential-ref`），預設是它自己的出廠供應商
+ * 的名字（`DEEPSEEK_API_KEY`），跟端點同一份設定的兩格。這裡欄位名照抄，預設保留 `NVIDIA_API_KEY`（出廠端點是 NVIDIA），出廠行為不變；
+ * 把 `baseUrl` 指到公司內部閘道時，金鑰可以叫 `GATEWAY_KEY`，不必借用 `NVIDIA_API_KEY`。
+ *
+ * - **名字在這一列，值不在**：值照舊每次請求前由憑證服務按名字解析（#730，受管檔 `refs:`、啟動環境、`.env`，順序見 `credentials.ts`），
+ *   受管檔改了下一個請求就用新的。名字跟 `baseUrl` 一樣跟著起動期解一次的那一份走（偏離一）。
+ * - **形狀**同受管檔 `refs` 的鍵與 dsh 的 `credentialRef`：環境變數形狀（`CREDENTIAL_NAME_PATTERN`），空字串、含空白、含 `=` 都拒收。
+ * - dsh 的 `.role('credential-ref')` 是 schemastery 的標記，zod 沒有對應；值是名字、不是秘密，照其他欄位一樣可以出現在設定傾印裡。
+ *   `.volatile()`（同一代設定熱換）不適用：這一列本來就起動期解一次。
+ * - **不改**：舊位置（程式碼資料夾根目錄）`.env` 的搬家檢查（`loadLiveLaunchEnv`）仍用 `LIVE_API_KEY_ENV`——它跑在讀設定之前，
+ *   也只為舊的出廠名字存在。只有一條路由，所以一列一把金鑰就是 dsh「每條路由一把」。
+ *
  * ## 偏離四：標題要關推理，由 `createLiveModel` 依用途帶型錄條目的寫法
  *
  * 兩半各有 dsh 出處：
@@ -191,12 +206,14 @@ import {
 import type { NexusPlugin, PluginRegistry, StreamRetryOptions } from '@nexus/core';
 import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
+import { CREDENTIAL_NAME_PATTERN } from '../credentials.js';
 import {
   DEFAULT_LIVE_BASE_URL,
   DEFAULT_LIVE_MODEL_ENTRY,
   DEFAULT_LIVE_MODEL_ID,
   DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS,
   DEFAULT_LIVE_TIMEOUT_MS,
+  LIVE_API_KEY_ENV,
 } from '../live-model.js';
 import { findModelEntry, modelCatalogSchema } from '../model-catalog.js';
 import type { ModelEntry } from '../model-catalog.js';
@@ -370,7 +387,7 @@ function defaultRetryPolicy(): FrozenRetryPolicy {
   });
 }
 
-/** 七格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
+/** 九格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
 export const liveModelConfigSchema = z
   .strictObject(
     {
@@ -379,6 +396,18 @@ export const liveModelConfigSchema = z
         .string()
         .refine(isHttpRoot, '端點要是 http: 或 https: 的網址，不能帶帳密、query 或 fragment')
         .default(DEFAULT_LIVE_BASE_URL),
+      /**
+       * 金鑰的名字（#1604，照 dsh `llm-deepseek-api-key` 的 `apiKeyEnv`，見檔頭「金鑰的名字在這一列」）。**名字**在這一列，**值**不在：
+       * 照舊在每次請求前由憑證服務按這個名字解析（受管檔 `refs:`、啟動環境、`.env`）。環境變數的形狀，空字串、含空白、含 `=` 都拒收。
+       * 預設 `NVIDIA_API_KEY`，出廠行為不變。
+       */
+      apiKeyEnv: z
+        .string()
+        .regex(
+          CREDENTIAL_NAME_PATTERN,
+          'apiKeyEnv 要是環境變數形狀的名字（字母或底線開頭，之後只有字母、數字、底線）',
+        )
+        .default(LIVE_API_KEY_ENV),
       /** 用哪一顆模型。必須是 `models` 裡的一筆，見檔頭「型錄」。 */
       modelId: z.string().min(1).default(DEFAULT_LIVE_MODEL_ID),
       /** 模型型錄，**整份取代**，見檔頭「型錄」。省略即出廠那一筆。 */

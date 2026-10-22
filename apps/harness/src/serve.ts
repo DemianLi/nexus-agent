@@ -562,8 +562,6 @@ async function startUnderHomeLock(
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
   const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env, store: true }) : undefined;
-  // 這一把 key 來自哪一層（#1540 Q2 (a)）：只講名字與來源、不含值；排在拿到 home 鎖之後（上面 `runServe` 先拿鎖才進這裡）。
-  if (liveLaunch?.keySource !== undefined) serverLog.serve.info(liveLaunch.keySource);
   // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
   // 用只有行程環境的那一層。server 起不來就當場還原；起來了，收尾跟著 `close()` 走。
   const disposeProxy = await installLaunchProxy(
@@ -732,6 +730,10 @@ async function startServer(
   // 一顆），但設定是 server 的性質：解在這裡，設定寫壞的話在 server 起來之前就失敗，而不是等到
   // 第一條 thread；啟動時印的模型名也從這一份來。
   const liveModel = startupSetting(plugins, liveModelPlugin);
+  // 這一把 key 來自哪一層（#1540 Q2 (a)）：只講名字與來源、不含值；名字是 `live-model` 那一列的 `apiKeyEnv`（#1604），所以讀完設定才印。
+  // 仍排在拿到 home 鎖之後（`runServe` 先拿鎖才進 `startServer`）、任何模型建構與請求之前；日誌裡出現的順序比以前往後挪。
+  const keySource = liveLaunch?.keySourceOf(liveModel.apiKeyEnv);
+  if (keySource !== undefined) log(keySource);
   // 全機的模型請求並行閘（#1505）：起動期建一份，每條 thread 的組裝共用；沒設 `maxConcurrentRequests` 就沒有。
   // 排隊逾時的那一行走獨立的 `warn`，不借別處的。
   const requestGate = createRequestGate(liveModel, warn);

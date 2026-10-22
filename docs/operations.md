@@ -452,7 +452,10 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 
 ## 金鑰放哪裡
 
-真實供應商（`--live`）的 key 是 `NVIDIA_API_KEY`（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）。**每次模型請求前**才解析一次，
+真實供應商（`--live`）的 key 預設叫 `NVIDIA_API_KEY`（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）。
+**下面寫的 `NVIDIA_API_KEY` 都是預設名字**：`cordis.yml` 的 `live-model` 那一列可以用 `apiKeyEnv` 改成別的名字
+（例如 `baseUrl` 指到公司內部閘道時叫 `GATEWAY_KEY`，[#1604](https://github.com/DemianLi/nexus-agent/issues/1604)），改過之後受管憑證檔的 `refs:`、
+啟動環境、`.env`、缺金鑰與格式錯誤的訊息、起動時那一行來源，全部換成那個名字。**每次模型請求前**才解析一次，
 依序找，先找到的算數。**兩種入口順序不同**（[#1540](https://github.com/DemianLi/nexus-agent/issues/1540)，各自照 dsh 的 Web profile 與 headless profile）：
 
 **`serve`**：
@@ -1643,7 +1646,8 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   加進請求 body，主請求不帶。出貨那顆模型不關推理的話，標題那 64 個輸出 token 全被推理吃光，一個標題都回不出來
   （實測 0/6；關掉之後 6/6）。換一顆不認得 `chat_template_kwargs` 的模型時，那一筆不要寫 `compat`，或另外量它自己
   的寫法——不認得的參數可能讓標題請求整個 400，也可能靜靜沒效果。
-- **key 不在這一列**：從 `NVIDIA_API_KEY` 讀，來源與順序見「金鑰放哪裡」。
+- **key 的名字在這一列，值不在**：名字預設 `NVIDIA_API_KEY`，可以用 `apiKeyEnv` 改（環境變數形狀：字母或底線開頭，之後只有字母、數字、底線；
+  空字串、含空白、含 `=` 會被拒收）；值放哪裡、順序見「金鑰放哪裡」。
 - **`eval` 與 `spike` 不跟這一列走**：它們量的是出貨預設那一組設定底下的模型。
 
 **每會話選模型**（[#723](https://github.com/DemianLi/nexus-agent/issues/723)，只有 `serve --live`）：web 的模型座列出型錄（`model.catalog`），
