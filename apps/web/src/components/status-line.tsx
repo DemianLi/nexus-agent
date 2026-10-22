@@ -61,8 +61,9 @@ function RunningElapsed({ since }: { since: number | undefined }) {
 }
 
 /**
- * 斷線那一行怎麼講。`refusal` 是伺服器明說不收這條下行時給人看的話（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)）：
- * 不管之前連上過沒有都換成它，**不接 server 的原文**。背景的重試照舊，所以「立刻重連」還在。
+ * 斷線那一行怎麼講。`refusal` 是伺服器明說不收這條下行時給人看的話（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)），
+ * 或伺服器送來看不懂的資料（[#1601](https://github.com/DemianLi/nexus-agent/issues/1601)）：不管之前連上過沒有都換成它，**不接 server 的原文**。
+ * 前者背景的重試照舊；後者停了自動重連。兩種「立刻重連」都還在。
  */
 function lostText(
   reconnecting: { readonly wasConnected: boolean; readonly offline: boolean },
@@ -91,11 +92,11 @@ export function StatusLine({
   connected: boolean;
   connectionError?: string;
   /**
-   * 下行被伺服器明說不收時給人看的話。還在重試（thread 數滿了）就取代斷線那一行（見 `lostText`）；
+   * 下行被伺服器明說不收、或送來看不懂的資料時給人看的話。斷著（thread 數滿了、看不懂的資料）就取代斷線那一行（見 `lostText`）；
    * 不重試（子代理的會話，[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）就單獨一行，沒有「立刻重連」。
    */
   refusal?: string;
-  /** 下行斷了、正在自動重接（見 `useConversation` 的 `reconnecting`）。 */
+  /** 下行斷了、等著重接：多半是自動重接，看不懂的資料時只等人按（見 `useConversation` 的 `reconnecting`）。 */
   reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
   /** 剛重新接上。 */
   recovered?: boolean;
