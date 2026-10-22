@@ -20,6 +20,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { loggedMessageId } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
+import type { SessionDurabilityService } from '@nexus/session';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import type { AiEntry, ConversationState, Event, WireClient } from '@nexus/wire';
 import {
@@ -85,12 +86,15 @@ afterEach(async () => {
   for (const handler of opened.splice(0)) await handler.close();
 });
 
-async function line(turns: readonly ScriptedTurn[]): Promise<Line> {
+async function line(
+  turns: readonly ScriptedTurn[],
+  durability?: SessionDurabilityService,
+): Promise<Line> {
   const model = new ScriptedChatModel({ turns });
   const built = await createNexusAgent({
     model,
     checkpointer: new MemorySaver(),
-    plugins: [createFeedbackPlugin({ maxNoteBytes: 64 }), fixturePlugin],
+    plugins: [createFeedbackPlugin({ maxNoteBytes: 64 }, durability), fixturePlugin],
   });
   let captured: SessionLog | undefined;
   const handler = createWireHandler({
@@ -254,6 +258,33 @@ describe('評一則回覆', () => {
     }
     // 壞的只有評分：重新整理照樣拿得到這條 thread 的歷史。
     expect((await reloaded(wired.client, 't')).entries.length).toBeGreaterThan(0);
+  });
+
+  it('落盤確認被拒（磁碟寫不進去）：put 與 delete 都回 unknown_error「評分沒存成」，不回 ok（#1606 A）', async () => {
+    let refuse = false;
+    const wired = await line([{ content: '答。' }], {
+      checkpoint: () => (refuse ? Promise.reject(new Error('磁碟滿了')) : Promise.resolve()),
+    });
+    const session = await open(wired, 't', '跑。');
+    await until(session, settled(1));
+    const messageId = messageIdOf(aiEntries(session.state, 'root')[0]);
+    const first = await wired.client.feedbackPut('t', {
+      messageId,
+      rating: 'positive',
+      ifVersion: null,
+    });
+    if (first.kind !== 'ok' || !first.result.ok) throw new Error('評不下去');
+    const version = first.result.value.version;
+
+    refuse = true;
+    // 先 append、再確認（同 dsh）：被拒的那一顆留在記憶體的日誌裡，所以先收回（拿現行 version），再從「沒評過」評一次。
+    for (const outcome of [
+      await wired.client.feedbackDelete('t', { messageId, ifVersion: version }),
+      await wired.client.feedbackPut('t', { messageId, rating: 'negative', ifVersion: null }),
+    ]) {
+      expect(outcome).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+      expect(outcome.kind === 'rejected' && outcome.message).toContain('評分沒存成：磁碟滿了');
+    }
   });
 
   it('rating 不是 positive／negative：整顆退回 invalid_argument，連原型鏈上的名字也一樣', async () => {
