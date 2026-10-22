@@ -8,15 +8,15 @@
  * 3. **只在磁碟上的 thread** 重啟之後也改得了名。
  */
 
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 let running: RunningServe | undefined;
 
@@ -49,18 +49,14 @@ async function driveTurn(server: RunningServe, threadId: string, prompt: string)
 }
 
 async function titlesOnDisk(root: string, threadId: string): Promise<string[]> {
-  const body = await readFile(join(root, projectKey(process.cwd()), `${threadId}.jsonl`), 'utf8');
-  return body
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent)
-    .flatMap((event) =>
+  return (await sessionEventsOf(join(root, projectKey(process.cwd())), threadId)).flatMap(
+    (event) =>
       event.type === 'session/title'
         ? [
             `${(event.data as { source: { kind: string } }).source.kind}:${(event.data as { title: string }).title}`,
           ]
         : [],
-    );
+  );
 }
 
 /** 列表讀的是落盤的那份；落盤是非同步的，所以等到它變成預期的值（逾時就讓斷言講哪裡不對）。 */

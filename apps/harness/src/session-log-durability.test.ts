@@ -22,6 +22,7 @@ import { runCli } from './cli.js';
 import { resolveSessionLogDir, SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
+import { sessionHeaderOf } from './session-files.fixture.js';
 import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
@@ -91,11 +92,9 @@ describe('--session-log 給了', () => {
     await runOnce(['--session-log', root, '把這句話回聲一次。'], cwd);
 
     const runDir = await onlyRunDir(root);
-    const header = JSON.parse(await readFile(join(runDir, 'cli.header.json'), 'utf8')) as Record<
-      string,
-      unknown
-    >;
-    expect(header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+    const { header, storedFormatVersion } = await sessionHeaderOf(runDir, 'cli');
+    // 比磁碟上的版號：經接縫讀出來的 `header.version` 永遠是這一版（#1868）。
+    expect(storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION);
     expect(header.id).toBe('cli');
     expect(header.cwd).toBe(cwd);
     expect(typeof header.createdAt).toBe('number');
@@ -460,10 +459,9 @@ describe('--resume 碰到不認得的事件種類', () => {
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
     expect(events.length).toBeGreaterThan(seq + 1);
     // 續接蓋成這一版（沒升版的詞彙成長也一樣：header 描述的是「現在這個 runtime 讀得懂的最新號」）。
-    const header = JSON.parse(await readFile(join(runDir, 'cli.header.json'), 'utf8')) as Record<
-      string,
-      unknown
-    >;
-    expect(header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+    // 比磁碟上的版號：經接縫讀出來的 `header.version` 永遠是這一版（#1868）。
+    expect((await sessionHeaderOf(runDir, 'cli')).storedFormatVersion).toBe(
+      SESSION_LOG_FORMAT_VERSION,
+    );
   });
 });

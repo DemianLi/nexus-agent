@@ -19,7 +19,7 @@
  *   - **C3（剛好上限）**：上限值本身在真的後端上寫得出去、讀得回來。
  */
 
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -36,6 +36,7 @@ import type { SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { openJsonlSessionStore } from './jsonl-session-store.js';
+import { sessionsUnder } from './session-files.fixture.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -206,9 +207,10 @@ describe('C：深巢狀（#1526、#1661）', () => {
     sessions.root.append('tool/result', { callId: 'after', isError: false });
     await persistence.flush();
     await persistence.dispose();
-    const [logFile, ...others] = (await readdir(dir)).filter((name) => name.endsWith('.jsonl'));
+    // 只有 root 那一份；經 `session-files.fixture.ts` 找（#1868），改的是它的日誌原文。
+    const [session, ...others] = await sessionsUnder(dir);
     expect(others).toEqual([]);
-    const path = join(dir, logFile!);
+    const path = session!.logPath;
     let text = await readFile(path, 'utf8');
     for (const [callId, meta] of deep) {
       const placeholder = JSON.stringify(`placeholder:${callId}`);

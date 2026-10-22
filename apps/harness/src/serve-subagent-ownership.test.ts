@@ -12,7 +12,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,6 +22,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { startScriptedServe } from './scripted-serve.js';
+import { rewriteSessionHeader, sessionEvents, sessionsUnder } from './session-files.fixture.js';
+import type { SessionOnDisk } from './session-files.fixture.js';
 import type { ScriptedServe } from './scripted-serve.js';
 
 /** 第一台 serve 的腳本：根對話派一個背景子代理，之後都是普通回覆（子代理與根對話共用同一顆腳本模型，輪到誰誰吃）。 */
@@ -107,25 +109,26 @@ async function dispatchRealSubagent(): Promise<RealSubagent> {
   await foldTurn(events);
   await events.return?.(undefined);
 
-  const [project] = await readdir(root);
-  const directory = join(root, project!);
-  let headerName = '';
+  // 子代理那一份的 id 是 `alpha/<runId>`，背景派的 runId 以 `bg-` 起頭；經 `session-files.fixture.ts` 找（#1868）。
+  let found = undefined as SessionOnDisk | undefined;
   await until(async () => {
-    headerName =
-      (await readdir(directory)).find(
-        (name) => name.startsWith('alpha%2fbg-') && name.endsWith('.header.json'),
-      ) ?? '';
-    return headerName !== '';
+    found = (await sessionsUnder(root)).find((session) => session.id.startsWith('alpha/bg-'));
+    return found !== undefined;
   });
-  const base = headerName.replace(/\.header\.json$/u, '');
-  const header = join(directory, headerName);
-  const body = join(directory, `${base}.jsonl`);
+  const subagent = found!;
   // 子代理的第一輪寫完收尾：本文裡出現 `turn/end`。
   await until(async () =>
-    (await readFile(body, 'utf8').catch(() => '')).includes('"type":"turn/end"'),
+    (await sessionEvents(subagent)).events.some((event) => event.type === 'turn/end'),
   );
-  const runId = decodeURIComponent(base).slice('alpha/'.length);
-  return { root, directory, runId, sessionId: `alpha/${runId}`, header, body };
+  const runId = subagent.id.slice('alpha/'.length);
+  return {
+    root,
+    directory: subagent.directory,
+    runId,
+    sessionId: subagent.id,
+    header: subagent.headerPath,
+    body: subagent.logPath,
+  };
 }
 
 const digest = async (subagent: RealSubagent) => ({
@@ -284,11 +287,8 @@ describe('子代理的會話不是 thread（#1544 驗收 1、2）', () => {
     const subagent = await dispatchRealSubagent();
     await serve?.close();
     serve = undefined;
-    const rootHeader = (await readdir(subagent.directory)).find(
-      (name) => name.startsWith('alpha.') && name.endsWith('.header.json'),
-    );
-    expect(rootHeader).toBeDefined();
-    await writeFile(join(subagent.directory, rootHeader!), '{壞掉', 'utf8');
+    // 找不到 root 那一份就拋錯：前提（它在）照樣成立才寫壞。
+    await rewriteSessionHeader(subagent.directory, 'alpha', () => '{壞掉');
 
     const lines: string[] = [];
     const second = await start(subagent.root, PLAIN_TURNS, undefined, (line) => lines.push(line));

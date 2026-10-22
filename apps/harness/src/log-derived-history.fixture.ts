@@ -34,10 +34,10 @@
 
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { existsSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
 import { SystemMessage } from '@langchain/core/messages';
@@ -57,11 +57,16 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toolResultAsSeen } from './conversation-restore.js';
 import { foldTurn, serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { projectKey, readSessionEntry, sessionPathsIn } from './jsonl-session-store.js';
+import { projectKey } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID, withShippedRequestBody } from './live-model.js';
 import { composeEntries } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import {
+  closedSessionEvents,
+  sessionEventsOf,
+  sessionsUnder as sessionFilesUnder,
+} from './session-files.fixture.js';
 
 export interface WireMessage {
   role: string;
@@ -519,7 +524,7 @@ const finish = (events: SessionEvent[], bodies: Body[]): Run => ({
   mainBodies: bodies.filter(hasTools),
 });
 
-/** 一份落了盤的會話：讀取接縫交出來的 header 與日誌路徑，加上逐行解開的事件。 */
+/** 一份落了盤的會話：讀取接縫交出來的 id 與日誌路徑，加上逐行解開的事件。 */
 interface SessionOnDisk {
   readonly id: string;
   readonly logPath: string;
@@ -527,46 +532,18 @@ interface SessionOnDisk {
 }
 
 /**
- * 經後端的讀取接縫（`readSessionEntry`，#1857）讀一份，事件逐行解開、不驗：這裡要的是寫方落盤的原樣，不是讀方的修復。
- * 日誌還不在的那份是 `undefined`：這裡要的是落了盤的事件。
+ * 日誌目錄底下（遞迴）每一份落了盤的會話，經 `session-files.fixture.ts`（#1868）。日誌還不在的那份不算：這裡要的是
+ * 落了盤的事件。事件逐行解開、不驗：要的是寫方落盤的原樣，不是讀方的修復。這裡在關檔之後才讀，尾巴是半行就拋
+ * （`closedSessionEvents`）。
  */
-async function sessionOnDisk(
-  directory: string,
-  filename: string,
-): Promise<SessionOnDisk | undefined> {
-  const entry = await readSessionEntry(directory, filename);
-  if (entry === undefined || !existsSync(entry.logPath)) return undefined;
-  const events = (await entry.readBody())
-    .toString('utf8')
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
-  return { id: entry.header.id, logPath: entry.logPath, events };
-}
-
-/** 日誌目錄底下（遞迴）每一份落了盤的會話。 */
 async function sessionsUnder(root: string): Promise<SessionOnDisk[]> {
   const out: SessionOnDisk[] = [];
-  const walk = async (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        await walk(join(dir, entry.name));
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      const session = await sessionOnDisk(dir, entry.name);
-      if (session !== undefined) out.push(session);
-    }
-  };
-  await walk(root);
+  for (const session of await sessionFilesUnder(root)) {
+    if (!existsSync(session.logPath)) continue;
+    const events = await closedSessionEvents(session);
+    out.push({ id: session.id, logPath: session.logPath, events });
+  }
   return out;
-}
-
-/** `directory` 裡 id 是 `id` 的那一份的事件。 */
-async function eventsOf(directory: string, id: string): Promise<SessionEvent[]> {
-  const session = await sessionOnDisk(directory, basename(sessionPathsIn(directory, id).header));
-  if (session === undefined) throw new Error(`${directory} 裡沒有落了盤的會話 ${id}`);
-  return session.events;
 }
 
 /**
@@ -749,7 +726,10 @@ export async function runServePhases(
   } finally {
     await upstream.close();
   }
-  return finish(await eventsOf(join(logs, projectKey(process.cwd())), 'alpha'), upstream.bodies);
+  return finish(
+    await sessionEventsOf(join(logs, projectKey(process.cwd())), 'alpha'),
+    upstream.bodies,
+  );
 }
 
 // ---------------------------------------------------------------------------

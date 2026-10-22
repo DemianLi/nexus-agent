@@ -17,13 +17,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { SessionEvent } from '@nexus/core';
 
 import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
+import { sessionPathsIn } from './jsonl-session-store.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const temporary: string[] = [];
 let upstream: { baseUrl: string; hits: () => number; close(): Promise<void> } | undefined;
@@ -100,11 +101,10 @@ async function failingTurn(where: ReturnType<typeof layout>) {
 
   const sessions = join(where.home, 'sessions');
   const [projectDir] = await readdir(sessions);
-  const text = await readFile(join(sessions, projectDir!, 't1.jsonl'), 'utf8');
-  const session = text
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+  const directory = join(sessions, projectDir!);
+  const session = await sessionEventsOf(directory, 't1');
+  // 原文另外交：量的是落盤的那幾行本身。
+  const text = await readFile(sessionPathsIn(directory, 't1').log, 'utf8');
   return { raw, lines, session, sessionText: text, runId: started.result.run_id };
 }
 

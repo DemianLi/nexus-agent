@@ -6,7 +6,7 @@
  */
 
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -21,6 +21,7 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const temporary: string[] = [];
 let server: Server | undefined;
@@ -100,11 +101,7 @@ async function failingTurn(): Promise<SessionEvent[]> {
 
   const sessions = join(home, 'sessions');
   const [projectDir] = await readdir(sessions);
-  const text = await readFile(join(sessions, projectDir!, 't1.jsonl'), 'utf8');
-  return text
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+  return sessionEventsOf(join(sessions, projectDir!), 't1');
 }
 
 describe('串流中段的 in-band 錯誤（#1763）', () => {

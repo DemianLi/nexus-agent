@@ -7,7 +7,7 @@
  * 那兩條路換了拿鎖的那一下——macOS 與 CI 的 Linux 上都走不到它們，不換就是沒驗過就出貨。
  */
 
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -20,6 +20,7 @@ import {
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import { openJsonlSessionStore } from './jsonl-session-store.js';
+import { rewriteSessionHeader } from './session-files.fixture.js';
 import { acquireSessionLease } from './session-lease.js';
 import type { TryLock } from './session-lease.js';
 
@@ -90,14 +91,12 @@ describe('兩個把手搶同一份', () => {
 
   it('讀壞了的續接不佔著租約', async () => {
     await written();
-    const headerPath = join(dir, 'cli.header.json');
-    const good = await readFile(headerPath, 'utf8');
-    await writeFile(headerPath, '{壞的');
+    const restore = await rewriteSessionHeader(dir, 'cli', () => '{壞的');
     await expect(openJsonlSessionStore({ directory: dir }).resume('cli')).rejects.toThrow(
       SessionCorruptionError,
     );
 
-    await writeFile(headerPath, good);
+    await restore();
     const resumed = await openJsonlSessionStore({ directory: dir }).resume('cli');
     await resumed.stored.close();
   });

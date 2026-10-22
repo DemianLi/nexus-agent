@@ -43,6 +43,13 @@ import { scriptedPatchText } from './scripted-serve.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe, RunServeOptions } from './serve.js';
+import {
+  rewriteSessionHeader,
+  sessionEvents,
+  sessionEventsOf,
+  sessionHeaderOf,
+  sessionsUnder,
+} from './session-files.fixture.js';
 import { SHARED_WORKSPACE_PREFIX, THREAD_ROOTS_DIR_NAME } from './thread-roots.js';
 
 const PERSISTENCE_OFF_PATCH = fileURLToPath(
@@ -151,28 +158,21 @@ async function privateRoots(fx: Fixture): Promise<string[]> {
   }
 }
 
-async function headerPath(home: string, threadId: string): Promise<string> {
-  const names = await readdir(join(home, 'sessions'), { recursive: true });
-  const found = names.find((name) => name.endsWith(`${threadId}.header.json`));
-  if (found === undefined) throw new Error(`找不到 ${threadId} 的 header`);
-  return join(home, 'sessions', found);
-}
-
+/** 經 `session-files.fixture.ts` 讀這條 thread 的 header（#1868）。 */
 async function headerOf(home: string, threadId: string): Promise<{ workspaceRoot?: string }> {
-  return JSON.parse(await readFile(await headerPath(home, threadId), 'utf8')) as {
-    workspaceRoot?: string;
-  };
+  return (await sessionHeaderOf(join(home, 'sessions'), threadId)).header;
 }
 
+/** 就地改這條 thread 的 header，經 `session-files.fixture.ts`（#1868）。 */
 async function rewriteHeader(
   home: string,
   threadId: string,
   change: (header: Record<string, unknown>) => void,
 ): Promise<void> {
-  const path = await headerPath(home, threadId);
-  const header = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
-  change(header);
-  await writeFile(path, JSON.stringify(header), 'utf8');
+  await rewriteSessionHeader(join(home, 'sessions'), threadId, (header) => {
+    change(header);
+    return header;
+  });
 }
 
 const WRITE: ScriptedTurn[] = [
@@ -520,17 +520,11 @@ describe('子代理與 --workspace 的指示檔', () => {
 /** 日誌裡 agent-instructions 注入的那些 user/message 的內容。 */
 async function instructionMessages(home: string): Promise<string[]> {
   const directory = join(home, 'sessions');
-  let names: string[];
-  try {
-    names = await readdir(directory, { recursive: true });
-  } catch {
-    return [];
-  }
+  // 還沒有 sessions 目錄就是還沒注入；有了，每一份都經 `session-files.fixture.ts` 讀（#1868），讀不懂照拋。
+  if ((await stat(directory).catch(() => undefined)) === undefined) return [];
   const found: string[] = [];
-  for (const name of names.filter((entry) => entry.endsWith('.jsonl'))) {
-    for (const line of (await readFile(join(directory, name), 'utf8')).split('\n')) {
-      if (line.length === 0) continue;
-      const event = JSON.parse(line) as { type: string; data: unknown };
+  for (const session of await sessionsUnder(directory)) {
+    for (const event of (await sessionEvents(session)).events) {
       if (
         event.type === 'user/message' &&
         (event.data as { source?: { plugin?: string } }).source?.plugin ===
@@ -675,19 +669,12 @@ describe('其餘組合', () => {
   }, 60000);
 });
 
-/** 這條 thread 的 root 日誌（落盤的那一份）裡每一顆事件。 */
+/** 這條 thread 的 root 日誌（落盤的那一份）裡每一顆事件（經 `session-files.fixture.ts`，#1868）。 */
 async function logEvents(
   home: string,
   threadId: string,
 ): Promise<{ type: string; seq: number; data: unknown }[]> {
-  const directory = join(home, 'sessions');
-  const names = await readdir(directory, { recursive: true });
-  const found = names.find((name) => name.endsWith(`${threadId}.jsonl`) && !name.includes('%2f'));
-  if (found === undefined) throw new Error(`找不到 ${threadId} 的日誌`);
-  return (await readFile(join(directory, found), 'utf8'))
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as { type: string; seq: number; data: unknown });
+  return sessionEventsOf(join(home, 'sessions'), threadId);
 }
 
 describe('#1620 例外的前提：私有根在 home 底下，模型的位址空間碰不到 home', () => {
@@ -936,13 +923,15 @@ describe('子代理拿的是那條 thread 的根', () => {
     let runId: string | undefined;
     const deadline = Date.now() + 15000;
     while (runId === undefined && Date.now() < deadline) {
-      const names = await readdir(sessions, { recursive: true });
-      const body = names.find((name) => name.includes('a%2fbg-') && name.endsWith('.jsonl'));
-      if (body !== undefined) {
-        const text = await readFile(join(sessions, body), 'utf8');
-        if (text.includes('"turn/end"'))
-          runId = body.slice(body.indexOf('a%2f') + 4, -'.jsonl'.length);
-      }
+      // 子代理那一份的 id 是 `a/<runId>`，背景派的 runId 以 `bg-` 起頭（#1868）。
+      const subagent = (await sessionsUnder(sessions)).find((session) =>
+        session.id.startsWith('a/bg-'),
+      );
+      if (
+        subagent !== undefined &&
+        (await sessionEvents(subagent)).events.some((event) => event.type === 'turn/end')
+      )
+        runId = subagent.id.slice('a/'.length);
       if (runId === undefined) await new Promise((resolve) => setTimeout(resolve, 25));
     }
     expect(runId).toBeDefined();

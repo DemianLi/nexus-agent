@@ -17,7 +17,7 @@
  * **零憑證、零外部連線**：模型是出貨清單裡的假模型，session log 落在暫存目錄。
  */
 
-import { mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -27,6 +27,7 @@ import { foldTurn, serveClient } from '../fixtures.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
+import { closedSessionEvents, sessionsUnder } from '../session-files.fixture.js';
 import { sessionPersistencePlugin } from '@nexus/core';
 
 import { browserSessionPlugin, DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './browser-session.js';
@@ -92,24 +93,15 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
 }
 
 /**
- * 那個 `--session-log` 根底下所有 `.jsonl` 的事件行數合計。
+ * 那個 `--session-log` 根底下每一份會話落了盤的事件數合計（經 `session-files.fixture.ts`，#1868）。
  *
- * **只數 `.jsonl`**：`.lock`（租約）與 `.header.json`（表頭）在第一顆事件之前就存在了，
- * 數進去的話兩臂都非零，這條測試會永遠綠。實測過：窗口還沒到期時目錄裡只有 `.lock`。
+ * **只數事件**：租約與表頭在第一顆事件之前就存在了，數檔的話兩臂都非零，這條測試會永遠綠。
+ * 實測過：窗口還沒到期時目錄裡只有租約。
  */
 async function countPersistedEvents(root: string): Promise<number> {
   let total = 0;
-  async function walk(dir: string): Promise<void> {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else if (entry.name.endsWith('.jsonl')) {
-        const text = await readFile(path, 'utf8');
-        total += text.split('\n').filter((line) => line !== '').length;
-      }
-    }
-  }
-  await walk(root);
+  for (const session of await sessionsUnder(root))
+    total += (await closedSessionEvents(session)).length;
   return total;
 }
 

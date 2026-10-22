@@ -36,7 +36,13 @@ import {
   ResumeCwdConflictError,
   ResumeWorkspaceConflictError,
 } from './resume-guards.js';
-import { openJsonlSessionStore } from './jsonl-session-store.js';
+import {
+  rewriteSessionHeader,
+  sessionEventsOf,
+  sessionHeaderOf,
+  sessionsUnder,
+} from './session-files.fixture.js';
+import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
 import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
@@ -73,12 +79,14 @@ async function cli(argv: readonly string[], lines = '/exit\n', cwd?: string) {
 }
 
 /** 讀一份 jsonl 日誌。 */
-async function readLog(path: string): Promise<SessionEvent[]> {
-  const body = await readFile(path, 'utf8');
-  return body
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+/** run 目錄裡 root（`cli`）那一份的事件，經 `session-files.fixture.ts`（#1868）。 */
+function readLog(runDir: string): Promise<SessionEvent[]> {
+  return sessionEventsOf(runDir, 'cli');
+}
+
+/** 同一份的日誌檔。只給要動位元組的（補行、改行、截尾、比原文）。 */
+function logOf(runDir: string): string {
+  return sessionPathsIn(runDir, 'cli').log;
 }
 
 let workspace: string;
@@ -187,7 +195,7 @@ describe('計劃模式跟著回來', () => {
     expect(twice.stdout).toContain(PLAN_ALREADY_ACTIVE_MESSAGE);
     expect(twice.stderr).not.toContain('[不變量]');
 
-    const events = await readLog(join(runDir, 'cli.jsonl'));
+    const events = await readLog(runDir);
     expect(events.filter((event) => event.type === 'session/end-seed')).toHaveLength(2);
     // 開過一次，之後兩次都是「已經在裡面」——只有一顆。
     expect(events.filter((event) => event.type === 'plan/mode')).toEqual([
@@ -216,15 +224,15 @@ describe('計劃模式跟著回來', () => {
 describe('往原檔續寫', () => {
   it('seq 從上一次的長度接下去，中間只有一顆 `session/end-seed`，header 升到這一版', async () => {
     const runDir = await firstRun();
-    const before = await readLog(join(runDir, 'cli.jsonl'));
-    // 讓 header 看起來是上一版寫的：續接要把它蓋成這一版（續寫進去的是這一版的詞彙）。
-    const headerPath = join(runDir, 'cli.header.json');
+    const before = await readLog(runDir);
+    // 讓 header 看起來是上一版寫的：續接要把它蓋成這一版（續寫進去的是這一版的詞彙）。改的是版號，直接寫檔（#1868 裁決 Q1）。
+    const headerPath = sessionPathsIn(runDir, 'cli').header;
     const header = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
     await writeFile(headerPath, JSON.stringify({ ...header, version: 2 }));
 
     await cli(['--workspace', workspace, '--resume', runDir]);
 
-    const after = await readLog(join(runDir, 'cli.jsonl'));
+    const after = await readLog(runDir);
     expect(after.slice(0, before.length)).toEqual(before);
     expect(after.map((event) => event.seq)).toEqual(after.map((_, index) => index));
     expect(after.filter((event) => event.type === 'session/end-seed')).toEqual([
@@ -255,7 +263,7 @@ describe('接第二次', () => {
 
     expect(stdout).toContain('起始 mode: workspace-write（從續接的日誌來）');
     expect(stderr).not.toContain('[不變量]');
-    const after = await readLog(join(runDir, 'cli.jsonl'));
+    const after = await readLog(runDir);
     expect(after.map((event) => event.seq)).toEqual(after.map((_, index) => index));
     expect(after.filter((event) => event.type === 'session/end-seed')).toHaveLength(2);
   });
@@ -271,9 +279,9 @@ describe('接第二次', () => {
     expect(entries).toHaveLength(1);
     const runDir = join(logs, entries[0]!);
     await cli(['--resume', runDir]);
-    const once = await readLog(join(runDir, 'cli.jsonl'));
+    const once = await readLog(runDir);
     await cli(['--resume', runDir]);
-    const twice = await readLog(join(runDir, 'cli.jsonl'));
+    const twice = await readLog(runDir);
 
     expect(twice).toEqual(once);
     // 尾巴是 end-seed 加上續接寫的 `session/resumed`（#1138）；第二次內容相同不疊，所以兩次一模一樣。
@@ -293,8 +301,8 @@ describe('尾巴', () => {
    */
   it('當在輪中、命令沒落定、最後一行寫到一半：接得回來，不報違規，半行被截掉', async () => {
     const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
-    const before = await readLog(logPath);
+    const logPath = logOf(runDir);
+    const before = await readLog(runDir);
     const next = before.length;
     const tail: SessionEvent[] = [
       { type: 'turn/start', seq: next, time: 1, data: { kind: 'message', text: '跑到一半' } },
@@ -314,7 +322,7 @@ describe('尾巴', () => {
     );
 
     expect(stderr).not.toContain('[不變量]');
-    const after = await readLog(logPath);
+    const after = await readLog(runDir);
     expect(after.map((event) => event.seq)).toEqual(after.map((_, index) => index));
     // 當掉那一輪的收尾補在 end-seed 前面（#721）；命令沒落定那一顆不屬於這張卡，沒有補。
     expect(after[next + 2]).toMatchObject({
@@ -332,8 +340,8 @@ describe('尾巴', () => {
    */
   it('當在工具呼叫中：補結與 turn/end interrupted 寫在 end-seed 前面，再接一次不重補', async () => {
     const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
-    const before = await readLog(logPath);
+    const logPath = logOf(runDir);
+    const before = await readLog(runDir);
     const next = before.length;
     const tail = [
       { type: 'turn/start', data: { kind: 'message', text: '寫個檔' } },
@@ -343,7 +351,7 @@ describe('尾巴', () => {
 
     const { stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
     expect(stderr).not.toContain('[不變量]');
-    const once = await readLog(logPath);
+    const once = await readLog(runDir);
     expect(once.map((event) => event.seq)).toEqual(once.map((_, index) => index));
     expect(once.slice(next + 2, next + 5).map((event) => event.type)).toEqual([
       'tool/result',
@@ -356,7 +364,7 @@ describe('尾巴', () => {
     expect(once[next + 3]).toMatchObject({ data: { reason: { kind: 'interrupted' } } });
 
     await cli(['--workspace', workspace, '--resume', runDir]);
-    const twice = await readLog(logPath);
+    const twice = await readLog(runDir);
     expect(
       twice.filter(
         (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
@@ -394,8 +402,8 @@ describe('尾巴', () => {
    */
   it('當在一批工具中間：結果不明、還沒開始、model/end 與 turn/end 依序補齊，再接一次不重補', async () => {
     const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
-    const next = (await readLog(logPath)).length;
+    const logPath = logOf(runDir);
+    const next = (await readLog(runDir)).length;
     await appendFile(
       logPath,
       `${midBatchTail(next)
@@ -405,7 +413,7 @@ describe('尾巴', () => {
 
     const { stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
     expect(stderr).not.toContain('[不變量]');
-    const once = await readLog(logPath);
+    const once = await readLog(runDir);
     expect(once.map((event) => event.seq)).toEqual(once.map((_, index) => index));
     expect(once.slice(next + 4, next + 8).map((event) => event.type)).toEqual([
       'tool/result',
@@ -424,7 +432,7 @@ describe('尾巴', () => {
     expect(once[next + 8]).toMatchObject({ type: 'session/end-seed' });
 
     await cli(['--workspace', workspace, '--resume', runDir]);
-    const twice = await readLog(logPath);
+    const twice = await readLog(runDir);
     expect(
       twice.filter(
         (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
@@ -441,8 +449,8 @@ describe('尾巴', () => {
    */
   it('舊檔「開著的輪＋end-seed」：補結接在 end-seed 後面，不報違規，再接不重補', async () => {
     const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
-    const next = (await readLog(logPath)).length;
+    const logPath = logOf(runDir);
+    const next = (await readLog(runDir)).length;
     const tail = [
       ...midBatchTail(next),
       { type: 'session/end-seed', data: {}, seq: next + 4, time: 1 },
@@ -451,7 +459,7 @@ describe('尾巴', () => {
 
     const { stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
     expect(stderr).not.toContain('[不變量]');
-    const once = await readLog(logPath);
+    const once = await readLog(runDir);
     expect(once.map((event) => event.seq)).toEqual(once.map((_, index) => index));
     expect(once.slice(next + 4, next + 9).map((event) => event.type)).toEqual([
       'session/end-seed',
@@ -462,7 +470,7 @@ describe('尾巴', () => {
     ]);
 
     await cli(['--workspace', workspace, '--resume', runDir]);
-    const twice = await readLog(logPath);
+    const twice = await readLog(runDir);
     expect(
       twice.filter(
         (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
@@ -480,10 +488,10 @@ describe('尾巴', () => {
 describe('認不得的沙箱模式', () => {
   it('最後一顆 `sandbox/mode` 被改成 bogus：接得回來，stderr 報出帶 bogus 的違規', async () => {
     const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
+    const logPath = logOf(runDir);
     // 逐行改，只動最後一顆 `sandbox/mode` 的 `data.mode`：`/permission read-only` 的 `command/run`
     // 參數裡也有 `read-only`，前面還有一顆起始值，整份字串取代會一起改到。
-    const events = await readLog(logPath);
+    const events = await readLog(runDir);
     const last = events.findLastIndex((event) => event.type === 'sandbox/mode');
     expect(events[last]).toMatchObject({ data: { mode: 'read-only' } });
     const rewritten = events.map((event, index) =>
@@ -508,7 +516,7 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
 
   it('中段一行壞了、之後有收尾：是壞檔', async () => {
     const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
+    const logPath = logOf(runDir);
     const lines = (await readFile(logPath, 'utf8')).split('\n');
     lines[1] = '這不是 JSON';
     await writeFile(logPath, lines.join('\n') + CLOSER);
@@ -517,7 +525,7 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
 
   it('缺號、之後有收尾：是壞檔，不是當掉', async () => {
     const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
+    const logPath = logOf(runDir);
     const lines = (await readFile(logPath, 'utf8')).split('\n').filter((line) => line !== '');
     await writeFile(logPath, `${[lines[0], ...lines.slice(2)].join('\n')}\n${CLOSER}`);
     await expect(cli(['--resume', runDir])).rejects.toThrow(/缺號或重號/);
@@ -525,7 +533,7 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
 
   it('壞行之後沒有收尾：是當機的尾巴，`--resume` 照樣接得回來', async () => {
     const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
+    const logPath = logOf(runDir);
     const lines = (await readFile(logPath, 'utf8')).split('\n');
     lines[1] = '這不是 JSON';
     await writeFile(logPath, lines.join('\n'));
@@ -534,7 +542,8 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
 
   it('版本比這一版新：不是壞的，是讀不懂', async () => {
     const runDir = await firstRun();
-    const headerPath = join(runDir, 'cli.header.json');
+    // 改的是版號，直接寫檔（#1868 裁決 Q1）。
+    const headerPath = sessionPathsIn(runDir, 'cli').header;
     const header = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
     await writeFile(
       headerPath,
@@ -556,7 +565,7 @@ describe('寫租約', () => {
   it('另一個把手握著：擋下、檔案沒被動；它放了之後接得回來', async () => {
     const runDir = await firstRun();
     const holder = await openJsonlSessionStore({ directory: runDir }).resume('cli');
-    const log = join(runDir, 'cli.jsonl');
+    const log = logOf(runDir);
     const before = await readFile(log, 'utf8');
 
     await expect(cli(['--workspace', workspace, '--resume', runDir])).rejects.toThrow(
@@ -591,21 +600,18 @@ describe('寫租約', () => {
  * 還沒起來」；晚一步的話 `session/end-seed` 已經寫進一份不屬於這個目錄的日誌。
  */
 describe('屬於哪個目錄', () => {
-  /** run 目錄裡 root 那一份的兩個檔。 */
+  /** run 目錄裡只有 root 那一份：回它的日誌檔。header 經 `session-files.fixture.ts` 讀、改。 */
   async function rootFiles(runDir: string) {
-    const entries = await readdir(runDir);
-    const header = entries.filter((name) => name.endsWith('.header.json'));
-    const log = entries.filter((name) => name.endsWith('.jsonl'));
-    expect(header).toHaveLength(1);
-    expect(log).toHaveLength(1);
-    return { header: join(runDir, header[0]!), log: join(runDir, log[0]!) };
+    const sessions = await sessionsUnder(runDir);
+    expect(sessions).toHaveLength(1);
+    return { log: sessions[0]!.logPath };
   }
 
   it('換了目錄：擋下，訊息帶兩個目錄，檔案沒被動', async () => {
     const runDir = await firstRun();
-    const { header, log } = await rootFiles(runDir);
+    const { log } = await rootFiles(runDir);
     // 前提：header 記的就是這個行程的目錄，不然下面那一條「換了」證不了什麼。
-    expect(JSON.parse(await readFile(header, 'utf8')).cwd).toBe(process.cwd());
+    expect((await sessionHeaderOf(runDir, 'cli')).header.cwd).toBe(process.cwd());
     const before = await readFile(log, 'utf8');
 
     await expect(
@@ -619,12 +625,8 @@ describe('屬於哪個目錄', () => {
 
   it('header 沒記 cwd：一樣擋下，不猜', async () => {
     const runDir = await firstRun();
-    const { header, log } = await rootFiles(runDir);
-    const { cwd: _dropped, ...rest } = JSON.parse(await readFile(header, 'utf8')) as Record<
-      string,
-      unknown
-    >;
-    await writeFile(header, JSON.stringify(rest));
+    const { log } = await rootFiles(runDir);
+    await rewriteSessionHeader(runDir, 'cli', ({ cwd: _dropped, ...rest }) => rest);
     const before = await readFile(log, 'utf8');
 
     await expect(cli(['--workspace', workspace, '--resume', runDir])).rejects.toThrow(
@@ -666,22 +668,19 @@ describe('屬於哪個目錄', () => {
  * 「沒記也拒」會讓 13 出貨那天每一份舊日誌永久接不回來，包含接回同一個工作區那些完全正確的。
  */
 describe('屬於哪個工作區', () => {
-  /** run 目錄裡 root 那一份的兩個檔。 */
+  /** run 目錄裡只有 root 那一份：回它的日誌檔。header 經 `session-files.fixture.ts` 讀、改。 */
   async function rootFiles(runDir: string) {
-    const entries = await readdir(runDir);
-    const header = entries.filter((name) => name.endsWith('.header.json'));
-    const log = entries.filter((name) => name.endsWith('.jsonl'));
-    expect(header).toHaveLength(1);
-    expect(log).toHaveLength(1);
-    return { header: join(runDir, header[0]!), log: join(runDir, log[0]!) };
+    const sessions = await sessionsUnder(runDir);
+    expect(sessions).toHaveLength(1);
+    return { log: sessions[0]!.logPath };
   }
 
   it('換了 `--workspace`：擋下，訊息帶兩個根，檔案沒被動', async () => {
     const runDir = await firstRun();
-    const { header, log } = await rootFiles(runDir);
+    const { log } = await rootFiles(runDir);
     // 前提：header 真的記了那一格，而且記的就是第一次跑的那個根。沒有這一條，下面那句
     // 「換了」證不了東西——一份沒記的日誌照設計是放行的。
-    expect(JSON.parse(await readFile(header, 'utf8')).workspaceRoot).toBe(workspace);
+    expect((await sessionHeaderOf(runDir, 'cli')).header.workspaceRoot).toBe(workspace);
     const before = await readFile(log, 'utf8');
     const other = await mkdtemp(join(tmpdir(), 'nexus-resume-ws2-'));
 
@@ -714,13 +713,12 @@ describe('屬於哪個工作區', () => {
    */
   it('header 沒記那一格（13 以前的日誌）：放行', async () => {
     const runDir = await firstRun();
-    const { header } = await rootFiles(runDir);
-    const { workspaceRoot: dropped, ...rest } = JSON.parse(
-      await readFile(header, 'utf8'),
-    ) as Record<string, unknown>;
-    // 前提：拿掉的是一個真的在的東西。
-    expect(dropped).toBe(workspace);
-    await writeFile(header, JSON.stringify(rest));
+    await rootFiles(runDir);
+    await rewriteSessionHeader(runDir, 'cli', ({ workspaceRoot: dropped, ...rest }) => {
+      // 前提：拿掉的是一個真的在的東西。
+      expect(dropped).toBe(workspace);
+      return rest;
+    });
 
     const { stdout } = await cli(
       ['--workspace', workspace, '--resume', runDir],

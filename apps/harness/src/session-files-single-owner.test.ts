@@ -9,6 +9,9 @@
  *
  * - 字串字面量或模板片段**以 `.jsonl` 結尾**，或**含 `header.json`**；regex 字面量裡出現這兩個字也算。
  * - 從 `jsonl-session-store` 匯入、轉出或解構 `parseHeader`／`sessionLogPathOf`，或以屬性存取它們。
+ * - 整包轉出 `jsonl-session-store`（裸的 `export * from`，#1873）：轉手之後別處從轉手的模組拿 `parseHeader`，
+ *   上一條只看直接的匯入來源，看不到。具名轉出上一條已經擋了；不做跨檔解析。`export * as ns` 不算裸的：
+ *   拿的人得寫 `ns.parseHeader`，屬性存取那條擋得到。
  *
  * 不是會話的 `.jsonl`（變更紀錄、結果檔……）照 dsh `scripts/verify-no-bare-dispatcher.ts` 的 `proxy-exempt:` 做法：
  * 同一行或上一行的註解寫 `session-file-exempt: <理由>`。**理由空白也紅**：新加的 `.jsonl` 一定要說它為什麼不是會話檔。
@@ -116,6 +119,10 @@ export function findViolations(file: string, text: string): Violation[] {
       ts.isStringLiteral(node.moduleSpecifier) &&
       isStore(node.moduleSpecifier.text)
     ) {
+      if (ts.isExportDeclaration(node) && node.exportClause === undefined) {
+        add(node, '整包轉出後端');
+        return;
+      }
       const bindings = ts.isImportDeclaration(node)
         ? node.importClause?.namedBindings
         : node.exportClause;
@@ -146,11 +153,18 @@ export function findViolations(file: string, text: string): Violation[] {
  */
 const SOURCE_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages', 'scripts'] as const;
 
-/** 原始碼：`.ts`／`.tsx`／`.mts`／`.mjs`，宣告檔與測試檔不算（測試是 ①b）。`.fixture.ts`、`.smoke.ts` 是非測試，要掃。 */
-const isSource = (name: string): boolean =>
-  /\.(tsx?|mts|cts|mjs|cjs)$/u.test(name) &&
+/**
+ * 原始碼：`.ts`／`.tsx`／`.mts`／`.cts`／`.js`／`.mjs`／`.cjs`，宣告檔與測試檔不算（測試不擴，#1868 裁決）。
+ * `.fixture.ts`、`.smoke.ts` 是非測試，要掃。`.js` 照 dsh 的「每個原始碼檔」（#1873）。
+ */
+export const isSource = (name: string): boolean =>
+  /\.(tsx?|mts|cts|[cm]?js)$/u.test(name) &&
   !/\.d\.[cm]?ts$/u.test(name) &&
-  !/\.test\.tsx?$/u.test(name);
+  !/\.test\.([cm]?[jt]sx?)$/u.test(name);
+
+/** 擁有者自己的檔整檔不掃：它們寫檔名、解 header、轉出自己都是本分。 */
+export const isOwner = (path: string): boolean =>
+  OWNERS.some((owner) => path === owner || (owner.endsWith('/') && path.startsWith(owner)));
 
 /** 遞迴列出原始碼，跳過相依與建置產物（`dist`，與套件根底下的 `lib`）。 */
 function sourceFiles(dir: string): string[] {
@@ -186,8 +200,35 @@ describe('量具自檢：每一種寫法都抓得到，註解與豁免不算', (
     ["export { parseHeader } from './jsonl-session-store.js';", '從後端拿 parseHeader'],
     ['store.parseHeader(text);', '從後端拿 parseHeader'],
     ["const { parseHeader } = await import('./jsonl-session-store.js');", '從後端拿 parseHeader'],
+    ["export * from './jsonl-session-store.js';", '整包轉出後端'],
+    ["export * from '../jsonl-session-store.ts';", '整包轉出後端'],
+    [
+      "export * as ns from './jsonl-session-store.js';\nns.parseHeader(text);",
+      '從後端拿 parseHeader',
+    ],
   ])('%s', (text, what) => {
     expect(at(text)).toEqual([what]);
+  });
+
+  it('整包轉出：轉的不是後端不算；`export * as` 不算裸的', () => {
+    expect(at("export * from './jsonl-session-store-helpers.js';")).toEqual([]);
+    expect(at("export * from './other.js';")).toEqual([]);
+    expect(at("export * as ns from './jsonl-session-store.js';")).toEqual([]);
+  });
+
+  it('擁有者自己的檔整檔不掃（轉出自己、寫檔名是本分），別人的照掃', () => {
+    expect(isOwner('apps/harness/src/jsonl-session-store.ts')).toBe(true);
+    expect(isOwner('packages/nexus-core/src/session-filename.ts')).toBe(true);
+    expect(isOwner('scripts/session-format-fixtures/in-tree/reader.ts')).toBe(true);
+    expect(isOwner('apps/harness/src/session-files.fixture.ts')).toBe(false);
+    expect(isOwner('apps/harness/src/jsonl-session-store.fixture.ts')).toBe(false);
+  });
+
+  it('.js 檔一樣掃：以 .jsonl 結尾的字面量會紅', () => {
+    expect(isSource('a.js')).toBe(true);
+    expect(findViolations('x.js', "const f = 'runs.jsonl';").map((v) => v.what)).toEqual([
+      '字串以 .jsonl 結尾',
+    ]);
   });
 
   it('不相干的寫法不算', () => {
@@ -237,6 +278,9 @@ describe('量具自檢：每一種寫法都抓得到，註解與豁免不算', (
   it('副檔名：測試與宣告檔不掃，fixture 與 smoke 要掃', () => {
     expect(isSource('a.test.ts')).toBe(false);
     expect(isSource('a.test.tsx')).toBe(false);
+    expect(isSource('a.test.js')).toBe(false);
+    expect(isSource('a.test.mjs')).toBe(false);
+    expect(isSource('a.test.cjs')).toBe(false);
     expect(isSource('a.d.ts')).toBe(false);
     expect(isSource('a.fixture.ts')).toBe(true);
     expect(isSource('a.smoke.ts')).toBe(true);
@@ -254,11 +298,7 @@ describe('全樹掃描', () => {
     for (const root of SOURCE_ROOTS) {
       for (const file of sourceFiles(join(REPO_ROOT, root))) {
         const path = relative(REPO_ROOT, file);
-        if (
-          OWNERS.some((owner) => path === owner || (owner.endsWith('/') && path.startsWith(owner)))
-        ) {
-          continue;
-        }
+        if (isOwner(path)) continue;
         for (const v of findViolations(path, readFileSync(file, 'utf8'))) {
           found.push(`${v.file}:${String(v.line)} ${v.what}`);
         }

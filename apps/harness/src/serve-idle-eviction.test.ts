@@ -13,7 +13,7 @@
  * 輪詢間隔的下限是 1 秒，所以這一檔的每一條要等一兩秒。**零憑證、零外部連線**：模型是預設的假模型。
  */
 
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -28,6 +28,7 @@ import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { PluginSnapshot } from './plugin-snapshot.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const temporary: string[] = [];
 const running: RunningServe[] = [];
@@ -127,20 +128,9 @@ async function observe(client: WireClient, thread: string, workspace: string) {
   return { entries, permission: (permission.text ?? '').replaceAll(workspace, '<工作區>') };
 }
 
-/** 這條 thread 的 root 日誌（落盤的那一份）上，依序每一顆事件的型別與資料。 */
-function rootLogEvents(h: Home, thread: string): { type: string; data: unknown }[] {
-  const sessions = join(h.dir, HARNESS_SESSIONS_DIR_NAME);
-  const [project] = readdirSync(sessions);
-  const directory = join(sessions, project ?? '');
-  const body = readdirSync(directory).find(
-    (name) => name === `${thread}.jsonl` || name.startsWith(`${encodeURIComponent(thread)}.jsonl`),
-  );
-  if (body === undefined)
-    throw new Error(`找不到 ${thread} 的日誌：${readdirSync(directory).join('、')}`);
-  return readFileSync(join(directory, body), 'utf8')
-    .split('\n')
-    .filter((line) => line.trim() !== '')
-    .map((line) => JSON.parse(line) as { type: string; data: unknown });
+/** 這條 thread 的 root 日誌（落盤的那一份）上，依序每一顆事件的型別與資料（經 `session-files.fixture.ts`，#1868）。 */
+function rootLogEvents(h: Home, thread: string): Promise<{ type: string; data: unknown }[]> {
+  return sessionEventsOf(join(h.dir, HARNESS_SESSIONS_DIR_NAME), thread);
 }
 
 const evictedLine = (lines: readonly string[], thread: string): boolean =>
@@ -213,7 +203,7 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
       lines.filter((line) => line.startsWith('[閒置逐出] thread "alpha"')).length;
     // 落盤是批次的：撤掉（收尾）之後才讀得到完整的日誌。
     await until(() => evictions() >= 1);
-    const before = rootLogEvents(h, 'alpha');
+    const before = await rootLogEvents(h, 'alpha');
     // 前提：切過去之後日誌上真的有一顆讓這件事分得出勝負的東西（起始釘一顆、切換再一顆，最後一顆是唯讀）。
     expect(count(before, 'sandbox/mode')).toBeGreaterThanOrEqual(2);
     expect(before.filter((event) => event.type === 'sandbox/mode').at(-1)?.data).toMatchObject({
@@ -224,7 +214,7 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
     expect(reopened.permission).toContain('read-only');
     // 重建出來的 thread 再閒置一次、再被撤：它如果多寫了什麼，這時候才落盤。
     await until(() => evictions() >= 2);
-    const after = rootLogEvents(h, 'alpha');
+    const after = await rootLogEvents(h, 'alpha');
     // 重建出來的 thread 接上時，沙箱的參與者會照控制器的值再釘一顆 `sandbox/mode`（每次接上都釘，不是這一步的事）；
     // 要看的是**值**：重建之後沒有任何一顆往別的值走，也沒有人再選一次組、再改一次核准。
     const rebuilt = after.slice(before.length);
