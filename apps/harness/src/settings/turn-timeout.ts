@@ -40,6 +40,7 @@
 import { z } from 'zod';
 
 import type { NexusPlugin, PluginRegistry } from '@nexus/core';
+import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
 /** 這一列在訊息裡叫什麼。 */
 export const TURN_TIMEOUT_PLUGIN_NAME = 'turn-timeout';
@@ -48,7 +49,7 @@ export const TURN_TIMEOUT_PLUGIN_NAME = 'turn-timeout';
 export const DEFAULT_TURN_TIMEOUT_MS = 30 * 60 * 1000;
 
 /** 計時器能排的最長延遲，見檔頭。 */
-export const MAX_TURN_TIMEOUT_MS = 2_147_483_647;
+export const MAX_TURN_TIMEOUT_MS = MAX_TIMER_DELAY_MS;
 
 /** 中止原因裡的 `reason`：日誌與下行都帶這個字串，讀的人據此分出「時間到」與「人按停止」。 */
 export const TURN_TIMEOUT_REASON = 'turn-timeout';

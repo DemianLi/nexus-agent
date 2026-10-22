@@ -102,6 +102,7 @@ import {
 } from '@/lib/question-view';
 import { settledNoticeText } from '@/lib/queue-view';
 import { mentionDisplayText } from '@/lib/session-mention';
+import { stoppedByTurnClock } from '@/lib/stop-cause';
 import { agentMessageCaption, subagentLabel, subagentNames } from '@/lib/subagent-view';
 import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import { firstLine, toolSummary, toolTitle } from '@/lib/tool-view';
@@ -163,10 +164,12 @@ export const CALL_OUTCOME_LABEL = { error: '失敗', aborted: '已中止' } as c
 
 export const TRACE_CALL_UNLOADED_TEXT = '這次呼叫的內文不在目前載入的對話裡。';
 
-export type EndingReason = 'stopped' | 'max-tokens' | 'blocked' | 'failed';
+export type EndingReason = 'stopped' | 'timed-out' | 'max-tokens' | 'blocked' | 'failed';
 
 export const ENDING_LABEL: Readonly<Record<EndingReason, string>> = {
   stopped: '已停止',
+  /** 一輪的時鐘到點停下（#1631）：不是誰按了停止，也不是失敗，不畫紅。 */
+  'timed-out': '超過時間上限，已停止',
   'max-tokens': '輸出上限',
   /** 封存的會話收到話：這一輪開了又立刻收尾，沒有送給模型（#633）。不是失敗，不畫紅。 */
   blocked: '已擋下（會話已封存）',
@@ -475,7 +478,8 @@ function itemsOf(state: ConversationState): Item[] {
         });
       }
       if (entry.stopped === true) {
-        rows.push(endingRow(entry.id, 'stopped', ENDING_LABEL.stopped, base));
+        const reason = stoppedByTurnClock(entry.stopCause) ? 'timed-out' : 'stopped';
+        rows.push(endingRow(entry.id, reason, ENDING_LABEL[reason], base));
       }
       if (entry.maxTokens === true) {
         rows.push(endingRow(entry.id, 'max-tokens', MAX_TOKENS_NOTICE, base));
@@ -1145,7 +1149,13 @@ function withToolFact(row: TraceRow, index: ViewIndex): TraceRow {
 /** 最新那一組的收尾：回覆上的旗標標不到的（停在工具執行中被停止、整輪失敗）讀 `status`。 */
 function closeWithStatus(rows: TraceRow[], state: ConversationState): void {
   const reason: EndingReason | undefined =
-    state.status === 'stopped' ? 'stopped' : state.status === 'failed' ? 'failed' : undefined;
+    state.status === 'stopped'
+      ? stoppedByTurnClock(state.stopCause)
+        ? 'timed-out'
+        : 'stopped'
+      : state.status === 'failed'
+        ? 'failed'
+        : undefined;
   const lastRow = rows.at(-1);
   if (reason === undefined || lastRow === undefined) return;
   if (rows.some((row) => row.kind === 'ending' && row.reason === reason)) return;

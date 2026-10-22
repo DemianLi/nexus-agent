@@ -184,6 +184,7 @@ import {
   DEFAULT_STREAM_RETRY_MAX_DELAY_MS,
 } from '@nexus/core';
 import type { NexusPlugin, PluginRegistry, StreamRetryOptions } from '@nexus/core';
+import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
 import {
   DEFAULT_LIVE_BASE_URL,
@@ -199,7 +200,7 @@ import type { ModelEntry } from '../model-catalog.js';
 export const LIVE_MODEL_PLUGIN_NAME = 'live-model';
 
 /** 逾時的上限：Node 計時器收得住的最大延遲，見檔頭「偏離三」。 */
-export const MAX_LIVE_TIMEOUT_MS = 2_147_483_647;
+export const MAX_LIVE_TIMEOUT_MS = MAX_TIMER_DELAY_MS;
 
 /** 排隊等名額的預設上限（毫秒），見檔頭「偏離六」。沒有量測依據。 */
 export const DEFAULT_MAX_REQUEST_WAIT_MS = 60_000;

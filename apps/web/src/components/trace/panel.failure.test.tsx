@@ -7,7 +7,7 @@ import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';
-import { traceModel } from '@/lib/trace-view';
+import { ENDING_LABEL, traceModel } from '@/lib/trace-view';
 import { Script } from '@/test/conversation-frames';
 import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 import { call, digest, tool, turn, view, withTrajectory } from '@/test/trajectory-fixtures';
@@ -114,6 +114,31 @@ describe('觀測分頁：失敗的那一輪標頭寫它是哪一類失敗（#112
     const failed = within(block).getByTestId('trace-head-failure');
     expect(failed.textContent).toBe('失敗（被限流）');
     expect(within(block).getAllByTestId('trace-digest')).toHaveLength(2);
+  });
+});
+
+describe('觀測分頁：時間到停下的收尾列（#1631）', () => {
+  const stoppedWith = (cause: unknown) => {
+    const script = new Script();
+    return reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('history-0', '跑久一點'),
+      script.openAi('a'),
+      script.delta('a', '講到一半'),
+      script.stopped(cause),
+    ]);
+  };
+  const count = (haystack: string, needle: string) => haystack.split(needle).length - 1;
+
+  it.each([
+    ['時鐘到點', { kind: 'hook', reason: 'turn-timeout' }, ENDING_LABEL['timed-out']],
+    ['人按了停止', { kind: 'user' }, ENDING_LABEL.stopped],
+  ] as const)('%s：只寫一次標籤（摘要不重複），不畫紅', async (_name, cause, label) => {
+    const view = mount(stoppedWith(cause));
+    await act(async () => {});
+    const text = view.container.textContent ?? '';
+    expect(count(text, label)).toBe(1);
+    expect(view.container.querySelector('.text-destructive')).toBeNull();
   });
 });
 

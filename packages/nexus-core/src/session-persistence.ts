@@ -41,6 +41,7 @@ import type {
   StoredSessionHeader,
 } from './session-store.js';
 import type { SessionRegistry } from './session-registry.js';
+import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
 /** 第一顆待處理事件開的批次窗口，毫秒。 */
 export const DEFAULT_PERSISTENCE_WINDOW_MS = 10;
@@ -431,7 +432,7 @@ function throwAggregate(failures: readonly Error[], what: string): void {
  * 同 `@nexus/plugin-telemetry-otel` 對 `shutdownTimeoutMillis` 的檢查，也同 dsh
  * （`packages/util/timeout/src/index.ts:25` 的 `MAX_TIMER_DELAY_MS`，`ddefc45`）。
  */
-export const MAX_PERSISTENCE_WINDOW_MS = 2_147_483_647;
+export const MAX_PERSISTENCE_WINDOW_MS = MAX_TIMER_DELAY_MS;
 
 /**
  * 這個條目的 plugin 名。

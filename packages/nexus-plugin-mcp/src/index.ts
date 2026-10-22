@@ -32,14 +32,7 @@ import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
-import {
-  callOf,
-  clientOptions,
-  connectGeneration,
-  generationOf,
-  instructionsOf,
-  throwOnToolError,
-} from './connection.js';
+import { clientOptions, connectGeneration } from './connection.js';
 import type { Generation, RequestOptions, SdkClient, ToolCall } from './connection.js';
 import { ensureHub } from './hub.js';
 import { MCP_POOL_SERVICE } from './pool.js';
@@ -227,15 +220,14 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     // dsh 這幾句是 error 級；插件 logger 只有 warn，所以退成 warn（`supervisor.ts` 檔頭偏離 6）。
     const error = report;
     try {
-      const first = new Map<string, ToolCall>();
+      // 首連與重連、池走同一個 `connectGeneration`（#1572 N0516）：`taskSupport: 'required'` 的拒絕與指引上限只寫一處。
+      const first = await connectGeneration(client, config);
       const names: string[] = [];
       // 核准閘門用的對照：模型叫的是 public name，宣告寫的是 raw name。
       const rawNameOf = new Map<string, string>();
-      for (const tool of await client.getTools()) {
+      for (const tool of first.listed.tools) {
         const rawName = tool.name;
-        throwOnToolError(tool);
-        // **先收走這一代的呼叫，再把註冊的物件換成委派**——否則第 0 代的呼叫會指到自己，無窮遞迴。
-        first.set(rawName, callOf(tool));
+        // **呼叫已在 `connectGeneration` 收進這一代，這裡才把註冊的物件換成委派**——否則第 0 代的呼叫會指到自己，無窮遞迴。
         // 改的是**註冊給模型看的**名字。`tools/call` 送上線的是 adapter 在建這個工具時
         // 就閉包住的 raw name（`convertMcpTools` 裡的 `toolName: tool.name`），不是這個欄位——所以改它不會讓
         // 呼叫送到不存在的工具上。
@@ -255,10 +247,9 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
             `（要寫 server 自己公告的名字；沒對到的照 default 被問）`,
         );
       }
-      // 指引與資源走同一條已經連上的 SDK client，不再經 `MultiServerMCPClient` 開新連線。放在 `try` 裡：
-      // 超過上限的指引算連線失敗，要跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
-      const sdk = await client.getClient(serverName);
-      const instructions = instructionsOf(sdk?.getInstructions(), config);
+      // 指引與資源走同一條已經連上的 SDK client，不再經 `MultiServerMCPClient` 開新連線。指引上限已在 `connectGeneration` 查過：
+      // 超過上限算連線失敗，跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
+      const { instructions } = first.listed;
       const policy: ReconnectPolicy = config.reconnect;
       const current = (supervisor = new Supervisor<Generation>(
         {
@@ -282,7 +273,7 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
           report,
           error,
         },
-        generationOf(first, sdk),
+        first,
       ));
       // 放棄重連之後，這一台的工具對模型隱藏（dsh 此時把工具從註冊表撤掉；我們的註冊表在組裝之後撤了沒有效果，
       // 所以改在每次模型呼叫前把它們從請求的工具清單拿掉，見 `supervisor.ts` 檔頭偏離 4）。
