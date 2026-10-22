@@ -4,7 +4,7 @@
  * 與計劃分頁那一句（[#1866](https://github.com/DemianLi/nexus-agent/issues/1866)）。
  *
  * **不顯示錯誤原文**：`field` 與 `message` 是給管理者查的，原文只進 console（開線時 `console.warn`，往前讀時照 dsh `loadOlder`
- * 用 `console.error`）。開線時**不自動重連**：歷史裡的壞資料每次重連都抓到同一份，照 dsh 的錯誤分類（`session-controller/README.md:54`：
+ * 用 `console.error`）。開線時**不自動重連**：歷史裡的壞資料每次重連都抓到同一份，照 dsh 的錯誤分類（`packages/api/session-controller/README.md:54`：
  * 協定錯誤終止串流，只有載體斷了才自動續接），要人按「立刻重連」。往前讀時不停什麼，再按一次照樣讀。
  *
  * @module

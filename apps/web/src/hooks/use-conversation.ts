@@ -76,7 +76,7 @@ export const JUMP_PAGE_MESSAGES = 200;
 /**
  * 往前讀歷史（`loadEarlier`、`loadThrough`、`findPlan`）拋錯時給畫面的那一句。伺服器送來看不懂的資料（`WireProtocolError`，
  * [#1866](https://github.com/DemianLi/nexus-agent/issues/1866)）：原文只進 `console.error`，照 dsh `Session.loadOlder`／`loadThrough`
- * （`session-controller/src/client/sessions/session.ts:418-420`、`:466-468`）在這個位置的做法；畫面講固定的一句，可以再按一次。
+ * （`packages/api/session-controller/src/client/sessions/session.ts:418-420`、`:466-468`）在這個位置的做法；畫面講固定的一句，可以再按一次。
  * 開線時停住那條（`halt`）是另一個位置：不再自動重連、等人按，用 `console.warn`。其他錯誤照舊回原因。
  */
 function pagingFailureText(error: unknown): string {
@@ -548,7 +548,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     };
     /**
      * 伺服器送來看不懂的資料（`WireProtocolError`，#1601 `N0758`）：下行的一顆、或歷史頁（頁欄位與每一筆）。**不排重試**：
-     * 歷史裡的壞資料每次重連都抓到同一份，照 dsh 的錯誤分類（`session-controller/README.md:54`）協定錯誤終止串流。
+     * 歷史裡的壞資料每次重連都抓到同一份，照 dsh 的錯誤分類（`packages/api/session-controller/README.md:54`）協定錯誤終止串流。
      * `lost` 照設，「立刻重連」按得到；`halted` 擋掉 `online`／`offline` 的自動重排。原文只進 `console.warn`，不進畫面。
      */
     const halt = (error: WireProtocolError) => {
