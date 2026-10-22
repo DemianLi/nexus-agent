@@ -61,8 +61,11 @@ function isProductSource(path: string): boolean {
   );
 }
 
-/** 一個目錄底下的每個產品原始碼檔（遞迴），排序過，路徑用 `/` 分隔。 */
-function productFilesUnder(root: string, directory: string): string[] {
+/**
+ * 一個目錄底下的每個產品原始碼檔（遞迴），排序過，路徑用 `/` 分隔、相對於 `root`。
+ * `persistence-schema.ts` 也拿它組 TypeScript program 的檔案清單，兩邊對「產品原始碼」的判斷是同一份。
+ */
+export function productFilesUnder(root: string, directory: string): string[] {
   const found: string[] = [];
   const walk = (current: string): void => {
     for (const entry of readdirSync(current, { withFileTypes: true })) {

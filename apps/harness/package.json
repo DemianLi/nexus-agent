@@ -22,6 +22,7 @@
     "eval:sessions": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/sessions-cli.ts",
     "eval:survey": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/survey-cli.ts",
     "gen-known-event-types": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-known-event-types.ts",
+    "gen-persistence-schema": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-persistence-schema.ts",
     "lint": "eslint .",
     "plugin": "tsx --tsconfig ../../tsconfig.runtime.json src/plugin-cli.ts",
     "serve": "tsx --tsconfig ../../tsconfig.runtime.json src/serve.ts",
