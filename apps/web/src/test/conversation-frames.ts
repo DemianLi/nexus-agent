@@ -29,9 +29,14 @@ export class Script {
     return this.frame('lifecycle', { event: 'completed', graph_name: 'root' });
   }
 
-  /** 按了停止收尾（`aborted` 由 pump 補）。 */
-  stopped(): Event {
-    return this.frame('lifecycle', { event: 'failed', graph_name: 'root', aborted: true });
+  /** 按了停止收尾（`aborted` 由 pump 補）；`cause` 是 pump 補在旁邊的原因（#1624），省略就是舊 server 沒帶。 */
+  stopped(cause?: unknown): Event {
+    return this.frame('lifecycle', {
+      event: 'failed',
+      graph_name: 'root',
+      aborted: true,
+      ...(cause === undefined ? {} : { cause }),
+    });
   }
 
   /** 一輪撞到輸出上限而收尾（`maxTokens` 由 pump 補）。 */

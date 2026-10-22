@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 import type { ConversationState, Event } from './index.js';
 import {
@@ -475,6 +477,98 @@ describe('按了停止（#276）', () => {
     ]);
     expect(state.status).toBe('failed');
     expect(state.error).toBe('供應商掛了');
+  });
+});
+
+/**
+ * 停下的原因（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：pump 在 `aborted` 旁邊補 `cause`，即時是 `failed`
+ * （切斷的那一次）或 `completed`（停在核准點時收回合成的那顆），歷史重放是 `failed`。形狀照 `@nexus/harness` 的
+ * `thread-pump.ts` 與 `conversation-history.ts`（`21aedf16`）。
+ */
+describe('停下的原因（#1624）', () => {
+  const TIMEOUT = { kind: 'hook', reason: 'turn-timeout' } as const;
+  const USER = { kind: 'user' } as const;
+  const streamingThenStop = (closing: Record<string, unknown>) =>
+    reduceAll(emptyConversation(), [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...text('a', ['model_request:1'], '甲乙').slice(0, -1),
+      frame('lifecycle', [], { graph_name: 'root', aborted: true, ...closing }),
+    ]);
+
+  it.each([
+    ['時鐘到點', TIMEOUT],
+    ['人按了停止', USER],
+  ] as const)('%s：狀態與那則被打斷的回覆都記下原因', (_name, cause) => {
+    const state = streamingThenStop({ event: 'failed', cause });
+    expect(state.status).toBe('stopped');
+    expect(state.stopCause).toEqual(cause);
+    expect(state.entries).toMatchObject([{ kind: 'ai', stopped: true, stopCause: cause }]);
+  });
+
+  it('停在核准點時收回（`completed` 那顆）也帶原因', () => {
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', [], {
+        interrupt_id: 'i1',
+        payload: {
+          actionRequests: [{ name: 'danger', args: {} }],
+          reviewConfigs: [{ actionName: 'danger', allowedDecisions: ['approve', 'reject'] }],
+        },
+      }),
+      frame('lifecycle', [], {
+        event: 'completed',
+        graph_name: 'root',
+        aborted: true,
+        cause: TIMEOUT,
+      }),
+    ]);
+    expect(state.status).toBe('stopped');
+    expect(state.stopCause).toEqual(TIMEOUT);
+  });
+
+  it('舊 server 沒帶原因：兩格都沒有，跟今天一樣', () => {
+    const state = streamingThenStop({ event: 'failed' });
+    expect(state.status).toBe('stopped');
+    expect(state.stopCause).toBeUndefined();
+    expect(state.entries[0]).toMatchObject({ stopped: true });
+    expect(state.entries[0]).not.toHaveProperty('stopCause');
+  });
+
+  it('下一輪開跑就清掉；上一則回覆上的原因留著（那一輪就是這樣停的）', () => {
+    const stopped = streamingThenStop({ event: 'failed', cause: TIMEOUT });
+    const next = reduceAll(stopped, [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    ]);
+    expect(next.status).toBe('running');
+    expect(next.stopCause).toBeUndefined();
+    expect(next.entries[0]).toMatchObject({ stopCause: TIMEOUT });
+  });
+
+  it('子圖那顆收尾帶的原因不算這一輪的', () => {
+    const state = reduceAll(emptyConversation(), [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      frame('lifecycle', ['tools:a'], {
+        event: 'failed',
+        graph_name: 'worker',
+        aborted: true,
+        cause: TIMEOUT,
+      }),
+    ]);
+    expect(state.status).toBe('running');
+    expect(state.stopCause).toBeUndefined();
+  });
+
+  it('與 `@nexus/core` 的 `TurnAbortCause` 同形：core 加了一種，這裡要跟著加', () => {
+    const union = (source: string, name: string) => {
+      const match = new RegExp(`export type ${name} =([^;]*);`).exec(source);
+      if (match === null) throw new Error(`找不到 ${name}`);
+      return match[1]!.replace(/\s+/g, ' ').trim();
+    };
+    const core = readFileSync(
+      new URL('../../nexus-core/src/session-log.ts', import.meta.url),
+      'utf8',
+    );
+    const wire = readFileSync(new URL('./conversation.ts', import.meta.url), 'utf8');
+    expect(union(wire, 'TurnStopCause')).toBe(union(core, 'TurnAbortCause'));
   });
 });
 
