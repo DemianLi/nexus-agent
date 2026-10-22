@@ -14,7 +14,7 @@
  * - 串流進來、不聚合：上傳不吃記憶體。
  * - **讀與去重都重算雜湊**（`ATTACHMENT_CORRUPT`，[#1338](https://github.com/DemianLi/nexus-agent/issues/1338)）：
  *   物件路徑就是雜湊，所以讀圖時重算一次、去重碰到既有物件時重算一次，對不上就拋，不把來路不明的位元組交出去、
- *   也不讓壞物件「認領」新上傳。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結不重算內容，只比 inode：跟物件不同
+ *   也不讓壞物件「認領」新上傳。讀圖時再重讀檔頭比媒體類型與寬高（dsh `readImageFile`，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結不重算內容，只比 inode：跟物件不同
  *   （物件被刪掉重建過）就原子地換掉（[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)）。
  * - **回報參照之前逐層 fsync 目錄**（[#1528](https://github.com/DemianLi/nexus-agent/issues/1528)，dsh `store.ts:126-183`、
  *   `:272-302`、`:350-388`，`1517a4db`）：暫存檔內容 fsync 了還不夠，`link` 寫進父目錄的那一筆名字、這次新建的
@@ -61,6 +61,7 @@ import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@nex
 import { syncDirectory } from './atomic-file.js';
 import { ThreadScopedAttachmentBackend } from './attachment-route.js';
 import type { AttachmentScope } from './attachment-route.js';
+import { probeImageHeader } from './image-intake.js';
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
 import { assertPrivateFile } from './plugin-config.js';
 import type { PrivateFileRole } from './plugin-config.js';
@@ -366,8 +367,8 @@ export class AttachmentStore {
   }
 
   /**
-   * 讀一張存好的圖的位元組。大小或內容雜湊跟參照對不上（物件被換過、損毀、被截斷）就拋，不把來路不明的位元組交出去。
-   * 大小先比（便宜），再重算 sha256。
+   * 讀一張存好的圖的位元組。大小、內容雜湊或檔頭（媒體類型、寬高）跟參照對不上（物件被換過、損毀、被截斷，
+   * 或參照被改過）就拋，不把來路不明的位元組交出去。大小先比（便宜），再重算 sha256，最後重讀檔頭。
    *
    * @throws {AttachmentError} 參照不合格式、物件不在（`ATTACHMENT_STORE_FAILED`）、或內容對不上（`ATTACHMENT_CORRUPT`）。
    */
@@ -394,6 +395,17 @@ export class AttachmentStore {
     }
     if (createHash('sha256').update(data).digest('hex') !== sha256) {
       throw new AttachmentError('圖片的內容對不上它的雜湊', 'ATTACHMENT_CORRUPT');
+    }
+    // 雜湊只證明位元組是當初存的那份，不證明參照的其他欄位：日誌裡的寬高、媒體類型被改過，畫面與模型會照著錯的
+    // 那份走。照 dsh `readImageFile`（`store.ts:450-458`，`687f282e`）重讀檔頭再比一次，只讀檔頭、不解碼像素。
+    const facts = probeImageHeader(data);
+    if (
+      facts === undefined ||
+      facts.mediaType !== ref.mediaType ||
+      facts.width !== ref.width ||
+      facts.height !== ref.height
+    ) {
+      throw new AttachmentError('圖片的檔頭對不上參照', 'ATTACHMENT_CORRUPT');
     }
     return data;
   }

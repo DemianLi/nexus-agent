@@ -7,6 +7,14 @@
  *
  * 這一支只放與儲存無關的部分：走訪訊息、換區塊的骨架，和幾句固定的佔位字。讀位元組的是 `apps/harness`。
  *
+ * **送出的每張圖前面有一行把手**（{@link requestImageHandleText}，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）：照 dsh 的
+ * pi-ai 轉接（`packages/llm/llm-pi-ai/src/context.ts:79-89`，`687f282e`），每個 `image` 區塊先推一段文字、再推圖，模型才叫得出
+ * 「哪一張」。只有真的送圖的那一支有；三種佔位字本身就是文字，不另加。和 dsh 不同的兩處：
+ *
+ * 1. **不加 `It may be resized or re-encoded…` 那半句**（理由 1，基座表達不出來；掛在 `apps/harness/src/attachment-store.ts` 檔頭的偏離 2
+ *    底下）：dsh 送的是正規化過的請求版本，那半句講的是它；我們沒有影像函式庫，送的就是原圖，寬高也就是參照記的寬高，那半句不成立。
+ * 2. **沒有唯讀路徑那一支**（`normalizedAccessText`）：同 {@link offloadedImageText}，我們不替模型準備圖的唯讀副本。
+ *
  * @module
  */
 
@@ -42,6 +50,17 @@ export function hasAttachmentBlocks(message: BaseMessage): boolean {
  */
 export function assumedFileLine(ref: FileAttachmentRef): string {
   return fileHandleText(ref, fileModelPath(ref));
+}
+
+/**
+ * 送出的一張圖前面那一行把手。逐字照 dsh `requestImageHandleText` 沒有路徑時的前半句（`packages/llm/llm/src/content.ts:91-102`，身分字串
+ * 照同檔 `:45-53` 的 `imageIdentity`）：有名字是 `"名字" (sha256:…)`，沒名字是完整的 `attachmentId`。dsh 的寬高是請求版本的；我們不正規化，
+ * 請求版本就是原圖，所以用參照記的寬高。後半句不加的理由見檔頭。
+ */
+export function requestImageHandleText(ref: ImageAttachmentRef): string {
+  const identity =
+    ref.name === undefined ? ref.attachmentId : `${JSON.stringify(ref.name)} (${ref.attachmentId})`;
+  return `Image ${identity}; request preview ${String(ref.width)}x${String(ref.height)}px.`;
 }
 
 /**
@@ -85,18 +104,29 @@ export function unavailableImageText(ref: ImageAttachmentRef): string {
  * 其餘欄位（id、名字、`additional_kwargs`、`response_metadata`）原樣帶過去，原訊息不動。
  *
  * @param messages - 要送出的訊息。
- * @param rewrite - 一個附件區塊換成什麼；可以是非同步（讀儲存）。
+ * @param rewrite - 一個附件區塊換成什麼；可以是非同步（讀儲存）。回一串時照順序攤平在原位（送出的圖是「把手、圖」兩塊）。
  */
 export async function rewriteAttachmentBlocks(
   messages: readonly BaseMessage[],
-  rewrite: (block: FileBlock | ImageBlock) => ProjectedBlock | Promise<ProjectedBlock>,
+  rewrite: (
+    block: FileBlock | ImageBlock,
+  ) =>
+    | ProjectedBlock
+    | readonly ProjectedBlock[]
+    | Promise<ProjectedBlock | readonly ProjectedBlock[]>,
 ): Promise<readonly BaseMessage[]> {
   let changed: BaseMessage[] | undefined;
   for (const [index, message] of messages.entries()) {
     if (!HumanMessage.isInstance(message) || !hasAttachmentBlocks(message)) continue;
     const content: unknown[] = [];
     for (const block of message.content as readonly unknown[]) {
-      content.push(isFileBlock(block) || isImageBlock(block) ? await rewrite(block) : block);
+      if (!isFileBlock(block) && !isImageBlock(block)) {
+        content.push(block);
+        continue;
+      }
+      const projected = await rewrite(block);
+      if (Array.isArray(projected)) content.push(...(projected as readonly ProjectedBlock[]));
+      else content.push(projected);
     }
     changed ??= [...messages];
     changed[index] = new HumanMessage({

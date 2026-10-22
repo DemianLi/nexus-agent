@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assumedFileLine,
   hasAttachmentBlocks,
+  requestImageHandleText,
   rewriteAttachmentBlocks,
   summaryImageText,
   textOnlyImageText,
@@ -62,6 +63,26 @@ describe('附件區塊投影', () => {
     expect((withAttachments.content as { type: string }[])[0]!.type).toBe('nexus-file');
   });
 
+  it('rewrite 回一串：照順序攤平在原位，不巢狀（送出的圖是「把手、圖」兩塊，#1566）', async () => {
+    const message = new HumanMessage({
+      content: [
+        { type: 'text', text: '前' },
+        { type: 'nexus-image', attachment: IMAGE },
+        { type: 'text', text: '後' },
+      ] as never,
+    });
+    const out = await rewriteAttachmentBlocks([message], async () => [
+      { type: 'text', text: 'HANDLE' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+    ]);
+    expect(out[0]!.content).toEqual([
+      { type: 'text', text: '前' },
+      { type: 'text', text: 'HANDLE' },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AAAA' } },
+      { type: 'text', text: '後' },
+    ]);
+  });
+
   it('非同步的 rewrite 照順序等', async () => {
     const message = new HumanMessage({
       content: [
@@ -92,5 +113,19 @@ describe('附件區塊投影', () => {
       '"x.png" (sha256:cccccccc)',
     );
     expect(summaryImageText(IMAGE)).toContain('(sha256:cccccccc, 4x3)');
+  });
+});
+
+describe('送出的圖前面那一行把手（#1566，逐字照 dsh requestImageHandleText 沒有路徑的前半句）', () => {
+  it('沒名字：完整的 attachmentId；寬高照參照', () => {
+    expect(requestImageHandleText(IMAGE)).toBe(
+      `Image sha256:${'c'.repeat(64)}; request preview 4x3px.`,
+    );
+  });
+
+  it('有名字：名字照 JSON 字串引起來（引號、反斜線跳脫），後面括號帶 attachmentId', () => {
+    expect(requestImageHandleText({ ...IMAGE, name: 'a "b"\\c.png' })).toBe(
+      `Image "a \\"b\\"\\\\c.png" (sha256:${'c'.repeat(64)}); request preview 4x3px.`,
+    );
   });
 });

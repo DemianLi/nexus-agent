@@ -4,7 +4,7 @@
  * `run.start` 帶的圖是內嵌 base64（`{ type: 'image', mediaType, data, name? }`，見 `@nexus/wire` 的 `PromptAttachment`）。
  * 這一支只做**驗證**：解 base64、從位元組本身認出格式與寬高、四道上限。存下來是 `AttachmentStore.saveImage`。
  *
- * ## 四道上限（照 dsh `attachment-local/src/index.ts:34-40`，`5badb150`）
+ * ## 五道上限（照 dsh `attachment-local/src/index.ts:34-42`，`687f282e`）
  *
  * | 上限 | 值 |
  * | --- | --- |
@@ -12,8 +12,13 @@
  * | 每句圖數 | 20（{@link MAX_IMAGES_PER_MESSAGE}） |
  * | 每句圖片總量 | 200 MiB（{@link MAX_MESSAGE_IMAGE_BYTES}） |
  * | 每張像素 | 6400 萬（{@link MAX_IMAGE_PIXELS}，寬乘高） |
+ * | 每張單邊 | 8192（{@link MAX_IMAGE_DIMENSION}，寬或高，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)） |
  *
- * 超過就**拒收，不縮圖**。位元組上限先看 base64 的長度（不解碼就知道），像素上限要先讀得出寬高。
+ * 超過就**拒收，不縮圖**。位元組上限先看 base64 的長度（不解碼就知道），像素與單邊上限要先讀得出寬高；先比總量、再比單邊，
+ * 照 dsh `image.ts:121-126`。
+ *
+ * **只收規範的 base64**（#1566，照 dsh `attachment/src/admission.ts:15-24` 的 `decodeCanonicalBase64`）：解碼後再編碼要等於原字串。
+ * `QR==` 這種尾端多帶位元的寫法字元集與長度都合格，解出來跟 `QQ==` 一樣，照 dsh 拒收。
  *
  * ## 偏離（依 AGENTS.md 登記）
  *
@@ -29,6 +34,7 @@
 import {
   IMAGE_MEDIA_TYPES,
   MAX_IMAGE_BYTES,
+  MAX_IMAGE_DIMENSION,
   MAX_IMAGE_PIXELS,
   MAX_IMAGES_PER_MESSAGE,
   MAX_MESSAGE_IMAGE_BYTES,
@@ -41,6 +47,7 @@ export interface ImageLimits {
   readonly maxImagesPerMessage: number;
   readonly maxMessageImageBytes: number;
   readonly maxImagePixels: number;
+  readonly maxImageDimension: number;
 }
 
 /** 出貨的上限，見檔頭的表。 */
@@ -49,6 +56,7 @@ export const DEFAULT_IMAGE_LIMITS: ImageLimits = {
   maxImagesPerMessage: MAX_IMAGES_PER_MESSAGE,
   maxMessageImageBytes: MAX_MESSAGE_IMAGE_BYTES,
   maxImagePixels: MAX_IMAGE_PIXELS,
+  maxImageDimension: MAX_IMAGE_DIMENSION,
 };
 
 /** 圖被拒的原因。`message` 是給人看的中文，指出是哪一張、哪一道上限。 */
@@ -57,7 +65,8 @@ export type ImageIntakeCode =
   | 'IMAGE_TOO_LARGE'
   | 'TOO_MANY_IMAGES'
   | 'MESSAGE_IMAGES_TOO_LARGE'
-  | 'IMAGE_TOO_MANY_PIXELS';
+  | 'IMAGE_TOO_MANY_PIXELS'
+  | 'IMAGE_DIMENSION_TOO_LARGE';
 
 export class ImageIntakeError extends Error {
   readonly code: ImageIntakeCode;
@@ -269,7 +278,12 @@ export function admitImages(
     );
   }
   return parts.map((part, index) => {
-    const bytes = new Uint8Array(Buffer.from(part.data, 'base64'));
+    const decoded = Buffer.from(part.data, 'base64');
+    // 規範才收（照 dsh `decodeCanonicalBase64`）：字元集與長度上面驗過了，這裡擋「尾端多帶位元」的另一種寫法。
+    if (decoded.toString('base64') !== part.data) {
+      throw new ImageIntakeError(`${label(index, part)}不是規範的 base64`, 'INVALID_IMAGE');
+    }
+    const bytes = new Uint8Array(decoded);
     const facts = probeImageHeader(bytes);
     if (facts === undefined) {
       throw new ImageIntakeError(
@@ -287,6 +301,12 @@ export function admitImages(
       throw new ImageIntakeError(
         `${label(index, part)}是 ${String(facts.width)}×${String(facts.height)}，超過每張 ${String(limits.maxImagePixels)} 像素的上限`,
         'IMAGE_TOO_MANY_PIXELS',
+      );
+    }
+    if (Math.max(facts.width, facts.height) > limits.maxImageDimension) {
+      throw new ImageIntakeError(
+        `${label(index, part)}是 ${String(facts.width)}×${String(facts.height)}，單邊超過 ${String(limits.maxImageDimension)} 像素的上限`,
+        'IMAGE_DIMENSION_TOO_LARGE',
       );
     }
     return { bytes, ...facts, name: part.name };

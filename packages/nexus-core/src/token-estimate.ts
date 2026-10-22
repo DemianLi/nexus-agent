@@ -104,6 +104,7 @@ import {
   isFileBlock,
   isImageBlock,
 } from './attachment-ref.js';
+import { requestImageHandleText } from './attachment-projection.js';
 import { modelNameOf } from './model-route.js';
 import { createHash } from 'node:crypto';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -320,12 +321,16 @@ function contentText(content: unknown): string {
     else if (block !== null && typeof block === 'object') {
       const { type, text: blockText } = block as { type?: unknown; text?: unknown };
       if (typeof type === 'string' && UNSENT_BLOCKS.has(type)) continue;
-      // 附件（#732）：檔案算**投影之後**那一行（組請求時就是換成這一行字，用的是同一個函式）；圖不是文字，由 {@link imageCount} 另算。
+      // 附件（#732）：檔案算**投影之後**那一行（組請求時就是換成這一行字，用的是同一個函式）；圖的像素由 {@link imageCount} 另算，
+      // 這裡只算送出時圖前面那一行把手（#1566，同一個函式）。被省略的圖沒有把手。
       if (isFileBlock(block)) {
         text += fileHandleText(block.attachment, fileModelPath(block.attachment));
         continue;
       }
-      if (isImageBlock(block)) continue;
+      if (isImageBlock(block)) {
+        if (block.offloaded !== true) text += requestImageHandleText(block.attachment);
+        continue;
+      }
       text += typeof blockText === 'string' ? blockText : JSON.stringify(block);
     }
   }
@@ -345,7 +350,8 @@ export function estimateTextTokens(text: string): number {
 
 /**
  * 內容裡有幾張圖。每張算 {@link IMAGE_TOKENS}，跟位元組數與像素數都無關。**被省略的不算**（#1270）：組請求時它們是一行佔位字，
- * 佔位字那一行的 token 不計（比 3,166 小兩個數量級）。
+ * 佔位字那一行的 token 不計（比 3,166 小兩個數量級）。送出的圖前面那一行把手照卡算進文字（`contentText`，#1566）：它跟著每一張送出的圖，
+ * 張數一多累積得起來；佔位字則是換掉那張圖，那張本來就不算。
  */
 function imageCount(content: unknown): number {
   return Array.isArray(content)

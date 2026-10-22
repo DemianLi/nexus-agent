@@ -17,8 +17,9 @@
  * - B：額度一張——第二張圖進來時最舊的那張被省略（日誌上有 `image/offload`），第三輪請求帶一張留著、一張標了省略的圖。
  *
  * 預算層寫在日誌上的 `context/measure.approxTokens`（`summarization.ts:1017` 那一格）就是摘要器對第三輪請求估到的 token。
- * 兩次的訊息、系統提示與工具都一樣，所以 **A − B 必須正好是一張圖的 `IMAGE_TOKENS`**：被省略的那張不算。摘要器若在
- * `imageOffload` 外面（修之前），B 的估算看到的是還沒標省略的請求，兩者相等，差是 0。
+ * 兩次的訊息、系統提示與工具都一樣，所以 **A − B 必須正好是一張圖：`IMAGE_TOKENS` 加它送出時前面那一行把手**
+ * （[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）：被省略的那張兩樣都不算。摘要器若在 `imageOffload` 外面（修之前），
+ * B 的估算看到的是還沒標省略的請求，兩者相等，差是 0。
  *
  * 不拿「摘要器內側探針看到的請求」當對照：探針在摘要器內側，系統提示被更內層的 middleware 補過，絕對值對不上
  * （實測差 110 token，與圖無關）；拿差值才與那一段無關。剪刀的壓力判斷（`summarization.ts:519`）與預算層在同一個最外層，
@@ -31,7 +32,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
-import { IMAGE_TOKENS } from '@nexus/core';
+import { estimateTextTokens, IMAGE_TOKENS, requestImageHandleText } from '@nexus/core';
 import type { AttachmentRef, SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -114,13 +115,15 @@ async function threeRounds(maxImages: number | undefined) {
 }
 
 describe('摘要器的估算不含已省略的圖（#1376）', () => {
-  it('被省略的那張不算：兩張都留著的估算比省略一張的正好多一張圖（IMAGE_TOKENS）', async () => {
+  it('被省略的那張不算：兩張都留著的估算比省略一張的正好多一張圖（IMAGE_TOKENS 加它的把手）', async () => {
     const kept = await threeRounds(undefined);
     const omitted = await threeRounds(1);
     // 前提：B 真的省略了一張，A 沒有（不然這個差什麼都沒量）。
     expect(kept.offloads).toBe(0);
     expect(omitted.offloads).toBe(1);
-    // 正確的行為：差一張圖。摘要器在 `imageOffload` 外面時這裡是 0（被省略的圖照算）。
-    expect(kept.approxTokens - omitted.approxTokens).toBe(IMAGE_TOKENS);
+    // 正確的行為：差一張圖（最舊的 FIRST）。摘要器在 `imageOffload` 外面時這裡是 0（被省略的圖照算）。
+    expect(kept.approxTokens - omitted.approxTokens).toBe(
+      IMAGE_TOKENS + estimateTextTokens(requestImageHandleText(FIRST)),
+    );
   }, 30_000);
 });

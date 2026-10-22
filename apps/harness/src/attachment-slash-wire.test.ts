@@ -239,9 +239,12 @@ describe('slash.run 帶附件', () => {
       expect((start?.data as { attachments: unknown }).attachments).toEqual(seen[0]);
       const user = requests[0]!.messages.find((m) => m.role === 'user')!;
       const blocks = user.content as { type: string; text?: string }[];
-      expect(blocks.map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
+      expect(blocks.map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
       expect(blocks[0]!.text).toContain('File "說明.txt"');
-      expect(blocks[2]!.text).toBe('請看附件');
+      expect(blocks[1]!.text).toMatch(
+        /^Image "s\.png" \(sha256:[0-9a-f]{64}\); request preview 7x5px\.$/u,
+      );
+      expect(blocks[3]!.text).toBe('請看附件');
       // 日誌順序：command/run → command/done → turn/start。
       expect(
         events()

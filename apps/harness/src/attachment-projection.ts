@@ -10,7 +10,7 @@
  *
  * - **檔案**：一行 {@link fileHandleText}。路徑讀得到（儲存裡還在）用「可讀」的措辭，讀不到用「無法存取，不要聲稱讀過」。
  * - **圖**：被圖片額度省略的（`block.offloaded`）→ 佔位字（`offloadedImageText`），先於下面兩條；型錄宣告了 `input` 而沒有 `image`（`'rejects'`）→ 佔位字（{@link textOnlyImageText}）；其餘（收圖、沒宣告）→ `image_url`
- *   data URL。沒宣告時照送，同 dsh（它的 `projectImagesForTextModel` 只在**明確**宣告純文字時才換）。圖的位元組讀不到
+ *   data URL，**前面一行把手**（`requestImageHandleText`，#1566，照 dsh pi-ai `context.ts:79-89`）。沒宣告時照送，同 dsh（它的 `projectImagesForTextModel` 只在**明確**宣告純文字時才換）。圖的位元組讀不到
  *   （儲存被清掉、被換過）→ 佔位字（{@link unavailableImageText}），那一步不因此失敗。
  *
  * ## 登記的偏離
@@ -26,6 +26,7 @@ import {
   fileHandleText,
   fileModelPath,
   offloadedImageText,
+  requestImageHandleText,
   rewriteAttachmentBlocks,
   textOnlyImageText,
   unavailableImageText,
@@ -39,7 +40,7 @@ import type { ImageSupport } from './model-catalog.js';
 export interface AttachmentSource {
   /** 這份檔案的存放路徑現在讀不讀得到。 */
   hasFile(ref: FileAttachmentRef): Promise<boolean>;
-  /** 一張圖的位元組；讀不到、大小或雜湊對不上就拋。 */
+  /** 一張圖的位元組；讀不到、大小、雜湊或檔頭（媒體類型、寬高）對不上就拋。 */
   readImage(ref: ImageAttachmentRef): Promise<Uint8Array>;
 }
 
@@ -70,10 +71,15 @@ export function projectAttachments(
     if (imageSupport === 'rejects') return { type: 'text', text: textOnlyImageText(ref) };
     try {
       const bytes = await source.readImage(ref);
-      return {
-        type: 'image_url',
-        image_url: { url: `data:${ref.mediaType};base64,${Buffer.from(bytes).toString('base64')}` },
-      };
+      return [
+        { type: 'text', text: requestImageHandleText(ref) },
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:${ref.mediaType};base64,${Buffer.from(bytes).toString('base64')}`,
+          },
+        },
+      ];
     } catch {
       return { type: 'text', text: unavailableImageText(ref) };
     }

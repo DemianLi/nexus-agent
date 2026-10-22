@@ -80,6 +80,12 @@ export const MAX_MESSAGE_IMAGE_BYTES = 200 * 1024 * 1024;
 export const MAX_IMAGE_PIXELS = 64_000_000;
 
 /**
+ * 每張圖的單邊像素上限，同 dsh 的 `DEFAULT_MAX_IMAGE_DIMENSION`（`attachment-local/src/index.ts:42`，`687f282e`）：8192。
+ * 像素總量之外再擋一道：20000×100 的長截圖總量遠低於 6400 萬，卻是端點收不下的形狀（[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）。
+ */
+export const MAX_IMAGE_DIMENSION = 8192;
+
+/**
  * 收圖檢查的錯誤碼：這個會話目前的模型宣告了輸入種類、而裡面沒有 `image`。同 dsh 的 `MODEL_DOES_NOT_SUPPORT_IMAGES`，
  * 碼的寫法照我們其他的（`turn_not_found` 那一族）。那句話不進佇列、日誌不多東西。
  */

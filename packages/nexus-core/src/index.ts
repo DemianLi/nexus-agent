@@ -271,6 +271,7 @@ export {
   assumedFileLine,
   hasAttachmentBlocks,
   offloadedImageText,
+  requestImageHandleText,
   rewriteAttachmentBlocks,
   summaryImageText,
   textOnlyImageText,
