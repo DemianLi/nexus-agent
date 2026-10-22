@@ -336,7 +336,7 @@ type FrozenRetryPolicy = Readonly<
 >;
 
 /**
- * 把驗過的重試政策凍結，見檔頭「偏離二」。**複製再凍結**，同 dsh `retry-policy.ts:182`：使用者寫進設定的那個陣列
+ * 把驗過的重試政策凍結，見檔頭「解出來的政策是凍結的」那一段（照 dsh、沒有偏離）。**複製再凍結**，同 dsh `retry-policy.ts:182`：使用者寫進設定的那個陣列
  * 不被凍結、也不會被這一份共用；`backoff` 是巢狀物件，要另外凍一層（dsh 由 `resolveBackoff` 凍，`:140`）。
  *
  * @param policy - 驗過的政策。
