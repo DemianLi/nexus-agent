@@ -168,6 +168,8 @@ export interface Conversation {
    * 下行被伺服器明說不收、而且有一句給使用者看的話時，就是那一句；這時 {@link connectionError} 不在——server 的原文不往畫面送。
    * thread 數滿了（[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)）是暫時的：重試照舊，接回來就清掉。
    * 子代理的會話（[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）是永久的：不排重試，{@link reconnecting} 不在。
+   * 伺服器送來看不懂的資料（#1601 `N0758`）也是這一格，{@link connectionError} 同樣不在：停止自動重連，{@link reconnecting} 照樣在，
+   * 等人按 {@link reconnectNow}。
    */
   readonly refusal?: string;
   /**
@@ -176,14 +178,15 @@ export interface Conversation {
    */
   readonly connections: number;
   /**
-   * 下行斷了（或第一次就沒開成），正在自動重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）。
+   * 下行斷了（或第一次就沒開成），等著重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：多半是照退避自動重接；
+   * 伺服器送來看不懂的資料時（#1601 `N0758`）停止自動重連，只等人按 {@link reconnectNow}，這時 {@link refusal} 有那一句。
    * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
    * 回到線上才從頭算。
    */
   readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
   /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
   readonly recovered: boolean;
-  /** 不等退避，立刻重接一次，退避從頭算。沒在重接時什麼都不做。 */
+  /** 不等退避，立刻重接一次，退避從頭算；停止自動重連的（#1601）也從這裡重開。下行開著、或被永久拒絕時什麼都不做。 */
   reconnectNow(): void;
   /**
    * 上一個上行指令被拒的原因。
@@ -385,7 +388,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   /**
    * 重接的帳。**放 ref 不放 state**：計時器與 `online` 事件在 effect 外面讀寫它，不需要為它重畫。
    * `attempt` 是連續第幾次重試（接上就歸零）；`lost` 是下行現在斷著；`everConnected` 分「中斷」與「從沒連上」；
-   * `halted` 是伺服器送來看不懂的資料、停了自動重連（#1601 `N0758`），只有「立刻重連」清得掉。
+   * `halted` 是最後一次失敗是伺服器送來看不懂的資料、停了自動重連（#1601 `N0758`）：「立刻重連」、接上、一般的斷線都清掉它。
    */
   const retry = useRef<{
     attempt: number;
@@ -500,6 +503,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     const lose = (reason: string | undefined, refused?: string) => {
       const book = retry.current;
       book.lost = true;
+      // 這次是一般的斷線：`halted` 只講「最後一次失敗是看不懂的資料」，在路上那次停住過也不算數（#1601）。
+      book.halted = false;
       clearTimeout(book.recoveredTimer);
       setRecovered(false);
       setConnected(false);
@@ -589,6 +594,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         const book = retry.current;
         const wasLost = book.lost && book.everConnected;
         book.lost = false;
+        // 計時器排的那次到點、還沒換上新的一輪時，在路上那次可能才停住（#1601）：接上了就不算停著。
+        book.halted = false;
         book.attempt = 0;
         book.everConnected = true;
         setConnected(true);

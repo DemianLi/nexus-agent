@@ -96,7 +96,7 @@ export function StatusLine({
    * 不重試（子代理的會話，[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）就單獨一行，沒有「立刻重連」。
    */
   refusal?: string;
-  /** 下行斷了、正在自動重接（見 `useConversation` 的 `reconnecting`）。 */
+  /** 下行斷了、等著重接：多半是自動重接，看不懂的資料時只等人按（見 `useConversation` 的 `reconnecting`）。 */
   reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
   /** 剛重新接上。 */
   recovered?: boolean;

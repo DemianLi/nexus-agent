@@ -566,23 +566,37 @@ describe.each([false, true])(
 /**
  * **真的 `createWireClient`**，只注入 `fetch`（#1601 `N0758`）：下行是測試推進去的 SSE 位元組，歷史是測試給的 JSON。壞資料由
  * client 自己的驗證（`decodeSseStream` 的 `assertWireEvent`、`readHistory` 的頁欄位與每一筆）認出來、拋 `WireProtocolError`，
- * 測試不自己丟替身：拿掉 nexus-wire 那一側的接線，這裡也會紅。`slashList` 不在這條路上，換成固定的回答。
+ * 測試不自己丟替身：拿掉 nexus-wire 那一側的接線，這裡也會紅。`slashList` 不在這條路上，換成固定的回答。thread 認 `t` 與 `u`。
  */
 function wiredClient() {
   const encoder = new TextEncoder();
   const streams: ReadableStreamDefaultController<Uint8Array>[] = [];
   const goodPage = { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false };
   let page: unknown = goodPage;
+  let holdNext = false;
+  const held: ((page: unknown) => void)[] = [];
+  let failNext: string | undefined;
   const opened = vi.fn();
+  const threads = ['t', 'u'];
   const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = new URL(String(input)).pathname;
-    if (path === historyPath('t')) {
-      return new Response(JSON.stringify({ type: 'success', result: page }), {
+    if (threads.some((id) => path === historyPath(id))) {
+      let result = page;
+      if (holdNext) {
+        holdNext = false;
+        result = await new Promise((resolve) => held.push(resolve));
+      }
+      return new Response(JSON.stringify({ type: 'success', result }), {
         headers: { 'content-type': 'application/json' },
       });
     }
-    if (path !== streamPath('t')) throw new Error(`沒預期的請求：${path}`);
+    if (!threads.some((id) => path === streamPath(id))) throw new Error(`沒預期的請求：${path}`);
     opened();
+    if (failNext !== undefined) {
+      const message = failNext;
+      failNext = undefined;
+      throw new TypeError(message);
+    }
     let controller!: ReadableStreamDefaultController<Uint8Array>;
     const body = new ReadableStream<Uint8Array>({ start: (c) => void (controller = c) });
     streams.push(controller);
@@ -605,6 +619,13 @@ function wiredClient() {
     send: (data: unknown) => latest().enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`)),
     /** 最新那條下行正常收掉（伺服器收線、網路斷）。 */
     end: () => latest().close(),
+    /** 最新那條下行在網路層出錯：一般的斷線，`connectionError` 是這一句。 */
+    fail: (message: string) => latest().error(new TypeError(message)),
+    /** 下一次開線在網路層失敗（`fetch` 拋）。 */
+    failNextOpen: (message: string) => (failNext = message),
+    /** 扣住下一次的歷史頁：開線停在路上，等 {@link release} 交出那一頁。 */
+    hold: () => (holdNext = true),
+    release: (next: unknown) => held.shift()!(next),
     setPage: (next: unknown) => (page = next),
     goodPage,
   };
@@ -712,6 +733,133 @@ describe.each([false, true])(
       });
       await tick(RECONNECT_MAX_MS);
       expect(wire.opened).toHaveBeenCalledTimes(opened + 1);
+      expect(result.current.connected).toBe(true);
+    });
+
+    it('競態：排著的那次到點、還沒換上時，在路上那次才停住；接著那次接上，之後一般的斷線照舊自動重連', async () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const wire = wiredClient();
+      const { result } = renderHook(() => useConversation({ client: wire.client, threadId: 't' }));
+      await tick();
+      wire.fail('network error');
+      await tick();
+      wire.hold();
+      await tick(250);
+      const opened = wire.opened.mock.calls.length;
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      // 同一個 act：計時器到點（新的一輪排著、還沒換上），在路上那次這時才拿到壞的那一頁。
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+        wire.release({ ...wire.goodPage, events: [BROKEN_FRAME] });
+        for (let i = 0; i < 20; i++) await Promise.resolve();
+      });
+      await tick();
+      // 在路上那次真的停住過：沒有這一條，競態沒做出來，這一格白綠。
+      expect(warn.mock.calls.some(([error]) => error instanceof WireProtocolError)).toBe(true);
+      expect(wire.opened).toHaveBeenCalledTimes(opened + 1);
+      expect(result.current.connected).toBe(true);
+      expect(result.current.refusal).toBeUndefined();
+
+      online = false;
+      wire.end();
+      await tick();
+      online = true;
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      await tick(RECONNECT_MAX_MS);
+      expect(wire.opened).toHaveBeenCalledTimes(opened + 2);
+      expect(result.current.connected).toBe(true);
+    });
+
+    it('換 thread：前一條停住，新的一條第一次開線在網路層失敗，網路回來照常自動重連', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const wire = wiredClient();
+      const { result, rerender } = renderHook(
+        ({ threadId }) => useConversation({ client: wire.client, threadId }),
+        { initialProps: { threadId: 't' } },
+      );
+      await tick();
+      wire.send(BROKEN_FRAME);
+      await tick();
+      expect(result.current.refusal).toBe(THREAD_PROTOCOL_ERROR_TEXT);
+      const opened = wire.opened.mock.calls.length;
+
+      online = false;
+      wire.failNextOpen('network error');
+      rerender({ threadId: 'u' });
+      await tick();
+      expect(wire.opened).toHaveBeenCalledTimes(opened + 1);
+      expect(result.current.refusal).toBeUndefined();
+      expect(result.current.reconnecting?.offline).toBe(true);
+
+      online = true;
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+      await tick(RECONNECT_MAX_MS);
+      expect(wire.opened).toHaveBeenCalledTimes(opened + 2);
+      expect(result.current.connected).toBe(true);
+    });
+
+    it('停住時收掉排著的那一次：開線在路上時網路回來排了重試，這次拿到壞資料，退避跑完也不再開', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const wire = wiredClient();
+      const { result } = renderHook(() => useConversation({ client: wire.client, threadId: 't' }));
+      await tick();
+      wire.fail('network error');
+      await tick();
+      wire.hold();
+      await tick(250);
+      const opened = wire.opened.mock.calls.length;
+      act(() => {
+        window.dispatchEvent(new Event('online'));
+      });
+
+      wire.release({ ...wire.goodPage, events: [BROKEN_FRAME] });
+      await tick();
+      expect(result.current.refusal).toBe(THREAD_PROTOCOL_ERROR_TEXT);
+      await tick(RECONNECT_MAX_MS * 4);
+      expect(wire.opened).toHaveBeenCalledTimes(opened);
+    });
+
+    it('上一次一般失敗的原因不留：重試時碰到壞資料，畫面只有那一句', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const wire = wiredClient();
+      const { result } = renderHook(() => useConversation({ client: wire.client, threadId: 't' }));
+      await tick();
+      wire.fail('network error');
+      await tick();
+      expect(result.current.connectionError).toBe('network error');
+
+      wire.setPage({ ...wire.goodPage, events: [BROKEN_FRAME] });
+      await tick(250);
+      expect(result.current.refusal).toBe(THREAD_PROTOCOL_ERROR_TEXT);
+      expect(result.current.connectionError).toBeUndefined();
+    });
+
+    it('按「立刻重連」那次還在路上時網路斷了：狀態列改講離線，不再是停住的那一種', async () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const wire = wiredClient();
+      const { result } = renderHook(() => useConversation({ client: wire.client, threadId: 't' }));
+      await tick();
+      wire.send(BROKEN_FRAME);
+      await tick();
+      wire.hold();
+      act(() => result.current.reconnectNow());
+      await tick();
+
+      online = false;
+      act(() => {
+        window.dispatchEvent(new Event('offline'));
+      });
+      expect(result.current.reconnecting).toEqual({ wasConnected: true, offline: true });
+
+      online = true;
+      wire.release(wire.goodPage);
+      await tick();
       expect(result.current.connected).toBe(true);
     });
   },
