@@ -13,8 +13,12 @@
  *   樣子、補上子行程裡的 Node 要的旗標；那一層已疊進共用的那一份（#746），git 快照的環境自然帶著。git 自己不看
  *   那個旗標、只讀代理變數，快照又不碰網路，所以這一層對今天的 git 呼叫沒有可觀察的效果——跟著共用函式走，
  *   是為了將來哪個 git 底下的 Node 工具（hook、credential helper）連外時跟父行程走同一條路。
- * - **逾時與輸出上限**：能力層提供的 `AbortSignal`、`graceMs`、stdout 位元組上限（保留尾端），在
- *   {@link GitRunner.run} 裡自己做。
+ * - **逾時、輸出上限與管線排空**：能力層提供的 `AbortSignal`、`graceMs`、stdout 位元組上限（保留尾端），在
+ *   {@link GitRunner.run} 裡自己做。**管線排空**也在這裡：dsh 的 `bindManagedProcess`
+ *   （`packages/subprocess/subprocess-local/src/spawn.ts:409-415`）在直接子行程 `exit` 之後給 `graceMs` 讓管線排空，
+ *   到時間就強制結算並銷毀收集用的管線，不等後代把 pipe 關掉。`run` 同樣以 `'exit'` 為界、到 {@link TERMINATE_GRACE_MS}
+ *   銷毀 stdout／stderr、用 exit 的結束碼結算（#1560 N1110）；只聽 `'close'` 的話，後代（會自己 fork 背景行程的
+ *   clean filter、fsmonitor）握著管線時 `run` 永遠不回來，recorder 的 dispose 與 thread 的閒置逐出都會等它。
  * - **找執行檔**：能力層的 `resolveExecutable` 在淨化過的 `PATH` 裡找，見 {@link resolveGitExecutable}。
  * - **行程結束時同步強殺**（[#1542](https://github.com/DemianLi/nexus-agent/issues/1542)）：dsh 的 `subprocess-local` 在 `'exit'`
  *   上同步終止每個還活著的子行程（`packages/subprocess/subprocess-local/src/index.ts:90-120`，`687f282e`）。serve 被強制結束時
@@ -170,17 +174,34 @@ export class GitRunner {
         child.stdin!.on('error', () => undefined);
         child.stdin!.end(options.stdin);
       }
-      child.once('error', (error) => {
+      let settled = false;
+      let drain: NodeJS.Timeout | undefined;
+      const finish = (): boolean => {
+        if (settled) return false;
+        settled = true;
         untrack();
         signal.removeEventListener('abort', terminate);
         clearTimeout(grace);
-        reject(error);
+        clearTimeout(drain);
+        return true;
+      };
+      child.once('error', (error) => {
+        if (finish()) reject(error);
+      });
+      // `'close'` 要等 stdio 全關；後代行程（會自己 fork 背景行程的 clean filter、fsmonitor）繼承了管線的話，
+      // 直接子行程死了它也不來，逾時與 SIGKILL 殺的都是已經死掉的那一個。所以以 `'exit'` 為界：之後給管線
+      // 一段時間排空，到了就銷毀收集用的管線、用 exit 拿到的結束碼結算，不等後代（同 dsh `bindManagedProcess`，
+      // 見檔頭「管線排空」）。
+      child.once('exit', (code) => {
+        drain = setTimeout(() => {
+          child.stdout?.destroy();
+          child.stderr?.destroy();
+          if (finish()) resolveExit(code);
+        }, TERMINATE_GRACE_MS);
+        drain.unref();
       });
       child.once('close', (code) => {
-        untrack();
-        signal.removeEventListener('abort', terminate);
-        clearTimeout(grace);
-        resolveExit(code);
+        if (finish()) resolveExit(code);
       });
     });
     if (signal.aborted) throw failure();
