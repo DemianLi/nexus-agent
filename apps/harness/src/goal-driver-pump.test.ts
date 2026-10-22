@@ -1027,6 +1027,45 @@ describe('續行走送出佇列（#638）', () => {
   });
 });
 
+describe('續行預約去重（#reserveGoalRound，#1575 紅燈 6 的單獨一刀）', () => {
+  /**
+   * 佇列上已經有一件 `goal` 預約、而 `running` 為假——只有「重啟折回來、停住不自己跑」的預約是這個形狀（排進去的預約一進佇列
+   * `running` 就為真，排在它後面的問會被 `this.running` 先擋掉）。這時再來一次「該排第 1 輪」不能多排一份。
+   * 上面 N0372 的紅燈 6 釘的是「兩道一起」；這一條釘去重那一道**單獨**。
+   */
+  it('佇列上已有停住的 goal 預約：目標一建立，排程器不再多預約一份', async () => {
+    const seed = new SessionLogClass('seed-root');
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [
+        {
+          id: 'stale-goal',
+          text: '續行第 1 輪',
+          source: { kind: 'goal', goalId: 'goal-9' as never, revision: 1, round: 1 },
+        },
+      ],
+    });
+    const { pump, goals, stop } = await build({
+      turns: [QUIET],
+      threadId: 'queue-dedupe-parked',
+      withDriver: true,
+      rootSeed: seed.events,
+    });
+    expect(pump.inbox.map((item) => item.id)).toEqual(['stale-goal']);
+    expect(pump.running).toBe(false);
+
+    goals.serviceFor(pump.sessionLog)?.create({ objective: '把 CI 修綠', maxGoalRounds: 3 });
+    // 排程器是被 goal/change 叫起來的：等它問完（飛行中為真→回到假）。
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(pump.goalRoundInFlight).toBe(false);
+
+    expect(pump.inbox.map((item) => item.id)).toEqual(['stale-goal']);
+    expect(startKinds(pump.sessionLog)).toEqual([]);
+    await stop();
+  });
+});
+
 describe('封存的會話（#633）', () => {
   /** 日誌上每一顆 `turn/end` 的收尾原因種類（沒帶 reason ＝ 正常收）。 */
   function endKinds(log: SessionLog): string[] {
@@ -1294,6 +1333,8 @@ describe('續行等背景子代理（N0372）', () => {
   async function rig(options: {
     readonly limit: number;
     readonly turns?: readonly ScriptedTurn[];
+    /** 結算要不要叫醒主對話開一輪（預設要）。關掉就只剩「等的人被放行」這一條路，沒有結算輪插進來。 */
+    readonly notifySettled?: boolean;
   }) {
     const hold = gateOf();
     const ref: { host?: BackgroundSubagentHost } = {};
@@ -1310,13 +1351,15 @@ describe('續行等背景子代理（N0372）', () => {
     ref.host = new BackgroundSubagentHost({
       sessions: built.pump.sessions,
       compile: () => holdingAgent(hold.opened),
-      onSettled: (settlement) =>
+      onSettled: (settlement) => {
+        if (options.notifySettled === false) return;
         built.pump.notifySettled({
           text: settlement.text,
           summary: settlement.summary,
           reason: settlement.reason,
           senderSessionId: settlement.sessionId,
-        }),
+        });
+      },
     });
     return { ...built, host: ref.host, hold };
   }
@@ -1422,6 +1465,48 @@ describe('續行等背景子代理（N0372）', () => {
     hold.open();
     await host.close();
     expect(goalRounds(pump.sessionLog)).toEqual([1]);
+    await stop();
+  });
+
+  it('紅燈 6：兩次排程同時在等，放行後只預約一份 goal（#reserveGoalRound 去重）', async () => {
+    // **結算不叫醒主對話**（`notifySettled: false`）：不然放行的同一刻會開一輪結算輪，把兩個排程都擋成「日誌上有輪在跑」，去重那一行碰不到。
+    // 第 1 輪派出子代理 → 排程 A 在等；等的時候人又講了一句，那一輪收完 → 排程 B 也進來等。兩個都看得到「該排第 2 輪」。
+    const turns: ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
+      },
+      { content: '建好了。' },
+      { content: '', toolCalls: [{ name: 'spawn_bg', args: {} }] },
+      { content: '派出去了。' },
+      { content: '人的第二句，我回了。' },
+      { content: '收到結算。' },
+      QUIET,
+      QUIET,
+    ];
+    const { pump, host, hold, state, stop } = await rig({ limit: 5, turns, notifySettled: false });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await until(() => pump.goalRoundInFlight);
+    // 排程 A 在等的時候，人插進一句；那一輪收完會再問一次排程器（排程 B）。
+    await pump.submit({ kind: 'message', text: '另外還有一件事' });
+    await until(() => state.turn >= 5);
+    await settle(pump);
+    // 正向錨點：兩個排程確實都還在等——第 1 輪預約過了，第 2 輪還沒有任何一份。
+    expect(host.hasRunning()).toBe(true);
+    const goalSplices = (): number[] =>
+      splicesOf(pump.sessionLog).flatMap((splice) =>
+        splice.inserted.flatMap((item) => (item.source.kind === 'goal' ? [item.source.round] : [])),
+      );
+    expect(goalSplices()).toEqual([1]);
+    hold.open();
+    await until(() => goalRounds(pump.sessionLog).length >= 2);
+    await settle(pump);
+    // 第 2 輪只被預約過一次；沒去重的話，A 與 B 各預約一份（第二份領走時驗不過被丟，但佇列上確實排過兩份）。
+    expect(goalSplices().filter((round) => round === 2)).toHaveLength(1);
+    expect(goalRounds(pump.sessionLog)).toContain(2);
+    await host.close();
     await stop();
   });
 
