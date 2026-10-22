@@ -265,6 +265,36 @@ describe('瀏覽器端的 client', () => {
     expect(await serve([good, good]).threadHistory('t')).toMatchObject({ kind: 'ok' });
   });
 
+  // 頁信封壞掉與事件壞掉是同一件事：歷史裡的壞資料每次重連都抓到同一份，呼叫端要能用同一個型別認出「重連沒有用」（#1555，PM 審查）。
+  it.each([
+    ['events', { events: 'nope', firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false }],
+    ['firstSeq', { events: [], firstSeq: '0', throughSeq: 0, hasMore: false, legacy: false }],
+    ['throughSeq', { events: [], firstSeq: 0, hasMore: false, legacy: false }],
+    ['hasMore', { events: [], firstSeq: 0, throughSeq: 0, hasMore: 'no', legacy: false }],
+    ['legacy', { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: null }],
+    ['result', null],
+    ['result', 'oops'],
+  ])(
+    '歷史頁的 %s 欄位不對：threadHistory 與 subagentHistory 都拋 WireProtocolError，field 指名那一格',
+    async (field, result) => {
+      const client = createWireClient({
+        baseUrl: 'http://agent.test/',
+        fetch: async () => Response.json({ type: 'success', result }),
+      });
+      for (const call of [
+        () => client.threadHistory('t'),
+        () => client.subagentHistory('t', 'bg-0123456789ab'),
+      ]) {
+        const error = await call().then(
+          () => undefined,
+          (reason: unknown) => reason,
+        );
+        expect(error).toBeInstanceOf(WireProtocolError);
+        expect((error as WireProtocolError).field).toBe(field);
+      }
+    },
+  );
+
   it('下行預設訂全部放行的 channel，回來的是解好的封包', async () => {
     const { calls, client } = stub(() => sseResponse([FRAME]));
     const events = await client.openEvents('t2');

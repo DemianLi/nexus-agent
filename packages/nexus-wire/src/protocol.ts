@@ -869,6 +869,9 @@ export type ThreadFeedFrame =
  *   沒有這幾個欄位（時間在 `params.timestamp`，是 `@langchain/protocol` 的 `Extensible` 欄位，折疊器不讀它）。取而代之驗的是我們信封
  *   的等價物：`type`（dsh 的 `type` 是字串）、`method`、`params.namespace`。
  * - **錯誤類別的方向相反**，見 {@link WireProtocolError}。
+ * - **`seq` 若有才驗，沒有不拒收。** dsh 的信封必帶 `seq`（`session-wire-event.ts:36`）。我們的歷史 `Event` 一律不帶 `seq`
+ *   （既有偏離，見 {@link historyPath} 的「歷史的 `Event` 一律不帶 `seq`」與 `conversation-history.ts` 的 `frame()`）：帶了耐久 seq，之後的即時 frame 會被
+ *   折疊器當重複丟掉。實測 8,670 顆歷史事件全部不帶；必帶的話整份歷史都會被拒。撤除條件（建議）：歷史改帶傳輸 seq 之後，改成必帶。
  *
  * @param value - 解出來的一顆。
  * @param at - 這一顆在更大的資料裡的位置（歷史頁的 `events[3]`），接在欄位路徑前面；省略就是頂層。
