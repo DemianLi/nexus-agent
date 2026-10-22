@@ -433,9 +433,7 @@ export class GoalService implements GoalServiceContract {
     // **每一顆 goal 變更都把授權打回 disarmed**，除非那一顆正是這次變更自己掛的邊。
     // 別人（未來的工具、另一個分頁）改動了目標，這個 process 先前拿到的續行授權就不再
     // 對得上他們改成的東西。
-    this.#setActivation(
-      this.#pending?.seq === event.seq ? this.#pending.activation : 'disarmed',
-    );
+    this.#setActivation(this.#pending?.seq === event.seq ? this.#pending.activation : 'disarmed');
   }
 
   /**

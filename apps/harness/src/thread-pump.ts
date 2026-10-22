@@ -1978,7 +1978,11 @@ export class ThreadPump {
    * @param change - 服務交來的變化（`GoalActivationChange`）。
    */
   notifyGoalActivation(change: {
-    readonly goal?: { readonly id: string; readonly revision: number; readonly activation: 'armed' | 'disarmed' };
+    readonly goal?: {
+      readonly id: string;
+      readonly revision: number;
+      readonly activation: 'armed' | 'disarmed';
+    };
   }): void {
     if (this.#closed) return;
     this.#goalActivation = change.goal?.activation ?? 'disarmed';
