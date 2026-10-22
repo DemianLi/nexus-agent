@@ -9,7 +9,7 @@ import type {
   WireClient,
   WireFeedbackItem,
 } from '@nexus/wire';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '@/App';
@@ -394,6 +394,9 @@ describe('伺服器不收評分（not_supported，#1849）', () => {
     [FEEDBACK_COPY.like, FEEDBACK_COPY.dislike].map((name) =>
       within(entryOf('收工了。')).getByRole('button', { name }),
     );
+  /** 停用是 `aria-disabled`、不是原生 `disabled`：原生停用會把停在鈕上的焦點丟回 body（§8）。 */
+  const stopped = (button: HTMLElement) =>
+    button.getAttribute('aria-disabled') === 'true' && !(button as HTMLButtonElement).disabled;
 
   it('滑過之後：讚踩停用、旁邊講原因（掛在描述上，不是 live region）；「這一輪的過程」照常', async () => {
     seq = 0;
@@ -407,7 +410,7 @@ describe('伺服器不收評分（not_supported，#1849）', () => {
     const note = within(entryOf('收工了。')).getByText(FEEDBACK_COPY.unsupported);
     expect(note.closest('[role=status]')).toBeNull();
     for (const button of buttons()) {
-      expect((button as HTMLButtonElement).disabled).toBe(true);
+      expect(stopped(button)).toBe(true);
       expect(document.getElementById(button.getAttribute('aria-describedby') ?? '')).toBe(note);
     }
     expect(within(entryOf('收工了。')).queryByText(FEEDBACK_COPY.load)).toBeNull();
@@ -416,13 +419,31 @@ describe('伺服器不收評分（not_supported，#1849）', () => {
     ).toBe(false);
   });
 
+  it('聚焦到讚（鍵盤）：讀回講不收之後焦點還在那顆鈕上，描述唸得到那一句；點下去不開對話框', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'unsupported' });
+    render(<App client={fake.client} />);
+    await ready();
+    const like = buttons()[0]!;
+    act(() => like.focus());
+    await waitFor(() => expect(stopped(buttons()[0]!)).toBe(true));
+    expect(document.activeElement).toBe(buttons()[0]);
+    expect(
+      document.getElementById(buttons()[0]!.getAttribute('aria-describedby') ?? '')?.textContent,
+    ).toBe(FEEDBACK_COPY.unsupported);
+    fireEvent.click(buttons()[0]!);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(fake.puts).toEqual([]);
+    expect(document.activeElement).toBe(buttons()[0]);
+  });
+
   it('沒滑過就直接點（觸控）：等讀回，不收評分就不開對話框、不送 put', async () => {
     seq = 0;
     const fake = fakeClient({ list: 'unsupported' });
     render(<App client={fake.client} />);
     await ready();
     fireEvent.click(buttons()[1]!);
-    await waitFor(() => expect((buttons()[1] as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect(stopped(buttons()[1]!)).toBe(true));
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(fake.puts).toEqual([]);
     expect(fake.lists).toHaveLength(1);
@@ -434,7 +455,7 @@ describe('伺服器不收評分（not_supported，#1849）', () => {
     render(<App client={fake.client} />);
     await ready();
     fireEvent.pointerEnter(buttons()[0]!);
-    await waitFor(() => expect((buttons()[0] as HTMLButtonElement).disabled).toBe(true));
+    await waitFor(() => expect(stopped(buttons()[0]!)).toBe(true));
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/feedback' } });
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     const dialog = await screen.findByRole('dialog');
