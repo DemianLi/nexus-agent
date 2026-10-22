@@ -568,3 +568,36 @@ describe('inspectionOf', () => {
     });
   });
 });
+
+describe('等背景子代理停下來：叫醒中的也算在推進（#1575，dsh waitForChildren 先等 materializations，manager.ts:255、:260）', () => {
+  it('冷子代理正在重建：不兌現；重建完才兌現 true', async () => {
+    const m = make(['bg-1'], [fixture('bg-1')]);
+    let release!: () => void;
+    m.failures.slowResume = new Promise<void>((resolve) => (release = resolve));
+    const waking = m.host.resume('bg-1');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    let resolved = false;
+    const waiting = m.host.whenChildrenSettled().then((waited) => {
+      resolved = true;
+      return waited;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(m.host.hasRunning()).toBe(false);
+    expect(resolved).toBe(false);
+    release();
+    await waking;
+    expect(
+      await Promise.race([
+        waiting,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('卡住了')), 3000)),
+      ]),
+    ).toBe(true);
+    await m.host.close();
+  });
+
+  it('沒有叫醒中的、也沒有在跑的：立刻 false', async () => {
+    const m = make(['bg-1'], [fixture('bg-1')]);
+    expect(await m.host.whenChildrenSettled()).toBe(false);
+    await m.host.close();
+  });
+});

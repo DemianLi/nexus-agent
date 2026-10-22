@@ -20,6 +20,7 @@ import {
   CONCURRENCY_SAFE_METADATA_KEY,
   fromLoggedMessage,
   REPEAT_REMINDER_MARKER,
+  TURN_CANCEL_CONFIG_KEY,
 } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { SessionLog as SessionLogClass } from '@nexus/core';
@@ -28,6 +29,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
+import { BackgroundSubagentHost } from './background-subagents.js';
+import type { BackgroundAgent } from './background-subagents.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
@@ -1228,6 +1231,225 @@ describe('封存的會話（#633）', () => {
     // 核准是在叫模型之前就給的：dsh 的一步是「叫模型→跑工具」，`ArchivedSessionGate` 掛在步前，所以掛著的核准照樣落地。
     const results = pump.sessionLog.events.filter((event) => event.type === 'tool/result');
     expect(results).toHaveLength(1);
+    await stop();
+  });
+});
+
+/**
+ * 目標續行要等背景子代理（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372）：**真 pump、真背景 host、腳本模型**。
+ *
+ * 不等的話：某一輪派出背景子代理就結束，下一個續行輪馬上排上，模型看一眼就收工，`roundsStarted` 一路加到 `round-limit`。
+ * 派出背景子代理用一顆夾具工具（`spawn_bg`）做，它呼叫 host 的 `start`，跟產品裡 `subagent` 工具的落點是同一個。
+ */
+describe('續行等背景子代理（N0372）', () => {
+  /** 背景子代理的假 agent：等 `hold` 才收；`abortable` 時被中止就收。 */
+  function holdingAgent(hold: Promise<void>): BackgroundAgent {
+    return {
+      async streamEvents(_input: unknown, config: { configurable: Record<string, unknown> }) {
+        const signal = config.configurable[TURN_CANCEL_CONFIG_KEY] as AbortSignal | undefined;
+        await Promise.race([
+          hold,
+          new Promise<void>((resolve) => signal?.addEventListener('abort', () => resolve())),
+        ]);
+        return (async function* () {})() as never;
+      },
+    } as never;
+  }
+
+  function spawnPlugin(spawn: () => void): PluginEntry {
+    return {
+      plugin: {
+        name: 'spawn-fixture',
+        apply(registration) {
+          registration.tools.register(
+            tool(
+              () => {
+                spawn();
+                return '已派出去';
+              },
+              { name: 'spawn_bg', description: '派一個背景子代理', schema: z.object({}) },
+            ),
+          );
+        },
+      },
+    };
+  }
+
+  /** 第 1 輪（人那一輪建目標，上限 `limit`）→ 續行第 1 輪派出子代理。 */
+  const turnsFor = (limit: number): readonly ScriptedTurn[] => [
+    {
+      content: '',
+      toolCalls: [
+        { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: limit } },
+      ],
+    },
+    { content: '建好了。' },
+    { content: '', toolCalls: [{ name: 'spawn_bg', args: {} }] },
+    { content: '派出去了。' },
+    { content: '收到結算。' },
+    QUIET,
+    QUIET,
+  ];
+
+  async function rig(options: {
+    readonly limit: number;
+    readonly turns?: readonly ScriptedTurn[];
+  }) {
+    const hold = gateOf();
+    const ref: { host?: BackgroundSubagentHost } = {};
+    const built = await build({
+      turns: options.turns ?? turnsFor(options.limit),
+      threadId: 'wait-children',
+      withDriver: true,
+      extraPlugins: [spawnPlugin(() => void ref.host?.start({ subagent: 'worker', text: '查' }))],
+      portOverrides: {
+        waitForChildren: (signal) =>
+          ref.host?.whenChildrenSettled(signal) ?? Promise.resolve(false),
+      },
+    });
+    ref.host = new BackgroundSubagentHost({
+      sessions: built.pump.sessions,
+      compile: () => holdingAgent(hold.opened),
+      onSettled: (settlement) =>
+        built.pump.notifySettled({
+          text: settlement.text,
+          summary: settlement.summary,
+          reason: settlement.reason,
+          senderSessionId: settlement.sessionId,
+        }),
+    });
+    return { ...built, host: ref.host, hold };
+  }
+
+  function gateOf() {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    return { open, opened };
+  }
+
+  /** 等到 `predicate` 成立（逾時就拋，讓「該發生而沒發生」明確紅）。 */
+  async function until(predicate: () => boolean, ms = 3000): Promise<void> {
+    const start = Date.now();
+    while (!predicate()) {
+      if (Date.now() - start > ms) throw new Error('等太久了');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  const goalRounds = (log: SessionLog): number[] =>
+    log.events
+      .filter(
+        (event) => event.type === 'turn/start' && (event.data as { kind: string }).kind === 'goal',
+      )
+      .map((event) => (event.data as { round: number }).round);
+
+  it('紅燈 1：子代理跑著時不排第 2 個續行輪；放行後順序是 subagent-settled → goal 第 2 輪', async () => {
+    const { pump, host, hold, state, stop } = await rig({ limit: 5 });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 放行之前：日誌上只有人那一輪與續行第 1 輪，沒有第 2 個 goal；模型只被叫了 4 次。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(state.turn).toBe(4);
+    expect(host.hasRunning()).toBe(true);
+    hold.open();
+    await until(() => goalRounds(pump.sessionLog).length >= 2);
+    await settle(pump);
+    expect(startKinds(pump.sessionLog).slice(0, 4)).toEqual([
+      'message',
+      'goal',
+      'subagent-settled',
+      'goal',
+    ]);
+    await host.close();
+    await stop();
+  });
+
+  it('紅燈 2：只有被 interrupt 暫停的子代理（排著輪次）——續行照常排第 2 輪，不被 idle() 式的等法卡住', async () => {
+    const turns: ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } }],
+      },
+      { content: '建好了。' },
+      QUIET,
+      QUIET,
+    ];
+    const { pump, host, stop } = await rig({ limit: 2, turns });
+    const first = host.start({ subagent: 'worker', text: 'A1' });
+    // 等這一輪真的開跑（有控制器可以舉），中斷才算數。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+    expect(host.interrupt(first.runId)).toBe(true);
+    await first.outcome;
+    expect(host.hasRunning()).toBe(false);
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => goalRounds(pump.sessionLog).length >= 2);
+    await settle(pump);
+    expect(goalRounds(pump.sessionLog)).toEqual([1, 2]);
+    await host.close();
+    await second;
+    await stop();
+  });
+
+  it('紅燈 3：等子代理時按停止——授權收成 disarmed，放行後不排續行輪', async () => {
+    const { pump, host, hold, goals, state, stop } = await rig({ limit: 5 });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await until(() => pump.goalRoundInFlight);
+    expect(pump.cancel()).toBe('drive');
+    expect(goals.serviceFor(pump.sessionLog).get()?.activation).toBe('disarmed');
+    hold.open();
+    await until(() => !host.hasRunning());
+    await settle(pump);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(goalRounds(pump.sessionLog)).toEqual([1]);
+    expect(startKinds(pump.sessionLog).filter((kind) => kind === 'goal')).toHaveLength(1);
+    await host.close();
+    await stop();
+  });
+
+  it('紅燈 4：等待期間 close()——排程器在有限時間內回來、不預約，goalRoundInFlight 回到假', async () => {
+    const { pump, host, hold, state, stop } = await rig({ limit: 5 });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await until(() => pump.goalRoundInFlight);
+    pump.close();
+    await until(() => !pump.goalRoundInFlight);
+    hold.open();
+    await host.close();
+    expect(goalRounds(pump.sessionLog)).toEqual([1]);
+    await stop();
+  });
+
+  it('紅燈 5：輪數已到頂、子代理還在跑——round-limit 的 blocker 落在 subagent-settled 那一輪之後', async () => {
+    const { pump, host, hold, state, stop } = await rig({ limit: 1 });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 放行之前不記 blocker：輪數雖然到頂了，先等子代理（dsh：先等、再判上限）。
+    const blocked = () =>
+      pump.sessionLog.events.some(
+        (event) =>
+          event.type === 'goal/change' && JSON.stringify(event.data).includes('round-limit'),
+      );
+    expect(blocked()).toBe(false);
+    hold.open();
+    await until(blocked);
+    const settledAt = pump.sessionLog.events.findIndex(
+      (event) =>
+        event.type === 'turn/start' && (event.data as { kind: string }).kind === 'subagent-settled',
+    );
+    const blockedAt = pump.sessionLog.events.findIndex(
+      (event) => event.type === 'goal/change' && JSON.stringify(event.data).includes('round-limit'),
+    );
+    expect(settledAt).toBeGreaterThan(-1);
+    expect(blockedAt).toBeGreaterThan(settledAt);
+    await host.close();
     await stop();
   });
 });

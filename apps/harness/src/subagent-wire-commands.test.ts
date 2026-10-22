@@ -108,6 +108,7 @@ describe('替身控制面：wire 這一層', () => {
       hasRunning: () => false,
       quiescent: () => true,
       interruptAll: () => 0,
+      whenChildrenSettled: () => Promise.resolve(false),
     };
     return { calls, control };
   }
@@ -270,6 +271,7 @@ describe('替身控制面：wire 這一層', () => {
       hasRunning: () => false,
       quiescent: () => true,
       interruptAll: () => 0,
+      whenChildrenSettled: () => Promise.resolve(false),
     };
     const { client } = stubbed(control);
     await client.slashList('t1');
@@ -446,4 +448,65 @@ describe('真組裝：從 wire 對背景子代理傳話、單獨停', () => {
     const end = rigged.child.events.find((event) => event.type === 'turn/end')!;
     expect(end.data).toEqual({ reason: { kind: 'aborted', cause: { kind: 'parent' } } });
   }, 20000);
+});
+
+/**
+ * 目標續行等背景子代理（#1575 N0372）的接線：`wire-handler` 把 `attachSessions` 之後才拿到的背景控制面，延後綁進
+ * `goalDriver` 的第三格。排程器自己的測試直接塞 port，繞過這一段——拿掉任一行接線，那些測試照樣綠。
+ */
+describe('goalDriver 的等子代理口（wire 這一層，#1575）', () => {
+  function driverRig(background: BackgroundSubagentControl | undefined) {
+    let captured: ((signal?: AbortSignal) => Promise<boolean>) | undefined;
+    const handled = rig(async () => ({
+      agent: {} as PumpAgent,
+      commands: emptyCommandPoint(),
+      dispose: async () => {},
+      goalDriver: (_log, _flush, waitForChildren) => {
+        captured = waitForChildren;
+        return {
+          goal: () => undefined,
+          block: () => {},
+          disarm: () => {},
+          pause: () => {},
+          flush: () => Promise.resolve(),
+          warn: () => {},
+        };
+      },
+      attachSessions: () => ({
+        detach: async () => {},
+        ...(background !== undefined && { background }),
+      }),
+    }));
+    return { ...handled, captured: () => captured };
+  }
+
+  it('有背景控制面：交出去的那一格打到它，signal 原樣帶過去、回傳值原樣回來', async () => {
+    const seen: (AbortSignal | undefined)[] = [];
+    const control: BackgroundSubagentControl = {
+      sendFromUser: () => Promise.resolve(),
+      interrupt: () => false,
+      hasRunning: () => false,
+      quiescent: () => true,
+      interruptAll: () => 0,
+      whenChildrenSettled: (signal) => {
+        seen.push(signal);
+        return Promise.resolve(true);
+      },
+    };
+    const { client, captured } = driverRig(control);
+    await client.slashList('t1');
+    const wait = captured();
+    expect(wait).toBeDefined();
+    const controller = new AbortController();
+    expect(await wait!(controller.signal)).toBe(true);
+    expect(seen).toEqual([controller.signal]);
+  });
+
+  it('沒有背景控制面：交出去的那一格回 false（沒有在等的）', async () => {
+    const { client, captured } = driverRig(undefined);
+    await client.slashList('t1');
+    const wait = captured();
+    expect(wait).toBeDefined();
+    expect(await wait!()).toBe(false);
+  });
 });

@@ -407,6 +407,8 @@ export interface BackgroundSubagentControl {
   readonly interruptAll: () => number;
   /** {@link BackgroundSubagentHost.quiescent}（閒置逐出要問「撤掉這條 thread 會不會丟掉在記憶體裡的工作」，#1484）。 */
   readonly quiescent: () => boolean;
+  /** {@link BackgroundSubagentHost.whenChildrenSettled}（目標續行要等背景子代理停下來再排下一輪，#1575）。 */
+  readonly whenChildrenSettled: (signal?: AbortSignal) => Promise<boolean>;
 }
 
 /**
@@ -527,6 +529,8 @@ export class BackgroundSubagentHost {
   readonly #coldScanned: Promise<void>;
   /** 正在叫醒的：編號 → 同一件事（重複的叫醒共用一次）。算在並存上限裡——名額在重建**之前**佔，同 dsh 的 `ActivationPool.reserve`。 */
   readonly #waking = new Map<string, Promise<void>>();
+  /** {@link whenChildrenSettled} 正在等的人；每次現況變動（{@link #publishStatus}）與叫醒的起落都喚醒，不輪詢。 */
+  readonly #childWaiters = new Set<() => void>();
   readonly #onMessage: BackgroundSubagentHostOptions['onMessage'];
   readonly #onStatus: BackgroundSubagentHostOptions['onStatus'];
   /** 上一次送出去的現況（序列化），沒變就不重送。起頭是 `undefined`：建構完那一刻一定送一份（可以是空的）。 */
@@ -766,6 +770,7 @@ export class BackgroundSubagentHost {
       hasRunning: () => this.hasRunning(),
       interruptAll: () => this.interruptAll(),
       quiescent: () => this.quiescent(),
+      whenChildrenSettled: (signal) => this.whenChildrenSettled(signal),
     };
   }
 
@@ -966,6 +971,50 @@ export class BackgroundSubagentHost {
   }
 
   /**
+   * 等到沒有背景子代理在推進（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372，dsh `SubagentManager.waitForChildren`，
+   * `manager.ts:247-285`）。目標續行排下一輪之前問它：子代理還在跑時續行輪只會空轉。
+   *
+   * **「在推進」的定義照 dsh：等著的是正在動的，閒著停放的不等**（`:248-251`）：
+   * - {@link hasRunning} 為真：有一輪在跑，或排著而沒被中斷暫停。**一輪跑完到結算通知發出之間（含結算前的最後一次排空，#1565）
+   *   子代理還在 `#busy`**，算在推進——dsh 同：`watchLocalSettlement` 的 `flushFinalState` 期間 agent 已 idle，但 `result.promise` 要到
+   *   結算才兌現，`waitForChildren` 走最後一行 `race(result, poke)` 等它（`:271-272`）。
+   * - 叫醒中的（{@link resume} 正在重建冷子代理）：dsh 先等 `materializations`（`:255`、`:260`）。
+   * - **不等**：被 {@link interrupt}／{@link interruptAll} 暫停而排著輪次的（＝dsh 的收件匣有欠著、閒著停放，`:271`）。
+   *   所以不能用 {@link idle}：它會被暫停的排著輪次卡住，永不兌現。
+   *
+   * 不輪詢：由 `#publishStatus` 與叫醒的起落喚醒，醒了重新判斷（dsh 的 `while (true)`）。
+   *
+   * @param signal - 舉起就不再等，回傳目前為止有沒有等過（同 dsh 的 `unloading`；呼叫端自己看 signal 決定要不要往下）。
+   * @returns 有沒有等過任何東西：`true` 表示呼叫端該重新判斷（同 dsh「host must recheck parent completion」）。
+   */
+  async whenChildrenSettled(signal?: AbortSignal): Promise<boolean> {
+    let waited = false;
+    while (this.#progressing()) {
+      if (signal?.aborted === true) return waited;
+      waited = true;
+      await new Promise<void>((resolve) => {
+        const wake = (): void => {
+          this.#childWaiters.delete(wake);
+          signal?.removeEventListener('abort', wake);
+          resolve();
+        };
+        this.#childWaiters.add(wake);
+        signal?.addEventListener('abort', wake, { once: true });
+      });
+    }
+    return waited;
+  }
+
+  /** {@link whenChildrenSettled} 的判準：有在跑的，或有正在叫醒的。 */
+  #progressing(): boolean {
+    return this.hasRunning() || this.#waking.size > 0;
+  }
+
+  #wakeChildWaiters(): void {
+    for (const wake of [...this.#childWaiters]) wake();
+  }
+
+  /**
    * 記憶體裡**沒有任何在途的工作**（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，閒置逐出的判準）。
    *
    * 比 {@link hasRunning} 嚴：`hasRunning` 不算被中斷暫停的排著的輪次（那是給「停止」鈕用的，暫停的不算在跑），但那些輪次
@@ -1023,6 +1072,8 @@ export class BackgroundSubagentHost {
   }
 
   #publishStatus(): void {
+    // **先喚醒等的人，再看有沒有人接現況**：沒給 `onStatus` 的 host（CLI、測試）照樣有人在等。
+    this.#wakeChildWaiters();
     if (this.#onStatus === undefined) return;
     const items = this.statuses();
     const key = JSON.stringify(items);
@@ -1114,8 +1165,10 @@ export class BackgroundSubagentHost {
     if (full !== undefined) throw new BackgroundSubagentError('at-capacity', full);
     const activation = this.#activate(runId, inspection).finally(() => {
       this.#waking.delete(runId);
+      this.#wakeChildWaiters();
     });
     this.#waking.set(runId, activation);
+    this.#wakeChildWaiters();
     return activation;
   }
 

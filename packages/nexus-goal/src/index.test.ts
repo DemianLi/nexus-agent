@@ -5,10 +5,10 @@ import { describe, expect, it } from 'vitest';
 import { GOALS_CONTRACT_VERSION, GOALS_SERVICE, goalsToken } from './index.js';
 
 describe('@nexus/goal 的定義', () => {
-  it('token 名是 goals、契約版本是 semver 常數（1.0.0）', () => {
+  it('token 名是 goals、契約版本是 semver 常數（1.1.0）', () => {
     expect(goalsToken).toEqual({ name: 'goals', version: GOALS_CONTRACT_VERSION });
     expect(GOALS_SERVICE).toBe('goals');
-    expect(GOALS_CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(GOALS_CONTRACT_VERSION).toBe('1.1.0');
   });
 });
 

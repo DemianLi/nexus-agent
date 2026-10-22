@@ -2063,6 +2063,130 @@ describe('結算通知（#840）', () => {
     });
   });
 
+  describe('等背景子代理停下來（#1575 N0372，dsh manager.ts:247-285 waitForChildren）', () => {
+    const childOf = (runId: string) => `root-1/${runId}`;
+    /** 3 秒內沒兌現就當它卡住：讓「不該卡住」的那幾條明確紅，不靠 5 秒逾時。 */
+    const within = <T>(promise: Promise<T>): Promise<T> =>
+      Promise.race([
+        promise,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error('卡住了')), 3000)),
+      ]);
+
+    it('沒有任何在推進的：立刻回 false', async () => {
+      const { host } = setup(() => {});
+      expect(await within(host.whenChildrenSettled())).toBe(false);
+      await host.close();
+    });
+
+    it('有一輪在跑：不兌現，那一輪收完（並已通知）才兌現 true；host 沒給 onStatus 也被喚醒', async () => {
+      const hold = gate();
+      const { host, order } = setup(async () => hold.opened);
+      const started = host.start({ subagent: 'worker', text: '查' });
+      await settle();
+      let resolved = false;
+      const waiting = host.whenChildrenSettled().then((waited) => {
+        resolved = true;
+        order.push('waiter-resumed');
+        return waited;
+      });
+      await settle();
+      expect(resolved).toBe(false);
+      hold.open();
+      expect(await within(waiting)).toBe(true);
+      await started.outcome;
+      expect(order).toEqual([`notified:${started.runId}`, 'waiter-resumed']);
+      await host.close();
+    });
+
+    it('結算前的最後一次排空期間也算在推進：排空放行才兌現（#1565 留下的那段空檔）', async () => {
+      const held = gate();
+      const release = gate();
+      let runId = '';
+      const { host, sessions } = setup((_text, _signal, log) => reply(log, '查到了'));
+      sessions.onFlush(async (log) => {
+        if (log.sessionId !== childOf(runId)) return;
+        held.open();
+        await release.opened;
+      });
+      const started = host.start({ subagent: 'worker', text: '查' });
+      runId = started.runId;
+      await held.opened;
+      // 這一輪已經跑完、不在 #running，卡在排空：子代理還在 #busy。
+      let resolved = false;
+      const waiting = host.whenChildrenSettled().then((waited) => {
+        resolved = true;
+        return waited;
+      });
+      await settle();
+      expect(resolved).toBe(false);
+      release.open();
+      expect(await within(waiting)).toBe(true);
+      await host.close();
+    });
+
+    it('被中斷而暫停、還排著輪次的不等（閒著停放）；不能用 idle()，它會被這種排著的卡住', async () => {
+      const entered = gate();
+      const { host } = setup(async (text, signal) => {
+        if (text === 'A1') {
+          entered.open();
+          await waitAbort(signal);
+        }
+      });
+      const first = host.start({ subagent: 'worker', text: 'A1' });
+      await entered.opened;
+      const second = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+      host.interrupt(first.runId);
+      await first.outcome;
+      expect(host.hasRunning()).toBe(false);
+      expect(await within(host.whenChildrenSettled())).toBe(false);
+      await host.close();
+      await second;
+    });
+
+    it('signal 舉起：不再等，也不留下等的人；一開始就舉起的不等', async () => {
+      const hold = gate();
+      const { host } = setup(async () => hold.opened);
+      host.start({ subagent: 'worker', text: '查' });
+      await settle();
+      const controller = new AbortController();
+      const waiting = host.whenChildrenSettled(controller.signal);
+      await settle();
+      controller.abort();
+      expect(await within(waiting)).toBe(true);
+      const already = new AbortController();
+      already.abort();
+      expect(await within(host.whenChildrenSettled(already.signal))).toBe(false);
+      hold.open();
+      await host.close();
+    });
+
+    it('控制面（給 wire 用）轉出同一個等法：signal 原樣帶過去', async () => {
+      const hold = gate();
+      const { host } = setup(async () => hold.opened);
+      host.start({ subagent: 'worker', text: '查' });
+      await settle();
+      const controller = new AbortController();
+      const waiting = host.control.whenChildrenSettled(controller.signal);
+      await settle();
+      controller.abort();
+      expect(await within(waiting)).toBe(true);
+      expect(await within(host.control.whenChildrenSettled(controller.signal))).toBe(false);
+      hold.open();
+      await host.close();
+    });
+
+    it('兩個人同時在等：一起被喚醒', async () => {
+      const hold = gate();
+      const { host } = setup(async () => hold.opened);
+      host.start({ subagent: 'worker', text: '查' });
+      await settle();
+      const both = Promise.all([host.whenChildrenSettled(), host.whenChildrenSettled()]);
+      hold.open();
+      expect(await within(both)).toEqual([true, true]);
+      await host.close();
+    });
+  });
+
   it('失敗、被中斷、撞到輸出上限：各自不同的摘要', async () => {
     const failed = setup(() => {
       throw new Error('模型掛了');

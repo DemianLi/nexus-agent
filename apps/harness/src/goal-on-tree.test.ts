@@ -20,11 +20,13 @@ import { createGoalCore, goalConfigSchema } from '@nexus/plugin-goal';
 import type { GoalCore } from '@nexus/plugin-goal';
 import { goalId, SessionLog } from '@nexus/core';
 import type { GoalChangeMeta } from '@nexus/core';
-import { historyPath } from '@nexus/wire';
+import { createWireClient, historyPath } from '@nexus/wire';
+import type { Event } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { goalDriverPort } from './assembly-root.js';
+import type { GoalDriverPort } from './goal-driver.js';
 import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
@@ -40,6 +42,8 @@ const T = 10_000;
 
 interface Rig {
   readonly handler: ReturnType<typeof createWireHandler>;
+  /** 走這個 handler 的線上用戶端（下行用）。 */
+  readonly client: ReturnType<typeof createWireClient>;
   /** 整個行程共用的一份核心——樹上那一列的樣子。 */
   readonly core: GoalCore;
   /** 每條 thread 目前的 root 日誌（`goalDriver` 工廠收到的 `log()` 讀回來的）。 */
@@ -54,7 +58,10 @@ afterEach(async () => {
   for (const rig of rigs.splice(0)) await rig.handler.close();
 });
 
-function rig(): Rig {
+/** 測試要在訂閱前後插一手時用：包住真的 `goalDriverPort`，其餘成員原樣。 */
+type WrapPort = (port: GoalDriverPort, log: () => SessionLog) => GoalDriverPort;
+
+function rig(wrap: WrapPort = (port) => port): Rig {
   const core = createGoalCore(goalConfigSchema.parse({}));
   const logs = new Map<string, () => SessionLog>();
   const disposed: string[] = [];
@@ -82,11 +89,14 @@ function rig(): Rig {
         // **跟產品一樣用 `goalDriverPort`**：逐出判斷走它的 `armed()`，而不是測試自己捏的替身。
         goalDriver: (log) => {
           logs.set(threadId, log);
-          return goalDriverPort(
-            goalCoreOf(built.services.use(GOALS_SERVICE)),
+          return wrap(
+            goalDriverPort(
+              goalCoreOf(built.services.use(GOALS_SERVICE)),
+              log,
+              () => Promise.resolve(),
+              (message) => warnings.push(message),
+            ),
             log,
-            () => Promise.resolve(),
-            (message) => warnings.push(message),
           );
         },
         dispose: async () => {
@@ -98,6 +108,10 @@ function rig(): Rig {
   });
   const made: Rig = {
     handler,
+    client: createWireClient({
+      baseUrl: BASE,
+      fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
+    }),
     core,
     logs,
     disposed,
@@ -177,6 +191,17 @@ describe('閒置逐出走非建立式讀，而且讀的是真的 goals 服務', 
     expect(r.core.existingFor(log)).toBeUndefined();
   });
 
+  it('續行授權的訂閱（N0376）不替沒有目標的 thread 建出服務；之後建目標，服務才出現', async () => {
+    const r = rig();
+    // threadFor 組好這條 thread 時 wire handler 已經對它的 root 日誌訂了「授權變了」；訂閱是非建立式的。
+    await touch(r, 't1');
+    const log = rootOf(r, 't1');
+    expect(r.core.existingFor(log)).toBeUndefined();
+
+    r.core.serviceFor(log).create({ objective: '把 CI 修綠' });
+    expect(r.core.existingFor(log)).toBeDefined();
+  });
+
   it('折疊壞掉的目標：判成「不閒置」，不撤、不拋', async () => {
     const r = rig();
     await touch(r, 't1');
@@ -193,6 +218,54 @@ describe('閒置逐出走非建立式讀，而且讀的是真的 goals 服務', 
     await sweep(r);
 
     expect(r.disposed).toEqual([]);
+  });
+});
+
+describe('續行授權的接線（N0376）：訂閱、種子、退訂', () => {
+  it('thread 接上時服務已經在而且武裝著：種子讓晚到的下行第一顆就是 armed', async () => {
+    // 手搭的組裝或測試可能在 wire handler 訂閱之前就讓服務存在；那時 pump 起始的 disarmed 是錯的，靠 `currentActivation` 種進去。
+    const r = rig((port, log) => ({
+      ...port,
+      onActivationChanged: (listener) => {
+        r.core.serviceFor(log()).create({ objective: '把 CI 修綠' });
+        return port.onActivationChanged!(listener);
+      },
+    }));
+    await touch(r, 't1');
+    const frames: Event[] = [];
+    const events = await r.client.openEvents('t1');
+    const first = await events.next();
+    if (first.done !== true) frames.push(first.value);
+    void events.return?.(undefined);
+    const activation = frames.find(
+      (event) =>
+        event.method === 'custom' &&
+        (event.params.data as { name?: unknown } | null)?.name === 'goal/activation',
+    );
+    expect(activation).toBeDefined();
+    expect(
+      (activation!.params.data as unknown as { payload: { goal: { activation: string } } }).payload
+        .goal.activation,
+    ).toBe('armed');
+  });
+
+  it('逐出：退訂被呼叫一次（不留一個指著已撤 pump 的監聽）', async () => {
+    const unsubscribed: string[] = [];
+    const r = rig((port) => ({
+      ...port,
+      onActivationChanged: (listener) => {
+        const off = port.onActivationChanged!(listener);
+        return () => {
+          unsubscribed.push('off');
+          off();
+        };
+      },
+    }));
+    await touch(r, 't1');
+    expect(unsubscribed).toEqual([]);
+    await sweep(r);
+    expect(r.disposed).toEqual(['t1']);
+    expect(unsubscribed).toEqual(['off']);
   });
 });
 

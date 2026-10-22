@@ -480,6 +480,7 @@ describe('A：閒置條件成立滿 T 才逐出（#1484）', () => {
         hasRunning: () => false,
         interruptAll: () => 0,
         quiescent: () => quiescent,
+        whenChildrenSettled: () => Promise.resolve(false),
       },
     });
     await touch(r, 't1');

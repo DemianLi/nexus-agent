@@ -17,7 +17,12 @@ import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { driveGoalRounds, MAX_GOAL_ROUNDS_SOURCE, runCli, runRepl, runTurn } from './cli.js';
-import { createCliAgent, formatGoalDriverDisclosure, goalDriverPort } from './assembly-root.js';
+import {
+  createCliAgent,
+  formatGoalDriverDisclosure,
+  goalDriverPort,
+  serveGoalDriver,
+} from './assembly-root.js';
 import { parseCliArgs } from './cli.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { ROUND_CAP_BLOCK_CODE } from './goal-driver.js';
@@ -699,6 +704,63 @@ describe('goals 服務綁的是這一次組裝', () => {
       );
       expect(service.get()?.phase).toBe('blocked');
       expect(service.get()?.blockedReason?.code).toBe('round-limit');
+    } finally {
+      await built.dispose();
+    }
+  });
+
+  /**
+   * **`goalDriverPort` 把等子代理的口原樣交出去**（#1575）：排程器的測試都自己搭 port，這個函式的第五格沒人驅動過。
+   * 拿掉那一行展開，整套排程器測試照樣綠——這一條是它的紅燈。沒給就缺席（CLI、沒有背景 host）。
+   */
+  it('goalDriverPort 的 waitForChildren：給了原樣交出，沒給就缺席', async () => {
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      const wait = (): Promise<boolean> => Promise.resolve(true);
+      const given = goalDriverPort(
+        built.goals,
+        () => built.sessionLog,
+        () => Promise.resolve(),
+        () => undefined,
+        wait,
+      );
+      expect(given.waitForChildren).toBe(wait);
+      const absent = goalDriverPort(
+        built.goals,
+        () => built.sessionLog,
+        () => Promise.resolve(),
+        () => undefined,
+      );
+      expect('waitForChildren' in absent).toBe(false);
+    } finally {
+      await built.dispose();
+    }
+  });
+
+  /**
+   * **serve 交給 wire handler 的 `goalDriver` 工廠**（#1575 W4）：N0372 在產品路徑上的效果完全靠它把 `waitForChildren` 轉進
+   * `goalDriverPort`。以前它是 `serve.ts` 裡的行內閉包，拿掉那一格所有測試照樣綠；現在是具名的 `serveGoalDriver`，`serve.ts` 只用它。
+   */
+  it('serveGoalDriver：waitForChildren 原樣轉進 port，flush／warn／roundCap 也各到各的位置', async () => {
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      const warned: string[] = [];
+      const wait = (): Promise<boolean> => Promise.resolve(true);
+      const flush = (): Promise<void> => Promise.resolve();
+      const cap = { limit: 3, source: 'test' } as const;
+      const make = serveGoalDriver(built.goals, (message) => warned.push(message), cap);
+
+      const port = make(() => built.sessionLog, flush, wait);
+      expect(port.waitForChildren).toBe(wait);
+      expect(port.flush).toBe(flush);
+      expect(port.roundCap).toEqual(cap);
+      port.warn('量一下');
+      expect(warned).toEqual(['[續行] 量一下']);
+
+      // 沒給 waitForChildren（沒有背景 host）就缺席；沒設上限就不帶 roundCap。
+      const bare = serveGoalDriver(built.goals, () => undefined)(() => built.sessionLog, flush);
+      expect('waitForChildren' in bare).toBe(false);
+      expect('roundCap' in bare).toBe(false);
     } finally {
       await built.dispose();
     }
