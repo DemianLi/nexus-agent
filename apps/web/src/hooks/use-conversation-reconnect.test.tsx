@@ -456,6 +456,52 @@ describe.each([false, true])(
       expect(result.current.ratings.get('m1')).toMatchObject({ rating: 'positive', version: 'v2' });
     });
 
+    it('伺服器不收評分（#1849）：停用；重接之後重讀，伺服器改成收評分就恢復', async () => {
+      let unsupported = true;
+      const feedbackList = vi.fn(async () =>
+        unsupported
+          ? { kind: 'rejected', code: 'not_supported', message: '這個組裝沒有掛落盤，評分存不住' }
+          : {
+              kind: 'ok',
+              result: {
+                ok: true,
+                value: {
+                  items: [
+                    {
+                      messageId: 'm1',
+                      rating: 'positive',
+                      version: 'v1',
+                      createdAt: 0,
+                      updatedAt: 0,
+                    },
+                  ],
+                },
+              },
+            },
+      );
+      const { client, latest } = scriptedClient({ feedbackList });
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      act(() => result.current.seedRatings());
+      await tick();
+      expect(result.current.ratingsUnsupported).toBe(true);
+      expect(result.current.ratingsLoadFailed).toBe(false);
+      // 不收評分的不再試：再滑過也不打。
+      act(() => result.current.seedRatings());
+      await tick();
+      expect(feedbackList).toHaveBeenCalledTimes(1);
+
+      // 伺服器重開、改成落盤開著。
+      unsupported = false;
+      latest().fail('network error');
+      await tick();
+      await tick(250);
+      expect(result.current.connected).toBe(true);
+      expect(feedbackList).toHaveBeenCalledTimes(2);
+      expect(result.current.ratingsUnsupported).toBe(false);
+      expect(result.current.ratings.get('m1')?.rating).toBe('positive');
+    });
+
     it('沒讀過的不讀：冷的等人滑過再讀', async () => {
       const server = ratingsServer();
       const { client, latest } = scriptedClient({ feedbackList: server.feedbackList });

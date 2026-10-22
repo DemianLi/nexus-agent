@@ -97,8 +97,8 @@ function fakeClient(
   options: {
     readonly put?: (params: FeedbackPutCommand['params']) => FeedbackPutResult;
     readonly del?: (params: FeedbackDeleteCommand['params']) => FeedbackDeleteResult;
-    /** 省略就是一筆都沒有；`'rejected'` 是線收不下。 */
-    readonly list?: FeedbackListResult | 'rejected';
+    /** 省略就是一筆都沒有；`'rejected'` 是線收不下；`'unsupported'` 是伺服器不收評分（`not_supported`，#1849）。 */
+    readonly list?: FeedbackListResult | 'rejected' | 'unsupported';
   } = {},
 ) {
   const lists: number[] = [];
@@ -159,6 +159,13 @@ function fakeClient(
     feedbackList: async () => {
       lists.push(lists.length);
       if (options.list === 'rejected') return { kind: 'rejected', message: '讀不到' };
+      if (options.list === 'unsupported') {
+        return {
+          kind: 'rejected',
+          code: 'not_supported',
+          message: '這個組裝沒有掛落盤，評分存不住',
+        };
+      }
       return { kind: 'ok', result: options.list ?? { ok: true, value: { items: [] } } };
     },
     feedbackRecord: async (_threadId, params) => {
@@ -379,6 +386,60 @@ describe('讀回評分（list，#382）', () => {
       within(entryOf('收工了。')).getByRole('button', { name: FEEDBACK_COPY.dislike }),
     );
     expect(await screen.findByRole('dialog')).toBeTruthy();
+  });
+});
+
+describe('伺服器不收評分（not_supported，#1849）', () => {
+  const buttons = () =>
+    [FEEDBACK_COPY.like, FEEDBACK_COPY.dislike].map((name) =>
+      within(entryOf('收工了。')).getByRole('button', { name }),
+    );
+
+  it('滑過之後：讚踩停用、旁邊講原因（掛在描述上，不是 live region）；「這一輪的過程」照常', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'unsupported' });
+    render(<App client={fake.client} />);
+    await ready();
+    fireEvent.pointerEnter(buttons()[1]!);
+    await waitFor(() =>
+      expect(within(entryOf('收工了。')).getByText(FEEDBACK_COPY.unsupported)).toBeTruthy(),
+    );
+    const note = within(entryOf('收工了。')).getByText(FEEDBACK_COPY.unsupported);
+    expect(note.closest('[role=status]')).toBeNull();
+    for (const button of buttons()) {
+      expect((button as HTMLButtonElement).disabled).toBe(true);
+      expect(document.getElementById(button.getAttribute('aria-describedby') ?? '')).toBe(note);
+    }
+    expect(within(entryOf('收工了。')).queryByText(FEEDBACK_COPY.load)).toBeNull();
+    expect(
+      (within(entryOf('收工了。')).getByTestId('turn-trace') as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('沒滑過就直接點（觸控）：等讀回，不收評分就不開對話框、不送 put', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'unsupported' });
+    render(<App client={fake.client} />);
+    await ready();
+    fireEvent.click(buttons()[1]!);
+    await waitFor(() => expect((buttons()[1] as HTMLButtonElement).disabled).toBe(true));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(fake.puts).toEqual([]);
+    expect(fake.lists).toHaveLength(1);
+  });
+
+  it('/feedback 照常：評語不受影響', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'unsupported' });
+    render(<App client={fake.client} />);
+    await ready();
+    fireEvent.pointerEnter(buttons()[0]!);
+    await waitFor(() => expect((buttons()[0] as HTMLButtonElement).disabled).toBe(true));
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/feedback' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: FEEDBACK_COPY.submit }));
+    await waitFor(() => expect(fake.records).toEqual([{}]));
   });
 });
 

@@ -96,6 +96,11 @@ export interface TranscriptFeedback {
   readonly busy: boolean;
   /** 讀回評分失敗了：按鈕旁邊講一句（dsh 的 `error.load`）。 */
   readonly loadFailed: boolean;
+  /**
+   * 這台伺服器不收評分（#1849）：讚踩停用、旁邊講原因。**停用不藏**：讀回是第一次滑過才打的，藏起來的話按鈕會在指標底下消失。
+   * 省略同 `false`。
+   */
+  readonly unsupported?: boolean;
   /** 第一次滑過或聚焦讚踩時讀回評分，照 dsh 的 `seed`。 */
   onSeed(): void;
   onRate(messageId: string, rating: WireFeedbackRating): void;
@@ -121,8 +126,15 @@ function RatingButtons({
   const likeLabel = rating === 'positive' ? FEEDBACK_COPY.likeActive : FEEDBACK_COPY.like;
   const dislikeLabel = rating === 'negative' ? FEEDBACK_COPY.dislikeActive : FEEDBACK_COPY.dislike;
   // 載入失敗那句掛在兩顆鈕的描述上（同 `plan/chip`），不開 live region（#1290）：它是背景載入失敗，不是人剛做的事的結果。
-  const loadFailedId = useId();
-  const describedBy = feedback.loadFailed ? loadFailedId : undefined;
+  // 伺服器不收評分（#1849）那句同一個做法，兩句不會同時出現。
+  const noteId = useId();
+  const unsupported = feedback.unsupported === true;
+  const note = unsupported
+    ? FEEDBACK_COPY.unsupported
+    : feedback.loadFailed
+      ? FEEDBACK_COPY.load
+      : undefined;
+  const describedBy = note === undefined ? undefined : noteId;
   return (
     <div className="flex items-center gap-1" data-testid="rating-buttons">
       <Button
@@ -134,7 +146,7 @@ function RatingButtons({
         aria-label={likeLabel}
         aria-pressed={rating === 'positive'}
         aria-describedby={describedBy}
-        disabled={feedback.busy}
+        disabled={feedback.busy || unsupported}
         onPointerEnter={feedback.onSeed}
         onFocus={feedback.onSeed}
         onClick={() => feedback.onRate(messageId, 'positive')}
@@ -150,7 +162,7 @@ function RatingButtons({
         aria-label={dislikeLabel}
         aria-pressed={rating === 'negative'}
         aria-describedby={describedBy}
-        disabled={feedback.busy}
+        disabled={feedback.busy || unsupported}
         onPointerEnter={feedback.onSeed}
         onFocus={feedback.onSeed}
         onClick={() => feedback.onRate(messageId, 'negative')}
@@ -169,9 +181,9 @@ function RatingButtons({
           這一輪的過程
         </Button>
       )}
-      {feedback.loadFailed && (
-        <span id={loadFailedId} className="text-muted-foreground text-tip">
-          {FEEDBACK_COPY.load}
+      {note !== undefined && (
+        <span id={noteId} className="text-muted-foreground text-tip">
+          {note}
         </span>
       )}
     </div>
