@@ -21,6 +21,8 @@
  *   （`parseHistoricalPersistenceSnapshot`，只給 `persistence-review`／`persistence-formats` 用）、人讀的目錄文件
  *   `persistence-catalog.md`（[#1886](https://github.com/DemianLi/nexus-agent/issues/1886)）。
  * - header 根只認 `SessionHeader`、基線必備的根不含 `JsonlHeaderLine`：nexus 沒有那個根（見 `persistence-schema.ts` 檔頭）。
+ * - 生成物缺漏或過期時，訊息指向 `gen-persistence-schema`，不寫 dsh 的「regenerate the persistence catalog」：
+ *   這裡沒有 catalog（同上，#1886）。
  *
  * @module
  */
