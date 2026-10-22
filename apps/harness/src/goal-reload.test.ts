@@ -177,3 +177,52 @@ describe('D：設定中途改了，開著的 thread 不動、新的 thread 看�
     await fresh.close();
   }, 60000);
 });
+
+describe('N0376：goal 列重載之後，續行授權的通知仍到得了訂閱的人', () => {
+  /** 宿主那條路訂「授權變了」：`goalDriverPort.onActivationChanged`，就是 wire handler 訂的那一格（它再轉給 pump 送 `goal/activation`）。 */
+  function listen(thread: Thread): string[] {
+    const goals = thread.built.goals;
+    if (goals === undefined) throw new Error('這條 thread 沒有 goals 服務');
+    const port = goalDriverPort(
+      goals,
+      () => thread.log,
+      () => Promise.resolve(),
+      warnNothing,
+    );
+    const seen: string[] = [];
+    port.onActivationChanged?.((change) => seen.push(change.goal?.activation ?? '無目標'));
+    return seen;
+  }
+
+  it('重載前就訂了的 thread 照樣收到 armed／disarmed；重載後才開的 thread 也收到，兩邊互不串', async () => {
+    const h = home();
+    const booted = await boot(h.env);
+    const old = await openThread(booted, booted.loaded, 'old');
+    // 先訂、後重載：訂閱掛在舊那一列的核心上。
+    const oldSeen = listen(old);
+
+    seedHomePatch(h.dir, ['- id: goal', '  config:', '    defaultMaxGoalRounds: 3', ''].join('\n'));
+    const reloaded = await loadDefaultPlugins(
+      { env: h.env, warn: warnNothing },
+      { tree: booted.root.tree },
+    );
+    expect(reloaded.dropped).toEqual([]);
+
+    // 重載之後，舊 thread 的命令（舊閉包）改授權：訂在舊核心上的人要聽得到。
+    await slash(old, '命令建的目標');
+    await slash(old, 'pause');
+    await slash(old, 'resume');
+    expect(oldSeen).toEqual(['armed', 'disarmed', 'armed']);
+
+    // 重載之後才開的 thread：訂在新那一列的核心上，同樣聽得到；舊 thread 的人聽不到它的變化。
+    const fresh = await openThread(booted, reloaded, 'new');
+    const freshSeen = listen(fresh);
+    await slash(fresh, '新 thread 的目標');
+    await slash(fresh, 'pause');
+    expect(freshSeen).toEqual(['armed', 'disarmed']);
+    expect(oldSeen).toEqual(['armed', 'disarmed', 'armed']);
+
+    await old.close();
+    await fresh.close();
+  }, 60000);
+});
