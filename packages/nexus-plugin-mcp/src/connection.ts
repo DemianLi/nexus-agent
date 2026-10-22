@@ -42,29 +42,72 @@ export function clientOptions(config: McpConfig, elicitation: boolean): ClientCo
 
 /**
  * 連一代：`tools/list`、拿 SDK client、查指引上限，三步都過才算連上；任何一步拋就是這次嘗試失敗（指引超過上限也算，同 plugin
- * 首連那條）。池的每一代與 plugin 自己連的重連都走這裡（#1824）。工具物件只包一次 {@link throwOnToolError}、不改名，留給池的
- * 每份組裝建自己的委派物件。
+ * 首連那條）。池的每一代與 plugin 自己連的首連、重連都走這裡（#1824、#1572 N0516）。工具物件只包一次 {@link throwOnToolError}、
+ * 不改名，留給呼叫端建自己的委派物件。
+ *
+ * **`execution.taskSupport: 'required'` 的工具在這裡就改成當場拒絕**，照 dsh（`mcp-client/src/tools.ts:123` 的 `cacheMode: 'refresh'`、`:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
+ * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。偏離：dsh 在自己的 bridge 裡讀 `tool.execution`，這裡的工具是
+ * adapter 轉出來的，而 `@langchain/mcp-adapters` 2.0.0 轉工具時丟掉了 `execution`（`dist/tools.js` 沒有 `taskSupport` 的任何處理），
+ * 所以多對 SDK client 叫一次 `tools/list`（理由 1：基座表達不出來）。
  */
 export async function connectGeneration(
   client: MultiServerMCPClient,
   config: McpConfig,
-): Promise<Generation> {
+): Promise<Generation & { readonly listed: Listed }> {
   const calls = new Map<string, ToolCall>();
   const tools: StructuredTool[] = [];
-  for (const tool of await client.getTools()) {
+  const listed = await client.getTools();
+  const sdk = await client.getClient(config.serverName);
+  const taskRequired = await taskRequiredNames(sdk, listed.length);
+  for (const tool of listed) {
     throwOnToolError(tool);
+    if (taskRequired.has(tool.name)) rejectTaskRequired(tool);
     calls.set(tool.name, callOf(tool));
     tools.push(tool);
   }
-  const sdk = await client.getClient(config.serverName);
   const instructions = instructionsOf(sdk?.getInstructions(), config);
-  return generationOf(calls, sdk, { tools, instructions });
+  return generationOf(calls, sdk, { tools, instructions }) as Generation & { listed: Listed };
+}
+
+/**
+ * 這台 server 公告 `execution.taskSupport === 'required'` 的工具名（raw name）。`count` 是 adapter 列出的工具數：一支都沒有就不必問。
+ * 分頁照 `nextCursor` 走完；`cacheMode: 'refresh'` 同 dsh，不讀新協議 client 的列表快取。
+ */
+async function taskRequiredNames(sdk: SdkClient | undefined, count: number): Promise<Set<string>> {
+  const names = new Set<string>();
+  if (sdk === undefined || count === 0) return names;
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const page = await sdk.listTools(cursor === undefined ? undefined : { cursor }, {
+      cacheMode: 'refresh',
+    });
+    for (const tool of page.tools) {
+      if (tool.execution?.taskSupport === 'required') names.add(tool.name);
+    }
+    cursor = page.nextCursor;
+    if (cursor !== undefined && seen.has(cursor)) break;
+    if (cursor !== undefined) seen.add(cursor);
+  } while (cursor !== undefined);
+  return names;
+}
+
+/** 讓這個工具的呼叫當場拋 dsh 那一句、不送請求（訊息逐字照抄 `tools.ts:280`）。 */
+function rejectTaskRequired(tool: StructuredTool): void {
+  const rawName = tool.name;
+  (tool as unknown as { func: (...args: unknown[]) => Promise<unknown> }).func = () =>
+    Promise.reject(
+      new Error(
+        `Tool "${rawName}" requires task-based execution, which this bridge does not support`,
+      ),
+    );
 }
 
 /** SDK client 上，這個檔會用到的那幾個方法；結構型別，不直接依賴 `@modelcontextprotocol/client`。 */
 export interface SdkClient {
   onclose?: () => void;
   getInstructions(): string | undefined;
+  listTools(params?: { cursor: string }, options?: RequestOptions): Promise<ListToolsPage>;
   listResources(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   listResourceTemplates(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   readResource(params: { uri: string }, options?: RequestOptions): Promise<unknown>;
@@ -73,6 +116,13 @@ export interface SdkClient {
 export interface RequestOptions {
   signal?: AbortSignal;
   timeout?: number;
+  cacheMode?: 'refresh';
+}
+
+/** `tools/list` 的一頁，只列這個檔讀的欄位。 */
+export interface ListToolsPage {
+  readonly tools: readonly { name: string; execution?: { taskSupport?: string } }[];
+  readonly nextCursor?: string | undefined;
 }
 
 /**

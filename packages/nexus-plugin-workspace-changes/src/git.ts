@@ -46,10 +46,14 @@ import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 
 import { scrubbedParentEnv, trackHostExitChild } from '@nexus/core';
+import { deadline, timeoutOf } from '@nexus/timeout';
 
 import { parseNumstat } from './numstat.js';
 import type { NumstatEntry } from './numstat.js';
 import { canonicalPath, isInside, toPosix } from './paths.js';
+
+/** 逾時的 `TimeoutReason.code`；`timeoutOf` 靠它分辨「自己這顆逾時」與上游的中止。 */
+const GIT_TIMEOUT_CODE = 'GIT_TIMEOUT';
 
 /** 開始收掉之後，git 子行程還有幾毫秒可以自己結束；固定的生命週期常數，同 dsh。 */
 const TERMINATE_GRACE_MS = 2_000;
@@ -128,11 +132,30 @@ export class GitRunner {
    * @throws 逾時、被中止，或 spawn 不起來。
    */
   async run(args: readonly string[], options: GitRunOptions): Promise<GitRunResult> {
-    const timeout = AbortSignal.timeout(this.limits.timeoutMs);
-    const signal = AbortSignal.any([options.signal, timeout]);
+    // 取消與逾時融合成一顆 signal，**先到的那個決定原因**（`AbortSignal.any` 採用先中止的來源的 reason）：先被中止、
+    // 逾時的計時器之後才到期（git 收到 SIGTERM 之後還有 2 秒的 SIGKILL 寬限），`timeoutOf` 讀到的仍是中止，不會誤報逾時。
+    // 舊寫法另外留著逾時那顆 signal、事後看 `timeout.aborted`，上面這個時序會報成「逾時」。
+    // `deadline` 把 `<= 0` 當成「不起計時器」（dsh 的內部暗號）；這裡的設定是 `z.number()`，0 或負數是設錯了，
+    // 舊寫法（`AbortSignal.timeout(0)`）會立刻逾時，不能因為換了實作就變成「永不逾時」。
+    if (!(this.limits.timeoutMs > 0)) {
+      throw new Error(`git timeoutMs 必須大於 0，收到 ${String(this.limits.timeoutMs)}`);
+    }
+    const bound = deadline(options.signal, this.limits.timeoutMs, GIT_TIMEOUT_CODE);
+    try {
+      return await this.#execute(args, options, bound.signal);
+    } finally {
+      bound[Symbol.dispose]();
+    }
+  }
+
+  async #execute(
+    args: readonly string[],
+    options: GitRunOptions,
+    signal: AbortSignal,
+  ): Promise<GitRunResult> {
     const failure = (): Error =>
       new Error(
-        `git ${args.join(' ')} ${timeout.aborted ? `timed out after ${this.limits.timeoutMs}ms` : 'was aborted'}`,
+        `git ${args.join(' ')} ${timeoutOf(signal, GIT_TIMEOUT_CODE) !== undefined ? `timed out after ${this.limits.timeoutMs}ms` : 'was aborted'}`,
       );
     if (signal.aborted) throw failure();
     const stdout = new TailBuffer(options.maxBytes ?? this.limits.outputMaxBytes);
