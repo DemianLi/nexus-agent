@@ -23,6 +23,8 @@
  * 4. 走 v3 串流，並把投影裡沒人讀的 promise 標成已處理（`markProjectionsHandled`，#346）——裸走的話，工具本體拋錯會讓
  *    行程以未處理的 rejection 結束（探針的子行程對照組）。
  * 5. 收尾寫 `turn/end`；拋錯寫 `turn/failed`，錯誤在這裡收掉，不往外漏。
+ * 6. **結算之前先落盤**（#1565，dsh `manager.ts` 的 `flushFinalState`）：把這個子代理自己的日誌排空，最後的回覆與 `turn/end` 才不會還在
+ *    寫回窗口裡就先通知了主對話。排空失敗只講一聲，結算照發。
  *
  * 每個子代理**各自串行**（一次一輪，後到的排隊）、彼此並行。
  *
@@ -60,7 +62,9 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   appendSubagentCatalog,
   appendSubagentDescriptor,
+  errorChain,
   fromLoggedMessage,
+  isEmptyAssistant,
   subagentLinks,
   thrownMessage,
   toLoggedMessage,
@@ -245,14 +249,27 @@ export function settlementText(summary: string, closing: string): string {
     : `${summary}\n\nIts closing message:\n${closing}`;
 }
 
-/** 這一輪最後一則回覆的非空文字；一則回覆都沒有、或沒有文字就是空字串。只看這一輪（最近一顆 `turn/start` 之後）。 */
-function closingTextOf(log: SessionLog): string {
+/**
+ * 這一次結算的收尾訊息：從 `fromSeq` 起往回找，**最後一則不是空的助手回覆**的文字（trim 後；可以是空字串）。
+ *
+ * 照 dsh `assistant-output.ts:32-40`：沒有內容也沒有工具呼叫的回覆（撞到輸出上限、工具呼叫被清掉之後什麼都不剩的那種，
+ * `max-tokens.ts` 的 `dropToolCalls`）不取代更早的輸出；判準是 `@nexus/core` 的 `isEmptyAssistant`（`content.length === 0`
+ * 加上沒有工具呼叫，照 dsh）。**不是「文字空就跳過」**：只有工具呼叫的那一則（沒撞上限）dsh 算非空、會被選中，到
+ * `continuation-messages.ts:147-155` 才只留文字，沒有就寫 `It left no closing message.`——這裡一樣。
+ *
+ * 範圍是「上一次結算之後」（dsh `activation.ts:152` 的 `outputStart`）：一次結算可以跨好幾輪（沒領走的插話排成下一輪，
+ * 結算等它收完），所以起點是這一段的第一顆 `turn/start`（{@link BackgroundSubagentHost.#epochStart}），不是最近一顆。
+ * 串流文字的退路（dsh `:55-59`）不做：子代理的日誌沒有素材（`assistant/attempt` 只由 pump 為 root 寫）。
+ */
+function closingTextOf(log: SessionLog, fromSeq: number): string {
   const events = log.events;
   for (let at = events.length - 1; at >= 0; at -= 1) {
     const event = events[at]!;
-    if (event.type === 'turn/start') return '';
+    if (event.seq < fromSeq) return '';
     if (event.type !== 'assistant/message') continue;
-    return fromLoggedMessage(event.data.message).text.trim();
+    const message = fromLoggedMessage(event.data.message);
+    if (isEmptyAssistant(message)) continue;
+    return message.text.trim();
   }
   return '';
 }
@@ -529,6 +546,11 @@ export class BackgroundSubagentHost {
    * 一次喚醒發送會恢復被暫停的 FIFO 佇列，`docs/subsystems/subagent.zh.md:152` 附近）。
    */
   readonly #paused = new Set<string>();
+  /**
+   * 這個子代理這一次結算的起點：第一顆 `turn/start` 的 `seq`（#1565，dsh `outputStart`）。結算（確定沒有輪次排著）時刪掉，
+   * 被中斷而暫停的不刪（那一段還沒收）。撤回（{@link BackgroundSubagentHost.#retract}）、關閉時丟掉的輪次與 `close()` 也清。
+   */
+  readonly #epochStart = new Map<string, number>();
   readonly #inflight = new Set<Promise<void>>();
   #wake: (() => void) | undefined;
   #closed = false;
@@ -899,6 +921,7 @@ export class BackgroundSubagentHost {
     this.#known.delete(runId);
     this.#choices.delete(runId);
     this.#paused.delete(runId);
+    this.#epochStart.delete(runId);
     this.#publishStatus();
   }
 
@@ -1188,6 +1211,7 @@ export class BackgroundSubagentHost {
     // 正在叫醒的會在重建的下一步看到 `#closed`、放掉租約再拋；等它們收完，租約才不會晚於 `close()` 才放。
     await Promise.allSettled([...this.#waking.values()]);
     await this.#loop;
+    this.#epochStart.clear();
   }
 
   /** 關閉之後：被中斷而暫停的輪次不會再有人喚醒，當作沒跑成交出去，免得 `close()` 永遠等。 */
@@ -1196,6 +1220,7 @@ export class BackgroundSubagentHost {
       const job = this.#queue[index]!;
       if (!this.#paused.has(job.runId)) continue;
       this.#queue.splice(index, 1);
+      this.#epochStart.delete(job.runId);
       job.settle({ ok: false, error: '這個背景子代理被中斷後沒有再收到訊息，這一輪沒有跑' });
     }
   }
@@ -1217,8 +1242,11 @@ export class BackgroundSubagentHost {
           this.#publishStatus();
           this.#wake?.();
           // 結算＝這個子代理沒有輪次排著了（被中斷而暫停的排著就不算）。**在交下場之前通知**，同 dsh 在所有權釋放之前。
-          if (!this.#queue.some((queued) => queued.runId === job.runId))
+          if (!this.#queue.some((queued) => queued.runId === job.runId)) {
+            // 這一段收完了：下一次 `submit` 是新的一段，收尾訊息不回頭撿這一段的。不論有沒有人接 `onSettled` 都重置。
+            this.#epochStart.delete(job.runId);
             this.#notifySettled(settlement);
+          }
           job.settle(outcome);
         });
         this.#inflight.add(round);
@@ -1290,7 +1318,8 @@ export class BackgroundSubagentHost {
     let stopClock = (): void => {};
     try {
       log = this.#sessions.open({ kind: 'subagent', runId: job.runId });
-      log.append('turn/start', job.turn);
+      const started = log.append('turn/start', job.turn);
+      if (!this.#epochStart.has(job.runId)) this.#epochStart.set(job.runId, started.seq);
       // 一輪的時鐘（#1624 的 Q-B4 (a)）：從這一輪的 `turn/start` 起算，到點照 `interrupt` 的路停下（排著的輪次暫停到下一次
       // `submit`，同主對話的 Q-B3 (a)），原因記 `hook`。收尾在 `finally` 清掉。
       const opened = log;
@@ -1355,6 +1384,11 @@ export class BackgroundSubagentHost {
       // 從表裡拿掉，窗就跟著沒了：之後到的話是排下一輪，不是掛在一個已經沒人領的收件匣上。
       this.#running.delete(job.runId);
     }
+    // **結算之前先落盤**（#1565）：通知主對話之前，這個子代理自己的最後一則回覆與 `turn/end` 要已經排空，否則強制結束落在 10ms
+    // 寫回窗口裡時，主對話記著「收尾訊息是 X」、子代理日誌卻沒有 X。放在 `#round` 裡、不放進 `.then`：`.then` 保持同步，
+    // 「先讓出位子、再交下場」不被拆開。這裡 await 的時候 `#running` 已經拿掉、`#busy` 還在：期間到的話排成下一輪，`.then`
+    // 的佇列檢查在 flush 之後才讀，所以這次不發結算（等於 dsh `manager.ts:1042-1048` 在 flush 之後重核）。
+    if (log !== undefined) await this.#flushFinal(job.runId, log);
     let settlement: BackgroundSettlement | undefined;
     if (log !== undefined) {
       const summary = settlementSummary(job.runId, stop);
@@ -1363,10 +1397,31 @@ export class BackgroundSubagentHost {
         sessionId: log.sessionId,
         summary,
         reason: stop,
-        text: settlementText(summary, closingTextOf(log)),
+        text: settlementText(
+          summary,
+          closingTextOf(log, this.#epochStart.get(job.runId) ?? Number.POSITIVE_INFINITY),
+        ),
       };
     }
     return { outcome, settlement, leftover: running.steers.splice(0) };
+  }
+
+  /**
+   * 把這個子代理自己的日誌排空（單份：`SessionRegistry.flush(log)`，#1511 沒動這一支，失敗照舊往外拋，所以在這裡接住）。
+   * 失敗只講一聲，字樣照 dsh `manager.ts:1208-1218`；結算照發。
+   */
+  async #flushFinal(runId: string, log: SessionLog): Promise<void> {
+    try {
+      await this.#sessions.flush(log);
+    } catch (error) {
+      try {
+        this.#warn?.(
+          `[背景子代理] ${runId} 結算前的最後一次落盤失敗，續接時狀態可能是舊的或讀不到：${errorChain(error)}`,
+        );
+      } catch {
+        // 講不出來也不影響結算。
+      }
+    }
   }
 
   /** 通知主對話。沒人接（沒給 `onSettled`）、拿不到日誌所以沒通知可送（`settlement` 缺）都是不通知；送不出去只講一聲。 */
