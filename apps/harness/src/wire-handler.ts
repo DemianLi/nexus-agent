@@ -49,6 +49,7 @@ import type {
   ThreadSearchResponse,
   ThreadSearchResult,
   UplinkMethod,
+  RpcMethod,
   ImageMediaType,
   PromptAttachment,
   UploadResponse,
@@ -115,6 +116,7 @@ import {
   SessionReferenceError,
   sessionReferencesPath,
   successResponse,
+  unknownParamKeys,
 } from '@nexus/wire';
 import type {
   AttachmentRef,
@@ -1281,6 +1283,50 @@ export class SubagentSessionError extends Error {
 /** 收尾中拒收這一句時回給使用者的話。**給使用者看**：web 目前直接顯示 `result.message`（理由見 `SERVER_CLOSING`）。 */
 const SERVER_CLOSING_MESSAGE = '伺服器正在重新啟動，這句話沒有送出；稍後再送一次。';
 
+/**
+ * 協定型別上合法、但這台 server **沒實作**的 `params` 欄位（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)，Q2 (a)）。
+ * 有值就回 `not_supported` 並指名欄位，不是 `invalid_argument`——同 `attachments`、`mention` 的既有模式：欄位在協定裡合法，
+ * 只是這台 server 沒有東西去讀它。不拒的話，客戶端以為「這一次的 config 覆寫」生效了，其實被靜靜忽略。
+ *
+ * 這張表只管**不在** `RPC_PARAM_KEYS` 的那幾格；其餘不認得的欄位走 `unknownParamKeys`，回 `invalid_argument`。
+ */
+const PROTOCOL_PARAMS_NOT_IMPLEMENTED: Partial<Record<RpcMethod, readonly string[]>> = {
+  'run.start': ['config', 'metadata'],
+  'input.respond': ['update', 'goto', 'config', 'metadata'],
+};
+
+/**
+ * 上行命令的 `params` 精確鍵集檢查（N1228）：照 dsh 的 `assertExactArguments`（`gateway/src/index.ts:1613-1640`，`687f282e`），
+ * 多一格就拒、**訊息只指名欄位、不帶值**。回 `undefined` 表示通過。少一格的情況不在這裡：各命令今天已經會回自己的錯。
+ */
+function paramsRejection(
+  id: number,
+  method: RpcMethod,
+  params: unknown,
+): ReturnType<typeof errorResponse> | undefined {
+  const notImplemented = PROTOCOL_PARAMS_NOT_IMPLEMENTED[method] ?? [];
+  // 協定合法但沒實作的那幾格不算「不認得」：它們走下面的 `not_supported`，不是 `invalid_argument`。
+  const unknown = unknownParamKeys(method, params).filter((key) => !notImplemented.includes(key));
+  if (unknown.length > 0) {
+    return errorResponse(
+      id,
+      'invalid_argument',
+      `${method} 不收這些欄位：${unknown.join('、')}（拼錯欄位名，或客戶端與這台 server 的版本對不上）`,
+    );
+  }
+  // `params` 不是物件時 `unknownParamKeys` 已經回空：各命令自己的必填檢查接手，這裡也沒有欄位可查。
+  if (typeof params !== 'object' || params === null) return undefined;
+  const unsupported = notImplemented.filter((key) => key in params);
+  if (unsupported.length > 0) {
+    return errorResponse(
+      id,
+      'not_supported',
+      `這一版不支援 ${method} 的 ${unsupported.join('、')}`,
+    );
+  }
+  return undefined;
+}
+
 /** 斜線命令的 `acceptSteer`／`acceptOpenTurn` 在收尾中拋的例外；只有 `handleSlash` 接，回 `server_closing`。 */
 class ServerClosingError extends Error {
   constructor() {
@@ -2075,6 +2121,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         ),
       );
     }
+    // **精確鍵集**（#1572）：信封過了、進任何一支命令之前，`params` 多出協定沒定義的欄位就拒（拼錯的欄位名不再被靜靜忽略）。
+    const rejected = paramsRejection(envelope.id, method, (body as { params?: unknown }).params);
+    if (rejected !== undefined) return json(rejected);
 
     if (isRunCancelMethod(method)) {
       // 中止這一輪（#276）：**受理就回，不等停穩**，停下來的事實走下行——照 dsh 的

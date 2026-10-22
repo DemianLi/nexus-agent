@@ -302,6 +302,7 @@ export {
   QUEUE_ITEM_NOT_FOUND,
   QUEUE_UPDATE_METHOD,
   REQUEST_ID_MAX_LENGTH,
+  RPC_PARAM_KEYS,
   RUN_CANCEL_METHOD,
   RUN_START_MODES,
   SLASH_METHODS,
@@ -338,6 +339,7 @@ export {
   isWireEvent,
   streamPath,
   successResponse,
+  unknownParamKeys,
 } from './protocol.js';
 
 export { decodeSseData, decodeSseStream, encodeSseData, encodeSseFrame } from './sse.js';

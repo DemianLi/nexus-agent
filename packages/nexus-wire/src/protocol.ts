@@ -604,6 +604,68 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
   );
 }
 
+/**
+ * 每支上行命令的 `params` 收哪些欄位（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)，N1228）。
+ *
+ * 照 dsh 的 `assertExactArguments`（`packages/api/gateway/src/index.ts:1613-1640`，`687f282e`）：欄位集合要跟描述完全一致，
+ * 多一格就拋 `gateway/arguments-invalid`，訊息只指名欄位、不帶值。**偏離（理由 1：基座表達不出來）**：dsh 的鍵集來自 Typert
+ * 描述，這裡沒有 Typert，所以用這張表代替；型別與執行期各看各的型別，靠 `satisfies` 讓**新增 method 時編譯當場報錯**
+ * （逼人在這裡登記），欄位層級則靠 `wire-handler` 那條「真的 client 送出的每個命令都不被擋」的測試。
+ *
+ * **只列這台 server 讀得懂的欄位。** 協定的型別上合法、但這台 server 沒實作的欄位（`run.start` 與 `input.respond` 的 `config`、
+ * `metadata`，`input.respond` 的 `update`、`goto`）不在表裡：它們有值時由 server 回 `not_supported` 並指名欄位，同
+ * `attachments`、`mention` 的既有模式（見 `wire-handler` 的 `PROTOCOL_PARAMS_NOT_IMPLEMENTED`），不是 `invalid_argument`。
+ * `input.respond` 的 `responses` 在表裡，是為了讓批次形照舊走 `not_supported`。
+ *
+ * 沒有參數的命令是空陣列；那一類的 `params` 省略、`{}` 都收，多一格就是多的。
+ */
+export const RPC_PARAM_KEYS = {
+  'run.start': [
+    'assistant_id',
+    'input',
+    'mode',
+    'attachments',
+    'mention',
+    'request_id',
+    'client_time_zone',
+  ],
+  'input.respond': ['namespace', 'interrupt_id', 'response', 'responses'],
+  'slash.list': [],
+  'slash.run': ['line', 'attachments'],
+  'run.cancel': [],
+  'queue.update': ['item_id', 'action'],
+  'subagent.send': ['run_id', 'text', 'client_time_zone'],
+  'subagent.interrupt': ['run_id'],
+  'subagent.list': [],
+  'feedback.put': ['messageId', 'rating', 'note', 'category', 'ifVersion'],
+  'feedback.delete': ['messageId', 'ifVersion'],
+  'feedback.list': [],
+  'feedback.record': ['text', 'category'],
+  'goal.pause': ['goalId', 'revision'],
+  'deliverable.read': ['seq', 'index', 'offset', 'limit'],
+  'deliverable.readBytes': ['seq', 'index', 'offset', 'length'],
+  'model.catalog': [],
+  'model.select': ['modelId', 'reasoningEffort'],
+  'permission.catalog': [],
+  'thread.pin': [],
+  'thread.unpin': [],
+  'thread.archive': ['stopActivity'],
+  'thread.unarchive': [],
+  'thread.rename': ['title'],
+} as const satisfies Record<RpcMethod, readonly string[]>;
+
+/**
+ * `params` 裡**這支命令不認得**的欄位名，依出現順序。`params` 不是物件（省略、`null`、陣列、字串……）就沒有欄位可數，回空陣列——
+ * 那一類由各命令自己的必填檢查回錯，訊息不變。
+ *
+ * 只看自有的字串鍵（`JSON.parse` 出來的物件沒有別的）；`__proto__` 這種鍵在 JSON 裡是普通的自有鍵，照樣被數到。
+ */
+export function unknownParamKeys(method: RpcMethod, params: unknown): readonly string[] {
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) return [];
+  const allowed: readonly string[] = RPC_PARAM_KEYS[method];
+  return Object.keys(params).filter((key) => !allowed.includes(key));
+}
+
 /** 命令的自由輸入怎麼提示：**就是 `@nexus/core` 的 `CommandInputDescriptor`**。 */
 export type SlashInputDescriptor = CommandInputDescriptor;
 
