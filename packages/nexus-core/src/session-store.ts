@@ -52,11 +52,11 @@
  *   所以介面上沒有原版號。我們的寫方今天就地續寫加性區間，舊檔就是舊版號的那一份，讀方（本文解析、`headerStale`、
  *   引用快照的 `capturedFormatVersion`、離線掃描的版本門檻）真的要知道它。header 照 dsh 轉譯成目前版，原版號另交這一格，
  *   要它的讀方被型別逼著明講。**撤除條件**：[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) 的 ③
- *   （寫方切到世代檔）合併時重新評估這一格要不要留。
+ *   （寫方切到世代檔）落地、舊檔都經遷移成目前版之後，拿掉這一格；屆時若還有讀方需要原版號，在 ③ 的 PR 裡另外登記。
  * - **引用快照的 `capturedFormatVersion` 記原版號**（`SessionReferenceSourceEntry.capturedFormatVersion`，寫在
  *   `apps/harness/src/session-reference.ts`；理由 1，**類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：
- *   dsh 記 `snapshot.session.version`（`packages/context/session-reference/src/index.ts:409`），也就是目前版——前提是
- *   store 先把事件轉成目前版才交出去（`packages/core/session/src/types.ts:96-100`）。我們今天沒有遷移鏈
+ *   dsh 記 `snapshot.session.version`（`packages/context/session-reference/src/index.ts:409`，`687f282e`），也就是目前版——
+ *   前提是 store 先把事件轉成目前版才交出去（`packages/core/session/src/types.ts:96-100`）。我們今天沒有遷移鏈
  *   （`session-format.ts` 模組說明），交給讀方的事件是磁碟上的原樣，不是目前版的表示法，所以記原版號才對得上內容。
  *   **撤除條件**：遷移鏈把事件轉成目前版再交給讀方的那一刀（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)
  *   第四刀）落地時，改成照 dsh 記目前版。跟上一條的撤除條件不同，兩條分開撤。
