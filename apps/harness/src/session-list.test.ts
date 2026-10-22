@@ -315,15 +315,27 @@ describe('listStoredThreads', () => {
       list: () =>
         Promise.resolve({
           sessions: [
-            ...[...stored.values()].map(({ header: h }) => ({ header: h, revision: 'r' })),
-            { header: header('gone'), revision: 'r' },
+            ...[...stored.values()].map(({ header: h }) => ({
+              header: h,
+              storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
+              revision: 'r',
+            })),
+            {
+              header: header('gone'),
+              storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
+              revision: 'r',
+            },
           ],
           unreadable: 2,
         }),
       open: (id) => {
         const found = [...stored.values()].find(({ header: h }) => h.id === id);
         if (found === undefined) return Promise.reject(new SessionNotFoundError(id, '不在了'));
-        return Promise.resolve({ header: found.header, read: () => Promise.resolve(found.events) });
+        return Promise.resolve({
+          header: found.header,
+          storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
+          read: () => Promise.resolve(found.events),
+        });
       },
     };
 

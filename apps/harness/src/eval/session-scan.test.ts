@@ -612,6 +612,32 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
     ]);
   });
 
+  it('比這一版舊的：門檻照磁碟上的版號判，不是轉譯後的這一版（#1856）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-older-'));
+    const entries: Entry[] = [
+      turn('message'),
+      ...same(2),
+      ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
+    ];
+    const directory = await writeSession(root, 'old', entries);
+    // 改成第 6 版寫的樣子：有工具事件與模型起訖，還沒有中止與評分。
+    const headerPath = join(directory, 'old.header.json');
+    const onDisk = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
+    await writeFile(headerPath, JSON.stringify({ ...onDisk, version: 6 }));
+
+    const { logs } = await readSessionLogs([root]);
+    expect(logs.map((log) => [log.header.id, log.header.version])).toEqual([['old', 6]]);
+    expect(scanSessionLog(logs[0]!)).toMatchObject({
+      version: 6,
+      toolCalls: 2,
+      aborted: null,
+      negativeTurns: null,
+      feedbackRecords: null,
+    });
+    // 同一份本文當成這一版掃：中止那一輪會算進去。分得出來，上面的 null 才是門檻判的。
+    expect(scan(entries).aborted).toBe(1);
+  });
+
   /**
    * header 的建置中繼資料（#1025）：記了的照印，舊版沒記的印「—」。**判準是那一格在不在**，所以舊檔的 `version` 被續接
    * 蓋成這一版也一樣印「—」。

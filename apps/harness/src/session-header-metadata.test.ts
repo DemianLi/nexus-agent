@@ -259,7 +259,12 @@ describe('寫的一側：投影與雜湊', () => {
 
 describe('讀的一側：舊版讀得出來，缺的標「—」', () => {
   it('29 以前的 header 一格都沒有：投影是空的，報表四格都是「—」', () => {
-    const old = { version: 27, id: 'cli', createdAt: 1 } as StoredSessionHeader;
+    // 讀回來的 header 版號已轉譯成這一版（#1856），缺的格照舊缺：判準是那一格在不在，不是版號。
+    const old: StoredSessionHeader = {
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'cli',
+      createdAt: 1,
+    };
     expect(readSessionHeaderMetadata(old)).toEqual({});
     expect(formatSessionHeaderMetadata(readSessionHeaderMetadata(old))).toBe(
       '建置 — ｜模型 — ｜插件 — ｜設定雜湊 —',

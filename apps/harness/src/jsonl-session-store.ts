@@ -721,6 +721,14 @@ export interface ParseHeaderOptions {
   readonly catalog?: SessionFormatCatalog;
 }
 
+/** {@link parseHeader} 交出來的東西。 */
+export interface ParsedSessionHeader {
+  /** 轉譯成這一版的 header：`version` 一律是 `SESSION_LOG_FORMAT_VERSION`，其餘各格原樣（照 dsh `types.ts:96-100`）。 */
+  readonly header: StoredSessionHeader;
+  /** 磁碟上那份 header 寫的格式版本。見 `@nexus/core` 的 `ReadonlyStoredSession.storedFormatVersion`。 */
+  readonly storedFormatVersion: number;
+}
+
 /**
  * 讀 header，**版本太新與讀不懂分開報**（見 `session-store.ts` 的版本 3 那一段）。續接、列、唯讀打開與離線掃描
  * 共用這一份，差別只在選項。
@@ -729,11 +737,14 @@ export interface ParseHeaderOptions {
  * 沒有那一段的遷移），都以 {@link SessionFormatUnsupportedError} 拒讀，訊息分得出是哪一種。續接、唯讀打開與列表都經過
  * 這裡，所以就地續寫只走得到全是 `additive` 的區間。
  *
+ * **header 在這裡轉譯成這一版**（#1856）：交出去的 `header.version` 一律是 `SESSION_LOG_FORMAT_VERSION`，磁碟上寫的
+ * 那個版號另交 `storedFormatVersion`。本文照後者解析；過了上面那道目錄檢查，兩者之間只有 `additive` 的邊。
+ *
  * @throws {@link SessionFormatUnsupportedError} 版本比這一版新（開了 `acceptNewer` 就不拋），或比一條 `breaking` 邊舊
  *   （`acceptNewer` 不放行這一種）。
  * @throws {@link SessionCorruptionError} 不是 JSON、欄位形狀不對、或 id 對不上。
  */
-export function parseHeader(text: string, options: ParseHeaderOptions = {}): StoredSessionHeader {
+export function parseHeader(text: string, options: ParseHeaderOptions = {}): ParsedSessionHeader {
   const { id: expected } = options;
   /** 錯誤訊息裡的那個 id：呼叫方給的，沒給就是 header 自己記的。 */
   let id = expected ?? '（不明）';
@@ -769,7 +780,11 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Sto
   if (typeof value['createdAt'] !== 'number') {
     throw new SessionCorruptionError(id, 'header 沒有 createdAt');
   }
-  return value as unknown as StoredSessionHeader;
+  const header = {
+    ...value,
+    version: SESSION_LOG_FORMAT_VERSION,
+  } as unknown as StoredSessionHeader;
+  return { header, storedFormatVersion: version };
 }
 
 /**
@@ -1084,9 +1099,9 @@ async function listStoredSessions(
       if (isNotFound(error)) continue;
       throw error;
     }
-    let header: StoredSessionHeader;
+    let parsed: ParsedSessionHeader;
     try {
-      header = parseHeader(text, { catalog });
+      parsed = parseHeader(text, { catalog });
     } catch (error: unknown) {
       if (
         error instanceof SessionCorruptionError ||
@@ -1097,11 +1112,11 @@ async function listStoredSessions(
       }
       throw error;
     }
-    if (safeBaseName(header.id) !== base) {
+    if (safeBaseName(parsed.header.id) !== base) {
       unreadable += 1;
       continue;
     }
-    sessions.push({ header, revision });
+    sessions.push({ ...parsed, revision });
   }
   return { sessions, unreadable };
 }
@@ -1128,21 +1143,22 @@ async function openStoredSessionForRead(
     }
     throw error;
   }
-  const header = parseHeader(text, { id, catalog });
+  const { header, storedFormatVersion } = parseHeader(text, { id, catalog });
   const logPath = join(directory, `${base}${LOG_SUFFIX}`);
   return {
     header,
+    storedFormatVersion,
     async read(options: StoredSessionReadOptions = {}): Promise<readonly SessionEvent[]> {
       const body = await readBody(logPath);
       try {
         // 開了 salvage 的先走 strict、失敗才撿回：salvage 的語意（已登記的偏離）維持今天的樣子，不被 recoverable 搶先丟掉。
         return parseJsonlSessionBody(id, body, {
-          version: header.version,
+          version: storedFormatVersion,
           recovery: options.salvage === true ? 'strict' : 'recoverable',
         }).events;
       } catch (error: unknown) {
         if (options.salvage === true && error instanceof SessionCorruptionError) {
-          return salvageJsonlSessionBody(id, body, header.version);
+          return salvageJsonlSessionBody(id, body, storedFormatVersion);
         }
         throw error;
       }
@@ -1183,29 +1199,29 @@ async function resumeStoredSession(
       if (isNotFound(error)) throw missing();
       throw error;
     }
-    const header = parseHeader(headerText, { id, catalog: context.catalog });
+    const { header, storedFormatVersion } = parseHeader(headerText, {
+      id,
+      catalog: context.catalog,
+    });
     const body = await readBody(join(directory, `${base}${LOG_SUFFIX}`));
     const { events, validBytes } = parseJsonlSessionBody(id, body, {
-      version: header.version,
+      version: storedFormatVersion,
       recovery: 'recoverable',
     });
     const droppedBytes = body.byteLength - validBytes;
     return {
       header,
+      storedFormatVersion,
       events,
       // 就地續寫、header 換成這一版：**只在加性區間成立**（#1529）。走到這裡的版本，從它到這一版的每一條邊都是
       // `additive`——有 `breaking` 的話上面的 `parseHeader` 已經拒讀，續寫進去的新詞彙舊段落的讀法不受影響。
-      stored: new JsonlStoredSession(
-        directory,
-        { ...header, version: SESSION_LOG_FORMAT_VERSION },
-        context,
-        {
-          nextSeq: events.length,
-          ...(header.version !== SESSION_LOG_FORMAT_VERSION && { headerStale: true as const }),
-          ...(droppedBytes > 0 && { torn: { truncateTo: validBytes, droppedBytes } }),
-          lease,
-        },
-      ),
+      // `header` 已經是這一版（`parseHeader` 轉譯過），磁碟上那份要不要換掉看 `storedFormatVersion`。
+      stored: new JsonlStoredSession(directory, header, context, {
+        nextSeq: events.length,
+        ...(storedFormatVersion !== SESSION_LOG_FORMAT_VERSION && { headerStale: true as const }),
+        ...(droppedBytes > 0 && { torn: { truncateTo: validBytes, droppedBytes } }),
+        lease,
+      }),
     };
   } catch (error: unknown) {
     // 讀壞了就沒有把手可關，租約得在這裡放。

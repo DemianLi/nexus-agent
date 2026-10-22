@@ -50,7 +50,7 @@ function readerOf(
       const found = sessions[sessionId];
       return found === undefined
         ? Promise.reject(new Error(`找不到 ${sessionId}`))
-        : Promise.resolve(found);
+        : Promise.resolve({ ...found, storedFormatVersion: SESSION_LOG_FORMAT_VERSION });
     },
   };
 }
@@ -340,7 +340,12 @@ describe('prepareSessionReferences：讀、投影、塞預算、渲染成一則 
     const slow: SessionReferenceReader = {
       read: () =>
         new Promise((resolve) => {
-          release = () => resolve({ header: header('a'), events: [] });
+          release = () =>
+            resolve({
+              header: header('a'),
+              storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
+              events: [],
+            });
         }),
     };
     const controller = new AbortController();
