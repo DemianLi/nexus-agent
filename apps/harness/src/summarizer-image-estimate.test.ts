@@ -42,7 +42,10 @@ import { ScriptedChatModel } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
-const imageRef = (letter: string, name: string): AttachmentRef => ({
+const imageRef = (
+  letter: string,
+  name: string,
+): Extract<AttachmentRef, { readonly type: 'image' }> => ({
   type: 'image',
   attachmentId: `sha256:${letter.repeat(64)}`,
   mediaType: 'image/png',
