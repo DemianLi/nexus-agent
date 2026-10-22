@@ -38,6 +38,11 @@
  * `initialDelayMs` 大於 0、不超過 `MAX_TIMER_DELAY_MS`、不大於 `maxDelayMs`；`jitterRatio` 在 0 到 1；`retryableCodes` 不能
  * 是空陣列、不能有空字串、不能重複；未知欄位拒收。
  *
+ * **解出來的政策是凍結的**（[#1603](https://github.com/DemianLi/nexus-agent/issues/1603)，照 dsh `retry-policy.ts:149-195` 的
+ * `resolveRetryPolicy`：每條回傳路徑都 `Object.freeze`，沒有偏離）：這一份在起動期解一次、全行程的對話共用（`startupSetting`），
+ * 誰在執行期對它 `push` 一個碼或改一個數字，所有對話的重試都會跟著變、而且不報錯；凍結之後那一處當場拋 `TypeError`。
+ * `readonly` 只在編譯期有效，這一層是執行期的。使用者寫進設定的陣列是複製後才凍結（同 dsh `:182`），不會被凍到。
+ *
  * **重試只有 `@nexus/core` 的 `retryModelCall` 這一層**：SDK 的 `AsyncCaller` `maxRetries` 恆為 0（`live-model.ts`
  * 的 `onFailedAttempt` 只做分類與回報）。以前兩層各算各的（SDK 6 次＋串流中段 2 次），同一個情境最壞 (1+6)×(1+2) 次請求、
  * 第 4 次起 `llm/retry` 還被吞掉（`.docs/wrapmodelcall-bridge-gaps-2026-10-11.md` G4）。現在首事件之前與之後共用這一份預算，
@@ -296,7 +301,7 @@ function retryModeError(issue: { readonly input?: unknown }): string {
   return "retryPolicy.mode 只收 'normal'";
 }
 
-const retryPolicySchema = z.strictObject({
+const retryPolicyShape = z.strictObject({
   /** 只收 `normal`，寫了就必填，見 {@link retryModeError}。 */
   mode: z.literal('normal', { error: retryModeError }),
   /** 最多重打幾次（不含第一次）。非負安全整數，沒有另外的上限，同 dsh：安全靠的是單次等待有界。 */
@@ -319,9 +324,41 @@ const retryPolicySchema = z.strictObject({
   })),
 });
 
-/** 整個不寫 `retryPolicy` 時的值：normal、出廠的四個數字、dsh 預設可重試碼。 */
-function defaultRetryPolicy(): z.infer<typeof retryPolicySchema> {
-  return {
+/** 驗完、還沒凍結的重試政策（形狀）。 */
+type RetryPolicyShape = z.infer<typeof retryPolicyShape>;
+
+/** 凍結後的重試政策：整份唯讀，`retryableCodes` 與 `backoff` 也各自凍結。 */
+type FrozenRetryPolicy = Readonly<
+  Omit<RetryPolicyShape, 'retryableCodes' | 'backoff'> & {
+    retryableCodes: readonly string[];
+    backoff: Readonly<RetryPolicyShape['backoff']>;
+  }
+>;
+
+/**
+ * 把驗過的重試政策凍結，見檔頭「解出來的政策是凍結的」那一段（照 dsh、沒有偏離）。**複製再凍結**，同 dsh `retry-policy.ts:182`：使用者寫進設定的那個陣列
+ * 不被凍結、也不會被這一份共用；`backoff` 是巢狀物件，要另外凍一層（dsh 由 `resolveBackoff` 凍，`:140`）。
+ *
+ * @param policy - 驗過的政策。
+ * @returns 一份新的、整份凍結的政策。
+ */
+function freezeRetryPolicy(policy: RetryPolicyShape): FrozenRetryPolicy {
+  return Object.freeze({
+    ...policy,
+    retryableCodes: Object.freeze([...policy.retryableCodes]),
+    backoff: Object.freeze({ ...policy.backoff }),
+  });
+}
+
+/**
+ * 重試政策：驗完就凍結。**zod 4 的 `.default()` 在整格沒寫時直接回預設函式給的值、不跑內層的 transform**
+ * （#1603 實測），所以 `retryPolicy` 那一格的預設值要自己凍（{@link defaultRetryPolicy}），兩條路都要凍到。
+ */
+const retryPolicySchema = retryPolicyShape.transform(freezeRetryPolicy);
+
+/** 整個不寫 `retryPolicy` 時的值：normal、出廠的四個數字、dsh 預設可重試碼；**凍結的**，見 {@link retryPolicySchema}。 */
+function defaultRetryPolicy(): FrozenRetryPolicy {
+  return freezeRetryPolicy({
     mode: 'normal',
     maxRetries: DEFAULT_RETRY_MAX_RETRIES,
     retryableCodes: [...DEFAULT_STREAM_RETRYABLE_CODES],
@@ -330,7 +367,7 @@ function defaultRetryPolicy(): z.infer<typeof retryPolicySchema> {
       maxDelayMs: DEFAULT_STREAM_RETRY_MAX_DELAY_MS,
       jitterRatio: DEFAULT_STREAM_RETRY_JITTER_RATIO,
     },
-  };
+  });
 }
 
 /** 七格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
@@ -398,16 +435,17 @@ export type LiveModelConfig = z.infer<typeof liveModelConfigSchema>;
  * 把驗過的 `retryPolicy` 攤平成 `@nexus/core` 的執行參數（`mode` 只有 `normal`，沒有東西要帶）。
  *
  * @param policy - `live-model` 那一列驗過的 `retryPolicy`。
- * @returns 給 `streamRetry`、標題與摘要器生摘要那幾處共用的同一份。
+ * @returns 給 `streamRetry`、標題與摘要器生摘要那幾處共用的同一份；**凍結的**（#1603）。
  */
 export function streamRetryOptionsOf(policy: LiveModelConfig['retryPolicy']): StreamRetryOptions {
-  return {
+  return Object.freeze({
     maxRetries: policy.maxRetries,
     initialDelayMs: policy.backoff.initialDelayMs,
     maxDelayMs: policy.backoff.maxDelayMs,
     jitterRatio: policy.backoff.jitterRatio,
+    // 政策上那個已凍結的陣列，不複製：全行程共用的是同一個，誰寫它都會當場拋。
     retryableCodes: policy.retryableCodes,
-  };
+  });
 }
 
 /**
