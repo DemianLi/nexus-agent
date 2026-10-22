@@ -38,6 +38,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
+import { convertMessagesToCompletionsMessageParams } from '@langchain/openai';
 import { HumanMessage } from '@langchain/core/messages';
 import { APPROVAL_POLICY_NEVER, SessionRegistry, STEP_INBOX_CONFIG_KEY } from '@nexus/core';
 import type {
@@ -70,6 +71,7 @@ import { createMemoryPlugin } from '@nexus/plugin-memory';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
+import { restoreConversation } from './conversation-restore.js';
 import { runRepl } from './cli.js';
 import {
   shippedPlugins,
@@ -129,13 +131,14 @@ async function assemble(turns: readonly ScriptedTurn[], options: AssembleOptions
   const base = [...(options.before ?? []), ...withPlanMode(options.plan)];
   const plugins = withScriptedModel(options.patch ? options.patch(base) : base, turns);
   const built = await createCliAgent(
-    { live: false, ...(options.workspace === undefined ? {} : { workspace: options.workspace }) },
-    plugins,
-    options.workspace,
     {
-      ...(options.headless === true && { approvals: HEADLESS_APPROVALS }),
+      live: false,
+      ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
       ...(options.stepInbox === true && { stepInbox: true }),
     },
+    plugins,
+    options.workspace,
+    options.headless === true ? { approvals: HEADLESS_APPROVALS } : {},
   );
   return { ...built, model: built.model as ScriptedChatModel };
 }
@@ -325,13 +328,14 @@ async function reviewPlan(
   threadId: string,
   reply: QuestionReply,
   inbox?: StepInbox,
+  script: readonly ScriptedTurn[] = PLAN_SCRIPT,
 ): Promise<{
   readonly raised: readonly RaisedInterrupt[];
   readonly after: { readonly messages: readonly BaseMessage[]; readonly __interrupt__?: unknown };
   readonly events: readonly SessionEvent[];
   readonly model: ScriptedChatModel;
 }> {
-  const { agent, model, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
+  const { agent, model, sessions, attachSession, dispose } = await assemble(script, {
     plan: { startActive: true },
     ...(inbox !== undefined && { stepInbox: true }),
   });
@@ -514,7 +518,8 @@ describe('exit_plan_mode 的結局', () => {
       inbox,
     );
 
-    expect(finishCalls).toEqual([1]);
+    // 第一次收尾領走那一件、跳回模型；第二次收尾（模型說完）窗是空的。
+    expect(finishCalls).toEqual([1, 0]);
     expect(model.prompts).toHaveLength(2);
     const humans = (model.prompts[1] ?? [])
       .filter((message) => message.getType() === 'human')
@@ -541,6 +546,103 @@ describe('exit_plan_mode 的結局', () => {
 
     expect(finishCalls).toEqual([0]);
     expect(model.prompts).toHaveLength(1);
+  });
+
+  /**
+   * **冷續接之後，送給模型的 `exit_plan_mode` 結果跟改動前逐位元組相同**（#1607 條件 1）。同意、繼續規劃的結果在日誌與 state 裡
+   * 不帶 `name`（{@link EXIT_PLAN_MODE_RETURN_DIRECT}）；續接是從日誌 `tool/result` 重建 messages，重建出來的同樣不帶，
+   * 所以 `wrapModelCall` 補回 `name` 在還原的路上也要生效。期望值寫死成供應商那一側的形狀（Chat Completions 的 `tool` 訊息帶 `name`），
+   * 跟改動前（結果自帶 `name`）一致。
+   */
+  it.each([
+    [
+      '同意',
+      { answers: [{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }] },
+      PLAN_APPROVED_MESSAGE,
+    ],
+    [
+      '繼續規劃',
+      {
+        answers: [
+          { id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_KEEP_PLANNING_LABEL], custom: '先補測試' },
+        ],
+      },
+      `Error: ${planFeedbackMessage('先補測試')}`,
+    ],
+  ] as const)(
+    '冷續接（%s）→ 重建出來的結果進模型請求時帶回 name，供應商側位元組不變',
+    async (label, reply, text) => {
+      const { events } = await reviewPlan(`review-cold-${label}`, reply);
+      const logged = events.filter((event) => event.type === 'tool/result');
+      // 前提：日誌裡這則確實不帶 name，沒補回去就不會有這一格要驗的東西。
+      const loggedData = (logged[0]?.data as { message?: { data?: { name?: unknown } } }).message
+        ?.data;
+      expect(loggedData?.name).toBeUndefined();
+
+      const fresh = await assemble(quiet('續接後的回覆。'), { plan: { startActive: true } });
+      try {
+        await restoreConversation(fresh.agent as never, 'cold-thread', events);
+        await fresh.agent.invoke(toAgentInvocation('接著說。'), {
+          configurable: { thread_id: 'cold-thread' },
+        });
+      } finally {
+        await fresh.dispose();
+      }
+      const provider = convertMessagesToCompletionsMessageParams({
+        messages: [...fresh.model.lastPrompt],
+        model: 'x',
+      }) as { role: string; content: unknown; name?: string; tool_call_id?: string }[];
+      const toolMessage = provider.find((message) => message.role === 'tool');
+      expect(toolMessage).toEqual({
+        role: 'tool',
+        content: text,
+        name: EXIT_PLAN_MODE_TOOL_NAME,
+        tool_call_id: expect.any(String),
+      });
+    },
+  );
+
+  /**
+   * **同一批還有別的工具呼叫時，關掉這一題不收這一輪**（#1607 登記的偏離，理由 1）：dsh 是批內任何一個 `concludeTurn()` 就收，
+   * 基座的路由每個呼叫各判，混批會讓 exitNode 與 beforeModel 在同一個 super-step 都寫 `jumpTo` 而整輪擲 `InvalidUpdateError`
+   * （`returndirect-route.test.ts` 釘住基座形狀）。這裡用真工具＋step-inbox（產品組裝永遠有 `beforeModel`）驗：不擲、照常繼續、
+   * 兩種批內順序都一樣、模式還開著、結果仍是成功那一句。
+   */
+  it.each([
+    ['exit_plan_mode 在前', 0],
+    ['exit_plan_mode 在後', 1],
+  ] as const)('關掉這一題、同一批還有別的工具（%s）→ 不擲、這一輪照常繼續', async (_label, at) => {
+    const calls: { name: string; args: Record<string, unknown> }[] = [
+      { name: 'write_todos', args: { todos: [] } },
+    ];
+    calls.splice(at, 0, { name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: '# 計劃\n\n先看再改。' } });
+    const finishCalls: number[] = [];
+    const inbox: StepInbox = {
+      claim: () => Promise.resolve([]),
+      finish: () => {
+        finishCalls.push(0);
+        return Promise.resolve([]);
+      },
+    };
+    const { after, events, model } = await reviewPlan(
+      'review-dismiss-batch',
+      { cancelled: true },
+      inbox,
+      [{ content: '並行。', toolCalls: calls }, { content: '再說一句。' }],
+    );
+
+    expect(model.prompts).toHaveLength(2);
+    expect(finishCalls).toEqual([0]);
+    const exit = (after.messages as BaseMessage[]).find(
+      (message) => message.getType() === 'tool' && message.text === PLAN_REVIEW_DISMISSED_MESSAGE,
+    ) as ToolMessage;
+    expect(exit.status).not.toBe('error');
+    // 送給模型的請求跟以前一樣帶 `name`（middleware 補回去）。
+    const seenByModel = (model.prompts[1] ?? []).find(
+      (message) => message.getType() === 'tool' && message.text === PLAN_REVIEW_DISMISSED_MESSAGE,
+    ) as ToolMessage;
+    expect(seenByModel.name).toBe(EXIT_PLAN_MODE_TOOL_NAME);
+    expect(events.some((event) => event.type === 'plan/mode')).toBe(false);
   });
 
   /**

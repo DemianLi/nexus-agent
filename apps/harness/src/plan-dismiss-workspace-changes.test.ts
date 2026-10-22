@@ -1,12 +1,10 @@
 /**
- * **關掉計劃審核收尾這一輪，改動紀錄仍然記得到**（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607) 探針 (a)）。
+ * **關掉計劃審核收尾這一輪，改動紀錄記在 `turn/end` 之前**（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)，照 dsh）。
  *
- * 關掉審核時 plan-mode 的 middleware 在 `beforeModel` 跳 `end`，直達 END，**略過所有 `afterAgent`**——其中一顆是
- * `@nexus/plugin-workspace-changes` 的 `stopping()`（輪內記錄）。要證明沒有丟：同一輪先改了檔、再交計劃、人關掉審核，
- * 日誌上仍有一顆 `workspace/changes`，而且落在這一輪（`turn/start` 之後、下一輪 `turn/start` 之前）。
- *
- * 靠的是 `turn/end` 之後的補記（`TurnRecorder.end()`，recorder.ts：中止、失敗、以及這種略過 `afterAgent` 的收尾共用）。
- * **這一檔把「補記」這條路釘住**：哪天有人把補記拿掉、或把關掉審核的收尾改回別的路，這裡會紅。
+ * 關掉審核時 `exit_plan_mode` 的結果帶 `name`、工具設了 `returnDirect`，基座的 tools 路由走 exitNode，**跑所有 `afterAgent`**，
+ * 其中一顆是 `@nexus/plugin-workspace-changes` 的 `stopping()`（輪內記錄）。同一輪先改了檔、再交計劃、人關掉審核，
+ * 日誌上的 `workspace/changes` 落在這一輪、**在 `turn/end` 之前**——dsh 的 `agent/turn-stopping` 也是這個時機。
+ * （曾試過 middleware 的 `beforeModel` 跳 `end`：略過 `afterAgent`，記錄要等 `turn/end` 之後由 `end()` 補記；探針量過，沒採用。）
  *
  * 走產品組裝（serve 的出貨清單＋`--workspace`）、真的 pump 與 wire，模型是腳本。
  */
@@ -136,7 +134,7 @@ async function dismissAfterWriting(): Promise<{
         all.slice(0, at).some((e) => e.type === 'turn/start' && e.data.kind === 'resume'),
     ) ?? false;
   await pump(ended);
-  // 補記排在 `turn/end` 之後的佇列裡（`end()` 是 `void enqueue`）；讓它落定。
+  // 記錄經日誌的寫入佇列落定；等它出現。
   await vi.waitFor(() => {
     expect(sessions?.root.events.some((event) => event.type === 'workspace/changes')).toBe(true);
   });
@@ -145,7 +143,7 @@ async function dismissAfterWriting(): Promise<{
   return { sessions, model, close: () => handler.close() };
 }
 
-describe('關掉計劃審核收尾：略過 afterAgent 之後改動紀錄還在', () => {
+describe('關掉計劃審核收尾：afterAgent 照跑，改動紀錄記在 turn/end 之前', () => {
   it('同一輪先改檔、再交計劃、人關掉審核：一顆 workspace/changes，落在這一輪、模型只多叫到交計劃那一次', async () => {
     const { sessions, model, close } = await dismissAfterWriting();
     try {
@@ -169,9 +167,9 @@ describe('關掉計劃審核收尾：略過 afterAgent 之後改動紀錄還在'
       const lastStart = starts.at(-1)!;
       // 落在最後一顆 `turn/start`（resume 那一輪）之後，也沒有下一輪的 `turn/start` 在它後面。
       expect(at).toBeGreaterThan(lastStart);
-      // 補記在 `turn/end` 之後：略過 `afterAgent` 的收尾走的是 `end()`，不是輪內的 `stopping()`。
+      // 輪內記錄在 `turn/end` 之前：走 exitNode 所以 `afterAgent` 的 `stopping()` 跑到了，不是靠 `end()` 補記。
       const turnEnd = events.filter((event) => event.type === 'turn/end').at(-1)!.seq;
-      expect(at).toBeGreaterThan(turnEnd);
+      expect(at).toBeLessThan(turnEnd);
     } finally {
       await close();
     }

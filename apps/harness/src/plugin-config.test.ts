@@ -347,6 +347,8 @@ describe('出貨的 cordis.yml', () => {
 
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
     expect(withConfig).toEqual([
+      // **`guidance` 必填、套件沒有預設值**（#1607，照 dsh），所以出貨那一列帶 config；內容由 `plan-mode.test.ts` 的 `SHIPPED_GUIDANCE` 量。
+      'plan-mode',
       'todo',
       'feedback',
       'system-prompt',
@@ -792,7 +794,7 @@ describe('讀清單時一列自己的失敗只讓那一列掉（#751）', () => 
     const { plugins, dropped } = await loadRows(
       "- id: echo\n  name: '@nexus/plugin-echo'\n" +
         "- id: todo\n  name: '@nexus/plugin-todo'\n  config:\n    allowParallelInProgress: '不是布林'\n" +
-        "- id: plan\n  name: '@nexus/plugin-plan-mode'\n",
+        "- id: plan\n  name: '@nexus/plugin-plan-mode'\n  config:\n    guidance: 計劃指引\n",
     );
     expect(plugins.map((entry) => [entry.id, entry.disabled === true])).toEqual([
       ['echo', false],
