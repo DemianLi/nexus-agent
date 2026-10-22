@@ -49,6 +49,7 @@ import type {
   ThreadSearchResponse,
   ThreadSearchResult,
   UplinkMethod,
+  RpcMethod,
   ImageMediaType,
   PromptAttachment,
   UploadResponse,
@@ -115,6 +116,8 @@ import {
   SessionReferenceError,
   sessionReferencesPath,
   successResponse,
+  RPC_PARAMS_NOT_IMPLEMENTED,
+  unknownParamKeys,
 } from '@nexus/wire';
 import type {
   AttachmentRef,
@@ -1281,6 +1284,46 @@ export class SubagentSessionError extends Error {
 /** 收尾中拒收這一句時回給使用者的話。**給使用者看**：web 目前直接顯示 `result.message`（理由見 `SERVER_CLOSING`）。 */
 const SERVER_CLOSING_MESSAGE = '伺服器正在重新啟動，這句話沒有送出；稍後再送一次。';
 
+/**
+ * 上行命令的 `params` 精確檢查（N1228，[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)）：照 dsh 的 `assertExactArguments`
+ * （`gateway/src/index.ts:1613-1640`，`687f282e`）。回 `undefined` 表示通過。
+ *
+ * - **有給 `params` 就要是物件**（`:1618-1620`，`args must be a plain object`）：`null`、陣列、字串、數字一律 `invalid_argument`。
+ *   **省略 `params` 照收**：有些命令的型別本來就沒有 `params`，缺不缺由各命令自己決定（`feedback.list` 省略今天回「缺 params」）。
+ * - **多一格就拒**，訊息只指名欄位、不帶值；鍵名用 `JSON.stringify` 加引號（空字串鍵、含換行或控制字元的鍵都讀得出來）。
+ * - 協定型別上合法、但這台 server 沒實作的欄位（{@link RPC_PARAMS_NOT_IMPLEMENTED}）有值回 `not_supported`，同 `attachments`、`mention`。
+ *
+ * **少一格不在這裡重報**：各命令今天已經會回自己的錯，訊息不變。
+ */
+function paramsRejection(
+  id: number,
+  method: RpcMethod,
+  body: object,
+): ReturnType<typeof errorResponse> | undefined {
+  if (!Object.hasOwn(body, 'params')) return undefined;
+  const params = (body as { params?: unknown }).params;
+  if (typeof params !== 'object' || params === null || Array.isArray(params)) {
+    return errorResponse(id, 'invalid_argument', `${method} 的 params 要是物件`);
+  }
+  const quoted = (keys: readonly string[]): string =>
+    keys.map((key) => JSON.stringify(String(key))).join('、');
+  const unknown = unknownParamKeys(method, params);
+  if (unknown.length > 0) {
+    return errorResponse(
+      id,
+      'invalid_argument',
+      `${method} 不收這些欄位：${quoted(unknown)}（拼錯欄位名，或客戶端與這台 server 的版本對不上）`,
+    );
+  }
+  const notImplemented: readonly string[] =
+    (RPC_PARAMS_NOT_IMPLEMENTED as Partial<Record<RpcMethod, readonly string[]>>)[method] ?? [];
+  const unsupported = notImplemented.filter((key) => key in params);
+  if (unsupported.length > 0) {
+    return errorResponse(id, 'not_supported', `這一版不支援 ${method} 的 ${quoted(unsupported)}`);
+  }
+  return undefined;
+}
+
 /** 斜線命令的 `acceptSteer`／`acceptOpenTurn` 在收尾中拋的例外；只有 `handleSlash` 接，回 `server_closing`。 */
 class ServerClosingError extends Error {
   constructor() {
@@ -1840,7 +1883,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * `GET /threads/:id/attachments/:attachmentId`（[#733](https://github.com/DemianLi/nexus-agent/issues/733)）：契約見 `@nexus/wire` 的
    * `attachmentPath`。**授權＝這條 thread 的日誌引用過它**（`referencedImage`，照 dsh `session.attachment`），不是知道 id。
    * 讀記憶體裡那份 root 日誌（含還沒落盤的），**只讀已經載入的 thread**：沒載入的一律 `attachment_not_found`，不為了讀圖建 thread。
-   * 沒引用、編號不合格式、thread 不存在不細分（見 `ATTACHMENT_NOT_FOUND`）；引用了但位元組讀不回來（儲存被清掉、大小或雜湊對不上）是 `unknown_error`。
+   * 沒引用、編號不合格式、thread 不存在不細分（見 `ATTACHMENT_NOT_FOUND`）；引用了但位元組讀不回來（儲存被清掉、大小或雜湊對不上、檔頭的媒體類型或寬高跟參照對不上，#1566）是 `unknown_error`。
    */
   async function handleAttachment(threadId: string, attachmentId: string): Promise<Response> {
     const store = options.attachments;
@@ -1901,7 +1944,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    *    （照 dsh `commands.ts:336-348`）；什麼都沒宣告照收。檢查在碰收據、解 base64 之前。
    * 2. **收據**：必須是這條 thread 發的、沒用過的；同一句話不能用兩次。**收下的那一刻就從表裡拿掉**（同步，賽跑的第二個請求拿不到），
    *    後面任何一步失敗再放回去——整句拒收，使用者可以修了重送，檔案不必重傳。
-   * 3. **圖**：四道上限與格式（`image-intake.ts`），通過才存進附件儲存。
+   * 3. **圖**：五道上限與格式（`image-intake.ts`：每張位元組、每句張數、每句總量、每張像素、每張單邊），通過才存進附件儲存。
    *
    * 不碰回應格式（`run.start` 與 `slash.run` 共用）：成功時附帶「放回收據」的 `restore`，拒收時給碼與訊息。
    *
@@ -2075,6 +2118,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         ),
       );
     }
+    // **精確鍵集**（#1572）：信封過了、進任何一支命令之前，`params` 多出協定沒定義的欄位就拒（拼錯的欄位名不再被靜靜忽略）。
+    const rejected = paramsRejection(envelope.id, method, envelope);
+    if (rejected !== undefined) return json(rejected);
 
     if (isRunCancelMethod(method)) {
       // 中止這一輪（#276）：**受理就回，不等停穩**，停下來的事實走下行——照 dsh 的
