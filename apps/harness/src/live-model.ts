@@ -1985,9 +1985,10 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
     if (code === SESSION_EVENT_DEPTH_EXCEEDED || code === CHECKPOINT_DEPTH_EXCEEDED) tooDeep = true;
     if (inband === undefined && modelCall && guarded(() => isInbandApiError(link), false)) {
       const body = readField(link, 'error');
-      inband = classifyInbandError(
-        typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : undefined,
-      );
+      const envelope =
+        typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : undefined;
+      // 信封上的欄位也是別人的物件（SDK 從伺服器的 body 組出來），讀到拋錯的存取子就當作沒有信封（照 dsh 的預設：`SERVER`）。
+      inband = guarded(() => classifyInbandError(envelope), classifyInbandError(undefined));
       if (inband.overflow) overflow = true;
     }
   }
@@ -2054,7 +2055,7 @@ export function turnFailureOf(error: unknown): { message: string; error: LlmFail
 /**
  * 供應商給的 `retry-after`（毫秒）：從錯誤鏈上找帶 `headers` 的那一環，秒數或 HTTP 日期都認，沒有就 `undefined`。
  *
- * **認 header，不解析訊息**（同這個檔的規矩）。in-band 錯誤翻成的 HTTP 回應會把 `retry-after` 帶過來
+ * **只讀 header，不讀訊息**：額度與超窗的字樣在 {@link classifyTurnFailure}（模型呼叫的錯誤鏈上），這一支不碰。in-band 錯誤翻成的 HTTP 回應會把 `retry-after` 帶過來
  * （{@link withInbandStreamErrors}），所以兩種投遞方式走同一條路。
  */
 export function retryAfterMsOf(error: unknown): number | undefined {

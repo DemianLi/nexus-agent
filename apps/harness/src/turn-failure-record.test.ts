@@ -69,6 +69,27 @@ describe('N0471：怪值不能讓記失敗那一步拋錯', () => {
     expect(classifyTurnFailure(outer)).toMatchObject({ code: 'RATE_LIMIT', status: 429 });
   });
 
+  it('串流中段的信封（沒有 status 的 APIError）欄位的 getter 會拋錯：照樣分類，當作沒有信封', () => {
+    class APIError extends Error {
+      readonly error: object;
+      constructor(body: object) {
+        super('provider error');
+        this.error = body;
+      }
+    }
+    const body = {};
+    for (const key of ['type', 'code', 'message', 'status']) {
+      Object.defineProperty(body, key, {
+        get() {
+          throw new Error(`${key} getter 拋錯`);
+        },
+      });
+    }
+    const error = new APIError(body);
+    markModelCallFailure(error);
+    expect(classifyTurnFailure(error)).toMatchObject({ code: 'SERVER' });
+  });
+
   it('cause 的 getter 會拋錯：停在那一環，前面讀到的照用', () => {
     const outer = withStatus(503, '過載');
     Object.defineProperty(outer, 'cause', {
@@ -232,6 +253,18 @@ describe('N0479：UNKNOWN 的失敗，turn/failed 帶整條原因鏈', () => {
     });
     const recorded = turnFailureOf(wrapped(new Error('外層', { cause })));
     expect(recorded.message).toBe('外層: <unrenderable value>');
+  });
+
+  it('空 message 的 Error：UNKNOWN 記名字（errorChain 的規則），有碼的失敗記固定字', () => {
+    const unknown = turnFailureOf(new Error(''));
+    expect(unknown.message).toBe('Error');
+    expect(unknown.error).toMatchObject({ code: 'UNKNOWN', message: 'Error' });
+    const classified = turnFailureOf(withStatus(500, ''));
+    expect(classified.message).toBe(LLM_FAILURE_FALLBACK_MESSAGE);
+    expect(classified.error).toMatchObject({
+      code: 'SERVER',
+      message: LLM_FAILURE_FALLBACK_MESSAGE,
+    });
   });
 
   it('不是 UNKNOWN 的碼維持最外層那一句：供應商的原話', () => {
