@@ -14,8 +14,15 @@
  * - `event:<名字>`：每一種事件，名字來自 `known-event-types-catalog.ts` 的掃描，再跟編譯器看到的
  *   `keyof SessionEventMap` 對一次，兩邊不一致就拋。
  *
- * dsh 另有兩個根，nexus 不建，因為沒有對應的實體型別（不是偏離）：`JsonlHeaderLine`（dsh 的實體 header 行跟邏輯 header
- * 分開；nexus 的 header 檔就是 `StoredSessionHeader` 直接序列化）與 surface 標記（nexus 沒有 `SurfaceEventType`）。
+ * dsh 另有 `JsonlHeaderLine` 這個根（實體 header 行跟邏輯 header 分開），nexus 不建：header 檔就是 `StoredSessionHeader`
+ * 直接序列化，沒有另一個實體型別（不是偏離）。
+ *
+ * 每個事件根照 dsh 帶 `surface` 欄位（不進指紋；dsh 的驗證器 `persistence-changes.ts:299` 拒收沒有這一格的事件根，
+ * `:388`、`:397`、`:424` 用它判斷能不能同版新增）。nexus 沒有 surface 那一軸（`session-log.ts` 的
+ * `ModelVisibleEventType` 說明），所以每一種都照實寫 `false`。
+ *
+ * 合成的根檔放在 `scripts/`（同 dsh），不在追蹤範圍裡：它的型別別名不能變成型別名與宣告位置，否則
+ * `__persistence_schema_roots__.ts#EventRootN` 會進基線，而且每加一種排序靠前的事件就整批重編號。
  *
  * ## program 怎麼組
  *
@@ -25,15 +32,18 @@
  * 它不宣告事件，`tsconfig.base.json` 也沒有 DOM 與 JSX 的設定。編譯選項照 dsh 覆寫成 `strict`、
  * `exactOptionalPropertyTypes`、`skipLibCheck: false`；診斷只收選項、語法、根檔，以及從根可達的宣告範圍內的語意錯誤。
  *
- * ## 偏離 dsh
+ * ## 過渡：訊息上的來源不進型別圖
  *
- * **`@persistenceSource`／`@persistenceAttribution` 不搬（理由 1，基座表達不出來）。** dsh 用這兩個標記把訊息來源
+ * **`@persistenceSource`／`@persistenceAttribution` 這一刀不搬，登記為過渡（不掛偏離理由）。** dsh 用這兩個標記把訊息來源
  * （`packages/llm/llm/src/message.ts:145` 的 `MessageBase.source`）綁進型別圖，讓「新增一種來源」走寬鬆的相容政策。
- * nexus 的訊息來源 `MessageSource`（`packages/nexus-core/src/message-source.ts`）落盤在 `additional_kwargs.nexus_source`，
- * 進不了型別圖：基座 LangChain 把 `StoredMessageData.additional_kwargs` 宣告成 `Record<string, any>`，而且 `MessageSource`
- * 本身是開放記錄（`kind: string` 加索引簽名），就算接成根也看不出變更。所以這一刀兩個標記都不搬，清單的
- * `formatVersion` 固定 1。**後果：`additional_kwargs`、`response_metadata` 裡的東西這套檢查看不到，改了不會紅。**
- * 撤除條件：訊息來源改成封閉的型別、落在型別圖看得到的位置（[#1883](https://github.com/DemianLi/nexus-agent/issues/1883)）。
+ * nexus 訊息上的來源 `MessageSource`（`packages/nexus-core/src/message-source.ts`）落盤在 `additional_kwargs.nexus_source`，
+ * 今天的 `LoggedMessage` 照 LangChain 把 `additional_kwargs` 宣告成 `Record<string, any>`，所以圖裡是 `any`。**表達得出來**：
+ * 跟 `role`、`name`、`tool_call_id` 一樣在 `LoggedMessage` 改寫型別就行；這一刀不收窄，是因為 `MessageSource` 本身是開放記錄
+ * （`kind: string` 加索引簽名），接進來也看不出變更，dsh 的綁定還要求同一個物件上有 `role` 字面量。收窄屬
+ * [#1883](https://github.com/DemianLi/nexus-agent/issues/1883)。兩個標記都不搬，清單的 `formatVersion` 固定 1。
+ * **後果：訊息的 `additional_kwargs`、`response_metadata` 裡的東西這套檢查看不到，改了不會紅。** `user/message` 的
+ * `data.source`（`session-log.ts` 的 `UserMessageSource`，封閉聯集）不受影響，已經在圖裡。
+ * 撤除條件：訊息來源改成封閉的型別、落在型別圖看得到的位置（#1883）。
  *
  * `@persistenceReserved` 照搬：標在選填的 `never`／`undefined` 屬性上，讓「預留但還沒用」的欄位留在圖裡。
  *
@@ -80,8 +90,11 @@ export function renderPersistenceSchema(inventory: PersistenceSchemaInventory): 
 /** 組 program 用的設定檔，相對於 repo 根。 */
 const CONFIG_PATH = 'tsconfig.base.json';
 
-/** 合成的根檔：只存在於 compiler host 裡，不落盤。 */
-const ROOTS_FILE = 'apps/harness/src/__persistence_schema_roots__.ts';
+/**
+ * 合成的根檔：只存在於 compiler host 裡，不落盤。放在 {@link TRACKED_PREFIXES} 之外（同 dsh 的 `scripts/`），
+ * 它的別名才不會被記成型別名與宣告位置。
+ */
+export const ROOTS_FILE = 'scripts/__persistence_schema_roots__.ts';
 
 /** 型別圖要追蹤宣告位置、收語意診斷、找 `@persistenceReserved` 的原始碼範圍（相對於 repo 根）。 */
 const TRACKED_PREFIXES = ['packages/', 'vendor/', 'apps/harness/src/'] as const;
@@ -95,6 +108,7 @@ interface RootInput {
   readonly key: string;
   readonly kind: PersistenceRoot['kind'];
   readonly event?: string;
+  readonly surface?: boolean;
   readonly node: number;
 }
 
@@ -228,7 +242,13 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
   for (const [index, event] of events.entries()) {
     const item = declaration(`EventRoot${String(index)}`);
     const node = extraction.convert(checker.getTypeFromTypeNode(item.type), item);
-    roots.push({ key: `event:${event.name}`, kind: 'event', event: event.name, node });
+    roots.push({
+      key: `event:${event.name}`,
+      kind: 'event',
+      event: event.name,
+      surface: false,
+      node,
+    });
     envelopes.push(extraction.envelope(node, event.name));
   }
   roots.splice(1, 0, {
@@ -572,6 +592,7 @@ class SchemaExtractor {
         key: input.key,
         kind: input.kind,
         ...(input.event === undefined ? {} : { event: input.event }),
+        ...(input.surface === undefined ? {} : { surface: input.surface }),
         digest: schemaDigest(schema),
         schema,
       };

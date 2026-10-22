@@ -3,8 +3,8 @@
  *
  * 照 dsh `scripts/persistence-schema.spec.ts`（`687f282e`）：在暫存目錄搭一棵照 nexus 佈局的小 repo
  * （`tsconfig.base.json`、`packages/nexus-core/src` 的 `SessionEventMap` 與 `StoredSessionHeader`、一個放酬載的套件），
- * 改原始碼、重抽、比指紋。沒搬的：surface 與 `JsonlHeaderLine` 那兩格（nexus 沒有這兩個根）、訊息來源政策那一組
- * （偏離，見 `persistence-schema.ts` 檔頭）、用 `classifyPersistenceChange`／`parsePersistenceSnapshot` 斷言的地方
+ * 改原始碼、重抽、比指紋。沒搬的：surface 與 `JsonlHeaderLine` 那一格（nexus 沒有 surface 那一軸，事件根一律
+ * `surface: false`；也沒有 `JsonlHeaderLine` 這個根）、訊息來源政策那一組（過渡，見 `persistence-schema.ts` 檔頭）、用 `classifyPersistenceChange`／`parsePersistenceSnapshot` 斷言的地方
  * （驗證器，⓪b-2；這裡改成比指紋）。
  *
  * 最後兩格跑真的 repo：已提交的 `docs/persistence-schema.json` 沒過期，以及每一種事件都在、每個可達節點都有指紋。
@@ -14,7 +14,7 @@
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { collectSessionEventTypes, EVENT_CATALOG_ROOTS } from './known-event-types-catalog.js';
 import { repositoryRoot } from './package-invariants.js';
@@ -23,6 +23,7 @@ import {
   PERSISTENCE_SCHEMA_PATH,
   PERSISTENCE_SCHEMA_REGENERATE,
   renderPersistenceSchema,
+  ROOTS_FILE,
 } from './persistence-schema.js';
 import {
   canonicalizeSchema,
@@ -129,6 +130,10 @@ describe('從原始碼抽持久化型別', { timeout: EXTRACT_TIMEOUT }, () => {
       'SessionEventEnvelope',
       'event:test/record',
     ]);
+    // 事件根照 dsh 帶 surface；nexus 沒有那一軸，一律 false。header 與封裝沒有這一格。
+    expect(inventory.roots.map((item) => item.surface)).toEqual([undefined, undefined, false]);
+    expect(Object.keys(inventory.roots[0]!)).not.toContain('surface');
+    expect(Object.keys(inventory.roots[1]!)).not.toContain('surface');
     const header = inventory.roots[0]!.schema;
     const object = header.nodes[0];
     if (object?.kind !== 'object') throw new Error('header is not an object');
@@ -700,6 +705,14 @@ describe('這個 repo 的持久化型別圖', { timeout: EXTRACT_TIMEOUT }, () =
     ).toBe(renderPersistenceSchema(inventory));
   });
 
+  it('合成的根檔不在追蹤範圍裡，沒有型別名或宣告位置指向它', () => {
+    const stem = basename(ROOTS_FILE, '.ts');
+    const leaked = inventory.types.flatMap((type) =>
+      [...type.names, ...type.sources].filter((entry) => entry.includes(stem)),
+    );
+    expect(leaked).toEqual([]);
+  });
+
   it('每一種事件都在，每個可達節點都有指紋', () => {
     expect(
       inventory.roots
@@ -713,6 +726,9 @@ describe('這個 repo 的持久化型別圖', { timeout: EXTRACT_TIMEOUT }, () =
     );
     expect(inventory.roots.filter((item) => item.kind === 'header')).toHaveLength(1);
     expect(inventory.roots.filter((item) => item.kind === 'envelope')).toHaveLength(1);
+    for (const item of inventory.roots) {
+      expect(item.surface, item.key).toBe(item.kind === 'event' ? false : undefined);
+    }
     const digests = new Set(inventory.types.map((type) => type.digest));
     for (const item of inventory.roots) {
       expect(schemaDigest(item.schema)).toBe(item.digest);
