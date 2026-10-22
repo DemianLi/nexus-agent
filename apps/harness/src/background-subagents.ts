@@ -73,6 +73,7 @@ import type {
   StepInbox,
   SubagentSettleReason,
   ToolErrorInfo,
+  TurnAbortCause,
 } from '@nexus/core';
 
 import type { ColdChildStore, ColdInspection, ColdResumed } from './background-cold.js';
@@ -83,6 +84,9 @@ import { declineAll, parseMcpElicitation } from './mcp-elicitation.js';
 import type { McpElicitation } from './mcp-elicitation.js';
 import { asInterruptEntries, markProjectionsHandled } from './thread-pump.js';
 import type { RunProjections } from './thread-pump.js';
+import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
+import { startTurnClock, unsettledToolNames } from './turn-clock.js';
+import type { TurnClock } from './turn-clock.js';
 
 /** host 對背景圖的全部要求：給我一個可抽的 v3 run。`AgentHandle.compileSubagent` 編出來的圖照 pump 的做法轉型過來。 */
 export interface BackgroundAgent {
@@ -185,6 +189,11 @@ export interface BackgroundParentPort {
    * 沒給就從不擋。
    */
   readonly isArchived?: () => boolean;
+  /**
+   * 一輪的時鐘（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624) 的 Q-B4 (a)，跟主對話用同一列的值）：背景子代理的每一輪
+   * 從它自己的 `turn/start` 起算，到點照 {@link BackgroundSubagentHost.interrupt} 的路停下，原因 `hook`。沒給就不限。
+   */
+  readonly turnClock?: TurnClock;
 }
 
 /** 背景子代理一輪失敗的對照資料（#1536）：`seq` 是它**自己日誌**裡那一筆 `turn/failed`。 */
@@ -305,6 +314,8 @@ export interface BackgroundSubagentHostOptions {
   readonly isArchived?: () => boolean;
   /** {@link BackgroundParentPort.onTurnFailed}。 */
   readonly onTurnFailed?: (failure: BackgroundTurnFailure) => void;
+  /** {@link BackgroundParentPort.turnClock}。 */
+  readonly turnClock?: TurnClock;
   /**
    * 冷復活的存放處（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）。**給了**：建構時從 root 日誌上的 `subagent/catalog`
    * 找出重啟之前派出的 continuable 子代理，唯讀冷讀它們的身分；叫得醒的列為 `idle`，收到話（{@link BackgroundSubagentHost.resume}）
@@ -429,6 +440,11 @@ interface RunningRound {
   closed: boolean;
   /** 封存閘門擋下過這一輪的模型呼叫（#633）：這一輪以 `blocked` 收、結算原因是 `refusal`。 */
   blocked: boolean;
+  /**
+   * 這一輪為什麼被中止（#1624）；`undefined` 是父代理那一側（`interrupt`、`interruptAll`、`close`）。理由同 `ThreadPump` 的
+   * `CurrentRun.cause`：不放進 `controller.abort(reason)`。
+   */
+  cause?: TurnAbortCause;
 }
 
 /** 一句話在子代理日誌裡開一輪時的 `turn/start`：人說的是 `message`，agent 寫的是 `agent-message`（記寄件人）。 */
@@ -482,6 +498,7 @@ export class BackgroundSubagentHost {
   readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
   readonly #isArchived: (() => boolean) | undefined;
   readonly #onTurnFailed: ((failure: BackgroundTurnFailure) => void) | undefined;
+  readonly #turnClock: TurnClock | undefined;
   readonly #cold: ColdChildStore | undefined;
   /**
    * 重啟之前派出的 continuable 子代理（#1271）：編號 → 唯讀冷讀的結果。叫醒（{@link BackgroundSubagentHost.resume}）之後從這裡搬進
@@ -526,6 +543,7 @@ export class BackgroundSubagentHost {
     // `onSettled` 本來就從迴圈的環境叫，一起綁只是讓兩個出口的規矩一致。
     this.#isArchived = options.isArchived;
     this.#onTurnFailed = options.onTurnFailed;
+    this.#turnClock = options.turnClock;
     this.#onSettled =
       options.onSettled === undefined ? undefined : AsyncResource.bind(options.onSettled);
     this.#onMessage =
@@ -905,6 +923,17 @@ export class BackgroundSubagentHost {
   }
 
   /**
+   * 一輪的時鐘到點（#1624）：同 {@link interrupt}，只多記原因。只認它自己那一輪；那一輪已經收尾或已經被中止，就什麼都不做（先到的原因算數）。
+   */
+  #expire(runId: string, round: RunningRound): void {
+    if (this.#running.get(runId) !== round || round.controller.signal.aborted) return;
+    this.#paused.add(runId);
+    round.cause = { kind: 'hook', reason: TURN_TIMEOUT_REASON };
+    round.controller.abort();
+    this.#publishStatus();
+  }
+
+  /**
    * 現在有沒有背景子代理在跑（或排著而沒被中斷暫停）：{@link statuses} 裡有沒有 `running`。給封存問「還有沒有工作」
    * （[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
    */
@@ -1257,9 +1286,27 @@ export class BackgroundSubagentHost {
       blocked: false,
     };
     this.#running.set(job.runId, running);
+    let stopClock = (): void => {};
     try {
       log = this.#sessions.open({ kind: 'subagent', runId: job.runId });
       log.append('turn/start', job.turn);
+      // 一輪的時鐘（#1624 的 Q-B4 (a)）：從這一輪的 `turn/start` 起算，到點照 `interrupt` 的路停下（排著的輪次暫停到下一次
+      // `submit`，同主對話的 Q-B3 (a)），原因記 `hook`。收尾在 `finally` 清掉。
+      const opened = log;
+      stopClock = startTurnClock(
+        this.#turnClock,
+        () => this.#expire(job.runId, running),
+        () => {
+          const tools = unsettledToolNames(opened.events);
+          try {
+            this.#warn?.(
+              `[背景子代理] ${job.runId} 的一輪到點中止之後還沒收尾，等著還沒落定的工具：${tools.length === 0 ? '（沒有）' : tools.join('、')}`,
+            );
+          } catch {
+            // 講不出來也不影響輪次。
+          }
+        },
+      );
       // **輪頭先問，話不進圖**（#633，同 `ThreadPump.#runOnce` 的輪頭檢查）：子代理那一層被閘門擋下時不拋、回合成的空訊息讓圖正常收尾，
       // 存檔點一定會存，所以這一句話交進圖就留在它的對話裡。封存的會話一開輪就擋，這一句連圖都不進。
       if (this.#isArchived?.() === true) running.blocked = true;
@@ -1270,7 +1317,7 @@ export class BackgroundSubagentHost {
       log.append(
         'turn/end',
         controller.signal.aborted
-          ? { reason: { kind: 'aborted', cause: { kind: 'parent' } } }
+          ? { reason: { kind: 'aborted', cause: running.cause ?? { kind: 'parent' } } }
           : blocked
             ? { reason: { kind: 'blocked' } }
             : {},
@@ -1299,6 +1346,7 @@ export class BackgroundSubagentHost {
       }
       outcome = { ok: false, error: message };
     } finally {
+      stopClock();
       // 從表裡拿掉，窗就跟著沒了：之後到的話是排下一輪，不是掛在一個已經沒人領的收件匣上。
       this.#running.delete(job.runId);
     }

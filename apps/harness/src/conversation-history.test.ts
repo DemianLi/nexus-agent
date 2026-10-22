@@ -295,6 +295,22 @@ describe('日誌 → 畫面', () => {
     expect(state.status).toBe('stopped');
   });
 
+  /** 同即時那條（#1624）：收尾 frame 在 `aborted` 旁邊帶原因，人按停止與時鐘到點分得出來。 */
+  it.each([[{ kind: 'user' }], [{ kind: 'hook', reason: 'turn-timeout' }]] as const)(
+    '被中止的那一輪：收尾 frame 帶日誌上的原因 %o',
+    (cause) => {
+      const frames = historyFrames(
+        log(human('跑'), reply('寫到一半', [], true), {
+          type: 'turn/end',
+          data: { reason: { kind: 'aborted', cause } },
+        }),
+        DEFAULT_TOOL_TEXT_MAX_BYTES,
+      );
+      const closing = frames.filter((frame) => frame.method === 'lifecycle').at(-1);
+      expect(closing?.params.data).toMatchObject({ event: 'failed', aborted: true, cause });
+    },
+  );
+
   /** 同即時那條（#433）：pump 在收尾 frame 上補 `maxTokens`，重播照日誌的 `turn/end` 補同一格。 */
   it('撞到輸出上限：那一輪最後一則回覆標上，狀態是就緒', () => {
     const state = screen(

@@ -78,13 +78,14 @@ const BAD_BROWSER_SESSION = '- id: browser-session\n  config:\n    maxAgeDays: 0
 const BAD_TODO = "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n";
 
 describe('必掛的列掉了：兩個入口都起不來', () => {
-  it('名單上是 browser-session、system-prompt、background-subagents、permission-presets 與 goal-round-cap，而且比的是條目 id', () => {
+  it('名單上是 browser-session、system-prompt、background-subagents、permission-presets、goal-round-cap 與 turn-timeout，而且比的是條目 id', () => {
     expect([...REQUIRED_ENTRY_IDS]).toEqual([
       'browser-session',
       'system-prompt',
       'background-subagents',
       'permission-presets',
       'goal-round-cap',
+      'turn-timeout',
     ]);
   });
 
@@ -144,6 +145,34 @@ describe('goal-round-cap 寫壞：兩個入口都起不來；關掉照常起來'
 
   it('對照：disabled: true，兩個入口都起得來', async () => {
     const env = homeWith('- id: goal-round-cap\n  disabled: true\n');
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
+  });
+});
+
+/**
+ * 一輪的時鐘寫壞（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：寫壞的列會掉，掉了就沒有時鐘（fail-open），所以同 `goal-round-cap`
+ * 在必掛名單上。**關掉不一樣**：`disabled: true` 是部署方明講不限，照常起來。上限是計時器的上限（超過 2³¹−1 會被 Node 當成 1）。
+ */
+describe('turn-timeout 寫壞：兩個入口都起不來；關掉照常起來', () => {
+  it.each([['0'], ['-1'], ['2.5'], ['2147483648'], ["'半小時'"]])(
+    'timeoutMs 寫成 %s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）',
+    async (raw) => {
+      const env = homeWith(`- id: turn-timeout\n  config:\n    timeoutMs: ${raw}\n`);
+
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(/^ {2}turn-timeout（#settings\/turn-timeout）〔必掛〕設定驗不過：/mu);
+
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it('對照：disabled: true，兩個入口都起得來', async () => {
+    const env = homeWith('- id: turn-timeout\n  disabled: true\n');
     expect((await cli(env)).error).toBeUndefined();
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
   });

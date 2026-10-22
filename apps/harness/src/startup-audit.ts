@@ -25,7 +25,7 @@
  * `fiber.await()` 拿回原始錯誤，PENDING 列出缺哪些服務；必掛的沒起來就拋同一種 {@link StartupError}。兩張名單分開
  * （{@link REQUIRED_TREE_ENTRY_IDS}）：清單的列 id 由使用者的 patch 決定，`insert` 一列 id 叫 `serve` 的不該因此變成必掛。
  *
- * ## 名單是 `browser-session`、`system-prompt`、`background-subagents`、`permission-presets` 與 `goal-round-cap`
+ * ## 名單是 `browser-session`、`system-prompt`、`background-subagents`、`permission-presets`、`goal-round-cap` 與 `turn-timeout`
  *
  * dsh 的七個 id 分三類（`README.zh.md:43`），對到我們：
  *
@@ -56,6 +56,9 @@
  * **`goal-round-cap` 同一型**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，沿用 #707 那筆登記）：它是目標續行的操作者上限，
  * 也是一道**限制**。寫壞就掉、掉了上限就沒了，部署方打錯一個字就回到模型自己挑上限，是 fail-open。**它關得掉**（不在
  * `PROTECTED_ENTRY_NAMES` 上）：`disabled: true` 是部署方明講只留目標自己那條，不是寫壞，照常起來；這份名單只管「掉了」。
+ *
+ * **`turn-timeout` 也同一型**（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，沿用 #707 那筆登記）：它是一輪的時鐘，寫壞就掉、
+ * 掉了一輪就沒有時鐘，是 fail-open。同樣關得掉：`disabled: true` 是部署方明講不限。
  *
  * **它跟「關不掉」的名單（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）是兩回事**：那一份只管能不能寫
  * `disabled: true`，以 `name` 為鍵；這一份管掉了要不要整個起不來，以 id 為鍵，照 dsh。以 id 為鍵繞不過去：patch
@@ -93,6 +96,7 @@ export const REQUIRED_ENTRY_IDS: ReadonlySet<string> = new Set([
   'background-subagents',
   'permission-presets',
   'goal-round-cap',
+  'turn-timeout',
 ]);
 
 /** 帶 `--live` 時也必須在的那一列的 id，理由見檔頭。 */

@@ -120,6 +120,7 @@ import {
   type SessionLog,
   type StepInbox,
   type SubagentSettleReason,
+  type TurnAbortCause,
   type TurnEndReason,
   type UserMessageSource,
 } from '@nexus/core';
@@ -175,6 +176,9 @@ import type { ThreadTitleLimits } from './session-title.js';
 import { threadTitleConfigSchema } from './settings/thread-title.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
+import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
+import { startTurnClock, unsettledToolNames } from './turn-clock.js';
+import type { TurnClock } from './turn-clock.js';
 // 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
 import { classifyTurnFailure } from './live-model.js';
 import {
@@ -864,8 +868,19 @@ const settled = (): void => undefined;
 /** 續行預約連續失效幾次就停用續行，見 `ThreadPump.#goalDropStreak`。 */
 const GOAL_DROP_LIMIT = 3;
 
+/** 人按了停止。見 `session-log.ts` 的 `TurnAbortCause`。 */
+const USER_CAUSE: TurnAbortCause = { kind: 'user' };
+
+/** 一輪的時鐘到點（#1624）。見 `settings/turn-timeout.ts`。 */
+const TURN_TIMEOUT_CAUSE: TurnAbortCause = { kind: 'hook', reason: TURN_TIMEOUT_REASON };
+
 /** 人按了停止——`turn/end` 帶的那一格。見 `session-log.ts` 的 `turn/end`。 */
-const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: { kind: 'user' } };
+const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: USER_CAUSE };
+
+/** 這一輪被中止時 `turn/end` 帶的那一格：原因記在 {@link CurrentRun.cause}，沒記就是人按了停止。 */
+function abortedBy(current: CurrentRun): TurnEndReason {
+  return { kind: 'aborted', cause: current.cause ?? USER_CAUSE };
+}
 
 /** 被準入閘門擋下的一輪（#633），見 {@link ThreadPump.#runOnce} 的 catch。 */
 const BLOCKED: TurnEndReason = { kind: 'blocked' };
@@ -927,6 +942,12 @@ export interface TurnFailedReport {
 
 interface CurrentRun {
   readonly controller: AbortController;
+  /**
+   * 這一輪為什麼被中止（#1624）；`undefined` 是人按了停止。**不放進 `controller.abort(reason)`**：中止訊號的 `reason` 會被原樣拋出來
+   * （`request-gate.ts` 的 `abortReason`、LangChain 的 `getAbortSignalError`），放一個不是 `Error` 的原因進去，排隊等名額的那一格
+   * 拋的就是一個普通物件。收尾時讀這一格，不讀 `signal.reason`。
+   */
+  cause?: TurnAbortCause;
   /** root 那則回覆到目前為止的文字。`message-finish` 之後清空——講完的那則已經在 checkpoint 裡了。 */
   partial: string;
   /** 同 {@link partial}，是那則回覆到目前為止的推理（#561）。 */
@@ -1339,6 +1360,8 @@ export class ThreadPump {
    * 那之間又送了一句的話，那一句就是「下一次送出」，把這一格清掉。
    */
   #stopRequested = false;
+  /** 一輪的時鐘（#1624），見建構參數 `turnClock`。 */
+  readonly #turnClock: TurnClock | undefined;
   /** 有一件正在跑（一輪 run，或一次收回）。 */
   #busy = false;
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
@@ -1399,6 +1422,8 @@ export class ThreadPump {
    *   serve 用它在伺服器日誌記一行。**回呼拋錯吞掉**，不影響這一輪的收尾。使用者按停止、準入閘門擋下的輪不叫它（那兩條不是失敗）。
    * @param downlinkMaxBytes - 每條下行的佇列位元組上限（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)，`downlink` 那一列）。
    *   **省略即 {@link DEFAULT_DOWNLINK_MAX_BYTES}**（2 MiB，照 dsh `TerminalFollower`）。
+   * @param turnClock - 一輪的時鐘（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，`turn-timeout` 那一列）：一輪從
+   *   `turn/start` 起算，到點就照停止鍵的路中止，原因 `hook`。**省略即不限**，同今天。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1417,7 +1442,9 @@ export class ThreadPump {
     isArchived?: () => boolean,
     downlinkMaxBytes: number = DEFAULT_DOWNLINK_MAX_BYTES,
     onTurnFailed?: (report: TurnFailedReport) => void,
+    turnClock?: TurnClock,
   ) {
+    this.#turnClock = turnClock;
     this.#downlinkMaxBytes = downlinkMaxBytes;
     this.#onTurnFailed = onTurnFailed;
     this.#agent = agent;
@@ -2059,12 +2086,16 @@ export class ThreadPump {
    * 等下一次送出才照 FIFO 跑。當時 Q6 引的 `keepInbox` 只管保留、不管接著跑。停不停住以那一輪真的收成中止為準，
    * 見 {@link ThreadPump.#stopRequested}。
    *
+   * @param cause - 為什麼停（#1624），照 dsh 的 `agent.cancel(cause)`。省略即人按了停止。只有「有一輪在跑」那一格用得到它：
+   *   收回與停續行只有人會觸發。
    * @returns 這一次落在哪一種。線上只回受理，這個給測試看。
    */
-  cancel(): 'run' | 'withdrawn' | 'drive' | 'idle' {
+  cancel(cause?: TurnAbortCause): 'run' | 'withdrawn' | 'drive' | 'idle' {
     const current = this.#current;
     if (current !== undefined) {
-      current.controller.abort();
+      this.#abortRun(current, cause);
+      // **每次都設**，不只第一次：停止之後那一輪還在等工具落定時送了一句（`submit` 會清掉這個請求），再按停止，那一句要停住
+      // （#637 的 Q2；#1831 審查 B1）。`#abortRun` 在已經中止過時什麼都不做，所以這一行不能收進去。
       this.#stopRequested = true;
       return 'run';
     }
@@ -2101,6 +2132,24 @@ export class ThreadPump {
       return 'drive';
     }
     return 'idle';
+  }
+
+  /**
+   * 中止正在跑的這一輪：{@link ThreadPump.cancel} 的「有一輪在跑」那一格，與一輪的時鐘到點（#1624）共用。
+   *
+   * 時鐘**不經過 `cancel()`**，差在**已經中止過**的那一輪：人先按了停止、接著送了一句（`submit` 清掉停住的請求），那一輪還在
+   * 等工具落定時時鐘才到點——`cancel()` 每次都把停住的請求設回來，那一句會被一顆已經被人中止的輪的時鐘停住；這裡什麼都不做
+   * （先到的原因算數），那一句照常跑。這一輪第一次被中止時一樣把 {@link ThreadPump.#stopRequested} 設起來，排著的輸入照停止鍵停住
+   * （Q-B3 (a)）。
+   *
+   * 「只認它自己那一輪」（`#current !== current`）是防禦，今天量不出來：計時器在這一輪的 `finally` 裡、`#current` 清掉之前就同步
+   * 清掉，回呼也先查自己還算不算數，到點的回呼碰不到下一輪。
+   */
+  #abortRun(current: CurrentRun, cause: TurnAbortCause | undefined): void {
+    if (this.#current !== current || current.controller.signal.aborted) return;
+    if (cause !== undefined) current.cause = cause;
+    current.controller.abort();
+    this.#stopRequested = true;
   }
 
   /**
@@ -2172,7 +2221,7 @@ export class ThreadPump {
         params: {
           namespace: [],
           timestamp: Date.now(),
-          data: { event: 'completed', graph_name: 'root', aborted: true },
+          data: { event: 'completed', graph_name: 'root', aborted: true, cause: USER_CAUSE },
         },
         // `aborted` 不在協定的 `LifecycleData` 裡——那正是它存在的理由，見 `#translate` 那一格。
       } as unknown as Event),
@@ -2878,6 +2927,18 @@ export class ThreadPump {
       },
     };
     this.#current = current;
+    // 一輪的時鐘（#1624）：從 `turn/start` 寫下之後起算，到點照停止鍵的路中止。停在核准點、正常收尾、拋錯都在 `finally` 清掉；
+    // 人批准是新的一輪，重新計時，等人的時間不算。
+    const stopClock = startTurnClock(
+      this.#turnClock,
+      () => this.#abortRun(current, TURN_TIMEOUT_CAUSE),
+      () => {
+        const tools = unsettledToolNames(this.#sessions.root.events);
+        this.#warn?.(
+          `[時鐘] thread ${this.#threadId} 的一輪到點中止之後還沒收尾，等著還沒落定的工具：${tools.length === 0 ? '（沒有）' : tools.join('、')}`,
+        );
+      },
+    );
     try {
       // **輪頭先問一次，人話不進圖**（#633）：圖的輸入只要送進去，基座就把它存進存檔點——就算第一次模型呼叫被閘門擋下、圖拋錯也一樣
       // （實測，見 `goal-driver-pump.test.ts`）。dsh 的 `user/message` 要等放行才寫，被擋下的話不在之後的對話裡，所以輪頭的擋要在
@@ -2954,7 +3015,7 @@ export class ThreadPump {
       this.#sessions.root.append(
         'turn/end',
         current.stopped
-          ? { reason: ABORTED_BY_USER }
+          ? { reason: abortedBy(current) }
           : current.maxTokens
             ? { reason: MAX_TOKENS_TURN_END }
             : {},
@@ -2980,7 +3041,7 @@ export class ThreadPump {
       // 訊息（#276）。
       if (current.controller.signal.aborted || isTurnCancelled(error)) {
         await this.#keepInterruptedReply(current);
-        this.#sessions.root.append('turn/end', { reason: ABORTED_BY_USER });
+        this.#sessions.root.append('turn/end', { reason: abortedBy(current) });
         this.#parkIfStopped();
         return;
       }
@@ -2997,6 +3058,7 @@ export class ThreadPump {
       this.#stopRequested = false;
       throw failure;
     } finally {
+      stopClock();
       if (this.#current === current) this.#current = undefined;
       this.#systemAnswers = [];
       // 一輪裡的判定在這一輪裡就落定了：圍堵在 `wrapToolCall` 回傳之前寫，而圖要等每一顆工具回傳
@@ -3352,7 +3414,11 @@ export class ThreadPump {
         params: {
           namespace: raw.params.namespace,
           timestamp: raw.params.timestamp,
-          data: { ...(raw.params.data as object), aborted: true },
+          data: {
+            ...(raw.params.data as object),
+            aborted: true,
+            cause: current.cause ?? USER_CAUSE,
+          },
         },
       } as Event);
       return;

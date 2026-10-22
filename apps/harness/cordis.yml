@@ -379,7 +379,7 @@
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
 # - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`memory-gauge`、`ops-endpoints`、`browser-session`、`deliverable-files`、`tool-text`、`projection-flush`、`downlink`、
-#   `tool-result-stash`、`spill-policy`、`background-subagents`、`subagent-model-selection`、`live-model`、`goal-round-cap`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
+#   `tool-result-stash`、`spill-policy`、`background-subagents`、`subagent-model-selection`、`live-model`、`goal-round-cap`、`turn-timeout`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
 #   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
 #   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
 #   讀（#650）。所以這幾列的 `apply` 是空的，值由
@@ -781,6 +781,18 @@
   name: '#settings/recursion-limit'
   config:
     limit: 100
+
+# 一輪的時鐘上限（#1624）：一輪從開始算起超過這麼多毫秒，serve 就照停止鍵的路把它停下來——還沒開始的工具不開始、正在跑的等它
+# 落定、模型請求當場切斷，這一輪收成 `aborted`，日誌的原因是 `{kind: hook, reason: turn-timeout}`（不是人按停止）；排著的輸入停住、
+# 目標收回續行授權，要人再送、再授權。背景子代理的每一輪用同一個值。等人核准的時間不算（批准是新的一輪、重新計時）。**出廠 30 分鐘
+# 是暫定值**：比單次請求的最壞重試（約 21 分鐘）長，沒有量過健康長輪要多久。值的家在 schema（`src/settings/turn-timeout.ts`），這裡照抄
+# 同一個值讓人看得到。只有 serve 讀，CLI 一次性路徑不套。起動期讀一次、改了要重啟。**這一列關得掉**：`disabled: true` 就是不限；
+# **但寫壞了整個起不來**（`startup-audit.ts` 的必掛名單）：寫壞就掉，掉了就沒有時鐘，是 fail-open。
+# **偏離登記：產品需求超出 dsh**（dsh 沒有一輪的時鐘），逐點見 `src/settings/turn-timeout.ts` 的檔頭。
+- id: turn-timeout
+  name: '#settings/turn-timeout'
+  config:
+    timeoutMs: 1800000
 
 # 目標續行的操作者上限（#1623）：人每授權一次（建立或恢復目標），續行最多再排幾輪；到了就把目標記成 `round-cap` 擋住，
 # 人恢復目標之後重新起算。目標自己的 `max_goal_rounds` 是模型填的、還能自己調高，這一列是模型改不動的那一條。**出廠 20**：
