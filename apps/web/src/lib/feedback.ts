@@ -32,6 +32,11 @@ export const FEEDBACK_COPY = {
   generic: '回饋儲存失敗',
   noteTooLarge: '描述太長，請縮短後再提交',
   load: '回饋狀態載入失敗',
+  /**
+   * 這台伺服器不收評分（評分三個 method 回 `not_supported`，[#1849](https://github.com/DemianLi/nexus-agent/issues/1849)）：落盤關掉的
+   * 組裝（#1606），或根本沒掛回饋外掛。**不提 `/feedback`**：後一種連評語也收不了。
+   */
+  unsupported: '這台伺服器不收評分',
 } as const;
 
 /**
