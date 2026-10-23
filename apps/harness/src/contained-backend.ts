@@ -42,8 +42,9 @@
  * 小於 {@link READ_STREAM_MIN_SIZE}（同 dsh 的 `STREAM_MIN_SIZE`）一次 `readFile`，否則逐 chunk 解碼掃描；兩條路交給同一支
  * `scanWindow`。**在 `read_file` 裡**照 dsh 的 `buildWindow` 建頁（每行截 2000 字元、選到的行累計 50 KiB 停但掃到檔尾數總行數），
  * 並把頁的範圍與邊讀邊算的版本回報給 `@nexus/core`；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
- * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2（縮到只剩 BOM）**：開頭的 BOM 保留，不照 dsh 去掉——
- * 基座的 `readRaw` 版本 token 與既有輸出都含它。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
+ * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2（縮到只剩 BOM，理由 1 基座表達不出來）**：開頭的 BOM 保留，不照 dsh 去掉——
+ * 基座 `readRaw` 的版本 token 是從保留 U+FEFF 的字串算的，`read` 不保留就和「先讀後改」寫與改前的比對對不上；`edit` 沿用同一個解碼（`ignoreBOM`），
+ * 寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
  * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡；版本 token 仍對含 `\r` 的原文算。
  *
  * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
@@ -141,7 +142,8 @@ function notText(filePath: string, reason: 'binary file' | 'invalid UTF-8 text')
 }
 
 /**
- * 作業系統的錯誤碼 → 檔案工具的原因碼（#1563），記在這一次工具呼叫上；錯誤文字不動。`EACCES`／`EPERM` 是 `FS_PERMISSION_DENIED`；
+ * 作業系統的錯誤碼 → 檔案工具的原因碼（#1563），記在這一次工具呼叫上；錯誤文字不動。`EACCES`／`EPERM` 是 `FS_PERMISSION_DENIED`
+ * （**依卡面要求，不是照 dsh**：dsh 只在 `listDirectory` 轉這個碼，`fsio.ts:282`，這裡 `read`／`write`／`edit` 碰到也記）；
  * `ENOENT`／`ENOTDIR` 是 `FS_NOT_FOUND`，但只有 `missing` 為真（呼叫端的目標本來就該存在：`read`、`edit`）時才算——`write` 會自己建父目錄，
  * 碰到它們是別的原因。認不得的不記碼。
  */
@@ -151,7 +153,7 @@ function noteErrno(error: unknown, missing: boolean): void {
   else if (missing && (code === 'ENOENT' || code === 'ENOTDIR')) noteFsError(FS_NOT_FOUND);
 }
 
-/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2）。 */
+/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2，理由見檔頭）。 */
 function decodeWhole(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -336,11 +338,14 @@ function applyLiteralEdit(
 ): { readonly content: string; readonly occurrences: number } | EditFailure {
   const oldNorm = normalizeLineEndings(oldString);
   const newNorm = normalizeLineEndings(newString);
-  if (content === '' && oldNorm === '') return { content: newNorm, occurrences: 0 };
+  // 空的 `old_string` 一律是 `FS_EDIT_NOT_FOUND`，連空檔也一樣（照 dsh `applyLiteralEdit`，`fsio.ts:820-823`；基座對空檔配空字串是直接寫入）。
   if (oldNorm === '') {
     return {
       code: FS_EDIT_NOT_FOUND,
-      message: `${BASE_ERROR_WORD}: oldString cannot be empty when file has content`,
+      message:
+        content === ''
+          ? `${BASE_ERROR_WORD}: old_string must be a non-empty string`
+          : `${BASE_ERROR_WORD}: oldString cannot be empty when file has content`,
     };
   }
   const occurrences = content.split(oldNorm).length - 1;
@@ -457,7 +462,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * 取消：`currentToolCallSignal()` 接進讀取，中止時回 `{ error: 'read aborted' }`，不拋。
    *
-   * **與 dsh 的偏離**：開頭的 BOM 不吃掉（偏離 2，理由見 `utf8-stream.ts`）；另外視窗經旁路回報，
+   * **與 dsh 的偏離**：開頭的 BOM 不吃掉（偏離 2，理由 1，見檔頭與 `utf8-stream.ts`）；另外視窗經旁路回報，
    * 不經工具回傳值（偏離 1，見 `read-continuation.ts`）。
    *
    * @param filePath - 虛擬路徑。
@@ -641,7 +646,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
           await handle.close();
         }
         // 二進位與壞掉的 UTF-8 不改：有損解碼再寫回會把原本的位元組換成 U+FFFD（照 dsh `readForEdit`，`fsio.ts:725-736`）。
-        if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0)) {
+        // **NUL 掃整份**，不像讀檔那條取樣前 {@link BINARY_SAMPLE_BYTES}（dsh `fsio.ts:733` 是 `buffer.includes(0)`；取樣是 `read` 的 `fsio.ts:396`）：
+        // 這裡整份本來就在記憶體裡，而且改錯的代價是把檔案寫壞。
+        if (bytes.includes(0)) {
           noteFsError(FS_NOT_TEXT);
           return { error: `cannot edit "${checked}": binary file` };
         }

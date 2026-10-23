@@ -279,14 +279,12 @@ describe('射程', () => {
   });
 });
 
-describe('規則要在模型動手之前就講給它聽：寫在工具描述裡（#1563）', () => {
+describe('規則要在模型動手之前就講給它聽：系統提示詞的 section，照 dsh（#1563）', () => {
   /**
-   * **這一句是機制的一部分，不是文件。**
+   * **這幾句是機制的一部分，不是文件。**
    *
-   * 沒有它，模型每碰一個新檔都得先撞一次牆才學會——而省掉那一輪往返正是這件事的主要價值。dsh 把同一件事寫在**工具描述**裡
-   * （`snapshots/web` 底下每一份 `system-prompt.expected.md`：「read an existing file first (the **default**
-   * fs-observation-policy requires it)」）。自有組裝經 `createFilesystemMiddleware` 的 `customToolDescriptions` 換描述
-   * （`agent-assembly.ts`），所以規則跟著工具定義送給模型，不再往系統提示詞追加一句。
+   * 沒有它們，模型每碰一個新檔都得先撞一次牆才學會——而省掉那一輪往返正是這件事的主要價值。dsh 把同一件事寫在系統提示詞的 section
+   * （`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，工具在場才寫），這裡一樣由 `observation.ts` 的 `wrapModelCall` 接在系統提示後面。
    */
   async function modelSees(options: { observationPolicy?: false }): Promise<{
     descriptions: Record<string, string>;
@@ -320,25 +318,23 @@ describe('規則要在模型動手之前就講給它聽：寫在工具描述裡�
     return { descriptions, system };
   }
 
-  it('模型收到的 write_file／edit_file 描述裡有那幾句，系統提示詞裡沒有多一句', async () => {
+  it('root 那一輪的系統提示詞裡有 dsh 的那兩句；write_file／edit_file 的工具描述仍是基座的原文', async () => {
     const { descriptions, system } = await modelSees({});
-    expect(descriptions['write_file']).toContain(
-      'read an existing file first (the default fs-observation-policy requires it)',
+    expect(system).toContain(
+      'Read an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.',
     );
-    expect(descriptions['write_file']).not.toContain('You do not need to read the file first');
-    expect(descriptions['edit_file']).toContain(
-      'Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session',
+    expect(system).toContain(
+      'Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.',
     );
-    // 以前往 `systemMessage` 追加的那一句不在了。
-    expect(system).not.toContain('先讀後改');
-    expect(system).not.toContain('fs-observation-policy');
-  });
-
-  it('關掉策略就不該出現那幾句（上一條的對照組）：描述是基座的原文', async () => {
-    const { descriptions } = await modelSees({ observationPolicy: false });
+    // 規則不在工具描述裡：dsh 的描述只有一句 UTF-8 文字檔的說明，我們這邊維持基座的原文。
     expect(descriptions['write_file']).toContain('You do not need to read the file first');
     expect(descriptions['write_file']).not.toContain('fs-observation-policy');
     expect(descriptions['edit_file']).not.toContain('fs-observation-policy');
+  });
+
+  it('關掉策略就不該出現那幾句（上一條的對照組）', async () => {
+    const { system } = await modelSees({ observationPolicy: false });
+    expect(system).not.toContain('fs-observation-policy');
   });
 });
 

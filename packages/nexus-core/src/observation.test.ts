@@ -16,6 +16,7 @@ import {
   createObservationPolicy,
   createVersionHasher,
   noteReadVersion,
+  observationGuidance,
   observationKey,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
@@ -269,11 +270,45 @@ describe('不歸它管的都原樣放行', () => {
   });
 });
 
-describe('規則不再往系統提示詞追加（#1563）', () => {
-  it('這顆 middleware 沒有 wrapModelCall：規則住在工具描述裡，見 fs-tool-descriptions.test.ts', () => {
+describe('規則在模型動手之前就講給它聽（dsh 的 systemPrompt.section，write.ts:63-71、edit.ts:76-83）', () => {
+  const WRITE_AND_EDIT =
+    'Read an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.';
+  const WRITE_ONLY =
+    'Read an existing file before overwriting it with write_file (the default fs-observation-policy requires it).';
+  const EDIT =
+    'Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.';
+
+  it('observationGuidance：工具在場才寫各自那一句，句子是 dsh 原句（工具名換成 write_file／edit_file）', () => {
+    expect(observationGuidance(new Set([OBSERVED_WRITE_TOOL, OBSERVED_EDIT_TOOL]))).toBe(
+      `${WRITE_AND_EDIT}\n\n${EDIT}`,
+    );
+    expect(observationGuidance(new Set([OBSERVED_WRITE_TOOL]))).toBe(WRITE_ONLY);
+    expect(observationGuidance(new Set([OBSERVED_EDIT_TOOL]))).toBe(EDIT);
+    expect(observationGuidance(new Set([OBSERVED_READ_TOOL, 'grep']))).toBe('');
+  });
+
+  it('wrapModelCall：看這一輪送給模型的工具清單，把那兩句接在系統提示後面', () => {
     const { backend } = fakeBackend(new Map());
-    const middleware = createObservationPolicy(backend) as unknown as { wrapModelCall?: unknown };
-    expect(middleware.wrapModelCall).toBeUndefined();
+    const middleware = createObservationPolicy(backend) as unknown as {
+      wrapModelCall: (request: unknown, handler: (next: unknown) => unknown) => unknown;
+    };
+    const run = (tools: readonly { name: string }[]): string => {
+      let system = '';
+      middleware.wrapModelCall(
+        { tools, systemMessage: { concat: (text: string) => (system = `原本的${text}`) } },
+        (next) => next,
+      );
+      return system;
+    };
+    expect(
+      run([
+        { name: OBSERVED_READ_TOOL },
+        { name: OBSERVED_WRITE_TOOL },
+        { name: OBSERVED_EDIT_TOOL },
+      ]),
+    ).toBe(`原本的\n\n${WRITE_AND_EDIT}\n\n${EDIT}`);
+    // 沒有 write_file／edit_file（例如唯讀模式把它們拿掉）→ 不追加，請求原樣交出去。
+    expect(run([{ name: OBSERVED_READ_TOOL }])).toBe('');
   });
 });
 

@@ -20,9 +20,9 @@
  * 唯一的例外是 skills：基座那顆對空清單也會接一大段說明、又不快取空結果，包了一層
  * （`./skills-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)）。
  *
- * **檔案工具的三份描述不是基座的原文**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：`read_file` 的預設行數、`write_file`／`edit_file` 的
- * 「先讀後改」，經 `createFilesystemMiddleware` 的 `customToolDescriptions` 換掉，開不開看 fold 給的 middleware 清單裡有沒有對應那顆
- * （`./fs-tool-descriptions.ts`）。這是跟 `createDeepAgent` 的**明文差異**，`assembly-parity.test.ts` 列出哪幾個工具、差在哪。
+ * **`read_file` 的描述不是基座的原文**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：預設行數經 `createFilesystemMiddleware` 的
+ * `customToolDescriptions` 換掉，開不開看 fold 給的 middleware 清單裡有沒有 read-continuation（`./fs-tool-descriptions.ts`）。這是跟
+ * `createDeepAgent` 的**明文差異**，`assembly-parity.test.ts` 列出差在哪。「先讀後改」不在描述裡，照 dsh 在系統提示詞（`./observation.ts`）。
  *
  * ## 照抄基座的組裝順序，不是照猜
  *

@@ -273,7 +273,7 @@ describe('CLI（非串流）', () => {
       await run.say('再一句');
       expect(turnEnds(run.sessions.root.events)).toEqual([{ reason: { kind: 'max-tokens' } }, {}]);
       // 下一輪送出去的歷史：那一則照樣在（有字），沒有呼叫、後面也沒有 tool 訊息。
-      expect(roles(run.upstream.requests[1])).toEqual(['user', 'assistant', 'user']);
+      expect(roles(run.upstream.requests[1])).toEqual(['system', 'user', 'assistant', 'user']);
     } finally {
       await run.close();
     }
@@ -291,7 +291,7 @@ describe('CLI（非串流）', () => {
     try {
       await run.say('查一下');
       await run.say('再一句');
-      expect(roles(run.upstream.requests[1])).toEqual(['user', 'user']);
+      expect(roles(run.upstream.requests[1])).toEqual(['system', 'user', 'user']);
     } finally {
       await run.close();
     }
@@ -407,7 +407,7 @@ describe('web（pump、v3 串流）', () => {
         { reason: { kind: 'max-tokens' } },
         {},
       ]);
-      expect(roles(run.upstream.requests[1])).toEqual(['user', 'assistant', 'user']);
+      expect(roles(run.upstream.requests[1])).toEqual(['system', 'user', 'assistant', 'user']);
     } finally {
       await run.close();
     }
@@ -438,7 +438,7 @@ describe('web（pump、v3 串流）', () => {
       expect(replayed).toEqual(live);
 
       await run.pump.submit({ kind: 'message', text: '再一句' });
-      expect(roles(run.upstream.requests[1])).toEqual(['user', 'user']);
+      expect(roles(run.upstream.requests[1])).toEqual(['system', 'user', 'user']);
     } finally {
       await run.close();
     }

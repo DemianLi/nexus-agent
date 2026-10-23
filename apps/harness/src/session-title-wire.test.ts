@@ -153,8 +153,13 @@ describe('web 那條：開跑時寫一次、推一顆', () => {
       await thread.pump.whenIdle();
       expect(titleEvents(thread.pump.sessionLog.events)).toHaveLength(1);
       const second = thread.model.prompts[1] ?? [];
-      // 模型那一側：兩句人話、一則回覆，**沒有多一則**，也沒有一則是標題本身。
-      expect(second.map((message) => message.getType())).toEqual(['human', 'ai', 'human']);
+      // 模型那一側：系統提示、兩句人話、一則回覆，**沒有多一則**，也沒有一則是標題本身。
+      expect(second.map((message) => message.getType())).toEqual([
+        'system',
+        'human',
+        'ai',
+        'human',
+      ]);
       expect(second.map((message) => message.text)).not.toContain(FIRST_TITLE);
     } finally {
       await thread.close();

@@ -122,6 +122,35 @@ describe('edit：CRLF 檔', () => {
   });
 });
 
+describe('edit：二進位判斷掃整份，空檔配空 old_string 照 dsh', () => {
+  it('NUL 在 8192 位元組之後：照樣拒絕，檔案原封不動（dsh `buffer.includes(0)`；讀檔那條才取樣）', async () => {
+    // 9000 個 `a`、一個 NUL、再接含 `\r\n` 的文字：只掃前 8192 的話會被當成文字，還會跑一次行尾正規化與還原。
+    const bytes = Buffer.concat([
+      Buffer.from('a'.repeat(9000)),
+      Buffer.from([0]),
+      Buffer.from('x\r\ny\r\n'),
+    ]);
+    await writeFile(join(root, 'late-nul.txt'), bytes);
+    const result = await backend.edit('/late-nul.txt', 'x', 'X');
+    expect(result.error).toBe('cannot edit "/late-nul.txt": binary file');
+    expect(await readFile(join(root, 'late-nul.txt'))).toEqual(bytes);
+  });
+
+  it('空檔配空的 old_string：FS_EDIT_NOT_FOUND，檔案不動（基座會直接寫入）', async () => {
+    await writeFile(join(root, 'empty.txt'), '');
+    const result = await backend.edit('/empty.txt', '', 'hello');
+    expect(result.error).toBe('Error: old_string must be a non-empty string');
+    expect(await bytesOf('empty.txt')).toBe('');
+  });
+
+  it('有內容的檔配空的 old_string：同一個碼，字句照基座', async () => {
+    await writeFile(join(root, 'a.txt'), 'abc');
+    const result = await backend.edit('/a.txt', '', 'X');
+    expect(result.error).toBe('Error: oldString cannot be empty when file has content');
+    expect(await bytesOf('a.txt')).toBe('abc');
+  });
+});
+
 describe('write：不還原行尾（照 dsh）', () => {
   it('內容原樣寫進去', async () => {
     await backend.write('/w.txt', 'a\nb\n');

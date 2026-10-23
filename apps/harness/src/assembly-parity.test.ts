@@ -39,10 +39,11 @@ vi.mock('@nexus/core', async (importOriginal) => {
  *   子代理的第一次、root 的第二次都在裡面，所以 root 與子代理的組成一次驗到。
  * - **圖的節點**：middleware 的名稱與順序。
  *
- * **唯一的明文例外：三個檔案工具的描述**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。自有組裝經 `createFilesystemMiddleware` 的
- * `customToolDescriptions` 換掉 `read_file`、`write_file`、`edit_file` 的描述（`agent-assembly.ts`、`fs-tool-descriptions.ts`），`createDeepAgent` 不轉發那個選項，
- * 所以這三個工具的描述兩邊**必然不同**，見 {@link DESCRIPTION_EXCEPTIONS}：每一條列出自有那邊該長什麼樣、基座那邊的原文、為什麼。其餘一切——工具清單、
- * 每個工具的參數 schema、其他工具的描述、系統提示（以前 `observation.ts` 往裡追加一句，現在兩邊都沒有）——仍逐位元組相同。
+ * **唯一的明文例外：`read_file` 的描述**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。自有組裝經 `createFilesystemMiddleware` 的
+ * `customToolDescriptions` 換掉預設行數那一句（`agent-assembly.ts`、`fs-tool-descriptions.ts`），`createDeepAgent` 不轉發那個選項，
+ * 所以這個工具的描述兩邊**必然不同**，見 {@link DESCRIPTION_EXCEPTIONS}。**例外是收緊的**：把自有那邊換上去的那一句換回基座的原句，整份必須與基座逐位元組相同，
+ * 所以組裝路徑上別的描述漂移（多一句、少一句）一樣抓得到。其餘一切——工具清單、每個工具的參數 schema、其他工具的描述、系統提示（先讀後改那兩句由
+ * 同一顆 middleware 追加，兩邊都有）——仍逐位元組相同。
  *
  * 這條測試在 `deepagents` 被拿乾淨之前同時是升版絆索：基座改了組裝（多一顆 middleware、換順序、改提示），
  * 它會在這裡紅，而不是在生產上才發現。基座拿乾淨之後這條測試連同 `createDeepAgent` 的 import 一起拿掉。
@@ -121,24 +122,24 @@ function project(messages: readonly BaseMessage[]): unknown[] {
   }));
 }
 
-/** 描述不同的工具：自有組裝那邊的描述該有什麼、基座（`createDeepAgent`）那邊的原文有什麼、為什麼不同。 */
+/**
+ * 描述不同的工具：自有組裝那邊換上去的是哪一句、基座（`createDeepAgent`）那邊的原句、為什麼不同。
+ * `restore` 把自有那邊換上去的句子換回基座的原句；換回之後兩邊要逐位元組相同。
+ */
 const DESCRIPTION_EXCEPTIONS: Readonly<
-  Record<string, { readonly own: RegExp; readonly base: RegExp; readonly why: string }>
+  Record<
+    string,
+    {
+      readonly own: string;
+      readonly base: string;
+      readonly why: string;
+    }
+  >
 > = {
   read_file: {
-    own: /By default, it reads up to 2000 lines/,
-    base: /By default, it reads up to 100 lines/,
+    own: 'By default, it reads up to 2000 lines',
+    base: 'By default, it reads up to 100 lines',
     why: '一頁預設 2000 行（照 dsh，#602），預設值由 read-continuation 的 wrapToolCall 填；基座的原文寫死 100',
-  },
-  write_file: {
-    own: /read an existing file first \(the default fs-observation-policy requires it\)/,
-    base: /You do not need to read the file first/,
-    why: '先讀後改（observation-policy）擋覆蓋沒讀過的檔；基座的原文說不必先讀，照 dsh 把規則寫進工具描述',
-  },
-  edit_file: {
-    own: /Read the file first \(the default fs-observation-policy requires it\), unless you just created or edited it in this session/,
-    base: /You must read the file before editing; this tool errors otherwise/,
-    why: '同 write_file：先讀後改的規則與「剛建過或改過就不必重讀」，照 dsh 寫進工具描述',
   },
 };
 
@@ -147,10 +148,13 @@ interface BoundTool {
 }
 
 /**
- * 把每一次 `bindTools` 的記錄拆開，例外工具的描述換成佔位字，回傳換掉的描述。
- * 例外之外的每一個位元組都留在 `normalized` 裡，兩邊要逐位元組相同。
+ * 把每一次 `bindTools` 的記錄拆開：例外工具的描述單獨留下（`kept`），**自有那邊再把換上去的句子換回基座的原句**（`restoreBase`）。
+ * 描述之外的每一個位元組、以及換回之後的描述，都留在 `normalized` 裡，兩邊要逐位元組相同。
  */
-function splitExceptions(bindings: readonly string[]): {
+function splitExceptions(
+  bindings: readonly string[],
+  restoreBase: boolean,
+): {
   readonly normalized: string[];
   readonly descriptions: Record<string, string>[];
 } {
@@ -158,9 +162,19 @@ function splitExceptions(bindings: readonly string[]): {
   const normalized = bindings.map((binding) => {
     const kept: Record<string, string> = {};
     const tools = (JSON.parse(binding) as BoundTool[]).map((each) => {
-      if (!(each.function.name in DESCRIPTION_EXCEPTIONS)) return each;
-      kept[each.function.name] = each.function.description ?? '';
-      return { ...each, function: { ...each.function, description: '<明文例外>' } };
+      const exception = DESCRIPTION_EXCEPTIONS[each.function.name];
+      if (exception === undefined) return each;
+      const description = each.function.description ?? '';
+      kept[each.function.name] = description;
+      return restoreBase
+        ? {
+            ...each,
+            function: {
+              ...each.function,
+              description: description.replace(exception.own, exception.base),
+            },
+          }
+        : each;
     });
     descriptions.push(kept);
     return JSON.stringify(tools);
@@ -239,21 +253,22 @@ describe('自有組裝點對上 createDeepAgent', () => {
     expect(own.nodes).toEqual(reference.nodes);
     expect(own.finalText).toBe(reference.finalText);
 
-    // 綁定的工具：明文例外之外逐位元組相同，例外的那三個描述各自對得上 DESCRIPTION_EXCEPTIONS。
-    const ownTools = splitExceptions(own.bindings);
-    const referenceTools = splitExceptions(reference.bindings);
+    // 綁定的工具：自有那邊換上去的句子換回基座的原句之後，逐位元組相同。
+    const ownTools = splitExceptions(own.bindings, true);
+    const referenceTools = splitExceptions(reference.bindings, false);
     expect(ownTools.normalized).toEqual(referenceTools.normalized);
-    // root 與子代理的綁定都有那三個工具：例外不是空的，證明這條量得到東西。
-    expect(ownTools.descriptions.every((each) => Object.keys(each).length === 3)).toBe(true);
+    // root 與子代理的綁定都有 `read_file`：例外不是空的，證明這條量得到東西；且確實換過（自有有新句、基座是原句）。
+    expect(ownTools.descriptions.every((each) => Object.keys(each).length === 1)).toBe(true);
     for (const [name, exception] of Object.entries(DESCRIPTION_EXCEPTIONS)) {
       for (const [index, kept] of ownTools.descriptions.entries()) {
-        expect(kept[name], `${name}（第 ${index} 次綁定，自有）：${exception.why}`).toMatch(
+        expect(kept[name], `${name}（第 ${index} 次綁定，自有）：${exception.why}`).toContain(
           exception.own,
         );
+        expect(kept[name]).not.toContain(exception.base);
         expect(
           referenceTools.descriptions[index]?.[name],
           `${name}（第 ${index} 次綁定，基座）`,
-        ).toMatch(exception.base);
+        ).toContain(exception.base);
       }
     }
   });

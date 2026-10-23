@@ -35,7 +35,7 @@
  * - **位元組上限**：{@link readWithExtent} 切回去時累計 {@link READ_MAX_BYTES}，算法同 `buildWindow`
  *   ——每行的 UTF-8 位元組，不是第一行的再加一個換行。
  * - **模型看到的說明**：基座的描述寫死「reads up to 100 lines」、JSON schema 把 `limit` 列成必填且預設 100。
- *   **描述**經 `customToolDescriptions` 換（`fs-tool-descriptions.ts`，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)，照 dsh 的工具自己的描述）；
+ *   **描述**經 `customToolDescriptions` 換（`fs-tool-descriptions.ts`，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）；
  *   **schema**（`limit` 不再必填）由 `wrapModelCall` 把送給模型的那一份換掉，見 {@link modelFacingReadTool}。
  *
  * **偏離一（縮到只剩 schema）：`limit` 的 schema 在模型呼叫時換，不在工具上改。** 照 dsh 應該是工具自己的 schema。基座表達不出來

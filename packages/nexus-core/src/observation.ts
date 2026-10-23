@@ -5,7 +5,7 @@
  * 模型重讀 → 再改），成功了則可能改壞它沒看到的地方。這個 middleware 記下每個 agent
  * 這一場觀察過哪些檔，並用那份紀錄擋下每一次寫入與編輯。
  *
- * ## 照抄 dsh 的哪些、退了哪兩條
+ * ## 照抄 dsh 的哪些、退了哪一條
  *
  * 標準是 `packages/fs/fs-observation-policy`（SHA `4e84901`，對到上游
  * `76fda72` 時該套件除了版號沒有變動）。**三個狀態、三個錯誤碼、以及「部分讀也算」
@@ -35,12 +35,19 @@
  * （{@link createVersionHasher}、{@link noteReadVersion}）直接把版本交上來，這裡就記它，不再讀；沒回報的照舊 `readRaw`。
  * 寫與改前的比對仍是 `readRaw`，兩邊的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
  *
- * **規則寫在工具描述裡，照 dsh**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。dsh 把它寫進工具描述——
- * 「read an existing file first (**the default fs-observation-policy requires it**)」、「Read the file first…, unless you just created or edited it
- * in this session」（`snapshots/web` 底下每一份 `system-prompt.expected.md`）。模型看得到的只有描述，不寫在那裡它每碰一個新檔就得先撞一次牆。
- * 這一顆以前退到 `wrapModelCall` 往 `systemMessage` 追加一句（登記為偏離二，理由是 `customToolDescriptions` 沒有往下傳）；那個理由只對
- * `createDeepAgent` 成立，自有組裝收得到它（#1776），所以偏離收掉：描述由 `agent-assembly.ts` 經 `customToolDescriptions` 換
- * （`fs-tool-descriptions.ts`，看這顆 middleware 在不在），這裡不再碰系統提示詞。
+ * **規則寫在系統提示詞，照 dsh**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。dsh 的 `write`、`edit` 各用一個
+ * `ctx.systemPrompt.section`（`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，`687f282e`），工具在場才寫：
+ * 「Read an existing file before overwriting it with write (the default fs-observation-policy requires it) and prefer edit for targeted changes.」、
+ * 「Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.」
+ * 工具描述本身只有一句「Create or fully replace a UTF-8 text file.」／「Edit an existing UTF-8 text file by replacing literal text.」。
+ * 這裡一樣：{@link observationGuidance} 看這一輪送給模型的工具清單裡有沒有 `write_file`／`edit_file`，有才往 `systemMessage` 追加；
+ * 句子用 dsh 原句，只把工具名換成我們的（`write`→`write_file`、`edit`→`edit_file`，機械對應，不算偏離）。
+ * 模型看得到這句才不會每碰一個新檔都先撞一次牆。這一顆 middleware 沒掛（`observationPolicy: false`）就不會有這句。
+ *
+ * 以前這一段登記成「偏離二：dsh 把它寫進工具描述」，那是寫錯的說明（沒有核原始碼），已更正：規則本來就在系統提示詞的 section。
+ *
+ * **鍵的範圍（N0333）：延後，不是偏離。** {@link observationKey} 只看得到兩層路由，見該函式的說明。要全看見只需要 `fold.ts` 把
+ * `offWorkspacePrefixes()` 交給 {@link createObservationPolicy}；PM 裁決這張卡不動 `fold.ts`，驗收時另開 backlog 卡。
  *
  * @module
  */
@@ -75,6 +82,32 @@ export const OBSERVED_READ_TOOL = 'read_file';
 export const OBSERVED_WRITE_TOOL = 'write_file';
 /** 見 {@link OBSERVED_READ_TOOL}。 */
 export const OBSERVED_EDIT_TOOL = 'edit_file';
+
+/**
+ * 先讀後改的兩句系統提示（dsh `write.ts:63-71`、`edit.ts:76-83` 的原句；工具名換成我們的）。**這兩句是機制的一部分，不是註解**：
+ * 沒有它們，模型每碰一個新檔都得先撞一次牆才學會，而省掉那一輪往返正是這件事的主要價值。
+ *
+ * @param tools - 這一輪送給模型的工具名。`write_file`、`edit_file` 各自在場才寫各自那一句（`write` 那句在 `edit_file` 也在場時多一小段）。
+ * @returns 要接在系統提示後面的文字；兩個工具都不在場時是空字串。
+ */
+export function observationGuidance(tools: ReadonlySet<string>): string {
+  const sections: string[] = [];
+  if (tools.has(OBSERVED_WRITE_TOOL)) {
+    sections.push(
+      `Read an existing file before overwriting it with ${OBSERVED_WRITE_TOOL} (the default fs-observation-policy requires it)` +
+        (tools.has(OBSERVED_EDIT_TOOL)
+          ? ` and prefer ${OBSERVED_EDIT_TOOL} for targeted changes`
+          : '') +
+        '.',
+    );
+  }
+  if (tools.has(OBSERVED_EDIT_TOOL)) {
+    sections.push(
+      'Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.',
+    );
+  }
+  return sections.join('\n\n');
+}
 
 /**
  * 一次權威觀測。
@@ -246,6 +279,9 @@ const MAX_ROUTE_DEPTH = 8;
  *   `routePrefixes`、不留 `getBackendAndKey` 與 `default`，所以沒辦法用基座自己的 `getBackendAndKey` 一路走到底，也看不到第三層以後的前綴。
  *   看不到的那幾層裡，不同路由的同名檔會被當成同一個檔：結果只會是**錯誤碼不準**（`FS_STALE_VERSION` 而不是 `FS_NOT_OBSERVED`），不會放行——
  *   `staleness` 拿這次呼叫的原路徑問後端，版本對不上就拒絕。
+ *   **這一條是延後，不是偏離**：`fold.ts` 把 `offWorkspacePrefixes()` 交給 {@link createObservationPolicy} 就看得到全部前綴（PM 裁決這張卡不動 `fold.ts`，
+ *   驗收時另開 backlog 卡）。dsh 對應的是 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`）。
+ *   另一個殘留：看不到的那幾層裡鍵相同的兩個不同檔，若版本 token 也撞號（同一毫秒 mtime、同長度、同 djb2），讀其中一個會讓另一個被放行；實務上可以忽略。
  * - 含 `..` 段的路徑不收（鍵是原字串）：後端會拒絕它，`normalize` 卻會把它折成別的檔的名字，讓一次失敗的讀誤記到那個檔身上。
  *
  * **與 dsh 的偏離（理由 1，基座表達不出來）：不取 realpath，用字面正規化。** dsh 的 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`，
@@ -351,6 +387,22 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
 
   return createMiddleware({
     name: OBSERVATION_POLICY_MIDDLEWARE_NAME,
+
+    // 規則要在模型動手之前就講給它聽，理由與出處見檔頭。
+    wrapModelCall: (request, handler) => {
+      const names = new Set(
+        request.tools.flatMap((tool) => {
+          const name = (tool as { readonly name?: unknown }).name;
+          return typeof name === 'string' ? [name] : [];
+        }),
+      );
+      const guidance = observationGuidance(names);
+      return handler(
+        guidance === ''
+          ? request
+          : { ...request, systemMessage: request.systemMessage.concat(`\n\n${guidance}`) },
+      );
+    },
 
     wrapToolCall: async (request, handler) => {
       const toolName = resolveToolName(request);

@@ -27,12 +27,6 @@ import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
-/**
- * 裸 agent 沒有系統提示詞。以前模型那一側的第一則 system 是觀察政策的 `wrapModelCall` 追加的（#1563 起規則改寫進工具描述、不再追加），
- * 這份測試用「第一則是不是 system」分辨主呼叫與摘要呼叫，所以自己給一則。
- */
-const TEST_SYSTEM_PROMPT = '你是測試用的助理。';
-
 type CompactionSummary = SessionEventMap['compaction/summary'];
 
 const ROOT_ID = 'compaction-root';
@@ -92,7 +86,6 @@ async function run(
   const backend = new ContainedFilesystemBackend({ rootDir: backendRoot });
   const saver = new MemorySaver();
   const { agent, attachSession, dispose } = await createNexusAgent({
-    systemPrompt: TEST_SYSTEM_PROMPT,
     model,
     backend,
     checkpointer: saver,
@@ -228,7 +221,6 @@ describe('壓縮發生時，日誌裡留得下來', () => {
       ],
     });
     const { agent, dispose } = await createNexusAgent({
-      systemPrompt: TEST_SYSTEM_PROMPT,
       model: reader,
       backend,
       checkpointer: saver,

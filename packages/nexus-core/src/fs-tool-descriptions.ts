@@ -1,26 +1,23 @@
 /**
- * 基座檔案工具的描述，換成講得出我們實際規則的那一份（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。
+ * 基座 `read_file` 的描述，換成講得出我們實際預設行數的那一份（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。
  *
- * ## 為什麼是描述，不是系統提示詞
+ * ## 只換 `read_file` 一顆
  *
- * dsh 把「先讀後改」寫進工具描述（`snapshots/web` 底下每一份 `system-prompt.expected.md`：「read an existing file first (the default
- * fs-observation-policy requires it)」、「Read the file first … unless you just created or edited it in this session」），模型看得到的
- * 只有描述，不寫在那裡它每碰一個新檔就得先撞一次牆。以前 `observation.ts` 退到 `wrapModelCall` 往 `systemMessage` 追加一句，
- * `read-continuation.ts` 也在 `wrapModelCall` 裡改送給模型的 `read_file` 定義，理由是「`customToolDescriptions` 沒有往下傳」——那只對
+ * 基座 `read_file` 的描述寫死「By default, it reads up to 100 lines」（`READ_FILE_TOOL_DESCRIPTION`，`deepagents@1.13.1`，
+ * `dist/langsmith-zm0ILQsV.js:1951-1963`），而我們的預設一頁是 {@link READ_LIMIT} 行（照 dsh，#602）；寫錯的描述會讓模型照 100 行規劃分頁。
+ * 以前 `read-continuation.ts` 在 `wrapModelCall` 裡改送給模型的工具定義，理由是「`customToolDescriptions` 沒有往下傳」——那只對
  * `createDeepAgent` 成立（它建 `createFilesystemMiddleware` 時只傳 `{ backend, permissions, tools }`）。自有組裝收得到它
  * （#1776 補正）：`createFilesystemMiddleware` 的 `customToolDescriptions` 認 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、`glob`、
- * `grep`、`execute`，每個工具建立時把 `customDescription || 基座預設` 當 `description`（`deepagents@1.13.1`，
- * `dist/langsmith-zm0ILQsV.js:2363-2407`）。所以規則現在住在工具描述裡，照 dsh。
+ * `grep`、`execute`，每個工具建立時把 `customDescription || 基座預設` 當 `description`（`dist/langsmith-zm0ILQsV.js:2363-2407`）。所以描述現在由這裡換。
+ *
+ * **`write_file`／`edit_file` 的描述不換。** 先讀後改的規則照 dsh 寫在系統提示詞的 section（`observation.ts` 的 {@link observationGuidance}），
+ * 不是工具描述；dsh 的工具描述只有一句 UTF-8 文字檔的說明。
  *
  * ## 開不開，看 middleware 在不在
  *
- * 描述講的是 middleware 的行為，middleware 沒掛，描述就是在說謊：
- *
- * - `write_file`／`edit_file` 的「先讀後改」只在 {@link OBSERVATION_POLICY_MIDDLEWARE_NAME} 在場時寫（`observationPolicy: false` 或條目 `disabled` 時
- *   那顆不在，基座的原描述「不必先讀」才是真話）；
- * - `read_file` 的「預設 {@link READ_LIMIT} 行」只在 {@link READ_CONTINUATION_MIDDLEWARE_NAME} 在場時寫（預設的 `limit` 是它的 `wrapToolCall` 填的）。
- *
- * 呼叫端傳這次組裝（或這個子代理）實際會掛的 middleware 清單進來，這裡看名字。
+ * 描述講的是 middleware 的行為，middleware 沒掛，描述就是在說謊：`read_file` 的「預設 {@link READ_LIMIT} 行」只在
+ * {@link READ_CONTINUATION_MIDDLEWARE_NAME} 在場時寫（預設的 `limit` 是它的 `wrapToolCall` 填的）。呼叫端傳這次組裝（或這個子代理）
+ * 實際會掛的 middleware 清單進來，這裡看名字。
  *
  * ## 從基座的原文改，不是整段重寫
  *
@@ -39,36 +36,15 @@
 
 import { createFilesystemMiddleware } from 'deepagents';
 
-import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME, READ_LIMIT } from './read-continuation.js';
 
-/** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（只用到這三顆）。 */
-export type FilesystemToolDescriptions = Readonly<
-  Partial<Record<'read_file' | 'write_file' | 'edit_file', string>>
->;
+/** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（只用到 `read_file`）。 */
+export type FilesystemToolDescriptions = Readonly<Partial<Record<'read_file', string>>>;
 
 /** 基座 `read_file` 描述裡講預設行數的那一句（`READ_FILE_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js:1951-1963`）。 */
 const BASE_READ_DEFAULT = 'By default, it reads up to 100 lines';
 
-/** 基座 `write_file` 描述裡「不必先讀」的那一句（`WRITE_FILE_TOOL_DESCRIPTION`，`:1965-1971`）。 */
-const BASE_WRITE_NO_READ = 'You do not need to read the file first.';
-
-/** 基座 `edit_file` 描述裡「要先讀」的那一行（`EDIT_FILE_TOOL_DESCRIPTION`，`:1972-1979`）。 */
-const BASE_EDIT_MUST_READ = '- You must read the file before editing; this tool errors otherwise.';
-
-/**
- * 換上去的句子，前半照 dsh `snapshots/web` 的措辭。後半是我們的策略多出來、dsh 那兩句沒講的兩件事（部分讀也算、被改動要重讀），
- * 以前寫在 `OBSERVATION_POLICY_NOTICE` 裡，模型靠它才不會在第一次撞牆時才知道。
- */
-const WRITE_OBSERVATION =
-  'Existing files are overwritten, so read an existing file first (the default fs-observation-policy requires it); ' +
-  'a file that does not exist yet can be created without reading. ' +
-  'If the file changed after you read it, read it again first.';
-const EDIT_OBSERVATION =
-  '- Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session; ' +
-  'reading only part of it (offset/limit) counts. If the file changed after you read it, read it again first. This tool errors otherwise.';
-
-/** 基座三顆工具的原描述，每個進程算一次。 */
+/** 基座檔案工具的原描述，每個進程算一次。 */
 let baseDescriptions: Readonly<Record<string, string>> | undefined;
 
 function baseDescriptionsOf(): Readonly<Record<string, string>> {
@@ -102,17 +78,12 @@ export function filesystemToolDescriptions(
   middleware: readonly { readonly name: string }[],
 ): FilesystemToolDescriptions | undefined {
   const names = new Set(middleware.map((each) => each.name));
-  const descriptions: Record<string, string> = {};
-  if (names.has(READ_CONTINUATION_MIDDLEWARE_NAME)) {
-    descriptions['read_file'] = swap(
+  if (!names.has(READ_CONTINUATION_MIDDLEWARE_NAME)) return undefined;
+  return {
+    read_file: swap(
       'read_file',
       BASE_READ_DEFAULT,
       `By default, it reads up to ${READ_LIMIT} lines`,
-    );
-  }
-  if (names.has(OBSERVATION_POLICY_MIDDLEWARE_NAME)) {
-    descriptions['write_file'] = swap('write_file', BASE_WRITE_NO_READ, WRITE_OBSERVATION);
-    descriptions['edit_file'] = swap('edit_file', BASE_EDIT_MUST_READ, EDIT_OBSERVATION);
-  }
-  return Object.keys(descriptions).length === 0 ? undefined : descriptions;
+    ),
+  };
 }
