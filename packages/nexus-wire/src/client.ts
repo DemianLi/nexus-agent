@@ -701,7 +701,8 @@ function readThreadList(result: unknown): ThreadListResult {
         typeof row.updatedAt !== 'number' ||
         typeof row.running !== 'boolean' ||
         typeof row.blank !== 'boolean' ||
-        (row.title !== undefined && typeof row.title !== 'string')
+        (row.title !== undefined && typeof row.title !== 'string') ||
+        (row.parentThreadId !== undefined && typeof row.parentThreadId !== 'string')
       ) {
         throw new Error('GET /threads 回了不認得的一列');
       }
@@ -711,6 +712,7 @@ function readThreadList(result: unknown): ThreadListResult {
         running: row.running,
         blank: row.blank,
         ...(typeof row.title === 'string' ? { title: row.title } : {}),
+        ...(typeof row.parentThreadId === 'string' ? { parentThreadId: row.parentThreadId } : {}),
       });
     }),
   };

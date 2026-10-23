@@ -33,9 +33,13 @@
  *    `Event`、[#89](https://github.com/DemianLi/nexus-agent/issues/89)），web 拿不到 dsh 按鈕送的那顆 `turn/end` 的 seq。退到：指名那一輪
  *    root 回覆的 `messageId`（即時與歷史都穩定，評分指名的也是它），由 server 換算成同一輪的 `turn/end`——換算之後切點與 dsh 的 web
  *    入口相同。代價是沒有切在一輪中間的分叉。**不收「省略切點」**（dsh 由 Host 取最新完成那一輪）：範圍沒做，不是形狀不同。
+ *    **失敗收尾的那一輪由 server 拒**（`fork_unavailable`），這一點也是 `messageId` 帶出來的：dsh 的 server 只看 `atSeq` 在不在
+ *    （`commands.ts:251-260`），不給失敗的輪分支是 UI 的判斷（`turn-tail.ts:76-98` 的 `branchUnavailable`，範圍也更廣）；我們由 server
+ *    換算切點，所以由 server 判。
  * 5. **分叉的業務失敗走成功回應**，同這一族其他幾支；dsh 的 `session/not-found`、`session/fork-unavailable` 都是拋出的錯誤。
- *    名額滿了不在這裡：沿用整條線共用的 `thread_at_capacity`（`protocol.ts` 的 `THREAD_AT_CAPACITY`，`ErrorResponse`），任何會新建
- *    thread 的路滿了都回它。
+ *    名額滿了不在這裡，**dsh 也沒有這個碼**：dsh 的 fork 不檢查名額，名額是 nexus 的 thread 數上限（#1476，偏離登記在
+ *    `wire-handler.ts` 的 `threadFor`，理由 2）。所以沿用那道上限整條線共用的 `thread_at_capacity`（`protocol.ts` 的
+ *    `THREAD_AT_CAPACITY`，`ErrorResponse`），任何會新建 thread 的路滿了都回它。
  *
  * 回應都是 `{ ok: true, value }`／`{ ok: false, error: { code } }`，業務失敗走成功回應，`ErrorResponse` 只給「這條線收不了」
  * （含 `not_supported`），同 {@link ../model-selection.ts | 模型選擇} 與回饋那四支。
