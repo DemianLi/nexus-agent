@@ -140,6 +140,7 @@ const MINIMAL_PARAMS: Record<RpcMethod, Record<string, unknown>> = {
   'input.respond': { namespace: [], interrupt_id: 'i-1', response: {} },
   'slash.list': {},
   'slash.run': { line: '/nothing' },
+  'skill.list': {},
   'run.cancel': {},
   'queue.update': { item_id: 'q-1', action: { kind: 'remove' } },
   'subagent.send': { run_id: 'bg-1', text: '嗨' },
@@ -335,6 +336,7 @@ describe('wire：今天的客戶端照樣過', () => {
     });
     await client.inputRespond(thread, { namespace: [], interrupt_id: 'i-1', response: {} });
     await client.slashList(thread);
+    await client.skillList(thread);
     await client.slashRun(thread, '/nothing', [{ type: 'file', receiptId: 'r-2' }]);
     await client.runCancel(thread);
     await client.queueUpdate(thread, { item_id: 'q-1', action: { kind: 'edit', text: '改' } });

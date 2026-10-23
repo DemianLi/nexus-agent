@@ -517,6 +517,71 @@ describe('瀏覽器端的 client', () => {
     const badDescriptor = stub(() => Response.json(successResponse(1, { commands: [{}] })));
     await expect(badDescriptor.client.slashList('t8')).rejects.toThrow('不認得的 descriptor');
   });
+
+  it('技能清單（#1574 N0929）：路徑與封包講 skill.list；每列逐格重建，多的格子（正文）不帶過去、凍過', async () => {
+    const { calls, client } = stub(() =>
+      Response.json(
+        successResponse(1, {
+          skills: [
+            {
+              name: 'deploy',
+              description: '部署',
+              path: '/skills/deploy/SKILL.md',
+              modelInvocable: false,
+              content: '正文',
+            },
+            {
+              name: 'normal',
+              description: '一般',
+              whenToUse: '平常',
+              modelInvocable: true,
+              body: '正文',
+            },
+          ],
+        }),
+      ),
+    );
+    const listed = await client.skillList('t9');
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t9/commands/skill.list');
+    expect(calls[0]?.body).toEqual({ id: 1, method: 'skill.list' });
+    if (listed.kind !== 'ok') throw new Error('skill.list 應該成功');
+    // `toStrictEqual` 連「多一格」都分得出：伺服器多送的 `content`／`body` 不在 client 交出的物件上。
+    expect(listed.skills).toStrictEqual([
+      {
+        name: 'deploy',
+        description: '部署',
+        path: '/skills/deploy/SKILL.md',
+        modelInvocable: false,
+      },
+      { name: 'normal', description: '一般', whenToUse: '平常', modelInvocable: true },
+    ]);
+    expect(Object.isFrozen(listed.skills[0])).toBe(true);
+  });
+
+  it.each([
+    ['沒有 skills 陣列', {}, '沒有 skills 陣列'],
+    ['少 modelInvocable', { skills: [{ name: 'a', description: 'a' }] }, '不認得的一列'],
+    [
+      'modelInvocable 不是布林',
+      { skills: [{ name: 'a', description: 'a', modelInvocable: 'yes' }] },
+      '不認得的一列',
+    ],
+    ['少 description', { skills: [{ name: 'a', modelInvocable: true }] }, '不認得的一列'],
+    [
+      'whenToUse 不是字串',
+      { skills: [{ name: 'a', description: 'a', modelInvocable: true, whenToUse: 1 }] },
+      '不認得的一列',
+    ],
+    [
+      'path 不是字串',
+      { skills: [{ name: 'a', description: 'a', modelInvocable: true, path: null }] },
+      '不認得的一列',
+    ],
+    ['一列是 null', { skills: [null] }, '不認得的一列'],
+  ] as const)('skill.list 的格子不對（%s）就拋錯，不默默收下', async (_name, result, message) => {
+    const { client } = stub(() => Response.json(successResponse(1, result)));
+    await expect(client.skillList('t9')).rejects.toThrow(message);
+  });
 });
 
 describe('列檔（#651）', () => {
@@ -664,6 +729,7 @@ describe('被拒時把 server 的錯誤碼交給呼叫端（#764）', () => {
     (client: ReturnType<typeof createWireClient>) => Promise<unknown>,
   ])[] = [
     ['slashList', (c) => c.slashList('t')],
+    ['skillList', (c) => c.skillList('t')],
     ['slashRun', (c) => c.slashRun('t', '/plan')],
     ['goalPause', (c) => c.goalPause('t', { goalId: 'g', revision: 1 })],
     ['feedbackPut', (c) => c.feedbackPut('t', {} as never)],

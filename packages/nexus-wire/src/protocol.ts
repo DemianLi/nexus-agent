@@ -228,6 +228,24 @@ export function isSlashMethod(value: unknown): value is SlashMethod {
 }
 
 /**
+ * 這條對話用 `/名字` 叫得出哪些技能（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929）。**只讀，不帶正文**。
+ *
+ * 照 dsh 的 `skills/list({ sessionId })`（`packages/api/session-controller/src/skill-catalog.ts:35-91`，`687f282e`）：只回人叫得到的
+ * （`isUserInvocable`），依名字逐碼排序（`skill/src/index.ts` 的 `compareSkillSummary`），每列是 {@link SkillEntry}。thread 在路徑上，
+ * 同 {@link SLASH_METHODS}，所以沒有 `sessionId` 那一格；端點形狀同 {@link SLASH_METHODS} 那段說的，沒有偏離要標。
+ *
+ * 這台 server 沒掛 `skills` 那一列時回 `not_supported`（dsh 是「registry 不在」的 `gateway/internal`，碼用我們現有的）；
+ * 掛了但沒有技能是 `{ skills: [] }`。
+ */
+export const SKILL_METHODS = ['skill.list'] as const;
+
+export type SkillMethod = (typeof SKILL_METHODS)[number];
+
+export function isSkillMethod(value: unknown): value is SkillMethod {
+  return typeof value === 'string' && (SKILL_METHODS as readonly string[]).includes(value);
+}
+
+/**
  * 中止這一輪（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**以 thread 為單位、不帶
  * run id**：一條 thread 一次只跑一個 run。回 `{ accepted: true }`——只代表受理，不等停穩；這一輪
  * 結束的事實走下行（root 那顆收尾的 `lifecycle` 帶 `aborted: true`）。
@@ -583,6 +601,7 @@ export type FeedbackRecordResult = {
 export type RpcMethod =
   | UplinkMethod
   | SlashMethod
+  | SkillMethod
   | typeof RUN_CANCEL_METHOD
   | typeof QUEUE_UPDATE_METHOD
   | typeof SUBAGENT_SEND_METHOD
@@ -599,6 +618,7 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
   return (
     isUplinkMethod(value) ||
     isSlashMethod(value) ||
+    isSkillMethod(value) ||
     isRunCancelMethod(value) ||
     isQueueUpdateMethod(value) ||
     isSubagentMethod(value) ||
@@ -640,6 +660,7 @@ export const RPC_PARAM_KEYS = {
   'input.respond': ['namespace', 'interrupt_id', 'response', 'responses'],
   'slash.list': [],
   'slash.run': ['line', 'attachments'],
+  'skill.list': [],
   'run.cancel': [],
   'queue.update': ['item_id', 'action'],
   'subagent.send': ['run_id', 'text', 'client_time_zone'],
@@ -678,6 +699,7 @@ type RpcCommand =
   | RunStartCommand
   | Extract<Command, { method: 'input.respond' }>
   | SlashCommand
+  | SkillListCommand
   | RunCancelCommand
   | QueueUpdateCommand
   | SubagentSendCommand
@@ -803,6 +825,35 @@ export type SlashRunResult =
   | { readonly kind: 'unknown' }
   | { readonly kind: 'success'; readonly command_id: string; readonly text?: string }
   | { readonly kind: 'error'; readonly command_id?: string; readonly text: string };
+
+/** 列出這條 thread 用 `/名字` 叫得出的技能。沒有參數——清單是整個 thread 的（同 `slash.list`）。 */
+export interface SkillListCommand {
+  readonly id: number;
+  readonly method: 'skill.list';
+}
+
+/**
+ * 人叫得到的一份技能，逐格照 dsh 的 `SkillEntry`（`packages/api/session-controller/src/types.ts:248-259`，`687f282e`）。
+ * **不帶正文**：叫用時才由 `/名字` 那條路讀。
+ */
+export interface SkillEntry {
+  /** kebab-case 的名字，`/name` 叫的就是它。 */
+  readonly name: string;
+  /** 一句話的用途說明。 */
+  readonly description: string;
+  /** 選填的補充：什麼時候用。 */
+  readonly whenToUse?: string;
+  /**
+   * 那份 `SKILL.md` 的路徑。**是 backend 命名空間的路徑，不是磁碟路徑**（dsh 是磁碟上的絕對路徑；偏離登記在
+   * `apps/harness` 的 `skill-catalog-wire.ts`）。
+   */
+  readonly path?: string;
+  /** 同一份技能有沒有也列給模型（`disable-model-invocation: true` 的是 `false`，只給人叫）。 */
+  readonly modelInvocable: boolean;
+}
+
+/** `skill.list` 的結果，**依名字逐碼排序**。 */
+export type SkillListResult = { readonly skills: readonly SkillEntry[] };
 
 /**
  * 列出以前的 thread 走的路徑（[#302](https://github.com/DemianLi/nexus-agent/issues/302)），`GET`。
