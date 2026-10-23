@@ -132,7 +132,8 @@ describe('ReplayChatModel', () => {
     running = (await runServe({
       argv: ['--port', '0', '--patch', patch, '--session-log', root],
       log: () => undefined,
-      env: {},
+      // 暫存的 home：不讀跑測試那台機器的使用者設定。
+      env: { NEXUS_AGENT_HOME: join(dir, 'home') },
     })) as RunningServe;
 
     const client = await serveClient(running);
@@ -168,7 +169,8 @@ describe('ReplayChatModel', () => {
     running = (await runServe({
       argv: ['--port', '0', '--patch', patch, '--session-log', root],
       log: () => undefined,
-      env: {},
+      // 暫存的 home：不讀跑測試那台機器的使用者設定。
+      env: { NEXUS_AGENT_HOME: join(dir, 'home') },
     })) as RunningServe;
 
     const client = await serveClient(running);
