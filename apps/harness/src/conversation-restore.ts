@@ -154,18 +154,31 @@ function createContentPreview(contentStr: string, headLines = 5, tailLines = 5):
 }
 
 /**
+ * 基座會把這則工具結果搬到哪個檔：沒過門檻或基座不搬的回 undefined。
+ *
+ * 重播（{@link toolResultAsSeen}）與分叉讀繼承檔的路由（`fork-stash.ts`）共用這一份規則。
+ *
+ * @param message - 日誌裡記的那則（工具的輸出）。
+ * @returns 搬去的虛擬路徑（`/large_tool_results/<呼叫編號>.txt`）；不搬就是 undefined。
+ */
+export function toolResultEvictionPath(message: ToolMessage): string | undefined {
+  if (message.name !== undefined && TOOLS_EXCLUDED_FROM_EVICTION.includes(message.name)) {
+    return undefined;
+  }
+  if (stringifyToolContent(message.content).length <= EVICTION_THRESHOLD_CHARS) return undefined;
+  return `${TOOL_RESULT_STASH_PREFIX}/${sanitizeToolCallId(message.tool_call_id)}.txt`;
+}
+
+/**
  * 一則工具結果在模型那一格長什麼樣：照基座的規則，過大的換成預覽。
  *
  * @param message - 日誌裡記的那則（工具的輸出）。
  * @returns 沒過門檻或基座不搬的原樣；過了的換成基座那則。
  */
 export function toolResultAsSeen(message: ToolMessage): ToolMessage {
-  if (message.name !== undefined && TOOLS_EXCLUDED_FROM_EVICTION.includes(message.name)) {
-    return message;
-  }
+  const filePath = toolResultEvictionPath(message);
+  if (filePath === undefined) return message;
   const text = stringifyToolContent(message.content);
-  if (text.length <= EVICTION_THRESHOLD_CHARS) return message;
-  const filePath = `${TOOL_RESULT_STASH_PREFIX}/${sanitizeToolCallId(message.tool_call_id)}.txt`;
   return new ToolMessage({
     content: TOO_LARGE_TOOL_MSG.replace('{tool_call_id}', message.tool_call_id)
       .replace('{file_path}', filePath)
