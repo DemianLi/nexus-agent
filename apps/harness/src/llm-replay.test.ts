@@ -13,7 +13,9 @@ import { join } from 'node:path';
 import type { LoggedMessage, SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { TIME_CONTEXT_OFF_PATCH_ROWS, foldTurn, serveClient } from './fixtures.js';
+import { uniformDecisions } from '@nexus/wire';
+
+import { TIME_CONTEXT_OFF_PATCH_ROWS, approvalAt, foldTurn, serveClient } from './fixtures.js';
 import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { ReplayChatModel } from './llm-replay.js';
 import { runServe } from './serve.js';
@@ -94,12 +96,12 @@ function finalReply(): LoggedMessage {
   });
 }
 
-function replayPatch(script: readonly LoggedMessage[]): string {
+function replayPatch(script: readonly LoggedMessage[], extraInserts = ''): string {
   return `- insert:
     - id: replay
       name: '#settings/replay-model'
       config: ${JSON.stringify({ script })}
-- id: agent-default-model
+${extraInserts}- id: agent-default-model
   config:
     provider: replay
 ${TIME_CONTEXT_OFF_PATCH_ROWS}`;
@@ -114,7 +116,10 @@ async function loggedReplies(root: string, threadId: string): Promise<Record<str
     .map((line) => JSON.parse(line) as SessionEvent);
   return events
     .filter((event) => event.type === 'assistant/message')
-    .map((event) => (event as SessionEvent<'assistant/message'>).data.message.data as Record<string, unknown>);
+    .map(
+      (event) =>
+        (event as SessionEvent<'assistant/message'>).data.message.data as Record<string, unknown>,
+    );
 }
 
 describe('ReplayChatModel', () => {
@@ -133,7 +138,50 @@ describe('ReplayChatModel', () => {
     const client = await serveClient(running);
     const events = await client.openEvents('replay');
     await client.runStart('replay', '回聲一次。');
-    await foldTurn(events);
+    const state = await foldTurn(events);
+    await events.return?.(undefined);
+    await running.close();
+    running = undefined;
+
+    expect(await loggedReplies(root, 'replay')).toEqual(script.map((logged) => logged.data));
+    // 下行也畫得出來：web 那條（#1602）看的是這一層，不是日誌。
+    expect(
+      state.entries
+        .filter((entry) => entry.kind === 'ai')
+        .map((entry) => ({ text: entry.text, reasoning: entry.reasoning })),
+    ).toEqual([
+      { text: '先回聲一次。', reasoning: '使用者要回聲，叫 echo。' },
+      { text: '回聲回來了。', reasoning: '工具成功，收尾。' },
+    ]);
+  }, 60_000);
+
+  it('停在核准、准了之後續接：腳本接著吃，不從頭再來', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nexus-replay-'));
+    const patch = join(dir, 'replay.patch.yml');
+    const script = [toolReply(), finalReply()];
+    // echo 要人核准（`approval.fixture.ts`）：續接若重新組出一顆模型、游標從 0 開始，第二次呼叫會再吐一次工具呼叫。
+    const approvalRow = `    - id: approval-demo
+      name: '${join(process.cwd(), 'src', 'approval.fixture.ts')}'
+`;
+    await writeFile(patch, replayPatch(script, approvalRow), 'utf8');
+    const root = join(dir, 'sessions');
+    running = (await runServe({
+      argv: ['--port', '0', '--patch', patch, '--session-log', root],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+
+    const client = await serveClient(running);
+    const events = await client.openEvents('replay');
+    await client.runStart('replay', '回聲一次。');
+    const paused = await foldTurn(events);
+    const pending = approvalAt(paused.pendings);
+    await client.inputRespond('replay', {
+      namespace: [...pending.namespace],
+      interrupt_id: pending.interruptId,
+      response: uniformDecisions(pending, 'approve'),
+    });
+    await foldTurn(events, paused);
     await events.return?.(undefined);
     await running.close();
     running = undefined;

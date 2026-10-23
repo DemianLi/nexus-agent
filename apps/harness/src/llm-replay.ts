@@ -108,7 +108,9 @@ export class ReplayChatModel extends BaseChatModel {
   private nextMessage(): AIMessage {
     const message = fromLoggedMessage(this.nextLogged());
     if (!(message instanceof AIMessage)) {
-      throw new Error(`重放腳本第 ${String(this.shared.next)} 次不是模型的回覆（${message.getType()}）`);
+      throw new Error(
+        `重放腳本第 ${String(this.shared.next)} 次不是模型的回覆（${message.getType()}）`,
+      );
     }
     return message;
   }
@@ -141,7 +143,25 @@ export class ReplayChatModel extends BaseChatModel {
         ? [{ type: 'text', text: data.content }]
         : [];
     for (const [index, content] of blocks.entries()) {
-      yield { event: 'content-block-start', index, content };
+      // 文字與推理要有一顆 delta：下行畫回覆只收 `text-delta`／`reasoning-delta`（`@nexus/wire` 的
+      // `conversation.ts`），只有 start 與 finish 的話畫面上是空的。落盤取的是 finish 那一塊，不受影響。
+      if (content.type === 'text' && typeof content.text === 'string') {
+        yield { event: 'content-block-start', index, content: { ...content, text: '' } };
+        yield {
+          event: 'content-block-delta',
+          index,
+          delta: { type: 'text-delta', text: content.text },
+        };
+      } else if (content.type === 'reasoning' && typeof content.reasoning === 'string') {
+        yield { event: 'content-block-start', index, content: { ...content, reasoning: '' } };
+        yield {
+          event: 'content-block-delta',
+          index,
+          delta: { type: 'reasoning-delta', reasoning: content.reasoning },
+        };
+      } else {
+        yield { event: 'content-block-start', index, content };
+      }
       yield { event: 'content-block-finish', index, content };
     }
     const {
