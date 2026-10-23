@@ -663,11 +663,19 @@ async function skillListResponse(catalog: SkillCatalog | undefined, id: number):
   return successResponse(id, result);
 }
 
-/** 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。 */
+/**
+ * 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。
+ * 其餘四種在 harness 裡分得開（#1552 N0843），線上一律 `unknown_error`：同 dsh host 把提供方的失敗一律交 `gateway/internal`
+ * （`session-controller/src/list.ts:282-287`）。`aborted` 對到 dsh `:283`：請求自己的 signal 中止時 dsh 直接拋 reason，沒有碼可交
+ * （`:284-285` 的 `gateway/cancelled` 只在提供方自己回 ABORTED、請求還活著時才走得到，nexus 的中止只來自請求）；這裡沿用 `unknown_error`。
+ */
 const SEARCH_ERROR_CODES: Record<ThreadSearchErrorKind, WireErrorCode> = {
   invalid: 'invalid_argument',
   disabled: 'not_supported',
-  failed: 'unknown_error',
+  aborted: 'unknown_error',
+  'index-failed': 'unknown_error',
+  'persistence-failed': 'unknown_error',
+  'source-conflict': 'unknown_error',
 };
 
 function json(body: unknown, status = 200): Response {
