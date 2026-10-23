@@ -55,7 +55,13 @@ import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { isPlanReview, planReviewOf } from '@/lib/plan-review';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
-import { canRunSlash, canSendText, steerableItems } from '@/lib/queue-view';
+import {
+  canRunSlash,
+  canSendText,
+  commandToken,
+  namesCommand,
+  steerableItems,
+} from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
 import {
@@ -385,6 +391,12 @@ function ConversationView({
   const [mentionedAgent, setMentionedAgent] = useState<MentionAgent | undefined>(undefined);
   // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
   const [sendingAttachments, setSendingAttachments] = useState(false);
+  /**
+   * 開頭像命令的那一行在等命令清單認（#1929，dsh 送出狀態機的 `adjudicating`）：等的期間不再送任何一行、草稿不動。
+   */
+  const [adjudicating, setAdjudicating] = useState(false);
+  // 同一件事給非同步回呼讀：前一句晚到的拒收不能在鎖住期間改寫畫面（dsh `draftInitializationBlocked`）。
+  const adjudicatingNow = useRef(false);
   // 上次沒送出去的那一句和它的請求編號（#1335）：原樣重送時沿用，伺服器才認得是同一句；收下了就丟掉。
   const pendingRequest = useRef<PendingRequest | undefined>(undefined);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
@@ -420,7 +432,10 @@ function ConversationView({
       conversation.state.status,
       draft,
       steerableItems(conversation.state.inbox).length,
-    ) && !steeringAll.current;
+    ) &&
+    !steeringAll.current &&
+    // 等命令清單認的期間不收（dsh `InputBar.tsx:156` 的 `canSteerQueue` 排除 `machineBusy`，#1929）。
+    !adjudicating;
   const steerQueue = () => {
     if (steeringAll.current) return;
     steeringAll.current = true;
@@ -435,7 +450,7 @@ function ConversationView({
     );
   };
   // **送出分兩道閘**（#645 Q2）。純文字跑著也送得出去：伺服器收下就排進送出佇列，開跑時才畫人的話。停在核准點時
-  // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
+  // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令（開頭那個字在命令清單上，#1929；技能的 `/名字` 是一句話）一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
   // 例外：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record` 任何時候都收（#267 的 Q10）。命令在 `slash.list` 宣告過
   // 「忙的時候也放行」的那幾行（`/goal pause`）也過得去，判斷照伺服器的宣告，不在這裡另寫文法（#1517）。
   const status = conversation.state.status;
@@ -448,7 +463,7 @@ function ConversationView({
   const canSendLine = (line: string) =>
     isModelLine(line)
       ? conversation.connected
-      : line.trim().startsWith('/')
+      : namesCommand(conversation.slashCommands, line)
         ? canRunSlash(
             conversation.connected,
             status,
@@ -480,7 +495,7 @@ function ConversationView({
   };
   // 封存的會話不給送（#633）：橫幅在輸入框上方，送出鈕停用。伺服器端也擋，這一道是第一道。
   const archived = isArchivedThread(threadManagement?.archivedIds, threadId);
-  const canSend = canSendLine(draft) && !sendingAttachments && !archived;
+  const canSend = canSendLine(draft) && !sendingAttachments && !archived && !adjudicating;
   const hasModelSeat = modelSeat !== null;
   const commands = useMemo(
     () =>
@@ -785,89 +800,121 @@ function ConversationView({
                     if (modelRan) setDraft('');
                     return;
                   }
-                  setDraft('');
-                  // `/` 開頭的是命令，不帶提及（留著，同附件）；否則這一句送出就用掉它。
-                  const mentioned = text.trim().startsWith('/') ? undefined : mentionedAgent;
-                  if (mentioned !== undefined) setMentionedAgent(undefined);
-                  // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
+                  // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。按下去那一刻就定。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
-                  // 只有功能開著才帶附件；`/` 開頭的命令也帶（#733：命令有宣告收附件才收，其餘伺服器回錯誤、草稿與附件留著），
-                  // 只有光打 `/feedback`（開回饋框、不送出）不帶，附件留在草稿裡。
-                  const items =
-                    serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
-                      ? draftAttachments.items
-                      : [];
-                  // 跟上次沒送出去的那一句完全相同才沿用它的編號；改過字、換了點名、增減附件都是新的一句（#1335）。
-                  const sentence: Sentence = {
-                    text,
-                    mention: mentioned?.name,
-                    attachmentIds: items.map((item) => item.id),
-                  };
-                  const requestId = requestIdFor(pendingRequest.current, sentence);
-                  pendingRequest.current = undefined;
-                  void (async () => {
-                    const mention = mentioned === undefined ? undefined : toMention(mentioned);
-                    if (items.length === 0) {
-                      return conversation.send(text, mode, undefined, mention, requestId);
-                    }
-                    setSendingAttachments(true);
-                    try {
-                      const prepared = await prepareAttachments(
-                        client,
-                        threadId,
-                        items,
-                        undefined,
-                        uploads.begin(),
-                      );
-                      if (prepared.kind === 'cancelled') {
-                        uploads.settle('cancelled');
-                        return { message: '附件還在，再按送出會重新上傳。', cancelled: true };
+                  // `route` 是等清單認出來的結果（沒認就是 `undefined`），一路交給 `send`，不再認第二次（#1929）。等的期間
+                  // 輸入框鎖著，這裡讀到的草稿、附件、標記就是畫面上的值。
+                  const submit = (route: 'command' | 'sentence' | undefined) => {
+                    setDraft('');
+                    // 命令不帶提及（留著，同附件）；否則這一句送出就用掉它。開頭是不是命令照送出路由認（#1929）：技能的
+                    // `/deploy 今天` 是一句話，照樣帶。
+                    const isCommand =
+                      route === undefined
+                        ? namesCommand(conversation.slashCommands, text)
+                        : route === 'command';
+                    const mentioned = isCommand ? undefined : mentionedAgent;
+                    if (mentioned !== undefined) setMentionedAgent(undefined);
+                    // 只有功能開著才帶附件；`/` 開頭的命令也帶（#733：命令有宣告收附件才收，其餘伺服器回錯誤、草稿與附件留著），
+                    // 只有光打 `/feedback`（開回饋框、不送出）不帶，附件留在草稿裡。
+                    const items =
+                      serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
+                        ? draftAttachments.items
+                        : [];
+                    // 跟上次沒送出去的那一句完全相同才沿用它的編號；改過字、換了點名、增減附件都是新的一句（#1335）。
+                    const sentence: Sentence = {
+                      text,
+                      mention: mentioned?.name,
+                      attachmentIds: items.map((item) => item.id),
+                    };
+                    const requestId = requestIdFor(pendingRequest.current, sentence);
+                    pendingRequest.current = undefined;
+                    void (async () => {
+                      const mention = mentioned === undefined ? undefined : toMention(mentioned);
+                      if (items.length === 0) {
+                        return conversation.send(text, mode, undefined, mention, requestId, route);
                       }
-                      if (prepared.kind === 'failed') {
-                        uploads.settle('failed');
-                        return { message: prepared.message };
+                      setSendingAttachments(true);
+                      try {
+                        const prepared = await prepareAttachments(
+                          client,
+                          threadId,
+                          items,
+                          undefined,
+                          uploads.begin(),
+                        );
+                        if (prepared.kind === 'cancelled') {
+                          uploads.settle('cancelled');
+                          return { message: '附件還在，再按送出會重新上傳。', cancelled: true };
+                        }
+                        if (prepared.kind === 'failed') {
+                          uploads.settle('failed');
+                          return { message: prepared.message };
+                        }
+                        const rejected = await conversation.send(
+                          text,
+                          mode,
+                          prepared.attachments,
+                          mention,
+                          requestId,
+                          route,
+                        );
+                        // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
+                        if (rejected === undefined) {
+                          const ids = items.map((item) => item.id);
+                          draftAttachments.removeMany(ids);
+                          uploads.forget(ids);
+                        } else {
+                          // 上傳都成功了，是伺服器沒收下這一句：卡片沒有哪裡出錯。
+                          uploads.settle();
+                        }
+                        return rejected;
+                      } finally {
+                        setSendingAttachments(false);
                       }
-                      const rejected = await conversation.send(
-                        text,
-                        mode,
-                        prepared.attachments,
-                        mention,
-                        requestId,
-                      );
-                      // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
-                      if (rejected === undefined) {
-                        const ids = items.map((item) => item.id);
-                        draftAttachments.removeMany(ids);
-                        uploads.forget(ids);
+                    })().then((rejected) => {
+                      if (rejected === undefined) return;
+                      // 「沒送出去」可能其實到了、只是回條斷了：留著編號，原樣重送這一句時帶同一個。
+                      pendingRequest.current = { id: requestId, sentence };
+                      // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
+                      setDraft((current) => (current === '' ? text : current));
+                      // 標記不放回鎖住的輸入框：那一行送出時帶的是按 Enter 當下的標記，放回去畫面就跟送出的對不上
+                      // （dsh `facade.ts:301-304` 的 `draftInitializationBlocked`，#1929）。草稿那一行不用擋：鎖住時草稿一定不是空的。
+                      if (mentioned !== undefined && !adjudicatingNow.current)
+                        setMentionedAgent((current) => current ?? mentioned);
+                      if ('cancelled' in rejected) {
+                        toast('已取消上傳', { description: rejected.message });
+                      } else if (rejected.uncertain === true) {
+                        // 斷在網路層：可能其實到了。不說「沒送出去」，說原樣重送是安全的（#1335）。
+                        toast.warning('不確定這一句有沒有送到', {
+                          description: `原樣再按一次送出，不會重複。（${rejected.message}）`,
+                        });
                       } else {
-                        // 上傳都成功了，是伺服器沒收下這一句：卡片沒有哪裡出錯。
-                        uploads.settle();
+                        toast.error('這一句沒送出去', { description: rejected.message });
                       }
-                      return rejected;
-                    } finally {
-                      setSendingAttachments(false);
-                    }
-                  })().then((rejected) => {
-                    if (rejected === undefined) return;
-                    // 「沒送出去」可能其實到了、只是回條斷了：留著編號，原樣重送這一句時帶同一個。
-                    pendingRequest.current = { id: requestId, sentence };
-                    // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
-                    setDraft((current) => (current === '' ? text : current));
-                    if (mentioned !== undefined)
-                      setMentionedAgent((current) => current ?? mentioned);
-                    if ('cancelled' in rejected) {
-                      toast('已取消上傳', { description: rejected.message });
-                    } else if (rejected.uncertain === true) {
-                      // 斷在網路層：可能其實到了。不說「沒送出去」，說原樣重送是安全的（#1335）。
-                      toast.warning('不確定這一句有沒有送到', {
-                        description: `原樣再按一次送出，不會重複。（${rejected.message}）`,
-                      });
-                    } else {
-                      toast.error('這一句沒送出去', { description: rejected.message });
-                    }
-                  });
+                    });
+                  };
+                  // 開頭像命令的那一行先等命令清單認（dsh 的 `adjudicate`）：等的期間 `canSend` 是關的、輸入框整個鎖住（`locked`），
+                  // Enter 不動作、草稿不動；認完才照命令或一句話送。抓不到清單就說原因，草稿、附件、標記都沒動過。光打
+                  // `/feedback` 是開對話框，不用認。
+                  if (commandToken(text) !== undefined && text.trim() !== FEEDBACK_COMMAND_LINE) {
+                    adjudicatingNow.current = true;
+                    setAdjudicating(true);
+                    void conversation.adjudicate(text).then((verdict) => {
+                      adjudicatingNow.current = false;
+                      setAdjudicating(false);
+                      if (verdict.kind === 'released') return;
+                      if (verdict.kind === 'failed') {
+                        toast.error('這一句沒送出去', { description: verdict.message });
+                        return;
+                      }
+                      submit(verdict.kind);
+                    });
+                    return;
+                  }
+                  submit(undefined);
                 }}
                 commands={commands}
+                skills={conversation.skills}
                 fileReferences={fileReferences}
                 sessionReferences={sessionReferences}
                 // 底列照 SG demo（#1591 Q3）：左邊是助理怎麼做事（模式＝權限），右邊是這則訊息用什麼送（模型、推理強度、
@@ -884,7 +931,8 @@ function ConversationView({
                             status === 'running' || status === 'awaiting-input',
                           )}
                           // 成功的回話與失敗的原因由斜線命令那一套顯示（狀態列），這裡不另開一條。
-                          onSwitch={(line) => void conversation.send(line)}
+                          // 座位送的一定是命令：直接走 `slash.run`，不經過送出認命令那一道（#1929）。
+                          onSwitch={(line) => void conversation.runCommand(line)}
                         />
                       ),
                     })}
@@ -919,6 +967,8 @@ function ConversationView({
                   void conversation.send(line);
                   return true;
                 }}
+                // 一行在等命令清單認的期間整個鎖住：文字框唯讀、附件與 @ 標記改不了（dsh `InputBar.tsx:139-156`，#1929）。
+                locked={adjudicating}
                 // **一輪在跑時才出現**。停在等人時輸入框被面板換掉了（§4.3）：核准面板沒有停止（#376 第 10、11 條），
                 // 提問面板的停止是它自己的 ❌。伺服器只回受理，停下來的事實走下行，所以按下去不自己改狀態。任何分頁
                 // 都按得動，不查是誰起的這一輪（#265 的 Q3）。
