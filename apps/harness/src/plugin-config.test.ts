@@ -87,6 +87,7 @@ import { liveModelConfigSchema } from './settings/live-model.js';
 import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './settings/agent-loop.js';
 import { toolFsConfigSchema } from './settings/tool-fs.js';
 import { toolFsSearchConfigSchema } from './settings/tool-fs-search.js';
+import { sessionReferenceConfigSchema } from './settings/session-reference.js';
 import { threadSearchConfigSchema } from './settings/thread-search.js';
 import { threadTitleLlmConfigSchema } from './settings/thread-title-llm.js';
 import {
@@ -121,17 +122,17 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 57 = 17 個功能（#1574 加了 `skill-invocation`，#1625 加了 `time-context`，#440 加了 `skills`，#669 加了 `ask-user`、`submit-record` 與 `sandbox-policy`，#1027 加了 `trajectory`，#1028 加了 `token-meter`，#437 加了 `permission-presets`）＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 58 = 17 個功能（#1574 加了 `skill-invocation`，#1625 加了 `time-context`，#440 加了 `skills`，#669 加了 `ask-user`、`submit-record` 與 `sandbox-policy`，#1027 加了 `trajectory`，#1028 加了 `token-meter`，#437 加了 `permission-presets`）＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
-    // ＋ **23 個 harness 自己的設定條目**（#1605 加了 `tool-fs`；#1624 加了 `turn-timeout`；#1623 加了 `goal-round-cap`；#1535 加了 `ops-endpoints`；#1490 加了 `memory-gauge`；#1504 加了 `downlink`；#1476 加了 `thread-capacity`；#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#670、#735、#1071；#670 之後 `agent-default-model` 旁多一列出貨的腳本提供者 `cli-script`，所以是 19 個）＋ 8 個配套入口（#974 之前是 20 個，其中 12 個是空 installer，拿掉後 53 → 41）。**數目寫在這裡是為了擋
+    // ＋ **24 個 harness 自己的設定條目**（#1573 加了 `session-reference`；#1605 加了 `tool-fs`；#1624 加了 `turn-timeout`；#1623 加了 `goal-round-cap`；#1535 加了 `ops-endpoints`；#1490 加了 `memory-gauge`；#1504 加了 `downlink`；#1476 加了 `thread-capacity`；#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#670、#735、#1071；#670 之後 `agent-default-model` 旁多一列出貨的腳本提供者 `cli-script`，所以是 19 個）＋ 8 個配套入口（#974 之前是 20 個，其中 12 個是空 installer，拿掉後 53 → 41）。**數目寫在這裡是為了擋
     // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個配套入口
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 57。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(57);
+    // 解析、import、而且長得像一顆 plugin，才數得到 58。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(58);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -206,6 +207,18 @@ describe('出貨的 cordis.yml', () => {
     // dsh `base` 與 `web-app` 兩個 bundle，dsh 也用測試釘這一列）。改成開著是部署的選擇，不該是有人順手改了出貨檔。
     expect(byId.get('thread-search')).toEqual({ openAt: 'never' });
     expect(threadSearchConfigSchema.parse({})).toEqual({ openAt: 'startup' });
+    // **跨會話引用的出廠比例是 0.1，不等於 schema 預設的 0.2（dsh 的值）**（#1573 N0862，Q4 (b)，偏離理由 2）：中文三條 0.2 的來源逼近摘要門檻，
+    // 量法與數字在 `cordis.yml` 那一列與 `session-reference-budget.test.ts` 的 H。改回 0.2 是行為變了，不該是順手改了出貨檔。
+    expect(byId.get('session-reference')).toEqual({
+      maxReferences: 3,
+      candidateLimit: 50,
+      referenceContextFraction: 0.1,
+    });
+    expect(sessionReferenceConfigSchema.parse({})).toEqual({
+      maxReferences: 3,
+      candidateLimit: 50,
+      referenceContextFraction: 0.2,
+    });
     expect(byId.get('browser-session')).toEqual({
       maxAgeDays: DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS,
     });
@@ -370,6 +383,7 @@ describe('出貨的 cordis.yml', () => {
       'thread-title',
       'thread-title-llm',
       'thread-search',
+      'session-reference',
       'thread-capacity',
       'memory-gauge',
       'ops-endpoints',
@@ -1093,6 +1107,7 @@ describe('保護名單', () => {
       '#settings/projection-flush',
       '#settings/downlink',
       '#settings/thread-capacity',
+      '#settings/session-reference',
       '#settings/logger-console',
       '#settings/tool-result-stash',
       '#settings/live-model',

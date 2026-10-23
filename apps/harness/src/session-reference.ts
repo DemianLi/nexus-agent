@@ -5,11 +5,13 @@
  * 照 dsh 的 `SessionReferenceResolver`（`packages/context/session-reference/src/{index,projection,spill,serialization}.ts`，
  * `477b4f4`）：
  *
- * 1. **解析與驗證**（{@link parseReferencedText}）：`@[標題](nexus-session:…)` 換成 `@標題`，最多 3 條不同的會話、不能引用自己。
+ * 1. **解析與驗證**（{@link parseReferencedText}）：`@[標題](nexus-session:…)` 換成 `@標題`，最多 `maxReferences` 條不同的會話（預設 3，
+ *    `session-reference` 那一列，#1573）、不能引用自己。
  * 2. **精確讀**（{@link SessionReferenceReader}）：整份日誌讀回來，壞了就拋，不撿回（dsh 的 `readSurface`）。
  * 3. **投影**（{@link projectSessionConversation}）：只留**那條會話現在看得到的**人話與助手文字，工具、推理、外掛塞的、快照本身都不留
  *    ——所以快照不會一層包一層。
- * 4. **預算**（{@link retainReferencedSession}）：每條來源序列化後最多 64 KiB（沒有模型容量資訊時 dsh 也是這個值）。先丟中間的訊息
+ * 4. **預算**（{@link retainReferencedSession}）：每條來源序列化後最多多少位元組照 dsh **跟著模型窗口走**（`session-reference-budget.ts`：
+ *    `max(64 KiB, floor(窗口 × 4 × 比例))`，`maxReferenceBytes` 給了就原樣蓋過，#1573）；沒有模型容量資訊時 64 KiB。先丟中間的訊息
  *    （留最新的與摘要），再對最長的一則頭尾各留一半、中間換成 `[… omitted N UTF-8 bytes …]`。
  * 5. **提示詞**（{@link renderReferencePrompt}）：不可信、唯讀的 JSON，包在 `<referenced-sessions>` 裡；截斷了就多一段說明全文在哪。
  * 6. **截斷的全文**（`prepareReferenceOmission`，dsh `spill.ts`）：存進接收那條 thread 的存檔服務，說明裡帶回位址。
@@ -24,11 +26,25 @@
  *    失敗讓這一輪失敗，同 dsh。
  * 2. （已撤：截斷的全文照 dsh 存進接收那條 thread 的工具結果暫存並回位址，#1553 N0948；沒有暫存時回 `storage-not-configured`。
  *    編號保留，別處引用的「偏離 3、4」不跟著動。）
- * 3. **模型容量**：dsh 有容量資訊就用 `context × 4 × 0.2`（下限 64 KiB）。我們的模型解不出 `maxInputTokens`（見 `summarization.ts`），
- *    走的正是 dsh「沒有容量資訊」的那條路，所以固定 64 KiB，不是另一條規則。
+ * 3. （已撤：模型容量。以前寫「我們的模型解不出 `maxInputTokens`，所以固定 64 KiB」，前提今天不成立：型錄每一筆必填 `contextWindow`，
+ *    組裝端有 `limitsOf`，#1573 N0862 起預算照 dsh 跟著模型窗口走，見偏離 5、6。編號保留，別處引用的「偏離 3、4」不跟著動。）
  * 4. **投影靠 `replayConversation`**：dsh 走「目前那一面」（surface）的事件，我們沒有那一軸，「現在看得到的」就是把日誌推回模型歷史
  *    （壓縮會換掉舊的），同 `thread-search.ts` 的做法。**推不出來就拋**（`SESSION_REFERENCE_READ_FAILED`），不像搜尋那樣退回「整份都算」
  *    ——快照會把被壓掉的內容帶進另一條會話，不能亂猜。
+ * 5. **預算用的路由在「收下領走的那一刻」取，不在這一步組裝完之後**（理由 1，基座表達不出來；#1573 N0862）：dsh 取的是這一步
+ *    組裝完的路由（`22ddee37` 是 `agent/pre-step` 帶的 `modelSelection`，`index.ts:133`、`:321`；`1517a4db`／`687f282e` 是
+ *    `system-prompt/assemble` 記下的 `assembledRoutes`，`index.ts:97`、`:122-128`）。
+ *    我們領走發生在 step-inbox 的 `beforeModel`，它在 middleware 順序裡是**第一顆**（`packages/nexus-core/src/fold.ts:671` 的註解），而這一步的路由由後面的
+ *    重複提醒／換模型通知那顆 `beforeModel` 的 `assembleStep()` 才定，所以領走的當下**這一步的路由還沒定**。表達不出來的是「領走晚於
+ *    定路由」。退到最接近的：領走時問選擇控制器的 `next()`（使用者最後選的 → 最近一次請求走的 → 部署預設，純讀日誌），整批共用
+ *    一次。**不叫 `assembleStep()`／`takeStepRoute()`**：前者會寫快照，`beforeModel` 被跳過的下一步會吃到舊路由。差別只在「領走之後、
+ *    這一步請求之前」又有 `model/selection` 落進日誌的那個窗口：預算用的是舊那顆的窗口，請求走的是新那顆。dsh 本身不重算這一步，
+ *    補上等於加了 dsh 沒有的語意，所以不補。這個窗口在同一批領走裡不存在：開場那句與插話都從 `#deliverSteps`（`thread-pump.ts`）一處進來、
+ *    一次領走，共用同一個預算。
+ * 6. **出廠的 `referenceContextFraction` 是 0.1，不是 dsh 的 0.2**（理由 2，產品需求超出 dsh 的射程；demian 2026-10-17 拍板 Q4 (b)）：
+ *    dsh 的「每 token 4 位元組」是照英文調的，本產品以中文為主，nexus 自己的估算器量中文約 0.31 token／位元組，0.2 時三條來源占摘要門檻的
+ *    94%–95%，乘上實測的真實÷o200k 1.10 就超過。量法、數字與突變見 `cordis.yml` 的 `session-reference` 那一列與 `session-reference-budget.test.ts`；
+ *    schema 的預設仍是 dsh 的 0.2（`settings/session-reference.ts`）。
  *
  * @module
  */
@@ -80,13 +96,21 @@ export interface ParsedReferencedText {
  *
  * @param text - 使用者送出的文字。
  * @param selfId - 這條 thread 的 id：引用自己是錯的。
+ * @param maxReferences - 最多幾條不同的會話（`session-reference` 那一列的 `maxReferences`）；省略即 {@link MAX_SESSION_REFERENCES}。
  * @returns 換過的文字與去重後的引用。
- * @throws {@link SessionReferenceError} 網址壞了、引用自己、超過 3 條不同的會話。
+ * @throws {@link SessionReferenceError} 網址壞了、引用自己、超過 `maxReferences` 條不同的會話。
  */
-export function parseReferencedText(text: string, selfId: string): ParsedReferencedText {
+export function parseReferencedText(
+  text: string,
+  selfId: string,
+  maxReferences: number = MAX_SESSION_REFERENCES,
+): ParsedReferencedText {
   const parsed = parseSessionReferenceText(text);
   if (parsed.references.length === 0) return { text, references: [] };
-  return { text: parsed.text, references: normalizeReferences(selfId, parsed.references) };
+  return {
+    text: parsed.text,
+    references: normalizeReferences(selfId, parsed.references, maxReferences),
+  };
 }
 
 /** 去重（第一次出現的標題留下）、擋自己、擋太多，同 dsh 的 `normalizeReferences`。 */

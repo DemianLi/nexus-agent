@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import type { SessionReferenceListResult } from '@nexus/wire';
-import { parseSessionReferenceText } from '@nexus/wire';
+import { formatSessionReferenceMention, parseSessionReferenceText } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { assemblyWitness, resetAssemblyWitness } from './assembly-witness.fixture.js';
 import { foldTurn, serveClient } from './fixtures.js';
@@ -34,6 +34,9 @@ afterEach(async () => {
 });
 
 const WITNESS = fileURLToPath(new URL('./assembly-witness.patch.yml', import.meta.url));
+const CANDIDATE_LIMIT_PATCH = fileURLToPath(
+  new URL('./settings/session-reference-limit.patch.yml', import.meta.url),
+);
 const PERSISTENCE_OFF_PATCH = fileURLToPath(
   new URL('./settings/persistence-off.patch.yml', import.meta.url),
 );
@@ -234,5 +237,88 @@ describe('GET /threads/:id/session-references', () => {
       env: {},
     })) as RunningServe;
     expect(await references(running, 'any', '')).toEqual({ available: false });
+  });
+});
+
+/**
+ * 候選上限走設定（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862 驗收 E）：`session-reference` 那一列的 `candidateLimit` 經
+ * `startupSetting` 讀出來，`serve.ts` 建 `SessionReferenceCandidates` 時給 `limit`。`session-reference-candidates.test.ts` 直接傳 `limit`，
+ * 那種測法拿掉 `serve.ts` 傳 `limit` 的那一行也照樣綠；這一條走 `runServe`。
+ */
+describe('候選上限，從 serve 組裝起', () => {
+  async function sevenSessions(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-refs-limit-'));
+    const directory = join(root, projectKey(process.cwd()));
+    for (let at = 0; at < 7; at += 1) {
+      const id = `s${String(at)}`;
+      const session = openJsonlSessionStore({ directory }).create({
+        version: SESSION_LOG_FORMAT_VERSION,
+        id,
+        createdAt: 100 + at,
+        cwd: process.cwd(),
+      });
+      await session.append([
+        {
+          type: 'turn/start',
+          seq: 0,
+          time: 1_000_000_000_000 + at,
+          data: { kind: 'message', text: `第 ${String(at)} 條` },
+        } as never,
+      ]);
+      await session.close();
+    }
+    return root;
+  }
+
+  it('candidateLimit: 5（--patch 覆寫）：七條會話只回五筆', async () => {
+    const root = await sevenSessions();
+    const server = await start(root, ['--patch', CANDIDATE_LIMIT_PATCH]);
+    expect(available(await references(server, 'brand-new', ''))).toHaveLength(5);
+  });
+
+  it('maxReferences: 2 與 maxReferenceBytes: 1000（同一份 --patch）：引用三條在收下時就被拒；引用一條長會話被截——兩個值都經 serve 交到 pump', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-refs-limits-'));
+    const first = await start(root);
+    await driveTurn(first, 'alpha', '甲'.repeat(2_000));
+    await first.close();
+    running = undefined;
+
+    const second = await start(root, ['--patch', CANDIDATE_LIMIT_PATCH]);
+    const client = await serveClient(second);
+    const mention = (id: string): string =>
+      formatSessionReferenceMention({ sessionId: id, label: id });
+    const refused = await client.runStart(
+      'beta',
+      `看 ${mention('a')} ${mention('b')} ${mention('c')}`,
+    );
+    expect(refused).toMatchObject({ type: 'error', error: 'invalid_argument' });
+    expect(String(refused.type === 'error' ? refused.message : '')).toContain(
+      'SESSION_REFERENCE_TOO_MANY',
+    );
+
+    const candidate = available(await references(second, 'beta', '')).find(
+      ({ sessionId }) => sessionId === 'alpha',
+    )!;
+    await driveTurn(second, 'beta', `接著 ${candidate.mention} 說`);
+    await second.close();
+    running = undefined;
+
+    const beta = await (
+      await openJsonlSessionStore({ directory: join(root, projectKey(process.cwd())) }).open(
+        'beta',
+        'read',
+      )
+    ).read();
+    const snapshot = beta.find(
+      (event) => event.type === 'user/message' && event.data.source.kind === 'session-reference',
+    ) as SessionEvent<'user/message'>;
+    // 2,000 個「甲」是 6,000 位元組，超過 1,000 的預算：被截；出廠預算（64 KiB 以上）下它是完整的。
+    expect(JSON.stringify(snapshot.data.message)).toContain('Reference omissions');
+  });
+
+  it('對照：出廠的 50，同一批七條全回', async () => {
+    const root = await sevenSessions();
+    const server = await start(root);
+    expect(available(await references(server, 'brand-new', ''))).toHaveLength(7);
   });
 });

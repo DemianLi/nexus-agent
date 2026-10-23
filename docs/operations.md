@@ -1652,7 +1652,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search`、`tool-fs` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -1851,6 +1851,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `thread-title`              | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組）                                                       | 有（三格）                       | **關不掉**               |
 | `thread-title-llm`          | `--live` 時由模型依第一句話產生會話標題                                                                                        | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
 | `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                             | 有（一格）                       | 關得掉（＝搜尋一律失敗） |
+| `session-reference`         | 引用別的會話：一則訊息最多引幾條、候選清單上限、每條來源最多留幾個位元組（照模型窗口算）；**出廠 3 條、候選 50、窗口的 10%**，見〈引用別的會話〉 | 有（四格，`maxReferenceBytes` 選配） | **關不掉**               |
 | `thread-capacity`           | serve 行程裡最多同時有幾條 thread，與閒置的 thread 多久之後撤出記憶體；**出廠開著**（500 條、2 小時）                           | 有（兩格）                       | **關不掉**               |
 | `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                              | 有（兩格）                       | **關不掉**               |
 | `logger-console`            | 伺服器日誌的等級門檻與格式（文字／一行一筆 JSON）；**只有 `serve` 載**，見〈伺服器日誌的等級與格式〉；**出廠 info、文字**           | 有（五格）                       | **關不掉**               |
@@ -1869,9 +1870,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
-- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`browser-session`、`deliverable-files`、
+- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`browser-session`、`deliverable-files`、
   `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`thread-search`、
-  `browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
+  `session-reference`、`browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、引用的候選清單與每則訊息的引用政策、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
   以及工具結果 `meta` 與壓縮摘要那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），
   **只在 `serve` 上有作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
   `cli.ts` 與 `serve.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
@@ -2025,7 +2026,8 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   `finish_reason` 不是 `stop`（例如推理吃光上限）、要求呼叫工具、正規化後是空的、輸入超過 `maxInputBytes`，
   都算失敗。
 - **CLI 一次性的呼叫多半等不到它**：主回覆收完行程就收尾，還沒回來的標題請求會被中止（不講話），只留退回標題。
-- 送出去的系統提示與訊息原文記在日誌的 `session/title-llm-request`，想知道模型看到什麼去讀那一顆。
+- 送出去的系統提示與訊息原文記在日誌的 `session/title-llm-request`，想知道模型看到什麼去讀那一顆。型錄條目宣告了 `off`（`reasoningEfforts` 有 `off` 這個鍵，值是 `null` 也算）時，那一顆多記一格 `"reasoningEffort": "off"`；沒宣告就沒有這一格。這一格只是紀錄，送出去的請求怎麼關推理看條目的 `compat`，與它無關（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
+- **模型回的文字只取第一個非空行**，並剝掉包住整行的 `*`／`**`／`***`（`**甲** 與 **乙**` 這種中間還有同樣記號的不剝）。模型不聽「只回一行」、在標題後面接了一段說明時，說明不會進側欄。系統提示的最後一行要它在沒什麼可命名時（例如只打招呼）也給一個簡短標題，不要解釋（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
 
 **`thread-search`**（[#631](https://github.com/DemianLi/nexus-agent/issues/631)）讓側欄按**內容**搜尋以前的會話，
 不只比標題。**出廠不開**，同 dsh 的產品組裝：要不要多背一份搜尋索引是部署自己的選擇。多人共用的主機上沒有「整台
@@ -2059,6 +2061,32 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **怎麼比對跟 dsh 不同**：子字串比對，英文不分大小寫、連續空白算一個。dsh 的斷詞把連續的中文當成一個詞，
   句子中間的「搜尋」「會話」都搜不到，所以這裡換掉了；代價是索引大一些。
 - 日誌不落盤（`session-persistence` 關掉）時沒有東西可搜，一律回空。
+
+**`session-reference`**（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）管「引用別的會話」的三個量：一則訊息最多引幾條、輸入框的候選清單最多列幾筆、
+每條被引用的來源最多留幾個位元組。**出廠開著、關不掉**（`disabled: true` 起動當場拋），格式寫壞整個 serve 起不來；理由是關掉只會回到 dsh
+的 20%，讀起來卻像關掉引用。值的家在 schema（`apps/harness/src/settings/session-reference.ts`），只在 `serve` 上有作用，**起動時讀一次**，改了要重啟。
+
+```yaml
+- id: session-reference
+  config:
+    maxReferences: 3
+    candidateLimit: 50
+    referenceContextFraction: 0.1
+```
+
+- **`maxReferences`**：1 到 3，預設 3。上限 3 是網頁端與 wire 一起認的（`MAX_SESSION_REFERENCES`），schema 擋掉 4 以上；
+  調小的話，超過的那則訊息在**收下的當下**就回 `invalid_argument`（`SESSION_REFERENCE_TOO_MANY`），什麼都不進日誌。
+- **`candidateLimit`**：候選清單最多回幾筆，預設 50。
+- **每條來源的位元組預算**：設了 `maxReferenceBytes` 就用它，**原樣蓋過**下面的算式；沒設就是
+  `max(65536, floor(窗口 × 4 × referenceContextFraction))`，窗口是**這一步會走的那顆模型**的（`model.select` 選過的、沒選過就是上一次請求走過的、
+  再沒有就是部署預設），所以使用者在兩次引用之間換模型，下一次引用就吃新那顆的窗口。取不到窗口（腳本模型、沒帶 `--live`）用 64 KiB。
+  超過預算的來源會被截，訊息裡帶 `Reference omissions` 標記，模型看得到被截了。
+- **出廠比例是 0.1，不是 dsh 的 0.2**（schema 的預設仍是 0.2）：三條上限大小的中文來源，乘上實測的中文校正 1.10 之後要留在摘要門檻之內。
+  量法與數字在 `apps/harness/cordis.yml` 那一列的註解與 `session-reference-budget.test.ts`；比例調大前先照那個量法重量。
+- **patch 是整份替換 `config`，不是深層合併**：在自己的 `cordis.patch.yml` 或 `--patch` 裡只寫 `candidateLimit` 或 `maxReferences` 的話，
+  另外幾格由 schema 補，**`referenceContextFraction` 會靜靜回到 schema 的 0.2**，出廠調低的 0.1 就被拿掉了，起動時沒有任何警告。
+  所以調任何一格都要把 `referenceContextFraction: 0.1`（或你量出來的值）一起寫進去。
+- **窗口一律查型錄**。型錄裡沒有的模型（續接的會話選過、後來被拿掉的那顆）這一輪在打供應商之前就失敗，所以這一格的預算沒有人看得到。
 
 **`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)、[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）給 serve 行程裡的 thread 數設上限（第 2 級），
 並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（量測與背景見 #1464：每條 thread 常駐約 2 MB heap，只讀歷史也有）。
