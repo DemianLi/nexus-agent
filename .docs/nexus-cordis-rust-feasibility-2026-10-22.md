@@ -14,8 +14,9 @@
 | 對象 | 版本 |
 | --- | --- |
 | nexus | develop `058d90ef` |
-| dsh | `dsh-v0.2.1-rc.1`，tag 指向 `1600d8a1`（它的 `vendor/` 與 rc.2 `687f282e` 逐檔相同） |
-| cordis-rs | `d77cf919`（用 `gh api` 取檔，沒有 clone） |
+| dsh | `dsh-v0.2.1-rc.1`，tag 指向 `1600d8a1`。檔案是從本機 rc.2（`687f282e`）的 clone 讀的；本篇讀到的 `native/system`、`vendor/cordis` 兩個目錄，tree SHA 與 rc.1 相同；`packages/sandbox` 底下四個套件只差 `package.json` 的版號（2026-10-23 核對） |
+| cordis-rs | `d77cf919`（2026-10-05，用 `gh api` 取檔，沒有 clone）。它比 tag `v0.11.1`（`0f720427`，crate 版號 cordis-core 0.6.1）多 11 個 commit，但那 11 個 commit 沒有改到 `crates/cordis-core/src`，所以本篇讀到的核心原始碼等同 v0.11.1 |
+| Cordis 上游 | **2026-10-23 起以 `v4.0.0-rc.12`（`01b39624`）為準**（demian 拍板）。本篇的量測與讀碼用的是 nexus vendor 的 rc.11（`0b96d9fd`）；rc.12 的差異與實測在 [#1937](https://github.com/DemianLi/nexus-agent/issues/1937) |
 
 **這份筆記是研究，不是決議。** 現在不開卡、不派工。結論是「要換」，所以各段之後會在 #1385 底下開卡。要 demian 決定的事列在 §十一，並會寫進 [#1827](https://github.com/DemianLi/nexus-agent/issues/1827)。
 
@@ -58,9 +59,12 @@
 | --- | --- | --- | --- |
 | dsh `dsh-v0.2.1-rc.1` | `@deepseek-ai/cordis 4.0.5` | `cordis-plugin-loader 1.0.6` | dsh tag `1600d8a1` 的 `vendor/` |
 | nexus | `@nexus/cordis 4.0.0-rc.11` | `@nexus/cordis-plugin-loader 1.0.0-rc.8` | `vendor/cordis/package.json`、`vendor/loader/package.json` |
-| cordis-rs | 對齊上游 rc.8（不是 rc.11） | 有 Loader 的對應，語意不完全相同 | `d77cf919`；差異細節見 dshbox/cordis-rs#264 |
+| cordis-rs | 對齊上游 rc.8（不是 rc.11） | 有 Loader 的對應，語意不完全相同 | `d77cf919`（核心原始碼等同 v0.11.1）；差異細節見 dshbox/cordis-rs#264 |
+| Cordis 上游（新基準） | `cordis 4.0.0-rc.12` | `@cordisjs/plugin-loader 1.0.0-rc.9` | tag `v4.0.0-rc.12`（`01b39624`）；include 是 1.2.0 |
 
 dsh 是比對基準。nexus 的 rc.11 比 dsh 的 4.0.5 新，兩者的差異已由 #1385 底下各子卡處理，本篇不重列。
+
+**基準改成 rc.12（2026-10-23）**：rc.11 到 rc.12 共 21 個 commit、81 個檔。跟本篇有關的是 §七 的三項，見那一節。vendor 要不要跟著升、本地修補 `0001` 與上游 #133 衝突時選哪邊，由 #1937 先實測再定。
 
 ### 2-2 nexus 怎麼用 Cordis
 
@@ -383,6 +387,13 @@ Q9、Q10 是量測計畫與下載許可的程序題，不列。Q19、Q20 整理�
 | 4b | 執行器用 Rust，不照 dsh 的 C | **語言選擇**（偏離 dsh 的 C `landlock-run`；依附在 #2、#3 的理由 2 之下） | 執行器是安全邊界上的新小程式，要記憶體安全。量到同功能下比 C 每次多 0.04–0.16 ms、執行檔大 460 KB（§三-7）。業界同樣做法：Codex | demian 拍板：照 Q11 用 Rust，不受 R1 (b) 管（§三-7） |
 | 5 | MCP 搬進 Rust | **2**（由 #1、#4 推出） | 跨對話的 MCP 連線池（PR #1820）必須活在監督行程裡，對話行程活不久也看不到彼此。監督行程是 Rust，所以 MCP client 是 Rust | Rust MCP client，以編進執行檔的插件形式提供 |
 | 6 | 模型並行上限搬進 Rust | **2**（由 #1 推出） | 上限要跨所有對話計數（#1618），對話分成多個行程以後，只有監督行程看得到全部 | 監督行程裡的並行上限插件，經橋提供給對話行程 |
+| 7 | 執行器改成常駐 spawner，不照 dsh 每次 spawn 一個（#1946 S3） | **2** | demian 定的門檻是「每次 spawn 多出 p50 ≤1 ms，不論宿主負載」，部署形態是多人共用主機（#1678），dsh 沒有這個需求。控制負載掃描裡 L100／L150 每次 spawn 一個執行器 4/4 都超過 1 ms（#1946 issuecomment-6376031454）。證據的限度：L150 排除干擾後只剩一格，只超出 +156 µs；只在 aarch64 的 Docker Desktop VM 上量過，負載只有純 CPU | 常駐 spawner：seccomp 只裝一次、子行程繼承，每個子行程各自上 Landlock。TS 的 spawn 介面從 dsh 的 `confine(argv) → argv` 改成「交給 spawner，回 pid 與 stdio fd」；`SandboxMode`、`full/partial` 仍照 dsh |
+| 8 | 主機級的樹用 Rust 自寫核心，不 vendor TS Cordis（Q14、Q17） | **2**（由 #1、#4a 推出） | 主機級的樹活在監督行程裡，監督行程是 Rust | §七 的語意清單；逐條跟 rc.11 的對照在 #1948 正文 |
+| 8a | 擁有者顯式傳遞；服務值只存資料 | **1** | 基座表達不出來（§四）：Rust 沒有 TS Cordis 的 `Proxy`，無法自動把 effect 歸給呼叫者；Rust 不能跨 isolate 持有 JS 函式（原型 P1 實測 V8 FATAL） | 退到 cordis-rs 的顯式擁有者；過橋只有資料 |
+| 9 | 第一版只做 Linux 後端，不做 dsh 的 macOS Seatbelt、Windows ACL＋受限 token（Q31） | **待 demian 定**（#1827 D17） | Q31 拍板時沒標理由類別 | — |
+| 10 | Linux 只有 Landlock 一格，dsh 的鏈是 bwrap→Landlock | **待 demian 定**（#1827 D17） | 等 #1946 的 S2 與「要做的事」第 6 條（在能建 namespace 的宿主上 bwrap 能不能用） | — |
+
+#7–#10 是 2026-10-24 補的，編號接在 1–6 後面。#7、#9、#10 對應 #1946 的偏離表，#8、#8a 對應 #1948。§七 語意清單裡另有三條（嚴格 inject、時限與 AbortSignal、listener 各自 try/catch）：2026-10-11 決議有拍板，但決議 §五 的偏離表沒登記，理由類別記在 #1827 D18。
 
 **不是偏離理由的**：「效能比較好」。§三-4 的 S6 沒有一組有隔離的形狀過 Q4.3 的門檻。
 
@@ -396,6 +407,12 @@ Q9、Q10 是量測計畫與下載許可的程序題，不列。Q19、Q20 整理�
 - exporter 出錯被圍住，不外溢。
 - 計時器綁在生命週期上。
 - 設定值是 `None` 時不覆寫。
+
+**基準改成 rc.12 後要重核的三項**（2026-10-23 補）：下面「取自 TS rc.11」這一組是照 rc.11 寫的，rc.12 改了其中三項，要等 [#1937](https://github.com/DemianLi/nexus-agent/issues/1937) 實測後更新：
+
+- **fiber 的六種狀態**：上游 #133 讓從沒啟用過與失敗過的 fiber 卸載時直接到 DISPOSED，不經 UNLOADING。這跟 nexus 的本地修補 `0001`（上游 #185）互斥。
+- **isolate**：上游 #209 讓找服務遇到隔離邊界就停。
+- **provide/inject 與 intercept**：上游 #206 讓 inject 宣告的設定不再複製進 `Context.intercept`，改在讀取時合併；`Service.resolveConfig` 改名 `resolveIntercept`。
 
 **取自 TS rc.11**：
 
@@ -448,7 +465,7 @@ Rust 監督行程（主機級的樹）
 
 | 段 | 內容 | 要提升 | 宣告允許的退步 |
 | --- | --- | --- | --- |
-| 1 | Rust 沙箱執行器（Landlock＋seccomp），接 dsh 形狀的 TS 接縫 | (c)：S5 從「沒有 OS 沙箱」變成全擋，含 UDP | 無 |
+| 1 | Rust 沙箱執行器（Landlock＋seccomp），接 dsh 形狀的 TS 接縫；spawn 介面例外，交給常駐 spawner（§六 #7） | (c)：S5 從「沒有 OS 沙箱」變成全擋，含 UDP | 每次 spawn 多出 p50 ≤1 ms，不論宿主負載（2026-10-23 demian 拍板，見 #1946） |
 | 2 | Rust 監督行程＋每條對話一個 Node 行程，行程裡跑今天的 harness | (b)：S3、S3b、S3c、S4 及格 | **每條對話的記憶體**。原型的下限是 c0s 0.45 MB → p2 10.8 MB。真 harness 子行程沒有量過，見 §十。**每輪 CPU 與邊界延遲**：多一跳 IPC，必然退步。**這三項的數字都要在這段動工前，用真 harness 子行程量好，才能宣告** |
 | 3 | Rust 主機級的樹、Rust MCP client、並行上限 | 監督行程的記憶體與啟動 | CPU 不得退步。原型 CPU 落後，所以這段要先調校 |
 | 4 | 收掉相容層 | 收回一部分記憶體 | 無 |
