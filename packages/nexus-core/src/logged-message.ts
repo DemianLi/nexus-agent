@@ -13,14 +13,29 @@
  * **我們模型看到的訊息是 LangChain 的 `BaseMessage`，不是 dsh 的 `Message`。** 換成 dsh 的形狀
  * 得在寫入時翻一次、讀回時再翻回來，而 `additional_kwargs`（DeepSeek 的 `reasoning_content`
  * 就住在這裡）、`response_metadata`、`tool_calls` 與 v3 的 content block 都要有對應——翻得不齊，
- * 推回來的就不是同一則。基座自己有一組無損的來回：`mapChatMessagesToStoredMessages` 與
- * `mapStoredMessagesToChatMessages`（`@langchain/core@1.2.9` 的 `messages/utils`）。**退到那一組，
+ * 推回來的就不是同一則。基座自己有一組來回：`mapChatMessagesToStoredMessages` 與
+ * `mapStoredMessagesToChatMessages`（`@langchain/core@1.2.9` 的 `messages/utils`）。**退到那一組的形狀，
  * 紀律照抄**：記下來的東西推得回同一則訊息。偏離登記在 #305 的 PR。
+ *
+ * ## 寫出去這一半為什麼不走基座的 `toDict()`（[#1660](https://github.com/DemianLi/nexus-agent/issues/1660)）
+ *
+ * `toDict()` 是 `{ type, data: toJSON().kwargs }`，而 `toJSON` 對每個欄位值呼叫 `escapeIfNeeded`
+ * （`@langchain/core@1.2.9` 的 `load/validation.js`）：物件逐鍵 `result[key] = …` 拷到一個 `{}`。
+ * 鍵是**自有的** `"__proto__"`（`JSON.parse` 出來的物件會有，模型或 MCP 回的工具參數就是這個形狀）時，
+ * 那行賦值走原型 setter——自有鍵沒建立、那份拷貝的原型被換掉。工具參數、`artifact`、`metadata`、
+ * `additional_kwargs`、`response_metadata` 一律中。`escapeIfNeeded` 還會把帶 `lc` 鍵的物件包成
+ * `{ "__lc_escaped__": … }`，而 `mapStoredMessagesToChatMessages` 不拆，續接回來的參數就多了一層。
+ * 最新版 `1.3.0` 的 `escapeIfNeeded` 仍是同一段，升版沒有修。
+ *
+ * 所以寫出去這一半自己取欄位（{@link storedMessageOf}），讀回那一半照舊走基座的 `mapStoredMessagesToChatMessages`
+ * （建構子把 `data` 原樣收下，自有鍵實測留得住）。**與 dsh 的偏離（理由 1）**：dsh 的日誌快照寫物件屬性一律
+ * `Object.defineProperty`（`packages/util/values/src/index.ts`，`687f282e`），`"__proto__"` 照樣是自有鍵；
+ * 我們記的是 LangChain 的 `BaseMessage`，基座表達不出這件事，退到自己取欄位。
  *
  * ## 為什麼還要再壓一次 JSON
  *
- * `SessionLog.append` 的 `snapshotJsonValue` 對 `undefined` 是當場拋的，而 `toDict()` 取的是建構子
- * 收到的那份欄位（`toJSON().kwargs`）：**建訊息的人明著傳了 `undefined` 的欄位，就照樣列成 key**。
+ * `SessionLog.append` 的 `snapshotJsonValue` 對 `undefined` 是當場拋的，而取欄位（基座的 `toDict()` 與 {@link storedMessageOf} 都一樣）取的是建構子
+ * 收到的那份欄位（`lc_kwargs`）：**建訊息的人明著傳了 `undefined` 的欄位，就照樣列成 key**。
  * 實測 `new ToolMessage({ ..., artifact: undefined })` 的 `data` 帶著 `artifact` 與 `metadata` 兩個
  * `undefined`，而基座搬移大結果時就是這樣建的（`artifact: msg.artifact`）。拋的話那一顆整筆不算，
  * 而當時寫它的人都把 `append` 的例外吞掉（記不進去不能扳倒模型呼叫；#1665 起回覆這一則改成拋，這一步失敗），結果是日誌上**安靜地少一則**：
@@ -29,10 +44,7 @@
  * 序列化的，這一步只是讓記憶體裡那一份與磁碟上那一份提早長成同一個樣子。
  */
 
-import {
-  mapChatMessagesToStoredMessages,
-  mapStoredMessagesToChatMessages,
-} from '@langchain/core/messages';
+import { mapStoredMessagesToChatMessages } from '@langchain/core/messages';
 import type {
   BaseMessage,
   ContentBlock,
@@ -68,7 +80,7 @@ export interface LoggedMessage {
   };
 }
 
-/** {@link toLoggedMessage} 在交給 `toDict()` 之前先量的門檻：日誌上限的兩倍（理由見那裡）。 */
+/** {@link toLoggedMessage} 在取欄位、序列化之前先量的門檻：日誌上限的兩倍（理由見那裡）。 */
 const PRECHECK_DEPTH = SESSION_EVENT_MAX_DEPTH * 2;
 
 /**
@@ -91,21 +103,57 @@ function nestingExceeds(value: unknown, limit: number): boolean {
 }
 
 /**
+ * 基座 `keyToJson` 的鍵名轉換（`@langchain/core@1.2.9` 的 `load/map_keys.js`，沒有對外匯出）：有別名表的照表，
+ * 其餘轉 snake_case。訊息的欄位本來就是 snake_case，這一步等於原樣；留著是為了和 `toDict()` 的鍵集一致，
+ * 對照測試逐位元組釘住。
+ */
+function snakeCase(key: string): string {
+  return key
+    .replace(/([A-Z]+)([A-Z][a-z0-9]+)/g, '$1_$2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+    .replace(/[-_\s]+/g, '_')
+    .toLowerCase();
+}
+
+/**
+ * 取一則訊息的欄位，形狀同基座的 `toDict()`（`{ type, data }`，`data` 是 `toJSON().kwargs`），但**欄位值原樣帶過來**：
+ * 不拷、不跑 `escapeIfNeeded`（#1660，理由見檔頭）。鍵集與取值規則照 `Serializable.toJSON`：
+ * 建構子收到的欄位（`lc_kwargs`）逐一取，物件上有同名屬性的取物件上的（建構子會補 `tool_calls` 這類），
+ * 鍵名過別名表。訊息類別沒有 `lc_attributes`、`lc_secrets`，那兩段不需要。
+ *
+ * 回傳的 `data` 裡的值就是訊息上那一份，**呼叫端必須馬上序列化，不能留著用**；{@link toLoggedMessage} 緊接著做 JSON 往返。
+ * 不是 `lc_serializable` 的（訊息類別都是）沒有這個形狀可取，拋出去比記一顆空殼好。
+ */
+function storedMessageOf(message: BaseMessage): { type: string; data: Record<string, unknown> } {
+  if (!message.lc_serializable) {
+    throw new TypeError(`${message.constructor.name} 不是可序列化的訊息，日誌記不下`);
+  }
+  const aliases = message.lc_aliases as Record<string, string | undefined>;
+  const live = message as unknown as Record<string, unknown>;
+  const data: Record<string, unknown> = {};
+  for (const key of Object.keys(message.lc_kwargs)) {
+    // 目標鍵過別名表、snakeCase，不會是 "__proto__"（連續底線收成一個），這裡的賦值碰不到原型 setter。
+    data[aliases[key] ?? snakeCase(key)] = key in message ? live[key] : message.lc_kwargs[key];
+  }
+  return { type: message.getType(), data };
+}
+
+/**
  * 把一則訊息轉成日誌收得下的形狀。
  *
- * **太深的先拒**（[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：`toDict()` 一路的 `escapeIfNeeded`
- * （`@langchain/core@1.2.9` 的 `load/validation.js`）與下面那一次 `JSON.stringify` 都是遞迴的，交錯巢狀幾千層就
+ * **太深的先拒**（[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：下面那一次 `JSON.stringify`（改寫前還有基座 `toDict()` 一路的
+ * `escapeIfNeeded`，`@langchain/core@1.2.9` 的 `load/validation.js`）是遞迴的，交錯巢狀幾千層就
  * `Maximum call stack size exceeded`——輪不到 `SessionLog.append` 那一關的層數檢查，回合失敗只剩一顆認不出來的 `RangeError`。
  * 實測（macOS、Node 25.9.0、真的 `serve`）同台模型回 6000 層前後的工具參數就是這樣，邊界隨堆疊大小變。所以先迭代量訊息本身，
  * 超過 {@link PRECHECK_DEPTH} 就拋跟日誌那一關同一種 {@link SessionEventDepthError}。
  *
  * **門檻不是上限本身**：這裡量的是 `BaseMessage` 物件，跟日誌裡那一份的形狀不同，層數對不齊；取上限本身的話，日誌那一關會拒的訊息
  * 改由這裡拒，錯誤訊息就少了事件種類、路徑與層數（core 的 `containment`、`model-calls` 測試釘著那一句）。取上限的兩倍：
- * 比它淺的照舊走 `toDict()` 再由日誌那一關拒（幾千層才爆，這段沒有風險），只有更深的在這裡先拒。
+ * 比它淺的照舊序列化、再由日誌那一關拒（幾千層才爆，這段沒有風險），只有更深的在這裡先拒。
  * 超過兩倍的訊息包進事件後一定也超過上限，所以這一步**不改變哪些訊息記得進去**。
  *
- * **與 dsh 的偏離（理由 1）**：dsh 的訊息走自己的迭代快照，沒有這一步。我們記的是 LangChain 的 `BaseMessage`，轉成純 JSON 只能
- * 經基座那一組遞迴的 `toDict()`（見檔頭），退到在交給它之前先量。
+ * **與 dsh 的偏離（理由 1）**：dsh 的訊息走自己的迭代快照，沒有這一步。我們記的是 LangChain 的 `BaseMessage`，轉成純 JSON 要經
+ * 遞迴的 `JSON.stringify`，退到在交給它之前先量。
  *
  * @param message - 模型看到的那一則。
  * @returns 純 JSON 的 `StoredMessage`。
@@ -117,8 +165,7 @@ export function toLoggedMessage(message: BaseMessage): LoggedMessage {
       `要記的訊息巢狀超過 ${PRECHECK_DEPTH} 層，日誌收不下（上限 ${SESSION_EVENT_MAX_DEPTH} 層；轉成日誌的形狀之前就先拒）`,
     );
   }
-  const [stored] = mapChatMessagesToStoredMessages([message]);
-  return JSON.parse(JSON.stringify(stored)) as LoggedMessage;
+  return JSON.parse(JSON.stringify(storedMessageOf(message))) as LoggedMessage;
 }
 
 /**
