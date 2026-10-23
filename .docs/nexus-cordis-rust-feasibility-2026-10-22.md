@@ -14,8 +14,9 @@
 | 對象 | 版本 |
 | --- | --- |
 | nexus | develop `058d90ef` |
-| dsh | `dsh-v0.2.1-rc.1`，tag 指向 `1600d8a1`（它的 `vendor/` 與 rc.2 `687f282e` 逐檔相同） |
-| cordis-rs | `d77cf919`（用 `gh api` 取檔，沒有 clone） |
+| dsh | `dsh-v0.2.1-rc.1`，tag 指向 `1600d8a1`。檔案是從本機 rc.2（`687f282e`）的 clone 讀的；本篇讀到的 `native/system`、`vendor/cordis` 兩個目錄，tree SHA 與 rc.1 相同；`packages/sandbox` 底下四個套件只差 `package.json` 的版號（2026-10-23 核對） |
+| cordis-rs | `d77cf919`（2026-10-05，用 `gh api` 取檔，沒有 clone）。它比 tag `v0.11.1`（`0f720427`，crate 版號 cordis-core 0.6.1）多 11 個 commit，但那 11 個 commit 沒有改到 `crates/cordis-core/src`，所以本篇讀到的核心原始碼等同 v0.11.1 |
+| Cordis 上游 | **2026-10-23 起以 `v4.0.0-rc.12`（`01b39624`）為準**（demian 拍板）。本篇的量測與讀碼用的是 nexus vendor 的 rc.11（`0b96d9fd`）；rc.12 的差異與實測在 [#1937](https://github.com/DemianLi/nexus-agent/issues/1937) |
 
 **這份筆記是研究，不是決議。** 現在不開卡、不派工。結論是「要換」，所以各段之後會在 #1385 底下開卡。要 demian 決定的事列在 §十一，並會寫進 [#1827](https://github.com/DemianLi/nexus-agent/issues/1827)。
 
@@ -58,9 +59,12 @@
 | --- | --- | --- | --- |
 | dsh `dsh-v0.2.1-rc.1` | `@deepseek-ai/cordis 4.0.5` | `cordis-plugin-loader 1.0.6` | dsh tag `1600d8a1` 的 `vendor/` |
 | nexus | `@nexus/cordis 4.0.0-rc.11` | `@nexus/cordis-plugin-loader 1.0.0-rc.8` | `vendor/cordis/package.json`、`vendor/loader/package.json` |
-| cordis-rs | 對齊上游 rc.8（不是 rc.11） | 有 Loader 的對應，語意不完全相同 | `d77cf919`；差異細節見 dshbox/cordis-rs#264 |
+| cordis-rs | 對齊上游 rc.8（不是 rc.11） | 有 Loader 的對應，語意不完全相同 | `d77cf919`（核心原始碼等同 v0.11.1）；差異細節見 dshbox/cordis-rs#264 |
+| Cordis 上游（新基準） | `cordis 4.0.0-rc.12` | `@cordisjs/plugin-loader 1.0.0-rc.9` | tag `v4.0.0-rc.12`（`01b39624`）；include 是 1.2.0 |
 
 dsh 是比對基準。nexus 的 rc.11 比 dsh 的 4.0.5 新，兩者的差異已由 #1385 底下各子卡處理，本篇不重列。
+
+**基準改成 rc.12（2026-10-23）**：rc.11 到 rc.12 共 21 個 commit、81 個檔。跟本篇有關的是 §七 的三項，見那一節。vendor 要不要跟著升、本地修補 `0001` 與上游 #133 衝突時選哪邊，由 #1937 先實測再定。
 
 ### 2-2 nexus 怎麼用 Cordis
 
@@ -396,6 +400,12 @@ Q9、Q10 是量測計畫與下載許可的程序題，不列。Q19、Q20 整理�
 - exporter 出錯被圍住，不外溢。
 - 計時器綁在生命週期上。
 - 設定值是 `None` 時不覆寫。
+
+**基準改成 rc.12 後要重核的三項**（2026-10-23 補）：下面「取自 TS rc.11」這一組是照 rc.11 寫的，rc.12 改了其中三項，要等 [#1937](https://github.com/DemianLi/nexus-agent/issues/1937) 實測後更新：
+
+- **fiber 的六種狀態**：上游 #133 讓從沒啟用過與失敗過的 fiber 卸載時直接到 DISPOSED，不經 UNLOADING。這跟 nexus 的本地修補 `0001`（上游 #185）互斥。
+- **isolate**：上游 #209 讓找服務遇到隔離邊界就停。
+- **provide/inject 與 intercept**：上游 #206 讓 inject 宣告的設定不再複製進 `Context.intercept`，改在讀取時合併；`Service.resolveConfig` 改名 `resolveIntercept`。
 
 **取自 TS rc.11**：
 
