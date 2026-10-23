@@ -18,7 +18,7 @@ import {
   recordRequestSnapshot,
 } from './request-snapshot.js';
 import type { ExtractedRequest } from './request-snapshot.js';
-import { SessionLog } from './session-log.js';
+import { SessionEventDepthError, SessionLog } from './session-log.js';
 
 const ECHO = {
   type: 'function',
@@ -92,6 +92,153 @@ describe('extractRequest', () => {
     expect(extractRequest(messages, { model: 'real' }, {}, 'fallback').header.config.model).toBe(
       'real',
     );
+  });
+});
+
+/** 外面包 `layers` 層物件的 schema（最裡面是純量，所以巢狀層數剛好是 `layers`）。 */
+function nested(layers: number): Record<string, unknown> {
+  let value: Record<string, unknown> = { type: 'string' };
+  for (let layer = 1; layer < layers; layer++) value = { next: value };
+  return value;
+}
+
+const toolOf = (name: string, parameters: unknown) => ({
+  type: 'function',
+  function: { name, description: '壞掉的。', parameters },
+});
+
+describe('拷不動的參數不再靜靜丟掉（#1731，照 dsh snapshotJsonValue 拋出）', () => {
+  it('循環參照的工具參數：拋 TypeError、訊息帶工具名稱，不是回一份少了參數的 header', () => {
+    const cyclic: Record<string, unknown> = { type: 'object' };
+    cyclic['self'] = cyclic;
+    const call = () => extractRequest(messages, { tools: [ECHO, toolOf('looped', cyclic)] }, {});
+    expect(call).toThrow(TypeError);
+    expect(call).toThrow(/tools\["looped"\]\.parameters/);
+    expect(call).toThrow(/這次請求不送/);
+  });
+
+  it('頂層不是 JSON（函式）：同樣拋、帶名稱', () => {
+    expect(() => extractRequest(messages, { tools: [toolOf('fn', () => 1)] }, {})).toThrow(
+      /tools\["fn"\]\.parameters.*function/,
+    );
+  });
+
+  it('BigInt（原生 stringify 拒）：拋、帶名稱', () => {
+    expect(() =>
+      extractRequest(messages, { tools: [toolOf('big', { max: BigInt(1) })] }, {}),
+    ).toThrow(/tools\["big"\]\.parameters/);
+  });
+
+  it('config.extra 也一樣：循環的 body 參數拋、帶鍵名，不是把那一格拿掉', () => {
+    const cyclic: Record<string, unknown> = {};
+    cyclic['self'] = cyclic;
+    expect(() => extractRequest(messages, { model: 'm', thinking: cyclic }, {})).toThrow(
+      /config\.extra\.thinking/,
+    );
+  });
+
+  it('讀值的時候就拋（存取器壞了）：同樣帶名稱拋出，原錯留在 cause', () => {
+    const parameters = {};
+    Object.defineProperty(parameters, 'bad', {
+      enumerable: true,
+      get: () => {
+        throw new Error('讀不了');
+      },
+    });
+    let thrown: unknown;
+    try {
+      extractRequest(messages, { tools: [toolOf('getter', parameters)] }, {});
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toMatch(/tools\["getter"\]\.parameters.*讀不了/);
+    expect(((thrown as Error).cause as Error).message).toBe('讀不了');
+  });
+
+  it('config.extra 頂層是 undefined 的鍵：略過，不拋、也不進 extra（那一格沒有值，供應商收不到）', () => {
+    const { header } = extractRequest(messages, { model: 'm', gone: undefined, kept: 1 }, {});
+    expect(header.config.extra).toEqual({ kept: 1 });
+    expect(extractRequest(messages, { model: 'm', gone: undefined }, {}).header.config).toEqual({
+      model: 'm',
+    });
+  });
+
+  it('已知多報：最深處的 Date 在 JSON 往返後是字串，量法仍算它一層（fail-closed，工具 schema 實務上沒有 Date）', () => {
+    // 596 層物件加最裡面一個 Date：量成 597 層而拒；往返後只剩 596 層、`append` 其實收得下。
+    let value: Record<string, unknown> = { at: new Date(0) };
+    for (let layer = 1; layer < 596; layer++) value = { next: value };
+    expect(() => extractRequest(messages, { tools: [toolOf('dated', value)] }, {})).toThrow(
+      SessionEventDepthError,
+    );
+    const roundTripped = JSON.parse(JSON.stringify(value)) as unknown;
+    const header = { config: {}, tools: [{ name: 'dated', parameters: roundTripped }] };
+    expect(() =>
+      new SessionLog('d').append('request/header', { header, reason: 'initial' }),
+    ).not.toThrow();
+  });
+
+  it('JSON 本來就丟的照舊（巢狀裡的 undefined、函式）：供應商收到的就是那樣，不算拷不動', () => {
+    const { header } = extractRequest(
+      messages,
+      { tools: [toolOf('lossy', { type: 'object', a: undefined, b: () => 1, c: [1, undefined] })] },
+      {},
+    );
+    expect(header.tools).toEqual([
+      { name: 'lossy', description: '壞掉的。', parameters: { type: 'object', c: [1, null] } },
+    ]);
+  });
+
+  it('參數是 undefined 或沒給：沒有那一格，不拋', () => {
+    const { header } = extractRequest(messages, { tools: [toolOf('bare', undefined)] }, {});
+    expect(header.tools).toEqual([{ name: 'bare', description: '壞掉的。' }]);
+  });
+
+  it('深度：工具名稱進 SessionEventDepthError，且界線跟寫入那一關完全一致（596 層過、597 層拒）', () => {
+    // data(1) → header(2) → tools(3) → 一顆工具(4)，parameters 的根是第 5 層：596 層 parameters 剛好 600 層。
+    const ok = extractRequest(messages, { tools: [toolOf('edge', nested(596))] }, {});
+    const log = new SessionLog('s');
+    expect(() => recordRequestSnapshot(log, ok, 0)).not.toThrow();
+    expect(kinds(log)).toContain('request/header:initial');
+
+    const call = () => extractRequest(messages, { tools: [toolOf('edge', nested(597))] }, {});
+    expect(call).toThrow(SessionEventDepthError);
+    expect(call).toThrow(/tools\["edge"\]\.parameters/);
+    expect(call).toThrow(/超過上限 600 層/);
+    // 沒有先量的話，是寫入那一關在 597 層拒（只是訊息裡沒有名字）：量法對得上它。
+    const raw = { config: {}, tools: [{ name: 'edge', parameters: nested(597) }] };
+    expect(() =>
+      new SessionLog('t').append('request/header', { header: raw, reason: 'initial' }),
+    ).toThrow(SessionEventDepthError);
+    const fits = { config: {}, tools: [{ name: 'edge', parameters: nested(596) }] };
+    expect(() =>
+      new SessionLog('u').append('request/header', { header: fits, reason: 'initial' }),
+    ).not.toThrow();
+  });
+
+  it('深到原生 stringify 會爆堆疊（5000 層）：先量先拒，拋的是帶名字的深度錯誤，不是 RangeError', () => {
+    const call = () => extractRequest(messages, { tools: [toolOf('abyss', nested(5000))] }, {});
+    expect(call).toThrow(SessionEventDepthError);
+    expect(call).toThrow(/tools\["abyss"\]\.parameters/);
+  });
+
+  it('深度錯誤帶穩定碼：回合失敗分類認 code，不認訊息', () => {
+    try {
+      extractRequest(messages, { tools: [toolOf('edge', nested(700))] }, {});
+      expect.unreachable();
+    } catch (error) {
+      expect((error as SessionEventDepthError).code).toBe('session_event_depth_exceeded');
+    }
+  });
+
+  it('多顆工具只有一顆壞：名稱指的是壞的那一顆', () => {
+    expect(() =>
+      extractRequest(
+        messages,
+        { tools: [ECHO, toolOf('fine', {}), toolOf('deep', nested(900))] },
+        {},
+      ),
+    ).toThrow(/tools\["deep"\]\.parameters/);
   });
 });
 
