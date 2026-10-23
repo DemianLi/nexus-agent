@@ -20,7 +20,8 @@
  * 2. 呼叫 listener，交 `{ configurable: runtime.configurable, signal }`（**這個形狀**：原樣交給會話查找與 fs 查找才認得出這次呼叫；交裸的
  *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。`signal` 是這一輪的中止訊號（契約 1.1.0，#1533），見 {@link stepSignal}。
  * 3. 把 listener 回的每一則建成使用者訊息：`additional_kwargs` 先放 listener 給的記號、**再**蓋 `source`（順序影響位元組，golden
- *    比對）；不加 `id`。
+ *    比對）；不加 `id`。`source` 是 listener 給的那一格（契約 1.2.0，#1574），沒給是 `{ kind: 'plugin', plugin: <名字> }`；
+ *    給了 `kind: 'user'` 就拋，見 {@link injectionSource}。
  * 4. 經**這條 thread 的** `registry.sessions.forCall` 記一筆 `user/message`；找不到就不記、訊息照送，寫不進去原錯往外拋（#1665，
  *    見 `record`）。**不走行程級的
  *    `session-lookup`**：那條多 thread 時可能 `ambiguous`，而這顆 middleware 本來就是這條 thread 的。
@@ -33,9 +34,9 @@
 
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { PreStepListener } from '@nexus/agent-loop';
+import type { PreStepInjection, PreStepListener } from '@nexus/agent-loop';
 import { effectiveMessages, sourceKwargs, toLoggedMessage, turnCancelSignalOf } from '@nexus/core';
-import type { SessionLookup } from '@nexus/core';
+import type { SessionLookup, UserMessageSource } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
@@ -77,22 +78,44 @@ export function createPreStepMiddleware(
         ...(signal !== undefined && { signal }),
       });
       if (injections === undefined || injections.length === 0) return undefined;
-      const messages = injections.map((injection) => {
+      // 先驗完全部的來源再記：一則被拒時，前面那幾則也不落盤（不然日誌上有、state 裡沒有）。
+      const sources = injections.map((injection) => injectionSource(name, injection));
+      const messages = injections.map((injection, index) => {
+        const source = sources[index]!;
         const message = new HumanMessage({
           content: injection.content,
-          // 來源是 `plugin`（#662）：它注入的時機是一輪的開頭，今天緊接在人那句話之後所以沒事；以後哪個時刻
-          // 它被補在一輪中間，重複提醒的鏈不會因它被悄悄清零。
+          // 來源預設是 `plugin`（#662）：它注入的時機是一輪的開頭，今天緊接在人那句話之後所以沒事；以後哪個時刻
+          // 它被補在一輪中間，重複提醒的鏈不會因它被悄悄清零。listener 給了自己的來源（#1574）就用它，同樣不是人。
           additional_kwargs: {
             ...injection.additionalKwargs,
-            ...sourceKwargs({ kind: 'plugin', plugin: name }),
+            ...sourceKwargs(source),
           },
         });
-        record(sessions, runtime?.configurable, name, message);
+        record(sessions, runtime?.configurable, source, message);
         return message;
       });
       return { messages };
     },
   }) as unknown as AgentMiddleware;
+}
+
+/**
+ * 一則注入的來源：listener 給了就用它（契約 1.2.0，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)；dsh 的 listener 自己帶
+ * `source`，例如 `tool-skill/src/index.ts:198-202`，`687f282e`），沒給是 `{ kind: 'plugin', plugin: <名字> }`。
+ *
+ * **拒絕 `user`**：日誌上 `user` 是「有人在場」的判別，goal 的直接人類授權認它，`session-log.ts` 的 `user/message` 寫明外掛不能寫這一種。
+ * 接縫開了這一格之後，任何 listener 都寫得出來，所以宿主在這裡擋：拋錯、這一輪失敗（listener 的錯本來就不吞，見檔頭）。
+ */
+function injectionSource(name: string, injection: PreStepInjection): UserMessageSource {
+  const source = injection.source;
+  if (source === undefined) return { kind: 'plugin', plugin: name };
+  if (source.kind === 'user') {
+    throw new Error(
+      `pre-step listener "${name}" 交了 user 來源：只有人話能記成 user，listener 注入的訊息不能冒充`,
+    );
+  }
+  // 形狀由 listener 負責，宿主照記；`UserMessageSource` 列的是今天已知的生產者，新的生產者在 session-log.ts 補它的 variant。
+  return source as UserMessageSource;
 }
 
 /**
@@ -124,13 +147,10 @@ function stepSignal(
 function record(
   sessions: { forCall(config: unknown): SessionLookup },
   configurable: unknown,
-  name: string,
+  source: UserMessageSource,
   message: HumanMessage,
 ): void {
   const found = sessions.forCall({ configurable });
   if (found.kind !== 'ok') return;
-  found.log.append('user/message', {
-    message: toLoggedMessage(message),
-    source: { kind: 'plugin', plugin: name },
-  });
+  found.log.append('user/message', { message: toLoggedMessage(message), source });
 }

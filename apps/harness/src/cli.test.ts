@@ -179,6 +179,9 @@ describe('一次性模式', () => {
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
       'echo',
       'agent-instructions',
+      // **`skill-invocation` 進來的理由是人要叫得出只給人叫的技能**（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）：
+      // 同一個 `agent/pre-step` 接縫，root 的人話裡有 `/名字` 才注入那份技能的正文；不多工具、不多命令。排在 `time-context` 前面，同 dsh。
+      'skill-invocation',
       // **`time-context` 進來的理由是模型沒有時鐘**（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）：
       // 與 `agent-instructions` 同一個 `agent/pre-step` 接縫，每次 agent 呼叫開頭（同一條 thread 10 分鐘內不重複）追加一則
       // 持久的使用者訊息；不多工具、不多命令、不進系統提示詞。CLI 也掛（偏離 dsh，登記在套件檔頭）。

@@ -1177,6 +1177,9 @@ importers:
         specifier: ^4.3.6
         version: 4.4.3
     devDependencies:
+      '@nexus/agent-loop':
+        specifier: workspace:*
+        version: link:../nexus-agent-loop
       '@nexus/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
@@ -1186,6 +1189,9 @@ importers:
       '@nexus/core':
         specifier: workspace:*
         version: link:../nexus-core
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk

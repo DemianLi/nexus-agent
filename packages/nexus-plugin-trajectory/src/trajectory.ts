@@ -1057,8 +1057,9 @@ function onUserMessage(
       plugin,
     });
   }
-  // 人插的話、子代理來信與結算通知：輪中的輸入。`session-reference` 的快照是模型讀的背景，不是輸入。
-  if (kind === 'session-reference') return state;
+  // 人插的話、子代理來信與結算通知：輪中的輸入。`session-reference` 的快照是模型讀的背景，不是輸入；
+  // `skill-invocation`（人寫 `/名字` 帶出的技能正文，#1574）同理，是那句人話帶出來的，不是另一則輸入。
+  if (kind === 'session-reference' || kind === 'skill-invocation') return state;
   const message = isRecord(data['message']) ? data['message'] : {};
   const inner = isRecord(message['data']) ? message['data'] : {};
   const text = textOfContent(inner['content']);

@@ -30,8 +30,9 @@
  *
  * 和 `@nexus/plugin-agent-instructions` 同一格、同一個接縫，是它之外的第二位消費者：dsh 在 `agent/pre-step` 把讀數 splice 進那一步的批次
  * （`src/index.ts:185-225`）；我們這側經 `@nexus/agent-loop` 的 `preStep` 登記 listener（宿主以 `beforeAgent` 承載），**只佔注入那半**，
- * 只能追加、落點由基座決定。位置由列的位置決定：`cordis.yml` 上這一列在 `agent-instructions` 正下方，所以同一次 invoke 裡讀數排在 AGENTS.md
- * 基線之後。逐欄的差與頻率量在 `apps/harness/src/interception-index.test.ts` 第 2 列。
+ * 只能追加、落點由基座決定。位置由列的位置決定：`cordis.yml` 上這一列排在 `agent-instructions` 與 `skill-invocation` 之後，所以同一次 invoke 裡
+ * 讀數排在 AGENTS.md 基線與 `/名字` 叫用的技能說明之後，是最後一則——同 dsh 以 `{ prepend: true }` 登記、當 waterfall 的最外層
+ * （`src/index.ts:225`，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) 核過）。逐欄的差與頻率量在 `apps/harness/src/interception-index.test.ts` 第 2 列。
  *
  * ## 偏離登記（AGENTS.md 的偏離規則；dsh 以 `687f282e` 為準）
  *

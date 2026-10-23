@@ -331,6 +331,12 @@ type UserMessageSourcePinned =
       readonly kind: 'agent-message';
       readonly form: 'relay';
       readonly senderSessionId: string;
+    }
+  | {
+      // 人寫 `/名字` 叫用的技能說明（#1574）：內容是 SKILL.md，不是人打的字，見下面「技能叫用的注入不算人」那條。
+      readonly kind: 'skill-invocation';
+      readonly name: string;
+      readonly form: 'instructions';
     };
 type UserMessageSourceActual = SessionEventMap['user/message']['source'];
 const _sourceWidened: UserMessageSourcePinned = undefined as unknown as UserMessageSourceActual;
@@ -380,6 +386,14 @@ describe('輪中插話算直接人類授權（#710）', () => {
     expect(hasDirectHumanTurn(logOf([GOAL_ROUND, RELAY]).events)).toBe(false);
     // 人先插過話、後面才來 agent 的話：這條鏈裡仍有人。
     expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER, RELAY]).events)).toBe(true);
+  });
+
+  it('技能叫用的注入不算人（#1574）：source 是 skill-invocation 的 user/message 拿不到', () => {
+    const SKILL: readonly [keyof SessionEventMap, unknown] = [
+      'user/message',
+      { message, source: { kind: 'skill-invocation', name: 'deploy', form: 'instructions' } },
+    ];
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, SKILL]).events)).toBe(false);
   });
 
   it('續行輪次裡人插了話：拿得到', () => {

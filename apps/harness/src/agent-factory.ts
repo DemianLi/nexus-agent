@@ -401,7 +401,7 @@ export interface CreateNexusAgentOptions {
    * **一定要設，因為基座的預設等於沒有上限**——見 {@link DEFAULT_RECURSION_LIMIT}。
    * 換算是 `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`：裸組裝每輪兩格（模型、工具各一），
    * 提醒器與 {@link stepInbox} 各再加一格，100 因此是 49／33／24 輪；每次 invoke 只走一次的
-   * `beforeAgent` 節點另從分子扣一格（出貨清單的工作區指令那顆，CLI 因此是 32 輪）。
+   * `beforeAgent` 節點另從分子扣一格（出貨清單有三顆 pre-step listener，CLI 因此是 31 輪，#1574）。
    */
   readonly recursionLimit?: number;
   /**

@@ -180,6 +180,12 @@ export {
   pickSessionForCall,
 } from './registry.js';
 export type {
+  SkillCatalogEntry,
+  SkillCatalogScan,
+  SkillInvocationPolicy,
+} from './skill-catalog.js';
+export { renderSkillInvocation, scanSkills } from './skill-catalog.js';
+export type {
   DispatchMode,
   EventDispatcher,
   EventListenerInfo,

@@ -1,10 +1,12 @@
 import { readFileSync } from 'node:fs';
 
+import * as core from '@nexus/core';
 import type { Context } from '@nexus/cordis';
 import { checkConformance, defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import * as skills from './index.js';
 import { SKILL_SOURCES_CONTRACT_VERSION, skillSourcesToken } from './index.js';
 import { createSkillSourcesProvider } from './provider.js';
 
@@ -58,9 +60,16 @@ describe('@nexus/skills 的定義', () => {
 });
 
 describe('相依關係', () => {
-  it('主入口不 import @nexus/core（定義不依賴核心）；core 只在提供者入口，放 peer、devDependencies 留 workspace 版本', () => {
+  it('轉出的三個值與 core 是同一個參照（轉出，不是複製）', () => {
+    expect(skills.scanSkills).toBe(core.scanSkills);
+    expect(skills.renderSkillInvocation).toBe(core.renderSkillInvocation);
+    expect(skills.messageSourceOf).toBe(core.messageSourceOf);
+  });
+
+  it('主入口對 @nexus/core 只有單向轉出（#1574 Q3 (a)），不 import 它來用；core 放 peer、devDependencies 留 workspace 版本', () => {
     const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
-    expect(read('./index.ts')).not.toMatch(/from '@nexus\/core'/u);
+    // 只准 `export … from '@nexus/core'`：定義本身不依賴核心，轉出的那幾個是給插件的（插件不能 import core）。
+    expect(read('./index.ts')).not.toMatch(/^import[^;]*from '@nexus\/core'/mu);
     expect(read('./provider.ts')).toMatch(/from '@nexus\/core'/u);
     const pkg = JSON.parse(read('../package.json')) as {
       dependencies?: Record<string, string>;
