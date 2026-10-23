@@ -30,7 +30,9 @@
  * 不會從 `steps` 裡消失。`model/usage` 寫了、`model/end` 還沒寫就斷掉的那種，`steps` 與 `usages` 相等、`unknownSteps` 算不出缺，
  * 所以另用 `openCallAtEnd` 記「收尾時有開著的呼叫」。
  *
- * `tokensProven`（只有收尾了的輪才有）＝ 至少有一次嘗試 ∧ `unknownSteps === 0` ∧ 收尾時沒有開著的呼叫 ∧ 四桶加總是安全整數。條件照 dsh
+ * `tokensProven`（只有收尾了的輪才有）＝ 至少有一次嘗試 ∧ `unknownSteps === 0` ∧ 收尾時沒有開著的呼叫 ∧ 起訖與用量沒有不成對過 ∧ 四桶加總是安全整數。
+ * 「不成對」是 dsh 生命週期驗證器的形狀（`turn-usage.ts:196-270`）：`model/start` 時上一次還開著、`model/usage` 時沒有開著的呼叫或這次呼叫已經有一顆用量、
+ * `model/end` 時沒有開著的呼叫。這些形狀 `unknownSteps` 看不出來（兩顆用量換掉一次沒報的，夾在 0）。條件照 dsh
  * `deriveTurnTokenUsage`（`turn-usage.ts:178-274`）；快取桶缺席只讓那一格省略、不讓它變 `false`（dsh `:133-138`）。
  * 沒有 `turn/end` 的輪不出這一格（dsh `!sawEnd`，`:273`）。
  *
@@ -350,6 +352,12 @@ interface Row {
    * 死在兩者之間的呼叫 `usages` 已經是 1，補上的那一步讓 `steps` 也是 1，`unknownSteps` 夾在 0。
    */
   readonly openCallAtEnd?: boolean;
+  /**
+   * 這一輪的模型呼叫起訖／用量不成對過（{@link markLifecycleBroken}）：`model/start` 時上一次還開著、`model/usage` 時沒有開著的呼叫或這次
+   * 呼叫已經有一顆用量、`model/end` 時沒有開著的呼叫。dsh 的 `deriveTurnTokenUsage` 本身是生命週期驗證器（`turn-usage.ts:196-270`），
+   * 這些形狀都讓整輪證不出；我們的 fold 不拒收日誌，記下來給 `tokensProven` 用。寫方（`wrapModelCall`）正常不會寫出這些形狀。
+   */
+  readonly lifecycleBroken?: boolean;
   readonly sp: Sp;
   /** 這一輪的工具區間聯集；收進 `closed` 時清掉（只有目前這一輪還會有新工具）。 */
   readonly cover: Cover;
@@ -375,8 +383,8 @@ export interface TokenMeterState {
   readonly paused: boolean;
   /** 最近一份 `request/header` 讀到的模型 id。 */
   readonly model: string | null;
-  /** 還沒結束的模型呼叫：開始時刻與其間等掉的退避。 */
-  readonly call: { readonly start: number; readonly waited: number } | null;
+  /** 還沒結束的模型呼叫：開始時刻、其間等掉的退避，與這次呼叫已經收過用量沒有（`model/usage` 至多一顆，見 {@link markLifecycleBroken}）。 */
+  readonly call: { readonly start: number; readonly waited: number; readonly used: boolean } | null;
   /** 還沒落定的工具呼叫：鍵加 `#` 前綴，免得 `callId` 叫 `constructor` 讀到繼承來的東西。 */
   readonly pending: Readonly<Record<string, { readonly name: string; readonly time: number }>>;
   readonly links: readonly TokenMeterLink[];
@@ -420,6 +428,19 @@ function update(state: TokenMeterState, change: (sp: Sp) => Sp): TokenMeterState
     return { ...state, current: { ...row, sp: change(row.sp) } };
   }
   return { ...state, outside: change(state.outside) };
+}
+
+/**
+ * 記下「這一輪的呼叫起訖或用量不成對」，給 {@link proven} 用。不在輪裡就不記（輪外沒有 `tokensProven`）。
+ * 三種形狀，對應 dsh `deriveTurnTokenUsage` 的 open／settled 狀態機（`turn-usage.ts:196-270`）：
+ * `model/start` 時還有開著的呼叫、`model/usage` 時沒有開著的呼叫或這次呼叫已經收過用量、`model/end` 時沒有開著的呼叫。
+ */
+function markLifecycleBroken(state: TokenMeterState): TokenMeterState {
+  if (!inRow(state)) return state;
+  const row = state.current!;
+  return row.lifecycleBroken === true
+    ? state
+    : { ...state, current: { ...row, lifecycleBroken: true } };
 }
 
 // ── 折疊 ─────────────────────────────────────────────────────────────────────────────────
@@ -556,8 +577,10 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
       const model = modelOf(data, state.model);
       return model === state.model ? state : { ...state, model };
     }
-    case 'model/start':
-      return { ...state, call: { start: event.time, waited: 0 } };
+    case 'model/start': {
+      const started = { ...state, call: { start: event.time, waited: 0, used: false } };
+      return state.call === null ? started : markLifecycleBroken(started);
+    }
     case 'llm/retry-started': {
       const waited = typeof data['waitedMs'] === 'number' ? data['waitedMs'] : 0;
       const counted = update(state, (sp) => bump(sp, { retries: 1, retryWaitMs: waited }));
@@ -573,7 +596,10 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
       const failed = data['outcome'] !== undefined;
       const cacheRead = data['cacheReadTokens'];
       const cacheWrite = data['cacheWriteTokens'];
-      return update(state, (sp) =>
+      const unpaired = state.call === null || state.call.used;
+      const paired =
+        state.call === null ? state : { ...state, call: { ...state.call, used: true } };
+      return update(unpaired ? markLifecycleBroken(paired) : paired, (sp) =>
         addModel(
           bump(sp, {
             usages: 1,
@@ -610,7 +636,7 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
       const failed = data['outcome'] !== undefined;
       const modelMs =
         started === null ? 0 : Math.max(0, event.time - started.start - started.waited);
-      const next = update(state, (sp) =>
+      const next = update(started === null ? markLifecycleBroken(state) : state, (sp) =>
         addModel(bump(sp, { steps: 1, failedSteps: failed ? 1 : 0, modelMs }), {
           model: state.model,
           ...NO_MODEL_ACC,
@@ -731,7 +757,8 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
 
 /**
  * 這一輪的 token 數字證不證得出是準的（Q1 (a)，條件照 dsh `deriveTurnTokenUsage`，`turn-usage.ts:178-274`）：
- * 至少有一次嘗試（dsh `aggregateAttempts:127`，零次是 undefined）、每一次嘗試都報了有效用量（`unknownSteps` 是 0）、收尾時沒有開著的呼叫、加總沒超過安全整數。
+ * 至少有一次嘗試（dsh `aggregateAttempts:127`，零次是 undefined）、每一次嘗試都報了有效用量（`unknownSteps` 是 0）、收尾時沒有開著的呼叫、
+ * 呼叫的起訖與用量沒有不成對過（`lifecycleBroken`，dsh `:196-270`）、加總沒超過安全整數。
  * 快取桶缺席**不算**（dsh `:133-138` 缺桶只讓那一格省略；`:108-109` 的「沒有 total 又缺桶」在 nexus 走不到，`validateUsage` 的 total 必填）。
  */
 function proven(row: Row, span: TokenMeterSpan): boolean {
@@ -740,6 +767,7 @@ function proven(row: Row, span: TokenMeterSpan): boolean {
     span.steps > 0 &&
     span.unknownSteps === 0 &&
     row.openCallAtEnd !== true &&
+    row.lifecycleBroken !== true &&
     // dsh `safeSum`（`:63-70`、`:128-131`）：每一次的數都是安全整數，兩個各在範圍內的呼叫加起來仍可能不是。
     Number.isSafeInteger(n.inputTokens + n.outputTokens + n.cacheReadTokens + n.cacheWriteTokens)
   );

@@ -1029,3 +1029,136 @@ describe('收輪時還開著的呼叫：舊日誌漏帳與今天的續接路徑�
     expect(turn.failedSteps).toBe(1);
   });
 });
+
+/**
+ * 呼叫的起訖與用量不成對（#1571 N1201，PM 審查）：dsh 的 `deriveTurnTokenUsage` 本身是生命週期驗證器（`turn-usage.ts:196-270`），
+ * nexus 的 fold 不拒收日誌，所以三種形狀各自記一個旗標，`tokensProven` 看它。每一條的前提都先釘住「`unknownSteps` 是 0 或看不出」，
+ * 證明靠的是旗標而不是別的條件。
+ */
+describe('tokensProven：呼叫起訖與用量不成對的日誌', () => {
+  const turnOf = (...drafts: readonly Draft[]) =>
+    fold(log([0, 'turn/start', { kind: 'message' }], ...drafts, [99, 'turn/end', {}])).turns[0]!;
+
+  it('一次呼叫記了兩顆用量、另一次一顆都沒記：unknownSteps 被夾成 0，tokensProven 仍是 false；數字照舊交', () => {
+    const turn = turnOf(
+      [1, 'model/start', {}],
+      [2, 'model/usage', usage(10, 2)],
+      [3, 'model/usage', usage(10, 2)],
+      [4, 'model/end', {}],
+      [5, 'model/start', {}],
+      [6, 'model/end', {}],
+    );
+    // 前提：用量條數等於呼叫數，只看 unknownSteps 會判成準。
+    expect(turn.steps).toBe(2);
+    expect(turn.unknownSteps).toBe(0);
+    expect(turn.inputTokens).toBe(20);
+    expect(turn.tokensProven).toBe(false);
+  });
+
+  it('model/start 時上一次還開著：前一次被蓋掉，tokensProven 是 false', () => {
+    const turn = turnOf(
+      [1, 'model/start', {}],
+      [2, 'model/start', {}],
+      [3, 'model/usage', usage(10, 2)],
+      [4, 'model/end', {}],
+    );
+    expect(turn.steps).toBe(1);
+    expect(turn.unknownSteps).toBe(0);
+    expect(turn.tokensProven).toBe(false);
+  });
+
+  it('model/usage 時沒有開著的呼叫（在 start 之前）：false', () => {
+    const turn = turnOf(
+      [1, 'model/usage', usage(10, 2)],
+      [2, 'model/start', {}],
+      [3, 'model/end', {}],
+    );
+    expect(turn.steps).toBe(1);
+    expect(turn.unknownSteps).toBe(0);
+    expect(turn.tokensProven).toBe(false);
+  });
+
+  it('model/usage 時沒有開著的呼叫（在 end 之後）：false', () => {
+    const turn = turnOf(
+      [1, 'model/start', {}],
+      [2, 'model/end', {}],
+      [3, 'model/usage', usage(10, 2)],
+    );
+    expect(turn.steps).toBe(1);
+    expect(turn.unknownSteps).toBe(0);
+    expect(turn.tokensProven).toBe(false);
+  });
+
+  it('同一次呼叫的第二顆用量：false（即使後面另一次呼叫也有一顆，兩邊條數對得上）', () => {
+    const turn = turnOf(
+      [1, 'model/start', {}],
+      [2, 'model/usage', usage(10, 2)],
+      [3, 'model/usage', usage(10, 2)],
+      [4, 'model/end', {}],
+    );
+    expect(turn.steps).toBe(1);
+    expect(turn.tokensProven).toBe(false);
+  });
+
+  /**
+   * 注意：這一條單獨拿掉 `model/end` 那道判斷不會紅——沒有 start 的 end 照加一步、沒有對應的用量，`unknownSteps` 本來就 ≥ 1。
+   * 要讓 `unknownSteps` 看不出來得先有多出來的用量，而多出來的用量自己就會被 `model/usage` 那兩道判斷記壞。所以這道判斷是照 dsh
+   * 狀態機補齊的冗餘防線，不是獨立可觀察的一條（PR 內文如實寫）。
+   */
+  it('model/end 時沒有開著的呼叫（沒有 start）：false', () => {
+    const turn = turnOf([1, 'model/end', {}]);
+    expect(turn.steps).toBe(1);
+    expect(turn.tokensProven).toBe(false);
+  });
+
+  it('旗標只落在不成對的那一輪：同一份日誌後面乾淨的輪仍是 true', () => {
+    const view = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/end', {}],
+        [2, 'turn/end', {}],
+        [3, 'turn/start', { kind: 'message' }],
+        [4, 'model/start', {}],
+        [5, 'model/usage', usage(10, 2)],
+        [6, 'model/end', {}],
+        [7, 'turn/end', {}],
+      ),
+    );
+    expect(view.turns.map((turn) => turn.tokensProven)).toEqual([false, true]);
+  });
+
+  /** 守衛：寫方的合法形狀都不能被誤判成壞的。 */
+  it('合法的形狀都不算壞：重試（失敗那對沒用量、成功那對有）、失敗帶 outcome 的用量、一輪多次呼叫', () => {
+    const turn = turnOf(
+      [1, 'model/start', {}],
+      [2, 'model/usage', usage(5, 1, 'error')],
+      [3, 'model/end', { outcome: 'error' }],
+      [4, 'llm/retry-started', { waitedMs: 5 }],
+      [5, 'model/start', {}],
+      [6, 'model/usage', usage(10, 2)],
+      [7, 'model/end', {}],
+      [8, 'model/start', {}],
+      [9, 'model/usage', usage(11, 3)],
+      [10, 'model/end', {}],
+    );
+    expect(turn.steps).toBe(3);
+    expect(turn.unknownSteps).toBe(0);
+    expect(turn.tokensProven).toBe(true);
+  });
+
+  it('續接補結的 model/end（interruptedTurnClosers）不算壞：用量在死掉之前已寫下的那次呼叫，補結之後仍是 true', () => {
+    const crashed = log(
+      [0, 'turn/start', { kind: 'message' }],
+      [1, 'model/start', {}],
+      [2, 'model/usage', usage(10, 2)],
+    );
+    const closers = interruptedTurnClosers(crashed);
+    // 前提：補的是 model/end（接在開著的 model/start 後面）與 turn/end。
+    expect(closers.map((event) => event.type)).toEqual(['model/end', 'turn/end']);
+    const turn = fold([...crashed, ...closers] as unknown as SessionEvent[]).turns[0]!;
+    expect(turn.steps).toBe(1);
+    expect(turn.failedSteps).toBe(1);
+    expect(turn.unknownSteps).toBe(0);
+    expect(turn.tokensProven).toBe(true);
+  });
+});
