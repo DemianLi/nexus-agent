@@ -18,11 +18,7 @@ import type { AddressInfo } from 'node:net';
 
 import { AIMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import {
-  SESSION_LOG_FORMAT_VERSION,
-  SessionLog,
-  toLoggedMessage,
-} from '@nexus/core';
+import { SESSION_LOG_FORMAT_VERSION, SessionLog, toLoggedMessage } from '@nexus/core';
 import type { SessionEvent, SessionRegistry, StoredSessionHeader } from '@nexus/core';
 import { createWireClient, formatSessionReferenceMention } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -364,9 +360,9 @@ describe('一則訊息最多引用幾條（驗收 C）', () => {
         `看 ${mentions('a', 'b', 'c', 'd')}`,
       );
       expect(refused).toMatchObject({ type: 'error', error: 'invalid_argument' });
-      expect(await connection.client.runStart(THREAD, `看 ${mentions('a', 'b', 'c')}`)).toMatchObject(
-        { type: 'success' },
-      );
+      expect(
+        await connection.client.runStart(THREAD, `看 ${mentions('a', 'b', 'c')}`),
+      ).toMatchObject({ type: 'success' });
       await settled(connection.events, 1);
     } finally {
       await connection.handler.close();

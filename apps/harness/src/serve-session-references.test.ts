@@ -285,8 +285,12 @@ describe('候選上限，從 serve 組裝起', () => {
 
     const second = await start(root, ['--patch', CANDIDATE_LIMIT_PATCH]);
     const client = await serveClient(second);
-    const mention = (id: string): string => formatSessionReferenceMention({ sessionId: id, label: id });
-    const refused = await client.runStart('beta', `看 ${mention('a')} ${mention('b')} ${mention('c')}`);
+    const mention = (id: string): string =>
+      formatSessionReferenceMention({ sessionId: id, label: id });
+    const refused = await client.runStart(
+      'beta',
+      `看 ${mention('a')} ${mention('b')} ${mention('c')}`,
+    );
     expect(refused).toMatchObject({ type: 'error', error: 'invalid_argument' });
     expect(String(refused.type === 'error' ? refused.message : '')).toContain(
       'SESSION_REFERENCE_TOO_MANY',

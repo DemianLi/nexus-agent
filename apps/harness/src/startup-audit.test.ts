@@ -523,21 +523,24 @@ describe('session-reference 寫壞：兩個入口都起不來；關不掉', () =
     ['candidateLimit', '0'],
     ['maxReferenceBytes', '0'],
     ['maxReferences', '0'],
-  ])('%s 寫成 %s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）與欄位', async (field, raw) => {
-    const env = homeWith(`- id: session-reference\n  config:\n    ${field}: ${raw}\n`);
+  ])(
+    '%s 寫成 %s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）與欄位',
+    async (field, raw) => {
+      const env = homeWith(`- id: session-reference\n  config:\n    ${field}: ${raw}\n`);
 
-    const fromCli = await cli(env);
-    expect(fromCli.error).toBeInstanceOf(StartupError);
-    const message = (fromCli.error as Error).message;
-    expect(message).toMatch(
-      /^ {2}session-reference（#settings\/session-reference）〔必掛〕設定驗不過：/mu,
-    );
-    expect(message).toContain(field);
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(
+        /^ {2}session-reference（#settings\/session-reference）〔必掛〕設定驗不過：/mu,
+      );
+      expect(message).toContain(field);
 
-    await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
-      message,
-    );
-  });
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
 
   it('disabled: true：起動當場拋，指名這一列（關掉只會回到 dsh 的 0.2，讀起來卻像關掉引用）', async () => {
     const env = homeWith('- id: session-reference\n  disabled: true\n');

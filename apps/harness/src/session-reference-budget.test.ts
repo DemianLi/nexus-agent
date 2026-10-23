@@ -229,7 +229,10 @@ describe('出廠比例夠中文用嗎（驗收 H）', () => {
    * 只有第二道對素材不敏感：下面的對照說明 0.2 在這個量法下只差幾個百分點才超過門檻。
    */
   it('出貨那一列：三條上限大小的中文來源加 system prompt，乘上實測的 1.10 之後不超過摘要門檻，而且占不到六成', () => {
-    const { ratio } = loadAgainstThreshold(reference.referenceContextFraction, CHINESE_REAL_OVER_O200K);
+    const { ratio } = loadAgainstThreshold(
+      reference.referenceContextFraction,
+      CHINESE_REAL_OVER_O200K,
+    );
     expect(ratio).toBeLessThanOrEqual(1);
     expect(ratio).toBeLessThan(0.6);
   });

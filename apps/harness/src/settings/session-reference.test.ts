@@ -42,7 +42,11 @@ describe('schema 的預設與範圍，同 dsh', () => {
     ['maxReferences 0', { maxReferences: 0 }, 'maxReferences'],
     ['maxReferences 2.5', { maxReferences: 2.5 }, 'maxReferences'],
     ['referenceContextFraction 1.5', { referenceContextFraction: 1.5 }, 'referenceContextFraction'],
-    ['referenceContextFraction -0.1', { referenceContextFraction: -0.1 }, 'referenceContextFraction'],
+    [
+      'referenceContextFraction -0.1',
+      { referenceContextFraction: -0.1 },
+      'referenceContextFraction',
+    ],
     ['candidateLimit 0', { candidateLimit: 0 }, 'candidateLimit'],
     ['candidateLimit 1.5', { candidateLimit: 1.5 }, 'candidateLimit'],
     ['maxReferenceBytes 0', { maxReferenceBytes: 0 }, 'maxReferenceBytes'],
