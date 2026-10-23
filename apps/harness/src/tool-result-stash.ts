@@ -444,7 +444,8 @@ async function sweepSessionDir(
 }
 
 /**
- * 啟動時清掉超過保留期的暫存檔，照 dsh `spill-local` 的 `cleanup.ts`（`sweepSpillRoots`）：
+ * 清掉超過保留期的暫存檔，照 dsh `spill-local` 的 `cleanup.ts`（`sweepSpillRoots`）。兩個入口啟動時在背景叫它一次、
+ * 卸載根時等它收斂（`tool-result-stash-sweep.ts`，#1553 N0952）：
  *
  * - `cleanupPeriodDays` 為 `0` 表示不清。
  * - **別人改得動的根不清**（dsh `index.ts:43-44`）：根或它的祖先群組／其他人可寫，就一個檔都不碰——那個目錄裡的東西

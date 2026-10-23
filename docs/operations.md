@@ -578,7 +578,7 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **回不來的**：虛擬檔案系統、摘要器的會話歷史檔，以及停在核准點還沒答的那張卡——它們只在 graph state 裡。
 
-**工具結果暫存回得來**：過大的工具結果原文存在主機的私有目錄（預設 `<harness home>/tool-results/`，目錄 0700、檔案 0600，按會話分目錄），續接時預覽指的路徑照樣讀得到。保留天數與位置在 `tool-result-stash` 那一列設定（`cleanupPeriodDays` 預設 30，`0` 表示不清）；根目錄寫不進去時退回記憶體暫存並講一聲。
+**工具結果暫存回得來**：過大的工具結果原文存在主機的私有目錄（預設 `<harness home>/tool-results/`，目錄 0700、檔案 0600，按會話分目錄），續接時預覽指的路徑照樣讀得到。保留天數與位置在 `tool-result-stash` 那一列設定（`cleanupPeriodDays` 預設 30，`0` 表示不清；啟動時在背景清一次過期的檔，不擋服務，關機時等它清完）；根目錄寫不進去時退回記憶體暫存並講一聲。
 
 **上傳的檔案存在 harness home**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，只有 `serve`）：`POST /threads/:id/uploads` 把檔案的原始位元組存到 `<harness home>/attachments/v1/`，內容定址、同樣的內容只存一份；目錄 0700、檔案唯讀（0400），檔名清成葉名。回一張收據，只在收下它的那條 thread 有效、行程重開就失效。模型用 `read_file` 讀 `/attachments/<雜湊前兩碼>/<雜湊>/<檔名>`（唯讀路由，不是主機路徑）。**路由只露出這條 thread 的日誌引用過的檔案**（#1773，見下面「模型讀附件的範圍」）。沒有保留期清理，也沒有單檔大小上限（照 dsh `file-upload`）。**上傳不受請求本文上限管**：Node 轉接層（`wire-server.ts`）對上傳路由是串流——位元組從 socket 一路流進儲存，行程記憶體不跟著檔案大小漲（實測 480 MiB 的檔 RSS 約漲 80 MiB，有界；整份緩衝是近 2 GiB）。其他路由（JSON）先收完整份，本文上限 300 MiB（`DEFAULT_MAX_REQUEST_BODY_BYTES`，照 dsh `client/connection` 的 `http-bridge.ts`），超過回 413 並斷線。**所以 300 MiB 的上限擋不到上傳**，上傳也沒有儲存配額（dsh 預設也沒有），磁碟寫滿由主機管。要清就自己刪 `attachments/` 底下沒有被會話引用的檔。
 
