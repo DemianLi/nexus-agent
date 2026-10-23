@@ -2272,6 +2272,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // 改名（#633 第二張）：照 dsh 要這條會話是活的，所以**經 `threadFor`**（先確認它存在，免得為一個不存在的 id 建 agent）。
       return handleRename(threadId, envelope.id, body);
     }
+    if (method === 'thread.fork') {
+      // 分叉（#1580）：刀 1 只有契約，**不經 `threadFor`**，不為了回「還沒做」建 agent。刀 2 接上實作。
+      return json(
+        errorResponse(envelope.id, 'not_supported', '這台 server 還沒有實作分叉（thread.fork）'),
+      );
+    }
     if (isThreadManagementMethod(method)) {
       // 釘選與封存（#633 第一張）：**不經 `threadFor`**，同 `run.cancel`——整理的是一個 id 在兩個全域集合裡的位置，不是這條 thread
       // 的 agent；為了封存一條還沒開起來的 thread 把它建起來（連 MCP 子行程）是反的。
@@ -2881,7 +2887,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    */
   async function handleThreadOrganization(
     threadId: string,
-    method: Exclude<ThreadManagementMethod, 'thread.rename'>,
+    method: Exclude<ThreadManagementMethod, 'thread.rename' | 'thread.fork'>,
     id: number,
     body: unknown,
   ): Promise<Response> {

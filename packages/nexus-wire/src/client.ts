@@ -37,6 +37,8 @@ import type {
 import type {
   ThreadArchiveCommand,
   ThreadArchiveResult,
+  ThreadForkCommand,
+  ThreadForkResult,
   ThreadManagementCommand,
   ThreadPinCommand,
   ThreadPinResult,
@@ -401,6 +403,11 @@ export interface WireClient {
   /** 改這條 thread 的標題（`thread.rename`）。回受理後的標題與事件 `seq`；標題不合法回 `title_invalid`，標題不變。 */
   threadRename(threadId: string, title: string): Promise<CommandOutcome<ThreadRenameResult>>;
   /**
+   * 從這條 thread 指名那一輪分出一條新 thread（`thread.fork`，#1580）。`messageId` 是那一輪 root 回覆的；回新 thread 的 id。
+   * 分不出去回 `fork_unavailable`；名額滿了是 `rejected` 帶 `thread_at_capacity`。
+   */
+  threadFork(threadId: string, messageId: string): Promise<CommandOutcome<ThreadForkResult>>;
+  /**
    * 上傳一個檔案，換一張收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。契約見 `attachments.ts`：收據只在這條
    * thread 有效，送訊息時放進 `run.start` 的 `attachments`。**排在 {@link openEvents} 兌現之後**（這條 thread 會為它建起來）。
    *
@@ -694,7 +701,8 @@ function readThreadList(result: unknown): ThreadListResult {
         typeof row.updatedAt !== 'number' ||
         typeof row.running !== 'boolean' ||
         typeof row.blank !== 'boolean' ||
-        (row.title !== undefined && typeof row.title !== 'string')
+        (row.title !== undefined && typeof row.title !== 'string') ||
+        (row.parentThreadId !== undefined && typeof row.parentThreadId !== 'string')
       ) {
         throw new Error('GET /threads 回了不認得的一列');
       }
@@ -704,6 +712,7 @@ function readThreadList(result: unknown): ThreadListResult {
         running: row.running,
         blank: row.blank,
         ...(typeof row.title === 'string' ? { title: row.title } : {}),
+        ...(typeof row.parentThreadId === 'string' ? { parentThreadId: row.parentThreadId } : {}),
       });
     }),
   };
@@ -1217,6 +1226,15 @@ export function createWireClient(options: WireClientOptions): WireClient {
         params: { title },
       };
       return sendOkCommand<ThreadRenameResult>(threadId, command, '改名');
+    },
+
+    async threadFork(threadId, messageId) {
+      const command: ThreadForkCommand = {
+        id: nextCommandId++,
+        method: 'thread.fork',
+        params: { messageId },
+      };
+      return sendOkCommand<ThreadForkResult>(threadId, command, '分叉');
     },
 
     async uploadFile(threadId, body, name, signal, onProgress) {
