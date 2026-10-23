@@ -882,9 +882,13 @@ StateDirectoryMode=0700
 Environment=NEXUS_AGENT_HOME=/var/lib/nexus-agent
 WorkingDirectory=/var/lib/nexus-agent
 
+# 記憶體上限（整個 cgroup：serve、MCP 子行程、rg 都算在內）與 V8 heap 上限成對：
+# --max-old-space-size（MiB）取 MemoryMax 的 70%，改一個要一起改另一個，算法與依據見下面〈記憶體上限〉。
+MemoryMax=4G
+
 # 直接 exec node，不經 pnpm：pnpm 會把 SIGTERM 吃掉，serve 收不到停止要求（#1464）。
 # systemd 要求絕對路徑；node 不在 /usr/bin 就改成 which node 印出來的那個。
-ExecStart=/usr/bin/node /opt/nexus-agent/current/lib/serve.js --live --workspace /srv/nexus-agent/workspace --port 8787
+ExecStart=/usr/bin/node --max-old-space-size=2867 /opt/nexus-agent/current/lib/serve.js --live --workspace /srv/nexus-agent/workspace --port 8787
 
 # SIGTERM 是 serve 的一般停止要求（退出碼 0）。serve 自己的收尾上限是 5 秒，到了就自己結束，
 # 所以這裡留 10 秒：serve 先自己收完，systemd 的 SIGKILL 只是最後一道。
@@ -904,6 +908,33 @@ WantedBy=multi-user.target
   [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
   到了就強制結束、退出碼仍是 0。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
   這兩個數字改其中一個，另一個要跟著改。
+- **記憶體上限：`MemoryMax` 與 `--max-old-space-size` 成對，heap 取 70%**（[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)）。
+  Node 沒給旗標時，V8 的 heap 上限是依容器上限推出來的一個**較小的值**（1g 約 520 MiB、4g 約 2080 MiB，約一半），
+  容器多給的記憶體 heap 用不到，會先以 `FATAL ERROR: … JavaScript heap out of memory`（退出碼 134、不是 cgroup OOM kill）死掉；
+  [#1490](https://github.com/DemianLi/nexus-agent/issues/1490) 實測 6 次都是這樣，死的當下 cgroup 只用到 60–67%。
+  - **算法：`--max-old-space-size` ＝ ⌊`MemoryMax`（MiB）× 0.7⌋。** 範本的 4G ＝ 4096 MiB，所以是 2867。
+    剩下的 30% 給 heap 以外的東西：native 記憶體、page cache、`rg`，以及 MCP 的 stdio 子行程（每條對話 +43.5 MiB 左右，見 #1490）。
+  - **為什麼是 70%**（2026-10-23 在 #1490 的環境重跑，同一個假模型端點、一條一條開 thread 到 serve 死；每組一次，1g 的 70% 跑了 3 次）：
+    | 容器 | `--max-old-space-size` | 死的原因 | 死前 cgroup | 撐到幾條 thread |
+    | --- | --- | --- | --- | --- |
+    | 1g | 不給 | heap（134） | 66.0% | 202 |
+    | 1g | 614（60%） | heap（134） | 77.1% | 256 |
+    | 1g | 716（70%） | heap（134），3 次 | 86.5–88.5% | 304–309 |
+    | 1g | 768（75%） | heap（134） | 95.0% | 337 |
+    | 4g | 不給 | heap（134） | 58.1% | 1008 |
+    | 4g | 2867（70%） | heap（134） | 79.9% | 1439 |
+
+    75% 在 1g 死前離 cgroup 上限只剩 52 MiB，heap 以外再多長一點就換成 cgroup OOM kill（SIGKILL，日誌上沒有任何遺言），所以不取；
+    70% 在 1g 留 100 MiB 以上。**這組量測沒有 MCP 子行程**：開了 MCP 的部署，heap 以外長得比這張表快，要看自己的 `記憶體用量` 那一行，不夠就把 `MemoryMax` 加大或旗標往下調。
+  - **跟用量警告（[#1718](https://github.com/DemianLi/nexus-agent/issues/1718)）的關係：** 警告的 heap 分母是 `v8.getHeapStatistics().heap_size_limit`，
+    給了旗標之後就是旗標算出來的那個值，**比旗標的數字大一點**（`--max-old-space-size=716` 時印 `728.0 MiB`，2867 時印 `2915.0 MiB`，多出來的是新生代）。
+    上表每一組在死之前都先印過至少一行警告（預設的 1g 第 153 條 thread 響 heap，70% 的 1g 在第 202–210 條響 heap、再 1–12 條響 cgroup）。
+  - **改 `MemoryMax` 之後要重算旗標**：`apps/harness/src/systemd-unit.test.ts` 讀這一段，旗標不等於 ⌊`MemoryMax` 的 MiB 數 × 0.7⌋ 就紅。
+- **不是用這份範本起 node 的部署，要自己設上限。** 沒有 systemd 單元的起法（docker／podman、`pnpm --filter @nexus/harness run serve`、自己寫的腳本）不會有人替你設：
+  容器照上面的算法，用起動命令的旗標給（`docker run --memory=4g … node --max-old-space-size=2867 …`），或者在**行程環境**放 `NODE_OPTIONS=--max-old-space-size=2867`（`-e`、`Environment=`）。
+  **不能放在任何一份 `.env` 裡**：`NODE_OPTIONS` 是兩份 `.env` 都不准設的名字，起動就失敗並指名檔案（見〈金鑰放哪裡〉）。
+  沒設的話 serve 照樣跑，只是 heap 上限落在 Node 依容器推出來的預設值，容器多給的記憶體用不到；用量警告的 heap 那個來源仍然會響，分母是那個預設值。
+  **沒有容器上限的主機**（裸機、沒設 `MemoryMax` 的單元）沒有可乘的數字，Node 預設就依主機記憶體推，不必設。
 - **`ExecStart` 指的是 `current` 這個符號連結。** 換版就是解開另一版、`ln -sfn` 換掉 `current`、重啟；連結換掉之前跑著的行程不受影響。
   **退回舊版不能只把 `current` 指回去**：新版寫過的 home 舊版讀不了，要連 home 一起還原，見〈升級與回滾〉。
 - **`--live` 要有 key，而且要在第一次 `enable --now` 之前就位。** 上面第三、四步放進 home 的受管憑證檔最合適（`chmod 600`，擁有者是 `nexus-agent`；
@@ -1829,7 +1860,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **用量警告（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)，「底座保險絲」第 0 級）**：取樣開著時，每次讀數之後再和 `warnAtPercent`（預設 75）比一次。**取樣關著（預設）就整段不檢查**，serve 的日誌與沒有這個功能時一樣。
   - **分母**：容器有 cgroup 上限時是 `memory.current ÷ memory.max`；cgroup 自己沒設、但行程受限（上限在祖先 cgroup）時用受限的值；都沒有就看主機的 `(總量 − 可用) ÷ 總量`，其中「可用」只認 `/proc/meminfo` 的 `MemAvailable`。警告裡寫明用的是哪一個。**主機退到 `os.freemem()`（沒有 `/proc/meminfo`）時當成讀不到**：它不含可回收的快取，用量天生偏高，會一直誤報。所以在 macOS 上 cgroup 和主機都不可用，**整個不警告**，只在起動時講一次原因。
   - **另一個來源：V8 heap 已用 ÷ `heap_size_limit`（[#1718](https://github.com/DemianLi/nexus-agent/issues/1718)，demian 2026-10-20 拍板）**。跟上面那個比例**取較高的**，也就是任何一個超過門檻就響；**用同一組門檻**（`warnAtPercent`、降回「門檻 − 5」才恢復），不另訂。依據是 #1490 的實測：1g、4g 容器各三次，**都是 V8 heap 先撞到自己的上限**（exit 134、`OOMKilled=false`），死的當下 cgroup 只到 60–67%，只看 cgroup 一次都不會警告。分母是 `v8.getHeapStatistics().heap_size_limit`（沒給 `--max-old-space-size` 時 Node 依 cgroup／主機推出來的值），不是 `heapTotal`（已提交的量平常就貼著已用）。行程的讀數拿不到、或上限不是正數時，這個來源**讀不到就不判斷**，講一次原因，不影響上面那個來源。
-  - **兩個來源各講各的**：文案寫明是哪一個觸發——`記憶體用量（cgroup v2 /）…` 是容器或主機，`V8 heap 用量（V8 heap_size_limit）…` 是 heap。「cgroup 60%、heap 90%」響的是 heap。**越過與恢復各算各的**：每個來源一份狀態，只跟自己比；cgroup 降到 70% 以下就講 cgroup 已恢復，不等 heap。兩個都超過時是兩行（修法不同，所以分開講）。heap 這一行的現況：`heapUsed` 隨老生代 GC 起伏，在合成負載下範圍有 20 多個百分點，遠大於 5 個百分點的遲滯；常態落在門檻附近的 heap 會輪流響「警告」與「已恢復」，每次越過一行、只寫日誌。部署範本把上限設成多少（`--max-old-space-size`）是另一張卡（[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)）。
+  - **兩個來源各講各的**：文案寫明是哪一個觸發——`記憶體用量（cgroup v2 /）…` 是容器或主機，`V8 heap 用量（V8 heap_size_limit）…` 是 heap。「cgroup 60%、heap 90%」響的是 heap。**越過與恢復各算各的**：每個來源一份狀態，只跟自己比；cgroup 降到 70% 以下就講 cgroup 已恢復，不等 heap。兩個都超過時是兩行（修法不同，所以分開講）。heap 這一行的現況：`heapUsed` 隨老生代 GC 起伏，在合成負載下範圍有 20 多個百分點，遠大於 5 個百分點的遲滯；常態落在門檻附近的 heap 會輪流響「警告」與「已恢復」，每次越過一行、只寫日誌。出廠 systemd 範本把上限設成 `MemoryMax` 的 70%（`--max-old-space-size`），警告的分母就是那個旗標算出來的 `heap_size_limit`；取值與實測見〈用 systemd 常駐〉的〈記憶體上限〉那一條（[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)）。
   - **`memory.current` 會高估**：它含 page cache，沒有扣 `inactive_file`（照拍板）。#1490 在 1g 容器實測高於行程 RSS 約 28 MiB、4g 約 170 MiB。長期跑下來 page cache 會把讀數推高後停在高處，警告響一次之後可能一直不恢復；因為只在越過時講一次，代價只有那一行日誌。
   - **講幾次**：**嚴格超過**門檻講一次，之後不重複；降到「門檻 − 5」**以下**（嚴格小於）才講一次「已恢復」。在門檻附近來回不會洗版。
   - **警告長這樣**（固定前綴 `[記憶體]`，只寫 serve 日誌）：`[記憶體] 警告：記憶體用量（cgroup v2 /）80.0%，超過門檻 75%（800.0 MiB／1000.0 MiB）。serve 現在有 37 條 thread（上限 500）。下一步：調低 thread-capacity 的 maxThreads，或縮短 idleEvictAfterMs（改了要重啟 serve）；門檻是 memory-gauge 那一列的 warnAtPercent。`

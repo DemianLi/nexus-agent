@@ -1,9 +1,10 @@
 /**
  * `docs/operations.md`〈用 systemd 常駐〉那份單元檔範本（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5）的紅燈。
  *
- * 範本是文件裡的一段文字，沒人跑它就沒人知道它跟程式碼脫鉤了。這裡把它讀出來，釘住四件會靜靜壞掉的事：
+ * 範本是文件裡的一段文字，沒人跑它就沒人知道它跟程式碼脫鉤了。這裡把它讀出來，釘住五件會靜靜壞掉的事：
  * `TimeoutStopSec` 要比 serve 自己的收尾上限大、`ExecStart` 直接 exec node 且旗標是 serve 真的收的、
- * home 與工作區不重疊（#1620 會讓 serve 起不來）、key 不寫進單元檔。
+ * home 與工作區不重疊（#1620 會讓 serve 起不來）、key 不寫進單元檔、
+ * `MemoryMax` 與 node 的 `--max-old-space-size` 成對（#1767：改了一個沒改另一個，上限就不是量過的那個比例）。
  * 真的交給 systemd 跑的證據在 PR 內文，不在這裡。
  */
 
@@ -62,6 +63,10 @@ function one(unit: Unit, section: string, key: string): string {
 const unitText = extractUnitText(readFileSync(operationsDoc, 'utf8'));
 const unit = parseUnit(unitText);
 const execStart = one(unit, 'Service', 'ExecStart').split(/\s+/u);
+// node 後面、入口 .js 之前的是 node 自己的旗標（#1767：--max-old-space-size）；入口之後才是 serve 的旗標。
+const entryIndex = execStart.findIndex((arg, i) => i > 0 && !arg.startsWith('-'));
+const nodeFlags = execStart.slice(1, entryIndex);
+const serveArgs = execStart.slice(entryIndex + 1);
 
 describe('operations.md 的 systemd 單元檔範本', () => {
   it('KillSignal 是 SIGTERM，TimeoutStopSec 比 serve 的收尾上限大', () => {
@@ -74,7 +79,8 @@ describe('operations.md 的 systemd 單元檔範本', () => {
   });
 
   it('ExecStart 直接 exec node 的絕對路徑跑 lib/serve.js，不經 pnpm、npx 或 shell', () => {
-    const [node, entry] = execStart;
+    const node = execStart[0];
+    const entry = execStart[entryIndex];
     expect(node !== undefined && isAbsolute(node)).toBe(true);
     expect(node).toMatch(/\/node$/u);
     expect(entry !== undefined && isAbsolute(entry)).toBe(true);
@@ -83,7 +89,7 @@ describe('operations.md 的 systemd 單元檔範本', () => {
   });
 
   it('ExecStart 的旗標 serve 真的收，且是常駐該有的樣子', () => {
-    const invocation = parseServeArgs(execStart.slice(2));
+    const invocation = parseServeArgs(serveArgs);
     expect(invocation.live).toBe(true);
     expect(invocation.port).toBe(8787);
     expect(invocation.workspace).toBeDefined();
@@ -93,13 +99,24 @@ describe('operations.md 的 systemd 單元檔範本', () => {
     const home = `/var/lib/${one(unit, 'Service', 'StateDirectory')}`;
     expect(one(unit, 'Service', 'Environment')).toBe(`NEXUS_AGENT_HOME=${home}`);
     expect(one(unit, 'Service', 'WorkingDirectory')).toBe(home);
-    const workspace = parseServeArgs(execStart.slice(2)).workspace ?? '';
+    const workspace = parseServeArgs(serveArgs).workspace ?? '';
     // #1620：工作區與 home 任一方向重疊，serve 當場起不來。
     const down = relative(workspace, home);
     const up = relative(home, workspace);
     const overlaps = (rel: string): boolean =>
       rel === '' || !(rel.startsWith('..') || isAbsolute(rel));
     expect(overlaps(down) || overlaps(up)).toBe(false);
+  });
+
+  it('MemoryMax 與 --max-old-space-size 成對：旗標是 MemoryMax（MiB）的 70%，向下取整（#1767）', () => {
+    const limit = /^(\d+)([KMGT])$/u.exec(one(unit, 'Service', 'MemoryMax'));
+    expect(limit).not.toBeNull();
+    const unitMiB = { K: 1 / 1024, M: 1, G: 1024, T: 1024 * 1024 } as const;
+    const memoryMaxMiB = Number(limit?.[1]) * unitMiB[limit?.[2] as keyof typeof unitMiB];
+    const flags = nodeFlags.filter((f) => f.startsWith('--max-old-space-size='));
+    expect(flags).toHaveLength(1);
+    expect(nodeFlags).toHaveLength(1);
+    expect(Number(flags[0]?.split('=')[1])).toBe(Math.floor(memoryMaxMiB * 0.7));
   });
 
   it('只在失敗時重啟，並限制重啟次數', () => {
