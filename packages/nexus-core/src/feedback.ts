@@ -253,11 +253,18 @@ export interface CurrentMessageFeedback {
  * `assistant/message`（那時的按鈕就放在那一則上），之後同一則回覆的新評分照常覆蓋它。對不到的照輪留著，
  * 只有按輪統計的讀方（離線掃描）用得到。
  *
+ * **繼承來的前綴裡的評分不算**（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）：那是父會話給的。前綴裡的回覆照樣是
+ * 評分的目標（分叉之後可以對它重新評）。dsh 靠評分事件裡記的 `sessionId` 分（`message-feedback/src/index.ts:97-113`，只收
+ * `data.sessionId === sessionId` 的，`687f282e`）；**偏離（理由 1）**：我們的評分事件沒有 `sessionId` 這一格，舊檔也補不回來，
+ * 所以退到用切點分——分叉的前綴原樣是父會話的事件，切點之前的評分一定是父會話記的，結果與 dsh 相同。
+ *
  * @param events - root 那一份日誌的全部事件。
+ * @param inheritedEventCount - 切點（`SessionLog.inheritedEventCount`）；之前的評分事件略過。省略即 0。
  * @returns 目前每一則回覆（或對不到回覆的舊的一輪）的評分。
  */
 export function currentMessageFeedback(
   events: readonly SessionEvent[],
+  inheritedEventCount = 0,
 ): readonly CurrentMessageFeedback[] {
   /** 訊息 id → 它所屬那一輪。 */
   const turnOfMessage = new Map<string, number>();
@@ -283,6 +290,7 @@ export function currentMessageFeedback(
     return tail === undefined ? `turn:${String(target.turn)}` : `message:${tail}`;
   };
   for (const event of events) {
+    if (event.seq < inheritedEventCount) continue;
     if (event.type === 'feedback/message-put') {
       const stored = event.data.item;
       const key = keyOf(stored);

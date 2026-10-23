@@ -221,7 +221,8 @@ export type TurnAbortCause =
  *   那一輪的目標預約被擋就把目標擋下（`prompt-rejected`，照 dsh `goal-round-driver/src/index.ts:403-415`）。
  *
  * dsh 另有 `completed`、`error`、`forked`：正常結束在我們這側是不放
- * `reason`，拋錯是另一顆 `turn/failed`，其餘沒有生產者。
+ * `reason`，拋錯是另一顆 `turn/failed`。`forked` 是分叉時替切在一輪中間的前綴補的收尾；我們的分叉切點只落在已收尾的
+ * `turn/end`（{@link buildForkSeed} 用斷言擋，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），所以沒有生產者。
  */
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: TurnAbortCause }
@@ -1370,8 +1371,13 @@ export interface SessionEventMap {
    * 之前沒配到的開頭（`turn/start`、`command/run`、`interrupt/raised`）屬於一個已經結束
    * 的生命週期，不管它是怎麼結束的。所以讀「當前這一段」的人與帶開關狀態的配套入口都
    * 要在這裡重設——見 {@link currentTurnStart} 與 core、todo、commands 三份配套入口。
+   *
+   * **`inherited: true` 是分叉的切點**（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)，照 dsh 的
+   * `{ inherited?: true }`，`packages/core/session/src/types.ts:428`，`687f282e`）：它之前的事件是從另一份會話複製來的前綴，
+   * 它自己與之後的才是這一份的（{@link inheritedEventCount}）。寫它的只有 {@link buildForkSeed}；續接時建構子補的仍是普通的 `{}`。
+   * 讀「當前這一段」的人不分兩種，一樣在這裡重設：繼承來的前綴同樣屬於一個已經結束的生命週期。
    */
-  'session/end-seed': Record<string, never>;
+  'session/end-seed': { readonly inherited?: true };
   /**
    * 這一次續接**實際載入**的建置版本、插件清單與設定雜湊（[#1138](https://github.com/DemianLi/nexus-agent/issues/1138)
    * 量到的缺口 2）——形狀同 header 的那三格（{@link SessionHeaderBuildMetadata}），**不帶 `config`**，理由同
@@ -2084,6 +2090,63 @@ export interface SessionLogView {
   readonly events: readonly SessionEvent[];
   /** 目前的長度，也就是下一筆會拿到的 `seq`。 */
   readonly length: number;
+  /** 分叉繼承來的前綴有幾顆，見 {@link inheritedEventCount}；不是分叉來的是 0。 */
+  readonly inheritedEventCount: number;
+  /** 切點之後、這一份自己的事件。見 {@link SessionLog.ownEvents}。 */
+  ownEvents(): readonly SessionEvent[];
+  /** 這個位置是不是這一份自己的。見 {@link SessionLog.isOwnSeq}。 */
+  isOwnSeq(seq: number): boolean;
+}
+
+/**
+ * 分叉的切點：**最後一顆** `session/end-seed {inherited: true}` 的 `seq`，沒有就是 0（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
+ *
+ * 照 dsh 讀盤時的求法（`packages/session/session-format-v1-to-v2/src/codec.ts:114-116`、`session-format-v3-to-v4/src/validation.ts:70-71`，
+ * `687f282e`）：切點不另外落盤，從標記推。它等於複製進來的事件數（{@link buildForkSeed} 把標記放在 `boundary + 1`），標記自己算這一份的。
+ * 分叉再分叉時前綴裡也有祖先的標記，所以取最後一顆。
+ *
+ * @param events - 一份日誌，照 `seq` 排、從 0 連續。
+ * @returns 切點；之前的是繼承來的，之後（含）是這一份自己的。
+ */
+export function inheritedEventCount(events: readonly SessionEvent[]): number {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === 'session/end-seed' && event.data.inherited === true) return event.seq;
+  }
+  return 0;
+}
+
+/**
+ * 分叉的 seed：來源日誌到 `boundary`（含）的前綴，原樣、seq 不改，再接一顆 `session/end-seed {inherited: true}`（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
+ *
+ * 照 dsh `buildForkSeed`（`packages/core/session/src/fork.ts:21-30`，`687f282e`）：標記的 `seq` 是 `boundary + 1`、`time` 抄切點那一顆。
+ * 拿它開一份 {@link SessionLog}（`seed`），切點就是標記的位置。
+ *
+ * **偏離（理由 1）：不串開著回合的閉合，改用斷言擋。** dsh 接著串 `openTurnClosers(prefix, {kind:'forked'})`，替切在一輪中間的前綴補收尾。
+ * 我們的切點只能指名到一輪收尾的那則回覆（wire 不帶耐久 seq，見 #1580 的偏離），所以切點一定是一顆 `turn/end`，閉合永遠是空的；
+ * `TurnEndReason` 也就不加 `forked`。
+ *
+ * @param events - 來源日誌，照 `seq` 排、從 0 連續。
+ * @param boundary - 繼承到哪一顆（含），必須是一顆 `turn/end`。
+ * @returns 新的陣列；事件物件沿用來源的（已凍），標記是新的。
+ * @throws {RangeError} `boundary` 不是一顆存在的 `turn/end`。
+ */
+export function buildForkSeed(events: readonly SessionEvent[], boundary: number): SessionEvent[] {
+  const cut = events[boundary];
+  if (!Number.isSafeInteger(boundary) || cut === undefined || cut.seq !== boundary) {
+    throw new RangeError(`分叉的切點 ${boundary} 不在來源日誌裡。`);
+  }
+  if (cut.type !== 'turn/end') {
+    throw new RangeError(`分叉的切點必須是一顆 turn/end，第 ${boundary} 顆是 "${cut.type}"。`);
+  }
+  const prefix = events.slice(0, boundary + 1);
+  prefix.push({
+    type: 'session/end-seed',
+    seq: boundary + 1,
+    time: cut.time,
+    data: { inherited: true },
+  } as SessionEvent);
+  return prefix;
 }
 
 /**
@@ -2112,6 +2175,8 @@ export class SessionLog implements SessionLogView {
   readonly #onListenerError: (message: string) => void;
   /** 正在回呼中。重入防護唯一的狀態。 */
   #publishing = false;
+  /** 分叉的切點，接 seed 時算一次。end-seed 只有建構子能合法寫（見那顆事件的說明），所以之後不會變。 */
+  #inheritedEventCount = 0;
 
   constructor(sessionId: string, options: SessionLogOptions = {}) {
     this.#sessionId = sessionId;
@@ -2143,6 +2208,9 @@ export class SessionLog implements SessionLogView {
       }
       this.#events.push(deepFreeze(snapshot));
     }
+    // 切點從已收下的 seed 推（同 dsh 讀盤）。剛分叉的 seed 以 inherited 標記結尾，下面就不再補；續接一份分叉來的
+    // 日誌時標記留在原位，結尾補的是普通的那顆（dsh `index.ts:691-698` 的 restore 那一支）。
+    this.#inheritedEventCount = inheritedEventCount(this.#events);
     // 末尾的 `session/resumed` 是上一次續接寫在 end-seed 之後的，不算「有新東西」：算的話每次空轉的續接
     // 都多疊一顆 end-seed。
     let last = this.#events.length - 1;
@@ -2171,6 +2239,30 @@ export class SessionLog implements SessionLogView {
   /** 目前的長度，也就是下一筆會拿到的 `seq`。 */
   get length(): number {
     return this.#events.length;
+  }
+
+  /** 分叉繼承來的前綴有幾顆（{@link inheritedEventCount}）；不是分叉來的是 0。 */
+  get inheritedEventCount(): number {
+    return this.#inheritedEventCount;
+  }
+
+  /**
+   * 切點之後、這一份自己的事件，照 `seq` 排（含切點那顆標記）。照 dsh `Session.ownEvents`（`packages/core/session/src/index.ts:742-745`，`687f282e`）。
+   * 從日誌折出「我擁有的狀態」（開過的子代理、給過的評分）的人讀這個，不讀 {@link events}：前綴裡的是父會話的。
+   * **回的是副本**，同 {@link events}。
+   */
+  ownEvents(): readonly SessionEvent[] {
+    return this.#events.slice(this.#inheritedEventCount);
+  }
+
+  /**
+   * 這個位置的事件是不是這一份自己的（不在繼承來的前綴裡）。照 dsh `Session.isOwnSeq`（`index.ts:752-754`，`687f282e`）。
+   *
+   * @param seq - 事件的位置。
+   * @returns 在切點（含）之後、而且已經在日誌裡。
+   */
+  isOwnSeq(seq: number): boolean {
+    return seq >= this.#inheritedEventCount && seq < this.#events.length;
   }
 
   /**

@@ -656,11 +656,23 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
         linksOmitted: state.linksOmitted + cut,
       };
     }
-    case 'session/end-seed':
+    case 'session/end-seed': {
       // 這個行程沒寫過它之前的事件：還開著的呼叫與工具屬於一個已經結束的生命週期，不跟之後的結果配對。
-      return state.call === null && Object.keys(state.pending).length === 0
-        ? state
-        : { ...state, call: null, pending: NO_PENDING };
+      const settled =
+        state.call === null && Object.keys(state.pending).length === 0
+          ? state
+          : { ...state, call: null, pending: NO_PENDING };
+      // 分叉繼承來的前綴到此為止（#1579）：之前收的子代理都是來源 thread 派的，`<這條>/<run>` 開不到，清掉。
+      // 同 dsh `subagentCatalog` 投影（`catalog.ts:124-126`，`seq < inheritedEventCount` 就略過）——這裡的 init
+      // 拿不到切點，但事件照 seq 順序進來，在最後一顆 inherited 標記清掉等於只留它之後的。
+      if (
+        data['inherited'] !== true ||
+        (settled.links.length === 0 && settled.linksOmitted === 0)
+      ) {
+        return settled;
+      }
+      return { ...settled, links: [], linksOmitted: 0 };
+    }
     default:
       return state;
   }

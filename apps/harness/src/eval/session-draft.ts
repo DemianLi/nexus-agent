@@ -30,7 +30,7 @@
  *
  * ## 不起草的
  *
- * - **子代理那幾份**（header 有 `parentSession`）：沒有 `turn/start`，也就沒有「使用者那句話」。
+ * - **子代理那幾份**（`isSubagentSessionHeader`，#1579；分叉帶 `parentSession` 但不是子代理，照起草）：沒有 `turn/start`，也就沒有「使用者那句話」。
  *   它的打轉照樣在 `scan` 裡看得到，root 那一輪也看得到它那顆 `task`。
  * - **`/feedback`**：沒綁輪，不參與排序，印在該會話第一份草稿的前面；會話裡一輪都沒入選的另列最後。
  *
@@ -40,7 +40,9 @@
  */
 
 import {
+  inheritedEventCount,
   isLogicalTurnStart,
+  isSubagentSessionHeader,
   repeatCallKey,
   repeatReminderTracks,
   resolveRepeatReminderSettings,
@@ -118,6 +120,8 @@ export interface SessionDrafts {
   readonly file: string;
   readonly sessionId: string;
   readonly parentSession?: string;
+  /** 子代理的那幾份（core 的 `isSubagentSessionHeader`），不起草。 */
+  readonly subagent?: true;
   readonly version: number;
   readonly turns: readonly DraftTurn[];
   readonly feedbackRecords: readonly FeedbackRecord[];
@@ -161,6 +165,8 @@ export function draftSessionLog(
   const callTurn = new Map<string, OpenTurn>();
   const ratings = ratingsByTurn(log.events);
   const feedbackRecords: FeedbackRecord[] = [];
+  // 分叉繼承來的前綴（#1579）：評語同評分（`ratingsByTurn`），是來源 thread 的，不收。
+  const inherited = inheritedEventCount(log.events);
 
   for (const event of log.events) {
     switch (event.type) {
@@ -210,7 +216,7 @@ export function draftSessionLog(
         break;
       }
       case 'feedback/record':
-        feedbackRecords.push(event.data);
+        if (event.seq >= inherited) feedbackRecords.push(event.data);
         break;
       default:
         break;
@@ -222,6 +228,7 @@ export function draftSessionLog(
     file: log.file,
     sessionId: log.header.id,
     ...(log.header.parentSession !== undefined && { parentSession: log.header.parentSession }),
+    ...(isSubagentSessionHeader(log.header) && { subagent: true as const }),
     version,
     turns: turns.map((turn, index) => {
       const rating = ratings.get(turn.seq);
@@ -376,7 +383,7 @@ export function formatDraftReport(
   options: { readonly threshold: number; readonly base?: string },
 ): readonly string[] {
   const shown = (file: string): string => displayPath(file, options.base);
-  const roots = sessions.filter((session) => session.parentSession === undefined);
+  const roots = sessions.filter((session) => session.subagent !== true);
   const ranked = rankDrafts(roots);
 
   const lines: string[] = [

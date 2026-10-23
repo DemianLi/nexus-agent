@@ -317,8 +317,12 @@ export function attachSessionPersistence(
       // 沒跑在工作區底下就不寫這一格（#504）。**缺席與空字串不是同一件事**：續接的守衛
       // 對「沒記」放行，而對任何記下來的值逐字比。
       ...(options.workspaceRoot !== undefined && { workspaceRoot: options.workspaceRoot }),
-      // 血緣：subagent 那些的 id 是 `<root>/<runId>`，root 就是它的父。
-      ...(address.kind === 'subagent' && { parentSession: sessions.root.sessionId }),
+      // 血緣：subagent 那些的 id 是 `<root>/<runId>`，root 就是它的父。`origin` 說它是 spawn 出來的（#1579，照 dsh），
+      // 分叉也帶 `parentSession`，所以「是不是子代理」不能只看血緣。
+      ...(address.kind === 'subagent' && {
+        parentSession: sessions.root.sessionId,
+        origin: 'subagent' as const,
+      }),
       ...(options.buildMetadata !== undefined && {
         build: options.buildMetadata.build,
         plugins: options.buildMetadata.plugins,

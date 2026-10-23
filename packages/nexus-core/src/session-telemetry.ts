@@ -136,9 +136,9 @@ export type SessionTelemetrySharingStatus = 'full' | 'feedback-only' | 'disabled
  *
  * dsh 的另外兩道守衛在我們這裡不需要，理由各一：
  *
- * - **分叉繼承來的回饋不算**（`event.seq < session.inheritedEventCount`）：我們不分叉。續接帶進來的
- *   seed 裡就算有回饋也碰不到這裡——seed 不發給任何觀察者（`SessionLogOptions.seed`），接線那側
- *   用的是不重播的 `log.subscribe`。
+ * - **分叉繼承來的回饋不算**（`event.seq < session.inheritedEventCount`）：繼承來的前綴只會經 seed 進來
+ *   （`buildForkSeed`，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），續接帶進來的也一樣——seed 不發給任何觀察者
+ *   （`SessionLogOptions.seed`），接線那側用的是不重播的 `log.subscribe`，所以前綴裡的回饋碰不到這裡。
  * - **`message-put`／`message-delete` 比 `sessionId`**：我們的事件沒有那一格（`feedback.ts` 的偏離）。
  *
  * **只有人明白送出的回饋准：三顆 `feedback/*`，其餘一律不准，不認得的種類也不准。**

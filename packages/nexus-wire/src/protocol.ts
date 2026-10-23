@@ -396,7 +396,7 @@ export const TURN_NOT_FOUND = 'turn_not_found';
 export const THREAD_AT_CAPACITY = 'thread_at_capacity';
 
 /**
- * 這個 id 是**子代理的會話**（`<thread>/<編號>`，header 帶 `parentSession`），不能當一條 thread 開或驅動
+ * 這個 id 是**子代理的會話**（`<thread>/<編號>`，header 是子代理的：`origin: 'subagent'`，或 50 以前帶 `parentSession` 的），不能當一條 thread 開或驅動
  * （[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。serve 在碰日誌之前就拒絕，日誌一個位元組都不動。
  * 要對子代理說話，請從它的主對話用 `subagent.send`。對到 dsh 的 `session/agent-busy`＋`use subagent delivery`
  * （`packages/api/session-controller/src/agent.ts:24-30`、`:127-133`）。**不是暫時失敗，重試沒用**。
@@ -817,7 +817,7 @@ export type SlashRunResult =
 export const THREADS_PATH = '/threads';
 
 /**
- * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`parentSessionId`／`origin`（subagent 不列）、
+ * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`origin`（subagent 不列）、`parentSessionId`（subagent 不列；分叉的 thread 照列，來源這一格等 #1580 加回）、
  * `cwd`（只列這台 server 那個目錄的）、`projections`（我們沒有投影快取）、`agentAvailable`（dsh 後來才加，我們沒有
  * 這一格）。多的一格是 `title`：dsh 的清單列把標題放在 `projections` 的 `title` 投影裡；我們把日誌上最後一顆
  * `session/title` 直接放進 `title` 這一格，來源見 `@nexus/core` 的 `SessionTitleSource`。

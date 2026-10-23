@@ -7,7 +7,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createRegistry, createSessionRunner, goalId, SessionLog } from '@nexus/core';
+import {
+  buildForkSeed,
+  createRegistry,
+  createSessionRunner,
+  goalId,
+  SessionLog,
+} from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import type { GoalChangeMeta, GoalRef } from '@nexus/core';
 
@@ -404,6 +410,29 @@ describe('接上一份已經有內容的日誌', () => {
     expect(view?.phase).toBe('paused');
     expect(view?.revision).toBe(2);
     // **授權不重播**：它是 process 內的東西，重放一段歷史不該讓誰自己動起來。
+    expect(view?.activation).toBe('disarmed');
+  });
+
+  it('分叉的前綴裡有一顆執行中、已授權的 goal：分叉出來的那一份折得出它，但是 disarmed（#1579 驗收 5）', () => {
+    const parent = attach();
+    parent.service.create({ objective: '父會話在跑的' });
+    expect(parent.service.get()?.activation).toBe('armed');
+    parent.log.append('turn/start', { kind: 'message', text: '一' });
+    const end = parent.log.append('turn/end', {});
+
+    // 照 dsh：授權不落盤（`goal/goal/src/fold.ts:337`），分叉之後要人說「繼續」才重新授權。
+    const child = new SessionLog('child', { seed: buildForkSeed(parent.log.events, end.seq) });
+    const registry = createRegistry();
+    const goals = applyGoalTo(registry, createGoalPlugin(), 'goal#1');
+    createSessionRunner({
+      address: { kind: 'root' },
+      log: child,
+      rootLog: child,
+      installers: registry.sessions.installers(),
+    });
+    const view = goals.serviceFor(child).get();
+    expect(view?.objective).toBe('父會話在跑的');
+    expect(view?.phase).toBe(parent.service.get()?.phase);
     expect(view?.activation).toBe('disarmed');
   });
 });

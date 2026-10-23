@@ -607,7 +607,9 @@ export class BackgroundSubagentHost {
     if (cold === undefined) return undefined;
     const parentId = this.rootSessionId;
     const prefix = `${parentId}/`;
-    const targets = subagentLinks(this.#sessions.root.events)
+    // 只看自己派的（切點之後，#1579，同 dsh 的目錄投影）。父會話派的另有 `<父 thread>/` 前綴、下面那道也濾得掉，兩道是同一件事。
+    const root = this.#sessions.root;
+    const targets = subagentLinks(root.events, root.inheritedEventCount)
       .filter((link) => link.mode === 'continuable' && link.childId.startsWith(prefix))
       .map((link) => ({ childId: link.childId, runId: link.childId.slice(prefix.length) }))
       .filter(({ runId }) => runId.startsWith(BACKGROUND_RUN_PREFIX));
