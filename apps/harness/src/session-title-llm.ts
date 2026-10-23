@@ -7,8 +7,9 @@
  * ## 什麼時候跑
  *
  * 只在**這一則是第一則合格的人話、而且還沒有任何標題**時排一次（dsh `onUserMessage` 的
- * `count === 1 && get(session) === undefined`；我們沒有 fork，所以沒有「有父會話」那一格）。其餘都不排：第二句、
- * 續接回來的舊會話（前面已經有人話）、子代理（只訂 root）。
+ * `parentSession === undefined && count === 1 && get(session) === undefined`；「沒有父會話」那一格不另寫：分叉的日誌從整份數起，
+ * 繼承來的前綴裡已經有人話，`count === 1` 本來就不成立，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。其餘都不排：第二句、
+ * 續接回來的舊會話（前面已經有人話）、分叉（同上）、子代理（只訂 root）。
  *
  * **排了不等於開跑**：要等那一顆 `turn/start` 之後的第一次模型呼叫（`model/start`）出現才開始，所以主回覆的請求
  * 先送出去，標題不拖慢它。這一顆沒等到的話（那一輪在呼叫模型之前就失敗了），留到下一次模型呼叫，同 dsh 的

@@ -743,6 +743,8 @@ export {
   openTurnStart,
   hasUnansweredInterrupt,
   assertSessionEventEnvelope,
+  buildForkSeed,
+  inheritedEventCount,
   isKnownSessionEventType,
   isLogicalTurnStart,
   isModelVisibleEvent,
@@ -794,6 +796,7 @@ export type {
   StoredSessionSnapshot,
 } from './session-store.js';
 export {
+  isSubagentSessionHeader,
   SESSION_LOG_FORMAT_VERSION,
   SessionAlreadyExistsError,
   SessionAlreadyOwnedError,

@@ -180,16 +180,20 @@ function assertFeedbackEvents(events: readonly SessionEvent[]): void {
  * 從日誌折出每一則回覆目前的評分，同 dsh 的 `currentItems`：**先驗再折**，壞的就拋。舊日誌裡以輪記、對不到回覆的那幾筆
  * 不在裡面：它們沒有訊息 id 可以指名，這裡的操作也就碰不到它們。
  *
+ * 繼承來的前綴裡的評分不算（#1579，偏離見 core 的 `currentMessageFeedback`）；驗證照樣驗整份，同 dsh 先 `parse` 再看是誰的。
+ *
  * @param events - 一份日誌的全部事件。
+ * @param inheritedEventCount - 切點（`SessionLog.inheritedEventCount`）。省略即 0。
  * @returns 訊息 id → 目前那一筆，依第一次評的先後。
  * @throws {FeedbackLogCorruptionError} 有一顆評分事件結構不對。
  */
 export function currentFeedbackItems(
   events: readonly SessionEvent[],
+  inheritedEventCount = 0,
 ): ReadonlyMap<string, MessageFeedbackItem> {
   assertFeedbackEvents(events);
   const items = new Map<string, MessageFeedbackItem>();
-  for (const { item } of currentMessageFeedback(events)) {
+  for (const { item } of currentMessageFeedback(events, inheritedEventCount)) {
     if ('messageId' in item) items.set(item.messageId, item);
   }
   return items;
@@ -255,7 +259,7 @@ export function createFeedbackService(
       if (!isAssistantMessage(events, request.messageId)) {
         return { ok: false, error: { code: 'target-not-found', messageId: request.messageId } };
       }
-      const existing = currentFeedbackItems(events).get(request.messageId);
+      const existing = currentFeedbackItems(events, log.inheritedEventCount).get(request.messageId);
       if (request.ifVersion !== (existing?.version ?? null)) {
         return { ok: false, error: { code: 'version-conflict', current: existing ?? null } };
       }
@@ -289,7 +293,9 @@ export function createFeedbackService(
       request: MessageFeedbackDeleteRequest,
     ): Promise<MessageFeedbackDeleteResult> {
       const checkpoint = durable();
-      const existing = currentFeedbackItems(log.events).get(request.messageId);
+      const existing = currentFeedbackItems(log.events, log.inheritedEventCount).get(
+        request.messageId,
+      );
       if (existing !== undefined) {
         if (request.ifVersion !== existing.version) {
           return { ok: false, error: { code: 'version-conflict', current: existing } };
@@ -304,7 +310,12 @@ export function createFeedbackService(
     // async：驗不過的拋錯走 rejection，不在呼叫當下同步拋。
     async list(log: SessionLog): Promise<MessageFeedbackListResult> {
       durable();
-      return { ok: true, value: { items: [...currentFeedbackItems(log.events).values()] } };
+      return {
+        ok: true,
+        value: {
+          items: [...currentFeedbackItems(log.events, log.inheritedEventCount).values()],
+        },
+      };
     },
 
     // 不等落盤，照 dsh（見檔頭）。

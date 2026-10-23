@@ -178,6 +178,7 @@ import type { LeaseUnavailable, SessionWriteLease, TryLock } from './session-lea
 import {
   assertStoredEventData,
   assertStoredHeaderFields,
+  assertStoredInheritance,
   assertStoredRelationships,
 } from './session-log-validation.js';
 
@@ -1440,10 +1441,18 @@ function locate(directory: string, files: SessionFilenames): SessionLocation {
  * 事件信封不在這裡驗：它在 {@link parseJsonlSessionBody} 逐行驗（壞行照 strict／recoverable 處理，照 dsh `decodeEvent`），
  * core 的 seed（`SessionLog`）再驗一次（dsh 兩層都有）。
  *
+ * 分叉前綴（#1579）排第一：關係驗證要用它回的切點，同 dsh 先在 `restoreReleasedV4Artifact` 驗標記、再跑
+ * `assertReleasedV4Relationships`（`session-format-v3-to-v4/src/validation.ts:70-79`）。跑在尾端復原之後，理由見 {@link assertStoredInheritance}。
+ *
  * @throws {@link SessionCorruptionError} 哪一行、哪一格不對。
  */
-function validateStoredLog(id: string, events: readonly SessionEvent[]): void {
-  assertStoredRelationships(id, events);
+function validateStoredLog(
+  id: string,
+  header: StoredSessionHeader,
+  events: readonly SessionEvent[],
+): void {
+  const cut = assertStoredInheritance(id, header, events);
+  assertStoredRelationships(id, events, cut);
   assertStoredEventData(id, events);
 }
 
@@ -1487,7 +1496,7 @@ async function openStoredSessionForRead(
           location,
         });
         if (options.salvage === true) return events;
-        validateStoredLog(id, events);
+        validateStoredLog(id, header, events);
         const frozen = freezeStoredEvents(events);
         coldLogs.set(id, {
           headerRevision,
@@ -1557,7 +1566,7 @@ async function resumeStoredSession(
         recovery: 'recoverable',
         location,
       });
-      validateStoredLog(id, events);
+      validateStoredLog(id, header, events);
       read = { header, storedFormatVersion, events, validBytes, bodyBytes: body.byteLength };
     }
     const { header, storedFormatVersion, events, validBytes } = read;

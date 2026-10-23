@@ -88,14 +88,22 @@ export interface SubagentLink extends SubagentCatalogData {
  * 父日誌上每一顆 `subagent/catalog` 解成連結，照日誌順序。**一顆都沒有就是空的**——31 以前的日誌、或沒派過子代理，
  * 讀的人照「沒記」表態（「—」），不推論成沒有子代理。
  *
+ * **繼承來的前綴裡的目錄不算**（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）：那是父會話派的子代理。照 dsh 的
+ * `subagentCatalog` 投影（`packages/subagent/subagent/src/catalog.ts:121-126`，`event.seq < inheritedEventCount` 就略過，`687f282e`）。
+ * 往回找派它的呼叫照樣看整份（自己區段的目錄指的呼叫不會在前綴裡，但讀法不必知道這件事）。
+ *
  * @param events - 父那一份日誌的全部事件。
+ * @param inheritedEventCount - 切點（`SessionLog.inheritedEventCount`）；之前的目錄略過。省略即 0。
  * @returns 每一顆的連結。
  */
-export function subagentLinks(events: readonly SessionEvent[]): readonly SubagentLink[] {
+export function subagentLinks(
+  events: readonly SessionEvent[],
+  inheritedEventCount = 0,
+): readonly SubagentLink[] {
   const links: SubagentLink[] = [];
   for (let at = 0; at < events.length; at += 1) {
     const event = events[at]!;
-    if (event.type !== 'subagent/catalog') continue;
+    if (event.type !== 'subagent/catalog' || event.seq < inheritedEventCount) continue;
     const data = event.data;
     let callSeq: number | undefined;
     let turnSeq: number | undefined;

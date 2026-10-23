@@ -73,7 +73,7 @@ function put(turn: number, rating: 'positive' | 'negative', note?: string): Entr
 
 function log(
   entries: readonly Entry[],
-  options: { id?: string; version?: number; parentSession?: string } = {},
+  options: { id?: string; version?: number; parentSession?: string; isSeeded?: true } = {},
 ): LoadedSessionLog {
   const id = options.id ?? 's';
   return {
@@ -82,6 +82,7 @@ function log(
       id,
       version: options.version ?? SESSION_LOG_FORMAT_VERSION,
       ...(options.parentSession !== undefined && { parentSession: options.parentSession }),
+      ...(options.isSeeded !== undefined && { isSeeded: options.isSeeded }),
     },
     events: events(entries),
   };
@@ -89,7 +90,7 @@ function log(
 
 const draft = (
   entries: readonly Entry[],
-  options: { id?: string; version?: number; parentSession?: string } = {},
+  options: { id?: string; version?: number; parentSession?: string; isSeeded?: true } = {},
 ): SessionDrafts => draftSessionLog(log(entries, options));
 
 const candidates = (drafts: SessionDrafts): DraftTurn[] =>
@@ -326,6 +327,16 @@ describe('草稿', () => {
     const root = draft([say('委派'), end], { id: 'root' });
     const sub = draft(same(6), { id: 'root/sub-1', parentSession: 'root' });
     expect(report([root, sub])).toContain('// 起草：2 份日誌（子代理 1 份不起草），候選 0 輪。');
+  });
+
+  it('分叉帶 parentSession 卻不是子代理，照起草（#1579）', () => {
+    const forked = draft([say('分叉之後'), failed('x')], {
+      id: 'forked',
+      parentSession: 'root',
+      isSeeded: true,
+    });
+    expect(forked.subagent).toBeUndefined();
+    expect(report([forked])).toContain('// 起草：1 份日誌（子代理 0 份不起草），候選 1 輪。');
   });
 
   it('goal 續行輪次標出來：prompt 是機器排的', () => {

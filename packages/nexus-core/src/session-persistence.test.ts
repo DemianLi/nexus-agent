@@ -229,6 +229,9 @@ describe('接在註冊表上', () => {
     expect(headers.map((header) => header.id)).toEqual(['root-1', 'root-1/r9']);
     expect(headers[0]?.parentSession).toBeUndefined();
     expect(headers[1]?.parentSession).toBe('root-1');
+    // 新建的子代理一律寫 `origin`（#1579）；root 不寫，也都不寫 `isSeeded`（這一張沒有分叉的生產者）。
+    expect(headers.map((header) => header.origin)).toEqual([undefined, 'subagent']);
+    expect(headers.some((header) => 'isSeeded' in header)).toBe(false);
     expect(headers.every((header) => header.version === SESSION_LOG_FORMAT_VERSION)).toBe(true);
     expect(headers.every((header) => header.cwd === '/w')).toBe(true);
     expect(handles[0]?.written).toHaveLength(1);

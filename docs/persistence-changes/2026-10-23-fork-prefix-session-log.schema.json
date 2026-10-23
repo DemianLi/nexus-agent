@@ -1,0 +1,231 @@
+{
+  "formatVersion": 1,
+  "roots": [
+    {
+      "key": "SessionHeader",
+      "kind": "header",
+      "digest": "eb5bcaa512ec4a442a07dabbe20ac46594b5f651143a54303ce54251d4755a54",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "build",
+                "type": 1,
+                "optional": true
+              },
+              {
+                "name": "configHash",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "createdAt",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "cwd",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "id",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "isSeeded",
+                "type": 8,
+                "optional": true
+              },
+              {
+                "name": "modelEntryId",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "origin",
+                "type": 9,
+                "optional": true
+              },
+              {
+                "name": "parentSession",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "plugins",
+                "type": 10,
+                "optional": true
+              },
+              {
+                "name": "version",
+                "type": 12,
+                "optional": false
+              },
+              {
+                "name": "workspaceRoot",
+                "type": 4,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "commit",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "dirty",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "union",
+            "types": [
+              3,
+              4
+            ]
+          },
+          {
+            "kind": "primitive",
+            "type": "null"
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "union",
+            "types": [
+              3,
+              6
+            ]
+          },
+          {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "literal",
+            "value": "subagent"
+          },
+          {
+            "kind": "array",
+            "element": 11
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "disabled",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "id",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "name",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": 51
+          }
+        ]
+      }
+    },
+    {
+      "key": "event:session/end-seed",
+      "kind": "event",
+      "event": "session/end-seed",
+      "surface": false,
+      "digest": "e436ba3b86f7031927b102f4f361626674b71ed304910e4e8269c03e88530d25",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 2,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 3,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 3,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "inherited",
+                "type": 2,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": "session/end-seed"
+          }
+        ]
+      }
+    }
+  ],
+  "types": []
+}
