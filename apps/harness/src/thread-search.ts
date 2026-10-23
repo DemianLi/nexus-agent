@@ -78,6 +78,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import {
   fromLoggedMessage,
   isMentionHintBlock,
+  readColdSession,
   replayConversation,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
@@ -610,6 +611,8 @@ export class ThreadSearch {
 
 /**
  * 讀一條的 header 與整份本文。**中間壞掉的撿回讀得懂的**（`salvage`），同列表不擋它。header 交回去給 {@link assertSameSource} 比。
+ * 經 `readColdSession`（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)），同 dsh 冷讀一律經 `readColdSessionLog`
+ * （`session-query-sqlite/src/index.ts:522`）：死在一輪中間的那一份在記憶體補平，推得出歷史，不退回整份都收。
  *
  * 列與讀之間那一份變了——被刪掉、或 header 讀不懂了（別的行程以更新的版本續接過）——是 `undefined`：
  * 不讓一條拖垮整次搜尋。
@@ -619,8 +622,8 @@ async function readForSearch(
   threadId: string,
 ): Promise<{ header: StoredSessionHeader; events: readonly SessionEvent[] } | undefined> {
   try {
-    const opened = await store.open(threadId, 'read');
-    return { header: opened.header, events: await opened.read({ salvage: true }) };
+    const { header, events } = await readColdSession(store, threadId, { salvage: true });
+    return { header, events };
   } catch (error: unknown) {
     if (
       error instanceof SessionNotFoundError ||
