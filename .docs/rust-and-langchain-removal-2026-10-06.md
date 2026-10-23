@@ -6,6 +6,8 @@
 
 ## 結論
 
+> **2026-10-22 起，決定 ① 的前提已過期**：本篇寫作時 nexus 沒有 import Cordis，但 10-11 [#1385](https://github.com/DemianLi/nexus-agent/issues/1385) 已改用 vendor 的 Cordis。底座換不換 Rust 的重新評估見 [`nexus-cordis-rust-feasibility-2026-10-22.md`](nexus-cordis-rust-feasibility-2026-10-22.md)。
+
 **這個問題其實是三個決定，不能一起答。** 它們的證據、成本與可逆性都不同：
 
 | 決定 | 建議 | 一句話理由 |
