@@ -156,9 +156,10 @@
  *
  * - **「怎麼關推理」放在型錄條目**（`off` 那一級加 `compat.chatTemplateKwargs`）：照 `llm-pi-ai` 的形狀
  *   （`packages/llm/llm-pi-ai/src/catalog.ts:389-396`、`:600-607`）。寫法跟模型 id 一起換，所以住在同一筆。
- * - **「標題要關推理」依用途在程式裡決定**：照 dsh 的 DeepSeek adapter 對 `purpose: 'session-title'` 在程式裡關思考
- *   （`packages/llm/llm-deepseek/src/serialize.ts:146`，`477b4f4`）；`llm-pi-ai` 自己不因用途關推理。標題程式只表明
- *   用途，由 `createLiveModel` 決定帶什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
+ * - **「標題要關推理」依用途在程式裡決定**：結果等價於 dsh 標題程式選最低一級推理強度
+ *   （僅限條目宣告了 `off` 的：沒宣告的 dsh 取 `efforts[0]`，nexus 紀錄和送出都不做，理由 1，見 `model-catalog.ts` 檔頭；`session-title-first-prompt-llm/src/index.ts:74-76`、`session-title-llm/src/index.ts:252-258`，1517a4db；`477b4f4` 時機制是
+ *   `llm-deepseek/src/serialize.ts:146` 依 `purpose` 關思考，1517a4db 起搬到 provider 端讀 `options.reasoningEffort`，`serialize.ts:147`，#1573）。
+ *   標題程式只表明用途，由 `createLiveModel` 決定帶什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
  *
  * **偏離的一格**：pi-ai 在非 `off` 的等級底下會把 `thinking.enabled` 解成 `true` 一併送出，我們的主請求不送
  * `chat_template_kwargs`（今天的送法）。沒有量過兩者等價——這台機器沒有 key，量不了——所以保留今天的送法，見

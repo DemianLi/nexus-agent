@@ -4574,7 +4574,7 @@
       "kind": "event",
       "event": "session/title-llm-request",
       "surface": false,
-      "digest": "110f4b79309a43abe89a2c6656c3a0fca4081831cc8543d8f92219b9e980231d",
+      "digest": "0d2720e89f07b8c0aff1363e57c66b15356dcf70ab3561bea82bbf2054112cee",
       "schema": {
         "root": 0,
         "nodes": [
@@ -4626,6 +4626,11 @@
                 "name": "messages",
                 "type": 4,
                 "optional": false
+              },
+              {
+                "name": "reasoningEffort",
+                "type": 6,
+                "optional": true
               },
               {
                 "name": "route",
@@ -6705,6 +6710,13 @@
       "sources": []
     },
     {
+      "digest": "0d2720e89f07b8c0aff1363e57c66b15356dcf70ab3561bea82bbf2054112cee",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:1426"
+      ]
+    },
+    {
       "digest": "101ce0bc85d4ecb3d764bbaaee8987ed9fb8bc196f60330edcf1fbad666f6888",
       "names": [],
       "sources": [
@@ -6723,13 +6735,6 @@
       "names": [],
       "sources": [
         "packages/nexus-core/src/feedback.ts:103"
-      ]
-    },
-    {
-      "digest": "110f4b79309a43abe89a2c6656c3a0fca4081831cc8543d8f92219b9e980231d",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:1426"
       ]
     },
     {
@@ -8223,6 +8228,13 @@
       "sources": []
     },
     {
+      "digest": "cad87e2fafc49b76225590418d3e930a4deba7ff64a666b3e2c0d72c4afac9c9",
+      "names": [],
+      "sources": [
+        "apps/harness/src/session-title.ts:254"
+      ]
+    },
+    {
       "digest": "cc0ee3cc75b2b200b688200d55dcbba5424dac8e02b42fa47815757e7711ed86",
       "names": [],
       "sources": []
@@ -8354,13 +8366,6 @@
       "names": [],
       "sources": [
         "packages/nexus-core/src/session-log.ts:1426"
-      ]
-    },
-    {
-      "digest": "da16e584940e90f6e6fed1aa336929509a7ff7ef80b4d1308c4b2b5993474845",
-      "names": [],
-      "sources": [
-        "apps/harness/src/session-title.ts:254"
       ]
     },
     {

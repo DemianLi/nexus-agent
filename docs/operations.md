@@ -2026,7 +2026,8 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   `finish_reason` 不是 `stop`（例如推理吃光上限）、要求呼叫工具、正規化後是空的、輸入超過 `maxInputBytes`，
   都算失敗。
 - **CLI 一次性的呼叫多半等不到它**：主回覆收完行程就收尾，還沒回來的標題請求會被中止（不講話），只留退回標題。
-- 送出去的系統提示與訊息原文記在日誌的 `session/title-llm-request`，想知道模型看到什麼去讀那一顆。
+- 送出去的系統提示與訊息原文記在日誌的 `session/title-llm-request`，想知道模型看到什麼去讀那一顆。型錄條目宣告了 `off`（`reasoningEfforts` 有 `off` 這個鍵，值是 `null` 也算）時，那一顆多記一格 `"reasoningEffort": "off"`；沒宣告就沒有這一格。這一格只是紀錄，送出去的請求怎麼關推理看條目的 `compat`，與它無關（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
+- **模型回的文字只取第一個非空行**，並剝掉包住整行的 `*`／`**`／`***`（`**甲** 與 **乙**` 這種中間還有同樣記號的不剝）。模型不聽「只回一行」、在標題後面接了一段說明時，說明不會進側欄。系統提示的最後一行要它在沒什麼可命名時（例如只打招呼）也給一個簡短標題，不要解釋（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
 
 **`thread-search`**（[#631](https://github.com/DemianLi/nexus-agent/issues/631)）讓側欄按**內容**搜尋以前的會話，
 不只比標題。**出廠不開**，同 dsh 的產品組裝：要不要多背一份搜尋索引是部署自己的選擇。多人共用的主機上沒有「整台

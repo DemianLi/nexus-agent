@@ -1,0 +1,150 @@
+{
+  "formatVersion": 1,
+  "roots": [
+    {
+      "key": "event:session/title-llm-request",
+      "kind": "event",
+      "event": "session/title-llm-request",
+      "surface": false,
+      "digest": "0d2720e89f07b8c0aff1363e57c66b15356dcf70ab3561bea82bbf2054112cee",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 9,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 10,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "maxTokens",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "messageSeqs",
+                "type": 3,
+                "optional": false
+              },
+              {
+                "name": "messages",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "reasoningEffort",
+                "type": 6,
+                "optional": true
+              },
+              {
+                "name": "route",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "system",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "titleProvider",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "array",
+            "element": 2
+          },
+          {
+            "kind": "array",
+            "element": 5
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "content",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "role",
+                "type": 7,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "literal",
+            "value": "user"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "model",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "provider",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "literal",
+            "value": "session/title-llm-request"
+          }
+        ]
+      }
+    }
+  ],
+  "types": []
+}

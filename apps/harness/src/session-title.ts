@@ -258,6 +258,11 @@ declare module '@nexus/core' {
       readonly system: string;
       readonly messages: readonly SessionTitleLlmMessage[];
       readonly maxTokens: number;
+      /**
+       * 這一次請求的推理強度（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)，dsh 1517a4db `session-title-llm/src/index.ts:267-275`：
+       * 有 effort 才多記這一格）。目前只會是 `'off'`：標題那一顆的型錄條目宣告了 `off`。沒宣告就**沒有這個 key**。只進日誌的資訊欄位，不影響送出的請求。
+       */
+      readonly reasoningEffort?: string;
     };
   }
 }
