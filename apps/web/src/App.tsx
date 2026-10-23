@@ -430,7 +430,10 @@ function ConversationView({
       conversation.state.status,
       draft,
       steerableItems(conversation.state.inbox).length,
-    ) && !steeringAll.current;
+    ) &&
+    !steeringAll.current &&
+    // 等命令清單認的期間不收（dsh `InputBar.tsx:156` 的 `canSteerQueue` 排除 `machineBusy`，#1929）。
+    !adjudicating;
   const steerQueue = () => {
     if (steeringAll.current) return;
     steeringAll.current = true;
@@ -797,13 +800,16 @@ function ConversationView({
                   }
                   // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。按下去那一刻就定。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
-                  const submit = (isCommand: boolean) => {
-                    // 草稿只清掉送出去的那一段：等清單的期間又打的字留著（dsh 的 `retainSuffixOf`）。
-                    setDraft((current) =>
-                      current.startsWith(text) ? current.slice(text.length) : current,
-                    );
+                  // `route` 是等清單認出來的結果（沒認就是 `undefined`），一路交給 `send`，不再認第二次（#1929）。等的期間
+                  // 輸入框鎖著，這裡讀到的草稿、附件、標記就是畫面上的值。
+                  const submit = (route: 'command' | 'sentence' | undefined) => {
+                    setDraft('');
                     // 命令不帶提及（留著，同附件）；否則這一句送出就用掉它。開頭是不是命令照送出路由認（#1929）：技能的
                     // `/deploy 今天` 是一句話，照樣帶。
+                    const isCommand =
+                      route === undefined
+                        ? namesCommand(conversation.slashCommands, text)
+                        : route === 'command';
                     const mentioned = isCommand ? undefined : mentionedAgent;
                     if (mentioned !== undefined) setMentionedAgent(undefined);
                     // 只有功能開著才帶附件；`/` 開頭的命令也帶（#733：命令有宣告收附件才收，其餘伺服器回錯誤、草稿與附件留著），
@@ -823,7 +829,7 @@ function ConversationView({
                     void (async () => {
                       const mention = mentioned === undefined ? undefined : toMention(mentioned);
                       if (items.length === 0) {
-                        return conversation.send(text, mode, undefined, mention, requestId);
+                        return conversation.send(text, mode, undefined, mention, requestId, route);
                       }
                       setSendingAttachments(true);
                       try {
@@ -848,6 +854,7 @@ function ConversationView({
                           prepared.attachments,
                           mention,
                           requestId,
+                          route,
                         );
                         // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
                         if (rejected === undefined) {
@@ -882,8 +889,9 @@ function ConversationView({
                       }
                     });
                   };
-                  // 開頭像命令的那一行先等命令清單認（dsh 的 `adjudicate`）：等的期間 `canSend` 是關的，Enter 不動作、草稿不動；
-                  // 認完才照命令或一句話送。抓不到清單就說原因，草稿、附件、標記都沒動過。光打 `/feedback` 是開對話框，不用認。
+                  // 開頭像命令的那一行先等命令清單認（dsh 的 `adjudicate`）：等的期間 `canSend` 是關的、輸入框整個鎖住（`locked`），
+                  // Enter 不動作、草稿不動；認完才照命令或一句話送。抓不到清單就說原因，草稿、附件、標記都沒動過。光打
+                  // `/feedback` 是開對話框，不用認。
                   if (commandToken(text) !== undefined && text.trim() !== FEEDBACK_COMMAND_LINE) {
                     setAdjudicating(true);
                     void conversation.adjudicate(text).then((verdict) => {
@@ -893,11 +901,11 @@ function ConversationView({
                         toast.error('這一句沒送出去', { description: verdict.message });
                         return;
                       }
-                      submit(verdict.kind === 'command');
+                      submit(verdict.kind);
                     });
                     return;
                   }
-                  submit(namesCommand(conversation.slashCommands, text));
+                  submit(undefined);
                 }}
                 commands={commands}
                 skills={conversation.skills}
@@ -953,6 +961,8 @@ function ConversationView({
                   void conversation.send(line);
                   return true;
                 }}
+                // 一行在等命令清單認的期間整個鎖住：文字框唯讀、附件與 @ 標記改不了（dsh `InputBar.tsx:139-156`，#1929）。
+                locked={adjudicating}
                 // **一輪在跑時才出現**。停在等人時輸入框被面板換掉了（§4.3）：核准面板沒有停止（#376 第 10、11 條），
                 // 提問面板的停止是它自己的 ❌。伺服器只回受理，停下來的事實走下行，所以按下去不自己改狀態。任何分頁
                 // 都按得動，不查是誰起的這一輪（#265 的 Q3）。

@@ -1381,6 +1381,31 @@ describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#
     expect(fake.sent).toEqual([]);
   });
 
+  it('等清單認的期間文字框唯讀：草稿照樣看得到、打字不進去；認完才放開（dsh `editable` 排除 `machineBusy`）', async () => {
+    seq = 0;
+    const fake = fakeClient([], { commands: [planCommand] });
+    let arrive: (() => void) | undefined;
+    const slashList: WireClient['slashList'] = () =>
+      new Promise((resolve) => {
+        arrive = () => resolve({ kind: 'ok', commands: [planCommand] });
+      });
+    render(<App client={{ ...fake.client, slashList }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    await waitFor(() => expect(arrive).toBeDefined());
+    expect(input().readOnly).toBe(false);
+
+    sendLine('/plna 試試');
+    expect(input().readOnly).toBe(true);
+    expect(input().value).toBe('/plna 試試');
+    fireEvent.change(input(), { target: { value: '/plna 改了' } });
+    expect(input().value).toBe('/plna 試試');
+
+    arrive!();
+    await waitFor(() => expect(fake.sent).toEqual(['/plna 試試']));
+    await waitFor(() => expect(input().readOnly).toBe(false));
+    expect(input().value).toBe('');
+  });
+
   it('命令清單抓失敗：送出時重抓一次，還是失敗才退回、說出原因；不是 / 開頭的照常送', async () => {
     seq = 0;
     const fake = fakeClient([], { commands: [planCommand] });
@@ -6213,6 +6238,81 @@ describe('附件送出（#733、#732）', () => {
       expect(screen.getByRole('button', { name: '移除 c.pdf' })).toBeTruthy();
     });
 
+    /** 命令清單到不了、直到測試叫它到（#1929）：開頁那一次就卡在途。 */
+    function heldList() {
+      let arrive: (() => void) | undefined;
+      const slashList: WireClient['slashList'] = () =>
+        new Promise((resolve) => {
+          arrive = () => resolve({ kind: 'ok', commands: [{ name: 'goal', description: 'goal' }] });
+        });
+      return { slashList, arrive: () => arrive!() };
+    }
+
+    it('等清單認的期間：移除、加入、拖放附件都不動作；放行後送出的附件就是畫面上那些（#1929，dsh facade 拒收）', async () => {
+      const { client, calls, uploads } = withSlash(() => ({ kind: 'success', command_id: 'c' }));
+      const held = heldList();
+      render(<App client={{ ...client, slashList: held.slashList }} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('a.pdf'), png('b.png')]);
+      send('/goal 照附件做');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(calls).toHaveLength(0);
+
+      fireEvent.click(screen.getByRole('button', { name: '移除 a.pdf' }));
+      addFiles([png('c.png')]);
+      fireEvent.dragEnter(window, { dataTransfer: { types: ['Files'] } });
+      expect(screen.queryByTestId('drop-overlay')).toBeNull();
+      // 照樣接住（不讓瀏覽器把檔案開成新頁），只是不收。
+      expect(
+        fireEvent.drop(window, { dataTransfer: { types: ['Files'], files: [png('d.png')] } }),
+      ).toBe(false);
+      expect(screen.getByRole('button', { name: '加入附件' }).hasAttribute('disabled')).toBe(true);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(chips()).toHaveLength(2);
+
+      held.arrive();
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toEqual({
+        line: '/goal 照附件做',
+        attachments: [
+          { type: 'file', receiptId: 'r-a.pdf' },
+          { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'b.png' },
+        ],
+      });
+      expect(uploads.map((upload) => upload.name)).toEqual(['a.pdf']);
+      await waitFor(() => expect(chips()).toHaveLength(0));
+      expect(screen.getByRole('button', { name: '加入附件' }).hasAttribute('disabled')).toBe(false);
+    });
+
+    it('帶附件等清單時換到新對話：不上傳、不送；清單後來到也一樣（dsh 的 release）', async () => {
+      const { client, calls, uploads, runStart } = withSlash(() => ({
+        kind: 'success',
+        command_id: 'c',
+      }));
+      const held = heldList();
+      render(<App client={{ ...client, slashList: held.slashList }} />);
+      await screen.findByPlaceholderText('說點什麼…');
+      // 這條講過話，「新對話」才會真的換一條（空白的留在原地，#313）。
+      send('先講一句');
+      await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+
+      addFiles([pdf('a.pdf')]);
+      send('/goal 照附件做');
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+      await waitFor(() => expect(input().value).toBe(''));
+      expect(chips()).toHaveLength(0);
+
+      held.arrive();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(uploads).toHaveLength(0);
+      expect(calls).toHaveLength(0);
+      expect(runStart).toHaveBeenCalledTimes(1);
+      // 靜默：不跳中止的原因（toast 跨測試留著，所以只認這一句；沒給 reason 時是瀏覽器的 AbortError）。
+      expect(screen.queryByText(/aborted|不等命令清單了/u)).toBeNull();
+    });
+
     it('帶附件的命令斷在網路層：照舊說沒送出去，不說原樣重送不會重複（命令沒有請求編號，#1335）', async () => {
       const { client, calls } = withSlash(() => {
         throw new TypeError('命令斷了（#1335 toast）');
@@ -6556,6 +6656,35 @@ describe('@子代理 提及（#328）', () => {
     // 命令收下了：不是「沒送出去」，草稿不放回來。
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(input().value).toBe('');
+  });
+
+  it('等清單認的期間 @ 標記改不了：拿不掉、選單挑不了；放行後帶的是畫面上那一個（#1929）', async () => {
+    let arrive: (() => void) | undefined;
+    const slashList: WireClient['slashList'] = () =>
+      new Promise((resolve) => {
+        arrive = () =>
+          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+      });
+    const { runStart } = await ready(supported, undefined, slashList);
+    await pick('@');
+    type('/deploy 今天');
+    fireEvent.keyDown(input(), { key: 'Escape' });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(runStart).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: '取消委派給 explorer' }));
+    expect(chip()?.textContent).toBe('@explorer');
+    // 草稿改不動，`@` 選單開不起來；就算開著，挑了也不換。
+    type('@rev');
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(screen.queryByRole('dialog', { name: '@ 選單' })).toBeNull();
+    expect(chip()?.textContent).toBe('@explorer');
+
+    arrive!();
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![1]).toBe('/deploy 今天');
+    expect(runStart.mock.calls[0]![2]?.mention).toEqual({ kind: 'subagent', name: 'explorer' });
   });
 
   it('開頭不是命令的 /名字 是一句話：帶標記、也用掉它（#1929）', async () => {

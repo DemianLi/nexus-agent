@@ -267,7 +267,7 @@ export interface Conversation {
    * 錯誤」；「不認得這個命令」只剩清單上有、伺服器卻說不認得的那一種。開頭像命令的那一行要等到這條線的命令清單才分得出來
    * （照 dsh 的 strong-wait，`lib/command-directory.ts`）：清單在途就等它；之前抓失敗就當場重抓一次；等到的還是失敗才回
    * {@link SendRejected}（{@link commandsFailedText}），不靜默送給模型；等的時候畫面卸載就靜靜回 `undefined`。認的那一道同
-   * {@link Conversation.adjudicate}，畫面要在等的期間擋住下一次送出，先自己叫那一個。
+   * {@link Conversation.adjudicate}，畫面要在等的期間擋住下一次送出，先自己叫那一個，再把結果帶進 `route`，這裡就不再認。
    *
    * **一句話送出去不畫任何東西**（#645）：伺服器收下就進送出佇列，開跑那一刻才由 `inbox` 的 `claimed` 畫人的泡泡。
    * 伺服器沒收下（回錯誤或這一趟就斷了）時回 {@link SendRejected}，呼叫端把草稿放回去並說出原因；斜線命令與
@@ -296,6 +296,7 @@ export interface Conversation {
     attachments?: readonly PromptAttachment[],
     mention?: SubagentMention,
     requestId?: string,
+    route?: 'command' | 'sentence',
   ): Promise<SendRejected | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
@@ -873,6 +874,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       attachments?: readonly PromptAttachment[],
       mention?: SubagentMention,
       requestId?: string,
+      route?: 'command' | 'sentence',
     ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       const hasAttachments = attachments !== undefined && attachments.length > 0;
@@ -892,7 +894,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       // 打錯的 `/plna` 都送給模型。分得出來之前照 dsh 等（`matchEnter` 的 strong-wait）：清單在途就等它、之前失敗就
       // 重抓；等到的還是失敗才退回、說出原因，草稿與附件原樣留著（「never a silent downgrade」）。
       if (commandToken(trimmed) !== undefined) {
-        const verdict = await adjudicate(trimmed);
+        // 呼叫端已經認過（`route`）就照它，不再認第二次：兩次之間剛好重連的話，結果可能跟呼叫端決定標記時不同。
+        const verdict: Adjudication =
+          route === undefined ? await adjudicate(trimmed) : { kind: route };
         if (verdict.kind === 'released') return undefined;
         if (verdict.kind === 'failed') return { message: verdict.message };
         if (verdict.kind === 'command') {

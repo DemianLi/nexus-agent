@@ -196,6 +196,37 @@ describe.each([false, true])(
       expect(fake.started).toEqual([]);
     });
 
+    it('帶了 route 就照它走，不再認一次（App 認過的結果，PM N-c）', async () => {
+      const fake = scriptedClient(
+        async () => ({ kind: 'ok', commands: [plan] }),
+        async () => ({ kind: 'ok', skills: [] }),
+      );
+      const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
+      await tick();
+      expect(result.current.slashCommands).toEqual([plan]);
+      const listed = fake.client.slashList.mock.calls.length;
+
+      // 清單上有 plan，但呼叫端認的是一句話（例如認完之後剛好重連換了清單）：照呼叫端的。
+      await act(async () => {
+        await result.current.send('/plan', undefined, undefined, undefined, undefined, 'sentence');
+      });
+      expect(fake.started).toEqual(['/plan']);
+      expect(fake.slashed).toEqual([]);
+
+      await act(async () => {
+        await result.current.send(
+          '/deploy 今天',
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          'command',
+        );
+      });
+      expect(fake.slashed).toEqual(['/deploy 今天']);
+      expect(fake.client.slashList).toHaveBeenCalledTimes(listed);
+    });
+
     it('重連時技能清單先清掉：新的還沒到，選單不留上一條線的技能', async () => {
       const second = deferred<Awaited<ReturnType<WireClient['skillList']>>>();
       let phase: 'first' | 'second' = 'first';

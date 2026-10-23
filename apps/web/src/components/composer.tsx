@@ -123,6 +123,7 @@ export function Composer({
   attachments,
   footerStart,
   agentMention,
+  locked = false,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -191,6 +192,12 @@ export function Composer({
    * 輸入框上方也沒有標記。清單要穩定（它在查詢的 effect 依賴裡）。
    */
   readonly agentMention?: AgentMentionState;
+  /**
+   * 鎖住草稿（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）：開頭像命令的那一行在等命令清單認。照 dsh
+   * `InputBar` 的 `machineBusy`（`skeleton/InputBar.tsx:139-156`）與 `facade.ts:308-337`：文字框唯讀、草稿照樣看得到；附件
+   * 不能加、不能移除，貼上與拖放也不收；`@` 標記不能換也不能拿掉。送出時讀到的才一定是畫面上的值。
+   */
+  readonly locked?: boolean;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -201,9 +208,24 @@ export function Composer({
   // 選了之後要把游標放回去的位置：草稿由呼叫端更新，要等它畫出來才放得進去。
   const pendingCaret = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const onAddFiles = attachments?.onAdd;
-  // 沒給 `attachments` 時整頁拖放什麼都不掛（拖進來的檔案維持瀏覽器自己的行為）。
-  const dropping = useFileDrop(onAddFiles !== undefined, (files) => onAddFiles?.(files));
+  const addFiles = attachments?.onAdd;
+  const onAddFiles =
+    addFiles === undefined
+      ? undefined
+      : (files: File[]) => {
+          if (!locked) addFiles(files);
+        };
+  // 沒給 `attachments` 時整頁拖放什麼都不掛（拖進來的檔案維持瀏覽器自己的行為）。鎖住時照樣接住（不然瀏覽器會把
+  // 檔案開成新頁、整頁跳走），只是不收、也不出「放開就加入」的提示。
+  const dragging = useFileDrop(addFiles !== undefined, (files) => onAddFiles?.(files));
+  const dropping = dragging && !locked;
+  // SG 的 `textareaProps` 不收 `readOnly`：從 ref 設在元素上（vendor 檔不動）。
+  useLayoutEffect(() => {
+    if (textarea.current !== null) textarea.current.readOnly = locked;
+  }, [locked, textarea]);
+  const selectAgent = (agent: Parameters<AgentMentionState['onSelect']>[0]) => {
+    if (!locked) agentMention?.onSelect(agent);
+  };
 
   const at = Math.min(caret, draft.length);
   // 先判 `@` 再判 `/`（dsh `detectTrigger`）：`@/` 是一段路徑，不是命令。
@@ -337,6 +359,7 @@ export function Composer({
   }, [draft, textarea]);
 
   function edit(next: string, at: number) {
+    if (locked) return;
     onDraftChange(next);
     setCaret(at);
     setHighlight(0);
@@ -369,7 +392,7 @@ export function Composer({
     if (row.source === 'agent') {
       // 不進草稿：`@` 那一段拿掉、標記換成這一個（取代前一個）。
       const result = applyAgentPick(draft, mention);
-      agentMention?.onSelect(row.agent);
+      selectAgent(row.agent);
       pendingCaret.current = result.caret;
       edit(result.draft, result.caret);
       return;
@@ -549,7 +572,7 @@ export function Composer({
             // 游標在最前面、沒選一段字時退格：整顆刪掉 `@子代理` 標記（一按就刪，不學 SG demo 的先選再刪）。
             onBackspaceAtStart={() => {
               if (agentMention?.selected === undefined) return false;
-              agentMention.onSelect(undefined);
+              selectAgent(undefined);
               return true;
             }}
             {...(onAddFiles === undefined
@@ -562,6 +585,7 @@ export function Composer({
                       size="icon"
                       className="text-muted-foreground hover:text-foreground size-11 shrink-0 lg:size-8"
                       aria-label="加入附件"
+                      disabled={locked}
                       onClick={() => fileInput.current?.click()}
                     >
                       <Plus />
@@ -576,13 +600,15 @@ export function Composer({
                       {agentMention?.selected !== undefined && (
                         <AgentMentionChip
                           agent={agentMention.selected}
-                          onRemove={() => agentMention.onSelect(undefined)}
+                          onRemove={() => selectAgent(undefined)}
                         />
                       )}
                       {attachments !== undefined && attachments.items.length > 0 && (
                         <AttachmentRail
                           items={attachments.items}
-                          onRemove={attachments.onRemove}
+                          onRemove={(id) => {
+                            if (!locked) attachments.onRemove(id);
+                          }}
                           uploads={attachments.uploads}
                           onCancelUpload={attachments.onCancelUpload}
                         />
