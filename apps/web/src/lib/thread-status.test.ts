@@ -8,6 +8,7 @@ import {
   pendingKindOf,
   reduceThreadStatus,
   rowStatus,
+  withPlaceholders,
 } from '@/lib/thread-status';
 import type { ThreadStatusAction, ThreadStatusState } from '@/lib/thread-status';
 
@@ -289,5 +290,67 @@ describe('有效空白（#1600）', () => {
       listed(blankRow('B')),
     );
     expect(effectiveBlank(state, blankRow('B'))).toBe(true);
+  });
+});
+
+/** 分叉的佔位（#1581 刀 2，dsh `manager.ts` 的 `fork` 與 `applyMutation` 的 `placeholder`）。 */
+describe('分叉的佔位（#1581）', () => {
+  const child: ThreadSummary = {
+    threadId: '子',
+    updatedAt: 5,
+    running: false,
+    blank: true,
+    parentThreadId: '來源',
+  };
+  const placeholder: ThreadStatusAction = { type: 'placeholder', summary: child };
+  const requested: ThreadStatusAction = { type: 'list-requested' };
+  const rows = (state: ThreadStatusState, ...items: ThreadSummary[]) =>
+    withPlaceholders(items, state.placeholders);
+
+  it('沒有刷新在途：馬上放在最前面，帶 parentThreadId；算講過，側欄不會當空白藏起來', () => {
+    const state = run('來源', listed(item('來源')), placeholder);
+    expect(rows(state, item('來源')).map((row) => row.threadId)).toEqual(['子', '來源']);
+    expect(rows(state, item('來源'))[0]?.parentThreadId).toBe('來源');
+    expect(effectiveBlank(state, child)).toBe(false);
+  });
+
+  it('刷新在途時分叉：晚到的舊清單裡沒有子 thread，重放把佔位放回去', () => {
+    const state = run('來源', requested, placeholder, listed(item('來源')));
+    expect(rows(state, item('來源')).map((row) => row.threadId)).toEqual(['子', '來源']);
+    expect(effectiveBlank(state, child)).toBe(false);
+    expect(state.mutations).toBeUndefined();
+  });
+
+  it('分叉之後才送的清單：清單就是 server 講的話，佔位清掉；帶著子 thread 回來時只有一列', () => {
+    const fromServer: ThreadSummary = { ...child, blank: false, updatedAt: 9 };
+    const state = run('來源', placeholder, requested, listed(fromServer, item('來源')));
+    expect(state.placeholders).toEqual([]);
+    expect(rows(state, fromServer, item('來源'))).toEqual([fromServer, item('來源')]);
+  });
+
+  it('清單上已經有那一列：不多加一列，只補 parentThreadId；blank 只降不升', () => {
+    const listedBlank: ThreadSummary = {
+      threadId: '子',
+      updatedAt: 9,
+      running: false,
+      blank: true,
+    };
+    const listedFull: ThreadSummary = { ...listedBlank, blank: false };
+    const state = run('來源', placeholder);
+    expect(rows(state, listedBlank)).toEqual([{ ...listedBlank, parentThreadId: '來源' }]);
+    // 佔位是 `blank: true`，清單已經說不空白的不能被它抬回空白。
+    expect(rows(state, listedFull)).toEqual([{ ...listedFull, parentThreadId: '來源' }]);
+  });
+
+  it('清單上的 parentThreadId 不被佔位蓋掉；沒有佔位時原樣回傳同一份', () => {
+    const own: ThreadSummary = { ...child, parentThreadId: '別條', blank: false };
+    expect(rows(run('來源', placeholder), own)[0]?.parentThreadId).toBe('別條');
+    const items = [item('A')];
+    expect(withPlaceholders(items, [])).toBe(items);
+  });
+
+  it('同一條放兩次只有一列；重接只清紀錄，不清佔位', () => {
+    const state = run('來源', placeholder, placeholder, { type: 'connected' });
+    expect(state.placeholders).toEqual([child]);
   });
 });
