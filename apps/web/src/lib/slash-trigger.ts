@@ -9,9 +9,12 @@
  * - 選了之後照 `service.ts` 的 `dispatch` 的順序：有裝飾的命令（光打名字就另有動作，nexus 目前只有 `/feedback`
  *   開回饋框）直接執行；帶參數的在草稿填上 `/名稱 ` 等人打參數（dsh 的 claim；nexus 沒有 claim 的標籤，用文字
  *   表達）；不帶參數的從草稿拿掉那一段、直接執行。
+ * - 技能那一組（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）照 `ui-skill/src/client/index.ts` 的 `/` 來源
+ *   （本機 clone `687f282e`）：排在命令後面（`order: 2`），用同一個 `rankByName` 排；句中也列（技能的叫用在句中也認）；
+ *   只給人叫的在描述前面加標記；選了在草稿落成字面的 `/名字 `，跟著那句話一起送給模型。
  */
 
-import type { SlashDescriptor } from '@nexus/wire';
+import type { SkillEntry, SlashDescriptor } from '@nexus/wire';
 
 export interface SlashHit {
   /** `/` 到游標之間的字。 */
@@ -130,6 +133,38 @@ export function slashCandidates(
   return rankByName(visible, hit.query);
 }
 
+/** 技能描述前面的標記：只能由人用 `/名字` 叫，模型自己不會用（dsh `menu.userOnly`）。 */
+export const USER_ONLY_MARK = '只給人叫';
+
+/** `/` 選單的一列：命令或技能。 */
+export type SlashCandidate =
+  | { readonly kind: 'command'; readonly command: SlashDescriptor }
+  | { readonly kind: 'skill'; readonly skill: SkillEntry };
+
+/** 這個片段的整份選單：命令一組在前、技能一組在後，各自排序（dsh 的 `order` 1、2）。 */
+export function slashMenu(
+  commands: readonly SlashDescriptor[],
+  skills: readonly SkillEntry[],
+  hit: SlashHit,
+): readonly SlashCandidate[] {
+  return [
+    ...slashCandidates(commands, hit).map((command) => ({ kind: 'command' as const, command })),
+    ...rankByName(skills, hit.query).map((skill) => ({ kind: 'skill' as const, skill })),
+  ];
+}
+
+/** 選單裡的鍵：命令與技能可能同名（路由以命令為準，選單兩組都列），所以帶上組別。 */
+export function slashCandidateKey(candidate: SlashCandidate): string {
+  return candidate.kind === 'command'
+    ? `command:${candidate.command.name}`
+    : `skill:${candidate.skill.name}`;
+}
+
+/** 列上那行說明：只給人叫的技能在描述前面加 {@link USER_ONLY_MARK}（dsh `index.ts:183`）。 */
+export function skillDescription(skill: SkillEntry): string {
+  return skill.modelInvocable ? skill.description : `${USER_ONLY_MARK} · ${skill.description}`;
+}
+
 export interface SlashPick {
   readonly draft: string;
   readonly caret: number;
@@ -154,4 +189,11 @@ export function applySlashPick(
     return { draft: before + token + after, caret: before.length + token.length };
   }
   return { draft: before + after, caret: before.length, run: `/${command.name}` };
+}
+
+/** 選了技能：草稿落成字面的 `/名字 `，不執行——它是那句話的一部分，跟著送給模型（dsh 的 plain-text reference）。 */
+export function applySkillPick(draft: string, hit: SlashHit, skill: SkillEntry): SlashPick {
+  const before = draft.slice(0, hit.start);
+  const token = `/${skill.name} `;
+  return { draft: before + token + draft.slice(hit.end), caret: before.length + token.length };
 }
