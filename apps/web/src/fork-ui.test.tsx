@@ -4,6 +4,7 @@ import type {
   ThreadForkResult,
   ThreadListResult,
   ThreadRenameResult,
+  ThreadSummary,
   WireClient,
 } from '@nexus/wire';
 import { THREAD_AT_CAPACITY, TITLE } from '@nexus/wire';
@@ -108,6 +109,7 @@ function fakeClient(
 ) {
   const calls: string[] = [];
   const events = options.events ?? source({ title: '計劃（1）' });
+  const forked: ThreadSummary[] = [];
   const listed: ThreadListResult = {
     unreadable: 0,
     items: [
@@ -142,9 +144,10 @@ function fakeClient(
     feedbackDelete: async () => ({ kind: 'rejected', code: 'not_supported', message: '沒有接' }),
     feedbackList: async () => ({ kind: 'rejected', code: 'not_supported', message: '沒有接' }),
     feedbackRecord: async () => ({ kind: 'rejected', code: 'not_supported', message: '沒有接' }),
+    // 同真的 server：子 thread 在回分叉之前就落了盤，之後的清單裡有它（改名不一定追上，標題照落盤的那份）。
     listThreads: async () => {
       calls.push('list');
-      return { kind: 'ok', result: listed };
+      return { kind: 'ok', result: { ...listed, items: [...forked, ...listed.items] } };
     },
     threadHistory: async () => ({
       kind: 'ok',
@@ -152,7 +155,15 @@ function fakeClient(
     }),
     threadFork: async (threadId, messageId) => {
       calls.push(`fork ${threadId} ${messageId}`);
-      return options.fork === undefined ? ok({ threadId: '子' }) : options.fork();
+      if (options.fork !== undefined) return options.fork();
+      forked.push({
+        threadId: '子',
+        updatedAt: 2_000,
+        running: false,
+        blank: false,
+        parentThreadId: threadId,
+      });
+      return ok({ threadId: '子' });
     },
     threadRename: async (threadId, title) => {
       calls.push(`rename ${threadId} ${title}`);
@@ -364,6 +375,11 @@ describe('分出去之後', () => {
     expect(card.textContent).toContain(FORK_RENAME_FAILED_TEXT);
     await waitFor(() => expect(remembered()).toBe('子'));
     expect(fake.calls).toContain('open 子');
+    // 子 thread 照樣留在清單上，記著來源。
+    const list = await screen.findByRole('group', { name: '以前的會話' });
+    await waitFor(() =>
+      expect(list.querySelector('[data-parent-thread-id="來源"]')).not.toBeNull(),
+    );
   });
 });
 
