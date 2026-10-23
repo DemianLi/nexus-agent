@@ -197,6 +197,23 @@ describe('runner：判準的每個條件各有一條反例', () => {
     ).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
   });
 
+  it('grep（--json）搭第二種形狀、起點 `.`：照舊 SEARCH_FAILED（Linux 非 root、根 chmod 000 實測，rg 15.0.0 arm64／x64）', async () => {
+    // 實測輸出（~/.nexus-agent-evidence/2026-10-23/rg-unreadable-1704/linux3.txt）：根 0000 時 grep 也印第二種形狀，
+    // stdout 只有 begin／end／summary 的 JSON、零命中，結束碼 2。
+    const executable = await script(
+      'grep-io-root.sh',
+      `echo '{"type":"summary","data":{"stats":{"matches":0}}}'\n` +
+        `echo 'rg: .: IO error for operation on .: Permission denied (os error 13)' >&2\nexit 2`,
+    );
+    expect(await run(executable)).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+    // 同一行出現在起點底下的子路徑：放行（只差路徑，形狀與 argv 都相同）。
+    const sub = await script(
+      'grep-io-sub.sh',
+      `echo 'rg: ./sub: IO error for operation on ./sub: Permission denied (os error 13)' >&2\nexit 2`,
+    );
+    expect(await run(sub)).toMatchObject({ kind: 'ok', unreadable: 1 });
+  });
+
   it('預設不放行（dsh 的做法）：沒開 tolerateUnreadable 時，同一份「全是讀不到」的 stderr 照舊 SEARCH_FAILED', async () => {
     const executable = await script(
       'default.sh',
