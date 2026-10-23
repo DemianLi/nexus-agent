@@ -2,6 +2,7 @@ import type {
   CommandOutcome,
   Event,
   ThreadForkResult,
+  ThreadListOutcome,
   ThreadListResult,
   ThreadRenameResult,
   ThreadSummary,
@@ -105,6 +106,8 @@ function fakeClient(
     readonly events?: readonly Event[];
     readonly fork?: () => Promise<CommandOutcome<ThreadForkResult>>;
     readonly rename?: (title: string) => Promise<CommandOutcome<ThreadRenameResult>>;
+    /** 換掉清單的回應（#1964）；沒給就照真的 server 列。 */
+    readonly list?: () => Promise<ThreadListOutcome>;
   } = {},
 ) {
   const calls: string[] = [];
@@ -147,6 +150,7 @@ function fakeClient(
     // 同真的 server：子 thread 在回分叉之前就落了盤，之後的清單裡有它（改名不一定追上，標題照落盤的那份）。
     listThreads: async () => {
       calls.push('list');
+      if (options.list !== undefined) return options.list();
       return { kind: 'ok', result: { ...listed, items: [...forked, ...listed.items] } };
     },
     threadHistory: async () => ({
@@ -437,6 +441,52 @@ describe('分不出去', () => {
     // 失敗之後按鈕放開，可以再按。
     await waitFor(() =>
       expect(forkButtonOf('第二輪收尾。').getAttribute('aria-disabled')).not.toBe('true'),
+    );
+  });
+});
+
+describe('server 沒接落盤時不畫分支鈕（#1964）', () => {
+  it('清單回 not_supported：一顆分支鈕都沒有，複製鈕照舊', async () => {
+    const fake = fakeClient({
+      list: async () => ({
+        kind: 'rejected',
+        code: 'not_supported',
+        message: '會話日誌只在記憶體裡（#1964）',
+      }),
+    });
+    render(<App client={fake.client} />);
+    await ready();
+    await waitFor(() => expect(screen.getByText(/會話日誌只在記憶體裡（#1964）/)).toBeTruthy());
+    expect(screen.queryAllByTestId('fork-button')).toHaveLength(0);
+    expect(within(entryOf('第三輪收尾。')).getByRole('button', { name: '複製回覆' })).toBeTruthy();
+  });
+
+  it.each([
+    [
+      '別的錯誤碼',
+      async (): Promise<ThreadListOutcome> => ({
+        kind: 'rejected',
+        code: 'unknown_error',
+        message: '目錄讀不動（#1964 別的碼）',
+      }),
+      /目錄讀不動（#1964 別的碼）/,
+    ],
+    [
+      '網路層拋錯',
+      async (): Promise<ThreadListOutcome> => {
+        throw new Error('列表被載體層擋下（#1964 拋錯）');
+      },
+      /列表被載體層擋下（#1964 拋錯）/,
+    ],
+  ] as const)('清單因%s失敗：鈕照畫，按下去交給 server 判', async (_label, list, shown) => {
+    const fake = fakeClient({ list });
+    render(<App client={fake.client} />);
+    await ready();
+    await waitFor(() => expect(screen.getByText(shown)).toBeTruthy());
+    expect(screen.getAllByTestId('fork-button')).toHaveLength(3);
+    fireEvent.click(forkButtonOf('第二輪收尾。'));
+    await waitFor(() =>
+      expect(fake.calls.filter((call) => call.startsWith('fork'))).toEqual(['fork 來源 run-t2']),
     );
   });
 });

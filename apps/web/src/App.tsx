@@ -73,6 +73,7 @@ import {
   FORK_FAILED_TEXT,
   FORK_RENAME_FAILED_TEXT,
   FORKED_THREAD_NOTICE,
+  forkSupported,
   increasedForkTitle,
 } from '@/lib/thread-fork';
 import {
@@ -335,7 +336,12 @@ export function App({ client }: { client?: WireClient } = {}) {
         threadId={choice.threadId}
         notice={ORIGIN_NOTICE[choice.origin]}
         forking={forking}
-        onFork={(messageId, liveTitle) => forkConversation(choice.threadId, messageId, liveTitle)}
+        {...(forkSupported(directory.listing)
+          ? {
+              onFork: (messageId: string, liveTitle: string | null) =>
+                forkConversation(choice.threadId, messageId, liveTitle),
+            }
+          : {})}
         onNewConversation={newConversation}
         onSwitch={(threadId) => {
           navigation.current += 1;
@@ -366,7 +372,8 @@ function ConversationView({
   readonly notice: string | undefined;
   /** 分叉送出去了、回應還沒到（#1581）。 */
   readonly forking: boolean;
-  readonly onFork: (messageId: string, liveTitle: string | null) => void;
+  /** 沒給就不畫分支鈕：這台 server 沒接落盤（#1964，`forkSupported`）。 */
+  readonly onFork?: (messageId: string, liveTitle: string | null) => void;
   readonly onNewConversation: (engaged: boolean) => void;
   readonly onSwitch: (threadId: string) => void;
 }) {
@@ -728,10 +735,15 @@ function ConversationView({
                   isFresh={isFresh}
                   changes={changes}
                   deliverableDownload={deliverableDownload}
-                  fork={{
-                    forking,
-                    onFork: (messageId) => onFork(messageId, conversation.state.title),
-                  }}
+                  {...(onFork === undefined
+                    ? {}
+                    : {
+                        fork: {
+                          forking,
+                          onFork: (messageId: string) =>
+                            onFork(messageId, conversation.state.title),
+                        },
+                      })}
                   feedback={{
                     ratings: conversation.ratings,
                     busy: !conversation.connected,
