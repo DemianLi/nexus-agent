@@ -894,7 +894,7 @@ export interface ThreadSummary {
   /**
    * 這條是從哪條 thread 分出來的（`thread.fork`，[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)），對到 dsh `SessionSummary.parentSessionId`
    * （`session-controller/src/list.ts:353-362`）。不是分叉來的不帶。子代理照舊不列，所以這一格只會指向分叉的來源。
-   * 契約先合（#1580 刀 1）：刀 2 接上分叉之後列表才開始填。
+   * 列表照會話 header 的 `parentSession` 填（#1580 刀 2），同 dsh `listFields`。
    */
   readonly parentThreadId?: string;
 }

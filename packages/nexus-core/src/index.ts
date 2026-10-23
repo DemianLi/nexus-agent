@@ -768,6 +768,7 @@ export type {
   SessionReferenceSourceEntry,
   UserMessageSource,
 } from './session-log.js';
+export { forkBoundaryOf } from './fork-boundary.js';
 export {
   currentTurnStart,
   openTurnStart,
