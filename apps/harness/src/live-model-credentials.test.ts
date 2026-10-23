@@ -263,3 +263,49 @@ describe('金鑰送出前先修剪、檢查（#1541）', () => {
     expect(classifyTurnFailure(wrapped).code).toBe('INVALID_CREDENTIAL');
   });
 });
+
+describe('請求時取金鑰失敗：訊息是我們自己的那句，不帶 SDK 的英文前綴（#1656）', () => {
+  // openai 的 `_callApiKey` 對函式丟出的錯，不是它自己的 `OpenAIError` 就包成
+  // 「Failed to get token from 'apiKey' function: <原訊息>」（`openai@7.5.0` 的 `client.js:323-331`）。
+  // 真的 `ChatOpenAI`、真的受管檔、loopback 假端點，不 mock SDK。
+  const SDK_PREFIX = 'Failed to get token';
+
+  it('兩個請求之間受管檔被改成不合格的值：丟出的訊息逐字等於原錯，且不含 SDK 前綴', async () => {
+    managed(FILE_KEY);
+    const model = createLiveModel(config(), undefined, credentials());
+    await model.invoke([new HumanMessage('one')]);
+
+    managedRaw('"nvapi-SECRET3\\nnvapi-SECRET3"');
+    // 原錯：同一個壞檔、同一條取金鑰的路，在建構當下丟的就是請求時要丟的那句。
+    const original = await thrownBy(() => createLiveModel(config(), undefined, credentials()));
+    expect(original).toBeInstanceOf(InvalidCredentialError);
+
+    const error = (await thrownBy(() => model.invoke([new HumanMessage('two')]))) as Error;
+
+    expect(error.message).toBe((original as Error).message);
+    expect(error.message).not.toContain(SDK_PREFIX);
+    expect(classifyTurnFailure(error).code).toBe('INVALID_CREDENTIAL');
+    expect(classifyTurnFailure(error).message).toBe((original as Error).message);
+    expect(seen).toEqual([`Bearer ${FILE_KEY}`]);
+  });
+
+  it('兩個請求之間受管檔被刪掉：丟出的訊息逐字等於缺 key 的那句，且不含 SDK 前綴；分類碼照今天', async () => {
+    managed(FILE_KEY);
+    const model = createLiveModel(config(), undefined, credentials());
+    await model.invoke([new HumanMessage('one')]);
+
+    rmSync(join(home, CREDENTIALS_FILE));
+    const original = (await thrownBy(() =>
+      createLiveModel(config(), undefined, credentials()),
+    )) as Error;
+    expect(original.message).toContain(LIVE_API_KEY_ENV);
+
+    const error = (await thrownBy(() => model.invoke([new HumanMessage('two')]))) as Error;
+
+    expect(error.message).toBe(original.message);
+    expect(error.message).not.toContain(SDK_PREFIX);
+    // 缺 key 是一般的 `Error`，今天落在哪一碼，修完仍落在那一碼（以直接分類原錯為準）。
+    expect(classifyTurnFailure(error).code).toBe(classifyTurnFailure(original).code);
+    expect(seen).toEqual([`Bearer ${FILE_KEY}`]);
+  });
+});
