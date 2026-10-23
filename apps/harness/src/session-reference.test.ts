@@ -7,7 +7,12 @@
  */
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
-import { SESSION_LOG_FORMAT_VERSION, SessionLog, toLoggedMessage } from '@nexus/core';
+import {
+  REFERENCE_WARNING,
+  SESSION_LOG_FORMAT_VERSION,
+  SessionLog,
+  toLoggedMessage,
+} from '@nexus/core';
 import type { SessionEvent, SpillSaveRequest, SpillStore, StoredSessionHeader } from '@nexus/core';
 import {
   formatSessionReferenceMention,
@@ -21,7 +26,6 @@ import {
   parseReferencedText,
   prepareSessionReferences,
   projectSessionConversation,
-  REFERENCE_WARNING,
   retainReferencedSession,
 } from './session-reference.js';
 import type { SessionReferenceReader } from './session-reference.js';
