@@ -6,7 +6,7 @@
  * 線上的形狀與產品路徑在 `serve-thread-search.test.ts`。
  */
 
-import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
@@ -400,6 +400,40 @@ describe('ThreadSearch', () => {
     expect(await ids(engine, '第二句')).toEqual([]);
     expect(await ids(engine, '前情摘要')).toEqual(['a']);
     await engine.close();
+  });
+
+  it('壓縮過、又死在模型呼叫中間、整份還沒有回覆的那一份：冷讀在記憶體補平（#1598），照常推歷史，換掉的照樣搜不到；檔一個位元組都不動', async () => {
+    const directory = await dir();
+    const log = new SessionLog('t');
+    // 第一輪模型失敗收工：沒有回覆。
+    log.append('turn/start', { kind: 'message', text: '第一句' });
+    log.append('model/start', {});
+    log.append('model/end', { modelCall: 1, outcome: 'error' });
+    log.append('turn/failed', { message: '模型掛了' });
+    // 第二輪叫模型之前先壓縮，換掉「第一句」；接著死在那次呼叫中間（`model/start` 沒有 `model/end`）。
+    // 沒補平的話，重播把開著的呼叫算成跑過、整份又沒有回覆，推不出歷史，退回整份都收。
+    log.append('turn/start', { kind: 'message', text: '第二句' });
+    log.append('compaction/summary', {
+      cutoffIndex: 1,
+      messagesBefore: 2,
+      beforeCall: true,
+      filePath: null,
+      summary: toLoggedMessage(
+        new HumanMessage({
+          content: '前情摘要',
+          additional_kwargs: { lc_source: 'summarization' },
+        }),
+      ),
+    });
+    log.append('model/start', {});
+    await writeThread(directory, 'a', log.events);
+    const before = await readFile(join(directory, 'a.jsonl'));
+    const engine = search(directory);
+    expect(await ids(engine, '第一句')).toEqual([]);
+    expect(await ids(engine, '前情摘要')).toEqual(['a']);
+    expect(await ids(engine, '第二句')).toEqual(['a']);
+    await engine.close();
+    expect(await readFile(join(directory, 'a.jsonl'))).toEqual(before);
   });
 
   it('只有 header 的沒東西；日誌中間壞掉的：壞的那行略過、其餘照收（同列表），不拖垮其他條', async () => {

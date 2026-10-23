@@ -11,7 +11,11 @@ import {
   TOOL_NOT_STARTED_TEXT,
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from './conversation-replay.js';
-import { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
+import {
+  interruptedTurnClosers,
+  readColdSession,
+  resumeClosingInterruptedTurn,
+} from './interrupted-turn.js';
 import { createInvariantRunner } from './invariants.js';
 import type { InvariantError } from './invariants.js';
 import { sessionInvariant, CORE_INVARIANT_PACKAGE } from './invariant.js';
@@ -400,5 +404,57 @@ describe('resumeClosingInterruptedTurn', () => {
     const fake = fakeStore(crashed().events, { failAppend: true });
     await expect(resumeClosingInterruptedTurn(fake.store, 'crash')).rejects.toThrow('寫不進去');
     expect(fake.closed()).toBe(1);
+  });
+});
+
+/** 只有唯讀打開的存放處：`resume` 一叫就拋，記下 `open` 與 `read` 收到什麼。 */
+function readOnlyStore(events: readonly SessionEvent[], failRead?: Error) {
+  const calls: unknown[][] = [];
+  const store = {
+    open: (id: string, access: string) => {
+      calls.push(['open', id, access]);
+      return Promise.resolve({
+        header: { version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 0 },
+        storedFormatVersion: 7,
+        read: (options?: unknown) => {
+          calls.push(['read', options]);
+          return failRead === undefined ? Promise.resolve(events) : Promise.reject(failRead);
+        },
+      });
+    },
+    resume: () => Promise.reject(new Error('冷讀不該拿寫租約')),
+  } as unknown as SessionStore;
+  return { store, calls };
+}
+
+describe('readColdSession（#1598）', () => {
+  it('唯讀打開、選項原樣轉交 read，補結只接在交回的 events 後面', async () => {
+    const log = crashed();
+    const fake = readOnlyStore(log.events);
+    const cold = await readColdSession(fake.store, 'crash', { salvage: true });
+
+    expect(fake.calls).toEqual([
+      ['open', 'crash', 'read'],
+      ['read', { salvage: true }],
+    ]);
+    expect(cold.header.id).toBe('crash');
+    expect(cold.storedFormatVersion).toBe(7);
+    expect(cold.events.slice(0, log.events.length)).toEqual(log.events);
+    expect(typesOf(cold.events.slice(log.events.length))).toEqual(['tool/result', 'turn/end']);
+    expect(cold.events.map((event) => event.seq)).toEqual(cold.events.map((_, at) => at));
+  });
+
+  it('已平衡的：原樣交回', async () => {
+    const log = new SessionLog('ok');
+    log.append('turn/start', { kind: 'message', text: 'hi' });
+    log.append('turn/end', {});
+    expect((await readColdSession(readOnlyStore(log.events).store, 'ok')).events).toEqual(
+      log.events,
+    );
+  });
+
+  it('讀失敗原樣拋，由呼叫端分類', async () => {
+    const broken = new Error('壞掉');
+    await expect(readColdSession(readOnlyStore([], broken).store, 'crash')).rejects.toBe(broken);
   });
 });

@@ -511,7 +511,12 @@ export type {
   StreamRetryOptions,
   StreamRetrySignal,
 } from './stream-retry.js';
-export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
+export {
+  interruptedTurnClosers,
+  readColdSession,
+  resumeClosingInterruptedTurn,
+} from './interrupted-turn.js';
+export type { ColdStoredSession } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
