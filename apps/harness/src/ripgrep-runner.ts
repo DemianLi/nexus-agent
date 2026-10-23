@@ -15,8 +15,44 @@
  *   `SIGKILL`（`:53`），回 `SEARCH_ABORTED`。
  * - 結束碼：0 有結果、1 零結果，其餘依 stderr 分 `SEARCH_INVALID_PATTERN`（regex／glob 解析錯誤）與 `SEARCH_FAILED`
  *   （`:124-130`）；被訊號殺也是 `SEARCH_FAILED`。**沒有退路**：這一層不改走別的搜尋法。
+ *   **唯一的例外是偏離 1（#1704）**：呼叫端給了 `tolerateUnreadable`、結束碼 2、而 stderr 每一行都是「起點底下讀不到」時，
+ *   照樣交出 stdout。
  * - 子行程環境是 `scrubbedParentEnv()`（`search-core.ts:8`、`subprocess-local/src/spawn.ts:45`）：名字像憑證的與
  *   harness 自己的變數不交給 rg。
+ *
+ * ## 偏離 dsh（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)，理由 2：多人共用主機）
+ *
+ * 1. **有些路徑讀不到不讓整次搜尋失敗。** dsh `runRipgrep` 把 0、1 以外的結束碼一律拋成 `SEARCH_FAILED`
+ *    （`search-core.ts:282-284`）。dsh 的測試裡結束碼 2 只有：regex 解析錯誤（`tests/tools.spec.ts:568`）、glob 解析錯誤（`:576`）、
+ *    路徑不存在的 `IO error`（`:583`）、被截尾的 stderr（`:597-605`）與 `'boom'`（`:1108`）；空 stderr 那條是結束碼 3（`:591`）。
+ *    **沒有「部分路徑讀不到」的情境**——它是單人的 Host，工作區都是自己的檔。
+ *    多人共用一台主機時，工作區裡只要有一個 0600、屬於別人的檔，或一個 0700 的目錄，rg 就回 2，stdout 其實已經有
+ *    其餘檔的命中，整次 grep 失敗等於把已找到的一起丟掉。
+ *
+ *    **最接近的 dsh 前例是 `packages/context/file-reference-local/src/search.ts`**（`687f282e`）：走訪時「根不是子樹」——
+ *    讀不到的子樹只少掉它自己的候選、其他分支照用（`:297-302`），但讀不到的**根**表示這趟走訪什麼都沒學到，失敗而不是回空
+ *    （`:211-217`；測試 `tests/search.spec.ts:197`、`:254-269`）。這裡照同一條線：
+ *
+ *    - **搜尋起點本身讀不到 → 照舊判錯。**stderr 裡讀不到的路徑等於 {@link TolerateUnreadable.searchRoots} 的任何一個
+ *      （`.`、`./<起點>`；rg 的 stderr 原樣印出我們給的引數），就不放行：整個工作區都沒搜到，不能當成「沒有命中」。
+ *    - **起點底下的子樹或檔讀不到 → 放行。**
+ *
+ *    判準寫死、從嚴，**逐行精確比對**：**結束碼是 2、stderr 完整（沒被截尾）、而且每一個非空行都完整符合
+ *    `rg: <路徑>: Permission denied (os error 13)`（含行尾 `$` 錨點，不是子字串）**，並且路徑不是起點。少一條就照舊判錯：
+ *    regex／glob 解析錯誤、路徑不存在（`IO error for operation on`）、`Permission denied` 後面還接了別的字（例如
+ *    `rg: ./x: Permission denied (os error 13): No such file or directory (os error 2)`，檔名剛好長得像一條「讀不到」、
+ *    搜到一半被刪掉時 rg 印的就是這個形狀）、stderr 被截尾（看不到被截掉的那段，不能保證裡面沒有別種錯誤）。
+ *    字樣在 macOS（rg 15.1.0 與內附 15.0.0）與 Linux（內附 15.0.0）實測過，見 PR 內文。
+ *
+ *    **stderr 是行內通道，檔名可以偽造行**（`docs/postmortem/0004-landlock-partial-notice-misclassified-child-failures.md`
+ *    同樣明寫「stderr remains an in-band attribution channel」）：檔名含換行時，一個讀不到的檔會印出不只一行，所以
+ *    {@link RipgrepOutcome.unreadable} 是 **stderr 的行數，檔名可以灌高它**。放行時送到模型那裡的只有數字，偽造的文字
+ *    到不了；要放行，每一行仍必須整行符合上面兩種形狀。**但行內偽造不只能灌高數字**：起點（搜尋引數）的名字含換行時，
+ *    「起點本身讀不到」那一行被拆成兩行、兩段路徑都不等於起點，起點比對會被繞過（X1）。所以**起點含 `\n` 或 `\r` 就整個
+ *    不放行**，走 {@link classifyExit}。子樹裡的檔名含換行只會灌高 N（起點的名字完整，`.` 這種起點不受影響）。
+ *    0004 的教訓照用：精確、窄、不認得的一律失敗。
+ *
+ *    退到的做法：照樣交出 stdout，並在結果上帶 {@link RipgrepOutcome.unreadable}，由呼叫端告訴模型「結果只涵蓋讀得到的」。
  *
  * ## 與 dsh 的差異（不是偏離，是載體）
  *
@@ -70,8 +106,21 @@ export type RipgrepTool = 'grep' | 'glob';
 
 /** 這一次執行的結果。 */
 export type RipgrepOutcome =
-  | { readonly kind: 'ok'; readonly stdout: string; readonly noMatches: boolean }
+  | {
+      readonly kind: 'ok';
+      readonly stdout: string;
+      /** rg 結束碼是 1。結束碼 2 的部分失敗（{@link unreadable} 大於 0）不是零結果，這裡永遠是 `false`，由呼叫端解析 stdout。 */
+      readonly noMatches: boolean;
+      /** 讀不到的 stderr 行數（偏離 1，#1704；檔名含換行時可被灌高，見檔頭）；沒有就是 0。 */
+      readonly unreadable: number;
+    }
   | { readonly kind: 'error'; readonly code: SearchErrorCode; readonly message: string };
+
+/** 放行「有些路徑讀不到」的條件（偏離 1，#1704）。起點要一起給：讀不到的路徑等於起點時不放行，所以放行與起點不能分開。 */
+export interface TolerateUnreadable {
+  /** 這一次 rg 的搜尋起點，**原樣就是 argv 裡 `--` 後面的那幾個**（`.`、`./sub`）：rg 的 stderr 照我們給的引數印路徑。 */
+  readonly searchRoots: readonly string[];
+}
 
 /** {@link runRipgrep} 的參數。 */
 export interface RipgrepRunOptions {
@@ -81,6 +130,12 @@ export interface RipgrepRunOptions {
   readonly argv: readonly string[];
   /** 工作目錄；呼叫端要先確認它存在。 */
   readonly cwd: string;
+  /**
+   * 結束碼 2、stderr 全是「讀不到」（而且讀不到的不是搜尋起點）時照樣交出 stdout（偏離 1，#1704）。**不給就是 dsh 的做法**：
+   * 只有呼叫端確定「子樹讀不到不是秘密、少搜幾個檔可以接受」才給（工作區的 `grep`／`glob`）；附件路由不給
+   * （#1822：同一個目錄裡沒引用的別名檔屬於別的 thread，連「有幾個」都不交給模型）。
+   */
+  readonly tolerateUnreadable?: TolerateUnreadable | undefined;
   /** 錯誤訊息裡的工具名；預設 `grep`。 */
   readonly tool?: RipgrepTool | undefined;
   /** 呼叫端的取消訊號（這一次工具呼叫的）。 */
@@ -109,6 +164,62 @@ function stderrExcerpt(text: string, truncated: boolean): string {
   const trimmed = text.trim();
   if (trimmed.length === 0) return '';
   return truncated ? `${trimmed} [stderr truncated]` : trimmed;
+}
+
+/**
+ * rg 為了「讀不到」寫的 stderr 行，**兩種形狀**，整行都要符合（`$` 錨點，後面不能再有字）：
+ *
+ * - `rg: <路徑>: Permission denied (os error 13)`：`grep`（`--json`）與不排序的 `--files`。
+ * - `rg: <路徑>: IO error for operation on <路徑>: Permission denied (os error 13)`：`glob` 的 `--files --sort=modified`
+ *   碰到讀不到的**目錄**時用這一種（rg 為了排序先 `stat` 每條路徑）；兩個路徑一定相同，用反向參照釘住。
+ *
+ * 實測（#1704）：macOS rg 15.1.0、內附 rg 15.0.0（darwin-arm64、linux-arm64、linux-x64）兩種形狀一致。
+ * `(os error 13)` 是 `EACCES` 的數字，不依賴 locale（Rust 不呼叫 `setlocale`，訊息固定是 C locale 的英文）。
+ * 路徑是貪婪比到最後一個 `: Permission denied (os error 13)`，所以檔名裡有冒號也取得到完整路徑。
+ */
+const UNREADABLE_LINE = /^rg: (.+): Permission denied \(os error 13\)$/u;
+const UNREADABLE_IO_LINE =
+  /^rg: (.+): IO error for operation on \1: Permission denied \(os error 13\)$/u;
+
+/** 這一行讀不到的路徑；不是兩種形狀之一（含兩個路徑不同的 `IO error`）時是 `undefined`。 */
+function unreadablePathOf(line: string): string | undefined {
+  const io = UNREADABLE_IO_LINE.exec(line)?.[1];
+  if (io !== undefined) return io;
+  const plain = UNREADABLE_LINE.exec(line)?.[1];
+  // 第一種形狀的「路徑」裡出現 `IO error for operation on`：是兩個路徑不同的第二種（或檔名在偽造），不認，免得它躲過起點比對。
+  return plain === undefined || plain.includes(': IO error for operation on ') ? undefined : plain;
+}
+
+/** 拿掉結尾的 `/`（`./` 與 `.`、`./sub/` 與 `./sub` 是同一個起點），根本身 `/` 留著。 */
+const withoutTrailingSlash = (path: string): string =>
+  path.length > 1 ? path.replace(/\/+$/u, '') || '/' : path;
+
+/**
+ * stderr 是不是**只有**「起點底下讀不到」。
+ *
+ * @param text - 保留下來的 stderr。
+ * @param truncated - stderr 是否被截尾；截過的看不到前段，不能保證裡面沒有別種錯誤，一律當不是。
+ * @param searchRoots - 搜尋起點；讀不到的路徑等於其中之一就不是（整個起點都沒搜到）。**任何一個起點含 `\n` 或 `\r` 就
+ *   整個不放行**：起點的名字裡有換行時，rg 把「起點本身讀不到」那一行印成兩行，路徑被拆成兩段，兩段都不等於起點，
+ *   起點比對就被繞過（X1）。起點是呼叫端給的引數，不是 rg 的輸出，這裡看得到完整的名字，所以直接擋。
+ * @returns 讀不到的 stderr 行數（檔名含換行時可能多於實際路徑數，見檔頭）；有任何一行不是、沒有任何一行、讀不到的是起點、
+ *   起點含換行、或被截尾時是 `undefined`。
+ */
+function unreadableCount(
+  text: string,
+  truncated: boolean,
+  searchRoots: readonly string[],
+): number | undefined {
+  if (truncated) return undefined;
+  if (searchRoots.some((root) => /[\n\r]/u.test(root))) return undefined;
+  const lines = text.split('\n').filter((line) => line.trim() !== '');
+  if (lines.length === 0) return undefined;
+  const roots = new Set(searchRoots.map(withoutTrailingSlash));
+  for (const line of lines) {
+    const path = unreadablePathOf(line);
+    if (path === undefined || roots.has(withoutTrailingSlash(path))) return undefined;
+  }
+  return lines.length;
 }
 
 /** 非 0／1 結束的 rg 歸類，照 dsh `classifyRunFailure`（`:124-130`）。 */
@@ -278,14 +389,25 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
         });
         return;
       }
+      let unreadable = 0;
       if (exitCode !== 0 && exitCode !== 1) {
-        settle(classifyExit(tool, exitCode, stderrTail.toString('utf8'), stderrTruncated));
-        return;
+        const stderrText = stderrTail.toString('utf8');
+        // 偏離 1（#1704）：只有結束碼 2、而 stderr 全是「讀不到」才放行；其餘的非 0／1 照 dsh 判錯。
+        const skipped =
+          exitCode === 2 && options.tolerateUnreadable !== undefined
+            ? unreadableCount(stderrText, stderrTruncated, options.tolerateUnreadable.searchRoots)
+            : undefined;
+        if (skipped === undefined) {
+          settle(classifyExit(tool, exitCode, stderrText, stderrTruncated));
+          return;
+        }
+        unreadable = skipped;
       }
       settle({
         kind: 'ok',
         stdout: Buffer.concat(stdoutChunks).toString('utf8'),
         noMatches: exitCode === 1,
+        unreadable,
       });
     });
   });

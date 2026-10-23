@@ -105,6 +105,7 @@ import {
   noteReadWindow,
   noteSandboxDenial,
   noteSearchError,
+  noteSearchSkipped,
   SEARCH_ABORTED,
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
@@ -436,6 +437,12 @@ export interface ContainedFilesystemBackendOptions {
    * 名字與預設照 dsh 的 `readStreamMinSize`（`packages/fs/tool-fs/src/read.ts:21`、`index.ts:42`）。
    */
   readonly streamMinSize?: number;
+  /**
+   * 搜尋（`grep`／`glob`）時，起點底下有些路徑讀不到，其餘照常交出並註明數量（偏離 dsh，理由 2，[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）。
+   * **預設 `false`＝ dsh 的做法（整次失敗）**：只有多人共用主機上的使用者工作區明確打開；暫存目錄是 serve 自己的目錄，附件路由的
+   * 讀不到的檔屬於別的 thread（#1822），都不開。判準與起點讀不到的規則見 `ripgrep-runner.ts` 檔頭。
+   */
+  readonly tolerateUnreadable?: boolean;
 }
 
 /** 讀檔改用串流的檔案大小門檻（位元組）。同 dsh 的 `STREAM_MIN_SIZE`（`read.ts:21`）。 */
@@ -457,6 +464,12 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /** 升級的 grant 從哪裡認領；`undefined` 就是這道 fence 沒有升級。 */
   private readonly grants: SandboxGrantLedger | undefined;
+
+  /**
+   * 搜尋時起點底下有些路徑讀不到，要不要照樣交出其餘的結果（偏離 dsh，#1704，見 `ripgrep-runner.ts` 檔頭）。**預設 `false`
+   * ＝ dsh 的做法**，只有多人共用主機上的工作區明確打開（`assembly-root.ts`）；讀不到的是搜尋起點本身時不論如何都判錯。
+   */
+  protected readonly tolerateUnreadable: boolean;
 
   /** 只給測試用的 `rg` 接縫；正式組裝是 `undefined`。 */
   private readonly ripgrepInternals: RipgrepInternals | undefined;
@@ -485,6 +498,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
     this.grants = options.grants;
     this.ripgrepInternals = options.ripgrep;
+    this.tolerateUnreadable = options.tolerateUnreadable === true;
     this.atomicInternals = options.atomicInternals;
     this.streamMinSize = options.streamMinSize ?? READ_STREAM_MIN_SIZE;
   }
@@ -897,9 +911,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       ],
       cwd: this.cwd,
       signal: currentToolCallSignal(),
+      ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
     });
     if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    noteSearchSkipped(outcome.unreadable);
     return applyGrepMaxCount({
       result: { matches: this.parseRipgrepJson(outcome.stdout) },
       maxCount: maxCount ?? null,
@@ -961,9 +977,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       cwd: this.cwd,
       tool: 'glob',
       signal,
+      ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
     });
     if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    noteSearchSkipped(outcome.unreadable);
 
     const relatives: string[] = [];
     for (const entry of outcome.stdout.split('\0')) {
