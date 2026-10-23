@@ -48,7 +48,8 @@ function setup() {
       kind: 'ok',
       result: { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
     }),
-    slashList: async () => ({ kind: 'ok', commands: [] }),
+    // 開頭的字在清單上才是命令（#1929）。
+    slashList: async () => ({ kind: 'ok', commands: [{ name: 'help', description: '說明' }] }),
     slashRun: async (...args: unknown[]) => {
       slashed.push(args);
       return { kind: 'ok', result: { type: 'message', text: '好' } };
@@ -117,6 +118,8 @@ describe('send 帶上瀏覽器時區（#1630）', () => {
     stubBrowserZone(() => 'Asia/Taipei');
     const { client, started, slashed } = setup();
     const result = await mounted(client);
+    // 命令清單到了才認得 `/help`（#1929）。
+    await waitFor(() => expect(result.current.slashCommands).toHaveLength(1));
     await act(async () => {
       await result.current.send('/help');
     });

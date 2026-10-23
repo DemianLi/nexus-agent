@@ -142,6 +142,9 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     super({
       rootDir: options.rootDir,
       mode: 'read-only',
+      // **讀不到的路徑不放行**（#1704 的偏離只給工作區）：這個根裡讀不到的檔是別的 thread 的別名檔（同一個內容雜湊目錄），
+      // 連「有幾個」都不交給模型（#1822）。維持 dsh 的做法：整次失敗，原始訊息只進伺服器日誌。
+      tolerateUnreadable: false,
       ...(options.ripgrep === undefined ? {} : { ripgrep: options.ripgrep }),
     });
     this.#scope = options.scope;
