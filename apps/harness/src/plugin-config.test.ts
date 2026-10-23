@@ -621,9 +621,9 @@ describe('權限', () => {
   });
 });
 
-describe('insert 進來的模組宣告的 @nexus/core 範圍不滿足：import 之前那一列掉了（#1137）', () => {
+describe('insert 進來的模組宣告的 @nexus 範圍不滿足：import 之前那一列掉了（#1137、#1568）', () => {
   /** 私有目錄裡一個帶 manifest 的插件；模組頂層會寫一個見證檔。回傳 { 目錄, 見證檔 }。 */
-  function peerPlugin(root: string, peer: string) {
+  function peerPlugin(root: string, peer: string, peerName = '@nexus/core') {
     const witness = join(root, 'ran');
     writePrivate(
       root,
@@ -631,7 +631,7 @@ describe('insert 進來的模組宣告的 @nexus/core 範圍不滿足：import �
       JSON.stringify({
         name: 'team-plugin',
         version: '2.0.0',
-        peerDependencies: { '@nexus/core': peer },
+        peerDependencies: { [peerName]: peer },
       }),
     );
     const module = writePrivate(
@@ -660,6 +660,28 @@ describe('insert 進來的模組宣告的 @nexus/core 範圍不滿足：import �
       /^條目 "team"（file:[^）]+） 不相容：team-plugin@2\.0\.0 需要 @nexus\/core >=999\.0\.0，執行中的是 \d+\.\d+\.\d+/u,
     );
     expect(existsSync(witness)).toBe(false);
+  });
+
+  it('只 peer @nexus/sdk（沒有 @nexus/core）、範圍不滿足：同樣在 import 之前掉了，訊息指名 @nexus/sdk（#1568）', async () => {
+    const root = privateDirectory();
+    const { witness } = peerPlugin(root, '>=999.0.0', '@nexus/sdk');
+    const { plugins, dropped } = await loadWith(root, './team.mjs');
+    expect(plugins).toEqual([]);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toMatchObject({ id: 'team', stage: 'module' });
+    expect(dropped[0]?.message).toMatch(
+      /^條目 "team"（file:[^）]+） 不相容：team-plugin@2\.0\.0 需要 @nexus\/sdk >=999\.0\.0，執行中的是 \d+\.\d+\.\d+/u,
+    );
+    expect(existsSync(witness)).toBe(false);
+  });
+
+  it('peer 寫 workspace:*（從 repo 複製出來的 package.json）：放行，模組主體有跑（#1568）', async () => {
+    const root = privateDirectory();
+    const { witness } = peerPlugin(root, 'workspace:*', '@nexus/sdk');
+    const loaded = await loadWith(root, './team.mjs');
+    expect(loaded.dropped).toEqual([]);
+    expect(loaded.plugins[0]?.plugin.name).toBe('team');
+    expect(existsSync(witness)).toBe(true);
   });
 
   it('滿足：照常載入，模組主體有跑（對照：見證檔量得到「跑了」）', async () => {
