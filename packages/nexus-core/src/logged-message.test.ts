@@ -9,6 +9,7 @@ import {
   SystemMessage,
   ToolMessage,
   mapChatMessagesToStoredMessages,
+  mapStoredMessagesToChatMessages,
 } from '@langchain/core/messages';
 import { fromLoggedMessage, loggedContentBlocks, toLoggedMessage } from './logged-message.js';
 import { resumedLog } from './fixtures.js';
@@ -304,5 +305,46 @@ describe('toLoggedMessage 自己取欄位（#1660）', () => {
     expect(JSON.stringify(logged)).not.toContain('__lc_escaped__');
     const back = fromLoggedMessage(logged) as AIMessage;
     expect(back.tool_calls?.[0]?.args).toEqual(args);
+  });
+  /**
+   * PM 的兩個條件（#1950 審查）：形狀像 LangChain 序列化物件的參數，讀回來還是普通物件，不能被還原成訊息之類的實例；
+   * 舊日誌裡已經被包過 `__lc_escaped__` 的資料，讀回行為不能變（照基座原樣讀），再記一次也不會多包一層。
+   */
+  const SHAPED = {
+    lc: 1,
+    type: 'constructor',
+    id: ['langchain_core', 'messages', 'AIMessage'],
+    kwargs: { content: 'boom' },
+  };
+
+  it('形狀像 LangChain 序列化物件的參數：讀回來是普通物件，不是還原出的實例', () => {
+    const ai = new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'p', args: SHAPED }] });
+    const back = fromLoggedMessage(toLoggedMessage(ai)) as AIMessage;
+    const args = back.tool_calls?.[0]?.args as Record<string, unknown>;
+    expect(Object.getPrototypeOf(args)).toBe(Object.prototype);
+    expect('lc_serializable' in args).toBe(false);
+    expect(args).toEqual(SHAPED);
+  });
+
+  it('舊日誌裡已包過 __lc_escaped__ 的參數：讀回與基座原樣讀一致，再記一次不多包', () => {
+    const oldLogged = {
+      type: 'ai',
+      data: {
+        content: '',
+        tool_calls: [{ id: 'c1', name: 'p', args: { __lc_escaped__: SHAPED } }],
+        invalid_tool_calls: [],
+        additional_kwargs: {},
+        response_metadata: {},
+      },
+    };
+    const viaBase = mapStoredMessagesToChatMessages([
+      JSON.parse(JSON.stringify(oldLogged)) as never,
+    ])[0] as AIMessage;
+    const ours = fromLoggedMessage(oldLogged as never) as AIMessage;
+    expect(JSON.stringify(ours.tool_calls)).toBe(JSON.stringify(viaBase.tool_calls));
+    expect(ours.tool_calls?.[0]?.args).toEqual({ __lc_escaped__: SHAPED });
+    expect(
+      JSON.stringify((toLoggedMessage(ours).data as unknown as { tool_calls: unknown }).tool_calls),
+    ).toBe(JSON.stringify(oldLogged.data.tool_calls));
   });
 });
