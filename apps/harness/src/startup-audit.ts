@@ -25,7 +25,7 @@
  * `fiber.await()` 拿回原始錯誤，PENDING 列出缺哪些服務；必掛的沒起來就拋同一種 {@link StartupError}。兩張名單分開
  * （{@link REQUIRED_TREE_ENTRY_IDS}）：清單的列 id 由使用者的 patch 決定，`insert` 一列 id 叫 `serve` 的不該因此變成必掛。
  *
- * ## 名單是 `browser-session`、`system-prompt`、`background-subagents`、`permission-presets`、`goal-round-cap` 與 `turn-timeout`
+ * ## 名單是 `browser-session`、`system-prompt`、`background-subagents`、`permission-presets`、`goal-round-cap`、`turn-timeout` 與 `session-reference`
  *
  * dsh 的七個 id 分三類（`README.zh.md:43`），對到我們：
  *
@@ -59,6 +59,12 @@
  *
  * **`turn-timeout` 也同一型**（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，沿用 #707 那筆登記）：它是一輪的時鐘，寫壞就掉、
  * 掉了一輪就沒有時鐘，是 fail-open。同樣關得掉：`disabled: true` 是部署方明講不限。
+ *
+ * **`session-reference` 也同一型，方向是「寫壞靜靜變回不合需求的預設」**（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862，
+ * 沿用 #707 那筆登記，偏離理由 2）：dsh 的 `SessionReferenceResolver` 在建構子裡越界就拋 `SESSION_REFERENCE_INVALID_CONFIG`
+ * （`packages/context/session-reference/src/index.ts:100-128`），我們的載入器把它變成「那一列掉了」，掉了之後 `startupSetting` 回 schema 的預設
+ * （`referenceContextFraction` 0.2，dsh 的英文換算）。出廠把比例調低到 0.1 是因為中文三條 0.2 的來源逼近摘要門檻
+ * （`cordis.yml` 那一列），打錯一個字就靜靜回到 0.2。這一列**同時關不掉**（`PROTECTED_ENTRY_NAMES`）：兩道一起，寫壞與關掉都不會讓出廠的比例消失。
  *
  * **它跟「關不掉」的名單（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）是兩回事**：那一份只管能不能寫
  * `disabled: true`，以 `name` 為鍵；這一份管掉了要不要整個起不來，以 id 為鍵，照 dsh。以 id 為鍵繞不過去：patch
@@ -97,6 +103,7 @@ export const REQUIRED_ENTRY_IDS: ReadonlySet<string> = new Set([
   'permission-presets',
   'goal-round-cap',
   'turn-timeout',
+  'session-reference',
 ]);
 
 /** 帶 `--live` 時也必須在的那一列的 id，理由見檔頭。 */

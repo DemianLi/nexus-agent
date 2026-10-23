@@ -250,6 +250,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '卡住的線照樣兩拍內被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
   ],
   [
+    '#settings/session-reference',
+    '這一列不裝任何東西，只講用 `@` 引用別的會話時的四個上限（引用條數、候選筆數、每條來源的位元組、占模型窗口的比例）。關掉它不會讓引用停下來' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，四個值於是回到 schema 的預設，其中比例是 dsh 的 0.2，' +
+      '對中文三條來源逼近摘要門檻，等於靜靜拿掉出廠調低的 0.1，只會讓這份設定讀起來像關掉了引用。要放寬，把數值調大。',
+  ],
+  [
     '#settings/thread-capacity',
     '這一列不裝任何東西，只講 serve 行程裡的 thread 數上限與閒置逐出的時間。關掉它不會讓上限或逐出消失' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（500 條、閒置 2 小時撤出），' +
