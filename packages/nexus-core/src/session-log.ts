@@ -1506,20 +1506,25 @@ const SESSION_EVENT_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * seed 裡一顆事件的固定信封，照 dsh `assertSessionEventEnvelope`（`packages/core/session/src/index.ts:201-243`，`687f282e`）：
+ * 一筆事件的固定信封，照 dsh `assertSessionEventEnvelope`（`packages/core/session/src/index.ts:201-243`，`687f282e`）：
  * 鍵只准 {@link SESSION_EVENT_ENVELOPE_KEYS}；`seq` 是非負安全整數、不是 `-0`；`time` 是安全整數；`data` 要在；
- * `ignorable` 只准 `true`。接著跑 {@link validateSessionEventData}（dsh `:230`）。dsh 之後的 `assertCurrentLlmShape`
- * （`:232-242`）驗的是 dsh 自己的訊息詞彙，nexus 沒有對應（#1549 N0558、N0599 已劃掉）。
+ * `ignorable` 只准 `true`。**不含資料規則**：dsh 的 seed 在信封之後接著跑 {@link validateSessionEventData}（`:230`），
+ * 這裡拆成兩支，因為讀盤那一側照 dsh 是逐行只驗信封（`session-format-v1-to-v2/src/codec.ts:132-146` 的 `decodeEvent`，
+ * 壞行照 recoverable 處理），資料規則等讀完整份才跑（`session-persistence-jsonl/src/index.ts:860`）。dsh seed 之後的
+ * `assertCurrentLlmShape`（`:232-242`）驗的是 dsh 自己的訊息詞彙，nexus 沒有對應（#1549 N0558、N0599 已劃掉）。
  *
- * `-0` 那一格在這裡其實擋不到東西：{@link SessionLog} 的 seed 一律先過 {@link snapshotJsonValue}，它已經拒收 `-0`
- * （dsh 的 adopted 模式不拷，那一格才有作用）。照 dsh 逐條留著。
+ * 兩個呼叫點（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549)）：{@link SessionLog} 的 seed（拷完之後），
+ * 與 harness 讀盤的逐行判壞行（`jsonl-session-store.ts` 的 `parseJsonlSessionBody`）。`-0` 那一格在 seed 擋不到東西
+ * （seed 一律先過 {@link snapshotJsonValue}，它已經拒收 `-0`）；讀盤時 `JSON.parse` 讀得出 `-0`，那裡才有作用。
  *
- * @param value - 剛拷好的那一顆。
- * @param index - 它在 seed 裡的位置。
- * @throws {TypeError} 信封哪一格不對，或資料規則不過。
+ * @param value - 要驗的那一筆。
+ * @param subject - 錯誤訊息的開頭，指認是哪一筆（「seed 第 3 顆」「第 4 行」）。
+ * @throws {TypeError} 信封哪一格不對。
  */
-function assertSessionEventEnvelope(value: unknown, index: number): asserts value is SessionEvent {
-  const subject = `seed 第 ${index} 顆`;
+export function assertSessionEventEnvelope(
+  value: unknown,
+  subject: string,
+): asserts value is SessionEvent {
   if (!isJsonObject(value)) throw new TypeError(`${subject}不是一個物件`);
   const extra = Object.keys(value).find((key) => !SESSION_EVENT_ENVELOPE_KEYS.has(key));
   if (extra !== undefined) {
@@ -1537,7 +1542,6 @@ function assertSessionEventEnvelope(value: unknown, index: number): asserts valu
   if (value['ignorable'] !== undefined && value['ignorable'] !== true) {
     throw new TypeError(`${subject}的 ignorable 只能是 true`);
   }
-  validateSessionEventData({ type, data: value['data'] }, `${subject}（${type}）`);
 }
 
 /**
@@ -2117,8 +2121,10 @@ export class SessionLog implements SessionLogView {
    */
   #adoptSeed(seed: readonly SessionEvent[]): void {
     for (const [index, event] of seed.entries()) {
-      const snapshot = snapshotJsonValue(event, `seed 第 ${index} 顆`);
-      assertSessionEventEnvelope(snapshot, index);
+      const subject = `seed 第 ${index} 顆`;
+      const snapshot = snapshotJsonValue(event, subject);
+      assertSessionEventEnvelope(snapshot, subject);
+      validateSessionEventData(snapshot, `${subject}（${snapshot.type}）`);
       if (snapshot.seq !== index) {
         throw new Error(
           `會話 "${this.#sessionId}" 的 seed 不連續：第 ${index} 顆的 seq 是 ${snapshot.seq}。`,

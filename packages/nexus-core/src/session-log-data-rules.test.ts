@@ -1,7 +1,7 @@
 /**
  * 單筆事件的資料規則與 seed 的信封（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549) N0785、N0556 做法 1）。
- * 照 dsh：資料規則在 `append`（`packages/core/session/src/index.ts:824`）與 seed（`:230`）都跑；信封只在 seed 驗
- * （`:201-243`、`:651`）。讀盤那一側（`jsonl-session-store.ts`）跑同一支資料規則，測在 harness。
+ * 照 dsh：資料規則在 `append`（`packages/core/session/src/index.ts:824`）與 seed（`:230`）都跑；信封在 seed 驗
+ * （`:201-243`、`:651`）。讀盤那一側（`jsonl-session-store.ts`）逐行跑同一支信封、讀完跑同一支資料規則，測在 harness。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -60,11 +60,27 @@ describe('seed 的信封（照 dsh 的 assertSessionEventEnvelope）', () => {
     ['ignorable 是 false', { ignorable: false }, /ignorable/],
     ['多一個鍵 foo', { foo: 1 }, /foo/],
     ['type 不是字串', { type: 7 }, /type/],
-  ])('%s：拿它當 seed 建 SessionLog 要拋', (_name, extra, message) => {
+    // 連續性檢查也會拒這一顆，但拋的是 `Error`：斷言 `TypeError` 才分得出是信封那一格擋下的。
+    ['seq 是負數', { seq: -1 }, /seq 要是非負/],
+  ])('%s：拿它當 seed 建 SessionLog 要拋 TypeError', (_name, extra, message) => {
     const broken = row(1, extra);
     // 少了 data：JSON 落盤時那一格就不在，模擬讀回來的樣子。
     if ('data' in extra) delete (broken as { data?: unknown }).data;
-    expect(() => new SessionLog('env', { seed: [row(0), broken] })).toThrow(message);
+    const build = () => new SessionLog('env', { seed: [row(0), broken] });
+    expect(build).toThrow(TypeError);
+    expect(build).toThrow(message);
+  });
+
+  it('先拷再驗：驗的與存的是同一份拷貝（存取器第一次讀到 1、之後讀到 1.5）', () => {
+    let reads = 0;
+    const tricky: Record<string, unknown> = { type: 'model/usage', seq: 0, data: {} };
+    Object.defineProperty(tricky, 'time', {
+      enumerable: true,
+      configurable: true,
+      get: () => (reads++ === 0 ? 1 : 1.5),
+    });
+    const log = new SessionLog('accessor', { seed: [tricky as unknown as SessionEvent] });
+    expect(log.events[0]?.time).toBe(1);
   });
 
   it('合格的 seed 照收，ignorable: true 也收', () => {

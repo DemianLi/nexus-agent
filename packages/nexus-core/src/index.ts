@@ -742,6 +742,7 @@ export {
   currentTurnStart,
   openTurnStart,
   hasUnansweredInterrupt,
+  assertSessionEventEnvelope,
   isKnownSessionEventType,
   isLogicalTurnStart,
   isModelVisibleEvent,
