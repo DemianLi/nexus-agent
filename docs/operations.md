@@ -108,7 +108,8 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 **3. 出廠兩個組合，加上部署方可以加回的全開，都是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
 動手；它們不涵蓋子行程與網路，對讀也幾乎沒有作用（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
 檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
-並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界。
+並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界；
+怎麼加、怎麼確認做到了，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉。
 
 ### serve：key 與 home 不能跟工作區重疊
 
@@ -158,6 +159,247 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
   沒有 header 可以記根，所以新 thread 的可寫根是**記憶體裡的虛擬檔案系統，重啟就沒了**；
   `--workspace` 仍然以 `/shared` 唯讀掛著；啟動會印一行「[私有根] 會話日誌落盤關掉…重啟就沒了…」讓部署方知道。這一格沒有圍堵，`/permission` 回「不適用」；
   同時給 `--sandbox` **啟動失敗**（沒有東西可以圍，說的是「要配落盤」）。
+
+## 多人共用主機的部署清單
+
+[#1678](https://github.com/DemianLi/nexus-agent/issues/1678)。給要把 serve 架在多人共用主機上的管理者，照下面七條做。**這一節全是部署層的防護，程式碼這一層不提供 OS 級隔離**：
+serve 起的每個子行程（git、`rg`、以 stdio 起的 MCP server）都跟 serve 用同一個 OS 帳號，程式碼裡沒有任何切換帳號的地方；檔案 fence 與權限組合是政策圍欄，不是隔離
+（見〈檔案圍堵〉的〈這道 fence 管不到的〉）。同屬部署層、但不在這七條裡的是行程的記憶體上限（`MemoryMax` 與 `--max-old-space-size` 成對，
+[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)），見〈[用 systemd 常駐](#用-systemd-常駐)〉的「記憶體上限」那一條。**按人隔離不在這一節**：同一個 serve 帳號底下，OS 層分不開網頁上的使用者，應用層的按人隔離是 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的事。
+
+形狀是**一台 serve、一個專屬帳號、多人經瀏覽器共用**，帳號名沿用〈用 systemd 常駐〉的 `nexus-agent`。每一條寫「做什麼、為什麼、怎麼確認」；
+建法在別處已經寫過的（第 1、2、3 條的前半），這裡連過去、只補怎麼確認，不抄。下面的指令在 Linux 上寫（Debian／Ubuntu 的 `useradd`、GNU `find`），其他發行版找對應的指令。
+
+### 1. serve 用專屬、不能登入的帳號
+
+**做什麼**
+
+- 建一個系統帳號，沒有密碼、沒有登入 shell，不跟別的服務或人共用。用 systemd 的話，〈用 systemd 常駐〉的第一個指令與 `User=` 已經做到；不用 systemd 的部署要自己做到同等條件。
+- serve、`plugin` 寫入口、`--dump-config` 都以它的身分、帶 serve 用的那個 `NEXUS_AGENT_HOME` 跑（`sudo -u nexus-agent …`）。以別的帳號跑，寫出來的檔擁有者就不是它。
+- 不以 root 跑。
+- 程式碼與安裝目錄的擁有者不是它，它只能讀。serve 的工作目錄指到它自己擁有的目錄（systemd 範本是 home），不指到安裝樹。
+
+**為什麼**
+
+- serve 起的子行程都跟它同一個帳號，home 的 `0600`／`0700` 只擋得住別的帳號，所以這個帳號只做這一件事。
+- 套件名引用的插件不檢查權限，理由是它們跟出貨的 `cordis.yml` 在同一條邊界上（〈plugin 清單〉）；這個前提要求 serve 帳號改不了安裝樹。
+- 第 4 條的出口限制要以帳號為條件，先要有專屬帳號。
+- 變更紀錄記的操作者是有效帳號加 `SUDO_USER`（〈後台改清單〉），是自報、不是身分認證；要能追責，靠主機本身的存取控制，也就是誰能登入、誰能 `sudo`。另設安裝帳號與它的 sudo 規則屬 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428)，這一條不寫。
+
+**怎麼確認**
+
+```bash
+ps -o user= -p "$(systemctl show -p MainPID --value nexus-agent)"   # nexus-agent
+getent passwd nexus-agent                                           # 最後一欄是 nologin 或 false
+sudo passwd -S nexus-agent                                          # 第二欄是 L（鎖住）或 NP（沒有密碼）
+su - nexus-agent                                                    # 被拒，不給 shell
+sudo -u nexus-agent test -w /opt/nexus-agent/current || echo 唯讀   # 印「唯讀」
+```
+
+### 2. harness home 的擁有者與權限
+
+**做什麼**
+
+- 明設 `NEXUS_AGENT_HOME`，指到 serve 帳號擁有、留得住的位置。系統帳號可能沒有家目錄，不設就落到 `homedir()` 底下的 `.nexus-agent`。
+- 先以 `0700` 建好，擁有者是 serve 帳號。**serve 不會收緊已經存在的目錄**：它只在自己新建目錄時給 `0700`，home 本身它不 `chmod`，預先建成 `0755` 的 home 就一直是 `0755`。
+- 用 systemd 的話，前兩點〈用 systemd 常駐〉已經做到（`install -d -m 0700`、`StateDirectoryMode=0700`、`Environment=NEXUS_AGENT_HOME=`）；不用 systemd 的部署自己做到。
+- key 放受管憑證檔、`chmod 600`（〈金鑰放哪裡〉），不放 `.env`，也不放 serve 的啟動環境。**兩份 `.env` 讀的時候不查權限**，受管檔與兩把密鑰檔（瀏覽器會話簽章、設定雜湊）才查。
+- 要加插件，優先裝成套件、用套件名引用，走 serve 帳號只能讀的安裝樹。改用檔案路徑 `insert` 的模組與 patch 檔，要屬於 serve 帳號、群組與其他人不可寫，每一層上層目錄也不可寫（〈plugin 清單〉）：
+  放在 home 與工作區以外的專用目錄，只在維護時由管理者改。
+
+**為什麼**
+
+- home 底下有會話日誌、瀏覽器會話簽章鍵、設定雜湊鍵、受管憑證、所有人的附件，以及每條對話的私有可寫根（`thread-roots/`），表見〈升級與回滾〉的〈home 底下有什麼〉。
+- 同一個帳號底下的 `0700` 分不開人（見上面第 1 條），它擋的是同一台主機上的其他帳號。
+- 啟動環境裡同名的舊 key 會蓋過受管檔的情形，見〈金鑰放哪裡〉的遷移那一段。
+
+**怎麼確認**
+
+```bash
+sudo stat -c '%U %a %n' /var/lib/nexus-agent                                        # nexus-agent 700 /var/lib/nexus-agent
+sudo find /var/lib/nexus-agent \( ! -user nexus-agent -o -perm /077 \) -print       # 沒有輸出
+```
+
+serve 開頭「會話日誌：」那一行印的目錄，要在這個 home 底下。
+
+### 3. 工作區的擁有者與權限，與 home 分開
+
+**做什麼**
+
+- serve 上 `--workspace` 是所有對話共用的唯讀參考區，模型的可寫根在 home 底下（〈serve：每條 thread 一個私有可寫根〉），所以這一條管的是「放什麼進去」。
+- 擁有者是 serve 帳號（〈用 systemd 常駐〉已經 `chown`），群組與其他人不可寫。
+- 只放這台 serve 的每位使用者都可以讀的東西。
+- 不放指向工作區外的目錄連結。
+- 工作區跟 home、跟任何一份 `.env` 的所在目錄都不重疊。serve 啟動時已經擋（〈serve：key 與 home 不能跟工作區重疊〉），這裡不重述規則。
+
+**為什麼**
+
+- 讀取不受 fence 管，工作區裡的目錄連結讀得穿到根外（〈這道 fence 管不到的〉第 1 條）；啟動時的重疊檢查只看路徑本身，擋不到連結。
+- 共用區誰的模型都讀得到，放進去的東西等於對所有使用者公開。
+
+**怎麼確認**
+
+```bash
+sudo find /srv/nexus-agent/workspace -perm /022 -print                                # 沒有輸出
+sudo find /srv/nexus-agent/workspace -type l -exec readlink -f {} +                   # 每一條都落在工作區裡
+realpath /srv/nexus-agent/workspace /var/lib/nexus-agent                              # 互不包含
+```
+
+### 4. 主機層的出口控制
+
+**做什麼**
+
+以 serve 帳號為條件，預設拒絕出站，只放行：
+
+- 模型端點，也就是 `live-model` 那一列的 `baseUrl`（出廠是 `https://integrate.api.nvidia.com/v1`，指到公司內部閘道就放行那個閘道）；
+- 設了代理時，只放行代理（〈經代理連外〉）；
+- HTTP 傳輸的 MCP server；
+- 開了遙測時的 OTLP 收集器（它直連，不經代理）；
+- DNS 與 loopback。
+
+寫法看主機：以帳號為條件的主機防火牆出站規則（nftables 的 `meta skuid`、iptables 的 `-m owner --uid-owner`）、服務單元層級的 IP 放行名單（systemd 的 `IPAddressDeny=`／`IPAddressAllow=`）都行。
+文件不給完整規則：名單內容每家不同，寫錯發行版的規則比不寫更糟。在容器裡跑的 MCP server 的網路，由第 5 條管。
+
+**為什麼**
+
+- 內網的重點是防止橫向打到其他內部系統，不是斷外網。
+- 程式碼這一層沒有網路圍欄：三組權限組合不涵蓋網路（〈這道 fence 管不到的〉第 3 條）。
+
+**怎麼確認**
+
+```bash
+sudo -u nexus-agent curl -sS -m 5 -o /dev/null -w '%{http_code}\n' <模型端點的 baseUrl>   # 連得上
+sudo -u nexus-agent curl -sS -m 5 <名單外的內部位址>                                       # 連不上
+curl -sS -m 5 <名單外的內部位址>                                                          # 用別的帳號跑，結果不受這條規則影響
+```
+
+最後一行證明規則是以帳號為條件，而不是整台機器一起封。
+
+### 5. MCP stdio server 怎麼圍起來
+
+以 stdio 起的 MCP server 是部署方接上的任意程式，**不在 fence 底下**（〈這道 fence 管不到的〉第 2 條）：環境有清洗（名字像憑證的與 `NEXUS_*` 拿掉），但檔案系統與網路不受限。要圍它，只能從啟動它的方式下手。
+
+**做什麼**
+
+以 rootless 容器為主，另一個帳號為備案。實機驗證的範圍見這一條最後的〈驗過什麼〉；寫法照下面「怎麼確認」自己驗過再上線。
+
+容器的形狀（寫在 patch 檔裡，`insert` 一列 MCP；起法見〈用 systemd 常駐〉，臨時看效果用 `sudo -u nexus-agent` 加 `--dump-config`）：
+
+<!-- mcp-container-example:begin（apps/harness/src/operations-mcp-container.test.ts 讀這一段，改了要一起過） -->
+```yaml
+- insert:
+    - id: mcp-crm
+      name: '@nexus/plugin-mcp'
+      config:
+        serverName: crm
+        connection:
+          transport: stdio
+          command: podman
+          env:
+            HOME: /var/lib/nexus-agent-podman
+          args:
+            - run
+            - --rm
+            - -i
+            - --network=none
+            - --read-only
+            - --cap-drop=ALL
+            - --security-opt=no-new-privileges
+            - --http-proxy=false
+            - -e
+            - LANG
+            - registry.example.internal/mcp-crm:1.0.0
+```
+<!-- mcp-container-example:end -->
+
+- **`-i` 一定要給**：stdio 走的就是容器的標準輸入輸出。**不要加 `-t`**：配了 pty，stdio 就不是乾淨的 pipe。
+- **`--rm` 一定要給**：stdin 關掉時 server 要自己結束（〈會話日誌〉停 serve 那一段），容器跟著清掉。
+- **網路**：上面寫 `--network=none`，不需要網路的 server 用它。要連內部系統的，改成只通到那個系統的容器網路，並且把那個系統也放進第 4 條的名單。
+- **環境變數**：先到 `podman` 這個行程（清洗過的父環境加 `connection.env`），容器只拿得到 `-e NAME` 點名的。podman 預設把代理變數傳進容器（`--http-proxy` 預設開），而代理網址可能帶帳密，所以範例加 `--http-proxy=false`，要代理就用 `-e` 明寫。範例的 `LANG` 只是示範 `-e` 怎麼用。
+- **憑證**：範例不放憑證。需要憑證的 stdio server，今天沒有合規的寫法（MCP 的 README 要求秘密不寫進設定檔，而清洗會拿掉名字像憑證的變數），這一節不解。
+- **映像**：寫固定版本，從內網映像庫拉。
+- **rootless**：serve 帳號要配 `subuid`／`subgid`（`usermod --add-subuids … --add-subgids …`）。**podman 的 `HOME` 要跟 harness home 分開**：rootless 的映像與容器儲存預設落在 `$HOME` 底下，
+  放進 harness home 會讓第 2 條的 `find` 掃出幾萬筆不是 `0700` 的檔（實測 3.7 萬筆、1.2G），所以範例用 `connection.env` 給 `podman` 一個專用的 `HOME`（`/var/lib/nexus-agent-podman`，擁有者是 serve 帳號、`0700`）。
+  載映像也要用同一個 `HOME`：`sudo -u nexus-agent env HOME=/var/lib/nexus-agent-podman podman pull <映像>`（或 `podman load -i <檔>`）。
+  **不要為了這一條把 serve 帳號加進有特權的容器群組**，那會推翻第 1 條；用 rootless 的執行環境。
+- **容器的數量**：serve 上一列 stdio 的 MCP 就是一個容器，不管開了幾條對話；對話被逐出或關掉不收它，serve 收掉才收。改了那一列的設定，新對話連到新的一份、開著的照舊用舊的，舊的一份留到重啟（〈plugin 清單〉的 MCP 連線那一條）。
+- **必要的一步**：同一台 server 由所有使用者共用一條連線，server 記在連線上的狀態會跨人共用。接上之前，先確認那台 server 沒有連線級的狀態，否則就自己把 server 隔開。
+
+另一個帳號的形狀：`command: sudo`，`args: ['-n', '-u', '<server 專屬帳號>', '<server 的絕對路徑>']`。配一條 `NOPASSWD` 的 sudoers 規則，只准 serve 帳號以那個帳號跑那一支程式（`-n` 才不會卡在問密碼）。
+sudo 預設會重設環境，代理與 `connection.env` 的變數到不了 server，要在 sudoers 點名保留，例如 `Defaults:nexus-agent env_keep += "HTTPS_PROXY HTTP_PROXY NO_PROXY"`；沒點名的變數不會傳到 server。
+這一條給 serve 帳號多一條 sudo 權限，而且網路要另外按**那個帳號**限制（第 4 條）：第 4 條的規則是以 serve 帳號為條件，server 專屬帳號不在它的範圍裡，要自己再補一條。
+
+**為什麼**
+
+容器同時限得住檔案與網路；換帳號只限得住檔案，網路要另外按帳號限。不論哪一種，MCP 的核准（〈plugin 清單〉的「MCP 的工具預設都要人核准」）管的是「這一次呼叫送不送出去」，這一條管的是「server 這個行程碰得到什麼」，兩者互補。
+
+**怎麼確認**
+
+- 照範例掛上之後，serve 起動不報這一列，工具列得出、叫得動（沒寫 `approval` 時整台都問，要先在畫面上按允許）。
+- serve 正常停、強制停之後，`sudo -u nexus-agent podman ps -a` 都沒有殘留。
+- 用 `--network=none` 時，在容器裡連不出去；容器裡 `env | grep -i proxy` 沒有輸出（或只有 `-e` 明寫的）。
+
+**驗過什麼**
+
+在 Linux arm64 容器（Debian bookworm、podman 4.3.1、nftables）裡，用上面的範例 YAML 照這條的作法跑過一輪；沒有 systemd，serve 以 `sudo -u nexus-agent` 直接起：
+
+- 範例 YAML 經 patch 載入，serve 的 MCP 快照出現 `mcp-crm` 這一列，容器 `Up`；用一個腳本化的假模型叫 `mcp__crm__fetch_release_note`，回來 `isError: false` 與工具的內容。
+- `SIGTERM` 與對 serve `SIGKILL` 之後，`podman ps -a` 都是空的（server 在 stdin 關掉時自己結束）；留下的只有 rootless podman 自己的 pause 行程，不是容器。
+- `--network=none`：容器內連 `10.77.0.2` 得到 `ENETUNREACH`，預設網路連得上；預設的 podman 把 `HTTP_PROXY` 傳進容器（1 行），加 `--http-proxy=false` 之後是 0 行。
+- 備案：`sudo -n -u <專屬帳號> <node> <server>` 配 `NOPASSWD` 規則，server 起得來、`initialize` 有回應；規則之外的程式被拒（`a password is required`）；server 看到的 `USER` 是專屬帳號；有 `env_keep` 才收得到 `HTTP_PROXY`，其他沒點名的變數收不到。專屬帳號不受第 4 條「以 serve 帳號為條件」的規則限制（實測連得到名單外的位址）。
+- 這次的環境限制：容器裡再起容器用不了 overlay，實驗是把儲存驅動設成 `vfs`（範例裡的旗標沒變）；備案只驗到 sudo 這一層，沒有經 serve 叫過工具；沒有 systemd，`ps -o user= -p $(systemctl show …)` 這種寫法沒有在這個環境跑過。
+
+### 6. serve 綁的位址與前面那一層
+
+**今天的形狀**
+
+- serve 只綁 `127.0.0.1:8787`，沒有綁其他位址的旗標。同一台主機上的其他帳號連得到這個 port，擋人的是瀏覽器會話的 cookie（〈瀏覽器會話的安全約束〉）。
+- 唯一支援的連法是 SSH 轉 port（同一節）。信任圍欄只認 loopback 的 `Host`（[#387](https://github.com/DemianLi/nexus-agent/issues/387)），所以經反向代理連進來今天沒有支援，等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（`--host` 與 TLS）。
+
+**做什麼**
+
+- 不改綁位址、不架反向代理。
+- 只為了連 serve 而開的主機帳號，在 `sshd_config` 裡用 `Match User <帳號>` 收窄成「只能把本機 port 轉到 serve 那一個 port、不能執行指令」：
+  - `AllowTcpForwarding local`、`PermitOpen 127.0.0.1:8787`：只准本機轉發、只准轉到 serve；
+  - `PermitTTY no`、`ForceCommand /usr/sbin/nologin`（或把帳號的 shell 設成不能登入的那一種）：不給 shell。`PermitTTY` 只管配不配 pty，擋不住 `ssh <主機> <指令>`，所以不能只靠它；
+  - `X11Forwarding no`、`AllowAgentForwarding no`、`PermitTunnel no`：關掉其他轉發。
+- serve 的輸出只讓管理者讀得到：啟動印的網址帶 token，會進 journal（〈用 systemd 常駐〉）；別把輸出轉存到別人讀得到的檔。
+- 帶 token 的網址由管理者交給該用的人。今天一個 serve 行程一顆 token，所有人共用同一顆；換成個人帳號登入是 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的事。
+- 閒著的死線要靠 sshd 收：`ClientAliveInterval`、`ClientAliveCountMax`（〈瀏覽器會話的安全約束〉）。
+
+**為什麼**
+
+連 serve 的人只需要轉 port，不需要在主機上執行程式。少給一種權限，要管的面就少一個。
+
+**怎麼確認**
+
+```bash
+sudo ss -ltnp | grep 8787                      # 只有 127.0.0.1:8787
+ssh -N -L 8787:127.0.0.1:8787 <收窄過的帳號>@<主機>    # 連得上，網頁打得開
+ssh <收窄過的帳號>@<主機>                          # 拿不到 shell
+ssh <收窄過的帳號>@<主機> id                       # 失敗
+ssh -N -L 9999:127.0.0.1:22 <收窄過的帳號>@<主機>  # 轉到別的 port：連線被重設，到不了
+```
+
+`--host` 與 TLS 那一段留給 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)；到時「把 port 的可達範圍限制在需要它的內網段」（dsh 的 `public-deployments.zh.md` 也這樣要求）也要寫進來。
+
+### 7. 全開權限模式
+
+**做什麼**
+
+多人共用主機上，不要把 `danger-full-access` 加回權限表（`permission-presets` 的 `presets`），也不要用 `--sandbox danger-full-access` 起。出廠的表只有 `read-only` 與 `workspace-write`（〈權限組合：`/permission`〉）。
+
+**為什麼**
+
+- 三組權限組合是政策，不是隔離。
+- serve 多人共用，同一把 token 底下的每個人都切得到；加回去之後，每一個人都可以把自己的對話切成全開。
+
+**怎麼確認**
+
+- `/permission` 不帶引數，「切得過去的」只列 `read-only`、`workspace-write`；網頁的權限座也沒有全開。
+- `/permission danger-full-access` 回「認不得」，不切。
+
+這一條管的是會話層的切換。**經人核准的單次升級不經權限表**：模型呼叫 `request_sandbox_escalation`，使用者在核准卡上點頭之後，只有那一個檔的下一次變更跑在升上去的那一格，用完就沒了。這條路不在這一條的確認範圍。
 
 ## 會話日誌
 
@@ -947,7 +1189,8 @@ WantedBy=multi-user.target
   代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。`WorkingDirectory` 是 home 時，「目前資料夾」與 home 的 `.env` 是同一份，不會讀兩次；
   照〈升級〉第 4 步把 `WorkingDirectory` 改成舊版的目錄（例如 `<checkout>/apps/harness`）的話，那個目錄的 `.env` 也會讀、而且比 home 的優先，
   裡面不能有代理變數（有就拒絕啟動），代理照樣寫在 home 的那一份。
-- **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標；要讓別台機器連進來，前面放反向代理（本專案不附設定）。
+- **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標。今天唯一支援的連法是 SSH 轉 port（見〈瀏覽器會話的安全約束〉），經反向代理連進來要等
+  [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)；只為了連 serve 而開的 SSH 帳號怎麼收窄，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉第 6 條。
 - **啟動印的網址帶登入 token，會進 journal。** 讀得到 journal 的人（`systemd-journal`、`adm` 群組、root）就拿得到：
   `journalctl -u nexus-agent -n 20` 找「nexus-agent 在 http://…」那一行。token 每次重啟都換新。
 - **一個 home 只能起一個 serve**（`<home>/serve.lock`，[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：
