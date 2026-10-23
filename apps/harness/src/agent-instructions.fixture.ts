@@ -19,6 +19,7 @@
 import {
   AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
   createAgentInstructionsListener,
+  DEFAULT_MAX_SOURCE_BYTES,
 } from '@nexus/plugin-agent-instructions';
 import type { AnyBackendProtocol } from 'deepagents';
 import type { AgentMiddleware } from 'langchain';
@@ -32,7 +33,7 @@ const NO_SESSIONS = { forCall: () => ({ kind: 'not-attached' as const }) };
  * 給一個 backend 就得到 middleware（遷移之前 `createAgentInstructionsMiddleware` 的簽名）。
  *
  * @param backend - 讀候選檔的 backend。
- * @param maxBytes - 一則基線的位元組上限。
+ * @param maxBytes - 一則基線的位元組上限。單檔上限用出廠的 `DEFAULT_MAX_SOURCE_BYTES`。
  * @param sessions - 這條 thread 的會話註冊表的 `forCall`；**省略就不記日誌**。
  * @returns 可以直接呼叫 `beforeAgent` 的 middleware。
  */
@@ -50,10 +51,13 @@ export function createAgentInstructionsMiddleware(
   };
   return createPreStepMiddleware(
     AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
-    createAgentInstructionsListener(maxBytes, {
-      // 單元測試不經圖，沒有 `checkpoint_ns`：查找一律成功，位址隨便給 root。
-      fs: () => ({ kind: 'ok', fs: handle, address: { kind: 'root' } }),
-    }),
+    createAgentInstructionsListener(
+      { maxBytes, maxSourceBytes: DEFAULT_MAX_SOURCE_BYTES },
+      {
+        // 單元測試不經圖，沒有 `checkpoint_ns`：查找一律成功，位址隨便給 root。
+        fs: () => ({ kind: 'ok', fs: handle, address: { kind: 'root' } }),
+      },
+    ),
     sessions ?? NO_SESSIONS,
   );
 }

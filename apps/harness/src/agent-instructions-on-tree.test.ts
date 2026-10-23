@@ -24,10 +24,12 @@ import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import {
   AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
+  createAgentInstructionsListener,
+  DEFAULT_MAX_BYTES,
   isAgentInstructionsMessage,
 } from '@nexus/plugin-agent-instructions';
-import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
-import { afterEach, describe, expect, it } from 'vitest';
+import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT, StateBackend } from 'deepagents';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { HEADLESS_APPROVALS } from './agent-factory.js';
 import { createNexusAgent } from './agent-factory.js';
@@ -246,14 +248,14 @@ describe('B：出貨清單上的 agent-instructions 經樹進來，位置與名�
     });
   }, 60000);
 
-  it('樹上的 agentLoop 服務：歸屬是 pre-step 那一列、契約 1.0.0；pre-step 是必掛的內建列', async () => {
+  it('樹上的 agentLoop 服務：歸屬是 pre-step 那一列、契約 1.1.0（#1533 加了 signal）；pre-step 是必掛的內建列', async () => {
     const root = newRoot();
     await loadDefaultPlugins({ env: home(), warn: warnNothing }, { tree: root.tree });
     const tree = await root.tree.context();
     const agentLoop = tree.get('agentLoop') as
       { provider?: string; contractVersion?: string } | undefined;
     expect(agentLoop?.provider).toBe('pre-step');
-    expect(agentLoop?.contractVersion).toBe('1.0.0');
+    expect(agentLoop?.contractVersion).toBe('1.1.0');
     expect(REQUIRED_TREE_ENTRY_IDS.has('pre-step')).toBe(true);
   }, 60000);
 });
@@ -836,4 +838,151 @@ describe('真的入口：runCli 與 runServe（落盤的會話日誌是證據）
     for (const event of injected)
       expect(JSON.stringify(event.data)).toContain('serve 入口的規矩。');
   }, 90000);
+});
+
+/**
+ * [#1533](https://github.com/DemianLi/nexus-agent/issues/1533)：讀整份、單檔有上限，經**產品的組裝**。插件單元測試用的是插件自己
+ * 拿到的 backend；這一組量的是每個入口真的交給它的那一顆（CLI 的樹、serve 的樹、無樹的組裝、runServe 新 thread 走的
+ * `/shared` 那一格）會不會在第 500 行截斷，以及出貨那一列的設定有沒有真的傳到 `apply`。
+ */
+describe('讀整份與單檔上限，經各入口的組裝（#1533）', () => {
+  const RULES = Array.from({ length: 600 }, (_, index) => `rule ${index + 1}`).join('\n');
+
+  it.each(['cli', 'serve'] as const)(
+    '%s 的樹：600 行的 AGENTS.md 讀到第 600 行',
+    async (entry) => {
+      const booted = await boot(home(), entry);
+      const thread = await openThread(booted, `${entry}-long`, [{ content: '好。' }], {
+        workspace: workspaceWith(RULES),
+      });
+      await runOn(thread);
+      const texts = baselineTexts(thread.model.prompts[0] ?? []);
+      expect(texts).toHaveLength(1);
+      expect(texts[0]).toContain('rule 600');
+      expect(texts[0]).not.toContain('Workspace instruction budget');
+      await closeThread(thread);
+    },
+    60000,
+  );
+
+  /**
+   * 讀前那一道（`ls` 的大小）在生產的 backend 上真的對得上 `read` 的路徑：組裝點的 composite（`agent-factory.ts` 的
+   * `withToolResultStash` 形狀：預設格＋`/shared/` 唯讀格），兩格都是 `ContainedFilesystemBackend`。替身的 `ls` 是我們自己寫的，
+   * 路徑對不上的話那一道永遠不觸發、只剩讀完那一道——結果一樣、量不出來，所以這裡數 `read`。
+   */
+  it.each([
+    ['新 thread：讀 /shared 那一格', '/shared'],
+    ['舊 thread／CLI：讀根', undefined],
+  ] as const)(
+    '生產形狀的 backend，%s：超過上限的那份一次 read 都沒有，小的照讀',
+    async (_label, prefix) => {
+      const workspace = workspaceWith(`大檔開頭。${'a'.repeat(2048)}`);
+      writeFileSync(join(workspace, 'CLAUDE.md'), '小檔的規矩。', 'utf8');
+      const target = new ContainedFilesystemBackend({
+        rootDir: workspace,
+        mode: prefix === undefined ? 'workspace-write' : 'read-only',
+      });
+      const reads = vi.spyOn(target, 'read');
+      const backend =
+        prefix === undefined
+          ? new CompositeBackend(target, { '/large_tool_results/': new StateBackend() })
+          : new CompositeBackend(new ContainedFilesystemBackend({ rootDir: scratch() }), {
+              '/large_tool_results/': new StateBackend(),
+              '/shared/': target,
+            });
+      const handle = {
+        backend: () => backend,
+        offWorkspacePrefixes: () => [] as readonly string[],
+        hasWorkspace: () => true,
+        workspaceRoot: () => undefined,
+        sharedWorkspacePrefix: () => prefix,
+      };
+      const listener = createAgentInstructionsListener(
+        { maxBytes: DEFAULT_MAX_BYTES, maxSourceBytes: 1024 },
+        { fs: () => ({ kind: 'ok', fs: handle, address: { kind: 'root' } }) },
+      );
+      const injected = await listener([], { configurable: {} });
+      const text = injected?.[0]?.content ?? '';
+      expect(text).toContain('小檔的規矩。');
+      expect(text).not.toContain('大檔開頭。');
+      const readPaths = reads.mock.calls.map(([path]) => path);
+      expect(readPaths).toContain('/CLAUDE.md');
+      expect(readPaths).not.toContain('/AGENTS.md');
+    },
+  );
+
+  it('沒有樹的組裝：600 行的 AGENTS.md 讀到第 600 行', async () => {
+    const loaded = await loadDefaultPlugins({ env: home(), warn: warnNothing });
+    const workspace = workspaceWith(RULES);
+    const built = await createCliAgent(
+      { live: false, workspace, sandbox: 'workspace-write' },
+      withScriptedModel([...loaded.plugins], [{ content: '好。' }]),
+      workspace,
+    );
+    const attachment = built.attachSessions(new SessionRegistry('detached-long'));
+    await built.agent.invoke(toAgentInvocation('跑。'), {
+      configurable: { thread_id: 'detached-long' },
+    });
+    const texts = baselineTexts((built.model as unknown as ScriptedChatModel).prompts[0] ?? []);
+    expect(texts).toHaveLength(1);
+    expect(texts[0]).toContain('rule 600');
+    await attachment.detach();
+    await built.dispose();
+  }, 60000);
+
+  it('runServe（新 thread 經 /shared 那一格讀）：落盤的基線讀到第 600 行', async () => {
+    const home = scratch();
+    const workspace = workspaceWith(RULES);
+    const patch = join(home, 'scripted.patch.yml');
+    writeFileSync(patch, scriptedPatchText([{ content: '好。' }]), { mode: 0o600 });
+    const running = (await runServe({
+      argv: ['--port', '0', '--workspace', workspace, '--patch', patch],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+    })) as RunningServe;
+    try {
+      const client = await serveClient(running);
+      const down = await client.openEvents('serve-long');
+      await client.runStart('serve-long', '開工。');
+      await foldTurn(down);
+      await down.return?.(undefined);
+    } finally {
+      await running.close();
+    }
+    const injected = injectedBaselines(await logEventsOf(home));
+    expect(injected).toHaveLength(1);
+    expect(JSON.stringify(injected[0]?.data)).toContain('rule 600');
+  }, 90000);
+
+  it.each([
+    ['patch 把 maxSourceBytes 調成 1024', true],
+    ['出廠設定（1 MiB）', false],
+  ] as const)(
+    'runCli，%s：2 KB 的 AGENTS.md %s，小的 CLAUDE.md 照讀（出貨那一列的設定傳到 apply）',
+    async (_label, capped) => {
+      const home = scratch();
+      const workspace = workspaceWith(`大檔開頭。${'a'.repeat(2048)}`);
+      writeFileSync(join(workspace, 'CLAUDE.md'), '小檔的規矩。', 'utf8');
+      const patch = join(home, 'scripted.patch.yml');
+      const rows = capped ? '- id: agent-instructions\n  config:\n    maxSourceBytes: 1024\n' : '';
+      writeFileSync(patch, scriptedPatchText([{ content: '好。' }], rows), { mode: 0o600 });
+      const lines: string[] = [];
+      const record = (...parts: unknown[]): void => void lines.push(parts.join(' '));
+      await runCli({
+        argv: ['--patch', patch, '--workspace', workspace, '開工。'],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer: { log: record, error: record },
+        env: { [HARNESS_HOME_ENV]: home },
+        cwd: workspace,
+      });
+      expect(lines.join('\n')).toContain('好。');
+      const injected = injectedBaselines(await logEventsOf(home));
+      expect(injected).toHaveLength(1);
+      const text = JSON.stringify(injected[0]?.data);
+      expect(text).toContain('小檔的規矩。');
+      expect(text.includes('大檔開頭。')).toBe(!capped);
+    },
+    60000,
+  );
 });

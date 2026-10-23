@@ -56,6 +56,15 @@
  *    `AGENTS.md` 不會升格成系統指示（那是一條使用者訊息的載體，不該由模型自己填）。
  *    **退到什麼**：有前綴就讀前綴底下，沒有（舊 thread、CLI、沒有圍堵）讀 `/`，與 dsh 行為相同。
  *    **重開條件**：出現「使用者自己放在私有根裡的指示檔也要生效」的需求。
+ * 5. **哪一條**：dsh 的單檔上限是**邊讀邊量**（`src/files.ts:387-417` 的 `readBounded`）：先看 stat 的 `size`，超過
+ *    `maxSourceBytes` 就不讀（`:397`）；否則串流讀、累計 UTF-8 位元組，一超過就收手（`:404-408`），所以讀的當下檔案變大也讀不進超過上限的量。
+ *    **為什麼表達不出來**（理由 1）：插件只經 `fs` 服務拿到 `BackendProtocol`，它的 `read` 整段回傳、沒有串流；繞過 backend 直接讀主機檔
+ *    會越過 fence（偏離 1）。
+ *    **退到什麼**：讀之前對要讀的那個目錄 `ls` 一次，拿候選檔的 `size`，超過就不讀（對應 `:397`）；讀完再用 UTF-8 位元組量一次，
+ *    超過就丟（對應 `:406-407`）。`ls` 拋錯或回錯誤時表是空的，每個候選照讀、只靠讀完那一道。沒有工作區時墊底的 `StateBackend`
+ *    給的 `size` 是字元數，不大於位元組數，所以那一道只會放行、不會誤擋。
+ *    **留下的缺口**：`ls` 之後、`read` 之前檔案才變大，那一次讀進記憶體的量不受上限保護（dsh 的串流擋得住）；結果照樣丟掉，不進 prompt。
+ *    **重開條件**：`fs` 服務交出串流讀。
  *
  * ## 摘要之後：看的是模型看得到的那一串
  *
@@ -102,6 +111,10 @@
  * 什麼時候不加」。**行為逐字不變**（Q4）：記號、渲染文字、四個候選與順序、`maxBytes` 預設、middleware 名字與在鏈上的位置、日誌
  * `source`、每次 invoke 一格、摘要後下一次 invoke 補回。（遷移當時還有「寫日誌失敗訊息照送」；#1665 起宿主改成原錯往外拋、這一輪失敗，見 harness 的
  * `pre-step-middleware.ts`。）
+ *
+ * 之後改過的兩件（[#1533](https://github.com/DemianLi/nexus-agent/issues/1533)）：**不再在第 500 行截斷**——讀候選檔時沒給 `limit`，
+ * 基座的 `read` 補成 500 行（`CompositeBackend.read`、`FilesystemBackend.read` 的預設值），而且不帶任何截斷說明；現在明確讀整份，
+ * 只受渲染預算限制。**單檔有上限**（`maxSourceBytes`，照 dsh）：超過的整份不讀、不進基線；這一輪被停下時，還沒讀的候選不再讀。
  *
  * 舊外殼的建構式（`createAgentInstructionsMiddleware`）搬到 harness 的
  * `agent-instructions.fixture.ts`，給 `pre-step-middleware.test.ts` 的單元測試用；`NexusPlugin` 外殼與 `createAgentInstructionsPlugin`
@@ -163,6 +176,12 @@ export const INSTRUCTION_FILE_CANDIDATES = [
 export const DEFAULT_MAX_BYTES = 65536;
 
 /**
+ * 單一指示檔最多讀幾個 UTF-8 位元組，更大的檔不讀、不進基線。照 dsh `packages/context/agent-instructions/src/config.ts:14` 的
+ * `DEFAULT_MAX_SOURCE_BYTES`（說明在 `:23-24`，`687f282e`）。
+ */
+export const DEFAULT_MAX_SOURCE_BYTES = 1_048_576;
+
+/**
  * 這個 plugin 的設定。
  *
  * **dsh 拿非正數當「關掉」，我們這側不留那條路**：要關就別把這個 plugin 放進清單，而一個
@@ -175,10 +194,21 @@ export const agentInstructionsConfigSchema = z.strictObject({
     .positive('上限要是正的有限數')
     .finite('上限要是正的有限數')
     .default(DEFAULT_MAX_BYTES),
+  /**
+   * 單一指示檔的 UTF-8 位元組上限。正整數，照 dsh `config.ts:40` 的 `.step(1).min(1)`；省略即 {@link DEFAULT_MAX_SOURCE_BYTES}。
+   */
+  maxSourceBytes: z
+    .number()
+    .int('單檔上限要是正整數')
+    .min(1, '單檔上限要是正整數')
+    .default(DEFAULT_MAX_SOURCE_BYTES),
 });
 
 /** 驗過的設定。 */
 export type AgentInstructionsConfig = z.infer<typeof agentInstructionsConfigSchema>;
+
+/** listener 用到的兩個上限：渲染預算與單檔上限。**兩格都必填**，`apply` 照設定交，不在這裡補預設。 */
+export type AgentInstructionsLimits = Pick<AgentInstructionsConfig, 'maxBytes' | 'maxSourceBytes'>;
 
 /** 這一則訊息是基線嗎。 */
 export function isAgentInstructionsMessage(message: BaseMessage): boolean {
@@ -200,24 +230,37 @@ function trimmedDigest(content: string): string {
  *
  * 同一層內容相同的只留第一個（`AGENTS.md` 與 `CLAUDE.md` 互為符號連結或直接複製是常見的做法），
  * 保留的是**先出現的那個路徑**。
+ *
+ * **讀整份，單檔有上限**（#1533，照 dsh `src/files.ts:387-417` 的 `readBounded`，退法見檔頭偏離 5）：先看 `ls` 的大小，超過
+ * `maxSourceBytes` 不讀；讀的時候明確要整份（不給 `limit` 基座會補成 500 行）；讀完再量一次位元組。讀前、讀完各看一次 `signal`，
+ * 讀的時候拋錯也先看——這一輪被停下就把中止往外拋，不當成「讀不到」吞掉（dsh `:396`、`:410`、`:413`）。
  */
 async function discover(
   backend: AnyBackendProtocol,
   directory: string,
+  maxSourceBytes: number,
+  signal: AbortSignal | undefined,
 ): Promise<InstructionFile[]> {
+  signal?.throwIfAborted();
   const adapted = adaptBackendProtocol(backend);
+  const sizes = await listedSizes(adapted, directory);
   const files: InstructionFile[] = [];
   const seen = new Set<string>();
   for (const candidate of INSTRUCTION_FILE_CANDIDATES) {
+    signal?.throwIfAborted();
+    const path = `${directory}/${candidate}`;
+    const listed = sizes.get(path);
+    if (listed !== undefined && listed > maxSourceBytes) continue;
     let content: string | undefined;
     try {
-      const result = await adapted.read(`${directory}/${candidate}`);
-      if (result.error != null) continue;
-      if (typeof result.content !== 'string') continue;
-      content = result.content;
+      const result = await adapted.read(path, 0, Number.MAX_SAFE_INTEGER);
+      if (result.error == null && typeof result.content === 'string') content = result.content;
     } catch {
-      continue;
+      // 讀不到就跳過；被停下的話下面那一行拋。
     }
+    signal?.throwIfAborted();
+    if (content === undefined) continue;
+    if (Buffer.byteLength(content, 'utf8') > maxSourceBytes) continue;
     if (content.length === 0) continue;
     const digest = trimmedDigest(content);
     if (seen.has(digest)) continue;
@@ -225,6 +268,26 @@ async function discover(
     files.push({ displayPath: candidate, content });
   }
   return files;
+}
+
+/**
+ * 對要讀的那個目錄 `ls` 一次，回「路徑 → 位元組數」（只收檔案）。路徑與 `read` 用的同一種：有共用區前綴時 composite 回的路徑
+ * 帶著前綴。`ls` 拋錯或回錯誤就回空表，由讀完那一道擋。
+ */
+async function listedSizes(
+  adapted: ReturnType<typeof adaptBackendProtocol>,
+  directory: string,
+): Promise<ReadonlyMap<string, number>> {
+  const sizes = new Map<string, number>();
+  try {
+    const listed = await adapted.ls(directory === '' ? '/' : directory);
+    for (const info of listed.files ?? []) {
+      if (info.is_dir !== true && typeof info.size === 'number') sizes.set(info.path, info.size);
+    }
+  } catch {
+    // 表空著：每個候選照讀，只靠讀完那一道。
+  }
+  return sizes;
 }
 
 /** {@link createAgentInstructionsListener} 要的查找。測試換成替身；`apply` 換成從服務抓進閉包的那一份。 */
@@ -239,12 +302,15 @@ export interface AgentInstructionsLookups {
  * 判準看的是宿主交來的第一個參數——摘要器會組給模型的那一串，不是 `state.messages`：摘要之後舊基線還在 state 裡、但落在切點
  * 之前（#397）。fs 查找不是 `ok`、或 `backend()` 是 `undefined`（這次組裝沒有 backend）就不注入。
  *
- * @param maxBytes - 一則基線的位元組上限。
+ * 宿主交了 `invocation.signal`（`@nexus/agent-loop` 1.1.0 起）就照它收手：已中止的話拋中止原因，一個候選都不讀。1.0.0 的宿主沒有
+ * 這一格，照讀。
+ *
+ * @param limits - 渲染預算與單檔上限，見 {@link AgentInstructionsLimits}。
  * @param lookups - 查找，見 {@link AgentInstructionsLookups}。
  * @returns 登記給 `agentLoop.preStep` 的 listener。
  */
 export function createAgentInstructionsListener(
-  maxBytes: number,
+  limits: AgentInstructionsLimits,
   lookups: AgentInstructionsLookups,
 ): PreStepListener {
   return async (visible, invocation): Promise<readonly PreStepInjection[] | undefined> => {
@@ -254,7 +320,8 @@ export function createAgentInstructionsListener(
     if (backend === undefined || found.kind !== 'ok') return undefined;
     // 有共用區前綴的 thread（新 thread，#1775）讀共用區；沒有的（舊 thread、沒有圍堵）讀 `/`。
     const directory = found.fs.sharedWorkspacePrefix() ?? '';
-    const rendered = renderAgentInstructions(await discover(backend, directory), maxBytes);
+    const files = await discover(backend, directory, limits.maxSourceBytes, invocation.signal);
+    const rendered = renderAgentInstructions(files, limits.maxBytes);
     if (rendered === undefined) return undefined;
     return [{ content: rendered.text, additionalKwargs: { [AGENT_INSTRUCTIONS_MARKER]: true } }];
   };
@@ -281,7 +348,7 @@ export const manifest = defineManifest({
     { token: fsToken.name, range: '^2.1.0' },
   ],
   config: Config,
-  // 換程式碼要重啟行程；設定（`maxBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
+  // 換程式碼要重啟行程；設定（`maxBytes`、`maxSourceBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
   reload: { code: 'restart', config: 'next-thread' },
   capabilities: [],
 });
@@ -299,8 +366,11 @@ export function apply(ctx: Context, config: AgentInstructionsConfig): void {
   const fs = service(ctx, fsToken);
   agentLoop.preStep(
     AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
-    createAgentInstructionsListener(config.maxBytes, {
-      fs: (invocation) => fs.forCall(invocation),
-    }),
+    createAgentInstructionsListener(
+      { maxBytes: config.maxBytes, maxSourceBytes: config.maxSourceBytes },
+      {
+        fs: (invocation) => fs.forCall(invocation),
+      },
+    ),
   );
 }
