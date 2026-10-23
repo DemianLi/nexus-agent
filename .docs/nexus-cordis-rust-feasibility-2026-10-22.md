@@ -259,6 +259,59 @@ S3 與 S4 的及格標準就是 Q4.2 的門檻。
 - **CPU 與尾延遲**：這支 Rust 原型反而較差。原型用多執行緒 tokio、`serde_json::Value`、`std::Mutex`，沒有調校。這是實作品質的問題，不是語言的上限，但也代表「Rust 一定比較省 CPU」在這裡**沒有被證明**。
 - **換算**：監督行程省下的 40–90 MB，約等於 4–8 條原型對話子行程（每條 10.8 MB）。
 
+### 3-7 執行器的語言：Rust 對 C（2026-10-23 晚補）
+
+這一節回答「R1 (b) 的 CPU 條件管不管執行器」。條件是監督行程的 CPU 不輸 Node 監督行程。
+
+**量法**：
+
+- 環境：同一個容器，`--cpus=4 --memory=2g`。量測時宿主負載 load avg 12–20，四個變體交錯執行，抵銷負載漂移。
+- 編譯：全部編成 static glibc。dsh 正式出貨是 `musl-gcc -Os -static -s`，容器裡沒有 musl，所以 musl 版沒量。
+- 指標：每次 fork＋exec `/bin/true` 到結束，用 `wait4` 取子行程的 rusage；另從 Node `spawn` 量一次產品實際走的路徑。
+
+**變體**：
+
+| 變體 | 內容 | 大小 |
+| --- | --- | --- |
+| C | dsh 的 `native/system/packages/entry/src/main.c`（`687f282e`，與 rc.1 相同），只有 Landlock | 600 KB |
+| C＋seccomp | 同上，加上 Rust v2 的 seccomp 過濾器，逐條移植 | 600 KB |
+| Rust v1 | `sbx-run` v1，只有 Landlock | 1.06 MB |
+| Rust v2 | `sbx-run` v2，Landlock＋seccomp | 1.06 MB |
+
+四個都擋得住 `/secret/token`，也都寫得進工作區。UDP 只有兩個 seccomp 版擋得住（回 `EACCES`）。
+
+**結果**：每次執行比直接 exec 多出的時間，取 p50。
+
+| 比較 | 負載較低時 | 負載較高時 |
+| --- | --- | --- |
+| Rust v1 對 C（都只有 Landlock） | +36～37 µs | +97～154 µs |
+| Rust v2 對 C＋seccomp | 沒量 | +66～164 µs（多 6～15%） |
+| maxrss | C 708 KB、Rust 848 KB | 同左 |
+
+- **功能相同時，Rust 每次多 0.04–0.16 ms。** 一次工具呼叫本身要幾毫秒到幾百毫秒。
+- **成本大頭是 seccomp，不是語言。** C 加上同一份過濾器，多出的時間和 Rust v2 幾乎一樣。10 條 BPF 指令為什麼要 0.1–1 ms，沒有查。
+- **對照：Node 啟動一次（`node -e 0`）要 16.8 ms、42 MB。** 所以「不輸 Node」對執行器沒有意義，執行器要比的對象是 C。
+
+**業界做法**：子代理讀各專案原始碼得出，主代理抽查了 Codex 的 seccomp 規則、srt 的 `apply-seccomp.c`、Codex Discussion #1174。
+
+- **監督行程是 TS／JS 的工具，「套沙箱再 exec」那段都交給 C**：
+  - dsh：`landlock-run`；
+  - Anthropic 的 sandbox-runtime 與 Claude Code：bubblewrap 加上 965 行的 `apply-seccomp.c`；
+  - Gemini CLI：bubblewrap。
+- **執行器用 Rust 的，都是監督行程本來就是原生語言的專案**：
+  - Codex：landlock 0.4 加 seccompiler，擋 `AF_INET`、`AF_INET6` 與 `io_uring`，和本篇最像，但 namespace 那段仍交給 bubblewrap；
+  - youki、Firecracker jailer：全 Rust。
+- **專案自己寫下的語言理由**：
+  - dsh：只依賴 libc，要稽核的只有一個檔；
+  - minijail：C 好連結，也能控制會用到哪些 syscall；
+  - crun：低階工具適合 C；
+  - youki：記憶體安全，處理 fork 和 namespace 比 Go 容易；
+  - Codex：只有一句「bindings 現成」。
+- **查不到**：只變「語言」這一個變數的公開效能比較。
+- **政策面**：CISA 等機構的《The Case for Memory Safe Roadmaps》（2023-12）建議新的、小的、安全關鍵的程式優先用記憶體安全語言，但沒有點名沙箱執行器。把執行器算進這條，是本篇的推論。
+
+**決定**：執行器照 Q11 用 Rust，**不受 R1 (b) 管**（demian 2026-10-23 拍板）。代價是每次多 0.04–0.16 ms、執行檔大約 460 KB，換到的是記憶體安全，做法和 Codex 一致。
+
 ## 四、前置判斷：Cordis 在 Rust 裡表達得出來嗎
 
 **表達得出來的部分**：cordis-rs 已經實作了這些。
@@ -326,7 +379,8 @@ Q9、Q10 是量測計畫與下載許可的程序題，不列。Q19、Q20 整理�
 | 1 | 每條對話一個行程＋監督行程 | **2** | dsh 沒有整體的資源保險絲，只有各入口 fail-closed 的上限。nexus 的主機要多人共用（企業內網），一條對話失控不能拖垮全部。§三-3 量到同一個行程裡的隔離擋不住 S3b、S3c | 監督行程管對話行程的生死、heap 上限、時限、renice；加上 #1484 的閒置逐出 |
 | 2 | 工具子行程擋網路 | **2** | dsh 的 `SandboxMode` 明寫網路不在範圍內。企業內網要防資料外流。Landlock 只管 TCP，擋 UDP 要用 seccomp（§三-5） | seccomp 擋 `socket(AF_INET/AF_INET6)` 與 `io_uring_setup` |
 | 3 | 自己寫原生執行器 | **2**（由 #2 推出） | dsh 的 `landlock-run` 只做 Landlock，表達不出 seccomp 擋網路 | 新的執行器；dsh 的 TS 接縫（`SandboxMode`、`full/partial`）照用 |
-| 4 | 執行器與監督行程用 Rust | **語言選擇**（dsh 沒有對應的做法可偏離；依附在 #1、#2 的理由 2 之下） | 執行器與監督行程都站在安全邊界上，要記憶體安全、不要 GC。監督行程的足跡有量測支持（§三-6），但 CPU 原型落後 | demian 拍板 (b)：先調校原型，量到 CPU 不輸 Node 監督行程才收（§十一） |
+| 4a | 監督行程用 Rust | **語言選擇**（dsh 沒有監督行程，無從比照；依附在 #1 的理由 2 之下） | 監督行程站在安全邊界上，要記憶體安全、不要 GC。足跡有量測支持（§三-6），但 CPU 原型落後 | demian 拍板 (b)：先調校原型，量到 CPU 不輸 Node 監督行程才收（§十一） |
+| 4b | 執行器用 Rust，不照 dsh 的 C | **語言選擇**（偏離 dsh 的 C `landlock-run`；依附在 #2、#3 的理由 2 之下） | 執行器是安全邊界上的新小程式，要記憶體安全。量到同功能下比 C 每次多 0.04–0.16 ms、執行檔大 460 KB（§三-7）。業界同樣做法：Codex | demian 拍板：照 Q11 用 Rust，不受 R1 (b) 管（§三-7） |
 | 5 | MCP 搬進 Rust | **2**（由 #1、#4 推出） | 跨對話的 MCP 連線池（PR #1820）必須活在監督行程裡，對話行程活不久也看不到彼此。監督行程是 Rust，所以 MCP client 是 Rust | Rust MCP client，以編進執行檔的插件形式提供 |
 | 6 | 模型並行上限搬進 Rust | **2**（由 #1 推出） | 上限要跨所有對話計數（#1618），對話分成多個行程以後，只有監督行程看得到全部 | 監督行程裡的並行上限插件，經橋提供給對話行程 |
 
@@ -416,6 +470,12 @@ Rust 監督行程（主機級的樹）
 - **CPU 原型落後**：見 §三-6。
 - **單條對話的 CPU 上限**：預設容器做不到，cgroup 唯讀、renice 只能單向。要做得在宿主上給監督行程一棵可寫的 cgroup 子樹，部署形狀要另議。
 - **p3 的 S4 不一致**：不採計。p3 本來也在 S3b、S3c 不及格。
+- **seccomp 過濾器的缺口**：
+  - 目前只擋 `AF_INET`、`AF_INET6` 與 `io_uring_setup`。
+  - Codex 還擋 `io_uring_enter`、`io_uring_register`。
+  - Anthropic 的 sandbox-runtime 還擋 `AF_UNIX`、`AF_VSOCK` 與建立 namespace 的 syscall；Codex 棄用舊的 Landlock 路徑，也是因為擋不住 Unix socket。
+  - 第 1 段開卡時要逐條決定。
+- **seccomp 的成本**：每次 0.1–1 ms，原因沒查（§三-7）。執行器用 musl 編的版本也沒量。
 - **平台只量了 aarch64 Linux**：沒有量 x86_64。seccomp 過濾器有處理 x86_64 的架構檢查，但沒有在 x86_64 上跑過。
 - **bwrap**：只在預設容器裡試過。在可以建 namespace 的宿主上沒有量。
 
@@ -425,7 +485,7 @@ Rust 監督行程（主機級的樹）
    - 支持：記憶體約 1/10、啟動快約 6 倍、30 分鐘沒有洩漏。
    - 反對：未調校的原型 CPU 約 2.6 倍、尾延遲較差。
    - 要決定：接受「記憶體安全加上足跡」當語言理由，還是要等調校後 CPU 不輸 Node 再定？
-   - **已拍板（2026-10-23）：(b)**。先調校原型，量到監督行程的 CPU 不輸 Node 監督行程（c0p），這條語言偏離才收。比法：同一支 `bench.mjs`、同一台機器。在那之前，監督行程的語言視為未定。
+   - **已拍板（2026-10-23）：(b)**。先調校原型，量到監督行程的 CPU 不輸 Node 監督行程（c0p），這條語言偏離才收。比法：同一支 `bench.mjs`、同一台機器。在那之前，監督行程的語言視為未定。**這個條件只管監督行程，不管執行器**：執行器照 Q11 用 Rust（§三-7、§六 #4b）。
 2. **第 2 段的記憶體退步要先量**：在真 harness 子行程量出每條成本以前，第 2 段不宣告數字。要決定：是否同意這個前置條件？量出來太高時，可以接受的上限是多少？
    - **已拍板（2026-10-23）：是**。可以接受的上限，等量出來以後再定。
 3. **CPU 上限的部署形狀**：要不要在部署時給監督行程一棵可寫的 cgroup 子樹？這會改變內網部署的要求。
