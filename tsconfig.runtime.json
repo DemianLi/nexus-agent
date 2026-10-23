@@ -56,6 +56,7 @@
         "./packages/nexus-plugin-sandbox-policy/src/invariant.ts"
       ],
       "@nexus/plugin-skills": ["./packages/nexus-plugin-skills/src/index.ts"],
+      "@nexus/plugin-skills/invocation": ["./packages/nexus-plugin-skills/src/invocation.ts"],
       "@nexus/plugin-submit-record": ["./packages/nexus-plugin-submit-record/src/index.ts"],
       "@nexus/plugin-system-prompt": ["./packages/nexus-plugin-system-prompt/src/index.ts"],
       "@nexus/plugin-telemetry-otel": ["./packages/nexus-plugin-telemetry-otel/src/index.ts"],

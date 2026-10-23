@@ -83,9 +83,10 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
 });
 
 describe('相依關係', () => {
-  it('src 不 import @nexus/core；相依只有 SDK、cordis 與 @nexus/skills，沒有 default 匯出', () => {
+  it('src 不 import @nexus/core；相依只有 SDK、cordis、@nexus/skills（`/名字` 那一列另加 agent-loop 與 fs），沒有 default 匯出', () => {
     const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
     expect(read('./index.ts')).not.toMatch(/from '@nexus\/core'/u);
+    expect(read('./invocation.ts')).not.toMatch(/from '@nexus\/core'/u);
     expect('default' in skills).toBe(false);
     const pkg = JSON.parse(read('../package.json')) as {
       dependencies?: Record<string, string>;
@@ -93,7 +94,7 @@ describe('相依關係', () => {
     };
     expect(Object.keys(pkg.dependencies ?? {})).toEqual(['zod']);
     expect(Object.keys(pkg.peerDependencies).sort()).toEqual(
-      ['@nexus/cordis', '@nexus/sdk', '@nexus/skills'].sort(),
+      ['@nexus/agent-loop', '@nexus/cordis', '@nexus/fs', '@nexus/sdk', '@nexus/skills'].sort(),
     );
   });
 });

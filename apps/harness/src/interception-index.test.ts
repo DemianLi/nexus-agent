@@ -213,8 +213,8 @@ const INDEX: readonly InterceptionRow[] = [
       '#394 寫的「零」是上限 20 被 floor 吃掉的讀數）。摘要把基線切掉之後，dsh 下一步就補回、' +
       '我們等到下一次 invoke（#397，登記在 plugin 檔頭）。要「每一步」的東西這一格撐不住，' +
       '得換每輪多一格的 `beforeModel`（33 輪變 24 輪）——#389 因此以 not planned 關閉，重開條件在卡上。' +
-      '**第二位消費者 `time-context`（#1625）同價**：也是每次 invoke 一格、每輪零格，而且在上限 100 下輪數不變（出貨清單有沒有它都是 32 輪，' +
-      '`time-context-on-tree.test.ts` J 組）；dsh 的每步重算同樣退成每次 invoke 一則（偏離登記在 `@nexus/plugin-time-context` 檔頭第 1 條）。',
+      '**第二位消費者 `time-context`（#1625）與第三位 `skill-invocation`（#1574）同價**：也是每次 invoke 一格、每輪零格；' +
+      '三位都在時上限 100 下出貨清單是 31 輪，少任一位是 32（`time-context-on-tree.test.ts` J 組）；dsh 的每步重算同樣退成每次 invoke 一則（偏離登記在 `@nexus/plugin-time-context` 檔頭第 1 條）。',
   },
   {
     cell: 3,

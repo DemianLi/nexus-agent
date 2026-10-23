@@ -116,6 +116,7 @@ export const ROW_CLASSES: ReadonlyMap<string, RowClassEntry> = new Map<string, R
   // ── 出貨的插件（分類文件 A 表）：程式碼住在套件裡，狀態全在 `apply` 裡，每條 thread 各掛一份。
   ['echo', next],
   ['agent-instructions', next],
+  ['skill-invocation', next],
   ['time-context', next],
   ['skills', next],
   ['plan-mode', next],

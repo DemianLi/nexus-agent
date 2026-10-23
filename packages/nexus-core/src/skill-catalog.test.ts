@@ -9,12 +9,20 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SystemMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { createSkillsMiddleware, FilesystemBackend } from 'deepagents';
 import type { BackendProtocolV2, BackendRuntime, FileDownloadResponse, LsResult } from 'deepagents';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { modelVisibleSkillsBackend, parseSkillInvocation, scanSkills } from './skill-catalog.js';
+import { sourceKwargs } from './message-source.js';
+import { REPEAT_REMINDER_MARKER } from './repeat-reminder.js';
+import {
+  isHumanSpeech,
+  modelVisibleSkillsBackend,
+  parseSkillInvocation,
+  renderSkillInvocation,
+  scanSkills,
+} from './skill-catalog.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 
 /** `{ '<來源>/<目錄>': '<frontmatter 多出來的幾行>' }`，`name` 取目錄名。 */
@@ -114,7 +122,9 @@ describe('scanSkills', () => {
       'proj/beta': 'user-invocable: maybe\n',
     });
 
-    const skills = await scanSkills(backendAt(root), ['/base/', '/proj/']);
+    const { skills, complete } = await scanSkills(backendAt(root), ['/base/', '/proj/']);
+
+    expect(complete).toBe(true);
 
     expect(skills.map((skill) => [skill.name, skill.path, skill.invocation])).toEqual([
       ['alpha', '/proj/alpha/SKILL.md', { modelInvocable: false, userInvocable: true }],
@@ -127,10 +137,47 @@ describe('scanSkills', () => {
 
   it('來源本身是單一技能', async () => {
     const root = await workspace({ 'solo/deploy': 'disable-model-invocation: on\n' });
-    const skills = await scanSkills(backendAt(root), ['/solo/deploy']);
+    const { skills } = await scanSkills(backendAt(root), ['/solo/deploy']);
     expect(skills.map((skill) => [skill.path, skill.invocation.modelInvocable])).toEqual([
       ['/solo/deploy/SKILL.md', false],
     ]);
+  });
+
+  it('讀不到勝出的那一份：回不完整，順位較低的同名技能頂上來（交給消費端判斷）', async () => {
+    const root = await workspace({ 'base/deploy': '', 'proj/deploy': '' });
+    const inner = new FlakyBackend(root, {
+      download: { '/proj/deploy/SKILL.md': 'permission_denied' },
+    });
+
+    const { skills, complete } = await scanSkills(inner, ['/base/', '/proj/']);
+
+    expect(complete).toBe(false);
+    expect(skills.map((skill) => skill.path)).toEqual(['/base/deploy/SKILL.md']);
+  });
+});
+
+describe('renderSkillInvocation：逐字照 dsh renderSkillContent', () => {
+  it('directory 形狀的資源說明、正文原樣、名字與路徑跳脫', () => {
+    expect(
+      renderSkillInvocation({
+        name: 'a"<b',
+        path: '/skills/x<y>&z/SKILL.md',
+        body: '照做 <raw> & 不跳脫',
+      }),
+    ).toBe(
+      [
+        '<skill_content name="a&quot;&lt;b">',
+        '<skill_resources>',
+        'Base directory for this skill: /skills/x&lt;y&gt;&amp;z',
+        'Resolve relative paths mentioned by this skill against the base directory before using them. Load referenced resources only as needed.',
+        '</skill_resources>',
+        '',
+        '<skill_instructions>',
+        '照做 <raw> & 不跳脫',
+        '</skill_instructions>',
+        '</skill_content>',
+      ].join('\n'),
+    );
   });
 });
 
@@ -432,5 +479,40 @@ describe('skills 中介層交給模型的 system prompt', () => {
     expect(await invoke(build(ours, readOnly('EACCES: permission denied'), ['/skills/']))).toBe(
       '系統。',
     );
+  });
+});
+
+describe('isHumanSpeech：/名字 叫用只掃人講的話（#1574）', () => {
+  it.each([
+    ['沒有來源的人話', new HumanMessage('hi /deploy'), true],
+    [
+      '來源是 user（插話）',
+      new HumanMessage({ content: 'x', additional_kwargs: sourceKwargs({ kind: 'user' }) }),
+      true,
+    ],
+    [
+      '外掛注入',
+      new HumanMessage({
+        content: 'x',
+        additional_kwargs: sourceKwargs({ kind: 'plugin', plugin: 'P' }),
+      }),
+      false,
+    ],
+    [
+      '重複提醒（沒有來源）',
+      new HumanMessage({
+        content: 'x',
+        additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool: 't', count: 5 } },
+      }),
+      false,
+    ],
+    [
+      '基座的摘要訊息（沒有來源）',
+      new HumanMessage({ content: 'x', additional_kwargs: { lc_source: 'summarization' } }),
+      false,
+    ],
+    ['模型回覆', new AIMessage('hi /deploy'), false],
+  ])('%s → %s', (_label, message, expected) => {
+    expect(isHumanSpeech(message)).toBe(expected);
   });
 });

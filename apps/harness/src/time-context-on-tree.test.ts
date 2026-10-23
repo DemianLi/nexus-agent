@@ -663,31 +663,32 @@ describe('J：代價——有沒有這一列，預設上限 100 下的輪數', (
     return model.calls;
   }
 
-  it('出貨清單 32 輪；拿掉 time-context 還是 32；兩顆 pre-step 消費者都拿掉也是 32（floor 吃掉）', async () => {
+  it('出貨清單 31 輪；拿掉 time-context 是 32；pre-step 消費者全拿掉也是 32（floor 吃掉）', async () => {
+    // 每輪三格時 `輪數 = floor((上限 - 2 - k) / 3)`，k 是 pre-step listener 的 `beforeAgent` 顆數（2026-10-23 實測，#1574）。
+    // 出貨清單 k = 3（agent-instructions、skill-invocation、time-context）：floor(95 / 3) = 31；少一顆 floor(96 / 3) = 32；
+    // 三顆全拿掉 floor(98 / 3) = 32——上限 100 下最後那兩顆被 floor 吃掉，第三顆（#1574 加的）才落到臺階下面。
     const shipped = await shippedPlugins();
-    expect(await rounds(shipped)).toBe(32);
+    expect(await rounds(shipped)).toBe(31);
     expect(await rounds(withoutTimeContext(shipped))).toBe(32);
-    // 對照：連 agent-instructions 也拿掉（清單上沒有任何 pre-step 消費者）還是 32——`beforeAgent` 的那一格在這個上限下被 floor 吃掉，
-    // 不是這一列「免費」：節點確實多了一個（`TimeContextMiddleware.before_agent`，見 `agent-instructions-on-tree.test.ts` 的 D 組鏈）。
     expect(
       await rounds(
-        withoutTimeContext(shipped).filter((entry) => entry.id !== 'agent-instructions'),
+        withoutTimeContext(shipped).filter(
+          (entry) => entry.id !== 'agent-instructions' && entry.id !== 'skill-invocation',
+        ),
       ),
     ).toBe(32);
   }, 120000);
 
-  it('正好站在邊界上：上限 99 時這一列多吃一輪（32→31），上限 100、101 不影響，102 又吃一輪（33→32）', async () => {
-    // 預設上限 100 剛好落在 floor 的臺階上（4 + 96 = 100），所以上面三個 32 看不出這一列的成本；
-    // 上限往下 1 或往上 2，臺階就不在了：每多一顆 `beforeAgent` 節點，就少一輪。
-    // 上限壓得很低的部署（或將來有人調預設）會直接看到這一格——這就是 PR 內文要寫的「代價」。
+  it('每顆 `beforeAgent` 節點把臺階往上推一格：上限 100 時這一列吃一輪（32→31），101、102 不影響，103 又吃一輪（33→32）', async () => {
+    // 有這一列 k = 3、沒有 k = 2：臺階分別在上限 101／104 與 100／103。上限壓得很低的部署（或將來有人調預設）會直接看到這一格。
     const shipped = await shippedPlugins();
     const without = withoutTimeContext(shipped);
-    expect(await rounds(shipped, 99)).toBe(31);
-    expect(await rounds(without, 99)).toBe(32);
-    expect(await rounds(shipped, 100)).toBe(32);
+    expect(await rounds(shipped, 100)).toBe(31);
     expect(await rounds(without, 100)).toBe(32);
-    expect(await rounds(shipped, 102)).toBe(32);
-    expect(await rounds(without, 102)).toBe(33);
+    expect(await rounds(shipped, 101)).toBe(32);
+    expect(await rounds(without, 101)).toBe(32);
+    expect(await rounds(shipped, 103)).toBe(32);
+    expect(await rounds(without, 103)).toBe(33);
   }, 240000);
 });
 

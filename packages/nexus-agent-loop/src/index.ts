@@ -14,13 +14,13 @@
  *
  * ## 誰建 middleware、誰建訊息、誰記日誌（Q2 (a)）
  *
- * **都是宿主**。listener 只回「要追加什麼」（`{ content, additionalKwargs }`）；宿主為每個 listener 建**一顆** middleware、掛在
+ * **都是宿主**。listener 只回「要追加什麼」（`{ content, additionalKwargs, source? }`）；宿主為每個 listener 建**一顆** middleware、掛在
  * `beforeAgent`（名字就是登記時給的名字），在那裡：
  *
  * 1. 用 core 的 `effectiveMessages` 算出「模型看得到的那一串」交給 listener——摘要器的私有鍵 `_summarizationEvent` 留在宿主，
  *    插件不碰；
  * 2. 把 listener 回的內容建成 `HumanMessage`（`additional_kwargs` 先放 listener 給的、再蓋 `source`）；
- * 3. 經**這條 thread 自己的**會話註冊表記一筆 `user/message`，來源是 `{ kind: 'plugin', plugin: <名字> }`；記不進去原錯往外拋，這一輪失敗（#1665，照 dsh）；
+ * 3. 經**這條 thread 自己的**會話註冊表記一筆 `user/message`，來源是 listener 給的 `source`，沒給是 `{ kind: 'plugin', plugin: <名字> }`；記不進去原錯往外拋，這一輪失敗（#1665，照 dsh）；
  * 4. 回 `{ messages }`，由基座**追加**。
  *
  * 這跟 dsh 一致：dsh 的插件只把基線放進這一步的批次，由 agent loop 記成 `user/message`，插件不寫日誌
@@ -55,8 +55,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * - `1.1.0`（[#1533](https://github.com/DemianLi/nexus-agent/issues/1533)）：{@link PreStepInvocation} 多一格選填的 `signal`。
  *   只加選填欄位，`^1.0.0` 的消費者照常運作（在 1.0.0 的宿主上那一格是 `undefined`）。
+ * - `1.2.0`（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）：{@link PreStepInjection} 多一格選填的 `source`，listener 自己宣告
+ *   注入的訊息是哪一種來源。只加選填欄位：不給的 listener 照舊記成 `{ kind: 'plugin', plugin: <名字> }`。要用這一格的消費者宣告 `^1.2.0`，
+ *   在 1.1.0 的宿主上載不起來，不會靜靜記成 `plugin`。
  */
-export const AGENT_LOOP_CONTRACT_VERSION = '1.1.0';
+export const AGENT_LOOP_CONTRACT_VERSION = '1.2.0';
 
 /**
  * 這一次呼叫的設定，listener 的第二個參數。`configurable` 那一格要**原樣**交給會話查找與 fs 查找
@@ -82,6 +85,15 @@ export interface PreStepInjection {
    * 記號用來讓 listener 下一次認得「這個 agent 已經有了」——判準放在訊息上，不放在閉包裡（一份 listener 服務好幾條 thread）。
    */
   readonly additionalKwargs?: Readonly<Record<string, unknown>>;
+  /**
+   * 這則訊息的來源（`1.2.0` 起），寫進訊息的 `nexus_source` 與日誌 `user/message` 的 `source`。對應 dsh listener 自己在
+   * `createUserMessage({ source })` 帶的那一格（例如 `tool-skill` 的 `{ kind: 'skill-invocation', name, form: 'instructions' }`，
+   * `packages/skill/tool-skill/src/index.ts:198-202`，`687f282e`）。
+   *
+   * 不給就是 `{ kind: 'plugin', plugin: <登記時的名字> }`。**`kind` 不能是 `'user'`**：那一種是「有人在場」的判別（goal 的直接人類授權認它），
+   * 只有宿主領走人話的那條路寫得出來；交了宿主就拋，這一輪失敗。
+   */
+  readonly source?: { readonly kind: string; readonly [detail: string]: unknown };
 }
 
 /**

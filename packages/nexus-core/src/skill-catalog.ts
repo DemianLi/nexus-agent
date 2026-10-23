@@ -22,6 +22,8 @@
  * @module
  */
 
+import { HumanMessage } from '@langchain/core/messages';
+import type { BaseMessage } from '@langchain/core/messages';
 import { adaptBackendProtocol, resolveBackend } from 'deepagents';
 import type {
   AnyBackendProtocol,
@@ -33,6 +35,10 @@ import type {
   ReadResult,
 } from 'deepagents';
 import { parse as parseYaml } from 'yaml';
+
+import { isMachineMessage } from './message-source.js';
+import { REPEAT_REMINDER_MARKER } from './repeat-reminder.js';
+import { isSummarizationMessage } from './summarization.js';
 
 /** 一份技能誰叫得到。兩格都照 dsh 的 `SkillInvocationPolicy`。 */
 export interface SkillInvocationPolicy {
@@ -322,19 +328,93 @@ function winners(scanned: readonly ScannedSkillFile[]): Map<string, SkillCatalog
   return byName;
 }
 
+/** 一次掃描的結果，形狀照 dsh 的 `SkillCatalogSnapshot`（`skill/src/index.ts:230-236`）。 */
+export interface SkillCatalogScan {
+  /** 每個名字一份（同名後者贏），照第一次出現的順序。讀不到的那幾份不在這裡。 */
+  readonly skills: readonly SkillCatalogEntry[];
+  /**
+   * 這次掃描完不完整：`ls` 或讀 `SKILL.md` 遇到「不存在」以外的錯誤就是 `false`。這時 `skills` 可能少了讀不到的那份，
+   * 順位較低的同名技能會頂上來，所以消費端要自己決定能不能用。
+   */
+  readonly complete: boolean;
+}
+
 /**
- * 掃這組來源裡的技能，同名後者贏，旗標不合規的整份不收。讀不到的那幾份不在結果裡（這個函式不判斷完不完整）。
+ * 掃這組來源裡的技能，同名後者贏，旗標不合規的整份不收。
  *
  * @param backend - 這條 thread 的檔案 backend（實例，不收工廠）。
  * @param sources - 技能來源路徑，順序就是優先序（後者贏）。
- * @returns 每個名字一份，照第一次出現的順序。
+ * @returns 掃到的技能與這次掃描完不完整，見 {@link SkillCatalogScan}。
  */
 export async function scanSkills(
   backend: AnyBackendProtocol,
   sources: readonly string[],
-): Promise<SkillCatalogEntry[]> {
+): Promise<SkillCatalogScan> {
   const snapshot = await scanAll(adaptBackendProtocol(backend), sources);
-  return [...winners(snapshot.scanned).values()];
+  return {
+    skills: [...winners(snapshot.scanned).values()],
+    complete: snapshot.incomplete === undefined,
+  };
+}
+
+/**
+ * 一則訊息是不是人講的話——`/名字` 叫用只掃這種（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）。
+ *
+ * dsh 只掃 `source.kind === 'user'`（`tool-skill/src/index.ts:420-423`，`687f282e`），因為它每個生產者都帶來源。nexus 照
+ * `message-source.ts` 的「缺席就是人」：圖上一輪開頭那句人話沒有來源，所以不能照搬「只認 `user`」，改成**排除**機器造的：
+ *
+ * - 有來源、而且不是 `user`（{@link isMachineMessage}：外掛注入、goal 續行、引用快照、背景子代理的回報、技能叫用本身）；
+ * - **重複提醒**：它沒有來源、只帶 {@link REPEAT_REMINDER_MARKER}，詳細那一版會把模型寫的工具參數原樣放進去
+ *   （`repeat-reminder.ts` 的 `detailedReminder`），參數裡的 ` /deploy ` 不能變成人在叫用；dsh 的提醒帶 `repeat-tool-reminder` 來源；
+ * - **基座的摘要訊息**：只帶 `lc_source: 'summarization'`（{@link isSummarizationMessage}），內容是模型寫的。
+ *
+ * 不是 `HumanMessage` 一律 `false`。
+ *
+ * @param message - 要判的那一則。
+ * @returns 是人講的話就 `true`。
+ */
+export function isHumanSpeech(message: BaseMessage): boolean {
+  if (!HumanMessage.isInstance(message)) return false;
+  if (isMachineMessage(message)) return false;
+  if (message.additional_kwargs[REPEAT_REMINDER_MARKER] != null) return false;
+  return !isSummarizationMessage(message);
+}
+
+/**
+ * 把一份技能渲染成交給模型照做的那一段，逐字照 dsh `renderSkillContent`（`skill/src/index.ts:170-214`，`687f282e`）：
+ * `<skill_content>` 裡先放資源的位置、再放正文。nexus 的技能都在 backend 的目錄裡，所以資源一律是 dsh 的 `directory` 那一種，
+ * 基底是 `SKILL.md` 所在的目錄（dsh 的 `resourceBase: { kind: 'directory', path: locator.directory }`，
+ * `skill-filesystem/src/index.ts:220`）。
+ *
+ * @param skill - 掃到的那一份。
+ * @returns 給模型看的整段 `<skill_content>`。
+ */
+export function renderSkillInvocation(
+  skill: Pick<SkillCatalogEntry, 'name' | 'path' | 'body'>,
+): string {
+  const directory = skill.path.replace(/[/\\]SKILL\.md$/, '');
+  return [
+    `<skill_content name="${escapeAttr(skill.name)}">`,
+    '<skill_resources>',
+    `Base directory for this skill: ${escapeText(directory)}`,
+    'Resolve relative paths mentioned by this skill against the base directory before using them. Load referenced resources only as needed.',
+    '</skill_resources>',
+    '',
+    '<skill_instructions>',
+    skill.body,
+    '</skill_instructions>',
+    '</skill_content>',
+  ].join('\n');
+}
+
+/** 同 dsh `escapeAttr`（`skill/src/index.ts:216-218`）。 */
+function escapeAttr(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+}
+
+/** 同 dsh `escapeText`（`skill/src/index.ts:226-228`）。 */
+function escapeText(value: string): string {
+  return value.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 }
 
 /**
