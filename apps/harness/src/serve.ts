@@ -1548,7 +1548,8 @@ async function startServer(
     } catch (closeError: unknown) {
       fail(`[啟動失敗] 收尾也出錯：${errorChain(closeError)}`);
     }
-    threadSearch?.close();
+    // 等已接受的搜尋靜止才關（#1552 N0836）；它不 reject，蓋不掉原本的錯。
+    await threadSearch?.close();
     throw error;
   }
 

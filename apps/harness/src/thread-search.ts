@@ -16,7 +16,11 @@
  * ## 索引：`node:sqlite` 的 FTS5，只放在記憶體裡
  *
  * 同 dsh 的載體（`schema.ts:52` 用 `await import('node:sqlite')`）。**每次搜尋前先對帳**（dsh `index.ts:268-293`）：列出可見的
- * 那幾條，`list` 給的 `revision` 跟上次不同的整條重讀（同 dsh `index.ts:510-514`），不見了的拿掉。對帳與查詢排成一條隊，同 dsh 的 `_serialized`。
+ * 那幾條，`list` 給的 `revision` 跟上次不同的整條重讀（同 dsh `index.ts:510-514`），不見了的拿掉。對帳與查詢排成一條隊，同 dsh 的 `_serialized`
+ * （`index.ts:383-405`，`687f282e`）：**排隊中的那一次可以中止**（客戶端斷線就立刻離隊，不等前面跑完），輪到時已經收掉就不進對帳。
+ * 讀到的那一份 header 要跟列表給的同一條會話對得上（dsh `sources.ts:11-25` 的 `assertSessionHeadersCompatible`），對不上整次搜尋失敗。
+ * 寫進索引的文字先把 NUL 換成 U+FFFD（dsh `query.ts:232-237` 的 `sanitizeFtsText`）：不換的話 FTS5 只收到 NUL 前面那一截。
+ * **收掉時等靜止**（dsh `index.ts:327-358`）：已經排進來的每一次跑完、開到一半的索引開完，才關 db。
  * 索引檔 dsh 可以落盤（`path`），我們只放記憶體，同 dsh 出廠的 `path: ':memory:'`：serve 重開之後第一次搜尋重建。
  *
  * **`node:sqlite` 在 `openAt: never` 時一次都不載入**：Node 22 載入它會在 stderr 印一行實驗功能的警告。載不起來
@@ -79,7 +83,12 @@ import {
   SessionFormatUnsupportedError,
   SessionNotFoundError,
 } from '@nexus/core';
-import type { SessionEvent, SessionStore, StoredSessionSnapshot } from '@nexus/core';
+import type {
+  SessionEvent,
+  SessionStore,
+  StoredSessionHeader,
+  StoredSessionSnapshot,
+} from '@nexus/core';
 import {
   THREAD_SEARCH_QUERY_MAX_LENGTH,
   THREAD_SEARCH_RESULT_LIMIT,
@@ -91,13 +100,18 @@ import { listVisibleThreads } from './session-list.js';
 import type { ThreadSearchConfig } from './settings/thread-search.js';
 
 /**
- * 搜尋失敗的種類。線上怎麼講見 `wire-handler.ts`。
+ * 搜尋失敗的種類，對到 dsh `SessionQueryErrorCode`（`session-query/src/config.ts:29-47`）裡我們有對應介面的那幾種。
+ * 線上怎麼講見 `wire-handler.ts`（新的四種一律 `unknown_error`，同 dsh host 一律交 `gateway/internal`）。
  *
- * - `invalid`：查詢空白、太長、含 NUL。
- * - `disabled`：那一列設成 `openAt: never`，而且有東西可搜。
- * - `failed`：`node:sqlite` 載不起來、或讀日誌／寫索引出錯。
+ * - `invalid`：查詢空白、太長、含 NUL（dsh `INVALID_QUERY`）。
+ * - `disabled`：那一列設成 `openAt: never`，而且有東西可搜（`SEARCH_DISABLED`）。
+ * - `aborted`：`signal` 中止了；`cause` 是它的 `reason`（`ABORTED`）。
+ * - `index-failed`：`node:sqlite` 載不起來、寫索引或查詢出錯、已經收掉了（`INDEX_FAILED`）。
+ * - `persistence-failed`：列不出以前的 thread、或讀不到某一條的日誌（`PERSISTENCE_FAILED`）。
+ * - `source-conflict`：列表給的 header 與讀到的 header 不是同一條會話（`SOURCE_CONFLICT`）。
  */
-export type ThreadSearchErrorKind = 'invalid' | 'disabled' | 'failed';
+export type ThreadSearchErrorKind =
+  'invalid' | 'disabled' | 'aborted' | 'index-failed' | 'persistence-failed' | 'source-conflict';
 
 export class ThreadSearchError extends Error {
   constructor(
@@ -108,6 +122,42 @@ export class ThreadSearchError extends Error {
     super(message, options);
     this.name = 'ThreadSearchError';
   }
+}
+
+/** 中止，照 dsh 的 `SESSION_QUERY_ABORTED`；`cause` 帶訊號的 `reason`。 */
+function abortedError(signal: AbortSignal): ThreadSearchError {
+  return new ThreadSearchError('aborted', '搜尋被中止了', { cause: signal.reason });
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted === true) throw abortedError(signal);
+}
+
+/** 已經收掉，照 dsh 的 `indexClosed()`（`index.ts:1082-1084`）。 */
+function closedError(): ThreadSearchError {
+  return new ThreadSearchError('index-failed', '搜尋已經收掉了');
+}
+
+/** 等一個 promise，`signal` 中止就先走（那個 promise 照跑），同 dsh 的 `waitWithAbort`（`index.ts:1092-1111`）。 */
+function waitWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (signal === undefined) return promise;
+  if (signal.aborted) return Promise.reject(abortedError(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      reject(abortedError(signal));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 /** `openAt: never` 時的失敗，照 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`（`index.ts:338-344`）。 */
@@ -259,7 +309,8 @@ export function searchDocuments(events: readonly SessionEvent[]): SearchDocument
   const documents: SearchDocument[] = [];
   for (const [message, event] of current) {
     if (ToolMessage.isInstance(message)) continue;
-    const text = messageText(message);
+    // NUL 換成 U+FFFD，同 dsh `sanitizeFtsText` 的第一個 `replaceAll`（`query.ts:232-237`）；另外兩個是 `highlight()` 的標記，我們不用。
+    const text = messageText(message).replaceAll('\0', '\uFFFD');
     if (text !== '') documents.push({ seq: event.seq, time: event.time, text });
   }
   return documents.sort((left, right) => left.seq - right.seq);
@@ -296,9 +347,10 @@ export class ThreadSearch {
   readonly #stamps = new Map<string, Stamp>();
   /** 每條 thread 佔了哪幾列，刪的時候用。跟 `#stamps` 同進同出。 */
   readonly #rows = new Map<string, readonly (number | bigint)[]>();
-  /** 對帳與查詢排成一條隊，同 dsh 的 `_serialized`。 */
-  #queue: Promise<unknown> = Promise.resolve();
+  /** 隊伍的尾巴，同 dsh 的 `_tail`：每一次接一道閘門在後面，跑完（或排隊中被中止）才放。永遠不 reject。 */
+  #queue: Promise<void> = Promise.resolve();
   #closed = false;
+  #closing: Promise<void> | undefined;
 
   constructor(options: ThreadSearchOptions) {
     this.#options = options;
@@ -312,57 +364,104 @@ export class ThreadSearch {
   /**
    * 搜一次。順序見 `@nexus/wire` 的 `THREAD_SEARCH_PATH`。
    *
-   * @throws {@link ThreadSearchError}；`signal` 中止時拋它的 `reason`。
+   * @throws {@link ThreadSearchError}；`signal` 中止時是 `aborted`（**不論中止發生在哪一步**，同 dsh 先看中止再分種類）。
    */
   async search(query: unknown, signal?: AbortSignal): Promise<ThreadSearchResult> {
     const normalized = collapseWhitespace(normalizeThreadSearchQuery(query));
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     const { store } = this.#options;
     if (store === undefined) return EMPTY;
     let visible;
     try {
       visible = await listVisibleThreads(store, this.#options.cwd, signal);
     } catch (error: unknown) {
-      // 列到一半被中止：拋的是訊號的 reason，不是「列不出來」，同對帳那一段。
-      if (signal?.aborted === true) throw error;
-      throw new ThreadSearchError('failed', `以前的 thread 列不出來：${String(error)}`, {
-        cause: error,
-      });
+      // 列到一半被中止：是中止，不是「列不出來」，同對帳那一段。
+      throwIfAborted(signal);
+      throw new ThreadSearchError(
+        'persistence-failed',
+        `以前的 thread 列不出來：${String(error)}`,
+        {
+          cause: error,
+        },
+      );
     }
-    signal?.throwIfAborted();
+    throwIfAborted(signal);
     if (visible.items.length === 0) return EMPTY;
     if (this.#options.openAt === 'never') {
       throw new ThreadSearchError('disabled', THREAD_SEARCH_DISABLED_MESSAGE);
     }
-    const prepared = await this.#ready();
-    return this.#serialized(async () => {
+    return this.#serialized(signal, async () => {
       try {
+        // 開索引也在隊伍裡、可中止，同 dsh `searchSessions` 在隊伍裡 `_ensureReady`（`index.ts:275-277`、`:369-381`）；
+        // 開不起來是 `index-failed`，同它把非中止的錯包成 `INDEX_FAILED`。
+        const prepared = await this.#ready(signal);
         await this.#reconcile(prepared, store, visible.items, signal);
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         return this.#query(prepared.db, normalized);
       } catch (error: unknown) {
-        if (signal?.aborted === true || error instanceof ThreadSearchError) throw error;
-        throw new ThreadSearchError('failed', `搜尋失敗：${String(error)}`, { cause: error });
+        throwIfAborted(signal);
+        if (error instanceof ThreadSearchError) throw error;
+        throw new ThreadSearchError('index-failed', `搜尋失敗：${String(error)}`, { cause: error });
       }
     });
   }
 
-  /** 收掉索引。之後的搜尋回失敗。 */
-  close(): void {
+  /**
+   * 收掉索引，**等已經排進來的每一次跑完**才關 db，同 dsh 的 `close`（`index.ts:327-358`）。冪等：再叫拿到同一個 promise。
+   * 開始收的那一刻起，新的搜尋回 `index-failed`。不 reject。
+   */
+  close(): Promise<void> {
+    this.#closing ??= this.#close();
+    return this.#closing;
+  }
+
+  async #close(): Promise<void> {
     this.#closed = true;
-    void this.#prepared?.then(({ db }) => db.close()).catch(() => undefined);
+    await this.#queue;
+    let prepared: Prepared | undefined;
+    try {
+      prepared = await this.#prepared;
+    } catch {
+      // 開到一半失敗：`#prepare` 已經關掉自己開的 db，收尾只等它。
+    }
+    prepared?.db.close();
   }
 
-  #serialized<T>(task: () => Promise<T>): Promise<T> {
-    const run = this.#queue.then(task, task);
-    this.#queue = run.catch(() => undefined);
-    return run;
+  /**
+   * 排進隊伍，同 dsh 的 `_serialized`（`index.ts:383-405`）：每一次接一道閘門在尾巴，等前一個時可以中止——中止就放掉自己的閘門、
+   * 立刻離隊，後面的不受影響。
+   */
+  async #serialized<T>(signal: AbortSignal | undefined, task: () => Promise<T>): Promise<T> {
+    if (this.#closed) throw closedError();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const prior = this.#queue;
+    this.#queue = prior.then(() => gate);
+    try {
+      await waitWithAbort(prior, signal);
+    } catch (error: unknown) {
+      release();
+      throw error;
+    }
+    // 等的時候收掉了：先講收掉，再看中止，同 dsh `:395-401` 的順序。
+    if (this.#closed) {
+      release();
+      throw closedError();
+    }
+    try {
+      throwIfAborted(signal);
+      return await task();
+    } finally {
+      release();
+    }
   }
 
-  #ready(): Promise<Prepared> {
-    if (this.#closed) return Promise.reject(new ThreadSearchError('failed', '搜尋已經收掉了'));
+  #ready(signal?: AbortSignal): Promise<Prepared> {
+    if (this.#closed) return Promise.reject(closedError());
     this.#prepared ??= this.#prepare();
-    return this.#prepared;
+    return waitWithAbort(this.#prepared, signal);
   }
 
   async #prepare(): Promise<Prepared> {
@@ -372,20 +471,26 @@ export class ThreadSearch {
     } catch (error: unknown) {
       this.#prepared = undefined;
       throw new ThreadSearchError(
-        'failed',
+        'index-failed',
         `會話內容搜尋要 Node 內建的 node:sqlite（Node 22.13 以上不必加旗標），這台的 ${process.version} 載不起來：${String(error)}`,
         { cause: error },
       );
     }
     const db = new sqlite.DatabaseSync(':memory:');
-    db.exec(
-      "CREATE VIRTUAL TABLE docs USING fts5(thread_id UNINDEXED, seq UNINDEXED, time UNINDEXED, text, tokenize = 'trigram')",
-    );
-    return {
-      db,
-      insert: db.prepare('INSERT INTO docs (thread_id, seq, time, text) VALUES (?, ?, ?, ?)'),
-      remove: db.prepare('DELETE FROM docs WHERE rowid = ?'),
-    };
+    try {
+      db.exec(
+        "CREATE VIRTUAL TABLE docs USING fts5(thread_id UNINDEXED, seq UNINDEXED, time UNINDEXED, text, tokenize = 'trigram')",
+      );
+      return {
+        db,
+        insert: db.prepare('INSERT INTO docs (thread_id, seq, time, text) VALUES (?, ?, ?, ?)'),
+        remove: db.prepare('DELETE FROM docs WHERE rowid = ?'),
+      };
+    } catch (error: unknown) {
+      // 開到一半失敗：關掉自己開的 db 再拋，同 dsh `schema.ts:74-76`。
+      db.close();
+      throw error;
+    }
   }
 
   /** 見檔頭的「每次搜尋前先對帳」。 */
@@ -414,13 +519,26 @@ export class ThreadSearch {
         for (const rowid of this.#rows.get(threadId) ?? []) remove.run(rowid);
       }
       for (const { header, revision } of visible) {
-        signal?.throwIfAborted();
+        throwIfAborted(signal);
         const threadId = header.id;
         if (this.#stamps.get(threadId) === revision) continue;
-        const events = await readForSearch(store, threadId);
+        let loaded;
+        try {
+          loaded = await readForSearch(store, threadId);
+        } catch (error: unknown) {
+          throwIfAborted(signal);
+          throw new ThreadSearchError(
+            'persistence-failed',
+            `讀不到 thread "${threadId}" 的日誌：${String(error)}`,
+            { cause: error },
+          );
+        }
+        // 讀的時候中止了：不寫、不 COMMIT，同 dsh `index.ts:523` 讀完先 `assertNotAborted` 再比 header。
+        throwIfAborted(signal);
         // 列與讀之間變了：這一次不動它，下一次對帳再看（被刪掉的那時就在「不見了的」那一邊）。
-        if (events === undefined) continue;
-        const documents = searchDocuments(events);
+        if (loaded === undefined) continue;
+        assertSameSource(header, loaded.header);
+        const documents = searchDocuments(loaded.events);
         begin();
         for (const rowid of this.#rows.get(threadId) ?? []) remove.run(rowid);
         const rows: (number | bigint)[] = [];
@@ -434,8 +552,11 @@ export class ThreadSearch {
       if (open) db.exec('COMMIT');
     } catch (error: unknown) {
       if (open) db.exec('ROLLBACK');
-      if (signal?.aborted === true || error instanceof ThreadSearchError) throw error;
-      throw new ThreadSearchError('failed', `寫不進搜尋索引：${String(error)}`, { cause: error });
+      throwIfAborted(signal);
+      if (error instanceof ThreadSearchError) throw error;
+      throw new ThreadSearchError('index-failed', `寫不進搜尋索引：${String(error)}`, {
+        cause: error,
+      });
     }
     // 交易成功之後才記，失敗的那幾條下一次搜尋再讀一次，同 dsh 失敗時 ROLLBACK、下一次再試。
     for (const threadId of gone) {
@@ -488,7 +609,7 @@ export class ThreadSearch {
 }
 
 /**
- * 讀一條的整份本文。**中間壞掉的撿回讀得懂的**（`salvage`），同列表不擋它。
+ * 讀一條的 header 與整份本文。**中間壞掉的撿回讀得懂的**（`salvage`），同列表不擋它。header 交回去給 {@link assertSameSource} 比。
  *
  * 列與讀之間那一份變了——被刪掉、或 header 讀不懂了（別的行程以更新的版本續接過）——是 `undefined`：
  * 不讓一條拖垮整次搜尋。
@@ -496,9 +617,10 @@ export class ThreadSearch {
 async function readForSearch(
   store: SessionStore,
   threadId: string,
-): Promise<readonly SessionEvent[] | undefined> {
+): Promise<{ header: StoredSessionHeader; events: readonly SessionEvent[] } | undefined> {
   try {
-    return await (await store.open(threadId, 'read')).read({ salvage: true });
+    const opened = await store.open(threadId, 'read');
+    return { header: opened.header, events: await opened.read({ salvage: true }) };
   } catch (error: unknown) {
     if (
       error instanceof SessionNotFoundError ||
@@ -508,5 +630,28 @@ async function readForSearch(
       return undefined;
     }
     throw error;
+  }
+}
+
+/**
+ * 列表給的那一份與讀到的那一份是不是同一條會話，照 dsh 的 `assertSessionHeadersCompatible`（`session-query/src/sources.ts:11-25`，
+ * `687f282e`）：id、建立時間、工作目錄、血緣、是不是分叉，任一不同就拋 `source-conflict`，整次搜尋失敗。
+ * 在 nexus 上兩份會不同只有一種可能：列與讀之間檔被換成了別的會話。續接只改 `version`，不在比的欄位裡。
+ * `isSeeded` 照 dsh 嚴格比：列與讀走同一個後端、同一支 header 解析，表示法相同（沒分叉都是缺席，分叉都是 `true`）。
+ *
+ * dsh 還比 `delegationDepth ?? 0`；nexus 的 header 沒有這一格，**#1567 N0788 加上它時這裡一起補**。
+ */
+function assertSameSource(listed: StoredSessionHeader, loaded: StoredSessionHeader): void {
+  if (
+    listed.id !== loaded.id ||
+    listed.createdAt !== loaded.createdAt ||
+    listed.cwd !== loaded.cwd ||
+    listed.parentSession !== loaded.parentSession ||
+    listed.isSeeded !== loaded.isSeeded
+  ) {
+    throw new ThreadSearchError(
+      'source-conflict',
+      `thread "${listed.id}" 列表給的 header 與讀到的對不上（列與讀之間換成了別的會話）`,
+    );
   }
 }
