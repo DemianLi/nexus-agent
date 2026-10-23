@@ -1,6 +1,6 @@
 /**
- * skills 的 middleware——**包一層基座的 `createSkillsMiddleware`，補上兩件它不做的事**
- * （[#440](https://github.com/DemianLi/nexus-agent/issues/440)）。
+ * skills 的 middleware——**包一層基座的 `createSkillsMiddleware`，補上三件它不做的事**
+ * （[#440](https://github.com/DemianLi/nexus-agent/issues/440)、[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）。
  *
  * ## 基座的兩個行為（`deepagents@1.13.1`，實跑確認過，不是只讀 dist）
  *
@@ -24,12 +24,29 @@
  * 基座在 `ls` 失敗時回空陣列且完全無聲（見 `assertLoadableSkillsPath` 的說明），所以「備份端暫時讀不到」與
  * 「目錄是空的」在這裡分不開，兩者都會被當成空。
  *
+ * ## 只給人叫的技能不列給模型（#1574）
+ *
+ * 基座不讀 SKILL.md 的 `disable-model-invocation`／`user-invocable`，掃到的全部印進 prompt。dsh 在提供者解析這兩個旗標、
+ * 不合規的整份不收，`tool-skill` 只把 `isModelInvocable` 的列給模型（`skill-filesystem/src/index.ts:831-837`、
+ * `tool-skill/src/index.ts:228`，`687f282e`）。
+ *
+ * **偏離登記（理由 1：基座表達不出來）**：基座不讀這兩個鍵，`createSkillsMiddleware` 也沒有過濾參數
+ * （`langsmith-zm0ILQsV.js:4516-4553`）。退到：nexus 自己解析（`skill-catalog.ts`），交給基座的 `backend` 換成
+ * {@link modelVisibleSkillsBackend} 的視圖，讓基座的 `ls` 看不到那幾個目錄。基座的解析與格式化一行都不動，沒有旗標的技能
+ * prompt 位元組跟沒包時一樣。
+ * - **代價**：第一次掃描時每個技能目錄多讀一次 `SKILL.md`（視圖先掃完全部來源做同名決勝，基座再讀一次）。
+ * - **擋的只有清單**：nexus 沒有 dsh 的 `skill` 載入工具（正文由模型自己 `read_file`），所以沒有「拒絕叫用」那一道；
+ *   模型照樣讀得到那份檔，只是路徑沒列出來，它得自己猜到。
+ * - **撤除條件**：自寫 skills 中介層，或基座支援這兩個鍵。
+ *
  * @module
  */
 
 import { createSkillsMiddleware } from 'deepagents';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
+
+import { modelVisibleSkillsBackend } from './skill-catalog.js';
 
 /** {@link createSkillsMiddleware} 收的東西，原樣轉給基座。 */
 type BaseOptions = Parameters<typeof createSkillsMiddleware>[0];
@@ -48,13 +65,16 @@ interface BaseHooks {
 }
 
 /**
- * 建 skills middleware：掃到空的就整個隱形（不掃第二次、不加任何字）。
+ * 建 skills middleware：掃到空的就整個隱形（不掃第二次、不加任何字）；只給人叫的、旗標不合規的技能不列給模型。
  *
- * @param options - 同基座的 `createSkillsMiddleware`。
+ * @param options - 同基座的 `createSkillsMiddleware`。`backend` 會換成 {@link modelVisibleSkillsBackend} 的視圖再交給基座。
  * @returns 與基座同名（`SkillsMiddleware`）同 state 形狀的 middleware，可以直接換掉基座那顆。
  */
 export function createSkillsMiddlewareQuietWhenEmpty(options: BaseOptions): AgentMiddleware {
-  const base = createSkillsMiddleware(options) as unknown as BaseHooks & { name: string };
+  const base = createSkillsMiddleware({
+    ...options,
+    backend: modelVisibleSkillsBackend(options.backend, options.sources),
+  }) as unknown as BaseHooks & { name: string };
   /** 第一次掃描的結果是空的之後為 `true`。非空或還沒掃都是 `false`，委派給基座。 */
   let empty = false;
   return createMiddleware({
