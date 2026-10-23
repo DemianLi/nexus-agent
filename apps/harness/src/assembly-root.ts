@@ -1119,6 +1119,8 @@ export async function createCliAgent(
           rootDir: workspaceRoot,
           mode: sandboxMode.source,
           grants: sandboxMode,
+          // 多人共用主機上的使用者工作區：別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗（偏離 dsh，#1704）。
+          tolerateUnreadable: true,
         });
   // **每會話模型選擇只在 `--live` 時有**（#723）：假模型沒有型錄可選。控制器由組裝點建、經 `createNexusAgent` 折進 root，
   // 同一個 host 回傳給呼叫端（serve 的 `model.catalog`／`model.select` 用它驗型錄）。

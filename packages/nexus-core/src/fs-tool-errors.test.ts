@@ -12,6 +12,7 @@ import {
   FS_SANDBOX_DENIED,
   noteSandboxDenial,
   noteSearchError,
+  noteSearchSkipped,
   recordBackendOutcomes,
   SEARCH_INVALID_PATTERN,
 } from './fs-tool-errors.js';
@@ -361,5 +362,105 @@ describe('搜尋失敗的碼與這一次呼叫的取消訊號（#1532）', () =>
     });
     expect(without).toBeUndefined();
     expect(currentToolCallSignal()).toBeUndefined();
+  });
+});
+
+describe('搜尋成功但有路徑讀不到：把「略過幾條」接在結果後面（#1704）', () => {
+  const wrap = wrapperOf(createFsToolErrorsMiddleware());
+  const sentence = (n: number, was = 'paths were'): string =>
+    `${String(n)} ${was} unreadable (permission denied) and skipped; results cover only the readable files`;
+
+  /** 一次工具呼叫：backend 先記幾次（每一次是一個 backend 呼叫略過的條數），基座排好 `content` 交回來。 */
+  const call = async (
+    tool: string,
+    content: ToolMessage['content'],
+    noted: readonly number[] = [2],
+  ): Promise<ToolMessage> =>
+    (await wrap(requestFor(tool), async () => {
+      for (const count of noted) noteSearchSkipped(count);
+      return asToolMessage(content, tool);
+    })) as ToolMessage;
+
+  it('grep 與 glob 的成功結果：空一行、包括號接在最後，其餘每一格不動', async () => {
+    for (const tool of ['grep', 'glob']) {
+      const result = await call(tool, 'Found 1 match\n\n/a.log:\n  1: needle');
+      expect(result.content).toBe(`Found 1 match\n\n/a.log:\n  1: needle\n\n(${sentence(2)})`);
+      expect(result.tool_call_id).toBe('call-1');
+      expect(result.name).toBe(tool);
+    }
+  });
+
+  it('單數：1 條是 `1 path was`', async () => {
+    expect((await call('grep', 'x', [1])).content).toBe(`x\n\n(${sentence(1, 'path was')})`);
+  });
+
+  it('一次工具呼叫裡記多次（CompositeBackend 依序搜預設與每條 route）：數字累加，後面的不蓋掉前面的', async () => {
+    expect((await call('grep', 'x', [2, 1, 3])).content).toBe(`x\n\n(${sentence(6)})`);
+  });
+
+  it('文字塊陣列：多接一個文字塊，原本的塊原樣保留', async () => {
+    const result = await call('grep', [{ type: 'text', text: 'Found 1 match' }]);
+    expect(result.content).toEqual([
+      { type: 'text', text: 'Found 1 match' },
+      { type: 'text', text: `\n\n(${sentence(2)})` },
+    ]);
+  });
+
+  it('反例：沒有記過就什麼都不接', async () => {
+    expect((await call('grep', 'No matches found', [])).content).toBe('No matches found');
+  });
+
+  it('反例：記了 0、負數、小數：當沒記（0 條略過不該出現一句「0 paths」）', async () => {
+    expect((await call('grep', 'x', [0, -1, 1.5, Number.NaN])).content).toBe('x');
+  });
+
+  it('反例：不是 grep／glob（read_file、ls）記了也不接——這句話只屬於搜尋', async () => {
+    for (const tool of ['read_file', 'ls']) {
+      expect((await call(tool, 'x')).content).toBe('x');
+    }
+  });
+
+  it('反例：不是文字的內容（圖片塊）原樣交出，不猜', async () => {
+    const content = [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }];
+    expect((await call('grep', content)).content).toEqual(content);
+  });
+
+  it('反例：backend 沒回錯、但工具訊息本身已是錯誤狀態（例如工具逾時）：不接', async () => {
+    const result = (await wrap(requestFor('grep'), async () => {
+      noteSearchSkipped(2);
+      return new ToolMessage({
+        content: 'Error: timed out',
+        tool_call_id: 'call-1',
+        name: 'grep',
+        status: 'error',
+      });
+    })) as ToolMessage;
+    expect(result.content).toBe('Error: timed out');
+  });
+
+  it('反例：已經是錯誤的結果不接（錯誤自己會說明，不需要「結果不完整」）', async () => {
+    const backend = recordBackendOutcomes({
+      async grep(): Promise<{ error: string }> {
+        noteSearchError(SEARCH_INVALID_PATTERN);
+        noteSearchSkipped(2);
+        return { error: 'grep pattern rejected by ripgrep: x' };
+      },
+    });
+    const result = (await wrap(requestFor('grep'), async () => {
+      const out = await backend.grep();
+      return asToolMessage(out.error, 'grep');
+    })) as ToolMessage;
+    expect(result.status).toBe('error');
+    expect(String(result.content)).not.toContain('unreadable');
+  });
+
+  it('兩次平行的呼叫各記各的：一顆的數字不會接到另一顆的結果上', async () => {
+    const [withNotice, without] = await Promise.all([call('grep', 'a'), call('grep', 'b', [])]);
+    expect(withNotice.content).toContain(sentence(2));
+    expect(without.content).toBe('b');
+  });
+
+  it('不在工具呼叫裡時 noteSearchSkipped 什麼都不做', () => {
+    expect(() => noteSearchSkipped(2)).not.toThrow();
   });
 });
