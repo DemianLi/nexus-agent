@@ -98,6 +98,7 @@ import {
 } from './session-header-metadata.js';
 import { installFailLoud } from './fail-loud.js';
 import type { FailLoudProcess } from './fail-loud.js';
+import { forkAncestors, inheritedStashNames } from './fork-stash.js';
 import { createProcessShutdown } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import {
@@ -1299,6 +1300,16 @@ async function startServer(
           resumedEvents: history?.events,
           setting: modelSelection,
         });
+        // 分叉來的（第一次組裝或重啟後續接都一樣）：前綴裡的預覽指著祖先目錄裡的檔，讀取沿祖先找（#1580 Q1 (a)，`fork-stash.ts`）。
+        const inheritedStash =
+          sessionStore !== undefined && history?.header.isSeeded === true
+            ? {
+                names: inheritedStashNames(history.events),
+                sessions: (await forkAncestors(history.header, coldSessionHeader, warn)).map(
+                  (ancestor) => `${sessionStore.directory}\0${ancestor}`,
+                ),
+              }
+            : undefined;
         built = await assembly.create(
           {
             ...effective,
@@ -1334,6 +1345,7 @@ async function startServer(
                 rootDir: stashRoot,
                 session: `${sessionStore.directory}\0${threadId}`,
                 warn,
+                ...(inheritedStash !== undefined && { inherited: inheritedStash }),
               },
               ...(spillPolicy.maxInlineTokens !== undefined && {
                 spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
