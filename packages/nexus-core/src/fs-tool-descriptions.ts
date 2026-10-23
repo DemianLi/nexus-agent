@@ -36,10 +36,50 @@
 
 import { createFilesystemMiddleware } from 'deepagents';
 
+import type { FileToolsOptions } from './fs-tools-options.js';
+import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME, READ_LIMIT } from './read-continuation.js';
 
-/** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（只用到 `read_file`）。 */
-export type FilesystemToolDescriptions = Readonly<Partial<Record<'read_file', string>>>;
+/** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（用到 `read_file`、`grep` 與 `glob`）。 */
+export type FilesystemToolDescriptions = Readonly<
+  Partial<Record<'read_file' | 'grep' | 'glob', string>>
+>;
+
+/**
+ * 基座 `grep` 描述最前面講「字面」的那兩段（`GREP_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）：從開頭到 `\n\nReturns matching files`。
+ * 換成 dsh 的第一句（`grep.ts:286`）加一句 `/conversation_history/` 的例外；後面基座講輸出與 `/large_tool_results/` 的部分原樣留著。
+ */
+const BASE_GREP_LITERAL_HEAD_END = '\n\nReturns matching files';
+const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across files (NOT regex).';
+
+/**
+ * 換進去的正規式說法：第一句**照 dsh 原句**（`grep.ts:286`），後面接一句 `/conversation_history/` 的例外。
+ *
+ * **偏離 dsh（理由 1：基座表達不出來）。** 兩處，都不是我們自己多寫說明：
+ *
+ * - **不搬 dsh 的輸出句。** dsh 接著講「Returns matching lines with line numbers, grouped by file. Returns up to N matches …」，
+ *   那是 dsh 自己的輸出形狀；基座的 `grep` 有 `output_mode`（`files_with_matches`／`content`／`count`），後面那段基座原文（講輸出與 `/large_tool_results/`）照留，
+ *   搬 dsh 的句子進來會跟它矛盾。
+ * - **加 `/conversation_history/` 的例外句。** 工作區底下這一格路由是記憶體裡的 `StateBackend`，基座的 `grep` 在那裡是字面比對；
+ *   描述若只說「正規式」，模型在那裡寫 `foo|bar` 會得到 0 筆並當成「沒有」。這是基座實際的行為，不是我們另外立的規則。
+ *
+ * 基座原文開頭那段講「regex metacharacters are ordinary characters」的文字，隨著被換掉的開頭一併拿掉，不補我們自己寫的轉義說明。
+ */
+export const GREP_REGEXP_HEAD =
+  'Search file contents with a ripgrep regular expression.\n\n' +
+  'Files under `/conversation_history/` are the exception: they are searched as literal text.';
+
+/** 基座 `glob` 描述的第一句（`GLOB_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）。後面講 `*`、`**`、`?` 的一段原樣留著。 */
+const BASE_GLOB_HEAD = 'Find files matching a glob pattern, returning absolute paths.';
+
+/**
+ * 換進去的 `glob` 說法：第一句照 dsh `glob.ts:308`（「Find files, not directories, … including hidden and ignored files」），
+ * 第二句照 dsh 的「in modification-time order」。**偏離（理由 1：基座表達不出來）**：dsh 的第二句還有「Returns up to N paths … a larger result keeps the first paths and reports where the complete list was saved」，
+ * 那是外溢層（`tool-fs-search`，可關）的行為，不一定在，所以不寫；「absolute paths」「oldest first」是基座與我們實際的輸出。
+ */
+export const GLOB_HEAD =
+  'Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. ' +
+  'Returns absolute paths in modification-time order, oldest first.';
 
 /** 基座 `read_file` 描述裡講預設行數的那一句（`READ_FILE_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js:1951-1963`）。 */
 const BASE_READ_DEFAULT = 'By default, it reads up to 100 lines';
@@ -68,22 +108,48 @@ function swap(tool: string, from: string, to: string): string {
   return description.replace(from, to);
 }
 
+/** `grep` 的描述：把基座講字面的開頭換成講正規式的。找不到基座的開頭就拋，同 {@link swap}。 */
+function grepRegexpDescription(): string {
+  const description = baseDescriptionsOf()['grep'];
+  const end = description?.indexOf(BASE_GREP_LITERAL_HEAD_END) ?? -1;
+  if (
+    description === undefined ||
+    !description.startsWith(BASE_GREP_LITERAL_HEAD_START) ||
+    end < 0
+  ) {
+    throw new Error(
+      'deepagents 的 grep 工具描述不是預期的樣子，找不到講字面比對的開頭：升版後要對一次 fs-tool-descriptions.ts',
+    );
+  }
+  return `${GREP_REGEXP_HEAD}${description.slice(end)}`;
+}
+
 /**
  * 這一組 middleware 掛上之後，基座檔案工具該用的描述。
  *
  * @param middleware - 這次組裝（root）或這個子代理實際會掛的 middleware；只看名字。
+ * @param options - `tool-fs` 設定（#1605）：`read_file` 描述裡的預設行數用 `readLimit`；缺席用 {@link READ_LIMIT}。
  * @returns 要交給 `createFilesystemMiddleware({ customToolDescriptions })` 的表；一顆都不用換時是 `undefined`（組成與基座逐位元組相同）。
  */
 export function filesystemToolDescriptions(
   middleware: readonly { readonly name: string }[],
+  options?: Pick<FileToolsOptions, 'readLimit'>,
 ): FilesystemToolDescriptions | undefined {
   const names = new Set(middleware.map((each) => each.name));
-  if (!names.has(READ_CONTINUATION_MIDDLEWARE_NAME)) return undefined;
+  const readFile = names.has(READ_CONTINUATION_MIDDLEWARE_NAME);
+  const search = names.has(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+  if (!readFile && !search) return undefined;
   return {
-    read_file: swap(
-      'read_file',
-      BASE_READ_DEFAULT,
-      `By default, it reads up to ${READ_LIMIT} lines`,
-    ),
+    ...(readFile && {
+      read_file: swap(
+        'read_file',
+        BASE_READ_DEFAULT,
+        `By default, it reads up to ${options?.readLimit ?? READ_LIMIT} lines`,
+      ),
+    }),
+    ...(search && {
+      grep: grepRegexpDescription(),
+      glob: swap('glob', BASE_GLOB_HEAD, GLOB_HEAD),
+    }),
   };
 }

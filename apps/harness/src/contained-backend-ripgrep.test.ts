@@ -640,4 +640,146 @@ describe('掛進真的組裝之後', () => {
       error: { name: 'SearchError', code: SEARCH_FAILED },
     });
   }, 60_000);
+
+  // ---- #1605 ----
+
+  it('glob 在內附 rg 解析不到：錯誤、碼是 SEARCH_FAILED、字句指名 glob，沒有改走基座的 glob', async () => {
+    vi.mocked(resolveRgPath).mockRejectedValue(new Error('Cannot find module @vscode/ripgrep-x'));
+    const bare = vi.spyOn(FilesystemBackend.prototype, 'glob');
+
+    const { messages, results } = await runAgent([{ name: 'glob', args: { pattern: '**/*' } }]);
+
+    expect(messages[0]?.status).toBe('error');
+    expect(String(messages[0]?.content)).toMatch(
+      /^Error finding files: glob could not start its search command/,
+    );
+    expect(String(messages[0]?.content)).not.toContain('/a.log');
+    expect(results[0]).toMatchObject({
+      isError: true,
+      error: { name: 'SearchError', code: SEARCH_FAILED },
+    });
+    expect(bare).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it('glob 的 pattern 空白：錯誤，碼是 SEARCH_INVALID_PATTERN', async () => {
+    const { messages, results } = await runAgent([{ name: 'glob', args: { pattern: '  ' } }]);
+
+    expect(messages[0]?.status).toBe('error');
+    expect(String(messages[0]?.content)).toBe(
+      'Error finding files: glob pattern must be a non-empty string',
+    );
+    expect(results[0]).toMatchObject({
+      isError: true,
+      error: { name: 'SearchError', code: SEARCH_INVALID_PATTERN },
+    });
+  }, 60_000);
+
+  it('glob 的 pattern 是 rg 解不開的（`{`）：碼是 SEARCH_INVALID_PATTERN，字句指名 glob', async () => {
+    const { messages, results } = await runAgent([{ name: 'glob', args: { pattern: '{' } }]);
+
+    expect(messages[0]?.status).toBe('error');
+    expect(String(messages[0]?.content)).toMatch(
+      /^Error finding files: glob pattern rejected by ripgrep: /,
+    );
+    expect(results[0]).toMatchObject({
+      isError: true,
+      error: { name: 'SearchError', code: SEARCH_INVALID_PATTERN },
+    });
+  }, 60_000);
+
+  it.each([
+    ['!*.log', 'negated'],
+    ['*.log,*.txt', 'comma list'],
+    ['', 'empty'],
+  ])(
+    'grep 的檔案篩選 %j（%s）：SEARCH_INVALID_PATTERN，rg 沒有被起',
+    async (glob) => {
+      const spawned = vi.fn();
+      vi.mocked(resolveRgPath).mockImplementation(async () => {
+        spawned();
+        return realResolveRgPath();
+      });
+
+      const { messages, results } = await runAgent([
+        { name: 'grep', args: { pattern: 'needle', path: '/', glob, output_mode: 'content' } },
+      ]);
+
+      expect(messages[0]?.status).toBe('error');
+      expect(String(messages[0]?.content)).toMatch(/^Error: glob must be /);
+      expect(results[0]).toMatchObject({
+        isError: true,
+        error: { name: 'SearchError', code: SEARCH_INVALID_PATTERN },
+      });
+      expect(spawned).not.toHaveBeenCalled();
+    },
+    60_000,
+  );
+
+  it('grep 的 pattern 是空字串：SEARCH_INVALID_PATTERN，rg 沒有被起（`--regexp=` 會命中每一行）', async () => {
+    const spawned = vi.fn();
+    vi.mocked(resolveRgPath).mockImplementation(async () => {
+      spawned();
+      return realResolveRgPath();
+    });
+
+    const { messages, results } = await runAgent([
+      { name: 'grep', args: { pattern: '', path: '/', output_mode: 'content' } },
+    ]);
+
+    expect(messages[0]?.status).toBe('error');
+    expect(String(messages[0]?.content)).toBe('Error: pattern must be a non-empty string');
+    expect(results[0]).toMatchObject({
+      isError: true,
+      error: { name: 'SearchError', code: SEARCH_INVALID_PATTERN },
+    });
+    expect(spawned).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it('grep 的 pattern 只有空白字元是合法的正規式（照 dsh：只擋「空」，不擋空白）', async () => {
+    const { messages } = await runAgent([
+      { name: 'grep', args: { pattern: ' ', path: '/a.log', output_mode: 'content' } },
+    ]);
+
+    expect(messages[0]?.status).not.toBe('error');
+    expect(String(messages[0]?.content)).toContain('needle 一');
+  }, 60_000);
+
+  it('grep 的檔案篩選 `*.{log,txt}`（逗號在大括號內）照常搜尋', async () => {
+    const { messages } = await runAgent([
+      {
+        name: 'grep',
+        args: { pattern: 'needle', path: '/', glob: '*.{log,txt}', output_mode: 'content' },
+      },
+    ]);
+
+    expect(messages[0]?.status).not.toBe('error');
+    expect(String(messages[0]?.content)).toContain('/a.log');
+    expect(String(messages[0]?.content)).toContain('/notes.txt');
+  }, 60_000);
+
+  it('grep 的 pattern 不是合法正規式（`(`）：碼是 SEARCH_INVALID_PATTERN，不是 SEARCH_FAILED', async () => {
+    const { messages, results } = await runAgent([
+      { name: 'grep', args: { pattern: '(', path: '/', output_mode: 'content' } },
+    ]);
+
+    expect(messages[0]?.status).toBe('error');
+    expect(String(messages[0]?.content)).toMatch(/^Error: grep pattern rejected by ripgrep: /);
+    expect(results[0]).toMatchObject({
+      isError: true,
+      error: { name: 'SearchError', code: SEARCH_INVALID_PATTERN },
+    });
+  }, 60_000);
+
+  it('grep 的 pattern 是正規式：`needle 一|needle 二` 兩行都命中（`-F` 底下是 0 筆）', async () => {
+    const { messages } = await runAgent([
+      {
+        name: 'grep',
+        args: { pattern: 'needle 一|needle 二', path: '/a.log', output_mode: 'content' },
+      },
+    ]);
+
+    expect(messages[0]?.status).not.toBe('error');
+    expect(String(messages[0]?.content)).toContain('needle 一');
+    expect(String(messages[0]?.content)).toContain('needle 二');
+  }, 60_000);
 });

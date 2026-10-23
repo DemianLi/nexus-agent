@@ -93,7 +93,7 @@
 
 | 設定何時讀 | 列 |
 | --- | --- |
-| **組裝期，服務**（新 thread 生效） | agent-loop、recursion-limit、tool-fs-search、default-model（非 `--live`，2026-10-12 更正） |
+| **組裝期，服務**（新 thread 生效） | agent-loop、recursion-limit、tool-fs-search、tool-fs、default-model（非 `--live`，2026-10-12 更正） |
 | **起動期，`startupSetting`**（需重啟） | thread-title、thread-title-llm、thread-search、browser-session、deliverable-files、tool-text、projection-flush、tool-result-stash、spill-policy、background-subagents、subagent-model-selection、live-model（加 B 表的 session-persistence，共 13 列） |
 | 測試用，不在出貨清單 | scripted-model |
 

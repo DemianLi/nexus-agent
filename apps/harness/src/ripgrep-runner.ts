@@ -57,11 +57,16 @@ export const STDERR_MAX_BYTES = 64 * 1024;
  * （`spawn /opt/…/rg ENOENT`）。照 dsh `packages/fs/tool-fs-search/src/search-core.ts:260`：訊息固定、原始錯誤不接在後面。
  * 要查是哪個路徑，看 serve 啟動日誌那一行「搜尋（grep）：內附 ripgrep …」（給管理者的，`rg-path.ts`）。
  */
-const LAUNCH_FAILED_MESSAGE = 'grep could not start its search command (ripgrep launch failed)';
-const NOT_FOUND_MESSAGE = 'grep could not start its search command (bundled ripgrep not found)';
+const launchFailedMessage = (tool: RipgrepTool): string =>
+  `${tool} could not start its search command (ripgrep launch failed)`;
+const notFoundMessage = (tool: RipgrepTool): string =>
+  `${tool} could not start its search command (bundled ripgrep not found)`;
 
 /** 收掉 rg 時 `SIGTERM` 之後等多久升級到 `SIGKILL`（毫秒）。dsh `SEARCH_GRACE_MS`（`:53`）。 */
 export const KILL_GRACE_MS = 3_000;
+
+/** 錯誤訊息裡說的是哪一顆工具：`grep` 與 `glob` 共用同一支 runner（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）。 */
+export type RipgrepTool = 'grep' | 'glob';
 
 /** 這一次執行的結果。 */
 export type RipgrepOutcome =
@@ -76,6 +81,8 @@ export interface RipgrepRunOptions {
   readonly argv: readonly string[];
   /** 工作目錄；呼叫端要先確認它存在。 */
   readonly cwd: string;
+  /** 錯誤訊息裡的工具名；預設 `grep`。 */
+  readonly tool?: RipgrepTool | undefined;
   /** 呼叫端的取消訊號（這一次工具呼叫的）。 */
   readonly signal?: AbortSignal | undefined;
   /** 測試接縫：覆寫預設值。 */
@@ -95,7 +102,8 @@ export interface RipgrepInternals {
   readonly onChild?: (child: { readonly pid: number | undefined }) => void;
 }
 
-const ABORT_MESSAGE = 'grep was aborted before completion (tool timeout or caller cancellation)';
+const abortMessage = (tool: RipgrepTool): string =>
+  `${tool} was aborted before completion (tool timeout or caller cancellation)`;
 
 function stderrExcerpt(text: string, truncated: boolean): string {
   const trimmed = text.trim();
@@ -105,6 +113,7 @@ function stderrExcerpt(text: string, truncated: boolean): string {
 
 /** 非 0／1 結束的 rg 歸類，照 dsh `classifyRunFailure`（`:124-130`）。 */
 function classifyExit(
+  tool: RipgrepTool,
   exitCode: number,
   stderrText: string,
   truncated: boolean,
@@ -114,13 +123,13 @@ function classifyExit(
     return {
       kind: 'error',
       code: SEARCH_INVALID_PATTERN,
-      message: `grep pattern rejected by ripgrep: ${stderr}`,
+      message: `${tool} pattern rejected by ripgrep: ${stderr}`,
     };
   }
   return {
     kind: 'error',
     code: SEARCH_FAILED,
-    message: `grep search failed (exit ${String(exitCode)})${stderr.length > 0 ? `: ${stderr}` : ''}`,
+    message: `${tool} search failed (exit ${String(exitCode)})${stderr.length > 0 ? `: ${stderr}` : ''}`,
   };
 }
 
@@ -138,6 +147,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
   const maxBytes = internals.rawOutputMaxBytes ?? RAW_OUTPUT_MAX_BYTES;
   const graceMs = internals.killGraceMs ?? KILL_GRACE_MS;
   const executable = options.executable;
+  const tool = options.tool ?? 'grep';
   const signals: AbortSignal[] = [AbortSignal.timeout(internals.timeoutMs ?? SEARCH_TIMEOUT_MS)];
   if (options.signal !== undefined) signals.push(options.signal);
   const signal = AbortSignal.any(signals);
@@ -145,7 +155,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
   const aborted = (): RipgrepOutcome => ({
     kind: 'error',
     code: SEARCH_ABORTED,
-    message: ABORT_MESSAGE,
+    message: abortMessage(tool),
   });
   if (signal.aborted) return Promise.resolve(aborted());
 
@@ -186,7 +196,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
           : {
               kind: 'error',
               code: SEARCH_FAILED,
-              message: LAUNCH_FAILED_MESSAGE,
+              message: launchFailedMessage(tool),
             },
       );
       return;
@@ -243,7 +253,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
       settle({
         kind: 'error',
         code: SEARCH_FAILED,
-        message: error.code === 'ENOENT' ? NOT_FOUND_MESSAGE : LAUNCH_FAILED_MESSAGE,
+        message: error.code === 'ENOENT' ? notFoundMessage(tool) : launchFailedMessage(tool),
       });
     });
 
@@ -256,7 +266,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
         settle({
           kind: 'error',
           code: SEARCH_RAW_OUTPUT_OVERFLOW,
-          message: `grep produced more than ${String(maxBytes)} bytes of raw output; narrow pattern, path, or glob and retry`,
+          message: `${tool} produced more than ${String(maxBytes)} bytes of raw output; narrow pattern, path, or glob and retry`,
         });
         return;
       }
@@ -264,12 +274,12 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
         settle({
           kind: 'error',
           code: SEARCH_FAILED,
-          message: `grep search command was killed by signal ${killedBy ?? '(unknown)'}`,
+          message: `${tool} search command was killed by signal ${killedBy ?? '(unknown)'}`,
         });
         return;
       }
       if (exitCode !== 0 && exitCode !== 1) {
-        settle(classifyExit(exitCode, stderrTail.toString('utf8'), stderrTruncated));
+        settle(classifyExit(tool, exitCode, stderrTail.toString('utf8'), stderrTruncated));
         return;
       }
       settle({

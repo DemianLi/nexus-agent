@@ -11,7 +11,7 @@ review 時就看得到模型看到的字變了什麼。範圍與做法見 `apps/
 
 ## 基座（deepagents）
 
-零 plugin 組裝時基座與組裝點綁給模型的工具。
+零 plugin 組裝時基座與組裝點綁給模型的工具。`grep`、`glob` 列的是給了 `--workspace` 的說法（講 ripgrep 的語意）；沒給時是基座原文。
 
 ### `delete`
 
@@ -100,7 +100,7 @@ Usage:
 描述：
 
 ```text
-Find files matching a glob pattern, returning absolute paths.
+Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns absolute paths in modification-time order, oldest first.
 
 Supports `*` (any characters), `**` (any directories), `?` (single character), e.g. `**/*.py`, `*.txt`, `/subdir/**/*.md`.
 ```
@@ -114,7 +114,7 @@ Supports `*` (any characters), `**` (any directories), `?` (single character), e
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Glob pattern to match files (e.g., '**/*.py', '*.txt', '/subdir/**/*.md')"
+      "description": "Glob pattern to match file paths against (e.g. \"**/*.ts\", \"src/**/*.test.js\"). A pattern with no \"/\" matches the basename at any depth, so \"*\" and \"*.ts\" both search the whole tree; include a separator to anchor the depth."
     },
     "path": {
       "description": "Base directory to search from. Defaults to the backend's default root.",
@@ -133,9 +133,9 @@ Supports `*` (any characters), `**` (any directories), `?` (single character), e
 描述：
 
 ```text
-Search for a LITERAL text pattern across files (NOT regex).
+Search file contents with a ripgrep regular expression.
 
-The pattern is matched verbatim: regex metacharacters are ordinary characters, not operators. To match any of several strings, run a separate grep for each; `grep(pattern="foo|bar")` searches for the literal text "foo|bar", and `.*` or `\\.` match those characters literally.
+Files under `/conversation_history/` are the exception: they are searched as literal text.
 
 Returns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.
 ```
@@ -149,7 +149,7 @@ Returns matching files or content per `output_mode`. Offloaded large tool result
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Literal text pattern to search for (not regex)"
+      "description": "Regular expression to search for (ripgrep syntax)."
     },
     "path": {
       "default": "/",
@@ -158,7 +158,7 @@ Returns matching files or content per `output_mode`. Offloaded large tool result
     },
     "glob": {
       "default": null,
-      "description": "Optional glob pattern to filter files (e.g., '*.py')",
+      "description": "One glob filter for which files to search (e.g. \"*.ts\", \"*.{js,jsx}\"). Not a list; negation is not supported.",
       "anyOf": [
         {
           "type": "string"

@@ -9,6 +9,7 @@ import { describe, expect, it } from 'vitest';
 import {
   capSearchResults,
   createSearchOverflowMiddleware,
+  previewLine,
   searchSeenOf,
 } from './search-overflow.js';
 
@@ -39,9 +40,13 @@ function fakeBackend(matches: readonly Match[]) {
 }
 
 /** 在 middleware 的槽裡跑 `body`（代替基座的工具本體），回 `body` 拿到的東西。 */
-async function inSlot<T>(limit: number, body: () => Promise<T>): Promise<T> {
+async function inSlot<T>(
+  limit: number,
+  body: () => Promise<T>,
+  extra: { grepMaxLineBytes?: number } = {},
+): Promise<T> {
   const middleware = createSearchOverflowMiddleware({
-    limits: { grepMaxMatches: limit, globMaxResults: limit },
+    limits: { grepMaxMatches: limit, globMaxResults: limit, ...extra },
   });
   const wrap = (middleware as unknown as { wrapToolCall: Wrap }).wrapToolCall;
   let seen: T | undefined;
@@ -92,5 +97,95 @@ describe('backend 包裝', () => {
     const backend = fakeBackend(Array.from({ length: 10 }, (_, i) => m('/a', i + 1)));
     const page = await inSlot(3, () => capSearchResults(backend).grep('x') as Promise<object>);
     expect('truncated' in page).toBe(false);
+  });
+});
+
+describe('previewLine：切在 UTF-8 字元邊界上（#1605，dsh `previewLine`）', () => {
+  it('沒超過上限原樣；剛好等於上限也原樣', () => {
+    expect(previewLine('abc', 3)).toBe('abc');
+    expect(previewLine('一二', 6)).toBe('一二');
+    expect(previewLine('', 5)).toBe('');
+  });
+
+  it('超過就切、加後綴；上限算保留下來的文字，後綴不算', () => {
+    expect(previewLine('abcdef', 4)).toBe('abcd (line truncated)');
+  });
+
+  it('切點落在中文字中間：退到前一個字元的邊界，保留下來的文字是合法 UTF-8', () => {
+    // 「一」三個位元組：上限 4 只容得下一個字。
+    for (const max of [3, 4, 5]) {
+      const out = previewLine('一二三', max).replace(' (line truncated)', '');
+      expect(out).toBe('一');
+      expect(Buffer.byteLength(out)).toBeLessThanOrEqual(max);
+      expect(out).not.toContain('\uFFFD');
+    }
+    expect(previewLine('一二三', 6)).toBe('一二 (line truncated)');
+  });
+
+  it('四位元組的字元（emoji）也不被切開', () => {
+    const out = previewLine('a😀b', 3).replace(' (line truncated)', '');
+    expect(out).toBe('a');
+    expect(previewLine('a😀b', 5)).toBe('a😀 (line truncated)');
+  });
+
+  it('上限比一個字元還小：留空字串加後綴，不會拋', () => {
+    expect(previewLine('一', 2)).toBe(' (line truncated)');
+  });
+});
+
+describe('每行限長（grepMaxLineBytes）', () => {
+  const long = (path: string, line: number): Match => ({ path, line, text: '一'.repeat(400) });
+
+  it('給了上限：每一行切到上限內，沒超過的那些是同一個物件、不複製', async () => {
+    const short = m('/a', 1);
+    const backend = capSearchResults(fakeBackend([short, long('/a', 2)]));
+
+    const result = await inSlot(
+      10,
+      () => (backend as ReturnType<typeof fakeBackend>).grep('x') as Promise<{ matches: Match[] }>,
+      { grepMaxLineBytes: 100 },
+    );
+
+    expect(result.matches[0]).toBe(short);
+    const text = result.matches[1]?.text ?? '';
+    expect(text.endsWith(' (line truncated)')).toBe(true);
+    expect(Buffer.byteLength(text.replace(' (line truncated)', ''))).toBeLessThanOrEqual(100);
+  });
+
+  it('沒給上限：一個位元組都不動（舊呼叫端、單元測試的形狀）', async () => {
+    const backend = capSearchResults(fakeBackend([long('/a', 1)]));
+
+    const result = await inSlot(
+      10,
+      () => (backend as ReturnType<typeof fakeBackend>).grep('x') as Promise<{ matches: Match[] }>,
+    );
+
+    expect(result.matches[0]?.text).toBe('一'.repeat(400));
+  });
+
+  it('超過筆數上限時，存檔的完整結果也是限過長的那一份', async () => {
+    const saved: string[] = [];
+    const middleware = createSearchOverflowMiddleware({
+      limits: { grepMaxMatches: 1, globMaxResults: 1, grepMaxLineBytes: 30 },
+      store: {
+        saveText: (input: { content: string }) => {
+          saved.push(input.content);
+          return Promise.resolve({ locator: '/saved', retrievalHint: 'read it' });
+        },
+      } as never,
+    });
+    const wrap = (middleware as unknown as { wrapToolCall: Wrap }).wrapToolCall;
+    const backend = capSearchResults(fakeBackend([long('/a', 1), long('/a', 2)])) as ReturnType<
+      typeof fakeBackend
+    >;
+
+    await wrap({ toolCall: { name: 'grep', id: 'call_1', args: { pattern: 'x' } } }, async () => {
+      await backend.grep('x');
+      return new ToolMessage({ content: 'body', tool_call_id: 'call_1', name: 'grep' });
+    });
+
+    expect(saved).toHaveLength(1);
+    expect(saved[0]).toContain('(line truncated)');
+    expect(saved[0]).not.toContain('一'.repeat(400));
   });
 });
