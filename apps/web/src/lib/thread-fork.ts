@@ -6,7 +6,8 @@
  * 改成遞增的名字 → 切過去（dsh `client/sessions/service.ts:459-483` 的 `fork({ increaseTitle: true })`）。流程在 `App.tsx`。
  *
  * **能不能按照 server 的判法**（卡面刀 2 第 1 點）：那則是收尾那一則、有 `messageId`、那一輪收了而且不是失敗收尾（`@nexus/core` 的
- * `forkBoundaryOf`）。dsh 另外在「收尾的字之後同一輪還有工具卡」時不給（`turn-tail.ts:76-98` 的 `branchUnavailable`、
+ * `forkBoundaryOf`）。只看這一輪：新的一輪在跑時更早那幾輪照樣分得出去（server 的 `handleFork` 不看來源在不在跑，
+ * dsh `TurnTailNodeView.tsx:71` 也只看同一輪）。dsh 另外在「收尾的字之後同一輪還有工具卡」時不給（`turn-tail.ts:76-98` 的 `branchUnavailable`、
  * `TurnTailNodeView.tsx` 的 `hasLaterChatNode`），我們的 server 收這種，卡面照 server，所以不另擋。串流中、送出之後回應之前也不給。
  *
  * @module
@@ -47,16 +48,15 @@ export function hasForkButton(entry: AiEntry): boolean {
  * 分支鈕現在按得了嗎；按不了回原因。
  *
  * @param entry - 收尾的那則回覆（{@link hasForkButton} 為真）。
- * @param state.running - 這條 thread 有一輪在跑或停著等人回答。
  * @param state.forking - 分叉送出去了、回應還沒到。
  * @param state.failed - 這則所在的那一輪是失敗收尾的。
  */
 export function forkUnavailable(
   entry: AiEntry,
-  state: { readonly running: boolean; readonly forking: boolean; readonly failed: boolean },
+  state: { readonly forking: boolean; readonly failed: boolean },
 ): ForkUnavailable | undefined {
   if (state.forking) return 'forking';
-  if (state.running || entry.streaming) return 'running';
+  if (entry.streaming) return 'running';
   if (state.failed) return 'failed';
   if (entry.messageId === undefined) return 'no-message';
   return undefined;

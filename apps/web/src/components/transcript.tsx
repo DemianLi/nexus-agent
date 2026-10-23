@@ -220,18 +220,9 @@ export interface TranscriptFork {
  * 收尾那則回覆下面的「在新對話中分支」（dsh `MessageIconActions` 的 `onBranch`）。按不了照 dsh 用 `aria-disabled` 留著焦點，
  * 原因掛在描述上、tooltip 講同一句；這裡的停用寫法同 {@link RatingButtons}。
  */
-function ForkButton({
-  entry,
-  fork,
-  running,
-}: {
-  entry: AiEntry;
-  fork: TranscriptFork;
-  running: boolean;
-}) {
+function ForkButton({ entry, fork }: { entry: AiEntry; fork: TranscriptFork }) {
   const reasonId = useId();
   const unavailable = forkUnavailable(entry, {
-    running,
     forking: fork.forking,
     failed: entry.turnFailed === true,
   });
@@ -300,7 +291,6 @@ export function Entry({
   entry,
   feedback,
   fork,
-  running = false,
   answer,
   subagentNames,
 }: {
@@ -308,8 +298,6 @@ export function Entry({
   feedback?: TranscriptFeedback;
   /** 分支鈕（#1581）；沒給就不畫。 */
   fork?: TranscriptFork;
-  /** 這條 thread 有一輪在跑或停著等人回答：分支鈕按不了。 */
-  running?: boolean;
   /** 配到這張提問卡的答案。 */
   answer?: AnswerEntry;
   /** 背景子代理的編號 → 名字（`lib/subagent-view.ts`）。 */
@@ -457,7 +445,7 @@ export function Entry({
         {(copyable || ratable || forkable) && (
           <div className="flex items-center gap-1">
             {copyable && <ReplyCopyButton text={entry.text} />}
-            {forkable && <ForkButton entry={entry} fork={fork} running={running} />}
+            {forkable && <ForkButton entry={entry} fork={fork} />}
             {ratable && <RatingButtons messageId={entry.messageId} feedback={feedback} />}
           </div>
         )}
@@ -640,15 +628,12 @@ export function Transcript({
       }),
     [],
   );
-  // 跑著或停著等人回答時分支鈕都按不了（卡面刀 2 第 1 點「串流中按不了」），連更早那幾輪的也是。
-  const running = state.status === 'running' || state.status === 'awaiting-input';
   const renderEntry = (entry: ConversationEntry) => {
     const answer = answers.get(entry.id);
     return (
       <Entry
         entry={entry}
         subagentNames={names}
-        running={running}
         {...(feedback === undefined ? {} : { feedback })}
         {...(fork === undefined ? {} : { fork })}
         {...(answer === undefined ? {} : { answer })}

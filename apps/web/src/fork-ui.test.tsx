@@ -240,17 +240,31 @@ describe('分支鈕放哪、能不能按', () => {
     expect(fake.calls.filter((call) => call.startsWith('fork'))).toEqual([]);
   });
 
-  it('串流中：所有分支鈕都按不了，tooltip 講要等這一輪跑完', async () => {
+  it('新的一輪在串流：那一輪沒有鈕，更早那一輪照樣分得出去（server 不看來源在不在跑，dsh 只看同一輪）', async () => {
     seq = 0;
+    const namespace = ['model_request:1'];
     const events = [
       ...turn('t1', '第一輪收尾。'),
       frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      frame('messages', namespace, { event: 'message-start', id: 'run-t2', run_id: 't2' }),
+      frame('messages', namespace, {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '第二輪吐到一半' },
+        run_id: 't2',
+      }),
     ];
-    render(<App client={fakeClient({ events }).client} />);
-    await waitFor(() => expect(screen.getByText('第一輪收尾。')).toBeTruthy());
+    const fake = fakeClient({ events });
+    render(<App client={fake.client} />);
+    await waitFor(() => expect(screen.getByText('第二輪吐到一半')).toBeTruthy());
+    expect(within(entryOf('第二輪吐到一半')).queryByTestId('fork-button')).toBeNull();
     const button = forkButtonOf('第一輪收尾。');
-    expect(button.getAttribute('aria-disabled')).toBe('true');
-    expect(button.getAttribute('title')).toBe(FORK_UNAVAILABLE_TEXT.running);
+    expect(button.getAttribute('aria-disabled')).not.toBe('true');
+    expect(button.getAttribute('title')).toBe(FORK_LABEL);
+    fireEvent.click(button);
+    await waitFor(() =>
+      expect(fake.calls.filter((call) => call.startsWith('fork'))).toEqual(['fork 來源 run-t1']),
+    );
   });
 
   it('不是收尾的那一則沒有分支鈕', async () => {

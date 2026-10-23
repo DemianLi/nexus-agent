@@ -218,7 +218,7 @@ export function App({ client }: { client?: WireClient } = {}) {
   const directory = useThreadDirectory(wire, choice.threadId);
   // 釘選、封存、改名（#633）也在 thread 外面：換一條不歸零。列表沒帶兩個集合（server 還沒實作）時是 `undefined`，
   // 側欄什麼都不多畫。
-  // server 受理過的標題：側欄改名與分叉的改名共用一份（#1581），會話管理不在時分叉照樣頂得住。
+  // server 受理過的標題：側欄改名與分叉的改名共用一份（#1581），所以提到 App，再交給會話管理。
   const acceptedTitles = useAcceptedTitles();
   const threadManagement = useThreadManagement(wire, directory, acceptedTitles);
   // 換 thread 有三條路（「新對話」、從清單點一條、分叉），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單

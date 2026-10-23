@@ -40,7 +40,7 @@ function tail(extra: Partial<AiEntry> = {}): AiEntry {
   } as AiEntry;
 }
 
-const idle = { running: false, forking: false, failed: false };
+const idle = { forking: false, failed: false };
 
 describe('分支鈕能不能按（判法同 server 的 fork_unavailable）', () => {
   it('只畫在收尾那一則', () => {
@@ -55,7 +55,6 @@ describe('分支鈕能不能按（判法同 server 的 fork_unavailable）', () 
   });
 
   it.each([
-    ['串流中', tail(), { ...idle, running: true }, 'running'],
     ['這則還在吐字', tail({ streaming: true }), idle, 'running'],
     ['送出之後、回應之前', tail(), { ...idle, forking: true }, 'forking'],
     ['失敗收尾的那一輪', tail(), { ...idle, failed: true }, 'failed'],
