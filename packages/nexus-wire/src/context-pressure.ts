@@ -71,6 +71,23 @@ export interface WireContextMeasure {
    * 讀的人照沒有這一格以前的算法，不當成 `false`。
    */
   readonly messagesCompactable?: boolean;
+  /**
+   * 這份請求的組成（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）：系統提示、工具定義、對話訊息各約多少 token，
+   * 三格都是非負整數（沒有系統提示或工具時是 `0`）。`systemTokens`、`toolsTokens` 是送出那份請求的純估算；`messageTokens` 是
+   * `max(0, approxTokens − systemTokens − toolsTokens)`，所以三格相加等於 {@link approxTokens}——除非前兩格加起來就比
+   * `approxTokens` 大，那時 `messageTokens` 是 `0`、三格相加會比 `approxTokens` 大。
+   *
+   * **缺席＝沒量**：這一格出現以前的會話日誌沒有它，重放舊日誌拿到的 `measure` 不帶它，畫面不畫那三行，不當成 `0`。
+   * 偏離 dsh 的理由見 `@nexus/core` 的 `estimateRequestParts`。
+   */
+  readonly breakdown?: WireContextBreakdown;
+}
+
+/** {@link WireContextMeasure.breakdown} 的三格。 */
+export interface WireContextBreakdown {
+  readonly systemTokens: number;
+  readonly toolsTokens: number;
+  readonly messageTokens: number;
 }
 
 /**

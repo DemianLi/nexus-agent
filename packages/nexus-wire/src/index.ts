@@ -250,6 +250,7 @@ export {
 } from './session-references.js';
 export type {
   ModelUsagePayload,
+  WireContextBreakdown,
   WireContextMeasure,
   WireContextPressure,
   WireSummaryThreshold,

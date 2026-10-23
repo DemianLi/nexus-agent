@@ -32,7 +32,11 @@
  */
 
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
-import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
+import type {
+  WireContextBreakdown,
+  WireContextMeasure,
+  WireContextPressure,
+} from './context-pressure.js';
 import type { CustomFrameName } from './custom-frame.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import { IMAGE_MEDIA_TYPES } from './attachments.js';
@@ -1169,11 +1173,12 @@ function reduceModelUsage(state: ConversationState, payload: object): Conversati
  * 話，環會量錯那一道，而且看起來正常。
  */
 function reduceContextMeasure(state: ConversationState, payload: object): ConversationState {
-  const { approxTokens, messageCount, thresholds, messagesCompactable } = payload as {
+  const { approxTokens, messageCount, thresholds, messagesCompactable, breakdown } = payload as {
     approxTokens?: unknown;
     messageCount?: unknown;
     thresholds?: unknown;
     messagesCompactable?: unknown;
+    breakdown?: unknown;
   };
   // 空陣列也不收：`measure` 在就保證至少一道門檻，web 不必處理「有量測、沒分母」。摘要的設定本來就不准空陣列。
   if (!isCount(approxTokens) || !isCount(messageCount) || !Array.isArray(thresholds)) return state;
@@ -1187,11 +1192,23 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
   }
   // 選填（#1443）：沒有就不出這一格（舊日誌），有就得是布林。
   if (messagesCompactable !== undefined && typeof messagesCompactable !== 'boolean') return state;
+  // 選填（#1571）：沒有就不出這一格（舊日誌、還沒量過），有就得是三個非負整數。壞的整顆不收，不收一半。
+  let parsedBreakdown: WireContextBreakdown | undefined;
+  if (breakdown !== undefined) {
+    const { systemTokens, toolsTokens, messageTokens } = (breakdown ?? {}) as {
+      systemTokens?: unknown;
+      toolsTokens?: unknown;
+      messageTokens?: unknown;
+    };
+    if (!isCount(systemTokens) || !isCount(toolsTokens) || !isCount(messageTokens)) return state;
+    parsedBreakdown = { systemTokens, toolsTokens, messageTokens };
+  }
   const measure: WireContextMeasure = {
     approxTokens,
     messageCount,
     thresholds: parsed,
     ...(messagesCompactable !== undefined && { messagesCompactable }),
+    ...(parsedBreakdown !== undefined && { breakdown: parsedBreakdown }),
   };
   return { ...state, contextPressure: { ...state.contextPressure, measure } };
 }

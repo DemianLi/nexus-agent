@@ -13,6 +13,7 @@ import { requestImageHandleText } from './attachment-projection.js';
 import { attachmentBlock, fileHandleText, fileModelPath, IMAGE_TOKENS } from './attachment-ref.js';
 import {
   estimateAnchoredTokens,
+  estimateRequestParts,
   estimateRequestTokens,
   estimateTextTokens,
   TokenAnchorBook,
@@ -695,5 +696,57 @@ describe('附件區塊（#732）', () => {
     const counted = estimateRequestTokens(request([withBlocks(block)])) - baseline;
     expect(counted).toBe(estimateTextTokens(fileHandleText(FILE_REF, fileModelPath(FILE_REF))));
     expect(counted).toBeGreaterThan(40);
+  });
+});
+
+describe('E 拆三格（#1571 N1193）', () => {
+  const DIGITS = '編號 20261024 與 3141592653 共 1234567 筆。'.repeat(20);
+
+  it('系統那一格 = 該段文字的 o200k 數 + 一則訊息的框架開銷，工具與訊息兩格是 0', () => {
+    const text = '你是測試用的助手。請簡短回答。';
+    const parts = estimateRequestParts({ systemMessage: new SystemMessage(text) });
+    expect(parts).toEqual({ system: estimateTextTokens(text) + 4, tools: 0, messages: 0 });
+  });
+
+  it('工具那一格 = 每個工具送上線那份 OpenAI JSON 的數，加總', () => {
+    const other = {
+      type: 'function',
+      function: { name: 'write_file', description: '寫檔', parameters: {} },
+    };
+    const parts = estimateRequestParts({ tools: [...TOOLS, other] });
+    expect(parts.system).toBe(0);
+    expect(parts.messages).toBe(0);
+    expect(parts.tools).toBe(
+      estimateTextTokens(JSON.stringify(TOOLS[0])) + estimateTextTokens(JSON.stringify(other)),
+    );
+  });
+
+  it('什麼都沒有：三格都是 0（不是缺席）', () => {
+    expect(estimateRequestParts({})).toEqual({ system: 0, tools: 0, messages: 0 });
+  });
+
+  it.each([false, true])(
+    '三格加起來 = estimateRequestTokens（singleDigits=%s），整數且非負',
+    (singleDigits) => {
+      const req = request([new HumanMessage(DIGITS), new AIMessage('收到 12345。')]);
+      const parts = estimateRequestParts(req, { singleDigits });
+      for (const value of Object.values(parts)) {
+        expect(Number.isInteger(value)).toBe(true);
+        expect(value).toBeGreaterThanOrEqual(0);
+      }
+      expect(parts.system + parts.tools + parts.messages).toBe(
+        estimateRequestTokens(req, { singleDigits }),
+      );
+    },
+  );
+
+  it('逐位切詞的多出量只算進含數字的那一格', () => {
+    const plain = estimateRequestParts(request([new HumanMessage(DIGITS)]));
+    const single = estimateRequestParts(request([new HumanMessage(DIGITS)]), {
+      singleDigits: true,
+    });
+    expect(single.messages).toBeGreaterThan(plain.messages);
+    expect(single.system).toBe(plain.system);
+    expect(single.tools).toBe(plain.tools);
   });
 });
