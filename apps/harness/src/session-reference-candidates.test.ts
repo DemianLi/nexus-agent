@@ -62,6 +62,7 @@ async function put(
     readonly cwd?: string | null;
     readonly createdAt?: number;
     readonly parentSession?: string;
+    readonly isSeeded?: true;
     readonly events?: readonly Draft[];
     readonly tail?: string;
   } = {},
@@ -73,6 +74,7 @@ async function put(
     createdAt: options.createdAt ?? 1_000,
     ...(options.cwd === null ? {} : { cwd: options.cwd ?? projectCwd }),
     ...(options.parentSession === undefined ? {} : { parentSession: options.parentSession }),
+    ...(options.isSeeded === undefined ? {} : { isSeeded: options.isSeeded }),
   });
   // 一筆都沒寫的會話在檔案系統上沒有足跡、後端不列（#665），所以空的給一筆與標題無關的事件墊底。
   const events = options.events?.length
@@ -213,6 +215,23 @@ describe('SessionReferenceCandidates.list', () => {
       parentLabel: 'gone',
     });
     expect(candidates.find(({ sessionId }) => sessionId === 'me')).toBeUndefined();
+  });
+
+  it('分叉帶 parentSession 卻是自己的一條會話：不帶 parentSessionId／parentLabel（#1579 驗收 2）', async () => {
+    await put(CWD, 'source', { events: [titled('來源', 1_500)] });
+    await put(CWD, 'forked', {
+      parentSession: 'source',
+      isSeeded: true,
+      events: [
+        said('來源那一句', 1_000),
+        { type: 'session/end-seed', time: 1_000, data: { inherited: true } },
+        said('分叉之後', 2_000),
+      ],
+    });
+    const forked = (await service().list('me', '')).find(({ sessionId }) => sessionId === 'forked');
+    expect(forked).toBeDefined();
+    expect(forked).not.toHaveProperty('parentSessionId');
+    expect(forked).not.toHaveProperty('parentLabel');
   });
 
   it('比對 id、目錄、標題，不分大小寫；不搜內文', async () => {

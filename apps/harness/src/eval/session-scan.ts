@@ -83,7 +83,9 @@ import {
   classifyStoredFormatVersion,
   currentMessageFeedback,
   deriveSessionStats,
+  inheritedEventCount,
   isKnownSessionEventType,
+  isSubagentSessionHeader,
   parseSessionHeaderFilename,
   sessionFilenames,
   subagentLinks,
@@ -137,6 +139,9 @@ export interface SessionLogHeader {
   /** 磁碟上那份 header 寫的格式版本（`parseHeader` 的 `storedFormatVersion`），各個 `…_SINCE` 門檻比的是它。 */
   readonly version: number;
   readonly parentSession?: string;
+  /** header 的那兩格（#1579），判「是不是子代理」用（core 的 `isSubagentSessionHeader`）。 */
+  readonly origin?: 'subagent';
+  readonly isSeeded?: true;
   /** 建置版本、插件清單、設定雜湊、模型型錄 id（#1025），只留形狀對得上的那幾格；沒有就是沒記。 */
   readonly metadata?: SessionHeaderMetadataView;
 }
@@ -162,6 +167,8 @@ export interface SessionScan {
   readonly file: string;
   readonly sessionId: string;
   readonly parentSession?: string;
+  /** 子代理的（core 的 `isSubagentSessionHeader`，#1579）。帶 `parentSession` 卻不是子代理的是分叉。 */
+  readonly subagent?: true;
   readonly version: number;
   /** 模型呼叫次數（`deriveSessionStats` 的 `steps`）。 */
   readonly steps: number | null;
@@ -240,6 +247,8 @@ export function parseArguments(serialized: string): unknown {
  * **一輪有好幾則回覆被評時點踩優先**，其次取後評的：按鈕只放在每一輪最後一則，但線上指得到任何一則
  * 回覆，而這裡要回答的是「這一輪有沒有被點踩」。
  *
+ * 分叉繼承來的前綴裡的評分不算（#1579），同產品的評分插件：那是父會話的，掃父那一份時才算。
+ *
  * @param events - root 那一份日誌的全部事件。
  * @returns 輪（起頭那顆 `turn/start` 的 `seq`）→ 那一筆。
  */
@@ -247,7 +256,7 @@ export function ratingsByTurn(
   events: readonly SessionEvent[],
 ): ReadonlyMap<number, MessageFeedbackItem | LegacyTurnFeedbackItem> {
   const byTurn = new Map<number, MessageFeedbackItem | LegacyTurnFeedbackItem>();
-  for (const { item, turn } of currentMessageFeedback(events)) {
+  for (const { item, turn } of currentMessageFeedback(events, inheritedEventCount(events))) {
     const held = byTurn.get(turn);
     const negative = item.rating === 'negative';
     const outranks =
@@ -282,6 +291,8 @@ export function scanSessionLog(
   let toolCalls = 0;
   let aborted = 0;
   let feedbackRecords = 0;
+  // 分叉繼承來的前綴（#1579）：評語同評分，是來源 thread 的，不算這一份的。
+  const inherited = inheritedEventCount(log.events);
   let chain: (RepeatRun & { readonly key: string }) | undefined;
   let longest: RepeatRun | null = null;
 
@@ -325,7 +336,7 @@ export function scanSessionLog(
         break;
       }
       case 'feedback/record':
-        feedbackRecords += 1;
+        if (event.seq >= inherited) feedbackRecords += 1;
         break;
       default:
         break;
@@ -339,6 +350,7 @@ export function scanSessionLog(
     file: log.file,
     sessionId: log.header.id,
     ...(log.header.parentSession !== undefined && { parentSession: log.header.parentSession }),
+    ...(isSubagentSessionHeader(log.header) && { subagent: true as const }),
     version,
     steps: version >= MODEL_CALLS_SINCE ? deriveSessionStats(known).steps : null,
     toolCalls: hasToolEvents ? toolCalls : null,
@@ -351,7 +363,11 @@ export function scanSessionLog(
         ? [...ratingsByTurn(known).values()].filter((item) => item.rating === 'negative').length
         : null,
     feedbackRecords: version >= FEEDBACK_SINCE ? feedbackRecords : null,
-    subagents: version >= SUBAGENT_CATALOG_SINCE ? subagentLinks(known) : null,
+    // 分叉繼承來的目錄是父會話派的（#1579），同產品的子代理目錄。
+    subagents:
+      version >= SUBAGENT_CATALOG_SINCE
+        ? subagentLinks(known, inheritedEventCount(log.events))
+        : null,
     unknownEvents: log.events.length - known.length,
     unknownIgnorableEvents: log.events.filter(
       (event) => !isKnownSessionEventType(event.type) && event.ignorable === true,
@@ -371,6 +387,8 @@ function headerOf({ header, storedFormatVersion }: SessionEntry): SessionLogHead
     // 版本門檻看磁碟上那份寫的版號；`header.version` 已轉譯成這一版（#1856）。
     version: storedFormatVersion,
     ...(header.parentSession !== undefined && { parentSession: header.parentSession }),
+    ...(header.origin !== undefined && { origin: header.origin }),
+    ...(header.isSeeded !== undefined && { isSeeded: header.isSeeded }),
     // 一格都沒記（30 以前的日誌）就整個不帶，報表照樣印「—」。
     ...(Object.keys(metadata).length > 0 && { metadata }),
   };
@@ -516,7 +534,12 @@ export function formatScanReport(
   ];
   for (const scan of ordered) {
     const tag = scan.looping === true ? '[疑似打轉] ' : '';
-    const parent = scan.parentSession === undefined ? '' : `（上層 ${scan.parentSession}）`;
+    const parent =
+      scan.parentSession === undefined
+        ? ''
+        : scan.subagent === true
+          ? `（上層 ${scan.parentSession}）`
+          : `（分叉自 ${scan.parentSession}）`;
     lines.push('', `${tag}${scan.sessionId}${parent}  ${shown(scan.file)}`);
     const run =
       scan.longestRun === null
@@ -528,7 +551,7 @@ export function formatScanReport(
       `  中止 ${scan.aborted ?? '—'} 輪 ｜點踩 ${scan.negativeTurns ?? '—'} 輪 ｜回饋 ${scan.feedbackRecords ?? '—'} 則`,
       `  ${formatSessionHeaderMetadata(scan.headerMetadata ?? {})}`,
     );
-    if (scan.parentSession !== undefined) {
+    if (scan.parentSession !== undefined && scan.subagent === true) {
       lines.push(`  派它的 ${dispatchedBy(scan, byId.get(scan.parentSession))}`);
     }
     for (const link of scan.subagents ?? []) {

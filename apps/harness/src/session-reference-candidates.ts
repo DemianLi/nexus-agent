@@ -28,6 +28,7 @@
 import { basename } from 'node:path';
 
 import {
+  isSubagentSessionHeader,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
   SessionNotFoundError,
@@ -163,10 +164,12 @@ export class SessionReferenceCandidates {
           sameWorkspace: header.cwd !== undefined && header.cwd === cwd,
           createdAt: header.createdAt,
           updatedAt,
-          ...(header.parentSession !== undefined && {
-            parentSessionId: header.parentSession,
-            parentLabel: labelOf.get(header.parentSession) ?? header.parentSession,
-          }),
+          // 子代理那一列才講「屬於哪條會話」；分叉帶 `parentSession` 卻是一條自己的會話（#1579）。
+          ...(header.parentSession !== undefined &&
+            isSubagentSessionHeader(header) && {
+              parentSessionId: header.parentSession,
+              parentLabel: labelOf.get(header.parentSession) ?? header.parentSession,
+            }),
           mention: formatSessionReferenceMention({ sessionId: header.id, label }),
         };
       });

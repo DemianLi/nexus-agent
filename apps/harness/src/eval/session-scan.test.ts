@@ -538,6 +538,52 @@ describe('派它的呼叫：找不到一律「—」，說是哪一種沒有', (
     expect(fresh.subagents).toEqual([]);
     expect(report(fresh, child('p'))).toContain('派它的 —（上層的子代理目錄沒有這一份）');
   });
+
+  it('分叉（parentSession 加 isSeeded）不是子代理：不找派它的呼叫，前綴裡父會話派的子代理與點踩都不算（#1579）', () => {
+    const forked = scanSessionLog({
+      file: 'forked.jsonl',
+      header: {
+        id: 'f',
+        version: SESSION_LOG_FORMAT_VERSION,
+        parentSession: 'p',
+        isSeeded: true,
+      },
+      events: events([
+        turn('message'),
+        call('task', {}, 'c1'),
+        ['subagent/catalog', { childId: 'p/x', callId: 'c1', mode: 'one-shot' }],
+        ['assistant/message', { message: { type: 'ai', data: { content: '答。', id: 'a1' } } }],
+        ['turn/end', {}],
+        [
+          'feedback/message-put',
+          {
+            item: {
+              messageId: 'a1',
+              rating: 'negative',
+              version: 'v-a1',
+              createdAt: 0,
+              updatedAt: 0,
+            },
+          },
+        ],
+        ['feedback/record', { text: '父會話的評語' }],
+        ['session/end-seed', { inherited: true }],
+        turn('message'),
+        ['feedback/record', { text: '自己的評語' }],
+        call('task', {}, 'c2'),
+        ['subagent/catalog', { childId: 'f/y', callId: 'c2', mode: 'one-shot' }],
+      ]),
+    });
+    expect(forked.subagent).toBeUndefined();
+    expect(forked.subagents?.map((link) => link.childId)).toEqual(['f/y']);
+    // 前綴裡父會話給的點踩與評語是父會話的，不算這一份的。
+    expect(forked.negativeTurns).toBe(0);
+    expect(forked.feedbackRecords).toBe(1);
+    const text = report(forked);
+    expect(text).toContain('f（分叉自 p）');
+    expect(text).not.toContain('派它的');
+    expect(child('p').subagent).toBe(true);
+  });
 });
 
 /** 在 `directory` 裡寫一份會話，照 JSONL 後端的寫法。 */

@@ -22,7 +22,11 @@
  * @module
  */
 
-import { foldSubagentDescriptor, resumeClosingInterruptedTurn } from '@nexus/core';
+import {
+  foldSubagentDescriptor,
+  inheritedEventCount,
+  resumeClosingInterruptedTurn,
+} from '@nexus/core';
 import type {
   ConversationReplay,
   ResumedStoredSession,
@@ -77,9 +81,15 @@ export interface ColdChildStore {
   ): Promise<ConversationReplay>;
 }
 
-/** 一份子日誌的事件折成「叫不叫得醒」。 */
+/**
+ * 一份子日誌的事件折成「叫不叫得醒」。
+ *
+ * 身分只從**自己的**事件折（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），照 dsh 冷復活與封存准入
+ * （`subagent/subagent/src/manager.ts:1348-1349`、`archive-admission.ts:84`，`687f282e`）：帶著繼承前綴開出來的日誌，前綴裡的
+ * `subagent/descriptor` 是來源那一份的身分。
+ */
 export function inspectionOf(events: readonly SessionEvent[]): ColdInspection {
-  const folded = foldSubagentDescriptor(events);
+  const folded = foldSubagentDescriptor(events.slice(inheritedEventCount(events)));
   switch (folded.kind) {
     case 'absent':
       return {

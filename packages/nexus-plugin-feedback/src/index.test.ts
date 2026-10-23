@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 
 import { createCommandsProvider } from '@nexus/commands/provider';
 import { createSessionDurabilityProvider } from '@nexus/session/provider';
-import { SessionLog } from '@nexus/core';
+import { buildForkSeed, SessionLog } from '@nexus/core';
 import type { LoggedMessage, SessionEvent } from '@nexus/core';
 import { Context } from '@nexus/cordis';
 import Loader from '@nexus/cordis-plugin-loader';
@@ -274,6 +274,39 @@ describe('評分', () => {
     });
     await service.delete(log, { messageId: 'm-goal', ifVersion: changed.value.version });
     expect(await service.list(log)).toEqual({ ok: true, value: { items: [first.value] } });
+  });
+
+  it('分叉：父會話給的評分不列、也不當成現有的那一筆；前綴裡的回覆可以重新評（#1579 驗收 5）', async () => {
+    const { log: parent } = logWithTurns();
+    const given = await service.put(parent, {
+      messageId: 'm-first',
+      rating: 'negative',
+      ifVersion: null,
+    });
+    if (!given.ok) throw new Error('建不起來');
+    // 分叉的切點只能是一顆 `turn/end`：評分那一顆之後再收一輪。
+    parent.append('turn/start', { kind: 'message', text: '再。' });
+    const cut = parent.append('turn/end', {});
+
+    const child = new SessionLog('child', { seed: buildForkSeed(parent.events, cut.seq) });
+    expect(await service.list(child)).toEqual({ ok: true, value: { items: [] } });
+    // 父會話那一筆的版本在這裡不算數：當成新建（`ifVersion: null`）才收。
+    expect(
+      (
+        await service.put(child, {
+          messageId: 'm-first',
+          rating: 'positive',
+          ifVersion: given.value.version,
+        })
+      ).ok,
+    ).toBe(false);
+    const again = await service.put(child, {
+      messageId: 'm-first',
+      rating: 'positive',
+      ifVersion: null,
+    });
+    if (!again.ok) throw new Error('重新評不了');
+    expect(await service.list(child)).toEqual({ ok: true, value: { items: [again.value] } });
   });
 });
 

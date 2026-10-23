@@ -433,6 +433,20 @@ describe('窗口與上限：總數不因摺掉而變小', () => {
     expect(view.linksOmitted).toBe(4);
   });
 
+  it('分叉繼承來的目錄不收（#1579）：在 inherited 標記清掉之前的，同 dsh catalog.ts:124-126', () => {
+    const view = fold(
+      log(
+        [0, 'subagent/catalog', { childId: 'T/x', callId: 'c1', mode: 'one-shot' }],
+        [1, 'session/end-seed', { inherited: true }],
+        [2, 'subagent/catalog', { childId: 'F/y', callId: 'c2', mode: 'one-shot' }],
+        // 續接補的是普通的 end-seed：不清。
+        [3, 'session/end-seed', {}],
+      ),
+    );
+    expect(view.links.map((link) => link.runId)).toEqual(['y']);
+    expect(view.linksOmitted).toBe(0);
+  });
+
   it('同一個子代理的目錄重複寫：只留一筆', () => {
     const data = { childId: 't/bg-1', callId: 'c', mode: 'one-shot' };
     expect(

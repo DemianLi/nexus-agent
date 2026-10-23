@@ -16,6 +16,7 @@ import {
 import type { ConversationEntry, ConversationState, ThreadHistoryQuery } from '@nexus/wire';
 import {
   HISTORY_PAGE_MAX_BYTES,
+  SUBAGENT_CATALOG,
   UNFINISHED_TOOL_TEXT,
   emptyConversation,
   prependEntries,
@@ -1245,5 +1246,38 @@ describe('模型回覆的開始時刻（#1048）', () => {
     const [entry] = aiEntries(events);
     expect(entry?.startedAt).toBe(1100);
     expect(entry?.settledAt).toBe(1600);
+  });
+});
+
+describe('分叉繼承來的子代理目錄（#1579）', () => {
+  const catalog = (childId: string, callId: string): Draft => ({
+    type: 'subagent/catalog',
+    data: { childId, callId, mode: 'one-shot' },
+  });
+  /** 前綴是來源 thread `T` 的一輪（派了 `T/x`），切點之後是自己的一輪（派了 `F/y`）。 */
+  const FORKED = log(
+    human('一'),
+    call('c1', 'task'),
+    catalog('T/x', 'c1'),
+    turnEnd,
+    { type: 'session/end-seed', data: { inherited: true } },
+    human('二'),
+    call('c2', 'task'),
+    catalog('F/y', 'c2'),
+    turnEnd,
+  );
+  const childIds = (events: readonly SessionEvent[], query?: ThreadHistoryQuery): string[] =>
+    historyPage(events, query)
+      .events.map((frame) => (frame.params as { data?: { name?: string; payload?: unknown } }).data)
+      .filter((data) => data?.name === SUBAGENT_CATALOG)
+      .map((data) => (data!.payload as { childId: string }).childId);
+
+  it('前綴裡的不轉 frame（`F/x` 開不到），自己派的照轉：同 dsh catalog.ts:124-126', () => {
+    expect(childIds(FORKED)).toEqual(['F/y']);
+  });
+
+  it('切點由整份日誌算：只拿前綴那一頁（不含標記）也不轉', () => {
+    // `throughSeq` 停在前綴裡：這一頁不含標記，但切點從整份日誌來。
+    expect(childIds(FORKED, { beforeSeq: 4 })).toEqual([]);
   });
 });

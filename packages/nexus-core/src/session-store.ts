@@ -608,8 +608,24 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 22），不是非升不可：讀 `aborted` 的 goal 續行與掃描只看 `reason.kind`，一樣當成「被打斷」；歷史把 `cause` 原樣帶上收尾的 frame。
  * 版號照上面 49 那段「併行的升版」：#1579 還沒開工，這張先拿 50。**回滾的後果**同 49：被 50 碰過的 thread，49 的 runtime 打不開。
+ *
+ * ## 51：日誌承載分叉前綴，header 分開子代理與分叉
+ *
+ * [#1579](https://github.com/DemianLi/nexus-agent/issues/1579)，照 dsh 的形狀（`687f282e`）：
+ * - header 多兩格：`origin: 'subagent'`（新建的子代理一律寫）與 `isSeeded: true`（分叉來的，只在 true 時寫）。見 {@link StoredSessionHeader}。
+ * - `session/end-seed` 的 data 可以帶 `inherited: true`，標出繼承來的前綴在哪裡切（`session-log.ts` 的 `inheritedEventCount`）。切點**不另外落盤**，
+ *   照 dsh 讀盤從最後一顆標記推（`packages/session/session-format-v1-to-v2/src/codec.ts:114-127`），所以 dsh v0 的 `seedLength` 沒有對應的鍵。
+ * - 讀盤驗證照 dsh `session-format-v3-to-v4/src/validation.ts:52-76`：seeded 就一定要有標記、沒 seeded 就不能有（`apps/harness/src/session-log-validation.ts`）。
+ *
+ * **升版，不是可選的**（判準見上面 32 那段）。這張 PR 開工時實測過 50 的讀方（develop `f210b3ac`）：header 帶 `origin` 或 `isSeeded` 的 50 檔，
+ * `parseHeader` 的白名單（#1549）拒成 `SessionCorruptionError`（「header 有這一版不寫的鍵」）——**把一份好好的新檔判成壞檔**，列表也把它算成壞的；
+ * 只帶 `inherited` 標記、header 沒新鍵的 50 檔則照常讀回，標記被當成普通的 end-seed，前綴被當成自己的。兩種都是靜靜讀錯或報錯錯，所以要讓舊讀方
+ * 在讀之前就停：51 的檔在 50 的 runtime 上拋 `SessionFormatUnsupportedError`（「比這一版新」），列表算進 unreadable。
+ *
+ * **讀舊檔**：50 以前沒有這三樣，等於不是分叉、子代理靠 `parentSession` 認（{@link isSubagentSessionHeader} 的退路）。續接一份 50 的檔，
+ * header 改寫成 51 但不補 `origin`、不寫 `isSeeded`（續接改寫只動 `version`）。**回滾的後果**同 49：被 51 碰過的 thread，50 的 runtime 打不開。
  */
-export const SESSION_LOG_FORMAT_VERSION = 50;
+export const SESSION_LOG_FORMAT_VERSION = 51;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
@@ -685,12 +701,28 @@ export interface StoredSessionHeader {
    */
   readonly workspaceRoot?: string;
   /**
-   * 它 fork／spawn 自哪一份，有的話。
+   * 它 spawn／fork 自哪一份，有的話。**帶了它不等於是子代理**：問「是不是子代理」一律用 {@link isSubagentSessionHeader}
+   * （[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
    *
-   * subagent 的日誌帶 root 的 id——**血緣要讀得出來**，同 `SessionRegistry` 檔頭那條
-   * 「id 是 `<root>/<runId>`，對到 dsh 的 `header.parentSession`」。
+   * - **子代理**的日誌帶 root 的 id——**血緣要讀得出來**，同 `SessionRegistry` 檔頭那條
+   *   「id 是 `<root>/<runId>`，對到 dsh 的 `header.parentSession`」。
+   * - **分叉**的日誌帶來源 thread 的 id，同時帶 {@link isSeeded}（照 dsh `core/session/src/index.ts:1392-1396`，`687f282e`）。
+   *   分叉之後和來源只剩這一格關聯，不共用任何狀態。
    */
   readonly parentSession?: string;
+  /**
+   * 這份是 spawn 出來的子代理（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），照 dsh `SessionHeader.origin`
+   * （`packages/core/session/src/types.ts:95-131`，`687f282e`）。51 起新建的子代理一律寫；50 以前的沒有，見 {@link isSubagentSessionHeader}。
+   */
+  readonly origin?: 'subagent';
+  /**
+   * 這份是帶著另一份會話的前綴開出來的（分叉，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。照 dsh 的 `isSeeded`，
+   * 但**只在 true 時寫**（dsh 是必填的 boolean；我們沒寫就是 false，50 以前的檔一格都沒有）。
+   *
+   * **繼承了幾顆不另外落盤**：照 dsh 讀盤的求法，從最後一顆 `session/end-seed {inherited: true}` 推（`inheritedEventCount`，
+   * `session-log.ts`）。讀盤時兩者要對得上，見 `apps/harness/src/session-log-validation.ts`。
+   */
+  readonly isSeeded?: true;
   /**
    * 寫這份日誌的程式碼版本（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
    *
@@ -715,6 +747,24 @@ export interface StoredSessionHeader {
    * 續接規則同 {@link build}。
    */
   readonly modelEntryId?: string;
+}
+
+/**
+ * 這份 header 是不是一個子代理的（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。列表不列、@ 選單標成誰的子代理、
+ * eval 不算 root，問的都是這一支。
+ *
+ * dsh 只看 `origin === 'subagent'`。**偏離（理由 1：既有落盤資料表達不出 dsh 的判準）**：50 以前的子代理 header 都沒有 `origin`，
+ * 只看它會把它們全當成一般 thread。退到：沒有 `origin` 時，帶 `parentSession` 又不是分叉（`isSeeded`）的就是子代理。
+ *
+ * **「是不是我的子代理」不是這一支**：那要比 `parentSession` 是不是自己的 id（`background-cold.ts`、`session-list.ts` 的血緣核對），
+ * 分叉 header 的 `parentSession` 是一條 thread 的 id，不會是 `<thread>/<runId>`，核對自然不過。
+ */
+export function isSubagentSessionHeader(
+  header: Pick<StoredSessionHeader, 'parentSession' | 'origin' | 'isSeeded'>,
+): boolean {
+  return (
+    header.origin === 'subagent' || (header.parentSession !== undefined && header.isSeeded !== true)
+  );
 }
 
 /**

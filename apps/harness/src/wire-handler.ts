@@ -403,7 +403,7 @@ export interface WireHandlerOptions {
    */
   storedThreadKnown?(threadId: string): Promise<boolean>;
   /**
-   * 這個 id 是不是落盤的**子代理會話**（header 帶 `parentSession`，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。
+   * 這個 id 是不是落盤的**子代理會話**（core 的 `isSubagentSessionHeader`，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)、#1579）。
    * 只給 `run.cancel` 用——它不經 {@link createAgent}，所以閘不到那裡；實作是 `serve.ts` 冷讀 header（`open(id, 'read')`，不拿租約），
    * 沒有日誌回 `false`。省略＝沒有落盤，沒有子代理會話可言。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
    */
@@ -1278,7 +1278,7 @@ export class ThreadCapacityError extends Error {
 /**
  * 這個 id 是子代理的會話，不能當一條 thread 開（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。
  *
- * 由 serve 的 `createAgent` 在**碰日誌之前**拋（冷讀 header 看到 `parentSession`），只有 `threadOrError` 接，回
+ * 由 serve 的 `createAgent` 在**碰日誌之前**拋（冷讀 header，`isSubagentSessionHeader`），只有 `threadOrError` 接，回
  * `thread_is_subagent`。message 寫明原因與下一步：要對子代理說話，從它的主對話用 `subagent.send`。
  */
 export class SubagentSessionError extends Error {

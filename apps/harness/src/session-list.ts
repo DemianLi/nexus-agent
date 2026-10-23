@@ -42,8 +42,8 @@
  *
  * 切換走的是 serve 的續接路徑，所以會在那裡被擋的，這裡就不列（{@link isListedThread}）：
  *
- * - **header 帶 `parentSession` 的不列**：subagent 的 id 是 `<thread>/<task>`，不是一條 thread。dsh 會列、
- *   標 `origin: 'subagent'`；我們切不進去（#302 拍板的第 3 件）。
+ * - **子代理的不列**（{@link isSubagentSessionHeader}）：subagent 的 id 是 `<thread>/<task>`，不是一條 thread。dsh 會列、
+ *   標 `origin: 'subagent'`；我們切不進去（#302 拍板的第 3 件）。分叉帶 `parentSession` 但不是子代理，照列（#1579）。
  * - **`header.cwd` 不等於這一次的 `cwd` 就不列**，沒記的也不列。**不是按目錄判**：`projectKey` 是有損的，
  *   兩個目錄可能落在同一格，header 的 `cwd` 才是唯一分得開的東西（`resume-guards.ts` 的 `assertSameCwd`，
  *   續接時一樣比它）。dsh 只擋沒記的，因為它的列表跨專案。
@@ -62,6 +62,7 @@
  */
 
 import {
+  isSubagentSessionHeader,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
   SessionNotFoundError,
@@ -92,19 +93,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 這份是子代理的會話嗎：header 帶 `parentSession`（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。
+ * 這份是子代理的會話嗎（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：core 的 `isSubagentSessionHeader`，
+ * 判準與偏離寫在那裡（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
  *
  * **列表（{@link isListedThread}）和 serve 的續接閘（`serve.ts` 的 `createAgent`）共用這一支**，判準只有一份。
- * 對到 dsh 的 headless（`packages/bundle/headless/src/index.ts:222-224`）與 ACP（`packages/acp/acp/src/index.ts:252-255`）：
- * `origin === 'subagent' || parentSession !== undefined`。nexus 的 header 沒有 `origin`，而 `parentSession` 只有子代理會寫
- * （`session-persistence.ts` 的 `address.kind === 'subagent'` 那一支），所以兩者等價。
- *
- * **將來做會話分叉（N0762，#1550）時這條要改**：分叉的 header 會帶 `parentSession` 卻是一條可以驅動的主對話。到時要像 dsh 的
- * session-controller 那樣在 header 加 `origin`，判準改成 `origin === 'subagent'`，否則分叉會被誤擋。
+ * #1544 時對到 dsh 的 headless 與 ACP（`origin === 'subagent' || parentSession !== undefined`），那兩支連分叉也擋，因為它們本來
+ * 就不驅動分叉；web 這條路照 dsh session-controller（`api/session-controller/src/agent.ts:115`）只認 `origin`，分叉是一條可以驅動的主對話。
  */
-export function isSubagentSessionHeader(header: StoredSessionHeader): boolean {
-  return header.parentSession !== undefined;
-}
+export { isSubagentSessionHeader };
 
 /**
  * 一份列得出來嗎：root、`cwd` 對得上。判準見檔頭的「列出來的每一列都要切得過去」。

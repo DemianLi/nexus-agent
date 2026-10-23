@@ -6,8 +6,14 @@
  * 真的落盤、真的重開一台的端到端在 `background-cold-e2e.test.ts`。
  */
 
-import { SessionRegistry, appendSubagentCatalog, appendSubagentDescriptor } from '@nexus/core';
-import type { SessionEvent, SessionLog } from '@nexus/core';
+import {
+  SessionLog,
+  SessionRegistry,
+  appendSubagentCatalog,
+  appendSubagentDescriptor,
+  buildForkSeed,
+} from '@nexus/core';
+import type { SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import type { ColdChildStore, ColdInspection } from './background-cold.js';
@@ -566,6 +572,18 @@ describe('inspectionOf', () => {
       kind: 'unresumable',
       reason: expect.stringContaining('壞了'),
     });
+  });
+
+  it('帶繼承前綴的日誌：身分只從自己的事件折，前綴裡的是來源那一份的（#1579，dsh manager.ts:1348）', () => {
+    const source = childEvents('bg-1', { descriptor: { subagent: 'reviewer' } });
+    const seed = buildForkSeed(source, source.length - 1);
+    expect(inspectionOf(seed)).toMatchObject({
+      kind: 'unresumable',
+      reason: expect.stringContaining('格式 44 以前'),
+    });
+    const own = new SessionLog(`${ROOT}/bg-2`, { seed });
+    appendSubagentDescriptor(own, { subagent: 'worker' });
+    expect(inspectionOf(own.events)).toEqual({ kind: 'resumable', subagent: 'worker' });
   });
 });
 
