@@ -177,15 +177,10 @@ describe('skills 進到 system prompt', () => {
  * （`packages/skill/skill/src/index.ts:540-541`）。改的是組裝點包的那一層，不是基座。
  */
 describe('skills 的快取邊界', () => {
-  /**
-   * 第一次 invoke 掃兩次 `ls`：基座掃一次，交給基座的 backend 視圖（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)，
-   * `skill-catalog.ts`）在基座第一次 `ls` 時先自己掃完全部來源做同名決勝，又一次（代價登記在 `skills-middleware.ts` 檔頭）。
-   * 凍住看的是第二次 invoke 一次都不掃。
-   */
   it('載到 skill 就凍住，載到空的也凍住', async () => {
-    for (const [label, source] of [
-      ['有 skill', '/skills/'],
-      ['沒 skill', '/empty/'],
+    for (const [label, source, expected] of [
+      ['有 skill', '/skills/', 1],
+      ['沒 skill', '/empty/', 1],
     ] as const) {
       const root = await workspace({ skills: { 'web-research': '上網查資料。' } });
       await mkdir(join(root, 'empty'), { recursive: true });
@@ -207,18 +202,15 @@ describe('skills 的快取邊界', () => {
         plugins: [createSkillsPlugin({ sources: [source] })],
       });
 
-      let first = 0;
       try {
         // 快取的粒度是 per invoke（`beforeAgent`），不是 per model turn——所以要 invoke 兩次。
         await agent.invoke(toAgentInvocation('第一次。'));
-        first = scans;
         await agent.invoke(toAgentInvocation('第二次。'));
       } finally {
         await dispose();
       }
 
-      expect(first, label).toBe(2);
-      expect(scans, label).toBe(first);
+      expect(scans, label).toBe(expected);
     }
   });
 });
@@ -355,12 +347,12 @@ async function rows(enabled: boolean): Promise<readonly PluginEntry[]> {
   );
 }
 
-/** 產品組裝跑一輪，回傳每一次模型呼叫的 system prompt。 */
-async function promptsOf(
+/** 產品組裝跑一輪，回傳每一次模型呼叫的完整訊息串。 */
+async function requestsOf(
   enabled: boolean,
   workspaceRoot: string | undefined,
   turns: Parameters<typeof withScriptedModel>[1],
-): Promise<string[]> {
+): Promise<BaseMessage[][]> {
   const built = await createCliAgent(
     workspaceRoot === undefined ? { live: false } : { live: false, workspace: workspaceRoot },
     withScriptedModel([...(await rows(enabled))], turns),
@@ -376,7 +368,16 @@ async function promptsOf(
   } finally {
     await built.dispose();
   }
-  return (built.model as unknown as { prompts: BaseMessage[][] }).prompts.map(systemPrompt);
+  return (built.model as unknown as { prompts: BaseMessage[][] }).prompts;
+}
+
+/** 產品組裝跑一輪，回傳每一次模型呼叫的 system prompt。 */
+async function promptsOf(
+  enabled: boolean,
+  workspaceRoot: string | undefined,
+  turns: Parameters<typeof withScriptedModel>[1],
+): Promise<string[]> {
+  return (await requestsOf(enabled, workspaceRoot, turns)).map(systemPrompt);
 }
 
 /**
@@ -469,8 +470,14 @@ describe('只給人叫的技能不列給模型', () => {
 
   it('disable-model-invocation: true 的不在 root 與 general-purpose 子代理的 prompt 裡', async () => {
     const root = await flagged({ deploy: 'disable-model-invocation: true\n', normal: '' });
-    const prompts = await promptsOf(true, root, delegate);
+    const requests = await requestsOf(true, root, delegate);
+    const prompts = requests.map(systemPrompt);
     expect(prompts).toHaveLength(3);
+    // 第 1 次（從 0 數）是子代理那一次：它收到的第一則人話是委派描述，不是使用者那一句（後面還有 time-context 注入的那則）。
+    const firstHuman = (messages: readonly BaseMessage[]): string | undefined =>
+      messages.find((message) => message.getType() === 'human')?.text;
+    expect(firstHuman(requests[0]!)).toBe('嗨。');
+    expect(firstHuman(requests[1]!)).toBe('去做事');
     for (const [index, prompt] of prompts.entries()) {
       expect(prompt, `第 ${index} 次`).toContain('**normal**');
       expect(prompt, `第 ${index} 次`).not.toContain('**deploy**');

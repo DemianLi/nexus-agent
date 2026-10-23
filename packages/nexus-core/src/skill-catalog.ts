@@ -9,7 +9,8 @@
  *
  * dsh 的做法：提供者解析旗標，舊鍵或不在值表上的值整份不收（fail-closed，`skill-filesystem/src/index.ts:831-837`，
  * `687f282e`）；不合規的根本不成為候選（`discoverRoot`，`:730-756`），同名由 rank 決勝（`skill/src/index.ts:78-79`、`:808`）；
- * `tool-skill` 再只把 `isModelInvocable` 的列給模型。
+ * `tool-skill` 再只把 `isModelInvocable` 的列給模型；讀檔或列目錄遇到「不存在」以外的錯誤，快照不完整，`tool-skill` 整份目錄不發
+ * （`skill-filesystem/src/index.ts:864-865`、`:893-896`，`tool-skill/src/index.ts:227`）。
  * 這裡照它解析、照它決勝，模型那一側由 {@link modelVisibleSkillsBackend} 讓基座看不到（偏離登記在 `skills-middleware.ts` 檔頭）。
  *
  * ## 掃描形狀照基座
@@ -27,7 +28,9 @@ import type {
   BackendFactory,
   BackendProtocolV2,
   BackendRuntime,
+  FileDownloadResponse,
   LsResult,
+  ReadResult,
 } from 'deepagents';
 import { parse as parseYaml } from 'yaml';
 
@@ -115,14 +118,15 @@ const MAX_SKILL_DESCRIPTION_LENGTH = 1024;
  *
  * - `skill`：基座會收的那一份，調用策略也解析過了；
  * - `invalid`：基座會收，但旗標解析拋錯。dsh 整份不收，**也不參與同名決勝**；
- * - `ignored`：讀不到、太大、沒有 frontmatter、YAML 壞了、缺 `name`／`description`。基座自己也跳過（並自己 warn），這裡不表態；
- * - `unreadable`：基座讀不讀得到不知道，這一側讀失敗了。視圖照 fail-closed 拿掉它。
+ * - `ignored`：不存在、太大、沒有 frontmatter、YAML 壞了、缺 `name`／`description`。基座自己也跳過（並自己 warn），這裡不表態；
+ * - `unreadable`：「不存在」以外的讀檔錯誤（權限、路徑不合法、backend 拋例外……）。不知道那份叫什麼名字，同名決勝做不了，
+ *   所以這一次掃描算**不完整**（同 dsh `skill-filesystem/src/index.ts:864-865`、`:893-896` 拋錯）。
  */
 type SkillFileOutcome =
   | { readonly kind: 'skill'; readonly entry: SkillCatalogEntry }
   | { readonly kind: 'invalid'; readonly name: string }
   | { readonly kind: 'ignored' }
-  | { readonly kind: 'unreadable' };
+  | { readonly kind: 'unreadable'; readonly reason: string };
 
 /** 掃到的一個 `SKILL.md`：路徑的拼法同基座，視圖靠它對回 `ls` 的那一列。 */
 interface ScannedSkillFile {
@@ -130,32 +134,77 @@ interface ScannedSkillFile {
   readonly outcome: SkillFileOutcome;
 }
 
-/** 同基座 `readFileFromBackend`（`:4374-4386`）。讀不到回 `null`；拋的往上拋。 */
-async function readSkillFile(backend: BackendProtocolV2, path: string): Promise<string | null> {
+/**
+ * 一次掃描看到的原樣：每個來源 `ls` 回的那一份、每個 `SKILL.md` 讀回的那一份。視圖拿它回應基座，基座看到的就是掃描當時那一份，
+ * 兩次讀之間的檔案變動與暫時性錯誤都碰不到。
+ */
+interface ScanSnapshot {
+  readonly listings: Map<string, LsResult>;
+  readonly downloads: Map<string, FileDownloadResponse>;
+  readonly reads: Map<string, ReadResult>;
+  readonly scanned: ScannedSkillFile[];
+  /** 第一個讓掃描不完整的原因；`undefined` 就是完整。 */
+  incomplete?: string;
+}
+
+function emptySnapshot(): ScanSnapshot {
+  return { listings: new Map(), downloads: new Map(), reads: new Map(), scanned: [] };
+}
+
+/** `downloadFiles` 的錯誤碼裡算「不存在」的兩個（dsh `isAbsentSkillPathError` 加 `info.type !== 'file'`，`:720-724`、`:890`）。 */
+const ABSENT_DOWNLOAD_ERRORS: ReadonlySet<string> = new Set(['file_not_found', 'is_directory']);
+
+/**
+ * `read` 的錯誤只是一段字串。基座 `FilesystemBackend.read` 對不是檔案的回 `File '<路徑>' not found`（`src-C9o7b5C6.js:676`、
+ * `:693`），路徑不存在時 `stat` 拋的 `ENOENT`／`ENOTDIR` 包成 `Error reading file '<路徑>': <訊息>`（`:717`）。
+ * 認得出這幾種的才算不存在（同 dsh `isAbsentSkillPathError`，`:720-724`），其餘照不完整處理。
+ */
+const ABSENT_READ_ERROR = /not found|ENOENT|ENOTDIR/i;
+
+/**
+ * 讀一個 `SKILL.md`，讀法同基座 `readFileFromBackend`（`:4374-4386`）：有 `downloadFiles` 先用它。原樣記進快照，視圖之後回給基座的
+ * 就是這一份。
+ */
+async function readSkillFile(
+  backend: BackendProtocolV2,
+  path: string,
+  snapshot: ScanSnapshot,
+): Promise<{ readonly text: string } | { readonly absent: true } | { readonly error: string }> {
   if (backend.downloadFiles) {
     const results = await backend.downloadFiles([path]);
-    if (results.length !== 1) return null;
+    if (results.length !== 1) return { error: `downloadFiles 回了 ${results.length} 筆` };
     const response = results[0]!;
-    if (response.error != null || response.content == null) return null;
-    return new TextDecoder().decode(response.content);
+    snapshot.downloads.set(path, response);
+    if (response.error != null) {
+      return ABSENT_DOWNLOAD_ERRORS.has(response.error)
+        ? { absent: true }
+        : { error: response.error };
+    }
+    if (response.content == null) return { absent: true };
+    return { text: new TextDecoder().decode(response.content) };
   }
   const result = await backend.read(path);
-  if (result.error) return null;
-  if (typeof result.content !== 'string') return null;
-  return result.content;
+  snapshot.reads.set(path, result);
+  if (result.error)
+    return ABSENT_READ_ERROR.test(result.error) ? { absent: true } : { error: result.error };
+  if (typeof result.content !== 'string') return { absent: true };
+  return { text: result.content };
 }
 
 async function readSkillOutcome(
   backend: BackendProtocolV2,
   skillMdPath: string,
+  snapshot: ScanSnapshot,
 ): Promise<SkillFileOutcome> {
-  let content: string | null;
+  let read: Awaited<ReturnType<typeof readSkillFile>>;
   try {
-    content = await readSkillFile(backend, skillMdPath);
-  } catch {
-    return { kind: 'unreadable' };
+    read = await readSkillFile(backend, skillMdPath, snapshot);
+  } catch (error) {
+    return { kind: 'unreadable', reason: error instanceof Error ? error.message : String(error) };
   }
-  if (content === null) return { kind: 'ignored' };
+  if ('error' in read) return { kind: 'unreadable', reason: read.error };
+  if ('absent' in read) return { kind: 'ignored' };
+  const content = read.text;
   if (content.length > MAX_SKILL_FILE_LENGTH) return { kind: 'ignored' };
   const match = content.match(FRONTMATTER);
   if (!match) return { kind: 'ignored' };
@@ -217,40 +266,51 @@ function isSingleSkill(files: NonNullable<LsResult['files']>): boolean {
   return files.some((info) => !info.is_dir && entryName(info.path) === 'SKILL.md');
 }
 
-/** 掃一個來源。`ls` 失敗回空，同基座（`:4405-4412`）。 */
+/**
+ * 掃一個來源。`ls` 回 `error` 或拋例外，這一次掃描算不完整（dsh 列根目錄遇到「不存在」以外的錯誤會拋，`:766-773`）。
+ * `FilesystemBackend.ls` 自己把所有錯誤吞成空列表（`src-C9o7b5C6.js:657-659`），那種失敗這一側看不出來；
+ * 基座拿到的是快照裡同一份空列表，所以不會因此漏出該藏的技能。
+ */
 async function scanSource(
   backend: BackendProtocolV2,
   sourcePath: string,
-): Promise<ScannedSkillFile[]> {
+  snapshot: ScanSnapshot,
+): Promise<void> {
   const { dir, sep } = normalizeSource(sourcePath);
-  let files: NonNullable<LsResult['files']>;
+  let listed: LsResult;
   try {
-    const listed = await backend.ls(dir);
-    if (listed.error || !listed.files) return [];
-    files = listed.files;
-  } catch {
-    return [];
+    listed = await backend.ls(dir);
+  } catch (error) {
+    snapshot.incomplete ??= `${dir} 列不出來：${error instanceof Error ? error.message : String(error)}`;
+    return;
   }
-  if (isSingleSkill(files)) {
-    const skillMdPath = `${dir}SKILL.md`;
-    return [{ skillMdPath, outcome: await readSkillOutcome(backend, skillMdPath) }];
+  snapshot.listings.set(dir, listed);
+  if (listed.error) {
+    snapshot.incomplete ??= `${dir} 列不出來：${listed.error}`;
+    return;
   }
-  const scanned: ScannedSkillFile[] = [];
-  for (const info of files) {
-    if (!info.is_dir) continue;
-    const skillMdPath = `${dir}${entryName(info.path)}${sep}SKILL.md`;
-    scanned.push({ skillMdPath, outcome: await readSkillOutcome(backend, skillMdPath) });
+  const files = listed.files ?? [];
+  const skillMdPaths = isSingleSkill(files)
+    ? [`${dir}SKILL.md`]
+    : files
+        .filter((info) => info.is_dir)
+        .map((info) => `${dir}${entryName(info.path)}${sep}SKILL.md`);
+  for (const skillMdPath of skillMdPaths) {
+    const outcome = await readSkillOutcome(backend, skillMdPath, snapshot);
+    if (outcome.kind === 'unreadable') {
+      snapshot.incomplete ??= `${skillMdPath} 讀不到：${outcome.reason}`;
+    }
+    snapshot.scanned.push({ skillMdPath, outcome });
   }
-  return scanned;
 }
 
 async function scanAll(
   backend: BackendProtocolV2,
   sources: readonly string[],
-): Promise<ScannedSkillFile[]> {
-  const scanned: ScannedSkillFile[] = [];
-  for (const source of sources) scanned.push(...(await scanSource(backend, source)));
-  return scanned;
+): Promise<ScanSnapshot> {
+  const snapshot = emptySnapshot();
+  for (const source of sources) await scanSource(backend, source, snapshot);
+  return snapshot;
 }
 
 /** 同名後者贏（基座 `allSkills.set` 的順序；dsh 的 rank 在 nexus 就是來源順序）。不合規的不參與。 */
@@ -263,7 +323,7 @@ function winners(scanned: readonly ScannedSkillFile[]): Map<string, SkillCatalog
 }
 
 /**
- * 掃這組來源裡的技能，同名後者贏，旗標不合規的整份不收。
+ * 掃這組來源裡的技能，同名後者贏，旗標不合規的整份不收。讀不到的那幾份不在結果裡（這個函式不判斷完不完整）。
  *
  * @param backend - 這條 thread 的檔案 backend（實例，不收工廠）。
  * @param sources - 技能來源路徑，順序就是優先序（後者贏）。
@@ -273,72 +333,107 @@ export async function scanSkills(
   backend: AnyBackendProtocol,
   sources: readonly string[],
 ): Promise<SkillCatalogEntry[]> {
-  return [...winners(await scanAll(adaptBackendProtocol(backend), sources)).values()];
+  const snapshot = await scanAll(adaptBackendProtocol(backend), sources);
+  return [...winners(snapshot.scanned).values()];
 }
 
 /**
- * 讓基座的 skills 中介層看不到模型不該看的技能：包住 `ls`，把那幾個技能目錄從列表裡拿掉。
+ * 讓基座的 skills 中介層看不到模型不該看的技能。
  *
- * 拿掉的是：
- * - **同名勝出的那一份是 `disable-model-invocation: true`** 的名字，所有來源裡同名的目錄一起拿掉。只拿勝出那一份的話，
- *   順位較低的同名技能會露出來；dsh 是先決勝、再過濾，模型那一側整個名字都看不到；
- * - **旗標不合規**的目錄（fail-closed）。它在 dsh 不成為候選，所以同名、順位較低的合規技能照常列；
- * - **這一側讀失敗**的目錄（fail-closed）。照常情況基座也讀不到、本來就不列，位元組不受影響。
+ * 回傳的一律是工廠：基座每次掃描都在 `beforeAgent` 裡用 `resolveBackend` 解開一次（`langsmith-zm0ILQsV.js:4529`），
+ * 所以每次掃描都拿到一份新的視圖。視圖在基座第一次 `ls` 時先自己掃完全部來源（同名決勝要看全部），之後基座的 `ls` 與讀
+ * `SKILL.md` 都由這份快照回應，不再碰 inner：
  *
- * 沒有旗標的技能不動，基座的解析與格式化一行都不碰，prompt 位元組跟沒包時一樣。
+ * - **完整**：拿掉同名勝出的那一份是 `disable-model-invocation: true` 的名字（所有來源裡同名的目錄一起拿掉；dsh 是先決勝、
+ *   再過濾），以及旗標不合規的目錄（它在 dsh 不成為候選，所以同名、順位較低的合規技能照常列）；
+ * - **不完整**（`ls` 或讀 `SKILL.md` 遇到「不存在」以外的錯誤）：每個來源都回空列表，這一次一份技能都不給模型。讀不到的那份
+ *   叫什麼名字不知道，只藏它或它那個來源，順位較低的同名技能就會露出來；dsh 遇到不完整的快照也是整份目錄不發
+ *   （`tool-skill/src/index.ts:227`）。記一行 warn，並經 `onScan` 告訴呼叫端，讓它別把這次的空結果當成定案。
  *
- * 判斷在第一次 `ls` 時掃完全部來源（同名決勝要看全部），之後同一個解開的 backend 共用那一份結果。
+ * 沒有旗標的技能不動：快照回的是 inner 原樣的那一份，基座的解析與格式化一行都不碰，prompt 位元組跟沒包時一樣。
  *
- * @param backend - 交給基座的那一個；是工廠就先用基座的 `resolveBackend` 解開再包。
+ * @param backend - 交給基座的那一個，實例或工廠都可以。
  * @param sources - 同交給基座的 `sources`。
- * @returns 跟 `backend` 同一種（實例或工廠）的 backend。
+ * @param onScan - 每次掃描完叫一次，`complete` 是這次掃描完不完整。
+ * @returns 交給基座的工廠。
  */
 export function modelVisibleSkillsBackend(
   backend: AnyBackendProtocol | BackendFactory,
   sources: readonly string[],
-): AnyBackendProtocol | BackendFactory {
-  if (typeof backend === 'function') {
-    return async (runtime: BackendRuntime) =>
-      withVisibleLs(await resolveBackend(backend, runtime), sources);
-  }
-  return withVisibleLs(adaptBackendProtocol(backend), sources);
+  onScan?: (complete: boolean) => void,
+): BackendFactory {
+  return async (runtime: BackendRuntime) =>
+    withSnapshot(await resolveBackend(backend, runtime), sources, onScan);
 }
 
-function withVisibleLs(inner: BackendProtocolV2, sources: readonly string[]): BackendProtocolV2 {
-  let hidden: Promise<ReadonlySet<string>> | undefined;
-  const hiddenPaths = (): Promise<ReadonlySet<string>> => {
-    hidden ??= scanAll(inner, sources).then((scanned) => {
-      const won = winners(scanned);
-      const paths = new Set<string>();
-      for (const { skillMdPath, outcome } of scanned) {
-        if (outcome.kind === 'invalid' || outcome.kind === 'unreadable') paths.add(skillMdPath);
+function withSnapshot(
+  inner: BackendProtocolV2,
+  sources: readonly string[],
+  onScan: ((complete: boolean) => void) | undefined,
+): BackendProtocolV2 {
+  let view:
+    Promise<{ readonly snapshot: ScanSnapshot; readonly hidden: ReadonlySet<string> }> | undefined;
+  const scanned = () => {
+    view ??= scanAll(inner, sources).then((snapshot) => {
+      const won = winners(snapshot.scanned);
+      const hidden = new Set<string>();
+      for (const { skillMdPath, outcome } of snapshot.scanned) {
+        if (outcome.kind === 'invalid') hidden.add(skillMdPath);
         if (
           outcome.kind === 'skill' &&
           won.get(outcome.entry.name)?.invocation.modelInvocable === false
         ) {
-          paths.add(skillMdPath);
+          hidden.add(skillMdPath);
         }
       }
-      return paths;
+      if (snapshot.incomplete !== undefined) {
+        console.warn(`技能清單這一次不給模型：掃描不完整：${snapshot.incomplete}`);
+      }
+      onScan?.(snapshot.incomplete === undefined);
+      return { snapshot, hidden };
     });
-    return hidden;
+    return view;
   };
-  return {
+  const sourceDirs = new Set(sources.map((source) => normalizeSource(source).dir));
+  const adapted: BackendProtocolV2 = {
     ...inner,
     async ls(path: string): Promise<LsResult> {
-      const listed = await inner.ls(path);
+      if (!sourceDirs.has(path)) return inner.ls(path);
+      const { snapshot, hidden } = await scanned();
+      if (snapshot.incomplete !== undefined) return { files: [] };
+      const listed = snapshot.listings.get(path)!;
       if (listed.error || !listed.files) return listed;
-      const paths = await hiddenPaths();
       const { dir, sep } = normalizeSource(path);
       if (isSingleSkill(listed.files)) {
-        return paths.has(`${dir}SKILL.md`) ? { ...listed, files: [] } : listed;
+        return hidden.has(`${dir}SKILL.md`) ? { ...listed, files: [] } : listed;
       }
       return {
         ...listed,
         files: listed.files.filter(
-          (info) => !info.is_dir || !paths.has(`${dir}${entryName(info.path)}${sep}SKILL.md`),
+          (info) => !info.is_dir || !hidden.has(`${dir}${entryName(info.path)}${sep}SKILL.md`),
         ),
       };
     },
   };
+  // 方法形狀跟 inner 一樣：inner 有 `downloadFiles` 才覆寫它，沒有才覆寫 `read`，基座的讀法不會因為包了一層而換路。
+  if (inner.downloadFiles) {
+    const download = inner.downloadFiles.bind(inner);
+    adapted.downloadFiles = async (paths: string[]) => {
+      const { snapshot } = await scanned();
+      const cached = paths.map((path) => snapshot.downloads.get(path));
+      if (cached.every((response) => response !== undefined))
+        return cached as FileDownloadResponse[];
+      return download(paths);
+    };
+  } else {
+    const read = inner.read.bind(inner);
+    adapted.read = async (path: string, offset?: number, limit?: number) => {
+      if (offset === undefined && limit === undefined) {
+        const cached = (await scanned()).snapshot.reads.get(path);
+        if (cached !== undefined) return cached;
+      }
+      return read(path, offset, limit);
+    };
+  }
+  return adapted;
 }
