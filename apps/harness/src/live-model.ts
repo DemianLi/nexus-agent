@@ -1641,8 +1641,9 @@ export function withStreamUsageReport(baseFetch: typeof fetch = fetch): typeof f
  * 一次模型呼叫的用途。照 dsh `GenerateOptions.purpose`（`packages/llm/llm/src/types.ts:547-552`，`477b4f4`）：
  * 「adapters may map the purpose to … purpose-specific generation policy」，一般的對話請求不帶。
  *
- * - `session-title`：標題（#650）。帶上型錄條目的關推理寫法（`thinkingOffBody`），同 dsh 的 DeepSeek adapter 對這個用途關掉思考
- *   （`packages/llm/llm-deepseek/src/serialize.ts:146`）。
+ * - `session-title`：標題（#650）。帶上型錄條目的關推理寫法（`thinkingOffBody`），結果等價於 dsh 標題程式選最低一級（`off`）推理強度
+ *   （`session-title-first-prompt-llm/src/index.ts:74-76` 的 `selectReasoningEffort`，經 `session-title-llm/src/index.ts:252-258` 帶進 `prepareCall`；
+ *   1517a4db 起機制在 provider 端，`llm-deepseek/src/serialize.ts:147` 讀 `options.reasoningEffort`，不再依 `purpose` 關思考，#1573）。
  *
  * dsh 另有 `compaction`，我們的摘要走另一條路，沒有這一格的消費者。
  */

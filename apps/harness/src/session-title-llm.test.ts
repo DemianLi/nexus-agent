@@ -31,6 +31,7 @@ import { runCli } from './cli.js';
 import { createCliAgent } from './assembly-root.js';
 import { bodyLog, serveClient, shippedPlugins } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
+import { projectKey } from './jsonl-session-store.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -39,6 +40,7 @@ import { ensureFallbackTitle, renameThreadTitle } from './session-title.js';
 import {
   createSessionTitleLlm,
   frameTitleMessages,
+  titleFromOutput,
   titleSystemPrompt,
 } from './session-title-llm.js';
 import type { TitleModel } from './session-title-llm.js';
@@ -53,12 +55,16 @@ const CONFIG = threadTitleLlmConfigSchema.parse({});
 const LIMITS = { maxWords: 5, maxBytes: 40, maxTitleBytes: 80 };
 const ROUTE = { provider: 'http://title.test/v1', model: 'nexus-test/title-model' };
 
-/** dsh `session-title-llm` 的系統提示，**逐字**，數字代入 base 的 5 與 10。字面值：函式改掉的話這一條要紅。 */
+/**
+ * dsh `session-title-first-prompt-llm` 的系統提示，**逐字**（1517a4db 起五行，#1573），數字代入 base 的 5 與 10。
+ * 字面值：函式改掉的話這一條要紅。
+ */
 const DSH_SYSTEM_PROMPT = [
   'Create a concise title for an AI coding-assistant session from the supplied human messages.',
   'Return only the title on one line, **in plain text of natural language**, with no quotes, prefix, explanation, Markdown, XML, or terminal control codes. No code is allowed.',
   'Use the language of the messages.',
   'Aim for about 5 words in non-CJK languages or 10 CJK characters.',
+  'If the messages give little to name, still return a short best-effort title, such as Greeting, instead of explaining.',
 ].join('\n');
 
 function titleEvents(events: readonly SessionEvent[]): SessionEvent<'session/title'>[] {
@@ -124,7 +130,12 @@ function hangUntilAborted(call: FakeCall): Promise<AIMessage> {
 /** 一條日誌加一顆接好的 LLM 標題。 */
 function attached(
   reply: (call: FakeCall) => Promise<AIMessage>,
-  options: { seed?: readonly SessionEvent[]; config?: Partial<typeof CONFIG> } = {},
+  options: {
+    seed?: readonly SessionEvent[];
+    config?: Partial<typeof CONFIG>;
+    reasoningEffort?: string;
+    follow?: Parameters<typeof createSessionTitleLlm>[0]['follow'];
+  } = {},
 ) {
   const { model, calls } = fakeTitleModel(reply);
   const log = new SessionLog('t', options.seed === undefined ? {} : { seed: options.seed });
@@ -134,6 +145,8 @@ function attached(
     route: ROUTE,
     config: { ...CONFIG, ...options.config },
     limits: LIMITS,
+    ...(options.reasoningEffort !== undefined && { reasoningEffort: options.reasoningEffort }),
+    ...(options.follow !== undefined && { follow: options.follow }),
   })(log, (message) => void warnings.push(message));
   /** 照 pump 的順序開一輪：`turn/start` → 退回標題 → 第一次模型呼叫。 */
   const startTurn = (text: string): SessionEvent => {
@@ -239,8 +252,97 @@ describe('送出去的是什麼、寫了什麼', () => {
     );
   });
 
-  it('回來的文字照 maxTitleBytes 正規化：控制字元清掉、空白收一格、截在字的邊界', async () => {
-    // 9 個位元組：「標題 」之後放不下「第」，收尾的空白也去掉。
+  /**
+   * #1573 N0885：照 dsh `titleFromOutput`（`session-title-first-prompt-llm/src/index.ts:96-113`）只取第一個非空行，並剝掉包住整行的
+   * 星號強調。以前整段文字被 `cleanTitleText` 收成一行，「標題＋一段說明」整串進了側欄。
+   */
+  describe('取標題：第一個非空行、剝整行強調', () => {
+    async function providerTitle(text: string): Promise<string | undefined> {
+      const t = attached(() => stopReply(text));
+      t.startTurn(FIRST);
+      await until(() => titleEvents(t.log.events).length === 2);
+      await t.detach();
+      return titleEvents(t.log.events).find((event) => event.data.source.kind === 'provider')?.data
+        .title;
+    }
+
+    it('A 標題加一段說明：只取標題，且整行的 ** 被剝掉', async () => {
+      expect(await providerTitle('**季度營收彙整**\n\n這個標題概括了你的需求')).toBe(
+        '季度營收彙整',
+      );
+    });
+
+    it('B 內層還有同一個記號的不剝：原樣保留', async () => {
+      expect(await providerTitle('**甲** 與 **乙**')).toBe('**甲** 與 **乙**');
+    });
+
+    it.each([
+      ['單星號', '*斜體標題*', '斜體標題'],
+      ['三星號', '***粗斜標題***', '粗斜標題'],
+      ['前面的空行與空白', '\n  \r\n  **標題**  \n後面的說明', '標題'],
+      ['CRLF 換行', '標題\r\n說明', '標題'],
+      ['兩端記號不一樣（* 對 **）不剝', '*標題**', '*標題**'],
+      ['只有一頭有記號不剝', '**標題', '**標題'],
+      ['強調在行中間不剝', '前面 **重點** 後面', '前面 **重點** 後面'],
+      ['記號裡只有空白不剝', '** **', '** **'],
+      ['純空白', '  \n \t ', ''],
+    ])('titleFromOutput：%s', (_name, input, expected) => {
+      expect(titleFromOutput(input)).toBe(expected);
+    });
+  });
+
+  /**
+   * #1573 N0885：請求紀錄多一格 `reasoningEffort`（dsh `session-title-llm/src/index.ts:267-275`，有 effort 才記）。
+   * 組裝端交進來的值原樣記；沒交就沒有這個 key。**只是紀錄，不改送出去的東西**。
+   */
+  describe('請求紀錄的 reasoningEffort', () => {
+    it('組裝端交了就原樣記，模型收到的訊息跟沒交時一字不差', async () => {
+      const withEffort = attached(() => stopReply(), { reasoningEffort: 'off' });
+      const without = attached(() => stopReply());
+      withEffort.startTurn(FIRST);
+      without.startTurn(FIRST);
+      await until(() => titleEvents(withEffort.log.events).length === 2);
+      await until(() => titleEvents(without.log.events).length === 2);
+      expect(requestEvents(withEffort.log.events)[0]!.data.reasoningEffort).toBe('off');
+      expect('reasoningEffort' in requestEvents(without.log.events)[0]!.data).toBe(false);
+      const sent = (t: typeof withEffort) =>
+        t.calls[0]!.messages.map((message) => [message.getType(), message.text]);
+      expect(sent(withEffort)).toEqual(sent(without));
+      await withEffort.detach();
+      await without.detach();
+    });
+
+    it('跟隨主路由的那一顆用自己的：跟隨的沒交就沒有這個 key，不借預設那顆的', async () => {
+      const followedModel = fakeTitleModel(() => stopReply());
+      const t = attached(() => stopReply(), {
+        reasoningEffort: 'off',
+        follow: () => ({ model: followedModel.model, route: ROUTE }),
+      });
+      t.log.append('turn/start', { kind: 'message', text: FIRST });
+      ensureFallbackTitle(t.log, LIMITS);
+      t.log.append('model/start', { route: { model: 'other' } });
+      await until(() => titleEvents(t.log.events).length === 2);
+      expect(followedModel.calls).toHaveLength(1);
+      expect('reasoningEffort' in requestEvents(t.log.events)[0]!.data).toBe(false);
+      await t.detach();
+    });
+
+    it('跟隨的那一顆交了就記它的', async () => {
+      const followedModel = fakeTitleModel(() => stopReply());
+      const t = attached(() => stopReply(), {
+        follow: () => ({ model: followedModel.model, route: ROUTE, reasoningEffort: 'off' }),
+      });
+      t.log.append('turn/start', { kind: 'message', text: FIRST });
+      ensureFallbackTitle(t.log, LIMITS);
+      t.log.append('model/start', { route: { model: 'other' } });
+      await until(() => titleEvents(t.log.events).length === 2);
+      expect(requestEvents(t.log.events)[0]!.data.reasoningEffort).toBe('off');
+      await t.detach();
+    });
+  });
+
+  it('回來的文字照 maxTitleBytes 正規化：只取第一個非空行、控制字元清掉、截在字的邊界', async () => {
+    // 只取第一個非空行（「標題」），第二行不進來；9 個位元組放得下，控制碼與前後空白也不在裡面。
     const small = createSessionTitleLlm({
       model: fakeTitleModel(() => stopReply('  標題\n第二行\u001b[31m  ')).model,
       route: ROUTE,
@@ -987,6 +1089,73 @@ describe('產品路徑：serve --live', () => {
     expect(messageStarts(frames)).toBe(main.length);
   }, 30000);
 
+  /**
+   * #1573 N0885：跟隨主路由的那一顆（`titleLlmFor` 的 `follow`）也各記各的 `reasoningEffort`，從 `runServe --live` 起量：
+   * 兩條 thread 各選型錄裡的一顆，標題跟著走，紀錄上記的是**那一顆**條目的宣告——選了宣告 off 的記 `off`，選了沒宣告的沒有這個 key
+   * （預設那顆是宣告了的，所以「借預設的」或「寫死 off」都會讓第二條紅）。
+   */
+  it('#1573 標題跟著主路由走：紀錄的 reasoningEffort 看被跟隨的那一顆條目', async () => {
+    const declared = {
+      id: 'nexus-test/follow-declared',
+      contextWindow: 131007,
+      maxTokens: 4096,
+      reasoningEfforts: { off: null },
+    };
+    const undeclared = {
+      id: 'nexus-test/follow-undeclared',
+      contextWindow: 131007,
+      maxTokens: 4096,
+    };
+    fake = await startFakeEndpoint('reply');
+    const root = await mkdtemp(join(tmpdir(), 'nexus-title-follow-'));
+    const patch = await writePatch(
+      liveModelPatch(fake.baseUrl, [
+        `    models: ${JSON.stringify([DEFAULT_LIVE_MODEL_ENTRY, declared, undeclared])}`,
+      ]),
+    );
+    running = (await runServe({
+      argv: ['--port', '0', '--live', '--session-log', root, '--patch', patch],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    const client = await serveClient(running);
+    for (const [threadId, entry] of [
+      ['follow-a', declared],
+      ['follow-b', undeclared],
+    ] as const) {
+      const frames: Event[] = [];
+      const events = await client.openEvents(threadId);
+      void (async () => {
+        for (;;) {
+          const next = await events.next().catch(() => ({ done: true as const, value: undefined }));
+          if (next.done === true) return;
+          frames.push(next.value);
+        }
+      })();
+      expect((await client.selectModel(threadId, { modelId: entry.id })).kind).toBe('ok');
+      await client.runStart(threadId, FIRST);
+      await until(() => titlePushes(frames).length === 2);
+      expect(titlePushes(frames)).toHaveLength(2);
+    }
+    await running.close();
+    running = undefined;
+
+    const requestOf = async (threadId: string) =>
+      requestEvents(await sessionEventsOf(join(root, projectKey(process.cwd())), threadId)).map(
+        (event) => event.data,
+      );
+    const [a] = await requestOf('follow-a');
+    const [b] = await requestOf('follow-b');
+    expect(a).toMatchObject({ route: { model: declared.id }, reasoningEffort: 'off' });
+    expect(b?.route.model).toBe(undeclared.id);
+    expect('reasoningEffort' in b!).toBe(false);
+    // 送出去的也是被跟隨的那兩顆。
+    expect(fake.seen.filter((body) => body.title).map((body) => body.model)).toEqual([
+      declared.id,
+      undeclared.id,
+    ]);
+  }, 30000);
+
   it('模型標題在那一輪收完之後才到：閒著的 thread 照推、照折，不變量不報錯', async () => {
     const errors = vi.spyOn(console, 'error');
     const { client, frames } = await openThread('late', 'title-llm-late');
@@ -1147,6 +1316,69 @@ describe('產品路徑：CLI --live', () => {
       DEFAULT_LIVE_MODEL_ID,
     ]);
   }, 30000);
+
+  /**
+   * #1573 N0885 驗收 D：請求紀錄的 `reasoningEffort` 走**產品組裝路徑**（`createCliAgent` → `titleLlmFor`），不是直接餵 `createSessionTitleLlm`。
+   * 判準看型錄條目**有沒有宣告 `off`**（`declaresOffEffort`），跟 `thinkingOffBody` 關推理用同一個判準；每一格同時量兩件事：
+   * 送出去的請求本文（端點收到的）與紀錄上記的，並且記的 system／訊息就是送出去的那一份。
+   */
+  describe('#1573 請求紀錄的 reasoningEffort（產品組裝路徑）', () => {
+    const base = { contextWindow: 131007, maxTokens: 4096 };
+    /** 宣告了 `off: null`、沒有 chat template 參數：什麼都不送，但紀錄要帶 `'off'`。 */
+    const NO_COMPAT = { id: 'nexus-test/off-no-compat', ...base, reasoningEfforts: { off: null } };
+    /** 沒宣告 `off`：不推理的標籤也不算，紀錄沒有這個 key。 */
+    const UNDECLARED = { id: 'nexus-test/off-undeclared', ...base };
+    const NOT_REASONING = { id: 'nexus-test/off-false', ...base, reasoningEfforts: false };
+    const catalog = (): string[] => [
+      `    models: ${JSON.stringify([DEFAULT_LIVE_MODEL_ENTRY, NO_COMPAT, UNDECLARED, NOT_REASONING])}`,
+    ];
+
+    async function titleRequest(modelPatch: string) {
+      const { events, errors } = await runOnce('reply', modelPatch, catalog());
+      const sent = fake!.seen.filter((body) => body.title);
+      expect(sent).toHaveLength(1);
+      const [recorded] = requestEvents(events);
+      expect(recorded).toBeDefined();
+      // 記的 system 與訊息就是送出去的那一份。
+      expect(sent[0]!.messages).toEqual([
+        { role: 'system', content: recorded!.data.system },
+        { role: 'user', content: recorded!.data.messages[0]!.content },
+      ]);
+      expect(errors.filter((line) => line.startsWith('[標題]'))).toEqual([]);
+      return { sent: sent[0]!, recorded: recorded!.data };
+    }
+
+    it('預設條目（off: null＋compat）：紀錄帶 off，送出去的請求帶關推理那一格', async () => {
+      const { sent, recorded } = await titleRequest('');
+      expect(recorded.reasoningEffort).toBe('off');
+      expect(sent).toMatchObject({
+        stream: false,
+        maxTokens: 64,
+        chatTemplateKwargs: { enable_thinking: false },
+      });
+    }, 30000);
+
+    it('宣告 off: null、沒有 compat：紀錄也帶 off，送出去的請求什麼都不加', async () => {
+      const { sent, recorded } = await titleRequest(titleModelPatch(NO_COMPAT.id));
+      expect(recorded.reasoningEffort).toBe('off');
+      expect(sent.model).toBe(NO_COMPAT.id);
+      expect(sent.chatTemplateKwargs).toBeUndefined();
+    }, 30000);
+
+    it.each([
+      ['沒有 reasoningEfforts', UNDECLARED],
+      ['reasoningEfforts 是 false', NOT_REASONING],
+    ])(
+      '沒宣告 off（%s）：紀錄沒有這個 key，送出去的請求照舊',
+      async (_name, entry) => {
+        const { sent, recorded } = await titleRequest(titleModelPatch(entry.id));
+        expect('reasoningEffort' in recorded).toBe(false);
+        expect(sent.model).toBe(entry.id);
+        expect(sent.chatTemplateKwargs).toBeUndefined();
+      },
+      30000,
+    );
+  });
 
   it('#657 標題挑的 id 不在型錄裡：組裝失敗，訊息指名 thread-title-llm 那一列與那個 id，沒有請求送出去', async () => {
     await expect(runOnce('absent', titleModelPatch('nexus-test/ghost'))).rejects.toThrow(

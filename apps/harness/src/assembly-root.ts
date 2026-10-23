@@ -42,7 +42,7 @@ import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import type { ThreadTitleConfig } from './settings/thread-title.js';
-import { findModelEntry, singleDigitModelIds } from './model-catalog.js';
+import { declaresOffEffort, findModelEntry, singleDigitModelIds } from './model-catalog.js';
 import { resolveDefaultModel } from './model-provider.js';
 import type { ModelSelectionPolicy } from './model-selection-policy.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
@@ -1373,6 +1373,23 @@ export function liveSubagentModelFor(
 }
 
 /**
+ * 標題請求要記的推理強度（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)，照 dsh 1517a4db `session-title-first-prompt-llm/src/index.ts:74-76`
+ * 取最低一級）。標題那顆以 `purpose: 'session-title'` 建，`live-model` 會依型錄條目關推理（`thinkingOffBody`）；這裡用
+ * 同一個判準（{@link declaresOffEffort}）決定記不記 `'off'`，只讓紀錄多一格，不碰送出去的請求。
+ *
+ * @param models - `live-model` 的型錄。
+ * @param modelId - 這顆標題模型的 id。
+ * @returns 條目宣告了 `off` 就 `{ reasoningEffort: 'off' }`；沒宣告（或不在型錄）就 `{}`，紀錄上沒有這個 key。
+ */
+function titleReasoningEffort(
+  models: LiveModelConfig['models'],
+  modelId: string,
+): { readonly reasoningEffort?: string } {
+  const entry = findModelEntry(models, modelId);
+  return entry !== undefined && declaresOffEffort(entry) ? { reasoningEffort: 'off' } : {};
+}
+
+/**
  * 這一次組裝的 LLM 標題。路由是 `live-model` 那一列的連線（一個組裝一條連線）加上實際走的那顆模型：
  * `thread-title-llm` 的 `modelId`（#657）挑型錄裡的一筆，沒給就是 `live-model` 的預設模型；記進
  * `session/title-llm-request` 與 provider 標題的 `model`。
@@ -1405,6 +1422,7 @@ function titleLlmFor(
       ...(requestGate !== undefined && { requestGate }),
     }),
     route: { provider: liveModel.baseUrl, model: modelId },
+    ...titleReasoningEffort(liveModel.models, modelId),
     config,
     limits,
     // 標題不在模型呼叫圖裡，SDK 層又不重試了（#1427）：自己吃同一份政策，不記日誌。
@@ -1432,6 +1450,7 @@ function titleLlmFor(
           return {
             model: followed,
             route: { provider: liveModel.baseUrl, model: mainRoute.model },
+            ...titleReasoningEffort(liveModel.models, mainRoute.model),
           };
         },
       }),
