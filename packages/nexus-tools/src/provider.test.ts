@@ -73,6 +73,17 @@ const resultConsumer = {
   },
 };
 
+/** 標「這一輪在這顆工具之後收」的消費者（#1607）：要 `^1.4.0`，叫 `concludeTurn(config.tool)`；方法是選填，沒有就擲。 */
+const concludingConsumer = {
+  name: 'tools-concluding-consumer',
+  inject: injectOf(need(toolsToken, '^1.4.0')),
+  apply(ctx: Context, config: { tool: string }) {
+    const tools = service(ctx, toolsToken);
+    if (tools.concludeTurn === undefined) throw new Error('提供者沒有 concludeTurn');
+    tools.concludeTurn(config.tool);
+  },
+};
+
 /** 舊範圍的消費者：只登記一個工具，不呼叫 `gate`／`onResult`（驗收：`^1.0.0`～`^1.2.0` 在 1.3.0 的提供者上照常）。 */
 const oldRangeConsumer = (name: string, range: string) => ({
   name,
@@ -88,8 +99,8 @@ afterEach(async () => {
   root = undefined;
 });
 
-async function boot() {
-  const provider = createToolsProvider();
+async function boot(options: Parameters<typeof createToolsProvider>[0] = {}) {
+  const provider = createToolsProvider(options);
   const context = new Context();
   root = context;
   await context.plugin(Loader);
@@ -99,6 +110,7 @@ async function boot() {
     optioned: optionedConsumer,
     gating: gatingConsumer,
     results: resultConsumer,
+    concluding: concludingConsumer,
     'old-100': oldRangeConsumer('old-100', '^1.0.0'),
     'old-110': oldRangeConsumer('old-110', '^1.1.0'),
     'old-120': oldRangeConsumer('old-120', '^1.2.0'),
@@ -219,7 +231,23 @@ describe('工具登記處的提供者', () => {
     expect(provider.resultListeners().map((entry) => entry.source)).toEqual(['res-b']);
   });
 
-  it('舊範圍：^1.0.0、^1.1.0、^1.2.0 的消費者在 1.3.0 的提供者上照常登記工具，而且沒有人因此多出閘門或觀察者', async () => {
+  it('concludeTurn（#1607）：消費者經 ctx.tools.concludeTurn 叫到宿主注入的實作，帶著工具名', async () => {
+    const concluded: string[] = [];
+    const { loader, create } = await boot({ concludeTurn: (name) => concluded.push(name) });
+    await create({ id: 'con-a', name: 'cordis:concluding', config: { tool: 'closer' } });
+    await loader.await();
+    expect(loader.resolve('con-a').fiber?.ctx.fiber.state).toBe(2);
+    expect(concluded).toEqual(['closer']);
+  });
+
+  it('concludeTurn（#1607）：宿主沒注入實作 → 呼叫什麼都不做、不擲（定義套件不相依 core，沒有預設實作）', async () => {
+    const { loader, create } = await boot();
+    await create({ id: 'con-b', name: 'cordis:concluding', config: { tool: 'closer' } });
+    await loader.await();
+    expect(loader.resolve('con-b').fiber?.ctx.fiber.state).toBe(2);
+  });
+
+  it('舊範圍：^1.0.0、^1.1.0、^1.2.0 的消費者在 1.4.0 的提供者上照常登記工具，而且沒有人因此多出閘門或觀察者', async () => {
     const { provider, loader, create } = await boot();
     await create({ id: 'old-a', name: 'cordis:old-100' });
     await create({ id: 'old-b', name: 'cordis:old-110' });

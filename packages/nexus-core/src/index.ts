@@ -412,7 +412,7 @@ export type {
   ReadResultMeta,
   SearchResultMeta,
 } from './tool-result-meta.js';
-export { putToolResultMeta } from './tool-result-meta.js';
+export { concludeTurn, putToolResultMeta } from './tool-result-meta.js';
 export type { MaxTokensCarrier } from './max-tokens.js';
 export {
   createMaxTokensCarrier,

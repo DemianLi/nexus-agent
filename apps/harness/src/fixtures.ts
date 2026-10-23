@@ -29,6 +29,7 @@ import {
   reduceConversation,
 } from '@nexus/wire';
 import { createHostServicesPlugin, createRegistry } from '@nexus/core';
+import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
 import { StateBackend } from 'deepagents';
 import type { FileData } from 'deepagents';
 import { z } from 'zod';
@@ -544,4 +545,18 @@ export function levelsOf(raw: readonly string[], prefix: string): (string | unde
   return raw
     .filter((line) => serverLogBody(line).startsWith(prefix))
     .map((line) => serverLogLevel(line));
+}
+
+/**
+ * 測試用的計劃指引。**plan-mode 套件沒有預設值**（#1607，照 dsh：部署必給），出貨的那一句寫在 `cordis.yml` 的 `plan-mode` 那一列；
+ * 手搭組裝的測試不依賴那一句，只要有一句可以認得。要驗出貨那一句的測試改讀出貨清單（`plan-mode.test.ts` 的 `SHIPPED_GUIDANCE`）。
+ */
+export const TEST_PLAN_GUIDANCE =
+  '【測試用計劃指引】現在在計劃模式，先探索與設計，不要動手改東西。';
+
+/** 補上 {@link TEST_PLAN_GUIDANCE} 的 `createPlanModePlugin`：手搭組裝的測試大多不關心指引寫什麼。 */
+export function testPlanModePlugin(
+  options: { startActive?: boolean; guidance?: string } = {},
+): PluginEntry {
+  return createPlanModePlugin({ guidance: TEST_PLAN_GUIDANCE, ...options });
 }

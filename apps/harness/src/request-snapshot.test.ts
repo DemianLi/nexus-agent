@@ -30,13 +30,13 @@ import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 import { createEchoPlugin } from './echo.fixture.js';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
-import { createPlanModePlugin, DEFAULT_PLAN_GUIDANCE } from '@nexus/plugin-plan-mode';
 import { describe, expect, it, vi } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { CreateNexusAgentOptions } from './agent-factory.js';
 import { runRepl, runTurn } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { TEST_PLAN_GUIDANCE, testPlanModePlugin } from './fixtures.js';
 
 /** 一次請求的 body 裡我們關心的那幾格。 */
 interface Body {
@@ -239,7 +239,7 @@ describe('請求快照 = 端點實際收到的（產品組裝）', () => {
     const { events, bodies } = await run('一\n二\n/plan\n三\n/exit\n', [
       createEchoPlugin(),
       createMemoryPlugin(),
-      createPlanModePlugin(),
+      testPlanModePlugin(),
       WORKER,
     ]);
     expect(bodies).toHaveLength(3);
@@ -252,8 +252,8 @@ describe('請求快照 = 端點實際收到的（產品組裝）', () => {
 
     expect(systems[0]!.system).toBe(systemOf(bodies[0]!));
     expect(systems[1]!.system).toBe(systemOf(bodies[2]!));
-    expect(systems[1]!.system).toContain(DEFAULT_PLAN_GUIDANCE);
-    expect(systems[0]!.system).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systems[1]!.system).toContain(TEST_PLAN_GUIDANCE);
+    expect(systems[0]!.system).not.toContain(TEST_PLAN_GUIDANCE);
 
     const header = headers[0]!.header;
     expect(header.tools).toEqual(
@@ -272,7 +272,7 @@ describe('請求快照 = 端點實際收到的（產品組裝）', () => {
   });
 
   it('每筆指回它那次呼叫的 model/start，且寫在 model/end 之前', async () => {
-    const { events } = await run('一\n/plan\n二\n/exit\n', [createPlanModePlugin()]);
+    const { events } = await run('一\n/plan\n二\n/exit\n', [testPlanModePlugin()]);
     const starts = eventsOf(events, 'model/start');
     const ends = eventsOf(events, 'model/end');
     const snapshots = [

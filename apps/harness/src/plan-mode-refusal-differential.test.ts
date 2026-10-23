@@ -23,7 +23,6 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { createHostServicesPlugin, SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import {
-  createPlanModePlugin,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
   PLAN_NO_REVIEWER_MESSAGE,
@@ -31,6 +30,7 @@ import {
 } from '@nexus/plugin-plan-mode';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
+import { testPlanModePlugin } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -89,7 +89,7 @@ async function run(scenario: Scenario): Promise<Fingerprint> {
     plugins: [
       createHostServicesPlugin({ channel: { kind: 'policy-never' } }),
       ...(scenario.gate === true ? [askEverything] : []),
-      createPlanModePlugin({ startActive: scenario.startActive }),
+      testPlanModePlugin({ startActive: scenario.startActive }),
     ],
     approvals: HEADLESS_APPROVALS,
   });

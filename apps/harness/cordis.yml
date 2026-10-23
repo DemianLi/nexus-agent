@@ -95,8 +95,14 @@
 # - **serve 也吃這份清單**，而那條路上有命令介面（#123）：web 那端自己打 `/plan` 就進得
 #   去，而且核准是開著的，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」整條走得完——那
 #   是 CLI 這條路走不完的。
+#
+# **`guidance` 是部署必給的**（#1607，照 dsh `resolveConfig`）：套件沒有預設值，缺席或空白在載入時失敗。下面這一句就是原本寫在套件裡的
+# 預設值，逐字不變（所以出貨的 system prompt 位元組沒變）。**patch 的 `config` 是整份替換、不是深層合併**（`plugin-config.ts` 的 patch
+# 語意），要在 patch 裡改這一列的 `config`（例如 `startActive`）就得連 `guidance` 一起帶，不然這一列起不來。
 - id: plan-mode
   name: '@nexus/plugin-plan-mode'
+  config:
+    guidance: '你現在在計劃模式。先探索與設計，不要動手改東西；計劃完成後用 exit_plan_mode 把完整的計劃交出去等人批准。'
 
 # **例外二：goal**（#126）。同一條理由：命令沒進清單，`/goal 把測試修綠` 會掉回模型變成
 # 一句閒聊。代價一筆：模型側多三顆工具（`create_goal`／`get_goal`／`update_goal`，#177 之後

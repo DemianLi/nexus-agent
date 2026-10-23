@@ -493,6 +493,27 @@ describe('附件', () => {
     ]);
   });
 
+  it('**空白文字加附件的 steer 收下**（`/plan` 只貼圖，照 dsh 的 hasPromptContent）；空白又沒附件（含空陣列）仍拒', async () => {
+    const { executor, signal } = harness(
+      accepting(({ steer, attachments }) => {
+        steer('', attachments);
+        return { kind: 'success' };
+      }),
+    );
+    const execution = await executor.execute('/goal x', signal, submission().value);
+    expect(execution?.steers).toEqual([{ text: '', attachments: [image, file] }]);
+
+    const empty = harness(
+      accepting(({ steer }) => {
+        steer('  ', []);
+        return { kind: 'success' };
+      }),
+    );
+    await expect(
+      empty.executor.execute('/goal x', empty.signal, submission().value),
+    ).rejects.toThrow('非空字串');
+  });
+
   it('**steer 只能帶這次收下的附件**：憑空造的參照與形狀壞的都拋，目標命令落定成 error', async () => {
     const forged: AttachmentRef = { ...file, attachmentId: sha('c') };
     const { executor, events, signal } = harness(

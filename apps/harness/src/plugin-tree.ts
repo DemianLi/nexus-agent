@@ -68,7 +68,7 @@ import type { ApprovalChannel } from '@nexus/approval-channel';
 import { createApprovalChannelProvider } from '@nexus/approval-channel/provider';
 import { createCommandsProvider } from '@nexus/commands/provider';
 import type { CommandEntry } from '@nexus/commands/provider';
-import { checkpointSession } from '@nexus/core';
+import { checkpointSession, concludeTurn } from '@nexus/core';
 import type {
   CommandDefinition,
   FsService,
@@ -433,7 +433,7 @@ export interface PluginTreeOptions {
 export class PluginTree {
   readonly #channel: ApprovalChannel | undefined;
   #context?: Promise<Context>;
-  #provider = createToolsProvider();
+  #provider = createToolsProvider({ concludeTurn });
   #projections = createProjectionsProvider();
   #skillSources = createSkillSourcesProvider();
   #preSteps = createAgentLoopProvider();
@@ -1192,7 +1192,7 @@ export interface DetachedContributions {
  * @throws {Error} 那一列沒有起來，訊息同樹上的判定。
  */
 export async function mountDetached(mount: DetachedMount): Promise<DetachedContributions> {
-  const provider = createToolsProvider();
+  const provider = createToolsProvider({ concludeTurn });
   const projections = createProjectionsProvider();
   const skillSources = createSkillSourcesProvider();
   const commands = createCommandsProvider();
