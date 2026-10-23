@@ -898,7 +898,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return undefined;
       }
       // 開頭那個字是命令清單上的名字才是命令（#1929，#1574 Q2 (a)），其餘整行走 `run.start`：技能的 `/deploy 今天`、
-      // 打錯的 `/plna`、沒宣告 input 卻帶了字的 `/compact 留下三輪`（#1971，dsh `matchEnter` `:358`）都送給模型。
+      // 打錯的 `/plna`、沒宣告 input 卻帶了字的 `/compact 留下三輪`（#1971，dsh `matchEnter` `:361`）都送給模型。
       // 分得出來之前照 dsh 等（`matchEnter` 的 strong-wait）：清單在途就等它、之前失敗就重抓；等到的還是失敗才退回、
       // 說出原因，草稿與附件原樣留著（「never a silent downgrade」）。
       if (commandToken(trimmed) !== undefined) {

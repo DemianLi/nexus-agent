@@ -438,7 +438,7 @@ describe('對話介面', () => {
     const fake = fakeClient([frame('lifecycle', [], { event: 'running', graph_name: 'root' })], {
       // `/feedback` 在真的伺服器上也列（回饋插件登記的命令），命令認不認得照這份清單（#1929）。
       commands: [
-        { name: 'plan', description: '計劃模式' },
+        { name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } },
         { name: 'feedback', description: '回饋' },
       ],
     });
@@ -2006,7 +2006,7 @@ describe('目標列（#945）', () => {
           input: { hint: '[<目標>|pause]' },
           runWhileBusy: ['pause'],
         },
-        { name: 'plan', description: '計劃模式' },
+        { name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } },
       ],
     );
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
@@ -6356,7 +6356,11 @@ describe('附件送出（#733、#732）', () => {
       let arrive: (() => void) | undefined;
       const slashList: WireClient['slashList'] = () =>
         new Promise((resolve) => {
-          arrive = () => resolve({ kind: 'ok', commands: [{ name: 'goal', description: 'goal' }] });
+          arrive = () =>
+            resolve({
+              kind: 'ok',
+              commands: [{ name: 'goal', description: 'goal', input: { hint: '<參數>' } }],
+            });
         });
       return { slashList, arrive: () => arrive!() };
     }
@@ -6543,7 +6547,7 @@ describe('@子代理 提及（#328）', () => {
   ) {
     seq = 0;
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
-      commands: [{ name: 'plan', description: '計劃模式' }],
+      commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
       // 命令收下了（#1941：收下才清草稿，所以這裡要是成功）。
       run: () => ({ kind: 'success', command_id: 'plan' }),
     });
@@ -6760,7 +6764,10 @@ describe('@子代理 提及（#328）', () => {
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
         arrive = () =>
-          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+          resolve({
+            kind: 'ok',
+            commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
+          });
       });
     const { runStart, slashed } = await ready(supported, undefined, slashList);
     await pick('@');
@@ -6784,7 +6791,10 @@ describe('@子代理 提及（#328）', () => {
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
         arrive = () =>
-          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+          resolve({
+            kind: 'ok',
+            commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
+          });
       });
     const { runStart } = await ready(supported, undefined, slashList);
     await pick('@');
@@ -6822,7 +6832,10 @@ describe('@子代理 提及（#328）', () => {
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
         arrive = () =>
-          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+          resolve({
+            kind: 'ok',
+            commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
+          });
       });
     render(<App client={{ ...fake.client, runStart, subagentList: supported, slashList }} />);
     await screen.findByPlaceholderText('說點什麼…');
@@ -6889,7 +6902,10 @@ describe('@子代理 提及（#328）', () => {
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
         arrive = () =>
-          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+          resolve({
+            kind: 'ok',
+            commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
+          });
       });
     const { runStart } = await ready(supported, undefined, slashList);
     type('/deploy @ex');

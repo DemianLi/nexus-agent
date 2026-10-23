@@ -928,7 +928,7 @@ function ConversationView({
                       serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
                         ? draftAttachments.items
                         : [];
-                    // 沒宣告 input、整行只有 `/名字` 的命令照 dsh 的 detached（`ui-commands/src/client/service.ts:358-365` 先
+                    // 沒宣告 input、整行只有 `/名字` 的命令照 dsh 的 detached（`ui-commands/src/client/service.ts:361-365` 先
                     // `consumeVia` 再 `runDetached`，`input/machine.ts:155-175` 收到 `'handled'` 就回 plain，#1971）：當場拿掉、
                     // 背景執行，不進在途、不鎖輸入框；沒收下由狀態列講（`runSlash`），草稿不放回去。
                     if (detached && items.length === 0) {

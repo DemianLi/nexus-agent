@@ -211,7 +211,7 @@ describe('namesCommand：開頭的字在命令清單上才是命令（#1929，Q2
     expect(namesCommand([], '/plan')).toBe(false);
   });
 
-  it('沒宣告 input 的命令只有整行是 /名字 才是命令；帶了字就是一句話（#1971，dsh matchEnter `:358`）', () => {
+  it('沒宣告 input 的命令只有整行是 /名字 才是命令；帶了字就是一句話（#1971，dsh matchEnter `:361`）', () => {
     expect(namesCommand(COMMANDS, ' /compact ')).toBe(true);
     expect(namesCommand(COMMANDS, '/compact 留下最近三輪')).toBe(false);
   });
