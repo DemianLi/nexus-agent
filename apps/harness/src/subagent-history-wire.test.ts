@@ -9,13 +9,21 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { AIMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
+import { SESSION_LOG_FORMAT_VERSION, toLoggedMessage } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
-import { createWireClient, emptyConversation, reduceAll, subagentHistoryPath } from '@nexus/wire';
+import {
+  createWireClient,
+  emptyConversation,
+  reduceAll,
+  subagentHistoryPath,
+  UNFINISHED_TOOL_TEXT,
+} from '@nexus/wire';
 import type { ConversationEntry, ConversationState, Event } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -23,6 +31,8 @@ import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { openJsonlSessionStore } from './jsonl-session-store.js';
+import { readStoredSubagentSession } from './session-list.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -46,6 +56,9 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 2));
   }
 }
+
+/** 落盤夾具的一顆事件，`seq` 由寫的順序給。 */
+type Draft = Omit<SessionEvent, 'seq'>;
 
 function humans(state: ConversationState): string[] {
   return state.entries.flatMap((entry) => (entry.kind === 'human' ? [entry.text] : []));
@@ -294,5 +307,75 @@ describe('背景子代理自己的歷史', () => {
     expect(await rig.client.subagentHistory('t1', id)).toMatchObject({ kind: 'rejected' });
     expect(rig.warnings.some((message) => message.includes('壞檔'))).toBe(true);
     expect(rig.created()).toBe(0);
+  });
+
+  it('死在一輪中間、重啟後沒被喚醒的那一份（#1598）：經出貨的冷讀補平，不再停在執行中，工具卡收成沒跑完；檔一個位元組都不動', async () => {
+    const id = 'bg-0123456789ab';
+    const directory = join(dir, 'sessions');
+    const store = openJsonlSessionStore({ directory });
+    const write = async (sessionId: string, parentSession: string | undefined, events: Draft[]) => {
+      const stored = store.create({
+        version: SESSION_LOG_FORMAT_VERSION,
+        id: sessionId,
+        createdAt: 1_000,
+        cwd: dir,
+        ...(parentSession !== undefined && { parentSession }),
+      });
+      try {
+        await stored.append(events.map((event, seq) => ({ ...event, seq }) as SessionEvent));
+      } finally {
+        await stored.close();
+      }
+    };
+    await write('t1', undefined, [
+      { type: 'turn/start', time: 1, data: { kind: 'message', text: '委派' } },
+      { type: 'turn/end', time: 2, data: {} },
+    ]);
+    // 子代理叫了工具、工具開始了，行程就死了：沒有 `tool/result`、`model/end`、`turn/end`。
+    await write(`t1/${id}`, 't1', [
+      { type: 'turn/start', time: 10, data: { kind: 'message', text: '派給你的' } },
+      { type: 'model/start', time: 11, data: {} },
+      {
+        type: 'assistant/message',
+        time: 12,
+        data: {
+          message: toLoggedMessage(
+            new AIMessage({
+              content: '去查',
+              tool_calls: [{ id: 'c1', name: 'lookup', args: {} }],
+            }),
+          ),
+        },
+      },
+      { type: 'tool/call', time: 13, data: { callId: 'c1', name: 'lookup', arguments: '{}' } },
+    ]);
+    const files = async () =>
+      Promise.all(
+        (await readdir(directory)).sort().map(async (name) => {
+          const path = join(directory, name);
+          return [name, await readFile(path, 'utf8'), (await stat(path)).mtimeMs] as const;
+        }),
+      );
+    const before = await files();
+
+    const rig = await assemble({
+      readSubagentSession: (threadId, runId) => readStoredSubagentSession(store, threadId, runId),
+    });
+    const outcome = await rig.client.subagentHistory('t1', id);
+    if (outcome.kind !== 'ok') throw new Error(`讀不到：${outcome.message}`);
+    const lifecycles = outcome.result.events
+      .filter((frame) => frame.method === 'lifecycle')
+      .map((frame) => (frame.params.data as { event?: unknown }).event);
+    expect(lifecycles.at(-1)).toBe('completed');
+    const state = reduceAll(emptyConversation(), outcome.result.events);
+    expect(humans(state)).toEqual(['派給你的']);
+    expect(
+      state.entries.flatMap((entry) =>
+        entry.kind === 'tool' ? [[entry.name, entry.status, entry.error]] : [],
+      ),
+    ).toEqual([['lookup', 'failed', UNFINISHED_TOOL_TEXT]]);
+    expect(state.status).toBe('idle');
+    expect(rig.created()).toBe(0);
+    expect(await files()).toEqual(before);
   });
 });

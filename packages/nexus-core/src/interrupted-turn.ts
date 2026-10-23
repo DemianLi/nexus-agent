@@ -38,7 +38,12 @@ import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
 import { closer, requestedCalls } from './conversation-replay.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
 import type { SessionEvent } from './session-log.js';
-import type { ResumedStoredSession, SessionStore } from './session-store.js';
+import type {
+  ResumedStoredSession,
+  SessionStore,
+  StoredSessionHeader,
+  StoredSessionReadOptions,
+} from './session-store.js';
 
 /**
  * 一份已存日誌的尾巴如果停在一輪開著，算出補結：**沒配到結果的呼叫**各一顆錯誤 `tool/result`（記過 `tool/call` 的說
@@ -151,6 +156,47 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
     data: { reason: { kind: 'interrupted' } },
   });
   return closers;
+}
+
+/** {@link readColdSession} 交回的：一份為了唯讀檢視而補平的已存日誌。 */
+export interface ColdStoredSession {
+  /** 存的那份 header，打開時定下的。 */
+  readonly header: StoredSessionHeader;
+  /** 磁碟上那份 header 寫的格式版本，同 `ReadonlyStoredSession.storedFormatVersion`。 */
+  readonly storedFormatVersion: number;
+  /** 存的事件，後面接上 {@link interruptedTurnClosers} 在記憶體裡算的補結；一個位元組都不寫回。 */
+  readonly events: readonly SessionEvent[];
+}
+
+/**
+ * 冷讀一份已存的會話（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)），照 dsh 的 `readColdSessionLog`
+ * （`packages/session-query/session-query/src/cold-read.ts:31-57`，`687f282e`）：唯讀打開、讀整份、在記憶體接上
+ * {@link interruptedTurnClosers}，讓寫的那一方死在一輪中間的日誌也折得成收好尾的樣子。**不拿租約、不寫回**——要寫回走
+ * {@link resumeClosingInterruptedTurn}。讀失敗原樣拋，由呼叫端分類。
+ *
+ * dsh 讀完會關把手；我們的唯讀把手沒有 `close()`，所以少這一步。
+ *
+ * 補結的 `seq` 接在最後一顆真事件後面，所以拿 `events.at(-1).seq` 當「讀到哪裡」的，記的是補結的那一顆，同 dsh
+ * （`readSurface` 的 `capturedThroughSeq`，`session-query/src/index.ts:315`）。
+ *
+ * @param store - 存放處；只用它的唯讀打開。
+ * @param id - 要讀的會話 id。
+ * @param options - 原樣轉交 `read`。
+ * @returns header、磁碟上的格式版本，與補平後的事件。
+ * @throws `store.open` 或 `read` 拋的，原樣。
+ */
+export async function readColdSession(
+  store: Pick<SessionStore, 'open'>,
+  id: string,
+  options?: StoredSessionReadOptions,
+): Promise<ColdStoredSession> {
+  const opened = await store.open(id, 'read');
+  const events = await opened.read(options);
+  return {
+    header: opened.header,
+    storedFormatVersion: opened.storedFormatVersion,
+    events: [...events, ...interruptedTurnClosers(events)],
+  };
 }
 
 /**

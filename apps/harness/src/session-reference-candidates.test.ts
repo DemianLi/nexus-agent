@@ -5,7 +5,7 @@
  * `serve-session-references.test.ts`。
  */
 
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
@@ -18,6 +18,7 @@ import {
   projectKey,
 } from './jsonl-session-store.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
+import { projectSessionConversation } from './session-reference.js';
 
 const CWD = '/專案/甲';
 const OTHER = '/專案/乙';
@@ -44,6 +45,8 @@ const said = (text: string, time: number): Draft => ({
   time,
   data: { kind: 'message', text },
 });
+
+const ended = (time: number): Draft => ({ type: 'turn/end', time, data: {} });
 
 const titled = (title: string, time: number): Draft => ({
   type: 'session/title',
@@ -436,20 +439,23 @@ describe('標題快取', () => {
 });
 
 describe('read：精確讀一條被引用的會話（準備那一半用）', () => {
-  it('整份日誌與 header 原樣交回；專案自己的那一格優先，同 id 在兩格時取自己的', async () => {
-    await put(OTHER, 'dup', { events: [said('別格的', 2_000)] });
-    await put(CWD, 'dup', { events: [said('自己格的', 2_000)] });
+  it('收好尾的整份日誌與 header 原樣交回；專案自己的那一格優先，同 id 在兩格時取自己的', async () => {
+    await put(OTHER, 'dup', { events: [said('別格的', 2_000), ended(2_100)] });
+    await put(CWD, 'dup', { events: [said('自己格的', 2_000), ended(2_100)] });
     const { header, events } = await service().read('dup');
     expect(header.id).toBe('dup');
     expect(header.cwd).toBe(CWD);
-    expect(events.map((event) => (event.data as { text?: string }).text)).toEqual(['自己格的']);
+    expect(events.map((event) => [event.type, (event.data as { text?: string }).text])).toEqual([
+      ['turn/start', '自己格的'],
+      ['turn/end', undefined],
+    ]);
   });
 
   it('別的專案的也讀得到；子代理那種含 / 的 id 也行', async () => {
-    await put(OTHER, 'elsewhere', { events: [said('別處', 2_000)] });
+    await put(OTHER, 'elsewhere', { events: [said('別處', 2_000), ended(2_100)] });
     await put(CWD, 'delegated/tools:abc', { parentSession: 'me' });
     const s = service();
-    expect((await s.read('elsewhere')).events).toHaveLength(1);
+    expect((await s.read('elsewhere')).events).toHaveLength(2);
     expect((await s.read('delegated/tools:abc')).header.parentSession).toBe('me');
   });
 
@@ -496,5 +502,27 @@ describe('read：精確讀一條被引用的會話（準備那一半用）', () 
         .map(async (name) => [name, await readFile(join(directory, name), 'utf8')]),
     );
     expect(after).toEqual(before);
+  });
+
+  it('死在第一次模型呼叫的那一份（#1598）：冷讀在記憶體補平，投影得出那句人打的字；檔的位元組與 mtime 都不變', async () => {
+    const directory = await put(CWD, 'crashed', {
+      events: [said('那句人打的字', 2_000), { type: 'model/start', time: 2_001, data: {} }],
+    });
+    const snapshot = async () =>
+      Promise.all(
+        (await readdir(directory)).sort().map(async (name) => {
+          const path = join(directory, name);
+          return [name, await readFile(path, 'utf8'), (await stat(path)).mtimeMs] as const;
+        }),
+      );
+    const before = await snapshot();
+
+    const { events } = await service().read('crashed');
+    expect(projectSessionConversation(events)).toMatchObject([
+      { role: 'user', text: '那句人打的字' },
+    ]);
+    // 補結只在記憶體：開著的呼叫收成失敗、那一輪收成中斷。
+    expect(events.slice(2).map((event) => event.type)).toEqual(['model/end', 'turn/end']);
+    expect(await snapshot()).toEqual(before);
   });
 });
