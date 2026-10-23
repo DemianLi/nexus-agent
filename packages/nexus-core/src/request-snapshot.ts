@@ -91,6 +91,13 @@
  * `SESSION_EVENT_MAX_DEPTH`）。#1526 的有損值到不了這裡：工具參數與 `extra` 先經 `jsonCopy` 洗過，`config` 的數字欄把 `-0`
  * 正規化成 `0`。
  *
+ * ## 拷不動的參數也是這次請求不送，錯誤帶工具名稱（[#1731](https://github.com/DemianLi/nexus-agent/issues/1731)）
+ *
+ * 工具 `parameters` 與 `config.extra` 先拷成純 JSON 再進 header（{@link jsonCopy}）。改寫前拷不動（循環、頂層是函式、原生
+ * stringify 爆堆疊）回 `undefined`、呼叫端把那一格拿掉，日誌上記下一份**少了參數**的 header，沒有任何提示；現在照 dsh
+ * （`append` 的 `snapshotJsonValue` 拷不動就拋）當場拋，等於這次請求不送，同上一節。
+ * 深度超過上限的，錯誤訊息帶出是哪一顆工具（`tools["name"].parameters`）：寫入那一關的路徑只印前 8 段，看得到索引、看不到名字。
+ *
  * @module
  */
 
@@ -103,7 +110,12 @@ import type { AgentMiddleware } from './base-types.js';
 import { currentModelCall, withModelCall } from './model-call-scope.js';
 import { bindModelConfig } from './model-binding.js';
 import type { SessionLookup } from './registry.js';
-import { snapshotJsonValue } from './session-log.js';
+import { nestingExceeds } from './logged-message.js';
+import {
+  SESSION_EVENT_MAX_DEPTH,
+  SessionEventDepthError,
+  snapshotJsonValue,
+} from './session-log.js';
 import type { SessionLog } from './session-log.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
@@ -167,14 +179,59 @@ const NOT_EXTRA = new Set([
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** 拷成純 JSON；拷不動（循環、函式）回 `undefined`。 */
-function jsonCopy(value: unknown): unknown {
+/**
+ * 工具 `parameters` 與 `config.extra` 的值在 `request/header` 事件裡前面還有幾層：`data`（第 1 層）→ `header`（2）→
+ * `tools` 或 `config`（3）→ 一顆工具或 `extra`（4），值本身的根從第 5 層起。所以值自己最多巢狀
+ * {@link SESSION_EVENT_MAX_DEPTH} 減這一段，跟寫入那一關（`SessionLog.append`）拒收的是同一批。
+ */
+const HEADER_VALUE_PREFIX_DEPTH = 4;
+
+/**
+ * 拷成純 JSON，**拷不動就當場拋、帶上是哪一格**（[#1731](https://github.com/DemianLi/nexus-agent/issues/1731)）。
+ *
+ * 照 dsh：`request/header` 的內容原樣交給 `append`，`append` 裡的 `snapshotJsonValue` 拷不動就拋，不會丟掉欄位
+ * （`packages/core/session/src/index.ts:808-811`，`687f282e`）。改寫前這裡拷不動回 `undefined`、呼叫端把那一格拿掉，
+ * 日誌上記下一份**少了參數**的 header，「日誌 = 模型收到的」不成立，也沒有任何提示。
+ *
+ * 值在 `JSON.stringify` 之後才進日誌，所以 JSON 本來就丟的（巢狀裡的 `undefined`、函式、`toJSON` 的轉換）照舊——那是
+ * 供應商收到的 JSON，也是 #1526 說的「先洗過」。這裡拋的只有**整格拷不成 JSON**的：循環、頂層是函式／symbol、`BigInt`、
+ * 原生 stringify 爆堆疊。
+ *
+ * **深度先量**：原生 `JSON.stringify` 是遞迴的（Node 22 約 4100 層就 `RangeError`），而寫入那一關另有 600 層的上限
+ * （{@link SESSION_EVENT_MAX_DEPTH}，#1661）。後者拒收時錯誤訊息的路徑只印前 8 段，看得到工具的索引、看不到名字；
+ * MCP 是 serve 層掛的，一個 server 的病態 schema 會讓掛了它的每條 thread 每一輪都失敗，管理者要能一眼找到是哪一顆。所以在拷之前
+ * 先迭代量，超過就拋同一種 {@link SessionEventDepthError}（`classifyTurnFailure` 認它的 `code`），訊息帶 `where`。
+ * 量的是同一條線，**不改變哪些值記得進去**；只少報（同一顆物件只走一次），少報的交給 `append` 那一關，訊息照舊不帶名字。
+ *
+ * @param where - 這個值是哪一格，例如 `tools["echo"].parameters`（括號裡是工具名稱，不是索引）；進錯誤訊息。
+ */
+function jsonCopy(value: unknown, where: string): unknown {
+  const reject = (cause: unknown): never => {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new TypeError(`request/header 的 ${where} 拷不成純 JSON，這次請求不送：${reason}`, {
+      cause,
+    });
+  };
+  const limit = SESSION_EVENT_MAX_DEPTH - HEADER_VALUE_PREFIX_DEPTH;
+  let exceeds = false;
   try {
-    const text = JSON.stringify(value);
-    return text === undefined ? undefined : (JSON.parse(text) as unknown);
-  } catch {
-    return undefined;
+    exceeds = nestingExceeds(value, limit);
+  } catch (error) {
+    return reject(error);
   }
+  if (exceeds) {
+    throw new SessionEventDepthError(
+      `request/header 的 ${where} 巢狀太深：前面還有 ${HEADER_VALUE_PREFIX_DEPTH} 層，超過上限 ${SESSION_EVENT_MAX_DEPTH} 層`,
+    );
+  }
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(value);
+  } catch (error) {
+    return reject(error);
+  }
+  if (text === undefined) return reject(new TypeError(`是 ${typeof value}，不是 JSON`));
+  return JSON.parse(text) as unknown;
 }
 
 /** 一則訊息的文字（區塊裡只取文字部分）。 */
@@ -192,7 +249,10 @@ function normalizeTool(raw: unknown): RequestToolSchema | undefined {
   const description = inner['description'];
   // 各家把 schema 放在不同的鍵：OpenAI `parameters`、Anthropic `input_schema`、LangChain 工具的 JSON `schema`。
   const parameters = inner['parameters'] ?? inner['input_schema'] ?? inner['inputSchema'];
-  const copy = parameters === undefined ? undefined : jsonCopy(parameters);
+  const copy =
+    parameters === undefined
+      ? undefined
+      : jsonCopy(parameters, `tools[${JSON.stringify(name)}].parameters`);
   return {
     name,
     ...(typeof description === 'string' ? { description } : {}),
@@ -226,8 +286,7 @@ function extractConfig(
     .sort();
   const extra: Record<string, unknown> = {};
   for (const key of extraKeys) {
-    const copy = jsonCopy(invocation[key]);
-    if (copy !== undefined) extra[key] = copy;
+    extra[key] = jsonCopy(invocation[key], `config.extra.${key}`);
   }
   const resolvedModel = typeof model === 'string' ? model : fallbackModel;
   const temperature = number(pick('temperature'));

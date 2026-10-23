@@ -88,8 +88,10 @@ const PRECHECK_DEPTH = SESSION_EVENT_MAX_DEPTH * 2;
  *
  * 走的是自有、可列舉的值。同一顆物件只走一次：`BaseMessage` 的 `lc_kwargs` 跟欄位指到同一份，繞回自己的也不會走不完。
  * 只走一次可能少算從較深那條路到它的層數，所以這裡只會**少報**、不會多報。
+ *
+ * 請求快照（`request-snapshot.ts`，#1731）也用它：工具參數在交給遞迴的 `JSON.stringify` 之前先量，超過就拋帶工具名稱的錯。
  */
-function nestingExceeds(value: unknown, limit: number): boolean {
+export function nestingExceeds(value: unknown, limit: number): boolean {
   const seen = new Set<object>();
   const stack: [unknown, number][] = [[value, 1]];
   for (let item = stack.pop(); item !== undefined; item = stack.pop()) {

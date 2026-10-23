@@ -535,6 +535,45 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
       expect(bodies).toHaveLength(0);
       expect(eventsOf(sessions.root.events, 'request/header')).toHaveLength(0);
       expect(eventsOf(sessions.root.events, 'turn/failed')).toHaveLength(2);
+      // 管理者看到的那一行（`turn/failed` 的訊息）要點得出是哪一顆工具（#1731）：寫入那一關的路徑只印前 8 段，只有索引。
+      for (const failed of eventsOf(sessions.root.events, 'turn/failed')) {
+        expect(failed.message).toContain('tools["deep"].parameters');
+      }
+    } finally {
+      printed.mockRestore();
+      await close();
+    }
+  });
+
+  it('工具參數有循環參照（#1731）：這次請求不送、日誌上沒有少了參數的 header，每一輪都一樣', async () => {
+    // 產品路徑上這個錯不是從快照這一格拋的：deepagents 的 summarization 在模型被叫之前先 `JSON.stringify` 整串工具
+    // （`countTokensApproximately`），循環在那裡就爆了（訊息是原生的 `Converting circular structure to JSON`，不帶工具名稱）。
+    // 這一條釘的是不變量，不管誰先拋：沒送、沒有少了參數的 header。快照這一格自己的拒收與工具名稱在 core 的 `request-snapshot.test.ts`。
+    const looped: Record<string, unknown> = { type: 'object', properties: {} };
+    looped['self'] = looped;
+    const broken: PluginEntry = {
+      plugin: {
+        name: 'looped-tool',
+        apply: (registry) =>
+          void registry.tools.register(
+            tool(() => '好', {
+              name: 'looped',
+              description: '繞回自己。',
+              schema: looped as never,
+            }),
+          ),
+      },
+    };
+    const { agent, sessions, bodies, close } = await assemble([broken], '你是測試助手。', retrying);
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      for (const text of ['一', '二']) {
+        await expect(runTurn(agent, text, quiet, sessions.root)).rejects.toThrow();
+      }
+      expect(bodies).toHaveLength(0);
+      expect(eventsOf(sessions.root.events, 'request/header')).toHaveLength(0);
+      expect(eventsOf(sessions.root.events, 'turn/failed')).toHaveLength(2);
+      expect(sessions.root.events.some((event) => event.type.startsWith('llm/retry'))).toBe(false);
     } finally {
       printed.mockRestore();
       await close();
