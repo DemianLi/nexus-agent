@@ -7,7 +7,8 @@
  * - **重連就整份丟掉重抓**（`resetConnected`，dsh `:82-88`）：另一條線上的伺服器可能已經換了組裝。
  * - **抓失敗就清空、標失敗**（`refresh`，dsh `:117-121`），原本是 `ready` 也一樣。只有最新那一次能發布結果（epoch）。
  * - **送出時 strong-wait**（`ensureReady`，dsh `:136-146`）：`ready` 直接用；`cold`／`failed` 重抓一次；`pending` 等在途的那一次；
- *   等到的是失敗才拋——不靜默降級成送給模型（dsh `service.ts:304-305`）。
+ *   等到的是失敗才拋——不靜默降級成送給模型（dsh `service.ts:304-305`）。等的那一方帶 `signal`，放手（dsh 送出狀態機的
+ *   `onRelease`，web 是那條 thread 的畫面卸載）就不等了。
  */
 
 import type { SlashDescriptor } from '@nexus/wire';
@@ -79,15 +80,32 @@ export class CommandDirectory {
 
   /**
    * 等到有一份能用的清單（送出時認命令那一道）。`ready` 馬上回；`cold`／`failed` 重抓一次；`pending` 等在途的那一次；
-   * 等到的那一次被後來的蓋掉就再等。等到的是失敗就拋，訊息是失敗的原因。
+   * 等到的那一次被後來的蓋掉就再等。等到的是失敗就拋，訊息是失敗的原因；`signal` 中止了也拋。
    */
-  async ensureReady(): Promise<readonly SlashDescriptor[]> {
+  async ensureReady(signal: AbortSignal): Promise<readonly SlashDescriptor[]> {
     for (;;) {
       if (this.#state === 'ready') return this.#commands;
       if (this.#state !== 'pending') void this.refresh();
-      await new Promise<void>((resolve) => this.#waiters.push(resolve));
+      await this.#settled(signal);
       if (this.#state === 'failed') throw new Error(messageOf(this.#lastError));
     }
+  }
+
+  /** 等最新那一次抓完；`signal` 中止就把自己從等的名單拿掉、拋出（dsh `settled`）。 */
+  #settled(signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.reject(abortReason(signal));
+    return new Promise((resolve, reject) => {
+      const waiter = () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      };
+      const onAbort = () => {
+        this.#waiters = this.#waiters.filter((other) => other !== waiter);
+        reject(abortReason(signal));
+      };
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.#waiters.push(waiter);
+    });
   }
 
   #notify(): void {
@@ -95,6 +113,10 @@ export class CommandDirectory {
     this.#waiters = [];
     for (const wake of woken) wake();
   }
+}
+
+function abortReason(signal: AbortSignal): Error {
+  return signal.reason instanceof Error ? signal.reason : new Error('不等命令清單了');
 }
 
 function messageOf(error: unknown): string {

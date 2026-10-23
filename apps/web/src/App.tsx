@@ -838,7 +838,7 @@ function ConversationView({
                         requestId,
                       );
                       // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
-                      if (rejected === undefined) {
+                      if (rejected === undefined || 'asCommand' in rejected) {
                         const ids = items.map((item) => item.id);
                         draftAttachments.removeMany(ids);
                         uploads.forget(ids);
@@ -852,6 +852,12 @@ function ConversationView({
                     }
                   })().then((rejected) => {
                     if (rejected === undefined) return;
+                    if ('asCommand' in rejected) {
+                      // 按下去時命令清單還在途、先當成一句話用掉了標記；等到清單認出是命令，命令不用掉它，放回去（#1929）。
+                      if (mentioned !== undefined)
+                        setMentionedAgent((current) => current ?? mentioned);
+                      return;
+                    }
                     // 「沒送出去」可能其實到了、只是回條斷了：留著編號，原樣重送這一句時帶同一個。
                     pendingRequest.current = { id: requestId, sentence };
                     // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。

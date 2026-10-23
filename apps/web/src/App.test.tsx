@@ -6263,6 +6263,7 @@ describe('@子代理 提及（#328）', () => {
   async function ready(
     subagentList: WireClient['subagentList'] | undefined = supported,
     runStartResult: UplinkResult = { type: 'success', id: 1, result: { run_id: 'run-1' } },
+    slashList?: WireClient['slashList'],
   ) {
     seq = 0;
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
@@ -6270,7 +6271,16 @@ describe('@子代理 提及（#328）', () => {
     });
     const runStart = vi.fn(async (..._args: Parameters<WireClient['runStart']>) => runStartResult);
     const listed = vi.fn(subagentList);
-    render(<App client={{ ...fake.client, runStart, subagentList: listed }} />);
+    render(
+      <App
+        client={{
+          ...fake.client,
+          runStart,
+          subagentList: listed,
+          ...(slashList === undefined ? {} : { slashList }),
+        }}
+      />,
+    );
     await screen.findByPlaceholderText('說點什麼…');
     return { runStart, listed, slashed: fake.slashed };
   }
@@ -6465,6 +6475,30 @@ describe('@子代理 提及（#328）', () => {
     await waitFor(() => expect(slashed).toEqual(['/plan']));
     expect(runStart).not.toHaveBeenCalled();
     expect(chip()).not.toBeNull();
+  });
+
+  it('命令清單在途時送「/plan」：等到清單認成命令，標記照樣留著（#1929）', async () => {
+    let arrive: (() => void) | undefined;
+    const slashList: WireClient['slashList'] = () =>
+      new Promise((resolve) => {
+        arrive = () =>
+          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+      });
+    const { runStart, slashed } = await ready(supported, undefined, slashList);
+    await pick('@');
+    type('/plan');
+    fireEvent.keyDown(input(), { key: 'Escape' });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(slashed).toEqual([]);
+
+    arrive!();
+    await waitFor(() => expect(slashed).toEqual(['/plan']));
+    expect(runStart).not.toHaveBeenCalled();
+    await waitFor(() => expect(chip()).not.toBeNull());
+    // 命令收下了：不是「沒送出去」，草稿不放回來。
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(input().value).toBe('');
   });
 
   it('開頭不是命令的 /名字 是一句話：帶標記、也用掉它（#1929）', async () => {

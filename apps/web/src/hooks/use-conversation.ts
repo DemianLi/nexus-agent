@@ -129,6 +129,17 @@ export interface SendRejected {
 }
 
 /**
+ * 這一行照命令清單認成命令、交給了 `slash.run`（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）。按下送出時
+ * 畫面上那份清單可能還在途，呼叫端先把它當一句話、用掉了提及標記；看到這個就放回去——命令不用掉標記。命令沒收下而且帶了
+ * 附件時照舊回 {@link SendRejected}。
+ */
+export interface SentAsCommand {
+  readonly asCommand: true;
+}
+
+const SENT_AS_COMMAND: SentAsCommand = { asCommand: true };
+
+/**
  * 佇列的改、刪或改成插話沒收下。`gone` 是那一件已經不在隊裡：多半是剛開跑了，也可能是別的分頁刪的。`unavailable` 是
  * 改成插話時這一輪已經不收了（`steer_unavailable`，#710）。
  */
@@ -284,7 +295,7 @@ export interface Conversation {
     attachments?: readonly PromptAttachment[],
     mention?: SubagentMention,
     requestId?: string,
-  ): Promise<SendRejected | undefined>;
+  ): Promise<SendRejected | SentAsCommand | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
    * 命令成功（標籤等線上的值翻回關著才消失），回字串是失敗的原因（被拒、不認得、命令回錯誤）。不碰
@@ -454,6 +465,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       }, setSlashCommands),
     [client, threadId],
   );
+  /** 這條 thread 的畫面卸載就中止還在等命令清單的送出（dsh 送出狀態機的 `onRelease`）。 */
+  const released = useRef(new AbortController());
+  useEffect(() => {
+    const controller = new AbortController();
+    released.current = controller;
+    return () => controller.abort();
+  }, [commandDirectory]);
   const [skills, setSkills] = useState<readonly SkillEntry[]>([]);
   const [slashError, setSlashError] = useState<string | undefined>(undefined);
   const [slashNotice, setSlashNotice] = useState<string | undefined>(undefined);
@@ -831,7 +849,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       attachments?: readonly PromptAttachment[],
       mention?: SubagentMention,
       requestId?: string,
-    ): Promise<SendRejected | undefined> => {
+    ): Promise<SendRejected | SentAsCommand | undefined> => {
       const trimmed = text.trim();
       const hasAttachments = attachments !== undefined && attachments.length > 0;
       // 文字或附件至少一個；只有附件時文字是空字串，照樣送。
@@ -852,14 +870,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       if (commandToken(trimmed) !== undefined) {
         let commands: readonly SlashDescriptor[];
         try {
-          commands = await commandDirectory.ensureReady();
+          commands = await commandDirectory.ensureReady(released.current.signal);
         } catch (error) {
           return {
             message: commandsFailedText(error instanceof Error ? error.message : String(error)),
           };
         }
         if (namesCommand(commands, trimmed)) {
-          return runSlash(trimmed, hasAttachments ? attachments : undefined);
+          return (
+            (await runSlash(trimmed, hasAttachments ? attachments : undefined)) ?? SENT_AS_COMMAND
+          );
         }
       }
       setSlashError(undefined);

@@ -1,5 +1,5 @@
 import type { Event, SkillEntry, SlashDescriptor, SlashListOutcome, WireClient } from '@nexus/wire';
-import { act, cleanup, renderHook } from '@testing-library/react';
+import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { commandsFailedText, useConversation } from '@/hooks/use-conversation';
@@ -89,85 +89,130 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe('useConversation 的命令清單跟著連線走（#1929，dsh resetConnected）', () => {
-  it('重連後重抓失敗：上一條線的清單不留，送「/plan」重抓一次還是失敗就退回', async () => {
-    const answers: SlashListOutcome[] = [{ kind: 'ok', commands: [plan] }];
-    const fake = scriptedClient(
-      async () => answers.shift() ?? { kind: 'rejected', message: '清單讀不出來' },
-      async () => ({ kind: 'ok', skills: [] }),
-    );
-    const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
-    await tick();
-    expect(result.current.slashCommands).toEqual([plan]);
+// `main.tsx` 開著 StrictMode：effect 先跑一次、收掉、再跑一次，開線與 `resetConnected` 都會多一次；被蓋掉的那一次不能發布。
+// 所以清單的回答跟著「現在是第幾條線」走（`phase`），呼叫次數從斷線前那一刻算起。
+describe.each([false, true])(
+  'useConversation 的命令清單跟著連線走（#1929，dsh resetConnected；StrictMode：%s）',
+  (strict) => {
+    beforeEach(() => configure({ reactStrictMode: strict }));
+    afterEach(() => configure({ reactStrictMode: false }));
 
-    await reconnect(fake.failLatest);
-    expect(fake.openEvents).toHaveBeenCalledTimes(2);
-    expect(result.current.connected).toBe(true);
-    expect(result.current.slashCommands).toEqual([]);
-    expect(fake.client.slashList).toHaveBeenCalledTimes(2);
+    it('重連後重抓失敗：上一條線的清單不留，送「/plan」重抓一次還是失敗就退回', async () => {
+      let phase: 'first' | 'second' = 'first';
+      const fake = scriptedClient(
+        async () =>
+          phase === 'first'
+            ? { kind: 'ok', commands: [plan] }
+            : { kind: 'rejected', message: '清單讀不出來' },
+        async () => ({ kind: 'ok', skills: [] }),
+      );
+      const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
+      await tick();
+      expect(result.current.slashCommands).toEqual([plan]);
 
-    let rejected: Awaited<ReturnType<typeof result.current.send>>;
-    await act(async () => {
-      rejected = await result.current.send('/plan');
+      phase = 'second';
+      const opened = fake.openEvents.mock.calls.length;
+      const listed = fake.client.slashList.mock.calls.length;
+      await reconnect(fake.failLatest);
+      expect(fake.openEvents).toHaveBeenCalledTimes(opened + 1);
+      expect(result.current.connected).toBe(true);
+      expect(result.current.slashCommands).toEqual([]);
+      expect(fake.client.slashList).toHaveBeenCalledTimes(listed + 1);
+
+      let rejected: Awaited<ReturnType<typeof result.current.send>>;
+      await act(async () => {
+        rejected = await result.current.send('/plan');
+      });
+      expect(rejected!).toEqual({ message: commandsFailedText('清單讀不出來') });
+      expect(fake.client.slashList).toHaveBeenCalledTimes(listed + 2);
+      expect(fake.slashed).toEqual([]);
+      expect(fake.started).toEqual([]);
     });
-    expect(rejected!).toEqual({ message: commandsFailedText('清單讀不出來') });
-    expect(fake.client.slashList).toHaveBeenCalledTimes(3);
-    expect(fake.slashed).toEqual([]);
-    expect(fake.started).toEqual([]);
-  });
 
-  it('重連後新清單還在途：送出等它，照新的那份路由（舊的有 plan、新的沒有 → 送給模型）', async () => {
-    const second = deferred<SlashListOutcome>();
-    const answers: Promise<SlashListOutcome>[] = [
-      Promise.resolve({ kind: 'ok', commands: [plan] }),
-      second.promise,
-    ];
-    const fake = scriptedClient(
-      () => answers.shift()!,
-      async () => ({ kind: 'ok', skills: [] }),
-    );
-    const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
-    await tick();
-    expect(result.current.slashCommands).toEqual([plan]);
+    it('重連後新清單還在途：送出等它，照新的那份路由（舊的有 plan、新的沒有 → 送給模型）', async () => {
+      const second = deferred<SlashListOutcome>();
+      let phase: 'first' | 'second' = 'first';
+      const fake = scriptedClient(
+        () =>
+          phase === 'first' ? Promise.resolve({ kind: 'ok', commands: [plan] }) : second.promise,
+        async () => ({ kind: 'ok', skills: [] }),
+      );
+      const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
+      await tick();
+      expect(result.current.slashCommands).toEqual([plan]);
 
-    await reconnect(fake.failLatest);
-    expect(fake.client.slashList).toHaveBeenCalledTimes(2);
+      phase = 'second';
+      const listed = fake.client.slashList.mock.calls.length;
+      await reconnect(fake.failLatest);
+      expect(fake.client.slashList).toHaveBeenCalledTimes(listed + 1);
 
-    let sending!: Promise<unknown>;
-    act(() => {
-      sending = result.current.send('/plan');
+      let sending!: Promise<unknown>;
+      act(() => {
+        sending = result.current.send('/plan');
+      });
+      await tick();
+      expect(fake.slashed).toEqual([]);
+      expect(fake.started).toEqual([]);
+
+      second.resolve({ kind: 'ok', commands: [] });
+      await act(async () => {
+        await sending;
+      });
+      expect(fake.started).toEqual(['/plan']);
+      expect(fake.slashed).toEqual([]);
+      // 在途那一次就是要等的那一次，不另外再抓。
+      expect(fake.client.slashList).toHaveBeenCalledTimes(listed + 1);
     });
-    await tick();
-    expect(fake.slashed).toEqual([]);
-    expect(fake.started).toEqual([]);
 
-    second.resolve({ kind: 'ok', commands: [] });
-    await act(async () => {
-      await sending;
+    it('等清單時畫面卸載：不等了，清單後來到也不送', async () => {
+      const pending = deferred<SlashListOutcome>();
+      const fake = scriptedClient(
+        () => pending.promise,
+        async () => ({ kind: 'ok', skills: [] }),
+      );
+      const { result, unmount } = renderHook(() =>
+        useConversation({ client: fake.client, threadId: 't' }),
+      );
+      await tick();
+
+      let rejected: Awaited<ReturnType<typeof result.current.send>> | 'pending' = 'pending';
+      act(() => {
+        void result.current.send('/plan').then((outcome) => (rejected = outcome));
+      });
+      await tick();
+      expect(rejected).toBe('pending');
+
+      unmount();
+      await tick();
+      expect(rejected).not.toBe('pending');
+      expect(rejected).toHaveProperty('message');
+
+      pending.resolve({ kind: 'ok', commands: [plan] });
+      await tick();
+      expect(fake.slashed).toEqual([]);
+      expect(fake.started).toEqual([]);
     });
-    expect(fake.started).toEqual(['/plan']);
-    expect(fake.slashed).toEqual([]);
-    // 在途那一次就是要等的那一次，不另外再抓。
-    expect(fake.client.slashList).toHaveBeenCalledTimes(2);
-  });
 
-  it('重連時技能清單先清掉：新的還沒到，選單不留上一條線的技能', async () => {
-    const second = deferred<Awaited<ReturnType<WireClient['skillList']>>>();
-    const answers = [Promise.resolve({ kind: 'ok' as const, skills: [deploy] }), second.promise];
-    const fake = scriptedClient(
-      async () => ({ kind: 'ok', commands: [plan] }),
-      () => answers.shift()!,
-    );
-    const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
-    await tick();
-    expect(result.current.skills).toEqual([deploy]);
+    it('重連時技能清單先清掉：新的還沒到，選單不留上一條線的技能', async () => {
+      const second = deferred<Awaited<ReturnType<WireClient['skillList']>>>();
+      let phase: 'first' | 'second' = 'first';
+      const fake = scriptedClient(
+        async () => ({ kind: 'ok', commands: [plan] }),
+        () =>
+          phase === 'first' ? Promise.resolve({ kind: 'ok', skills: [deploy] }) : second.promise,
+      );
+      const { result } = renderHook(() => useConversation({ client: fake.client, threadId: 't' }));
+      await tick();
+      expect(result.current.skills).toEqual([deploy]);
 
-    await reconnect(fake.failLatest);
-    expect(result.current.connected).toBe(true);
-    expect(result.current.skills).toEqual([]);
+      phase = 'second';
+      await reconnect(fake.failLatest);
+      expect(result.current.connected).toBe(true);
+      expect(result.current.skills).toEqual([]);
 
-    second.resolve({ kind: 'ok', skills: [] });
-    await tick();
-    expect(result.current.skills).toEqual([]);
-  });
-});
+      second.resolve({ kind: 'ok', skills: [] });
+      await tick();
+      expect(result.current.skills).toEqual([]);
+    });
+  },
+);

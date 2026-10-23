@@ -28,6 +28,9 @@ function scripted() {
   return { directory, fetchCommands, changes, call: (index: number) => pending[index]! };
 }
 
+/** 不會中止的那一個：等到清單為止。 */
+const live = new AbortController().signal;
+
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe('CommandDirectory（#1929，dsh directory.ts）', () => {
@@ -66,7 +69,7 @@ describe('CommandDirectory（#1929，dsh directory.ts）', () => {
     call(0).reject(new Error('第一次'));
     await first;
 
-    const waiting = directory.ensureReady();
+    const waiting = directory.ensureReady(live);
     await flush();
     expect(fetchCommands).toHaveBeenCalledTimes(2);
     call(1).reject(new Error('第二次'));
@@ -76,7 +79,7 @@ describe('CommandDirectory（#1929，dsh directory.ts）', () => {
   it('ensureReady：在途就等那一次，不另外再抓', async () => {
     const { directory, call, fetchCommands } = scripted();
     void directory.resetConnected();
-    const waiting = directory.ensureReady();
+    const waiting = directory.ensureReady(live);
     await flush();
     expect(fetchCommands).toHaveBeenCalledTimes(1);
     call(0).resolve([plan]);
@@ -90,7 +93,7 @@ describe('CommandDirectory（#1929，dsh directory.ts）', () => {
     call(0).reject(new Error('清單讀不出來'));
     await first;
 
-    const waiting = directory.ensureReady();
+    const waiting = directory.ensureReady(live);
     await flush();
     expect(fetchCommands).toHaveBeenCalledTimes(2);
     call(1).resolve([plan]);
@@ -99,17 +102,31 @@ describe('CommandDirectory（#1929，dsh directory.ts）', () => {
 
   it('ensureReady：沒抓過（cold）也會自己抓', async () => {
     const { directory, call, fetchCommands } = scripted();
-    const waiting = directory.ensureReady();
+    const waiting = directory.ensureReady(live);
     await flush();
     expect(fetchCommands).toHaveBeenCalledTimes(1);
     call(0).resolve([help]);
     expect(await waiting).toEqual([help]);
   });
 
+  it('signal 中止：不等了、拋出，也不留在等的名單裡（dsh `settled`）', async () => {
+    const { directory, call } = scripted();
+    void directory.resetConnected();
+    const release = new AbortController();
+    const waiting = directory.ensureReady(release.signal);
+    release.abort();
+    await expect(waiting).rejects.toThrow();
+    // 中止之後清單才到：另一個等的人照樣等到，中止的那一個不會被叫醒第二次。
+    const other = directory.ensureReady(live);
+    call(0).resolve([plan]);
+    expect(await other).toEqual([plan]);
+    await expect(directory.ensureReady(AbortSignal.abort())).resolves.toEqual([plan]);
+  });
+
   it('只有最新那一次能發布：先開的那一次晚到，結果不採用，等的人等到新的', async () => {
     const { directory, call, changes } = scripted();
     const stale = directory.resetConnected();
-    const waiting = directory.ensureReady();
+    const waiting = directory.ensureReady(live);
     const fresh = directory.resetConnected();
 
     call(0).resolve([plan]);
