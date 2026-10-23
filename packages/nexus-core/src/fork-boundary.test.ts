@@ -136,3 +136,34 @@ describe('forkBoundaryOf', () => {
     expect(forkBoundaryOf(log.events, 'm2')).toBeUndefined();
   });
 });
+
+// 下面三條的序列，今天的生產者寫不出來，但 `SessionLog` 照收（#1580 刀 2a 審查 N2）。所以它們釘的是函式本身的判斷，
+// 不靠「生產者一定先寫 turn/start」這種別處的保證：每一條各殺一個只在生產者寫法下才等價的突變。
+describe('forkBoundaryOf：日誌照收、生產者今天寫不出來的序列', () => {
+  it('turn/end 之後緊接 turn/failed（中間沒有 resume）：仍然分不出去', () => {
+    const log = new SessionLog('end-then-failed');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    log.append('assistant/message', { message: reply('m1', '好') });
+    log.append('turn/end', {});
+    log.append('turn/failed', { message: '收尾之後又失敗' });
+    expect(forkBoundaryOf(log.events, 'm1')).toBeUndefined();
+  });
+
+  it('turn/end 之後一顆 resume 的 turn/start、沒有核准點、還沒收：分不出去', () => {
+    const log = new SessionLog('resume-without-interrupt');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    log.append('assistant/message', { message: reply('m1', '好') });
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'resume' });
+    expect(forkBoundaryOf(log.events, 'm1')).toBeUndefined();
+  });
+
+  it('同一個邏輯輪連著兩顆 turn/end（中間沒有 resume）：取最後一顆', () => {
+    const log = new SessionLog('two-ends');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    log.append('assistant/message', { message: reply('m1', '好') });
+    log.append('turn/end', {});
+    const last = log.append('turn/end', {});
+    expect(forkBoundaryOf(log.events, 'm1')).toBe(last.seq);
+  });
+});

@@ -7,7 +7,7 @@
  * **零憑證、零外部連線**：agent 是空殼，冷讀由測試給。
  */
 
-import { mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdtemp, open, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -33,6 +33,7 @@ import { createWireClient, THREAD_AT_CAPACITY } from '@nexus/wire';
 
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
+import type { LogFileHandle, OpenLogFile } from './jsonl-session-store.js';
 import { findSession } from './session-files.fixture.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -177,18 +178,54 @@ function flakyStore(inner: SessionStore, failAppends: number): SessionStore {
 }
 
 /**
+ * 開日誌照真的開（header 已經發佈、日誌已經 `wx` 建出來），**第一個新日誌把手的第一次 `writeFile`** 才拋 ENOSPC：
+ * 這才是「實體化了、第一批寫不進去」（#1580 刀 2a 審查 B1）。
+ */
+function firstLogWriteFails(): OpenLogFile {
+  let left = 1;
+  return async (path, flags, mode) => {
+    const handle = await open(path, flags, mode);
+    if (flags !== 'wx') return handle as unknown as LogFileHandle;
+    return new Proxy(handle, {
+      get(target, key) {
+        if (key === 'writeFile' && left > 0) {
+          return async () => {
+            left -= 1;
+            throw Object.assign(new Error('ENOSPC: no space left on device, write'), {
+              code: 'ENOSPC',
+            });
+          };
+        }
+        const value: unknown = Reflect.get(target, key, target);
+        return typeof value === 'function' ? (value as () => unknown).bind(target) : value;
+      },
+    }) as unknown as LogFileHandle;
+  };
+}
+
+/**
  * 子 thread 接**真的**落盤（`attachSessionPersistence`＋暫存目錄上的 jsonl store）：量「組裝失敗磁碟上不留檔」只能用真的，
  * 替身的 `dispose` 不排空，量不出收尾會不會把 seed 寫出去。
  */
-async function realRig(options: { readonly failAppends?: number; readonly failTitles?: number }) {
+async function realRig(options: {
+  readonly failAppends?: number;
+  readonly failTitles?: number;
+  readonly openLog?: OpenLogFile;
+}) {
   const directory = await mkdtemp(join(tmpdir(), 'nexus-fork-real-'));
   temporary.push(directory);
-  const store = flakyStore(openJsonlSessionStore({ directory }), options.failAppends ?? 0);
+  const store = flakyStore(
+    openJsonlSessionStore({
+      directory,
+      ...(options.openLog !== undefined && { openLog: options.openLog }),
+    }),
+    options.failAppends ?? 0,
+  );
   let titles = options.failTitles ?? 0;
-  let next = 0;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
-    newThreadId: () => `child-${String((next += 1))}`,
+    // 每次都是同一個 id：失敗那一次要是在後端留下任何東西（pending、檔），重試的 `create` 就會撞上它。
+    newThreadId: () => 'child',
     readStoredThread: async (id) => (id === 'src' ? cold('src', sourceEvents()) : undefined),
     maxThreads: 1,
     createAgent: async (_threadId: string, fork?: ThreadForkSeed) => ({
@@ -261,6 +298,11 @@ describe('thread.fork', () => {
         error: 'invalid_argument',
       });
     }
+    // 兩個條件同時不成立時，排在前面的那個贏：參數壞＋來源不存在 → 參數。
+    expect(await raw('ghost', 'thread.fork', {})).toMatchObject({
+      type: 'error',
+      error: 'invalid_argument',
+    });
     expect(await client.threadFork('ghost', 'm1')).toEqual({
       kind: 'ok',
       result: { ok: false, error: { code: 'thread_not_found' } },
@@ -347,6 +389,11 @@ describe('thread.fork', () => {
       type: 'error',
       error: THREAD_AT_CAPACITY,
     });
+    // 名額滿＋切不出來：切點在名額之前判，回 fork_unavailable，不是 thread_at_capacity。
+    expect(await client.threadFork('src', 'nope')).toEqual({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'fork_unavailable' } },
+    });
     expect(record.forks).toEqual([]);
     expect(handler.threadCount()).toBe(1);
   });
@@ -389,11 +436,12 @@ describe('thread.fork', () => {
   });
 
   for (const [name, failure] of [
-    ['接上落盤之後的一步失敗', { failTitles: 1 }],
-    ['第一次排空寫不進去', { failAppends: 1 }],
+    ['接上落盤之後的一步失敗', () => ({ failTitles: 1 })],
+    ['第一次排空在交給把手之前就被拒（還沒實體化）', () => ({ failAppends: 1 })],
+    ['第一次排空實體化了、第一批寫不進去（B1）', () => ({ openLog: firstLogWriteFails() })],
   ] as const) {
-    it(`真的落盤、${name}：磁碟上不留子 thread 的檔、名額回到原數；重試成功，檔才出現`, async () => {
-      const { directory, handler, client } = await realRig(failure);
+    it(`真的落盤、${name}：磁碟上不留子 thread 的檔、名額回到原數；同一個 id 重試成功，檔才出現`, async () => {
+      const { directory, handler, client } = await realRig(failure());
       const refused = await client.threadFork('src', 'm1');
       expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
       expect(handler.threadCount()).toBe(0);
@@ -403,8 +451,9 @@ describe('thread.fork', () => {
 
       const outcome = await client.threadFork('src', 'm1');
       if (outcome.kind !== 'ok' || !outcome.result.ok) throw new Error(JSON.stringify(outcome));
+      expect(outcome.result.value.threadId).toBe('child');
       expect(handler.threadCount()).toBe(1);
-      const child = await findSession(directory, outcome.result.value.threadId);
+      const child = await findSession(directory, 'child');
       expect(child?.header).toMatchObject({ parentSession: 'src', isSeeded: true });
     });
   }
@@ -434,5 +483,43 @@ describe('thread.fork', () => {
     });
     // 切點仍是那顆標記。
     expect(inheritedEventCount(seed)).toBe(4);
+  });
+
+  it('切點上 next-step 也還排著（Q2 (a)）：兩條各補一顆取消，不只清 next-turn', async () => {
+    // `next-step` 的件在一輪收尾時可能還留著（`thread-pump.ts` 的 `#takeSteps`）。
+    const log = new SessionLog('src');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    log.append('assistant/message', { message: reply('m1', '好') });
+    log.append('inbox/spliced', {
+      target: 'next-step',
+      start: 0,
+      inserted: [
+        { id: 's1', text: '順便看這個', source: { kind: 'user' } },
+        { id: 's2', text: '還有這個', source: { kind: 'user' } },
+      ],
+    });
+    log.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{ id: 'q1', text: '下一句', source: { kind: 'user' } }],
+    });
+    log.append('turn/end', {});
+    const { client, record } = rig({
+      readStoredThread: async (id) => (id === 'src' ? cold('src', log.events) : undefined),
+    });
+    expect(await client.threadFork('src', 'm1')).toMatchObject({ result: { ok: true } });
+    const seed = record.forks[0]!.fork.seed;
+    const marker = seed.findIndex((event) => event.type === 'session/end-seed');
+    const added = seed.slice(marker + 1);
+    expect(added.map((event) => (event.data as { target: string }).target).sort()).toEqual([
+      'next-step',
+      'next-turn',
+    ]);
+    expect(
+      added.find((event) => (event.data as { target: string }).target === 'next-step'),
+    ).toMatchObject({
+      data: { start: 0, removedCount: 2, inserted: [], outcome: 'canceled' },
+    });
+    expect(inheritedEventCount(seed)).toBe(marker);
   });
 });

@@ -255,8 +255,10 @@ describe('分叉的 root（#1580）', () => {
   });
 });
 
+// 這兩條量的是「磁碟上沒寫」，不量訂閱與排空者有沒有退掉：退掉之後協調器已經 disposed、`byLog` 也清了，
+// 留著的 listener 對磁碟沒有可觀察的差別（#1580 刀 2a 審查的不擋項）。
 describe('丟掉（#1580：還沒發佈的分叉子 thread 組裝失敗）', () => {
-  it('只關把手、不排空：窗口到期也不寫，之後的事件不收，再 dispose 是 no-op', async () => {
+  it('只關把手、不排空：窗口到期不寫，之後進來的事件也沒寫出去，再 dispose 是 no-op', async () => {
     vi.useFakeTimers();
     try {
       const log = new SessionLog('s');
@@ -277,7 +279,7 @@ describe('丟掉（#1580：還沒發佈的分叉子 thread 組裝失敗）', () 
     }
   });
 
-  it('接在註冊表上：每一份都丟、退掉排空者；呼叫當下同步退出，不等關把手', async () => {
+  it('接在註冊表上：每一份都丟；呼叫之後窗口到期、全域排空都不寫，這一點當下就成立，不等關把手', async () => {
     vi.useFakeTimers();
     try {
       const sessions = new SessionRegistry('root-abandon');
