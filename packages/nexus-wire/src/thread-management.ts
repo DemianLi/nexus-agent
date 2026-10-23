@@ -1,8 +1,9 @@
 /**
- * 會話的釘選、封存與改名上線的形狀（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
+ * 會話的釘選、封存、改名與分叉上線的形狀（[#633](https://github.com/DemianLi/nexus-agent/issues/633)、[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）。
  *
- * **契約**：型別、method 名字、client 方法。**五支 server 端都已實作**（#633：釘選與封存是第一張，改名是第二張）。釘選與封存要整理檔，沒接落盤的
+ * **契約**：型別、method 名字、client 方法。**前五支 server 端都已實作**（#633：釘選與封存是第一張，改名是第二張）。釘選與封存要整理檔，沒接落盤的
  * server 回 `not_supported`，web 據那個碼把這幾個動作藏起來（或退回瀏覽器本地）；改名寫在會話日誌上，不依賴整理檔。
+ * **分叉（`thread.fork`）只有契約**：#1580 刀 1 先合，server 一律回 `not_supported`，刀 2 接上實作。
  *
  * 照 dsh 的 `workspace-controller` 與 `session-controller`（`packages/api/workspace-controller/src/{commands,types}.ts`、
  * `packages/api/session-controller/src/{commands,types}.ts`，`5badb150`）：
@@ -17,6 +18,9 @@
  * - **改名**把使用者的標題追加成日誌事件，回受理後的標題與事件的 `seq`（dsh `SessionRenameValue { title, seq }`）。標題不合法
  *   （dsh `session/title-invalid`）：回 `title_invalid`，標題不變。標題是正規化後的（去控制字元、空白收成一格、截到 `maxTitleBytes`），
  *   **釘住**：之後的自動標題不會蓋過它。
+ * - **分叉**照 dsh `session.fork`（`packages/api/session-controller/src/commands.ts:220-310`、`types.ts:329-341`，`687f282e`）：
+ *   把指名那一輪（含）之前的對話複製成一條新 thread，回新 thread 的 id（dsh `SessionForkValue { sessionId }`）；新 id 一律由 server
+ *   產生，請求不能指定。分出來之後兩條各走各的，列表上新的那條帶 `parentThreadId`（`protocol.ts` 的 `ThreadSummary`）。
  *
  * ## 與 dsh 的偏離
  *
@@ -25,6 +29,17 @@
  * 2. **集合也跟著列表走**：`GET /threads` 的結果多兩個選填集合（{@link ThreadListSets}），開頁面就拿得到，不必為了畫側欄先打五支 RPC。
  *    dsh 的對應物是 `WorkspaceBaseline`（重連時的完整基線，同樣帶 `archivedSessionIds` 與 `pinnedSessionIds`）。沒有實作的 server 不送這兩格。
  * 3. **還沒有推送**：dsh 的 workspace feed 會把變更推給所有分頁。這一版只有 RPC 回應與列表；要多分頁即時同步時再加（向後相容）。
+ * 4. **分叉用 `messageId` 指名切點，不用 `atSeq`**（理由 1：wire 表達不出來）。wire 刻意不帶耐久 seq（`protocol.ts` 的歷史
+ *    `Event`、[#89](https://github.com/DemianLi/nexus-agent/issues/89)），web 拿不到 dsh 按鈕送的那顆 `turn/end` 的 seq。退到：指名那一輪
+ *    root 回覆的 `messageId`（即時與歷史都穩定，評分指名的也是它），由 server 換算成同一輪的 `turn/end`——換算之後切點與 dsh 的 web
+ *    入口相同。代價是沒有切在一輪中間的分叉。**不收「省略切點」**（dsh 由 Host 取最新完成那一輪）：範圍沒做，不是形狀不同。
+ *    **失敗收尾的那一輪由 server 拒**（`fork_unavailable`），這一點也是 `messageId` 帶出來的：dsh 的 server 只看 `atSeq` 在不在
+ *    （`commands.ts:251-260`），不給失敗的輪分支是 UI 的判斷（`turn-tail.ts:76-98` 的 `branchUnavailable`，範圍也更廣）；我們由 server
+ *    換算切點，所以由 server 判。
+ * 5. **分叉的業務失敗走成功回應**，同這一族其他幾支；dsh 的 `session/not-found`、`session/fork-unavailable` 都是拋出的錯誤。
+ *    名額滿了不在這裡，**dsh 也沒有這個碼**：dsh 的 fork 不檢查名額，名額是 nexus 的 thread 數上限（#1476，偏離登記在
+ *    `wire-handler.ts` 的 `threadFor`，理由 2）。所以沿用那道上限整條線共用的 `thread_at_capacity`（`protocol.ts` 的
+ *    `THREAD_AT_CAPACITY`，`ErrorResponse`），任何會新建 thread 的路滿了都回它。
  *
  * 回應都是 `{ ok: true, value }`／`{ ok: false, error: { code } }`，業務失敗走成功回應，`ErrorResponse` 只給「這條線收不了」
  * （含 `not_supported`），同 {@link ../model-selection.ts | 模型選擇} 與回饋那四支。
@@ -32,13 +47,14 @@
  * @module
  */
 
-/** 這個檔定義的五支 method。 */
+/** 這個檔定義的六支 method。 */
 export const THREAD_MANAGEMENT_METHODS = [
   'thread.pin',
   'thread.unpin',
   'thread.archive',
   'thread.unarchive',
   'thread.rename',
+  'thread.fork',
 ] as const;
 
 export type ThreadManagementMethod = (typeof THREAD_MANAGEMENT_METHODS)[number];
@@ -97,12 +113,23 @@ export interface ThreadRenameCommand {
   readonly params: { readonly title: string };
 }
 
+export interface ThreadForkCommand {
+  readonly id: number;
+  readonly method: 'thread.fork';
+  /**
+   * 切點：那一輪 root 回覆的 `messageId`（`AiEntry.messageId`）。server 換算成同一輪的 `turn/end`，那一輪（含）之前的都帶過去；
+   * 同一輪的哪一則回覆都換算到同一顆。
+   */
+  readonly params: { readonly messageId: string };
+}
+
 export type ThreadManagementCommand =
   | ThreadPinCommand
   | ThreadUnpinCommand
   | ThreadArchiveCommand
   | ThreadUnarchiveCommand
-  | ThreadRenameCommand;
+  | ThreadRenameCommand
+  | ThreadForkCommand;
 
 /** 沒有這條會話（dsh `session/not-found`）。 */
 export type ThreadNotFound = { readonly code: 'thread_not_found' };
@@ -161,3 +188,15 @@ export type ThreadUnarchiveResult = {
 export type ThreadRenameResult =
   | { readonly ok: true; readonly value: { readonly title: string; readonly seq: number } }
   | { readonly ok: false; readonly error: ThreadRenameError };
+
+/**
+ * 分叉失敗的原因：沒有這條會話，或指名的那一則分不出去（dsh `session/fork-unavailable`）——它不是這條 thread 的 root 回覆
+ * （使用者的話、子代理的回覆、找不到這個 `messageId`）、它那一輪還沒收尾，或那一輪是失敗收尾的（dsh 的分支鈕對失敗收尾的輪不給，
+ * `turn-tail.ts` 的 `branchUnavailable`）。
+ */
+export type ThreadForkError = ThreadNotFound | { readonly code: 'fork_unavailable' };
+
+/** 分叉的結果：新 thread 的 id（server 產生）。 */
+export type ThreadForkResult =
+  | { readonly ok: true; readonly value: { readonly threadId: string } }
+  | { readonly ok: false; readonly error: ThreadForkError };

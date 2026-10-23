@@ -64,17 +64,20 @@ describe('每一支未實作的方法都回 not_supported', () => {
       expect([...THREAD_MANAGEMENT_METHODS, SUBAGENT_LIST_METHOD].sort()).toEqual([
         'subagent.list',
         'thread.archive',
+        'thread.fork',
         'thread.pin',
         'thread.rename',
         'thread.unarchive',
         'thread.unpin',
       ]);
       // `thread.rename` 不在這裡：它寫在會話日誌上、不依賴整理檔，已有真的行為測試（`thread-rename-wire.test.ts`）。
+      // `thread.fork` 是 #1580 刀 1：只有契約，刀 2 接上實作時這一行換成真的行為測試。
       const outcomes = [
         await client.threadPin('t'),
         await client.threadUnpin('t'),
         await client.threadArchive('t', { stopActivity: true }),
         await client.threadUnarchive('t'),
+        await client.threadFork('t', 'm-1'),
       ];
       for (const outcome of outcomes) expect(outcome).toMatchObject(NOT_SUPPORTED);
       for (const outcome of outcomes) {

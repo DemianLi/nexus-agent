@@ -7,6 +7,12 @@ import { WireRejectedError } from './rejected-error.js';
 import { encodeSseFrame } from './sse.js';
 import { UplinkTransportError } from './uplink-error.js';
 import type { Event, WireErrorCode, WireErrorResponse } from './protocol.js';
+import type {
+  ThreadForkError,
+  ThreadForkResult,
+  ThreadRenameError,
+  ThreadRenameResult,
+} from './thread-management.js';
 
 /**
  * 瀏覽器那一端。
@@ -91,6 +97,36 @@ describe('GET /threads 的釘選與封存集合（#633）', () => {
       expect(result).not.toHaveProperty('pinnedThreadIds');
       expect(result.archivedThreadIds).toEqual(['c']);
     }
+  });
+});
+
+describe('GET /threads 每一列的分叉來源（#1580）', () => {
+  const listRow = async (extra: Record<string, unknown>) => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async () =>
+        Response.json({
+          type: 'success',
+          result: {
+            items: [{ threadId: 'a', updatedAt: 1, running: false, blank: false, ...extra }],
+            unreadable: 0,
+          },
+        }),
+    });
+    return client.listThreads();
+  };
+
+  it('server 帶了 parentThreadId，列裡就有；沒帶就沒有這個鍵', async () => {
+    const forked = await listRow({ parentThreadId: 'p' });
+    if (forked.kind !== 'ok') throw new Error('應該是 ok');
+    expect(forked.result.items[0]?.parentThreadId).toBe('p');
+    const plain = await listRow({});
+    if (plain.kind !== 'ok') throw new Error('應該是 ok');
+    expect(plain.result.items[0]).not.toHaveProperty('parentThreadId');
+  });
+
+  it('parentThreadId 不是字串就是不認得的一列', async () => {
+    await expect(listRow({ parentThreadId: 3 })).rejects.toThrow('不認得的一列');
   });
 });
 
@@ -799,5 +835,28 @@ describe('WireErrorResponse 的型別', () => {
     };
     expect(typeof narrow).toBe('function');
     expect(errorResponse(1, 'invalid_argument', '壞了').message).toBe('壞了');
+  });
+});
+
+/**
+ * 型別層的釘子（#1580 審查 N1）：client 把結果原樣轉交、web 收的錯誤碼是 `string`，所以碼拼錯或成功值的鍵改名，
+ * 執行期測試與下游 tsc 都還是綠的。這一組由 `pnpm -r run typecheck` 檢；跑起來只是無害的空操作。
+ */
+describe('thread.rename／thread.fork 結果的型別', () => {
+  it('分叉：錯誤碼恰好兩個，成功值只有 threadId', () => {
+    expectTypeOf<ThreadForkError['code']>().toEqualTypeOf<
+      'thread_not_found' | 'fork_unavailable'
+    >();
+    expectTypeOf<Extract<ThreadForkResult, { ok: true }>['value']>().toEqualTypeOf<{
+      readonly threadId: string;
+    }>();
+  });
+
+  it('改名：錯誤碼恰好兩個，成功值是 title 與 seq', () => {
+    expectTypeOf<ThreadRenameError['code']>().toEqualTypeOf<'thread_not_found' | 'title_invalid'>();
+    expectTypeOf<Extract<ThreadRenameResult, { ok: true }>['value']>().toEqualTypeOf<{
+      readonly title: string;
+      readonly seq: number;
+    }>();
   });
 });
