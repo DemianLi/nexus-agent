@@ -177,8 +177,8 @@ interface CallRecord {
   searchError: SearchErrorCode | undefined;
   /** backend 的讀寫改失敗了，是哪一種（{@link noteFsError}）。 */
   fsError: FsErrorCode | undefined;
-  /** 搜尋成功、但有話要補在結果後面（{@link noteSearchNotice}）。 */
-  searchNotice: string | undefined;
+  /** 搜尋成功、但這次呼叫累計有幾條路徑讀不到而被略過（{@link noteSearchSkipped}）。 */
+  searchSkipped: number;
 }
 
 /**
@@ -218,16 +218,20 @@ export function noteSearchError(code: SearchErrorCode): void {
 }
 
 /**
- * 搜尋成功了，但結果不完整、要讓模型知道（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）：backend 在回結果之前
- * 叫它，`wrapToolCall` 在 `grep`／`glob` 成功的結果後面接上這一句。基座的 `GrepResult`／`GlobResult` 沒有地方放這種話
- * （`truncated` 會讓基座接上「raise max_count」，說的是別的事），所以走跟 {@link noteSearchError} 同一條載體。
- * 一次工具呼叫裡叫多次時，最後一次算數。不在任何一次工具呼叫裡時什麼都不做。
+ * 搜尋成功了，但有路徑讀不到、被略過（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）：backend 在回結果之前
+ * 叫它，`wrapToolCall` 在 `grep`／`glob` 成功的結果後面接上一句「N 條路徑讀不到、已略過」。基座的 `GrepResult`／`GlobResult`
+ * 沒有地方放這種話（`truncated` 會讓基座接上「hit the maximum match count」，說的是別的事），所以走跟 {@link noteSearchError}
+ * 同一條載體。
  *
- * @param text - 一句話，不含括號與換行（接上去時由 middleware 包括號）。
+ * **記的是數字，句子在 middleware 組**：基座的 `CompositeBackend.grep('/')` 一次工具呼叫會依序搜預設 backend 與每一條 route，
+ * 每一個都可能略過一些；數字累加，各自記一句的話後面的會蓋掉前面的、N 少算。也讓 core 不必帶任意文字。
+ * 不在任何一次工具呼叫裡、或 `count` 不是正整數時什麼都不做。
+ *
+ * @param count - 這一次 backend 呼叫略過幾條路徑。
  */
-export function noteSearchNotice(text: string): void {
+export function noteSearchSkipped(count: number): void {
   const record = currentCall.getStore();
-  if (record !== undefined) record.searchNotice = text;
+  if (record !== undefined && Number.isInteger(count) && count > 0) record.searchSkipped += count;
 }
 
 /**
@@ -299,15 +303,20 @@ function withSandboxCode<T>(result: T, record: CallRecord): T {
   return markToolError(result, { name: 'FsError', code: FS_SANDBOX_DENIED });
 }
 
+/** 略過的路徑數 → 接在結果後面的那一句。只講數量，路徑是主機上別人的檔名。 */
+function skippedNotice(count: number): string {
+  const noun = count === 1 ? 'path was' : 'paths were';
+  return `${String(count)} ${noun} unreadable (permission denied) and skipped; results cover only the readable files`;
+}
+
 /**
- * 搜尋成功而 backend 說了話（{@link noteSearchNotice}）：把那句接在基座排好的結果後面，其餘每一格原樣帶過去。
+ * 搜尋成功而 backend 記了略過幾條路徑（{@link noteSearchSkipped}）：把那句接在基座排好的結果後面，其餘每一格原樣帶過去。
  * 只管 `grep`／`glob`；錯誤的結果、不是文字的內容（文字區塊以外的形狀）原樣交出，不猜。
  */
-function withSearchNotice<T>(result: T, toolName: string, record: CallRecord): T {
-  const notice = record.searchNotice;
-  if (notice === undefined || (toolName !== 'grep' && toolName !== 'glob')) return result;
+function withSkippedNotice<T>(result: T, toolName: string, record: CallRecord): T {
+  if (record.searchSkipped === 0 || (toolName !== 'grep' && toolName !== 'glob')) return result;
   if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
-  const suffix = `\n\n(${notice})`;
+  const suffix = `\n\n(${skippedNotice(record.searchSkipped)})`;
   let content: ToolMessage['content'];
   if (typeof result.content === 'string') {
     content = `${result.content}${suffix}`;
@@ -348,14 +357,14 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
         signal: (request.runtime as { readonly signal?: AbortSignal } | undefined)?.signal,
         searchError: undefined,
         fsError: undefined,
-        searchNotice: undefined,
+        searchSkipped: 0,
       };
       const result = await currentCall.run(record, () => handler(request));
       const toolName = resolveToolName(request);
       const method = FS_TOOL_PRIMARY_METHOD[toolName];
       if (method === undefined) return withSandboxCode(result, record);
       if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) {
-        return withSearchNotice(result, toolName, record);
+        return withSkippedNotice(result, toolName, record);
       }
       const error = record.sandboxDenied
         ? { name: 'FsError', code: FS_SANDBOX_DENIED }

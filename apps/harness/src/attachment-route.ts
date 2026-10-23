@@ -128,12 +128,6 @@ function visibleOf(events: readonly SessionEvent[] | undefined): Visible {
  * 唯讀、按 thread 收窄的附件路由。根是附件儲存的 `files` 目錄；能看到的只有 {@link AttachmentScope} 說這條 thread 引用過的檔案。
  */
 export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
-  /**
-   * **讀不到的路徑不放行**（#1704 的偏離只給工作區）：這個根裡讀不到的檔是別的 thread 的別名檔（同一個內容雜湊目錄），
-   * 連「有幾個」都不交給模型（#1822）。維持 dsh 的做法：整次失敗，原始訊息只進伺服器日誌。
-   */
-  protected override readonly tolerateUnreadable = false;
-
   readonly #scope: AttachmentScope;
   readonly #warn: (line: string) => void;
 
@@ -148,6 +142,9 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     super({
       rootDir: options.rootDir,
       mode: 'read-only',
+      // **讀不到的路徑不放行**（#1704 的偏離只給工作區）：這個根裡讀不到的檔是別的 thread 的別名檔（同一個內容雜湊目錄），
+      // 連「有幾個」都不交給模型（#1822）。維持 dsh 的做法：整次失敗，原始訊息只進伺服器日誌。
+      tolerateUnreadable: false,
       ...(options.ripgrep === undefined ? {} : { ripgrep: options.ripgrep }),
     });
     this.#scope = options.scope;

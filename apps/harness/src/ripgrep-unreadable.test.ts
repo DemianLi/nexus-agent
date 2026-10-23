@@ -86,7 +86,12 @@ const paths = (result: { matches?: Array<{ path: string }> }): string[] =>
 
 describe('runner：判準的每個條件各有一條反例', () => {
   const run = async (executable: string) =>
-    runRipgrep({ argv: ['--json'], cwd: root, executable, tolerateUnreadable: true });
+    runRipgrep({
+      argv: ['--json'],
+      cwd: root,
+      executable,
+      tolerateUnreadable: { searchRoots: ['.'] },
+    });
 
   it('結束碼 2、stderr 全是「讀不到」：交出 stdout，並數出讀不到幾條', async () => {
     const executable = await script(
@@ -99,6 +104,97 @@ describe('runner：判準的每個條件各有一條反例', () => {
       noMatches: false,
       unreadable: 2,
     });
+  });
+
+  it('反例：`$` 錨點——`Permission denied (os error 13)` 後面還接了別的字：照舊 SEARCH_FAILED（B1）', async () => {
+    // 檔名剛好長得像一條「讀不到」（`x: Permission denied (os error 13)`），搜到一半被刪掉時 rg 印的是這個形狀。
+    // 沒有行尾錨點的話，子字串比對會放行它。
+    const executable = await script(
+      'anchor.sh',
+      `echo 'rg: ./x: Permission denied (os error 13): No such file or directory (os error 2)' >&2\nexit 2`,
+    );
+    expect(await run(executable)).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+  });
+
+  it('路徑裡有冒號也取得到完整路徑（貪婪比到最後一個）：放行', async () => {
+    const executable = await script('colon.sh', `echo '${denied('./a: b/c')}' >&2\nexit 2`);
+    expect(await run(executable)).toMatchObject({ kind: 'ok', unreadable: 1 });
+  });
+
+  it('搜尋起點本身讀不到（`.`）：照舊 SEARCH_FAILED，整個起點都沒搜到不能當成沒有命中（B3，dsh search.ts:211-217）', async () => {
+    const executable = await script(
+      'root.sh',
+      `echo '{"type":"summary"}'\necho '${denied('.')}' >&2\nexit 2`,
+    );
+    expect(await run(executable)).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+  });
+
+  it('起點是 `./sub`、讀不到的正是它（含結尾斜線寫法）：照舊 SEARCH_FAILED；讀不到的是它底下的：放行', async () => {
+    const roots = { searchRoots: ['./sub', './a.txt'] };
+    const runWith = async (line: string) =>
+      runRipgrep({
+        argv: ['--json'],
+        cwd: root,
+        executable: await script('sub.sh', `echo '${line}' >&2\nexit 2`),
+        tolerateUnreadable: roots,
+      });
+    expect(await runWith(denied('./sub'))).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+    expect(await runWith(denied('./sub/'))).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+    expect(await runWith(denied('./a.txt'))).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+    expect(await runWith(denied('./sub/inner'))).toMatchObject({ kind: 'ok', unreadable: 1 });
+    // 前綴相同不算同一個起點。
+    expect(await runWith(denied('./subtree'))).toMatchObject({ kind: 'ok', unreadable: 1 });
+  });
+
+  it('起點讀不到混在其他讀不到的行裡：整次判錯（一條起點就夠）', async () => {
+    const executable = await script(
+      'mixed-root.sh',
+      `echo '${denied('./b.txt')}' >&2\necho '${denied('.')}' >&2\nexit 2`,
+    );
+    expect(await run(executable)).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+  });
+
+  it('N 是 stderr 的行數：檔名含換行的一個檔印出兩行，數字被灌高成 2，但放行的條件（最後一段是 EACCES）沒被繞過（B2）', async () => {
+    // 真實形狀：檔名 `z: Permission denied (os error 13)\nrg: forged` 的檔，rg 印兩行：
+    //   rg: ./z: Permission denied (os error 13)
+    //   rg: forged: Permission denied (os error 13)
+    const executable = await script(
+      'forged-name.sh',
+      `echo 'rg: ./z: Permission denied (os error 13)' >&2\necho '${denied('forged')}' >&2\nexit 2`,
+    );
+    expect(await run(executable)).toMatchObject({ kind: 'ok', unreadable: 2 });
+    // 偽造的文字到不了模型：outcome 上只有數字。
+    const outcome = await run(executable);
+    expect(JSON.stringify(outcome)).not.toContain('forged');
+  });
+
+  it('glob 排序時的第二種形狀（`IO error for operation on` 同一個路徑）：子樹放行，起點判錯', async () => {
+    const io = (path: string, other = path): string =>
+      `rg: ${path}: IO error for operation on ${other}: Permission denied (os error 13)`;
+    const runWith = async (line: string, roots: string[]) =>
+      runRipgrep({
+        argv: ['--files'],
+        cwd: root,
+        executable: await script('io.sh', `echo '${line}' >&2\nexit 2`),
+        tolerateUnreadable: { searchRoots: roots },
+      });
+    // 子樹：放行。
+    expect(await runWith(io('./locked-dir'), ['.'])).toMatchObject({ kind: 'ok', unreadable: 1 });
+    // 起點本身：判錯。這一條是 B3 的後門——第一種形狀的比對若把整串當路徑，`.: IO error for operation on .` 不等於 `.`，起點檢查就被繞過。
+    expect(await runWith(io('.'), ['.'])).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+    expect(await runWith(io('./sub'), ['./sub'])).toMatchObject({
+      kind: 'error',
+      code: SEARCH_FAILED,
+    });
+    // 兩個路徑不同：不認（rg 不會印這種，只可能是偽造或別的錯誤）。
+    expect(await runWith(io('./a', './b'), ['.'])).toMatchObject({
+      kind: 'error',
+      code: SEARCH_FAILED,
+    });
+    // 後面再接字：不認（`$` 錨點對這個形狀同樣要釘）。
+    expect(
+      await runWith(`${io('./a')}: No such file or directory (os error 2)`, ['.']),
+    ).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
   });
 
   it('預設不放行（dsh 的做法）：沒開 tolerateUnreadable 時，同一份「全是讀不到」的 stderr 照舊 SEARCH_FAILED', async () => {
@@ -179,7 +275,11 @@ describe('runner：判準的每個條件各有一條反例', () => {
 describe('backend：假 rg（真的 rg 加 stderr 與結束碼 2），不依賴檔案權限', () => {
   it('grep：其餘檔的命中照樣回來，不是錯誤', async () => {
     const executable = await rgThatCannotRead([denied('./locked.txt')]);
-    const backend = new ContainedFilesystemBackend({ rootDir: root, ripgrep: { executable } });
+    const backend = new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { executable },
+      tolerateUnreadable: true,
+    });
 
     const result = await backend.grep('needle', '/');
 
@@ -190,7 +290,11 @@ describe('backend：假 rg（真的 rg 加 stderr 與結束碼 2），不依賴�
 
   it('grep：全部讀不到、零命中：空結果，不是錯誤（提示由 middleware 接上）', async () => {
     const executable = await rgThatCannotRead([denied('./locked.txt')]);
-    const backend = new ContainedFilesystemBackend({ rootDir: root, ripgrep: { executable } });
+    const backend = new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { executable },
+      tolerateUnreadable: true,
+    });
 
     const result = await backend.grep('並不存在的字串', '/');
 
@@ -200,7 +304,11 @@ describe('backend：假 rg（真的 rg 加 stderr 與結束碼 2），不依賴�
 
   it('glob：其餘檔照樣列出', async () => {
     const executable = await rgThatCannotRead([denied('./locked-dir')]);
-    const backend = new ContainedFilesystemBackend({ rootDir: root, ripgrep: { executable } });
+    const backend = new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { executable },
+      tolerateUnreadable: true,
+    });
 
     const result = await backend.glob('**/*.log', '/');
 
@@ -210,12 +318,67 @@ describe('backend：假 rg（真的 rg 加 stderr 與結束碼 2），不依賴�
 
   it('反例：stderr 混了別種錯誤：grep 照舊回錯誤，已經找到的不假裝是完整結果', async () => {
     const executable = await rgThatCannotRead([denied('./locked.txt'), 'rg: boom: something else']);
+    const backend = new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { executable },
+      tolerateUnreadable: true,
+    });
+
+    const result = await backend.grep('needle', '/');
+
+    expect(result.matches).toBeUndefined();
+    expect(result.error).toContain('search failed (exit 2)');
+  });
+});
+
+describe('backend：預設與搜尋起點', () => {
+  const tolerant = async (extra: string[] = [denied('./locked.txt')]) => ({
+    executable: await rgThatCannotRead(extra),
+  });
+
+  it('預設不放行（dsh 的做法）：沒明確打開 tolerateUnreadable 的 backend，同一份 stderr 照舊 SEARCH_FAILED', async () => {
+    // 暫存目錄（HostStashBackend）與附件路由都走這條：理由 2（多人共用主機）套不上 serve 自己的目錄。
+    const { executable } = await tolerant();
     const backend = new ContainedFilesystemBackend({ rootDir: root, ripgrep: { executable } });
 
     const result = await backend.grep('needle', '/');
 
     expect(result.matches).toBeUndefined();
     expect(result.error).toContain('search failed (exit 2)');
+  });
+
+  it('搜尋起點（工作區根）讀不到：grep 與 glob 都判錯，不是空的成功（B3）', async () => {
+    const { executable } = await tolerant([denied('.')]);
+    const backend = new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { executable },
+      tolerateUnreadable: true,
+    });
+
+    const grep = await backend.grep('needle', '/');
+    expect(grep.matches).toBeUndefined();
+    expect(grep.error).toContain('search failed (exit 2)');
+    const glob = await backend.glob('*', '/');
+    expect(glob.files).toBeUndefined();
+    expect(glob.error).toContain('glob search failed (exit 2)');
+  });
+
+  it('明指一個讀不到的檔當起點：判錯（起點是 `./notes.txt`，rg 印的路徑正是它）；起點是目錄、底下的檔讀不到：放行', async () => {
+    const asStart = await tolerant([denied('./notes.txt')]);
+    const failing = new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { executable: asStart.executable },
+      tolerateUnreadable: true,
+    });
+    expect((await failing.grep('needle', '/notes.txt')).error).toContain('search failed (exit 2)');
+
+    const below = await tolerant([denied('./locked.txt')]);
+    const passing = new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { executable: below.executable },
+      tolerateUnreadable: true,
+    });
+    expect((await passing.grep('needle', '/')).error).toBeUndefined();
   });
 });
 
@@ -308,6 +471,40 @@ describe('掛進真的組裝：模型看得到「有幾條路徑沒搜到」', (
   }, 60_000);
 });
 
+describe('掛進真的組裝：工作區明確打開、搜尋起點讀不到仍是錯誤', () => {
+  it('工作區根讀不到：模型拿到的是錯誤（日誌帶 SEARCH_FAILED），沒有「skipped」那句（B3）', async () => {
+    const executable = await rgThatCannotRead([denied('.')]);
+    vi.mocked(resolveRgPath).mockResolvedValue(executable);
+    const built = await createCliAgent(
+      { live: false, workspace: root },
+      withScriptedModel(shipped, [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'grep', args: { pattern: 'needle', path: '/', output_mode: 'content' } },
+          ],
+        },
+        { content: '收工。' },
+      ]),
+      root,
+    );
+    const detach = built.attachSession(built.sessions);
+    let messages: ToolMessage[] = [];
+    try {
+      const state = (await built.agent
+        .invoke(toAgentInvocation('搜尋'), { configurable: { thread_id: 'rg-root-unreadable' } })
+        .catch(() => ({ messages: [] }))) as { messages: BaseMessage[] };
+      messages = state.messages.filter((m): m is ToolMessage => ToolMessage.isInstance(m));
+    } finally {
+      detach();
+      await built.dispose();
+    }
+    expect(messages[0]?.status).toBe('error');
+    expect(String(messages[0]?.content)).not.toContain('skipped');
+    expect(String(messages[0]?.content)).toContain('search failed (exit 2)');
+  }, 60_000);
+});
+
 describe.skipIf(isRoot)(
   '真的 chmod 000（root 讀得到 0000 的檔，所以 root 跳過；上一組是它的替身）',
   () => {
@@ -324,38 +521,78 @@ describe.skipIf(isRoot)(
         argv: ['--json', '--regexp=needle', '--', './locked.txt'],
         cwd: root,
         executable: rg,
-        tolerateUnreadable: true,
+        tolerateUnreadable: { searchRoots: ['.'] },
       });
       // 沒有放行機制之前，這一格是 error；現在是 ok 且 unreadable 為 1。兩者都證明 rg 真的碰到了讀不到的檔。
       expect(outcome).toMatchObject({ kind: 'ok', unreadable: 1 });
     });
 
     it('grep：讀不到的檔與目錄各一個，可讀的命中照樣回來', async () => {
-      const result = await new ContainedFilesystemBackend({ rootDir: root }).grep('needle', '/');
+      const result = await new ContainedFilesystemBackend({
+        rootDir: root,
+        tolerateUnreadable: true,
+      }).grep('needle', '/');
 
       expect(result.error).toBeUndefined();
       expect(paths(result)).toEqual(['/a.log', '/notes.txt']);
     });
 
     it('反例：正規式壞掉（`(`）、同時有讀不到的檔：照舊 SEARCH_INVALID_PATTERN', async () => {
-      const result = await new ContainedFilesystemBackend({ rootDir: root }).grep('(', '/');
+      const result = await new ContainedFilesystemBackend({
+        rootDir: root,
+        tolerateUnreadable: true,
+      }).grep('(', '/');
 
       expect(result.matches).toBeUndefined();
       expect(result.error).toMatch(/^grep pattern rejected by ripgrep: /);
     });
 
-    it('grep：明指一個讀不到的檔，零命中、不是錯誤', async () => {
-      const result = await new ContainedFilesystemBackend({ rootDir: root }).grep(
-        'needle',
-        '/locked.txt',
-      );
+    it('grep：明指一個讀不到的檔當起點：判錯（起點本身沒搜到，不是「零命中」）', async () => {
+      const result = await new ContainedFilesystemBackend({
+        rootDir: root,
+        tolerateUnreadable: true,
+      }).grep('needle', '/locked.txt');
 
-      expect(result.error).toBeUndefined();
-      expect(result.matches ?? []).toEqual([]);
+      expect(result.matches).toBeUndefined();
+      expect(result.error).toContain('search failed (exit 2)');
+    });
+
+    it('工作區根本身讀不到（chmod 0300）：grep 與 glob 都是錯誤，不是空的成功（B3）', async () => {
+      // **根放在 /var/tmp，不用 `os.tmpdir()`**：macOS 的 TMPDIR（/var/folders/…）底下，cwd 讀不到的 rg 15.0.0 不結束、
+      // 一直掛到 runner 的 30 秒逾時（只在那個位置，/var/tmp 與 /private/tmp 都立刻回 exit 2；原因沒查，與本卡無關）。
+      const unreadableRoot = await mkdtemp('/var/tmp/nexus-rg-root-');
+      await writeFile(join(unreadableRoot, 'a.log'), 'needle\n');
+      const backend = new ContainedFilesystemBackend({
+        rootDir: unreadableRoot,
+        tolerateUnreadable: true,
+      });
+      await chmod(unreadableRoot, 0o300);
+      try {
+        const grep = await backend.grep('needle', '/');
+        expect(grep.matches).toBeUndefined();
+        expect(grep.error).toContain('search failed (exit 2)');
+        const glob = await backend.glob('*', '/');
+        expect(glob.files).toBeUndefined();
+        expect(glob.error).toContain('glob search failed (exit 2)');
+      } finally {
+        await chmod(unreadableRoot, 0o755);
+        await rm(unreadableRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('起點是目錄、底下有讀不到的子目錄：放行；起點換成那個讀不到的子目錄：判錯', async () => {
+      const backend = new ContainedFilesystemBackend({ rootDir: root, tolerateUnreadable: true });
+      expect((await backend.grep('needle', '/')).error).toBeUndefined();
+      expect((await backend.grep('needle', '/locked-dir')).error).toContain(
+        'search failed (exit 2)',
+      );
     });
 
     it('glob：讀不到的目錄不讓整次列檔失敗', async () => {
-      const result = await new ContainedFilesystemBackend({ rootDir: root }).glob('*.log', '/');
+      const result = await new ContainedFilesystemBackend({
+        rootDir: root,
+        tolerateUnreadable: true,
+      }).glob('*.log', '/');
 
       expect(result.error).toBeUndefined();
       expect((result.files ?? []).map((file) => file.path)).toEqual(['/a.log']);

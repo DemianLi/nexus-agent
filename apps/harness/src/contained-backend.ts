@@ -105,7 +105,7 @@ import {
   noteReadWindow,
   noteSandboxDenial,
   noteSearchError,
-  noteSearchNotice,
+  noteSearchSkipped,
   SEARCH_ABORTED,
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
@@ -175,18 +175,6 @@ function searchFailure(
 ): { readonly error: string; readonly errorCode: SearchErrorCode } {
   noteSearchError(code);
   return { error: message, errorCode: code };
-}
-
-/**
- * rg 有些路徑讀不到、其餘照常搜完時（偏離 dsh，#1704，見 `ripgrep-runner.ts` 檔頭），替這一次工具呼叫記一句，
- * 由 `fs-tool-errors.ts` 接在結果後面。**只講數量、不列路徑**：這句話原樣交給模型，路徑是主機上別人的檔名。
- */
-function noteUnreadable(count: number): void {
-  if (count === 0) return;
-  const noun = count === 1 ? 'path was' : 'paths were';
-  noteSearchNotice(
-    `${String(count)} ${noun} unreadable (permission denied) and skipped; results cover only the readable files`,
-  );
 }
 
 /** dsh `GLOB_VCS_EXCLUDES`（`glob.ts:21-107`，`687f282e`）：版本控制的中繼目錄，`glob` 一律不列。 */
@@ -449,6 +437,12 @@ export interface ContainedFilesystemBackendOptions {
    * 名字與預設照 dsh 的 `readStreamMinSize`（`packages/fs/tool-fs/src/read.ts:21`、`index.ts:42`）。
    */
   readonly streamMinSize?: number;
+  /**
+   * 搜尋（`grep`／`glob`）時，起點底下有些路徑讀不到，其餘照常交出並註明數量（偏離 dsh，理由 2，[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）。
+   * **預設 `false`＝ dsh 的做法（整次失敗）**：只有多人共用主機上的使用者工作區明確打開；暫存目錄是 serve 自己的目錄，附件路由的
+   * 讀不到的檔屬於別的 thread（#1822），都不開。判準與起點讀不到的規則見 `ripgrep-runner.ts` 檔頭。
+   */
+  readonly tolerateUnreadable?: boolean;
 }
 
 /** 讀檔改用串流的檔案大小門檻（位元組）。同 dsh 的 `STREAM_MIN_SIZE`（`read.ts:21`）。 */
@@ -472,10 +466,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private readonly grants: SandboxGrantLedger | undefined;
 
   /**
-   * 搜尋時有些路徑讀不到，要不要照樣交出其餘的結果（偏離 dsh，#1704，見 `ripgrep-runner.ts` 檔頭）。工作區是多人共用主機上
-   * 的目錄，預設開；子類的根不是「使用者的檔案」、而讀不到的路徑本身就不該交給模型時關掉（附件路由，#1822）。
+   * 搜尋時起點底下有些路徑讀不到，要不要照樣交出其餘的結果（偏離 dsh，#1704，見 `ripgrep-runner.ts` 檔頭）。**預設 `false`
+   * ＝ dsh 的做法**，只有多人共用主機上的工作區明確打開（`assembly-root.ts`）；讀不到的是搜尋起點本身時不論如何都判錯。
    */
-  protected readonly tolerateUnreadable: boolean = true;
+  protected readonly tolerateUnreadable: boolean;
 
   /** 只給測試用的 `rg` 接縫；正式組裝是 `undefined`。 */
   private readonly ripgrepInternals: RipgrepInternals | undefined;
@@ -504,6 +498,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
     this.grants = options.grants;
     this.ripgrepInternals = options.ripgrep;
+    this.tolerateUnreadable = options.tolerateUnreadable === true;
     this.atomicInternals = options.atomicInternals;
     this.streamMinSize = options.streamMinSize ?? READ_STREAM_MIN_SIZE;
   }
@@ -916,11 +911,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       ],
       cwd: this.cwd,
       signal: currentToolCallSignal(),
-      tolerateUnreadable: this.tolerateUnreadable,
+      ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
     });
     if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
-    noteUnreadable(outcome.unreadable);
+    noteSearchSkipped(outcome.unreadable);
     return applyGrepMaxCount({
       result: { matches: this.parseRipgrepJson(outcome.stdout) },
       maxCount: maxCount ?? null,
@@ -982,11 +977,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       cwd: this.cwd,
       tool: 'glob',
       signal,
-      tolerateUnreadable: this.tolerateUnreadable,
+      ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
     });
     if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
-    noteUnreadable(outcome.unreadable);
+    noteSearchSkipped(outcome.unreadable);
 
     const relatives: string[] = [];
     for (const entry of outcome.stdout.split('\0')) {
