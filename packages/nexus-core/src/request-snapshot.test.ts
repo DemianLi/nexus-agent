@@ -156,6 +156,28 @@ describe('拷不動的參數不再靜靜丟掉（#1731，照 dsh snapshotJsonVal
     expect(((thrown as Error).cause as Error).message).toBe('讀不了');
   });
 
+  it('config.extra 頂層是 undefined 的鍵：略過，不拋、也不進 extra（那一格沒有值，供應商收不到）', () => {
+    const { header } = extractRequest(messages, { model: 'm', gone: undefined, kept: 1 }, {});
+    expect(header.config.extra).toEqual({ kept: 1 });
+    expect(extractRequest(messages, { model: 'm', gone: undefined }, {}).header.config).toEqual({
+      model: 'm',
+    });
+  });
+
+  it('已知多報：最深處的 Date 在 JSON 往返後是字串，量法仍算它一層（fail-closed，工具 schema 實務上沒有 Date）', () => {
+    // 596 層物件加最裡面一個 Date：量成 597 層而拒；往返後只剩 596 層、`append` 其實收得下。
+    let value: Record<string, unknown> = { at: new Date(0) };
+    for (let layer = 1; layer < 596; layer++) value = { next: value };
+    expect(() => extractRequest(messages, { tools: [toolOf('dated', value)] }, {})).toThrow(
+      SessionEventDepthError,
+    );
+    const roundTripped = JSON.parse(JSON.stringify(value)) as unknown;
+    const header = { config: {}, tools: [{ name: 'dated', parameters: roundTripped }] };
+    expect(() =>
+      new SessionLog('d').append('request/header', { header, reason: 'initial' }),
+    ).not.toThrow();
+  });
+
   it('JSON 本來就丟的照舊（巢狀裡的 undefined、函式）：供應商收到的就是那樣，不算拷不動', () => {
     const { header } = extractRequest(
       messages,

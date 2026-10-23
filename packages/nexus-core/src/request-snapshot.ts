@@ -79,11 +79,16 @@
  * 錯經 {@link ./model-calls.ts} 記成 `model/end{outcome:'error'}` 往外拋；它沒有回報碼，{@link ./stream-retry.ts} 不重打，同 dsh。
  * 基準只在**記成功之後**才前進（dsh 的 `requestHeaderLogged` 也是寫成功才設），所以下一次呼叫會再試、第一份照樣是 `initial`。
  *
- * 兩顆的寫入順序是先 `request/system` 後 `request/header`：header 寫不進去時，日誌上已經有這次的 `request/system`，它指回的那次
- * 呼叫 `model/end` 是 `outcome:'error'`、沒有送出。形狀同 dsh：`step()` 先寫 `system/message`（`agent.ts:423`）與 `user/message`
+ * 兩顆的寫入順序是先 `request/system` 後 `request/header`：**`append` 寫 header 時拋**（含超過深度上限），日誌上已經有這次的
+ * `request/system`，它指回的那次呼叫 `model/end` 是 `outcome:'error'`、沒有送出。形狀同 dsh：`step()` 先寫 `system/message`（`agent.ts:423`）與 `user/message`
  * （`:430-439`），再寫 `request/header`（`:637-650`），header 寫不進去時那一步的 system 與 user 一樣留在日誌上。dsh 的不變量是
  * 「送出的必定在送出之前就在日誌上」，不是「日誌上的必定被送出」；讀 `request/system` 的地方取的是最近（生效）的那一份
  * （`packages/nexus-plugin-trajectory/src/trajectory.ts` 的 `noteSnapshot`、`apps/harness/src/log-derived-history.fixture.ts`）。
+ *
+ * **已知差異（#1731）：抽取階段拋的，連 `request/system` 都不寫。** {@link extractRequest} 是 {@link recordRequestSnapshot} 的引數，
+ * 工具參數拷不動、巢狀太深都在抽取時就拋，輪不到寫 system；dsh 的 `step()` 在這一步已經寫了 system 與 user。#1731 之前，
+ * 工具參數太深是 `append` 寫 header 時才拒，system 先落下了一顆；現在沒有。對讀的人沒有影響（沒送出的請求，日誌上沒有它的
+ * 快照，下一次呼叫補記 `initial`），只是「失敗那一次也有 system」不再對這一類成立。
  *
  * header 超過寫入那一關的 600 層上限時，工具清單不變，這條 thread 之後**每次**呼叫都會在這裡失敗（#1726 驗收 4）。這是
  * #1661 偏離的後果，不是照 dsh：dsh 寫 header 那一關沒有深度上限（`packages/core/session/src/index.ts:808-811` 迭代的
@@ -91,12 +96,20 @@
  * `SESSION_EVENT_MAX_DEPTH`）。#1526 的有損值到不了這裡：工具參數與 `extra` 先經 `jsonCopy` 洗過，`config` 的數字欄把 `-0`
  * 正規化成 `0`。
  *
+ * **先洗過再收，是偏離 dsh（理由 1，基座表達不出來）。** dsh 的 `snapshotJsonValue` 對巢狀的 `undefined`、函式、`toJSON`、`NaN`、
+ * `-0` 一律拒收；我們用 `JSON.stringify` 洗掉。原因是基座送出時就是 `JSON.stringify`：LangChain 把請求 body 序列化成 JSON 才送
+ * 給供應商，所以洗過之後的才是「模型實際收到的」，日誌上的才等於它。照 dsh 拒收的話，工具 schema 裡一個 `undefined` 欄位就讓
+ * 那顆工具所在的每條 thread 每一輪都失敗，而供應商根本看不到那一格。
+ *
  * ## 拷不動的參數也是這次請求不送，錯誤帶工具名稱（[#1731](https://github.com/DemianLi/nexus-agent/issues/1731)）
  *
  * 工具 `parameters` 與 `config.extra` 先拷成純 JSON 再進 header（{@link jsonCopy}）。改寫前拷不動（循環、頂層是函式、原生
- * stringify 爆堆疊）回 `undefined`、呼叫端把那一格拿掉，日誌上記下一份**少了參數**的 header，沒有任何提示；現在照 dsh
- * （`append` 的 `snapshotJsonValue` 拷不動就拋）當場拋，等於這次請求不送，同上一節。
- * 深度超過上限的，錯誤訊息帶出是哪一顆工具（`tools["name"].parameters`）：寫入那一關的路徑只印前 8 段，看得到索引、看不到名字。
+ * stringify 爆堆疊）回 `undefined`、呼叫端把那一格拿掉，日誌上記下一份**少了參數**的 header，沒有任何提示；現在照 dsh 的
+ * `append` 拒收：dsh 的 `snapshotJsonValue` 拷不動回 `undefined`，由 `Session.append` 拋（不帶路徑的通用 `Error`，
+ * `packages/core/session/src/index.ts:808-811`），欄位不會被丟掉。我們當場拋，等於這次請求不送，同上一節。
+ * **訊息帶「是哪一格」（`tools["name"].parameters`）是偏離，理由 2（產品需求超出 dsh）**，與 `session-log.ts` 的
+ * `snapshotJsonValue` 已登記的「帶路徑的 `TypeError`」同類：多人共用的主機上，管理者要靠錯誤定位是哪一顆工具。
+ * 深度超過上限的也一樣：寫入那一關的路徑只印前 8 段，看得到索引、看不到名字。
  *
  * @module
  */
@@ -189,19 +202,22 @@ const HEADER_VALUE_PREFIX_DEPTH = 4;
 /**
  * 拷成純 JSON，**拷不動就當場拋、帶上是哪一格**（[#1731](https://github.com/DemianLi/nexus-agent/issues/1731)）。
  *
- * 照 dsh：`request/header` 的內容原樣交給 `append`，`append` 裡的 `snapshotJsonValue` 拷不動就拋，不會丟掉欄位
- * （`packages/core/session/src/index.ts:808-811`，`687f282e`）。改寫前這裡拷不動回 `undefined`、呼叫端把那一格拿掉，
+ * 照 dsh 的 `append` 拒收：`request/header` 的內容原樣交給 `append`，`snapshotJsonValue` 拷不動回 `undefined`、`append` 拋，
+ * 不會丟掉欄位（`packages/core/session/src/index.ts:808-811`，`687f282e`）。訊息帶「是哪一格」是理由 2 的偏離。改寫前這裡拷不動回 `undefined`、呼叫端把那一格拿掉，
  * 日誌上記下一份**少了參數**的 header，「日誌 = 模型收到的」不成立，也沒有任何提示。
  *
  * 值在 `JSON.stringify` 之後才進日誌，所以 JSON 本來就丟的（巢狀裡的 `undefined`、函式、`toJSON` 的轉換）照舊——那是
- * 供應商收到的 JSON，也是 #1526 說的「先洗過」。這裡拋的只有**整格拷不成 JSON**的：循環、頂層是函式／symbol、`BigInt`、
+ * 供應商收到的 JSON，也是 #1526 說的「先洗過」（偏離 dsh，理由 1，見檔頭）。這裡拋的只有**整格拷不成 JSON**的：循環、頂層是函式／symbol、`BigInt`、
  * 原生 stringify 爆堆疊。
  *
  * **深度先量**：原生 `JSON.stringify` 是遞迴的（Node 22 約 4100 層就 `RangeError`），而寫入那一關另有 600 層的上限
  * （{@link SESSION_EVENT_MAX_DEPTH}，#1661）。後者拒收時錯誤訊息的路徑只印前 8 段，看得到工具的索引、看不到名字；
  * MCP 是 serve 層掛的，一個 server 的病態 schema 會讓掛了它的每條 thread 每一輪都失敗，管理者要能一眼找到是哪一顆。所以在拷之前
  * 先迭代量，超過就拋同一種 {@link SessionEventDepthError}（`classifyTurnFailure` 認它的 `code`），訊息帶 `where`。
- * 量的是同一條線，**不改變哪些值記得進去**；只少報（同一顆物件只走一次），少報的交給 `append` 那一關，訊息照舊不帶名字。
+ * 量的是同一條線，對 JSON 的工具 schema **不改變哪些值記得進去**。它量的是拷之前的值，跟拷之後不完全是同一個數：
+ * 同一顆物件只走一次，會**少報**（交給 `append` 那一關，訊息照舊不帶名字）；任何 `typeof` 是 `object` 的都算一層，
+ * 所以也會**多報**——最深處的 `Date` 在 JSON 往返後是字串，不再佔那一層，剛好 596 層的值會被這裡拒、`append` 其實收得下。
+ * 工具 schema 實務上不帶 `Date` 這類東西；多報的方向是 fail-closed，不會讓寫不進去的值溜過去。
  *
  * @param where - 這個值是哪一格，例如 `tools["echo"].parameters`（括號裡是工具名稱，不是索引）；進錯誤訊息。
  */
