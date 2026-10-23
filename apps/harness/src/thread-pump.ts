@@ -119,6 +119,7 @@ import {
   type SessionEvent,
   type SessionEventMap,
   type SessionLog,
+  type SpillStore,
   type StepInbox,
   type SubagentSettleReason,
   type TurnAbortCause,
@@ -1375,6 +1376,8 @@ export class ThreadPump {
   #stopRequested = false;
   /** 一輪的時鐘（#1624），見建構參數 `turnClock`。 */
   readonly #turnClock: TurnClock | undefined;
+  /** 這條 thread 自己的外溢存檔服務（#1553 N0948），見建構參數 `spillStore`。 */
+  readonly #spillStore: SpillStore | undefined;
   /** 有一件正在跑（一輪 run，或一次收回）。 */
   #busy = false;
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
@@ -1439,6 +1442,9 @@ export class ThreadPump {
    *   **省略即 {@link DEFAULT_DOWNLINK_MAX_BYTES}**（2 MiB，照 dsh `TerminalFollower`）。
    * @param turnClock - 一輪的時鐘（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，`turn-timeout` 那一列）：一輪從
    *   `turn/start` 起算，到點就照停止鍵的路中止，原因 `hook`。**省略即不限**，同今天。
+   * @param spillStore - 這條 thread 自己的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948）：
+   *   引用別的會話被截斷時，全文存進這裡、模型拿到讀得回的位址（dsh `session-reference/src/index.ts:348-352`）。同一份實例也給
+   *   外溢層與搜尋上限用（`agent-factory.ts`）。**省略即沒有地方存**，說明裡寫 `storage-not-configured`。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1458,8 +1464,10 @@ export class ThreadPump {
     downlinkMaxBytes: number = DEFAULT_DOWNLINK_MAX_BYTES,
     onTurnFailed?: (report: TurnFailedReport) => void,
     turnClock?: TurnClock,
+    spillStore?: SpillStore,
   ) {
     this.#turnClock = turnClock;
+    this.#spillStore = spillStore;
     this.#downlinkMaxBytes = downlinkMaxBytes;
     this.#onTurnFailed = onTurnFailed;
     this.#agent = agent;
@@ -2732,6 +2740,7 @@ export class ThreadPump {
                     })(),
                   messageId: job.snapshotId,
                   signal,
+                  ...(this.#spillStore !== undefined && { spillStore: this.#spillStore }),
                 }),
           ),
         )

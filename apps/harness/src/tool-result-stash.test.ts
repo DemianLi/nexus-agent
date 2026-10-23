@@ -32,7 +32,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
-import type { PluginEntry } from '@nexus/core';
+import type { PluginEntry, SpillSaveRequest } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
 import type { AnyBackendProtocol } from 'deepagents';
 import { tool } from 'langchain';
@@ -773,6 +773,49 @@ describe('啟動時清掉超過保留期的暫存', () => {
   });
 });
 
+/** 一則工具結果的外溢請求，形狀照 dsh `spill-policy` 填的那樣。 */
+function toolSpill(callId: string, content: string): SpillSaveRequest {
+  return {
+    source: { kind: 'tool', toolName: 'bulk', callId, label: 'result' },
+    suggestedName: 'bulk.txt',
+    content,
+  };
+}
+
+/** 外溢層存檔服務的回傳（#1553 N0949，照 dsh `spill/src/types.ts` 的 `SpillRef` 與 `store.ts:110-130`）。 */
+describe('外溢存檔：回傳位元組數，檔名照建議檔名', () => {
+  it('bytes 是內容的 UTF-8 位元組數，不是字元數', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stash-bytes-'));
+    const store = createToolResultStash({ rootDir: root, session: 's' }).spillStore(
+      TOOL_RESULT_STASH_PREFIX,
+    );
+    const content = '紫色的暗號 MURASAKI';
+    const ref = await store.saveText(toolSpill('c1', content));
+    expect(ref.bytes).toBe(Buffer.byteLength(content, 'utf8'));
+    expect(ref.bytes).not.toBe(content.length);
+  });
+
+  it('跨會話引用的建議檔名進了定位；工具結果照舊是 <工具名>.txt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stash-name-'));
+    const route = createToolResultStash({ rootDir: root, session: 's' });
+    const store = route.spillStore(TOOL_RESULT_STASH_PREFIX);
+    const reference = await store.saveText({
+      source: { kind: 'session-reference', sessionId: 'other', label: '另一段' },
+      suggestedName: 'session-reference-1.txt',
+      content: '全文',
+    });
+    expect(reference.locator).toMatch(
+      new RegExp(`^${TOOL_RESULT_STASH_PREFIX}/[0-9a-f]{12}-session-reference-1\\.txt$`),
+    );
+    const tool = await store.saveText(toolSpill('c1', '結果'));
+    expect(tool.locator).toMatch(
+      new RegExp(`^${TOOL_RESULT_STASH_PREFIX}/[0-9a-f]{12}-bulk\\.txt$`),
+    );
+    const name = reference.locator.slice(`${TOOL_RESULT_STASH_PREFIX}/`.length);
+    expect(await readFile(join(route.sessionDir, name), 'utf8')).toBe('全文');
+  });
+});
+
 /**
  * 清掃會把掃空的會話目錄 `rmdir` 掉，而它跟續接中的寫入可能同時發生（#1553 N0952 的前提）。寫入撞上目錄已經不在，
  * 要重建目錄再寫，照 dsh `store.ts:112-124`。
@@ -784,10 +827,10 @@ describe('會話目錄被清掃收掉之後，下一次存檔重建目錄再寫'
     const root = await mkdtemp(join(tmpdir(), 'stash-recreate-'));
     const route = createToolResultStash({ rootDir: root, session: 's' });
     const store = route.spillStore(TOOL_RESULT_STASH_PREFIX);
-    await store.saveText({ toolName: 'bulk', callId: 'c1', content: '第一次' });
+    await store.saveText(toolSpill('c1', '第一次'));
     await rm(route.sessionDir, { recursive: true });
 
-    const ref = await store.saveText({ toolName: 'bulk', callId: 'c2', content: '第二次' });
+    const ref = await store.saveText(toolSpill('c2', '第二次'));
     const name = ref.locator.slice(`${TOOL_RESULT_STASH_PREFIX}/`.length);
     expect(await readFile(join(route.sessionDir, name), 'utf8')).toBe('第二次');
     expect((await stat(route.sessionDir)).mode & 0o777).toBe(0o700);
