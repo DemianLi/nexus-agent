@@ -68,12 +68,19 @@ const STANDARD = {
   'model-only': 'user-invocable: false\n',
 };
 
-/** 起一台 serve（工作區固定成 `ws`），回打 `skill.list` 拿原始 JSON 的函式；伺服器日誌（含 warn）收進 `lines`。 */
-async function serveOn(ws: string, extraRows = '') {
+/**
+ * 起一台 serve，回打 `skill.list` 拿原始 JSON 的函式；伺服器日誌（含 warn）收進 `lines`。
+ * 給了 `ws` 就是 `--workspace`，預設把每條 thread 的可寫根固定成它（`productPlacer: true` 改走產品路徑的 placer）。
+ */
+async function serveOn(
+  ws: string | undefined,
+  extraRows = '',
+  options: { readonly productPlacer?: boolean } = {},
+) {
   const lines: string[] = [];
   const serve = await startScriptedServe([{ content: '好。' }], {
-    workspace: ws,
-    workspaceRootOf: () => ws,
+    ...(ws !== undefined && { workspace: ws }),
+    ...(ws !== undefined && options.productPlacer !== true && { workspaceRootOf: () => ws }),
     extraRows,
     log: (line) => void lines.push(line),
   });
@@ -137,22 +144,50 @@ describe('紅燈 1：只列人叫得到的、依名字排序、不帶正文', ()
 describe('產品路徑的 placer（不給 workspaceRootOf）', () => {
   it('新 thread、一句話都還沒說：success 不是 not_supported；`/skills/` 是私有根的，`--workspace` 底下的 skills/ 不在來源上', async () => {
     // 新 thread 配私有根、`--workspace` 退成唯讀的 `/shared`（#1775，`docs/operations.md`〈私有根〉）。出廠來源 `/skills/` 對的是私有根，
-    // 所以工作區裡那三份**不列**。部署方的技能放在 `--workspace/skills/` 時新 thread 看不到，這不是這張卡的事，已交 PM；
-    // 改了來源這條跟著改。
-    const serve = await startScriptedServe([{ content: '好。' }], {
-      workspace: workspace(STANDARD),
+    // 所以工作區裡那三份**不列**。部署方的技能放在 `--workspace/skills/` 時新 thread 看不到是
+    // [#1928](https://github.com/DemianLi/nexus-agent/issues/1928)，不是這張卡的事；改了來源這條跟著改。
+    const { list, lines } = await serveOn(workspace(STANDARD), '', { productPlacer: true });
+    expect(await list('t-placer')).toMatchObject({ type: 'success', result: { skills: [] } });
+    expect(lines.join('\n')).not.toContain('[技能]');
+  }, 60000);
+});
+
+/**
+ * 沒有磁碟根的 thread：墊底是只在圖內讀得到的記憶體 FS，`/skills/` 在那上面等於「這個來源沒有檔案提供者」——回空、**不 warn**
+ * （PM 審查 B1，issuecomment-6361790065）。路由到磁碟的來源（`/shared/skills/`）照常讀。
+ */
+describe('沒有磁碟根：圖內才讀得到的來源不掃、不 warn', () => {
+  const sharedSkills =
+    `- insert:\n    - id: shared-skills\n      name: '@nexus/plugin-skills'\n` +
+    `      config:\n        sources:\n          - '/shared/skills/'\n`;
+  const noPersistence = '- id: session-persistence\n  disabled: true\n';
+
+  it('serve 沒給 --workspace：{ skills: [] }，不 warn', async () => {
+    const { list, lines } = await serveOn(undefined);
+    expect(await list('t-no-ws')).toMatchObject({ type: 'success', result: { skills: [] } });
+    expect(lines.join('\n')).not.toContain('[技能]');
+  }, 60000);
+
+  it('有 --workspace、落盤關掉：{ skills: [] }，不 warn', async () => {
+    const { list, lines } = await serveOn(workspace(STANDARD), noPersistence, {
+      productPlacer: true,
     });
-    serves.push(serve);
-    const fetch = fetchWithCookie(await exchangeServeToken(serve.running.authenticatedUrl));
-    const response = await fetch(
-      new URL(commandPath('t-placer', 'skill.list'), serve.running.url).toString(),
-      {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ id: 1, method: 'skill.list' }),
-      },
-    );
-    expect(await response.json()).toMatchObject({ type: 'success', result: { skills: [] } });
+    expect(await list('t-no-log')).toMatchObject({ type: 'success', result: { skills: [] } });
+    expect(lines.join('\n')).not.toContain('[技能]');
+  }, 60000);
+
+  it('落盤關掉、另加 /shared/skills/：共用區（磁碟）上的照常列，/skills/（記憶體）那一格跳過，不 warn', async () => {
+    const { list, lines } = await serveOn(workspace(STANDARD), `${noPersistence}${sharedSkills}`, {
+      productPlacer: true,
+    });
+    const raw = (await list('t-shared')) as {
+      result: { skills: { name: string; path: string }[] };
+    };
+    expect(raw.result.skills.map((skill) => [skill.name, skill.path])).toEqual([
+      ['deploy', '/shared/skills/deploy/SKILL.md'],
+      ['normal', '/shared/skills/normal/SKILL.md'],
+    ]);
+    expect(lines.join('\n')).not.toContain('[技能]');
   }, 60000);
 });
 
