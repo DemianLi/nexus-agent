@@ -653,7 +653,9 @@ export interface IdleSweepingWireHandler extends WireHandler {
   closingCount(): number;
   /**
    * 已經建好、活著的 thread（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)，內容搜尋讀它們記憶體裡的日誌）。**同步、只讀 `ready`**：
-   * 還在建的不算（不等它組裝），正在撤的也不算（撤的時候排空到磁碟，搜尋改冷讀）。照 dsh 觀察活會話用的 `ctx.sessions.list()`
+   * 還在建的不算（不等它組裝），正在撤的也不算：`evictThread` 先 `ready.delete`、最後的排空在後面，撤的期間搜尋改走冷讀。dsh 撤出時
+   * 也是先離開 `list()`（`detachEntered` 先 `store.delete`、之後才發 `session/disposed`，`core/session/src/index.ts:1253-1255`）。冷讀到一半
+   * 檔又被寫，由搜尋那一側提交前的第二次列表比 revision 重來。照 dsh 觀察活會話用的 `ctx.sessions.list()`
    * （`session-query-sqlite/src/index.ts:503,549`，`687f282e`），不改任何東西：不 flush、不建檔。
    */
   liveThreads(): readonly LiveThread[];

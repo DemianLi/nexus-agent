@@ -20,8 +20,9 @@
  * - **stamp 是指紋**：header、切點與整份事件的 SHA-256（dsh `observeSession`，`:876-891`），內容一變就重讀。
  * - **header 跟盤上那份比**，欄位同冷讀那一道（dsh `:552`）；記憶體那份是落盤接線真的寫進檔的那一份（core `attachSessionPersistence` 的
  *   `rootHeader()`）。
- * - **穩定觀察**（dsh `_observeStable`，`:495-562`）：一次對帳開頭與提交之前各看一次活的 id 集合，不同就整段退回、重新列一次再來，
- *   最多 2 次，仍不穩是 `persistence-failed`。
+ * - **穩定觀察**（dsh `_observeStable`，`:495-562`）：讀完、提交之前再列一次持久層，逐條比 revision 與 header（`:527-531`）；一次對帳開頭
+ *   與提交之前各看一次活的 id 集合（`:555`）。任一不同就整段退回、重新列一次再來，最多 2 次，仍不穩是 `persistence-failed`。不活的那幾條
+ *   也受這一道管：讀到一半檔被寫了（例如閒置撤出先離開 `ready`、最後的排空在後面），同一次搜尋裡就重讀，不等下一次。
  *
  * **盤上還沒有檔的活 thread 不進索引**（範圍取捨，#1599）：dsh 的 live 那一組不看持久層有沒有它。我們的可見集合是列表，列表本身也不列
  * 它（web 把不在清單上的內容命中丟掉，`apps/web/src/lib/thread-search.ts` 的檔頭），收進來也看不到。
@@ -566,8 +567,9 @@ export class ThreadSearch {
 
   /**
    * 見檔頭的「每次搜尋前先對帳」與「活的讀記憶體」。**穩定觀察**照 dsh `_observeStable`（`session-query-sqlite/src/index.ts:495-562`，
-   * `687f282e`）：一次對帳開頭與提交之前各看一次活的集合，不同就整段不算、重新列一次再來；{@link STABLE_OBSERVATION_ATTEMPTS} 次都不穩
-   * 就 `persistence-failed`。第一次用 {@link search} 列好的那一份，`THREAD_SEARCH_PATH` 的順序不動。
+   * `687f282e`）：提交之前再列一次持久層、逐條比 revision 與 header，並在一次對帳開頭與提交之前各看一次活的集合；任一不同就整段不算、
+   * 重新列一次再來，{@link STABLE_OBSERVATION_ATTEMPTS} 次都不穩就 `persistence-failed`。第一次用 {@link search} 列好的那一份，
+   * `THREAD_SEARCH_PATH` 的順序不動。
    */
   async #reconcile(
     prepared: Prepared,
@@ -581,11 +583,11 @@ export class ThreadSearch {
     }
     throw new ThreadSearchError(
       'persistence-failed',
-      `活著的 thread 在對帳途中一直在變，重來 ${String(STABLE_OBSERVATION_ATTEMPTS - 1)} 次仍不穩定`,
+      `對帳途中日誌或活著的 thread 一直在變，重來 ${String(STABLE_OBSERVATION_ATTEMPTS - 1)} 次仍不穩定`,
     );
   }
 
-  /** 對帳一次。活的集合前後不同時整段退回、什麼都不記，回 `false`。 */
+  /** 對帳一次。持久層或活的集合前後不同時整段退回、什麼都不記，回 `false`。 */
   async #reconcileOnce(
     prepared: Prepared,
     store: SessionStore,
@@ -651,8 +653,11 @@ export class ThreadSearch {
           rows: this.#replace(prepared, threadId, loaded.events),
         });
       }
-      // 提交之前再看一次活的集合（dsh `index.ts:555` 的 `sameSessionIds`）：途中有一條變活或被收掉，這一次讀到的可能半新半舊。
-      if (!sameIds(initiallyLive, this.#live())) {
+      // 提交之前再列一次持久層（dsh `index.ts:527-531` 的 `samePersistenceSnapshots`）：讀到一半有一條被寫了（例如閒置撤出先離開
+      // `ready`、最後的排空在後面，這段期間冷讀會缺批次窗口那一截），或換了 header，這一次讀到的就不是列表那一刻的樣子。
+      // 再看一次活的集合（`:555` 的 `sameSessionIds`）：途中有一條變活或被收掉，這一次讀到的可能半新半舊。任一不同就整段重來。
+      const relisted = await this.#list(store, signal);
+      if (!sameSnapshots(visible, relisted) || !sameIds(initiallyLive, this.#live())) {
         if (open) db.exec('ROLLBACK');
         open = false;
         return false;
@@ -768,6 +773,37 @@ async function readForSearch(
   }
 }
 
+/** {@link assertSameSource} 比的那幾格；兩次列表之間比 header 也用它（dsh `sameHeader`，`index.ts:938-946`）。 */
+function sameSource(a: StoredSessionHeader, b: StoredSessionHeader): boolean {
+  return (
+    a.id === b.id &&
+    a.createdAt === b.createdAt &&
+    a.cwd === b.cwd &&
+    a.parentSession === b.parentSession &&
+    a.isSeeded === b.isSeeded
+  );
+}
+
+/**
+ * 兩次列出來的是不是同一組，照 dsh `samePersistenceSnapshots`（`session-query-sqlite/src/index.ts:911-924`，`687f282e`）：
+ * 條數相同，每一條的 revision 與 header 都沒變。
+ */
+function sameSnapshots(
+  before: readonly StoredSessionSnapshot[],
+  after: readonly StoredSessionSnapshot[],
+): boolean {
+  if (before.length !== after.length) return false;
+  const later = new Map(after.map((snapshot) => [snapshot.header.id, snapshot]));
+  return before.every((first) => {
+    const second = later.get(first.header.id);
+    return (
+      second !== undefined &&
+      first.revision === second.revision &&
+      sameSource(first.header, second.header)
+    );
+  });
+}
+
 /**
  * 列表給的那一份與讀到的那一份是不是同一條會話，照 dsh 的 `assertSessionHeadersCompatible`（`session-query/src/sources.ts:11-25`，
  * `687f282e`）：id、建立時間、工作目錄、血緣、是不是分叉，任一不同就拋 `source-conflict`，整次搜尋失敗。
@@ -777,13 +813,7 @@ async function readForSearch(
  * dsh 還比 `delegationDepth ?? 0`；nexus 的 header 沒有這一格，**#1567 N0788 加上它時這裡一起補**。
  */
 function assertSameSource(listed: StoredSessionHeader, loaded: StoredSessionHeader): void {
-  if (
-    listed.id !== loaded.id ||
-    listed.createdAt !== loaded.createdAt ||
-    listed.cwd !== loaded.cwd ||
-    listed.parentSession !== loaded.parentSession ||
-    listed.isSeeded !== loaded.isSeeded
-  ) {
+  if (!sameSource(listed, loaded)) {
     throw new ThreadSearchError(
       'source-conflict',
       `thread "${listed.id}" 列表給的 header 與讀到的對不上（列與讀之間換成了別的會話）`,

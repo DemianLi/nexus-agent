@@ -1011,6 +1011,83 @@ describe('活的 thread 讀記憶體（#1599）', () => {
     await engine.close();
   });
 
+  it('冷讀之後、提交之前日誌被寫了（revision 變了）：同一次搜尋裡重來，索引是新版', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('舊版的話').events);
+    const inner = openJsonlSessionStore({ directory });
+    let lists = 0;
+    const engine = search(undefined, {
+      store: wrap(inner, {
+        list: async (options) => {
+          lists += 1;
+          // 第 1 次是搜尋前的列表、冷讀在它之後；第 2 次是提交之前那一次：在它之前把檔換成新版。
+          if (lists === 2) await writeThread(directory, 'a', said('新版的暗號，長一點').events);
+          return inner.list(options);
+        },
+      }),
+    });
+    expect(await ids(engine, '新版的暗號')).toEqual(['a']);
+    expect(await ids(engine, '舊版的話')).toEqual([]);
+    // 第一次對帳的兩次、重來那一次的兩次；之後那一次搜尋再兩次。
+    expect(lists).toBe(6);
+    await engine.close();
+  });
+
+  it('日誌每次列都在變：重來一次仍不穩定就 persistence-failed', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('句子').events);
+    const inner = openJsonlSessionStore({ directory });
+    let lists = 0;
+    const engine = search(undefined, {
+      store: wrap(inner, {
+        list: async (options) => {
+          lists += 1;
+          if (lists > 20) throw new Error('停不下來');
+          if (lists > 1) {
+            await writeThread(directory, 'a', said(`句子${'又'.repeat(lists)}`).events);
+          }
+          return inner.list(options);
+        },
+      }),
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({
+      kind: 'persistence-failed',
+      message: expect.stringContaining('不穩定'),
+    });
+    expect(lists).toBe(4);
+    await engine.close();
+  });
+
+  it('兩次列表之間只換了 header（revision 沒變）也算不穩定', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('句子').events);
+    const inner = openJsonlSessionStore({ directory });
+    let lists = 0;
+    const engine = search(undefined, {
+      store: wrap(inner, {
+        list: async (options) => {
+          lists += 1;
+          const page = await inner.list(options);
+          // 每一輪提交之前那一次（第 2、4 次）換一個建立時間，revision 照真的。每一輪讀之前那一次不換：換了的話冷讀先撞上
+          // source-conflict（同 dsh 讀完先比 header）。
+          if (lists % 2 === 1) return page;
+          return {
+            ...page,
+            sessions: page.sessions.map((snapshot) => ({
+              ...snapshot,
+              header: { ...snapshot.header, createdAt: snapshot.header.createdAt + lists },
+            })),
+          };
+        },
+      }),
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({
+      kind: 'persistence-failed',
+      message: expect.stringContaining('不穩定'),
+    });
+    await engine.close();
+  });
+
   it('D：活的集合每次看都不一樣，重來一次仍不穩定就 persistence-failed', async () => {
     const directory = await dir();
     await writeThread(directory, 'a', said('句子').events);
