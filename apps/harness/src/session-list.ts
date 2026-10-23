@@ -240,6 +240,9 @@ export async function listStoredThreads(
       updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
       blank: scan.blank,
       ...(scan.title !== undefined && { title: scan.title }),
+      // 分叉的來源（#1580），照 dsh 列表的 `listFields`（`session-controller/src/list.ts:353-362`，`687f282e`）：header 有就帶。
+      // 列得出來的都不是子代理（`isListedThread`），所以這一格只會是分叉的來源。
+      ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
     });
   }
   items.sort(
