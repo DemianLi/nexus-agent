@@ -46,8 +46,11 @@
  *
  *    **stderr 是行內通道，檔名可以偽造行**（`docs/postmortem/0004-landlock-partial-notice-misclassified-child-failures.md`
  *    同樣明寫「stderr remains an in-band attribution channel」）：檔名含換行時，一個讀不到的檔會印出不只一行，所以
- *    {@link RipgrepOutcome.unreadable} 是 **stderr 的行數，檔名可以灌高它**。能被偽造的只有這個數字：要放行，最後一段
- *    仍必須真的是 `EACCES`；放行時送到模型那裡的只有數字，偽造的文字到不了。0004 的教訓照用：精確、窄、不認得的一律失敗。
+ *    {@link RipgrepOutcome.unreadable} 是 **stderr 的行數，檔名可以灌高它**。放行時送到模型那裡的只有數字，偽造的文字
+ *    到不了；要放行，每一行仍必須整行符合上面兩種形狀。**但行內偽造不只能灌高數字**：起點（搜尋引數）的名字含換行時，
+ *    「起點本身讀不到」那一行被拆成兩行、兩段路徑都不等於起點，起點比對會被繞過（X1）。所以**起點含 `\n` 或 `\r` 就整個
+ *    不放行**，走 {@link classifyExit}。子樹裡的檔名含換行只會灌高 N（起點的名字完整，`.` 這種起點不受影響）。
+ *    0004 的教訓照用：精確、窄、不認得的一律失敗。
  *
  *    退到的做法：照樣交出 stdout，並在結果上帶 {@link RipgrepOutcome.unreadable}，由呼叫端告訴模型「結果只涵蓋讀得到的」。
  *
@@ -196,9 +199,11 @@ const withoutTrailingSlash = (path: string): string =>
  *
  * @param text - 保留下來的 stderr。
  * @param truncated - stderr 是否被截尾；截過的看不到前段，不能保證裡面沒有別種錯誤，一律當不是。
- * @param searchRoots - 搜尋起點；讀不到的路徑等於其中之一就不是（整個起點都沒搜到）。
+ * @param searchRoots - 搜尋起點；讀不到的路徑等於其中之一就不是（整個起點都沒搜到）。**任何一個起點含 `\n` 或 `\r` 就
+ *   整個不放行**：起點的名字裡有換行時，rg 把「起點本身讀不到」那一行印成兩行，路徑被拆成兩段，兩段都不等於起點，
+ *   起點比對就被繞過（X1）。起點是呼叫端給的引數，不是 rg 的輸出，這裡看得到完整的名字，所以直接擋。
  * @returns 讀不到的 stderr 行數（檔名含換行時可能多於實際路徑數，見檔頭）；有任何一行不是、沒有任何一行、讀不到的是起點、
- *   或被截尾時是 `undefined`。
+ *   起點含換行、或被截尾時是 `undefined`。
  */
 function unreadableCount(
   text: string,
@@ -206,6 +211,7 @@ function unreadableCount(
   searchRoots: readonly string[],
 ): number | undefined {
   if (truncated) return undefined;
+  if (searchRoots.some((root) => /[\n\r]/u.test(root))) return undefined;
   const lines = text.split('\n').filter((line) => line.trim() !== '');
   if (lines.length === 0) return undefined;
   const roots = new Set(searchRoots.map(withoutTrailingSlash));

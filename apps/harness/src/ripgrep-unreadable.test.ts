@@ -197,6 +197,30 @@ describe('runner：判準的每個條件各有一條反例', () => {
     ).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
   });
 
+  it('X1：起點的名字含 `\\n` 或 `\\r` 就整個不放行——rg 把起點那一行印成兩行，拆開的路徑都不等於起點', async () => {
+    // 起點 `./x: Permission denied (os error 13)\nrg: y` 讀不到時 rg 實際印的兩行。
+    const forged = [
+      'rg: ./x: Permission denied (os error 13)',
+      'rg: y: Permission denied (os error 13)',
+    ];
+    const runWith = async (roots: string[]) =>
+      runRipgrep({
+        argv: ['--json'],
+        cwd: root,
+        executable: await script(
+          'newline-root.sh',
+          `echo '${forged[0]}' >&2\necho '${forged[1]}' >&2\nexit 2`,
+        ),
+        tolerateUnreadable: { searchRoots: roots },
+      });
+    const withNewline = './x: Permission denied (os error 13)\nrg: y';
+    expect(await runWith([withNewline])).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+    expect(await runWith(['.', withNewline])).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+    expect(await runWith(['./a\rb'])).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
+    // 起點完整、沒有換行：同一份 stderr 是起點底下的兩個檔，放行，N=2（檔名可以灌高 N，見檔頭）。
+    expect(await runWith(['.'])).toMatchObject({ kind: 'ok', unreadable: 2 });
+  });
+
   it('grep（--json）搭第二種形狀、起點 `.`：照舊 SEARCH_FAILED（Linux 非 root、根 chmod 000 實測，rg 15.0.0 arm64／x64）', async () => {
     // 實測輸出（~/.nexus-agent-evidence/2026-10-23/rg-unreadable-1704/linux3.txt）：根 0000 時 grep 也印第二種形狀，
     // stdout 只有 begin／end／summary 的 JSON、零命中，結束碼 2。
@@ -574,9 +598,26 @@ describe.skipIf(isRoot)(
       expect(result.error).toContain('search failed (exit 2)');
     });
 
+    it('X1：起點的名字含換行、本身讀不到：判錯，不被拆成兩段路徑繞過起點比對', async () => {
+      // 目錄名 `x: Permission denied (os error 13)\nrg: y`：rg 把「起點本身讀不到」那一行印成兩行，
+      // 路徑被讀成 `./x` 與 `y`，都不等於起點。
+      const name = 'x: Permission denied (os error 13)\nrg: y';
+      await mkdir(join(root, name));
+      await chmod(join(root, name), 0o000);
+      const backend = new ContainedFilesystemBackend({ rootDir: root, tolerateUnreadable: true });
+      try {
+        const result = await backend.grep('needle', `/${name}`);
+        expect(result.matches).toBeUndefined();
+        expect(result.error).toContain('search failed (exit 2)');
+      } finally {
+        await chmod(join(root, name), 0o755);
+      }
+    });
+
     it('工作區根本身讀不到（chmod 0300）：grep 與 glob 都是錯誤，不是空的成功（B3）', async () => {
       // **根放在 /var/tmp，不用 `os.tmpdir()`**：macOS 的 TMPDIR（/var/folders/…）底下，cwd 讀不到的 rg 15.0.0 不結束、
-      // 一直掛到 runner 的 30 秒逾時（只在那個位置，/var/tmp 與 /private/tmp 都立刻回 exit 2；原因沒查，與本卡無關）。
+      // 一直掛到 runner 的 30 秒逾時；/var/tmp 與 /private/tmp 都立刻回 exit 2。原因（複審查到的）：getcwd 讀不到 cwd 時
+      // 改去逐項掃父目錄找回路徑，而 TMPDIR 底下有約 57.5 萬個項目，父目錄小的位置就不會卡。
       const unreadableRoot = await mkdtemp('/var/tmp/nexus-rg-root-');
       await writeFile(join(unreadableRoot, 'a.log'), 'needle\n');
       const backend = new ContainedFilesystemBackend({
