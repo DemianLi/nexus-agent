@@ -116,10 +116,29 @@ function snakeCase(key: string): string {
 }
 
 /**
+ * 別名表：沿整條原型鏈把每一層的 `lc_aliases` 合起來（`Reflect.get(…, message)`，getter 的 `this` 是這則訊息），
+ * 同 `Serializable.toJSON`。只讀實例上的那一份不夠——子類別的 getter 不一定 `...super.lc_aliases`
+ * （例如 `ToolMessage` 就只回自己的一項），今天每一項都是自己對應自己所以輸出一樣，基座日後在父類加一個
+ * 不是自己對應自己的別名，只讀實例的就會悄悄分岔。
+ */
+function mergedAliases(message: BaseMessage): Record<string, string | undefined> {
+  const aliases: Record<string, string | undefined> = {};
+  for (
+    let current: object | null = Object.getPrototypeOf(message) as object | null;
+    current !== null;
+    current = Object.getPrototypeOf(current) as object | null
+  ) {
+    Object.assign(aliases, Reflect.get(current, 'lc_aliases', message) as unknown);
+  }
+  return aliases;
+}
+
+/**
  * 取一則訊息的欄位，形狀同基座的 `toDict()`（`{ type, data }`，`data` 是 `toJSON().kwargs`），但**欄位值原樣帶過來**：
  * 不拷、不跑 `escapeIfNeeded`（#1660，理由見檔頭）。鍵集與取值規則照 `Serializable.toJSON`：
  * 建構子收到的欄位（`lc_kwargs`）逐一取，物件上有同名屬性的取物件上的（建構子會補 `tool_calls` 這類），
- * 鍵名過別名表。訊息類別沒有 `lc_attributes`、`lc_secrets`，那兩段不需要。
+ * 鍵名過 {@link mergedAliases}（沿原型鏈合併，同基座）再轉 snake_case。`@langchain/core@1.2.9` 的訊息類別沒有
+ * `lc_attributes`、`lc_secrets`，那兩段不需要；基座哪天給訊息加了，對照測試的鍵集比對會先紅。
  *
  * 回傳的 `data` 裡的值就是訊息上那一份，**呼叫端必須馬上序列化，不能留著用**；{@link toLoggedMessage} 緊接著做 JSON 往返。
  * 不是 `lc_serializable` 的（訊息類別都是）沒有這個形狀可取，拋出去比記一顆空殼好。
@@ -128,7 +147,7 @@ function storedMessageOf(message: BaseMessage): { type: string; data: Record<str
   if (!message.lc_serializable) {
     throw new TypeError(`${message.constructor.name} 不是可序列化的訊息，日誌記不下`);
   }
-  const aliases = message.lc_aliases as Record<string, string | undefined>;
+  const aliases = mergedAliases(message);
   const live = message as unknown as Record<string, unknown>;
   const data: Record<string, unknown> = {};
   for (const key of Object.keys(message.lc_kwargs)) {

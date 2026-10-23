@@ -204,6 +204,28 @@ describe('toLoggedMessage 自己取欄位（#1660）', () => {
     ['FunctionMessage', () => new FunctionMessage({ content: 'f', name: 'fn' })],
   ];
 
+  /**
+   * 別名表守衛：子類別的 `lc_aliases` getter 不一定 `...super.lc_aliases`（`ToolMessage` 就只回自己的一項），
+   * 基座 `toJSON` 沿整條原型鏈合併。這裡造一個父類有「不是自己對應自己」的別名、子類 getter 又不帶 super 的訊息，
+   * 只讀實例上那一份的做法會在這一組分岔。
+   */
+  it('別名表沿原型鏈合併：父類的別名子類沒帶上也算', () => {
+    class Parent extends HumanMessage {
+      override get lc_aliases(): Record<string, string> {
+        return { ...super.lc_aliases, name: 'speaker' };
+      }
+    }
+    class Child extends Parent {
+      override get lc_aliases(): Record<string, string> {
+        return { additional_kwargs: 'additional_kwargs' };
+      }
+    }
+    const message = new Child({ content: 'x', name: 'n' });
+    const logged = toLoggedMessage(message);
+    expect(JSON.stringify(logged)).toBe(viaToDict(message));
+    expect((logged.data as unknown as Record<string, unknown>)['speaker']).toBe('n');
+  });
+
   it.each(SAMPLES)('對照：%s', (_label, make) => {
     const message = make();
     expect(JSON.stringify(toLoggedMessage(message))).toBe(viaToDict(message));

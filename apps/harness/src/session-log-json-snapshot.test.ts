@@ -6,11 +6,11 @@
  *
  * - **A**：`JSON.parse` 出來的自有 `"__proto__"` 鍵。改寫前副本用 `copy[key] =` 賦值，走的是原型 setter：
  *   記憶體裡那顆的原型被換掉（而且沒被凍），落盤時鍵消失。
- *  * - **A2**：同一個鍵經過訊息那條路（`toLoggedMessage` → `append` → 續接 → `fromLoggedMessage`）。#1526 時這個鍵在進日誌**之前**
+ * - **A2**：同一個鍵經過訊息那條路（`toLoggedMessage` → `append` → 續接 → `fromLoggedMessage`）。#1526 時這個鍵在進日誌**之前**
  *   就丟了：`@langchain/core@1.2.9` 的 `Serializable.toJSON`（`dist/load/validation.js:85`）用賦值拷 kwargs，`toDict()`
  *   出來的 args 原型被換掉、自有鍵沒了，所以當時只能斷言「原型乾淨、沒有繼承來的 `x`」。#1660 起 `toLoggedMessage`
  *   自己取欄位，這裡改回卡上原本的斷言：續接讀回的 args 仍有**自有**的 `"__proto__"` 鍵，內容同模型送的，記憶體與磁碟一致。
-- **C**：深巢狀，前後各夾一則普通事件。比對用 `JSON.stringify`：vitest 的 `toEqual` 本身是遞迴的。
+ * - **C**：深巢狀，前後各夾一則普通事件。比對用 `JSON.stringify`：vitest 的 `toEqual` 本身是遞迴的。
  *   - **C1（舊日誌）**：寫入那一關有深度上限（`SESSION_EVENT_MAX_DEPTH`，#1661），但上限之前寫下的日誌可能更深。
  *     磁碟上一份 3000 層的舊日誌，續接讀回、接上 seed 都照收，讀方不設限。深度取 3000：原生 `JSON.stringify` 對凍過的
  *     陣列在 CI（Node 22.23.3 Linux x64）約 2200 層就爆，沒凍過的約 4100 層，夾在中間才驗得到「凍過的那份要先拷」。
