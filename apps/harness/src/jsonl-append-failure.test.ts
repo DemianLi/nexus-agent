@@ -7,12 +7,17 @@
  * 斷言一律回頭讀**檔案**與**續接讀回的事件**：把手回報什麼不重要，下一個行程讀得回來才重要。
  */
 
-import { mkdtemp, open, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SESSION_LOG_FORMAT_VERSION, SessionLog, SessionPersistenceCoordinator } from '@nexus/core';
+import {
+  SESSION_LOG_FORMAT_VERSION,
+  SessionAlreadyExistsError,
+  SessionLog,
+  SessionPersistenceCoordinator,
+} from '@nexus/core';
 import type { SessionEvent, StoredSession, StoredSessionHeader } from '@nexus/core';
 
 import { openJsonlSessionStore } from './jsonl-session-store.js';
@@ -54,6 +59,8 @@ interface Fault {
   /** 追加把手的 `datasync`／`close` 拋這個錯。 */
   datasyncError?: Error;
   closeError?: Error;
+  /** 下一次 `open(<日誌>, 'wx')` 在開檔之前就拋這個錯（header 已經發佈了）。 */
+  wxError?: Error;
   /** 卡住追加把手的 `datasync`，直到這個 promise resolve。 */
   datasyncGate?: Promise<void>;
   /** 追加把手上的 `sync` 次數；`datasync` 次數；`r+` 截回把手上的 `sync` 次數；每次開檔的 flags。 */
@@ -84,6 +91,8 @@ function take<K extends keyof Fault>(fault: Fault, key: K): Fault[K] {
  */
 function faulty(fault: Fault): OpenLogFile {
   return async (path, flags, mode) => {
+    const wxError = flags === 'wx' ? take(fault, 'wxError') : undefined;
+    if (wxError !== undefined) throw wxError;
     const real = await open(path, flags, mode);
     fault.opened.push(flags);
     const rollback = flags === 'r+';
@@ -538,5 +547,39 @@ describe('H 第一批就寫不進去：撤掉這次實體化（#1580 刀 2a 審�
     expect(await filesOf('w')).toEqual(['w.header.json', 'w.jsonl', 'w.lock']);
     expect(await sizeOf('w')).toBe(0);
     await stored.close();
+  });
+});
+
+describe('I 第一次實體化做到一半就關：header 發佈了、日誌沒開成（#1580 刀 2a 審查）', () => {
+  it('wx 拋 EMFILE 之後不重試就 close：header、日誌、鎖檔都不在；列表看不到；同一個 id 建得回來', async () => {
+    const fault = newFault();
+    const store = openJsonlSessionStore({ directory: dir, openLog: faulty(fault) });
+    const stored = store.create(header('u'));
+
+    fault.wxError = Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+    await expect(stored.append(batch(0))).rejects.toThrow('EMFILE');
+    // 前提：header 真的發佈了（這正是改動之前會留下來的那個）。
+    expect(await filesOf('u')).toContain('u.header.json');
+    await stored.close();
+
+    expect(await filesOf('u')).toEqual([]);
+    expect((await store.list()).sessions).toEqual([]);
+    const again = store.create(header('u'));
+    await again.append(batch(0));
+    await again.close();
+    expect(seqsOf(await readBack('u'))).toEqual([0, 1]);
+  });
+
+  it('header 撞名（link 回 EEXIST，那份是別人的）之後 close：別人的 header 原封不動', async () => {
+    const store = openJsonlSessionStore({ directory: dir });
+    const stored = store.create(header('v'));
+    // `create` 之後才出現的同名：另一個行程搶先發佈了。
+    const theirs = `${JSON.stringify({ ...header('v'), createdAt: 99 })}\n`;
+    await writeFile(join(dir, 'v.header.json'), theirs);
+
+    await expect(stored.append(batch(0))).rejects.toThrow(SessionAlreadyExistsError);
+    await stored.close();
+
+    expect(await readFile(join(dir, 'v.header.json'), 'utf8')).toBe(theirs);
   });
 });

@@ -312,6 +312,8 @@ describe('目錄 fsync 的錯不吞，也不卡死', () => {
     await expect(stored.close()).resolves.toBeUndefined();
     // 開成了、但還沒完成物化的那個日誌把手，close() 要關掉（剛好一次）：不然把手洩漏到行程結束。
     expect(logCloses).toBe(1);
+    // 做到一半的實體化整個撤掉（#1580 刀 2a 審查）：不留 header＋空日誌＋鎖檔。
+    expect((await readdir(projectDir)).filter((name) => name.startsWith('theta.'))).toEqual([]);
   });
 });
 

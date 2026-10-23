@@ -204,6 +204,21 @@ function firstLogWriteFails(): OpenLogFile {
 }
 
 /**
+ * 第一次 `open(<日誌>, 'wx')` 就拋 EMFILE：header 已經 `link` 發佈、日誌沒開成，實體化在寫入之前就失敗（#1580 刀 2a 審查）。
+ * 之後照真的開。
+ */
+function firstLogOpenFails(): OpenLogFile {
+  let left = 1;
+  return async (path, flags, mode) => {
+    if (flags === 'wx' && left > 0) {
+      left -= 1;
+      throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+    }
+    return (await open(path, flags, mode)) as unknown as LogFileHandle;
+  };
+}
+
+/**
  * 子 thread 接**真的**落盤（`attachSessionPersistence`＋暫存目錄上的 jsonl store）：量「組裝失敗磁碟上不留檔」只能用真的，
  * 替身的 `dispose` 不排空，量不出收尾會不會把 seed 寫出去。
  */
@@ -439,6 +454,10 @@ describe('thread.fork', () => {
     ['接上落盤之後的一步失敗', () => ({ failTitles: 1 })],
     ['第一次排空在交給把手之前就被拒（還沒實體化）', () => ({ failAppends: 1 })],
     ['第一次排空實體化了、第一批寫不進去（B1）', () => ({ openLog: firstLogWriteFails() })],
+    [
+      '第一次排空實體化到一半（header 發佈了、日誌開不成）',
+      () => ({ openLog: firstLogOpenFails() }),
+    ],
   ] as const) {
     it(`真的落盤、${name}：磁碟上不留子 thread 的檔、名額回到原數；同一個 id 重試成功，檔才出現`, async () => {
       const { directory, handler, client } = await realRig(failure());

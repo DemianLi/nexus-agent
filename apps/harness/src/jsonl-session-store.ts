@@ -49,7 +49,9 @@
  * **第一批同時是這份新會話的第一次實體化時，不截回，整個撤掉**（`#unmaterialize`，#1580 刀 2a）：刪日誌、header、鎖檔、
  * fsync 目錄，同一個 id 建得回來。結果與 dsh `materializePosix`（`index.ts:1282-1321`，`687f282e`）相同：dsh 第一批與發佈
  * 是同一次 `link`，寫不進去就什麼都沒發佈。只截回的話會留下 header＋空日誌，分叉的子 thread（header 標了 `isSeeded`）
- * 從此列得出來卻讀不了。
+ * 從此列得出來卻讀不了。另一條同形狀的路也一樣撤：header 發佈了、日誌沒開成（或開成了但目錄 fsync 失敗），沒重試就
+ * `close()`——`#shutdown` 把已發佈的部分刪掉（`#discardPublished`）。兩條都只刪自己發佈的：`link` 撞上 `EEXIST` 時
+ * 那份 header 是別人的，不碰。
  *
  * **和 dsh 唯一的形狀差異是把手的壽命**：dsh 每批開關一次，這裡成功路徑一個把手用到會話結束；失敗路徑
  * 照 dsh——先關掉這個把手、另用 `r+` 開檔截回，下一批用 `a` 重開（demian 2026-10-17 在 #1506 拍板 Q1 (a)）。
@@ -507,6 +509,15 @@ async function replaceSyncedFile(finalPath: string, content: string): Promise<vo
   }
 }
 
+/** 跑一步；拋錯就收進 `failures`，不往外拋——收尾與撤銷要每一步都走到，全走完才報。 */
+async function attempt(failures: unknown[], step: () => Promise<unknown>): Promise<void> {
+  try {
+    await step();
+  } catch (error: unknown) {
+    failures.push(error);
+  }
+}
+
 /** 一份已存會話。IO 延後到第一次 {@link append} 或 {@link flush}。 */
 class JsonlStoredSession implements StoredSession {
   readonly #directory: string;
@@ -604,8 +615,9 @@ class JsonlStoredSession implements StoredSession {
    * `AggregateError`，照 dsh `storage.ts:246-258`。以前關檔的錯會蓋掉落盤的錯，「哪些位元組沒落盤」就看不見了。
    */
   async #shutdown(): Promise<void> {
+    const fresh = !this.#opened && this.#resume === undefined;
     // 還沒實體化就關掉：這個 id 在這個後端上不再算建過（dsh `storage.ts:499`），同一個 id 可以再 `create`。
-    if (!this.#opened && this.#resume === undefined) this.#context.pending.delete(this.#header.id);
+    if (fresh) this.#context.pending.delete(this.#header.id);
     const failures: unknown[] = [];
     // 第一次物化開成了日誌、但目錄 fsync 失敗又沒等到重試就關：把手還在 `#publish.log`，也要關。
     const handle = this.#handle ?? this.#publish.log;
@@ -622,6 +634,12 @@ class JsonlStoredSession implements StoredSession {
       } catch (error: unknown) {
         failures.push(error);
       }
+    }
+    // 第一次實體化做到一半就關（header 發佈了，日誌沒開成、或開成了但目錄 fsync 失敗）：撤掉已經發佈的部分，
+    // 同 {@link #unmaterialize}（#1580 刀 2a 審查）。不撤的話留下 header＋鎖檔：列得出一份、同一個 id 建不回來。
+    if (fresh && this.#publish.headerPublished === true) {
+      await this.#discardPublished(handle !== undefined, failures);
+      this.#publish = {};
     }
     // **不論開沒開過日誌都放**：續接那條路在讀之前就拿了租約，一筆都沒寫就關也要放掉，
     // 不然同一個行程裡下一次接同一份會撞上自己。
@@ -706,21 +724,11 @@ class JsonlStoredSession implements StoredSession {
     this.#context.pending.add(this.#header.id);
     const names = sessionFilenames(this.#base);
     const failures: unknown[] = [];
-    const attempt = async (step: () => Promise<unknown>): Promise<void> => {
-      try {
-        await step();
-      } catch (stepError: unknown) {
-        failures.push(stepError);
-      }
-    };
-    await attempt(() => handle.close());
-    await attempt(() => rm(this.#logPath(), { force: true }));
-    await attempt(() => rm(join(this.#directory, names.header), { force: true }));
-    await attempt(() => rm(join(this.#directory, names.lock), { force: true }));
-    await attempt(() => syncDirectory(this.#directory));
+    await attempt(failures, () => handle.close());
+    await this.#discardPublished(true, failures);
     const lease = this.#lease;
     this.#lease = undefined;
-    await attempt(async () => lease?.release());
+    await attempt(failures, async () => lease?.release());
     this.#opened = false;
     this.#materializing = undefined;
     this.#publish = {};
@@ -732,6 +740,28 @@ class JsonlStoredSession implements StoredSession {
       );
     }
     throw error;
+  }
+
+  /**
+   * 刪掉這個把手第一次實體化時自己發佈的檔，再 fsync 目錄；**租約還握著**，由呼叫端之後放（順序的理由見 {@link #unmaterialize}）。
+   * 失敗的步驟收進 `failures`，不中斷後面的步驟。
+   *
+   * **只刪確定是自己的**：呼叫端只在 header 的 `link` 成功過（`headerPublished`）時才進來——`link` 撞上 `EEXIST` 時那份 header
+   * 是別人的，不能碰。日誌只在這個把手開成過時刪（`ownLog`），鎖檔只在握著租約時刪。
+   *
+   * @param ownLog - 這個把手開成過日誌（`wx` 成功）。
+   * @param failures - 收集失敗的陣列。
+   */
+  async #discardPublished(ownLog: boolean, failures: unknown[]): Promise<void> {
+    const names = sessionFilenames(this.#base);
+    if (ownLog) await attempt(failures, () => rm(this.#logPath(), { force: true }));
+    const temp = this.#publish.tempHeader;
+    if (temp !== undefined) await attempt(failures, () => rm(temp, { force: true }));
+    await attempt(failures, () => rm(join(this.#directory, names.header), { force: true }));
+    if (this.#lease !== undefined) {
+      await attempt(failures, () => rm(join(this.#directory, names.lock), { force: true }));
+    }
+    await attempt(failures, () => syncDirectory(this.#directory));
   }
 
   /** 另開 `r+` 把日誌截回 `size` 並 fsync，同 dsh `rollbackAppend`（`index.ts:1441-1449`）。 */
