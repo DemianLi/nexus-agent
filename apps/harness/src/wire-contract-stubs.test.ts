@@ -97,6 +97,17 @@ describe('每一支未實作的方法都回 not_supported', () => {
     }
   });
 
+  it('skill.list：手搭的組裝沒有技能清單就回 not_supported（有清單的真行為在 skill-list-wire.test.ts）', async () => {
+    const { client, handler } = connect();
+    try {
+      const outcome = await client.skillList('t');
+      expect(outcome).toMatchObject(NOT_SUPPORTED);
+      expect(outcome.kind === 'rejected' && outcome.message !== '').toBe(true);
+    } finally {
+      await handler.close();
+    }
+  });
+
   it('model.catalog／model.select：組裝沒有型錄（沒帶 --live）回 not_supported，web 據此藏起模型座（#723）', async () => {
     const { client, handler } = connect();
     try {

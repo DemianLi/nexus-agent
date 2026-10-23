@@ -7,16 +7,35 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { MemoryReading, Reading, CgroupMemory, HostMemory } from './memory-gauge.js';
+import type {
+  MemoryReading,
+  Reading,
+  CgroupMemory,
+  HostMemory,
+  ProcessMemory,
+} from './memory-gauge.js';
 import {
   createMemoryPressureWatch,
+  heapUsageSource,
   memoryUsageSource,
   PRESSURE_HYSTERESIS_POINTS,
 } from './memory-pressure.js';
 import type { PressureContext, PressureSource } from './memory-pressure.js';
 
 const MIB = 1024 * 1024;
-const PROCESS_OK = { ok: true, rssBytes: 1, heapUsedBytes: 1, heapTotalBytes: 1 } as const;
+
+/** 行程讀得到、heap 上限 1000 MiB，已用 `percent`%（已提交的量故意貼著已用，量不到上限要看 `heapLimitBytes`）。 */
+function processAt(percent: number, extra: Partial<ProcessMemory> = {}): Reading<ProcessMemory> {
+  return {
+    ok: true,
+    rssBytes: 1,
+    heapUsedBytes: percent * 10 * MIB,
+    heapTotalBytes: percent * 10 * MIB,
+    heapLimitBytes: 1000 * MIB,
+    ...extra,
+  };
+}
+const PROCESS_OK = processAt(4);
 
 /** cgroup 讀得到、自己設了 1000 MiB 上限，用了 `percent`%。 */
 function cgroupAt(percent: number, extra: Partial<CgroupMemory> = {}): Reading<CgroupMemory> {
@@ -42,11 +61,13 @@ const HOST_GONE: Reading<HostMemory> = { ok: false, reason: 'EACCES' };
 function reading(
   cgroup: Reading<CgroupMemory>,
   host: Reading<HostMemory> = HOST_OK,
+  proc: Reading<ProcessMemory> = PROCESS_OK,
 ): MemoryReading {
-  return { process: PROCESS_OK, cgroup, host };
+  return { process: proc, cgroup, host };
 }
 
 const CONTEXT: PressureContext = { threadCount: 37, maxThreads: 500 };
+const WARNED = /^\[記憶體\] 警告：/u;
 
 function watch(threshold = 75, sources: readonly PressureSource[] = [memoryUsageSource]) {
   return createMemoryPressureWatch({
@@ -334,6 +355,162 @@ describe('讀不到就不判斷、不警告，也不當成 0%（驗收 D）', ()
     const lines = watch(75, [nan]).observe(reading(cgroupAt(10)));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toContain('不是數字');
+  });
+});
+
+/** serve 實際掛的兩個來源（`serve.ts`）。 */
+const BOTH: readonly PressureSource[] = [memoryUsageSource, heapUsageSource];
+
+describe('來源：V8 heap 已用 ÷ heap_size_limit（#1718 Q5）', () => {
+  it('已用 ÷ heap_size_limit，依據寫 V8 heap_size_limit，分子分母給人看', () => {
+    expect(heapUsageSource.measure(reading(CGROUP_GONE, HOST_OK, processAt(90)))).toEqual({
+      kind: 'level',
+      basis: 'V8 heap_size_limit',
+      percent: 90,
+      detail: '900.0 MiB／1000.0 MiB',
+    });
+  });
+
+  it('分母是 heap_size_limit，不是 heapTotal：已提交的量貼著已用（100%）也不影響', () => {
+    const m = heapUsageSource.measure(
+      reading(CGROUP_GONE, HOST_OK, processAt(10, { heapTotalBytes: 100 * MIB })),
+    );
+    expect(m).toMatchObject({ kind: 'level', percent: 10 });
+  });
+
+  it('行程讀不到（heap 讀不到）：讀不到，原因講出來，不是 0%', () => {
+    const gone: Reading<ProcessMemory> = { ok: false, reason: 'EPERM' };
+    expect(heapUsageSource.measure(reading(CGROUP_GONE, HOST_OK, gone))).toEqual({
+      kind: 'unreadable',
+      reason: '行程讀不到（EPERM）',
+    });
+  });
+
+  it('heap_size_limit 不是正數（0、負數、NaN）：讀不到，不除以 0', () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const m = heapUsageSource.measure(
+        reading(CGROUP_GONE, HOST_OK, processAt(50, { heapLimitBytes: bad })),
+      );
+      expect(m.kind).toBe('unreadable');
+    }
+  });
+});
+
+describe('兩個來源合起來：取較高的那個響，寫明是 heap 還是 cgroup（#1718 驗收）', () => {
+  it('cgroup 60%、heap 90%：警告，而且寫明是 V8 heap（不是 cgroup）', () => {
+    const lines = watch(75, BOTH).observe(reading(cgroupAt(60), HOST_OK, processAt(90)));
+    expect(lines).toHaveLength(1);
+    const [line] = lines;
+    expect(line).toMatch(
+      /^\[記憶體\] 警告：V8 heap 用量（V8 heap_size_limit）90\.0%，超過門檻 75%/u,
+    );
+    expect(line).toContain('900.0 MiB／1000.0 MiB');
+    expect(line).not.toContain('cgroup');
+    // 同一組門檻，文案後半跟 cgroup 的一樣：thread 數與下一步。
+    expect(line).toContain('37 條 thread（上限 500）');
+    expect(line).toContain('warnAtPercent');
+  });
+
+  it('cgroup 80%、heap 10%：警告寫 cgroup（記憶體用量），不寫 heap', () => {
+    const lines = watch(75, BOTH).observe(reading(cgroupAt(80), HOST_OK, processAt(10)));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('記憶體用量（cgroup v2 /）80.0%');
+    expect(lines[0]).not.toContain('V8 heap');
+  });
+
+  it('兩個都低：一行都沒有；heap 剛好 75.0% 不算越過（同一組嚴格大於）', () => {
+    const w = watch(75, BOTH);
+    expect(w.observe(reading(cgroupAt(60), HOST_OK, processAt(75)))).toEqual([]);
+    expect(w.observe(reading(cgroupAt(60), HOST_OK, processAt(75.1)))).toHaveLength(1);
+  });
+
+  it('用同一組門檻：門檻 50，heap 60% 就警告、寫 50%', () => {
+    const [line] = watch(50, BOTH).observe(reading(cgroupAt(10), HOST_OK, processAt(60)));
+    expect(line).toContain('V8 heap 用量');
+    expect(line).toContain('門檻 50%');
+  });
+
+  it('heap 讀不到：heap 這個來源不判斷（講一次原因）；cgroup 照常判斷', () => {
+    const gone: Reading<ProcessMemory> = { ok: false, reason: 'EPERM' };
+    const w = watch(75, BOTH);
+    const first = w.observe(reading(cgroupAt(80), HOST_OK, gone));
+    expect(first).toHaveLength(2);
+    expect(
+      first.some((line) => /^\[記憶體\] V8 heap 用量讀不到（行程讀不到（EPERM））/u.test(line)),
+    ).toBe(true);
+    expect(first.some((line) => /警告：記憶體用量（cgroup v2 \/）80\.0%/u.test(line))).toBe(true);
+    // 之後 heap 一直讀不到：不重複講，也沒有 heap 的警告。
+    expect(w.observe(reading(cgroupAt(80), HOST_OK, gone))).toEqual([]);
+  });
+
+  it('只有 heap 讀不到、cgroup 也 60%：整次沒有警告，也沒有把讀不到當成 0% 的「已恢復」', () => {
+    const gone: Reading<ProcessMemory> = { ok: false, reason: 'EPERM' };
+    const w = watch(75, BOTH);
+    w.observe(reading(cgroupAt(60), HOST_OK, processAt(90))); // heap 先越過
+    const lines = w.observe(reading(cgroupAt(60), HOST_OK, gone));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('讀不到');
+    expect(lines.join('\n')).not.toMatch(/已恢復/u);
+  });
+});
+
+describe('越過與恢復的來源不同：遲滯各算各的（#1718）', () => {
+  it('cgroup 越過、heap 在別處：cgroup 降到 70% 以下就恢復，不等 heap；heap 的狀態不被牽動', () => {
+    const w = watch(75, BOTH);
+    const up = w.observe(reading(cgroupAt(80), HOST_OK, processAt(72)));
+    expect(up).toHaveLength(1);
+    expect(up[0]).toContain('記憶體用量');
+    // heap 此刻 72%（> 70，但沒越過 75）：不影響 cgroup 恢復，也不會對 heap 補一行恢復。
+    const down = w.observe(reading(cgroupAt(60), HOST_OK, processAt(72)));
+    expect(down).toHaveLength(1);
+    expect(down[0]).toMatch(/已恢復：記憶體用量（cgroup v2 \/）60\.0%，低於 70%/u);
+  });
+
+  it('heap 先越過、cgroup 接著越過、heap 先恢復：三行各寫各的來源，沒有第二次 heap 警告', () => {
+    const w = watch(75, BOTH);
+    const lines: string[] = [];
+    lines.push(...w.observe(reading(cgroupAt(60), HOST_OK, processAt(90)))); // heap 警告
+    lines.push(...w.observe(reading(cgroupAt(80), HOST_OK, processAt(90)))); // cgroup 警告（heap 不重複）
+    lines.push(...w.observe(reading(cgroupAt(80), HOST_OK, processAt(60)))); // heap 已恢復（cgroup 還高）
+    lines.push(...w.observe(reading(cgroupAt(60), HOST_OK, processAt(60)))); // cgroup 已恢復
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toMatch(/警告：V8 heap 用量/u);
+    expect(lines[1]).toMatch(/警告：記憶體用量/u);
+    expect(lines[2]).toMatch(/已恢復：V8 heap 用量/u);
+    expect(lines[3]).toMatch(/已恢復：記憶體用量/u);
+  });
+
+  it('較高的那個換手（cgroup 80% → heap 衝到 85%、cgroup 仍 80%）：不重講 cgroup，只多一行 heap', () => {
+    const w = watch(75, BOTH);
+    expect(w.observe(reading(cgroupAt(80), HOST_OK, processAt(10)))).toHaveLength(1);
+    const swap = w.observe(reading(cgroupAt(80), HOST_OK, processAt(85)));
+    expect(swap).toHaveLength(1);
+    expect(swap[0]).toMatch(/警告：V8 heap 用量/u);
+    // 換回去（heap 降、cgroup 不變）：heap 恢復一行，cgroup 沒有任何動靜。
+    const back = w.observe(reading(cgroupAt(80), HOST_OK, processAt(10)));
+    expect(back).toHaveLength(1);
+    expect(back[0]).toMatch(/已恢復：V8 heap 用量/u);
+  });
+
+  it('heap 在門檻附近鋸齒（GC）：71%–79% 來回仍只有最初一行警告（5 個百分點壓得住的範圍）', () => {
+    const w = watch(75, BOTH);
+    const lines: string[] = [];
+    for (const percent of [76, 71, 79, 72, 76, 71, 78])
+      lines.push(...w.observe(reading(cgroupAt(10), HOST_OK, processAt(percent))));
+    expect(lines).toHaveLength(1);
+  });
+
+  it('heap 鋸齒幅度超過 5 個百分點（如 #1718 量到的 20 多點）：每次越過一行，警告與恢復輪流（已知限制，照拍板同一組門檻）', () => {
+    const w = watch(75, BOTH);
+    const lines: string[] = [];
+    for (const percent of [80, 60, 80, 60])
+      lines.push(...w.observe(reading(cgroupAt(10), HOST_OK, processAt(percent))));
+    expect(lines.map((line) => (WARNED.test(line) ? '警告' : '恢復'))).toEqual([
+      '警告',
+      '恢復',
+      '警告',
+      '恢復',
+    ]);
   });
 });
 

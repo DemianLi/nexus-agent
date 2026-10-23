@@ -279,3 +279,37 @@ describe('fence 的協議與覆蓋面', () => {
     expect(await readFile(join(terrain.root, '上傳.md'), 'utf8')).toBe('上傳的內容');
   });
 });
+
+// `--workspace /` 時可寫根是 `/`：包含判斷若用 `realRoot + sep` 前綴，`/` 加分隔符是 `//`，什麼都比不中，
+// 根底下的每一筆寫入都會被誤判成「落在可寫根之外」（#1647）。
+describe('可寫根是檔案系統根 `/`', () => {
+  it('寫、改、刪根底下的檔都放行', async () => {
+    const backend = contained('/');
+    const virtual = join(terrain.root, 'x.txt');
+
+    expect((await backend.write(virtual, '第一版')).error).toBeUndefined();
+    expect(await readFile(virtual, 'utf8')).toBe('第一版');
+
+    expect((await backend.edit(virtual, '第一版', '第二版')).error).toBeUndefined();
+    expect(await readFile(virtual, 'utf8')).toBe('第二版');
+
+    expect((await backend.delete(virtual)).error).toBeUndefined();
+    await expect(stat(virtual)).rejects.toThrow();
+  });
+
+  it('uploadFiles 也放行', async () => {
+    const [result] = await contained('/').uploadFiles([
+      [join(terrain.root, '上傳.md'), new TextEncoder().encode('上傳的內容')],
+    ]);
+
+    expect(result?.error).toBeFalsy();
+    expect(await readFile(join(terrain.root, '上傳.md'), 'utf8')).toBe('上傳的內容');
+  });
+
+  it('根就是 `/` 時，經 symlink 指到哪裡都還在根裡面：不是 fence 擋的範圍', async () => {
+    const virtual = join(terrain.root, 'escape', 'again.txt');
+
+    expect((await contained('/').write(virtual, '寫進去')).error).toBeUndefined();
+    expect(await readFile(join(terrain.outside, 'again.txt'), 'utf8')).toBe('寫進去');
+  });
+});
