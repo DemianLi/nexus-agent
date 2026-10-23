@@ -134,8 +134,11 @@ function fakeClient(
       code: 'not_supported',
       message: '這一檔沒有接軌跡細節',
     }),
-    // 真的伺服器上 `/feedback` 是回饋插件登記的命令；開頭的字在清單上才走 `slash.run`（#1929）。
-    slashList: async () => ({ kind: 'ok', commands: [{ name: 'feedback', description: '回饋' }] }),
+    // 真的伺服器上 `/feedback` 是回饋插件登記的命令，宣告了 `input`；開頭的字在清單上才走 `slash.run`（#1929）。
+    slashList: async () => ({
+      kind: 'ok',
+      commands: [{ name: 'feedback', description: '回饋', input: { hint: '<內容>' } }],
+    }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
       return { kind: 'unknown' };
