@@ -73,7 +73,7 @@ export abstract class ContractService<T = unknown> extends Service<ContractInter
   }
 
   [Service.check](): boolean {
-    const { range } = this[Service.resolveConfig]();
+    const { range } = this[Service.resolveIntercept]();
     if (range === undefined || semver.satisfies(this.contractVersion, range)) return true;
     const consumer = this.ctx.fiber.entry?.id ?? this.ctx.fiber.runtime?.name ?? '(未知)';
     throw new ContractError(consumer, this.provider, this.name, this.contractVersion, range);

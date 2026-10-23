@@ -50,16 +50,6 @@ function rewrite(dir, transform) {
   }
 }
 
-/** 本地修改第 1 條：core 原始碼的相對 specifier 補上 `.ts`（等同上游 #125）。 */
-function explicitExtensions(source) {
-  return source
-    .replace(/(from |import\(|declare module )'(\.\/[\w/-]+)'/g, "$1'$2.ts'")
-    .replace(
-      "import type { Context, Service } from '.'\n",
-      "import type { Context } from './context.ts'\nimport type { Service } from './service.ts'\n",
-    );
-}
-
 /** 本地修改第 4 條：指向 vendor 套件的 specifier 換成我們的 scope（照 dsh 第 17 條）。 */
 function rescope(source) {
   let out = source;
@@ -140,12 +130,14 @@ function closeWriteBack(source) {
   );
   out = once(
     out,
-    `    const tree = applyPatches(this.cache.data, this.config.patches, this.warn)
-    this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
+    `    const { data, index } = applyPatches(this.cache.data, this.config.patches, this.warn)
+    this.index = index
+    this._pendingTree = applyJournal(data, this.journal, undefined, this.warn)
 `,
-    `    const patched = applyPatches(this.cache.data, this.config.patches, this.warn)
+    `    const { data, index } = applyPatches(this.cache.data, this.config.patches, this.warn)
+    this.index = index
     const only = this.config.only
-    const tree = only === undefined ? patched : patched.filter((options) => only.includes(options.name))
+    const tree = only === undefined ? data : data.filter((options) => only.includes(options.name))
     this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
 `,
   );
@@ -267,8 +259,9 @@ function selfDisableHook(source) {
   let out = source;
   // 上游 rc.11 起（#196）loader 自己 import 了 `FiberState`，目標內容已經在：這一處「已經存在就跳過」，其餘各處照舊剛好命中一次。
   // 只有這一處放寬，因為它是純 import，目標已在不代表上游的行為變了；`FiberState` 不在也不是舊形狀時，仍然在這裡擋下。
+  // rc.12 起那一行還多了 `Fiber`、`ValidationError`：判準改成「從 `@nexus/cordis` 的具名 import 已含 `FiberState`」。
   const importWithFiberState = "import { Context, FiberState, Inject, Service } from '@nexus/cordis'";
-  if (!out.includes(importWithFiberState)) {
+  if (!/^import \{[^}]*\bFiberState\b[^}]*\} from '@nexus\/cordis'$/m.test(out)) {
     out = once(out, "import { Context, Inject, Service } from '@nexus/cordis'", importWithFiberState);
   }
   out = once(
@@ -365,9 +358,8 @@ try {
   for (const [to, from] of COPIES) cpSync(join(base, from), join(out, to), { recursive: true });
   // 本地修改第 5 條：上游測試的 tsconfig extends 上游根目錄的設定，那份沒有 vendor；拿掉後 vitest 用套件自己的 tsconfig。
   rmSync(join(out, 'cordis/tests/tsconfig.json'));
-  rewrite(join(out, 'cordis/src'), explicitExtensions);
   rewrite(join(out, 'loader/src'), rescope);
-  rewrite(join(out, 'include/src'), (source) => rescope(explicitExtensions(source)));
+  rewrite(join(out, 'include/src'), rescope);
   rewrite(join(out, 'include/src'), (source) => (source.includes('class Include') ? rejectJsExpr(closeWriteBack(source)) : source));
   rewrite(join(out, 'cordis/tests'), rescope);
   // 本地修改第 12 條：logger-console 刪瀏覽器版、拿掉 schemastery 與 supports-color。

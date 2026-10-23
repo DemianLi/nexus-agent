@@ -16,14 +16,26 @@ const kValidationError = Symbol.for('ValidationError')
 export class ValidationError extends TypeError {
   name = 'ValidationError'
 
-  constructor(issues: readonly StandardSchemaV1.Issue[]) {
+  constructor(public issues: readonly StandardSchemaV1.Issue[]) {
     super(`invalid config:\n` + issues.map(issue => {
-      if (issue.path) {
-        return `  - ${issue.message} (at ${issue.path.join('.')})`
+      if (issue.path?.length) {
+        return `  - ${issue.message} (at ${ValidationError.formatPath(issue.path)})`
       } else {
         return `  - ${issue.message}`
       }
     }).join('\n'))
+  }
+
+  static is(error: unknown): error is ValidationError {
+    return !!error?.[kValidationError]
+  }
+
+  static normalizePath(path: StandardSchemaV1.Issue['path'] = []) {
+    return path.map(segment => typeof segment === 'object' ? segment.key : segment)
+  }
+
+  static formatPath(path: StandardSchemaV1.Issue['path']) {
+    return ValidationError.normalizePath(path).map(String).join('.')
   }
 }
 
@@ -98,33 +110,6 @@ export namespace CordisError {
   } as const
 }
 
-/**
- * Notify plugin teardown without letting one observer break ownership cleanup.
- *
- * `ctx.emit()` runs its listeners in a bare loop, so a listener that throws
- * aborts the remaining listeners *and* the disposal that issued the
- * notification — leaving the fiber reporting `ACTIVE` with every effect it
- * owned still registered. Each observer is therefore contained individually.
- */
-function emitPluginDisposed(context: Context, fiber: Fiber) {
-  const args: any[] = ['internal/plugin', fiber]
-  let callbacks: Function[]
-  try {
-    callbacks = context.events.dispatch('emit', args)
-  } catch (error) {
-    context.logger.error(error)
-    return
-  }
-  for (const callback of callbacks) {
-    try {
-      const returned = callback(...args)
-      void Promise.resolve(returned).catch(error => context.logger.error(error))
-    } catch (error) {
-      context.logger.error(error)
-    }
-  }
-}
-
 const INACTIVE = '__INACTIVE__'
 
 export class Fiber {
@@ -163,15 +148,6 @@ export class Fiber {
       this.uid = parent.registry.counter
       this.ctx = this.context = parent.extend({ fiber: this })
 
-      const injectEntries = Object.entries(this.inject)
-      if (injectEntries.length) {
-        this.ctx[Context.intercept] = Object.create(parent[Context.intercept])
-        for (const [name, config] of injectEntries) {
-          if (isNullable(config)) continue
-          this.ctx[Context.intercept][name] = config
-        }
-      }
-
       this._runner = {
         epoch: INACTIVE,
         getOuterStack,
@@ -191,15 +167,23 @@ export class Fiber {
         collect,
       }
 
-      // Publish only after the parent owns a fully assigned disposer: an
-      // observer may dispose this fiber, or its parent, from inside the
-      // notification. Assigning afterwards left `fiber.dispose` undefined at
-      // publication and let the constructor carry on into activation.
+      this.context.emit('internal/plugin', this)
+
+      for (const name of Object.keys(this.inject)) {
+        this._checkImpl(name)
+      }
+
       this.dispose = parent.fiber.effect(() => {
         const remove = runtime.fibers.push(this)
+        try {
+          this._refresh()
+        } catch (error) {
+          this.ctx.logger.error(error)
+          this._error = error
+        }
         return async () => {
           this.uid = null
-          emitPluginDisposed(this.context, this)
+          this.context.emit('internal/plugin', this)
           if (this.ctx.registry.has(runtime.callback)) {
             remove()
             if (!runtime.fibers.length) {
@@ -207,54 +191,18 @@ export class Fiber {
             }
           }
           this._setEpoch(INACTIVE)
-          // A fiber that never activated can still own disposables: an
-          // observer of `internal/plugin` registers effects on it while its
-          // epoch is still INACTIVE, and the `_setEpoch()` above has no
-          // transition to drive because the epoch does not change. Unload
-          // that pre-activation work here; the `_updateState` inside
-          // `_unload()` then settles the state to DISPOSED, which `uid`
-          // being null now makes the derived answer.
-          if (!this.inertia) {
-            this._updateState(() => {
-              this.inertia = this._unload()
-              return FiberState.UNLOADING
-            })
-          }
-          // `this.inertia` itself should never reject — both `_reload` and
-          // `_unload` swallow their own work errors via `ctx.logger.error`.
-          // If it *does* reject, the only remaining cause is the logger
-          // itself failing, which we can't recover from in this exact spot
-          // (calling the logger again is what just failed). Let the
-          // rejection propagate; process-level crash is the honest outcome.
+          // `inertia` never rejects: `_reload` and `_unload` both log their
+          // own work errors. A rejection here would mean the logger itself
+          // failed, so let it propagate.
           while (this.inertia) {
             await this.inertia
           }
+          // `_setEpoch()` above returns early for a fiber that was not ACTIVE,
+          // so the cached state is not refreshed. Re-derive it now that
+          // `uid` is null; the empty callback falls through to `_getState()`.
+          this._updateState(() => {})
         }
       }, 'ctx.plugin()')
-
-      try {
-        this.context.emit('internal/plugin', this)
-      } catch (error) {
-        // Publication failed synchronously. The disposer removes the child from
-        // both the parent and the runtime before control escapes.
-        void Promise.resolve(this.dispose()).catch(reason => this.ctx.logger.error(reason))
-        throw error
-      }
-
-      // An observer may have added to `inject`, so resolve dependencies only
-      // after publication. A reentrant disposal leaves `uid` null and the
-      // parent's fiber unloading; neither may be dragged back into activation.
-      if (this.uid !== null && parent.fiber.state !== FiberState.UNLOADING) {
-        try {
-          for (const name of Object.keys(this.inject)) {
-            this._checkImpl(name)
-          }
-          this._refresh()
-        } catch (error) {
-          this.ctx.logger.error(error)
-          this._error = error
-        }
-      }
     } else {
       this.uid = 0
       this.ctx = this.context = parent
@@ -338,13 +286,6 @@ export class Fiber {
   effect(execute: () => Effect, label?: string): AsyncDisposable<Promise<void>>
   effect(execute: () => Effect, label = 'anonymous'): any {
     this.assertActive()
-    // Registration while the owner is unloading would land after
-    // `_unload()` has already cleared the list it drains, so the effect would
-    // outlive the teardown that was supposed to own it. PENDING and LOADING
-    // stay legal: effects there are drained by the activation that follows.
-    if (this.state === FiberState.UNLOADING) {
-      throw new CordisError('INACTIVE_EFFECT')
-    }
 
     const disposables: Disposable[] = []
     const dispose = () => {

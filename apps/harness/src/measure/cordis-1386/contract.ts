@@ -6,7 +6,7 @@
  * - 消費者宣告範圍的地方有兩個——插件自己的 `inject: { memory: { range } }`，或 Loader 列上的 `intercept: { memory: { range } }`。
  *   兩者都落進消費者 ctx 的 `Context.intercept`（vendor/cordis/src/fiber.ts 的建構子、vendor/loader/src/config/isolate.ts 的 patch-context）。
  * - 提供者是 `Service`：它的 `[Service.check]` 由**消費者的** fiber 呼叫（`Fiber._checkImpl`），`this` 是追蹤到消費者 ctx 的代理，
- *   所以 `this[Service.resolveConfig]()` 讀到的是消費者宣告的範圍，`this.ctx.fiber.entry` 是消費者那一列。
+ *   所以 `this[Service.resolveIntercept]()` 讀到的是消費者宣告的範圍，`this.ctx.fiber.entry` 是消費者那一列。
  *   Loader 自己的 `await` 檢查就是這樣用的（vendor/loader/src/index.ts 的 `[Service.check]`）。
  *
  * 不相容時 `check` 拋 {@link ContractError}；Cordis 把它交給**提供者**的 logger，消費者留在 PENDING。
@@ -54,7 +54,7 @@ export function contractProvider(name: string, version: string) {
     readonly version = version;
 
     [Service.check](): boolean {
-      const { range } = this[Service.resolveConfig]();
+      const { range } = this[Service.resolveIntercept]();
       if (range === undefined || semver.satisfies(version, range)) return true;
       const consumer = this.ctx.fiber.entry?.id ?? this.ctx.fiber.runtime?.name ?? '(未知)';
       throw new ContractError(consumer, this.provider, name, version, range);
