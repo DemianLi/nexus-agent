@@ -42,7 +42,7 @@ import type { ReconnectPolicy } from './supervisor.js';
 import type { McpResourceRequest, McpSource } from './hub.js';
 
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
-export { MCP_HUB_SERVICE, RESOURCE_TOOL_NAMES } from './hub.js';
+export { MCP_HUB_SERVICE, RESOURCE_TOOL_NAMES, UNTRUSTED_CONTENT_PROMPT } from './hub.js';
 export { reconnectSchema } from './supervisor.js';
 export { approvalReason, mcpApprovalSchema } from './approval.js';
 export type { McpApproval } from './approval.js';
