@@ -40,7 +40,9 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
+    "@types/compression": "^1.8.1",
     "@types/js-yaml": "^4.0.9",
+    "@types/negotiator": "^0.6.5",
     "@types/semver": "^7.8.0",
     "@types/node": "^24.10.0",
     "ajv": "8.20.0",
@@ -103,9 +105,11 @@
     "@nexus/wire": "workspace:*",
     "@nexus/web": "workspace:*",
     "@vscode/ripgrep": "^1.18.0",
+    "compression": "^1.8.1",
     "deepagents": "~1.13.1",
     "langchain": "^1.5.10",
     "langsmith": ">=0.7.1 <0.10.0",
+    "negotiator": "^1.1.0",
     "semver": "^7.8.5",
     "yaml": "^2.9.0",
     "zod": "^4.3.6"

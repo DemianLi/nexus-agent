@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { documentedFixture } from './documented-fixture.js';
-import { approvalAt, foldTurn, serveClient } from './fixtures.js';
+import { approvalAt, exchangeServeToken, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -70,6 +70,46 @@ describe('serve 的旗標', () => {
   it('port 不是合法整數就當場說清楚', () => {
     expect(() => parseServeArgs(['--port', '七'])).toThrow('--port 要給 0 到 65535');
     expect(() => parseServeArgs(['--port', '99999'])).toThrow('--port 要給 0 到 65535');
+  });
+
+  it('壓縮旗標（#1570）：預設不壓；gzip 帶預設等級與門檻；不合法當場說清楚', () => {
+    // 預設：沒有 compression 這一格（跟以前的 ServeInvocation 一樣）。
+    expect('compression' in parseServeArgs([])).toBe(false);
+    expect(parseServeArgs(['--compression', 'none']).compression).toBeUndefined();
+    expect(parseServeArgs(['--compression', 'gzip']).compression).toEqual({
+      level: 1,
+      thresholdBytes: 1024,
+    });
+    expect(
+      parseServeArgs([
+        '--compression',
+        'gzip',
+        '--compression-level',
+        '9',
+        '--compression-threshold',
+        '0',
+      ]).compression,
+    ).toEqual({ level: 9, thresholdBytes: 0 });
+
+    expect(() => parseServeArgs(['--compression', 'gzip', '--compression-level', '10'])).toThrow(
+      /0 到 9/u,
+    );
+    expect(() => parseServeArgs(['--compression', 'gzip', '--compression-level', '1.5'])).toThrow(
+      /0 到 9/u,
+    );
+    expect(() => parseServeArgs(['--compression', 'gzip', '--compression-threshold=-1'])).toThrow(
+      /非負整數/u,
+    );
+    expect(() => parseServeArgs(['--compression', 'brotli'])).toThrow(/none 或 gzip/u);
+    // 逐欄獨立驗（dsh webserver/src/index.ts:295-296）：沒打開 gzip 時給等級或門檻照收、不用；值本身不合法照樣擋。
+    expect(parseServeArgs(['--compression-level', '3']).compression).toBeUndefined();
+    expect(
+      parseServeArgs(['--compression', 'none', '--compression-threshold', '10']).compression,
+    ).toBeUndefined();
+    expect(() => parseServeArgs(['--compression-level', '10'])).toThrow(/0 到 9/u);
+    expect(() => parseServeArgs(['--compression', 'none', '--compression-threshold', 'x'])).toThrow(
+      /非負整數/u,
+    );
   });
 
   it('--patch 給空字串是錯的，不是「沒給」', () => {
@@ -139,6 +179,30 @@ describe('起起來之後', () => {
  * 不會真的死（vitest 自己接住了），所以判準是**這條測試期間的未處理 rejection 數**，再加上
  * 「同一條 thread 再送一句、另一條 thread 也送一句都跑得完」那一半。
  */
+describe('gzip 壓縮接上了 serve（#1570）', () => {
+  /** 帶著登入 cookie 打 `GET /threads`，回 `content-encoding`。 */
+  async function listEncoding(argv: readonly string[]): Promise<string | null> {
+    running = await runServe({ argv: ['--port', '0', ...argv], log: () => undefined, env: {} });
+    const started = running as RunningServe;
+    const cookie = await exchangeServeToken(started.authenticatedUrl);
+    const response = await fetch(`${started.url}/threads`, {
+      headers: { cookie, 'accept-encoding': 'gzip', 'content-type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    return response.headers.get('content-encoding');
+  }
+
+  it('--compression gzip：JSON 回應壓縮再送', async () => {
+    expect(await listEncoding(['--compression', 'gzip', '--compression-threshold', '0'])).toBe(
+      'gzip',
+    );
+  });
+
+  it('不給旗標：跟以前一樣，不壓', async () => {
+    expect(await listEncoding([])).toBeNull();
+  });
+});
+
 describe('serve 上的工具拋錯', () => {
   it('同一條 thread 再送一句、另一條 thread 也送一句都跑得完，沒有未處理的 rejection', async () => {
     const unhandled: unknown[] = [];

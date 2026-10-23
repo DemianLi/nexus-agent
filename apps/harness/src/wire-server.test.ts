@@ -2,7 +2,10 @@ import { tool } from '@langchain/core/tools';
 import { createWireClient } from '@nexus/wire';
 import type { Event } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
+import { request as httpRequest } from 'node:http';
+import type { IncomingHttpHeaders } from 'node:http';
 import { connect } from 'node:net';
+import { gunzipSync } from 'node:zlib';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -190,7 +193,7 @@ describe('最後一道防線（照 dsh webserver）', () => {
   it('absolute-form 的請求行照樣處理：只取路徑與 query，帶的 authority 不算數', async () => {
     const seen: string[] = [];
     const handler: WireHandler = {
-      handle: async (request) => {
+      handle: async (request: Request) => {
         seen.push(request.url);
         return new Response('ok');
       },
@@ -209,7 +212,7 @@ describe('最後一道防線（照 dsh webserver）', () => {
   it('handler 拋錯：記一筆、回 400，行程照跑、下一個請求照常', async () => {
     const warned: Error[] = [];
     const handler: WireHandler = {
-      handle: async (request) => {
+      handle: async (request: Request) => {
         if (new URL(request.url).pathname === '/boom') throw new Error('炸了');
         return new Response('ok');
       },
@@ -247,7 +250,7 @@ describe('最後一道防線（照 dsh webserver）', () => {
   it('onResponse：每個請求回完算一次，帶 pathname（不含 query）與實際送出的狀態碼（#1535）', async () => {
     const seen: { path: string; status: number }[] = [];
     const handler: WireHandler = {
-      handle: async (request) => {
+      handle: async (request: Request) => {
         const { pathname } = new URL(request.url);
         if (pathname === '/boom') throw new Error('炸了');
         return new Response('x', { status: pathname === '/teapot' ? 418 : 200 });
@@ -331,5 +334,235 @@ describe('最後一道防線（照 dsh webserver）', () => {
 
     await aborted;
     expect(seen?.aborted).toBe(true);
+  });
+});
+
+/**
+ * 選用的 gzip 壓縮（[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)），逐條對 dsh `tests/webserver.spec.ts:313-401`。
+ *
+ * 用 `node:http` 的原始請求讀回應：`fetch` 會自己解壓，`content-encoding` 與位元組都被它吃掉，量不到「線上到底送了什麼」。
+ */
+describe('gzip 壓縮（#1570）', () => {
+  interface Raw {
+    readonly status: number;
+    readonly headers: IncomingHttpHeaders;
+    readonly body: Buffer;
+  }
+
+  function rawGet(url: string, headers: Record<string, string> = {}): Promise<Raw> {
+    return new Promise((resolve, reject) => {
+      const req = httpRequest(url, { method: 'GET', headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () =>
+          resolve({
+            status: res.statusCode ?? 0,
+            headers: res.headers,
+            body: Buffer.concat(chunks),
+          }),
+        );
+        res.on('error', reject);
+      });
+      req.on('error', reject);
+      req.end();
+    });
+  }
+
+  /** 每個請求都回同一份 `Response` 的手搭 handler。 */
+  function fixed(make: () => Response): WireHandler {
+    return { handle: async () => make(), close: async () => undefined } as unknown as WireHandler;
+  }
+
+  /** 4 KB 的 JSON：夠大、夠重複，壓得下去。 */
+  const BIG_JSON = JSON.stringify({
+    rows: Array.from({ length: 200 }, (_, i) => `row-${String(i)}`),
+  });
+  const json = (body: string, extra: Record<string, string> = {}): Response =>
+    new Response(body, { headers: { 'content-type': 'application/json', ...extra } });
+
+  it('打開時會壓：帶 accept-encoding: gzip，回 content-encoding: gzip，解回來與原文逐位元組相同', async () => {
+    expect(BIG_JSON.length).toBeGreaterThan(1024);
+    running = await startWireServer({
+      handler: fixed(() => json(BIG_JSON)),
+      compression: { level: 1, thresholdBytes: 1024 },
+    });
+    const response = await rawGet(running.url, { 'accept-encoding': 'gzip' });
+    expect(response.status).toBe(200);
+    expect(response.headers['content-encoding']).toBe('gzip');
+    expect(String(response.headers.vary).toLowerCase()).toContain('accept-encoding');
+    expect(response.body.length).toBeLessThan(BIG_JSON.length);
+    expect(gunzipSync(response.body).equals(Buffer.from(BIG_JSON))).toBe(true);
+  });
+
+  it('等級有傳進去：level 0（只打包不壓縮）的線上位元組比 level 9 大，兩者解回來都等於原文', async () => {
+    const sizes: number[] = [];
+    for (const level of [0, 9]) {
+      const server = await startWireServer({
+        handler: fixed(() => json(BIG_JSON)),
+        compression: { level, thresholdBytes: 0 },
+      });
+      try {
+        const response = await rawGet(server.url, { 'accept-encoding': 'gzip' });
+        expect(response.headers['content-encoding']).toBe('gzip');
+        expect(gunzipSync(response.body).equals(Buffer.from(BIG_JSON))).toBe(true);
+        sizes.push(response.body.length);
+      } finally {
+        await server.close();
+      }
+    }
+    expect(sizes[0]).toBeGreaterThan(sizes[1]!);
+  });
+
+  it('不給選項不壓：同一個請求，沒有 content-encoding，位元組原樣（預設不變）', async () => {
+    running = await startWireServer({ handler: fixed(() => json(BIG_JSON)) });
+    const response = await rawGet(running.url, { 'accept-encoding': 'gzip' });
+    expect(response.headers['content-encoding']).toBeUndefined();
+    expect(response.body.equals(Buffer.from(BIG_JSON))).toBe(true);
+  });
+
+  it('協商：br, gzip, deflate 選 gzip；gzip;q=0.5, identity;q=1 與沒帶 accept-encoding 都不壓', async () => {
+    running = await startWireServer({
+      handler: fixed(() => json(BIG_JSON)),
+      compression: { level: 1, thresholdBytes: 1024 },
+    });
+    const negotiated = await rawGet(running.url, { 'accept-encoding': 'br, gzip, deflate' });
+    expect(negotiated.headers['content-encoding']).toBe('gzip');
+    const prefersIdentity = await rawGet(running.url, {
+      'accept-encoding': 'gzip;q=0.5, identity;q=1',
+    });
+    expect(prefersIdentity.headers['content-encoding']).toBeUndefined();
+    expect(prefersIdentity.body.equals(Buffer.from(BIG_JSON))).toBe(true);
+    const none = await rawGet(running.url);
+    expect(none.headers['content-encoding']).toBeUndefined();
+  });
+
+  it('門檻：已知長度 512 位元組不壓，4 KB 的壓；長度未知的串流可以壓', async () => {
+    const small = 'x'.repeat(512);
+    const big = JSON.stringify({ pad: 'y'.repeat(4096) });
+    running = await startWireServer({
+      handler: {
+        handle: async (request: Request) => {
+          const path = new URL(request.url).pathname;
+          if (path === '/small') return json(small, { 'content-length': String(small.length) });
+          if (path === '/big') return json(big, { 'content-length': String(big.length) });
+          const encoder = new TextEncoder();
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.enqueue(encoder.encode(BIG_JSON));
+                controller.close();
+              },
+            }),
+            { headers: { 'content-type': 'application/json' } },
+          );
+        },
+        close: async () => undefined,
+      } as unknown as WireHandler,
+      compression: { level: 1, thresholdBytes: 1024 },
+    });
+    const gzip = { 'accept-encoding': 'gzip' };
+    expect(
+      (await rawGet(`${running.url}/small`, gzip)).headers['content-encoding'],
+    ).toBeUndefined();
+    expect((await rawGet(`${running.url}/big`, gzip)).headers['content-encoding']).toBe('gzip');
+    const streamed = await rawGet(`${running.url}/stream`, gzip);
+    expect(streamed.headers['content-encoding']).toBe('gzip');
+    expect(gunzipSync(streamed.body).equals(Buffer.from(BIG_JSON))).toBe(true);
+  });
+
+  it('門檻目前只對自帶 content-length 的回應有效：沒有 content-length 的小回應（"ok"）照樣被壓（與 dsh 相同；docs/operations.md 的說明靠這一格）', async () => {
+    running = await startWireServer({
+      handler: fixed(() => new Response('ok', { headers: { 'content-type': 'text/plain' } })),
+      compression: { level: 1, thresholdBytes: 1024 },
+    });
+    const response = await rawGet(running.url, { 'accept-encoding': 'gzip' });
+    expect(response.headers['content-length']).toBeUndefined();
+    expect(response.headers['content-encoding']).toBe('gzip');
+    expect(gunzipSync(response.body).toString()).toBe('ok');
+  });
+
+  it('排除：content-range 不壓；application/gzip 不再壓一次；multipart/form-data 一律壓', async () => {
+    running = await startWireServer({
+      handler: {
+        handle: async (request: Request) => {
+          const path = new URL(request.url).pathname;
+          if (path === '/range') {
+            return new Response(BIG_JSON, {
+              status: 206,
+              headers: {
+                'content-type': 'application/json',
+                'content-range': `bytes 0-${String(BIG_JSON.length - 1)}/${String(BIG_JSON.length)}`,
+              },
+            });
+          }
+          if (path === '/gz') {
+            return new Response(BIG_JSON, { headers: { 'content-type': 'application/gzip' } });
+          }
+          return new Response(BIG_JSON, {
+            headers: { 'content-type': 'multipart/form-data; boundary=b' },
+          });
+        },
+        close: async () => undefined,
+      } as unknown as WireHandler,
+      compression: { level: 1, thresholdBytes: 1024 },
+    });
+    const gzip = { 'accept-encoding': 'gzip' };
+    const range = await rawGet(`${running.url}/range`, gzip);
+    expect(range.status).toBe(206);
+    expect(range.headers['content-encoding']).toBeUndefined();
+    expect(range.body.equals(Buffer.from(BIG_JSON))).toBe(true);
+    expect((await rawGet(`${running.url}/gz`, gzip)).headers['content-encoding']).toBeUndefined();
+    const multipart = await rawGet(`${running.url}/multipart`, gzip);
+    expect(multipart.headers['content-encoding']).toBe('gzip');
+    expect(gunzipSync(multipart.body).equals(Buffer.from(BIG_JSON))).toBe(true);
+  });
+
+  it('非 SSE 的串流回應：標頭不等第一顆 body 就送出（flushHeaders 在壓縮之下照樣有效）', async () => {
+    const FIRST_CHUNK_DELAY_MS = 600;
+    running = await startWireServer({
+      handler: fixed(
+        () =>
+          new Response(
+            new ReadableStream<Uint8Array>({
+              async start(controller) {
+                // 第一顆 body 故意晚到：標頭要是等它，用戶端的 `response` 事件就會晚到這麼久。
+                await new Promise((resolve) => setTimeout(resolve, FIRST_CHUNK_DELAY_MS));
+                controller.enqueue(new TextEncoder().encode(BIG_JSON));
+                controller.close();
+              },
+            }),
+            { headers: { 'content-type': 'application/json' } },
+          ),
+      ),
+      compression: { level: 1, thresholdBytes: 1024 },
+    });
+    const startedAt = Date.now();
+    const headerAt = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest(running!.url, { headers: { 'accept-encoding': 'gzip' } }, (res) => {
+        resolve(Date.now() - startedAt);
+        expect(res.headers['content-encoding']).toBe('gzip');
+        res.resume();
+      });
+      req.on('error', reject);
+      req.end();
+    });
+    expect(headerAt).toBeLessThan(FIRST_CHUNK_DELAY_MS / 2);
+  });
+
+  it('最後一道防線在壓縮層裡面：handler 拋了，照樣回 400、行程不死', async () => {
+    const warned: string[] = [];
+    running = await startWireServer({
+      handler: {
+        handle: async () => {
+          throw new Error('handler 拋了');
+        },
+        close: async () => undefined,
+      } as unknown as WireHandler,
+      compression: { level: 1, thresholdBytes: 1024 },
+      warn: (error) => warned.push(error.message),
+    });
+    const response = await rawGet(running.url, { 'accept-encoding': 'gzip' });
+    expect(response.status).toBe(400);
+    expect(warned).toEqual(['handler 拋了']);
   });
 });

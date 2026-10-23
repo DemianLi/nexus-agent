@@ -111,8 +111,8 @@ import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
-import { startWireServer } from './wire-server.js';
-import type { WireServer } from './wire-server.js';
+import { parseCompressionFlags, startWireServer } from './wire-server.js';
+import type { WireCompression, WireServer } from './wire-server.js';
 import { runDumpConfigSchema } from './config-schema-dump.js';
 import {
   composeDefaultEntries,
@@ -186,6 +186,8 @@ export const DEFAULT_PORT = 8787;
 export interface ServeInvocation {
   readonly live: boolean;
   readonly port: number;
+  /** gzip 壓縮（#1570）：只在 `--compression gzip` 時有值；省略就是不壓，跟以前完全一樣。 */
+  readonly compression?: WireCompression;
   readonly workspace?: string;
   /** 見 `assembly-root.ts` 的 `CliInvocation.sandbox`。**兩個入口共用同一個旗標名、同一份驗證、同一個預設**。 */
   readonly sandbox?: SandboxMode;
@@ -229,6 +231,13 @@ const USAGE = `用法：
                        （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
+  --compression <mode> none｜gzip，預設 none（不壓，跟以前一樣）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
+                       SSE 下行與帶 content-range 的回應照原樣送
+  --compression-level <0-9>
+                       gzip 等級，預設 1
+  --compression-threshold <bytes>
+                       已知長度小於這個位元組數就不壓，預設 1024；
+                       目前只對自帶 content-length 的回應有效
   --no-goal-driver     關掉自動續行：一個 active 的目標沒達成時，預設會自己再開一輪
                        （上限是那個目標自己的 max_goal_rounds）；關掉之後一輪結束就結束
   --goal-driver        明講要開（預設就是開；與 --no-goal-driver 不能一起給）
@@ -253,6 +262,9 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         sandbox: { type: 'string' },
         'session-log': { type: 'string' },
         port: { type: 'string' },
+        compression: { type: 'string' },
+        'compression-level': { type: 'string' },
+        'compression-threshold': { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
         'no-goal-driver': { type: 'boolean', default: false },
         'dump-config': { type: 'boolean', default: false },
@@ -317,9 +329,22 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     throw new Error(`--port 要給 0 到 65535 之間的整數，收到 "${values.port}"。\n\n${USAGE}`);
   }
 
+  // 壓縮旗標的驗證（照 dsh 的 schema）；不合法是 usage error，在任何檔案寫入之前失敗。
+  let compression: WireCompression | undefined;
+  try {
+    compression = parseCompressionFlags({
+      compression: values.compression,
+      level: values['compression-level'],
+      threshold: values['compression-threshold'],
+    });
+  } catch (error) {
+    throw new Error(`${error instanceof Error ? error.message : String(error)}\n\n${USAGE}`);
+  }
+
   return {
     live: values.live === true,
     port,
+    ...(compression !== undefined && { compression }),
     ...(patches !== undefined && { patches }),
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sandbox !== undefined && { sandbox }),
@@ -1485,6 +1510,7 @@ async function startServer(
         opsEndpoints,
       ),
       port: invocation.port,
+      ...(invocation.compression !== undefined && { compression: invocation.compression }),
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
       // 方法與 pathname 一起記（#1536）：管理者才對得回是哪一個請求；pathname 不含 query，權杖不進日誌。
       warn: (error, request) => {
