@@ -5,15 +5,32 @@
  *
  * ## 結構：來源 × 狀態機
  *
- * - **來源**（{@link PressureSource}）把一次讀數換成「用量百分比」，或「讀不到與原因」。今天只有一個
- *   （{@link memoryUsageSource}，Q1(a)：cgroup 上限優先、其次行程受限、最後主機）；之後多一個來源（例如 heap 比例）或
- *   少一種來源（例如主機的 `os.freemem` 不算），是改來源清單，不是改狀態機。
+ * - **來源**（{@link PressureSource}）把一次讀數換成「用量百分比」，或「讀不到與原因」。現在有兩個：
+ *   {@link memoryUsageSource}（Q1(a)：cgroup 上限優先、其次行程受限、最後主機）與 {@link heapUsageSource}（Q5，
+ *   [#1718](https://github.com/DemianLi/nexus-agent/issues/1718)：V8 heap 已用 ÷ `heap_size_limit`）。之後多一個來源或少一種來源
+ *   （例如主機的 `os.freemem` 不算），是改來源清單，不是改狀態機。
  * - **狀態機**（{@link createMemoryPressureWatch}）每個來源各一份狀態，互不影響：
  *   - 嚴格超過門檻（`>`）講一次「警告」；之後不重複。
  *   - 降到「門檻 − {@link PRESSURE_HYSTERESIS_POINTS}」**以下**（嚴格小於）講一次「已恢復」；門檻附近來回不洗版（Q3）。
  *   - **讀不到就不判斷、不警告，也不把讀不到當成 0**（借 dsh `terminal-controller/src/retention.ts:119`、`:122`：檢查失敗記成 `state: 'unknown'`，不是 `idle` 就不收，活動狀態未知時不動作）。
  *     從可讀變成不可讀時講一次原因（起動時就讀不到也講一次），不可讀期間狀態保持不變——讀不到不算恢復，回來時接續。
  *   - 同一個來源的「依據」換了（例如 cgroup 消失、改看主機），分母的意思變了，狀態重來。
+ *
+ * ## 兩個來源怎麼合：各講各的，等於「取較高的」（Q5，#1718）
+ *
+ * demian 2026-10-20 拍板「heap 比例跟 Q1(a) 的比例**取較高的那個**，用同一組門檻，警告寫明是哪個來源觸發」。做法是**兩個來源、
+ * 各一份狀態**，不是先取 max 再進同一份狀態：
+ *
+ * - **觸發條件等價**：任何一個超過門檻就響，所以「cgroup 60%、heap 90%」響的是 heap（文案是 `V8 heap 用量`），「cgroup 80%、heap 10%」
+ *   響的是 cgroup（`記憶體用量`）。
+ * - **越過與恢復用哪個來源，不會錯位**：先 max 再進同一份狀態的話，較高的那個換手（cgroup 80% 時 heap 衝到 85%）會讓「依據」變、
+ *   狀態重來，同一次高壓講兩次警告，又在換回來時再講；而且恢復是「兩個都低於 70%」才成立，文案卻只能寫其中一個。各一份狀態時，
+ *   **每個來源只跟自己比**：自己越過就講自己、自己降回 70% 以下就講自己已恢復，另一個來源怎麼動都不影響這一個。
+ * - **代價**：兩個都超過時是兩行（各寫各的依據與分子分母），不是一行。修法不同（heap 靠 thread 數與 `--max-old-space-size`，cgroup 靠
+ *   整個容器的配額），分開講反而是管理者要的資訊。
+ * - **heap 的遲滯壓不住 GC 鋸齒**（#1718 合成量測，見 PR 內文）：heapUsed 隨老生代 GC 在 20 多個百分點的範圍內起伏，遠大於
+ *   {@link PRESSURE_HYSTERESIS_POINTS}。常態落在門檻附近的 heap 會「警告、已恢復、警告」輪流響，每次越過一行，只寫日誌。照拍板用同一組門檻，
+ *   不另訂；若實際洗版，要改的是 heap 來源怎麼取樣（例如只看 GC 後的值），不是這個狀態機。
  *
  * ## 偏離 dsh：產品需求超出 dsh（理由 2）
  *
@@ -109,6 +126,38 @@ export const memoryUsageSource: PressureSource = {
       ? `主機沒有 MemAvailable（${host.fallbackReason ?? '原因不明'}），退到 os.freemem 不含可回收快取、不能當分母`
       : `主機讀不到（${host.reason}）`;
     return { kind: 'unreadable', reason: `${cgroupSide}；${hostSide}` };
+  },
+};
+
+/**
+ * Q5（[#1718](https://github.com/DemianLi/nexus-agent/issues/1718)）：**V8 heap 已用 ÷ `heap_size_limit`。**
+ *
+ * 為什麼要有：#1490 實測，1g 與 4g 容器各三次，**全部是 V8 heap 先撞到自己的上限**（exit 134、`OOMKilled=false`），死的當下 cgroup 只到
+ * 67.6% 與 60.1%。只看 cgroup 的話，這六次一次都不會警告（門檻 75%）。
+ *
+ * - **分母是 `heap_size_limit`，不是 `heapTotal`**：已提交的量平常就貼著已用，拿它當分母會一直警告。
+ * - **讀不到**：行程自己的讀數拋了，或 `heap_size_limit` 不是正數——明說原因，不當成 0。
+ * - **依據固定**：`heap_size_limit` 在行程活著的期間不變，所以狀態機不會因為依據換了而重來。
+ * - 跟 {@link memoryUsageSource} 的合併方式是**各講各的**，見檔頭「兩個來源怎麼合」。
+ *
+ * 依據：dsh 自己把這個上限當一級量測值（`scripts/run-memory-pressure-bench.ts:114-115`，`687f282e`：
+ * `defaultNodeHeapLimitMb: getHeapStatistics().heap_size_limit`）。警告本身是 dsh 沒有的，沿用 #1493 的偏離登記（理由 2）。
+ */
+export const heapUsageSource: PressureSource = {
+  id: 'heap-usage',
+  label: 'V8 heap 用量',
+  measure({ process: proc }) {
+    if (!proc.ok) return { kind: 'unreadable', reason: `行程讀不到（${proc.reason}）` };
+    const limit = proc.heapLimitBytes;
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return { kind: 'unreadable', reason: `heap_size_limit 不是正數（${String(limit)}）` };
+    }
+    return {
+      kind: 'level',
+      basis: 'V8 heap_size_limit',
+      percent: (proc.heapUsedBytes / limit) * 100,
+      detail: `${mib(proc.heapUsedBytes)}／${mib(limit)}`,
+    };
   },
 };
 

@@ -166,7 +166,11 @@ import { loadOrCreateMetricsToken, METRICS_TOKEN_FILE } from './metrics-token.js
 import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
 import type { OpsEndpoints } from './ops-endpoints.js';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
-import { createMemoryPressureWatch, memoryUsageSource } from './memory-pressure.js';
+import {
+  createMemoryPressureWatch,
+  heapUsageSource,
+  memoryUsageSource,
+} from './memory-pressure.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
@@ -1544,7 +1548,8 @@ async function startServer(
     } catch (closeError: unknown) {
       fail(`[啟動失敗] 收尾也出錯：${errorChain(closeError)}`);
     }
-    threadSearch?.close();
+    // 等已接受的搜尋靜止才關（#1552 N0836）；它不 reject，蓋不掉原本的錯。
+    await threadSearch?.close();
     throw error;
   }
 
@@ -1635,7 +1640,7 @@ async function startServer(
           // 用量警告（#1493，保險絲第 0 級）：跟著取樣開關走，取樣關著這一整段不建。
           onReading: createMemoryPressureWatch({
             thresholdPercent: memoryGaugeConfig.warnAtPercent,
-            sources: [memoryUsageSource],
+            sources: [memoryUsageSource, heapUsageSource],
             context: () => ({
               threadCount: handler.threadCount(),
               maxThreads: threadCapacity.maxThreads,
