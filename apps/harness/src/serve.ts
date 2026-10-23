@@ -160,7 +160,7 @@ import { assertAllowedModelsInCatalog, modelSelectionPolicyFor } from './model-s
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { toolTextPlugin } from './settings/tool-text.js';
-import { cleanupToolResultStash } from './tool-result-stash.js';
+import { launchToolResultStashSweep } from './tool-result-stash-sweep.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
@@ -753,11 +753,17 @@ async function startServer(
   const toolTextLimits = startupSetting(plugins, toolTextPlugin);
   // 插件投影 frame 的合併視窗（#1071）。同樣是 server 的性質：每條 thread 的 pump 吃同一個數字。
   const projectionFlush = startupSetting(plugins, projectionFlushPlugin);
-  // 過大工具結果的暫存（#734）：根與保留天數是 server 的性質，解一次；啟動時清一次超過保留期的會話目錄，
-  // 別人改得動的根不清，失敗只記一筆不擋啟動。
+  // 過大工具結果的暫存（#734）：根與保留天數是 server 的性質，解一次；啟動時清一次超過保留期的檔，
+  // 別人改得動的根不清，失敗只記一筆不擋啟動。**清掃在背景跑**（#1553 N0952，照 dsh `spill-local/src/index.ts:90-101`）：
+  // 歸根所有，server 不等它就開始服務；卸載根（`close()` 與起不來的那幾條路）時等它收斂。
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
   const stashRoot = resolveToolResultStashRoot(stashConfig, env);
-  await cleanupToolResultStash(stashRoot, stashConfig.cleanupPeriodDays, { warn });
+  launchToolResultStashSweep(
+    await root.tree.context(),
+    stashRoot,
+    stashConfig.cleanupPeriodDays,
+    warn,
+  );
   // 外溢層的預算（#719）：server 的性質，解一次；省略就是不掛。
   const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
   // 背景續行子代理（#841）：server 的性質，解一次；`one-shot` 就不傳，回到基座的 `task`。
