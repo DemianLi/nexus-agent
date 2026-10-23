@@ -64,7 +64,7 @@ describe('operations.md 的 MCP 容器範例', () => {
     });
   });
 
-  it('散文講的幾個旗標都在：-i、--rm、不給 -t、--http-proxy=false、有 --network、podman 專用的 HOME', async () => {
+  it('散文講的旗標都在：-i、--rm、--http-proxy=false、podman 專用的 HOME', async () => {
     const [loaded] = await loadExample(example);
     const connection = (
       loaded?.config as { connection: { args?: string[]; env?: Record<string, string> } }
@@ -75,9 +75,28 @@ describe('operations.md 的 MCP 容器範例', () => {
     expect(args[0]).toBe('run');
     expect(args).toContain('-i');
     expect(args).toContain('--rm');
-    expect(args).not.toContain('-t');
     expect(args).toContain('--http-proxy=false');
-    expect(args.some((arg) => arg.startsWith('--network='))).toBe(true);
+  });
+
+  it('圍堵的旗標都在：--network=none、--read-only、--cap-drop=ALL、no-new-privileges', async () => {
+    const [loaded] = await loadExample(example);
+    const args = (loaded?.config as { connection: { args?: string[] } }).connection.args ?? [];
+    expect(args).toContain('--network=none');
+    expect(args).toContain('--read-only');
+    expect(args).toContain('--cap-drop=ALL');
+    expect(args).toContain('--security-opt=no-new-privileges');
+  });
+
+  it('不給 pty（-t／--tty／-it 這類合併寫法都算），也不放寬網路、行程或使用者命名空間', async () => {
+    const [loaded] = await loadExample(example);
+    const args = (loaded?.config as { connection: { args?: string[] } }).connection.args ?? [];
+    expect(args.filter((arg) => arg === '--tty' || /^-[A-Za-z]*t[A-Za-z]*$/u.test(arg))).toEqual(
+      [],
+    );
+    expect(args.filter((arg) => /^--(net|network|pid|userns|ipc|uts)=host$/u.test(arg))).toEqual(
+      [],
+    );
+    expect(args.filter((arg) => /^--(privileged|cap-add)/u.test(arg))).toEqual([]);
   });
 
   it('範例不放憑證，也不把 serve 帳號加進特權群組', () => {
