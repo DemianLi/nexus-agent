@@ -5,7 +5,7 @@
  * 模型重讀 → 再改），成功了則可能改壞它沒看到的地方。這個 middleware 記下每個 agent
  * 這一場觀察過哪些檔，並用那份紀錄擋下每一次寫入與編輯。
  *
- * ## 照抄 dsh 的哪些、退了哪兩條
+ * ## 照抄 dsh 的哪些、退了哪一條
  *
  * 標準是 `packages/fs/fs-observation-policy`（SHA `4e84901`，對到上游
  * `76fda72` 時該套件除了版號沒有變動）。**三個狀態、三個錯誤碼、以及「部分讀也算」
@@ -35,24 +35,25 @@
  * （{@link createVersionHasher}、{@link noteReadVersion}）直接把版本交上來，這裡就記它，不再讀；沒回報的照舊 `readRaw`。
  * 寫與改前的比對仍是 `readRaw`，兩邊的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
  *
- * **偏離二：規則寫在系統提示詞，不是工具描述裡。** dsh 把它寫進工具描述——
- * 「read an existing file first (**the default fs-observation-policy requires it**)」、
- * 「Read the file first…, unless you just created or edited it in this session」
- * （`snapshots/web` 底下每一份 `system-prompt.expected.md`）。理由跟 {@link ROOT_ONLY_NOTICE} 同一條：
- * 模型看得到的只有描述，不寫在那裡它每碰一個新檔就得先撞一次牆。**那個縫只在走
- * `createDeepAgent` 時是關著的**：`customToolDescriptions` 只存在於 `FilesystemMiddlewareOptions` 上，而
- * `createDeepAgent` 建 `createFilesystemMiddleware` 時只傳
- * `{ backend, permissions, tools }`——root 與 subagent 兩條路都不轉發它。**自有組裝收得到它**
- * （#1776 補正；`agent-assembly.ts` 的 root 與 subagent 兩處都是直接呼叫
- * `createFilesystemMiddleware({ backend, permissions })`，`FilesystemMiddlewareOptions` 本來就有這個欄位），
- * 所以「換不掉」不成立，只是今天沒有人用它。**行為沒改**：仍然退到 `wrapModelCall` 往 `systemMessage` 追加一句
- * （同一個模型、同一輪看得到，只是位置不同）。**紀律沒退**：規則照樣在模型動手之前就講給它聽。
- * 要不要改成真的換掉工具描述，交給 [#1563](https://github.com/DemianLi/nexus-agent/issues/1563)。
+ * **規則寫在系統提示詞，照 dsh**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。dsh 的 `write`、`edit` 各用一個
+ * `ctx.systemPrompt.section`（`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，`687f282e`），工具在場才寫：
+ * 「Read an existing file before overwriting it with write (the default fs-observation-policy requires it) and prefer edit for targeted changes.」、
+ * 「Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.」
+ * 工具描述本身只有一句「Create or fully replace a UTF-8 text file.」／「Edit an existing UTF-8 text file by replacing literal text.」。
+ * 這裡一樣：{@link observationGuidance} 看這一輪送給模型的工具清單裡有沒有 `write_file`／`edit_file`，有才往 `systemMessage` 追加；
+ * 句子用 dsh 原句，只把工具名換成我們的（`write`→`write_file`、`edit`→`edit_file`，機械對應，不算偏離）。
+ * 模型看得到這句才不會每碰一個新檔都先撞一次牆。這一顆 middleware 沒掛（`observationPolicy: false`）就不會有這句。
+ *
+ * 以前這一段登記成「偏離二：dsh 把它寫進工具描述」，那是寫錯的說明（沒有核原始碼），已更正：規則本來就在系統提示詞的 section。
+ *
+ * **鍵的範圍（N0333）：延後，不是偏離。** {@link observationKey} 只看得到兩層路由，見該函式的說明。要全看見只需要 `fold.ts` 把
+ * `offWorkspacePrefixes()` 交給 {@link createObservationPolicy}；PM 裁決這張卡不動 `fold.ts`，驗收時另開 backlog 卡。
  *
  * @module
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { posix } from 'node:path';
 
 import { ToolMessage } from '@langchain/core/messages';
 import { adaptBackendProtocol } from 'deepagents';
@@ -83,6 +84,32 @@ export const OBSERVED_WRITE_TOOL = 'write_file';
 export const OBSERVED_EDIT_TOOL = 'edit_file';
 
 /**
+ * 先讀後改的兩句系統提示（dsh `write.ts:63-71`、`edit.ts:76-83` 的原句；工具名換成我們的）。**這兩句是機制的一部分，不是註解**：
+ * 沒有它們，模型每碰一個新檔都得先撞一次牆才學會，而省掉那一輪往返正是這件事的主要價值。
+ *
+ * @param tools - 這一輪送給模型的工具名。`write_file`、`edit_file` 各自在場才寫各自那一句（`write` 那句在 `edit_file` 也在場時多一小段）。
+ * @returns 要接在系統提示後面的文字；兩個工具都不在場時是空字串。
+ */
+export function observationGuidance(tools: ReadonlySet<string>): string {
+  const sections: string[] = [];
+  if (tools.has(OBSERVED_WRITE_TOOL)) {
+    sections.push(
+      `Read an existing file before overwriting it with ${OBSERVED_WRITE_TOOL} (the default fs-observation-policy requires it)` +
+        (tools.has(OBSERVED_EDIT_TOOL)
+          ? ` and prefer ${OBSERVED_EDIT_TOOL} for targeted changes`
+          : '') +
+        '.',
+    );
+  }
+  if (tools.has(OBSERVED_EDIT_TOOL)) {
+    sections.push(
+      'Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.',
+    );
+  }
+  return sections.join('\n\n');
+}
+
+/**
  * 一次權威觀測。
  *
  * `absent` 不是「沒觀測過」——它是**確認缺席**，授權受防護的新建，但不授權編輯。
@@ -90,19 +117,6 @@ export const OBSERVED_EDIT_TOOL = 'edit_file';
  */
 type Observation =
   { readonly kind: 'present'; readonly version: string } | { readonly kind: 'absent' };
-
-/**
- * 加進系統提示詞的那一句。**這句話是機制的一部分，不是註解。**
- *
- * 沒有它，模型每碰一個新檔都會先撞一次牆再學會——而省掉那一輪往返正是這件事的主要價值。
- * dsh 把同一件事寫在工具描述裡；為什麼我們寫在這裡，見本檔檔頭的「偏離二」。
- */
-export const OBSERVATION_POLICY_NOTICE =
-  '這個 agent 啟用了「先讀後改」策略：' +
-  `\`${OBSERVED_EDIT_TOOL}\` 要求先讀過目標檔；` +
-  `\`${OBSERVED_WRITE_TOOL}\` 可以新建檔案，但覆蓋一個已經存在的檔之前一樣要先讀過它。` +
-  '讀過之後那個檔又被改動的，要重讀一次才能再改。' +
-  `讀整個檔或只讀一段（帶 \`offset\` / \`limit\`）都算讀過。`;
 
 /** 錯誤碼照抄 dsh，句子中文——碼是給機器讀的，句子是給模型讀的。 */
 const NOT_OBSERVED = 'FS_NOT_OBSERVED';
@@ -236,6 +250,69 @@ function filePathOf(args: unknown): string | undefined {
   return typeof path === 'string' && path.length > 0 ? path : undefined;
 }
 
+/** 一層 backend 自己的路由前綴；不是 `CompositeBackend`（或它被轉接過的外殼）就是 `undefined`。 */
+function routePrefixesOf(level: unknown): readonly string[] | undefined {
+  if (typeof level !== 'object' || level === null) return undefined;
+  const prefixes = (level as { readonly routePrefixes?: unknown }).routePrefixes;
+  return Array.isArray(prefixes) ? prefixes.filter((each) => typeof each === 'string') : undefined;
+}
+
+/** 往下一層：`CompositeBackend` 的 `default`（執行期有、型別上是 private）。 */
+function defaultOf(level: unknown): unknown {
+  return (level as { readonly default?: unknown }).default;
+}
+
+/** 一個 `CompositeBackend` 最多往下看幾層，防壞掉的環。 */
+const MAX_ROUTE_DEPTH = 8;
+
+/**
+ * 觀測紀錄的鍵：**同一個檔的不同寫法收成同一把**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0333）。
+ *
+ * 紀錄以前直接用模型給的原字串當鍵，所以 `a.txt`、`/a.txt`、`./a.txt`、`dir//a.txt` 是四個檔：讀 `a.txt` 再改 `/a.txt` 被回 `FS_NOT_OBSERVED`。
+ * 但後端把它們解成同一個檔（virtual mode 的 `resolvePath` 前面補 `/`、`normalize`）。鍵是 `路由前綴＋'\0'＋posix.normalize('/' + 去掉前綴的部分)`：
+ *
+ * - **路由前綴用跟 `CompositeBackend.getBackendAndKey` 一樣的判準**（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:1123-1129`）：一層一層看，
+ *   最長的前綴先試，`key === prefix.slice(0, -1) || key.startsWith(prefix)`；沒中任何一層的前綴給空字串。**路由要進鍵**：`/tool-results/x` 走暫存路由，
+ *   `tool-results/x` 沒有前導斜線、落到預設的工作區，兩個是不同的檔，不能因為去掉前綴後長得一樣就撞在一起。
+ * - **只看得到一層加上它的 `default` 那一層。** 組裝點的 composite 是巢狀的（歷史、工具結果暫存、plugin 掛載各一層，`fold.ts` 的 `foldBackend`、
+ *   `agent-factory.ts`），而基座建構 `CompositeBackend` 時把 `default` 與每條路由的 backend 都包進 `adaptBackendProtocol` 的外殼，外殼只複製
+ *   `routePrefixes`、不留 `getBackendAndKey` 與 `default`，所以沒辦法用基座自己的 `getBackendAndKey` 一路走到底，也看不到第三層以後的前綴。
+ *   看不到的那幾層裡，不同路由的同名檔會被當成同一個檔：結果只會是**錯誤碼不準**（`FS_STALE_VERSION` 而不是 `FS_NOT_OBSERVED`），不會放行——
+ *   `staleness` 拿這次呼叫的原路徑問後端，版本對不上就拒絕。
+ *   **這一條是延後，不是偏離**：`fold.ts` 把 `offWorkspacePrefixes()` 交給 {@link createObservationPolicy} 就看得到全部前綴（PM 裁決這張卡不動 `fold.ts`，
+ *   驗收時另開 backlog 卡）。dsh 對應的是 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`）。
+ *   另一個殘留：看不到的那幾層裡鍵相同的兩個不同檔，若版本 token 也撞號（同一毫秒 mtime、同長度、同 djb2），讀其中一個會讓另一個被放行；實務上可以忽略。
+ * - 含 `..` 段的路徑不收（鍵是原字串）：後端會拒絕它，`normalize` 卻會把它折成別的檔的名字，讓一次失敗的讀誤記到那個檔身上。
+ *
+ * **與 dsh 的偏離（理由 1，基座表達不出來）：不取 realpath，用字面正規化。** dsh 的 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`，
+ * `687f282e`）檔案存在時用 realpath 當 `targetKey`，不存在時取最近一個存在的祖先的 realpath 接上缺的幾段。這裡 middleware 拿到的是 `BackendProtocol`，
+ * 上面沒有 `resolve`／`realpath`，主機路徑只存在於 `ContainedFilesystemBackend` 內部。經過目錄符號連結的別名因此仍是兩個檔，但結果只會是誤擋
+ * （`FS_NOT_OBSERVED`），不會放行：`staleness`／`look` 拿這次呼叫的**原路徑**問後端，比的是真正那個檔的版本，基座的讀取用 `O_NOFOLLOW`。
+ *
+ * @param backend - 工具實際讀寫的那個 backend。
+ * @param raw - 模型給的 `file_path`。
+ */
+export function observationKey(backend: AnyBackendProtocol, raw: string): string {
+  if (raw.split('/').includes('..')) return `raw\0${raw}`;
+  let route = '';
+  let rest = raw;
+  let level: unknown = backend;
+  for (let depth = 0; depth < MAX_ROUTE_DEPTH; depth += 1) {
+    const prefixes = routePrefixesOf(level);
+    if (prefixes === undefined) break;
+    const hit = [...prefixes]
+      .sort((a, b) => b.length - a.length)
+      .find((prefix) => raw === prefix.slice(0, -1) || raw.startsWith(prefix));
+    if (hit !== undefined) {
+      route = hit;
+      rest = raw.substring(hit.length);
+      break;
+    }
+    level = defaultOf(level);
+  }
+  return `${route}\0${posix.normalize(`/${rest}`)}`;
+}
+
 /**
  * 造一份「先讀後改」的策略 middleware。
  *
@@ -251,7 +328,9 @@ function filePathOf(args: unknown): string | undefined {
 export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddleware {
   // v1 / v2 兩種 backend 的 `readRaw` 回傳形狀不同；轉接一次之後統一是 `{ data } | { error }`。
   const fs = adaptBackendProtocol(backend);
+  /** 鍵見 {@link observationKey}；問後端時一律用模型給的原路徑。 */
   const observed = new Map<string, Observation>();
+  const keyOf = (path: string): string => observationKey(backend, path);
 
   /**
    * 現在這個檔的權威狀態。
@@ -298,23 +377,32 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
   const observe = async (path: string, readFailed = false, reported?: string): Promise<void> => {
     // 讀成功、而且 backend 已經邊讀邊算好版本：記它，不再整份讀一次（#1530）。失敗的讀不會有回報。
     if (!readFailed && reported !== undefined) {
-      observed.set(path, { kind: 'present', version: reported });
+      observed.set(keyOf(path), { kind: 'present', version: reported });
       return;
     }
     const state = await look(path);
     if (readFailed && state.kind === 'present') return;
-    observed.set(path, state);
+    observed.set(keyOf(path), state);
   };
 
   return createMiddleware({
     name: OBSERVATION_POLICY_MIDDLEWARE_NAME,
 
-    // 規則要在模型動手之前就講給它聽，理由見檔頭的「偏離二」。
-    wrapModelCall: (request, handler) =>
-      handler({
-        ...request,
-        systemMessage: request.systemMessage.concat(`\n\n${OBSERVATION_POLICY_NOTICE}`),
-      }),
+    // 規則要在模型動手之前就講給它聽，理由與出處見檔頭。
+    wrapModelCall: (request, handler) => {
+      const names = new Set(
+        request.tools.flatMap((tool) => {
+          const name = (tool as { readonly name?: unknown }).name;
+          return typeof name === 'string' ? [name] : [];
+        }),
+      );
+      const guidance = observationGuidance(names);
+      return handler(
+        guidance === ''
+          ? request
+          : { ...request, systemMessage: request.systemMessage.concat(`\n\n${guidance}`) },
+      );
+    },
 
     wrapToolCall: async (request, handler) => {
       const toolName = resolveToolName(request);
@@ -334,7 +422,7 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
       }
 
       if (toolName === OBSERVED_EDIT_TOOL) {
-        const prior = observed.get(path);
+        const prior = observed.get(keyOf(path));
         if (prior === undefined)
           return refusal(
             callId,
@@ -352,7 +440,7 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
       }
 
       if (toolName === OBSERVED_WRITE_TOOL) {
-        const prior = observed.get(path);
+        const prior = observed.get(keyOf(path));
         if (prior?.kind === 'present') {
           const stale = await staleness(path, prior);
           if (stale !== undefined) return refusal(callId, toolName, STALE_VERSION, stale);

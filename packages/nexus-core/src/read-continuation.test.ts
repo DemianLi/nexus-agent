@@ -375,12 +375,12 @@ describe('模型看到的 read_file', () => {
     return sent;
   };
 
-  it('描述講 2000 行；limit 照 dsh 的措辭、不再必填、沒有預設', () => {
+  it('limit 照 dsh 的措辭、不再必填、沒有預設；描述不在這裡換（#1563，見 fs-tool-descriptions.test.ts）', () => {
     const [read] = toolsSent([baseReadTool]) as [
       { function: { description: string; parameters: Record<string, unknown> } },
     ];
-    expect(read.function.description).toContain('By default, it reads up to 2000 lines');
-    expect(read.function.description).not.toContain('100 lines');
+    // 描述原樣帶過去：預設行數的那一句由組裝點的 `customToolDescriptions` 換，這顆只換 schema。
+    expect(read.function.description).toBe(baseReadTool.description);
     const parameters = read.function.parameters as {
       properties: Record<string, unknown>;
       required: string[];

@@ -130,13 +130,49 @@ describe('scanWindow：行長與位元組上限（dsh buildWindow）', () => {
     expect(scan.totalLines).toBe(100);
   });
 
-  it('行尾的 \\r 留著（偏離 2）', async () => {
+  it('沒開 stripCarriageReturn（不在 read_file 裡）：行尾的 \\r 留著，維持基座的切片語意', async () => {
     const scan = await scanWindow(['a\r\nb\r\n'], params());
     expect(scan.lines).toEqual(['a\r', 'b\r']);
   });
 
-  // #1776：判長度不算行尾的 `\r`（dsh 先去掉 `\r` 才判；我們保留 `\r`，所以判長度時要自己扣掉）。
-  it('CRLF：剛好 2000 字元的行不標截斷，`\r` 仍留著；2001 字元的標', async () => {
+  it('stripCarriageReturn（read_file 裡，#1563 N0335）：每一行的行尾 \\r 去掉，只去一個，行中間的 \\r 不動', async () => {
+    const on = params({ stripCarriageReturn: true });
+    expect((await scanWindow(['a\r\nb\r\n'], on)).lines).toEqual(['a', 'b']);
+    // 最後一行沒有換行收尾也去；兩個 `\r` 只去最後一個；行中間的 `\r` 不動。
+    expect((await scanWindow(['a\r\nb\r'], on)).lines).toEqual(['a', 'b']);
+    expect((await scanWindow(['a\r\r\nm\rn\r\n'], on)).lines).toEqual(['a\r', 'm\rn']);
+    // 總行數、換行數不受影響。
+    const scan = await scanWindow(['a\r\nb\r\n'], on);
+    expect(scan.totalLines).toBe(2);
+    expect(scan.newlines).toBe(2);
+    // 逐字元分片（`\r` 與 `\n` 各自獨立）結果相同。
+    expect((await scanWindow(Array.from('a\r\nb\r\n'), on)).lines).toEqual(['a', 'b']);
+  });
+
+  it('stripCarriageReturn：位元組上限算的是去掉 \\r 之後的行', async () => {
+    // 每行 `abcd\r`：去掉後 4 位元組。第一行 4，第二行 4+1=5 → 累計 9；上限 9 剛好收兩行。
+    const scan = await scanWindow(
+      ['abcd\r\nabcd\r\nabcd\r\n'],
+      params({ stripCarriageReturn: true, maxBytes: 9 }),
+    );
+    expect(scan.lines).toEqual(['abcd', 'abcd']);
+    expect(scan.cappedByBytes).toBe(true);
+  });
+
+  it('stripCarriageReturn：剛好 2000 字元的 CRLF 行不標截斷，`\r` 不在輸出裡；2001 字元的標', async () => {
+    const scan = await scanWindow(
+      [`${'x'.repeat(2000)}\r\n${'y'.repeat(2001)}\r\n${'z'.repeat(2000)}\n`],
+      params({ stripCarriageReturn: true }),
+    );
+    expect(scan.lines).toEqual([
+      'x'.repeat(2000),
+      `${'y'.repeat(2000)}... (line truncated to 2000 chars)`,
+      'z'.repeat(2000),
+    ]);
+  });
+
+  // #1776：沒開 strip 的呼叫判長度時仍不算行尾的 `\r`（dsh 先去掉 `\r` 才判；那些呼叫保留 `\r`，所以判長度時要自己扣掉）。
+  it('沒開 strip：CRLF 剛好 2000 字元的行不標截斷，`\r` 仍留著；2001 字元的標', async () => {
     const scan = await scanWindow(
       [`${'x'.repeat(2000)}\r\n${'y'.repeat(2001)}\r\n${'z'.repeat(2000)}\n`],
       params(),

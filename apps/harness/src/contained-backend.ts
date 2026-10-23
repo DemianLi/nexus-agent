@@ -42,9 +42,10 @@
  * 小於 {@link READ_STREAM_MIN_SIZE}（同 dsh 的 `STREAM_MIN_SIZE`）一次 `readFile`，否則逐 chunk 解碼掃描；兩條路交給同一支
  * `scanWindow`。**在 `read_file` 裡**照 dsh 的 `buildWindow` 建頁（每行截 2000 字元、選到的行累計 50 KiB 停但掃到檔尾數總行數），
  * 並把頁的範圍與邊讀邊算的版本回報給 `@nexus/core`；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
- * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2**：行尾 `\r` 與開頭的 BOM 保留，不照 dsh 去掉——
- * 基座的 `readRaw` 版本 token 與既有輸出都含它們；去掉的條件綁在 [#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
- * N0335，**到時只撤 `\r`、BOM 留著**（`text-window.ts` 檔頭寫的是這樣）。
+ * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2（縮到只剩 BOM，理由 1 基座表達不出來）**：開頭的 BOM 保留，不照 dsh 去掉——
+ * 基座 `readRaw` 的版本 token 是從保留 U+FEFF 的字串算的，`read` 不保留就和「先讀後改」寫與改前的比對對不上；`edit` 沿用同一個解碼（`ignoreBOM`），
+ * 寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
+ * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡；版本 token 仍對含 `\r` 的原文算。
  *
  * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
@@ -92,6 +93,13 @@ import {
   currentReadWindow,
   currentToolCallSignal,
   EMPTY_CONTENT_WARNING,
+  FS_AMBIGUOUS_EDIT,
+  FS_EDIT_NOT_FOUND,
+  FS_NOT_FOUND,
+  FS_NOT_REGULAR_FILE,
+  FS_NOT_TEXT,
+  FS_PERMISSION_DENIED,
+  noteFsError,
   noteReadVersion,
   noteReadWindow,
   noteSandboxDenial,
@@ -108,6 +116,7 @@ import type { RipgrepInternals } from './ripgrep-runner.js';
 import { pageOf, scanWindow, ScanAborted } from './text-window.js';
 import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 import type {
+  FsErrorCode,
   SandboxDenial,
   SearchErrorCode,
   SandboxGrantLedger,
@@ -126,12 +135,25 @@ function denied<T extends { error: string }>(result: T): T {
   return result;
 }
 
-/** 讀檔碰到不是文字的檔。字句同基座 `notTextReason` 時代的：`cannot read "<路徑>": <原因>`。 */
+/** 讀檔碰到不是文字的檔。字句同基座 `notTextReason` 時代的：`cannot read "<路徑>": <原因>`；碼 `FS_NOT_TEXT`（#1563）。 */
 function notText(filePath: string, reason: 'binary file' | 'invalid UTF-8 text'): ReadResult {
+  noteFsError(FS_NOT_TEXT);
   return { error: `cannot read "${filePath}": ${reason}` };
 }
 
-/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2）。 */
+/**
+ * 作業系統的錯誤碼 → 檔案工具的原因碼（#1563），記在這一次工具呼叫上；錯誤文字不動。`EACCES`／`EPERM` 是 `FS_PERMISSION_DENIED`
+ * （**依卡面要求，不是照 dsh**：dsh 只在 `listDirectory` 轉這個碼，`fsio.ts:282`，這裡 `read`／`write`／`edit` 碰到也記）；
+ * `ENOENT`／`ENOTDIR` 是 `FS_NOT_FOUND`，但只有 `missing` 為真（呼叫端的目標本來就該存在：`read`、`edit`）時才算——`write` 會自己建父目錄，
+ * 碰到它們是別的原因。認不得的不記碼。
+ */
+function noteErrno(error: unknown, missing: boolean): void {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  if (code === 'EACCES' || code === 'EPERM') noteFsError(FS_PERMISSION_DENIED);
+  else if (missing && (code === 'ENOENT' || code === 'ENOTDIR')) noteFsError(FS_NOT_FOUND);
+}
+
+/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2，理由見檔頭）。 */
 function decodeWhole(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -271,28 +293,75 @@ function sameDenial(bound: SandboxDenial | undefined, call: SandboxDenial): bool
  */
 const BASE_ERROR_WORD = 'Error';
 
+/** 行尾的寫法。 */
+type LineEndings = 'LF' | 'CRLF';
+
+/** `\r\n` 收成 `\n`；單獨的 `\r` 不動。照 dsh `normalizeLineEndings`（`fsio.ts:683`，`687f282e`）。 */
+function normalizeLineEndings(content: string): string {
+  return content.replaceAll('\r\n', '\n');
+}
+
+/** 前 4096 個字元裡 `\r\n` 比單獨 `\n` 多就是 CRLF。照 dsh `detectLineEndings`（`fsio.ts:687`）。 */
+function detectLineEndings(raw: string): LineEndings {
+  const sample = raw.slice(0, 4096);
+  const crlfCount = sample.split('\r\n').length - 1;
+  const lfCount = sample.split('\n').length - 1 - crlfCount;
+  return crlfCount > lfCount ? 'CRLF' : 'LF';
+}
+
+/** 把 LF 的內容還原成原檔的行尾；CRLF 先正規化再轉，已經是 `\r\n` 的不會變成 `\r\r\n`。照 dsh `restoreLineEndings`（`fsio.ts:702`）。 */
+function restoreLineEndings(content: string, lineEndings: LineEndings): string {
+  return lineEndings === 'LF' ? content : normalizeLineEndings(content).split('\n').join('\r\n');
+}
+
+/** 字串替換失敗：碼給 `tool/result`，字句給模型。 */
+interface EditFailure {
+  readonly code: FsErrorCode;
+  readonly message: string;
+}
+
 /**
- * 字串替換，**逐字照抄基座的 `performStringReplacement`**（`deepagents` 沒有匯出）：錯誤字句一字不改，
- * 模型看到的拒絕理由不因為這個 backend 自己寫檔而換了一套話。`contained-backend.test.ts` 對著裸的
- * `FilesystemBackend` 釘住字句。
+ * 字串替換。**錯誤字句逐字照抄基座的 `performStringReplacement`**（`deepagents` 沒有匯出）：模型看到的拒絕理由不因為這個 backend
+ * 自己寫檔而換了一套話；`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 釘住字句。**行尾照 dsh 的 `applyLiteralEdit`**
+ * （`packages/fs/fs-local/src/fsio.ts:814-834`，`687f282e`，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：
+ * `content` 要已經正規化成 LF，`oldString`／`newString` 裡的 `\r\n` 在比對前收成 `\n`；字句裡回顯的仍是模型給的原字串。
  *
- * @returns `[新內容, 取代次數]`，或錯誤字串。
+ * 碼的歸類照 dsh：`old_string` 是空的或找不到是 `FS_EDIT_NOT_FOUND`，命中好幾處又沒有 `replaceAll` 是 `FS_AMBIGUOUS_EDIT`。
+ *
+ * @returns 新內容（LF）與取代次數，或失敗。
  */
-function performStringReplacement(
+function applyLiteralEdit(
   content: string,
   oldString: string,
   newString: string,
   replaceAll: boolean,
-): [string, number] | string {
-  if (content === '' && oldString === '') return [newString, 0];
-  if (oldString === '')
-    return `${BASE_ERROR_WORD}: oldString cannot be empty when file has content`;
-  const occurrences = content.split(oldString).length - 1;
-  if (occurrences === 0) return `${BASE_ERROR_WORD}: String not found in file: '${oldString}'`;
-  if (occurrences > 1 && !replaceAll) {
-    return `${BASE_ERROR_WORD}: String '${oldString}' has multiple occurrences (appears ${String(occurrences)} times) in file. Use replace_all=True to replace all instances, or provide a more specific string with surrounding context.`;
+): { readonly content: string; readonly occurrences: number } | EditFailure {
+  const oldNorm = normalizeLineEndings(oldString);
+  const newNorm = normalizeLineEndings(newString);
+  // 空的 `old_string` 一律是 `FS_EDIT_NOT_FOUND`，連空檔也一樣（照 dsh `applyLiteralEdit`，`fsio.ts:820-823`；基座對空檔配空字串是直接寫入）。
+  if (oldNorm === '') {
+    return {
+      code: FS_EDIT_NOT_FOUND,
+      message:
+        content === ''
+          ? `${BASE_ERROR_WORD}: old_string must be a non-empty string`
+          : `${BASE_ERROR_WORD}: oldString cannot be empty when file has content`,
+    };
   }
-  return [content.split(oldString).join(newString), occurrences];
+  const occurrences = content.split(oldNorm).length - 1;
+  if (occurrences === 0) {
+    return {
+      code: FS_EDIT_NOT_FOUND,
+      message: `${BASE_ERROR_WORD}: String not found in file: '${oldString}'`,
+    };
+  }
+  if (occurrences > 1 && !replaceAll) {
+    return {
+      code: FS_AMBIGUOUS_EDIT,
+      message: `${BASE_ERROR_WORD}: String '${oldString}' has multiple occurrences (appears ${String(occurrences)} times) in file. Use replace_all=True to replace all instances, or provide a more specific string with surrounding context.`,
+    };
+  }
+  return { content: content.split(oldNorm).join(newNorm), occurrences };
 }
 
 export interface ContainedFilesystemBackendOptions {
@@ -393,7 +462,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * 取消：`currentToolCallSignal()` 接進讀取，中止時回 `{ error: 'read aborted' }`，不拋。
    *
-   * **與 dsh 的偏離**：行尾 `\r` 不去掉、開頭的 BOM 不吃掉（偏離 2，理由見 `text-window.ts` 與 `utf8-stream.ts`）；另外視窗經旁路回報，
+   * **與 dsh 的偏離**：開頭的 BOM 不吃掉（偏離 2，理由 1，見檔頭與 `utf8-stream.ts`）；另外視窗經旁路回報，
    * 不經工具回傳值（偏離 1，見 `read-continuation.ts`）。
    *
    * @param filePath - 虛擬路徑。
@@ -406,7 +475,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     try {
       const resolved = this.resolveVirtual(filePath);
       if (signal?.aborted === true) return { error: READ_ABORTED };
-      if (!(await stat(resolved)).isFile()) return { error: `File '${filePath}' not found` };
+      if (!(await stat(resolved)).isFile()) {
+        noteFsError(FS_NOT_REGULAR_FILE);
+        return { error: `File '${filePath}' not found` };
+      }
       const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         return await this.readOpened(handle, filePath, offset, limit, signal);
@@ -416,6 +488,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     } catch (error: unknown) {
       if (error instanceof ScanAborted || signal?.aborted === true) return { error: READ_ABORTED };
       if (error instanceof NotUtf8) return notText(filePath, 'invalid UTF-8 text');
+      noteErrno(error, true);
       return { error: `Error reading file '${filePath}': ${(error as Error).message}` };
     }
   }
@@ -430,12 +503,15 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   ): Promise<ReadResult> {
     const info = await handle.stat();
     const window = currentReadWindow();
-    const params = window ?? {
-      offset: Math.max(0, Math.trunc(offset)),
-      limit: Math.max(0, Math.trunc(limit)),
-      maxLineLength: Infinity,
-      maxBytes: Infinity,
-    };
+    // `read_file` 裡行尾的 `\r` 去掉（照 dsh，#1563 N0335）；其餘呼叫維持基座的切片語意。
+    const params = window
+      ? { ...window, stripCarriageReturn: true }
+      : {
+          offset: Math.max(0, Math.trunc(offset)),
+          limit: Math.max(0, Math.trunc(limit)),
+          maxLineLength: Infinity,
+          maxBytes: Infinity,
+        };
     const hasher = window === undefined ? undefined : createVersionHasher();
     const options = {
       ...(hasher === undefined ? {} : { onChunk: (chunk: string) => hasher.update(chunk) }),
@@ -509,6 +585,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
           };
         }
         if (existing !== undefined && !existing.isFile()) {
+          noteFsError(FS_NOT_REGULAR_FILE);
           return { error: `Error writing file '${checked}': not a regular file` };
         }
         await mkdir(dirname(resolved), { recursive: true });
@@ -521,6 +598,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         return { path: checked, filesUpdate: null };
       });
     } catch (error: unknown) {
+      noteErrno(error, false);
       return { error: `Error writing file '${checked}': ${(error as Error).message}` };
     }
   }
@@ -528,8 +606,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 編輯檔案，先過 fence，**自己讀、自己替換、經暫存檔加 `rename` 寫回**（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）。
    *
-   * 讀照基座（`stat` 判一般檔、`O_NOFOLLOW` 開、UTF-8），替換用逐字照抄的 {@link performStringReplacement}，
-   * 保留既有 mode。讀、替換、寫整段在逐目標的鎖裡，同一步的兩個平行 `edit` 不會丟修改。
+   * 讀照基座（`stat` 判一般檔、`O_NOFOLLOW` 開），再照 dsh 的 `readForEdit`：含 NUL 或不是合法 UTF-8 的拒絕（`FS_NOT_TEXT`），行尾偵測後正規化成 LF
+   * （[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）。替換用 {@link applyLiteralEdit}（錯誤字句逐字照基座，`old_string`／
+   * `new_string` 的 `\r\n` 也收成 `\n`），寫回前還原原檔的行尾；保留既有 mode。失敗的原因碼見 `fs-tool-errors.ts` 的 {@link noteFsError}。
+   * **已知的界線（照 dsh）：** 混合行尾的檔以前 4096 個字元的多數為準，整份被統一成那一種。讀、替換、寫整段在逐目標的鎖裡，同一步的兩個平行 `edit` 不會丟修改。
    *
    * @param filePath - 虛擬路徑。
    * @param oldString - 要被換掉的字串。
@@ -552,25 +632,53 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     try {
       const resolved = this.resolveVirtual(checked);
       return await withTargetLock(await canonicalize(resolved), async () => {
-        if (!(await stat(resolved)).isFile())
+        if (!(await stat(resolved)).isFile()) {
+          noteFsError(FS_NOT_REGULAR_FILE);
           return { error: `${BASE_ERROR_WORD}: File '${checked}' not found` };
-        let content: string;
+        }
+        let bytes: Uint8Array;
         let mode: number;
         const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
         try {
-          content = await handle.readFile({ encoding: 'utf-8' });
+          bytes = await handle.readFile();
           mode = (await handle.stat()).mode & 0o777;
         } finally {
           await handle.close();
         }
-        const result = performStringReplacement(content, oldString, newString, replaceAll === true);
-        if (typeof result === 'string') return { error: result };
-        const [newContent, occurrences] = result;
+        // 二進位與壞掉的 UTF-8 不改：有損解碼再寫回會把原本的位元組換成 U+FFFD（照 dsh `readForEdit`，`fsio.ts:725-736`）。
+        // **NUL 掃整份**，不像讀檔那條取樣前 {@link BINARY_SAMPLE_BYTES}（dsh `fsio.ts:733` 是 `buffer.includes(0)`；取樣是 `read` 的 `fsio.ts:396`）：
+        // 這裡整份本來就在記憶體裡，而且改錯的代價是把檔案寫壞。
+        if (bytes.includes(0)) {
+          noteFsError(FS_NOT_TEXT);
+          return { error: `cannot edit "${checked}": binary file` };
+        }
+        const raw = decodeWhole(bytes);
+        const lineEndings = detectLineEndings(raw);
+        const result = applyLiteralEdit(
+          normalizeLineEndings(raw),
+          oldString,
+          newString,
+          replaceAll === true,
+        );
+        if ('code' in result) {
+          noteFsError(result.code);
+          return { error: result.message };
+        }
         await this.atomicInternals?.afterEditRead?.(resolved);
-        await writeFileAtomic(resolved, newContent, mode, this.atomicInternals);
-        return { path: checked, filesUpdate: null, occurrences };
+        await writeFileAtomic(
+          resolved,
+          restoreLineEndings(result.content, lineEndings),
+          mode,
+          this.atomicInternals,
+        );
+        return { path: checked, filesUpdate: null, occurrences: result.occurrences };
       });
     } catch (error: unknown) {
+      if (error instanceof NotUtf8) {
+        noteFsError(FS_NOT_TEXT);
+        return { error: `cannot edit "${checked}": invalid UTF-8 text` };
+      }
+      noteErrno(error, true);
       return { error: `Error editing file '${checked}': ${(error as Error).message}` };
     }
   }
