@@ -51,11 +51,22 @@
 - id: agent-instructions
   name: '@nexus/plugin-agent-instructions'
 
+# 人寫 `/名字` 叫用技能（#1574）：root 的人話裡有 `/deploy` 這類手勢、而那份技能人叫得到（`user-invocable` 不是 false），
+# 就在同一個 `agent/pre-step` 接縫上把 SKILL.md 的正文當成一則使用者訊息交給這一輪；只給人叫的技能
+# （`disable-model-invocation: true`）只有這個入口。話裡沒有手勢就不掃。來源讀 `skills` 列登記的那幾個目錄。
+#
+# **單獨一列**：`skills` 列可以有好幾列（每列登記自己的來源），叫用是整個行程一份，同 dsh 由一顆 `tool-skill` 負責。
+# **位置在 `agent-instructions` 與 `time-context` 之間**：技能說明排在 AGENTS.md 基線之後、時間讀數之前，同 dsh
+# （time-context 以 `prepend` 登記，最後才 append）。偏離與理由登記在 `@nexus/plugin-skills/invocation` 檔頭。
+- id: skill-invocation
+  name: '@nexus/plugin-skills/invocation'
+
 # 時間讀數（#1625）：每次 agent 呼叫開頭、**同一個 `agent/pre-step` 接縫**上，追加一則持久的使用者訊息，
 # 寫著取樣時間、瀏覽器時區（`run.start` 帶 `client_time_zone` 才有，#1629；沒帶是 unavailable）與距上一則模型看得到的訊息過了多久。
 # 同一條 thread 10 分鐘內不重複（`refreshIntervalMs`，`0` 是每次都注入）；從不進系統提示詞，所以前綴快取不受影響。
 #
-# 位置在 `agent-instructions` 正下方：同一次 invoke 裡人話在前、AGENTS.md 基線居中、讀數在最後。
+# 位置在 `agent-instructions` 與 `skill-invocation` 之下：同一次 invoke 裡人話在前、AGENTS.md 基線與 `/名字` 叫用的技能說明居中、讀數在最後
+# （照 dsh：time-context 以 `prepend` 登記，是 `agent/pre-step` waterfall 的最外層、最後才 append，`time-context/src/index.ts:225`）。
 # **CLI 也掛這一列**（偏離 dsh，理由 1，登記在套件檔頭第 5 條）：dsh 只有 web-app 的 preset 掛它，照 dsh 該只掛 serve；
 # 但 serve 專屬層（`cordis.serve.yml`）的函式插件上不了樹（`plugin-tree.ts:51-52`），這一列只能寫在這份出貨清單，CLI 與 serve 一起掛。
 # 撤除條件：serve 層經 Include 上樹之後，把這一列搬到 `cordis.serve.yml`。
@@ -802,9 +813,10 @@
 # `recursionLimit` 在 `bundle/*` 的 patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列
 # 的形狀抄的是上面 core 那三列，不是抄 dsh 的某一列。
 #
-# **100 不是模型輪數**：換算是 `模型輪數 = floor((limit − 1) / 每輪格數)`，而每輪幾格取決於這一次
-# 掛了哪些 middleware（預設組裝三格＝33 輪，再給 `--workspace` 是 32 輪；serve 另掛插話的載體（#710），
-# 每輪四格，出貨清單上是 24 輪）。那正是這個值歸 harness
+# **100 不是模型輪數**：裸組裝的換算是 `模型輪數 = floor((limit − 1) / 每輪格數)`，每輪幾格取決於這一次
+# 掛了哪些 middleware（預設組裝三格＝33 輪）；每次 invoke 多走一次的 `beforeAgent` 節點各從分子再扣一格。
+# 出貨清單多基座 skills 中介層一顆、pre-step 三顆，是 `floor((limit − 2 − 3) / 3)` ＝ 31 輪；
+# serve 另掛插話的載體（#710），每輪四格，出貨清單上是 23 輪。那正是這個值歸 harness
 # 而不是歸 `@nexus/core` 的理由：core 不知道組裝長什麼樣。逐段實測見
 # `src/settings/recursion-limit.ts` 的檔頭。
 #

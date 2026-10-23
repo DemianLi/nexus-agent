@@ -1914,7 +1914,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 上限（[#544](https://github.com/DemianLi/nexus-agent/issues/544)，dsh 同形）。
 `recursion-limit` 的 `100`
 **沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
-模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，再給 `--workspace` 是 32 輪。逐段
+模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，出貨清單（CLI）是 31 輪，serve 是 23 輪。逐段
 實測見 `apps/harness/src/settings/recursion-limit.ts` 的檔頭。
 `agent-loop` 的 `10` 照 dsh（`maxParallelToolCalls`），最小 1（串行）也同 dsh，**但 1 不是靠 LangGraph 的 `maxConcurrency: 1`**：
 它跑完第一顆就靜靜收掉那一步，其餘工具呼叫沒跑也不報錯。上限 1 時 `maxConcurrency` 仍帶 2，串行由獨佔屏障做
@@ -1962,7 +1962,7 @@ Elapsed since the preceding model-visible message: 15m 0s.
 - **顯示時區預設是行程的 `TZ`**，載入時解析一次。**容器裡常常是 UTC**，要固定成使用者看得懂的時區，啟動時設 `TZ`，或用 `plugin config set time-context --file <檔>`（檔裡寫 `timeZone: Asia/Taipei`，IANA 名），或在 `--patch` 裡給這一列的 `config`。
 - **設定寫錯（不是 IANA 名、間隔不是非負安全整數、多出來的欄位）這一列掉下來**，啟動時印原因，其餘照常；設定只給新的 thread。
 - **關掉**：`plugin disable time-context`，或 patch 寫 `- id: time-context` ＋ `disabled: true`。這一列在 `cordis.yml`（CLI 與 serve 共用），所以兩邊一起關：dsh 只有 web-app 掛它、照理只掛 serve，但 serve 專屬層的函式插件上不了樹（`plugin-tree.ts:51-52`），所以我們的 CLI 也掛（偏離登記在套件檔頭第 5 條，撤除條件：serve 層經 Include 上樹後搬到 `cordis.serve.yml`）。
-- **每次 invoke 多一個圖節點**（`TimeContextMiddleware.before_agent`），在預設遞迴上限 100 下輪數不變（32 輪，被 floor 吃掉）；**但剛好卡在邊界上**：上限 99 就是 31 輪，再多一個 `beforeAgent` 節點，預設上限也會少一輪。上限壓得很低的部署要自己量。
+- **每次 invoke 多一個圖節點**（`TimeContextMiddleware.before_agent`）。2026-10-23 起清單上另有 `/名字` 叫用那一顆（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)），預設遞迴上限 100 下出貨清單是 31 輪；拿掉這一列（或叫用那一列）是 32 輪。上限壓得很低的部署要自己量。
 - **畫面上不會多一則**：讀數是持久訊息、模型看得到，但帶 `source.plugin`，web 的對話畫面不把它當使用者說的話畫出來（同 AGENTS.md 基線）。
 
 ### 後台改清單：`plugin` 寫入口與變更紀錄

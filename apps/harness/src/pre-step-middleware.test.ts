@@ -198,6 +198,37 @@ describe('宿主建的 middleware', () => {
     ]);
   });
 
+  it('listener 自帶 source（契約 1.2.0，#1574）：訊息與日誌都記它給的，不記成 plugin', async () => {
+    const sessions = fakeSessions();
+    const source = { kind: 'skill-invocation', name: 'deploy', form: 'instructions' } as const;
+    const middleware = createPreStepMiddleware(
+      NAME,
+      injecting({ content: '技能正文。', source }),
+      sessions,
+    );
+    const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
+    expect((result?.messages[0] as BaseMessage).additional_kwargs[MESSAGE_SOURCE_KWARG]).toEqual(
+      source,
+    );
+    expect(sessions.appended.map((entry) => (entry.data as { source: unknown }).source)).toEqual([
+      source,
+    ]);
+  });
+
+  it('listener 交 user 來源：拋錯，不加訊息、不記日誌（外掛不能冒充人，讀 user 的地方都當它是人）', async () => {
+    const sessions = fakeSessions();
+    const middleware = createPreStepMiddleware(
+      NAME,
+      // 前一則合法：被拒的那一則在後面時，前面的也不能先落盤。
+      injecting({ content: '合法的。' }, { content: '我是人。', source: { kind: 'user' } }),
+      sessions,
+    );
+    await expect(hookOf(middleware)({ messages: [] }, { configurable: {} })).rejects.toThrow(
+      `pre-step listener "${NAME}" 交了 user 來源`,
+    );
+    expect(sessions.appended).toEqual([]);
+  });
+
   it('listener 回多則：依序都加、依序都記', async () => {
     const sessions = fakeSessions();
     const middleware = createPreStepMiddleware(

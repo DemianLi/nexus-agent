@@ -359,6 +359,18 @@ export type UserMessageSource =
       readonly form: 'relay';
       /** 寄件的會話 id。內容是寄件人自己選的話，所以與 `subagent-settled` 分開，記帳不能被呈現成子代理寫的。 */
       readonly senderSessionId: string;
+    }
+  | {
+      /**
+       * 人在句子裡寫 `/名字` 叫用的技能說明（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)），形狀照 dsh 的
+       * `SkillInvocationSource`（`packages/skill/skill/src/index.ts:146-152`，`687f282e`）。唯一的生產者是 `@nexus/plugin-skills`
+       * 的 `agent/pre-step` listener，只在 root 注入。
+       */
+      readonly kind: 'skill-invocation';
+      /** 叫用的技能名，注入當下已確認人叫得到。 */
+      readonly name: string;
+      /** 注入的是要模型照做的指示（dsh 的 `instructions` 形式）。 */
+      readonly form: 'instructions';
     };
 
 /** 每一種事件帶什麼。 */
@@ -870,6 +882,10 @@ export interface SessionEventMap {
    *   （一輪開頭的是 `turn/start` 與領走那顆 `inbox/spliced` 之後，插話的是那句 `user` 來源之後），**內容凍在這一顆裡**：續接與重播
    *   讀的是這一份，不重讀被引用的會話。**它不是人打的字**——goal 的直接人類授權只認 `user`（正向判準），畫面不當人話畫，
    *   內容搜尋不收（不然別的會話的字會讓這一條被搜到）。唯一的生產者是 pump 的準備那一步（`apps/harness/src/session-reference.ts`）。
+   * - **`skill-invocation`：人寫 `/名字` 叫用的技能說明**（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)），照 dsh 帶
+   *   `source: {kind: 'skill-invocation', name, form: 'instructions'}`。`agent/pre-step` 的 listener 交來源、宿主照記
+   *   （`apps/harness/src/pre-step-middleware.ts`），落在那次呼叫的 `model/start` 之前。它是機器造的：畫面不當人話畫、goal 的授權不認。
+   *   宿主拒絕 listener 交 `user` 來源，所以上面「外掛不能寫 `user`」在這條路上照樣成立。
    *
    * **偏離**：dsh 一輪開頭那句人話也是 `user/message`；我們的在 `turn/start`，而那一格是授權的判別欄，不動它。
    * 所以一輪開頭的人話不在這裡，只有輪中插的話在。**`turn/start.text` 記的是換過的 `@標題`**，同 dsh 落在 `user/message` 的是換過的內容
