@@ -15,8 +15,23 @@
  *   `SIGKILL`（`:53`），回 `SEARCH_ABORTED`。
  * - 結束碼：0 有結果、1 零結果，其餘依 stderr 分 `SEARCH_INVALID_PATTERN`（regex／glob 解析錯誤）與 `SEARCH_FAILED`
  *   （`:124-130`）；被訊號殺也是 `SEARCH_FAILED`。**沒有退路**：這一層不改走別的搜尋法。
+ *   **唯一的例外是偏離 1（#1704）**：結束碼 2、而 stderr 每一行都是「讀不到」時，照樣交出 stdout。
  * - 子行程環境是 `scrubbedParentEnv()`（`search-core.ts:8`、`subprocess-local/src/spawn.ts:45`）：名字像憑證的與
  *   harness 自己的變數不交給 rg。
+ *
+ * ## 偏離 dsh（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)，理由 2：多人共用主機）
+ *
+ * 1. **有些檔讀不到不讓整次搜尋失敗。** dsh `runRipgrep` 把 0、1 以外的結束碼一律拋成 `SEARCH_FAILED`
+ *    （`search-core.ts:282-284`），dsh 的測試也只有 regex／glob 解析錯誤、路徑不存在與空 stderr 三種 2
+ *    （`tests/tools.spec.ts:566-598`），沒有「部分檔讀不到」的情境——它是單人的 Host，工作區都是自己的檔。
+ *    多人共用一台主機時，工作區裡只要有一個 0600、屬於別人的檔，或一個 0700 的目錄，rg 就回 2，stdout 其實已經有
+ *    其餘檔的命中，整次 grep 失敗等於把已找到的一起丟掉。
+ *
+ *    判準寫死、從嚴：**結束碼是 2、stderr 完整（沒被截尾）、而且每一個非空行都是 `rg: <路徑>: Permission denied (os error 13)`**。
+ *    少一條就照舊判錯：regex／glob 解析錯誤、路徑不存在（`IO error for operation on`）、symlink 迴圈、stderr 被截尾（看不到
+ *    被截掉的那段，不能保證裡面沒有別種錯誤）。字樣在 macOS（rg 15.1.0 與內附 15.0.0）與 Linux（內附 15.0.0）實測過，
+ *    見 PR 內文。退到的做法：照樣交出 stdout，並在結果上帶 {@link RipgrepOutcome.unreadable}（讀不到幾條路徑），
+ *    由呼叫端告訴模型「結果只涵蓋讀得到的」。
  *
  * ## 與 dsh 的差異（不是偏離，是載體）
  *
@@ -70,7 +85,14 @@ export type RipgrepTool = 'grep' | 'glob';
 
 /** 這一次執行的結果。 */
 export type RipgrepOutcome =
-  | { readonly kind: 'ok'; readonly stdout: string; readonly noMatches: boolean }
+  | {
+      readonly kind: 'ok';
+      readonly stdout: string;
+      /** rg 結束碼是 1。結束碼 2 的部分失敗（{@link unreadable} 大於 0）不是零結果，這裡永遠是 `false`，由呼叫端解析 stdout。 */
+      readonly noMatches: boolean;
+      /** 讀不到的路徑數（偏離 1，#1704）；沒有就是 0。 */
+      readonly unreadable: number;
+    }
   | { readonly kind: 'error'; readonly code: SearchErrorCode; readonly message: string };
 
 /** {@link runRipgrep} 的參數。 */
@@ -81,6 +103,12 @@ export interface RipgrepRunOptions {
   readonly argv: readonly string[];
   /** 工作目錄；呼叫端要先確認它存在。 */
   readonly cwd: string;
+  /**
+   * 結束碼 2、stderr 全是「讀不到」時照樣交出 stdout（偏離 1，#1704）。**預設 `false`，也就是 dsh 的做法**：
+   * 只有呼叫端確定「讀不到的路徑不是秘密、少搜幾個檔可以接受」才開（工作區的 `grep`／`glob`）；附件路由不開
+   * （#1822：同一個目錄裡沒引用的別名檔屬於別的 thread，連「有幾個」都不交給模型）。
+   */
+  readonly tolerateUnreadable?: boolean | undefined;
   /** 錯誤訊息裡的工具名；預設 `grep`。 */
   readonly tool?: RipgrepTool | undefined;
   /** 呼叫端的取消訊號（這一次工具呼叫的）。 */
@@ -109,6 +137,27 @@ function stderrExcerpt(text: string, truncated: boolean): string {
   const trimmed = text.trim();
   if (trimmed.length === 0) return '';
   return truncated ? `${trimmed} [stderr truncated]` : trimmed;
+}
+
+/**
+ * rg 為了「讀不到」寫的 stderr 行：`rg: <路徑>: Permission denied (os error 13)`。
+ * 實測（#1704）：macOS rg 15.1.0、內附 rg 15.0.0（darwin-arm64、linux-arm64）字樣一致；檔與目錄都是這一句。
+ * `(os error 13)` 是 `EACCES` 的數字，不依賴 locale（Rust 不呼叫 `setlocale`，訊息固定是 C locale 的英文）。
+ */
+const UNREADABLE_LINE = /^rg: .+: Permission denied \(os error 13\)$/u;
+
+/**
+ * stderr 是不是**只有**「讀不到」。
+ *
+ * @param text - 保留下來的 stderr。
+ * @param truncated - stderr 是否被截尾；截過的看不到前段，不能保證裡面沒有別種錯誤，一律當不是。
+ * @returns 讀不到的路徑數；有任何一行不是「讀不到」、沒有任何一行、或被截尾時是 `undefined`。
+ */
+function unreadableCount(text: string, truncated: boolean): number | undefined {
+  if (truncated) return undefined;
+  const lines = text.split('\n').filter((line) => line.trim() !== '');
+  if (lines.length === 0) return undefined;
+  return lines.every((line) => UNREADABLE_LINE.test(line)) ? lines.length : undefined;
 }
 
 /** 非 0／1 結束的 rg 歸類，照 dsh `classifyRunFailure`（`:124-130`）。 */
@@ -278,14 +327,25 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
         });
         return;
       }
+      let unreadable = 0;
       if (exitCode !== 0 && exitCode !== 1) {
-        settle(classifyExit(tool, exitCode, stderrTail.toString('utf8'), stderrTruncated));
-        return;
+        const stderrText = stderrTail.toString('utf8');
+        // 偏離 1（#1704）：只有結束碼 2、而 stderr 全是「讀不到」才放行；其餘的非 0／1 照 dsh 判錯。
+        const skipped =
+          exitCode === 2 && options.tolerateUnreadable === true
+            ? unreadableCount(stderrText, stderrTruncated)
+            : undefined;
+        if (skipped === undefined) {
+          settle(classifyExit(tool, exitCode, stderrText, stderrTruncated));
+          return;
+        }
+        unreadable = skipped;
       }
       settle({
         kind: 'ok',
         stdout: Buffer.concat(stdoutChunks).toString('utf8'),
         noMatches: exitCode === 1,
+        unreadable,
       });
     });
   });

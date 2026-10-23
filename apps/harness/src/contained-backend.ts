@@ -105,6 +105,7 @@ import {
   noteReadWindow,
   noteSandboxDenial,
   noteSearchError,
+  noteSearchNotice,
   SEARCH_ABORTED,
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
@@ -174,6 +175,18 @@ function searchFailure(
 ): { readonly error: string; readonly errorCode: SearchErrorCode } {
   noteSearchError(code);
   return { error: message, errorCode: code };
+}
+
+/**
+ * rg 有些路徑讀不到、其餘照常搜完時（偏離 dsh，#1704，見 `ripgrep-runner.ts` 檔頭），替這一次工具呼叫記一句，
+ * 由 `fs-tool-errors.ts` 接在結果後面。**只講數量、不列路徑**：這句話原樣交給模型，路徑是主機上別人的檔名。
+ */
+function noteUnreadable(count: number): void {
+  if (count === 0) return;
+  const noun = count === 1 ? 'path was' : 'paths were';
+  noteSearchNotice(
+    `${String(count)} ${noun} unreadable (permission denied) and skipped; results cover only the readable files`,
+  );
 }
 
 /** dsh `GLOB_VCS_EXCLUDES`（`glob.ts:21-107`，`687f282e`）：版本控制的中繼目錄，`glob` 一律不列。 */
@@ -457,6 +470,12 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /** 升級的 grant 從哪裡認領；`undefined` 就是這道 fence 沒有升級。 */
   private readonly grants: SandboxGrantLedger | undefined;
+
+  /**
+   * 搜尋時有些路徑讀不到，要不要照樣交出其餘的結果（偏離 dsh，#1704，見 `ripgrep-runner.ts` 檔頭）。工作區是多人共用主機上
+   * 的目錄，預設開；子類的根不是「使用者的檔案」、而讀不到的路徑本身就不該交給模型時關掉（附件路由，#1822）。
+   */
+  protected readonly tolerateUnreadable: boolean = true;
 
   /** 只給測試用的 `rg` 接縫；正式組裝是 `undefined`。 */
   private readonly ripgrepInternals: RipgrepInternals | undefined;
@@ -897,9 +916,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       ],
       cwd: this.cwd,
       signal: currentToolCallSignal(),
+      tolerateUnreadable: this.tolerateUnreadable,
       internals: this.ripgrepInternals,
     });
     if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    noteUnreadable(outcome.unreadable);
     return applyGrepMaxCount({
       result: { matches: this.parseRipgrepJson(outcome.stdout) },
       maxCount: maxCount ?? null,
@@ -961,9 +982,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       cwd: this.cwd,
       tool: 'glob',
       signal,
+      tolerateUnreadable: this.tolerateUnreadable,
       internals: this.ripgrepInternals,
     });
     if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    noteUnreadable(outcome.unreadable);
 
     const relatives: string[] = [];
     for (const entry of outcome.stdout.split('\0')) {

@@ -379,6 +379,7 @@ export {
   noteFsError,
   noteSandboxDenial,
   noteSearchError,
+  noteSearchNotice,
   SEARCH_ABORTED,
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,

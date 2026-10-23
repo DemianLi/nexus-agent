@@ -177,6 +177,8 @@ interface CallRecord {
   searchError: SearchErrorCode | undefined;
   /** backend 的讀寫改失敗了，是哪一種（{@link noteFsError}）。 */
   fsError: FsErrorCode | undefined;
+  /** 搜尋成功、但有話要補在結果後面（{@link noteSearchNotice}）。 */
+  searchNotice: string | undefined;
 }
 
 /**
@@ -213,6 +215,19 @@ export function noteSandboxDenial(): void {
 export function noteSearchError(code: SearchErrorCode): void {
   const record = currentCall.getStore();
   if (record !== undefined) record.searchError = code;
+}
+
+/**
+ * 搜尋成功了，但結果不完整、要讓模型知道（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）：backend 在回結果之前
+ * 叫它，`wrapToolCall` 在 `grep`／`glob` 成功的結果後面接上這一句。基座的 `GrepResult`／`GlobResult` 沒有地方放這種話
+ * （`truncated` 會讓基座接上「raise max_count」，說的是別的事），所以走跟 {@link noteSearchError} 同一條載體。
+ * 一次工具呼叫裡叫多次時，最後一次算數。不在任何一次工具呼叫裡時什麼都不做。
+ *
+ * @param text - 一句話，不含括號與換行（接上去時由 middleware 包括號）。
+ */
+export function noteSearchNotice(text: string): void {
+  const record = currentCall.getStore();
+  if (record !== undefined) record.searchNotice = text;
 }
 
 /**
@@ -285,6 +300,37 @@ function withSandboxCode<T>(result: T, record: CallRecord): T {
 }
 
 /**
+ * 搜尋成功而 backend 說了話（{@link noteSearchNotice}）：把那句接在基座排好的結果後面，其餘每一格原樣帶過去。
+ * 只管 `grep`／`glob`；錯誤的結果、不是文字的內容（文字區塊以外的形狀）原樣交出，不猜。
+ */
+function withSearchNotice<T>(result: T, toolName: string, record: CallRecord): T {
+  const notice = record.searchNotice;
+  if (notice === undefined || (toolName !== 'grep' && toolName !== 'glob')) return result;
+  if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
+  const suffix = `\n\n(${notice})`;
+  let content: ToolMessage['content'];
+  if (typeof result.content === 'string') {
+    content = `${result.content}${suffix}`;
+  } else if (
+    result.content.every((block) => (block as { readonly type?: unknown }).type === 'text')
+  ) {
+    content = [...result.content, { type: 'text', text: suffix }];
+  } else {
+    return result;
+  }
+  return new ToolMessage({
+    content,
+    tool_call_id: result.tool_call_id,
+    name: result.name ?? toolName,
+    id: result.id,
+    status: result.status,
+    artifact: result.artifact,
+    additional_kwargs: result.additional_kwargs,
+    response_metadata: result.response_metadata,
+  }) as unknown as T;
+}
+
+/**
  * 造一顆把檔案工具的失敗標成錯誤的 middleware。**無狀態**：記錄每次呼叫各一份，root 與每個
  * subagent 共用同一顆。
  *
@@ -302,11 +348,15 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
         signal: (request.runtime as { readonly signal?: AbortSignal } | undefined)?.signal,
         searchError: undefined,
         fsError: undefined,
+        searchNotice: undefined,
       };
       const result = await currentCall.run(record, () => handler(request));
-      const method = FS_TOOL_PRIMARY_METHOD[resolveToolName(request)];
+      const toolName = resolveToolName(request);
+      const method = FS_TOOL_PRIMARY_METHOD[toolName];
       if (method === undefined) return withSandboxCode(result, record);
-      if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) return result;
+      if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) {
+        return withSearchNotice(result, toolName, record);
+      }
       const error = record.sandboxDenied
         ? { name: 'FsError', code: FS_SANDBOX_DENIED }
         : record.searchError !== undefined

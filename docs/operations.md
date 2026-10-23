@@ -358,6 +358,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **`grep` 用的 ripgrep 是產物內附的，不看主機的 `PATH`**（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4）：`@vscode/ripgrep` 的平台套件隨 `pnpm install` 與 release tarball 一起來，主機有沒有裝 rg、是哪個版本都無關，完全內網的主機也不必另外裝。啟動時 serve 會印一行 `搜尋（grep）：內附 ripgrep <路徑>`；印的是「不可用」就是產物壞了（平台套件被刪、或 rg 沒有執行權限），這時每一次 `grep` 都會以 `SEARCH_FAILED` 失敗，**沒有退路**，重新安裝即可。rg 以 `--no-config` 啟動，`~/.ripgreprc` 與 `RIPGREP_CONFIG_PATH` 影響不到搜尋。
 
+**工作區裡有 serve 讀不到的檔，`grep` 與 `glob` 不整次失敗**（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）：多人共用一台主機時，工作區裡常有別人的 0600 檔或 0700 目錄，ripgrep 碰到會結束碼 2。其餘讀得到的檔照樣搜完，結果最後接一句 `(2 paths were unreadable (permission denied) and skipped; results cover only the readable files)`，模型因此知道這份結果不是整個工作區。**只數量、不列路徑。**要讓那些檔被搜到，給 serve 的執行身分讀取權限；沒有的話它們永遠搜不到，這句提示每次都會出現。判準從嚴：結束碼是 2、stderr 沒被截尾、而且**每一行**都是 `rg: <路徑>: Permission denied (os error 13)` 才放行；正規式或 glob 寫壞、路徑不存在、symlink 迴圈、stderr 多到被截尾，或夾了任何別種錯誤，都照舊回 `SEARCH_INVALID_PATTERN`／`SEARCH_FAILED`。這一點偏離 dsh（dsh 對 0、1 以外的結束碼一律整次失敗），理由與實測見 #1704。**附件的搜尋不適用**：附件目錄裡讀不到的檔是別的對話的別名檔，連「有幾個」都不交給模型（#1822），那裡維持整次失敗、原始訊息只進伺服器日誌。
+
 **接得回來要站在同一個地方**，兩道守衛，兩個入口都擋：
 
 - **同一個目錄。** 一份會話記著它建立當下的工作目錄，接不回別的目錄；**沒記的也拒**，不猜。

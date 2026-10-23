@@ -12,6 +12,7 @@ import {
   FS_SANDBOX_DENIED,
   noteSandboxDenial,
   noteSearchError,
+  noteSearchNotice,
   recordBackendOutcomes,
   SEARCH_INVALID_PATTERN,
 } from './fs-tool-errors.js';
@@ -361,5 +362,93 @@ describe('搜尋失敗的碼與這一次呼叫的取消訊號（#1532）', () =>
     });
     expect(without).toBeUndefined();
     expect(currentToolCallSignal()).toBeUndefined();
+  });
+});
+
+describe('搜尋成功但結果不完整：把 backend 記的那句接在後面（#1704）', () => {
+  const wrap = wrapperOf(createFsToolErrorsMiddleware());
+  const NOTICE = '2 paths were unreadable (permission denied) and skipped';
+
+  /** 一次工具呼叫：backend 先記一句，基座排好 `content` 交回來。 */
+  const call = async (
+    tool: string,
+    content: ToolMessage['content'],
+    noted = true,
+  ): Promise<ToolMessage> =>
+    (await wrap(requestFor(tool), async () => {
+      if (noted) noteSearchNotice(NOTICE);
+      return asToolMessage(content, tool);
+    })) as ToolMessage;
+
+  it('grep 與 glob 的成功結果：空一行、包括號接在最後，其餘每一格不動', async () => {
+    for (const tool of ['grep', 'glob']) {
+      const result = await call(tool, 'Found 1 match\n\n/a.log:\n  1: needle');
+      expect(result.content).toBe(`Found 1 match\n\n/a.log:\n  1: needle\n\n(${NOTICE})`);
+      expect(result.tool_call_id).toBe('call-1');
+      expect(result.name).toBe(tool);
+    }
+  });
+
+  it('文字塊陣列：多接一個文字塊，原本的塊原樣保留', async () => {
+    const result = await call('grep', [{ type: 'text', text: 'Found 1 match' }]);
+    expect(result.content).toEqual([
+      { type: 'text', text: 'Found 1 match' },
+      { type: 'text', text: `\n\n(${NOTICE})` },
+    ]);
+  });
+
+  it('反例：沒有記過就什麼都不接', async () => {
+    const result = await call('grep', 'No matches found', false);
+    expect(result.content).toBe('No matches found');
+  });
+
+  it('反例：不是 grep／glob（read_file、ls）記了也不接——這句話只屬於搜尋', async () => {
+    for (const tool of ['read_file', 'ls']) {
+      expect((await call(tool, 'x')).content).toBe('x');
+    }
+  });
+
+  it('反例：不是文字的內容（圖片塊）原樣交出，不猜', async () => {
+    const content = [{ type: 'image_url', image_url: { url: 'data:image/png;base64,AA==' } }];
+    expect((await call('grep', content)).content).toEqual(content);
+  });
+
+  it('反例：backend 沒回錯、但工具訊息本身已是錯誤狀態（例如工具逾時）：不接', async () => {
+    const result = (await wrap(requestFor('grep'), async () => {
+      noteSearchNotice(NOTICE);
+      return new ToolMessage({
+        content: 'Error: timed out',
+        tool_call_id: 'call-1',
+        name: 'grep',
+        status: 'error',
+      });
+    })) as ToolMessage;
+    expect(result.content).toBe('Error: timed out');
+  });
+
+  it('反例：已經是錯誤的結果不接（錯誤自己會說明，不需要「結果不完整」）', async () => {
+    const backend = recordBackendOutcomes({
+      async grep(): Promise<{ error: string }> {
+        noteSearchError(SEARCH_INVALID_PATTERN);
+        noteSearchNotice(NOTICE);
+        return { error: 'grep pattern rejected by ripgrep: x' };
+      },
+    });
+    const result = (await wrap(requestFor('grep'), async () => {
+      const out = await backend.grep();
+      return asToolMessage(out.error, 'grep');
+    })) as ToolMessage;
+    expect(result.status).toBe('error');
+    expect(String(result.content)).not.toContain('unreadable');
+  });
+
+  it('兩次平行的呼叫各記各的：一顆的話不會接到另一顆的結果上', async () => {
+    const [withNotice, without] = await Promise.all([call('grep', 'a'), call('grep', 'b', false)]);
+    expect(withNotice.content).toContain(NOTICE);
+    expect(without.content).toBe('b');
+  });
+
+  it('不在工具呼叫裡時 noteSearchNotice 什麼都不做', () => {
+    expect(() => noteSearchNotice(NOTICE)).not.toThrow();
   });
 });
