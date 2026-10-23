@@ -2082,6 +2082,9 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   超過預算的來源會被截，訊息裡帶 `Reference omissions` 標記，模型看得到被截了。
 - **出廠比例是 0.1，不是 dsh 的 0.2**（schema 的預設仍是 0.2）：三條上限大小的中文來源，乘上實測的中文校正 1.10 之後要留在摘要門檻之內。
   量法與數字在 `apps/harness/cordis.yml` 那一列的註解與 `session-reference-budget.test.ts`；比例調大前先照那個量法重量。
+- **patch 是整份替換 `config`，不是深層合併**：在自己的 `cordis.patch.yml` 或 `--patch` 裡只寫 `candidateLimit` 或 `maxReferences` 的話，
+  另外幾格由 schema 補，**`referenceContextFraction` 會靜靜回到 schema 的 0.2**，出廠調低的 0.1 就被拿掉了，起動時沒有任何警告。
+  所以調任何一格都要把 `referenceContextFraction: 0.1`（或你量出來的值）一起寫進去。
 - **窗口一律查型錄**。型錄裡沒有的模型（續接的會話選過、後來被拿掉的那顆）這一輪在打供應商之前就失敗，所以這一格的預算沒有人看得到。
 
 **`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)、[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）給 serve 行程裡的 thread 數設上限（第 2 級），
