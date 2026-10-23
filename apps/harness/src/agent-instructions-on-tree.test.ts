@@ -955,11 +955,11 @@ describe('讀整份與單檔上限，經各入口的組裝（#1533）', () => {
   }, 90000);
 
   it.each([
-    ['patch 把 maxSourceBytes 調成 1024', true],
-    ['出廠設定（1 MiB）', false],
+    ['patch 把 maxSourceBytes 調成 1024', '不進基線', true],
+    ['出廠設定（1 MiB）', '照進', false],
   ] as const)(
     'runCli，%s：2 KB 的 AGENTS.md %s，小的 CLAUDE.md 照讀（出貨那一列的設定傳到 apply）',
-    async (_label, capped) => {
+    async (_label, _outcome, capped) => {
       const home = scratch();
       const workspace = workspaceWith(`大檔開頭。${'a'.repeat(2048)}`);
       writeFileSync(join(workspace, 'CLAUDE.md'), '小檔的規矩。', 'utf8');
