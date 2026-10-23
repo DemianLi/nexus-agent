@@ -1,5 +1,5 @@
 /**
- * 契約先合、實作還沒做的 wire 方法（#723／#732／#733／#437／#633／#1516／#1581）：假 client 沒有接這幾個，回 `not_supported`，同 server 還沒實作時的樣子。
+ * 契約先合、實作還沒做的 wire 方法（#723／#732／#733／#437／#633／#1516／#1581／#1574）：假 client 沒有接這幾個，回 `not_supported`，同 server 還沒實作時的樣子。
  *
  * **只能用 spread 放進 `WireClient` 字面值**（`...UNWIRED_WIRE_CONTRACT`），不要逐項寫在字面值上：逐項寫的話，
  * `@nexus/wire` 還沒有這幾個方法的那棵樹會報「多餘屬性」，契約 PR 與這邊就不能分兩張合。
@@ -21,4 +21,5 @@ export const UNWIRED_WIRE_CONTRACT = {
   subagentList: async () => NOT_SUPPORTED,
   goalPause: async () => NOT_SUPPORTED,
   threadFork: async () => NOT_SUPPORTED,
+  skillList: async () => NOT_SUPPORTED,
 };

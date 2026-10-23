@@ -1,7 +1,7 @@
 import { ContextOverflowError } from '@langchain/core/errors';
 import { parseRetryAfterMs } from '@langchain/core/utils/async_caller';
 import { MiddlewareError } from 'langchain';
-import { ChatOpenAI } from '@langchain/openai';
+import { ChatOpenAI, OpenAIClient } from '@langchain/openai';
 import type { ChatOpenAIFields } from '@langchain/openai';
 import {
   assertImageBudget,
@@ -1714,7 +1714,13 @@ export function createLiveModel(
       baseURL: config.baseUrl,
       // **每次請求前才解析**（openai 的 `apiKey` 收函式，實測經過 `bindTools`／`withConfig` 之後還在，
       // 見 `live-model.test.ts`）。所以受管檔改了、下一個請求就用新的，也不必把 key 放進行程的環境變數。
-      apiKey: async () => resolveUsableKey(credentials, config.apiKeyEnv),
+      apiKey: async () => {
+        try {
+          return resolveUsableKey(credentials, config.apiKeyEnv);
+        } catch (error) {
+          throw keyFailureForSdk(error);
+        }
+      },
       fetch: withAttribution(
         withStreamIdleTimeout(
           config.streamIdleTimeoutMs,
@@ -2231,6 +2237,25 @@ function resolveUsableKey(credentials: CredentialService, name: string): string 
   const hit = credentials.resolve(name);
   if (hit === undefined) throw new Error(missingKeyMessage(credentials.store, name));
   return assertUsableApiKey(name, hit);
+}
+
+/**
+ * 請求時取金鑰的錯，換成 openai 不會再包一層的形狀（[#1656](https://github.com/DemianLi/nexus-agent/issues/1656)）。
+ *
+ * openai 在每次請求前呼叫 `apiKey` 函式（`openai@7.5.0` 的 `client.js:316-338` `_callApiKey`），函式拋的錯只要不是它自己的 `OpenAIError`，
+ * 就包成 `OpenAIError("Failed to get token from 'apiKey' function: <原訊息>", { cause: 原錯 })`；是 `OpenAIError` 就原樣放行（`:327`）。
+ * 所以這裡把我們的錯（缺 key 的 `Error`、{@link InvalidCredentialError}）放進一個 `OpenAIError`，**訊息逐字用我們的**、`cause` 仍是原錯：
+ * 送到線上的紅字是我們那句中文，`classifyTurnFailure` 沿 `cause` 鏈認出的碼也不變。
+ *
+ * **偏離 dsh（理由 1：基座表達不出來）。** dsh 在轉接器自己先取金鑰、拿到值才發請求（`llm-pi-ai/src/adapter.ts:384`），取金鑰的錯不經 SDK。
+ * LangChain 的 `ChatOpenAI` 只收靜態字串或函式：先取再給字串，就失去 #1541 要的「每次請求前才解析」（`model` 建好就固定了）；
+ * 在每個請求前另外預取一次再讓函式取第二次，兩次之間檔案又被改，錯還是會被包上前綴。所以取金鑰仍在函式裡，但錯的形狀由我們定。
+ * `OpenAIError` 從 `@langchain/openai` 重新匯出的 `OpenAIClient` 取（harness 沒有直接依賴 `openai`，也避免兩份 `openai` 時 `instanceof` 對不上）。
+ */
+function keyFailureForSdk(error: unknown): unknown {
+  return error instanceof Error
+    ? new OpenAIClient.OpenAIError(error.message, { cause: error })
+    : error;
 }
 
 /**
