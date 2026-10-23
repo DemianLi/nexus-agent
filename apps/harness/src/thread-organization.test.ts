@@ -353,6 +353,26 @@ describe('ThreadOrganization.open：認不得的檔明確失敗，而且一個�
     expect(organization.archivedThreadIds).toEqual(['q']);
   });
 
+  /** #1507 Q1 (a)：處置不變（起不來、不覆寫），訊息先叫人備份，再講怎麼重設；備份在刪除之前。 */
+  it('壞內容的訊息先叫人備份整個檔，再講重設會清空', async () => {
+    const text = 'not json';
+    const { home, file } = await homeWith(text);
+    let message = '';
+    try {
+      await ThreadOrganization.open(home);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain(`${file} 的格式認不得`);
+    expect(message).toContain('先把整個檔備份起來');
+    // 帶時間戳：固定檔名的話，第二次備份會蓋掉前一份。訊息是執行期字串，stderr 不渲染 markdown，不能有星號。
+    expect(message).toContain(`cp ${file} ${file}.bak-$(date +%s)`);
+    expect(message).not.toContain('*');
+    expect(message).toContain('釘選與封存會全部清空');
+    expect(message.indexOf('先把整個檔備份起來')).toBeLessThan(message.indexOf('刪掉它'));
+    expect(await readFile(file, 'utf8')).toBe(text);
+  });
+
   it.skipIf(!POSIX)('權限過寬（group／other 讀得到）：拒絕，檔案不動', async () => {
     const text = JSON.stringify({ version: 1, pinnedThreadIds: [], archivedThreadIds: [] });
     for (const mode of [0o644, 0o640, 0o604]) {
