@@ -27,6 +27,8 @@
  *    因為編號重複代表同一則結果被重送。檔案權限仍是 0600。
  * 3. **會話目錄的鑰匙由呼叫端給**（CLI 是會話日誌的 run 目錄、serve 是專案目錄加 thread id）：兩者都是「續接時會回到
  *    同一個會話」的既有身分，這裡只取雜湊。沒給鑰匙的組裝（eval、spike、沒有會話日誌）維持今天的記憶體暫存。
+ *    所以外溢存檔的請求**不帶 dsh `SaveTextSpill.owner`**（`spill/src/types.ts:61-72`）：分區在建實例時就由這把鑰匙定了，
+ *    一個實例只服務一個會話，基座的 backend 路由又是組裝時固定的一條前綴，請求帶 owner 也沒有第二個去處（理由 1）。
  *
  * ## 模型也寫得進這個前綴
  *
@@ -220,7 +222,8 @@ export class StashRoute implements BackendProtocolV2 {
    * content`），8 萬字元以下的結果於是原樣交給模型。退回記憶體的話這裡會回報成功，模型拿到的是預覽加一個只在這個行程
    * 讀得回的路徑，而原文本來完全放得下。
    *
-   * 檔名是隨機的（`<十二個十六進位字>-<工具名>.txt`），不會跟基座按工具呼叫編號取的名字撞在一起；定位是虛擬前綴下的路徑，
+   * 檔名是隨機的（`<十二個十六進位字>-<建議檔名>`，照 dsh `store.ts:110`；工具結果是 `<工具名>.txt`、跨會話引用是
+   * `session-reference-<N>.txt`），不會跟基座按工具呼叫編號取的名字撞在一起；定位是虛擬前綴下的路徑，
    * 讀取走路由，圍欄看不到的主機絕對路徑不會出現在模型面前。
    *
    * @param prefix - 這條路由在組裝點掛的前綴（不含結尾斜線）。
@@ -229,10 +232,15 @@ export class StashRoute implements BackendProtocolV2 {
   spillStore(prefix: string): SpillStore {
     return {
       saveText: async (request: SpillSaveRequest): Promise<SpillRef> => {
-        const name = `${randomBytes(6).toString('hex')}-${request.toolName.replace(/[^A-Za-z0-9._-]/gu, '_')}.txt`;
+        const name = `${randomBytes(6).toString('hex')}-${request.suggestedName.replace(/[^A-Za-z0-9._-]/gu, '_')}`;
         const result = await this.#host.write(`/${name}`, request.content);
         if (failed(result)) throw new Error(result.error);
-        return { locator: `${prefix}/${name}`, retrievalHint: SPILL_RETRIEVAL_HINT };
+        // 位元組數照 dsh `store.ts:130`：寫進去的內容的 UTF-8 長度。
+        return {
+          locator: `${prefix}/${name}`,
+          bytes: Buffer.byteLength(request.content, 'utf8'),
+          retrievalHint: SPILL_RETRIEVAL_HINT,
+        };
       },
     };
   }

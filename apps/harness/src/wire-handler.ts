@@ -128,6 +128,7 @@ import type {
   SessionEvent,
   SessionLog,
   SessionRegistry,
+  SpillStore,
 } from '@nexus/core';
 import {
   errorChain,
@@ -216,6 +217,12 @@ export interface ThreadAgent {
    * `next-step`。
    */
   readonly stepInbox?: boolean;
+  /**
+   * 這條 thread 自己的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948，`createNexusAgent` 回的那一格），選配。
+   * 引用別的會話被截斷時，pump 把全文存進這裡、模型拿到讀得回的位址。**省略即沒有地方存**（沒開會話日誌、手搭的組裝），
+   * 說明裡寫 `storage-not-configured`；產品路徑（`serve.ts`）有會話日誌時一律交。
+   */
+  readonly spillStore?: SpillStore;
   /**
    * 這個 thread 打得出哪些斜線命令。**必填**，理由同 `dispose`：忘記它的代價看不見。
    *
@@ -1653,6 +1660,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             ? undefined
             : (report) => options.onTurnFailed!(report),
           options.turnClock,
+          threadAgent.spillStore,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);

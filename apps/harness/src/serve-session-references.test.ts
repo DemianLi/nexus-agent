@@ -9,8 +9,8 @@
  * 4. **快照記的是被引用那份磁碟上的版號**（#1856）：header 讀回來轉譯成這一版，`capturedFormatVersion` 仍記原版號。
  */
 
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
@@ -20,9 +20,11 @@ import { parseSessionReferenceText } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { assemblyWitness, resetAssemblyWitness } from './assembly-witness.fixture.js';
 import { foldTurn, serveClient } from './fixtures.js';
+import { HARNESS_HOME_DIR_NAME } from './harness-home.js';
 import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { TOOL_RESULT_STASH_DIR_NAME } from './settings/tool-result-stash.js';
 
 let running: RunningServe | undefined;
 
@@ -185,6 +187,43 @@ describe('GET /threads/:id/session-references', () => {
     expect((JSON.parse(await readFile(headerPath, 'utf8')) as { version: number }).version).toBe(
       older,
     );
+  });
+
+  it('被引用的會話塞不進預算：截掉的全文存進工具結果暫存，快照裡帶 saved 與位址（#1553，出貨組裝、真的落盤）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-refs-spill-'));
+    // 遠超過預算（今天 64 KiB）；中間的記號對齊 64 碼點分段，在逐字稿裡自成一行。
+    const middle = 'MIDDLE-OF-THE-REFERENCED-SESSION'.padEnd(64, '-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha', `${'a'.repeat(64 * 5000)}${middle}${'b'.repeat(64 * 5000)}`);
+    await first.close();
+    running = undefined;
+
+    const second = await start(root);
+    const candidate = available(await references(second, 'beta', '')).find(
+      ({ sessionId }) => sessionId === 'alpha',
+    )!;
+    await driveTurn(second, 'beta', `接著上面那條 ${candidate.mention} 說`);
+    await second.close();
+    running = undefined;
+
+    const directory = join(root, projectKey(process.cwd()));
+    const beta = await (await openJsonlSessionStore({ directory }).open('beta', 'read')).read();
+    const snapshot = beta.find(
+      (event) => event.type === 'user/message' && event.data.source.kind === 'session-reference',
+    ) as SessionEvent<'user/message'> | undefined;
+    const text = String(snapshot?.data.message.data.content);
+    expect(text).not.toContain('MIDDLE-OF');
+    expect(text).toMatch(/"status":\s*"saved"/u);
+    const locator = /\/large_tool_results\/([0-9a-f]{12}-session-reference-1\.txt)/u.exec(text);
+    expect(locator).not.toBeNull();
+
+    // serve 收到 `env: {}`，暫存根退回 `~/.nexus-agent/tool-results`（測試的 HOME 是暫存目錄）。
+    const stashRoot = join(homedir(), HARNESS_HOME_DIR_NAME, TOOL_RESULT_STASH_DIR_NAME);
+    const found = (await readdir(stashRoot, { recursive: true })).filter((path) =>
+      path.endsWith(locator![1]!),
+    );
+    expect(found).toHaveLength(1);
+    expect(await readFile(join(stashRoot, found[0]!), 'utf8')).toContain(JSON.stringify(middle));
   });
 
   it('清單把落盤關掉：不提供，不是空清單', async () => {

@@ -372,9 +372,15 @@ export function createSearchOverflowMiddleware(options: SearchOverflowOptions): 
         options.warn?.(`search-overflow: 沒有存檔服務，${toolName} 的完整結果沒存到`);
       } else {
         try {
+          // 來源與建議檔名照 dsh `tool-fs-search/src/search-core.ts:399-404`、`grep.ts:354`、`glob.ts:361`。
           ref = await options.store.saveText({
-            toolName,
-            callId: request.toolCall.id ?? result.tool_call_id,
+            source: {
+              kind: 'tool',
+              toolName,
+              callId: request.toolCall.id ?? result.tool_call_id,
+              label: 'result',
+            },
+            suggestedName: `${toolName}-results.txt`,
             content: fullText(overflow),
           });
         } catch (error: unknown) {

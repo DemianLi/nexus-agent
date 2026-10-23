@@ -162,6 +162,8 @@ describe('搜尋結果超過筆數上限時自存全文（#735）', { timeout: 3
       expect(text).toContain(hit('b', 50));
       expect(text).not.toContain(hit('b', 51));
       expect(text).toContain(`Full grep result stored at: ${TOOL_RESULT_STASH_PREFIX}/`);
+      // 建議檔名照 dsh `grep.ts:354`。
+      expect(locatorOf(text)).toMatch(/\/[0-9a-f]{12}-grep-results\.txt$/u);
       expect(results[0]?.status).not.toBe('error');
       // 基座那句「the search stopped early … raise max_count」不該出現：截的是我們，不是 backend。
       expect(text).not.toContain('max_count');
@@ -201,6 +203,7 @@ describe('搜尋結果超過筆數上限時自存全文（#735）', { timeout: 3
       expect(text).toContain('/many/f100.txt');
       expect(text).not.toContain('/many/f101.txt');
       expect(text).toContain('(Showing 100 of 101 paths. Full glob result stored at: ');
+      expect(locatorOf(text)).toMatch(/\/[0-9a-f]{12}-glob-results\.txt$/u);
       expect(await readBack(stash, locatorOf(text), 95, 10)).toContain('/many/f101.txt');
 
       const exact = await workspace(1, 100);
