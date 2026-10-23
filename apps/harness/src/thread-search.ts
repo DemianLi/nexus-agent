@@ -773,7 +773,11 @@ async function readForSearch(
   }
 }
 
-/** {@link assertSameSource} 比的那幾格；兩次列表之間比 header 也用它（dsh `sameHeader`，`index.ts:938-946`）。 */
+/**
+ * {@link assertSameSource} 比的那幾格；兩次列表之間比 header 也用它（dsh `sameHeader`，`index.ts:938-946`）。
+ * dsh 的 `sameHeader` 另外比 `delegationDepth ?? 0` 與 `agentPreset`；nexus 的 header 兩格都沒有
+ * （#1567 N0788 重核判不成立，見 `session-log-validation.ts:65`）。
+ */
 function sameSource(a: StoredSessionHeader, b: StoredSessionHeader): boolean {
   return (
     a.id === b.id &&
@@ -810,7 +814,7 @@ function sameSnapshots(
  * 在 nexus 上兩份會不同只有一種可能：列與讀之間檔被換成了別的會話。續接只改 `version`，不在比的欄位裡。
  * `isSeeded` 照 dsh 嚴格比：列與讀走同一個後端、同一支 header 解析，表示法相同（沒分叉都是缺席，分叉都是 `true`）。
  *
- * dsh 還比 `delegationDepth ?? 0`；nexus 的 header 沒有這一格，**#1567 N0788 加上它時這裡一起補**。
+ * dsh 還比 `delegationDepth ?? 0`；nexus 的 header 沒有這一格（#1567 N0788 重核判不成立，見 `session-log-validation.ts:65`）。
  */
 function assertSameSource(listed: StoredSessionHeader, loaded: StoredSessionHeader): void {
   if (!sameSource(listed, loaded)) {
