@@ -89,7 +89,7 @@ function withoutName(message: ToolMessage): ToolMessage {
  *
  * @param request - 這次呼叫的 `wrapToolCall` 請求。
  * @param value - 圍堵要交出去的東西（成功的結果、內層回的錯誤訊息、圍堵自己接住拋錯翻出來的訊息）。
- * @param concluded - 工具本體有沒有呼叫 {@link concludeTurn}。
+ * @param concluded - 工具本體有沒有呼叫 {@link concludeTurn}。標了但結果是 `status: 'error'`（內層換掉的）也不收。
  * @returns 要收：原物（帶 `name`，路由走 exitNode）；不收：去掉 `name` 的同一則；不是 `returnDirect` 工具、
  *   不是 ToolMessage（`Command`）、本來就沒有 `name`：原物。
  */
@@ -100,6 +100,8 @@ export function settleTurnConclusion<T>(
 ): T {
   if (!declaresReturnDirect(request)) return value;
   if (!ToolMessage.isInstance(value) || value.name === undefined) return value;
-  if (concluded && batchSizeOf(request) <= 1) return value;
+  // 標了、但內層把結果換成錯誤（輸出校驗、檔案圍欄、max-tokens 這類）：dsh 的 `ToolExecutionFailure` 寫的是 `concludesTurn?: never`，
+  // 失敗不收；模型要有機會看到那則錯誤。
+  if (concluded && value.status !== 'error' && batchSizeOf(request) <= 1) return value;
   return withoutName(value) as T;
 }

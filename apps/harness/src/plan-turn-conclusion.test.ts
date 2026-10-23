@@ -19,7 +19,10 @@
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { convertMessagesToCompletionsMessageParams } from '@langchain/openai';
+import { concludeTurn } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, SessionEvent } from '@nexus/core';
+import { tool } from '@langchain/core/tools';
+import { z } from 'zod';
 import {
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
@@ -139,7 +142,9 @@ describe('exit_plan_mode：不是關掉審核的結局，模型有機會改正�
     expect(tool?.text).toBe('Error: 不准');
   });
 
-  it('混批＋全攔核准閘門（headless）：照常繼續，日誌上的 tool/result 仍帶 APPROVAL_POLICY_NEVER', async () => {
+  // 注意這一格釘的是兩件事：照常繼續（模型叫 2 次），以及**圍堵先記日誌、再拿掉 `name`**——日誌上那一則是複本之前的原物，錯誤碼在原物上
+  // （`markToolError` 的 WeakMap），所以日誌帶碼；複本帶碼另由 `turn-conclusion.test.ts` 逐項斷言。
+  it('混批＋全攔核准閘門（headless）：照常繼續；先記日誌再拿掉 name，日誌上的 tool/result 帶 APPROVAL_POLICY_NEVER', async () => {
     const { model, events } = await run(
       [
         {
@@ -188,5 +193,47 @@ describe('exit_plan_mode：本體自己的拒絕，第二次請求送給供應�
       name: EXIT_PLAN_MODE_TOOL_NAME,
       tool_call_id: expect.any(String),
     });
+  });
+});
+
+/**
+ * **本體標了要收，但內層把結果換成錯誤 → 不收**（dsh `ToolExecutionFailure` 的 `concludesTurn?: never`）。
+ * 一顆測試用的 `returnDirect` 工具：本體呼叫 `concludeTurn` 並回一句不是 JSON 的字，登記時宣告 `outputSchema`，
+ * 輸出校驗在內層把它換成 `INVALID_TOOL_OUTPUT` 的錯誤——標記還在槽上，但結果是錯誤，模型要再被叫一次。
+ */
+describe('標了但內層把結果換成錯誤', () => {
+  const closer: PluginEntry = {
+    id: 'closer',
+    plugin: {
+      name: 'closer',
+      apply(registry) {
+        registry.tools.register(
+          tool(
+            () => {
+              concludeTurn('closer_tool');
+              return '不是 JSON';
+            },
+            {
+              name: 'closer_tool',
+              description: '測試用：標了收尾、但輸出不合 schema。',
+              schema: z.object({}),
+              returnDirect: true,
+            },
+          ),
+          { outputSchema: z.object({ ok: z.boolean() }) },
+        );
+      },
+    } satisfies NexusPlugin,
+  } as unknown as PluginEntry;
+
+  it('輸出校驗換成錯誤 → 模型被叫了第二次，最後一則是錯誤', async () => {
+    const { model, messages } = await run(
+      [{ content: '收。', toolCalls: [{ name: 'closer_tool', args: {} }] }, AGAIN],
+      { before: [closer] },
+    );
+
+    expect(model.prompts).toHaveLength(2);
+    const last = [...messages].reverse().find((message) => message.getType() === 'tool');
+    expect((last as { status?: string } | undefined)?.status).toBe('error');
   });
 });

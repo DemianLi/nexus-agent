@@ -293,13 +293,13 @@ describe('B：出貨清單上的 present 經樹進來，位置與名字不變', 
     });
   }, 60000);
 
-  it('契約版本：tools 服務 1.3.0（onResult）、fs 查找服務 2.1.0（hasWorkspace 加 #1469、行程級 workspaceRoot 加 #1491、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix）', async () => {
+  it('契約版本：tools 服務 1.4.0（onResult 加 #1469、concludeTurn 加 #1607）、fs 查找服務 2.1.0（hasWorkspace 加 #1469、行程級 workspaceRoot 加 #1491、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix）', async () => {
     const { env } = home();
     const root = newRoot();
     await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });
     const tree = await root.tree.context();
     expect((tree.get('tools') as { contractVersion?: string } | undefined)?.contractVersion).toBe(
-      '1.3.0',
+      '1.4.0',
     );
     expect((tree.get('fs') as { contractVersion?: string } | undefined)?.contractVersion).toBe(
       '2.1.0',

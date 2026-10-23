@@ -58,8 +58,17 @@ export interface ToolsProviderHandle {
   resultListeners(): readonly ToolResultEntry[];
 }
 
+/** {@link createToolsProvider} 的選項。 */
+export interface ToolsProviderOptions {
+  /**
+   * `tools.concludeTurn(toolName)` 要委派給的實作（契約 `1.4.0`，#1607）：宿主傳 `@nexus/core` 的 `concludeTurn`。
+   * 定義套件不相依 core，所以由宿主注入；沒給就是什麼都不做。
+   */
+  readonly concludeTurn?: (toolName: string) => void;
+}
+
 /** 造一個提供者。登記處的狀態活在回傳的 handle 裡，不在模組層級。 */
-export function createToolsProvider(): ToolsProviderHandle {
+export function createToolsProvider(options: ToolsProviderOptions = {}): ToolsProviderHandle {
   const items: ToolEntry[] = [];
   const gateItems: ToolGateEntry[] = [];
   const resultItems: ToolResultEntry[] = [];
@@ -117,6 +126,10 @@ export function createToolsProvider(): ToolsProviderHandle {
           if (index >= 0) resultItems.splice(index, 1);
         };
       }, 'tools.onResult()');
+    }
+
+    concludeTurn(toolName: string): void {
+      options.concludeTurn?.(toolName);
     }
   }
 
