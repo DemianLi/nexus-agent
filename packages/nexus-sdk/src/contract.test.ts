@@ -80,9 +80,12 @@ describe('服務契約的 semver 檢查（驗收 C）', () => {
     expect(t.thrown()).toMatchObject([{ consumer: 'consumer-row', range: '^2.0.0' }]);
   });
 
-  // 實測（vendor c261dd2c，#1416 PR 2 補）：範圍的權威是插件自己的 `inject`；列的 `intercept` 只在插件沒宣告範圍時才算，
-  // 蓋不掉插件自己宣告的，不論往嚴或往鬆；列的 `inject` 對範圍沒有作用。把這一條釘住，文件與行為才不會各說各話。
-  it('插件自己宣告了範圍：列的 intercept 蓋不掉它（往鬆）', async () => {
+  // 實測（vendor rc.12 `01b39624`，#1937）：上游 #206 起 `Service.resolveIntercept` 把插件自己的 `inject` 墊在最底、
+  // 列的 `intercept` 疊在上面，所以**同一個鍵列的 `intercept` 贏**，往嚴往鬆都蓋得掉；列的 `inject` 由 Loader 的
+  // `Inject.resolve` 併進 fiber 的 `inject`，也蓋掉插件自己宣告的範圍。rc.11 時權威是插件自己的 `inject`（這幾條當時的斷言相反）。
+  // nexus 的列不接受 `inject`／`intercept`（`apps/harness/src/plugin-config.ts` 的 `entrySchema`），產品路徑碰不到這個差別；
+  // 要不要把權威改回插件自己的 `inject`，待 demian 拍板（#1937 第 4 條）。
+  it('插件自己宣告了範圍：列的 intercept 蓋得掉它（往鬆）', async () => {
     const c = consumer('^2.0.0');
     const t = await setup({ provider: createRegistryProvider().Provider, consumer: c.plugin });
     await t.create({ id: 'provider', name: 'cordis:provider' });
@@ -92,11 +95,11 @@ describe('服務契約的 semver 檢查（驗收 C）', () => {
       intercept: { widgets: { range: '^1.0.0' } },
     });
     await t.loader.await();
-    expect(t.state('row')).toBe(FIBER_STATE.PENDING);
-    expect(t.thrown()).toMatchObject([{ consumer: 'row', range: '^2.0.0' }]);
+    expect(t.state('row')).toBe(FIBER_STATE.ACTIVE);
+    expect(t.thrown()).toEqual([]);
   });
 
-  it('插件自己宣告了範圍：列的 intercept 蓋不掉它（往嚴）', async () => {
+  it('插件自己宣告了範圍：列的 intercept 蓋得掉它（往嚴）', async () => {
     const c = consumer('^1.0.0');
     const t = await setup({ provider: createRegistryProvider().Provider, consumer: c.plugin });
     await t.create({ id: 'provider', name: 'cordis:provider' });
@@ -106,11 +109,11 @@ describe('服務契約的 semver 檢查（驗收 C）', () => {
       intercept: { widgets: { range: '^2.0.0' } },
     });
     await t.loader.await();
-    expect(t.state('row')).toBe(FIBER_STATE.ACTIVE);
-    expect(t.thrown()).toEqual([]);
+    expect(t.state('row')).toBe(FIBER_STATE.PENDING);
+    expect(t.thrown()).toMatchObject([{ consumer: 'row', range: '^2.0.0' }]);
   });
 
-  it('列的 inject 寫了範圍對檢查沒有作用', async () => {
+  it('列的 inject 寫了範圍：併進插件的 inject，照它檢查', async () => {
     const c = consumer();
     const t = await setup({ provider: createRegistryProvider().Provider, consumer: c.plugin });
     await t.create({ id: 'provider', name: 'cordis:provider' });
@@ -120,7 +123,18 @@ describe('服務契約的 semver 檢查（驗收 C）', () => {
       inject: { widgets: { range: '^2.0.0' } },
     });
     await t.loader.await();
+    expect(t.state('row')).toBe(FIBER_STATE.PENDING);
+    expect(t.thrown()).toMatchObject([{ consumer: 'row', range: '^2.0.0' }]);
+  });
+
+  it('列的 inject 只寫名字：蓋掉插件自己宣告的範圍，不再檢查', async () => {
+    const c = consumer('^2.0.0');
+    const t = await setup({ provider: createRegistryProvider().Provider, consumer: c.plugin });
+    await t.create({ id: 'provider', name: 'cordis:provider' });
+    await t.create({ id: 'row', name: 'cordis:consumer', inject: ['widgets'] });
+    await t.loader.await();
     expect(t.state('row')).toBe(FIBER_STATE.ACTIVE);
+    expect(t.thrown()).toEqual([]);
   });
 
   it('沒宣告範圍就不檢查', async () => {

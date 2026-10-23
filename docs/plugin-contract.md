@@ -287,9 +287,11 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `ContractService`，不要自己 `ctx.provide` 一個物件。
 - **錯誤進的是提供者的 logger**，不是消費者的。要把它對回消費者那一列（啟動結算、後台插件頁），靠 `ContractError` 上的
   結構化欄位 `consumer`／`provider`／`service`／`provided`／`range`，不要解析訊息。
-- **範圍的權威是插件自己的 `inject`**（實測，`packages/nexus-sdk/src/contract.test.ts`，vendor `c261dd2c`）：Loader 列的
-  `intercept` 只在插件**沒有**宣告範圍時才算，蓋不掉插件自己宣告的（往嚴往鬆都蓋不掉）；列的 `inject` 寫範圍對檢查沒有作用。
-  所以宿主對一顆插件的範圍沒有否決權，只能在插件沒講的時候補一句。`manifest.consumes` 不是第三個地方：它跟 `inject`
+- **範圍怎麼合併**（實測，`packages/nexus-sdk/src/contract.test.ts`，vendor rc.12 `01b39624`）：`check` 用
+  `Service.resolveIntercept`，插件自己的 `inject` 墊底、Loader 列的 `intercept` 疊在上面，同一個鍵列的贏（往嚴往鬆都蓋得掉）；
+  列的 `inject` 由 Loader 併進插件的 `inject`，寫範圍會照它檢查，只寫名字會蓋掉插件自己的範圍。rc.11 時權威是插件自己的
+  `inject`（上游 #206 改的，見 #1937）。nexus 的列不接受 `inject`／`intercept`（`entrySchema` 是 `strictObject`），所以產品路徑上
+  宿主仍然改不了插件的範圍。`manifest.consumes` 不是第三個地方：它跟 `inject`
   是同一份宣告的兩個面，一致性套件的 `export-form` 一格比對兩邊。
 - **宿主消費的服務，宿主自己檢查（#1456）。** 上面這道檢查只在**消費者的 fiber** 注入時跑；宿主從 root 讀服務**沒有 fiber**，
   `check` 不會發生。所以宿主在取服務的那一處（`plugin-tree.ts` 的 `HOST_SERVICES`）宣告它期望的範圍（具名常數，今天是
