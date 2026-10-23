@@ -131,6 +131,9 @@ describe('運行中受管檔被改壞（serve 的路）', () => {
       expect(error.message).toContain(join(home, CREDENTIALS_FILE));
       expect(JSON.stringify(events)).not.toContain('SECRETPIECE');
       expect(JSON.stringify(events)).not.toContain('Headers.append');
+      // 送到線上的是我們那句中文，不是 openai 包的「Failed to get token from 'apiKey' function: …」（#1656）。
+      expect(JSON.stringify(events)).not.toContain('Failed to get token');
+      expect(error.message.startsWith(LIVE_API_KEY_ENV)).toBe(true);
       expect(events.filter((event) => event.type === 'llm/retry')).toHaveLength(0);
       expect(requests).toBe(1);
     } finally {
