@@ -10,8 +10,9 @@
  *
  * - 外溢全文存在宿主上，按會話分目錄 `session-<雜湊>`（`store.ts:78-81`）；目錄 0700、檔案 0600（`store.ts:110-115`）。
  * - 保留期預設 30 天、`0` 表示不清，**啟動時清一次**（`index.ts:66-69`）；刻意保留，讓續接或 fork 的會話還讀得到舊定位
- *   （`index.ts:38-48`）。別人改得動的目錄不清（`index.ts:43-44`），判準沿用 `plugin-config.ts` 已照 dsh 抄的
- *   `assertPrivateFile`（dsh `cleanup.ts:86` 的 `hasProtectedAncestors`）。
+ *   （`index.ts:38-48`），**以單一檔為準**：一個檔寫入滿保留期就過期，同一個會話還在寫新檔也一樣（`index.ts:40-42`）。
+ *   別人改得動的根不清，判準沿用 `plugin-config.ts` 已照 dsh 抄的 `assertPrivateFile`（dsh `cleanup.ts:86` 的
+ *   `hasProtectedAncestors`）；別人改得動的會話目錄也不進去（`cleanup.ts:322-326`）。
  * - 存不下時保留原結果，不把成功變成錯誤（`spill-policy/src/index.ts:127-129`）：寫不進主機目錄就退回記憶體
  *   （{@link StashRoute}），不讓 #170 的「存不下就連原文一起丟」復發。
  *
@@ -37,7 +38,8 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, lstat, mkdir, readdir, rm, stat } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
+import { chmod, lstat, mkdir, readdir, rmdir, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type {
@@ -143,13 +145,33 @@ export class HostStashBackend extends ContainedFilesystemBackend {
     return this.#prepared;
   }
 
-  override async write(filePath: string, content: string): Promise<WriteResult> {
+  /** 會話目錄是不是已經不在了（被清掃 `rmdir` 掉）。其餘的錯（權限之類）不算，交給原本的錯誤結果。 */
+  async #sessionDirGone(): Promise<boolean> {
     try {
-      await this.#prepare();
+      await lstat(this.#sessionDir);
+      return false;
     } catch (error: unknown) {
-      return { error: `工具結果暫存目錄不可用：${(error as Error).message}` };
+      return (error as NodeJS.ErrnoException).code === 'ENOENT';
     }
-    const result = await super.write(filePath, content);
+  }
+
+  /**
+   * 寫進會話目錄。**目錄在寫入途中被清掃 `rmdir` 掉就重建再寫**，照 dsh `store.ts:112-124`（ENOENT 就再 `mkdir` 一次，
+   * 直到寫進去或撞上別的錯）：清掃會把掃空的會話目錄刪掉，而它跟續接中的寫入可能同時發生。目錄消失時 `super.write`
+   * 回的是錯誤結果不是 errno（可寫根不存在，或建暫存檔時 ENOENT），所以判準是「寫失敗之後目錄不在了」。
+   */
+  override async write(filePath: string, content: string): Promise<WriteResult> {
+    let result: WriteResult;
+    for (;;) {
+      try {
+        await this.#prepare();
+      } catch (error: unknown) {
+        return { error: `工具結果暫存目錄不可用：${(error as Error).message}` };
+      }
+      result = await super.write(filePath, content);
+      if (result.error === undefined || !(await this.#sessionDirGone())) break;
+      this.#prepared = undefined;
+    }
     if (result.error !== undefined) return result;
     try {
       await chmod(join(this.#sessionDir, filePath.replace(/^\/+/u, '')), FILE_MODE);
@@ -286,23 +308,97 @@ export function createToolResultStash(options: ToolResultStashOptions): StashRou
   return new StashRoute(options);
 }
 
+function isErrno(error: unknown, code: string): boolean {
+  return (error as NodeJS.ErrnoException | undefined)?.code === code;
+}
+
+/** 講一聲，但收警告的那一方拋了也不讓清掃失敗（dsh `cleanup.ts:36-44` 的 `warnSafely`）。 */
+function warnSafely(warn: ((message: string) => void) | undefined, message: string): void {
+  try {
+    warn?.(message);
+  } catch {
+    // 警告只是旁觀的回呼；清掃本身照樣盡力做完。
+  }
+}
+
 /**
- * 啟動時清掉超過保留期的會話目錄，照 dsh `spill-local` 的 `cleanup`：
+ * 別的本機使用者換不掉這個目錄底下的東西：是真的目錄、屬於目前使用者、群組與其他人不可寫。照 dsh `cleanup.ts:47-55` 的
+ * `isTrustedDirectory`，判準同 {@link assertPrivateFile} 的前兩條；用剛 `lstat` 到的那一份判，不再走一次路徑。
+ */
+function isTrustedDirectory(stats: Stats): boolean {
+  if (!stats.isDirectory()) return false;
+  /* v8 ignore next -- Windows 沒有 geteuid，POSIX 的測試走下面那條。 */
+  if (process.geteuid === undefined) return true;
+  return stats.uid === process.geteuid() && (stats.mode & 0o022) === 0;
+}
+
+/**
+ * 掃一個會話目錄：刪掉過期的一般檔，其餘不動，照 dsh `cleanup.ts:225-261` 的 `sweepSessionDir`。裡面的符號連結、子目錄、
+ * 特殊檔都不刪也不跟（`lstat` 不跟連結，所以連結改不了年齡判斷，也刪不到別處）。每一項的失敗各自收住，不擋同目錄其餘的檔。
+ *
+ * @returns 刪掉的檔數，與掃完之後目錄是不是空的（空的才交給呼叫端 `rmdir`）。
+ */
+async function sweepSessionDir(
+  dir: string,
+  cutoff: number,
+  warn: ((message: string) => void) | undefined,
+): Promise<{ readonly removed: number; readonly empty: boolean }> {
+  let names: string[];
+  try {
+    names = await readdir(dir);
+  } catch (error: unknown) {
+    /* v8 ignore next 3 -- 呼叫端剛 lstat 確認是目錄；讀不了只剩競爭或權限，造不穩。 */
+    warnSafely(warn, `[暫存] 讀不了 ${dir}：${(error as Error).message}`);
+    return { removed: 0, empty: false };
+  }
+  let remaining = names.length;
+  let removed = 0;
+  for (const name of names) {
+    const path = join(dir, name);
+    let info: Stats;
+    try {
+      info = await lstat(path);
+    } catch (error: unknown) {
+      /* v8 ignore start -- readdir 剛列出的項目 lstat 不到，只有競爭或權限，造不穩。 */
+      if (isErrno(error, 'ENOENT')) remaining -= 1;
+      else warnSafely(warn, `[暫存] 看不了 ${path}：${(error as Error).message}`);
+      continue;
+      /* v8 ignore stop */
+    }
+    // 只有一般檔會過期；連結與其他特殊項目略過（不跟），清掃就不會被導到別處，也不會刪掉一個連結。
+    if (!info.isFile() || info.mtimeMs >= cutoff) continue;
+    try {
+      await unlink(path);
+      removed += 1;
+      remaining -= 1;
+    } catch (error: unknown) {
+      // 同時有別的清掃先刪了：目的已經達成，不算失敗（dsh `cleanup.ts:196-208`）。
+      if (isErrno(error, 'ENOENT')) remaining -= 1;
+      else warnSafely(warn, `[暫存] 刪不掉 ${path}：${(error as Error).message}`);
+    }
+  }
+  return { removed, empty: remaining === 0 };
+}
+
+/**
+ * 啟動時清掉超過保留期的暫存檔，照 dsh `spill-local` 的 `cleanup.ts`（`sweepSpillRoots`）：
  *
  * - `cleanupPeriodDays` 為 `0` 表示不清。
  * - **別人改得動的根不清**（dsh `index.ts:43-44`）：根或它的祖先群組／其他人可寫，就一個檔都不碰——那個目錄裡的東西
  *   可能是別人放的，刪它等於替別人選了要刪什麼。
- * - 以**會話目錄裡最新的檔**的修改時間為準：一個還在用的會話（續接後又寫了新檔）不會因為它的第一個檔很舊被清掉。
- *   空的會話目錄以目錄自己的時間為準。
  * - 只碰名字是 `session-<十六位雜湊>` 的直接子目錄（{@link STASH_SESSION_DIR_RE}）；其他名字（使用者放的東西，
  *   包括 `session-notes` 這種剛好以 `session-` 開頭的）不動。
- * - 那一項先 `lstat`，不是真的目錄就跳過：名字對的**符號連結**也不跟，否則會刪到連結指向的別處（dsh `cleanup.ts:309-326`）。
- * - 逐個目錄獨立：一個清不掉（權限、競爭）只記一筆，不擋其餘。根不存在就是沒東西可清。
+ * - 那一項先 `lstat`，必須是真的目錄、屬於目前使用者、群組與其他人不可寫，否則講一聲跳過（dsh `cleanup.ts:309-326`）：
+ *   名字對的**符號連結**不跟，否則會刪到連結指向的別處；別人改得動的會話目錄裡的檔可能是別人放的。
+ * - **以單一檔為準**：會話目錄裡只刪修改時間早於保留期的一般檔，不往子目錄走；一個會話還在寫新檔，它的舊檔照樣過期
+ *   （dsh `index.ts:40-42`）。掃完目錄是空的就 `rmdir`；同時有寫入（`ENOTEMPTY`）或已經不在（`ENOENT`）都不算錯，
+ *   寫入那一側會重建目錄（{@link HostStashBackend.write}）。
+ * - 每一項獨立：一個刪不掉（權限、競爭）只記一筆，不擋其餘。根不存在就是沒東西可清。
  *
  * @param rootDir - 根目錄。
  * @param cleanupPeriodDays - 保留天數。
  * @param options - `now` 給測試控制時間；`warn` 收無法清掉的訊息。
- * @returns 清掉的會話目錄數。
+ * @returns 刪掉的檔數。
  */
 export async function cleanupToolResultStash(
   rootDir: string,
@@ -310,18 +406,19 @@ export async function cleanupToolResultStash(
   options: { readonly now?: number; readonly warn?: (message: string) => void } = {},
 ): Promise<number> {
   if (cleanupPeriodDays === 0) return 0;
+  const { warn } = options;
   let names: string[];
   try {
     names = await readdir(rootDir);
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0;
-    options.warn?.(`[暫存] 讀不了 ${rootDir}，這次不清：${(error as Error).message}`);
+    if (isErrno(error, 'ENOENT')) return 0;
+    warnSafely(warn, `[暫存] 讀不了 ${rootDir}，這次不清：${(error as Error).message}`);
     return 0;
   }
   try {
     assertPrivateFile(rootDir, STASH_ROOT_ROLE);
   } catch (error: unknown) {
-    options.warn?.(`[暫存] ${(error as Error).message}這次不清。`);
+    warnSafely(warn, `[暫存] ${(error as Error).message}這次不清。`);
     return 0;
   }
   const cutoff = (options.now ?? Date.now()) - cleanupPeriodDays * 24 * 60 * 60 * 1000;
@@ -329,19 +426,33 @@ export async function cleanupToolResultStash(
   for (const name of names) {
     if (!STASH_SESSION_DIR_RE.test(name)) continue;
     const dir = join(rootDir, name);
+    let info: Stats;
     try {
       // lstat，不是 stat：名字對的符號連結在這裡就被擋下，不跟到它指向的目錄。
-      const info = await lstat(dir);
-      if (!info.isDirectory()) continue;
-      let newest = info.mtimeMs;
-      for (const file of await readdir(dir)) {
-        newest = Math.max(newest, (await stat(join(dir, file))).mtimeMs);
-      }
-      if (newest >= cutoff) continue;
-      await rm(dir, { recursive: true, force: true });
-      removed += 1;
+      info = await lstat(dir);
     } catch (error: unknown) {
-      options.warn?.(`[暫存] 清不掉 ${dir}：${(error as Error).message}`);
+      /* v8 ignore next -- readdir 剛列出的項目 lstat 不到，只有競爭或權限，造不穩。 */
+      if (!isErrno(error, 'ENOENT'))
+        warnSafely(warn, `[暫存] 看不了 ${dir}：${(error as Error).message}`);
+      continue;
+    }
+    if (!isTrustedDirectory(info)) {
+      warnSafely(
+        warn,
+        `[暫存] 略過 ${dir}：要是目前使用者擁有、群組與其他人不可寫的目錄（符號連結不跟）。`,
+      );
+      continue;
+    }
+    const swept = await sweepSessionDir(dir, cutoff, warn);
+    removed += swept.removed;
+    if (!swept.empty) continue;
+    try {
+      await rmdir(dir);
+    } catch (error: unknown) {
+      /* v8 ignore next 3 -- 只對剛掃空的目錄 rmdir；失敗只剩同時有寫入（ENOTEMPTY）或競爭，造不穩。 */
+      if (!isErrno(error, 'ENOENT') && !isErrno(error, 'ENOTEMPTY')) {
+        warnSafely(warn, `[暫存] 收不掉空的 ${dir}：${(error as Error).message}`);
+      }
     }
   }
   return removed;
