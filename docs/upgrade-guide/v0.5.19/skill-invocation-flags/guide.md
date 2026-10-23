@@ -16,8 +16,9 @@ v0.5.19 的技能清單不讀 SKILL.md frontmatter 的 `disable-model-invocation
    - 舊鍵：`disableModelInvocation`、`modelInvocable`、`userInvocable`；
    - 值不在值表上。值表是：`true`、`false`、`1`、`0`，以及字串 `true`／`yes`／`on`、`false`／`no`／`off`（不分大小寫）。`maybe`、`null`、`2`、空字串都不行。
 
-   這種技能不列給模型，也不參與同名決勝：順位較低的同名技能照常列。每掃描一次，serve 的標準錯誤輸出記一行
-   `技能檔 <路徑> 不收：調用旗標不合規則：…`，路徑是 backend 裡的路徑（例如 `/skills/deploy/SKILL.md`）。
+   這種技能不列給模型，也不參與同名決勝：順位較低的同名技能照常列。每掃描一次，用 `console.warn` 記一行
+   `技能檔 <路徑> 不收：調用旗標不合規則：…`（沒有另外接管，寫到 serve 行程的標準錯誤輸出），路徑是 backend 裡的路徑
+   （例如 `/skills/deploy/SKILL.md`）。
 
 `user-invocable: false` 只管人打 `/名字` 叫不叫得出來，這一版還沒有那個入口，對模型看到的清單沒有影響。
 

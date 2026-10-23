@@ -179,7 +179,8 @@ describe('skills 進到 system prompt', () => {
 describe('skills 的快取邊界', () => {
   /**
    * 第一次 invoke 掃兩次 `ls`：基座掃一次，交給基座的 backend 視圖（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)，
-   * `skill-catalog.ts`）在基座第一次 `ls` 時先自己掃完全部來源做同名決勝，又一次。凍住看的是第二次 invoke 一次都不掃。
+   * `skill-catalog.ts`）在基座第一次 `ls` 時先自己掃完全部來源做同名決勝，又一次（代價登記在 `skills-middleware.ts` 檔頭）。
+   * 凍住看的是第二次 invoke 一次都不掃。
    */
   it('載到 skill 就凍住，載到空的也凍住', async () => {
     for (const [label, source] of [
