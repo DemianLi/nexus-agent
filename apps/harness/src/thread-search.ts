@@ -6,12 +6,25 @@
  * `session-query-sqlite` 的提供方（`packages/session-query/session-query-sqlite/src/index.ts`）。我們沒有「提供方」這一層
  * 服務，兩層併在這一個類別裡，順序照 host 那一支。
  *
- * ## 冷讀，搜得到的一定列得出來
+ * ## 搜得到的一定列得出來；活的讀記憶體
  *
  * 一條 thread 都不為它啟動。可見的集合就是列表的（`session-list.ts` 的 `listVisibleThreads`：root、`cwd` 對得上、
  * header 讀得懂），同 dsh 先拿列表過濾。列與讀都經過 `SessionStore`（`list` 與 `open(id, 'read')`，
  * [#665](https://github.com/DemianLi/nexus-agent/issues/665)），同 dsh 的查詢層不碰檔名與目錄。**多人共用主機時各搜各的**：
  * 存放處是這個 home 底下的，別人的日誌不在裡面。
+ *
+ * **列表上正活著的那一條讀記憶體**（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)），同 dsh `_reconcile` 的 live 那一組
+ * （`session-query-sqlite/src/index.ts:407-493`，`687f282e`）：批次窗口還沒寫出去的那一句也搜得到，不活的照舊冷讀。活的集合是 wire handler
+ * 已經建好的那幾條（`liveThreads()`，同步、只讀不寫），還在建的不等它。活的那一條：
+ *
+ * - **stamp 是指紋**：header、切點與整份事件的 SHA-256（dsh `observeSession`，`:876-891`），內容一變就重讀。
+ * - **header 跟盤上那份比**，欄位同冷讀那一道（dsh `:552`）；記憶體那份是落盤接線真的寫進檔的那一份（core `attachSessionPersistence` 的
+ *   `rootHeader()`）。
+ * - **穩定觀察**（dsh `_observeStable`，`:495-562`）：一次對帳開頭與提交之前各看一次活的 id 集合，不同就整段退回、重新列一次再來，
+ *   最多 2 次，仍不穩是 `persistence-failed`。
+ *
+ * **盤上還沒有檔的活 thread 不進索引**（範圍取捨，#1599）：dsh 的 live 那一組不看持久層有沒有它。我們的可見集合是列表，列表本身也不列
+ * 它（web 把不在清單上的內容命中丟掉，`apps/web/src/lib/thread-search.ts` 的檔頭），收進來也看不到。
  *
  * ## 索引：`node:sqlite` 的 FTS5，只放在記憶體裡
  *
@@ -71,6 +84,7 @@
  * @module
  */
 
+import { createHash } from 'node:crypto';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -86,6 +100,7 @@ import {
 } from '@nexus/core';
 import type {
   SessionEvent,
+  SessionLog,
   SessionStore,
   StoredSessionHeader,
   StoredSessionSnapshot,
@@ -319,20 +334,60 @@ export function searchDocuments(events: readonly SessionEvent[]): SearchDocument
 
 type Sqlite = typeof import('node:sqlite');
 
+/**
+ * 一條活的 thread（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)）：wire handler 的 `liveThreads()` 交出來的，
+ * 對到 dsh 對帳時拿的 `ctx.sessions.list()`（`session-query-sqlite/src/index.ts:503,549`，`687f282e`）。
+ */
+export interface LiveThread {
+  readonly threadId: string;
+  /** 它的 root 日誌：記憶體裡的就是最新的，批次窗口還沒寫出去的也在。 */
+  readonly log: Pick<SessionLog, 'events' | 'inheritedEventCount'>;
+  /** root 那一份檔的 header（落盤接線交給 `store.create` 的那一份，或續接讀回來的那一份）；沒開落盤是 `undefined`。 */
+  readonly header: StoredSessionHeader | undefined;
+}
+
+/** 穩定觀察最多幾次，同 dsh `STABLE_OBSERVATION_ATTEMPTS`（`session-query-sqlite/src/index.ts:86`，`687f282e`）：一次改變給一次重來。 */
+const STABLE_OBSERVATION_ATTEMPTS = 2;
+
 export interface ThreadSearchOptions {
   /** serve 的那一個（`<會話根>/<projectKey(cwd)>` 那一格）。**缺席＝沒接落盤**：沒有東西可搜，一律回空。 */
   readonly store?: SessionStore;
   /** 這台 server 的工作目錄，同列表。 */
   readonly cwd: string;
   readonly openAt: ThreadSearchConfig['openAt'];
+  /**
+   * 現在活著的 thread（#1599）。**同步**：對帳開頭與交易提交之前各叫一次，兩次的 id 集合不同就整次重來。省略＝沒有活的，一律冷讀。
+   * serve 在 wire handler 建好之後才拿得到，所以給的是一支延遲讀 handler 的函式。
+   */
+  readonly liveThreads?: () => readonly LiveThread[];
   /** 載入 `node:sqlite`。測試換掉它來驗「`never` 一次都不載入」與「載不起來」。 */
   readonly loadSqlite?: () => Promise<Sqlite>;
 }
 
 const EMPTY: ThreadSearchResult = { items: [], hasMore: false };
 
-/** 一條 thread 在索引裡的樣子：`list` 給的 `revision`。變了就整條重讀。 */
+/**
+ * 一條 thread 在索引裡的樣子，變了就整條重讀。冷讀的是 `list` 給的 `revision`；活的是記憶體內容的指紋（{@link liveStamp}），
+ * 前綴 `live:` 跟 revision 分開：同一條在活與冷之間換手，一定重讀。
+ */
 type Stamp = string;
+
+/**
+ * 活的那一條的指紋，照 dsh `observeSession`（`session-query-sqlite/src/index.ts:876-891`，`687f282e`）：header、切點與整份事件的
+ * JSON 取 SHA-256。
+ */
+function liveStamp(thread: LiveThread): Stamp {
+  const digest = createHash('sha256')
+    .update(
+      JSON.stringify({
+        header: thread.header,
+        inheritedEventCount: thread.log.inheritedEventCount,
+        events: thread.log.events,
+      }),
+    )
+    .digest('base64url');
+  return `live:${digest}`;
+}
 
 interface Prepared {
   readonly db: DatabaseSync;
@@ -372,22 +427,8 @@ export class ThreadSearch {
     throwIfAborted(signal);
     const { store } = this.#options;
     if (store === undefined) return EMPTY;
-    let visible;
-    try {
-      visible = await listVisibleThreads(store, this.#options.cwd, signal);
-    } catch (error: unknown) {
-      // 列到一半被中止：是中止，不是「列不出來」，同對帳那一段。
-      throwIfAborted(signal);
-      throw new ThreadSearchError(
-        'persistence-failed',
-        `以前的 thread 列不出來：${String(error)}`,
-        {
-          cause: error,
-        },
-      );
-    }
-    throwIfAborted(signal);
-    if (visible.items.length === 0) return EMPTY;
+    const visible = await this.#list(store, signal);
+    if (visible.length === 0) return EMPTY;
     if (this.#options.openAt === 'never') {
       throw new ThreadSearchError('disabled', THREAD_SEARCH_DISABLED_MESSAGE);
     }
@@ -396,7 +437,7 @@ export class ThreadSearch {
         // 開索引也在隊伍裡、可中止，同 dsh `searchSessions` 在隊伍裡 `_ensureReady`（`index.ts:275-277`、`:369-381`）；
         // 開不起來是 `index-failed`，同它把非中止的錯包成 `INDEX_FAILED`。
         const prepared = await this.#ready(signal);
-        await this.#reconcile(prepared, store, visible.items, signal);
+        await this.#reconcile(prepared, store, visible, signal);
         throwIfAborted(signal);
         return this.#query(prepared.db, normalized);
       } catch (error: unknown) {
@@ -494,14 +535,65 @@ export class ThreadSearch {
     }
   }
 
-  /** 見檔頭的「每次搜尋前先對帳」。 */
+  /** 列出可見的那幾條。列不出來是 `persistence-failed`；列到一半被中止是中止，不是「列不出來」，同對帳那一段。 */
+  async #list(
+    store: SessionStore,
+    signal: AbortSignal | undefined,
+  ): Promise<readonly StoredSessionSnapshot[]> {
+    let visible;
+    try {
+      visible = await listVisibleThreads(store, this.#options.cwd, signal);
+    } catch (error: unknown) {
+      throwIfAborted(signal);
+      throw new ThreadSearchError(
+        'persistence-failed',
+        `以前的 thread 列不出來：${String(error)}`,
+        {
+          cause: error,
+        },
+      );
+    }
+    throwIfAborted(signal);
+    return visible.items;
+  }
+
+  /** 現在活著的那幾條，按 id。 */
+  #live(): Map<string, LiveThread> {
+    return new Map(
+      (this.#options.liveThreads?.() ?? []).map((thread) => [thread.threadId, thread]),
+    );
+  }
+
+  /**
+   * 見檔頭的「每次搜尋前先對帳」與「活的讀記憶體」。**穩定觀察**照 dsh `_observeStable`（`session-query-sqlite/src/index.ts:495-562`，
+   * `687f282e`）：一次對帳開頭與提交之前各看一次活的集合，不同就整段不算、重新列一次再來；{@link STABLE_OBSERVATION_ATTEMPTS} 次都不穩
+   * 就 `persistence-failed`。第一次用 {@link search} 列好的那一份，`THREAD_SEARCH_PATH` 的順序不動。
+   */
   async #reconcile(
+    prepared: Prepared,
+    store: SessionStore,
+    listed: readonly StoredSessionSnapshot[],
+    signal?: AbortSignal,
+  ): Promise<void> {
+    for (let attempt = 0; attempt < STABLE_OBSERVATION_ATTEMPTS; attempt += 1) {
+      const visible = attempt === 0 ? listed : await this.#list(store, signal);
+      if (await this.#reconcileOnce(prepared, store, visible, signal)) return;
+    }
+    throw new ThreadSearchError(
+      'persistence-failed',
+      `活著的 thread 在對帳途中一直在變，重來 ${String(STABLE_OBSERVATION_ATTEMPTS - 1)} 次仍不穩定`,
+    );
+  }
+
+  /** 對帳一次。活的集合前後不同時整段退回、什麼都不記，回 `false`。 */
+  async #reconcileOnce(
     prepared: Prepared,
     store: SessionStore,
     visible: readonly StoredSessionSnapshot[],
     signal?: AbortSignal,
-  ): Promise<void> {
-    const { db, insert, remove } = prepared;
+  ): Promise<boolean> {
+    const { db, remove } = prepared;
+    const initiallyLive = this.#live();
     const seen = new Set(visible.map(({ header }) => header.id));
     const gone = [...this.#stamps.keys()].filter((threadId) => !seen.has(threadId));
     /** 這一次寫進去的。交易成功之後才併進 `#stamps`／`#rows`。 */
@@ -522,6 +614,20 @@ export class ThreadSearch {
       for (const { header, revision } of visible) {
         throwIfAborted(signal);
         const threadId = header.id;
+        // **活的讀記憶體**（#1599）：批次窗口還沒寫出去的那一句也在。header 每次都跟盤上那份比，同 dsh 每次觀察都拿每一條活會話
+        // 跟持久層那份比（`index.ts:549-553`）；比的欄位同冷讀那一道。
+        const live = initiallyLive.get(threadId);
+        if (live !== undefined) {
+          if (live.header !== undefined) assertSameSource(header, live.header);
+          const stamp = liveStamp(live);
+          if (this.#stamps.get(threadId) === stamp) continue;
+          begin();
+          written.set(threadId, {
+            stamp,
+            rows: this.#replace(prepared, threadId, live.log.events),
+          });
+          continue;
+        }
         if (this.#stamps.get(threadId) === revision) continue;
         let loaded;
         try {
@@ -539,16 +645,17 @@ export class ThreadSearch {
         // 列與讀之間變了：這一次不動它，下一次對帳再看（被刪掉的那時就在「不見了的」那一邊）。
         if (loaded === undefined) continue;
         assertSameSource(header, loaded.header);
-        const documents = searchDocuments(loaded.events);
         begin();
-        for (const rowid of this.#rows.get(threadId) ?? []) remove.run(rowid);
-        const rows: (number | bigint)[] = [];
-        for (const document of documents) {
-          rows.push(
-            insert.run(threadId, document.seq, document.time, document.text).lastInsertRowid,
-          );
-        }
-        written.set(threadId, { stamp: revision, rows });
+        written.set(threadId, {
+          stamp: revision,
+          rows: this.#replace(prepared, threadId, loaded.events),
+        });
+      }
+      // 提交之前再看一次活的集合（dsh `index.ts:555` 的 `sameSessionIds`）：途中有一條變活或被收掉，這一次讀到的可能半新半舊。
+      if (!sameIds(initiallyLive, this.#live())) {
+        if (open) db.exec('ROLLBACK');
+        open = false;
+        return false;
       }
       if (open) db.exec('COMMIT');
     } catch (error: unknown) {
@@ -568,6 +675,23 @@ export class ThreadSearch {
       this.#stamps.set(threadId, stamp);
       this.#rows.set(threadId, rows);
     }
+    return true;
+  }
+
+  /** 把一條的舊列刪掉、寫進這一份的文件，回新的列號。要在交易裡叫。 */
+  #replace(
+    prepared: Prepared,
+    threadId: string,
+    events: readonly SessionEvent[],
+  ): (number | bigint)[] {
+    const { insert, remove } = prepared;
+    const documents = searchDocuments(events);
+    for (const rowid of this.#rows.get(threadId) ?? []) remove.run(rowid);
+    const rows: (number | bigint)[] = [];
+    for (const document of documents) {
+      rows.push(insert.run(threadId, document.seq, document.time, document.text).lastInsertRowid);
+    }
+    return rows;
   }
 
   #query(db: DatabaseSync, query: string): ThreadSearchResult {
@@ -607,6 +731,14 @@ export class ThreadSearch {
       })),
     };
   }
+}
+
+/** 兩次看到的活 thread 是不是同一組 id。 */
+function sameIds(
+  before: ReadonlyMap<string, unknown>,
+  after: ReadonlyMap<string, unknown>,
+): boolean {
+  return before.size === after.size && [...before.keys()].every((threadId) => after.has(threadId));
 }
 
 /**
