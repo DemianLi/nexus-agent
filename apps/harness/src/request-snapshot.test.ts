@@ -168,11 +168,15 @@ const WORKER: PluginEntry = {
   },
 };
 
-type Extra = Partial<Pick<CreateNexusAgentOptions, 'backgroundSubagents' | 'streamRetry'>> & {
+type Extra = Partial<
+  Pick<CreateNexusAgentOptions, 'backgroundSubagents' | 'streamRetry' | 'summarization'>
+> & {
   /** 上一個行程留下的事件：新行程從它續接（`SessionRegistry` 的 `rootSeed`）。 */
   readonly seed?: readonly SessionEvent[];
   /** 模型的 `temperature`；省略即 0.3。 */
   readonly temperature?: number;
+  /** 模型的 `modelKwargs`（其餘 body 參數，進 `invocation_params`，也就是快照的 `config.extra`）。 */
+  readonly modelKwargs?: Record<string, unknown>;
 };
 
 /** 產品組裝接上本機假端點與一份 root 日誌；`close` 收掉三樣。 */
@@ -186,6 +190,7 @@ async function assemble(plugins: readonly PluginEntry[], systemPrompt: string, e
       apiKey: 'sk-loopback',
       maxRetries: 0,
       temperature: extra.temperature ?? 0.3,
+      ...(extra.modelKwargs !== undefined && { modelKwargs: extra.modelKwargs }),
       configuration: { baseURL: upstream.baseURL },
     }),
     backend: new ContainedFilesystemBackend({ rootDir: root }),
@@ -196,6 +201,7 @@ async function assemble(plugins: readonly PluginEntry[], systemPrompt: string, e
       backgroundSubagents: extra.backgroundSubagents,
     }),
     ...(extra.streamRetry !== undefined && { streamRetry: extra.streamRetry }),
+    ...(extra.summarization !== undefined && { summarization: extra.summarization }),
   });
   const sessions = new SessionRegistry(
     'snapshot',
@@ -535,6 +541,108 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
       expect(bodies).toHaveLength(0);
       expect(eventsOf(sessions.root.events, 'request/header')).toHaveLength(0);
       expect(eventsOf(sessions.root.events, 'turn/failed')).toHaveLength(2);
+      // 管理者看到的那一行（`turn/failed` 的訊息）要點得出是哪一顆工具（#1731）：寫入那一關的路徑只印前 8 段，只有索引。
+      for (const failed of eventsOf(sessions.root.events, 'turn/failed')) {
+        expect(failed.message).toContain('tools["deep"].parameters');
+      }
+    } finally {
+      printed.mockRestore();
+      await close();
+    }
+  });
+
+  it('工具參數有循環參照（#1731）：這次請求不送、日誌上沒有少了參數的 header，失敗訊息點名那顆工具', async () => {
+    // **要關掉 summarization 才走得到快照這一格。** 預設組裝裡 deepagents 的 summarization 在模型被叫之前先 `JSON.stringify`
+    // 整串工具（`countTokensApproximately`），循環在那裡就爆了：訊息是原生的 `Converting circular structure to JSON`、不帶
+    // 工具名稱，而且 #1731 之前這個結果就已經成立，分不出對錯。部署可以關掉摘要（`fold.ts` 的 `summarization: false`），
+    // 那時只剩快照這一格擋：改寫前它把 `parameters` 拿掉、照樣記一份 header 並送出。
+    const looped: Record<string, unknown> = { type: 'object', properties: {} };
+    looped['self'] = looped;
+    const broken: PluginEntry = {
+      plugin: {
+        name: 'looped-tool',
+        apply: (registry) =>
+          void registry.tools.register(
+            tool(() => '好', {
+              name: 'looped',
+              description: '繞回自己。',
+              schema: looped as never,
+            }),
+          ),
+      },
+    };
+    const { agent, sessions, bodies, close } = await assemble([broken], '你是測試助手。', {
+      ...retrying,
+      summarization: false,
+    });
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      for (const text of ['一', '二']) {
+        await expect(runTurn(agent, text, quiet, sessions.root)).rejects.toThrow(
+          /tools\["looped"\]\.parameters/,
+        );
+      }
+      expect(bodies).toHaveLength(0);
+      expect(eventsOf(sessions.root.events, 'request/header')).toHaveLength(0);
+      const failures = eventsOf(sessions.root.events, 'turn/failed');
+      expect(failures).toHaveLength(2);
+      for (const failed of failures) expect(failed.message).toContain('tools["looped"].parameters');
+      expect(sessions.root.events.some((event) => event.type.startsWith('llm/retry'))).toBe(false);
+    } finally {
+      printed.mockRestore();
+      await close();
+    }
+  });
+
+  it('預設組裝下工具參數有循環：照樣沒送、沒有 header（summarization 先拋，訊息不帶工具名稱）', async () => {
+    // 不變量，不管是誰先拋；這條在改寫前就綠，分不出快照這一格的對錯，所以上面那條才是驗收。
+    const looped: Record<string, unknown> = { type: 'object' };
+    looped['self'] = looped;
+    const broken: PluginEntry = {
+      plugin: {
+        name: 'looped-tool-default',
+        apply: (registry) =>
+          void registry.tools.register(
+            tool(() => '好', {
+              name: 'looped',
+              description: '繞回自己。',
+              schema: looped as never,
+            }),
+          ),
+      },
+    };
+    const { agent, sessions, bodies, close } = await assemble([broken], '你是測試助手。', retrying);
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(runTurn(agent, '一', quiet, sessions.root)).rejects.toThrow();
+      expect(bodies).toHaveLength(0);
+      expect(eventsOf(sessions.root.events, 'request/header')).toHaveLength(0);
+    } finally {
+      printed.mockRestore();
+      await close();
+    }
+  });
+
+  it('modelKwargs 裡有循環（預設組裝就走得到 config.extra）：沒送、沒有 header，失敗訊息帶 config.extra.<鍵>', async () => {
+    // 改寫前：`extra` 那一格被靜靜拿掉，記下一份 `thinking` 不見了的 header 並照常送出。
+    const loop: Record<string, unknown> = { type: 'disabled' };
+    loop['self'] = loop;
+    const { agent, sessions, bodies, close } = await assemble([], '你是測試助手。', {
+      ...retrying,
+      modelKwargs: { thinking: loop },
+    });
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      for (const text of ['一', '二']) {
+        await expect(runTurn(agent, text, quiet, sessions.root)).rejects.toThrow(
+          /config\.extra\.thinking/,
+        );
+      }
+      expect(bodies).toHaveLength(0);
+      expect(eventsOf(sessions.root.events, 'request/header')).toHaveLength(0);
+      const failures = eventsOf(sessions.root.events, 'turn/failed');
+      expect(failures).toHaveLength(2);
+      for (const failed of failures) expect(failed.message).toContain('config.extra.thinking');
     } finally {
       printed.mockRestore();
       await close();

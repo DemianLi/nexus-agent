@@ -6,6 +6,7 @@
  * 線上的形狀與產品路徑在 `serve-thread-search.test.ts`。
  */
 
+import { writeFileSync } from 'node:fs';
 import { appendFile, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,7 +34,7 @@ import {
   ThreadSearch,
   ThreadSearchError,
 } from './thread-search.js';
-import type { ThreadSearchOptions } from './thread-search.js';
+import type { LiveThread, ThreadSearchOptions } from './thread-search.js';
 
 const CWD = '/專案/甲';
 
@@ -939,6 +940,248 @@ describe('隊伍、收尾與失敗的種類（#1552）', () => {
     await writeThread(directory, 'a', said('前面\u0000後面的暗號').events);
     const engine = search(directory);
     expect(await ids(engine, '後面的暗號')).toEqual(['a']);
+    await engine.close();
+  });
+});
+
+/** 盤上那份 header 的樣子，同 {@link writeThread} 寫的。 */
+function headerOf(id: string, extra: Partial<StoredSessionHeader> = {}): StoredSessionHeader {
+  return { version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1_000, cwd: CWD, ...extra };
+}
+
+function live(threadId: string, log: SessionLog, header = headerOf(threadId)): LiveThread {
+  return { threadId, log, header };
+}
+
+describe('活的 thread 讀記憶體（#1599）', () => {
+  it('A：活的那一條讀記憶體，批次窗口還沒寫出去的那一句搜得到', async () => {
+    const directory = await dir();
+    const log = said('落盤的話');
+    await writeThread(directory, 'a', log.events);
+    chat(log, '還沒落盤的暗號', '好');
+    const engine = search(directory, { liveThreads: () => [live('a', log)] });
+    expect(await ids(engine, '還沒落盤的暗號')).toEqual(['a']);
+    await engine.close();
+  });
+
+  it('B：不在記憶體的照舊冷讀', async () => {
+    const directory = await dir();
+    const log = said('活的那條');
+    await writeThread(directory, 'a', log.events);
+    await writeThread(directory, 'b', said('冷的那條的暗號').events);
+    const engine = search(directory, { liveThreads: () => [live('a', log)] });
+    expect(await ids(engine, '冷的那條的暗號')).toEqual(['b']);
+    await engine.close();
+  });
+
+  it('C：對帳途中有一條變活，整段重來一次，索引裡是記憶體那一份', async () => {
+    const directory = await dir();
+    const log = said('落盤的話');
+    await writeThread(directory, 'a', log.events);
+    chat(log, '記憶體的暗號', '好');
+    let calls = 0;
+    const engine = search(directory, {
+      liveThreads: () => {
+        calls += 1;
+        return calls === 1 ? [] : [live('a', log)];
+      },
+    });
+    expect(await ids(engine, '記憶體的暗號')).toEqual(['a']);
+    // 第一次對帳的開頭與提交前、重來那一次的開頭與提交前。
+    expect(calls).toBe(4);
+    await engine.close();
+  });
+
+  it('C 的變體：重來那一次重新列，途中新寫下的那一條也進索引', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('先有的').events);
+    let calls = 0;
+    const engine = search(directory, {
+      liveThreads: () => {
+        calls += 1;
+        // 第一次對帳提交之前：`b` 剛寫下、而且活著。用同步寫：這一支是同步的。
+        if (calls === 2) {
+          writeFileSync(join(directory, 'b.header.json'), JSON.stringify(headerOf('b')));
+          writeFileSync(join(directory, 'b.jsonl'), jsonl(said('途中寫下的暗號').events));
+        }
+        return calls === 1 ? [] : [live('b', said('途中寫下的暗號'))];
+      },
+    });
+    expect(await ids(engine, '途中寫下的暗號')).toEqual(['b']);
+    await engine.close();
+  });
+
+  it('冷讀之後、提交之前日誌被寫了（revision 變了）：同一次搜尋裡重來，索引是新版', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('舊版的話').events);
+    const inner = openJsonlSessionStore({ directory });
+    let lists = 0;
+    const engine = search(undefined, {
+      store: wrap(inner, {
+        list: async (options) => {
+          lists += 1;
+          // 第 1 次是搜尋前的列表、冷讀在它之後；第 2 次是提交之前那一次：在它之前把檔換成新版。
+          if (lists === 2) await writeThread(directory, 'a', said('新版的暗號，長一點').events);
+          return inner.list(options);
+        },
+      }),
+    });
+    expect(await ids(engine, '新版的暗號')).toEqual(['a']);
+    expect(await ids(engine, '舊版的話')).toEqual([]);
+    // 第一次對帳的兩次、重來那一次的兩次；之後那一次搜尋再兩次。
+    expect(lists).toBe(6);
+    await engine.close();
+  });
+
+  it('日誌每次列都在變：重來一次仍不穩定就 persistence-failed', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('句子').events);
+    const inner = openJsonlSessionStore({ directory });
+    let lists = 0;
+    const engine = search(undefined, {
+      store: wrap(inner, {
+        list: async (options) => {
+          lists += 1;
+          if (lists > 20) throw new Error('停不下來');
+          if (lists > 1) {
+            await writeThread(directory, 'a', said(`句子${'又'.repeat(lists)}`).events);
+          }
+          return inner.list(options);
+        },
+      }),
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({
+      kind: 'persistence-failed',
+      message: expect.stringContaining('不穩定'),
+    });
+    expect(lists).toBe(4);
+    await engine.close();
+  });
+
+  it('兩次列表之間只換了 header（revision 沒變）也算不穩定', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('句子').events);
+    const inner = openJsonlSessionStore({ directory });
+    let lists = 0;
+    const engine = search(undefined, {
+      store: wrap(inner, {
+        list: async (options) => {
+          lists += 1;
+          const page = await inner.list(options);
+          // 每一輪提交之前那一次（第 2、4 次）換一個建立時間，revision 照真的。每一輪讀之前那一次不換：換了的話冷讀先撞上
+          // source-conflict（同 dsh 讀完先比 header）。
+          if (lists % 2 === 1) return page;
+          return {
+            ...page,
+            sessions: page.sessions.map((snapshot) => ({
+              ...snapshot,
+              header: { ...snapshot.header, createdAt: snapshot.header.createdAt + lists },
+            })),
+          };
+        },
+      }),
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({
+      kind: 'persistence-failed',
+      message: expect.stringContaining('不穩定'),
+    });
+    await engine.close();
+  });
+
+  it('D：活的集合每次看都不一樣，重來一次仍不穩定就 persistence-failed', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('句子').events);
+    let calls = 0;
+    const engine = search(directory, {
+      liveThreads: () => {
+        calls += 1;
+        // 拿掉次數上限的話不會停：多看幾次就拋別的錯，讓那一條紅得快。
+        if (calls > 20) throw new Error('停不下來');
+        return [live(`變來變去-${String(calls)}`, said('別的'))];
+      },
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({
+      kind: 'persistence-failed',
+      message: expect.stringContaining('不穩定'),
+    });
+    expect(calls).toBe(4);
+    await engine.close();
+  });
+
+  it('D 的對照：不穩定的那一次整段不算，之後穩定了照常搜得到', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('之後的暗號').events);
+    let calls = 0;
+    let unstable = true;
+    const engine = search(directory, {
+      liveThreads: () => {
+        calls += 1;
+        return unstable ? [live(`變來變去-${String(calls)}`, said('別的'))] : [];
+      },
+    });
+    await expect(engine.search('暗號')).rejects.toMatchObject({ kind: 'persistence-failed' });
+    unstable = false;
+    expect(await ids(engine, '之後的暗號')).toEqual(['a']);
+    await engine.close();
+  });
+
+  it('E：記憶體那份 header 的工作目錄跟盤上那份不同是 source-conflict', async () => {
+    const directory = await dir();
+    const log = said('句子');
+    await writeThread(directory, 'a', log.events);
+    const engine = search(directory, {
+      liveThreads: () => [live('a', log, headerOf('a', { cwd: '/專案/乙' }))],
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({ kind: 'source-conflict' });
+    await engine.close();
+  });
+
+  it('E 的對照：記憶體那份跟盤上那份一樣、或拿不到 header 都不誤判', async () => {
+    const directory = await dir();
+    const log = said('一樣的暗號');
+    await writeThread(directory, 'a', log.events);
+    const same = search(directory, { liveThreads: () => [live('a', log)] });
+    expect(await ids(same, '一樣的暗號')).toEqual(['a']);
+    await same.close();
+    const none = search(directory, {
+      liveThreads: () => [{ threadId: 'a', log, header: undefined }],
+    });
+    expect(await ids(none, '一樣的暗號')).toEqual(['a']);
+    await none.close();
+  });
+
+  it('F：同一條活 thread 多講一句（還沒寫出去），下一次搜尋就搜得到', async () => {
+    const directory = await dir();
+    const log = said('第一句');
+    await writeThread(directory, 'a', log.events);
+    const engine = search(directory, { liveThreads: () => [live('a', log)] });
+    expect(await ids(engine, '第一句')).toEqual(['a']);
+    chat(log, '第二句的暗號', '好');
+    expect(await ids(engine, '第二句的暗號')).toEqual(['a']);
+    await engine.close();
+  });
+
+  it('收掉之後換回冷讀：盤上那份後來多寫的照樣讀進來', async () => {
+    const directory = await dir();
+    const log = said('第一句');
+    await writeThread(directory, 'a', log.events);
+    let alive = true;
+    const engine = search(directory, { liveThreads: () => (alive ? [live('a', log)] : []) });
+    expect(await ids(engine, '第一句')).toEqual(['a']);
+    chat(log, '收掉前寫出去的暗號', '好');
+    await writeThread(directory, 'a', log.events);
+    alive = false;
+    expect(await ids(engine, '收掉前寫出去的暗號')).toEqual(['a']);
+    await engine.close();
+  });
+
+  it('還沒落盤的活 thread 不進索引：可見的集合照舊是列表的', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('盤上的').events);
+    const engine = search(directory, {
+      liveThreads: () => [live('沒落盤', said('只在記憶體的暗號'))],
+    });
+    expect(await ids(engine, '只在記憶體的暗號')).toEqual([]);
     await engine.close();
   });
 });

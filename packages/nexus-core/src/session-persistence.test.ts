@@ -9,7 +9,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { SessionLog } from './session-log.js';
+import { buildForkSeed, SessionLog } from './session-log.js';
 import { SessionRegistry } from './session-registry.js';
 import {
   attachSessionPersistence,
@@ -202,6 +202,121 @@ describe('圍堵翻面', () => {
   });
 });
 
+describe('分叉的 root（#1580）', () => {
+  function seededRoot(): SessionEvent[] {
+    const source = new SessionLog('src');
+    source.append('turn/start', { kind: 'message', text: '一' });
+    source.append('turn/end', {});
+    return buildForkSeed(source.events, 1);
+  }
+
+  function storeInto(headers: StoredSessionHeader[], handle = fakeStored()): SessionStore {
+    return {
+      ...NO_READS,
+      create: (header) => {
+        headers.push(header);
+        return handle;
+      },
+      resume: () => Promise.reject(new Error('這一條不續接')),
+    };
+  }
+
+  it('給了 rootLineage：root 的 header 帶來源與 isSeeded，seed 從 0 整份寫出去', async () => {
+    const headers: StoredSessionHeader[] = [];
+    const handle = fakeStored();
+    const sessions = new SessionRegistry('child', { rootSeed: seededRoot() });
+    const persistence = attachSessionPersistence(sessions, storeInto(headers, handle), {
+      rootLineage: { parentSession: 'src', isSeeded: true },
+    });
+    await persistence.flush();
+    expect(headers).toEqual([
+      expect.objectContaining({ id: 'child', parentSession: 'src', isSeeded: true }),
+    ]);
+    expect(headers[0]?.origin).toBeUndefined();
+    expect(handle.written.map((event) => event.seq)).toEqual(
+      sessions.root.events.map((event) => event.seq),
+    );
+    expect(handle.written[0]?.seq).toBe(0);
+    await persistence.dispose();
+  });
+
+  it('切點與 rootLineage 對不上就在寫之前拒：帶標記沒給、給了沒帶標記', () => {
+    expect(() =>
+      attachSessionPersistence(
+        new SessionRegistry('child', { rootSeed: seededRoot() }),
+        storeInto([]),
+      ),
+    ).toThrow(/rootLineage/u);
+    expect(() =>
+      attachSessionPersistence(new SessionRegistry('plain'), storeInto([]), {
+        rootLineage: { parentSession: 'src', isSeeded: true },
+      }),
+    ).toThrow(/inherited/u);
+  });
+});
+
+// 這兩條量的是「磁碟上沒寫」，不量訂閱與排空者有沒有退掉：退掉之後協調器已經 disposed、`byLog` 也清了，
+// 留著的 listener 對磁碟沒有可觀察的差別（#1580 刀 2a 審查的不擋項）。
+describe('丟掉（#1580：還沒發佈的分叉子 thread 組裝失敗）', () => {
+  it('只關把手、不排空：窗口到期不寫，之後進來的事件也沒寫出去，再 dispose 是 no-op', async () => {
+    vi.useFakeTimers();
+    try {
+      const log = new SessionLog('s');
+      const stored = fakeStored();
+      const coordinator = new SessionPersistenceCoordinator({ log, stored, windowMs: 5 });
+      turn(log);
+      await coordinator.abandon();
+      turn(log);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(stored.written).toEqual([]);
+      expect(stored.flushes).toBe(0);
+      expect(stored.closes).toBe(1);
+      await coordinator.dispose();
+      expect(stored.written).toEqual([]);
+      expect(stored.closes).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('接在註冊表上：每一份都丟；呼叫之後窗口到期、全域排空都不寫，這一點當下就成立，不等關把手', async () => {
+    vi.useFakeTimers();
+    try {
+      const sessions = new SessionRegistry('root-abandon');
+      const stored = fakeStored();
+      let release!: () => void;
+      const closing = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // 關把手卡住：丟棄的同步那一半（退訂、取消窗口）不能排在它後面。
+      stored.close = () => {
+        stored.closes += 1;
+        return closing;
+      };
+      const store: SessionStore = {
+        ...NO_READS,
+        create: () => stored,
+        resume: () => Promise.reject(new Error('這一條不續接')),
+      };
+      const persistence = attachSessionPersistence(sessions, store, { windowMs: 5 });
+      turn(sessions.root);
+      const abandoning = persistence.abandon();
+      turn(sessions.root);
+      await vi.advanceTimersByTimeAsync(50);
+      await sessions.flush(sessions.root);
+      expect(stored.written).toEqual([]);
+      release();
+      await abandoning;
+      expect(stored.closes).toBe(1);
+      await persistence.dispose();
+      expect(stored.written).toEqual([]);
+      expect(stored.closes).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('接在註冊表上', () => {
   it('root 與 subagent 各一份，subagent 的 header 帶血緣', async () => {
     const sessions = new SessionRegistry('root-1');
@@ -229,7 +344,7 @@ describe('接在註冊表上', () => {
     expect(headers.map((header) => header.id)).toEqual(['root-1', 'root-1/r9']);
     expect(headers[0]?.parentSession).toBeUndefined();
     expect(headers[1]?.parentSession).toBe('root-1');
-    // 新建的子代理一律寫 `origin`（#1579）；root 不寫，也都不寫 `isSeeded`（這一張沒有分叉的生產者）。
+    // 新建的子代理一律寫 `origin`（#1579）；root 不寫，也都不寫 `isSeeded`（沒給 `rootLineage`，見「分叉的 root」那一組）。
     expect(headers.map((header) => header.origin)).toEqual([undefined, 'subagent']);
     expect(headers.some((header) => 'isSeeded' in header)).toBe(false);
     expect(headers.every((header) => header.version === SESSION_LOG_FORMAT_VERSION)).toBe(true);
@@ -914,5 +1029,59 @@ describe('一份失敗、其餘照收（#1511）', () => {
 
     release();
     await disposing;
+  });
+});
+
+describe('rootHeader()（#1599：搜尋拿它跟盤上那份比）', () => {
+  function recordingStore(headers: StoredSessionHeader[]): SessionStore {
+    return {
+      ...NO_READS,
+      create(header) {
+        headers.push(header);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+  }
+
+  it('新建的 root：就是交給 store.create 的那一份；之後生的 subagent 不蓋掉它', async () => {
+    const headers: StoredSessionHeader[] = [];
+    const sessions = new SessionRegistry('root-h');
+    const persistence = attachSessionPersistence(sessions, recordingStore(headers), {
+      cwd: '/專案',
+    });
+    sessions.open({ kind: 'subagent', runId: 'r1' });
+    expect(headers.map((header) => header.id)).toEqual(['root-h', 'root-h/r1']);
+    expect(persistence.rootHeader()).toBe(headers[0]);
+    await persistence.dispose();
+  });
+
+  it('續接的 root：是讀回來的那一份，不是這裡另外建的；沒給就是 undefined', async () => {
+    const earlier = new SessionLog('root-h');
+    earlier.append('turn/start', { kind: 'message', text: '一' });
+    const stored: StoredSessionHeader = {
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'root-h',
+      createdAt: 1_000,
+      cwd: '/專案',
+    };
+    const sessions = new SessionRegistry('root-h', { rootSeed: earlier.events });
+    const persistence = attachSessionPersistence(sessions, recordingStore([]), {
+      cwd: '/專案',
+      resumedRoot: { stored: fakeStored(), storedCount: earlier.length, header: stored },
+    });
+    sessions.open({ kind: 'subagent', runId: 'r1' });
+    expect(persistence.rootHeader()).toBe(stored);
+    await persistence.dispose();
+
+    const bare = attachSessionPersistence(
+      new SessionRegistry('root-h', { rootSeed: earlier.events }),
+      recordingStore([]),
+      { resumedRoot: { stored: fakeStored(), storedCount: earlier.length } },
+    );
+    expect(bare.rootHeader()).toBeUndefined();
+    await bare.dispose();
   });
 });

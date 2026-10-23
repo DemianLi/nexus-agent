@@ -322,7 +322,8 @@ describe('33→34 的讀方分支只有一份（#1797）', () => {
     '%s 續接的核准政策呼叫 approvalPolicyOnResume，不自己讀日誌',
     (path) => {
       const source = readFileSync(join(REPO, path), 'utf8');
-      expect(source).toContain('approvalPolicyOnResume(resumed.events)');
+      // serve 的續接與分叉（#1580）共用一份 `history`，所以引數名不固定，只看它交的是日誌的事件。
+      expect(source).toMatch(/approvalPolicyOnResume\((?:resumed|history)\.events\)/u);
       expect(source).not.toContain('recordedApprovalPolicy');
     },
   );

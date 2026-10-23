@@ -30,6 +30,12 @@
  *    所以外溢存檔的請求**不帶 dsh `SaveTextSpill.owner`**（`spill/src/types.ts:61-72`）：分區在建實例時就由這把鑰匙定了，
  *    一個實例只服務一個會話，基座的 backend 路由又是組裝時固定的一條前綴，請求帶 owner 也沒有第二個去處（理由 1）。
  *
+ * ## 分叉的子 thread
+ *
+ * 子 thread 的前綴裡的預覽指著來源會話目錄裡的檔（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）。
+ * 呼叫端給了 {@link ToolResultStashOptions.inherited} 時，名單內的名字讀取（含搜單一個檔）沿祖先的目錄找；寫入仍只進自己的目錄，
+ * 上面「一個實例只服務一個會話」對寫入照舊成立。名單、祖先鏈與偏離見 `fork-stash.ts`。
+ *
  * ## 模型也寫得進這個前綴
  *
  * 路由在圍欄外面，所以模型用 `write_file` 寫到 `/large_tool_results/…` 會落到這個會話的目錄。**不擋**：它只寫得進自己
@@ -101,6 +107,14 @@ export interface ToolResultStashOptions {
   readonly session: string;
   /** 退回記憶體時講一聲；每個 backend 最多講一次。缺席就不講。 */
   readonly warn?: (message: string) => void;
+  /**
+   * 分叉的子 thread 從祖先繼承來的暫存檔（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)，`fork-stash.ts`）：
+   * `names` 裡的檔名讀取時沿 `sessions`（祖先的會話鑰匙，近的在前）逐代找，取第一個有的。缺席就是不是分叉來的。
+   */
+  readonly inherited?: {
+    readonly names: ReadonlySet<string>;
+    readonly sessions: readonly string[];
+  };
 }
 
 /**
@@ -188,6 +202,15 @@ function failed(result: { readonly error?: string | undefined }): boolean {
   return result.error !== undefined;
 }
 
+/** 這個目錄底下有沒有這個一般檔；不在、看不了、不是一般檔（連結、目錄）都算沒有。 */
+async function isFileIn(dir: string, name: string): Promise<boolean> {
+  try {
+    return (await lstat(join(dir, name))).isFile();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * 暫存那一格的路由目標：主機上的私有目錄，**寫不進去就退回記憶體**。
  *
@@ -204,10 +227,17 @@ export class StashRoute implements BackendProtocolV2 {
   readonly #inMemory = new Set<string>();
   readonly #warn: ((message: string) => void) | undefined;
   #warned = false;
+  readonly #inheritedNames: ReadonlySet<string>;
+  /** 祖先的會話目錄，只讀：不呼叫 `write`，所以不會替祖先建目錄（{@link HostStashBackend} 只在寫入時建）。 */
+  readonly #ancestors: readonly HostStashBackend[];
 
   constructor(options: ToolResultStashOptions) {
     this.#host = new HostStashBackend(options);
     this.#warn = options.warn;
+    this.#inheritedNames = options.inherited?.names ?? new Set();
+    this.#ancestors = (options.inherited?.sessions ?? []).map(
+      (session) => new HostStashBackend({ rootDir: options.rootDir, session }),
+    );
   }
 
   /** 主機上的會話目錄（測試用）。 */
@@ -249,6 +279,23 @@ export class StashRoute implements BackendProtocolV2 {
     return this.#inMemory.has(filePath) ? this.#memory : this.#host;
   }
 
+  /**
+   * 讀取走哪一邊：自己退回過記憶體的先認；再來是自己的目錄裡有這個檔就讀自己的——子 thread 自己寫過的同名檔（基座按呼叫編號
+   * 取名，跟來源撞名不是不可能；模型也寫得進這個前綴）不能被祖先那份蓋掉。自己沒有、名字又在繼承名單裡，才沿祖先逐代找
+   * 第一個有這個檔的；都沒有就回自己的目錄（讀到原本的「找不到」）。只有讀走這一支，寫與改留在自己（`fork-stash.ts` 的偏離）。
+   */
+  async #readerFor(filePath: string): Promise<BackendProtocolV2> {
+    if (this.#inMemory.has(filePath)) return this.#memory;
+    const name = filePath.replace(/^\/+/u, '');
+    if (!this.#inheritedNames.has(name) || (await isFileIn(this.sessionDir, name))) {
+      return this.#host;
+    }
+    for (const ancestor of this.#ancestors) {
+      if (await isFileIn(ancestor.sessionDir, name)) return ancestor;
+    }
+    return this.#host;
+  }
+
   async write(filePath: string, content: string): Promise<WriteResult> {
     const result = await this.#host.write(filePath, content);
     if (!failed(result)) return result;
@@ -263,12 +310,12 @@ export class StashRoute implements BackendProtocolV2 {
     return fallback;
   }
 
-  read(filePath: string, offset?: number, limit?: number): Promise<ReadResult> | ReadResult {
-    return this.#backendFor(filePath).read(filePath, offset, limit);
+  async read(filePath: string, offset?: number, limit?: number): Promise<ReadResult> {
+    return (await this.#readerFor(filePath)).read(filePath, offset, limit);
   }
 
-  readRaw(filePath: string): Promise<ReadRawResult> | ReadRawResult {
-    return this.#backendFor(filePath).readRaw(filePath);
+  async readRaw(filePath: string): Promise<ReadRawResult> {
+    return (await this.#readerFor(filePath)).readRaw(filePath);
   }
 
   edit(
@@ -284,13 +331,21 @@ export class StashRoute implements BackendProtocolV2 {
     return this.#host.ls(path);
   }
 
-  grep(
+  /**
+   * 搜尋走自己的目錄；**只有搜一個繼承名單裡的檔**時，跟讀同一套先後（{@link #readerFor}）：取回提示叫模型「grep 這個路徑」
+   * （`SPILL_RETRIEVAL_HINT`），子 thread 照著搜繼承來的定位，不能回一個空的「沒有命中」。
+   */
+  async grep(
     pattern: string,
     path?: string | null,
     glob?: string | null,
     maxCount?: number | null,
-  ): Promise<GrepResult> | GrepResult {
-    return this.#host.grep(pattern, path ?? undefined, glob, maxCount);
+  ): Promise<GrepResult> {
+    const backend =
+      path != null && this.#inheritedNames.has(path.replace(/^\/+/u, ''))
+        ? await this.#readerFor(path)
+        : this.#host;
+    return backend.grep(pattern, path ?? undefined, glob, maxCount);
   }
 
   glob(pattern: string, path?: string): Promise<GlobResult> | GlobResult {
@@ -389,7 +444,8 @@ async function sweepSessionDir(
 }
 
 /**
- * 啟動時清掉超過保留期的暫存檔，照 dsh `spill-local` 的 `cleanup.ts`（`sweepSpillRoots`）：
+ * 清掉超過保留期的暫存檔，照 dsh `spill-local` 的 `cleanup.ts`（`sweepSpillRoots`）。兩個入口啟動時在背景叫它一次、
+ * 卸載根時等它收斂（`tool-result-stash-sweep.ts`，#1553 N0952）：
  *
  * - `cleanupPeriodDays` 為 `0` 表示不清。
  * - **別人改得動的根不清**（dsh `index.ts:43-44`）：根或它的祖先群組／其他人可寫，就一個檔都不碰——那個目錄裡的東西

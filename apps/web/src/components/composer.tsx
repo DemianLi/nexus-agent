@@ -37,6 +37,7 @@ import type { KeyboardEvent, ReactNode, RefObject } from 'react';
 import type {
   FileReferenceListOutcome,
   SessionReferenceListOutcome,
+  SkillEntry,
   SlashDescriptor,
 } from '@nexus/wire';
 
@@ -66,7 +67,16 @@ import {
 } from '@/lib/mention-menu';
 import type { MentionRow, MentionSource } from '@/lib/mention-menu';
 import { applySessionPick } from '@/lib/session-mention';
-import { applySlashPick, detectSlash, slashCandidates } from '@/lib/slash-trigger';
+import { namesCommand } from '@/lib/queue-view';
+import {
+  applySkillPick,
+  applySlashPick,
+  detectSlash,
+  skillDescription,
+  slashCandidateKey,
+  slashMenu,
+} from '@/lib/slash-trigger';
+import type { SlashCandidate } from '@/lib/slash-trigger';
 import { isAcceleratedEnter, resolveSubmitMode } from '@/lib/submit-mode';
 import { useFileDrop } from '@/lib/use-file-drop';
 import type { SendHint, SubmitGesture } from '@/lib/submit-mode';
@@ -89,6 +99,8 @@ function sameHit(left: Span | null, right: Span | null): boolean {
   );
 }
 
+const NO_SKILLS: readonly SkillEntry[] = [];
+
 export function Composer({
   draft,
   onDraftChange,
@@ -98,6 +110,7 @@ export function Composer({
   sendHint = { text: 'Enter 送出' },
   onSteerQueue,
   commands,
+  skills = NO_SKILLS,
   onRunCommand,
   decorated,
   stoppable,
@@ -110,6 +123,8 @@ export function Composer({
   attachments,
   footerStart,
   agentMention,
+  locked = false,
+  removalLocked = false,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -131,6 +146,10 @@ export function Composer({
    */
   readonly onSteerQueue?: () => void;
   readonly commands: readonly SlashDescriptor[];
+  /**
+   * `/` 選單的技能組（#1929）：排在命令後面，選了在草稿落成字面的 `/名字 `、跟著那句話送給模型。**沒給就沒有**這一組。
+   */
+  readonly skills?: readonly SkillEntry[];
   /** 從選單直接執行一行命令；現在不能執行就回 false，那一行改留在草稿裡。 */
   readonly onRunCommand: (line: string) => boolean;
   /** 光打名字就另有動作的命令：從選單選到時直接執行，不等參數。 */
@@ -174,6 +193,17 @@ export function Composer({
    * 輸入框上方也沒有標記。清單要穩定（它在查詢的 effect 依賴裡）。
    */
   readonly agentMention?: AgentMentionState;
+  /**
+   * 鎖住草稿（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）：開頭像命令的那一行在等命令清單認。照 dsh
+   * `InputBar` 的 `machineBusy`（`skeleton/InputBar.tsx:139-156`）與 `facade.ts:308-337`：文字框唯讀、草稿照樣看得到；附件
+   * 不能加、不能移除，貼上與拖放也不收；`@` 標記不能換也不能拿掉。送出時讀到的才一定是畫面上的值。
+   */
+  readonly locked?: boolean;
+  /**
+   * 只鎖附件列上的移除（[#1941](https://github.com/DemianLi/nexus-agent/issues/1941)）：附件正在送出，那一批送出當下就取好了，
+   * 移掉的照樣會送出（dsh `facade.ts:330-334`）。文字框、加入、貼上、拖放、取消上傳照舊。
+   */
+  readonly removalLocked?: boolean;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -184,9 +214,24 @@ export function Composer({
   // 選了之後要把游標放回去的位置：草稿由呼叫端更新，要等它畫出來才放得進去。
   const pendingCaret = useRef<number | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
-  const onAddFiles = attachments?.onAdd;
-  // 沒給 `attachments` 時整頁拖放什麼都不掛（拖進來的檔案維持瀏覽器自己的行為）。
-  const dropping = useFileDrop(onAddFiles !== undefined, (files) => onAddFiles?.(files));
+  const addFiles = attachments?.onAdd;
+  const onAddFiles =
+    addFiles === undefined
+      ? undefined
+      : (files: File[]) => {
+          if (!locked) addFiles(files);
+        };
+  // 沒給 `attachments` 時整頁拖放什麼都不掛（拖進來的檔案維持瀏覽器自己的行為）。鎖住時照樣接住（不然瀏覽器會把
+  // 檔案開成新頁、整頁跳走），只是不收、也不出「放開就加入」的提示。
+  const dragging = useFileDrop(addFiles !== undefined, (files) => onAddFiles?.(files));
+  const dropping = dragging && !locked;
+  // SG 的 `textareaProps` 不收 `readOnly`：從 ref 設在元素上（vendor 檔不動）。
+  useLayoutEffect(() => {
+    if (textarea.current !== null) textarea.current.readOnly = locked;
+  }, [locked, textarea]);
+  const selectAgent = (agent: Parameters<AgentMentionState['onSelect']>[0]) => {
+    if (!locked) agentMention?.onSelect(agent);
+  };
 
   const at = Math.min(caret, draft.length);
   // 先判 `@` 再判 `/`（dsh `detectTrigger`）：`@/` 是一段路徑，不是命令。
@@ -195,13 +240,15 @@ export function Composer({
   const span: Span | null = mention ?? hit;
   // 照 dsh `InputTriggerController.track`：片段不見了、或換成別的片段，收起的記錄就作廢——刪光重打 `/` 要再跳出來。
   if (dismissed !== null && !sameHit(span, dismissed)) setDismissed(null);
-  const candidates = hit === null ? [] : slashCandidates(commands, hit);
-  const open = hit !== null && candidates.length > 0 && !sameHit(hit, dismissed);
+  const candidates = hit === null ? [] : slashMenu(commands, skills, hit);
+  // 鎖住時兩個選單都收起、也不再問（dsh 進 adjudicating 時 `popup.dismiss()` 並凍結觸發，`facade.ts:428-431`）。
+  const open = !locked && hit !== null && candidates.length > 0 && !sameHit(hit, dismissed);
   const active = open ? candidates[Math.min(highlight, candidates.length - 1)] : undefined;
 
   const [menu, dispatchMenu] = useReducer(reduceMentionMenu, MENTION_MENU_CLOSED);
   const generation = useRef(0);
   const asking =
+    !locked &&
     mention !== null &&
     (fileReferences !== undefined ||
       sessionReferences !== undefined ||
@@ -320,14 +367,21 @@ export function Composer({
   }, [draft, textarea]);
 
   function edit(next: string, at: number) {
+    if (locked) return;
     onDraftChange(next);
     setCaret(at);
     setHighlight(0);
   }
 
-  function pick(command: SlashDescriptor) {
+  function pick(candidate: SlashCandidate) {
     if (hit === null) return;
-    const result = applySlashPick(draft, hit, command, decorated);
+    if (candidate.kind === 'skill') {
+      const result = applySkillPick(draft, hit, candidate.skill);
+      pendingCaret.current = result.caret;
+      edit(result.draft, result.caret);
+      return;
+    }
+    const result = applySlashPick(draft, hit, candidate.command, decorated);
     if (result.run !== undefined && !onRunCommand(result.run)) {
       // 現在不能執行（例如這一輪還在跑）：那一行留在草稿裡，看得到為什麼送不出去。
       const kept = `${draft.slice(0, hit.start)}${result.run}${draft.slice(hit.end)}`;
@@ -346,7 +400,7 @@ export function Composer({
     if (row.source === 'agent') {
       // 不進草稿：`@` 那一段拿掉、標記換成這一個（取代前一個）。
       const result = applyAgentPick(draft, mention);
-      agentMention?.onSelect(row.agent);
+      selectAgent(row.agent);
       pendingCaret.current = result.caret;
       edit(result.draft, result.caret);
       return;
@@ -447,9 +501,9 @@ export function Composer({
 
   const running = stoppable && !stopDisabled;
   // 跑著時按鈕送出的是 Enter 的送法（排隊）。名稱只在這一下真的會送出一句普通訊息時說出送法（dsh 的 `primaryLabel`）：
-  // `/` 開頭的是命令，照舊叫「送出」。
+  // 命令照舊叫「送出」。是不是命令照送出路由認（#1929）：技能的 `/deploy 今天` 是一句話。
   const sendLabel =
-    running && canSend && !draft.trimStart().startsWith('/')
+    running && canSend && !namesCommand(commands, draft)
       ? resolveSubmitMode('running', 'enter') === 'steer'
         ? '插話送出'
         : '排隊送出'
@@ -526,7 +580,7 @@ export function Composer({
             // 游標在最前面、沒選一段字時退格：整顆刪掉 `@子代理` 標記（一按就刪，不學 SG demo 的先選再刪）。
             onBackspaceAtStart={() => {
               if (agentMention?.selected === undefined) return false;
-              agentMention.onSelect(undefined);
+              selectAgent(undefined);
               return true;
             }}
             {...(onAddFiles === undefined
@@ -539,6 +593,7 @@ export function Composer({
                       size="icon"
                       className="text-muted-foreground hover:text-foreground size-11 shrink-0 lg:size-8"
                       aria-label="加入附件"
+                      disabled={locked}
                       onClick={() => fileInput.current?.click()}
                     >
                       <Plus />
@@ -553,13 +608,15 @@ export function Composer({
                       {agentMention?.selected !== undefined && (
                         <AgentMentionChip
                           agent={agentMention.selected}
-                          onRemove={() => agentMention.onSelect(undefined)}
+                          onRemove={() => selectAgent(undefined)}
                         />
                       )}
                       {attachments !== undefined && attachments.items.length > 0 && (
                         <AttachmentRail
                           items={attachments.items}
-                          onRemove={attachments.onRemove}
+                          onRemove={(id) => {
+                            if (!locked && !removalLocked) attachments.onRemove(id);
+                          }}
                           uploads={attachments.uploads}
                           onCancelUpload={attachments.onCancelUpload}
                         />
@@ -625,9 +682,11 @@ export function Composer({
           ) : (
             <Command
               shouldFilter={false}
-              value={active?.name ?? ''}
-              onValueChange={(name) => {
-                const index = candidates.findIndex((command) => command.name === name);
+              value={active === undefined ? '' : slashCandidateKey(active)}
+              onValueChange={(key) => {
+                const index = candidates.findIndex(
+                  (candidate) => slashCandidateKey(candidate) === key,
+                );
                 if (index !== -1) setHighlight(index);
               }}
               className="bg-transparent"
@@ -638,20 +697,7 @@ export function Composer({
                 // 點選項時焦點不離開輸入框。
                 onMouseDown={(event) => event.preventDefault()}
               >
-                {candidates.map((command) => (
-                  <CommandItem
-                    key={command.name}
-                    value={command.name}
-                    onSelect={() => pick(command)}
-                    className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
-                  >
-                    <span className="font-mono text-body">
-                      /{command.name}
-                      {command.input === undefined ? '' : ` ${command.input.hint}`}
-                    </span>
-                    <span className="text-muted-foreground text-tip">{command.description}</span>
-                  </CommandItem>
-                ))}
+                <SlashList candidates={candidates} onPick={pick} />
               </CommandList>
             </Command>
           )}
@@ -660,6 +706,59 @@ export function Composer({
     </>
   );
 }
+
+/** `/` 選單的一列：名字（命令帶參數提示），底下一行說明。 */
+function SlashItem({
+  candidate,
+  onPick,
+}: {
+  readonly candidate: SlashCandidate;
+  readonly onPick: (candidate: SlashCandidate) => void;
+}) {
+  const [name, hint, description] =
+    candidate.kind === 'command'
+      ? [candidate.command.name, candidate.command.input?.hint, candidate.command.description]
+      : [candidate.skill.name, undefined, skillDescription(candidate.skill)];
+  return (
+    <CommandItem
+      value={slashCandidateKey(candidate)}
+      onSelect={() => onPick(candidate)}
+      className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
+    >
+      <span className="font-mono text-body">
+        /{name}
+        {hint === undefined ? '' : ` ${hint}`}
+      </span>
+      <span className="text-muted-foreground text-tip">{description}</span>
+    </CommandItem>
+  );
+}
+
+/**
+ * `/` 選單的列（#1929）：命令一組、技能一組。**有技能時才畫段標題**，只有命令時跟原來一樣（同 `@` 選單只有檔案時不畫）。
+ */
+function SlashList({
+  candidates,
+  onPick,
+}: {
+  readonly candidates: readonly SlashCandidate[];
+  readonly onPick: (candidate: SlashCandidate) => void;
+}) {
+  const item = (candidate: SlashCandidate) => (
+    <SlashItem key={slashCandidateKey(candidate)} candidate={candidate} onPick={onPick} />
+  );
+  if (!candidates.some((candidate) => candidate.kind === 'skill')) return candidates.map(item);
+  return (['command', 'skill'] as const).map((kind) => {
+    const inGroup = candidates.filter((candidate) => candidate.kind === kind);
+    return inGroup.length === 0 ? null : (
+      <CommandGroup key={kind} heading={SLASH_HEADINGS[kind]}>
+        {inGroup.map(item)}
+      </CommandGroup>
+    );
+  });
+}
+
+const SLASH_HEADINGS = { command: '命令', skill: '技能' } as const;
 
 /** 段的標題（Q4：檔案、會話、子代理；#328：最上面可以再有「委派給」）。 */
 const SECTION_HEADINGS = {

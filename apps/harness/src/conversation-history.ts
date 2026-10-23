@@ -417,6 +417,14 @@ export function contextMeasureData(measure: SessionEventMap['context/measure']):
       ...(measure.messagesCompactable !== undefined && {
         messagesCompactable: measure.messagesCompactable,
       }),
+      // 沒有就不出這一格（#1571 以前的日誌）：缺席＝沒量，不是 `0`。
+      ...(measure.breakdown !== undefined && {
+        breakdown: {
+          systemTokens: measure.breakdown.systemTokens,
+          toolsTokens: measure.breakdown.toolsTokens,
+          messageTokens: measure.breakdown.messageTokens,
+        },
+      }),
     },
   };
 }

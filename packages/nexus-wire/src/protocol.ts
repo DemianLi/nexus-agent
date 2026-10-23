@@ -681,6 +681,7 @@ export const RPC_PARAM_KEYS = {
   'thread.archive': ['stopActivity'],
   'thread.unarchive': [],
   'thread.rename': ['title'],
+  'thread.fork': ['messageId'],
 } as const satisfies Record<RpcMethod, readonly string[]>;
 
 /**
@@ -868,7 +869,7 @@ export type SkillListResult = { readonly skills: readonly SkillEntry[] };
 export const THREADS_PATH = '/threads';
 
 /**
- * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`origin`（subagent 不列）、`parentSessionId`（subagent 不列；分叉的 thread 照列，來源這一格等 #1580 加回）、
+ * 列表上的一列。形狀照 dsh 的 `SessionSummary`，少掉的幾格：`origin`（subagent 不列）、
  * `cwd`（只列這台 server 那個目錄的）、`projections`（我們沒有投影快取）、`agentAvailable`（dsh 後來才加，我們沒有
  * 這一格）。多的一格是 `title`：dsh 的清單列把標題放在 `projections` 的 `title` 投影裡；我們把日誌上最後一顆
  * `session/title` 直接放進 `title` 這一格，來源見 `@nexus/core` 的 `SessionTitleSource`。
@@ -890,6 +891,12 @@ export interface ThreadSummary {
    * `SessionTitleSource`）；一顆都沒有時（例如 18 以前的日誌，或退回標題寫不進去），照退回規則從第一則合格的人話推。**缺席不等於空白**：只有目標排的輪次的 thread 不是空白，但沒有人打過字。
    */
   readonly title?: string;
+  /**
+   * 這條是從哪條 thread 分出來的（`thread.fork`，[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)），對到 dsh `SessionSummary.parentSessionId`
+   * （`session-controller/src/list.ts:353-362`）。不是分叉來的不帶。子代理照舊不列，所以這一格只會指向分叉的來源。
+   * 列表照會話 header 的 `parentSession` 填（#1580 刀 2），同 dsh `listFields`。
+   */
+  readonly parentThreadId?: string;
 }
 
 /** `GET /threads` 的結果。 */

@@ -21,8 +21,13 @@
  *   refs:
  *     NVIDIA_API_KEY: nvapi-…
  *   ```
- *   任何其他內容都明確拒絕，不靜靜忽略：根不是 mapping、未知的頂層鍵、鍵不是環境變數形狀、值不是非空字串、
- *   重複鍵、壞掉的 YAML。**錯誤訊息不引原文**——YAML 解析器自己的訊息會把出錯那一行帶出來，而那一行是秘密。
+ *   空檔或只有註解的檔是空的倉庫，不要求 `version`（dsh `credentials-local/src/index.ts:203`、`:209-211`）。
+ *   **`refs` 裡面**一律拒絕、不跳過——鍵不是環境變數形狀、值不是非空字串、重複鍵——因為被靜靜忽略的條目讀起來就是「我存的憑證沒作用」
+ *   （dsh `:179-183`）；根不是 mapping、`version` 不是 1、壞掉的 YAML 同樣拒絕。
+ *   **`version`、`refs` 之外的頂層鍵不擋啟動**：別的工具寫進來的外來條目不該讓 `serve --live` 起不來，也不該連累檔裡存好的 key
+ *   （dsh `:184-185`、`:228`、`:883-890`）。解析器把它們的鍵名交回呼叫端，{@link createCredentialService} 經 `warn` 講一聲，**只印鍵名、不印值**；
+ *   這些鍵留在檔案裡、不解析出任何東西。
+ *   **錯誤訊息不引原文**——YAML 解析器自己的訊息會把出錯那一行帶出來，而那一行是秘密。
  * - **讀之前先查權限**：group 或 other 有任何權限位元就拒絕，訊息帶 `chmod 600`（`owner-only.ts`，與瀏覽器會話
  *   密鑰檔共用）。寫入時檔 0600、目錄 0700——**這一段還沒有寫入路徑**（沒有設定頁，手動編輯，dsh 也允許）。
  * - **內容從不寫進行程的環境變數**：跟兩層 `.env`（`launch-env.ts`，會寫）不同，這是受管檔存在的意義。
@@ -36,7 +41,8 @@
  *   代價：沒有請求就沒有重載，也就不會在請求之外提早發現檔案壞了——**啟動那一次**（{@link CredentialService.check}）
  *   仍然完整檢查、壞了就起不來。
  * - **執行期重載失敗保留最後一份可用內容並警告一次**，同 dsh 的熱重載；啟動那一次則拋。
- * - 沒有 `records`（`grant`／`api-key` 記錄）：我們沒有第二種憑證。出現就當未知頂層鍵拒絕。
+ * - 沒有 `records`（`grant`／`api-key` 記錄）：我們沒有第二種憑證。**`records` 這個鍵照舊拒絕，不跟其他未知頂層鍵一起放過**：
+ *   理由用 dsh 自己的規則（`:179-183`）——我們不會用 `records` 裡的東西，放過它，使用者就會以為存進去的 grant 有作用。
  * - 服務是一個函式庫物件，由入口建、往下傳，不放進 `registry.services`：消費者只有模型那兩顆，
  *   不需要 plugin 也能取得它。
  */
@@ -104,34 +110,48 @@ function isMissing(error: unknown): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT';
 }
 
+/** {@link parseCredentialsDocument} 的結果。 */
+export interface ParsedCredentialsDocument {
+  /** `refs`：名字 → 值。 */
+  readonly refs: ReadonlyMap<string, string>;
+  /** `version`、`refs` 之外的頂層鍵名（照檔案裡的順序）。留在檔案裡、不解析出任何東西，由呼叫端決定怎麼講。 */
+  readonly ignoredKeys: readonly string[];
+}
+
 /**
  * 解析一份受管檔的文字。
  *
+ * 空檔、只有註解的檔、空的 mapping（`{}`）都是空的倉庫，不要求 `version`（同 dsh）。
+ *
  * @param file - 只用在訊息裡。
  * @param text - 檔案內容。
- * @returns `refs`：名字 → 值。
- * @throws 不合格的內容；**訊息不含任何值**。
+ * @returns `refs`：名字 → 值；`ignoredKeys`：不認得、但不擋的頂層鍵名。
+ * @throws 不合格的內容；**訊息不含任何值**（鍵名可以，值不行）。
  */
-export function parseCredentialsDocument(file: string, text: string): ReadonlyMap<string, string> {
+export function parseCredentialsDocument(file: string, text: string): ParsedCredentialsDocument {
   const fail = (why: string): never => {
     throw new Error(`受管憑證檔 ${file} 認不得：${why}`);
   };
-  if (text.trim() === '') return new Map();
+  const empty: ParsedCredentialsDocument = { refs: new Map(), ignoredKeys: [] };
+  if (text.trim() === '') return empty;
   const document = parseDocument(text, { uniqueKeys: true, prettyErrors: false });
   const [problem] = document.errors;
   if (problem !== undefined) fail(`YAML 錯誤 ${describeYamlError(problem)}`);
-  const root: unknown = document.toJS();
-  if (root === null || typeof root !== 'object' || Array.isArray(root)) {
+  // 只有註解的文件 `toJS()` 是 `null`：同 dsh `?? {}`，當空的倉庫。
+  const root: unknown = document.toJS() ?? {};
+  if (typeof root !== 'object' || Array.isArray(root)) {
     return fail('根要是一個 mapping（version 與 refs）');
   }
   const record = root as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
-    if (key !== 'version' && key !== 'refs') {
-      return fail(`不認得的頂層鍵 "${key}"（只有 version 與 refs）`);
-    }
-  }
+  const keys = Object.keys(record);
+  if (keys.length === 0) return empty;
   if (record.version !== CREDENTIALS_DOCUMENT_VERSION) {
     return fail(`version 要是 ${String(CREDENTIALS_DOCUMENT_VERSION)}`);
+  }
+  if ('records' in record) {
+    return fail(
+      'nexus 沒有 records 這種憑證（只有 refs 底下的 名字: 值）；留著它會讓人以為存進去的東西有作用',
+    );
   }
   const refs = record.refs ?? {};
   if (refs === null || typeof refs !== 'object' || Array.isArray(refs)) {
@@ -148,7 +168,7 @@ export function parseCredentialsDocument(file: string, text: string): ReadonlyMa
     }
     out.set(name, value);
   }
-  return out;
+  return { refs: out, ignoredKeys: keys.filter((key) => key !== 'version' && key !== 'refs') };
 }
 
 /** {@link createCredentialService} 的參數。 */
@@ -196,11 +216,10 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
       throw error;
     }
     if (good?.signature === signature) return good.refs;
+    let parsed: ParsedCredentialsDocument;
     try {
       assertOwnerOnlyMode('受管憑證檔', file, mode);
-      const refs = parseCredentialsDocument(file, readFileSync(file, 'utf8'));
-      good = { signature, refs };
-      return refs;
+      parsed = parseCredentialsDocument(file, readFileSync(file, 'utf8'));
     } catch (error) {
       if (good === undefined) throw error;
       if (warned !== signature) {
@@ -209,6 +228,15 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
       }
       return good.refs;
     }
+    good = { signature, refs: parsed.refs };
+    // 這是一份好檔：多出來的頂層鍵不擋、不算重載失敗。同一份 stat 簽章在上面就回快取了，所以每份檔只講一次。
+    // 只印鍵名（JSON 跳脫，免得鍵名裡的換行偽造日誌行），不印值。
+    if (parsed.ignoredKeys.length > 0) {
+      warn(
+        `credentials: 受管憑證檔 ${file} 有不認得的頂層鍵 ${parsed.ignoredKeys.map((key) => JSON.stringify(key)).join('、')}，已略過；只有 version 與 refs 底下的憑證會生效\n`,
+      );
+    }
+    return parsed.refs;
   }
 
   return {

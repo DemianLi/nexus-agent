@@ -22,11 +22,12 @@
  * （`markdown-text.tsx`，#405），使用者說的照原文畫（人打的字不當 markdown 解）。
  */
 
-import { Activity, ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Activity, ArrowDown, GitBranch, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 
 import type {
+  AiEntry,
   AnswerEntry,
   ConversationEntry,
   ConversationState,
@@ -72,6 +73,12 @@ import { transcriptItems } from '@/lib/deliverables-view';
 import { groupToolRuns, toolRunOf } from '@/lib/tool-runs';
 import { registerRunExpander, registerTranscriptScroller } from '@/lib/transcript-locate';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
+import {
+  FORK_LABEL,
+  FORK_UNAVAILABLE_TEXT,
+  forkUnavailable,
+  hasForkButton,
+} from '@/lib/thread-fork';
 import { RetryNotice } from '@/components/retry-notice';
 import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
 import { useStableNames } from '@/hooks/use-stable-names';
@@ -199,6 +206,56 @@ function RatingButtons({
   );
 }
 
+/**
+ * 分支鈕要的東西（[#1581](https://github.com/DemianLi/nexus-agent/issues/1581)）。只有主對話給：背景子代理自己的對話也用
+ * {@link Entry}，那邊不分叉。
+ */
+export interface TranscriptFork {
+  /** 分叉送出去了、回應還沒到：所有分支鈕都按不了，免得連按分出兩條。 */
+  readonly forking: boolean;
+  onFork(messageId: string): void;
+}
+
+/**
+ * 收尾那則回覆下面的「在新對話中分支」（dsh `MessageIconActions` 的 `onBranch`）。按不了照 dsh 用 `aria-disabled` 留著焦點，
+ * 原因掛在描述上、tooltip 講同一句；這裡的停用寫法同 {@link RatingButtons}。
+ */
+function ForkButton({ entry, fork }: { entry: AiEntry; fork: TranscriptFork }) {
+  const reasonId = useId();
+  const unavailable = forkUnavailable(entry, {
+    forking: fork.forking,
+    failed: entry.turnFailed === true,
+  });
+  const reason = unavailable === undefined ? undefined : FORK_UNAVAILABLE_TEXT[unavailable];
+  const messageId = entry.messageId;
+  return (
+    <>
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        className={RATING_BUTTON_CLASS}
+        title={reason ?? FORK_LABEL}
+        aria-label={FORK_LABEL}
+        aria-describedby={reason === undefined ? undefined : reasonId}
+        disabled={reason !== undefined}
+        focusableWhenDisabled
+        data-testid="fork-button"
+        onClick={() => {
+          if (reason === undefined && messageId !== undefined) fork.onFork(messageId);
+        }}
+      >
+        <GitBranch />
+      </Button>
+      {reason !== undefined && (
+        <span id={reasonId} className="sr-only">
+          {reason}
+        </span>
+      )}
+    </>
+  );
+}
+
 /** 一則回覆的「複製回覆」（#1305）：複製的是 markdown 原文，貼進信件或文件時格式還在。 */
 function ReplyCopyButton({ text }: { text: string }) {
   return (
@@ -233,11 +290,14 @@ function Marker({ children, testId }: { children: string; testId: string }) {
 export function Entry({
   entry,
   feedback,
+  fork,
   answer,
   subagentNames,
 }: {
   entry: ConversationEntry;
   feedback?: TranscriptFeedback;
+  /** 分支鈕（#1581）；沒給就不畫。 */
+  fork?: TranscriptFork;
   /** 配到這張提問卡的答案。 */
   answer?: AnswerEntry;
   /** 背景子代理的編號 → 名字（`lib/subagent-view.ts`）。 */
@@ -340,6 +400,8 @@ export function Entry({
   // 複製鈕講完才有（#1305）：串流中不畫，不是畫成透明——鍵盤會按得到。跟評分脫鉤，沒有評分外掛也在。
   const copyable = hasText && !entry.streaming;
   const ratable = feedback !== undefined && isRatable(entry);
+  // 分支鈕跟評分脫鉤：沒有評分外掛的部署也有。
+  const forkable = fork !== undefined && hasForkButton(entry);
   return (
     <Message
       align="start"
@@ -380,9 +442,10 @@ export function Entry({
           <MessageFooter className="px-0">{MAX_TOKENS_NOTICE}</MessageFooter>
         )}
         {entry.error !== undefined && <p className="text-destructive text-tip">{entry.error}</p>}
-        {(copyable || ratable) && (
+        {(copyable || ratable || forkable) && (
           <div className="flex items-center gap-1">
             {copyable && <ReplyCopyButton text={entry.text} />}
+            {forkable && <ForkButton entry={entry} fork={fork} />}
             {ratable && <RatingButtons messageId={entry.messageId} feedback={feedback} />}
           </div>
         )}
@@ -522,6 +585,7 @@ export function Transcript({
   state,
   isFresh,
   feedback,
+  fork,
   earlier,
   changes,
   deliverableDownload,
@@ -530,6 +594,8 @@ export function Transcript({
   /** 哪幾則是這一次看著它長出來的（`useFreshItems`，在常駐的元件裡算）。 */
   isFresh: (id: string) => boolean;
   feedback?: TranscriptFeedback;
+  /** 分支鈕（#1581）。沒給就不畫。 */
+  fork?: TranscriptFork;
   /** 往前翻（`earlier-pager.tsx`）。沒給就沒有按鈕、也不自動載入。 */
   earlier?: EarlierHistory;
   /** 改動的摘要與比較從哪裡讀（#443）。沒給就不畫改動卡。 */
@@ -569,6 +635,7 @@ export function Transcript({
         entry={entry}
         subagentNames={names}
         {...(feedback === undefined ? {} : { feedback })}
+        {...(fork === undefined ? {} : { fork })}
         {...(answer === undefined ? {} : { answer })}
       />
     );

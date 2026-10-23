@@ -94,6 +94,27 @@ const stubAgent: HandlerOptions['createAgent'] = async () => ({
 
 const noStored = { items: [], unreadable: 0 };
 
+describe('thread.fork（#1580）', () => {
+  it('接了整理檔、沒接落盤的 server 回 not_supported：不掉進釘選封存那一支、不建 agent、集合不動', async () => {
+    const threadOrganization = await ThreadOrganization.open(dir);
+    let created = 0;
+    const { client } = rig({
+      createAgent: async (threadId) => {
+        created += 1;
+        return stubAgent(threadId);
+      },
+      threadOrganization,
+      storedThreadKnown: async () => true,
+    });
+    const outcome = await client.threadFork('a', 'm-1');
+    expect(outcome).toMatchObject({ kind: 'rejected', code: 'not_supported' });
+    expect(outcome.kind === 'rejected' && outcome.message.includes('分叉')).toBe(true);
+    expect(created).toBe(0);
+    expect(threadOrganization.pinnedThreadIds).toEqual([]);
+    expect(threadOrganization.archivedThreadIds).toEqual([]);
+  });
+});
+
 describe('沒有 agent 的 thread：形狀與錯誤碼', () => {
   it('釘選：回完整集合，最近釘的在前；取消冪等（沒釘過、甚至沒這條會話也是 ok）', async () => {
     const threadOrganization = await ThreadOrganization.open(dir);

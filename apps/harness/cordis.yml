@@ -465,6 +465,30 @@
   config:
     openAt: never
 
+# 用 `@` 引用別的會話時的四個上限（#1573 N0862）：一則訊息最多引用幾條（`maxReferences`，不能超過 3）、候選最多回幾筆
+# （`candidateLimit`）、每條來源序列化後最多幾個位元組（`maxReferenceBytes`，**省略即照模型窗口算**，給了就原樣蓋過）、
+# 自動預算占模型窗口的幾成（`referenceContextFraction`）。**欄位名與 schema 的預設（3、50、0.2）都是 dsh 的**
+# （`packages/context/session-reference/src/index.ts:90-95`，`1517a4db`／`687f282e`／`22ddee37`）。自動預算是
+# `max(65536, floor(窗口 × 4 × 比例))` 位元組，窗口跟著**這條 thread 下一步會走的模型**，換了模型下一次引用就用新那顆的窗口。
+#
+# **出廠的比例是 0.1，不是 dsh 的 0.2。偏離登記：理由 2（產品需求超出 dsh 的射程），demian 2026-10-17 拍板 Q4 (b)。**
+# dsh 的 web-app 出貨這一列不給 config、吃 0.2；那個「每 token 4 位元組」是照英文調的。本產品以中文為主：用 nexus 自己的估算器
+# （o200k，`token-estimate.ts`）量中文是約 0.31 token／位元組（2026-10-24 量 `AGENTS.md`、`docs/operations.md`、`docs/standards.md`、
+# `.docs/development-plan.md`：混排 0.3100、只留中日韓字元 0.3114）。出廠模型窗口 700,045：比例 0.2 時每條 560,036 位元組，
+# 三條約 524k–534k token，是摘要門檻 560,036 的 94%–95%，乘上實測的真實÷o200k（中文 1.10，`token-estimate.ts:41`）就超過；
+# 比例 0.1 時每條 280,018 位元組，三條約 262k–269k token，占門檻 47%–48%（乘 1.10 約 51%–53%），留下一半給 system prompt、
+# 工具定義與歷史。測試 `session-reference-budget.test.ts` 的 H 釘住這一點。
+# 部署方可以調：要更多給 `referenceContextFraction`（上限 1），要固定位元組給 `maxReferenceBytes`。patch 是整份替換 `config`，
+# 只寫一格的話另外三格由 schema 補，**包括比例回到 0.2**，所以調別的格時要把比例一起寫。
+# **寫壞整個起不來**（`startup-audit.ts` 的 `REQUIRED_ENTRY_IDS`），**也關不掉**（`PROTECTED_ENTRY_NAMES`）：兩者的理由都是掉了或關了
+# 之後值回到 schema 的 0.2，靜靜把出廠調低的比例拿掉；逐點見 `src/settings/session-reference.ts` 檔頭。起動期讀一次、改了要重啟。
+- id: session-reference
+  name: '#settings/session-reference'
+  config:
+    maxReferences: 3
+    candidateLimit: 50
+    referenceContextFraction: 0.1
+
 # serve 行程裡最多同時有幾條 thread（#1476，「底座保險絲」第 2 級；背景 #1464：每條 thread 常駐約 2 MB heap、serve 不回收），
 # 以及閒置的 thread 多久之後撤出記憶體（#1484，第 1 級）。**兩格出廠都開著**（#1619，demian 2026-10-18 拍板）：上限 500 條、閒置 2 小時撤出。
 # 值的家在 schema（`src/settings/thread-capacity.ts`），這裡照抄同一組讓人看得到；patch 是整份替換 `config`，只寫一格的話另一格由 schema 補。

@@ -195,6 +195,22 @@ export class SessionPersistenceCoordinator {
     }
   }
 
+  /**
+   * 丟掉：退訂、取消窗口、只關把手，還沒送出的不送，**不做最後一次 flush**（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）。
+   * 給還沒發佈就組裝失敗的分叉子 thread：同 dsh `create` 失敗時只關掉還沒實體化的把手（`agent-loop/src/index.ts:688-702`，
+   * `687f282e`），磁碟上不留東西。退訂、取消窗口在呼叫的當下同步做完，之後窗口不會再開（`#schedule` 看 `#disposed`）。之後再呼叫 {@link dispose} 是 no-op。
+   *
+   * @throws `close()` 失敗。
+   */
+  abandon(): Promise<void> {
+    if (this.#disposed) return Promise.resolve();
+    this.#disposed = true;
+    this.#unsubscribe?.();
+    this.#unsubscribe = undefined;
+    this.#cancelTimer();
+    return this.#stored.close();
+  }
+
   /** 開窗。**第一顆開，後續的加入但不重置截止時間**（dsh 同條）。暫停期間不開。 */
   #schedule(): void {
     if (this.#disposed || this.#paused !== undefined) return;
@@ -273,7 +289,10 @@ export class SessionPersistenceCoordinator {
  *   **接上的同時在註冊表登記一位排空者**（{@link SessionRegistry.onFlush}，#599）：
  *   `sessions.flush(log)` 只排空那一份，給一輪之中的耐久檢查點用
  *   （{@link ./session-checkpoint-policy.ts | sessionCheckpointPlugin}）。
- * @returns `flush()` 把每一份都排空（響亮）；`dispose()` 退訂、退掉排空者並收掉每一份（響亮）。
+ * @returns `flush()` 把每一份都排空（響亮）；`dispose()` 退訂、退掉排空者並收掉每一份（響亮）；`abandon()` 同 `dispose()`
+ *   但不做最後一次排空，只關把手（還沒發佈的分叉子 thread 組裝失敗時用，#1580）；`rootHeader()` 是 root 那一份檔的 header：
+ *   新建的是這裡交給 `store.create` 的那一份，續接的是 `resumedRoot.header`；root 還沒接上、或續接沒給 header 時是 `undefined`
+ *   （[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)）。
  */
 export function attachSessionPersistence(
   sessions: SessionRegistry,
@@ -282,7 +301,12 @@ export function attachSessionPersistence(
     readonly cwd?: string;
     readonly workspaceRoot?: string;
     readonly warn?: (message: string) => void;
-    readonly resumedRoot?: { readonly stored: StoredSession; readonly storedCount: number };
+    readonly resumedRoot?: {
+      readonly stored: StoredSession;
+      readonly storedCount: number;
+      /** 讀回來的那一份 header，只拿來交給 `rootHeader()`（#1599）；省略時續接的 root 的 `rootHeader()` 是 `undefined`。 */
+      readonly header?: StoredSessionHeader;
+    };
     /**
      * 建置版本、插件清單與設定雜湊（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）：**這裡新建的每一份
      * header 都帶**（root 與 subagent），由入口算一次往下傳——這個套件不碰 git、不讀設定檔。`resumedRoot` 那一份
@@ -294,6 +318,11 @@ export function attachSessionPersistence(
      */
     readonly rootModelEntryId?: string;
     /**
+     * 分叉出來的 root（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）：**只進 root 的 header**，照 dsh fork 建子會話的
+     * `meta`（`session-controller/src/commands.ts:281-283`，`687f282e`）。`resumedRoot` 那一份不新建 header，所以兩個一起給沒有意義。
+     */
+    readonly rootLineage?: { readonly parentSession: string; readonly isSeeded: true };
+    /**
      * 批次窗口，毫秒。省略即 {@link DEFAULT_PERSISTENCE_WINDOW_MS}。
      *
      * **一路轉發給每一份協調器**——這個行程裡的每一條會話（root 與 subagent）共用同一個
@@ -301,14 +330,38 @@ export function attachSessionPersistence(
      */
     readonly windowMs?: number;
   } = {},
-): { flush(): Promise<void>; dispose(): Promise<void> } {
+): {
+  flush(): Promise<void>;
+  dispose(): Promise<void>;
+  abandon(): Promise<void>;
+  rootHeader(): StoredSessionHeader | undefined;
+} {
   const coordinators: SessionPersistenceCoordinator[] = [];
+  /** 見回傳值的 `rootHeader`。 */
+  let rootHeader: StoredSessionHeader | undefined;
   /** 這一組裡每一份的會話 id，給聚合錯誤指名用。 */
   const idOf = new Map<SessionPersistenceCoordinator, string>();
   /** 同一批協調器，按日誌找——耐久檢查點問的是「這一份」，不是全部（#599）。 */
   const byLog = new Map<SessionLog, SessionPersistenceCoordinator>();
   const unobserve = sessions.observe((entry) => {
     const { address, log } = entry;
+    // **新建的 root 由這裡寫 header，所以切點與 header 一致由這裡斷言**（#1580，PR #1908 審查帶來的第 2 件）：照 dsh 建構時的檢查
+    // （`core/session/src/index.ts:668-688`，`687f282e`），帶 inherited 標記的日誌必須標 `isSeeded`，反過來也一樣。不等下次讀盤才抓
+    // （`session-log-validation.ts`），在寫出第一個位元組之前就拒。續接的 root 不新建 header，不在這裡管。
+    if (
+      address.kind === 'root' &&
+      entry.resume === undefined &&
+      options.resumedRoot === undefined
+    ) {
+      const seeded = log.inheritedEventCount > 0;
+      if (seeded !== (options.rootLineage !== undefined)) {
+        throw new Error(
+          seeded
+            ? `會話 "${log.sessionId}" 的日誌帶分叉前綴（切點 ${String(log.inheritedEventCount)}），落盤卻沒給 rootLineage：header 會少標 isSeeded。`
+            : `會話 "${log.sessionId}" 給了 rootLineage，日誌卻沒有 inherited 的 session/end-seed。`,
+        );
+      }
+    }
     const header: StoredSessionHeader = {
       version: SESSION_LOG_FORMAT_VERSION,
       id: log.sessionId,
@@ -323,6 +376,11 @@ export function attachSessionPersistence(
         parentSession: sessions.root.sessionId,
         origin: 'subagent' as const,
       }),
+      ...(address.kind === 'root' &&
+        options.rootLineage !== undefined && {
+          parentSession: options.rootLineage.parentSession,
+          isSeeded: options.rootLineage.isSeeded,
+        }),
       ...(options.buildMetadata !== undefined && {
         build: options.buildMetadata.build,
         plugins: options.buildMetadata.plugins,
@@ -350,6 +408,11 @@ export function attachSessionPersistence(
     coordinators.push(coordinator);
     byLog.set(log, coordinator);
     idOf.set(coordinator, log.sessionId);
+    // 記憶體裡那一份 header（#1599）：搜尋拿它跟盤上那份比，照 dsh 拿活會話的 `session.header` 比（`session-query-sqlite/src/index.ts:552`）。
+    // 只有這一份是真的寫進檔的那份；入口手上的同名 header（例如分叉給 placer 看的）`createdAt` 是另一次取的時間。
+    if (address.kind === 'root') {
+      rootHeader = resumed === undefined ? header : options.resumedRoot?.header;
+    }
     // **續接的 root 記下這一次實際載入的清單**（#1138）：header 沿用最初那一份，這一顆補上「後來是誰接手的」。
     // 協調器已經接上，所以這一筆會跟著落盤。前一顆是同樣內容的 `session/resumed` 就不疊——空轉的續接不讓日誌長。
     if (resumed !== undefined && options.buildMetadata !== undefined) {
@@ -372,6 +435,7 @@ export function attachSessionPersistence(
     await byLog.get(log)?.flush();
   });
   return {
+    rootHeader: () => rootHeader,
     // **每一份都做完再報**（#1511，照 dsh `session-persistence/src/index.ts:168-180`）：某一份失敗不擋住排在它後面的，
     // 失敗的聚合成一個 `AggregateError`，message 嵌入每一份的會話 id 與原因鏈（只印 message 的人也看得到）。
     // 已經開始收尾的跳過：它的 `dispose()` 自己會做最後一次 flush 並負責報錯。
@@ -412,6 +476,27 @@ export function attachSessionPersistence(
         idOf.clear();
       }
       throwAggregate(failures, '會話日誌收尾失敗');
+    },
+    // **丟掉，不排空**（#1580，見協調器的 `abandon`）：退訂與每一份的同步那一半在呼叫當下做完，之後才等關把手。
+    async abandon() {
+      unobserve();
+      unflush();
+      const closing = [...coordinators].reverse().map((coordinator) => ({
+        id: idOf.get(coordinator) ?? '?',
+        done: coordinator.abandon(),
+      }));
+      coordinators.length = 0;
+      byLog.clear();
+      idOf.clear();
+      const failures: Error[] = [];
+      for (const { id, done } of closing) {
+        try {
+          await done;
+        } catch (error: unknown) {
+          failures.push(new Error(`會話 "${id}" 丟棄時關把手失敗`, { cause: error }));
+        }
+      }
+      throwAggregate(failures, '會話日誌丟棄失敗');
     },
   };
 }

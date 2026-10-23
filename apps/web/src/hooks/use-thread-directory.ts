@@ -28,7 +28,12 @@ import type { RowStatus } from '@/lib/thread-status';
 export type Listing =
   | { readonly kind: 'loading' }
   | { readonly kind: 'ok'; readonly result: ThreadListResult }
-  | { readonly kind: 'failed'; readonly message: string };
+  | {
+      readonly kind: 'failed';
+      readonly message: string;
+      /** server 回的錯誤碼；網路層拋的錯沒有。`not_supported` 是這台 server 沒接落盤（#1964 用它藏分支鈕）。 */
+      readonly code?: string;
+    };
 
 export interface ThreadDirectory {
   readonly listing: Listing;
@@ -37,6 +42,10 @@ export interface ThreadDirectory {
   readonly blankOf: (item: ThreadSummary) => boolean;
   /** 重抓一次列表。 */
   readonly refresh: () => void;
+  /** 分叉的佔位，最新的在前（#1581）；畫清單時用 `withPlaceholders` 合進 `listing` 的列。 */
+  readonly placeholders: readonly ThreadSummary[];
+  /** 分叉成功：把子 thread 先放進清單，不等下一次刷新（規則見 `lib/thread-status.ts`）。 */
+  readonly addPlaceholder: (summary: ThreadSummary) => void;
 }
 
 export function useThreadDirectory(client: WireClient, currentThreadId: string): ThreadDirectory {
@@ -55,7 +64,11 @@ export function useThreadDirectory(client: WireClient, currentThreadId: string):
           setListing({ kind: 'ok', result: outcome.result });
           dispatch({ type: 'listed', items: outcome.result.items });
         } else {
-          setListing({ kind: 'failed', message: outcome.message });
+          setListing({
+            kind: 'failed',
+            message: outcome.message,
+            ...(outcome.code === undefined ? {} : { code: outcome.code }),
+          });
           dispatch({ type: 'list-failed' });
         }
       },
@@ -106,5 +119,15 @@ export function useThreadDirectory(client: WireClient, currentThreadId: string):
 
   const statusOf = useCallback((item: ThreadSummary) => rowStatus(status, item), [status]);
   const blankOf = useCallback((item: ThreadSummary) => effectiveBlank(status, item), [status]);
-  return { listing, statusOf, blankOf, refresh };
+  const addPlaceholder = useCallback((summary: ThreadSummary) => {
+    dispatch({ type: 'placeholder', summary });
+  }, []);
+  return {
+    listing,
+    statusOf,
+    blankOf,
+    refresh,
+    placeholders: status.placeholders,
+    addPlaceholder,
+  };
 }

@@ -6,10 +6,10 @@
  *
  * - **A**：`JSON.parse` 出來的自有 `"__proto__"` 鍵。改寫前副本用 `copy[key] =` 賦值，走的是原型 setter：
  *   記憶體裡那顆的原型被換掉（而且沒被凍），落盤時鍵消失。
- * - **A2**：同一個鍵經過訊息那條路（`toLoggedMessage` → `append` → 續接 → `fromLoggedMessage`）。這個鍵在進日誌**之前**
+ * - **A2**：同一個鍵經過訊息那條路（`toLoggedMessage` → `append` → 續接 → `fromLoggedMessage`）。#1526 時這個鍵在進日誌**之前**
  *   就丟了：`@langchain/core@1.2.9` 的 `Serializable.toJSON`（`dist/load/validation.js:85`）用賦值拷 kwargs，`toDict()`
- *   出來的 args 原型被換掉、自有鍵沒了，再經 `JSON.stringify` 就只剩 `{"a":1}`。所以這裡斷言的是日誌真正保證的事：
- *   拿到的那份原型乾淨、沒有繼承來的 `x`、記憶體與磁碟一致。上游丟鍵另開卡。
+ *   出來的 args 原型被換掉、自有鍵沒了，所以當時只能斷言「原型乾淨、沒有繼承來的 `x`」。#1660 起 `toLoggedMessage`
+ *   自己取欄位，這裡改回卡上原本的斷言：續接讀回的 args 仍有**自有**的 `"__proto__"` 鍵，內容同模型送的，記憶體與磁碟一致。
  * - **C**：深巢狀，前後各夾一則普通事件。比對用 `JSON.stringify`：vitest 的 `toEqual` 本身是遞迴的。
  *   - **C1（舊日誌）**：寫入那一關有深度上限（`SESSION_EVENT_MAX_DEPTH`，#1661），但上限之前寫下的日誌可能更深。
  *     磁碟上一份 3000 層的舊日誌，續接讀回、接上 seed 都照收，讀方不設限。深度取 3000：原生 `JSON.stringify` 對凍過的
@@ -127,8 +127,8 @@ describe('A：自有的 "__proto__" 鍵照樣是自有鍵（#1526）', () => {
   });
 });
 
-describe('A2：經過訊息那條路（#1526）', () => {
-  it('工具呼叫參數帶 "__proto__"：記下、續接、推回訊息之後 args 的原型乾淨、沒有繼承來的鍵，記憶體與磁碟一致', async () => {
+describe('A2：經過訊息那條路（#1526、#1660）', () => {
+  it('工具呼叫參數帶 "__proto__"：記下、續接、推回訊息之後 args 仍有自有的 "__proto__" 鍵，原型乾淨，記憶體與磁碟一致', async () => {
     const ai = new AIMessage({
       id: 'm1',
       content: '',
@@ -148,6 +148,8 @@ describe('A2：經過訊息那條路（#1526）', () => {
         (event?.data as { message: Parameters<typeof fromLoggedMessage>[0] }).message,
       ) as AIMessage;
       const args = message.tool_calls?.[0]?.args as Record<string, unknown>;
+      expect(Object.hasOwn(args, '__proto__'), label).toBe(true);
+      expect(Object.getOwnPropertyDescriptor(args, '__proto__')?.value, label).toEqual({ x: 1 });
       expect(Object.getPrototypeOf(args), label).toBe(Object.prototype);
       expect(args['x'], label).toBeUndefined();
       expect(args['a'], label).toBe(1);

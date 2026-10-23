@@ -17,7 +17,7 @@ import { createServer } from 'node:http';
 
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
-import { SessionLog, SessionRegistry } from '@nexus/core';
+import { buildForkSeed, SessionLog, SessionRegistry } from '@nexus/core';
 import { SESSION_TELEMETRY_SERVICE } from '@nexus/core';
 import type {
   LoggedMessage,
@@ -340,6 +340,60 @@ async function mockCollector(): Promise<{ url: string; bodies: string[]; close: 
     },
   };
 }
+
+/**
+ * 一條剛分叉的 thread：來源一輪（0–2，前綴裡有一顆回饋），標記在 3。
+ *
+ * @returns 根日誌就是這份分叉來的日誌的登記處。
+ */
+function forkedSessions(): SessionRegistry {
+  const source = new SessionLog('source');
+  source.append('turn/start', { kind: 'message', text: '來源那一輪' });
+  source.append('feedback/record', { text: '來源的回饋' });
+  source.append('turn/end', {});
+  return new SessionRegistry('child', { rootSeed: buildForkSeed(source.events, 2) });
+}
+
+describe('遙測接線：分叉來的 thread（#1580）', () => {
+  it('full：從繼承標記起送，來源的前綴不重送；每筆帶切點', async () => {
+    const sessions = forkedSessions();
+    const sink = collectingSink('full');
+    const { dispose, attachTelemetry } = await createCliAgent({ live: false }, [
+      ...shipped,
+      telemetryPlugin(sink),
+    ]);
+    try {
+      attachTelemetry(sessions);
+      expect(ledgerOf(sink).map((record) => record.attributes['event.seq'])).toEqual([3]);
+      expect(ledgerOf(sink)[0]!.attributes['session.seed_length']).toBe(3);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('feedback-only：人送出回饋時補送整份，連繼承來的前綴（照 dsh 出廠的 includeHistory）', async () => {
+    const sessions = forkedSessions();
+    const sink = collectingSink('feedback-only');
+    const { dispose, attachTelemetry } = await createCliAgent({ live: false }, [
+      ...shipped,
+      telemetryPlugin(sink),
+    ]);
+    try {
+      attachTelemetry(sessions);
+      expect(sink.records).toHaveLength(0);
+      sessions.root.append('feedback/record', { text: '子會話的回饋' });
+      expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
+        'turn/start',
+        'feedback/record',
+        'turn/end',
+        'session/end-seed',
+        'feedback/record',
+      ]);
+    } finally {
+      await dispose();
+    }
+  });
+});
 
 describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）', () => {
   it('回饋之前一筆都不送；第一顆回饋送整份前綴，之後只送新的那段', async () => {

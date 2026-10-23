@@ -147,6 +147,9 @@ export type {
   ThreadActivityKind,
   ThreadArchiveError,
   ThreadArchiveResult,
+  ThreadForkCommand,
+  ThreadForkError,
+  ThreadForkResult,
   ThreadListSets,
   ThreadManagementCommand,
   ThreadManagementMethod,
@@ -247,6 +250,7 @@ export {
 } from './session-references.js';
 export type {
   ModelUsagePayload,
+  WireContextBreakdown,
   WireContextMeasure,
   WireContextPressure,
   WireSummaryThreshold,

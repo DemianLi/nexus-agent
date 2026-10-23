@@ -379,6 +379,7 @@ export {
   noteFsError,
   noteSandboxDenial,
   noteSearchError,
+  noteSearchSkipped,
   SEARCH_ABORTED,
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
@@ -686,10 +687,11 @@ export {
   summarizationConfigSchema,
   summarizationPlugin,
 } from './summarization.js';
-export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
+export type { EstimatedRequest, RequestParts, TokenEstimate } from './token-estimate.js';
 export {
   estimateAnchoredTokens,
   estimateMessageTokens,
+  estimateRequestParts,
   estimateRequestTokens,
   estimateTextTokens,
   TokenAnchorBook,
@@ -767,6 +769,7 @@ export type {
   SessionReferenceSourceEntry,
   UserMessageSource,
 } from './session-log.js';
+export { forkBoundaryOf } from './fork-boundary.js';
 export {
   currentTurnStart,
   openTurnStart,

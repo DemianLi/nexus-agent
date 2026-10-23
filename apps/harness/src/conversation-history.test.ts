@@ -922,6 +922,39 @@ describe('舊格式', () => {
     expect(old !== undefined && 'messagesCompactable' in old).toBe(false);
     expect(measured({ messagesCompactable: false })?.messagesCompactable).toBe(false);
   });
+
+  /**
+   * `breakdown`（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）同理：有就三格原樣上線，沒有的舊日誌重放出來就沒有這個 key。
+   */
+  it('context/measure 的 breakdown：有就三格原樣帶上線，沒有就沒有這個 key', () => {
+    const measured = (extra: object) =>
+      reduceAll(
+        emptyConversation(),
+        historyPage(
+          log(
+            human('嗨'),
+            { type: 'model/start', data: {} },
+            reply('嗨。'),
+            { type: 'model/end', data: {} },
+            {
+              type: 'context/measure',
+              data: {
+                approxTokens: 33_000,
+                messageCount: 70,
+                thresholds: [{ type: 'tokens', value: 100_000 }],
+                ...extra,
+              },
+            },
+            turnEnd,
+          ),
+        ).events,
+      ).contextPressure?.measure;
+
+    const old = measured({});
+    expect(old !== undefined && 'breakdown' in old).toBe(false);
+    const breakdown = { systemTokens: 1200, toolsTokens: 0, messageTokens: 31_800 };
+    expect(measured({ breakdown })?.breakdown).toEqual(breakdown);
+  });
 });
 
 /**

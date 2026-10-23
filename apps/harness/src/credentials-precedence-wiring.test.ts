@@ -8,6 +8,7 @@
  * | 入口 | 對應 dsh | 受管檔（`fake-from-file`）與啟動環境（`fake-from-env`）同時有 | 拿掉哪一處會紅 |
  * | --- | --- | --- | --- |
  * | `runServe --live` | Web profile | 端點收到 `Bearer fake-from-file`；起動訊息講來自受管檔 | `serve.ts` 的 `store: true`、`credentials.ts` 的 `resolve` 順序 |
+ * | `runServe --live`，受管檔多一個頂層鍵或只剩註解（#1507） | Web profile | 起得來；stderr 講鍵名、不帶值；`records` 仍然起不來 | `credentials.ts` 的 `ignoredKeys` 與空文件那兩段 |
  * | `runCli --live` | headless profile | 端點收到 `Bearer fake-from-env`；受管檔 0644 也照樣起得來（不讀它），serve 則起不來 | `cli.ts` 的 `store: false` |
  *
  * **零憑證、零外部連線**：key 是假值，端點在 loopback。
@@ -201,6 +202,85 @@ describe('serve（Web profile）：受管檔最優先', () => {
     const file = managedFile(where.home, FROM_FILE, 0o644);
     vi.stubEnv(LIVE_API_KEY_ENV, FROM_ENV);
     await expect(serve(where, [])).rejects.toThrow(`chmod 600 ${file}`);
+  }, 60000);
+});
+
+describe('serve：受管檔多一個別的工具寫的頂層鍵、或只剩註解，照樣起得來（#1507，對齊 dsh alpha.5）', () => {
+  /** 日誌之外，憑證服務的警告走 stderr（`loadLiveLaunchEnv` 沒傳 `warn`，預設就是 stderr）。 */
+  function captureStderr(): { text: () => string; restore: () => void } {
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stderr, 'write').mockImplementation(((
+      chunk: string | Uint8Array,
+    ) => {
+      chunks.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+      return true;
+    }) as typeof process.stderr.write);
+    return { text: () => chunks.join(''), restore: () => spy.mockRestore() };
+  }
+
+  it('多一個頂層鍵：serve 起得來、端點收到受管檔那把；stderr 講那個鍵名，不帶值', async () => {
+    const where = layout();
+    const file = join(where.home, CREDENTIALS_FILE);
+    writeFileSync(
+      file,
+      `version: 1\ncomment: ${FROM_ENV}\nrefs:\n  ${LIVE_API_KEY_ENV}: ${FROM_FILE}\n`,
+      { mode: 0o600 },
+    );
+    chmodSync(file, 0o600);
+    delete process.env[LIVE_API_KEY_ENV];
+    const stderr = captureStderr();
+    try {
+      running = await serve(where, []);
+      const client = await serveClient(running);
+      const events = await client.openEvents('t1');
+      await client.runStart('t1', '嗨');
+      await foldTurn(events);
+      await events.return?.(undefined);
+    } finally {
+      stderr.restore();
+    }
+
+    expect(new Set(upstream!.auth)).toEqual(new Set([`Bearer ${FROM_FILE}`]));
+    expect(stderr.text()).toContain('"comment"');
+    expect(stderr.text()).toContain(file);
+    expect(stderr.text()).not.toContain(FROM_ENV);
+    expect(stderr.text()).not.toContain(FROM_FILE);
+  }, 60000);
+
+  it('整份只剩註解（唯一一把 key 註解掉、改用環境變數）：serve 起得來，用啟動環境那把', async () => {
+    const where = layout();
+    const file = join(where.home, CREDENTIALS_FILE);
+    writeFileSync(file, `# 先停用，改用環境變數\n# ${LIVE_API_KEY_ENV}: ${FROM_FILE}\n`, {
+      mode: 0o600,
+    });
+    chmodSync(file, 0o600);
+    vi.stubEnv(LIVE_API_KEY_ENV, FROM_ENV);
+    const stderr = captureStderr();
+    const lines: string[] = [];
+    try {
+      running = await serve(where, lines);
+      const client = await serveClient(running);
+      const events = await client.openEvents('t1');
+      await client.runStart('t1', '嗨');
+      await foldTurn(events);
+      await events.return?.(undefined);
+    } finally {
+      stderr.restore();
+    }
+
+    expect(new Set(upstream!.auth)).toEqual(new Set([`Bearer ${FROM_ENV}`]));
+    expect(lines).toContain(`${LIVE_API_KEY_ENV}：來自啟動環境`);
+    expect(stderr.text()).toBe('');
+  }, 60000);
+
+  it('records 照舊拒絕：serve 起不來，訊息講 nexus 沒有這種憑證', async () => {
+    const where = layout();
+    const file = join(where.home, CREDENTIALS_FILE);
+    writeFileSync(file, `version: 1\nrecords: {}\nrefs:\n  ${LIVE_API_KEY_ENV}: ${FROM_FILE}\n`, {
+      mode: 0o600,
+    });
+    chmodSync(file, 0o600);
+    await expect(serve(where, [])).rejects.toThrow('nexus 沒有 records 這種憑證');
   }, 60000);
 });
 

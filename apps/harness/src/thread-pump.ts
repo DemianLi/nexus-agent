@@ -176,6 +176,7 @@ import {
   type ParsedReferencedText,
   type SessionReferenceReader,
 } from './session-reference.js';
+import type { SessionReferencePolicy } from './session-reference-budget.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import { isBackgroundAddress } from './background-run-id.js';
 import { capToolResultMeta, toolResultText } from './tool-result-text.js';
@@ -1378,6 +1379,8 @@ export class ThreadPump {
   readonly #turnClock: TurnClock | undefined;
   /** 這條 thread 自己的外溢存檔服務（#1553 N0948），見建構參數 `spillStore`。 */
   readonly #spillStore: SpillStore | undefined;
+  /** 引用別的會話的上限與預算（#1573 N0862），見建構參數 `referencePolicy`。 */
+  readonly #referencePolicy: SessionReferencePolicy | undefined;
   /** 有一件正在跑（一輪 run，或一次收回）。 */
   #busy = false;
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
@@ -1445,6 +1448,9 @@ export class ThreadPump {
    * @param spillStore - 這條 thread 自己的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948）：
    *   引用別的會話被截斷時，全文存進這裡、模型拿到讀得回的位址（dsh `session-reference/src/index.ts:348-352`）。同一份實例也給
    *   外溢層與搜尋上限用（`agent-factory.ts`）。**省略即沒有地方存**，說明裡寫 `storage-not-configured`。
+   * @param referencePolicy - 引用別的會話的上限與預算（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862，
+   *   `session-reference` 那一列）：一則訊息最多幾條，與每條來源的位元組預算（跟著這條 thread 下一步會走的模型）。
+   *   **省略即 3 條、每條 64 KiB**（`MAX_SESSION_REFERENCES`、`DEFAULT_MAX_REFERENCE_BYTES`），同今天。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1465,9 +1471,11 @@ export class ThreadPump {
     onTurnFailed?: (report: TurnFailedReport) => void,
     turnClock?: TurnClock,
     spillStore?: SpillStore,
+    referencePolicy?: SessionReferencePolicy,
   ) {
     this.#turnClock = turnClock;
     this.#spillStore = spillStore;
+    this.#referencePolicy = referencePolicy;
     this.#downlinkMaxBytes = downlinkMaxBytes;
     this.#onTurnFailed = onTurnFailed;
     this.#agent = agent;
@@ -2639,7 +2647,7 @@ export class ThreadPump {
    * @throws {@link SessionReferenceError} 網址壞、引用自己、超過上限、或這條 thread 不收引用。
    */
   referencedText(text: string): ParsedReferencedText {
-    const parsed = parseReferencedText(text, this.#threadId);
+    const parsed = parseReferencedText(text, this.#threadId, this.#referencePolicy?.maxReferences);
     if (
       parsed.references.length > 0 &&
       (this.#referenceReader === undefined || !this.#stepInboxMounted)
@@ -2724,7 +2732,13 @@ export class ThreadPump {
     ];
     const reader = this.#referenceReader;
     const signal = current.controller.signal;
-    const prepared = jobs.some((job) => job.references.length > 0)
+    const hasReferences = jobs.some((job) => job.references.length > 0);
+    // **這一批的預算在第一個 await 之前同步算一次，整批共用**（#1573 N0862）：開場那句與插話走同一處（step-inbox 的 `claim`），
+    // 同一批的兩句不會各算各的。路由用控制器的 `next()`（純讀日誌），不叫 `assembleStep()`／`takeStepRoute()`，見
+    // `ModelSelectionHost.nextContextWindow`。領走發生在這一步的 `beforeModel` 裡、早於後面的 `assembleStep()`，所以這一步的路由
+    // 還沒定，見 `session-reference.ts` 檔頭偏離 5。沒有引用就不算，免得每一步都掃一次日誌。
+    const maxReferenceBytes = hasReferences ? this.#referencePolicy?.budgetBytes() : undefined;
+    const prepared = hasReferences
       ? await Promise.all(
           jobs.map((job) =>
             job.references.length === 0
@@ -2740,6 +2754,7 @@ export class ThreadPump {
                     })(),
                   messageId: job.snapshotId,
                   signal,
+                  ...(maxReferenceBytes !== undefined && { maxReferenceBytes }),
                   ...(this.#spillStore !== undefined && { spillStore: this.#spillStore }),
                 }),
           ),

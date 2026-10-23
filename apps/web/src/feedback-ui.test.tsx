@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '@/App';
 import { TRACE_REPLY_UNPLACED_TEXT } from '@/components/trace/panel';
 import { FEEDBACK_COPY } from '@/lib/feedback';
+import { stubCmdkLayout } from '@/test/cmdk';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
 /**
@@ -133,7 +134,11 @@ function fakeClient(
       code: 'not_supported',
       message: '這一檔沒有接軌跡細節',
     }),
-    slashList: async () => ({ kind: 'ok', commands: [] }),
+    // 真的伺服器上 `/feedback` 是回饋插件登記的命令，宣告了 `input`；開頭的字在清單上才走 `slash.run`（#1929）。
+    slashList: async () => ({
+      kind: 'ok',
+      commands: [{ name: 'feedback', description: '回饋', input: { hint: '<內容>' } }],
+    }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
       return { kind: 'unknown' };
@@ -390,6 +395,8 @@ describe('讀回評分（list，#382）', () => {
 });
 
 describe('伺服器不收評分（not_supported，#1849）', () => {
+  // `/feedback` 列在命令清單上，打它會開選單（#1929）。
+  beforeEach(stubCmdkLayout);
   const buttons = () =>
     [FEEDBACK_COPY.like, FEEDBACK_COPY.dislike].map((name) =>
       within(entryOf('收工了。')).getByRole('button', { name }),
@@ -465,6 +472,8 @@ describe('伺服器不收評分（not_supported，#1849）', () => {
 });
 
 describe('/feedback', () => {
+  // 同上：`/feedback` 列在命令清單上（#1929）。
+  beforeEach(stubCmdkLayout);
   it('只打 /feedback 開同一個框、不走 slash.run；空著送也記一則', async () => {
     seq = 0;
     const fake = fakeClient();

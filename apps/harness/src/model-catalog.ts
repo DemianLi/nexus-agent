@@ -224,6 +224,18 @@ export function acceptsImages(entry: ModelEntry): ImageSupport {
 }
 
 /**
+ * 這一筆**宣告了** `off` 那一級（`reasoningEfforts` 有 `off` 這個鍵）。看宣告，不看值：`off: null` 在 dsh 的意思是「支援，但什麼都不送」。
+ * 標題請求紀錄的 `reasoningEffort` 與 {@link thinkingOffBody} 共用這一個判準，記的跟送的出自同一處（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
+ *
+ * @param entry - 型錄條目。
+ * @returns 宣告了就 `true`；沒宣告、`reasoningEfforts` 是 `false`（不推理）或沒寫，都是 `false`。
+ */
+export function declaresOffEffort(entry: ModelEntry): boolean {
+  const efforts = entry.reasoningEfforts;
+  return efforts !== undefined && efforts !== false && Object.hasOwn(efforts, 'off');
+}
+
+/**
  * 要關掉推理時加進請求 body 的東西：`off` 那一級加上 `compat.chatTemplateKwargs`，把 `thinking.enabled` 解成 `false`。
  * 沒宣告 `off` 那一級、不推理的模型、或沒有 chat template 參數，都是空物件（什麼都不加）。
  *
@@ -231,8 +243,7 @@ export function acceptsImages(entry: ModelEntry): ImageSupport {
  * @returns 要疊進請求 body 的頂層欄位。
  */
 export function thinkingOffBody(entry: ModelEntry): Record<string, unknown> {
-  const efforts = entry.reasoningEfforts;
-  if (efforts === undefined || efforts === false || !Object.hasOwn(efforts, 'off')) return {};
+  if (!declaresOffEffort(entry)) return {};
   const template = entry.compat?.chatTemplateKwargs;
   if (template === undefined) return {};
   const resolved: Record<string, unknown> = {};

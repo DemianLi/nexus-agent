@@ -177,6 +177,8 @@ interface CallRecord {
   searchError: SearchErrorCode | undefined;
   /** backend 的讀寫改失敗了，是哪一種（{@link noteFsError}）。 */
   fsError: FsErrorCode | undefined;
+  /** 搜尋成功、但這次呼叫累計有幾條路徑讀不到而被略過（{@link noteSearchSkipped}）。 */
+  searchSkipped: number;
 }
 
 /**
@@ -213,6 +215,23 @@ export function noteSandboxDenial(): void {
 export function noteSearchError(code: SearchErrorCode): void {
   const record = currentCall.getStore();
   if (record !== undefined) record.searchError = code;
+}
+
+/**
+ * 搜尋成功了，但有路徑讀不到、被略過（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）：backend 在回結果之前
+ * 叫它，`wrapToolCall` 在 `grep`／`glob` 成功的結果後面接上一句「N 條路徑讀不到、已略過」。基座的 `GrepResult`／`GlobResult`
+ * 沒有地方放這種話（`truncated` 會讓基座接上「hit the maximum match count」，說的是別的事），所以走跟 {@link noteSearchError}
+ * 同一條載體。
+ *
+ * **記的是數字，句子在 middleware 組**：基座的 `CompositeBackend.grep('/')` 一次工具呼叫會依序搜預設 backend 與每一條 route，
+ * 每一個都可能略過一些；數字累加，各自記一句的話後面的會蓋掉前面的、N 少算。也讓 core 不必帶任意文字。
+ * 不在任何一次工具呼叫裡、或 `count` 不是正整數時什麼都不做。
+ *
+ * @param count - 這一次 backend 呼叫略過幾條路徑。
+ */
+export function noteSearchSkipped(count: number): void {
+  const record = currentCall.getStore();
+  if (record !== undefined && Number.isInteger(count) && count > 0) record.searchSkipped += count;
 }
 
 /**
@@ -284,6 +303,42 @@ function withSandboxCode<T>(result: T, record: CallRecord): T {
   return markToolError(result, { name: 'FsError', code: FS_SANDBOX_DENIED });
 }
 
+/** 略過的路徑數 → 接在結果後面的那一句。只講數量，路徑是主機上別人的檔名。 */
+function skippedNotice(count: number): string {
+  const noun = count === 1 ? 'path was' : 'paths were';
+  return `${String(count)} ${noun} unreadable (permission denied) and skipped; results cover only the readable files`;
+}
+
+/**
+ * 搜尋成功而 backend 記了略過幾條路徑（{@link noteSearchSkipped}）：把那句接在基座排好的結果後面，其餘每一格原樣帶過去。
+ * 只管 `grep`／`glob`；錯誤的結果、不是文字的內容（文字區塊以外的形狀）原樣交出，不猜。
+ */
+function withSkippedNotice<T>(result: T, toolName: string, record: CallRecord): T {
+  if (record.searchSkipped === 0 || (toolName !== 'grep' && toolName !== 'glob')) return result;
+  if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
+  const suffix = `\n\n(${skippedNotice(record.searchSkipped)})`;
+  let content: ToolMessage['content'];
+  if (typeof result.content === 'string') {
+    content = `${result.content}${suffix}`;
+  } else if (
+    result.content.every((block) => (block as { readonly type?: unknown }).type === 'text')
+  ) {
+    content = [...result.content, { type: 'text', text: suffix }];
+  } else {
+    return result;
+  }
+  return new ToolMessage({
+    content,
+    tool_call_id: result.tool_call_id,
+    name: result.name ?? toolName,
+    id: result.id,
+    status: result.status,
+    artifact: result.artifact,
+    additional_kwargs: result.additional_kwargs,
+    response_metadata: result.response_metadata,
+  }) as unknown as T;
+}
+
 /**
  * 造一顆把檔案工具的失敗標成錯誤的 middleware。**無狀態**：記錄每次呼叫各一份，root 與每個
  * subagent 共用同一顆。
@@ -302,11 +357,15 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
         signal: (request.runtime as { readonly signal?: AbortSignal } | undefined)?.signal,
         searchError: undefined,
         fsError: undefined,
+        searchSkipped: 0,
       };
       const result = await currentCall.run(record, () => handler(request));
-      const method = FS_TOOL_PRIMARY_METHOD[resolveToolName(request)];
+      const toolName = resolveToolName(request);
+      const method = FS_TOOL_PRIMARY_METHOD[toolName];
       if (method === undefined) return withSandboxCode(result, record);
-      if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) return result;
+      if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) {
+        return withSkippedNotice(result, toolName, record);
+      }
       const error = record.sandboxDenied
         ? { name: 'FsError', code: FS_SANDBOX_DENIED }
         : record.searchError !== undefined

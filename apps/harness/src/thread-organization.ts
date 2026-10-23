@@ -28,6 +28,13 @@
  *   斷電後也不會退回上一版。
  * - **開檔在啟動時**（`serve.ts`），壞檔就讓 serve 起不來，而不是第一個釘選請求才失敗——跟瀏覽器密鑰那一把一樣。
  *
+ * **不建通用 storage domain**：這是 demian 在 [#1576](https://github.com/DemianLi/nexus-agent/issues/1576) 的拍板（2026-10-17），
+ * 不是 AGENTS.md 偏離規則的理由 1 或 2。dsh 的 `storage-domain` 替 `WorkspaceRegistry` 做的事（單一寫入鏈、先落盤再換記憶體、
+ * 鏈上讀改寫、open 驗證）本檔都手寫了；home 底下被讀回來的狀態檔裡，形狀是 domain 的 global／kv 的只有這一個消費者，
+ * 建一層抽象沒有第二個使用者。重開條件（任一成立）：出現第二個 kv／global 形狀的耐久狀態（排程、投影快取、workspace registry）；
+ * 要把釘選／封存的變更推給同一個使用者的其他分頁（dsh 靠 `domain/changed`）。理由與完整條件見
+ * `.docs/plugin-architecture-gap-survey.md` 的〈storage 為什麼不建、什麼時候重開〉。
+ *
  * ## 單一寫入者
  *
  * 記憶體裡的集合是真相，檔案是它的耐久副本：兩個 serve 行程共用同一個 home 時，後寫的會蓋掉先寫的（各自的記憶體互不知道）。
@@ -177,7 +184,8 @@ export class ThreadOrganization {
     if (state === undefined) {
       throw new Error(
         `會話整理檔 ${file} 的格式認不得（要 { "version": 1, "pinnedThreadIds": […], "archivedThreadIds": […] }，` +
-          `兩個集合各自不重複、彼此不重疊）；確認它不是別的東西寫的。要重設就刪掉它再重啟 serve——釘選與封存會全部清空。`,
+          `兩個集合各自不重複、彼此不重疊）；確認它不是別的東西寫的。先把整個檔備份起來（例如 cp ${file} ${file}.bak-$(date +%s)，備份一樣只給擁有者讀）。` +
+          `備份之後要重設，就刪掉它再重啟 serve——釘選與封存會全部清空。`,
       );
     }
     return new ThreadOrganization(home, state);

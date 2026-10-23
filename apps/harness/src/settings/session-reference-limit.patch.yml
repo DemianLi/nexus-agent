@@ -1,0 +1,9 @@
+# 把跨會話引用的三個上限改掉（#1573 N0862 驗收 C、E、F：「在設定裡覆寫會生效」）。
+# **三個值非得都不是預設不可**：出廠那一列與 schema 預設的 `candidateLimit` 是同一個 50、`maxReferences` 是同一個 3（dsh 的值），
+# `maxReferenceBytes` 預設不存在（照模型窗口算），拿預設去驗量不出東西。5、2、1000 都小到一眼看得出差別。
+# 讀它的是 `serve-session-references.test.ts`。
+- id: session-reference
+  config:
+    candidateLimit: 5
+    maxReferences: 2
+    maxReferenceBytes: 1000

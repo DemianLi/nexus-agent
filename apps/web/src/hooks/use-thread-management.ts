@@ -64,6 +64,48 @@ async function settle<V>(
 }
 
 /**
+ * server 受理過的標題，按 id（`useThreadManagement` 的改名與分叉的改名共用一份，#1581）。放在 hook 外面，是因為列表沒帶
+ * 兩個集合時整個會話管理是 `undefined`，分叉照樣要改名、照樣要頂著。
+ */
+export interface AcceptedTitles {
+  readonly renamed: ReadonlyMap<string, string>;
+  readonly accept: (threadId: string, title: string) => void;
+}
+
+export function useAcceptedTitles(): AcceptedTitles {
+  const [renamed, setRenamed] = useState<ReadonlyMap<string, string>>(NO_TITLES);
+  const accept = useCallback((threadId: string, title: string) => {
+    setRenamed((previous) => new Map(previous).set(threadId, title));
+  }, []);
+  return useMemo(() => ({ renamed, accept }), [renamed, accept]);
+}
+
+/**
+ * 改名一條 thread，回 server 受理的標題或一句人話。標題不正規化：呼叫端給的就是要送的（分叉的遞增名字由來源標題算出來）。
+ */
+export async function renameThread(
+  client: WireClient,
+  threadId: string,
+  title: string,
+): Promise<{ readonly title: string } | { readonly message: string }> {
+  const result = await settle(() => client.threadRename(threadId, title));
+  return 'message' in result ? { message: result.message } : { title: result.value.title };
+}
+
+/**
+ * 從 `messageId` 那則回覆所在的那一輪分出一條新 thread（#1581），回子 thread 的 id 或一句人話：名額滿了換成
+ * `THREAD_AT_CAPACITY_TEXT`、`fork_unavailable` 由 {@link explainThreadFailure} 講，其餘同這一族。
+ */
+export async function forkThread(
+  client: WireClient,
+  threadId: string,
+  messageId: string,
+): Promise<{ readonly threadId: string } | { readonly message: string }> {
+  const result = await settle(() => client.threadFork(threadId, messageId));
+  return 'message' in result ? { message: result.message } : { threadId: result.value.threadId };
+}
+
+/**
  * 側欄的釘選、封存、改名（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。回 `undefined` 就是這一檔沒有這個功能：
  * 列表沒帶釘選與封存兩個集合（還沒實作的 server）、還在讀、或讀失敗，側欄什麼都不多畫。規則見 `lib/thread-management.ts`。
  *
@@ -74,6 +116,7 @@ async function settle<V>(
 export function useThreadManagement(
   client: WireClient,
   directory: ThreadDirectory,
+  accepted: AcceptedTitles,
 ): ThreadManagement | undefined {
   const { listing, refresh } = directory;
   const base = listing.kind === 'ok' ? listing.result : undefined;
@@ -87,7 +130,7 @@ export function useThreadManagement(
   const current = overlay.base === base ? overlay : undefined;
   const tickets = useRef({ pinned: 0, archived: 0 });
   // server 受理過的標題，按 id；跨列表留著（見 `onRename`）。
-  const [renamed, setRenamed] = useState<ReadonlyMap<string, string>>(NO_TITLES);
+  const { renamed, accept } = accepted;
 
   const patch = useCallback((update: (previous: Overlay) => Overlay) => {
     setOverlay((previous) => {
@@ -161,14 +204,14 @@ export function useThreadManagement(
     async (threadId: string, raw: string) => {
       const title = normalizeTitle(raw);
       if (title === undefined) return '標題不能是空的。';
-      const result = await settle(() => client.threadRename(threadId, title));
+      const result = await renameThread(client, threadId, title);
       if ('message' in result) return result.message;
       // 用 server 受理的標題頂著，**不重抓列表**：`GET /threads` 讀的是落盤的那份，落盤是非同步的，這時候重抓回來的多半
       // 還是舊標題，會把剛改好的蓋回去。頂著的標題留到列表自己追上（列上的標題等於它）為止；目前這條的標題另走即時推送。
-      setRenamed((previous) => new Map(previous).set(threadId, result.value.title));
+      accept(threadId, result.title);
       return undefined;
     },
-    [client],
+    [client, accept],
   );
 
   const pinned = current?.pinned ?? sets?.pinned;

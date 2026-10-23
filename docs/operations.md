@@ -108,7 +108,8 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 **3. 出廠兩個組合，加上部署方可以加回的全開，都是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
 動手；它們不涵蓋子行程與網路，對讀也幾乎沒有作用（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
 檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
-並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界。
+並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界；
+怎麼加、怎麼確認做到了，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉。
 
 ### serve：key 與 home 不能跟工作區重疊
 
@@ -158,6 +159,257 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
   沒有 header 可以記根，所以新 thread 的可寫根是**記憶體裡的虛擬檔案系統，重啟就沒了**；
   `--workspace` 仍然以 `/shared` 唯讀掛著；啟動會印一行「[私有根] 會話日誌落盤關掉…重啟就沒了…」讓部署方知道。這一格沒有圍堵，`/permission` 回「不適用」；
   同時給 `--sandbox` **啟動失敗**（沒有東西可以圍，說的是「要配落盤」）。
+
+## 多人共用主機的部署清單
+
+[#1678](https://github.com/DemianLi/nexus-agent/issues/1678)。給要把 serve 架在多人共用主機上的管理者，照下面七條做。**這一節全是部署層的防護，程式碼這一層不提供 OS 級隔離**：
+serve 起的每個子行程（git、`rg`、以 stdio 起的 MCP server）都跟 serve 用同一個 OS 帳號，程式碼裡沒有任何切換帳號的地方；檔案 fence 與權限組合是政策圍欄，不是隔離
+（見〈檔案圍堵〉的〈這道 fence 管不到的〉）。同屬部署層、但不在這七條裡的是行程的記憶體上限（`MemoryMax` 與 `--max-old-space-size` 成對，
+[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)），見〈[用 systemd 常駐](#用-systemd-常駐)〉的「記憶體上限」那一條。**按人隔離不在這一節**：同一個 serve 帳號底下，OS 層分不開網頁上的使用者，應用層的按人隔離是 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的事。
+
+形狀是**一台 serve、一個專屬帳號、多人經瀏覽器共用**，帳號名沿用〈用 systemd 常駐〉的 `nexus-agent`。每一條寫「做什麼、為什麼、怎麼確認」；
+建法在別處已經寫過的（第 1、2、3 條的前半），這裡連過去、只補怎麼確認，不抄。下面的指令在 Linux 上寫（Debian／Ubuntu 的 `useradd`、GNU `find`），其他發行版找對應的指令。
+
+### 1. serve 用專屬、不能登入的帳號
+
+**做什麼**
+
+- 建一個系統帳號，沒有密碼、沒有登入 shell，不跟別的服務或人共用。用 systemd 的話，〈用 systemd 常駐〉的第一個指令與 `User=` 已經做到；不用 systemd 的部署要自己做到同等條件。
+- serve、`plugin` 寫入口、`--dump-config` 都以它的身分、帶 serve 用的那個 `NEXUS_AGENT_HOME` 跑（`sudo -u nexus-agent …`）。以別的帳號跑，寫出來的檔擁有者就不是它。
+- 不以 root 跑。
+- 程式碼與安裝目錄的擁有者不是它，它只能讀。serve 的工作目錄指到它自己擁有的目錄（systemd 範本是 home），不指到安裝樹。
+
+**為什麼**
+
+- serve 起的子行程都跟它同一個帳號，home 的 `0600`／`0700` 只擋得住別的帳號，所以這個帳號只做這一件事。
+- 套件名引用的插件不檢查權限，理由是它們跟出貨的 `cordis.yml` 在同一條邊界上（〈plugin 清單〉）；這個前提要求 serve 帳號改不了安裝樹。
+- 第 4 條的出口限制要以帳號為條件，先要有專屬帳號。
+- 變更紀錄記的操作者是有效帳號加 `SUDO_USER`（〈後台改清單〉），是自報、不是身分認證；要能追責，靠主機本身的存取控制，也就是誰能登入、誰能 `sudo`。另設安裝帳號與它的 sudo 規則屬 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428)，這一條不寫。
+
+**怎麼確認**
+
+```bash
+ps -o user:32= -p "$(systemctl show -p MainPID --value nexus-agent)"   # nexus-agent（user:32 才不會把長帳號名截成 8 個字）
+getent passwd nexus-agent                                           # 最後一欄是 nologin 或 false
+sudo passwd -S nexus-agent                                          # 第二欄是 L（鎖住；RHEL 系印 LK）。NP 是空密碼，不算
+su - nexus-agent                                                    # 被拒，不給 shell
+sudo -u nexus-agent test -w /opt/nexus-agent/current || echo 唯讀   # 印「唯讀」
+```
+
+### 2. harness home 的擁有者與權限
+
+**做什麼**
+
+- 明設 `NEXUS_AGENT_HOME`，指到 serve 帳號擁有、留得住的位置。系統帳號可能沒有家目錄，不設就落到 `homedir()` 底下的 `.nexus-agent`。
+- 先以 `0700` 建好，擁有者是 serve 帳號。**serve 不會收緊已經存在的目錄**：它只在自己新建目錄時給 `0700`，home 本身它不 `chmod`，預先建成 `0755` 的 home 就一直是 `0755`。
+- 用 systemd 的話，前兩點〈用 systemd 常駐〉已經做到（`install -d -m 0700`、`StateDirectoryMode=0700`、`Environment=NEXUS_AGENT_HOME=`）；不用 systemd 的部署自己做到。
+- key 放受管憑證檔、`chmod 600`（〈金鑰放哪裡〉），不放 `.env`，也不放 serve 的啟動環境。**兩份 `.env` 讀的時候不查權限**；受管檔與瀏覽器會話簽章、設定雜湊這類密鑰檔才查。
+- 要加插件，優先裝成套件、用套件名引用，走 serve 帳號只能讀的安裝樹。改用檔案路徑 `insert` 的模組與 patch 檔，要屬於 serve 帳號、群組與其他人不可寫，每一層上層目錄也不可寫（〈plugin 清單〉）：
+  放在 home 與工作區以外的專用目錄，只在維護時由管理者改。
+
+**為什麼**
+
+- home 底下有會話日誌、瀏覽器會話簽章鍵、設定雜湊鍵、受管憑證、所有人的附件，以及每條對話的私有可寫根（`thread-roots/`）。除了 `thread-roots/` 之外的內容見〈升級與回滾〉的〈home 底下有什麼〉。
+- 同一個帳號底下的 `0700` 分不開人（見上面第 1 條），它擋的是同一台主機上的其他帳號。
+- 從舊版升上來時，啟動環境裡同名的舊 key 以前會蓋過受管檔、現在受管檔優先，見〈[金鑰放哪裡](#金鑰放哪裡)〉的「從舊版升上來的遷移」那一條。
+
+**怎麼確認**
+
+```bash
+sudo stat -c '%U %a %n' /var/lib/nexus-agent                                        # nexus-agent 700 /var/lib/nexus-agent
+sudo find /var/lib/nexus-agent -path '/var/lib/nexus-agent/thread-roots/*/*' -prune -o \( ! -user nexus-agent -o -perm /077 \) -print   # 沒有輸出
+```
+
+`-path … -prune` 把每條對話私有根**裡面**的東西排除在外：serve 只替私有根本身（`thread-roots/` 與 `thread-<雜湊>/` 兩層）設 `0700`，
+模型在根裡建的巢狀目錄是 `0755`、檔案用預設 mode，不排除的話，只要有人讓模型寫過巢狀路徑，這條 `find` 就會列出它們。
+那些內容受上一層的 `0700` 保護；私有根本身的擁有者或 mode 不對，仍然會被列出來。
+serve 開頭「會話日誌：」那一行印的目錄，要在這個 home 底下。
+
+### 3. 工作區的擁有者與權限，與 home 分開
+
+**做什麼**
+
+- serve 上 `--workspace` 是所有對話共用的唯讀參考區，模型的可寫根在 home 底下（〈serve：每條 thread 一個私有可寫根〉），所以這一條管的是「放什麼進去」。
+- 擁有者是 serve 帳號（〈用 systemd 常駐〉已經 `chown`），群組與其他人不可寫。
+- 只放這台 serve 的每位使用者都可以讀的東西。
+- 不放指向工作區外的目錄連結。
+- 工作區跟 home、跟任何一份 `.env` 的所在目錄都不重疊。serve 啟動時已經擋（〈serve：key 與 home 不能跟工作區重疊〉），這裡不重述規則。
+
+**為什麼**
+
+- 讀取不受 fence 管，工作區裡的目錄連結讀得穿到根外（〈這道 fence 管不到的〉第 1 條）；啟動時的重疊檢查只看路徑本身，擋不到連結。
+- 共用區誰的模型都讀得到，放進去的東西等於對所有使用者公開。
+
+**怎麼確認**
+
+```bash
+sudo find /srv/nexus-agent/workspace -perm /022 -print                                # 沒有輸出
+sudo find /srv/nexus-agent/workspace -type l -exec readlink -f {} +                   # 每一條都落在工作區裡
+realpath /srv/nexus-agent/workspace /var/lib/nexus-agent                              # 互不包含
+```
+
+### 4. 主機層的出口控制
+
+**做什麼**
+
+以 serve 帳號為條件，預設拒絕出站，只放行：
+
+- 模型端點，也就是 `live-model` 那一列的 `baseUrl`（出廠是 `https://integrate.api.nvidia.com/v1`，指到公司內部閘道就放行那個閘道）；
+- 設了代理時，只放行代理（〈經代理連外〉）；
+- HTTP 傳輸的 MCP server；
+- 開了遙測時的 OTLP 收集器（它直連，不經代理）；
+- DNS 與 loopback。
+
+寫法用以帳號為條件的主機防火牆出站規則：nftables 的 `meta skuid`、iptables 的 `-m owner --uid-owner`。
+systemd 的 `IPAddressDeny=`／`IPAddressAllow=` 限制的是單元的 cgroup，用 `sudo -u nexus-agent curl` 起的行程不在那個單元裡，下面的確認量不到它，所以這一條不點名它。
+文件不給完整規則：名單內容每家不同，寫錯發行版的規則比不寫更糟。在容器裡跑的 MCP server 的網路，由第 5 條管。
+
+**為什麼**
+
+- 內網的重點是防止橫向打到其他內部系統，不是斷外網。
+- 程式碼這一層沒有網路圍欄：三組權限組合不涵蓋網路（〈這道 fence 管不到的〉第 3 條）。
+
+**怎麼確認**
+
+```bash
+sudo -u nexus-agent curl -sS -m 5 -o /dev/null -w '%{http_code}\n' <模型端點的 baseUrl>   # 連得上
+sudo -u nexus-agent curl -sS -m 5 <名單外的內部位址>                                       # 連不上
+curl -sS -m 5 <名單外的內部位址>                                                          # 用別的帳號跑，結果不受這條規則影響
+```
+
+最後一行證明規則是以帳號為條件，而不是整台機器一起封。
+
+### 5. MCP stdio server 怎麼圍起來
+
+以 stdio 起的 MCP server 是部署方接上的任意程式，**不在 fence 底下**（〈這道 fence 管不到的〉第 2 條）：環境有清洗（名字像憑證的與 `NEXUS_*` 拿掉），但檔案系統與網路不受限。要圍它，只能從啟動它的方式下手。
+
+**做什麼**
+
+以 rootless 容器為主，另一個帳號為備案。實機驗證的範圍見這一條最後的〈驗過什麼〉；寫法照下面「怎麼確認」自己驗過再上線。
+
+容器的形狀（寫在 patch 檔裡，`insert` 一列 MCP；起法見〈用 systemd 常駐〉。`--dump-config` 不載 plugin，驗不到這一列的欄位，載得進來與否看 serve 起動後的快照）：
+
+<!-- mcp-container-example:begin（apps/harness/src/operations-mcp-container.test.ts 讀這一段，改了要一起過） -->
+```yaml
+- insert:
+    - id: mcp-crm
+      name: '@nexus/plugin-mcp'
+      config:
+        serverName: crm
+        connection:
+          transport: stdio
+          command: podman
+          env:
+            HOME: /var/lib/nexus-agent-podman
+          args:
+            - run
+            - --rm
+            - -i
+            - --network=none
+            - --read-only
+            - --cap-drop=ALL
+            - --security-opt=no-new-privileges
+            - --http-proxy=false
+            - -e
+            - LANG
+            - registry.example.internal/mcp-crm:1.0.0
+```
+<!-- mcp-container-example:end -->
+
+- **`-i` 一定要給**：stdio 走的就是容器的標準輸入輸出。**不要加 `-t`**：配了 pty，stdio 就不是乾淨的 pipe。
+- **`--rm` 一定要給**：stdin 關掉時 server 要自己結束（〈會話日誌〉停 serve 那一段），容器跟著清掉。
+- **網路**：上面寫 `--network=none`，不需要網路的 server 用它。要連內部系統的，改成只通到那個系統的容器網路，並且把那個系統也放進第 4 條的名單。
+- **環境變數**：先到 `podman` 這個行程（清洗過的父環境加 `connection.env`），容器只拿得到 `-e NAME` 點名的。podman 預設把代理變數傳進容器（`--http-proxy` 預設開），而代理網址可能帶帳密，所以範例加 `--http-proxy=false`，要代理就用 `-e` 明寫。範例的 `LANG` 只是示範 `-e` 怎麼用。
+- **憑證**：範例不放憑證。需要憑證的 stdio server，今天沒有合規的寫法（MCP 的 README 要求秘密不寫進設定檔，而清洗會拿掉名字像憑證的變數），這一節不解。
+- **映像**：寫固定版本，從內網映像庫拉。
+- **rootless**：serve 帳號要配 `subuid`／`subgid`（`usermod --add-subuids … --add-subgids …`）。**podman 的 `HOME` 要跟 harness home 分開**：rootless 的映像與容器儲存預設落在 `$HOME` 底下，
+  放進 harness home 會讓第 2 條的 `find` 掃出幾萬筆不是 `0700` 的檔（實測 3.7 萬筆、1.2G），所以範例用 `connection.env` 給 `podman` 一個專用的 `HOME`（`/var/lib/nexus-agent-podman`，擁有者是 serve 帳號、`0700`）。
+  載映像、`podman ps -a` 之類的管理指令也要帶同一個 `HOME`：`sudo -u nexus-agent env HOME=/var/lib/nexus-agent-podman podman pull <映像>`（或 `podman load -i <檔>`）。
+  不帶的話讀到的是另一份空的儲存，查殘留永遠是空的，還會在 harness home 底下新建 `.local`、`.config`。
+  runtime 目錄不用另外給：系統服務沒有 user session、沒有 `XDG_RUNTIME_DIR`，實測 podman 照樣跑，runtime 檔落在 `/tmp/containers-user-<uid>` 與 `/tmp/podman-run-<uid>`（擁有者是 serve 帳號、`0700`）。
+  **不要為了這一條把 serve 帳號加進有特權的容器群組**，那會推翻第 1 條；用 rootless 的執行環境。
+- **容器的數量**：serve 上一列 stdio 的 MCP 就是一個容器，不管開了幾條對話；對話被逐出或關掉不收它，serve 收掉才收。改了那一列的設定，新對話連到新的一份、開著的照舊用舊的，舊的一份留到重啟（〈plugin 清單〉的 MCP 連線那一條）。
+- **必要的一步**：同一台 server 由所有使用者共用一條連線，server 記在連線上的狀態會跨人共用。接上之前，先確認那台 server 沒有連線級的狀態，否則就自己把 server 隔開。
+
+另一個帳號的形狀：`command: sudo`，`args: ['-n', '-u', '<server 專屬帳號>', '<server 的絕對路徑>']`。配一條 `NOPASSWD` 的 sudoers 規則，只准 serve 帳號以那個帳號跑那一支程式（`-n` 才不會卡在問密碼）。
+sudo 預設會重設環境，代理與 `connection.env` 的變數到不了 server，要在 sudoers 點名保留，例如 `Defaults:nexus-agent env_keep += "HTTPS_PROXY HTTP_PROXY NO_PROXY https_proxy http_proxy no_proxy NODE_USE_ENV_PROXY"`
+（serve 替子行程補的是 `NODE_USE_ENV_PROXY=1` 加上代理變數，大小寫都可能出現）；沒點名的變數不會傳到 server。
+這一條給 serve 帳號多一條 sudo 權限，而且網路要另外按**那個帳號**限制（第 4 條）：第 4 條的規則是以 serve 帳號為條件，server 專屬帳號不在它的範圍裡，要自己再補一條。
+
+**為什麼**
+
+容器同時限得住檔案與網路；換帳號只限得住檔案，網路要另外按帳號限。不論哪一種，MCP 的核准（〈plugin 清單〉的「MCP 的工具預設都要人核准」）管的是「這一次呼叫送不送出去」，這一條管的是「server 這個行程碰得到什麼」，兩者互補。
+
+**怎麼確認**
+
+- 照範例掛上之後，serve 起動不報這一列，工具列得出、叫得動（沒寫 `approval` 時整台都問，要先在畫面上按允許）。
+- serve 正常停、強制停之後，`sudo -u nexus-agent env HOME=/var/lib/nexus-agent-podman podman ps -a` 都沒有殘留（要帶那個 `HOME`，原因見上面「rootless」）。
+- 用 `--network=none` 時，在容器裡連不出去；容器裡 `env | grep -i proxy` 沒有輸出（或只有 `-e` 明寫的）。
+
+**驗過什麼**
+
+在 Linux arm64 容器（Debian bookworm、podman 4.3.1、nftables、OpenSSH 9.2）裡，用上面的範例 YAML 照這條的作法跑過一輪；沒有 systemd，serve 以 `sudo -u nexus-agent` 直接起：
+
+- 範例 YAML 原樣（只把映像名換成實驗室建的那個）經 patch 載入，serve 的 MCP 快照出現 `mcp-crm` 這一列，容器 `Up`。沒寫 `approval`，所以叫工具時 serve 發出核准請求，從連線端答「允許」之後，`mcp__crm__fetch_release_note` 回 `isError: false` 與工具的內容；日誌裡有 `approval/asked` 與 `approval/decided`（`allowed-once`）。
+- `SIGTERM` 與對 serve `SIGKILL` 之後，帶專用 `HOME` 的 `podman ps -a` 都是空的（server 在 stdin 關掉時自己結束）；不帶 `HOME` 的那條也是空的，所以它證明不了任何事。
+- `--network=none`：容器內連 `10.77.0.2` 得到 `ENETUNREACH`，預設網路連得上；預設的 podman 把 `HTTP_PROXY` 傳進容器（1 行），加 `--http-proxy=false` 之後是 0 行。
+- 備案：`sudo -n -u <專屬帳號> <node> <server>` 配 `NOPASSWD` 規則，server 起得來、`initialize` 有回應；規則之外的程式被拒（`a password is required`）；server 看到的 `USER` 是專屬帳號；有 `env_keep` 才收得到點名的代理變數，其他沒點名的變數收不到。專屬帳號不受第 4 條「以 serve 帳號為條件」的規則限制（實測連得到名單外的位址）。
+- 這次的環境限制：容器裡再起容器用不了 overlay，實驗是把儲存驅動設成 `vfs`（範例裡的旗標沒變）；備案只驗到 sudo 這一層，沒有經 serve 叫過工具；沒有 systemd，所以 systemd 單元底下的 runtime 目錄與 `ps -o user:32= -p $(systemctl show …)` 這種寫法沒有在這個環境跑過；`MemoryMax` 對容器的效果沒量。
+
+### 6. serve 綁的位址與前面那一層
+
+**今天的形狀**
+
+- serve 只綁 `127.0.0.1:8787`，沒有綁其他位址的旗標。同一台主機上的其他帳號連得到這個 port，擋人的是瀏覽器會話的 cookie（〈瀏覽器會話的安全約束〉）。
+- 唯一支援的連法是 SSH 轉 port（同一節）。信任圍欄只認 loopback 的 `Host`（[#387](https://github.com/DemianLi/nexus-agent/issues/387)），所以經反向代理連進來今天沒有支援，等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（`--host` 與 TLS）。
+
+**做什麼**
+
+- 不改綁位址、不架反向代理。
+- 只為了連 serve 而開的主機帳號，在 `sshd_config` 裡用 `Match User <帳號>` 收窄成「只能把本機 port 轉到 serve 那一個 port、不能執行指令」：
+  - `AllowTcpForwarding local`、`PermitOpen 127.0.0.1:8787`：只准本機轉發、只准轉到 serve。`PermitOpen` 逐字比對主機字串，寫成 `localhost:8787` 的轉發會被拒；
+  - `AllowStreamLocalForwarding no`：Unix socket 轉發由它管，預設是開的。不要靠 `PermitOpen` 順便擋：OpenSSH 9.2 實測 `PermitOpen` 會一起擋，其他版本沒有量；
+  - `PermitTTY no`、`ForceCommand /usr/sbin/nologin`：不給 shell、不給指令。`PermitTTY` 只管配不配 pty，擋不住 `ssh <主機> <指令>`；只把帳號的 shell 設成 nologin、不設 `ForceCommand`，擋得住指令，擋不住 `Subsystem sftp internal-sftp`（sftp 不經 shell），所以兩個都要設；
+  - `X11Forwarding no`、`AllowAgentForwarding no`、`PermitTunnel no`：關掉其他轉發。
+- serve 的輸出只讓管理者讀得到：啟動印的網址帶 token，會進 journal（〈用 systemd 常駐〉）；別把輸出轉存到別人讀得到的檔。
+- 帶 token 的網址由管理者交給該用的人。今天一個 serve 行程一顆 token，所有人共用同一顆；換成個人帳號登入是 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的事。
+- 閒著的死線要靠 sshd 收：`ClientAliveInterval`、`ClientAliveCountMax`（〈瀏覽器會話的安全約束〉）。
+
+**為什麼**
+
+連 serve 的人只需要轉 port，不需要在主機上執行程式。少給一種權限，要管的面就少一個。
+
+**怎麼確認**
+
+```bash
+sudo ss -ltnp | grep 8787                      # 只有 127.0.0.1:8787
+ssh -N -L 8787:127.0.0.1:8787 <收窄過的帳號>@<主機>    # 連得上，網頁打得開
+ssh <收窄過的帳號>@<主機>                          # 拿不到 shell
+ssh <收窄過的帳號>@<主機> id                       # 失敗
+ssh -N -L 9999:127.0.0.1:22 <收窄過的帳號>@<主機>  # 轉到別的 port：連線被重設，到不了
+ssh -N -L 9998:/tmp/x.sock <收窄過的帳號>@<主機>   # 轉到 Unix socket：連線被重設，到不了（/tmp/x.sock 換成主機上真有的 socket）
+echo ls | sftp <收窄過的帳號>@<主機>                # 失敗
+```
+
+`--host` 與 TLS 那一段留給 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)；到時「把 port 的可達範圍限制在需要它的內網段」（dsh 的 `public-deployments.zh.md` 也這樣要求）也要寫進來。
+
+### 7. 全開權限模式
+
+**做什麼**
+
+多人共用主機上，不要把 `danger-full-access` 加回權限表（`permission-presets` 的 `presets`），也不要用 `--sandbox danger-full-access` 起。出廠的表只有 `read-only` 與 `workspace-write`（〈權限組合：`/permission`〉）。
+
+**為什麼**
+
+- 三組權限組合是政策，不是隔離。
+- serve 多人共用，同一把 token 底下的每個人都切得到；加回去之後，每一個人都可以把自己的對話切成全開。
+
+**怎麼確認**
+
+- `/permission` 不帶引數，「切得過去的」只列 `read-only`、`workspace-write`；網頁的權限座也沒有全開。
+- `/permission danger-full-access` 回「認不得」，不切。
+
+這一條管的是會話層的切換。**經人核准的單次升級不經權限表**：模型呼叫 `request_sandbox_escalation`，使用者在核准卡上點頭之後，只有那一個檔的下一次變更跑在升上去的那一格，用完就沒了。這條路不在這一條的確認範圍。
 
 ## 會話日誌
 
@@ -326,7 +578,7 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **回不來的**：虛擬檔案系統、摘要器的會話歷史檔，以及停在核准點還沒答的那張卡——它們只在 graph state 裡。
 
-**工具結果暫存回得來**：過大的工具結果原文存在主機的私有目錄（預設 `<harness home>/tool-results/`，目錄 0700、檔案 0600，按會話分目錄），續接時預覽指的路徑照樣讀得到。保留天數與位置在 `tool-result-stash` 那一列設定（`cleanupPeriodDays` 預設 30，`0` 表示不清）；根目錄寫不進去時退回記憶體暫存並講一聲。
+**工具結果暫存回得來**：過大的工具結果原文存在主機的私有目錄（預設 `<harness home>/tool-results/`，目錄 0700、檔案 0600，按會話分目錄），續接時預覽指的路徑照樣讀得到。保留天數與位置在 `tool-result-stash` 那一列設定（`cleanupPeriodDays` 預設 30，`0` 表示不清；啟動時在背景清一次過期的檔，不擋服務，關機時等它清完）；根目錄寫不進去時退回記憶體暫存並講一聲。
 
 **上傳的檔案存在 harness home**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，只有 `serve`）：`POST /threads/:id/uploads` 把檔案的原始位元組存到 `<harness home>/attachments/v1/`，內容定址、同樣的內容只存一份；目錄 0700、檔案唯讀（0400），檔名清成葉名。回一張收據，只在收下它的那條 thread 有效、行程重開就失效。模型用 `read_file` 讀 `/attachments/<雜湊前兩碼>/<雜湊>/<檔名>`（唯讀路由，不是主機路徑）。**路由只露出這條 thread 的日誌引用過的檔案**（#1773，見下面「模型讀附件的範圍」）。沒有保留期清理，也沒有單檔大小上限（照 dsh `file-upload`）。**上傳不受請求本文上限管**：Node 轉接層（`wire-server.ts`）對上傳路由是串流——位元組從 socket 一路流進儲存，行程記憶體不跟著檔案大小漲（實測 480 MiB 的檔 RSS 約漲 80 MiB，有界；整份緩衝是近 2 GiB）。其他路由（JSON）先收完整份，本文上限 300 MiB（`DEFAULT_MAX_REQUEST_BODY_BYTES`，照 dsh `client/connection` 的 `http-bridge.ts`），超過回 413 並斷線。**所以 300 MiB 的上限擋不到上傳**，上傳也沒有儲存配額（dsh 預設也沒有），磁碟寫滿由主機管。要清就自己刪 `attachments/` 底下沒有被會話引用的檔。
 
@@ -357,6 +609,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 **`glob` 與 `grep` 的語意、檔案工具組態**（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）：`glob` 跟 `grep` 一樣走內附 ripgrep（`rg --files`，`--no-ignore --hidden`），不列 `.git`、`.svn`、`.hg`、`.bzr`、`.jj`、`.sl` 底下的任何內容，結果照修改時間排序（舊的在前），不跟 symlink；沒有 `/` 的 pattern 比檔名、任何深度，帶 `/` 的從工作區根錨定。`grep` 的 `pattern` 是 ripgrep 正規式，`glob` 參數是一個檔案過濾（不收空字串、`!` 否定、逗號清單），不合法回 `SEARCH_INVALID_PATTERN`；每一行命中文字限在 `tool-fs-search` 那一列的 `grepMaxLineBytes`（出貨 2000）位元組內，在 UTF-8 邊界上切並加 ` (line truncated)`。`tool-fs` 那一列（出貨全開）：`write: false` 關掉 `write_file` 與 `delete`、`edit: false` 關掉 `edit_file`，關掉的工具不進模型的工具清單，對應的「先讀後改」提示也跟著不出現；`readLimit`、`readMaxLineLength`、`readMaxBytes`、`readStreamMinSize` 調讀檔的上限（正整數）；`read: false` 載入就失敗（基座要求 `read_file` 在清單裡）。這一列**關不掉**：標成 `disabled: true` 啟動就失敗（關掉它只會讓所有檔案工具全開，原本寫了 `write: false` 的部署反而把寫檔放回來）。這一列管的是模型看得到什麼，圍堵（`read-only` 之類）管叫了會怎樣，兩者可以疊用。升級的差異見 [`docs/upgrade-guide/v0.5.19/file-search-and-tool-fs/guide.md`](upgrade-guide/v0.5.19/file-search-and-tool-fs/guide.md)。
 
 **`grep` 用的 ripgrep 是產物內附的，不看主機的 `PATH`**（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4）：`@vscode/ripgrep` 的平台套件隨 `pnpm install` 與 release tarball 一起來，主機有沒有裝 rg、是哪個版本都無關，完全內網的主機也不必另外裝。啟動時 serve 會印一行 `搜尋（grep）：內附 ripgrep <路徑>`；印的是「不可用」就是產物壞了（平台套件被刪、或 rg 沒有執行權限），這時每一次 `grep` 都會以 `SEARCH_FAILED` 失敗，**沒有退路**，重新安裝即可。rg 以 `--no-config` 啟動，`~/.ripgreprc` 與 `RIPGREP_CONFIG_PATH` 影響不到搜尋。
+
+**工作區裡有 serve 讀不到的檔，`grep` 與 `glob` 不整次失敗**（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）：多人共用一台主機時，工作區裡常有別人的 0600 檔或 0700 目錄，ripgrep 碰到會結束碼 2（`grep` 讀不到的檔與目錄都會；`glob` 只列檔名、不開檔，所以只有讀不到的**目錄**會觸發）。其餘讀得到的檔照樣搜完，結果最後接一句 `(2 paths were unreadable (permission denied) and skipped; results cover only the readable files)`，模型因此知道這份結果不是整個工作區。**只數量、不列路徑**；這個數是 stderr 的行數，檔名含換行時會比實際路徑數大。要讓那些檔被搜到，給 serve 的執行身分讀取權限；沒有的話它們永遠搜不到，這句提示每次都會出現。判準從嚴：結束碼是 2、stderr 沒被截尾、而且**每一行**都是 `rg: <路徑>: Permission denied (os error 13)`（`glob` 碰到讀不到的目錄時 rg 會印 `rg: <路徑>: IO error for operation on <路徑>: Permission denied (os error 13)`，也認）才放行；正規式或 glob 寫壞、路徑不存在、stderr 多到被截尾，或夾了任何別種錯誤，都照舊回 `SEARCH_INVALID_PATTERN`／`SEARCH_FAILED`。**搜尋起點本身讀不到也照舊失敗**（整個工作區都沒搜到，不能當成「沒有命中」）；只有起點底下的檔或子目錄讀不到才放行。這一點偏離 dsh（dsh 對 0、1 以外的結束碼一律整次失敗），理由與實測見 #1704。**附件的搜尋不適用**：附件目錄裡讀不到的檔是別的對話的別名檔，連「有幾個」都不交給模型（#1822），那裡維持整次失敗、原始訊息只進伺服器日誌。
 
 **接得回來要站在同一個地方**，兩道守衛，兩個入口都擋：
 
@@ -395,7 +649,7 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
   標題照設定的 `maxTitleBytes` 正規化，正規化完是空的回 `title_invalid`。**寫在日誌上，所以沒落盤的 server 上改名只活到這個行程結束**；
   只在磁碟上的會話改名時會被重新打開。列表讀的是落盤的那份，改名到列表上看得見有短暫的落盤延遲，開著的頁面從即時的標題推送看得到。
 - **檔壞了 serve 起不來**：版本不對、JSON 壞、欄位型別不對、兩個集合有重複或互相重疊，或權限讓別人讀得到（會要你 `chmod 600`），
-  啟動就失敗，**不會覆寫它**。要重設就刪掉這個檔再重啟——釘選與封存會全部清空。
+  啟動就失敗，**不會覆寫它**。**先把整個檔備份起來**，要重設再刪掉它重啟——釘選與封存會全部清空。逐檔的處置見〈升級與回滾〉的〈home 底下的狀態檔壞了怎麼辦〉。
 - **一個 home 只能起一個 serve**（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）。釘選、封存、插件快照這些 home 層的檔都假設只有一個 serve 在寫，
   所以 `serve` 啟動時對 `$NEXUS_AGENT_HOME/serve.lock` 拿一把 kernel 鎖（`flock`），握到行程結束；**第二個 serve 在碰 home 底下任何檔之前就起不來**，
   錯誤講出是哪個 home、鎖檔在哪：
@@ -493,7 +747,10 @@ refs:
   3. **要停用受管檔那一把：刪掉 `refs` 底下那一行。** 執行期改受管檔，下一個請求就生效，不必重啟。
   4. **一次性驗證**（`cli:live`、eval、spike）的 key 要放在環境或 `.env`，不要只放受管檔。要確認 serve 目前用的是哪一層，才需要重啟，看起動日誌那一行來源（它只在起動時印一次）。
 - **受管檔一定要 `chmod 600`。** group 或 other 任何一位有權限，serve 起動就拒絕，訊息帶著要跑的指令（一次性入口不讀這個檔，也就不檢查它）。
-  檔案格式錯（未知頂層鍵、`version` 不是 1、重複的鍵、非字串的值）也是起動就失敗；訊息指名檔案，不會把值印出來。
+  檔案格式錯（`version` 不是 1、`records`、`refs` 裡重複的鍵或非字串的值）也是起動就失敗；訊息指名檔案，不會把值印出來。
+  **`version`、`refs` 以外的頂層鍵不擋**（別的工具多放的條目，[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)，照 dsh）：
+  serve 照樣起來，日誌講一次是哪幾個鍵（只印鍵名），檔裡存好的 key 照常生效；那些鍵本身不解析出任何東西。**整份只有註解**（例如把唯一一把 key 註解掉、改用環境變數）
+  或空檔，等於沒有憑證，往下一層找。`records` 例外，照舊拒絕：nexus 沒有這種憑證，放過它會讓人以為存進去的東西有作用。
 - **它的值不進行程的環境變數**，所以子行程（`execute`、MCP、git 快照）看不到它。兩份 `.env` 則是照舊寫進
   行程環境（啟動環境已有的變數不會被蓋掉）。
 - **改了下一個請求就生效**，不必重啟：每次請求前先 `stat` 一次，修改時間、大小、inode 或權限變了才重讀。
@@ -945,7 +1202,8 @@ WantedBy=multi-user.target
   代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。`WorkingDirectory` 是 home 時，「目前資料夾」與 home 的 `.env` 是同一份，不會讀兩次；
   照〈升級〉第 4 步把 `WorkingDirectory` 改成舊版的目錄（例如 `<checkout>/apps/harness`）的話，那個目錄的 `.env` 也會讀、而且比 home 的優先，
   裡面不能有代理變數（有就拒絕啟動），代理照樣寫在 home 的那一份。
-- **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標；要讓別台機器連進來，前面放反向代理（本專案不附設定）。
+- **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標。今天唯一支援的連法是 SSH 轉 port（見〈瀏覽器會話的安全約束〉），經反向代理連進來要等
+  [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)；只為了連 serve 而開的 SSH 帳號怎麼收窄，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉第 6 條。
 - **啟動印的網址帶登入 token，會進 journal。** 讀得到 journal 的人（`systemd-journal`、`adm` 群組、root）就拿得到：
   `journalctl -u nexus-agent -n 20` 找「nexus-agent 在 http://…」那一行。token 每次重啟都換新。
 - **一個 home 只能起一個 serve**（`<home>/serve.lock`，[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：
@@ -980,16 +1238,41 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
 | `tool-results/` | 過大的工具結果原文 | 有保留期（〈接著上一次跑下去〉） |
 | `plugin-journal.jsonl` | 插件清單的變更紀錄 | 舊版不認得它；`.lock` 是它的鎖檔 |
 | `cordis.patch.yml.migrated-<時間>` | 從舊版遷移時改名留下的原檔 | 不再讀取 |
-| `thread-organization.json` | 側欄的釘選與封存 | |
+| `thread-organization.json` | 側欄的釘選與封存 | 會話落盤開著才有 |
 | `.credentials.yaml` | 受管憑證（API key） | **秘密** |
 | `.env` | 代理設定等環境變數 | **秘密**（可能有 key） |
 | `browser-session.json` | 瀏覽器登入的簽章密鑰 | **秘密** |
 | `config-hash-key.json` | 會話日誌 header 設定雜湊的鍵 | **秘密** |
+| `metrics-token` | 指標的 bearer token | **秘密**；打開指標才有，`tokenFile` 有設就在那個位置、不在 home |
 | `invariant-log.jsonl` | 不變量量測記錄 | |
 | `plugin-snapshot.json` | 已儲存與執行中的清單對照 | 每次啟動重寫，還原時不必在意 |
 | `serve.lock` | 「一個 home 一個 serve」的鎖檔 | 備份可以帶，還原時不必 |
 
 備份檔裡有秘密，要用跟 home 一樣的權限保管（擁有者是跑 serve 的那個使用者、`0600`），不要放進別人讀得到的地方。
+
+### home 底下的狀態檔壞了怎麼辦
+
+serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)）。壞了的處置只有兩種，**每份檔屬於其中一種**：
+
+- **起不來，不覆寫**：檔在、但不能信。serve 不會把它當成「沒有這份資料」往下跑，也不會自己改寫它，交給人決定。
+- **警告，少一格**：檔只是描述用的。serve 照樣起來，日誌講一聲，少掉的那一格寫在下表。
+
+**不論哪一種，動手之前先備份整個檔**：`cp <檔> <檔>.bak-$(date +%s)`。備份跟原檔一樣有秘密的（標「秘密」的那幾份），用同樣的權限保管（`chmod 600`，擁有者是跑 serve 的那個使用者）。
+
+| 檔 | 什麼時候讀 | 壞了的時候 | 怎麼救（都先備份整個檔） |
+| --- | --- | --- | --- |
+| `.credentials.yaml`（秘密） | 只有帶 `--live` 的 serve | **起不來**：根不是 mapping、`version` 不是 1、有 `records`、`refs` 裡的鍵不是環境變數形狀或值不是非空字串、重複的鍵、YAML 壞、權限讓別人讀得到。訊息指名檔案，不印值。`version`、`refs` 以外的頂層鍵、整份只有註解，**不算壞**（見〈金鑰放哪裡〉）。跑著的時候才改壞：保留最後一份能用的內容，警告一次 | 照訊息修；權限過寬跑 `chmod 600`；要停用一把 key 就刪掉那一行，不要留空字串 |
+| `plugin-journal.jsonl` | 啟動，之後每條新 thread 重讀一次 | **起不來**：中間某行壞了、欄位多或少、`seq` 跳號、`failed` 指錯筆、權限過寬；訊息指名第幾行。最後一行沒寫完會略過。**不讓略過壞行**：略過會把被停用的插件重新掛上、也漏掉稽核紀錄。跑著的時候壞了，只有重讀清單的那條新 thread 建不起來 | 〈後台改清單〉的「紀錄壞了怎麼救」三步 |
+| 舊的 `cordis.patch.yml` | 紀錄檔還不在時，當待遷移的那一層讀；紀錄檔已經在就不讀，只警告 | **起不來**：YAML 壞、形狀不合（不是 patch 清單）、權限不合 | 修好 YAML 或權限再啟動；它的內容會在第一次啟動時遷進紀錄檔 |
+| `browser-session.json`（秘密） | 啟動 | **起不來**：版本不對、JSON 壞、密鑰不是 32 bytes 的 base64url、權限過寬 | 要重設：刪掉它再重啟，**所有瀏覽器會話一起失效** |
+| `thread-organization.json` | 會話落盤開著才開它（沒落盤就不開）；開的時候沒有這個檔，就是兩個空集合 | **起不來**：版本不對、JSON 壞、欄位型別不對、集合裡有重複、釘選與封存重疊、權限過寬 | 要重設：刪掉它再重啟，**釘選與封存全部清空** |
+| `metrics-token`（秘密） | 打開指標時，在綁 port 之前讀；沒有就建（目錄 `0700`、檔 `0600`）。`tokenFile` 有設就是那個檔 | **起不來，不覆寫**：權限讓別人讀得到、內容不是 43 字元的 base64url | 要重設：刪掉它再重啟，**監控那一側要換新的 token**（見〈探針與指標〉） |
+| `config-hash-key.json`（秘密） | 會話落盤開著才讀（落盤關掉就不取）；啟動時讀兩處：會話日誌 header 的設定雜湊、對照快照的活著版本 | **警告，少一格**：兩處各講一次，新寫的會話日誌 header 不記設定雜湊、對照快照不列活著的設定版本；檔不動，之後每次啟動都一樣，直到它修好 | 要重設：刪掉它，之後寫的設定雜湊換一套，**跟之前的比不起來** |
+
+表裡「起不來」的，serve 不碰檔：不會備份、不會用空內容重建、不會跳過壞的部分。`plugin-snapshot.json` 每次啟動重寫、`invariant-log.jsonl` 只追加，serve 啟動時都不讀它們，壞了不影響啟動；`serve.lock` 是空的鎖檔，不用管。
+`.env` 是設定、不是狀態檔，寫壞了同樣起不來（見〈金鑰放哪裡〉）。`sessions/` 與 `attachments/` 用到才讀，各有自己的處置，見〈會話日誌〉與〈接著上一次跑下去〉。
+
+之後改這幾份檔的 schema 或版本時，同一張 PR 要留著 v1 的夾具，並證明舊檔怎麼處置（`docs/standards.md` 的〈home 底下的狀態檔〉）。
 
 ### 升級
 
@@ -1369,7 +1652,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search`、`tool-fs` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -1568,6 +1851,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `thread-title`              | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組）                                                       | 有（三格）                       | **關不掉**               |
 | `thread-title-llm`          | `--live` 時由模型依第一句話產生會話標題                                                                                        | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
 | `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                             | 有（一格）                       | 關得掉（＝搜尋一律失敗） |
+| `session-reference`         | 引用別的會話：一則訊息最多引幾條、候選清單上限、每條來源最多留幾個位元組（照模型窗口算）；**出廠 3 條、候選 50、窗口的 10%**，見〈引用別的會話〉 | 有（四格，`maxReferenceBytes` 選配） | **關不掉**               |
 | `thread-capacity`           | serve 行程裡最多同時有幾條 thread，與閒置的 thread 多久之後撤出記憶體；**出廠開著**（500 條、2 小時）                           | 有（兩格）                       | **關不掉**               |
 | `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                              | 有（兩格）                       | **關不掉**               |
 | `logger-console`            | 伺服器日誌的等級門檻與格式（文字／一行一筆 JSON）；**只有 `serve` 載**，見〈伺服器日誌的等級與格式〉；**出廠 info、文字**           | 有（五格）                       | **關不掉**               |
@@ -1586,9 +1870,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
-- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`browser-session`、`deliverable-files`、
+- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`session-reference`、`thread-capacity`、`logger-console`、`browser-session`、`deliverable-files`、
   `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`thread-search`、
-  `browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
+  `session-reference`、`browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、引用的候選清單與每則訊息的引用政策、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
   以及工具結果 `meta` 與壓縮摘要那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），
   **只在 `serve` 上有作用**；**`session-persistence`、`thread-title` 與 `live-model` 兩條路都讀**——`session-persistence` 由
   `cli.ts` 與 `serve.ts` 各自在接落盤時讀；`thread-title` 在 serve 上給冷讀清單、pump 與歷史，在 CLI 上給
@@ -1742,7 +2026,8 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   `finish_reason` 不是 `stop`（例如推理吃光上限）、要求呼叫工具、正規化後是空的、輸入超過 `maxInputBytes`，
   都算失敗。
 - **CLI 一次性的呼叫多半等不到它**：主回覆收完行程就收尾，還沒回來的標題請求會被中止（不講話），只留退回標題。
-- 送出去的系統提示與訊息原文記在日誌的 `session/title-llm-request`，想知道模型看到什麼去讀那一顆。
+- 送出去的系統提示與訊息原文記在日誌的 `session/title-llm-request`，想知道模型看到什麼去讀那一顆。型錄條目宣告了 `off`（`reasoningEfforts` 有 `off` 這個鍵，值是 `null` 也算）時，那一顆多記一格 `"reasoningEffort": "off"`；沒宣告就沒有這一格。這一格只是紀錄，送出去的請求怎麼關推理看條目的 `compat`，與它無關（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
+- **模型回的文字只取第一個非空行**，並剝掉包住整行的 `*`／`**`／`***`（`**甲** 與 **乙**` 這種中間還有同樣記號的不剝）。模型不聽「只回一行」、在標題後面接了一段說明時，說明不會進側欄。系統提示的最後一行要它在沒什麼可命名時（例如只打招呼）也給一個簡短標題，不要解釋（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
 
 **`thread-search`**（[#631](https://github.com/DemianLi/nexus-agent/issues/631)）讓側欄按**內容**搜尋以前的會話，
 不只比標題。**出廠不開**，同 dsh 的產品組裝：要不要多背一份搜尋索引是部署自己的選擇。多人共用的主機上沒有「整台
@@ -1770,9 +2055,38 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **搜什麼**：人打的字、模型回覆的文字與它要叫的工具（名字與參數）、外掛塞進對話的訊息、壓縮換上去的摘要。
   **推理、工具結果、標題不搜**；**被壓縮換掉的那幾則搜不到**（模型也看不到它們了），同 dsh。只搜這台 serve
   列得出來的會話（同一個工作目錄、不含子代理）。
+- **正在用的會話讀記憶體裡的那一份**（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)），同 dsh：剛講完、還沒寫到磁碟的那一句
+  也搜得到。每次搜尋都會把每一條正在用的會話整份算一次指紋，內容變了才重讀。磁碟上還沒有檔的會話（剛開、還沒叫過模型）不搜，
+  清單上也還沒有它。搜尋途中有會話剛好被打開、收掉或寫進磁碟，會整次重來一回；還是對不上就回失敗，網頁退回只比標題。
 - **怎麼比對跟 dsh 不同**：子字串比對，英文不分大小寫、連續空白算一個。dsh 的斷詞把連續的中文當成一個詞，
   句子中間的「搜尋」「會話」都搜不到，所以這裡換掉了；代價是索引大一些。
 - 日誌不落盤（`session-persistence` 關掉）時沒有東西可搜，一律回空。
+
+**`session-reference`**（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）管「引用別的會話」的三個量：一則訊息最多引幾條、輸入框的候選清單最多列幾筆、
+每條被引用的來源最多留幾個位元組。**出廠開著、關不掉**（`disabled: true` 起動當場拋），格式寫壞整個 serve 起不來；理由是關掉只會回到 dsh
+的 20%，讀起來卻像關掉引用。值的家在 schema（`apps/harness/src/settings/session-reference.ts`），只在 `serve` 上有作用，**起動時讀一次**，改了要重啟。
+
+```yaml
+- id: session-reference
+  config:
+    maxReferences: 3
+    candidateLimit: 50
+    referenceContextFraction: 0.1
+```
+
+- **`maxReferences`**：1 到 3，預設 3。上限 3 是網頁端與 wire 一起認的（`MAX_SESSION_REFERENCES`），schema 擋掉 4 以上；
+  調小的話，超過的那則訊息在**收下的當下**就回 `invalid_argument`（`SESSION_REFERENCE_TOO_MANY`），什麼都不進日誌。
+- **`candidateLimit`**：候選清單最多回幾筆，預設 50。
+- **每條來源的位元組預算**：設了 `maxReferenceBytes` 就用它，**原樣蓋過**下面的算式；沒設就是
+  `max(65536, floor(窗口 × 4 × referenceContextFraction))`，窗口是**這一步會走的那顆模型**的（`model.select` 選過的、沒選過就是上一次請求走過的、
+  再沒有就是部署預設），所以使用者在兩次引用之間換模型，下一次引用就吃新那顆的窗口。取不到窗口（腳本模型、沒帶 `--live`）用 64 KiB。
+  超過預算的來源會被截，訊息裡帶 `Reference omissions` 標記，模型看得到被截了。
+- **出廠比例是 0.1，不是 dsh 的 0.2**（schema 的預設仍是 0.2）：三條上限大小的中文來源，乘上實測的中文校正 1.10 之後要留在摘要門檻之內。
+  量法與數字在 `apps/harness/cordis.yml` 那一列的註解與 `session-reference-budget.test.ts`；比例調大前先照那個量法重量。
+- **patch 是整份替換 `config`，不是深層合併**：在自己的 `cordis.patch.yml` 或 `--patch` 裡只寫 `candidateLimit` 或 `maxReferences` 的話，
+  另外幾格由 schema 補，**`referenceContextFraction` 會靜靜回到 schema 的 0.2**，出廠調低的 0.1 就被拿掉了，起動時沒有任何警告。
+  所以調任何一格都要把 `referenceContextFraction: 0.1`（或你量出來的值）一起寫進去。
+- **窗口一律查型錄**。型錄裡沒有的模型（續接的會話選過、後來被拿掉的那顆）這一輪在打供應商之前就失敗，所以這一格的預算沒有人看得到。
 
 **`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)、[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）給 serve 行程裡的 thread 數設上限（第 2 級），
 並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（量測與背景見 #1464：每條 thread 常駐約 2 MB heap，只讀歷史也有）。

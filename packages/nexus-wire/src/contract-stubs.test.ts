@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import type { UploadProgress, UploadXhr } from './client.js';
 
 import { createWireClient } from './client.js';
-import { isRpcMethod, commandPath } from './protocol.js';
+import { isRpcMethod, commandPath, THREAD_AT_CAPACITY } from './protocol.js';
 import { attachmentPath, uploadPath } from './attachments.js';
 
 interface Seen {
@@ -172,6 +172,54 @@ describe('thread 釘選／封存／改名', () => {
     const expected = { kind: 'rejected', code: 'not_supported', message: '還沒做' };
     expect(await client.threadPin('t')).toEqual(expected);
     expect(await client.threadRename('t', 'x')).toEqual(expected);
+    expect(await client.threadFork('t', 'm-1')).toEqual(expected);
+  });
+});
+
+describe('thread.fork（#1580 刀 1：契約）', () => {
+  it('在 RPC 白名單裡，送到 /commands/thread.fork，params 只有 messageId；成功回新 thread 的 id', async () => {
+    expect(isRpcMethod('thread.fork')).toBe(true);
+    const { client, seen } = recording(() =>
+      Response.json({ type: 'success', id: 1, result: { ok: true, value: { threadId: 'new-1' } } }),
+    );
+    expect(await client.threadFork('t', 'm-1')).toEqual({
+      kind: 'ok',
+      result: { ok: true, value: { threadId: 'new-1' } },
+    });
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      [
+        `http://agent.test${commandPath('t', 'thread.fork')}`,
+        { id: 1, method: 'thread.fork', params: { messageId: 'm-1' } },
+      ],
+    ]);
+  });
+
+  it('沒有這條、分不出去：業務失敗在 result 裡，不是 rejected', async () => {
+    const respondWith = (error: unknown) =>
+      recording(() => Response.json({ type: 'success', id: 1, result: { ok: false, error } }))
+        .client;
+    for (const code of ['thread_not_found', 'fork_unavailable'] as const) {
+      expect(await respondWith({ code }).threadFork('t', 'm-1')).toEqual({
+        kind: 'ok',
+        result: { ok: false, error: { code } },
+      });
+    }
+  });
+
+  it('名額滿了：rejected 帶 thread_at_capacity（整條線共用的那個碼）', async () => {
+    const { client } = recording(() =>
+      Response.json({
+        type: 'error',
+        id: 1,
+        error: THREAD_AT_CAPACITY,
+        message: '滿了',
+      }),
+    );
+    expect(await client.threadFork('t', 'm-1')).toEqual({
+      kind: 'rejected',
+      code: THREAD_AT_CAPACITY,
+      message: '滿了',
+    });
   });
 });
 

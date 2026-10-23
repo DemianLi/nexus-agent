@@ -29,6 +29,8 @@
  * 見 [`browser-auth.ts`](./browser-auth.ts)（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
  */
 
+import { randomUUID } from 'node:crypto';
+
 import type {
   Command,
   EventStreamRequest,
@@ -124,6 +126,7 @@ import {
 } from '@nexus/wire';
 import type {
   AttachmentRef,
+  ColdStoredSession,
   CommandRegistrationPoint,
   ProjectionRegistrationPoint,
   FeedbackCategory,
@@ -132,14 +135,17 @@ import type {
   SessionLog,
   SessionRegistry,
   SpillStore,
+  StoredSessionHeader,
 } from '@nexus/core';
 import {
   errorChain,
   FEEDBACK_CATEGORIES,
   FeedbackDurabilityUnavailableError,
   FeedbackLogCorruptionError,
+  forkBoundaryOf,
   ProjectionDetailError,
 } from '@nexus/core';
+import { childForkSeed } from './thread-fork.js';
 import type { GoalId } from '@nexus/goal';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
@@ -160,6 +166,10 @@ import type { BackgroundSubagentControl, BackgroundTurnFailure } from './backgro
 import type { AttachSessions } from './session-attach.js';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { SessionReferenceReader } from './session-reference.js';
+import { referenceBudgetBytes } from './session-reference-budget.js';
+import type { SessionReferencePolicy } from './session-reference-budget.js';
+import { sessionReferenceConfigSchema } from './settings/session-reference.js';
+import type { SessionReferenceConfig } from './settings/session-reference.js';
 import type {
   DeliverableRefusal,
   DeliverableResult,
@@ -185,7 +195,7 @@ import {
 } from './settings/thread-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { normalizeThreadSearchQuery, ThreadSearchError } from './thread-search.js';
-import type { ThreadSearchErrorKind } from './thread-search.js';
+import type { LiveThread, ThreadSearchErrorKind } from './thread-search.js';
 import type { SkillCatalog } from './skill-catalog-wire.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
@@ -308,11 +318,18 @@ export interface ThreadAgent {
    * 前面那個 `attachSessions` 接的三件事是觀察者，這一個是出口，所以排在最後——同 `cli.ts` 的接線順序。
    *
    * @param sessions - 這個 thread 的會話註冊表。
-   * @returns 收掉這次接線的方法（`dispose` 會排空並關檔），或沒開落盤時的 `undefined`。
+   * @returns 收掉這次接線的方法（`dispose` 會排空並關檔；`abandon` 不排空、只關檔，給還沒發佈就組裝失敗的分叉子 thread，
+   *   #1580，沒給的照 `dispose` 收），或沒開落盤時的 `undefined`。
    */
-  attachPersistence?(
-    sessions: SessionRegistry,
-  ): { flush(): Promise<void>; dispose(): Promise<void> } | undefined;
+  attachPersistence?(sessions: SessionRegistry):
+    | {
+        flush(): Promise<void>;
+        dispose(): Promise<void>;
+        abandon?(): Promise<void>;
+        /** root 那一份檔的 header（core `attachSessionPersistence` 的 `rootHeader`，#1599）：搜尋拿它跟盤上那份比。 */
+        rootHeader?(): StoredSessionHeader | undefined;
+      }
+    | undefined;
   /**
    * 把 LLM 標題接到這條 thread 的 root 日誌上（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），選配。
    * 沒帶 `--live`、或清單把 `thread-title-llm` 那一列關掉，`createCliAgent` 就不給，那時只有退回標題。
@@ -382,9 +399,37 @@ export interface ThreadAgent {
   readonly resumedWorkspaceRoot?: string;
 }
 
+/**
+ * 分叉出來的子 thread 要從什麼長出來（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580) 刀 2），交給 {@link WireHandlerOptions.createAgent}。
+ *
+ * 照 dsh fork 交給 `agents.create` 的那幾樣（`session-controller/src/commands.ts:276-290`，`687f282e`）：seed（`buildForkSeed` 的結果），
+ * 與來源的 header（新 header 的 `cwd` 與根照抄它、`parentSession` 指向它）。**這裡不寫檔**：落盤照常延遲到第一次 flush 才實體化，
+ * 同 dsh 的 `createStoredSession` 只拿把手、`appendUnstoredSuffix` 在發佈時才寫，組裝失敗磁碟上什麼都不留。
+ */
+export interface ThreadForkSeed {
+  /** 來源 thread 冷讀回來的 header。 */
+  readonly sourceHeader: StoredSessionHeader;
+  /** 子 thread 的 root 日誌從這一份開始：來源到切點的前綴、inherited 標記，再加清空佇列的 `inbox/spliced`（Q2 (a)）。 */
+  readonly seed: readonly SessionEvent[];
+}
+
 export interface WireHandlerOptions {
-  /** 一個 thread 一個 agent。第一次碰到這個 thread 時呼叫。 */
-  createAgent(threadId: string): Promise<ThreadAgent>;
+  /**
+   * 一個 thread 一個 agent。第一次碰到這個 thread 時呼叫。
+   *
+   * @param fork - 這條是剛分叉出來的子 thread（`thread.fork`，#1580）：不讀磁碟，從這一份 seed 組裝，其餘照續接那條路。
+   */
+  createAgent(threadId: string, fork?: ThreadForkSeed): Promise<ThreadAgent>;
+  /**
+   * 冷讀一條落盤的 thread（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580) 的分叉來源；#1599 的搜尋也要用）：header 與整份事件，
+   * 中斷的那一輪在記憶體裡補平（`readColdSession`）。**列表上看不到的回 `undefined`**（子代理的會話、別的 `cwd`，可見規則同列表），
+   * 找不到也是 `undefined`；壞檔、版本太新照拋。**它不准碰 {@link createAgent}**，同 {@link listThreads}。
+   *
+   * **缺席就是沒有落盤**：`thread.fork` 回 `not_supported`（沒有會話日誌就沒有可以分的東西）。
+   */
+  readStoredThread?(threadId: string): Promise<ColdStoredSession | undefined>;
+  /** 分叉出來的子 thread 用什麼 id（測試接縫）。省略即 `randomUUID()`，同 dsh 由 Host 產生（`commands.ts:272`）。 */
+  newThreadId?(): string;
   /**
    * 讀以前落盤的 thread（`GET /threads`，[#302](https://github.com/DemianLi/nexus-agent/issues/302)），選配。
    *
@@ -458,6 +503,15 @@ export interface WireHandlerOptions {
    * 與 {@link listSessionReferences} 同進同出（都來自落盤的會話根），分開兩格是因為手搭的組裝可以只給其中一個。
    */
   readonly sessionReferenceReader?: SessionReferenceReader;
+  /**
+   * `session-reference` 那一列的值（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862），選配：每則訊息最多引用幾條，
+   * 與每條來源的位元組預算（`maxReferenceBytes` 或窗口的 `referenceContextFraction`）。`candidateLimit` 不在這裡，候選上限在
+   * `serve.ts` 建 `SessionReferenceCandidates` 時給。**省略即 schema 的預設**（dsh 的值），同 `toolText`。
+   *
+   * **預算跟著這條 thread 下一步會走的模型**：每條 thread 的 pump 在這裡組出 `SessionReferencePolicy`，窗口問該 thread 的
+   * `modelSelection.nextContextWindow`，所以使用者在兩次引用之間換了模型，下一次就用新那顆的窗口。
+   */
+  readonly sessionReferenceSettings?: SessionReferenceConfig;
   /**
    * 瀏覽器會話的驗證（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
    *
@@ -610,6 +664,14 @@ export interface IdleSweepingWireHandler extends WireHandler {
   threadCount(): number;
   /** 撤到一半、還佔著名額的 thread 數（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，`/metrics` 的 `nexus_threads_closing`）。 */
   closingCount(): number;
+  /**
+   * 已經建好、活著的 thread（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)，內容搜尋讀它們記憶體裡的日誌）。**同步、只讀 `ready`**：
+   * 還在建的不算（不等它組裝），正在撤的也不算：`evictThread` 先 `ready.delete`、最後的排空在後面，撤的期間搜尋改走冷讀。dsh 撤出時
+   * 也是先離開 `list()`（`detachEntered` 先 `store.delete`、之後才發 `session/disposed`，`core/session/src/index.ts:1253-1255`）。冷讀到一半
+   * 檔又被寫，由搜尋那一側提交前的第二次列表比 revision 重來。照 dsh 觀察活會話用的 `ctx.sessions.list()`
+   * （`session-query-sqlite/src/index.ts:503,549`，`687f282e`），不改任何東西：不 flush、不建檔。
+   */
+  liveThreads(): readonly LiveThread[];
   /**
    * `close()` 已經開始了沒（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，`/readyz` 據此回 503）。**只讀**：叫 `close()` 的那一刻同步變 `true`，不會變回來。
    */
@@ -916,9 +978,12 @@ function promptAttachmentsOf(raw: readonly unknown[]): readonly PromptAttachment
   return shaped;
 }
 
-/** wire 要的那一面。`imageSupport` 選填：只做型錄與選擇的替身不必實作，沒有就不做收圖檢查（同沒宣告）。 */
+/**
+ * wire 要的那一面。`imageSupport` 選填：只做型錄與選擇的替身不必實作，沒有就不做收圖檢查（同沒宣告）。`nextContextWindow` 同理：
+ * 沒有就是取不到窗口，引用的預算退回 64 KiB（`session-reference-budget.ts`）。
+ */
 type ThreadModelSelection = Pick<ModelSelectionHost, 'catalog' | 'state' | 'select'> &
-  Partial<Pick<ModelSelectionHost, 'imageSupport'>>;
+  Partial<Pick<ModelSelectionHost, 'imageSupport' | 'nextContextWindow'>>;
 
 interface ThreadState {
   readonly pump: ThreadPump;
@@ -941,6 +1006,8 @@ interface ThreadState {
    * `locateAt` 的檔頭）。
    */
   readonly storedCount: number;
+  /** root 那一份檔的 header，見 {@link ThreadAgent.attachPersistence}；沒開落盤是 `undefined`。 */
+  readonly storedHeader: () => StoredSessionHeader | undefined;
   /** 這一次組裝的工作區根，沒給 `--workspace` 就是 `undefined`。見 {@link ThreadAgent.workspaceRoot}。 */
   readonly workspaceRoot: string | undefined;
   /**
@@ -1569,7 +1636,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     sweeper.unref();
   }
 
-  function threadFor(threadId: string): Promise<ThreadState> {
+  /**
+   * @param fork - 剛分叉出來的子 thread 的 seed（#1580）。id 是剛產生的，所以不會命中下面兩道；名額照算，**佔位在這個同步段**，
+   *   查完名額到寫出任何東西之間不讓別人搶走（寫檔延到組裝之後第一次 flush）。
+   */
+  function threadFor(threadId: string, fork?: ThreadForkSeed): Promise<ThreadState> {
     const existing = threads.get(threadId);
     if (existing !== undefined) {
       return existing;
@@ -1580,7 +1651,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     // 這時等的人在下面那道上限檢查拿到 `thread_at_capacity`，不保證等了就一定進得來。
     const retiring = closing.get(threadId);
     if (retiring !== undefined) {
-      return retiring.then(() => threadFor(threadId));
+      return retiring.then(() => threadFor(threadId, fork));
     }
     // **thread 數上限（#1476，保險絲第 2 級；偏離登記：產品需求超出 dsh，借 jobs-local 的准入形狀）。**
     // 順序是承重的：在 `threads.get` 沒命中之後（已在行程裡的不受影響，同一個新 id 的並行請求也在上面共用同一個 promise、
@@ -1598,7 +1669,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       );
     }
     const created = (async (): Promise<ThreadState> => {
-      const threadAgent = await options.createAgent(threadId);
+      const threadAgent = await (fork === undefined
+        ? options.createAgent(threadId)
+        : options.createAgent(threadId, fork));
       // **從這裡到回傳之間拋錯，要把剛建好的 agent 收掉。** 下面說好「下一次請求該重試」，
       // 而續接的 thread 在 `createAgent` 裡就拿了寫租約——沒人收的話，重試撞上的是**自己
       // 上一次**留下的租約。收 agent 也順便收掉它底下的東西（MCP 的子行程之類）。
@@ -1612,7 +1685,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         unsubscribeGoalActivation?: () => void;
         fileSearch?: WorkspaceFileSearch;
         attachment?: { detach(): Promise<void> };
-        persistence?: { dispose(): Promise<void> };
+        persistence?: { dispose(): Promise<void>; abandon?(): Promise<void> };
       } = {};
       /**
        * 收掉已經接上的每一樣，順序：下行 → 標題 → 列檔索引 → 會話接線 → 落盤 → agent。
@@ -1672,6 +1745,21 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           // 沒有背景 host（沒開背景續行、CLI）就是沒有在等的；host 在 `attachSessions` 之後才有，所以也是延後綁。
           (signal) => late.background?.whenChildrenSettled(signal) ?? Promise.resolve(false),
         );
+        // 引用別的會話的上限與預算（#1573 N0862）。預算是函式：每一批領走時問這條 thread 的選擇控制器下一步走哪一顆，見
+        // `ModelSelectionHost.nextContextWindow`。沒有選擇控制器（腳本模型、沒帶 `--live`）或型錄沒有那一顆時取不到窗口，退回 64 KiB。
+        const referenceSettings =
+          options.sessionReferenceSettings ?? sessionReferenceConfigSchema.parse({});
+        const referencePolicy: SessionReferencePolicy = {
+          maxReferences: referenceSettings.maxReferences,
+          budgetBytes: () =>
+            referenceBudgetBytes({
+              ...(referenceSettings.maxReferenceBytes !== undefined && {
+                maxReferenceBytes: referenceSettings.maxReferenceBytes,
+              }),
+              referenceContextFraction: referenceSettings.referenceContextFraction,
+              contextWindow: threadAgent.modelSelection?.nextContextWindow?.(),
+            }),
+        };
         const pump = new ThreadPump(
           threadAgent.agent,
           threadId,
@@ -1702,6 +1790,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             : (report) => options.onTurnFailed!(report),
           options.turnClock,
           threadAgent.spillStore,
+          referencePolicy,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -1800,6 +1889,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
           // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
           storedCount: threadAgent.rootSeed?.length ?? 0,
+          storedHeader: () => persistence?.rootHeader?.(),
           workspaceRoot: threadAgent.workspaceRoot,
           resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
           fileSearch,
@@ -1842,12 +1932,25 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         pump.watch(() => {
           state.lastActiveAt = now();
         });
+        // **分叉的子 thread 在這裡第一次排空**（#1580）：seed 這一刻才實體化成檔，同 dsh `create` 在發佈那一刻 `appendUnstoredSuffix`
+        // （`agent-loop/src/index.ts:688-735`，`687f282e`）。排在登記 `ready` 之前：寫不進去就走下面的 `catch` 收掉（落盤那一步關把手）、
+        // 不登記，同 dsh 發佈失敗不留下 agent。**從接上落盤到這一行之間不准有 await**：協調器一接上就開批次窗口，
+        // 中間讓出去的話窗口到期會先把 seed 寫出去，下面的丟棄就救不回來。
+        if (fork !== undefined) await pump.sessions.flush(pump.sessionLog);
         ready.set(threadId, state);
         return state;
       } catch (error) {
         // 建不起來的那條不留在全域下行上：它的中斷永遠答不到。已經接上的每一樣也一併收掉（#1467）：
         // 下一次請求用同一個 thread id 重組，舊的訂閱、背景 host、落盤不收的話會和新的並存。
         // 組裝失敗那條路：收尾的錯沒有人能處理，吞掉，原本的錯才不會被蓋掉。
+        // **還沒發佈的分叉子 thread 丟掉落盤、不排空**（#1580）：磁碟上不留這條，同 dsh `create` 失敗時只關還沒實體化的把手
+        // （`agent-loop/src/index.ts:688-702`，`687f282e`）；`dispose` 會先排空，等於把 seed 寫出去。**排在 `release` 之前、
+        // 同步呼叫**：`release` 前幾步會 await，批次窗口在那之間到期就會把 seed 寫出去。
+        const persistence = attached.persistence;
+        if (fork !== undefined && persistence?.abandon !== undefined) {
+          delete attached.persistence;
+          await persistence.abandon().catch(() => undefined);
+        }
         await release(() => undefined);
         throw error;
       }
@@ -1880,9 +1983,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   async function threadOrError(
     threadId: string,
     id: number | null,
+    fork?: ThreadForkSeed,
   ): Promise<ThreadState | Response> {
     try {
-      return await threadFor(threadId);
+      return await threadFor(threadId, fork);
     } catch (error: unknown) {
       // 滿了不是「壞了」：專用碼、不加「建不起來」的前綴，message 自己講上限與下一步（#1476）。
       if (error instanceof ThreadCapacityError) {
@@ -2271,6 +2375,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (method === 'thread.rename') {
       // 改名（#633 第二張）：照 dsh 要這條會話是活的，所以**經 `threadFor`**（先確認它存在，免得為一個不存在的 id 建 agent）。
       return handleRename(threadId, envelope.id, body);
+    }
+    if (method === 'thread.fork') {
+      // 分叉（#1580）：讀來源**不經 `threadFor(來源)`**（活的讀記憶體、不在就冷讀），冷的來源不為它佔名額、不建 agent；
+      // 只有子 thread 經 `threadFor`。
+      return handleFork(threadId, envelope.id, body);
     }
     if (isThreadManagementMethod(method)) {
       // 釘選與封存（#633 第一張）：**不經 `threadFor`**，同 `run.cancel`——整理的是一個 id 在兩個全域集合裡的位置，不是這條 thread
@@ -2881,7 +2990,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    */
   async function handleThreadOrganization(
     threadId: string,
-    method: Exclude<ThreadManagementMethod, 'thread.rename'>,
+    method: Exclude<ThreadManagementMethod, 'thread.rename' | 'thread.fork'>,
     id: number,
     body: unknown,
   ): Promise<Response> {
@@ -3009,6 +3118,91 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       const reason = error instanceof Error ? error.message : String(error);
       return json(errorResponse(id, 'unknown_error', `改名沒做成：${reason}`));
     }
+  }
+
+  /**
+   * 讀一條 thread 現在的樣子（#1580 分叉的來源；#1599 的搜尋不經這裡，它不等、不排空，見 `liveThreads`）：**活的讀記憶體，不在就冷讀**，照 dsh `observeSession`
+   * （`session-query/src/observation.ts:105-106,275-315`，`687f282e`）。不能一律冷讀：落盤有批次窗口，冷讀會缺尾巴。
+   *
+   * **不經 `threadFor`**：冷的來源不為它建 agent、不佔名額。還在建的等它建好再讀記憶體；正在撤的等撤完再冷讀（撤的時候會排空到磁碟）。
+   * header 一律讀磁碟那一份（活的 thread 在記憶體裡沒有 header）；一份還沒實體化的活 thread（剛開、第一次 flush 之前）先排空再讀。
+   *
+   * @returns header 與事件；看不到這條（不存在、子代理的會話、別的 `cwd`）是 `undefined`。
+   * @throws 磁碟讀不了（壞檔、版本太新），或排空失敗。
+   */
+  async function observeThread(
+    threadId: string,
+    readStored: (threadId: string) => Promise<ColdStoredSession | undefined>,
+  ): Promise<
+    { readonly header: StoredSessionHeader; readonly events: readonly SessionEvent[] } | undefined
+  > {
+    const retiring = closing.get(threadId);
+    if (retiring !== undefined) await retiring.catch(() => undefined);
+    const building = threads.get(threadId);
+    const live = building === undefined ? undefined : await building.catch(() => undefined);
+    let stored = await readStored(threadId);
+    if (live === undefined) return stored;
+    if (stored === undefined) {
+      await live.pump.sessions.flush(live.pump.sessionLog);
+      stored = await readStored(threadId);
+      if (stored === undefined) return undefined;
+    }
+    return { header: stored.header, events: live.pump.sessionLog.events };
+  }
+
+  /**
+   * 分叉（`thread.fork`，#1580 刀 2）：把指名那一輪（含）之前的對話複製成一條新 thread，照 dsh `session.fork`
+   * （`session-controller/src/commands.ts:227-310`，`687f282e`）。
+   *
+   * 判斷的順序（PM 裁定，issuecomment-6365749290）：
+   * 1. 沒有落盤 → `not_supported`；
+   * 2. 參數 → `invalid_argument`；
+   * 3. 讀來源，看不到 → `thread_not_found`；
+   * 4. 換算切點，分不出去 → `fork_unavailable`（**排在名額之前**：同一個請求的結果不隨負載變）；
+   * 5. 子 thread 經 `threadFor` 建：名額滿 → `thread_at_capacity`（協定層），佔位與建失敗的釋放都在 `threadFor`；
+   * 6. **登記之前排空子 thread 的日誌**（在 `threadFor` 裡）：seed 在這一刻才實體化成檔（同 dsh 發佈時 `appendUnstoredSuffix`），
+   *    回傳之後重啟也還在。組裝失敗時沒有任何東西落盤，同 dsh「leaves no stored residue」；寫不進去就收掉、不登記，回 `unknown_error`。
+   */
+  async function handleFork(sourceId: string, id: number, body: unknown): Promise<Response> {
+    const readStored = options.readStoredThread;
+    if (readStored === undefined) {
+      return json(
+        errorResponse(
+          id,
+          'not_supported',
+          '這台 server 的會話日誌只在記憶體裡（沒接落盤），沒有可以分叉的東西',
+        ),
+      );
+    }
+    const params = (body as { params?: unknown }).params;
+    const messageId =
+      typeof params === 'object' && params !== null
+        ? (params as { messageId?: unknown }).messageId
+        : undefined;
+    if (typeof messageId !== 'string' || messageId === '') {
+      return json(errorResponse(id, 'invalid_argument', 'thread.fork 的 messageId 要是非空字串'));
+    }
+    let source: Awaited<ReturnType<typeof observeThread>>;
+    try {
+      source = await observeThread(sourceId, readStored);
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return json(errorResponse(id, 'unknown_error', `分叉的來源讀不出來：${reason}`));
+    }
+    if (source === undefined) {
+      return json(successResponse(id, { ok: false, error: { code: 'thread_not_found' } }));
+    }
+    const boundary = forkBoundaryOf(source.events, messageId);
+    if (boundary === undefined) {
+      return json(successResponse(id, { ok: false, error: { code: 'fork_unavailable' } }));
+    }
+    const childId = options.newThreadId?.() ?? randomUUID();
+    const child = await threadOrError(childId, id, {
+      sourceHeader: source.header,
+      seed: childForkSeed(source.events, boundary),
+    });
+    if (child instanceof Response) return child;
+    return json(successResponse(id, { ok: true, value: { threadId: childId } }));
   }
 
   /**
@@ -3697,6 +3891,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     sweepIdle,
     threadCount: () => threads.size + closing.size,
     closingCount: () => closing.size,
+    liveThreads: () =>
+      [...ready].map(([threadId, state]) => ({
+        threadId,
+        log: state.pump.sessionLog,
+        header: state.storedHeader(),
+      })),
     isClosing: () => closed,
     stopAdmission: () => {
       admissionStopped = true;
