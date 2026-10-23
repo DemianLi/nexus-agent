@@ -112,7 +112,7 @@ import {
 import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { BINARY_SAMPLE_BYTES } from './binary-read.js';
-import { canonicalize } from './canonical-path.js';
+import { canonicalize, isWithin } from './canonical-path.js';
 import { resolveRgPath } from './rg-path.js';
 import { runRipgrep } from './ripgrep-runner.js';
 import type { RipgrepInternals, RipgrepTool } from './ripgrep-runner.js';
@@ -1218,7 +1218,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       return { error: this.denial(mode, operation, filePath, `路徑解析失敗（${code}）`) };
     }
 
-    if (realTarget !== realRoot && !realTarget.startsWith(realRoot + sep)) {
+    if (!isWithin(realRoot, realTarget)) {
       return {
         error: this.denial(
           mode,
