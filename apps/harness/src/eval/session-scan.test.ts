@@ -566,16 +566,19 @@ describe('派它的呼叫：找不到一律「—」，說是哪一種沒有', (
             },
           },
         ],
+        ['feedback/record', { text: '父會話的評語' }],
         ['session/end-seed', { inherited: true }],
         turn('message'),
+        ['feedback/record', { text: '自己的評語' }],
         call('task', {}, 'c2'),
         ['subagent/catalog', { childId: 'f/y', callId: 'c2', mode: 'one-shot' }],
       ]),
     });
     expect(forked.subagent).toBeUndefined();
     expect(forked.subagents?.map((link) => link.childId)).toEqual(['f/y']);
-    // 前綴裡父會話給的點踩是父會話的，不算這一份的。
+    // 前綴裡父會話給的點踩與評語是父會話的，不算這一份的。
     expect(forked.negativeTurns).toBe(0);
+    expect(forked.feedbackRecords).toBe(1);
     const text = report(forked);
     expect(text).toContain('f（分叉自 p）');
     expect(text).not.toContain('派它的');

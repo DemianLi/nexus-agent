@@ -40,6 +40,7 @@
  */
 
 import {
+  inheritedEventCount,
   isLogicalTurnStart,
   isSubagentSessionHeader,
   repeatCallKey,
@@ -164,6 +165,8 @@ export function draftSessionLog(
   const callTurn = new Map<string, OpenTurn>();
   const ratings = ratingsByTurn(log.events);
   const feedbackRecords: FeedbackRecord[] = [];
+  // 分叉繼承來的前綴（#1579）：評語同評分（`ratingsByTurn`），是來源 thread 的，不收。
+  const inherited = inheritedEventCount(log.events);
 
   for (const event of log.events) {
     switch (event.type) {
@@ -213,7 +216,7 @@ export function draftSessionLog(
         break;
       }
       case 'feedback/record':
-        feedbackRecords.push(event.data);
+        if (event.seq >= inherited) feedbackRecords.push(event.data);
         break;
       default:
         break;

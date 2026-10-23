@@ -339,6 +339,22 @@ describe('草稿', () => {
     expect(report([forked])).toContain('// 起草：1 份日誌（子代理 0 份不起草），候選 1 輪。');
   });
 
+  it('分叉繼承來的 /feedback 評語不收：是來源 thread 的（#1579）', () => {
+    const forked = draft(
+      [
+        say('前'),
+        end,
+        ['feedback/record', { text: '父會話的評語' }],
+        ['session/end-seed', { inherited: true }],
+        say('後'),
+        failed('x'),
+        ['feedback/record', { text: '自己的評語' }],
+      ],
+      { id: 'forked', parentSession: 'root', isSeeded: true },
+    );
+    expect(forked.feedbackRecords).toEqual([{ text: '自己的評語' }]);
+  });
+
   it('goal 續行輪次標出來：prompt 是機器排的', () => {
     const drafts = draft([
       ['turn/start', { kind: 'goal', text: '繼續完成目標', goalId: 'g', revision: 1, round: 2 }],

@@ -42,7 +42,7 @@ changes:
 <a id="verification"></a>
 ## 驗證
 
-探針（develop `f210b3ac`，50 的讀方）：header 帶 `origin` 或 `isSeeded` 拋 `SessionCorruptionError`；只帶 inherited 標記照常讀回 5 筆；51 的檔拋 `SessionFormatUnsupportedError`。`apps/harness/src/jsonl-session-store-fork-prefix.test.ts`：header 新鍵的壞值、合法分叉、seeded 卻沒有標記、沒 seeded 卻有標記、撕裂的標記、標記之後的壞尾巴、前綴與自己的區段同 childId 照常讀回、自己的區段重複照舊拒、50 的檔續接後 header 是 51 且不補新鍵。`packages/nexus-core/src/fork-prefix.test.ts`：切點、`buildForkSeed`、續接、子代理判準表。突變 15 條（拿掉切點過濾、判準任一條、讀盤兩條一致性檢查等）全部轉紅。全 repo `pnpm -r run test`、`typecheck` 綠。
+探針（develop `f210b3ac`，50 的讀方）：header 帶 `origin` 或 `isSeeded` 拋 `SessionCorruptionError`；只帶 inherited 標記照常讀回 5 筆；51 的檔拋 `SessionFormatUnsupportedError`。`apps/harness/src/jsonl-session-store-fork-prefix.test.ts`：header 新鍵的壞值、合法分叉、seeded 卻沒有標記、沒 seeded 卻有標記、撕裂的標記、標記之後的壞尾巴、前綴與自己的區段同 childId 照常讀回、自己的區段重複照舊拒、50 的檔續接後 header 是 51 且不補新鍵。`packages/nexus-core/src/fork-prefix.test.ts`：切點、`buildForkSeed`、續接、子代理判準表。突變 21 條（拿掉切點過濾、判準任一條、讀盤兩條一致性檢查、歷史頁目錄 frame、token-meter links、eval 評語等）全部轉紅。全 repo `pnpm -r run test`、`typecheck` 綠。
 
 <a id="dev-note"></a>
 ## 開發備註

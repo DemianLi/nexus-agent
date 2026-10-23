@@ -291,6 +291,8 @@ export function scanSessionLog(
   let toolCalls = 0;
   let aborted = 0;
   let feedbackRecords = 0;
+  // 分叉繼承來的前綴（#1579）：評語同評分，是來源 thread 的，不算這一份的。
+  const inherited = inheritedEventCount(log.events);
   let chain: (RepeatRun & { readonly key: string }) | undefined;
   let longest: RepeatRun | null = null;
 
@@ -334,7 +336,7 @@ export function scanSessionLog(
         break;
       }
       case 'feedback/record':
-        feedbackRecords += 1;
+        if (event.seq >= inherited) feedbackRecords += 1;
         break;
       default:
         break;

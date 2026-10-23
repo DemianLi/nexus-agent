@@ -113,6 +113,7 @@ import {
   attachmentRefOfBlock,
   createProjectionFold,
   foldInbox,
+  inheritedEventCount,
   isLogicalTurnStart,
   isMaxTokensFinish,
   isMentionHintBlock,
@@ -874,12 +875,17 @@ export interface AwaitingInput {
  *   照上面分兩種畫，都不收掉。面板（核准的按鈕、提問）不從這裡來——中斷的酬載只在發出去的那一顆 frame 上，由 pump
  *   在下行接上時補送（`ThreadPump.subscribe`，[#728](https://github.com/DemianLi/nexus-agent/issues/728)）。行程重開過的話
  *   中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
+ * @param inherited - 分叉繼承來的前綴有幾顆（`inheritedEventCount`，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），
+ *   由呼叫端用整份日誌算好交進來：一頁不一定含標記。前綴裡的 `subagent/catalog` 不轉 frame，同 dsh 的
+ *   `subagentCatalog` 投影（`packages/subagent/subagent/src/catalog.ts:124-126`，`687f282e`）——這顆 frame 就是拿來取代
+ *   那個投影的（`@nexus/wire` 的 `subagent-catalog.ts`）。前綴裡的子代理是來源 thread 的，`<這條>/<run>` 開不到。省略即 0。
  */
 export function historyFrames(
   events: readonly SessionEvent[],
   toolTextMaxBytes: number,
   awaitingInput?: AwaitingInput,
   offloadedImages?: ReadonlyMap<number, ReadonlySet<number>>,
+  inherited = 0,
 ): Event[] {
   const frames: Event[] = [];
   /** 被圖片額度省略的圖（#1270）：`seq` → 圖序號。一頁從輪首切，比這一頁新的 `image/offload` 由呼叫端用整份日誌算好交進來。 */
@@ -1107,6 +1113,8 @@ export function historyFrames(
         break;
       case 'subagent/catalog':
         // 子代理目錄（#1023）：逐顆轉，位置就是日誌上的位置——配對的 `tool/call` 在它前面、同一輪，卡已經開了。
+        // 分叉繼承來的不轉（#1579），見 `inherited`。
+        if (event.seq < inherited) break;
         frames.push(customFrame(event.time, subagentCatalogData(event.data)));
         break;
       case 'workspace/changes':
@@ -1414,6 +1422,8 @@ export function historyPage(
         toolTextMaxBytes,
         end === events.length ? awaitingInput : undefined,
         offloadedImagesOf(window),
+        // 秤重（`fitBytes`）不帶它：前綴的目錄多秤進去是高估，方向安全。
+        inheritedEventCount(events),
       ),
       ...tailFrames,
     ],
