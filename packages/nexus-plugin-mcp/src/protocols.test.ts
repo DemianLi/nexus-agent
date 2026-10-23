@@ -15,7 +15,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import type { ToolMessage } from '@langchain/core/messages';
-import { loadPlugins } from '@nexus/core';
+import { EXTERNAL_MCP_CONTENT_NOTICE, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMcpPlugin } from './index.js';
@@ -25,6 +25,7 @@ import type { HttpFixture } from './http-fixtures.js';
 import type { ProtocolInfo } from './modern-tools.js';
 import { CITE_RESOURCE_LINKS } from './project-content.js';
 import { modelToolNames } from './tool-names.js';
+import { withoutNotice } from './untrusted-fixtures.js';
 
 const MODERN_STDIO_SERVER = fileURLToPath(new URL('./modern-stdio-server.ts', import.meta.url));
 
@@ -125,7 +126,9 @@ function tool(mounted: Mounted, name: string) {
 
 /** 呼叫 `protocol_info`：server 端看到的協議版本與 client 宣告的能力。 */
 async function protocolInfo(mounted: Mounted): Promise<ProtocolInfo> {
-  return JSON.parse(String(await tool(mounted, 'protocol_info').invoke({}))) as ProtocolInfo;
+  return JSON.parse(
+    withoutNotice(String(await tool(mounted, 'protocol_info').invoke({}))),
+  ) as ProtocolInfo;
 }
 
 /** #1320 的四支原始資料工具，跟在最後。 */
@@ -199,6 +202,7 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         args: {},
       })) as ToolMessage;
       expect(message.content).toEqual([
+        { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
         { type: 'text', text: '畫面之前' },
         { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
         { type: 'text', text: '畫面之後' },
@@ -215,6 +219,7 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         args: {},
       })) as ToolMessage;
       expect(message.content).toEqual([
+        { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
         { type: 'text', text: CITE_TEXT },
         ...CITE_LINKS.map((link) => ({
           type: 'text',
@@ -257,7 +262,7 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
       expect(JSON.stringify((nullable as unknown as { schema: unknown }).schema)).toContain(
         'anyOf',
       );
-      const text = String(await nullable.invoke({ label: null, value: 3 }));
+      const text = withoutNotice(String(await nullable.invoke({ label: null, value: 3 })));
       expect(JSON.parse(text)).toEqual({ label: null, value: 3 });
     });
   });

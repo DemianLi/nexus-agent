@@ -13,6 +13,7 @@ import type { AddressInfo } from 'node:net';
 import { installProxyFromEnvironment, loadPlugins } from '@nexus/core';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createMcpPlugin } from './index.js';
+import { withoutNotice } from './untrusted-fixtures.js';
 
 let seen: string[] = [];
 let proxy: Server;
@@ -113,10 +114,12 @@ describe.skipIf(!childHonorsFlag)('stdio MCP server 子行程的連線', () => {
     });
     const { registry, dispose } = await loadPlugins([plugin]);
     try {
-      return String(
-        await registry.tools
-          .resolve('mcp__fixture__fetch_url')
-          ?.value.invoke({ url: 'http://child-target.invalid/' }),
+      return withoutNotice(
+        String(
+          await registry.tools
+            .resolve('mcp__fixture__fetch_url')
+            ?.value.invoke({ url: 'http://child-target.invalid/' }),
+        ),
       );
     } finally {
       await dispose();
