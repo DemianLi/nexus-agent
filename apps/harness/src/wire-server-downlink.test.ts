@@ -1,5 +1,7 @@
 import { decodeSseStream } from '@nexus/wire';
+import { randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { request as httpRequest } from 'node:http';
 import type { ServerResponse } from 'node:http';
 import { connect } from 'node:net';
 import type { Socket } from 'node:net';
@@ -39,7 +41,9 @@ interface Source {
 }
 
 /** 一支永遠在吐大 frame 的 SSE handler：每被拉一次記一次，request 的 signal 中止就記下來並結束。 */
-function bulkSource(options: { readonly frame?: string } = {}): Source {
+function bulkSource(
+  options: { readonly frame?: string; readonly contentType?: string } = {},
+): Source {
   const frame = options.frame ?? `data: ${'x'.repeat(FRAME_BYTES)}\n\n`;
   const source: Source = {
     pulls: 0,
@@ -78,7 +82,9 @@ function bulkSource(options: { readonly frame?: string } = {}): Source {
             controller.enqueue(encoder.encode(frame));
           },
         });
-        return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
+        return new Response(body, {
+          headers: { 'content-type': options.contentType ?? 'text/event-stream' },
+        });
       },
       async close() {},
     },
@@ -117,7 +123,7 @@ function quietSource(): Source {
 }
 
 /** 開一條原始 socket 打 `GET /threads/feed`，之後不讀（或照 `read` 慢慢讀）。 */
-async function openRawClient(url: string): Promise<Socket> {
+async function openRawClient(url: string, extraHeaders = ''): Promise<Socket> {
   const { port, hostname } = new URL(url);
   const socket = connect({ port: Number(port), host: hostname });
   sockets.push(socket);
@@ -125,7 +131,7 @@ async function openRawClient(url: string): Promise<Socket> {
     socket.once('connect', resolve);
     socket.once('error', reject);
   });
-  socket.write(`GET /threads/feed HTTP/1.1\r\nHost: ${hostname}:${port}\r\n\r\n`);
+  socket.write(`GET /threads/feed HTTP/1.1\r\nHost: ${hostname}:${port}\r\n${extraHeaders}\r\n`);
   socket.pause();
   return socket;
 }
@@ -159,6 +165,83 @@ describe('背壓：寫入等 drain（驗收 1）', () => {
     // 兩次取樣之間沒有再長：迴圈停在等 drain。
     expect(second - first).toBeLessThanOrEqual(1);
     expect(source.aborted).toBe(false);
+  });
+});
+
+describe('背壓不因打開 gzip 而退化（#1570 驗收 5）', () => {
+  const GZIP = { compression: { level: 1, thresholdBytes: 1024 } } as const;
+
+  it('SSE 下行（不經壓縮）：打開 gzip 之後對方不收，來源照樣停在一個小常數', async () => {
+    const source = bulkSource();
+    running = await startWireServer({
+      handler: source.handler,
+      heartbeatIntervalMs: 60_000,
+      ...GZIP,
+    });
+    await openRawClient(running.url, 'Accept-Encoding: gzip\r\n');
+
+    await sleep(400);
+    const first = source.pulls;
+    await sleep(400);
+    const second = source.pulls;
+
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(PRODUCE_CEILING / 2);
+    expect(second - first).toBeLessThanOrEqual(1);
+  });
+
+  it('會被壓的串流（application/json）：對方不收，壓縮串流的 write() 回 false 也一路傳回來，來源不衝上天花板', async () => {
+    // 隨機位元組的 base64：壓不掉多少，緩衝一定吃得滿。
+    const source = bulkSource({
+      contentType: 'application/json',
+      frame: randomBytes(FRAME_BYTES).toString('base64'),
+    });
+    running = await startWireServer({
+      handler: source.handler,
+      heartbeatIntervalMs: 60_000,
+      ...GZIP,
+    });
+    await openRawClient(running.url, 'Accept-Encoding: gzip\r\n');
+
+    await sleep(400);
+    const first = source.pulls;
+    await sleep(400);
+    const second = source.pulls;
+
+    expect(first).toBeGreaterThan(0);
+    expect(first).toBeLessThan(PRODUCE_CEILING / 2);
+    expect(second - first).toBeLessThanOrEqual(1);
+  });
+});
+
+describe('SSE 不壓、第一顆 frame 照樣即時到（#1570 驗收 3）', () => {
+  it('打開 gzip、帶 accept-encoding: gzip：1 秒內讀到 `: connected`，而且沒有 content-encoding', async () => {
+    const source = quietSource();
+    running = await startWireServer({
+      handler: source.handler,
+      heartbeatIntervalMs: 60_000,
+      compression: { level: 1, thresholdBytes: 0 },
+    });
+    const first = await new Promise<{ readonly encoding: unknown; readonly text: string }>(
+      (resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error('1 秒內沒讀到第一顆 chunk')), 1000);
+        const req = httpRequest(
+          `${running!.url}/threads/feed`,
+          { headers: { 'accept-encoding': 'gzip' } },
+          (res) => {
+            res.once('data', (chunk: Buffer) => {
+              clearTimeout(timer);
+              resolve({ encoding: res.headers['content-encoding'], text: chunk.toString('utf8') });
+              req.destroy();
+            });
+          },
+        );
+        req.on('error', () => undefined);
+        req.end();
+      },
+    );
+    expect(first.encoding).toBeUndefined();
+    expect(first.text).toBe(': connected\n\n');
   });
 });
 

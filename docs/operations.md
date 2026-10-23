@@ -820,6 +820,24 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 - **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例（Kubernetes 的 `livez`／`readyz`、Prometheus 文字格式），逐點見 `apps/harness/src/ops-endpoints.ts` 的檔頭。這一列沒有新增任何出境路徑。
 - **將來若開 `--host`（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）**，「探針免登入、只在 loopback」的前提要重看；現在 serve 只綁 `127.0.0.1`。
 
+## 壓縮 HTTP 回應（gzip）
+
+[#1570](https://github.com/DemianLi/nexus-agent/issues/1570)。**預設不壓**，跟 dsh 的預設（`compression: 'none'`）一樣；不打開時 serve 的行為跟以前完全相同。
+頻寬窄的內網段（跨廠區、VPN）想壓縮第一次載入的網頁 bundle 與歷史頁，才需要打開：
+
+```bash
+# 在 serve 的啟動旗標後面加（systemd 單元就加在 ExecStart 那一行）
+--compression gzip
+# 可再調：--compression-level 1（0 到 9 的整數，預設 1）、--compression-threshold 1024（位元組，預設 1024）
+```
+
+- **壓什麼**：網頁 bundle、CSS 與 JSON 回應（歷史頁、列表），而且只在瀏覽器的 `Accept-Encoding` 接受 gzip 時（`gzip;q=0.5, identity;q=1` 這種偏好 identity 的不壓）。已知長度小於門檻的不壓，長度未知的串流可以壓；**目前只對自帶 `Content-Length` 的回應有效**——nexus 的回應都沒有已知長度（`writeResponse` 先 `writeHead` 再寫 body），所以門檻實際上不會生效，語意跟 dsh 相同。
+- **不壓什麼**：`text/event-stream`（SSE 下行）與帶 `Content-Range` 的回應。壓縮串流會把逐顆 frame 積在緩衝裡，等於關掉 SSE 的即時性，所以 SSE 一律照原樣送；帶 range 的回應壓了位元組範圍就對不上。探針與 `/metrics` 照同一套規則：因為門檻不生效，抓取端帶 `Accept-Encoding: gzip` 時連只有 `ok` 兩個字的探針本文也會被壓（實測壓成 22 位元組），抓取端不需要這個的話不要帶。
+- **三個旗標逐欄獨立驗**（同 dsh）：等級超出 0 到 9、門檻不是非負整數、`--compression` 不是 `none`／`gzip` 都是 usage error，在任何檔案寫入之前失敗；沒打開 gzip 時給等級或門檻照收但不生效。
+- **設定走旗標，不走 `cordis.yml` 的列**：listener 的設定（`--port`）本來就是旗標，將來的 `--host` 與 TLS（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）也一樣。起動時決定，改了要重啟。
+- **前面有反向代理的部署**：代理已經在壓的話不必再打開，兩層各壓一次只是白耗 CPU。
+- **偏離 dsh**：無。形狀照抄 dsh `packages/host/webserver/src/index.ts` 的 `createGzipMiddleware`（`:218-246`）與接在 listener 最外層的做法（`:443-457`），只是載體從 Cordis 的 `WebServer` 服務換成 `wire-server.ts`。
+
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），
