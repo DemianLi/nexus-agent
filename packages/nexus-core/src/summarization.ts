@@ -1775,6 +1775,15 @@ function withTokenBudget(
                   ...(thresholds.some((threshold) => threshold.type === 'messages') &&
                     retained !== undefined &&
                     length !== undefined && { messagesCompactable: retained < length }),
+                  // 這份請求的組成（#1571）：系統與工具是 `sent` 的純估算，訊息拿環上的數扣掉這兩格，三格相加等於 `approxTokens`。
+                  breakdown: {
+                    systemTokens: estimate.parts.system,
+                    toolsTokens: estimate.parts.tools,
+                    messageTokens: Math.max(
+                      0,
+                      estimate.tokens - estimate.parts.system - estimate.parts.tools,
+                    ),
+                  },
                 },
                 call.of(found.log),
               ),

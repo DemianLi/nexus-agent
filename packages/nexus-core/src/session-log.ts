@@ -1136,6 +1136,22 @@ export interface SessionEventMap {
      */
     readonly messagesCompactable?: boolean;
     /**
+     * 這份請求的組成：system 提示、工具定義、對話訊息各約多少 token（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）。
+     * 三格都是非負整數，**沒有系統提示或沒有工具時是 `0`，不是缺席**。`systemTokens`、`toolsTokens` 是摘要器交給下一層的那份請求的純估算
+     * （`estimateRequestParts`）；`messageTokens` 是 `max(0, approxTokens − systemTokens − toolsTokens)`，所以三格相加等於環上的
+     * `approxTokens`（錨在供應商實數上的修正量全算給訊息，那是唯一會被錨移動的一格）。`systemTokens + toolsTokens` 大過
+     * `approxTokens` 時夾在 `0`，三格相加會比 `approxTokens` 大。
+     *
+     * **偏離 dsh（理由 1：基座表達不出來）**：dsh 的 `contextBreakdown` 從日誌的 surface 事件折出，我們的日誌沒有那一軸
+     * （`session-log.ts:948`），退到量測點手上那份實際送出的請求，見 `estimateRequestParts`。這一格出現以前的日誌沒有它——沒有就是沒量，
+     * 不是 `0`。加它沒有升日誌格式版本，紀錄見 `docs/persistence-changes/2026-10-24-context-measure-breakdown.md`。
+     */
+    readonly breakdown?: {
+      readonly systemTokens: number;
+      readonly toolsTokens: number;
+      readonly messageTokens: number;
+    };
+    /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
      * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
      */

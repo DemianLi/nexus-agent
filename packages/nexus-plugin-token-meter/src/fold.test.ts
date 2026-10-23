@@ -6,7 +6,12 @@
  * 對帳測試把折出來的數字跟 core 的 `sessionStats`、`tokenUsage` 逐項對一遍——「不另造總帳」靠這個證明。
  */
 
-import { createProjectionFold, deriveSessionStats, deriveTokenUsage } from '@nexus/core';
+import {
+  createProjectionFold,
+  deriveSessionStats,
+  deriveTokenUsage,
+  interruptedTurnClosers,
+} from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import {
   TOKEN_METER_LINKS_CAP,
@@ -334,7 +339,7 @@ describe('邊角', () => {
     expect(view.session.toolSumMs).toBe(4);
   });
 
-  it('session/end-seed 清掉還開著的呼叫與工具：重啟後的結果不跟崩潰前的開頭配對', () => {
+  it('session/end-seed 清掉還開著的呼叫與工具：重啟後的結果不跟崩潰前的開頭配對（#1571：開著的呼叫先記成一次失敗）', () => {
     const view = fold(
       log(
         [0, 'model/start', {}],
@@ -346,7 +351,10 @@ describe('邊角', () => {
     );
     // 沒配到的工具不算；沒配到 model/start 的 model/end 算一步但不計時。
     expect(view.session.toolCalls).toBe(0);
-    expect(view.session.steps).toBe(1);
+    // 崩潰前開著的那次呼叫在 end-seed 記成一次失敗、沒報用量的呼叫（過去靜靜消失），加上後面那顆沒配到的 model/end。
+    expect(view.session.steps).toBe(2);
+    expect(view.session.failedSteps).toBe(1);
+    expect(view.session.unknownSteps).toBe(2);
     expect(view.session.modelMs).toBe(0);
   });
 
@@ -785,5 +793,239 @@ describe('投影通道', () => {
     expect(live.current()).toEqual(folder.fold(events));
     const [value] = folder.fold(events);
     expect(JSON.parse(JSON.stringify(value?.view))).toEqual(value?.view);
+  });
+});
+
+describe('tokensProven：這一輪的數字證不證得出是準的（#1571 N1201，Q1 (a)，條件照 dsh turn-usage.ts）', () => {
+  /** 一輪、一次呼叫，用量 10／2。 */
+  const cleanTurn = (extra: { usageData?: unknown } = {}): Draft[] => [
+    [0, 'turn/start', { kind: 'message' }],
+    [1, 'model/start', {}],
+    [2, 'model/usage', extra.usageData ?? usage(10, 2)],
+    [3, 'model/end', {}],
+    [4, 'turn/end', {}],
+  ];
+
+  it('每次嘗試都報了有效用量、收尾了、沒有開著的呼叫：true', () => {
+    const turn = fold(log(...cleanTurn())).turns[0]!;
+    expect(turn.tokensProven).toBe(true);
+    expect(turn.unknownSteps).toBe(0);
+  });
+
+  it('快取少一桶（只報讀、沒報寫）：仍是 true，而且那一格缺席（dsh turn-usage.ts:133-138 缺桶只省略）', () => {
+    const turn = fold(
+      log(...cleanTurn({ usageData: { ...usage(10, 2), totalTokens: 15, cacheReadTokens: 3 } })),
+    ).turns[0]!;
+    expect(turn.tokensProven).toBe(true);
+    expect(turn.cacheReadTokens).toBe(3);
+    expect(Object.hasOwn(turn, 'cacheWriteTokens')).toBe(false);
+  });
+
+  it('其中一次嘗試沒報用量：false，數字照舊交', () => {
+    const turn = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'model/usage', usage(10, 2)],
+        [3, 'model/end', {}],
+        [4, 'model/start', {}],
+        [5, 'model/end', { outcome: 'error' }],
+        [6, 'turn/end', {}],
+      ),
+    ).turns[0]!;
+    expect(turn.tokensProven).toBe(false);
+    expect(turn.unknownSteps).toBe(1);
+    expect(turn.inputTokens).toBe(10);
+    expect(turn.outputTokens).toBe(2);
+  });
+
+  it('收尾時還有一次呼叫開著，而且它的用量已經寫了：false（unknownSteps 夾在 0，只看它會誤判成準）', () => {
+    // 真實順序是 model/start → model/usage → assistant/message → model/end；死在 usage 與 end 之間就是這個形狀。
+    const turn = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'model/usage', usage(10, 2)],
+        [3, 'turn/end', { reason: { kind: 'interrupted' } }],
+      ),
+    ).turns[0]!;
+    expect(turn.unknownSteps).toBe(0);
+    expect(turn.steps).toBe(1);
+    expect(turn.failedSteps).toBe(1);
+    expect(turn.tokensProven).toBe(false);
+  });
+
+  it('還沒收尾的輪（沒有 turn/end）：不帶 tokensProven，不是 false', () => {
+    const turn = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'model/usage', usage(10, 2)],
+        [3, 'model/end', {}],
+      ),
+    ).turns[0]!;
+    expect(turn.end).toBeUndefined();
+    expect(Object.hasOwn(turn, 'tokensProven')).toBe(false);
+  });
+
+  it('停在核准點（paused）與失敗（turn/failed）的輪也算收尾了：帶 tokensProven', () => {
+    const paused = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'model/usage', usage(10, 2)],
+        [3, 'model/end', {}],
+        [4, 'interrupt/raised', {}],
+        [5, 'turn/end', {}],
+      ),
+    ).turns[0]!;
+    expect(paused.end).toBe('paused');
+    expect(paused.tokensProven).toBe(true);
+    const failed = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'model/usage', usage(10, 2)],
+        [3, 'model/end', {}],
+        [4, 'turn/failed', {}],
+      ),
+    ).turns[0]!;
+    expect(failed.end).toBe('failed');
+    expect(failed.tokensProven).toBe(true);
+  });
+
+  it('加總超過安全整數：false（dsh safeSum，turn-usage.ts:63-70）', () => {
+    const big = Number.MAX_SAFE_INTEGER - 1;
+    const turn = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'model/usage', usage(big, 0)],
+        [3, 'model/end', {}],
+        [4, 'model/start', {}],
+        [5, 'model/usage', usage(big, 0)],
+        [6, 'model/end', {}],
+        [7, 'turn/end', {}],
+      ),
+    ).turns[0]!;
+    expect(turn.unknownSteps).toBe(0);
+    expect(Number.isSafeInteger(turn.inputTokens)).toBe(false);
+    expect(turn.tokensProven).toBe(false);
+  });
+
+  it('收尾了、但一次呼叫都沒有的輪：false，數字全是 0（dsh aggregateAttempts:127 零次嘗試回 undefined＝證不出）', () => {
+    const turn = fold(log([0, 'turn/start', { kind: 'message' }], [1, 'turn/end', {}])).turns[0]!;
+    expect(turn.steps).toBe(0);
+    expect(turn.end).toBe('completed');
+    expect(turn.inputTokens + turn.outputTokens).toBe(0);
+    expect(turn.tokensProven).toBe(false);
+  });
+});
+
+describe('收輪時還開著的呼叫：舊日誌漏帳與今天的續接路徑（#1571 N1201）', () => {
+  it('舊日誌形狀（#934～#1169 之間）：turn/end interrupted 之前那次呼叫從沒有 model/end，補記進那一輪', () => {
+    // 那幾天的補結只補 turn/end；今天續接不會再產出這個形狀，所以手寫。
+    const view = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'turn/end', { reason: { kind: 'interrupted' } }],
+        [3, 'session/end-seed', {}],
+        [4, 'turn/start', { kind: 'message' }],
+      ),
+    );
+    const first = view.turns[0]!;
+    expect(first.steps).toBe(1);
+    expect(first.failedSteps).toBe(1);
+    expect(first.unknownSteps).toBe(1);
+    expect(first.tokensProven).toBe(false);
+    // 記在那一輪，不是輪外。
+    expect(view.outside.steps).toBe(0);
+    expect(view.session.steps).toBe(1);
+    expect(first.models).toEqual([expect.objectContaining({ steps: 1 })]);
+    // 模型時間不加：結束時刻不知道。
+    expect(first.modelMs).toBe(0);
+  });
+
+  it('今天的續接路徑（interruptedTurnClosers 補 model/end 再接 end-seed）：一次，不重複計數', () => {
+    const crashed = log([0, 'turn/start', { kind: 'message' }], [1, 'model/start', {}]);
+    const closers = interruptedTurnClosers(crashed);
+    const resumed: SessionEvent[] = [
+      ...crashed,
+      ...closers,
+      { type: 'session/end-seed', seq: crashed.length + closers.length, time: 2, data: {} },
+    ] as unknown as SessionEvent[];
+    expect(closers.map((event) => event.type)).toEqual(['model/end', 'turn/end']);
+    const first = fold(resumed).turns[0]!;
+    expect(first.steps).toBe(1);
+    expect(first.failedSteps).toBe(1);
+    expect(first.unknownSteps).toBe(1);
+    expect(first.tokensProven).toBe(false);
+  });
+
+  it('沒有 turn/end 就接 end-seed：開著的呼叫記進輪外或還開著的那一輪，不消失', () => {
+    const outside = fold(log([0, 'model/start', {}], [1, 'session/end-seed', {}]));
+    expect(outside.outside.steps).toBe(1);
+    expect(outside.outside.failedSteps).toBe(1);
+    const inRow = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'session/end-seed', {}],
+      ),
+    );
+    expect(inRow.turns[0]?.steps).toBe(1);
+    expect(inRow.turns[0]?.end).toBeUndefined();
+    expect(Object.hasOwn(inRow.turns[0]!, 'tokensProven')).toBe(false);
+  });
+
+  it('沒有開著的呼叫、沒有待結工具、不是 inherited：end-seed 回同一個 state 物件', () => {
+    let state = initialTokenMeter();
+    state = applyTokenMeter(state, {
+      seq: 0,
+      time: 0,
+      type: 'turn/start',
+      data: { kind: 'message' },
+    } as unknown as SessionEvent);
+    const next = applyTokenMeter(state, {
+      seq: 1,
+      time: 1,
+      type: 'session/end-seed',
+      data: {},
+    } as unknown as SessionEvent);
+    expect(next).toBe(state);
+  });
+
+  it('分叉的 inherited end-seed 接在 turn/end 後面：不多記一顆幻影呼叫（buildForkSeed 的切點一定是 turn/end）', () => {
+    const view = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'model/usage', usage(10, 2)],
+        [3, 'model/end', {}],
+        [4, 'turn/end', {}],
+        [5, 'session/end-seed', { inherited: true }],
+      ),
+    );
+    expect(view.session.steps).toBe(1);
+    expect(view.session.failedSteps).toBe(0);
+    expect(view.turns[0]?.tokensProven).toBe(true);
+  });
+
+  it('一次重試：失敗那一對帶 outcome、成功那一對沒帶 ⇒ steps 2、failedSteps 1（TOKEN_METER_CALIBER.steps 說的事實）', () => {
+    const turn = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        [1, 'model/start', {}],
+        [2, 'model/end', { outcome: 'error' }],
+        [3, 'llm/retry-started', { waitedMs: 5 }],
+        [4, 'model/start', {}],
+        [5, 'model/usage', usage(10, 2)],
+        [6, 'model/end', {}],
+        [7, 'turn/end', {}],
+      ),
+    ).turns[0]!;
+    expect(turn.steps).toBe(2);
+    expect(turn.failedSteps).toBe(1);
   });
 });

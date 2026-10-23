@@ -422,28 +422,69 @@ function systemTokens(system: unknown): Counted {
   return counted;
 }
 
+/** 一份請求的 E 拆成三格（system 一則、全部工具定義、全部訊息）。每一格都是非負整數。 */
+export interface RequestParts {
+  /** system 那一則（含角色框架開銷）。沒有 system 就是 `0`，不是缺席。 */
+  readonly system: number;
+  /** 全部工具定義的 JSON。沒有工具就是 `0`。 */
+  readonly tools: number;
+  /** 全部訊息（含每則的角色框架開銷與圖）。 */
+  readonly messages: number;
+}
+
+/**
+ * 一份請求的 E（不錨），拆成 system／工具／訊息三格（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）。
+ *
+ * **{@link estimateRequestTokens} 就是這三格相加**，所以兩支永遠一致：加 `singleDigits` 時逐位切詞多出來的那一截算在它所屬的那一格，
+ * 不是另外一格。
+ *
+ * **偏離 dsh（理由 1：基座表達不出來）。** dsh 的 `contextBreakdown`（`packages/llm/token-meter/src/breakdown-projection.ts:1-5` 的
+ * 檔頭與按 `surfaceOp` 放節點的 `:70-107`，`1517a4db`；`22ddee37` 只動型別宣告）從日誌裡的 surface 事件折出「現在還留著什麼」。我們的歷史替換由基座的摘要中介層直接改 state，
+ * 日誌沒有 surface 那一軸（沒有 `surfaceOp`，替換不能掛在事件上，`session-log.ts:948`），純讀日誌的折疊無從知道哪些 system 與訊息還在。
+ * 退到最接近的一格：**量測點手上那份實際送出的請求**，在那裡拆（`summarization.ts` 的 `withTokenBudget`）。
+ *
+ * @param request - 要估的請求；`messages` 可以只給一段前綴。
+ * @param options - `singleDigits`：同 {@link estimateRequestTokens}。
+ * @returns 三格 token 數。
+ */
+export function estimateRequestParts(
+  request: EstimatedRequest,
+  options: { readonly singleDigits?: boolean } = {},
+): RequestParts {
+  const withDigits = (counted: Counted): number =>
+    options.singleDigits === true ? counted.tokens + counted.excess : counted.tokens;
+  const sum = (items: Iterable<Counted>): Counted => {
+    let tokens = 0;
+    let excess = 0;
+    for (const counted of items) {
+      tokens += counted.tokens;
+      excess += counted.excess;
+    }
+    return { tokens, excess };
+  };
+  return {
+    system: withDigits(systemTokens(request.systemMessage)),
+    tools: withDigits(
+      sum(Array.isArray(request.tools) ? (request.tools as unknown[]).map(toolTokens) : []),
+    ),
+    messages: withDigits(sum((request.messages ?? []).map(messageTokens))),
+  };
+}
+
 /**
  * 一份請求的 E（不錨）。
  *
  * @param request - 要估的請求；`messages` 可以只給一段前綴。
  * @param options - `singleDigits`：這顆模型把數字逐位切成一個 token 一位（[#1102](https://github.com/DemianLi/nexus-agent/issues/1102)），
  *   連續數字按位數計，不按 o200k 的三位一組。省略就是 o200k 原樣。
- * @returns token 數：o200k 算出來的，加上 `singleDigits` 時逐位切詞多出來的那一截。
+ * @returns token 數：o200k 算出來的，加上 `singleDigits` 時逐位切詞多出來的那一截。三格拆開的樣子見 {@link estimateRequestParts}。
  */
 export function estimateRequestTokens(
   request: EstimatedRequest,
   options: { readonly singleDigits?: boolean } = {},
 ): number {
-  let tokens = 0;
-  let excess = 0;
-  const add = (counted: Counted): void => {
-    tokens += counted.tokens;
-    excess += counted.excess;
-  };
-  add(systemTokens(request.systemMessage));
-  for (const message of request.messages ?? []) add(messageTokens(message));
-  if (Array.isArray(request.tools)) for (const tool of request.tools) add(toolTokens(tool));
-  return options.singleDigits === true ? tokens + excess : tokens;
+  const { system, tools, messages } = estimateRequestParts(request, options);
+  return system + tools + messages;
 }
 
 /** 一則 AI 訊息的實數，與報它的模型。不是 AI 訊息、或沒有正的實數，就是 `undefined`。 */
@@ -635,16 +676,18 @@ function roundTokens(value: number): number {
  *
  * @param request - 要估的請求。錨從它的 `messages` 裡找。
  * @param book - 帳。由進入點注入，見 {@link TokenAnchorBook}。
- * @returns 估算值與它的來源。
+ * @returns 估算值與它的來源；`estimated` 是這份請求的 E（不錨），`parts` 是 E 拆成的三格（{@link estimateRequestParts}，
+ *   用的是這顆模型同一個 `singleDigits`，所以三格相加就是 `estimated`）。
  */
 export function estimateAnchoredTokens(
   request: EstimatedRequest,
   book: TokenAnchorBook,
-): TokenEstimate & { readonly estimated: number } {
+): TokenEstimate & { readonly estimated: number; readonly parts: RequestParts } {
   const messages = request.messages ?? [];
   const current = modelNameOf(request.model);
   const digits = { singleDigits: book.singleDigits(current) };
-  const estimated = estimateRequestTokens(request, digits);
+  const parts = estimateRequestParts(request, digits);
+  const estimated = parts.system + parts.tools + parts.messages;
   const learned = book.learnedRatio(current) ?? 1;
   const { last, first } = anchorsIn(messages, current);
   if (last >= 0) {
@@ -663,6 +706,7 @@ export function estimateAnchoredTokens(
       tokens: roundTokens(tokens + (estimated - before) * (ratio ?? learned)),
       basis: 'anchor',
       estimated,
+      parts,
     };
   }
   const borrowed = book.firstCall(request);
@@ -671,6 +715,7 @@ export function estimateAnchoredTokens(
       tokens: roundTokens(borrowed.tokens + (estimated - borrowed.estimated) * learned),
       basis: 'borrowed',
       estimated,
+      parts,
     };
-  return { tokens: estimated, basis: 'estimate', estimated };
+  return { tokens: estimated, basis: 'estimate', estimated, parts };
 }

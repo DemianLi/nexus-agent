@@ -180,6 +180,18 @@ export interface TokenMeterTurn extends TokenMeterSpan {
   readonly time: number;
   readonly kind: string;
   readonly end?: TokenMeterEnd;
+  /**
+   * 這一輪的 token 數字證不證得出是準的（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1201，Q1 (a)）。
+   * `true` 是準數；`false` 是下限——**數字照舊交**，只是別當成總數。**缺席＝這一輪還沒收尾**（沒有 `turn/end`），還沒定案。
+   *
+   * 條件照 dsh `deriveTurnTokenUsage`（`packages/llm/token-meter/src/turn-usage.ts:178-274`，`1517a4db`）：這一輪收尾了、
+   * 至少有一次嘗試（零次是 `false`，dsh `aggregateAttempts:127`）、每一次嘗試都報了有效用量（{@link TokenMeterSpan.unknownSteps} 是 0）、收尾時沒有開著的呼叫、加總沒有超過安全整數。
+   * **快取桶缺席不讓它變 `false`**（dsh `:133-138` 缺桶只讓那一格省略）：看 {@link TokenMeterSpan.cacheReadTokens} 在不在。
+   *
+   * **偏離 dsh（理由 2：產品需求超出 dsh）**：dsh 證不出的那一輪整輪不交數字；管理者估成本要下限，空白沒有用，所以我們數字照舊交。
+   * 會話總計（`session`）跟 dsh 的 `usage-projection.ts` 一樣是部分和，那一半不是偏離。
+   */
+  readonly tokensProven?: boolean;
   /** 最後一顆 `turn/end`／`turn/failed` 的時刻。 */
   readonly endTime?: number;
   /** `endTime − time`：含停在核准點等的那段。 */
@@ -232,9 +244,13 @@ export interface TokenMeterView {
  */
 export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
   steps:
-    '結束了的模型呼叫，完成、失敗、中止都算；重試掉的中間幾次不算（重試在記錄器底下，只有最後一次的起訖）；不含產生會話標題的那一次呼叫（標題不記用量，#1022）。',
-  failedSteps: '沒有正常回來的呼叫（拋錯或使用者按了停止）。',
-  unknownSteps: '有結束但供應商沒報用量的呼叫：燒了多少不知道，不是 0，所以 token 是下限。',
+    '結束了的模型呼叫，完成、失敗、中止都算；每一次嘗試各算一次，含被重試掉的那幾次（它們同時算進失敗的呼叫）；行程在呼叫中途結束的那一次也算一次；不含產生會話標題的那一次呼叫（標題不記用量，#1022）。',
+  failedSteps:
+    '沒有正常回來的呼叫（拋錯或使用者按了停止，含被重試掉的那幾次），或行程在呼叫中途結束的那一次。',
+  unknownSteps:
+    '有結束但供應商沒報用量的呼叫（含行程在呼叫中途結束的那一次）：燒了多少不知道，不是 0，所以 token 是下限。',
+  tokensProven:
+    '這一輪的 token 數字是不是準的：這一輪收尾了、至少有一次嘗試、每一次嘗試都報了有效用量、收尾時沒有開著的呼叫。不是準的（下限）數字照舊在；快取桶缺席不影響它。缺席表示這一輪還沒收尾。',
   inputTokens:
     '供應商報的輸入 token，只算沒走快取的那一桶（快取讀、快取寫另列，完整的 prompt 要三桶相加）；成功與失敗的呼叫都算；不含生摘要那一次、不含產生會話標題的那一次；沒報的呼叫不在裡面。',
   outputTokens:
@@ -261,9 +277,9 @@ export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
   summaryCacheWriteTokens: '生摘要那一次寫進快取的輸入 token，另列；缺席的規則同摘要的快取讀。',
   retries: '模型呼叫的重試次數。',
   retryWaitMs:
-    '重試實際等的退避時間，包在該次模型呼叫的起訖之內，所以從模型時間扣掉；畫面把它和核准等待合成「等待」時要相加。',
+    '重試實際等的退避時間。新日誌（#1427 之後）退避落在兩次嘗試之間，不在模型呼叫的起訖之內，不用從模型時間扣；更早的日誌退避包在該次呼叫的起訖之內，已從模型時間扣掉。畫面把它和核准等待合成「等待」時要相加。',
   modelMs:
-    '模型呼叫的牆鐘（含失敗與中止的），扣掉重試退避；不含產生會話標題的那一次。逐輪加總會小於會話總計的 llmMs，差的正是退避。',
+    '模型呼叫的牆鐘（含失敗與中止的）；不含產生會話標題的那一次。新日誌（#1427 之後）退避在兩次嘗試之間，逐輪加總等於會話總計的 llmMs；更早的日誌退避包在起訖之內、已從這裡扣掉，逐輪加總會小於 llmMs，差的正是退避。',
   toolCalls: '落定的工具呼叫（有結果的）；核准被拒的也有結果；停在核准點、沒跑的那一次不算。',
   toolErrors: '落定的工具呼叫裡 isError 的。',
   toolSumMs: '每個工具各自的牆鐘加總，平行的重疊會重複算（同會話統計的工具耗時）。',

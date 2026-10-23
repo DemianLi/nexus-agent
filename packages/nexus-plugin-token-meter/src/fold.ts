@@ -23,6 +23,20 @@
  *   兩格分開放，畫面要合成一段「等待」就相加。
  * - **殘差** `unaccountedMs` ＝ 牆鐘 − 模型 − 工具 − 重試退避 − 核准等待，不夾 0（見型別）。前景子代理跑的時間已在派它的工具裡。
  *
+ * ## 開著的呼叫與 `tokensProven`（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1201）
+ *
+ * 輪收尾（`turn/end`／`turn/failed`／`session/end-seed`）時 `model/start` 還沒配到 `model/end` 的呼叫，**先記成一次失敗、沒報用量的嘗試**
+ * （`steps`＋1、`failedSteps`＋1、模型列 `steps`＋1，沒有 `modelMs`），記在收尾的那一輪、不落到 `outside`。這樣行程在呼叫中途結束的那一次
+ * 不會從 `steps` 裡消失。`model/usage` 寫了、`model/end` 還沒寫就斷掉的那種，`steps` 與 `usages` 相等、`unknownSteps` 算不出缺，
+ * 所以另用 `openCallAtEnd` 記「收尾時有開著的呼叫」。
+ *
+ * `tokensProven`（只有收尾了的輪才有）＝ 至少有一次嘗試 ∧ `unknownSteps === 0` ∧ 收尾時沒有開著的呼叫 ∧ 四桶加總是安全整數。條件照 dsh
+ * `deriveTurnTokenUsage`（`turn-usage.ts:178-274`）；快取桶缺席只讓那一格省略、不讓它變 `false`（dsh `:133-138`）。
+ * 沒有 `turn/end` 的輪不出這一格（dsh `!sawEnd`，`:273`）。
+ *
+ * **偏離 dsh（理由 2：產品需求超出 dsh）**：dsh 證不出的輪整輪不交數字；我們數字照舊交，旗標說它是下限（既有承諾：`TOKEN_METER_CALIBER.unknownSteps`
+ * 在 `token-meter.ts:250-251` 就寫「token 是下限」）。沒有任何嘗試的輪照 dsh `aggregateAttempts:127` 是「證不出」＝ `false`，數字全 0，不是偏離。
+ *
  * ## 模型 id
  *
  * `request/header` 落在配對的 `model/start` **之後**、而且變了才記，所以 id 要在 `model/end`／`model/usage` 的當下才讀（那時
@@ -329,6 +343,13 @@ interface Row {
   readonly kind: string;
   readonly end?: TokenMeterEnd;
   readonly endTime?: number;
+  /**
+   * 收尾（`turn/end`／`turn/failed`）的時候還有一次模型呼叫開著（有 `model/start`、沒有 `model/end`）：行程死在呼叫中途。
+   * 那次呼叫已記成一次失敗、沒報用量的呼叫（{@link abandonCall}），這一格另外記著「收尾時有開著的呼叫」，給 `tokensProven` 用——
+   * 它不能只靠 `unknownSteps`：用量是在 `model/end` **之前**寫的（`model-usage.ts` 在內層、`model-calls.ts` 的 `model/end` 在外層），
+   * 死在兩者之間的呼叫 `usages` 已經是 1，補上的那一步讓 `steps` 也是 1，`unknownSteps` 夾在 0。
+   */
+  readonly openCallAtEnd?: boolean;
   readonly sp: Sp;
   /** 這一輪的工具區間聯集；收進 `closed` 時清掉（只有目前這一輪還會有新工具）。 */
   readonly cover: Cover;
@@ -463,16 +484,40 @@ function endOf(reason: unknown, paused: boolean): TokenMeterEnd {
   return paused ? 'paused' : 'completed';
 }
 
+/**
+ * 還開著的模型呼叫（`state.call`）記成一次失敗、沒報用量的呼叫，再清掉（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1201）：
+ * `steps` ＋1、`failedSteps` ＋1、模型時間不加（結束時刻不知道），模型列 `steps` ＋1。沒有開著的呼叫就原樣回傳同一個參照。
+ *
+ * 這是 dsh `deriveTurnTokenUsage` 的「收輪時還開著的嘗試」（`turn-usage.ts:262-270`、`:273`）：dsh 讓整輪證不出來，我們把它算成
+ * 一次沒報用量的失敗（`unknownSteps` 加一，這一輪的數字是下限），形狀同 #1169 續接補寫的 `model/end { outcome: 'error' }`。
+ * 去處跟著 {@link update}：輪開著就進那一輪，否則進輪外。
+ */
+function abandonCall(state: TokenMeterState): TokenMeterState {
+  if (state.call === null) return state;
+  const counted = update(state, (sp) =>
+    addModel(bump(sp, { steps: 1, failedSteps: 1 }), {
+      model: state.model,
+      ...NO_MODEL_ACC,
+      steps: 1,
+    }),
+  );
+  return { ...counted, call: null };
+}
+
 function closeRow(
   state: TokenMeterState,
   event: SessionEvent,
   end: TokenMeterEnd,
 ): TokenMeterState {
   if (!inRow(state)) return state;
-  const row = state.current!;
+  // 先記進這一輪（`current` 還開著），不是輪外：#934～#1169 之間續接過的舊日誌是 `model/start` → `turn/end { interrupted }` →
+  // `session/end-seed`，那次呼叫從來沒有 `model/end`，過去在 `session/end-seed` 才被靜靜清掉、不進帳。
+  const abandoned = state.call !== null;
+  const settled = abandonCall(state);
+  const row = settled.current!;
   return {
-    ...state,
-    current: { ...row, end, endTime: event.time },
+    ...settled,
+    current: { ...row, end, endTime: event.time, ...(abandoned && { openCallAtEnd: true }) },
     open: false,
     paused: false,
     pending: NO_PENDING,
@@ -658,10 +703,14 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
     }
     case 'session/end-seed': {
       // 這個行程沒寫過它之前的事件：還開著的呼叫與工具屬於一個已經結束的生命週期，不跟之後的結果配對。
+      // 還開著的呼叫先記成一次失敗、沒報用量的（{@link abandonCall}）再清掉；通常 `turn/end` 已經收過了（`closeRow`），
+      // 這裡接的是沒有 `turn/end` 就接 end-seed 的日誌（前景子代理沒有輪、行程死在輪中沒收尾）。
+      // 分叉前綴的切點一定是 `turn/end`（`buildForkSeed`），所以 `inherited` 的 end-seed 走到這裡 `call` 已經是 `null`，不會多記。
+      const abandoned = abandonCall(state);
       const settled =
-        state.call === null && Object.keys(state.pending).length === 0
-          ? state
-          : { ...state, call: null, pending: NO_PENDING };
+        abandoned.call === null && Object.keys(abandoned.pending).length === 0
+          ? abandoned
+          : { ...abandoned, call: null, pending: NO_PENDING };
       // 分叉繼承來的前綴到此為止（#1579）：之前收的子代理都是來源 thread 派的，`<這條>/<run>` 開不到，清掉。
       // 同 dsh `subagentCatalog` 投影（`catalog.ts:124-126`，`seq < inheritedEventCount` 就略過）——這裡的 init
       // 拿不到切點，但事件照 seq 順序進來，在最後一顆 inherited 標記清掉等於只留它之後的。
@@ -680,6 +729,22 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
 
 // ── view ─────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * 這一輪的 token 數字證不證得出是準的（Q1 (a)，條件照 dsh `deriveTurnTokenUsage`，`turn-usage.ts:178-274`）：
+ * 至少有一次嘗試（dsh `aggregateAttempts:127`，零次是 undefined）、每一次嘗試都報了有效用量（`unknownSteps` 是 0）、收尾時沒有開著的呼叫、加總沒超過安全整數。
+ * 快取桶缺席**不算**（dsh `:133-138` 缺桶只讓那一格省略；`:108-109` 的「沒有 total 又缺桶」在 nexus 走不到，`validateUsage` 的 total 必填）。
+ */
+function proven(row: Row, span: TokenMeterSpan): boolean {
+  const { n } = row.sp;
+  return (
+    span.steps > 0 &&
+    span.unknownSteps === 0 &&
+    row.openCallAtEnd !== true &&
+    // dsh `safeSum`（`:63-70`、`:128-131`）：每一次的數都是安全整數，兩個各在範圍內的呼叫加起來仍可能不是。
+    Number.isSafeInteger(n.inputTokens + n.outputTokens + n.cacheReadTokens + n.cacheWriteTokens)
+  );
+}
+
 function rowToTurn(row: Row): TokenMeterTurn {
   const span = toSpan(row.sp);
   const wallMs = row.endTime === undefined ? undefined : row.endTime - row.time;
@@ -689,7 +754,7 @@ function rowToTurn(row: Row): TokenMeterTurn {
     seq: row.seq,
     time: row.time,
     kind: row.kind,
-    ...(row.end === undefined ? {} : { end: row.end }),
+    ...(row.end === undefined ? {} : { end: row.end, tokensProven: proven(row, span) }),
     ...(row.endTime === undefined ? {} : { endTime: row.endTime }),
     ...(wallMs === undefined
       ? {}
