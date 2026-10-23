@@ -1031,3 +1031,57 @@ describe('一份失敗、其餘照收（#1511）', () => {
     await disposing;
   });
 });
+
+describe('rootHeader()（#1599：搜尋拿它跟盤上那份比）', () => {
+  function recordingStore(headers: StoredSessionHeader[]): SessionStore {
+    return {
+      ...NO_READS,
+      create(header) {
+        headers.push(header);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+  }
+
+  it('新建的 root：就是交給 store.create 的那一份；之後生的 subagent 不蓋掉它', async () => {
+    const headers: StoredSessionHeader[] = [];
+    const sessions = new SessionRegistry('root-h');
+    const persistence = attachSessionPersistence(sessions, recordingStore(headers), {
+      cwd: '/專案',
+    });
+    sessions.open({ kind: 'subagent', runId: 'r1' });
+    expect(headers.map((header) => header.id)).toEqual(['root-h', 'root-h/r1']);
+    expect(persistence.rootHeader()).toBe(headers[0]);
+    await persistence.dispose();
+  });
+
+  it('續接的 root：是讀回來的那一份，不是這裡另外建的；沒給就是 undefined', async () => {
+    const earlier = new SessionLog('root-h');
+    earlier.append('turn/start', { kind: 'message', text: '一' });
+    const stored: StoredSessionHeader = {
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'root-h',
+      createdAt: 1_000,
+      cwd: '/專案',
+    };
+    const sessions = new SessionRegistry('root-h', { rootSeed: earlier.events });
+    const persistence = attachSessionPersistence(sessions, recordingStore([]), {
+      cwd: '/專案',
+      resumedRoot: { stored: fakeStored(), storedCount: earlier.length, header: stored },
+    });
+    sessions.open({ kind: 'subagent', runId: 'r1' });
+    expect(persistence.rootHeader()).toBe(stored);
+    await persistence.dispose();
+
+    const bare = attachSessionPersistence(
+      new SessionRegistry('root-h', { rootSeed: earlier.events }),
+      recordingStore([]),
+      { resumedRoot: { stored: fakeStored(), storedCount: earlier.length } },
+    );
+    expect(bare.rootHeader()).toBeUndefined();
+    await bare.dispose();
+  });
+});

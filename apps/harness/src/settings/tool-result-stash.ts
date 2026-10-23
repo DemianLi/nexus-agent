@@ -4,8 +4,8 @@
  * `477b4f4`）。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `tool-text`／`deliverable-files` 那幾列。消費點在起動期：
- * `runCli`／`runServe` 解一次，往下傳給組裝點（`agent-factory.ts` 的 `toolResultStash`），並在啟動時清一次保留期
- * （`tool-result-stash.ts` 的 `cleanupToolResultStash`）。
+ * `runCli`／`runServe` 解一次，往下傳給組裝點（`agent-factory.ts` 的 `toolResultStash`），並在啟動時於背景清一次保留期
+ * （`tool-result-stash-sweep.ts` 放出 `tool-result-stash.ts` 的 `cleanupToolResultStash`，不擋服務，#1553）。
  *
  * ## 這一列關不掉
  *
@@ -44,7 +44,7 @@ export const toolResultStashConfigSchema = z.strictObject({
    * 跨行程重開保持固定；預設放 harness home 而不是系統暫存區，因為那裡會被定期清掉。登記在 `tool-result-stash.ts` 的檔頭。
    */
   root: z.string().min(1).optional(),
-  /** 保留天數；`0` 表示不清。啟動時清一次，別人改得動的根不清。 */
+  /** 保留天數；`0` 表示不清。啟動時在背景清一次，別人改得動的根不清。 */
   cleanupPeriodDays: z.number().int().min(0).default(DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS),
 });
 

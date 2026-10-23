@@ -35,7 +35,7 @@ import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { HARNESS_VERSION } from './harness-version.js';
-import { cleanupToolResultStash } from './tool-result-stash.js';
+import { launchToolResultStashSweep } from './tool-result-stash-sweep.js';
 import { ensureFallbackTitle } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import {
@@ -1042,14 +1042,20 @@ async function runLaunched(
       : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn });
   // 落盤確認（#1606）讀回比對用的 store：樹上 `session-durability` 那一列在讀清單時依清單掛上，做法在被呼叫當下才讀它。
   if (sessionStore !== undefined) root.tree.bindDurableStore(sessionStore);
-  // 過大工具結果的暫存（#734）：根與保留天數從清單解一次；**啟動時清一次**超過保留期的會話目錄（別人改得動的根
-  // 不清）。清理失敗只講一聲，不擋啟動。
+  // 過大工具結果的暫存（#734）：根與保留天數從清單解一次；**啟動時清一次**超過保留期的檔（別人改得動的根
+  // 不清）。清理失敗只講一聲，不擋啟動。**清掃在背景跑**（#1553 N0952，照 dsh `spill-local/src/index.ts:90-101`）：
+  // 歸根所有，這一輪不等它；`runCli` 卸載根（跑完或跑壞）時等它收斂。
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
   const stashRoot = resolveToolResultStashRoot(stashConfig, options.env ?? process.env);
   const stashWarn = (message: string): void => printer.error(message);
   // 外溢層的預算（#719）：省略就是不掛。
   const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
-  await cleanupToolResultStash(stashRoot, stashConfig.cleanupPeriodDays, { warn: stashWarn });
+  launchToolResultStashSweep(
+    await root.tree.context(),
+    stashRoot,
+    stashConfig.cleanupPeriodDays,
+    stashWarn,
+  );
   // 關掉時 `--resume` 已經被 `assertPersistenceFlags` 擋下，所以有 `resumeDir` 就一定有 store。
   const resumed =
     resumeDir === undefined || sessionStore === undefined

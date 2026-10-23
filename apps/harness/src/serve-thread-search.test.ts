@@ -8,6 +8,8 @@
  *    （`apps/cli/tests/lazy-search-startup.compat.spec.ts:103-123`，`477b4f4`）。**判準是模組有沒有載入，不是 stderr
  *    有沒有那一行**：Node 24 以後不印，本機跑的是哪一版就量不到那一行。所以另起一個行程，退出時自己講載入過沒有。
  * 3. 線上的閘門：`content-type`、方法、body。
+ * 4. **活的 thread 讀記憶體**（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)）：落盤窗口拉長，批次窗口裡的那一句搜得到；新建、
+ *    分叉、重啟後續接的 root 拿來比的 header 都是真的寫進檔的那一份；還沒實體化的 thread 不進索引，搜尋也不替它建檔。
  */
 
 import { spawn } from 'node:child_process';
@@ -15,14 +17,23 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { THREAD_SEARCH_PATH } from '@nexus/wire';
+import { emptyConversation, reduceAll, THREAD_SEARCH_PATH } from '@nexus/wire';
 import type { WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { fetchWithCookie, exchangeServeToken, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
+import type { ScriptedTurn } from './scripted-model.js';
+import { startScriptedServe } from './scripted-serve.js';
+import type { ScriptedServe } from './scripted-serve.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import {
+  findSession,
+  rewriteSessionHeader,
+  sessionEvents,
+  sessionsUnder,
+} from './session-files.fixture.js';
 import { THREAD_SEARCH_DISABLED_MESSAGE } from './thread-search.js';
 
 const serveEntry = fileURLToPath(new URL('./serve.ts', import.meta.url));
@@ -223,4 +234,144 @@ describe('出廠的清單一次都不載入 node:sqlite', () => {
     expect(await sqliteLoadedAfterSearch(root)).toBe(false);
     expect(await sqliteLoadedAfterSearch(root, await patch(OPEN_ON_FIRST_SEARCH))).toBe(true);
   }, 60_000);
+});
+
+/** 落盤窗口拉長（批次窗口裡的留在記憶體）＋內容搜尋打開。 */
+const LIVE_ROWS = `- id: session-persistence\n  config:\n    windowMs: 600000\n${OPEN_ON_FIRST_SEARCH}`;
+
+/**
+ * 每條 thread 各吃一份腳本、從第一輪開始（重啟續接的也重新從第一輪）。**一輪開頭人打的字在叫模型之前就落盤了**（耐久檢查點），
+ * 留在批次窗口裡的是最後一輪的回覆，所以搜的是回覆：第 N 輪回 `REPLIES[N-1]`。
+ */
+const REPLIES: readonly ScriptedTurn[] = [
+  { content: '第一輪的回覆' },
+  { content: '第二輪的回覆暗號' },
+  { content: '第三輪的回覆暗號' },
+];
+
+const scripted: ScriptedServe[] = [];
+
+afterEach(async () => {
+  for (const serve of scripted.splice(0)) await serve.close();
+});
+
+async function startLive(root: string): Promise<{ serve: ScriptedServe; client: WireClient }> {
+  const serve = await startScriptedServe(REPLIES, {
+    argv: ['--session-log', root],
+    extraRows: LIVE_ROWS,
+  });
+  scripted.push(serve);
+  return { serve, client: await serveClient(serve.running) };
+}
+
+async function stopLive(serve: ScriptedServe): Promise<void> {
+  scripted.splice(scripted.indexOf(serve), 1);
+  await serve.close();
+}
+
+/** 這條 thread 第一則收尾回覆的 `messageId`，分叉指名的就是它。 */
+async function firstTailId(client: WireClient, threadId: string): Promise<string> {
+  const page = await client.threadHistory(threadId);
+  if (page.kind !== 'ok') throw new Error(`歷史拿不到：${page.message}`);
+  const tail = reduceAll(emptyConversation(), page.result.events).entries.find(
+    (entry) => entry.kind === 'ai' && entry.turnTail === true && entry.messageId !== undefined,
+  );
+  if (tail?.kind !== 'ai' || tail.messageId === undefined) throw new Error('沒有收尾的回覆');
+  return tail.messageId;
+}
+
+async function forkOk(client: WireClient, threadId: string, messageId: string): Promise<string> {
+  const outcome = await client.threadFork(threadId, messageId);
+  if (outcome.kind !== 'ok' || !outcome.result.ok) {
+    throw new Error(`分叉失敗：${JSON.stringify(outcome)}`);
+  }
+  return outcome.result.value.threadId;
+}
+
+/** 盤上那一份有沒有回過這句。 */
+async function repliedOnDisk(root: string, threadId: string, text: string): Promise<boolean> {
+  const session = await findSession(root, threadId);
+  if (session === undefined) return false;
+  return (await sessionEvents(session)).events.some(
+    (event) => event.type === 'assistant/message' && JSON.stringify(event.data).includes(text),
+  );
+}
+
+/**
+ * 正向對照：把盤上那份 header 的 `createdAt` 改掉，搜尋就要被拒——證明活的那一條真的拿記憶體那份 header 去比，
+ * 不是拿不到 header 而跳過。比完還原。
+ */
+async function conflictsWhenDiskHeaderChanges(
+  client: WireClient,
+  root: string,
+  threadId: string,
+  query: string,
+): Promise<void> {
+  const restore = await rewriteSessionHeader(root, threadId, (header) => ({
+    ...header,
+    createdAt: (header['createdAt'] as number) + 1,
+  }));
+  try {
+    expect(await client.searchThreads(query)).toEqual({
+      kind: 'rejected',
+      code: 'unknown_error',
+      message: expect.stringContaining(`thread "${threadId}" 列表給的 header 與讀到的對不上`),
+    });
+  } finally {
+    await restore();
+  }
+}
+
+async function hits(client: WireClient, query: string): Promise<string[]> {
+  const outcome = await client.searchThreads(query);
+  if (outcome.kind !== 'ok') throw new Error(`搜尋失敗：${JSON.stringify(outcome)}`);
+  return outcome.result.items.map((item) => item.threadId);
+}
+
+describe('活的 thread 讀記憶體（#1599）', () => {
+  it('新建的 root 與分叉出來的子 thread、重啟後續接的兩條：批次窗口裡的那一句都搜得到，header 不誤判', async () => {
+    const root = await tmp();
+    const first = await startLive(root);
+    await driveTurn(first.client, 'src', '一');
+    // 分叉回傳時子 thread 的檔就在（seed 在回應之前排空）。
+    const childId = await forkOk(first.client, 'src', await firstTailId(first.client, 'src'));
+    await driveTurn(first.client, childId, '子一');
+    await driveTurn(first.client, childId, '子二');
+    await driveTurn(first.client, 'src', '二');
+    // 前提：兩條第二輪的回覆都還沒寫出去——一律冷讀的話搜不到。
+    expect(await repliedOnDisk(root, 'src', '第二輪的回覆暗號')).toBe(false);
+    expect(await repliedOnDisk(root, childId, '第二輪的回覆暗號')).toBe(false);
+    expect((await hits(first.client, '第二輪的回覆暗號')).sort()).toEqual([childId, 'src'].sort());
+    for (const threadId of [childId, 'src']) {
+      await conflictsWhenDiskHeaderChanges(first.client, root, threadId, '第二輪的回覆暗號');
+    }
+    await stopLive(first.serve);
+
+    // 續接：root 的 header 是讀回來的那一份。重啟後腳本從第一輪重來，第三輪的回覆兩條都沒回過。
+    const second = await startLive(root);
+    for (const threadId of [childId, 'src']) {
+      for (const text of ['再一', '再二', '再三']) await driveTurn(second.client, threadId, text);
+    }
+    expect(await repliedOnDisk(root, 'src', '第三輪的回覆暗號')).toBe(false);
+    expect(await repliedOnDisk(root, childId, '第三輪的回覆暗號')).toBe(false);
+    expect((await hits(second.client, '第三輪的回覆暗號')).sort()).toEqual([childId, 'src'].sort());
+    for (const threadId of [childId, 'src']) {
+      await conflictsWhenDiskHeaderChanges(second.client, root, threadId, '第三輪的回覆暗號');
+    }
+  });
+
+  it('還沒實體化的 thread：搜不到（不進索引），搜過之後磁碟上也沒有多出它的檔', async () => {
+    const root = await tmp();
+    const { client } = await startLive(root);
+    await driveTurn(client, 'seen', '已落盤的話');
+    // 讀歷史就把 `fresh` 組起來了（活的、在 `ready` 上），還沒有一輪，批次窗口也還沒到：磁碟上沒有它。
+    expect((await client.threadHistory('fresh')).kind).toBe('ok');
+    expect(await findSession(root, 'fresh')).toBeUndefined();
+    const before = (await sessionsUnder(root)).map((session) => session.header.id).sort();
+    expect(before).toEqual(['seen']);
+
+    expect(await hits(client, '已落盤的話')).toEqual(['seen']);
+    expect(await findSession(root, 'fresh')).toBeUndefined();
+    expect((await sessionsUnder(root)).map((session) => session.header.id).sort()).toEqual(before);
+  });
 });
