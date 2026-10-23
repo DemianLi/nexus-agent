@@ -763,8 +763,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   /**
    * 斜線命令那一半。命令不進模型，也就不進 transcript。
    *
-   * 帶了附件（`attachments`）時，命令沒收下（被拒、不認得、命令回錯誤）回 {@link SendRejected}：呼叫端把草稿放回去、附件
-   * 留著；狀態列照舊畫同一句。沒帶附件時一律回 `undefined`，各自報自己的結果（#733）。
+   * 命令沒收下（被拒、不認得、命令回錯誤、拋錯）回 {@link SendRejected}，狀態列照舊畫同一句。「收下」只有命令成功那一種，
+   * 同 dsh `facade.ts:903` 的 `ok: outcome.kind === 'success'`。帶了附件時呼叫端把草稿放回去、附件留著（#733）；沒帶附件時
+   * 呼叫端在途期間沒動草稿，沒收下就照樣不動、收下才清（[#1941](https://github.com/DemianLi/nexus-agent/issues/1941)）。
    */
   const runSlash = useCallback(
     async (
@@ -775,8 +776,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setSlashNotice(undefined);
       const turnsBefore = turnsStarted.current;
       const kept = attachments !== undefined && attachments.length > 0;
-      const refuse = (message: string): SendRejected | undefined =>
-        kept ? { message } : undefined;
+      const refuse = (message: string): SendRejected => ({ message });
       let outcome: SlashRunOutcome;
       try {
         outcome = await clientRef.current.slashRun(threadId, line, kept ? attachments : undefined);
