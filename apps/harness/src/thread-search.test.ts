@@ -17,7 +17,7 @@ import {
   toLoggedMessage,
   userContent,
 } from '@nexus/core';
-import type { SessionEvent, SessionStore } from '@nexus/core';
+import type { SessionEvent, SessionStore, StoredSessionHeader } from '@nexus/core';
 import {
   THREAD_SEARCH_QUERY_MAX_LENGTH,
   THREAD_SEARCH_RESULT_LIMIT,
@@ -285,7 +285,7 @@ describe('ThreadSearch', () => {
     expect(await ids(engine, '100%')).toEqual(['pct']);
     expect(await ids(engine, 'snake_case')).toEqual(['under']);
     expect(await ids(engine, '找不到的字')).toEqual([]);
-    engine.close();
+    await engine.close();
   });
 
   it('點名過的話：搜提示裡的字不命中，搜使用者自己打的字仍然命中', async () => {
@@ -302,7 +302,7 @@ describe('ThreadSearch', () => {
     for (const hint of ['委派工具', '子代理', 'subagent_type', 'system-reminder', 'reviewer']) {
       expect(await ids(engine, hint), hint).toEqual([]);
     }
-    engine.close();
+    await engine.close();
   });
 
   it('一條 thread 一筆；命中多的在前，一樣多時那一則短的在前；片段是那一則', async () => {
@@ -329,7 +329,7 @@ describe('ThreadSearch', () => {
         { threadId: 'once', snippet: '索引只講一次' },
       ],
     });
-    engine.close();
+    await engine.close();
   });
 
   it(`最多 ${THREAD_SEARCH_RESULT_LIMIT} 筆，多的由 hasMore 講`, async () => {
@@ -348,7 +348,7 @@ describe('ThreadSearch', () => {
     expect(result.hasMore).toBe(true);
     // 什麼都一樣時照 id，同 dsh 的 `session_id ASC`。
     expect(result.items[0]?.threadId).toBe('t00');
-    engine.close();
+    await engine.close();
   });
 
   it('只搜列得出來的：別的目錄、subagent、header 讀不懂的都不收', async () => {
@@ -361,7 +361,7 @@ describe('ThreadSearch', () => {
     await writeFile(join(directory, 'broken.jsonl'), jsonl(said('暗號甲乙丙').events));
     const engine = search(directory);
     expect(await ids(engine, '暗號')).toEqual(['mine']);
-    engine.close();
+    await engine.close();
   });
 
   it('每次搜尋前對帳：寫進去的新一輪、新開的 thread 搜得到，刪掉的、壓縮換掉的搜不到', async () => {
@@ -399,7 +399,7 @@ describe('ThreadSearch', () => {
     await appendFile(join(directory, 'a.jsonl'), jsonl(log.events.slice(compactedFrom)));
     expect(await ids(engine, '第二句')).toEqual([]);
     expect(await ids(engine, '前情摘要')).toEqual(['a']);
-    engine.close();
+    await engine.close();
   });
 
   it('只有 header 的沒東西；日誌中間壞掉的：壞的那行略過、其餘照收（同列表），不拖垮其他條', async () => {
@@ -411,10 +411,10 @@ describe('ThreadSearch', () => {
     await writeFile(join(directory, 'torn.jsonl'), `{壞掉\n${jsonl(said('好好的一句').events)}`);
     const engine = search(directory);
     expect((await ids(engine, '好好的')).sort()).toEqual(['good', 'torn']);
-    engine.close();
+    await engine.close();
   });
 
-  it('列到一半被中止：拋訊號的 reason，不包成「列不出來」；後端真的壞了才是 failed', async () => {
+  it('列到一半被中止：是 aborted（帶訊號的 reason），不包成「列不出來」；後端真的壞了才是 persistence-failed', async () => {
     const controller = new AbortController();
     const reason = new Error('不搜了');
     const listing = (fail: () => never): SessionStore => ({
@@ -431,13 +431,15 @@ describe('ThreadSearch', () => {
         throw reason;
       }),
     });
-    await expect(aborted.search('什麼', controller.signal)).rejects.toBe(reason);
+    const stopped = aborted.search('什麼', controller.signal);
+    await expect(stopped).rejects.toBeInstanceOf(ThreadSearchError);
+    await expect(stopped).rejects.toMatchObject({ kind: 'aborted', cause: reason });
     const broken = search(undefined, {
       store: listing(() => {
         throw new Error('讀不到目錄');
       }),
     });
-    await expect(broken.search('什麼')).rejects.toMatchObject({ kind: 'failed' });
+    await expect(broken.search('什麼')).rejects.toMatchObject({ kind: 'persistence-failed' });
   });
 
   describe('先後：查詢 → 沒東西可搜 → 不開（同 dsh `list.ts:163-266`）', () => {
@@ -471,7 +473,7 @@ describe('ThreadSearch', () => {
       const on = search(directory, { loadSqlite });
       expect(await ids(on, '什麼')).toEqual(['a']);
       expect(loadSqlite).toHaveBeenCalledOnce();
-      on.close();
+      await on.close();
     });
 
     it('沒接落盤（沒有目錄）：回空，設定開或關都一樣', async () => {
@@ -489,7 +491,7 @@ describe('ThreadSearch', () => {
       const startup = search(directory, { openAt: 'startup', loadSqlite: eager });
       await startup.open();
       expect(eager).toHaveBeenCalledOnce();
-      startup.close();
+      await startup.close();
 
       const lazy = vi.fn(() => import('node:sqlite'));
       const firstSearch = search(directory, { loadSqlite: lazy });
@@ -499,7 +501,7 @@ describe('ThreadSearch', () => {
       await writeThread(directory, 'a', said('什麼').events);
       expect(await ids(firstSearch, '什麼')).toEqual(['a']);
       expect(lazy).toHaveBeenCalledOnce();
-      firstSearch.close();
+      await firstSearch.close();
     });
 
     it('node:sqlite 載不起來（Node 太舊）：回失敗、講要哪一版；下一次再試', async () => {
@@ -514,11 +516,395 @@ describe('ThreadSearch', () => {
         .mockImplementation(() => import('node:sqlite'));
       const engine = search(directory, { loadSqlite });
       await expect(engine.search('什麼')).rejects.toMatchObject({
-        kind: 'failed',
+        kind: 'index-failed',
         message: expect.stringContaining('Node 22.13 以上'),
       });
       expect(await ids(engine, '什麼')).toEqual(['a']);
-      engine.close();
+      await engine.close();
     });
+  });
+});
+
+/** 一道手動放行的閘門：`reached` 在被擋住的那一刻 resolve。 */
+function hold() {
+  let release!: () => void;
+  let reach!: () => void;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const reached = new Promise<void>((resolve) => {
+    reach = resolve;
+  });
+  return {
+    release,
+    reached,
+    async wait(): Promise<void> {
+      reach();
+      await released;
+    },
+  };
+}
+
+/** 包一層真的後端，換掉其中幾支。 */
+function wrap(inner: SessionStore, overrides: Partial<SessionStore>): SessionStore {
+  return {
+    create: (header) => inner.create(header),
+    resume: (id) => inner.resume(id),
+    list: (options) => inner.list(options),
+    open: (id, access) => inner.open(id, access),
+    ...overrides,
+  };
+}
+
+/** 讀到的 header 換成 `change` 改過的那一份，其餘照真的。 */
+function rewriteOpenedHeader(
+  inner: SessionStore,
+  change: (header: StoredSessionHeader) => StoredSessionHeader,
+): SessionStore {
+  return wrap(inner, {
+    open: async (id, access) => {
+      const opened = await inner.open(id, access);
+      return {
+        header: change(opened.header),
+        storedFormatVersion: opened.storedFormatVersion,
+        read: (options) => opened.read(options),
+      };
+    },
+  });
+}
+
+/** 等 `ms` 毫秒，拿來給「還沒 settle」一個期限。 */
+function after<T>(ms: number, value: T): Promise<T> {
+  return new Promise((resolve) => setTimeout(() => resolve(value), ms));
+}
+
+/** 給一個 promise 一段期限：期限內 settle 了交出結果或錯誤，沒有就是 `'pending'`。 */
+async function settledWithin(promise: Promise<unknown>, ms: number): Promise<unknown> {
+  return Promise.race([
+    promise.then(
+      (value) => ({ value }),
+      (error: unknown) => error,
+    ),
+    after(ms, 'pending' as const),
+  ]);
+}
+
+describe('隊伍、收尾與失敗的種類（#1552）', () => {
+  /**
+   * 第一次搜尋卡在讀日誌（手動放行），第二次的列表跑完、排進隊伍才交出來。
+   * `listed` 數 `list` 回來幾次，第二次回來之後再讓微任務跑完，第二次就一定在隊伍裡等。
+   */
+  async function queued(directory: string) {
+    const inner = openJsonlSessionStore({ directory });
+    const gate = hold();
+    let opens = 0;
+    let listed = 0;
+    let secondListed!: () => void;
+    const secondInQueue = new Promise<void>((resolve) => {
+      secondListed = resolve;
+    });
+    const store = wrap(inner, {
+      list: async (options) => {
+        const listing = await inner.list(options);
+        listed += 1;
+        if (listed === 2) secondListed();
+        return listing;
+      },
+      open: async (id, access) => {
+        opens += 1;
+        if (opens === 1) await gate.wait();
+        return inner.open(id, access);
+      },
+    });
+    const engine = search(undefined, { store });
+    const first = engine.search('排隊');
+    await gate.reached;
+    return {
+      engine,
+      gate,
+      first,
+      opens: () => opens,
+      async enqueue(signal?: AbortSignal) {
+        const second = engine.search('排隊', signal);
+        second.catch(() => undefined);
+        await secondInQueue;
+        await after(20, undefined);
+        // 包一層：async 函式直接交出 promise 會被攤開，變成等它跑完。
+        return { second };
+      },
+    };
+  }
+
+  it('N0829：排在後面的那一次被中止就立刻離隊，不等前面跑完；後面的照常', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('排隊的句子').events);
+    const run = await queued(directory);
+    const controller = new AbortController();
+    const reason = new Error('客戶端斷線');
+    const { second } = await run.enqueue(controller.signal);
+    controller.abort(reason);
+
+    // 第一次還卡著，第二次已經回來了：是中止，帶著訊號的 reason。
+    const outcome = await settledWithin(second, 500);
+    expect(outcome).toBeInstanceOf(ThreadSearchError);
+    expect(outcome).toMatchObject({ kind: 'aborted', cause: reason });
+    expect(run.opens()).toBe(1);
+
+    run.gate.release();
+    expect((await run.first).items.map((item) => item.threadId)).toEqual(['a']);
+    expect(await ids(run.engine, '排隊')).toEqual(['a']);
+    await run.engine.close();
+  });
+
+  it('N0829：排在後面時收掉了，輪到它時是 index-failed，不碰索引', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('排隊的句子').events);
+    const run = await queued(directory);
+    const { second } = await run.enqueue();
+    const closing = run.engine.close();
+
+    run.gate.release();
+    expect((await run.first).items.map((item) => item.threadId)).toEqual(['a']);
+    await expect(second).rejects.toMatchObject({ kind: 'index-failed' });
+    await closing;
+    // 收掉之後才來的，也是 index-failed。
+    await expect(run.engine.search('排隊')).rejects.toMatchObject({ kind: 'index-failed' });
+  });
+
+  it('N0829：開索引開到一半被中止，不等它開完就回 aborted；之後照常', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('開索引的句子').events);
+    const gate = hold();
+    const loadSqlite = async (): Promise<typeof import('node:sqlite')> => {
+      await gate.wait();
+      return import('node:sqlite');
+    };
+    const engine = search(directory, { loadSqlite });
+    const controller = new AbortController();
+    const reason = new Error('客戶端斷線');
+    const stopped = engine.search('開索引', controller.signal);
+    await gate.reached;
+    controller.abort(reason);
+
+    const outcome = await settledWithin(stopped, 500);
+    expect(outcome).toBeInstanceOf(ThreadSearchError);
+    expect(outcome).toMatchObject({ kind: 'aborted', cause: reason });
+
+    gate.release();
+    expect(await ids(engine, '開索引')).toEqual(['a']);
+    await engine.close();
+  });
+
+  it('N0843：node:sqlite 載得起來、索引卻開不起來，也是 index-failed', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('開不起來的句子').events);
+    const loadSqlite = async (): Promise<typeof import('node:sqlite')> => {
+      const real = await import('node:sqlite');
+      class Broken extends real.DatabaseSync {
+        override exec(): void {
+          throw new Error('no such module: fts5');
+        }
+        override close(): void {
+          closed += 1;
+          super.close();
+        }
+      }
+      return { ...real, DatabaseSync: Broken };
+    };
+    let closed = 0;
+    const engine = search(directory, { loadSqlite });
+    await expect(engine.search('句子')).rejects.toMatchObject({
+      kind: 'index-failed',
+      message: expect.stringContaining('fts5'),
+    });
+    // 開到一半失敗的那個 db 當下就關掉，同 dsh `schema.ts:74-76`。
+    expect(closed).toBe(1);
+    await engine.close();
+    expect(closed).toBe(1);
+  });
+
+  it('N0829／N0836：開索引開到一半時收掉，那一次已經在隊伍裡，照常回結果；收尾在它之後才完成', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('開索引的句子').events);
+    const gate = hold();
+    const loadSqlite = async (): Promise<typeof import('node:sqlite')> => {
+      await gate.wait();
+      return import('node:sqlite');
+    };
+    const engine = search(directory, { loadSqlite });
+    const order: string[] = [];
+    const searching = engine.search('開索引').then((result) => {
+      order.push('搜尋回來');
+      return result;
+    });
+    await gate.reached;
+    const closing = engine.close().then(() => {
+      order.push('收尾完成');
+    });
+
+    gate.release();
+    expect((await searching).items.map((item) => item.threadId)).toEqual(['a']);
+    await closing;
+    expect(order).toEqual(['搜尋回來', '收尾完成']);
+  });
+
+  it('讀最後一條時中止：這一次不寫進索引，下一次照樣重讀', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('中止的句子').events);
+    const inner = openJsonlSessionStore({ directory });
+    const controller = new AbortController();
+    let opens = 0;
+    const engine = search(undefined, {
+      store: wrap(inner, {
+        open: async (id, access) => {
+          opens += 1;
+          const opened = await inner.open(id, access);
+          if (opens === 1) controller.abort(new Error('客戶端斷線'));
+          return opened;
+        },
+      }),
+    });
+    await expect(engine.search('中止', controller.signal)).rejects.toMatchObject({
+      kind: 'aborted',
+    });
+    expect(await ids(engine, '中止')).toEqual(['a']);
+    expect(opens).toBe(2);
+    await engine.close();
+  });
+
+  it('N0836：收尾等已排進來的跑完才關 db；再叫拿到同一個 promise', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('收尾的句子').events);
+    const inner = openJsonlSessionStore({ directory });
+    const gate = hold();
+    const order: string[] = [];
+    const store = wrap(inner, {
+      open: async (id, access) => {
+        await gate.wait();
+        const opened = await inner.open(id, access);
+        order.push('讀完日誌');
+        return opened;
+      },
+    });
+    const loadSqlite = async (): Promise<typeof import('node:sqlite')> => {
+      const real = await import('node:sqlite');
+      class Recorded extends real.DatabaseSync {
+        override close(): void {
+          order.push('關 db');
+          super.close();
+        }
+      }
+      return { ...real, DatabaseSync: Recorded };
+    };
+    const engine = search(undefined, { store, loadSqlite });
+    const first = engine.search('收尾');
+    await gate.reached;
+
+    const closing = engine.close();
+    expect(engine.close()).toBe(closing);
+    expect(await settledWithin(closing, 100)).toBe('pending');
+    expect(order).toEqual([]);
+
+    gate.release();
+    expect((await first).items.map((item) => item.threadId)).toEqual(['a']);
+    await closing;
+    expect(order).toEqual(['讀完日誌', '關 db']);
+  });
+
+  it('N0843：讀某一條的日誌出錯是 persistence-failed，不是索引壞了', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('讀不到的句子').events);
+    const inner = openJsonlSessionStore({ directory });
+    const engine = search(undefined, {
+      store: wrap(inner, { open: () => Promise.reject(new Error('磁碟讀錯')) }),
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({
+      kind: 'persistence-failed',
+      message: expect.stringContaining('"a"'),
+    });
+    await engine.close();
+  });
+
+  it('N0858：列表給的與讀到的不是同一條會話（工作目錄不同）是 source-conflict', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('換掉的句子').events);
+    const engine = search(undefined, {
+      store: rewriteOpenedHeader(openJsonlSessionStore({ directory }), (header) => ({
+        ...header,
+        cwd: '/專案/乙',
+      })),
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({ kind: 'source-conflict' });
+    await engine.close();
+  });
+
+  it('N0858：只差 isSeeded 也是 source-conflict', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('換掉的句子').events);
+    const engine = search(undefined, {
+      store: rewriteOpenedHeader(openJsonlSessionStore({ directory }), (header) => ({
+        ...header,
+        isSeeded: true,
+      })),
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({ kind: 'source-conflict' });
+    await engine.close();
+  });
+
+  it.each([
+    ['id', (header: StoredSessionHeader) => ({ ...header, id: 'b' })],
+    ['createdAt', (header: StoredSessionHeader) => ({ ...header, createdAt: 2_000 })],
+    ['parentSession', (header: StoredSessionHeader) => ({ ...header, parentSession: 'x' })],
+  ])('N0858：只差 %s 也是 source-conflict', async (_field, change) => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('換掉的句子').events);
+    const engine = search(undefined, {
+      store: rewriteOpenedHeader(openJsonlSessionStore({ directory }), change),
+    });
+    await expect(engine.search('句子')).rejects.toMatchObject({ kind: 'source-conflict' });
+    await engine.close();
+  });
+
+  it('N0858 的對照：真的後端上新開、續接過、分叉來的 thread 都不誤判', async () => {
+    const directory = await dir();
+    const store = openJsonlSessionStore({ directory });
+    const header = (id: string, extra: Partial<StoredSessionHeader> = {}): StoredSessionHeader => ({
+      version: SESSION_LOG_FORMAT_VERSION,
+      id,
+      createdAt: 1_000,
+      cwd: CWD,
+      ...extra,
+    });
+
+    const fresh = said('新開的暗號');
+    const freshStored = store.create(header('fresh'));
+    await freshStored.append(fresh.events);
+    await freshStored.close();
+
+    const resumedLog = said('續接前的話');
+    const before = store.create(header('resumed'));
+    await before.append(resumedLog.events);
+    await before.close();
+    const resumed = await store.resume('resumed');
+    const from = resumedLog.events.length;
+    chat(resumedLog, '續接後的暗號', '好');
+    await resumed.stored.append(resumedLog.events.slice(from));
+    await resumed.stored.close();
+
+    const forked = store.create(header('forked', { parentSession: 'fresh', isSeeded: true }));
+    await forked.append(said('分叉的暗號').events);
+    await forked.close();
+
+    const engine = search(directory);
+    expect((await ids(engine, '暗號')).sort()).toEqual(['forked', 'fresh', 'resumed']);
+    await engine.close();
+  });
+
+  it('日誌裡的 NUL 換成 U+FFFD 才進索引：NUL 後面的字搜得到', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', said('前面\u0000後面的暗號').events);
+    const engine = search(directory);
+    expect(await ids(engine, '後面的暗號')).toEqual(['a']);
+    await engine.close();
   });
 });
