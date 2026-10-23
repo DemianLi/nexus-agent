@@ -4,7 +4,7 @@
  * 基座的 `read_file` 照副檔名判 MIME，非文字的整份交給模型當圖片、音訊或檔案塊，而模型那一側的工具訊息只收文字：
  * NVIDIA 對它回 400，那則工具結果又已經進了 state，同一條 thread 之後每一輪都 400（實測）。dsh 的 `read` 不看副檔名、
  * 看內容（`packages/fs/fs-local/src/fsio.ts:386-399`，`477b4f4`）：前 {@link BINARY_SAMPLE_BYTES} 個位元組有 NUL 是
- * `binary file`，不是合法 UTF-8 是 `invalid UTF-8 text`，兩句都帶 `FS_NOT_TEXT`。圖片另走 `read_image`，要掛了附件
+ * `binary file`，不是合法 UTF-8 是 `invalid UTF-8 text`，兩句都帶 `FS_NOT_TEXT`（nexus 兩個 backend 也都記這個碼，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。圖片另走 `read_image`，要掛了附件
  * 儲存才有——我們沒有，等於 dsh「沒掛」的那一格（附件／`read_image` 見 [#731](https://github.com/DemianLi/nexus-agent/issues/731)）。
  *
  * 判在 backend 的 `read` 上，兩種 backend 各一個掛點：落磁碟的 `ContainedFilesystemBackend`（`contained-backend.ts`），與沒給
@@ -20,6 +20,7 @@
  */
 
 import { extname } from 'node:path';
+import { FS_NOT_TEXT, noteFsError } from '@nexus/core';
 import { StateBackend } from 'deepagents';
 import type { ReadResult, WriteResult } from 'deepagents';
 
@@ -47,6 +48,7 @@ export function notTextReason(bytes: Uint8Array): string | undefined {
  * @param bytes - 那一支的位元組。
  */
 export function refuseNonText(filePath: string, bytes: Uint8Array): ReadResult {
+  noteFsError(FS_NOT_TEXT);
   return { error: `cannot read "${filePath}": ${notTextReason(bytes) ?? 'binary file'}` };
 }
 

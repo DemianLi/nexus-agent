@@ -20,6 +20,10 @@
  * 唯一的例外是 skills：基座那顆對空清單也會接一大段說明、又不快取空結果，包了一層
  * （`./skills-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)）。
  *
+ * **`read_file` 的描述不是基座的原文**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：預設行數經 `createFilesystemMiddleware` 的
+ * `customToolDescriptions` 換掉，開不開看 fold 給的 middleware 清單裡有沒有 read-continuation（`./fs-tool-descriptions.ts`）。這是跟
+ * `createDeepAgent` 的**明文差異**，`assembly-parity.test.ts` 列出差在哪。「先讀後改」不在描述裡，照 dsh 在系統提示詞（`./observation.ts`）。
+ *
  * ## 照抄基座的組裝順序，不是照猜
  *
  * ```text
@@ -59,6 +63,7 @@ import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
 import type { FoldedAgentParams } from './fold.js';
+import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
 import {
   MODEL_SELECTION_MIDDLEWARE_NAME,
@@ -152,7 +157,7 @@ export function mergeMiddlewareStack(
  * @returns 預設疊；呼叫端再用 {@link mergeMiddlewareStack} 併上規格自己帶的。
  */
 export function subagentDefaultMiddleware(
-  spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills'>,
+  spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills' | 'middleware'>,
   context: Pick<FoldedAgentParams, 'backend' | 'permissions'>,
 ): AgentMiddleware[] {
   const backend = context.backend;
@@ -161,8 +166,13 @@ export function subagentDefaultMiddleware(
   // 缺席時它的預設值是空陣列，與不傳等價。
   const permissions = spec.permissions ?? context.permissions;
   const skills = spec.skills ?? [];
+  const descriptions = filesystemToolDescriptions(spec.middleware ?? []);
   return [
-    createFilesystemMiddleware({ backend, ...(permissions !== undefined && { permissions }) }),
+    createFilesystemMiddleware({
+      backend,
+      ...(permissions !== undefined && { permissions }),
+      ...(descriptions !== undefined && { customToolDescriptions: descriptions }),
+    }),
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware(),
     ...(skills.length > 0
@@ -207,6 +217,7 @@ export function assembleAgent(params: AssembleAgentParams) {
   const memory = params.memory ?? [];
   const tools = params.tools;
   const systemPrompt = params.systemPrompt ?? '';
+  const descriptions = filesystemToolDescriptions(params.middleware);
 
   for (const spec of params.subagents) assertSupportedSubagent(spec);
   // 基座只在清單裡沒有 `general-purpose` 時才自己補一個；fold 一律自己補，所以這裡斷言它在，
@@ -235,7 +246,11 @@ export function assembleAgent(params: AssembleAgentParams) {
     ...(skills.length > 0
       ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
       : []),
-    createFilesystemMiddleware({ backend, permissions }),
+    createFilesystemMiddleware({
+      backend,
+      permissions,
+      ...(descriptions !== undefined && { customToolDescriptions: descriptions }),
+    }),
     createSubAgentMiddleware({
       defaultModel: model as never,
       defaultTools: tools,

@@ -10,10 +10,10 @@
  *   每行（截斷後、含後綴）的 UTF-8 位元組，非第一行再加一個換行。
  * - chunk 的邊界沒有意義：換行可以在任何地方。
  *
- * **與 dsh 的偏離（理由 1，基座表達不出來）：行尾的 `\r` 不去掉。** dsh 去掉（`read-render.ts:91-93`），但基座的 `edit_file` 對
- * `old_string` 做字面比對、不正規化行尾（#1531 照抄）；在 CRLF 檔上讀的時候把 `\r` 去掉，模型照抄出來的 `old_string` 就永遠對不上。
- * 撤除條件見卡 #1530 的偏離 2（#1563 N0335 改檔保留 CRLF 之後，`\r` 這一半撤掉）。
- * 判行長時不算行尾的 `\r`（#1776，dsh 是先去掉才判）：CRLF 檔裡剛好 `maxLineLength` 個字元的行不會被標截斷；`\r` 撤掉時這個扣除一併消失。
+ * **行尾的 `\r` 去掉**（{@link WindowParams.stripCarriageReturn}，`read_file` 裡才開；照 dsh `read-render.ts:91-93` 的 `stripCarriageReturn`，
+ * [#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）：`edit` 現在對行尾做正規化（`contained-backend.ts`），模型照讀到的內容寫
+ * `old_string` 就對得上，不必再為了它保留 `\r`。判行長在去掉之後（`maxLineLength` 個字元的 CRLF 行不會被標截斷，#1776）。不在 `read_file` 裡的
+ * 呼叫（摘要器、`agent-instructions` 的 `discover`、直接呼叫）維持基座的切片語意，`\r` 原樣。**開頭的 BOM 仍保留**（`utf8-stream.ts`）。
  *
  * 另外多回三樣 dsh 的 `WindowResult` 沒有、基座的 `read` 語意要的東西：換行的個數（`Line offset N exceeds file length (M lines)` 的 M 是
  * 換行數加 1）、檔案是不是以換行結尾（頁到檔尾時結尾那個換行要留著，與基座切片一致）、有沒有看過非空白字元（基座對空檔與全空白的檔回
@@ -32,6 +32,8 @@ export interface WindowParams {
   readonly maxLineLength: number;
   /** 選到的行累計最多幾個位元組；`Infinity` 是不設上限。 */
   readonly maxBytes: number;
+  /** 行尾的 `\r` 去掉（CRLF 檔的每一行）；省略是不去掉，維持基座的切片語意。 */
+  readonly stripCarriageReturn?: boolean;
 }
 
 /** {@link scanWindow} 的結果。 */
@@ -74,7 +76,7 @@ export async function scanWindow(
   params: WindowParams,
   options: { readonly onChunk?: (chunk: string) => void; readonly signal?: AbortSignal } = {},
 ): Promise<WindowScan> {
-  const { offset, limit, maxLineLength, maxBytes } = params;
+  const { offset, limit, maxLineLength, maxBytes, stripCarriageReturn = false } = params;
   // 多留一個字元就足以證明這一行超長。
   const lineBufferCap = maxLineLength + 1;
   const lines: string[] = [];
@@ -110,13 +112,15 @@ export async function scanWindow(
   const endLine = (): void => {
     totalLines += 1;
     if (collecting) {
-      // 判長度不算行尾的 `\r`（#1776，照 dsh：它先去掉 `\r` 才判，我們保留 `\r` 不去掉，見檔頭偏離）：CRLF 檔裡剛好
-      // `maxLineLength` 個字元的行不該被標截斷。緩衝丟過字元的一行一定超長，那時緩衝尾巴是不是 `\r` 不作數。
-      const contentLength = buffer.length - (buffer.endsWith('\r') ? 1 : 0);
+      // 去 `\r` 在判長度之前（#1776，照 dsh 先去掉才判）：CRLF 檔裡剛好 `maxLineLength` 個字元的行不該被標截斷。
+      // 緩衝丟過字元的一行一定超長，那時緩衝尾巴是不是 `\r` 不作數。不去 `\r` 的呼叫（基座切片語意）判長度時仍不算它。
+      const crlf = buffer.endsWith('\r');
+      const line = stripCarriageReturn && crlf && !lineDropped ? buffer.slice(0, -1) : buffer;
+      const contentLength = line.length - (crlf && !stripCarriageReturn ? 1 : 0);
       const text =
         lineDropped || contentLength > maxLineLength
-          ? `${buffer.substring(0, maxLineLength)}... (line truncated to ${maxLineLength} chars)`
-          : buffer;
+          ? `${line.substring(0, maxLineLength)}... (line truncated to ${maxLineLength} chars)`
+          : line;
       const bytes = Buffer.byteLength(text, 'utf8') + (lines.length > 0 ? 1 : 0);
       if (outputBytes + bytes > maxBytes) {
         cappedByBytes = true;

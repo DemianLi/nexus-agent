@@ -344,7 +344,6 @@ export {
   createVersionHasher,
   noteReadVersion,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
-  OBSERVATION_POLICY_NOTICE,
   OBSERVATION_POLICY_PLUGIN_NAME,
   observationPolicyPlugin,
   OBSERVED_EDIT_TOOL,
@@ -357,9 +356,16 @@ export type { VersionHasher } from './observation.js';
 // 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。
 export {
   currentToolCallSignal,
+  FS_AMBIGUOUS_EDIT,
+  FS_EDIT_NOT_FOUND,
+  FS_NOT_FOUND,
+  FS_NOT_REGULAR_FILE,
+  FS_NOT_TEXT,
+  FS_PERMISSION_DENIED,
   FS_SANDBOX_DENIED,
   FS_TOOL_ERRORS_MIDDLEWARE_NAME,
   FS_TOOL_PRIMARY_METHOD,
+  noteFsError,
   noteSandboxDenial,
   noteSearchError,
   SEARCH_ABORTED,
@@ -367,7 +373,7 @@ export {
   SEARCH_INVALID_PATTERN,
   SEARCH_RAW_OUTPUT_OVERFLOW,
 } from './fs-tool-errors.js';
-export type { SearchErrorCode } from './fs-tool-errors.js';
+export type { FsErrorCode, SearchErrorCode } from './fs-tool-errors.js';
 
 // glob pattern 的大括號上限：包 backend 的那一層只由 `foldRegistry` 掛，主入口只公開上限與錯誤字句。
 export {

@@ -20,7 +20,8 @@
  * dsh 的 `write`／`edit` 在工具本體裡拋 `FsError`（`packages/fs/tool-fs/src/write.ts:116-123`，
  * SHA `c291e79`），註冊表渲染成 `isError`；sandbox 拒絕的碼是 `FS_SANDBOX_DENIED`
  * （`tool-fs/src/sandbox.ts:124-130`），其餘檔案失敗照樣是 `isError`。**範圍照抄**：每一種 backend
- * 錯誤都是錯誤，只有 fence 拒絕帶碼——其餘要分出 `FS_NOT_FOUND` 之類得解析基座的措辭。**文字只補
+ * 錯誤都是錯誤；fence 拒絕帶 `FS_SANDBOX_DENIED`，自己實作的 `read`／`edit`／`write` 失敗帶 `FS_NOT_FOUND` 等六個原因碼
+ * （{@link noteFsError}，#1563）。其餘（基座的 `ls`／`glob`／`delete`）仍沒有碼，要分得解析基座的措辭。**文字只補
  * `Error: `**：原本是一字不變（[#271](https://github.com/DemianLi/nexus-agent/issues/271)），
  * [#318](https://github.com/DemianLi/nexus-agent/issues/318) 照 dsh 的 `toolErrorResult` 補上前綴，
  * 基座自己已經寫成錯誤的那幾句不補（見 middleware）。
@@ -72,6 +73,37 @@ export const FS_TOOL_ERRORS_MIDDLEWARE_NAME = 'nexusFsToolErrors';
 
 /** fence 擋下一次變更的碼。dsh `FsErrorCode` 的同名成員。 */
 export const FS_SANDBOX_DENIED = 'FS_SANDBOX_DENIED';
+
+/**
+ * 檔案工具失敗的原因碼（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。字面照 dsh `FsErrorCode`
+ * （`packages/fs/fs/src/types.ts:176-188`，`687f282e`）。載體跟 {@link FS_SANDBOX_DENIED} 一樣：backend 在這一次呼叫的記錄上寫碼
+ * （{@link noteFsError}），`wrapToolCall` 標錯時帶出去，最後落進會話日誌那顆 `tool/result` 的 `error`，web 的 trace 列照實顯示。
+ *
+ * - `FS_NOT_FOUND`：路徑不存在（`read`／`edit`）。
+ * - `FS_NOT_REGULAR_FILE`：路徑存在但不是一般檔（目錄等）。
+ * - `FS_NOT_TEXT`：二進位檔，或不是合法 UTF-8。
+ * - `FS_EDIT_NOT_FOUND`：`old_string` 是空的，或在檔案裡找不到。
+ * - `FS_AMBIGUOUS_EDIT`：`old_string` 命中好幾處、又沒有 `replace_all`。
+ * - `FS_PERMISSION_DENIED`：作業系統回 `EACCES`／`EPERM`。
+ *
+ * **不做 `FS_TOO_LARGE`：** nexus 的 `read` 沒有整檔大小上限（#1530 刻意不加，dsh 的 read 工具也沒有；dsh 的 `FS_TOO_LARGE` 只出在
+ * `readWholeBytes` 的 `maxBytes`，給附件與媒體用），沒有產生它的地方。**`FS_ABORTED` 不做：** 基座的 backend 方法拿不到取消訊號。
+ */
+export const FS_NOT_FOUND = 'FS_NOT_FOUND';
+export const FS_NOT_REGULAR_FILE = 'FS_NOT_REGULAR_FILE';
+export const FS_NOT_TEXT = 'FS_NOT_TEXT';
+export const FS_EDIT_NOT_FOUND = 'FS_EDIT_NOT_FOUND';
+export const FS_AMBIGUOUS_EDIT = 'FS_AMBIGUOUS_EDIT';
+export const FS_PERMISSION_DENIED = 'FS_PERMISSION_DENIED';
+
+/** 檔案工具失敗的六個原因碼（不含 fence 的 {@link FS_SANDBOX_DENIED}，它有自己的旁路）。 */
+export type FsErrorCode =
+  | typeof FS_NOT_FOUND
+  | typeof FS_NOT_REGULAR_FILE
+  | typeof FS_NOT_TEXT
+  | typeof FS_EDIT_NOT_FOUND
+  | typeof FS_AMBIGUOUS_EDIT
+  | typeof FS_PERMISSION_DENIED;
 
 /**
  * 搜尋失敗的碼（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。dsh `SearchErrorCode` 的四個成員
@@ -143,6 +175,8 @@ interface CallRecord {
   readonly signal: AbortSignal | undefined;
   /** backend 的搜尋失敗了，是哪一種（{@link noteSearchError}）。 */
   searchError: SearchErrorCode | undefined;
+  /** backend 的讀寫改失敗了，是哪一種（{@link noteFsError}）。 */
+  fsError: FsErrorCode | undefined;
 }
 
 /**
@@ -179,6 +213,17 @@ export function noteSandboxDenial(): void {
 export function noteSearchError(code: SearchErrorCode): void {
   const record = currentCall.getStore();
   if (record !== undefined) record.searchError = code;
+}
+
+/**
+ * 檔案工具失敗了：backend 在回 `{ error }` 之前叫它，記下是哪一個碼（{@link FsErrorCode}）。錯誤文字不變，碼只進 `tool/result`。
+ * 不在任何一次工具呼叫裡時什麼都不做。**fence 的拒絕不走這裡**，叫 {@link noteSandboxDenial}；兩者同時出現時 fence 的碼優先。
+ *
+ * @param code - 六個碼之一。
+ */
+export function noteFsError(code: FsErrorCode): void {
+  const record = currentCall.getStore();
+  if (record !== undefined) record.fsError = code;
 }
 
 /**
@@ -256,6 +301,7 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
         sandboxDenied: false,
         signal: (request.runtime as { readonly signal?: AbortSignal } | undefined)?.signal,
         searchError: undefined,
+        fsError: undefined,
       };
       const result = await currentCall.run(record, () => handler(request));
       const method = FS_TOOL_PRIMARY_METHOD[resolveToolName(request)];
@@ -263,9 +309,11 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
       if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) return result;
       const error = record.sandboxDenied
         ? { name: 'FsError', code: FS_SANDBOX_DENIED }
-        : record.searchError === undefined
-          ? undefined
-          : { name: 'SearchError', code: record.searchError };
+        : record.searchError !== undefined
+          ? { name: 'SearchError', code: record.searchError }
+          : record.fsError === undefined
+            ? undefined
+            : { name: 'FsError', code: record.fsError };
       // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
       if (result.status === 'error' && error === undefined) return result;
       const options = {

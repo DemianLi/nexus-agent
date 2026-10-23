@@ -6,14 +6,18 @@
  * 「掛在哪、排第幾、幾份實例」在 [`fold.test.ts`](./fold.test.ts)。
  */
 
+import { posix } from 'node:path';
+
 import { ToolMessage } from '@langchain/core/messages';
+import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import {
   createObservationPolicy,
   createVersionHasher,
   noteReadVersion,
-  OBSERVATION_POLICY_NOTICE,
+  observationGuidance,
+  observationKey,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
   OBSERVED_WRITE_TOOL,
@@ -266,21 +270,161 @@ describe('不歸它管的都原樣放行', () => {
   });
 });
 
-describe('規則在模型動手之前就講給它聽', () => {
-  it('往 systemMessage 追加那一句', async () => {
+describe('規則在模型動手之前就講給它聽（dsh 的 systemPrompt.section，write.ts:63-71、edit.ts:76-83）', () => {
+  const WRITE_AND_EDIT =
+    'Read an existing file before overwriting it with write_file (the default fs-observation-policy requires it) and prefer edit_file for targeted changes.';
+  const WRITE_ONLY =
+    'Read an existing file before overwriting it with write_file (the default fs-observation-policy requires it).';
+  const EDIT =
+    'Read a file before editing it (the default fs-observation-policy requires it), unless you just created or edited it in this session.';
+
+  it('observationGuidance：工具在場才寫各自那一句，句子是 dsh 原句（工具名換成 write_file／edit_file）', () => {
+    expect(observationGuidance(new Set([OBSERVED_WRITE_TOOL, OBSERVED_EDIT_TOOL]))).toBe(
+      `${WRITE_AND_EDIT}\n\n${EDIT}`,
+    );
+    expect(observationGuidance(new Set([OBSERVED_WRITE_TOOL]))).toBe(WRITE_ONLY);
+    expect(observationGuidance(new Set([OBSERVED_EDIT_TOOL]))).toBe(EDIT);
+    expect(observationGuidance(new Set([OBSERVED_READ_TOOL, 'grep']))).toBe('');
+  });
+
+  it('wrapModelCall：看這一輪送給模型的工具清單，把那兩句接在系統提示後面', () => {
     const { backend } = fakeBackend(new Map());
     const middleware = createObservationPolicy(backend) as unknown as {
       wrapModelCall: (request: unknown, handler: (next: unknown) => unknown) => unknown;
     };
-    let seen = '';
-    middleware.wrapModelCall(
-      { systemMessage: { concat: (text: string) => (seen = `原本的${text}`) } },
-      (next) => next,
+    const run = (tools: readonly { name: string }[]): string => {
+      let system = '';
+      middleware.wrapModelCall(
+        { tools, systemMessage: { concat: (text: string) => (system = `原本的${text}`) } },
+        (next) => next,
+      );
+      return system;
+    };
+    expect(
+      run([
+        { name: OBSERVED_READ_TOOL },
+        { name: OBSERVED_WRITE_TOOL },
+        { name: OBSERVED_EDIT_TOOL },
+      ]),
+    ).toBe(`原本的\n\n${WRITE_AND_EDIT}\n\n${EDIT}`);
+    // 沒有 write_file／edit_file（例如唯讀模式把它們拿掉）→ 不追加，請求原樣交出去。
+    expect(run([{ name: OBSERVED_READ_TOOL }])).toBe('');
+  });
+});
+
+/**
+ * 一個認得「同一個檔的不同寫法」的假 backend：跟 virtual mode 的 `resolvePath` 一樣，前面補 `/` 再 `normalize`。
+ * `fakeBackend` 的鍵是原字串，`a.txt` 與 `/a.txt` 對它是兩個檔，量不到這一格。
+ */
+function resolvingBackend(files: Map<string, string>): {
+  backend: AnyBackendProtocol;
+  set: (path: string, content: string) => void;
+} {
+  const stamps = new Map<string, string>();
+  let clock = 0;
+  const keyOf = (path: string): string => posix.normalize(`/${path}`);
+  const touch = (key: string): void => {
+    clock += 1;
+    stamps.set(key, `2026-01-01T00:00:${String(clock).padStart(2, '0')}.000Z`);
+  };
+  const store = new Map([...files].map(([path, content]) => [keyOf(path), content]));
+  for (const key of store.keys()) touch(key);
+  return {
+    backend: {
+      readRaw(path: string) {
+        const key = keyOf(path);
+        const content = store.get(key);
+        if (content === undefined) return { error: `File '${path}' not found` };
+        return { data: { content, modified_at: stamps.get(key) } };
+      },
+    } as unknown as AnyBackendProtocol,
+    set: (path, content) => {
+      store.set(keyOf(path), content);
+      touch(keyOf(path));
+    },
+  };
+}
+
+describe('同一個檔的不同寫法是同一個檔（#1563 N0333）', () => {
+  it('讀 `a.txt` 再 edit `/a.txt` → 放行（拿掉正規化就是 FS_NOT_OBSERVED）', async () => {
+    const { backend } = resolvingBackend(new Map([['/a.txt', '原本的']]));
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { calls, handler } = probe();
+
+    await wrap(requestFor(OBSERVED_READ_TOOL, 'a.txt'), handler);
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.txt'), handler)) as ToolMessage;
+    expect(toolErrorOf(result)).toBeUndefined();
+    expect(calls).toEqual([OBSERVED_READ_TOOL, OBSERVED_EDIT_TOOL]);
+  });
+
+  it('讀 `./dir//a.txt` 再 write `/dir/a.txt` → 放行', async () => {
+    const { backend } = resolvingBackend(new Map([['/dir/a.txt', '原本的']]));
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { calls, handler } = probe();
+
+    await wrap(requestFor(OBSERVED_READ_TOOL, './dir//a.txt'), handler);
+    const result = (await wrap(
+      requestFor(OBSERVED_WRITE_TOOL, '/dir/a.txt'),
+      handler,
+    )) as ToolMessage;
+    expect(toolErrorOf(result)).toBeUndefined();
+    expect(calls).toEqual([OBSERVED_READ_TOOL, OBSERVED_WRITE_TOOL]);
+  });
+
+  it('換寫法之後檔案被動過 → 仍然是 FS_STALE_VERSION（不是放行）', async () => {
+    const { backend, set } = resolvingBackend(new Map([['/a.txt', '原本的']]));
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+
+    await wrap(requestFor(OBSERVED_READ_TOOL, 'a.txt'), handler);
+    set('a.txt', '別人改過');
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.txt'), handler)) as ToolMessage;
+    expect(toolErrorOf(result)?.code).toBe('FS_STALE_VERSION');
+  });
+
+  it('**路由那一格**：讀 `/tool-results/x.txt` 之後 write `tool-results/x.txt` → FS_NOT_OBSERVED（是兩個檔）', async () => {
+    // 兩邊各放一個 x.txt。`/tool-results/` 走暫存路由，沒有前導斜線的 `tool-results/x.txt` 落到預設的工作區。
+    const stash = resolvingBackend(new Map([['/x.txt', '暫存那份']]));
+    const workspace = resolvingBackend(new Map([['/tool-results/x.txt', '工作區那份']]));
+    const backend = new CompositeBackend(workspace.backend, {
+      '/tool-results/': stash.backend,
+    }) as unknown as AnyBackendProtocol;
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { calls, handler } = probe();
+
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/tool-results/x.txt'), handler);
+    const result = (await wrap(
+      requestFor(OBSERVED_WRITE_TOOL, 'tool-results/x.txt'),
+      handler,
+    )) as ToolMessage;
+    // 單純的 `'/' + raw` 會讓兩把鍵撞在一起，結果變成 FS_STALE_VERSION（兩份內容的版本不同）。
+    expect(toolErrorOf(result)?.code).toBe('FS_NOT_OBSERVED');
+    expect(calls).toEqual([OBSERVED_READ_TOOL]);
+  });
+
+  it('巢狀的 CompositeBackend 也認得內層的路由（組裝點的 composite 是一層包一層）', () => {
+    const inner = new CompositeBackend(resolvingBackend(new Map()).backend, {
+      '/tool-results/': resolvingBackend(new Map()).backend,
+    });
+    const outer = new CompositeBackend(inner as unknown as AnyBackendProtocol, {
+      '/mounted/': resolvingBackend(new Map()).backend,
+    }) as unknown as AnyBackendProtocol;
+
+    expect(observationKey(outer, '/tool-results/x.txt')).not.toBe(
+      observationKey(outer, 'tool-results/x.txt'),
     );
-    expect(seen).toContain(OBSERVATION_POLICY_NOTICE);
-    // 兩顆工具名都要出現在那句話裡——模型是靠名字對上去的。
-    expect(OBSERVATION_POLICY_NOTICE).toContain(OBSERVED_EDIT_TOOL);
-    expect(OBSERVATION_POLICY_NOTICE).toContain(OBSERVED_WRITE_TOOL);
+    expect(observationKey(outer, '/mounted/x.txt')).not.toBe(observationKey(outer, '/x.txt'));
+    // 同一個 backend 裡的不同寫法是同一把。
+    expect(observationKey(outer, '/tool-results/x.txt')).toBe(
+      observationKey(outer, '/tool-results//./x.txt'),
+    );
+    expect(observationKey(outer, 'a.txt')).toBe(observationKey(outer, '/a.txt'));
+  });
+
+  it('含 `..` 的路徑不併進別的檔的鍵（後端會拒絕它，失敗的讀不能記到 `/x` 身上）', () => {
+    const { backend } = resolvingBackend(new Map());
+    expect(observationKey(backend, '../x')).not.toBe(observationKey(backend, '/x'));
+    expect(observationKey(backend, 'a/../x')).not.toBe(observationKey(backend, '/x'));
   });
 });
 
