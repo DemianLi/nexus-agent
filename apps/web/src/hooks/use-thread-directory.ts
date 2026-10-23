@@ -28,7 +28,12 @@ import type { RowStatus } from '@/lib/thread-status';
 export type Listing =
   | { readonly kind: 'loading' }
   | { readonly kind: 'ok'; readonly result: ThreadListResult }
-  | { readonly kind: 'failed'; readonly message: string };
+  | {
+      readonly kind: 'failed';
+      readonly message: string;
+      /** server 回的錯誤碼；網路層拋的錯沒有。`not_supported` 是這台 server 沒接落盤（#1964 用它藏分支鈕）。 */
+      readonly code?: string;
+    };
 
 export interface ThreadDirectory {
   readonly listing: Listing;
@@ -59,7 +64,11 @@ export function useThreadDirectory(client: WireClient, currentThreadId: string):
           setListing({ kind: 'ok', result: outcome.result });
           dispatch({ type: 'listed', items: outcome.result.items });
         } else {
-          setListing({ kind: 'failed', message: outcome.message });
+          setListing({
+            kind: 'failed',
+            message: outcome.message,
+            ...(outcome.code === undefined ? {} : { code: outcome.code }),
+          });
           dispatch({ type: 'list-failed' });
         }
       },

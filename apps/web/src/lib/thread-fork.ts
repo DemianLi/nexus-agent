@@ -39,6 +39,16 @@ export const FORK_RENAME_FAILED_TEXT = '已分出新對話，但改名失敗';
 export const FORKED_THREAD_NOTICE =
   '這是分出來的新對話：到分叉那一輪為止的內容都帶過來了，模型也記得。原本那條對話不變。';
 
+/**
+ * 這台 server 分得了叉嗎：清單回 `not_supported` 就是沒接落盤，分叉也必定回 `not_supported`——server 的列表與冷讀兩支由同一個
+ * 開關給（`apps/harness/src/serve.ts` 的 `sessionStore`，[#1964](https://github.com/DemianLi/nexus-agent/issues/1964)）。
+ * 這時鈕整顆不畫，同 dsh `TurnTailNodeView.tsx:32,70` 沒有 `session/fork` 權限時 `onBranch` 是 `undefined`。
+ * 還在讀、清單別的原因失敗都照畫：按下去由 server 回錯誤。
+ */
+export function forkSupported(listing: { readonly kind: string; readonly code?: string }): boolean {
+  return !(listing.kind === 'failed' && listing.code === 'not_supported');
+}
+
 /** 這一則下面要不要畫分支鈕：只有收尾的那一則（評分鈕的位置，`AiEntry.turnTail`）。 */
 export function hasForkButton(entry: AiEntry): boolean {
   return entry.turnTail === true;

@@ -1,7 +1,12 @@
 import type { AiEntry } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { forkUnavailable, hasForkButton, increasedForkTitle } from '@/lib/thread-fork';
+import {
+  forkSupported,
+  forkUnavailable,
+  hasForkButton,
+  increasedForkTitle,
+} from '@/lib/thread-fork';
 
 /** 分支鈕的判法與子 thread 的標題（#1581 刀 2）。 */
 
@@ -61,5 +66,17 @@ describe('分支鈕能不能按（判法同 server 的 fork_unavailable）', () 
     ['沒有 messageId', tail({ messageId: undefined }), idle, 'no-message'],
   ] as const)('%s：按不了，原因是 %s', (_label, entry, state, reason) => {
     expect(forkUnavailable(entry, state)).toBe(reason);
+  });
+});
+
+describe('這台 server 分得了叉嗎（#1964）', () => {
+  it.each([
+    ['還在讀', { kind: 'loading' }, true],
+    ['列出來了', { kind: 'ok' }, true],
+    ['沒接落盤（not_supported）', { kind: 'failed', code: 'not_supported' }, false],
+    ['別的碼', { kind: 'failed', code: 'unknown_error' }, true],
+    ['網路層拋錯（沒有碼）', { kind: 'failed' }, true],
+  ] as const)('清單%s → %s', (_label, listing, supported) => {
+    expect(forkSupported(listing)).toBe(supported);
   });
 });
