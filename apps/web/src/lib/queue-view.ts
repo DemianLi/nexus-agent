@@ -161,6 +161,24 @@ export function canSendText(
   return connected && (line.trim() !== '' || hasAttachments) && status !== 'awaiting-input';
 }
 
+/** 跟 `parseCommand` 同一條：lookahead 讓 `/planning` 不會被當成 `/plan`。 */
+const COMMAND_TOKEN = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u;
+
+/** 這一行開頭像不像一個命令（`/名字`，名字照 `parseCommand`）；不管清單上有沒有。不像就回 `undefined`。 */
+export function commandToken(line: string): string | undefined {
+  return COMMAND_TOKEN.exec(line.trim())?.[1];
+}
+
+/**
+ * 開頭那個字是不是命令清單上的名字（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)，#1574 Q2 (a)）：是才走
+ * `slash.run`，其餘一律是一句話、走 `run.start`——技能的 `/deploy 今天`、打錯的 `/plna` 都送給模型。照 dsh：命令在客戶端
+ * 先認，認不得的整行變成 prompt（`ui-commands/src/client/service.ts` 的 `matchEnter`）。
+ */
+export function namesCommand(commands: readonly SlashDescriptor[], line: string): boolean {
+  const name = commandToken(line);
+  return name !== undefined && commands.some((command) => command.name === name);
+}
+
 /**
  * 這一行在一輪跑著、或停在核准點時能不能執行（[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)）：照 `slash.list`
  * 帶下來的 `runWhileBusy` 宣告（#1516），**不在前端另寫一份各命令的文法**。
@@ -171,8 +189,7 @@ export function canSendText(
  * 對照同一批輸入，兩邊分岔就紅。
  */
 export function slashRunsWhileBusy(commands: readonly SlashDescriptor[], line: string): boolean {
-  // 跟 `parseCommand` 同一條：lookahead 讓 `/planning` 不會被當成 `/plan`。
-  const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u.exec(line);
+  const match = COMMAND_TOKEN.exec(line);
   if (match === null) return false;
   const declared = commands.find((command) => command.name === match[1])?.runWhileBusy;
   return declared !== undefined && declared.includes(line.slice(match[0].length).trim());

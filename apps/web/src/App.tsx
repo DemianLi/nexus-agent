@@ -55,7 +55,7 @@ import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { isPlanReview, planReviewOf } from '@/lib/plan-review';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
-import { canRunSlash, canSendText, steerableItems } from '@/lib/queue-view';
+import { canRunSlash, canSendText, namesCommand, steerableItems } from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
 import {
@@ -435,7 +435,7 @@ function ConversationView({
     );
   };
   // **送出分兩道閘**（#645 Q2）。純文字跑著也送得出去：伺服器收下就排進送出佇列，開跑時才畫人的話。停在核准點時
-  // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
+  // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令（開頭那個字在命令清單上，#1929；技能的 `/名字` 是一句話）一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
   // 例外：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record` 任何時候都收（#267 的 Q10）。命令在 `slash.list` 宣告過
   // 「忙的時候也放行」的那幾行（`/goal pause`）也過得去，判斷照伺服器的宣告，不在這裡另寫文法（#1517）。
   const status = conversation.state.status;
@@ -448,7 +448,7 @@ function ConversationView({
   const canSendLine = (line: string) =>
     isModelLine(line)
       ? conversation.connected
-      : line.trim().startsWith('/')
+      : namesCommand(conversation.slashCommands, line)
         ? canRunSlash(
             conversation.connected,
             status,
@@ -786,8 +786,11 @@ function ConversationView({
                     return;
                   }
                   setDraft('');
-                  // `/` 開頭的是命令，不帶提及（留著，同附件）；否則這一句送出就用掉它。
-                  const mentioned = text.trim().startsWith('/') ? undefined : mentionedAgent;
+                  // 命令不帶提及（留著，同附件）；否則這一句送出就用掉它。開頭是不是命令照送出路由認（#1929）：技能的
+                  // `/deploy 今天` 是一句話，照樣帶。
+                  const mentioned = namesCommand(conversation.slashCommands, text)
+                    ? undefined
+                    : mentionedAgent;
                   if (mentioned !== undefined) setMentionedAgent(undefined);
                   // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
@@ -868,6 +871,7 @@ function ConversationView({
                   });
                 }}
                 commands={commands}
+                skills={conversation.skills}
                 fileReferences={fileReferences}
                 sessionReferences={sessionReferences}
                 // 底列照 SG demo（#1591 Q3）：左邊是助理怎麼做事（模式＝權限），右邊是這則訊息用什麼送（模型、推理強度、
@@ -884,7 +888,8 @@ function ConversationView({
                             status === 'running' || status === 'awaiting-input',
                           )}
                           // 成功的回話與失敗的原因由斜線命令那一套顯示（狀態列），這裡不另開一條。
-                          onSwitch={(line) => void conversation.send(line)}
+                          // 座位送的一定是命令：直接走 `slash.run`，不經過送出認命令那一道（#1929）。
+                          onSwitch={(line) => void conversation.runCommand(line)}
                         />
                       ),
                     })}

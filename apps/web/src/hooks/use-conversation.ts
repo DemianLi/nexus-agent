@@ -14,6 +14,7 @@ import type {
   GoalPauseResult,
   PromptAttachment,
   SubagentMention,
+  SkillEntry,
   SlashDescriptor,
   QueueSteerAction,
   QueueUpdateAction,
@@ -56,6 +57,7 @@ import type { Publication } from '@/lib/frame-publisher';
 import { RatingsController } from '@/lib/feedback-ratings';
 import { goalPauseFailureText } from '@/lib/goal-bar';
 import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
+import { commandToken, namesCommand } from '@/lib/queue-view';
 import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
@@ -69,6 +71,17 @@ import {
 } from '@/lib/thread-protocol-error';
 import { threadSubagentText } from '@/lib/thread-subagent';
 import { randomUuid } from '@/lib/uuid';
+
+/**
+ * 命令清單還沒回來時，開頭像命令的那一行退回的原因（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）。
+ * 清單沒到就分不出 `/plan` 是命令還是一句話，照 dsh 等清單、不靜默降級成送給模型。
+ */
+export const COMMANDS_PENDING_TEXT = '命令清單還沒載入，開頭是「/」的這一行先不送，稍候再按送出。';
+
+/** 命令清單抓失敗時，開頭像命令的那一行退回的原因（#1929）：同上，不靜默降級。 */
+export function commandsFailedText(message: string): string {
+  return `命令清單沒有載入，分不出開頭的「/」是命令還是一句話，這一行沒有送出。（${message}）`;
+}
 
 /** `loadThrough` 每頁至少幾則，照 dsh 的 `JUMP_PAGE_MESSAGES`（`session.ts:57`）。 */
 export const JUMP_PAGE_MESSAGES = 200;
@@ -215,10 +228,15 @@ export interface Conversation {
    */
   readonly commandError?: string;
   /**
-   * 這條 thread 打得出哪些斜線命令。**拿來顯示，不做選單**——
-   * dsh 的 `CommandDirectory`（epoch guard、single-flight、`ensureReady`）是另一張卡。
+   * 這條 thread 打得出哪些斜線命令：`/` 選單的命令組，也是送出時認命令的那份（#1929）。
+   * dsh 的 `CommandDirectory`（epoch guard、single-flight）是另一張卡。
    */
   readonly slashCommands: readonly SlashDescriptor[];
+  /**
+   * 這條 thread 用 `/名字` 叫得出的技能（#1929）：`/` 選單的技能組。抓不到（伺服器沒掛技能、被拒、拋錯）就是空的，
+   * 只少了那一組。
+   */
+  readonly skills: readonly SkillEntry[];
   /**
    * 上一個斜線命令自己失敗的原因，或那一行不是認得的命令。
    *
@@ -234,11 +252,11 @@ export interface Conversation {
    */
   readonly slashNotice?: string;
   /**
-   * 送一行進去。**第一個字是 `/` 就走 `slash.run`**，其餘走 `run.start`。
-   *
-   * 認不得的命令在這裡是錯誤，不像 CLI 那樣照原樣送給模型——瀏覽器這個發派面手上
-   * 就有清單，說「不認得」比把一行斜線丟給模型有用
-   * （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
+   * 送一行進去。**開頭那個字是命令清單上的名字才走 `slash.run`**，其餘走 `run.start`
+   * （[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)，#1574 Q2 (a)，照 dsh）：技能的 `/deploy 今天`、打錯的
+   * `/plna` 都是一句話，送給模型。這推翻了 [#123](https://github.com/DemianLi/nexus-agent/issues/123) 的「認不得的命令是
+   * 錯誤」；「不認得這個命令」只剩清單上有、伺服器卻說不認得的那一種。清單還沒到或抓失敗時，開頭像命令的那一行回
+   * {@link SendRejected}（{@link COMMANDS_PENDING_TEXT}、{@link commandsFailedText}），不靜默送給模型。
    *
    * **一句話送出去不畫任何東西**（#645）：伺服器收下就進送出佇列，開跑那一刻才由 `inbox` 的 `claimed` 畫人的泡泡。
    * 伺服器沒收下（回錯誤或這一趟就斷了）時回 {@link SendRejected}，呼叫端把草稿放回去並說出原因；斜線命令與
@@ -274,6 +292,11 @@ export interface Conversation {
    * {@link Conversation.slashNotice} 與 {@link Conversation.slashError}：那兩格是狀態列的，標籤的失敗講在標籤旁邊。
    */
   exitPlanMode(): Promise<string | undefined>;
+  /**
+   * 執行一行**呼叫端確定是命令**的斜線命令（權限座的 `/permission <組名>`），直接走 `slash.run`，不經過 {@link Conversation.send}
+   * 認命令的那一道（#1929）：命令清單抓失敗時那一道會退回，座位的切換就靜靜沒了。結果照斜線命令那一套顯示。
+   */
+  runCommand(line: string): Promise<void>;
   /**
    * 暫停目標（`goal.pause`，[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)）：帶**畫面上當時那份**目標的身分與修訂。
    * 一輪跑著時 server 當場停掉那一輪，停下來的事實走下行（跟按停止一樣）；相位翻成 `paused` 也走下行，這裡不自己改狀態。
@@ -419,6 +442,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [commandError, setCommandError] = useState<string | undefined>(undefined);
   const [attempted, setAttempted] = useState(false);
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
+  /**
+   * 送出時認命令用的那份清單（#1929）：清單到之前是 `pending`，抓失敗而且從來沒到過是 `failed`。到過一次就留著——重連時
+   * 重抓失敗不把認得的命令丟掉。用 ref 是因為 `send` 要讀送出當下的那一份。
+   */
+  const commandCatalog = useRef<
+    | { readonly status: 'pending' }
+    | { readonly status: 'failed'; readonly message: string }
+    | { readonly status: 'ready'; readonly commands: readonly SlashDescriptor[] }
+  >({ status: 'pending' });
+  const [skills, setSkills] = useState<readonly SkillEntry[]>([]);
   const [slashError, setSlashError] = useState<string | undefined>(undefined);
   const [slashNotice, setSlashNotice] = useState<string | undefined>(undefined);
   /** 這條會話開跑過幾輪（`status` 變成 `running` 的次數）。命令回應靠它認得「發出命令之後有輪開跑了」。 */
@@ -632,13 +665,26 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (ratingsController.view.status !== 'cold') void ratingsController.resync();
         // **抓清單排在開線之後**，跟送話同一條規則：這條線除了還掛著的中斷不重播，所有的上行都等
         // 下行開好。清單本身不需要重播，但兩套順序規則比一套容易記錯。
+        // 技能清單（#1929）不等：事件照常往下收。被拒、拋錯（含看不懂的資料）都只是 `/` 選單少了技能那一組，不停這條線。
+        void Promise.resolve()
+          .then(() => client.skillList(threadId))
+          .then(
+            (outcome) => {
+              if (!cancelled && outcome.kind === 'ok') setSkills(outcome.skills);
+            },
+            () => undefined,
+          );
         const listed = await client.slashList(threadId);
         if (cancelled) {
           return;
         }
         if (listed.kind === 'ok') {
+          commandCatalog.current = { status: 'ready', commands: listed.commands };
           setSlashCommands(listed.commands);
         } else {
+          if (commandCatalog.current.status !== 'ready') {
+            commandCatalog.current = { status: 'failed', message: listed.message };
+          }
           setSlashError(listed.message);
         }
         for await (const event of events) {
@@ -741,6 +787,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     [threadId],
   );
 
+  const runCommand = useCallback(
+    async (line: string): Promise<void> => {
+      await runSlash(line.trim());
+    },
+    [runSlash],
+  );
+
   const exitPlanMode = useCallback(async (): Promise<string | undefined> => {
     let outcome: SlashRunOutcome;
     try {
@@ -795,8 +848,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         setFeedbackDialog({ target: { kind: 'session' }, submitting: false });
         return undefined;
       }
-      if (trimmed.startsWith('/')) {
-        return runSlash(trimmed, hasAttachments ? attachments : undefined);
+      // 開頭那個字是命令清單上的名字才是命令（#1929，#1574 Q2 (a)），其餘整行走 `run.start`：技能的 `/deploy 今天`、
+      // 打錯的 `/plna` 都送給模型。清單沒到或抓失敗時分不出來，照 dsh 退回、說出原因，草稿與附件原樣留著（`matchEnter`
+      // 的 strong-wait：「never a silent downgrade」）。
+      if (commandToken(trimmed) !== undefined) {
+        const catalog = commandCatalog.current;
+        if (catalog.status === 'pending') return { message: COMMANDS_PENDING_TEXT };
+        if (catalog.status === 'failed') return { message: commandsFailedText(catalog.message) };
+        if (namesCommand(catalog.commands, trimmed)) {
+          return runSlash(trimmed, hasAttachments ? attachments : undefined);
+        }
       }
       setSlashError(undefined);
       setSlashNotice(undefined);
@@ -1226,8 +1287,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         }),
     ...(historyError === undefined ? {} : { historyError }),
     slashCommands,
+    skills,
     send,
     exitPlanMode,
+    runCommand,
     pauseGoal,
     updateQueue,
     respond,

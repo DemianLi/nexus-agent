@@ -5,13 +5,15 @@ import { fileURLToPath } from 'node:url';
 
 import { normalizeCommandDefinition } from '@nexus/core';
 import type { CommandDefinition } from '@nexus/core';
-import { runsWhileBusy } from '@nexus/plugin-commands';
+import { parseCommand, runsWhileBusy } from '@nexus/plugin-commands';
 import { SETTLE_REASONS } from '@nexus/wire';
 import type { ConversationStatus, SlashDescriptor, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
   canRunSlash,
+  commandToken,
+  namesCommand,
   slashRunsWhileBusy,
   GOAL_CONTINUATION_TEXT,
   GOAL_CONTINUATION_WARNING,
@@ -151,6 +153,56 @@ const COMMANDS: readonly SlashDescriptor[] = REGISTERED.map((r) => r.descriptor)
 const FIND = {
   find: (name: string) => REGISTERED.find((r) => r.definition.name === name)?.definition,
 };
+
+describe('commandToken 跟伺服器的 parseCommand 同一套（#1929）', () => {
+  // 拿 `@nexus/plugin-commands` 真的 `parseCommand` 對照同一批輸入：認命令的文法在 web 分岔了就紅。
+  it.each([
+    '/plan',
+    ' /plan ',
+    '/plan off',
+    '/plan\toff',
+    '/plan\noff',
+    '/planning',
+    '/Plan',
+    '/plan-b',
+    '/plan_b',
+    '/9plan',
+    '/計劃',
+    '/plan/off',
+    '/usr/bin 是什麼',
+    '/',
+    '',
+    'plan',
+    '說 /plan',
+  ])('%j', (line) => {
+    expect(commandToken(line)).toBe(parseCommand(line.trim())?.name);
+  });
+
+  it('對照組裡兩種結果都有', () => {
+    expect(commandToken('/plan off')).toBe('plan');
+    expect(commandToken('/planning')).toBe('planning');
+    expect(commandToken('/計劃')).toBeUndefined();
+  });
+});
+
+describe('namesCommand：開頭的字在命令清單上才是命令（#1929，Q2 (a)）', () => {
+  it('清單上的名字是命令，前後空白不計', () => {
+    expect(namesCommand(COMMANDS, '/plan')).toBe(true);
+    expect(namesCommand(COMMANDS, ' /goal 把登入改好 ')).toBe(true);
+  });
+
+  it('清單上沒有的都不是：技能、打錯的、只差開頭的、大小寫不同、不在開頭的', () => {
+    expect(namesCommand(COMMANDS, '/deploy 今天')).toBe(false);
+    expect(namesCommand(COMMANDS, '/plna')).toBe(false);
+    expect(namesCommand(COMMANDS, '/planning')).toBe(false);
+    expect(namesCommand(COMMANDS, '/Plan')).toBe(false);
+    expect(namesCommand(COMMANDS, '說 /plan')).toBe(false);
+  });
+
+  it('清單是空的：什麼都不是命令', () => {
+    expect(namesCommand([], '/plan')).toBe(false);
+  });
+});
 
 describe('slashRunsWhileBusy 跟伺服器的閘門同一套（#1517）', () => {
   // 拿 `@nexus/plugin-commands` 真的 `runsWhileBusy` 對照同一批輸入：web 這一份分岔了就紅。

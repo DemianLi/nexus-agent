@@ -1,8 +1,19 @@
 // @vitest-environment node
-import type { SlashDescriptor } from '@nexus/wire';
+import type { SkillEntry, SlashDescriptor } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { applySlashPick, detectSlash, rankByName, slashCandidates } from '@/lib/slash-trigger';
+import {
+  applySkillPick,
+  applySlashPick,
+  detectSlash,
+  rankByName,
+  skillDescription,
+  slashCandidateKey,
+  slashCandidates,
+  slashMenu,
+  USER_ONLY_MARK,
+} from '@/lib/slash-trigger';
+import type { SlashCandidate } from '@/lib/slash-trigger';
 
 /**
  * `/` 選單的純邏輯（#407）。觸發的案例照 dsh `ui-input-trigger/tests/core-detect.client.spec.ts` 的 `/` 那幾條，
@@ -133,6 +144,55 @@ describe('applySlashPick', () => {
       draft: '先記一下 ',
       caret: 5,
       run: '/feedback',
+    });
+  });
+});
+
+describe('技能那一組（#1929）', () => {
+  const deploy: SkillEntry = { name: 'deploy', description: '部署', modelInvocable: false };
+  const digest: SkillEntry = { name: 'digest', description: '週報', modelInvocable: true };
+  const keys = (candidates: readonly SlashCandidate[]) => candidates.map(slashCandidateKey);
+
+  it('命令一組在前、技能一組在後，兩組各自照 rankByName（dsh 的 order 1、2）', () => {
+    expect(keys(slashMenu([plan, feedback], [digest, deploy], atEnd('/')!))).toEqual([
+      'command:plan',
+      'command:feedback',
+      'skill:digest',
+      'skill:deploy',
+    ]);
+    // `de` 對 deploy 是開頭命中，對 digest 是跳格：deploy 在前；命令一個都不中。
+    expect(keys(slashMenu([plan, feedback], [digest, deploy], atEnd('/de')!))).toEqual([
+      'skill:deploy',
+      'skill:digest',
+    ]);
+  });
+
+  it('句中也列技能（技能在句中也認）；命令照舊只列不帶參數的', () => {
+    expect(keys(slashMenu([plan, feedback], [deploy], atEnd('幫我 /')!))).toEqual([
+      'command:feedback',
+      'skill:deploy',
+    ]);
+  });
+
+  it('跟命令同名的技能兩組都列，鍵帶組別所以不撞', () => {
+    const planSkill: SkillEntry = { name: 'plan', description: '同名', modelInvocable: true };
+    expect(keys(slashMenu([plan], [planSkill], atEnd('/pl')!))).toEqual([
+      'command:plan',
+      'skill:plan',
+    ]);
+  });
+
+  it('只給人叫的在描述前面加標記，模型也能叫的不加', () => {
+    expect(skillDescription(deploy)).toBe(`${USER_ONLY_MARK} · 部署`);
+    expect(USER_ONLY_MARK).toBe('只給人叫');
+    expect(skillDescription(digest)).toBe('週報');
+  });
+
+  it('選了技能：草稿落成字面的 `/名字 `，不執行', () => {
+    expect(applySkillPick('/de', atEnd('/de')!, deploy)).toEqual({ draft: '/deploy ', caret: 8 });
+    expect(applySkillPick('幫我 /de', atEnd('幫我 /de')!, deploy)).toEqual({
+      draft: '幫我 /deploy ',
+      caret: 11,
     });
   });
 });

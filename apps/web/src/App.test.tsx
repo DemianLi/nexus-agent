@@ -6,6 +6,7 @@ import type {
   ModelSelectResult,
   ModelSelection,
   PermissionCatalogResult,
+  SkillEntry,
   SlashDescriptor,
   SessionReferenceCandidate,
   SlashRunOutcome,
@@ -58,6 +59,7 @@ import {
   SWITCHED_THREAD_NOTICE,
 } from '@/App';
 import { NO_DECISION_REASON } from '@/components/approval-card';
+import { COMMANDS_PENDING_TEXT, commandsFailedText } from '@/hooks/use-conversation';
 import {
   BLANK_THREAD_LABEL,
   CLEAR_SEARCH_LABEL,
@@ -434,7 +436,11 @@ describe('對話介面', () => {
     seq = 0;
     stubCmdkLayout();
     const fake = fakeClient([frame('lifecycle', [], { event: 'running', graph_name: 'root' })], {
-      commands: [{ name: 'plan', description: '計劃模式' }],
+      // `/feedback` 在真的伺服器上也列（回饋插件登記的命令），命令認不認得照這份清單（#1929）。
+      commands: [
+        { name: 'plan', description: '計劃模式' },
+        { name: 'feedback', description: '回饋' },
+      ],
     });
     const client: WireClient = {
       ...fake.client,
@@ -1195,7 +1201,7 @@ describe('斜線命令', () => {
     expect(screen.getByRole('button', { name: '停止' })).toBeTruthy();
   });
 
-  it('第一個字是 `/` 就走 slash.run，而且不進 transcript', async () => {
+  it('開頭的字是清單上的命令就走 slash.run，而且不進 transcript', async () => {
     seq = 0;
     const { client, sent, slashed } = fakeClient([], {
       commands: [planCommand],
@@ -1215,9 +1221,13 @@ describe('斜線命令', () => {
     expect(document.querySelectorAll('[data-slot="message-scroller-item"]')).toHaveLength(0);
   });
 
-  it('認不得的一行說「不認得」，不是靜靜送給模型', async () => {
+  it('清單上有、伺服器卻說不認得：說「不認得」，不是靜靜送給模型', async () => {
     seq = 0;
-    const { client, sent } = fakeClient([], { run: () => ({ kind: 'unknown' }) });
+    // 清單上沒有的 `/nope` 是一句話、送給模型（#1929，見「開頭的字」那一組）；「不認得」只剩清單與伺服器對不上的這一種。
+    const { client, sent } = fakeClient([], {
+      commands: [{ name: 'nope', description: '剛被移掉的命令' }],
+      run: () => ({ kind: 'unknown' }),
+    });
     render(<App client={client} />);
 
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
@@ -1231,6 +1241,7 @@ describe('斜線命令', () => {
   it('命令自己失敗與這條線拒絕發派，說出來的話不一樣', async () => {
     seq = 0;
     const { client } = fakeClient([], {
+      commands: [planCommand],
       run: (line) =>
         line === '/plan off'
           ? { kind: 'error', command_id: 'cmd-2', text: '本來就不在計劃模式。' }
@@ -1252,6 +1263,180 @@ describe('斜線命令', () => {
     await waitFor(() =>
       expect(screen.getByRole('status').textContent).toContain('這個動作沒送出去'),
     );
+  });
+});
+
+describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#1574 Q2 (a)）', () => {
+  const planCommand: SlashDescriptor = { name: 'plan', description: '進出計劃模式。' };
+  const deploy: SkillEntry = {
+    name: 'deploy',
+    description: '部署到預備環境',
+    modelInvocable: false,
+  };
+  const normal: SkillEntry = { name: 'normal', description: '整理週報', modelInvocable: true };
+  const skillList: WireClient['skillList'] = async () => ({
+    kind: 'ok',
+    skills: [deploy, normal],
+  });
+
+  beforeEach(stubCmdkLayout);
+
+  const input = () => screen.getByLabelText<HTMLTextAreaElement>('要說的話');
+  /** 打一行、按送出鈕（選單開著也一樣送）。 */
+  const sendLine = (line: string) => {
+    fireEvent.change(input(), { target: { value: line } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+  };
+  /** 等命令清單到：打 `/` 看得到 `/plan`，再清掉。 */
+  async function commandsListed() {
+    await screen.findByPlaceholderText('說點什麼…');
+    fireEvent.change(input(), { target: { value: '/' } });
+    await within(await screen.findByRole('listbox')).findByText('/plan');
+    fireEvent.change(input(), { target: { value: '' } });
+  }
+
+  it('紅燈 4：「/plan」照舊走 slash.run；「/deploy 今天」原字串送給模型、不走 slash.run', async () => {
+    seq = 0;
+    const fake = fakeClient([], {
+      commands: [planCommand],
+      run: () => ({ kind: 'success', command_id: 'c' }),
+    });
+    render(<App client={{ ...fake.client, skillList }} />);
+    await commandsListed();
+
+    sendLine('/plan');
+    await waitFor(() => expect(fake.slashed).toEqual(['/plan']));
+    expect(fake.sent).toEqual([]);
+
+    sendLine('/deploy 今天');
+    await waitFor(() => expect(fake.sent).toEqual(['/deploy 今天']));
+    expect(fake.slashed).toEqual(['/plan']);
+  });
+
+  it('打錯的 /plna 也是一句話，送給模型（Q2 (a)）', async () => {
+    seq = 0;
+    const fake = fakeClient([], { commands: [planCommand] });
+    render(<App client={fake.client} />);
+    await commandsListed();
+
+    sendLine('/plna');
+    await waitFor(() => expect(fake.sent).toEqual(['/plna']));
+    expect(fake.slashed).toEqual([]);
+  });
+
+  it('命令清單還沒到：「/plan」兩條都不走，說出原因，草稿留著（dsh 的 strong-wait）', async () => {
+    seq = 0;
+    const fake = fakeClient([], { commands: [planCommand] });
+    const slashList: WireClient['slashList'] = () => new Promise(() => {});
+    render(<App client={{ ...fake.client, slashList }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    sendLine('/plan');
+    const card = await toastWith(COMMANDS_PENDING_TEXT);
+    expect(card.textContent).toContain('這一句沒送出去');
+    await waitFor(() => expect(input().value).toBe('/plan'));
+    expect(fake.sent).toEqual([]);
+    expect(fake.slashed).toEqual([]);
+  });
+
+  it('命令清單抓失敗：「/plan」兩條都不走，說出原因；不是 / 開頭的照常送', async () => {
+    seq = 0;
+    const fake = fakeClient([], { commands: [planCommand] });
+    const slashList: WireClient['slashList'] = async () => ({
+      kind: 'rejected',
+      message: '清單讀不出來',
+    });
+    render(<App client={{ ...fake.client, slashList }} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('清單讀不出來'));
+
+    sendLine('/plan');
+    await toastWith(commandsFailedText('清單讀不出來'));
+    await waitFor(() => expect(input().value).toBe('/plan'));
+    expect(fake.sent).toEqual([]);
+    expect(fake.slashed).toEqual([]);
+
+    sendLine('一句話');
+    await waitFor(() => expect(fake.sent).toEqual(['一句話']));
+  });
+
+  it('跑著時：技能那一行跟一句話一樣能排隊；命令照舊送不出去', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'running', graph_name: 'root' })], {
+      commands: [planCommand],
+    });
+    render(<App client={{ ...fake.client, skillList }} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+    fireEvent.change(input(), { target: { value: '/' } });
+    await within(await screen.findByRole('listbox')).findByText('/plan');
+
+    fireEvent.change(input(), { target: { value: '/deploy 今天' } });
+    const queue = screen.getByRole('button', { name: '排隊送出' }) as HTMLButtonElement;
+    expect(queue.disabled).toBe(false);
+    fireEvent.change(input(), { target: { value: '/plan' } });
+    expect(screen.queryByRole('button', { name: '送出' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '排隊送出' })).toBeNull();
+  });
+
+  it('紅燈 5：打 /de，候選有 deploy，描述帶「只給人叫」；選了在草稿落成「/deploy 」', async () => {
+    seq = 0;
+    const fake = fakeClient([], { commands: [planCommand] });
+    render(<App client={{ ...fake.client, skillList }} />);
+    await commandsListed();
+
+    // 空查詢：命令一組在前、技能一組在後，各有段標題；一般技能不帶標記。
+    fireEvent.change(input(), { target: { value: '/' } });
+    const all = await screen.findByRole('listbox');
+    await within(all).findByText('/deploy');
+    expect(
+      within(all)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['/plan進出計劃模式。', '/deploy只給人叫 · 部署到預備環境', '/normal整理週報']);
+    expect(within(all).getByText('命令')).toBeTruthy();
+    expect(within(all).getByText('技能')).toBeTruthy();
+
+    fireEvent.change(input(), { target: { value: '/de' } });
+    const listbox = await screen.findByRole('listbox');
+    await waitFor(() =>
+      expect(
+        within(listbox)
+          .getAllByRole('option')
+          .map((option) => option.textContent),
+      ).toEqual(['/deploy只給人叫 · 部署到預備環境']),
+    );
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    expect(input().value).toBe('/deploy ');
+    expect(fake.slashed).toEqual([]);
+    expect(fake.sent).toEqual([]);
+  });
+
+  it('技能清單拋錯（看不懂的資料）：只少了技能那一組，這條線不停、命令照常', async () => {
+    seq = 0;
+    const fake = fakeClient([], {
+      commands: [planCommand],
+      run: () => ({ kind: 'success', command_id: 'c' }),
+    });
+    const broken: WireClient['skillList'] = async () => {
+      throw new WireProtocolError(
+        'skills[0].modelInvocable',
+        'skill.list 的結果少了 modelInvocable',
+      );
+    };
+    render(<App client={{ ...fake.client, skillList: broken }} />);
+    await commandsListed();
+
+    fireEvent.change(input(), { target: { value: '/' } });
+    const listbox = await screen.findByRole('listbox');
+    expect(
+      within(listbox)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['/plan進出計劃模式。']);
+    expect(within(listbox).queryByText('技能')).toBeNull();
+    expect(screen.queryByText(THREAD_PROTOCOL_ERROR_TEXT)).toBeNull();
+
+    sendLine('/plan');
+    await waitFor(() => expect(fake.slashed).toEqual(['/plan']));
   });
 });
 
@@ -4375,7 +4560,9 @@ describe('新對話重用空白會話', () => {
 
   it('送出斜線命令之後按：它不起一輪，留在原地（#1600）', async () => {
     seq = 0;
-    const fake = fakeClient([]);
+    // 開頭的字在命令清單上才是命令（#1929）；列上之後打 `/` 會開選單。
+    stubCmdkLayout();
+    const fake = fakeClient([], { commands: [{ name: 'whatever', description: '隨便' }] });
     const { client, state } = gated(fake, LISTED);
     render(<App client={client} />);
     await waitFor(() => expect(state.reads).toBe(1));
@@ -5021,10 +5208,11 @@ describe('模型座（#723）', () => {
     expect(seat()).toBeNull();
     typeLine('/');
     await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
-    // 沒有 /model 時，打 /model 就是一般的斜線命令：走伺服器，不被客戶端攔。
+    // 沒有 /model 時，打 /model 不被客戶端攔，照一般的路由走：命令清單上沒有 `model`，就是一句話（#1929）。
     typeLine('/model');
     submit();
-    await waitFor(() => expect(fake.slashed).toEqual(['/model']));
+    await waitFor(() => expect(fake.sent).toEqual(['/model']));
+    expect(fake.slashed).toEqual([]);
   });
 
   it('讀型錄時拋錯也不畫模型座', async () => {
@@ -5887,12 +6075,22 @@ describe('附件送出（#733、#732）', () => {
   });
 
   describe('斜線命令帶附件（#733）', () => {
+    // 命令列在清單上，打 `/` 會開選單（#1929）。
+    beforeEach(stubCmdkLayout);
     type SlashCall = { line: string; attachments: Parameters<WireClient['slashRun']>[2] };
     function withSlash(run: (line: string) => SlashRunOutcome) {
       const fake = withUploads();
       const calls: SlashCall[] = [];
       const client: WireClient = {
         ...fake.client,
+        // 開頭的字在命令清單上才走 `slash.run`（#1929）：這一組送的命令都列上。
+        slashList: async () => ({
+          kind: 'ok',
+          commands: ['goal', 'other', 'nope', 'plan', 'feedback'].map((name) => ({
+            name,
+            description: name,
+          })),
+        }),
         slashRun: async (_threadId, line, attachments) => {
           calls.push({ line, attachments });
           return run(line);
@@ -6035,7 +6233,9 @@ describe('@子代理 提及（#328）', () => {
     runStartResult: UplinkResult = { type: 'success', id: 1, result: { run_id: 'run-1' } },
   ) {
     seq = 0;
-    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
+      commands: [{ name: 'plan', description: '計劃模式' }],
+    });
     const runStart = vi.fn(async (..._args: Parameters<WireClient['runStart']>) => runStartResult);
     const listed = vi.fn(subagentList);
     render(<App client={{ ...fake.client, runStart, subagentList: listed }} />);
@@ -6226,12 +6426,24 @@ describe('@子代理 提及（#328）', () => {
   it('以 / 開頭的命令不帶也不用掉標記', async () => {
     const { runStart } = await ready();
     await pick('@');
-    type('/model');
+    type('/plan');
     fireEvent.keyDown(input(), { key: 'Escape' });
     fireEvent.keyDown(input(), { key: 'Enter' });
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(runStart).not.toHaveBeenCalled();
     expect(chip()).not.toBeNull();
+  });
+
+  it('開頭不是命令的 /名字 是一句話：帶標記、也用掉它（#1929）', async () => {
+    const { runStart } = await ready();
+    await pick('@');
+    type('/deploy 今天');
+    fireEvent.keyDown(input(), { key: 'Escape' });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![1]).toBe('/deploy 今天');
+    expect(runStart.mock.calls[0]![2]?.mention).toEqual({ kind: 'subagent', name: 'explorer' });
+    await waitFor(() => expect(chip()).toBeNull());
   });
 
   it('帶附件時兩樣都在 run.start 裡', async () => {
