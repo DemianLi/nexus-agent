@@ -33,3 +33,7 @@ GitHub 端已啟用 secret scanning 與 push protection，但它們只擋得住�
 ## 會話日誌格式
 
 **升 `SESSION_LOG_FORMAT_VERSION` 就要在版本邊目錄補一條邊**（`packages/nexus-core/src/session-format.ts`，[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）：`additive` 或 `breaking`，讀方為舊形狀留了分支的填 `readerBranch`，並讓一份比它舊的夾具含觸發它的事件。不補邊，模組載入就拋。**要發的版本格式版本是新的**（不在 `RELEASED_SESSION_FORMAT_VERSIONS` 裡），**發版前**開一張進 `develop` 的 PR 補上：把它加進 `RELEASED_SESSION_FORMAT_VERSIONS`，在 `scripts/session-format-fixtures/generate.ts` 的 `TARGETS` 加一筆，`rev` 填當下 `develop` 的 commit（版號 PR 只改版號、不動格式，用它之前或之後的 commit 都一樣），以那一版的寫入器凍一份夾具到 `apps/harness/src/fixtures/session-format/v<N>/`。不能留到發版那一步：`develop → main` 的 PR 不另加 commit，tag 也要 Release 跑完才有。這張合進去之後到 Release 發出之前，若又升了格式版本，就照新的版本重做一次。
+
+## home 底下的狀態檔
+
+**改這幾份檔（`.credentials.yaml`、`plugin-journal.jsonl`、`browser-session.json`、`thread-organization.json`、`config-hash-key.json`）的 schema 或版本，同一張 PR 要留著 `apps/harness/src/fixtures/home-state/v1/` 的夾具，並在 `home-state-v1-fixtures.test.ts` 旁邊證明 v1 怎麼處置**（[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)，照 dsh `session-projection-cache/README.zh.md:130`）：讀相容、照當前版本重寫，或 backup-and-skip；就算選擇直接丟掉舊記錄，也要證明不會讓啟動失敗。出貨新版本時另放 `v2/`，不動 `v1/`。backup-and-skip 只給可以重建的衍生資料，這幾份都是權威狀態，沒有理由用它（`docs/operations.md` 的〈home 底下的狀態檔壞了怎麼辦〉）。夾具裡的值一律是假的（見上面〈秘密與環境變數〉：夾具不放真的 secret）。
