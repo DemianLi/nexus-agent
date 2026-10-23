@@ -129,15 +129,15 @@ export interface SendRejected {
 }
 
 /**
- * 這一行照命令清單認成命令、交給了 `slash.run`（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）。按下送出時
- * 畫面上那份清單可能還在途，呼叫端先把它當一句話、用掉了提及標記；看到這個就放回去——命令不用掉標記。命令沒收下而且帶了
- * 附件時照舊回 {@link SendRejected}。
+ * 開頭像命令的那一行是不是命令（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)，dsh 送出狀態機的 `adjudicate`）：
+ * `command` 是命令清單上的名字、`sentence` 是一句話；`failed` 是重抓過一次還是抓不到清單（原因講給人聽）；`released` 是等的時候
+ * 這條 thread 的畫面卸載了，什麼都不必說（dsh 的 `onRelease` 不出聲）。
  */
-export interface SentAsCommand {
-  readonly asCommand: true;
-}
-
-const SENT_AS_COMMAND: SentAsCommand = { asCommand: true };
+export type Adjudication =
+  | { readonly kind: 'command' }
+  | { readonly kind: 'sentence' }
+  | { readonly kind: 'failed'; readonly message: string }
+  | { readonly kind: 'released' };
 
 /**
  * 佇列的改、刪或改成插話沒收下。`gone` 是那一件已經不在隊裡：多半是剛開跑了，也可能是別的分頁刪的。`unavailable` 是
@@ -266,7 +266,8 @@ export interface Conversation {
    * `/plna` 都是一句話，送給模型。這推翻了 [#123](https://github.com/DemianLi/nexus-agent/issues/123) 的「認不得的命令是
    * 錯誤」；「不認得這個命令」只剩清單上有、伺服器卻說不認得的那一種。開頭像命令的那一行要等到這條線的命令清單才分得出來
    * （照 dsh 的 strong-wait，`lib/command-directory.ts`）：清單在途就等它；之前抓失敗就當場重抓一次；等到的還是失敗才回
-   * {@link SendRejected}（{@link commandsFailedText}），不靜默送給模型。
+   * {@link SendRejected}（{@link commandsFailedText}），不靜默送給模型；等的時候畫面卸載就靜靜回 `undefined`。認的那一道同
+   * {@link Conversation.adjudicate}，畫面要在等的期間擋住下一次送出，先自己叫那一個。
    *
    * **一句話送出去不畫任何東西**（#645）：伺服器收下就進送出佇列，開跑那一刻才由 `inbox` 的 `claimed` 畫人的泡泡。
    * 伺服器沒收下（回錯誤或這一趟就斷了）時回 {@link SendRejected}，呼叫端把草稿放回去並說出原因；斜線命令與
@@ -295,7 +296,7 @@ export interface Conversation {
     attachments?: readonly PromptAttachment[],
     mention?: SubagentMention,
     requestId?: string,
-  ): Promise<SendRejected | SentAsCommand | undefined>;
+  ): Promise<SendRejected | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
    * 命令成功（標籤等線上的值翻回關著才消失），回字串是失敗的原因（被拒、不認得、命令回錯誤）。不碰
@@ -307,6 +308,11 @@ export interface Conversation {
    * 認命令的那一道（#1929）：命令清單抓失敗時那一道會退回，座位的切換就靜靜沒了。結果照斜線命令那一套顯示。
    */
   runCommand(line: string): Promise<void>;
+  /**
+   * 認開頭像命令的這一行（{@link Adjudication}）：等到這條線的命令清單才答——在途就等、之前失敗就重抓一次（照 dsh 的
+   * `CommandDirectory.ensureReady`）。呼叫端在等的期間不再送任何一行、草稿不動（dsh 的 `adjudicating`）。
+   */
+  adjudicate(line: string): Promise<Adjudication>;
   /**
    * 暫停目標（`goal.pause`，[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)）：帶**畫面上當時那份**目標的身分與修訂。
    * 一輪跑著時 server 當場停掉那一輪，停下來的事實走下行（跟按停止一樣）；相位翻成 `paused` 也走下行，這裡不自己改狀態。
@@ -842,6 +848,24 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     [threadId],
   );
 
+  const adjudicate = useCallback(
+    async (line: string): Promise<Adjudication> => {
+      const signal = released.current.signal;
+      let commands: readonly SlashDescriptor[];
+      try {
+        commands = await commandDirectory.ensureReady(signal);
+      } catch (error) {
+        if (signal.aborted) return { kind: 'released' };
+        return {
+          kind: 'failed',
+          message: commandsFailedText(error instanceof Error ? error.message : String(error)),
+        };
+      }
+      return namesCommand(commands, line) ? { kind: 'command' } : { kind: 'sentence' };
+    },
+    [commandDirectory],
+  );
+
   const send = useCallback(
     async (
       text: string,
@@ -849,7 +873,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       attachments?: readonly PromptAttachment[],
       mention?: SubagentMention,
       requestId?: string,
-    ): Promise<SendRejected | SentAsCommand | undefined> => {
+    ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       const hasAttachments = attachments !== undefined && attachments.length > 0;
       // 文字或附件至少一個；只有附件時文字是空字串，照樣送。
@@ -868,18 +892,11 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       // 打錯的 `/plna` 都送給模型。分得出來之前照 dsh 等（`matchEnter` 的 strong-wait）：清單在途就等它、之前失敗就
       // 重抓；等到的還是失敗才退回、說出原因，草稿與附件原樣留著（「never a silent downgrade」）。
       if (commandToken(trimmed) !== undefined) {
-        let commands: readonly SlashDescriptor[];
-        try {
-          commands = await commandDirectory.ensureReady(released.current.signal);
-        } catch (error) {
-          return {
-            message: commandsFailedText(error instanceof Error ? error.message : String(error)),
-          };
-        }
-        if (namesCommand(commands, trimmed)) {
-          return (
-            (await runSlash(trimmed, hasAttachments ? attachments : undefined)) ?? SENT_AS_COMMAND
-          );
+        const verdict = await adjudicate(trimmed);
+        if (verdict.kind === 'released') return undefined;
+        if (verdict.kind === 'failed') return { message: verdict.message };
+        if (verdict.kind === 'command') {
+          return runSlash(trimmed, hasAttachments ? attachments : undefined);
         }
       }
       setSlashError(undefined);
@@ -918,7 +935,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setCommandError(undefined);
       return undefined;
     },
-    [threadId, runSlash, commandDirectory],
+    [threadId, runSlash, adjudicate],
   );
 
   const updateQueue = useCallback(
@@ -1314,6 +1331,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     send,
     exitPlanMode,
     runCommand,
+    adjudicate,
     pauseGoal,
     updateQueue,
     respond,

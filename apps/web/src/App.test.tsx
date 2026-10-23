@@ -1349,6 +1349,38 @@ describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#
     expect(fake.sent).toEqual([]);
   });
 
+  it('一行在等清單認的期間再送：都不發；清單到了只送第一行（dsh `adjudicating` 時 Enter 不動作）', async () => {
+    seq = 0;
+    const fake = fakeClient([], {
+      commands: [planCommand],
+      run: () => ({ kind: 'success', command_id: 'c' }),
+    });
+    let arrive: (() => void) | undefined;
+    const slashList: WireClient['slashList'] = () =>
+      new Promise((resolve) => {
+        arrive = () => resolve({ kind: 'ok', commands: [planCommand] });
+      });
+    render(<App client={{ ...fake.client, slashList }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    await waitFor(() => expect(arrive).toBeDefined());
+
+    sendLine('/plan');
+    // 在等的時候草稿不動（還沒 commit）。
+    expect(input().value).toBe('/plan');
+    sendLine('幫我規劃');
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    sendLine('/plan');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.sent).toEqual([]);
+    expect(fake.slashed).toEqual([]);
+
+    arrive!();
+    await waitFor(() => expect(fake.slashed).toEqual(['/plan']));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(fake.slashed).toEqual(['/plan']);
+    expect(fake.sent).toEqual([]);
+  });
+
   it('命令清單抓失敗：送出時重抓一次，還是失敗才退回、說出原因；不是 / 開頭的照常送', async () => {
     seq = 0;
     const fake = fakeClient([], { commands: [planCommand] });
@@ -6154,6 +6186,31 @@ describe('附件送出（#733、#732）', () => {
       expect(runStart).not.toHaveBeenCalled();
       await waitFor(() => expect(chips()).toHaveLength(0));
       expect(input().value).toBe('');
+    });
+
+    it('命令清單抓失敗：這一行沒送出去，草稿文字與附件卡都還在、沒有上傳（#1929）', async () => {
+      const { client, calls, uploads, runStart } = withSlash(() => ({
+        kind: 'success',
+        command_id: 'c',
+      }));
+      const slashList: WireClient['slashList'] = async () => ({
+        kind: 'rejected',
+        message: '清單讀不出來（#1929 附件）',
+      });
+      render(<App client={{ ...client, slashList }} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('c.pdf')]);
+      send('/goal 照附件做');
+
+      const card = await toastWith(commandsFailedText('清單讀不出來（#1929 附件）'));
+      expect(card.textContent).toContain('這一句沒送出去');
+      expect(calls).toHaveLength(0);
+      expect(runStart).not.toHaveBeenCalled();
+      expect(uploads).toHaveLength(0);
+      expect(input().value).toBe('/goal 照附件做');
+      expect(chips()).toHaveLength(1);
+      expect(screen.getByRole('button', { name: '移除 c.pdf' })).toBeTruthy();
     });
 
     it('帶附件的命令斷在網路層：照舊說沒送出去，不說原樣重送不會重複（命令沒有請求編號，#1335）', async () => {

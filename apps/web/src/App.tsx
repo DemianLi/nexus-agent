@@ -55,7 +55,13 @@ import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { isPlanReview, planReviewOf } from '@/lib/plan-review';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
-import { canRunSlash, canSendText, namesCommand, steerableItems } from '@/lib/queue-view';
+import {
+  canRunSlash,
+  canSendText,
+  commandToken,
+  namesCommand,
+  steerableItems,
+} from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
 import {
@@ -385,6 +391,10 @@ function ConversationView({
   const [mentionedAgent, setMentionedAgent] = useState<MentionAgent | undefined>(undefined);
   // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
   const [sendingAttachments, setSendingAttachments] = useState(false);
+  /**
+   * 開頭像命令的那一行在等命令清單認（#1929，dsh 送出狀態機的 `adjudicating`）：等的期間不再送任何一行、草稿不動。
+   */
+  const [adjudicating, setAdjudicating] = useState(false);
   // 上次沒送出去的那一句和它的請求編號（#1335）：原樣重送時沿用，伺服器才認得是同一句；收下了就丟掉。
   const pendingRequest = useRef<PendingRequest | undefined>(undefined);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
@@ -480,7 +490,7 @@ function ConversationView({
   };
   // 封存的會話不給送（#633）：橫幅在輸入框上方，送出鈕停用。伺服器端也擋，這一道是第一道。
   const archived = isArchivedThread(threadManagement?.archivedIds, threadId);
-  const canSend = canSendLine(draft) && !sendingAttachments && !archived;
+  const canSend = canSendLine(draft) && !sendingAttachments && !archived && !adjudicating;
   const hasModelSeat = modelSeat !== null;
   const commands = useMemo(
     () =>
@@ -785,96 +795,109 @@ function ConversationView({
                     if (modelRan) setDraft('');
                     return;
                   }
-                  setDraft('');
-                  // 命令不帶提及（留著，同附件）；否則這一句送出就用掉它。開頭是不是命令照送出路由認（#1929）：技能的
-                  // `/deploy 今天` 是一句話，照樣帶。
-                  const mentioned = namesCommand(conversation.slashCommands, text)
-                    ? undefined
-                    : mentionedAgent;
-                  if (mentioned !== undefined) setMentionedAgent(undefined);
-                  // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
+                  // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。按下去那一刻就定。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
-                  // 只有功能開著才帶附件；`/` 開頭的命令也帶（#733：命令有宣告收附件才收，其餘伺服器回錯誤、草稿與附件留著），
-                  // 只有光打 `/feedback`（開回饋框、不送出）不帶，附件留在草稿裡。
-                  const items =
-                    serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
-                      ? draftAttachments.items
-                      : [];
-                  // 跟上次沒送出去的那一句完全相同才沿用它的編號；改過字、換了點名、增減附件都是新的一句（#1335）。
-                  const sentence: Sentence = {
-                    text,
-                    mention: mentioned?.name,
-                    attachmentIds: items.map((item) => item.id),
-                  };
-                  const requestId = requestIdFor(pendingRequest.current, sentence);
-                  pendingRequest.current = undefined;
-                  void (async () => {
-                    const mention = mentioned === undefined ? undefined : toMention(mentioned);
-                    if (items.length === 0) {
-                      return conversation.send(text, mode, undefined, mention, requestId);
-                    }
-                    setSendingAttachments(true);
-                    try {
-                      const prepared = await prepareAttachments(
-                        client,
-                        threadId,
-                        items,
-                        undefined,
-                        uploads.begin(),
-                      );
-                      if (prepared.kind === 'cancelled') {
-                        uploads.settle('cancelled');
-                        return { message: '附件還在，再按送出會重新上傳。', cancelled: true };
+                  const submit = (isCommand: boolean) => {
+                    // 草稿只清掉送出去的那一段：等清單的期間又打的字留著（dsh 的 `retainSuffixOf`）。
+                    setDraft((current) =>
+                      current.startsWith(text) ? current.slice(text.length) : current,
+                    );
+                    // 命令不帶提及（留著，同附件）；否則這一句送出就用掉它。開頭是不是命令照送出路由認（#1929）：技能的
+                    // `/deploy 今天` 是一句話，照樣帶。
+                    const mentioned = isCommand ? undefined : mentionedAgent;
+                    if (mentioned !== undefined) setMentionedAgent(undefined);
+                    // 只有功能開著才帶附件；`/` 開頭的命令也帶（#733：命令有宣告收附件才收，其餘伺服器回錯誤、草稿與附件留著），
+                    // 只有光打 `/feedback`（開回饋框、不送出）不帶，附件留在草稿裡。
+                    const items =
+                      serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
+                        ? draftAttachments.items
+                        : [];
+                    // 跟上次沒送出去的那一句完全相同才沿用它的編號；改過字、換了點名、增減附件都是新的一句（#1335）。
+                    const sentence: Sentence = {
+                      text,
+                      mention: mentioned?.name,
+                      attachmentIds: items.map((item) => item.id),
+                    };
+                    const requestId = requestIdFor(pendingRequest.current, sentence);
+                    pendingRequest.current = undefined;
+                    void (async () => {
+                      const mention = mentioned === undefined ? undefined : toMention(mentioned);
+                      if (items.length === 0) {
+                        return conversation.send(text, mode, undefined, mention, requestId);
                       }
-                      if (prepared.kind === 'failed') {
-                        uploads.settle('failed');
-                        return { message: prepared.message };
+                      setSendingAttachments(true);
+                      try {
+                        const prepared = await prepareAttachments(
+                          client,
+                          threadId,
+                          items,
+                          undefined,
+                          uploads.begin(),
+                        );
+                        if (prepared.kind === 'cancelled') {
+                          uploads.settle('cancelled');
+                          return { message: '附件還在，再按送出會重新上傳。', cancelled: true };
+                        }
+                        if (prepared.kind === 'failed') {
+                          uploads.settle('failed');
+                          return { message: prepared.message };
+                        }
+                        const rejected = await conversation.send(
+                          text,
+                          mode,
+                          prepared.attachments,
+                          mention,
+                          requestId,
+                        );
+                        // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
+                        if (rejected === undefined) {
+                          const ids = items.map((item) => item.id);
+                          draftAttachments.removeMany(ids);
+                          uploads.forget(ids);
+                        } else {
+                          // 上傳都成功了，是伺服器沒收下這一句：卡片沒有哪裡出錯。
+                          uploads.settle();
+                        }
+                        return rejected;
+                      } finally {
+                        setSendingAttachments(false);
                       }
-                      const rejected = await conversation.send(
-                        text,
-                        mode,
-                        prepared.attachments,
-                        mention,
-                        requestId,
-                      );
-                      // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
-                      if (rejected === undefined || 'asCommand' in rejected) {
-                        const ids = items.map((item) => item.id);
-                        draftAttachments.removeMany(ids);
-                        uploads.forget(ids);
-                      } else {
-                        // 上傳都成功了，是伺服器沒收下這一句：卡片沒有哪裡出錯。
-                        uploads.settle();
-                      }
-                      return rejected;
-                    } finally {
-                      setSendingAttachments(false);
-                    }
-                  })().then((rejected) => {
-                    if (rejected === undefined) return;
-                    if ('asCommand' in rejected) {
-                      // 按下去時命令清單還在途、先當成一句話用掉了標記；等到清單認出是命令，命令不用掉它，放回去（#1929）。
+                    })().then((rejected) => {
+                      if (rejected === undefined) return;
+                      // 「沒送出去」可能其實到了、只是回條斷了：留著編號，原樣重送這一句時帶同一個。
+                      pendingRequest.current = { id: requestId, sentence };
+                      // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
+                      setDraft((current) => (current === '' ? text : current));
                       if (mentioned !== undefined)
                         setMentionedAgent((current) => current ?? mentioned);
-                      return;
-                    }
-                    // 「沒送出去」可能其實到了、只是回條斷了：留著編號，原樣重送這一句時帶同一個。
-                    pendingRequest.current = { id: requestId, sentence };
-                    // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
-                    setDraft((current) => (current === '' ? text : current));
-                    if (mentioned !== undefined)
-                      setMentionedAgent((current) => current ?? mentioned);
-                    if ('cancelled' in rejected) {
-                      toast('已取消上傳', { description: rejected.message });
-                    } else if (rejected.uncertain === true) {
-                      // 斷在網路層：可能其實到了。不說「沒送出去」，說原樣重送是安全的（#1335）。
-                      toast.warning('不確定這一句有沒有送到', {
-                        description: `原樣再按一次送出，不會重複。（${rejected.message}）`,
-                      });
-                    } else {
-                      toast.error('這一句沒送出去', { description: rejected.message });
-                    }
-                  });
+                      if ('cancelled' in rejected) {
+                        toast('已取消上傳', { description: rejected.message });
+                      } else if (rejected.uncertain === true) {
+                        // 斷在網路層：可能其實到了。不說「沒送出去」，說原樣重送是安全的（#1335）。
+                        toast.warning('不確定這一句有沒有送到', {
+                          description: `原樣再按一次送出，不會重複。（${rejected.message}）`,
+                        });
+                      } else {
+                        toast.error('這一句沒送出去', { description: rejected.message });
+                      }
+                    });
+                  };
+                  // 開頭像命令的那一行先等命令清單認（dsh 的 `adjudicate`）：等的期間 `canSend` 是關的，Enter 不動作、草稿不動；
+                  // 認完才照命令或一句話送。抓不到清單就說原因，草稿、附件、標記都沒動過。光打 `/feedback` 是開對話框，不用認。
+                  if (commandToken(text) !== undefined && text.trim() !== FEEDBACK_COMMAND_LINE) {
+                    setAdjudicating(true);
+                    void conversation.adjudicate(text).then((verdict) => {
+                      setAdjudicating(false);
+                      if (verdict.kind === 'released') return;
+                      if (verdict.kind === 'failed') {
+                        toast.error('這一句沒送出去', { description: verdict.message });
+                        return;
+                      }
+                      submit(verdict.kind === 'command');
+                    });
+                    return;
+                  }
+                  submit(namesCommand(conversation.slashCommands, text));
                 }}
                 commands={commands}
                 skills={conversation.skills}

@@ -123,6 +123,38 @@ describe('CommandDirectory（#1929，dsh directory.ts）', () => {
     await expect(directory.ensureReady(AbortSignal.abort())).resolves.toEqual([plan]);
   });
 
+  it('舊連線那一次晚到而且失敗：不清掉新連線的清單、不叫醒等的人', async () => {
+    const { directory, call, changes } = scripted();
+    void directory.resetConnected();
+    void directory.resetConnected();
+    let woken: readonly SlashDescriptor[] | Error | undefined;
+    void directory.ensureReady(live).then(
+      (commands) => (woken = commands),
+      (error: Error) => (woken = error),
+    );
+
+    call(0).reject(new Error('舊的那條斷了'));
+    await flush();
+    expect(directory.status).toBe('pending');
+    expect(woken).toBeUndefined();
+
+    call(1).resolve([help]);
+    await flush();
+    expect(woken).toEqual([help]);
+    const published = changes.length;
+
+    // 新的已經 ready，再晚到一次舊的失敗也一樣不動它。
+    void directory.resetConnected();
+    void directory.resetConnected();
+    call(3).resolve([plan]);
+    await flush();
+    call(2).reject(new Error('又一條舊的'));
+    await flush();
+    expect(directory.status).toBe('ready');
+    expect(changes.slice(published).at(-1)).toEqual([plan]);
+    await expect(directory.ensureReady(live)).resolves.toEqual([plan]);
+  });
+
   it('只有最新那一次能發布：先開的那一次晚到，結果不採用，等的人等到新的', async () => {
     const { directory, call, changes } = scripted();
     const stale = directory.resetConnected();

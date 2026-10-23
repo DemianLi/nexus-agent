@@ -164,7 +164,7 @@ describe.each([false, true])(
       expect(fake.client.slashList).toHaveBeenCalledTimes(listed + 1);
     });
 
-    it('等清單時畫面卸載：不等了，清單後來到也不送', async () => {
+    it('等清單時畫面卸載：靜靜不等了（不回原因，dsh 的 release 不出聲），清單後來到也不送', async () => {
       const pending = deferred<SlashListOutcome>();
       const fake = scriptedClient(
         () => pending.promise,
@@ -176,16 +176,19 @@ describe.each([false, true])(
       await tick();
 
       let rejected: Awaited<ReturnType<typeof result.current.send>> | 'pending' = 'pending';
+      let verdict: Awaited<ReturnType<typeof result.current.adjudicate>> | 'pending' = 'pending';
       act(() => {
         void result.current.send('/plan').then((outcome) => (rejected = outcome));
+        void result.current.adjudicate('/plan').then((outcome) => (verdict = outcome));
       });
       await tick();
       expect(rejected).toBe('pending');
+      expect(verdict).toBe('pending');
 
       unmount();
       await tick();
-      expect(rejected).not.toBe('pending');
-      expect(rejected).toHaveProperty('message');
+      expect(rejected).toBeUndefined();
+      expect(verdict).toEqual({ kind: 'released' });
 
       pending.resolve({ kind: 'ok', commands: [plan] });
       await tick();
