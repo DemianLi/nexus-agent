@@ -1474,13 +1474,21 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   - **擁有者也算**：別人擁有的模組檔，就算只有他寫得動也會被拒。
   - **要共用 plugin**：複製一份到自己的私有目錄再指過去，或裝成套件用套件名引用。直接指向開發組共用的
     目錄不再起得來。
-- **`insert` 進來的模組宣告的 `@nexus/core` 範圍要滿足**（[#1137](https://github.com/DemianLi/nexus-agent/issues/1137)）。
-  指到檔案的那一列在 import 之前讀最近的 `package.json`，把 `peerDependencies["@nexus/core"]` 對執行中的 core 版本
-  （`packages/nexus-core/package.json` 的 `version`）跑 semver 比對；不滿足時那一列掉了、其餘照樣起來，訊息
-  寫 `套件@版本 需要 @nexus/core <範圍>，執行中的是 <版本>`，模組的程式碼一行都沒跑。範圍寫壞、`package.json` 讀不了一樣掉。
-  沒宣告（沒有 `package.json`、沒有 `peerDependencies`、沒有 `@nexus/core` 那一格）就放行。**沒有豁免機制**。
+- **`insert` 進來的模組宣告的 nexus 版本範圍要滿足**（[#1137](https://github.com/DemianLi/nexus-agent/issues/1137)、[#1568](https://github.com/DemianLi/nexus-agent/issues/1568)）。
+  指到檔案的那一列在 import 之前讀最近的 `package.json`，照 dsh 的 `plugin-compatibility.ts` 判，對的是執行中的版本
+  （`packages/nexus-core/package.json` 的 `version`）：
+  - 插件有 `engines.nexus` → **只看它**，`peerDependencies` 不看。
+  - 否則 `peerDependencies` 裡每一個 `@nexus/*` 套件（`@nexus/core`、`@nexus/sdk`、`@nexus/tools`、`@nexus/session`⋯，**`@nexus/cordis*` 這四個 vendor 的上游套件除外**，它們有自己的版號）
+    都要滿足執行中的版本。樹上的函式插件只 peer `@nexus/sdk`／`@nexus/tools`，沒有 `@nexus/core`，一樣被檢查。
+  - peer 寫 `workspace:*`、`workspace:^`、`workspace:~`（從 repo 裡的出貨插件複製出去的 `package.json` 就是這樣）視為「跟執行中的版本相同」，放行。
+  - 範圍是空字串或不合法的，算不滿足。欄位形狀不對（`engines` 不是物件、`engines.nexus` 或某個 peer 的範圍不是字串、`peerDependencies` 不是表）、`package.json` 讀不了，一樣掉。
+  不滿足時那一列掉了、其餘照樣起來，訊息寫 `套件@版本 需要 <全部不滿足的需求，例如 @nexus/sdk ^2.0.0、@nexus/tools ^2.0.0>，執行中的是 <版本>`，
+  並附上「硬跑可能崩潰或遺失資料」的風險句；不相容時 `package.json` 的 `name`／`version` 要是非空字串，不然也掉。模組的程式碼一行都沒跑。
+  沒宣告（沒有 `package.json`、沒有 `engines.nexus`、沒有任何 `@nexus/*` peer）就放行。**沒有豁免機制**。
   - **這個版本只有人守得住**：改了 registry 的形狀（欄位改名、註冊點簽章換形狀、聯集少一支）要跟著升 core 的 `version`，
     不然範圍檢查會放行一個其實已經不相容的插件。目前沒有機械守著。
+  - **前提是所有 `@nexus/*` 成員同一個版號**（Release 的 bump 腳本把同一個版號寫進每一份 manifest）。開發樹裡每一份都是 `0.0.0`，
+    所以在開發樹上，寫了 `^1.0.0` 之類範圍的 `@nexus/sdk` peer 會被擋；要在開發樹上試，寫 `workspace:*` 或 `>=0.0.0`。
 - **核准閘門關不掉。** `- id: approval-gate` ＋ `disabled: true` 不是一行被忽略的字，是
   **啟動失敗**，`--dump-config` 也一樣擋。詳見下一節最後一列。
 
