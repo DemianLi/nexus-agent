@@ -183,6 +183,7 @@ import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round
 import type { GoalRoundCap } from './goal-driver.js';
 import { turnTimeoutPlugin } from './settings/turn-timeout.js';
 import type { TurnClock } from './turn-clock.js';
+import { sessionReferencePlugin } from './settings/session-reference.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { ThreadSearch } from './thread-search.js';
@@ -792,6 +793,9 @@ async function startServer(
   // 失敗），`openAt: never` 是掛了不開（沒東西可搜時回空）。出廠是後者，見 `settings/thread-search.ts`。
   const threadSearchMounted = startupEntryMounted(plugins, threadSearchPlugin);
   const threadSearchConfig = startupSetting(plugins, threadSearchPlugin);
+  // 跨會話引用那一列（#1573 N0862）：候選上限在下面建 `SessionReferenceCandidates` 時給，引用上限與預算經 handler 交給每條 thread 的 pump。
+  // 這一列在必掛名單上（寫壞整個起不來）也關不掉，所以 `startupSetting` 讀到的一定是清單上那一列，不會是「關掉的列回預設」。
+  const sessionReference = startupSetting(plugins, sessionReferencePlugin);
   // thread 數上限（#1476，保險絲第 2 級）。**server 的性質**：`threads` 表一台伺服器一張，檢查在 `createWireHandler` 的
   // `threadFor` 裡，所以值在這裡解、往下傳一份。出廠開著、關不掉（#1619，`settings/thread-capacity.ts`）。
   const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
@@ -1065,6 +1069,7 @@ async function startServer(
           rootDir: sessionLogDir,
           cwd,
           title: threadTitle,
+          limit: sessionReference.candidateLimit,
           warn,
         });
 
@@ -1189,6 +1194,8 @@ async function startServer(
       // 被 `@` 的會話怎麼讀回來（#713）：同一份索引，pump 領走那句話時用。
       sessionReferenceReader: sessionReferenceCandidates,
     }),
+    // 每則訊息最多引用幾條、每條多大（#1573 N0862）；預算跟著每條 thread 下一步會走的模型，見 `createWireHandler`。
+    sessionReferenceSettings: sessionReference,
     // 按內容搜（#631）。沒掛那一列就不給，handler 那時一律回「沒掛」。
     ...(threadSearch !== undefined && {
       searchThreads: (query: unknown, signal: AbortSignal) => threadSearch.search(query, signal),

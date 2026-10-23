@@ -83,6 +83,14 @@ export interface ModelSelectionHost {
    * 使用者選的那顆，沒選過是預設。型錄沒有那一筆（續接的會話選過、後來被拿掉的）是 `'undeclared'`，不替它拒。
    */
   imageSupport(): ImageSupport;
+  /**
+   * 這條 thread **下一步會走的那顆**的窗口（token），引用別的會話的預算用（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862）。
+   *
+   * 路由用控制器的 `next()`：使用者最後選的 → 最近一次請求走的 → 部署預設，**純讀日誌、不留快照**。不能用 `assembleStep()`：它會寫
+   * `#assembled`，`takeStepRoute()` 下一次就吃那一份，`beforeModel` 被跳過的那一步會用上這裡留下的舊路由。**也不照 `imageSupport()` 只看
+   * 「選的」**：沒選過的會話走的是最近一次請求的那顆，不是部署預設。型錄沒有那一筆（續接的會話選過、後來被拿掉的）是 `undefined`。
+   */
+  nextContextWindow(): number | undefined;
 }
 
 /**
@@ -157,6 +165,9 @@ export function createModelSelectionHost(options: {
       const { selected } = controller.state();
       const entry = findModelEntry(liveModel.models, (selected ?? defaultRoute).model);
       return entry === undefined ? 'undeclared' : acceptsImages(entry);
+    },
+    nextContextWindow() {
+      return findModelEntry(liveModel.models, controller.next().model)?.contextWindow;
     },
     validate(selection) {
       const entry = findModelEntry(liveModel.models, selection.modelId);

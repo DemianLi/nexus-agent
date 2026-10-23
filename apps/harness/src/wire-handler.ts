@@ -166,6 +166,10 @@ import type { BackgroundSubagentControl, BackgroundTurnFailure } from './backgro
 import type { AttachSessions } from './session-attach.js';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { SessionReferenceReader } from './session-reference.js';
+import { referenceBudgetBytes } from './session-reference-budget.js';
+import type { SessionReferencePolicy } from './session-reference-budget.js';
+import { sessionReferenceConfigSchema } from './settings/session-reference.js';
+import type { SessionReferenceConfig } from './settings/session-reference.js';
 import type {
   DeliverableRefusal,
   DeliverableResult,
@@ -499,6 +503,15 @@ export interface WireHandlerOptions {
    * 與 {@link listSessionReferences} 同進同出（都來自落盤的會話根），分開兩格是因為手搭的組裝可以只給其中一個。
    */
   readonly sessionReferenceReader?: SessionReferenceReader;
+  /**
+   * `session-reference` 那一列的值（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862），選配：每則訊息最多引用幾條，
+   * 與每條來源的位元組預算（`maxReferenceBytes` 或窗口的 `referenceContextFraction`）。`candidateLimit` 不在這裡，候選上限在
+   * `serve.ts` 建 `SessionReferenceCandidates` 時給。**省略即 schema 的預設**（dsh 的值），同 `toolText`。
+   *
+   * **預算跟著這條 thread 下一步會走的模型**：每條 thread 的 pump 在這裡組出 `SessionReferencePolicy`，窗口問該 thread 的
+   * `modelSelection.nextContextWindow`，所以使用者在兩次引用之間換了模型，下一次就用新那顆的窗口。
+   */
+  readonly sessionReferenceSettings?: SessionReferenceConfig;
   /**
    * 瀏覽器會話的驗證（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
    *
@@ -965,9 +978,12 @@ function promptAttachmentsOf(raw: readonly unknown[]): readonly PromptAttachment
   return shaped;
 }
 
-/** wire 要的那一面。`imageSupport` 選填：只做型錄與選擇的替身不必實作，沒有就不做收圖檢查（同沒宣告）。 */
+/**
+ * wire 要的那一面。`imageSupport` 選填：只做型錄與選擇的替身不必實作，沒有就不做收圖檢查（同沒宣告）。`nextContextWindow` 同理：
+ * 沒有就是取不到窗口，引用的預算退回 64 KiB（`session-reference-budget.ts`）。
+ */
 type ThreadModelSelection = Pick<ModelSelectionHost, 'catalog' | 'state' | 'select'> &
-  Partial<Pick<ModelSelectionHost, 'imageSupport'>>;
+  Partial<Pick<ModelSelectionHost, 'imageSupport' | 'nextContextWindow'>>;
 
 interface ThreadState {
   readonly pump: ThreadPump;
@@ -1729,6 +1745,21 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           // 沒有背景 host（沒開背景續行、CLI）就是沒有在等的；host 在 `attachSessions` 之後才有，所以也是延後綁。
           (signal) => late.background?.whenChildrenSettled(signal) ?? Promise.resolve(false),
         );
+        // 引用別的會話的上限與預算（#1573 N0862）。預算是函式：每一批領走時問這條 thread 的選擇控制器下一步走哪一顆，見
+        // `ModelSelectionHost.nextContextWindow`。沒有選擇控制器（腳本模型、沒帶 `--live`）或型錄沒有那一顆時取不到窗口，退回 64 KiB。
+        const referenceSettings =
+          options.sessionReferenceSettings ?? sessionReferenceConfigSchema.parse({});
+        const referencePolicy: SessionReferencePolicy = {
+          maxReferences: referenceSettings.maxReferences,
+          budgetBytes: () =>
+            referenceBudgetBytes({
+              ...(referenceSettings.maxReferenceBytes !== undefined && {
+                maxReferenceBytes: referenceSettings.maxReferenceBytes,
+              }),
+              referenceContextFraction: referenceSettings.referenceContextFraction,
+              contextWindow: threadAgent.modelSelection?.nextContextWindow?.(),
+            }),
+        };
         const pump = new ThreadPump(
           threadAgent.agent,
           threadId,
@@ -1759,6 +1790,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             : (report) => options.onTurnFailed!(report),
           options.turnClock,
           threadAgent.spillStore,
+          referencePolicy,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
