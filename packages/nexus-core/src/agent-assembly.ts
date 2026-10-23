@@ -64,6 +64,7 @@ import type { AgentMiddleware } from 'langchain';
 
 import type { FoldedAgentParams } from './fold.js';
 import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
+import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
 import {
   MODEL_SELECTION_MIDDLEWARE_NAME,
@@ -158,7 +159,7 @@ export function mergeMiddlewareStack(
  */
 export function subagentDefaultMiddleware(
   spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills' | 'middleware'>,
-  context: Pick<FoldedAgentParams, 'backend' | 'permissions'>,
+  context: Pick<FoldedAgentParams, 'backend' | 'permissions' | 'fileTools'>,
 ): AgentMiddleware[] {
   const backend = context.backend;
   if (backend === undefined) throw new Error('子代理沒有 backend，檔案系統 middleware 建不起來');
@@ -166,12 +167,14 @@ export function subagentDefaultMiddleware(
   // 缺席時它的預設值是空陣列，與不傳等價。
   const permissions = spec.permissions ?? context.permissions;
   const skills = spec.skills ?? [];
-  const descriptions = filesystemToolDescriptions(spec.middleware ?? []);
+  const descriptions = filesystemToolDescriptions(spec.middleware ?? [], context.fileTools);
+  const whitelist = filesystemToolWhitelist(context.fileTools);
   return [
     createFilesystemMiddleware({
       backend,
       ...(permissions !== undefined && { permissions }),
       ...(descriptions !== undefined && { customToolDescriptions: descriptions }),
+      ...(whitelist !== undefined && { tools: whitelist }),
     }),
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware(),
@@ -217,7 +220,8 @@ export function assembleAgent(params: AssembleAgentParams) {
   const memory = params.memory ?? [];
   const tools = params.tools;
   const systemPrompt = params.systemPrompt ?? '';
-  const descriptions = filesystemToolDescriptions(params.middleware);
+  const descriptions = filesystemToolDescriptions(params.middleware, params.fileTools);
+  const whitelist = filesystemToolWhitelist(params.fileTools);
 
   for (const spec of params.subagents) assertSupportedSubagent(spec);
   // 基座只在清單裡沒有 `general-purpose` 時才自己補一個；fold 一律自己補，所以這裡斷言它在，
@@ -235,7 +239,11 @@ export function assembleAgent(params: AssembleAgentParams) {
           ...spec,
           tools: spec.tools ?? [],
           middleware: mergeMiddlewareStack(
-            subagentDefaultMiddleware(spec, { backend, permissions }),
+            subagentDefaultMiddleware(spec, {
+              backend,
+              permissions,
+              ...(params.fileTools !== undefined && { fileTools: params.fileTools }),
+            }),
             (spec.middleware ?? []) as AgentMiddleware[],
           ),
         },
@@ -250,6 +258,7 @@ export function assembleAgent(params: AssembleAgentParams) {
       backend,
       permissions,
       ...(descriptions !== undefined && { customToolDescriptions: descriptions }),
+      ...(whitelist !== undefined && { tools: whitelist }),
     }),
     createSubAgentMiddleware({
       defaultModel: model as never,

@@ -66,6 +66,7 @@ import {
   type InvariantSelection,
   type InvariantTap,
   type DroppedEntry,
+  type FileToolsOptions,
   type ModelContextLimits,
   type ModelSelectionController,
   type NexusSubAgent,
@@ -115,6 +116,7 @@ import {
   MIN_LANGGRAPH_MAX_CONCURRENCY,
 } from './settings/agent-loop.js';
 import { SEARCH_RESULT_LIMITS_SERVICE } from './settings/tool-fs-search.js';
+import { TOOL_FS_SERVICE } from './settings/tool-fs.js';
 
 /** 組裝時掉了的一列（#751）：載入器交出來的原因，加上它是清單上哪一個條目。 */
 export interface AssemblyDrop {
@@ -734,6 +736,15 @@ function searchOverflowFor(
   };
 }
 
+/**
+ * 檔案工具的組態（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）：`#settings/tool-fs` 那一列提供了服務才有，
+ * 見那一列的檔頭。**沒有就什麼都不傳**——所有工具都在、上限是常數，`foldRegistry` 的產出與沒有這個選項時逐位元組相同。
+ */
+function fileToolsFor(registry: PluginRegistry): { readonly fileTools?: FileToolsOptions } {
+  const fileTools = registry.services.get(TOOL_FS_SERVICE);
+  return fileTools === undefined ? {} : { fileTools };
+}
+
 /** 模型物件自己報的型號；沒有的話退到它的種類名，每個 `BaseChatModel` 都有。字串形式的模型（基座的 `provider:model`）原樣用。 */
 function modelLabelOf(model: AgentModel): string {
   if (typeof model === 'string') return model;
@@ -891,6 +902,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           },
         }),
       ...searchOverflowFor(registry, stashRoute, options),
+      ...fileToolsFor(registry),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
       ...(options.subagentToolFilter !== undefined && {

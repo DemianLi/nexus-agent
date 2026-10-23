@@ -47,6 +47,8 @@ import {
   WORKSPACE_CAPABILITY,
   WORKSPACE_ROOT_SERVICE,
 } from './sandbox.js';
+import type { FileToolsOptions } from './fs-tools-options.js';
+import { createGrepRegexpMiddleware } from './grep-regexp.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
 import { createInvalidToolArgsMiddleware } from './invalid-tool-args.js';
@@ -387,6 +389,13 @@ export interface FoldOptions {
   searchOverflow?: SearchOverflowOptions;
 
   /**
+   * 檔案工具的組態（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)，`tool-fs` 設定列）：`write`／`edit` 開關與讀檔的四個上限。
+   * **省略就是全開、用常數**，產出與以前逐位元組相同。開關在組裝時換成基座的 `tools` 白名單（{@link FoldedAgentParams.fileTools}），
+   * 上限交給讀檔續讀那一對（行數上限在 middleware，其餘在 backend 建頁）。見 {@link ./fs-tools-options.ts}。
+   */
+  fileTools?: FileToolsOptions;
+
+  /**
    * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著，`false` 是明著關掉。
    *
    * **省略時還有第二條關法**：部署設定層把 `@nexus/core/model-usage` 那一列標成
@@ -486,6 +495,11 @@ export interface FoldedAgentParams {
   checkpointer?: AgentCheckpointer;
   /** 組裝點給的 store。 */
   store?: AgentStore;
+  /**
+   * 檔案工具的組態（{@link FoldOptions.fileTools} 原樣帶出，`#1605`）。**省略 ＝ 全開**。`assembleAgent` 與兩條子代理路徑據此決定
+   * 基座檔案 middleware 的 `tools` 白名單與 `read_file` 描述裡的預設行數。
+   */
+  fileTools?: FileToolsOptions;
 }
 
 /**
@@ -605,7 +619,11 @@ export function foldRegistry(
   const fsToolErrors = backend === undefined ? undefined : createFsToolErrorsMiddleware();
   // 讀檔結果最後補上讀到哪（#594）：同上，只在有 backend 時掛、包的是交給基座的那一份，無狀態、
   // 一份走遍 root 與每個 subagent。見 {@link ./read-continuation.ts}。
-  const readContinuation = backend === undefined ? undefined : createReadContinuationMiddleware();
+  const readContinuation =
+    backend === undefined ? undefined : createReadContinuationMiddleware(options.fileTools);
+  // `grep` 兩格參數說明換成正規式的說法（#1605）：`ContainedFilesystemBackend.grep` 是正規式，基座的工具定義說「字面」。
+  // 無狀態、一份走遍 root 與每個 subagent，只在有 backend 時掛。見 {@link ./grep-regexp.ts}。
+  const grepRegexp = backend === undefined ? undefined : createGrepRegexpMiddleware();
   // 外溢層（#719）：無狀態、一份走遍 root 與每個 subagent，位置緊貼中止（在 plugin 與核准閘門外側），
   // 圍堵記進日誌的就是它換過的那一則。見 {@link ./spill-policy.ts}。
   const spill =
@@ -776,6 +794,8 @@ export function foldRegistry(
     // 讀檔結果最後補上讀到哪：同一個時刻、同一個理由貼著工具本體。在失敗記錄的內側，它只補成功的，兩者不相干；
     // 外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
     shared('readContinuation', readContinuation),
+    // `grep` 參數說明的換法：同一個時刻、同一個理由，只動模型那一側的工具定義，與上面互不相干。見 {@link ./grep-regexp.ts}。
+    shared('grepRegexp', grepRegexp),
     // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在其餘 `wrapModelCall`
     // 的內側（外面看到的都是改寫過的那則）。root 與子代理同一顆（#269 的 Q7）。見 {@link ./invalid-tool-args.ts}。
     shared('invalidToolArgs', invalidToolArgs),
@@ -829,6 +849,7 @@ export function foldRegistry(
         recordToolResultMeta(searchOverflow === undefined ? limited : capSearchResults(limited), {
           search: searchMetaAllowed(registry, permissions),
         }),
+        options.fileTools,
       ),
     );
   }
@@ -841,6 +862,7 @@ export function foldRegistry(
   if (options.model !== undefined) params.model = options.model;
   if (options.checkpointer !== undefined) params.checkpointer = options.checkpointer;
   if (options.store !== undefined) params.store = options.store;
+  if (options.fileTools !== undefined) params.fileTools = options.fileTools;
 
   return params;
 }

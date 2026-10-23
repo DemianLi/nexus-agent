@@ -36,10 +36,25 @@
 
 import { createFilesystemMiddleware } from 'deepagents';
 
+import type { FileToolsOptions } from './fs-tools-options.js';
+import { GREP_REGEXP_MIDDLEWARE_NAME } from './grep-regexp.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME, READ_LIMIT } from './read-continuation.js';
 
-/** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（只用到 `read_file`）。 */
-export type FilesystemToolDescriptions = Readonly<Partial<Record<'read_file', string>>>;
+/** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（用到 `read_file` 與 `grep`）。 */
+export type FilesystemToolDescriptions = Readonly<Partial<Record<'read_file' | 'grep', string>>>;
+
+/**
+ * 基座 `grep` 描述最前面講「字面」的那兩段（`GREP_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）：從開頭到 `\n\nReturns matching files`。
+ * 換成 dsh 的第一句（`grep.ts:286`）加一段講正規式怎麼寫的說明；後面基座講輸出與 `/large_tool_results/` 的部分原樣留著。
+ */
+const BASE_GREP_LITERAL_HEAD_END = '\n\nReturns matching files';
+const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across files (NOT regex).';
+
+/** 換進去的正規式說法：第一句照 dsh `grep.ts:286`，第二段是我們的（dsh 的描述沒有講轉義，基座原文有一整段講字面，需要對應的一段）。 */
+export const GREP_REGEXP_HEAD =
+  'Search file contents with a ripgrep regular expression.\n\n' +
+  'The pattern uses ripgrep (Rust regex) syntax: `grep(pattern="foo|bar")` matches either string and `\\bword\\b` matches a whole word. ' +
+  'Regex metacharacters are operators, so escape them to match literally (e.g. `\\.` for a dot, `\\(` for a parenthesis); an invalid expression is rejected with an error.';
 
 /** 基座 `read_file` 描述裡講預設行數的那一句（`READ_FILE_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js:1951-1963`）。 */
 const BASE_READ_DEFAULT = 'By default, it reads up to 100 lines';
@@ -68,22 +83,45 @@ function swap(tool: string, from: string, to: string): string {
   return description.replace(from, to);
 }
 
+/** `grep` 的描述：把基座講字面的開頭換成講正規式的。找不到基座的開頭就拋，同 {@link swap}。 */
+function grepRegexpDescription(): string {
+  const description = baseDescriptionsOf()['grep'];
+  const end = description?.indexOf(BASE_GREP_LITERAL_HEAD_END) ?? -1;
+  if (
+    description === undefined ||
+    !description.startsWith(BASE_GREP_LITERAL_HEAD_START) ||
+    end < 0
+  ) {
+    throw new Error(
+      'deepagents 的 grep 工具描述不是預期的樣子，找不到講字面比對的開頭：升版後要對一次 fs-tool-descriptions.ts',
+    );
+  }
+  return `${GREP_REGEXP_HEAD}${description.slice(end)}`;
+}
+
 /**
  * 這一組 middleware 掛上之後，基座檔案工具該用的描述。
  *
  * @param middleware - 這次組裝（root）或這個子代理實際會掛的 middleware；只看名字。
+ * @param options - `tool-fs` 設定（#1605）：`read_file` 描述裡的預設行數用 `readLimit`；缺席用 {@link READ_LIMIT}。
  * @returns 要交給 `createFilesystemMiddleware({ customToolDescriptions })` 的表；一顆都不用換時是 `undefined`（組成與基座逐位元組相同）。
  */
 export function filesystemToolDescriptions(
   middleware: readonly { readonly name: string }[],
+  options?: Pick<FileToolsOptions, 'readLimit'>,
 ): FilesystemToolDescriptions | undefined {
   const names = new Set(middleware.map((each) => each.name));
-  if (!names.has(READ_CONTINUATION_MIDDLEWARE_NAME)) return undefined;
+  const readFile = names.has(READ_CONTINUATION_MIDDLEWARE_NAME);
+  const grep = names.has(GREP_REGEXP_MIDDLEWARE_NAME);
+  if (!readFile && !grep) return undefined;
   return {
-    read_file: swap(
-      'read_file',
-      BASE_READ_DEFAULT,
-      `By default, it reads up to ${READ_LIMIT} lines`,
-    ),
+    ...(readFile && {
+      read_file: swap(
+        'read_file',
+        BASE_READ_DEFAULT,
+        `By default, it reads up to ${options?.readLimit ?? READ_LIMIT} lines`,
+      ),
+    }),
+    ...(grep && { grep: grepRegexpDescription() }),
   };
 }

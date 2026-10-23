@@ -30,11 +30,13 @@
  * `SEARCH_INVALID_PATTERN`（{@link noteSearchError}），由 `fs-tool-errors.ts` 標成錯誤。`grep` 的 `glob` 不經過
  * 這一層：工作區那一路交給 ripgrep 的 `--glob`，同 dsh。
  *
- * ## 偏離 dsh：#1605 落地前的暫時防線（理由 1：基座表達不出來）
+ * ## 偏離 dsh：只剩給其他 backend 的防線（理由 1：基座表達不出來）
  *
  * dsh 的 `glob` 把 pattern 原樣交給 `rg --files --glob=`（`packages/fs/tool-fs-search/src/glob.ts:89-92`，`687f282e`），
- * 沒有這一步。我們的 `glob` 是基座的，走 `fast-glob`。退到：交給 backend 之前先量、超過就拒。撤除條件：
- * [#1605](https://github.com/DemianLi/nexus-agent/issues/1605) 合併、`glob` 不再經 `fast-glob`。
+ * 沒有這一步。[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) 之後，`ContainedFilesystemBackend` 的 `glob` 自己起 rg、
+ * 不再經 `fast-glob`，大括號展開由 ripgrep 的 globset 做，這一層對它不再是必要的防線。**守衛留著**：`foldRegistry` 的 backend 也可能是
+ * 沒有 rg 的其他實作（走基座 `glob` 的那些），那一側仍是 `fast-glob`。撤除條件：所有會被接上來的 backend 都不再經
+ * `fast-glob`。
  *
  * @module
  */

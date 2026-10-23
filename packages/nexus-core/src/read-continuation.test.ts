@@ -515,3 +515,125 @@ describe('backend 自己建頁的旁路（#1530）', () => {
     expect(textOf(result)).toMatch(/\(End of file - total 3 lines\)$/);
   });
 });
+
+describe('上限來自 tool-fs 設定（#1605）', () => {
+  const limits = {
+    readLimit: 10,
+    readMaxLineLength: 300,
+    readMaxBytes: 200,
+    readStreamMinSize: 4096,
+  };
+  const wrap = wrapperOf(createReadContinuationMiddleware(limits));
+
+  it('沒給 limit：填設定的行數，30 行的檔只回 10 行並帶續讀提示（退回常數就是 30 行）', async () => {
+    const backend = recordReadExtent(
+      new SliceBackend({ '/f': numbered(30) }),
+      limits,
+    ) as SliceBackend;
+    const result = (await wrap(requestFor('read_file'), argsReadFile(backend))) as ToolMessage;
+    const text = textOf(result);
+    expect(text).toMatch(/\(Showing lines 1-10 of 30\. Use offset=10 to continue\.\)$/);
+    expect(text).toContain('    10\t');
+    expect(text).not.toContain('    11\t');
+  });
+
+  it('給的 limit 超過設定的上限：拋，字句帶設定的數字；剛好等於放行', async () => {
+    let ran = false;
+    await expect(
+      wrap(requestFor('read_file', { limit: 11 }), async () => {
+        ran = true;
+        return new ToolMessage({ content: 'ok', tool_call_id: 'call-1', name: 'read_file' });
+      }),
+    ).rejects.toThrow('limit must be less than or equal to 10');
+    expect(ran).toBe(false);
+    await expect(
+      wrap(requestFor('read_file', { limit: 10 }), async () => {
+        return new ToolMessage({ content: 'ok', tool_call_id: 'call-1', name: 'read_file' });
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('位元組上限用設定的：每行 99 位元組，200 位元組只放得下 2 行', async () => {
+    const backend = recordReadExtent(
+      new SliceBackend({ '/f': wide(9, 99) }),
+      limits,
+    ) as SliceBackend;
+    const result = (await wrap(requestFor('read_file'), argsReadFile(backend))) as ToolMessage;
+    expect(textOf(result)).toMatch(
+      /\(Output capped\. Showing lines 1-2\. Use offset=2 to continue\.\)$/,
+    );
+  });
+
+  it('backend 領到的請求帶設定的行長、位元組與串流門檻', async () => {
+    class Taker {
+      taken: ReturnType<typeof currentReadWindow>;
+      async read(_path?: string, _offset?: number, _limit?: number): Promise<{ content: string }> {
+        this.taken = currentReadWindow();
+        return { content: 'raw' };
+      }
+    }
+    const backend = recordReadExtent(new Taker(), limits) as Taker;
+    await wrap(requestFor('read_file'), async () => {
+      await backend.read('/f', 0, 10);
+      return new ToolMessage({ content: 'ok', tool_call_id: 'call-1', name: 'read_file' });
+    });
+    expect(backend.taken).toEqual({
+      offset: 0,
+      limit: 10,
+      maxLineLength: 300,
+      maxBytes: 200,
+      streamMinSize: 4096,
+    });
+  });
+
+  it('沒給串流門檻時請求裡沒有這一格（backend 用自己的預設）', async () => {
+    class Taker {
+      taken: ReturnType<typeof currentReadWindow>;
+      async read(_path?: string, _offset?: number, _limit?: number): Promise<{ content: string }> {
+        this.taken = currentReadWindow();
+        return { content: 'raw' };
+      }
+    }
+    const partial = { readLimit: 10 };
+    const backend = recordReadExtent(new Taker(), partial) as Taker;
+    await wrapperOf(createReadContinuationMiddleware(partial))(
+      requestFor('read_file'),
+      async () => {
+        await backend.read('/f', 0, 10);
+        return new ToolMessage({ content: 'ok', tool_call_id: 'call-1', name: 'read_file' });
+      },
+    );
+    expect(backend.taken).not.toHaveProperty('streamMinSize');
+    expect(backend.taken?.maxBytes).toBe(READ_MAX_BYTES);
+    expect(backend.taken?.maxLineLength).toBe(READ_MAX_LINE_LENGTH);
+  });
+
+  it('給模型看的 limit 定義寫設定的行數；兩顆不同上限的 middleware 各自的快取不互相污染', () => {
+    const other = createReadContinuationMiddleware({ readLimit: 20 }) as unknown as {
+      wrapModelCall: ModelWrapper;
+    };
+    const sent = (
+      middleware: unknown,
+    ): { function: { parameters: { properties: { limit: unknown } } } } => {
+      let out: unknown[] = [];
+      (middleware as { wrapModelCall: ModelWrapper }).wrapModelCall(
+        { tools: [baseReadTool] },
+        (request) => {
+          out = request.tools ?? [];
+          return undefined;
+        },
+      );
+      return out[0] as never;
+    };
+    expect(
+      sent(createReadContinuationMiddleware(limits)).function.parameters.properties.limit,
+    ).toEqual({
+      type: 'number',
+      description: 'Maximum number of lines to return. Defaults to 10.',
+    });
+    expect(sent(other).function.parameters.properties.limit).toEqual({
+      type: 'number',
+      description: 'Maximum number of lines to return. Defaults to 20.',
+    });
+  });
+});

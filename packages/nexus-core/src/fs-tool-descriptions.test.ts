@@ -7,6 +7,7 @@ import { createFilesystemMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
 import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
+import { GREP_REGEXP_MIDDLEWARE_NAME } from './grep-regexp.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 
@@ -58,5 +59,52 @@ describe('filesystemToolDescriptions', () => {
     expect(byName['write_file']).toBe(baseDescription('write_file'));
     expect(byName['edit_file']).toBe(baseDescription('edit_file'));
     expect(byName['grep']).toBe(baseDescription('grep'));
+  });
+
+  it('行數上限來自 tool-fs 設定：read_file 描述寫那個數字，其餘一字不動', () => {
+    const descriptions = filesystemToolDescriptions([{ name: READ_CONTINUATION_MIDDLEWARE_NAME }], {
+      readLimit: 500,
+    });
+    const read = descriptions?.read_file ?? '';
+    expect(read).toContain('By default, it reads up to 500 lines');
+    expect(read.replace('up to 500 lines', 'up to 100 lines')).toBe(baseDescription('read_file'));
+  });
+});
+
+describe('filesystemToolDescriptions：grep 講正規式（#1605）', () => {
+  it('grep 的 middleware 不在 → 不換（描述不能比 backend 的行為先講）', () => {
+    expect(
+      filesystemToolDescriptions([{ name: READ_CONTINUATION_MIDDLEWARE_NAME }]),
+    ).not.toHaveProperty('grep');
+  });
+
+  it('在場 → 只換開頭講字面的那兩段：第一句是 dsh 的，後面基座講輸出與 /large_tool_results/ 的原樣留著', () => {
+    const descriptions = filesystemToolDescriptions([{ name: GREP_REGEXP_MIDDLEWARE_NAME }]);
+    expect(Object.keys(descriptions ?? {})).toEqual(['grep']);
+    const grep = descriptions?.grep ?? '';
+    expect(grep.startsWith('Search file contents with a ripgrep regular expression.')).toBe(true);
+    expect(grep).toContain('foo|bar');
+    expect(grep).not.toContain('LITERAL');
+    expect(grep).not.toContain('NOT regex');
+    const base = baseDescription('grep');
+    const tail = base.slice(base.indexOf('\n\nReturns matching files'));
+    expect(grep.endsWith(tail)).toBe(true);
+    expect(tail).toContain('/large_tool_results/');
+  });
+
+  it('真的交給 createFilesystemMiddleware，建出來的 grep 就是換過的描述；其他工具仍是基座的', () => {
+    const customToolDescriptions = filesystemToolDescriptions([
+      { name: GREP_REGEXP_MIDDLEWARE_NAME },
+    ]);
+    const { tools } = createFilesystemMiddleware({
+      backend: {} as never,
+      ...(customToolDescriptions !== undefined && { customToolDescriptions }),
+    });
+    const byName = Object.fromEntries(
+      (tools ?? []).map((each) => [each.name, String(each.description)]),
+    );
+    expect(byName['grep']).toBe(customToolDescriptions?.grep);
+    expect(byName['glob']).toBe(baseDescription('glob'));
+    expect(byName['read_file']).toBe(baseDescription('read_file'));
   });
 });

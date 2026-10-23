@@ -354,6 +354,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
 
+**`glob` 與 `grep` 的語意、檔案工具組態**（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）：`glob` 跟 `grep` 一樣走內附 ripgrep（`rg --files`，`--no-ignore --hidden`），不列 `.git`、`.svn`、`.hg`、`.bzr`、`.jj`、`.sl` 底下的任何內容，結果照修改時間排序（舊的在前），不跟 symlink；沒有 `/` 的 pattern 比檔名、任何深度，帶 `/` 的從工作區根錨定。`grep` 的 `pattern` 是 ripgrep 正規式，`glob` 參數是一個檔案過濾（不收空字串、`!` 否定、逗號清單），不合法回 `SEARCH_INVALID_PATTERN`；每一行命中文字限在 `tool-fs-search` 那一列的 `grepMaxLineBytes`（出貨 2000）位元組內，在 UTF-8 邊界上切並加 ` (line truncated)`。`tool-fs` 那一列（出貨全開）：`write: false` 關掉 `write_file` 與 `delete`、`edit: false` 關掉 `edit_file`，關掉的工具不進模型的工具清單，對應的「先讀後改」提示也跟著不出現；`readLimit`、`readMaxLineLength`、`readMaxBytes`、`readStreamMinSize` 調讀檔的上限（正整數）；`read: false` 載入就失敗（基座要求 `read_file` 在清單裡）。**標成 `disabled: true` 不是關寫檔，是整列拿掉、全開**。這一列管的是模型看得到什麼，圍堵（`read-only` 之類）管叫了會怎樣，兩者可以疊用。升級的差異見 [`docs/upgrade-guide/v0.5.19/file-search-and-tool-fs/guide.md`](upgrade-guide/v0.5.19/file-search-and-tool-fs/guide.md)。
+
 **`grep` 用的 ripgrep 是產物內附的，不看主機的 `PATH`**（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4）：`@vscode/ripgrep` 的平台套件隨 `pnpm install` 與 release tarball 一起來，主機有沒有裝 rg、是哪個版本都無關，完全內網的主機也不必另外裝。啟動時 serve 會印一行 `搜尋（grep）：內附 ripgrep <路徑>`；印的是「不可用」就是產物壞了（平台套件被刪、或 rg 沒有執行權限），這時每一次 `grep` 都會以 `SEARCH_FAILED` 失敗，**沒有退路**，重新安裝即可。rg 以 `--no-config` 啟動，`~/.ripgreprc` 與 `RIPGREP_CONFIG_PATH` 影響不到搜尋。
 
 **接得回來要站在同一個地方**，兩道守衛，兩個入口都擋：
@@ -1333,7 +1335,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   外掛掛上去時拋錯，都在那一刻報出來，訊息兩邊同一句。**`disabled: true` 的那一列不驗設定。**
 - **`serve` 改了清單，新對話就生效，不必重啟**（[#1405](https://github.com/DemianLi/nexus-agent/issues/1405)）。每條對話組裝時
   照同一組 env 與 `--patch` 重讀一次清單，所以用 `plugin` 寫入口改了變更紀錄，之後開的對話看得到：哪幾列掛、組裝時讀的設定
-  （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
+  （`agent-loop`、`recursion-limit`、`tool-fs-search`、`tool-fs` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
   - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、

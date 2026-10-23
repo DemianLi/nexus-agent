@@ -208,6 +208,8 @@ describe('同名取代是唯一的縫', () => {
         'nexusFsToolErrors',
         // 讀檔結果最後補上讀到哪（#594）：有 backend 就有，同一個理由貼著工具本體。
         'nexusReadContinuation',
+        // `grep` 參數說明的換法（#1605）：同一個時刻、同一個理由，緊接讀檔續讀。
+        'nexusGrepRegexp',
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
         'nexusInvalidToolArgs',

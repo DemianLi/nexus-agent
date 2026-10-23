@@ -133,9 +133,9 @@ Supports `*` (any characters), `**` (any directories), `?` (single character), e
 描述：
 
 ```text
-Search for a LITERAL text pattern across files (NOT regex).
+Search file contents with a ripgrep regular expression.
 
-The pattern is matched verbatim: regex metacharacters are ordinary characters, not operators. To match any of several strings, run a separate grep for each; `grep(pattern="foo|bar")` searches for the literal text "foo|bar", and `.*` or `\\.` match those characters literally.
+The pattern uses ripgrep (Rust regex) syntax: `grep(pattern="foo|bar")` matches either string and `\bword\b` matches a whole word. Regex metacharacters are operators, so escape them to match literally (e.g. `\.` for a dot, `\(` for a parenthesis); an invalid expression is rejected with an error.
 
 Returns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.
 ```
@@ -149,7 +149,7 @@ Returns matching files or content per `output_mode`. Offloaded large tool result
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Literal text pattern to search for (not regex)"
+      "description": "Regular expression to search for (ripgrep syntax)."
     },
     "path": {
       "default": "/",
@@ -158,7 +158,7 @@ Returns matching files or content per `output_mode`. Offloaded large tool result
     },
     "glob": {
       "default": null,
-      "description": "Optional glob pattern to filter files (e.g., '*.py')",
+      "description": "One glob filter for which files to search (e.g. \"*.ts\", \"*.{js,jsx}\"). Not a list; negation is not supported.",
       "anyOf": [
         {
           "type": "string"

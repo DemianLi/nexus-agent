@@ -3,6 +3,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { MemorySaver } from '@langchain/langgraph';
+import { GREP_REGEXP_HEAD } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createDeepAgent } from 'deepagents';
 import { describe, expect, it, vi } from 'vitest';
@@ -141,6 +142,18 @@ const DESCRIPTION_EXCEPTIONS: Readonly<
     base: 'By default, it reads up to 100 lines',
     why: '一頁預設 2000 行（照 dsh，#602），預設值由 read-continuation 的 wrapToolCall 填；基座的原文寫死 100',
   },
+  grep: {
+    own: GREP_REGEXP_HEAD,
+    base:
+      'Search for a LITERAL text pattern across files (NOT regex).\n\n' +
+      'The pattern is matched verbatim: regex metacharacters are ordinary characters, not operators. ' +
+      'To match any of several strings, run a separate grep for each; `grep(pattern="foo|bar")` searches for the literal text "foo|bar", ' +
+      'and `.*` or `\\\\.` match those characters literally.',
+    why:
+      'grep 的 pattern 是正規式（#1605，照 dsh `grep.ts:286`）：ContainedFilesystemBackend 不再帶 `-F`；基座的原文講「字面」。' +
+      '只換開頭那兩段，後面基座講輸出與 /large_tool_results/ 的部分原樣；`pattern`／`glob` 兩格參數說明在 grep-regexp middleware，' +
+      '兩邊都經過它，不屬於這個例外',
+  },
 };
 
 interface BoundTool {
@@ -171,7 +184,7 @@ function splitExceptions(
             ...each,
             function: {
               ...each.function,
-              description: description.replace(exception.own, exception.base),
+              description: description.replace(exception.own, () => exception.base),
             },
           }
         : each;
@@ -258,7 +271,11 @@ describe('自有組裝點對上 createDeepAgent', () => {
     const referenceTools = splitExceptions(reference.bindings, false);
     expect(ownTools.normalized).toEqual(referenceTools.normalized);
     // root 與子代理的綁定都有 `read_file`：例外不是空的，證明這條量得到東西；且確實換過（自有有新句、基座是原句）。
-    expect(ownTools.descriptions.every((each) => Object.keys(each).length === 1)).toBe(true);
+    expect(
+      ownTools.descriptions.every(
+        (each) => Object.keys(each).length === Object.keys(DESCRIPTION_EXCEPTIONS).length,
+      ),
+    ).toBe(true);
     for (const [name, exception] of Object.entries(DESCRIPTION_EXCEPTIONS)) {
       for (const [index, kept] of ownTools.descriptions.entries()) {
         expect(kept[name], `${name}（第 ${index} 次綁定，自有）：${exception.why}`).toContain(

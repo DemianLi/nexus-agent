@@ -83,6 +83,7 @@ import type {
   DeleteResult,
   EditResult,
   FileUploadResponse,
+  GlobResult,
   GrepResult,
   ReadResult,
   WriteResult,
@@ -104,7 +105,9 @@ import {
   noteReadWindow,
   noteSandboxDenial,
   noteSearchError,
+  SEARCH_ABORTED,
   SEARCH_FAILED,
+  SEARCH_INVALID_PATTERN,
 } from '@nexus/core';
 import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
@@ -112,7 +115,7 @@ import { BINARY_SAMPLE_BYTES } from './binary-read.js';
 import { canonicalize } from './canonical-path.js';
 import { resolveRgPath } from './rg-path.js';
 import { runRipgrep } from './ripgrep-runner.js';
-import type { RipgrepInternals } from './ripgrep-runner.js';
+import type { RipgrepInternals, RipgrepTool } from './ripgrep-runner.js';
 import { pageOf, scanWindow, ScanAborted } from './text-window.js';
 import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 import type {
@@ -165,9 +168,43 @@ function decodeWhole(bytes: Uint8Array): string {
 /**
  * 搜尋失敗：替這一次工具呼叫記下碼，回帶 `error` 的結果。字句不以 `Error: ` 開頭，前綴由 `fs-tool-errors.ts` 補。
  */
-function searchFailure(code: SearchErrorCode, message: string): GrepPathsResult {
+function searchFailure(
+  code: SearchErrorCode,
+  message: string,
+): { readonly error: string; readonly errorCode: SearchErrorCode } {
   noteSearchError(code);
   return { error: message, errorCode: code };
+}
+
+/** dsh `GLOB_VCS_EXCLUDES`（`glob.ts:21-107`，`687f282e`）：版本控制的中繼目錄，`glob` 一律不列。 */
+const GLOB_VCS_EXCLUDES: readonly string[] = ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'];
+
+/** 一次 `lstat` 同時最多幾支：結果可以有幾萬筆，一次全丟出去會撞檔案描述元上限。 */
+const GLOB_LSTAT_BATCH = 64;
+
+/**
+ * 驗 `grep` 的檔案篩選（dsh 叫 `include`，基座的參數叫 `glob`）。照 dsh `validateInclude`（`grep.ts:24-116`，`687f282e`）：
+ * 只收**單一正向 glob**——空字串、`!` 開頭、大括號外的逗號清單都拒絕；`*.{ts,tsx}` 的逗號在括號內，是同一個 glob 的選擇，放行。
+ *
+ * **偏離 dsh 的只有載體**：dsh 在工具參數驗證丟一般 `Error`，這裡的工具是基座的、驗證點只能在 backend，所以回
+ * `SEARCH_INVALID_PATTERN`（卡面指定的碼，#1605）。字句照 dsh，把 `include` 換成基座工具實際的參數名 `glob`。
+ *
+ * @returns 不合格時的訊息；合格是 `undefined`。
+ */
+export function invalidGrepGlob(glob: string): string | undefined {
+  if (glob.trim().length === 0) return 'glob must be a non-empty glob when given';
+  if (glob.startsWith('!')) {
+    return 'glob must be a positive glob filter; negated patterns ("!…") are not supported';
+  }
+  let braceDepth = 0;
+  for (const char of glob) {
+    if (char === '{') braceDepth++;
+    else if (char === '}') braceDepth = Math.max(0, braceDepth - 1);
+    else if (char === ',' && braceDepth === 0) {
+      return 'glob must be one glob, not a comma-separated list (use {a,b} alternation instead)';
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -179,8 +216,8 @@ export type GrepPathsResult = GrepResult & { readonly errorCode?: SearchErrorCod
 /**
  * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
  *
- * `read-only` 只擋得住**變更**——讀不經過這裡（`read` / `glob` 沒被覆寫；`grep` 的覆寫只修
- * glob 的錨點，不加任何 fence，見 {@link ContainedFilesystemBackend.grep}）。dsh 也是
+ * `read-only` 只擋得住**變更**——讀不經過這裡（`read` 的覆寫只管讀法；`glob`／`grep` 的覆寫只管怎麼起 rg，
+ * 不加任何 fence，見 {@link ContainedFilesystemBackend.grep}、{@link ContainedFilesystemBackend.glob}）。dsh 也是
  * 這樣：它的 fence 同樣只掛在兩個 mutation 上，「read-only」講的是這個 backend 不改東西，
  * 不是「這個 agent 看不到東西」。看不看得到歸 `permissions`。
  *
@@ -505,7 +542,13 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     const window = currentReadWindow();
     // `read_file` 裡行尾的 `\r` 去掉（照 dsh，#1563 N0335）；其餘呼叫維持基座的切片語意。
     const params = window
-      ? { ...window, stripCarriageReturn: true }
+      ? {
+          offset: window.offset,
+          limit: window.limit,
+          maxLineLength: window.maxLineLength,
+          maxBytes: window.maxBytes,
+          stripCarriageReturn: true,
+        }
       : {
           offset: Math.max(0, Math.trunc(offset)),
           limit: Math.max(0, Math.trunc(limit)),
@@ -518,7 +561,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       ...(signal === undefined ? {} : { signal }),
     };
     let scan;
-    if (info.size < this.streamMinSize) {
+    // 部署設定給了串流門檻（`tool-fs` 的 `readStreamMinSize`，#1605）就用它，沒給用建構子選項（預設 `READ_STREAM_MIN_SIZE`）。
+    if (info.size < (window?.streamMinSize ?? this.streamMinSize)) {
       const bytes = await handle.readFile(signal === undefined ? undefined : { signal });
       if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0))
         return notText(filePath, 'binary file');
@@ -765,13 +809,21 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * rg 會被基座以沒有 `--no-config` 的方式起來，注入就又打開了。啟動時 `serve` 會印出這一支的路徑或「不可用」（`rg-path.ts`
    * 的 `formatRipgrepDisclosure`）。
    *
+   * ## 正規式，不是字面字串（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）
+   *
+   * 基座與 #1532 起 rg 時都帶 `-F`（字面字串）：`foo|bar`、`\bword\b` 全是 0 筆，模型會把 0 筆當成「沒有」。#1563 Q1 (a) 拍板照 dsh 改成
+   * 正規式（`--regexp=`，rg 的語法），本卡接手 #1532 PR 內文那句「暫留，見 #1605 Q1」。不合法的正規式 rg 回 `regex parse error`，
+   * 歸類成 `SEARCH_INVALID_PATTERN`（`ripgrep-runner.ts` 的 `classifyExit`）。檔案篩選（`glob`）先驗過：空字串、`!` 開頭、大括號外的
+   * 逗號清單回 `SEARCH_INVALID_PATTERN`（{@link invalidGrepGlob}）。每行文字的截斷（dsh `previewLine`）在 `search-overflow.ts`，
+   * 跟筆數上限同一對包裝，上限來自 `grepMaxLineBytes`。
+   *
    * ## 與基座一樣的
    *
-   * 維持 `-F`（字面字串）：暫留，見 #1605 Q1。筆數上限（`maxCount`）在解析之後才套用，截斷時照基座的形狀設 `truncated`。
+   * 筆數上限（`maxCount`）在解析之後才套用，截斷時照基座的形狀設 `truncated`。
    *
-   * @param pattern - 要找的字面字串。
+   * @param pattern - 要找的正規式（rg 語法）。
    * @param dirPath - 從哪個虛擬路徑開始找。
-   * @param glob - 篩選檔案的 glob；帶 `/` 時對工作區根錨定。
+   * @param glob - 篩選檔案的 glob（單一正向 glob）；帶 `/` 時對工作區根錨定。
    * @param maxCount - 最多回幾筆。
    * @returns 搜尋結果；失敗時是帶 `error` 的結果。
    */
@@ -809,46 +861,27 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     glob?: string | null,
     maxCount?: number | null,
   ): Promise<GrepPathsResult> {
-    // `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。放在最前面。
-    // **根不存在不是錯誤，是「沒有東西可找」**（`{ matches: [] }`，同基座對不存在的起點）：暫存 backend 的根是第一次
-    // 存東西才建的（`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
-    try {
-      if (!(await stat(this.cwd)).isDirectory()) throw new Error('not a directory');
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { matches: [] };
-      return searchFailure(
-        SEARCH_FAILED,
-        'grep cannot search: the workspace root is not an accessible directory',
-      );
+    // 檔案篩選要先驗，再看根與起點：寫錯的篩選不該因為「根不存在」之類的前提被說成別的（`invalidGrepGlob`）。
+    if (glob !== undefined && glob !== null) {
+      const invalid = invalidGrepGlob(glob);
+      if (invalid !== undefined) return searchFailure(SEARCH_INVALID_PATTERN, invalid);
     }
-    const searchArgs = await this.existingSearchArgs(dirPaths);
-    if (searchArgs.length === 0) return { matches: [] };
-    let executable = this.ripgrepInternals?.executable;
-    if (executable === undefined) {
-      try {
-        executable = await resolveRgPath();
-      } catch {
-        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `LAUNCH_FAILED_MESSAGE`）。
-        // 管理者從 serve 啟動日誌那一行看得到原因。
-        return searchFailure(
-          SEARCH_FAILED,
-          'grep could not start its search command (bundled ripgrep unavailable)',
-        );
-      }
-    }
+    const prepared = await this.prepareSearch('grep', dirPaths, false);
+    if (prepared.kind === 'empty') return { matches: [] };
+    if (prepared.kind === 'failed') return prepared.failure;
     const outcome = await runRipgrep({
-      executable,
-      // **形式照 dsh `buildGrepCommand`，內容不是逐字相同**（`packages/fs/tool-fs-search/src/grep.ts:112`，`687f282e`）：pattern 與 glob 走
-      // `--flag=value` 形式、起點放在 `--` 後面，模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。差別：dsh 是
-      // `--json`、`--regexp=`、`--glob=`、（有 path 才）`--`＋一個 path；這裡是 `--json`、`-F`（nexus 自己的，#1605 Q1）、`--glob=`、`--regexp=`
-      // （glob 與 regexp 的順序相反，rg 不在意）、**一定帶 `--`**、起點多個且都有 `./` 前綴（理由見 `existingSearchArgs`）。
+      executable: prepared.executable,
+      // **形式照 dsh `buildGrepCommand`**（`packages/fs/tool-fs-search/src/grep.ts:112`，`687f282e`）：pattern 與 glob 走
+      // `--flag=value` 形式、起點放在 `--` 後面，模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。pattern 是
+      // **正規式**（#1605，沒有 `-F`）。差別：dsh 是 `--json`、`--regexp=`、`--glob=`、（有 path 才）`--`＋一個 path；這裡是
+      // `--json`、`--glob=`、`--regexp=`（glob 與 regexp 的順序相反，rg 不在意）、**一定帶 `--`**、起點多個且都有 `./` 前綴
+      // （理由見 `existingSearchArgs`）。
       argv: [
         '--json',
-        '-F',
-        ...(glob ? [`--glob=${glob}`] : []),
+        ...(glob !== undefined && glob !== null ? [`--glob=${glob}`] : []),
         `--regexp=${pattern}`,
         '--',
-        ...searchArgs,
+        ...prepared.searchArgs,
       ],
       cwd: this.cwd,
       signal: currentToolCallSignal(),
@@ -862,14 +895,162 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 把虛擬路徑換成 rg 的搜尋引數，濾掉解不出來或不存在的。
+   * 列出符合 glob 的檔案。**rg 由這裡自己起**（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)），共用 `grep` 的
+   * 起法（`ripgrep-runner.ts`：不經 shell、`--no-config`、輸出上限、取消與逾時、錯誤分類），argv 照 dsh
+   * `buildGlobCommand`（`packages/fs/tool-fs-search/src/glob.ts:89-92`，`687f282e`）：
+   * `--files --glob=<pattern> --sort=modified --no-ignore --hidden`，再為 {@link GLOB_VCS_EXCLUDES} 每個名字各加兩條否定 glob
+   * （一條剪掉目錄，一條在搜尋起點就在那個目錄裡面時排除內容），起點放在 `--` 後面。
+   *
+   * 基座的 `glob`（`dist/src-C9o7b5C6.js:1035-1082`）是 `fast-glob` 的 `dot: true`，不剪任何目錄，最後 `localeCompare` 照路徑排序：
+   * 工作區裡有 git 倉庫時 `glob('**\/*')` 會把 `.git/objects` 整棵走過、佔滿上限；剛改過的檔也不會排在一起。
+   *
+   * ## 和基座不一樣的地方（外部可見，見升級指南）
+   *
+   * - **排序**：修改時間，舊的在前（rg `--sort=modified`）；基座是路徑字典序。
+   * - **版本控制目錄不列**：`.git`、`.svn`、`.hg`、`.bzr`、`.jj`、`.sl`，任何深度。
+   * - **pattern 是 rg 的 glob 語意**：沒有 `/` 的 pattern 比檔名、任何深度都對得上（`*.ts` 找整棵樹），帶 `/` 的對**工作區根**錨定
+   *   （不是對 `path`）。基座的 `*.ts` 只比搜尋起點那一層。這是 dsh 的語意（`glob.ts` 工具描述），不是我們挑的。
+   * - **symlink 不列**：rg 預設不跟 symlink，指向檔案的連結也不出現在結果裡；基座會列。
+   * - 空白 pattern 回 `SEARCH_INVALID_PATTERN`：`--glob=` 空字串會讓 rg 列出全部（含 `.git`），dsh 同樣拒絕。
+   *
+   * ## 沒有 rg 就是錯誤，沒有退路
+   *
+   * 同 `grep`（#1502 刀 4）：內附 rg 找不到或起不來回 `SEARCH_FAILED`，**不退回 `super.glob`**。
+   *
+   * 每一筆 `lstat` 一次，補 `size`／`modified_at`（形狀同基座）；`lstat` 失敗（兩次呼叫之間被刪）或不是一般檔的略過。順序維持 rg 的輸出。
+   * 筆數上限與外溢不在這裡（`search-overflow.ts` 包在外面）。
+   *
+   * @param pattern - glob；不可空白。
+   * @param searchPath - 從哪個虛擬路徑開始找，預設工作區根；不存在或不是目錄回空結果（同基座）。
+   * @returns 檔案清單（`is_dir: false`），失敗時是帶 `error` 的結果。
+   */
+  override async glob(pattern: string, searchPath = '/'): Promise<GlobResult> {
+    if (pattern.trim().length === 0) {
+      return searchFailure(SEARCH_INVALID_PATTERN, 'glob pattern must be a non-empty string');
+    }
+    const prepared = await this.prepareSearch('glob', [searchPath || '/'], true);
+    if (prepared.kind === 'empty') return { files: [] };
+    if (prepared.kind === 'failed') return prepared.failure;
+    const signal = currentToolCallSignal();
+    const outcome = await runRipgrep({
+      executable: prepared.executable,
+      argv: [
+        '--files',
+        // 檔名可以含換行：用 NUL 分隔，不靠換行切（偏離 dsh 的只有這一個旗標，理由 2：工作區內容是不可信輸入）。
+        '--null',
+        `--glob=${pattern}`,
+        '--sort=modified',
+        '--no-ignore',
+        '--hidden',
+        ...GLOB_VCS_EXCLUDES.flatMap((name) => [`--glob=!**/${name}`, `--glob=!**/${name}/**`]),
+        '--',
+        ...prepared.searchArgs,
+      ],
+      cwd: this.cwd,
+      tool: 'glob',
+      signal,
+      internals: this.ripgrepInternals,
+    });
+    if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+
+    const relatives: string[] = [];
+    for (const entry of outcome.stdout.split('\0')) {
+      if (entry === '') continue;
+      const rel = relative(this.cwd, resolve(this.cwd, entry));
+      if (rel === '' || rel.startsWith('..')) continue;
+      relatives.push(rel);
+    }
+    const files: Array<{ path: string; is_dir: false; size: number; modified_at: string }> = [];
+    for (let start = 0; start < relatives.length; start += GLOB_LSTAT_BATCH) {
+      if (signal?.aborted === true) {
+        return searchFailure(
+          SEARCH_ABORTED,
+          'glob was aborted before completion (tool timeout or caller cancellation)',
+        );
+      }
+      const batch = relatives.slice(start, start + GLOB_LSTAT_BATCH);
+      const stats = await Promise.all(
+        batch.map((rel) => lstat(resolve(this.cwd, rel)).catch(() => undefined)),
+      );
+      batch.forEach((rel, index) => {
+        const stats0 = stats[index];
+        if (stats0 === undefined || !stats0.isFile()) return;
+        files.push({
+          path: `/${rel.split(sep).join('/')}`,
+          is_dir: false,
+          size: stats0.size,
+          modified_at: stats0.mtime.toISOString(),
+        });
+      });
+    }
+    return { files };
+  }
+
+  /**
+   * `grep` 與 `glob` 起 rg 之前共用的準備：確認工作區根、解出搜尋起點、解出內附 rg。
+   *
+   * `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。
+   * **根不存在不是錯誤，是「沒有東西可找」**（`empty`，同基座對不存在的起點）：暫存 backend 的根是第一次存東西才建的
+   * （`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
+   *
+   * @param tool - 錯誤訊息裡的工具名。
+   * @param dirPaths - 起點的虛擬路徑。
+   * @param directoriesOnly - 起點必須是目錄（`glob`）；`grep` 的起點也可以是單一檔案。
+   */
+  private async prepareSearch(
+    tool: RipgrepTool,
+    dirPaths: readonly string[],
+    directoriesOnly: boolean,
+  ): Promise<
+    | { readonly kind: 'empty' }
+    | { readonly kind: 'failed'; readonly failure: ReturnType<typeof searchFailure> }
+    | { readonly kind: 'ready'; readonly executable: string; readonly searchArgs: string[] }
+  > {
+    try {
+      if (!(await stat(this.cwd)).isDirectory()) throw new Error('not a directory');
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { kind: 'empty' };
+      return {
+        kind: 'failed',
+        failure: searchFailure(
+          SEARCH_FAILED,
+          `${tool} cannot search: the workspace root is not an accessible directory`,
+        ),
+      };
+    }
+    const searchArgs = await this.existingSearchArgs(dirPaths, directoriesOnly);
+    if (searchArgs.length === 0) return { kind: 'empty' };
+    let executable = this.ripgrepInternals?.executable;
+    if (executable === undefined) {
+      try {
+        executable = await resolveRgPath();
+      } catch {
+        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `launchFailedMessage`）。
+        // 管理者從 serve 啟動日誌那一行看得到原因。
+        return {
+          kind: 'failed',
+          failure: searchFailure(
+            SEARCH_FAILED,
+            `${tool} could not start its search command (bundled ripgrep unavailable)`,
+          ),
+        };
+      }
+    }
+    return { kind: 'ready', executable, searchArgs };
+  }
+
+  /**
+   * 把虛擬路徑換成 rg 的搜尋引數，濾掉解不出來或不存在的（`directoriesOnly` 時也濾掉不是目錄的）。
    *
    * **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：rg 的錨點是它自己 `getcwd()` 的 realpath，根經過 symlink 時
    * 傳絕對路徑會對不上、帶目錄的 `--glob` 一個都命中不了；相對路徑不受影響（rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或
    * `src` 時 `logs/app.log`、`/logs/app.log` 與 `src` 底下的遞迴 glob 都對根錨定）。
    * 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
    */
-  private async existingSearchArgs(dirPaths: readonly string[]): Promise<string[]> {
+  private async existingSearchArgs(
+    dirPaths: readonly string[],
+    directoriesOnly: boolean,
+  ): Promise<string[]> {
     const args: string[] = [];
     for (const dirPath of dirPaths) {
       let baseFull: string;
@@ -879,7 +1060,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         continue;
       }
       try {
-        await stat(baseFull);
+        const info = await stat(baseFull);
+        if (directoriesOnly && !info.isDirectory()) continue;
       } catch {
         continue;
       }

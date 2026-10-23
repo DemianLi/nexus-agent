@@ -396,6 +396,7 @@ export {
 export type { SearchOverflowOptions, SearchResultLimits } from './search-overflow.js';
 export {
   GLOB_MAX_RESULTS,
+  GREP_MAX_LINE_BYTES,
   GREP_MAX_MATCHES,
   SEARCH_OVERFLOW_MIDDLEWARE_NAME,
 } from './search-overflow.js';
@@ -411,7 +412,12 @@ export {
   READ_MAX_LINE_LENGTH,
   readLineTruncationSuffix,
 } from './read-continuation.js';
-export type { ReadExtent, ReadWindowRequest } from './read-continuation.js';
+export type { ReadExtent, ReadLimits, ReadWindowRequest } from './read-continuation.js';
+// 檔案工具的組態（#1605，`tool-fs` 設定列）：形狀與開關換算；功能本體在 fold／agent-assembly。
+export type { FileToolsOptions } from './fs-tools-options.js';
+export { FILESYSTEM_TOOL_NAMES, filesystemToolWhitelist } from './fs-tools-options.js';
+export { GREP_REGEXP_MIDDLEWARE_NAME } from './grep-regexp.js';
+export { GREP_REGEXP_HEAD } from './fs-tool-descriptions.js';
 export type {
   DiffResultMeta,
   FileDiff,
