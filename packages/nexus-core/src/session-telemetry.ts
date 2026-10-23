@@ -41,11 +41,14 @@ export interface SessionTelemetryRecord {
   /** 捕獲時就映好的告警等級，見 {@link SessionTelemetrySeverity}。 */
   readonly severity: SessionTelemetrySeverity;
   /**
-   * 識別屬性，**刻意最小**。ledger 帶 `session.id` / `event.type` / `event.seq`；
+   * 識別屬性，**刻意最小**。ledger 帶 `session.id` / `event.type` / `event.seq`，分叉來的會話再帶
+   * `session.seed_length`（繼承的前綴有幾顆，[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）；
    * ops 帶 `telemetry.op` 與 `session.id`。**body 裡撈得到的東西一律不在這裡重複一份。**
    *
-   * dsh 另有 `session.cwd` / `session.parent_id` / `session.seed_length`，**nexus 沒有
-   * 來源**（沒有 session header、沒有 fork），所以那三個不會出現——是缺，不是省略。
+   * dsh 另有 `session.format_version` / `session.cwd` / `session.parent_id`，取自 session header。
+   * 這三個今天不會出現——是缺，不是省略：nexus 有 header，但協調器只拿得到日誌（`SessionLog`），
+   * header 沒有接進來。所以收端今天只認得出「開頭幾顆是繼承來的」，認不出是從哪一份來的
+   * （[#1958](https://github.com/DemianLi/nexus-agent/issues/1958)）。
    */
   readonly attributes: Readonly<Record<string, string | number>>;
   /**
