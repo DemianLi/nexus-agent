@@ -6,7 +6,7 @@
  * 外加 rg 的 pattern 語意（沒有 `/` 的比檔名、任何深度）。**用的是內附 rg**，不在就紅，不跳過（理由同 `contained-backend-ripgrep.test.ts`）。
  */
 
-import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
@@ -256,5 +256,50 @@ describe('pattern 與起點', () => {
     const result = await new ContainedFilesystemBackend({ rootDir: root }).glob('**/*.ts');
 
     expect(pathsOf(result)).toEqual(['/real.ts']);
+  });
+});
+
+describe('檔名以 `..` 開頭的檔不被當成跑出根外（dsh `toWorkdirRelative`）', () => {
+  it('glob：`..foo`、`...bar`、`..` 開頭的目錄底下的檔都列', async () => {
+    await put('..foo', 'x');
+    await put('...bar', 'x');
+    await put('..dir/inner.txt', 'x');
+    await put('plain.txt', 'x');
+
+    const result = await new ContainedFilesystemBackend({ rootDir: root }).glob('*');
+
+    expect(pathsOf(result).sort()).toEqual(['/...bar', '/..dir/inner.txt', '/..foo', '/plain.txt']);
+  });
+
+  it('grep：同上，命中不被丟掉（虛擬路徑本身含 `..` 會被 fence 擋掉，所以用 glob 篩選從根搜，隱藏檔靠明給的 glob 放行）', async () => {
+    await put('..foo', 'needle\n');
+    await put('..dir/inner.txt', 'needle\n');
+    const backend = new ContainedFilesystemBackend({ rootDir: root });
+
+    // glob 篩選明給了，隱藏的檔與目錄才會被放行；`*` 放行整棵。
+    const result = await backend.grep('needle', '/', '*');
+    expect(result.error).toBeUndefined();
+    expect((result.matches ?? []).map((match) => match.path).sort()).toEqual([
+      '/..dir/inner.txt',
+      '/..foo',
+    ]);
+  });
+});
+
+describe('rg 吐出來的不是一般檔就略過（兩次呼叫之間被換掉的防線）', () => {
+  it('用 stub 的 rg 吐出一個目錄與一個 symlink 與一個真檔：只回真檔', async () => {
+    await put('real.txt', 'x');
+    await mkdir(join(root, 'adir'));
+    await symlink(join(root, 'real.txt'), join(root, 'alink'));
+    const stub = join(base, 'fake-rg.sh');
+    await writeFile(stub, "#!/bin/sh\nprintf 'adir\\0alink\\0real.txt\\0'\n");
+    await chmod(stub, 0o755);
+
+    const result = await new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { executable: stub },
+    }).glob('*');
+
+    expect(pathsOf(result)).toEqual(['/real.txt']);
   });
 });

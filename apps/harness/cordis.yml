@@ -609,7 +609,8 @@
 # `edit: false`：模型看不到 `edit_file`。關掉的工具根本不在送給模型的清單裡，「先讀後改」那句提示也跟著不出現。
 # 這跟 `read-only` 圍堵是兩件事：圍堵是模型叫了再被擋，這裡是模型看不到。部署「只讀的知識助理」兩個一起關。
 # `read` 這一格收了但只認 `true`（基座要求 `read_file` 一定在），寫 `false` 載入失敗。
-# **把這一列標成 `disabled: true`（或刪掉）＝ 所有工具都在、上限回到常數**——不是把檔案工具關掉；要關寫檔寫 `write: false`。
+# **這一列關不掉**：寫 `disabled: true` 啟動失敗（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）。關掉它會讓所有檔案工具全開、上限回到常數，
+# 原本寫了 `write: false` 的部署反而把寫檔放回來；要關寫檔寫 `write: false`。
 - id: tool-fs
   name: '#settings/tool-fs'
   config:

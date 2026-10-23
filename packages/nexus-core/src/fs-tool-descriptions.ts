@@ -37,11 +37,13 @@
 import { createFilesystemMiddleware } from 'deepagents';
 
 import type { FileToolsOptions } from './fs-tools-options.js';
-import { GREP_REGEXP_MIDDLEWARE_NAME } from './grep-regexp.js';
+import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME, READ_LIMIT } from './read-continuation.js';
 
-/** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（用到 `read_file` 與 `grep`）。 */
-export type FilesystemToolDescriptions = Readonly<Partial<Record<'read_file' | 'grep', string>>>;
+/** `createFilesystemMiddleware` 的 `customToolDescriptions` 形狀（用到 `read_file`、`grep` 與 `glob`）。 */
+export type FilesystemToolDescriptions = Readonly<
+  Partial<Record<'read_file' | 'grep' | 'glob', string>>
+>;
 
 /**
  * 基座 `grep` 描述最前面講「字面」的那兩段（`GREP_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）：從開頭到 `\n\nReturns matching files`。
@@ -50,11 +52,31 @@ export type FilesystemToolDescriptions = Readonly<Partial<Record<'read_file' | '
 const BASE_GREP_LITERAL_HEAD_END = '\n\nReturns matching files';
 const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across files (NOT regex).';
 
-/** 換進去的正規式說法：第一句照 dsh `grep.ts:286`，第二段是我們的（dsh 的描述沒有講轉義，基座原文有一整段講字面，需要對應的一段）。 */
+/**
+ * 換進去的正規式說法：第一句**照 dsh 原句**（`grep.ts:286`），第二段是我們的。
+ *
+ * **偏離 dsh（理由 1：基座表達不出來）。** dsh 的描述接著講「Returns matching lines with line numbers, grouped by file. Returns up to N matches …」，
+ * 那是 dsh 自己的輸出形狀；基座的 `grep` 有 `output_mode`（`files_with_matches`／`content`／`count`），後面那段基座原文（講輸出與 `/large_tool_results/`）照留，
+ * 搬 dsh 的第二句進來會跟它矛盾。而基座原文有一整段講「regex metacharacters are ordinary characters」，換成正規式之後需要對應的一段——
+ * dsh 的描述沒有講轉義，所以第二段是我們寫的：怎麼寫 `foo|bar`、怎麼轉義、寫壞會怎樣，以及 `/conversation_history/` 是例外（記憶體裡的歷史檔，基座的 `grep` 是字面比對）。
+ */
 export const GREP_REGEXP_HEAD =
   'Search file contents with a ripgrep regular expression.\n\n' +
   'The pattern uses ripgrep (Rust regex) syntax: `grep(pattern="foo|bar")` matches either string and `\\bword\\b` matches a whole word. ' +
-  'Regex metacharacters are operators, so escape them to match literally (e.g. `\\.` for a dot, `\\(` for a parenthesis); an invalid expression is rejected with an error.';
+  'Regex metacharacters are operators, so escape them to match literally (e.g. `\\.` for a dot, `\\(` for a parenthesis); an invalid expression is rejected with an error. ' +
+  'Files under `/conversation_history/` are the exception: they are searched as literal text.';
+
+/** 基座 `glob` 描述的第一句（`GLOB_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）。後面講 `*`、`**`、`?` 的一段原樣留著。 */
+const BASE_GLOB_HEAD = 'Find files matching a glob pattern, returning absolute paths.';
+
+/**
+ * 換進去的 `glob` 說法：第一句照 dsh `glob.ts:308`（「Find files, not directories, … including hidden and ignored files」），
+ * 第二句照 dsh 的「in modification-time order」。**偏離（理由 1：基座表達不出來）**：dsh 的第二句還有「Returns up to N paths … a larger result keeps the first paths and reports where the complete list was saved」，
+ * 那是外溢層（`tool-fs-search`，可關）的行為，不一定在，所以不寫；「absolute paths」「oldest first」是基座與我們實際的輸出。
+ */
+export const GLOB_HEAD =
+  'Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. ' +
+  'Returns absolute paths in modification-time order, oldest first.';
 
 /** 基座 `read_file` 描述裡講預設行數的那一句（`READ_FILE_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js:1951-1963`）。 */
 const BASE_READ_DEFAULT = 'By default, it reads up to 100 lines';
@@ -112,8 +134,8 @@ export function filesystemToolDescriptions(
 ): FilesystemToolDescriptions | undefined {
   const names = new Set(middleware.map((each) => each.name));
   const readFile = names.has(READ_CONTINUATION_MIDDLEWARE_NAME);
-  const grep = names.has(GREP_REGEXP_MIDDLEWARE_NAME);
-  if (!readFile && !grep) return undefined;
+  const search = names.has(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+  if (!readFile && !search) return undefined;
   return {
     ...(readFile && {
       read_file: swap(
@@ -122,6 +144,9 @@ export function filesystemToolDescriptions(
         `By default, it reads up to ${options?.readLimit ?? READ_LIMIT} lines`,
       ),
     }),
-    ...(grep && { grep: grepRegexpDescription() }),
+    ...(search && {
+      grep: grepRegexpDescription(),
+      glob: swap('glob', BASE_GLOB_HEAD, GLOB_HEAD),
+    }),
   };
 }

@@ -17,7 +17,7 @@
 
 import { tool as makeTool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
-import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
+import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
 import { modelCallLimitMiddleware } from 'langchain';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
@@ -48,7 +48,8 @@ import {
   WORKSPACE_ROOT_SERVICE,
 } from './sandbox.js';
 import type { FileToolsOptions } from './fs-tools-options.js';
-import { createGrepRegexpMiddleware } from './grep-regexp.js';
+import { ModifiedOrderCompositeBackend } from './modified-order-composite.js';
+import { createSearchDescriptionsMiddleware } from './search-descriptions.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
 import { createInvalidToolArgsMiddleware } from './invalid-tool-args.js';
@@ -396,6 +397,13 @@ export interface FoldOptions {
   fileTools?: FileToolsOptions;
 
   /**
+   * 搜尋工具走的是**工作區 backend**（`ContainedFilesystemBackend`，rg 語意）嗎？（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）
+   * `true` 才掛換參數說明的 middleware（`grep` 是正規式、`glob` 比基名），並讓工具描述跟著換；省略或 `false` 是基座原說法。
+   * 說明講的是 backend 的行為，所以由組裝點說（它知道 default 是什麼）；fold 只看到折過的 composite，看不出來。見 {@link ./search-descriptions.ts}。
+   */
+  workspaceSearch?: boolean;
+
+  /**
    * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著，`false` 是明著關掉。
    *
    * **省略時還有第二條關法**：部署設定層把 `@nexus/core/model-usage` 那一列標成
@@ -621,9 +629,12 @@ export function foldRegistry(
   // 一份走遍 root 與每個 subagent。見 {@link ./read-continuation.ts}。
   const readContinuation =
     backend === undefined ? undefined : createReadContinuationMiddleware(options.fileTools);
-  // `grep` 兩格參數說明換成正規式的說法（#1605）：`ContainedFilesystemBackend.grep` 是正規式，基座的工具定義說「字面」。
-  // 無狀態、一份走遍 root 與每個 subagent，只在有 backend 時掛。見 {@link ./grep-regexp.ts}。
-  const grepRegexp = backend === undefined ? undefined : createGrepRegexpMiddleware();
+  // `grep`／`glob` 的參數說明換成 rg 語意的說法（#1605）：`ContainedFilesystemBackend.grep` 是正規式，基座的工具定義說「字面」。
+  // 無狀態、一份走遍 root 與每個 subagent，只在組裝點說搜尋走工作區 backend 時掛（記憶體的 StateBackend 是字面比對，說正規式是說謊）。見 {@link ./search-descriptions.ts}。
+  const searchDescriptions =
+    backend === undefined || options.workspaceSearch !== true
+      ? undefined
+      : createSearchDescriptionsMiddleware();
   // 外溢層（#719）：無狀態、一份走遍 root 與每個 subagent，位置緊貼中止（在 plugin 與核准閘門外側），
   // 圍堵記進日誌的就是它換過的那一則。見 {@link ./spill-policy.ts}。
   const spill =
@@ -794,8 +805,8 @@ export function foldRegistry(
     // 讀檔結果最後補上讀到哪：同一個時刻、同一個理由貼著工具本體。在失敗記錄的內側，它只補成功的，兩者不相干；
     // 外面每一顆（含圍堵寫進日誌的那一則）看到的都是補過的。見 {@link ./read-continuation.ts}。
     shared('readContinuation', readContinuation),
-    // `grep` 參數說明的換法：同一個時刻、同一個理由，只動模型那一側的工具定義，與上面互不相干。見 {@link ./grep-regexp.ts}。
-    shared('grepRegexp', grepRegexp),
+    // `grep` 參數說明的換法：同一個時刻、同一個理由，只動模型那一側的工具定義，與上面互不相干。見 {@link ./search-descriptions.ts}。
+    shared('searchDescriptions', searchDescriptions),
     // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在其餘 `wrapModelCall`
     // 的內側（外面看到的都是改寫過的那則）。root 與子代理同一顆（#269 的 Q7）。見 {@link ./invalid-tool-args.ts}。
     shared('invalidToolArgs', invalidToolArgs),
@@ -1672,7 +1683,7 @@ function foldBackend(
     );
   }
   const routes = Object.fromEntries(mounts.map(([prefix, entry]) => [prefix, entry.value]));
-  return new CompositeBackend(defaultBackend, routes);
+  return new ModifiedOrderCompositeBackend(defaultBackend, routes);
 }
 
 /**

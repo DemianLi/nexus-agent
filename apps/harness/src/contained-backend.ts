@@ -179,6 +179,14 @@ function searchFailure(
 /** dsh `GLOB_VCS_EXCLUDES`（`glob.ts:21-107`，`687f282e`）：版本控制的中繼目錄，`glob` 一律不列。 */
 const GLOB_VCS_EXCLUDES: readonly string[] = ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl'];
 
+/**
+ * `relative(cwd, …)` 的結果跑出根了嗎？照 dsh `toWorkdirRelative`：只有 `..` 本身與 `..` 加分隔符開頭才算。
+ * 不能用 `startsWith('..')`——檔名 `..foo` 的相對路徑就是 `..foo`，會被誤判成根外而整個漏掉。
+ */
+function escapesRoot(rel: string): boolean {
+  return rel === '..' || rel.startsWith(`..${sep}`);
+}
+
 /** 一次 `lstat` 同時最多幾支：結果可以有幾萬筆，一次全丟出去會撞檔案描述元上限。 */
 const GLOB_LSTAT_BATCH = 64;
 
@@ -861,6 +869,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     glob?: string | null,
     maxCount?: number | null,
   ): Promise<GrepPathsResult> {
+    // 空 pattern 先擋（dsh `parseGrepArgs`，`grep.ts:90`）：`--regexp=` 會命中每一行。只有「空」才擋，空白字元本身是合法的正規式。
+    if (pattern.length === 0) {
+      return searchFailure(SEARCH_INVALID_PATTERN, 'pattern must be a non-empty string');
+    }
     // 檔案篩選要先驗，再看根與起點：寫錯的篩選不該因為「根不存在」之類的前提被說成別的（`invalidGrepGlob`）。
     if (glob !== undefined && glob !== null) {
       const invalid = invalidGrepGlob(glob);
@@ -957,7 +969,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     for (const entry of outcome.stdout.split('\0')) {
       if (entry === '') continue;
       const rel = relative(this.cwd, resolve(this.cwd, entry));
-      if (rel === '' || rel.startsWith('..')) continue;
+      if (rel === '' || escapesRoot(rel)) continue;
       relatives.push(rel);
     }
     const files: Array<{ path: string; is_dir: false; size: number; modified_at: string }> = [];
@@ -1089,7 +1101,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         const lineNumber = data.data?.line_number;
         if (file === undefined || file === '' || lineNumber === undefined) continue;
         const rel = relative(this.cwd, resolve(this.cwd, file));
-        if (rel.startsWith('..')) continue;
+        if (escapesRoot(rel)) continue;
         matches.push({
           path: `/${rel.split(sep).join('/')}`,
           line: lineNumber,

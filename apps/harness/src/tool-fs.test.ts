@@ -6,7 +6,7 @@
  * 「組裝點讀了但沒往下傳」。零憑證、零外部連線：模型是 `ScriptedChatModel`。
  */
 
-import { mkdir, mkdtemp, open, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
@@ -56,6 +56,8 @@ interface Run {
   readonly grep: { readonly description: string; readonly pattern: string } | undefined;
   /** 綁給模型的每顆工具的描述。 */
   readonly descriptions: Readonly<Record<string, string>>;
+  /** `glob` 的 `pattern` 參數說明。 */
+  readonly globPattern: string;
 }
 
 async function run(
@@ -90,7 +92,12 @@ async function run(
   const grepPattern = (
     grepTool?.function.parameters as { properties?: { pattern?: { description?: string } } }
   ).properties?.pattern?.description;
+  const globTool = definitions.find((candidate) => candidate.function.name === 'glob');
+  const globPattern =
+    (globTool?.function.parameters as { properties?: { pattern?: { description?: string } } })
+      .properties?.pattern?.description ?? '';
   return {
+    globPattern,
     descriptions: Object.fromEntries(
       definitions.map((each) => [each.function.name, each.function.description ?? '']),
     ),
@@ -296,12 +303,26 @@ describe('讀檔上限', { timeout: 30_000 }, () => {
 });
 
 describe('grep 是正規式（N0347）', { timeout: 30_000 }, () => {
-  it('模型看到的描述與 pattern 說明講的是 regular expression', async () => {
-    const { grep } = await run([], { plugins: [] });
+  it('有工作區：模型看到的描述與 pattern 說明講的是 regular expression，glob 講基名規則', async () => {
+    const root = await workspace({ 'x.txt': 'x\n' });
+    const { grep, descriptions, globPattern } = await run([], { plugins: [], root });
 
     expect(grep?.description).toMatch(/regular expression/iu);
     expect(grep?.description).not.toContain('LITERAL');
     expect(grep?.pattern).toMatch(/regular expression/iu);
+    expect(descriptions['glob']).toContain('including hidden and ignored files');
+    expect(descriptions['glob']).toContain('modification-time order');
+    expect(globPattern).toContain('matches the basename at any depth');
+  });
+
+  it('沒有工作區（記憶體 backend 的 grep 是字面比對）：維持基座的說法，不說謊', async () => {
+    const { grep, descriptions, globPattern } = await run([], { plugins: [] });
+
+    expect(grep?.description).toContain('LITERAL');
+    expect(grep?.description).not.toMatch(/regular expression/iu);
+    expect(grep?.pattern).toMatch(/literal/iu);
+    expect(descriptions['glob']).not.toContain('modification-time');
+    expect(globPattern).not.toContain('basename');
   });
 
   it('`foo|bar` 同時命中兩個檔；`a.c` 的點是任意字元', async () => {
@@ -318,6 +339,41 @@ describe('grep 是正規式（N0347）', { timeout: 30_000 }, () => {
     expect(first).toContain('/x.txt');
     expect(first).toContain('/y.txt');
     expect(textOf(results[1])).toContain('/z.txt');
+  });
+});
+
+describe('glob 照修改時間排，老的在前（N0345）', { timeout: 30_000 }, () => {
+  it('經 createNexusAgent 的產品組裝，模型收到的順序是 b（舊）、c、a（新），不是路徑順序 a、b、c', async () => {
+    const root = await workspace({ 'a.ts': 'x', 'b.ts': 'x', 'c.ts': 'x' });
+    // 路徑順序 a < b < c，修改時間反過來：b 最舊、c 次之、a 最新。
+    await utimes(
+      join(root, 'b.ts'),
+      new Date('2024-01-01T00:00:00Z'),
+      new Date('2024-01-01T00:00:00Z'),
+    );
+    await utimes(
+      join(root, 'c.ts'),
+      new Date('2024-06-01T00:00:00Z'),
+      new Date('2024-06-01T00:00:00Z'),
+    );
+    await utimes(
+      join(root, 'a.ts'),
+      new Date('2025-01-01T00:00:00Z'),
+      new Date('2025-01-01T00:00:00Z'),
+    );
+
+    const { results } = await run([{ name: 'glob', args: { pattern: '*.ts' } }], {
+      plugins: [],
+      root,
+    });
+
+    const text = textOf(results[0]);
+    const order = ['/b.ts', '/c.ts', '/a.ts'].map((each) => text.indexOf(each));
+    expect(
+      order.every((index) => index >= 0),
+      text,
+    ).toBe(true);
+    expect(order, text).toEqual([...order].sort((left, right) => left - right));
   });
 });
 

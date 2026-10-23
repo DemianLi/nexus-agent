@@ -54,6 +54,7 @@ import {
   isFeedbackEvent,
   loadPlugins,
   MESSAGE_FEEDBACK_SERVICE,
+  ModifiedOrderCompositeBackend,
   resolveEntriesPerEntry,
   SESSION_TELEMETRY_SERVICE,
   SessionTelemetryCoordinator,
@@ -85,7 +86,6 @@ import {
   type ToolResultPruneConfig,
 } from '@nexus/core';
 import type { SystemPromptVariables } from '@nexus/system-prompt';
-import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';
 import type { SessionLookupRegistrar } from './thread-sessions.js';
@@ -583,7 +583,7 @@ function withToolResultStash(
   // **附件那一格（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）掛在同一個 composite 上，不另包一層**：巢狀的
   // `CompositeBackend` 會藏住內層的路由前綴（根目錄 `ls` 看不到它），見 `tool-result-stash.ts` 那一條的實測。它是唯讀路由，
   // 根是附件儲存的 `files` 子目錄（`attachment-store.ts`），模型用 `read_file` 讀上傳的檔案。
-  return new CompositeBackend(backend, {
+  return new ModifiedOrderCompositeBackend(backend, {
     [`${TOOL_RESULT_STASH_PREFIX}/`]: stash === undefined ? new TextOnlyStateBackend() : stash,
     ...(attachments === undefined ? {} : { [`${ATTACHMENTS_PREFIX}/`]: attachments }),
     // 唯讀共用參考區（#1775）：同一個 composite 上的另一格，理由同附件那一格（巢狀會藏住路由前綴）。
@@ -652,7 +652,7 @@ function withConversationHistory(backend: AnyBackendProtocol): AnyBackendProtoco
   // 目錄本身、`key.substring(prefix.length)` 剝前綴，兩個都假設鍵以 `/` 結尾。少了它，寫進去
   // 的鍵變成 `//session_x.md`，照確切路徑 `read_file` 仍讀得到（兩邊同樣錯），但在這個目錄底下
   // `ls`／`grep` 都對不上（實測 `grep` 回 No matches）。
-  return new CompositeBackend(backend, {
+  return new ModifiedOrderCompositeBackend(backend, {
     [`${CONVERSATION_HISTORY_PREFIX}/`]: new TextOnlyStateBackend(),
   });
 }
@@ -903,6 +903,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         }),
       ...searchOverflowFor(registry, stashRoute, options),
       ...fileToolsFor(registry),
+      // 搜尋工具的說明（`grep` 正規式、`glob` 比基名）只在 default 真的是工作區 backend 時講；記憶體的 StateBackend 是字面比對（#1605）。
+      ...(options.backend instanceof ContainedFilesystemBackend && { workspaceSearch: true }),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
       ...(options.subagentToolFilter !== undefined && {

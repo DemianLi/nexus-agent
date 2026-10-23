@@ -11,7 +11,7 @@ review 時就看得到模型看到的字變了什麼。範圍與做法見 `apps/
 
 ## 基座（deepagents）
 
-零 plugin 組裝時基座與組裝點綁給模型的工具。
+零 plugin 組裝時基座與組裝點綁給模型的工具。`grep`、`glob` 列的是給了 `--workspace` 的說法（講 ripgrep 的語意）；沒給時是基座原文。
 
 ### `delete`
 
@@ -100,7 +100,7 @@ Usage:
 描述：
 
 ```text
-Find files matching a glob pattern, returning absolute paths.
+Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns absolute paths in modification-time order, oldest first.
 
 Supports `*` (any characters), `**` (any directories), `?` (single character), e.g. `**/*.py`, `*.txt`, `/subdir/**/*.md`.
 ```
@@ -114,7 +114,7 @@ Supports `*` (any characters), `**` (any directories), `?` (single character), e
   "properties": {
     "pattern": {
       "type": "string",
-      "description": "Glob pattern to match files (e.g., '**/*.py', '*.txt', '/subdir/**/*.md')"
+      "description": "Glob pattern to match file paths against (e.g. \"**/*.ts\", \"src/**/*.test.js\"). A pattern with no \"/\" matches the basename at any depth, so \"*\" and \"*.ts\" both search the whole tree; include a separator to anchor the depth."
     },
     "path": {
       "description": "Base directory to search from. Defaults to the backend's default root.",
@@ -135,7 +135,7 @@ Supports `*` (any characters), `**` (any directories), `?` (single character), e
 ```text
 Search file contents with a ripgrep regular expression.
 
-The pattern uses ripgrep (Rust regex) syntax: `grep(pattern="foo|bar")` matches either string and `\bword\b` matches a whole word. Regex metacharacters are operators, so escape them to match literally (e.g. `\.` for a dot, `\(` for a parenthesis); an invalid expression is rejected with an error.
+The pattern uses ripgrep (Rust regex) syntax: `grep(pattern="foo|bar")` matches either string and `\bword\b` matches a whole word. Regex metacharacters are operators, so escape them to match literally (e.g. `\.` for a dot, `\(` for a parenthesis); an invalid expression is rejected with an error. Files under `/conversation_history/` are the exception: they are searched as literal text.
 
 Returns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.
 ```

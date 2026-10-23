@@ -1099,6 +1099,7 @@ describe('保護名單', () => {
       '#settings/default-model',
       '#settings/recursion-limit',
       '#settings/agent-loop',
+      '#settings/tool-fs',
     ];
     for (const name of expected) {
       expect(PROTECTED_ENTRY_NAMES.has(name), name).toBe(true);

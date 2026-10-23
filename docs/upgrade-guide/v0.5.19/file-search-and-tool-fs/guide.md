@@ -18,7 +18,9 @@ description: glob 改用內附 ripgrep（不列版本控制目錄、照修改時
   - 內附 ripgrep 不可用時回錯誤，沒有退回基座實作的路（同 `grep`）。
 - **`grep` 的 `pattern` 是 ripgrep 正規式**（v0.5.19 是字面比對）。`foo|bar`、`\bword\b`、`.` 都有了正規式的意思，要比對字面的 `.`、`(` 要自己轉義；
   不合法的正規式回 `SEARCH_INVALID_PATTERN`。`glob` 參數（檔案過濾）也驗：空字串、以 `!` 開頭的否定、逗號分隔的清單都會被拒，要多選用 `{a,b}`。
-  模型看到的工具說明跟著換成正規式的說法。
+  模型看到的工具說明（`grep`、`glob` 的描述與參數說明）跟著換成正規式、基名規則與修改時間序的說法。
+  **這個說法只在給了 `--workspace` 時換**（搜尋走工作區 backend）：沒給 `--workspace` 時 default 是記憶體裡的 `StateBackend`，它的 `grep` 是字面比對，工具說明維持基座原文；
+  工作區底下的 `/conversation_history/` 也是記憶體後端，`grep` 在那裡仍是字面比對，工具說明裡有寫。
 - **`grep` 每一行命中文字限在 `grepMaxLineBytes`（出貨 2000）位元組內**，在 UTF-8 字元邊界上切、結尾加 ` (line truncated)`；
   整行還在檔案裡，用 `read_file` 讀得到。這一格在 `tool-fs-search` 那一列，跟筆數上限同進同出（行內與外溢存檔的全文都是截過的版本）。
 - **新的設定列 `tool-fs`**（出貨就掛著，值全是預設）：
@@ -36,6 +38,6 @@ description: glob 改用內附 ripgrep（不列版本控制目錄、照修改時
 3. 一行命中文字太長被截了而你要全文：不調 `grepMaxLineBytes` 的話，用 `read_file` 讀那個檔的對應行；要放寬，改 `tool-fs-search`：
    `plugin config set tool-fs-search --file -`，內容寫 `{"grepMaxLineBytes": 8000}`（`config` 整份替換，筆數兩格沒寫就回到預設 250／100）。要完全不截，
    `plugin disable tool-fs-search`（同時也沒有筆數上限）。
-4. 要部署「只讀的知識助理」：`plugin config set tool-fs --file -`，內容寫 `{"write": false, "edit": false}`。**標成 `disabled: true` 不是關寫檔**，是整列拿掉、所有工具全開。
+4. 要部署「只讀的知識助理」：`plugin config set tool-fs --file -`，內容寫 `{"write": false, "edit": false}`。這一列**關不掉**：標成 `disabled: true` 啟動就失敗，因為關掉它只會讓所有檔案工具全開。
    這是模型看得到什麼；叫了會怎樣仍由圍堵（`read-only` 之類）管，兩者可以疊用。
 5. 確認：`--dump-config` 裡 `tool-fs`、`tool-fs-search` 是你要的狀態；兩列都在新對話生效，已經開著的對話不變。

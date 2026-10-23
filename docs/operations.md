@@ -354,7 +354,7 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
 
-**`glob` 與 `grep` 的語意、檔案工具組態**（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）：`glob` 跟 `grep` 一樣走內附 ripgrep（`rg --files`，`--no-ignore --hidden`），不列 `.git`、`.svn`、`.hg`、`.bzr`、`.jj`、`.sl` 底下的任何內容，結果照修改時間排序（舊的在前），不跟 symlink；沒有 `/` 的 pattern 比檔名、任何深度，帶 `/` 的從工作區根錨定。`grep` 的 `pattern` 是 ripgrep 正規式，`glob` 參數是一個檔案過濾（不收空字串、`!` 否定、逗號清單），不合法回 `SEARCH_INVALID_PATTERN`；每一行命中文字限在 `tool-fs-search` 那一列的 `grepMaxLineBytes`（出貨 2000）位元組內，在 UTF-8 邊界上切並加 ` (line truncated)`。`tool-fs` 那一列（出貨全開）：`write: false` 關掉 `write_file` 與 `delete`、`edit: false` 關掉 `edit_file`，關掉的工具不進模型的工具清單，對應的「先讀後改」提示也跟著不出現；`readLimit`、`readMaxLineLength`、`readMaxBytes`、`readStreamMinSize` 調讀檔的上限（正整數）；`read: false` 載入就失敗（基座要求 `read_file` 在清單裡）。**標成 `disabled: true` 不是關寫檔，是整列拿掉、全開**。這一列管的是模型看得到什麼，圍堵（`read-only` 之類）管叫了會怎樣，兩者可以疊用。升級的差異見 [`docs/upgrade-guide/v0.5.19/file-search-and-tool-fs/guide.md`](upgrade-guide/v0.5.19/file-search-and-tool-fs/guide.md)。
+**`glob` 與 `grep` 的語意、檔案工具組態**（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）：`glob` 跟 `grep` 一樣走內附 ripgrep（`rg --files`，`--no-ignore --hidden`），不列 `.git`、`.svn`、`.hg`、`.bzr`、`.jj`、`.sl` 底下的任何內容，結果照修改時間排序（舊的在前），不跟 symlink；沒有 `/` 的 pattern 比檔名、任何深度，帶 `/` 的從工作區根錨定。`grep` 的 `pattern` 是 ripgrep 正規式，`glob` 參數是一個檔案過濾（不收空字串、`!` 否定、逗號清單），不合法回 `SEARCH_INVALID_PATTERN`；每一行命中文字限在 `tool-fs-search` 那一列的 `grepMaxLineBytes`（出貨 2000）位元組內，在 UTF-8 邊界上切並加 ` (line truncated)`。`tool-fs` 那一列（出貨全開）：`write: false` 關掉 `write_file` 與 `delete`、`edit: false` 關掉 `edit_file`，關掉的工具不進模型的工具清單，對應的「先讀後改」提示也跟著不出現；`readLimit`、`readMaxLineLength`、`readMaxBytes`、`readStreamMinSize` 調讀檔的上限（正整數）；`read: false` 載入就失敗（基座要求 `read_file` 在清單裡）。這一列**關不掉**：標成 `disabled: true` 啟動就失敗（關掉它只會讓所有檔案工具全開，原本寫了 `write: false` 的部署反而把寫檔放回來）。這一列管的是模型看得到什麼，圍堵（`read-only` 之類）管叫了會怎樣，兩者可以疊用。升級的差異見 [`docs/upgrade-guide/v0.5.19/file-search-and-tool-fs/guide.md`](upgrade-guide/v0.5.19/file-search-and-tool-fs/guide.md)。
 
 **`grep` 用的 ripgrep 是產物內附的，不看主機的 `PATH`**（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4）：`@vscode/ripgrep` 的平台套件隨 `pnpm install` 與 release tarball 一起來，主機有沒有裝 rg、是哪個版本都無關，完全內網的主機也不必另外裝。啟動時 serve 會印一行 `搜尋（grep）：內附 ripgrep <路徑>`；印的是「不可用」就是產物壞了（平台套件被刪、或 rg 沒有執行權限），這時每一次 `grep` 都會以 `SEARCH_FAILED` 失敗，**沒有退路**，重新安裝即可。rg 以 `--no-config` 啟動，`~/.ripgreprc` 與 `RIPGREP_CONFIG_PATH` 影響不到搜尋。
 
@@ -1581,12 +1581,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 `thread-title-llm` 關掉就真的沒有模型產生的標題，只剩從第一句話截出來的退回標題（見下面那一段）。
 `thread-search` 關掉就真的沒有內容搜尋；它跟出廠的 `openAt: never` 差在哪裡見下面那一段。
 
-**其餘七列關不掉**，但理由分兩種。起動期那五列是「關掉沒有意義」：它們**不裝任何東西**，關掉
+**其餘八列關不掉**，但理由分兩種。起動期那五列是「關掉沒有意義」：它們**不裝任何東西**，關掉
 不會讓標題不再被裁切、cookie 不再過期、交付檔不再有上限、工具結果的 `meta` 與摘要不再被截、
 `--live` 不再有連線設定——那一列
 被當成沒有那一列，值回到 schema 的預設，行為一個位元組都不變。`recursion-limit` 與 `agent-loop` 硬一級
 ——關掉它確實會讓那顆服務消失，但組裝點接著落回內建的 100／10，**護欄還在**，讀起來卻像把上限
-解除了（基座自己那層是一萬／不限）。兩種都只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗，
+解除了（基座自己那層是一萬／不限）。`tool-fs` 是第三種：關掉它會讓組裝點落回所有檔案工具全開、上限用常數，原本寫了 `write: false` 的部署反而把寫檔放回來。三種都只會讓你以為關掉了什麼。寫 `disabled: true` 是啟動失敗，
 **訊息會指名你那一列自己的理由**，不是一段通用的話。
 
 **改 `tool-text` 的 `maxBytes` 會讓一條跨套件的比例失效，而且沒有任何東西會擋你。**

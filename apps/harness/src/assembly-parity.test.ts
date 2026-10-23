@@ -1,15 +1,17 @@
+import { tmpdir } from 'node:os';
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { MemorySaver } from '@langchain/langgraph';
-import { GREP_REGEXP_HEAD } from '@nexus/core';
+import { GLOB_HEAD, GREP_REGEXP_HEAD } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { createDeepAgent } from 'deepagents';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
+import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -96,6 +98,9 @@ const WORKER: PluginEntry = {
 
 const SYSTEM_PROMPT = '你是對照測試用的 agent。';
 
+/** 對照用的工作區根：不會真的讀寫，只是讓 default backend 是 `ContainedFilesystemBackend`。 */
+const PARITY_ROOT = tmpdir();
+
 /** root 呼叫一次 `task` 委派 worker，worker 回一句話，root 收尾。 */
 const SCRIPT: readonly ScriptedTurn[] = [
   {
@@ -151,8 +156,15 @@ const DESCRIPTION_EXCEPTIONS: Readonly<
       'and `.*` or `\\\\.` match those characters literally.',
     why:
       'grep 的 pattern 是正規式（#1605，照 dsh `grep.ts:286`）：ContainedFilesystemBackend 不再帶 `-F`；基座的原文講「字面」。' +
-      '只換開頭那兩段，後面基座講輸出與 /large_tool_results/ 的部分原樣；`pattern`／`glob` 兩格參數說明在 grep-regexp middleware，' +
+      '只換開頭那兩段，後面基座講輸出與 /large_tool_results/ 的部分原樣；`pattern`／`glob` 兩格參數說明在 search-descriptions middleware，' +
       '兩邊都經過它，不屬於這個例外',
+  },
+  glob: {
+    own: GLOB_HEAD,
+    base: 'Find files matching a glob pattern, returning absolute paths.',
+    why:
+      'glob 走 rg --files（#1605）：不含目錄、含隱藏與被 ignore 的檔、照修改時間排序；基座的第一句沒講這些（照 dsh `glob.ts:308`）。' +
+      '只換第一句，後面基座講 `*`／`**`／`?` 的一段原樣；`pattern` 參數說明在 search-descriptions middleware，兩邊都經過它',
   },
 };
 
@@ -227,6 +239,8 @@ async function assemble(model: RecordingModel, plugins: readonly PluginEntry[] =
     checkpointer: new MemorySaver(),
     plugins: [...plugins],
     systemPrompt: SYSTEM_PROMPT,
+    // 工作區 backend：搜尋工具的說明（grep 正規式、glob 基名規則）只在 default 是它的時候換（#1605）。
+    backend: new ContainedFilesystemBackend({ rootDir: PARITY_ROOT, mode: 'workspace-write' }),
   });
   const params = captured.params;
   if (params === undefined) throw new Error('assembleAgent 沒被呼叫：組裝點沒走自有組裝');

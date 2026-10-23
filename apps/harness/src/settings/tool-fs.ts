@@ -27,10 +27,13 @@
  *    對照的開關，歸到寫入面最接近。
  * 3. **沒抄 `readImage`**：#731 判定不註冊 `read_image`。
  *
- * ## 這一列關掉，就是沒有任何限制
+ * ## 這一列關不掉（偏離 4，理由 1：基座表達不出來）
  *
- * 沒有這一列、或標成 `disabled: true`，服務就不在，組裝點不傳任何組態：**所有工具都在、上限回到常數**——跟 dsh 不同（dsh 關掉 `tool-fs`
- * 是連檔案工具都沒有）。要關掉寫檔，寫 `write: false`，不要標 `disabled: true`；後者是把限制拿掉。
+ * 標成 `disabled: true` 在啟動時就拋（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`，訊息帶 `PROTECTED_ENTRY_REASONS` 裡這一列自己的理由）。
+ * dsh 關掉 `tool-fs` 是連讀寫檔工具都不註冊（`packages/bundle/base/cordis.patch.yml:295`），方向相反；基座要求 `read_file` 一定在工具清單，
+ * 我們做不到那一種，退到「關不掉」：沒有這一列、服務不在時，組裝點不傳任何組態，**所有工具都在、上限回到常數**——原本寫了 `write: false`
+ * 的部署關掉這一列，反而把寫檔放回來，是最會誤導的關法。要關掉寫檔，寫 `write: false`。（組裝點讀不到服務時的「全開」只剩沒有載入設定列的組裝，
+ * 例如測試與 eval。）
  *
  * @module
  */

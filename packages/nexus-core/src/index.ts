@@ -416,8 +416,9 @@ export type { ReadExtent, ReadLimits, ReadWindowRequest } from './read-continuat
 // 檔案工具的組態（#1605，`tool-fs` 設定列）：形狀與開關換算；功能本體在 fold／agent-assembly。
 export type { FileToolsOptions } from './fs-tools-options.js';
 export { FILESYSTEM_TOOL_NAMES, filesystemToolWhitelist } from './fs-tools-options.js';
-export { GREP_REGEXP_MIDDLEWARE_NAME } from './grep-regexp.js';
-export { GREP_REGEXP_HEAD } from './fs-tool-descriptions.js';
+export { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
+export { GLOB_HEAD, GREP_REGEXP_HEAD } from './fs-tool-descriptions.js';
+export { ModifiedOrderCompositeBackend } from './modified-order-composite.js';
 export type {
   DiffResultMeta,
   FileDiff,

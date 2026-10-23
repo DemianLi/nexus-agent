@@ -715,6 +715,35 @@ describe('掛進真的組裝之後', () => {
     60_000,
   );
 
+  it('grep 的 pattern 是空字串：SEARCH_INVALID_PATTERN，rg 沒有被起（`--regexp=` 會命中每一行）', async () => {
+    const spawned = vi.fn();
+    vi.mocked(resolveRgPath).mockImplementation(async () => {
+      spawned();
+      return realResolveRgPath();
+    });
+
+    const { messages, results } = await runAgent([
+      { name: 'grep', args: { pattern: '', path: '/', output_mode: 'content' } },
+    ]);
+
+    expect(messages[0]?.status).toBe('error');
+    expect(String(messages[0]?.content)).toBe('Error: pattern must be a non-empty string');
+    expect(results[0]).toMatchObject({
+      isError: true,
+      error: { name: 'SearchError', code: SEARCH_INVALID_PATTERN },
+    });
+    expect(spawned).not.toHaveBeenCalled();
+  }, 60_000);
+
+  it('grep 的 pattern 只有空白字元是合法的正規式（照 dsh：只擋「空」，不擋空白）', async () => {
+    const { messages } = await runAgent([
+      { name: 'grep', args: { pattern: ' ', path: '/a.log', output_mode: 'content' } },
+    ]);
+
+    expect(messages[0]?.status).not.toBe('error');
+    expect(String(messages[0]?.content)).toContain('needle 一');
+  }, 60_000);
+
   it('grep 的檔案篩選 `*.{log,txt}`（逗號在大括號內）照常搜尋', async () => {
     const { messages } = await runAgent([
       {

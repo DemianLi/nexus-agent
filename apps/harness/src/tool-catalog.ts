@@ -259,6 +259,13 @@ function boundCatalogTools(bound: readonly unknown[]): Map<string, CatalogTool> 
   return tools;
 }
 
+/**
+ * 說法跟著 backend 走的工具（#1605）：給了 `--workspace` 才講 ripgrep 的語意（`grep` 是正規式、`glob` 是基名規則與修改時間序），
+ * 沒給時 default 是記憶體裡的 `StateBackend`，留基座原說法（字面比對）。目錄列**給了 `--workspace` 的那一份**——那是會碰到檔案的實際用法；
+ * 沒給 `--workspace` 的說法見該工具的來源（`search-descriptions.ts`、`fs-tool-descriptions.ts`）。除了這幾個，兩種組裝不同一律失敗。
+ */
+const WORKSPACE_WORDING_TOOLS: ReadonlySet<string> = new Set(['grep', 'glob']);
+
 /** 腳本模型答一句就收，只為了讓基座對模型 `bindTools` 一次。 */
 const scripted = () => new ScriptedChatModel({ turns: [{ content: '好。' }] });
 
@@ -324,7 +331,11 @@ async function shippedTools(tempRoot: string): Promise<{
         (assembled.model as ScriptedChatModel).boundTools,
       )) {
         const seen = bound.get(name);
-        if (seen !== undefined && JSON.stringify(seen) !== JSON.stringify(tool)) {
+        if (
+          seen !== undefined &&
+          JSON.stringify(seen) !== JSON.stringify(tool) &&
+          !WORKSPACE_WORDING_TOOLS.has(name)
+        ) {
           throw new Error(
             `工具 ${name} 在有無 --workspace 兩種組裝下描述或 schema 不同，目錄只能列一個`,
           );
@@ -355,7 +366,7 @@ async function shippedTools(tempRoot: string): Promise<{
   for (const [name, tool] of serveBound) {
     const seen = bound.get(name);
     if (seen === undefined) background.set(name, tool);
-    else if (JSON.stringify(seen) !== JSON.stringify(tool)) {
+    else if (JSON.stringify(seen) !== JSON.stringify(tool) && !WORKSPACE_WORDING_TOOLS.has(name)) {
       throw new Error(
         `工具 ${name} 在 CLI 與 serve（背景續行）兩種組裝下描述或 schema 不同，目錄只能列一個`,
       );
@@ -368,7 +379,9 @@ async function shippedTools(tempRoot: string): Promise<{
   for (const [name, tool] of optionalBound) {
     const seen = serveBound.get(name) ?? bound.get(name);
     if (seen === undefined) optional.set(name, tool);
-    else if (JSON.stringify(seen) !== JSON.stringify(tool)) optionalVariants.set(name, tool);
+    else if (JSON.stringify(seen) !== JSON.stringify(tool) && !WORKSPACE_WORDING_TOOLS.has(name)) {
+      optionalVariants.set(name, tool);
+    }
   }
   // 歸屬另載一次：產品組裝不交出註冊表。載入同一份清單、同一組補的服務，`origin` 就是註冊那一列的 plugin。
   const { registry, dispose } = await loadPlugins(withSystemPromptVariables(shipped));
@@ -463,7 +476,7 @@ export async function collectToolCatalog(repoRoot: string): Promise<readonly Cat
   const sections: CatalogSection[] = [
     {
       source: BASE_SOURCE,
-      note: '零 plugin 組裝時基座與組裝點綁給模型的工具。',
+      note: '零 plugin 組裝時基座與組裝點綁給模型的工具。`grep`、`glob` 列的是給了 `--workspace` 的說法（講 ripgrep 的語意）；沒給時是基座原文。',
       // 模型實際收到的是出廠組裝那一份（例如 `task` 的描述帶著出廠清單上的子代理）；零 plugin 組裝只決定「哪些算基座」。
       tools: [...base.values()].map((tool) => bound.get(tool.name) ?? tool).sort(byName),
     },

@@ -7,7 +7,7 @@ import { createFilesystemMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
 import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
-import { GREP_REGEXP_MIDDLEWARE_NAME } from './grep-regexp.js';
+import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME } from './observation.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 
@@ -79,8 +79,10 @@ describe('filesystemToolDescriptions：grep 講正規式（#1605）', () => {
   });
 
   it('在場 → 只換開頭講字面的那兩段：第一句是 dsh 的，後面基座講輸出與 /large_tool_results/ 的原樣留著', () => {
-    const descriptions = filesystemToolDescriptions([{ name: GREP_REGEXP_MIDDLEWARE_NAME }]);
-    expect(Object.keys(descriptions ?? {})).toEqual(['grep']);
+    const descriptions = filesystemToolDescriptions([
+      { name: SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME },
+    ]);
+    expect(Object.keys(descriptions ?? {}).sort()).toEqual(['glob', 'grep']);
     const grep = descriptions?.grep ?? '';
     expect(grep.startsWith('Search file contents with a ripgrep regular expression.')).toBe(true);
     expect(grep).toContain('foo|bar');
@@ -94,7 +96,7 @@ describe('filesystemToolDescriptions：grep 講正規式（#1605）', () => {
 
   it('真的交給 createFilesystemMiddleware，建出來的 grep 就是換過的描述；其他工具仍是基座的', () => {
     const customToolDescriptions = filesystemToolDescriptions([
-      { name: GREP_REGEXP_MIDDLEWARE_NAME },
+      { name: SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME },
     ]);
     const { tools } = createFilesystemMiddleware({
       backend: {} as never,
@@ -104,7 +106,30 @@ describe('filesystemToolDescriptions：grep 講正規式（#1605）', () => {
       (tools ?? []).map((each) => [each.name, String(each.description)]),
     );
     expect(byName['grep']).toBe(customToolDescriptions?.grep);
-    expect(byName['glob']).toBe(baseDescription('glob'));
+    expect(byName['glob']).toBe(customToolDescriptions?.glob);
     expect(byName['read_file']).toBe(baseDescription('read_file'));
+  });
+});
+
+describe('filesystemToolDescriptions：glob 講 rg 的語意（#1605）', () => {
+  it('不在 → 不換', () => {
+    expect(
+      filesystemToolDescriptions([{ name: READ_CONTINUATION_MIDDLEWARE_NAME }]),
+    ).not.toHaveProperty('glob');
+  });
+
+  it('在場 → 只換第一句（dsh 原句：不含目錄、含隱藏與被 ignore 的檔、照修改時間），基座講 `*`／`**`／`?` 的一段原樣留著', () => {
+    const glob =
+      filesystemToolDescriptions([{ name: SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME }])?.glob ?? '';
+    expect(
+      glob.startsWith(
+        'Find files, not directories, whose paths match a glob pattern, including hidden and ignored files.',
+      ),
+    ).toBe(true);
+    expect(glob).toContain('modification-time order');
+    const base = baseDescription('glob');
+    const tail = base.slice(base.indexOf('\n\n'));
+    expect(glob.endsWith(tail)).toBe(true);
+    expect(tail).toContain('Supports `*`');
   });
 });

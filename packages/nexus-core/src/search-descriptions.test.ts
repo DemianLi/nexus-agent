@@ -8,11 +8,12 @@ import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { describe, expect, it } from 'vitest';
 
 import {
-  createGrepRegexpMiddleware,
+  createSearchDescriptionsMiddleware,
+  GLOB_PATTERN_DESCRIPTION,
   GREP_GLOB_DESCRIPTION,
   GREP_PATTERN_DESCRIPTION,
-  GREP_REGEXP_MIDDLEWARE_NAME,
-} from './grep-regexp.js';
+  SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME,
+} from './search-descriptions.js';
 
 type Wrap = (
   request: { tools: unknown[] },
@@ -26,7 +27,7 @@ function baseTools() {
 
 /** 把 `tools` 交給 middleware，回它交給下一層的清單。 */
 function through(tools: unknown[]): unknown[] {
-  const middleware = createGrepRegexpMiddleware() as unknown as { wrapModelCall: Wrap };
+  const middleware = createSearchDescriptionsMiddleware() as unknown as { wrapModelCall: Wrap };
   let seen: unknown[] = [];
   middleware.wrapModelCall({ tools }, (next) => {
     seen = next.tools;
@@ -35,9 +36,9 @@ function through(tools: unknown[]): unknown[] {
   return seen;
 }
 
-describe('createGrepRegexpMiddleware', () => {
+describe('createSearchDescriptionsMiddleware', () => {
   it('名字固定（fs-tool-descriptions 看它在不在）', () => {
-    expect(createGrepRegexpMiddleware().name).toBe(GREP_REGEXP_MIDDLEWARE_NAME);
+    expect(createSearchDescriptionsMiddleware().name).toBe(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
   });
 
   it('grep 的 pattern、glob 兩格說明換掉，其餘（描述、別的參數、必填）與基座的轉換結果相同', () => {
@@ -72,6 +73,32 @@ describe('createGrepRegexpMiddleware', () => {
     expect(Object.keys(swapped as object)).not.toContain('name');
   });
 
+  it('glob 的 pattern 說明換成基名規則的說法，其餘（描述、path 參數、必填）不動', () => {
+    const glob = baseTools().find((tool) => tool.name === 'glob');
+    if (glob === undefined) throw new Error('基座沒有 glob');
+    type Definition = {
+      function: {
+        name: string;
+        description: string;
+        parameters: { properties: Record<string, { description?: string }>; required?: string[] };
+      };
+    };
+    const [swapped] = through([glob]) as Definition[];
+    const original = convertToOpenAITool(glob as never) as Definition;
+
+    expect(swapped?.function.parameters.properties['pattern']?.description).toBe(
+      GLOB_PATTERN_DESCRIPTION,
+    );
+    expect(GLOB_PATTERN_DESCRIPTION).toContain('matches the basename at any depth');
+    expect(swapped?.function.parameters.properties['path']).toEqual(
+      original.function.parameters.properties['path'],
+    );
+    expect(swapped?.function.parameters.required).toEqual(original.function.parameters.required);
+    expect(swapped?.function.description).toBe(original.function.description);
+    expect((swapped as unknown as { name: string }).name).toBe('glob');
+    expect(Object.keys(swapped as object)).not.toContain('name');
+  });
+
   it('基座原本的說法確實是「字面」：絆線——升版後改了說法，這裡先紅', () => {
     const grep = baseTools().find((tool) => tool.name === 'grep');
     const properties = (
@@ -86,7 +113,7 @@ describe('createGrepRegexpMiddleware', () => {
   it('不是 grep 的工具原樣；沒有 grep 的請求不複製清單', () => {
     const read = baseTools().find((tool) => tool.name === 'read_file');
     const tools = [read];
-    const middleware = createGrepRegexpMiddleware() as unknown as { wrapModelCall: Wrap };
+    const middleware = createSearchDescriptionsMiddleware() as unknown as { wrapModelCall: Wrap };
     const request = { tools };
     let received: { tools: unknown[] } | undefined;
     middleware.wrapModelCall(request, (next) => {
