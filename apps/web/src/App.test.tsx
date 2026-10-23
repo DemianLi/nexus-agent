@@ -258,7 +258,7 @@ function fakeClient(
   events: readonly Event[],
   slash: {
     readonly commands?: readonly SlashDescriptor[];
-    readonly run?: (line: string) => SlashRunOutcome;
+    readonly run?: (line: string) => SlashRunOutcome | Promise<SlashRunOutcome>;
   } = {},
 ) {
   const sent: string[] = [];
@@ -602,6 +602,45 @@ describe('對話介面', () => {
       }
       return { ...made, input };
     }
+
+    it('命令在途時整批插話不收（#1941，dsh `canSteerQueue` 排除 `machineBusy`）', async () => {
+      stubCmdkLayout();
+      seq = 0;
+      const made = steeringClient([
+        frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ]);
+      const holds: ((outcome: SlashRunOutcome) => void)[] = [];
+      // 跑著也放行的不帶參數命令：從選單選下去就執行，草稿是空的。
+      const client: WireClient = {
+        ...made.client,
+        slashList: async () => ({
+          kind: 'ok',
+          commands: [{ name: 'todo', description: '列出待辦', runWhileBusy: [''] }],
+        }),
+        slashRun: () => new Promise<SlashRunOutcome>((resolve) => holds.push(resolve)),
+      };
+      render(<App client={client} />);
+      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+      const input = screen.getByLabelText<HTMLTextAreaElement>('要說的話');
+      fireEvent.change(input, { target: { value: '先讀設定' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(input.value).toBe(''));
+      await screen.findByTestId('queue-dock');
+      expect(input.placeholder).toBe('Cmd/Ctrl+Enter 把排著的全部改成插話');
+
+      fireEvent.change(input, { target: { value: '/to' } });
+      await screen.findByRole('listbox');
+      fireEvent.keyDown(input, { key: 'Enter' });
+      await waitFor(() => expect(holds).toHaveLength(1));
+      expect(input.value).toBe('');
+      expect(input.placeholder).not.toBe('Cmd/Ctrl+Enter 把排著的全部改成插話');
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(made.updates).toEqual([]);
+
+      holds[0]!({ kind: 'success', command_id: 'todo' });
+      await waitFor(() => expect(input.placeholder).toBe('Cmd/Ctrl+Enter 把排著的全部改成插話'));
+    });
 
     it('佇列列上的插話鈕：那一則離開佇列，改畫在對話尾端，這一輪不停（第二步）', async () => {
       const { fake } = await runningWithQueue(['先讀設定']);
@@ -5963,6 +6002,44 @@ describe('附件送出（#733、#732）', () => {
     expect(uploads).toEqual([{ threadId: expect.any(String), name: 'b.pdf' }]);
   });
 
+  it('附件送出期間移除鈕不收、加入照收：送出的是按送出當下那一批（#1941）', async () => {
+    const { client, runStart } = withUploads();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: WireClient = {
+      ...client,
+      uploadFile: async (threadId, body, name, signal) => {
+        await gate;
+        return client.uploadFile(threadId, body, name, signal);
+      },
+    };
+    render(<App client={slow} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('a.pdf'), png('b.png')]);
+    send('帶這兩個（#1941）');
+    // a.pdf 在上傳（那一格換成取消上傳），b.png 是內嵌圖、移除鈕還在。
+    await screen.findByRole('button', { name: '取消上傳 a.pdf' });
+    fireEvent.click(screen.getByRole('button', { name: '移除 b.png' }));
+    expect(chips()).toHaveLength(2);
+    // 送出期間才加進來的照收，送出之後留著。
+    addFiles([png('c.png')]);
+    expect(chips()).toHaveLength(3);
+
+    release();
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![2]?.attachments).toEqual([
+      { type: 'file', receiptId: 'r-a.pdf' },
+      { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'b.png' },
+    ]);
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    // 送完放開：留下來的那一張移除得掉。
+    fireEvent.click(screen.getByRole('button', { name: '移除 c.png' }));
+    expect(chips()).toHaveLength(0);
+  });
+
   it('送出中不收第二次送出', async () => {
     const { client, runStart } = withUploads();
     let release: () => void = () => undefined;
@@ -6457,6 +6534,8 @@ describe('@子代理 提及（#328）', () => {
     seq = 0;
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
       commands: [{ name: 'plan', description: '計劃模式' }],
+      // 命令收下了（#1941：收下才清草稿，所以這裡要是成功）。
+      run: () => ({ kind: 'success', command_id: 'plan' }),
     });
     const runStart = vi.fn(async (..._args: Parameters<WireClient['runStart']>) => runStartResult);
     const listed = vi.fn(subagentList);
@@ -6758,6 +6837,43 @@ describe('@子代理 提及（#328）', () => {
     expect(chip()).toBeNull();
   });
 
+  it('命令在途時前一句被拒：標記不放回鎖住的輸入框（#1941，同 #1929 的 `draftInitializationBlocked`）', async () => {
+    seq = 0;
+    const holds: ((outcome: SlashRunOutcome) => void)[] = [];
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
+      commands: [{ name: 'plan', description: '計劃模式' }],
+      run: () => new Promise<SlashRunOutcome>((resolve) => holds.push(resolve)),
+    });
+    let settle: (result: UplinkResult) => void = () => {};
+    const runStart = vi.fn(
+      (..._args: Parameters<WireClient['runStart']>) =>
+        new Promise<UplinkResult>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    render(<App client={{ ...fake.client, runStart, subagentList: supported }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    await pick('@');
+    type('先一句（#1941）');
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(chip()).toBeNull();
+
+    type('/plan');
+    fireEvent.keyDown(input(), { key: 'Escape' });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await waitFor(() => expect(holds).toHaveLength(1));
+    expect(input().readOnly).toBe(true);
+    settle({ type: 'error', id: 1, error: 'invalid_argument', message: '第一句收不了（#1941）' });
+    expect(await screen.findByText('第一句收不了（#1941）')).toBeTruthy();
+    expect(chip()).toBeNull();
+    expect(input().value).toBe('/plan');
+
+    holds[0]!({ kind: 'success', command_id: 'plan' });
+    await waitFor(() => expect(input().readOnly).toBe(false));
+    expect(chip()).toBeNull();
+  });
+
   it('等清單認的期間 @ 選單收起：游標移回 @ 那一段也不開（#1929，dsh 進 adjudicating 時 `popup.dismiss()`）', async () => {
     let arrive: (() => void) | undefined;
     const slashList: WireClient['slashList'] = () =>
@@ -6810,5 +6926,143 @@ describe('@子代理 提及（#328）', () => {
     const options = runStart.mock.calls[0]![2];
     expect(options?.mention).toEqual({ kind: 'subagent', name: 'reviewer' });
     expect(options?.attachments).toHaveLength(1);
+  });
+});
+
+describe('命令在途（#1941，dsh 送出狀態機的 submitting）', () => {
+  beforeEach(() => {
+    stubCmdkLayout();
+    attachmentGate.on = false;
+  });
+
+  const input = () => screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+  const chips = () => screen.queryAllByTestId('draft-attachment');
+  const png = (name: string) => new File(['PNG'], name, { type: 'image/png' });
+
+  /** 認得 `/plan` 的假 client，`slash.run` 由測試兌現。 */
+  async function held() {
+    seq = 0;
+    const settle: ((outcome: SlashRunOutcome | Error) => void)[] = [];
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
+      commands: [{ name: 'plan', description: '計劃模式' }],
+      run: () =>
+        new Promise<SlashRunOutcome>((resolve, reject) => {
+          settle.push((outcome) => (outcome instanceof Error ? reject(outcome) : resolve(outcome)));
+        }),
+    });
+    const runStart = vi.fn(fake.client.runStart);
+    render(<App client={{ ...fake.client, runStart }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    const enter = (text: string) => {
+      fireEvent.change(input(), { target: { value: text } });
+      fireEvent.keyDown(input(), { key: 'Escape' });
+      fireEvent.keyDown(input(), { key: 'Enter' });
+    };
+    return { slashed: fake.slashed, runStart, settle, enter };
+  }
+
+  it('在途時再按 Enter 不送：slash.run 與 run.start 的次數都不變，輸入框鎖著、草稿還在', async () => {
+    const { slashed, runStart, enter } = await held();
+    enter('/plan');
+    await waitFor(() => expect(slashed).toEqual(['/plan']));
+    expect(input().value).toBe('/plan');
+    expect(input().readOnly).toBe(true);
+
+    // 唯讀擋不住程式送來的 change：直接再按 Enter，同一個 tick 連按兩下也一樣。
+    act(() => {
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      fireEvent.keyDown(input(), { key: 'Enter' });
+    });
+    const sendButton = screen.getByRole('button', { name: '送出' }) as HTMLButtonElement;
+    expect(sendButton.disabled).toBe(true);
+    fireEvent.click(sendButton);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(slashed).toEqual(['/plan']);
+    expect(runStart).not.toHaveBeenCalled();
+  });
+
+  it('同一個 tick 連按兩下 Enter：只認一次、只送一次', async () => {
+    const { slashed, settle } = await held();
+    fireEvent.change(input(), { target: { value: '/plan' } });
+    fireEvent.keyDown(input(), { key: 'Escape' });
+    act(() => {
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      fireEvent.keyDown(input(), { key: 'Enter' });
+    });
+    await waitFor(() => expect(settle).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(slashed).toEqual(['/plan']);
+  });
+
+  it('從選單直接執行的命令也算在途：輸入框鎖著，回來才放開', async () => {
+    const { slashed, settle } = await held();
+    fireEvent.change(input(), { target: { value: '/pl' } });
+    await screen.findByRole('listbox');
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await waitFor(() => expect(slashed).toEqual(['/plan']));
+    expect(input().readOnly).toBe(true);
+    settle[0]!({ kind: 'success', command_id: 'plan' });
+    await waitFor(() => expect(input().readOnly).toBe(false));
+  });
+
+  it('收下才清：回來之前草稿還在，成功之後清掉，輸入框放開', async () => {
+    const { settle, enter } = await held();
+    enter('/plan');
+    await waitFor(() => expect(settle).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(input().value).toBe('/plan');
+
+    settle[0]!({ kind: 'success', command_id: 'plan', text: '計劃模式打開了（#1941）。' });
+    await waitFor(() => expect(input().value).toBe(''));
+    expect(input().readOnly).toBe(false);
+    expect(await screen.findByText('計劃模式打開了（#1941）。')).toBeTruthy();
+  });
+
+  it.each([
+    [
+      '被拒',
+      { kind: 'rejected', message: '這條線不收（#1941 被拒）' } as SlashRunOutcome,
+      '這條線不收（#1941 被拒）',
+    ],
+    [
+      '命令回錯誤',
+      { kind: 'error', text: '計劃模式開不了（#1941）' } as SlashRunOutcome,
+      '計劃模式開不了（#1941）',
+    ],
+    ['拋錯', new Error('網路斷了（#1941）'), '網路斷了（#1941）'],
+  ] as const)(
+    '沒收下（%s）：草稿原樣、狀態列講原因、不跳「沒送出去」，放開之後能再送',
+    async (_label, outcome, reason) => {
+      const { slashed, settle, enter } = await held();
+      enter('/plan');
+      await waitFor(() => expect(settle).toHaveLength(1));
+      settle[0]!(outcome);
+      // 狀態列那一格（被拒的前面帶「這個動作沒送出去：」）。
+      expect(await screen.findByText(reason, { exact: false })).toBeTruthy();
+      await waitFor(() => expect(input().readOnly).toBe(false));
+      expect(input().value).toBe('/plan');
+      // 不另跳 toast（sonner 的 toast 跨測試留著，所以只看帶這個原因的那張）。
+      const toasts = [...document.querySelectorAll('[data-sonner-toast]')];
+      expect(toasts.filter((toast) => toast.textContent?.includes(reason))).toEqual([]);
+
+      fireEvent.keyDown(input(), { key: 'Enter' });
+      await waitFor(() => expect(slashed).toEqual(['/plan', '/plan']));
+    },
+  );
+
+  it('在途時拖檔、加檔都不收：附件數不變', async () => {
+    attachmentGate.on = true;
+    URL.createObjectURL = vi.fn(() => 'blob:preview');
+    URL.revokeObjectURL = vi.fn();
+    const { settle, enter } = await held();
+    enter('/plan');
+    await waitFor(() => expect(settle).toHaveLength(1));
+
+    fireEvent.dragEnter(window, { dataTransfer: { types: ['Files'] } });
+    expect(screen.queryByTestId('drop-overlay')).toBeNull();
+    fireEvent.drop(window, { dataTransfer: { types: ['Files'], files: [png('d.png')] } });
+    expect(screen.getByRole('button', { name: '加入附件' }).hasAttribute('disabled')).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(chips()).toHaveLength(0);
   });
 });
