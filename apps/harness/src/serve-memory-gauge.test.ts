@@ -92,8 +92,14 @@ describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => 
 
 const MIB = 1024 * 1024;
 
-/** 假的 cgroup v2（私有 cgroupns，路徑 `/`）：上限 1000 MiB，用量由 `usedPercent()` 決定，每次讀取當下才取值。 */
-function fakeCgroup(usedPercent: () => number): MemoryGaugeDeps {
+/**
+ * 假的 cgroup v2（私有 cgroupns，路徑 `/`）：上限 1000 MiB，用量由 `usedPercent()` 決定，每次讀取當下才取值。
+ * 行程的 V8 heap 上限也是 1000 MiB，已用由 `heapPercent()` 決定（預設 4%，不影響 cgroup 的測試）。
+ */
+function fakeCgroup(
+  usedPercent: () => number,
+  heapPercent: () => number = () => 4,
+): MemoryGaugeDeps {
   const files: Record<string, () => string> = {
     '/proc/self/cgroup': () => '0::/\n',
     '/sys/fs/cgroup/memory.current': () => String(Math.round(usedPercent() * 10 * MIB)),
@@ -108,8 +114,9 @@ function fakeCgroup(usedPercent: () => number): MemoryGaugeDeps {
     },
     processMemory: () => ({
       rssBytes: 100 * MIB,
-      heapUsedBytes: 40 * MIB,
+      heapUsedBytes: Math.round(heapPercent() * 10 * MIB),
       heapTotalBytes: 60 * MIB,
+      heapLimitBytes: 1000 * MIB,
     }),
     freemem: () => 8192 * MIB,
     totalmem: () => 16384 * MIB,
@@ -168,6 +175,31 @@ describe('記憶體用量警告，從 serve 組裝起（#1493 驗收 C、F）', 
     await until(() => count(WARNING) >= 2);
     expect(count(WARNING)).toBe(2);
     expect(count(RECOVERED)).toBe(1);
+  }, 20_000);
+
+  it('cgroup 60%、heap 90%：serve 真的把 heap 來源掛上，警告寫明是 V8 heap；恢復也是 heap（#1718）', async () => {
+    let heap = 90;
+    const lines: string[] = [];
+    serve = await startScriptedServe(TURNS, {
+      extraRows: '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n',
+      memoryGaugeDeps: fakeCgroup(
+        () => 60,
+        () => heap,
+      ),
+      log: bodyLog(lines),
+    });
+    await until(() => lines.some((line) => WARNING.test(line)));
+    const warnings = lines.filter((line) => WARNING.test(line));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('V8 heap 用量（V8 heap_size_limit）90.0%');
+    expect(warnings[0]).toContain('門檻 75%');
+    expect(warnings[0]).not.toContain('cgroup');
+    heap = 50;
+    await until(() => lines.some((line) => RECOVERED.test(line)));
+    const recovered = lines.filter((line) => RECOVERED.test(line));
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toContain('V8 heap 用量');
+    expect(lines.filter((line) => WARNING.test(line))).toHaveLength(1);
   }, 20_000);
 
   it('用量警告是 warn 等級、讀數那一行是 info（#1534）：門檻調到 warn 的主機不會丟掉警告', async () => {

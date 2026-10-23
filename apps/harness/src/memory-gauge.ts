@@ -33,6 +33,7 @@
 import { readFile } from 'node:fs/promises';
 import { freemem, totalmem } from 'node:os';
 import { posix } from 'node:path';
+import { getHeapStatistics } from 'node:v8';
 
 /** 一個來源的讀數：讀到了，或讀不到與原因。 */
 export type Reading<T> =
@@ -43,6 +44,11 @@ export interface ProcessMemory {
   readonly rssBytes: number;
   readonly heapUsedBytes: number;
   readonly heapTotalBytes: number;
+  /**
+   * V8 的 `heap_size_limit`：這個行程的 heap 最多能長到多大（沒給 `--max-old-space-size` 時 Node 依 cgroup／主機推出來，
+   * [#1718](https://github.com/DemianLi/nexus-agent/issues/1718)）。分母用它，不用 `heapTotalBytes`（已提交的量平常就貼著已用）。
+   */
+  readonly heapLimitBytes: number;
 }
 
 /**
@@ -94,6 +100,7 @@ const defaultDeps: MemoryGaugeDeps = {
       rssBytes: usage.rss,
       heapUsedBytes: usage.heapUsed,
       heapTotalBytes: usage.heapTotal,
+      heapLimitBytes: getHeapStatistics().heap_size_limit,
     };
   },
   freemem,

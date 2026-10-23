@@ -166,7 +166,11 @@ import { loadOrCreateMetricsToken, METRICS_TOKEN_FILE } from './metrics-token.js
 import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
 import type { OpsEndpoints } from './ops-endpoints.js';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
-import { createMemoryPressureWatch, memoryUsageSource } from './memory-pressure.js';
+import {
+  createMemoryPressureWatch,
+  heapUsageSource,
+  memoryUsageSource,
+} from './memory-pressure.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
@@ -1635,7 +1639,7 @@ async function startServer(
           // 用量警告（#1493，保險絲第 0 級）：跟著取樣開關走，取樣關著這一整段不建。
           onReading: createMemoryPressureWatch({
             thresholdPercent: memoryGaugeConfig.warnAtPercent,
-            sources: [memoryUsageSource],
+            sources: [memoryUsageSource, heapUsageSource],
             context: () => ({
               threadCount: handler.threadCount(),
               maxThreads: threadCapacity.maxThreads,

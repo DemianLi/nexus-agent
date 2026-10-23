@@ -59,7 +59,12 @@ function memoryDeps(options: { cgroup: boolean }): MemoryGaugeDeps {
       if (path === '/proc/meminfo') return 'MemAvailable: 100 kB\n';
       throw Object.assign(new Error('nope'), { code: 'ENOENT' });
     },
-    processMemory: () => ({ rssBytes: 111, heapUsedBytes: 22, heapTotalBytes: 33 }),
+    processMemory: () => ({
+      rssBytes: 111,
+      heapUsedBytes: 22,
+      heapTotalBytes: 33,
+      heapLimitBytes: 44,
+    }),
     freemem: () => 5,
     totalmem: () => 10,
     constrainedMemory: () => undefined,
