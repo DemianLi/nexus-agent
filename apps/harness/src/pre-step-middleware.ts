@@ -17,8 +17,8 @@
  * 1. 用 `effectiveMessages` 算出「模型看得到的那一串」。基座的摘要器不改寫 `state.messages`，只記一顆 `_summarizationEvent`，模型
  *    呼叫時才組 `[summary, ...messages.slice(cutoffIndex)]`；listener 要看的是後者（#397）。讀那顆私有鍵要宣告 `stateSchema`，
  *    見 {@link SUMMARIZATION_EVENT_VIEW}——插件因此不碰基座的私有鍵。
- * 2. 呼叫 listener，交 `{ configurable: runtime.configurable }`（**這個形狀**：原樣交給會話查找與 fs 查找才認得出這次呼叫；交裸的
- *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。
+ * 2. 呼叫 listener，交 `{ configurable: runtime.configurable, signal }`（**這個形狀**：原樣交給會話查找與 fs 查找才認得出這次呼叫；交裸的
+ *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。`signal` 是這一輪的中止訊號（契約 1.1.0，#1533），見 {@link stepSignal}。
  * 3. 把 listener 回的每一則建成使用者訊息：`additional_kwargs` 先放 listener 給的記號、**再**蓋 `source`（順序影響位元組，golden
  *    比對）；不加 `id`。
  * 4. 經**這條 thread 的** `registry.sessions.forCall` 記一筆 `user/message`；找不到就不記、訊息照送，寫不進去原錯往外拋（#1665，
@@ -34,7 +34,7 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PreStepListener } from '@nexus/agent-loop';
-import { effectiveMessages, sourceKwargs, toLoggedMessage } from '@nexus/core';
+import { effectiveMessages, sourceKwargs, toLoggedMessage, turnCancelSignalOf } from '@nexus/core';
 import type { SessionLookup } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
@@ -68,10 +68,14 @@ export function createPreStepMiddleware(
     stateSchema: SUMMARIZATION_EVENT_VIEW,
     beforeAgent: async (
       state: { messages?: readonly BaseMessage[]; _summarizationEvent?: unknown },
-      runtime?: { readonly configurable?: unknown },
+      runtime?: { readonly configurable?: unknown; readonly signal?: AbortSignal },
     ) => {
       const visible = effectiveMessages(state.messages ?? [], state);
-      const injections = await listener(visible, { configurable: runtime?.configurable });
+      const signal = stepSignal(runtime);
+      const injections = await listener(visible, {
+        configurable: runtime?.configurable,
+        ...(signal !== undefined && { signal }),
+      });
       if (injections === undefined || injections.length === 0) return undefined;
       const messages = injections.map((injection) => {
         const message = new HumanMessage({
@@ -89,6 +93,24 @@ export function createPreStepMiddleware(
       return { messages };
     },
   }) as unknown as AgentMiddleware;
+}
+
+/**
+ * 交給 listener 的中止訊號（[#1533](https://github.com/DemianLi/nexus-agent/issues/1533)）：dsh 交的是這一步的 `signal`
+ * （`packages/core/agent-loop/src/agent.ts:275`），也就是人按停止時舉起的那一顆。
+ *
+ * 我們這一顆**不在 `runtime.signal`**：pump 把這一輪的中止訊號放在 `configurable` 的 `TURN_CANCEL_CONFIG_KEY`，刻意不交給
+ * LangGraph（交了會丟下正在跑的工具，見 `@nexus/core` 的 `turn-cancel.ts`）。所以先讀那一顆；呼叫端若另外給了 LangGraph 的
+ * `signal`（`runtime.signal`，langchain `dist/agents/nodes/middleware.js:52`），兩顆任一舉起都算。CLI 與 eval 兩顆都沒有，就不交。
+ */
+function stepSignal(
+  runtime: { readonly configurable?: unknown; readonly signal?: AbortSignal } | undefined,
+): AbortSignal | undefined {
+  const turn = turnCancelSignalOf({ configurable: runtime?.configurable });
+  const graph = runtime?.signal;
+  if (turn === undefined) return graph;
+  if (graph === undefined) return turn;
+  return AbortSignal.any([turn, graph]);
 }
 
 /**
