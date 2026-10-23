@@ -167,7 +167,7 @@ describe('前綴進會話日誌的 tool/result（#1768）', () => {
 
         // 單塊文字：content 是字串，第一行逐字是前綴。
         expect(typeof note).toBe('string');
-        expect((note as string).split('\n')[0]).toBe(EXTERNAL_MCP_CONTENT_NOTICE);
+        expect((note as string).split('\n').slice(0, 2)).toEqual([EXTERNAL_MCP_CONTENT_NOTICE, '']);
 
         // 多塊：最前面多一塊只有前綴的文字塊。
         expect(Array.isArray(cite)).toBe(true);
@@ -179,9 +179,11 @@ describe('前綴進會話日誌的 tool/result（#1768）', () => {
 
         // 資源：出處行 → 前綴 → 本文。
         expect(typeof read).toBe('string');
-        expect((read as string).split('\n').slice(0, 2)).toEqual([
+        expect((read as string).split('\n').slice(0, 4)).toEqual([
           'MCP server: srv',
+          '',
           EXTERNAL_MCP_CONTENT_NOTICE,
+          '',
         ]);
       } finally {
         await pool?.close();

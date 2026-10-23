@@ -10,18 +10,18 @@
 
 import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/core';
 
-/** 拿掉開頭的前綴（含後面的換行）；開頭不是前綴就拋。 */
+/** 拿掉開頭的前綴（含後面空的一行）；開頭不是前綴就拋。 */
 export function withoutNotice(text: string): string {
-  const prefix = `${EXTERNAL_MCP_CONTENT_NOTICE}\n`;
+  const prefix = `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n`;
   if (!text.startsWith(prefix)) {
     throw new Error(`結果的開頭不是外部內容前綴：${JSON.stringify(text.slice(0, 80))}`);
   }
   return text.slice(prefix.length);
 }
 
-/** 資源結果是 `MCP server: <name>\n<前綴>\n<本文>`（出處行在前）：拿掉前綴那一行，其餘原樣。 */
+/** 資源結果是 `MCP server: <name>\n\n<前綴>\n\n<本文>`（出處行在前）：拿掉前綴那一段，出處行與本文之間留一個換行。 */
 export function withoutResourceNotice(text: string): string {
   const lineEnd = text.indexOf('\n');
-  const rest = text.slice(lineEnd + 1);
+  const rest = text.slice(lineEnd + 2);
   return `${text.slice(0, lineEnd + 1)}${withoutNotice(rest)}`;
 }

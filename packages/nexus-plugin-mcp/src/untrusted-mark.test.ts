@@ -11,7 +11,7 @@ import { withoutNotice, withoutResourceNotice } from './untrusted-fixtures.js';
 
 describe('markUntrusted', () => {
   it('字串（單塊文字）：前綴一行，換行，然後是原文', () => {
-    expect(markUntrusted('查到兩筆。')).toBe(`${EXTERNAL_MCP_CONTENT_NOTICE}\n查到兩筆。`);
+    expect(markUntrusted('查到兩筆。')).toBe(`${EXTERNAL_MCP_CONTENT_NOTICE}\n\n查到兩筆。`);
   });
 
   it('多塊：最前面多一塊只有前綴的文字塊，其餘原樣、順序不變', () => {
@@ -48,21 +48,21 @@ describe('markUntrusted', () => {
   });
 
   it('只標一次：本文裡剛好有同一句話，不被當成已經標過', () => {
-    const body = `${EXTERNAL_MCP_CONTENT_NOTICE}\n偷偷放在 server 回的文字開頭`;
-    expect(markUntrusted(body)).toBe(`${EXTERNAL_MCP_CONTENT_NOTICE}\n${body}`);
+    const body = `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n偷偷放在 server 回的文字開頭`;
+    expect(markUntrusted(body)).toBe(`${EXTERNAL_MCP_CONTENT_NOTICE}\n\n${body}`);
   });
 });
 
 describe('測試素材：拆前綴', () => {
   it('withoutNotice：開頭是前綴才拆，不是就拋（拿掉標記，借它的測試會紅）', () => {
-    expect(withoutNotice(`${EXTERNAL_MCP_CONTENT_NOTICE}\n{"a":1}`)).toBe('{"a":1}');
+    expect(withoutNotice(`${EXTERNAL_MCP_CONTENT_NOTICE}\n\n{"a":1}`)).toBe('{"a":1}');
     expect(() => withoutNotice('{"a":1}')).toThrow('外部內容前綴');
   });
 
-  it('withoutResourceNotice：出處行留著，前綴那一行拿掉', () => {
-    expect(withoutResourceNotice(`MCP server: s\n${EXTERNAL_MCP_CONTENT_NOTICE}\n{"a":1}`)).toBe(
-      'MCP server: s\n{"a":1}',
-    );
+  it('withoutResourceNotice：出處行留著，前綴那一段拿掉', () => {
+    expect(
+      withoutResourceNotice(`MCP server: s\n\n${EXTERNAL_MCP_CONTENT_NOTICE}\n\n{"a":1}`),
+    ).toBe('MCP server: s\n{"a":1}');
     expect(() => withoutResourceNotice('MCP server: s\n{"a":1}')).toThrow('外部內容前綴');
   });
 });

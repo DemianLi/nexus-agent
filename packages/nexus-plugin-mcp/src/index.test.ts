@@ -195,7 +195,7 @@ describe('接上一台真的 MCP server', () => {
           name: 'mcp__fixture__fetch_release_note',
           args: { topic: '發行說明' },
         })) as ToolMessage;
-      expect(message.content).toBe(`${EXTERNAL_MCP_CONTENT_NOTICE}\n發行說明｜${RELEASE_NOTE}`);
+      expect(message.content).toBe(`${EXTERNAL_MCP_CONTENT_NOTICE}\n\n發行說明｜${RELEASE_NOTE}`);
     } finally {
       await dispose();
     }
