@@ -56,6 +56,7 @@ import type { WorkspaceRootOf } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 import { createServerLog } from './server-log.js';
+import { createSkillCatalog } from './skill-catalog-wire.js';
 import type { ServerLog } from './server-log.js';
 import { turnFailedFields, turnFailedMessage } from './turn-failed-log.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
@@ -835,6 +836,8 @@ async function startServer(
     plugins,
     ...(options.cwd !== undefined && { cwd: options.cwd }),
   });
+  // `skill.list` 在每條 thread 的閉包裡讀它（#1574）：`root` 是 `let`，進閉包就失去收窄。
+  const tree = root.tree;
   const trial = await assembly
     .create(
       {
@@ -1410,6 +1413,12 @@ async function startServer(
         ...(permissionPresets !== undefined && { permissionPresets }),
         // 可點名的子代理（#328 第 2 項）：`subagent.list` 與 `run.start` 的 `mention` 驗證讀這一份。
         subagentKinds,
+        // `/名字` 叫得出的技能（#1574 N0929）：來源讀樹上的登記處、backend 與「有沒有磁碟根」讀這條 thread 的 fs 把手，都在 `skill.list` 打進來的當下。
+        skillCatalog: createSkillCatalog({
+          sources: () => tree.skillSources(),
+          fs: () => tree.threadSessions.fsForThread(threadId),
+          warn: (message) => warn(`[技能] thread "${threadId}" ${message}`),
+        }),
         // 每會話模型選擇（#723）：沒帶 `--live` 就缺席，`model.catalog`／`model.select` 回 `not_supported`。
         ...(threadModelSelection !== undefined && { modelSelection: threadModelSelection }),
         // 交付讀檔方法的錨（#452）：沒給 `--workspace` 就缺席，兩支方法一律 no-anchor。

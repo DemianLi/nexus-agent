@@ -85,6 +85,8 @@ import type {
   SubagentSendCommand,
   RunStartCommand,
   RunStartMode,
+  SkillEntry,
+  SkillListCommand,
   SlashCommand,
   SlashDescriptor,
   SlashRunResult,
@@ -200,6 +202,14 @@ export type UplinkResult = CommandResponse | WireErrorResponse;
  */
 export type SlashListOutcome =
   | { readonly kind: 'ok'; readonly commands: readonly SlashDescriptor[] }
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
+
+/**
+ * `skill.list` 的結果（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929）。`rejected` 的分寸同 {@link SlashListOutcome}；
+ * 這台 server 沒掛技能時是 `code: 'not_supported'`，掛了但沒有技能是 `ok` 加空陣列。
+ */
+export type SkillListOutcome =
+  | { readonly kind: 'ok'; readonly skills: readonly SkillEntry[] }
   | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** `slash.run` 的結果：三個命令自己的值，加上這條線拒絕發派的那一個。 */
@@ -421,6 +431,11 @@ export interface WireClient {
    * dsh 那一套 `CommandDirectory`（epoch guard、single-flight、`ensureReady`）是另一張卡。
    */
   slashList(threadId: string): Promise<SlashListOutcome>;
+  /**
+   * 這條 thread 用 `/名字` 叫得出哪些技能（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929），依名字排序、不帶正文。
+   * 每一列逐格重建（{@link SkillEntry} 以外的格子不收），格子不對就拋錯。
+   */
+  skillList(threadId: string): Promise<SkillListOutcome>;
   /**
    * 打一行斜線命令。**回的是命令的執行結果，不是收件回條**——命令不進模型，
    * 所以它沒有「之後走下行」的那一半。
@@ -750,6 +765,36 @@ function readDescriptors(result: unknown): readonly SlashDescriptor[] {
   });
 }
 
+/**
+ * `skill.list` 回來的清單逐格重建（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)），理由同 {@link readDescriptors}：**這是別人的位元組**。
+ * 只收 {@link SkillEntry} 的五格；必填格缺了、選填格給了卻不是字串，就拋錯，不默默收下。多的格子（例如正文）不帶過去。
+ */
+function readSkills(result: unknown): readonly SkillEntry[] {
+  const { skills } = result as { skills?: unknown };
+  if (!Array.isArray(skills)) {
+    throw new Error('skill.list 的結果裡沒有 skills 陣列');
+  }
+  return skills.map((entry: unknown) => {
+    const row = entry as Record<string, unknown> | null;
+    if (
+      typeof row?.name !== 'string' ||
+      typeof row.description !== 'string' ||
+      typeof row.modelInvocable !== 'boolean' ||
+      (row.whenToUse !== undefined && typeof row.whenToUse !== 'string') ||
+      (row.path !== undefined && typeof row.path !== 'string')
+    ) {
+      throw new Error('skill.list 回了不認得的一列');
+    }
+    return Object.freeze({
+      name: row.name,
+      description: row.description,
+      ...(typeof row.whenToUse === 'string' ? { whenToUse: row.whenToUse } : {}),
+      ...(typeof row.path === 'string' ? { path: row.path } : {}),
+      modelInvocable: row.modelInvocable,
+    });
+  });
+}
+
 /** 同上。`unknown` 是三值之一，不是「驗不出來」。 */
 function readRunResult(result: unknown): SlashRunResult {
   const { kind, command_id: commandId, text } = result as Record<string, unknown>;
@@ -927,6 +972,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       | Command
       | RunStartCommand
       | SlashCommand
+      | SkillListCommand
       | RunCancelCommand
       | QueueUpdateCommand
       | SubagentSendCommand
@@ -1263,6 +1309,16 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return response.type === 'error'
         ? rejectedOf(response)
         : { kind: 'ok', commands: readDescriptors(response.result) };
+    },
+
+    async skillList(threadId) {
+      const response = await sendCommand(threadId, 'skill.list', {
+        id: nextCommandId++,
+        method: 'skill.list',
+      });
+      return response.type === 'error'
+        ? rejectedOf(response)
+        : { kind: 'ok', skills: readSkills(response.result) };
     },
 
     async slashRun(threadId, line, attachments) {

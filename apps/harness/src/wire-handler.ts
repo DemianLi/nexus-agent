@@ -35,6 +35,8 @@ import type {
   FileReferenceListResponse,
   SessionReferenceCandidate,
   SessionReferenceListResponse,
+  SkillEntry,
+  SkillListResult,
   SlashListResult,
   SlashMethod,
   SlashRunResult,
@@ -111,6 +113,7 @@ import {
   THREAD_AT_CAPACITY,
   THREAD_HISTORY_TOO_DEEP,
   THREAD_IS_SUBAGENT,
+  isSkillMethod,
   isSlashMethod,
   isWireChannel,
   SessionReferenceError,
@@ -183,6 +186,7 @@ import {
 import type { ThreadTitleLimits } from './session-title.js';
 import { normalizeThreadSearchQuery, ThreadSearchError } from './thread-search.js';
 import type { ThreadSearchErrorKind } from './thread-search.js';
+import type { SkillCatalog } from './skill-catalog-wire.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -259,6 +263,12 @@ export interface ThreadAgent {
    * **缺席就是這個組裝沒有清單**（手搭的組裝）：`subagent.list` 回 `not_supported`，`run.start` 帶 `mention` 也一樣。
    */
   readonly subagentKinds?: readonly SubagentKind[];
+  /**
+   * 這條 thread 用 `/名字` 叫得出的技能（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929，`skill-catalog-wire.ts`），選配。
+   * **缺席就是這個組裝沒有技能清單**（手搭的組裝），`skill.list` 回 `not_supported`；產品路徑（`serve.ts`）一律交，沒掛 `skills` 那一列時
+   * 由它自己回 `undefined`，同樣是 `not_supported`。
+   */
+  readonly skillCatalog?: SkillCatalog;
   /**
    * 每會話模型選擇（[#723](https://github.com/DemianLi/nexus-agent/issues/723)），選配。沒帶 `--live`（假模型沒有型錄）的組裝就沒有，
    * 那時 `model.catalog`／`model.select` 回 `not_supported`，web 據這個碼把模型座藏起來。
@@ -632,6 +642,27 @@ async function* requestBodyChunks(
   }
 }
 
+/**
+ * `skill.list` 的回應（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929）。組裝沒有清單、或清單說「沒有技能可列」回
+ * `not_supported`（dsh 是 registry 不在的 `gateway/internal`，見 `skill-catalog-wire.ts`）；掃描本身拋了回 `unknown_error`
+ * （dsh 的 `skill listing failed` 也是 `gateway/internal`，`skill-catalog.ts:88-90`），訊息帶原因。
+ */
+async function skillListResponse(catalog: SkillCatalog | undefined, id: number): Promise<unknown> {
+  const unsupported = () =>
+    errorResponse(id, 'not_supported', '這個組裝沒有技能清單（沒掛 skills 那一列）');
+  if (catalog === undefined) return unsupported();
+  let skills: readonly SkillEntry[] | undefined;
+  try {
+    skills = await catalog();
+  } catch (error: unknown) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return errorResponse(id, 'unknown_error', `技能清單讀不出來：${reason}`);
+  }
+  if (skills === undefined) return unsupported();
+  const result: SkillListResult = { skills };
+  return successResponse(id, result);
+}
+
 /** 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。 */
 const SEARCH_ERROR_CODES: Record<ThreadSearchErrorKind, WireErrorCode> = {
   invalid: 'invalid_argument',
@@ -889,6 +920,8 @@ interface ThreadState {
   readonly workspaceChanges: WorkspaceChanges | undefined;
   readonly permissionPresets: { catalog(): PermissionCatalog } | undefined;
   readonly subagentKinds: readonly SubagentKind[] | undefined;
+  /** 見 {@link ThreadAgent.skillCatalog}。 */
+  readonly skillCatalog: SkillCatalog | undefined;
   readonly modelSelection: ThreadModelSelection | undefined;
   /**
    * 接回來那批事件的長度；沒續接就是 0（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
@@ -1754,6 +1787,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           workspaceChanges: threadAgent.workspaceChanges,
           permissionPresets: threadAgent.permissionPresets,
           subagentKinds: threadAgent.subagentKinds,
+          skillCatalog: threadAgent.skillCatalog,
           modelSelection: threadAgent.modelSelection,
           // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
           // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
@@ -2281,6 +2315,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           value: { catalog: thread.permissionPresets.catalog() },
         }),
       );
+    }
+    if (isSkillMethod(method)) {
+      // `/名字` 叫得出的技能（#1574 N0929）：經 `threadFor`，同 `slash.list`——打 `/` 多半發生在第一句之前，沒開過的 thread 要為它建起來。
+      // **不看「還在跑」、核准點與 `slashInFlight`**：它只讀，沒有東西可以跟誰賽跑。
+      return json(await skillListResponse(thread.skillCatalog, envelope.id));
     }
     if (isSlashMethod(method)) {
       return handleSlash(thread, threadId, method, envelope.id, body, signal);

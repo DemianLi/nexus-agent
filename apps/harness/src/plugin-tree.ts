@@ -535,6 +535,14 @@ export class PluginTree {
   }
 
   /**
+   * 技能來源登記處**當下**的路徑（#1446），依登記順序；快照。同 `skillSources` 服務的 `sources()`：`/名字` 叫用的 listener 讀服務，
+   * `skill.list`（#1574 N0929）由宿主讀這裡，兩邊是同一組（PM 裁決 (i)：讀登記處，不讀折進 thread 的那一份）。
+   */
+  skillSources(): readonly string[] {
+    return this.#skillSources.entries().map((entry) => entry.path);
+  }
+
+  /**
    * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources`、`commands`、
    * `approval-channel`、`session-lookup`、`fs`、`pre-step` 那八列。
    *
