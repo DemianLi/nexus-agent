@@ -191,7 +191,7 @@ import {
 } from './settings/thread-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { normalizeThreadSearchQuery, ThreadSearchError } from './thread-search.js';
-import type { ThreadSearchErrorKind } from './thread-search.js';
+import type { LiveThread, ThreadSearchErrorKind } from './thread-search.js';
 import type { SkillCatalog } from './skill-catalog-wire.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
@@ -317,9 +317,15 @@ export interface ThreadAgent {
    * @returns 收掉這次接線的方法（`dispose` 會排空並關檔；`abandon` 不排空、只關檔，給還沒發佈就組裝失敗的分叉子 thread，
    *   #1580，沒給的照 `dispose` 收），或沒開落盤時的 `undefined`。
    */
-  attachPersistence?(
-    sessions: SessionRegistry,
-  ): { flush(): Promise<void>; dispose(): Promise<void>; abandon?(): Promise<void> } | undefined;
+  attachPersistence?(sessions: SessionRegistry):
+    | {
+        flush(): Promise<void>;
+        dispose(): Promise<void>;
+        abandon?(): Promise<void>;
+        /** root 那一份檔的 header（core `attachSessionPersistence` 的 `rootHeader`，#1599）：搜尋拿它跟盤上那份比。 */
+        rootHeader?(): StoredSessionHeader | undefined;
+      }
+    | undefined;
   /**
    * 把 LLM 標題接到這條 thread 的 root 日誌上（[#650](https://github.com/DemianLi/nexus-agent/issues/650)），選配。
    * 沒帶 `--live`、或清單把 `thread-title-llm` 那一列關掉，`createCliAgent` 就不給，那時只有退回標題。
@@ -645,6 +651,14 @@ export interface IdleSweepingWireHandler extends WireHandler {
   threadCount(): number;
   /** 撤到一半、還佔著名額的 thread 數（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，`/metrics` 的 `nexus_threads_closing`）。 */
   closingCount(): number;
+  /**
+   * 已經建好、活著的 thread（[#1599](https://github.com/DemianLi/nexus-agent/issues/1599)，內容搜尋讀它們記憶體裡的日誌）。**同步、只讀 `ready`**：
+   * 還在建的不算（不等它組裝），正在撤的也不算：`evictThread` 先 `ready.delete`、最後的排空在後面，撤的期間搜尋改走冷讀。dsh 撤出時
+   * 也是先離開 `list()`（`detachEntered` 先 `store.delete`、之後才發 `session/disposed`，`core/session/src/index.ts:1253-1255`）。冷讀到一半
+   * 檔又被寫，由搜尋那一側提交前的第二次列表比 revision 重來。照 dsh 觀察活會話用的 `ctx.sessions.list()`
+   * （`session-query-sqlite/src/index.ts:503,549`，`687f282e`），不改任何東西：不 flush、不建檔。
+   */
+  liveThreads(): readonly LiveThread[];
   /**
    * `close()` 已經開始了沒（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，`/readyz` 據此回 503）。**只讀**：叫 `close()` 的那一刻同步變 `true`，不會變回來。
    */
@@ -976,6 +990,8 @@ interface ThreadState {
    * `locateAt` 的檔頭）。
    */
   readonly storedCount: number;
+  /** root 那一份檔的 header，見 {@link ThreadAgent.attachPersistence}；沒開落盤是 `undefined`。 */
+  readonly storedHeader: () => StoredSessionHeader | undefined;
   /** 這一次組裝的工作區根，沒給 `--workspace` 就是 `undefined`。見 {@link ThreadAgent.workspaceRoot}。 */
   readonly workspaceRoot: string | undefined;
   /**
@@ -1841,6 +1857,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
           // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
           storedCount: threadAgent.rootSeed?.length ?? 0,
+          storedHeader: () => persistence?.rootHeader?.(),
           workspaceRoot: threadAgent.workspaceRoot,
           resumedWorkspaceRoot: threadAgent.resumedWorkspaceRoot,
           fileSearch,
@@ -3072,7 +3089,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 讀一條 thread 現在的樣子（#1580 分叉的來源；#1599 的搜尋也要讀活的）：**活的讀記憶體，不在就冷讀**，照 dsh `observeSession`
+   * 讀一條 thread 現在的樣子（#1580 分叉的來源；#1599 的搜尋不經這裡，它不等、不排空，見 `liveThreads`）：**活的讀記憶體，不在就冷讀**，照 dsh `observeSession`
    * （`session-query/src/observation.ts:105-106,275-315`，`687f282e`）。不能一律冷讀：落盤有批次窗口，冷讀會缺尾巴。
    *
    * **不經 `threadFor`**：冷的來源不為它建 agent、不佔名額。還在建的等它建好再讀記憶體；正在撤的等撤完再冷讀（撤的時候會排空到磁碟）。
@@ -3842,6 +3859,12 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     sweepIdle,
     threadCount: () => threads.size + closing.size,
     closingCount: () => closing.size,
+    liveThreads: () =>
+      [...ready].map(([threadId, state]) => ({
+        threadId,
+        log: state.pump.sessionLog,
+        header: state.storedHeader(),
+      })),
     isClosing: () => closed,
     stopAdmission: () => {
       admissionStopped = true;

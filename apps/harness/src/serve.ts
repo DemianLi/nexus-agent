@@ -1045,6 +1045,8 @@ async function startServer(
         cwd,
         openAt: threadSearchConfig.openAt,
         ...(sessionStore !== undefined && { store: sessionStore }),
+        // 活的 thread 讀記憶體（#1599）：表在下面建的 handler 手上，搜尋只經 handler 進來，叫到時它一定在了（同 `OpsMetrics` 那一支）。
+        liveThreads: () => handler.liveThreads(),
       })
     : undefined;
   // `startup` 在這裡載入 `node:sqlite`，載不起來就不開 server：設定說要一起來，那就在什麼都還沒起來時講。
@@ -1544,7 +1546,12 @@ async function startServer(
                   ...(workspaceRoot !== undefined && { workspaceRoot }),
                   // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
                   ...(resumed !== undefined && {
-                    resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+                    resumedRoot: {
+                      stored: resumed.stored,
+                      storedCount: resumed.events.length,
+                      // 讀回來的 header 交給 `rootHeader()`：搜尋拿它跟盤上那份比（#1599）。
+                      header: resumed.header,
+                    },
                   }),
                   // 分叉（#1580）：新建的 header 標來源與 `isSeeded`。seed 不另外寫：協調器沒有已存筆數，第一次 flush 把整份寫出去
                   // （同 dsh 發佈時 `appendUnstoredSuffix` 從 0 寫起）。
