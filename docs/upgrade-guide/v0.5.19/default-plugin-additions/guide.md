@@ -41,6 +41,6 @@ CLI 的出貨清單是 31 輪，拿掉這兩列其中一列是 32 輪；serve �
 5. `thread-title-llm`：不要多打這一次模型，`plugin disable thread-title-llm`，標題回到截第一句話。
 6. `spill-policy`：要模型直接收大一點的結果，調大 `maxInlineTokens`；要回到 v0.5.19 的 80,000 字元，`plugin disable spill-policy`
    （基座那一條關不掉）。全文落在 `<home>/tool-results/`，備份見 [`docs/operations.md`〈升級與回滾〉](../../../operations.md#升級與回滾)。
-7. `tool-fs-search`：調 `grepMaxMatches`、`globMaxResults`（`config` 整份替換，兩格要一起寫）；要回到 v0.5.19 那樣沒有筆數上限，
+7. `tool-fs-search`：調 `grepMaxMatches`、`globMaxResults`、`grepMaxLineBytes`（`config` 整份替換，沒寫的格子回到預設；第三格見 `file-search-and-tool-fs` 那份指南）；要回到 v0.5.19 那樣沒有筆數上限，
    `plugin disable tool-fs-search`。
 8. 確認：`--dump-config` 裡這幾列是你要的狀態；`plugin` 改動的生效時機照它印的「生效：…」那一行。

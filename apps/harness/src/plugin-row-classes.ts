@@ -151,6 +151,7 @@ export const ROW_CLASSES: ReadonlyMap<string, RowClassEntry> = new Map<string, R
   ['agent-loop', next],
   ['recursion-limit', next],
   ['tool-fs-search', next],
+  ['tool-fs', next],
   [
     'agent-default-model',
     { class: 'next-thread', note: '非 --live 時每條 thread 組裝才讀（assembly-root.ts:527）。' },

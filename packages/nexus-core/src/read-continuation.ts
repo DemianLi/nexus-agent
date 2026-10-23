@@ -132,6 +132,27 @@ export interface ReadWindowRequest {
   readonly limit: number;
   readonly maxLineLength: number;
   readonly maxBytes: number;
+  /**
+   * 檔案大小達到這個位元組數就串流讀（`tool-fs` 的 `readStreamMinSize`，[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）。
+   * **只有部署設定給了才有**；沒有的話 backend 用它自己的預設（建構子選項，再不然 10 MiB）。
+   */
+  readonly streamMinSize?: number;
+}
+
+/**
+ * 讀檔的上限，`tool-fs` 設定列的四格（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)，名字與意義照 dsh `tool-fs`
+ * 的 Config，`packages/fs/tool-fs/src/index.ts:20-98`）。**每一格缺席就用上面的常數**，所以不給任何一格的 middleware
+ * 與以前逐位元組相同。
+ */
+export interface ReadLimits {
+  /** 一頁最多幾行：`limit` 沒給的預設，也是上限。預設 {@link READ_LIMIT}。 */
+  readonly readLimit?: number;
+  /** 一行最多幾個字元。預設 {@link READ_MAX_LINE_LENGTH}。 */
+  readonly readMaxLineLength?: number;
+  /** 一頁選到的行累計最多幾個位元組。預設 {@link READ_MAX_BYTES}。 */
+  readonly readMaxBytes?: number;
+  /** 檔案大小達到幾個位元組就串流讀。缺席是 backend 的預設。 */
+  readonly readStreamMinSize?: number;
 }
 
 /** 一次 `read_file` 裡，backend 讀到的範圍。 */
@@ -178,12 +199,12 @@ function countLines(lines: readonly string[]): number {
  * 選到的行累計不超過 {@link READ_MAX_BYTES} 的話能給幾行。算法同 dsh 的 `buildWindow`：每行的 UTF-8
  * 位元組，不是第一行的再加一個換行。**至少一行**，見檔頭的偏離二。
  */
-function linesWithinBytes(lines: readonly string[], wanted: number): number {
+function linesWithinBytes(lines: readonly string[], wanted: number, maxBytes: number): number {
   let bytes = 0;
   let shown = 0;
   while (shown < wanted) {
     const cost = Buffer.byteLength(lines[shown] ?? '') + (shown > 0 ? 1 : 0);
-    if (shown > 0 && bytes + cost > READ_MAX_BYTES) break;
+    if (shown > 0 && bytes + cost > maxBytes) break;
     bytes += cost;
     shown += 1;
   }
@@ -232,12 +253,19 @@ async function readWithExtent(
   read: (path: unknown, offset: number, limit: number) => unknown,
   record: CallRecord,
   args: readonly unknown[],
+  limits: ResolvedReadLimits,
 ): Promise<unknown> {
   const [path, rawOffset, limit] = args;
   // 基座的工具三個都會給；沒給 `limit` 的不是它，原樣轉交。
   if (typeof limit !== 'number') return read(...(args as [unknown, number, number]));
   const offset = typeof rawOffset === 'number' ? rawOffset : 0;
-  record.request = { offset, limit, maxLineLength: READ_MAX_LINE_LENGTH, maxBytes: READ_MAX_BYTES };
+  record.request = {
+    offset,
+    limit,
+    maxLineLength: limits.maxLineLength,
+    maxBytes: limits.maxBytes,
+    ...(limits.streamMinSize !== undefined && { streamMinSize: limits.streamMinSize }),
+  };
   const result = (await read(path, offset, Number.MAX_SAFE_INTEGER)) as ReadResultLike;
   // backend 自己建了頁（#1530）：內容已經是那一頁，範圍也已經回報。
   if (record.extent !== undefined) return result;
@@ -248,12 +276,29 @@ async function readWithExtent(
   const rest = result.content.split('\n');
   const remaining = countLines(rest);
   const wanted = Math.min(limit, remaining);
-  const shown = linesWithinBytes(rest, wanted);
+  const shown = linesWithinBytes(rest, wanted, limits.maxBytes);
   const cappedByBytes = shown < wanted;
   record.extent = { offset, shown, total: offset + remaining, cappedByBytes };
   record.lines = rest.slice(0, shown);
   // 沒撞到上限時照舊切 `limit`：檔尾那個換行留著，基座拿到的跟以前一字不差。
   return { ...result, content: rest.slice(0, cappedByBytes ? shown : limit).join('\n') };
+}
+
+/** {@link ReadLimits} 填完預設之後的樣子。 */
+interface ResolvedReadLimits {
+  readonly limit: number;
+  readonly maxLineLength: number;
+  readonly maxBytes: number;
+  readonly streamMinSize: number | undefined;
+}
+
+function resolveReadLimits(limits: ReadLimits | undefined): ResolvedReadLimits {
+  return {
+    limit: limits?.readLimit ?? READ_LIMIT,
+    maxLineLength: limits?.readMaxLineLength ?? READ_MAX_LINE_LENGTH,
+    maxBytes: limits?.readMaxBytes ?? READ_MAX_BYTES,
+    streamMinSize: limits?.readStreamMinSize,
+  };
 }
 
 /**
@@ -265,7 +310,8 @@ async function readWithExtent(
  * @param backend - fold 折出來的那個。
  * @returns 交給基座的那一份。
  */
-export function recordReadExtent<T extends object>(backend: T): T {
+export function recordReadExtent<T extends object>(backend: T, limits?: ReadLimits): T {
+  const resolved = resolveReadLimits(limits);
   return new Proxy(backend, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property, target);
@@ -276,7 +322,7 @@ export function recordReadExtent<T extends object>(backend: T): T {
         const record = currentRead.getStore();
         // 不在 `read_file` 裡，或這次呼叫已經讀過一次（工具只讀一次；第二次的不是它）：原樣轉交。
         if (record === undefined || record.extent !== undefined) return method(...args);
-        return readWithExtent(method as never, record, args);
+        return readWithExtent(method as never, record, args, resolved);
       };
     },
   });
@@ -374,13 +420,15 @@ function appendFooter(
 }
 
 /** `limit` 給模型看的定義，措辭照 dsh（`packages/fs/tool-fs/src/read.ts:83`）。沒有 `default`：預設由 middleware 填。 */
-const LIMIT_PARAMETER = {
-  type: 'number',
-  description: `Maximum number of lines to return. Defaults to ${READ_LIMIT}.`,
-} as const;
-
-/** 基座的 `read_file` → 模型看到的那一份。每個工具實例算一次。 */
-const modelFacing = new WeakMap<object, object>();
+function limitParameter(readLimit: number): {
+  readonly type: 'number';
+  readonly description: string;
+} {
+  return {
+    type: 'number',
+    description: `Maximum number of lines to return. Defaults to ${readLimit}.`,
+  };
+}
 
 /** OpenAI 形狀的工具定義，只取這裡動得到的幾格。 */
 interface FunctionParameters {
@@ -399,7 +447,11 @@ interface FunctionParameters {
  * 要拿掉的工具（`hasToolName`，`dist/langsmith-zm0ILQsV.js:5446-5462`）。沒有這一格的話，profile 拿掉
  * 的 `read_file` 會以這個形狀溜回去。不可列舉，所以序列化進請求本體時不會多一格。
  */
-function modelFacingReadTool(tool: object): object {
+function modelFacingReadTool(
+  tool: object,
+  modelFacing: WeakMap<object, object>,
+  readLimit: number,
+): object {
   const cached = modelFacing.get(tool);
   if (cached !== undefined) return cached;
   const converted = convertToOpenAITool(tool as never);
@@ -410,7 +462,7 @@ function modelFacingReadTool(tool: object): object {
       ...converted.function,
       parameters: {
         ...parameters,
-        properties: { ...parameters.properties, limit: LIMIT_PARAMETER },
+        properties: { ...parameters.properties, limit: limitParameter(readLimit) },
         required: (parameters.required ?? []).filter((name) => name !== 'limit'),
       },
     },
@@ -437,12 +489,12 @@ function isReadTool(tool: unknown): tool is object {
  *
  * `null` 當成沒給：基座的 schema 是 `z.coerce.number()`，放過去會變成 0 行。
  */
-function withReadLimit(args: unknown): Record<string, unknown> {
+function withReadLimit(args: unknown, readLimit: number): Record<string, unknown> {
   const given = (args ?? {}) as Record<string, unknown>;
   const limit = given.limit;
-  if (limit === undefined || limit === null) return { ...given, limit: READ_LIMIT };
-  if (Number(limit) > READ_LIMIT) {
-    throw new Error(`limit must be less than or equal to ${READ_LIMIT}`);
+  if (limit === undefined || limit === null) return { ...given, limit: readLimit };
+  if (Number(limit) > readLimit) {
+    throw new Error(`limit must be less than or equal to ${readLimit}`);
   }
   return given;
 }
@@ -451,9 +503,14 @@ function withReadLimit(args: unknown): Record<string, unknown> {
  * 造一顆在讀檔結果最後補上讀到哪的 middleware。**無狀態**：記錄每次呼叫各一份，root 與每個
  * subagent 共用同一顆。
  *
+ * @param limits - `tool-fs` 設定列的上限（{@link ReadLimits}）；缺席或缺格用常數。**行數上限在這裡生效**（`limit` 的預設與天花板、
+ *   給模型看的定義）；其餘三格交給 backend 建頁（{@link recordReadExtent} 把它們放進 {@link ReadWindowRequest}）。
  * @returns 交給 fold 排位置的 middleware。
  */
-export function createReadContinuationMiddleware(): AgentMiddleware {
+export function createReadContinuationMiddleware(limits?: ReadLimits): AgentMiddleware {
+  const readLimit = limits?.readLimit ?? READ_LIMIT;
+  // 每顆 middleware 各一份：描述裡有這顆的行數上限，不同上限的兩顆不能共用同一個快取。
+  const modelFacing = new WeakMap<object, object>();
   return createMiddleware({
     name: READ_CONTINUATION_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
@@ -461,12 +518,14 @@ export function createReadContinuationMiddleware(): AgentMiddleware {
       if (!Array.isArray(tools) || !tools.some(isReadTool)) return handler(request);
       return handler({
         ...request,
-        tools: tools.map((tool) => (isReadTool(tool) ? modelFacingReadTool(tool) : tool)),
+        tools: tools.map((tool) =>
+          isReadTool(tool) ? modelFacingReadTool(tool, modelFacing, readLimit) : tool,
+        ),
       } as typeof request);
     },
     wrapToolCall: async (request, handler) => {
       if (resolveToolName(request) !== READ_TOOL) return handler(request);
-      const args = withReadLimit(request.toolCall.args);
+      const args = withReadLimit(request.toolCall.args, readLimit);
       const call =
         args === request.toolCall.args
           ? request

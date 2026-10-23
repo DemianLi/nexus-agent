@@ -48,10 +48,10 @@ import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME } from './model-selection.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
 
-/** 編一個子代理要看的 fold 產物：規格清單、模型、backend、全域的 deny 規則。 */
+/** 編一個子代理要看的 fold 產物：規格清單、模型、backend、全域的 deny 規則、檔案工具的組態（`tool-fs`，#1605）。 */
 export type SubagentGraphParams = Pick<
   FoldedAgentParams,
-  'subagents' | 'model' | 'backend' | 'permissions'
+  'subagents' | 'model' | 'backend' | 'permissions' | 'fileTools'
 >;
 
 /** 編出來的圖：帶 checkpointer 的 `createAgent` 圖。 */
@@ -142,7 +142,11 @@ export function compileSubagentGraph(
   // 預設疊與一次性子代理共用同一個函式（`subagentDefaultMiddleware`）：檔案系統那顆帶的 `permissions`
   // 是 `spec.permissions ?? 全域`，漏傳的話全域的 deny 在背景圖上消失（#738 第 2 項，實測）。
   const defaults = [
-    ...subagentDefaultMiddleware(declarative, { backend, permissions: params.permissions }),
+    ...subagentDefaultMiddleware(declarative, {
+      backend,
+      permissions: params.permissions,
+      ...(params.fileTools !== undefined && { fileTools: params.fileTools }),
+    }),
     // 背景版插話載體（#858）：host 經 `configurable` 交 handle 進來才有作用，沒交就什麼都不做。
     createStepInboxMiddleware('background'),
   ];

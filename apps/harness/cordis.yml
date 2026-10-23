@@ -402,7 +402,7 @@
 #   讀（#650）。所以這幾列的 `apply` 是空的，值由
 #   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
 #   「值從一個地方來」，機制上不是服務，那條退讓登記在 #529 上。
-# - **組裝期**（`recursion-limit`、`agent-loop`、`tool-fs-search`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
+# - **組裝期**（`recursion-limit`、`agent-loop`、`tool-fs-search`、`tool-fs`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
 #   **註冊表就在手上**。所以這一列跟上面 core 那三列完全同形——`apply` 把驗過的值提供成一個
 #   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
 #
@@ -600,15 +600,38 @@
     maxInlineTokens: 12500
 
 # 搜尋結果的筆數上限（#735）：`grep` 命中超過 `grepMaxMatches`、`glob`／`ls` 超過 `globMaxResults` 時，模型只收到前段
-# 加一句定位，完整結果存進上面那個暫存目錄，用 `read_file` 照定位讀。**id、兩格的名字與 250／100 都是 dsh 的**
-# （`packages/fs/tool-fs-search/src/index.ts:73-100`、`grep.ts:29`、`glob.ts:25`，`477b4f4`）；`ls` 沿用 `globMaxResults`
+# 加一句定位，完整結果存進上面那個暫存目錄，用 `read_file` 照定位讀。**id、三格的名字與 250／100／2000 都是 dsh 的**
+# （`packages/fs/tool-fs-search/src/index.ts:73-100`、`grep.ts:29`、`:35`、`glob.ts:25`）；`ls` 沿用 `globMaxResults`
 # （dsh 沒有這顆工具）。`grep` 只管 `content` 模式。暫存目錄寫不進、或沒有會話日誌時，照樣只留前段，結尾註明沒存到。
-# **把這一列標成 `disabled: true`（或刪掉）就回到基座原樣**：超過 80,000 字元由工具本體自己截掉，原文不留。
+# `grepMaxLineBytes`（#1605）：`grep` 每一行命中文字最多留幾個位元組，切在 UTF-8 字元邊界、切了加 ` (line truncated)`；
+# 一行壓縮過的 JS 或 JSON 命中時不會整行塞進結果，整行還在檔案裡可以 `read_file`。
+# **把這一列標成 `disabled: true`（或刪掉）就回到基座原樣**：沒有筆數上限、不切行，超過 80,000 字元由工具本體自己截掉，原文不留。
 - id: tool-fs-search
   name: '#settings/tool-fs-search'
   config:
     grepMaxMatches: 250
     globMaxResults: 100
+    grepMaxLineBytes: 2000
+
+# 檔案工具的組態（#1605）：個別關掉寫檔、改檔，以及讀檔的上限。**id 與欄位名都是 dsh 的**（`tool-fs`，
+# `packages/fs/tool-fs/src/index.ts:20-98`），預設值就是出廠的常數（讀一頁 2000 行、一行 2000 字元、一頁 50 KiB、
+# 檔案達 10 MiB 改串流讀）。數值都要是正整數，否則載入時就拋。
+# `write: false`：模型看不到 `write_file` 與 `delete`（基座多一顆會改檔的 `delete`，dsh 沒有，歸到寫入面）；
+# `edit: false`：模型看不到 `edit_file`。關掉的工具根本不在送給模型的清單裡，「先讀後改」那句提示也跟著不出現。
+# 這跟 `read-only` 圍堵是兩件事：圍堵是模型叫了再被擋，這裡是模型看不到。部署「只讀的知識助理」兩個一起關。
+# `read` 這一格收了但只認 `true`（基座要求 `read_file` 一定在），寫 `false` 載入失敗。
+# **這一列關不掉**：寫 `disabled: true` 啟動失敗（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）。關掉它會讓所有檔案工具全開、上限回到常數，
+# 原本寫了 `write: false` 的部署反而把寫檔放回來；要關寫檔寫 `write: false`。
+- id: tool-fs
+  name: '#settings/tool-fs'
+  config:
+    read: true
+    write: true
+    edit: true
+    readLimit: 2000
+    readMaxLineLength: 2000
+    readMaxBytes: 51200
+    readStreamMinSize: 10485760
 
 # 委派工具是一次性的還是背景續行的（#841），以及每個主對話同時存活的背景子代理上限。**兩格名字與值域都是 dsh 的**
 # （`backgroundMode` 是 `tool-subagent` 的 Config、`maxActiveSubagents` 預設 8，`packages/subagent/tool-subagent/src/index.ts:111`，

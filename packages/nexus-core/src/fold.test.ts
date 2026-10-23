@@ -20,6 +20,7 @@ import {
   TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
 } from './tool-pipeline.js';
 import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
+import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
 import { MAX_TOKENS_MIDDLEWARE_NAME } from './max-tokens.js';
@@ -1378,6 +1379,39 @@ describe('組裝點自有的那五樣', () => {
  * default backend），所以**這一組要自己明著打開**——不然 fold 產出的摘要器在 core 這側
  * 一條測試都沒有。`false` 本身折出什麼也在這一組量（#446）。
  */
+describe('搜尋工具的說明（workspaceSearch，#1605）', () => {
+  const searchNames = (params: { middleware: unknown[] }) =>
+    middlewareNames(params).filter((name) => name === SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+
+  it('組裝點說搜尋走工作區 backend → root 與每個 subagent 都拿到，緊貼讀檔續讀之後', async () => {
+    const params = await fold(
+      [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser')))],
+      { defaultBackend: fakeBackend('default'), workspaceSearch: true },
+    );
+    const rootNames = middlewareNames(params);
+    expect(rootNames).toContain(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+    expect(rootNames.indexOf(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME)).toBe(
+      rootNames.indexOf(READ_CONTINUATION_MIDDLEWARE_NAME) + 1,
+    );
+    const subNames = (registered(params)[0]?.middleware ?? []).map(
+      (mw) => (mw as unknown as { name: string }).name,
+    );
+    expect(subNames).toContain(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+  });
+
+  it('省略或 false → 不掛（記憶體 backend 的 grep 是字面比對，說正規式是說謊）', async () => {
+    for (const extra of [{}, { workspaceSearch: false }]) {
+      const params = await fold([], { defaultBackend: fakeBackend('default'), ...extra });
+      expect(searchNames(params)).toEqual([]);
+    }
+  });
+
+  it('沒有 backend → 就算說了也不掛', async () => {
+    const params = await fold([], { workspaceSearch: true });
+    expect(searchNames(params)).toEqual([]);
+  });
+});
+
 describe('摘要器打底', () => {
   it('排在閘門之後、其餘 registry middleware 之前', async () => {
     const params = await fold(
@@ -2538,6 +2572,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
           store: { saveText: () => Promise.reject(new Error('這條測試不會存')) },
         },
         searchOverflow: { limits: { grepMaxMatches: 250, globMaxResults: 100 } },
+        workspaceSearch: true,
         baseToolNames: gatedTools,
         subagentToolFilter: { deny: ['write_file'] },
         checkpointer: true,
@@ -2560,6 +2595,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
         SESSION_CHECKPOINT_MIDDLEWARE_NAME,
         FS_TOOL_ERRORS_MIDDLEWARE_NAME,
         READ_CONTINUATION_MIDDLEWARE_NAME,
+        SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME,
         'a',
         'b',
         'c',

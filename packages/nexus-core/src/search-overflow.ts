@@ -65,10 +65,40 @@ export const GREP_MAX_MATCHES = 250;
 /** `glob`（與 `ls`）行內最多留幾條路徑，同 dsh 的 `GLOB_MAX_RESULTS`。 */
 export const GLOB_MAX_RESULTS = 100;
 
-/** 兩個上限。欄位名照 dsh `tool-fs-search` 的 Config。 */
+/** `grep` 每一行命中文字最多留幾個位元組，同 dsh 的 `GREP_MAX_LINE_BYTES`（`grep.ts:35`）。 */
+export const GREP_MAX_LINE_BYTES = 2000;
+
+/** 上限。欄位名照 dsh `tool-fs-search` 的 Config。 */
 export interface SearchResultLimits {
   readonly grepMaxMatches: number;
   readonly globMaxResults: number;
+  /**
+   * `grep` 每一行命中文字的位元組上限（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)），在 UTF-8 邊界上切，
+   * 切了加 ` (line truncated)`。**缺席就不切**（舊的呼叫端、單元測試只給前兩格）；`settings/tool-fs-search.ts` 一定會給。
+   */
+  readonly grepMaxLineBytes?: number;
+}
+
+/** 被截的那一行接在後面的標記，照 dsh `previewLine`（`search-core.ts:325`）。 */
+const LINE_TRUNCATED_SUFFIX = ' (line truncated)';
+
+/**
+ * 把一行命中文字限制在 `maxBytes` 個 UTF-8 位元組內，切在字元邊界上，切了就加 {@link LINE_TRUNCATED_SUFFIX}。
+ * 照 dsh `previewLine`（`search-core.ts:325`，`687f282e`）：上限算的是**保留下來的文字**，後綴不算在內；整行還在檔案裡，要看用 `read_file`。
+ *
+ * @param line - 命中那一行（已去掉結尾換行）。
+ * @param maxBytes - 位元組上限（正整數）。
+ * @returns 沒超過就是原字串。
+ */
+export function previewLine(line: string, maxBytes: number): string {
+  // UTF-8 一個字元最多 4 位元組，字串的 UTF-16 長度不會比位元組數大，所以短字串不必編碼。
+  if (line.length * 3 <= maxBytes) return line;
+  const bytes = Buffer.from(line, 'utf8');
+  if (bytes.length <= maxBytes) return line;
+  let end = maxBytes;
+  // 落在 continuation byte（10xxxxxx）上就往前退到字元的第一個位元組。
+  while (end > 0 && (bytes[end]! & 0xc0) === 0x80) end -= 1;
+  return `${bytes.subarray(0, end).toString('utf8')}${LINE_TRUNCATED_SUFFIX}`;
 }
 
 /** 這一層的設定。 */
@@ -113,6 +143,8 @@ interface SearchSlot {
   readonly tool: SearchTool;
   readonly args: Readonly<Record<string, unknown>>;
   readonly limit: number;
+  /** `grep` 每行的位元組上限；缺席就不切。 */
+  readonly maxLineBytes: number | undefined;
   /** 包裝已經處理過這次呼叫的第一次 backend 呼叫。之後的（搜尋卡數總數那一次）原樣通過。 */
   taken: boolean;
   overflow?: Overflow;
@@ -186,8 +218,19 @@ function withGrepCap(method: Method): Method {
     // 只有 `content` 模式按命中排版，見檔頭偏離 2。
     const mode = slot.args.output_mode;
     if (mode !== undefined && mode !== null && mode !== 'content') return result;
-    const matches: unknown[] = result.matches;
-    if (matches.length <= slot.limit || !matches.every(isGrepMatch)) return result;
+    const raw: unknown[] = result.matches;
+    if (!raw.every(isGrepMatch)) return result;
+    // 每一行先限長（#1605，dsh `retainGrepMatches`）：之後不管是行內那段還是存檔的完整結果，都是限過長的。
+    const maxLineBytes = slot.maxLineBytes;
+    const matches: GrepMatchLike[] =
+      maxLineBytes === undefined
+        ? raw
+        : raw.map((match) => {
+            const text = previewLine(match.text, maxLineBytes);
+            return text === match.text ? match : { ...match, text };
+          });
+    const trimmed = matches.some((match, index) => match !== raw[index]);
+    if (matches.length <= slot.limit) return trimmed ? { ...result, matches } : result;
     // 穩定排序：同一檔內保持 backend 的順序，同基座排版（見檔頭偏離 3）。
     const sorted = [...matches].sort(byPath);
     slot.overflow = { tool: 'grep', matches: sorted, kept: slot.limit };
@@ -359,6 +402,7 @@ export function createSearchOverflowMiddleware(options: SearchOverflowOptions): 
         tool: toolName as SearchTool,
         args: typeof args === 'object' && args !== null ? args : {},
         limit,
+        maxLineBytes: toolName === 'grep' ? options.limits.grepMaxLineBytes : undefined,
         taken: false,
       };
       const result = await currentSlot.run(slot, () => handler(request));

@@ -64,6 +64,7 @@ import type { AgentMiddleware } from 'langchain';
 
 import type { FoldedAgentParams } from './fold.js';
 import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
+import { filesystemToolWhitelist } from './fs-tools-options.js';
 import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
 import {
   MODEL_SELECTION_MIDDLEWARE_NAME,
@@ -147,6 +148,31 @@ export function mergeMiddlewareStack(
 }
 
 /**
+ * 交給 `createFilesystemMiddleware` 的選項。**root 與子代理（一次性、背景）三條路只經過這一處**，所以「全開時選項物件沒有 `tools` 這個鍵」
+ * 這件事只需要在這裡守一次（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)，`agent-assembly.test.ts`）：
+ * 傳了 `tools`（即使是全集）建出的工具跟不傳相同，`assembly-parity` 與模型看到的工具清單都看不出差別，但基座會改走白名單那條路，
+ * 之後基座新增檔案工具，全開的部署要等我們更新名單才拿得到。
+ *
+ * @param input - 後端、權限，以及這一組實際會掛的 middleware（決定 `customToolDescriptions`）和 `tool-fs` 設定（決定 `tools` 白名單與描述裡的行數）。
+ * @returns 選項；全開且沒有描述要換時只有 `backend`（與 `permissions`）。
+ */
+export function filesystemMiddlewareOptions(input: {
+  readonly backend: NonNullable<FoldedAgentParams['backend']>;
+  readonly permissions?: FoldedAgentParams['permissions'];
+  readonly middleware: readonly { readonly name: string }[];
+  readonly fileTools?: FoldedAgentParams['fileTools'];
+}): NonNullable<Parameters<typeof createFilesystemMiddleware>[0]> {
+  const descriptions = filesystemToolDescriptions(input.middleware, input.fileTools);
+  const whitelist = filesystemToolWhitelist(input.fileTools);
+  return {
+    backend: input.backend,
+    ...(input.permissions !== undefined && { permissions: input.permissions }),
+    ...(descriptions !== undefined && { customToolDescriptions: descriptions }),
+    ...(whitelist !== undefined && { tools: whitelist }),
+  };
+}
+
+/**
  * 一個宣告式子代理的預設疊：檔案工具、摘要、補懸空呼叫，規格帶 `skills` 時再加 skills。
  *
  * **一次性子代理（經 `task`）與背景子代理（經 `compileSubagentGraph`）共用這一個函式**——兩條路
@@ -158,7 +184,7 @@ export function mergeMiddlewareStack(
  */
 export function subagentDefaultMiddleware(
   spec: Pick<Exclude<SubAgent, { runnable: unknown }>, 'permissions' | 'skills' | 'middleware'>,
-  context: Pick<FoldedAgentParams, 'backend' | 'permissions'>,
+  context: Pick<FoldedAgentParams, 'backend' | 'permissions' | 'fileTools'>,
 ): AgentMiddleware[] {
   const backend = context.backend;
   if (backend === undefined) throw new Error('子代理沒有 backend，檔案系統 middleware 建不起來');
@@ -166,13 +192,15 @@ export function subagentDefaultMiddleware(
   // 缺席時它的預設值是空陣列，與不傳等價。
   const permissions = spec.permissions ?? context.permissions;
   const skills = spec.skills ?? [];
-  const descriptions = filesystemToolDescriptions(spec.middleware ?? []);
   return [
-    createFilesystemMiddleware({
-      backend,
-      ...(permissions !== undefined && { permissions }),
-      ...(descriptions !== undefined && { customToolDescriptions: descriptions }),
-    }),
+    createFilesystemMiddleware(
+      filesystemMiddlewareOptions({
+        backend,
+        permissions,
+        middleware: spec.middleware ?? [],
+        fileTools: context.fileTools,
+      }),
+    ),
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware(),
     ...(skills.length > 0
@@ -217,7 +245,6 @@ export function assembleAgent(params: AssembleAgentParams) {
   const memory = params.memory ?? [];
   const tools = params.tools;
   const systemPrompt = params.systemPrompt ?? '';
-  const descriptions = filesystemToolDescriptions(params.middleware);
 
   for (const spec of params.subagents) assertSupportedSubagent(spec);
   // 基座只在清單裡沒有 `general-purpose` 時才自己補一個；fold 一律自己補，所以這裡斷言它在，
@@ -235,7 +262,11 @@ export function assembleAgent(params: AssembleAgentParams) {
           ...spec,
           tools: spec.tools ?? [],
           middleware: mergeMiddlewareStack(
-            subagentDefaultMiddleware(spec, { backend, permissions }),
+            subagentDefaultMiddleware(spec, {
+              backend,
+              permissions,
+              ...(params.fileTools !== undefined && { fileTools: params.fileTools }),
+            }),
             (spec.middleware ?? []) as AgentMiddleware[],
           ),
         },
@@ -246,11 +277,14 @@ export function assembleAgent(params: AssembleAgentParams) {
     ...(skills.length > 0
       ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
       : []),
-    createFilesystemMiddleware({
-      backend,
-      permissions,
-      ...(descriptions !== undefined && { customToolDescriptions: descriptions }),
-    }),
+    createFilesystemMiddleware(
+      filesystemMiddlewareOptions({
+        backend,
+        permissions,
+        middleware: params.middleware,
+        fileTools: params.fileTools,
+      }),
+    ),
     createSubAgentMiddleware({
       defaultModel: model as never,
       defaultTools: tools,
