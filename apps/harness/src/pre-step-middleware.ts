@@ -105,6 +105,8 @@ export function createPreStepMiddleware(
  *
  * **拒絕 `user`**：日誌上 `user` 是「有人在場」的判別，goal 的直接人類授權認它，`session-log.ts` 的 `user/message` 寫明外掛不能寫這一種。
  * 接縫開了這一格之後，任何 listener 都寫得出來，所以宿主在這裡擋：拋錯、這一輪失敗（listener 的錯本來就不吞，見檔頭）。
+ * **偏離 dsh（理由 2）**：dsh 把 listener 交回的訊息照收、不看 `source`（`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`）；
+ * 這道限制是 nexus 為了 goal 的直接人類授權加的（#1574）。
  */
 function injectionSource(name: string, injection: PreStepInjection): UserMessageSource {
   const source = injection.source;

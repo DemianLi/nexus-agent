@@ -11,12 +11,15 @@ import { writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PreStepInjection, PreStepListener } from '@nexus/agent-loop';
 import {
+  createRepeatReminder,
   MESSAGE_SOURCE_KWARG,
+  REPEAT_REMINDER_MARKER,
   replayConversation,
+  resolveRepeatReminderSettings,
   SESSION_LOG_FORMAT_VERSION,
   SessionRegistry,
   sourceKwargs,
@@ -221,6 +224,66 @@ describe('驗收 6：只認 root 的人話', () => {
       human('/deploy', 'x', { kind: 'user' } as MessageSource),
     ]);
     expect(namesOf(injections)).toEqual(['deploy']);
+  });
+
+  it('重複提醒（沒有來源、帶著模型寫的參數）落在最後一則模型回覆之後：不注入', async () => {
+    // 真的生產者：預設門檻 3／5，第 5 次同參數呼叫出詳細提醒，參數原樣放進 `- arguments:`。
+    const hook = (
+      createRepeatReminder(resolveRepeatReminderSettings()) as {
+        beforeModel?: (state: {
+          messages: readonly BaseMessage[];
+        }) => { messages: BaseMessage[] } | undefined;
+      }
+    ).beforeModel!;
+    const messages: BaseMessage[] = [human('幫我發版')];
+    for (let index = 0; index < 5; index += 1) {
+      messages.push(
+        new AIMessage({
+          content: '',
+          tool_calls: [
+            {
+              id: `c${index}`,
+              name: 'execute',
+              args: { command: 'echo /release-notes done' },
+              type: 'tool_call',
+            },
+          ],
+        }),
+        new ToolMessage({ content: 'ok', tool_call_id: `c${index}`, name: 'execute' }),
+      );
+      messages.push(...(hook({ messages })?.messages ?? []));
+    }
+    const reminder = messages.at(-1)!;
+    // 前提：最後一則是詳細提醒、沒有來源、內容裡有前後是空白的 /release-notes。
+    expect(reminder.additional_kwargs[REPEAT_REMINDER_MARKER]).toEqual({
+      tool: 'execute',
+      count: 5,
+    });
+    expect(reminder.additional_kwargs[MESSAGE_SOURCE_KWARG]).toBeUndefined();
+    expect(reminder.text).toContain(' /release-notes ');
+
+    const ws = workspace(STANDARD);
+    const listener = listenerOn(backendOf(ws));
+    expect(await run(listener, messages)).toBeUndefined();
+    // 對照：同一段字當成人講的話就叫得出來，上面那個 undefined 靠的是排除，不是字本身叫不出。
+    expect(
+      namesOf(await run(listener, [...messages.slice(0, -1), human(reminder.text, 'plain')])),
+    ).toEqual(['release-notes']);
+  });
+
+  it('基座的摘要訊息（只帶 lc_source）裡的 /release-notes：不注入', async () => {
+    // 形狀照基座 `buildSummaryMessage`（deepagents dist `langsmith-*.js` 的 `lc_source: "summarization"`）。
+    const text =
+      'Here is a summary of the conversation to date:\n\n使用者要 /release-notes 的格式。';
+    const summary = new HumanMessage({
+      content: text,
+      id: 'summary',
+      additional_kwargs: { lc_source: 'summarization' },
+    });
+    const ws = workspace(STANDARD);
+    const listener = listenerOn(backendOf(ws));
+    expect(await run(listener, [summary])).toBeUndefined();
+    expect(namesOf(await run(listener, [human(text, 'plain')]))).toEqual(['release-notes']);
   });
 });
 

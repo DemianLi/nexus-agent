@@ -9,12 +9,15 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SystemMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { createSkillsMiddleware, FilesystemBackend } from 'deepagents';
 import type { BackendProtocolV2, BackendRuntime, FileDownloadResponse, LsResult } from 'deepagents';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { sourceKwargs } from './message-source.js';
+import { REPEAT_REMINDER_MARKER } from './repeat-reminder.js';
 import {
+  isHumanSpeech,
   modelVisibleSkillsBackend,
   parseSkillInvocation,
   renderSkillInvocation,
@@ -476,5 +479,40 @@ describe('skills 中介層交給模型的 system prompt', () => {
     expect(await invoke(build(ours, readOnly('EACCES: permission denied'), ['/skills/']))).toBe(
       '系統。',
     );
+  });
+});
+
+describe('isHumanSpeech：/名字 叫用只掃人講的話（#1574）', () => {
+  it.each([
+    ['沒有來源的人話', new HumanMessage('hi /deploy'), true],
+    [
+      '來源是 user（插話）',
+      new HumanMessage({ content: 'x', additional_kwargs: sourceKwargs({ kind: 'user' }) }),
+      true,
+    ],
+    [
+      '外掛注入',
+      new HumanMessage({
+        content: 'x',
+        additional_kwargs: sourceKwargs({ kind: 'plugin', plugin: 'P' }),
+      }),
+      false,
+    ],
+    [
+      '重複提醒（沒有來源）',
+      new HumanMessage({
+        content: 'x',
+        additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool: 't', count: 5 } },
+      }),
+      false,
+    ],
+    [
+      '基座的摘要訊息（沒有來源）',
+      new HumanMessage({ content: 'x', additional_kwargs: { lc_source: 'summarization' } }),
+      false,
+    ],
+    ['模型回覆', new AIMessage('hi /deploy'), false],
+  ])('%s → %s', (_label, message, expected) => {
+    expect(isHumanSpeech(message)).toBe(expected);
   });
 });

@@ -469,8 +469,9 @@ export interface SummarizationSettings {
  *
  * 窗口比這道還小的話它會來不及；`messages: 60` 那道就是為此存在的第二道。60 則約當
  * 30 輪模型呼叫，而迴圈上限的預設值（harness 的 `#settings/recursion-limit` 條目，100）照
- * `模型輪數 = floor((上限 - 1) / 每輪格數)` 換算：預設組裝每輪三格是 33 輪，CLI 的出貨清單另有三顆
- * 每次 invoke 走一次的 `beforeAgent`，是 31 輪（2026-10-23，#1574），兩者跑到上限前都越過 60 則——所以一場跑滿的
+ * `模型輪數 = floor((上限 - 1) / 每輪格數)` 換算：預設組裝每輪三格是 33 輪；CLI 的出貨清單另有四顆
+ * 每次 invoke 走一次的 `beforeAgent`（基座 skills 中介層一顆、pre-step listener 三顆），每顆從分子再扣一格，
+ * 是 `floor((上限 - 2 - 3) / 3)` ＝ 31 輪（2026-10-23，#1574），兩者跑到上限前都越過 60 則——所以一場跑滿的
  * 長任務會摘要一次，正常的基準任務（最長 3 次工具呼叫）碰不到它。serve 每輪四格只有 23 輪，
  * 單次 invoke 湊不到 60 則（2026-10-02 實測最多 51 則），要靠同一條 thread 後面幾輪累積才碰得到。
  *
@@ -1589,8 +1590,8 @@ function withArgTruncationLog(
   } as AgentMiddleware;
 }
 
-/** 基座的摘要訊息：`buildSummaryMessage` 蓋的 `lc_source`。 */
-function isSummarizationMessage(message: BaseMessage): boolean {
+/** 基座的摘要訊息：`buildSummaryMessage` 蓋的 `lc_source`。`skill-catalog.ts` 的 {@link isHumanSpeech} 也用它。 */
+export function isSummarizationMessage(message: BaseMessage): boolean {
   return (
     (message.additional_kwargs as { lc_source?: unknown } | undefined)?.lc_source ===
     'summarization'

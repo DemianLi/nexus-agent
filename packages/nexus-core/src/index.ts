@@ -184,7 +184,7 @@ export type {
   SkillCatalogScan,
   SkillInvocationPolicy,
 } from './skill-catalog.js';
-export { renderSkillInvocation, scanSkills } from './skill-catalog.js';
+export { isHumanSpeech, renderSkillInvocation, scanSkills } from './skill-catalog.js';
 export type {
   DispatchMode,
   EventDispatcher,

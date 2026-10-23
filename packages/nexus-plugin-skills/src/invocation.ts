@@ -14,8 +14,10 @@
  *
  * - **手勢**：同 dsh 的 `SKILL_GESTURE`（`:411`）：前後是空白或行首行尾，所以 `/usr/bin`、`5/8`、`/deploy/x` 都不算；依第一次出現的
  *   順序去重（`:420-432`）。只看 text 區塊。
- * - **只認人話**：只掃來源是人的訊息（沒有來源，或 `kind === 'user'`；`@nexus/core` 的 `message-source.ts`「缺席就是人」），續行輪、
- *   引用別的會話的快照、外掛注入的都不掃——外部文字偽造不了手勢（dsh `:420-423`）。
+ * - **只認人話**：dsh 只掃 `kind === 'user'`（`:420-423`），它每個生產者都帶來源。nexus 圖上那句人話沒有來源（「缺席就是人」），所以
+ *   改成排除機器造的（`@nexus/core` 的 `isHumanSpeech`）：有非 `user` 來源的（續行輪、引用別的會話的快照、外掛注入、技能叫用本身），
+ *   以及兩種沒有來源的機器訊息——**重複提醒**（詳細那一版帶著模型寫的工具參數）與**基座的摘要訊息**（模型寫的）。模型寫的字因此
+ *   造不出手勢。**沒有排除到的**：今天以後新增、卻沒帶來源也沒帶上面兩種記號的機器訊息會被當成人話——新的生產者要帶來源（#662）。
  * - **叫不出來就是一般文字**：名字找不到、或 `user-invocable: false`，不注入、不報錯（`:195-197`）。
  * - **掃描不完整就一份都不注入**：dsh 的檔案提供者讀 `SKILL.md` 遇到「不存在」以外的錯誤會拋（`skill-filesystem/src/index.ts:865`、
  *   `:879`、`:888`），註冊表跳過整個提供者（`skill/src/index.ts:602-609`），那個提供者底下的技能這一步全叫不出來。nexus 的所有來源是
@@ -42,7 +44,7 @@
  *    nexus 的模型清單是組 thread 時依**列序**折進去的快照（`apps/harness/src/plugin-tree.ts` 的 `#assignSkillSources`、`plugin-config.ts` 的
  *    `registry.skills.addSource`），listener 拿不到那一份，只拿得到行程級的登記處，它依**登記順序**、而且是活的。平常兩者相同。
  *    **留下的缺口**：清單上有兩列以上 skills、兩列有同名技能、而且其中一列重載過（停用再啟用，登記順序換了），`/名字` 跟模型清單可能
- *    挑到不同的那一份；thread 開著時改了來源也一樣。**撤除條件**：有「每條 thread 的技能來源」查找（PM 另開 backlog）。
+ *    挑到不同的那一份；thread 開著時改了來源也一樣。**撤除條件**：有「每條 thread 的技能來源」查找（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）。
  *
  * ## 代價
  *
@@ -61,12 +63,7 @@ import type { Context } from '@nexus/cordis';
 import { fsToken } from '@nexus/fs';
 import type { FsLookup } from '@nexus/fs';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
-import {
-  messageSourceOf,
-  renderSkillInvocation,
-  scanSkills,
-  skillSourcesToken,
-} from '@nexus/skills';
+import { isHumanSpeech, renderSkillInvocation, scanSkills, skillSourcesToken } from '@nexus/skills';
 import { z } from 'zod';
 
 /** 插件在樹上的列用的名字。 */
@@ -74,7 +71,7 @@ export const name = 'skill-invocation';
 
 /**
  * 要的服務：`agentLoop`（`^1.2.0`，登記 listener；注入要帶自己的 `source`，1.1.0 的宿主會靜靜記成 `plugin`，所以擋在範圍上）、
- * `fs`（`^2.0.0`，呼叫當下拿這條 thread 的 backend 與位址）、`skillSources`（`^1.0.0`，呼叫當下讀來源）。範圍在這裡宣告，落進 Cordis 的
+ * `fs`（`^2.0.0`，呼叫當下拿這條 thread 的 backend 與位址；只用 `forCall` 與它交回的 `address`，2.0.0 就有（#1471、#1774），用不到 2.1.0 加的 `sharedWorkspacePrefix`，所以不跟 `agent-instructions` 一起宣告 `^2.1.0`）、`skillSources`（`^1.0.0`，呼叫當下讀來源）。範圍在這裡宣告，落進 Cordis 的
  * `Context.intercept`，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
@@ -148,13 +145,6 @@ function markOf(message: BaseMessage): InvocationMark | undefined {
   const { name, forMessageId } = raw as { name?: unknown; forMessageId?: unknown };
   if (typeof name !== 'string') return undefined;
   return { name, forMessageId: typeof forMessageId === 'string' ? forMessageId : undefined };
-}
-
-/** 人講的話：沒有來源，或來源是 `user`（`message-source.ts`「缺席就是人」）。 */
-function isHumanSpeech(message: BaseMessage): boolean {
-  if (message.type !== 'human') return false;
-  const source = messageSourceOf(message);
-  return source === undefined || source.kind === 'user';
 }
 
 function textBlocks(message: BaseMessage): string[] {

@@ -43,9 +43,9 @@
 
 import { defineToken } from '@nexus/sdk';
 
-// `/名字` 叫用要的三個值（#1574）：掃技能（含完不完整）、渲染給模型照做的那一段、讀一則訊息的來源。
-export { messageSourceOf, renderSkillInvocation, scanSkills } from '@nexus/core';
-export type { MessageSource, SkillCatalogEntry, SkillCatalogScan } from '@nexus/core';
+// `/名字` 叫用要的三個值（#1574）：掃技能（含完不完整）、渲染給模型照做的那一段、認一則訊息是不是人講的話。
+export { isHumanSpeech, renderSkillInvocation, scanSkills } from '@nexus/core';
+export type { SkillCatalogEntry, SkillCatalogScan } from '@nexus/core';
 
 /** 契約版本（semver）。介面破壞性改動跳 major，消費者的 `inject` 範圍擋下不相容的提供者。 */
 export const SKILL_SOURCES_CONTRACT_VERSION = '1.0.0';

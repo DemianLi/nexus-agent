@@ -110,6 +110,7 @@ export const RECURSION_LIMIT_SERVICE = 'recursionLimit';
  * 宿主為 `agent/pre-step` 接縫的**每一位** listener 建一顆 `beforeAgent` middleware（#1474），每顆每次 invoke 再吃一格。
  * 出貨清單今天有三位（工作區指令、`/名字` 叫用、時間讀數），2026-10-23 實測（#1574）：每輪三格時
  * `模型輪數 = floor((上限 - 2 - 顆數) / 3)`，100 換算成 **31 輪**（只有工作區指令那一顆的年代是 32，2026-09-18）。
+ * `− 2` 是裸組裝的 `− 1` 再加基座 skills 中介層的 `SkillsMiddleware.before_agent`（裸組裝沒有這一顆，2026-10-23 對兩邊的節點清單實測）。
  * **有沒有給 `--workspace` 都一樣**：沒有工作區時組裝點照樣墊一顆 `StateBackend`，那幾顆 middleware 照建，只是 listener
  * 找不到東西就什麼都不加（`agent-instructions-on-tree.test.ts` 的 D 組兩邊都量到 31）。dsh 的 pre-step 是一個事件依序跑完，
  * 不會每位 listener 吃一格；這一格是 LangGraph 基座的代價，併成一顆節點的討論在 [#1917](https://github.com/DemianLi/nexus-agent/issues/1917)。

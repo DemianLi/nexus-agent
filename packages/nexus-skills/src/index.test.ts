@@ -63,7 +63,7 @@ describe('相依關係', () => {
   it('轉出的三個值與 core 是同一個參照（轉出，不是複製）', () => {
     expect(skills.scanSkills).toBe(core.scanSkills);
     expect(skills.renderSkillInvocation).toBe(core.renderSkillInvocation);
-    expect(skills.messageSourceOf).toBe(core.messageSourceOf);
+    expect(skills.isHumanSpeech).toBe(core.isHumanSpeech);
   });
 
   it('主入口對 @nexus/core 只有單向轉出（#1574 Q3 (a)），不 import 它來用；core 放 peer、devDependencies 留 workspace 版本', () => {
