@@ -470,6 +470,17 @@ describe('gzip 壓縮（#1570）', () => {
     expect(gunzipSync(streamed.body).equals(Buffer.from(BIG_JSON))).toBe(true);
   });
 
+  it('門檻目前只對自帶 content-length 的回應有效：沒有 content-length 的小回應（"ok"）照樣被壓（與 dsh 相同；docs/operations.md 的說明靠這一格）', async () => {
+    running = await startWireServer({
+      handler: fixed(() => new Response('ok', { headers: { 'content-type': 'text/plain' } })),
+      compression: { level: 1, thresholdBytes: 1024 },
+    });
+    const response = await rawGet(running.url, { 'accept-encoding': 'gzip' });
+    expect(response.headers['content-length']).toBeUndefined();
+    expect(response.headers['content-encoding']).toBe('gzip');
+    expect(gunzipSync(response.body).toString()).toBe('ok');
+  });
+
   it('排除：content-range 不壓；application/gzip 不再壓一次；multipart/form-data 一律壓', async () => {
     running = await startWireServer({
       handler: {

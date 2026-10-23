@@ -234,9 +234,10 @@ const USAGE = `用法：
   --compression <mode> none｜gzip，預設 none（不壓，跟以前一樣）。gzip：網頁 bundle、CSS 與 JSON 回應在瀏覽器支援時壓縮再送；
                        SSE 下行與帶 content-range 的回應照原樣送
   --compression-level <0-9>
-                       gzip 等級，預設 1；要配 --compression gzip
+                       gzip 等級，預設 1
   --compression-threshold <bytes>
-                       已知長度小於這個位元組數就不壓，預設 1024；要配 --compression gzip
+                       已知長度小於這個位元組數就不壓，預設 1024；
+                       目前只對自帶 content-length 的回應有效
   --no-goal-driver     關掉自動續行：一個 active 的目標沒達成時，預設會自己再開一輪
                        （上限是那個目標自己的 max_goal_rounds）；關掉之後一輪結束就結束
   --goal-driver        明講要開（預設就是開；與 --no-goal-driver 不能一起給）

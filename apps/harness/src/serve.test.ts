@@ -101,9 +101,15 @@ describe('serve 的旗標', () => {
       /非負整數/u,
     );
     expect(() => parseServeArgs(['--compression', 'brotli'])).toThrow(/none 或 gzip/u);
-    // 沒打開 gzip 就給等級或門檻：悄悄被忽略比 usage error 更難除錯。
-    expect(() => parseServeArgs(['--compression-level', '3'])).toThrow(/--compression gzip/u);
-    expect(() => parseServeArgs(['--compression-threshold', '10'])).toThrow(/--compression gzip/u);
+    // 逐欄獨立驗（dsh webserver/src/index.ts:295-296）：沒打開 gzip 時給等級或門檻照收、不用；值本身不合法照樣擋。
+    expect(parseServeArgs(['--compression-level', '3']).compression).toBeUndefined();
+    expect(
+      parseServeArgs(['--compression', 'none', '--compression-threshold', '10']).compression,
+    ).toBeUndefined();
+    expect(() => parseServeArgs(['--compression-level', '10'])).toThrow(/0 到 9/u);
+    expect(() => parseServeArgs(['--compression', 'none', '--compression-threshold', 'x'])).toThrow(
+      /非負整數/u,
+    );
   });
 
   it('--patch 給空字串是錯的，不是「沒給」', () => {

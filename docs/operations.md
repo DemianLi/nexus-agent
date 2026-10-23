@@ -831,9 +831,9 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 # 可再調：--compression-level 1（0 到 9 的整數，預設 1）、--compression-threshold 1024（位元組，預設 1024）
 ```
 
-- **壓什麼**：網頁 bundle、CSS 與 JSON 回應（歷史頁、列表），而且只在瀏覽器的 `Accept-Encoding` 接受 gzip 時（`gzip;q=0.5, identity;q=1` 這種偏好 identity 的不壓）。已知長度小於門檻的不壓，長度未知的串流可以壓。
-- **不壓什麼**：`text/event-stream`（SSE 下行）與帶 `Content-Range` 的回應。壓縮串流會把逐顆 frame 積在緩衝裡，等於關掉 SSE 的即時性，所以 SSE 一律照原樣送；帶 range 的回應壓了位元組範圍就對不上。探針與 `/metrics` 照同一套規則（探針本文只有幾個字，低於門檻；指標超過門檻且抓取端要 gzip 時會壓）。
-- **旗標在沒打開 gzip 時就給等級或門檻是 usage error**，不是悄悄忽略；等級超出 0 到 9、門檻不是非負整數同樣是 usage error，在任何檔案寫入之前失敗。
+- **壓什麼**：網頁 bundle、CSS 與 JSON 回應（歷史頁、列表），而且只在瀏覽器的 `Accept-Encoding` 接受 gzip 時（`gzip;q=0.5, identity;q=1` 這種偏好 identity 的不壓）。已知長度小於門檻的不壓，長度未知的串流可以壓；**目前只對自帶 `Content-Length` 的回應有效**——nexus 的回應都沒有已知長度（`writeResponse` 先 `writeHead` 再寫 body），所以門檻實際上不會生效，語意跟 dsh 相同。
+- **不壓什麼**：`text/event-stream`（SSE 下行）與帶 `Content-Range` 的回應。壓縮串流會把逐顆 frame 積在緩衝裡，等於關掉 SSE 的即時性，所以 SSE 一律照原樣送；帶 range 的回應壓了位元組範圍就對不上。探針與 `/metrics` 照同一套規則：因為門檻不生效，抓取端帶 `Accept-Encoding: gzip` 時連只有 `ok` 兩個字的探針本文也會被壓（實測壓成 22 位元組），抓取端不需要這個的話不要帶。
+- **三個旗標逐欄獨立驗**（同 dsh）：等級超出 0 到 9、門檻不是非負整數、`--compression` 不是 `none`／`gzip` 都是 usage error，在任何檔案寫入之前失敗；沒打開 gzip 時給等級或門檻照收但不生效。
 - **設定走旗標，不走 `cordis.yml` 的列**：listener 的設定（`--port`）本來就是旗標，將來的 `--host` 與 TLS（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）也一樣。起動時決定，改了要重啟。
 - **前面有反向代理的部署**：代理已經在壓的話不必再打開，兩層各壓一次只是白耗 CPU。
 - **偏離 dsh**：無。形狀照抄 dsh `packages/host/webserver/src/index.ts` 的 `createGzipMiddleware`（`:218-246`）與接在 listener 最外層的做法（`:443-457`），只是載體從 Cordis 的 `WebServer` 服務換成 `wire-server.ts`。

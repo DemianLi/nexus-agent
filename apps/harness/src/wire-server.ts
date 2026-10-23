@@ -82,7 +82,7 @@ export interface WireCompression {
 /**
  * 把 `serve` 的三個壓縮旗標驗成 {@link WireCompression}（沒打開就是 `undefined`）。驗法照 dsh 的 schema（`webserver/src/index.ts:294-296`）：
  * 等級是 0 到 9 的整數，門檻是非負整數；不合法丟 `Error`，由呼叫端接上用法說明。
- * **等級或門檻在沒打開 gzip 時給了也丟**：旗標悄悄被忽略比起 usage error 更難除錯。
+ * **逐欄獨立驗**（dsh 的 schema 就是這樣）：`--compression none` 配上等級或門檻照收（值驗過、然後不用），不做三個旗標之間的交叉檢查。
  */
 export function parseCompressionFlags(flags: {
   readonly compression?: string | undefined;
@@ -92,14 +92,6 @@ export function parseCompressionFlags(flags: {
   const mode = flags.compression ?? 'none';
   if (mode !== 'none' && mode !== 'gzip') {
     throw new Error(`--compression 只收 none 或 gzip，收到 "${mode}"。`);
-  }
-  if (mode === 'none') {
-    if (flags.level !== undefined || flags.threshold !== undefined) {
-      throw new Error(
-        '--compression-level 與 --compression-threshold 要配 --compression gzip 才有意義。',
-      );
-    }
-    return undefined;
   }
   const level = flags.level === undefined ? DEFAULT_COMPRESSION_LEVEL : integerFlag(flags.level);
   if (level === undefined || level > 9) {
@@ -112,7 +104,7 @@ export function parseCompressionFlags(flags: {
   if (thresholdBytes === undefined) {
     throw new Error(`--compression-threshold 要給非負整數（位元組），收到 "${flags.threshold}"。`);
   }
-  return { level, thresholdBytes };
+  return mode === 'gzip' ? { level, thresholdBytes } : undefined;
 }
 
 /** 只收十進位的非負整數（`1e3`、`1.5`、空字串都不收）。 */
@@ -149,7 +141,8 @@ function createGzipMiddleware(config: WireCompression): NodeMiddleware {
   }) as unknown as NodeMiddleware;
 
   return (req, res, next) => {
-    // 沒有 socket 的 response（dsh 的 Web Worker 通道）搬的是原樣位元組，不壓。
+    // 沒有 socket 的 response（dsh 的 Web Worker 通道）搬的是原樣位元組，不壓。照 dsh 逐字保留；
+    // nexus 沒有這種通道，而 node:http 在 pipelining 時第二個請求的 socket 是 `null` 不是 `undefined`，所以這個條件在這裡不會成立。
     if ((res as { socket?: unknown }).socket === undefined) {
       next();
       return;
