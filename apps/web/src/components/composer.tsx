@@ -235,12 +235,14 @@ export function Composer({
   // 照 dsh `InputTriggerController.track`：片段不見了、或換成別的片段，收起的記錄就作廢——刪光重打 `/` 要再跳出來。
   if (dismissed !== null && !sameHit(span, dismissed)) setDismissed(null);
   const candidates = hit === null ? [] : slashMenu(commands, skills, hit);
-  const open = hit !== null && candidates.length > 0 && !sameHit(hit, dismissed);
+  // 鎖住時兩個選單都收起、也不再問（dsh 進 adjudicating 時 `popup.dismiss()` 並凍結觸發，`facade.ts:428-431`）。
+  const open = !locked && hit !== null && candidates.length > 0 && !sameHit(hit, dismissed);
   const active = open ? candidates[Math.min(highlight, candidates.length - 1)] : undefined;
 
   const [menu, dispatchMenu] = useReducer(reduceMentionMenu, MENTION_MENU_CLOSED);
   const generation = useRef(0);
   const asking =
+    !locked &&
     mention !== null &&
     (fileReferences !== undefined ||
       sessionReferences !== undefined ||

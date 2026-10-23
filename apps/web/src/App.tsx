@@ -395,6 +395,8 @@ function ConversationView({
    * 開頭像命令的那一行在等命令清單認（#1929，dsh 送出狀態機的 `adjudicating`）：等的期間不再送任何一行、草稿不動。
    */
   const [adjudicating, setAdjudicating] = useState(false);
+  // 同一件事給非同步回呼讀：前一句晚到的拒收不能在鎖住期間改寫畫面（dsh `draftInitializationBlocked`）。
+  const adjudicatingNow = useRef(false);
   // 上次沒送出去的那一句和它的請求編號（#1335）：原樣重送時沿用，伺服器才認得是同一句；收下了就丟掉。
   const pendingRequest = useRef<PendingRequest | undefined>(undefined);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
@@ -875,7 +877,9 @@ function ConversationView({
                       pendingRequest.current = { id: requestId, sentence };
                       // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
                       setDraft((current) => (current === '' ? text : current));
-                      if (mentioned !== undefined)
+                      // 標記不放回鎖住的輸入框：那一行送出時帶的是按 Enter 當下的標記，放回去畫面就跟送出的對不上
+                      // （dsh `facade.ts:301-304` 的 `draftInitializationBlocked`，#1929）。草稿那一行不用擋：鎖住時草稿一定不是空的。
+                      if (mentioned !== undefined && !adjudicatingNow.current)
                         setMentionedAgent((current) => current ?? mentioned);
                       if ('cancelled' in rejected) {
                         toast('已取消上傳', { description: rejected.message });
@@ -893,8 +897,10 @@ function ConversationView({
                   // Enter 不動作、草稿不動；認完才照命令或一句話送。抓不到清單就說原因，草稿、附件、標記都沒動過。光打
                   // `/feedback` 是開對話框，不用認。
                   if (commandToken(text) !== undefined && text.trim() !== FEEDBACK_COMMAND_LINE) {
+                    adjudicatingNow.current = true;
                     setAdjudicating(true);
                     void conversation.adjudicate(text).then((verdict) => {
+                      adjudicatingNow.current = false;
                       setAdjudicating(false);
                       if (verdict.kind === 'released') return;
                       if (verdict.kind === 'failed') {
