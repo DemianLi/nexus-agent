@@ -21,7 +21,8 @@
  *
  * ## 已知的洞（Q3 (a) 的代價）
  *
- * 純語法認不出別名：`const c = ctx; c.root`、把參數取別的名字、`const { root } = someOtherName` 都抓不到；
+ * 純語法認不出別名：`const c = ctx; c.root`、把參數取別的名字、`const { root } = someOtherName`、把 `Context` 改名 import
+ * 後的 `ctx[C.root]`、先把 `Symbol.for('cordis.root')` 存進變數再取，都抓不到；
  * 頂層的 `const state = { count: 0 }` 這種「物件本身可變」也不在清單裡。這些由審查與一致性套件的 `unload`
  * 那一格補（副作用沒走 `ctx.effect`，卸載後就有殘留，`unload` 會紅）。真的有人繞過，再升級成帶型別的規則。
  *
@@ -59,6 +60,25 @@ function ctxMember(member: string): string {
   ].join(', ');
 }
 
+/**
+ * 樹根的另一種寫法：上游 #207（rc.12）把 `ctx.root` 搬到 `ctx[Context.root]`，鍵是 `Symbol.for('cordis.root')`。
+ * 兩種寫法都擋：`ctx[Context.root]`／`ctx[Symbol.for('cordis.root')]`，以及 `this.ctx[…]`。`Context` 被改名 import 時抓不到，
+ * 同上面「已知的洞」。
+ */
+function ctxRootSymbol(): string {
+  const keys = [
+    `[property.type='MemberExpression'][property.object.name='Context'][property.property.name='root']`,
+    `[property.type='CallExpression'][property.callee.object.name='Symbol'][property.callee.property.name='for'][property.arguments.0.value='cordis.root']`,
+  ];
+  const owners = [
+    `[object.name='ctx']`,
+    `[object.type='MemberExpression'][object.object.type='ThisExpression'][object.property.name='ctx']`,
+  ];
+  return owners
+    .flatMap((owner) => keys.map((key) => `MemberExpression${owner}[computed=true]${key}`))
+    .join(', ');
+}
+
 /** 頂層宣告的位置：`Program > …` 與 `Program > ExportNamedDeclaration > …`。 */
 function topLevel(rest: string): string {
   return [`Program > ${rest}`, `Program > ExportNamedDeclaration > ${rest}`].join(', ');
@@ -72,9 +92,9 @@ function topLevel(rest: string): string {
 export const pluginLintSyntaxRestrictions: readonly PluginLintSyntaxRestriction[] = [
   {
     id: 'ctx-root',
-    selector: ctxMember('root'),
+    selector: [ctxMember('root'), ctxRootSymbol()].join(', '),
     message:
-      '插件不准碰 `ctx.root`：它拿到整棵樹，繞過 `inject` 宣告與卸載追蹤。要別的服務就用 `inject` 宣告，在 `apply` 裡 `ctx.get(token)` 取。',
+      '插件不准碰 `ctx.root`（含 `ctx[Context.root]`）：它拿到整棵樹，繞過 `inject` 宣告與卸載追蹤。要別的服務就用 `inject` 宣告，在 `apply` 裡 `ctx.get(token)` 取。',
   },
   {
     id: 'ctx-registry',
