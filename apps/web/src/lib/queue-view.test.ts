@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canRunSlash,
+  commandArm,
   commandToken,
   namesCommand,
   slashRunsWhileBusy,
@@ -139,16 +140,23 @@ describe('canRunSlash', () => {
 });
 
 /** 照伺服器的寫法登記命令：同一份定義產生閘門查的 definition 與 `slash.list` 送的 descriptor。 */
-function command(name: string, runWhileBusy?: readonly string[]) {
+function command(name: string, runWhileBusy?: readonly string[], input = true) {
   const definition: CommandDefinition = {
     name,
     description: `${name} 的說明`,
+    ...(input ? { input: { hint: '<參數>' } } : {}),
     ...(runWhileBusy === undefined ? {} : { runWhileBusy }),
     handler: () => ({ kind: 'success' }),
   };
   return normalizeCommandDefinition(definition);
 }
-const REGISTERED = [command('goal', ['pause']), command('plan'), command('demo', ['a b', 'stop'])];
+// 出貨的命令都宣告了 `input`（`/goal`、`/plan` 收參數）；`compact` 是沒宣告的 bare 命令（#1971），只有第三方會登記這種。
+const REGISTERED = [
+  command('goal', ['pause']),
+  command('plan'),
+  command('demo', ['a b', 'stop']),
+  command('compact', undefined, false),
+];
 const COMMANDS: readonly SlashDescriptor[] = REGISTERED.map((r) => r.descriptor);
 const FIND = {
   find: (name: string) => REGISTERED.find((r) => r.definition.name === name)?.definition,
@@ -201,6 +209,29 @@ describe('namesCommand：開頭的字在命令清單上才是命令（#1929，Q2
 
   it('清單是空的：什麼都不是命令', () => {
     expect(namesCommand([], '/plan')).toBe(false);
+  });
+
+  it('沒宣告 input 的命令只有整行是 /名字 才是命令；帶了字就是一句話（#1971，dsh matchEnter `:358`）', () => {
+    expect(namesCommand(COMMANDS, ' /compact ')).toBe(true);
+    expect(namesCommand(COMMANDS, '/compact 留下最近三輪')).toBe(false);
+  });
+});
+
+describe('commandArm：命令走哪一路（#1971，dsh matchEnter）', () => {
+  it.each([
+    ['/plan', 'claim'],
+    ['/plan off', 'claim'],
+    [' /goal 把登入改好 ', 'claim'],
+    ['/goal pause', 'claim'],
+    ['/compact', 'detached'],
+    [' /compact\t', 'detached'],
+    ['/compact 留下最近三輪', undefined],
+    ['/compact\n留下', undefined],
+    ['/deploy 今天', undefined],
+    ['/compacting', undefined],
+    ['說 /compact', undefined],
+  ] as const)('%j → %s', (line, arm) => {
+    expect(commandArm(COMMANDS, line)).toBe(arm);
   });
 });
 

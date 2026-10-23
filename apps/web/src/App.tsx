@@ -916,7 +916,7 @@ function ConversationView({
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
                   // `route` 是等清單認出來的結果（沒認就是 `undefined`），一路交給 `send`，不再認第二次（#1929）。等的期間
                   // 輸入框鎖著，這裡讀到的草稿、附件、標記就是畫面上的值。
-                  const submit = (route: 'command' | 'sentence' | undefined) => {
+                  const submit = (route: 'command' | 'sentence' | undefined, detached = false) => {
                     // 開頭是不是命令照送出路由認（#1929）：技能的 `/deploy 今天` 是一句話。
                     const isCommand =
                       route === undefined
@@ -928,7 +928,16 @@ function ConversationView({
                       serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
                         ? draftAttachments.items
                         : [];
-                    // 不帶附件的命令照 dsh 的 `submitting`（`input/machine.ts:138`、`:183-192`，#1941）：在途期間不收下一次送出、
+                    // 沒宣告 input、整行只有 `/名字` 的命令照 dsh 的 detached（`ui-commands/src/client/service.ts:358-365` 先
+                    // `consumeVia` 再 `runDetached`，`input/machine.ts:155-175` 收到 `'handled'` 就回 plain，#1971）：當場拿掉、
+                    // 背景執行，不進在途、不鎖輸入框；沒收下由狀態列講（`runSlash`），草稿不放回去。
+                    if (detached && items.length === 0) {
+                      setDraft('');
+                      pendingRequest.current = undefined;
+                      void conversation.send(text, mode, undefined, undefined, undefined, route);
+                      return;
+                    }
+                    // 有 input 的命令照 dsh 的 `submitting`（`input/machine.ts:138`、`:183-192`，#1941）：在途期間不收下一次送出、
                     // 輸入框鎖住、草稿不動；收下（命令成功）才清掉送出的那段，沒收下草稿原樣，原因由狀態列講（`runSlash`），
                     // 不另跳 toast。在認命令那一段的回呼裡同步進來，兩段之間沒有空檔。
                     if (isCommand && items.length === 0) {
@@ -1043,7 +1052,7 @@ function ConversationView({
                         toast.error('這一句沒送出去', { description: verdict.message });
                         return;
                       }
-                      submit(verdict.kind);
+                      submit(verdict.kind, verdict.kind === 'command' && verdict.detached);
                     });
                     return;
                   }
@@ -1094,20 +1103,16 @@ function ConversationView({
                   : {})}
                 decorated={DECORATED_COMMANDS}
                 // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 與命令宣告過的那幾行過得去，#1517）。
-                // 認命令或命令在途的期間不收第二次，執行期間也算命令在途（#1941；dsh 那段期間整個 editor 鎖著，選單沒有入口，
-                // `InputBar.tsx:147`、`:154`）。
+                // 認命令或有 input 的命令在途的期間不收（#1941；dsh 那段期間整個 editor 鎖著，選單沒有入口，`InputBar.tsx:147`、
+                // `:154`）。選單直接執行的只有 bare 命令與被裝飾的命令（`applySlashPick`）：照 dsh 背景執行，不進在途
+                // （`ui-commands/src/client/service.ts:271-275` 的 `runDetached`，#1971），沒收下由狀態列講（`runSlash`）。
                 onRunCommand={(line) => {
                   if (adjudicatingNow.current || submittingNow.current || !canSendLine(line)) {
                     return false;
                   }
                   const modelRan = runModelLine(line);
                   if (modelRan !== undefined) return modelRan;
-                  submittingNow.current = true;
-                  setSubmitting(true);
-                  void conversation.send(line).finally(() => {
-                    submittingNow.current = false;
-                    setSubmitting(false);
-                  });
+                  void conversation.send(line);
                   return true;
                 }}
                 // 一行在等命令清單認的期間整個鎖住：文字框唯讀、附件與 @ 標記改不了（dsh `InputBar.tsx:139-156`，#1929）。

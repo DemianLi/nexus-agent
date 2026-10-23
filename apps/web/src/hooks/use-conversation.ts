@@ -57,7 +57,7 @@ import type { Publication } from '@/lib/frame-publisher';
 import { RatingsController } from '@/lib/feedback-ratings';
 import { goalPauseFailureText } from '@/lib/goal-bar';
 import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
-import { commandToken, namesCommand } from '@/lib/queue-view';
+import { commandArm, commandToken } from '@/lib/queue-view';
 import { CommandDirectory } from '@/lib/command-directory';
 import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
@@ -134,7 +134,11 @@ export interface SendRejected {
  * 這條 thread 的畫面卸載了，什麼都不必說（dsh 的 `onRelease` 不出聲）。
  */
 export type Adjudication =
-  | { readonly kind: 'command' }
+  /**
+   * `detached`：沒宣告 `input`、整行只有 `/名字` 的命令（{@link commandArm}，#1971）：照 dsh 當場拿掉、背景執行，不進在途。
+   * 在認完的那一刻、用認的那份清單判，呼叫端不必再讀自己手上可能較舊的清單。
+   */
+  | { readonly kind: 'command'; readonly detached: boolean }
   | { readonly kind: 'sentence' }
   | { readonly kind: 'failed'; readonly message: string }
   | { readonly kind: 'released' };
@@ -862,7 +866,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           message: commandsFailedText(error instanceof Error ? error.message : String(error)),
         };
       }
-      return namesCommand(commands, line) ? { kind: 'command' } : { kind: 'sentence' };
+      const arm = commandArm(commands, line);
+      return arm === undefined
+        ? { kind: 'sentence' }
+        : { kind: 'command', detached: arm === 'detached' };
     },
     [commandDirectory],
   );
@@ -891,11 +898,12 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return undefined;
       }
       // 開頭那個字是命令清單上的名字才是命令（#1929，#1574 Q2 (a)），其餘整行走 `run.start`：技能的 `/deploy 今天`、
-      // 打錯的 `/plna` 都送給模型。分得出來之前照 dsh 等（`matchEnter` 的 strong-wait）：清單在途就等它、之前失敗就
-      // 重抓；等到的還是失敗才退回、說出原因，草稿與附件原樣留著（「never a silent downgrade」）。
+      // 打錯的 `/plna`、沒宣告 input 卻帶了字的 `/compact 留下三輪`（#1971，dsh `matchEnter` `:358`）都送給模型。
+      // 分得出來之前照 dsh 等（`matchEnter` 的 strong-wait）：清單在途就等它、之前失敗就重抓；等到的還是失敗才退回、
+      // 說出原因，草稿與附件原樣留著（「never a silent downgrade」）。
       if (commandToken(trimmed) !== undefined) {
         // 呼叫端已經認過（`route`）就照它，不再認第二次：兩次之間剛好重連的話，結果可能跟呼叫端決定標記時不同。
-        const verdict: Adjudication =
+        const verdict: Adjudication | { readonly kind: 'command' | 'sentence' } =
           route === undefined ? await adjudicate(trimmed) : { kind: route };
         if (verdict.kind === 'released') return undefined;
         if (verdict.kind === 'failed') return { message: verdict.message };
