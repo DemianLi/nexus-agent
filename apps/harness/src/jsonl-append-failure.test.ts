@@ -7,12 +7,17 @@
  * 斷言一律回頭讀**檔案**與**續接讀回的事件**：把手回報什麼不重要，下一個行程讀得回來才重要。
  */
 
-import { mkdtemp, open, readFile, rm, stat } from 'node:fs/promises';
+import { mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SESSION_LOG_FORMAT_VERSION, SessionLog, SessionPersistenceCoordinator } from '@nexus/core';
+import {
+  SESSION_LOG_FORMAT_VERSION,
+  SessionAlreadyExistsError,
+  SessionLog,
+  SessionPersistenceCoordinator,
+} from '@nexus/core';
 import type { SessionEvent, StoredSession, StoredSessionHeader } from '@nexus/core';
 
 import { openJsonlSessionStore } from './jsonl-session-store.js';
@@ -54,6 +59,8 @@ interface Fault {
   /** 追加把手的 `datasync`／`close` 拋這個錯。 */
   datasyncError?: Error;
   closeError?: Error;
+  /** 下一次 `open(<日誌>, 'wx')` 在開檔之前就拋這個錯（header 已經發佈了）。 */
+  wxError?: Error;
   /** 卡住追加把手的 `datasync`，直到這個 promise resolve。 */
   datasyncGate?: Promise<void>;
   /** 追加把手上的 `sync` 次數；`datasync` 次數；`r+` 截回把手上的 `sync` 次數；每次開檔的 flags。 */
@@ -84,6 +91,8 @@ function take<K extends keyof Fault>(fault: Fault, key: K): Fault[K] {
  */
 function faulty(fault: Fault): OpenLogFile {
   return async (path, flags, mode) => {
+    const wxError = flags === 'wx' ? take(fault, 'wxError') : undefined;
+    if (wxError !== undefined) throw wxError;
     const real = await open(path, flags, mode);
     fault.opened.push(flags);
     const rollback = flags === 'r+';
@@ -147,6 +156,11 @@ async function sizeOf(id: string): Promise<number> {
   return (await stat(logPath(id))).size;
 }
 
+/** 目錄裡屬於 `id` 的檔（header、日誌、鎖檔、暫存檔都算）。 */
+async function filesOf(id: string): Promise<string[]> {
+  return (await readdir(dir)).filter((name) => name.startsWith(`${id}.`)).sort();
+}
+
 /** 另開一個後端把 `id` 續接讀回來（讀完就關，放掉租約）。 */
 async function readBack(id: string): Promise<readonly SessionEvent[]> {
   const resumed = await openJsonlSessionStore({ directory: dir }).resume(id);
@@ -163,13 +177,14 @@ function create(id: string, fault: Fault): StoredSession {
 }
 
 describe('A 寫到一半拋錯：整批不在，重送後讀得回來', () => {
-  it('第一批寫了十幾個位元組（在某一行中間）就拋：拒絕、檔案是空的、重送成功', async () => {
+  it('第一批寫了十幾個位元組（在某一行中間）就拋：拒絕、這份會話的檔一個都不在、重送成功', async () => {
     const fault = newFault();
     const stored = create('a', fault);
 
     fault.writeThrowsAfter = 17;
     await expect(stored.append(batch(0))).rejects.toThrow('ENOSPC');
-    expect(await sizeOf('a')).toBe(0);
+    // 第一批同時是第一次實體化：整個撤掉，不是截成空檔（#1580 刀 2a 審查 B1，見下面 H）。
+    expect(await filesOf('a')).toEqual([]);
 
     await stored.append(batch(0));
     await stored.close();
@@ -257,11 +272,13 @@ describe('D 回滾也失敗：兩個錯都報', () => {
   it('寫拋錯、截回的 truncate 也拋錯：拒絕的是 AggregateError，errors 裡有兩個，訊息指名是哪個檔', async () => {
     const fault = newFault();
     const stored = create('d', fault);
+    // 先寫成一批：第一批失敗走的是撤掉實體化（H），不截回。
+    await stored.append(batch(0));
     const truncateFailure = new Error('EIO: truncate failed');
     fault.writeThrowsAfter = 10;
     fault.rollbackTruncateError = truncateFailure;
 
-    const error: unknown = await stored.append(batch(0)).then(
+    const error: unknown = await stored.append(batch(2)).then(
       () => undefined,
       (caught: unknown) => caught,
     );
@@ -346,7 +363,7 @@ describe('F 走協調器的整條路', () => {
     expect(String(warn.mock.calls[0]?.[0])).toContain('ENOSPC');
     expect(coordinator.paused).toBe(true);
     expect(coordinator.pending).toBe(2);
-    expect(await sizeOf('f')).toBe(0);
+    expect(await filesOf('f')).toEqual([]);
 
     await coordinator.flush();
     expect(coordinator.paused).toBe(false);
@@ -459,5 +476,110 @@ describe('G2 close 的兩個錯都留', () => {
 
     await expect(stored.close()).rejects.toBe(closeFailure);
     await ownedAgain('h3');
+  });
+});
+
+describe('H 第一批就寫不進去：撤掉這次實體化（#1580 刀 2a 審查 B1）', () => {
+  // 對照 dsh `materializePosix`（`session-persistence-jsonl/src/index.ts:1282-1321`）：第一批與發佈是同一次 `link`，
+  // 寫失敗時正式路徑上什麼都沒有。改動之前這裡會留下 header＋0 位元組的日誌＋鎖檔。
+
+  it('寫一半拋 ENOSPC：header、日誌、鎖檔都不在；列表看不到；關掉之後同一個 id 建得回來', async () => {
+    const fault = newFault();
+    const store = openJsonlSessionStore({ directory: dir, openLog: faulty(fault) });
+    const stored = store.create(header('x'));
+
+    fault.writeThrowsAfter = 9;
+    await expect(stored.append(batch(0))).rejects.toThrow('ENOSPC');
+
+    expect(await filesOf('x')).toEqual([]);
+    expect((await store.list()).sessions).toEqual([]);
+    // 把手還開著：這個 id 仍然是它的。
+    expect(() => store.create(header('x'))).toThrow(/x/);
+    await stored.close();
+
+    const again = store.create(header('x'));
+    await again.append(batch(0));
+    await again.close();
+    expect(seqsOf(await readBack('x'))).toEqual([0, 1]);
+  });
+
+  it('同一個把手重送：從頭實體化一次（header 再 link 一次，不撞 EEXIST），續接讀得回', async () => {
+    const fault = newFault();
+    const stored = create('y', fault);
+    fault.syncError = new Error('EIO: sync failed');
+    await expect(stored.append(batch(0))).rejects.toThrow('EIO');
+    expect(await filesOf('y')).toEqual([]);
+
+    await stored.append(batch(0));
+    await stored.close();
+    expect(seqsOf(await readBack('y'))).toEqual([0, 1]);
+    expect(fault.opened).toEqual(['wx', 'wx']);
+  });
+
+  it('撤的途中也失敗（關把手拋錯）：AggregateError，原錯在第一個；其餘步驟照走，檔照樣不在', async () => {
+    const fault = newFault();
+    const stored = create('z', fault);
+    const closeFailure = new Error('EIO: close failed');
+    fault.writeThrowsAfter = 9;
+    fault.closeError = closeFailure;
+
+    const error: unknown = await stored.append(batch(0)).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    const { errors, message } = error as AggregateError;
+    expect(errors).toHaveLength(2);
+    expect(String((errors[0] as Error).message)).toContain('ENOSPC');
+    expect(errors[1]).toBe(closeFailure);
+    expect(message).toContain(dir);
+    expect(await filesOf('z')).toEqual([]);
+    await stored.close();
+  });
+
+  it('先 flush 實體化過（空會話已經列得出來）再寫失敗：照舊截回，不撤', async () => {
+    const fault = newFault();
+    const stored = create('w', fault);
+    await stored.flush();
+    fault.writeThrowsAfter = 9;
+    await expect(stored.append(batch(0))).rejects.toThrow('ENOSPC');
+    expect(await filesOf('w')).toEqual(['w.header.json', 'w.jsonl', 'w.lock']);
+    expect(await sizeOf('w')).toBe(0);
+    await stored.close();
+  });
+});
+
+describe('I 第一次實體化做到一半就關：header 發佈了、日誌沒開成（#1580 刀 2a 審查）', () => {
+  it('wx 拋 EMFILE 之後不重試就 close：header、日誌、鎖檔都不在；列表看不到；同一個 id 建得回來', async () => {
+    const fault = newFault();
+    const store = openJsonlSessionStore({ directory: dir, openLog: faulty(fault) });
+    const stored = store.create(header('u'));
+
+    fault.wxError = Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+    await expect(stored.append(batch(0))).rejects.toThrow('EMFILE');
+    // 前提：header 真的發佈了（這正是改動之前會留下來的那個）。
+    expect(await filesOf('u')).toContain('u.header.json');
+    await stored.close();
+
+    expect(await filesOf('u')).toEqual([]);
+    expect((await store.list()).sessions).toEqual([]);
+    const again = store.create(header('u'));
+    await again.append(batch(0));
+    await again.close();
+    expect(seqsOf(await readBack('u'))).toEqual([0, 1]);
+  });
+
+  it('header 撞名（link 回 EEXIST，那份是別人的）之後 close：別人的 header 原封不動', async () => {
+    const store = openJsonlSessionStore({ directory: dir });
+    const stored = store.create(header('v'));
+    // `create` 之後才出現的同名：另一個行程搶先發佈了。
+    const theirs = `${JSON.stringify({ ...header('v'), createdAt: 99 })}\n`;
+    await writeFile(join(dir, 'v.header.json'), theirs);
+
+    await expect(stored.append(batch(0))).rejects.toThrow(SessionAlreadyExistsError);
+    await stored.close();
+
+    expect(await readFile(join(dir, 'v.header.json'), 'utf8')).toBe(theirs);
   });
 });

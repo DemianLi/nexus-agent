@@ -94,8 +94,8 @@ const stubAgent: HandlerOptions['createAgent'] = async () => ({
 
 const noStored = { items: [], unreadable: 0 };
 
-describe('thread.fork（#1580 刀 1：只有契約）', () => {
-  it('接了整理檔的 server 也回 not_supported：不掉進釘選封存那一支、不建 agent、集合不動', async () => {
+describe('thread.fork（#1580）', () => {
+  it('接了整理檔、沒接落盤的 server 回 not_supported：不掉進釘選封存那一支、不建 agent、集合不動', async () => {
     const threadOrganization = await ThreadOrganization.open(dir);
     let created = 0;
     const { client } = rig({
@@ -108,7 +108,7 @@ describe('thread.fork（#1580 刀 1：只有契約）', () => {
     });
     const outcome = await client.threadFork('a', 'm-1');
     expect(outcome).toMatchObject({ kind: 'rejected', code: 'not_supported' });
-    expect(outcome.kind === 'rejected' && outcome.message.includes('thread.fork')).toBe(true);
+    expect(outcome.kind === 'rejected' && outcome.message.includes('分叉')).toBe(true);
     expect(created).toBe(0);
     expect(threadOrganization.pinnedThreadIds).toEqual([]);
     expect(threadOrganization.archivedThreadIds).toEqual([]);

@@ -33,6 +33,7 @@ import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
   ResumedStoredSession,
+  SessionEvent,
   SessionLog,
   SessionRegistry,
   SessionStore,
@@ -71,7 +72,9 @@ import {
 import { ThreadOrganization } from './thread-organization.js';
 import {
   attachSessionPersistence,
+  readColdSession,
   resumeClosingInterruptedTurn,
+  SESSION_LOG_FORMAT_VERSION,
   sessionPersistencePlugin,
   SessionFormatUnsupportedError,
   SessionNotFoundError,
@@ -111,7 +114,7 @@ import type { TryLock } from './kernel-file-lock.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler, SubagentSessionError } from './wire-handler.js';
-import type { WireHandler } from './wire-handler.js';
+import type { ThreadForkSeed, WireHandler } from './wire-handler.js';
 import { parseCompressionFlags, startWireServer } from './wire-server.js';
 import type { WireCompression, WireServer } from './wire-server.js';
 import { runDumpConfigSchema } from './config-schema-dump.js';
@@ -1141,6 +1144,17 @@ async function startServer(
       : {
           listThreads: (signal: AbortSignal) =>
             listStoredThreads(sessionStore, { cwd, title: threadTitle, signal }),
+          // 冷讀一條 thread（#1580 分叉的來源）：中斷的那一輪在記憶體補平（`readColdSession`，#1598），可見規則同列表（`isListedThread`）。
+          // 只有「找不到」是 `undefined`；壞檔、版本太新照拋。
+          readStoredThread: async (threadId: string) => {
+            try {
+              const stored = await readColdSession(sessionStore, threadId);
+              return isListedThread(stored.header, cwd) ? stored : undefined;
+            } catch (error) {
+              if (error instanceof SessionNotFoundError) return undefined;
+              throw error;
+            }
+          },
           // 背景子代理自己的落盤日誌（#871）：唯讀冷讀，規則見 `readStoredSubagentSession`。
           readSubagentSession: (threadId: string, runId: string) =>
             readStoredSubagentSession(sessionStore, threadId, runId),
@@ -1178,12 +1192,13 @@ async function startServer(
       },
     }),
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
-    createAgent: async (threadId: string) => {
+    createAgent: async (threadId: string, fork?: ThreadForkSeed) => {
       // **子代理的會話不是 thread**（#1544；判準見 core 的 `isSubagentSessionHeader`，分叉不算，#1579）。
       // **必須在 `resumeThread` 之前、而且只冷讀 header**（`open(…, 'read')`，不拿租約、不寫檔）：續接會先拿寫租約、再把當掉那一輪的
       // 收尾寫回檔上（#721），放在它之後的話，日誌在被拒絕之前就已經被改了。「找不到」往下走（新 thread）；其他讀不了的
       // （header 壞了、權限）`coldSessionHeader` 自己就拋，這條 thread 建不起來、下一次請求重試——不吞成「不是子代理」放行。
-      if (sessionStore !== undefined) {
+      // 分叉出來的子 thread（#1580）id 是剛產生的，磁碟上沒有它，兩道都不必問。
+      if (sessionStore !== undefined && fork === undefined) {
         const header = await coldSessionHeader(threadId).catch(noteRefusedLog(threadId));
         if (header !== undefined && isSubagentSessionHeader(header)) {
           throw new SubagentSessionError(threadId);
@@ -1193,9 +1208,32 @@ async function startServer(
       // 之前就拿了寫租約，要到落盤接上之後才歸協調器收；這中間拋錯要先放掉，不然
       // `wire-handler.ts` 說好的「下一次請求重試」會撞上自己上一次留下的租約。
       const resumed =
-        sessionStore === undefined
+        sessionStore === undefined || fork !== undefined
           ? undefined
           : await resumeThread(sessionStore, threadId).catch(noteRefusedLog(threadId));
+      // **這條 thread 從哪一份日誌長出來**：續接的是磁碟上那一份，分叉的是記憶體裡的 seed（#1580）。下面從日誌推的每一樣（目錄守衛、
+      // 可寫根、沙箱模式、核准政策、模型選擇、對話重播、交付的錨）都讀這一份，所以分叉出來的子 thread 第一次組裝與重啟後續接走同一套規則。
+      // 分叉的 header 是給 placer 與守衛看的：根照抄來源（`thread-roots.ts` 那張表的「分叉的子 thread」那一列），`cwd` 也是來源的。
+      // 真正落盤的 header 由落盤接線建（下面的 `rootLineage`），同 dsh 由 `agents.create` 的 `meta` 建。
+      const history:
+        | { readonly header: StoredSessionHeader; readonly events: readonly SessionEvent[] }
+        | undefined =
+        fork !== undefined
+          ? {
+              header: {
+                version: SESSION_LOG_FORMAT_VERSION,
+                id: threadId,
+                createdAt: Date.now(),
+                ...(fork.sourceHeader.cwd !== undefined && { cwd: fork.sourceHeader.cwd }),
+                ...(fork.sourceHeader.workspaceRoot !== undefined && {
+                  workspaceRoot: fork.sourceHeader.workspaceRoot,
+                }),
+                parentSession: fork.sourceHeader.id,
+                isSeeded: true,
+              },
+              events: fork.seed,
+            }
+          : resumed;
       let handedOff = false;
       const release = async (): Promise<void> => {
         if (handedOff) return;
@@ -1227,20 +1265,20 @@ async function startServer(
         // 讀不起來、必掛的列掉了：只有這一條建不起來，伺服器照常，下一條再讀一次（#1405 Q1）。
         threadList = await threadPluginList.read();
         assembledFrom = threadList;
-        if (resumed !== undefined) assertSameCwd('serve', threadId, resumed.header, cwd);
+        if (history !== undefined) assertSameCwd('serve', threadId, history.header, cwd);
         // **這條 thread 的可寫根只在這裡取一次**（#1774、#1775）：「thread（連同 header）→ 放在哪裡」回來的值**同時**交給組裝點與下面的續接分類，兩邊不會分岔。
         // 新 thread 在這裡配私有根；續接照 header 分類（header 的根是這一次的 `--workspace`、沒記、或在基底底下就照用，其餘拋 `ResumeWorkspaceConflictError`），
         // 順序與理由逐字同 CLI 的 `--resume`：目錄先認，這一道在沙箱那一道之前（#504）。
         const placement = await placeThread({
           entry: 'serve',
           threadId,
-          resumedHeader: resumed?.header,
+          resumedHeader: history?.header,
         });
         const threadWorkspaceRoot = placement.root;
         // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有
         // `--workspace` 的話那道 fence 不在路徑上，接回來的 `read-only` 會靜靜蒸發。
         const resumedSandbox =
-          resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
+          history === undefined ? undefined : recordedSandboxMode(history.events);
         if (resumedSandbox !== undefined && invocation.workspace === undefined) {
           throw new Error(
             `thread "${threadId}" 接不回來：上一次跑在 --workspace 底下（日誌記著沙箱模式 ` +
@@ -1250,7 +1288,7 @@ async function startServer(
         }
         // 核准政策同樣從日誌來（#437），續接就給滿（日誌沒記的照 `ask`，見 `approvalPolicyOnResume`）。
         const resumedApprovalPolicy =
-          resumed === undefined ? undefined : approvalPolicyOnResume(resumed.events);
+          history === undefined ? undefined : approvalPolicyOnResume(history.events);
         const effective = {
           ...invocation,
           ...(resumedSandbox !== undefined && { sandbox: resumedSandbox }),
@@ -1258,7 +1296,7 @@ async function startServer(
         };
         // 子代理選模型的政策（#875）：沒有歷史的新會話從設定取樣一次，有歷史的只讀日誌那一份。
         const modelSelectionPolicy = modelSelectionPolicyFor({
-          resumedEvents: resumed?.events,
+          resumedEvents: history?.events,
           setting: modelSelection,
         });
         built = await assembly.create(
@@ -1363,10 +1401,14 @@ async function startServer(
       });
       // **對話從日誌推回模型**（#306），同 CLI 的 `--resume`，在這條 thread 的第一輪之前。灌不進去就讓它
       // 起不來（理由見 `conversation-restore.ts`）：剛建好的 agent 與續接那把租約都要收掉，下一次請求才重試得了。
-      if (resumed !== undefined) {
+      if (history !== undefined) {
         try {
-          const replay = await restoreConversation(built.agent, threadId, resumed.events);
-          log(`[會話日誌] thread "${threadId}" 接回來了：${formatConversationRestore(replay)}`);
+          const replay = await restoreConversation(built.agent, threadId, history.events);
+          log(
+            fork !== undefined
+              ? `[會話日誌] thread "${threadId}" 從 "${fork.sourceHeader.id}" 分叉出來：${formatConversationRestore(replay)}`
+              : `[會話日誌] thread "${threadId}" 接回來了：${formatConversationRestore(replay)}`,
+          );
         } catch (error) {
           await built.dispose().catch(() => {});
           await release().catch(() => {});
@@ -1432,8 +1474,8 @@ async function startServer(
         // `--workspace`**。沒續接、或那份 header 沒記那一格（13 以前的日誌都沒有，而且續接
         // 不回填）就整個不給，那時線以下的每一顆照舊 404——判準是那一格在不在，不是
         // `header.version`，理由見 `wire-handler.ts` 的 `locateAt`。
-        ...(resumed?.header.workspaceRoot !== undefined && {
-          resumedWorkspaceRoot: resumed.header.workspaceRoot,
+        ...(history?.header.workspaceRoot !== undefined && {
+          resumedWorkspaceRoot: history.header.workspaceRoot,
         }),
         // 落盤沒接上就被收掉（建 thread 途中失敗）的話，續接那個把手還在這裡，要自己放。
         dispose: async () => {
@@ -1442,7 +1484,7 @@ async function startServer(
           await release().catch(() => {});
           await dispose();
         },
-        ...(resumed !== undefined && { rootSeed: resumed.events }),
+        ...(history !== undefined && { rootSeed: history.events }),
         attachSessions,
         // LLM 標題（#650）：沒帶 `--live` 或那一列關掉就缺席，只剩退回標題。
         ...(attachTitle !== undefined && { attachTitle }),
@@ -1491,6 +1533,11 @@ async function startServer(
                   // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
                   ...(resumed !== undefined && {
                     resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+                  }),
+                  // 分叉（#1580）：新建的 header 標來源與 `isSeeded`。seed 不另外寫：協調器沒有已存筆數，第一次 flush 把整份寫出去
+                  // （同 dsh 發佈時 `appendUnstoredSuffix` 從 0 寫起）。
+                  ...(fork !== undefined && {
+                    rootLineage: { parentSession: fork.sourceHeader.id, isSeeded: true },
                   }),
                   // CLI 那條走 `Printer` 是為了前綴分得出誰在講話；這裡沒有那個問題，
                   // 伺服器日誌本來就沒有跟誰搶終端機（同不變量那條的理由）。
