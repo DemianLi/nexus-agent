@@ -362,7 +362,7 @@ export default [...base, ...pluginLintConfig];
 
 | 規則 | 擋什麼 | 改用什麼 |
 | --- | --- | --- |
-| `ctx-root` | `ctx.root`（含 `ctx['root']`、`this.ctx.root`、`const { root } = ctx`） | `inject` 宣告服務，`apply` 裡 `ctx.get(token)` |
+| `ctx-root` | `ctx.root`（含 `ctx['root']`、`this.ctx.root`、`const { root } = ctx`），以及 rc.12 起的 `ctx[Context.root]`、`ctx[Symbol.for('cordis.root')]`（含 `this.ctx[…]`） | `inject` 宣告服務，`apply` 裡 `ctx.get(token)` |
 | `ctx-registry` | `ctx.registry`（同上各種寫法） | 服務的 `register()`（內部包 `ctx.effect`）、`inject` 後 `ctx.get(token)` |
 | `internal-name` | 以 `internal/` 開頭的字串或樣板字串（服務名、事件名） | 公開的事件用 `ctx.on`，登記東西用 `ctx.effect` |
 | `process-on` ／ `process-once` ／ `process-addListener` ／ `process-prependListener` | `process.on`／`once`／`addListener`／`prependListener`，以及從 `node:process` 具名 import 它們 | 今天宿主沒有行程事件的服務；必須用時，`ctx.effect` 裡掛、回傳撤除函式（`process.off`），那一行寫窄例外 |
