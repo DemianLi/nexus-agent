@@ -63,6 +63,7 @@
 
 import {
   isSubagentSessionHeader,
+  readColdSession,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
   SessionNotFoundError,
@@ -169,10 +170,12 @@ export function scanPrompts(
 
 /**
  * 讀一個背景子代理自己落盤的日誌（[#871](https://github.com/DemianLi/nexus-agent/issues/871)）：唯讀冷讀，`<thread>/<runId>`。
- * 經 `open(id, 'read')`，同列表，不拿租約、不動檔。
+ * 經 `@nexus/core` 的 `readColdSession`（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)），同列表不拿租約、不動檔；
+ * 死在一輪中間的那一份在記憶體補平，畫面上收成完成、沒結果的卡收成沒跑完，不永遠停在執行中。
  *
  * **header 的 `parentSession` 必須是這條 thread**：id 是照 thread 組出來的所以本來就在它底下，這一道是萬一檔案被手動改名搬走時的
- * 第二層。沒有這一份、或不屬於這條 thread：`undefined`。其他失敗（壞檔、版本太新）照拋，由呼叫端決定怎麼講。
+ * 第二層，讀完才核。沒有這一份、或不屬於這條 thread：`undefined`。其他失敗（壞檔、版本太新）照拋，由呼叫端決定怎麼講——
+ * 不屬於這條 thread、本文又壞掉的那一份也是拋。
  */
 export async function readStoredSubagentSession(
   store: SessionStore,
@@ -180,9 +183,9 @@ export async function readStoredSubagentSession(
   runId: string,
 ): Promise<readonly SessionEvent[] | undefined> {
   try {
-    const stored = await store.open(`${threadId}/${runId}`, 'read');
+    const stored = await readColdSession(store, `${threadId}/${runId}`);
     if (stored.header.parentSession !== threadId) return undefined;
-    return await stored.read();
+    return stored.events;
   } catch (error: unknown) {
     if (error instanceof SessionNotFoundError) return undefined;
     throw error;
