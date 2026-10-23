@@ -12,7 +12,12 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PreStepInjection, PreStepInvocation, PreStepListener } from '@nexus/agent-loop';
-import { MESSAGE_SOURCE_KWARG, SESSION_EVENT_MAX_DEPTH, SessionLog } from '@nexus/core';
+import {
+  MESSAGE_SOURCE_KWARG,
+  SESSION_EVENT_MAX_DEPTH,
+  SessionLog,
+  TURN_CANCEL_CONFIG_KEY,
+} from '@nexus/core';
 import type { SessionLookup } from '@nexus/core';
 import {
   AGENT_INSTRUCTIONS_MARKER,
@@ -58,7 +63,7 @@ function fakeSessions(options: { kind?: SessionLookup['kind'] } = {}): {
 
 type Hook = (
   state: { messages?: readonly BaseMessage[]; _summarizationEvent?: unknown },
-  runtime?: { readonly configurable?: unknown },
+  runtime?: { readonly configurable?: unknown; readonly signal?: AbortSignal },
 ) => Promise<{ messages: BaseMessage[] } | undefined>;
 
 const hookOf = (middleware: unknown): Hook => (middleware as { beforeAgent: Hook }).beforeAgent;
@@ -110,6 +115,56 @@ describe('宿主建的 middleware', () => {
     expect(seen).toEqual([{ configurable }, { configurable: undefined }]);
     expect(seen[0]?.configurable).toBe(configurable);
     expect('configurable' in (seen[1] ?? {})).toBe(true);
+  });
+
+  describe('交給 listener 的中止訊號（契約 1.1.0，#1533）', () => {
+    function seenSignals(runtimes: readonly Parameters<Hook>[1][]) {
+      const seen: PreStepInvocation[] = [];
+      const middleware = createPreStepMiddleware(
+        NAME,
+        (_visible, invocation) => {
+          seen.push(invocation);
+          return undefined;
+        },
+        fakeSessions(),
+      );
+      return Promise.all(
+        runtimes.map((runtime) => hookOf(middleware)({ messages: [] }, runtime)),
+      ).then(() => seen);
+    }
+
+    it('這一輪的訊號在 configurable 的 TURN_CANCEL_CONFIG_KEY（pump 放的那顆）：原樣交出去，configurable 也照原樣', async () => {
+      const turn = new AbortController();
+      const configurable = { thread_id: 't', [TURN_CANCEL_CONFIG_KEY]: turn.signal };
+      const [invocation] = await seenSignals([{ configurable }]);
+      expect(invocation?.signal).toBe(turn.signal);
+      expect(invocation?.configurable).toBe(configurable);
+    });
+
+    it('只有基座的 runtime.signal：交那一顆', async () => {
+      const graph = new AbortController();
+      const [invocation] = await seenSignals([{ configurable: {}, signal: graph.signal }]);
+      expect(invocation?.signal).toBe(graph.signal);
+    });
+
+    it.each([
+      ['這一輪的', 'turn'],
+      ['基座的', 'graph'],
+    ] as const)('兩顆都有：合成一顆，%s那顆舉起來就算停', async (_label, which) => {
+      const turn = new AbortController();
+      const graph = new AbortController();
+      const [invocation] = await seenSignals([
+        { configurable: { [TURN_CANCEL_CONFIG_KEY]: turn.signal }, signal: graph.signal },
+      ]);
+      expect(invocation?.signal?.aborted).toBe(false);
+      (which === 'turn' ? turn : graph).abort();
+      expect(invocation?.signal?.aborted).toBe(true);
+    });
+
+    it('兩顆都沒有（CLI、eval）：invocation 上沒有 signal 這一格', async () => {
+      const seen = await seenSignals([{ configurable: { thread_id: 't' } }, undefined]);
+      for (const invocation of seen) expect('signal' in invocation).toBe(false);
+    });
   });
 
   it('訊息：內容照 listener 給的、記號在前 source 在後、不帶 id', async () => {
@@ -400,5 +455,25 @@ describe('舊外殼（fixture）', () => {
   it('沒接會話時照樣加訊息、只是不記', async () => {
     const messages = await inject({ '/AGENTS.md': '規矩。' });
     expect(messages).toHaveLength(1);
+  });
+
+  it('這一輪已經停下（pump 放的訊號舉起來了）：真的 listener 經宿主拋中止，一個檔都沒讀、沒有訊息', async () => {
+    const reads: string[] = [];
+    const backend = {
+      read: (path: string) => {
+        reads.push(path);
+        return Promise.resolve({ content: '規矩。' });
+      },
+    };
+    const turn = new AbortController();
+    turn.abort();
+    const middleware = createAgentInstructionsMiddleware(backend as never, DEFAULT_MAX_BYTES);
+    await expect(
+      hookOf(middleware)(
+        { messages: [] },
+        { configurable: { [TURN_CANCEL_CONFIG_KEY]: turn.signal } },
+      ),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    expect(reads).toEqual([]);
   });
 });

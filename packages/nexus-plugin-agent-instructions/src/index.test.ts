@@ -8,6 +8,10 @@
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core`；`src/index.ts` 不行。
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { agentLoopToken } from '@nexus/agent-loop';
@@ -20,6 +24,7 @@ import Loader from '@nexus/cordis-plugin-loader';
 import type { FsLookup } from '@nexus/fs';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import { checkConformance } from '@nexus/sdk';
+import { CompositeBackend, FilesystemBackend, StateBackend } from 'deepagents';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import * as module from './index.js';
@@ -30,9 +35,13 @@ import {
   Config,
   createAgentInstructionsListener,
   DEFAULT_MAX_BYTES,
+  DEFAULT_MAX_SOURCE_BYTES,
   INSTRUCTION_FILE_CANDIDATES,
   isAgentInstructionsMessage,
 } from './index.js';
+
+/** 出廠的兩個上限。 */
+const LIMITS = { maxBytes: DEFAULT_MAX_BYTES, maxSourceBytes: DEFAULT_MAX_SOURCE_BYTES };
 
 /** 只回得出指定那幾個檔的假 backend；其餘一律「讀不到」。 */
 function fakeBackend(files: Record<string, string>) {
@@ -66,9 +75,12 @@ async function inject(
   maxBytes = DEFAULT_MAX_BYTES,
 ): Promise<readonly PreStepInjection[] | undefined> {
   const handle = handleOf(fakeBackend(files));
-  const listener = createAgentInstructionsListener(maxBytes, {
-    fs: () => ({ kind: 'ok', fs: handle, address: { kind: 'root' } }),
-  });
+  const listener = createAgentInstructionsListener(
+    { ...LIMITS, maxBytes },
+    {
+      fs: () => ({ kind: 'ok', fs: handle, address: { kind: 'root' } }),
+    },
+  );
   return listener(messages, INVOCATION);
 }
 
@@ -101,6 +113,17 @@ describe('設定', () => {
     expect(Config).toBe(agentInstructionsConfigSchema);
     expect(Config.parse({}).maxBytes).toBe(DEFAULT_MAX_BYTES);
     expect(Config.safeParse({ extra: 1 }).success).toBe(false);
+  });
+
+  it('單檔上限要是正整數（照 dsh `.step(1).min(1)`），不是就讓設定驗證失敗、訊息指得出欄位；省略是 1 MiB', () => {
+    for (const maxSourceBytes of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const result = agentInstructionsConfigSchema.safeParse({ maxSourceBytes });
+      expect(result.success, String(maxSourceBytes)).toBe(false);
+      expect(JSON.stringify(result.error?.issues)).toContain('maxSourceBytes');
+    }
+    expect(DEFAULT_MAX_SOURCE_BYTES).toBe(1_048_576);
+    expect(Config.parse({}).maxSourceBytes).toBe(DEFAULT_MAX_SOURCE_BYTES);
+    expect(Config.parse({ maxSourceBytes: 1 }).maxSourceBytes).toBe(1);
   });
 });
 
@@ -141,7 +164,7 @@ describe('讀工作區根那一層', () => {
           ? Promise.reject(new Error('backend 壞了'))
           : Promise.resolve({ content: '還在。' }),
     };
-    const listener = createAgentInstructionsListener(DEFAULT_MAX_BYTES, {
+    const listener = createAgentInstructionsListener(LIMITS, {
       fs: () => ({ kind: 'ok', fs: handleOf(backend), address: { kind: 'root' } }),
     });
     const injections = await listener([], INVOCATION);
@@ -173,7 +196,7 @@ describe('新 thread 讀唯讀共用區（#1775）', () => {
     '/shared/AGENTS.md': 'DEPLOY-RULE',
   });
   const run = (prefix: string | undefined) =>
-    createAgentInstructionsListener(DEFAULT_MAX_BYTES, {
+    createAgentInstructionsListener(LIMITS, {
       fs: () => ({ kind: 'ok', fs: handleWithShared(prefix, BACKEND), address: { kind: 'root' } }),
     })([], INVOCATION);
 
@@ -189,6 +212,222 @@ describe('新 thread 讀唯讀共用區（#1775）', () => {
     const text = (await run(undefined))?.[0]?.content ?? '';
     expect(text).toContain('PRIVATE-RULE');
     expect(text).not.toContain('DEPLOY-RULE');
+  });
+});
+
+/**
+ * 帶 `ls` 的替身：`ls` 回那個目錄底下每個檔的 `size`（`sizes` 可以撒謊），`read` 記下讀了哪些路徑。
+ * `lsFails` 讓 `ls` 回錯誤；`onRead` 在回內容之前跑（測「讀到一半被停下」）。
+ */
+function listingBackend(
+  files: Record<string, string>,
+  options: {
+    readonly sizes?: Record<string, number>;
+    readonly lsFails?: boolean;
+    readonly onLs?: () => void;
+    readonly onRead?: (path: string) => void;
+  } = {},
+) {
+  const reads: string[] = [];
+  const listed: string[] = [];
+  return {
+    reads,
+    listed,
+    ls: (path: string) => {
+      listed.push(path);
+      options.onLs?.();
+      if (options.lsFails === true) return Promise.resolve({ error: 'ls 壞了' });
+      const prefix = path === '/' ? '' : path;
+      return Promise.resolve({
+        files: Object.entries(files)
+          .filter(([file]) => file.startsWith(`${prefix}/`))
+          .map(([file, content]) => ({
+            path: file,
+            is_dir: false,
+            size: options.sizes?.[file] ?? Buffer.byteLength(content, 'utf8'),
+          })),
+      });
+    },
+    read: (path: string) => {
+      reads.push(path);
+      options.onRead?.(path);
+      return Object.prototype.hasOwnProperty.call(files, path)
+        ? Promise.resolve({ content: files[path] })
+        : Promise.resolve({ error: 'file_not_found' });
+    },
+  };
+}
+
+/** 照這兩個上限、這個共用區前綴、這顆中止訊號跑一次 listener。 */
+function listen(
+  backend: unknown,
+  limits: { maxBytes: number; maxSourceBytes: number },
+  options: { readonly prefix?: string; readonly signal?: AbortSignal } = {},
+) {
+  const handle: FsService = { ...handleOf(backend), sharedWorkspacePrefix: () => options.prefix };
+  return createAgentInstructionsListener(limits, {
+    fs: () => ({ kind: 'ok', fs: handle, address: { kind: 'root' } }),
+  })([], { ...INVOCATION, ...(options.signal !== undefined && { signal: options.signal }) });
+}
+
+describe('讀整份，單檔有上限（#1533，照 dsh `files.ts:387-417`）', () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  function workspace(files: Record<string, string>): string {
+    const dir = mkdtempSync(join(tmpdir(), 'agent-instructions-'));
+    dirs.push(dir);
+    for (const [name, content] of Object.entries(files)) writeFileSync(join(dir, name), content);
+    return dir;
+  }
+  const RULES = Array.from({ length: 600 }, (_, index) => `rule ${index + 1}`).join('\n');
+
+  // 替身不會補 500 行：這條一定要用基座真的 backend（卡上驗收 1）。
+  it.each([
+    ['裸的 FilesystemBackend', undefined],
+    ['外面包一層 CompositeBackend（組裝點的形狀）', undefined],
+    ['共用區前綴底下（新 thread，經 composite 的 /shared/ 路由）', '/shared'],
+  ] as const)('600 行的 AGENTS.md，%s：讀到第 600 行，沒有截斷說明', async (label, prefix) => {
+    const root = workspace({ 'AGENTS.md': RULES });
+    const files = new FilesystemBackend({ rootDir: root, virtualMode: true });
+    const backend = label.startsWith('裸的')
+      ? files
+      : prefix === undefined
+        ? new CompositeBackend(files, { '/large_tool_results/': new StateBackend() })
+        : new CompositeBackend(
+            new FilesystemBackend({ rootDir: workspace({}), virtualMode: true }),
+            {
+              '/shared/': files,
+            },
+          );
+    const text =
+      (await listen(backend, LIMITS, prefix === undefined ? {} : { prefix }))?.[0]?.content ?? '';
+    expect(text).toContain('rule 1\n');
+    expect(text).toContain('rule 500\n');
+    expect(text).toContain('rule 600');
+    expect(text).not.toContain('Workspace instruction budget');
+  });
+
+  it.each([
+    ['/', undefined],
+    ['共用區前綴', '/shared'],
+  ] as const)(
+    '超過上限的不讀（%s）：ls 報的大小超過就跳過，對它一次 read 都沒有；其他照讀',
+    async (_label, prefix) => {
+      const at = prefix ?? '';
+      const backend = listingBackend({
+        [`${at}/AGENTS.md`]: 'a'.repeat(2048),
+        [`${at}/CLAUDE.md`]: 'b'.repeat(100),
+      });
+      const text =
+        (
+          await listen(
+            backend,
+            { ...LIMITS, maxSourceBytes: 1024 },
+            prefix === undefined ? {} : { prefix },
+          )
+        )?.[0]?.content ?? '';
+      expect(text).toContain('Instructions from: CLAUDE.md');
+      expect(text).not.toContain('Instructions from: AGENTS.md');
+      expect(backend.listed).toEqual([prefix ?? '/']);
+      expect(backend.reads).not.toContain(`${at}/AGENTS.md`);
+      expect(backend.reads).toContain(`${at}/CLAUDE.md`);
+    },
+  );
+
+  it('讀完那一道：ls 報的大小是小的、讀回來卻超過，照樣丟掉', async () => {
+    const backend = listingBackend(
+      { '/AGENTS.md': 'a'.repeat(2048) },
+      { sizes: { '/AGENTS.md': 10 } },
+    );
+    expect(await listen(backend, { ...LIMITS, maxSourceBytes: 1024 })).toBeUndefined();
+    expect(backend.reads).toContain('/AGENTS.md');
+  });
+
+  it('ls 回錯誤、或 backend 根本沒有 ls：每個候選照讀，超過的由讀完那一道擋下', async () => {
+    const failing = listingBackend({ '/AGENTS.md': 'a'.repeat(2048) }, { lsFails: true });
+    expect(await listen(failing, { ...LIMITS, maxSourceBytes: 1024 })).toBeUndefined();
+    expect(failing.reads).toContain('/AGENTS.md');
+
+    const noLs = fakeBackend({ '/AGENTS.md': 'a'.repeat(2048), '/CLAUDE.md': '留下。' });
+    const text = (await listen(noLs, { ...LIMITS, maxSourceBytes: 1024 }))?.[0]?.content ?? '';
+    expect(text).toContain('留下。');
+    expect(text).not.toContain('Instructions from: AGENTS.md');
+  });
+
+  it('上限算的是 UTF-8 位元組不是字元：1000 個中文字（3000 位元組）過不了 2048；剛好等於上限的留下', async () => {
+    const wide = listingBackend({ '/AGENTS.md': '中'.repeat(1000) }, { lsFails: true });
+    expect(await listen(wide, { ...LIMITS, maxSourceBytes: 2048 })).toBeUndefined();
+
+    const exact = listingBackend({ '/AGENTS.md': 'a'.repeat(1024) });
+    const text = (await listen(exact, { ...LIMITS, maxSourceBytes: 1024 }))?.[0]?.content ?? '';
+    expect(text).toContain('Instructions from: AGENTS.md');
+  });
+});
+
+describe('這一輪被停下（invocation.signal，#1533）', () => {
+  it('已經停下：拋中止原因（AbortError），連 ls 都沒做、一個候選都沒讀', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    const backend = listingBackend({ '/AGENTS.md': '規矩。' });
+    await expect(listen(backend, LIMITS, { signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(backend.listed).toEqual([]);
+    expect(backend.reads).toEqual([]);
+  });
+
+  it('讀第一個檔的時候被停下：拋中止，後面的候選不再讀', async () => {
+    const controller = new AbortController();
+    const backend = listingBackend(
+      { '/AGENTS.md': '一。', '/CLAUDE.md': '二。' },
+      { onRead: () => controller.abort() },
+    );
+    await expect(listen(backend, LIMITS, { signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(backend.reads).toEqual(['/AGENTS.md']);
+  });
+
+  it('ls 的時候被停下：拋中止，一個候選都沒讀（每個候選讀之前都看一次，dsh `files.ts:396`）', async () => {
+    const controller = new AbortController();
+    const backend = listingBackend({ '/AGENTS.md': '一。' }, { onLs: () => controller.abort() });
+    await expect(listen(backend, LIMITS, { signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(backend.reads).toEqual([]);
+  });
+
+  it('讀最後一個候選的時候被停下：照樣拋中止，不把讀到的那幾份當成結果交回去', async () => {
+    const controller = new AbortController();
+    const last = INSTRUCTION_FILE_CANDIDATES[INSTRUCTION_FILE_CANDIDATES.length - 1];
+    const backend = listingBackend(
+      { '/AGENTS.md': '一。', [`/${last}`]: '最後。' },
+      { onRead: (path) => path === `/${last}` && controller.abort() },
+    );
+    await expect(listen(backend, LIMITS, { signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+    expect(backend.reads.at(-1)).toBe(`/${last}`);
+  });
+
+  it('讀的時候拋錯而且這一輪已經停下：拋的是中止，不當成「讀不到」吞掉', async () => {
+    const controller = new AbortController();
+    const backend = {
+      read: () => {
+        controller.abort();
+        return Promise.reject(new Error('串流被切斷'));
+      },
+    };
+    await expect(listen(backend, LIMITS, { signal: controller.signal })).rejects.toMatchObject({
+      name: 'AbortError',
+    });
+  });
+
+  it('沒有訊號（1.0.0 的宿主）照讀', async () => {
+    const text = (await listen(listingBackend({ '/AGENTS.md': '規矩。' }), LIMITS))?.[0]?.content;
+    expect(text).toContain('規矩。');
   });
 });
 
@@ -221,12 +460,12 @@ describe('什麼時候不注入（查找不是 ok、或沒有 backend）', () =>
     ['unknown-caller', { kind: 'unknown-caller' }],
     ['ambiguous', { kind: 'ambiguous', count: 2 }],
   ])('fs 查找是 %s：不注入、不拋', async (_label, lookup) => {
-    const listener = createAgentInstructionsListener(DEFAULT_MAX_BYTES, { fs: () => lookup });
+    const listener = createAgentInstructionsListener(LIMITS, { fs: () => lookup });
     expect(await listener([], INVOCATION)).toBeUndefined();
   });
 
   it('把手在、但這次組裝一個 backend 都沒有：不注入', async () => {
-    const listener = createAgentInstructionsListener(DEFAULT_MAX_BYTES, {
+    const listener = createAgentInstructionsListener(LIMITS, {
       fs: () => ({ kind: 'ok', fs: handleOf(undefined), address: { kind: 'root' } }),
     });
     expect(await listener([], INVOCATION)).toBeUndefined();
@@ -234,7 +473,7 @@ describe('什麼時候不注入（查找不是 ok、或沒有 backend）', () =>
 
   it('呼叫設定原樣交給 fs 查找，沒有被改形狀（交裸的 configurable 會變 unknown-caller）', async () => {
     const seen: unknown[] = [];
-    const listener = createAgentInstructionsListener(DEFAULT_MAX_BYTES, {
+    const listener = createAgentInstructionsListener(LIMITS, {
       fs: (invocation) => {
         seen.push(invocation);
         return { kind: 'not-attached' };
@@ -247,7 +486,7 @@ describe('什麼時候不注入（查找不是 ok、或沒有 backend）', () =>
 
   it('已經有基線時連 fs 都不查', async () => {
     let looked = 0;
-    const listener = createAgentInstructionsListener(DEFAULT_MAX_BYTES, {
+    const listener = createAgentInstructionsListener(LIMITS, {
       fs: () => {
         looked += 1;
         return { kind: 'not-attached' };

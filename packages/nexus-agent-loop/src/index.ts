@@ -32,7 +32,7 @@
  * | --- | --- | --- | --- |
  * | 1 | waterfall：listener 收 `next()`、拿到這一步的決定（`enter`／`reject`）後可以 splice 進批次的任何位置、可以 `reject` 整步（`agent.ts:267-288`、`runtime-types.ts:309-320`（`agent/pre-step` 的說明與簽名；`:321` 起是 `agent/request`））。`agent-instructions` 遇到 `reject`、或第 1 步批次是空的就不 splice，把基線留在收件匣等下一步（`agent-instructions/src/index.ts:345`） | **只能追加**，位置由基座決定（今天落在使用者那一句之後，與 dsh 同位）；沒有 `reject`，也沒有「留到下一步」 | 載體是 middleware 的 `beforeAgent`，只能回要追加的訊息（`interception-index.test.ts` 第 2 列 `permissionDelta`）；拿不到整個批次 |
  * | 2 | **每一步**都跑（waterfall 在 `preStep()`，迴圈裡每個 step 一次：`agent.ts:318` 呼叫、`:267-288` 實作） | **每次 invoke 一次**（`beforeAgent`） | 每一步要 `beforeModel`，它是圖裡的節點，預設上限 100 下每輪多一格＝33 輪變 24 輪（#389 triage 實測）；#389 拍板每一步的那一半先不做，這裡也就沒有另外為它付那一格。名字叫 `preStep` 而不叫 `beforeInvoke`：#389 重開時名字不必改 |
- * | 3 | listener 收 `{ agent, messages, turn, step, signal }`（簽名在 `runtime-types.ts:320`），`messages` 是**這一步從收件匣領出來的批次**（`runtime-types.ts:313`） | listener 收「**模型看得到的那一串**」（`effectiveMessages`）與呼叫設定 `{ configurable }`；沒有 `agent` 物件，這次呼叫屬於哪條 thread 由 `configurable` 認 | 我們沒有收件匣：訊息批次在圖的 state 裡。沒有 `agent` 物件，身分由呼叫設定認（同 `@nexus/session` 的會話查找） |
+ * | 3 | listener 收 `{ agent, messages, turn, step, signal }`（簽名在 `runtime-types.ts:320`），`messages` 是**這一步從收件匣領出來的批次**（`runtime-types.ts:313`） | listener 收「**模型看得到的那一串**」（`effectiveMessages`）與呼叫設定 `{ configurable, signal? }`（`signal` 是 1.1.0 加的）；沒有 `agent` 物件，這次呼叫屬於哪條 thread 由 `configurable` 認 | 我們沒有收件匣：訊息批次在圖的 state 裡。沒有 `agent` 物件，身分由呼叫設定認（同 `@nexus/session` 的會話查找） |
  * | 4 | 在請求被接受的**第一次嘗試**才記 `user/message`（`agent.ts:426-436`，`if (firstAttempt)` 底下） | 在注入當下記（`beforeAgent` 回傳之前） | `beforeAgent` 在請求之前就跑，看不到「這一步是不是第一次嘗試」。重試是模型呼叫那一層的事（`retryModelCall`），不會重跑 `beforeAgent`，所以同一次 invoke 不會因重試記兩筆 |
  *
  * **撤除條件**：#389 重開（每一步注入），或 core 開了讓多個貢獻者共用一格的 pre-step 節點時，第 1、2、4 列一起重評。
@@ -52,17 +52,25 @@ import { defineToken } from '@nexus/sdk';
 
 /**
  * 契約版本（semver）。介面破壞性改動跳 major，消費者的 `inject` 範圍擋下不相容的提供者。
+ *
+ * - `1.1.0`（[#1533](https://github.com/DemianLi/nexus-agent/issues/1533)）：{@link PreStepInvocation} 多一格選填的 `signal`。
+ *   只加選填欄位，`^1.0.0` 的消費者照常運作（在 1.0.0 的宿主上那一格是 `undefined`）。
  */
-export const AGENT_LOOP_CONTRACT_VERSION = '1.0.0';
+export const AGENT_LOOP_CONTRACT_VERSION = '1.1.0';
 
 /**
- * 這一次呼叫的設定，listener 的第二個參數。形狀固定是 `{ configurable }`：**原樣**交給會話查找與 fs 查找
- * （`sessionLookup.forCall(invocation)`、`fs.forCall(invocation)`）就認得出這次呼叫屬於哪一條 thread、是 root 還是某個子代理。
+ * 這一次呼叫的設定，listener 的第二個參數。`configurable` 那一格要**原樣**交給會話查找與 fs 查找
+ * （`sessionLookup.forCall(invocation)`、`fs.forCall(invocation)`）才認得出這次呼叫屬於哪一條 thread、是 root 還是某個子代理。
  * 交裸的 `configurable` 那兩個查找會回 `unknown-caller`——**注入會靜靜消失**，所以宿主一律交這個形狀。
  */
 export interface PreStepInvocation {
   /** 基座給 `beforeAgent` 的 `runtime.configurable`；取不到時是 `undefined`。 */
   readonly configurable: unknown;
+  /**
+   * 這一輪的中止訊號（`1.1.0` 起），對應 dsh `agent/pre-step` 參數裡的 `signal`（`packages/core/agent/src/runtime-types.ts:320`，`687f282e`）：人按了停止，listener
+   * 做到一半的事（例如讀檔）就收手。宿主拿不到時省略。
+   */
+  readonly signal?: AbortSignal;
 }
 
 /** 一則要追加的訊息：宿主把它建成使用者訊息。 */
