@@ -25,7 +25,9 @@
  * `session/end-seed` 收掉當下那一輪：之後、下一顆起頭之前的事件沒有輪可歸，略過。
  *
  * 分叉繼承來的輪不起草（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）：那幾輪是來源 thread 的，起草來源那一份時
- * 已經在了，子 thread 再出一次就是同一句話兩塊草稿。輪照樣從頭數，第幾輪對得上日誌裡的位置。
+ * 已經在了，子 thread 再出一次就是同一句話兩塊草稿。**例外是子 thread 自己對前綴裡的回覆評了分**（分叉之後照樣評得到，
+ * 見 `@nexus/core` 的 `currentMessageFeedback`）：那筆評分只在這一份裡，跳過那一輪它就哪一份都不在。所以那一輪留下，
+ * 但只認點踩；中止、失敗、打轉是來源那一輪發生的事，不算。輪照樣從頭數，第幾輪對得上日誌裡的位置。
  *
  * ## 排序
  *
@@ -233,24 +235,27 @@ export function draftSessionLog(
     ...(log.header.parentSession !== undefined && { parentSession: log.header.parentSession }),
     ...(isSubagentSessionHeader(log.header) && { subagent: true as const }),
     version,
-    // 先照整份數第幾輪，再丟掉繼承來的：前綴的輪起頭都在切點之前。
+    // 先照整份數第幾輪，再丟掉繼承來的：前綴的輪起頭都在切點之前。`ratings` 已經只收切點之後的評分（`ratingsByTurn`），
+    // 所以前綴那一輪查得到評分，就是子 thread 自己評的。
     turns: turns.flatMap((turn, index) => {
-      if (turn.seq < inherited) return [];
       const rating = ratings.get(turn.seq);
+      const own = turn.seq >= inherited;
+      if (!own && rating === undefined) return [];
       const hit: Readonly<Record<DraftSignal, boolean>> = {
         negative: rating?.rating === 'negative',
-        aborted: turn.aborted,
-        failed: turn.failures.length > 0,
-        looping: turn.longest !== null && turn.longest.count >= threshold,
+        aborted: own && turn.aborted,
+        failed: own && turn.failures.length > 0,
+        looping: own && turn.longest !== null && turn.longest.count >= threshold,
       };
       return {
         seq: turn.seq,
         ordinal: index + 1,
         kind: turn.kind,
         text: turn.text,
+        // 前綴那一輪的呼叫照印：被評的就是那則回覆，人要看它當時做了什麼。
         toolCalls: [...turn.calls.values()],
-        longestRun: turn.longest,
-        failures: turn.failures,
+        longestRun: own ? turn.longest : null,
+        failures: own ? turn.failures : [],
         ...(rating !== undefined && { rating }),
         signals: DRAFT_SIGNALS.filter((signal) => hit[signal]),
       };

@@ -211,6 +211,9 @@ describe('分叉來的日誌（#1580）', () => {
     new SessionTelemetryCoordinator({ log, sink });
 
     expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([5, 6, 7, 8]);
+    for (const record of sink.records) {
+      expect(record.attributes['session.seed_length']).toBe(5);
+    }
   });
 
   it('ops 的 shutdown 不帶切點', async () => {

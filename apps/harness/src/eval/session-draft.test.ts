@@ -379,6 +379,81 @@ describe('草稿', () => {
     expect(report([forked])).toContain('// 起草：1 份日誌（子代理 0 份不起草），候選 1 輪。');
   });
 
+  it('子 thread 對前綴裡的回覆點踩：那一輪留下，只算點踩，第幾輪照整份數（#1580）', () => {
+    const reply: Entry = [
+      'assistant/message',
+      { message: { type: 'ai', data: { content: '來源的回答', id: 'm1' } } },
+    ];
+    const forked = draft(
+      [
+        say('來源第一輪'),
+        end,
+        say('來源失敗又打轉、被點踩的那輪'),
+        reply,
+        failed('x'),
+        ...same(6),
+        aborted,
+        ['session/end-seed', { inherited: true }],
+        [
+          'feedback/message-put',
+          {
+            item: {
+              messageId: 'm1',
+              rating: 'negative',
+              note: '子會話點的',
+              version: 'v-child',
+              createdAt: 0,
+              updatedAt: 0,
+            },
+          },
+        ],
+      ],
+      { id: 'forked', parentSession: 'root', isSeeded: true },
+    );
+    expect(forked.turns).toHaveLength(1);
+    expect(forked.turns[0]).toMatchObject({
+      seq: 2,
+      ordinal: 2,
+      text: '來源失敗又打轉、被點踩的那輪',
+      signals: ['negative'],
+      failures: [],
+      longestRun: null,
+      rating: { rating: 'negative', note: '子會話點的' },
+    });
+    const text = report([forked]);
+    expect(text).toContain('// [點踩] 第 2 輪（seq 2）');
+    expect(text).not.toContain('// 失敗：');
+  });
+
+  it('前綴裡來源自己的點踩不讓那一輪留下：那是來源那一份的（#1580）', () => {
+    const reply: Entry = [
+      'assistant/message',
+      { message: { type: 'ai', data: { content: '來源的回答', id: 'm1' } } },
+    ];
+    const forked = draft(
+      [
+        say('來源那輪'),
+        reply,
+        [
+          'feedback/message-put',
+          {
+            item: {
+              messageId: 'm1',
+              rating: 'negative',
+              version: 'v-src',
+              createdAt: 0,
+              updatedAt: 0,
+            },
+          },
+        ],
+        end,
+        ['session/end-seed', { inherited: true }],
+      ],
+      { id: 'forked', parentSession: 'root', isSeeded: true },
+    );
+    expect(forked.turns).toEqual([]);
+  });
+
   it('goal 續行輪次標出來：prompt 是機器排的', () => {
     const drafts = draft([
       ['turn/start', { kind: 'goal', text: '繼續完成目標', goalId: 'g', revision: 1, round: 2 }],
