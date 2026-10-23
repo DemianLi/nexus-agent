@@ -355,6 +355,30 @@ describe('草稿', () => {
     expect(forked.feedbackRecords).toEqual([{ text: '自己的評語' }]);
   });
 
+  it('分叉繼承來的輪不起草，第幾輪照整份數（#1580）', () => {
+    const forked = draft(
+      [
+        say('來源中止的那輪'),
+        aborted,
+        say('來源失敗又打轉的那輪'),
+        failed('x'),
+        ...same(6),
+        end,
+        ['session/end-seed', { inherited: true }],
+        say('子會話自己的'),
+        failed('y'),
+      ],
+      { id: 'forked', parentSession: 'root', isSeeded: true },
+    );
+    expect(forked.turns).toHaveLength(1);
+    expect(forked.turns[0]).toMatchObject({
+      ordinal: 3,
+      text: '子會話自己的',
+      signals: ['failed'],
+    });
+    expect(report([forked])).toContain('// 起草：1 份日誌（子代理 0 份不起草），候選 1 輪。');
+  });
+
   it('goal 續行輪次標出來：prompt 是機器排的', () => {
     const drafts = draft([
       ['turn/start', { kind: 'goal', text: '繼續完成目標', goalId: 'g', revision: 1, round: 2 }],

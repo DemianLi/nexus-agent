@@ -24,6 +24,9 @@
  * [#267](https://github.com/DemianLi/nexus-agent/issues/267)）。
  * `session/end-seed` 收掉當下那一輪：之後、下一顆起頭之前的事件沒有輪可歸，略過。
  *
+ * 分叉繼承來的輪不起草（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）：那幾輪是來源 thread 的，起草來源那一份時
+ * 已經在了，子 thread 再出一次就是同一句話兩塊草稿。輪照樣從頭數，第幾輪對得上日誌裡的位置。
+ *
  * ## 排序
  *
  * 先比命中幾種，多的在前；同數時照 點踩 > 取消 > 失敗 > 打轉 逐位比（#280 拍板）。
@@ -95,11 +98,11 @@ export interface DraftToolCall {
   readonly result?: { readonly isError: boolean; readonly code?: string };
 }
 
-/** 一輪。**每一輪都在**，`signals` 空的就是沒入選。 */
+/** 一輪。**這一份自己的每一輪都在**（分叉繼承來的不在），`signals` 空的就是沒入選。 */
 export interface DraftTurn {
   /** 起頭那顆 `turn/start` 的 `seq`。點踩綁的是這一輪裡的回覆（格式 10 以前綁的是它）。 */
   readonly seq: number;
-  /** 這份日誌裡的第幾輪，從 1 起算，給人看的。 */
+  /** 這份日誌裡的第幾輪，從 1 起算，給人看的；分叉來的連繼承來的輪一起數，同日誌裡的位置。 */
   readonly ordinal: number;
   /** `goal` 是續行輪次、`agent-message` 是父代理傳來的（#839）、`subagent-settled` 是背景子代理結算的通知（#840）：`text` 都不是人說的話。 */
   readonly kind: 'message' | 'goal' | 'agent-message' | 'subagent-settled';
@@ -230,7 +233,9 @@ export function draftSessionLog(
     ...(log.header.parentSession !== undefined && { parentSession: log.header.parentSession }),
     ...(isSubagentSessionHeader(log.header) && { subagent: true as const }),
     version,
-    turns: turns.map((turn, index) => {
+    // 先照整份數第幾輪，再丟掉繼承來的：前綴的輪起頭都在切點之前。
+    turns: turns.flatMap((turn, index) => {
+      if (turn.seq < inherited) return [];
       const rating = ratings.get(turn.seq);
       const hit: Readonly<Record<DraftSignal, boolean>> = {
         negative: rating?.rating === 'negative',

@@ -1064,6 +1064,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        *
        * **怎麼捕獲由後端說的共享策略決定**（[#279](https://github.com/DemianLi/nexus-agent/issues/279)）：
        * `feedback-only` 是 on-demand，只在人送出回饋時補送（{@link watchFeedback}）；其餘是 live。
+       * 分叉來的會話，live 從繼承標記起送，`feedback-only` 補送整份、連繼承來的前綴（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）。
        * dsh 把這一段放在 OTel 後端自己的建構子裡（它的後端自己組協調器）；我們的協調器從
        * [#89](https://github.com/DemianLi/nexus-agent/issues/89) 起就在這裡組，plugin 碰不到日誌，所以
        * 策略跟著協調器住在這裡。協調器本身照舊不讀 `sharing`。
@@ -1084,6 +1085,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             // 掛著的策略。這是 dsh waterfall 的語意，折疊要接得住。
             rules: () => registry.telemetry.rules(),
             capture: sharing === 'feedback-only' ? 'on-demand' : 'live',
+            // `feedback-only` 補送整份，連分叉繼承來的前綴（照 dsh 出廠後端的 `includeHistory: true`）；
+            // `full` 從這一份自己的第一顆起，分叉來的不重送來源的前綴（#1580）。
+            includeHistory: sharing === 'feedback-only',
           });
           const unwatch = watchFeedback(log, sharing, coordinator);
           // 退訂跟協調器綁成一個：組裝整個收掉時（下面的 `dispose`）只知道逐個收，

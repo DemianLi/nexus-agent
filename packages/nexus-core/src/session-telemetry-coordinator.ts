@@ -50,13 +50,20 @@ export interface SessionTelemetryCoordinatorOptions {
   readonly warn?: (message: string) => void;
   /** 省略即 `live`。 */
   readonly capture?: SessionTelemetryCapture;
+  /**
+   * 從頭（`seq` 0）捕獲，連分叉繼承來的前綴一起。省略即從這一份自己的第一顆起：分叉來的從繼承標記那一顆起，
+   * 其餘從頭。照 dsh 的 `includeHistory`（`packages/session/session-telemetry/src/coordinator.ts:150-155`，`687f282e`）；
+   * dsh 出廠的 OTel 後端在 `feedback-only` 給 `true`（`session-telemetry-otel/src/index.ts:219-222`），我們的組裝點同樣。
+   */
+  readonly includeHistory?: boolean;
 }
 
 /**
  * 一份日誌一個。
  *
  * `live` 會在建構當下**補送日誌裡已經有的東西**再訂閱後續——協調器晚於日誌成立是常態
- * （日誌在 pump / CLI 起來時就建了），少補這一段就等於開頭那幾筆永遠不會出去。
+ * （日誌在 pump / CLI 起來時就建了），少補這一段就等於開頭那幾筆永遠不會出去。分叉來的日誌只補送
+ * 繼承標記之後的（{@link SessionTelemetryCoordinatorOptions.includeHistory}）。
  */
 export class SessionTelemetryCoordinator {
   readonly #log: SessionLog;
@@ -65,12 +72,12 @@ export class SessionTelemetryCoordinator {
   readonly #warn: (message: string) => void;
   readonly #capture: SessionTelemetryCapture;
   /**
-   * 交付游標：**交出去過的最高 `seq`**，還沒交過任何一筆時是 `-1`。
+   * 交付游標：**交出去過的最高 `seq`**。起點見建構子：從頭捕獲時是 `-1`，分叉來的是繼承標記的前一顆。
    *
    * 「交出去過」不是「送達了」——`emit()` 回來就算數，送達是後端 SDK 的事。被扣住的
    * 記錄（脫敏拋錯、後端拋錯）**不推進游標**，所以下一次 {@link captureNow} 會再試一遍。
    */
-  #cursor = -1;
+  #cursor: number;
   #unsubscribe: (() => void) | undefined;
   #disposed = false;
 
@@ -84,6 +91,12 @@ export class SessionTelemetryCoordinator {
         console.warn(message);
       });
     this.#capture = options.capture ?? 'live';
+    // 起點照 dsh `captureSession`（`coordinator.ts:150-155`）：分叉來的從繼承標記那一顆起——前綴是來源會話的，
+    // 標記是子會話自己的。dsh 對續接回來的會話另外從讀回的前綴之後起（`firstLiveSeq`）；這裡續接照舊從頭重送，
+    // 收端靠 `(session.id, event.seq)` 去重，所以續接一份分叉來的日誌是從標記起重送它自己的那一段。這是既有差異，
+    // 沒有登記過（[#1958](https://github.com/DemianLi/nexus-agent/issues/1958)）。
+    const start = this.#log.inheritedEventCount;
+    this.#cursor = options.includeHistory === true || start === 0 ? -1 : start - 1;
     if (this.#capture === 'live') {
       this.captureNow();
       this.#unsubscribe = this.#log.subscribe((event) => {
@@ -153,6 +166,12 @@ export class SessionTelemetryCoordinator {
         'session.id': this.#log.sessionId,
         'event.type': event.type,
         'event.seq': event.seq,
+        // 分叉的切點：收端據此認出開頭那幾顆是繼承來的（dsh `identityOf`，`coordinator.ts:303`）。dsh 看 header 的
+        // `isSeeded`；這裡看切點大於 0，兩者等價——切點是一顆 `turn/end` 之後的標記，至少是 1，落盤也核過帶標記的
+        // 日誌必須標 `isSeeded`（`session-persistence.ts` 的 rootLineage）。
+        ...(this.#log.inheritedEventCount > 0 && {
+          'session.seed_length': this.#log.inheritedEventCount,
+        }),
       },
       // **拷一份，不借用。** 借的話送出去的 body 就是正典日誌裡那個物件，脫敏規則或
       // 後端就地一改等於改寫歷史。今天那還會被 `deepFreeze` 擋成一個看不懂的失敗

@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 
 import { fakeSink, resumedLog } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
-import { SessionLog } from './session-log.js';
+import { buildForkSeed, SessionLog } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
 import { isFeedbackEvent, isMirroredEvent } from './session-telemetry.js';
@@ -72,7 +72,7 @@ describe('ledger 投影', () => {
     expect(record.body).toEqual({ kind: 'message', text: '你好' });
   });
 
-  it('沒有來源的 dsh 欄位就是不在：cwd / parent_id / seed_length 一個都不出現', () => {
+  it('沒有來源的 dsh 欄位就是不在：cwd / parent_id 不出現，不是分叉來的也不帶 seed_length', () => {
     const log = new SessionLog('thread-a');
     const sink = fakeSink();
     new SessionTelemetryCoordinator({ log, sink });
@@ -129,6 +129,100 @@ describe('ledger 投影', () => {
     log.append('turn/end', {});
     coordinator.captureNow();
     expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([0, 1]);
+  });
+});
+
+/**
+ * 一份剛分叉的子日誌：來源兩輪（seq 0–3），切在第二輪的 `turn/end`（3），標記在 4。
+ * 前綴裡放一顆 `feedback/record`，on-demand 補送整份時看得出前綴有沒有被送。
+ */
+function forkedLog(): SessionLog {
+  const source = new SessionLog('source');
+  source.append('turn/start', { kind: 'message', text: '第一輪' });
+  source.append('turn/end', {});
+  source.append('turn/start', { kind: 'message', text: '第二輪' });
+  source.append('feedback/record', { text: '來源的回饋' });
+  source.append('turn/end', {});
+  return new SessionLog('child', { seed: buildForkSeed(source.events, 4) });
+}
+
+describe('分叉來的日誌（#1580）', () => {
+  it('live：從繼承標記那一顆起送，前綴不重送；每筆都帶切點', () => {
+    const log = forkedLog();
+    expect(log.inheritedEventCount).toBe(5);
+    const sink = fakeSink();
+    new SessionTelemetryCoordinator({ log, sink });
+    log.append('turn/start', { kind: 'message', text: '子會話自己的' });
+
+    expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([5, 6]);
+    expect(sink.records[0]!.attributes['event.type']).toBe('session/end-seed');
+    for (const record of sink.records) {
+      expect(record.attributes['session.seed_length']).toBe(5);
+    }
+  });
+
+  it('includeHistory：從頭送，連前綴一起，前綴那幾筆也帶切點', () => {
+    const log = forkedLog();
+    const sink = fakeSink();
+    new SessionTelemetryCoordinator({ log, sink, includeHistory: true });
+
+    expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([
+      0, 1, 2, 3, 4, 5,
+    ]);
+    for (const record of sink.records) {
+      expect(record.attributes['session.seed_length']).toBe(5);
+    }
+  });
+
+  it('on-demand 不給 includeHistory 也從標記起：前綴裡的回饋不補送', () => {
+    const log = forkedLog();
+    const sink = fakeSink();
+    const coordinator = new SessionTelemetryCoordinator({ log, sink, capture: 'on-demand' });
+    coordinator.captureNow();
+
+    expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([5]);
+  });
+
+  it('on-demand＋includeHistory（feedback-only 的組法）：補送整份，前綴裡的回饋也在', () => {
+    const log = forkedLog();
+    const sink = fakeSink();
+    const coordinator = new SessionTelemetryCoordinator({
+      log,
+      sink,
+      capture: 'on-demand',
+      includeHistory: true,
+    });
+    coordinator.captureNow();
+
+    expect(sink.records.map((record) => record.attributes['event.type'])).toContain(
+      'feedback/record',
+    );
+    expect(sink.records[0]!.attributes['event.seq']).toBe(0);
+  });
+
+  it('續接一份分叉來的日誌：從標記起重送自己那一段，前綴照樣不送', () => {
+    const first = forkedLog();
+    first.append('turn/start', { kind: 'message', text: '子會話自己的' });
+    first.append('turn/end', {});
+    const log = new SessionLog('child', { seed: first.events });
+    expect(log.inheritedEventCount).toBe(5);
+
+    const sink = fakeSink();
+    new SessionTelemetryCoordinator({ log, sink });
+
+    expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([5, 6, 7, 8]);
+  });
+
+  it('ops 的 shutdown 不帶切點', async () => {
+    const log = forkedLog();
+    const sink = fakeSink();
+    const coordinator = new SessionTelemetryCoordinator({ log, sink });
+    await coordinator.dispose();
+
+    expect(sink.records.at(-1)!.attributes).toEqual({
+      'telemetry.op': 'shutdown',
+      'session.id': 'child',
+    });
   });
 });
 
