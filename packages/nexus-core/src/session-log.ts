@@ -1507,23 +1507,31 @@ const SESSION_EVENT_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
 
 /**
  * 一筆事件的固定信封，照 dsh `assertSessionEventEnvelope`（`packages/core/session/src/index.ts:201-243`，`687f282e`）：
- * 鍵只准 {@link SESSION_EVENT_ENVELOPE_KEYS}；`seq` 是非負安全整數、不是 `-0`；`time` 是安全整數；`data` 要在；
+ * 鍵只准 {@link SESSION_EVENT_ENVELOPE_KEYS}；`seq` 是非負安全整數、不是 `-0`；`time` 是安全整數、不是 `-0`；`data` 要在；
  * `ignorable` 只准 `true`。**不含資料規則**：dsh 的 seed 在信封之後接著跑 {@link validateSessionEventData}（`:230`），
  * 這裡拆成兩支，因為讀盤那一側照 dsh 是逐行只驗信封（`session-format-v1-to-v2/src/codec.ts:132-146` 的 `decodeEvent`，
  * 壞行照 recoverable 處理），資料規則等讀完整份才跑（`session-persistence-jsonl/src/index.ts:860`）。dsh seed 之後的
  * `assertCurrentLlmShape`（`:232-242`）驗的是 dsh 自己的訊息詞彙，nexus 沒有對應（#1549 N0558、N0599 已劃掉）。
  *
- * 兩個呼叫點（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549)）：{@link SessionLog} 的 seed（拷完之後），
- * 與 harness 讀盤的逐行判壞行（`jsonl-session-store.ts` 的 `parseJsonlSessionBody`）。`-0` 那一格在 seed 擋不到東西
- * （seed 一律先過 {@link snapshotJsonValue}，它已經拒收 `-0`）；讀盤時 `JSON.parse` 讀得出 `-0`，那裡才有作用。
+ * 兩個呼叫點（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549)），兩層照 dsh 各驗各的：
+ *
+ * - {@link SessionLog} 的 seed（拷完之後），對到 dsh core 的這一支：`seq` 的形狀在這裡驗。
+ * - harness 讀盤的逐行判壞行（`jsonl-session-store.ts` 的 `parseJsonlSessionBody`），對到 dsh 讀檔器的 `decodeEvent`：
+ *   傳 `checkSeq: false`，**不驗 `seq` 的形狀**，交給讀方的 `seq === 已接受的筆數`（dsh `codec.ts:104`；`-0` 會等於 `0`
+ *   而放行，要到續接建 seed 時才拒，同 dsh）。
+ *
+ * `time` 拒 `-0` 照 dsh 讀檔器（`decodeEvent:143` 的 `sessionFormatSafeInteger`，`session-format/src/json.ts:37`）；dsh core
+ * 這一支不檢，但 seed 一律先過 {@link snapshotJsonValue}，`-0` 在拷那一步就拒了，所以放在共用的這一支，seed 的行為不變。
  *
  * @param value - 要驗的那一筆。
  * @param subject - 錯誤訊息的開頭，指認是哪一筆（「seed 第 3 顆」「第 4 行」）。
+ * @param options - `checkSeq` 預設 `true`；讀盤傳 `false`，見上。
  * @throws {TypeError} 信封哪一格不對。
  */
 export function assertSessionEventEnvelope(
   value: unknown,
   subject: string,
+  options: { readonly checkSeq?: boolean } = {},
 ): asserts value is SessionEvent {
   if (!isJsonObject(value)) throw new TypeError(`${subject}不是一個物件`);
   const extra = Object.keys(value).find((key) => !SESSION_EVENT_ENVELOPE_KEYS.has(key));
@@ -1532,10 +1540,13 @@ export function assertSessionEventEnvelope(
   }
   const { type, seq, time } = value;
   if (typeof type !== 'string') throw new TypeError(`${subject}的 type 要是字串`);
-  if (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0 || Object.is(seq, -0)) {
+  if (
+    options.checkSeq !== false &&
+    (typeof seq !== 'number' || !Number.isSafeInteger(seq) || seq < 0 || Object.is(seq, -0))
+  ) {
     throw new TypeError(`${subject}的 seq 要是非負的安全整數`);
   }
-  if (typeof time !== 'number' || !Number.isSafeInteger(time)) {
+  if (typeof time !== 'number' || !Number.isSafeInteger(time) || Object.is(time, -0)) {
     throw new TypeError(`${subject}的 time 要是安全整數，拿到 ${String(time)}`);
   }
   if (value['data'] === undefined) throw new TypeError(`${subject}沒有 data`);

@@ -940,6 +940,11 @@ export type ParseBodyOptions = (
   | {
       /** 不認得又沒標可忽略的種類也照收。**只給產品路徑外的離線掃描**（`eval/session-scan.ts` 的「照格式版本表態」）。 */
       readonly acceptUnknownEvents: true;
+      /**
+       * header 的版本比這一版新（`classifyStoredFormatVersion` 判 `newer`）。是的話不驗信封：新版的格式不必過這一版的
+       * 結構檢查（dsh `format.ts:333-337`，同 `parseHeader` 那一側）；這一版的檔照驗（#1549 PM 裁決 issuecomment-6354566852）。
+       */
+      readonly newerFormat: boolean;
     }
   | {
       readonly acceptUnknownEvents?: false;
@@ -983,8 +988,8 @@ function isTurnCloser(value: unknown): boolean {
  *
  * 壞行指：不是 JSON、信封不對（`@nexus/core` 的 `assertSessionEventEnvelope`，與 seed 共用，照 dsh 讀檔器逐行的
  * `decodeEvent`，`session-format-v1-to-v2/src/codec.ts:132-146`，#1549），或 `seq` 不等於已接受的事件數。
- * 開了 `acceptUnknownEvents` 的離線掃描不驗信封、只看像不像一筆事件（`type` 是字串、`time` 是數字的物件）：它也讀
- * 比這一版新的日誌，新版的信封不必過這一版的結構檢查（同 header 那一側，dsh `format.ts:333-337`）。
+ * 離線掃描讀比這一版新的日誌（`newerFormat`）不驗信封、只看像不像一筆事件（`type` 是字串、`time` 是數字的物件）：
+ * 新版的信封不必過這一版的結構檢查（同 header 那一側，dsh `format.ts:333-337`）。
  *
  * **種類這一版不認得、又沒標 `ignorable` 的，整份拒絕**（{@link SessionEventUnsupportedError}，
  * [#507](https://github.com/DemianLi/nexus-agent/issues/507)），不是略過那一行：不認得的必需事件可能左右後面每一筆
@@ -1029,10 +1034,11 @@ export function parseJsonlSessionBody(
       isRecord(value) &&
       typeof value['type'] === 'string' &&
       typeof value['time'] === 'number';
-    if (problem === undefined && options.acceptUnknownEvents !== true) {
+    if (problem === undefined && !(options.acceptUnknownEvents === true && options.newerFormat)) {
       // 信封照 dsh 逐行驗（`decodeEvent`，#1549），與 core 的 seed 共用同一支；不過就是壞行，照下面的 strict／recoverable 處理。
+      // `seq` 的形狀不在這裡驗，交給下面的 `seq === events.length`（同 dsh 讀檔器）。
       try {
-        assertSessionEventEnvelope(value, `第 ${lineNumber} 行`);
+        assertSessionEventEnvelope(value, `第 ${lineNumber} 行`, { checkSeq: false });
       } catch (error: unknown) {
         problem = error instanceof Error ? error.message : String(error);
       }

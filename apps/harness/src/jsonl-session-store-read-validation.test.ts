@@ -2,7 +2,7 @@
  * 讀盤時的驗證（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549)），每一段對到卡上一項：
  *
  * - 信封：逐行驗，與 core 的 seed 共用 `assertSessionEventEnvelope`（dsh 讀檔器的 `decodeEvent`）；壞行照 recoverable：
- *   後面有收尾就整份拒，在尾巴就當撕裂的尾巴丟掉。
+ *   後面有收尾就整份拒，在尾巴就當撕裂的尾巴丟掉。離線掃描照 header 的版本分流：這一版的照驗，比這一版新的不驗。
  * - header：各格的形狀與鍵白名單，與 `create` 共用 `assertStoredHeaderFields`；排在版本判定之後；`acceptNewer`
  *   讀比這一版新的整支不跑。
  * - N0785：讀回來的每一筆跑 core 的單筆資料規則（dsh `validateStoredEvents`）。
@@ -22,8 +22,10 @@ import {
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
+  SessionLog,
 } from '@nexus/core';
 
+import { readSessionLogs } from './eval/session-scan.js';
 import {
   openJsonlSessionStore,
   parseHeader,
@@ -117,29 +119,58 @@ describe('N0556 讀盤逐行的信封（照 dsh decodeEvent）', () => {
     },
   );
 
-  it('seq 是 -0（JSON.parse 讀得出、JSON.stringify 寫不出）：後面還有收尾就拒', async () => {
+  it('time 是 -0（JSON.parse 讀得出、JSON.stringify 寫不出）：後面還有收尾就拒，照 dsh sessionFormatSafeInteger', async () => {
     const directory = await written([
-      '{"type":"model/usage","seq":-0,"time":1,"data":{}}',
+      '{"type":"model/usage","seq":0,"time":-0,"data":{}}',
       turnEnd,
     ]);
     for (const error of await failures(directory)) {
       expect(error).toBeInstanceOf(SessionCorruptionError);
-      expect((error as Error).message).toContain('第 1 行的 seq');
+      expect((error as Error).message).toContain('第 1 行的 time');
     }
   });
 
-  it('離線掃描（acceptUnknownEvents）不驗信封：它也讀比這一版新的日誌；說明版本的照驗', () => {
-    const body = Buffer.from(
-      `${JSON.stringify({ type: 'model/usage', seq: 0, time: 1.5, data: {} })}\n`,
-    );
-    const scanned = parseJsonlSessionBody('a', body, {
-      acceptUnknownEvents: true,
-      recovery: 'strict',
+  it('seq 的形狀讀盤不驗，交給連續性（同 dsh 讀檔器）：-0 等於 0 讀得出，要到建 seed 才拒', async () => {
+    const directory = await written([
+      '{"type":"model/usage","seq":-0,"time":1,"data":{}}',
+      turnEnd,
+    ]);
+    expect(await lengths(directory)).toEqual([2, 2]);
+    const { events, stored } = await openJsonlSessionStore({ directory }).resume('a');
+    await stored.close();
+    expect(() => new SessionLog('a', { seed: events })).toThrow(TypeError);
+  });
+
+  describe('E2 離線掃描照 header 的版本分流（PM 裁決 issuecomment-6354566852）', () => {
+    const badTime = { type: 'model/usage', time: 1.5, data: {} };
+
+    it('E2a 不是 newer 的檔信封壞了：記成讀不了，同 header 那一側', async () => {
+      const directory = await written([usage, badTime]);
+      const { logs, unreadable } = await readSessionLogs([directory]);
+      expect(logs).toHaveLength(0);
+      expect(unreadable).toHaveLength(1);
+      expect(unreadable[0]?.reason).toContain('第 2 行的 time');
     });
-    expect(scanned.events).toHaveLength(1);
-    expect(() =>
-      parseJsonlSessionBody('a', body, { version: SESSION_LOG_FORMAT_VERSION, recovery: 'strict' }),
-    ).toThrow(/time/);
+
+    it('E2b newer 的檔：帶這一版不合格的信封也照讀', async () => {
+      const directory = await written([usage, badTime], {
+        version: SESSION_LOG_FORMAT_VERSION + 1,
+      });
+      const { logs, unreadable } = await readSessionLogs([directory]);
+      expect(unreadable).toHaveLength(0);
+      expect(logs[0]?.events).toHaveLength(2);
+    });
+
+    it('E2 parseJsonlSessionBody 本身：newerFormat 才不驗', () => {
+      const body = Buffer.from(`${JSON.stringify({ seq: 0, ...badTime })}\n`);
+      const options = { acceptUnknownEvents: true, recovery: 'strict' } as const;
+      expect(
+        parseJsonlSessionBody('a', body, { ...options, newerFormat: true }).events,
+      ).toHaveLength(1);
+      expect(() => parseJsonlSessionBody('a', body, { ...options, newerFormat: false })).toThrow(
+        /time/,
+      );
+    });
   });
 });
 
