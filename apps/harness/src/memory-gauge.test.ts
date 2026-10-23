@@ -3,6 +3,8 @@
  * 一行日誌的形狀、計時器的行為。接線（serve 真的起量具）在 `serve-memory-gauge.test.ts`。
  */
 
+import { getHeapStatistics } from 'node:v8';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { formatMemoryLine, readMemory, startMemoryGauge } from './memory-gauge.js';
@@ -31,6 +33,7 @@ function deps(
       rssBytes: 100 * MIB,
       heapUsedBytes: 40 * MIB,
       heapTotalBytes: 60 * MIB,
+      heapLimitBytes: 1000 * MIB,
     }),
     freemem: () => 2048 * MIB,
     totalmem: () => 8192 * MIB,
@@ -44,6 +47,18 @@ const MEMINFO =
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe('行程自己：heap 上限（#1718）', () => {
+  it('真的讀：heapLimitBytes 是 V8 的 heap_size_limit，不是已提交的 heapTotal', async () => {
+    const { process: proc } = await readMemory();
+    expect(proc.ok).toBe(true);
+    if (!proc.ok) return;
+    expect(proc.heapLimitBytes).toBe(getHeapStatistics().heap_size_limit);
+    // 已用一定小於上限；若誤拿 heapTotal 當上限，heapTotal 平常就貼著 heapUsed，這個差距不會有這麼大。
+    expect(proc.heapLimitBytes).toBeGreaterThan(proc.heapTotalBytes);
+    expect(proc.heapUsedBytes).toBeLessThan(proc.heapLimitBytes);
+  });
 });
 
 /** v2 單一階層（docker 預設的私有 cgroupns）：路徑是 `/`。 */

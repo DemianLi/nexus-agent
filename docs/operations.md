@@ -1828,12 +1828,14 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **只讀、只講**，不拒收、不逐出、不下架；也不寫進 `plugin-snapshot.json`。看了之後要不要做動作（下架插件）等量測的數字出來再決定。
 - **用量警告（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)，「底座保險絲」第 0 級）**：取樣開著時，每次讀數之後再和 `warnAtPercent`（預設 75）比一次。**取樣關著（預設）就整段不檢查**，serve 的日誌與沒有這個功能時一樣。
   - **分母**：容器有 cgroup 上限時是 `memory.current ÷ memory.max`；cgroup 自己沒設、但行程受限（上限在祖先 cgroup）時用受限的值；都沒有就看主機的 `(總量 − 可用) ÷ 總量`，其中「可用」只認 `/proc/meminfo` 的 `MemAvailable`。警告裡寫明用的是哪一個。**主機退到 `os.freemem()`（沒有 `/proc/meminfo`）時當成讀不到**：它不含可回收的快取，用量天生偏高，會一直誤報。所以在 macOS 上 cgroup 和主機都不可用，**整個不警告**，只在起動時講一次原因。
+  - **另一個來源：V8 heap 已用 ÷ `heap_size_limit`（[#1718](https://github.com/DemianLi/nexus-agent/issues/1718)，demian 2026-10-20 拍板）**。跟上面那個比例**取較高的**，也就是任何一個超過門檻就響；**用同一組門檻**（`warnAtPercent`、降回「門檻 − 5」才恢復），不另訂。依據是 #1490 的實測：1g、4g 容器各三次，**都是 V8 heap 先撞到自己的上限**（exit 134、`OOMKilled=false`），死的當下 cgroup 只到 60–67%，只看 cgroup 一次都不會警告。分母是 `v8.getHeapStatistics().heap_size_limit`（沒給 `--max-old-space-size` 時 Node 依 cgroup／主機推出來的值），不是 `heapTotal`（已提交的量平常就貼著已用）。行程的讀數拿不到、或上限不是正數時，這個來源**讀不到就不判斷**，講一次原因，不影響上面那個來源。
+  - **兩個來源各講各的**：文案寫明是哪一個觸發——`記憶體用量（cgroup v2 /）…` 是容器或主機，`V8 heap 用量（V8 heap_size_limit）…` 是 heap。「cgroup 60%、heap 90%」響的是 heap。**越過與恢復各算各的**：每個來源一份狀態，只跟自己比；cgroup 降到 70% 以下就講 cgroup 已恢復，不等 heap。兩個都超過時是兩行（修法不同，所以分開講）。heap 這一行的現況：`heapUsed` 隨老生代 GC 起伏，在合成負載下範圍有 20 多個百分點，遠大於 5 個百分點的遲滯；常態落在門檻附近的 heap 會輪流響「警告」與「已恢復」，每次越過一行、只寫日誌。部署範本把上限設成多少（`--max-old-space-size`）是另一張卡（[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)）。
   - **`memory.current` 會高估**：它含 page cache，沒有扣 `inactive_file`（照拍板）。#1490 在 1g 容器實測高於行程 RSS 約 28 MiB、4g 約 170 MiB。長期跑下來 page cache 會把讀數推高後停在高處，警告響一次之後可能一直不恢復；因為只在越過時講一次，代價只有那一行日誌。
   - **講幾次**：**嚴格超過**門檻講一次，之後不重複；降到「門檻 − 5」**以下**（嚴格小於）才講一次「已恢復」。在門檻附近來回不會洗版。
   - **警告長這樣**（固定前綴 `[記憶體]`，只寫 serve 日誌）：`[記憶體] 警告：記憶體用量（cgroup v2 /）80.0%，超過門檻 75%（800.0 MiB／1000.0 MiB）。serve 現在有 37 條 thread（上限 500）。下一步：調低 thread-capacity 的 maxThreads，或縮短 idleEvictAfterMs（改了要重啟 serve）；門檻是 memory-gauge 那一列的 warnAtPercent。`
-  - **讀不到就不判斷、不警告，也不當成 0%**：兩個來源都讀不到時，講一次原因，之後不重複；不可讀期間狀態保持不變（讀不到不算恢復），回來時接續。從可讀變成不可讀才再講一次。
+  - **讀不到就不判斷、不警告，也不當成 0%**：容器與主機兩邊都讀不到時（heap 來源各算各的，見上），講一次原因，之後不重複；不可讀期間狀態保持不變（讀不到不算恢復），回來時接續。從可讀變成不可讀才再講一次。
   - **只警告，不做任何動作**：不拒收、不逐出、不下架。web 看不到這一行（等管理員身分，[#1428](https://github.com/DemianLi/nexus-agent/issues/1428)）。
-  - **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有執行期記憶體監看；「讀不到就不警告」借 dsh 終端回收的形狀（`packages/api/terminal-controller/src/retention.ts:119`、`:122`：檢查失敗記成 `state: 'unknown'`、不是 `idle` 就不收）。
+  - **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有執行期記憶體監看；heap 上限這個量取自 dsh 的 `scripts/run-memory-pressure-bench.ts:114-115`（`getHeapStatistics().heap_size_limit` 當一級量測值），拿它來警告是我們的；「讀不到就不警告」借 dsh 終端回收的形狀（`packages/api/terminal-controller/src/retention.ts:119`、`:122`：檢查失敗記成 `state: 'unknown'`、不是 `idle` 就不收）。
 - **只量 serve 這一個行程**，不含它起的子行程（MCP 的 stdio 子行程、`rg`）。cgroup 那一格涵蓋同一個容器裡的整棵行程樹，所以在容器裡跑時，`cgroup` 的數字比 `行程 RSS` 大多少，就是子行程與其他行程佔的。
 - **起動時讀一次，改了要重啟**。間隔寫小於 1000 的非零數字，這一列在載入期被丟掉（和其他設定驗不過的列一樣，日誌會說「設定驗不過」），量具不啟動。
 - **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有執行期的記憶體監看，它的記憶體只在 CI 量（無 swap 的 cgroup 模擬 4／8 GB 機器）。這一列是多人共用的內網主機才有的需求。讀 cgroup 的方法照 dsh `scripts/run-memory-pressure-bench.ts:63-66`（`/proc/self/cgroup` 加 `process.constrainedMemory()`）；多出來的只有 v1／hybrid 的讀法（dsh 的 bench 只認 v2）。逐點見 `src/memory-gauge.ts` 的檔頭。
