@@ -380,8 +380,12 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
         if (executeOptions?.busy === true) {
           throw new Error(`命令 "/${parsed.name}" 這次是在一輪跑著時執行的，不能 steer。`);
         }
-        if (typeof text !== 'string' || text.trim().length === 0) {
-          throw new TypeError(`命令 "/${parsed.name}" 的 steer 要是非空字串。`);
+        // 照 dsh 的 `hasPromptContent`：文字空白但帶著附件，這一句仍有內容（`/plan` 只貼圖）。
+        const hasAttachments = steerAttachments !== undefined && steerAttachments.length > 0;
+        if (typeof text !== 'string' || (text.trim().length === 0 && !hasAttachments)) {
+          throw new TypeError(
+            `命令 "/${parsed.name}" 的 steer 要是非空字串（帶附件時可以是空字串）。`,
+          );
         }
         // 帶附件的 steer 只能帶這次呼叫收下的那幾份：host 不替 handler 憑空造參照。
         if (steerAttachments !== undefined) {

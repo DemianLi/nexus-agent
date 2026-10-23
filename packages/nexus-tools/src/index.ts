@@ -33,8 +33,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `1.3.0`（#1469）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.onResult}（監聽 `tools/result`，工具最終結果落定的觀察者）。
  * 同樣是向後相容的新增：`^1.0.0`～`^1.2.0` 的舊消費者不呼叫它，照常；要用的消費者宣告 `^1.3.0`。
+ *
+ * `1.4.0`（#1607）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.concludeTurn}（宣告了 `returnDirect` 的工具在本體裡標「這一輪在這個結局收」）。
+ * 同樣是向後相容的新增：`^1.0.0`～`^1.3.0` 的舊消費者不呼叫它，照常；要用的消費者宣告 `^1.4.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '1.3.0';
+export const TOOLS_CONTRACT_VERSION = '1.4.0';
 
 /**
  * 子代理叫到 `rootOnly` 工具時，那一份拒絕樁自己帶的句與碼（#1458 Q3 (a)）。形狀對應 `@nexus/core` 註冊點的
@@ -183,6 +186,31 @@ export interface ToolRegistry {
    * @returns 只撤銷這一次登記的冪等 disposer。
    */
   onResult?(listener: ToolResultListener): () => void;
+  /**
+   * 標「這一輪在這個工具呼叫之後收」（契約 `1.4.0` 起，#1607）：宣告了 `returnDirect: true` 的工具，在**本體執行當中**、
+   * 走到要收的那個結局時呼叫它。對應 dsh 的 `exec.concludeTurn()`（`packages/core/tools/src/index.ts:1862` 的 `concludingExecutions`，
+   * 由 plan-mode 在 `ASK_CANCELLED` 呼叫，`plan-mode/src/index.ts:331-341`）。
+   *
+   * **`returnDirect` 的語意因此改了**：基座把 `returnDirect: true` 當成「這顆工具的每一種結局都收這一輪」；宿主現在改成**標了才收**。
+   * 宣告了 `returnDirect` 卻不呼叫這個方法的工具，這一輪**不再**在它之後結束（升級指南 `returndirect-conclude-turn`）。
+   *
+   * 要收，同時要成立：
+   * - 在該工具本體執行當中呼叫，且 `toolName` 是正在執行的那顆（別顆的名字、槽外呼叫都什麼都不做）；
+   * - 那個工具宣告了 `returnDirect: true`；
+   * - 最終結果不是錯誤（錯誤不收，dsh 的 `ToolExecutionFailure` 寫的是 `concludesTurn?: never`）；
+   * - 同一則 AI 訊息叫的工具只有這一個（**偏離**，下）。
+   *
+   * **偏離（理由 1：基座表達不出來）**：dsh 的 `concludeTurn()` 在**每次呼叫各自的 exec 物件**上，基座的工具沒有；所以退到 tools 服務上
+   * 的一個方法，以工具名認人。另外，dsh 是批內任何一個工具標了就收，基座把批裡每個呼叫各自送成一個 `Send`、tools 路由各判各的，
+   * 混批會擲 `InvalidUpdateError`，所以批裡不只一個呼叫時標了也照常繼續叫模型。
+   *
+   * 這個方法由**宿主**注入（定義套件不相依 `@nexus/core`）；沒注入的提供者呼叫它什麼都不做。
+   *
+   * **選填**：`1.0.0`～`1.3.0` 的提供者沒有它。消費者宣告 `^1.4.0` 就保證有。
+   *
+   * @param toolName - 正在執行的這顆工具的名字。
+   */
+  concludeTurn?(toolName: string): void;
 }
 
 /** `tools` 服務的 token。 */

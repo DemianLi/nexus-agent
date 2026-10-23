@@ -289,7 +289,7 @@ describe('B：出貨清單上的 submit-record 經樹進來，位置與名字不
       kind: 'not-attached',
     });
     const tools = tree.get('tools') as { contractVersion?: string } | undefined;
-    expect(tools?.contractVersion).toBe('1.3.0');
+    expect(tools?.contractVersion).toBe('1.4.0');
   }, 60000);
 
   it('fs 那一列是必掛的：它起不來，submit_record 沒有地方問 fs，整個起不來', () => {

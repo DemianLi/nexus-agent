@@ -103,6 +103,7 @@ import {
 import type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 import { notifyToolResult } from './tool-pipeline.js';
 import { runInToolMetaSlot } from './tool-result-meta.js';
+import { settleTurnConclusion } from './turn-conclusion.js';
 
 /** 圍堵 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const CONTAINMENT_MIDDLEWARE_NAME = 'nexusToolFailureContainment';
@@ -500,9 +501,10 @@ export function createContainmentMiddleware(
             message,
             [],
           );
-          return message;
+          // 拋錯翻出來的訊息沒有「收這一輪」的標記（本體沒走到那一行）：`returnDirect` 工具的這一則照常回頭叫模型。
+          return settleTurnConclusion(request, message, false);
         }
-        const { result, meta } = ran;
+        const { result, meta, concluded } = ran;
         // **未知工具不在這裡猜**：碼由最內層在交給基座查名字的那一刻標（`invalid-tool-args.ts`，#1024）。
         // 這一格的 `request.tool` 對動態加給模型的工具（`subagent`）也是 `undefined`，拿它當判準會把
         // 外層回的合法拒絕記成 `UNKNOWN_TOOL`。
@@ -515,7 +517,8 @@ export function createContainmentMiddleware(
           readInjectedMessages(result),
           meta,
         );
-        return result;
+        // 日誌記的是上面那一則（帶 `name`）；交給基座的這一則，`returnDirect` 工具沒標記就拿掉 `name`（見 `turn-conclusion.ts`）。
+        return settleTurnConclusion(request, result, concluded);
       } finally {
         // 子代理出生在 `handler` 裡；落定之後（拋錯、中斷也是）就不會再有以這次呼叫出生的，退掉登記（#1023）。
         recorded?.release();

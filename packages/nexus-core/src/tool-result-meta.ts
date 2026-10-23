@@ -110,6 +110,8 @@ interface ToolMetaSlot {
   readonly args: Readonly<Record<string, unknown>>;
   /** 寫過就不再寫。 */
   meta?: unknown;
+  /** 這顆工具本體說「這一輪在這一批工具之後收」（{@link concludeTurn}）。 */
+  concluded?: true;
 }
 
 const currentSlot = new AsyncLocalStorage<ToolMetaSlot>();
@@ -125,13 +127,28 @@ export async function runInToolMetaSlot<T>(
   toolName: string,
   args: unknown,
   fn: () => T | Promise<T>,
-): Promise<{ readonly result: T; readonly meta: unknown }> {
+): Promise<{ readonly result: T; readonly meta: unknown; readonly concluded: boolean }> {
   const slot: ToolMetaSlot = {
     toolName,
     args: typeof args === 'object' && args !== null ? (args as Record<string, unknown>) : {},
   };
   const result = await currentSlot.run(slot, fn);
-  return { result, meta: slot.meta };
+  return { result, meta: slot.meta, concluded: slot.concluded === true };
+}
+
+/**
+ * 這顆工具說：**這一輪在這一批工具之後收**——dsh 的 `exec.concludeTurn()`（`plan-mode/src/index.ts:331-341`）。
+ *
+ * 只有**工具本體**走到這一行才算數：核准閘門拒絕、參數驗不過、圍堵接住的拋錯，都在本體之外，不會呼叫它，
+ * 所以那些結局的結果一律照常回頭叫模型。標記掛在這一次呼叫的槽上，由圍堵在最外層讀（`turn-conclusion.ts`）；
+ * 不是這顆工具的槽、或不在槽裡（單元測試直接叫工具本體），什麼都不做。
+ *
+ * @param toolName - 呼叫端自己的工具名；槽認的是開槽的那顆工具，別人的槽不能替它標。
+ */
+export function concludeTurn(toolName: string): void {
+  const slot = currentSlot.getStore();
+  if (slot === undefined || slot.toolName !== toolName) return;
+  slot.concluded = true;
 }
 
 /**
