@@ -214,6 +214,12 @@ export interface AiEntry {
    */
   readonly turnTail?: true;
   /**
+   * 這一輪是失敗收尾的（`failed`，不含人按停止）：跟 {@link AiEntry.turnTail} 一起標在收尾那則上
+   * （[#1581](https://github.com/DemianLi/nexus-agent/issues/1581)）。web 的分支鈕對這種輪不給，同 server 的 `fork_unavailable`
+   * 與 dsh `turn-tail.ts` 的 `branchUnavailable`。即時與歷史都在 {@link reduceConversation} 收尾那一步標。
+   */
+  readonly turnFailed?: true;
+  /**
    * 這一輪撞到了模型的輸出上限（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：標在那一輪**最後一則
    * root 回覆**上，有沒有字都標。讀的是 root 那顆收尾 `lifecycle` 上 pump 補的 `maxTokens`，同 {@link AiEntry.stopped}
    * 讀 `aborted`。**一輪一格，不是一則一格**：日誌的 `turn/end` 是 sticky 的，前面某一步撞到、後面收掉也算。
@@ -775,7 +781,8 @@ function isTailCandidate(entry: ConversationEntry): boolean {
  *
  * - **一輪從沒在跑走到 `running` 算起**：人送一句話、續行驅動器排了一輪，都是。從 `awaiting-input` 回到
  *   `running` 是續接，同一輪。
- * - **收尾是 `idle`、`stopped`、`failed`**。停在核准點不是收尾；停在核准點時按停止是。
+ * - **收尾是 `idle`、`stopped`、`failed`**。停在核准點不是收尾；停在核准點時按停止是。`failed` 收尾的那則另標
+ *   {@link AiEntry.turnFailed}（#1581）。
  * - 子代理那幾則、串流中的、整輪只有工具的，都不標。
  */
 function trackTurn(previous: ConversationState, next: ConversationState): ConversationState {
@@ -791,7 +798,11 @@ function trackTurn(previous: ConversationState, next: ConversationState): Conver
     const entry = next.entries[at];
     if (entry === undefined || !isTailCandidate(entry)) continue;
     const entries = [...next.entries];
-    entries[at] = { ...entry, turnTail: true } as AiEntry;
+    entries[at] = {
+      ...entry,
+      turnTail: true,
+      ...(next.status === 'failed' ? { turnFailed: true } : {}),
+    } as AiEntry;
     return { ...next, entries, turnStart: next.entries.length };
   }
   return { ...next, turnStart: next.entries.length };

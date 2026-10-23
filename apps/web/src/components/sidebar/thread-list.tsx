@@ -28,7 +28,7 @@ import {
 import type { ContentMatches } from '@/lib/thread-search';
 import { splitThreads } from '@/lib/thread-management';
 import type { ThreadActionResult, ThreadManagement, ThreadSections } from '@/lib/thread-management';
-import { ROW_STATUS_TEXT } from '@/lib/thread-status';
+import { ROW_STATUS_TEXT, withPlaceholders } from '@/lib/thread-status';
 import type { RowStatus } from '@/lib/thread-status';
 import { threadLabel, withCurrentTitle } from '@/lib/thread-title';
 import { cn } from '@/lib/utils';
@@ -91,7 +91,7 @@ export function ThreadList({
   /** 釘選、封存、改名（#633）；沒給就沒有那些。 */
   readonly management?: ThreadManagement;
 }) {
-  const { listing, statusOf, blankOf, refresh } = directory;
+  const { listing, statusOf, blankOf, refresh, placeholders } = directory;
   const labelId = useId();
 
   useEffect(() => {
@@ -148,9 +148,11 @@ export function ThreadList({
   const fallback = fellBack ? current.fallback : null;
   const visible =
     listing.kind === 'ok'
-      ? withCurrentTitle(listing.result.items, currentThreadId, currentTitle).filter(
-          (item) => !blankOf(item) || item.threadId === currentThreadId,
-        )
+      ? withCurrentTitle(
+          withPlaceholders(listing.result.items, placeholders),
+          currentThreadId,
+          currentTitle,
+        ).filter((item) => !blankOf(item) || item.threadId === currentThreadId)
       : [];
   const view = mergeThreadSearch(
     visible,
@@ -445,7 +447,8 @@ function ThreadRow({
   }
   const compact = status === undefined ? undefined : ROW_STATUS_TEXT[status].compact;
   return (
-    <SidebarMenuItem>
+    // 分叉來的那一條記著來源（#1581）：畫面上不講（同 dsh），只留在屬性上。
+    <SidebarMenuItem data-parent-thread-id={item.parentThreadId}>
       {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
       <SidebarMenuButton
         type="button"
