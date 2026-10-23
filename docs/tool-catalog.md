@@ -135,7 +135,7 @@ Supports `*` (any characters), `**` (any directories), `?` (single character), e
 ```text
 Search file contents with a ripgrep regular expression.
 
-The pattern uses ripgrep (Rust regex) syntax: `grep(pattern="foo|bar")` matches either string and `\bword\b` matches a whole word. Regex metacharacters are operators, so escape them to match literally (e.g. `\.` for a dot, `\(` for a parenthesis); an invalid expression is rejected with an error. Files under `/conversation_history/` are the exception: they are searched as literal text.
+Files under `/conversation_history/` are the exception: they are searched as literal text.
 
 Returns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.
 ```

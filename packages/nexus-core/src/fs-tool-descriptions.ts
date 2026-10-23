@@ -47,23 +47,26 @@ export type FilesystemToolDescriptions = Readonly<
 
 /**
  * 基座 `grep` 描述最前面講「字面」的那兩段（`GREP_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）：從開頭到 `\n\nReturns matching files`。
- * 換成 dsh 的第一句（`grep.ts:286`）加一段講正規式怎麼寫的說明；後面基座講輸出與 `/large_tool_results/` 的部分原樣留著。
+ * 換成 dsh 的第一句（`grep.ts:286`）加一句 `/conversation_history/` 的例外；後面基座講輸出與 `/large_tool_results/` 的部分原樣留著。
  */
 const BASE_GREP_LITERAL_HEAD_END = '\n\nReturns matching files';
 const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across files (NOT regex).';
 
 /**
- * 換進去的正規式說法：第一句**照 dsh 原句**（`grep.ts:286`），第二段是我們的。
+ * 換進去的正規式說法：第一句**照 dsh 原句**（`grep.ts:286`），後面接一句 `/conversation_history/` 的例外。
  *
- * **偏離 dsh（理由 1：基座表達不出來）。** dsh 的描述接著講「Returns matching lines with line numbers, grouped by file. Returns up to N matches …」，
- * 那是 dsh 自己的輸出形狀；基座的 `grep` 有 `output_mode`（`files_with_matches`／`content`／`count`），後面那段基座原文（講輸出與 `/large_tool_results/`）照留，
- * 搬 dsh 的第二句進來會跟它矛盾。而基座原文有一整段講「regex metacharacters are ordinary characters」，換成正規式之後需要對應的一段——
- * dsh 的描述沒有講轉義，所以第二段是我們寫的：怎麼寫 `foo|bar`、怎麼轉義、寫壞會怎樣，以及 `/conversation_history/` 是例外（記憶體裡的歷史檔，基座的 `grep` 是字面比對）。
+ * **偏離 dsh（理由 1：基座表達不出來）。** 兩處，都不是我們自己多寫說明：
+ *
+ * - **不搬 dsh 的輸出句。** dsh 接著講「Returns matching lines with line numbers, grouped by file. Returns up to N matches …」，
+ *   那是 dsh 自己的輸出形狀；基座的 `grep` 有 `output_mode`（`files_with_matches`／`content`／`count`），後面那段基座原文（講輸出與 `/large_tool_results/`）照留，
+ *   搬 dsh 的句子進來會跟它矛盾。
+ * - **加 `/conversation_history/` 的例外句。** 工作區底下這一格路由是記憶體裡的 `StateBackend`，基座的 `grep` 在那裡是字面比對；
+ *   描述若只說「正規式」，模型在那裡寫 `foo|bar` 會得到 0 筆並當成「沒有」。這是基座實際的行為，不是我們另外立的規則。
+ *
+ * 基座原文開頭那段講「regex metacharacters are ordinary characters」的文字，隨著被換掉的開頭一併拿掉，不補我們自己寫的轉義說明。
  */
 export const GREP_REGEXP_HEAD =
   'Search file contents with a ripgrep regular expression.\n\n' +
-  'The pattern uses ripgrep (Rust regex) syntax: `grep(pattern="foo|bar")` matches either string and `\\bword\\b` matches a whole word. ' +
-  'Regex metacharacters are operators, so escape them to match literally (e.g. `\\.` for a dot, `\\(` for a parenthesis); an invalid expression is rejected with an error. ' +
   'Files under `/conversation_history/` are the exception: they are searched as literal text.';
 
 /** 基座 `glob` 描述的第一句（`GLOB_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）。後面講 `*`、`**`、`?` 的一段原樣留著。 */

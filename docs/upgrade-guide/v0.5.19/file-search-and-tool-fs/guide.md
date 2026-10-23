@@ -12,6 +12,8 @@ description: glob 改用內附 ripgrep（不列版本控制目錄、照修改時
 - **`glob` 改走內附 ripgrep**（`rg --files`），不再經 `fast-glob`。v0.5.19 的結果按路徑排序、`.git` 之類的目錄也會列進來；新版：
   - 不列 `.git`、`.svn`、`.hg`、`.bzr`、`.jj`、`.sl` 這六種版本控制目錄的任何內容（任何深度）；
   - 照**修改時間**排序，舊的在前；
+    起點落在路由裡（`/conversation_history/`、`/large_tool_results/`、`/attachments/`、共用區、外掛掛載點）時一樣會重排；
+    從 `/` 搜時，各路由的結果也跟工作區的檔排在同一條時間軸上；
   - 沒有 `/` 的 pattern（例如 `*.ts`）比的是檔名、任何深度都命中，帶 `/` 的從工作區根錨定；
   - 不跟 symlink、也不列 symlink；
   - 空白 pattern 回 `SEARCH_INVALID_PATTERN` 錯誤，不再列出全部；

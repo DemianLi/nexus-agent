@@ -85,7 +85,8 @@ describe('filesystemToolDescriptions：grep 講正規式（#1605）', () => {
     expect(Object.keys(descriptions ?? {}).sort()).toEqual(['glob', 'grep']);
     const grep = descriptions?.grep ?? '';
     expect(grep.startsWith('Search file contents with a ripgrep regular expression.')).toBe(true);
-    expect(grep).toContain('foo|bar');
+    expect(grep).toContain('/conversation_history/');
+    expect(grep).not.toContain('foo|bar');
     expect(grep).not.toContain('LITERAL');
     expect(grep).not.toContain('NOT regex');
     const base = baseDescription('grep');
