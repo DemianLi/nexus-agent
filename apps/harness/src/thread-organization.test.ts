@@ -365,7 +365,9 @@ describe('ThreadOrganization.open：認不得的檔明確失敗，而且一個�
     }
     expect(message).toContain(`${file} 的格式認不得`);
     expect(message).toContain('先把整個檔備份起來');
-    expect(message).toContain(`cp ${file} ${file}.bak`);
+    // 帶時間戳：固定檔名的話，第二次備份會蓋掉前一份。訊息是執行期字串，stderr 不渲染 markdown，不能有星號。
+    expect(message).toContain(`cp ${file} ${file}.bak-$(date +%s)`);
+    expect(message).not.toContain('*');
     expect(message).toContain('釘選與封存會全部清空');
     expect(message.indexOf('先把整個檔備份起來')).toBeLessThan(message.indexOf('刪掉它'));
     expect(await readFile(file, 'utf8')).toBe(text);
