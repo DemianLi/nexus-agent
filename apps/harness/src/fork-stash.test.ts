@@ -4,7 +4,7 @@
  * [`serve-fork-stash.test.ts`](./serve-fork-stash.test.ts)。
  */
 
-import { mkdir, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -122,7 +122,12 @@ describe('forkAncestors：沿 header 往上找分叉來源', () => {
     expect(await forkAncestors(header('c', 'p'), broken, (m) => warnings.push(m))).toEqual(['p']);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('壞了');
-    expect(await forkAncestors(header('c', 'gone'), book([]), () => undefined)).toEqual(['gone']);
+    const missing: string[] = [];
+    expect(await forkAncestors(header('c', 'gone'), book([]), (m) => missing.push(m))).toEqual([
+      'gone',
+    ]);
+    expect(missing).toHaveLength(1);
+    expect(missing[0]).toContain('找不到 header');
   });
 
   it('繞回看過的 id 就停', async () => {
@@ -169,6 +174,38 @@ describe('StashRoute：名單內的讀轉到祖先，其餘留在自己', () => 
     const content = (await route.read('/call_p.txt')).content;
     expect(content).toContain('子自己的');
     expect(content).not.toContain('父的原文');
+  });
+
+  it('grep 一個繼承來的檔：照取回提示搜得到祖先那一份；名單外的照舊只搜自己', async () => {
+    const root = await seeded({
+      p: { 'call_p.txt': '第一行\nMIDDLE 在這\n', 'later.txt': 'MIDDLE 之後' },
+    });
+    const route = createToolResultStash({
+      rootDir: root,
+      session: 'c',
+      inherited: { names: new Set(['call_p.txt']), sessions: ['p'] },
+    });
+    const hit = await route.grep('MIDDLE', '/call_p.txt');
+    expect(hit.error).toBeUndefined();
+    expect(hit.matches?.map((match) => match.line)).toEqual([2]);
+    expect((await route.grep('MIDDLE', '/later.txt')).matches ?? []).toEqual([]);
+  });
+
+  // 讀取本身有 O_NOFOLLOW 兜底（`contained-backend.ts`），只斷言讀不到分不出「當成沒有」與「挑中了連結、讀時被擋」；
+  // 祖父那一代放真的檔，當成沒有才會往上找到它。
+  it('祖先目錄裡同名的是符號連結：不跟、當成那一代沒有，往上一代找', async () => {
+    const root = await seeded({ p: {}, gp: { 'call_p.txt': '祖父的原文' } });
+    const outside = await mkdtemp(join(tmpdir(), 'fork-stash-outside-'));
+    await writeFile(join(outside, 'secret.txt'), '連結指向的別處');
+    await symlink(join(outside, 'secret.txt'), join(root, stashSessionDirName('p'), 'call_p.txt'));
+    const route = createToolResultStash({
+      rootDir: root,
+      session: 'c',
+      inherited: { names: new Set(['call_p.txt']), sessions: ['p', 'gp'] },
+    });
+    const result = await route.read('/call_p.txt');
+    expect(result.content).toContain('祖父的原文');
+    expect(JSON.stringify(result)).not.toContain('連結指向的別處');
   });
 
   it('不在名單內的不轉：祖先目錄裡有同名檔，照樣讀不到', async () => {

@@ -8,13 +8,21 @@
  *
  * ## 偏離（理由 1）
  *
- * dsh 的定位是宿主上的絕對路徑，子會話照著讀的就是來源那一個檔，不另存一份；保留期仍按每個檔各自算
- * （`spill/spill-local/src/index.ts:38-48`，`687f282e`）。我們的定位是虛擬路徑（基座寫死 `/large_tool_results/…`，
+ * dsh 的定位是宿主上的絕對路徑：分叉繼承前綴裡的定位，不複製、不改歸屬，分叉之後的新外溢用子會話的 id
+ * （`spill/spill/src/types.ts:30-36`、`spill/spill/README.md:62`）；保留期按每個檔各自算，就是為了續接或分叉的會話還讀得到
+ * 舊定位（`spill/spill-local/src/index.ts:38-48`；皆 `687f282e`）。我們的定位是虛擬路徑（基座寫死 `/large_tool_results/…`，
  * 檔頭見 `tool-result-stash.ts` 的偏離 1），帶不出來源的目錄，所以退到**依名稱路由到祖先的目錄**：結果同樣是不多存一份、
- * 保留期照舊按檔算。只有讀（`read`、`readRaw`）會轉過去；寫、改、列目錄、搜尋都留在自己的目錄——dsh 子會話照絕對路徑
- * 也改得到來源的檔，這裡刻意不讓子 thread 動祖先的檔。
+ * 保留期照舊按檔算。轉過去的是讀（`read`、`readRaw`）與搜一個繼承來的檔（`grep` 的路徑就是那個檔，取回提示叫模型這樣搜）；
+ * 寫與改留在自己的目錄，子 thread 不動祖先的檔。
  *
  * 讀的先後：子 thread 自己的目錄有這個檔就讀自己的（自己寫過的同名檔不被祖先那份蓋掉），沒有才沿祖先找，都沒有就是讀不到。
+ *
+ * ## 範圍取捨（不是偏離理由）
+ *
+ * - **列目錄、整個前綴的 `glob`／`grep` 列不出繼承來的檔**，只看自己的目錄。把幾代的目錄合起來列做得到，這張沒做：
+ *   取回提示給的是單一檔的路徑，模型照著讀或搜那個檔都轉得過去。
+ * - **名單收得比「工具結果的預覽」寬**：事件文字掃的是前綴裡所有事件（人說的話、助手的文字、工具參數都算）。前綴裡出現過、
+ *   祖先目錄裡又有的名字都轉；來源在分叉之後改過那個檔（模型寫得進這個前綴），子 thread 讀到的是改過的那一份。
  *
  * ## 名單為什麼不能用「標記數」分段
  *
@@ -73,8 +81,8 @@ export function inheritedStashNames(events: readonly SessionEvent[]): ReadonlySe
  * 這條 thread 往上的分叉來源：父、祖父……，照 header 的 `parentSession` 一路問，到不是分叉來的（沒有 `isSeeded`）為止。
  *
  * 子代理的會話也帶 `parentSession`，但不帶 `isSeeded`，所以不會被當成分叉來源（core 的 `isSubagentSessionHeader`）。
- * 讀不到某一代的 header（被刪、讀不了）就停在那一代：那一代本身照樣列進來（它的暫存目錄可能還在），再往上不找，
- * 講一聲，不讓這條 thread 建不起來——讀不到的只是更早的外溢檔。繞回自己看過的 id 也停。
+ * 讀不到某一代的 header（找不到、讀不了）就停在那一代：那一代本身照樣列進來（它的暫存目錄可能還在），再往上不找，
+ * 兩種都講一聲，不讓這條 thread 建不起來——讀不到的只是更早的外溢檔。繞回自己看過的 id 也停。
  *
  * @param header - 這條 thread 的 header。
  * @param readHeader - 冷讀一條會話的 header；找不到回 undefined。
@@ -101,6 +109,9 @@ export async function forkAncestors(
         `[暫存] thread ${header.id} 的分叉來源 ${parent} 讀不了 header，更早的外溢檔讀不到：${(error as Error).message}`,
       );
       break;
+    }
+    if (current === undefined) {
+      warn(`[暫存] thread ${header.id} 的分叉來源 ${parent} 找不到 header，更早的外溢檔讀不到。`);
     }
   }
   return ancestors;

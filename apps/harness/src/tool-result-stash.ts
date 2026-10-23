@@ -33,7 +33,7 @@
  * ## 分叉的子 thread
  *
  * 子 thread 的前綴裡的預覽指著來源會話目錄裡的檔（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）。
- * 呼叫端給了 {@link ToolResultStashOptions.inherited} 時，名單內的名字讀取沿祖先的目錄找；寫入仍只進自己的目錄，
+ * 呼叫端給了 {@link ToolResultStashOptions.inherited} 時，名單內的名字讀取（含搜單一個檔）沿祖先的目錄找；寫入仍只進自己的目錄，
  * 上面「一個實例只服務一個會話」對寫入照舊成立。名單、祖先鏈與偏離見 `fork-stash.ts`。
  *
  * ## 模型也寫得進這個前綴
@@ -331,13 +331,21 @@ export class StashRoute implements BackendProtocolV2 {
     return this.#host.ls(path);
   }
 
-  grep(
+  /**
+   * 搜尋走自己的目錄；**只有搜一個繼承名單裡的檔**時，跟讀同一套先後（{@link #readerFor}）：取回提示叫模型「grep 這個路徑」
+   * （`SPILL_RETRIEVAL_HINT`），子 thread 照著搜繼承來的定位，不能回一個空的「沒有命中」。
+   */
+  async grep(
     pattern: string,
     path?: string | null,
     glob?: string | null,
     maxCount?: number | null,
-  ): Promise<GrepResult> | GrepResult {
-    return this.#host.grep(pattern, path ?? undefined, glob, maxCount);
+  ): Promise<GrepResult> {
+    const backend =
+      path != null && this.#inheritedNames.has(path.replace(/^\/+/u, ''))
+        ? await this.#readerFor(path)
+        : this.#host;
+    return backend.grep(pattern, path ?? undefined, glob, maxCount);
   }
 
   glob(pattern: string, path?: string): Promise<GlobResult> | GlobResult {
