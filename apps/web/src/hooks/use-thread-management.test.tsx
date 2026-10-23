@@ -3,7 +3,7 @@ import { THREAD_AT_CAPACITY, THREAD_HISTORY_TOO_DEEP } from '@nexus/wire';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { useThreadManagement } from '@/hooks/use-thread-management';
+import { useAcceptedTitles, useThreadManagement } from '@/hooks/use-thread-management';
 import type { Listing, ThreadDirectory } from '@/hooks/use-thread-directory';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
@@ -36,10 +36,12 @@ function setup(client: Partial<Record<keyof WireClient, unknown>>, first: Listin
     refresh,
     statusOf: () => 'idle' as never,
     blankOf: (item) => item.blank,
+    placeholders: [],
+    addPlaceholder: () => {},
   });
   const hook = renderHook(
     ({ listing }: { listing: Listing }) =>
-      useThreadManagement(client as unknown as WireClient, directory(listing)),
+      useThreadManagement(client as unknown as WireClient, directory(listing), useAcceptedTitles()),
     { initialProps: { listing: first } },
   );
   return { hook, refresh };

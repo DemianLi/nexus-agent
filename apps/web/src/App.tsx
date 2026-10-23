@@ -41,7 +41,12 @@ import { useAgentMention } from '@/hooks/use-agent-mention';
 import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat';
 import { PERMISSIONS_PROJECTION_KEY, usePermissionSeat } from '@/hooks/use-permission-seat';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
-import { useThreadManagement } from '@/hooks/use-thread-management';
+import {
+  forkThread,
+  renameThread,
+  useAcceptedTitles,
+  useThreadManagement,
+} from '@/hooks/use-thread-management';
 import { isArchivedThread } from '@/lib/archived-view';
 import type { ThreadManagement } from '@/lib/thread-management';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
@@ -64,6 +69,12 @@ import {
 } from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
+import {
+  FORK_FAILED_TEXT,
+  FORK_RENAME_FAILED_TEXT,
+  FORKED_THREAD_NOTICE,
+  increasedForkTitle,
+} from '@/lib/thread-fork';
 import {
   canSteerQueue,
   steerAll,
@@ -134,6 +145,7 @@ const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>
   fresh: undefined,
   recalled: RESUMED_THREAD_NOTICE,
   listed: SWITCHED_THREAD_NOTICE,
+  forked: FORKED_THREAD_NOTICE,
 };
 
 /** 光打名字就另有動作的命令（`/feedback` 開回饋框，見 `use-conversation` 的 `send`）。 */
@@ -206,8 +218,10 @@ export function App({ client }: { client?: WireClient } = {}) {
   const directory = useThreadDirectory(wire, choice.threadId);
   // 釘選、封存、改名（#633）也在 thread 外面：換一條不歸零。列表沒帶兩個集合（server 還沒實作）時是 `undefined`，
   // 側欄什麼都不多畫。
-  const threadManagement = useThreadManagement(wire, directory);
-  // 換 thread 有兩條路（「新對話」與從清單點一條），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
+  // server 受理過的標題：側欄改名與分叉的改名共用一份（#1581），所以提到 App，再交給會話管理。
+  const acceptedTitles = useAcceptedTitles();
+  const threadManagement = useThreadManagement(wire, directory, acceptedTitles);
+  // 換 thread 有三條路（「新對話」、從清單點一條、分叉），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
   // 點了別條的話，晚到的結果不能把人拉回去。讀清單期間再按一次「新對話」不另開一次（dsh `connectWorkspace` 的
   // `connecting`）——兩次讀到的是同一份清單，只會換一次。
   const navigation = useRef(0);
@@ -244,6 +258,70 @@ export function App({ client }: { client?: WireClient } = {}) {
       });
   };
 
+  // 分叉（#1581）送出去到回應之前：所有分支鈕都按不了。ref 擋同一個 tick 裡的第二下，state 讓按鈕畫成按不了。
+  const forkingNow = useRef(false);
+  const [forking, setForking] = useState(false);
+  const directoryRef = useRef(directory);
+  useEffect(() => {
+    directoryRef.current = directory;
+  }, [directory]);
+
+  /**
+   * 從 `messageId` 那則回覆分出一條新對話，照 dsh `ui-chat/src/client/apply.ts:285-295` 的 `forkAt` 與
+   * `client/sessions/service.ts:459-483` 的 `fork({ increaseTitle: true })`：分好了先把佔位放進清單，來源有標題就把子 thread
+   * 改成遞增的名字，再切過去。**流程在 `App`**：切過去之後 `ConversationView` 整個重掛，流程不能跟著它卸掉。
+   *
+   * 與 dsh 不同的兩處（卡面拍板）：分不出去時用 toast 講原因（dsh 不出聲，使用者按了沒反應會以為沒按到）；改名失敗時子 thread 照樣
+   * 切過去、toast 講改名失敗（dsh 拋出、留在原畫面）。途中人自己換到別條的話，佔位與改名照做，但不把人拉回來（後按的贏）。
+   *
+   * @param liveTitle - 來源這條即時推來的標題（`ConversationState.title`）。
+   */
+  const forkConversation = (source: string, messageId: string, liveTitle: string | null): void => {
+    if (forkingNow.current) return;
+    forkingNow.current = true;
+    setForking(true);
+    const ticket = navigation.current;
+    void (async () => {
+      try {
+        const forked = await forkThread(wire, source, messageId);
+        if ('message' in forked) {
+          toast.error(FORK_FAILED_TEXT, { description: forked.message });
+          return;
+        }
+        const child = forked.threadId;
+        const listing = directoryRef.current.listing;
+        directoryRef.current.addPlaceholder({
+          threadId: child,
+          updatedAt: Date.now(),
+          running: false,
+          blank: true,
+          parentThreadId: source,
+        });
+        // 來源的標題：畫面上那一列寫的那個——即時推來的、剛改名頂著的、清單上的，依序。都沒有就不改名（dsh 同）。
+        const sourceTitle =
+          (liveTitle === '' ? null : liveTitle) ??
+          acceptedTitles.renamed.get(source) ??
+          (listing.kind === 'ok'
+            ? listing.result.items.find((item) => item.threadId === source)?.title
+            : undefined);
+        if (sourceTitle !== undefined && sourceTitle !== null && sourceTitle !== '') {
+          const renamed = await renameThread(wire, child, increasedForkTitle(sourceTitle));
+          if ('message' in renamed) {
+            toast.error(FORK_RENAME_FAILED_TEXT, { description: renamed.message });
+          } else {
+            acceptedTitles.accept(child, renamed.title);
+          }
+        }
+        if (navigation.current !== ticket) return;
+        navigation.current += 1;
+        setChoice({ threadId: child, origin: 'forked' });
+      } finally {
+        forkingNow.current = false;
+        setForking(false);
+      }
+    })();
+  };
+
   // **換 thread 就整個重掛。** 只換 `threadId` 的話 hook 會重開下行，但上一條的 transcript、
   // 錯誤與命令清單都還留在它的 state 裡——畫面會把兩條 thread 混成一條。從清單切過去也走這一條（#261 的重掛）。
   // 側欄的開關放在 thread 外面：換一條不會把收起來的側欄又打開。
@@ -256,6 +334,8 @@ export function App({ client }: { client?: WireClient } = {}) {
         threadManagement={threadManagement}
         threadId={choice.threadId}
         notice={ORIGIN_NOTICE[choice.origin]}
+        forking={forking}
+        onFork={(messageId, liveTitle) => forkConversation(choice.threadId, messageId, liveTitle)}
         onNewConversation={newConversation}
         onSwitch={(threadId) => {
           navigation.current += 1;
@@ -274,6 +354,8 @@ function ConversationView({
   threadManagement,
   threadId,
   notice,
+  forking,
+  onFork,
   onNewConversation,
   onSwitch,
 }: {
@@ -282,6 +364,9 @@ function ConversationView({
   readonly threadManagement: ThreadManagement | undefined;
   readonly threadId: string;
   readonly notice: string | undefined;
+  /** 分叉送出去了、回應還沒到（#1581）。 */
+  readonly forking: boolean;
+  readonly onFork: (messageId: string, liveTitle: string | null) => void;
   readonly onNewConversation: (engaged: boolean) => void;
   readonly onSwitch: (threadId: string) => void;
 }) {
@@ -643,6 +728,10 @@ function ConversationView({
                   isFresh={isFresh}
                   changes={changes}
                   deliverableDownload={deliverableDownload}
+                  fork={{
+                    forking,
+                    onFork: (messageId) => onFork(messageId, conversation.state.title),
+                  }}
                   feedback={{
                     ratings: conversation.ratings,
                     busy: !conversation.connected,

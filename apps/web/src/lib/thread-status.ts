@@ -21,6 +21,12 @@ import { isPlanReview } from '@/lib/plan-review';
  *   同時記下來；列表到了先當基線套上去，再照順序重放紀錄。重疊的刷新只套最新那一次的回應（ticket），紀錄從最早那一次
  *   起算。**每次接上都清掉紀錄**：斷線期間漏掉的 frame 不會補，斷線前記下的重放在接上後的清單之後會把舊事實蓋回去；
  *   接上之後馬上重抓，新的 ticket 丟掉舊的回應。
+ * - **分叉的佔位**（#1581 刀 2，dsh `manager.ts:556-576` 的 `fork` 與 `:828-860` 的 `applyMutation`）：分叉一成功就放一列進清單，
+ *   不等下一次刷新。它是變更紀錄的一筆：有刷新在途就記下來，回應到了照樣重放，晚到的舊清單蓋不掉它；沒有在途的話，下一份
+ *   清單就是 server 講的話，佔位跟著清掉（子 thread 在 server 回分叉之前就落了盤，那一份清單裡有它）。清單上已經有那一列時，
+ *   只補 `parentThreadId`，`blank` 只降不升。**佔位算講過（`engaged`）**：照 dsh 它是 `blank: true`，等 Host 的摘要校正；我們沒有
+ *   session-added 推送，標著空白的話人一切走，那一列在下一次刷新之前就被側欄藏起來。分叉一定切在收了的一輪之後，子 thread
+ *   不會是空的（偏離 dsh，理由 1：基座沒有那條推送）。
  * - **有效空白**（#1600 `N1363`，dsh `manager.ts:95`、`:284-298` 的 `engagedSessions`）：清單上的 `blank` 是磁碟上
  *   還沒有 `turn/start`。全域下行或清單說在跑過的那條就不算空白，**跑完也不鬆開**（照 dsh：跑完之後、下一次刷新之前
  *   快照還說空白），清單上沒有那條時才拿掉。
@@ -36,11 +42,10 @@ export type PendingKind = 'approval' | 'question' | 'plan-review';
 
 const PRECEDENCE: Record<PendingKind, number> = { approval: 0, question: 1, 'plan-review': 2 };
 
-/**
- * 清單刷新途中記下、回應到了要重放的一筆變更（dsh 的 `SessionListMutation`）。今天只有全域下行的 frame；
- * #1581 刀 2 的分叉佔位（dsh `kind: 'placeholder'`）是下一支，加在這個聯集上、在 {@link replay} 裡接。
- */
-export type ListMutation = { readonly kind: 'frame'; readonly frame: ThreadFeedFrame };
+/** 清單刷新途中記下、回應到了要重放的一筆變更（dsh 的 `SessionListMutation`）：全域下行的 frame，或分叉的佔位。 */
+export type ListMutation =
+  | { readonly kind: 'frame'; readonly frame: ThreadFeedFrame }
+  | { readonly kind: 'placeholder'; readonly summary: ThreadSummary };
 
 export interface ThreadStatusState {
   readonly current: string;
@@ -54,6 +59,8 @@ export interface ThreadStatusState {
   readonly engaged: ReadonlySet<string>;
   /** 清單刷新途中的變更；`undefined` 是沒有刷新在途。 */
   readonly mutations: readonly ListMutation[] | undefined;
+  /** 分叉的佔位，最新的在前；畫的時候由 {@link withPlaceholders} 合進清單。 */
+  readonly placeholders: readonly ThreadSummary[];
 }
 
 export type ThreadStatusAction =
@@ -64,6 +71,8 @@ export type ThreadStatusAction =
   | { readonly type: 'listed'; readonly items: readonly ThreadSummary[] }
   /** 最新那一次列表請求失敗了：紀錄不再有人重放。 */
   | { readonly type: 'list-failed' }
+  /** 分叉成功：子 thread 的佔位。 */
+  | { readonly type: 'placeholder'; readonly summary: ThreadSummary }
   | { readonly type: 'current'; readonly threadId: string };
 
 export function initialThreadStatus(current: string): ThreadStatusState {
@@ -75,6 +84,7 @@ export function initialThreadStatus(current: string): ThreadStatusState {
     baselined: false,
     engaged: new Set(),
     mutations: undefined,
+    placeholders: [],
   };
 }
 
@@ -156,9 +166,26 @@ function applyListing(
   return { ...next, running, unread, engaged, baselined: true };
 }
 
+function applyPlaceholder(state: ThreadStatusState, summary: ThreadSummary): ThreadStatusState {
+  const rest = state.placeholders.filter((row) => row.threadId !== summary.threadId);
+  return {
+    ...state,
+    placeholders: [summary, ...rest],
+    engaged: state.engaged.has(summary.threadId)
+      ? state.engaged
+      : new Set(state.engaged).add(summary.threadId),
+  };
+}
+
 /** 列表到了之後，照順序重放刷新途中記下的變更（dsh `refreshList` 的 `mutations.reduce(applyMutation, baseline)`）。 */
 function replay(state: ThreadStatusState, mutations: readonly ListMutation[]): ThreadStatusState {
-  return mutations.reduce((next, mutation) => applyFrame(next, mutation.frame), state);
+  return mutations.reduce(
+    (next, mutation) =>
+      mutation.kind === 'frame'
+        ? applyFrame(next, mutation.frame)
+        : applyPlaceholder(next, mutation.summary),
+    state,
+  );
 }
 
 export function reduceThreadStatus(
@@ -181,12 +208,25 @@ export function reduceThreadStatus(
     case 'list-requested':
       return state.mutations === undefined ? { ...state, mutations: [] } : state;
     case 'listed':
+      // 清單是基線：在途之前放的佔位由它取代，在途期間放的由重放放回去。
       return {
-        ...replay(applyListing(state, action.items), state.mutations ?? []),
+        ...replay(
+          { ...applyListing(state, action.items), placeholders: [] },
+          state.mutations ?? [],
+        ),
         mutations: undefined,
       };
     case 'list-failed':
       return state.mutations === undefined ? state : { ...state, mutations: undefined };
+    case 'placeholder': {
+      const next = applyPlaceholder(state, action.summary);
+      return state.mutations === undefined
+        ? next
+        : {
+            ...next,
+            mutations: [...state.mutations, { kind: 'placeholder', summary: action.summary }],
+          };
+    }
     case 'current': {
       if (action.threadId === state.current && !state.unread.has(action.threadId)) return state;
       const unread = new Set(state.unread);
@@ -202,6 +242,31 @@ export function reduceThreadStatus(
  */
 export function effectiveBlank(state: ThreadStatusState, item: ThreadSummary): boolean {
   return item.blank && !state.engaged.has(item.threadId);
+}
+
+/**
+ * 清單合上分叉的佔位（dsh `applyMutation` 的 `placeholder` 那一支）：清單上沒有的放最前面；已經有的只補 `parentThreadId`，
+ * `blank` 只降不升，其餘照清單。沒有佔位時原樣回傳同一份。
+ */
+export function withPlaceholders(
+  items: readonly ThreadSummary[],
+  placeholders: readonly ThreadSummary[],
+): readonly ThreadSummary[] {
+  if (placeholders.length === 0) return items;
+  const listed = new Set(items.map((item) => item.threadId));
+  const fresh = placeholders.filter((row) => !listed.has(row.threadId));
+  const filled = items.map((item) => {
+    const placeholder = placeholders.find((row) => row.threadId === item.threadId);
+    if (placeholder === undefined) return item;
+    return {
+      ...item,
+      blank: item.blank && placeholder.blank,
+      ...(item.parentThreadId === undefined && placeholder.parentThreadId !== undefined
+        ? { parentThreadId: placeholder.parentThreadId }
+        : {}),
+    };
+  });
+  return [...fresh, ...filled];
 }
 
 /** 一列畫什麼。等人回答 ＞ 在跑 ＞ 跑完沒看 ＞ 什麼都不畫（dsh `sessionStatuses` 的順序）。 */

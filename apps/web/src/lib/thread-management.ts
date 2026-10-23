@@ -38,6 +38,9 @@ export function explainThreadFailure(error: {
       return '這條會話還在跑，先停掉它再封存。';
     case 'title_invalid':
       return error.message ?? '這個標題不合法。';
+    case 'fork_unavailable':
+      // 分叉指名的那一則分不出去（#1580）：不是收尾的輪、還沒收，或失敗收尾。web 的分支鈕先擋了大半，這是 server 那一道。
+      return '這一輪還不能分支。';
     default:
       return '這個動作沒成功。';
   }

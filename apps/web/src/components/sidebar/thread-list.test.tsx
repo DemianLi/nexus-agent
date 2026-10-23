@@ -25,6 +25,8 @@ const DIRECTORY: ThreadDirectory = {
   statusOf: () => undefined,
   blankOf: (item) => item.blank,
   refresh: () => undefined,
+  placeholders: [],
+  addPlaceholder: () => undefined,
 };
 
 function searcher() {
