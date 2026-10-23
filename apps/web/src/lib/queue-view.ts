@@ -175,8 +175,27 @@ export function commandToken(line: string): string | undefined {
  * 先認，認不得的整行變成 prompt（`ui-commands/src/client/service.ts` 的 `matchEnter`）。
  */
 export function namesCommand(commands: readonly SlashDescriptor[], line: string): boolean {
+  return commandArm(commands, line) !== undefined;
+}
+
+/**
+ * 這一行是命令的話走哪一路（[#1971](https://github.com/DemianLi/nexus-agent/issues/1971)），照 dsh `matchEnter`
+ * （`ui-commands/src/client/service.ts:325-365`，`687f282e`）：
+ *
+ * - `claim`：宣告了 `input` 的命令，後面帶不帶字都算。送出後在途、收下才清（#1941）。
+ * - `detached`：沒宣告 `input`、整行只有 `/名字`。當場拿掉、背景執行，不鎖輸入框（dsh `consumeVia`＋`runDetached`）。
+ * - `undefined`：不是命令。不在清單上，或沒宣告 `input` 卻帶了字——後者 dsh 整行當一句話送（`if (!bare) return undefined`）。
+ */
+export function commandArm(
+  commands: readonly SlashDescriptor[],
+  line: string,
+): 'claim' | 'detached' | undefined {
   const name = commandToken(line);
-  return name !== undefined && commands.some((command) => command.name === name);
+  if (name === undefined) return undefined;
+  const command = commands.find((candidate) => candidate.name === name);
+  if (command === undefined) return undefined;
+  if (command.input !== undefined) return 'claim';
+  return line.trim() === `/${name}` ? 'detached' : undefined;
 }
 
 /**

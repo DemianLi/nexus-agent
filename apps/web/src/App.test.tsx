@@ -438,7 +438,7 @@ describe('對話介面', () => {
     const fake = fakeClient([frame('lifecycle', [], { event: 'running', graph_name: 'root' })], {
       // `/feedback` 在真的伺服器上也列（回饋插件登記的命令），命令認不認得照這份清單（#1929）。
       commands: [
-        { name: 'plan', description: '計劃模式' },
+        { name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } },
         { name: 'feedback', description: '回饋' },
       ],
     });
@@ -610,12 +610,20 @@ describe('對話介面', () => {
         frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
       ]);
       const holds: ((outcome: SlashRunOutcome) => void)[] = [];
-      // 跑著也放行的不帶參數命令：從選單選下去就執行，草稿是空的。
+      // 跑著也放行的那一行（有 input、宣告了 runWhileBusy，同出貨的 `/goal pause`）：按 Enter 進在途（#1941）。
+      // 沒有 input 的 bare 命令不進在途（#1971），伺服器也不讓它宣告 runWhileBusy 的空字串。
       const client: WireClient = {
         ...made.client,
         slashList: async () => ({
           kind: 'ok',
-          commands: [{ name: 'todo', description: '列出待辦', runWhileBusy: [''] }],
+          commands: [
+            {
+              name: 'goal',
+              description: '目標',
+              input: { hint: '[<目標>|pause]' },
+              runWhileBusy: ['pause'],
+            },
+          ],
         }),
         slashRun: () => new Promise<SlashRunOutcome>((resolve) => holds.push(resolve)),
       };
@@ -628,17 +636,17 @@ describe('對話介面', () => {
       await screen.findByTestId('queue-dock');
       expect(input.placeholder).toBe('Cmd/Ctrl+Enter 把排著的全部改成插話');
 
-      fireEvent.change(input, { target: { value: '/to' } });
-      await screen.findByRole('listbox');
+      fireEvent.change(input, { target: { value: '/goal pause' } });
+      fireEvent.keyDown(input, { key: 'Escape' });
       fireEvent.keyDown(input, { key: 'Enter' });
       await waitFor(() => expect(holds).toHaveLength(1));
-      expect(input.value).toBe('');
+      expect(input.readOnly).toBe(true);
       expect(input.placeholder).not.toBe('Cmd/Ctrl+Enter 把排著的全部改成插話');
       fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
       await new Promise((resolve) => setTimeout(resolve, 30));
       expect(made.updates).toEqual([]);
 
-      holds[0]!({ kind: 'success', command_id: 'todo' });
+      holds[0]!({ kind: 'success', command_id: 'goal' });
       await waitFor(() => expect(input.placeholder).toBe('Cmd/Ctrl+Enter 把排著的全部改成插話'));
     });
 
@@ -1998,7 +2006,7 @@ describe('目標列（#945）', () => {
           input: { hint: '[<目標>|pause]' },
           runWhileBusy: ['pause'],
         },
-        { name: 'plan', description: '計劃模式' },
+        { name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } },
       ],
     );
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
@@ -6278,9 +6286,11 @@ describe('附件送出（#733、#732）', () => {
         // 開頭的字在命令清單上才走 `slash.run`（#1929）：這一組送的命令都列上。
         slashList: async () => ({
           kind: 'ok',
+          // 都宣告 `input`，跟出貨的命令一樣（#1971：沒宣告的帶了字就是一句話）。
           commands: ['goal', 'other', 'nope', 'plan', 'feedback'].map((name) => ({
             name,
             description: name,
+            input: { hint: '<參數>' },
           })),
         }),
         slashRun: async (_threadId, line, attachments) => {
@@ -6346,7 +6356,11 @@ describe('附件送出（#733、#732）', () => {
       let arrive: (() => void) | undefined;
       const slashList: WireClient['slashList'] = () =>
         new Promise((resolve) => {
-          arrive = () => resolve({ kind: 'ok', commands: [{ name: 'goal', description: 'goal' }] });
+          arrive = () =>
+            resolve({
+              kind: 'ok',
+              commands: [{ name: 'goal', description: 'goal', input: { hint: '<參數>' } }],
+            });
         });
       return { slashList, arrive: () => arrive!() };
     }
@@ -6533,7 +6547,7 @@ describe('@子代理 提及（#328）', () => {
   ) {
     seq = 0;
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
-      commands: [{ name: 'plan', description: '計劃模式' }],
+      commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
       // 命令收下了（#1941：收下才清草稿，所以這裡要是成功）。
       run: () => ({ kind: 'success', command_id: 'plan' }),
     });
@@ -6750,7 +6764,10 @@ describe('@子代理 提及（#328）', () => {
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
         arrive = () =>
-          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+          resolve({
+            kind: 'ok',
+            commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
+          });
       });
     const { runStart, slashed } = await ready(supported, undefined, slashList);
     await pick('@');
@@ -6774,7 +6791,10 @@ describe('@子代理 提及（#328）', () => {
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
         arrive = () =>
-          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+          resolve({
+            kind: 'ok',
+            commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
+          });
       });
     const { runStart } = await ready(supported, undefined, slashList);
     await pick('@');
@@ -6812,7 +6832,10 @@ describe('@子代理 提及（#328）', () => {
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
         arrive = () =>
-          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+          resolve({
+            kind: 'ok',
+            commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
+          });
       });
     render(<App client={{ ...fake.client, runStart, subagentList: supported, slashList }} />);
     await screen.findByPlaceholderText('說點什麼…');
@@ -6841,7 +6864,7 @@ describe('@子代理 提及（#328）', () => {
     seq = 0;
     const holds: ((outcome: SlashRunOutcome) => void)[] = [];
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
-      commands: [{ name: 'plan', description: '計劃模式' }],
+      commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
       run: () => new Promise<SlashRunOutcome>((resolve) => holds.push(resolve)),
     });
     let settle: (result: UplinkResult) => void = () => {};
@@ -6879,7 +6902,10 @@ describe('@子代理 提及（#328）', () => {
     const slashList: WireClient['slashList'] = () =>
       new Promise((resolve) => {
         arrive = () =>
-          resolve({ kind: 'ok', commands: [{ name: 'plan', description: '計劃模式' }] });
+          resolve({
+            kind: 'ok',
+            commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
+          });
       });
     const { runStart } = await ready(supported, undefined, slashList);
     type('/deploy @ex');
@@ -6939,12 +6965,12 @@ describe('命令在途（#1941，dsh 送出狀態機的 submitting）', () => {
   const chips = () => screen.queryAllByTestId('draft-attachment');
   const png = (name: string) => new File(['PNG'], name, { type: 'image/png' });
 
-  /** 認得 `/plan` 的假 client，`slash.run` 由測試兌現。 */
+  /** 認得 `/plan`（有 input，在途照 #1941；沒有 input 的 bare 命令見 #1971 那組）的假 client，`slash.run` 由測試兌現。 */
   async function held() {
     seq = 0;
     const settle: ((outcome: SlashRunOutcome | Error) => void)[] = [];
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
-      commands: [{ name: 'plan', description: '計劃模式' }],
+      commands: [{ name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } }],
       run: () =>
         new Promise<SlashRunOutcome>((resolve, reject) => {
           settle.push((outcome) => (outcome instanceof Error ? reject(outcome) : resolve(outcome)));
@@ -6992,17 +7018,6 @@ describe('命令在途（#1941，dsh 送出狀態機的 submitting）', () => {
     await waitFor(() => expect(settle).toHaveLength(1));
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(slashed).toEqual(['/plan']);
-  });
-
-  it('從選單直接執行的命令也算在途：輸入框鎖著，回來才放開', async () => {
-    const { slashed, settle } = await held();
-    fireEvent.change(input(), { target: { value: '/pl' } });
-    await screen.findByRole('listbox');
-    fireEvent.keyDown(input(), { key: 'Enter' });
-    await waitFor(() => expect(slashed).toEqual(['/plan']));
-    expect(input().readOnly).toBe(true);
-    settle[0]!({ kind: 'success', command_id: 'plan' });
-    await waitFor(() => expect(input().readOnly).toBe(false));
   });
 
   it('收下才清：回來之前草稿還在，成功之後清掉，輸入框放開', async () => {
@@ -7064,5 +7079,126 @@ describe('命令在途（#1941，dsh 送出狀態機的 submitting）', () => {
     expect(screen.getByRole('button', { name: '加入附件' }).hasAttribute('disabled')).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(chips()).toHaveLength(0);
+  });
+});
+
+describe('沒有 input 的命令（#1971，dsh `matchEnter`）', () => {
+  beforeEach(() => {
+    stubCmdkLayout();
+    attachmentGate.on = false;
+  });
+
+  const input = () => screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+
+  /** 認得 bare 的 `/compact` 與有 input 的 `/plan`；`slash.run` 由測試兌現。 */
+  async function held(events: readonly Event[] = []) {
+    seq = 0;
+    const settle: ((outcome: SlashRunOutcome | Error) => void)[] = [];
+    const fake = fakeClient(
+      [frame('lifecycle', [], { event: 'completed', graph_name: 'root' }), ...events],
+      {
+        commands: [
+          { name: 'compact', description: '壓縮' },
+          { name: 'plan', description: '計劃模式', input: { hint: '[on|off]' } },
+        ],
+        run: () =>
+          new Promise<SlashRunOutcome>((resolve, reject) => {
+            settle.push((outcome) =>
+              outcome instanceof Error ? reject(outcome) : resolve(outcome),
+            );
+          }),
+      },
+    );
+    const runStart = vi.fn(fake.client.runStart);
+    render(<App client={{ ...fake.client, runStart }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    const enter = (text: string, ctrlKey = false) => {
+      fireEvent.change(input(), { target: { value: text } });
+      fireEvent.keyDown(input(), { key: 'Escape' });
+      fireEvent.keyDown(input(), { key: 'Enter', ctrlKey });
+    };
+    return { slashed: fake.slashed, runStart, settle, enter };
+  }
+
+  it('A：bare 命令按 Enter 當場拿掉、輸入框不鎖；回來之前就能打下一句', async () => {
+    const { slashed, settle, enter } = await held();
+    enter('/compact');
+    await waitFor(() => expect(slashed).toEqual(['/compact']));
+    expect(settle).toHaveLength(1);
+    // 還沒回來：草稿已經空了、輸入框沒鎖、打了字送出鈕就能按。
+    expect(input().value).toBe('');
+    expect(input().readOnly).toBe(false);
+    fireEvent.change(input(), { target: { value: '下一句' } });
+    expect((screen.getByRole('button', { name: '送出' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it.each([
+    [
+      '被拒',
+      { kind: 'rejected', message: '這條線不收（#1971 被拒）' } as SlashRunOutcome,
+      '這條線不收（#1971 被拒）',
+    ],
+    [
+      '命令回錯誤',
+      { kind: 'error', text: '壓縮不了（#1971）' } as SlashRunOutcome,
+      '壓縮不了（#1971）',
+    ],
+    ['拋錯', new Error('網路斷了（#1971）'), '網路斷了（#1971）'],
+  ] as const)(
+    'A：bare 命令沒收下（%s）：狀態列講原因，草稿不放回去',
+    async (_label, outcome, reason) => {
+      const { settle, enter } = await held();
+      enter('/compact');
+      await waitFor(() => expect(settle).toHaveLength(1));
+      fireEvent.change(input(), { target: { value: '在途時打的下一句' } });
+      settle[0]!(outcome);
+      expect(await screen.findByText(reason, { exact: false })).toBeTruthy();
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(input().value).toBe('在途時打的下一句');
+    },
+  );
+
+  it('B：有 input 的命令照 #1941：在途鎖著、草稿留著，收下才清', async () => {
+    const { slashed, settle, enter } = await held();
+    enter('/plan off');
+    await waitFor(() => expect(slashed).toEqual(['/plan off']));
+    expect(input().value).toBe('/plan off');
+    expect(input().readOnly).toBe(true);
+    settle[0]!({ kind: 'success', command_id: 'plan' });
+    await waitFor(() => expect(input().value).toBe(''));
+    expect(input().readOnly).toBe(false);
+  });
+
+  it('C：從選單執行 bare 命令：當場執行、輸入框不鎖', async () => {
+    const { slashed, settle } = await held();
+    fireEvent.change(input(), { target: { value: '/com' } });
+    await screen.findByRole('listbox');
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await waitFor(() => expect(slashed).toEqual(['/compact']));
+    expect(settle).toHaveLength(1);
+    expect(input().value).toBe('');
+    expect(input().readOnly).toBe(false);
+  });
+
+  it('D：沒有 input 卻帶字的那一行是一句話：走 run.start，不走 slash.run', async () => {
+    const { slashed, runStart, enter } = await held();
+    enter('/compact 留下最近三輪');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![1]).toBe('/compact 留下最近三輪');
+    expect(slashed).toEqual([]);
+  });
+
+  it('D：跑著時 Cmd/Ctrl+Enter 照一般句子插話（#710），不被當命令擋掉', async () => {
+    const { slashed, runStart, enter } = await held([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    ]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+    enter('/compact 留下最近三輪', true);
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![1]).toBe('/compact 留下最近三輪');
+    expect(runStart.mock.calls[0]![2]).toMatchObject({ mode: 'steer' });
+    expect(slashed).toEqual([]);
   });
 });
