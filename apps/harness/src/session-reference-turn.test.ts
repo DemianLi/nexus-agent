@@ -7,6 +7,10 @@
  * 解析、投影、預算的細節在 `session-reference.test.ts`。**零憑證、零外部連線**。
  */
 
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { BaseMessage } from '@langchain/core/messages';
 import { AIMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
@@ -17,7 +21,7 @@ import {
   SessionLog,
   toLoggedMessage,
 } from '@nexus/core';
-import type { PluginEntry, SessionEvent, StoredSessionHeader } from '@nexus/core';
+import type { PluginEntry, SessionEvent, SpillRef, StoredSessionHeader } from '@nexus/core';
 import type { Event, InboxPayload } from '@nexus/wire';
 import {
   emptyConversation,
@@ -597,5 +601,90 @@ describe('wire：收下那句話的時候就驗，壞的不進佇列', () => {
     });
     expect(bad).toMatchObject({ type: 'error', error: 'invalid_argument' });
     expect(String(bad.message)).toContain('SESSION_REFERENCE_INVALID_REFERENCE');
+  });
+});
+
+describe('wire：截斷掉的全文存進工具結果暫存，模型照位址讀得回', () => {
+  // 一條訊息，中間夾一個剛好對齊 64 碼點分段的記號：預覽塞不下它，全文的逐字稿裡它自成一行。
+  const MIDDLE = 'MIDDLE-OF-THE-REFERENCED-SESSION'.padEnd(64, '-');
+  const LONG = `${'甲'.repeat(64 * 400)}${MIDDLE}${'乙'.repeat(64 * 400)}`;
+
+  it('說明裡帶 saved 與 /large_tool_results/ 位址；同一條 thread 對那個位址 read_file，讀到被略掉的中間', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'reference-spill-'));
+    const read: Record<string, unknown> = { file_path: '/還沒存', offset: 0, limit: 3 };
+    const model = new ScriptedChatModel({
+      turns: [{ content: '', toolCalls: [{ name: 'read_file', args: read }] }, { content: '好' }],
+    });
+    const built = await createNexusAgent({
+      model,
+      checkpointer: new MemorySaver(),
+      plugins: [],
+      stepInbox: true,
+      toolResultStash: { rootDir, session: 'reference-spill' },
+    });
+    const store = built.spillStore;
+    expect(store).toBeDefined();
+    let saved: SpillRef | undefined;
+    let logOf: (() => readonly SessionEvent[]) | undefined;
+    const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
+      sessionReferenceReader: fakeReader({ long: source('long', LONG, '收到') }),
+      createAgent: async () => ({
+        agent: built.agent as unknown as PumpAgent,
+        stepInbox: true,
+        commands: emptyCommandPoint(),
+        dispose: async () => {},
+        attachSessions: (sessions, backgroundPort) => {
+          logOf = () => sessions.root.events;
+          return composeAttachSessions(built)(sessions, backgroundPort);
+        },
+        // 包一層只為了在叫模型之前知道位址：存檔本身是組裝出來的那一份。
+        spillStore: {
+          saveText: async (request) => {
+            saved = await store!.saveText(request);
+            const lines = request.content.split('\n');
+            read.file_path = saved.locator;
+            read.offset = lines.findIndex((line) => line.includes('MIDDLE-OF')) - 1;
+            return saved;
+          },
+        },
+      }),
+    });
+    runs.push({
+      close: async () => {
+        await handler.close();
+        await built.dispose();
+        await rm(rootDir, { recursive: true, force: true });
+      },
+    });
+    const response = await handler.handle(
+      loopbackRequest('http://ref.test/threads/spill/commands/run.start', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          id: 1,
+          method: 'run.start',
+          params: {
+            assistant_id: 'nexus',
+            input: { messages: [{ role: 'user', content: `看 ${mention('long', '長的')}` }] },
+          },
+        }),
+      }),
+    );
+    expect(await response.json()).toMatchObject({ type: 'success' });
+    await until(() => (logOf?.() ?? []).some((event) => event.type === 'turn/end'));
+
+    expect(saved?.locator).toMatch(
+      /^\/large_tool_results\/[0-9a-f]{12}-session-reference-1\.txt$/u,
+    );
+    const snapshot = model.prompts[0]!.find((message) =>
+      message.id?.endsWith(':session-reference'),
+    )!.text;
+    expect(snapshot).not.toContain('MIDDLE-OF');
+    expect(snapshot).toMatch(/"status":\s*"saved"/u);
+    expect(snapshot).toContain(saved!.locator);
+
+    const readBack = model.prompts[1]!.filter((message) => message.getType() === 'tool').at(-1)!;
+    expect(readBack.text).toContain(JSON.stringify(MIDDLE));
   });
 });

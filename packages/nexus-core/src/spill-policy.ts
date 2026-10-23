@@ -15,7 +15,8 @@
  * ## 偏離（依 AGENTS.md 登記：哪一條、為什麼、退到什麼）
  *
  * 1. **只處理純文字結果。** dsh 的預算圖文共用，圖片整張保留或整張略過（`retention.ts`）。這一版只做文字：內容裡有任何
- *    非文字區塊就原樣交出。圖片的估價入口歸 [#715](https://github.com/DemianLi/nexus-agent/issues/715)／#732。
+ *    非文字區塊就原樣交出。工具結果裡沒有圖片的生產者：[#731 的判定](https://github.com/DemianLi/nexus-agent/issues/731#issuecomment-6059782432)
+ *    只收使用者訊息裡的圖、`read_image` 不註冊、MCP 的圖換成文字，重開條件寫在那裡。
  * 2. **估算用 o200k，不是 dsh 的「四個字元一個 token」。** 同 {@link ./token-estimate.ts} 的理由（中文一字約 0.9 token，
  *    固定密度會少估兩倍以上）。o200k 的前綴 token 數**不保證**單調，所以頭尾不做 dsh 那種二分搜尋，改成「按密度猜長度、
  *    量、修正」幾輪，最後**整則再量一次**、超過就整體縮，保住「不超過預算」。
@@ -38,21 +39,49 @@ export const SPILL_POLICY_MIDDLEWARE_NAME = 'nexusSpillPolicy';
 /** 不外溢的工具：讀出來的東西再外溢，模型永遠讀不完。dsh 只放過 `read`。 */
 const EXEMPT_TOOLS: ReadonlySet<string> = new Set(['read_file']);
 
-/** 存下去的東西要回給模型的定位。 */
+/** 存下去的東西要回給模型的定位，照 dsh `spill/src/types.ts:76-80` 的 `SpillRef`。 */
 export interface SpillRef {
   /** 模型 `read_file` 得到的路徑。 */
   readonly locator: string;
+  /** 存下去的全文有幾個 UTF-8 位元組。 */
+  readonly bytes: number;
   /** 通知裡接在定位後面的那一句怎麼取回。 */
   readonly retrievalHint: string;
 }
 
-/** 存一份全文的請求。 */
+/**
+ * 這份全文是誰產生的，照 dsh `spill/src/types.ts:41-58` 的 `SpillSource`：工具結果帶呼叫編號，跨會話引用帶被引用的會話。
+ * 只是描述，不拿來做存取控制。
+ */
+export type SpillSource =
+  | {
+      readonly kind: 'tool';
+      /** 產生這則結果的工具。 */
+      readonly toolName: string;
+      /** 工具呼叫編號。 */
+      readonly callId: string;
+      /** 這份東西的短名（例如 `result`）。 */
+      readonly label: string;
+    }
+  | {
+      readonly kind: 'session-reference';
+      /** 被引用的會話。 */
+      readonly sessionId: string;
+      /** 那條會話給人看的名字。 */
+      readonly label: string;
+    };
+
+/**
+ * 存一份全文的請求，照 dsh `spill/src/types.ts:61-72` 的 `SaveTextSpill`。
+ *
+ * **沒有 `owner`**（偏離登記在 `apps/harness/src/tool-result-stash.ts` 的偏離 3）：一個存檔服務的實例只服務一個會話，
+ * 分區在建實例時就定了，請求帶 owner 也沒有第二個去處。
+ */
 export interface SpillSaveRequest {
-  /** 產生這則結果的工具。 */
-  readonly toolName: string;
-  /** 工具呼叫編號。 */
-  readonly callId: string;
-  /** 全文。 */
+  readonly source: SpillSource;
+  /** 呼叫端建議的檔名（例如 `web_fetch.txt`）。儲存端清洗成一段安全的名字才用，只是提示，不是路徑。 */
+  readonly suggestedName: string;
+  /** 全文（UTF-8）。 */
   readonly content: string;
 }
 
@@ -260,9 +289,15 @@ export function createSpillPolicyMiddleware(options: SpillPolicyOptions): AgentM
       const text = plainText(result.content);
       if (text === undefined) return result;
       try {
+        // 來源與建議檔名照 dsh `spill-policy/src/index.ts:103-106`。
         const replaced = await spill(text, options, {
-          toolName,
-          callId: request.toolCall.id ?? result.tool_call_id,
+          source: {
+            kind: 'tool',
+            toolName,
+            callId: request.toolCall.id ?? result.tool_call_id,
+            label: 'result',
+          },
+          suggestedName: `${toolName}.txt`,
           content: text,
         });
         if (replaced === undefined) return result;

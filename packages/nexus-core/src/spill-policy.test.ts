@@ -27,7 +27,8 @@ function fakeStore(): SpillStore & Saved {
     saveText: (request) => {
       requests.push(request);
       return Promise.resolve({
-        locator: `/large_tool_results/abc123def456-${request.toolName}.txt`,
+        locator: `/large_tool_results/abc123def456-${request.suggestedName}`,
+        bytes: Buffer.byteLength(request.content, 'utf8'),
         retrievalHint: SPILL_RETRIEVAL_HINT,
       });
     },
@@ -92,6 +93,14 @@ describe('不管內容長什麼樣，換過的那一則不超過預算', () => {
     expect(seen).toContain('Full formatted result stored at: /large_tool_results/');
     expect(store.requests).toHaveLength(1);
     expect(store.requests[0]?.content).toBe(text);
+    // 來源與建議檔名照 dsh `spill-policy/src/index.ts:103-106`（#1553 N0949）。
+    expect(store.requests[0]?.source).toEqual({
+      kind: 'tool',
+      toolName: 'bulk',
+      callId: 'call_1',
+      label: 'result',
+    });
+    expect(store.requests[0]?.suggestedName).toBe('bulk.txt');
     // 代理對不能被切成兩半：留下的字串要能無損轉成 UTF-8 再轉回來。
     expect(Buffer.from(seen, 'utf8').toString('utf8')).toBe(seen);
   });
@@ -182,7 +191,11 @@ describe('原樣交出的情形', () => {
 describe('通知措辭', () => {
   it('逐字照 dsh 的 formatSpillNotice', () => {
     expect(
-      formatSpillNotice(1234, { locator: '/large_tool_results/x.txt', retrievalHint: 'HINT' }),
+      formatSpillNotice(1234, {
+        locator: '/large_tool_results/x.txt',
+        bytes: 1234,
+        retrievalHint: 'HINT',
+      }),
     ).toBe(
       '(Omitted 1234 bytes. Full formatted result stored at: /large_tool_results/x.txt. HINT)',
     );

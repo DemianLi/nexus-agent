@@ -29,6 +29,7 @@ import type {
   PluginWarning,
   SessionEvent,
   SessionTelemetrySharingStatus,
+  SpillStore,
 } from '@nexus/core';
 import type { ColdChildStore } from './background-cold.js';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
@@ -1014,6 +1015,8 @@ export async function createCliAgent(
   onWarning: (listener: (warning: PluginWarning) => void) => () => void;
   /** 這一次組裝收不收插話（#710），見 `stepInbox` 那一格。 */
   stepInbox: boolean;
+  /** 這一次組裝的外溢存檔服務（#1553 N0948）；**沒給工具結果暫存是 `undefined`**。見 `createNexusAgent` 回的那一格。 */
+  spillStore: SpillStore | undefined;
   /** 每會話模型選擇的組裝端（#723）；**沒帶 `--live` 是 `undefined`**（假模型沒有型錄）。 */
   modelSelection: ModelSelectionHost | undefined;
 }> {
@@ -1142,6 +1145,7 @@ export async function createCliAgent(
     warnings,
     onWarning,
     stepInbox,
+    spillStore,
     subagentKinds,
   } = await createNexusAgent({
     model,
@@ -1338,6 +1342,7 @@ export async function createCliAgent(
     warnings,
     onWarning,
     stepInbox,
+    spillStore,
     modelSelection,
   };
 }

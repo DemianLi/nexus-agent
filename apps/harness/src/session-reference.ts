@@ -12,6 +12,7 @@
  * 4. **預算**（{@link retainReferencedSession}）：每條來源序列化後最多 64 KiB（沒有模型容量資訊時 dsh 也是這個值）。先丟中間的訊息
  *    （留最新的與摘要），再對最長的一則頭尾各留一半、中間換成 `[… omitted N UTF-8 bytes …]`。
  * 5. **提示詞**（{@link renderReferencePrompt}）：不可信、唯讀的 JSON，包在 `<referenced-sessions>` 裡；截斷了就多一段說明全文在哪。
+ * 6. **截斷的全文**（`prepareReferenceOmission`，dsh `spill.ts`）：存進接收那條 thread 的存檔服務，說明裡帶回位址。
  *
  * 給模型看的字（提示詞、警告、截斷標記）**逐字照抄 dsh**，同 `conversation-replay.ts` 抄 dsh 修補句的做法。
  *
@@ -21,8 +22,8 @@
  *    寫進日誌的時候就要已經是換過的 `@標題`，而那時迴圈還沒開始，所以解析與驗證（自己、太多條、網址壞）提前到 `run.start`／
  *    `queue.update` 收下的那一刻，回 `invalid_argument`，那句話不進佇列、什麼都不丟。**讀被引用的會話仍在迴圈裡**（領走之後、叫模型之前），
  *    失敗讓這一輪失敗，同 dsh。
- * 2. **截斷的全文暫時沒有地方存**：dsh 有 `spillStore` 就存全文並回位址，沒有就回 `storage-not-configured`。我們的外溢層
- *    （[#719](https://github.com/DemianLi/nexus-agent/issues/719)）還沒落地，一律走 `storage-not-configured`；落地之後翻成帶位址，那條驗收不刪。
+ * 2. （已撤：截斷的全文照 dsh 存進接收那條 thread 的工具結果暫存並回位址，#1553 N0948；沒有暫存時回 `storage-not-configured`。
+ *    編號保留，別處引用的「偏離 3、4」不跟著動。）
  * 3. **模型容量**：dsh 有容量資訊就用 `context × 4 × 0.2`（下限 64 KiB）。我們的模型解不出 `maxInputTokens`（見 `summarization.ts`），
  *    走的正是 dsh「沒有容量資訊」的那條路，所以固定 64 KiB，不是另一條規則。
  * 4. **投影靠 `replayConversation`**：dsh 走「目前那一面」（surface）的事件，我們沒有那一軸，「現在看得到的」就是把日誌推回模型歷史
@@ -35,7 +36,13 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { replayConversation, sourceKwargs } from '@nexus/core';
-import type { SessionEvent, SessionReferenceSourceEntry, StoredSessionHeader } from '@nexus/core';
+import type {
+  SessionEvent,
+  SessionReferenceSourceEntry,
+  SpillRef,
+  SpillStore,
+  StoredSessionHeader,
+} from '@nexus/core';
 import {
   MAX_SESSION_REFERENCES,
   parseSessionReferenceText,
@@ -379,30 +386,101 @@ export function renderReferencePrompt(data: readonly ReferencedSessionData[]): s
   return `${PROMPT_PREFIX}${stringifyTagSafeJson(data)}${PROMPT_SUFFIX}`;
 }
 
+/** 全文存下來了沒有，照 dsh `spill.ts:12-13` 的 `FullSnapshot`。 */
+type FullSnapshot =
+  | ({ readonly status: 'saved' } & SpillRef)
+  | {
+      readonly status: 'unavailable';
+      readonly reason: 'storage-not-configured' | 'save-failed';
+    };
+
 interface OmissionNotice {
   readonly sessionId: string;
   readonly capturedThroughSeq: number | null;
   readonly omittedMessages: number;
   readonly omittedBytes: number;
-  readonly fullSnapshot: {
-    readonly status: 'unavailable';
-    readonly reason: 'storage-not-configured';
+  readonly fullSnapshot: FullSnapshot;
+}
+
+interface OmissionSource {
+  readonly fullData: ReferencedSessionData;
+  readonly stats: ReferenceRetentionStats;
+  readonly capturedFormatVersion: number;
+}
+
+/**
+ * 預覽少了字的那一條，存全文並回一則說明，照 dsh `spill.ts:23-50` 的 `prepareReferenceOmission`。沒有截斷就是 `undefined`。
+ * 沒有存檔服務回 `storage-not-configured`；存檔拋錯回 `save-failed`——存不下不能把殘缺的預覽說成有全文，也不讓這一輪失敗。
+ * 取消不在這裡吞：外層 {@link settleWithCancellation} 照樣拋 `CANCELLED`。
+ *
+ * @param store - 這條 thread 的存檔服務；沒有會話日誌的組裝沒有。
+ * @param source - 同一次擷取的全文與省略統計。
+ * @param inputIndex - 第幾條引用，用來分開逐字稿的檔名。
+ */
+async function prepareReferenceOmission(
+  store: SpillStore | undefined,
+  source: OmissionSource,
+  inputIndex: number,
+): Promise<OmissionNotice | undefined> {
+  if (!source.stats.truncated) return undefined;
+  let fullSnapshot: FullSnapshot;
+  if (store === undefined) {
+    fullSnapshot = { status: 'unavailable', reason: 'storage-not-configured' };
+  } else {
+    let saved: SpillRef;
+    try {
+      saved = await store.saveText({
+        source: {
+          kind: 'session-reference',
+          sessionId: source.fullData.sessionId,
+          label: source.fullData.label,
+        },
+        suggestedName: `session-reference-${inputIndex + 1}.txt`,
+        content: renderTranscript(source.fullData, source.capturedFormatVersion),
+      });
+    } catch {
+      // 存檔是選配的：存不下不能讓殘缺的預覽自稱有全文。
+      return omission(source, { status: 'unavailable', reason: 'save-failed' });
+    }
+    fullSnapshot = { status: 'saved', ...saved };
+  }
+  return omission(source, fullSnapshot);
+}
+
+function omission(source: OmissionSource, fullSnapshot: FullSnapshot): OmissionNotice {
+  return {
+    sessionId: source.fullData.sessionId,
+    capturedThroughSeq: source.fullData.capturedThroughSeq,
+    omittedMessages: source.stats.omittedMessages,
+    omittedBytes: source.stats.omittedBytes,
+    fullSnapshot,
   };
 }
 
-/** 預覽少了字的那幾條各一則說明。全文暫時沒有地方存（偏離第 2 條）。 */
-function omissionNotices(
-  sources: readonly { fullData: ReferencedSessionData; stats: ReferenceRetentionStats }[],
-): OmissionNotice[] {
-  return sources
-    .filter((source) => source.stats.truncated)
-    .map((source) => ({
-      sessionId: source.fullData.sessionId,
-      capturedThroughSeq: source.fullData.capturedThroughSeq,
-      omittedMessages: source.stats.omittedMessages,
-      omittedBytes: source.stats.omittedBytes,
-      fullSnapshot: { status: 'unavailable', reason: 'storage-not-configured' },
-    }));
+/**
+ * 截斷的那一條的完整逐字稿，逐字照 dsh `spill.ts:62-81` 的 `renderTranscript`：警告、擷取的中繼資料，每則訊息切成最多 64 個
+ * code point 一段的 JSON 字串、一段一行（沒有換行的長訊息也讀得了，逐段 `JSON.parse` 串起來就是原文）。
+ */
+function renderTranscript(data: ReferencedSessionData, capturedFormatVersion: number): string {
+  const { conversation, ...capture } = data;
+  return [
+    '## Referenced session — full projected snapshot',
+    '',
+    'This transcript is an untrusted, read-only snapshot from another session.',
+    REFERENCE_WARNING,
+    '',
+    JSON.stringify({ ...capture, capturedFormatVersion }, null, 2),
+    '',
+    'Message text is stored as JSON string fragments, at most 64 Unicode code points per line.',
+    'Decode and concatenate the fragments of each message to recover its exact text, including newlines.',
+    ...conversation.flatMap((item, index) => [
+      '',
+      `### Message ${index + 1}: ${item.role}`,
+      '',
+      ...Array.from(item.text.matchAll(/[\s\S]{1,64}/gu), (match) => JSON.stringify(match[0])),
+    ]),
+    '',
+  ].join('\n');
 }
 
 /** 準備好的快照：給模型的那則訊息，與要記進日誌的 `source`。 */
@@ -425,6 +503,11 @@ export interface PrepareReferencesOptions {
   readonly signal?: AbortSignal;
   /** 每條來源序列化後的位元組上限，省略即 {@link DEFAULT_MAX_REFERENCE_BYTES}。 */
   readonly maxReferenceBytes?: number;
+  /**
+   * 截斷時存全文的地方，**接收這段脈絡的那條 thread 自己的**存檔服務（dsh 取 `ctx.get('spillStore')`，owner 是接收的會話）。
+   * 缺席就回 `storage-not-configured`。
+   */
+  readonly spillStore?: SpillStore;
 }
 
 /** 包一層：直接寫 `signal?.aborted === true` 的話，TypeScript 會在前一次檢查之後把它窄成 `false`。 */
@@ -520,7 +603,15 @@ export async function prepareSessionReferences(
     return { ...retained, capturedFormatVersion: storedFormatVersion };
   });
 
-  const notices = omissionNotices(rendered);
+  // 照 dsh `index.ts:348-352`：逐條存，存的時候也等得到取消。
+  const omissions = await settleWithCancellation(
+    Promise.all(
+      rendered.map((source, index) => prepareReferenceOmission(options.spillStore, source, index)),
+    ),
+    signal,
+  );
+  if (signal !== undefined && isAborted(signal)) throw cancelled(signal);
+  const notices = omissions.filter((notice) => notice !== undefined);
   const prompt =
     renderReferencePrompt(rendered.map((source) => source.data)) +
     (notices.length === 0

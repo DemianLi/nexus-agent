@@ -1363,10 +1363,13 @@ async function startServer(
         workspaceRoot,
         attachTitle,
         stepInbox,
+        spillStore,
       } = built;
       return {
         agent: agent as unknown as PumpAgent,
         stepInbox,
+        // 外溢存檔服務（#1553 N0948）：引用別的會話被截斷時全文存這裡。沒開會話日誌就沒有暫存，缺席。
+        ...(spillStore !== undefined && { spillStore }),
         // **`createCliAgent` 一直都回著這個註冊點，這條路以前把它丟掉了。**
         // 撿起來就是 web 那端打得到 `/plan` 的全部
         // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）；發派面本身在

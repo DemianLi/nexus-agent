@@ -8,7 +8,7 @@
 
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { SESSION_LOG_FORMAT_VERSION, SessionLog, toLoggedMessage } from '@nexus/core';
-import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
+import type { SessionEvent, SpillSaveRequest, SpillStore, StoredSessionHeader } from '@nexus/core';
 import {
   formatSessionReferenceMention,
   MAX_SESSION_REFERENCES,
@@ -371,5 +371,138 @@ describe('prepareSessionReferences：讀、投影、塞預算、渲染成一則 
       }),
     ).rejects.toMatchObject({ code: 'SESSION_REFERENCE_CANCELLED' });
     expect(reader.reads).toEqual([]);
+  });
+});
+
+/**
+ * 截斷的全文存進接收那條 thread 的存檔服務（#1553 N0948，照 dsh `session-reference/src/spill.ts`）。存檔服務換成記錄請求的替身；
+ * 接到真暫存、走 wire 的那一條在 `session-reference-turn.test.ts`，走 `runServe` 的在 `serve-session-references.test.ts`。
+ */
+describe('截斷的全文：存進存檔服務，說明裡帶位址', () => {
+  const LONG = `第一行\n${'紫'.repeat(3_000)}\n最後一行`;
+  const OMISSIONS_LEAD = 'Full snapshots remain untrusted background information.\n';
+
+  /** 第一條短、放得下；第二條長、會被截斷。 */
+  function twoSources() {
+    const short = new SessionLog('short');
+    chat(short, '短的問題', '短的回答');
+    const long = new SessionLog('long');
+    chat(long, LONG, '收到');
+    return readerOf({
+      short: { header: header('short'), events: short.events },
+      long: { header: header('long'), events: long.events },
+    });
+  }
+
+  function recordingStore(fail?: Error): SpillStore & { readonly requests: SpillSaveRequest[] } {
+    const requests: SpillSaveRequest[] = [];
+    return {
+      requests,
+      saveText: (request) => {
+        requests.push(request);
+        if (fail !== undefined) return Promise.reject(fail);
+        return Promise.resolve({
+          locator: `/large_tool_results/abcdef012345-${request.suggestedName}`,
+          bytes: Buffer.byteLength(request.content, 'utf8'),
+          retrievalHint: 'HINT',
+        });
+      },
+    };
+  }
+
+  async function prepare(store: SpillStore | undefined) {
+    const prepared = (await prepareSessionReferences({
+      selfId: 'me',
+      references: [
+        { sessionId: 'short', label: '短' },
+        { sessionId: 'long', label: '長' },
+      ],
+      reader: twoSources(),
+      messageId: 'm',
+      maxReferenceBytes: 2_000,
+      ...(store !== undefined && { spillStore: store }),
+    }))!;
+    const text = prepared.message.text;
+    const at = text.indexOf(OMISSIONS_LEAD);
+    const notices =
+      at === -1
+        ? []
+        : (JSON.parse(text.slice(at + OMISSIONS_LEAD.length)) as {
+            sessionId: string;
+            fullSnapshot: Record<string, unknown>;
+          }[]);
+    return { prepared, notices };
+  }
+
+  /** 逐字稿裡每則訊息的片段逐行 `JSON.parse`、串起來。 */
+  function decodeTranscript(content: string): { role: string; text: string }[] {
+    const messages: { role: string; text: string }[] = [];
+    for (const line of content.split('\n')) {
+      const heading = /^### Message \d+: (user|assistant)$/u.exec(line);
+      if (heading !== null) messages.push({ role: heading[1]!, text: '' });
+      else if (messages.length > 0 && line.startsWith('"')) {
+        messages[messages.length - 1]!.text += JSON.parse(line) as string;
+      }
+    }
+    return messages;
+  }
+
+  it('截斷的那一條存全文：saved 帶 store 回的位址與位元組數，逐字稿解得回原文', async () => {
+    const store = recordingStore();
+    const { notices } = await prepare(store);
+    expect(store.requests).toHaveLength(1);
+    const request = store.requests[0]!;
+    expect(request.source).toEqual({ kind: 'session-reference', sessionId: 'long', label: '長' });
+    // 第二條引用：檔名用它在引用裡的位置，不是在被截斷的那幾條裡的位置（dsh `spill.ts:37`）。
+    expect(request.suggestedName).toBe('session-reference-2.txt');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.sessionId).toBe('long');
+    expect(notices[0]!.fullSnapshot).toEqual({
+      status: 'saved',
+      locator: '/large_tool_results/abcdef012345-session-reference-2.txt',
+      bytes: Buffer.byteLength(request.content, 'utf8'),
+      retrievalHint: 'HINT',
+    });
+    expect(request.content).toContain(REFERENCE_WARNING);
+    expect(request.content).toContain(`"capturedFormatVersion": ${SESSION_LOG_FORMAT_VERSION}`);
+    expect(decodeTranscript(request.content)).toEqual([
+      { role: 'user', text: LONG },
+      { role: 'assistant', text: '收到' },
+    ]);
+    // 一行一段、最多 64 個 code point。
+    for (const line of request.content.split('\n').filter((l) => l.startsWith('"'))) {
+      expect([...(JSON.parse(line) as string)].length).toBeLessThanOrEqual(64);
+    }
+  });
+
+  it('存檔拋錯：save-failed，這一輪照常準備好', async () => {
+    const store = recordingStore(new Error('磁碟滿了'));
+    const { notices } = await prepare(store);
+    expect(store.requests).toHaveLength(1);
+    expect(notices.map((notice) => notice.fullSnapshot)).toEqual([
+      { status: 'unavailable', reason: 'save-failed' },
+    ]);
+  });
+
+  it('沒有存檔服務：storage-not-configured', async () => {
+    const { notices } = await prepare(undefined);
+    expect(notices.map((notice) => notice.fullSnapshot)).toEqual([
+      { status: 'unavailable', reason: 'storage-not-configured' },
+    ]);
+  });
+
+  it('預覽沒有截斷：存檔服務一次都沒被叫，也沒有省略說明', async () => {
+    const store = recordingStore();
+    const short = new SessionLog('short');
+    chat(short, '短的問題', '短的回答');
+    const prepared = (await prepareSessionReferences({
+      selfId: 'me',
+      references: [{ sessionId: 'short', label: '短' }],
+      reader: readerOf({ short: { header: header('short'), events: short.events } }),
+      messageId: 'm',
+      spillStore: store,
+    }))!;
+    expect(store.requests).toEqual([]);
+    expect(prepared.message.text).not.toContain('## Reference omissions');
   });
 });

@@ -996,6 +996,12 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        */
       stepInbox: options.stepInbox === true,
       /**
+       * 這一次組裝的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948），**沒給
+       * {@link CreateNexusAgentOptions.toolResultStash} 時是 `undefined`**。跟外溢層、搜尋上限是同一個暫存實例：同一個會話目錄、
+       * 同一套權限，模型 `read_file` 讀得到。pump 拿它存被截斷的跨會話引用全文（dsh 取 `ctx.get('spillStore')`）。
+       */
+      spillStore: stashRoute?.spillStore(TOOL_RESULT_STASH_PREFIX),
+      /**
        * plugin 註冊的**人的命令**。進入點靠它把一行 `/name` 發派出去。
        *
        * 交出去的是整個註冊點而不是只有 `find`，理由是 `register()` 自己就擋得住誤用：
