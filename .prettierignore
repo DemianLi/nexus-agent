@@ -24,6 +24,9 @@ references/
 # `expected.json` 也是產生器寫的，交給 Prettier 會被改寫，重產時就跟版控對不上。
 apps/harness/src/fixtures/session-format/
 
+# home 狀態檔的 v1 夾具（#1507）：位元組原樣封存出貨格式（JSON 單行、YAML 註解），交給 Prettier 就不是當時的樣子了。
+apps/harness/src/fixtures/home-state/
+
 # 持久化型別圖（#1856）：`gen-persistence-schema` 照 dsh 寫成 JSON.stringify(…, null, 2)，Prettier 會把短陣列併成一行，
 # 重產就跟版控對不上；新鮮度由 `persistence-schema.test.ts` 逐字比。
 /docs/persistence-schema.json

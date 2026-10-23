@@ -177,7 +177,8 @@ export class ThreadOrganization {
     if (state === undefined) {
       throw new Error(
         `會話整理檔 ${file} 的格式認不得（要 { "version": 1, "pinnedThreadIds": […], "archivedThreadIds": […] }，` +
-          `兩個集合各自不重複、彼此不重疊）；確認它不是別的東西寫的。要重設就刪掉它再重啟 serve——釘選與封存會全部清空。`,
+          `兩個集合各自不重複、彼此不重疊）；確認它不是別的東西寫的。**先把整個檔備份起來**（例如 cp ${file} ${file}.bak，備份一樣只給擁有者讀）。` +
+          `備份之後要重設，就刪掉它再重啟 serve——釘選與封存會全部清空。`,
       );
     }
     return new ThreadOrganization(home, state);

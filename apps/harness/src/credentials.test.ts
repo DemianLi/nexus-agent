@@ -70,21 +70,70 @@ function service(
 
 describe('parseCredentialsDocument', () => {
   it('version 與 refs', () => {
-    const refs = parseCredentialsDocument(file, `version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`);
+    const { refs, ignoredKeys } = parseCredentialsDocument(
+      file,
+      `version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`,
+    );
     expect(refs.get(KEY)).toBe(SECRET);
+    expect(ignoredKeys).toEqual([]);
   });
 
   it('空檔與只有 version 都是「沒有憑證」', () => {
-    expect(parseCredentialsDocument(file, '').size).toBe(0);
-    expect(parseCredentialsDocument(file, '  \n').size).toBe(0);
-    expect(parseCredentialsDocument(file, 'version: 1\n').size).toBe(0);
-    expect(parseCredentialsDocument(file, 'version: 1\nrefs:\n').size).toBe(0);
+    expect(parseCredentialsDocument(file, '').refs.size).toBe(0);
+    expect(parseCredentialsDocument(file, '  \n').refs.size).toBe(0);
+    expect(parseCredentialsDocument(file, 'version: 1\n').refs.size).toBe(0);
+    expect(parseCredentialsDocument(file, 'version: 1\nrefs:\n').refs.size).toBe(0);
+  });
+
+  /** 同 dsh：整份只有註解（`toJS()` 是 `null`）與空 mapping 都是空的倉庫，不要求 `version`（#1507）。 */
+  it.each([
+    ['只有註解', '# 只有註解\n'],
+    ['註解加空白行', '# 把唯一一把 key 註解掉了\n# NVIDIA_API_KEY: x\n\n   \n'],
+    ['文件標記加註解', '---\n# 只有註解\n'],
+    ['空 mapping', '{}\n'],
+  ])('%s：空的倉庫，不要求 version', (_label, text) => {
+    expect(parseCredentialsDocument(file, text)).toEqual({ refs: new Map(), ignoredKeys: [] });
+  });
+
+  it('version、refs 之外的頂層鍵不擋：鍵名交回、refs 照解、值不在結果裡以外的任何地方（#1507）', () => {
+    const parsed = parseCredentialsDocument(
+      file,
+      `version: 1\nnote: ${SECRET}\nrefs:\n  ${KEY}: ${SECRET}\nother:\n  - 1\n`,
+    );
+    expect(parsed.refs.get(KEY)).toBe(SECRET);
+    expect(parsed.ignoredKeys).toEqual(['note', 'other']);
+    // 外來的條目留在檔案裡、不解析出東西：它的值不在 refs 裡。
+    expect([...parsed.refs.keys()]).toEqual([KEY]);
+  });
+
+  it('只有 version 加外來的鍵：沒有憑證，鍵名交回', () => {
+    expect(parseCredentialsDocument(file, 'version: 1\ncomment: hi\n')).toEqual({
+      refs: new Map(),
+      ignoredKeys: ['comment'],
+    });
+  });
+
+  /** `records` 是 dsh 的鍵、我們沒有這種憑證：放過它，使用者會以為存進去的東西有作用（偏離 dsh 的既有登記）。 */
+  it('records 仍然拒絕，訊息講明 nexus 沒有這種憑證，不說成「不認得的頂層鍵」', () => {
+    const text = `version: 1\nrecords:\n  a/b:\n    type: api-key\n    key: ${SECRET}\nrefs:\n  ${KEY}: ${SECRET}\n`;
+    let message = '';
+    try {
+      parseCredentialsDocument(file, text);
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain('nexus 沒有 records 這種憑證');
+    expect(message).not.toContain('不認得的頂層鍵');
+    expect(message).not.toContain(SECRET);
+    expect(() => parseCredentialsDocument(file, 'version: 1\nrecords: {}\n')).toThrow('records');
+    expect(() => parseCredentialsDocument(file, 'version: 1\nrecords:\n')).toThrow('records');
   });
 
   /** 每一種拒絕都不能把值帶進訊息：YAML 解析器自己的訊息會引出錯那一行。 */
   it.each([
     ['根不是 mapping', `- ${SECRET}\n`],
-    ['未知頂層鍵', `version: 1\nrecords: {}\nrefs:\n  ${KEY}: ${SECRET}\n`],
+    ['records', `version: 1\nrecords: {}\nrefs:\n  ${KEY}: ${SECRET}\n`],
+    ['沒有 version、只有外來的鍵', `note: ${SECRET}\n`],
     ['version 不對', `version: 2\nrefs:\n  ${KEY}: ${SECRET}\n`],
     ['沒有 version', `refs:\n  ${KEY}: ${SECRET}\n`],
     ['refs 不是 mapping', `version: 1\nrefs:\n  - ${SECRET}\n`],
@@ -315,6 +364,98 @@ describe('重載：每次解析先 stat，變了才重讀', () => {
   it('一開始就是壞的：第一次解析就拋（沒有「最後一份」可以保留）', () => {
     managed(`version: 1\nrefs:\n  ${KEY}: [壞的\n`);
     expect(() => service().credentials.resolve(KEY)).toThrow(resolve(file));
+  });
+});
+
+describe('別的工具多放的頂層鍵、只剩註解的檔（#1507，對齊 dsh alpha.5）', () => {
+  it('多一個頂層鍵：解得出 key，warn 恰好一次，訊息含鍵名、不含值；同一份檔再解析不再警告', () => {
+    managed(`version: 1\nnote: ${SECRET}-note\nrefs:\n  ${KEY}: ${SECRET}\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+
+    expect(() => credentials.check()).not.toThrow();
+    expect(credentials.resolve(KEY)?.value).toBe(SECRET);
+    expect(credentials.resolve(KEY)?.value).toBe(SECRET);
+    expect(credentials.resolve('OTHER')).toBeUndefined();
+
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('"note"');
+    expect(warned[0]).toContain(file);
+    expect(warned.join('')).not.toContain(SECRET);
+    // 不是「重載失敗」：那條路徑是壞檔才走的。
+    expect(warned[0]).not.toContain('重載失敗');
+  });
+
+  it('鍵名用 JSON 跳脫印出：鍵名裡的換行偽造不出第二行日誌', () => {
+    managed(`version: 1\n"a\\nFAKE: line": 1\nrefs:\n  ${KEY}: v\n`);
+    const warned: string[] = [];
+    service({}, (line) => warned.push(line)).credentials.check();
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.match(/\n/gu)).toHaveLength(1);
+    expect(warned[0]).toContain('"a\\nFAKE: line"');
+  });
+
+  it('沒有外來的鍵就不警告', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: v\n`);
+    const warned: string[] = [];
+    service({}, (line) => warned.push(line)).credentials.check();
+    expect(warned).toEqual([]);
+  });
+
+  it('整份只有註解：check 不拋、沒有憑證，往下掉到 .env', () => {
+    managed('# 把唯一一把 key 註解掉了，之後改用環境變數\n# NVIDIA_API_KEY: x\n');
+    dotenv(home, `${KEY}=from-home-env\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+
+    expect(() => credentials.check()).not.toThrow();
+    expect(credentials.resolve(KEY)).toMatchObject({ value: 'from-home-env', source: 'user-env' });
+    expect(warned).toEqual([]);
+  });
+
+  it('執行期重載：多了未知頂層鍵加新值，下一次解析拿到新值；講的是外來的鍵，不是「重載失敗」', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: first\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+    expect(credentials.resolve(KEY)?.value).toBe('first');
+    expect(warned).toEqual([]);
+
+    managed(`version: 1\ncomment: hi\nrefs:\n  ${KEY}: second-longer\n`);
+    expect(credentials.resolve(KEY)?.value).toBe('second-longer');
+    expect(credentials.resolve(KEY)?.value).toBe('second-longer');
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('"comment"');
+    expect(warned.join('')).not.toContain('重載失敗');
+  });
+
+  it('執行期被改成只剩註解：那一層消失（空的倉庫），不是壞檔', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: first\n`);
+    dotenv(home, `${KEY}=fallback-layer\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+    expect(credentials.resolve(KEY)?.source).toBe('file');
+
+    managed('# 註解掉了\n');
+    expect(credentials.resolve(KEY)).toMatchObject({ source: 'user-env', value: 'fallback-layer' });
+    expect(warned).toEqual([]);
+  });
+
+  it('外來的鍵之後又改壞 refs：保留最後一份好的並警告重載失敗（refs 裡面照舊嚴）', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: good-value\n`);
+    const warned: string[] = [];
+    const { credentials } = service({}, (line) => warned.push(line));
+    credentials.resolve(KEY);
+
+    managed(`version: 1\ncomment: hi\nrefs:\n  ${KEY}: ""\n`);
+    expect(credentials.resolve(KEY)?.value).toBe('good-value');
+    expect(warned.join('')).toContain('重載失敗');
+  });
+
+  it('一次性入口（不掛受管檔）不讀它：外來的鍵不警告', () => {
+    managed(`version: 1\ncomment: hi\nrefs:\n  ${KEY}: from-file\n`);
+    const warned: string[] = [];
+    service({}, (line) => warned.push(line), false).credentials.check();
+    expect(warned).toEqual([]);
   });
 });
 
