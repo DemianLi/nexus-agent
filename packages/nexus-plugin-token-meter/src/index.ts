@@ -49,7 +49,7 @@ export type { TokenMeterState } from './fold.js';
 /** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`，錯誤訊息、log 與相容層清單用）。 */
 export const name = 'token-meter';
 
-/** 要的服務：`projections`，契約 `^1.0.0`。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。 */
+/** 要的服務：`projections`，契約 `^1.0.0`。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。 */
 export const inject = injectOf(need(projectionsToken, '^1.0.0'));
 
 /**

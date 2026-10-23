@@ -340,7 +340,7 @@ export const name = 'agent-instructions';
 
 /**
  * 要的服務：`agentLoop`（`^1.3.0`，登記 `preStep` listener，注入帶 `form: 'instructions'`）與 `fs`（`^2.1.0`，呼叫當下拿這條 thread 的 backend 與共用區前綴）。範圍在這裡宣告，
- * 落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2。
+ * 經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2。
  */
 export const inject = injectOf(need(agentLoopToken, '^1.3.0'), need(fsToken, '^2.1.0'));
 

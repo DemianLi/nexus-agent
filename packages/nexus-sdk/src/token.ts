@@ -49,7 +49,7 @@ export function need<T>(token: ServiceToken<T>, range: string): Need<T> {
 /**
  * 組出插件的 `inject`：`{ [token.name]: { range } }`。
  *
- * 範圍落進消費者 ctx 的 `Context.intercept`，提供者的 `[Service.check]` 讀得到它
+ * 範圍由提供者的 `[Service.check]` 經 `Service.resolveIntercept` 讀到（rc.12 起不再複製進 `Context.intercept`，上游 #206）
  * （探針 #1386 ⑤）。manifest 的 `consumes` 與它是同一份宣告的兩個面，一致性套件比對兩邊。
  */
 export function injectOf(...needs: readonly Need[]): Record<string, { range: string }> {

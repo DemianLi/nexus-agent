@@ -80,7 +80,7 @@ export type SkillsPluginOptions = z.input<typeof skillsConfigSchema>;
 /** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`，錯誤訊息、log 與相容層清單用）。 */
 export const name = 'skills';
 
-/** 要的服務：`skillSources`，契約 `^1.0.0`。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。 */
+/** 要的服務：`skillSources`，契約 `^1.0.0`。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。 */
 export const inject = injectOf(need(skillSourcesToken, '^1.0.0'));
 
 /** 設定的 schema，與 {@link manifest}.config 是同一個物件（一致性套件比對）。 */
