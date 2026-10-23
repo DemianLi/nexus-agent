@@ -38,6 +38,12 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
+/**
+ * 裸 agent 沒有系統提示詞。以前模型那一側的第一則 system 是觀察政策的 `wrapModelCall` 追加的（#1563 起規則改寫進工具描述、不再追加），
+ * 這份測試用「第一則是不是 system」分辨主呼叫與摘要呼叫，所以自己給一則。
+ */
+const TEST_SYSTEM_PROMPT = '你是測試用的助理。';
+
 const SMALL: ModelContextLimits = { contextWindow: 4_200, maxOutputTokens: 200 };
 const BIG: ModelContextLimits = { contextWindow: 700_045, maxOutputTokens: 16_384 };
 
@@ -99,6 +105,7 @@ async function converse(options: {
   const model = options.model ?? new ScriptedChatModel({ turns: options.script });
   let current = SMALL;
   const built = await createNexusAgent({
+    systemPrompt: TEST_SYSTEM_PROMPT,
     model,
     backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
     checkpointer: new MemorySaver(),

@@ -38,6 +38,12 @@ import { toolResultAsSeen } from './conversation-restore.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
+/**
+ * 裸 agent 沒有系統提示詞。以前模型那一側的第一則 system 是觀察政策的 `wrapModelCall` 追加的（#1563 起規則改寫進工具描述、不再追加），
+ * 這份測試用「第一則是不是 system」分辨主呼叫與摘要呼叫，所以自己給一則。
+ */
+const TEST_SYSTEM_PROMPT = '你是測試用的助理。';
+
 /** 記下每次收到的訊息，第 `overflowOn` 次呼叫回真的 `ContextOverflowError`。 */
 class RecordingModel extends BaseChatModel {
   constructor(
@@ -82,6 +88,7 @@ async function converse(overflowOn: number) {
   const root = await mkdtemp(join(tmpdir(), 'nexus-after-summary-'));
   const shared = { calls: 0, seen: [] as string[][] };
   const built = await createNexusAgent({
+    systemPrompt: TEST_SYSTEM_PROMPT,
     model: new RecordingModel(shared, overflowOn),
     backend: new ContainedFilesystemBackend({ rootDir: root }),
     checkpointer: new MemorySaver(),

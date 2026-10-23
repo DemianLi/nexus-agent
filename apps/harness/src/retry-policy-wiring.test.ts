@@ -40,6 +40,12 @@ import { sessionEventsOf } from './session-files.fixture.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
+/**
+ * 裸 agent 沒有系統提示詞。以前模型那一側的第一則 system 是觀察政策的 `wrapModelCall` 追加的（#1563 起規則改寫進工具描述、不再追加），
+ * 這份測試用「第一則是不是 system」分辨主呼叫與摘要呼叫，所以自己給一則。
+ */
+const TEST_SYSTEM_PROMPT = '你是測試用的助理。';
+
 const FAKE_KEY = 'nvapi-fake-for-loopback-only';
 /** 重試用兩次、退避 1 毫秒：N = 2，一次主呼叫最多打 3 次。 */
 const RETRIES = 2;
@@ -274,6 +280,7 @@ describe('產品組裝：摘要器生摘要的那一次呼叫吃同一份政策'
     const root = await mkdtemp(join(tmpdir(), 'nexus-retry-wiring-sum-'));
     const shared = { summaryCalls: 0, mainCalls: 0 };
     const built = await createNexusAgent({
+      systemPrompt: TEST_SYSTEM_PROMPT,
       model: new SummaryFlakyModel(shared, 1),
       backend: new ContainedFilesystemBackend({ rootDir: root }),
       checkpointer: new MemorySaver(),

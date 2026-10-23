@@ -54,7 +54,7 @@ Usage:
 Performs exact string replacements in files.
 
 Usage:
-- You must read the file before editing; this tool errors otherwise.
+- Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session; reading only part of it (offset/limit) counts. If the file changed after you read it, read it again first. This tool errors otherwise.
 - Preserve the exact indentation from the read output, and never include line-number prefixes in old_string or new_string.
 - Prefer editing an existing file over creating a new one.
 - Only use emojis if the user explicitly requests it.
@@ -334,7 +334,7 @@ Specify subagent_type to select the agent. Usage notes:
 Writes content to a file. Creates the file if it does not exist; replaces it entirely if it does.
 
 Usage:
-- Use this tool when you intend to create a new file or replace the whole file. You do not need to read the file first.
+- Use this tool when you intend to create a new file or replace the whole file. Existing files are overwritten, so read an existing file first (the default fs-observation-policy requires it); a file that does not exist yet can be created without reading. If the file changed after you read it, read it again first.
 - Prefer to edit existing files (with the edit_file tool) over creating new ones when possible.
 ```
 

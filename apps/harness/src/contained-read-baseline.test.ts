@@ -124,10 +124,11 @@ describe('ContainedFilesystemBackend.read：九種情況與切片，字句與內
 
 describe('真的 read_file 工具：ToolMessage 逐字不變', () => {
   const expected: [string, 'success' | 'error', string][] = [
+    // CRLF 檔：行尾的 `\r` 去掉（#1563 N0335，照 dsh `read-render.ts:91-93`）。這是這份基準唯一被刻意改掉的一格。
     [
       '/crlf.txt',
       'success',
-      '     1\tone\r\n     2\ttwo\r\n     3\tthree\r\n\n(End of file - total 3 lines)',
+      '     1\tone\n     2\ttwo\n     3\tthree\n\n(End of file - total 3 lines)',
     ],
     ['/bom.txt', 'success', '     1\t﻿bom line\n     2\tsecond\n\n(End of file - total 2 lines)'],
     ['/tail.txt', 'success', '     1\tx\n     2\ty\n     3\tz\n\n(End of file - total 3 lines)'],

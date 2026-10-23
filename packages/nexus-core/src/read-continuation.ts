@@ -34,17 +34,16 @@
  * - **預設與上限**：`limit` 沒給就填 {@link READ_LIMIT}，超過就拋 dsh 的原句（圍堵把它轉成工具錯誤）。
  * - **位元組上限**：{@link readWithExtent} 切回去時累計 {@link READ_MAX_BYTES}，算法同 `buildWindow`
  *   ——每行的 UTF-8 位元組，不是第一行的再加一個換行。
- * - **模型看到的說明**：基座的描述寫死「reads up to 100 lines」、JSON schema 把 `limit` 列成必填且
- *   預設 100。`wrapModelCall` 把送給模型的那一份換掉，見 {@link modelFacingReadTool}。
+ * - **模型看到的說明**：基座的描述寫死「reads up to 100 lines」、JSON schema 把 `limit` 列成必填且預設 100。
+ *   **描述**經 `customToolDescriptions` 換（`fs-tool-descriptions.ts`，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)，照 dsh 的工具自己的描述）；
+ *   **schema**（`limit` 不再必填）由 `wrapModelCall` 把送給模型的那一份換掉，見 {@link modelFacingReadTool}。
  *
- * **偏離一：說明在模型呼叫時換，不在工具上改。** 照 dsh 應該是工具自己的描述與 schema。基座的
- * 表達不出來：profile 的 `toolDescriptionOverrides` 只作用在自訂工具上、不碰內建的檔案工具
- * （`createDeepAgent`，`dist/langsmith-zm0ILQsV.js:6210-6211`），`customToolDescriptions` 沒有往下傳；
- * 換掉工具實例則會被 langchain 拒絕（`AgentNode.js` 約 250 行：同名不同實例的 client tool）。退到
+ * **偏離一（縮到只剩 schema）：`limit` 的 schema 在模型呼叫時換，不在工具上改。** 照 dsh 應該是工具自己的 schema。基座表達不出來
+ * （理由 1）：`limit` 是 `z.coerce.number().optional().default(100)`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2129`），被轉成
+ * 必填、預設 100 的 JSON schema；`createFilesystemMiddleware` 只收 `customToolDescriptions`（換描述）與 `tools`（基座工具的**名單**，不收實例），
+ * 沒有任何選項換 schema；換掉工具實例則會被 langchain 拒絕（`AgentNode.js` 約 250 行：同名不同實例的 client tool）。退到
  * 最接近的：模型那一側換成一份 OpenAI 形狀的定義（不是 client tool，驗證不擋），執行的仍是基座的工具。
- * （「換不掉」只在走 `createDeepAgent` 時成立：**自有組裝收得到 `customToolDescriptions`**（#1776 補正；`agent-assembly.ts` 直接呼叫
- * `createFilesystemMiddleware({ backend, permissions })`，`FilesystemMiddlewareOptions` 有這個欄位），行為沒改，
- * 要不要真的換描述交給 #1563。#1530 之後 contained backend 的讀檔不再經基座的 `read`，但工具本體仍是基座的。）
+ * （描述那一半以前也在這裡換，理由是 `customToolDescriptions` 沒有往下傳——那只對 `createDeepAgent` 成立，自有組裝收得到它（#1776 補正），#1563 收掉。）
  *
  * **偏離二：一行都塞不下時照樣給那一行。** dsh 先把單行截到 2000 字元，所以第一行永遠塞得下；
  * 基座不截行（超過 5000 字元切成續行），所以第一行本身就超過 50 KiB 時不停在零行——給它，由基座
@@ -374,12 +373,6 @@ function appendFooter(
   return next;
 }
 
-/** 基座描述裡講預設行數的那一句（`READ_FILE_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js:1955`）。 */
-const BASE_DEFAULT_SENTENCE = 'By default, it reads up to 100 lines';
-
-/** 換成的那一句。 */
-const DEFAULT_SENTENCE = `By default, it reads up to ${READ_LIMIT} lines`;
-
 /** `limit` 給模型看的定義，措辭照 dsh（`packages/fs/tool-fs/src/read.ts:83`）。沒有 `default`：預設由 middleware 填。 */
 const LIMIT_PARAMETER = {
   type: 'number',
@@ -396,7 +389,8 @@ interface FunctionParameters {
 }
 
 /**
- * 模型看到的 `read_file`：描述的預設行數換成 {@link READ_LIMIT}，`limit` 換成 dsh 的定義、不再必填。
+ * 模型看到的 `read_file`：`limit` 換成 dsh 的定義、不再必填。**描述不在這裡換**（#1563）：預設行數 {@link READ_LIMIT} 由
+ * `fs-tool-descriptions.ts` 經 `customToolDescriptions` 寫進工具自己的描述。
  *
  * **是 OpenAI 形狀的一份定義，不是工具**：`Runnable` 才算 client tool，langchain 對同名換了實例的
  * client tool 會拒絕，定義則直接交給 `bindTools`。執行時 ToolNode 找的仍是基座那個實例。
@@ -414,7 +408,6 @@ function modelFacingReadTool(tool: object): object {
     ...converted,
     function: {
       ...converted.function,
-      description: converted.function.description?.replace(BASE_DEFAULT_SENTENCE, DEFAULT_SENTENCE),
       parameters: {
         ...parameters,
         properties: { ...parameters.properties, limit: LIMIT_PARAMETER },

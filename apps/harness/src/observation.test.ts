@@ -19,8 +19,9 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
+import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { MemorySaver } from '@langchain/langgraph';
-import { OBSERVATION_POLICY_NOTICE, observationPolicyPlugin } from '@nexus/core';
+import { observationPolicyPlugin } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -278,24 +279,25 @@ describe('射程', () => {
   });
 });
 
-describe('規則要在模型動手之前就講給它聽', () => {
+describe('規則要在模型動手之前就講給它聽：寫在工具描述裡（#1563）', () => {
   /**
    * **這一句是機制的一部分，不是文件。**
    *
-   * 沒有它，模型每碰一個新檔都得先撞一次牆才學會——而省掉那一輪往返正是這件事的主要
-   * 價值。dsh 把同一件事寫在**工具描述**裡（`snapshots/web` 底下每一份
-   * `system-prompt.expected.md`：「read an existing file first (the **default**
-   * fs-observation-policy requires it)」）。那個縫在我們這裡是關著的——
-   * `customToolDescriptions` 只在 `FilesystemMiddlewareOptions` 上，而 `createDeepAgent`
-   * 建 `createFilesystemMiddleware` 時只傳 `{ backend, permissions, tools }`。所以載體
-   * 退到系統提示詞，紀律沒退。
+   * 沒有它，模型每碰一個新檔都得先撞一次牆才學會——而省掉那一輪往返正是這件事的主要價值。dsh 把同一件事寫在**工具描述**裡
+   * （`snapshots/web` 底下每一份 `system-prompt.expected.md`：「read an existing file first (the **default**
+   * fs-observation-policy requires it)」）。自有組裝經 `createFilesystemMiddleware` 的 `customToolDescriptions` 換描述
+   * （`agent-assembly.ts`），所以規則跟著工具定義送給模型，不再往系統提示詞追加一句。
    */
-  it('root 那一輪的 system prompt 裡有那句話', async () => {
+  async function modelSees(options: { observationPolicy?: false }): Promise<{
+    descriptions: Record<string, string>;
+    system: string;
+  }> {
     const root = await workspace();
     const model = new ScriptedChatModel({ turns: DONE });
     const { agent, dispose } = await createNexusAgent({
       model,
       backend: new ContainedFilesystemBackend({ rootDir: root }),
+      ...options,
       plugins: [],
     });
     try {
@@ -303,34 +305,40 @@ describe('規則要在模型動手之前就講給它聽', () => {
     } finally {
       await dispose();
     }
-
+    const descriptions = Object.fromEntries(
+      model.boundTools.map((candidate) => {
+        const definition = convertToOpenAITool(
+          candidate as Parameters<typeof convertToOpenAITool>[0],
+        );
+        return [definition.function.name, definition.function.description ?? ''];
+      }),
+    );
     const system = model.lastPrompt
       .filter((message) => message.getType() === 'system')
       .map((message) => message.text)
       .join('\n');
-    expect(system).toContain(OBSERVATION_POLICY_NOTICE);
+    return { descriptions, system };
+  }
+
+  it('模型收到的 write_file／edit_file 描述裡有那幾句，系統提示詞裡沒有多一句', async () => {
+    const { descriptions, system } = await modelSees({});
+    expect(descriptions['write_file']).toContain(
+      'read an existing file first (the default fs-observation-policy requires it)',
+    );
+    expect(descriptions['write_file']).not.toContain('You do not need to read the file first');
+    expect(descriptions['edit_file']).toContain(
+      'Read the file first (the default fs-observation-policy requires it), unless you just created or edited it in this session',
+    );
+    // 以前往 `systemMessage` 追加的那一句不在了。
+    expect(system).not.toContain('先讀後改');
+    expect(system).not.toContain('fs-observation-policy');
   });
 
-  it('關掉策略就不該出現那句話（上一條的對照組）', async () => {
-    const root = await workspace();
-    const model = new ScriptedChatModel({ turns: DONE });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      backend: new ContainedFilesystemBackend({ rootDir: root }),
-      observationPolicy: false,
-      plugins: [],
-    });
-    try {
-      await agent.invoke(toAgentInvocation('嗨。'));
-    } finally {
-      await dispose();
-    }
-
-    const system = model.lastPrompt
-      .filter((message) => message.getType() === 'system')
-      .map((message) => message.text)
-      .join('\n');
-    expect(system).not.toContain(OBSERVATION_POLICY_NOTICE);
+  it('關掉策略就不該出現那幾句（上一條的對照組）：描述是基座的原文', async () => {
+    const { descriptions } = await modelSees({ observationPolicy: false });
+    expect(descriptions['write_file']).toContain('You do not need to read the file first');
+    expect(descriptions['write_file']).not.toContain('fs-observation-policy');
+    expect(descriptions['edit_file']).not.toContain('fs-observation-policy');
   });
 });
 
