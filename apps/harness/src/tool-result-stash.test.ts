@@ -22,6 +22,8 @@ import {
   mkdir,
   mkdtemp,
   readdir,
+  readFile,
+  rm,
   stat,
   symlink,
   utimes,
@@ -41,7 +43,11 @@ import { createMountPlugin } from './fixtures.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { cleanupToolResultStash, stashSessionDirName } from './tool-result-stash.js';
+import {
+  cleanupToolResultStash,
+  createToolResultStash,
+  stashSessionDirName,
+} from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
 
 /** 暗號放在**最前面**：截斷與「只拿到預覽」都會讓它消失，`includes` 才分得出來。 */
@@ -627,16 +633,19 @@ describe('啟動時清掉超過保留期的暫存', () => {
     expect((await readdir(dir)).sort()).toEqual([...foreign].sort());
   });
 
-  it('名字對的符號連結不跟：連結與它指向的目錄都原封不動', async () => {
+  it('名字對的符號連結不跟：連結與它指向的目錄都原封不動，而且講一聲', async () => {
     const dir = await root();
     const target = await session(await root(), 'elsewhere', 400);
     const link = join(dir, OLD);
     await symlink(target, link);
     const then = new Date(Date.now() - 400 * DAY);
     await lutimes(link, then, then);
-    expect(await cleanupToolResultStash(dir, 30)).toBe(0);
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(0);
     expect((await lstat(link)).isSymbolicLink()).toBe(true);
     expect(await readdir(target)).toEqual(['call_1_0.txt']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('略過');
   });
 
   it('cleanupPeriodDays 為 0 表示不清', async () => {
@@ -646,12 +655,87 @@ describe('啟動時清掉超過保留期的暫存', () => {
     expect(await readdir(dir)).toEqual([OLD]);
   });
 
-  it('以會話裡最新的檔為準：續接後又寫了新檔的會話不會因為第一個檔很舊被清掉', async () => {
+  /** 把一串路徑的時間都設成 `ageDays` 天前；目錄的時間要在裡面的東西建完之後才設，建檔會把它推回現在。 */
+  async function age(ageDays: number, ...paths: string[]): Promise<void> {
+    const then = new Date(Date.now() - ageDays * DAY);
+    for (const path of paths) await utimes(path, then, then);
+  }
+
+  /**
+   * **保留以單一檔為準**（#1553 N0951，dsh `index.ts:40-42`）：續接後又寫了新檔的會話，舊檔照樣過期，新檔與目錄留著。
+   * 以前以「會話裡最新的檔」為準，這條會整個不清（回 0、`call_1_0.txt` 還在）。
+   */
+  it('以單一檔為準：續接後又寫了新檔的會話，舊檔照樣過期，新檔與目錄留著', async () => {
     const dir = await root();
     const old = await session(dir, OLD, 90);
     await writeFile(join(old, 'call_9_0.txt'), 'fresh');
-    expect(await cleanupToolResultStash(dir, 30)).toBe(0);
+    expect(await cleanupToolResultStash(dir, 30)).toBe(1);
     expect(await readdir(dir)).toEqual([OLD]);
+    expect(await readdir(old)).toEqual(['call_9_0.txt']);
+  });
+
+  /**
+   * 只刪會話目錄的直接子項裡過期的一般檔，不往子目錄走、不整個 `rm -r`（#1553 N0951 驗收 1）。
+   * 第二個會話目錄的第一層與目錄本身都是 40 天前，深層 `a/b/new.txt` 是今天寫的：以前只看第一層的年齡，整個遞迴刪掉。
+   */
+  it('不往子目錄走：子目錄裡的過期檔、深層剛寫的檔都留著，名字不對的目錄不碰', async () => {
+    const dir = await root();
+    const first = await session(dir, OLD, 40);
+    await mkdir(join(first, 'keep'));
+    await writeFile(join(first, 'keep', 'old.txt'), 'x');
+    await age(40, join(first, 'keep', 'old.txt'), join(first, 'keep'), first);
+    const notes = await session(dir, 'session-notes', 400);
+
+    const second = await session(dir, NEW, 40);
+    await mkdir(join(second, 'a', 'b'), { recursive: true });
+    await writeFile(join(second, 'a', 'b', 'new.txt'), 'today');
+    await age(40, join(second, 'a'), second);
+
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(2);
+    expect(warnings).toEqual([]);
+    expect(await readdir(first)).toEqual(['keep']);
+    expect(await readdir(join(first, 'keep'))).toEqual(['old.txt']);
+    expect(await readdir(notes)).toEqual(['call_1_0.txt']);
+    expect(await readdir(second)).toEqual(['a']);
+    expect(await readFile(join(second, 'a', 'b', 'new.txt'), 'utf8')).toBe('today');
+  });
+
+  /** 同一個會話目錄裡過期檔、新檔、壞掉的符號連結並存（#1553 N0951 驗收 2）：以前新檔讓整目錄不清、壞連結讓整目錄跳過。 */
+  it('過期檔刪掉，新檔與壞掉的符號連結都留著', async () => {
+    const dir = await root();
+    const old = await session(dir, OLD, 60);
+    await writeFile(join(old, 'call_2_0.txt'), 'fresh');
+    await symlink(join(dir, '不存在'), join(old, 'dangling'));
+    // 連結本身也是 60 天前：留下它的理由只能是「不是一般檔」，不是「還新」。
+    const then = new Date(Date.now() - 60 * DAY);
+    await lutimes(join(old, 'dangling'), then, then);
+    await age(60, old);
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(1);
+    expect((await readdir(old)).sort()).toEqual(['call_2_0.txt', 'dangling']);
+    expect((await lstat(join(old, 'dangling'))).isSymbolicLink()).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  /** 掃空的會話目錄收掉（#1553 N0951 驗收 3，dsh `cleanup.ts:327-341`）。 */
+  it('只有過期檔的會話目錄，掃完整個目錄消失', async () => {
+    const dir = await root();
+    await session(dir, OLD, 60);
+    expect(await cleanupToolResultStash(dir, 30)).toBe(1);
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  /** 別人改得動的會話目錄不進去，而且講一聲（dsh `cleanup.ts:322-326`）。以前只驗根，這種目錄照清。 */
+  it('群組可寫的會話目錄：裡面的過期檔不碰，講一聲', async () => {
+    const dir = await root();
+    const shared = await session(dir, OLD, 60);
+    await chmod(shared, 0o770);
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(0);
+    expect(await readdir(shared)).toEqual(['call_1_0.txt']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(shared);
   });
 
   it('根別人改得動就一個檔都不碰，而且講一聲', async () => {
@@ -686,5 +770,27 @@ describe('啟動時清掉超過保留期的暫存', () => {
     } finally {
       await chmod(locked, 0o700);
     }
+  });
+});
+
+/**
+ * 清掃會把掃空的會話目錄 `rmdir` 掉，而它跟續接中的寫入可能同時發生（#1553 N0952 的前提）。寫入撞上目錄已經不在，
+ * 要重建目錄再寫，照 dsh `store.ts:112-124`。
+ *
+ * 走外溢層的存檔服務，**不走路由的 `write`**：路由寫不進主機會退回記憶體、回報成功，拿掉重試也照樣綠。
+ */
+describe('會話目錄被清掃收掉之後，下一次存檔重建目錄再寫', () => {
+  it('第一次存檔建好目錄；整個目錄被刪掉之後再存，照樣存進主機、目錄回到 0700', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stash-recreate-'));
+    const route = createToolResultStash({ rootDir: root, session: 's' });
+    const store = route.spillStore(TOOL_RESULT_STASH_PREFIX);
+    await store.saveText({ toolName: 'bulk', callId: 'c1', content: '第一次' });
+    await rm(route.sessionDir, { recursive: true });
+
+    const ref = await store.saveText({ toolName: 'bulk', callId: 'c2', content: '第二次' });
+    const name = ref.locator.slice(`${TOOL_RESULT_STASH_PREFIX}/`.length);
+    expect(await readFile(join(route.sessionDir, name), 'utf8')).toBe('第二次');
+    expect((await stat(route.sessionDir)).mode & 0o777).toBe(0o700);
+    expect((await stat(join(route.sessionDir, name))).mode & 0o777).toBe(0o600);
   });
 });
