@@ -44,8 +44,9 @@
  * - 其他（選繼續規劃、或有自由作答）→ 拒絕，意見帶回給模型，模式留著。
  * - 人關掉這一題（`cancelled`）→ **成功結果** {@link PLAN_REVIEW_DISMISSED_MESSAGE}，模式留著，**這一批工具跑完之後這一輪就收**
  *   （正常收尾：`turn/end` 不帶 `reason`；不是失敗、不是中止），不再多叫一次模型（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)，
- *   照 dsh `:331-341` 的 `concludeTurn()`）。收尾走基座的 `returnDirect`（{@link EXIT_PLAN_MODE_RETURN_DIRECT}）：
- *   其餘結局的結果不帶 `name`，這一種帶；**`next-step` 還有插話就不收**、接著叫模型（step-inbox 的 `afterAgent`，dsh `agent.ts:361-365`）。
+ *   照 dsh `:331-341` 的 `concludeTurn()`）。工具本體在這個結局呼叫 core 的 `concludeTurn`（正向標記），收尾走基座的 `returnDirect`
+ *   （{@link EXIT_PLAN_MODE_RETURN_DIRECT}）：**只有標了才收**，其餘結局（拒絕、參數錯、核准閘門擋下、拋錯）照常回頭叫模型；
+ *   **`next-step` 還有插話就不收**、接著叫模型（step-inbox 的 `afterAgent`，dsh `agent.ts:361-365`）。
  *   不是 `ask_user_question` 那句放棄訊息：那句叫模型別重問同一組，說的是它沒呼叫過的工具。
  * - 停止這一輪 → 由 `apps/harness` 的 `ThreadPump` 收回掛著的呼叫，工具本體不會再跑，中止保留它自己那句。
  * - **沒有人可以回答**（{@link CHANNEL_SERVICE} 說 `policy-never` 或 `no-channel`）→ 拒絕，請使用者自己切模式，
@@ -171,6 +172,7 @@ import type { StructuredTool } from '@langchain/core/tools';
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { interrupt } from '@langchain/langgraph';
+import { concludeTurn } from '@nexus/core';
 import type {
   AgentMiddleware,
   ApprovalChannel,
@@ -458,19 +460,6 @@ function createPlanModeMiddleware(
 ): AgentMiddleware {
   return createMiddleware({
     name: PLAN_MODE_MIDDLEWARE_NAME,
-    wrapToolCall: async (request, handler) => {
-      const result = await handler(request);
-      // 同一批還有別的工具呼叫時，關掉審核也不收這一輪（{@link EXIT_PLAN_MODE_RETURN_DIRECT} 的「登記的偏離」）。
-      if (
-        request.toolCall.name === EXIT_PLAN_MODE_TOOL_NAME &&
-        ToolMessage.isInstance(result) &&
-        result.name !== undefined &&
-        batchSizeOf(request) > 1
-      ) {
-        return unnamed(result);
-      }
-      return result;
-    },
     wrapModelCall: (request, handler) => {
       const config = callConfigOf(request);
       settle(config);
@@ -487,25 +476,6 @@ function createPlanModeMiddleware(
       );
     },
   }) as AgentMiddleware;
-}
-
-/** 這次工具呼叫所屬的那一則 AI 訊息一共叫了幾個工具。找不到那則訊息就當一個（不動結果）。 */
-function batchSizeOf(request: {
-  readonly toolCall: { readonly id?: string };
-  readonly state: unknown;
-}): number {
-  const messages = (request.state as { messages?: readonly BaseMessage[] } | undefined)?.messages;
-  if (messages === undefined) return 1;
-  for (let at = messages.length - 1; at >= 0; at -= 1) {
-    const message = messages[at]!;
-    if (
-      AIMessage.isInstance(message) &&
-      message.tool_calls?.some((call) => call.id === request.toolCall.id) === true
-    ) {
-      return message.tool_calls.length;
-    }
-  }
-  return 1;
 }
 
 /**
@@ -525,35 +495,31 @@ type PlanModeLookup =
   | { readonly kind: 'not-root' };
 
 /**
- * `exit_plan_mode` 的 `returnDirect`（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)）：**人關掉審核時這一輪在這一批工具之後收**，
+ * `exit_plan_mode` 的 `returnDirect`（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)）：宣告「這顆工具可能收這一輪」，
  * 照 dsh 的 `exec.concludeTurn()`（`plan-mode/src/index.ts:331-341`，語意鏈 `agent.ts:361-364`）。
  *
- * ## 怎麼收（基座的做法）
- *
- * langchain 的 tools 節點出去的條件邊（`ReactAgent.js:359-365`，`langchain@1.5.10`）：**最後一則 ToolMessage 的 `name` 在 returnDirect 名單裡**
- * 就走 exitNode（會跑所有 `afterAgent`），否則回頭叫模型。名單是依工具名靜態收的，所以單設 `returnDirect: true` 會讓這顆工具
- * **每一種結局**都收；要只在「關掉審核」收，其餘結局的結果就得**不帶 `name`**（{@link unnamed}）：路由看 `name`，空的不在名單裡。
- * 關掉審核回普通字串，tool node 補上 `name`。這個形狀由 `apps/harness/src/returndirect-route.test.ts` 釘住，langchain 升版時先紅。
+ * **收不收由 core 決定、由工具本體正向標記**（`@nexus/core` 的 `turn-conclusion.ts`，該檔有完整推理）：本體只在關掉審核那一行呼叫
+ * `concludeTurn`；圍堵在最外層對 `returnDirect` 工具的結果，沒標記就拿掉 `name`，基座的 tools 路由（`ReactAgent.js:359-365`，
+ * `langchain@1.5.10`，只看最後一則 ToolMessage 的 `name` 在不在 returnDirect 名單）因此不收。所以不論哪一層造的錯誤或拒絕
+ * （參數驗不過、核准閘門、`toolPreExecute`、圍堵接住的拋錯，root 與子代理一樣）都照常回頭叫模型，與 dsh 一致。
  *
  * ## 為什麼不是 middleware 的 `beforeModel` 跳 `end`
  *
- * 兩個代價（#1607 探針量過）：`beforeModel` 是圖裡的節點，**每一步模型呼叫多一個 super-step、所有 session 都付**（`recursion-limit.ts`
- * 的換算掉一格）；`jumpTo: 'end'` 直達 END，**略過所有 `afterAgent`**——step-inbox 的關窗與接插話、workspace-changes 的輪內記錄都要補。
- * 走 exitNode 兩者都照原本的路：`next-step` 還有插話就不收（step-inbox 的 `afterAgent` 跳回模型，dsh `agent.ts:361-365`），沒有就關窗，
- * 改動紀錄記在 `turn/end` 之前（dsh `agent/turn-stopping`）。
+ * `jumpTo: 'end'` 直達 END，**略過所有 `afterAgent`**：step-inbox 的關窗與接插話、workspace-changes 的輪內記錄都不跑，
+ * 改動紀錄只能落在 `turn/end` 之後由補記寫入（dsh 的 `agent/turn-stopping` 是在輪內記）；`next-step` 還有插話時也不會繼續。
+ * 走 returnDirect 的 exitNode，`afterAgent` 全部照原本的路。（另一個代價是 `beforeModel` 讓每一步模型呼叫多一個 super-step，
+ * 但那是成本，不是理由。）
  *
  * ## 登記的偏離（理由 1：基座表達不出來）
  *
- * dsh 是批內**任何一個**工具 `concludeTurn()` 就收；這裡**只有 `exit_plan_mode` 是那一批唯一的工具呼叫時才收**，批裡還有別的就照常繼續叫模型。
- * 原因（`returndirect-route.test.ts` 釘住）：基座每個工具呼叫是各自一個 Send，路由各自判；一批裡有的走 exitNode、有的回頭走 beforeModel 時，
- * 兩條在同一個 super-step 都寫 `jumpTo`，langgraph 擲 `InvalidUpdateError` 整輪就垮（只要掛了任何 `beforeModel`，例如 step-inbox）。
- * 所以 middleware 的 `wrapToolCall` 在批裡不只一個呼叫時把結果的 `name` 拿掉（{@link unnamed}），變成「不收」的那一格。
+ * dsh 是批內**任何一個**工具 `concludeTurn()` 就收；這裡**只有 `exit_plan_mode` 是那一批唯一的工具呼叫時才收**
+ * （`turn-conclusion.ts` 與 `apps/harness/src/returndirect-route.test.ts` 釘住：基座混批會擲 `InvalidUpdateError`）。
  */
 export const EXIT_PLAN_MODE_RETURN_DIRECT = true;
 
 /**
- * 送給模型之前，把 `exit_plan_mode` 那些不帶 `name` 的結果補回 `name`，**請求跟改動前逐位元組相同**
- * （Chat Completions 的轉換器會把 `name` 送出去，`apps/harness` 的 `returndirect-route.test.ts` 對照過）。
+ * 送給模型之前，把 `exit_plan_mode` 那些被 core 拿掉 `name` 的結果（沒標記收尾的那些，見 {@link EXIT_PLAN_MODE_RETURN_DIRECT}）補回 `name`，
+ * **請求跟改動前逐位元組相同**（Chat Completions 的轉換器會把 `name` 送出去）。
  * 路由只看 state 裡的訊息，模型看的是這一份複本；沒有要補的就原物返回，不碰別的 middleware 看到的東西。
  */
 function withExitToolNames<T extends { messages?: readonly BaseMessage[] }>(request: T): T {
@@ -589,18 +555,6 @@ function withExitToolNames<T extends { messages?: readonly BaseMessage[] }>(requ
     });
   });
   return changed ? { ...request, messages: named } : request;
-}
-
-/**
- * 去掉 ToolMessage 的 `name`（{@link EXIT_PLAN_MODE_RETURN_DIRECT}）。**只換 `name`**：`content`、`tool_call_id`、`status` 原樣，
- * 送給模型的請求（Chat Completions 的轉換器只送 `{ role, tool_call_id, content }`）與以前逐位元組相同。
- */
-function unnamed(message: ToolMessage): ToolMessage {
-  return new ToolMessage({
-    content: message.content,
-    tool_call_id: message.tool_call_id,
-    status: message.status,
-  });
 }
 
 /**
@@ -641,9 +595,8 @@ function createExitPlanModeTool(
   return tool(
     async ({ plan }: { plan: string }, config: unknown) => {
       const callId = toolCallIdOf(config) ?? '';
-      // **除了「關掉審核」之外，每一種結局都回不帶 `name` 的 ToolMessage**（見 {@link EXIT_PLAN_MODE_RETURN_DIRECT}）。
       const refuse = (message: string) =>
-        unnamed(toolRefusal(message, { callId, name: EXIT_PLAN_MODE_TOOL_NAME }));
+        toolRefusal(message, { callId, name: EXIT_PLAN_MODE_TOOL_NAME });
       const found = lookup(config);
       if (found.kind === 'not-attached') return refuse(PLAN_NOT_ATTACHED_TOOL_MESSAGE);
       if (found.kind === 'not-root' || !found.session.active()) {
@@ -671,9 +624,12 @@ function createExitPlanModeTool(
       };
       const reply = (await interrupt(payload)) as QuestionReply | undefined;
 
-      // 照 dsh `:331-341`：成功結果，並請這一輪在這一批工具之後收（`concludeTurn`）。**回普通字串**：tool node 替它補上
-      // `name: exit_plan_mode`，基座的 tools 路由因此走 exitNode（會跑 `afterAgent`），這一輪收。
-      if (reply?.cancelled === true) return PLAN_REVIEW_DISMISSED_MESSAGE;
+      // 照 dsh `:331-341`：成功結果，並請這一輪在這一批工具之後收（`exec.concludeTurn()`）。**只有走到這一行才標**——
+      // 拋錯、被拒絕、參數不對、核准閘門擋下都不會到這裡，那些結局照常回頭叫模型（{@link EXIT_PLAN_MODE_RETURN_DIRECT}）。
+      if (reply?.cancelled === true) {
+        concludeTurn(EXIT_PLAN_MODE_TOOL_NAME);
+        return PLAN_REVIEW_DISMISSED_MESSAGE;
+      }
       // 照 dsh：剛好一筆審核的答案、只選了同意、沒有自由作答，才算同意。其餘一律是繼續規劃，
       // 看不懂的回覆也是——那時沒有意見可帶，回的是沒有意見的那一句。
       const items = (Array.isArray(reply?.answers) ? reply.answers : []).filter(
@@ -688,13 +644,7 @@ function createExitPlanModeTool(
         return refuse(planFeedbackMessage(item?.custom ?? ''));
       }
       queueExit(found.session);
-      return unnamed(
-        new ToolMessage({
-          content: PLAN_APPROVED_MESSAGE,
-          tool_call_id: callId,
-          status: 'success',
-        }),
-      );
+      return PLAN_APPROVED_MESSAGE;
     },
     {
       name: EXIT_PLAN_MODE_TOOL_NAME,
@@ -714,7 +664,8 @@ function createExitPlanModeTool(
  *
  * - **`sessions`**：接上 root 那份日誌、折它的 `plan/mode`。**只管 root**，同 goal：模式是
  *   人對這個會話選的，subagent 沒有人可以選。
- * - **`middleware`（`prepend: true`）**：只有 `wrapModelCall`——待關交出去與指引夾進 system prompt。
+ * - **`middleware`（`prepend: true`）**：只有 `wrapModelCall`——待關交出去、指引夾進 system prompt，以及把 core 拿掉 `name` 的
+ *   `exit_plan_mode` 結果在送模型之前補回 `name`。
  *   `prepend` 讓它站在記憶 plugin 外面（`concat` 之後記憶才接上去）。**它不擋 `exit_plan_mode`**：模式外的拒絕
  *   只在工具本體裡，同 dsh；掛著全攔核准閘門（`approval.patch.yml` 那一類組裝）時，模型先看到核准的措辭
  *   （[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)，曾經有一層排在閘門之前的拒絕，#1272 搬上事件匯流排、#1276 拿掉）。

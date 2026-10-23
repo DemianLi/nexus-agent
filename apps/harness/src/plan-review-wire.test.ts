@@ -270,8 +270,8 @@ describe('計劃審核在線上', () => {
   });
 
   /**
-   * **掛著插話載體（serve 的組裝）時同樣收尾**（#1607）：middleware 的 `beforeModel` 跳 `end` 會略過 step-inbox 的 `afterAgent`，
-   * 所以由 plan-mode 自己叫 `finish()` 領走插話並關窗。真的 pump 與真的 `StepInbox`：一次模型呼叫、`turn/end` 不帶理由、
+   * **掛著插話載體（serve 的組裝）時同樣收尾**（#1607）：收尾走 returnDirect 的 exitNode，step-inbox 自己的 `afterAgent` 照跑，
+   * 領走插話並關窗（`next-step` 還有插話就不收，見 `plan-mode.test.ts`）。真的 pump 與真的 `StepInbox`：一次模型呼叫、`turn/end` 不帶理由、
    * 卡是 `done`——窗關了之後 pump 寫 `turn/end` 不出錯。
    */
   it('關掉這一題（掛著插話載體）：一樣一次模型呼叫、正常收尾', async () => {

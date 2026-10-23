@@ -549,10 +549,11 @@ describe('exit_plan_mode 的結局', () => {
   });
 
   /**
-   * **冷續接之後，送給模型的 `exit_plan_mode` 結果跟改動前逐位元組相同**（#1607 條件 1）。同意、繼續規劃的結果在日誌與 state 裡
-   * 不帶 `name`（{@link EXIT_PLAN_MODE_RETURN_DIRECT}）；續接是從日誌 `tool/result` 重建 messages，重建出來的同樣不帶，
-   * 所以 `wrapModelCall` 補回 `name` 在還原的路上也要生效。期望值寫死成供應商那一側的形狀（Chat Completions 的 `tool` 訊息帶 `name`），
-   * 跟改動前（結果自帶 `name`）一致。
+   * **熱續（同一個 state）與冷續接（從日誌重建）之後，送給模型的 `exit_plan_mode` 結果跟改動前逐位元組相同**（#1607）。
+   * 同意、繼續規劃沒標記收尾，core 把交給基座的那則的 `name` 拿掉（路由才不收，`turn-conclusion.ts`），所以 **state 裡的訊息不帶
+   * `name`；日誌上的 `tool/result` 是拿掉之前那一則，仍帶 `name`**（跟改動前相同）。
+   * 熱：同一輪的第二次請求，`wrapModelCall` 把 `name` 補回。冷：從日誌重建的本來就帶 `name`。期望值寫死成供應商那一側的形狀
+   * （Chat Completions 的 `tool` 訊息帶 `name`）。
    */
   it.each([
     [
@@ -570,14 +571,27 @@ describe('exit_plan_mode 的結局', () => {
       `Error: ${planFeedbackMessage('先補測試')}`,
     ],
   ] as const)(
-    '冷續接（%s）→ 重建出來的結果進模型請求時帶回 name，供應商側位元組不變',
+    '熱續與冷續接（%s）→ 進模型請求時帶 name，供應商側位元組不變',
     async (label, reply, text) => {
-      const { events } = await reviewPlan(`review-cold-${label}`, reply);
+      const { events, model: warm, after } = await reviewPlan(`review-cold-${label}`, reply);
+      const expected = {
+        role: 'tool',
+        content: text,
+        name: EXIT_PLAN_MODE_TOOL_NAME,
+        tool_call_id: expect.any(String),
+      };
+      // state 裡的訊息不帶 name（路由因此不收）；日誌那一則仍帶（跟改動前相同）。
+      expect((lastToolMessage(after.messages) as ToolMessage).name).toBeUndefined();
       const logged = events.filter((event) => event.type === 'tool/result');
-      // 前提：日誌裡這則確實不帶 name，沒補回去就不會有這一格要驗的東西。
       const loggedData = (logged[0]?.data as { message?: { data?: { name?: unknown } } }).message
         ?.data;
-      expect(loggedData?.name).toBeUndefined();
+      expect(loggedData?.name).toBe(EXIT_PLAN_MODE_TOOL_NAME);
+      // 熱：同一輪第二次請求。
+      const sent = convertMessagesToCompletionsMessageParams({
+        messages: [...warm.prompts[1]!],
+        model: 'x',
+      }) as { role: string }[];
+      expect(sent.find((message) => message.role === 'tool')).toEqual(expected);
 
       const fresh = await assemble(quiet('續接後的回覆。'), { plan: { startActive: true } });
       try {
@@ -592,13 +606,7 @@ describe('exit_plan_mode 的結局', () => {
         messages: [...fresh.model.lastPrompt],
         model: 'x',
       }) as { role: string; content: unknown; name?: string; tool_call_id?: string }[];
-      const toolMessage = provider.find((message) => message.role === 'tool');
-      expect(toolMessage).toEqual({
-        role: 'tool',
-        content: text,
-        name: EXIT_PLAN_MODE_TOOL_NAME,
-        tool_call_id: expect.any(String),
-      });
+      expect(provider.find((message) => message.role === 'tool')).toEqual(expected);
     },
   );
 

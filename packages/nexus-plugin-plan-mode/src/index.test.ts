@@ -1,4 +1,4 @@
-import { AIMessage, ToolMessage } from '@langchain/core/messages';
+import { ToolMessage } from '@langchain/core/messages';
 import {
   createHostServicesPlugin,
   createSessionRunner,
@@ -21,7 +21,6 @@ import {
   planModeConfigSchema,
   planModePlugin,
   EXIT_PLAN_MODE_TOOL_NAME,
-  PLAN_REVIEW_DISMISSED_MESSAGE,
   NOT_IN_PLAN_MODE_MESSAGE,
   PLAN_ALREADY_ACTIVE_MESSAGE,
   PLAN_APPROVE_LABEL,
@@ -263,67 +262,17 @@ describe('createPlanModePlugin', () => {
     expect(registry.middleware.list()[0]?.value.prepend).toBe(true);
   });
 
-  /**
-   * 照 dsh：模式外拒絕只在工具本體裡，事件匯流排上沒有 plan-mode 的監聽者。middleware 的 `wrapToolCall` **只做一件事**
-   * （#1607）：同一批還有別的工具呼叫時，把 `exit_plan_mode` 結果的 `name` 拿掉（基座混批會擲 `InvalidUpdateError`，
-   * `apps/harness/src/returndirect-route.test.ts`）。它不擋、不改 `content`／`status`／`tool_call_id`。
-   */
-  it('wrapToolCall 只在批裡不只一個呼叫時拿掉 exit_plan_mode 結果的 name，其餘原物返回；沒有事件監聽者', async () => {
+  /** 照 dsh：模式外拒絕只在工具本體裡。middleware 只剩模型呼叫那一件（含補回 `name`），事件匯流排上也沒有 plan-mode 的監聽者。 */
+  it('middleware 沒有 wrapToolCall，也沒有掛任何事件監聽者', async () => {
     const { registry } = await loadPlugins([planPlugin()]);
-    const middleware = registry.middleware.list()[0]?.value.middleware as unknown as {
-      wrapToolCall: (
-        request: unknown,
-        handler: (request: unknown) => Promise<unknown>,
-      ) => Promise<unknown>;
-      wrapModelCall: unknown;
-    };
+    const middleware = registry.middleware.list()[0]?.value.middleware as unknown as Record<
+      string,
+      unknown
+    >;
+
+    expect(middleware.wrapToolCall).toBeUndefined();
     expect(typeof middleware.wrapModelCall).toBe('function');
     expect(registry.events.listeners()).toEqual([]);
-
-    const named = () =>
-      new ToolMessage({
-        content: PLAN_REVIEW_DISMISSED_MESSAGE,
-        tool_call_id: 'c1',
-        name: EXIT_PLAN_MODE_TOOL_NAME,
-        status: 'success',
-      });
-    const batch = (names: string[]) => ({
-      toolCall: { id: 'c1', name: EXIT_PLAN_MODE_TOOL_NAME },
-      state: {
-        messages: [
-          new AIMessage({
-            content: '',
-            tool_calls: names.map((name, at) => ({
-              id: at === 0 ? 'c1' : `c${at + 1}`,
-              name,
-              args: {},
-            })),
-          }),
-        ],
-      },
-    });
-
-    // 單獨一個 → 原物返回（帶 name，基座據此收這一輪）。
-    const alone = named();
-    expect(
-      await middleware.wrapToolCall(batch([EXIT_PLAN_MODE_TOOL_NAME]), async () => alone),
-    ).toBe(alone);
-    // 同批還有別的 → 只換 name。
-    const stripped = (await middleware.wrapToolCall(
-      batch([EXIT_PLAN_MODE_TOOL_NAME, 'write_todos']),
-      async () => named(),
-    )) as ToolMessage;
-    expect(stripped.name).toBeUndefined();
-    expect(stripped.content).toBe(PLAN_REVIEW_DISMISSED_MESSAGE);
-    expect(stripped.tool_call_id).toBe('c1');
-    expect(stripped.status).toBe('success');
-    // 別的工具的結果不碰。
-    const other = new ToolMessage({ content: 'x', tool_call_id: 'c2', name: 'write_todos' });
-    const otherRequest = {
-      ...batch([EXIT_PLAN_MODE_TOOL_NAME, 'write_todos']),
-      toolCall: { id: 'c2', name: 'write_todos' },
-    };
-    expect(await middleware.wrapToolCall(otherRequest, async () => other)).toBe(other);
   });
 });
 

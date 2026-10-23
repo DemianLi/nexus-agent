@@ -356,4 +356,28 @@ describe('root 在計劃模式裡委派：子代理不在計劃模式', () => {
       20000,
     );
   }
+
+  /**
+   * **子代理裡參數缺 `plan`（圍堵接住的拋錯）也照常繼續**（#1607）：`exit_plan_mode` 宣告了 `returnDirect`，子代理的工具目錄相同，
+   * 圍堵在每個子代理裡一樣是最外層——沒標記的結果拿掉 `name`，路由不收，子代理被叫第二次、有機會改正。
+   */
+  it('子代理叫 exit_plan_mode 缺參數：子代理被叫了第二次', async () => {
+    const run = await runOnce(
+      [
+        delegate('worker'),
+        { content: '', toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: {} }] },
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ],
+      [WORKER, testPlanModePlugin({ startActive: true })],
+    );
+    try {
+      const subagentPrompts = run.model.prompts.filter(isSubagentPrompt);
+      expect(subagentPrompts).toHaveLength(2);
+      const failure = subagentPrompts.flat().find((message) => message.getType() === 'tool');
+      expect(failure?.text).toContain(EXIT_PLAN_MODE_TOOL_NAME);
+    } finally {
+      await run.close();
+    }
+  }, 20000);
 });

@@ -1,7 +1,8 @@
 /**
  * **基座形狀**：`returnDirect` 的路由只看「最後一則 ToolMessage 的 `name`」（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)）。
  *
- * `@nexus/plugin-plan-mode` 靠這個形狀做到「只有人關掉審核才收這一輪」（`EXIT_PLAN_MODE_RETURN_DIRECT` 的 JSDoc）：
+ * `@nexus/core` 的 `turn-conclusion.ts` 靠這個形狀做到「工具標了才收這一輪」，`@nexus/plugin-plan-mode` 的 `exit_plan_mode` 用它
+ * （`EXIT_PLAN_MODE_RETURN_DIRECT` 的 JSDoc）：
  * 工具設 `returnDirect: true`，**其餘結局的結果不帶 `name`**，路由就不收。這個行為是 langchain 內部的條件邊
  * （`ReactAgent.js:359-365`，`langchain@1.5.10` 的 `#createToolsRouter`），沒有公開契約。
  * **這一檔用沒有 plan-mode 的最小 agent 把它釘住**——升版後形狀變了，紅在這裡，而不是紅在 plan-mode 的一堆情境測試裡讓人猜原因。
@@ -12,7 +13,7 @@
  * 2. 最後一則沒有 `name` → 照常回頭叫模型（今天的行為）。
  * 3. 同一批全是 returnDirect → 都走 exitNode，收一次。
  * 4. **混批**（returnDirect 帶 `name` 與普通工具同一批）加上任何 `beforeModel` → langgraph 擲 `InvalidUpdateError`。這是
- *    plan-mode 在批裡不只一個呼叫時把 `exit_plan_mode` 的 `name` 拿掉的原因（登記的偏離，理由 1）；dsh 是批內任何一個收就收。
+ *    core 在批裡不只一個呼叫時把 `returnDirect` 工具的 `name` 拿掉的原因（登記的偏離，理由 1）；dsh 是批內任何一個收就收。
  * 5. 版號釘死：換版本要重新確認 (1)–(4) 之後才改這個常數。
  */
 
@@ -118,8 +119,8 @@ describe('returnDirect 的路由只看最後一則 ToolMessage 的 name（langch
 
   it('(4) 同一批 returnDirect 與普通工具混著、又掛了 beforeModel → langgraph 擲 InvalidUpdateError（不論順序）', async () => {
     // 基座每個工具呼叫是各自的 Send，路由各判；一批裡有的去 exitNode（afterAgent）、有的回頭去 beforeModel，
-    // 兩邊在同一個 super-step 都寫 `jumpTo`。plan-mode 因此在批裡不只一個呼叫時把 exit_plan_mode 的 `name` 拿掉。
-    // 這一條紅了＝基座修好了或換了形狀，可以重新考慮是否保留那段 wrapToolCall。
+    // 兩邊在同一個 super-step 都寫 `jumpTo`。core 因此在批裡不只一個呼叫時把 returnDirect 工具的 `name` 拿掉。
+    // 這一條紅了＝基座修好了或換了形狀，可以重新考慮是否保留 `settleTurnConclusion` 裡的批內判斷。
     for (const calls of [
       [DIRECT_CALL, PLAIN_CALL],
       [PLAIN_CALL, DIRECT_CALL],

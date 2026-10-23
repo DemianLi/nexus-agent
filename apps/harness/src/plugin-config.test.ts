@@ -345,9 +345,16 @@ describe('出貨的 cordis.yml', () => {
     // 是 core；它的消費點卻在起動期，那條不對稱寫在 `session-persistence.ts` 的檔頭上。
     expect(byId.get('session-persistence')).toEqual({ windowMs: DEFAULT_PERSISTENCE_WINDOW_MS });
 
+    // **出貨的計劃指引逐字釘死**（#1607）：套件沒有預設值了，這一句住在 `cordis.yml`，改一個字就是改每個計劃模式的 system prompt。
+    // `plan-mode.test.ts` 的 `SHIPPED_GUIDANCE` 是從 yml 讀的，量不到字有沒有變；字面值只能釘在這裡。
+    expect(byId.get('plan-mode')).toEqual({
+      guidance:
+        '你現在在計劃模式。先探索與設計，不要動手改東西；計劃完成後用 exit_plan_mode 把完整的計劃交出去等人批准。',
+    });
+
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
     expect(withConfig).toEqual([
-      // **`guidance` 必填、套件沒有預設值**（#1607，照 dsh），所以出貨那一列帶 config；內容由 `plan-mode.test.ts` 的 `SHIPPED_GUIDANCE` 量。
+      // **`guidance` 必填、套件沒有預設值**（#1607，照 dsh），所以出貨那一列帶 config；內容的字面值在上面釘住。
       'plan-mode',
       'todo',
       'feedback',
