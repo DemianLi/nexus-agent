@@ -742,6 +742,7 @@ export {
   currentTurnStart,
   openTurnStart,
   hasUnansweredInterrupt,
+  assertSessionEventEnvelope,
   isKnownSessionEventType,
   isLogicalTurnStart,
   isModelVisibleEvent,
@@ -754,6 +755,7 @@ export {
   SessionEventDepthError,
   SessionLog,
   snapshotJsonValue,
+  validateSessionEventData,
 } from './session-log.js';
 
 export type {

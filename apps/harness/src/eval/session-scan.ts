@@ -80,6 +80,7 @@
 import { readdir } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import {
+  classifyStoredFormatVersion,
   currentMessageFeedback,
   deriveSessionStats,
   isKnownSessionEventType,
@@ -426,8 +427,10 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
           file,
           header,
           // 掃描照格式版本表態、認不得的略過並報數，不守「不認得的必需種類就拒讀」（#507）：那是產品路徑的讀方才要守的。
+          // 信封照 header 的版本分流（#1549）：不是 newer 的照驗、壞的記成讀不了，同 header 那一側；newer 的不驗。
           events: parseJsonlSessionBody(header.id, body, {
             acceptUnknownEvents: true,
+            newerFormat: classifyStoredFormatVersion(header.version) === 'newer',
             recovery: 'strict',
           }).events,
         });

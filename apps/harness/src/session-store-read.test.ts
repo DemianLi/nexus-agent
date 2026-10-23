@@ -499,7 +499,11 @@ describe('不認得的事件種類', () => {
     const body = Buffer.from(`${futureEvent(0)}\n`);
     for (const recovery of ['strict', 'recoverable'] as const) {
       expect(
-        parseJsonlSessionBody('s', body, { acceptUnknownEvents: true, recovery }).events,
+        parseJsonlSessionBody('s', body, {
+          acceptUnknownEvents: true,
+          newerFormat: false,
+          recovery,
+        }).events,
       ).toHaveLength(1);
       expect(() =>
         parseJsonlSessionBody('s', body, { version: SESSION_LOG_FORMAT_VERSION, recovery }),

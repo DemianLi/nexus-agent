@@ -142,6 +142,7 @@ import { dirname, join, resolve } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
+  assertSessionEventEnvelope,
   classifyStoredFormatVersion,
   isUnreadableSessionEvent,
   materializeAppendBatch,
@@ -174,7 +175,11 @@ import type {
 } from '@nexus/core';
 import { acquireSessionLease } from './session-lease.js';
 import type { LeaseUnavailable, SessionWriteLease, TryLock } from './session-lease.js';
-import { assertStoredHeaderFields } from './session-log-validation.js';
+import {
+  assertStoredEventData,
+  assertStoredHeaderFields,
+  assertStoredRelationships,
+} from './session-log-validation.js';
 
 /**
  * 目錄與檔案的權限。
@@ -863,6 +868,10 @@ export interface ParsedSessionHeader {
  *
  * @throws {@link SessionFormatUnsupportedError} 版本比這一版新（開了 `acceptNewer` 就不拋），或比一條 `breaking` 邊舊
  *   （`acceptNewer` 不放行這一種）。
+ * **各格的形狀與鍵白名單**與 `create` 共用（`session-log-validation.ts` 的 `assertStoredHeaderFields`，#1549），對到 dsh
+ * 讀 header 時的精確鍵與型別檢查（`session-format-v1-to-v2/src/codec.ts:40-75`）。開了 `acceptNewer`、而且版本確實
+ * 比這一版新的，整支不跑（dsh `format.ts:333-337`：新版的格式不必過這一版的結構檢查）；版本就是這一版的照驗。
+ *
  * @throws {@link SessionCorruptionError} 不是 JSON、欄位形狀不對、或 id 對不上。
  */
 export function parseHeader(text: string, options: ParseHeaderOptions = {}): ParsedSessionHeader {
@@ -878,9 +887,12 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Par
   if (!isRecord(value)) throw new SessionCorruptionError(id, 'header 不是一個物件');
   if (expected === undefined && typeof value['id'] === 'string') id = value['id'];
   const { version } = value;
+  /** 比這一版新、又開了 `acceptNewer` 才走得到底的那一種。 */
+  let newer = false;
   if (typeof version === 'number' && Number.isSafeInteger(version) && version >= 1) {
     const verdict = classifyStoredFormatVersion(version, options.catalog ?? SESSION_FORMAT_CATALOG);
-    if (verdict === 'newer' && options.acceptNewer !== true) {
+    newer = verdict === 'newer';
+    if (newer && options.acceptNewer !== true) {
       throw new SessionFormatUnsupportedError(id, version, undefined, options.location);
     }
     if (verdict === 'older-without-migration') {
@@ -902,6 +914,16 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Par
   if (typeof value['createdAt'] !== 'number') {
     throw new SessionCorruptionError(id, 'header 沒有 createdAt');
   }
+  // 各格的形狀與鍵白名單，與 `create` 共用同一支（#1549）。排在版本判定之後：讀不了的版本照舊報
+  // `SessionFormatUnsupportedError`，不會被這裡改判成壞檔。比這一版新的（只有 `acceptNewer` 走得到）整支跳過：
+  // 新版的 header 不必過這一版的結構檢查（dsh `format.ts:333-337`）。
+  if (!newer) {
+    try {
+      assertStoredHeaderFields(value);
+    } catch (error: unknown) {
+      throw new SessionCorruptionError(id, error instanceof Error ? error.message : String(error));
+    }
+  }
   const header = {
     ...value,
     version: SESSION_LOG_FORMAT_VERSION,
@@ -918,6 +940,11 @@ export type ParseBodyOptions = (
   | {
       /** 不認得又沒標可忽略的種類也照收。**只給產品路徑外的離線掃描**（`eval/session-scan.ts` 的「照格式版本表態」）。 */
       readonly acceptUnknownEvents: true;
+      /**
+       * header 的版本比這一版新（`classifyStoredFormatVersion` 判 `newer`）。是的話不驗信封：新版的格式不必過這一版的
+       * 結構檢查（dsh `format.ts:333-337`，同 `parseHeader` 那一側）；這一版的檔照驗（#1549 PM 裁決 issuecomment-6354566852）。
+       */
+      readonly newerFormat: boolean;
     }
   | {
       readonly acceptUnknownEvents?: false;
@@ -959,7 +986,10 @@ function isTurnCloser(value: unknown): boolean {
  *   留下的尾巴，是壞檔；沒有收尾的話，壞行與它之後的行都屬於那一次沒寫完的輪，丟掉，由續接補「中斷」。壞行本身
  *   parse 得了、而且是收尾事件，也立即拋。
  *
- * 壞行指：不是 JSON、不像一筆事件（`type` 是字串、`time` 是數字的物件），或 `seq` 不等於已接受的事件數。
+ * 壞行指：不是 JSON、信封不對（`@nexus/core` 的 `assertSessionEventEnvelope`，與 seed 共用，照 dsh 讀檔器逐行的
+ * `decodeEvent`，`session-format-v1-to-v2/src/codec.ts:132-146`，#1549），或 `seq` 不等於已接受的事件數。
+ * 離線掃描讀比這一版新的日誌（`newerFormat`）不驗信封、只看像不像一筆事件（`type` 是字串、`time` 是數字的物件）：
+ * 新版的信封不必過這一版的結構檢查（同 header 那一側，dsh `format.ts:333-337`）。
  *
  * **種類這一版不認得、又沒標 `ignorable` 的，整份拒絕**（{@link SessionEventUnsupportedError}，
  * [#507](https://github.com/DemianLi/nexus-agent/issues/507)），不是略過那一行：不認得的必需事件可能左右後面每一筆
@@ -1004,7 +1034,17 @@ export function parseJsonlSessionBody(
       isRecord(value) &&
       typeof value['type'] === 'string' &&
       typeof value['time'] === 'number';
-    if (problem === undefined && !eventLike) problem = `第 ${lineNumber} 行不是一筆會話事件`;
+    if (problem === undefined && !(options.acceptUnknownEvents === true && options.newerFormat)) {
+      // 信封照 dsh 逐行驗（`decodeEvent`，#1549），與 core 的 seed 共用同一支；不過就是壞行，照下面的 strict／recoverable 處理。
+      // `seq` 的形狀不在這裡驗，交給下面的 `seq === events.length`（同 dsh 讀檔器）。
+      try {
+        assertSessionEventEnvelope(value, `第 ${lineNumber} 行`, { checkSeq: false });
+      } catch (error: unknown) {
+        problem = error instanceof Error ? error.message : String(error);
+      }
+    } else if (problem === undefined && !eventLike) {
+      problem = `第 ${lineNumber} 行不是一筆會話事件`;
+    }
 
     if (options.recovery === 'strict') {
       if (problem !== undefined) throw new SessionCorruptionError(id, problem);
@@ -1394,6 +1434,20 @@ function locate(directory: string, files: SessionFilenames): SessionLocation {
 }
 
 /**
+ * 解析好的已接受前綴，交出去之前（也是存進冷讀快取之前）的驗證（#1549），續接與唯讀打開共用，順序照 dsh：
+ * 讀檔器收尾時的關係驗證（`session-persistence-jsonl/src/format.ts:468`），再逐筆跑單筆資料規則（`index.ts:860` 的
+ * `validateStoredEvents`，之後才 `:868` 存快取）。撿回（salvage）不跑：它本來就是在處理壞檔，dsh 沒有這條路。
+ * 事件信封不在這裡驗：它在 {@link parseJsonlSessionBody} 逐行驗（壞行照 strict／recoverable 處理，照 dsh `decodeEvent`），
+ * core 的 seed（`SessionLog`）再驗一次（dsh 兩層都有）。
+ *
+ * @throws {@link SessionCorruptionError} 哪一行、哪一格不對。
+ */
+function validateStoredLog(id: string, events: readonly SessionEvent[]): void {
+  assertStoredRelationships(id, events);
+  assertStoredEventData(id, events);
+}
+
+/**
  * 唯讀打開 `directory` 裡的那一份。見 {@link SessionStore.open}：**不拿租約、不截尾巴、不動 header**。
  */
 async function openStoredSessionForRead(
@@ -1433,6 +1487,7 @@ async function openStoredSessionForRead(
           location,
         });
         if (options.salvage === true) return events;
+        validateStoredLog(id, events);
         const frozen = freezeStoredEvents(events);
         coldLogs.set(id, {
           headerRevision,
@@ -1502,6 +1557,7 @@ async function resumeStoredSession(
         recovery: 'recoverable',
         location,
       });
+      validateStoredLog(id, events);
       read = { header, storedFormatVersion, events, validBytes, bodyBytes: body.byteLength };
     }
     const { header, storedFormatVersion, events, validBytes } = read;
