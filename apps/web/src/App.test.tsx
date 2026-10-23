@@ -59,7 +59,7 @@ import {
   SWITCHED_THREAD_NOTICE,
 } from '@/App';
 import { NO_DECISION_REASON } from '@/components/approval-card';
-import { COMMANDS_PENDING_TEXT, commandsFailedText } from '@/hooks/use-conversation';
+import { commandsFailedText } from '@/hooks/use-conversation';
 import {
   BLANK_THREAD_LABEL,
   CLEAR_SEARCH_LABEL,
@@ -1324,39 +1324,71 @@ describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#
     expect(fake.slashed).toEqual([]);
   });
 
-  it('命令清單還沒到：「/plan」兩條都不走，說出原因，草稿留著（dsh 的 strong-wait）', async () => {
+  it('清單在途時送出：兩條都先不走，等清單到了才路由（dsh 的 strong-wait）', async () => {
     seq = 0;
-    const fake = fakeClient([], { commands: [planCommand] });
-    const slashList: WireClient['slashList'] = () => new Promise(() => {});
+    const fake = fakeClient([], {
+      commands: [planCommand],
+      run: () => ({ kind: 'success', command_id: 'c' }),
+    });
+    let arrive: (() => void) | undefined;
+    const slashList: WireClient['slashList'] = () =>
+      new Promise((resolve) => {
+        arrive = () => resolve({ kind: 'ok', commands: [planCommand] });
+      });
     render(<App client={{ ...fake.client, slashList }} />);
     await screen.findByPlaceholderText('說點什麼…');
+    await waitFor(() => expect(arrive).toBeDefined());
 
     sendLine('/plan');
-    const card = await toastWith(COMMANDS_PENDING_TEXT);
-    expect(card.textContent).toContain('這一句沒送出去');
-    await waitFor(() => expect(input().value).toBe('/plan'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(fake.sent).toEqual([]);
     expect(fake.slashed).toEqual([]);
+
+    arrive!();
+    await waitFor(() => expect(fake.slashed).toEqual(['/plan']));
+    expect(fake.sent).toEqual([]);
   });
 
-  it('命令清單抓失敗：「/plan」兩條都不走，說出原因；不是 / 開頭的照常送', async () => {
+  it('命令清單抓失敗：送出時重抓一次，還是失敗才退回、說出原因；不是 / 開頭的照常送', async () => {
     seq = 0;
     const fake = fakeClient([], { commands: [planCommand] });
-    const slashList: WireClient['slashList'] = async () => ({
+    const slashList = vi.fn<WireClient['slashList']>(async () => ({
       kind: 'rejected',
       message: '清單讀不出來',
-    });
+    }));
     render(<App client={{ ...fake.client, slashList }} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('清單讀不出來'));
+    expect(slashList).toHaveBeenCalledTimes(1);
 
     sendLine('/plan');
-    await toastWith(commandsFailedText('清單讀不出來'));
+    const card = await toastWith(commandsFailedText('清單讀不出來'));
+    expect(card.textContent).toContain('這一句沒送出去');
+    expect(slashList).toHaveBeenCalledTimes(2);
     await waitFor(() => expect(input().value).toBe('/plan'));
     expect(fake.sent).toEqual([]);
     expect(fake.slashed).toEqual([]);
 
     sendLine('一句話');
     await waitFor(() => expect(fake.sent).toEqual(['一句話']));
+  });
+
+  it('第一次抓失敗、送出時重抓成功：這一句照清單路由，送得出去', async () => {
+    seq = 0;
+    const fake = fakeClient([], {
+      commands: [planCommand],
+      run: () => ({ kind: 'success', command_id: 'c' }),
+    });
+    const slashList = vi
+      .fn<WireClient['slashList']>()
+      .mockResolvedValueOnce({ kind: 'rejected', message: '清單讀不出來' })
+      .mockResolvedValue({ kind: 'ok', commands: [planCommand] });
+    render(<App client={{ ...fake.client, slashList }} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('清單讀不出來'));
+
+    sendLine('/plan');
+    await waitFor(() => expect(fake.slashed).toEqual(['/plan']));
+    expect(slashList).toHaveBeenCalledTimes(2);
+    expect(fake.sent).toEqual([]);
   });
 
   it('跑著時：技能那一行跟一句話一樣能排隊；命令照舊送不出去', async () => {
@@ -6240,7 +6272,7 @@ describe('@子代理 提及（#328）', () => {
     const listed = vi.fn(subagentList);
     render(<App client={{ ...fake.client, runStart, subagentList: listed }} />);
     await screen.findByPlaceholderText('說點什麼…');
-    return { runStart, listed };
+    return { runStart, listed, slashed: fake.slashed };
   }
 
   /** 打 `@` 開選單、挑第 `down` 個（從 0 起）、Enter。 */
@@ -6424,12 +6456,13 @@ describe('@子代理 提及（#328）', () => {
   });
 
   it('以 / 開頭的命令不帶也不用掉標記', async () => {
-    const { runStart } = await ready();
+    const { runStart, slashed } = await ready();
     await pick('@');
     type('/plan');
     fireEvent.keyDown(input(), { key: 'Escape' });
     fireEvent.keyDown(input(), { key: 'Enter' });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // 真的走了 `slash.run`：清單沒到就被退回的話，這一格不該照樣綠。
+    await waitFor(() => expect(slashed).toEqual(['/plan']));
     expect(runStart).not.toHaveBeenCalled();
     expect(chip()).not.toBeNull();
   });

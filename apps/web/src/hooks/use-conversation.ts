@@ -58,6 +58,7 @@ import { RatingsController } from '@/lib/feedback-ratings';
 import { goalPauseFailureText } from '@/lib/goal-bar';
 import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
 import { commandToken, namesCommand } from '@/lib/queue-view';
+import { CommandDirectory } from '@/lib/command-directory';
 import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
@@ -73,12 +74,9 @@ import { threadSubagentText } from '@/lib/thread-subagent';
 import { randomUuid } from '@/lib/uuid';
 
 /**
- * 命令清單還沒回來時，開頭像命令的那一行退回的原因（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）。
- * 清單沒到就分不出 `/plan` 是命令還是一句話，照 dsh 等清單、不靜默降級成送給模型。
+ * 命令清單抓不到時，開頭像命令的那一行退回的原因（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）：送出當下
+ * 重抓過一次還是失敗。分不出 `/plan` 是命令還是一句話，照 dsh 退回、不靜默降級成送給模型。
  */
-export const COMMANDS_PENDING_TEXT = '命令清單還沒載入，開頭是「/」的這一行先不送，稍候再按送出。';
-
-/** 命令清單抓失敗時，開頭像命令的那一行退回的原因（#1929）：同上，不靜默降級。 */
 export function commandsFailedText(message: string): string {
   return `命令清單沒有載入，分不出開頭的「/」是命令還是一句話，這一行沒有送出。（${message}）`;
 }
@@ -255,8 +253,9 @@ export interface Conversation {
    * 送一行進去。**開頭那個字是命令清單上的名字才走 `slash.run`**，其餘走 `run.start`
    * （[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)，#1574 Q2 (a)，照 dsh）：技能的 `/deploy 今天`、打錯的
    * `/plna` 都是一句話，送給模型。這推翻了 [#123](https://github.com/DemianLi/nexus-agent/issues/123) 的「認不得的命令是
-   * 錯誤」；「不認得這個命令」只剩清單上有、伺服器卻說不認得的那一種。清單還沒到或抓失敗時，開頭像命令的那一行回
-   * {@link SendRejected}（{@link COMMANDS_PENDING_TEXT}、{@link commandsFailedText}），不靜默送給模型。
+   * 錯誤」；「不認得這個命令」只剩清單上有、伺服器卻說不認得的那一種。開頭像命令的那一行要等到這條線的命令清單才分得出來
+   * （照 dsh 的 strong-wait，`lib/command-directory.ts`）：清單在途就等它；之前抓失敗就當場重抓一次；等到的還是失敗才回
+   * {@link SendRejected}（{@link commandsFailedText}），不靜默送給模型。
    *
    * **一句話送出去不畫任何東西**（#645）：伺服器收下就進送出佇列，開跑那一刻才由 `inbox` 的 `claimed` 畫人的泡泡。
    * 伺服器沒收下（回錯誤或這一趟就斷了）時回 {@link SendRejected}，呼叫端把草稿放回去並說出原因；斜線命令與
@@ -443,14 +442,18 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [attempted, setAttempted] = useState(false);
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
   /**
-   * 送出時認命令用的那份清單（#1929）：清單到之前是 `pending`，抓失敗而且從來沒到過是 `failed`。到過一次就留著——重連時
-   * 重抓失敗不把認得的命令丟掉。用 ref 是因為 `send` 要讀送出當下的那一份。
+   * 送出時認命令用的那份清單（#1929），照 dsh 的 `CommandDirectory`：每次開線丟掉重抓、抓失敗清空、送出時等到有一份才認。
+   * 能用的那份換了就畫進 {@link Conversation.slashCommands}（選單、送出鈕）。
    */
-  const commandCatalog = useRef<
-    | { readonly status: 'pending' }
-    | { readonly status: 'failed'; readonly message: string }
-    | { readonly status: 'ready'; readonly commands: readonly SlashDescriptor[] }
-  >({ status: 'pending' });
+  const commandDirectory = useMemo(
+    () =>
+      new CommandDirectory(async () => {
+        const listed = await client.slashList(threadId);
+        if (listed.kind === 'ok') return listed.commands;
+        throw new Error(listed.message);
+      }, setSlashCommands),
+    [client, threadId],
+  );
   const [skills, setSkills] = useState<readonly SkillEntry[]>([]);
   const [slashError, setSlashError] = useState<string | undefined>(undefined);
   const [slashNotice, setSlashNotice] = useState<string | undefined>(undefined);
@@ -665,7 +668,15 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (ratingsController.view.status !== 'cold') void ratingsController.resync();
         // **抓清單排在開線之後**，跟送話同一條規則：這條線除了還掛著的中斷不重播，所有的上行都等
         // 下行開好。清單本身不需要重播，但兩套順序規則比一套容易記錯。
-        // 技能清單（#1929）不等：事件照常往下收。被拒、拋錯（含看不懂的資料）都只是 `/` 選單少了技能那一組，不停這條線。
+        // 兩份清單都不等，事件照常往下收（#1929）。
+        // 命令清單：每次連上都丟掉重抓（dsh `resetConnected`）——另一條線上的伺服器可能換了組裝。抓失敗照舊在狀態列說出來；
+        // 送出時認命令那一道會再抓一次。
+        void commandDirectory.resetConnected().then((outcome) => {
+          if (!cancelled && outcome.kind === 'failed') setSlashError(outcome.message);
+        });
+        // 技能清單：同樣先清掉再抓（dsh `ui-skill` 重連時丟掉快取）。被拒、拋錯（含看不懂的資料）都只是 `/` 選單少了
+        // 技能那一組，不停這條線。
+        setSkills([]);
         void Promise.resolve()
           .then(() => client.skillList(threadId))
           .then(
@@ -674,19 +685,6 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             },
             () => undefined,
           );
-        const listed = await client.slashList(threadId);
-        if (cancelled) {
-          return;
-        }
-        if (listed.kind === 'ok') {
-          commandCatalog.current = { status: 'ready', commands: listed.commands };
-          setSlashCommands(listed.commands);
-        } else {
-          if (commandCatalog.current.status !== 'ready') {
-            commandCatalog.current = { status: 'failed', message: listed.message };
-          }
-          setSlashError(listed.message);
-        }
         for await (const event of events) {
           if (cancelled) {
             return;
@@ -730,7 +728,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       controller.abort();
       setConnected(false);
     };
-  }, [client, threadId, advance, generation, scheduleRetry, ratingsController]);
+  }, [client, threadId, advance, generation, scheduleRetry, ratingsController, commandDirectory]);
 
   /** 收下上行的回條：被拒就說出來，成功就把上一次的抱怨收掉。 */
   const note = useCallback((result: UplinkResult) => {
@@ -849,13 +847,18 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return undefined;
       }
       // 開頭那個字是命令清單上的名字才是命令（#1929，#1574 Q2 (a)），其餘整行走 `run.start`：技能的 `/deploy 今天`、
-      // 打錯的 `/plna` 都送給模型。清單沒到或抓失敗時分不出來，照 dsh 退回、說出原因，草稿與附件原樣留著（`matchEnter`
-      // 的 strong-wait：「never a silent downgrade」）。
+      // 打錯的 `/plna` 都送給模型。分得出來之前照 dsh 等（`matchEnter` 的 strong-wait）：清單在途就等它、之前失敗就
+      // 重抓；等到的還是失敗才退回、說出原因，草稿與附件原樣留著（「never a silent downgrade」）。
       if (commandToken(trimmed) !== undefined) {
-        const catalog = commandCatalog.current;
-        if (catalog.status === 'pending') return { message: COMMANDS_PENDING_TEXT };
-        if (catalog.status === 'failed') return { message: commandsFailedText(catalog.message) };
-        if (namesCommand(catalog.commands, trimmed)) {
+        let commands: readonly SlashDescriptor[];
+        try {
+          commands = await commandDirectory.ensureReady();
+        } catch (error) {
+          return {
+            message: commandsFailedText(error instanceof Error ? error.message : String(error)),
+          };
+        }
+        if (namesCommand(commands, trimmed)) {
           return runSlash(trimmed, hasAttachments ? attachments : undefined);
         }
       }
@@ -895,7 +898,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setCommandError(undefined);
       return undefined;
     },
-    [threadId, runSlash],
+    [threadId, runSlash, commandDirectory],
   );
 
   const updateQueue = useCallback(
