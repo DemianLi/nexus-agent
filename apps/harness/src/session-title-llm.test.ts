@@ -341,8 +341,8 @@ describe('送出去的是什麼、寫了什麼', () => {
     });
   });
 
-  it('回來的文字照 maxTitleBytes 正規化：只取第一個非空行、控制字元清掉、截在字的邊界', async () => {
-    // 只取第一個非空行（「標題」），第二行不進來；9 個位元組放得下，控制碼與前後空白也不在裡面。
+  it('回來的文字照 maxTitleBytes 正規化：控制字元清掉、空白收一格、截在字的邊界', async () => {
+    // 這條只釘正規化（控制碼、前後空白、位元組上限）；9 個位元組連第二行都放得下的話才分得出切行，所以切行由上面 A 那組釘，不靠這條。
     const small = createSessionTitleLlm({
       model: fakeTitleModel(() => stopReply('  標題\n第二行\u001b[31m  ')).model,
       route: ROUTE,

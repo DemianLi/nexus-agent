@@ -1377,6 +1377,9 @@ export function liveSubagentModelFor(
  * 取最低一級）。標題那顆以 `purpose: 'session-title'` 建，`live-model` 會依型錄條目關推理（`thinkingOffBody`）；這裡用
  * 同一個判準（{@link declaresOffEffort}）決定記不記 `'off'`，只讓紀錄多一格，不碰送出去的請求。
  *
+ * **只有條目宣告了 `off` 時才跟 dsh 一致。** 沒宣告 `off` 的條目，dsh 取 `efforts[0]`（最低一級），紀錄和送出都用它；nexus 兩樣都不做
+ * （沒有 `off` 以外的線上寫法），已登記為理由 1，見 `model-catalog.ts` 檔頭「`reasoningEfforts` 的驗證只搬 dsh 的前三條」那一條。
+ *
  * @param models - `live-model` 的型錄。
  * @param modelId - 這顆標題模型的 id。
  * @returns 條目宣告了 `off` 就 `{ reasoningEffort: 'off' }`；沒宣告（或不在型錄）就 `{}`，紀錄上沒有這個 key。
