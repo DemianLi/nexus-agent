@@ -56,7 +56,9 @@ index_status(project: "nexus-agent")
 實測過的，查詢時要自己扣掉：
 
 - **呼叫邊的解析信心不一致。** 同一張圖裡有 `lsp 0.95`、`heuristic 0.95`，也有 `heuristic 0.38`（`createNexusAgent → foldRegistry`）。實測時這幾條邊都與 grep 一致，但信心高低跟 package 邊界沒有對應關係（同 package 的 `createCliAgent → createNexusAgent` 也是 heuristic），不要自己推規則。邊要拿來當證據時，加 `include_evidence: true` 逐條看 strategy 與 confidence，低的那條配 grep。
-- **全文搜尋會被測試檔淹沒。** `search_graph` 的 `query` 前幾名常是 `*.test.ts` 裡的輔助函式，要限定範圍就加 `file_pattern`（例如 `packages/**/src/**`）。`trace_path` 預設就排除測試，要看測試加 `include_tests: true`。
+- **透過欄位或介面呼叫的方法，呼叫者會漏報。** `trace_path` 查 `JsonlStoredSession.append` 回 0 個呼叫者，但 `thread-pump.ts` 裡有十幾處 `this.#sessions.root.append(...)`：接收者的型別圖解不出來，這條邊就不存在。一般函式不受影響（`runCli`、`acquireHomeLock` 的呼叫者與 grep 完全一致）。查方法的呼叫者時，圖回 0 或回很少，一律再用 grep 掃方法名（0.12.1 實測）。
+- **全文搜尋會被測試檔淹沒。** `search_graph` 的 `query` 前幾名常是 `*.test.ts` 裡的輔助函式，要限定範圍就加 `file_pattern`（例如 `packages/**/src/**`）；知道名字時改用 `name_pattern` 精確比對。`trace_path` 預設就排除測試，要看測試加 `include_tests: true`。
+- **`semantic_query` 不可靠。** 以「serve 鎖檔，確保一個 home 只跑一個 server」查，回的全是 `.docs/chat-agent-research/verify/*.py` 的研究腳本，`home-lock.ts` 沒出現（0.12.1 實測）。不要用它找程式碼，改用 `name_pattern` 或加 `file_pattern` 的 `query`。
 - **部分解析失敗的檔案**：`nexus-agent` 只有 `apps/web/src/index.css`，無關緊要；`deepseek-harness` 有上百個，查不到東西時先 `check_index_coverage` 看那個檔案有沒有被標記。
 
 ## 引用 deepseek-harness 之前
