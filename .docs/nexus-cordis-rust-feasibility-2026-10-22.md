@@ -64,7 +64,7 @@
 
 dsh 是比對基準。nexus 的 rc.11 比 dsh 的 4.0.5 新，兩者的差異已由 #1385 底下各子卡處理，本篇不重列。
 
-**基準改成 rc.12（2026-10-23）**：rc.11 到 rc.12 共 21 個 commit、81 個檔。跟本篇有關的是 §七 的三項，見那一節。vendor 要不要跟著升、本地修補 `0001` 與上游 #133 衝突時選哪邊，由 #1937 先實測再定。
+**基準是 rc.12**（demian 2026-10-23，#1937）：rc.11 到 rc.12 共 21 個 commit、81 個檔。跟本篇有關的是 §七 的三項，見那一節。vendor 由 #1937 同步到 rc.12；本地修補 `0001` 與上游 #133 衝突時照 C1 (b)：`0001` 重定基，另加 `0002` 改上游 `fiber.spec.ts` 兩條期待（demian 2026-10-24，#1827）。
 
 ### 2-2 nexus 怎麼用 Cordis
 
@@ -263,7 +263,7 @@ S3 與 S4 的及格標準就是 Q4.2 的門檻。
 - **CPU 與尾延遲**：這支 Rust 原型反而較差。原型用多執行緒 tokio、`serde_json::Value`、`std::Mutex`，沒有調校。這是實作品質的問題，不是語言的上限，但也代表「Rust 一定比較省 CPU」在這裡**沒有被證明**。
 - **換算**：監督行程省下的 40–90 MB，約等於 4–8 條原型對話子行程（每條 10.8 MB）。
 
-### 3-7 執行器的語言：Rust 對 C（2026-10-23 晚補）
+### 3-7 執行器的語言：Rust 對 C
 
 這一節回答「R1 (b) 的 CPU 條件管不管執行器」。條件是監督行程的 CPU 不輸 Node 監督行程。
 
@@ -390,10 +390,10 @@ Q9、Q10 是量測計畫與下載許可的程序題，不列。Q19、Q20 整理�
 | 7 | 執行器改成常駐 spawner，不照 dsh 每次 spawn 一個（#1946 S3） | **2** | demian 定的門檻是「每次 spawn 多出 p50 ≤1 ms，不論宿主負載」，部署形態是多人共用主機（#1678），dsh 沒有這個需求。控制負載掃描裡 L100／L150 每次 spawn 一個執行器 4/4 都超過 1 ms（#1946 issuecomment-6376031454）。證據的限度：L150 排除干擾後只剩一格，只超出 +156 µs；只在 aarch64 的 Docker Desktop VM 上量過，負載只有純 CPU | 常駐 spawner：seccomp 只裝一次、子行程繼承，每個子行程各自上 Landlock。TS 的 spawn 介面從 dsh 的 `confine(argv) → argv` 改成「交給 spawner，回 pid 與 stdio fd」；`SandboxMode`、`full/partial` 仍照 dsh |
 | 8 | 主機級的樹用 Rust 自寫核心，不 vendor TS Cordis（Q14、Q17） | **2**（由 #1、#4a 推出） | 主機級的樹活在監督行程裡，監督行程是 Rust | §七 的語意清單；逐條跟 rc.11 的對照在 #1948 正文 |
 | 8a | 擁有者顯式傳遞；服務值只存資料 | **1** | 基座表達不出來（§四）：Rust 沒有 TS Cordis 的 `Proxy`，無法自動把 effect 歸給呼叫者；Rust 不能跨 isolate 持有 JS 函式（原型 P1 實測 V8 FATAL） | 退到 cordis-rs 的顯式擁有者；過橋只有資料 |
-| 9 | 第一版只做 Linux 後端，不做 dsh 的 macOS Seatbelt、Windows ACL＋受限 token（Q31） | **待 demian 定**（#1827 D17） | Q31 拍板時沒標理由類別 | — |
-| 10 | Linux 只有 Landlock 一格，dsh 的鏈是 bwrap→Landlock | **待 demian 定**（#1827 D17） | 等 #1946 的 S2 與「要做的事」第 6 條（在能建 namespace 的宿主上 bwrap 能不能用） | — |
+| 9 | 第一版只做 Linux 後端，不做 dsh 的 macOS Seatbelt、Windows ACL＋受限 token（Q31） | **2**（demian 2026-10-24，#1827 D17） | 範圍比 dsh 小，不是超出 dsh：依部署形態（完全內網、Linux 多人共用主機，#1678）只做 Linux，是 demian 的決定。要在桌機或 Windows 上部署時重開 | Mac 開發機上沒有沙箱後端；本機開發時工具怎麼跑，要在 #1946 寫明 |
+| 10 | Linux 只有 Landlock 一格，dsh 的鏈是 bwrap→Landlock | **依量測定**（demian 2026-10-24，#1827 D17） | #1946「要做的事」第 6 條量在能建 namespace 的宿主上 bwrap 能不能用：可用就照 dsh 補上 bwrap，這條不再是偏離；宿主或容器建不了 namespace，就標理由 1 並附量測 | 今天的鏈只有 Landlock，不可用就 fail-closed（S2） |
 
-#7–#10 是 2026-10-24 補的，編號接在 1–6 後面。#7、#9、#10 對應 #1946 的偏離表，#8、#8a 對應 #1948。§七 語意清單裡另有三條（嚴格 inject、時限與 AbortSignal、listener 各自 try/catch）：2026-10-11 決議有拍板，但決議 §五 的偏離表沒登記，理由類別記在 #1827 D18。
+#7、#9、#10 對應 #1946 的偏離表，#8、#8a 對應 #1948。§七 語意清單裡另有三條（嚴格 inject、時限與 AbortSignal、listener 各自 try/catch），偏離登記在 [2026-10-11 決議](decisions-2026-10-11.md) §五，理由 2（demian 2026-10-24，#1827 D18）。
 
 **不是偏離理由的**：「效能比較好」。§三-4 的 S6 沒有一組有隔離的形狀過 Q4.3 的門檻。
 
@@ -408,7 +408,7 @@ Q9、Q10 是量測計畫與下載許可的程序題，不列。Q19、Q20 整理�
 - 計時器綁在生命週期上。
 - 設定值是 `None` 時不覆寫。
 
-**基準改成 rc.12 後要重核的三項**（2026-10-23 補）：下面「取自 TS rc.11」這一組是照 rc.11 寫的，rc.12 改了其中三項，要等 [#1937](https://github.com/DemianLi/nexus-agent/issues/1937) 實測後更新：
+**rc.12 改了的三項**：下面「取自 TS rc.11」這一組是照 rc.11 寫的，rc.12 改了其中三項，照 [#1937](https://github.com/DemianLi/nexus-agent/issues/1937) 的實測更新由 #1937 做：
 
 - **fiber 的六種狀態**：上游 #133 讓從沒啟用過與失敗過的 fiber 卸載時直接到 DISPOSED，不經 UNLOADING。這跟 nexus 的本地修補 `0001`（上游 #185）互斥。
 - **isolate**：上游 #209 讓找服務遇到隔離邊界就停。
