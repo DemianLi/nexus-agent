@@ -46,7 +46,7 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 - `## 摘要`：挑最小的一張圖（虛擬碼、呼叫樹、元件樹、檔案樹或 diff 草圖），配一兩句話；GitHub 上 Mermaid 只露出一小塊，優先用文字樹或 diff 草圖；
 - `## 證據`：改之前／改之後，截圖最好，其次是測試或指令的實際輸出，突變結果放這裡。**寫實際跑過的，沒跑過就寫沒跑過**，這一段的價值來自它是真的；
 - `## 合併風險`：門（單向或雙向。單向指合了很難回頭：資料格式、落盤內容、出廠設定、對外協定）與影響範圍（一個詞）；檔案歸屬的同批適配（見「檔案歸屬」）也寫在這裡；
-- `## 偏離 dsh`：有偏離才寫，沒有就整段刪掉（見「技術實現標準」）。
+- `## 對照 dsh`：照「技術實現標準」的三步寫：dsh 怎麼做與為什麼、比較了哪些做法、選了哪個與好在哪；做法跟 dsh 一樣的寫一行出處。沒有涉及技術實現的 PR（純文件、純設定）就整段刪掉。
 
 用 `gh pr create --body` 開 PR 時 CLI 不會自動套模板，要自己照骨架填。feature PR 的內文 gate 不檢查。
 
@@ -60,7 +60,7 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 
 ## 技術實現標準
 
-凡技術實現方法的問題，一律以 **DeepSeek Harness**（[`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)，Cordis 插件框架、TypeScript、MIT）的實際做法為標準。
+凡技術實現方法的問題，以 **DeepSeek Harness**（[`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)，Cordis 插件框架、TypeScript、MIT）為**參照**：先讀懂它的設計架構與實現方式，再選出對 nexus 最好的做法。目標是超越 dsh，不是複製它。選出來的做法可以跟 dsh 一樣，也可以不一樣，但都要說得出為什麼它對 nexus 比較好。
 
 **先讀原始碼，不要靠搜尋或記憶回答。** 那份 clone 不進版控（`.gitignore` 與 `.prettierignore` 都排除 `references/`），所以要自己拉一份：
 
@@ -70,16 +70,23 @@ git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git referenc
 
 唯讀，不要改它。`docs/` 每份都有 `.zh.md` 中文版，入口是 `docs/architecture.zh.md`、`docs/cordis-primer.zh.md`、`docs/subsystems/*.zh.md`；房規在根目錄的 `AGENTS.md` 與 `packages/AGENTS.md`。
 
-**偏離規則**：一律照 dsh 的實際做法。只有兩種理由可以偏離：
+**怎麼選：**
 
-1. **基座表達不出來**：現有基礎建設做不到 dsh 的做法（今天是 deepagents / LangChain JS / LangGraph JS；底座正遷往 vendor 的 Cordis，見 [`.docs/decisions-2026-10-11.md`](.docs/decisions-2026-10-11.md)），退到最接近的實作。
-2. **產品需求超出 dsh 的射程**：dsh 沒有的需求，例如幾百人並行開發的組織規模、稽核、只給新對話的插件更新、完全內網部署。
+1. **先講清楚 dsh 怎麼做、為什麼這樣做。** 指到原始碼（`path:line`，並註明 SHA），說出它在解決什麼問題、付出什麼代價。講不出來，就還沒到可以選的時候。
+2. **再列出至少一種別的做法，用同一組標準比較：**
+   - 正確性；
+   - 失敗與恢復；
+   - 效能；
+   - 維護成本；
+   - nexus 的產品需求：企業內部聊天機器人、完全內網、多人共用主機、稽核、幾百人並行開發；
+   - 現有基座做不做得到：今天是 deepagents／LangChain JS／LangGraph JS，正遷往 vendor 的 Cordis，見 [`.docs/decisions-2026-10-11.md`](.docs/decisions-2026-10-11.md)。
+3. **選比較好的那一個，寫明它好在哪。** 比不出高下時照 dsh，因為它的做法已經在實際使用中驗證過。
 
-兩種都要在決議或 PR 內文裡明確標註是哪一條、屬於哪一種理由、具體理由是什麼、退到或補了什麼。不得因為「我們的形狀不同」就自由發揮。
+**記在哪：** 對照與取捨寫在 PR 內文〈對照 dsh〉，或 `docs/`、`.docs/` 的 md（決議、設計文件），不寫進程式碼與註解（見 [`docs/standards.md`](docs/standards.md)）。做法跟 dsh 一樣的，寫一行出處就好；不一樣的，寫完整的比較。
 
 這條規則撐起了 [`.docs/development-plan.md`](.docs/development-plan.md) 裡大半的設計決定；來龍去脈見已關閉的地圖 [#26](https://github.com/DemianLi/nexus-agent/issues/26)。
 
-**不在這條範圍內的：web 的 UI/UX**（視覺、設計 token、互動、動效）。這一塊以 **shadcn＋Tailwind 為基底**，外觀與設計 token 用 **[solid-glass](https://github.com/deeplethe/solid-glass)**（以下稱 SG）：SG 的檔**原樣 vendor** 在 [`apps/web/src/vendor/solid-glass/`](apps/web/src/vendor/solid-glass/README.md)，vendor 檔不動，要改的寫在後載入、layer 外的覆寫檔並逐條登記在該目錄 README 的「本地修改」；對比、焦點、reduced-motion 這些無障礙門檻照本專案的（[`.docs/web-ui-spec.md`](.docs/web-ui-spec.md) §5），SG 的色值配合調整。元件目前仍是 shadcn registry 的 Radix 版，換成 SG 的 Base UI 版在地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497) 的第 ③ 步。視覺、設計 token、動效的數值以 SG 為準；[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 只當**元件多樣性與交互模式**的參考，用在 SG 沒有定義的元件或互動上（例如 #1497 第 ⑤ 步的設計稿）（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。最後長成本專案自己的系統風格。AI 專屬元件（思考過程、工具呼叫、核准、串流回覆這類）另以 [beautiful-ui](https://github.com/slev12397/beautiful-ui) 為參考對象：**不安裝、不複製程式碼**，要吸收就用本專案的元件與設計數值重寫，比對與取捨見 [`.docs/beautiful-ui-comparison.md`](.docs/beautiful-ui-comparison.md)（地圖 [#1278](https://github.com/DemianLi/nexus-agent/issues/1278)）。「不複製程式碼」管的是 beautiful-ui；SG 是例外，照上面的 vendor 規則。tool-run、reasoning-row、status-line、context-meter、changes、question-panel、composer 這 7 組在 #1497 的第 ④ 步改用 SG 自家的 AI 元件，wire 到 props 由本專案的轉接層接，執行語意照下一句。SG 的來龍去脈見 [#1468 的拍板留言](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)。dsh 在 UI/UX 上**最多只參考元件的多樣性**（有哪些元件、哪些面），不拿來當建議的依據，也不需要寫偏離標註。會動到執行語意的介面行為（例如按下去這一輪停不停）仍照上面的規則。來龍去脈見地圖 [#372](https://github.com/DemianLi/nexus-agent/issues/372) 的 Notes。
+**不在這條範圍內的：web 的 UI/UX**（視覺、設計 token、互動、動效）。這一塊以 **shadcn＋Tailwind 為基底**，外觀與設計 token 用 **[solid-glass](https://github.com/deeplethe/solid-glass)**（以下稱 SG）：SG 的檔**原樣 vendor** 在 [`apps/web/src/vendor/solid-glass/`](apps/web/src/vendor/solid-glass/README.md)，vendor 檔不動，要改的寫在後載入、layer 外的覆寫檔並逐條登記在該目錄 README 的「本地修改」；對比、焦點、reduced-motion 這些無障礙門檻照本專案的（[`.docs/web-ui-spec.md`](.docs/web-ui-spec.md) §5），SG 的色值配合調整。元件目前仍是 shadcn registry 的 Radix 版，換成 SG 的 Base UI 版在地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497) 的第 ③ 步。視覺、設計 token、動效的數值以 SG 為準；[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 只當**元件多樣性與交互模式**的參考，用在 SG 沒有定義的元件或互動上（例如 #1497 第 ⑤ 步的設計稿）（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。最後長成本專案自己的系統風格。AI 專屬元件（思考過程、工具呼叫、核准、串流回覆這類）另以 [beautiful-ui](https://github.com/slev12397/beautiful-ui) 為參考對象：**不安裝、不複製程式碼**，要吸收就用本專案的元件與設計數值重寫，比對與取捨見 [`.docs/beautiful-ui-comparison.md`](.docs/beautiful-ui-comparison.md)（地圖 [#1278](https://github.com/DemianLi/nexus-agent/issues/1278)）。「不複製程式碼」管的是 beautiful-ui；SG 是例外，照上面的 vendor 規則。tool-run、reasoning-row、status-line、context-meter、changes、question-panel、composer 這 7 組在 #1497 的第 ④ 步改用 SG 自家的 AI 元件，wire 到 props 由本專案的轉接層接，執行語意照下一句。SG 的來龍去脈見 [#1468 的拍板留言](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)。dsh 在 UI/UX 上**最多只參考元件的多樣性**（有哪些元件、哪些面），不拿來當建議的依據，也不需要寫對照紀錄。會動到執行語意的介面行為（例如按下去這一輪停不停）仍照上面的規則。來龍去脈見地圖 [#372](https://github.com/DemianLi/nexus-agent/issues/372) 的 Notes。
 
 ## 分支策略
 
@@ -198,9 +205,9 @@ Release 的說明開頭會連到 `docs/upgrade-guide/v<上一個 tag>/`，有這
 
 和 dsh 不同的兩處：
 
-- **只寫中文一份**（理由 2）。dsh 每份有英、中兩份加配對紀錄，500 字上限只套英文；本 repo 的文件只有中文，所以只有
+- **只寫中文一份**（產品需求：本 repo 的文件只有中文）。dsh 每份有英、中兩份加配對紀錄，500 字上限只套英文；本 repo 的文件只有中文，所以只有
   `guide.md`，段落名用 dsh 中文版的「變更」「遷移」，不設字數上限（同 dsh 中文版）。
-- **`<版號>` 取 tag，不取根 `package.json`**（理由 1）。dsh 的 `<version>` 是讀者正在跑的那一版，從根 manifest 讀；
+- **`<版號>` 取 tag，不取根 `package.json`**（現況做不到：manifest 的版號跟 tag 對不上）。dsh 的 `<version>` 是讀者正在跑的那一版，從根 manifest 讀；
   發版順序兩邊一樣，都是版號 commit 先合、再打 tag（dsh `scripts/release/bump.ts` 檔頭）。不同在 manifest 的值：
   本 repo 的 manifest 今天還是 `0.0.0`，跟已發出的 `v0.5.19` 對不上，照抄會把指南全寫進 `v0.0.0/`；而且版號 PR
   合進去到 Release 發出之間，manifest 已經是還沒發的那一版，這段時間合進來的 PR 會把指南放進讀者還沒在跑的目錄。
