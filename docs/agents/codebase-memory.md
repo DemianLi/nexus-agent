@@ -29,7 +29,18 @@ git -C references/cordis checkout v4.0.0-rc.12
 
 它釘在 tag，不 pull；基準換版時，checkout 新 tag 再重跑上面那行 `index_repository(... name: "cordis" ...)`。
 
-索引過的專案會在背景自動更新，不需要每次手動重建。
+### 圖譜不會自己跟上
+
+背景監看只追「目前 MCP session 開在哪個專案」那一份；從 CLI 或從別的專案的 session 建的索引都不監看（[v0.12.0 release notes](https://github.com/DeusData/codebase-memory-mcp/releases/tag/v0.12.0)〈Upgrade notes〉）。上表三份在 worktree 裡開的 session 都不算：session 開在 `.claude/worktrees/<名字>`，`nexus-agent` 指向主 checkout，另外兩份在 `references/` 底下。所以三份都要手動重建，才會跟上原始碼。
+
+要知道某一份有沒有被監看，看 `index_status` 的 `watch`：
+
+```
+index_status(project: "nexus-agent")
+→ watch: { watched: false, reason: "not_session_project" }
+```
+
+圖譜落後時，用同一個專案名重跑上面那行 `index_repository`；名字寫錯會長出一份新的圖譜，而不是更新原本那份。主 checkout 停在舊 commit 時，`nexus-agent` 反映的就是那個 commit，不是你 worktree 裡還沒合的改動，要引用最新內容就讀原始碼或 grep。
 
 ## 分工：正向走圖，否定配 grep
 
