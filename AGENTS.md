@@ -40,13 +40,12 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 
 兩種 PR，兩種格式。
 
-**feature → develop**：照 [`.github/pull_request_template.md`](.github/pull_request_template.md)，寫法照 `mattpocock-skills:pr`（Summary／Evidence／Merge Danger 對應「摘要／證據／合併風險」），段落標題用中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md) 指到的領域詞彙。骨架：
+**feature → develop**：標準格式是 `mattpocock-skills:pr`，照 [`.github/pull_request_template.md`](.github/pull_request_template.md)。段落標題與欄位名照 `/pr` 原文用英文，內文寫中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md) 指到的領域詞彙。`/pr` 之外只加兩處：第一行的 `Refs #N`，與 Summary 裡的「對照 dsh」。骨架：
 
 - 第一行 `Refs #N`（不寫 Closes）；
-- `## 摘要`：挑最小的一張圖（虛擬碼、呼叫樹、元件樹、檔案樹或 diff 草圖），配一兩句話；GitHub 上 Mermaid 只露出一小塊，優先用文字樹或 diff 草圖；
-- `## 證據`：改之前／改之後，截圖最好，其次是測試或指令的實際輸出，突變結果放這裡。**寫實際跑過的，沒跑過就寫沒跑過**，這一段的價值來自它是真的；
-- `## 合併風險`：門（單向或雙向。單向指合了很難回頭：資料格式、落盤內容、出廠設定、對外協定）與影響範圍（一個詞）；檔案歸屬的同批適配（見「檔案歸屬」）也寫在這裡；
-- `## 對照 dsh`：照「技術實現標準」的三步寫：dsh 怎麼做與為什麼、比較了哪些做法、選了哪個與好在哪；做法跟 dsh 一樣的寫一行出處。沒有涉及技術實現的 PR（純文件、純設定）就整段刪掉。
+- `## Summary`：挑最小的一張圖（虛擬碼、呼叫樹、元件樹、檔案樹或 diff 草圖），配一兩句話；GitHub 上 Mermaid 只露出一小塊，優先用文字樹或 diff 草圖。涉及技術實現的 PR，圖之後接 `**對照 dsh：**`，照「技術實現標準」的三步寫：dsh 怎麼做與為什麼、比較了哪些做法、選了哪個與好在哪；做法跟 dsh 一樣的寫一行出處。純文件、純設定的 PR 刪掉這一段；
+- `## Evidence`：`**Before:**`／`**After:**` 兩項，截圖最好，其次是測試或指令的實際輸出，突變結果放這裡。**寫實際跑過的，沒跑過就寫沒跑過**，這一段的價值來自它是真的；
+- `## Merge Danger`：`**Door:**` 寫 one-way 或 two-way（one-way 指合了很難回頭：資料格式、落盤內容、出廠設定、對外協定），`**Blast Radius:**` 寫一個詞；檔案歸屬的同批適配（見「檔案歸屬」）也寫在這裡。
 
 用 `gh pr create --body` 開 PR 時 CLI 不會自動套模板，要自己照骨架填。feature PR 的內文 gate 不檢查。
 
@@ -82,7 +81,7 @@ git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git referenc
    - 現有基座做不做得到：今天是 deepagents／LangChain JS／LangGraph JS，正遷往 vendor 的 Cordis，見 [`.docs/decisions-2026-10-11.md`](.docs/decisions-2026-10-11.md)。
 3. **選比較好的那一個，寫明它好在哪。** 比不出高下時照 dsh，因為它的做法已經在實際使用中驗證過。
 
-**記在哪：** 對照與取捨寫在 PR 內文〈對照 dsh〉，或 `docs/`、`.docs/` 的 md（決議、設計文件），不寫進程式碼與註解（見 [`docs/standards.md`](docs/standards.md)）。做法跟 dsh 一樣的，寫一行出處就好；不一樣的，寫完整的比較。
+**記在哪：** 對照與取捨寫在 PR 內文 Summary 的「對照 dsh」，或 `docs/`、`.docs/` 的 md（決議、設計文件），不寫進程式碼與註解（見 [`docs/standards.md`](docs/standards.md)）。做法跟 dsh 一樣的，寫一行出處就好；不一樣的，寫完整的比較。
 
 這條規則撐起了 [`.docs/development-plan.md`](.docs/development-plan.md) 裡大半的設計決定；來龍去脈見已關閉的地圖 [#26](https://github.com/DemianLi/nexus-agent/issues/26)。
 
