@@ -12,11 +12,22 @@
 | --- | --- | --- |
 | `nexus-agent` | repo 根目錄 | 照 `.gitignore` 排除 `references/`、`node_modules/`；`.claude/` 也被排除 |
 | `deepseek-harness` | `references/deepseek-harness` | 技術實現標準（見 [AGENTS.md](../../AGENTS.md#技術實現標準)），另外索引 |
+| `cordis` | `references/cordis` | 上游 [cordiverse/cordis](https://github.com/cordiverse/cordis)，checkout 在 `v4.0.0-rc.12`（`01b39624`）：Cordis 的比對基準是 rc.12（demian 2026-10-23，[#1937](https://github.com/DemianLi/nexus-agent/issues/1937)），`vendor/` 本身仍停在 rc.11（見 [vendor/README.md](../../vendor/README.md)） |
 
 ```
 index_repository(repo_path: "<repo>", name: "nexus-agent", mode: "full")
 index_repository(repo_path: "<repo>/references/deepseek-harness", name: "deepseek-harness", mode: "full")
+index_repository(repo_path: "<repo>/references/cordis", name: "cordis", mode: "full")
 ```
+
+`references/cordis` 同樣不進版控，要自己拉一份並釘在 tag 上：
+
+```bash
+git clone https://github.com/cordiverse/cordis.git references/cordis
+git -C references/cordis checkout v4.0.0-rc.12
+```
+
+它釘在 tag，不 pull；基準換版時，checkout 新 tag 再重跑上面那行 `index_repository(... name: "cordis" ...)`。
 
 索引過的專案會在背景自動更新，不需要每次手動重建。
 
