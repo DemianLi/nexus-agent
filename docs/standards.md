@@ -22,6 +22,10 @@
 
 等 Phase 1 有真正的 plugin 實作之後，再回頭評估要不要加量化門檻。
 
+## 註解
+
+**註解寫 HEAD 的現況：契約、不變量、理由、外部限制，以及程式碼表達不出來的事**（照 dsh `AGENTS.md`〈Type safety and documentation〉與 `dsh-prose-standard`）。變更的來龍去脈（原本怎樣、改成怎樣、審查時怎麼決定）寫在 PR 內文；squash 合併時 PR 內文會成為 develop 上的 commit 內文，那裡就是它的家。`照 dsh …`／`偏離 dsh …` 標註與 issue 引用留在程式碼裡。逐條的判準與審查流程見 [`comment-audit`](../.agents/skills/comment-audit/SKILL.md)。
+
 ## 秘密與環境變數
 
 GitHub 端已啟用 secret scanning 與 push protection，但它們只擋得住已知格式的憑證被 push，擋不住自己造的洞。三條規範：
