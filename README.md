@@ -91,7 +91,7 @@ pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 
 ```
 
 程式碼規範見 [`docs/standards.md`](docs/standards.md)。分支策略、PR 標題格式、發版流程與設計方法論
-（含對 DeepSeek Harness 的偏離規則）見 [AGENTS.md](AGENTS.md)。
+（含怎麼參照 DeepSeek Harness 選做法）見 [AGENTS.md](AGENTS.md)。
 
 CI 只有 `gate` 一個 required status check，無條件觸發。`plan` job 以 `git diff` 決定要掃什麼，
 lint、typecheck、各套件測試與 web build 平行跑，`gate` 只是把它們的結果收斂成單一燈號。
