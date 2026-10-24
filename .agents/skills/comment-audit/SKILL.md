@@ -7,7 +7,7 @@ description: 審查一份 diff 或指定檔案裡的程式註解，逐條判 kee
 
 用沒看過這段程式碼的眼睛讀範圍內每一條註解，判它留、補、修、刪，或交回給人決定，每個判決都附證據。目標是 develop 上只留讀者在 HEAD 用得到的註解：契約、不變量、理由、外部限制。這是指引，不是腳本：清單外的判斷照樣要做，[`docs/standards.md`](../../../docs/standards.md)〈註解〉的條文照樣適用。
 
-判準照 dsh 的 [`dsh-prose-standard`](https://github.com/deepseek-ai/deepseek-harness/blob/22ddee3792402c3e70ec5f86a63c3e3e895a2f60/.agents/skills/dsh-prose-standard/SKILL.md) 與 [`dsh-trim-cot-leakage`](https://github.com/deepseek-ai/deepseek-harness/blob/22ddee3792402c3e70ec5f86a63c3e3e895a2f60/.agents/skills/dsh-trim-cot-leakage/SKILL.md)；本檔只寫本 repo 的流程與 nexus 專屬的保留項。判例拿不準時讀那兩份的原文。
+判準以 dsh 的 [`dsh-prose-standard`](https://github.com/deepseek-ai/deepseek-harness/blob/22ddee3792402c3e70ec5f86a63c3e3e895a2f60/.agents/skills/dsh-prose-standard/SKILL.md) 與 [`dsh-trim-cot-leakage`](https://github.com/deepseek-ai/deepseek-harness/blob/22ddee3792402c3e70ec5f86a63c3e3e895a2f60/.agents/skills/dsh-trim-cot-leakage/SKILL.md) 為參照，本檔寫 nexus 自己的取捨與流程。判例拿不準時讀那兩份的原文。
 
 ## 模式
 
@@ -42,7 +42,6 @@ description: 審查一份 diff 或指定檔案裡的程式註解，逐條判 kee
 - **契約**：public JSDoc 的回傳區別、throw／reject、副作用、擁有權、時機、取消、落盤保證。
 - **非局部的結構**：不變量、競態順序、擁有權、安全邊界、出乎意料的失敗行為。
 - **外部限制**：我們改不了的依賴、平台、協定逼出來的行為。
-- **dsh 標註**：`照 dsh <path:line>`、`偏離 dsh（理由 1／2）…`。AGENTS.md〈技術實現標準〉要求寫，判 keep；只有路徑已經對不上時判 trim 修正。
 - **issue 引用**：`#1529`、`TODO(#N)` 這類在 HEAD 解析得到的連結。
 - **回歸釘**：「沒有 X 就會 Y」這種現在式的反事實。
 - **量測值**：「（量測：…）」校準一個常數的數字與出處。
@@ -61,6 +60,7 @@ description: 審查一份 diff 或指定檔案裡的程式註解，逐條判 kee
 - **審查往來**：審查時決定、某某說、第 N 版、被拒的寫法。留下決定與理由，刪掉誰在何時說。
 - **對審查者辯護**：「這樣是安全的，因為…」。改寫成讓它安全的不變量，程式碼看得出來就刪。
 - **流程敘事**：「先 X，再 Y」、測試的逐步導覽、顯而易見的分支證明。
+- **dsh 出處與偏離紀錄**：`照 dsh <path:line>`、`偏離 dsh（理由 1／2）…`、`對應 dsh 的 X`。這類紀錄的家是 PR 內文〈偏離 dsh〉或 `docs/`、`.docs/` 的 md。註解裡留下這段程式碼自己的契約與理由，用 nexus 的話寫；出處與偏離理由整段移到 PR 內文或對應的 md，不留在程式碼裡。
 - **對話裡的引用**：決策編號、稽核代號、草稿的 §N、階段代號。有落盤的出處就指名路徑或 issue；沒有就刪引用、留命題。
 - **含糊與計畫殘渣**：「先暫時」「應該夠了」「之後再說」。寫成實際的界限，或換成 `TODO(#N)`。
 - **重述程式碼**、橫幅、註解掉的程式碼。
@@ -116,13 +116,15 @@ report 模式寫成建議，fix 模式照做。
 2. **MUST KILL**：每列一個：檔案與行、符號、註解的主張、為什麼走、最小修法。
 3. **add／restore**：檔案與行、缺的是哪一項覆蓋、建議的文字。
 4. **trim／delete**：依「該走的」類別計數；被要求時才逐條列檔案與行。
-5. **keep**：檔案與行、屬於「該留的」哪一項、今天為真的證據。只列靠主張留下、經過第 2 步查證的；契約與 dsh 標註計數即可。
-6. **defer**：約束、模型看得到的文字、兩難的寫法，各附選項。
-7. **被退回的子代理輸出**與重跑。
-8. **待辦**：範圍外的事、架構草圖、需要人決定的 suppression。
+5. **keep**：檔案與行、屬於「該留的」哪一項、今天為真的證據。只列靠主張留下、經過第 2 步查證的；契約計數即可。
+6. **移出的紀錄**：從註解移走的 dsh 出處與偏離理由，每條寫明要放進 PR 內文〈偏離 dsh〉還是哪份 md，附要寫的文字，讓紀錄不會因為刪註解而消失。
+7. **defer**：約束、模型看得到的文字、兩難的寫法，各附選項。
+8. **被退回的子代理輸出**與重跑。
+9. **待辦**：範圍外的事、架構草圖、需要人決定的 suppression。
 
 ## fix 模式
 
 - 依報告套用判決，最小的先做；MUST KILL 的修法照第 4 步。
+- 移出的紀錄在同一張 PR 寫進 PR 內文〈偏離 dsh〉或對應的 md，再刪註解。
 - 對碰到的檔跑 lint、typecheck 與測試，回報實際結果。
 - 要求 commit 時，註解的增刪與程式碼的修法分成不同的 commit。
