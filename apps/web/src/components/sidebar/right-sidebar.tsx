@@ -7,8 +7,8 @@
  *   **窄螢幕載入時一律從收起開始**，不照存下來的「開著」恢復：一進來整個對話就被蓋住不是人要的。
  * - **分頁第一次被選中才掛上**：重新整理後恢復十個分頁，不該一口氣打十份讀取。掛過之後切走只是藏起來。
  * - **計劃（#654）**：審核面板與計劃卡按「查看全文」打開同一個分頁，焦點進分頁，停靠時收起鈕把焦點交回按下去的那顆；
- *   待審時 1024 以上自動停靠一次（`autoOpenPlan`），1024 以下不自動開。內容讀的是對話裡那一份（`sources.plans`），
- *   不另外打讀取。
+ *   待審時 1024 以上自動停靠一次（`autoOpenPlan`），1024 以下不自動開。內容先讀對話裡那一份（`sources.plans`）；
+ *   不在載入的對話裡時往前掃歷史找它（#1798），見 `PlanTab`。
  *
  * 檔案分工：契約型別（`RightSidebarSources`、`RightSidebarApi`、`PanelBodyProps`、`TurnReveal`）在 `lib/right-sidebar-api.ts`，
  * context 與卡片用的 `useRightSidebar` 在 `right-sidebar-context.ts`；面板與卡片只取這兩處，不 import 回這個檔（#1127）。
@@ -134,6 +134,16 @@ export function RightSidebarProvider({
   const locateFocus = useRef<HTMLElement | null>(null);
   const [reveal, setReveal] = useState<TurnReveal | undefined>(undefined);
   const revealCount = useRef(0);
+  const [scannedPlanTitles, setScannedPlanTitles] = useState<ReadonlyMap<string, string>>(
+    () => new Map(),
+  );
+  const noteScannedPlan = useCallback(
+    (id: string, title: string) =>
+      setScannedPlanTitles((previous) =>
+        previous.get(id) === title ? previous : new Map(previous).set(id, title),
+      ),
+    [],
+  );
   useEffect(() => {
     if (touched.current) writeLayout(threadId, layout);
   }, [threadId, layout]);
@@ -214,12 +224,26 @@ export function RightSidebarProvider({
       focusTab,
       returnFocus,
       locateFocus,
+      scannedPlanTitles,
+      noteScannedPlan,
       reveal,
       settleReveal,
       update,
       setWidth,
     }),
-    [api, layout, sources, isMobile, width, reveal, settleReveal, update, setWidth],
+    [
+      api,
+      layout,
+      sources,
+      isMobile,
+      width,
+      scannedPlanTitles,
+      noteScannedPlan,
+      reveal,
+      settleReveal,
+      update,
+      setWidth,
+    ],
   );
   return <Control.Provider value={control}>{children}</Control.Provider>;
 }
@@ -475,13 +499,13 @@ function EmptyState() {
 }
 
 /**
- * 計劃分頁（#654）。那一份不在載入的對話裡時（重新整理後還原的分頁、計劃在更早的輪），照 dsh 的 `planResourceProvider` 另外往前
- * 讀歷史找它（#1798，`Conversation.findPlan`），**不動對話窗口**：找到先在這裡顯示全文，旁邊一顆鈕先 `loadThrough` 載到那一頁
+ * 計劃分頁（#654）。那一份不在載入的對話裡時（重新整理後還原的分頁、計劃在更早的輪），另外往前讀歷史找它
+ *（#1798，`Conversation.findPlan`），**不動對話窗口**：找到先在這裡顯示全文，旁邊一顆鈕先 `loadThrough` 載到那一頁
  * （同觀測分頁，#1601）、計劃出現在對話裡之後再捲到那張計劃卡。掃完沒有、讀取失敗都只講一句。**「待定位」記在這一層**：載完之後
- * 計劃庫裡有了它，鈕那一格卸掉。
+ * 計劃庫裡有了它，鈕那一格卸掉。掃到時把標題記進提供者（`noteScannedPlan`），分頁標籤在定位之前就寫得出標題。
  */
 function PlanTab({ id }: { id: string }) {
-  const { api, sources, isMobile } = useControl();
+  const { api, sources, isMobile, noteScannedPlan } = useControl();
   /** 對話條目裡的那一份：有它才定位得到。 */
   const entriesPlan = sources.plans?.get(id);
   const { findPlan, loadThrough } = sources;
@@ -509,6 +533,10 @@ function PlanTab({ id }: { id: string }) {
   const found =
     entriesPlan === undefined && scan !== 'scanning' && scan?.kind === 'found' ? scan : undefined;
   const shown = entriesPlan ?? found?.plan;
+  const foundTitle = found?.plan.title;
+  useEffect(() => {
+    if (foundTitle !== undefined) noteScannedPlan(id, foundTitle);
+  }, [foundTitle, id, noteScannedPlan]);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'settled' | 'missing'>('idle');
   const preview = useRef<HTMLElement>(null);
   const stillMissing = useRef<HTMLParagraphElement>(null);
@@ -716,7 +744,7 @@ export function changesTabTitle(
 }
 
 function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefined } {
-  const { sources } = useControl();
+  const { sources, scannedPlanTitles } = useControl();
   const store = sources.changes?.summary;
   const seq = tab.kind === 'changes' ? tab.seq : undefined;
   const summary = useSyncExternalStore(store?.subscribe ?? noSubscribe, () =>
@@ -728,7 +756,7 @@ function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefin
   if (isPanelTab(tab)) return { label: PANELS[tab.kind].title, detail: undefined };
   if (tab.kind === 'deliverable') return { label: basename(tab.file.path), detail: tab.file.path };
   if (tab.kind === 'plan') {
-    const title = sources.plans?.get(tab.id)?.title ?? '計劃';
+    const title = sources.plans?.get(tab.id)?.title ?? scannedPlanTitles.get(tab.id) ?? '計劃';
     return { label: title, detail: title };
   }
   return changesTabTitle(typeof summary === 'object' ? summary : undefined);
