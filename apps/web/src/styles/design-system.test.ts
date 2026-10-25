@@ -16,7 +16,7 @@ import { readCascade } from './css-cascade';
  * 十三條：
  * 1. **不用 Tailwind 預設色板**（`text-red-500`、`bg-white`、`bg-black/50`…）：顏色只走語意 token（`bg-card`、`text-destructive`…）。
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
- * 3. **圓角只走階梯**（`rounded-sm`…`rounded-3xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
+ * 3. **圓角只走階梯**（`rounded-sm`…`rounded-4xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
  * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`shadow-material`＋`rounded-3xl`，或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著展開轉的 `rotate-*`（Base UI 的 `data-panel-open`，
@@ -234,11 +234,6 @@ const ALLOWED: readonly Allowed[] = [
     file: 'components/surface.tsx',
     what: 'bg-card border rounded-3xl',
     why: '`Surface` 的 docked 配方本身：全站唯一該寫這串的地方',
-  },
-  {
-    file: 'components/session-reference.tsx',
-    what: 'text-[0.9em]',
-    why: '行內引用比周圍字小一點，要跟著周圍的字級走，所以用相對的 em，不是絕對值',
   },
 ];
 
