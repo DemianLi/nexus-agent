@@ -92,7 +92,6 @@ const TEXT: [string, string][] = [
   ['popover-foreground', 'popover'],
   ['muted-foreground', 'background'],
   ['muted-foreground', 'card'],
-  ['muted-foreground', 'stage'],
   // 可點的小面（#1689）：平常是 `--muted`，上面是次要字；hover 照 SG ghost 是 `--hover`，字是 foreground。
   ['muted-foreground', 'muted'],
   ['foreground', 'hover'],
@@ -108,13 +107,29 @@ const TEXT: [string, string][] = [
   ['success', 'card'],
   ['status-interrupted', 'card'],
   ['status-done', 'card'],
-  // 程式碼區塊（stage）上的語法色（`shiki.css`）。
-  ['foreground', 'stage'],
-  ['brand', 'stage'],
-  ['destructive', 'stage'],
-  ['success', 'stage'],
-  ['status-interrupted', 'stage'],
 ];
+
+/**
+ * 畫在 stage 上的字（#1689）：stage 的面是 SG 的 `--hover-faint`，本身半透明，疊在每一疊頁面上、也疊在每一疊頁面上的卡片上
+ * （工具卡、交付清單在對話裡，提問面板、程式碼區塊也可能在卡片裡），最差的那一疊要過 4.5。語法色見 `shiki.css`，連結是回覆裡的。
+ */
+const STAGE_TEXT = [
+  'foreground',
+  'muted-foreground',
+  'brand',
+  'link',
+  'destructive',
+  'success',
+  'status-interrupted',
+];
+
+function onPagesAndCards(theme: Theme, mode: Mode): string[][] {
+  const pages = bases(theme, mode);
+  return [...pages, ...pages.map((stack) => [...stack, 'card'])];
+}
+
+/** stage 疊在卡片上至少要分得出來：原型 eb800a1 的 stage 對卡片（產生器的 `T.stage`），只疊在底色上量，同 {@link SURFACES}。 */
+const STAGE_ON_CARD = 1.05;
 
 const NON_TEXT: [string, string][] = [
   ['ring', 'background'],
@@ -131,7 +146,7 @@ const STATUS = ['destructive', 'success', 'status-done', 'status-interrupted', '
  */
 const SURFACES: [string, string][] = [
   ['card', 'background'],
-  ['stage', 'card'],
+  ['hover-faint', 'card'],
   ['muted', 'background'],
   ['sidebar', 'background'],
   ['border', 'background'],
@@ -165,6 +180,21 @@ describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mod
   for (const theme of THEMES) {
     test.each(TEXT)(`${theme}：文字 %s 對 %s ≥ 4.5`, (fg, bg) => {
       expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(4.5);
+    });
+
+    test.each(STAGE_TEXT)(
+      `${theme}：文字 %s 對 stage（hover-faint 疊在頁面與卡片上）≥ 4.5`,
+      (fg) => {
+        expect(
+          contrast(mode, theme, fg, 'hover-faint', onPagesAndCards(theme, mode)),
+        ).toBeGreaterThanOrEqual(4.5);
+      },
+    );
+
+    test(`${theme}：stage（hover-faint）疊在卡片上 ≥ ${STAGE_ON_CARD}`, () => {
+      expect(contrast(mode, theme, 'hover-faint', 'card', ONLY_BACKGROUND)).toBeGreaterThanOrEqual(
+        STAGE_ON_CARD,
+      );
     });
 
     test.each(NON_TEXT)(`${theme}：非文字 %s 對 %s ≥ 3`, (fg, bg) => {

@@ -65,6 +65,13 @@ export type QuestionAnswer = { id: string; selected: string[]; custom?: string }
 /** 單選自動跳之前先停多久（§7）。 */
 const AUTO_ADVANCE_MS = 200;
 
+/**
+ * 釘在捲動區底部那一列的底要不透明，捲過去的題目才不會從底下透出來（stage 的 `--hover-faint` 是半透明的）。畫成面板的那一疊：
+ * hover-faint 疊卡片、疊頁面底色（#1689）。
+ */
+const STICKY_STAGE =
+  'bg-background bg-[image:linear-gradient(var(--hover-faint),var(--hover-faint)),linear-gradient(var(--card),var(--card))]';
+
 /** 「第 2 題，共 3 題」：進度字與 legend 前的 sr-only 題號同一句（§8）。 */
 export function questionPosition(index: number, total: number): string {
   return `第 ${index + 1} 題，共 ${total} 題`;
@@ -140,7 +147,7 @@ export function QuestionPanel({
 
   // 操作列。有來源時外面再包一層釘住的容器、多一列拒絕／取消，這裡的列自己就不釘（`sticky`＝是不是最外層）。
   const actions = (sticky: boolean) => (
-    <QuestionnaireActions className={sticky ? 'bg-stage sticky bottom-0 pb-4' : undefined}>
+    <QuestionnaireActions className={sticky ? `${STICKY_STAGE} sticky bottom-0 pb-4` : undefined}>
       <QuestionnairePrevious>上一題</QuestionnairePrevious>
       <QuestionnaireSkip>跳過</QuestionnaireSkip>
       <QuestionnaireNext>下一題</QuestionnaireNext>
@@ -257,7 +264,7 @@ export function QuestionPanel({
         {origin === undefined || (onDecline === undefined && onDismiss === undefined) ? (
           actions(true)
         ) : (
-          <div className="bg-stage sticky bottom-0 flex flex-col gap-2 pb-4">
+          <div className={`${STICKY_STAGE} sticky bottom-0 flex flex-col gap-2 pb-4`}>
             {actions(false)}
             <div className="flex justify-end gap-2" data-testid="origin-actions">
               {onDecline !== undefined && (

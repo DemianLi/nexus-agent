@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils';
  * （MCP 反問的呼叫參數）。
  *
  * **跟工具輸出的 `Surface tone="stage"`（`tool/result.tsx` 的 `ToolOutputBlock`）不是同一種東西，所以沒有併**：
- * - stage 是卡片裡的**內層底**：`bg-stage` 加一圈細線陰影、`rounded-xl`，上面還有一行「結果」標題，跟工具輸入、diff、搜尋結果排在同一層。
+ * - stage 是卡片裡的**內層底**：SG 的 `--hover-faint` 加一圈細線陰影、`rounded-xl`，上面還有一行「結果」標題，跟工具輸入、diff、搜尋結果排在同一層。
  * - 這個是**平的**一塊 `bg-muted`、`rounded-lg`、沒有邊線也沒有標題，放在文字段落之間（提問面板的來源框裡），
  *   不跟卡片的層次對齊。換成 stage 會在已經有框的地方再疊一層框。
  *

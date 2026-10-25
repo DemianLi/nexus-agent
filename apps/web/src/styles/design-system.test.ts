@@ -18,7 +18,7 @@ import { readCascade } from './css-cascade';
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-4xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
- * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`rounded-3xl`（沒有 `border`），或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
+ * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-(--hover-faint)`＋`shadow-[inset_0_0_0_1px_var(--border)]`、`bg-card`＋`rounded-3xl`（沒有 `border`），或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著展開轉的 `rotate-*`（Base UI 的 `data-panel-open`，
  *    #1638；Radix 的 `data-state=open` 也照擋），就是又手寫了一顆。
  * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-muted`＋`w-full`＋`text-left`＋`min-h-11`，就是又手寫了一列。
@@ -130,8 +130,11 @@ const THIN_WEIGHT = /^font-(?:thin|extralight|light)$/;
 function rulesBroken(text: string): { rule: Rule; what: string }[] {
   const found: { rule: Rule; what: string }[] = [];
   const utilities = new Set(text.split(/\s+/).map(utility));
-  if (utilities.has('bg-stage') && utilities.has('shadow-stage')) {
-    found.push({ rule: '表面', what: 'bg-stage shadow-stage' });
+  if (
+    utilities.has('bg-(--hover-faint)') &&
+    utilities.has('shadow-[inset_0_0_0_1px_var(--border)]')
+  ) {
+    found.push({ rule: '表面', what: 'bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]' });
   }
   if (utilities.has('bg-card') && utilities.has('rounded-3xl') && !utilities.has('border')) {
     found.push({ rule: '表面', what: 'bg-card rounded-3xl' });
@@ -216,7 +219,7 @@ const ALLOWED: readonly Allowed[] = [
   },
   {
     file: 'components/surface.tsx',
-    what: 'bg-stage shadow-stage',
+    what: 'bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]',
     why: '`Surface` 的 stage 配方本身：全站唯一該寫這串的地方',
   },
   {
@@ -309,7 +312,7 @@ describe('判準', () => {
   test('語意 token 與只是名字像的不算', () => {
     expect(rules('bg-card text-destructive text-muted-foreground bg-muted')).toEqual([]);
     expect(rules('text-primary-foreground border-border ring-ring/50 bg-brand/15')).toEqual([]);
-    expect(rules('bg-background text-foreground bg-stage')).toEqual([]);
+    expect(rules('bg-background text-foreground bg-(--hover-faint)')).toEqual([]);
   });
 
   test('字級：預設階與任意值都擋，規格的四階與顏色的 text-* 不擋', () => {
@@ -345,11 +348,15 @@ describe('判準', () => {
   });
 
   test('表面：手寫 stage 或 raised 的整組配方擋，只用到一部分的不擋', () => {
-    expect(rules('bg-stage shadow-stage rounded-xl p-3')).toEqual(['表面:bg-stage shadow-stage']);
-    expect(rules('hover:bg-stage dark:shadow-stage')).toEqual(['表面:bg-stage shadow-stage']);
+    expect(
+      rules('bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)] rounded-xl p-3'),
+    ).toEqual(['表面:bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]']);
+    expect(rules('hover:bg-(--hover-faint) dark:shadow-[inset_0_0_0_1px_var(--border)]')).toEqual([
+      '表面:bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]',
+    ]);
     expect(rules('bg-card rounded-3xl p-1')).toEqual(['表面:bg-card rounded-3xl']);
     expect(rules('bg-card rounded-3xl')).toEqual(['表面:bg-card rounded-3xl']);
-    expect(rules('bg-stage sticky bottom-0 pb-4')).toEqual([]);
+    expect(rules('bg-(--hover-faint) sticky bottom-0 pb-4')).toEqual([]);
     expect(rules('bg-card rounded-lg p-1')).toEqual([]);
     expect(rules('bg-card border rounded-3xl p-1')).toEqual(['表面:bg-card border rounded-3xl']);
     expect(rules('bg-card border rounded-lg')).toEqual([]);
