@@ -33,7 +33,11 @@
  * **讀檔記的版本可以由 backend 回報**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：`read_file` 成功之後
  * 本來要再 `readRaw` 一次才有版本，等於同一個檔讀兩遍（大檔更糟）。能邊讀邊算出同一個 token 的 backend
  * （{@link createVersionHasher}、{@link noteReadVersion}）直接把版本交上來，這裡就記它，不再讀；沒回報的照舊 `readRaw`。
- * 寫與改前的比對仍是 `readRaw`，兩邊的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
+ * 兩邊的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
+ *
+ * **寫與改前的比對只做 stat**（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）：掛了 {@link FILE_VERSION} 的 backend
+ * 用 stat 組版本，不讀內容；圍堵 backend 的 token 照 dsh `dev:ino:size:mtimeNs:ctimeNs`（`fs-local/src/fsio.ts:76-78`），`read_file` 回報的也是它。
+ * 沒有這一格的 backend 照舊整份 `readRaw` 算 {@link versionOf}。
  *
  * **規則寫在系統提示詞，照 dsh**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。dsh 的 `write`、`edit` 各用一個
  * `ctx.systemPrompt.section`（`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，`687f282e`），工具在場才寫：
@@ -222,6 +226,41 @@ export function noteReadVersion(version: string): void {
 }
 
 /**
+ * backend 不讀內容、只看 stat 就給得出版本的那個方法（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。
+ * 基座的 `BackendProtocol` 沒有這一格，所以掛在一個 symbol 上，不跟基座日後的方法名撞。
+ *
+ * 實作了它的 backend，寫與改前的比對只做 stat；沒實作的（記憶體的 `StateBackend`、插件掛的路由）照舊整份 `readRaw` 算 {@link versionOf}。
+ * **同一個 backend 的 `read_file` 回報（{@link noteReadVersion}）必須是同一種 token**，否則讀完就改會被當成「讀過之後被改動了」。
+ */
+export const FILE_VERSION = Symbol.for('nexus.backend.file-version');
+
+/** {@link FILE_VERSION} 的結果：`undefined` 是「這一格回答不了」，由 observation 退回 `readRaw`。 */
+export type FileVersionLookup =
+  | { readonly kind: 'present'; readonly version: string }
+  | { readonly kind: 'absent' }
+  | undefined;
+
+/** 掛了 {@link FILE_VERSION} 的 backend。 */
+export interface FileVersionSource {
+  [FILE_VERSION](path: string): Promise<FileVersionLookup>;
+}
+
+/**
+ * 問 backend 這個檔的 stat 版本；沒有這一格就是 `undefined`。
+ *
+ * @param backend - 工具實際讀寫的那個 backend。
+ * @param path - 模型給的原路徑。
+ */
+export async function fileVersionOf(
+  backend: unknown,
+  path: string,
+): Promise<FileVersionLookup> {
+  const source = (backend as Partial<FileVersionSource> | null | undefined)?.[FILE_VERSION];
+  if (typeof source !== 'function') return undefined;
+  return source.call(backend, path);
+}
+
+/**
  * 一則說得出恢復辦法的拒絕：模型看到 `Error: <原因>`，**碼不進文字**
  * （[#318](https://github.com/DemianLi/nexus-agent/issues/318)）。照 dsh：`FsError` 拋出來由
  * `toolErrorResult` 渲染，碼只在 `error.info`（`packages/core/tools/src/index.ts:635-641`）。
@@ -344,6 +383,13 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
    * 不會放寬任何一格。
    */
   const look = async (path: string): Promise<Observation> => {
+    // 給得出 stat 版本的 backend 不讀內容（#2030）。它自己的失敗一樣收斂成「不存在」，理由同下。
+    try {
+      const stated = await fileVersionOf(backend, path);
+      if (stated !== undefined) return stated;
+    } catch {
+      return { kind: 'absent' };
+    }
     let result: unknown;
     try {
       result = await fs.readRaw(path);
