@@ -117,7 +117,7 @@ export function StatusLine({
             type="button"
             variant="outline"
             size="sm"
-            className="h-11 shrink-0 rounded-full lg:h-8"
+            className="h-11 shrink-0 lg:h-8"
             onClick={onReconnect}
           >
             立刻重連

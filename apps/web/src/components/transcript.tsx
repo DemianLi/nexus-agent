@@ -277,7 +277,7 @@ function Marker({ children, testId }: { children: string; testId: string }) {
   return (
     <div className="flex justify-center">
       <p
-        className="text-muted-foreground bg-chip rounded-full px-3 py-1 text-tip"
+        className="text-muted-foreground bg-chip rounded-4xl px-3 py-1 text-tip"
         data-testid={testId}
       >
         {children}
@@ -729,10 +729,7 @@ export function Transcript({
           </MessageScrollerContent>
         </MessageScrollerViewport>
         {/* 壓到對話裡的輸入區（子代理面板）就藏起來（#1295，`use-scroll-button-clearance.ts`）。 */}
-        <MessageScrollerButton
-          className="rounded-full data-[obscuring]:invisible"
-          behavior={scrollBehavior()}
-        >
+        <MessageScrollerButton className="data-[obscuring]:invisible" behavior={scrollBehavior()}>
           <ArrowDown />
           <span className="sr-only">捲到最新的訊息</span>
         </MessageScrollerButton>

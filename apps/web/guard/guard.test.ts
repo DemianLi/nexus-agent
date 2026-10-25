@@ -64,6 +64,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 18. **工具卡的 diff**（#1685 PR B，`?overlay=diff-view`，產品的 `ToolRun`＋`ToolCard`）：SG `DiffView` 每一種行（`diff --git`、`@@`、
  *    新增、刪除、上下文、`... 還有 N 行沒畫`）在 `StepList` 裡與單獨放在頁面上都過 4.5；疊在清單裡的沒有 blur、單獨的照 SG 有（第 65 條）；
  *    聚焦時 2px 外框沒被切掉、方向鍵捲得動（patch `0024`）。
+ * 20. **會話引用與 G2 圓角**（#1695 PR B，`?overlay=transcript-refs`，產品的 `Transcript`＋`StatusLine`）：能點的引用一直帶 brand 色底線、
+ *    底線對泡泡底過 3，不能點的沒有底線；兩種的字過 4.5；引用與「立刻重連」的焦點外框；決定紀錄的 chip 是 SG Badge 的圓角，
+ *    捲到底的鈕與「立刻重連」是 SG Button 的圓角。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -4117,4 +4120,137 @@ describe('瀏覽器量工具卡的 diff 的覆寫與焦點（#1685 PR B）', () 
       }
     },
   );
+});
+
+/**
+ * 會話引用與 G2 圓角（#1695 PR B，`?overlay=transcript-refs`）。能點的引用不靠 hover 也看得出來：一直帶 brand 色底線，底線對
+ * 泡泡底過 {@link NON_TEXT_MIN}（非文字的辨識門檻）；不能點的沒有底線。圓角拿 SG 的 class 做探針比：chip 是 Badge 的
+ * `rounded-4xl`，捲到底的鈕（`icon-sm`）與「立刻重連」（`sm`）是 Button 的 `rounded-sm`。
+ */
+const REF_LINK = 'button[data-session-reference]';
+const REF_PLAIN = 'span[data-session-reference]';
+const transcriptRefsMarks: Record<string, Record<string, string>> = {
+  [REF_LINK]: { 'data-guard-text': 'ref-link', 'data-guard-focus': 'ref-link' },
+  [REF_PLAIN]: { 'data-guard-text': 'ref-plain' },
+  '[data-testid="decision-entry"]': { 'data-guard-text': 'decision-chip' },
+  '[data-guard-rows="status"] button': { 'data-guard-focus': 'reconnect' },
+};
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量會話引用與圓角（#1695 PR B）：%s', (theme) => {
+  test('引用：能點的帶 brand 底線、過 3；兩種的字過 4.5；引用與「立刻重連」的焦點外框', async () => {
+    const page = await openOverlay('transcript-refs', theme, { marks: transcriptRefsMarks });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        ['ref-link', 'ref-plain', 'decision-chip'],
+        `transcript-refs:${theme}`,
+      );
+      const refs = await page.evaluate(
+        ([link, plain]) => {
+          const probe = document.createElement('span');
+          probe.style.color = 'var(--brand)';
+          document.body.append(probe);
+          const brand = getComputedStyle(probe).color;
+          probe.remove();
+          const read = (el: Element) => {
+            const chain = [];
+            for (let node: Element | null = el; node !== null; node = node.parentElement) {
+              const style = getComputedStyle(node);
+              chain.push({
+                backgroundColor: style.backgroundColor,
+                backgroundImage: style.backgroundImage,
+                opacity: style.opacity,
+              });
+            }
+            const style = getComputedStyle(el);
+            return {
+              line: style.textDecorationLine,
+              color: style.textDecorationColor,
+              thickness: style.textDecorationThickness,
+              chain,
+            };
+          };
+          return {
+            brand,
+            link: [...document.querySelectorAll(link!)].map(read),
+            plain: [...document.querySelectorAll(plain!)].map(read),
+          };
+        },
+        [REF_LINK, REF_PLAIN],
+      );
+      // 量具自檢：能點、不能點各一顆。
+      expect([refs.link.length, refs.plain.length]).toEqual([1, 1]);
+      const link = refs.link[0]!;
+      const underline = worstOn(link.color, link.chain);
+      report[`transcript-refs:${theme}:underline`] = {
+        line: link.line,
+        color: link.color,
+        brand: refs.brand,
+        thickness: link.thickness,
+        ratio: round(underline.ratio),
+        on: underline.on,
+        plain: refs.plain[0]!.line,
+      };
+      expect([link.line, link.color, link.thickness]).toEqual(['underline', refs.brand, '2px']);
+      expect(underline.ratio).toBeGreaterThanOrEqual(NON_TEXT_MIN);
+      expect(refs.plain[0]!.line).toBe('none');
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['ref-link-0', 'reconnect-0']);
+      expectFocus(focus, `transcript-refs:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('G2：決定紀錄的 chip 是 Badge 的圓角，捲到底的鈕與「立刻重連」是 Button 的圓角', async () => {
+    const page = await openOverlay('transcript-refs', theme, { marks: transcriptRefsMarks });
+    try {
+      const radii = await page.evaluate(() => {
+        // 探針的值取自出貨 CSS 裡那一條 utility 的原文（guard 底下不寫 class，`guard-page.test.ts`）。
+        const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]);
+        const find = (selector: string): CSSStyleRule | undefined => {
+          for (const rule of rules) {
+            if (rule instanceof CSSStyleRule && rule.selectorText === selector) return rule;
+            if (rule instanceof CSSGroupingRule)
+              for (const inner of rule.cssRules)
+                if (inner instanceof CSSStyleRule && inner.selectorText === selector) return inner;
+          }
+          return undefined;
+        };
+        const radiusOf = (selector: string) => {
+          const probe = document.createElement('div');
+          probe.style.borderRadius = find(selector)?.style.borderRadius ?? '';
+          document.body.append(probe);
+          const radius = getComputedStyle(probe).borderTopLeftRadius;
+          probe.remove();
+          return radius;
+        };
+        const of = (selector: string) =>
+          [...document.querySelectorAll(selector)].map(
+            (el) => getComputedStyle(el).borderTopLeftRadius,
+          );
+        return {
+          badge: radiusOf('.rounded-4xl'),
+          button: radiusOf('.rounded-sm'),
+          chip: of('[data-testid="decision-entry"]'),
+          scroll: of('[data-slot="message-scroller-button"]'),
+          reconnect: of('[data-guard-rows="status"] button'),
+        };
+      });
+      report[`transcript-refs:${theme}:radii`] = radii;
+      expect(radii).toEqual({
+        badge: radii.badge,
+        button: radii.button,
+        chip: [radii.badge],
+        scroll: [radii.button],
+        reconnect: [radii.button],
+      });
+      // 探針自檢：兩個 class 都真的產出了，而且不是同一個值。
+      expect(radii.badge).not.toBe('0px');
+      expect(radii.button).not.toBe('0px');
+      expect(radii.badge).not.toBe(radii.button);
+    } finally {
+      await page.close();
+    }
+  });
 });

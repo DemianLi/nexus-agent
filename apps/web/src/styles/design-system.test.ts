@@ -240,11 +240,6 @@ const ALLOWED: readonly Allowed[] = [
     what: 'text-2xl',
     why: '空狀態的標題；規格 §5 的字級階只有內文與小字、沒有標題階。要不要加一階由第 3 刀的規則手冊定，定之前不再新增',
   },
-  {
-    file: 'components/session-reference.tsx',
-    what: 'text-[0.9em]',
-    why: '行內引用比周圍字小一點，要跟著周圍的字級走，所以用相對的 em，不是絕對值',
-  },
 ];
 
 interface Violation {

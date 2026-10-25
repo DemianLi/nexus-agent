@@ -64,6 +64,10 @@
  * - `?overlay=diff-stats` 畫增刪行數（SG 的 `DiffStats`＋nexus 包裝層，#1685 PR A）：頁面上一顆、工具段裡寫檔那張卡、改動卡（讀假的
  *   fetch，路徑故意很長）；測試再點開審查頁與選檔器。量 `+`／`−` 在四種底上的對比、算出來的顏色是 `--success`／`--destructive`（第 75 條）、
  *   375 寬不被擠（第 76 條）；三塊各包一層 `data-guard-diffstats`（`page`、`panel`、`changes`）。
+ * - `?overlay=transcript-refs` 畫產品的 `Transcript`（#1695 PR B）：一則人話帶兩個會話引用（`@部署腳本除錯` 能點、`@月報` 不能點）、
+ *   一則壓縮標記與一則決定紀錄（置中的 chip），前面墊幾輪對話讓它捲得動（捲到底的鈕）；底下一條斷線中的狀態列（「立刻重連」）
+ *   與封存橫幅。
+ *   量引用的底線與字、兩顆鈕與 chip 的圓角。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -81,6 +85,7 @@ import { Check, MoreHorizontal } from 'lucide-react';
 import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { ArchivedBanner } from '@/components/archived-banner';
 import { CompactionRow } from '@/components/compaction-row';
 import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
@@ -88,6 +93,7 @@ import { ContextMeter } from '@/components/context-meter';
 import { PendingSwap } from '@/components/pending-swap';
 import { QuestionPanel } from '@/components/question-panel';
 import { ReasoningRow } from '@/components/reasoning-row';
+import { SessionReferenceContext } from '@/components/session-reference';
 import { StatusLine } from '@/components/status-line';
 import { RetryNotice } from '@/components/retry-notice';
 import { Surface } from '@/components/surface';
@@ -1090,6 +1096,55 @@ function MessagesPage() {
   );
 }
 
+const REFS_LINKS = {
+  openable: (sessionId: string) => sessionId === 'thread-mine',
+  open: () => undefined,
+};
+const REFS_ENTRIES: ConversationEntry[] = [
+  ...MESSAGES,
+  COMPACTION,
+  {
+    kind: 'human',
+    id: 'h-refs',
+    text: '照 @部署腳本除錯 的結論，順便看 @月報 那份。',
+    references: [
+      { sessionId: 'thread-mine', label: '部署腳本除錯' },
+      { sessionId: 'thread-other', label: '月報' },
+    ],
+  },
+  { kind: 'decision', id: 'decision-refs', decision: 'approve', actions: ['call-1'] },
+];
+
+function TranscriptRefsPage() {
+  return (
+    <div style={{ height: 600, display: 'flex', flexDirection: 'column' }}>
+      <SessionReferenceContext.Provider value={REFS_LINKS}>
+        <Transcript
+          state={{ ...emptyConversation(), entries: REFS_ENTRIES }}
+          isFresh={() => false}
+        />
+      </SessionReferenceContext.Provider>
+      <div
+        data-guard-rows="status"
+        style={{ maxWidth: '42rem', margin: '0 auto', width: '100%', padding: '0 24px' }}
+      >
+        <StatusLine
+          state={emptyConversation()}
+          connected={false}
+          reconnecting={{ wasConnected: true, offline: false }}
+          onReconnect={() => undefined}
+        />
+      </div>
+      <div
+        data-guard-rows="archived"
+        style={{ maxWidth: '42rem', margin: '0 auto', width: '100%', padding: '0 24px' }}
+      >
+        <ArchivedBanner onRestore={() => Promise.resolve(undefined)} />
+      </div>
+    </div>
+  );
+}
+
 /**
  * 附件（#1638 PR C）：輸入框底下的草稿列兩排，與已送出的附件一排。
  * - `fits`：一張檔案卡、寬度放得下，不會溢出（量左右淡出不出現）。
@@ -1304,6 +1359,8 @@ function OverlayPage({ name }: { name: string }) {
       return <CollapsiblesPage />;
     case 'messages':
       return <MessagesPage />;
+    case 'transcript-refs':
+      return <TranscriptRefsPage />;
     case 'attachments':
       return <AttachmentsPage />;
     case 'tool-steps':
