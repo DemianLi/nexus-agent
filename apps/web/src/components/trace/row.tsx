@@ -72,12 +72,6 @@ function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
       <span className={entry.status === 'failed' ? 'text-destructive' : undefined}>
         {TOOL_STATUS_LABEL[entry.status]}
       </span>
-      {row.time !== undefined && (
-        <span data-testid="trace-time">
-          {clockText(row.time)}
-          {row.durationMs !== undefined && ` · ${durationText(row.durationMs)}`}
-        </span>
-      )}
       {entry.errorCode !== undefined && (
         <code className="font-mono" data-testid="trace-error-code">
           {entry.errorCode}
@@ -90,6 +84,17 @@ function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
         </span>
       )}
     </>
+  );
+}
+
+/** 工具列的時刻與耗時：收進展開區（#1690 T3）。 */
+function toolTime(row: Extract<TraceRow, { kind: 'tool' }>) {
+  if (row.time === undefined) return undefined;
+  return (
+    <span data-testid="trace-time">
+      {clockText(row.time)}
+      {row.durationMs !== undefined && ` · ${durationText(row.durationMs)}`}
+    </span>
   );
 }
 
@@ -137,6 +142,7 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
             summary: row.summary,
             attribution: row.attribution,
             meta: toolMeta(row),
+            time: toolTime(row),
             ...(row.entry.status === 'failed' ? { tone: 'danger' as const } : {}),
           }}
         >
@@ -157,7 +163,7 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
           label={`重試 ${row.retry}/${row.maxRetries}`}
           summary={failureReasonText(row.code, row.status)}
           code={row.code}
-          meta={
+          time={
             <span data-testid="trace-time">
               {clockText(row.time)} · 等了 {durationText(row.waitedMs)}
             </span>
@@ -170,7 +176,7 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
           icon={row.signal === 'reminder' ? Repeat : Info}
           label={SIGNAL_LABEL[row.signal]}
           summary={row.summary}
-          meta={<span data-testid="trace-time">{clockText(row.time)}</span>}
+          time={<span data-testid="trace-time">{clockText(row.time)}</span>}
         />
       );
     case 'decision':
