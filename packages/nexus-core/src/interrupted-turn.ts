@@ -16,6 +16,9 @@
  * （`packages/core/session/src/repair.ts:159-162`）。語意修復歸 agent 層、不歸存放層，所以這裡是一個獨立的 helper，
  * 不放進 `SessionStore.resume`。
  *
+ * 沒配到結果的呼叫補的那幾句也是一輪失敗時當場補的來源（{@link unansweredCallResults}，[#2029](https://github.com/DemianLi/nexus-agent/issues/2029)）：
+ * 兩處共用一份句子與碼。
+ *
  * ## 補哪些（卡上三題 PM 2026-10-08 拍板，一律照 dsh）
  *
  * - **沒配到結果的呼叫都補**：記過 `tool/call` 的說結果不明，回覆裡要了、還沒記到 `tool/call` 的說還沒開始
@@ -34,10 +37,12 @@
  * @module
  */
 
+import type { ToolMessage } from '@langchain/core/messages';
+
 import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
 import { closer, requestedCalls } from './conversation-replay.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
-import type { SessionEvent } from './session-log.js';
+import type { SessionEvent, SessionEventMap } from './session-log.js';
 import type {
   ResumedStoredSession,
   SessionStore,
@@ -45,24 +50,25 @@ import type {
   StoredSessionReadOptions,
 } from './session-store.js';
 
-/**
- * 一份已存日誌的尾巴如果停在一輪開著，算出補結：**沒配到結果的呼叫**各一顆錯誤 `tool/result`（記過 `tool/call` 的說
- * 結果不明，還沒記到的說還沒開始，字逐字照 dsh）、**開著的 `model/start`** 各一顆 `model/end {outcome:'error'}`，最後一顆
- * `turn/end {reason:{kind:'interrupted'}}`。順序照 dsh：結果、步的收尾、輪的收尾。
- *
- * 掃描照 dsh：`turn/start`、`turn/end` 重設（我們的 `turn/failed` 也是收工）；**`session/end-seed` 不重設**，見檔頭。
- * `seq` 接在最後一顆後面、`time` 沿用最後一顆真事件的，所以補結不會捏造一個晚於崩潰的時刻。
- *
- * @param events - 讀回來的全部事件，照 `seq` 排。
- * @returns 要接在後面的補結；已平衡（沒有開著的輪）就是空陣列。
- */
-export function interruptedTurnClosers(events: readonly SessionEvent[]): SessionEvent[] {
-  let open = false;
+/** {@link scanOpenTurn} 掃到的：最後一輪開著沒有，與它還沒結清的東西。 */
+interface OpenTurnScan {
+  readonly open: boolean;
   /** 這一輪的回覆要過、還沒配到結果的呼叫，照要的順序（dsh 的 `ToolCallRecovery.pendingCalls`）。 */
-  const unanswered = new Map<string, string>();
+  readonly unanswered: ReadonlyMap<string, string>;
   /** 其中記過 `tool/call` 的：決定補哪一句。 */
-  const started = new Set<string>();
+  readonly started: ReadonlySet<string>;
   /** 還開著的 `model/start` 的 `seq`，照開的順序。 */
+  readonly openModelStarts: readonly number[];
+}
+
+/**
+ * 掃一遍事件，看最後一輪開著沒有、還欠什麼。掃描照 dsh：`turn/start`、`turn/end` 重設（我們的 `turn/failed` 也是收工）；
+ * **`session/end-seed` 不重設**，見檔頭。
+ */
+function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
+  let open = false;
+  const unanswered = new Map<string, string>();
+  const started = new Set<string>();
   const openModelStarts: number[] = [];
   const reset = (): void => {
     unanswered.clear();
@@ -120,26 +126,62 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
         break;
     }
   }
-  const last = events.at(-1);
-  if (!open || last === undefined) return [];
+  return { open, unanswered, started, openModelStarts };
+}
 
-  let seq = last.seq + 1;
-  const closers: SessionEvent[] = [];
-  for (const [callId, name] of unanswered) {
+/** 一顆沒配到結果的呼叫補的錯誤結果：寫進日誌的 `data`，與寫進對話的那一則（同一個實例）。 */
+export interface UnansweredCallResult {
+  readonly data: SessionEventMap['tool/result'];
+  readonly message: ToolMessage;
+}
+
+/**
+ * 最後一輪如果開著，替它**沒配到結果的呼叫**各算一顆錯誤結果：記過 `tool/call` 的說結果不明，還沒記到的說還沒開始，
+ * 字逐字照 dsh。續接時的補結（{@link interruptedTurnClosers}）與一輪失敗時當場補的（#2029）都從這裡拿，
+ * 句子與碼只有這一份。
+ *
+ * @param events - 全部事件，照 `seq` 排。
+ * @returns 照回覆要的順序；最後一輪沒開著、或都配到了，就是空陣列。
+ */
+export function unansweredCallResults(events: readonly SessionEvent[]): UnansweredCallResult[] {
+  const { open, unanswered, started } = scanOpenTurn(events);
+  if (!open) return [];
+  return [...unanswered].map(([callId, name]) => {
     const wasStarted = started.has(callId);
-    closers.push({
-      type: 'tool/result',
-      seq: seq++,
-      time: last.time,
+    const message = closer({ id: callId, name }, wasStarted);
+    return {
+      message,
       data: {
         callId,
         isError: true,
         error: wasStarted
           ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
           : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
-        message: toLoggedMessage(closer({ id: callId, name }, wasStarted)),
+        message: toLoggedMessage(message),
       },
-    });
+    };
+  });
+}
+
+/**
+ * 一份已存日誌的尾巴如果停在一輪開著，算出補結：**沒配到結果的呼叫**各一顆錯誤 `tool/result`（{@link unansweredCallResults}）、
+ * **開著的 `model/start`** 各一顆 `model/end {outcome:'error'}`，最後一顆 `turn/end {reason:{kind:'interrupted'}}`。
+ * 順序照 dsh：結果、步的收尾、輪的收尾。
+ *
+ * `seq` 接在最後一顆後面、`time` 沿用最後一顆真事件的，所以補結不會捏造一個晚於崩潰的時刻。
+ *
+ * @param events - 讀回來的全部事件，照 `seq` 排。
+ * @returns 要接在後面的補結；已平衡（沒有開著的輪）就是空陣列。
+ */
+export function interruptedTurnClosers(events: readonly SessionEvent[]): SessionEvent[] {
+  const { open, openModelStarts } = scanOpenTurn(events);
+  const last = events.at(-1);
+  if (!open || last === undefined) return [];
+
+  let seq = last.seq + 1;
+  const closers: SessionEvent[] = [];
+  for (const { data } of unansweredCallResults(events)) {
+    closers.push({ type: 'tool/result', seq: seq++, time: last.time, data });
   }
   for (const modelCall of openModelStarts) {
     closers.push({
