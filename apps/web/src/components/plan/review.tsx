@@ -108,7 +108,7 @@ function PlanSummary({ plan, id }: { plan: PlanDocument; id: string }) {
             type="button"
             variant="ghost"
             size="sm"
-            className="text-muted-foreground -my-1 h-11 shrink-0 rounded-full lg:h-8"
+            className="text-muted-foreground -my-1 h-11 shrink-0 lg:h-8"
             aria-label={`${OPEN_PLAN_LABEL}：${plan.title}`}
             onClick={(event) => sidebar.openPlan(id, event.currentTarget)}
           >
@@ -162,18 +162,13 @@ export function PlanReviewPanel({
         <Button
           type="button"
           variant="outline"
-          className="h-11 rounded-full px-5 lg:h-9"
+          className="h-11 px-5 lg:h-9"
           disabled={busy}
           onClick={onRevise}
         >
           要求修改
         </Button>
-        <Button
-          type="button"
-          className="h-11 rounded-full px-5 lg:h-9"
-          disabled={busy}
-          onClick={onApprove}
-        >
+        <Button type="button" className="h-11 px-5 lg:h-9" disabled={busy} onClick={onApprove}>
           同意執行
         </Button>
       </div>
@@ -199,7 +194,7 @@ export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument
         <ScrollText aria-hidden className="size-4 shrink-0" />
         <span className="flex-1">計劃</span>
         {outcome !== undefined && (
-          <span className="bg-chip rounded-full px-3 py-1 text-tip" data-testid="plan-outcome">
+          <span className="bg-chip rounded-4xl px-3 py-1 text-tip" data-testid="plan-outcome">
             {PLAN_OUTCOME_LABEL[outcome]}
           </span>
         )}

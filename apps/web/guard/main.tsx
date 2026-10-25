@@ -75,6 +75,9 @@
  * - `?overlay=handoff` 畫核准與換手這一組（#1694）：換手層裡的核准卡（有允許／不允許的、只剩「停止這一輪」的）、可收起的提問面板（收起鈕）、送出佇列、輸入框上方的委派
  *   chip 與對話裡的委派標記，以及展開的背景子代理卡兩張（跑著、閒著；各包一層 `data-guard-handoff`）。量子代理面板的字、焦點
  *   外框與幾顆鈕的圓角；核准卡的呼吸光一圈還是兩圈只記錄、不斷言，交給截圖（#1694〈要看稿確認〉）。
+ * - `?overlay=plan` 畫計劃與目標這一組（#1692）：輸入框上方的計劃模式標籤三塊（能按、跑著停用、按過一次失敗；各包一層
+ *   `data-guard-plan`）、計劃審核面板（有右側欄，帶「查看全文」）、帶結果 chip 的計劃卡，以及目標列（帶暫停鈕）。量 SG Badge 不在 Tab
+ *   順序裡、「退出」鈕的名稱與停用、字與焦點外框、圓角（G2），375 寬時幾顆鈕 44px 高。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -86,6 +89,8 @@ import type {
   WireAttachmentRef,
   CompactionEntry,
   PendingQuestion,
+  PlanModePayload,
+  WireGoal,
   ToolEntry,
   WireContextPressure,
   WireTodoItem,
@@ -106,6 +111,9 @@ import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { PendingSwap } from '@/components/pending-swap';
+import { PlanChip } from '@/components/plan/chip';
+import { PlanReviewPanel, PlanToolCard } from '@/components/plan/review';
+import { GoalBar } from '@/components/goal-bar';
 import { QuestionPanel } from '@/components/question-panel';
 import { QueueDock } from '@/components/queue-dock';
 import { ReasoningRow } from '@/components/reasoning-row';
@@ -127,6 +135,7 @@ import {
 } from '@/components/ui/message-scroller';
 import { createChangesStores } from '@/lib/changes-diff';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
+import { planDocument, planReviewOf } from '@/lib/plan-review';
 import { serverClock } from '@/lib/server-clock';
 import { Script } from '@/test/conversation-frames';
 import { turn, view, withTrajectory } from '@/test/trajectory-fixtures';
@@ -670,6 +679,93 @@ function HandoffPage() {
       <HandoffSubagent state="running" />
       <HandoffSubagent state="idle" />
     </div>
+  );
+}
+
+const PLAN_TEXT = '# 改登入頁\n\n先把**文案**改成中文。\n\n## 步驟\n\n- 改文案\n- 補測試';
+const PLAN_PENDING = {
+  kind: 'question',
+  interruptId: 'int-plan',
+  namespace: ['tools:a'],
+  questions: [
+    {
+      id: 'plan-review',
+      question: '同意這份計劃並離開計劃模式？',
+      detail: PLAN_TEXT,
+      options: [{ label: '同意' }, { label: '繼續規劃' }],
+      intent: { kind: 'plan-review', approve: '同意', callId: 'call-plan' },
+    },
+  ],
+} as unknown as PendingQuestion;
+const PLAN_REVIEW = planReviewOf(PLAN_PENDING.questions)!;
+const PLAN_ENTRY: ToolEntry = {
+  kind: 'tool',
+  id: 'tool-call-plan-done',
+  callId: 'call-plan-done',
+  name: 'exit_plan_mode',
+  input: JSON.stringify({ plan: PLAN_TEXT }),
+  status: 'done',
+  attribution: { kind: 'root' },
+};
+const PLAN_ON: PlanModePayload = { active: true };
+const PLAN_GOAL: WireGoal = {
+  id: 'g1',
+  revision: 1,
+  objective: '把登入改好',
+  phase: 'active',
+  maxGoalRounds: 10,
+  roundsStarted: 3,
+  createdAt: 0,
+  updatedAt: 0,
+};
+
+function PlanPage() {
+  return (
+    <RightSidebarProvider
+      threadId="guard-plan"
+      sources={{ plans: new Map([['call-plan', planDocument(PLAN_TEXT)]]) }}
+    >
+      <div
+        style={{
+          maxWidth: '48rem',
+          margin: '0 auto',
+          padding: 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+        }}
+      >
+        <div data-guard-plan="chip">
+          <PlanChip planMode={PLAN_ON} status="idle" connected onExit={async () => undefined} />
+        </div>
+        <div data-guard-plan="chip-running">
+          <PlanChip planMode={PLAN_ON} status="running" connected onExit={async () => undefined} />
+        </div>
+        <div data-guard-plan="chip-failed">
+          <PlanChip
+            planMode={PLAN_ON}
+            status="idle"
+            connected
+            onExit={async () => '斜線命令被拒：這一輪還在跑'}
+          />
+        </div>
+        <div data-guard-plan="review">
+          <PlanReviewPanel
+            pending={PLAN_PENDING}
+            review={PLAN_REVIEW}
+            busy={false}
+            onApprove={() => {}}
+            onRevise={() => {}}
+          />
+        </div>
+        <div data-guard-plan="card">
+          <PlanToolCard entry={PLAN_ENTRY} />
+        </div>
+        <div data-guard-plan="goal">
+          <GoalBar goal={PLAN_GOAL} activation="armed" connected onPause={async () => undefined} />
+        </div>
+      </div>
+    </RightSidebarProvider>
   );
 }
 
@@ -1574,6 +1670,8 @@ function OverlayPage({ name }: { name: string }) {
       return <TranscriptRowsPage />;
     case 'handoff':
       return <HandoffPage />;
+    case 'plan':
+      return <PlanPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

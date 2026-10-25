@@ -16,7 +16,10 @@ export const PLAN_EXIT_LINE = '/plan off';
 /** 標籤上的字。 */
 export const PLAN_CHIP_TEXT = '計劃模式';
 
-/** 按鈕的無障礙名稱：名字講的是按下去會發生的事，不是現況。 */
+/** 退出鈕上的字。 */
+export const PLAN_CHIP_EXIT_TEXT = '退出';
+
+/** 退出鈕的無障礙名稱：名字講的是按下去會發生的事，不是現況。 */
 export const PLAN_CHIP_LABEL = '退出計劃模式';
 
 /** 跑著時停用的提示（照卡上的建議）：伺服器一輪還在跑時會拒絕斜線命令，不讓人按下去才收到一句拒絕。 */

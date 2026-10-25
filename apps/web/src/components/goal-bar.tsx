@@ -82,7 +82,7 @@ export function GoalBar({
             disabled={!connected || busy}
             onClick={() => void pause()}
             data-testid="goal-pause"
-            className="hover:bg-chip-hover active:bg-chip-pressed relative -my-2 -mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-full transition-colors duration-(--duration-quick) after:absolute after:-inset-1.5 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent lg:after:hidden"
+            className="hover:bg-chip-hover active:bg-chip-pressed relative -my-2 -mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-md transition-colors duration-(--duration-quick) after:absolute after:-inset-1.5 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent lg:after:hidden"
           >
             <Pause aria-hidden className="size-4" />
           </button>
