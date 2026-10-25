@@ -83,11 +83,16 @@
  *   `trajectoryTurn` 照 seq 回應，`trace-digests` 一律不回）：空狀態、計劃那一列（結果 chip、定位鈕）、更早的摘要、只有摘要的組、子代理的呼叫結構、
  *   一輪裡的各種列（`trace-steps`，#1690 T3、T5、T7：輸入、重試、成功與失敗的工具、兩次模型呼叫、派出子代理的工具，子代理推了一輪兩次呼叫）。
  *   量狀態膠囊的字、載入細節的鈕與進度、空狀態、圓角，以及分頁只有一格 `role=status`（#1690）；`trace-steps` 另量列、數字格、結果框的字與焦點外框，375 寬時列高 44px。
+ * - `?overlay=cost` 畫打開成本分頁的右側欄（產品的 `RightSidebarPanel`：root 的總帳、口徑、兩個背景子代理，假的讀取照 runId 回應），
+ *   主區放頂列的用量鈕（#1691）。量用量鈕的圓角（#1827 G2）、字與焦點外框，分頁裡的總計與子代理列的字。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
 import {
   APPROVAL_PENDING_KIND,
+  MODEL_USAGE,
+  SESSION_STATS,
+  TOKEN_USAGE,
   TRAJECTORY_PROJECTION,
   TRAJECTORY_VERSION,
   emptyConversation,
@@ -149,6 +154,7 @@ import { createChangesStores } from '@/lib/changes-diff';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
 import { planDocument, planReviewOf } from '@/lib/plan-review';
 import { serverClock } from '@/lib/server-clock';
+import type { SubagentUsageLoader } from '@/lib/subagent-usage';
 import { Script } from '@/test/conversation-frames';
 import {
   call,
@@ -1124,6 +1130,88 @@ function TracePanelPage({ name }: { name: string }) {
   );
 }
 
+/** 成本分頁（#1691）：root 的總帳加兩個背景子代理，子代理的用量照 runId 回。頂列的用量鈕讀同一份總帳。 */
+const COST_USAGE = {
+  inputTokens: 1_412_380,
+  uncachedInputTokens: 212_380,
+  cacheReadTokens: 1_150_000,
+  cacheWriteTokens: 50_000,
+  outputTokens: 9_815,
+};
+const COST_STATS = { turns: 4, steps: 17, llmMs: 133_000, toolMs: 38_400 };
+
+function costState(): ConversationState {
+  const script = new Script();
+  return reduceAll(emptyConversation(), [
+    script.running(),
+    ...script.human('history-0', '幫我查兩件事'),
+    script.started('d1', 'subagent', { description: '查 A' }),
+    script.finishedWith('d1', '已派出', {
+      kind: 'background-subagent',
+      runId: 'bg-1',
+      subagentType: 'researcher',
+    }),
+    script.started('d2', 'subagent', { description: '查 B' }),
+    script.finishedWith('d2', '已派出', {
+      kind: 'background-subagent',
+      runId: 'bg-2',
+      subagentType: 'writer',
+    }),
+    ...script.ai('a', { text: '派出去了。' }),
+    script.custom(TOKEN_USAGE, COST_USAGE),
+    script.custom(SESSION_STATS, COST_STATS),
+    script.custom(MODEL_USAGE, { inputTokens: 98_200 }),
+    script.completed(),
+  ]);
+}
+
+const costLoader: SubagentUsageLoader = async (runId) => ({
+  ok: true,
+  usage: {
+    tokenUsage:
+      runId === 'bg-1'
+        ? { inputTokens: 52_000, outputTokens: 1_200 }
+        : { inputTokens: 7_400, outputTokens: 310 },
+    sessionStats: { turns: 1, steps: 3, llmMs: 6_200, toolMs: 900 },
+  },
+});
+
+function CostPage() {
+  const [sources] = useState(() => {
+    const threadId = 'guard-cost';
+    localStorage.setItem(
+      LAYOUT_KEY_PREFIX + threadId,
+      JSON.stringify({ open: true, tabs: [{ kind: 'cost' }], active: 'cost' }),
+    );
+    return { threadId, conversation: createConversationStore(costState()) };
+  });
+  return (
+    <RightSidebarProvider
+      threadId={sources.threadId}
+      sources={{ conversation: sources.conversation, subagentUsage: costLoader }}
+    >
+      <div style={{ display: 'flex', minHeight: '100vh' }}>
+        <main
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: 16,
+            display: 'flex',
+            gap: 8,
+            alignItems: 'flex-start',
+          }}
+        >
+          <RightSidebarToggle />
+          <div data-guard-cost="usage">
+            <SessionUsage tokenUsage={COST_USAGE} sessionStats={COST_STATS} />
+          </div>
+        </main>
+        <RightSidebarPanel />
+      </div>
+    </RightSidebarProvider>
+  );
+}
+
 /** 展開收合的元件（#1638 PR A）：思考過程、摘要列、工具卡（Root 用 `render` 接 `Surface`）、待辦、提問面板（內容保持掛載）。都是關著畫出來的。 */
 function CollapsiblesPage() {
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -2036,6 +2124,8 @@ function OverlayPage({ name }: { name: string }) {
     case 'trace-subagent':
     case 'trace-steps':
       return <TracePanelPage name={name} />;
+    case 'cost':
+      return <CostPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':
