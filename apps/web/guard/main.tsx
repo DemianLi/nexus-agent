@@ -87,6 +87,8 @@
  *   主區放頂列的用量鈕（#1691）。量用量鈕的圓角（#1827 G2）、字與焦點外框，分頁裡的總計與子代理列的字。
  * - `?overlay=right-empty` 畫打開、但一個分頁都沒有的右側欄（產品的 `RightSidebarPanel`，#1696）：收起鈕與兩顆「打開某面板」的鈕，
  *   量圓角（#1827 G2）、字與焦點外框。
+ * - `?overlay=thread-statuses` 畫產品的左側欄（`AppSidebar`，#1696 S1-C）：目前這條在跑，另外五種狀態與一條沒有狀態的各一列，
+ *   有幾條是長標題，每列都有「⋯」。手機寬度時抽屜自己打開。量狀態字、色條、焦點外框、報讀名稱，以及窄側欄裡標題沒被擠掉。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -175,10 +177,14 @@ import {
   RightSidebarProvider,
   RightSidebarToggle,
 } from '@/components/sidebar/right-sidebar';
+import { AppSidebar } from '@/components/sidebar/app-sidebar';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { TurnHeader } from '@/components/trace/turn-head';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
+import type { ThreadDirectory } from '@/hooks/use-thread-directory';
+import type { ThreadManagement } from '@/lib/thread-management';
+import type { RowStatus } from '@/lib/thread-status';
 import type { TurnHead } from '@/lib/trace-view';
 import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { Badge } from '@/components/ui/badge';
@@ -1151,6 +1157,64 @@ function RightEmptyPage() {
         <RightSidebarPanel />
       </div>
     </RightSidebarProvider>
+  );
+}
+
+/** 左側欄的會話狀態（#1696 S1-C）：`s0` 是目前這條、在跑；其餘五種狀態各一列，加一列沒有狀態的。 */
+const THREAD_STATUSES: readonly (readonly [string, RowStatus])[] = [
+  ['部署腳本除錯', 'running'],
+  ['整理 README 的部署段落與回滾步驟', 'approval'],
+  ['十月月報草稿', 'plan-review'],
+  ['新人問卷題目', 'question'],
+  ['查 CI 為什麼慢：pnpm install 與快取命中率', 'running'],
+  ['週會紀錄', 'completed'],
+  ['讀規格', undefined],
+];
+const THREAD_DIRECTORY: ThreadDirectory = {
+  listing: {
+    kind: 'ok',
+    result: {
+      items: THREAD_STATUSES.map(([title], index) => ({
+        threadId: `s${index}`,
+        updatedAt: Date.now() - index * 60_000,
+        running: false,
+        blank: false,
+        title,
+      })),
+      unreadable: 0,
+    },
+  },
+  statusOf: (item) => THREAD_STATUSES[Number(item.threadId.slice(1))]![1],
+  blankOf: (item) => item.blank,
+  refresh: () => undefined,
+  placeholders: [],
+  addPlaceholder: () => undefined,
+};
+const THREAD_MANAGEMENT: ThreadManagement = {
+  pinnedIds: [],
+  archivedIds: new Set(),
+  titles: new Map(),
+  onPin: async () => undefined,
+  onUnpin: async () => undefined,
+  onArchive: async () => undefined,
+  onUnarchive: async () => undefined,
+  onRename: async () => undefined,
+};
+
+function ThreadStatusesPage() {
+  return (
+    <SidebarProvider>
+      <OpenMobileSidebar />
+      <AppSidebar
+        directory={THREAD_DIRECTORY}
+        currentThreadId="s0"
+        currentTitle={THREAD_STATUSES[0]![0]}
+        onNewConversation={() => undefined}
+        onPick={() => undefined}
+        management={THREAD_MANAGEMENT}
+      />
+      <SidebarInset>會話區</SidebarInset>
+    </SidebarProvider>
   );
 }
 
@@ -2152,6 +2216,8 @@ function OverlayPage({ name }: { name: string }) {
       return <CostPage />;
     case 'right-empty':
       return <RightEmptyPage />;
+    case 'thread-statuses':
+      return <ThreadStatusesPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

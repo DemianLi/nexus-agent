@@ -3931,8 +3931,8 @@ describe('以前的會話', () => {
     expect(within(list).queryByRole('searchbox')).toBeNull();
   });
 
-  /** 分組、搜尋、狀態點（inventory 列 6）：分界與比對規則在 `lib/thread-groups.test.ts`，這裡驗畫出來的。 */
-  describe('分組、搜尋、狀態點', () => {
+  /** 分組、搜尋、狀態（inventory 列 6）：分界與比對規則在 `lib/thread-groups.test.ts`，這裡驗畫出來的。 */
+  describe('分組、搜尋、狀態', () => {
     const DAY = 86_400_000;
     function recent(): ThreadListResult {
       const now = Date.now();
@@ -3983,7 +3983,7 @@ describe('以前的會話', () => {
       expect(within(list).queryByRole('group', { name: '昨天' })).toBeNull();
     });
 
-    it('跑著的那一列有一顆點，報讀器唸「執行中」', async () => {
+    it('跑著的那一列寫「執行中」', async () => {
       const list = await rendered();
       const running = within(list).getByRole('button', { name: /幫我改登入頁/ });
       expect(within(running).getByTestId('thread-status').textContent).toBe('執行中');
@@ -4142,7 +4142,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
   const statusOf = (element: HTMLElement) =>
     within(element).queryByTestId('thread-status')?.getAttribute('data-status') ?? null;
 
-  it('沒打開的那條停在核准：那一列標出來、時間換成「待核准」；撤回就回到在跑', async () => {
+  it('沒打開的那條停在核准：那一列寫「等待核准」、不帶時間；撤回就回到在跑', async () => {
     const feed = rendered(async () => ok(row('a', '改登入頁', true)));
     const target = await rowOf('改登入頁');
     await waitFor(() => expect(statusOf(target)).toBe('running'));
@@ -4154,7 +4154,6 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     });
     await waitFor(() => expect(statusOf(target)).toBe('approval'));
     expect(within(target).getByTestId('thread-status').textContent).toBe('等待核准');
-    expect(target.textContent).toContain('待核准');
     expect(target.textContent).not.toMatch(/\d{1,2}:\d{2}/);
 
     feed.line().push({ type: 'input-withdrawn', threadId: 'a', interruptId: 'int-1' });

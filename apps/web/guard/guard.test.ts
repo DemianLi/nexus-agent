@@ -89,6 +89,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    （#1827 G2）、字過 4.5、有焦點外框；成本分頁裡總計的欄名與數字、子代理列的數字過 4.5。
  * 26. **沒有分頁的右側欄**（#1696，`?overlay=right-empty`，產品的 `RightSidebarPanel`）：收起鈕與兩顆「打開某面板」的鈕跟 SG Button 一樣是
  *    `rounded-md`（#1827 G2）、有焦點外框；空狀態那句說明與鈕上的字過 4.5。
+ * 27. **會話清單的狀態**（#1696 S1-C，`?overlay=thread-statuses`，產品的 `AppSidebar`）：能點的每列（目前這條停用，不量）的標題與狀態字過 4.5、有焦點外框；
+ *    色條 3px、顏色是該狀態的 token，沒有狀態的列是透明；每列的報讀名稱只唸一次狀態；手機抽屜（375）與桌面最窄的側欄（1024）裡，
+ *    標題獨佔一行、寬度不少於 150px；第二行只有目前這條放不下、被截掉。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -5265,4 +5268,107 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量沒有分頁的右側欄（
       await page.close();
     }
   });
+});
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#1696 S1-C）：%s', (theme) => {
+  const ROW = '[data-slot="sidebar-menu-item"] > [data-slot="sidebar-menu-button"]';
+  const BAR_TOKEN: Record<string, string> = {
+    approval: '--warning',
+    question: '--warning',
+    'plan-review': '--warning',
+    running: '--brand',
+    completed: '--success',
+  };
+
+  test.each([
+    { width: 375, height: 812 },
+    { width: 1024, height: 900 },
+  ])(
+    'S1（#1696）：$width 寬時字過 4.5、色條是狀態的顏色、報讀只唸一次狀態、標題沒被擠掉',
+    async (viewport) => {
+      const page = await openOverlay('thread-statuses', theme, {
+        viewport,
+        marks: {
+          // 目前這條是 disabled（整列 opacity 0.5），對比門檻不管停用的元件，只量能點的列。
+          [`${ROW}:not([disabled]) [data-testid="thread-title-text"]`]: {
+            'data-guard-text': 'title',
+          },
+          [`${ROW}:not([disabled]) [data-testid="thread-status"]`]: { 'data-guard-text': 'status' },
+          [`${ROW}:not([disabled])`]: { 'data-guard-focus': 'row' },
+        },
+      });
+      const key = `thread-statuses:${theme}:${viewport.width}`;
+      try {
+        expectTexts(await collectTexts(page), ['title', 'status'], key);
+        const focus = await collectFocus(page);
+        expect(focus.map((f) => f.name)).toEqual([
+          'row-0',
+          'row-1',
+          'row-2',
+          'row-3',
+          'row-4',
+          'row-5',
+        ]);
+        expectFocus(focus, key);
+
+        const rows = await page.$$eval(
+          ROW,
+          (buttons, tokens) => {
+            const probe = document.createElement('span');
+            document.body.append(probe);
+            const colorOf = (token: string) => {
+              probe.style.backgroundColor = `var(${token})`;
+              return getComputedStyle(probe).backgroundColor;
+            };
+            const out = buttons.map((button) => {
+              const bar = button.querySelector<HTMLElement>('[data-testid="thread-status-bar"]')!;
+              const title = button.querySelector<HTMLElement>('[data-testid="thread-title-text"]')!;
+              const status = button.querySelector('[data-testid="thread-status"]');
+              const kind = status?.getAttribute('data-status') ?? null;
+              const line = title.nextElementSibling as HTMLElement | null;
+              const titleBox = title.getBoundingClientRect();
+              return {
+                title: title.textContent,
+                kind,
+                barWidth: bar.getBoundingClientRect().width,
+                barColor: getComputedStyle(bar).backgroundColor,
+                want: kind === null ? 'rgba(0, 0, 0, 0)' : colorOf(tokens[kind]!),
+                titleWidth: Math.round(titleBox.width),
+                // 標題獨佔一行：第二行在標題下面，不跟它並排。
+                ownLine: line === null || line.getBoundingClientRect().top >= titleBox.bottom - 1,
+                lineOverflow: line === null ? 0 : line.scrollWidth - line.clientWidth,
+              };
+            });
+            probe.remove();
+            return out;
+          },
+          BAR_TOKEN,
+        );
+        report[`${key}:rows`] = rows;
+        expect(rows).toHaveLength(7);
+        for (const row of rows) {
+          expect(row.barWidth).toBe(3);
+          expect(row.barColor).toBe(row.want);
+          expect(row.titleWidth).toBeGreaterThanOrEqual(150);
+          expect(row.ownLine).toBe(true);
+        }
+        // 第二行放不下就截（帶省略號）。只有目前這條會截：「目前這條 · 執行中 · 日期時間」比側欄寬，其餘每列都放得下。
+        expect(rows.filter((row) => row.lineOverflow > 0).map((row) => row.title)).toEqual([
+          '部署腳本除錯',
+        ]);
+
+        // 報讀名稱用瀏覽器算的（ariaSnapshot）：狀態字只出現一次。
+        const buttons = page.locator(ROW);
+        for (let i = 0; i < rows.length; i += 1) {
+          const { kind } = rows[i]!;
+          if (kind === null) continue;
+          const label = await buttons.nth(i).locator('[data-testid="thread-status"]').textContent();
+          const snapshot = await buttons.nth(i).ariaSnapshot();
+          expect(snapshot.split(label!).length - 1, `${rows[i]!.title}：${snapshot}`).toBe(1);
+        }
+      } finally {
+        await page.close();
+      }
+    },
+  );
 });

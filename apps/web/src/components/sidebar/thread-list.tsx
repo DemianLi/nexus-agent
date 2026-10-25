@@ -1,6 +1,6 @@
 import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
 import { X } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { Fragment, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { Chevron } from '@/components/chevron';
@@ -56,9 +56,9 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  * 比內容（[#760](https://github.com/DemianLi/nexus-agent/issues/760)），規則在 `lib/thread-search.ts`：打完停 250ms 才問、下一個
  * 字一到就取消上一次；伺服器拒絕（出廠沒開就是）或搜尋失敗，那一次只比標題，跟 #610 一樣（拋錯時多一句說明）。
  *
- * **狀態點**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
- * `lib/thread-status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種；點旁邊有給
- * 報讀器的那一句。等人回答的三種照 dsh 把第二行的時間換成短的那一句。
+ * **狀態**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
+ * `lib/thread-status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種：左邊一條該狀態顏色的
+ * 色條，第二行寫出狀態字，報讀器從列上的字唸、只唸一次。等人回答的三種不帶時間、標題加粗（#1696）。
  *
  * **釘選、封存、改名**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：給了 `management` 才有——每一列多一顆
  * 「⋯」選單，清單最前面多一區「已釘選」（最近釘的在前，不分時間組），最後多一區「已封存」（預設收著、顯示份數；搜尋有命中時
@@ -388,8 +388,8 @@ function BucketGroup({
   );
 }
 
-/** 點的顏色：等人回答是警示色，在跑是品牌色，跑完沒看是完成色。 */
-const DOT_CLASS: Record<Exclude<RowStatus, undefined>, string> = {
+/** 色條的顏色：等人回答是警示色，在跑是品牌色，跑完沒看是完成色。 */
+const BAR_CLASS: Record<Exclude<RowStatus, undefined>, string> = {
   approval: 'bg-warning',
   question: 'bg-warning',
   'plan-review': 'bg-warning',
@@ -445,7 +445,7 @@ function ThreadRow({
       </SidebarMenuItem>
     );
   }
-  const compact = status === undefined ? undefined : ROW_STATUS_TEXT[status].compact;
+  const text = status === undefined ? undefined : ROW_STATUS_TEXT[status];
   return (
     // 分叉來的那一條記著來源（#1581）：畫面上不講（同 dsh），只留在屬性上。
     <SidebarMenuItem data-parent-thread-id={item.parentThreadId}>
@@ -456,58 +456,63 @@ function ThreadRow({
         disabled={current}
         onClick={() => onPick(item.threadId)}
         className={cn(
-          'h-auto min-h-11 flex-col items-start gap-0.5 lg:min-h-9',
+          'h-auto min-h-11 items-stretch gap-2.5 lg:min-h-9',
           // 右邊留給「⋯」。
           management !== undefined && 'pr-10 lg:pr-8',
         )}
       >
-        <span className="flex w-full min-w-0 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate" data-testid="thread-title-text">
+        {/* 狀態是左邊 3px 色條＋第二行的字（#1696 S1-C）；沒有狀態的列也留這條空位，標題才對齊。 */}
+        <span
+          aria-hidden
+          className={cn('w-0.75 shrink-0 rounded-xs', status !== undefined && BAR_CLASS[status])}
+          data-testid="thread-status-bar"
+        />
+        {/* 這一欄是按鈕的最後一個 span，vendor 的 `[&>span:last-child]:truncate` 會讓它整欄不換行；裡面每一行自己截，才有省略號。 */}
+        <span className="flex min-w-0 flex-1 flex-col items-start gap-0.5">
+          <span
+            className={cn('w-full truncate', text?.waiting === true && 'font-medium')}
+            data-testid="thread-title-text"
+          >
             {label}
           </span>
-          {status !== undefined && (
+          {(current || !item.blank || text !== undefined) && (
+            <span className="text-muted-foreground w-full truncate text-tip">
+              {[
+                current && '目前這條',
+                text !== undefined && (
+                  <span data-testid="thread-status" data-status={status}>
+                    {text.label}
+                  </span>
+                ),
+                // 空白的那一列不帶時間：它的時間是建立時間，不是誰說過話。等人回答時也不帶。
+                !item.blank && text?.waiting !== true && formatTime(item.updatedAt),
+              ]
+                .filter((part) => part !== false)
+                .map((part, index) => (
+                  <Fragment key={index}>
+                    {index > 0 && ' · '}
+                    {part}
+                  </Fragment>
+                ))}
+            </span>
+          )}
+          {snippet !== undefined && (
             <span
-              className="flex shrink-0 items-center"
-              data-testid="thread-status"
-              data-status={status}
+              className="text-muted-foreground line-clamp-2 w-full truncate text-tip"
+              data-testid="thread-snippet"
             >
-              <span aria-hidden className={cn('size-2 rounded-full', DOT_CLASS[status])} />
-              <span className="sr-only">{ROW_STATUS_TEXT[status].label}</span>
+              {highlightMatches(snippet, query).map((part, index) =>
+                part.hit ? (
+                  <mark key={index} className="bg-brand/15 text-foreground rounded-xs">
+                    {part.text}
+                  </mark>
+                ) : (
+                  part.text
+                ),
+              )}
             </span>
           )}
         </span>
-        {(current || !item.blank) && (
-          <span className="text-muted-foreground text-tip">
-            {[
-              ...(current ? ['目前這條'] : []),
-              // 空白的那一列不帶時間（dsh `Rows.tsx`）：它的時間是建立時間，不是誰說過話。
-              // 等人回答時換成短的那一句（dsh 的 `trailingLabel`）；報讀器已經從點旁邊那一句聽到了。
-              ...(item.blank || compact !== undefined ? [] : [formatTime(item.updatedAt)]),
-            ].join(' · ')}
-            {compact !== undefined && (
-              <span aria-hidden className="text-warning">
-                {current ? ' · ' : ''}
-                {compact}
-              </span>
-            )}
-          </span>
-        )}
-        {snippet !== undefined && (
-          <span
-            className="text-muted-foreground line-clamp-2 text-tip"
-            data-testid="thread-snippet"
-          >
-            {highlightMatches(snippet, query).map((part, index) =>
-              part.hit ? (
-                <mark key={index} className="bg-brand/15 text-foreground rounded-xs">
-                  {part.text}
-                </mark>
-              ) : (
-                part.text
-              ),
-            )}
-          </span>
-        )}
       </SidebarMenuButton>
       {management !== undefined && (
         <ThreadRowMenu
