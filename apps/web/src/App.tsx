@@ -672,8 +672,8 @@ function ConversationView({
       {/* 基準寬 480：右側欄打開時會話區至少留這麼多，視窗再窄才輪到它讓（#640，見 `right-sidebar.tsx`）。 */}
       <SidebarInset className="flex h-svh min-w-0 flex-col" style={{ flexBasis: 480 }}>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-2">
-          {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
-          <SidebarTrigger className="size-11 rounded-full lg:size-9" />
+          {/* 觸控目標 44px，1024 以上回到 36（§9）；三顆的圓角都照 SG 36px 的 `icon-lg`，是 `rounded-md`。 */}
+          <SidebarTrigger className="size-11 rounded-md lg:size-9" />
           {/* 換字不做動效（Q4）；截斷時 `title` 帶全文。 */}
           <h1 className="min-w-0 flex-1 truncate text-body font-medium" title={heading}>
             {heading}
@@ -683,9 +683,9 @@ function ConversationView({
             tokenUsage={conversation.state.tokenUsage}
             sessionStats={conversation.state.sessionStats}
           />
-          <ThemeToggle className="size-11 rounded-full lg:size-9" />
+          <ThemeToggle className="size-11 rounded-md lg:size-9" />
           {/* 會話標頭那一列的右端（#640 決定 2；#655 確認不用再搬）。 */}
-          <RightSidebarToggle className="size-11 rounded-full lg:size-9" />
+          <RightSidebarToggle className="size-11 rounded-md lg:size-9" />
         </header>
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-4">

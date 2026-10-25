@@ -402,6 +402,23 @@ describe('對話介面', () => {
     expect(await axeViolations(container)).toEqual([]);
   });
 
+  it('頂列的側欄、主題、右側欄三顆鈕用 SG 36px 圖示鈕的 rounded-md，不是圓形（#1696 G2）', async () => {
+    const { client } = fakeClient([]);
+    const { container } = render(<App client={client} />);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+    const header = container.querySelector('header')!;
+    const buttons = [
+      within(header).getByRole('button', { name: '開關側欄' }),
+      within(header).getByRole('button', { name: /^目前：/ }),
+      within(header).getByRole('button', { name: /右側欄$/ }),
+    ];
+    // 兩顆是 `icon-sm`（自帶 `rounded-sm`），要被頂列給的 `rounded-md` 蓋掉，三顆才一樣。
+    for (const button of buttons) {
+      const radius = button.className.split(' ').filter((c) => c.startsWith('rounded-'));
+      expect(radius).toEqual(['rounded-md']);
+    }
+  });
+
   /**
    * 人的話**等開跑才畫**（#645）：伺服器收下就進送出佇列，領走開跑那一顆 `inbox` 帶 `claimed`，泡泡由它畫——跑著時
    * 送的那句才不會插進正在跑的那一輪中間。送出當下什麼都不畫。
