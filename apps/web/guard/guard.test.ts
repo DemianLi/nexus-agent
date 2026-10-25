@@ -71,7 +71,7 @@ import { startGuardServer, type GuardServer } from './server';
  *    捲到底的鈕與「立刻重連」是 SG Button 的圓角。
  * 21. **核准與換手**（#1694，`?overlay=handoff`）：背景子代理面板的字過 4.5（「子代理的對話」、「只停這個子代理」、送出鈕）；重讀、停止、
  *    輸入框（外框畫在群組上）、送出、核准卡兩顆與「停止這一輪」、換手面板的收起鈕、委派 chip 的取消鈕都有焦點外框；核准卡兩顆鈕、收起鈕、輸入框是
- *    SG Button 的 `rounded-md`（核准卡含只剩「停止這一輪」那張），取消委派的小鈕是 `rounded-sm`。核准卡的呼吸光有幾圈只記在報告裡，看截圖。
+ *    SG Button 的 `rounded-md`（核准卡含只剩「停止這一輪」那張），取消委派的小鈕是 `rounded-sm`；375 寬時面板的輸入框與三顆鈕 44px 高。核准卡的呼吸光有幾圈只記在報告裡，看截圖。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -4469,6 +4469,30 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量核准與換手（#1694）�
         'sub-send-0',
       ]);
       expectFocus(focus, `handoff:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('375 寬：子代理面板的輸入框與三顆鈕都是 44px 高，頁面不橫向溢出', async () => {
+    const page = await openOverlay('handoff', theme, {
+      marks: handoffMarks,
+      viewport: { width: 375, height: 900 },
+    });
+    try {
+      const sizes = await page.evaluate((running) => {
+        const height = (selector: string) =>
+          document.querySelector(`${running} ${selector}`)!.getBoundingClientRect().height;
+        return {
+          input: height('[data-slot="input-group"] input'),
+          send: height('button[aria-label="送出給背景子代理"]'),
+          stop: height('button[aria-label="只停這個子代理"]'),
+          reload: height('button[aria-label="重新讀取子代理的對話"]'),
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      }, HANDOFF_RUNNING);
+      report[`handoff:${theme}:375`] = sizes;
+      expect(sizes).toEqual({ input: 44, send: 44, stop: 44, reload: 44, overflow: 0 });
     } finally {
       await page.close();
     }

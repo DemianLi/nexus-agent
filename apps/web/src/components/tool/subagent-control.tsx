@@ -384,7 +384,7 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
             aria-label="對背景子代理說話"
             className="max-sm:h-11"
           />
-          <InputGroupAddon align="inline-end">
+          <InputGroupAddon align="inline-end" className="max-sm:py-0">
             <InputGroupButton
               type="submit"
               variant="default"
