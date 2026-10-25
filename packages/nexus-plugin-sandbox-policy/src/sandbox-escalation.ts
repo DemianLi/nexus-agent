@@ -83,6 +83,7 @@ import { interrupt } from '@langchain/langgraph';
 import type { ApprovalChannel, ApprovalPolicySource, NexusPlugin } from '@nexus/core';
 import {
   APPROVAL_INTERRUPT_KIND,
+  APPROVAL_INVALID_REPLY,
   APPROVAL_POLICY_SERVICE,
   APPROVAL_REJECTED_BY_USER,
   approvalDenied,
@@ -365,6 +366,7 @@ function createEscalationTool(
         return refuse(
           `核准回覆看不懂：${JSON.stringify(answer)}。` +
             '這一格只收 { decisions: [{ type: "approve" | "reject" }] }，所以沒有升級。',
+          approvalDenied(APPROVAL_INVALID_REPLY),
         );
       }
       // 綁的是**這一刻**最近被擋下的那一次。同一則訊息裡另有平行的變更也被擋的話，綁到的

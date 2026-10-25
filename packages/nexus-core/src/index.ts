@@ -327,6 +327,7 @@ export {
 
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {
+  APPROVAL_INVALID_REPLY,
   APPROVAL_NO_CHANNEL,
   APPROVAL_POLICY_NEVER,
   APPROVAL_REJECTED_BY_USER,
