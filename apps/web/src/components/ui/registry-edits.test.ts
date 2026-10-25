@@ -80,7 +80,7 @@ describe('registry 檔的改動還在', () => {
     test('第 37 條：用量環在 vendor 原文仍寫死 text-blue-500 與 text-amber-500（覆寫檔的選擇器錨在這兩個 class 上）', () => {
       expect(ring()).toContain('"text-amber-500" : "text-blue-500"');
       expect(overrides()).toContain(
-        '[data-slot="context-ring"] svg.text-blue-500 {\n  color: var(--info);\n}',
+        '[data-slot="context-ring"] svg.text-blue-500 {\n  color: var(--status-done);\n}',
       );
       expect(overrides()).toContain(
         '[data-slot="context-ring"] svg.text-amber-500 {\n  color: var(--status-interrupted);\n}',

@@ -143,7 +143,7 @@ export function SnapshotBlock({
     <Collapsible className="mt-1" data-testid={testId}>
       <RowTrigger fit="bare" className="text-ui">
         <span className="min-w-0 truncate font-medium">{title}</span>
-        <Chevron className="text-muted-foreground ml-auto" />
+        <Chevron className="text-muted-foreground group-hover/row-trigger:text-foreground ml-auto" />
       </RowTrigger>
       <CollapsibleContent className="overflow-hidden">
         <div className="pt-1 pb-2 pl-2">{children}</div>

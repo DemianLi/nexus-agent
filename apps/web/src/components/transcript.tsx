@@ -277,7 +277,7 @@ function Marker({ children, testId }: { children: string; testId: string }) {
   return (
     <div className="flex justify-center">
       <p
-        className="text-muted-foreground bg-chip rounded-4xl px-3 py-1 text-tip"
+        className="text-muted-foreground bg-muted rounded-4xl px-3 py-1 text-tip"
         data-testid={testId}
       >
         {children}

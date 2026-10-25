@@ -73,7 +73,7 @@
   .markdown :not(pre) > code {
     font-family: var(--font-mono);
     font-size: 0.9em;
-    background: var(--chip);
+    background: var(--muted);
     border-radius: var(--radius-sm);
     padding: 0.1em 0.35em;
   }
@@ -130,7 +130,7 @@
   }
   .markdown th {
     font-weight: 500;
-    background: var(--chip);
+    background: var(--muted);
   }
   /* 數字欄（#1330，判定見 `lib/markdown/numeric-columns.ts`）：位數等寬、靠右。作者寫明的對齊是行內樣式，蓋得過這裡。 */
   .markdown .md-num {
@@ -149,7 +149,7 @@
     min-width: 10em;
   }
   /*
-   * 整列 hover（#1330）：中性的 muted 疊一半（同 `bg-muted/50`），比表頭的 chip 淺，不會看成又一列表頭。
+   * 整列 hover（#1330）：中性的 muted 疊一半（同 `bg-muted/50`），比表頭的 muted 淺，不會看成又一列表頭。
    * 包在 (hover: hover) 裡跟 Tailwind 的 `hover:` 一樣：觸控點一下不會把底色卡住。
    */
   @media (hover: hover) {

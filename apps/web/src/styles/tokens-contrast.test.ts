@@ -87,17 +87,15 @@ const THEMES: Theme[] = ['light', 'dark'];
 
 const TEXT: [string, string][] = [
   ['foreground', 'background'],
-  ['foreground', 'chip'],
+  ['foreground', 'muted'],
   ['card-foreground', 'card'],
   ['popover-foreground', 'popover'],
   ['muted-foreground', 'background'],
   ['muted-foreground', 'card'],
   ['muted-foreground', 'stage'],
-  ['muted-foreground', 'chip'],
-  ['muted-foreground', 'chip-hover'],
-  ['muted-foreground', 'chip-pressed'],
-  ['foreground', 'chip-hover'],
-  ['foreground', 'chip-pressed'],
+  // 可點的小面（#1689）：平常是 `--muted`，上面是次要字；hover 照 SG ghost 是 `--hover`，字是 foreground。
+  ['muted-foreground', 'muted'],
+  ['foreground', 'hover'],
   ['primary-foreground', 'primary'],
   ['secondary-foreground', 'secondary'],
   ['accent-foreground', 'accent'],
@@ -109,10 +107,7 @@ const TEXT: [string, string][] = [
   ['destructive', 'card'],
   ['success', 'card'],
   ['status-interrupted', 'card'],
-  ['status-interrupted', 'chip'],
-  ['status-interrupted', 'chip-hover'],
-  ['status-interrupted', 'chip-pressed'],
-  ['info', 'card'],
+  ['status-done', 'card'],
   // 程式碼區塊（stage）上的語法色（`shiki.css`）。
   ['foreground', 'stage'],
   ['brand', 'stage'],
@@ -128,14 +123,7 @@ const NON_TEXT: [string, string][] = [
 ];
 
 /** SG 自己的 `status-*` 也算狀態色、套 5.2（demian，#1512，2026-10-17）。 */
-const STATUS = [
-  'destructive',
-  'success',
-  'info',
-  'status-done',
-  'status-interrupted',
-  'status-running',
-];
+const STATUS = ['destructive', 'success', 'status-done', 'status-interrupted', 'status-running'];
 
 /**
  * 表面這一層：亮暗要一樣分得出來。**只疊在 `--background` 上量**，不算漸層停點（PM，#1512）：鑑別度問的是「這一片面跟頁面分不分得開」，
@@ -144,7 +132,7 @@ const STATUS = [
 const SURFACES: [string, string][] = [
   ['card', 'background'],
   ['stage', 'card'],
-  ['chip', 'background'],
+  ['muted', 'background'],
   ['sidebar', 'background'],
   ['border', 'background'],
 ];
@@ -199,24 +187,6 @@ describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mod
     const light = contrast(mode, 'light', fg, bg, ONLY_BACKGROUND);
     const dark = contrast(mode, 'dark', fg, bg, ONLY_BACKGROUND);
     expect(Math.abs(light - dark)).toBeLessThanOrEqual(0.05);
-  });
-});
-
-/**
- * chip 與 hover 釘在 ② 出貨的值（#1512 PR-B 2ad91a61，#1521）：產生器的 `SHIPPED_CHIP`（PM 裁決，PR #1721 issuecomment-6255648703）。
- * 這張只動 pressed 那一階，全站的 rest 與 hover 逐字不變。撤除條件：⑥ 把 chip 三階換成 SG 的面時，這條跟著拿掉。
- */
-const SHIPPED_CHIP_STEPS: Record<Theme, { chip: string; 'chip-hover': string }> = {
-  light: { chip: 'oklch(0.8812 0 0)', 'chip-hover': 'oklch(0.8729 0 0)' },
-  dark: { chip: 'oklch(0.2289 0 0)', 'chip-hover': 'oklch(0.239 0 0)' },
-};
-
-describe('chip 與 hover 逐字等於 ② 出貨的值', () => {
-  test.each(THEMES)('%s', (theme) => {
-    expect({
-      chip: token(TRANSLUCENT, theme, 'chip'),
-      'chip-hover': token(TRANSLUCENT, theme, 'chip-hover'),
-    }).toEqual(SHIPPED_CHIP_STEPS[theme]);
   });
 });
 

@@ -79,7 +79,7 @@ function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
       )}
       {approvalCode !== undefined && <span data-testid="trace-approval-code">{approvalCode}</span>}
       {outcome !== undefined && (
-        <span className="bg-chip rounded-4xl px-2 py-0.5" data-testid="trace-plan-outcome">
+        <span className="bg-muted rounded-4xl px-2 py-0.5" data-testid="trace-plan-outcome">
           {PLAN_OUTCOME_LABEL[outcome]}
         </span>
       )}

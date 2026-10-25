@@ -793,7 +793,9 @@ function TabChip({
       role="none"
       className={cn(
         'group flex h-9 max-w-56 min-w-28 shrink items-center rounded-lg transition-colors duration-(--duration-quick)',
-        selected ? 'bg-chip-hover text-foreground' : 'text-muted-foreground hover:bg-chip-hover',
+        selected
+          ? 'glass-chosen text-foreground'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
       data-testid="right-sidebar-tab"
     >
@@ -816,7 +818,7 @@ function TabChip({
       {/* 不可聚焦、讀屏看不到：鍵盤用 Delete 關（見檔頭）。 */}
       <span
         aria-hidden
-        className="hover:bg-chip-pressed mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md"
+        className="hover:bg-muted mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md"
         onClick={onClose}
         data-testid="right-sidebar-tab-close"
       >

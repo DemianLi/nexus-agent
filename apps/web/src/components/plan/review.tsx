@@ -194,7 +194,7 @@ export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument
         <ScrollText aria-hidden className="size-4 shrink-0" />
         <span className="flex-1">計劃</span>
         {outcome !== undefined && (
-          <span className="bg-chip rounded-4xl px-3 py-1 text-tip" data-testid="plan-outcome">
+          <span className="bg-muted rounded-4xl px-3 py-1 text-tip" data-testid="plan-outcome">
             {PLAN_OUTCOME_LABEL[outcome]}
           </span>
         )}

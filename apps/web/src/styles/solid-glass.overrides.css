@@ -192,7 +192,7 @@ body {
  * 只是靜態底色的開與關，不做動效（spec §7）；圓角跟泡泡（`chat-bubble.tsx` 的 `rounded-3xl`）同一階，免得底色切成直角。
  */
 [data-slot='message-scroller-item'][data-located] {
-  background-color: var(--chip);
+  background-color: var(--muted);
   border-radius: var(--radius-3xl);
 }
 
@@ -355,7 +355,7 @@ body {
  */
 /* prettier-ignore */
 [data-slot="context-ring"] svg.text-blue-500 {
-  color: var(--info);
+  color: var(--status-done);
 }
 
 /* prettier-ignore */

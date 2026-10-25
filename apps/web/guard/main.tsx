@@ -11,9 +11,9 @@
  *   - `data-guard-docked`：貼在輸入框上方的卡片（`Surface tone="docked"`），量它是不是平的（1px 邊、沒有投影）。
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
- *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、清單開著三種狀態各量一次字色對底色（chip 三階，#1512；#1591 起量底列的 Pick）。
- *   - `data-guard-press`：平常、滑鼠移上去、按著（`:active`）三種狀態各量一次字色對底色：次要字疊在 `chip-hover`、`chip-pressed`
- *     上的真消費者。
+ *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、清單開著三種狀態各量一次字色對底色（輸入框底列的 Pick，#1591）。
+ *   - `data-guard-press`：平常、滑鼠移上去、按著（`:active`）三種狀態各量一次字色對底色：平常是次要字疊在頁面上，移上去與按著
+ *     照 SG ghost 是 foreground 疊在 SG 的 `--hover` 上（#1689）。
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
  *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:642-679`
  *     靠 vendor Button 輸出的 `data-variant` 命中（#1523）。
@@ -420,8 +420,8 @@ function GuardPage() {
         </div>
 
         {/* 輸入框底列的 Pick（#1591 驗收 D）：平常、滑鼠移上去、按下去，12px 的次要字都過 4.5；權限「全開」換成警示色，
-            三種狀態都留著（本地修改第 35 條）。底列在輸入框外面、直接疊在頁面的底上，所以放在頁面上量。重試那一行是平的
-            chip 底加次要文字（#1512）。用量環（#1591 起沒有字）在 composer 頁量。 */}
+            三種狀態都留著（本地修改第 35 條）。底列在輸入框外面、直接疊在頁面的底上，所以放在頁面上量。重試那一行是次要文字、
+            沒有底色（#1512）。用量環（#1591 起沒有字）在 composer 頁量。 */}
         <div style={row}>
           <div data-guard-chip="pick">
             <ComposerPick
@@ -438,8 +438,7 @@ function GuardPage() {
               onSwitch={() => {}}
             />
           </div>
-          {/* 頂列的用量鈕：`text-muted-foreground` 配 `hover:bg-chip-hover active:bg-chip-pressed`，底下沒有 `bg-card`，
-              chip 的兩階真的畫得出來。 */}
+          {/* 頂列的用量鈕：底下沒有 `bg-card`，SG 的 `--hover` 真的畫得出來。 */}
           <div data-guard-press="session-usage">
             <SessionUsage
               tokenUsage={{ inputTokens: 412_380, outputTokens: 9_815 }}

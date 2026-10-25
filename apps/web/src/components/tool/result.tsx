@@ -76,7 +76,7 @@ function FoldToggle({
   return (
     <button
       type="button"
-      className="text-muted-foreground hover:text-foreground hover:bg-chip-hover w-full px-3 py-0.5 text-left font-sans transition-colors duration-(--duration-quick)"
+      className="text-muted-foreground hover:text-foreground hover:bg-muted w-full px-3 py-0.5 text-left font-sans transition-colors duration-(--duration-quick)"
       aria-expanded={expanded}
       onClick={onToggle}
       data-testid={testId}

@@ -18,15 +18,16 @@ import { readCascade } from './css-cascade';
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-4xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
- * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`rounded-3xl`＋`p-1`（沒有 `border`），或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
+ * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`rounded-3xl`（沒有 `border`），或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著展開轉的 `rotate-*`（Base UI 的 `data-panel-open`，
  *    #1638；Radix 的 `data-state=open` 也照擋），就是又手寫了一顆。
- * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-chip-hover`＋`active:bg-chip-pressed`＋`w-full`＋`text-left`，就是又手寫了一列。
+ * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-muted`＋`w-full`＋`text-left`＋`min-h-11`，就是又手寫了一列。
+ *    少了 `min-h-11` 的不算：工具結果的收合鈕（`tool/result.tsx` 的 `FoldToggle`）是一行字高的鈕，不是整列。
  * 8. **不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
  *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
  *    vendor 上游原樣的 ring 由 `solid-glass.overrides.css` 統一處理（不在掃描範圍）；#1680 起 `ui/` 不再有 registry 原文，`ui/` 也照擋。
  * 9. **對話泡泡用 `ChatBubble`**（#1280）：同一個字串裡有 `rounded-3xl`＋`px-4`＋`py-2.5`，就是又手寫了一個泡泡。
- * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-chip`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
+ * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-muted`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
  * 11. **`ui/` 以外不寫原生 `<textarea`**（#1280）：用 `ui/textarea` 的 `Textarea`（邊框、焦點、手機字級都在那裡）。
  *     輸入框裡的是 `InputGroupTextarea`，也在 `ui/`。這條掃 JSX，不是字串字面值。
  * 12. **時長走 `motion.css` 的 token**（#1280）：不寫 `duration-200`、`animation-duration-350` 這種數字，寫
@@ -132,13 +133,8 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
   if (utilities.has('bg-stage') && utilities.has('shadow-stage')) {
     found.push({ rule: '表面', what: 'bg-stage shadow-stage' });
   }
-  if (
-    utilities.has('bg-card') &&
-    utilities.has('rounded-3xl') &&
-    utilities.has('p-1') &&
-    !utilities.has('border')
-  ) {
-    found.push({ rule: '表面', what: 'bg-card rounded-3xl p-1' });
+  if (utilities.has('bg-card') && utilities.has('rounded-3xl') && !utilities.has('border')) {
+    found.push({ rule: '表面', what: 'bg-card rounded-3xl' });
   }
   if (utilities.has('bg-card') && utilities.has('border') && utilities.has('rounded-3xl')) {
     found.push({ rule: '表面', what: 'bg-card border rounded-3xl' });
@@ -148,26 +144,23 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
     found.push({ rule: '箭頭', what: 'transition-transform rotate-*' });
   }
   if (
-    tokens.has('hover:bg-chip-hover') &&
-    tokens.has('active:bg-chip-pressed') &&
+    tokens.has('hover:bg-muted') &&
     utilities.has('w-full') &&
-    utilities.has('text-left')
+    utilities.has('text-left') &&
+    utilities.has('min-h-11')
   ) {
-    found.push({
-      rule: '可展開列',
-      what: 'hover:bg-chip-hover active:bg-chip-pressed w-full text-left',
-    });
+    found.push({ rule: '可展開列', what: 'hover:bg-muted w-full text-left min-h-11' });
   }
   if (utilities.has('rounded-3xl') && utilities.has('px-4') && utilities.has('py-2.5')) {
     found.push({ rule: '泡泡', what: 'rounded-3xl px-4 py-2.5' });
   }
   if (
-    utilities.has('bg-chip') &&
+    utilities.has('bg-muted') &&
     utilities.has('rounded-lg') &&
     utilities.has('p-2') &&
     utilities.has('font-mono')
   ) {
-    found.push({ rule: '程式碼小框', what: 'bg-chip rounded-lg p-2 font-mono' });
+    found.push({ rule: '程式碼小框', what: 'bg-muted rounded-lg p-2 font-mono' });
   }
   for (const token of text.split(/\s+/)) {
     const u = utility(token);
@@ -208,7 +201,7 @@ const ALLOWED: readonly Allowed[] = [
   },
   {
     file: 'components/row-trigger.tsx',
-    what: 'hover:bg-chip-hover active:bg-chip-pressed w-full text-left',
+    what: 'hover:bg-muted w-full text-left min-h-11',
     why: '`RowTrigger` 本身：全站唯一該寫可展開列配方的地方',
   },
   {
@@ -218,7 +211,7 @@ const ALLOWED: readonly Allowed[] = [
   },
   {
     file: 'components/mono-block.tsx',
-    what: 'bg-chip rounded-lg p-2 font-mono',
+    what: 'bg-muted rounded-lg p-2 font-mono',
     why: '`MonoBlock` 本身：全站唯一該寫程式碼小框配方的地方',
   },
   {
@@ -228,7 +221,7 @@ const ALLOWED: readonly Allowed[] = [
   },
   {
     file: 'components/surface.tsx',
-    what: 'bg-card rounded-3xl p-1',
+    what: 'bg-card rounded-3xl',
     why: '`Surface` 的 raised 配方本身：全站唯一該寫這串的地方',
   },
   {
@@ -314,7 +307,7 @@ describe('判準', () => {
   });
 
   test('語意 token 與只是名字像的不算', () => {
-    expect(rules('bg-card text-destructive text-muted-foreground bg-chip-hover')).toEqual([]);
+    expect(rules('bg-card text-destructive text-muted-foreground bg-muted')).toEqual([]);
     expect(rules('text-primary-foreground border-border ring-ring/50 bg-brand/15')).toEqual([]);
     expect(rules('bg-background text-foreground bg-stage')).toEqual([]);
   });
@@ -354,7 +347,8 @@ describe('判準', () => {
   test('表面：手寫 stage 或 raised 的整組配方擋，只用到一部分的不擋', () => {
     expect(rules('bg-stage shadow-stage rounded-xl p-3')).toEqual(['表面:bg-stage shadow-stage']);
     expect(rules('hover:bg-stage dark:shadow-stage')).toEqual(['表面:bg-stage shadow-stage']);
-    expect(rules('bg-card rounded-3xl p-1')).toEqual(['表面:bg-card rounded-3xl p-1']);
+    expect(rules('bg-card rounded-3xl p-1')).toEqual(['表面:bg-card rounded-3xl']);
+    expect(rules('bg-card rounded-3xl')).toEqual(['表面:bg-card rounded-3xl']);
     expect(rules('bg-stage sticky bottom-0 pb-4')).toEqual([]);
     expect(rules('bg-card rounded-lg p-1')).toEqual([]);
     expect(rules('bg-card border rounded-3xl p-1')).toEqual(['表面:bg-card border rounded-3xl']);
@@ -391,12 +385,13 @@ describe('判準', () => {
     expect(rules('transition-transform scale-95')).toEqual([]);
   });
 
-  test('可展開列：四樣湊齊才算，按鈕的 hover 底色不算', () => {
-    expect(
-      rules('group hover:bg-chip-hover active:bg-chip-pressed flex w-full rounded-xl text-left'),
-    ).toEqual(['可展開列:hover:bg-chip-hover active:bg-chip-pressed w-full text-left']);
-    expect(rules('hover:bg-chip-hover active:bg-chip-pressed size-11 rounded-full')).toEqual([]);
-    expect(rules('hover:bg-chip-hover active:bg-chip-pressed rounded-lg text-left')).toEqual([]);
+  test('可展開列：四樣湊齊才算，按鈕的 hover 底色與一行字高的收合鈕不算', () => {
+    expect(rules('group hover:bg-muted flex min-h-11 w-full rounded-xl text-left')).toEqual([
+      '可展開列:hover:bg-muted w-full text-left min-h-11',
+    ]);
+    expect(rules('hover:bg-muted size-11 rounded-full')).toEqual([]);
+    expect(rules('hover:bg-muted rounded-lg text-left')).toEqual([]);
+    expect(rules('hover:bg-muted hover:text-foreground w-full px-3 py-0.5 text-left')).toEqual([]);
   });
 
   test('焦點：focus-visible 下的 ring 都擋，outline 與非焦點的 ring 不擋', () => {
@@ -410,18 +405,18 @@ describe('判準', () => {
   });
 
   test('泡泡：三樣湊齊才算，只有圓角或內距的不算', () => {
-    expect(rules('bg-chip text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap')).toEqual([
+    expect(rules('bg-muted text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap')).toEqual([
       '泡泡:rounded-3xl px-4 py-2.5',
     ]);
     expect(rules('rounded-3xl px-4 py-2')).toEqual([]);
     expect(rules('rounded-xl px-4 py-2.5')).toEqual([]);
   });
 
-  test('程式碼小框：四樣湊齊才算，chip 底的標籤與別的等寬字不算', () => {
+  test('程式碼小框：四樣湊齊才算，muted 底的標籤與別的等寬字不算', () => {
     expect(
-      rules('bg-chip max-h-32 min-w-0 overflow-auto rounded-lg p-2 font-mono text-tip'),
-    ).toEqual(['程式碼小框:bg-chip rounded-lg p-2 font-mono']);
-    expect(rules('bg-chip rounded-full px-3 py-1 text-tip')).toEqual([]);
+      rules('bg-muted max-h-32 min-w-0 overflow-auto rounded-lg p-2 font-mono text-tip'),
+    ).toEqual(['程式碼小框:bg-muted rounded-lg p-2 font-mono']);
+    expect(rules('bg-muted rounded-full px-3 py-1 text-tip')).toEqual([]);
     expect(rules('max-h-[150px] overflow-auto px-3 pt-1 pb-2 font-mono text-tip')).toEqual([]);
   });
 

@@ -154,20 +154,19 @@
 **顏色**
 - 全部 oklch，**語意 token 直接寫值**，不另建色板層；registry 帶進來的 `--sidebar-*` 由 `hsl()` 轉掉。
 - `--primary` **無彩**。`--brand` **只**用在連結、info、核准與提問面板的邊框光；error 沿用 `--destructive`。
-- **帶色相的 token 分兩種來源**：
-  - **SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:302-304`）、`--success`（`:199`、`:308`）、`--destructive`、`--status-*`（`:198`、`:307` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。
-  - **nexus 另加、SG 沒有的**：`--info`。色相與彩度沿用上一版產生器解出來的值，明度對 SG 的底色重解（`apps/web/tokengen/generate.mjs`）。
-- 原型另加的名字（SG 也沒有）：`--stage`、`--chip`／`--chip-hover`／`--chip-pressed`、`--stage-ring`、`--beam-*`。
-- **「需要你處理」那一色是 SG 的 `--status-interrupted`**（Q14）：產生器另外要求它疊在 stage 與 chip 三階上也過 4.5。
-- **nexus 獨有的顏色**（`stage`、`chip*`、`info`，同 vendor README「另外新增」）與原型另加的陰影名字，在 #1497 第 ⑥ 步刪掉，自製元件改用 SG 有的 token（Q11）。刪之前它們的值照下面的目標解，亮暗都要過。
+- **帶色相的 token 都是 SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:302-304`）、`--success`（`:199`、`:308`）、`--destructive`、`--status-*`（`:198`、`:307` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。用量環 70% 以下是 `--status-done`（vendor README 本地修改第 37 條）。
+- 原型另加的名字（SG 也沒有）：`--stage`、`--stage-ring`、`--beam-*`。
+- **「需要你處理」那一色是 SG 的 `--status-interrupted`**（Q14）：產生器另外要求它疊在 stage 上也過 4.5。
+- **可點的小面用 SG 的面**（#1689）：平常 `--muted`；滑鼠移上去與按著同一階，照 SG ghost 是 `--hover`，字換成 foreground；選中是 SG 的 `.glass-chosen`。
+- **nexus 獨有的顏色**（`stage`，同 vendor README「另外新增」）與原型另加的陰影名字，在 #1497 第 ⑥ 步刪掉，自製元件改用 SG 有的 token（Q11）。刪之前它們的值照下面的目標解，亮暗都要過。
 
 **對比度目標**（WCAG 2.x；產生器用 colorjs.io 逐對解，不再用 Leonardo）
 - **輸入是 SG 的值**（Q10）：色相、彩度、alpha 照 SG，彩度收進 sRGB，只解明度（步長 0.001）；SG 原值已達標的原樣留。唯一的例外是暗色 `--destructive`，照 SG 原值、不收進 sRGB。逐值的 SG 原值與產物在 `apps/web/tokengen/token-table.md`。
 - 文字 ≥ 4.5，非文字 ≥ 3（SC 1.4.11）；狀態色對**底色** **5.2**（產生器的解目標，讓暗色狀態色對卡片仍過 4.5；SG 的 `--status-*` 也套）；brand 在亮色底色上 ≥ 4.5（Q5）。
-- **表面的亮暗鑑別度**：卡片、細線、側欄、chip 這些面對底色的對比，亮色與暗色相差 ≤ 0.05；不到就只調亮色的明度（Q5）。表面只疊在底色上算；文字與狀態色的對比則疊在每一個底色與漸層停點上算，取最差的。
+- **表面的亮暗鑑別度**：卡片、細線、側欄、`--muted` 這些面對底色的對比，亮色與暗色相差 ≤ 0.05；不到就只調亮色的明度（Q5）。表面只疊在底色上算；文字與狀態色的對比則疊在每一個底色與漸層停點上算，取最差的。
 - **不透明的退路一樣要過**：`prefers-reduced-transparency: reduce` 與 `<html data-glass="opaque">` 下的面換成不透明，對比與表面差照同一組目標量（Q7）。
 - **亮暗鑑別度一樣**：兩主題共用一組目標，取兩主題較強者；起算點是原型 `eb800a1` 認可的對比度。
-- **不准比 develop 差**：換主題前已達標的對要維持達標。chip 三階上的次要字與 `status-interrupted` 都過 4.5，沒有例外。
+- **不准比 develop 差**：換主題前已達標的對要維持達標。可點的小面上的字（`--muted` 上的次要字、`--hover` 上的 foreground）與 `status-interrupted` 都過 4.5，沒有例外。
 - 不用 APCA（2023-07 已從 WCAG 3 草稿移除）。人工抽驗用 Vispero Colour Contrast Analyser，CI 用 colorjs.io 重算（§11）。
 
 **形狀**

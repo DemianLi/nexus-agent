@@ -315,7 +315,7 @@
   - 資料為空時平均值除以 0，算出 NaN%（`RecordsTable.tsx:736`）。
 - 可借的：
   - 「放不下就收成 +N」的量測做法，等哪一排 chip 只能單行時再用。
-  - 可選：markdown 表格加列的 hover 底色（`bg-chip-hover`），數字欄加 `tabular-nums`。小。
+  - 可選：markdown 表格加列的 hover 底色（`hover:bg-muted`），數字欄加 `tabular-nums`。小。
 
 **18. filter-table**
 
@@ -346,7 +346,7 @@
 
 | 原則 | 我們現況（現場數） | 提案 | 能變成測試嗎 |
 |---|---|---|---|
-| **顏色只當點綴** | 已經是這樣：色值以灰階為主，帶色相的只有 brand、success、warning、info、destructive 這幾個語意 token（`styles/tokens.generated.css`）。`design-system.test.ts` 已擋原生色板、white／black、hex、沒有 var 的色彩函式 | **採用**，寫進 `COMPONENTS.md` 當原則 | 已經有一半：原色擋得住。「彩色面積不能大」靜態量不出來，不另寫測試 |
+| **顏色只當點綴** | 已經是這樣：色值以灰階為主，帶色相的只有 brand、success、destructive 與 SG 的 `status-*` 這幾個語意 token（`styles/tokens.generated.css`）。`design-system.test.ts` 已擋原生色板、white／black、hex、沒有 var 的色彩函式 | **採用**，寫進 `COMPONENTS.md` 當原則 | 已經有一半：原色擋得住。「彩色面積不能大」靜態量不出來，不另寫測試 |
 | **次要靠顏色不靠字重** | `font-light／thin／extralight` 0 次；`font-medium` 28 次、`font-semibold` 1 次（`components/` 不含 ui/）；次要字一律 `text-muted-foreground` | **採用，但加一條它自己沒守住的**：次要色本身要過 4.5:1。它的 `ink-3` 只有 2.4–2.7:1（§4） | 可以：細字重的類別加進 `design-system.test.ts` 的擋單（今天 0 次，是絆索）。次要色的對比已由 `tokens-contrast.test.ts` 守 |
 | **一個面一顆實心按鈕** | `components/`（不含 ui/）裡 `variant="ghost"` 32、`outline` 14、`secondary` 6、`destructive` 1；沒寫 variant 的就是實心。按壓縮放也只給實心主按鈕 | **採用**，寫進 `COMPONENTS.md`。這是我們已經在做的事，寫下來讓新元件照做 | 靜態量不準：條件渲染會讓同一個檔裡兩顆實心按鈕不同時出現。**不寫測試**，靠 review |
 | **不刺眼**（陰影分層、單位數透明度） | 亮色陰影每層 ≤ 0.06；暗色 menu 的外層是 0.24（暗底上要更濃才看得到） | **採用亮色的部分**。暗色不套這個數字 | 可以：解析 `theme.css` 的 `:root` 陰影，每層透明度 ≤ 0.06。只管亮色 |

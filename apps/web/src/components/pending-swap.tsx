@@ -144,7 +144,7 @@ function PendingPanel({
       {collapsible && (
         <CollapsibleTrigger
           ref={trigger}
-          className="hover:bg-chip-hover active:bg-chip-pressed flex size-11 shrink-0 items-center justify-center rounded-md transition-colors duration-(--duration-quick) lg:size-8"
+          className="hover:bg-muted hover:text-foreground flex size-11 shrink-0 items-center justify-center rounded-md transition-colors duration-(--duration-quick) lg:size-8"
           aria-label={open ? '收起這些問題' : '展開這些問題'}
         >
           <Chevron open={open} />
