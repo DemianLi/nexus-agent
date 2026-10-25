@@ -135,6 +135,18 @@ afterEach(() => {
 });
 
 describe('計劃分頁：計劃不在載入的對話裡（#1798）', () => {
+  it('分頁標籤：掃描找到之前寫「計劃」，找到之後寫計劃標題，不必等定位', async () => {
+    const scan = pending();
+    mount(states().before, { findPlan: () => scan.promise });
+    await act(async () => {});
+    const tabNames = () => screen.queryAllByRole('tab').map((tab) => tab.textContent);
+    expect(tabNames()).toEqual(['計劃']);
+    await act(async () => scan.resolve(FOUND));
+    expect(tabNames()).toEqual(['改登入頁']);
+    // 計劃還不在對話裡：標題來自掃描，不是計劃庫。
+    expect(screen.getByTestId('plan-preview').textContent).toContain('先把文案改成中文');
+  });
+
   it('掃描找到：先顯示全文；按下去載到那一頁，計劃出現在對話裡之後捲到那張計劃卡，焦點交給全文', async () => {
     const { before, after } = states();
     let item: HTMLElement | undefined;

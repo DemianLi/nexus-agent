@@ -134,6 +134,20 @@ export function RightSidebarProvider({
   const locateFocus = useRef<HTMLElement | null>(null);
   const [reveal, setReveal] = useState<TurnReveal | undefined>(undefined);
   const revealCount = useRef(0);
+  const [scanned, setScanned] = useState<{
+    readonly threadId: string;
+    readonly titles: ReadonlyMap<string, string>;
+  }>({ threadId, titles: NO_TITLES });
+  const scannedPlanTitles = scanned.threadId === threadId ? scanned.titles : NO_TITLES;
+  const noteScannedPlan = useCallback(
+    (id: string, title: string) =>
+      setScanned((previous) => {
+        const base = previous.threadId === threadId ? previous.titles : NO_TITLES;
+        if (base.get(id) === title) return previous;
+        return { threadId, titles: new Map(base).set(id, title) };
+      }),
+    [threadId],
+  );
   useEffect(() => {
     if (touched.current) writeLayout(threadId, layout);
   }, [threadId, layout]);
@@ -214,12 +228,26 @@ export function RightSidebarProvider({
       focusTab,
       returnFocus,
       locateFocus,
+      scannedPlanTitles,
+      noteScannedPlan,
       reveal,
       settleReveal,
       update,
       setWidth,
     }),
-    [api, layout, sources, isMobile, width, reveal, settleReveal, update, setWidth],
+    [
+      api,
+      layout,
+      sources,
+      isMobile,
+      width,
+      scannedPlanTitles,
+      noteScannedPlan,
+      reveal,
+      settleReveal,
+      update,
+      setWidth,
+    ],
   );
   return <Control.Provider value={control}>{children}</Control.Provider>;
 }
@@ -481,7 +509,7 @@ function EmptyState() {
  * 計劃庫裡有了它，鈕那一格卸掉。
  */
 function PlanTab({ id }: { id: string }) {
-  const { api, sources, isMobile } = useControl();
+  const { api, sources, isMobile, noteScannedPlan } = useControl();
   /** 對話條目裡的那一份：有它才定位得到。 */
   const entriesPlan = sources.plans?.get(id);
   const { findPlan, loadThrough } = sources;
@@ -509,6 +537,10 @@ function PlanTab({ id }: { id: string }) {
   const found =
     entriesPlan === undefined && scan !== 'scanning' && scan?.kind === 'found' ? scan : undefined;
   const shown = entriesPlan ?? found?.plan;
+  const foundTitle = found?.plan.title;
+  useEffect(() => {
+    if (foundTitle !== undefined) noteScannedPlan(id, foundTitle);
+  }, [foundTitle, id, noteScannedPlan]);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'settled' | 'missing'>('idle');
   const preview = useRef<HTMLElement>(null);
   const stillMissing = useRef<HTMLParagraphElement>(null);
@@ -716,7 +748,7 @@ export function changesTabTitle(
 }
 
 function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefined } {
-  const { sources } = useControl();
+  const { sources, scannedPlanTitles } = useControl();
   const store = sources.changes?.summary;
   const seq = tab.kind === 'changes' ? tab.seq : undefined;
   const summary = useSyncExternalStore(store?.subscribe ?? noSubscribe, () =>
@@ -728,13 +760,14 @@ function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefin
   if (isPanelTab(tab)) return { label: PANELS[tab.kind].title, detail: undefined };
   if (tab.kind === 'deliverable') return { label: basename(tab.file.path), detail: tab.file.path };
   if (tab.kind === 'plan') {
-    const title = sources.plans?.get(tab.id)?.title ?? '計劃';
+    const title = sources.plans?.get(tab.id)?.title ?? scannedPlanTitles.get(tab.id) ?? '計劃';
     return { label: title, detail: title };
   }
   return changesTabTitle(typeof summary === 'object' ? summary : undefined);
 }
 
 const noSubscribe = () => () => {};
+const NO_TITLES: ReadonlyMap<string, string> = new Map();
 
 function TabChip({
   tab,

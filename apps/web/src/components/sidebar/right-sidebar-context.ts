@@ -24,6 +24,12 @@ export interface RightSidebarControl {
   readonly returnFocus: RefObject<HTMLElement | null>;
   /** 1024 以下定位之後，抽屜關掉時焦點要去的那一格（`locate`）。 */
   readonly locateFocus: RefObject<HTMLElement | null>;
+  /**
+   * 計劃分頁往前掃到（#1798）的計劃標題，以分頁 id 為鍵。掃到的那一份不在計劃庫裡（`sources.plans` 只有載入的對話），分頁標籤
+   * 要靠這裡才寫得出標題。換 thread 就清。
+   */
+  readonly scannedPlanTitles: ReadonlyMap<string, string>;
+  noteScannedPlan(id: string, title: string): void;
   /** 還沒被觀測分頁消費的「顯示某一輪」請求。 */
   readonly reveal: TurnReveal | undefined;
   settleReveal(nonce: number): void;
