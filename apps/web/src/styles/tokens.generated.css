@@ -9,7 +9,6 @@
   --status-running: oklch(0.468 0 0);
   --card: oklch(0.981 0.004 265 / 60%);
   --border: oklch(0.294 0.02 265 / 13%);
-  --warning: oklch(0.48 0.131 47.41);
   --info: oklch(0.485 0.2414 263.16);
   --stage: oklch(0.9423 0 0);
   --chip: oklch(0.8812 0 0);
@@ -28,7 +27,6 @@
   --status-running: oklch(0.72 0 0);
   --card: oklch(0.31 0 0 / 46%);
   --border: oklch(1 0 0 / 11%);
-  --warning: oklch(0.641 0.1635 52.25);
   --info: oklch(0.62 0.1995 258.86);
   --stage: oklch(0.2119 0 0);
   --chip: oklch(0.2289 0 0);

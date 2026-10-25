@@ -108,17 +108,17 @@ const TEXT: [string, string][] = [
   ['brand', 'card'],
   ['destructive', 'card'],
   ['success', 'card'],
-  ['warning', 'card'],
-  ['warning', 'chip'],
-  ['warning', 'chip-hover'],
-  ['warning', 'chip-pressed'],
+  ['status-interrupted', 'card'],
+  ['status-interrupted', 'chip'],
+  ['status-interrupted', 'chip-hover'],
+  ['status-interrupted', 'chip-pressed'],
   ['info', 'card'],
   // 程式碼區塊（stage）上的語法色（`shiki.css`）。
   ['foreground', 'stage'],
   ['brand', 'stage'],
   ['destructive', 'stage'],
   ['success', 'stage'],
-  ['warning', 'stage'],
+  ['status-interrupted', 'stage'],
 ];
 
 const NON_TEXT: [string, string][] = [
@@ -131,7 +131,6 @@ const NON_TEXT: [string, string][] = [
 const STATUS = [
   'destructive',
   'success',
-  'warning',
   'info',
   'status-done',
   'status-interrupted',

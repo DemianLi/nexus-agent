@@ -36,7 +36,7 @@
 
 三條，來自 beautiful-ui 的比對（[`.docs/beautiful-ui-comparison.md`](../../.docs/beautiful-ui-comparison.md) §3，[#1307](https://github.com/DemianLi/nexus-agent/issues/1307)）。都是我們已經在做的事，寫下來讓新元件照做。
 
-- **顏色只當點綴**。畫面以中性灰為主；帶色相的只有語意 token（brand、success、warning、info、destructive），用在狀態、焦點、需要人注意的地方，不拿來鋪大面積。原生色板與硬寫的色碼由 `design-system.test.ts` 擋；「彩色面積不能大」量不出來，靠 review。
+- **顏色只當點綴**。畫面以中性灰為主；帶色相的只有語意 token（brand、success、info、destructive、SG 的 `status-*`），用在狀態、焦點、需要人注意的地方，不拿來鋪大面積。原生色板與硬寫的色碼由 `design-system.test.ts` 擋；「彩色面積不能大」量不出來，靠 review。
 - **次要靠顏色，不靠字重；次要色本身要過 4.5:1**。說明、附註、時間一律 `text-muted-foreground`，不要把字變細（細字在中文與小字級下先糊掉）。`font-thin`／`font-extralight`／`font-light` 會被 `design-system.test.ts` 擋下。次要色的對比度由 `tokens-contrast.test.ts` 守著——次要色看不清楚，就等於沒寫。
 - **一個面一顆實心按鈕**。一張卡、一個面板、一列操作裡，只有主動作用實心（`Button` 預設 variant）；其他用 `outline`、`ghost`、`secondary`。按壓縮放也只給實心主按鈕（規格 §7）。條件渲染會讓同一個檔裡兩顆實心按鈕不同時出現，靜態量不準，**不寫測試，靠 review**。
 

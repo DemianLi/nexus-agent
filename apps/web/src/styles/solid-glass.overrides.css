@@ -320,15 +320,15 @@ body {
 }
 
 /*
- * 模式座（權限）在「全開」時換警示色（#1591 PM 決定第 5 點；README 本地修改第 35 條）：develop 的權限座是 `text-warning`，
+ * 模式座（權限）在「全開」時換警示色（#1591 PM 決定第 5 點；README 本地修改第 35 條）：警示色是 `status-interrupted`（#1468 Q14），
  * SG 的 `ComposerPick` 沒有危險狀態。外面那層（`permission-seat.tsx`）帶 `data-danger`，這裡對裡面的 Trigger 上 status token，
  * 平常、hover、焦點都留著，不被 Trigger 自己的 `hover:text-foreground` 換掉。**清單開著時不換**：SG 開著的底
- * （`.glass-held[aria-expanded]` 的 `--glass-state`）上，warning 只有 4.46（亮）／4.46（暗），連文字的 4.5 都不到；開著時跟其他
+ * （`.glass-held[aria-expanded]` 的 `--glass-state`）上，亮色的 `status-interrupted` 只有 4.46，連文字的 4.5 都不到（暗色 7.76；guard 的 composer 頁清單開著時量，#1689）；開著時跟其他
  * Pick 一樣是字色，「全開」那一列在清單裡打勾。寫在 layer 外。`guard/` 量平常、hover 的警示色過狀態色門檻 5.2，開著時換回字色。
  */
 /* prettier-ignore */
 [data-slot="permission-pick"][data-danger="true"] [data-slot="dropdown-menu-trigger"]:not([aria-expanded="true"]) {
-  color: var(--warning);
+  color: var(--status-interrupted);
 }
 
 /*
@@ -360,7 +360,7 @@ body {
 
 /* prettier-ignore */
 [data-slot="context-ring"] svg.text-amber-500 {
-  color: var(--warning);
+  color: var(--status-interrupted);
 }
 
 /*

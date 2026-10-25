@@ -109,7 +109,7 @@ export function StatusLine({
   if (reconnecting !== undefined) {
     return (
       <div className="flex items-center gap-2">
-        <p className="text-warning text-body" role="status">
+        <p className="text-status-interrupted text-body" role="status">
           {lostText(reconnecting, connectionError, refusal)}
         </p>
         {onReconnect !== undefined && (
@@ -128,7 +128,7 @@ export function StatusLine({
   }
   if (refusal !== undefined) {
     return (
-      <p className="text-warning text-body" role="status">
+      <p className="text-status-interrupted text-body" role="status">
         {refusal}
       </p>
     );
