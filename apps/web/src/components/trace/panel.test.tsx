@@ -12,7 +12,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PANELS } from '@/components/sidebar/right-sidebar-panels';
 import type { PanelBodyProps } from '@/lib/right-sidebar-api';
-import { REANNOUNCE_MS, TRACE_LOCATED_TEXT } from '@/components/trace/panel';
+import {
+  REANNOUNCE_MS,
+  TRACE_EMPTY_HINT,
+  TRACE_EMPTY_TEXT,
+  TRACE_LOCATED_TEXT,
+} from '@/components/trace/panel';
 import { TRACE_LOCATE_LABEL } from '@/components/trace/row';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
@@ -162,10 +167,12 @@ describe('觀測分頁：內容', () => {
     expect(screen.getByTestId('trace-limits').textContent).toContain(TRACE_LIMITS.loaded);
   });
 
-  it('沒有對話可看就是空狀態，限制不假裝有內容', async () => {
+  it('沒有對話可看就是空狀態（SG Empty：標題與一句說明），限制不假裝有內容', async () => {
     mount(emptyConversation());
     await act(async () => {});
-    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe('尚無資料');
+    const empty = screen.getByTestId('right-sidebar-panel-trace');
+    expect(empty.getAttribute('data-slot')).toBe('empty');
+    expect(empty.textContent).toBe(TRACE_EMPTY_TEXT + TRACE_EMPTY_HINT);
     expect(screen.queryByTestId('trace-limits')).toBeNull();
   });
 });

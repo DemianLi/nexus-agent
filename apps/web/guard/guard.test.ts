@@ -77,6 +77,11 @@ import { startGuardServer, type GuardServer } from './server';
  *    目標的暫停鈕；跑著時「退出」停用、`title` 寫原因，而且滑鼠移得上去（`pointer-events` 不是 none）、移上去底色不變；Badge、「退出」、失敗那句、審核兩顆、結果 chip 的字過 4.5，幾顆鈕有焦點外框；
  *    Badge 與結果 chip 是 `rounded-4xl`，「退出」與「查看全文」是 `rounded-sm`，審核兩顆與暫停鈕是 `rounded-md`；375 寬時「退出」至少 44px 寬、
  *    「退出」、「查看全文」、審核兩顆 44px 高，頁面不橫向溢出。
+ * 23. **觀測分頁**（#1690 PR A，`?overlay=trace-*`）：一輪標頭的狀態膠囊九種收法的色調與字過 4.5、圓角是 `rounded-4xl`，完成與停在中斷點
+ *    字前面的圓點對膠囊底過 3，只有進行中帶 `DotLoader`；
+ *    空狀態的標題與說明過 4.5；計劃那一列的結果 chip 是 `rounded-4xl`、定位鈕是 `rounded-md`、有焦點外框；載入細節的鈕（待命、重試）與失敗原因過 4.5、
+ *    鈕是 `rounded-sm`、有焦點外框，讀取中不是鈕、是 `DotLoader` 加一行字（只有摘要的組、更早的摘要、子代理三處都量），分頁只有一格
+ *    `role=status`；375 寬時重試鈕與讀取中那一行 44px 高、頁面不橫向溢出。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -1320,6 +1325,57 @@ const WIDTH_MARKS: Record<string, Record<string, Record<string, string>>> = {
   feedback: { '[data-slot="dialog-content"]': { 'data-guard-width': 'feedback' } },
   'mobile-sidebar': OVERLAYS.find((o) => o.name === 'mobile-sidebar')!.marks,
 };
+
+/**
+ * 圓角拿 SG 的 class 做探針比：探針的值取自出貨 CSS 裡 `.rounded-4xl`、`.rounded-md`、`.rounded-sm` 那幾條規則的原文（guard 底下
+ * 不寫 class，`src/guard-page.test.ts`）；`targets` 每個選擇器命中的元素各量一個圓角。自檢三條規則都抓到了，而且值兩兩不同。
+ */
+async function readRadii<K extends string>(
+  page: Page,
+  targets: Record<K, string>,
+): Promise<{ probe: { capsule: string; md: string; sm: string }; radii: Record<K, string[]> }> {
+  const result = await page.evaluate(
+    (targets) => {
+      const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]);
+      const find = (selector: string): CSSStyleRule | undefined => {
+        for (const rule of rules) {
+          if (rule instanceof CSSStyleRule && rule.selectorText === selector) return rule;
+          if (rule instanceof CSSGroupingRule)
+            for (const inner of rule.cssRules)
+              if (inner instanceof CSSStyleRule && inner.selectorText === selector) return inner;
+        }
+        return undefined;
+      };
+      const radiusOf = (selector: string) => {
+        const probe = document.createElement('div');
+        probe.style.borderRadius = find(selector)?.style.borderRadius ?? '';
+        document.body.append(probe);
+        const radius = getComputedStyle(probe).borderTopLeftRadius;
+        probe.remove();
+        return radius;
+      };
+      return {
+        probe: {
+          capsule: radiusOf('.rounded-4xl'),
+          md: radiusOf('.rounded-md'),
+          sm: radiusOf('.rounded-sm'),
+        },
+        radii: Object.fromEntries(
+          Object.entries(targets).map(([key, selector]) => [
+            key,
+            [...document.querySelectorAll(selector)].map(
+              (el) => getComputedStyle(el).borderTopLeftRadius,
+            ),
+          ]),
+        ),
+      };
+    },
+    targets as Record<string, string>,
+  );
+  const { capsule, md, sm } = result.probe;
+  expect(new Set([capsule, md, sm, '0px']).size).toBe(4);
+  return result as { probe: typeof result.probe; radii: Record<K, string[]> };
+}
 
 async function openOverlay(
   name: string,
@@ -4352,50 +4408,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話引用與圓角（#16
   test('G2：決定紀錄的 chip 是 Badge 的圓角，捲到底的鈕與「立刻重連」是 Button 的圓角', async () => {
     const page = await openOverlay('transcript-refs', theme, { marks: transcriptRefsMarks });
     try {
-      const radii = await page.evaluate(() => {
-        // 探針的值取自出貨 CSS 裡那一條 utility 的原文（guard 底下不寫 class，`src/guard-page.test.ts`）。
-        const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]);
-        const find = (selector: string): CSSStyleRule | undefined => {
-          for (const rule of rules) {
-            if (rule instanceof CSSStyleRule && rule.selectorText === selector) return rule;
-            if (rule instanceof CSSGroupingRule)
-              for (const inner of rule.cssRules)
-                if (inner instanceof CSSStyleRule && inner.selectorText === selector) return inner;
-          }
-          return undefined;
-        };
-        const radiusOf = (selector: string) => {
-          const probe = document.createElement('div');
-          probe.style.borderRadius = find(selector)?.style.borderRadius ?? '';
-          document.body.append(probe);
-          const radius = getComputedStyle(probe).borderTopLeftRadius;
-          probe.remove();
-          return radius;
-        };
-        const of = (selector: string) =>
-          [...document.querySelectorAll(selector)].map(
-            (el) => getComputedStyle(el).borderTopLeftRadius,
-          );
-        return {
-          badge: radiusOf('.rounded-4xl'),
-          button: radiusOf('.rounded-sm'),
-          chip: of('[data-testid="decision-entry"]'),
-          scroll: of('[data-slot="message-scroller-button"]'),
-          reconnect: of('[data-guard-rows="status"] button'),
-        };
+      const { probe, radii } = await readRadii(page, {
+        chip: '[data-testid="decision-entry"]',
+        scroll: '[data-slot="message-scroller-button"]',
+        reconnect: '[data-guard-rows="status"] button',
       });
-      report[`transcript-refs:${theme}:radii`] = radii;
-      expect(radii).toEqual({
-        badge: radii.badge,
-        button: radii.button,
-        chip: [radii.badge],
-        scroll: [radii.button],
-        reconnect: [radii.button],
-      });
-      // 探針自檢：兩個 class 都真的產出了，而且不是同一個值。
-      expect(radii.badge).not.toBe('0px');
-      expect(radii.button).not.toBe('0px');
-      expect(radii.badge).not.toBe(radii.button);
+      report[`transcript-refs:${theme}:radii`] = { probe, radii };
+      expect(radii).toEqual({ chip: [probe.capsule], scroll: [probe.sm], reconnect: [probe.sm] });
     } finally {
       await page.close();
     }
@@ -4506,33 +4525,17 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量核准與換手（#1694）�
   test('G2：核准卡的鈕（含「停止這一輪」）、收起鈕、輸入框群組是 rounded-md，取消委派的小鈕是 rounded-sm', async () => {
     const page = await openOverlay('handoff', theme, { marks: handoffMarks });
     try {
-      const radii = await page.evaluate((running) => {
-        // 探針的值取自出貨 CSS 裡那一條 utility 的原文（guard 底下不寫 class，`src/guard-page.test.ts`）。
-        const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]);
-        const find = (selector: string): CSSStyleRule | undefined => {
-          for (const rule of rules) {
-            if (rule instanceof CSSStyleRule && rule.selectorText === selector) return rule;
-            if (rule instanceof CSSGroupingRule)
-              for (const inner of rule.cssRules)
-                if (inner instanceof CSSStyleRule && inner.selectorText === selector) return inner;
-          }
-          return undefined;
-        };
-        const radiusOf = (selector: string) => {
-          const probe = document.createElement('div');
-          probe.style.borderRadius = find(selector)?.style.borderRadius ?? '';
-          document.body.append(probe);
-          const radius = getComputedStyle(probe).borderTopLeftRadius;
-          probe.remove();
-          return radius;
-        };
-        const of = (selector: string) =>
-          [...document.querySelectorAll(selector)].map(
-            (el) => getComputedStyle(el).borderTopLeftRadius,
-          );
-        // 核准卡在換手層裡：呼吸光幾圈，數這一塊裡在跑動畫的元素（只記錄）。
+      const { probe, radii } = await readRadii(page, {
+        approval: '[data-guard-handoff="approval"] [data-testid="approval-card"] button',
+        stop: '[data-guard-handoff="approval-stuck"] [data-testid="approval-card"] > div:last-child > button',
+        collapse: '[data-guard-handoff="question"] button[aria-label="收起這些問題"]',
+        group: `${HANDOFF_RUNNING} [data-slot="input-group"]`,
+        remove: '[data-guard-handoff="chips"] button[aria-label^="取消委派"]',
+      });
+      // 核准卡在換手層裡：呼吸光幾圈，數這一塊裡在跑動畫的元素（只記錄）。
+      const animated = await page.evaluate(() => {
         const approval = document.querySelector('[data-guard-handoff="approval"]')!;
-        const animated = [approval, ...approval.querySelectorAll('*')].filter((el) => {
+        return [approval, ...approval.querySelectorAll('*')].filter((el) => {
           const style = getComputedStyle(el);
           return [
             style.animationName,
@@ -4540,34 +4543,15 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量核准與換手（#1694）�
             getComputedStyle(el, '::after').animationName,
           ].some((name) => name !== 'none');
         }).length;
-        return {
-          md: radiusOf('.rounded-md'),
-          sm: radiusOf('.rounded-sm'),
-          approval: of('[data-guard-handoff="approval"] [data-testid="approval-card"] button'),
-          stop: of(
-            '[data-guard-handoff="approval-stuck"] [data-testid="approval-card"] > div:last-child > button',
-          ),
-          collapse: of('[data-guard-handoff="question"] button[aria-label="收起這些問題"]'),
-          group: of(`${running} [data-slot="input-group"]`),
-          remove: of('[data-guard-handoff="chips"] button[aria-label^="取消委派"]'),
-          animated,
-        };
-      }, HANDOFF_RUNNING);
-      report[`handoff:${theme}:radii`] = radii;
-      expect(radii).toEqual({
-        md: radii.md,
-        sm: radii.sm,
-        approval: [radii.md, radii.md],
-        stop: [radii.md],
-        collapse: [radii.md],
-        group: [radii.md],
-        remove: [radii.sm],
-        animated: radii.animated,
       });
-      // 探針自檢：兩個 class 都真的產出了，而且不是同一個值。
-      expect(radii.md).not.toBe('0px');
-      expect(radii.sm).not.toBe('0px');
-      expect(radii.md).not.toBe(radii.sm);
+      report[`handoff:${theme}:radii`] = { probe, radii, animated };
+      expect(radii).toEqual({
+        approval: [probe.md, probe.md],
+        stop: [probe.md],
+        collapse: [probe.md],
+        group: [probe.md],
+        remove: [probe.sm],
+      });
     } finally {
       await page.close();
     }
@@ -4718,58 +4702,308 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量計劃與目標（#1692）�
   test('G2（#1827）：Badge 與結果 chip 是 rounded-4xl，「退出」與「查看全文」是 rounded-sm，審核兩顆與暫停鈕是 rounded-md', async () => {
     const page = await openOverlay('plan', theme, { marks: planMarks });
     try {
-      const radii = await page.evaluate(() => {
-        // 探針的值取自出貨 CSS 裡那一條 utility 的原文（guard 底下不寫 class，`src/guard-page.test.ts`）。
-        const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]);
-        const find = (selector: string): CSSStyleRule | undefined => {
-          for (const rule of rules) {
-            if (rule instanceof CSSStyleRule && rule.selectorText === selector) return rule;
-            if (rule instanceof CSSGroupingRule)
-              for (const inner of rule.cssRules)
-                if (inner instanceof CSSStyleRule && inner.selectorText === selector) return inner;
-          }
-          return undefined;
-        };
-        const radiusOf = (selector: string) => {
-          const probe = document.createElement('div');
-          probe.style.borderRadius = find(selector)?.style.borderRadius ?? '';
-          document.body.append(probe);
-          const radius = getComputedStyle(probe).borderTopLeftRadius;
-          probe.remove();
-          return radius;
-        };
-        const of = (selector: string) =>
-          [...document.querySelectorAll(selector)].map(
-            (el) => getComputedStyle(el).borderTopLeftRadius,
-          );
-        return {
-          md: radiusOf('.rounded-md'),
-          sm: radiusOf('.rounded-sm'),
-          capsule: radiusOf('.rounded-4xl'),
-          badge: of('[data-guard-plan="chip"] [data-slot="badge"]'),
-          exit: of('[data-guard-plan="chip"] button[aria-label="退出計劃模式"]'),
-          open: of('[data-guard-plan] button[aria-label^="查看全文"]'),
-          review: of(
-            '[data-guard-plan="review"] [data-testid="plan-review-panel"] > div:last-child > button',
-          ),
-          outcome: of('[data-guard-plan="card"] [data-testid="plan-outcome"]'),
-          pause: of('[data-guard-plan="goal"] [data-testid="goal-pause"]'),
-        };
+      const { probe, radii } = await readRadii(page, {
+        badge: '[data-guard-plan="chip"] [data-slot="badge"]',
+        exit: '[data-guard-plan="chip"] button[aria-label="退出計劃模式"]',
+        open: '[data-guard-plan] button[aria-label^="查看全文"]',
+        review:
+          '[data-guard-plan="review"] [data-testid="plan-review-panel"] > div:last-child > button',
+        outcome: '[data-guard-plan="card"] [data-testid="plan-outcome"]',
+        pause: '[data-guard-plan="goal"] [data-testid="goal-pause"]',
       });
-      report[`plan:${theme}:radii`] = radii;
+      report[`plan:${theme}:radii`] = { probe, radii };
       expect(radii).toEqual({
-        md: radii.md,
-        sm: radii.sm,
-        capsule: radii.capsule,
-        badge: [radii.capsule],
-        exit: [radii.sm],
-        open: [radii.sm, radii.sm],
-        review: [radii.md, radii.md],
-        outcome: [radii.capsule],
-        pause: [radii.md],
+        badge: [probe.capsule],
+        exit: [probe.sm],
+        open: [probe.sm, probe.sm],
+        review: [probe.md, probe.md],
+        outcome: [probe.capsule],
+        pause: [probe.md],
       });
-      // 探針自檢：三個 class 都真的產出了，而且值兩兩不同。
-      expect(new Set([radii.md, radii.sm, radii.capsule, '0px']).size).toBe(4);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+/**
+ * 觀測分頁（#1690 PR A，`?overlay=trace-*`）。`trace-groups` 要先按「看第 1 輪」，前三輪才會從「更早的」摘要變成只有摘要的組；
+ * 假端點讓第 2 輪預拉失敗、第 3 輪預拉回空的，所以第 3 輪停在待命，按它的鈕就停在讀取中（同一個 seq 的第二次查詢不回）。按出來的東西在 `prepare` 裡等、再標。
+ */
+const TRACE_TONES = {
+  done: 'done',
+  waiting: 'waiting',
+  question: 'waiting',
+  failed: 'failed',
+  running: 'running',
+  aborted: 'neutral',
+  interrupted: 'neutral',
+  'max-tokens': 'neutral',
+  blocked: 'neutral',
+};
+const TRACE_PILL = '[data-testid="trace-head-status"]';
+const tracePillMarks: Record<string, Record<string, string>> = Object.fromEntries(
+  Object.keys(TRACE_TONES).map((name) => [
+    `[data-guard-head="${name}"] ${TRACE_PILL}`,
+    { 'data-guard-text': `pill-${name}` },
+  ]),
+);
+const traceTurn = (seq: number) => `section[data-testid="trace-turn"][data-seq="${seq}"]`;
+const TRACE_PULL = '[data-testid="trace-pull"]';
+const TRACE_LOADING = `${TRACE_PULL}[data-status="loading"]`;
+
+async function revealTraceGroups(page: Page): Promise<void> {
+  await page.click('[data-guard-reveal]');
+  const idle = page.locator(`${traceTurn(300)} ${TRACE_PULL}[data-status="idle"] button`);
+  const retry = page.locator(`${traceTurn(200)} ${TRACE_PULL}[data-status="failed"] button`);
+  await Promise.all([idle.waitFor(), retry.waitFor()]);
+  await idle.evaluate((el) => {
+    el.setAttribute('data-guard-text', 'pull-idle');
+    el.setAttribute('data-guard-focus', 'pull-idle');
+  });
+  await retry.evaluate((el) => {
+    el.setAttribute('data-guard-text', 'pull-retry');
+    el.setAttribute('data-guard-focus', 'pull-retry');
+  });
+  await page
+    .locator('[data-testid="trace-pull-failed"]')
+    .evaluate((el) => el.setAttribute('data-guard-text', 'pull-failure'));
+  await page.mouse.move(0, 0);
+}
+
+async function loadTraceGroup(page: Page): Promise<void> {
+  await revealTraceGroups(page);
+  await page.click(`${traceTurn(300)} ${TRACE_PULL} button`);
+  await page.locator(`${traceTurn(300)} ${TRACE_LOADING}`).waitFor();
+  await page.mouse.move(0, 0);
+}
+
+/** 讀取中那幾格：沒有鈕、一個 `DotLoader`（三個點）、字；外加整頁 `role=status` 有幾格。 */
+function readTraceLoading(page: Page) {
+  return page.evaluate(
+    (loading) => ({
+      rows: [...document.querySelectorAll(loading)].map((el) => ({
+        buttons: el.querySelectorAll('button').length,
+        dots: el.querySelectorAll('.animate-dot-flash').length,
+        text: el.textContent,
+      })),
+      status: document.querySelectorAll('[role="status"]').length,
+    }),
+    TRACE_LOADING,
+  );
+}
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁（#1690 PR A）：%s', (theme) => {
+  test('T8：狀態膠囊九種收法的色調、字過 4.5、圓角是 rounded-4xl；完成與停在中斷點的圓點過 3，只有進行中帶 DotLoader', async () => {
+    const page = await openOverlay('trace-heads', theme, { marks: tracePillMarks });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        Object.keys(TRACE_TONES).map((name) => `pill-${name}`),
+        `trace-heads:${theme}`,
+      );
+      const pills = await page.evaluate(
+        (pill) =>
+          Object.fromEntries(
+            [...document.querySelectorAll('[data-guard-head]')].map((head) => {
+              const el = head.querySelector(pill)!;
+              return [
+                head.getAttribute('data-guard-head'),
+                `${el.getAttribute('data-tone')}:${el.querySelectorAll('.animate-dot-flash').length}`,
+              ];
+            }),
+          ),
+        TRACE_PILL,
+      );
+      expect(pills).toEqual(
+        Object.fromEntries(
+          Object.entries(TRACE_TONES).map(([name, tone]) => [
+            name,
+            `${tone}:${name === 'running' ? 3 : 0}`,
+          ]),
+        ),
+      );
+      // 色調畫在圓點上：點對膠囊底過非文字的門檻。
+      const dots = await page.evaluate(() =>
+        [...document.querySelectorAll('[data-testid="trace-head-dot"]')].map((el) => {
+          const chain = [];
+          for (let node = el.parentElement; node !== null; node = node.parentElement) {
+            const style = getComputedStyle(node);
+            chain.push({
+              backgroundColor: style.backgroundColor,
+              backgroundImage: style.backgroundImage,
+              opacity: style.opacity,
+            });
+          }
+          return {
+            head: el.closest('[data-guard-head]')!.getAttribute('data-guard-head') ?? '',
+            color: getComputedStyle(el).backgroundColor,
+            chain,
+          };
+        }),
+      );
+      const ratios = Object.fromEntries<number>(
+        dots.map((dot) => [dot.head, round(worstOn(dot.color, dot.chain).ratio)]),
+      );
+      report[`trace-heads:${theme}:dots`] = ratios;
+      expect(Object.keys(ratios)).toEqual(['done', 'waiting', 'question']);
+      expect(Object.values(ratios).filter((ratio) => ratio < NON_TEXT_MIN)).toEqual([]);
+      const { probe, radii } = await readRadii(page, { pill: TRACE_PILL });
+      report[`trace-heads:${theme}:radii`] = { probe, radii };
+      expect(radii.pill).toEqual(Object.keys(TRACE_TONES).map(() => probe.capsule));
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('T1：空狀態的標題與說明過 4.5', async () => {
+    const page = await openOverlay('trace-empty', theme, {
+      marks: {
+        '[data-slot="empty-title"]': { 'data-guard-text': 'empty-title' },
+        '[data-slot="empty-description"]': { 'data-guard-text': 'empty-hint' },
+      },
+    });
+    try {
+      expectTexts(await collectTexts(page), ['empty-title', 'empty-hint'], `trace-empty:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('G2：計劃那一列的結果 chip 是 rounded-4xl、定位鈕是 rounded-md，定位鈕有焦點外框', async () => {
+    const page = await openOverlay('trace-plan', theme, {
+      marks: {
+        '[data-testid="trace-plan-outcome"]': { 'data-guard-text': 'plan-outcome' },
+        '[data-testid="trace-locate"]': { 'data-guard-focus': 'locate' },
+      },
+    });
+    try {
+      expectTexts(await collectTexts(page), ['plan-outcome'], `trace-plan:${theme}`);
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['locate-0', 'locate-1']);
+      expectFocus(focus, `trace-plan:${theme}`);
+      const { probe, radii } = await readRadii(page, {
+        outcome: '[data-testid="trace-plan-outcome"]',
+        locate: '[data-testid="trace-locate"]',
+      });
+      report[`trace-plan:${theme}:radii`] = { probe, radii };
+      expect(radii).toEqual({ outcome: [probe.capsule], locate: [probe.md, probe.md] });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('T6：載入細節的鈕與失敗原因過 4.5、鈕是 rounded-sm 並有焦點外框，失敗原因掛在重試鈕上', async () => {
+    const page = await openOverlay('trace-groups', theme, {
+      marks: { '[data-guard-reveal]': {} },
+      prepare: revealTraceGroups,
+    });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        ['pull-idle', 'pull-retry', 'pull-failure'],
+        `trace-groups:${theme}`,
+      );
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['pull-retry', 'pull-idle']);
+      expectFocus(focus, `trace-groups:${theme}`);
+      const described = await page.evaluate(() => {
+        const retry = document.querySelector('[data-guard-focus="pull-retry"]')!;
+        const id = retry.getAttribute('aria-describedby') ?? '';
+        return document.getElementById(id)?.getAttribute('data-testid') ?? null;
+      });
+      expect(described).toBe('trace-pull-failed');
+      const { probe, radii } = await readRadii(page, { pull: `${TRACE_PULL} button` });
+      report[`trace-groups:${theme}:radii`] = { probe, radii };
+      expect(radii.pull).toEqual([probe.sm, probe.sm]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('T6：讀取中不是鈕，是 DotLoader 加一行字（只有摘要的組、更早的摘要、子代理），分頁只有一格 role=status', async () => {
+    const expected = { buttons: 0, dots: 3, text: '正在載入這一輪的細節…' };
+    const group = await openOverlay('trace-groups', theme, {
+      marks: { '[data-guard-reveal]': {} },
+      prepare: async (page) => {
+        await loadTraceGroup(page);
+        await page
+          .locator(TRACE_LOADING)
+          .locator('p')
+          .evaluate((el) => el.setAttribute('data-guard-text', 'pull-loading'));
+      },
+    });
+    try {
+      expectTexts(await collectTexts(group), ['pull-loading'], `trace-groups-loading:${theme}`);
+      const loading = await readTraceLoading(group);
+      report[`trace-groups:${theme}:loading`] = loading;
+      expect(loading).toEqual({ rows: [expected], status: 1 });
+    } finally {
+      await group.close();
+    }
+    const digests = await openOverlay('trace-digests', theme, {
+      marks: { 'button[aria-expanded="false"]': {} },
+      prepare: async (page) => {
+        await page.getByRole('button', { name: /更早的/ }).click();
+        await page.locator(TRACE_LOADING).nth(1).waitFor();
+      },
+    });
+    try {
+      const loading = await readTraceLoading(digests);
+      report[`trace-digests:${theme}:loading`] = loading;
+      expect(loading).toEqual({ rows: [expected, expected], status: 1 });
+    } finally {
+      await digests.close();
+    }
+    const subagent = await openOverlay('trace-subagent', theme, {
+      marks: { '[data-testid="trace-row"]': {} },
+      prepare: async (page) => {
+        // 子代理的呼叫結構在派它的那顆工具列底下，展開工具列、再展開「子代理的呼叫結構」才拉。
+        await page
+          .locator('[data-testid="trace-row"] button[aria-expanded="false"]', {
+            hasText: '委派子代理',
+          })
+          .click();
+        await page.click('[data-testid="trace-subagent-block"] button[aria-expanded="false"]');
+        await page.locator(TRACE_LOADING).waitFor();
+      },
+    });
+    try {
+      const loading = await readTraceLoading(subagent);
+      report[`trace-subagent:${theme}:loading`] = loading;
+      expect(loading).toEqual({ rows: [expected], status: 1 });
+    } finally {
+      await subagent.close();
+    }
+  });
+
+  test('T6：375 寬時重試鈕與讀取中那一行都是 44px 高，頁面不橫向溢出', async () => {
+    const page = await openOverlay('trace-groups', theme, {
+      viewport: { width: 375, height: 812 },
+      marks: { '[data-guard-reveal]': {} },
+      prepare: async (page) => {
+        // 「看第 1 輪」（`revealTurn`）自己會打開右側欄。
+        await page.click('[data-guard-reveal]');
+        await page.locator(`${traceTurn(300)} ${TRACE_PULL} button`).click();
+        await page.locator(`${traceTurn(200)} ${TRACE_PULL}[data-status="failed"]`).waitFor();
+        await page.locator(`${traceTurn(300)} ${TRACE_LOADING}`).waitFor();
+      },
+    });
+    try {
+      const sizes = await page.evaluate(
+        ([turn200, turn300, pull]) => {
+          const height = (selector: string) =>
+            Math.round(document.querySelector(selector)!.getBoundingClientRect().height);
+          return {
+            retry: height(`${turn200} ${pull} button`),
+            loading: height(`${turn300} ${pull} p`),
+            overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          };
+        },
+        [traceTurn(200), traceTurn(300), TRACE_PULL],
+      );
+      report[`trace-groups:${theme}:375`] = sizes;
+      expect(sizes).toEqual({ retry: 44, loading: 44, overflow: 0 });
     } finally {
       await page.close();
     }

@@ -23,6 +23,7 @@
  *   再把焦點交給那一則（`right-sidebar.tsx`）。找不到時在那一列底下講原因。
  */
 
+import { Activity } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 
 import type { ConversationState } from '@nexus/wire';
@@ -32,6 +33,13 @@ import { Digests, TurnGroup } from '@/components/trace/groups';
 import { TRACE_PULL_FAILED_TEXT, TRACE_PULL_LOADING_TEXT } from '@/components/trace/pull-control';
 import { SubagentSourceContext } from '@/components/trace/subagent';
 import { Button } from '@/components/ui/button';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty';
 import { useStableNames } from '@/hooks/use-stable-names';
 import { useTrajectoryPull } from '@/hooks/use-trajectory-pull';
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot';
@@ -51,8 +59,9 @@ import { statusOf } from '@/lib/trajectory-pull';
 import type { PullSnapshot, TrajectoryPuller } from '@/lib/trajectory-pull';
 import { trajectoryOf } from '@/lib/trajectory-view';
 
-/** 面板還沒有資料可畫時那一句（也是 #1031 留下的那一句）。 */
-export const TRACE_EMPTY_TEXT = '尚無資料';
+/** 面板還沒有資料可畫時的空狀態（SG `Empty`，#1690 T1）：`TRACE_EMPTY_TEXT` 是標題，`TRACE_EMPTY_HINT` 是說明。 */
+export const TRACE_EMPTY_TEXT = '還沒有過程可看';
+export const TRACE_EMPTY_HINT = '送出第一句話之後，這裡會一輪一組列出模型呼叫與工具。';
 
 export const TRACE_LOCATED_TEXT = '已在對話裡定位';
 /** 同一句要再唸一次時，清空到填回去之間隔多久（毫秒）。太短報讀器會當成沒變。 */
@@ -393,19 +402,22 @@ export function TraceBody({ visible, sources, locate, reveal, onRevealed }: Pane
   const state = useVisibleSnapshot(sources.conversation, visible);
   const pull = useVisibleSnapshot(sources.trajectoryPull, visible);
   useTrajectoryPull(sources.trajectoryPull, state, visible);
-  // 條目是空的、但軌跡投影已經有輪（內文沒載入）時照樣畫結構，不寫「尚無資料」。
+  // 條目是空的、但軌跡投影已經有輪（內文沒載入）時照樣畫結構，不畫空狀態。
   const empty =
     state === undefined ||
     (state.entries.length === 0 &&
       (trajectoryOf(state)?.turns.length ?? 0) + (trajectoryOf(state)?.digests.length ?? 0) === 0);
   if (empty) {
     return (
-      <p
-        className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-body"
-        data-testid="right-sidebar-panel-trace"
-      >
-        {TRACE_EMPTY_TEXT}
-      </p>
+      <Empty className="flex-1" data-testid="right-sidebar-panel-trace">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Activity aria-hidden />
+          </EmptyMedia>
+          <EmptyTitle>{TRACE_EMPTY_TEXT}</EmptyTitle>
+          <EmptyDescription>{TRACE_EMPTY_HINT}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
   return (

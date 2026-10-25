@@ -78,12 +78,23 @@
  * - `?overlay=plan` 畫計劃與目標這一組（#1692）：輸入框上方的計劃模式標籤三塊（能按、跑著停用、按下去會回失敗原因；各包一層
  *   `data-guard-plan`）、計劃審核面板（有右側欄，帶「查看全文」）、帶結果 chip 的計劃卡，以及目標列（帶暫停鈕）。量 SG Badge 不在 Tab
  *   順序裡、「退出」鈕的名稱與停用、字與焦點外框、圓角（#1827 G2），375 寬時幾顆鈕 44px 高。
+ * - `?overlay=trace-heads` 畫觀測分頁一輪標頭的九種收法（#1690 T8，各包一層 `data-guard-head`）；`trace-empty`、`trace-plan`、
+ *   `trace-digests`、`trace-groups`、`trace-subagent` 各畫一個打開觀測分頁的右側欄（產品的 `RightSidebarPanel`，假的
+ *   `trajectoryTurn` 照 seq 回應，`trace-digests` 一律不回）：空狀態、計劃那一列（結果 chip、定位鈕）、更早的摘要、只有摘要的組、子代理的呼叫結構。
+ *   量狀態膠囊的字、載入細節的鈕與進度、空狀態、圓角，以及分頁只有一格 `role=status`（#1690）。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
-import { APPROVAL_PENDING_KIND, emptyConversation } from '@nexus/wire';
+import {
+  APPROVAL_PENDING_KIND,
+  TRAJECTORY_PROJECTION,
+  TRAJECTORY_VERSION,
+  emptyConversation,
+  reduceAll,
+} from '@nexus/wire';
 import type {
   ConversationEntry,
+  ConversationState,
   PendingApproval,
   WireQueuedInput,
   WireAttachmentRef,
@@ -138,11 +149,29 @@ import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
 import { planDocument, planReviewOf } from '@/lib/plan-review';
 import { serverClock } from '@/lib/server-clock';
 import { Script } from '@/test/conversation-frames';
-import { turn, view, withTrajectory } from '@/test/trajectory-fixtures';
+import {
+  call,
+  digest,
+  projectionFrame,
+  tool,
+  turn,
+  view,
+  withTrajectory,
+} from '@/test/trajectory-fixtures';
 import { AttachmentRail } from '@/components/attachment-rail';
 import { SentAttachments } from '@/components/sent-attachments';
 import { ChangesCard } from '@/components/changes/card';
-import { RightSidebarPanel, RightSidebarProvider } from '@/components/sidebar/right-sidebar';
+import {
+  RightSidebarPanel,
+  RightSidebarProvider,
+  RightSidebarToggle,
+} from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
+import { TurnHeader } from '@/components/trace/turn-head';
+import { createConversationStore } from '@/lib/conversation-store';
+import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
+import type { TurnHead } from '@/lib/trace-view';
+import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -764,6 +793,205 @@ function PlanPage() {
         <div data-guard-plan="goal">
           <GoalBar goal={PLAN_GOAL} activation="armed" connected onPause={async () => undefined} />
         </div>
+      </div>
+    </RightSidebarProvider>
+  );
+}
+
+const TRACE_HEAD: TurnHead = {
+  number: 7,
+  kind: 'message',
+  time: 1_700_000_000_000,
+  durationMs: 2500,
+  callCount: 2,
+  toolCount: 3,
+  toolErrors: 1,
+  subagentCount: 0,
+  retryCount: 1,
+  inputTokens: 200,
+  outputTokens: 20,
+};
+const TRACE_HEADS: readonly (readonly [string, Partial<TurnHead>])[] = [
+  ['done', { end: 'completed' }],
+  ['waiting', { end: 'completed', waiting: 'approval' }],
+  ['question', { waiting: 'question' }],
+  ['failed', { end: 'failed', failureCode: 'quota_exceeded' }],
+  ['running', {}],
+  ['aborted', { end: 'aborted' }],
+  ['interrupted', { end: 'interrupted' }],
+  ['max-tokens', { end: 'max-tokens' }],
+  ['blocked', { end: 'blocked' }],
+];
+
+/** 觀測分頁一輪的標頭（#1690 T8）：九種收法，寬度同右側欄的最小寬。 */
+function TraceHeadsPage() {
+  return (
+    <div
+      style={{
+        maxWidth: '20rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      {TRACE_HEADS.map(([name, patch]) => (
+        <div key={name} data-guard-head={name}>
+          <TurnHeader head={{ ...TRACE_HEAD, ...patch }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 四輪，推送只帶最後一輪的細節，前三輪（seq 100、200、300）是摘要。同 `trace/panel.pull.test.tsx`。 */
+function tracePullState(): ConversationState {
+  const script = new Script();
+  const frames = [];
+  for (const n of [1, 2, 3, 4]) {
+    frames.push(
+      script.running(),
+      ...script.human(`inbox:r${n}`, `第 ${n} 輪`),
+      ...script.ai(`m${n}`, { text: `第 ${n} 輪的回覆` }),
+      script.completed(),
+    );
+  }
+  const state = reduceAll(emptyConversation(), frames);
+  return withTrajectory(
+    state,
+    script,
+    view([turn(4, { calls: [call(40)] })], { digests: [digest(1), digest(2), digest(3)] }),
+  );
+}
+
+/** 一輪派出子代理，子代理的軌跡只剩一行摘要（seq 10），要按鈕才拉。同 `trace/panel.subagent.test.tsx`。 */
+function traceSubagentState(): ConversationState {
+  const script = new Script();
+  const state = reduceAll(emptyConversation(), [
+    script.running(),
+    ...script.human('inbox:r1', '派個子代理'),
+    ...script.ai('a1', { text: '好' }),
+    script.started('c1', 'subagent', { prompt: '去做' }),
+    script.finished('c1', '完成'),
+    script.completed(),
+  ]);
+  const link = { childId: 't/bg-1', runId: 'bg-1', mode: 'one-shot' as const, catalogSeq: 7 };
+  const withRoot = withTrajectory(
+    state,
+    script,
+    view([
+      turn(0, { calls: [call(5, { tools: [tool('c1', { name: 'subagent', subagent: link })] })] }),
+    ]),
+  );
+  return reduceAll(withRoot, [
+    projectionFrame(
+      script,
+      TRAJECTORY_PROJECTION,
+      TRAJECTORY_VERSION,
+      view([], { digests: [digest(1, { seq: 10 })] }),
+      {
+        session: 'bg-1',
+      },
+    ),
+  ]);
+}
+
+function tracePlanState(): ConversationState {
+  const script = new Script();
+  return reduceAll(emptyConversation(), [
+    script.running(),
+    ...script.human('history-0', '規劃一下'),
+    script.started('p1', 'exit_plan_mode', { plan: '# 改登入頁\n\n先改文案。' }),
+    script.finished('p1', '已同意'),
+    script.completed(),
+  ]);
+}
+
+/**
+ * 假的 `trajectoryTurn`：seq 300 回空的、200 回拒絕（「日誌裡沒有」）、100 回第 1 輪；同一個 seq 第二次起、與其他查詢一律
+ * 不回，停在讀取中。所以預拉之後，「只有摘要」的組裡 300 待命、200 失敗，按 300 的鈕就停在讀取中。
+ */
+function tracePullClient(): Parameters<typeof createTrajectoryPuller>[0] {
+  const seen = new Set<string>();
+  return {
+    trajectoryTurn: (_threadId, query) => {
+      const key = JSON.stringify(query);
+      const first = !seen.has(key);
+      seen.add(key);
+      if (first && query.seq === 300)
+        return Promise.resolve({ kind: 'ok', result: { turns: [], seq: 900 } });
+      if (first && query.seq === 200)
+        return Promise.resolve({ kind: 'rejected', code: 'turn_not_found', message: '日誌裡沒有' });
+      if (first && query.seq === 100)
+        return Promise.resolve({
+          kind: 'ok',
+          result: { turns: [turn(1, { calls: [call(10)] })], seq: 900 },
+        });
+      return new Promise(() => {});
+    },
+  };
+}
+
+/** 「看這一輪」：把第 1 輪拉回來，「只有摘要」的組才會出現（`trace-groups`）。 */
+function TraceRevealProbe() {
+  const api = useRightSidebar();
+  return (
+    <button type="button" data-guard-reveal="" onClick={() => api?.revealTurn(100)}>
+      看第 1 輪
+    </button>
+  );
+}
+
+/**
+ * 打開觀測分頁的右側欄：版面先寫進 localStorage（提供者只在掛上時讀一次）。1024 以下載入時是收著的，375 寬那條靠「看第 1 輪」（`revealTurn`）打開。
+ * `trace-digests` 的假端點一律不回，預拉的兩列停在讀取中。
+ */
+function TracePanelPage({ name }: { name: string }) {
+  const [sources] = useState(() => {
+    const threadId = `guard-${name}`;
+    localStorage.setItem(
+      LAYOUT_KEY_PREFIX + threadId,
+      JSON.stringify({ open: true, tabs: [{ kind: 'trace' }], active: 'trace' }),
+    );
+    const state =
+      name === 'trace-empty'
+        ? emptyConversation()
+        : name === 'trace-plan'
+          ? tracePlanState()
+          : name === 'trace-subagent'
+            ? traceSubagentState()
+            : tracePullState();
+    const client: Parameters<typeof createTrajectoryPuller>[0] =
+      name === 'trace-digests'
+        ? { trajectoryTurn: () => new Promise(() => {}) }
+        : tracePullClient();
+    return {
+      threadId,
+      conversation: createConversationStore(state),
+      trajectoryPull: createTrajectoryPuller(client, threadId),
+    };
+  });
+  return (
+    <RightSidebarProvider
+      threadId={sources.threadId}
+      sources={{ conversation: sources.conversation, trajectoryPull: sources.trajectoryPull }}
+    >
+      <div style={{ display: 'flex', minHeight: '100vh' }}>
+        <main
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: 16,
+            display: 'flex',
+            gap: 8,
+            alignItems: 'flex-start',
+          }}
+        >
+          <RightSidebarToggle />
+          {name === 'trace-groups' && <TraceRevealProbe />}
+        </main>
+        <RightSidebarPanel />
       </div>
     </RightSidebarProvider>
   );
@@ -1672,6 +1900,14 @@ function OverlayPage({ name }: { name: string }) {
       return <HandoffPage />;
     case 'plan':
       return <PlanPage />;
+    case 'trace-heads':
+      return <TraceHeadsPage />;
+    case 'trace-empty':
+    case 'trace-plan':
+    case 'trace-digests':
+    case 'trace-groups':
+    case 'trace-subagent':
+      return <TracePanelPage name={name} />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

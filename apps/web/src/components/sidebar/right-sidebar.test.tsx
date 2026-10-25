@@ -14,6 +14,7 @@ import {
   changesTabTitle,
 } from '@/components/sidebar/right-sidebar';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
+import { TRACE_EMPTY_HINT, TRACE_EMPTY_TEXT } from '@/components/trace/panel';
 import { createChangesStores } from '@/lib/changes-diff';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
@@ -447,7 +448,9 @@ describe('單例面板：觀測與成本（#1031）', () => {
     const tab = screen.getByRole('tab', { name: '觀測' });
     expect(tab.getAttribute('aria-selected')).toBe('true');
     expect(document.activeElement).toBe(tab);
-    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe('尚無資料');
+    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe(
+      TRACE_EMPTY_TEXT + TRACE_EMPTY_HINT,
+    );
     // 有分頁之後空狀態讓位。
     expect(screen.queryByText(RIGHT_SIDEBAR_EMPTY_TEXT)).toBeNull();
     expect(saved()?.tabs).toEqual([{ kind: 'trace' }]);
