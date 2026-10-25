@@ -437,8 +437,9 @@ export interface SummarizationSettings {
   /** 歷史落在 backend 的哪個前綴底下。 */
   readonly historyPathPrefix: string;
   /**
-   * 摘要之後重新量測仍超過 token 門檻時，再摘要幾次（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）。照 dsh
-   * `compaction-basic` 的 `compactionRetries`（`README.md:75`，預設 1）。**只收 0 或 1**，理由見 {@link withTokenBudget} 的偏離 5。
+   * 摘要之後重新量測仍不低於 token 門檻時，換保留 0 再摘要的次數（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）。
+   * **只收 0 或 1**（理由見 {@link assertCompactionRetries}）；保留的尾巴已經最短時不重試。重試用完、不重試或尾巴已最短時，
+   * 記一條 warn、照摘要完的那份送出。
    */
   readonly compactionRetries: number;
 }
@@ -546,7 +547,7 @@ export const DEFAULT_SUMMARIZATION: SummarizationSettings = {
  * @param override - 呼叫端的覆寫。省略即整份預設。
  * @returns 補滿的設定。
  * @throws 任何一道門檻的 `type` 不是 `'messages'` / `'tokens'`，或 `value` 不是正的
- *   有限數。
+ *   有限數；或 `compactionRetries` 不是 0 或 1。
  */
 export function resolveSummarizationSettings(
   override?: Partial<SummarizationSettings>,
@@ -585,14 +586,14 @@ function validateSettings(settings: SummarizationSettings): SummarizationSetting
 }
 
 /**
- * `compactionRetries` 只收 0 或 1（#2028）：再摘要靠的是「摘要完送出的那一次」還在基座的 `try` 裡，基座只有那一層；
- * 第二次摘要完交下來的那一次沒有 `try`，再要求重來只能繞過基座。dsh 收任意非負整數（`index.ts:87`），這裡收窄，偏離登記在
- * {@link withTokenBudget}。
+ * `compactionRetries` 只收 0 或 1（#2028）：重試一律從原請求換保留 0（最小的保留量）重走，{@link withRetainedTail} 只升級一次、
+ * 升級之後把 `canRetainLess` 設成 false。再重試一次也是切同一段；而保留 0 那一次再要求重摘沒有人接（那裡沒有 `try`，
+ * {@link withTokenBudget} 也不認它），整輪會失敗。
  */
 function assertCompactionRetries(value: unknown): void {
   if (value !== 0 && value !== 1)
     throw new Error(
-      `summarization.compactionRetries 是 ${String(value)}，只收 0 或 1：基座的摘要流程最多接得住一次重試（#2028）。`,
+      `summarization.compactionRetries 是 ${String(value)}，只收 0 或 1：重試固定換最小的保留量，再重試也是同一段（#2028）。`,
     );
 }
 
@@ -1155,18 +1156,19 @@ const SUPPRESS_SUMMARY = Symbol.for('nexus.summarization.suppress');
  */
 const RETAIN_DECISION = Symbol.for('nexus.summarization.retain-decision');
 
-/** {@link RETAIN_DECISION} 的格子：選尾巴的那一串有幾則、照保留政策要留幾則。 */
+/** {@link RETAIN_DECISION} 的格子：選尾巴的那一串有幾則、照保留政策要留幾則，以及 #2028 的重量判斷能不能重摘。 */
 interface RetainDecision {
   retained?: number;
   length?: number;
-  /** 換 retain 0 的實例會不會留得比較少（`zero < normal`）；`false` 就是再摘也一樣，不重試（#2028）。 */
+  /** 這一步還能不能換更少的保留量重摘：`zero < normal` 時為 true；已升級到保留 0 之後設回 false（#2028）。 */
   canRetainLess?: boolean;
 }
 
 /**
  * 摘要完、基座交下來的那一份要過的重量（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）：外面的 {@link withTokenBudget} 放一支函式，
  * 最內層的 {@link withQuietSummaryCall} 在檢查摘要有沒有變小的同一點叫它。**要在那裡叫**：那一點在 {@link withCompactionLog} 記事件之前，
- * 拋出來的話這份摘要不進日誌、不進 state、歷史檔被 #1389 的暫存丟掉，跟 {@link SummaryNotSmallerError} 同一條路。
+ * 拋出來的話這份摘要不進日誌、不進 state；接它的是 {@link withRetainedTail}（換保留 0 重摘），同一個暫存範圍裡後寫的歷史
+ * 蓋掉這一份（#1389）。
  */
 const AFTER_SUMMARY = Symbol.for('nexus.summarization.after-summary');
 
@@ -1278,7 +1280,7 @@ function withRetainedTail(
             throw error;
           // 現在就摘要、尾巴只留配對需要的那幾則；這一次的錯誤（含第二次又超窗）照原樣往外走，不再升級。
           // 摘要完重量仍超過門檻（{@link RetainLessSignal}，#2028）也走這裡：第一次的摘要沒有交出去，歷史檔由 #1389 的暫存只留這一次的。
-          // 這一次已經是最小的保留量，外面的量測不能再要求重來（這一次沒有 `try` 接）。
+          // 這一次已經是最小的保留量，`canRetainLess` 設成 false：這裡沒有 `try`，再拋 RetainLessSignal 會冒過 withTokenBudget，整輪失敗。
           if (decision !== undefined) decision.canRetainLess = false;
           return chainFor(zero, true).wrapModelCall!(seeded, handler);
         }
@@ -1708,18 +1710,19 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * 基座的判準寫死在 `countTotalTokens`（純估算），沒有縫注入別的數。但它在「不摘要」那條路上把
  * `handler` 包在 `try` 裡，接到 `ContextOverflowError` 就走緊急摘要：摘要、再叫一次 `handler`
  * （`:3219-3229`）。所以超過預算時這裡**拋一顆合成的 `ContextOverflowError`**，由基座自己摘要——保留、切點、
- * 寫歷史、回 `_summarizationEvent` 全是基座原本那套。摘要完再叫進來的那一次不再拋溢出，改走下一節的重量。
+ * 寫歷史、回 `_summarizationEvent` 全是基座原本那套。摘要完再叫進來的那一次不拋溢出（已經拋過一次），由下一節的重量處理。
  *
  * ## 摘要完再量一次（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）
  *
  * 摘要完的請求交下來之前（{@link withQuietSummaryCall} 呼叫 {@link AFTER_SUMMARY}，比 {@link withCompactionLog} 記摘要早），用同一把量具再估一次。
  * 仍不低於門檻、還有重試次數、而且保留的尾巴還能更短時，拋 {@link RetainLessSignal}：{@link withRetainedTail} 接住，改用保留 0
- * 重摘一次（同 #1381 端點溢出的升級，也同 dsh 溢出路徑 `index.ts:302-307` 的保留 0）。這一顆在基座的 `try` 裡被拋出
- * （`:3162-3181`），不是溢出，基座原樣往外拋、不拿它重摘；保留 0 那一次不再拋，所以第二次摘要完交下去的那一次（`:3178`，沒有 `try`）不會炸。
+ * 重摘一次（同 #1381 端點溢出的升級）。這一顆在基座的 `try` 裡拋出（`:3162-3168`），不是溢出，基座原樣往外拋、不拿它重摘。
+ * 只有 `canRetainLess` 為 true 時才拋：那顆的 `handler` 被 `watched` 包住，端點超窗變成 {@link EndpointOverflowSignal}，走不到基座
+ * 沒有 `try` 的再摘要（`:3178`）；其餘的實例 `canRetainLess` 都是 false，在 `:3178` 交下去時只會記 warn。
  * 白摘的第一份不進日誌也不進歷史：拋在記之前，歷史在同一個 `wrapModelCall` 裡後寫的蓋前寫的（#1389）。
- * 重摘之後仍超過、沒有重試次數、或尾巴已經最短：講一條 warn，照這份送出，不退回基座的再摘要（同 dsh 壓力警告 `index.ts:157-175`）。
+ * 重摘之後仍超過、沒有重試次數、或尾巴已經最短：講一條 warn，照這份送出，不退回基座的再摘要。
  *
- * **只在基座會接的地方拋**，其他三條路上的 `handler` 沒有 `try`，拋了就是整輪失敗：
+ * **合成的超窗只在基座會接的地方拋**，其他三條路上的 `handler` 沒有 `try`，拋了就是整輪失敗：
  *
  * - 摘要器眼中那串是空的（`:3197` 直接交下去）——不拋。
  * - 有一道 `messages` 門檻成立（基座走 `performSummarization`，`cutoffIndex <= 0` 那條直接交下去，`:3137`）——不拋。
@@ -1744,13 +1747,11 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  *    （`selectCompactableRange` 回 `null`，`compaction-basic/src/region.ts:117-155`、`index.ts:299`／`331`／`394`）
  *    與 `/compact` 的回覆裡講（`command-compact/src/index.ts:68`），不進投影。dsh 也沒有 `messages` 門檻（觸發只比 token，
  *    `index.ts:319`）；那道是我們自己加的（{@link DEFAULT_SUMMARIZATION} 的「`messages: 60` 那道」），這一格補的是它的誠實。
- * 5. **`compactionRetries` 只收 0 或 1，第二次固定用保留 0**（理由 1：基座表達不出來）。dsh 收任意非負整數、每次重摘照原保留量
- *    （`index.ts:87`、`:353-370`）。基座只有「摘要完送出的第一次」在 `try` 裡，第二次摘要完交下來的那一次沒有，所以最多一次；
- *    ≥2 在載入時就拒（{@link assertCompactionRetries}）。保留 0 是因為照原保留量重摘只會切出同一段，A（再摘一次同一段）只剩一則摘要，
- *    B 至少留一段原文尾巴，而且 B 和 #1381 用的是同一套升級。
+ * 5. **`compactionRetries` 只收 0 或 1，重試固定用保留 0**。上限的理由見 {@link assertCompactionRetries}；≥2 在載入時就拒。
  *
  * ## 量與記都不准拋
  *
+ * 唯一刻意拋的是 {@link RetainLessSignal}，見〈摘要完再量一次〉；估不出來時 `afterSummary` 照樣不比、不拋。
  * 估不出來就不比、不記，退回基座自己的 `messages` 門檻。**`context/measure` 記不進去講一條 warn**（`report`），這次呼叫照常回來
  * （[#1702](https://github.com/DemianLi/nexus-agent/issues/1702) 歸 (C)）：它不改請求、不改 state，只是量測，跟 dsh 自動壓縮的失敗同一類
  * （`packages/compaction/compaction-basic/src/index.ts:163-173`）。**`handler` 本身拋的錯原樣往外傳**——那是基座的緊急摘要要接的。
@@ -1762,6 +1763,7 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * @param trigger - 全部門檻；比的是 `tokens` 那幾道，`messages` 那幾道用來判斷基座走哪條路。原樣記進每一筆。
  * @param book - 錨定估算的帳。
  * @param sessions - 註冊表的 `sessions` 通道。省略即不記，照樣比。
+ * @param compactionRetries - 摘要後重量可以要求的重摘次數，0 或 1。
  * @returns 同名、同狀態、多一層預算的 middleware。
  */
 function withTokenBudget(

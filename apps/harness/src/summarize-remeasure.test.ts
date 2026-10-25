@@ -175,7 +175,7 @@ describe('摘要完仍超過門檻：換 retain 0 再摘一次', () => {
   });
 });
 
-describe('不重試的三種情況：warn 一條、照摘要完的那份送，這一輪不失敗', () => {
+describe('不再重試的情況：warn 一條、照摘要完的那份送，這一輪不失敗', () => {
   it('重試用完仍超過（第二次摘要本身就大）→ warn 一條、照送', async () => {
     const run = await converse({
       users: [FIRST, '短句'],
@@ -203,7 +203,7 @@ describe('不重試的三種情況：warn 一條、照摘要完的那份送，�
     expect(summariesOf(run.events)).toHaveLength(1);
   });
 
-  it('端點真的超窗、升級到 retain 0 之後仍超過門檻 → 不再要求重摘（那一次沒有 try 接），warn 一條、照送', async () => {
+  it('端點真的超窗、升級到 retain 0 之後仍超過門檻 → 不再要求重摘（已經是最小的保留量），warn 一條、照送', async () => {
     // 第 2 輪：預算觸發的摘要之後已經低於門檻、送出去端點卻回超窗；升級到 retain 0 重摘，那份摘要本身就超過門檻。
     const run = await converse({
       users: [BIG, '短句'],
