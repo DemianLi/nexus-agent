@@ -436,6 +436,11 @@ export interface SummarizationSettings {
   readonly truncateArgs: SummarizationArgTruncation;
   /** 歷史落在 backend 的哪個前綴底下。 */
   readonly historyPathPrefix: string;
+  /**
+   * 摘要之後重新量測仍超過 token 門檻時，再摘要幾次（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）。照 dsh
+   * `compaction-basic` 的 `compactionRetries`（`README.md:75`，預設 1）。**只收 0 或 1**，理由見 {@link withTokenBudget} 的偏離 5。
+   */
+  readonly compactionRetries: number;
 }
 
 /**
@@ -529,6 +534,7 @@ export const DEFAULT_SUMMARIZATION: SummarizationSettings = {
     keep: { type: 'messages', value: 20 },
   },
   historyPathPrefix: '/conversation_history',
+  compactionRetries: 1,
 };
 
 /**
@@ -567,6 +573,7 @@ function validateSettings(settings: SummarizationSettings): SummarizationSetting
   for (const [index, threshold] of settings.trigger.entries())
     assertThreshold(threshold, `trigger[${index}]`);
   assertRetain(settings);
+  assertCompactionRetries(settings.compactionRetries);
   assertThreshold(settings.truncateArgs.trigger, 'truncateArgs.trigger');
   assertThreshold(settings.truncateArgs.keep, 'truncateArgs.keep');
   if (settings.trigger.length === 0)
@@ -575,6 +582,18 @@ function validateSettings(settings: SummarizationSettings): SummarizationSetting
         '所以那等於沒有摘要器——要那個效果請明著傳 `summarization: false`。',
     );
   return settings;
+}
+
+/**
+ * `compactionRetries` 只收 0 或 1（#2028）：再摘要靠的是「摘要完送出的那一次」還在基座的 `try` 裡，基座只有那一層；
+ * 第二次摘要完交下來的那一次沒有 `try`，再要求重來只能繞過基座。dsh 收任意非負整數（`index.ts:87`），這裡收窄，偏離登記在
+ * {@link withTokenBudget}。
+ */
+function assertCompactionRetries(value: unknown): void {
+  if (value !== 0 && value !== 1)
+    throw new Error(
+      `summarization.compactionRetries 是 ${String(value)}，只收 0 或 1：基座的摘要流程最多接得住一次重試（#2028）。`,
+    );
 }
 
 /**
@@ -724,6 +743,7 @@ export function createSummarizer(
     sessions,
     limitsOf,
     report,
+    settings.compactionRetries,
   );
   // 暫存的範圍要罩住基座的寫入與日誌那層記下事件的時點，所以在預算層外面、剪刀裡面。
   const staged =
@@ -958,6 +978,7 @@ function withQuietSummaryCall(
       // 生摘要的呼叫完成過幾次、已經檢查過幾次：基座生完摘要緊接著交下去的第一份請求就是要檢查的那一份（#1396）。
       let generated = 0;
       let checked = 0;
+      const afterSummary = (request as { [AFTER_SUMMARY]?: AfterSummary })[AFTER_SUMMARY];
       const quiet = quietInvoke(
         model,
         summaryUsageCells.getStore(),
@@ -978,11 +999,13 @@ function withQuietSummaryCall(
             },
       );
       return inner({ ...request, model: quiet }, (sent) => {
+        const restored = sent.model === quiet ? { ...sent, model } : sent;
         if (generated > checked) {
           checked = generated;
           assertSummaryShrinks(request, sent);
+          afterSummary?.(restored);
         }
-        return handler(sent.model === quiet ? { ...sent, model } : sent);
+        return handler(restored);
       });
     },
   } as AgentMiddleware;
@@ -1136,6 +1159,30 @@ const RETAIN_DECISION = Symbol.for('nexus.summarization.retain-decision');
 interface RetainDecision {
   retained?: number;
   length?: number;
+  /** 換 retain 0 的實例會不會留得比較少（`zero < normal`）；`false` 就是再摘也一樣，不重試（#2028）。 */
+  canRetainLess?: boolean;
+}
+
+/**
+ * 摘要完、基座交下來的那一份要過的重量（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）：外面的 {@link withTokenBudget} 放一支函式，
+ * 最內層的 {@link withQuietSummaryCall} 在檢查摘要有沒有變小的同一點叫它。**要在那裡叫**：那一點在 {@link withCompactionLog} 記事件之前，
+ * 拋出來的話這份摘要不進日誌、不進 state、歷史檔被 #1389 的暫存丟掉，跟 {@link SummaryNotSmallerError} 同一條路。
+ */
+const AFTER_SUMMARY = Symbol.for('nexus.summarization.after-summary');
+
+/** {@link AFTER_SUMMARY} 掛的函式：收摘要完要交下去的那份請求；要重摘就拋 {@link RetainLessSignal}。 */
+type AfterSummary = (sent: Parameters<typeof estimateAnchoredTokens>[0]) => void;
+
+/**
+ * 摘要完重量仍超過門檻、而且少留一點還有用（#2028）：從 {@link AFTER_SUMMARY} 那一點拋出，**故意不是** `ContextOverflowError`
+ * 也不帶 `cause`，基座認不出它、不會拿同一個保留量重摘，錯誤冒回 {@link withRetainedTail}，由它換 retain 0 的實例重走一遍——
+ * 跟端點真的超窗（{@link EndpointOverflowSignal}）同一條升級。
+ */
+class RetainLessSignal extends Error {
+  constructor() {
+    super('still above the summarization threshold after compaction');
+    this.name = 'RetainLessSignal';
+  }
 }
 
 /** 沒有訊息數門檻的那顆實例在快取裡的鍵（保留則數不會是負的）。 */
@@ -1211,6 +1258,7 @@ function withRetainedTail(
       // 已經是最小尾巴（`zero >= normal`）時不用換，基座自己的緊急摘要就是這個保留量。
       const zero = suppressed ? undefined : Math.max(1, retainedTailCount(view, 0));
       const escalate = zero !== undefined && zero < normal;
+      if (decision !== undefined) decision.canRetainLess = escalate;
       const watched: typeof handler = escalate
         ? async (sent) => {
             try {
@@ -1226,8 +1274,12 @@ function withRetainedTail(
         try {
           return await chainFor(normal).wrapModelCall!(seeded, watched);
         } catch (error) {
-          if (!(error instanceof EndpointOverflowSignal)) throw error;
+          if (!(error instanceof EndpointOverflowSignal) && !(error instanceof RetainLessSignal))
+            throw error;
           // 現在就摘要、尾巴只留配對需要的那幾則；這一次的錯誤（含第二次又超窗）照原樣往外走，不再升級。
+          // 摘要完重量仍超過門檻（{@link RetainLessSignal}，#2028）也走這裡：第一次的摘要沒有交出去，歷史檔由 #1389 的暫存只留這一次的。
+          // 這一次已經是最小的保留量，外面的量測不能再要求重來（這一次沒有 `try` 接）。
+          if (decision !== undefined) decision.canRetainLess = false;
           return chainFor(zero, true).wrapModelCall!(seeded, handler);
         }
       })();
@@ -1706,6 +1758,7 @@ function withTokenBudget(
   sessions?: { forCall(config: unknown): SessionLookup },
   limitsOf?: (model: unknown) => ModelContextLimits | undefined,
   report: (message: string) => void = (message) => console.warn(message),
+  compactionRetries = DEFAULT_SUMMARIZATION.compactionRetries,
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 同 withCompactionLog。 */
@@ -1726,6 +1779,28 @@ function withTokenBudget(
       const decision: RetainDecision = {};
       // 端點真的回的超窗（不是我們合成的）：基座接住它、走緊急摘要；摘要若失敗，這一份是要還給呼叫端的原錯誤。
       let endpointOverflow: unknown;
+      let retriesLeft = compactionRetries;
+      // 摘要完、基座交下來的那一份：重量（#2028）。仍超過就換 retain 0 再摘一次；用完、或少留也沒用，記一條 warn、照這份送。
+      const afterSummary: AfterSummary = (sent) => {
+        let tokens: number;
+        try {
+          tokens = estimateAnchoredTokens(sent, book).tokens;
+        } catch {
+          return;
+        }
+        if (budget === undefined || tokens < budget) return;
+        if (retriesLeft > 0 && decision.canRetainLess === true) {
+          retriesLeft -= 1;
+          throw new RetainLessSignal();
+        }
+        const why =
+          retriesLeft < compactionRetries
+            ? `已經換最小的保留量重摘過 ${compactionRetries - retriesLeft} 次`
+            : compactionRetries === 0
+              ? '沒有設定重試（compactionRetries 是 0）'
+              : '保留的尾巴已經是最小的，再摘也一樣';
+        report(`摘要之後仍超過門檻：這份請求估計 ${tokens} token，門檻 ${budget}；${why}，照這份送出。`);
+      };
       const measured: Parameters<NonNullable<typeof inner>>[1] = async (sent) => {
         let estimate: ReturnType<typeof estimateAnchoredTokens> | undefined;
         try {
@@ -1799,7 +1874,7 @@ function withTokenBudget(
       return (async () => {
         try {
           return await inner(
-            { ...request, [RETAIN_DECISION]: decision } as typeof request,
+            { ...request, [RETAIN_DECISION]: decision, [AFTER_SUMMARY]: afterSummary } as typeof request,
             measured,
           );
         } catch (error) {
@@ -2058,6 +2133,8 @@ export const summarizationConfigSchema = z.strictObject({
     })),
   /** 見 {@link SummarizationSettings.historyPathPrefix}。 */
   historyPathPrefix: z.string().default(DEFAULT_SUMMARIZATION.historyPathPrefix),
+  /** 見 {@link SummarizationSettings.compactionRetries}。值的規則在 resolve 裡。 */
+  compactionRetries: z.number().default(DEFAULT_SUMMARIZATION.compactionRetries),
 });
 
 /** {@link summarizationConfigSchema} 驗完的形狀。 */
