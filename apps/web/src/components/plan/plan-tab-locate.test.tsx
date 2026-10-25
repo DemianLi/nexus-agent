@@ -23,7 +23,7 @@ import { Script } from '@/test/conversation-frames';
 import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 /**
- * 計劃分頁指到的那一份不在載入的對話裡（#1798）：照 dsh `planResourceProvider` 另外往前讀歷史找它（`findPlan`），找到先顯示
+ * 計劃分頁指到的那一份不在載入的對話裡（#1798）：另外往前讀歷史找它（`findPlan`），找到先顯示
  * 全文，按鈕 `loadThrough(那一頁的 firstSeq)` 再定位到對話裡那張計劃卡。這裡驗畫面，`findPlan` 用替身；掃描本身（一頁接一頁、
  * 固定切點、換代、中止、不動條目）驗在 `hooks/use-conversation-history-window.test.tsx`。
  */
@@ -135,6 +135,18 @@ afterEach(() => {
 });
 
 describe('計劃分頁：計劃不在載入的對話裡（#1798）', () => {
+  it('分頁標籤：掃描找到之前寫「計劃」，找到之後寫計劃標題，不必等定位', async () => {
+    const scan = pending();
+    mount(states().before, { findPlan: () => scan.promise, loadThrough: vi.fn(async () => {}) });
+    await act(async () => {});
+    const tabNames = () => screen.queryAllByRole('tab').map((tab) => tab.textContent);
+    expect(tabNames()).toEqual(['計劃']);
+    await act(async () => scan.resolve(FOUND));
+    expect(tabNames()).toEqual(['改登入頁']);
+    // 計劃還不在對話裡：標題來自掃描，不是計劃庫。
+    expect(screen.getByTestId('plan-tab-scanned')).toBeTruthy();
+  });
+
   it('掃描找到：先顯示全文；按下去載到那一頁，計劃出現在對話裡之後捲到那張計劃卡，焦點交給全文', async () => {
     const { before, after } = states();
     let item: HTMLElement | undefined;
