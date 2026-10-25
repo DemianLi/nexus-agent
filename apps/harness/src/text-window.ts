@@ -68,13 +68,12 @@ const NON_BLANK = /\S/u;
  *
  * @param chunks - 解碼過的文字片段，依檔案順序；片段的邊界沒有意義。
  * @param params - 要建的頁。
- * @param options.onChunk - 每一片掃之前叫一次（給版本雜湊餵整份文字）。
  * @param options.signal - 中止就丟 {@link ScanAborted}。
  */
 export async function scanWindow(
   chunks: AsyncIterable<string> | Iterable<string>,
   params: WindowParams,
-  options: { readonly onChunk?: (chunk: string) => void; readonly signal?: AbortSignal } = {},
+  options: { readonly signal?: AbortSignal } = {},
 ): Promise<WindowScan> {
   const { offset, limit, maxLineLength, maxBytes, stripCarriageReturn = false } = params;
   // 多留一個字元就足以證明這一行超長。
@@ -138,7 +137,6 @@ export async function scanWindow(
   for await (const chunk of chunks) {
     if (options.signal?.aborted === true) throw new ScanAborted();
     if (chunk.length === 0) continue;
-    options.onChunk?.(chunk);
     if (!hasNonBlank && NON_BLANK.test(chunk)) hasNonBlank = true;
     lastChar = chunk.charAt(chunk.length - 1);
     let start = 0;
