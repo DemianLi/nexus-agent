@@ -18,7 +18,7 @@ import { readCascade } from './css-cascade';
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-4xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
- * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`shadow-material`＋`rounded-3xl`，或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
+ * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`rounded-3xl`＋`p-1`（沒有 `border`），或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著展開轉的 `rotate-*`（Base UI 的 `data-panel-open`，
  *    #1638；Radix 的 `data-state=open` 也照擋），就是又手寫了一顆。
  * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-chip-hover`＋`active:bg-chip-pressed`＋`w-full`＋`text-left`，就是又手寫了一列。
@@ -134,10 +134,11 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
   }
   if (
     utilities.has('bg-card') &&
-    utilities.has('shadow-material') &&
-    utilities.has('rounded-3xl')
+    utilities.has('rounded-3xl') &&
+    utilities.has('p-1') &&
+    !utilities.has('border')
   ) {
-    found.push({ rule: '表面', what: 'bg-card shadow-material rounded-3xl' });
+    found.push({ rule: '表面', what: 'bg-card rounded-3xl p-1' });
   }
   if (utilities.has('bg-card') && utilities.has('border') && utilities.has('rounded-3xl')) {
     found.push({ rule: '表面', what: 'bg-card border rounded-3xl' });
@@ -227,7 +228,7 @@ const ALLOWED: readonly Allowed[] = [
   },
   {
     file: 'components/surface.tsx',
-    what: 'bg-card shadow-material rounded-3xl',
+    what: 'bg-card rounded-3xl p-1',
     why: '`Surface` 的 raised 配方本身：全站唯一該寫這串的地方',
   },
   {
@@ -315,7 +316,7 @@ describe('判準', () => {
   test('語意 token 與只是名字像的不算', () => {
     expect(rules('bg-card text-destructive text-muted-foreground bg-chip-hover')).toEqual([]);
     expect(rules('text-primary-foreground border-border ring-ring/50 bg-brand/15')).toEqual([]);
-    expect(rules('bg-background text-foreground bg-stage shadow-material')).toEqual([]);
+    expect(rules('bg-background text-foreground bg-stage')).toEqual([]);
   });
 
   test('字級：預設階與任意值都擋，規格的四階與顏色的 text-* 不擋', () => {
@@ -353,11 +354,9 @@ describe('判準', () => {
   test('表面：手寫 stage 或 raised 的整組配方擋，只用到一部分的不擋', () => {
     expect(rules('bg-stage shadow-stage rounded-xl p-3')).toEqual(['表面:bg-stage shadow-stage']);
     expect(rules('hover:bg-stage dark:shadow-stage')).toEqual(['表面:bg-stage shadow-stage']);
-    expect(rules('bg-card shadow-material rounded-3xl p-1')).toEqual([
-      '表面:bg-card shadow-material rounded-3xl',
-    ]);
+    expect(rules('bg-card rounded-3xl p-1')).toEqual(['表面:bg-card rounded-3xl p-1']);
     expect(rules('bg-stage sticky bottom-0 pb-4')).toEqual([]);
-    expect(rules('bg-card shadow-material rounded-lg')).toEqual([]);
+    expect(rules('bg-card rounded-lg p-1')).toEqual([]);
     expect(rules('bg-card border rounded-3xl p-1')).toEqual(['表面:bg-card border rounded-3xl']);
     expect(rules('bg-card border rounded-lg')).toEqual([]);
   });
@@ -431,7 +430,7 @@ describe('判準', () => {
     expect(rules('data-[state=open]:animation-duration-350')).toEqual([
       '時長:animation-duration-350',
     ]);
-    expect(rules('duration-(--duration-fast) animation-duration-(--duration-overlay)')).toEqual([]);
+    expect(rules('duration-(--duration-fast) animation-duration-(--duration-medium)')).toEqual([]);
     expect(rules('delay-50 data-[state=closed]:delay-0')).toEqual([]);
   });
 

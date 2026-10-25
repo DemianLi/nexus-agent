@@ -9,7 +9,6 @@
 | chip 對 底色 | 1.1459 | 原型 1.27；綁住的約束：釘在 ② 出貨的值（PM 裁決，PR #1721）（#1512） |
 | chip-hover 對 底色 | 1.1768 | Libraries.dev 的階梯比例 |
 | chip-pressed 對 底色 | 1.2155 | 比例 1.0607：取 min（次要字剛好 ≥ 4.5，Libraries.dev 的 1.1017），例外見產生器 |
-| 細線環 對 卡片 | 1.38 | 原型 eb800a1，亮暗取強 |
 
 chip 三階上的次要文字（約束見產生器）：
 
@@ -79,15 +78,11 @@ SG 底色：亮 #e4e6eb、暗 #0d0d0d。
 | `--status-running` | `oklch(0.468 0 0)` | `oklch(0.72 0 0)` |
 | `--card` | `oklch(0.981 0.004 265 / 60%)` | `oklch(0.31 0 0 / 46%)` |
 | `--border` | `oklch(0.294 0.02 265 / 13%)` | `oklch(1 0 0 / 11%)` |
-| `--primary-hover` | `oklch(0.285 0 0)` | `oklch(0.931 0 0)` |
-| `--primary-active` | `oklch(0 0 0)` | `oklch(0.8822 0 0)` |
 | `--warning` | `oklch(0.48 0.131 47.41)` | `oklch(0.641 0.1635 52.25)` |
 | `--info` | `oklch(0.485 0.2414 263.16)` | `oklch(0.62 0.1995 258.86)` |
-| `--brand-soft` | `oklch(0.489 0.102 165 / 0.09)` | `oklch(0.78 0.13 166 / 0.12)` |
 | `--stage` | `oklch(0.9423 0 0)` | `oklch(0.2119 0 0)` |
 | `--chip` | `oklch(0.8812 0 0)` | `oklch(0.2289 0 0)` |
 | `--chip-hover` | `oklch(0.8729 0 0)` | `oklch(0.239 0 0)` |
 | `--chip-pressed` | `oklch(0.8628 0 0)` | `oklch(0.2507 0 0)` |
-| `--card-hairline` | `oklch(0 0 0 / 0.141)` | `oklch(0.8203 0 0 / 0.145)` |
 | `--ring` | `oklch(0.16 0 0)` | `oklch(0.985 0 0)` |
 | `--sidebar-ring` | `oklch(0.16 0 0)` | `oklch(0.985 0 0)` |

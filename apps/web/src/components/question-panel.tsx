@@ -62,7 +62,7 @@ import { RECOMMENDED_BADGE, splitRecommended } from '@/lib/recommended-option';
 
 export type QuestionAnswer = { id: string; selected: string[]; custom?: string };
 
-/** 單選自動跳之前先停多久（`--auto-advance-delay`，§7）。 */
+/** 單選自動跳之前先停多久（§7）。 */
 const AUTO_ADVANCE_MS = 200;
 
 /** 「第 2 題，共 3 題」：進度字與 legend 前的 sr-only 題號同一句（§8）。 */

@@ -1,20 +1,10 @@
 /*
- * nexus 獨有的非顏色 token：陰影與邊框光。外觀改用 solid-glass 之後（#1512），元件裡還在用的 `shadow-material`、`shadow-menu`……
- * 靠這些 token 才有值，照 #1468 Q11 留到第 ⑥ 步跟其他獨有 token 一起刪；拿掉會變成「token 未定義」。
- * SG 有自己規則的元素（`.bg-card`、outline／secondary 按鈕、輸入框……）上，SG 寫在 layer 外的 `box-shadow` 本來就蓋過這些 utility。
- * 焦點、body 這類機制規則搬到了 `solid-glass.overrides.css`。顏色在 `tokens.generated.css`（產生器輸出，不要手改）。
+ * nexus 獨有的非顏色 token：stage 的內框線與邊框光，solid-glass 沒有對應的值，所以留著。
+ * 焦點、body 這類機制規則在 `solid-glass.overrides.css`。顏色在 `tokens.generated.css`（產生器輸出，不要手改）。
  */
 
-/*
- * 邊緣畫在陰影裡：同一個元素不同時用 border 與陰影（`src/styles/border-shadow.test.ts` 會擋）。
- * 亮色＝外側 1px 環＋投影；暗色＝inset 疊層。細線環的 alpha 由產生器解。
- */
+/* 邊緣畫在陰影裡：同一個元素不同時用 border 與陰影（`src/styles/border-shadow.test.ts` 會擋）。 */
 :root {
-  --card-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.04);
-  --material-shadow:
-    0 0 0 1px var(--card-hairline), 0 1px 2px rgb(0 0 0 / 0.06), 0 4px 12px rgb(0 0 0 / 0.04);
-  --menu-shadow:
-    0 0 0 1px var(--card-hairline), 0 2px 6px rgb(0 0 0 / 0.05), 0 4px 42px rgb(0 0 0 / 0.06);
   --stage-ring: inset 0 0 0 1px var(--border);
 
   /* 邊框光的靜態值：brand 在白底上對比低，亮色線粗、光暈濃、呼吸下限高 */
@@ -25,12 +15,6 @@
 }
 
 .dark {
-  --material-shadow:
-    0 1px 3px rgb(0 0 0 / 0.04), inset 0 1px 0 rgb(255 255 255 / 0.04),
-    inset 0 -1px 0 rgb(0 0 0 / 0.06), inset 0 0 0 1px var(--card-hairline);
-  --menu-shadow:
-    0 0 0 1px var(--card-hairline), 0 2px 6px rgb(0 0 0 / 0.05), 0 4px 42px rgb(0 0 0 / 0.24);
-
   --beam-width: 1.5px;
   --beam-glow: color-mix(in oklab, var(--brand), transparent 70%);
   --beam-glow-size: 24px;

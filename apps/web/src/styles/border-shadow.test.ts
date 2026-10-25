@@ -69,12 +69,10 @@ describe('邊緣畫在陰影裡', () => {
 
   test('判準認得邊線與陰影、不把顏色與拿掉算進去', () => {
     expect(borderAndShadow('rounded-lg border p-4 shadow-lg')).toBe('border ＋ shadow-lg');
-    expect(borderAndShadow('border-b-2 shadow-material')).toBe('border-b-2 ＋ shadow-material');
+    expect(borderAndShadow('border-b-2 shadow-stage')).toBe('border-b-2 ＋ shadow-stage');
     expect(borderAndShadow('dark:border hover:shadow-xs')).toBe('border ＋ shadow-xs');
-    expect(
-      borderAndShadow('border-input focus-visible:border-ring shadow-material'),
-    ).toBeUndefined();
-    expect(borderAndShadow('border-0 shadow-material')).toBeUndefined();
+    expect(borderAndShadow('border-input focus-visible:border-ring shadow-stage')).toBeUndefined();
+    expect(borderAndShadow('border-0 shadow-stage')).toBeUndefined();
     expect(borderAndShadow('border shadow-none')).toBeUndefined();
     expect(borderAndShadow('[&_svg]:border-l bg-card')).toBeUndefined();
   });

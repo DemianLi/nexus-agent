@@ -120,7 +120,7 @@ describe('解析', () => {
     expect(shadowLayers('none')).toEqual([]);
     expect(
       shadowLayers(
-        'rgba(0, 0, 0, 0.06) 0px 1px 2px 0px, oklch(0 0 0 / 0.14) 0px 0px 0px 1px, inset 0 1px 0 rgb(255 255 255 / 0.04), 0 0 0 1px var(--card-hairline)',
+        'rgba(0, 0, 0, 0.06) 0px 1px 2px 0px, oklch(0 0 0 / 0.14) 0px 0px 0px 1px, inset 0 1px 0 rgb(255 255 255 / 0.04), 0 0 0 1px var(--x)',
       ).map(({ inset, edge, color }) => ({ inset, edge, color })),
     ).toEqual([
       { inset: false, edge: false, color: 'rgba(0, 0, 0, 0.06)' },
