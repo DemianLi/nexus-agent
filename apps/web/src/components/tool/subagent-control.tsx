@@ -220,7 +220,10 @@ export function SubagentStateLabel({ runId }: { readonly runId: string }) {
   );
 }
 
-/** 委派卡展開後的輸入框、本地回聲與停止鈕。 */
+/**
+ * 委派卡展開後的子代理面板：頂端狀態列（跑著時的 glyph、重新讀取、只停這個子代理）、子代理自己的對話與本地回聲、輸入框。
+ * 沒有提供者就不畫。
+ */
 export function SubagentPanel({ runId }: { readonly runId: string }) {
   const control = useContext(SubagentControlContext);
   if (control === null) return null;
@@ -353,23 +356,12 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
           {stopping ? '停止中…' : '只停這個子代理'}
         </Button>
       </div>
-      <Conversation history={history} closed={state === 'closed'} renderEntry={control.renderEntry}>
-        {echoes.length > 0 && (
-          <ul className="flex flex-col gap-1">
-            {echoes.map((echo, index) => (
-              <li
-                key={index}
-                data-subagent-echo
-                className="flex items-baseline gap-2 text-body [overflow-wrap:anywhere] whitespace-pre-wrap"
-              >
-                <span className="text-muted-foreground shrink-0 text-tip">你：</span>
-                <span className="min-w-0 flex-1">{echo}</span>
-                <span className="text-muted-foreground shrink-0 text-tip">已送出</span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Conversation>
+      <Conversation
+        history={history}
+        closed={state === 'closed'}
+        renderEntry={control.renderEntry}
+        echoes={echoes}
+      />
       {/* 「跳到最新」浮鈕會讓開這一列（#1295）。 */}
       <form onSubmit={submit} data-scroll-button-avoid="">
         <InputGroup className="h-auto sm:h-9">
@@ -447,17 +439,17 @@ function useSubagentHistory(
 
 const TASK_CAPTION = '派出的任務';
 
-/** 子代理自己的對話與本地回聲（`children`），畫在 stage 底上；什麼都沒有就不畫底。 */
+/** 子代理自己的對話與還沒寫進日誌的回聲，畫在 stage 底上；錯誤、項目、「更早的沒有載入」、回聲都沒有時不畫底。 */
 function Conversation({
   history,
   closed,
   renderEntry,
-  children,
+  echoes,
 }: {
   readonly history: HistoryView;
   readonly closed: boolean;
   readonly renderEntry: SubagentControl['renderEntry'];
-  readonly children: ReactNode;
+  readonly echoes: readonly string[];
 }) {
   const entries = history.conversation?.entries;
   // 只有讀到最開頭才知道第一則人話是派出的任務；前面還有更早的，第一則可能只是後來對它說的話。
@@ -470,7 +462,7 @@ function Conversation({
   }, [entries]);
   const hasEntries = entries !== undefined && entries.length > 0;
   const hasMore = history.conversation?.hasMore === true;
-  const empty = history.error === undefined && !hasEntries && !hasMore && children === false;
+  const empty = history.error === undefined && !hasEntries && !hasMore && echoes.length === 0;
   return (
     <section aria-label="背景子代理的對話" data-subagent-conversation>
       {!empty && (
@@ -500,7 +492,21 @@ function Conversation({
               只顯示最近 {SUBAGENT_HISTORY_MAX_MESSAGES} 則，更早的沒有載入。
             </p>
           )}
-          {children}
+          {echoes.length > 0 && (
+            <ul className="flex flex-col gap-1">
+              {echoes.map((echo, index) => (
+                <li
+                  key={index}
+                  data-subagent-echo
+                  className="flex items-baseline gap-2 text-body [overflow-wrap:anywhere] whitespace-pre-wrap"
+                >
+                  <span className="text-muted-foreground shrink-0 text-tip">你：</span>
+                  <span className="min-w-0 flex-1">{echo}</span>
+                  <span className="text-muted-foreground shrink-0 text-tip">已送出</span>
+                </li>
+              ))}
+            </ul>
+          )}
         </Surface>
       )}
     </section>

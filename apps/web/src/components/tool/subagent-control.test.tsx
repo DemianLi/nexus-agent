@@ -517,7 +517,7 @@ describe('單獨停止', () => {
   });
 });
 
-describe('面板的長相（#1694 H4-B）', () => {
+describe('面板的長相（#1694）', () => {
   const glyph = () => document.querySelector('[data-subagent-panel] [data-slot="status-glyph"]');
 
   it.each([

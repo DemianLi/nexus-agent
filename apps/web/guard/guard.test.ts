@@ -70,8 +70,8 @@ import { startGuardServer, type GuardServer } from './server';
  *    底線對泡泡底過 3，不能點的沒有底線；兩種引用與決定紀錄 chip 的字過 4.5；引用與「立刻重連」的焦點外框；決定紀錄的 chip 是 SG Badge 的圓角，
  *    捲到底的鈕與「立刻重連」是 SG Button 的圓角。
  * 21. **核准與換手**（#1694，`?overlay=handoff`）：背景子代理面板的字過 4.5（「子代理的對話」、「只停這個子代理」、送出鈕）；重讀、停止、
- *    輸入框（外框畫在群組上）、送出、核准卡兩顆與「停止這一輪」、換手面板的收起鈕、委派 chip 的取消鈕都有焦點外框；核准卡兩顆鈕、收起鈕、輸入框是
- *    SG Button 的 `rounded-md`（核准卡含只剩「停止這一輪」那張），取消委派的小鈕是 `rounded-sm`；375 寬時面板的輸入框與三顆鈕 44px 高。核准卡的呼吸光有幾圈只記在報告裡，看截圖。
+ *    輸入框（外框畫在群組上）、送出、核准卡兩顆與「停止這一輪」、換手面板的收起鈕、委派 chip 的取消鈕都有焦點外框；核准卡兩顆鈕（含只剩「停止這一輪」那張）、
+ *    收起鈕是 SG Button 的 `rounded-md`，輸入框群組也是 `rounded-md`，取消委派的小鈕是 `rounded-sm`；375 寬時面板的輸入框與三顆鈕 44px 高。核准卡的呼吸光有幾圈只記在報告裡，看截圖。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -4398,8 +4398,8 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話引用與圓角（#16
 });
 
 /**
- * 核准與換手（#1694，`?overlay=handoff`）。子代理面板照 H4-B 改成頂端狀態列＋SG `InputGroup`；核准卡、換手面板的收起鈕、取消委派的小鈕
- * 照 G2 改成 SG Button 的圓角。量的是跑著那一張面板；送出鈕要有字才按得到，量之前先打一句。
+ * 核准與換手（#1694，`?overlay=handoff`）。量跑著那一張子代理面板（頂端狀態列＋SG `InputGroup`）的字與焦點外框，以及核准卡、
+ * 換手面板收起鈕、取消委派小鈕的圓角。送出鈕要有字才按得到，量之前先打一句。
  */
 const HANDOFF_RUNNING = '[data-guard-handoff="subagent-running"]';
 const handoffMarks: Record<string, Record<string, string>> = {
@@ -4498,7 +4498,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量核准與換手（#1694）�
     }
   });
 
-  test('G2：核准卡的鈕（含「停止這一輪」）、收起鈕、輸入框是 Button 的 rounded-md，取消委派的小鈕是 rounded-sm', async () => {
+  test('G2：核准卡的鈕（含「停止這一輪」）、收起鈕、輸入框群組是 rounded-md，取消委派的小鈕是 rounded-sm', async () => {
     const page = await openOverlay('handoff', theme, { marks: handoffMarks });
     try {
       const radii = await page.evaluate((running) => {
