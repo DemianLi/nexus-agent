@@ -64,14 +64,14 @@ import { startGuardServer, type GuardServer } from './server';
  * 18. **工具卡的 diff**（#1685 PR B，`?overlay=diff-view`，產品的 `ToolRun`＋`ToolCard`）：SG `DiffView` 每一種行（`diff --git`、`@@`、
  *    新增、刪除、上下文、`... 還有 N 行沒畫`）在 `StepList` 裡與單獨放在頁面上都過 4.5；疊在清單裡的沒有 blur、單獨的照 SG 有（第 65 條）；
  *    聚焦時 2px 外框沒被切掉、方向鍵捲得動（patch `0024`）。
- * 20. **會話引用與 G2 圓角**（#1695 PR B，`?overlay=transcript-refs`，產品的 `Transcript`＋`StatusLine`）：能點的引用一直帶 brand 色底線、
- *    底線對泡泡底過 3，不能點的沒有底線；兩種的字過 4.5；引用與「立刻重連」的焦點外框；決定紀錄的 chip 是 SG Badge 的圓角，
+ * 19. **會話引用與 G2 圓角**（#1695 PR B，`?overlay=transcript-refs`，產品的 `Transcript`＋`StatusLine`）：能點的引用一直帶 brand 色底線、
+ *    底線對泡泡底過 3，不能點的沒有底線；兩種引用與決定紀錄 chip 的字過 4.5；引用與「立刻重連」的焦點外框；決定紀錄的 chip 是 SG Badge 的圓角，
  *    捲到底的鈕與「立刻重連」是 SG Button 的圓角。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
  *
- * 量不到的：brand 與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（只有 `DiffStats` 的增刪數用到 success／destructive，覆寫檔第 75 條），
+ * 量不到的：brand 當字色與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（例外：`DiffStats` 的增刪數用到 success／destructive，覆寫檔第 75 條；會話引用的底線用到 brand，見第 19 條，只量底線、不量字色），
  * 由靜態那一層（`tokens-contrast.test.ts`）量。
  *
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
@@ -4137,7 +4137,7 @@ const transcriptRefsMarks: Record<string, Record<string, string>> = {
 };
 
 describe.each<Theme>(['light', 'dark'])('瀏覽器量會話引用與圓角（#1695 PR B）：%s', (theme) => {
-  test('引用：能點的帶 brand 底線、過 3；兩種的字過 4.5；引用與「立刻重連」的焦點外框', async () => {
+  test('引用：能點的帶 brand 底線、過 3；兩種引用與 chip 的字過 4.5；引用與「立刻重連」的焦點外框', async () => {
     const page = await openOverlay('transcript-refs', theme, { marks: transcriptRefsMarks });
     try {
       expectTexts(
@@ -4206,7 +4206,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話引用與圓角（#16
     const page = await openOverlay('transcript-refs', theme, { marks: transcriptRefsMarks });
     try {
       const radii = await page.evaluate(() => {
-        // 探針的值取自出貨 CSS 裡那一條 utility 的原文（guard 底下不寫 class，`guard-page.test.ts`）。
+        // 探針的值取自出貨 CSS 裡那一條 utility 的原文（guard 底下不寫 class，`src/guard-page.test.ts`）。
         const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]);
         const find = (selector: string): CSSStyleRule | undefined => {
           for (const rule of rules) {

@@ -4344,7 +4344,7 @@ describe('@ 引用', () => {
 /**
  * `@` 引用別的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。規則逐條驗在 `lib/session-mention.test.ts`、
  * `lib/mention-menu.test.ts` 與 `components/composer.test.tsx`；這裡驗整條路：選單挑到草稿、原文送出、被領走之後
- * 泡泡畫成一小塊（同專案的會話點得開）、重新整理後還在、被拒絕時說出原因。
+ * 泡泡畫成引用（同專案的會話是點得開的連結）、重新整理後還在、被拒絕時說出原因。
  */
 describe('@ 引用別的會話', () => {
   beforeEach(stubCmdkLayout);
@@ -4426,7 +4426,7 @@ describe('@ 引用別的會話', () => {
     await waitFor(() => expect(fake.sent.at(-1)).toBe(`照 ${mine.mention} 的方案改`));
   });
 
-  it('被領走之後畫成一小塊：同專案的會話點了切過去，別的專案與子代理只顯示', async () => {
+  it('被領走之後畫成引用：同專案的會話點了切過去，別的專案與子代理只顯示', async () => {
     seq = 0;
     const fake = fakeClient([]);
     const { client } = mentionClient(fake);
@@ -4459,7 +4459,7 @@ describe('@ 引用別的會話', () => {
     await waitFor(() => expect(fake.opened.at(-1)).toBe('thread-mine'));
   });
 
-  it('重新整理（歷史回來的人話帶 references）也畫成一小塊', async () => {
+  it('重新整理（歷史回來的人話帶 references）也畫成引用', async () => {
     seq = 0;
     const fake = fakeClient([
       frame('messages', [], {
