@@ -314,6 +314,9 @@
       trigger: { type: messages, value: 20 }
       keep: { type: messages, value: 20 }
     historyPathPrefix: /conversation_history
+    # 摘要之後重新量測，仍超過 token 門檻就換最小的保留量再摘一次（#2028）。
+    # 只收 0 或 1；0 是不重試，摘要後仍超過就記一條 warn、照那份送。
+    compactionRetries: 1
 
 # 先讀後改：沒讀過的檔不准改（#273）。照 dsh base 的 `fs-observation-policy`
 # （`packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
