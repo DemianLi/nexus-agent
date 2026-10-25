@@ -1,8 +1,7 @@
 /*
  * 動效：token、模式清單、keyframes、reduced-motion。現行規則見 `.docs/web-ui-spec.md` §7；
- * 從原型 tag `proto-375-design-language` 的 `prototype-375/tokens.css` 搬來（#401），原型的
- * `proto-*` class 改名（`border-beam`、`text-shimmer`、`stream-caret`），`data-reduce-motion` 模擬
- * 改成真的 media query，CPU 降速退路拿掉（量過 60fps，規格說不需要）。
+ * 從原型 tag `proto-375-design-language` 的 `prototype-375/tokens.css` 搬來（#401）。原型的 `proto-*` class 在這裡去掉前綴
+ * （`border-beam`、`text-shimmer`、`stream-caret`）；reduced-motion 只認 media query，沒有 CPU 降速的退路（量過 60fps，規格說不需要）。
  *
  * 進出場的 `--animate-in`／`--animate-out`：`index.css` 的 `@theme` 讓 Tailwind 產出 `animation: var(--animate-in)`，
  * 值在本檔的「進出場」那段逐元素宣告（#1687）；reduced-motion 換成本檔的 `motion-fade-in`／`motion-fade-out`。
@@ -308,9 +307,9 @@
  * ── reduced-motion：不是全關 ──
  * 位移／縮放／模糊拿掉，留 150 的透明度；尺寸瞬間到位；循環動畫停在一格；狀態不靠動效表達。
  *
- * 每條都帶 `:root:root` 前綴：補回原型 `:root[data-reduce-motion]` 的 (0,2,0) specificity。拿掉它，
- * `.motion-swap[data-phase='in']`、`[data-kind='pending'][data-active='true']` 這類帶狀態的選擇器
- * 就比這裡的強，reduced-motion 會無聲失效（`scripts/check-built-css.mjs` 比對 specificity）。
+ * 每條都帶 `:root:root` 前綴，多出 (0,2,0) 的 specificity。拿掉它，`.border-beam[data-kind='pending'][data-active='true']::before`
+ * 這類帶狀態的選擇器（(0,3,1)）就比這裡的 `.border-beam::before`（(0,1,1)）強，reduced-motion 會無聲失效
+ * （`scripts/check-built-css.mjs` 比對 specificity）。
  */
 @media (prefers-reduced-motion: reduce) {
   :root:root {

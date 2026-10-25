@@ -432,7 +432,6 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
-    // 讀取中不是停用的鈕：鈕拿掉，換成 DotLoader 加字（#1695 X4-B）。
     const loading = await screen.findByText(LOADING_EARLIER_LABEL);
     expect(loading.closest('button')).toBeNull();
     expect(loading.querySelectorAll('.animate-dot-flash')).toHaveLength(3);

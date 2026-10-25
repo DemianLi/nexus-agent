@@ -64,11 +64,13 @@ import { startGuardServer, type GuardServer } from './server';
  * 18. **工具卡的 diff**（#1685 PR B，`?overlay=diff-view`，產品的 `ToolRun`＋`ToolCard`）：SG `DiffView` 每一種行（`diff --git`、`@@`、
  *    新增、刪除、上下文、`... 還有 N 行沒畫`）在 `StepList` 裡與單獨放在頁面上都過 4.5；疊在清單裡的沒有 blur、單獨的照 SG 有（第 65 條）；
  *    聚焦時 2px 外框沒被切掉、方向鍵捲得動（patch `0024`）。
+ * 19. **對話流裡的列**（#1695 PR A，`?overlay=transcript-rows`）：重試提示、往前翻、空白畫面的字過 4.5，往前翻兩顆鈕的焦點外框；
+ *    SG `DotLoader` 的點 3px、`--status-running` 色，平常在閃、減少動態時停在全亮；往前翻待命與讀取中一樣高，375 與 1280 寬不橫向溢出。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
  *
- * 量不到的：brand 與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（只有 `DiffStats` 的增刪數用到 success／destructive，覆寫檔第 75 條），
+ * 量不到的：brand 與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（只有 `DiffStats` 的增刪數用到 success／destructive（覆寫檔第 75 條）、`DotLoader` 的點用到 status-running（這裡只量色值是那個 token）），
  * 由靜態那一層（`tokens-contrast.test.ts`）量。
  *
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
@@ -4226,29 +4228,32 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量對話流裡的列（#1695 
   );
 });
 
-test.each([375, 1280])('往前翻：寬 %ipx 時待命與讀取中一樣高、頁面不橫向溢出（#1695 X4-B）', async (width) => {
-  const page = await openOverlay('transcript-rows', 'light', {
-    viewport: { width, height: 1000 },
-    marks: transcriptRowMarks,
-  });
-  try {
-    const heights = await page.evaluate(() =>
-      Object.fromEntries(
-        [...document.querySelectorAll('[data-guard-pager]')].map((el) => [
-          el.getAttribute('data-guard-pager'),
-          el.getBoundingClientRect().height,
-        ]),
-      ),
-    );
-    report[`transcript-rows:pager-heights:${width}`] = heights;
-    const overflow = await page.evaluate(
-      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-    );
-    expect(overflow).toBe(0);
-    expect(heights.idle).toBeGreaterThan(0);
-    expect(heights.loading).toBe(heights.idle);
-    expect(heights.live).toBe(heights.idle);
-  } finally {
-    await page.close();
-  }
-});
+test.each([375, 1280])(
+  '往前翻：寬 %ipx 時待命與讀取中一樣高、頁面不橫向溢出（#1695 X4-B）',
+  async (width) => {
+    const page = await openOverlay('transcript-rows', 'light', {
+      viewport: { width, height: 1000 },
+      marks: transcriptRowMarks,
+    });
+    try {
+      const heights = await page.evaluate(() =>
+        Object.fromEntries(
+          [...document.querySelectorAll('[data-guard-pager]')].map((el) => [
+            el.getAttribute('data-guard-pager'),
+            el.getBoundingClientRect().height,
+          ]),
+        ),
+      );
+      report[`transcript-rows:pager-heights:${width}`] = heights;
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBe(0);
+      expect(heights.idle).toBeGreaterThan(0);
+      expect(heights.loading).toBe(heights.idle);
+      expect(heights.live).toBe(heights.idle);
+    } finally {
+      await page.close();
+    }
+  },
+);

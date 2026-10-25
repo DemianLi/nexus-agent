@@ -65,8 +65,8 @@
  *   fetch，路徑故意很長）；測試再點開審查頁與選檔器。量 `+`／`−` 在四種底上的對比、算出來的顏色是 `--success`／`--destructive`（第 75 條）、
  *   375 寬不被擠（第 76 條）；三塊各包一層 `data-guard-diffstats`（`page`、`panel`、`changes`）。
  * - `?overlay=transcript-rows` 畫對話流裡用到 SG `DotLoader`／`Empty` 的三種列（#1695 PR A）：輪尾的重試提示、往前翻的待命／讀取中／
- *   失敗三格（各包一層 `data-guard-pager`，寬度同對話欄），一格按得動的往前翻（`live`：按下去讀取 300ms 再回到待命，
- *   `window.__pagerLoads` 數按了幾次），以及空白畫面。量字的對比、焦點、點的大小與顏色、減少動態時停住、三格一樣高。
+ *   失敗三格（各包一層 `data-guard-pager`，寬度同 `App.tsx` 的對話欄，最寬 42rem），一格按得動的往前翻（`live`：按下去讀取
+ *   300ms 再回到待命），以及空白畫面。量字的對比、焦點、點的大小與顏色、減少動態時停住，待命、讀取中與 `live` 一樣高。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -838,18 +838,12 @@ function runningState(activity: string) {
   return { ...state, status: 'running' as const, entries: TURN_ENTRIES[activity] ?? [] };
 }
 
-/**
- * 對話流裡的列（#1695 PR A，`?overlay=transcript-rows`）：重試提示、往前翻三種狀態、按得動的往前翻、空白畫面。
- * 寬度與左右留白同 `App.tsx` 的對話欄（最寬 42rem）。
- */
 function LivePager() {
   const [loading, setLoading] = useState(false);
   const earlier: EarlierHistory = {
     hasMore: true,
     loading,
     onLoad: () => {
-      const hooks = window as unknown as { __pagerLoads?: number };
-      hooks.__pagerLoads = (hooks.__pagerLoads ?? 0) + 1;
       setLoading(true);
       setTimeout(() => setLoading(false), 300);
     },

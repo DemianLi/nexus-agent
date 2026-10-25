@@ -54,7 +54,8 @@ export function earlierLoadedNotice(loaded: number | undefined): string {
 
 export function EarlierPager({ earlier }: { earlier: EarlierHistory }) {
   const failed = earlier.error !== undefined;
-  // 讀取中不是停用的鈕，是 SG 的 DotLoader 加字（#1695 X4-B）。內層的最小高度等於 sm 鈕，三個狀態一樣高，接上一頁前畫面不跳。
+  // 讀取中畫 SG 的 DotLoader 加字（#1695 X4-B）。內層的最小高度等於 sm 鈕（vendor Button 的 `h-7`），待命與讀取中一樣高，
+  // 接上一頁之前畫面不跳。
   return (
     <div className="mx-auto w-full max-w-2xl px-6 pt-4">
       <div className="flex min-h-7 flex-wrap items-center justify-center gap-2">
