@@ -4125,7 +4125,7 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
   const statusOf = (element: HTMLElement) =>
     within(element).queryByTestId('thread-status')?.getAttribute('data-status') ?? null;
 
-  it('沒打開的那條停在核准：那一列標出來、時間換成「待核准」；撤回就回到在跑', async () => {
+  it('沒打開的那條停在核准：那一列標出來、時間換成「等待核准」；撤回就回到在跑', async () => {
     const feed = rendered(async () => ok(row('a', '改登入頁', true)));
     const target = await rowOf('改登入頁');
     await waitFor(() => expect(statusOf(target)).toBe('running'));
@@ -4137,7 +4137,6 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     });
     await waitFor(() => expect(statusOf(target)).toBe('approval'));
     expect(within(target).getByTestId('thread-status').textContent).toBe('等待核准');
-    expect(target.textContent).toContain('待核准');
     expect(target.textContent).not.toMatch(/\d{1,2}:\d{2}/);
 
     feed.line().push({ type: 'input-withdrawn', threadId: 'a', interruptId: 'int-1' });
