@@ -85,6 +85,8 @@ import { startGuardServer, type GuardServer } from './server';
  * 24. **觀測分頁的列**（#1690 PR B，`?overlay=trace-steps`）：不能展開的列、SG `StepRow` 的列與它的失敗字、展開後的時刻、模型呼叫的數字格與欄位表、
  *    系統提示詞的 `OutputBlock`、子代理那一輪的 `StepGroup` 計數過 4.5；列、計數、結果框有焦點外框；分頁只有一格 `role=status`；
  *    1280 寬時列的字與定位鈕對齊；375 寬時列 44px 高，失敗那一列的標題沒被截、後面那段不壓到箭頭與定位鈕，頁面不橫向溢出。
+ * 25. **成本分頁與頂列用量鈕**（#1691，`?overlay=cost`，產品的 `RightSidebarPanel`＋`SessionUsage`）：用量鈕的圓角跟 SG Badge 一樣是 `rounded-4xl`
+ *    （#1827 G2）、字過 4.5、有焦點外框；成本分頁裡總計的欄名與數字、子代理列的數字過 4.5。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -5195,6 +5197,39 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁的列（#1690 
         expect.arrayContaining(['input', 'tool', 'call', 'reply']),
       );
       expect(offsets.filter((o) => Math.abs(o.offset) > 1)).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量成本分頁與用量鈕（#1691）：%s', (theme) => {
+  test('G2（#1691）：頂列的用量鈕跟 SG Badge 一樣是 rounded-4xl、字過 4.5、有焦點外框；成本分頁的總計與子代理列的字過 4.5', async () => {
+    const page = await openOverlay('cost', theme, {
+      marks: {
+        '[data-guard-cost="usage"] [data-testid="session-usage"]': {
+          'data-guard-text': 'usage',
+          'data-guard-focus': 'usage',
+        },
+        '[data-testid="cost-totals"] dt': { 'data-guard-text': 'totals-term' },
+        '[data-testid="cost-totals"] dd': { 'data-guard-text': 'totals-value' },
+        '[data-testid="cost-subagent"] dd': { 'data-guard-text': 'subagent-value' },
+      },
+    });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        ['usage', 'totals-term', 'totals-value', 'subagent-value'],
+        `cost:${theme}`,
+      );
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['usage-0']);
+      expectFocus(focus, `cost:${theme}`);
+      const { probe, radii } = await readRadii(page, {
+        usage: '[data-guard-cost="usage"] [data-testid="session-usage"]',
+      });
+      report[`cost:${theme}:radii`] = { probe, radii };
+      expect(radii).toEqual({ usage: [probe.capsule] });
     } finally {
       await page.close();
     }
