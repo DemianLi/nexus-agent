@@ -2038,6 +2038,33 @@ describe('結算通知（#840）', () => {
       await host.close();
     });
 
+    it('傳完之後窗口關了才到的插話排成同一段的下一輪：結尾全文照附', async () => {
+      const closedWindow = gate();
+      const hold = gate();
+      const made = setup(async (text, _signal, log, inbox) => {
+        if (text.startsWith('Agent')) {
+          reply(log, '第二輪的結論');
+          return;
+        }
+        sendToParent(made.host, log, '先報一聲');
+        expect(await inbox.finish()).toEqual([]);
+        closedWindow.open();
+        await hold.opened;
+        reply(log, '第一輪收尾');
+      });
+      const { host } = made;
+      const started = host.start({ subagent: 'worker', text: '查' });
+      await closedWindow.opened;
+      const next = host.send({ runId: started.runId, message: '也看 c.ts' });
+      hold.open();
+      await started.outcome;
+      await next;
+      // 一段裡跑了兩輪，只結算一次；第二輪開頭只有 `turn/start`，沒有領走的 `user/message`。
+      expect(made.settlements).toHaveLength(1);
+      expect(made.settlements[0]?.text).toMatch(/\n\nIts closing message:\n第二輪的結論$/);
+      await host.close();
+    });
+
     it('上一段傳過、這一段沒傳：這一段的結尾全文照附（不帶到下一段）', async () => {
       const made = setup((text, _signal, log) => {
         if (text === '查') {
