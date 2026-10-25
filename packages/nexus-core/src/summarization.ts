@@ -1747,7 +1747,10 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  *    （`selectCompactableRange` 回 `null`，`compaction-basic/src/region.ts:117-155`、`index.ts:299`／`331`／`394`）
  *    與 `/compact` 的回覆裡講（`command-compact/src/index.ts:68`），不進投影。dsh 也沒有 `messages` 門檻（觸發只比 token，
  *    `index.ts:319`）；那道是我們自己加的（{@link DEFAULT_SUMMARIZATION} 的「`messages: 60` 那道」），這一格補的是它的誠實。
- * 5. **`compactionRetries` 只收 0 或 1，重試固定用保留 0**。上限的理由見 {@link assertCompactionRetries}；≥2 在載入時就拒。
+ * 5. **`compactionRetries` 只收 0 或 1，重試固定用保留 0**；≥2 在載入時就拒（{@link assertCompactionRetries}）。兩條理由都在
+ *    {@link withRetainedTail}：
+ *    - 重試交下去的永遠是原請求 `seeded`，換的只有保留量（`chainFor(zero, true)`），再試一次切到的是同一段；
+ *    - 保留 0 那一次在 `catch` 裡，外面沒有 `try`，再拋 {@link RetainLessSignal} 會冒過 {@link withTokenBudget}，整輪失敗。
  *
  * ## 量與記都不准拋
  *
