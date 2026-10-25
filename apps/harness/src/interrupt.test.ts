@@ -317,18 +317,12 @@ describe('閘門本身的邊界', () => {
   });
 
   /**
-   * **這一條翻過一次面。** 它以前釘的是「當場拋」——閘門對看不懂的決定 `throw`，而那時
-   * 整場 run 跟著死。[#159](https://github.com/DemianLi/nexus-agent/issues/159) 把圍堵
-   * 打底進 fold 的第 0 格之後，閘門就在它裡面，所以那個 `throw` 變成一則 error
-   * ToolMessage：**run 走得完，工具還是一次都沒跑。**
+   * 閘門對看不懂的決定回一則帶碼的拒絕（`APPROVAL_INVALID_REPLY`，[#2027](https://github.com/DemianLi/nexus-agent/issues/2027)）：
+   * **run 走得完，工具一次都沒跑。**
    *
-   * **翻面之後仍然是同一句驗收**：詞彙是封閉的、`edit` 不被靜默降級成核准。變的只是
-   * 拒絕的載體。這也正是 dsh 那側的形狀——「缺失、不负责该请求、抛异常或**不合规**的
-   * 应答者会产生 `unavailable`，**而非放行**」，而呼叫端對 `unavailable` 執行拒絕
-   * （`docs/subsystems/approval.zh.md:21`，SHA `4e84901`）：那是「這次呼叫被拒」，
-   * 不是「這一輪結束」。
+   * 驗收是：詞彙是封閉的、`edit` 不被靜默降級成核准；看不懂的回覆是「這次呼叫被拒」，不是「這一輪結束」。
    */
-  it('resume 傳看不懂的決定 → **一則錯誤，不是靜默降級成核准，也不再殺掉整場 run**', async () => {
+  it('resume 傳看不懂的決定 → **一則錯誤，不是靜默降級成核准，也不會殺掉整場 run**', async () => {
     const { agent } = await gatedAgent({ tools: ['danger'], gated: ['danger'] });
     const config = { configurable: { thread_id: 'edit' } };
 
@@ -345,7 +339,7 @@ describe('閘門本身的邊界', () => {
       .at(-1) as (BaseMessage & { status?: string }) | undefined;
     expect(failure?.status).toBe('error');
     expect(failure?.text).toContain('核准回覆看不懂');
-    // **承重的還是這一條**：載體變了，「沒跑」沒變。
+    // **承重的是這一條**：拒絕不論怎麼送回，工具都沒跑。
     expect(ran).toEqual([]);
   });
 

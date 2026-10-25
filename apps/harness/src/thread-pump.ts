@@ -3346,7 +3346,7 @@ export class ThreadPump {
    *
    * @param id - 中斷的 id。
    * @param response - 人的回覆（`{ decisions: [{ type }] }`）；`undefined` 是問題被收回（按了停止）。
-   *   看不懂的回覆**不記**：閘門收到它會拋（`approval.ts` 的「核准回覆看不懂」），沒有結局可言，那一對留著開著。
+   *   不是 `approve` 也不是 `reject` 的回覆記 `unavailable`：沒有拿到有效的決定，提問的一方照拒絕處理（核准閘門的碼是 `APPROVAL_INVALID_REPLY`，#2027）。
    */
   #noteApprovalDecided(id: string, response: unknown): void {
     if (!this.#approvalOpen.delete(id)) return;
@@ -3357,7 +3357,7 @@ export class ThreadPump {
       const type = (response as { decisions?: { type?: unknown }[] } | null)?.decisions?.[0]?.type;
       if (type === 'approve') outcome = 'allowed-once';
       else if (type === 'reject') outcome = 'rejected';
-      else return;
+      else outcome = 'unavailable';
     }
     this.#sessions.root.append('approval/decided', { id, outcome }, { ignorable: true });
   }
