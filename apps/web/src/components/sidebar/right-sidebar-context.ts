@@ -25,8 +25,9 @@ export interface RightSidebarControl {
   /** 1024 以下定位之後，抽屜關掉時焦點要去的那一格（`locate`）。 */
   readonly locateFocus: RefObject<HTMLElement | null>;
   /**
-   * 計劃分頁往前掃到（#1798）的計劃標題，以分頁 id 為鍵。掃到的那一份不在計劃庫裡（`sources.plans` 只有載入的對話），分頁標籤
-   * 要靠這裡才寫得出標題。換 thread 就清。
+   * 計劃分頁往前掃到（#1798）的計劃標題，以 `SidebarTab` 的 plan id 為鍵，`PlanTab` 掃到時經 `noteScannedPlan` 寫進來。分頁標籤
+   * 先讀計劃庫（`sources.plans`，只有載入的對話），沒有才讀這裡。只有掛上過的分頁會掃，沒選過的還原分頁標籤仍寫「計劃」。
+   * 換 thread 時隨提供者重掛清空。
    */
   readonly scannedPlanTitles: ReadonlyMap<string, string>;
   noteScannedPlan(id: string, title: string): void;
