@@ -136,7 +136,10 @@ export interface BackgroundSettlement {
   readonly summary: string;
   /** 怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：`summary` 的來源，畫面認這個、不解析英文句。 */
   readonly reason: BackgroundStopReason;
-  /** 送進主對話模型的整段字：摘要，加上它最後一則回覆的非空文字，沒有就是 `It left no closing message.`。 */
+  /**
+   * 送進主對話模型的整段字：摘要，加上它最後一則回覆的非空文字，沒有就是 `It left no closing message.`；收尾前剛傳過結果上來
+   * 就換成省略的那一句（#2032，見 {@link settlementText}）。
+   */
   readonly text: string;
 }
 
@@ -242,11 +245,41 @@ export function settlementSummary(runId: string, reason: BackgroundStopReason): 
 /**
  * 結算通知的整段字。dsh 是幾個 text 區塊（摘要、`Its closing message:`、子代理的文字區塊）；我們的 `turn/start.text` 與
  * `HumanMessage` 是一個字串，區塊之間空一行。
+ *
+ * `omitClosing`：子代理收尾前剛用 `send_message` 把結果傳上來（{@link sentJustBeforeFinishing}），結尾文字換成省略的那一句，
+ * 同一段結果不進主對話兩次（[#2032](https://github.com/DemianLi/nexus-agent/issues/2032)）。
  */
-export function settlementText(summary: string, closing: string): string {
+export function settlementText(summary: string, closing: string, omitClosing = false): string {
+  if (omitClosing) {
+    return `${summary}\n\nIt sent you a message just before finishing, so its closing message is omitted.`;
+  }
   return closing === ''
     ? `${summary}\n\nIt left no closing message.`
     : `${summary}\n\nIts closing message:\n${closing}`;
+}
+
+/** 一個子代理這一次結算的一段（見 {@link BackgroundSubagentHost.#epochs}）。 */
+interface Epoch {
+  /** 這一段第一顆 `turn/start` 的 `seq`。 */
+  readonly start: number;
+  /** 這一段裡最後一次成功傳給 parent 時，子代理日誌最後一筆的 `seq`（#2032），見 {@link sentJustBeforeFinishing}。 */
+  sentToParentAt?: number;
+}
+
+/**
+ * 子代理最後一次成功傳給 parent 之後**沒有再做事、也沒有再收到話**（#2032）。
+ *
+ * `sentAt` 是送達那一刻日誌最後一筆的 `seq`。之後出現 `tool/call`（又叫了工具）、`user/message`（收件匣領走的插話，或
+ * plugin 注入的訊息）或 `turn/start`（插話排成下一輪）就不算：結尾文字可能講了傳上來的那則沒講的事。`send_message` 在屏障上
+ * 是獨佔的，同一步排在它後面的呼叫一定記在 `sentAt` 之後。
+ */
+function sentJustBeforeFinishing(log: SessionLog, sentAt: number | undefined): boolean {
+  if (sentAt === undefined) return false;
+  return !log.events.some(
+    (event) =>
+      event.seq > sentAt &&
+      (event.type === 'tool/call' || event.type === 'user/message' || event.type === 'turn/start'),
+  );
 }
 
 /**
@@ -258,7 +291,7 @@ export function settlementText(summary: string, closing: string): string {
  * `continuation-messages.ts:147-155` 才只留文字，沒有就寫 `It left no closing message.`——這裡一樣。
  *
  * 範圍是「上一次結算之後」（dsh `activation.ts:152` 的 `outputStart`）：一次結算可以跨好幾輪（沒領走的插話排成下一輪，
- * 結算等它收完），所以起點是這一段的第一顆 `turn/start`（{@link BackgroundSubagentHost.#epochStart}），不是最近一顆。
+ * 結算等它收完），所以起點是這一段的第一顆 `turn/start`（{@link BackgroundSubagentHost.#epochs}），不是最近一顆。
  * 串流文字的退路（dsh `:55-59`）不做：子代理的日誌沒有素材（`assistant/attempt` 只由 pump 為 root 寫）。
  */
 function closingTextOf(log: SessionLog, fromSeq: number): string {
@@ -551,10 +584,10 @@ export class BackgroundSubagentHost {
    */
   readonly #paused = new Set<string>();
   /**
-   * 這個子代理這一次結算的起點：第一顆 `turn/start` 的 `seq`（#1565，dsh `outputStart`）。結算（確定沒有輪次排著）時刪掉，
-   * 被中斷而暫停的不刪（那一段還沒收）。撤回（{@link BackgroundSubagentHost.#retract}）、關閉時丟掉的輪次與 `close()` 也清。
+   * 這個子代理這一次結算的一段（#1565，dsh `outputStart`）。結算（確定沒有輪次排著）時刪掉，被中斷而暫停的不刪（那一段還沒收）。
+   * 撤回（{@link BackgroundSubagentHost.#retract}）、關閉時丟掉的輪次與 `close()` 也清。
    */
-  readonly #epochStart = new Map<string, number>();
+  readonly #epochs = new Map<string, Epoch>();
   readonly #inflight = new Set<Promise<void>>();
   #wake: (() => void) | undefined;
   #closed = false;
@@ -846,12 +879,15 @@ export class BackgroundSubagentHost {
     if (this.#onMessage === undefined) {
       throw new Error('主對話現在收不到訊息（沒有可以叫醒的一輪）');
     }
-    const sessionId = this.#sessions.open({ kind: 'subagent', runId: input.runId }).sessionId;
+    const log = this.#sessions.open({ kind: 'subagent', runId: input.runId });
+    const { sessionId } = log;
     this.#onMessage({
       runId: input.runId,
       sessionId,
       text: agentMessageText(sessionId, input.message),
     });
+    const epoch = this.#epochs.get(input.runId);
+    if (epoch !== undefined) epoch.sentToParentAt = log.events.at(-1)?.seq ?? -1;
   }
 
   /**
@@ -928,7 +964,7 @@ export class BackgroundSubagentHost {
     this.#known.delete(runId);
     this.#choices.delete(runId);
     this.#paused.delete(runId);
-    this.#epochStart.delete(runId);
+    this.#epochs.delete(runId);
     this.#publishStatus();
   }
 
@@ -1269,7 +1305,7 @@ export class BackgroundSubagentHost {
     // 正在叫醒的會在重建的下一步看到 `#closed`、放掉租約再拋；等它們收完，租約才不會晚於 `close()` 才放。
     await Promise.allSettled([...this.#waking.values()]);
     await this.#loop;
-    this.#epochStart.clear();
+    this.#epochs.clear();
   }
 
   /** 關閉之後：被中斷而暫停的輪次不會再有人喚醒，當作沒跑成交出去，免得 `close()` 永遠等。 */
@@ -1278,7 +1314,7 @@ export class BackgroundSubagentHost {
       const job = this.#queue[index]!;
       if (!this.#paused.has(job.runId)) continue;
       this.#queue.splice(index, 1);
-      this.#epochStart.delete(job.runId);
+      this.#epochs.delete(job.runId);
       job.settle({ ok: false, error: '這個背景子代理被中斷後沒有再收到訊息，這一輪沒有跑' });
     }
   }
@@ -1302,7 +1338,7 @@ export class BackgroundSubagentHost {
           // 結算＝這個子代理沒有輪次排著了（被中斷而暫停的排著就不算）。**在交下場之前通知**，同 dsh 在所有權釋放之前。
           if (!this.#queue.some((queued) => queued.runId === job.runId)) {
             // 這一段收完了：下一次 `submit` 是新的一段，收尾訊息不回頭撿這一段的。不論有沒有人接 `onSettled` 都重置。
-            this.#epochStart.delete(job.runId);
+            this.#epochs.delete(job.runId);
             this.#notifySettled(settlement);
           }
           job.settle(outcome);
@@ -1377,7 +1413,7 @@ export class BackgroundSubagentHost {
     try {
       log = this.#sessions.open({ kind: 'subagent', runId: job.runId });
       const started = log.append('turn/start', job.turn);
-      if (!this.#epochStart.has(job.runId)) this.#epochStart.set(job.runId, started.seq);
+      if (!this.#epochs.has(job.runId)) this.#epochs.set(job.runId, { start: started.seq });
       // 一輪的時鐘（#1624 的 Q-B4 (a)）：從這一輪的 `turn/start` 起算，到點照 `interrupt` 的路停下（排著的輪次暫停到下一次
       // `submit`，同主對話的 Q-B3 (a)），原因記 `hook`。收尾在 `finally` 清掉。
       const opened = log;
@@ -1450,6 +1486,7 @@ export class BackgroundSubagentHost {
     let settlement: BackgroundSettlement | undefined;
     if (log !== undefined) {
       const summary = settlementSummary(job.runId, stop);
+      const epoch = this.#epochs.get(job.runId);
       settlement = {
         runId: job.runId,
         sessionId: log.sessionId,
@@ -1457,7 +1494,8 @@ export class BackgroundSubagentHost {
         reason: stop,
         text: settlementText(
           summary,
-          closingTextOf(log, this.#epochStart.get(job.runId) ?? Number.POSITIVE_INFINITY),
+          closingTextOf(log, epoch?.start ?? Number.POSITIVE_INFINITY),
+          sentJustBeforeFinishing(log, epoch?.sentToParentAt),
         ),
       };
     }
