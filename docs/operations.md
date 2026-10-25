@@ -449,6 +449,11 @@ banner 那一行改印「只在記憶體裡」並點名是這一列關的。**�
 那句人話留在日誌上、那則回覆不記，下一輪照常。上限出現之前寫下的舊日誌裡如果有更深的事件，續接那條 thread 回專用碼
 **`thread_history_too_deep`**，message 寫明是日誌第幾顆事件、幾層；同一份日誌每次都一樣深，重試沒用。
 
+**同一份會話同時只能有一個寫入者**（寫租約：跟日誌並排的 `<base>.lock` 上的 `flock`）。續接一條 thread 時，它的寫租約如果被別的行程握著
+（另一個 serve 行程用同一個 `--session-log` 目錄與工作目錄、但不同的 home，還開著它；同一個 home 起不了第二台 serve），serve 不開這條 thread、
+不碰日誌，回專用碼 **`thread_writer_held`**（[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)），message 寫明是哪一份會話。
+這是暫時的：那個行程關掉這條 thread 或結束之後再送，就不會再因此被拒。
+
 CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一個 `.header.json`。`serve` 吃同一個旗標、同一個預設，
 會話根按目錄分，底下一條 thread 一個檔——**所以重開 `serve` 之後，網頁的 thread 清單會帶回同一個目錄底下以前的對話**。
 兩者共用同一個根：run 目錄以時間戳開頭，`serve` 那一格以 `--` 開頭，撞不到。eval 那條路沒有會話日誌，而那是一個登記過的決定
