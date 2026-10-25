@@ -46,7 +46,8 @@ export class ModifiedOrderCompositeBackend extends CompositeBackend {
   /**
    * 基座建構時把每個子 backend 換成轉接物件（`adaptBackendProtocol`），{@link FILE_VERSION} 這類基座不認得的方法會掉。
    * 這裡記「轉接物件 → 交進來的原物件」，路由仍走基座的 `getBackendAndKey`，只在最後換回原物件。
-   * 讀的是基座私有的 `default`／`routes`；基座改了欄位名，這張表就是空的，每一格都退回 `readRaw`（只變慢，不放寬比對）。
+   * 讀的是基座私有的 `default`／`routes`。基座改了欄位名，這張表就是空的，寫前比對退回 `readRaw` 算內容雜湊，但 `read_file`
+   * 照樣回報 stat token，兩邊對不上：讀過再改一律被擋成 `FS_STALE_VERSION`（`contained-read-window.test.ts` 的驗收 2b 會紅）。
    */
   private readonly originals = new Map<unknown, AnyBackendProtocol>();
 
