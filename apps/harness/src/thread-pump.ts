@@ -3346,7 +3346,7 @@ export class ThreadPump {
    *
    * @param id - 中斷的 id。
    * @param response - 人的回覆（`{ decisions: [{ type }] }`）；`undefined` 是問題被收回（按了停止）。
-   *   不是 `approve` 也不是 `reject` 的回覆記 `unavailable`：沒有拿到有效的決定，提問的一方照拒絕處理（核准閘門的碼是 `APPROVAL_INVALID_REPLY`，#2027）。
+   *   不是 `approve` 也不是 `reject` 的回覆記 `unavailable`：沒有拿到有效的決定，提問的一方照拒絕處理，碼是 `APPROVAL_INVALID_REPLY`（#2027）。
    */
   #noteApprovalDecided(id: string, response: unknown): void {
     if (!this.#approvalOpen.delete(id)) return;
