@@ -115,6 +115,7 @@ import {
   THREAD_AT_CAPACITY,
   THREAD_HISTORY_TOO_DEEP,
   THREAD_IS_SUBAGENT,
+  THREAD_WRITER_HELD,
   isSkillMethod,
   isSlashMethod,
   isWireChannel,
@@ -144,6 +145,7 @@ import {
   FeedbackLogCorruptionError,
   forkBoundaryOf,
   ProjectionDetailError,
+  SessionAlreadyOwnedError,
 } from '@nexus/core';
 import { childForkSeed } from './thread-fork.js';
 import type { GoalId } from '@nexus/goal';
@@ -1969,12 +1971,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    *
    * `handle()` 不接錯、`wire-server.ts` 也不接，所以讓 `threadFor` 的 rejection 往上冒的話，
    * 那個請求一個位元組都不回、client 永遠卡著，而那顆 rejection 沒有人處理。它屬於協定層：
-   * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、別的行程握著、目錄對不上……）。
+   * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、目錄對不上……）。
    * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`——原因寫在 message 裡。
    * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`；
    * 還有**這個 id 是子代理的會話**（{@link SubagentSessionError}，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：回 `thread_is_subagent`；
    * 以及**日誌裡有一則太深、灌不回存檔點**（`checkpoint_depth_exceeded`，[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：回 `thread_history_too_deep`，
-   * 認 `cause` 鏈上任何一環的碼（同 `classifyTurnFailure` 認碼不認訊息）。
+   * 認 `cause` 鏈上任何一環的碼（同 `classifyTurnFailure` 認碼不認訊息）；
+   * 還有**寫租約被別的寫入者握著**（{@link SessionAlreadyOwnedError}，[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)）：回 `thread_writer_held`。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
@@ -1995,6 +1998,17 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // 子代理的會話不是 thread（#1544）：專用碼、不加「建不起來」的前綴，重試沒用。
       if (error instanceof SubagentSessionError) {
         return json(errorResponse(id, THREAD_IS_SUBAGENT, error.message));
+      }
+      // 別的寫入者握著這份會話（#2031）：不是壞了，對方放掉之後再送就不會再因此被拒。專用碼、不加「建不起來」的前綴。
+      if (error instanceof SessionAlreadyOwnedError) {
+        return json(
+          errorResponse(
+            id,
+            THREAD_WRITER_HELD,
+            `會話 "${error.id}" 正由另一個寫入者握著（多半是另一個行程還開著這條 thread），serve 沒有開它。` +
+              '等握著它的那個行程關掉這條 thread 或結束之後再試。',
+          ),
+        );
       }
       const reason = error instanceof Error ? error.message : String(error);
       // 日誌太深不是暫時壞了（#1668）：專用碼，重試沒用。訊息照舊帶「建不起來」與第幾顆事件、幾層。
