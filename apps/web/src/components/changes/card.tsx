@@ -25,9 +25,12 @@ import type { ChangesStores } from '@/lib/changes-diff';
 /** 收起時先列幾個（dsh `COLLAPSED_ROWS`）。 */
 export const COLLAPSED_ROWS = 3;
 
-/** 可以點的標頭與列：跟工具卡的標頭同一套 chip 階梯。 */
+/**
+ * 可以點的標頭與列：hover 照 SG ghost（`hover:bg-muted`，底是 SG 的 `--hover`；字換成 foreground）。子元素自己寫
+ * `text-muted-foreground` 的（圖示、`FileCounts` 的說明字）用 `group-hover/pressable` 跟著翻。
+ */
 const PRESSABLE =
-  'hover:bg-chip-hover active:bg-chip-pressed rounded-lg text-left transition-colors duration-(--duration-quick)';
+  'group/pressable hover:bg-muted hover:text-foreground rounded-lg text-left transition-colors duration-(--duration-quick)';
 
 export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesStores }) {
   const { summary: store } = changes;
@@ -57,7 +60,10 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
         onPress={openAt === undefined ? undefined : () => openAt(0)}
         className="flex items-center gap-3 px-3 pt-2 pb-2"
       >
-        <FileDiff className="text-muted-foreground size-5 shrink-0" aria-hidden />
+        <FileDiff
+          className="text-muted-foreground group-hover/pressable:text-foreground size-5 shrink-0"
+          aria-hidden
+        />
         <span className="min-w-0 flex-1 font-medium">{`${total} 個檔案有改動`}</span>
         <DiffStats added={added} removed={deleted} />
       </Pressable>

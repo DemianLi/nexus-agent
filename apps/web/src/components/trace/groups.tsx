@@ -156,10 +156,10 @@ export function Digests({
   return (
     <Collapsible className="mb-4" data-testid="trace-digests" open={open} onOpenChange={setOpen}>
       <RowTrigger fit="bare" className="text-ui">
-        <span className="text-muted-foreground">
+        <span className="text-muted-foreground group-hover/row-trigger:text-foreground">
           更早的 {digests.length + omitted} 輪（只有摘要）
         </span>
-        <Chevron className="text-muted-foreground ml-auto" />
+        <Chevron className="text-muted-foreground group-hover/row-trigger:text-foreground ml-auto" />
       </RowTrigger>
       <CollapsibleContent className="overflow-hidden">
         {omitted > 0 && (

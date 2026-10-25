@@ -16,13 +16,13 @@
 
 `src/styles/design-system.test.ts` 會掃元件原始碼的字串字面值，下面這些寫了就紅：
 
-- **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-chip-hover`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。
+- **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-muted`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。
 - **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。
-- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card rounded-3xl p-1`、`bg-card border rounded-3xl`。
+- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card rounded-3xl`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`（照 SG 朝右、打開轉 90 度，#1687），不手寫 `transition-transform … rotate-90`（或跟著 `data-state=open` 轉的 `rotate-*`）。
-- **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-chip-hover active:bg-chip-pressed … w-full … text-left`。
+- **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-muted … w-full … text-left … min-h-11`。
 - **對話泡泡**：用 `ChatBubble`，不手寫 `rounded-3xl px-4 py-2.5`。
-- **程式碼小框**：用 `MonoBlock`，不手寫 `bg-chip … rounded-lg p-2 font-mono`。
+- **程式碼小框**：用 `MonoBlock`，不手寫 `bg-muted … rounded-lg p-2 font-mono`。
 - **多行輸入**：`ui/` 以外不寫原生 `<textarea`，用 `ui/textarea` 的 `Textarea`。
 - **時長**：走 `motion.css` 的 token（`duration-(--duration-fast)`、`animation-duration-(--duration-medium)`），不寫 `duration-200` 這種數字。這條連 `ui/` 一起管。`vendor/` 裡 SG 元件寫的數字（例如 dialog 的 `duration-100`）原樣留著，進出場的時長就照它（#1687）；這條規則跟 SG 的寫法最後怎麼收，在 ⑥（#1689）定。
 - **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `styles/solid-glass.overrides.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
@@ -36,7 +36,7 @@
 
 三條，來自 beautiful-ui 的比對（[`.docs/beautiful-ui-comparison.md`](../../.docs/beautiful-ui-comparison.md) §3，[#1307](https://github.com/DemianLi/nexus-agent/issues/1307)）。都是我們已經在做的事，寫下來讓新元件照做。
 
-- **顏色只當點綴**。畫面以中性灰為主；帶色相的只有語意 token（brand、success、info、destructive、SG 的 `status-*`），用在狀態、焦點、需要人注意的地方，不拿來鋪大面積。原生色板與硬寫的色碼由 `design-system.test.ts` 擋；「彩色面積不能大」量不出來，靠 review。
+- **顏色只當點綴**。畫面以中性灰為主；帶色相的只有語意 token（brand、success、destructive、SG 的 `status-*`），用在狀態、焦點、需要人注意的地方，不拿來鋪大面積。原生色板與硬寫的色碼由 `design-system.test.ts` 擋；「彩色面積不能大」量不出來，靠 review。
 - **次要靠顏色，不靠字重；次要色本身要過 4.5:1**。說明、附註、時間一律 `text-muted-foreground`，不要把字變細（細字在中文與小字級下先糊掉）。`font-thin`／`font-extralight`／`font-light` 會被 `design-system.test.ts` 擋下。次要色的對比度由 `tokens-contrast.test.ts` 守著——次要色看不清楚，就等於沒寫。
 - **一個面一顆實心按鈕**。一張卡、一個面板、一列操作裡，只有主動作用實心（`Button` 預設 variant）；其他用 `outline`、`ghost`、`secondary`。按壓縮放也只給實心主按鈕（規格 §7）。條件渲染會讓同一個檔裡兩顆實心按鈕不同時出現，靜態量不準，**不寫測試，靠 review**。
 
@@ -76,7 +76,7 @@
 - **兩處以上手寫同一份配方**（不只是名字像）才抽；只有一處就留在原地。
 - 只抽**共通的部分**，差異用 `className` 補（例：`RowTrigger` 只含底色、最小高度、圓角、過渡，圖示與間距由呼叫端給）。
 - 抽完要證明**畫面沒變**：展開成的 class 集合與原本逐項相等，再加實機前後比對。
-- 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`ChatBubble`（對話裡的文字泡泡，人的話靠右、子代理寄來的話靠左）、`MonoBlock`（夾在說明文字裡的等寬字小框，平的 `bg-chip`；工具輸出那種有標題、有細線的內層底是 `Surface tone="stage"`，不是它）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）、`CopyButton`（複製鈕：交付卡的複製路徑、回覆底下的複製回覆、程式碼區塊的複製程式碼共用同一套行為與回饋，[#1305](https://github.com/DemianLi/nexus-agent/issues/1305)）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
+- 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`ChatBubble`（對話裡的文字泡泡，人的話靠右、子代理寄來的話靠左）、`MonoBlock`（夾在說明文字裡的等寬字小框，平的 `bg-muted`；工具輸出那種有標題、有細線的內層底是 `Surface tone="stage"`，不是它）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）、`CopyButton`（複製鈕：交付卡的複製路徑、回覆底下的複製回覆、程式碼區塊的複製程式碼共用同一套行為與回饋，[#1305](https://github.com/DemianLi/nexus-agent/issues/1305)）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
 - 還沒抽的：`pending-swap`（走 `ui/Card` 覆寫，是 shadcn 元件的用法）。
 
 ## 浮層（Base UI）

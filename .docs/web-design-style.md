@@ -23,7 +23,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 
 ### 1.1 顏色只當點綴
 
-- **長什麼樣**：整個畫面是無彩的灰階，主按鈕也是無彩的（亮色近黑、暗色白）。帶色相的只有幾個語意 token：`brand`（連結、info、核准與提問面板的邊框光）、`success`、`info`、`destructive`，以及 SG 的狀態色 `status-done`／`status-interrupted`／`status-running`。
+- **長什麼樣**：整個畫面是無彩的灰階，主按鈕也是無彩的（亮色近黑、暗色白）。帶色相的只有幾個語意 token：`brand`（連結、info、核准與提問面板的邊框光）、`success`、`destructive`，以及 SG 的狀態色 `status-done`／`status-interrupted`／`status-running`。
 - **從哪裡來**：
   - `--primary` 無彩，因為 shadcn 與 Libraries.dev 的主按鈕都是黑白；`--brand` 用的是 SG 自己的 `--brand`，色相與彩度照 SG、明度由產生器對 SG 的底色解出來（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q10，[#1512](https://github.com/DemianLi/nexus-agent/issues/1512)），只用在上面那幾處（用途出自 [#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。
   - 「顏色只當點綴」這句原則來自 beautiful-ui，比對時發現我們本來就這樣做，寫成原則（[比對文件](beautiful-ui-comparison.md) §3，[#1307](https://github.com/DemianLi/nexus-agent/issues/1307)）。
@@ -34,7 +34,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 - **長什麼樣**：底色 → 浮起來的玻璃卡片（`Surface tone="raised"`）→ 卡片裡的內層底（`stage`）。卡片的邊畫在陰影裡，不用 `border`：頂上一條光、一圈 1px 細線、貼地的淡影，再加一層浮起來的投影，亮暗是同一組結構（SG `solid-glass.css:380-403`）；按鈕與欄位的細線則是它們自己的 `border`，再疊光與影（規格 §5「形狀」）。亮色每層投影的透明度上限是 solid-glass 現在的值（浮起來的那一層 `--glass-shade` 0.28、貼地的 `--glass-contact` 0.06），只准一樣或更淡（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q8，[#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。
 - **例外**：貼在輸入框上方的那一排（待辦、送出佇列、目標列，`Surface tone="docked"`）用平的細線，因為它們接在輸入框上、不是浮在對話裡；SG 會把它畫成浮起來的卡片，覆寫檔補回平線（#1512）（規格 §5「形狀」；`apps/web/src/components/surface.tsx` 檔頭）。
 - **從哪裡來**：
-  - 卡片外框、裡面再嵌一個展示區、1px 半透明邊線、幾乎不用實色邊框：Libraries.dev 的外觀（[元件清單](agent-ui-element-inventory.md) §3.2）；`--stage`、`--chip` 這些名字是原型為了映射它而加的（同節 §3.4 第 2 點、規格 §5「顏色」）。
+  - 卡片外框、裡面再嵌一個展示區、1px 半透明邊線、幾乎不用實色邊框：Libraries.dev 的外觀（[元件清單](agent-ui-element-inventory.md) §3.2）；`--stage` 這個名字是原型為了映射它而加的（同節 §3.4 第 2 點、規格 §5「顏色」）。
   - 邊緣畫在陰影裡：[#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)。
   - 亮色投影有上限：原本是 beautiful-ui「不刺眼」那條原則只採亮色的部分，每層 ≤ 0.06（比對文件 §3，#1307）；改用 solid-glass 後上限換成它的值，護欄保留（Q8，#1512）。
 - **規則在哪**：規格 §5「形狀」；`COMPONENTS.md`「外觀原則」最後一段；`border-shadow.test.ts`、`shadow-alpha.test.ts`、`design-system.test.ts`（卡片與內層底只能用 `Surface`）。
@@ -150,7 +150,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 | 按鈕、觸發鈕、選單項不縮成說明字級 | `src/styles/type-hierarchy.test.ts` |
 | 焦點外框畫得出來 | `src/styles/focus-outline.test.ts` |
 | solid-glass 用灰色畫的焦點全部蓋掉：帶回來的 ring、欄位聚焦的邊框 | `src/styles/focus-ring-suppression.test.ts`、`src/styles/focus-line-suppression.test.ts` |
-| 出貨 CSS 在真的 Chrome 裡：焦點、欄位聚焦的邊框、每個字對實際底色的對比、chip 三階（warning 用量表平常狀態守狀態色 5.2）、貼在輸入框上方的卡片是平的、對話定位那一則的圓角、陰影、不透明的退路 | `guard/guard.test.ts`（`pnpm test:guard`，要先 build） |
+| 出貨 CSS 在真的 Chrome 裡：焦點、欄位聚焦的邊框、每個字對實際底色的對比、Pick 與用量鈕的三種狀態（權限「全開」的 Pick 平常與移上去守狀態色 5.2）、貼在輸入框上方的卡片是平的、對話定位那一則的圓角、陰影、不透明的退路 | `guard/guard.test.ts`（`pnpm test:guard`，要先 build） |
 | vendor 的 solid-glass 沒被手改 | `src/vendor/solid-glass/vendor.test.ts` |
 | `role="status"` 只有狀態列 | `src/styles/live-region.test.ts` |
 | registry 元件上登記過的修改沒被改回去 | `src/components/ui/registry-edits.test.ts` |

@@ -343,7 +343,7 @@ const Timeline = memo(function Timeline({
           <p
             // 讀屏已經從下面的 `role=status` 聽到同一句，這裡只給看得見的人。
             aria-hidden
-            className="bg-chip mb-3 rounded-md px-3 py-2 text-tip"
+            className="bg-muted mb-3 rounded-md px-3 py-2 text-tip"
             data-testid="trace-reveal-notice"
           >
             {notice}

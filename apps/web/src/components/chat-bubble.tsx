@@ -4,9 +4,9 @@ import { Bubble, BubbleContent } from '@/components/ui/bubble';
 
 /**
  * 對話區的文字泡泡（[#1280](https://github.com/DemianLi/nexus-agent/issues/1280)）：人的話、排著的插話、背景子代理寄來的話
- * 原本各寫一份 `rounded-3xl px-4 py-2.5 whitespace-pre-wrap`，其中子代理那份還是手寫的 `div`。
+ * 共用這一個。
  *
- * - 底色走 registry `Bubble` 的 `secondary`（`--secondary` 與 `--chip` 同值），寬度、靠邊也照它：`w-fit`、最寬 80%。
+ * - 底色走 SG `Bubble` 的 `secondary`（SG 的 `--secondary`），寬度、靠邊也照它：`w-fit`、最寬 80%。
  * - `align`：人的話靠右（`end`，預設），子代理寄來的話靠左（`start`）。
  * - 半透明這類狀態由呼叫端用 `className` 補（排著的插話是 `opacity-70`），加在外層 `Bubble` 上。
  *

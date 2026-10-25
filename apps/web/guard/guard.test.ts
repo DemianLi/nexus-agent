@@ -25,15 +25,15 @@ import { startGuardServer, type GuardServer } from './server';
  *    外框對它畫在上面的底色過非文字門檻 {@link NON_TEXT_MIN}（#1468 Q5）。
  * 2. **對比**：每個字的顏色對它實際的底色（往上疊到不透明為止，漸層取最差的停點）過門檻（文字 4.5，`data-guard-min` 另給）。
  *    量具只疊底色、不算 `opacity`（祖先半透明時字與底整組一起淡掉），所以元素自己或任一祖先的 `opacity` 不是 1 就直接判不合格（#1523：
- *    vendor 的輸入框群組在送出鈕停用時整組 50%，只看色值的量具漏掉了）。字、chip、hover、焦點外框四種都照這條。
+ *    vendor 的輸入框群組在送出鈕停用時整組 50%，只看色值的量具漏掉了）。字、按鈕的各種狀態、焦點外框都照這條。
  * 3. **欄位聚焦**：文字欄位（`Input`、`Textarea`、輸入框群組）鍵盤聚焦後，邊框四邊都是頁面的字色（#1468 Q5 焦點用字色；
  *    SG 畫的是 `--focus-line` 灰線，`solid-glass.overrides.css` 換回來，靜態那一層 `focus-line-suppression.test.ts` 列舉）。
  * 4. **貼在輸入框上方的卡片是平的**：`Surface tone="docked"` 的邊是 1px、沒有投影（SG 的 `.bg-card` 會把它變成浮起來的卡片，
  *    `solid-glass.overrides.css` 補回來）。
- * 5. **chip 三階**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、清單開著三種狀態，字對它實際的底色過門檻。#1591 起量的是輸入框
- *    底列的 Pick（12px 次要字，4.5）；權限「全開」那顆是警示色直接疊在頁面上，是狀態色對底色，守 {@link STATUS_MIN}（同靜態那一層
+ * 5. **Pick 與用量鈕的三種狀態**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、清單開著三種狀態，字對它實際的底色過門檻。量的是輸入框
+ *    底列的 Pick（#1591，12px 次要字，4.5）；權限「全開」那顆是警示色直接疊在頁面上，是狀態色對底色，守 {@link STATUS_MIN}（同靜態那一層
  *    的狀態色門檻）。Pick 按下去就打開清單，量不到單純按著的樣子；`data-guard-press` 那顆頂列用量鈕量平常、移上去、按著
- *    （`:active`），次要字疊在 `chip-hover`、`chip-pressed` 上過 4.5。
+ *    （`:active`）：平常是次要字疊在頁面上，移上去與按著照 SG ghost 是同一階（SG 的 `--hover`），字換成 foreground，都過 4.5（#1689）。
  * 6. **對話裡被定位的那一則有圓角**：`[data-located]` 的圓角是 `var(--radius-3xl)`，這個變數只宣告在 SG 的 `@theme inline`；
  *    Tailwind 沒輸出或修剪掉它的話，圓角會靜靜變成 0。量 `border-radius` 不是 0。
  * 7. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
@@ -147,7 +147,7 @@ const CHIP_STATES: ChipState[] = ['rest', 'hover', 'open'];
  */
 const STATUS_MIN = 5.2;
 /**
- * chip 三階裡的狀態色：權限「全開」的 Pick 平常與滑鼠移上去是警示色（本地修改第 35 條），守 {@link STATUS_MIN}。清單開著時
+ * Pick 三種狀態裡的狀態色：權限「全開」的 Pick 平常與滑鼠移上去是警示色（本地修改第 35 條），守 {@link STATUS_MIN}。清單開著時
  * 換回字色（開著的底上警示色不到 4.5），守文字的 4.5。
  */
 const CHIP_STATUS = new Set(['pick-danger:rest', 'pick-danger:hover']);
@@ -853,7 +853,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     ).toEqual([]);
   });
 
-  test('chip 三階：輸入框底列的 Pick 平常、滑鼠移上去、清單開著，12px 的次要字過 4.5；「全開」平常與移上去是警示色、清單開著換回字色（#1591）', () => {
+  test('輸入框底列的 Pick 平常、滑鼠移上去、清單開著，12px 的次要字過 4.5；「全開」平常與移上去是警示色、清單開著換回字色（#1591）', () => {
     const measured = chips.map((c) => ({
       key: `${c.name}:${c.state}`,
       ...c,
@@ -888,7 +888,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     ).toEqual([]);
   });
 
-  test('chip 的兩階上的次要字：頂列用量鈕平常、滑鼠移上去（chip-hover）、按著（chip-pressed）都過 4.5', () => {
+  test('頂列用量鈕：平常的次要字、移上去與按著的 foreground（SG 的 --hover，按著跟移上去同一階）都過 4.5', () => {
     const measured = presses.map((p) => ({
       key: `${p.name}:${p.state}`,
       ...p,
@@ -901,12 +901,17 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
       on: m.on,
       ratio: Math.round(m.ratio * 10000) / 10000,
     }));
-    // 量具自檢：三種狀態都量到、真的在那個狀態，而且三種底色都不一樣（移上去與按著真的換了底；`bg-card` 之類蓋掉的話會一樣）。
+    // 量具自檢：三種狀態都量到、真的在那個狀態；移上去真的換了底（`bg-card` 之類蓋掉的話會跟平常一樣），按著跟移上去同一階。
     expect(measured.map((m) => m.key)).toEqual(
       PRESS_STATES.map((state) => `session-usage:${state}`),
     );
     expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
-    expect(new Set(measured.map((m) => m.backgroundColor)).size).toBe(3);
+    const by = Object.fromEntries(measured.map((m) => [m.state, m]));
+    expect(by.hover!.backgroundColor).not.toBe(by.rest!.backgroundColor);
+    expect(by.pressed!.backgroundColor).toBe(by.hover!.backgroundColor);
+    // 移上去與按著的字是 foreground（跟平常的次要字不同色）。
+    expect(by.hover!.color).not.toBe(by.rest!.color);
+    expect(by.pressed!.color).toBe(by.hover!.color);
     expect(
       measured
         .filter((m) => !(m.ratio >= TEXT_MIN))
@@ -922,7 +927,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     // 量具自檢：真的移上去了。
     expect([checked!.hovered, unchecked!.hovered]).toEqual([true, true]);
     // 勾選的底跟沒勾選的不一樣（data-checked 要蓋得過 SG 的 `.bg-card`），移上去也不變。
-    // 沒勾選的移上去今天也不變：`hover:bg-chip-hover` 同樣蓋不過 SG 的 `.bg-card`（② 起就是這樣，不是這裡要守的行為，不斷言）。
+    // 沒勾選的移上去不是這裡要守的行為，不斷言。
     expect(checked!.rest).not.toBe(unchecked!.rest);
     expect(checked!.hover).toBe(checked!.rest);
     // group-data-checked：勾選框只有勾選的那一個填上 primary。
@@ -986,7 +991,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     expect(groups['control-disabled']!.opacity).toBe('0.5');
   });
 
-  test('對話裡被定位的那一則：圓角真的畫出來（--radius-3xl 有宣告），底色換成 chip', () => {
+  test('對話裡被定位的那一則：圓角真的畫出來（--radius-3xl 有宣告），底色有畫出來', () => {
     report[`${theme}:located`] = located;
     expect(located).toHaveLength(1);
     const [only] = located;
@@ -2041,7 +2046,7 @@ describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#159
     try {
       const texts = (await collectTexts(page)).filter((t) => t.name === 'ring');
       const tokens = await page.evaluate(() =>
-        ['--info', '--status-interrupted', '--destructive'].map((token) => {
+        ['--status-done', '--status-interrupted', '--destructive'].map((token) => {
           const probe = document.createElement('span');
           probe.style.color = `var(${token})`;
           document.body.append(probe);
@@ -2051,7 +2056,7 @@ describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#159
         }),
       );
       report[`footer:${theme}:ring-tones`] = { tokens, colors: texts.map((t) => t.color) };
-      // 三個環依序是 info、status-interrupted、destructive（拿掉覆寫檔第 37 條，前兩個會是 Tailwind 色板的藍與琥珀）。
+      // 三個環依序是 status-done、status-interrupted、destructive（拿掉覆寫檔第 37 條，前兩個會是 Tailwind 色板的藍與琥珀）。
       expect(texts.map((t) => t.color)).toEqual(tokens);
       expect(new Set(tokens).size).toBe(3);
       expectTexts(texts, ['ring'], `footer:${theme}:ring`);

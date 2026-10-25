@@ -14,10 +14,13 @@ import { cn } from '@/lib/utils';
  *   （`index.css` 的 `--radius-row`，SG 的 3xl 減內距 4），跟卡片同心。
  * - `bare`：不在卡片裡、自己就是一列（思考過程、摘要列、觀測與成本分頁的列）。`rounded-xl`、內距窄一點（`px-2`）。
  *
- * 新的可展開列用這個，不要再手寫 `hover:bg-chip-hover active:bg-chip-pressed … w-full … text-left`（`design-system.test.ts` 會擋）。
+ * hover 照 SG ghost：`hover:bg-muted`（底是 SG 的 `--hover`）配 `hover:text-foreground`，按著跟 hover 同一階。子元素自己寫
+ * `text-muted-foreground` 的，蓋不到，要用具名 group 翻：`group-hover/row-trigger:text-foreground`（裸的 `group` 會被外層的 hover 誤觸發）。
+ *
+ * 新的可展開列用這個，不要再手寫 `hover:bg-muted … w-full … text-left`（`design-system.test.ts` 會擋）。
  */
 const rowTrigger = cva(
-  'group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center text-left transition-colors duration-(--duration-quick)',
+  'group group/row-trigger hover:bg-muted hover:text-foreground flex min-h-11 w-full min-w-0 items-center text-left transition-colors duration-(--duration-quick)',
   {
     variants: {
       fit: {

@@ -75,9 +75,6 @@
   --color-brand: var(--brand);
   --color-success: var(--success);
   --color-stage: var(--stage);
-  --color-chip: var(--chip);
-  --color-chip-hover: var(--chip-hover);
-  --color-chip-pressed: var(--chip-pressed);
   --shadow-stage: var(--stage-ring);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
