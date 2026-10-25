@@ -1708,7 +1708,16 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * 基座的判準寫死在 `countTotalTokens`（純估算），沒有縫注入別的數。但它在「不摘要」那條路上把
  * `handler` 包在 `try` 裡，接到 `ContextOverflowError` 就走緊急摘要：摘要、再叫一次 `handler`
  * （`:3219-3229`）。所以超過預算時這裡**拋一顆合成的 `ContextOverflowError`**，由基座自己摘要——保留、切點、
- * 寫歷史、回 `_summarizationEvent` 全是基座原本那套。摘要完再叫進來的那一次照常放行。
+ * 寫歷史、回 `_summarizationEvent` 全是基座原本那套。摘要完再叫進來的那一次不再拋溢出，改走下一節的重量。
+ *
+ * ## 摘要完再量一次（[#2028](https://github.com/DemianLi/nexus-agent/issues/2028)）
+ *
+ * 摘要完的請求交下來之前（{@link withQuietSummaryCall} 呼叫 {@link AFTER_SUMMARY}，比 {@link withCompactionLog} 記摘要早），用同一把量具再估一次。
+ * 仍不低於門檻、還有重試次數、而且保留的尾巴還能更短時，拋 {@link RetainLessSignal}：{@link withRetainedTail} 接住，改用保留 0
+ * 重摘一次（同 #1381 端點溢出的升級，也同 dsh 溢出路徑 `index.ts:302-307` 的保留 0）。這一顆在基座的 `try` 裡被拋出
+ * （`:3162-3181`），不是溢出，基座原樣往外拋、不拿它重摘；保留 0 那一次不再拋，所以第二次摘要完交下去的那一次（`:3178`，沒有 `try`）不會炸。
+ * 白摘的第一份不進日誌也不進歷史：拋在記之前，歷史在同一個 `wrapModelCall` 裡後寫的蓋前寫的（#1389）。
+ * 重摘之後仍超過、沒有重試次數、或尾巴已經最短：講一條 warn，照這份送出，不退回基座的再摘要（同 dsh 壓力警告 `index.ts:157-175`）。
  *
  * **只在基座會接的地方拋**，其他三條路上的 `handler` 沒有 `try`，拋了就是整輪失敗：
  *
@@ -1735,6 +1744,10 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  *    （`selectCompactableRange` 回 `null`，`compaction-basic/src/region.ts:117-155`、`index.ts:299`／`331`／`394`）
  *    與 `/compact` 的回覆裡講（`command-compact/src/index.ts:68`），不進投影。dsh 也沒有 `messages` 門檻（觸發只比 token，
  *    `index.ts:319`）；那道是我們自己加的（{@link DEFAULT_SUMMARIZATION} 的「`messages: 60` 那道」），這一格補的是它的誠實。
+ * 5. **`compactionRetries` 只收 0 或 1，第二次固定用保留 0**（理由 1：基座表達不出來）。dsh 收任意非負整數、每次重摘照原保留量
+ *    （`index.ts:87`、`:353-370`）。基座只有「摘要完送出的第一次」在 `try` 裡，第二次摘要完交下來的那一次沒有，所以最多一次；
+ *    ≥2 在載入時就拒（{@link assertCompactionRetries}）。保留 0 是因為照原保留量重摘只會切出同一段，A（再摘一次同一段）只剩一則摘要，
+ *    B 至少留一段原文尾巴，而且 B 和 #1381 用的是同一套升級。
  *
  * ## 量與記都不准拋
  *
@@ -1799,7 +1812,9 @@ function withTokenBudget(
             : compactionRetries === 0
               ? '沒有設定重試（compactionRetries 是 0）'
               : '保留的尾巴已經是最小的，再摘也一樣';
-        report(`摘要之後仍超過門檻：這份請求估計 ${tokens} token，門檻 ${budget}；${why}，照這份送出。`);
+        report(
+          `摘要之後仍超過門檻：這份請求估計 ${tokens} token，門檻 ${budget}；${why}，照這份送出。`,
+        );
       };
       const measured: Parameters<NonNullable<typeof inner>>[1] = async (sent) => {
         let estimate: ReturnType<typeof estimateAnchoredTokens> | undefined;
@@ -1874,7 +1889,11 @@ function withTokenBudget(
       return (async () => {
         try {
           return await inner(
-            { ...request, [RETAIN_DECISION]: decision, [AFTER_SUMMARY]: afterSummary } as typeof request,
+            {
+              ...request,
+              [RETAIN_DECISION]: decision,
+              [AFTER_SUMMARY]: afterSummary,
+            } as typeof request,
             measured,
           );
         } catch (error) {
