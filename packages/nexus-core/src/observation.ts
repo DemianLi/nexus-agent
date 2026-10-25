@@ -31,9 +31,8 @@
  * 不是 kernel boundary）。
  *
  * **讀檔記的版本可以由 backend 回報**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：`read_file` 成功之後
- * 本來要再 `readRaw` 一次才有版本，等於同一個檔讀兩遍（大檔更糟）。能邊讀邊算出同一個 token 的 backend
- * （{@link createVersionHasher}、{@link noteReadVersion}）直接把版本交上來，這裡就記它，不再讀；沒回報的照舊 `readRaw`。
- * 兩邊的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
+ * 本來要再 `readRaw` 一次才有版本，等於同一個檔讀兩遍（大檔更糟）。backend 讀的時候就把版本交上來（{@link noteReadVersion}），
+ * 這裡就記它，不再讀；沒回報的照舊。回報的與寫前比對的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
  *
  * **寫與改前的比對只做 stat**（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）：掛了 {@link FILE_VERSION} 的 backend
  * 用 stat 組版本，不讀內容；圍堵 backend 的 token 照 dsh `dev:ino:size:mtimeNs:ctimeNs`（`fs-local/src/fsio.ts:76-78`），`read_file` 回報的也是它。
@@ -173,8 +172,8 @@ function contentText(content: unknown): string {
 /**
  * 版本 token 的雜湊與長度，**可以分段餵**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。
  *
- * 讀檔工具串流讀大檔時，整份文字不在記憶體裡，版本只能邊讀邊算。djb2 本來就是逐字元累加，分段算的結果與整份一次算
- * 相同；{@link versionOf} 與讀檔 backend 用的是這同一份，兩邊才不會各算各的。
+ * djb2 本來就是逐字元累加，分段算的結果與整份一次算相同。{@link versionOf} 用它；沒有 stat 的 backend 要回報版本也得用這同一份，
+ * 兩邊才不會各算各的。
  */
 export interface VersionHasher {
   /** 餵下一段文字（UTF-16 單位，與整份文字的 `length`／`charCodeAt` 一致）。 */
@@ -212,13 +211,13 @@ interface ReadVersionSlot {
 const currentReadVersion = new AsyncLocalStorage<ReadVersionSlot>();
 
 /**
- * backend 讀完一個檔、邊讀邊算好版本之後回報（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。`read_file` 成功時
- * 「先讀後改」直接記這一個，不必為了記版本再整份 `readRaw` 一次。不在 `read_file` 裡時什麼都不做。
+ * backend 讀完一個檔之後回報版本（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。`read_file` 成功時
+ * 「先讀後改」直接記這一個，不必為了記版本再讀一次。不在 `read_file` 裡時什麼都不做。
  *
- * **只有算得出跟 `readRaw` 同一個 token 的 backend 才該叫它。** token 是 {@link createVersionHasher} 對整份解碼後的文字算的，
- * `modified_at` 是同一次 `stat` 的 `mtime`。沒有回報的 backend 照舊，observation 自己 `readRaw`。
+ * **只有給得出跟寫前比對同一種 token 的 backend 才該叫它**：掛了 {@link FILE_VERSION} 的，回報那一格會給的 stat token
+ * （圍堵 backend 用讀內容的那個 fd 的 stat，#2030）；沒掛的，回報 {@link versionOf} 會算出來的那個。沒有回報的 backend 照舊，observation 自己問。
  *
- * @param version - {@link VersionHasher.version} 的結果。
+ * @param version - 版本 token。
  */
 export function noteReadVersion(version: string): void {
   const slot = currentReadVersion.getStore();
@@ -421,7 +420,7 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
    * @param readFailed - 這次讀取的工具結果是不是錯誤。變更路徑上一律 `false`。
    */
   const observe = async (path: string, readFailed = false, reported?: string): Promise<void> => {
-    // 讀成功、而且 backend 已經邊讀邊算好版本：記它，不再整份讀一次（#1530）。失敗的讀不會有回報。
+    // 讀成功、而且 backend 已經回報版本：記它，不再問一次（#1530）。失敗的讀不會有回報。
     if (!readFailed && reported !== undefined) {
       observed.set(keyOf(path), { kind: 'present', version: reported });
       return;

@@ -352,7 +352,6 @@ export {
 
 export {
   createObservationPolicy,
-  createVersionHasher,
   FILE_VERSION,
   fileVersionOf,
   noteReadVersion,
@@ -363,7 +362,7 @@ export {
   OBSERVED_READ_TOOL,
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
-export type { FileVersionLookup, FileVersionSource, VersionHasher } from './observation.js';
+export type { FileVersionLookup, FileVersionSource } from './observation.js';
 
 // 檔案錯誤與讀到哪各是一對：middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
 // 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。

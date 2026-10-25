@@ -41,11 +41,10 @@
  * 變成好幾份常駐的字串；單行 3 MB 的檔也整行送出。所以 `read` 也**自己做完**（不 `super.read`）：開檔後用同一個 fd 的 `stat` 定路由，
  * 小於 {@link READ_STREAM_MIN_SIZE}（同 dsh 的 `STREAM_MIN_SIZE`）一次 `readFile`，否則逐 chunk 解碼掃描；兩條路交給同一支
  * `scanWindow`。**在 `read_file` 裡**照 dsh 的 `buildWindow` 建頁（每行截 2000 字元、選到的行累計 50 KiB 停但掃到檔尾數總行數），
- * 並把頁的範圍與邊讀邊算的版本回報給 `@nexus/core`；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
+ * 並把頁的範圍與同一個 fd 的 stat 版本回報給 `@nexus/core`（#2030）；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
  * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2（縮到只剩 BOM，理由 1 基座表達不出來）**：開頭的 BOM 保留，不照 dsh 去掉——
- * 基座 `readRaw` 的版本 token 是從保留 U+FEFF 的字串算的，`read` 不保留就和「先讀後改」寫與改前的比對對不上；`edit` 沿用同一個解碼（`ignoreBOM`），
- * 寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
- * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡；版本 token 仍對含 `\r` 的原文算。
+ * `edit` 沿用同一個解碼（`ignoreBOM`），寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
+ * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡。
  *
  * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。

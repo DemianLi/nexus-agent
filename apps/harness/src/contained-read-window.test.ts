@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
+import { FILE_VERSION, SessionRegistry } from '@nexus/core';
 import { FilesystemBackend } from 'deepagents';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -30,6 +30,22 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       return (original as unknown as (...args: unknown[]) => unknown)(target, ...rest);
     }) as unknown as F;
   return { ...actual, open: counting(actual.open), readFile: counting(actual.readFile) };
+});
+
+/**
+ * `read_file` 回報給「先讀後改」的版本（#2030）：`contained-backend.ts` 從 `@nexus/core` 叫 `noteReadVersion`，這裡包一層記下來再原樣轉交，
+ * 好跟寫前比對那一側（`FILE_VERSION`）逐字比。
+ */
+const reportedVersions = vi.hoisted(() => [] as string[]);
+vi.mock('@nexus/core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@nexus/core')>();
+  return {
+    ...actual,
+    noteReadVersion: (version: string) => {
+      reportedVersions.push(version);
+      actual.noteReadVersion(version);
+    },
+  };
 });
 
 /** 這個測試檔從現在起開過幾次這個檔。 */
@@ -166,7 +182,7 @@ describe('驗收 2：一次 read_file 只讀一次檔', () => {
   });
 });
 
-describe('驗收 2b：邊讀邊算的版本與 readRaw 算的一樣——先讀後改不被誤擋', () => {
+describe('驗收 2b：讀檔回報的版本與寫前比對的一樣——先讀後改不被誤擋', () => {
   const files: [string, Buffer | string, string][] = [
     ['ascii', 'hello\nworld\n', 'world'],
     ['cjk', '你好\n世界🙂\n再見\n', '世界🙂'],
@@ -190,6 +206,20 @@ describe('驗收 2b：邊讀邊算的版本與 readRaw 算的一樣——先讀�
       expect(results[1]?.text).toContain('Successfully replaced');
     });
   }
+
+  it('讀檔回報的就是寫前比對的那個 stat token，逐字相同（#2030）', async () => {
+    await writeFile(join(root, 'v-pin.txt'), 'pin\n');
+    reportedVersions.length = 0;
+    const [result] = await run(backend, [read('/v-pin.txt')]);
+    expect(result?.status).toBe('success');
+    expect(reportedVersions).toHaveLength(1);
+    // dsh `dev:ino:size:mtimeNs:ctimeNs`（`fs-local/src/fsio.ts:76-78`）。
+    expect(reportedVersions[0]).toMatch(/^\d+:\d+:4:\d+:\d+$/);
+    expect(await backend[FILE_VERSION]('/v-pin.txt')).toEqual({
+      kind: 'present',
+      version: reportedVersions[0],
+    });
+  });
 
   it('讀過之後檔案被換掉 → 仍然擋下（版本真的在比）', async () => {
     const file = join(root, 'v-changed.txt');
