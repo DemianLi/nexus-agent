@@ -147,7 +147,7 @@ export function ApprovalCard({
           <Button
             type="button"
             variant="destructive"
-            className="h-11 rounded-full px-5 lg:h-9"
+            className="h-11 px-5 lg:h-9"
             disabled={busy}
             onClick={onStop}
           >
@@ -167,7 +167,7 @@ export function ApprovalCard({
             key={decision}
             type="button"
             variant={decision === 'approve' ? 'default' : 'outline'}
-            className="h-11 rounded-full px-5 lg:h-9"
+            className="h-11 px-5 lg:h-9"
             disabled={busy}
             onClick={() => onDecide(decision)}
           >

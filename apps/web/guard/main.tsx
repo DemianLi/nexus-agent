@@ -72,12 +72,17 @@
  *   與封存橫幅。
  *   量引用的底線、引用與 chip 的字、引用與「立刻重連」的焦點外框，以及兩顆鈕與 chip 的圓角。
  *   壓縮標記與封存橫幅不量，放著給 X2、X5 的前後截圖對照（#1695〈驗收〉）。
+ * - `?overlay=handoff` 畫核准與換手這一組（#1694）：換手層裡的核准卡（有允許／不允許的、只剩「停止這一輪」的）、可收起的提問面板（收起鈕）、送出佇列、輸入框上方的委派
+ *   chip 與對話裡的委派標記，以及展開的背景子代理卡兩張（跑著、閒著；各包一層 `data-guard-handoff`）。量子代理面板的字、焦點
+ *   外框與幾顆鈕的圓角；核准卡的呼吸光一圈還是兩圈只記錄、不斷言，交給截圖（#1694〈要看稿確認〉）。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
-import { emptyConversation } from '@nexus/wire';
+import { APPROVAL_PENDING_KIND, emptyConversation } from '@nexus/wire';
 import type {
   ConversationEntry,
+  PendingApproval,
+  WireQueuedInput,
   WireAttachmentRef,
   CompactionEntry,
   PendingQuestion,
@@ -89,16 +94,20 @@ import { Check, MoreHorizontal } from 'lucide-react';
 import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
+import { AgentMentionChip } from '@/components/agent-mention-chip';
+import { ApprovalCard } from '@/components/approval-card';
 import { ArchivedBanner } from '@/components/archived-banner';
 import { CompactionRow } from '@/components/compaction-row';
 import { EarlierPager } from '@/components/earlier-pager';
 import type { EarlierHistory } from '@/components/earlier-pager';
+import { DelegatedChip } from '@/components/delegated-chip';
 import { EmptyHero } from '@/components/empty-hero';
 import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { PendingSwap } from '@/components/pending-swap';
 import { QuestionPanel } from '@/components/question-panel';
+import { QueueDock } from '@/components/queue-dock';
 import { ReasoningRow } from '@/components/reasoning-row';
 import { SessionReferenceContext } from '@/components/session-reference';
 import { StatusLine } from '@/components/status-line';
@@ -532,6 +541,137 @@ const QUESTION: PendingQuestion = {
     { id: 'name', question: '訪客姓名？' },
   ],
 };
+
+const HANDOFF_APPROVAL: PendingApproval = {
+  kind: APPROVAL_PENDING_KIND,
+  interruptId: 'a-1',
+  namespace: [],
+  actions: [{ name: 'edit_file', args: { path: 'docs/deploy.md' } }],
+  allowedDecisions: ['approve', 'reject'],
+};
+/** 允許的決定交集為空：卡上只剩「停止這一輪」（#376 第 12 條）。 */
+const HANDOFF_STUCK: PendingApproval = {
+  ...HANDOFF_APPROVAL,
+  interruptId: 'a-2',
+  allowedDecisions: [],
+};
+const HANDOFF_QUEUE: readonly WireQueuedInput[] = [
+  { id: 'q-a', text: '順便把回滾那段也整理一下', source: { kind: 'user' } },
+  { id: 'q-b', text: '整理完列出改了哪幾段', source: { kind: 'user' } },
+];
+const HANDOFF_AGENT = { id: 'researcher', name: 'researcher', description: '查資料' };
+/** 子代理自己的對話：派出的任務與一則回覆；`renderEntry` 只畫字。 */
+const HANDOFF_HISTORY: readonly ConversationEntry[] = [
+  { kind: 'human', id: 'h-task', text: '找出 README 裡講部署的段落。' },
+  {
+    kind: 'ai',
+    id: 'a-found',
+    text: '找到兩段：「部署」與「回滾」。',
+    streaming: false,
+    attribution: { kind: 'root' },
+  },
+];
+
+function handoffSubagents(state: 'running' | 'idle'): SubagentControl {
+  return {
+    connected: true,
+    renderEntry: (entry) => ('text' in entry ? <p>{entry.text}</p> : null),
+    history: async () => ({ ok: true, conversation: { entries: HANDOFF_HISTORY, hasMore: false } }),
+    stateOf: () => state,
+    echoesOf: () => ['先看部署那段'],
+    send: async () => ({ ok: true }),
+    interrupt: async () => undefined,
+  };
+}
+
+function HandoffSubagent({ state }: { readonly state: 'running' | 'idle' }) {
+  return (
+    <div data-guard-handoff={`subagent-${state}`}>
+      <SubagentControlContext.Provider value={handoffSubagents(state)}>
+        <ToolCard
+          entry={CARD({
+            id: `bg-${state}`,
+            name: 'task',
+            input: '{"description":"找部署段落","subagent_type":"researcher"}',
+            text: '已在背景開始',
+            meta: { kind: 'background-subagent', runId: `bg-${state}`, subagentType: 'researcher' },
+          })}
+          defaultOpen
+        />
+      </SubagentControlContext.Provider>
+    </div>
+  );
+}
+
+function HandoffPage() {
+  const approvalRef = useRef<HTMLTextAreaElement>(null);
+  const questionRef = useRef<HTMLTextAreaElement>(null);
+  const stuckRef = useRef<HTMLTextAreaElement>(null);
+  return (
+    <div
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div data-guard-handoff="approval">
+        <PendingSwap
+          pendings={[HANDOFF_APPROVAL]}
+          composerRef={approvalRef}
+          composer={<textarea ref={approvalRef} aria-label="要說的話" />}
+          renderPanel={(pending) =>
+            pending.kind === APPROVAL_PENDING_KIND && (
+              <ApprovalCard pending={pending} busy={false} onDecide={() => {}} onStop={() => {}} />
+            )
+          }
+        />
+      </div>
+      <div data-guard-handoff="approval-stuck">
+        <PendingSwap
+          pendings={[HANDOFF_STUCK]}
+          composerRef={stuckRef}
+          composer={<textarea ref={stuckRef} aria-label="要說的話" />}
+          renderPanel={(pending) =>
+            pending.kind === APPROVAL_PENDING_KIND && (
+              <ApprovalCard pending={pending} busy={false} onDecide={() => {}} onStop={() => {}} />
+            )
+          }
+        />
+      </div>
+      <div data-guard-handoff="question">
+        <PendingSwap
+          pendings={[QUESTION]}
+          composerRef={questionRef}
+          composer={<textarea ref={questionRef} aria-label="要說的話" />}
+          renderPanel={(pending) =>
+            pending.kind === 'question' && (
+              <QuestionPanel pending={pending} busy={false} onAnswer={() => {}} />
+            )
+          }
+        />
+      </div>
+      <div data-guard-handoff="queue">
+        <QueueDock
+          items={HANDOFF_QUEUE}
+          status="running"
+          connected
+          onUpdate={async () => undefined}
+          onFocusFallback={() => {}}
+        />
+      </div>
+      <div data-guard-handoff="chips" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <AgentMentionChip agent={HANDOFF_AGENT} onRemove={() => {}} />
+        <DelegatedChip name="researcher" />
+      </div>
+      <HandoffSubagent state="running" />
+      <HandoffSubagent state="idle" />
+    </div>
+  );
+}
 
 /** 展開收合的元件（#1638 PR A）：思考過程、摘要列、工具卡（Root 用 `render` 接 `Surface`）、待辦、提問面板（內容保持掛載）。都是關著畫出來的。 */
 function CollapsiblesPage() {
@@ -1432,6 +1572,8 @@ function OverlayPage({ name }: { name: string }) {
       return <TurnStatusPage />;
     case 'transcript-rows':
       return <TranscriptRowsPage />;
+    case 'handoff':
+      return <HandoffPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

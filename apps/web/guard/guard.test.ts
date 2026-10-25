@@ -69,6 +69,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 20. **會話引用與 G2 圓角**（#1695 PR B，`?overlay=transcript-refs`，產品的 `Transcript`＋`StatusLine`）：能點的引用一直帶 brand 色底線、
  *    底線對泡泡底過 3，不能點的沒有底線；兩種引用與決定紀錄 chip 的字過 4.5；引用與「立刻重連」的焦點外框；決定紀錄的 chip 是 SG Badge 的圓角，
  *    捲到底的鈕與「立刻重連」是 SG Button 的圓角。
+ * 21. **核准與換手**（#1694，`?overlay=handoff`）：背景子代理面板的字過 4.5（「子代理的對話」、「只停這個子代理」、送出鈕）；重讀、停止、
+ *    輸入框（外框畫在群組上）、送出、核准卡兩顆與「停止這一輪」、換手面板的收起鈕、委派 chip 的取消鈕都有焦點外框；核准卡兩顆鈕（含只剩「停止這一輪」那張）、
+ *    收起鈕是 SG Button 的 `rounded-md`，輸入框群組也是 `rounded-md`，取消委派的小鈕是 `rounded-sm`；375 寬時面板的輸入框與三顆鈕 44px 高。核准卡的呼吸光有幾圈只記在報告裡，看截圖。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -4388,6 +4391,178 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話引用與圓角（#16
       expect(radii.badge).not.toBe('0px');
       expect(radii.button).not.toBe('0px');
       expect(radii.badge).not.toBe(radii.button);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+/**
+ * 核准與換手（#1694，`?overlay=handoff`）。量跑著那一張子代理面板（頂端狀態列＋SG `InputGroup`）的字與焦點外框，以及核准卡、
+ * 換手面板收起鈕、取消委派小鈕的圓角。送出鈕要有字才按得到，量之前先打一句。
+ */
+const HANDOFF_RUNNING = '[data-guard-handoff="subagent-running"]';
+const handoffMarks: Record<string, Record<string, string>> = {
+  [`${HANDOFF_RUNNING} [data-subagent-panel] > div:first-child > span`]: {
+    'data-guard-text': 'sub-caption',
+  },
+  [`${HANDOFF_RUNNING} button[aria-label="重新讀取子代理的對話"]`]: {
+    'data-guard-focus': 'sub-reload',
+  },
+  [`${HANDOFF_RUNNING} button[aria-label="只停這個子代理"]`]: {
+    'data-guard-text': 'sub-stop',
+    'data-guard-focus': 'sub-stop',
+  },
+  [`${HANDOFF_RUNNING} [data-slot="input-group"]`]: { 'data-guard-outline-host': '' },
+  [`${HANDOFF_RUNNING} [data-slot="input-group"] input`]: { 'data-guard-focus': 'sub-input' },
+  [`${HANDOFF_RUNNING} button[aria-label="送出給背景子代理"]`]: {
+    'data-guard-text': 'sub-send',
+    'data-guard-focus': 'sub-send',
+    // 送出鈕在群組裡：自己當外框宿主，不然 `closest` 會找到外面的群組。
+    'data-guard-outline-host': '',
+  },
+  '[data-guard-handoff="approval"] [data-testid="approval-card"] button': {
+    'data-guard-focus': 'approval',
+  },
+  '[data-guard-handoff="approval-stuck"] [data-testid="approval-card"] > div:last-child > button': {
+    'data-guard-focus': 'approval-stop',
+  },
+  '[data-guard-handoff="question"] [data-slot="pending-panel"] button[aria-label="收起這些問題"]': {
+    'data-guard-focus': 'pending-collapse',
+  },
+  '[data-guard-handoff="chips"] button[aria-label^="取消委派"]': {
+    'data-guard-focus': 'mention-remove',
+  },
+};
+
+async function typeIntoSubagent(page: Page): Promise<void> {
+  await page.fill(`${HANDOFF_RUNNING} [data-slot="input-group"] input`, '先看部署那段');
+  // 停用到可按，`transition-all` 讓 opacity 淡上來；等它到 1 再量字。
+  await page.waitForFunction(
+    (selector) => getComputedStyle(document.querySelector(selector)!).opacity === '1',
+    `${HANDOFF_RUNNING} button[aria-label="送出給背景子代理"]`,
+  );
+}
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量核准與換手（#1694）：%s', (theme) => {
+  test('子代理面板的字過 4.5；面板、核准卡、收起鈕、取消委派鈕聚焦時有外框', async () => {
+    const page = await openOverlay('handoff', theme, {
+      marks: handoffMarks,
+      prepare: typeIntoSubagent,
+    });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        ['sub-caption', 'sub-stop', 'sub-send'],
+        `handoff:${theme}`,
+      );
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual([
+        'approval-0',
+        'approval-1',
+        'approval-stop-0',
+        'pending-collapse-0',
+        'mention-remove-0',
+        'sub-reload-0',
+        'sub-stop-0',
+        'sub-input-0',
+        'sub-send-0',
+      ]);
+      expectFocus(focus, `handoff:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('375 寬：子代理面板的輸入框與三顆鈕都是 44px 高，頁面不橫向溢出', async () => {
+    const page = await openOverlay('handoff', theme, {
+      marks: handoffMarks,
+      viewport: { width: 375, height: 900 },
+    });
+    try {
+      const sizes = await page.evaluate((running) => {
+        const height = (selector: string) =>
+          document.querySelector(`${running} ${selector}`)!.getBoundingClientRect().height;
+        return {
+          input: height('[data-slot="input-group"] input'),
+          send: height('button[aria-label="送出給背景子代理"]'),
+          stop: height('button[aria-label="只停這個子代理"]'),
+          reload: height('button[aria-label="重新讀取子代理的對話"]'),
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      }, HANDOFF_RUNNING);
+      report[`handoff:${theme}:375`] = sizes;
+      expect(sizes).toEqual({ input: 44, send: 44, stop: 44, reload: 44, overflow: 0 });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('G2：核准卡的鈕（含「停止這一輪」）、收起鈕、輸入框群組是 rounded-md，取消委派的小鈕是 rounded-sm', async () => {
+    const page = await openOverlay('handoff', theme, { marks: handoffMarks });
+    try {
+      const radii = await page.evaluate((running) => {
+        // 探針的值取自出貨 CSS 裡那一條 utility 的原文（guard 底下不寫 class，`src/guard-page.test.ts`）。
+        const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]);
+        const find = (selector: string): CSSStyleRule | undefined => {
+          for (const rule of rules) {
+            if (rule instanceof CSSStyleRule && rule.selectorText === selector) return rule;
+            if (rule instanceof CSSGroupingRule)
+              for (const inner of rule.cssRules)
+                if (inner instanceof CSSStyleRule && inner.selectorText === selector) return inner;
+          }
+          return undefined;
+        };
+        const radiusOf = (selector: string) => {
+          const probe = document.createElement('div');
+          probe.style.borderRadius = find(selector)?.style.borderRadius ?? '';
+          document.body.append(probe);
+          const radius = getComputedStyle(probe).borderTopLeftRadius;
+          probe.remove();
+          return radius;
+        };
+        const of = (selector: string) =>
+          [...document.querySelectorAll(selector)].map(
+            (el) => getComputedStyle(el).borderTopLeftRadius,
+          );
+        // 核准卡在換手層裡：呼吸光幾圈，數這一塊裡在跑動畫的元素（只記錄）。
+        const approval = document.querySelector('[data-guard-handoff="approval"]')!;
+        const animated = [approval, ...approval.querySelectorAll('*')].filter((el) => {
+          const style = getComputedStyle(el);
+          return [
+            style.animationName,
+            getComputedStyle(el, '::before').animationName,
+            getComputedStyle(el, '::after').animationName,
+          ].some((name) => name !== 'none');
+        }).length;
+        return {
+          md: radiusOf('.rounded-md'),
+          sm: radiusOf('.rounded-sm'),
+          approval: of('[data-guard-handoff="approval"] [data-testid="approval-card"] button'),
+          stop: of(
+            '[data-guard-handoff="approval-stuck"] [data-testid="approval-card"] > div:last-child > button',
+          ),
+          collapse: of('[data-guard-handoff="question"] button[aria-label="收起這些問題"]'),
+          group: of(`${running} [data-slot="input-group"]`),
+          remove: of('[data-guard-handoff="chips"] button[aria-label^="取消委派"]'),
+          animated,
+        };
+      }, HANDOFF_RUNNING);
+      report[`handoff:${theme}:radii`] = radii;
+      expect(radii).toEqual({
+        md: radii.md,
+        sm: radii.sm,
+        approval: [radii.md, radii.md],
+        stop: [radii.md],
+        collapse: [radii.md],
+        group: [radii.md],
+        remove: [radii.sm],
+        animated: radii.animated,
+      });
+      // 探針自檢：兩個 class 都真的產出了，而且不是同一個值。
+      expect(radii.md).not.toBe('0px');
+      expect(radii.sm).not.toBe('0px');
+      expect(radii.md).not.toBe(radii.sm);
     } finally {
       await page.close();
     }
