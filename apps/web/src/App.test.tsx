@@ -1715,7 +1715,7 @@ describe('計劃模式標籤（#900）', () => {
     expect(chip()!.hasAttribute('disabled')).toBe(false);
   });
 
-  it('按標籤送一次 `/plan off`，成功了也不自己拿掉，等線上的值翻回關著；送出期間再按不送', async () => {
+  it('按「退出」送一次 `/plan off`，成功了也不自己拿掉，等線上的值翻回關著；送出期間再按不送', async () => {
     seq = 0;
     const { client, downlink, opened, slashed } = fakeClient([], {
       commands: [planCommand],
@@ -1740,7 +1740,7 @@ describe('計劃模式標籤（#900）', () => {
     fireEvent.click(chip()!);
     release();
     await waitFor(() => expect(slashed).toEqual(['/plan off']));
-    // 命令回來了、線上的值還沒翻：標籤還在，能再按。
+    // 命令回來了、線上的值還沒翻：標籤還在，「退出」能再按。
     await waitFor(() => expect(chip()!.hasAttribute('disabled')).toBe(false));
     expect(slashed).toEqual(['/plan off']);
 
@@ -1774,7 +1774,7 @@ describe('計劃模式標籤（#900）', () => {
     }
   });
 
-  it('一輪跑著時標籤照畫但停用，提示說跑完才能關；收尾後恢復', async () => {
+  it('一輪跑著時標籤照畫、「退出」停用，提示說跑完才能關；收尾後恢復', async () => {
     seq = 0;
     const { client, downlink, opened } = fakeClient([], { commands: [planCommand] });
     render(<App client={client} />);

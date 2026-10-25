@@ -18,7 +18,7 @@ import { GOAL_PAUSE_LABEL, GOAL_PAUSE_OFFLINE_HINT, goalBarView } from '@/lib/go
  *   也走下行（跟按停止同一條，#1516）。送出期間停用、防連按；斷線時停用，原因放 `title`。
  * - **失敗時列留著**，列下面一句帶原因的字（目標剛被改過、已經不在進行、伺服器不支援）。下一次按再試時先收掉上一句。
  *   失敗那句掛在鈕的 `aria-describedby`。
- * - **鈕不撐高整列**：看得到的圓 32px、上下各吃掉 8px，跟一行 `text-tip` 一樣高，鈕消失時列不跳；窄螢幕用 `after` 把點擊區
+ * - **鈕不撐高整列**：看得到的鈕 32px（`size-8`）、上下各吃掉 8px，跟一行 `text-tip` 一樣高，鈕消失時列不跳；窄螢幕用 `after` 把點擊區
  *   擴到 44px（同側欄的寫法），不畫出來。
  * - **有目標且沒完成才畫**（`complete` 與沒有目標都不畫）。
  * - **目標內容單行截短**，全文在 `title` 與整列的無障礙名稱。`blocked` 的理由直接顯示在列上。
@@ -82,7 +82,7 @@ export function GoalBar({
             disabled={!connected || busy}
             onClick={() => void pause()}
             data-testid="goal-pause"
-            className="hover:bg-chip-hover active:bg-chip-pressed relative -my-2 -mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-full transition-colors duration-(--duration-quick) after:absolute after:-inset-1.5 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent lg:after:hidden"
+            className="hover:bg-chip-hover active:bg-chip-pressed relative -my-2 -mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-md transition-colors duration-(--duration-quick) after:absolute after:-inset-1.5 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent lg:after:hidden"
           >
             <Pause aria-hidden className="size-4" />
           </button>

@@ -12,6 +12,7 @@ import {
   shadowLayers,
   type BackgroundLayer,
 } from '../src/styles/color-math';
+import { PLAN_CHIP_RUNNING_HINT } from '../src/lib/plan-chip';
 import { startGuardServer, type GuardServer } from './server';
 
 /**
@@ -72,6 +73,10 @@ import { startGuardServer, type GuardServer } from './server';
  * 21. **核准與換手**（#1694，`?overlay=handoff`）：背景子代理面板的字過 4.5（「子代理的對話」、「只停這個子代理」、送出鈕）；重讀、停止、
  *    輸入框（外框畫在群組上）、送出、核准卡兩顆與「停止這一輪」、換手面板的收起鈕、委派 chip 的取消鈕都有焦點外框；核准卡兩顆鈕（含只剩「停止這一輪」那張）、
  *    收起鈕是 SG Button 的 `rounded-md`，輸入框群組也是 `rounded-md`，取消委派的小鈕是 `rounded-sm`；375 寬時面板的輸入框與三顆鈕 44px 高。核准卡的呼吸光有幾圈只記在報告裡，看截圖。
+ * 22. **計劃與目標**（#1692，`?overlay=plan`）：計劃模式的 SG Badge 不在 Tab 順序裡，按 Tab 走過一遍只停在「退出」、「查看全文」、審核兩顆、
+ *    目標的暫停鈕；跑著時「退出」停用、`title` 寫原因，而且滑鼠移得上去（`pointer-events` 不是 none）、移上去底色不變；Badge、「退出」、失敗那句、審核兩顆、結果 chip 的字過 4.5，幾顆鈕有焦點外框；
+ *    Badge 與結果 chip 是 `rounded-4xl`，「退出」與「查看全文」是 `rounded-sm`，審核兩顆與暫停鈕是 `rounded-md`；375 寬時「退出」至少 44px 寬、
+ *    「退出」、「查看全文」、審核兩顆 44px 高，頁面不橫向溢出。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -4563,6 +4568,208 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量核准與換手（#1694）�
       expect(radii.md).not.toBe('0px');
       expect(radii.sm).not.toBe('0px');
       expect(radii.md).not.toBe(radii.sm);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+/**
+ * 計劃與目標（#1692，`?overlay=plan`）。失敗那句要先按一次「退出」才出現，`prepare` 裡按、等它出來再標。
+ */
+const PLAN_EXIT = 'button[aria-label="退出計劃模式"]';
+const planMarks: Record<string, Record<string, string>> = {
+  '[data-guard-plan="chip"] [data-slot="badge"]': { 'data-guard-text': 'plan-badge' },
+  [`[data-guard-plan="chip"] ${PLAN_EXIT}`]: {
+    'data-guard-text': 'plan-exit',
+    'data-guard-focus': 'plan-exit',
+  },
+  [`[data-guard-plan="chip-failed"] ${PLAN_EXIT}`]: { 'data-guard-focus': 'plan-exit-failed' },
+  '[data-guard-plan] button[aria-label^="查看全文"]': { 'data-guard-focus': 'plan-open' },
+  '[data-guard-plan="review"] [data-testid="plan-review-panel"] > div:last-child > button:first-child':
+    { 'data-guard-text': 'plan-revise', 'data-guard-focus': 'plan-revise' },
+  '[data-guard-plan="review"] [data-testid="plan-review-panel"] > div:last-child > button:last-child':
+    { 'data-guard-text': 'plan-approve', 'data-guard-focus': 'plan-approve' },
+  '[data-guard-plan="card"] [data-testid="plan-outcome"]': { 'data-guard-text': 'plan-outcome' },
+  '[data-guard-plan="goal"] [data-testid="goal-pause"]': { 'data-guard-focus': 'goal-pause' },
+};
+
+async function failPlanExit(page: Page): Promise<void> {
+  await page.click(`[data-guard-plan="chip-failed"] ${PLAN_EXIT}`);
+  const failure = page.locator('[data-guard-plan="chip-failed"] p');
+  await failure.waitFor();
+  await failure.evaluate((el) => el.setAttribute('data-guard-text', 'plan-failure'));
+  // 按過之後游標還停在鈕上，hover 會換底色；移開再量字的對比與焦點。
+  await page.mouse.move(0, 0);
+}
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量計劃與目標（#1692）：%s', (theme) => {
+  test('Badge 不在 Tab 順序裡；跑著時「退出」停用並寫原因；字過 4.5、鈕有焦點外框', async () => {
+    const page = await openOverlay('plan', theme, { marks: planMarks, prepare: failPlanExit });
+    try {
+      // 真的按 Tab 走（不看 tabIndex）：Badge 不在順序裡、停用的「退出」被跳過，都要從焦點實際停在哪看出來。
+      await page.mouse.click(2, 2);
+      const stops: string[] = [];
+      for (let i = 0; i < 7; i += 1) {
+        await page.keyboard.press('Tab');
+        stops.push(
+          await page.evaluate(() => {
+            const el = document.activeElement!;
+            const block = el.closest('[data-guard-plan]')?.getAttribute('data-guard-plan') ?? '';
+            return `${block}:${el.getAttribute('data-slot') ?? el.tagName}:${el.textContent ?? ''}`;
+          }),
+        );
+      }
+      report[`plan:${theme}:tab`] = stops;
+      expect(stops).toEqual([
+        'chip:button:退出',
+        'chip-failed:button:退出',
+        'review:button:查看全文',
+        'review:button:要求修改',
+        'review:button:同意執行',
+        'card:button:查看全文',
+        'goal:BUTTON:',
+      ]);
+      // 停用的「退出」要滑鼠移得上去，`title` 的原因才跳得出來；移上去底色不變。
+      const runningExit = page.locator(`[data-guard-plan="chip-running"] ${PLAN_EXIT}`);
+      const readRunning = () =>
+        runningExit.evaluate((el) => ({
+          disabled: (el as HTMLButtonElement).disabled,
+          title: el.getAttribute('title'),
+          text: el.textContent,
+          pointerEvents: getComputedStyle(el).pointerEvents,
+          hovered: el.matches(':hover'),
+          background: getComputedStyle(el).backgroundColor,
+        }));
+      const idle = await readRunning();
+      await runningExit.hover();
+      await settle(page);
+      const hovered = await readRunning();
+      await page.mouse.move(0, 0);
+      report[`plan:${theme}:running`] = { idle, hovered };
+      expect(hovered).toEqual({
+        disabled: true,
+        title: PLAN_CHIP_RUNNING_HINT,
+        text: '退出',
+        pointerEvents: 'auto',
+        hovered: true,
+        background: idle.background,
+      });
+      expectTexts(
+        await collectTexts(page),
+        ['plan-badge', 'plan-exit', 'plan-failure', 'plan-revise', 'plan-approve', 'plan-outcome'],
+        `plan:${theme}`,
+      );
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual([
+        'plan-exit-0',
+        'plan-exit-failed-0',
+        'plan-open-0',
+        'plan-revise-0',
+        'plan-approve-0',
+        'plan-open-1',
+        'goal-pause-0',
+      ]);
+      expectFocus(focus, `plan:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('375 寬：「退出」至少 44px 寬，「退出」、「查看全文」、審核兩顆都是 44px 高，頁面不橫向溢出', async () => {
+    const page = await openOverlay('plan', theme, {
+      marks: planMarks,
+      viewport: { width: 375, height: 900 },
+    });
+    try {
+      const sizes = await page.evaluate(() => {
+        const heights = (selector: string) =>
+          [...document.querySelectorAll(selector)].map((el) => el.getBoundingClientRect().height);
+        return {
+          exitWidth: Math.min(
+            ...[
+              ...document.querySelectorAll(
+                '[data-guard-plan^="chip"] button[aria-label="退出計劃模式"]',
+              ),
+            ].map((el) => el.getBoundingClientRect().width),
+          ),
+          exit: heights('[data-guard-plan^="chip"] button[aria-label="退出計劃模式"]'),
+          open: heights('[data-guard-plan] button[aria-label^="查看全文"]'),
+          review: heights(
+            '[data-guard-plan="review"] [data-testid="plan-review-panel"] > div:last-child > button',
+          ),
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      });
+      report[`plan:${theme}:375`] = sizes;
+      expect(sizes.exitWidth).toBeGreaterThanOrEqual(44);
+      expect(sizes).toEqual({
+        exitWidth: sizes.exitWidth,
+        exit: [44, 44, 44],
+        open: [44, 44],
+        review: [44, 44],
+        overflow: 0,
+      });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('G2（#1827）：Badge 與結果 chip 是 rounded-4xl，「退出」與「查看全文」是 rounded-sm，審核兩顆與暫停鈕是 rounded-md', async () => {
+    const page = await openOverlay('plan', theme, { marks: planMarks });
+    try {
+      const radii = await page.evaluate(() => {
+        // 探針的值取自出貨 CSS 裡那一條 utility 的原文（guard 底下不寫 class，`src/guard-page.test.ts`）。
+        const rules = [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]);
+        const find = (selector: string): CSSStyleRule | undefined => {
+          for (const rule of rules) {
+            if (rule instanceof CSSStyleRule && rule.selectorText === selector) return rule;
+            if (rule instanceof CSSGroupingRule)
+              for (const inner of rule.cssRules)
+                if (inner instanceof CSSStyleRule && inner.selectorText === selector) return inner;
+          }
+          return undefined;
+        };
+        const radiusOf = (selector: string) => {
+          const probe = document.createElement('div');
+          probe.style.borderRadius = find(selector)?.style.borderRadius ?? '';
+          document.body.append(probe);
+          const radius = getComputedStyle(probe).borderTopLeftRadius;
+          probe.remove();
+          return radius;
+        };
+        const of = (selector: string) =>
+          [...document.querySelectorAll(selector)].map(
+            (el) => getComputedStyle(el).borderTopLeftRadius,
+          );
+        return {
+          md: radiusOf('.rounded-md'),
+          sm: radiusOf('.rounded-sm'),
+          capsule: radiusOf('.rounded-4xl'),
+          badge: of('[data-guard-plan="chip"] [data-slot="badge"]'),
+          exit: of('[data-guard-plan="chip"] button[aria-label="退出計劃模式"]'),
+          open: of('[data-guard-plan] button[aria-label^="查看全文"]'),
+          review: of(
+            '[data-guard-plan="review"] [data-testid="plan-review-panel"] > div:last-child > button',
+          ),
+          outcome: of('[data-guard-plan="card"] [data-testid="plan-outcome"]'),
+          pause: of('[data-guard-plan="goal"] [data-testid="goal-pause"]'),
+        };
+      });
+      report[`plan:${theme}:radii`] = radii;
+      expect(radii).toEqual({
+        md: radii.md,
+        sm: radii.sm,
+        capsule: radii.capsule,
+        badge: [radii.capsule],
+        exit: [radii.sm],
+        open: [radii.sm, radii.sm],
+        review: [radii.md, radii.md],
+        outcome: [radii.capsule],
+        pause: [radii.md],
+      });
+      // 探針自檢：三個 class 都真的產出了，而且值兩兩不同。
+      expect(new Set([radii.md, radii.sm, radii.capsule, '0px']).size).toBe(4);
     } finally {
       await page.close();
     }
