@@ -225,6 +225,16 @@
       "sha256": "aa78ab42b3168284685db9bb0910d0603f969aa4137876533d1a2d08f4af71df",
       "patches": ["patches/0023-turn-status-no-live-region.patch"],
       "upstreamSha256": "c04bfe27e83c34c73308e2c7543c349fff8c934674903c0a6f9988ba8759a36c"
+    },
+    "components/ui/dot-loader.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/dot-loader.tsx",
+      "sha256": "62bda1c7ab3b0cbc26735de51122ab051482132e51828f7553da42f38d9e2387"
+    },
+    "components/ui/empty.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/empty.tsx",
+      "sha256": "e339e4d7659e7225968edc5c2cea047eb6946e723ea0591cde93877000bc1808"
     }
   }
 }

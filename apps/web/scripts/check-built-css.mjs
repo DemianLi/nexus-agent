@@ -33,7 +33,6 @@ const KEYFRAMES_ALLOWED = new Set([
   'motion-swap-in',
   'motion-swap-out',
   'motion-page-in',
-  'motion-orb-breathe',
   'motion-beam-pulse',
   'motion-shimmer',
   'motion-caret',

@@ -79,7 +79,7 @@
 | 2 | 手機抽屜 | shadcn `sheet` | — |
 | 3 | 主題切換 | 自建（§6） | — |
 | 6 | 會話列表 | shadcn `SidebarMenu*` | `thread-list.tsx` 留邏輯、換外殼 |
-| 7 | 空白狀態 hero | 自建（shadcn 基礎件＋breathing orb） | — |
+| 7 | 空白狀態 hero | SG `Empty`（靜態圖示＋標題＋一句說明，#1695） | — |
 | 8 | 會話標頭 | 自建；標題規則在 `lib/thread-title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `App.tsx` |
 | 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
 | 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`lib/max-tokens-view.ts`，#608） | `transcript.tsx` 留（歸屬、狀態字面） |
@@ -240,7 +240,8 @@
 - **按壓 .96（120ms）只給實心主按鈕與送出鍵**。
 - **stagger 40ms 只給提問選項**（前 6 個）。
 - **不動的**：載入歷史與切換對話、串流逐字（只有游標閃）；sonner 用它自帶的動畫與 reduced-motion（全關，跟我們「留 150 淡入」不同，已知差異）。
-- **orb** 只剩空白 hero 的 breathing；狀態列的 working 隨 #1684 換成 SG 的 `StatusGlyph`（語意是「這一輪正在跑」，所以待命畫面不換）。`StatusGlyph` 在 reduced-motion 下停在每個圖形的起始姿勢，換圖形時 450ms 的 morph 也不跑。
+- **沒有 orb**：狀態列執行中是 SG 的 `StatusGlyph`（#1684，語意是「這一輪正在跑」）；空白 hero 是 SG 的 `Empty`，圖示不動（#1695）。`StatusGlyph` 在 reduced-motion 下停在每個圖形的起始姿勢，換圖形時 450ms 的 morph 也不跑。
+- **「還在等」是 SG 的 `DotLoader`**（三點依序閃）：輪尾的重試提示、往前翻的讀取中（#1695）。reduced-motion 下停在全亮。
 
 **reduced-motion**（不是全關；實作寫 `@media (prefers-reduced-motion: reduce)`，原型的 `data-reduce-motion` 屬性只是模擬）
 - 位移、縮放、模糊拿掉，留 ≤ 150 的透明度；尺寸瞬間到位；按壓不縮；循環停一格；**狀態不能只靠動效表達**。
@@ -285,7 +286,7 @@
 - 換題：進度條 `aria-live` 關掉，legend 前放 sr-only「第 2 題，共 3 題」。
 - AI 回覆：`role="log"` 設 `aria-live="off"`，串流不逐字唸，結束時把全文丟進 polite 區唸一次。
 - 往前翻讀完：另一格 polite 唸「載入了較早的 N 則。」（N＝人打的字與模型的回覆，同 wire 一頁的單位），**不唸接上來的內容**，也不跟上一條共用一格（2026-09-25，inventory 列 9）。
-- 工具卡狀態變化不唸。狀態列的 glyph（SG `StatusGlyph`）與空白 hero 的 orb 旁已有同義文字時 `aria-hidden`。glyph 是裝飾，非文字對比以裝飾性豁免（WCAG 1.4.11 只管辨識內容所需的圖形；這一刻在做什麼由狀態列的字與工具列的字講，不靠 glyph）。
+- 工具卡狀態變化不唸。狀態列的 glyph（SG `StatusGlyph`）旁已有同義文字時 `aria-hidden`；`DotLoader` 本身沒有名稱，旁邊一定有同義的字。glyph 是裝飾，非文字對比以裝飾性豁免（WCAG 1.4.11 只管辨識內容所需的圖形；這一刻在做什麼由狀態列的字與工具列的字講，不靠 glyph）。
 - **工具卡與工具段**（#1682，SG 的 `StepRow`／`StepGroup`）：
   - 列是一顆帶 `aria-expanded` 的按鈕，名稱＝標題＋摘要＋列尾看得見的字（工具名、計數、歸屬、狀態字）。狀態一定有字（Badge），不靠顏色、圖示或動效。
   - 群組按鈕的名稱＝「N 個工具呼叫，讀取 ×3、寫入檔案」（段裡只收完成的工具）。摘要是純字串、會被報讀，用「，」「、」接，不用「·」。段裡有寫檔／改檔時名稱後面接整段的合計「新增 N 行，刪除 M 行」（#1685，看得見的「+N −M」`aria-hidden`）。
