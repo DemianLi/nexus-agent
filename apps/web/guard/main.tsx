@@ -85,6 +85,8 @@
  *   量狀態膠囊的字、載入細節的鈕與進度、空狀態、圓角，以及分頁只有一格 `role=status`（#1690）；`trace-steps` 另量列、數字格、結果框的字與焦點外框，375 寬時列高 44px。
  * - `?overlay=cost` 畫打開成本分頁的右側欄（產品的 `RightSidebarPanel`：root 的總帳、口徑、兩個背景子代理，假的讀取照 runId 回應），
  *   主區放頂列的用量鈕（#1691）。量用量鈕的圓角（#1827 G2）、字與焦點外框，分頁裡的總計與子代理列的字。
+ * - `?overlay=right-empty` 畫打開、但一個分頁都沒有的右側欄（產品的 `RightSidebarPanel`，#1696）：收起鈕與兩顆「打開某面板」的鈕，
+ *   量圓角（#1827 G2）、字與焦點外框。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -1130,6 +1132,28 @@ function TracePanelPage({ name }: { name: string }) {
   );
 }
 
+/** 打開、但沒有分頁的右側欄（#1696）。 */
+function RightEmptyPage() {
+  const [sources] = useState(() => {
+    const threadId = 'guard-right-empty';
+    localStorage.setItem(LAYOUT_KEY_PREFIX + threadId, JSON.stringify({ open: true, tabs: [] }));
+    return { threadId, conversation: createConversationStore(emptyConversation()) };
+  });
+  return (
+    <RightSidebarProvider
+      threadId={sources.threadId}
+      sources={{ conversation: sources.conversation }}
+    >
+      <div style={{ display: 'flex', minHeight: '100vh' }}>
+        <main style={{ flex: 1, minWidth: 0, padding: 16 }}>
+          <RightSidebarToggle />
+        </main>
+        <RightSidebarPanel />
+      </div>
+    </RightSidebarProvider>
+  );
+}
+
 /** 成本分頁（#1691）：root 的總帳加兩個背景子代理，子代理的用量照 runId 回。頂列的用量鈕讀同一份總帳。 */
 const COST_USAGE = {
   inputTokens: 1_412_380,
@@ -2126,6 +2150,8 @@ function OverlayPage({ name }: { name: string }) {
       return <TracePanelPage name={name} />;
     case 'cost':
       return <CostPage />;
+    case 'right-empty':
+      return <RightEmptyPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

@@ -428,7 +428,7 @@ function PanelContents() {
           type="button"
           variant="ghost"
           size="icon"
-          className="size-11 shrink-0 rounded-full lg:size-9"
+          className="size-11 shrink-0 lg:size-9"
           aria-label="收起右側欄"
           title="收起右側欄"
           onClick={() => {
@@ -475,7 +475,9 @@ function EmptyState() {
   const { api } = useControl();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-      <p className="text-muted-foreground text-body">{RIGHT_SIDEBAR_EMPTY_TEXT}</p>
+      <p className="text-muted-foreground text-body" data-testid="right-sidebar-empty">
+        {RIGHT_SIDEBAR_EMPTY_TEXT}
+      </p>
       <div className="flex gap-2">
         {PANEL_KINDS.map((kind) => {
           const { title, Icon } = PANELS[kind];
@@ -484,7 +486,7 @@ function EmptyState() {
               key={kind}
               type="button"
               variant="outline"
-              className="h-11 rounded-full lg:h-9"
+              className="h-11 lg:h-9"
               data-testid={`right-sidebar-open-${kind}`}
               onClick={(event) => api.openPanel(kind, event.currentTarget)}
             >

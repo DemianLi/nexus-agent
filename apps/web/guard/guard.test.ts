@@ -87,6 +87,8 @@ import { startGuardServer, type GuardServer } from './server';
  *    1280 寬時列的字與定位鈕對齊；375 寬時列 44px 高，失敗那一列的標題沒被截、後面那段不壓到箭頭與定位鈕，頁面不橫向溢出。
  * 25. **成本分頁與頂列用量鈕**（#1691，`?overlay=cost`，產品的 `RightSidebarPanel`＋`SessionUsage`）：用量鈕的圓角跟 SG Badge 一樣是 `rounded-4xl`
  *    （#1827 G2）、字過 4.5、有焦點外框；成本分頁裡總計的欄名與數字、子代理列的數字過 4.5。
+ * 26. **沒有分頁的右側欄**（#1696，`?overlay=right-empty`，產品的 `RightSidebarPanel`）：收起鈕與兩顆「打開某面板」的鈕跟 SG Button 一樣是
+ *    `rounded-md`（#1827 G2）、有焦點外框；空狀態那句說明與鈕上的字過 4.5。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -5230,6 +5232,35 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量成本分頁與用量鈕（
       });
       report[`cost:${theme}:radii`] = { probe, radii };
       expect(radii).toEqual({ usage: [probe.capsule] });
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量沒有分頁的右側欄（#1696）：%s', (theme) => {
+  test('G2（#1696）：收起鈕與「打開某面板」的鈕跟 SG Button 一樣是 rounded-md、有焦點外框；說明與鈕上的字過 4.5', async () => {
+    const page = await openOverlay('right-empty', theme, {
+      marks: {
+        '[aria-label="右側欄"] [aria-label="收起右側欄"]': { 'data-guard-focus': 'collapse' },
+        '[data-testid^="right-sidebar-open-"]': {
+          'data-guard-text': 'open',
+          'data-guard-focus': 'open',
+        },
+        '[data-testid="right-sidebar-empty"]': { 'data-guard-text': 'empty' },
+      },
+    });
+    try {
+      expectTexts(await collectTexts(page), ['empty', 'open'], `right-empty:${theme}`);
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['collapse-0', 'open-0', 'open-1']);
+      expectFocus(focus, `right-empty:${theme}`);
+      const { probe, radii } = await readRadii(page, {
+        collapse: '[aria-label="右側欄"] [aria-label="收起右側欄"]',
+        open: '[data-testid^="right-sidebar-open-"]',
+      });
+      report[`right-empty:${theme}:radii`] = { probe, radii };
+      expect(radii).toEqual({ collapse: [probe.md], open: [probe.md, probe.md] });
     } finally {
       await page.close();
     }
