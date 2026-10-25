@@ -75,9 +75,9 @@
  * - `?overlay=handoff` 畫核准與換手這一組（#1694）：換手層裡的核准卡（有允許／不允許的、只剩「停止這一輪」的）、可收起的提問面板（收起鈕）、送出佇列、輸入框上方的委派
  *   chip 與對話裡的委派標記，以及展開的背景子代理卡兩張（跑著、閒著；各包一層 `data-guard-handoff`）。量子代理面板的字、焦點
  *   外框與幾顆鈕的圓角；核准卡的呼吸光一圈還是兩圈只記錄、不斷言，交給截圖（#1694〈要看稿確認〉）。
- * - `?overlay=plan` 畫計劃與目標這一組（#1692）：輸入框上方的計劃模式標籤三塊（能按、跑著停用、按過一次失敗；各包一層
+ * - `?overlay=plan` 畫計劃與目標這一組（#1692）：輸入框上方的計劃模式標籤三塊（能按、跑著停用、按下去會回失敗原因；各包一層
  *   `data-guard-plan`）、計劃審核面板（有右側欄，帶「查看全文」）、帶結果 chip 的計劃卡，以及目標列（帶暫停鈕）。量 SG Badge 不在 Tab
- *   順序裡、「退出」鈕的名稱與停用、字與焦點外框、圓角（G2），375 寬時幾顆鈕 44px 高。
+ *   順序裡、「退出」鈕的名稱與停用、字與焦點外框、圓角（#1827 G2），375 寬時幾顆鈕 44px 高。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -696,7 +696,7 @@ const PLAN_PENDING = {
       intent: { kind: 'plan-review', approve: '同意', callId: 'call-plan' },
     },
   ],
-} as unknown as PendingQuestion;
+} satisfies PendingQuestion;
 const PLAN_REVIEW = planReviewOf(PLAN_PENDING.questions)!;
 const PLAN_ENTRY: ToolEntry = {
   kind: 'tool',

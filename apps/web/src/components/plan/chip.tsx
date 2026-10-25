@@ -18,9 +18,10 @@ import {
  * - **狀態與動作分開**：SG `Badge` 只說「計劃模式」、不能按也不在 Tab 順序裡；退出是旁邊那顆「退出」。
  * - **不是樂觀更新**：按下去送 `/plan off`，成功了也不自己拿掉，等線上的值翻回關著，標籤才消失。送出期間停用、防連按。
  * - **失敗時標籤留著**，旁邊一句帶原因的字（斜線命令被拒、不認得、回錯誤）。下一次按再試時先收掉上一句。
- * - **跑著、停在核准點、斷線時停用**，原因放在 `title`，不讓人按下去才收到一句拒絕。
- * - **報讀**：「退出」鈕的名稱是「退出計劃模式」（看得到的字在名稱開頭）；失敗那句掛在 `aria-describedby`。不掛 `role="status"`：代理的現況
- *   只由狀態列唸（§8）。
+ * - **跑著、停在核准點、斷線時停用**，原因放在 `title`，不讓人按下去才收到一句拒絕。SG Button 停用時是 `pointer-events-none`，
+ *   滑鼠移上去跳不出 `title`，這顆把它開回來，停用時也不換 hover 底。
+ * - **報讀**：「退出」鈕的無障礙名稱是「退出計劃模式」，看得到的「退出」在名稱開頭（WCAG 2.5.3）；失敗那句掛在 `aria-describedby`。
+ *   不掛 `role="status"`：代理的現況只由狀態列唸（`.docs/web-ui-spec.md` §8）。
  */
 export function PlanChip({
   planMode,
@@ -60,7 +61,7 @@ export function PlanChip({
         type="button"
         variant="ghost"
         size="xs"
-        className="max-lg:h-11"
+        className="disabled:pointer-events-auto disabled:hover:bg-transparent! disabled:cursor-default max-lg:h-11 max-lg:min-w-11"
         aria-label={PLAN_CHIP_LABEL}
         aria-describedby={failure === undefined ? undefined : failureId}
         title={view.hint}

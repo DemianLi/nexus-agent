@@ -12,6 +12,7 @@ import {
   shadowLayers,
   type BackgroundLayer,
 } from '../src/styles/color-math';
+import { PLAN_CHIP_RUNNING_HINT } from '../src/lib/plan-chip';
 import { startGuardServer, type GuardServer } from './server';
 
 /**
@@ -73,9 +74,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    輸入框（外框畫在群組上）、送出、核准卡兩顆與「停止這一輪」、換手面板的收起鈕、委派 chip 的取消鈕都有焦點外框；核准卡兩顆鈕（含只剩「停止這一輪」那張）、
  *    收起鈕是 SG Button 的 `rounded-md`，輸入框群組也是 `rounded-md`，取消委派的小鈕是 `rounded-sm`；375 寬時面板的輸入框與三顆鈕 44px 高。核准卡的呼吸光有幾圈只記在報告裡，看截圖。
  * 22. **計劃與目標**（#1692，`?overlay=plan`）：計劃模式的 SG Badge 不在 Tab 順序裡，按 Tab 走過一遍只停在「退出」、「查看全文」、審核兩顆、
- *    目標的暫停鈕；跑著時「退出」停用、`title` 寫原因；Badge、「退出」、失敗那句、審核兩顆、結果 chip 的字過 4.5，幾顆鈕有焦點外框；
- *    Badge 與結果 chip 是 `rounded-4xl`，「退出」與「查看全文」是 `rounded-sm`，審核兩顆與暫停鈕是 `rounded-md`；375 寬時「退出」、「查看全文」、
- *    審核兩顆 44px 高，頁面不橫向溢出。
+ *    目標的暫停鈕；跑著時「退出」停用、`title` 寫原因，而且滑鼠移得上去（`pointer-events` 不是 none）、移上去底色不變；Badge、「退出」、失敗那句、審核兩顆、結果 chip 的字過 4.5，幾顆鈕有焦點外框；
+ *    Badge 與結果 chip 是 `rounded-4xl`，「退出」與「查看全文」是 `rounded-sm`，審核兩顆與暫停鈕是 `rounded-md`；375 寬時「退出」至少 44px 寬、
+ *    「退出」、「查看全文」、審核兩顆 44px 高，頁面不橫向溢出。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -4598,7 +4599,7 @@ async function failPlanExit(page: Page): Promise<void> {
   const failure = page.locator('[data-guard-plan="chip-failed"] p');
   await failure.waitFor();
   await failure.evaluate((el) => el.setAttribute('data-guard-text', 'plan-failure'));
-  // 滑鼠按過，移開免得 hover 留在鈕上。
+  // 按過之後游標還停在鈕上，hover 會換底色；移開再量字的對比與焦點。
   await page.mouse.move(0, 0);
 }
 
@@ -4606,7 +4607,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量計劃與目標（#1692）�
   test('Badge 不在 Tab 順序裡；跑著時「退出」停用並寫原因；字過 4.5、鈕有焦點外框', async () => {
     const page = await openOverlay('plan', theme, { marks: planMarks, prepare: failPlanExit });
     try {
-      // 從頁面左上角的空白開始真的按 Tab 走一遍，記下每一步停在哪。
+      // 真的按 Tab 走（不看 tabIndex）：Badge 不在順序裡、停用的「退出」被跳過，都要從焦點實際停在哪看出來。
       await page.mouse.click(2, 2);
       const stops: string[] = [];
       for (let i = 0; i < 7; i += 1) {
@@ -4629,12 +4630,31 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量計劃與目標（#1692）�
         'card:button:查看全文',
         'goal:BUTTON:',
       ]);
-      const running = await page.$eval(`[data-guard-plan="chip-running"] ${PLAN_EXIT}`, (el) => ({
-        disabled: (el as HTMLButtonElement).disabled,
-        title: el.getAttribute('title'),
-        text: el.textContent,
-      }));
-      expect(running).toEqual({ disabled: true, title: '這一輪跑完才能關', text: '退出' });
+      // 停用的「退出」要滑鼠移得上去，`title` 的原因才跳得出來；移上去底色不變。
+      const runningExit = page.locator(`[data-guard-plan="chip-running"] ${PLAN_EXIT}`);
+      const readRunning = () =>
+        runningExit.evaluate((el) => ({
+          disabled: (el as HTMLButtonElement).disabled,
+          title: el.getAttribute('title'),
+          text: el.textContent,
+          pointerEvents: getComputedStyle(el).pointerEvents,
+          hovered: el.matches(':hover'),
+          background: getComputedStyle(el).backgroundColor,
+        }));
+      const idle = await readRunning();
+      await runningExit.hover();
+      await settle(page);
+      const hovered = await readRunning();
+      await page.mouse.move(0, 0);
+      report[`plan:${theme}:running`] = { idle, hovered };
+      expect(hovered).toEqual({
+        disabled: true,
+        title: PLAN_CHIP_RUNNING_HINT,
+        text: '退出',
+        pointerEvents: 'auto',
+        hovered: true,
+        background: idle.background,
+      });
       expectTexts(
         await collectTexts(page),
         ['plan-badge', 'plan-exit', 'plan-failure', 'plan-revise', 'plan-approve', 'plan-outcome'],
@@ -4656,7 +4676,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量計劃與目標（#1692）�
     }
   });
 
-  test('375 寬：「退出」、「查看全文」、審核兩顆都是 44px 高，頁面不橫向溢出', async () => {
+  test('375 寬：「退出」至少 44px 寬，「退出」、「查看全文」、審核兩顆都是 44px 高，頁面不橫向溢出', async () => {
     const page = await openOverlay('plan', theme, {
       marks: planMarks,
       viewport: { width: 375, height: 900 },
@@ -4666,6 +4686,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量計劃與目標（#1692）�
         const heights = (selector: string) =>
           [...document.querySelectorAll(selector)].map((el) => el.getBoundingClientRect().height);
         return {
+          exitWidth: Math.min(
+            ...[
+              ...document.querySelectorAll(
+                '[data-guard-plan^="chip"] button[aria-label="退出計劃模式"]',
+              ),
+            ].map((el) => el.getBoundingClientRect().width),
+          ),
           exit: heights('[data-guard-plan^="chip"] button[aria-label="退出計劃模式"]'),
           open: heights('[data-guard-plan] button[aria-label^="查看全文"]'),
           review: heights(
@@ -4675,13 +4702,20 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量計劃與目標（#1692）�
         };
       });
       report[`plan:${theme}:375`] = sizes;
-      expect(sizes).toEqual({ exit: [44, 44, 44], open: [44, 44], review: [44, 44], overflow: 0 });
+      expect(sizes.exitWidth).toBeGreaterThanOrEqual(44);
+      expect(sizes).toEqual({
+        exitWidth: sizes.exitWidth,
+        exit: [44, 44, 44],
+        open: [44, 44],
+        review: [44, 44],
+        overflow: 0,
+      });
     } finally {
       await page.close();
     }
   });
 
-  test('G2：Badge 與結果 chip 是 rounded-4xl，「退出」與「查看全文」是 rounded-sm，審核兩顆與暫停鈕是 rounded-md', async () => {
+  test('G2（#1827）：Badge 與結果 chip 是 rounded-4xl，「退出」與「查看全文」是 rounded-sm，審核兩顆與暫停鈕是 rounded-md', async () => {
     const page = await openOverlay('plan', theme, { marks: planMarks });
     try {
       const radii = await page.evaluate(() => {

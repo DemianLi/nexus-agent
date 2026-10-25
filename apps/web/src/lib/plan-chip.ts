@@ -16,7 +16,7 @@ export const PLAN_EXIT_LINE = '/plan off';
 /** 標籤上的字。 */
 export const PLAN_CHIP_TEXT = '計劃模式';
 
-/** 退出鈕上的字。 */
+/** 退出鈕上看得到的字；{@link PLAN_CHIP_LABEL} 必須以它開頭（看得到的字在無障礙名稱裡）。 */
 export const PLAN_CHIP_EXIT_TEXT = '退出';
 
 /** 退出鈕的無障礙名稱：名字講的是按下去會發生的事，不是現況。 */
@@ -34,13 +34,13 @@ export const PLAN_CHIP_OFFLINE_HINT = '連線恢復後才能關';
 export interface PlanChipView {
   /** 要不要畫。 */
   readonly visible: boolean;
-  /** 能不能按。 */
+  /** 退出鈕能不能按。 */
   readonly disabled: boolean;
   /** 停用時為什麼停用；能按時是退出的說明。 */
   readonly hint: string;
 }
 
-/** 這一刻標籤畫不畫、能不能按。 */
+/** 這一刻標籤畫不畫、退出鈕能不能按。 */
 export function planChipView(
   planMode: PlanModePayload | null,
   status: ConversationStatus,
