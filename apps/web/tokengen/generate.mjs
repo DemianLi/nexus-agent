@@ -11,7 +11,7 @@
  *    解明度，停在第一個達標的值。夾進 sRGB 是為了「畫的就是量的」：對比在 sRGB 上算，超出 sRGB 的顏色在 P3 螢幕上畫出來
  *    跟量到的不一樣。對比都疊到最差的那一疊底上算（SG 底色＋每個漸層停點；卡片是半透明的面再疊上去），同 gate。
  * 2. **SG 表面的亮暗鑑別度**：亮暗差 ≤ 0.05，只疊在 `--background` 上量；不達標時只調亮色、暗色不動（PM 定）。
- * 3. **nexus 獨有的 token**（stage、chip 三階、warning、info）：目標取自原型，對 SG 的底色解。
+ * 3. **nexus 獨有的 token**（stage、chip 三階、info）：目標取自原型，對 SG 的底色解。
  * 4. `--ring`／`--sidebar-ring`＝字色（Q5：焦點外框用文字色）。
  *
  * 亮暗**一定成對**：只在一個主題調整的 token，另一個主題也寫一份（值照 SG）。`.dark` 掛在 `<html>` 上，跟 `:root`
@@ -249,16 +249,10 @@ const PRESSED_STEP = Math.min(LIB_STEP.pressed, Math.floor(pressedCap * 10000) /
 T.pressedStep = PRESSED_STEP;
 while (!pressedOk(T.pressedStep)) T.pressedStep = Number((T.pressedStep - 0.0001).toFixed(4));
 
-/** warning／info 的色相與彩度：沿用上一版產生器（Leonardo 對舊底色解出來的）的值，明度對 SG 底色重解。 */
+/** info 的色相與彩度：沿用上一版產生器（Leonardo 對舊底色解出來的）的值，明度對 SG 底色重解。 */
 const NEXUS_HUE = {
-  light: {
-    warning: { C: 0.1458, H: '47.41' },
-    info: { C: 0.2414, H: '263.16' },
-  },
-  dark: {
-    warning: { C: 0.1635, H: '52.25' },
-    info: { C: 0.1995, H: '258.86' },
-  },
+  light: { info: { C: 0.2414, H: '263.16' } },
+  dark: { info: { C: 0.1995, H: '258.86' } },
 };
 
 // ── 1. SG 表面：亮暗鑑別度（只疊在 --background 上量，只調亮色） ──
@@ -328,11 +322,10 @@ const RULES = {
   success: { page: T.status, card: T.text, stage: T.text },
   // SG 自己的狀態色也套 5.2（demian，#1512，2026-10-17）。
   'status-done': { page: T.status, card: T.text },
-  'status-interrupted': { page: T.status, card: T.text },
+  // `chips`：疊在 chip 三階上。chip 是不透明的灰，不用疊頁面。
+  'status-interrupted': { page: T.status, card: T.text, stage: T.text, chips: T.text },
   'status-running': { page: T.status, card: T.text },
   link: { page: T.text, card: T.text },
-  // `chips`：疊在 chip 三階上。chip 是不透明的灰，不用疊頁面。
-  warning: { page: T.status, card: T.text, stage: T.text, chips: T.text },
   info: { page: T.status, card: T.text, stage: T.text },
 };
 const SG_COLORS = [
@@ -380,7 +373,7 @@ for (const theme of THEMES) {
       ? sg
       : solveB(lch(sg), lch(sg).L, toward(theme), (css) => passes(theme, name, css));
   }
-  for (const name of ['warning', 'info']) {
+  for (const name of ['info']) {
     // 原目標重解：從對比最小的那一端（亮色從最亮、暗色從最暗）往回推，停在第一個達標的值，也就是最接近目標的那個。
     COLOR[theme][name] = solveB(
       NEXUS_HUE[theme][name],
@@ -402,7 +395,6 @@ const tokens = { light: {}, dark: {} };
 for (const theme of THEMES) {
   const t = tokens[theme];
   for (const name of overridden) t[name] = solved(theme, name);
-  t.warning = COLOR[theme].warning;
   t.info = COLOR[theme].info;
   Object.assign(t, NEXUS_SURFACE[theme]);
   t.ring = SG[theme].foreground;

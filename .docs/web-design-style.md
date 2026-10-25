@@ -23,7 +23,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 
 ### 1.1 顏色只當點綴
 
-- **長什麼樣**：整個畫面是無彩的灰階，主按鈕也是無彩的（亮色近黑、暗色白）。帶色相的只有幾個語意 token：`brand`（連結、info、核准與提問面板的邊框光）、`success`、`warning`、`info`、`destructive`，以及 SG 的狀態色 `status-done`／`status-interrupted`／`status-running`。
+- **長什麼樣**：整個畫面是無彩的灰階，主按鈕也是無彩的（亮色近黑、暗色白）。帶色相的只有幾個語意 token：`brand`（連結、info、核准與提問面板的邊框光）、`success`、`info`、`destructive`，以及 SG 的狀態色 `status-done`／`status-interrupted`／`status-running`。
 - **從哪裡來**：
   - `--primary` 無彩，因為 shadcn 與 Libraries.dev 的主按鈕都是黑白；`--brand` 用的是 SG 自己的 `--brand`，色相與彩度照 SG、明度由產生器對 SG 的底色解出來（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q10，[#1512](https://github.com/DemianLi/nexus-agent/issues/1512)），只用在上面那幾處（用途出自 [#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。
   - 「顏色只當點綴」這句原則來自 beautiful-ui，比對時發現我們本來就這樣做，寫成原則（[比對文件](beautiful-ui-comparison.md) §3，[#1307](https://github.com/DemianLi/nexus-agent/issues/1307)）。

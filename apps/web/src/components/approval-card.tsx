@@ -82,7 +82,7 @@ function Actions({ pending, asker }: { pending: PendingApproval; asker?: Pending
               <p className="text-body wrap-anywhere">{escalation.reason}</p>
               {escalation.fullAccess && (
                 <p
-                  className="text-warning flex items-start gap-1.5 text-body"
+                  className="text-status-interrupted flex items-start gap-1.5 text-body"
                   data-testid="approval-full-access"
                 >
                   <ShieldAlert aria-hidden className="mt-0.5 size-4 shrink-0" />

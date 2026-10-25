@@ -390,9 +390,9 @@ function BucketGroup({
 
 /** 色條的顏色：等人回答是警示色，在跑是品牌色，跑完沒看是完成色。 */
 const BAR_CLASS: Record<Exclude<RowStatus, undefined>, string> = {
-  approval: 'bg-warning',
-  question: 'bg-warning',
-  'plan-review': 'bg-warning',
+  approval: 'bg-status-interrupted',
+  question: 'bg-status-interrupted',
+  'plan-review': 'bg-status-interrupted',
   running: 'bg-brand',
   completed: 'bg-success',
 };

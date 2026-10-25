@@ -142,7 +142,7 @@ type ChipState = 'rest' | 'hover' | 'open';
 const CHIP_STATES: ChipState[] = ['rest', 'hover', 'open'];
 
 /**
- * 狀態色對底色的門檻（`.docs/web-ui-spec.md` §5，#1468 Q5）。權限「全開」的 Pick 沒有 chip 底，字是 warning 色直接疊在頁面上，
+ * 狀態色對底色的門檻（`.docs/web-ui-spec.md` §5，#1468 Q5）。權限「全開」的 Pick 沒有 chip 底，字是警示色（`status-interrupted`）直接疊在頁面上，
  * 所以守這一條而不是文字的 4.5。不扣靜態那一層的 `ROUNDING`：瀏覽器量的是出貨的值，跟靜態那層對到小數第四位。
  */
 const STATUS_MIN = 5.2;
@@ -2041,7 +2041,7 @@ describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#159
     try {
       const texts = (await collectTexts(page)).filter((t) => t.name === 'ring');
       const tokens = await page.evaluate(() =>
-        ['--info', '--warning', '--destructive'].map((token) => {
+        ['--info', '--status-interrupted', '--destructive'].map((token) => {
           const probe = document.createElement('span');
           probe.style.color = `var(${token})`;
           document.body.append(probe);
@@ -2051,7 +2051,7 @@ describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#159
         }),
       );
       report[`footer:${theme}:ring-tones`] = { tokens, colors: texts.map((t) => t.color) };
-      // 三個環依序是 info、warning、destructive（拿掉覆寫檔第 37 條，前兩個會是 Tailwind 色板的藍與琥珀）。
+      // 三個環依序是 info、status-interrupted、destructive（拿掉覆寫檔第 37 條，前兩個會是 Tailwind 色板的藍與琥珀）。
       expect(texts.map((t) => t.color)).toEqual(tokens);
       expect(new Set(tokens).size).toBe(3);
       expectTexts(texts, ['ring'], `footer:${theme}:ring`);
@@ -2067,9 +2067,9 @@ describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#159
         '[data-slot="permission-pick"] [data-slot="dropdown-menu-trigger"]',
       );
       const model = page.locator('[data-slot="model-pick"] [data-slot="dropdown-menu-trigger"]');
-      const warning = await page.evaluate(() => {
+      const interrupted = await page.evaluate(() => {
         const probe = document.createElement('span');
-        probe.style.color = 'var(--warning)';
+        probe.style.color = 'var(--status-interrupted)';
         document.body.append(probe);
         const color = getComputedStyle(probe).color;
         probe.remove();
@@ -2089,10 +2089,10 @@ describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#159
       await page.keyboard.press('Escape');
       await page.waitForSelector('[role="menu"]', { state: 'detached' });
       const others = await colorOf(model);
-      report[`footer:${theme}:danger`] = { warning, rest, hover, open, others };
-      expect([rest, hover]).toEqual([warning, warning]);
-      expect(open).not.toBe(warning);
-      expect(others).not.toBe(warning);
+      report[`footer:${theme}:danger`] = { interrupted, rest, hover, open, others };
+      expect([rest, hover]).toEqual([interrupted, interrupted]);
+      expect(open).not.toBe(interrupted);
+      expect(others).not.toBe(interrupted);
     } finally {
       await page.close();
     }
@@ -5273,9 +5273,9 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量沒有分頁的右側欄（
 describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#1696 S1-C）：%s', (theme) => {
   const ROW = '[data-slot="sidebar-menu-item"] > [data-slot="sidebar-menu-button"]';
   const BAR_TOKEN: Record<string, string> = {
-    approval: '--warning',
-    question: '--warning',
-    'plan-review': '--warning',
+    approval: '--status-interrupted',
+    question: '--status-interrupted',
+    'plan-review': '--status-interrupted',
     running: '--brand',
     completed: '--success',
   };
