@@ -5080,7 +5080,7 @@ describe('背景子代理的輸入框接線（#869）', () => {
     await waitFor(() => expect(document.querySelector('[data-subagent-echo]')).not.toBeNull());
     expect(send).toHaveBeenCalledExactlyOnceWith(fake.opened[0], 'bg-1', '先看 A');
 
-    fireEvent.click(screen.getByRole('button', { name: '停止這一輪' }));
+    fireEvent.click(screen.getByRole('button', { name: '只停這個子代理' }));
     expect(interrupt).toHaveBeenCalledExactlyOnceWith(fake.opened[0], 'bg-1');
 
     // 下一份快照整份取代：翻成閒著，狀態字與輸入框跟著換；停止鈕恢復成不可按。
@@ -5089,9 +5089,9 @@ describe('背景子代理的輸入框接線（#869）', () => {
     expect((screen.getByLabelText('對背景子代理說話') as HTMLInputElement).placeholder).toContain(
       '喚醒',
     );
-    expect((screen.getByRole('button', { name: '停止這一輪' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    );
+    expect(
+      (screen.getByRole('button', { name: '只停這個子代理' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     // 空快照＝收線。
     fake.downlink.push(fake.opened[0]!, [statusFrame([])]);

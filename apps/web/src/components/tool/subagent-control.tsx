@@ -38,7 +38,13 @@ import type { ConversationEntry, WireClient } from '@nexus/wire';
 
 import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupButton,
+  InputGroupInput,
+} from '@/components/ui/input-group';
+import { StatusGlyph } from '@/components/ui/status-glyph';
 import { disconnectedPlaceholder } from '@/lib/connection-stall';
 import type { ConnectionStall } from '@/lib/connection-stall';
 import {
@@ -317,74 +323,87 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
   };
 
   return (
-    <Surface tone="stage" className="flex flex-col gap-2 p-3" data-subagent-panel={runId}>
-      <Conversation
-        history={history}
-        closed={state === 'closed'}
-        renderEntry={control.renderEntry}
-        onReload={() => setTick((value) => value + 1)}
-      />
-      {echoes.length > 0 && (
-        <ul className="flex flex-col gap-1">
-          {echoes.map((echo, index) => (
-            <li
-              key={index}
-              data-subagent-echo
-              className="flex items-baseline gap-2 text-body [overflow-wrap:anywhere] whitespace-pre-wrap"
-            >
-              <span className="text-muted-foreground shrink-0 text-tip">你：</span>
-              <span className="min-w-0 flex-1">{echo}</span>
-              <span className="text-muted-foreground shrink-0 text-tip">已送出</span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {/* 「跳到最新」浮鈕會讓開這一列（#1295）。 */}
-      <form
-        onSubmit={submit}
-        className="flex flex-wrap items-center gap-2"
-        data-scroll-button-avoid=""
-      >
-        <Input
-          value={text}
-          onChange={(event) => {
-            setText(event.target.value);
-            if (error !== undefined) setError(undefined);
-          }}
-          disabled={!sendable || busy}
-          placeholder={placeholder}
-          aria-label="對背景子代理說話"
-          className="min-h-11 basis-full sm:min-h-9 sm:flex-1 sm:basis-0"
-        />
+    <div className="flex flex-col gap-2" data-subagent-panel={runId}>
+      <div className="flex min-h-8 items-center gap-2">
+        {/* 只在跑著時畫：glyph 講的是「這一輪正在跑」。wire 沒有子代理在做哪一類事，所以圖形固定。 */}
+        {state === 'running' && <StatusGlyph activity="running" className="text-foreground/85" />}
+        <span className="text-muted-foreground text-tip">子代理的對話</span>
+        {history.loading && <span className="text-muted-foreground text-tip">讀取中…</span>}
         <Button
-          type="submit"
-          size="sm"
-          className="ml-auto min-h-11 min-w-11 sm:ml-0 sm:min-h-9"
-          disabled={!sendable || busy || text.trim() === ''}
-          aria-label="送出給背景子代理"
+          type="button"
+          variant="ghost"
+          size="icon-sm"
+          className="ml-auto max-sm:size-11"
+          aria-label="重新讀取子代理的對話"
+          disabled={history.loading}
+          onClick={() => setTick((value) => value + 1)}
         >
-          <Send aria-hidden />
-          {busy ? '送出中…' : '送出'}
+          <RotateCw aria-hidden />
         </Button>
         <Button
           type="button"
-          variant="outline"
-          size="sm"
-          className="min-h-11 min-w-11 sm:min-h-9"
+          variant="ghost"
+          size="xs"
+          className="max-sm:h-11"
           disabled={!canStopSubagent(state) || stopping}
           onClick={stop}
-          aria-label="停止這一輪"
+          aria-label="只停這個子代理"
         >
           <Square aria-hidden className="fill-current" />
-          {stopping ? '停止中…' : '停止這一輪'}
+          {stopping ? '停止中…' : '只停這個子代理'}
         </Button>
+      </div>
+      <Conversation history={history} closed={state === 'closed'} renderEntry={control.renderEntry}>
+        {echoes.length > 0 && (
+          <ul className="flex flex-col gap-1">
+            {echoes.map((echo, index) => (
+              <li
+                key={index}
+                data-subagent-echo
+                className="flex items-baseline gap-2 text-body [overflow-wrap:anywhere] whitespace-pre-wrap"
+              >
+                <span className="text-muted-foreground shrink-0 text-tip">你：</span>
+                <span className="min-w-0 flex-1">{echo}</span>
+                <span className="text-muted-foreground shrink-0 text-tip">已送出</span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Conversation>
+      {/* 「跳到最新」浮鈕會讓開這一列（#1295）。 */}
+      <form onSubmit={submit} data-scroll-button-avoid="">
+        <InputGroup className="h-auto sm:h-9">
+          <InputGroupInput
+            value={text}
+            onChange={(event) => {
+              setText(event.target.value);
+              if (error !== undefined) setError(undefined);
+            }}
+            disabled={!sendable || busy}
+            placeholder={placeholder}
+            aria-label="對背景子代理說話"
+            className="max-sm:h-11"
+          />
+          <InputGroupAddon align="inline-end">
+            <InputGroupButton
+              type="submit"
+              variant="default"
+              className="max-sm:h-11"
+              disabled={!sendable || busy || text.trim() === ''}
+              aria-label="送出給背景子代理"
+            >
+              <Send aria-hidden />
+              {busy ? '送出中…' : '送出'}
+            </InputGroupButton>
+          </InputGroupAddon>
+        </InputGroup>
       </form>
       {error !== undefined && (
         <p role="alert" className="text-destructive text-tip" data-subagent-error>
           {error}
         </p>
       )}
-    </Surface>
+    </div>
   );
 }
 
@@ -428,16 +447,17 @@ function useSubagentHistory(
 
 const TASK_CAPTION = '派出的任務';
 
+/** 子代理自己的對話與本地回聲（`children`），畫在 stage 底上；什麼都沒有就不畫底。 */
 function Conversation({
   history,
   closed,
   renderEntry,
-  onReload,
+  children,
 }: {
   readonly history: HistoryView;
   readonly closed: boolean;
   readonly renderEntry: SubagentControl['renderEntry'];
-  readonly onReload: () => void;
+  readonly children: ReactNode;
 }) {
   const entries = history.conversation?.entries;
   // 只有讀到最開頭才知道第一則人話是派出的任務；前面還有更早的，第一則可能只是後來對它說的話。
@@ -448,51 +468,40 @@ function Conversation({
     const element = scroller.current;
     if (element !== null) element.scrollTop = element.scrollHeight;
   }, [entries]);
+  const hasEntries = entries !== undefined && entries.length > 0;
+  const hasMore = history.conversation?.hasMore === true;
+  const empty = history.error === undefined && !hasEntries && !hasMore && children === false;
   return (
-    <section
-      aria-label="背景子代理的對話"
-      className="flex flex-col gap-2"
-      data-subagent-conversation
-    >
-      <div className="flex min-h-8 items-center gap-2">
-        <span className="text-muted-foreground text-tip">子代理的對話</span>
-        {history.loading && <span className="text-muted-foreground text-tip">讀取中…</span>}
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon-sm"
-          className="ml-auto max-sm:size-11"
-          aria-label="重新讀取子代理的對話"
-          disabled={history.loading}
-          onClick={onReload}
-        >
-          <RotateCw aria-hidden />
-        </Button>
-      </div>
-      {history.error !== undefined && (
-        <p
-          className={closed ? 'text-muted-foreground text-tip' : 'text-destructive text-tip'}
-          data-subagent-history-error
-        >
-          {closed ? '這個子代理的對話讀不到了。' : `子代理的對話讀不回來：${history.error}`}
-        </p>
-      )}
-      {entries !== undefined && entries.length > 0 && (
-        <div ref={scroller} className="flex max-h-96 flex-col gap-3 overflow-y-auto">
-          {entries.map((entry, index) => (
-            <div key={entry.id} className="flex flex-col gap-1">
-              {fromStart && index === 0 && entry.kind === 'human' && (
-                <p className="text-muted-foreground text-right text-tip">{TASK_CAPTION}</p>
-              )}
-              {renderEntry(entry)}
+    <section aria-label="背景子代理的對話" data-subagent-conversation>
+      {!empty && (
+        <Surface tone="stage" className="flex flex-col gap-2 p-3">
+          {history.error !== undefined && (
+            <p
+              className={closed ? 'text-muted-foreground text-tip' : 'text-destructive text-tip'}
+              data-subagent-history-error
+            >
+              {closed ? '這個子代理的對話讀不到了。' : `子代理的對話讀不回來：${history.error}`}
+            </p>
+          )}
+          {hasEntries && (
+            <div ref={scroller} className="flex max-h-96 flex-col gap-3 overflow-y-auto">
+              {entries.map((entry, index) => (
+                <div key={entry.id} className="flex flex-col gap-1">
+                  {fromStart && index === 0 && entry.kind === 'human' && (
+                    <p className="text-muted-foreground text-right text-tip">{TASK_CAPTION}</p>
+                  )}
+                  {renderEntry(entry)}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      )}
-      {history.conversation?.hasMore === true && (
-        <p className="text-muted-foreground text-tip">
-          只顯示最近 {SUBAGENT_HISTORY_MAX_MESSAGES} 則，更早的沒有載入。
-        </p>
+          )}
+          {hasMore && (
+            <p className="text-muted-foreground text-tip">
+              只顯示最近 {SUBAGENT_HISTORY_MAX_MESSAGES} 則，更早的沒有載入。
+            </p>
+          )}
+          {children}
+        </Surface>
       )}
     </section>
   );

@@ -867,7 +867,7 @@ function ConversationView({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="size-11 shrink-0 rounded-full lg:size-8"
+                          className="size-11 shrink-0 lg:size-8"
                           aria-label={STOP_QUESTIONS_LABEL}
                           disabled={!conversation.connected}
                           onClick={() => {

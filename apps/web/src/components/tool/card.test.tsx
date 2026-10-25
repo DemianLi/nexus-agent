@@ -1455,6 +1455,6 @@ describe('換成 SG 之後每一項資訊都還在（#1682 B2）', () => {
     expect(within(trigger()).getByText('跑著')).toBeTruthy();
     const area = expanded() as HTMLElement;
     expect(area.querySelector('[data-subagent-model]')?.textContent).toBe('模型：m');
-    expect(within(area).getByRole('button', { name: /停止/ })).toBeTruthy();
+    expect(within(area).getByRole('button', { name: '只停這個子代理' })).toBeTruthy();
   });
 });
