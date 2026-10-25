@@ -56,9 +56,9 @@ export const CLEAR_SEARCH_LABEL = '清除搜尋';
  * 比內容（[#760](https://github.com/DemianLi/nexus-agent/issues/760)），規則在 `lib/thread-search.ts`：打完停 250ms 才問、下一個
  * 字一到就取消上一次；伺服器拒絕（出廠沒開就是）或搜尋失敗，那一次只比標題，跟 #610 一樣（拋錯時多一句說明）。
  *
- * **狀態點**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
- * `lib/thread-status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種；點旁邊有給
- * 報讀器的那一句。等人回答的三種照 dsh 把第二行的時間換成短的那一句。
+ * **狀態**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
+ * `lib/thread-status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種：左邊一條該狀態顏色的
+ * 色條，第二行寫出狀態字，報讀器從列上的字唸、只唸一次。等人回答的三種不帶時間、標題加粗（#1696）。
  *
  * **釘選、封存、改名**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：給了 `management` 才有——每一列多一顆
  * 「⋯」選單，清單最前面多一區「已釘選」（最近釘的在前，不分時間組），最後多一區「已封存」（預設收著、顯示份數；搜尋有命中時
@@ -484,7 +484,7 @@ function ThreadRow({
                     {text.label}
                   </span>
                 ),
-                // 空白的那一列不帶時間（dsh `Rows.tsx`）：它的時間是建立時間，不是誰說過話。等人回答時也不帶（dsh 的 `trailingLabel`）。
+                // 空白的那一列不帶時間：它的時間是建立時間，不是誰說過話。等人回答時也不帶。
                 !item.blank && text?.waiting !== true && formatTime(item.updatedAt),
               ]
                 .filter((part) => part !== false)

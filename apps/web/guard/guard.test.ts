@@ -87,7 +87,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    1280 寬時列的字與定位鈕對齊；375 寬時列 44px 高，失敗那一列的標題沒被截、後面那段不壓到箭頭與定位鈕，頁面不橫向溢出。
  * 25. **成本分頁與頂列用量鈕**（#1691，`?overlay=cost`，產品的 `RightSidebarPanel`＋`SessionUsage`）：用量鈕的圓角跟 SG Badge 一樣是 `rounded-4xl`
  *    （#1827 G2）、字過 4.5、有焦點外框；成本分頁裡總計的欄名與數字、子代理列的數字過 4.5。
- * 27. **會話清單的狀態**（#1696 S1-C，`?overlay=thread-statuses`，產品的 `AppSidebar`）：每列的標題與狀態字過 4.5、列有焦點外框；
+ * 26. **沒有分頁的右側欄**（#1696，`?overlay=right-empty`，產品的 `RightSidebarPanel`）：收起鈕與兩顆「打開某面板」的鈕跟 SG Button 一樣是
+ *    `rounded-md`（#1827 G2）、有焦點外框；空狀態那句說明與鈕上的字過 4.5。
+ * 27. **會話清單的狀態**（#1696 S1-C，`?overlay=thread-statuses`，產品的 `AppSidebar`）：能點的每列（目前這條停用，不量）的標題與狀態字過 4.5、有焦點外框；
  *    色條 3px、顏色是該狀態的 token，沒有狀態的列是透明；每列的報讀名稱只唸一次狀態；手機抽屜（375）與桌面最窄的側欄（1024）裡，
  *    標題獨佔一行、寬度不少於 150px；第二行只有目前這條放不下、被截掉。
  *
@@ -5239,6 +5241,35 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量成本分頁與用量鈕（
   });
 });
 
+describe.each<Theme>(['light', 'dark'])('瀏覽器量沒有分頁的右側欄（#1696）：%s', (theme) => {
+  test('G2（#1696）：收起鈕與「打開某面板」的鈕跟 SG Button 一樣是 rounded-md、有焦點外框；說明與鈕上的字過 4.5', async () => {
+    const page = await openOverlay('right-empty', theme, {
+      marks: {
+        '[aria-label="右側欄"] [aria-label="收起右側欄"]': { 'data-guard-focus': 'collapse' },
+        '[data-testid^="right-sidebar-open-"]': {
+          'data-guard-text': 'open',
+          'data-guard-focus': 'open',
+        },
+        '[data-testid="right-sidebar-empty"]': { 'data-guard-text': 'empty' },
+      },
+    });
+    try {
+      expectTexts(await collectTexts(page), ['empty', 'open'], `right-empty:${theme}`);
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['collapse-0', 'open-0', 'open-1']);
+      expectFocus(focus, `right-empty:${theme}`);
+      const { probe, radii } = await readRadii(page, {
+        collapse: '[aria-label="右側欄"] [aria-label="收起右側欄"]',
+        open: '[data-testid^="right-sidebar-open-"]',
+      });
+      report[`right-empty:${theme}:radii`] = { probe, radii };
+      expect(radii).toEqual({ collapse: [probe.md], open: [probe.md, probe.md] });
+    } finally {
+      await page.close();
+    }
+  });
+});
+
 describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#1696 S1-C）：%s', (theme) => {
   const ROW = '[data-slot="sidebar-menu-item"] > [data-slot="sidebar-menu-button"]';
   const BAR_TOKEN: Record<string, string> = {
@@ -5258,7 +5289,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
       const page = await openOverlay('thread-statuses', theme, {
         viewport,
         marks: {
-          // 目前這條是 disabled（整列 opacity 0.5，本卡之前就是這樣），對比門檻不管停用的元件，只量能點的列。
+          // 目前這條是 disabled（整列 opacity 0.5），對比門檻不管停用的元件，只量能點的列。
           [`${ROW}:not([disabled]) [data-testid="thread-title-text"]`]: {
             'data-guard-text': 'title',
           },

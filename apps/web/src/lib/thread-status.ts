@@ -284,10 +284,7 @@ export function rowStatus(state: ThreadStatusState, item: ThreadSummary): RowSta
   return undefined;
 }
 
-/**
- * 列上寫出來的狀態字（dsh 的 `label`，文案照 dsh 的 zh 字典換成我們的用字）。`waiting` 是等人回答的三種：
- * 不帶時間（dsh 的 `trailingLabel` 也只替它們換掉時間）。
- */
+/** 列上寫出來的狀態字。`waiting` 是等人回答的三種：這三種不帶時間、標題加粗。 */
 export const ROW_STATUS_TEXT: Record<
   Exclude<RowStatus, undefined>,
   { readonly label: string; readonly waiting: boolean }
