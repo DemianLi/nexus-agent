@@ -517,8 +517,9 @@ export {
   interruptedTurnClosers,
   readColdSession,
   resumeClosingInterruptedTurn,
+  unansweredCallResults,
 } from './interrupted-turn.js';
-export type { ColdStoredSession } from './interrupted-turn.js';
+export type { ColdStoredSession, UnansweredCallResult } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
