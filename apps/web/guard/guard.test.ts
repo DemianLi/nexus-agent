@@ -4118,3 +4118,137 @@ describe('瀏覽器量工具卡的 diff 的覆寫與焦點（#1685 PR B）', () 
     },
   );
 });
+
+/**
+ * 對話流裡的列（#1695 PR A，`?overlay=transcript-rows`）：重試提示（X3-B）、往前翻（X4-B）、空白畫面（E1-C）。
+ * 字過 4.5、往前翻兩顆鈕的焦點外框；SG `DotLoader` 的點是 3px、`--status-running` 色，平常在閃、減少動態時停在全亮；
+ * 往前翻待命與讀取中一樣高（接上一頁之前畫面不跳）。
+ */
+const transcriptRowMarks: Record<string, Record<string, string>> = {
+  '[data-guard-rows="retry"] [data-testid="llm-retry"] > span[aria-hidden]': {
+    'data-guard-text': 'retry-text',
+  },
+  '[data-guard-pager="idle"] button': {
+    'data-guard-text': 'pager-idle',
+    'data-guard-focus': 'pager-idle',
+  },
+  '[data-guard-pager="loading"] span:has(> span > .animate-dot-flash)': {
+    'data-guard-text': 'pager-loading',
+  },
+  '[data-guard-pager="fail"] button': {
+    'data-guard-text': 'pager-fail',
+    'data-guard-focus': 'pager-fail',
+  },
+  '[data-guard-pager="fail"] p': { 'data-guard-text': 'pager-error' },
+  '[data-slot="empty-title"]': { 'data-guard-text': 'empty-title' },
+  '[data-slot="empty-description"]': { 'data-guard-text': 'empty-description' },
+};
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量對話流裡的列（#1695 PR A）：%s', (theme) => {
+  test('字過 4.5，往前翻的鈕聚焦時是 2px 外框', async () => {
+    const page = await openOverlay('transcript-rows', theme, { marks: transcriptRowMarks });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        [
+          'retry-text',
+          'pager-idle',
+          'pager-loading',
+          'pager-fail',
+          'pager-error',
+          'empty-title',
+          'empty-description',
+        ],
+        `transcript-rows:${theme}`,
+      );
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['pager-idle-0', 'pager-fail-0']);
+      expectFocus(focus, `transcript-rows:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([false, true])(
+    'DotLoader 的點：3px、status-running 色；減少動態 %s 時停在全亮',
+    async (reducedMotion) => {
+      const page = await openOverlay('transcript-rows', theme, {
+        reducedMotion,
+        marks: transcriptRowMarks,
+      });
+      try {
+        const dots = await page.evaluate(() => {
+          const probe = document.createElement('span');
+          probe.style.backgroundColor = 'var(--status-running)';
+          document.body.append(probe);
+          const running = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return [...document.querySelectorAll('.animate-dot-flash')].map((dot) => {
+            const style = getComputedStyle(dot);
+            const box = dot.getBoundingClientRect();
+            return {
+              where: dot
+                .closest('[data-guard-rows], [data-guard-pager]')
+                ?.getAttribute(
+                  dot.closest('[data-guard-rows]') === null
+                    ? 'data-guard-pager'
+                    : 'data-guard-rows',
+                ),
+              width: box.width,
+              height: box.height,
+              color: style.backgroundColor,
+              running,
+              animationName: style.animationName,
+              opacity: style.opacity,
+            };
+          });
+        });
+        report[`transcript-rows:${theme}:dots:${reducedMotion ? 'reduced' : 'normal'}`] = dots;
+        // 量具自檢：重試提示三個、往前翻讀取中三個。
+        expect(dots.map((d) => d.where)).toEqual([
+          'retry',
+          'retry',
+          'retry',
+          'loading',
+          'loading',
+          'loading',
+        ]);
+        expect(
+          dots.filter((d) => d.width !== 3 || d.height !== 3 || d.color !== d.running),
+        ).toEqual([]);
+        if (reducedMotion)
+          expect(dots.filter((d) => d.animationName !== 'none' || d.opacity !== '1')).toEqual([]);
+        else expect(dots.filter((d) => d.animationName !== 'sg-dot-flash')).toEqual([]);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+});
+
+test.each([375, 1280])('往前翻：寬 %ipx 時待命與讀取中一樣高、頁面不橫向溢出（#1695 X4-B）', async (width) => {
+  const page = await openOverlay('transcript-rows', 'light', {
+    viewport: { width, height: 1000 },
+    marks: transcriptRowMarks,
+  });
+  try {
+    const heights = await page.evaluate(() =>
+      Object.fromEntries(
+        [...document.querySelectorAll('[data-guard-pager]')].map((el) => [
+          el.getAttribute('data-guard-pager'),
+          el.getBoundingClientRect().height,
+        ]),
+      ),
+    );
+    report[`transcript-rows:pager-heights:${width}`] = heights;
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    expect(overflow).toBe(0);
+    expect(heights.idle).toBeGreaterThan(0);
+    expect(heights.loading).toBe(heights.idle);
+    expect(heights.live).toBe(heights.idle);
+  } finally {
+    await page.close();
+  }
+});

@@ -19,7 +19,7 @@ const retry = (over: Partial<WireLlmRetry> = {}): WireLlmRetry => ({
   ...over,
 });
 
-const visible = () => screen.getByTestId('llm-retry').querySelector('[aria-hidden=true]:not(svg)')!;
+const visible = () => screen.getByTestId('llm-retry').querySelector('span[aria-hidden=true]')!;
 const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
 
 describe('輪尾的倒數（#520）', () => {
@@ -52,6 +52,15 @@ describe('輪尾的倒數（#520）', () => {
     advance(1000);
     expect(root.querySelector('.sr-only')?.textContent).toBe('逾時，正在重試（第 1／2 次）');
     expect(visible().getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('前面是 SG 的 DotLoader：三個點依序閃，沒有底色條（#1695 X3-B）', () => {
+    render(<RetryNotice retry={retry()} />);
+    const root = screen.getByTestId('llm-retry');
+    const dots = [...root.querySelectorAll<HTMLElement>('.animate-dot-flash')];
+    expect(dots.map((dot) => dot.style.animationDelay)).toEqual(['0ms', '160ms', '320ms']);
+    expect(root.querySelector('svg')).toBeNull();
+    expect(root.className).not.toMatch(/\bbg-/);
   });
 
   it('卸載後不再更新（沒有殘留的計時器）', () => {
