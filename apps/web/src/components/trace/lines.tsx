@@ -93,7 +93,7 @@ export function StaticLine({
   );
 }
 
-/** 能展開的一列：SG `StepRow`，打開是時刻與 `children`。 */
+/** 能展開的一列：SG `StepRow`，打開是 `time`（有給才畫）與 `children`。 */
 export function ExpandableLine({
   line,
   children,
@@ -113,8 +113,8 @@ export function ExpandableLine({
             status: tone === 'danger' ? 'error' : 'done',
           }}
           trailing={
-            // 窄的時候標題先拿寬度，這一段只用剩下的、自己換行（碼太長就斷開），不壓到右邊的箭頭與定位鈕。
-            <span className="flex min-w-0 grow basis-0 flex-wrap items-center gap-x-2 text-left break-all">
+            // 窄的時候標題先拿寬度，這一段只用剩下的、自己換行（碼放不下才斷開），不壓到右邊的箭頭與定位鈕。
+            <span className="flex min-w-0 grow basis-0 flex-wrap items-center gap-x-2 text-left wrap-anywhere">
               <Extras attribution={attribution} meta={meta} />
             </span>
           }

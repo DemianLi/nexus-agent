@@ -223,15 +223,6 @@ export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
                 </span>
               ),
             }),
-        time: (
-          <span data-testid="trace-time">
-            {clockText(row.time)} · {durationText(row.durationMs)}
-            {row.inputTokens !== undefined &&
-              ` · 輸入 ${tokens.input}／輸出 ${tokens.output}${
-                tokens.hitRate === undefined ? '' : ` · 快取命中 ${tokens.hitRate}`
-              }`}
-          </span>
-        ),
       }}
     >
       <div className="space-y-2" data-testid="trace-call-details">

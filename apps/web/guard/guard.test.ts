@@ -5040,9 +5040,13 @@ async function openTraceSteps(page: Page): Promise<void> {
         'data-guard-text': 'step-row',
         'data-guard-focus': 'step-row',
       });
-      mark(`${row}[data-kind="call"] [data-testid="trace-time"]`, {
-        'data-guard-text': 'step-time',
-      });
+      // 展開區有時刻的只剩工具列，量已經展開的那顆子代理工具。
+      mark(
+        `${row}[data-kind="tool"]:has([data-testid="trace-subagent-block"]) [data-testid="trace-time"]`,
+        {
+          'data-guard-text': 'step-time',
+        },
+      );
       mark(`${row}[data-kind="retry"] p`, { 'data-guard-text': 'static-row' });
       mark(
         `${row}[data-kind="tool"] span:has(> [data-testid="trace-error-code"]) > span:first-child`,
