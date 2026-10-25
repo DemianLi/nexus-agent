@@ -1,5 +1,7 @@
 /** 觀測分頁一輪的標頭：第幾輪、種類，以及一輪的數字（時刻、耗時、結束狀態、呼叫、工具、重試、token）。 */
 
+import { Badge } from '@/components/ui/badge';
+import { DotLoader } from '@/components/ui/dot-loader';
 import type { TurnHead } from '@/lib/trace-view';
 import {
   TURN_END_LABEL,
@@ -39,14 +41,64 @@ function EndFact({ head }: { head: TurnHead }) {
   return <span>{TURN_END_LABEL[head.end]}</span>;
 }
 
-/** 一輪的數字（呼叫、工具、重試、token）；摺掉的部分仍算在計數裡，所以另外講。 */
-export function HeadFacts({ head, noEnd = false }: { head: TurnHead; noEnd?: boolean }) {
+type EndTone = 'done' | 'waiting' | 'failed' | 'running' | 'neutral';
+
+function endToneOf(head: TurnHead): EndTone {
+  if (head.waiting !== undefined) return 'waiting';
+  if (head.end === undefined) return 'running';
+  if (head.end === 'completed') return 'done';
+  if (head.end === 'failed') return 'failed';
+  return 'neutral';
+}
+
+const END_TONE_DOT: Readonly<Partial<Record<EndTone, string>>> = {
+  done: 'bg-status-done',
+  waiting: 'bg-status-interrupted',
+};
+
+/**
+ * 狀態膠囊（#1690 T8）：字一律是膠囊的前景色，色調畫在字前面的小圓點上：完成 `status-done`、停在中斷點（等核准或回答，#1468 Q14 的
+ * 「需要你處理」）`status-interrupted`；進行中換成 `DotLoader`；失敗是 SG 的 `destructive` 膠囊；其餘收法沒有點，只靠字。
+ * 圓點是非文字，門檻 3。不用 `default`：SG 把 `default` 膠囊畫成實心的墨色玻璃。
+ */
+function EndPill({ head }: { head: TurnHead }) {
+  const tone = endToneOf(head);
+  const dot = END_TONE_DOT[tone];
+  return (
+    <Badge
+      variant={tone === 'failed' ? 'destructive' : 'secondary'}
+      className="shrink-0"
+      data-testid="trace-head-status"
+      data-tone={tone}
+    >
+      {tone === 'running' && <DotLoader />}
+      {dot !== undefined && (
+        <span aria-hidden data-testid="trace-head-dot" className={`size-1.5 rounded-full ${dot}`} />
+      )}
+      <EndFact head={head} />
+    </Badge>
+  );
+}
+
+/**
+ * 一輪的數字（呼叫、工具、重試、token）；摺掉的部分仍算在計數裡，所以另外講。`endElsewhere` 是結束狀態另外畫在標頭的膠囊裡，
+ * 這一行就不再重複。
+ */
+export function HeadFacts({
+  head,
+  noEnd = false,
+  endElsewhere = false,
+}: {
+  head: TurnHead;
+  noEnd?: boolean;
+  endElsewhere?: boolean;
+}) {
   const tokens = tokenParts(head);
   return (
     <>
       <span>{clockText(head.time)}</span>
       {!noEnd && <span>耗時 {durationText(head.durationMs)}</span>}
-      {!noEnd && <EndFact head={head} />}
+      {!noEnd && !endElsewhere && <EndFact head={head} />}
       <span>{head.callCount} 次呼叫</span>
       <span>
         {head.toolCount} 個工具
@@ -69,19 +121,22 @@ export function HeadFacts({ head, noEnd = false }: { head: TurnHead; noEnd?: boo
 export function TurnHeader({ head }: { head: TurnHead }) {
   return (
     <header className="px-2 pt-1 pb-1" data-testid="trace-turn-head">
-      <h3
-        className="text-foreground text-body font-medium outline-none"
-        // 成本分頁的「看這一輪」把焦點交到這裡（`reveal`）；平常不在 Tab 順序裡。
-        data-reveal-target=""
-        tabIndex={-1}
-      >
-        第 {head.number} 輪
-        <span className="text-muted-foreground ml-2 text-tip font-normal">
-          {TURN_KIND_LABEL[head.kind]}
-        </span>
-      </h3>
+      <div className="flex min-w-0 items-center gap-2">
+        <h3
+          className="text-foreground min-w-0 flex-1 text-body font-medium outline-none"
+          // 成本分頁的「看這一輪」把焦點交到這裡（`reveal`）；平常不在 Tab 順序裡。
+          data-reveal-target=""
+          tabIndex={-1}
+        >
+          第 {head.number} 輪
+          <span className="text-muted-foreground ml-2 text-tip font-normal">
+            {TURN_KIND_LABEL[head.kind]}
+          </span>
+        </h3>
+        <EndPill head={head} />
+      </div>
       <p className="text-muted-foreground flex flex-wrap gap-x-2 text-tip">
-        <HeadFacts head={head} />
+        <HeadFacts head={head} endElsewhere />
       </p>
       {head.elidedCalls !== undefined && (
         <p className="text-muted-foreground text-tip" data-testid="trace-elided">

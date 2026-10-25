@@ -214,16 +214,17 @@ describe('摘要列的「載入這一輪的細節」', () => {
     return { ...fake, ...utils };
   }
 
-  it('按下去：進行中時鈕停用並講進度；拉回來就換成完整的一組', async () => {
+  it('按下去：進行中不是鈕，是 DotLoader 加一行進度字；拉回來就換成完整的一組', async () => {
     const { client, waiting, queries } = await opened();
     const row = digestRow(100)!;
     fireEvent.click(within(row).getByRole('button', { name: TRACE_PULL_LABEL }));
     await flush();
     expect(queries.at(-1)).toEqual({ seq: 100 });
-    expect(within(row).getByRole('button', { name: TRACE_PULL_LOADING_TEXT })).toHaveProperty(
-      'disabled',
-      true,
-    );
+    const pull = within(row).getByTestId('trace-pull');
+    expect(pull.getAttribute('data-status')).toBe('loading');
+    expect(pull.textContent).toBe(TRACE_PULL_LOADING_TEXT);
+    expect(pull.querySelectorAll('.animate-dot-flash')).toHaveLength(3);
+    expect(within(pull).queryByRole('button')).toBeNull();
     expect(client.trajectoryTurn).toHaveBeenCalledTimes(3);
     await act(async () => {
       waiting.at(-1)!(okTurns(detail(1)));
