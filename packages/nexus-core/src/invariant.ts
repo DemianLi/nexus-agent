@@ -20,7 +20,8 @@
  *   （`#events.length`、`snapshotJsonValue`、`deepFreeze`、`#publishing`）。抄過來只是
  *   複製擁有者的邊界，dsh 明說配套入口只檢**擁有者自己不負責**的那部分。
  *
- * 剩下真的沒人管的跨筆關係就是 turn 配對，外加 `modelCall` 的指向。turn 配對對著兩個生產者實際發的序列驗過
+ * 剩下真的沒人管的跨筆關係就是 turn 配對，外加 `modelCall` 的指向，與核准稽核（`approval/asked`、`approval/decided`）落在開著的輪內
+ * （見 `hasTurns`）。turn 配對對著兩個生產者實際發的序列驗過
  * （`apps/harness/src/thread-pump.ts` 的 `#runOnce`、`apps/harness/src/cli.ts` 的
  * `runTurn`）：兩條路都是 `turn/start` →（`interrupt/raised`）* → `turn/end` 或
  * `turn/failed`，而且 pump 的輪是排隊跑的，不會交錯。
@@ -71,6 +72,15 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
    * 旗標只管一件事——後面緊接著的 `turn/start` 是新行程自己的一輪，不是違規（舊檔的新一輪就是這樣接的）。
    */
   let carried = false;
+  /**
+   * 這份日誌出現過 `turn/start`（[#2026](https://github.com/DemianLi/nexus-agent/issues/2026)）。**跨 `session/end-seed` 不重設**：
+   * 續接時舊事件會重播，看得到上一個行程的輪。
+   *
+   * 核准稽核只在**有輪的日誌**上檢。前景子代理叫的工具走政策路徑時，稽核寫進子代理自己那份日誌（`forCall` 挑的是呼叫者的日誌），
+   * 而那份日誌從來沒有 `turn/*`，所以不判；前景子代理只在 parent 某顆工具執行期間跑，parent 那一輪一定開著。代價是一份全新的日誌在
+   * 第一顆 `turn/start` 之前寫的稽核抓不到。
+   */
+  let hasTurns = false;
   /**
    * 記過 `tool/call`、還沒配到結果的 `callId`。
    *
@@ -160,6 +170,7 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
           openModelCalls = 0;
         }
         open = true;
+        hasTurns = true;
         break;
       }
       case 'turn/end':
@@ -188,6 +199,12 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
       }
       case 'interrupt/raised': {
         if (!open) fail(`interrupt/raised（seq ${event.seq}）落在任何開著的輪之外`);
+        break;
+      }
+      case 'approval/asked':
+      case 'approval/decided': {
+        // 人那條的 asked 與 decided 分在兩輪（提問那一輪、續接或收回那一輪的 `turn/start` 之後），各自都在輪內。
+        if (hasTurns && !open) fail(`${event.type}（seq ${event.seq}）落在任何開著的輪之外`);
         break;
       }
       default:
