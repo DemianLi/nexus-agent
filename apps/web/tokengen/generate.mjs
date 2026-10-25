@@ -11,7 +11,7 @@
  *    解明度，停在第一個達標的值。夾進 sRGB 是為了「畫的就是量的」：對比在 sRGB 上算，超出 sRGB 的顏色在 P3 螢幕上畫出來
  *    跟量到的不一樣。對比都疊到最差的那一疊底上算（SG 底色＋每個漸層停點；卡片是半透明的面再疊上去），同 gate。
  * 2. **SG 表面的亮暗鑑別度**：亮暗差 ≤ 0.05，只疊在 `--background` 上量；不達標時只調亮色、暗色不動（PM 定）。
- * 3. **nexus 獨有的 token**（留到 #1497 第 ⑥ 步再整理，Q11）：保留原本的目標，改成對 SG 的底色重解。
+ * 3. **nexus 獨有的 token**（stage、chip 三階、warning、info）：目標取自原型，對 SG 的底色解。
  * 4. `--ring`／`--sidebar-ring`＝字色（Q5：焦點外框用文字色）。
  *
  * 亮暗**一定成對**：只在一個主題調整的 token，另一個主題也寫一份（值照 SG）。`.dark` 掛在 `<html>` 上，跟 `:root`
@@ -92,12 +92,6 @@ function solveGray(refRgb, target, direction) {
   return [v, v, v];
 }
 
-/** alpha 細線：base 色以 alpha 疊在 on 上，對 on 的對比度等於 target。 */
-function solveAlpha(baseRgb, onRgb, target) {
-  const a = bisect((x) => wcag(over(baseRgb, x, onRgb), onRgb), target, 0, 1);
-  return Math.round(a * 1000) / 1000;
-}
-
 /** (L, H) 上 sRGB 內、不超過 `max` 的最大彩度（往下取到 0.001）。 */
 function fitChroma(L, max, H) {
   if (inSrgb(`oklch(${L} ${max} ${H})`)) return max;
@@ -144,14 +138,12 @@ const PROTO = {
     card: srgb('#ffffff'),
     stage: srgb('#f9f9f9'),
     chip: srgb('#ececec'),
-    hairline: [srgb('#000000'), 0.14],
   },
   dark: {
     bg: srgb('#121212'),
     card: srgb('#181818'),
     stage: srgb('#131313'),
     chip: over(srgb('#ffffff'), 0.07, srgb('#181818')),
-    hairline: [srgb('#c4c4c4'), 0.08],
   },
 };
 const measured = {};
@@ -160,7 +152,6 @@ for (const theme of THEMES) {
   measured[theme] = {
     'stage 對 卡片': wcag(p.stage, p.card),
     'chip 對 底色': wcag(p.chip, p.bg),
-    '細線環 對 卡片': wcag(over(p.hairline[0], p.hairline[1], p.card), p.card),
   };
 }
 const round2 = (x) => Math.round(x * 100) / 100;
@@ -173,7 +164,6 @@ const LIB_STEP = {
 const T = {
   stage: both('stage 對 卡片'),
   chip: both('chip 對 底色'),
-  hairline: both('細線環 對 卡片'),
   text: 4.5,
   status: 5.2,
   surfaceDiff: 0.05,
@@ -271,12 +261,6 @@ const NEXUS_HUE = {
   },
 };
 
-/** 不是對比目標、照舊保留的值（留到第 ⑥ 步）。 */
-const KEEP = {
-  light: { 'primary-hover': 'oklch(0.285 0 0)', 'primary-active': 'oklch(0 0 0)' },
-  dark: { 'primary-hover': 'oklch(0.931 0 0)', 'primary-active': 'oklch(0.8822 0 0)' },
-};
-
 // ── 1. SG 表面：亮暗鑑別度（只疊在 --background 上量，只調亮色） ──
 
 const surfaceOnBg = (theme, css) => wcag(composite(css, BASE[theme].bg), BASE[theme].bg);
@@ -317,17 +301,15 @@ for (const name of ['card', 'sidebar'])
     SG_REDUCED_TRANSPARENCY.dark[name],
   );
 
-// ── 2. nexus 獨有的表面：對 SG 的底色（stage、細線對「卡片疊在底色上」）重解 ──
+// ── 2. nexus 獨有的表面：對 SG 的底色（stage 對「卡片疊在底色上」）重解 ──
 
 const NEXUS_SURFACE = { light: {}, dark: {} };
 for (const theme of THEMES) {
   const bg = BASE[theme].bg;
   const cardOnBg = composite(SURFACE[theme].card, bg);
-  const hairBase = theme === 'light' ? [0, 0, 0] : srgb('#c4c4c4');
   NEXUS_SURFACE[theme] = {
     stage: oklch(solveGray(cardOnBg, T.stage, 'darker')),
     ...chipSteps(theme, T.chip, T.pressedStep),
-    'card-hairline': oklch(hairBase, solveAlpha(hairBase, cardOnBg, T.hairline)),
   };
 }
 
@@ -420,11 +402,8 @@ const tokens = { light: {}, dark: {} };
 for (const theme of THEMES) {
   const t = tokens[theme];
   for (const name of overridden) t[name] = solved(theme, name);
-  Object.assign(t, KEEP[theme]);
   t.warning = COLOR[theme].warning;
   t.info = COLOR[theme].info;
-  const brand = lch(solved(theme, 'brand'));
-  t['brand-soft'] = `oklch(${brand.L} ${brand.C} ${brand.H} / ${theme === 'light' ? 0.09 : 0.12})`; // Libraries.dev --accent-soft
   Object.assign(t, NEXUS_SURFACE[theme]);
   t.ring = SG[theme].foreground;
   t['sidebar-ring'] = SG[theme].foreground;
@@ -481,7 +460,7 @@ let md = `## 目標\n\n| 目標 | 值 | 出處 |\n| --- | --- | --- |\n`;
 md += `| 文字 | ${f(T.text)} | Q5 |\n| 狀態色對頁面 | ${f(T.status)} | Q5；SG 的 status-* 也套（#1512） |\n| 表面亮暗差 | ≤ ${T.surfaceDiff} | Q5 |\n`;
 md += `| stage 對 卡片 | ${f(T.stage)} | 原型 eb800a1，亮暗取強 |\n| chip 對 底色 | ${T.chip.toFixed(4)} | 原型 ${f(T.chipFromProto)}；綁住的約束：${T.chipBinding}（#1512） |\n`;
 md += `| chip-hover 對 底色 | ${(T.chip * LIB_STEP.hover).toFixed(4)} | Libraries.dev 的階梯比例 |\n`;
-md += `| chip-pressed 對 底色 | ${(T.chip * T.pressedStep).toFixed(4)} | 比例 ${T.pressedStep.toFixed(4)}：取 min（次要字剛好 ≥ 4.5，Libraries.dev 的 ${LIB_STEP.pressed.toFixed(4)}），例外見產生器 |\n| 細線環 對 卡片 | ${f(T.hairline)} | 原型 eb800a1，亮暗取強 |\n`;
+md += `| chip-pressed 對 底色 | ${(T.chip * T.pressedStep).toFixed(4)} | 比例 ${T.pressedStep.toFixed(4)}：取 min（次要字剛好 ≥ 4.5，Libraries.dev 的 ${LIB_STEP.pressed.toFixed(4)}），例外見產生器 |\n`;
 md += `\nchip 三階上的次要文字（約束見產生器）：\n\n| 約束 | 上限換算成 chip 目標 | 產物上的實際值 |\n| --- | --- | --- |\n`;
 for (const c of caps)
   md += `| ${c.theme === 'light' ? '亮' : '暗'}：${c.why} | ${c.cap.toFixed(4)} | ${wcag(srgb(SG[c.theme]['muted-foreground']), srgb(chipSteps(c.theme, T.chip)[c.step])).toFixed(4)} |\n`;

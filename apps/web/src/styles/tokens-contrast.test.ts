@@ -147,7 +147,6 @@ const SURFACES: [string, string][] = [
   ['stage', 'card'],
   ['chip', 'background'],
   ['sidebar', 'background'],
-  ['card-hairline', 'card'],
   ['border', 'background'],
 ];
 

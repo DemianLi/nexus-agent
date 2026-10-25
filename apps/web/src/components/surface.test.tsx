@@ -30,7 +30,7 @@ describe('Surface（卡片與內層 stage 的共用底）', () => {
       </Surface>,
     );
     expect(classes(container.firstElementChild)).toEqual(
-      ['bg-card', 'shadow-material', 'rounded-3xl', 'p-1', 'border-beam'].sort(),
+      ['bg-card', 'rounded-3xl', 'p-1', 'border-beam'].sort(),
     );
   });
 

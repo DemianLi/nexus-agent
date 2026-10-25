@@ -18,13 +18,13 @@
 
 - **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-chip-hover`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。
 - **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。
-- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card shadow-material rounded-3xl`、`bg-card border rounded-3xl`。
+- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card rounded-3xl p-1`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`（照 SG 朝右、打開轉 90 度，#1687），不手寫 `transition-transform … rotate-90`（或跟著 `data-state=open` 轉的 `rotate-*`）。
 - **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-chip-hover active:bg-chip-pressed … w-full … text-left`。
 - **對話泡泡**：用 `ChatBubble`，不手寫 `rounded-3xl px-4 py-2.5`。
 - **程式碼小框**：用 `MonoBlock`，不手寫 `bg-chip … rounded-lg p-2 font-mono`。
 - **多行輸入**：`ui/` 以外不寫原生 `<textarea`，用 `ui/textarea` 的 `Textarea`。
-- **時長**：走 `motion.css` 的 token（`duration-(--duration-fast)`、`animation-duration-(--duration-overlay)`），不寫 `duration-200` 這種數字。這條連 `ui/` 一起管。`vendor/` 裡 SG 元件寫的數字（例如 dialog 的 `duration-100`）原樣留著，進出場的時長就照它（#1687）；這條規則跟 SG 的寫法最後怎麼收，在 ⑥（#1689）定。
+- **時長**：走 `motion.css` 的 token（`duration-(--duration-fast)`、`animation-duration-(--duration-medium)`），不寫 `duration-200` 這種數字。這條連 `ui/` 一起管。`vendor/` 裡 SG 元件寫的數字（例如 dialog 的 `duration-100`）原樣留著，進出場的時長就照它（#1687）；這條規則跟 SG 的寫法最後怎麼收，在 ⑥（#1689）定。
 - **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `styles/solid-glass.overrides.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
 - **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。

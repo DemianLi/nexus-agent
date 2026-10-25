@@ -8,35 +8,22 @@
  */
 
 /*
- * 動效 token：整組照 Libraries.dev site.css 的 :root，外加按壓與 resize。
+ * 動效 token：值取自 Libraries.dev site.css 的 :root，外加按壓與 resize。
  * 元件只能從下面「模式清單」裡挑；清單外沒有動效，只留顏色過渡。
  */
 :root {
   --duration-stagger: 40ms;
-  --duration-micro: 80ms;
   --duration-press: 120ms;
   --duration-quick: 150ms;
-  --duration-overlay: 200ms;
   --duration-fast: 250ms;
   --duration-medium: 350ms;
-  --duration-slow: 400ms;
-  --duration-very-slow: 500ms;
-  --ease-bounce: cubic-bezier(0.34, 1.36, 0.64, 1);
   --distance-micro: 4px;
-  --distance-small: 6px;
   --distance-base: 8px;
-  --distance-medium: 12px;
-  --distance-large: 30px;
   --scale-large: 0.96;
   --scale-medium: 0.97;
-  --scale-small: 0.98;
   --scale-tiny: 0.99;
-  --blur-small: 2px;
-  --blur-medium: 3px;
-  --blur-large: 8px;
   --resize-dur: 300ms;
   --resize-ease: var(--ease-smooth-out);
-  --auto-advance-delay: 200ms;
 }
 
 /*
