@@ -165,6 +165,8 @@ describe('觀測分頁：結構化模式', () => {
     await act(async () => {});
     const rows = screen.getAllByTestId('trace-row');
     const toolRow = rows.find((row) => row.getAttribute('data-kind') === 'tool')!;
+    // 時刻收在展開區（#1690 T3）：先打開那一列。
+    fireEvent.click(within(toolRow).getAllByRole('button')[0]!);
     expect(toolRow.textContent).toContain(`${clockText(1_700_000_100_000)} · 1.2 秒`);
     const retry = rows.find((row) => row.getAttribute('data-kind') === 'retry')!;
     expect(retry.textContent).toContain('重試 1/3');
@@ -340,14 +342,14 @@ describe('觀測分頁：結構化模式', () => {
     await act(async () => {});
     expect(screen.getAllByTestId('trace-row')).toHaveLength(ROW_PAGE);
     // 畫的是最新的一段：最後一顆工具在，那句人話（最舊）不在。
-    expect(screen.queryByText('做很多事')).toBeNull();
+    expect(screen.queryByText(/做很多事/)).toBeNull();
     const more = screen.getByTestId('trace-more-rows');
     expect(more.textContent).toContain(TRACE_MORE_ROWS_LABEL);
     expect(more.textContent).toContain('還有 51 列');
     fireEvent.click(more);
     expect(screen.getAllByTestId('trace-row')).toHaveLength(total + 1);
     expect(screen.queryByTestId('trace-more-rows')).toBeNull();
-    expect(screen.getByText('做很多事')).toBeTruthy();
+    expect(screen.getByText(/做很多事/)).toBeTruthy();
     // 要畫兩次 200 多列：本機約 1.2 秒、CI 的機器慢四倍（跑過 5.2 秒、撞預設的 5 秒逾時），
     // 所以這顆單獨放寬；列數是要驗的東西，不能為了快而縮小。
   }, 30_000);

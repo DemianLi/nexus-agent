@@ -1,6 +1,6 @@
 /**
  * 派出子代理的那顆工具底下的「子代理的呼叫結構」（#1015 的驗收缺口）：推送的最新一輪直接畫，更早的輪與前景子代理
- * 展開時才向伺服器拉。
+ * 展開時才向伺服器拉。一輪的呼叫收成 SG `StepGroup` 的一行計數，打開是 `StepList`，跟主對話的工具步驟同一套（#1690 T7）。
  */
 
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
@@ -12,6 +12,8 @@ import { PullControl } from '@/components/trace/pull-control';
 import { HeadFacts } from '@/components/trace/turn-head';
 import { TOOL_STATUS_LABEL } from '@/components/tool/card';
 import { Button } from '@/components/ui/button';
+import { StepGroup } from '@/components/ui/tool-steps';
+import type { Step } from '@/components/ui/tool-steps';
 import { subagentDigestHead, subagentTurnView } from '@/lib/trace-view';
 import type { SubagentCallView, SubagentTurnView } from '@/lib/trace-view';
 import type { TrajectoryPuller } from '@/lib/trajectory-pull';
@@ -71,7 +73,67 @@ function SubagentTool({ tool }: { tool: SubagentCallView['tools'][number] }) {
   );
 }
 
+/** 一輪收著那一行：呼叫與工具各幾個、幾個失敗，有工具還沒結束時再接「執行中」。純字串、會被報讀，所以用「，」接。 */
+function subagentStepsSummary(calls: readonly SubagentCallView[]): string {
+  const tools = calls.flatMap((call) => call.tools);
+  const failed = tools.filter((tool) => tool.status === 'error').length;
+  const running = tools.some((tool) => tool.status !== 'ok' && tool.status !== 'error');
+  return [
+    `${calls.length} 次呼叫`,
+    `${tools.length} 個工具${failed > 0 ? `（${failed} 個失敗）` : ''}`,
+    ...(running ? ['執行中'] : []),
+  ].join('，');
+}
+
+/** 一輪的步驟（每次呼叫一步、每個工具一步），只拿來判斷要不要包群組與是否執行中；畫出來的列是 children。 */
+function stepsOf(calls: readonly SubagentCallView[]): Step[] {
+  return calls.flatMap((call) => [
+    { id: call.row.key, label: call.row.key, status: 'done' as const },
+    ...call.tools.map((tool) => ({
+      id: tool.key,
+      label: tool.name,
+      status:
+        tool.status === 'error'
+          ? ('error' as const)
+          : tool.status === 'ok'
+            ? ('done' as const)
+            : ('running' as const),
+    })),
+  ]);
+}
+
+function SubagentCall({ call }: { call: SubagentCallView }) {
+  return (
+    <div data-testid="trace-subagent-call">
+      <CallRow row={call.row} />
+      {call.retries.map((retry) => (
+        <p
+          key={retry.key}
+          className="text-muted-foreground px-2 pl-8 text-tip"
+          data-testid="trace-subagent-retry"
+        >
+          重試 {retry.retry}/{retry.maxRetries} ·{' '}
+          <span title={retry.code} data-failure-code={retry.code}>
+            {failureReasonText(retry.code, retry.status)}
+          </span>
+          {retry.waitedMs !== undefined && ` · 等了 ${durationText(retry.waitedMs)}`}
+        </p>
+      ))}
+      {call.tools.length > 0 && (
+        <ul className="space-y-0.5 pb-1 pl-8">
+          {call.tools.map((tool) => (
+            <SubagentTool key={tool.key} tool={tool} />
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
+  const steps = stepsOf(turn.calls);
+  // SG 的 `StepGroup` 在只有一步、而且沒在跑時直接畫 `steps[0]`、丟掉 children；這裡的列是 children，所以同樣的條件下自己不包群組。
+  const grouped = steps.length > 1 || steps.some((step) => step.status === 'running');
   return (
     <section className="mb-2" data-testid="trace-subagent-turn" data-seq={turn.seq}>
       <p className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-tip">
@@ -83,31 +145,17 @@ function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
           更早的 {turn.elidedCalls} 次呼叫被單輪上限摺掉了，只留計數。
         </p>
       )}
-      {turn.calls.map((call) => (
-        <div key={call.row.key} data-testid="trace-subagent-call">
-          <CallRow row={call.row} />
-          {call.retries.map((retry) => (
-            <p
-              key={retry.key}
-              className="text-muted-foreground px-2 pl-8 text-tip"
-              data-testid="trace-subagent-retry"
-            >
-              重試 {retry.retry}/{retry.maxRetries} ·{' '}
-              <span title={retry.code} data-failure-code={retry.code}>
-                {failureReasonText(retry.code, retry.status)}
-              </span>
-              {retry.waitedMs !== undefined && ` · 等了 ${durationText(retry.waitedMs)}`}
-            </p>
-          ))}
-          {call.tools.length > 0 && (
-            <ul className="space-y-0.5 pb-1 pl-8">
-              {call.tools.map((tool) => (
-                <SubagentTool key={tool.key} tool={tool} />
-              ))}
-            </ul>
-          )}
+      {grouped ? (
+        <div className="px-2 pt-1">
+          <StepGroup steps={steps} summary={subagentStepsSummary(turn.calls)} defaultOpen>
+            {turn.calls.map((call) => (
+              <SubagentCall key={call.row.key} call={call} />
+            ))}
+          </StepGroup>
         </div>
-      ))}
+      ) : (
+        turn.calls.map((call) => <SubagentCall key={call.row.key} call={call} />)
+      )}
     </section>
   );
 }

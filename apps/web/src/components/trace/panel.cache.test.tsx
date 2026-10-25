@@ -249,3 +249,55 @@ describe('tokenParts', () => {
     });
   });
 });
+
+/** 展開第一次呼叫，回傳小格與下面欄位表各自的「欄位 → 值」。 */
+function callFields() {
+  expandFirstCall();
+  const details = screen.getByTestId('trace-call-details');
+  const pairs = (root: Element | null) =>
+    root === null
+      ? []
+      : [...root.querySelectorAll('dt')].map((dt) => [
+          dt.textContent,
+          dt.nextElementSibling?.textContent,
+        ]);
+  return {
+    tiles: pairs(within(details).queryByTestId('trace-call-tiles')),
+    rest: pairs(details.querySelector(':scope > dl:last-child')),
+  };
+}
+
+describe('觀測分頁：呼叫展開後的數字格（#1690 T5）', () => {
+  it('有資料的 6 個常看數字排成小格，其餘欄位列在下面，一個都沒少', async () => {
+    mount(conversation([{ usage: full(1000) }]));
+    await act(async () => {});
+    const { tiles, rest } = callFields();
+    expect(tiles.map(([term]) => term)).toEqual([
+      '耗時',
+      '輸入 token',
+      '快取讀 token',
+      '輸出 token',
+      '快取命中率',
+      '這次叫的工具',
+    ]);
+    expect(rest.map(([term]) => term)).toEqual([
+      '開始',
+      '結束',
+      '模型',
+      '快取寫 token',
+      '重試',
+      '系統提示詞',
+      '設定與工具清單',
+    ]);
+  });
+
+  it('沒資料的（「—」「沒記」）不畫成格，照樣寫在下面的欄位表', async () => {
+    const { cacheWriteTokens: _unused, ...withoutWrite } = full(1000)!;
+    mount(conversation([{ usage: withoutWrite }]));
+    await act(async () => {});
+    const { tiles, rest } = callFields();
+    expect(tiles.map(([term]) => term)).not.toContain('快取命中率');
+    expect(rest).toContainEqual(['快取命中率', '沒記']);
+    expect(tiles.filter(([, value]) => value === '—' || value === '沒記')).toEqual([]);
+  });
+});

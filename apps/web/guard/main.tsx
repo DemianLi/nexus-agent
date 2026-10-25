@@ -79,9 +79,10 @@
  *   `data-guard-plan`）、計劃審核面板（有右側欄，帶「查看全文」）、帶結果 chip 的計劃卡，以及目標列（帶暫停鈕）。量 SG Badge 不在 Tab
  *   順序裡、「退出」鈕的名稱與停用、字與焦點外框、圓角（#1827 G2），375 寬時幾顆鈕 44px 高。
  * - `?overlay=trace-heads` 畫觀測分頁一輪標頭的九種收法（#1690 T8，各包一層 `data-guard-head`）；`trace-empty`、`trace-plan`、
- *   `trace-digests`、`trace-groups`、`trace-subagent` 各畫一個打開觀測分頁的右側欄（產品的 `RightSidebarPanel`，假的
- *   `trajectoryTurn` 照 seq 回應，`trace-digests` 一律不回）：空狀態、計劃那一列（結果 chip、定位鈕）、更早的摘要、只有摘要的組、子代理的呼叫結構。
- *   量狀態膠囊的字、載入細節的鈕與進度、空狀態、圓角，以及分頁只有一格 `role=status`（#1690）。
+ *   `trace-digests`、`trace-groups`、`trace-subagent`、`trace-steps` 各畫一個打開觀測分頁的右側欄（產品的 `RightSidebarPanel`，假的
+ *   `trajectoryTurn` 照 seq 回應，`trace-digests` 一律不回）：空狀態、計劃那一列（結果 chip、定位鈕）、更早的摘要、只有摘要的組、子代理的呼叫結構、
+ *   一輪裡的各種列（`trace-steps`，#1690 T3、T5、T7：輸入、重試、成功與失敗的工具、兩次模型呼叫、派出子代理的工具，子代理推了一輪兩次呼叫）。
+ *   量狀態膠囊的字、載入細節的鈕與進度、空狀態、圓角，以及分頁只有一格 `role=status`（#1690）；`trace-steps` 另量列、數字格、結果框的字與焦點外框，375 寬時列高 44px。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -943,6 +944,130 @@ function TraceRevealProbe() {
   );
 }
 
+const TRACE_SYSTEM_TEXT = '你是部署助理。\n先讀腳本，再回答。';
+
+/**
+ * 觀測分頁的列、模型呼叫與子代理（#1690 T3、T5、T7，`?overlay=trace-steps`）：一輪裡有輸入、成功與失敗的工具、重試、回覆，
+ * 一顆派出子代理的工具，子代理推送了一輪兩次呼叫、三個工具（一個失敗）。
+ */
+function traceStepsState(): ConversationState {
+  const script = new Script();
+  const state = reduceAll(emptyConversation(), [
+    script.running(),
+    ...script.human('inbox:r1', '幫我看一下部署腳本'),
+    script.started('c1', 'ls', { path: '/srv' }),
+    script.finished('c1', 'deploy.sh'),
+    script.started('c2', 'bash', { command: 'rm -rf /srv' }),
+    script.failed('c2', '政策不允許', 'APPROVAL_POLICY_NEVER'),
+    script.started('c3', 'subagent', { prompt: '讀 deploy.sh' }),
+    script.finished('c3', '讀完了'),
+    ...script.ai('a1', { text: '看完了，腳本沒有問題。' }),
+    script.completed(),
+  ]);
+  const link = { childId: 't/bg-1', runId: 'bg-1', mode: 'one-shot' as const, catalogSeq: 7 };
+  const at = (seconds: number) => 1_700_000_000_000 + seconds * 1000;
+  const withRoot = withTrajectory(
+    state,
+    script,
+    view([
+      turn(0, {
+        end: 'completed',
+        durationMs: 5200,
+        calls: [
+          call(5, {
+            system: 3,
+            header: 4,
+            usage: {
+              inputTokens: 1200,
+              outputTokens: 80,
+              totalTokens: 1280,
+              uncachedInputTokens: 300,
+              cacheReadTokens: 900,
+              cacheWriteTokens: 0,
+            },
+            tools: [tool('c1', { time: at(2), durationMs: 120 })],
+            retries: [
+              {
+                seq: 6,
+                time: at(1),
+                retryId: 'r',
+                retry: 1,
+                maxRetries: 3,
+                code: 'RATE_LIMIT',
+                status: 429,
+                waitedMs: 2000,
+              },
+            ],
+          }),
+          call(20, {
+            tools: [
+              tool('c2', {
+                name: 'bash',
+                status: 'error',
+                time: at(3),
+                code: 'APPROVAL_POLICY_NEVER',
+              }),
+              tool('c3', { name: 'subagent', time: at(4), durationMs: 3100, subagent: link }),
+            ],
+          }),
+        ],
+      }),
+    ]),
+    {
+      system: [
+        {
+          seq: 3,
+          time: at(0),
+          reason: 'initial',
+          text: TRACE_SYSTEM_TEXT,
+          chars: TRACE_SYSTEM_TEXT.length,
+        },
+      ],
+      header: [
+        {
+          seq: 4,
+          time: at(0),
+          reason: 'initial',
+          header: {
+            config: { model: 'fake-model', temperature: 1 },
+            tools: [
+              {
+                name: 'ls',
+                description: '列出目錄',
+                parameters: { type: 'object', properties: { path: { type: 'string' } } },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  );
+  return reduceAll(withRoot, [
+    projectionFrame(
+      script,
+      TRAJECTORY_PROJECTION,
+      TRAJECTORY_VERSION,
+      view([
+        turn(0, {
+          end: 'completed',
+          calls: [
+            call(5, {
+              tools: [
+                tool('s1', { name: 'ls', time: at(5) }),
+                tool('s2', { name: 'read_file', time: at(5), durationMs: 200 }),
+              ],
+            }),
+            call(9, {
+              tools: [tool('s3', { name: 'grep', status: 'error', time: at(6), code: 'EACCES' })],
+            }),
+          ],
+        }),
+      ]),
+      { session: 'bg-1' },
+    ),
+  ]);
+}
+
 /**
  * 打開觀測分頁的右側欄：版面先寫進 localStorage（提供者只在掛上時讀一次）。1024 以下載入時是收著的，375 寬那條靠「看第 1 輪」（`revealTurn`）打開。
  * `trace-digests` 的假端點一律不回，預拉的兩列停在讀取中。
@@ -961,7 +1086,9 @@ function TracePanelPage({ name }: { name: string }) {
           ? tracePlanState()
           : name === 'trace-subagent'
             ? traceSubagentState()
-            : tracePullState();
+            : name === 'trace-steps'
+              ? traceStepsState()
+              : tracePullState();
     const client: Parameters<typeof createTrajectoryPuller>[0] =
       name === 'trace-digests'
         ? { trajectoryTurn: () => new Promise(() => {}) }
@@ -1907,6 +2034,7 @@ function OverlayPage({ name }: { name: string }) {
     case 'trace-digests':
     case 'trace-groups':
     case 'trace-subagent':
+    case 'trace-steps':
       return <TracePanelPage name={name} />;
     case 'questionnaire':
       return <QuestionnairePage />;

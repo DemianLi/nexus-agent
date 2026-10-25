@@ -214,6 +214,44 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     expect(block.textContent).not.toContain('SYS-CANARY');
   });
 
+  it('一輪收成 SG StepGroup 的一行計數，預設打開；收起來呼叫列就不在（#1690 T7）', async () => {
+    mount(scenario('bg-1', { trajectory: view([childTurn(1)]) }));
+    const block = await expandSubagent();
+    const summary = within(block).getByRole('button', { name: '2 次呼叫，1 個工具' });
+    expect(summary.getAttribute('aria-expanded')).toBe('true');
+    expect(within(block).getAllByTestId('trace-subagent-call')).toHaveLength(2);
+    fireEvent.click(summary);
+    expect(within(block).queryAllByTestId('trace-subagent-call')).toHaveLength(0);
+  });
+
+  it('計數帶失敗與執行中；只有一步的輪不包群組，直接畫那一列', async () => {
+    mount(
+      scenario('bg-1', {
+        trajectory: view([
+          turn(1, {
+            seq: 10,
+            calls: [
+              call(101, {
+                tools: [
+                  tool('k1', { name: 'grep', status: 'error' }),
+                  tool('k2', { name: 'ls', status: 'running' }),
+                ],
+              }),
+            ],
+          }),
+          turn(2, { seq: 20, calls: [call(201)] }),
+        ]),
+      }),
+    );
+    const block = await expandSubagent();
+    const [first, second] = within(block).getAllByTestId('trace-subagent-turn');
+    expect(
+      within(first!).getByRole('button', { name: '1 次呼叫，2 個工具（1 個失敗），執行中' }),
+    ).toBeTruthy();
+    expect(second!.querySelector('[data-slot="step-group"]')).toBeNull();
+    expect(within(second!).getAllByTestId('trace-subagent-call')).toHaveLength(1);
+  });
+
   it('子代理自己的快照：呼叫列的系統提示詞與設定讀它自己的 request-snapshots', async () => {
     const snapshots: RequestSnapshotsView = {
       system: [{ seq: 8, time: 1, reason: 'initial', text: '子代理系統提示', chars: 7 }],

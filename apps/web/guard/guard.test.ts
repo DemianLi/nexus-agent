@@ -82,6 +82,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    空狀態的標題與說明過 4.5；計劃那一列的結果 chip 是 `rounded-4xl`、定位鈕是 `rounded-md`、有焦點外框；載入細節的鈕（待命、重試）與失敗原因過 4.5、
  *    鈕是 `rounded-sm`、有焦點外框，讀取中不是鈕、是 `DotLoader` 加一行字（只有摘要的組、更早的摘要、子代理三處都量），分頁只有一格
  *    `role=status`；375 寬時重試鈕與讀取中那一行 44px 高、頁面不橫向溢出。
+ * 24. **觀測分頁的列**（#1690 PR B，`?overlay=trace-steps`）：不能展開的列、SG `StepRow` 的列與它的失敗字、展開後的時刻、模型呼叫的數字格與欄位表、
+ *    系統提示詞的 `OutputBlock`、子代理那一輪的 `StepGroup` 計數過 4.5；列、計數、結果框有焦點外框；分頁只有一格 `role=status`；
+ *    1280 寬時列的字與定位鈕對齊；375 寬時列 44px 高，失敗那一列的標題沒被截、後面那段不壓到箭頭與定位鈕，頁面不橫向溢出。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -5004,6 +5007,190 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁（#1690 PR A�
       );
       report[`trace-groups:${theme}:375`] = sizes;
       expect(sizes).toEqual({ retry: 44, loading: 44, overflow: 0 });
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+const TRACE_ROW = '[data-testid="trace-row"]';
+const TRACE_STEP = '[data-slot="step-row"] > button';
+
+/**
+ * 觀測分頁的列（#1690 PR B，`?overlay=trace-steps`）。量之前展開第 1 次模型呼叫、它的系統提示詞全文，以及派出子代理的那顆工具與
+ * 「子代理的呼叫結構」；展開才掛上的元素在 `prepare` 裡等、再標。
+ */
+async function openTraceSteps(page: Page): Promise<void> {
+  const call = page.locator(`${TRACE_ROW}[data-kind="call"] ${TRACE_STEP}`).first();
+  await call.click();
+  await page.locator('[data-testid="trace-system-text"] button').click();
+  await page
+    .locator(`${TRACE_ROW}[data-kind="tool"] ${TRACE_STEP}`, { hasText: '委派子代理' })
+    .click();
+  await page.click('[data-testid="trace-subagent-block"] button[aria-expanded="false"]');
+  await page.locator('[data-slot="step-group"]').waitFor();
+  await page.evaluate(
+    ([row, step]) => {
+      const mark = (selector: string, attributes: Record<string, string>) => {
+        const el = document.querySelector(selector);
+        if (el === null) throw new Error(`找不到 ${selector}`);
+        for (const [name, value] of Object.entries(attributes)) el.setAttribute(name, value);
+      };
+      mark(`${row}[data-kind="call"] ${step}`, {
+        'data-guard-text': 'step-row',
+        'data-guard-focus': 'step-row',
+      });
+      mark(`${row}[data-kind="call"] [data-testid="trace-time"]`, {
+        'data-guard-text': 'step-time',
+      });
+      mark(`${row}[data-kind="retry"] p`, { 'data-guard-text': 'static-row' });
+      mark(
+        `${row}[data-kind="tool"] span:has(> [data-testid="trace-error-code"]) > span:first-child`,
+        {
+          'data-guard-text': 'step-failed',
+        },
+      );
+      mark('[data-testid="trace-call-tiles"] dt', { 'data-guard-text': 'tile-term' });
+      mark('[data-testid="trace-call-tiles"] dd', { 'data-guard-text': 'tile-value' });
+      mark('[data-testid="trace-call-details"] > dl:last-child dt', {
+        'data-guard-text': 'field-term',
+      });
+      mark('[data-testid="trace-call-details"] > dl:last-child dd', {
+        'data-guard-text': 'field-value',
+      });
+      mark('[data-testid="trace-system-text"] pre', {
+        'data-guard-text': 'output',
+        'data-guard-focus': 'output',
+      });
+      mark('[data-slot="step-group"] > button', {
+        'data-guard-text': 'group',
+        'data-guard-focus': 'group',
+      });
+    },
+    [TRACE_ROW, TRACE_STEP] as const,
+  );
+}
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁的列（#1690 PR B）：%s', (theme) => {
+  test('T3／T5／T7：列、時刻、數字格、欄位表、結果框、子代理計數的字過 4.5；列、計數、結果框有焦點外框；只有一格 role=status', async () => {
+    const page = await openOverlay('trace-steps', theme, {
+      marks: { [TRACE_ROW]: {} },
+      prepare: openTraceSteps,
+    });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        [
+          'step-row',
+          'step-time',
+          'static-row',
+          'step-failed',
+          'tile-term',
+          'tile-value',
+          'field-term',
+          'field-value',
+          'output',
+          'group',
+        ],
+        `trace-steps:${theme}`,
+      );
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['step-row', 'output', 'group']);
+      expectFocus(focus, `trace-steps:${theme}`);
+      expect(await page.locator('[role="status"]').count()).toBe(1);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('375 寬：列 44px 高；失敗那一列的標題沒被截、後面那段不壓到箭頭與定位鈕；頁面不橫向溢出', async () => {
+    const page = await openOverlay('trace-steps', theme, {
+      viewport: { width: 375, height: 900 },
+      marks: { 'button[aria-label="打開右側欄"]': {} },
+      prepare: async (page) => {
+        await page.click('button[aria-label="打開右側欄"]');
+        await page.locator(`${TRACE_ROW}[data-kind="retry"]`).waitFor();
+      },
+    });
+    try {
+      const sizes = await page.evaluate(
+        ([row, step]) => {
+          const height = (selector: string) =>
+            Math.round(document.querySelector(selector)!.getBoundingClientRect().height);
+          return {
+            step: height(`${row}[data-kind="input"] ${step}`),
+            static: height(`${row}[data-kind="retry"] p`),
+            ...(() => {
+              // 失敗那一列的 trailing 最長（狀態、失敗碼、核准政策那句）。
+              const failed = [...document.querySelectorAll(`${row}[data-kind="tool"]`)].find((el) =>
+                el.querySelector('[data-testid="trace-error-code"]'),
+              )!;
+              const title = failed.querySelector(`${step} > span:first-child`)!;
+              // 量標題後面那一段裡每個元素的右緣（字溢出時外層的框不會變），對箭頭；箭頭再對定位鈕。
+              const button = failed.querySelector(step)!;
+              const right = Math.max(
+                ...[...button.querySelectorAll(':scope > span:nth-child(2) *')].map(
+                  (el) => el.getBoundingClientRect().right,
+                ),
+              );
+              const chevron = button.querySelector(':scope > svg')!.getBoundingClientRect();
+              const locate = failed
+                .querySelector('[data-testid="trace-locate"]')!
+                .getBoundingClientRect();
+              return {
+                titleClipped: title.scrollWidth > title.clientWidth,
+                overlapsChevron: right > chevron.left,
+                overlapsLocate: chevron.right > locate.left,
+              };
+            })(),
+            overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+          };
+        },
+        [TRACE_ROW, TRACE_STEP] as const,
+      );
+      report[`trace-steps:${theme}:375`] = sizes;
+      expect(sizes).toEqual({
+        step: 44,
+        static: 44,
+        titleClipped: false,
+        overlapsChevron: false,
+        overlapsLocate: false,
+        overflow: 0,
+      });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('1280 寬：列的字與右邊的定位鈕對齊（中心差 1px 以內）', async () => {
+    const page = await openOverlay('trace-steps', theme, { marks: { [TRACE_ROW]: {} } });
+    try {
+      const offsets = await page.evaluate(
+        ([row, step]) => {
+          const center = (el: Element) => {
+            const box = el.getBoundingClientRect();
+            return box.top + box.height / 2;
+          };
+          return [...document.querySelectorAll(row)].flatMap((el) => {
+            const locate = el.querySelector('[data-testid="trace-locate"]');
+            const line = el.querySelector(`${step}, p`);
+            if (locate === null || line === null) return [];
+            return [
+              {
+                kind: el.getAttribute('data-kind'),
+                offset: Math.round(center(line) - center(locate)),
+              },
+            ];
+          });
+        },
+        [TRACE_ROW, TRACE_STEP] as const,
+      );
+      report[`trace-steps:${theme}:1280`] = offsets;
+      // 量具自檢：能展開的（輸入、工具、模型呼叫、回覆）都量到了。
+      expect(offsets.map((o) => o.kind)).toEqual(
+        expect.arrayContaining(['input', 'tool', 'call', 'reply']),
+      );
+      expect(offsets.filter((o) => Math.abs(o.offset) > 1)).toEqual([]);
     } finally {
       await page.close();
     }

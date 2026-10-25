@@ -1,13 +1,16 @@
 /**
  * 觀測分頁的「模型呼叫」一列：起訖、用量、模型，展開後是當時送出的系統提示詞全文、取樣設定與工具清單
- * （日誌的 `request/system`、`request/header`）。
+ * （日誌的 `request/system`、`request/header`）。展開後常看的 6 個數字有資料的排成三欄小格、其餘欄位列在下面，快照用 SG `OutputBlock`
+ * （#1690 T5）。
  */
 
 import { Cpu } from 'lucide-react';
 import { useMemo } from 'react';
 
-import { MonoBlock } from '@/components/mono-block';
+import { Surface } from '@/components/surface';
 import { ExpandableLine, SnapshotBlock } from '@/components/trace/lines';
+import { OutputBlock } from '@/components/ui/tool-steps';
+import { NOT_RECORDED } from '@/lib/session-usage-view';
 import { CALL_OUTCOME_LABEL, TRACE_CALL_UNLOADED_TEXT } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
 import { ABSENT, clockText, durationText, tokenParts, tokenText } from '@/lib/trajectory-view';
@@ -110,7 +113,9 @@ function HeaderBody({ json, diff }: { json: string; diff: string | undefined }) 
               {tool.description !== '' && (
                 <p className="mb-1 break-words whitespace-pre-wrap">{tool.description}</p>
               )}
-              {tool.rest !== '' && <MonoBlock className="max-h-72">{tool.rest}</MonoBlock>}
+              {tool.rest !== '' && (
+                <OutputBlock label={`${tool.name} 的參數定義`} text={tool.rest} />
+              )}
             </SnapshotBlock>
           </li>
         ))}
@@ -138,7 +143,7 @@ function SnapshotDetails({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) 
               {TRACE_SYSTEM_TRUNCATED_TEXT}
             </p>
           )}
-          <MonoBlock className="max-h-72">{row.systemText}</MonoBlock>
+          <OutputBlock label="系統提示詞全文" text={row.systemText} />
         </SnapshotBlock>
       )}
       {row.headerJson !== undefined && (
@@ -161,6 +166,16 @@ function SnapshotDetails({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) 
     </>
   );
 }
+
+/** 展開後的 6 小格：有資料才畫成格；沒資料的（「—」「沒記」）照樣寫出來，排進下面的欄位表。 */
+const TILE_TERMS = new Set([
+  '耗時',
+  '輸入 token',
+  '輸出 token',
+  '快取讀 token',
+  '快取命中率',
+  '這次叫的工具',
+]);
 
 /** 一次模型呼叫的段落：起訖、用量、模型與當時送出的設定。 */
 export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
@@ -189,19 +204,27 @@ export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
     ['系統提示詞', snapshotText(row, 'system')],
     ['設定與工具清單', snapshotText(row, 'header')],
   ];
+  const tiles = details.filter(
+    ([term, value]) => TILE_TERMS.has(term) && value !== ABSENT && value !== NOT_RECORDED,
+  );
+  const rest = details.filter((field) => !tiles.includes(field));
   return (
     <ExpandableLine
       line={{
         icon: Cpu,
         label: `模型呼叫 #${row.n}`,
         summary: row.model ?? '',
-        meta: (
+        ...(row.outcome === undefined
+          ? {}
+          : {
+              meta: (
+                <span className="text-destructive" data-testid="trace-call-outcome">
+                  {CALL_OUTCOME_LABEL[row.outcome]}
+                </span>
+              ),
+            }),
+        time: (
           <span data-testid="trace-time">
-            {row.outcome !== undefined && (
-              <span className="text-destructive" data-testid="trace-call-outcome">
-                {CALL_OUTCOME_LABEL[row.outcome]} ·{' '}
-              </span>
-            )}
             {clockText(row.time)} · {durationText(row.durationMs)}
             {row.inputTokens !== undefined &&
               ` · 輸入 ${tokens.input}／輸出 ${tokens.output}${
@@ -211,17 +234,26 @@ export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
         ),
       }}
     >
-      <dl
-        className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-tip"
-        data-testid="trace-call-details"
-      >
-        {details.map(([term, value]) => (
-          <div key={term} className="contents">
-            <dt className="text-muted-foreground">{term}</dt>
-            <dd className="text-foreground min-w-0 break-words">{value}</dd>
-          </div>
-        ))}
-      </dl>
+      <div className="space-y-2" data-testid="trace-call-details">
+        {tiles.length > 0 && (
+          <dl className="grid grid-cols-3 gap-1.5" data-testid="trace-call-tiles">
+            {tiles.map(([term, value]) => (
+              <Surface key={term} tone="stage" className="min-w-0 px-2.5 py-1.5">
+                <dt className="text-muted-foreground truncate text-tip">{term}</dt>
+                <dd className="text-foreground truncate font-medium tabular-nums">{value}</dd>
+              </Surface>
+            ))}
+          </dl>
+        )}
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-tip">
+          {rest.map(([term, value]) => (
+            <div key={term} className="contents">
+              <dt className="text-muted-foreground">{term}</dt>
+              <dd className="text-foreground min-w-0 break-words">{value}</dd>
+            </div>
+          ))}
+        </dl>
+      </div>
       <SnapshotDetails row={row} />
       {row.hasContent && !row.loaded && (
         <p className="text-muted-foreground mt-2 text-tip" data-testid="trace-call-unloaded">
