@@ -352,7 +352,8 @@ export const STEER_UNAVAILABLE = 'steer_unavailable';
  *
  * **重啟之後的冷子代理（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)，缺口源自 #737）**：`subagent.send` 對一條只在磁碟上、
  * 還沒載入的 thread 會把它建起來（`subagent.interrupt` 仍不建），載體冷讀 root 日誌認得重啟之前派出的子代理；對冷的送話就是叫醒它，
- * 之後同一般投遞。叫醒失敗（別的行程握著寫入把手、日誌壞了……）回 `unknown_error`，原因寫在 message，子代理仍是冷的、可以再送。
+ * 之後同一般投遞。這條 thread 本身的寫租約被別的行程握著回 {@link THREAD_WRITER_HELD}；叫醒子代理失敗（別的行程握著它的寫入把手、日誌壞了……）
+ * 回 `unknown_error`，原因寫在 message，子代理仍是冷的、可以再送。
  * 並存名額在重建之前佔：滿了回 {@link SUBAGENT_AT_CAPACITY}，沒去握租約。叫不醒的（舊日誌沒有身分）回 {@link SUBAGENT_NOT_FOUND}，
  * message 說明原因。磁碟上也沒有這條 thread：{@link SUBAGENT_NOT_FOUND}，不建 agent。`subagent.interrupt` 對冷的是被接受的 no-op（dsh）。
  *
@@ -429,6 +430,13 @@ export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
 export const THREAD_HISTORY_TOO_DEEP = 'thread_history_too_deep';
 
 /**
+ * 這條 thread 的會話日誌，寫租約被**別的寫入者**握著（[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)）：多半是另一個
+ * serve 行程（不同 home、同一個 `--session-log` 與工作目錄）還開著它。serve 沒有開這條 thread，日誌不動。**是暫時的**：握著的那一方
+ * 關掉這條 thread 或結束之後，再送就不會再因此被拒。任何會經 `threadFor` 續接舊 thread 的路都可能回。message 寫明是哪一份會話與下一步。
+ */
+export const THREAD_WRITER_HELD = 'thread_writer_held';
+
+/**
  * serve 正在收尾（`close()` 已經開始：收到 `SIGTERM`／`SIGINT`，或致命例外；`close()` 一開始就停收新的一輪，**不論有沒有 `/readyz` 時間窗**——
  * `drainMs: 0`、沒人抓過 `/readyz`、致命例外不等時間窗的路徑都一樣，[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)），
  * **這一句話沒有送出**：會開新一輪的上行命令一律回這個碼，HTTP 照舊 200：
@@ -457,6 +465,7 @@ export type WireErrorCode =
   | typeof THREAD_AT_CAPACITY
   | typeof THREAD_IS_SUBAGENT
   | typeof THREAD_HISTORY_TOO_DEEP
+  | typeof THREAD_WRITER_HELD
   | typeof SERVER_CLOSING
   | typeof MODEL_DOES_NOT_SUPPORT_IMAGES
   | typeof ATTACHMENT_NOT_FOUND;

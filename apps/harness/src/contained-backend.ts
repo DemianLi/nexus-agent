@@ -41,11 +41,10 @@
  * 變成好幾份常駐的字串；單行 3 MB 的檔也整行送出。所以 `read` 也**自己做完**（不 `super.read`）：開檔後用同一個 fd 的 `stat` 定路由，
  * 小於 {@link READ_STREAM_MIN_SIZE}（同 dsh 的 `STREAM_MIN_SIZE`）一次 `readFile`，否則逐 chunk 解碼掃描；兩條路交給同一支
  * `scanWindow`。**在 `read_file` 裡**照 dsh 的 `buildWindow` 建頁（每行截 2000 字元、選到的行累計 50 KiB 停但掃到檔尾數總行數），
- * 並把頁的範圍與邊讀邊算的版本回報給 `@nexus/core`；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
+ * 並把頁的範圍與同一個 fd 的 stat 版本回報給 `@nexus/core`（#2030）；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
  * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2（縮到只剩 BOM，理由 1 基座表達不出來）**：開頭的 BOM 保留，不照 dsh 去掉——
- * 基座 `readRaw` 的版本 token 是從保留 U+FEFF 的字串算的，`read` 不保留就和「先讀後改」寫與改前的比對對不上；`edit` 沿用同一個解碼（`ignoreBOM`），
- * 寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
- * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡；版本 token 仍對含 `\r` 的原文算。
+ * `edit` 沿用同一個解碼（`ignoreBOM`），寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
+ * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡。
  *
  * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
@@ -77,6 +76,7 @@ import { createHash } from 'node:crypto';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
@@ -90,10 +90,10 @@ import type {
 } from 'deepagents';
 
 import {
-  createVersionHasher,
   currentReadWindow,
   currentToolCallSignal,
   EMPTY_CONTENT_WARNING,
+  FILE_VERSION,
   FS_AMBIGUOUS_EDIT,
   FS_EDIT_NOT_FOUND,
   FS_NOT_FOUND,
@@ -120,6 +120,7 @@ import type { RipgrepInternals, RipgrepTool } from './ripgrep-runner.js';
 import { pageOf, scanWindow, ScanAborted } from './text-window.js';
 import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 import type {
+  FileVersionLookup,
   FsErrorCode,
   SandboxDenial,
   SearchErrorCode,
@@ -452,6 +453,15 @@ export const READ_STREAM_MIN_SIZE = 10 * 1024 * 1024;
 const READ_ABORTED = 'read aborted';
 
 /**
+ * 檔案的版本 token：`dev:ino:size:mtimeNs:ctimeNs`。不透明，消費端只比相等。同一個時間戳粒度內改成等長的內容認不出來。
+ *
+ * @param info - `bigint: true` 的 stat。
+ */
+function statVersion(info: BigIntStats): string {
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+}
+
+/**
  * 在寫入路徑上加了 canonicalize-then-contain 的 `FilesystemBackend`。
  *
  * **一定是 `virtualMode: true`**，而且不給關。`virtualMode: false` 的語義是「絕對路徑原樣
@@ -516,7 +526,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 解碼、掃描；兩條路交給同一支 {@link scanWindow}，判斷的與讀到的是同一個檔。
    *
    * **在 `read_file` 裡**（`currentReadWindow()` 有值）：照請求建頁——每行截到 2000 字元、選到的行累計 50 KiB 就停但掃到檔尾數總行數——
-   * 並回報頁的範圍（`noteReadWindow`）與邊讀邊算好的版本（`noteReadVersion`，給「先讀後改」）。**不在 `read_file` 裡**（摘要器、
+   * 並回報頁的範圍（`noteReadWindow`）與同一個 fd 的 stat 版本（`noteReadVersion`，給「先讀後改」，#2030）。**不在 `read_file` 裡**（摘要器、
    * `agent-instructions` 的 `discover`、直接呼叫）：語意照基座，回 `lines[offset, offset+limit)`，不截行、不套位元組上限。
    *
    * 取消：`currentToolCallSignal()` 接進讀取，中止時回 `{ error: 'read aborted' }`，不拋。
@@ -560,7 +570,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     limit: number,
     signal: AbortSignal | undefined,
   ): Promise<ReadResult> {
-    const info = await handle.stat();
+    const info = await handle.stat({ bigint: true });
     const window = currentReadWindow();
     // `read_file` 裡行尾的 `\r` 去掉（照 dsh，#1563 N0335）；其餘呼叫維持基座的切片語意。
     const params = window
@@ -577,14 +587,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
           maxLineLength: Infinity,
           maxBytes: Infinity,
         };
-    const hasher = window === undefined ? undefined : createVersionHasher();
-    const options = {
-      ...(hasher === undefined ? {} : { onChunk: (chunk: string) => hasher.update(chunk) }),
-      ...(signal === undefined ? {} : { signal }),
-    };
+    const options = signal === undefined ? {} : { signal };
     let scan;
     // 部署設定給了串流門檻（`tool-fs` 的 `readStreamMinSize`，#1605）就用它，沒給用建構子選項（預設 `READ_STREAM_MIN_SIZE`）。
-    if (info.size < (window?.streamMinSize ?? this.streamMinSize)) {
+    if (Number(info.size) < (window?.streamMinSize ?? this.streamMinSize)) {
       const bytes = await handle.readFile(signal === undefined ? undefined : { signal });
       if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0))
         return notText(filePath, 'binary file');
@@ -606,11 +612,23 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         error: `Line offset ${params.offset} exceeds file length (${page.splitLength} lines)`,
       };
     }
-    if (window !== undefined && hasher !== undefined) {
+    if (window !== undefined) {
       noteReadWindow(page.extent, scan.lines);
-      noteReadVersion(hasher.version(info.mtime.toISOString()));
+      noteReadVersion(statVersion(info));
     }
     return { content: page.content, mimeType: 'text/plain' };
+  }
+
+  /**
+   * 寫與改前比對用的版本，只做 `lstat`、不讀內容（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。token 跟 {@link read}
+   * 回報的同一種（{@link statVersion}）。路徑同 {@link read}：基座的 `resolvePath`；不是一般檔（含最後一節是符號連結，`read` 開檔是
+   * `O_NOFOLLOW`）回不存在。`lstat` 的錯原樣拋，observation 收成不存在，同它對 `readRaw` 拋錯的處理。
+   *
+   * @param filePath - 虛擬路徑。
+   */
+  async [FILE_VERSION](filePath: string): Promise<FileVersionLookup> {
+    const info = await lstat(this.resolveVirtual(filePath), { bigint: true });
+    return info.isFile() ? { kind: 'present', version: statVersion(info) } : { kind: 'absent' };
   }
 
   /**

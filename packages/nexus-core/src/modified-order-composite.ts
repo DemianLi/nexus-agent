@@ -1,5 +1,6 @@
 /**
- * 把 `glob` 的結果照**修改時間（舊的在前）**交給模型的 `CompositeBackend`（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0345）。
+ * 產品用的 `CompositeBackend`：`glob` 的結果照**修改時間（舊的在前）**交給模型（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0345），
+ * 並把 {@link FILE_VERSION} 照路由轉給子 backend（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。
  *
  * ## 為什麼要有它
  *
@@ -22,7 +23,9 @@
  */
 
 import { CompositeBackend } from 'deepagents';
-import type { GlobResult } from 'deepagents';
+import type { AnyBackendProtocol, GlobResult } from 'deepagents';
+import { FILE_VERSION, fileVersionOf } from './observation.js';
+import type { FileVersionLookup } from './observation.js';
 
 type GlobEntry = NonNullable<GlobResult['files']>[number];
 
@@ -35,14 +38,47 @@ function byModifiedAt(a: GlobEntry, b: GlobEntry): number {
 }
 
 /**
- * 結果照修改時間排的 `CompositeBackend`，見檔頭。其餘方法與基座逐位元組相同。
+ * `glob` 照修改時間排、{@link FILE_VERSION} 照路由轉的 `CompositeBackend`，見檔頭。其餘方法與基座逐位元組相同。
  *
  * `modified_at` 是 `Date.prototype.toISOString()` 的形狀（基座與 `ContainedFilesystemBackend` 都是），字串比較等於時間比較。
  */
 export class ModifiedOrderCompositeBackend extends CompositeBackend {
+  /**
+   * 基座建構時把每個子 backend 換成轉接物件（`adaptBackendProtocol`），{@link FILE_VERSION} 這類基座不認得的方法會掉。
+   * 這裡記「轉接物件 → 交進來的原物件」，路由仍走基座的 `getBackendAndKey`，只在最後換回原物件。
+   * 讀的是基座私有的 `default`／`routes`。基座改了欄位名，這張表就是空的，寫前比對退回 `readRaw` 算內容雜湊，但 `read_file`
+   * 照樣回報 stat token，兩邊對不上：讀過再改一律被擋成 `FS_STALE_VERSION`（`contained-read-window.test.ts` 的驗收 2b 會紅）。
+   */
+  private readonly originals = new Map<unknown, AnyBackendProtocol>();
+
+  constructor(defaultBackend: AnyBackendProtocol, routes: Record<string, AnyBackendProtocol>) {
+    super(defaultBackend, routes);
+    const adapted = this as unknown as {
+      readonly default: unknown;
+      readonly routes: Record<string, unknown>;
+    };
+    this.originals.set(adapted.default, defaultBackend);
+    for (const [prefix, backend] of Object.entries(routes))
+      this.originals.set(adapted.routes[prefix], backend);
+  }
+
   override async glob(pattern: string, path = '/'): Promise<GlobResult> {
     const result = await super.glob(pattern, path);
     if (result.error !== undefined || result.files === undefined) return result;
     return { ...result, files: [...result.files].sort(byModifiedAt) };
+  }
+
+  /**
+   * stat 版本照路由分派（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）：前綴剝法跟 `readRaw` 同一支 `getBackendAndKey`，
+   * 子 backend 沒有這一格就回 `undefined`，observation 退回整份 `readRaw`。子 backend 也是這個類別時一層層照轉；基座的 `CompositeBackend`
+   * 沒有這一格，接在它底下的都退回 `readRaw`。
+   *
+   * @param path - 這一層座標系的路徑（最外層是模型給的原路徑）。
+   */
+  async [FILE_VERSION](path: string): Promise<FileVersionLookup> {
+    const [backend, key] = (
+      this as unknown as { getBackendAndKey(key: string): [AnyBackendProtocol, string] }
+    ).getBackendAndKey(path);
+    return fileVersionOf(this.originals.get(backend), key);
   }
 }
