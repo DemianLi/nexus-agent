@@ -1140,7 +1140,10 @@ function RightEmptyPage() {
     return { threadId, conversation: createConversationStore(emptyConversation()) };
   });
   return (
-    <RightSidebarProvider threadId={sources.threadId} sources={{ conversation: sources.conversation }}>
+    <RightSidebarProvider
+      threadId={sources.threadId}
+      sources={{ conversation: sources.conversation }}
+    >
       <div style={{ display: 'flex', minHeight: '100vh' }}>
         <main style={{ flex: 1, minWidth: 0, padding: 16 }}>
           <RightSidebarToggle />

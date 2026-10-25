@@ -88,7 +88,7 @@ import { startGuardServer, type GuardServer } from './server';
  * 25. **成本分頁與頂列用量鈕**（#1691，`?overlay=cost`，產品的 `RightSidebarPanel`＋`SessionUsage`）：用量鈕的圓角跟 SG Badge 一樣是 `rounded-4xl`
  *    （#1827 G2）、字過 4.5、有焦點外框；成本分頁裡總計的欄名與數字、子代理列的數字過 4.5。
  * 26. **沒有分頁的右側欄**（#1696，`?overlay=right-empty`，產品的 `RightSidebarPanel`）：收起鈕與兩顆「打開某面板」的鈕跟 SG Button 一樣是
- *    `rounded-md`（#1827 G2）、有焦點外框；那句說明與鈕上的字過 4.5。
+ *    `rounded-md`（#1827 G2）、有焦點外框；空狀態那句說明與鈕上的字過 4.5。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。

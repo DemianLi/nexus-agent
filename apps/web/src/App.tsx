@@ -672,7 +672,7 @@ function ConversationView({
       {/* 基準寬 480：右側欄打開時會話區至少留這麼多，視窗再窄才輪到它讓（#640，見 `right-sidebar.tsx`）。 */}
       <SidebarInset className="flex h-svh min-w-0 flex-col" style={{ flexBasis: 480 }}>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-2">
-          {/* 觸控目標 44px，1024 以上回到 36（§9）；三顆的圓角都照 SG 36px 的 `icon-lg`，是 `rounded-md`。 */}
+          {/* 觸控目標 44px，1024 以上回到 36（§9）。三顆都用 SG 36px 圖示鈕（`icon-lg`）的 `rounded-md`；側欄鈕與主題鈕是 `icon-sm`、自帶 `rounded-sm`，靠這裡蓋掉。 */}
           <SidebarTrigger className="size-11 rounded-md lg:size-9" />
           {/* 換字不做動效（Q4）；截斷時 `title` 帶全文。 */}
           <h1 className="min-w-0 flex-1 truncate text-body font-medium" title={heading}>
