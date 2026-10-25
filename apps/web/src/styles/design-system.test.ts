@@ -235,11 +235,6 @@ const ALLOWED: readonly Allowed[] = [
     what: 'bg-card border rounded-3xl',
     why: '`Surface` 的 docked 配方本身：全站唯一該寫這串的地方',
   },
-  {
-    file: 'components/empty-hero.tsx',
-    what: 'text-2xl',
-    why: '空狀態的標題；規格 §5 的字級階只有內文與小字、沒有標題階。要不要加一階由第 3 刀的規則手冊定，定之前不再新增',
-  },
 ];
 
 interface Violation {

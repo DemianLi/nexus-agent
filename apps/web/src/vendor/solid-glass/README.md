@@ -29,6 +29,7 @@
 | `components/ui/{tool-steps,diff-view}.tsx` | solid-glass `src/components/ui/` 同名檔（tool-steps 套了 patch，見「本地修改」第 56–59 條；diff-view 是 tool-steps import 的，#1685 PR B 起套了第 79 條的 patch） | ④（#1682，PR A） |
 | `components/ui/reasoning.tsx` | solid-glass `src/components/ui/reasoning.tsx`（套了 patch，見「本地修改」第 67、68 條） | ④（#1683） |
 | `components/ui/{turn-status,status-glyph}.tsx` | solid-glass `src/components/ui/` 同名檔（兩個都套了 patch，見「本地修改」第 71、72 條；status-glyph 是 turn-status import 的） | ④（#1684） |
+| `components/ui/{dot-loader,empty}.tsx` | solid-glass `src/components/ui/` 同名檔 | ⑤（#1695，PR A） |
 | `shadcn/tailwind.css` | shadcn `dist/tailwind.css` | ③-1（#1523） |
 | `shadcn/LICENSE.md` | shadcn `LICENSE.md`（MIT） | ③-1（#1523） |
 

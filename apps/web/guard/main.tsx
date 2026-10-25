@@ -64,6 +64,9 @@
  * - `?overlay=diff-stats` 畫增刪行數（SG 的 `DiffStats`＋nexus 包裝層，#1685 PR A）：頁面上一顆、工具段裡寫檔那張卡、改動卡（讀假的
  *   fetch，路徑故意很長）；測試再點開審查頁與選檔器。量 `+`／`−` 在四種底上的對比、算出來的顏色是 `--success`／`--destructive`（第 75 條）、
  *   375 寬不被擠（第 76 條）；三塊各包一層 `data-guard-diffstats`（`page`、`panel`、`changes`）。
+ * - `?overlay=transcript-rows` 畫對話流裡用到 SG `DotLoader`／`Empty` 的三種列（#1695 PR A）：輪尾的重試提示、往前翻的待命／讀取中／
+ *   失敗三格（各包一層 `data-guard-pager`，寬度同 `App.tsx` 的對話欄，最寬 42rem），一格按得動的往前翻（`live`：按下去讀取
+ *   300ms 再回到待命），以及空白畫面。量字的對比、焦點、點的大小與顏色、減少動態時停住，待命、讀取中與 `live` 一樣高。
  * - `?overlay=transcript-refs` 畫產品的 `Transcript`（#1695 PR B）：一則人話帶兩個會話引用（`@部署腳本除錯` 能點、`@月報` 不能點）、
  *   一則壓縮標記與一則決定紀錄（置中的 chip），前面墊幾輪對話讓它捲得動（捲到底的鈕）；底下一條斷線中的狀態列（「立刻重連」）
  *   與封存橫幅。
@@ -88,6 +91,9 @@ import { createRoot } from 'react-dom/client';
 
 import { ArchivedBanner } from '@/components/archived-banner';
 import { CompactionRow } from '@/components/compaction-row';
+import { EarlierPager } from '@/components/earlier-pager';
+import type { EarlierHistory } from '@/components/earlier-pager';
+import { EmptyHero } from '@/components/empty-hero';
 import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
@@ -839,6 +845,54 @@ function runningState(activity: string) {
   return { ...state, status: 'running' as const, entries: TURN_ENTRIES[activity] ?? [] };
 }
 
+function LivePager() {
+  const [loading, setLoading] = useState(false);
+  const earlier: EarlierHistory = {
+    hasMore: true,
+    loading,
+    onLoad: () => {
+      setLoading(true);
+      setTimeout(() => setLoading(false), 300);
+    },
+  };
+  return <EarlierPager earlier={earlier} />;
+}
+
+function TranscriptRowsPage() {
+  const idle = { hasMore: true, loading: false, onLoad: () => undefined };
+  const pagers: [string, EarlierHistory][] = [
+    ['idle', idle],
+    ['loading', { ...idle, loading: true }],
+    ['fail', { ...idle, error: '連線中斷' }],
+  ];
+  return (
+    <div
+      style={{
+        maxWidth: '42rem',
+        margin: '0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div data-guard-rows="retry" style={{ padding: '16px 24px 0' }}>
+        <RetryNotice retry={RETRY} />
+      </div>
+      {pagers.map(([name, earlier]) => (
+        <div key={name} data-guard-pager={name}>
+          <EarlierPager earlier={earlier} />
+        </div>
+      ))}
+      <div data-guard-pager="live">
+        <LivePager />
+      </div>
+      <div data-guard-rows="empty" style={{ display: 'flex', minHeight: 320, padding: '0 24px' }}>
+        <EmptyHero />
+      </div>
+    </div>
+  );
+}
+
 function TurnStatusPage() {
   const [activity, setActivity] = useState('thinking');
   useState(() => {
@@ -1376,6 +1430,8 @@ function OverlayPage({ name }: { name: string }) {
       return <DiffViewPage />;
     case 'turn-status':
       return <TurnStatusPage />;
+    case 'transcript-rows':
+      return <TranscriptRowsPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

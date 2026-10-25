@@ -432,8 +432,10 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
 
     fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
-    const loading = await screen.findByRole('button', { name: LOADING_EARLIER_LABEL });
-    expect((loading as HTMLButtonElement).disabled).toBe(true);
+    const loading = await screen.findByText(LOADING_EARLIER_LABEL);
+    expect(loading.closest('button')).toBeNull();
+    expect(loading.querySelectorAll('.animate-dot-flash')).toHaveLength(3);
+    expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
 
     release?.();
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());

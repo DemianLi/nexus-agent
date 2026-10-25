@@ -16,13 +16,15 @@
  * @module
  */
 
+import { ArrowUp, RefreshCw } from 'lucide-react';
 import { useCallback, useRef } from 'react';
 import type { KeyboardEvent, TouchEvent, UIEvent, WheelEvent } from 'react';
 
 import { Button } from '@/components/ui/button';
+import { DotLoader } from '@/components/ui/dot-loader';
 
 export const LOAD_EARLIER_LABEL = '載入更早的對話';
-export const LOADING_EARLIER_LABEL = '讀取中…';
+export const LOADING_EARLIER_LABEL = '讀取中';
 export const RETRY_EARLIER_LABEL = '再試一次';
 
 /** 離頂端多近算「到了」。 */
@@ -52,24 +54,26 @@ export function earlierLoadedNotice(loaded: number | undefined): string {
 
 export function EarlierPager({ earlier }: { earlier: EarlierHistory }) {
   const failed = earlier.error !== undefined;
+  // 讀取中畫 SG 的 DotLoader 加字（#1695 X4-B）。內層的最小高度等於 sm 鈕（vendor Button 的 `h-7`），待命與讀取中一樣高，
+  // 接上一頁之前畫面不跳。
   return (
-    <div className="mx-auto flex w-full max-w-2xl flex-col items-center gap-1 px-6 pt-4">
-      <Button
-        type="button"
-        variant="ghost"
-        size="sm"
-        disabled={earlier.loading}
-        onClick={earlier.onLoad}
-      >
-        {earlier.loading
-          ? LOADING_EARLIER_LABEL
-          : failed
-            ? RETRY_EARLIER_LABEL
-            : LOAD_EARLIER_LABEL}
-      </Button>
-      {failed && !earlier.loading && (
-        <p className="text-destructive text-center text-tip">讀不到更早的對話：{earlier.error}</p>
-      )}
+    <div className="mx-auto w-full max-w-2xl px-6 pt-4">
+      <div className="flex min-h-7 flex-wrap items-center justify-center gap-2">
+        {earlier.loading ? (
+          <span className="text-muted-foreground flex items-center gap-2 text-ui">
+            <DotLoader />
+            {LOADING_EARLIER_LABEL}
+          </span>
+        ) : (
+          <Button type="button" variant="outline" size="sm" onClick={earlier.onLoad}>
+            {failed ? <RefreshCw aria-hidden /> : <ArrowUp aria-hidden />}
+            {failed ? RETRY_EARLIER_LABEL : LOAD_EARLIER_LABEL}
+          </Button>
+        )}
+        {failed && !earlier.loading && (
+          <p className="text-destructive text-center text-tip">讀不到更早的對話：{earlier.error}</p>
+        )}
+      </div>
     </div>
   );
 }

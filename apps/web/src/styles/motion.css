@@ -1,8 +1,7 @@
 /*
  * 動效：token、模式清單、keyframes、reduced-motion。現行規則見 `.docs/web-ui-spec.md` §7；
- * 從原型 tag `proto-375-design-language` 的 `prototype-375/tokens.css` 搬來（#401），原型的
- * `proto-*` class 改名（`agent-orb`、`border-beam`、`text-shimmer`、`stream-caret`），`data-reduce-motion` 模擬
- * 改成真的 media query，CPU 降速退路拿掉（量過 60fps，規格說不需要）。
+ * 從原型 tag `proto-375-design-language` 的 `prototype-375/tokens.css` 搬來（#401）。原型的 `proto-*` class 在這裡去掉前綴
+ * （`border-beam`、`text-shimmer`、`stream-caret`）；reduced-motion 只認 media query，沒有 CPU 降速的退路（量過 60fps，規格說不需要）。
  *
  * 進出場的 `--animate-in`／`--animate-out`：`index.css` 的 `@theme` 讓 Tailwind 產出 `animation: var(--animate-in)`，
  * 值在本檔的「進出場」那段逐元素宣告（#1687）；reduced-motion 換成本檔的 `motion-fade-in`／`motion-fade-out`。
@@ -217,50 +216,6 @@
   }
 }
 
-/* ── 持續狀態：orb（只剩空白 hero 的 breathing；狀態列的 working 隨 #1684 換成 SG 的 StatusGlyph）── */
-
-.agent-orb {
-  --orb-size: 20px;
-  position: relative;
-  display: inline-block;
-  flex-shrink: 0;
-  width: var(--orb-size);
-  height: var(--orb-size);
-  color: var(--foreground);
-}
-
-.agent-orb::before,
-.agent-orb::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: 9999px;
-}
-
-/* 點陣圓：用 radial-gradient 鋪點，再用圓形遮罩切成球 */
-.agent-orb::before {
-  background: radial-gradient(circle, currentColor 0.9px, transparent 1.3px) 0 0 / 4px 4px;
-  mask: radial-gradient(circle, #000 55%, transparent 72%);
-  opacity: 0.85;
-}
-
-.agent-orb::after {
-  border: 1.5px dotted currentColor;
-  opacity: 0.35;
-}
-
-.agent-orb[data-state='breathing']::before,
-.agent-orb[data-state='breathing']::after {
-  animation: motion-orb-breathe 3s ease-in-out infinite;
-}
-
-@keyframes motion-orb-breathe {
-  50% {
-    transform: scale(0.82);
-    opacity: 0.5;
-  }
-}
-
 /* ── 持續狀態：邊框光（靜態值在 theme.css，這裡只管怎麼動）── */
 
 .border-beam {
@@ -352,9 +307,9 @@
  * ── reduced-motion：不是全關 ──
  * 位移／縮放／模糊拿掉，留 150 的透明度；尺寸瞬間到位；循環動畫停在一格；狀態不靠動效表達。
  *
- * 每條都帶 `:root:root` 前綴：補回原型 `:root[data-reduce-motion]` 的 (0,2,0) specificity。拿掉它，
- * `.agent-orb[data-state='breathing']::before`、`[data-kind='pending'][data-active='true']` 這類帶狀態的選擇器
- * 就比這裡的強，reduced-motion 會無聲失效（`scripts/check-built-css.mjs` 比對 specificity）。
+ * 每條都帶 `:root:root` 前綴，多出 (0,2,0) 的 specificity。拿掉它，`.border-beam[data-kind='pending'][data-active='true']::before`
+ * 這類帶狀態的選擇器（(0,3,1)）就比這裡的 `.border-beam::before`（(0,1,1)）強，reduced-motion 會無聲失效
+ * （`scripts/check-built-css.mjs` 比對 specificity）。
  */
 @media (prefers-reduced-motion: reduce) {
   :root:root {
@@ -408,21 +363,12 @@
 
   /* 循環動畫停在一格 */
   :root:root .stream-caret,
-  :root:root .agent-orb::before,
-  :root:root .agent-orb::after,
   :root:root .border-beam::before,
   :root:root .border-beam::after,
   :root:root .text-shimmer,
   :root:root .animate-spin,
   :root:root .animate-pulse {
     animation: none;
-  }
-
-  /* orb：breathing 停在呼吸中段 */
-  :root:root .agent-orb[data-state='breathing']::before,
-  :root:root .agent-orb[data-state='breathing']::after {
-    transform: scale(0.91);
-    opacity: 0.7;
   }
 
   /* shimmer 退成一般次要文字 */

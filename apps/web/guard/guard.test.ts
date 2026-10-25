@@ -64,14 +64,16 @@ import { startGuardServer, type GuardServer } from './server';
  * 18. **工具卡的 diff**（#1685 PR B，`?overlay=diff-view`，產品的 `ToolRun`＋`ToolCard`）：SG `DiffView` 每一種行（`diff --git`、`@@`、
  *    新增、刪除、上下文、`... 還有 N 行沒畫`）在 `StepList` 裡與單獨放在頁面上都過 4.5；疊在清單裡的沒有 blur、單獨的照 SG 有（第 65 條）；
  *    聚焦時 2px 外框沒被切掉、方向鍵捲得動（patch `0024`）。
- * 19. **會話引用與 G2 圓角**（#1695 PR B，`?overlay=transcript-refs`，產品的 `Transcript`＋`StatusLine`）：能點的引用一直帶 brand 色底線、
+ * 19. **對話流裡的列**（#1695 PR A，`?overlay=transcript-rows`）：重試提示、往前翻、空白畫面的字過 4.5，往前翻兩顆鈕的焦點外框；
+ *    SG `DotLoader` 的點 3px、`--status-running` 色，平常在閃、減少動態時停在全亮；往前翻待命與讀取中一樣高，375 與 1280 寬不橫向溢出。
+ * 20. **會話引用與 G2 圓角**（#1695 PR B，`?overlay=transcript-refs`，產品的 `Transcript`＋`StatusLine`）：能點的引用一直帶 brand 色底線、
  *    底線對泡泡底過 3，不能點的沒有底線；兩種引用與決定紀錄 chip 的字過 4.5；引用與「立刻重連」的焦點外框；決定紀錄的 chip 是 SG Badge 的圓角，
  *    捲到底的鈕與「立刻重連」是 SG Button 的圓角。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
  *
- * 量不到的：brand 當字色與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（例外：`DiffStats` 的增刪數用到 success／destructive，覆寫檔第 75 條；會話引用的底線用到 brand，見第 19 條，只量底線、不量字色），
+ * 量不到的：brand 當字色與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（例外：`DiffStats` 的增刪數用到 success／destructive（覆寫檔第 75 條）、`DotLoader` 的點用到 status-running（這裡只量色值是那個 token）、會話引用的底線用到 brand（第 20 條，只量底線、不量字色）），
  * 由靜態那一層（`tokens-contrast.test.ts`）量。
  *
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
@@ -4121,6 +4123,143 @@ describe('瀏覽器量工具卡的 diff 的覆寫與焦點（#1685 PR B）', () 
     },
   );
 });
+
+/**
+ * 對話流裡的列（#1695 PR A，`?overlay=transcript-rows`）：重試提示（X3-B）、往前翻（X4-B）、空白畫面（E1-C）。
+ * 字過 4.5、往前翻兩顆鈕的焦點外框；SG `DotLoader` 的點是 3px、`--status-running` 色，平常在閃、減少動態時停在全亮；
+ * 往前翻待命與讀取中一樣高（接上一頁之前畫面不跳）。
+ */
+const transcriptRowMarks: Record<string, Record<string, string>> = {
+  '[data-guard-rows="retry"] [data-testid="llm-retry"] > span[aria-hidden]': {
+    'data-guard-text': 'retry-text',
+  },
+  '[data-guard-pager="idle"] button': {
+    'data-guard-text': 'pager-idle',
+    'data-guard-focus': 'pager-idle',
+  },
+  '[data-guard-pager="loading"] span:has(> span > .animate-dot-flash)': {
+    'data-guard-text': 'pager-loading',
+  },
+  '[data-guard-pager="fail"] button': {
+    'data-guard-text': 'pager-fail',
+    'data-guard-focus': 'pager-fail',
+  },
+  '[data-guard-pager="fail"] p': { 'data-guard-text': 'pager-error' },
+  '[data-slot="empty-title"]': { 'data-guard-text': 'empty-title' },
+  '[data-slot="empty-description"]': { 'data-guard-text': 'empty-description' },
+};
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量對話流裡的列（#1695 PR A）：%s', (theme) => {
+  test('字過 4.5，往前翻的鈕聚焦時是 2px 外框', async () => {
+    const page = await openOverlay('transcript-rows', theme, { marks: transcriptRowMarks });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        [
+          'retry-text',
+          'pager-idle',
+          'pager-loading',
+          'pager-fail',
+          'pager-error',
+          'empty-title',
+          'empty-description',
+        ],
+        `transcript-rows:${theme}`,
+      );
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual(['pager-idle-0', 'pager-fail-0']);
+      expectFocus(focus, `transcript-rows:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([false, true])(
+    'DotLoader 的點：3px、status-running 色；減少動態 %s 時停在全亮',
+    async (reducedMotion) => {
+      const page = await openOverlay('transcript-rows', theme, {
+        reducedMotion,
+        marks: transcriptRowMarks,
+      });
+      try {
+        const dots = await page.evaluate(() => {
+          const probe = document.createElement('span');
+          probe.style.backgroundColor = 'var(--status-running)';
+          document.body.append(probe);
+          const running = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return [...document.querySelectorAll('.animate-dot-flash')].map((dot) => {
+            const style = getComputedStyle(dot);
+            const box = dot.getBoundingClientRect();
+            return {
+              where: dot
+                .closest('[data-guard-rows], [data-guard-pager]')
+                ?.getAttribute(
+                  dot.closest('[data-guard-rows]') === null
+                    ? 'data-guard-pager'
+                    : 'data-guard-rows',
+                ),
+              width: box.width,
+              height: box.height,
+              color: style.backgroundColor,
+              running,
+              animationName: style.animationName,
+              opacity: style.opacity,
+            };
+          });
+        });
+        report[`transcript-rows:${theme}:dots:${reducedMotion ? 'reduced' : 'normal'}`] = dots;
+        // 量具自檢：重試提示三個、往前翻讀取中三個。
+        expect(dots.map((d) => d.where)).toEqual([
+          'retry',
+          'retry',
+          'retry',
+          'loading',
+          'loading',
+          'loading',
+        ]);
+        expect(
+          dots.filter((d) => d.width !== 3 || d.height !== 3 || d.color !== d.running),
+        ).toEqual([]);
+        if (reducedMotion)
+          expect(dots.filter((d) => d.animationName !== 'none' || d.opacity !== '1')).toEqual([]);
+        else expect(dots.filter((d) => d.animationName !== 'sg-dot-flash')).toEqual([]);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+});
+
+test.each([375, 1280])(
+  '往前翻：寬 %ipx 時待命與讀取中一樣高、頁面不橫向溢出（#1695 X4-B）',
+  async (width) => {
+    const page = await openOverlay('transcript-rows', 'light', {
+      viewport: { width, height: 1000 },
+      marks: transcriptRowMarks,
+    });
+    try {
+      const heights = await page.evaluate(() =>
+        Object.fromEntries(
+          [...document.querySelectorAll('[data-guard-pager]')].map((el) => [
+            el.getAttribute('data-guard-pager'),
+            el.getBoundingClientRect().height,
+          ]),
+        ),
+      );
+      report[`transcript-rows:pager-heights:${width}`] = heights;
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBe(0);
+      expect(heights.idle).toBeGreaterThan(0);
+      expect(heights.loading).toBe(heights.idle);
+      expect(heights.live).toBe(heights.idle);
+    } finally {
+      await page.close();
+    }
+  },
+);
 
 /**
  * 會話引用與 G2 圓角（#1695 PR B，`?overlay=transcript-refs`）。能點的引用不靠 hover 也看得出來：一直帶 brand 色底線，底線對
