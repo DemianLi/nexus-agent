@@ -120,6 +120,7 @@ import type { RipgrepInternals, RipgrepTool } from './ripgrep-runner.js';
 import { pageOf, scanWindow, ScanAborted } from './text-window.js';
 import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 import type {
+  FileVersionLookup,
   FsErrorCode,
   SandboxDenial,
   SearchErrorCode,
@@ -452,7 +453,7 @@ export const READ_STREAM_MIN_SIZE = 10 * 1024 * 1024;
 const READ_ABORTED = 'read aborted';
 
 /**
- * 檔案的版本 token，照 dsh `dev:ino:size:mtimeNs:ctimeNs`（`packages/fs/fs-local/src/fsio.ts:76-78`，`22ddee37`）。不透明，消費端只比相等。
+ * 檔案的版本 token：`dev:ino:size:mtimeNs:ctimeNs`。不透明，消費端只比相等。同一個時間戳粒度內改成等長的內容認不出來。
  *
  * @param info - `bigint: true` 的 stat。
  */
@@ -625,7 +626,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * @param filePath - 虛擬路徑。
    */
-  async [FILE_VERSION](filePath: string): Promise<{ kind: 'present'; version: string } | { kind: 'absent' }> {
+  async [FILE_VERSION](filePath: string): Promise<FileVersionLookup> {
     const info = await lstat(this.resolveVirtual(filePath), { bigint: true });
     return info.isFile() ? { kind: 'present', version: statVersion(info) } : { kind: 'absent' };
   }

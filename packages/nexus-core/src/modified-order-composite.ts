@@ -1,5 +1,6 @@
 /**
- * 把 `glob` 的結果照**修改時間（舊的在前）**交給模型的 `CompositeBackend`（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0345）。
+ * 產品用的 `CompositeBackend`：`glob` 的結果照**修改時間（舊的在前）**交給模型（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0345），
+ * 並把 {@link FILE_VERSION} 照路由轉給子 backend（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。
  *
  * ## 為什麼要有它
  *
@@ -37,7 +38,7 @@ function byModifiedAt(a: GlobEntry, b: GlobEntry): number {
 }
 
 /**
- * 結果照修改時間排的 `CompositeBackend`，見檔頭。其餘方法與基座逐位元組相同。
+ * `glob` 照修改時間排、{@link FILE_VERSION} 照路由轉的 `CompositeBackend`，見檔頭。其餘方法與基座逐位元組相同。
  *
  * `modified_at` 是 `Date.prototype.toISOString()` 的形狀（基座與 `ContainedFilesystemBackend` 都是），字串比較等於時間比較。
  */
@@ -45,6 +46,7 @@ export class ModifiedOrderCompositeBackend extends CompositeBackend {
   /**
    * 基座建構時把每個子 backend 換成轉接物件（`adaptBackendProtocol`），{@link FILE_VERSION} 這類基座不認得的方法會掉。
    * 這裡記「轉接物件 → 交進來的原物件」，路由仍走基座的 `getBackendAndKey`，只在最後換回原物件。
+   * 讀的是基座私有的 `default`／`routes`；基座改了欄位名，這張表就是空的，每一格都退回 `readRaw`（只變慢，不放寬比對）。
    */
   private readonly originals = new Map<unknown, AnyBackendProtocol>();
 
@@ -67,9 +69,10 @@ export class ModifiedOrderCompositeBackend extends CompositeBackend {
 
   /**
    * stat 版本照路由分派（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）：前綴剝法跟 `readRaw` 同一支 `getBackendAndKey`，
-   * 子 backend 沒有這一格就回 `undefined`，observation 退回整份 `readRaw`。巢狀的 composite 一層層照轉。
+   * 子 backend 沒有這一格就回 `undefined`，observation 退回整份 `readRaw`。子 backend 也是這個類別時一層層照轉；基座的 `CompositeBackend`
+   * 沒有這一格，接在它底下的都退回 `readRaw`。
    *
-   * @param path - 模型給的原路徑。
+   * @param path - 這一層座標系的路徑（最外層是模型給的原路徑）。
    */
   async [FILE_VERSION](path: string): Promise<FileVersionLookup> {
     const [backend, key] = (

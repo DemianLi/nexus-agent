@@ -30,13 +30,12 @@
  * 之間有縫。這跟 `ContainedFilesystemBackend` 已經明文接受的那條同型（policy fence，
  * 不是 kernel boundary）。
  *
- * **讀檔記的版本可以由 backend 回報**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：`read_file` 成功之後
- * 本來要再 `readRaw` 一次才有版本，等於同一個檔讀兩遍（大檔更糟）。backend 讀的時候就把版本交上來（{@link noteReadVersion}），
- * 這裡就記它，不再讀；沒回報的照舊。回報的與寫前比對的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
+ * **讀檔記的版本可以由 backend 回報**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：backend 讀的時候就把版本交上來
+ * （{@link noteReadVersion}），這裡記它，不必為了版本再問一次。沒回報的，由 `look` 問：先 {@link FILE_VERSION}，再 `readRaw`。
+ * 回報的與寫前比對的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
  *
- * **寫與改前的比對只做 stat**（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）：掛了 {@link FILE_VERSION} 的 backend
- * 用 stat 組版本，不讀內容；圍堵 backend 的 token 照 dsh `dev:ino:size:mtimeNs:ctimeNs`（`fs-local/src/fsio.ts:76-78`），`read_file` 回報的也是它。
- * 沒有這一格的 backend 照舊整份 `readRaw` 算 {@link versionOf}。
+ * **寫與改前的比對先問 stat**（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）：掛了 {@link FILE_VERSION} 的 backend
+ * 用 stat 組版本、不讀內容，token 的形狀由 backend 自己決定。沒有這一格的 backend 整份 `readRaw`，算 {@link versionOf}。
  *
  * **規則寫在系統提示詞，照 dsh**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。dsh 的 `write`、`edit` 各用一個
  * `ctx.systemPrompt.section`（`packages/fs/tool-fs/src/write.ts:63-71`、`edit.ts:76-83`，`687f282e`），工具在場才寫：
@@ -129,8 +128,7 @@ const STALE_VERSION = 'FS_STALE_VERSION';
 /**
  * 把 `FileData` 折成一個不透明的版本 token。
  *
- * dsh 的本地後端用的是 `dev:ino:size:mtimeNs:ctimeNs`（`fs-local/src/fsio.ts:75`）——
- * 一個由後端自己組出來、消費端不得解讀的複合字串。我們手上只有 `modified_at`
+ * 給沒有 {@link FILE_VERSION} 的 backend 用。`FileData` 上只有 `modified_at`
  * （ISO 8601，毫秒），**單靠它會在同一毫秒內的兩次寫入上撞號**，所以再併上長度與一個
  * 便宜的內容雜湊。內容本來就在 `readRaw` 的回傳裡，不必多讀一次。
  *
@@ -149,11 +147,9 @@ function versionOf(data: unknown): string {
 /**
  * `FileData.content` 在 v1 是行陣列、v2 是字串或位元組。認不得的一律當空字串。
  *
- * **位元組要解碼**（[#1776](https://github.com/DemianLi/nexus-agent/issues/1776)）：基座對非文字副檔名（`.png`…）的 `readRaw` 回位元組，
- * 而 backend 的 `read_file` 看內容不看副檔名（#1530），內容是文字的 `notes.png` 讀得到、回報的版本是對解碼後的文字算的。
- * 這裡若把位元組當空字串，寫與改前的比對永遠對不上那個版本，模型被「在你讀過之後被改動了」叫去一直重讀。
- * 所以位元組用同一套規則解碼：fatal UTF-8、**開頭的 BOM 留著**（`ignoreBOM: true`，與 `contained-backend.ts` 的整份解碼一致，
- * 回報版本的 backend 也是這樣算）；解不開的（真的二進位檔）仍是空字串——那一格只剩 `modified_at` 的弱點，同上面 {@link versionOf} 所述。
+ * **位元組要解碼**（[#1776](https://github.com/DemianLi/nexus-agent/issues/1776)）：基座對非文字副檔名（`.png`…）的 `readRaw` 回位元組。
+ * 當成空字串的話，版本只剩 `modified_at`，同一毫秒內的改寫抓不到。所以位元組解碼：fatal UTF-8、開頭的 BOM 留著（`ignoreBOM: true`）；
+ * 解不開的（真的二進位檔）仍是空字串——那一格只剩 `modified_at` 的弱點，同上面 {@link versionOf} 所述。
  */
 function contentText(content: unknown): string {
   if (typeof content === 'string') return content;
@@ -214,8 +210,8 @@ const currentReadVersion = new AsyncLocalStorage<ReadVersionSlot>();
  * backend 讀完一個檔之後回報版本（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。`read_file` 成功時
  * 「先讀後改」直接記這一個，不必為了記版本再讀一次。不在 `read_file` 裡時什麼都不做。
  *
- * **只有給得出跟寫前比對同一種 token 的 backend 才該叫它**：掛了 {@link FILE_VERSION} 的，回報那一格會給的 stat token
- * （圍堵 backend 用讀內容的那個 fd 的 stat，#2030）；沒掛的，回報 {@link versionOf} 會算出來的那個。沒有回報的 backend 照舊，observation 自己問。
+ * **只有掛了 {@link FILE_VERSION} 的 backend 才該叫它**，而且回報的要是那一格會給的同一個 token（讀內容的那個已開檔的 stat）。
+ * 沒有回報的，observation 自己問（`look`）。
  *
  * @param version - 版本 token。
  */
@@ -228,32 +224,32 @@ export function noteReadVersion(version: string): void {
  * backend 不讀內容、只看 stat 就給得出版本的那個方法（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。
  * 基座的 `BackendProtocol` 沒有這一格，所以掛在一個 symbol 上，不跟基座日後的方法名撞。
  *
- * 實作了它的 backend，寫與改前的比對只做 stat；沒實作的（記憶體的 `StateBackend`、插件掛的路由）照舊整份 `readRaw` 算 {@link versionOf}。
+ * 實作了它的 backend，寫與改前的比對只做 stat；沒實作的（例如記憶體的 `StateBackend`）整份 `readRaw` 算 {@link versionOf}。
  * **同一個 backend 的 `read_file` 回報（{@link noteReadVersion}）必須是同一種 token**，否則讀完就改會被當成「讀過之後被改動了」。
+ * 拋錯時 observation 收成不存在（只會放行受防護的新建、擋下覆蓋）。stat token 分不出同一個時間戳粒度內的等長改寫，內容雜湊分得出；
+ * 換成 stat 就接受這個盲點。用 `Symbol.for`：同一行程裡有兩份 `@nexus/core`（`lib` 與 `./src/*` 兩條 export、外部插件自帶一份）時仍是同一個。
  */
 export const FILE_VERSION = Symbol.for('nexus.backend.file-version');
 
-/** {@link FILE_VERSION} 的結果：`undefined` 是「這一格回答不了」，由 observation 退回 `readRaw`。 */
+/** {@link FILE_VERSION} 的結果：`absent` 是確認缺席（不存在，或不是一般檔）；`undefined` 是「這一格回答不了」，由 observation 退回 `readRaw`。 */
 export type FileVersionLookup =
-  | { readonly kind: 'present'; readonly version: string }
-  | { readonly kind: 'absent' }
-  | undefined;
+  { readonly kind: 'present'; readonly version: string } | { readonly kind: 'absent' } | undefined;
 
-/** 掛了 {@link FILE_VERSION} 的 backend。 */
+/**
+ * 掛了 {@link FILE_VERSION} 的 backend，契約見那裡。`path` 是這個 backend 自己座標系的路徑：最外層是模型給的原路徑，
+ * composite 往下轉時已剝掉路由前綴。
+ */
 export interface FileVersionSource {
   [FILE_VERSION](path: string): Promise<FileVersionLookup>;
 }
 
 /**
- * 問 backend 這個檔的 stat 版本；沒有這一格就是 `undefined`。
+ * 問 backend 這個檔的 stat 版本；沒有這一格就是 `undefined`。`source` 拋錯原樣往上，由呼叫方決定怎麼收。
  *
  * @param backend - 工具實際讀寫的那個 backend。
- * @param path - 模型給的原路徑。
+ * @param path - 這個 backend 座標系的路徑（從 observation 呼叫時就是模型給的原路徑）。
  */
-export async function fileVersionOf(
-  backend: unknown,
-  path: string,
-): Promise<FileVersionLookup> {
+export async function fileVersionOf(backend: unknown, path: string): Promise<FileVersionLookup> {
   const source = (backend as Partial<FileVersionSource> | null | undefined)?.[FILE_VERSION];
   if (typeof source !== 'function') return undefined;
   return source.call(backend, path);
@@ -371,18 +367,17 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
   const keyOf = (path: string): string => observationKey(backend, path);
 
   /**
-   * 現在這個檔的權威狀態。
+   * 現在這個檔的權威狀態。先問 {@link fileVersionOf}；有答案就用，不讀內容，回 `undefined` 才走 `readRaw`。
    *
-   * **判準是 `'data' in result`**，不是比對錯誤訊息的字面——基座把措辭改一個字，靠字面
+   * **`readRaw` 那一支的判準是 `'data' in result`**，不是比對錯誤訊息的字面——基座把措辭改一個字，靠字面
    * 認的版本就會把「不存在」悄悄讀成「存在」。
    *
    * **拋錯也算不存在，而那不是偷懶。** `readRaw` 的失敗形狀在後端之間不一致：
    * `StateBackend` 回 `{ error }`，落磁碟的那個對缺檔直接拋 `ENOENT`（實測）。
    * 這裡任何一種失敗都收斂成「讀不到」，而讀不到只會讓策略**放行新建、擋下覆蓋**，
-   * 不會放寬任何一格。
+   * 不會放寬任何一格。stat 那一支拋錯也一樣收斂，後果相同。
    */
   const look = async (path: string): Promise<Observation> => {
-    // 給得出 stat 版本的 backend 不讀內容（#2030）。它自己的失敗一樣收斂成「不存在」，理由同下。
     try {
       const stated = await fileVersionOf(backend, path);
       if (stated !== undefined) return stated;

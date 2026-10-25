@@ -353,7 +353,6 @@ export {
 export {
   createObservationPolicy,
   FILE_VERSION,
-  fileVersionOf,
   noteReadVersion,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
   OBSERVATION_POLICY_PLUGIN_NAME,

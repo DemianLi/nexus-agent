@@ -213,7 +213,7 @@ describe('驗收 2b：讀檔回報的版本與寫前比對的一樣——先讀�
     const [result] = await run(backend, [read('/v-pin.txt')]);
     expect(result?.status).toBe('success');
     expect(reportedVersions).toHaveLength(1);
-    // dsh `dev:ino:size:mtimeNs:ctimeNs`（`fs-local/src/fsio.ts:76-78`）。
+    // dev:ino:size:mtimeNs:ctimeNs；size 是 'pin\n' 的 4 位元組。
     expect(reportedVersions[0]).toMatch(/^\d+:\d+:4:\d+:\d+$/);
     expect(await backend[FILE_VERSION]('/v-pin.txt')).toEqual({
       kind: 'present',
