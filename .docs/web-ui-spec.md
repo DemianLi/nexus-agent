@@ -155,10 +155,10 @@
 - 全部 oklch，**語意 token 直接寫值**，不另建色板層；registry 帶進來的 `--sidebar-*` 由 `hsl()` 轉掉。
 - `--primary` **無彩**。`--brand` **只**用在連結、info、核准與提問面板的邊框光；error 沿用 `--destructive`。
 - **帶色相的 token 都是 SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:302-304`）、`--success`（`:199`、`:308`）、`--destructive`、`--status-*`（`:198`、`:307` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。用量環 70% 以下是 `--status-done`（vendor README 本地修改第 37 條）。
-- 原型另加的名字（SG 也沒有）：`--stage`、`--stage-ring`、`--beam-*`。
+- 原型另加的名字（SG 也沒有）：`--beam-*`。
 - **「需要你處理」那一色是 SG 的 `--status-interrupted`**（Q14）：產生器另外要求它疊在 stage 上也過 4.5。
 - **可點的小面用 SG 的面**（#1689）：平常 `--muted`；滑鼠移上去與按著同一階，照 SG ghost 是 `--hover`，字換成 foreground；選中是 SG 的 `.glass-chosen`。
-- **nexus 獨有的顏色**（`stage`，同 vendor README「另外新增」）與原型另加的陰影名字，在 #1497 第 ⑥ 步刪掉，自製元件改用 SG 有的 token（Q11）。刪之前它們的值照下面的目標解，亮暗都要過。
+- **內層底 stage 是 SG 的 `--hover-faint`**（#1689）：加一圈 `--border` 的內框線（`inset 0 0 0 1px`），不用 `.glass-panel`。疊在卡片上的鑑別度不低於原型的 stage（1.05），亮暗差照表面的 ≤ 0.05。畫在上面的字（foreground、次要字、brand、link、destructive、success、status-interrupted）疊在每一疊頁面與每一疊卡片上都過 4.5：產生器對 brand、link、destructive、success、status-interrupted 套這條（解出的值見 `apps/web/tokengen/token-table.md`），foreground 與次要字由 `tokens-contrast.test.ts` 檢查。提問面板裡釘在捲動區底部的那一列要不透明，畫成 hover-faint 疊卡片、疊底色的同一疊。
 
 **對比度目標**（WCAG 2.x；產生器用 colorjs.io 逐對解，不再用 Leonardo）
 - **輸入是 SG 的值**（Q10）：色相、彩度、alpha 照 SG，彩度收進 sRGB，只解明度（步長 0.001）；SG 原值已達標的原樣留。唯一的例外是暗色 `--destructive`，照 SG 原值、不收進 sRGB。逐值的 SG 原值與產物在 `apps/web/tokengen/token-table.md`。

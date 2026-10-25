@@ -1,12 +1,9 @@
 /*
- * nexus 獨有的非顏色 token：stage 的內框線與邊框光，solid-glass 沒有對應的值，所以留著。
+ * nexus 獨有的非顏色 token：邊框光，solid-glass 沒有對應的值，所以留著。
  * 焦點、body 這類機制規則在 `solid-glass.overrides.css`。顏色在 `tokens.generated.css`（產生器輸出，不要手改）。
  */
 
-/* 邊緣畫在陰影裡：同一個元素不同時用 border 與陰影（`src/styles/border-shadow.test.ts` 會擋）。 */
 :root {
-  --stage-ring: inset 0 0 0 1px var(--border);
-
   /* 邊框光的靜態值：brand 在白底上對比低，亮色線粗、光暈濃、呼吸下限高 */
   --beam-width: 2px;
   --beam-glow: color-mix(in oklab, var(--brand), transparent 40%);

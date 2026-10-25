@@ -18,7 +18,7 @@
 
 - **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-muted`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。
 - **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。
-- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card rounded-3xl`、`bg-card border rounded-3xl`。
+- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]`、`bg-card rounded-3xl`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`（照 SG 朝右、打開轉 90 度，#1687），不手寫 `transition-transform … rotate-90`（或跟著 `data-state=open` 轉的 `rotate-*`）。
 - **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-muted … w-full … text-left … min-h-11`。
 - **對話泡泡**：用 `ChatBubble`，不手寫 `rounded-3xl px-4 py-2.5`。

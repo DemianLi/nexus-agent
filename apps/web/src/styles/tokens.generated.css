@@ -1,15 +1,15 @@
 /* 由 tokengen/generate.mjs 產生，不要手改。只放要覆寫 solid-glass 的 token，亮暗成對（#1512）。 */
 
 :root {
-  --brand: oklch(0.489 0.102 165);
+  --brand: oklch(0.467 0.098 165);
   --destructive: oklch(0.45 0.183 27.325);
   --success: oklch(0.454 0.119 152);
   --status-done: oklch(0.467 0.125 248);
   --status-interrupted: oklch(0.476 0.113 58);
   --status-running: oklch(0.468 0 0);
+  --link: oklch(0.483 0.159 255);
   --card: oklch(0.981 0.004 265 / 60%);
   --border: oklch(0.294 0.02 265 / 13%);
-  --stage: oklch(0.9423 0 0);
   --ring: oklch(0.16 0 0);
   --sidebar-ring: oklch(0.16 0 0);
 }
@@ -21,9 +21,9 @@
   --status-done: oklch(0.68 0.15 250);
   --status-interrupted: oklch(0.77 0.15 62);
   --status-running: oklch(0.72 0 0);
+  --link: oklch(0.76 0.12 250);
   --card: oklch(0.31 0 0 / 46%);
   --border: oklch(1 0 0 / 11%);
-  --stage: oklch(0.2119 0 0);
   --ring: oklch(0.985 0 0);
   --sidebar-ring: oklch(0.985 0 0);
 }
