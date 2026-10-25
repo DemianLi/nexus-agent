@@ -18,6 +18,11 @@ v0.5.19 的摘要器在 token 門檻觸發、摘要完之後不再量，就算�
 ## 遷移
 
 1. 新行為就是要的：不用改。
-2. 要維持 v0.5.19 的行為（摘要一次就送、不多打模型）：在 `summarization` 那一列的 `config` 加一行 `compactionRetries: 0`。
-   在 home 的 `cordis.patch.yml` 裡、升級時會被遷進變更紀錄的，升級後用 `plugin config set summarization --file -` 整份換掉；在 `--patch` 檔裡的直接改檔。
+2. 要維持 v0.5.19 的行為（摘要一次就送、不多打模型）：`summarization` 那一列的 `config` 要多一格 `compactionRetries: 0`。
+   `config` 是**整份替換**：只寫 `compactionRetries: 0`，沒寫的 `trigger`、`retainRatio`、`truncateArgs`、`historyPathPrefix` 都回到預設。
+   所以要把這一列現在的整份 `config` 照抄，再加上這一格：
+   - 用 `plugin config set summarization --file -` 改的（含升級時從 home 的 `cordis.patch.yml` 遷進變更紀錄的）：內容寫整份，例如出貨的那份是
+     `{"trigger": [{"type": "tokens", "value": 100000}, {"type": "messages", "value": 60}], "retainRatio": 0.16, "truncateArgs": {"trigger": {"type": "messages", "value": 20}, "keep": {"type": "messages", "value": 20}}, "historyPathPrefix": "/conversation_history", "compactionRetries": 0}`，
+     你改過的值換成你自己的；
+   - 在 `--patch` 檔裡寫這一列的：在它的 `config` 底下加 `compactionRetries: 0`，其他鍵原樣留著。
 3. 確認：`--dump-config` 的 `summarization` 那一列有 `compactionRetries`，值是你要的那一個。
