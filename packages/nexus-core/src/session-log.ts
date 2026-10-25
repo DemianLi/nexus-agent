@@ -448,7 +448,7 @@ export interface SessionEventMap {
     | {
         readonly kind: 'subagent-settled';
         /**
-         * 送進模型的那一串字：一行摘要，加上子代理最後一則回覆的非空文字（沒有就是 `It left no closing message.`）。
+         * 送進模型的那一串字：一行摘要，加上子代理最後一則回覆的非空文字（沒有就是 `It left no closing message.`，收尾前剛傳過結果就是省略結尾的那一句）。
          * **這一份與圖那一份是同一個值**。
          */
         readonly text: string;

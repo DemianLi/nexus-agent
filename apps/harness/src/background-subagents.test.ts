@@ -1683,12 +1683,18 @@ describe('產品組裝上的背景子代理', () => {
 // ───────────────────────────── 結算通知（#840） ─────────────────────────────
 
 describe('結算通知（#840）', () => {
-  type Script = (text: string, signal: AbortSignal, log: SessionLog) => Promise<void> | void;
+  type Script = (
+    text: string,
+    signal: AbortSignal,
+    log: SessionLog,
+    inbox: StepInbox,
+  ) => Promise<void> | void;
 
-  /** 假 agent：腳本拿得到這一輪的中止訊號與子代理自己的日誌（可以往裡記回覆）。 */
+  /** 假 agent：腳本拿得到這一輪的中止訊號、子代理自己的日誌（可以往裡記回覆）與插話收件匣。 */
   function setup(script: Script, options: { readonly throwOnSettled?: boolean } = {}) {
     const sessions = new SessionRegistry('root-1');
     const settlements: BackgroundSettlement[] = [];
+    const messages: BackgroundAgentMessage[] = [];
     const order: string[] = [];
     const warnings: string[] = [];
     const agent: BackgroundAgent = {
@@ -1701,6 +1707,7 @@ describe('結算通知（#840）', () => {
           text,
           config.configurable[TURN_CANCEL_CONFIG_KEY] as AbortSignal,
           sessions.get({ kind: 'subagent', runId })!,
+          stepInboxOf({ configurable: config.configurable })!,
         );
         return (async function* () {})() as never;
       },
@@ -1714,8 +1721,9 @@ describe('結算通知（#840）', () => {
         settlements.push(settlement);
         if (options.throwOnSettled === true) throw new Error('主對話收線了');
       },
+      onMessage: (message) => messages.push(message),
     });
-    return { host, sessions, settlements, order, warnings };
+    return { host, sessions, settlements, messages, order, warnings };
   }
 
   const reply = (
@@ -1944,6 +1952,133 @@ describe('結算通知（#840）', () => {
       expect(settlements).toHaveLength(2);
       expect(settlements[1]?.reason).toBe('error');
       expect(settlements[1]?.text).toMatch(/It left no closing message\.$/);
+      await host.close();
+    });
+  });
+
+  describe('收尾前剛傳過結果：結尾文字換成省略的那一句（#2032）', () => {
+    const OMITTED =
+      'It sent you a message just before finishing, so its closing message is omitted.';
+    const runIdOf = (log: SessionLog) => log.sessionId.slice('root-1/'.length);
+    /** 一顆工具呼叫的前後兩筆，形狀同圍堵記的（`containment.ts` 的 `recordToolCall`）。 */
+    const toolCall = (
+      log: SessionLog,
+      callId: string,
+      name: string,
+      body: () => void = () => {},
+    ) => {
+      log.append('tool/call', { callId, name, arguments: '{}' });
+      body();
+      log.append('tool/result', { callId, isError: false });
+    };
+    /** 照 send_message 工具：先記 `tool/call`，工具本體裡送達，再記結果。 */
+    const sendToParent = (host: BackgroundSubagentHost, log: SessionLog, message: string) =>
+      toolCall(log, `send-${message}`, 'send_message', () =>
+        host.sendToParent({ runId: runIdOf(log), targetId: 'root-1', message }),
+      );
+
+    it('傳完就收尾：沒有結尾全文，換成省略的那一句；摘要不變', async () => {
+      const made = setup((_text, _signal, log) => {
+        sendToParent(made.host, log, '結果：三個檔案');
+        reply(log, '結果：三個檔案（收尾）');
+      });
+      const { host } = made;
+      const started = host.start({ subagent: 'worker', text: '查' });
+      await started.outcome;
+      expect(made.messages).toHaveLength(1);
+      expect(made.settlements[0]?.text).toBe(
+        `Background subagent ${started.runId} finished and will do no further work unless you send it more.` +
+          `\n\n${OMITTED}`,
+      );
+      await host.close();
+    });
+
+    it('傳完又叫了工具才收尾：結尾全文照附', async () => {
+      const made = setup((_text, _signal, log) => {
+        sendToParent(made.host, log, '先報一聲');
+        toolCall(log, 'read-1', 'read_file');
+        reply(log, '讀完了：結論是 B');
+      });
+      const { host } = made;
+      await host.start({ subagent: 'worker', text: '查' }).outcome;
+      expect(made.settlements[0]?.text).toMatch(/\n\nIts closing message:\n讀完了：結論是 B$/);
+      await host.close();
+    });
+
+    it('沒傳過：附結尾全文', async () => {
+      const made = setup((_text, _signal, log) => {
+        toolCall(log, 'read-1', 'read_file');
+        reply(log, '結論是 A');
+      });
+      await made.host.start({ subagent: 'worker', text: '查' }).outcome;
+      expect(made.messages).toEqual([]);
+      expect(made.settlements[0]?.text).toMatch(/\n\nIts closing message:\n結論是 A$/);
+      await made.host.close();
+    });
+
+    it('傳完之後收件匣領走一則插話：結尾全文照附', async () => {
+      const sent = gate();
+      const steered = gate();
+      const made = setup(async (_text, _signal, log, inbox) => {
+        sendToParent(made.host, log, '先報一聲');
+        sent.open();
+        await steered.opened;
+        expect((await inbox.claim()).map((message) => message.text)).toEqual([
+          'Agent root-1 sent a message: 也看 c.ts',
+        ]);
+        reply(log, 'c.ts 也沒問題');
+      });
+      const { host } = made;
+      const started = host.start({ subagent: 'worker', text: '查' });
+      await sent.opened;
+      void host.send({ runId: started.runId, message: '也看 c.ts' });
+      steered.open();
+      await started.outcome;
+      expect(made.settlements[0]?.text).toMatch(/\n\nIts closing message:\nc\.ts 也沒問題$/);
+      await host.close();
+    });
+
+    it('傳完之後窗口關了才到的插話排成同一段的下一輪：結尾全文照附', async () => {
+      const closedWindow = gate();
+      const hold = gate();
+      const made = setup(async (text, _signal, log, inbox) => {
+        if (text.startsWith('Agent')) {
+          reply(log, '第二輪的結論');
+          return;
+        }
+        sendToParent(made.host, log, '先報一聲');
+        expect(await inbox.finish()).toEqual([]);
+        closedWindow.open();
+        await hold.opened;
+        reply(log, '第一輪收尾');
+      });
+      const { host } = made;
+      const started = host.start({ subagent: 'worker', text: '查' });
+      await closedWindow.opened;
+      const next = host.send({ runId: started.runId, message: '也看 c.ts' });
+      hold.open();
+      await started.outcome;
+      await next;
+      // 一段裡跑了兩輪，只結算一次；第二輪開頭只有 `turn/start`，沒有領走的 `user/message`。
+      expect(made.settlements).toHaveLength(1);
+      expect(made.settlements[0]?.text).toMatch(/\n\nIts closing message:\n第二輪的結論$/);
+      await host.close();
+    });
+
+    it('上一段傳過、這一段沒傳：這一段的結尾全文照附（不帶到下一段）', async () => {
+      const made = setup((text, _signal, log) => {
+        if (text === '查') {
+          sendToParent(made.host, log, '第一段的結果');
+          reply(log, '第一段收尾');
+        } else reply(log, '第二段的結論');
+      });
+      const { host } = made;
+      const started = host.start({ subagent: 'worker', text: '查' });
+      await started.outcome;
+      await host.send({ runId: started.runId, message: '再查一次' });
+      expect(
+        made.settlements.map((settlement) => settlement.text.split('\n\n').slice(1).join('\n\n')),
+      ).toEqual([OMITTED, 'Its closing message:\n第二段的結論']);
       await host.close();
     });
   });
