@@ -197,8 +197,8 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
 - **gate**：`.github/scripts/check_upgrade_guides.py`，跑在 `ci.yml` 的 `plan`（純文件 PR 也跑），檢查路徑形狀、
   版本目錄是已存在的 tag、frontmatter 與段落。tag 只驗存在，不驗是不是最近一個：發版之後還寫進
   舊目錄的，gate 擋不住，要靠審查。指南裡的相對連結由 `.github/scripts/check_md_links.py` 驗（同樣跑在 `plan`，
-  掃 `README.md`、`AGENTS.md`、`GLOSSARY-MAP.md`、`docs/**`、`.docs/**`、`.github/**`、`packages/*` 三層、`apps/*` 兩層
-  與兩份本地寫的 vendor README，目標檔要存在、`#片段` 要對到標題）。指到不進版控的 `references/` 的連結不查。
+  掃 `README.md`、`AGENTS.md`、`GLOSSARY-MAP.md`、`docs/**`、`.docs/**`、`.github/**`、`.agents/skills/**`、`packages/*` 三層、
+  `apps/*` 兩層與兩份本地寫的 vendor README，目標檔要存在、`#片段` 要對到標題）。指到不進版控的 `references/` 的連結不查。
 
 Release 的說明開頭會連到 `docs/upgrade-guide/v<上一個 tag>/`，有這個目錄才連。升級前要備份什麼、怎麼確認、出事怎麼
 退回去，見 [`docs/operations.md`](docs/operations.md)〈升級與回滾〉。

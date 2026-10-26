@@ -76,6 +76,8 @@ class Scope(unittest.TestCase):
             'apps/harness/docs/a.md': BAD,
             'vendor/README.md': BAD,
             'apps/web/src/vendor/solid-glass/README.md': BAD,
+            '.agents/skills/s/SKILL.md': BAD,
+            '.agents/skills/s/references/a.md': BAD,
         }
         paths, count, violations = scan(files)
         self.assertEqual(paths, sorted(files))
@@ -91,6 +93,8 @@ class Scope(unittest.TestCase):
             '.docs/.hidden/a.md': BAD,
             'apps/.a/README.md': BAD,
             'apps/web/src/a/b.md': BAD,
+            '.agents/notes/a.md': BAD,
+            '.agents/skills/.hidden/a.md': BAD,
         }
         self.assertEqual(scan(files), ([], 0, []))
 
@@ -118,7 +122,8 @@ class Scope(unittest.TestCase):
                                                    'packages/*/*/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md',
                                                    '.docs/**/*.md', '.github/**/*.md', 'apps/*/*.md', 'apps/*/*/*.md',
                                                    'vendor/README.md',
-                                                   'apps/web/src/vendor/solid-glass/README.md']))
+                                                   'apps/web/src/vendor/solid-glass/README.md',
+                                                   '.agents/skills/**/*.md']))
 
 
 class Links(unittest.TestCase):

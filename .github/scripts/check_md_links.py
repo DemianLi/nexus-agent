@@ -1,8 +1,8 @@
 """檢查 repo 自寫 Markdown 的相對連結：目標檔要存在，指向 .md 的 `#片段` 要對到那份的標題 slug 或 `<a id>`（#1537）。
 
-- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755）；`.agents/` 底下的 skill 不在內。vendor 只掃 `vendor/README.md` 與
+- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755），含 `.agents/skills/` 底下的 skill。vendor 只掃 `vendor/README.md` 與
   `apps/web/src/vendor/solid-glass/README.md` 兩份本地寫的，其餘是原樣搬來的，不掃。
-- 萬用字元不配點開頭的名字，寫死在 pattern 裡的段（`.docs`、`.github`）照認；符號連結指到同一份的只掃一次。
+- 萬用字元不配點開頭的名字，寫死在 pattern 裡的段（`.docs`、`.github`、`.agents`）照認；符號連結指到同一份的只掃一次。
 - 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼。
 - 片段只對指向 .md 的判，指向原始碼的 `#L10` 這類不判。
 - 落在 repo 根目錄 `references/` 底下的目標不查（存在與錨點都不查）：那是 AGENTS.md〈技術實現標準〉要各自 clone 的唯讀參照，
@@ -43,6 +43,7 @@ PATTERNS = [
     'apps/*/*/*.md',
     'vendor/README.md',
     'apps/web/src/vendor/solid-glass/README.md',
+    '.agents/skills/**/*.md',
 ]
 # 不查的目標：repo 根目錄底下的這個目錄（見檔頭）。
 UNCHECKED_ROOT = 'references'
@@ -62,7 +63,7 @@ def source_paths(root: Path) -> list[Path]:
     found: list[Path] = []
     for pattern in PATTERNS:
         matches = [root / pattern] if '*' not in pattern else sorted(root.glob(pattern))
-        # 寫死的段（`.docs`、`.github`）照認，萬用字元配到的段才不收點開頭的。
+        # pattern 裡寫死的段照認，萬用字元配到的段才不收點開頭的。
         literal = len(pattern.split('*', 1)[0].split('/')) - 1
         for path in matches:
             relative = path.relative_to(root).parts
@@ -77,7 +78,7 @@ def source_paths(root: Path) -> list[Path]:
 
 
 def github_slug(heading: str) -> str:
-    """照 dsh `githubSlug`：小寫，只留字母、數字、`_`、空白、`-`，空白換成 `-`。"""
+    """近似 GitHub 的標題 slug：小寫，只留 Unicode 字母、數字（類別 L*、N*）、`_`、空白、`-`，空白換成 `-`。"""
     kept = ''.join(c for c in heading.lower() if unicodedata.category(c)[0] in 'LN' or c in '_ -')
     return kept.replace(' ', '-')
 
