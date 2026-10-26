@@ -2,8 +2,9 @@
  * `/名字` 與模型清單讀同一份技能來源（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）。
  *
  * 模型清單用的是組 thread 時依**列序**折進去的來源；行程級的登記處依**登記順序**。兩列 skills 有同名技能、其中一列停用再啟用之後，
- * 登記順序跟列序反過來。`/名字` 與 `skill.list` 改讀 fold 填進這條 thread fs 把手的那一份（`FsService.skillSources()`），
- * 三條路挑的是同一份。量的是產品路徑：真的 `createCordisRoot`、真的 `loadDefaultPlugins`（帶樹）、真的寫入口 `changePlugin`、真的 `root.boot`。
+ * 登記順序跟列序反過來。`/名字` 與 `skill.list` 讀 fold 填進這條 thread fs 把手的那一份（`FsService.skillSources()`），
+ * 三條路挑的是同一份。另一組：落盤關掉、有共用區時，落在組裝點工具結果暫存路由底下的來源留在那條路由，不接到 `/shared` 底下——
+ * 把手換來源看的是自己的全部路由前綴，模型清單也讀把手換好的那一份。量的是產品路徑：真的 `createCordisRoot`、真的 `loadDefaultPlugins`（帶樹）、真的寫入口 `changePlugin`、真的 `root.boot`。
  */
 
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';

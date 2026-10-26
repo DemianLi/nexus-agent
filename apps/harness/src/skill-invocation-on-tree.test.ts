@@ -98,7 +98,7 @@ const STANDARD = {
 // listener 本身
 // ---------------------------------------------------------------------------------------------
 
-/** 沒有共用區的 fs 把手（舊 thread、CLI 的形狀）：fold 填的來源就是登記的那一份。共用區那一條在 `skills-shared-workspace.test.ts`。 */
+/** 沒有共用區的 fs 把手（舊 thread、CLI 的形狀）：fold 填的來源就是折進這次組裝的那一份，原樣不換。共用區那一條在 `skills-shared-workspace.test.ts`。 */
 function noSharedWorkspace(
   backend: () => ContainedFilesystemBackend | undefined,
   sources: () => readonly string[] = () => ['/skills/'],

@@ -850,8 +850,8 @@ export function foldRegistry(
     shared('turnCancelModelSignal', turnCancelModelSignal),
   ];
 
-  // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿把手上換好的那一份（#1919）。沒有把手（組裝點沒提供 `fs`）
-  // 就沒有 `/名字` 與 `skill.list` 要對齊，照保留前綴與 mount 自己換。
+  // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿把手上換好的那一份（#1919）。沒有填得進值的把手
+  // （組裝點沒提供 `fs`，或給的不是 `createFsService` 建的）就照保留前綴與 mount 自己換。
   const skills =
     settledFs?.skillSources() ??
     threadSkillSources(registry.skills.sources(), {

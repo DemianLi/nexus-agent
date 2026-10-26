@@ -83,7 +83,7 @@ export { virtualPathOf } from '@nexus/core';
  * 既有方法的消費者（`^2.0.0`）照常；要讀共用區的消費者（`agent-instructions`、`skill-invocation`）宣告 `^2.1.0`。
  *
  * `2.2.0`（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）：`FsService` 多 `skillSources()`——這條 thread 要掃的技能來源，就是
- * 折進這次組裝、模型清單用的那一份（已換到共用區底下）。向後相容的新增；`skill-invocation` 讀它，宣告 `^2.2.0`。
+ * 折進這次組裝、模型清單用的那一份（有共用區的 thread 已換到共用區底下）。向後相容的新增；`skill-invocation` 讀它，宣告 `^2.2.0`。
  */
 export const FS_LOOKUP_CONTRACT_VERSION = '2.2.0';
 

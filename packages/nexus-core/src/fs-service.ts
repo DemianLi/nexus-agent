@@ -74,7 +74,7 @@ export interface FsService {
    *
    * 新 thread 有私有可寫根，`--workspace` 退成唯讀共用區、掛在這個前綴底下（`apps/harness/src/agent-factory.ts`）；舊 thread 的可寫根本來就是
    * 共用區，沒有這一格。fold 當下讀組裝點提供的 host 服務 `sharedWorkspace`，跟 {@link workspaceRoot} 同一次算、同一條 thread。
-   * 消費者：`agent-instructions`（部署方放在共用區的指示檔從這裡讀）、`skill-invocation` 與 `skill.list`（技能來源換到共用區底下，#1928）。這個前綴同時也在 {@link offWorkspacePrefixes} 裡。
+   * 消費者：`agent-instructions`（部署方放在共用區的指示檔從這裡讀）；技能來源在把手填值時據它換到共用區底下（{@link skillSources}，#1928）。這個前綴同時也在 {@link offWorkspacePrefixes} 裡。
    * @returns 前綴（不含結尾斜線）；還沒 fold、或這條 thread 沒有共用區是 `undefined`。
    */
   sharedWorkspacePrefix(): string | undefined;
@@ -82,8 +82,8 @@ export interface FsService {
    * **這條 thread** 要掃的技能來源（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)，`@nexus/fs` 2.2.0 起），順序就是優先序（後者贏）。
    *
    * 就是模型清單用的那一份：fold 當下折進這次組裝的來源，經 `threadSkillSources` 依這個把手的 {@link sharedWorkspacePrefix} 與
-   * {@link offWorkspacePrefixes} 換過，跟 {@link workspaceRoot} 同一次算、同一條 thread。消費者：`skill-invocation`（`/名字`）與 `skill.list`，
-   * 直接掃這一份，不再自己讀行程級的登記處、自己換，所以三條路掃的是同一組。
+   * {@link offWorkspacePrefixes} 換過，跟 {@link workspaceRoot} 同一次算、同一條 thread。消費者：`skill-invocation`（`/名字`）與 `skill.list`
+   * 直接掃這一份，所以模型清單、`/名字`、`skill.list` 三條路掃的是同一組。
    * @returns 來源；還沒 fold、或這次組裝沒有技能來源是空陣列。
    */
   skillSources(): readonly string[];
@@ -142,9 +142,12 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
     root = facts.workspaceRoot;
     shared = facts.sharedWorkspacePrefix;
     // 組裝點明著交的在前，plugin 掛的在後；重複填（同一格 fold 兩次）不累加。
-    prefixes = [...assembly, ...facts.mountPrefixes];
-    // 換來源要用上面剛填好的共用區與全部路由前綴，所以排在最後。
-    skills = threadSkillSources(facts.skillSources, service);
+    const settled = [...assembly, ...facts.mountPrefixes];
+    prefixes = settled;
+    skills = threadSkillSources(facts.skillSources, {
+      sharedWorkspacePrefix: () => facts.sharedWorkspacePrefix,
+      offWorkspacePrefixes: () => settled,
+    });
   });
   return service;
 }

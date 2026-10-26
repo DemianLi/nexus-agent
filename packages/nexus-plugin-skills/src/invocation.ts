@@ -26,8 +26,8 @@
  *   `time-context/src/index.ts:225`）。我們的落點由出貨清單的列序決定，所以 `cordis.yml` 上這一列排在 `agent-instructions` 與
  *   `time-context` 之間：同一次 invoke 裡人話、AGENTS.md 基線、技能說明、讀數。
  * - **掃哪裡**：這次呼叫那條 thread 的 backend 與技能來源，都從同一格 fs 把手讀（`fs.forCall(invocation)`）：backend 就是組裝交給 skills
- *   中介層的那一個，來源是 `fs.skillSources()`——fold 折進這條 thread、模型清單用的那一份（已換到共用區底下，#1928），
- *   同 dsh 的 `/name` 與目錄讀同一個註冊表（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）。`skill.list` 讀的也是這一份。
+ *   中介層的那一個，來源是 `fs.skillSources()`，也就是 fold 折進這條 thread、模型清單用的那一份
+ *   （有共用區的 thread 已換到共用區底下，#1928；[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）。`skill.list` 讀的也是這一份。
  *
  * ## 偏離登記
  *

@@ -22,7 +22,7 @@
  *
  * 來源讀這條 thread 的 fs 把手（`FsService.skillSources()`，[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）：fold 折進這條 thread、
  * 模型清單用的那一份，有共用區的 thread（#1775 的新 thread）已換成共用區底下的來源（#1928）。`/名字` 讀的也是這一份，所以模型看得到的、
- * 人叫得出的、這份清單列的是同一組，同 dsh 的目錄與 `/name` 讀同一個註冊表。
+ * 人叫得出的、這份清單列的是同一組。
  *
  * ## 與 dsh 的偏離
  *
