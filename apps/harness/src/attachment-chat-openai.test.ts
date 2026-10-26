@@ -33,12 +33,17 @@ const IMAGE = {
 };
 const FILE = { attachmentId: `sha256:${'e'.repeat(64)}`, name: 'a.txt', bytes: 3 };
 
-const BYTES = new Uint8Array(Buffer.from(PNG_7X5, 'base64'));
+const VERSION = {
+  data: new Uint8Array(Buffer.from(PNG_7X5, 'base64')),
+  mediaType: 'image/png' as const,
+  width: 7,
+  height: 5,
+};
 
 function source(overrides: Partial<AttachmentSource> = {}): AttachmentSource {
   return {
     hasFile: async () => true,
-    readImage: async () => BYTES,
+    readRequestImage: async () => VERSION,
     ...overrides,
   };
 }
@@ -196,7 +201,7 @@ describe('投影的內容', () => {
     await model(
       'accepts',
       source({
-        readImage: async () => {
+        readRequestImage: async () => {
           throw new Error('沒了');
         },
       }),
@@ -219,9 +224,9 @@ describe('投影的內容', () => {
       await model(
         support,
         source({
-          readImage: async () => {
+          readRequestImage: async () => {
             reads += 1;
-            return BYTES;
+            return VERSION;
           },
         }),
       ).invoke([omitted]);
@@ -268,9 +273,9 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
   it('超額：三條路都在請求轉換之前拋 IMAGE_OFFLOAD_REQUIRED（帶張數），沒讀位元組、沒有任何請求到端點', async () => {
     let reads = 0;
     const src = source({
-      readImage: async () => {
+      readRequestImage: async () => {
         reads += 1;
-        return BYTES;
+        return VERSION;
       },
     });
     const llm = model('accepts', src, guard);

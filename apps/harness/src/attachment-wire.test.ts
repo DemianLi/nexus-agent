@@ -36,7 +36,10 @@ import { ambientCredentials } from './credentials.js';
 import { emptyCommandPoint, loopbackRequest, noSessions, TEST_BROWSER_AUTH } from './fixtures.js';
 import { PNG_7X5 } from './image-fixtures.js';
 import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
+import { probeImageHeader } from './image-intake.js';
+import type { ImageSubmission } from './image-normalization.js';
 import { createModelSelectionHost } from './model-selection-host.js';
+import { requestImagesRootOf } from './request-image.js';
 import type { PumpAgent } from './thread-pump.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 import { createWireHandler } from './wire-handler.js';
@@ -339,7 +342,7 @@ describe('內嵌的圖', () => {
     }
   });
 
-  it('超過 2048 的圖、帶 EXIF 轉向的圖：送模型的與落盤的都是規範化那一份，附件 id 是它的 sha256，原圖不留（#2033）', async () => {
+  it('超過 2048 的圖、帶 EXIF 轉向的圖：落盤的是規範化那一份，附件 id 是它的 sha256，原圖不留；這兩張在送模型的預算內，送的就是同一份（#2033）', async () => {
     const big = await sharp({
       create: { width: 3000, height: 3000, channels: 3, background: '#2a6' },
     })
@@ -404,6 +407,89 @@ describe('內嵌的圖', () => {
       for (const original of [big, turned]) {
         expect(stored).not.toContain(createHash('sha256').update(original).digest('hex'));
       }
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it('規範化之前落盤的大圖（EXIF 6）：每一輪送的都是轉正、縮到 2048² 以內的那一份，把手寫它的寬高；只轉一次（#2033）', async () => {
+    // 規範化之前的儲存：位元組原樣落盤，參照記檔頭的軸。
+    class PreNormalizationStore extends AttachmentStore {
+      override async saveImages(inputs: readonly ImageSubmission[]) {
+        return Promise.all(
+          inputs.map(async (input) => {
+            const file = await this.save({ data: input.bytes, name: input.name });
+            const header = probeImageHeader(input.bytes)!;
+            return {
+              attachmentId: file.attachmentId,
+              mediaType: header.mediaType,
+              bytes: file.bytes,
+              width: header.width,
+              height: header.height,
+              ...(input.name === undefined ? {} : { name: file.name }),
+            };
+          }),
+        );
+      }
+    }
+    store = new PreNormalizationStore(attachmentsRootOf(home));
+    // 存的點陣是 3000×2000，EXIF 6 要順時針轉 90°，看起來是 2000×3000。
+    const raw = await sharp({
+      create: { width: 3000, height: 2000, channels: 3, background: '#a26' },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const { client, handler, events } = connect('vision');
+    try {
+      const result = await client.runStart(THREAD, '舊圖', {
+        attachments: [
+          { type: 'image', mediaType: 'image/jpeg', data: raw.toString('base64'), name: 'old.jpg' },
+        ],
+      });
+      expect(result).toMatchObject({ type: 'success' });
+      await settled(events, 1);
+      expect(await client.runStart(THREAD, '再看一次')).toMatchObject({ type: 'success' });
+      await settled(events, 2);
+
+      const start = events().find((event) => event.type === 'turn/start') as unknown as {
+        data: { attachments: { attachmentId: string; width: number; height: number }[] };
+      };
+      // 參照是舊的樣子：原圖的雜湊、檔頭的軸。
+      expect(start.data.attachments[0]).toMatchObject({
+        attachmentId: `sha256:${createHash('sha256').update(raw).digest('hex')}`,
+        width: 3000,
+        height: 2000,
+      });
+
+      expect(requests).toHaveLength(2);
+      const sentPerRequest = requests.map((request) => {
+        const user = request.messages.find((m) => m.role === 'user')!;
+        const blocks = user.content as {
+          type: string;
+          text?: string;
+          image_url?: { url: string };
+        }[];
+        const image = blocks.find((block) => block.type === 'image_url')!;
+        const handle = blocks[blocks.indexOf(image) - 1]!;
+        return { url: image.image_url!.url, handle: handle.text! };
+      });
+      for (const { url, handle } of sentPerRequest) {
+        expect(url.startsWith('data:image/jpeg;base64,')).toBe(true);
+        const bytes = Buffer.from(url.split(',')[1]!, 'base64');
+        const meta = await sharp(bytes).metadata();
+        expect(meta).toMatchObject({ format: 'jpeg', width: 1672, height: 2508, space: 'srgb' });
+        expect(meta.orientation).toBeUndefined();
+        expect(bytes.byteLength).toBeLessThan(raw.byteLength);
+        expect(handle).toContain('request preview 1672x2508px.');
+      }
+      expect(sentPerRequest[1]!.url).toBe(sentPerRequest[0]!.url);
+      // 快取裡只有這一份。
+      const cacheRoot = requestImagesRootOf(home);
+      const cached = (
+        await Promise.all((await readdir(cacheRoot)).map((dir) => readdir(join(cacheRoot, dir))))
+      ).flat();
+      expect(cached).toHaveLength(1);
     } finally {
       await handler.close();
     }

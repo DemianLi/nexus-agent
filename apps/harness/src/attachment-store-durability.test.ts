@@ -295,7 +295,7 @@ describe.runIf(POSIX)('F 別名換掉的那一格也 fsync', () => {
   });
 });
 
-describe.runIf(POSIX)('G home 以上的祖先開不了（Q1 (b)，偏離 4）', () => {
+describe.runIf(POSIX)('G home 以上的祖先開不了（#1528，偏離 3）', () => {
   it('開目錄時 EACCES：略過那一層、存成功、日誌講一次；同一層再遇到不重講', async () => {
     const warnings: string[] = [];
     const above = dirname(home);

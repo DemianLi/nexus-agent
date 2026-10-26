@@ -950,7 +950,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 其餘（`--no-config`、上限、取消、錯誤分類、`maxCount` 在解析之後才套）與單一起點完全一樣。
    * 給「要搜的是一堆分散的子目錄」的子類用，免得一個目錄起一次 rg（[#1782](https://github.com/DemianLi/nexus-agent/issues/1782)）。
    *
-   * **偏離 dsh**（理由 2，登記在 `attachment-store.ts` 檔頭偏離 3）：dsh 的 `buildGrepCommand` 只收一個起點；多起點是附件路由
+   * **偏離 dsh**（理由 2，登記在 `attachment-store.ts` 檔頭偏離 2）：dsh 的 `buildGrepCommand` 只收一個起點；多起點是附件路由
    * 「只搜這條 thread 引用過的目錄」那條偏離帶出來的，這裡不為別的用途開放。
    *
    * **呼叫端負責去重**：起點不能重複、也不能互相包含（`['/a', '/a']`、`['/', '/a']` 會讓同一份檔的命中出現兩次）。附件路由給的是

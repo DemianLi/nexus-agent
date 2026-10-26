@@ -15,8 +15,8 @@
  * 1. **把手不帶路徑。** 圖不建檔名的硬連結、不在模型讀附件的路由底下（`apps/harness/src/attachment-store.ts` 的 `saveImages`），
  *    模型的檔案工具讀不到它，沒有路徑可指，同 {@link offloadedImageText} 沒有本機路徑的那一支。企業內部聊天機器人不拿工具
  *    改使用者的圖；要給模型讀圖的路徑，另開卡。
- * 2. **寬高用參照記的。** 沒有另做請求版本，送的就是落盤那一份，寬高相等；`attachment-store.ts` 檔頭第 2 條的 TODO(#2033)
- *    做了之後改用請求版本的寬高。
+ * 2. **寬高是送出那一份的。** 送模型的是照預算另做的一份（`apps/harness/src/request-image.ts`），寬高可能跟參照記的不同（縮過，或舊圖轉正後寬高對調）；
+ *    沒傳那一份的地方（token 估算）用參照記的。
  *
  * @module
  */
@@ -57,12 +57,18 @@ export function assumedFileLine(ref: FileAttachmentRef): string {
 
 /**
  * 送出的一張圖前面那一行把手：有名字是 `"名字" (sha256:…)`（名字照 JSON 字串跳脫），沒名字是完整的 `attachmentId`；
- * 寬高用參照記的，見檔頭第 2 條。整句由 `attachment-projection.test.ts` 逐字釘住。
+ * 寬高見檔頭第 2 條。整句由 `attachment-projection.test.ts` 逐字釘住。
+ *
+ * @param ref - 落盤那一份的參照。
+ * @param preview - 送出那一份的寬高；省略就用參照記的。
  */
-export function requestImageHandleText(ref: ImageAttachmentRef): string {
+export function requestImageHandleText(
+  ref: ImageAttachmentRef,
+  preview: { readonly width: number; readonly height: number } = ref,
+): string {
   const identity =
     ref.name === undefined ? ref.attachmentId : `${JSON.stringify(ref.name)} (${ref.attachmentId})`;
-  return `Image ${identity}; request preview ${String(ref.width)}x${String(ref.height)}px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`;
+  return `Image ${identity}; request preview ${String(preview.width)}x${String(preview.height)}px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`;
 }
 
 /**

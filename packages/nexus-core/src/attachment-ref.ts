@@ -17,7 +17,6 @@
  * 1. **區塊型別叫 `nexus-file`／`nexus-image`，不叫 `file`／`image`。** LangChain 的訊息塊自己有標準的 `file`／`image`（欄位不同），
  *    我們的區塊裝不進去，也不能讓基座或 `@langchain/openai` 把它當成它認得的那一種。形狀照 dsh（`{ type, attachment }`），
  *    只有型別名不同。基座表達不出 dsh 的 `ImageBlock`／`FileBlock`，所以退到自己的區塊型別。
- * 2. **沒有依請求準備的圖片版本**：見 `attachment-store.ts` 檔頭偏離第 2 條的 TODO(#2033)。
  *
  * @module
  */
