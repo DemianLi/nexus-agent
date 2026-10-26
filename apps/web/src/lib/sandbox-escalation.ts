@@ -5,7 +5,7 @@ import type { PendingApproval } from '@nexus/wire';
  * 模式、理由、「只蓋這一次」都在裡面（`@nexus/plugin-sandbox-policy` 的 `escalationReason`，對應 dsh `escalation.ts` 的
  * `displayReason`）。**web 不拼這句話**：沒有描述（較舊的 server）就退回一般核准卡。
  *
- * 工具名與模式字面照 plugin 抄（web 不依賴那個套件），`sandbox-escalation.test.ts` 從 `docs/tool-catalog.md` 讀回來對。
+ * 工具名照 plugin 抄（web 不依賴那個套件），`sandbox-escalation.test.ts` 從 `docs/tool-catalog.md` 讀回來對。
  */
 
 /** 模型看到的工具名，同 plugin 的 `SANDBOX_ESCALATION_TOOL_NAME`。 */
