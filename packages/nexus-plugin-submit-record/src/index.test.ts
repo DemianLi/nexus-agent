@@ -38,6 +38,7 @@ function fsHandle(backend: AnyBackendProtocol | undefined): FsService {
     hasWorkspace: () => true,
     workspaceRoot: () => undefined,
     sharedWorkspacePrefix: () => undefined,
+    skillSources: () => [],
   };
 }
 

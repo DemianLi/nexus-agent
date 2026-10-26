@@ -25,6 +25,8 @@
 
 import type { AnyBackendProtocol } from 'deepagents';
 
+import { threadSkillSources } from './skill-catalog.js';
+
 /** 服務名，照 dsh。 */
 export const FS_SERVICE = 'fs';
 
@@ -76,6 +78,15 @@ export interface FsService {
    * @returns 前綴（不含結尾斜線）；還沒 fold、或這條 thread 沒有共用區是 `undefined`。
    */
   sharedWorkspacePrefix(): string | undefined;
+  /**
+   * **這條 thread** 要掃的技能來源（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)，`@nexus/fs` 2.2.0 起），順序就是優先序（後者贏）。
+   *
+   * 就是模型清單用的那一份：fold 當下折進這次組裝的來源，經 `threadSkillSources` 依這個把手的 {@link sharedWorkspacePrefix} 與
+   * {@link offWorkspacePrefixes} 換過，跟 {@link workspaceRoot} 同一次算、同一條 thread。消費者：`skill-invocation`（`/名字`）與 `skill.list`，
+   * 直接掃這一份，不再自己讀行程級的登記處、自己換，所以三條路掃的是同一組。
+   * @returns 來源；還沒 fold、或這次組裝沒有技能來源是空陣列。
+   */
+  skillSources(): readonly string[];
 }
 
 /** {@link settleFsService} 在 fold 當下算好、一起填進把手的事實（#1469）。 */
@@ -88,6 +99,8 @@ export interface FsFacts {
   readonly workspaceRoot: string | undefined;
   /** 這條 thread 的唯讀共用區前綴（host 服務 `sharedWorkspace`，#1775）；沒有是 `undefined`。 */
   readonly sharedWorkspacePrefix: string | undefined;
+  /** 折進這次組裝的技能來源（`registry.skills.sources()`），還沒換到共用區底下；換由把手在填值時做（#1919）。 */
+  readonly skillSources: readonly string[];
 }
 
 /** {@link createFsService} 的參數。 */
@@ -112,6 +125,7 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
   let workspace = false;
   let root: string | undefined;
   let shared: string | undefined;
+  let skills: readonly string[] = [];
   const assembly = [...(options.offWorkspacePrefixes ?? [])];
   let prefixes: readonly string[] = assembly;
   const service: FsService = {
@@ -120,6 +134,7 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
     hasWorkspace: () => workspace,
     workspaceRoot: () => root,
     sharedWorkspacePrefix: () => shared,
+    skillSources: () => skills,
   };
   settlers.set(service, (backend, facts) => {
     folded = backend;
@@ -128,6 +143,8 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
     shared = facts.sharedWorkspacePrefix;
     // 組裝點明著交的在前，plugin 掛的在後；重複填（同一格 fold 兩次）不累加。
     prefixes = [...assembly, ...facts.mountPrefixes];
+    // 換來源要用上面剛填好的共用區與全部路由前綴，所以排在最後。
+    skills = threadSkillSources(facts.skillSources, service);
   });
   return service;
 }
@@ -143,13 +160,17 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
  *
  * @param service - `registry.services.get(FS_SERVICE)` 拿到的東西。
  * @param backend - `foldBackend` 折出來的那一個。
- * @param facts - fold 當下算好的工作區事實與掛載前綴。
+ * @param facts - fold 當下算好的工作區事實、掛載前綴與技能來源。
+ * @returns 填了值的那一格把手（fold 從它讀回換過的技能來源，#1919）；沒填（不是這一種）是 `undefined`。
  */
 export function settleFsService(
   service: unknown,
   backend: AnyBackendProtocol | undefined,
   facts: FsFacts,
-): void {
-  if (typeof service !== 'object' || service === null) return;
-  settlers.get(service)?.(backend, facts);
+): FsService | undefined {
+  if (typeof service !== 'object' || service === null) return undefined;
+  const settle = settlers.get(service);
+  if (settle === undefined) return undefined;
+  settle(backend, facts);
+  return service as FsService;
 }

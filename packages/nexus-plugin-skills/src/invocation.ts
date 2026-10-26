@@ -25,9 +25,9 @@
  * - **落點**：dsh 的叫用排在其他注入之後、time-context 的讀數之前（time-context 以 `prepend` 登記，是 waterfall 的最外層，最後才 append，
  *   `time-context/src/index.ts:225`）。我們的落點由出貨清單的列序決定，所以 `cordis.yml` 上這一列排在 `agent-instructions` 與
  *   `time-context` 之間：同一次 invoke 裡人話、AGENTS.md 基線、技能說明、讀數。
- * - **掃哪裡**：這次呼叫那條 thread 的 backend（`fs.forCall(invocation)`，就是組裝交給 skills 中介層的那一個），來源在**呼叫當下**讀技能來源
- *   登記處（`skillSources.sources()`），同 dsh 的 `/name` 與目錄讀同一個註冊表；有共用區的 thread 換成共用區底下的來源，跟模型清單、
- *   `skill.list` 同一支（`threadSkillSources`，#1928）。
+ * - **掃哪裡**：這次呼叫那條 thread 的 backend 與技能來源，都從同一格 fs 把手讀（`fs.forCall(invocation)`）：backend 就是組裝交給 skills
+ *   中介層的那一個，來源是 `fs.skillSources()`——fold 折進這條 thread、模型清單用的那一份（已換到共用區底下，#1928），
+ *   同 dsh 的 `/name` 與目錄讀同一個註冊表（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）。`skill.list` 讀的也是這一份。
  *
  * ## 偏離登記
  *
@@ -41,11 +41,6 @@
  *    下一次 invoke 它前面已經有模型回覆。**重開條件**同 `@nexus/agent-loop` 偏離 2（#389 重開，每一步注入）。
  * 3. **防重複的判準放在訊息上**（同理由 1）：dsh 的收件匣領走就不會再領；我們每次 invoke 都重看那一段，所以注入的訊息帶
  *    `nexus_skill_invocation: { name, forMessageId }`，那句人話已有同名的注入就不再注入（上一輪中途停掉、沒有模型回覆時會走到）。
- * 4. **來源讀登記處，不讀折進 thread 的那一份**（理由 1；PM 裁決 issuecomment-6359103754 (i)）。dsh 的目錄與 `/name` 讀同一個註冊表；
- *    nexus 的模型清單是組 thread 時依**列序**折進去的快照（`apps/harness/src/plugin-tree.ts` 的 `#assignSkillSources`、`plugin-config.ts` 的
- *    `registry.skills.addSource`），listener 拿不到那一份，只拿得到行程級的登記處，它依**登記順序**、而且是活的。平常兩者相同。
- *    **留下的缺口**：清單上有兩列以上 skills、兩列有同名技能、而且其中一列重載過（停用再啟用，登記順序換了），`/名字` 跟模型清單可能
- *    挑到不同的那一份；thread 開著時改了來源也一樣。**撤除條件**：有「每條 thread 的技能來源」查找（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）。
  *
  * ## 代價
  *
@@ -64,13 +59,7 @@ import type { Context } from '@nexus/cordis';
 import { fsToken } from '@nexus/fs';
 import type { FsLookup } from '@nexus/fs';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
-import {
-  isHumanSpeech,
-  renderSkillInvocation,
-  scanSkills,
-  skillSourcesToken,
-  threadSkillSources,
-} from '@nexus/skills';
+import { isHumanSpeech, renderSkillInvocation, scanSkills } from '@nexus/skills';
 import { z } from 'zod';
 
 /** 插件在樹上的列用的名字。 */
@@ -78,14 +67,10 @@ export const name = 'skill-invocation';
 
 /**
  * 要的服務：`agentLoop`（`^1.2.0`，登記 listener；注入要帶自己的 `source`，1.1.0 的宿主會靜靜記成 `plugin`，所以擋在範圍上）、
- * `fs`（`^2.1.0`，呼叫當下拿這條 thread 的 backend、位址與共用區前綴；前綴是 2.1.0 加的 `sharedWorkspacePrefix`，#1928 讀它換來源）、`skillSources`（`^1.0.0`，呼叫當下讀來源）。範圍在這裡宣告，落進 Cordis 的
+ * `fs`（`^2.2.0`，呼叫當下拿這條 thread 的 backend、位址與技能來源；來源是 2.2.0 加的 `skillSources`，#1919）。範圍在這裡宣告，落進 Cordis 的
  * `Context.intercept`，提供者的 `check` 讀得到。
  */
-export const inject = injectOf(
-  need(agentLoopToken, '^1.2.0'),
-  need(fsToken, '^2.1.0'),
-  need(skillSourcesToken, '^1.0.0'),
-);
+export const inject = injectOf(need(agentLoopToken, '^1.2.0'), need(fsToken, '^2.2.0'));
 
 /** 沒有設定：來源由 `skills` 列登記。`strictObject`：未知欄位讓載入失敗。 */
 export const Config = z.strictObject({});
@@ -97,8 +82,7 @@ export const manifest = defineManifest({
   provides: [],
   consumes: [
     { token: agentLoopToken.name, range: '^1.2.0' },
-    { token: fsToken.name, range: '^2.1.0' },
-    { token: skillSourcesToken.name, range: '^1.0.0' },
+    { token: fsToken.name, range: '^2.2.0' },
   ],
   config: Config,
   // 換程式碼要重啟行程；掛不掛只影響新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
@@ -107,21 +91,17 @@ export const manifest = defineManifest({
 });
 
 /**
- * 掛上：登記一位 `preStep` listener。三個服務都在這裡抓進閉包（列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫），**呼叫當下才**
- * `fs.forCall` 與讀來源。
+ * 掛上：登記一位 `preStep` listener。兩個服務都在這裡抓進閉包（列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫），**呼叫當下才**
+ * `fs.forCall`。
  *
  * @param ctx - 這一列的 Cordis context。
  */
 export function apply(ctx: Context): void {
   const agentLoop = service(ctx, agentLoopToken);
   const fs = service(ctx, fsToken);
-  const sources = service(ctx, skillSourcesToken);
   agentLoop.preStep(
     SKILL_INVOCATION_LISTENER_NAME,
-    createSkillInvocationListener({
-      fs: (invocation) => fs.forCall(invocation),
-      sources: () => sources.sources(),
-    }),
+    createSkillInvocationListener({ fs: (invocation) => fs.forCall(invocation) }),
   );
 }
 
@@ -196,10 +176,8 @@ function requestedNames(visible: readonly BaseMessage[]): InvocationMark[] {
 
 /** {@link createSkillInvocationListener} 要的查找。測試換成替身；`apply` 換成從服務抓進閉包的那一份。 */
 export interface SkillInvocationLookups {
-  /** 這次呼叫那條 thread 的 fs 把手與位址（`fs.forCall`）。 */
+  /** 這次呼叫那條 thread 的 fs 把手與位址（`fs.forCall`）；把手帶著這條 thread 的 backend 與技能來源。 */
   fs(invocation: PreStepInvocation): FsLookup;
-  /** 技能來源，順序就是優先序（`skillSources.sources()`，呼叫當下讀；見檔頭偏離 4）。 */
-  sources(): readonly string[];
 }
 
 /**
@@ -218,7 +196,7 @@ export function createSkillInvocationListener(lookups: SkillInvocationLookups): 
     const backend = found.fs.backend();
     if (backend === undefined) return undefined;
     invocation.signal?.throwIfAborted();
-    const scan = await scanSkills(backend, threadSkillSources(lookups.sources(), found.fs));
+    const scan = await scanSkills(backend, found.fs.skillSources());
     invocation.signal?.throwIfAborted();
     if (!scan.complete) {
       // 照 dsh 的提供者語意：掃描不完整，這一步一份都叫不出來（檔頭）。

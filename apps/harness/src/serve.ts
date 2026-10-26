@@ -1486,9 +1486,8 @@ async function startServer(
         ...(permissionPresets !== undefined && { permissionPresets }),
         // 可點名的子代理（#328 第 2 項）：`subagent.list` 與 `run.start` 的 `mention` 驗證讀這一份。
         subagentKinds,
-        // `/名字` 叫得出的技能（#1574 N0929）：來源讀樹上的登記處、backend 與「有沒有磁碟根」讀這條 thread 的 fs 把手，都在 `skill.list` 打進來的當下。
+        // `/名字` 叫得出的技能（#1574 N0929）：來源、backend 與「有沒有磁碟根」都讀這條 thread 的 fs 把手（#1919），在 `skill.list` 打進來的當下。
         skillCatalog: createSkillCatalog({
-          sources: () => tree.skillSources(),
           fs: () => tree.threadSessions.fsForThread(threadId),
           warn: (message) => warn(`[技能] thread "${threadId}" ${message}`),
         }),

@@ -98,22 +98,25 @@ const STANDARD = {
 // listener 本身
 // ---------------------------------------------------------------------------------------------
 
-/** 沒有共用區的 fs 把手（舊 thread、CLI 的形狀）：來源原樣掃。共用區那一條在 `skills-shared-workspace.test.ts`。 */
+/** 沒有共用區的 fs 把手（舊 thread、CLI 的形狀）：fold 填的來源就是登記的那一份。共用區那一條在 `skills-shared-workspace.test.ts`。 */
 function noSharedWorkspace(
   backend: () => ContainedFilesystemBackend | undefined,
+  sources: () => readonly string[] = () => ['/skills/'],
 ): Extract<FsLookup, { kind: 'ok' }>['fs'] {
   return {
     backend,
     sharedWorkspacePrefix: () => undefined,
     offWorkspacePrefixes: () => [],
+    skillSources: sources,
   } as never;
 }
 
 function lookupOf(
   backend: ContainedFilesystemBackend | undefined,
   address: SessionAddress = { kind: 'root' },
+  sources?: () => readonly string[],
 ): () => FsLookup {
-  return () => ({ kind: 'ok', fs: noSharedWorkspace(() => backend), address });
+  return () => ({ kind: 'ok', fs: noSharedWorkspace(() => backend, sources), address });
 }
 
 function listenerOn(
@@ -121,8 +124,7 @@ function listenerOn(
   options: { address?: SessionAddress; sources?: readonly string[] } = {},
 ): PreStepListener {
   return createSkillInvocationListener({
-    fs: lookupOf(backend, options.address),
-    sources: () => options.sources ?? ['/skills/'],
+    fs: lookupOf(backend, options.address, () => options.sources ?? ['/skills/']),
   });
 }
 
@@ -362,7 +364,6 @@ describe('掃描不完整：一份都不注入（照 dsh 的提供者語意，PM
         fs: noSharedWorkspace(() => new FlakyBackend(ws, '/skills/model-only/SKILL.md')),
         address: { kind: 'root' },
       }),
-      sources: () => ['/skills/'],
     });
     expect(await run(listener, [human('/deploy')])).toBeUndefined();
     expect(warn).toHaveBeenCalledWith('技能叫用這一次不注入：掃描不完整（/deploy）');
@@ -374,10 +375,7 @@ describe('掃描不完整：一份都不注入（照 dsh 的提供者語意，PM
 describe('其他守衛', () => {
   it('沒有 backend、fs 沒接上：不注入', async () => {
     expect(await run(listenerOn(undefined), [human('/deploy')])).toBeUndefined();
-    const notAttached = createSkillInvocationListener({
-      fs: () => ({ kind: 'not-attached' }),
-      sources: () => ['/skills/'],
-    });
+    const notAttached = createSkillInvocationListener({ fs: () => ({ kind: 'not-attached' }) });
     expect(await run(notAttached, [human('/deploy')])).toBeUndefined();
   });
 
@@ -393,12 +391,11 @@ describe('其他守衛', () => {
     expect(ls).not.toHaveBeenCalled();
   });
 
-  it('來源在呼叫當下讀（登記處是活的）', async () => {
+  it('來源讀這次呼叫那條 thread 的把手，在呼叫當下讀', async () => {
     const ws = workspace({ a: { deploy: { body: 'A 版。' } }, b: { deploy: { body: 'B 版。' } } });
     let sources = ['/a/'];
     const listener = createSkillInvocationListener({
-      fs: lookupOf(backendOf(ws)),
-      sources: () => sources,
+      fs: lookupOf(backendOf(ws), { kind: 'root' }, () => sources),
     });
     expect((await run(listener, [human('/deploy')]))![0]!.content).toContain('A 版。');
     sources = ['/a/', '/b/'];

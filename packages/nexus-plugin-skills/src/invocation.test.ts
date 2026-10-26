@@ -6,7 +6,6 @@
 import { createAgentLoopProvider } from '@nexus/agent-loop/provider';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import { checkConformance } from '@nexus/sdk';
-import { createSkillSourcesProvider } from '@nexus/skills/provider';
 import { describe, expect, it } from 'vitest';
 
 import * as invocation from './invocation.js';
@@ -25,18 +24,16 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
           return latest.Provider;
         },
         fs: () => createFsLookupProvider(() => ({ kind: 'not-attached' })).Provider,
-        skillSources: () => createSkillSourcesProvider().Provider,
       },
       residue: () => latest.registrations(),
     });
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告三個必要依賴：agentLoop（^1.2.0，要帶 source）、fs（^2.1.0）、skillSources（^1.0.0）；沒有設定、沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：agentLoop（^1.2.0，要帶 source）、fs（^2.2.0，來源讀把手）；沒有設定、沒有 default 匯出', () => {
     expect(invocation.manifest.consumes).toEqual([
       { token: 'agentLoop', range: '^1.2.0' },
-      { token: 'fs', range: '^2.1.0' },
-      { token: 'skillSources', range: '^1.0.0' },
+      { token: 'fs', range: '^2.2.0' },
     ]);
     expect(invocation.manifest.provides).toEqual([]);
     expect(() => invocation.Config.parse({ sources: ['/skills/'] })).toThrow(/sources/);

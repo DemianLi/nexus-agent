@@ -232,6 +232,7 @@ function fsHandleWithRoot(root: string): FsService {
     hasWorkspace: () => root !== '',
     workspaceRoot: () => (root === '' ? undefined : root),
     sharedWorkspacePrefix: () => undefined,
+    skillSources: () => [],
   };
 }
 
