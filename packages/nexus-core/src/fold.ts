@@ -79,6 +79,7 @@ import {
   SESSION_CHECKPOINT_PLUGIN_NAME,
 } from './session-checkpoint-policy.js';
 import type { SessionLog } from './session-log.js';
+import { threadSkillSources } from './skill-catalog.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
 import {
   createModelSwapMiddleware,
@@ -612,14 +613,16 @@ export function foldRegistry(
   // 所以結果跟「工具被叫時才讀」的相同；消費者之後只從這一格把手讀。
   const workspaceRootService = registry.services.get(WORKSPACE_ROOT_SERVICE);
   const sharedWorkspaceService = registry.services.get(SHARED_WORKSPACE_SERVICE);
+  // 唯讀共用參考區的前綴（#1775）：只有這條 thread 有私有可寫根時組裝點才提供；不是字串就當沒有。
+  const sharedWorkspacePrefix =
+    typeof sharedWorkspaceService === 'string' ? sharedWorkspaceService : undefined;
+  const mountPrefixes = registry.backend.mounts().map(([prefix]) => prefix);
   settleFsService(registry.services.get(FS_SERVICE), backend, {
     hasWorkspace: registry.capabilities.has(WORKSPACE_CAPABILITY),
-    mountPrefixes: registry.backend.mounts().map(([prefix]) => prefix),
+    mountPrefixes,
     // 這一條 thread 的可寫根（#1774）：組裝點提供的 host 服務 `workspaceRoot`，只在有圍堵時有；不是字串就當沒有。
     workspaceRoot: typeof workspaceRootService === 'string' ? workspaceRootService : undefined,
-    // 唯讀共用參考區的前綴（#1775）：只有這條 thread 有私有可寫根時組裝點才提供；不是字串就當沒有。
-    sharedWorkspacePrefix:
-      typeof sharedWorkspaceService === 'string' ? sharedWorkspaceService : undefined,
+    sharedWorkspacePrefix,
   });
   const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
@@ -834,13 +837,19 @@ export function foldRegistry(
     shared('turnCancelModelSignal', turnCancelModelSignal),
   ];
 
+  // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿同一份，`/名字` 與 `skill.list` 經同一支換。
+  const skills = threadSkillSources(registry.skills.sources(), {
+    sharedWorkspacePrefix: () => sharedWorkspacePrefix,
+    offWorkspacePrefixes: () => [...(options.reservedBackendPrefixes ?? []), ...mountPrefixes],
+  });
+
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
     subagents: foldSubAgents(registry, {
       toolOrder,
       toolFilter: options.subagentToolFilter,
       baseToolNames: options.baseToolNames ?? [],
-      skills: registry.skills.sources(),
+      skills,
       permissions,
       slots,
     }),
@@ -865,8 +874,7 @@ export function foldRegistry(
     );
   }
 
-  const skills = registry.skills.sources();
-  if (skills.length > 0) params.skills = skills;
+  if (skills.length > 0) params.skills = [...skills];
   const memory = registry.memory.sources();
   if (memory.length > 0) params.memory = memory;
 

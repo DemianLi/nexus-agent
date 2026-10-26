@@ -98,11 +98,22 @@ const STANDARD = {
 // listener 本身
 // ---------------------------------------------------------------------------------------------
 
+/** 沒有共用區的 fs 把手（舊 thread、CLI 的形狀）：來源原樣掃。共用區那一條在 `skills-shared-workspace.test.ts`。 */
+function noSharedWorkspace(
+  backend: () => ContainedFilesystemBackend | undefined,
+): Extract<FsLookup, { kind: 'ok' }>['fs'] {
+  return {
+    backend,
+    sharedWorkspacePrefix: () => undefined,
+    offWorkspacePrefixes: () => [],
+  } as never;
+}
+
 function lookupOf(
   backend: ContainedFilesystemBackend | undefined,
   address: SessionAddress = { kind: 'root' },
 ): () => FsLookup {
-  return () => ({ kind: 'ok', fs: { backend: () => backend } as never, address });
+  return () => ({ kind: 'ok', fs: noSharedWorkspace(() => backend), address });
 }
 
 function listenerOn(
@@ -348,7 +359,7 @@ describe('掃描不完整：一份都不注入（照 dsh 的提供者語意，PM
     const listener = createSkillInvocationListener({
       fs: () => ({
         kind: 'ok',
-        fs: { backend: () => new FlakyBackend(ws, '/skills/model-only/SKILL.md') } as never,
+        fs: noSharedWorkspace(() => new FlakyBackend(ws, '/skills/model-only/SKILL.md')),
         address: { kind: 'root' },
       }),
       sources: () => ['/skills/'],

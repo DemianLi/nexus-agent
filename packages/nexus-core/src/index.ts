@@ -183,8 +183,14 @@ export type {
   SkillCatalogEntry,
   SkillCatalogScan,
   SkillInvocationPolicy,
+  SkillSourcesPlacement,
 } from './skill-catalog.js';
-export { isHumanSpeech, renderSkillInvocation, scanSkills } from './skill-catalog.js';
+export {
+  isHumanSpeech,
+  renderSkillInvocation,
+  scanSkills,
+  threadSkillSources,
+} from './skill-catalog.js';
 export type {
   DispatchMode,
   EventDispatcher,

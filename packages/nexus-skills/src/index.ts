@@ -36,16 +36,17 @@
  * `peerDependencies`，`devDependencies` 留 `workspace:*`），core 不 import 它。**撤除條件**同 #1421 Q2 (b)：SDK 與定義套件要發布到
  * 私有 registry 之前，把實作搬進這個套件。
  *
- * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：下面三個值與型別是 `skills` 的 `/名字` 叫用的。
+ * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：下面四個值與型別是 `skills` 的 `/名字` 叫用的。
  *
  * @module
  */
 
 import { defineToken } from '@nexus/sdk';
 
-// `/名字` 叫用要的三個值（#1574）：掃技能（含完不完整）、渲染給模型照做的那一段、認一則訊息是不是人講的話。
-export { isHumanSpeech, renderSkillInvocation, scanSkills } from '@nexus/core';
-export type { SkillCatalogEntry, SkillCatalogScan } from '@nexus/core';
+// `/名字` 叫用要的四個值（#1574、#1928）：掃技能（含完不完整）、渲染給模型照做的那一段、認一則訊息是不是人講的話、
+// 這條 thread 要掃哪些來源。
+export { isHumanSpeech, renderSkillInvocation, scanSkills, threadSkillSources } from '@nexus/core';
+export type { SkillCatalogEntry, SkillCatalogScan, SkillSourcesPlacement } from '@nexus/core';
 
 /** 契約版本（semver）。介面破壞性改動跳 major，消費者的 `inject` 範圍擋下不相容的提供者。 */
 export const SKILL_SOURCES_CONTRACT_VERSION = '1.0.0';

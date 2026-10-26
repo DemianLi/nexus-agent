@@ -142,19 +142,27 @@ describe('紅燈 1：只列人叫得到的、依名字排序、不帶正文', ()
 });
 
 describe('產品路徑的 placer（不給 workspaceRootOf）', () => {
-  it('新 thread、一句話都還沒說：success 不是 not_supported；`/skills/` 是私有根的，`--workspace` 底下的 skills/ 不在來源上', async () => {
-    // 新 thread 配私有根、`--workspace` 退成唯讀的 `/shared`（#1775，`docs/operations.md`〈私有根〉）。出廠來源 `/skills/` 對的是私有根，
-    // 所以工作區裡那三份**不列**。部署方的技能放在 `--workspace/skills/` 時新 thread 看不到是
-    // [#1928](https://github.com/DemianLi/nexus-agent/issues/1928)，不是這張卡的事；改了來源這條跟著改。
+  it('新 thread、一句話都還沒說：列的是 `--workspace/skills/`，路徑在 `/shared/skills/` 底下', async () => {
+    // 新 thread 配私有根、`--workspace` 退成唯讀的 `/shared`（#1775，`docs/operations.md`〈私有根〉）。出廠來源 `/skills/` 在這種 thread 上
+    // 換成 `/shared/skills/`（[#1928](https://github.com/DemianLi/nexus-agent/issues/1928)），模型清單與 `/名字` 見 `skills-shared-workspace.test.ts`。
     const { list, lines } = await serveOn(workspace(STANDARD), '', { productPlacer: true });
-    expect(await list('t-placer')).toMatchObject({ type: 'success', result: { skills: [] } });
+    const raw = (await list('t-placer')) as {
+      type: string;
+      result: { skills: { name: string; path: string }[] };
+    };
+    expect(raw.type).toBe('success');
+    expect(raw.result.skills.map((skill) => [skill.name, skill.path])).toEqual([
+      ['deploy', '/shared/skills/deploy/SKILL.md'],
+      ['normal', '/shared/skills/normal/SKILL.md'],
+    ]);
     expect(lines.join('\n')).not.toContain('[技能]');
   }, 60000);
 });
 
 /**
  * 沒有磁碟根的 thread：墊底是只在圖內讀得到的記憶體 FS，`/skills/` 在那上面等於「這個來源沒有檔案提供者」——回空、**不 warn**
- * （PM 審查 B1，issuecomment-6361790065）。路由到磁碟的來源（`/shared/skills/`）照常讀。
+ * （issuecomment-6361790065）。路由到磁碟的來源（`/shared/skills/`）照常讀；給了 `--workspace` 的新 thread 有共用區，
+ * 出廠的 `/skills/` 換成 `/shared/skills/`（#1928），不落在墊底那一格。
  */
 describe('沒有磁碟根：圖內才讀得到的來源不掃、不 warn', () => {
   const sharedSkills =
@@ -168,15 +176,21 @@ describe('沒有磁碟根：圖內才讀得到的來源不掃、不 warn', () =>
     expect(lines.join('\n')).not.toContain('[技能]');
   }, 60000);
 
-  it('有 --workspace、落盤關掉：{ skills: [] }，不 warn', async () => {
+  it('有 --workspace、落盤關掉：私有根在記憶體，出廠的 /skills/ 換到共用區（磁碟）照常列，不 warn', async () => {
     const { list, lines } = await serveOn(workspace(STANDARD), noPersistence, {
       productPlacer: true,
     });
-    expect(await list('t-no-log')).toMatchObject({ type: 'success', result: { skills: [] } });
+    const raw = (await list('t-no-log')) as {
+      result: { skills: { name: string; path: string }[] };
+    };
+    expect(raw.result.skills.map((skill) => [skill.name, skill.path])).toEqual([
+      ['deploy', '/shared/skills/deploy/SKILL.md'],
+      ['normal', '/shared/skills/normal/SKILL.md'],
+    ]);
     expect(lines.join('\n')).not.toContain('[技能]');
   }, 60000);
 
-  it('落盤關掉、另加 /shared/skills/：共用區（磁碟）上的照常列，/skills/（記憶體）那一格跳過，不 warn', async () => {
+  it('落盤關掉、另加 /shared/skills/：出廠的 /skills/ 也換成 /shared/skills/，重複的只掃一次，每份只列一次，不 warn', async () => {
     const { list, lines } = await serveOn(workspace(STANDARD), `${noPersistence}${sharedSkills}`, {
       productPlacer: true,
     });

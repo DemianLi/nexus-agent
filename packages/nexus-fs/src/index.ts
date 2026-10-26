@@ -80,7 +80,7 @@ export { virtualPathOf } from '@nexus/core';
  *
  * `2.1.0`（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：`FsService` 多 `sharedWorkspacePrefix()`——新 thread 有私有可寫根、
  * `--workspace` 退成唯讀共用區時，共用區在模型位址空間裡的前綴（沒有共用區是 `undefined`）。向後相容的新增：只用 `backend()`／`workspaceRoot()` 等
- * 既有方法的消費者（`^2.0.0`）照常；要讀共用區的消費者（`agent-instructions`）宣告 `^2.1.0`。
+ * 既有方法的消費者（`^2.0.0`）照常；要讀共用區的消費者（`agent-instructions`、`skill-invocation`）宣告 `^2.1.0`。
  */
 export const FS_LOOKUP_CONTRACT_VERSION = '2.1.0';
 

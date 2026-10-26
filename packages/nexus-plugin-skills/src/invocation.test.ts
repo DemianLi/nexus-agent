@@ -32,10 +32,10 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告三個必要依賴：agentLoop（^1.2.0，要帶 source）、fs（^2.0.0）、skillSources（^1.0.0）；沒有設定、沒有 default 匯出', () => {
+  it('manifest 宣告三個必要依賴：agentLoop（^1.2.0，要帶 source）、fs（^2.1.0）、skillSources（^1.0.0）；沒有設定、沒有 default 匯出', () => {
     expect(invocation.manifest.consumes).toEqual([
       { token: 'agentLoop', range: '^1.2.0' },
-      { token: 'fs', range: '^2.0.0' },
+      { token: 'fs', range: '^2.1.0' },
       { token: 'skillSources', range: '^1.0.0' },
     ]);
     expect(invocation.manifest.provides).toEqual([]);

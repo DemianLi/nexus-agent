@@ -357,6 +357,50 @@ export async function scanSkills(
   };
 }
 
+/** {@link threadSkillSources} 讀的這條 thread 的兩件事，形狀同 `FsService` 的同名兩格。 */
+export interface SkillSourcesPlacement {
+  /** 唯讀共用區的前綴（不含結尾斜線）；這條 thread 沒有共用區是 `undefined`。 */
+  sharedWorkspacePrefix(): string | undefined;
+  /** 組裝點與 plugin 包上去的路由前綴；共用區那一格在不在裡面都可以。 */
+  offWorkspacePrefixes(): readonly string[];
+}
+
+/**
+ * 這條 thread 實際要掃的技能來源（[#1928](https://github.com/DemianLi/nexus-agent/issues/1928)）。
+ *
+ * 來源寫的是工作區裡的路徑（出廠 `/skills/`）。新 thread 有私有可寫根，工作區退成掛在共用區前綴底下的唯讀區
+ * （[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)），所以有共用區時，不在任何路由底下的來源一律接到共用區前綴底下：
+ * 讀部署方放的技能，**不讀私有根**——模型寫進私有根的技能，不會變成人用 `/名字` 叫得出、也不會蓋掉部署方同名的那一份。
+ * 已經在路由底下的（部署方明寫的 `/shared/skills/`、plugin 掛的路由）原樣留著。沒有共用區的 thread（舊 thread、CLI）原樣回。
+ *
+ * 換過之後重複的（`/skills/` 換成 `/shared/skills/`，清單上本來也有一個 `/shared/skills/`）只留最後一次出現的那一格：同名後者贏，
+ * 所以優先序跟沒去重時相同；模型的 prompt 每個來源目錄印一行，不去重就會把同一個目錄列兩次。
+ *
+ * 模型清單、`/名字` 叫用、`skill.list` 三條路都經這裡，三邊掃的才是同一組。
+ *
+ * @param sources - 登記的來源，順序就是優先序（後者贏）。
+ * @param placement - 這條 thread 的共用區前綴與路由前綴。
+ * @returns 要掃的來源，順序不變（去掉的重複除外）。
+ */
+export function threadSkillSources(
+  sources: readonly string[],
+  placement: SkillSourcesPlacement,
+): readonly string[] {
+  const shared = placement.sharedWorkspacePrefix();
+  if (shared === undefined) return sources;
+  const routes = [shared, ...placement.offWorkspacePrefixes()];
+  const placed = sources.map((source) =>
+    routes.some((prefix) => isUnderPrefix(source, prefix)) ? source : `${shared}${source}`,
+  );
+  return placed.filter((source, index) => placed.indexOf(source, index + 1) === -1);
+}
+
+/** `path` 是不是 `prefix` 本身或在它底下；兩邊的結尾斜線都不算數。 */
+function isUnderPrefix(path: string, prefix: string): boolean {
+  const base = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
+  return path === base || path.startsWith(`${base}/`);
+}
+
 /**
  * 一則訊息是不是人講的話——`/名字` 叫用只掃這種（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）。
  *
