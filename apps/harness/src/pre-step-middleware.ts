@@ -51,7 +51,11 @@ import { z } from 'zod';
  */
 const SUMMARIZATION_EVENT_VIEW = z.object({ _summarizationEvent: z.unknown().optional() });
 
-/** listener 交得出的來源：`plugin` 與 `skill-invocation` 兩種，形狀同 `session-log.ts` 的 `UserMessageSource`，多一個鍵都不收。 */
+/**
+ * listener 交得出的來源：`plugin` 與 `skill-invocation` 兩種，形狀同 `session-log.ts` 的 `UserMessageSource`，另外 `name` 不能是空字串、
+ * 多一個鍵都不收。`plugin` 要是自己的名字，在 {@link injectionSource} 驗。新的 listener 生產者要在 `session-log.ts` 補它的 variant，
+ * 也在這裡補一支。
+ */
 const LISTENER_SOURCE = z.discriminatedUnion('kind', [
   z.strictObject({ kind: z.literal('plugin'), plugin: z.string() }),
   z.strictObject({
@@ -114,13 +118,10 @@ export function createPreStepMiddleware(
  * `source`，例如 `tool-skill/src/index.ts:198-202`，`687f282e`），沒給是 `{ kind: 'plugin', plugin: <名字> }`。
  *
  * **只收兩種**（[#1920](https://github.com/DemianLi/nexus-agent/issues/1920)）：`plugin` 而且是自己的名字，或形狀完整的 `skill-invocation`。
- * 其餘的宿主擋下：拋錯、這一輪失敗（listener 的錯本來就不吞，見檔頭）。接縫開了這一格之後，任何 listener 都寫得出任何一種：
+ * 其餘的宿主擋下：拋錯、這一輪失敗（listener 的錯本來就不吞，見檔頭）。`source` 這一格任何 listener 都寫得出任何一種：
  * - `user` 是「有人在場」的判別，goal 的直接人類授權認它，`session-log.ts` 的 `user/message` 寫明外掛不能寫這一種；
  * - 別人的 `plugin` 名字會被那位插件當成自己的讀數（time-context 從日誌認 `source.plugin`）；
  * - `session-reference`、`subagent-settled`、`agent-message` 是宿主自己記的，冒出來會在歷史畫面長出假的引用或通知，形狀不全時讀的那側還會拋。
- *
- * **偏離 dsh（理由 2）**：dsh 把 listener 交回的訊息照收、不看 `source`（`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`）；
- * 這道限制是 nexus 為了 goal 的直接人類授權與稽核加的（#1574、#1920）。
  */
 function injectionSource(name: string, injection: PreStepInjection): UserMessageSource {
   const source = injection.source;

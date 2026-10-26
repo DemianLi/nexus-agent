@@ -279,7 +279,7 @@ export function resolveRepeatReminderSettings(
 }
 
 /**
- * 一則訊息是不是我們自己插進去的提醒。索引存取可能是 `undefined`，一併吃掉。
+ * 一則訊息是不是重複提醒 middleware 插進去的那則提醒。收 `undefined`（例如越界的索引存取）回 `false`。
  *
  * @param message - 要判的那一則。
  * @returns 帶 {@link REPEAT_REMINDER_MARKER} 的 `HumanMessage` 就 `true`。

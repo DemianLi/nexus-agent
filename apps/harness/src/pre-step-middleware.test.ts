@@ -229,7 +229,7 @@ describe('宿主建的 middleware', () => {
     expect(sessions.appended).toEqual([]);
   });
 
-  // listener 只交得出 plugin（自己的名字）與 skill-invocation（#1920）；其餘幾種是宿主自己記的，讀的那側認它們。
+  // listener 只交得出 plugin（自己的名字）與形狀完整的 skill-invocation（#1920）。第一則合法：被拒的那一則在後面時，前面的也不能先落盤。
   it.each([
     [
       '別人的 plugin 名字（time-context 從日誌認 source.plugin）',

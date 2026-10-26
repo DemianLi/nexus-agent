@@ -90,9 +90,9 @@ export interface PreStepInjection {
    * `createUserMessage({ source })` 帶的那一格（例如 `tool-skill` 的 `{ kind: 'skill-invocation', name, form: 'instructions' }`，
    * `packages/skill/tool-skill/src/index.ts:198-202`，`687f282e`）。
    *
-   * 不給就是 `{ kind: 'plugin', plugin: <登記時的名字> }`。**只收兩種**：`{ kind: 'plugin', plugin: <登記時的名字> }` 與
-   * `{ kind: 'skill-invocation', name, form: 'instructions' }`，多一個鍵都不收。`'user'` 是「有人在場」的判別（goal 的直接人類授權認它），
-   * 只有宿主領走人話的那條路寫得出來；其餘幾種是宿主自己記的。交了別的宿主就拋，這一輪失敗。
+   * 不給就是 `{ kind: 'plugin', plugin: <登記時的名字> }`。**只收兩種**：同上那一種，與
+   * `{ kind: 'skill-invocation', name, form: 'instructions' }`（`name` 非空），多一個鍵都不收。`'user'` 是「有人在場」的判別（goal 的直接
+   * 人類授權認它），只有宿主領走人話的那條路寫得出來；引用快照、子代理結算、agent 間寄件是宿主自己記的。交了別的宿主就拋，這一輪失敗。
    */
   readonly source?: { readonly kind: string; readonly [detail: string]: unknown };
 }
