@@ -70,10 +70,11 @@
 
   `presets` 是整份替換，所以出廠那兩組也要寫出來，漏寫的就不在表裡了。
 
-**被擋下來時，模型可以請一次升級。** 拒絕後面會接一行指引，模型照著呼叫
-`request_sandbox_escalation`，指名那個檔、要升到哪一格、一句給人看的理由；核准卡上看得到這三樣。
+**在 `read-only` 被擋下來時，模型可以請一次升級，最多升到 `workspace-write`**（[#1827](https://github.com/DemianLi/nexus-agent/issues/1827) D23）。
+拒絕後面會接一行指引，模型照著呼叫 `request_sandbox_escalation`，指名那個檔、要升到哪一格、一句給人看的理由；核准卡上看得到這三樣。
 核准之後**只有那一個檔的下一次變更**在升上去的那一格跑，用完就沒了，session 的模式不動。
-不比現在寬的請求不會去問人。
+不比現在寬的請求不會去問人。**已經在 `workspace-write` 的會話沒有升級可走**：寫到可寫根外（例如經往外指的符號連結）直接拒絕，
+拒絕後面不接指引。升級拿不到 `danger-full-access`；部署方要全開，照〈權限組合：`/permission`〉把那一組加回權限表，由人自己切。
 
 **沒有 `--workspace` 的組裝不會有 `/permission`、那句話，也不會有升級工具**：一格圍堵都沒有的時候
 講「目前是 workspace-write」是說謊。
@@ -411,7 +412,7 @@ echo ls | sftp <收窄過的帳號>@<主機>                # 失敗
 - `/permission` 不帶引數，「切得過去的」只列 `read-only`、`workspace-write`；網頁的權限座也沒有全開。
 - `/permission danger-full-access` 回「認不得」，不切。
 
-這一條管的是會話層的切換。**經人核准的單次升級不經權限表**：模型呼叫 `request_sandbox_escalation`，使用者在核准卡上點頭之後，只有那一個檔的下一次變更跑在升上去的那一格，用完就沒了。這條路不在這一條的確認範圍。
+這一條管的是會話層的切換。**經人核准的單次升級不經權限表**：模型呼叫 `request_sandbox_escalation`，使用者在核准卡上點頭之後，只有那一個檔的下一次變更跑在升上去的那一格，用完就沒了。升級最多到 `workspace-write`，所以這條路到不了全開。
 
 ## 會話日誌
 

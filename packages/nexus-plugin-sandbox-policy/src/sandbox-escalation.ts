@@ -6,9 +6,13 @@
  * （`AgentNode.ts:601-609`），所以 dsh 攤進 `write`／`edit` schema 的那兩個欄位在我們這側
  * 沒有地方掛。那條基座行為的絆索在 `escalation-carrier.test.ts`。
  *
- * ## 照 dsh 的六條
+ * ## 照 dsh 的六條，與升級的上限
  *
  * 出處都是 `references/deepseek-harness/packages/sandbox/sandbox/src/escalation.ts`。
+ *
+ * **升級最多到 `workspace-write`**（[#1827](https://github.com/DemianLi/nexus-agent/issues/1827) D23）：目標詞彙
+ * {@link ESCALATION_TARGETS} 沒有 `danger-full-access`，所以已經在 `workspace-write` 的會話沒有升級可走——被擋的寫入就是拒絕，
+ * 拒絕後面也不接升級指引（{@link canEscalateFrom}）。要全開的部署方自己在權限表加回那一組（#1621），由人用 `/permission` 切。
  *
  * 0. **問人在工具本體裡，fail-closed**（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）。
  *    dsh 的 `resolvePolicy` 先驗欄位（`packages/fs/tool-fs/src/sandbox.ts:88`），再
@@ -18,9 +22,9 @@
  *    整個短路掉，工具照樣回「核准了」。中斷照 `@nexus/plugin-ask-user` 的先例在本體裡 `interrupt()`，
  *    酬載與核准閘門同形（`@nexus/core` 的 `approval.ts`），web 那側一行都不用動。
  * 1. **嚴格加寬是執行期檢查，不是 schema 約束。** schema 的 enum 是封閉的目標詞彙
- *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「比現在寬」在本體裡對這一刻的模式判。
- *    理由照 dsh：schema 是全域的，當前模式是逐次呼叫的事實。收窄 enum 會讓一個被 `/sandbox`
- *    切窄的 session 連升級的槓桿都看不到。enum 外的值（含 `read-only`）在 schema 那一關就被擋，
+ *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「升得到」在本體裡對這一刻的模式判（{@link canEscalate}）。
+ *    理由照 dsh：schema 是全域的，當前模式是逐次呼叫的事實。收窄 enum 會讓一個被 `/permission`
+ *    切窄的 session 連升級的槓桿都看不到。enum 外的值（`read-only`、`danger-full-access`）在 schema 那一關就被擋，
  *    走不到本體，同 dsh 的 schema-pinned。
  * 2. **不加寬的請求不問人。** 本體在發中斷之前就回拒絕，核准卡一張都不掛。
  * 3. **欄位要齊、理由不能是空白。** dsh 的 `validateEscalationArgs`。
@@ -101,34 +105,52 @@ import type { SandboxModeController } from './sandbox-mode.js';
 export const SANDBOX_ESCALATION_TOOL_NAME = 'request_sandbox_escalation';
 
 /**
- * 升級的封閉目標詞彙：任何一次呼叫**可能**升到的每一格。`read-only` 是地板，沒有人升到它。
- *
- * 照 dsh 的 `ESCALATION_TARGETS`：公告時不隨當前模式收窄，理由見模組註解第 1 條。
+ * 升級的封閉目標詞彙：任何一次呼叫**可能**升到的每一格。`read-only` 是地板，沒有人升到它；
+ * `danger-full-access` 不經升級給（模組註解〈升級的上限〉）。公告時不隨當前模式收窄，理由見模組註解第 1 條。
  */
-export const ESCALATION_TARGETS = ['workspace-write', 'danger-full-access'] as const;
+export const ESCALATION_TARGETS = ['workspace-write'] as const;
 
-/** 嚴格加寬表：鍵是這一刻的模式，值是它能升到的那幾格。照 dsh 的 `WIDER_MODES`。 */
-export const WIDER_MODES: Readonly<Record<SandboxMode, readonly SandboxMode[]>> = {
-  'read-only': ['workspace-write', 'danger-full-access'],
-  'workspace-write': ['danger-full-access'],
+/**
+ * 升級可達表：鍵是這一刻的模式，值是從它**經升級**升得到的那幾格。每一格都比鍵嚴格更寬，但比鍵寬的不一定在裡面——
+ * 寬窄本身看 {@link SANDBOX_MODE_WIDTH}。
+ */
+export const ESCALATABLE_MODES: Readonly<Record<SandboxMode, readonly SandboxMode[]>> = {
+  'read-only': ['workspace-write'],
+  'workspace-write': [],
   'danger-full-access': [],
 };
 
 /**
- * `requested` 是不是比 `current` 嚴格更寬。
+ * 沙箱模式的寬窄序，越大越寬。只表達寬窄，不表達升不升得到（那是 {@link ESCALATABLE_MODES}）。
+ * `@nexus/plugin-permission-presets` 自留一份同樣的序，harness 的 `permission-resume-narrow.test.ts` 逐格對照兩邊。
+ */
+export const SANDBOX_MODE_WIDTH: Readonly<Record<SandboxMode, number>> = {
+  'read-only': 0,
+  'workspace-write': 1,
+  'danger-full-access': 2,
+};
+
+/**
+ * `requested` 是不是這一刻能經升級升到的那一格。
  *
  * 收 `unknown` 是防守：本體拿到的參數已經過 schema 的 enum，但這個判準不靠它——一個認不得的
- * 字串在這裡就是「不加寬」。
+ * 字串、或 enum 外的 `danger-full-access`，在這裡都是「升不到」。
  *
  * @param current - 這一刻的模式。
  * @param requested - 模型要的那一格，未驗證。
- * @returns 嚴格更寬時為真。
+ * @returns 升得到時為真。
  */
-export function isStrictlyWider(
-  current: SandboxMode,
-  requested: unknown,
-): requested is SandboxMode {
-  return WIDER_MODES[current].some((mode) => mode === requested);
+export function canEscalate(current: SandboxMode, requested: unknown): requested is SandboxMode {
+  return ESCALATABLE_MODES[current].some((mode) => mode === requested);
+}
+
+/**
+ * 這一刻還有沒有任何一格升得到。沒有的話，被擋下時不接升級指引：叫模型去呼叫一顆必定回拒絕的工具，只是多繞一圈。
+ * @param current - 這一刻的模式。
+ * @returns 至少有一格升得到時為真。
+ */
+export function canEscalateFrom(current: SandboxMode): boolean {
+  return ESCALATABLE_MODES[current].length > 0;
 }
 
 /**
@@ -318,7 +340,7 @@ function createEscalationTool(
       // resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次：人看卡片的那段時間裡，
       // `/sandbox` 可能已經換過格子。
       const current = controller.current;
-      if (!isStrictlyWider(current, requested)) {
+      if (!canEscalate(current, requested)) {
         return refuse(nonWideningRefusal(requested, current));
       }
       // 子代理不問人升級（#324／#328），見模組註解「子代理怎麼拒」。
