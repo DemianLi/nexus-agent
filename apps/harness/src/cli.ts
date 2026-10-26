@@ -60,7 +60,9 @@ import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round
 import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
+import { createCredentialService } from './credentials.js';
 import { processLaunchEnv } from './launch-env.js';
+import { resolveHarnessHome } from './harness-home.js';
 import { turnFailureOf, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import type { LiveLaunch } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
@@ -1125,7 +1127,14 @@ async function runLaunched(
           ...effective,
           ...(threadWorkspaceRoot !== undefined && { workspaceRoot: threadWorkspaceRoot }),
           liveModel,
-          ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+          // 沒帶 `--live` 也給一份（#1989）：MCP 設定裡的憑證引用跟模型 key 同一條規則，這個入口不讀受管檔；沒有 `.env` 那兩層。
+          credentials:
+            liveLaunch?.credentials ??
+            createCredentialService({
+              home: resolveHarnessHome(options.env ?? process.env),
+              launchEnv: processLaunchEnv(),
+              store: false,
+            }),
           threadTitle,
           threadTitleLlm,
           optionalEntries: optionalEntriesOf(loaded, { live: invocation.live }),

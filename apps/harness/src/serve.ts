@@ -84,6 +84,7 @@ import { assertSameCwd } from './resume-guards.js';
 import { McpConnectionPool } from '@nexus/plugin-mcp';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
+import { createCredentialService } from './credentials.js';
 import { processLaunchEnv } from './launch-env.js';
 import { DEFAULT_LIVE_MODEL_ID, loadLiveLaunchEnv } from './live-model.js';
 import type { LiveLaunch } from './live-model.js';
@@ -676,6 +677,16 @@ async function startServer(
   // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
   // 之後在記憶體裡驗。
   const env = options.env ?? process.env;
+  // **沒帶 `--live` 也建一份憑證服務**（#1989）：MCP 設定裡的憑證引用跟模型 key 同一條規則（受管檔 > 啟動環境），只是沒有 `.env`
+  // 那兩層。受管檔不在這裡檢查，引用它的列連線時才讀：從沒讀成功過就壞了，只讓引用它的那幾列連不上；讀成功過之後再壞，照憑證服務的
+  // 規則續用上一份並警告。
+  const credentials =
+    liveLaunch?.credentials ??
+    createCredentialService({
+      home: resolveHarnessHome(env),
+      launchEnv: processLaunchEnv(),
+      store: true,
+    });
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455），與 CLI 同一條
   // 路：同一個函式、同一個 home 層、同一組 `--patch`。
   //
@@ -862,7 +873,7 @@ async function startServer(
         ...invocation,
         liveModel,
         ...(requestGate !== undefined && { requestGate }),
-        ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+        credentials,
         threadTitle,
         threadTitleLlm,
         optionalEntries,
@@ -1347,7 +1358,7 @@ async function startServer(
             }),
             liveModel,
             ...(requestGate !== undefined && { requestGate }),
-            ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+            credentials,
             threadTitle,
             threadTitleLlm,
             optionalEntries: threadList.optionalEntries,
