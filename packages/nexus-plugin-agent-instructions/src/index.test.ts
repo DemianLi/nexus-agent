@@ -180,10 +180,15 @@ describe('讀工作區根那一層', () => {
     expect(text).not.toContain('Instructions from: CLAUDE.md');
   });
 
-  it('回的那一則帶記號、而且只帶記號：source 由宿主蓋，不是這裡的事', async () => {
+  it('回的那一則帶記號，來源標成給模型的指示（#1567 N0136）', async () => {
     const injections = await inject({ '/AGENTS.md': '規矩。' });
     expect(injections).toHaveLength(1);
     expect(injections?.[0]?.additionalKwargs).toEqual({ [AGENT_INSTRUCTIONS_MARKER]: true });
+    expect(injections?.[0]?.source).toEqual({
+      kind: 'plugin',
+      plugin: AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
+      form: 'instructions',
+    });
   });
 });
 
@@ -549,14 +554,14 @@ describe('樹上這一列（#1474）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：agentLoop（^1.0.0）、fs（^2.1.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：agentLoop（^1.3.0）、fs（^2.1.0）；沒有 default 匯出', () => {
     expect(module.manifest.consumes).toEqual([
-      { token: 'agentLoop', range: '^1.0.0' },
+      { token: 'agentLoop', range: '^1.3.0' },
       { token: 'fs', range: '^2.1.0' },
     ]);
     expect(module.manifest.provides).toEqual([]);
     expect(module.inject).toEqual({
-      agentLoop: { range: '^1.0.0' },
+      agentLoop: { range: '^1.3.0' },
       fs: { range: '^2.1.0' },
     });
     expect(agentLoopToken.name).toBe('agentLoop');

@@ -680,6 +680,11 @@ export async function runServePhases(
     readonly timeContext?: boolean;
     /** 每一段（從第二段起）開始前呼叫一次，參數是那一段的序號（從 1 起）：給需要在兩台 serve 之間推時鐘的測試。 */
     readonly beforePhase?: (index: number) => void;
+    /**
+     * 鍵是那一段的序號（同 `beforePhase`，從 1 起，第二台 serve 是 1）：那一段開始前把 patch 重寫成以這一份取代 `patchExtra` 的版本，
+     * 給「兩台 serve 之間管理員改了設定」的測試。沒列到的段沿用上一段寫下的 patch。
+     */
+    readonly patchExtraAt?: Readonly<Record<number, string>>;
   } = {},
 ): Promise<Run> {
   const upstream = await fakeEndpoint(script, true);
@@ -692,6 +697,12 @@ export async function runServePhases(
   try {
     for (const [phaseIndex, texts] of phases.entries()) {
       if (phaseIndex > 0) patchOptions.beforePhase?.(phaseIndex);
+      const extra = patchOptions.patchExtraAt?.[phaseIndex];
+      if (phaseIndex > 0 && extra !== undefined) {
+        writeFileSync(patch, liveModelPatch(upstream.baseURL, extra, patchOptions), {
+          mode: 0o600,
+        });
+      }
       let running: RunningServe | undefined;
       try {
         running = (await runServe({

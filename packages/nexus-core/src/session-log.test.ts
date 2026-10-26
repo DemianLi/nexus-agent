@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest';
 
 import { goalId } from './goal.js';
 import {
+  boundContextSummary,
+  CONTEXT_SUMMARY_MAX_CHARS,
   currentTurnStart,
   hasUnansweredInterrupt,
   isKnownSessionEventType,
@@ -812,5 +814,15 @@ describe('寫入那一關的深度上限（#1661）', () => {
         ),
       );
     });
+  });
+});
+
+describe('來源上的一行摘要（#1567 N0136）', () => {
+  it('不超過 120 字照原樣；超過就切到 119 字再接 …，總長 120', () => {
+    expect(CONTEXT_SUMMARY_MAX_CHARS).toBe(120);
+    expect(boundContextSummary('')).toBe('');
+    expect(boundContextSummary('甲'.repeat(120))).toBe('甲'.repeat(120));
+    expect(boundContextSummary('甲'.repeat(121))).toBe(`${'甲'.repeat(119)}…`);
+    expect(boundContextSummary('甲'.repeat(300))).toHaveLength(120);
   });
 });

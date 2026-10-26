@@ -108,10 +108,9 @@
  * ## 遷上樹（[#1474](https://github.com/DemianLi/nexus-agent/issues/1474)）
  *
  * 函式插件，套 SDK lint：**不 import `@nexus/core`**，也不碰 langchain 的 middleware。要在一次呼叫開頭追加訊息，經 `agentLoop` 服務
- * （`@nexus/agent-loop`）登記一位 `preStep` listener；宿主建 middleware、建訊息、記日誌（Q2 (a)）。這個檔只剩「讀什麼、渲染什麼、
- * 什麼時候不加」。**行為逐字不變**（Q4）：記號、渲染文字、四個候選與順序、`maxBytes` 預設、middleware 名字與在鏈上的位置、日誌
- * `source`、每次 invoke 一格、摘要後下一次 invoke 補回。（遷移當時還有「寫日誌失敗訊息照送」；#1665 起宿主改成原錯往外拋、這一輪失敗，見 harness 的
- * `pre-step-middleware.ts`。）
+ * （`@nexus/agent-loop`）登記一位 `preStep` listener；宿主建 middleware、建訊息、記日誌，來源由這裡交（`{ kind: 'plugin', form: 'instructions' }`，
+ * #1567）。這個檔只管「讀什麼、渲染什麼、什麼時候不加」。寫日誌失敗時宿主原錯往外拋、這一輪失敗（#1665，見 harness 的
+ * `pre-step-middleware.ts`）。
  *
  * 之後改過的兩件（[#1533](https://github.com/DemianLi/nexus-agent/issues/1533)）：**不再在第 500 行截斷**——讀候選檔時沒給 `limit`，
  * 基座的 `read` 補成 500 行（`CompositeBackend.read`、`FilesystemBackend.read` 的預設值），而且不帶任何截斷說明；現在明確讀整份，
@@ -303,8 +302,7 @@ export interface AgentInstructionsLookups {
  * 判準看的是宿主交來的第一個參數——摘要器會組給模型的那一串，不是 `state.messages`：摘要之後舊基線還在 state 裡、但落在切點
  * 之前（#397）。fs 查找不是 `ok`、或 `backend()` 是 `undefined`（這次組裝沒有 backend）就不注入。
  *
- * 宿主交了 `invocation.signal`（`@nexus/agent-loop` 1.1.0 起）就照它收手：已中止的話拋中止原因，一個候選都不讀。1.0.0 的宿主沒有
- * 這一格，照讀。
+ * 宿主交了 `invocation.signal` 就照它收手：已中止的話拋中止原因，一個候選都不讀。宿主拿不到這一輪的訊號時省略它（CLI、eval），照讀。
  *
  * @param limits - 渲染預算與單檔上限，見 {@link AgentInstructionsLimits}。
  * @param lookups - 查找，見 {@link AgentInstructionsLookups}。
@@ -324,17 +322,27 @@ export function createAgentInstructionsListener(
     const files = await discover(backend, directory, limits.maxSourceBytes, invocation.signal);
     const rendered = renderAgentInstructions(files, limits.maxBytes);
     if (rendered === undefined) return undefined;
-    return [{ content: rendered.text, additionalKwargs: { [AGENT_INSTRUCTIONS_MARKER]: true } }];
+    return [
+      {
+        content: rendered.text,
+        additionalKwargs: { [AGENT_INSTRUCTIONS_MARKER]: true },
+        source: {
+          kind: 'plugin',
+          plugin: AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
+          form: 'instructions',
+        },
+      },
+    ];
   };
 }
 
 export const name = 'agent-instructions';
 
 /**
- * 要的服務：`agentLoop`（`^1.0.0`，登記 `preStep` listener）與 `fs`（`^2.1.0`，呼叫當下拿這條 thread 的 backend 與共用區前綴）。範圍在這裡宣告，
+ * 要的服務：`agentLoop`（`^1.3.0`，登記 `preStep` listener，注入帶 `form: 'instructions'`）與 `fs`（`^2.1.0`，呼叫當下拿這條 thread 的 backend 與共用區前綴）。範圍在這裡宣告，
  * 落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2。
  */
-export const inject = injectOf(need(agentLoopToken, '^1.0.0'), need(fsToken, '^2.1.0'));
+export const inject = injectOf(need(agentLoopToken, '^1.3.0'), need(fsToken, '^2.1.0'));
 
 /** 這個插件的設定（manifest 的 `config`）：見 {@link agentInstructionsConfigSchema}。`strictObject`：未知欄位讓載入失敗。 */
 export const Config = agentInstructionsConfigSchema;
@@ -345,7 +353,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [],
   consumes: [
-    { token: agentLoopToken.name, range: '^1.0.0' },
+    { token: agentLoopToken.name, range: '^1.3.0' },
     { token: fsToken.name, range: '^2.1.0' },
   ],
   config: Config,

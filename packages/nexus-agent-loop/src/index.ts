@@ -58,8 +58,10 @@ import { defineToken } from '@nexus/sdk';
  * - `1.2.0`（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）：{@link PreStepInjection} 多一格選填的 `source`，listener 自己宣告
  *   注入的訊息是哪一種來源。只加選填欄位：不給的 listener 照舊記成 `{ kind: 'plugin', plugin: <名字> }`。要用這一格的消費者宣告 `^1.2.0`，
  *   在 1.1.0 的宿主上載不起來，不會靜靜記成 `plugin`。
+ * - `1.3.0`（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）：`plugin` 來源可多帶 `form: 'instructions'`，說這則是給模型照做的
+ *   指示。只多收一種形狀：要交這一格的消費者宣告 `^1.3.0`，1.2.0 的宿主會拒收它（拋錯，這一輪失敗）。
  */
-export const AGENT_LOOP_CONTRACT_VERSION = '1.2.0';
+export const AGENT_LOOP_CONTRACT_VERSION = '1.3.0';
 
 /**
  * 這一次呼叫的設定，listener 的第二個參數。`configurable` 那一格要**原樣**交給會話查找與 fs 查找
@@ -90,7 +92,7 @@ export interface PreStepInjection {
    * `createUserMessage({ source })` 帶的那一格（例如 `tool-skill` 的 `{ kind: 'skill-invocation', name, form: 'instructions' }`，
    * `packages/skill/tool-skill/src/index.ts:198-202`，`687f282e`）。
    *
-   * 不給就是 `{ kind: 'plugin', plugin: <登記時的名字> }`。**只收兩種**：同上那一種，與
+   * 不給就是 `{ kind: 'plugin', plugin: <登記時的名字> }`。**只收兩種**：同上那一種（`1.3.0` 起可多帶 `form: 'instructions'`），與
    * `{ kind: 'skill-invocation', name, form: 'instructions' }`（`name` 非空），多一個鍵都不收。`'user'` 是「有人在場」的判別（goal 的直接
    * 人類授權認它），只有宿主領走人話的那條路寫得出來；引用快照、子代理結算、agent 間寄件是宿主自己記的。交了別的宿主就拋，這一輪失敗。
    */

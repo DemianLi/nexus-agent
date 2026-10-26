@@ -203,6 +203,29 @@ describe('主對話閒著：叫醒它開一輪', () => {
     }
   });
 
+  it('摘要超過 120 字：佇列與日誌記的都截到 120 字、以 … 結尾，送進模型的字不截（#1567 N0136）', async () => {
+    const { agent, inputs } = fakeAgent();
+    const run = open(agent);
+    const long = { ...NOTICE, summary: '長'.repeat(300) };
+    try {
+      run.pump.notifySettled(long);
+      await run.pump.whenIdle();
+      const summaries = run.pump.sessionLog.events.flatMap((event) => {
+        const found: string[] = [];
+        JSON.stringify(event.data, (key, value: unknown) => {
+          if (key === 'summary' && typeof value === 'string') found.push(value);
+          return value;
+        });
+        return found;
+      });
+      // 排進佇列一次、turn/start 一次。
+      expect(summaries).toEqual([`${'長'.repeat(119)}…`, `${'長'.repeat(119)}…`]);
+      expect(inputs).toEqual([NOTICE.text]);
+    } finally {
+      await run.close();
+    }
+  });
+
   it('這一輪不是人話：hasDirectHumanTurn 為假，即使更早有過人的話', async () => {
     const { agent } = fakeAgent();
     const run = open(agent);

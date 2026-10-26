@@ -315,9 +315,34 @@ export interface SessionReferenceSourceEntry {
   readonly inputIndex: number;
 }
 
+/** `notice` 形式那一行摘要（`subagent-settled` 的 `summary`）的上限，以 UTF-16 code unit 計（`String.length`）。 */
+export const CONTEXT_SUMMARY_MAX_CHARS = 120;
+
+/**
+ * 把一行 `notice` 摘要夾在 {@link CONTEXT_SUMMARY_MAX_CHARS} 以內：超過就切到上限少一、結尾補 `…`，總長等於上限。摘要記進日誌
+ * （佇列項與這一輪的來源），而收它的入口收的是任意字串，所以在記錄點夾，不靠生產者自律。
+ *
+ * @param summary - 生產者給的那一行，長度不限。
+ * @returns 夾過的那一行。
+ */
+export function boundContextSummary(summary: string): string {
+  return summary.length <= CONTEXT_SUMMARY_MAX_CHARS
+    ? summary
+    : `${summary.slice(0, CONTEXT_SUMMARY_MAX_CHARS - 1)}…`;
+}
+
 /** `user/message` 是誰塞的，見 {@link SessionEventMap} 的 `user/message`。 */
 export type UserMessageSource =
-  | { readonly kind: 'plugin'; readonly plugin: string }
+  | {
+      readonly kind: 'plugin';
+      readonly plugin: string;
+      /**
+       * 這則是什麼（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567) N0136）：`'instructions'` 是插件塞給模型照做的使用說明，
+       * 今天唯一的生產者是 agent-instructions。只列有生產者的值，新的生產者在這裡加。沒帶就是沒分類：其他插件塞的提醒，以及這一格
+       * 出現之前寫下的日誌。
+       */
+      readonly form?: 'instructions';
+    }
   | {
       readonly kind: 'user';
       /**

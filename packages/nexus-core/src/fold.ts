@@ -105,6 +105,7 @@ import {
   createImageOffloadRecoveryMiddleware,
 } from './image-offload.js';
 import {
+  createRecordedProjectionShell,
   createSummarizer,
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
@@ -298,8 +299,8 @@ export interface FoldOptions {
    *
    * **`false` 是真的關掉**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：
    * root、宣告的 subagent 與 fold 補的 `general-purpose` 各拿到一顆同名空殼，基座無條件
-   * 建的那顆被它原地取代，於是沒有摘要、沒有歷史 offload、也沒有
-   * {@link FoldOptions.toolResultPruning} 那把剪刀。這是 dsh minimal preset 的形狀
+   * 建的那顆被它原地取代，於是沒有摘要、沒有歷史 offload、也不剪新的工具結果（日誌上記過的剪法與參數截斷仍由這顆空殼
+   * 換上去，[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）。這是 dsh minimal preset 的形狀
    * （不掛 compaction）。**連帶沒有的**：上下文溢出時基座那條緊急摘要——dsh 沒掛
    * compaction 時一樣沒有溢出恢復。
    *
@@ -319,7 +320,8 @@ export interface FoldOptions {
   tokenAnchorBook?: TokenAnchorBook;
   /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到
-   * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不先剪。
+   * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不剪新的；日誌上記過的剪法照樣換上去
+   * （[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）。
    *
    * **省略時不一定是預設值**：那時改由部署設定層的 `@nexus/core/tool-result-pruner` 條目
    * 決定，四態的順序見 {@link toolResultPruningDisposition}
@@ -1502,9 +1504,10 @@ function repeatReminderDisposition(
  * [#142](https://github.com/DemianLi/nexus-agent/issues/142) 要消滅的狀態。同名取代是
  * 唯一能讓基座那顆消失的縫（見 {@link SUMMARIZATION_MIDDLEWARE_NAME}）；基座的
  * `excludedMiddleware` 掛在按模型名稱查的行程級 profile 上，做不成「這次組裝關掉」。
- * 空殼沒有任何鉤子、也沒有 `stateSchema`：基座的 `task` 照樣往子代理的 state 塞
+ * 空殼沒有 `stateSchema`，也沒有會變成圖節點的鉤子：基座的 `task` 照樣往子代理的 state 塞
  * `_summarizationSessionId`，實測委派不受影響（`summarization.test.ts`）。
- * [#446](https://github.com/DemianLi/nexus-agent/issues/446)。
+ * [#446](https://github.com/DemianLi/nexus-agent/issues/446)。有會話註冊表時它帶一個 `wrapModelCall`，把日誌上記過的剪法與
+ * 參數截斷換上去（{@link createRecordedProjectionShell}，[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）；沒有就只有名字。
  *
  * **沒有 default backend 又沒關掉是拋，不是靜默跳過。** 這一格的失敗方向有主人：
  * 靜默跳過等於讓基座那顆回來，而它會長得跟「一切正常」一模一樣。同型的前例是
@@ -1527,7 +1530,7 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
   const settings = summarizationDisposition(registry, options);
   // **空殼要在拋之前。** 不要摘要的組裝沒有歷史要寫，也就不必有 backend；而「不要」今天
   // 有兩個來源（明著傳的 `false`、條目的 `disabled: true`），兩個都走這條早退。
-  if (settings === false) return () => ({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  if (settings === false) return () => createRecordedProjectionShell(registry.sessions);
   const backend = options.defaultBackend;
   if (backend === undefined)
     throw new Error(

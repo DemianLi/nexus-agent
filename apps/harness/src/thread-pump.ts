@@ -74,6 +74,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
   APPROVAL_INTERRUPT_KIND,
+  boundContextSummary,
   childProjectionUnits,
   createProjectionFold,
   findPromptRequest,
@@ -1957,7 +1958,7 @@ export class ThreadPump {
    * 按了停止之後停住的佇列**不被這個叫醒**：那是「下一次人送出」才放行的（#637 的 Q2），機器的通知不替人放行。
    *
    * @param notice.text - 送進模型的那一串字。
-   * @param notice.summary - 一行摘要（記在來源上）。
+   * @param notice.summary - 一行摘要（記在來源上，經 {@link boundContextSummary} 夾到 `CONTEXT_SUMMARY_MAX_CHARS` 以內，#1567 N0136）。
    * @param notice.reason - 怎麼收的（記在來源上，#884）；畫面據它分「完成、被停止、失敗、超出上限」。
    * @param notice.senderSessionId - 結算的背景子代理的會話 id。
    */
@@ -1969,7 +1970,7 @@ export class ThreadPump {
   }): void {
     this.#deliverMachineInput(notice.text, {
       kind: 'subagent-settled',
-      summary: notice.summary,
+      summary: boundContextSummary(notice.summary),
       reason: notice.reason,
       senderSessionId: notice.senderSessionId,
     });

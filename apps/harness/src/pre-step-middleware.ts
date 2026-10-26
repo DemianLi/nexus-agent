@@ -52,12 +52,16 @@ import { z } from 'zod';
 const SUMMARIZATION_EVENT_VIEW = z.object({ _summarizationEvent: z.unknown().optional() });
 
 /**
- * listener 交得出的來源：`plugin` 與 `skill-invocation` 兩種，形狀同 `session-log.ts` 的 `UserMessageSource`，另外 `name` 不能是空字串、
- * 多一個鍵都不收。`plugin` 要是自己的名字，在 {@link injectionSource} 驗。新的 listener 生產者要在 `session-log.ts` 補它的 variant，
+ * listener 交得出的來源：`plugin`（可帶 `form: 'instructions'`，契約 1.3.0，#1567）與 `skill-invocation` 兩種，形狀同 `session-log.ts` 的
+ * `UserMessageSource`，另外 `name` 不能是空字串、多一個鍵都不收。`plugin` 要是自己的名字，在 {@link injectionSource} 驗。新的 listener 生產者要在 `session-log.ts` 補它的 variant，
  * 也在這裡補一支。
  */
 const LISTENER_SOURCE = z.discriminatedUnion('kind', [
-  z.strictObject({ kind: z.literal('plugin'), plugin: z.string() }),
+  z.strictObject({
+    kind: z.literal('plugin'),
+    plugin: z.string(),
+    form: z.literal('instructions').optional(),
+  }),
   z.strictObject({
     kind: z.literal('skill-invocation'),
     name: z.string().min(1),
@@ -117,7 +121,8 @@ export function createPreStepMiddleware(
  * 一則注入的來源：listener 給了就用它（契約 1.2.0，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)；dsh 的 listener 自己帶
  * `source`，例如 `tool-skill/src/index.ts:198-202`，`687f282e`），沒給是 `{ kind: 'plugin', plugin: <名字> }`。
  *
- * **只收兩種**（[#1920](https://github.com/DemianLi/nexus-agent/issues/1920)）：`plugin` 而且是自己的名字，或形狀完整的 `skill-invocation`。
+ * **只收兩種**（[#1920](https://github.com/DemianLi/nexus-agent/issues/1920)）：`plugin` 而且是自己的名字（可帶 `form: 'instructions'`，
+ * 契約 1.3.0），或形狀完整的 `skill-invocation`。
  * 其餘的宿主擋下：拋錯、這一輪失敗（listener 的錯本來就不吞，見檔頭）。`source` 這一格任何 listener 都寫得出任何一種：
  * - `user` 是「有人在場」的判別，goal 的直接人類授權認它，`session-log.ts` 的 `user/message` 寫明外掛不能寫這一種；
  * - 別人的 `plugin` 名字會被那位插件當成自己的讀數（time-context 從日誌認 `source.plugin`）；
