@@ -204,8 +204,16 @@ describe('general-purpose 子代理', () => {
     const serving = await serveOn(deployerWorkspace(), [
       {
         content: '委派。',
+        // serve 的 `subagent` 預設派背景：root 這一輪當場收尾，子代理第一次呼叫模型可能落在 close 之後。前景派，這一輪等它跑完。
         toolCalls: [
-          { name: 'subagent', args: { description: '幹活', subagent_type: 'general-purpose' } },
+          {
+            name: 'subagent',
+            args: {
+              description: '幹活',
+              subagent_type: 'general-purpose',
+              run_in_background: false,
+            },
+          },
         ],
       },
       { content: '子代理做完了。' },
@@ -220,12 +228,17 @@ describe('general-purpose 子代理', () => {
     } finally {
       await serving.close();
     }
-    const systems = systemPrompts(await serving.events());
-    // root 一份、子代理一份（各自的日誌各記一則）。
-    expect(systems).toHaveLength(2);
-    for (const system of systems) {
-      expect(system).toContain('/shared/skills/normal/SKILL.md');
-      expect(system).not.toContain('rogue');
+    // root 的會話 id 是 thread id，子代理的是 `<thread>/<runId>`；各自的日誌各記一則 `request/system`。
+    const sessions = await sessionsUnder(join(serving.home, 'sessions'));
+    const ids = sessions.map((session) => session.id).sort();
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toBe('t-gp');
+    expect(ids[1]).toMatch(/^t-gp\//);
+    for (const session of sessions) {
+      const systems = systemPrompts(await closedSessionEvents(session));
+      expect(systems, session.id).toHaveLength(1);
+      expect(systems[0], session.id).toContain('/shared/skills/normal/SKILL.md');
+      expect(systems[0], session.id).not.toContain('rogue');
     }
   }, 90000);
 });
