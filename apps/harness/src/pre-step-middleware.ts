@@ -21,7 +21,7 @@
  *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。`signal` 是這一輪的中止訊號（契約 1.1.0，#1533），見 {@link stepSignal}。
  * 3. 把 listener 回的每一則建成使用者訊息：`additional_kwargs` 先放 listener 給的記號、**再**蓋 `source`（順序影響位元組，golden
  *    比對）；不加 `id`。`source` 是 listener 給的那一格（契約 1.2.0，#1574），沒給是 `{ kind: 'plugin', plugin: <名字> }`；
- *    給了 `kind: 'user'` 就拋，見 {@link injectionSource}。
+ *    給了 listener 不能交的來源就拋，見 {@link injectionSource}。
  * 4. 經**這條 thread 的** `registry.sessions.forCall` 記一筆 `user/message`；找不到就不記、訊息照送，寫不進去原錯往外拋（#1665，
  *    見 `record`）。**不走行程級的
  *    `session-lookup`**：那條多 thread 時可能 `ambiguous`，而這顆 middleware 本來就是這條 thread 的。
@@ -50,6 +50,20 @@ import { z } from 'zod';
  * 鍵名與切點語意的上游絆索在 `apps/harness/src/agent-instructions.test.ts`。
  */
 const SUMMARIZATION_EVENT_VIEW = z.object({ _summarizationEvent: z.unknown().optional() });
+
+/**
+ * listener 交得出的來源：`plugin` 與 `skill-invocation` 兩種，形狀同 `session-log.ts` 的 `UserMessageSource`，另外 `name` 不能是空字串、
+ * 多一個鍵都不收。`plugin` 要是自己的名字，在 {@link injectionSource} 驗。新的 listener 生產者要在 `session-log.ts` 補它的 variant，
+ * 也在這裡補一支。
+ */
+const LISTENER_SOURCE = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('plugin'), plugin: z.string() }),
+  z.strictObject({
+    kind: z.literal('skill-invocation'),
+    name: z.string().min(1),
+    form: z.literal('instructions'),
+  }),
+]);
 
 /**
  * 建一位 `agent/pre-step` listener 的 middleware。
@@ -103,10 +117,11 @@ export function createPreStepMiddleware(
  * 一則注入的來源：listener 給了就用它（契約 1.2.0，[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)；dsh 的 listener 自己帶
  * `source`，例如 `tool-skill/src/index.ts:198-202`，`687f282e`），沒給是 `{ kind: 'plugin', plugin: <名字> }`。
  *
- * **拒絕 `user`**：日誌上 `user` 是「有人在場」的判別，goal 的直接人類授權認它，`session-log.ts` 的 `user/message` 寫明外掛不能寫這一種。
- * 接縫開了這一格之後，任何 listener 都寫得出來，所以宿主在這裡擋：拋錯、這一輪失敗（listener 的錯本來就不吞，見檔頭）。
- * **偏離 dsh（理由 2）**：dsh 把 listener 交回的訊息照收、不看 `source`（`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`）；
- * 這道限制是 nexus 為了 goal 的直接人類授權加的（#1574）。
+ * **只收兩種**（[#1920](https://github.com/DemianLi/nexus-agent/issues/1920)）：`plugin` 而且是自己的名字，或形狀完整的 `skill-invocation`。
+ * 其餘的宿主擋下：拋錯、這一輪失敗（listener 的錯本來就不吞，見檔頭）。`source` 這一格任何 listener 都寫得出任何一種：
+ * - `user` 是「有人在場」的判別，goal 的直接人類授權認它，`session-log.ts` 的 `user/message` 寫明外掛不能寫這一種；
+ * - 別人的 `plugin` 名字會被那位插件當成自己的讀數（time-context 從日誌認 `source.plugin`）；
+ * - `session-reference`、`subagent-settled`、`agent-message` 是宿主自己記的，冒出來會在歷史畫面長出假的引用或通知，形狀不全時讀的那側還會拋。
  */
 function injectionSource(name: string, injection: PreStepInjection): UserMessageSource {
   const source = injection.source;
@@ -116,8 +131,18 @@ function injectionSource(name: string, injection: PreStepInjection): UserMessage
       `pre-step listener "${name}" 交了 user 來源：只有人話能記成 user，listener 注入的訊息不能冒充`,
     );
   }
-  // 形狀由 listener 負責，宿主照記；`UserMessageSource` 列的是今天已知的生產者，新的生產者在 session-log.ts 補它的 variant。
-  return source as UserMessageSource;
+  const parsed = LISTENER_SOURCE.safeParse(source);
+  if (!parsed.success) {
+    throw new Error(
+      `pre-step listener "${name}" 交了 ${JSON.stringify(source)}：listener 只能交 plugin（自己的名字）或 skill-invocation 來源`,
+    );
+  }
+  if (parsed.data.kind === 'plugin' && parsed.data.plugin !== name) {
+    throw new Error(
+      `pre-step listener "${name}" 交了別人的 plugin 來源 "${parsed.data.plugin}"：只能用自己的名字`,
+    );
+  }
+  return parsed.data;
 }
 
 /**

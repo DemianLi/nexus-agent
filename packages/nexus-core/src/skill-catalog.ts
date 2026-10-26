@@ -37,7 +37,7 @@ import type {
 import { parse as parseYaml } from 'yaml';
 
 import { isMachineMessage } from './message-source.js';
-import { REPEAT_REMINDER_MARKER } from './repeat-reminder.js';
+import { isReminder } from './repeat-reminder.js';
 import { isSummarizationMessage } from './summarization.js';
 
 /** 一份技能誰叫得到。兩格都照 dsh 的 `SkillInvocationPolicy`。 */
@@ -408,7 +408,7 @@ function isUnderPrefix(path: string, prefix: string): boolean {
  * `message-source.ts` 的「缺席就是人」：圖上一輪開頭那句人話沒有來源，所以不能照搬「只認 `user`」，改成**排除**機器造的：
  *
  * - 有來源、而且不是 `user`（{@link isMachineMessage}：外掛注入、goal 續行、引用快照、背景子代理的回報、技能叫用本身）；
- * - **重複提醒**：它沒有來源、只帶 {@link REPEAT_REMINDER_MARKER}，詳細那一版會把模型寫的工具參數原樣放進去
+ * - **重複提醒**：它沒有來源、只帶提醒的記號（{@link isReminder}），詳細那一版會把模型寫的工具參數原樣放進去
  *   （`repeat-reminder.ts` 的 `detailedReminder`），參數裡的 ` /deploy ` 不能變成人在叫用；dsh 的提醒帶 `repeat-tool-reminder` 來源；
  * - **基座的摘要訊息**：只帶 `lc_source: 'summarization'`（{@link isSummarizationMessage}），內容是模型寫的。
  *
@@ -420,7 +420,7 @@ function isUnderPrefix(path: string, prefix: string): boolean {
 export function isHumanSpeech(message: BaseMessage): boolean {
   if (!HumanMessage.isInstance(message)) return false;
   if (isMachineMessage(message)) return false;
-  if (message.additional_kwargs[REPEAT_REMINDER_MARKER] != null) return false;
+  if (isReminder(message)) return false;
   return !isSummarizationMessage(message);
 }
 
