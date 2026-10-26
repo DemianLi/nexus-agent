@@ -605,7 +605,12 @@ describe('驗收 7（樹上）：第二輪不重複', () => {
   it('第一輪的 /deploy 當時叫不出來，第二輪之前才放上那份技能：第二輪沒有手勢，不注入', async () => {
     const booted = await boot(home());
     const ws = workspace({});
-    const thread = await openThread(booted, 't-late', [{ content: '一。' }, { content: '二。' }], ws);
+    const thread = await openThread(
+      booted,
+      't-late',
+      [{ content: '一。' }, { content: '二。' }],
+      ws,
+    );
     await thread.say('/deploy');
     mkdirSync(join(ws, 'skills', 'deploy'), { recursive: true });
     writeFileSync(
