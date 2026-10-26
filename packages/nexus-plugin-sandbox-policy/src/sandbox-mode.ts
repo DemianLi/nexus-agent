@@ -90,6 +90,8 @@ import type {
   SessionSubject,
 } from '@nexus/core';
 
+import { canEscalateFrom } from './sandbox-escalation.js';
+
 /**
  * 一份日誌上**最後一顆** `sandbox/mode` 記的那一格，一顆都沒有時是 `undefined`。
  *
@@ -280,12 +282,15 @@ export class SandboxModeController implements SandboxGrantLedger {
   readonly source: SandboxModeSource = () => this.current;
 
   /**
-   * 被擋下時接在拒絕後面的升級指引。**只有真的掛了升級工具才有**——由掛它的那一步
-   * （{@link SandboxModeController.enableEscalation}）寫進來，所以 fence 與工具對「這個組裝
-   * 有沒有升級」讀的是同一個事實，不會一邊公告一邊沒有。
+   * 被擋下時接在拒絕後面的升級指引。兩個條件都要成立才有：
+   *
+   * - **真的掛了升級工具**——由掛它的那一步（{@link SandboxModeController.enableEscalation}）寫進來，所以 fence 與工具對「這個組裝
+   *   有沒有升級」讀的是同一個事實，不會一邊公告一邊沒有；
+   * - **這一刻還有一格升得到**（{@link canEscalateFrom}）。讀的是 {@link SandboxModeController.current}，所以跟著 `/permission` 切換，
+   *   在子代理裡是委派那一格。
    */
   get escalationHint(): string | undefined {
-    return this.#escalationHint;
+    return canEscalateFrom(this.current) ? this.#escalationHint : undefined;
   }
 
   /**
