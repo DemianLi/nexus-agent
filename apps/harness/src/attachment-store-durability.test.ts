@@ -14,6 +14,10 @@ import { dirname, join, parse, relative } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { PNG_7X5 } from './image-fixtures.js';
+
+const PNG = Buffer.from(PNG_7X5, 'base64');
+
 /** 記下的呼叫：`sync <目錄>`、`link <目標>`、`rename <目標>`。路徑經 {@link label}。 */
 const calls: string[] = [];
 /** 要拋錯的呼叫（以記下的那一行比對）→ 錯誤碼；`open <目錄>` 也可以注入。 */
@@ -160,15 +164,11 @@ describe.runIf(POSIX)('A 新物件：回報之前每一層都 fsync 了', () => 
 
   it('圖片也一樣：物件 link 之後逐層 fsync 到根（圖不建別名）', async () => {
     const store = storeAt(home);
-    const digest = sha('png');
+    // 已經合格的 PNG 原樣通過規範化，落盤的就是這份位元組。
+    const digest = createHash('sha256').update(PNG).digest('hex');
     const ab = digest.slice(0, 2);
 
-    await store.saveImage({
-      data: new TextEncoder().encode('png'),
-      mediaType: 'image/png',
-      width: 1,
-      height: 1,
-    });
+    await store.saveImage({ data: PNG, mediaType: 'image/png' });
 
     const after = calls.slice(calls.indexOf(`link ~/attachments/v1/file-objects/${ab}/${digest}`));
     expect(after).toEqual([
@@ -264,17 +264,12 @@ describe.runIf(POSIX)('E 目錄 fsync 失敗不吞', () => {
 
   it('圖片：附件根以下的 fsync 拋 EIO 一樣拒絕', async () => {
     const store = storeAt(home);
-    const digest = sha('img-eio');
+    const digest = createHash('sha256').update(PNG).digest('hex');
     failOn.set(`sync ~/attachments/v1/file-objects/${digest.slice(0, 2)}`, 'EIO');
 
-    await expect(
-      store.saveImage({
-        data: new TextEncoder().encode('img-eio'),
-        mediaType: 'image/png',
-        width: 1,
-        height: 1,
-      }),
-    ).rejects.toMatchObject({ code: 'ATTACHMENT_STORE_FAILED' });
+    await expect(store.saveImage({ data: PNG, mediaType: 'image/png' })).rejects.toMatchObject({
+      code: 'ATTACHMENT_STORE_FAILED',
+    });
     expect(injected).toBe(1);
   });
 });

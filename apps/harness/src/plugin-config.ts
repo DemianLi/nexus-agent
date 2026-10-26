@@ -263,6 +263,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '要放寬，把數值調大；要關掉閒置逐出，把 `idleEvictAfterMs` 設成 0。',
   ],
   [
+    '#settings/attachment-images',
+    '這一列不裝任何東西，只講同時規範化幾張圖。關掉它不會讓轉碼不再限流' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設 2，' +
+      '超過的照樣排隊，只會讓這份設定讀起來像把限流拆了。要放寬，把數值調大（上限 8）。',
+  ],
+  [
     '#settings/logger-console',
     '這一列不裝任何東西，只講伺服器日誌的等級門檻與格式。關掉它不會讓日誌停下來' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設（info、文字格式），' +

@@ -9,14 +9,14 @@
  *
  * **送出的每張圖前面有一行把手**（{@link requestImageHandleText}，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）：照 dsh 的
  * pi-ai 轉接（`packages/llm/llm-pi-ai/src/context.ts:79-89`，`687f282e`），每個 `image` 區塊先推一段文字、再推圖，模型才叫得出
- * 「哪一張」。只有真的送圖的那一支有；三種佔位字本身就是文字，不另加。和 dsh 不同的三處，都是**既有偏離 2 的延伸**
- * （`apps/harness/src/attachment-store.ts` 檔頭偏離 2「圖片沒有正規化／縮圖」，類別是過渡；撤除時這三處跟著撤）：
+ * 「哪一張」。只有真的送圖的那一支有；三種佔位字本身就是文字，不另加。把手是整句，包括 `It may be resized or re-encoded…` 那半句。
+ * 兩件事跟著儲存走：
  *
- * 1. **不加 `It may be resized or re-encoded…` 那半句**：dsh 送的是正規化過的請求版本，那半句講的是它；我們不正規化，送的就是原圖，
- *    寬高也就是參照記的寬高，那半句不成立。
- * 2. **沒有唯讀路徑那一支**（`normalizedAccessText`）：dsh 那個路徑指的是收圖時正規化出來的唯讀副本；我們不做正規化，就沒有那份
- *    副本可指，同 {@link offloadedImageText} 沒有本機路徑的那一支。
- * 3. **寬高用參照記的**：dsh 用請求版本的寬高；我們沒有請求版本，原圖就是請求版本，兩者相等。
+ * 1. **把手不帶路徑。** 圖不建檔名的硬連結、不在模型讀附件的路由底下（`apps/harness/src/attachment-store.ts` 的 `saveImages`），
+ *    模型的檔案工具讀不到它，沒有路徑可指，同 {@link offloadedImageText} 沒有本機路徑的那一支。企業內部聊天機器人不拿工具
+ *    改使用者的圖；要給模型讀圖的路徑，另開卡。
+ * 2. **寬高用參照記的。** 沒有另做請求版本，送的就是落盤那一份，寬高相等；`attachment-store.ts` 檔頭第 2 條的 TODO(#2033)
+ *    做了之後改用請求版本的寬高。
  *
  * @module
  */
@@ -56,14 +56,13 @@ export function assumedFileLine(ref: FileAttachmentRef): string {
 }
 
 /**
- * 送出的一張圖前面那一行把手。逐字照 dsh `requestImageHandleText` 沒有路徑時的前半句（`packages/llm/llm/src/content.ts:91-102`，身分字串
- * 照同檔 `:45-53` 的 `imageIdentity`）：有名字是 `"名字" (sha256:…)`，沒名字是完整的 `attachmentId`。dsh 的寬高是請求版本的；我們不正規化，
- * 請求版本就是原圖，所以用參照記的寬高。後半句不加的理由見檔頭。
+ * 送出的一張圖前面那一行把手：有名字是 `"名字" (sha256:…)`（名字照 JSON 字串跳脫），沒名字是完整的 `attachmentId`；
+ * 寬高用參照記的，見檔頭第 2 條。整句由 `attachment-projection.test.ts` 逐字釘住。
  */
 export function requestImageHandleText(ref: ImageAttachmentRef): string {
   const identity =
     ref.name === undefined ? ref.attachmentId : `${JSON.stringify(ref.name)} (${ref.attachmentId})`;
-  return `Image ${identity}; request preview ${String(ref.width)}x${String(ref.height)}px.`;
+  return `Image ${identity}; request preview ${String(ref.width)}x${String(ref.height)}px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`;
 }
 
 /**

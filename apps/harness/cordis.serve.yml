@@ -31,3 +31,13 @@
     levels:
       default: info
     colors: false
+
+# 圖片轉碼的併發上限（#2033）。使用者貼的圖落盤前要規範化（整張解碼、轉正、轉 sRGB、縮到 2048² 以內、重新編碼），
+# 那一步吃 CPU；一個 serve 行程同時最多轉這麼多張，超過的排隊（先進先出）。1 到 8 的整數，預設 2，鍵名、範圍與預設照 dsh
+# `LocalAttachmentStore` 的 `imageCompressionConcurrency`。主機 CPU 多、同時貼圖的人多，在自己的 `~/.nexus-agent/cordis.patch.yml`
+# 調大。起動期讀一次、改了要重啟。規範化的三個數值（像素預算、長邊、位元組目標）是出廠常數，不在這一列。
+# **這一列關不掉**：關掉只會回到預設 2，讀起來卻像把限流拆了，所以在 `PROTECTED_ENTRY_NAMES` 上。
+- id: attachment-images
+  name: '#settings/attachment-images'
+  config:
+    imageCompressionConcurrency: 2

@@ -16,7 +16,7 @@
  * **零憑證、零外部連線**：附件根放 `/var/tmp`。
  */
 
-import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
@@ -27,6 +27,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { createWireClient } from '@nexus/wire';
 import type { PromptAttachment } from '@nexus/wire';
 import type { SessionRegistry } from '@nexus/core';
+import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -319,7 +320,9 @@ describe('內嵌的圖', () => {
       expect(blocks.map((b) => b.type)).toEqual(['text', 'image_url', 'text']);
       // 圖前面一行把手（#1566）：名字與存下來的 attachmentId、寬高從位元組認的。
       const digest = createHash('sha256').update(Buffer.from(PNG_7X5, 'base64')).digest('hex');
-      expect(blocks[0]!.text).toBe(`Image "s.png" (sha256:${digest}); request preview 7x5px.`);
+      expect(blocks[0]!.text).toBe(
+        `Image "s.png" (sha256:${digest}); request preview 7x5px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`,
+      );
       expect(blocks[1]!.image_url!.url).toBe(`data:image/png;base64,${PNG_7X5}`);
 
       // 前提：base64 真的在這次請求裡，下面的「不在」才有意義。
@@ -331,6 +334,76 @@ describe('內嵌的圖', () => {
       const state = JSON.stringify(tuple?.checkpoint.channel_values ?? {});
       expect(state).toContain('nexus-image');
       expect(state).not.toContain(PNG_7X5);
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it('超過 2048 的圖、帶 EXIF 轉向的圖：送模型的與落盤的都是規範化那一份，附件 id 是它的 sha256，原圖不留（#2033）', async () => {
+    const big = await sharp({
+      create: { width: 3000, height: 3000, channels: 3, background: '#2a6' },
+    })
+      .png()
+      .toBuffer();
+    // 存的點陣是 40×20，EXIF 6 要順時針轉 90°，看起來是 20×40。
+    const turned = await sharp({
+      create: { width: 40, height: 20, channels: 3, background: '#a26' },
+    })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    const { client, handler, events } = connect('vision');
+    try {
+      const result = await client.runStart(THREAD, '兩張', {
+        attachments: [
+          { type: 'image', mediaType: 'image/png', data: big.toString('base64'), name: 'big.png' },
+          {
+            type: 'image',
+            mediaType: 'image/jpeg',
+            data: turned.toString('base64'),
+            name: 't.jpg',
+          },
+        ],
+      });
+      expect(result).toMatchObject({ type: 'success' });
+      await settled(events, 1);
+
+      const start = events().find((event) => event.type === 'turn/start') as unknown as {
+        data: { attachments: { attachmentId: string; width: number; height: number }[] };
+      };
+      const [bigRef, turnedRef] = start.data.attachments;
+      expect(bigRef).toMatchObject({
+        mediaType: 'image/jpeg',
+        width: 2048,
+        height: 2048,
+        originalDimensions: { width: 3000, height: 3000 },
+      });
+      expect(turnedRef).toMatchObject({ mediaType: 'image/jpeg', width: 20, height: 40 });
+      expect(turnedRef).not.toHaveProperty('originalDimensions');
+
+      const user = requests[0]!.messages.find((m) => m.role === 'user')!;
+      const sent = (user.content as { type: string; image_url?: { url: string } }[])
+        .filter((block) => block.type === 'image_url')
+        .map((block) => Buffer.from(block.image_url!.url.split(',')[1]!, 'base64'));
+      expect(sent).toHaveLength(2);
+      const objects = join(attachmentsRootOf(home), 'file-objects');
+      for (const [index, ref] of [bigRef!, turnedRef!].entries()) {
+        const bytes = sent[index]!;
+        const digest = createHash('sha256').update(bytes).digest('hex');
+        expect(ref.attachmentId).toBe(`sha256:${digest}`);
+        expect(await readFile(join(objects, digest.slice(0, 2), digest))).toEqual(bytes);
+        const meta = await sharp(bytes).metadata();
+        expect(meta).toMatchObject({ width: ref.width, height: ref.height, space: 'srgb' });
+        expect(meta.orientation).toBeUndefined();
+        expect(meta.exif).toBeUndefined();
+      }
+      // 原圖不落盤：兩份收到的位元組都不在物件裡。
+      const stored = (
+        await Promise.all((await readdir(objects)).map((dir) => readdir(join(objects, dir))))
+      ).flat();
+      for (const original of [big, turned]) {
+        expect(stored).not.toContain(createHash('sha256').update(original).digest('hex'));
+      }
     } finally {
       await handler.close();
     }

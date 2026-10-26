@@ -2,7 +2,7 @@
  * 使用者貼的圖，收下之前的檢查（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
  *
  * `run.start` 帶的圖是內嵌 base64（`{ type: 'image', mediaType, data, name? }`，見 `@nexus/wire` 的 `PromptAttachment`）。
- * 這一支只做**驗證**：解 base64、從位元組本身認出格式與寬高、五道上限。存下來是 `AttachmentStore.saveImage`。
+ * 這一支只做**驗證**：解 base64、從位元組本身認出格式與寬高、五道上限。解碼、規範化與存下來是 `AttachmentStore.saveImages`。
  *
  * ## 五道上限（照 dsh `attachment-local/src/index.ts:34-42`，`687f282e`）
  *
@@ -14,19 +14,18 @@
  * | 每張像素 | 6400 萬（{@link MAX_IMAGE_PIXELS}，寬乘高） |
  * | 每張單邊 | 8192（{@link MAX_IMAGE_DIMENSION}，寬或高，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)） |
  *
- * 超過就**拒收，不縮圖**。位元組上限先看 base64 的長度（不解碼就知道），像素與單邊上限要先讀得出寬高；先比總量、再比單邊，
+ * 超過就**拒收**；規範化只縮這五道以內的圖。位元組上限先看 base64 的長度（不解碼就知道），像素與單邊上限要先讀得出寬高；先比總量、再比單邊，
  * 照 dsh `image.ts:121-126`。
  *
  * **只收規範的 base64**（#1566，照 dsh `attachment/src/admission.ts:15-24` 的 `decodeCanonicalBase64`）：解碼後再編碼要等於原字串。
  * `QR==` 這種尾端多帶位元的寫法字元集與長度都合格，解出來跟 `QQ==` 一樣，照 dsh 拒收。
  *
- * ## 偏離（依 AGENTS.md 登記）
+ * ## 兩關：檔頭與整張解碼
  *
- * 1. **用檔頭認格式與寬高，不整張解碼。** dsh 用 sharp 把整張圖解碼過（`image.ts` 的 `detectImage`）才收，同時做正規化；我們沒有
- *    影像函式庫，也不做正規化（見 `attachment-store.ts` 檔頭偏離 2）。所以「位元組是 PNG／JPEG／WebP／GIF 的檔頭、宣告的
- *    媒體類型對得上、寬高在上限內」會收，**檔頭之後壞掉的圖會被收下**，由端點在請求時拒絕。
- * 2. **EXIF 轉向沒套**：dsh 回報的寬高是轉向之後看起來的軸，我們回報檔頭裡存的軸。只影響顯示用的寬高與像素上限的算法
- *    （乘積不受轉向影響，所以上限判定一樣）。
+ * 這一支是第一關，同步、不解碼像素：張數、位元組、base64、檔頭認得出格式與寬高、宣告的型別對得上、像素與單邊上限。
+ * 第二關在 `AttachmentStore.saveImages`（`image-normalization.ts` 的 `prepareImage`）：整張解碼，解不完拒收，再規範化。
+ * **像素與單邊上限只在這一關判**：第二關的 sharp 不設像素上限（`limitInputPixels: false`），宣告了上億像素的圖要在叫 sharp 之前
+ * 就擋掉。這裡用檔頭存的軸判；EXIF 轉向只交換寬高，總像素與長邊不變，用轉正後的軸判結果相同。
  *
  * @module
  */
@@ -62,6 +61,8 @@ export const DEFAULT_IMAGE_LIMITS: ImageLimits = {
 /** 圖被拒的原因。`message` 是給人看的中文，指出是哪一張、哪一道上限。 */
 export type ImageIntakeCode =
   | 'INVALID_IMAGE'
+  /** 宣告的媒體類型跟位元組不符：檔頭那一關（`admitImages`）與整張解碼那一關（`prepareImage`）都回這個碼。 */
+  | 'IMAGE_TYPE_MISMATCH'
   | 'IMAGE_TOO_LARGE'
   | 'TOO_MANY_IMAGES'
   | 'MESSAGE_IMAGES_TOO_LARGE'
@@ -92,6 +93,8 @@ export interface AdmittedImage {
   readonly width: number;
   readonly height: number;
   readonly name?: string | undefined;
+  /** 錯誤訊息裡指這一張的說法，第二關沿用。 */
+  readonly label: string;
 }
 
 /** 從檔頭認出來的格式與寬高。 */
@@ -294,7 +297,7 @@ export function admitImages(
     if (facts.mediaType !== part.mediaType) {
       throw new ImageIntakeError(
         `${label(index, part)}宣告是 ${part.mediaType}，位元組卻是 ${facts.mediaType}`,
-        'INVALID_IMAGE',
+        'IMAGE_TYPE_MISMATCH',
       );
     }
     if (facts.width * facts.height > limits.maxImagePixels) {
@@ -309,6 +312,6 @@ export function admitImages(
         'IMAGE_DIMENSION_TOO_LARGE',
       );
     }
-    return { bytes, ...facts, name: part.name };
+    return { bytes, ...facts, name: part.name, label: label(index, part) };
   });
 }

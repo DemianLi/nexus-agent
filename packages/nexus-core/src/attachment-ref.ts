@@ -6,7 +6,8 @@
  *
  * ## 照 dsh 的部分（`packages/attachment/attachment/src/types.ts`、`packages/llm/llm/src/content.ts`，`5badb150`）
  *
- * - 參照：`{ attachmentId, name, bytes }`（檔案）、`{ attachmentId, mediaType, bytes, width, height, name? }`（圖）。
+ * - 參照：`{ attachmentId, name, bytes }`（檔案）、`{ attachmentId, mediaType, bytes, width, height, name?, originalDimensions? }`（圖；
+ *   圖的欄位描述的是落盤那一份規範化過的圖，`originalDimensions` 只在規範化縮過時才有）。
  * - 訊息裡的區塊：`{ type: 'file', attachment }`、`{ type: 'image', attachment }`。
  * - **檔案從不以位元組到達任何供應商**：組請求時每個檔案區塊換成確定性的一行（{@link fileHandleText}），模型要讀就用檔案工具
  *   讀存下來的唯讀副本。
@@ -16,7 +17,7 @@
  * 1. **區塊型別叫 `nexus-file`／`nexus-image`，不叫 `file`／`image`。** LangChain 的訊息塊自己有標準的 `file`／`image`（欄位不同），
  *    我們的區塊裝不進去，也不能讓基座或 `@langchain/openai` 把它當成它認得的那一種。形狀照 dsh（`{ type, attachment }`），
  *    只有型別名不同。基座表達不出 dsh 的 `ImageBlock`／`FileBlock`，所以退到自己的區塊型別。
- * 2. **圖的壓縮與正規化沒做**：見 `attachment-store.ts` 檔頭。
+ * 2. **沒有依請求準備的圖片版本**：見 `attachment-store.ts` 檔頭偏離第 2 條的 TODO(#2033)。
  *
  * @module
  */
@@ -60,6 +61,8 @@ export interface ImageAttachmentRef {
   readonly height: number;
   /** 顯示名，不含本機路徑；不當路徑解讀。 */
   readonly name?: string;
+  /** 規範化縮過時，收下的原圖套過 EXIF 轉向之後的寬高；沒縮就沒有這一格。 */
+  readonly originalDimensions?: { readonly width: number; readonly height: number };
 }
 
 /**
@@ -161,8 +164,15 @@ export function isImageRef(value: unknown): value is ImageAttachmentRef {
     isCount(ref['bytes']) &&
     isCount(ref['width']) &&
     isCount(ref['height']) &&
-    (ref['name'] === undefined || typeof ref['name'] === 'string')
+    (ref['name'] === undefined || typeof ref['name'] === 'string') &&
+    (ref['originalDimensions'] === undefined || isDimensions(ref['originalDimensions']))
   );
+}
+
+function isDimensions(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const dimensions = value as Record<string, unknown>;
+  return isCount(dimensions['width']) && isCount(dimensions['height']);
 }
 
 /** 這個值是不是形狀合格的附件參照（含 `type`）。 */
