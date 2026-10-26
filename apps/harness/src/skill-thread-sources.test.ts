@@ -98,6 +98,12 @@ describe('兩列有同名技能，前面那一列重載過', () => {
       expect(injected).toHaveLength(1);
       expect(injected[0]!.text).toContain('後面那一列。');
       expect(injected[0]!.text).not.toContain('前面那一列。');
+      // `skill.list`：同一份。
+      const fs = ((await root.tree.context()).get('fs') as FsLookupService).forThread('t-twin');
+      const listed = await createSkillCatalog({ fs: () => fs, warn: () => {} })();
+      expect(listed?.map((entry) => [entry.name, entry.path])).toEqual([
+        ['deploy', '/late/deploy/SKILL.md'],
+      ]);
     } finally {
       await attachment.detach();
       await built.dispose();
