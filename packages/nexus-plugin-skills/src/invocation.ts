@@ -40,7 +40,9 @@
  *    **留下的缺口**：一輪跑著時插的話（`source.kind === 'user'`）裡的 `/名字` 叫不出來——插話進圖時這次 invoke 的 pre-step 已經跑過，
  *    下一次 invoke 它前面已經有模型回覆。**重開條件**同 `@nexus/agent-loop` 偏離 2（#389 重開，每一步注入）。
  * 3. **防重複的判準放在訊息上**（同理由 1）：dsh 的收件匣領走就不會再領；我們每次 invoke 都重看那一段，所以注入的訊息帶
- *    `nexus_skill_invocation: { name, forMessageId }`，那句人話已有同名的注入就不再注入（上一輪中途停掉、沒有模型回覆時會走到）。
+ *    `nexus_skill_invocation: { name }`，這一段已有同名的注入就不再注入（上一輪中途停掉、沒有模型回覆時會走到）。看的是段落、不是
+ *    哪一句人話：一輪開頭那句人話的 id 是 reducer 補的，日誌不記，續接重放回來就換了一個
+ *    （[#1920](https://github.com/DemianLi/nexus-agent/issues/1920)）。所以同一段裡人再打一次 `/名字` 也不再注入——那份正文模型在這一段看得到。
  *
  * ## 代價
  *
@@ -108,7 +110,7 @@ export function apply(ctx: Context): void {
 /** `/名字` 叫用那位 listener 的名字：宿主拿它當 middleware 名。 */
 export const SKILL_INVOCATION_LISTENER_NAME = 'SkillInvocationMiddleware';
 
-/** 注入的訊息帶的記號：`{ name, forMessageId }`，認出「這句人話的這個名字已經注入過了」（檔頭偏離 3）。 */
+/** 注入的訊息帶的記號：`{ name }`，認出「這一段已經注入過這個名字」（檔頭偏離 3）。 */
 export const SKILL_INVOCATION_MARKER = 'nexus_skill_invocation';
 
 /**
@@ -120,18 +122,12 @@ export const SKILL_GESTURE = /(^|\s)\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/g;
 /** listener 收到的一則訊息（`@langchain/core` 的 `BaseMessage`，經接縫的型別取得，這個套件不另外相依它）。 */
 type BaseMessage = Parameters<PreStepListener>[0][number];
 
-/** 記號的形狀。 */
-interface InvocationMark {
-  readonly name: string;
-  readonly forMessageId: string | undefined;
-}
-
-function markOf(message: BaseMessage): InvocationMark | undefined {
+/** 記號上的名字；沒有記號是 `undefined`。 */
+function markedName(message: BaseMessage): string | undefined {
   const raw: unknown = message.additional_kwargs?.[SKILL_INVOCATION_MARKER];
   if (typeof raw !== 'object' || raw === null) return undefined;
-  const { name, forMessageId } = raw as { name?: unknown; forMessageId?: unknown };
-  if (typeof name !== 'string') return undefined;
-  return { name, forMessageId: typeof forMessageId === 'string' ? forMessageId : undefined };
+  const { name } = raw as { name?: unknown };
+  return typeof name === 'string' ? name : undefined;
 }
 
 function textBlocks(message: BaseMessage): string[] {
@@ -144,30 +140,21 @@ function textBlocks(message: BaseMessage): string[] {
   );
 }
 
-function markKey(forMessageId: string | undefined, name: string): string {
-  return JSON.stringify([forMessageId ?? null, name]);
-}
-
 /**
- * 這一次要叫用的名字，依第一次出現的順序去重，每個名字記著它出現在哪一句人話。只看最後一則模型回覆之後的人話（檔頭偏離 2）；
- * 那句人話已經有同名注入的跳過（偏離 3）。
+ * 這一次要叫用的名字，依第一次出現的順序去重。只看最後一則模型回覆之後的人話（檔頭偏離 2）；這一段已經有同名注入的跳過（偏離 3）。
  */
-function requestedNames(visible: readonly BaseMessage[]): InvocationMark[] {
+function requestedNames(visible: readonly BaseMessage[]): string[] {
   const after = visible.slice(visible.findLastIndex((message) => message.type === 'ai') + 1);
-  const done = new Set<string>();
-  for (const message of after) {
-    const mark = markOf(message);
-    if (mark !== undefined) done.add(markKey(mark.forMessageId, mark.name));
-  }
-  const requested: InvocationMark[] = [];
+  const seen = new Set(after.map(markedName).filter((name) => name !== undefined));
+  const requested: string[] = [];
   for (const message of after) {
     if (!isHumanSpeech(message)) continue;
     for (const text of textBlocks(message)) {
       for (const match of text.matchAll(SKILL_GESTURE)) {
         const name = match[2]!;
-        if (requested.some((entry) => entry.name === name)) continue;
-        if (done.has(markKey(message.id, name))) continue;
-        requested.push({ name, forMessageId: message.id });
+        if (seen.has(name)) continue;
+        seen.add(name);
+        requested.push(name);
       }
     }
   }
@@ -201,22 +188,17 @@ export function createSkillInvocationListener(lookups: SkillInvocationLookups): 
     if (!scan.complete) {
       // 照 dsh 的提供者語意：掃描不完整，這一步一份都叫不出來（檔頭）。
       console.warn(
-        `技能叫用這一次不注入：掃描不完整（${requested.map((entry) => `/${entry.name}`).join('、')}）`,
+        `技能叫用這一次不注入：掃描不完整（${requested.map((name) => `/${name}`).join('、')}）`,
       );
       return undefined;
     }
     const injections: PreStepInjection[] = [];
-    for (const { name, forMessageId } of requested) {
+    for (const name of requested) {
       const skill = scan.skills.find((entry) => entry.name === name);
       if (skill === undefined || !skill.invocation.userInvocable) continue;
       injections.push({
         content: renderSkillInvocation(skill),
-        additionalKwargs: {
-          [SKILL_INVOCATION_MARKER]: {
-            name,
-            ...(forMessageId !== undefined && { forMessageId }),
-          },
-        },
+        additionalKwargs: { [SKILL_INVOCATION_MARKER]: { name } },
         source: { kind: 'skill-invocation', name, form: 'instructions' },
       });
     }
