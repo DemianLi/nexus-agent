@@ -21,16 +21,27 @@ import {
   sandboxPolicySentence,
   sharedReadOnlyRefusal,
 } from './index.js';
-import { ESCALATABLE_MODES, SANDBOX_MODE_WIDTH } from './sandbox-escalation.js';
+import { ESCALATABLE_MODES, ESCALATION_TARGETS, SANDBOX_MODE_WIDTH } from './sandbox-escalation.js';
 import { SandboxModeController } from './sandbox-mode.js';
 
 describe('升級可達表（#1827 D23）', () => {
-  // 「不加寬」那句模型看得到的話（「並不比…更寬」）靠這一條才為真：升得到的每一格都嚴格更寬。
+  // 第 2 條「不加寬的請求不問人」的另一面：升得到、會去問人的每一格，都嚴格更寬。
   it.each(Object.entries(ESCALATABLE_MODES))('%s 升得到的每一格都比它嚴格更寬', (from, targets) => {
     for (const to of targets) {
       expect(SANDBOX_MODE_WIDTH[to]).toBeGreaterThan(
         SANDBOX_MODE_WIDTH[from as keyof typeof SANDBOX_MODE_WIDTH],
       );
+    }
+  });
+
+  // 拒絕句「並不比…更寬」要為真，靠的是這一條。只看目標詞彙：詞彙以外的值在 schema 那一關就被擋，走不到拒絕句。
+  it.each(Object.entries(ESCALATABLE_MODES))('%s 升不到的目標都不比它寬', (from, targets) => {
+    for (const to of ESCALATION_TARGETS) {
+      if (!targets.includes(to)) {
+        expect(SANDBOX_MODE_WIDTH[to]).toBeLessThanOrEqual(
+          SANDBOX_MODE_WIDTH[from as keyof typeof SANDBOX_MODE_WIDTH],
+        );
+      }
     }
   });
 
