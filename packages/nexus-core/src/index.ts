@@ -58,6 +58,13 @@ export {
   isApprovalPolicy,
   recordedApprovalPolicy,
 } from './approval-policy.js';
+export {
+  APPROVAL_POLICY_ASK_SENTENCE,
+  APPROVAL_POLICY_NEVER_SENTENCE,
+  APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
+  approvalPolicySentence,
+  createApprovalPolicyPromptMiddleware,
+} from './approval-policy-prompt.js';
 export type {
   ApprovalPolicySource,
   ApprovalPolicySwitchOutcome,
@@ -470,6 +477,7 @@ export {
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export {
   createBackgroundApprovalGate,
+  createBackgroundApprovalPolicyPrompt,
   foldRegistry,
   ROOT_ONLY_NOTICE,
   rootOnlyRefusal,

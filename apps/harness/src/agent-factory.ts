@@ -49,6 +49,7 @@ import {
   foldRegistry,
   formatOrigin,
   createBackgroundApprovalGate,
+  createBackgroundApprovalPolicyPrompt,
   createRegistry,
   createSubagentDelegationMiddleware,
   isFeedbackEvent,
@@ -964,6 +965,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
      * @throws 沒有這個子代理、規格不合。
      */
     const backgroundApprovalGate = createBackgroundApprovalGate(registry);
+    const backgroundApprovalPolicyPrompt = createBackgroundApprovalPolicyPrompt();
     const compileSubagent = (
       name: string,
       checkpointer: NonNullable<AgentCheckpointer>,
@@ -980,6 +982,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         follow: false,
         // 背景子代理背後沒有人（#328 第 1 項只開前景）：換成 `policy-never` 的閘門，要核准的操作確定性回絕，不發中斷（#737，照 dsh）。
         approvalGate: backgroundApprovalGate,
+        // 政策句跟閘門用同一組事實（#1986）：閘門換成 `policy-never`，這一句也換成「一律自動回絕」那句。
+        approvalPolicyPrompt: backgroundApprovalPolicyPrompt,
         // 聲明同理換回背景那句：fold 放進規格的是前景用的（核准交給使用者），背景背後沒有人。
         delegation: createSubagentDelegationMiddleware(),
       }).withConfig({

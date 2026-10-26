@@ -723,6 +723,15 @@ const withTimeContext = (chain: readonly string[]): string[] =>
       : [name],
   );
 
+/**
+ * fold 在其餘 plugin 內側放一格 `nexusApprovalPolicyPrompt`（核准政策句，#1986），`b0a74042` 錄的名單沒有它：鏈上在其餘 plugin
+ * 之後、以 `last` 掛的 `nexusSystemPrompt` 之前多**恰好一格**。同上，只在這裡插這一格。
+ */
+const withApprovalPolicyPrompt = (chain: readonly string[]): string[] =>
+  chain.flatMap((name) =>
+    name === 'nexusSystemPrompt' ? ['nexusApprovalPolicyPrompt', name] : [name],
+  );
+
 describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐字相同（出貨清單、CLI、serve 各一次）', () => {
   it('出貨清單（createNexusAgent）', async () => {
     const shipped = await shippedPlugins();
@@ -736,7 +745,9 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
       }),
     });
     try {
-      expect(middlewareNames(agent)).toEqual(withTimeContext(CHAIN_SHIPPED));
+      expect(middlewareNames(agent)).toEqual(
+        withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED)),
+      );
     } finally {
       await dispose();
     }
@@ -753,7 +764,9 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
         workspace: workspaceWith('規矩。'),
       });
       try {
-        expect(middlewareNames(thread.built.agent)).toEqual(withTimeContext(expected));
+        expect(middlewareNames(thread.built.agent)).toEqual(
+          withApprovalPolicyPrompt(withTimeContext(expected)),
+        );
       } finally {
         await closeThread(thread);
       }
