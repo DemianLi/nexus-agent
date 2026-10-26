@@ -12,10 +12,10 @@ import {
 /** 沙箱升級的核准卡（#1292）。工具名與模式字面照 plugin 抄，這裡從模型實際收到的目錄讀回來對。 */
 
 describe('跟 plugin 對得上', () => {
-  it('目錄裡有這顆工具，`sandbox_permissions` 的 enum 有全開那格', () => {
+  it('目錄裡有這顆工具，`sandbox_permissions` 的 enum 有 workspace-write', () => {
     const section = catalogToolSection(SANDBOX_ESCALATION_TOOL);
     expect(section).toContain('"sandbox_permissions"');
-    expect(section).toContain(`"${FULL_ACCESS_MODE}"`);
+    expect(section).toContain('"workspace-write"');
   });
 });
 
