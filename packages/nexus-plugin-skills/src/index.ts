@@ -105,8 +105,8 @@ export const manifest = defineManifest({
  * **不經過 `permissions`**；而模型要拿到正文得呼叫 `read_file` 工具，**那條經過**。所以一條蓋到 skill 路徑的 deny 規則不會讓
  * skill 消失——它會讓 skill 好端端地列在 prompt 裡，然後模型每次去讀都被拒。`apps/harness` 有測試釘著這個形狀。
  *
- * （順帶：我們的 `ContainedFilesystemBackend` 那道 fence 在這裡**完全不參與**——它只包寫入路徑，讀一律通過。擋人的自始至終
- * 只有 `permissions` 一層。）
+ * （順帶：我們的 `ContainedFilesystemBackend` 那道 fence 在這裡**不擋**——它對讀只擋 canonicalize 之後落在根外的路徑
+ * （#1982），skill 在根內。擋人的自始至終只有 `permissions` 一層。）
  *
  * **繼承規則跟 memory 正好相反。** 基座的 `createSubagentDefaultMiddleware` 有 `input.skills` 分支，所以 subagent **可以**有
  * 自己的 skills；而 general-purpose subagent 會拿到 root 的那份來源——它由 `foldRegistry` 註冊，照基座那份把 `skills` 抄了

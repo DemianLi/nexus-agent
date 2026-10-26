@@ -17,9 +17,9 @@
  * | `write` | **寫穿了** |
  * | `edit` | **寫穿了** |
  * | `delete` | 被擋（基座的 `resolveDeletePath()` 會 lstat 逐層檢查祖先） |
- * | `read` | 讀穿了（照 [#34](https://github.com/DemianLi/nexus-agent/issues/34)：讀歸 `permissions` 管，fence 不碰） |
+ * | `read` | 讀穿了（`O_NOFOLLOW` 只管最後一段，祖先目錄的連結照跟） |
  *
- * 所以這個 class 要補的是 `write` 與 `edit`。**`delete` 也一起覆寫**，理由不是基座那邊有錯，
+ * 所以這個 class 要補的是 `write` 與 `edit`，以及讀（見下面〈讀取面的圍堵〉）。**`delete` 也一起覆寫**，理由不是基座那邊有錯，
  * 而是**拒絕的措辭要只有一種**：基座擋下來時說的是 `Symlink parent not allowed`，我們說的是
  * 另一句，同一條政策在模型眼裡就有兩套詞彙，測試也得斷言兩個字串。dsh 讓所有拒絕共用一個
  * `FS_SANDBOX_DENIED` 正是這個理由。
@@ -49,12 +49,19 @@
  * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
  *
+ * ## 讀取面的圍堵（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）
+ *
+ * 讀得到內容的六個入口——`read`、`readRaw`、`ls`、`grep`／`glob` 的起點、`downloadFiles`——讀之前都 canonicalize，
+ * 落在根外就拒，碼同樣是 `FS_SANDBOX_DENIED`。擋的是工作區裡往外指的符號連結：連結指向 harness home 或 `.env` 時，
+ * 經它讀得到 key。`grep`／`glob` 從根往下搜時 rg 本來就不跟樹內的連結，所以只看起點。判法與例外見 `readDenial`。
+ * 讀能看到什麼的其餘策略仍歸 `permissions`。
+ *
  * ## 形狀照 dsh 的 `fs-sandbox`
  *
  * [#34](https://github.com/DemianLi/nexus-agent/issues/34) 的定案，逐條對應
  * （`references/deepseek-harness/packages/fs/fs-sandbox/`）：**繼承**而不是平行實作、
- * **只在寫入路徑加 fence**、**讀一律通過**、canonicalize-then-contain 且在委派前重新
- * canonicalize、三個 mode 留一個不設防的逃生口。
+ * 變更的 fence 只掛在寫入路徑、canonicalize-then-contain 且在委派前重新
+ * canonicalize、三個 mode 留一個不設防的逃生口。讀取面的圍堵是上面那一節，不在這份定案裡。
  *
  * ## 威脅模型：這是 policy fence，不是 kernel boundary
  *
@@ -82,9 +89,12 @@ import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
   DeleteResult,
   EditResult,
+  FileDownloadResponse,
   FileUploadResponse,
   GlobResult,
   GrepResult,
+  LsResult,
+  ReadRawResult,
   ReadResult,
   WriteResult,
 } from 'deepagents';
@@ -226,10 +236,9 @@ export type GrepPathsResult = GrepResult & { readonly errorCode?: SearchErrorCod
 /**
  * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
  *
- * `read-only` 只擋得住**變更**——讀不經過這裡（`read` 的覆寫只管讀法；`glob`／`grep` 的覆寫只管怎麼起 rg，
- * 不加任何 fence，見 {@link ContainedFilesystemBackend.grep}、{@link ContainedFilesystemBackend.glob}）。dsh 也是
- * 這樣：它的 fence 同樣只掛在兩個 mutation 上，「read-only」講的是這個 backend 不改東西，
- * 不是「這個 agent 看不到東西」。看不看得到歸 `permissions`。
+ * `read-only` 只擋得住**變更**：「read-only」講的是這個 backend 不改東西，不是「這個 agent 看不到東西」。
+ * 讀在 `read-only` 與 `workspace-write` 下一樣，只擋經符號連結落到根外的（檔頭〈讀取面的圍堵〉）；
+ * 其餘看不看得到歸 `permissions`。
  *
  * **`read-only` 的根上，組裝點預設的摘要器照樣留得住對話歷史**
  * （[#348](https://github.com/DemianLi/nexus-agent/issues/348) 之後）。長對話會觸發基座的
@@ -462,7 +471,7 @@ function statVersion(info: BigIntStats): string {
 }
 
 /**
- * 在寫入路徑上加了 canonicalize-then-contain 的 `FilesystemBackend`。
+ * 在寫入路徑與讀取面上加了 canonicalize-then-contain 的 `FilesystemBackend`。
  *
  * **一定是 `virtualMode: true`**，而且不給關。`virtualMode: false` 的語義是「絕對路徑原樣
  * 放行」，那個模式底下沒有「根」這回事，圍堵無從談起——留一個關得掉的開關只會讓
@@ -543,6 +552,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     const signal = currentToolCallSignal();
     try {
       const resolved = this.resolveVirtual(filePath);
+      const refused = await this.readDenial(filePath, 'read');
+      if (refused !== undefined) return denied({ error: refused });
       if (signal?.aborted === true) return { error: READ_ABORTED };
       if (!(await stat(resolved)).isFile()) {
         noteFsError(FS_NOT_REGULAR_FILE);
@@ -617,6 +628,48 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       noteReadVersion(statVersion(info));
     }
     return { content: page.content, mimeType: 'text/plain' };
+  }
+
+  /**
+   * 原始內容（`submit_record`、先讀後改的版本記錄、工具結果的中繼資料走這支）。先過讀取面的圍堵（{@link readDenial}），其餘照基座。
+   *
+   * @param filePath - 虛擬路徑。
+   * @returns 基座的結果，或落在根外時的錯誤結果。
+   */
+  override async readRaw(filePath: string): Promise<ReadRawResult> {
+    const refused = await this.readDenial(filePath, 'readRaw');
+    return refused === undefined ? super.readRaw(filePath) : denied({ error: refused });
+  }
+
+  /**
+   * 列目錄。先過讀取面的圍堵（{@link readDenial}），其餘照基座。
+   *
+   * @param dirPath - 虛擬路徑。
+   * @returns 基座的結果，或落在根外時的錯誤結果。
+   */
+  override async ls(dirPath: string): Promise<LsResult> {
+    const refused = await this.readDenial(dirPath, 'ls');
+    return refused === undefined ? super.ls(dirPath) : denied({ error: refused });
+  }
+
+  /**
+   * 批次下載（技能目錄經它讀 `SKILL.md`），每個檔各自過讀取面的圍堵（{@link readDenial}）。錯誤型別是四個碼的 union，
+   * 跟 {@link uploadFiles} 一樣，落在根外的回 `permission_denied`。
+   *
+   * @param paths - 虛擬路徑。
+   * @returns 逐檔對應的結果，順序與輸入相同。
+   */
+  override async downloadFiles(paths: string[]): Promise<FileDownloadResponse[]> {
+    const results: FileDownloadResponse[] = [];
+    for (const filePath of paths) {
+      if ((await this.readDenial(filePath, 'downloadFiles')) === undefined) {
+        results.push(...(await super.downloadFiles([filePath])));
+      } else {
+        noteSandboxDenial();
+        results.push({ path: filePath, content: null, error: 'permission_denied' });
+      }
+    }
+    return results;
   }
 
   /**
@@ -1051,7 +1104,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     directoriesOnly: boolean,
   ): Promise<
     | { readonly kind: 'empty' }
-    | { readonly kind: 'failed'; readonly failure: ReturnType<typeof searchFailure> }
+    | {
+        readonly kind: 'failed';
+        readonly failure: { readonly error: string; readonly errorCode?: SearchErrorCode };
+      }
     | { readonly kind: 'ready'; readonly executable: string; readonly searchArgs: string[] }
   > {
     try {
@@ -1065,6 +1121,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
           `${tool} cannot search: the workspace root is not an accessible directory`,
         ),
       };
+    }
+    for (const dirPath of dirPaths) {
+      const refused = await this.readDenial(dirPath || '.', tool);
+      if (refused !== undefined) return { kind: 'failed', failure: denied({ error: refused }) };
     }
     const searchArgs = await this.existingSearchArgs(dirPaths, directoriesOnly);
     if (searchArgs.length === 0) return { kind: 'empty' };
@@ -1269,6 +1329,42 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // 基座那一次 lexical resolve 走的是實際位置。合法路徑走到這裡通常原封不動。
     const inside = relative(realRoot, realTarget);
     return inside === '' ? '/' : `/${inside.split(sep).join('/')}`;
+  }
+
+  /**
+   * 讀取面的圍堵（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）：路徑 canonicalize 之後落在根外就拒。
+   * 擋的是工作區裡往外指的符號連結——祖先目錄的連結基座照跟，經它讀得到根外的檔，連結指向 harness home 或 `.env` 時就是 key。
+   *
+   * 跟寫入的 {@link verdict} 同一套 canonicalize-then-contain（`canonical-path.ts`），差在三處：
+   * - **`read-only` 也照判**：那一格擋的是變更，不是讀。只有 `danger-full-access` 放行，跟寫入一致。
+   * - **不認領 grant、不接升級指引**：升級只蓋變更，指引對讀沒有用。
+   * - **判不了就放行給下游**：字面檢查（`..`、`~`）擋下的、根不存在、解析撞上 `ELOOP`／`EACCES` 的，原樣交給基座或自己的讀法，
+   *   錯誤字句照舊。那些情況下游本來就讀不到東西。
+   *
+   * 最後一段是指向根外的檔案連結也在這裡被拒，不再走到 `O_NOFOLLOW` 的 `ELOOP`；指向根內的照舊 `ELOOP`。
+   * 殘留的 TOCTOU（檢查之後、開檔之前祖先被換成連結）跟寫入面同一個取捨，見檔頭。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 出現在拒絕訊息裡的操作名。
+   * @returns 落在根外時的拒絕訊息；其餘 `undefined`。
+   */
+  private async readDenial(
+    filePath: string,
+    operation: 'read' | 'readRaw' | 'ls' | 'downloadFiles' | RipgrepTool,
+  ): Promise<string | undefined> {
+    const mode = this.mode;
+    if (mode === 'danger-full-access') return undefined;
+    let realRoot: string;
+    let realTarget: string;
+    try {
+      const resolved = this.resolveVirtual(filePath);
+      realRoot = await realpath(this.cwd);
+      realTarget = await canonicalize(resolved);
+    } catch {
+      return undefined;
+    }
+    if (isWithin(realRoot, realTarget)) return undefined;
+    return this.denial(mode, operation, filePath, '經符號連結解析之後落在根之外');
   }
 
   /**

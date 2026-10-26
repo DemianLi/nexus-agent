@@ -45,7 +45,9 @@ beforeAll(async () => {
   await writeFile(join(root, 'bad.txt'), Buffer.from([0x61, 0xff, 0xfe, 0x62]));
   await mkdir(join(root, 'dir'));
   await writeFile(join(outside, 'secret.txt'), 'secret\n');
-  await symlink(join(outside, 'secret.txt'), join(root, 'link.txt'));
+  // 根內互指的檔案連結照舊 `ELOOP`（基座的 `O_NOFOLLOW`）；指向根外的在那之前就被讀取面的圍堵拒掉（#1982）。
+  await symlink(join(root, 'two.txt'), join(root, 'link.txt'));
+  await symlink(join(outside, 'secret.txt'), join(root, 'out-link.txt'));
   await writeFile(join(root, 'crlf.txt'), 'one\r\ntwo\r\nthree\r\n');
   await writeFile(
     join(root, 'bom.txt'),
@@ -66,7 +68,7 @@ afterAll(async () => {
 const scrub = (text: string): string =>
   text.split(root).join('<ROOT>').split(outside).join('<OUT>');
 
-describe('ContainedFilesystemBackend.read：九種情況與切片，字句與內容逐字不變', () => {
+describe('ContainedFilesystemBackend.read：十種情況與切片，字句與內容逐字不變', () => {
   const cases: [string, string, number, number, unknown][] = [
     [
       'missing',
@@ -87,6 +89,16 @@ describe('ContainedFilesystemBackend.read：九種情況與切片，字句與內
       {
         error:
           "Error reading file '/link.txt': ELOOP: too many symbolic links encountered, open '<ROOT>/link.txt'",
+      },
+    ],
+    [
+      'outward-symlink',
+      '/out-link.txt',
+      0,
+      2000,
+      {
+        error:
+          '[containment] 拒絕 read "/out-link.txt"：經符號連結解析之後落在根之外（mode: workspace-write）',
       },
     ],
     [
