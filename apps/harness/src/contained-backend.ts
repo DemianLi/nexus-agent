@@ -458,6 +458,18 @@ export interface ContainedFilesystemBackendOptions {
 /** 讀檔改用串流的檔案大小門檻（位元組）。同 dsh 的 `STREAM_MIN_SIZE`（`read.ts:21`）。 */
 export const READ_STREAM_MIN_SIZE = 10 * 1024 * 1024;
 
+/**
+ * 讀取面的圍堵解析失敗時，交給下游照舊處理的錯誤碼（見 `ContainedFilesystemBackend.readDenial`）。`ENOENT`／`ENOTDIR` 只會是根不存在
+ * （`canonicalize` 把它們當成還不存在的尾巴）；其餘三個是開檔走同一串路徑必定也會撞上的。不在這裡的一律拒。
+ */
+const READ_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
+  'ENOENT',
+  'ENOTDIR',
+  'ELOOP',
+  'EACCES',
+  'ENAMETOOLONG',
+]);
+
 /** 讀檔被取消（使用者停止、工具逾時）時回的錯誤字句。 */
 const READ_ABORTED = 'read aborted';
 
@@ -1340,8 +1352,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 跟寫入的 {@link verdict} 同一套 canonicalize-then-contain（`canonical-path.ts`），差在三處：
    * - **`read-only` 也照判**：那一格擋的是變更，不是讀。只有 `danger-full-access` 放行，跟寫入一致。
    * - **不認領 grant、不接升級指引**：升級只蓋變更，指引對讀沒有用。
-   * - **判不了就放行給下游**：字面檢查（`..`、`~`）擋下的、根不存在、解析撞上 `ELOOP`／`EACCES` 的，原樣交給基座或自己的讀法，
-   *   錯誤字句照舊。那些情況下游本來就讀不到東西。
+   * - **判不了時只放行下游必定也失敗的那幾種**：字面檢查（`..`、`~`）擋下的、根不存在、解析撞上 {@link READ_PASSTHROUGH_CODES}
+   *   的，原樣交給基座或自己的讀法，錯誤字句照舊——開檔走同一串路徑，會撞上同一個錯。其餘（`EMFILE`、`EIO` 這類暫時性的錯）
+   *   拒，措辭同 {@link verdict} 的「路徑解析失敗」：這一刻判不了，下一刻開檔卻可能成功，就經連結讀出去了。
    *
    * 最後一段是指向根外的檔案連結也在這裡被拒，到不了開檔那一步；指向根內的檔案連結在開檔時是 `ELOOP`（`O_NOFOLLOW`）。
    * 殘留的 TOCTOU（檢查之後、開檔之前祖先被換成連結）跟寫入面同一個取捨，見檔頭。
@@ -1356,14 +1369,21 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   ): Promise<string | undefined> {
     const mode = this.mode;
     if (mode === 'danger-full-access') return undefined;
+    let resolved: string;
+    try {
+      resolved = this.resolveVirtual(filePath);
+    } catch {
+      return undefined;
+    }
     let realRoot: string;
     let realTarget: string;
     try {
-      const resolved = this.resolveVirtual(filePath);
       realRoot = await realpath(this.cwd);
       realTarget = await canonicalize(resolved);
-    } catch {
-      return undefined;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== undefined && READ_PASSTHROUGH_CODES.has(code)) return undefined;
+      return this.denial(mode, operation, filePath, `路徑解析失敗（${code ?? '未知'}）`);
     }
     if (isWithin(realRoot, realTarget)) return undefined;
     return this.denial(mode, operation, filePath, '經符號連結解析之後落在根之外');
