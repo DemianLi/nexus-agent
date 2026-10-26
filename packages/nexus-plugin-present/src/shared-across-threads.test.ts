@@ -79,6 +79,7 @@ async function mount(threads: readonly string[]): Promise<Mounted> {
       hasWorkspace: () => true,
       workspaceRoot: () => undefined,
       sharedWorkspacePrefix: () => undefined,
+      skillSources: () => [],
     });
     bind(thread);
   }

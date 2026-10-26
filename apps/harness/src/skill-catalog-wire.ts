@@ -20,9 +20,9 @@
  *   `list` 照常回。我們整組來源是一次掃描，等於一個提供者，所以照同一個語意回空陣列、記一行 warn。同刀 2 的叫用
  *   （PM 裁決 issuecomment-6358917124 第 1 題），不算偏離。
  *
- * 來源讀登記處（`skillSources` 那份行程級的），**每次呼叫當下讀**，不讀折進 thread 的那一份：同刀 2 的叫用（PM 裁決 (i)），
- * `/名字` 叫得出的和這份清單列的才是同一組。有共用區的 thread（#1775 的新 thread）先經 `threadSkillSources` 換成共用區底下的來源
- * （[#1928](https://github.com/DemianLi/nexus-agent/issues/1928)），跟模型清單、`/名字` 同一支。
+ * 來源讀這條 thread 的 fs 把手（`FsService.skillSources()`，[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）：fold 折進這條 thread、
+ * 模型清單用的那一份，有共用區的 thread（#1775 的新 thread）已換成共用區底下的來源（#1928）。`/名字` 讀的也是這一份，所以模型看得到的、
+ * 人叫得出的、這份清單列的是同一組。
  *
  * ## 與 dsh 的偏離
  *
@@ -42,21 +42,19 @@
  * @module
  */
 
-import { scanSkills, threadSkillSources } from '@nexus/core';
+import { scanSkills } from '@nexus/core';
 import type { FsService, SkillCatalogEntry } from '@nexus/core';
 import type { SkillEntry } from '@nexus/wire';
 
 /** {@link createSkillCatalog} 讀這條 thread 的 `fs` 把手讀的那幾格。 */
 export type SkillCatalogFs = Pick<
   FsService,
-  'backend' | 'workspaceRoot' | 'offWorkspacePrefixes' | 'sharedWorkspacePrefix'
+  'backend' | 'workspaceRoot' | 'offWorkspacePrefixes' | 'skillSources'
 >;
 
-/** {@link createSkillCatalog} 每次呼叫當下要讀的三樣東西。 */
+/** {@link createSkillCatalog} 每次呼叫當下要讀的兩樣東西。 */
 export interface SkillCatalogLookups {
-  /** 技能來源，順序就是優先序（後者贏）。空的就是沒掛 `skills` 那一列。 */
-  readonly sources: () => readonly string[];
-  /** 這條 thread 的 `fs` 把手；還沒有（沒綁）是 `undefined`。 */
+  /** 這條 thread 的 `fs` 把手（技能來源也從它讀，空的就是沒掛 `skills` 那一列）；還沒有（沒綁）是 `undefined`。 */
   readonly fs: () => SkillCatalogFs | undefined;
   /** 掃描不完整時說一句話的去處（伺服器日誌）。 */
   readonly warn: (message: string) => void;
@@ -71,20 +69,17 @@ export type SkillCatalog = () => Promise<readonly SkillEntry[] | undefined>;
 /**
  * 造一條 thread 的 {@link SkillCatalog}。
  *
- * @param lookups - 來源、backend 與 warn，都在呼叫當下才讀。
+ * @param lookups - fs 把手與 warn，都在呼叫當下才讀。
  * @returns 每次呼叫重掃一次的清單。
  */
 export function createSkillCatalog(lookups: SkillCatalogLookups): SkillCatalog {
   return async () => {
-    const sources = lookups.sources();
-    if (sources.length === 0) return undefined;
     const fs = lookups.fs();
     const backend = fs?.backend();
     if (fs === undefined || backend === undefined) return undefined;
-    // 有共用區的 thread 讀共用區裡的技能（#1928），跟模型清單、`/名字` 同一支換。
-    const readable = threadSkillSources(sources, fs).filter((source) =>
-      readableOutsideGraph(fs, source),
-    );
+    const sources = fs.skillSources();
+    if (sources.length === 0) return undefined;
+    const readable = sources.filter((source) => readableOutsideGraph(fs, source));
     if (readable.length === 0) return [];
     const scan = await scanSkills(backend, readable);
     if (!scan.complete) {

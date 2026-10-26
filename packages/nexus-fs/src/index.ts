@@ -81,8 +81,11 @@ export { virtualPathOf } from '@nexus/core';
  * `2.1.0`（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：`FsService` 多 `sharedWorkspacePrefix()`——新 thread 有私有可寫根、
  * `--workspace` 退成唯讀共用區時，共用區在模型位址空間裡的前綴（沒有共用區是 `undefined`）。向後相容的新增：只用 `backend()`／`workspaceRoot()` 等
  * 既有方法的消費者（`^2.0.0`）照常；要讀共用區的消費者（`agent-instructions`、`skill-invocation`）宣告 `^2.1.0`。
+ *
+ * `2.2.0`（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)）：`FsService` 多 `skillSources()`——這條 thread 要掃的技能來源，就是
+ * 折進這次組裝、模型清單用的那一份（有共用區的 thread 已換到共用區底下）。向後相容的新增；`skill-invocation` 讀它，宣告 `^2.2.0`。
  */
-export const FS_LOOKUP_CONTRACT_VERSION = '2.1.0';
+export const FS_LOOKUP_CONTRACT_VERSION = '2.2.0';
 
 /**
  * 找這次呼叫那條 thread 的 fs 把手的結果。

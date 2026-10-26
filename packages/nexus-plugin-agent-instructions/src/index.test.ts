@@ -61,6 +61,7 @@ function handleOf(backend: unknown): FsService {
     hasWorkspace: () => true,
     workspaceRoot: () => undefined,
     sharedWorkspacePrefix: () => undefined,
+    skillSources: () => [],
   };
 }
 
