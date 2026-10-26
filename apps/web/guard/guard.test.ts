@@ -1401,13 +1401,17 @@ async function openOverlay(
     reducedMotion?: boolean;
     marks: Record<string, Record<string, string>>;
     prepare?: (page: Page) => Promise<void>;
+    /** 頁面的時鐘與時區釘在這裡，載入之前就生效：畫出來的日期時間不跟著跑的當下變。 */
+    clock?: { readonly at: Date; readonly timezoneId: string };
   },
 ): Promise<Page> {
   if (browser === undefined || server === undefined) throw new Error('瀏覽器或伺服器沒起來');
   const mode = options.mode ?? 'translucent';
   const page = await browser.newPage({
     viewport: options.viewport ?? { width: 1280, height: 1000 },
+    ...(options.clock === undefined ? {} : { timezoneId: options.clock.timezoneId }),
   });
+  if (options.clock !== undefined) await page.clock.setFixedTime(options.clock.at);
   if (options.reducedMotion === true) await page.emulateMedia({ reducedMotion: 'reduce' });
   if (mode === 'reduced-transparency') {
     const cdp = await page.context().newCDPSession(page);
@@ -5275,6 +5279,12 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量沒有分頁的右側欄（
   });
 });
 
+/**
+ * 會話清單頁的時鐘（#2051）：夾具的更新時間是 `Date.now()` 往前推，第二行印成 zh-TW 的日期時間，字寬隨時刻變。
+ * 釘在這個時刻，目前這條的「目前這條 · 執行中 · 2026/10/26 中午12:00」在兩種寬度都放不下，其餘列都放得下。
+ */
+const THREAD_CLOCK = { at: new Date('2026-10-26T12:00:00+08:00'), timezoneId: 'Asia/Taipei' };
+
 describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#1696 S1-C）：%s', (theme) => {
   const ROW = '[data-slot="sidebar-menu-item"] > [data-slot="sidebar-menu-button"]';
   const BAR_TOKEN: Record<string, string> = {
@@ -5293,6 +5303,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
     async (viewport) => {
       const page = await openOverlay('thread-statuses', theme, {
         viewport,
+        clock: THREAD_CLOCK,
         marks: {
           // 目前這條是 disabled（整列 opacity 0.5），對比門檻不管停用的元件，只量能點的列。
           [`${ROW}:not([disabled]) [data-testid="thread-title-text"]`]: {
@@ -5357,7 +5368,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量會話清單的狀態（#16
           expect(row.titleWidth).toBeGreaterThanOrEqual(150);
           expect(row.ownLine).toBe(true);
         }
-        // 第二行放不下就截（帶省略號）。只有目前這條會截：「目前這條 · 執行中 · 日期時間」比側欄寬，其餘每列都放得下。
+        // 第二行放不下就截（帶省略號）。在 THREAD_CLOCK 那個時刻只有目前這條會截，其餘每列都放得下。
         expect(rows.filter((row) => row.lineOverflow > 0).map((row) => row.title)).toEqual([
           '部署腳本除錯',
         ]);
