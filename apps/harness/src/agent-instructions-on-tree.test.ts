@@ -248,14 +248,14 @@ describe('B：出貨清單上的 agent-instructions 經樹進來，位置與名�
     });
   }, 60000);
 
-  it('樹上的 agentLoop 服務：歸屬是 pre-step 那一列、契約 1.2.0（#1533 加了 signal、#1574 加了 source）；pre-step 是必掛的內建列', async () => {
+  it('樹上的 agentLoop 服務：歸屬是 pre-step 那一列、契約 1.3.0（#1533 加了 signal、#1574 加了 source、#1567 plugin 來源加 form）；pre-step 是必掛的內建列', async () => {
     const root = newRoot();
     await loadDefaultPlugins({ env: home(), warn: warnNothing }, { tree: root.tree });
     const tree = await root.tree.context();
     const agentLoop = tree.get('agentLoop') as
       { provider?: string; contractVersion?: string } | undefined;
     expect(agentLoop?.provider).toBe('pre-step');
-    expect(agentLoop?.contractVersion).toBe('1.2.0');
+    expect(agentLoop?.contractVersion).toBe('1.3.0');
     expect(REQUIRED_TREE_ENTRY_IDS.has('pre-step')).toBe(true);
   }, 60000);
 });

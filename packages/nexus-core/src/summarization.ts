@@ -135,7 +135,7 @@ import {
 } from './tool-arg-truncation-log.js';
 import { withSummaryCatchUp } from './summary-catch-up.js';
 import { createHistoryStaging } from './summary-history-staging.js';
-import { recordedPrunesOf } from './tool-result-prune-log.js';
+import { applyRecordedPrunes, recordedPrunesOf } from './tool-result-prune-log.js';
 import { turnCancelSignalOf } from './turn-cancel.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
@@ -677,7 +677,8 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *   **省略即不記**，而那是常態不是異常：`eval/runner.ts` 與絕大多數測試的組裝都沒有
  *   會話註冊表，它們不該為此拿到一個例外。同 {@link ./model-usage.ts} 的 `not-attached`。
  * @param pruning - 包在外面的那把剪刀的預算，來自 `resolveToolResultPruneConfig`；
- *   `false` 就不包（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
+ *   `false` 就不剪新的（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：有 `sessions` 時仍包一層壓力永遠不到的剪刀，
+ *   只把日誌上記過的剪法換上去（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)），沒有 `sessions` 就不包。
  * @param report - 摘要失敗時往哪裡講一條 warn（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）；省略即 `console.warn`。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
@@ -752,7 +753,19 @@ export function createSummarizer(
   // 最外層：state 的摘要事件在這一步請求之前先跟上日誌（#1390）。外面的預算與剪刀看到的有效訊息串要是補過的。
   const catchUp = (middleware: AgentMiddleware): AgentMiddleware =>
     sessions === undefined ? middleware : withSummaryCatchUp(middleware, sessions);
-  if (pruning === false) return catchUp(staged);
+  // 剪刀關掉：不剪新的，但記過的照樣換上去（#1567 N0780）。續接灌回 state 的是原文，換上去的只有這一層。
+  if (pruning === false) {
+    return catchUp(
+      sessions === undefined
+        ? staged
+        : withToolResultPruning(
+            staged,
+            NEVER_UNDER_PRESSURE,
+            DEFAULT_TOOL_RESULT_PRUNE,
+            pruneLogOf(sessions, warn),
+          ),
+    );
+  }
   return catchUp(
     withToolResultPruning(
       staged,
@@ -767,6 +780,52 @@ export function createSummarizer(
       sessions === undefined ? undefined : pruneLogOf(sessions, warn),
     ),
   );
+}
+
+/** 剪刀關掉時的壓力判斷：永遠沒到，於是只換記過的、不剪新的。 */
+const NEVER_UNDER_PRESSURE = (): boolean => false;
+
+/**
+ * 摘要關掉時（`summarization: false` 或那一列 `disabled: true`）發的同名空殼：**不摘要、不縮新的參數、不剪新的結果，記過的照樣換上去**
+ * （[#1567](https://github.com/DemianLi/nexus-agent/issues/1567) N0780）。
+ *
+ * 剪刀與參數截斷都包在摘要器上（{@link createSummarizer}），摘要那一列關掉時兩層跟著不在。續接灌回 graph state 的是原文
+ * （`apps/harness/src/conversation-restore.ts`），記過的 `compaction/prune` 與 `compaction/truncate-args` 沒人換上去，模型就拿到
+ * 原文，日誌上卻記著它看到的是剪過的。這一顆只做「換上去」：順序同正常那條（剪刀在外、截斷在內）。
+ *
+ * 摘要的切點不歸這裡：續接灌回去的本來就是「摘要＋之後的」，不帶 `_summarizationEvent`。所以這一顆沒有 `stateSchema`，
+ * 也沒有 `beforeModel` 之類會變成圖節點的鉤子，只有 `wrapModelCall`。
+ *
+ * 查不到這次屬於哪一份日誌（沒接註冊表、認不出呼叫者）就原樣往下交；套用記過的剪法時拋錯就往外拋，同剪刀開著時那條
+ * （{@link withToolResultPruning}）：靜靜送出原文，模型看到的就跟日誌記的不一樣。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道；省略就是一顆什麼都不做的空殼（沒有日誌就沒有記過的）。
+ * @returns 名字是 {@link SUMMARIZATION_MIDDLEWARE_NAME} 的 middleware。
+ */
+export function createRecordedProjectionShell(sessions?: {
+  forCall(config: unknown): SessionLookup;
+}): AgentMiddleware {
+  if (sessions === undefined) return { name: SUMMARIZATION_MIDDLEWARE_NAME } as AgentMiddleware;
+  return {
+    name: SUMMARIZATION_MIDDLEWARE_NAME,
+    wrapModelCall: (request, handler) => {
+      const original: readonly BaseMessage[] = request.messages ?? [];
+      let messages = original;
+      const found = sessions.forCall({
+        configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+      });
+      if (found.kind === 'ok') {
+        const events = found.log.events;
+        messages = applyRecordedPrunes(messages, recordedPrunesOf(events));
+        messages = applyRecordedArgTruncations(messages, recordedArgTruncationsOf(events));
+      }
+      return handler(
+        (messages === original
+          ? request
+          : { ...request, messages: [...messages] }) as typeof request,
+      );
+    },
+  } as AgentMiddleware;
 }
 
 /**
