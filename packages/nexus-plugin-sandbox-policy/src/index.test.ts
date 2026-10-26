@@ -21,7 +21,23 @@ import {
   sandboxPolicySentence,
   sharedReadOnlyRefusal,
 } from './index.js';
+import { ESCALATABLE_MODES, SANDBOX_MODE_WIDTH } from './sandbox-escalation.js';
 import { SandboxModeController } from './sandbox-mode.js';
+
+describe('升級可達表（#1827 D23）', () => {
+  // 「不加寬」那句模型看得到的話（「並不比…更寬」）靠這一條才為真：升得到的每一格都嚴格更寬。
+  it.each(Object.entries(ESCALATABLE_MODES))('%s 升得到的每一格都比它嚴格更寬', (from, targets) => {
+    for (const to of targets) {
+      expect(SANDBOX_MODE_WIDTH[to]).toBeGreaterThan(
+        SANDBOX_MODE_WIDTH[from as keyof typeof SANDBOX_MODE_WIDTH],
+      );
+    }
+  });
+
+  it('沒有任何一格升得到 danger-full-access', () => {
+    expect(Object.values(ESCALATABLE_MODES).flat()).not.toContain('danger-full-access');
+  });
+});
 
 describe('唯讀共用參考區那一句（#1775）', () => {
   it.each(['read-only', 'workspace-write', 'danger-full-access'] as const)(

@@ -6,13 +6,15 @@
  * （`AgentNode.ts:601-609`），所以 dsh 攤進 `write`／`edit` schema 的那兩個欄位在我們這側
  * 沒有地方掛。那條基座行為的絆索在 `escalation-carrier.test.ts`。
  *
- * ## 照 dsh 的六條，與升級的上限
+ * ## 升級的上限
  *
- * 出處都是 `references/deepseek-harness/packages/sandbox/sandbox/src/escalation.ts`。
- *
- * **升級最多到 `workspace-write`**（[#1827](https://github.com/DemianLi/nexus-agent/issues/1827) D23）：目標詞彙
+ * 升級最多到 `workspace-write`（[#1827](https://github.com/DemianLi/nexus-agent/issues/1827) D23）：目標詞彙
  * {@link ESCALATION_TARGETS} 沒有 `danger-full-access`，所以已經在 `workspace-write` 的會話沒有升級可走——被擋的寫入就是拒絕，
  * 拒絕後面也不接升級指引（{@link canEscalateFrom}）。要全開的部署方自己在權限表加回那一組（#1621），由人用 `/permission` 切。
+ *
+ * ## 照 dsh 的六條
+ *
+ * 出處都是 `references/deepseek-harness/packages/sandbox/sandbox/src/escalation.ts`。
  *
  * 0. **問人在工具本體裡，fail-closed**（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）。
  *    dsh 的 `resolvePolicy` 先驗欄位（`packages/fs/tool-fs/src/sandbox.ts:88`），再
@@ -21,7 +23,7 @@
  *    一顆只認這個名字的核准閘門，排在它前面、回 `allow` 又不呼叫 `next()` 的閘門會把它
  *    整個短路掉，工具照樣回「核准了」。中斷照 `@nexus/plugin-ask-user` 的先例在本體裡 `interrupt()`，
  *    酬載與核准閘門同形（`@nexus/core` 的 `approval.ts`），web 那側一行都不用動。
- * 1. **嚴格加寬是執行期檢查，不是 schema 約束。** schema 的 enum 是封閉的目標詞彙
+ * 1. **升不升得到是執行期檢查，不是 schema 約束。** schema 的 enum 是封閉的目標詞彙
  *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「升得到」在本體裡對這一刻的模式判（{@link canEscalate}）。
  *    理由照 dsh：schema 是全域的，當前模式是逐次呼叫的事實。收窄 enum 會讓一個被 `/permission`
  *    切窄的 session 連升級的槓桿都看不到。enum 外的值（`read-only`、`danger-full-access`）在 schema 那一關就被擋，
@@ -29,8 +31,8 @@
  * 2. **不加寬的請求不問人。** 本體在發中斷之前就回拒絕，核准卡一張都不掛。
  * 3. **欄位要齊、理由不能是空白。** dsh 的 `validateEscalationArgs`。
  * 4. **理由的消費者是人。** 它原樣進核准卡的那句話（dsh：`escalate sandbox to ${mode}: ${justification}`）。
- * 5. **被擋的當下就講得出能升級。** 指引騎在拒絕上（{@link SANDBOX_ESCALATION_HINT}，對應
- *    dsh 的 `escalationHintMarker`），不靠模型記得工具描述。
+ * 5. **被擋的當下就講得出能升級（這一刻還有格子升得到時）。** 指引騎在拒絕上（{@link SANDBOX_ESCALATION_HINT}，對應
+ *    dsh 的 `escalationHintMarker`），不靠模型記得工具描述；沒有格子可升就不接，見〈升級的上限〉。
  *
  * ## fail-closed 的出口，各有各的話
  *
@@ -76,7 +78,7 @@
  *
  * **subagent 拿不到 grant**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：子代理的升級在本體裡
  * 被當成 `delegated` 拒掉（上一節）；root 手上那顆也認領不到——控制器在委派裡 `grant` 不做事、`peekGrant`
- * 回空、`recordDenial` 不寫（見 `sandbox-mode.ts`）。本體判「加寬」讀 `controller.current`，在子代理裡就是
+ * 回空、`recordDenial` 不寫（見 `sandbox-mode.ts`）。本體判升不升得到讀 `controller.current`，在子代理裡就是
  * 委派那一刻拍下的那一格。
  *
  * @module
@@ -338,7 +340,7 @@ function createEscalationTool(
         return refuse(sharedReadOnlyRefusal(sharedPrefix));
       }
       // resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次：人看卡片的那段時間裡，
-      // `/sandbox` 可能已經換過格子。
+      // `/permission` 可能已經換過格子。
       const current = controller.current;
       if (!canEscalate(current, requested)) {
         return refuse(nonWideningRefusal(requested, current));

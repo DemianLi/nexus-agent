@@ -336,8 +336,8 @@ describe('升級', () => {
     });
 
     /**
-     * **enum 外的值走不到本體**（#700）：以前閘門排在 zod 之前，`read-only` 在閘門上拿到不加寬那句；
-     * 問人搬進本體之後，schema 的封閉詞彙先擋，同 dsh 的 schema-pinned。斷言的是結局，不抄基座的措辭。
+     * **enum 外的值走不到本體**（#700）：`read-only`、`danger-full-access` 都不在 schema 的封閉詞彙裡，在 schema 那一關就被擋。
+     * 斷言的是結局，不抄基座的措辭。
      */
     it.each([
       ['read-only', 'read-only'],
@@ -496,6 +496,31 @@ describe('升級', () => {
         expect(controller.peekGrant()).toBeUndefined();
         // 一次性 grant 不是切換 session 模式：人沒切，這一格就沒動。
         expect(controller.current).toBe('read-only');
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('升級的 file_path 不帶前置斜線也對得上：比對的是 canonical 位置，不是字串', async () => {
+      const { agent, dispose } = await assembleProduct('read-only', [
+        write('/a.txt', '一'),
+        escalate({
+          file_path: 'a.txt',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要這個檔',
+        }),
+        write('/a.txt', '一'),
+        { content: '完成。' },
+      ]);
+      const config = { configurable: { thread_id: 'no-leading-slash' } };
+      try {
+        const paused = await agent.invoke(toAgentInvocation('寫 a.txt。'), config);
+        expect(toolTexts(paused)[0]).toContain('這個 backend 是唯讀的');
+
+        const [, granted, retried] = toolTexts(await agent.invoke(APPROVE, config));
+        expect(granted).toContain('核准了');
+        expect(retried).not.toContain('[containment]');
+        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('一');
       } finally {
         await dispose();
       }
