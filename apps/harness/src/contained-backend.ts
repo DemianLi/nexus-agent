@@ -459,8 +459,9 @@ export interface ContainedFilesystemBackendOptions {
 export const READ_STREAM_MIN_SIZE = 10 * 1024 * 1024;
 
 /**
- * 讀取面的圍堵解析失敗時，交給下游照舊處理的錯誤碼（見 `ContainedFilesystemBackend.readDenial`）。`ENOENT`／`ENOTDIR` 只會是根不存在
- * （`canonicalize` 把它們當成還不存在的尾巴）；其餘三個是開檔走同一串路徑必定也會撞上的。不在這裡的一律拒。
+ * 讀取面的圍堵解析失敗時，交給下游處理的錯誤碼（見 `ContainedFilesystemBackend.readDenial`）。`ENOENT`／`ENOTDIR` 只會來自
+ * `realpath(this.cwd)`，也就是根不存在（`canonicalize` 把這兩個碼當成還不存在的尾巴吞掉，不往外拋）；其餘三個是開檔走同一串路徑
+ * 也會撞上的（這三個各有一條在真的檔案系統上做出來的測試，`contained-backend-read-resolve.test.ts`）。不在這裡的一律拒。
  */
 const READ_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
   'ENOENT',
@@ -1353,7 +1354,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * - **`read-only` 也照判**：那一格擋的是變更，不是讀。只有 `danger-full-access` 放行，跟寫入一致。
    * - **不認領 grant、不接升級指引**：升級只蓋變更，指引對讀沒有用。
    * - **判不了時只放行下游必定也失敗的那幾種**：字面檢查（`..`、`~`）擋下的、根不存在、解析撞上 {@link READ_PASSTHROUGH_CODES}
-   *   的，原樣交給基座或自己的讀法，錯誤字句照舊——開檔走同一串路徑，會撞上同一個錯。其餘（`EMFILE`、`EIO` 這類暫時性的錯）
+   *   的，原樣交給基座或自己的讀法，錯誤字句是下游自己的——開檔走同一串路徑，會撞上同一個錯。其餘（`EMFILE`、`EIO` 這類暫時性的錯）
    *   拒，措辭同 {@link verdict} 的「路徑解析失敗」：這一刻判不了，下一刻開檔卻可能成功，就經連結讀出去了。
    *
    * 最後一段是指向根外的檔案連結也在這裡被拒，到不了開檔那一步；指向根內的檔案連結在開檔時是 `ELOOP`（`O_NOFOLLOW`）。
