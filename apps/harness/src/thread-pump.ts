@@ -101,6 +101,7 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
   turnReachedMaxTokens,
+  unansweredCallResults,
   stampImageOrigin,
   userContent,
   withModelCall,
@@ -1845,7 +1846,8 @@ export class ThreadPump {
    * 它們留在隊裡，等中斷被回答或收回、那一輪收掉之後才照 FIFO 跑。答覆（`resume`）排在它們前面。
    *
    * 回傳的 promise 在**這一段** run 抽完時 resolve（跑完或停在核准點都算）；停住的那段要等它真的
-   * 跑完。收線時還停著的會 reject。上行的 handler 不等它——那是收件回條，不是「跑完了」。
+   * 跑完。收線時還停著的會 reject。這一輪失敗就以原錯 reject；當場補寫沒配到結果的呼叫也失敗時是 `AggregateError`
+   * （`cause` 是原錯，見 {@link ThreadPump.#closeUnansweredCalls}）。上行的 handler 不等它——那是收件回條，不是「跑完了」。
    *
    * **插話**（`steer`，[#710](https://github.com/DemianLi/nexus-agent/issues/710)）：這一輪還收插話（{@link ThreadPump.#acceptsSteer}）
    * 就排進 `next-step`，回的 promise 當場 resolve——它不開一段 run，由跑著的那一段在下一步領走。不收了就照送出開一輪，
@@ -2896,6 +2898,42 @@ export class ThreadPump {
     this.#stopParked = this.#queue.some((job) => !job.answers);
   }
 
+  /**
+   * 一輪失敗、寫 `turn/failed` 之前，替這一輪**沒配到結果的呼叫**當場補錯誤結果（[#2029](https://github.com/DemianLi/nexus-agent/issues/2029)）。
+   * 不補的話日誌上那幾顆一直沒有配對：續接的補結看到 `turn/failed` 就當這一輪收了，不會替它補。
+   *
+   * 結果從 {@link unansweredCallResults} 拿，句子與碼同續接的補結。對話那一側也由這裡寫，同 {@link ThreadPump.#withdraw}：
+   * 存檔點上還懸著的那幾顆推同一則 ToolMessage 進去，下一輪就不會由基座補上那句成因錯的話（#265 的 Q12）。
+   * 只推存檔點上真的懸著的：模型那一步還沒進存檔點就失敗的話，那則回覆不在 state 裡，推進去會是一則沒有呼叫的結果。
+   * 先寫日誌、再寫存檔點：存檔點那一步失敗時日誌已經有結果，存檔點沒有，下一輪那幾顆由基座補（句子不同，則數一樣）。
+   *
+   * @param failure - 這一輪的原錯。
+   * @returns 原錯；補寫也失敗時是把兩個錯一起帶出來的 `AggregateError`，`cause` 是原錯，沿 `cause` 認錯的地方照舊認得出原錯。
+   */
+  async #closeUnansweredCalls(failure: Error): Promise<Error> {
+    const log = this.#sessions.root;
+    try {
+      const results = unansweredCallResults(log.events);
+      if (results.length === 0) return failure;
+      for (const { data } of results) log.append('tool/result', data);
+      const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
+      const pending = new Set(
+        danglingToolCalls((await this.#agent.getState(config)).values).map((call) => call.id),
+      );
+      const messages = results
+        .filter(({ data }) => pending.has(data.callId))
+        .map(({ message }) => message);
+      if (messages.length > 0) await this.#agent.updateState(config, { messages });
+      return failure;
+    } catch (recoveryError) {
+      return new AggregateError(
+        [failure, recoveryError],
+        '這一輪失敗，沒配到結果的工具呼叫也補不進去',
+        { cause: failure },
+      );
+    }
+  }
+
   /** `turn/failed` 寫進日誌之後通知外面（#1536）。回呼拋錯吞掉：通知是附帶的，不能改變這一輪怎麼收尾。 */
   #reportTurnFailed(failed: SessionEvent<'turn/failed'>, runId?: string): void {
     const handler = this.#onTurnFailed;
@@ -3127,10 +3165,15 @@ export class ThreadPump {
       }
       // 失敗的原因已經以 `lifecycle failed` 上了線（實測：失敗 frame 先發、然後才拋），
       // 所以這裡不再合成一顆。下行**不關**——這條線是長期的，下一次 submit 還要用。
-      const failure =
+      const thrown =
         error instanceof Error ? error : new Error(thrownMessage(error), { cause: error });
+      const failure = await this.#closeUnansweredCalls(thrown);
+      // 沒包成 AggregateError 就照舊拿原始的 `error` 分類：非 Error 的拋出物，分類要看它本身，不是包它的那一層。
       this.#reportTurnFailed(
-        this.#sessions.root.append('turn/failed', turnFailureOf(error)),
+        this.#sessions.root.append(
+          'turn/failed',
+          turnFailureOf(failure === thrown ? error : failure),
+        ),
         claimed?.id,
       );
       this.#stopRequested = false;
@@ -3346,7 +3389,7 @@ export class ThreadPump {
    *
    * @param id - 中斷的 id。
    * @param response - 人的回覆（`{ decisions: [{ type }] }`）；`undefined` 是問題被收回（按了停止）。
-   *   看不懂的回覆**不記**：閘門收到它會拋（`approval.ts` 的「核准回覆看不懂」），沒有結局可言，那一對留著開著。
+   *   不是 `approve` 也不是 `reject` 的回覆記 `unavailable`：沒有拿到有效的決定，提問的一方照拒絕處理，碼是 `APPROVAL_INVALID_REPLY`（#2027）。
    */
   #noteApprovalDecided(id: string, response: unknown): void {
     if (!this.#approvalOpen.delete(id)) return;
@@ -3357,7 +3400,7 @@ export class ThreadPump {
       const type = (response as { decisions?: { type?: unknown }[] } | null)?.decisions?.[0]?.type;
       if (type === 'approve') outcome = 'allowed-once';
       else if (type === 'reject') outcome = 'rejected';
-      else return;
+      else outcome = 'unavailable';
     }
     this.#sessions.root.append('approval/decided', { id, outcome }, { ignorable: true });
   }

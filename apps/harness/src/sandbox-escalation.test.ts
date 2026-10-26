@@ -59,9 +59,11 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import {
+  APPROVAL_INVALID_REPLY,
   ApprovalPolicyController,
   createHostServicesPlugin,
   deriveApprovalChannel,
+  toolErrorOf,
 } from '@nexus/core';
 import type { ApprovalPolicyValue, PluginEntry } from '@nexus/core';
 
@@ -130,6 +132,7 @@ function permissiveGate(): PluginEntry {
 
 const APPROVE = new Command({ resume: { decisions: [{ type: 'approve' }] } }) as never;
 const REJECT = new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never;
+const UNREADABLE = new Command({ resume: { decisions: [{ type: 'maybe' }] } }) as never;
 
 describe('升級', () => {
   let root: string;
@@ -733,6 +736,29 @@ describe('升級', () => {
         const [, refused, again] = toolTexts(await agent.invoke(REJECT, config));
         expect(refused).toContain('拒絕了');
         expect(again).toContain('這個 backend 是唯讀的');
+        expect(controller.peekGrant()).toBeUndefined();
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('回覆看不懂（不是 approve 也不是 reject）：不發 grant，拒絕帶 APPROVAL_INVALID_REPLY（#2027）', async () => {
+      const { agent, dispose, controller } = await assemble('read-only', [
+        request,
+        { content: '好。' },
+      ]);
+      const config = { configurable: { thread_id: 'unreadable' } };
+      try {
+        await agent.invoke(toAgentInvocation('升級。'), config);
+        const result = await agent.invoke(UNREADABLE, config);
+        const refused = (result.messages as BaseMessage[])
+          .filter((message) => message.getType() === 'tool')
+          .at(-1);
+        expect(refused === undefined ? '' : flatten(refused.content)).toContain('核准回覆看不懂');
+        expect(toolErrorOf(refused)).toEqual({
+          name: 'ApprovalDenied',
+          code: APPROVAL_INVALID_REPLY,
+        });
         expect(controller.peekGrant()).toBeUndefined();
       } finally {
         await dispose();
