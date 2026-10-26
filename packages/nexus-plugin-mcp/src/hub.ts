@@ -55,7 +55,7 @@
 
 import type { StructuredTool } from '@langchain/core/tools';
 import { tool } from '@langchain/core/tools';
-import { EXTERNAL_MCP_CONTENT_NOTICE, REFERENCE_RULE } from '@nexus/core';
+import { EXTERNAL_MCP_CONTENT_NOTICE, REFERENCE_RULE, turnCancelSignalOf } from '@nexus/core';
 import type { AgentMiddleware, PluginRegistry } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
@@ -92,6 +92,20 @@ export interface McpHub {
 }
 
 /** 三支工具的名字，給提示詞段落與測試用。 */
+/**
+ * 一次 MCP 請求要帶的中止訊號：config 自己的 `signal`（LangGraph 的）併上這一輪的停止訊號（放在 `configurable`，`@nexus/core` 的
+ * `turn-cancel.ts`），任一個舉起都算（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)）。人按了停止，SDK 送
+ * `notifications/cancelled`、這次請求跟著結束。
+ * @param config - 工具拿到的 config。
+ * @returns 合起來的訊號；兩個都沒有時是 `undefined`。
+ */
+export function callSignalOf(config: unknown): AbortSignal | undefined {
+  const own = (config as { signal?: AbortSignal } | null | undefined)?.signal;
+  const turn = turnCancelSignalOf(config);
+  if (turn === undefined) return own;
+  return own === undefined ? turn : AbortSignal.any([own, turn]);
+}
+
 export const RESOURCE_TOOL_NAMES = [
   'list_mcp_resources',
   'list_mcp_resource_templates',
@@ -200,7 +214,7 @@ export function ensureHub(registry: PluginRegistry): McpHub {
       tool(
         async (args: Record<string, string | undefined>, config?: { signal?: AbortSignal }) => {
           const server = args['server'] ?? '';
-          const value = await find(server).request(build(args), config?.signal);
+          const value = await find(server).request(build(args), callSignalOf(config));
           return [renderResourceResult(server, value), value];
         },
         { name, description, schema, responseFormat: 'content_and_artifact' },

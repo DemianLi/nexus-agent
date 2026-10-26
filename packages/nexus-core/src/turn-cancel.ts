@@ -57,7 +57,10 @@
  *   「使用者看到了哪些字」的是轉發那些片段的 pump。所以這裡只拋 {@link TurnCancelledError}，半段由
  *   `apps/harness` 的 pump 事後寫回對話。
  *
- * **中止之後工具的副作用照樣發生**：等它落定就是讓它做完。dsh 也是這樣，不算偏離，但使用者會意外。
+ * **工具本體讀得到這一輪的訊號**：從它拿到的 config 用 {@link turnCancelSignalOf} 讀。讀了、把它交給自己的 I/O 的工具，按停止
+ * 就提早結束——今天是 `@nexus/plugin-mcp` 的工具呼叫與資源讀取，server 收到 `notifications/cancelled`（#1985）。**沒讀的工具
+ * 照舊跑到完，副作用照樣發生**，這裡只是等它落定。訊號只能這樣讀、不能交給 config 的 `signal`：`@langchain/core` 的 `tool()`
+ * 拿 `signal` 跟本體競速，舉起來就當場 reject、把本體丟在背景，同上面「載體退到哪裡」那一段。
  *
  * ## 在攔截索引上佔哪一格
  *

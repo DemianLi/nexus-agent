@@ -20,7 +20,7 @@
 
 import type { StructuredTool } from '@langchain/core/tools';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
-import { CHANNEL_SERVICE } from '@nexus/core';
+import { CHANNEL_SERVICE, turnCancelSignalOf } from '@nexus/core';
 import type {
   AgentMiddleware,
   ApprovalChannel,
@@ -34,7 +34,7 @@ import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
 import { clientOptions, connectGeneration } from './connection.js';
 import type { Generation, RequestOptions, SdkClient, ToolCall } from './connection.js';
-import { ensureHub } from './hub.js';
+import { callSignalOf, ensureHub } from './hub.js';
 import { MCP_POOL_SERVICE } from './pool.js';
 import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
@@ -443,6 +443,11 @@ export function isConnectionLost(error: unknown): boolean {
 /**
  * 把已註冊的工具物件的 `func` 換成「委派給目前這一代同名工具」。註冊表裡的物件換不掉，而 adapter 重連之後它們仍綁著死掉的
  * client，所以呼叫要繞到目前這一代去。照 dsh：斷線期間（沒有目前這一代）工具照樣列著、呼叫失敗。
+ *
+ * **這一輪的停止訊號在這裡交給 adapter**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)）：訊號放在 `configurable`
+ * （`@nexus/core` 的 `turn-cancel.ts`），`config.signal` 在產品路徑上是空的；adapter 把 `config.signal` 交給 SDK 的 `callTool`，
+ * 人按了停止，SDK 送 `notifications/cancelled`、這次呼叫跟著結束。adapter 的工具不拿 `config.signal` 跟本體競速，所以塞在這裡
+ * 不會丟下呼叫。
  */
 function delegateTo(
   tool: StructuredTool,
@@ -465,12 +470,24 @@ function delegateTo(
       throw new Error(`${label}: tool "${rawName}" is no longer offered by the server`);
     }
     try {
-      return await call(...args);
+      return await call(...withTurnSignal(args));
     } catch (error) {
       if (isConnectionLost(error)) supervisor.down(generation);
       throw error;
     }
   };
+}
+
+/**
+ * `func` 的參數（輸入、run manager、config）裡，把 config 的 `signal` 換成 {@link callSignalOf}（併上這一輪的停止訊號）。
+ * 換一份新的 config，不改呼叫端那份。
+ * @param args - 工具物件交給 `func` 的參數，原樣。
+ * @returns 換過訊號的參數；這一輪沒有停止訊號時原樣回去。
+ */
+function withTurnSignal(args: unknown[]): unknown[] {
+  const config = args[2] as object | undefined;
+  if (turnCancelSignalOf(config) === undefined) return args;
+  return [args[0], args[1], { ...config, signal: callSignalOf(config) }, ...args.slice(3)];
 }
 
 /** 放棄重連之後，把這一台的工具從每次模型請求的工具清單拿掉；沒放棄就原樣穿過。 */
