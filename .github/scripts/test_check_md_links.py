@@ -67,6 +67,17 @@ class Scope(unittest.TestCase):
             'packages/a.md': BAD,
             'packages/p/README.md': BAD,
             'packages/p/docs/a.md': BAD,
+            'GLOSSARY-MAP.md': BAD,
+            '.docs/a.md': BAD,
+            '.docs/x/y/z.md': BAD,
+            '.github/a.md': BAD,
+            '.github/ISSUE_TEMPLATE/a.md': BAD,
+            'apps/web/GLOSSARY.md': BAD,
+            'apps/harness/docs/a.md': BAD,
+            'vendor/README.md': BAD,
+            'apps/web/src/vendor/solid-glass/README.md': BAD,
+            '.agents/skills/s/SKILL.md': BAD,
+            '.agents/skills/s/references/a.md': BAD,
         }
         paths, count, violations = scan(files)
         self.assertEqual(paths, sorted(files))
@@ -75,25 +86,44 @@ class Scope(unittest.TestCase):
 
     def test_outside_patterns_is_not_scanned(self) -> None:
         files = {
-            '.docs/a.md': BAD,
-            '.github/a.md': BAD,
-            'apps/web/README.md': BAD,
             'docs/.hidden/a.md': BAD,
             'packages/.p/README.md': BAD,
             'packages/p/a/b/c.md': BAD,
             'CONTRIBUTING.md': BAD,
+            '.docs/.hidden/a.md': BAD,
+            'apps/.a/README.md': BAD,
+            'apps/web/src/a/b.md': BAD,
+            '.agents/notes/a.md': BAD,
+            '.agents/skills/.hidden/a.md': BAD,
         }
         self.assertEqual(scan(files), ([], 0, []))
+
+    def test_verbatim_vendor_markdown_is_not_scanned(self) -> None:
+        # 原樣搬來的 vendor 檔裡的壞連結不報；vendor 目錄頂層本地寫的 README 照掃。
+        files = {
+            'vendor/README.md': '# vendor\n',
+            'vendor/lib/README.md': BAD,
+            'vendor/lib/docs/a.md': BAD,
+            'apps/web/src/vendor/solid-glass/README.md': '# SG\n',
+            'apps/web/src/vendor/solid-glass/upstream/README.md': BAD,
+        }
+        paths, _, violations = scan(files)
+        self.assertEqual(paths, ['apps/web/src/vendor/solid-glass/README.md', 'vendor/README.md'])
+        self.assertEqual(violations, [])
 
     def test_symlink_to_same_file_is_scanned_once(self) -> None:
         paths, _, violations = scan({'AGENTS.md': BAD}, {'docs/AGENTS.md': 'AGENTS.md'})
         self.assertEqual(len(paths), 1)
         self.assertEqual(len(violations), 1)
 
-    def test_patterns_follow_dsh(self) -> None:
-        # dsh 的 PATTERNS 扣掉本 repo 沒有的 README.zh.md 與 .agents/**；.docs/、.github/、apps/ 由 #1755 補。
+    def test_patterns_are_pinned(self) -> None:
+        # 釘住 PATTERNS 的全集：增減時一起改檔頭與 AGENTS.md〈發版〉的掃描範圍。
         self.assertEqual(sorted(PATTERNS), sorted(['README.md', 'docs/**/*.md', 'packages/*.md', 'packages/*/*.md',
-                                                   'packages/*/*/*.md', 'AGENTS.md']))
+                                                   'packages/*/*/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md',
+                                                   '.docs/**/*.md', '.github/**/*.md', 'apps/*/*.md', 'apps/*/*/*.md',
+                                                   'vendor/README.md',
+                                                   'apps/web/src/vendor/solid-glass/README.md',
+                                                   '.agents/skills/**/*.md']))
 
 
 class Links(unittest.TestCase):
@@ -140,6 +170,18 @@ class Links(unittest.TestCase):
 
     def test_link_definition_is_checked(self) -> None:
         self.assertTrue(any('不存在的檔案' in v for v in linked('[參考]\n\n[參考]: nope.md')))
+
+    def test_references_is_not_checked(self) -> None:
+        # repo 根目錄的 references/ 不進版控（見檔頭）：不存在、錨點對不到都不報。
+        for link in ('[dsh](../references/dsh/a.ts)', '[dsh](../references/dsh/README.md#nope)'):
+            with self.subTest(link=link):
+                self.assertEqual(linked(link), [])
+
+    def test_lookalike_of_references_is_checked(self) -> None:
+        # 只認根目錄那一個：名字只是前綴相同、或別的層裡的 references/ 照查。
+        for link in ('[像](../references-x/a.ts)', '[子目錄](references/a.ts)'):
+            with self.subTest(link=link):
+                self.assertTrue(any('不存在的檔案' in v for v in linked(link)))
 
     def test_link_inside_fence_is_not_checked(self) -> None:
         self.assertEqual(linked('下面\n\n```\n[不查](nope.md)\n```\n'), [])
