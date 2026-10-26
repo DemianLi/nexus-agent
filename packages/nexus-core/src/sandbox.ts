@@ -240,12 +240,11 @@ export interface SandboxDenial {
 /**
  * fence 向外面認領 grant 的介面。`SandboxModeController` 就是它的實作。
  *
- * **`escalationHint` 在場就等於「這個組裝有升級工具」**——那是掛上工具的那一步寫進去的
- * 同一個事實，所以 fence 不會對一個沒有那顆工具的模型講「可以升級」（照 dsh：
- * `escalationModes` 為空時不公告）。
+ * **`escalationHint` 在場就等於「這個組裝有升級工具，而且這一刻升得上去」**——前一半是掛上工具的那一步寫進去的
+ * 同一個事實，後一半看這一刻的模式，所以 fence 不會對一個沒有那顆工具、或這一刻沒有格子可升的模型講「可以升級」。
  */
 export interface SandboxGrantLedger {
-  /** 被擋下時接在拒絕後面的升級指引；這個組裝沒有升級工具時為 `undefined`。 */
+  /** 被擋下時接在拒絕後面的升級指引；這個組裝沒有升級工具、或這一刻沒有格子升得到時為 `undefined`。 */
   readonly escalationHint: string | undefined;
   /** 現在待消費的那一顆。**只看，不消費。** */
   peekGrant(): SandboxGrant | undefined;

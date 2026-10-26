@@ -388,8 +388,7 @@ Usage:
     "sandbox_permissions": {
       "type": "string",
       "enum": [
-        "workspace-write",
-        "danger-full-access"
+        "workspace-write"
       ],
       "description": "要升到哪一格。選夠用的最窄那一格。"
     },
