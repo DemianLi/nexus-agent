@@ -10,7 +10,8 @@
  * 在排空之後再問一次。這裡量的是兩層組裝出來的結果，拿掉其中一層不會紅；單層的行為由 `@nexus/core` 的
  * `turn-cancel.test.ts` 與 `session-checkpoint-policy.test.ts` 各自釘住。
  *
- * pump 的停止那一支只寫 `turn/end`，不補 `tool/result`：上面兩層都不回結果的話，日誌會留下沒配到結果的 `tool/call`。
+ * pump 中止一輪的那一支只寫 `turn/end`，不補 `tool/result`；每顆的結果由圍堵記。兩層都不擋的話，結果照樣每顆一筆，但 `ping`
+ * 的本體被叫到、結果是成功的 `pong`，所以兩條除了斷言結果的碼，也直接斷言 `ping` 的本體一次都沒被叫。
  *
  * 量的是：日誌在 `turn/end` 之前每顆一筆結果、存檔點每顆一則 ToolMessage、同一個行程的下一輪模型看到的就是這幾句、不變量不報違規。
  *
