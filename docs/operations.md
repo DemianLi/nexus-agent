@@ -85,19 +85,23 @@
 或任何能在你機器上跑程式的路徑，不在它的設計範圍內（`apps/harness/src/contained-backend.ts` 檔頭同一個說法：policy fence，
 不是 kernel boundary）。下面三條是今天實測到的邊界，不是待補清單。
 
-**1. 讀取面幾乎沒有圍堵。** fence 只圍變更（寫、改、刪、上傳）；讀走 deepagents 基座，策略歸 `permissions`，
-而出貨的設定**沒有任何一條 deny 規則**。所以：
+**1. 讀取面只擋經符號連結出根的路。** 讀之前路徑會 canonicalize，落在工作區根外就拒，碼是 `FS_SANDBOX_DENIED`
+（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）。除此之外，讀的策略歸 `permissions`，而出貨的設定**沒有任何一條 deny 規則**。
 
-- **工作區裡的目錄 symlink 讀得穿到根外。** `read`、`ls` 經一條指向根外目錄的 symlink 看得到那邊的檔案——基座的
-  `O_NOFOLLOW` 只管路徑的最後一段，祖先目錄照跟。這是目前唯一讀得出去的路。
-- 其餘三種讀法今天被擋，擋的是基座不是我們：最後一段是檔案 symlink → `ELOOP`；路徑含 `..` 或以 `~` 開頭 →
-  `Path traversal not allowed`；主機絕對路徑（如 `/etc/hosts`）被當成工作區底下的子路徑 → `ENOENT`，讀不到真的那個檔。
-- 這四條由 `apps/harness/src/contained-backend.test.ts` 的「讀取面的今日實況」釘住：文件與實際漂開時測試會先紅。
-  基座哪天補上目錄 symlink 的圍堵，第一條會紅——那時該回來改這一節，不是把測試翻回去。
-- 想擋讀，現在唯一的辦法是在 `permissions` 自己加 deny 規則，或把 agent 跑在你信得過的隔離環境裡。
-- serve 啟動時會拒絕把 key 的來源與 harness home 擺在工作區裡（見下面「serve：key 與 home 不能跟工作區重疊」），但那道檢查
-  **只看路徑本身**：工作區裡一條指向 home 或指向 `.env` 所在目錄的目錄連結擋不到，經它照樣讀得到（就是上面第一條）。
-  不掃描是刻意的：要擋得掃整棵樹，而且連結可以在啟動之後才建。
+- **工作區裡往外指的連結讀不出去。** 包括 `read_file`、`ls`、`grep`、`glob`，以及 `submit_record` 讀表頭、技能目錄的掃描。
+  目錄連結與檔案連結都拒，連結底下還不存在的路徑也拒。指向 harness home 或 `.env` 的連結因此讀不到 key。
+- **技能目錄裡有一條往外指的連結，全部技能都會消失。** 技能掃描讀不到任何一份就算不完整，不完整時一份都不列：
+  模型清單、`/名字`、web 的技能清單都是空的，serve 記含 `掃描不完整` 的 warn。技能要放在工作區裡，不要用連結指到外面
+  （遷移見 `docs/upgrade-guide/v0.5.19/read-outward-symlinks-refused/guide.md`）。
+- **指向工作區裡的目錄連結照常讀。** 最後一段是指向根內的檔案連結時，結果是 `ELOOP`（基座開檔用 `O_NOFOLLOW`）。
+- **路徑寫法本身擋掉的兩種：**
+  - 路徑含 `..` 或以 `~` 開頭 → `Path traversal not allowed`；
+  - 主機絕對路徑（如 `/etc/hosts`）被當成工作區底下的子路徑 → `ENOENT`，讀不到真的那個檔。
+- **`danger-full-access` 不擋**，跟寫入一致。
+- 這幾條由 `apps/harness/src/contained-backend.test.ts` 的〈讀取面的圍堵〉釘住，工具層與日誌上的樣子在
+  `apps/harness/src/read-containment-tools.test.ts`。
+- 這是 policy fence，不是 kernel boundary：檢查與開檔之間，祖先目錄被換成連結的那一瞬間（TOCTOU）擋不到。要擋惡意的程式，用作業系統層的隔離。
+- 想再擋根內的特定路徑，在 `permissions` 自己加 deny 規則。
 
 **2. 以 stdio 起的 MCP server 子行程不在 fence 底下。** 它們是外部程序，走自己的檔案系統，既不經過 `permissions` 也不經過
 backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MCP 讀來的資料經由內建 `write_file` 寫進工作區」那一條。
@@ -106,7 +110,7 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 的「明文限制」。
 
 **3. 出廠兩個組合，加上部署方可以加回的全開，都是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
-動手；它們不涵蓋子行程與網路，對讀也幾乎沒有作用（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
+動手；它們不涵蓋子行程與網路；對讀，前兩組一樣只擋經連結出根的路（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
 檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
 並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界；
 怎麼加、怎麼確認做到了，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉。
@@ -234,19 +238,17 @@ serve 開頭「會話日誌：」那一行印的目錄，要在這個 home 底�
 - serve 上 `--workspace` 是所有對話共用的唯讀參考區，模型的可寫根在 home 底下（〈serve：每條 thread 一個私有可寫根〉），所以這一條管的是「放什麼進去」。
 - 擁有者是 serve 帳號（〈用 systemd 常駐〉已經 `chown`），群組與其他人不可寫。
 - 只放這台 serve 的每位使用者都可以讀的東西。
-- 不放指向工作區外的目錄連結。
 - 工作區跟 home、跟任何一份 `.env` 的所在目錄都不重疊。serve 啟動時已經擋（〈serve：key 與 home 不能跟工作區重疊〉），這裡不重述規則。
 
 **為什麼**
 
-- 讀取不受 fence 管，工作區裡的目錄連結讀得穿到根外（〈這道 fence 管不到的〉第 1 條）；啟動時的重疊檢查只看路徑本身，擋不到連結。
 - 共用區誰的模型都讀得到，放進去的東西等於對所有使用者公開。
 
 **怎麼確認**
 
 ```bash
 sudo find /srv/nexus-agent/workspace -perm /022 -print                                # 沒有輸出
-sudo find /srv/nexus-agent/workspace -type l -exec readlink -f {} +                   # 每一條都落在工作區裡
+sudo find /srv/nexus-agent/workspace -type l -exec readlink -f {} +                   # 落在工作區外的，模型讀不到；要它讀見升級指南 read-outward-symlinks-refused
 realpath /srv/nexus-agent/workspace /var/lib/nexus-agent                              # 互不包含
 ```
 
