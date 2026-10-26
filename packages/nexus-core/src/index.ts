@@ -228,7 +228,12 @@ export {
   EXTERNAL_MCP_CONTENT_NOTICE,
   REFERENCE_RULE,
   REFERENCE_WARNING,
+  SHARED_WORKSPACE_CONTENT_NOTICE,
 } from './untrusted-content.js';
+export {
+  createSharedReadMarkMiddleware,
+  SHARED_READ_MARK_MIDDLEWARE_NAME,
+} from './shared-read-mark.js';
 export type { HostExitChild } from './host-exit-children.js';
 export { trackHostExitChild } from './host-exit-children.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
