@@ -230,7 +230,8 @@ function textOf(data: unknown): string | undefined {
  *
  * 判法同 `observation.ts`：`'data' in result` 才算讀到。`{ error }` 算不存在——deepagents 的後端只在
  * 找不到時回這個形狀（`StateBackend`／`StoreBackend`／sandbox 都是 `File '…' not found`）；落磁碟的
- * 那個對缺檔直接拋 `ENOENT`。**拋別的**（`EISDIR`、`EACCES`……）才是「不知道」。
+ * 那個對缺檔直接拋 `ENOENT`。`ContainedFilesystemBackend` 經符號連結落到根外時也回這個形狀，同樣算不存在：
+ * 那個檔模型本來就讀不到。**拋別的**（`EISDIR`、`EACCES`……）才是「不知道」。
  */
 async function readText(
   backend: AnyBackendProtocol,

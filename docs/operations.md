@@ -90,14 +90,14 @@
 
 - **工作區裡往外指的連結讀不出去。** 包括 `read_file`、`ls`、`grep`、`glob`，以及 `submit_record` 讀表頭、技能目錄的掃描。
   目錄連結與檔案連結都拒，連結底下還不存在的路徑也拒。指向 harness home 或 `.env` 的連結因此讀不到 key。
-- **工作區裡互指的目錄連結照常讀。** 最後一段是指向根內的檔案連結時，結果是 `ELOOP`（基座開檔用 `O_NOFOLLOW`）。
+- **指向工作區裡的目錄連結照常讀。** 最後一段是指向根內的檔案連結時，結果是 `ELOOP`（基座開檔用 `O_NOFOLLOW`）。
 - **路徑寫法本身擋掉的兩種：**
   - 路徑含 `..` 或以 `~` 開頭 → `Path traversal not allowed`；
   - 主機絕對路徑（如 `/etc/hosts`）被當成工作區底下的子路徑 → `ENOENT`，讀不到真的那個檔。
 - **`danger-full-access` 不擋**，跟寫入一致。
 - 這幾條由 `apps/harness/src/contained-backend.test.ts` 的〈讀取面的圍堵〉釘住，工具層與日誌上的樣子在
   `apps/harness/src/read-containment-tools.test.ts`。
-- 這是政策圍欄，不是安全邊界：檢查與開檔之間，祖先目錄被換成連結的那一瞬間（TOCTOU）擋不到。要擋惡意的程式，用作業系統層的隔離。
+- 這是 policy fence，不是 kernel boundary：檢查與開檔之間，祖先目錄被換成連結的那一瞬間（TOCTOU）擋不到。要擋惡意的程式，用作業系統層的隔離。
 - 想再擋根內的特定路徑，在 `permissions` 自己加 deny 規則。
 
 **2. 以 stdio 起的 MCP server 子行程不在 fence 底下。** 它們是外部程序，走自己的檔案系統，既不經過 `permissions` 也不經過
@@ -243,7 +243,7 @@ serve 開頭「會話日誌：」那一行印的目錄，要在這個 home 底�
 
 ```bash
 sudo find /srv/nexus-agent/workspace -perm /022 -print                                # 沒有輸出
-sudo find /srv/nexus-agent/workspace -type l -exec readlink -f {} +                   # 落在工作區外的，模型讀不到
+sudo find /srv/nexus-agent/workspace -type l -exec readlink -f {} +                   # 落在工作區外的，模型讀不到；要它讀見升級指南 read-outward-symlinks-refused
 realpath /srv/nexus-agent/workspace /var/lib/nexus-agent                              # 互不包含
 ```
 

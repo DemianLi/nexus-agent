@@ -73,6 +73,14 @@ describe('基座的 virtualMode 是純字串比對（升版絆索）', () => {
     expect(await backend.delete(terrain.escapePath)).toMatchObject({ error: expect.any(String) });
   });
 
+  it('read 經目錄 symlink 讀得出根外', async () => {
+    const backend = new FilesystemBackend({ rootDir: terrain.root, virtualMode: true });
+
+    expect(await backend.read(terrain.escapePath)).toMatchObject({
+      content: expect.stringContaining(SECRET),
+    });
+  });
+
   it('".." 擋得住——字面上的穿越基座本來就查', async () => {
     const backend = new FilesystemBackend({ rootDir: terrain.root, virtualMode: true });
     expect(await backend.write('/../outside/via-dots.txt', 'x')).toMatchObject({
@@ -145,11 +153,10 @@ const readDenied = (
   `[containment] 拒絕 ${operation} "${path}"：經符號連結解析之後落在根之外（mode: ${mode}）`;
 
 /**
- * 讀取面的圍堵（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）。在這之前讀不經過 fence，
- * 工作區裡往外指的目錄連結讀得穿到根外（#1291 接受過的限制，這張推翻它）。
+ * 讀取面的圍堵（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）：經往外指的符號連結讀到根外的一律拒。
  *
- * 讀得到內容的入口有六個：`read`、`readRaw`、`ls`、`grep`、`glob`、`downloadFiles`。每一個各一條，
- * 拿掉其中一個入口的檢查只有它自己那條會紅。
+ * 讀得到內容的入口有六個：`read`、`readRaw`、`ls`、`grep`、`glob`、`downloadFiles`。每一個入口至少有一條
+ * 只靠它自己那道檢查的斷言。
  */
 describe('讀取面的圍堵', () => {
   it('read：經往外指的目錄連結被拒', async () => {
@@ -207,7 +214,7 @@ describe('讀取面的圍堵', () => {
     expect(result).toEqual({ error: readDenied('read', '/escape/nope.txt') });
   });
 
-  it('最後一段是往外指的檔案連結：拒（不再走到 ELOOP）', async () => {
+  it('最後一段是往外指的檔案連結：拒', async () => {
     await symlink(terrain.secretFile, join(terrain.root, 'filelink.txt'));
     const result = await contained(terrain.root).read('/filelink.txt');
 
@@ -229,7 +236,7 @@ describe('讀取面的圍堵', () => {
     }
   });
 
-  it('根內互指的目錄連結照常讀；根內的檔案連結照舊 ELOOP', async () => {
+  it('指向根內的目錄連結照常讀；指向根內的檔案連結是 ELOOP', async () => {
     await mkdir(join(terrain.root, '實際位置'));
     await writeFile(join(terrain.root, '實際位置/a.md'), '根內的內容');
     await symlink(join(terrain.root, '實際位置'), join(terrain.root, '捷徑'));

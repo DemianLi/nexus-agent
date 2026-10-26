@@ -46,7 +46,7 @@
  * `edit` 沿用同一個解碼（`ignoreBOM`），寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
  * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡。
  *
- * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
+ * 另一個會改檔案的方法是 **`uploadFiles`**——`BackendProtocolV2` 上的，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
  *
  * ## 讀取面的圍堵（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）
@@ -61,7 +61,7 @@
  * [#34](https://github.com/DemianLi/nexus-agent/issues/34) 的定案，逐條對應
  * （`references/deepseek-harness/packages/fs/fs-sandbox/`）：**繼承**而不是平行實作、
  * 變更的 fence 只掛在寫入路徑、canonicalize-then-contain 且在委派前重新
- * canonicalize、三個 mode 留一個不設防的逃生口。讀取面的圍堵是上面那一節，不在這份定案裡。
+ * canonicalize、三個 mode 留一個不設防的逃生口。
  *
  * ## 威脅模型：這是 policy fence，不是 kernel boundary
  *
@@ -526,7 +526,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 讀檔（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：**自己讀，只讀一次**，不再先 `super.read` 整份、
    * 再讀一次原始位元組判二進位，也不再讓「先讀後改」為了記版本整份 `readRaw`。
    *
-   * 路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
+   * 開檔之前先過讀取面的圍堵（{@link readDenial}）：經符號連結落在根外的回 `[containment]` 拒絕，碼 `FS_SANDBOX_DENIED`。
+   *
+   * 其餘路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
    * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔（符號連結是 `ELOOP`），其餘例外回 `Error reading file '…': …`。
    * 判二進位照 dsh（`fsio.ts` 的 `readWholeText`／`streamWholeText`）：前 {@link BINARY_SAMPLE_BYTES} 位元組有 NUL 是
    * `binary file`，fatal 解碼失敗是 `invalid UTF-8 text`；**看內容，不看副檔名**（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。
@@ -631,7 +633,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 原始內容（`submit_record`、先讀後改的版本記錄、工具結果的中繼資料走這支）。先過讀取面的圍堵（{@link readDenial}），其餘照基座。
+   * 原始內容（`submit_record`、工具結果的中繼資料，以及先讀後改拿不到 stat 版本時走這支）。先過讀取面的圍堵（{@link readDenial}），其餘照基座。
    *
    * @param filePath - 虛擬路徑。
    * @returns 基座的結果，或落在根外時的錯誤結果。
@@ -1341,7 +1343,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * - **判不了就放行給下游**：字面檢查（`..`、`~`）擋下的、根不存在、解析撞上 `ELOOP`／`EACCES` 的，原樣交給基座或自己的讀法，
    *   錯誤字句照舊。那些情況下游本來就讀不到東西。
    *
-   * 最後一段是指向根外的檔案連結也在這裡被拒，不再走到 `O_NOFOLLOW` 的 `ELOOP`；指向根內的照舊 `ELOOP`。
+   * 最後一段是指向根外的檔案連結也在這裡被拒，到不了開檔那一步；指向根內的檔案連結在開檔時是 `ELOOP`（`O_NOFOLLOW`）。
    * 殘留的 TOCTOU（檢查之後、開檔之前祖先被換成連結）跟寫入面同一個取捨，見檔頭。
    *
    * @param filePath - 模型給的虛擬路徑。

@@ -109,7 +109,7 @@ describe('經往外指的符號連結讀：工具回錯誤、內容不進日誌'
     expect(JSON.stringify(built.sessionLog.events)).not.toContain('sk-根外的假金鑰');
   }, 30000);
 
-  it('submit_record 經連結讀表頭（readRaw）：同一個碼，表頭不進日誌', async () => {
+  it('submit_record 經連結讀表頭（readRaw）：表頭不進日誌', async () => {
     const config = { configurable: { thread_id: 'read-containment-submit' } };
     const built = await createCliAgent(
       { live: false, workspace: root, sandbox: 'workspace-write' },

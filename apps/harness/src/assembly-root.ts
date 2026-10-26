@@ -539,7 +539,7 @@ export interface LaunchPathsCheck {
  * （`packages/sandbox/sandbox-policy/src/index.ts:131`），所以專案那份 `.env` 本來就在工作區根，讀取也照本機檔案系統走
  * （`packages/fs/fs-sandbox/README.zh.md:12`）。dsh 是單人的寫程式代理，跟模型對話的人就是 key 的主人。我們的 serve 是
  * 多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key。**補的是**啟動時這一道路徑重疊檢查；
- * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）、讀取面照舊不圍（#1291）。只做 serve（Q4）：CLI 是一個人在自己的
+ * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）。讀取面經連結出根的由 backend 擋（#1982）。只做 serve（Q4）：CLI 是一個人在自己的
  * 終端機跑，跟 dsh 同一個形狀；放在這裡，CLI 之後要用可以直接叫。
  *
  * ## #1775 的例外（#1620 Q3，demian 接受）：私有可寫根落在 home 底下
