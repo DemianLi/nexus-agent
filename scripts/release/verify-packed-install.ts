@@ -7,10 +7,11 @@
  *
  * 1. `.sha256` 與 tarball 對得上（等同 `sha256sum -c`）；
  * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；SBOM 與實際裝了的
- *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
+ *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），SBOM 列的每一顆授權都是寬鬆授權或審過的例外（`installedLicenseProblems`），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
  * 4. 目標平台的 `node-addon-system` 載得起來（flock 的原生二進位，#1503／會話租約都靠它）；內附的 ripgrep 在 `PATH` 上沒有 rg
- *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；
+ *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；sharp 與目標平台的 libvips 載得起來，真的縮一張圖
+ *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；
  * 5. 假模型跑一輪 `lib/cli.js`：會話 header 的 `build.commit` 等於戳記——已安裝的樹沒有 git，戳記是唯一的來源（PM 補驗收）；
  *    戳記本身也查：`commit` 是非空字串、`dirty` 是 `false`（本機驗沒 commit 的改動加 `--allow-dirty`，CI 不加）；
  * 6. 起一次 `lib/serve.js --port 0`：印出網址、啟動日誌講的 grep 用的 ripgrep 在**安裝樹裡**（不是宿主 `PATH` 上的）、
@@ -51,7 +52,7 @@ import {
   collectPayloadViolations,
   walkInstalledGraph,
 } from './payload.js';
-import { sbomProblems } from './sbom.js';
+import { installedLicenseProblems, sbomProblems } from './sbom.js';
 
 /**
  * CLI 那一輪 root 會話的檔名。root 的 id 固定是 `cli`，`safeBaseName` 編碼後不變；檔名照 `@nexus/core` 的那一份
@@ -150,6 +151,42 @@ export function bundledRgProblems(run: CommandOutcome): string[] {
   if (run.status !== 0 || !run.stdout.startsWith('ripgrep ')) {
     return [
       `內附的 ripgrep 在 PATH 上沒有 rg 的環境裡跑不起來：exit ${String(run.status)}，stdout ${JSON.stringify(run.stdout.slice(0, 200))}，stderr ${JSON.stringify(run.stderr.slice(-400))}`,
+    ];
+  }
+  return [];
+}
+
+/** 步驟 4d 的探針圖：比 {@link SHARP_PROBE_LIMIT} 大，縮完長邊要剛好等於上限。 */
+export const SHARP_PROBE_SOURCE = { width: 3000, height: 2000 } as const;
+/** 步驟 4d 探針自己的長邊上限，只用來確認真的縮了；跟產品的圖片處理沒有綁在一起。 */
+export const SHARP_PROBE_LIMIT = 2048;
+
+/** 步驟 4d 的探針：從 `cwd` 解析 `sharp`，產一張探針圖、依 EXIF 轉正、轉 sRGB、縮進上限、編 JPEG，印出結果的寬高、色彩空間與格式。 */
+export const SHARP_PROBE =
+  "import sharp from 'sharp';\n" +
+  `const source = await sharp({ create: { width: ${String(SHARP_PROBE_SOURCE.width)}, height: ${String(SHARP_PROBE_SOURCE.height)}, channels: 3, background: '#c03030' } }).png().toBuffer();\n` +
+  `const out = await sharp(source).rotate().toColourspace('srgb').resize(${String(SHARP_PROBE_LIMIT)}, ${String(SHARP_PROBE_LIMIT)}, { fit: 'inside' }).jpeg({ quality: 85 }).toBuffer();\n` +
+  'const meta = await sharp(out).metadata();\n' +
+  'process.stdout.write(JSON.stringify({ width: meta.width, height: meta.height, space: meta.space, format: meta.format }));';
+
+/** 步驟 4d：sharp 從產物根載得起來，把探針圖轉成 sRGB、縮進上限、編成 JPEG；子行程印一行 JSON。 */
+export function sharpProblems(run: CommandOutcome): string[] {
+  let result: { width?: unknown; height?: unknown; space?: unknown; format?: unknown } | undefined;
+  try {
+    result = run.status === 0 ? (JSON.parse(run.stdout) as typeof result) : undefined;
+  } catch {
+    // stdout 不是 JSON：result 留 undefined，由下面同一個判斷報。
+  }
+  if (
+    result === undefined ||
+    typeof result.width !== 'number' ||
+    typeof result.height !== 'number' ||
+    Math.max(result.width, result.height) !== SHARP_PROBE_LIMIT ||
+    result.space !== 'srgb' ||
+    result.format !== 'jpeg'
+  ) {
+    return [
+      `sharp 在產物裡縮不了圖：exit ${String(run.status)}，stdout ${JSON.stringify(run.stdout.slice(0, 200))}，stderr ${JSON.stringify(run.stderr.slice(-400))}`,
     ];
   }
   return [];
@@ -394,6 +431,7 @@ export async function verifyPackedInstall(
     const graph = walkInstalledGraph(root);
     problems.push(...graph.missing.map((chain) => `相依圖缺：${chain}`));
     problems.push(...sbomProblems(root));
+    problems.push(...installedLicenseProblems(root));
     problems.push(...attachedSbomProblems(tarball, root));
 
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
@@ -443,6 +481,15 @@ export async function verifyPackedInstall(
       timeout: 60_000,
     });
     problems.push(...bundledRgProblems(bundledRg));
+
+    // 4d. sharp：從產物根解析，原生的 sharp 與 libvips 都要載得起來（import 就會載 .so；真的轉一次，才確認建圖、色彩轉換、縮放與 JPEG 編碼都能跑）。
+    const sharpRun = spawnSync(process.execPath, ['--input-type=module', '--eval', SHARP_PROBE], {
+      cwd: root,
+      env,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    problems.push(...sharpProblems(sharpRun));
 
     // 4c. 安裝樹裡真的跑一次 grep：腳本模型叫 grep，PATH 是空目錄（同 4b），命中只可能來自內附的 rg。
     const grepWork = join(scratch, 'grep-ws');
@@ -661,7 +708,7 @@ if (import.meta.main) {
     process.exitCode = 1;
   } else {
     console.log(
-      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、--version、原生二進位與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
+      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、授權、--version、原生二進位、sharp 與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
     );
   }
 }

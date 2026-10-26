@@ -88,6 +88,7 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`react`](https://github.com/react/react) | MIT |
 | [`react-dom`](https://github.com/react/react) | MIT |
 | [`semver`](https://github.com/npm/node-semver) | ISC |
+| [`sharp`](https://github.com/lovell/sharp) | Apache-2.0 |
 | [`shiki`](https://github.com/shikijs/shiki) | MIT |
 | [`sonner`](https://github.com/emilkowalski/sonner) | MIT |
 | [`tailwindcss`](https://github.com/tailwindlabs/tailwindcss) | MIT |
@@ -103,6 +104,14 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能單獨販售字型本身；散布時要附上原本的著作權聲明與 OFL 全文；修改過的字型不能沿用保留的字型名稱。
 
 這個例外的決議記錄：[#1545 issuecomment-6254467463](https://github.com/DemianLi/nexus-agent/issues/1545#issuecomment-6254467463)。
+
+## 內附的原生函式庫
+
+產物內附 [`@img/sharp-libvips-linux-x64`](https://github.com/lovell/sharp-libvips) 1.3.4：[libvips](https://github.com/libvips/libvips) 與它的相依，以預編譯的共享函式庫（`.so`）原樣散布，由 `sharp` 在執行期動態載入，授權是 `LGPL-3.0-or-later`。它內附的各個函式庫與各自的授權，列在產物裡那個套件的 `README.md`。
+
+LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [`licenses/LGPL-3.0.txt`](licenses/LGPL-3.0.txt) 與 [`licenses/GPL-3.0.txt`](licenses/GPL-3.0.txt)。
+
+引進的決定記在 [#1827 D22](https://github.com/DemianLi/nexus-agent/issues/1827)。
 
 ## 只在開發時用的 npm 相依
 

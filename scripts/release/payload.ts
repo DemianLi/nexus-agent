@@ -90,6 +90,13 @@ const REQUIRED_FILES = [
 ] as const;
 
 /**
+ * 產物內附 LGPL 的原生函式庫（sharp 的 `@img/sharp-libvips-*`，`LGPL-3.0-or-later`），那個套件本身不帶授權檔。
+ * LGPL-3.0 第 4 節 b) 要求 Combined Work 附上 GPL 與 LGPL 兩份全文，所以兩份都從 repo 複製進產物（`pack.ts`），
+ * 少一份就是散布條件沒做到（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
+ */
+export const BUNDLED_LICENSE_TEXTS = ['licenses/LGPL-3.0.txt', 'licenses/GPL-3.0.txt'] as const;
+
+/**
  * 網頁打包進去的三顆字型（OFL-1.1）的授權全文，web 的建置放在 `dist/assets/fonts/`（#1713，PR #1717）。
  * OFL 要求散布時附上授權全文，少一份就是散布條件沒做到。
  */
@@ -137,6 +144,39 @@ export function removeSelfLink(root: string): boolean {
   if (!lstatSync(link).isSymbolicLink()) return false;
   rmSync(link);
   return true;
+}
+
+/**
+ * 拿掉 `node_modules/.pnpm` 底下沒有任何符號連結指進去的項目，回拿掉的項目名（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
+ *
+ * isolated 佈局裡套件只能經連結被解析到：沒有連結指進去的項目，Node 從產物的任何位置都解析不到它。`pnpm deploy` 會留下這種項目：
+ * 一顆在 workspace lockfile 沒標 `optional` 的套件，只被已經跳過的選用相依引用（sharp 的 wasm 選用鏈帶到的 `tslib`）。
+ * 判準只看連結，所以只剪 Node 解析不到的項目：`walkClosure` 漏走的套件仍有連結指著、不會被剪，`sbomProblems` 照樣抓得到。
+ * 拿掉一個項目之後，它裡面的連結不再算數，所以重算到沒有新的可拿為止。
+ *
+ * @param root - 產物根。
+ * @returns 拿掉的項目名，依名字排序。
+ */
+export function pruneUnlinkedStoreEntries(root: string): string[] {
+  const store = join(root, 'node_modules/.pnpm');
+  if (!existsSync(store)) return [];
+  const removed: string[] = [];
+  for (;;) {
+    const targets: string[] = [];
+    for (const item of walk(root)) {
+      if (item.link) targets.push(resolve(dirname(item.path), readlinkSync(item.path)));
+    }
+    const orphans = readdirSync(store, { withFileTypes: true }).filter((entry) => {
+      if (!entry.isDirectory() || entry.name === 'node_modules') return false;
+      const prefix = join(store, entry.name) + sep;
+      return !targets.some((target) => target.startsWith(prefix));
+    });
+    if (orphans.length === 0) return removed.sort();
+    for (const entry of orphans) {
+      rmSync(join(store, entry.name), { recursive: true, force: true });
+      removed.push(entry.name);
+    }
+  }
 }
 
 function isLinkPath(path: string): boolean {
@@ -188,7 +228,7 @@ export function collectPayloadViolations(
   const rel = (path: string): string => relative(root, path).split(sep).join('/');
   const vendor = new Set(options.vendorNames ?? vendorPackageNames());
 
-  for (const file of REQUIRED_FILES) {
+  for (const file of [...REQUIRED_FILES, ...BUNDLED_LICENSE_TEXTS]) {
     if (!existsSync(join(root, file))) violations.push({ path: file, message: '產物缺這個檔' });
   }
   // 照 dsh `build-python-release.py:256-259` 的 `License-Expression == "MIT"`，見 {@link REQUIRED_FILES} 的三件事。

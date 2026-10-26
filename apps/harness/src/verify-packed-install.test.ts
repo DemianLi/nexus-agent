@@ -8,7 +8,7 @@
  * 環境清理、`ps` 缺席、`SIGTERM` 收尾見 `release-scripts.test.ts`。
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -32,6 +32,9 @@ import {
   nativeLockProblems,
   ripgrepDisclosureProblems,
   serveOutputProblems,
+  SHARP_PROBE,
+  SHARP_PROBE_LIMIT,
+  sharpProblems,
   shutdownProblems,
   smokeInstalledServe,
   stampProblems,
@@ -65,6 +68,39 @@ describe('步驟 4：flock 原生二進位', () => {
       expect.stringContaining('ERR_DLOPEN_FAILED'),
     ]);
     expect(nativeLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
+  });
+});
+
+describe('步驟 4d：sharp 在產物裡縮得了圖', () => {
+  const good = { width: SHARP_PROBE_LIMIT, height: 1365, space: 'srgb', format: 'jpeg' };
+
+  it('長邊等於上限、sRGB、JPEG：不報', () => {
+    expect(sharpProblems({ ...ok, stdout: JSON.stringify(good) })).toEqual([]);
+  });
+
+  it('載不起來、沒縮、色彩空間或格式不對、印的不是 JSON：各自報', () => {
+    expect(
+      sharpProblems({ status: 1, stdout: '', stderr: 'Could not load the "sharp" module' }),
+    ).toEqual([expect.stringContaining('sharp')]);
+    expect(
+      sharpProblems({ ...ok, stdout: JSON.stringify({ ...good, width: 3000, height: 2000 }) }),
+    ).toHaveLength(1);
+    expect(
+      sharpProblems({ ...ok, stdout: JSON.stringify({ ...good, space: 'cmyk' }) }),
+    ).toHaveLength(1);
+    expect(
+      sharpProblems({ ...ok, stdout: JSON.stringify({ ...good, format: 'png' }) }),
+    ).toHaveLength(1);
+    expect(sharpProblems({ ...ok, stdout: 'not json' })).toHaveLength(1);
+  });
+
+  it('探針本身在 repo 裝好的 sharp 上跑得通：判斷函式收它的輸出不報', () => {
+    const run = spawnSync(process.execPath, ['--input-type=module', '--eval', SHARP_PROBE], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(sharpProblems(run)).toEqual([]);
   });
 });
 
