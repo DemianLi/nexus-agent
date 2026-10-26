@@ -112,7 +112,7 @@ class Scope(unittest.TestCase):
         self.assertEqual(len(paths), 1)
         self.assertEqual(len(violations), 1)
 
-    def test_patterns_follow_dsh(self) -> None:
+    def test_patterns_are_pinned(self) -> None:
         # 釘住 PATTERNS 的全集：增減時一起改檔頭與 AGENTS.md〈發版〉的掃描範圍。
         self.assertEqual(sorted(PATTERNS), sorted(['README.md', 'docs/**/*.md', 'packages/*.md', 'packages/*/*.md',
                                                    'packages/*/*/*.md', 'AGENTS.md', 'GLOSSARY-MAP.md',

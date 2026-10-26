@@ -1,25 +1,22 @@
 """檢查 repo 自寫 Markdown 的相對連結：目標檔要存在，指向 .md 的 `#片段` 要對到那份的標題 slug 或 `<a id>`（#1537）。
 
-照 dsh `scripts/verify-md-links.ts`（687f282e）：
-
-- 掃的檔照它的 PATTERNS，`.docs/` 對應它的 `.agents/notes`；萬用字元不配點開頭的名字，符號連結指到同一份的只掃一次；
-- 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼；
+- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755）；`.agents/` 底下的 skill 不在內。vendor 只掃 `vendor/README.md` 與
+  `apps/web/src/vendor/solid-glass/README.md` 兩份本地寫的，其餘是原樣搬來的，不掃。
+- 萬用字元不配點開頭的名字，寫死在 pattern 裡的段（`.docs`、`.github`）照認；符號連結指到同一份的只掃一次。
+- 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼。
 - 片段只對指向 .md 的判，指向原始碼的 `#L10` 這類不判。
-
-和 dsh 不同的地方：
-
-- 另掃 `.github/`、`apps/` 兩層、`GLOSSARY-MAP.md`，以及 `vendor/README.md` 與 `apps/web/src/vendor/solid-glass/README.md`
-  這兩份本地寫的 README；其餘 vendor 是原樣搬來的，不掃（#1755）。
 - 落在 repo 根目錄 `references/` 底下的目標不查（存在與錨點都不查）：那是 AGENTS.md〈技術實現標準〉要各自 clone 的唯讀參照，
   `.gitignore` 排除、CI 上不存在。代價是指到那裡的路徑打錯了也抓不到。
-- 寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job，理由同 `check_upgrade_guides.py`：純文件 PR 會跳過 `static`，
-  `plan` 不裝相依，所以沒有 Markdown 解析器，逐行近似。各處往哪一邊偏：
-  - 錨點只認 ATX 標題與 `<a id>`。setext 標題、清單項目裡縮排 4 格以上的標題不算，指向它們的連結會被報（報多）。
-    縮排程式碼裡的 `<a id>` 會被收成錨點（放過）。
-  - fence 用去掉行首空白的行判開關，因為清單項目裡的 fence 本來就縮排；縮排程式碼裡出現 ``` 會被當成 fence 開頭，
-    到收尾之前的連結不查（放過）。
-  - 連結只認行內的 `[文字](目標)`、`![圖](目標)` 與 `[標籤]: 目標` 定義；跨行的連結文字、`[文字][標籤]` 的參照式不認，
-    參照式的目標由那一行定義查到。
+
+寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job，理由同 `check_upgrade_guides.py`：純文件 PR 會跳過 `static`，
+`plan` 不裝相依，所以沒有 Markdown 解析器，逐行近似。各處往哪一邊偏：
+
+- 錨點只認 ATX 標題與 `<a id>`。setext 標題、清單項目裡縮排 4 格以上的標題不算，指向它們的連結會被報（報多）。
+  縮排程式碼裡的 `<a id>` 會被收成錨點（放過）。
+- fence 用去掉行首空白的行判開關，因為清單項目裡的 fence 本來就縮排；縮排程式碼裡出現 ``` 會被當成 fence 開頭，
+  到收尾之前的連結不查（放過）。
+- 連結只認行內的 `[文字](目標)`、`![圖](目標)` 與 `[標籤]: 目標` 定義；跨行的連結文字、`[文字][標籤]` 的參照式不認，
+  參照式的目標由那一行定義查到。
 """
 
 from __future__ import annotations
