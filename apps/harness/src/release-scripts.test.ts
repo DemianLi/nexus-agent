@@ -30,10 +30,12 @@ import {
 import { releaseMembers, sharedVersion } from '../../../scripts/release/members.js';
 import { fileSha256, productName, sha256Line } from '../../../scripts/release/pack.js';
 import {
+  BUNDLED_LICENSE_TEXTS,
   SBOM_FILE,
   collectClosureViolations,
   collectPayloadViolations,
   pruneThirdPartyMaps,
+  pruneUnlinkedStoreEntries,
   removeSelfLink,
   shippedNames,
   walkInstalledGraph,
@@ -42,6 +44,7 @@ import {
   buildSbom,
   cycloneDxLicense,
   integrityToHashes,
+  licenseProblems,
   listInstalledPackages,
   npmPurl,
   renderSbom,
@@ -225,6 +228,7 @@ function goodTree(root: string): void {
   put('build-stamp.json', '{"commit":"abc","dirty":false}');
   put('LICENSE', 'MIT License');
   put('THIRD_PARTY_NOTICES.md', '# 第三方授權');
+  for (const file of BUNDLED_LICENSE_TEXTS) put(file, 'GNU');
   put(SBOM_FILE, '{}');
   put('cordis.yml', '');
   put('cordis.serve.yml', '');
@@ -283,6 +287,14 @@ describe('產物樹的內容檢查', () => {
       /THIRD_PARTY_NOTICES\.md 產物缺這個檔/u,
     ],
     ['缺 SBOM', () => rmSync(join(root, SBOM_FILE)), /sbom\.cdx\.json 產物缺這個檔/u],
+    ...BUNDLED_LICENSE_TEXTS.map(
+      (file) =>
+        [
+          `缺 libvips 要附的授權全文 ${file}`,
+          () => rmSync(join(root, file)),
+          new RegExp(`^${file.replace('.', '\\.')} 產物缺這個檔`, 'mu'),
+        ] as [string, () => void, RegExp],
+    ),
     // 期望值寫死 MIT、不引產品常數（照 dsh `build-python-release.py:256-259`）。
     [
       'manifest 沒有 license',
@@ -406,6 +418,37 @@ describe('產物樹的內容檢查', () => {
     expect(pruneThirdPartyMaps(root)).toBe(1);
     expect(readdirSync(dirname(third))).not.toContain('index.js.map');
     expect(readdirSync(dirname(ours))).toContain('a.js.map');
+  });
+
+  it('pruneUnlinkedStoreEntries 只拿掉沒有連結指進去的項目，連帶只被它指著的也拿掉', () => {
+    const tree = mkdtempSync(join(tmpdir(), 'release-prune-'));
+    const store = join(tree, 'node_modules/.pnpm');
+    const entry = (name: string, pkg: string): string => {
+      const directory = join(store, name, 'node_modules', pkg);
+      mkdirSync(directory, { recursive: true });
+      writeFileSync(join(directory, 'package.json'), JSON.stringify({ name: pkg }));
+      return directory;
+    };
+    const link = (from: string, to: string): void => {
+      mkdirSync(dirname(from), { recursive: true });
+      symlinkSync(relative(dirname(from), to), from);
+    };
+    const sharp = entry('sharp@1', 'sharp');
+    link(join(tree, 'node_modules/sharp'), sharp);
+    // 只被 hoist 目錄指著的也算有人連（Node 從 `.pnpm/node_modules` 解析得到）。
+    link(join(store, 'node_modules/undici-types'), entry('undici-types@7', 'undici-types'));
+    // tslib 沒有任何連結；emnapi 沒有連結、只連到 wasm，wasm 只被 emnapi 指著：三個都要拿掉。
+    entry('tslib@2', 'tslib');
+    const wasm = entry('wasm@1', 'wasm');
+    link(join(entry('emnapi@1', 'emnapi'), '..', 'wasm'), wasm);
+
+    try {
+      expect(pruneUnlinkedStoreEntries(tree)).toEqual(['emnapi@1', 'tslib@2', 'wasm@1']);
+      expect(readdirSync(store).sort()).toEqual(['node_modules', 'sharp@1', 'undici-types@7']);
+      expect(pruneUnlinkedStoreEntries(tree)).toEqual([]);
+    } finally {
+      rmSync(tree, { recursive: true, force: true });
+    }
   });
 
   it('removeSelfLink 拿掉指回原始碼樹的 harness 連結，其他東西不動', () => {
@@ -678,6 +721,74 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
       'pkg:npm/a@1.0.0',
       'pkg:npm/b@1.0.0',
       'pkg:npm/native-linux@2.0.0',
+    ]);
+  });
+
+  it('只寫在 peerDependenciesMeta 的選用 peer 裝在閉包裡也收（sharp 的 @types/node），SBOM 跟閉包相同', () => {
+    // 根 → sharp；sharp 的 manifest 只有 `peerDependenciesMeta`（沒有 `peerDependencies`），pnpm 照樣把 @types/node 連到它底下。
+    const types = install('@types+node@24.0.0', {
+      name: '@types/node',
+      version: '24.0.0',
+      license: 'MIT',
+    });
+    const sharp = install('sharp@0.35.5_@types+node@24.0.0', {
+      name: 'sharp',
+      version: '0.35.5',
+      license: 'Apache-2.0',
+      peerDependenciesMeta: { '@types/node': { optional: true } },
+    });
+    link(
+      join(root, 'node_modules/.pnpm/sharp@0.35.5_@types+node@24.0.0/node_modules/@types/node'),
+      types,
+    );
+    link(join(root, 'node_modules/sharp'), sharp);
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        name: '@nexus/harness',
+        version: '1.0.0',
+        dependencies: { a: '1.0.0', sharp: '0.35.5', '@nexus/core': 'workspace:*' },
+      }),
+    );
+    const bom = buildSbom(root, {
+      firstPartyLicense: 'MIT',
+      lockfile: `${lockfile}  sharp@0.35.5:\n    resolution: {integrity: ${sri('sharp')}}\n  '@types/node@24.0.0':\n    resolution: {integrity: ${sri('types')}}\n`,
+    });
+    expect(bom.components.map((entry) => entry.purl)).toContain('pkg:npm/%40types/node@24.0.0');
+    writeFileSync(join(root, SBOM_FILE), renderSbom(bom));
+    expect(sbomProblems(root)).toEqual([]);
+  });
+
+  it('閉包的授權：寬鬆的、OFL 字型、sharp 的 libvips（LGPL）不報；其他非寬鬆的要報', () => {
+    const entry = (name: string, license: string) => {
+      const slash = name.startsWith('@') ? name.indexOf('/') : -1;
+      return {
+        ...(slash > 0 ? { group: name.slice(0, slash), name: name.slice(slash + 1) } : { name }),
+        version: '1.0.0',
+        licenses: [{ expression: license }],
+      };
+    };
+    expect(
+      licenseProblems({
+        components: [
+          entry('a', 'MIT'),
+          entry('@fontsource-variable/geist', 'OFL-1.1'),
+          entry('@img/sharp-libvips-linux-x64', 'LGPL-3.0-or-later'),
+        ],
+      }),
+    ).toEqual([]);
+    expect(
+      licenseProblems({
+        components: [
+          entry('copyleft', 'LGPL-3.0-or-later'),
+          entry('@img/sharp-libvips-linux-x64', 'GPL-3.0-only'),
+          entry('font', 'OFL-1.1'),
+        ],
+      }),
+    ).toEqual([
+      expect.stringContaining('copyleft@1.0.0'),
+      expect.stringContaining('@img/sharp-libvips-linux-x64@1.0.0'),
+      expect.stringContaining('font@1.0.0'),
     ]);
   });
 

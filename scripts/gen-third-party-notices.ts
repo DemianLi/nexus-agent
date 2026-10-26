@@ -65,6 +65,31 @@ const OFL_FONT_PACKAGES: ReadonlySet<string> = new Set([
 ]);
 const OFL_LICENSE = 'OFL-1.1';
 
+/**
+ * sharp 的 libvips 預編譯套件（`@img/sharp-libvips-<平台>`），宣告 `LGPL-3.0-or-later`，經 sharp 的 `optionalDependencies`
+ * 遞移進產物。LGPL 同樣不加進 `PERMISSIVE_LICENSES`，只對這一族套件名（比前綴）、而且授權剛好是這一條時放行。
+ * 引進的決定是 [#1827 D22](https://github.com/DemianLi/nexus-agent/issues/1827)，散布條件見 {@link renderLibvips}。
+ */
+const LIBVIPS_PACKAGE_PREFIX = '@img/sharp-libvips-';
+const LIBVIPS_LICENSE = 'LGPL-3.0-or-later';
+/** 產物只出 linux-x64（glibc），聲明列這一顆的版本。 */
+const SHIPPED_LIBVIPS = `${LIBVIPS_PACKAGE_PREFIX}linux-x64`;
+
+/**
+ * 不是寬鬆授權、但審過可以隨產物散布的套件：OFL 的三顆字型與 sharp 的 libvips。發版腳本的 SBOM 核對用它檢查完整閉包
+ * （`scripts/release/sbom.ts` 的 `licenseProblems`），所以遞移進來的也擋得到。
+ *
+ * @param name - 套件名。
+ * @param license - manifest 的 `license`。
+ * @returns 名字與授權都對上其中一條例外時為 true。
+ */
+export function isReviewedNonPermissive(name: string, license: string): boolean {
+  return (
+    (OFL_FONT_PACKAGES.has(name) && license === OFL_LICENSE) ||
+    (name.startsWith(LIBVIPS_PACKAGE_PREFIX) && license === LIBVIPS_LICENSE)
+  );
+}
+
 /** store 答不出來時的補值。每一條寫為什麼。 */
 const OVERRIDES: Record<string, { license?: string; repo?: string }> = {
   // 發布的 manifest 沒有 repository 也沒有 homepage（0.0.18），照 dsh `:89-90` 對 node-addon-require-builtin 的做法指 npm 頁面。
@@ -280,16 +305,14 @@ export function isPermissive(license: string): boolean {
 }
 
 /**
- * 執行期相依的授權不是寬鬆授權就擋下（dsh `:687-699`）。例外只有 `OFL_FONT_PACKAGES` 宣告 `OFL-1.1` 的那三顆。
+ * 執行期相依的授權不是寬鬆授權就擋下。例外見 {@link isReviewedNonPermissive}。
  * @throws 有任何一顆不合格時。
  */
 export function assertRuntimeLicenses(
   dependencies: readonly { name: string; license: string }[],
 ): void {
   const rejected = dependencies.filter(
-    (dep) =>
-      !isPermissive(dep.license) &&
-      !(OFL_FONT_PACKAGES.has(dep.name) && dep.license === OFL_LICENSE),
+    (dep) => !isPermissive(dep.license) && !isReviewedNonPermissive(dep.name, dep.license),
   );
   if (rejected.length > 0) {
     throw new Error(
@@ -536,6 +559,30 @@ OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能�
 `;
 }
 
+/**
+ * libvips 那一段：根 lockfile 裡有 {@link SHIPPED_LIBVIPS} 時才產生，版本取自 lockfile（各平台的開發機裝的是自己平台那一顆，
+ * 讀 store 會因機器而異）。這一段同時是 LGPL-3.0 第 4 節 a) 要的「顯著告知」；b) 要的兩份全文由 `scripts/release/pack.ts`
+ * 從 `licenses/` 複製進產物。
+ */
+function renderLibvips(): string {
+  const lock = parseYaml(readFileSync(join(ROOT, 'pnpm-lock.yaml'), 'utf8')) as {
+    packages?: Record<string, unknown>;
+  };
+  const version = Object.keys(lock.packages ?? {})
+    .find((key) => key.startsWith(`${SHIPPED_LIBVIPS}@`))
+    ?.slice(SHIPPED_LIBVIPS.length + 1);
+  if (version === undefined) return '';
+  return `
+## 內附的原生函式庫
+
+產物內附 [\`${SHIPPED_LIBVIPS}\`](https://github.com/lovell/sharp-libvips) ${version}：[libvips](https://github.com/libvips/libvips) 與它的相依，以預編譯的共享函式庫（\`.so\`）原樣散布，由 \`sharp\` 在執行期動態載入，授權是 \`${LIBVIPS_LICENSE}\`。它內附的各個函式庫與各自的授權，列在產物裡那個套件的 \`README.md\`。
+
+LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [\`licenses/LGPL-3.0.txt\`](licenses/LGPL-3.0.txt) 與 [\`licenses/GPL-3.0.txt\`](licenses/GPL-3.0.txt)。
+
+引進的決定記在 [#1827 D22](https://github.com/DemianLi/nexus-agent/issues/1827)。
+`;
+}
+
 function renderNonPermissiveNote(deps: ExternalDep[]): string {
   if (deps.length === 0) return '';
   const named = deps.map((dep) => `\`${dep.name}\`（${dep.license}）`).join('、');
@@ -602,7 +649,7 @@ ${webVendored.map((row) => `| [${row.name}](${row.upstream}) | ${row.pin} | ${ro
 安裝來在執行期使用，或打包進網頁 \`dist\` 的外部套件。網頁打包了哪些，是用 \`apps/web\` 自己的 vite 設定真的 build 一次收集的，不看它宣告在哪一段。這一層涵蓋每一顆可以從 \`cordis.yml\` 掛上的插件，不只預設載入的那些。
 
 ${renderNpmTable(runtimeDeps)}
-${renderOflFonts(runtimeDeps)}
+${renderOflFonts(runtimeDeps)}${renderLibvips()}
 ## 只在開發時用的 npm 相依
 
 只為開發、測試、型別或工具**直接**宣告的外部套件，不在執行期安裝，也沒有打包進網頁。這裡的套件仍可能被某個執行期相依遞移帶進來，那以 \`pnpm-lock.yaml\` 為準。

@@ -1,9 +1,9 @@
 /**
  * 把 `@nexus/harness` 的完整正式閉包打成一份 tar.gz，旁邊放 `.sha256`（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2，C047）。
  *
- * 流程：`build:lib` → web 的 `vite build` → `pnpm deploy --legacy --prod` 出閉包到暫存目錄 → 寫建置戳記 → 放 `LICENSE`、
- * `THIRD_PARTY_NOTICES.md`、SBOM（#1545）→ 兩道靜態檢查（`payload.ts` 的內容檢查與出貨清單閉包；第三道相依圖走訪只在
- * `verify-packed-install` 跑）→ `tar -czf` → `.sha256`。產物名 `nexus-agent-<版本>-<平台>.tar.gz`，解開是同名的一個資料夾。
+ * 流程：`build:lib` → web 的 `vite build` → `pnpm deploy --legacy --prod` 出閉包到暫存目錄 → 拿掉沒有連結指進去的 `.pnpm` 項目 →
+ * 寫建置戳記 → 放 `LICENSE`、`THIRD_PARTY_NOTICES.md`、`licenses/` 的 LGPL／GPL 全文、SBOM（#1545）→ 三道靜態檢查（`payload.ts` 的內容檢查與
+ * 出貨清單閉包，加上 `sbom.ts` 的閉包授權檢查；相依圖走訪只在 `verify-packed-install` 跑）→ `tar -czf` → `.sha256`。產物名 `nexus-agent-<版本>-<平台>.tar.gz`，解開是同名的一個資料夾。
  * SBOM 另外複製一份到產物目錄（`<產物名>.cdx.json`，旁邊一份 `.sha256`），Release 一起附上。
  * 主機預裝 Node（22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準）；產物不帶 node、不帶 pnpm、不需要安裝步驟（Q1 (a)，只出 linux-x64，Q2 (a)）。
  *
@@ -31,19 +31,21 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { ROOT } from '../workspace-packages.js';
 import { releaseMembers, sharedVersion } from './members.js';
 import {
+  BUNDLED_LICENSE_TEXTS,
   SBOM_FILE,
   collectClosureViolations,
   collectPayloadViolations,
   pruneThirdPartyMaps,
+  pruneUnlinkedStoreEntries,
   removeSelfLink,
 } from './payload.js';
-import { buildSbom, renderSbom } from './sbom.js';
+import { buildSbom, licenseProblems, renderSbom } from './sbom.js';
 
 /** 產物名（不含副檔名）。 */
 export function productName(version: string, platform: string): string {
@@ -116,21 +118,28 @@ export function pack(options: { out: string; skipBuild?: boolean; commit?: strin
     }
     pruneThirdPartyMaps(staging);
     removeSelfLink(staging);
+    const unlinked = pruneUnlinkedStoreEntries(staging);
+    if (unlinked.length > 0) {
+      process.stdout.write(`release:pack：拿掉沒有連結指進去的 ${unlinked.join('、')}\n`);
+    }
     writeFileSync(
       join(staging, 'build-stamp.json'),
       `${JSON.stringify({ commit, dirty }, null, 2)}\n`,
     );
     // 授權檔照 dsh `scripts/build-python-release.py` 的三件事（`payload.ts` 的 REQUIRED_FILES 有全文）：這裡是「複製」
     // （`:180`、`:183`）；「宣告」（`:185-195`）偏離理由 1，退到 manifest 的 `license`；「驗證」（`:256-259`、`:260-265`）在 payload。
-    for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+    for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md', ...BUNDLED_LICENSE_TEXTS]) {
+      mkdirSync(dirname(join(staging, file)), { recursive: true });
       copyFileSync(join(ROOT, file), join(staging, file));
     }
-    const sbomText = renderSbom(buildSbom(staging));
+    const bom = buildSbom(staging);
+    const sbomText = renderSbom(bom);
     writeFileSync(join(staging, SBOM_FILE), sbomText);
 
     const violations = [
       ...collectPayloadViolations(staging, { nativeSuffix: platform }),
       ...collectClosureViolations(staging),
+      ...licenseProblems(bom).map((message) => ({ path: SBOM_FILE, message })),
     ];
     if (violations.length > 0) {
       throw new Error(

@@ -9,7 +9,8 @@
  * 閉包裡每一顆的清冊，管理者拿去對機關的弱點資料庫（卡上的失敗情境）。補的是這一份清冊，格式照 CycloneDX 1.6。
  *
  * 兩種列閉包的方法刻意分開（#1545 驗收 6）：
- * - 產生用 {@link walkClosure}：從產物根沿 `dependencies`／`optionalDependencies`／`peerDependencies` 走相依圖。
+ * - 產生用 {@link walkClosure}：從產物根沿 `dependencies`／`optionalDependencies`／`peerDependencies` 走相依圖，另外加上
+ *   只寫在 `peerDependenciesMeta` 的選用 peer（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
  * - 核對用 {@link listInstalledPackages}：直接列 `node_modules/.pnpm` 底下實際裝了的套件目錄。
  *
  * 產生那一支漏了哪一段（例如拿掉 `optionalDependencies`，平台二進位套件就會漏），核對那一支照樣列得到，`sbomProblems` 就會紅。
@@ -27,6 +28,7 @@ import { join } from 'node:path';
 
 import parseSpdx from 'spdx-expression-parse';
 
+import { isPermissive, isReviewedNonPermissive } from '../gen-third-party-notices.js';
 import { ROOT } from '../workspace-packages.js';
 import { SBOM_FILE, installedPackage } from './payload.js';
 
@@ -43,8 +45,16 @@ export const CLOSURE_LOCKFILE = 'node_modules/.pnpm/lock.yaml';
 /** 我們自己的套件：名字在這個 scope 底下。 */
 const FIRST_PARTY_SCOPE = '@nexus/';
 
-/** 產生 SBOM 時沿這幾段走相依圖。平台二進位套件只掛在 `optionalDependencies`。 */
-const GRAPH_SECTIONS = ['dependencies', 'optionalDependencies', 'peerDependencies'] as const;
+/**
+ * 產生 SBOM 時沿這幾段走相依圖。平台二進位套件只掛在 `optionalDependencies`。`peerDependenciesMeta` 也走：只在那裡宣告、
+ * `peerDependencies` 沒列的選用 peer，pnpm 照樣裝進閉包並連到宣告者底下（sharp 的 `@types/node`，workspace 有那一顆時就進正式閉包）。
+ */
+const GRAPH_SECTIONS = [
+  'dependencies',
+  'optionalDependencies',
+  'peerDependencies',
+  'peerDependenciesMeta',
+] as const;
 
 interface Manifest {
   readonly name: string;
@@ -53,6 +63,7 @@ interface Manifest {
   readonly dependencies?: Readonly<Record<string, string>>;
   readonly optionalDependencies?: Readonly<Record<string, string>>;
   readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly peerDependenciesMeta?: Readonly<Record<string, unknown>>;
 }
 
 /** 閉包裡的一顆套件。 */
@@ -355,4 +366,59 @@ export function sbomProblems(root: string): string[] {
     if (!installed.has(id)) problems.push(`SBOM 列了閉包裡沒有的 ${id}`);
   }
   return problems;
+}
+
+/** CycloneDX 授權欄位轉回一個字串：運算式原樣，單一授權取 id 或 name。 */
+function licenseText(entry: CycloneDxLicense): string {
+  return 'expression' in entry
+    ? entry.expression
+    : 'id' in entry.license
+      ? entry.license.id
+      : entry.license.name;
+}
+
+/**
+ * 閉包裡每一顆的授權都要是寬鬆授權，或是審過的例外（`gen-third-party-notices.ts` 的 `isReviewedNonPermissive`）。
+ * `THIRD_PARTY_NOTICES.md` 的授權檢查只看直接相依；遞移進來的非寬鬆授權（例如 sharp 底下的 libvips）只有在這裡、對著實際出貨的
+ * 閉包才看得到（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
+ *
+ * @param bom - 產生的或產物裡的 SBOM。
+ * @returns 問題清單；空代表都合格。
+ */
+export function licenseProblems(bom: {
+  readonly components?: readonly (Pick<CycloneDxComponent, 'group' | 'name' | 'version'> & {
+    /** 產物裡那份 SBOM 讀進來的，可能少這一欄：當成沒有授權，照樣報。 */
+    readonly licenses?: readonly CycloneDxLicense[];
+  })[];
+}): string[] {
+  const problems: string[] = [];
+  for (const entry of bom.components ?? []) {
+    const name = entry.group === undefined ? entry.name : `${entry.group}/${entry.name}`;
+    const license = (entry.licenses ?? []).map(licenseText).join(' AND ');
+    if (!isPermissive(license) && !isReviewedNonPermissive(name, license)) {
+      problems.push(
+        `閉包裡的 ${name}@${entry.version} 授權是 ${license}，不是寬鬆授權也不在審過的例外裡`,
+      );
+    }
+  }
+  return problems;
+}
+
+/**
+ * 對產物根那份 SBOM 跑 {@link licenseProblems}。檔不在或不是合法 JSON 時回空：那兩種由 {@link sbomProblems} 報。
+ *
+ * @param root - 產物根（解開後的安裝樹）。
+ * @returns 問題清單；空代表都合格。
+ */
+export function installedLicenseProblems(root: string): string[] {
+  const path = join(root, SBOM_FILE);
+  if (!existsSync(path)) return [];
+  let bom: Parameters<typeof licenseProblems>[0];
+  try {
+    bom = JSON.parse(readFileSync(path, 'utf8')) as typeof bom;
+  } catch {
+    // 解析錯誤由 sbomProblems 報，這裡不重報。
+    return [];
+  }
+  return licenseProblems(bom);
 }

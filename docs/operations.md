@@ -867,7 +867,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 | `nexus-agent-<版本>-audit.json` | 發版當下的漏洞掃描結果，見下面〈漏洞掃描〉 |
 | `nexus-agent-<版本>-audit.json.sha256` | 掃描結果的雜湊 |
 
-tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
+tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）、`licenses/`（內附的 libvips 要附的 LGPL 3.0 與 GPL 3.0 全文）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
 以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這些檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
 閉包，平台套件（原生二進位、內附的 ripgrep）也是 linux-x64 那一版：Release 只出這一個平台。第 4 步有測試盯著
 （`apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
@@ -1155,6 +1155,7 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），
 Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
+主機的 C 函式庫要是 glibc 2.28 以上（RHEL／Rocky 8、Debian 10、Ubuntu 20.04 以上；`ldd --version` 看得到），因為產物裡的 sharp 只帶 linux-x64 glibc 版，它用的 libvips 要求 glibc 2.28 以上（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；Node 官方的 linux-x64 二進位本身也要 glibc 2.28。Alpine 這類用 musl 的發行版不支援。
 
 ```bash
 sudo useradd --system --home-dir /var/lib/nexus-agent --shell /usr/sbin/nologin nexus-agent
