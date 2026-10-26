@@ -243,7 +243,7 @@ nexus-agent 是單一 Node 行程的 agent harness。`serve` 對瀏覽器提供 
 順帶的更正：
 
 - dsh 的四個 preset 在 `687f282e` 的實際路徑是 `packages/bundle/web-app/presets/*.patch.yml`，只屬於 web-app；09-19 記的 `packages/preset/agent-presets/presets/*` 已不存在。
-- 09-26 的 C-14（time-context）、L-18（schedule）兩列判「dsh 也沒有」，在 `687f282e` 不成立（三個 preset 都掛 time-context，web-app 已啟用 schedule）。這次兩份分層盤點的判法不一致：C 層判 C-14 為缺口、架構那份判「判過不做」；L 層判 L-18 不變、架構那份改判「判過不做」。明細照實保留兩邊，由 demian 拍板。
+- 09-26 的 C-14（time-context）、L-18（schedule）兩列判「dsh 也沒有」，在 `687f282e` 不成立（三個 preset 都掛 time-context，web-app 已啟用 schedule）。這次兩份分層盤點的判法不一致：C 層判 C-14 為缺口、架構那份判「判過不做」；L 層判 L-18 不變、架構那份改判「判過不做」。明細照實保留兩邊。demian 2026-10-18 已拍板（#1614 issuecomment-6238795510）：C-14 照 dsh 掛上（#1625 已做）；L-18 判過不做，理由是「代替人定時跑任務」的需求在產品裡還沒出現，比照 L-16、L-17，重開條件是出現需要定時執行的業務需求。
 - `decisions-2026-10-11.md:90` 寫 dsh「換包要重啟」，這只在沒有 HMR 時成立；我們要「只給新對話」的那條偏離本身仍成立。
 
 ## 新缺口候選（沒有既有卡的，交 demian 決定要不要開卡）
@@ -370,7 +370,7 @@ dsh 架構對齊翻判（C）
 | C-08 上下文壓力量表（token-meter） | 完成 → 部分（09-26 漏判） | dsh packages/llm/token-meter/src/index.ts:115-116 同時登記 contextBreakdown，477b4f4 同檔 :116 已有（git show 實讀）；我方沒有組成拆分；#1571 |
 | C-11 跨會話引用 | 已拍板未落地 → 完成（形狀不同） | apps/harness/src/session-reference.ts:1-8；apps/harness/src/thread-pump.ts:1372；dsh packages/bundle/web-app/cordis.patch.yml:94-95；#713；harness 模組、不是清單列 |
 | C-12 @file 引用補全 | 已拍板未落地 → 完成（形狀不同） | apps/harness/src/file-references.ts:1-5；dsh packages/bundle/web-app/cordis.patch.yml:97-98；#651、#653 |
-| C-14 時間上下文（time-context） | dsh 也沒有 → **兩份 wp1 檔不一致：wp1-C 判「缺口」、wp1-dsh-arch 判「判過不做」**，待 demian 拍板 | 兩檔都同意 09-26 的「dsh 也沒有」在 687f282e 不成立：dsh packages/bundle/web-app/presets/standard.patch.yml:19、ptc.patch.yml:19、cordis.patch.yml:22 都掛 time-context（README.zh.md:12 寫明 standard、cordis 與 ptc 宣告它），477b4f4 時只在 web-app 且 disabled（git show 實讀）。分歧在我方：wp1-C 認為照 09-26 自訂規矩（.docs/plugin-architecture-gap-survey.md:407 (行號已更正)）它算出廠、我方沒有實作也沒有卡 → 缺口；wp1-dsh-arch 依調研筆記「登記不排」（gap-survey:408）→ 判過不做、重開條件要對一次。另：survey 的另一條理由（瀏覽器時區要先擴 wire）在 .docs/plugin-architecture-gap-survey.md:410 (行號已更正)，仍成立 |
+| C-14 時間上下文（time-context） | dsh 也沒有 → **照 dsh 掛上**（demian 2026-10-18，#1614 issuecomment-6238795510 第 1 條；#1625 已做）。盤點時兩份 wp1 檔不一致：wp1-C 判「缺口」、wp1-dsh-arch 判「判過不做」 | 兩檔都同意 09-26 的「dsh 也沒有」在 687f282e 不成立：dsh packages/bundle/web-app/presets/standard.patch.yml:19、ptc.patch.yml:19、cordis.patch.yml:22 都掛 time-context（README.zh.md:12 寫明 standard、cordis 與 ptc 宣告它），477b4f4 時只在 web-app 且 disabled（git show 實讀）。分歧在我方：wp1-C 認為照 09-26 自訂規矩（.docs/plugin-architecture-gap-survey.md:407 (行號已更正)）它算出廠、我方沒有實作也沒有卡 → 缺口；wp1-dsh-arch 依調研筆記「登記不排」（gap-survey:408）→ 判過不做、重開條件要對一次。另：survey 的另一條理由（瀏覽器時區要先擴 wire）在 .docs/plugin-architecture-gap-survey.md:410 (行號已更正)，仍成立 |
 | C-16 系統提示詞的身分與 persona | 部分 → 完成 | apps/harness/cordis.yml:210-215；dsh packages/bundle/base/cordis.patch.yml:504；#720、PR #820；#1477、PR #1495 上樹 |
 
 ### L 生命週期與編排
@@ -398,7 +398,7 @@ dsh 架構對齊翻判（L）
 | L-23 插話（next-step steer） | 缺口 → 完成（harness 那半） | apps/harness/src/wire-handler.ts:1510、:2147；apps/harness/cordis.yml:697；#710；web 那半沒驗證 |
 | L-25 每步平行工具呼叫上限 | 缺口 → 完成 | apps/harness/cordis.yml:716-719；apps/harness/src/agent-factory.ts:851-855；#711；偏離：改值要重啟、上限 1 時用屏障串行 |
 | L-26 模型選擇 | 部分 → 完成（serve --live） | apps/harness/src/model-selection-host.ts:65-75；apps/harness/src/serve.ts:1076；apps/harness/cordis.yml:661-662；#723、#729 |
-| L-18 排程（schedule） | dsh 也沒有 → **兩份 wp1 檔不一致：wp1-L 列為不變（否定 grep 0 筆）、wp1-dsh-arch 改判「判過不做」**，待 demian 拍板 | wp1-dsh-arch：687f282e 的 web-app:139-140 啟用 schedule、三個 preset 掛 tool-schedule，09-26「dsh 也沒有」的依據（477b4f4 web-app 那列 disabled）不再成立，依 gap-survey:40、:450「需求未出現」比照 L-16／L-17 判過不做。wp1-L 只重跑了我方否定 grep（沒有實作），沒有重核 dsh 側 |
+| L-18 排程（schedule） | dsh 也沒有 → **判過不做**（demian 2026-10-18，#1614 issuecomment-6238795510 第 2 條；#1625 照此不做 schedule）。盤點時兩份 wp1 檔不一致：wp1-L 列為不變（否定 grep 0 筆）、wp1-dsh-arch 改判「判過不做」 | wp1-dsh-arch：687f282e 的 web-app:139-140 啟用 schedule、三個 preset 掛 tool-schedule，09-26「dsh 也沒有」的依據（477b4f4 web-app 那列 disabled）不再成立，依 gap-survey:40、:450「需求未出現」比照 L-16／L-17 判過不做。wp1-L 只重跑了我方否定 grep（沒有實作），沒有重核 dsh 側 |
 
 ### O 可觀測與維運
 
@@ -508,8 +508,8 @@ G-04 仍是「完成」，但語意有變：前景子代理改成交給人（#12
 | session-checkpoint-policy（base:420） | 相容：apps/harness/cordis.yml:314 | L-08 完成（本次翻判，剩一條登記偏離沒標理由） |
 | image-offload（base:434） | 寫死：packages/nexus-core/src/image-offload.ts＋fold | C-07 完成（形狀不同，本次翻判） |
 | system-prompt、persona（base:504；presets） | 樹：system-prompt（apps/harness/cordis.yml:210，必掛） | C-16 完成（本次翻判，#1477 上樹） |
-| time-context（standard:19、ptc:19、cordis preset:22） | 無 | C-14：09-26「dsh 也沒有」不成立（三個 preset 都掛）；改判缺口或判過不做，兩份 wp1 不一致，待拍板 |
-| schedule、tool-schedule（web-app:139；standard:35、ptc:35、cordis preset:38） | 無 | L-18：09-26 的依據（477b4f4 web-app:125 disabled）在 687f282e 不成立；是否改判判過不做，兩份 wp1 不一致，待拍板 |
+| time-context（standard:19、ptc:19、cordis preset:22） | 樹：time-context（apps/harness/cordis.yml:78，#1625） | C-14：09-26「dsh 也沒有」不成立（三個 preset 都掛）；demian 2026-10-18 拍板照 dsh 掛上（#1614 issuecomment-6238795510 第 1 條），#1625 已做 |
+| schedule、tool-schedule（web-app:139；standard:35、ptc:35、cordis preset:38） | 無 | L-18：09-26 的依據（477b4f4 web-app:125 disabled）在 687f282e 不成立；demian 2026-10-18 判過不做（#1614 issuecomment-6238795510 第 2 條） |
 | session-reference、file-reference-local（web-app:94、:97） | 寫死：apps/harness/src/session-reference.ts；createFileReferencePlugin（apps/harness/src/assembly-root.ts:909） | C-11、C-12 完成（形狀不同，本次翻判） |
 | plugin-manager、hmr（base:20、:28） | 寫死：plugin-cli＋變更紀錄（#1412）；HMR 無 | 已登記偏離（.docs/decisions-2026-10-11.md:92，理由 2）；HMR 判過不做（:34） |
 | plugin-inventory（web-app:117） | plugin-snapshot.json（#1406）＋--dump-config（apps/harness/cordis.yml:21-23） | O-17 完成（本次翻判） |
