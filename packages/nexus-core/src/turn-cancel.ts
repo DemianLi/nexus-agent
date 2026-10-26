@@ -59,8 +59,9 @@
  *
  * **工具本體讀得到這一輪的訊號**：從它拿到的 config 用 {@link turnCancelSignalOf} 讀。讀了、把它交給自己的 I/O 的工具，按停止
  * 就提早結束——今天是 `@nexus/plugin-mcp` 的工具呼叫與資源讀取，server 收到 `notifications/cancelled`（#1985）。**沒讀的工具
- * 照舊跑到完，副作用照樣發生**，這裡只是等它落定。訊號只能這樣讀、不能交給 config 的 `signal`：`@langchain/core` 的 `tool()`
- * 拿 `signal` 跟本體競速，舉起來就當場 reject、把本體丟在背景，同上面「載體退到哪裡」那一段。
+ * 照舊跑到完，副作用照樣發生**，這裡只是等它落定。訊號只能這樣讀、不能放進交給工具的 config 的 `signal`：`@langchain/core`
+ * 物件 schema 的 `tool()` 拿那個 `signal` 跟本體競速，舉起來就當場 reject、把本體丟在背景，後果同上面「載體退到哪裡」。
+ * 工具自己往下交給 I/O 時可以放進 `signal`（例：`@nexus/plugin-mcp` 的 `withTurnSignal`）。
  *
  * ## 在攔截索引上佔哪一格
  *

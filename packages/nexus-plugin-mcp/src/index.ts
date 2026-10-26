@@ -442,12 +442,10 @@ export function isConnectionLost(error: unknown): boolean {
 
 /**
  * 把已註冊的工具物件的 `func` 換成「委派給目前這一代同名工具」。註冊表裡的物件換不掉，而 adapter 重連之後它們仍綁著死掉的
- * client，所以呼叫要繞到目前這一代去。照 dsh：斷線期間（沒有目前這一代）工具照樣列著、呼叫失敗。
+ * client，所以呼叫要繞到目前這一代去。斷線期間（沒有目前這一代）工具照樣列著、呼叫失敗。
  *
- * **這一輪的停止訊號在這裡交給 adapter**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)）：訊號放在 `configurable`
- * （`@nexus/core` 的 `turn-cancel.ts`），`config.signal` 在產品路徑上是空的；adapter 把 `config.signal` 交給 SDK 的 `callTool`，
- * 人按了停止，SDK 送 `notifications/cancelled`、這次呼叫跟著結束。adapter 的工具不拿 `config.signal` 跟本體競速，所以塞在這裡
- * 不會丟下呼叫。
+ * **這一輪的停止訊號在這裡併進交給 adapter 的 config**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)，見
+ * {@link callSignalOf}）。adapter 的工具不拿 `config.signal` 跟本體競速，所以放在這一層不會丟下呼叫。
  */
 function delegateTo(
   tool: StructuredTool,
