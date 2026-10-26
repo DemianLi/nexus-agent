@@ -1398,7 +1398,7 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
 **一輪也有時鐘上限：`turn-timeout` 那一列**（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)），**出廠 30 分鐘**。
 遞迴上限數的是步數，單次請求有首事件與閒置的逾時（`live-model` 那一列），但一輪仍可以合法地跑很久：每次請求可以重試好幾次，
 串流只要一直有位元組就不算閒置。這一列從 `turn/start` 起算，到點就照停止鈕的路停下這一輪：還沒開始的工具不開始、正在跑的工具
-等它落定（結果換成 `ABORTED`）、模型請求當場切斷、退避中的重試不再打。日誌的收尾是 `turn/end` 帶
+等它落定（結果換成 `ABORTED`；MCP 的呼叫會先送取消給伺服器，見〈plugin 清單〉的 MCP 條目）、模型請求當場切斷、退避中的重試不再打。日誌的收尾是 `turn/end` 帶
 `{ kind: 'aborted', cause: { kind: 'hook', reason: 'turn-timeout' } }`，下行收尾的 `lifecycle` 在 `aborted: true` 旁邊帶同一個 `cause`；
 人按停止的是 `{ kind: 'user' }`，分得出來。**不算失敗**：沒有 `turn/failed`，不進回合失敗的計數。
 
@@ -1761,6 +1761,11 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   **這是行為改變**：升上來之前插了 MCP 列的部署方，見升級指南
   [`mcp-tools-need-approval`](upgrade-guide/v0.5.19/mcp-tools-need-approval/guide.md)。寫法細節見
   [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)〈核准〉。
+- **按停止時，跑到一半的 MCP 呼叫在伺服器那一側也被取消**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)）：
+  工具呼叫（`tools/call`）與三支資源工具的讀取，都帶著這一輪的停止訊號。人按停止、或 `turn-timeout` 到點，client 送
+  `notifications/cancelled`，這次呼叫當場結束，這一輪不等它跑完就收尾；日誌上那一筆 `tool/result` 的碼是 `ABORTED`，同其他被停止
+  打斷的工具。沒按停止、是 MCP 自己的逾時（`toolCallTimeoutMs`）到點的，照舊是沒有碼的工具失敗。伺服器收到取消之後停不停手、
+  做到一半的事怎麼收，看伺服器自己；接伺服器之前確認它對取消的處理。
 - **MCP 伺服器的使用指引與資源也進得來**（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、
   [#430](https://github.com/DemianLi/nexus-agent/issues/430)）：伺服器 `initialize` 回的 `instructions` 會加上
   `### MCP server: <名字>` 接在系統提示詞後面，模型另有 `list_mcp_resources`、`list_mcp_resource_templates`、
