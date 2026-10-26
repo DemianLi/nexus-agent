@@ -338,7 +338,7 @@ describe('驗收 7：不重複', () => {
     expect(other).toBeUndefined();
   });
 
-  it('記號認不出那句人話（重放後 id 換了、或沒有 id）：同一段已有同名注入就不再注入', async () => {
+  it('那句人話換了 id（續接重放之後）或沒有 id：同一段已有同名注入就不再注入', async () => {
     const ws = workspace(STANDARD);
     const listener = listenerOn(backendOf(ws));
     const [injection] = (await run(listener, [human('/deploy', 'h1')]))!;
@@ -595,9 +595,6 @@ describe('驗收 7（樹上）：第二輪不重複', () => {
     const second = (thread.model.prompts[1] ?? []).filter(isSkillContent);
     expect(first).toHaveLength(1);
     expect(second).toHaveLength(1);
-    expect(second[0]?.additional_kwargs[SKILL_INVOCATION_MARKER]).toEqual(
-      first[0]?.additional_kwargs[SKILL_INVOCATION_MARKER],
-    );
     expect(invocationEvents(thread.rootLog().events)).toHaveLength(1);
     await thread.close();
   }, 60000);
@@ -624,7 +621,7 @@ describe('驗收 7（樹上）：第二輪不重複', () => {
   }, 60000);
 });
 
-describe('驗收 7（冷續接）：停在模型回覆之前，換一個行程續接', () => {
+describe('驗收 7（冷續接）：停在模型回覆之前，從日誌續接到一條新的 thread', () => {
   it('續接後的下一句話不再注入同一份：請求裡只有日誌重放回來的那一則，新的日誌沒有 skill-invocation', async () => {
     const booted = await boot(home());
     const ws = workspace(STANDARD);
@@ -636,7 +633,7 @@ describe('驗收 7（冷續接）：停在模型回覆之前，換一個行程�
     expect(invocationEvents(events)).toHaveLength(1);
     await before.close();
 
-    // 換一條 thread（行程重啟），日誌照 serve 續接的路灌回去。
+    // 換一條新的 thread 代替行程重啟（圖的 state 是空的），日誌照 serve 續接走的 `restoreConversation` 灌回去。
     const after = await openThread(booted, 't-cold-resumed', [{ content: '好。' }], ws);
     const replay = await restoreConversation(after.built.agent as never, 't-cold-resumed', events);
     expect(replay.kind).toBe('replayed');

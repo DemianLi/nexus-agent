@@ -122,7 +122,7 @@ export const SKILL_GESTURE = /(^|\s)\/([a-z0-9]+(?:-[a-z0-9]+)*)(?=\s|$)/g;
 /** listener 收到的一則訊息（`@langchain/core` 的 `BaseMessage`，經接縫的型別取得，這個套件不另外相依它）。 */
 type BaseMessage = Parameters<PreStepListener>[0][number];
 
-/** 記號上的名字；沒有記號是 `undefined`。 */
+/** 記號上的名字；沒有記號、或記號裡的 `name` 不是字串，都是 `undefined`。 */
 function markedName(message: BaseMessage): string | undefined {
   const raw: unknown = message.additional_kwargs?.[SKILL_INVOCATION_MARKER];
   if (typeof raw !== 'object' || raw === null) return undefined;
