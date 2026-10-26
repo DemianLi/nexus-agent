@@ -72,7 +72,7 @@ export interface FsService {
    *
    * 新 thread 有私有可寫根，`--workspace` 退成唯讀共用區、掛在這個前綴底下（`apps/harness/src/agent-factory.ts`）；舊 thread 的可寫根本來就是
    * 共用區，沒有這一格。fold 當下讀組裝點提供的 host 服務 `sharedWorkspace`，跟 {@link workspaceRoot} 同一次算、同一條 thread。
-   * 消費者：`agent-instructions`（部署方放在共用區的指示檔從這裡讀）。這個前綴同時也在 {@link offWorkspacePrefixes} 裡。
+   * 消費者：`agent-instructions`（部署方放在共用區的指示檔從這裡讀）、`skill-invocation` 與 `skill.list`（技能來源換到共用區底下，#1928）。這個前綴同時也在 {@link offWorkspacePrefixes} 裡。
    * @returns 前綴（不含結尾斜線）；還沒 fold、或這條 thread 沒有共用區是 `undefined`。
    */
   sharedWorkspacePrefix(): string | undefined;

@@ -33,7 +33,7 @@ v0.5.19 的技能清單不讀 SKILL.md frontmatter 的 `disable-model-invocation
 
 ## 遷移
 
-1. 找出寫了旗標或舊鍵的 SKILL.md。在每個技能來源目錄（出廠是工作區的 `skills/`）跑：
+1. 找出寫了旗標或舊鍵的 SKILL.md。在每個技能來源目錄（出廠是 `--workspace` 底下的 `skills/`，serve 的新對話也讀這一個）跑：
    `grep -rnE '^(disable-model-invocation|user-invocable|disableModelInvocation|modelInvocable|userInvocable):' skills/`。
    沒有輸出就跳到第 5 步。
 2. 舊鍵改掉：

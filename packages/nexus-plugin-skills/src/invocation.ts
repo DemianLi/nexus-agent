@@ -26,7 +26,8 @@
  *   `time-context/src/index.ts:225`）。我們的落點由出貨清單的列序決定，所以 `cordis.yml` 上這一列排在 `agent-instructions` 與
  *   `time-context` 之間：同一次 invoke 裡人話、AGENTS.md 基線、技能說明、讀數。
  * - **掃哪裡**：這次呼叫那條 thread 的 backend（`fs.forCall(invocation)`，就是組裝交給 skills 中介層的那一個），來源在**呼叫當下**讀技能來源
- *   登記處（`skillSources.sources()`），同 dsh 的 `/name` 與目錄讀同一個註冊表。
+ *   登記處（`skillSources.sources()`），同 dsh 的 `/name` 與目錄讀同一個註冊表；有共用區的 thread 換成共用區底下的來源，跟模型清單、
+ *   `skill.list` 同一支（`threadSkillSources`，#1928）。
  *
  * ## 偏離登記
  *
@@ -63,7 +64,13 @@ import type { Context } from '@nexus/cordis';
 import { fsToken } from '@nexus/fs';
 import type { FsLookup } from '@nexus/fs';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
-import { isHumanSpeech, renderSkillInvocation, scanSkills, skillSourcesToken } from '@nexus/skills';
+import {
+  isHumanSpeech,
+  renderSkillInvocation,
+  scanSkills,
+  skillSourcesToken,
+  threadSkillSources,
+} from '@nexus/skills';
 import { z } from 'zod';
 
 /** 插件在樹上的列用的名字。 */
@@ -71,12 +78,12 @@ export const name = 'skill-invocation';
 
 /**
  * 要的服務：`agentLoop`（`^1.2.0`，登記 listener；注入要帶自己的 `source`，1.1.0 的宿主會靜靜記成 `plugin`，所以擋在範圍上）、
- * `fs`（`^2.0.0`，呼叫當下拿這條 thread 的 backend 與位址；只用 `forCall` 與它交回的 `address`，2.0.0 就有（#1471、#1774），用不到 2.1.0 加的 `sharedWorkspacePrefix`，所以不跟 `agent-instructions` 一起宣告 `^2.1.0`）、`skillSources`（`^1.0.0`，呼叫當下讀來源）。範圍在這裡宣告，落進 Cordis 的
+ * `fs`（`^2.1.0`，呼叫當下拿這條 thread 的 backend、位址與共用區前綴；前綴是 2.1.0 加的 `sharedWorkspacePrefix`，#1928 讀它換來源）、`skillSources`（`^1.0.0`，呼叫當下讀來源）。範圍在這裡宣告，落進 Cordis 的
  * `Context.intercept`，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
   need(agentLoopToken, '^1.2.0'),
-  need(fsToken, '^2.0.0'),
+  need(fsToken, '^2.1.0'),
   need(skillSourcesToken, '^1.0.0'),
 );
 
@@ -90,7 +97,7 @@ export const manifest = defineManifest({
   provides: [],
   consumes: [
     { token: agentLoopToken.name, range: '^1.2.0' },
-    { token: fsToken.name, range: '^2.0.0' },
+    { token: fsToken.name, range: '^2.1.0' },
     { token: skillSourcesToken.name, range: '^1.0.0' },
   ],
   config: Config,
@@ -211,7 +218,7 @@ export function createSkillInvocationListener(lookups: SkillInvocationLookups): 
     const backend = found.fs.backend();
     if (backend === undefined) return undefined;
     invocation.signal?.throwIfAborted();
-    const scan = await scanSkills(backend, lookups.sources());
+    const scan = await scanSkills(backend, threadSkillSources(lookups.sources(), found.fs));
     invocation.signal?.throwIfAborted();
     if (!scan.complete) {
       // 照 dsh 的提供者語意：掃描不完整，這一步一份都叫不出來（檔頭）。

@@ -152,7 +152,9 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
   符號連結再比），任何一個重疊 serve 當場起不來，訊息點名是哪一個。要換位置，換 `NEXUS_AGENT_HOME`。啟動時另外驗一次：基底（還沒建就驗 home）不屬於目前使用者、或群組／其他人可寫（或上層目錄別人換得掉）時，serve **起不來**，不等到第一條新對話才拋。
 - **`--workspace` 變成 `/shared`**：唯讀、所有 thread 共用、不接受升級（`danger-full-access` 也一樣）；模型對 `/shared` 底下的路徑呼叫 `request_sandbox_escalation`，工具直接回「共用區唯讀、不能升級」，**不掛核准卡**（[#1800](https://github.com/DemianLi/nexus-agent/issues/1800)）；`present` 與 `@` 搜尋不到它。
   agent 指示檔（`AGENTS.md` 之類）改從這個共用區讀，所以部署方放在 `--workspace` 根目錄的規則檔照樣生效。**只讀共用區**：thread 私有根裡的
-  `AGENTS.md` 不會被注入（模型自己寫的檔不該變成下一輪的指令；有測試釘住）。
+  `AGENTS.md` 不會被注入（模型自己寫的檔不該變成下一輪的指令；有測試釘住）。技能同理（[#1928](https://github.com/DemianLi/nexus-agent/issues/1928)）：
+  `skills` 那一列的來源（出廠 `/skills/`）在新 thread 上換成共用區底下的 `/shared/skills/`，模型的清單、人打的 `/名字`、`skill.list` 都讀
+  `--workspace/skills/`；thread 私有根裡的 `skills/` 不讀。來源本來就寫在 `/shared/` 或外掛路由底下的原樣留著。
 - **外掛掛的 backend 路由不得與組裝點自己的路由重疊**（`/shared/`、`/conversation_history/`、工具結果暫存與附件的前綴，以及根 `/`）：外掛的路由
   包在組裝點預設路由的外面，重疊會蓋掉 `/shared/` 的唯讀，所以載入當場拒絕並點名外掛與前綴。
 - **舊 thread 不搬**：header 記的根就是 `--workspace`、或 header 沒有那一格的對話，繼續把 `--workspace` 當可寫根（沒有 `/shared`），
