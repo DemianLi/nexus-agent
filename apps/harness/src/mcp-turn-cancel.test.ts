@@ -2,7 +2,7 @@
  * **按停止之後，MCP 那支慢呼叫在 server 那一側也被取消**——[#1985](https://github.com/DemianLi/nexus-agent/issues/1985) 的驗收。
  *
  * 走真的進入點（`ThreadPump`）與真的 stdio 子行程：慢查詢被呼叫時往記號檔寫 `started`，server 收到取消時寫 `cancelled`。
- * 判準是 server 那一側的記號，不是 client 看到什麼；沒收到取消的話，這一輪要等慢查詢自己睡醒（{@link SLOW_QUERY_MS}）才落定。
+ * 判準是 server 那一側的記號，不是 client 看到什麼；停止訊號沒交進 MCP 請求的話，這一輪要等慢查詢自己睡醒（{@link SLOW_QUERY_MS}）才落定。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
@@ -55,6 +55,15 @@ async function until(predicate: () => Promise<boolean>, ms: number): Promise<voi
     if (Date.now() - start > ms) throw new Error('等太久了');
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
+}
+
+/**
+ * 等 server 那一側記下 `cancelled`。client 的請求一被中止就當場 reject、這一輪立刻收尾，server 子行程要處理完
+ * `notifications/cancelled` 才寫記號，所以 `await turn` 回來的那一刻記號檔可能還只有 `started`。
+ * server 沒收到取消的話睡滿也不寫 `cancelled`，紅在這個上限。
+ */
+async function untilCancelled(): Promise<void> {
+  await until(async () => (await marks()).includes('cancelled'), SLOW_QUERY_MS / 2);
 }
 
 async function assemble(turns: readonly ScriptedTurn[], toolCallTimeoutMs?: number) {
@@ -114,6 +123,7 @@ describe('MCP 呼叫跑到一半按停止', () => {
       await turn;
       const settledIn = Date.now() - stoppedAt;
 
+      await untilCancelled();
       expect(await marks()).toEqual(['started', 'cancelled']);
       expect(settledIn).toBeLessThan(SLOW_QUERY_MS / 3);
       const events = run.root();
@@ -154,9 +164,11 @@ describe('MCP 呼叫跑到一半按停止', () => {
       const stoppedAt = Date.now();
       expect(run.pump.cancel()).toBe('run');
       await turn;
+      const settledIn = Date.now() - stoppedAt;
 
+      await untilCancelled();
       expect(await marks()).toEqual(['started', 'cancelled']);
-      expect(Date.now() - stoppedAt).toBeLessThan(SLOW_QUERY_MS / 3);
+      expect(settledIn).toBeLessThan(SLOW_QUERY_MS / 3);
       expect(run.root().at(-1)).toMatchObject({
         type: 'turn/end',
         data: { reason: { kind: 'aborted', cause: { kind: 'user' } } },
