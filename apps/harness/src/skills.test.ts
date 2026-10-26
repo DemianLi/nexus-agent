@@ -84,8 +84,8 @@ describe('skills 進到 system prompt', () => {
    * 管不到 backend 方法），但**後果不同**：記憶那邊是整份內容照樣進 context，這邊只有
    * 名字與描述進去，正文擋住了。
    *
-   * 順帶：我們的 `ContainedFilesystemBackend` 那道 fence 在這裡**完全不參與**——它只包
-   * 寫入路徑，讀一律通過。擋人的自始至終只有 `permissions` 一層。
+   * 順帶：我們的 `ContainedFilesystemBackend` 那道 fence 在這裡**不擋**——它對讀只擋
+   * canonicalize 之後落在根外的路徑（#1982），skill 在根內。擋人的自始至終只有 `permissions` 一層。
    */
   it('deny 蓋到 skill 路徑：清單照樣列出來，正文讀不到', async () => {
     const root = await workspace({ skills: { 'web-research': '上網查資料。' } });
