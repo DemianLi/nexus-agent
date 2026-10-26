@@ -51,8 +51,8 @@ import type { ToolResultStashOptions } from './tool-result-stash.js';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { createSessionTitleLlm } from './session-title-llm.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
-import { MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
-import type { McpConnectionPool } from '@nexus/plugin-mcp';
+import { MCP_CREDENTIALS_SERVICE, MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
+import type { McpConnectionPool, McpCredentials } from '@nexus/plugin-mcp';
 import {
   ApprovalPolicyController,
   type ApprovalPolicyValue,
@@ -1161,6 +1161,10 @@ export async function createCliAgent(
         approvalPolicy,
         // MCP 連線池（#1677）：缺席＝每列自己連（CLI）。
         [MCP_POOL_SERVICE]: mcpPool,
+        // MCP 設定裡的憑證引用（#1989）：跟模型 key 同一份憑證服務、同一條規則；缺席＝寫了引用的列連不上。
+        ...(invocation.credentials !== undefined && {
+          [MCP_CREDENTIALS_SERVICE]: mcpCredentialsOf(invocation.credentials),
+        }),
         // 唯讀共用區的前綴（#1775）：缺席＝這條 thread 沒有共用區（舊 thread、CLI）。**與有沒有圍堵無關**：落盤關掉的新 thread 沒有圍堵、共用區照樣在。
         ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: SHARED_WORKSPACE_PREFIX }),
         // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
@@ -1345,6 +1349,15 @@ export async function createCliAgent(
     spillStore,
     modelSelection,
   };
+}
+
+/**
+ * 交給 MCP 那幾列的憑證服務（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：只要值，來源層不往外交。
+ *
+ * @param credentials - 這次啟動的憑證服務。
+ */
+export function mcpCredentialsOf(credentials: CredentialService): McpCredentials {
+  return { resolve: (name) => credentials.resolve(name)?.value };
 }
 
 /**

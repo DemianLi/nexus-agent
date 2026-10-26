@@ -9,6 +9,8 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { ClientConfig, Connection, MultiServerMCPClient } from '@langchain/mcp-adapters';
 import { scrubbedParentEnv } from '@nexus/core';
+import { substituted } from './credentials.js';
+import type { ResolvedCredentials } from './credentials.js';
 import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
 import { markUntrusted } from './untrusted-mark.js';
@@ -18,9 +20,13 @@ import type { McpConfig } from './index.js';
  * 交給 `MultiServerMCPClient` 的整份選項，只放這一台 server。plugin 自己連與池連都從這裡拿（#1677 第 2 步：池建 client 時沿用
  * 同一份，含 `afterToolCall`）。
  */
-export function clientOptions(config: McpConfig, elicitation: boolean): ClientConfig {
+export function clientOptions(
+  config: McpConfig,
+  elicitation: boolean,
+  credentials: ResolvedCredentials,
+): ClientConfig {
   return {
-    mcpServers: { [config.serverName]: toAdapterConnection(config, elicitation) },
+    mcpServers: { [config.serverName]: toAdapterConnection(config, elicitation, credentials) },
     // 名字由 `publicToolName` 一個地方說了算，所以 adapter 這邊的前綴全部關掉。
     // 開著的話會有兩份拼名字的邏輯，而其中一份不做正規化。
     prefixToolNameWithServerName: false,
@@ -229,8 +235,12 @@ export function textOf(content: ToolMessage['content']): string {
     .join('\n');
 }
 
-/** 把我們的連線設定翻成 adapter 收的形狀。 */
-export function toAdapterConnection(config: McpConfig, elicitation: boolean): Connection {
+/** 把我們的連線設定翻成 adapter 收的形狀；憑證引用換成 `credentials` 裡的值（`credentials.ts`）。 */
+export function toAdapterConnection(
+  config: McpConfig,
+  elicitation: boolean,
+  credentials: ResolvedCredentials,
+): Connection {
   const timeout = config.toolCallTimeoutMs;
   const connection = config.connection;
   if (connection.transport === 'stdio') {
@@ -242,7 +252,7 @@ export function toAdapterConnection(config: McpConfig, elicitation: boolean): Co
       // **一律傳整份**，照 dsh 的 `buildChildEnv`（`packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）：清洗過的
       // 父環境在前、設定的在後。不傳或只傳設定那幾格的話，底由 adapter（只補 `PATH`）與 SDK
       // （`getDefaultEnvironment()`，六個名字）決定，語系與代理都到不了子行程。
-      env: { ...scrubbedParentEnv(), ...connection.env },
+      env: { ...scrubbedParentEnv(), ...substituted(connection.env ?? {}, credentials) },
       ...(connection.cwd !== undefined && { cwd: connection.cwd }),
       // 2.0.0 的現代協定 server 要問使用者（elicitation）時走 LangGraph interrupt，等一次 resume。**有人可以回答才開**
       // （{@link McpConfig.elicitation}）：沒人的話開著會讓那一輪停在沒人接的 interrupt 上；關掉之後 adapter 把這種呼叫當工具失敗，
@@ -254,7 +264,9 @@ export function toAdapterConnection(config: McpConfig, elicitation: boolean): Co
   return {
     transport: 'http',
     url: connection.url,
-    ...(connection.headers !== undefined && { headers: { ...connection.headers } }),
+    ...(connection.headers !== undefined && {
+      headers: substituted(connection.headers, credentials),
+    }),
     elicitation,
     defaultToolTimeout: timeout,
   };

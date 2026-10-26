@@ -33,6 +33,13 @@ import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
 import { clientOptions, connectGeneration } from './connection.js';
+import {
+  envValueSchema,
+  headerValueSchema,
+  MCP_CREDENTIALS_SERVICE,
+  resolveCredentials,
+} from './credentials.js';
+import type { ResolvedCredentials } from './credentials.js';
 import type { Generation, RequestOptions, SdkClient, ToolCall } from './connection.js';
 import { asTurnAbort, callSignalOf, ensureHub } from './hub.js';
 import { MCP_POOL_SERVICE } from './pool.js';
@@ -49,6 +56,8 @@ export type { McpApproval } from './approval.js';
 export type { ReconnectPolicy } from './supervisor.js';
 export { FIRST_CONNECT_WAIT_MS, MCP_POOL_SERVICE, McpConnectionPool } from './pool.js';
 export type { Acquired, McpConnectionPoolOptions, SharedConnection } from './pool.js';
+export { CREDENTIAL_REF_PATTERN, MCP_CREDENTIALS_SERVICE } from './credentials.js';
+export type { McpCredentials } from './credentials.js';
 
 /** 帶出處標頭的 server 指引預設上限（UTF-8 位元組），照 dsh 的 `maxInstructionBytes`。 */
 export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768;
@@ -68,10 +77,10 @@ export const mcpStdioConnectionSchema = z.strictObject({
    * （`/KEY|PASSWORD|SECRET|TOKEN/i`）與 `NEXUS_*`，再疊這一格。所以語系、代理、CA 這類不必逐個填；要交給
    * server 的憑證（例如 `GITHUB_TOKEN`）得明著寫在這裡，同名時這一格的值蓋過父環境的。
    *
-   * **秘密只從呼叫端的環境變數來**（`docs/standards.md`）：這裡收的是值，寫死 token 的
-   * 地方不在這個型別裡，而在填它的那一行。
+   * 值可以是字串，或 `{ credential: <名字> }`：建連線那一刻向宿主的憑證服務要值、代入（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)，
+   * 見 [`credentials.ts`](./credentials.ts)）。秘密寫成引用，設定裡只有名字。
    */
-  env: z.record(z.string(), z.string()).optional(),
+  env: z.record(z.string(), envValueSchema).optional(),
   /** 子行程的工作目錄。 */
   cwd: z.string().optional(),
 });
@@ -81,8 +90,11 @@ export const mcpHttpConnectionSchema = z.strictObject({
   transport: z.literal('http'),
   /** server 的網址。 */
   url: z.string().min(1),
-  /** 額外的標頭，例如授權用的。 */
-  headers: z.record(z.string(), z.string()).optional(),
+  /**
+   * 額外的標頭，例如授權用的。值可以是字串，或 `{ credential: <名字>, prefix?: <前綴> }`：建連線時代入成 `<前綴><值>`
+   * （例如 `{ credential: MCP_TOKEN, prefix: 'Bearer ' }`），同 `env`。
+   */
+  headers: z.record(z.string(), headerValueSchema).optional(),
 });
 
 /**
@@ -200,13 +212,21 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     // 有人可以回答才宣告 elicitation 能力；沒人提供 channel 就是沒有答題者（同 ask-user，#669）。
     const channel: ApprovalChannel | undefined = registry.services.get(CHANNEL_SERVICE);
     const elicitation = config.elicitation && channel?.kind === 'human';
+    // 憑證引用在連線之前解析（#1989）：解析不了就是這一列連不上，池裡不留東西。
+    let credentials: ResolvedCredentials;
+    try {
+      credentials = resolveCredentials(config, registry.services.get(MCP_CREDENTIALS_SERVICE));
+    } catch (error) {
+      unreachable(registry, config, error);
+      return;
+    }
     // 宿主給了連線池（serve，#1677）就向池取用，一份設定整台一份連線；沒給（CLI）照舊這次組裝自己連。
     const pool: McpConnectionPool | undefined = registry.services.get(MCP_POOL_SERVICE);
     if (pool !== undefined) {
-      await applyShared(registry, config, await pool.acquire(config, elicitation));
+      await applyShared(registry, config, await pool.acquire(config, elicitation, credentials));
       return;
     }
-    const client = new MultiServerMCPClient(clientOptions(config, elicitation));
+    const client = new MultiServerMCPClient(clientOptions(config, elicitation, credentials));
     const label = `mcp-client(${serverName})`;
     const registered: (() => void)[] = [];
     let supervisor: Supervisor<Generation> | undefined;
@@ -300,18 +320,7 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       // 子行程會活過整個行程。收住的那條路也一樣：沒有工具就沒有理由留著它。
       await supervisor?.dispose();
       await client.close().catch(() => {});
-      if (config.failOnStartupError) throw error;
-      const reason = error instanceof Error ? error.message : String(error);
-      registry.logger.warn(
-        `MCP 伺服器 "${serverName}" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
-          `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
-      );
-      // 照 dsh：資源 provider 的登記不看連線成敗，名字照列、呼叫時才報不可用。**沒有 `failOnStartupError` 的這一列
-      // 才登記**——寫了 `true` 的那一列拋出去，不留任何東西在 hub 裡。
-      const hubUndo = ensureHub(registry).add(
-        resourceSource(serverName, '', config.toolCallTimeoutMs, () => undefined),
-      );
-      registry.lifecycle.onDispose(hubUndo);
+      unreachable(registry, config, error);
       return;
     }
 
@@ -325,6 +334,27 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 };
 
 export default mcpPlugin;
+
+/**
+ * 這一列連不上（憑證解析不了，或自己連時連不上、列不出工具、註冊不上）的出口：寫了 `failOnStartupError` 就拋，否則警告、
+ * 這一次沒有工具。
+ *
+ * 資源 provider 的登記不看連線成敗：名字照列，呼叫時才報不可用。**沒有 `failOnStartupError` 的這一列才登記**——寫了 `true`
+ * 的那一列拋出去，不在 hub 留任何東西。
+ */
+function unreachable(registry: PluginRegistry, config: McpConfig, error: unknown): void {
+  const { serverName } = config;
+  if (config.failOnStartupError) throw error;
+  const reason = error instanceof Error ? error.message : String(error);
+  registry.logger.warn(
+    `MCP 伺服器 "${serverName}" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
+      `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
+  );
+  const hubUndo = ensureHub(registry).add(
+    resourceSource(serverName, '', config.toolCallTimeoutMs, () => undefined),
+  );
+  registry.lifecycle.onDispose(hubUndo);
+}
 
 /**
  * 有池時的 `apply`（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）。向池取來的那一份連線**不屬於這次組裝**：這裡
