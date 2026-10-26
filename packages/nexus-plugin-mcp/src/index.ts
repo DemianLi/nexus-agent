@@ -34,7 +34,7 @@ import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
 import { clientOptions, connectGeneration } from './connection.js';
 import type { Generation, RequestOptions, SdkClient, ToolCall } from './connection.js';
-import { callSignalOf, ensureHub } from './hub.js';
+import { asTurnAbort, callSignalOf, ensureHub } from './hub.js';
 import { MCP_POOL_SERVICE } from './pool.js';
 import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
@@ -445,7 +445,8 @@ export function isConnectionLost(error: unknown): boolean {
  * client，所以呼叫要繞到目前這一代去。斷線期間（沒有目前這一代）工具照樣列著、呼叫失敗。
  *
  * **這一輪的停止訊號在這裡併進交給 adapter 的 config**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)，見
- * {@link callSignalOf}）。adapter 的工具不拿 `config.signal` 跟本體競速，所以放在這一層不會丟下呼叫。
+ * {@link callSignalOf}）。adapter 的工具不拿 `config.signal` 跟本體競速，所以放在這一層不會丟下呼叫。按了停止之後，呼叫的 reject
+ * 換成 `AbortError`（{@link asTurnAbort}），斷線判斷在換之前做。
  */
 function delegateTo(
   tool: StructuredTool,
@@ -471,7 +472,7 @@ function delegateTo(
       return await call(...withTurnSignal(args));
     } catch (error) {
       if (isConnectionLost(error)) supervisor.down(generation);
-      throw error;
+      throw asTurnAbort(error, args[2]);
     }
   };
 }

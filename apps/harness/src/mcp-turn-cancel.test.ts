@@ -12,6 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
+import { TOOL_ABORTED } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -56,7 +57,7 @@ async function until(predicate: () => Promise<boolean>, ms: number): Promise<voi
   }
 }
 
-async function assemble(turns: readonly ScriptedTurn[]) {
+async function assemble(turns: readonly ScriptedTurn[], toolCallTimeoutMs?: number) {
   const model = new ScriptedChatModel({ turns });
   const built = await createNexusAgent({
     model,
@@ -66,6 +67,7 @@ async function assemble(turns: readonly ScriptedTurn[]) {
         serverName: 'docs',
         // 量的不是核准：這台的工具都不問。
         approval: { default: 'allow' },
+        ...(toolCallTimeoutMs !== undefined && { toolCallTimeoutMs }),
         connection: {
           transport: 'stdio',
           command: process.execPath,
@@ -119,10 +121,13 @@ describe('MCP 呼叫跑到一半按停止', () => {
         type: 'turn/end',
         data: { reason: { kind: 'aborted', cause: { kind: 'user' } } },
       });
-      // 被取消的那次呼叫是工具自己拋的錯（SDK 的取消），不是成功的結果，所以不換成 ABORTED、也不帶碼：同其他工具拋的錯。
-      const [aborted] = events.filter((event) => event.type === 'tool/result');
-      expect(resultsOf(events)).toEqual([{ callId: expect.any(String), isError: true }]);
-      expect(JSON.stringify(aborted?.data)).toContain('This operation was aborted');
+      expect(resultsOf(events)).toEqual([
+        {
+          callId: expect.any(String),
+          isError: true,
+          error: { name: 'AbortError', code: TOOL_ABORTED },
+        },
+      ]);
 
       // 中止的錯不能被當成斷線：同一台 server 下一輪照常回資料。
       await run.pump.submit({ kind: 'message', text: '那變更紀錄呢' });
@@ -156,6 +161,38 @@ describe('MCP 呼叫跑到一半按停止', () => {
         type: 'turn/end',
         data: { reason: { kind: 'aborted', cause: { kind: 'user' } } },
       });
+      expect(resultsOf(run.root())).toEqual([
+        {
+          callId: expect.any(String),
+          isError: true,
+          error: { name: 'AbortError', code: TOOL_ABORTED },
+        },
+      ]);
+    } finally {
+      await run.close();
+    }
+  }, 60_000);
+
+  it('沒按停止、是 MCP 自己的逾時到點：不記成 ABORTED，這一輪照常往下走', async () => {
+    const run = await assemble(
+      [
+        { content: '查一下。', toolCalls: [{ name: SLOW_TOOL, args: { query: '庫存' } }] },
+        { content: '查不到。' },
+      ],
+      300,
+    );
+    try {
+      await run.pump.submit({ kind: 'message', text: '查庫存' });
+
+      const events = run.root();
+      // 正常落定的 turn/end 不帶 reason。
+      expect(events.at(-1)).toMatchObject({ type: 'turn/end', data: {} });
+      expect(events.at(-1)).not.toHaveProperty('data.reason');
+      const [verdict] = resultsOf(events);
+      const [result] = events.filter((event) => event.type === 'tool/result');
+      expect(verdict).toMatchObject({ isError: true });
+      expect(JSON.stringify(result?.data)).toContain('aborted due to timeout');
+      expect(verdict).not.toHaveProperty('error.code', TOOL_ABORTED);
     } finally {
       await run.close();
     }

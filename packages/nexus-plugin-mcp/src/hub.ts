@@ -91,7 +91,6 @@ export interface McpHub {
   add(source: McpSource): () => void;
 }
 
-/** 三支工具的名字，給提示詞段落與測試用。 */
 /**
  * 一次 MCP 請求要帶的中止訊號：config 自己的 `signal`（LangGraph 的）併上這一輪的停止訊號（放在 `configurable`，`@nexus/core` 的
  * `turn-cancel.ts`），任一個舉起都算（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)）。人按了停止，SDK 送
@@ -106,6 +105,24 @@ export function callSignalOf(config: unknown): AbortSignal | undefined {
   return own === undefined ? turn : AbortSignal.any([own, turn]);
 }
 
+/**
+ * 這一輪的停止訊號已經舉起時，把一次 MCP 請求的 reject 換成 `AbortError`（原錯放在 `cause`），讓圍堵照既有分類記成
+ * `ABORTED`。MCP SDK 對取消與逾時拋的都是 `REQUEST_TIMEOUT` 的 `SdkError`，光看錯分不出是誰；不換的話人按停止看起來像工具
+ * 自己壞了。所以只看這一輪的停止訊號：逾時、LangGraph 自己的 `signal` 照舊分類。
+ * @param error - 請求 reject 的東西。
+ * @param config - 工具拿到的 config。
+ * @returns 換過的錯，或原樣。
+ */
+export function asTurnAbort(error: unknown, config: unknown): unknown {
+  if (turnCancelSignalOf(config)?.aborted !== true) return error;
+  const aborted = new Error(error instanceof Error ? error.message : String(error), {
+    cause: error,
+  });
+  aborted.name = 'AbortError';
+  return aborted;
+}
+
+/** 三支工具的名字，給提示詞段落與測試用。 */
 export const RESOURCE_TOOL_NAMES = [
   'list_mcp_resources',
   'list_mcp_resource_templates',
@@ -214,7 +231,12 @@ export function ensureHub(registry: PluginRegistry): McpHub {
       tool(
         async (args: Record<string, string | undefined>, config?: { signal?: AbortSignal }) => {
           const server = args['server'] ?? '';
-          const value = await find(server).request(build(args), callSignalOf(config));
+          let value: unknown;
+          try {
+            value = await find(server).request(build(args), callSignalOf(config));
+          } catch (error) {
+            throw asTurnAbort(error, config);
+          }
           return [renderResourceResult(server, value), value];
         },
         { name, description, schema, responseFormat: 'content_and_artifact' },

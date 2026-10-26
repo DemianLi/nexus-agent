@@ -1763,9 +1763,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)〈核准〉。
 - **按停止時，跑到一半的 MCP 呼叫在伺服器那一側也被取消**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)）：
   工具呼叫（`tools/call`）與三支資源工具的讀取，都帶著這一輪的停止訊號。人按停止、或 `turn-timeout` 到點，client 送
-  `notifications/cancelled`，這次呼叫當場結束，這一輪不等它跑完就收尾；日誌上那一筆 `tool/result` 是工具失敗
-  （`… 執行失敗：AbortError: This operation was aborted`），不是 `ABORTED`。伺服器收到取消之後停不停手、做到一半的事怎麼收，
-  看伺服器自己；接伺服器之前確認它對取消的處理。
+  `notifications/cancelled`，這次呼叫當場結束，這一輪不等它跑完就收尾；日誌上那一筆 `tool/result` 的碼是 `ABORTED`，同其他被停止
+  打斷的工具。沒按停止、是 MCP 自己的逾時（`toolCallTimeoutMs`）到點的，照舊是沒有碼的工具失敗。伺服器收到取消之後停不停手、
+  做到一半的事怎麼收，看伺服器自己；接伺服器之前確認它對取消的處理。
 - **MCP 伺服器的使用指引與資源也進得來**（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、
   [#430](https://github.com/DemianLi/nexus-agent/issues/430)）：伺服器 `initialize` 回的 `instructions` 會加上
   `### MCP server: <名字>` 接在系統提示詞後面，模型另有 `list_mcp_resources`、`list_mcp_resource_templates`、
