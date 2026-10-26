@@ -325,7 +325,7 @@ curl -sS -m 5 <名單外的內部位址>                                        
 - **`--rm` 一定要給**：stdin 關掉時 server 要自己結束（〈會話日誌〉停 serve 那一段），容器跟著清掉。
 - **網路**：上面寫 `--network=none`，不需要網路的 server 用它。要連內部系統的，改成只通到那個系統的容器網路，並且把那個系統也放進第 4 條的名單。
 - **環境變數**：先到 `podman` 這個行程（清洗過的父環境加 `connection.env`），容器只拿得到 `-e NAME` 點名的。podman 預設把代理變數傳進容器（`--http-proxy` 預設開），而代理網址可能帶帳密，所以範例加 `--http-proxy=false`，要代理就用 `-e` 明寫。範例的 `LANG` 只是示範 `-e` 怎麼用。
-- **憑證**：範例不放憑證。需要憑證的 stdio server，今天沒有合規的寫法（MCP 的 README 要求秘密不寫進設定檔，而清洗會拿掉名字像憑證的變數），這一節不解。
+- **憑證**：範例不放憑證。需要憑證的 server，值放受管憑證檔，設定只寫憑證名，見這一條最後的〈MCP server 要的憑證〉。用容器時記得在 `args` 用 `-e <變數名>` 點名，值才到得了容器裡。
 - **映像**：寫固定版本，從內網映像庫拉。
 - **rootless**：serve 帳號要配 `subuid`／`subgid`（`usermod --add-subuids … --add-subgids …`）。**podman 的 `HOME` 要跟 harness home 分開**：rootless 的映像與容器儲存預設落在 `$HOME` 底下，
   放進 harness home 會讓第 2 條的 `find` 掃出幾萬筆不是 `0700` 的檔（實測 3.7 萬筆、1.2G），所以範例用 `connection.env` 給 `podman` 一個專用的 `HOME`（`/var/lib/nexus-agent-podman`，擁有者是 serve 帳號、`0700`）。
@@ -360,6 +360,40 @@ sudo 預設會重設環境，代理與 `connection.env` 的變數到不了 serve
 - `--network=none`：容器內連 `10.77.0.2` 得到 `ENETUNREACH`，預設網路連得上；預設的 podman 把 `HTTP_PROXY` 傳進容器（1 行），加 `--http-proxy=false` 之後是 0 行。
 - 備案：`sudo -n -u <專屬帳號> <node> <server>` 配 `NOPASSWD` 規則，server 起得來、`initialize` 有回應；規則之外的程式被拒（`a password is required`）；server 看到的 `USER` 是專屬帳號；有 `env_keep` 才收得到點名的代理變數，其他沒點名的變數收不到。專屬帳號不受第 4 條「以 serve 帳號為條件」的規則限制（實測連得到名單外的位址）。
 - 這次的環境限制：容器裡再起容器用不了 overlay，實驗是把儲存驅動設成 `vfs`（範例裡的旗標沒變）；備案只驗到 sudo 這一層，沒有經 serve 叫過工具；沒有 systemd，所以 systemd 單元底下的 runtime 目錄與 `ps -o user:32= -p $(systemctl show …)` 這種寫法沒有在這個環境跑過；`MemoryMax` 對容器的效果沒量。
+
+#### MCP server 要的憑證
+
+[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)：值放受管憑證檔（`<home>/.credentials.yaml`，格式與 `chmod 600` 的要求見〈金鑰放哪裡〉），MCP 那一列只寫憑證名。stdio 寫在 `connection.env`，HTTP 寫在 `connection.headers`，`prefix` 接在值前面：
+
+```yaml
+# <home>/.credentials.yaml（chmod 600）
+version: 1
+refs:
+  CRM_API_TOKEN: <值>
+```
+
+```yaml
+# patch 檔裡那一列的 config
+connection:
+  transport: stdio
+  command: podman
+  env:
+    CRM_TOKEN: { credential: CRM_API_TOKEN }   # 子行程看到的是 CRM_TOKEN=<值>
+  args: [run, --rm, -i, -e, CRM_TOKEN, …]       # 容器要 -e 點名才拿得到
+# HTTP 的寫法：
+#   headers:
+#     Authorization: { credential: CRM_API_TOKEN, prefix: 'Bearer ' }
+```
+
+- **找值的規則跟模型 key 一樣**：serve 先找受管檔，找不到才往下一層找（〈金鑰放哪裡〉）。請放受管檔。
+- **什麼時候代入**：每次連這一列之前（serve 起動時的試組、之後每條新對話）。沒有任何一列引用憑證就不讀受管檔；受管檔壞了也只讓引用它的那幾列連不上，不擋 serve 起動。
+- **找不到值、受管檔權限不對**：那一列連不上，跟 server 起不來一樣處理：預設是伺服器日誌一則警告，這一列沒有工具；寫了 `failOnStartupError: true` 就讓這一列失敗。修好之後，下一條新對話就連得上。
+  訊息只寫列、欄位與憑證名，不帶值。`--dump-config` 與日誌裡也只有憑證名。
+- **換值**：改受管檔之後，新對話會連一份帶新值的 server。開著的對話照舊用舊的那一份，舊的留到 serve 重啟（同上面「容器的數量」）。
+  要讓舊值完全失效，要重啟 serve。
+- **CLI 不讀受管檔**：只看啟動環境（帶 `--live` 時再加 `.env`），同〈金鑰放哪裡〉的一次性入口。
+- **第一版整台共用，一列一把**：後端只看得到這把憑證對應的服務帳號，分不出是哪一位使用者在查。這個服務帳號看得到的資料，每一位能用這台 nexus 的人都查得到，
+  所以**服務帳號的權限只開到所有使用者都可以看的範圍**。每人各用自己的憑證要等 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428)。
 
 ### 6. serve 綁的位址與前面那一層
 
@@ -761,7 +795,7 @@ refs:
   **`version`、`refs` 以外的頂層鍵不擋**（別的工具多放的條目，[#1507](https://github.com/DemianLi/nexus-agent/issues/1507)，照 dsh）：
   serve 照樣起來，日誌講一次是哪幾個鍵（只印鍵名），檔裡存好的 key 照常生效；那些鍵本身不解析出任何東西。**整份只有註解**（例如把唯一一把 key 註解掉、改用環境變數）
   或空檔，等於沒有憑證，往下一層找。`records` 例外，照舊拒絕：nexus 沒有這種憑證，放過它會讓人以為存進去的東西有作用。
-- **它的值不進行程的環境變數**，所以子行程（`execute`、MCP、git 快照）看不到它。兩份 `.env` 則是照舊寫進
+- **它的值不進行程的環境變數**，所以子行程（`execute`、MCP、git 快照）看不到它。例外是 MCP 那一列用 `{ credential: <名字> }` 明著引用的那幾把，只交給那一台 server（〈MCP server 要的憑證〉）。兩份 `.env` 則是照舊寫進
   行程環境（啟動環境已有的變數不會被蓋掉）。
 - **改了下一個請求就生效**，不必重啟：每次請求前先 `stat` 一次，修改時間、大小、inode 或權限變了才重讀。
   執行期改壞（格式錯、權限放寬）時，繼續用上一份可用的內容並在 stderr 警告一次；還沒讀成功過就直接失敗。

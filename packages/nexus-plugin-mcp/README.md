@@ -45,10 +45,10 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `connection.transport` | 兩者      | 是   | `"stdio"` 或 `"http"`                                                                      |
 | `connection.command`   | stdio     | 是   | 要執行的程式                                                                               |
 | `connection.args`      | stdio     | 否   | 參數                                                                                       |
-| `connection.env`       | stdio     | 否   | 額外的環境變數，疊在清洗過的父環境上（見下）                                               |
+| `connection.env`       | stdio     | 否   | 額外的環境變數，疊在清洗過的父環境上（見下）；值可以寫 `{ credential: <名字> }`（見憑證）  |
 | `connection.cwd`       | stdio     | 否   | 子行程的工作目錄                                                                           |
 | `connection.url`       | http      | 是   | server 網址                                                                                |
-| `connection.headers`   | http      | 否   | 額外標頭（授權用）                                                                         |
+| `connection.headers`   | http      | 否   | 額外標頭（授權用）；值可以寫 `{ credential: <名字>, prefix?: <前綴> }`（見憑證）           |
 | `toolCallTimeoutMs`    | 兩者      | 否   | 一次 `tools/call` 的逾時，預設 60000                                                       |
 | `failOnStartupError`   | 兩者      | 否   | 掛上那一刻連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
 | `maxInstructionBytes`  | 兩者      | 否   | server 指引**連同出處標頭**的 UTF-8 位元組上限，預設 32768；超過算連線失敗（同上，不截斷） |
@@ -56,6 +56,12 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 
 秘密一律從呼叫端的環境變數來，不寫進程式碼、設定檔或測試 fixture（見
 [`docs/standards.md`](../../docs/standards.md)）。
+
+**憑證**（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：設定檔裡要給秘密時，`connection.env` 或 `connection.headers`
+的值寫成 `{ credential: <名字> }`（標頭可以加 `prefix`，例如 `'Bearer '`）。建連線那一刻向宿主的 `mcp:credentials` 服務要值、代入；
+設定、`--dump-config`、池鍵、錯誤訊息裡都只有名字。名字是環境變數形狀（`[A-Za-z_][A-Za-z0-9_]*`）。宿主沒提供服務、名字沒有值、
+服務拋錯，這一列都算連不上（同 `failOnStartupError`）。serve 與 CLI 從哪裡找值見
+[`docs/operations.md`〈MCP server 要的憑證〉](../../docs/operations.md#mcp-server-要的憑證)。
 
 **stdio server 的環境照 dsh 以清洗過的父環境為底**（[#726](https://github.com/DemianLi/nexus-agent/issues/726)）：
 子行程拿到的是 nexus 這個行程的環境，扣掉名字像憑證的（`/KEY|PASSWORD|SECRET|TOKEN/i`，不分大小寫）與

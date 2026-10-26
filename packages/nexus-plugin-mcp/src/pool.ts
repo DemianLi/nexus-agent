@@ -36,6 +36,8 @@
 
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import { clientOptions, connectGeneration } from './connection.js';
+import { credentialFingerprint } from './credentials.js';
+import type { ResolvedCredentials } from './credentials.js';
 import type { Generation, Listed } from './connection.js';
 import type { McpConfig } from './index.js';
 import { Supervisor } from './supervisor.js';
@@ -76,10 +78,18 @@ export interface McpConnectionPoolOptions {
  * - **拿掉 `approval`**：它只決定每份註冊表的核准閘門，跟連線無關。放進鍵的話，只改核准宣告也會多起一個活到重啟的子行程。
  * - **elicitation 旗標是實際的那一個**（設定開著、而且這次組裝有人可以回答）：它是握手時宣告給 server 的 client 能力，旗標
  *   不同的組裝不能共用一條連線（Q3 (a)）。
+ * - **憑證引用放名字（在設定裡）加代入值的指紋**（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：值換了，下一次
+ *   取用連新的一份，舊的照 A′ 留著。指紋是行程內隨機金鑰的 HMAC，鍵裡沒有值。
  */
-export function poolKey(config: McpConfig, elicitation: boolean): string {
+export function poolKey(
+  config: McpConfig,
+  elicitation: boolean,
+  credentials: ResolvedCredentials = new Map(),
+): string {
   const { approval: _approval, ...connection } = config;
-  return `${stableStringify(connection)}\0elicitation=${String(elicitation)}`;
+  const key = `${stableStringify(connection)}\0elicitation=${String(elicitation)}`;
+  const fingerprint = credentialFingerprint(credentials);
+  return fingerprint === '' ? key : `${key}\0credentials=${fingerprint}`;
 }
 
 function stableStringify(value: unknown): string {
@@ -112,12 +122,16 @@ export class McpConnectionPool {
    *
    * @throws 第一次就連不上（或等到期限還沒連上）而且寫了 `failOnStartupError: true`；池已經關了。
    */
-  async acquire(config: McpConfig, elicitation: boolean): Promise<Acquired> {
+  async acquire(
+    config: McpConfig,
+    elicitation: boolean,
+    credentials: ResolvedCredentials = new Map(),
+  ): Promise<Acquired> {
     if (this.closing !== undefined) throw new Error('MCP 連線池已經關了');
-    const key = poolKey(config, elicitation);
+    const key = poolKey(config, elicitation, credentials);
     const existing = this.entries.get(key);
     if (existing === undefined || existing.supervisor.gaveUp) {
-      const shared = this.open(key, config, elicitation);
+      const shared = this.open(key, config, elicitation, credentials);
       const outcome = await shared.supervisor.ready;
       if (outcome.ok) return { shared, error: undefined };
       if (config.failOnStartupError) {
@@ -152,10 +166,15 @@ export class McpConnectionPool {
   }
 
   /** 建一份並**同步**放進表裡；第一次連線交給監督者。 */
-  private open(key: string, config: McpConfig, elicitation: boolean): SharedConnection {
+  private open(
+    key: string,
+    config: McpConfig,
+    elicitation: boolean,
+    credentials: ResolvedCredentials,
+  ): SharedConnection {
     const { serverName } = config;
     const label = `mcp-client(${serverName})`;
-    const client = new MultiServerMCPClient(clientOptions(config, elicitation));
+    const client = new MultiServerMCPClient(clientOptions(config, elicitation, credentials));
     const { log } = this.options;
     const error = this.options.error ?? log;
     let last: Listed | undefined;
