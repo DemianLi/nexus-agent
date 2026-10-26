@@ -9,6 +9,7 @@
  * | 同上，帶池、受管值換了 | 下一條 thread 拿到新值，開著的照舊 | `pool.ts` 鍵裡的指紋 |
  * | `runCli`（沒帶 `--live`） | 啟動環境的值到得了子行程；受管檔的值到不了（不讀它） | `cli.ts` 交憑證服務那一格 |
  * | `runCli --dump-config` | 只有憑證名 | — |
+ * | `runServe`（沒帶 `--live`） | 受管檔的值到得了子行程，server 日誌沒有值；受管檔 0644 時 serve 照樣起來、那一列連不上 | `serve.ts` 交憑證服務那一格 |
  *
  * **零憑證、零外部連線**：值是假的，server 是 stdio 子行程。
  */
@@ -28,13 +29,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCliAgent } from './assembly-root.js';
 import { runCli } from './cli.js';
 import { CREDENTIALS_FILE, createCredentialService } from './credentials.js';
-import { shippedPlugins, withScriptedModel } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient, shippedPlugins, withScriptedModel } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { processLaunchEnv } from './launch-env.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedPatchText } from './scripted-serve.js';
+import { runServe } from './serve.js';
+import type { RunningServe } from './serve.js';
 
 const FIXTURE_SERVER = fileURLToPath(
   new URL('../../../packages/nexus-plugin-mcp/src/fixture-server.ts', import.meta.url),
@@ -46,7 +49,10 @@ const FROM_ENV = 'zq7envr-process-0123456789';
 const NAME = 'NEXUS_TEST_MCP_PAT';
 
 const temporary: string[] = [];
-afterEach(() => {
+let running: RunningServe | undefined;
+afterEach(async () => {
+  await running?.close();
+  running = undefined;
   vi.unstubAllEnvs();
   for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -237,5 +243,53 @@ describe('runCli（沒帶 --live）：不讀受管檔，從啟動環境解析', 
     expect(dumped).toContain(`credential: ${NAME}`);
     expect(dumped).not.toContain(FROM_FILE.slice(0, 6));
     expect(dumped).not.toContain(FROM_ENV.slice(0, 6));
+  }, 60_000);
+});
+
+describe('runServe（沒帶 --live）：受管檔最優先，日誌只有名字', () => {
+  async function serve(home: string, lines: string[]): Promise<RunningServe> {
+    return (await runServe({
+      argv: ['--port', '0', '--patch', cliPatch(home)],
+      log: bodyLog(lines),
+      env: { [HARNESS_HOME_ENV]: home },
+      cwd: home,
+    })) as RunningServe;
+  }
+
+  async function oneTurn(server: RunningServe): Promise<void> {
+    const client = await serveClient(server);
+    const events = await client.openEvents('t1');
+    await client.runStart('t1', '看一下');
+    await foldTurn(events);
+    await events.return?.(undefined);
+  }
+
+  it('子行程讀到受管檔的值，啟動環境同名輪不到它；server 日誌找不到兩個值', async () => {
+    const home = scratch();
+    managedFile(home, FROM_FILE);
+    vi.stubEnv(NAME, FROM_ENV);
+    const lines: string[] = [];
+    running = await serve(home, lines);
+    await oneTurn(running);
+    await running.close();
+    running = undefined;
+
+    expect(sessionLogs(home)).toContain(`\\"MCP_TOKEN\\":\\"${FROM_FILE}\\"`);
+    expect(lines.length).toBeGreaterThan(0);
+    for (const line of lines) {
+      expect(line).not.toContain(FROM_FILE.slice(0, 6));
+      expect(line).not.toContain(FROM_ENV.slice(0, 6));
+    }
+  }, 60_000);
+
+  it('受管檔 0644：serve 照樣起來，那一列連不上，日誌指名憑證、不帶值', async () => {
+    const home = scratch();
+    managedFile(home, FROM_FILE, 0o644);
+    const lines: string[] = [];
+    running = await serve(home, lines);
+
+    const warning = lines.find((line) => line.includes('MCP 伺服器 "srv"'));
+    expect(warning).toContain(`connection.env.MCP_TOKEN 引用的憑證 "${NAME}" 讀不到`);
+    for (const line of lines) expect(line).not.toContain(FROM_FILE.slice(0, 6));
   }, 60_000);
 });
