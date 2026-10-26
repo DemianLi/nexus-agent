@@ -7231,7 +7231,7 @@
       "digest": "4d1cdc9d4b568a6a61061ff52f9916d9c4af59528bd13317633bff6a1636320b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/attachment-ref.ts:65"
+        "packages/nexus-core/src/attachment-ref.ts:64"
       ]
     },
     {
@@ -7459,7 +7459,7 @@
         "packages/nexus-core/src/attachment-ref.ts#ImageMediaType"
       ],
       "sources": [
-        "packages/nexus-core/src/attachment-ref.ts:48"
+        "packages/nexus-core/src/attachment-ref.ts:47"
       ]
     },
     {
@@ -7499,7 +7499,7 @@
         "packages/nexus-core/src/attachment-ref.ts#AttachmentRef"
       ],
       "sources": [
-        "packages/nexus-core/src/attachment-ref.ts:74"
+        "packages/nexus-core/src/attachment-ref.ts:73"
       ]
     },
     {

@@ -6,9 +6,11 @@
  * 每個覆寫各有一個突變能讓對應那條紅（見各測試的註解）。
  */
 
+import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { join } from 'node:path';
 
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -20,9 +22,13 @@ import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
 import type { RequestGuard } from './attachment-chat-openai.js';
 import { projectAttachments } from './attachment-projection.js';
 import type { AttachmentSource } from './attachment-projection.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
 import { PNG_7X5 } from './image-fixtures.js';
 import { imageBudgetGuard } from './live-model.js';
 import { modelEntrySchema } from './model-catalog.js';
+import { loadDefaultPlugins } from './plugin-config.js';
+import { liveModelPlugin } from './settings/live-model.js';
+import { startupSetting } from './settings/startup.js';
 
 const IMAGE = {
   attachmentId: `sha256:${'d'.repeat(64)}`,
@@ -33,12 +39,17 @@ const IMAGE = {
 };
 const FILE = { attachmentId: `sha256:${'e'.repeat(64)}`, name: 'a.txt', bytes: 3 };
 
-const BYTES = new Uint8Array(Buffer.from(PNG_7X5, 'base64'));
+const VERSION = {
+  data: new Uint8Array(Buffer.from(PNG_7X5, 'base64')),
+  mediaType: 'image/png' as const,
+  width: 7,
+  height: 5,
+};
 
 function source(overrides: Partial<AttachmentSource> = {}): AttachmentSource {
   return {
     hasFile: async () => true,
-    readImage: async () => BYTES,
+    readRequestImage: async () => VERSION,
     ...overrides,
   };
 }
@@ -196,7 +207,7 @@ describe('投影的內容', () => {
     await model(
       'accepts',
       source({
-        readImage: async () => {
+        readRequestImage: async () => {
           throw new Error('沒了');
         },
       }),
@@ -219,9 +230,9 @@ describe('投影的內容', () => {
       await model(
         support,
         source({
-          readImage: async () => {
+          readRequestImage: async () => {
             reads += 1;
-            return BYTES;
+            return VERSION;
           },
         }),
       ).invoke([omitted]);
@@ -268,9 +279,9 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
   it('超額：三條路都在請求轉換之前拋 IMAGE_OFFLOAD_REQUIRED（帶張數），沒讀位元組、沒有任何請求到端點', async () => {
     let reads = 0;
     const src = source({
-      readImage: async () => {
+      readRequestImage: async () => {
         reads += 1;
-        return BYTES;
+        return VERSION;
       },
     });
     const llm = model('accepts', src, guard);
@@ -335,6 +346,27 @@ describe('imageBudgetGuard（型錄條目 → adapter 的檢查）', () => {
     for (const input of [['text', 'image'], undefined]) {
       const guard = imageBudgetGuard(catalogEntry({ input, imageBudget: { maxImages: 1 } }));
       expect(guard).toBeDefined();
+    }
+  });
+
+  it('出廠型錄沒有一顆宣告 maxBytes：image-offload.ts 偏離 4（量參照上的位元組）今天沒有差別', async () => {
+    // 空的 home：本機 home 的 patch 或變更紀錄蓋不到出廠那一份。CLI 與 serve 兩層都讀。
+    const home = await mkdtemp(join('/var/tmp', 'nexus-shipped-catalog-'));
+    try {
+      for (const serve of [false, true]) {
+        const { plugins } = await loadDefaultPlugins({ serve, env: { [HARNESS_HOME_ENV]: home } });
+        const { models } = startupSetting(plugins, liveModelPlugin);
+        expect(models.length).toBeGreaterThan(0);
+        const declaring = models
+          .filter((m) => m.imageBudget?.maxBytes !== undefined)
+          .map((m) => m.id);
+        expect(
+          declaring,
+          '有型錄條目宣告了 imageBudget.maxBytes：image-offload.ts 偏離 4 的撤除條件成立，額度要改成量送出那一份（AttachmentStore.readRequestImage 的位元組），不是參照上的',
+        ).toEqual([]);
+      }
+    } finally {
+      await rm(home, { recursive: true, force: true });
     }
   });
 });

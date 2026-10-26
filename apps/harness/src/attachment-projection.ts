@@ -9,9 +9,9 @@
  * ## 規則
  *
  * - **檔案**：一行 {@link fileHandleText}。路徑讀得到（儲存裡還在）用「可讀」的措辭，讀不到用「無法存取，不要聲稱讀過」。
- * - **圖**：被圖片額度省略的（`block.offloaded`）→ 佔位字（`offloadedImageText`），先於下面兩條；型錄宣告了 `input` 而沒有 `image`（`'rejects'`）→ 佔位字（{@link textOnlyImageText}）；其餘（收圖、沒宣告）→ `image_url`
- *   data URL，**前面一行把手**（`requestImageHandleText`，#1566，照 dsh pi-ai `context.ts:79-89`）。沒宣告時照送，同 dsh（它的 `projectImagesForTextModel` 只在**明確**宣告純文字時才換）。圖的位元組讀不到
- *   （儲存被清掉、被換過）→ 佔位字（{@link unavailableImageText}），那一步不因此失敗。
+ * - **圖**：被圖片額度省略的（`block.offloaded`）→ 佔位字（`offloadedImageText`），先於下面兩條；型錄宣告了 `input` 而沒有 `image`（`'rejects'`）→ 佔位字（{@link textOnlyImageText}）；其餘（收圖、沒宣告）→ **送模型的那一份**
+ *   （`AttachmentStore.readRequestImage`，照預算另做、有快取，見 `request-image.ts`）的 `image_url` data URL，媒體類型是那一份的，**前面一行把手**（`requestImageHandleText`，#1566）。只在型錄**明確**宣告純文字時才換成佔位字，沒宣告時照送。圖的位元組讀不到
+ *   （儲存被清掉、被換過）或做不出送模型的那一份 → 佔位字（{@link unavailableImageText}），那一步不因此失敗。
  *
  * ## 登記的偏離
  *
@@ -35,13 +35,14 @@ import type { FileAttachmentRef, ImageAttachmentRef } from '@nexus/core';
 import type { BaseMessage } from '@langchain/core/messages';
 
 import type { ImageSupport } from './model-catalog.js';
+import type { RequestImage } from './request-image.js';
 
 /** 投影要問儲存的兩件事；`AttachmentStore` 滿足它。 */
 export interface AttachmentSource {
   /** 這份檔案的存放路徑現在讀不讀得到。 */
   hasFile(ref: FileAttachmentRef): Promise<boolean>;
-  /** 一張圖的位元組；讀不到、大小、雜湊或檔頭（媒體類型、寬高）對不上就拋。 */
-  readImage(ref: ImageAttachmentRef): Promise<Uint8Array>;
+  /** 送模型的那一份；落盤那一份讀不到、對不上，或做不出來就拋。 */
+  readRequestImage(ref: ImageAttachmentRef): Promise<RequestImage>;
 }
 
 /**
@@ -70,13 +71,13 @@ export function projectAttachments(
     if (block.offloaded === true) return { type: 'text', text: offloadedImageText(ref) };
     if (imageSupport === 'rejects') return { type: 'text', text: textOnlyImageText(ref) };
     try {
-      const bytes = await source.readImage(ref);
+      const version = await source.readRequestImage(ref);
       return [
-        { type: 'text', text: requestImageHandleText(ref) },
+        { type: 'text', text: requestImageHandleText(ref, version) },
         {
           type: 'image_url',
           image_url: {
-            url: `data:${ref.mediaType};base64,${Buffer.from(bytes).toString('base64')}`,
+            url: `data:${version.mediaType};base64,${Buffer.from(version.data).toString('base64')}`,
           },
         },
       ];

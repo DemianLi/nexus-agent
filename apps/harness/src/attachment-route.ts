@@ -26,7 +26,7 @@
  *
  * **不算外漏的情形**：B 自己上傳了位元組完全相同的檔，B 讀得到——內容定址的結果。檔名別名各自一條，B 引用的是 B 的那一條。
  *
- * ## 偏離（理由 2，登記在 `attachment-store.ts` 檔頭偏離 3）
+ * ## 偏離（理由 2，登記在 `attachment-store.ts` 檔頭偏離 2）
  *
  * dsh 是單人桌面，模型讀的是主機路徑，沒有路由；nexus 一台主機多人共用，0700 分不開人，所以路由多一道「日誌引用過」的判準，
  * 跟網頁讀圖同一條（照 dsh `session.attachment`）。
@@ -269,7 +269,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
       // **其餘照舊**：`SEARCH_ABORTED`（使用者按停止）與 `SEARCH_RAW_OUTPUT_OVERFLOW`（「縮小 pattern 再試」的提示）的字句固定、不帶路徑，
       // 換掉會讓 overflow 的提示不見，也會讓按停止寫出一行 warn（`serve.ts` 的 warn 是給要人處理的事）。
       // dsh 沒有對應做法（單人桌面、沒有「這條 thread 引用過哪些檔」的引用集；`search-core.ts` 的 `classifyRunFailure` 把 stderr 原樣接在訊息後面），
-      // 這是偏離 3（#1773，理由 2）帶出來的需求。
+      // 這是偏離 2（#1773，理由 2）帶出來的需求。
       if (found.errorCode === SEARCH_FAILED || found.errorCode === SEARCH_INVALID_PATTERN) {
         this.#warn(
           `[附件路由] thread ${this.#scope.sessionId?.() ?? '（未綁定）'} grep 出錯（${found.errorCode}），原始訊息不交給模型：${found.error}`,

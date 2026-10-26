@@ -19,6 +19,12 @@ import {
   attachmentsRootOf,
   fileLeafName,
 } from './attachment-store.js';
+import {
+  DEFAULT_REQUEST_IMAGE_MAX_BYTES,
+  REQUEST_IMAGE_POLICY,
+  requestImagesRootOf,
+  requestImageVariantId,
+} from './request-image.js';
 
 let home: string;
 let store: AttachmentStore;
@@ -536,5 +542,163 @@ describe('存圖之前規範化（#2033）', () => {
       height: 20,
     } as const;
     expect(Buffer.from(await store.readImage(legacy))).toEqual(raw);
+  });
+});
+
+describe('送模型的那一份（#2033）', () => {
+  /** 規範化之前落盤的圖：位元組原樣進 `file-objects/`，參照記檔頭的軸（同上面「照樣讀得回」那一條的造法）。 */
+  async function legacyImage(
+    raw: Buffer,
+    mediaType: 'image/jpeg' | 'image/png',
+    width: number,
+    height: number,
+  ) {
+    const file = await store.save({ data: raw, name: 'old' });
+    return {
+      attachmentId: file.attachmentId,
+      mediaType,
+      bytes: file.bytes,
+      width,
+      height,
+    } as const;
+  }
+  const turnedBig = () =>
+    sharp({ create: { width: 3000, height: 2000, channels: 3, background: '#a26' } })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+  const cachePath = (ref: { attachmentId: string }) => {
+    const id = requestImageVariantId(ref, REQUEST_IMAGE_POLICY);
+    return join(requestImagesRootOf(home), id.slice(0, 2), id);
+  };
+  /** 數限流器跑了幾件（只有轉碼走它）。 */
+  function countTransforms(target: AttachmentStore): () => number {
+    let runs = 0;
+    const limiter = target.compression;
+    const run = limiter.run.bind(limiter);
+    limiter.run = (task) => {
+      runs += 1;
+      return run(task);
+    };
+    return () => runs;
+  }
+
+  it('規範化之前落盤的大圖（EXIF 6）：轉正、縮到 2048² 以內；快取在 cache/attachments/request-images，0600', async () => {
+    const legacy = await legacyImage(await turnedBig(), 'image/jpeg', 3000, 2000);
+    const version = await store.readRequestImage(legacy);
+    expect(version).toMatchObject({ mediaType: 'image/jpeg', width: 1672, height: 2508 });
+    const meta = await sharp(version.data).metadata();
+    expect(meta).toMatchObject({ width: 1672, height: 2508, space: 'srgb' });
+    expect(meta.orientation).toBeUndefined();
+    expect(await readFile(cachePath(legacy))).toEqual(Buffer.from(version.data));
+    expect(await mode(cachePath(legacy))).toBe(0o600);
+    // 落盤那一份不動。
+    expect(Buffer.from(await store.readImage(legacy)).byteLength).toBe(legacy.bytes);
+  });
+
+  it('新收、規範化過但超過 1 MiB 的圖：落盤那一份不動，送模型的再壓到 1 MiB 以內', async () => {
+    const noisy = await sharp({
+      create: {
+        width: 2048,
+        height: 2048,
+        channels: 3,
+        background: '#888',
+        noise: { type: 'gaussian', mean: 128, sigma: 15 },
+      },
+    })
+      .png()
+      .toBuffer();
+    const ref = await store.saveImage({ data: noisy, mediaType: 'image/png' });
+    expect(ref.bytes).toBeGreaterThan(DEFAULT_REQUEST_IMAGE_MAX_BYTES);
+    const version = await store.readRequestImage(ref);
+    expect(version.data.byteLength).toBeLessThanOrEqual(DEFAULT_REQUEST_IMAGE_MAX_BYTES);
+    expect(version).toMatchObject({ mediaType: 'image/jpeg', width: 2048, height: 2048 });
+  });
+
+  it('第二次讀快取，不再轉碼；快取裡那一份就是送出的那一份', async () => {
+    const legacy = await legacyImage(await turnedBig(), 'image/jpeg', 3000, 2000);
+    const transforms = countTransforms(store);
+    await store.readRequestImage(legacy);
+    expect(transforms()).toBe(1);
+    const planted = await sharp({
+      create: { width: 10, height: 15, channels: 3, background: '#000' },
+    })
+      .jpeg()
+      .toBuffer();
+    await writeFile(cachePath(legacy), planted);
+    const again = await store.readRequestImage(legacy);
+    expect(transforms()).toBe(1);
+    expect(Buffer.from(again.data)).toEqual(planted);
+    expect(again).toMatchObject({ width: 10, height: 15 });
+  });
+
+  it('同一張圖同時要兩次：只轉一次，兩邊拿到同一份', async () => {
+    const legacy = await legacyImage(await turnedBig(), 'image/jpeg', 3000, 2000);
+    const transforms = countTransforms(store);
+    const [a, b] = await Promise.all([
+      store.readRequestImage(legacy),
+      store.readRequestImage(legacy),
+    ]);
+    expect(transforms()).toBe(1);
+    expect(a).toBe(b);
+  });
+
+  it('轉碼走限流：同時要好幾張不同的圖，同時在跑的不超過上限', async () => {
+    const limited = new AttachmentStore(attachmentsRootOf(home), {
+      imageCompressionConcurrency: 2,
+    });
+    const refs = await Promise.all(
+      ['#111', '#222', '#333', '#444', '#555'].map(async (background) => {
+        const raw = await sharp({ create: { width: 3000, height: 2000, channels: 3, background } })
+          .png()
+          .toBuffer();
+        const file = await limited.save({ data: raw, name: 'old.png' });
+        return {
+          attachmentId: file.attachmentId,
+          mediaType: 'image/png',
+          bytes: file.bytes,
+          width: 3000,
+          height: 2000,
+        } as const;
+      }),
+    );
+    let peak = 0;
+    const sampler = setInterval(() => {
+      peak = Math.max(peak, limited.compression.active);
+    }, 1);
+    try {
+      await Promise.all(refs.map((ref) => limited.readRequestImage(ref)));
+    } finally {
+      clearInterval(sampler);
+    }
+    expect(peak).toBe(2);
+  });
+
+  it('落盤那一份不見了：就算快取還在也拋（attachments/ 被清掉的舊訊息照舊換成佔位字）', async () => {
+    const legacy = await legacyImage(await turnedBig(), 'image/jpeg', 3000, 2000);
+    await store.readRequestImage(legacy);
+    const digest = legacy.attachmentId.slice('sha256:'.length);
+    await rm(join(store.rootDir, 'file-objects', digest.slice(0, 2), digest), { force: true });
+    await expect(store.readRequestImage(legacy)).rejects.toBeInstanceOf(AttachmentError);
+  });
+
+  it('快取寫不進去：這一次照樣回那一份，伺服器日誌講一次', async () => {
+    const warnings: string[] = [];
+    const warned = new AttachmentStore(attachmentsRootOf(home), {
+      warn: (line) => warnings.push(line),
+    });
+    const raw = await turnedBig();
+    const file = await warned.save({ data: raw, name: 'old.jpg' });
+    const legacy = {
+      attachmentId: file.attachmentId,
+      mediaType: 'image/jpeg',
+      bytes: file.bytes,
+      width: 3000,
+      height: 2000,
+    } as const;
+    await writeFile(join(home, 'cache'), 'not a directory');
+    const version = await warned.readRequestImage(legacy);
+    expect(version).toMatchObject({ width: 1672, height: 2508 });
+    expect(warnings).toEqual([expect.stringContaining('送模型的圖寫不進快取') as unknown]);
   });
 });

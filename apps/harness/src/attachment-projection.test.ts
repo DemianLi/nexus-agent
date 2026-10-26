@@ -30,10 +30,15 @@ const IMAGE = {
   name: 'shot.png',
 };
 const FILE = { attachmentId: `sha256:${'e'.repeat(64)}`, name: 'a.txt', bytes: 3 };
-const BYTES = new Uint8Array(Buffer.from(PNG_7X5, 'base64'));
+const VERSION = {
+  data: new Uint8Array(Buffer.from(PNG_7X5, 'base64')),
+  mediaType: 'image/png' as const,
+  width: 7,
+  height: 5,
+};
 
 function source(overrides: Partial<AttachmentSource> = {}): AttachmentSource {
-  return { hasFile: async () => true, readImage: async () => BYTES, ...overrides };
+  return { hasFile: async () => true, readRequestImage: async () => VERSION, ...overrides };
 }
 
 const message = (...blocks: readonly object[]) =>
@@ -94,6 +99,26 @@ describe('送出的圖：把手在前、圖在後，攤平在原位', () => {
     expect(content[0]!.text).toBe(requestImageHandleText(IMAGE));
     expect(content[2]!.text).toBe(requestImageHandleText(second));
   });
+
+  it('送的是送模型那一份：媒體類型與把手的寬高都是它的，不是參照記的', async () => {
+    const sent = {
+      data: new Uint8Array([1, 2, 3]),
+      mediaType: 'image/jpeg' as const,
+      width: 4,
+      height: 3,
+    };
+    const big = { ...IMAGE, width: 4000, height: 3000 };
+    const content = await contentOf(
+      [attachmentBlock({ type: 'image', ...big })],
+      source({ readRequestImage: async () => sent }),
+    );
+    expect(content).toEqual([
+      { type: 'text', text: requestImageHandleText(big, sent) },
+      { type: 'image_url', image_url: { url: 'data:image/jpeg;base64,AQID' } },
+      { type: 'text', text: '請看' },
+    ]);
+    expect(requestImageHandleText(big, sent)).toContain('request preview 4x3px.');
+  });
 });
 
 describe('沒送圖的三種：只有一行佔位字，沒有把手', () => {
@@ -117,7 +142,7 @@ describe('沒送圖的三種：只有一行佔位字，沒有把手', () => {
 
   it('位元組讀不到（含檔頭對不上參照）', async () => {
     const unreadable = source({
-      readImage: async () => {
+      readRequestImage: async () => {
         throw new Error('圖片的檔頭對不上參照');
       },
     });

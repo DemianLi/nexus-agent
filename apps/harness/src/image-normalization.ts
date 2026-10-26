@@ -1,6 +1,6 @@
 /**
  * 收下的圖在落盤之前規範化（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）：整張解碼、套 EXIF 轉向、轉 8-bit sRGB、
- * 縮到像素預算以內、重新編碼。落盤與送模型的都是這一份，附件 id 是它的 sha256，原圖不留（存哪一份見 #1827）。
+ * 縮到像素預算以內、重新編碼。落盤的是這一份，附件 id 是它的 sha256，原圖不留（存哪一份見 #1827）。送模型的那一份也用這裡的 {@link normalizeImage}，只是預算不同（`request-image.ts`）。
  *
  * - **整張解碼**（{@link decodeImage}）：`failOn: 'error'`、把像素真的解出來，檔頭之後壞掉的圖在這裡拒收。
  *   寬高回報轉向之後看起來的軸（EXIF 5–8 交換寬高）。
@@ -25,10 +25,10 @@ import type { ImageMediaType } from '@nexus/core';
 import type { Metadata, Sharp } from 'sharp';
 import type sharpModule from 'sharp';
 
-import { AttachmentError } from './attachment-store.js';
+import { AttachmentError } from './attachment-error.js';
 import { ImageIntakeError, probeImageHeader } from './image-intake.js';
 
-/** 落盤那一份的政策。 */
+/** 規範化的政策：落盤那一份用 {@link DEFAULT_NORMALIZATION_POLICY}，送模型那一份用 `REQUEST_IMAGE_POLICY`。 */
 export interface NormalizationPolicy {
   /** 總像素預算；超過的等比例縮小。 */
   readonly maxPixels: number;
@@ -139,7 +139,7 @@ async function imageFacts(image: Sharp): Promise<DecodedImage | undefined> {
 export async function decodeImage(data: Uint8Array): Promise<DecodedImage | undefined> {
   const sharp = requireSharp();
   try {
-    // 不設 sharp 的像素上限：進來的位元組都先過了檔頭那一關（`admitImages`）的總像素與單邊上限，或是這一支自己的輸出。
+    // 不設 sharp 的像素上限：進來的位元組都先過了檔頭那一關（`admitImages`）的總像素與單邊上限，或是這一支自己的輸出，或是讀回的落盤那一份（收下時至少過了總像素上限）。
     const image = sharp(data, { failOn: 'error', limitInputPixels: false });
     const facts = await imageFacts(image);
     if (facts === undefined) return undefined;
@@ -303,9 +303,9 @@ async function verifyNormalized(
 }
 
 /**
- * 做出要落盤的那一份。已經合格的原樣通過；其餘重新編碼並驗過。
+ * 照政策做出一份：收圖時是落盤那一份，組請求時是送模型那一份。已經合格的原樣通過；其餘重新編碼並驗過。
  *
- * @param data - 收下的完整位元組。
+ * @param data - 完整的編碼後位元組（收下的，或讀回的落盤那一份）。
  * @param decoded - 整張解碼的事實（{@link decodeImage}）。
  * @param policy - 規範化政策。
  * @throws {AttachmentError} 轉不出合格的輸出（`ATTACHMENT_STORE_FAILED`）。
