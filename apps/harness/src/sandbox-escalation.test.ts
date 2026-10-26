@@ -13,8 +13,8 @@
  *
  * ## 前提先釘死
  *
- * 第 0 項定案是 `workspace-write` ＋ 有人可問，**根內寫入直接放行**——所以升級這條路只有兩種跑
- * 會走到：切到 `read-only`，或目標在可寫根外。每一條會發 grant 的驗收都**先斷言那次呼叫真的被
+ * 第 0 項定案是 `workspace-write` ＋ 有人可問，**根內寫入直接放行**；升級最多到 `workspace-write`（#1827 D23），
+ * 所以升級這條路只有切到 `read-only` 才走得到——`workspace-write` 之下寫到可寫根外是直接拒絕。每一條會發 grant 的驗收都**先斷言那次呼叫真的被
  * fence 擋下來**（拒絕訊息，不是「有跑」），再驗升級。少了這一步，一份測試可以從頭到尾沒碰到
  * 升級而全綠。
  *
@@ -294,13 +294,30 @@ describe('升級', () => {
         await dispose();
       }
     });
+    it('升級指引跟著這一刻的模式：read-only 有、切到 workspace-write 就沒有、切回來又有', async () => {
+      await symlink(outside, join(root, 'out'));
+      const controller = new SandboxModeController('read-only');
+      controller.enableEscalation(SANDBOX_ESCALATION_HINT);
+      const backend = new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: controller.source,
+        grants: controller,
+      });
+
+      expect((await backend.write('/a.txt', '一')).error).toContain(SANDBOX_ESCALATION_HINT);
+      controller.switchTo('workspace-write');
+      const outsideDenied = (await backend.write('/out/x.txt', '一')).error;
+      expect(outsideDenied).toContain('落在可寫根之外');
+      expect(outsideDenied).not.toContain(SANDBOX_ESCALATION_TOOL_NAME);
+      controller.switchTo('read-only');
+      expect((await backend.write('/b.txt', '二')).error).toContain(SANDBOX_ESCALATION_HINT);
+    });
   });
 
   describe('不加寬的請求不問人', () => {
     it.each([
       ['danger-full-access', 'workspace-write'],
       ['workspace-write', 'workspace-write'],
-      ['danger-full-access', 'danger-full-access'],
     ] as const)('%s 之下要 %s：當場擋掉，核准卡一張都不掛', async (current, requested) => {
       const { agent, dispose, controller } = await assemble(current, [
         escalate({ file_path: '/a.txt', sandbox_permissions: requested, justification: '要寫檔' }),
@@ -319,31 +336,39 @@ describe('升級', () => {
     });
 
     /**
-     * **enum 外的值走不到本體**（#700）：以前閘門排在 zod 之前，`read-only` 在閘門上拿到不加寬那句；
-     * 問人搬進本體之後，schema 的封閉詞彙先擋，同 dsh 的 schema-pinned。斷言的是結局，不抄基座的措辭。
+     * **enum 外的值走不到本體**（#700）：`read-only`、`danger-full-access` 都不在 schema 的封閉詞彙裡，在 schema 那一關就被擋。
+     * 斷言的是結局，不抄基座的措辭。
      */
-    it('enum 外的值（read-only）在 schema 那一關就被擋：核准卡一張都不掛、grant 沒發', async () => {
-      const { agent, dispose, controller } = await assemble('read-only', [
-        escalate({
-          file_path: '/a.txt',
-          sandbox_permissions: 'read-only',
-          justification: '要寫檔',
-        }),
-        { content: '好。' },
-      ]);
-      try {
-        const result = await agent.invoke(toAgentInvocation('升級。'), {
-          configurable: { thread_id: 'no-widen-schema' },
-        });
-        expect(pendingCard(result)).toBeUndefined();
-        const [refused] = toolTexts(result);
-        expect(refused).toMatch(/^Error: /);
-        expect(refused).toContain('sandbox_permissions');
-        expect(controller.peekGrant()).toBeUndefined();
-      } finally {
-        await dispose();
-      }
-    });
+    it.each([
+      ['read-only', 'read-only'],
+      // 升級最多到 workspace-write（#1827 D23）：全開不在詞彙裡，哪一格要都一樣。
+      ['read-only', 'danger-full-access'],
+      ['workspace-write', 'danger-full-access'],
+    ] as const)(
+      '%s 之下要 enum 外的 %s：在 schema 那一關就被擋，核准卡一張都不掛、grant 沒發',
+      async (current, requested) => {
+        const { agent, dispose, controller } = await assemble(current, [
+          escalate({
+            file_path: '/a.txt',
+            sandbox_permissions: requested,
+            justification: '要寫檔',
+          }),
+          { content: '好。' },
+        ]);
+        try {
+          const result = await agent.invoke(toAgentInvocation('升級。'), {
+            configurable: { thread_id: `no-widen-schema-${current}-${requested}` },
+          });
+          expect(pendingCard(result)).toBeUndefined();
+          const [refused] = toolTexts(result);
+          expect(refused).toMatch(/^Error: /);
+          expect(refused).toContain('sandbox_permissions');
+          expect(controller.peekGrant()).toBeUndefined();
+        } finally {
+          await dispose();
+        }
+      },
+    );
 
     it('反例：真的加寬的請求會掛出核准卡，人看得到是哪一個檔與理由', async () => {
       const { agent, dispose, controller } = await assemble('read-only', [
@@ -413,7 +438,7 @@ describe('升級', () => {
           write('/a.txt', '一'),
           escalate({
             file_path: '/a.txt',
-            sandbox_permissions: 'danger-full-access',
+            sandbox_permissions: 'workspace-write',
             justification: '使用者要這個檔',
           }),
           { content: '好。' },
@@ -429,7 +454,7 @@ describe('升級', () => {
         expect(toolTexts(result).slice(1)).toEqual([]);
         expect(pendingCard(result)?.name).toBe(SANDBOX_ESCALATION_TOOL_NAME);
         expect(pendingCard(result)?.description).toBe(
-          escalationReason('/a.txt', 'danger-full-access', '使用者要這個檔'),
+          escalationReason('/a.txt', 'workspace-write', '使用者要這個檔'),
         );
         expect(controller.peekGrant()).toBeUndefined();
       } finally {
@@ -476,6 +501,31 @@ describe('升級', () => {
       }
     });
 
+    it('升級的 file_path 不帶前置斜線也對得上：比對的是 canonical 位置，不是字串', async () => {
+      const { agent, dispose } = await assembleProduct('read-only', [
+        write('/a.txt', '一'),
+        escalate({
+          file_path: 'a.txt',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要這個檔',
+        }),
+        write('/a.txt', '一'),
+        { content: '完成。' },
+      ]);
+      const config = { configurable: { thread_id: 'no-leading-slash' } };
+      try {
+        const paused = await agent.invoke(toAgentInvocation('寫 a.txt。'), config);
+        expect(toolTexts(paused)[0]).toContain('這個 backend 是唯讀的');
+
+        const [, granted, retried] = toolTexts(await agent.invoke(APPROVE, config));
+        expect(granted).toContain('核准了');
+        expect(retried).not.toContain('[containment]');
+        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('一');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('grant 只蓋指名的那個檔：別的檔照樣被擋，而且沒把 grant 吃掉', async () => {
       const { agent, dispose } = await assembleProduct('read-only', [
         write('/a.txt', '一'),
@@ -505,31 +555,29 @@ describe('升級', () => {
       }
     });
 
-    it('workspace-write：經 symlink 寫到根外 → 升到 danger-full-access 一次；寫法不同也對得上', async () => {
+    it('workspace-write：經 symlink 寫到根外被擋，拒絕後面沒有升級指引；要升到全開在 schema 就被擋', async () => {
       await symlink(outside, join(root, 'out'));
       const { agent, dispose } = await assembleProduct('workspace-write', [
         write('/out/x.txt', '一'),
-        // 故意不帶前置斜線：比對的是 canonical 位置，不是字串。
         escalate({
-          file_path: 'out/x.txt',
+          file_path: '/out/x.txt',
           sandbox_permissions: 'danger-full-access',
           justification: '要寫到工作區外面',
         }),
-        write('/out/x.txt', '一'),
-        write('/out/x.txt', '一'),
-        { content: '完成。' },
+        { content: '停。' },
       ]);
-      const config = { configurable: { thread_id: 'outside' } };
       try {
-        const paused = await agent.invoke(toAgentInvocation('寫到外面。'), config);
-        const [denied] = toolTexts(paused);
+        const result = await agent.invoke(toAgentInvocation('寫到外面。'), {
+          configurable: { thread_id: 'outside' },
+        });
+        const [denied, refused] = toolTexts(result);
         expect(denied).toContain('落在可寫根之外');
-        expect(denied).toContain(SANDBOX_ESCALATION_HINT);
-
-        const [, , retried, again] = toolTexts(await agent.invoke(APPROVE, config));
-        expect(retried).not.toContain('[containment]');
-        expect(again).toContain('落在可寫根之外');
-        expect(await readFile(join(outside, 'x.txt'), 'utf8')).toBe('一');
+        // 沒有格子升得到（#1827 D23）：不叫模型去呼叫一顆必定回拒絕的工具。
+        expect(denied).not.toContain(SANDBOX_ESCALATION_TOOL_NAME);
+        expect(refused).toMatch(/^Error: /);
+        expect(refused).toContain('sandbox_permissions');
+        expect(pendingCard(result)).toBeUndefined();
+        expect(await exists(join(outside, 'x.txt'))).toBe(false);
       } finally {
         await dispose();
       }
