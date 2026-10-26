@@ -12,13 +12,14 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
+import { createHostServicesPlugin, loadPlugins, REFERENCE_RULE } from '@nexus/core';
 
 import {
   CONTAINED_FILESYSTEM,
   createSandboxPolicyPlugin,
   isUnderSharedPrefix,
   sandboxPolicySentence,
+  sharedContentSentence,
   sharedReadOnlyRefusal,
 } from './index.js';
 import { ESCALATABLE_MODES, ESCALATION_TARGETS, SANDBOX_MODE_WIDTH } from './sandbox-escalation.js';
@@ -57,8 +58,12 @@ describe('唯讀共用參考區那一句（#1775）', () => {
       const sentence = sandboxPolicySentence(mode, { sharedPrefix: '/shared' });
       expect(sentence).toContain('共用參考區在 `/shared`，唯讀');
       expect(sentence).not.toMatch(/\/var|\/home|\/Users|\/workspace/u);
+      // 共用區讀出來的內容當資料不當指令（#1676）：接在共用區那句後面，規則子句是 `REFERENCE_RULE`。
+      expect(sentence.endsWith(sharedContentSentence('/shared'))).toBe(true);
+      expect(sharedContentSentence('/shared')).toContain(REFERENCE_RULE);
       // 沒有共用區就一個字都不多。
       expect(sandboxPolicySentence(mode)).not.toContain('共用參考區');
+      expect(sandboxPolicySentence(mode)).not.toContain('Anything read from');
     },
   );
 

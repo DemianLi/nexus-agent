@@ -60,6 +60,7 @@ import { createSpillPolicyMiddleware } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
 import { capSearchResults, createSearchOverflowMiddleware } from './search-overflow.js';
 import type { SearchOverflowOptions } from './search-overflow.js';
+import { createSharedReadMarkMiddleware } from './shared-read-mark.js';
 import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -667,6 +668,20 @@ export function foldRegistry(
       : undefined;
   const searchOverflowMiddleware =
     searchOverflow === undefined ? undefined : createSearchOverflowMiddleware(searchOverflow);
+  // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿把手上換好的那一份（#1919）。沒有填得進值的把手
+  // （組裝點沒提供 `fs`，或給的不是 `createFsService` 建的）就照保留前綴與 mount 自己換。
+  const skills =
+    settledFs?.skillSources() ??
+    threadSkillSources(registry.skills.sources(), {
+      sharedWorkspacePrefix: () => sharedWorkspacePrefix,
+      offWorkspacePrefixes: () => [...(options.reservedBackendPrefixes ?? []), ...mountPrefixes],
+    });
+
+  // 共用區讀出來的內容加前綴（#1676）：只在這條 thread 有共用區、也有 backend 時掛；上面那份技能來源底下不標。見 {@link ./shared-read-mark.ts}。
+  const sharedReadMark =
+    backend === undefined || sharedWorkspacePrefix === undefined
+      ? undefined
+      : createSharedReadMarkMiddleware(sharedWorkspacePrefix, skills);
   const subagentPlugins = subagentPluginMiddleware(plugins);
   // 工具過濾（#707）遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），
   // 不必扣自帶的。
@@ -810,6 +825,9 @@ export function foldRegistry(
     // `tools/post-execute`（#1248）在輸出校驗等貼著工具本體的那幾顆外側（dsh 在 post-execute 之前驗輸出）、在每一個 plugin
     // middleware 內側：plugin 與圍堵看到的是替換過的那則。
     shared('toolPostExecute', toolPostExecute),
+    // 共用區讀出來的內容加前綴：在輸出校驗與讀到哪的外側（它們看到沒標過的文字），在搜尋上限、外溢與圍堵的內側（`Found … matches`
+    // 排在前綴之前，日誌與外溢預覽都帶前綴）。子代理的檔案工具也經過它。見 {@link ./shared-read-mark.ts}。
+    shared('sharedReadMark', sharedReadMark),
     // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本（dsh 在
     // `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，這裡照規矩不驗。
     // 見 {@link ./output-schema.ts}。
@@ -849,15 +867,6 @@ export function foldRegistry(
     // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
     shared('turnCancelModelSignal', turnCancelModelSignal),
   ];
-
-  // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿把手上換好的那一份（#1919）。沒有填得進值的把手
-  // （組裝點沒提供 `fs`，或給的不是 `createFsService` 建的）就照保留前綴與 mount 自己換。
-  const skills =
-    settledFs?.skillSources() ??
-    threadSkillSources(registry.skills.sources(), {
-      sharedWorkspacePrefix: () => sharedWorkspacePrefix,
-      offWorkspacePrefixes: () => [...(options.reservedBackendPrefixes ?? []), ...mountPrefixes],
-    });
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
