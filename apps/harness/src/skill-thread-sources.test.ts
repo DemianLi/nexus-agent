@@ -12,6 +12,7 @@ import { join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { SessionRegistry } from '@nexus/core';
+import type { FsLookupService } from '@nexus/fs';
 import { SKILL_INVOCATION_MARKER } from '@nexus/plugin-skills/invocation';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -23,6 +24,7 @@ import { toAgentInvocation } from './messages.js';
 import { changePlugin } from './plugin-change.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import type { ScriptedChatModel } from './scripted-model.js';
+import { createSkillCatalog } from './skill-catalog-wire.js';
 
 const temporary: string[] = [];
 const roots: CordisRoot[] = [];
@@ -96,6 +98,67 @@ describe('兩列有同名技能，前面那一列重載過', () => {
       expect(injected).toHaveLength(1);
       expect(injected[0]!.text).toContain('後面那一列。');
       expect(injected[0]!.text).not.toContain('前面那一列。');
+    } finally {
+      await attachment.detach();
+      await built.dispose();
+    }
+  }, 90000);
+});
+
+/** 一列另加 `/large_tool_results/skills/`：組裝點包的工具結果暫存那條路由底下。 */
+const STASH_SOURCE = `- insert:\n    - id: stash-skills\n      name: '@nexus/plugin-skills'\n      config:\n        sources:\n          - '/large_tool_results/skills/'\n`;
+
+describe('落盤關掉、有共用區：來源在 /large_tool_results/ 底下', () => {
+  it('模型清單、/deploy、skill.list 讀的是同一個位置：暫存那條路由（記憶體），不是共用區底下的同名目錄', async () => {
+    const home = scratch('nexus-skill-thread-sources-home-');
+    writeFileSync(join(home, 'cordis.patch.yml'), STASH_SOURCE, { mode: 0o600 });
+    const env = { [HARNESS_HOME_ENV]: home };
+    // 共用區上放一份 `large_tool_results/skills/deploy`：來源若被當成「不在路由底下」接到 `/shared` 底下，就會讀到它。
+    const shared = scratch('nexus-skill-thread-sources-ws-');
+    mkdirSync(join(shared, 'large_tool_results', 'skills', 'deploy'), { recursive: true });
+    writeFileSync(
+      join(shared, 'large_tool_results', 'skills', 'deploy', 'SKILL.md'),
+      '---\nname: deploy\ndescription: 共用區上的那一份。\n---\n\n共用區上的那一份。\n',
+    );
+    const root = createCordisRoot({ channel: entryApprovalChannel(undefined), contained: true });
+    roots.push(root);
+    const loaded = await loadDefaultPlugins({ env, warn: () => {} }, { tree: root.tree });
+    expect(loaded.dropped).toEqual([]);
+
+    const assembly = await root.boot('serve', { plugins: loaded.plugins });
+    // 落盤關掉的新 thread：可寫根明著是 `undefined`（記憶體），`--workspace` 掛成共用區，沒有主機暫存（`toolResultStash` 不給）。
+    const built = await assembly.create(
+      {
+        live: false,
+        workspace: shared,
+        sandbox: 'workspace-write' as const,
+        workspaceRoot: undefined,
+        sharedWorkspaceRoot: shared,
+      },
+      { plugins: withScriptedModel(loaded.plugins, [{ content: '好。' }]) },
+    );
+    const attachment = built.attachSessions(new SessionRegistry('t-stash'));
+    try {
+      await built.agent.invoke(toAgentInvocation('/deploy'), {
+        configurable: { thread_id: 't-stash' },
+      });
+      const prompt = ((built.model as ScriptedChatModel).prompts[0] ?? []) as BaseMessage[];
+      const system = prompt
+        .filter((message) => message.getType() === 'system')
+        .map((message) => message.text)
+        .join('\n');
+      const injected = prompt.filter(
+        (message) => SKILL_INVOCATION_MARKER in message.additional_kwargs,
+      );
+      // 三條路都沒讀到共用區上那一份：來源留在暫存那條路由底下。
+      expect(system).not.toContain('/shared/large_tool_results/');
+      expect(system).not.toContain('共用區上的那一份。');
+      expect(injected).toEqual([]);
+      const fs = ((await root.tree.context()).get('fs') as FsLookupService).forThread('t-stash');
+      const listed = await createSkillCatalog({ fs: () => fs, warn: () => {} })();
+      expect(listed?.map((entry) => entry.path) ?? []).not.toContain(
+        '/shared/large_tool_results/skills/deploy/SKILL.md',
+      );
     } finally {
       await attachment.detach();
       await built.dispose();
