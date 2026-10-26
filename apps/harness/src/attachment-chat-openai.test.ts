@@ -131,7 +131,9 @@ describe('三條出請求的路都過投影', () => {
     expect(bodies.at(-1)!.stream).not.toBe(true);
     expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
     // 圖前面一行把手（#1566，照 dsh pi-ai `context.ts:79-89`），再來才是圖。
-    expect(userBlocks()[1]!.text).toBe(`Image sha256:${'d'.repeat(64)}; request preview 7x5px.`);
+    expect(userBlocks()[1]!.text).toBe(
+      `Image sha256:${'d'.repeat(64)}; request preview 7x5px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`,
+    );
     expect(userBlocks()[2]!.image_url!.url).toBe(`data:image/png;base64,${PNG_7X5}`);
   });
 
@@ -312,7 +314,9 @@ describe('圖片額度的檢查在 adapter（#1270，照 dsh：adapter 只量、
     expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
     // 被省略的那張只有佔位字；送出的那張前面才有把手。
     expect(userBlocks()[0]!.text).toContain('image omitted to fit request image limits');
-    expect(userBlocks()[1]!.text).toBe(`Image sha256:${'f'.repeat(64)}; request preview 7x5px.`);
+    expect(userBlocks()[1]!.text).toBe(
+      `Image sha256:${'f'.repeat(64)}; request preview 7x5px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`,
+    );
   });
 });
 

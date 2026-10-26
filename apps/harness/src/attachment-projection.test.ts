@@ -61,7 +61,7 @@ describe('送出的圖：把手在前、圖在後，攤平在原位', () => {
       { type: 'text', text: '請看' },
     ]);
     expect(requestImageHandleText(IMAGE)).toBe(
-      `Image "shot.png" (sha256:${'d'.repeat(64)}); request preview 7x5px.`,
+      `Image "shot.png" (sha256:${'d'.repeat(64)}); request preview 7x5px. It may be resized or re-encoded; source dimensions, format, and byte size may differ.`,
     );
   });
 

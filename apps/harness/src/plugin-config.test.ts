@@ -1109,6 +1109,7 @@ describe('保護名單', () => {
       '#settings/thread-capacity',
       '#settings/session-reference',
       '#settings/logger-console',
+      '#settings/attachment-images',
       '#settings/tool-result-stash',
       '#settings/live-model',
       '#settings/default-model',

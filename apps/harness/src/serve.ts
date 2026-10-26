@@ -179,6 +179,7 @@ import {
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
+import { attachmentImagesPlugin } from './settings/attachment-images.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import type { GoalRoundCap } from './goal-driver.js';
@@ -826,6 +827,8 @@ async function startServer(
   const downlink = startupSetting(plugins, downlinkPlugin);
   // 探針與指標（#1535）：探針預設開，指標預設關。路由與披露在下面，token 檔在瀏覽器密鑰之後讀。
   const opsConfig = startupSetting(plugins, opsEndpointsPlugin);
+  // 圖片轉碼的併發上限（#2033）：一個行程一份限流器，交給下面的附件儲存。出廠 2、關不掉（`settings/attachment-images.ts`）。
+  const attachmentImages = startupSetting(plugins, attachmentImagesPlugin);
   // **先照每條 thread 那一次組一份，組完就收**（#749）。上面那幾列只驗了自己的設定；其餘每一列的設定、重名、
   // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
   // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
@@ -981,6 +984,7 @@ async function startServer(
   // home 以上的祖先開不了、略過那一層 fsync 時，講在伺服器日誌（#1528 Q1 (b)）。
   const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)), {
     warn,
+    imageCompressionConcurrency: attachmentImages.imageCompressionConcurrency,
   });
 
   // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`
@@ -1678,6 +1682,8 @@ async function startServer(
       idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
     }）`,
   );
+  // 轉碼併發講出來（#2033）：讀的是附件儲存手上那一份限流器，不是設定值。
+  log(`圖片轉碼併發：${String(attachmentStore.compression.concurrency)} 張（超過的排隊）`);
   // 一輪的時鐘講出來（#1624）：出廠就有值，關掉那一列是管理者明著拿掉的，兩種都印。
   log(
     turnClock === undefined

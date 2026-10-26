@@ -1,0 +1,852 @@
+{
+  "formatVersion": 1,
+  "roots": [
+    {
+      "key": "event:inbox/spliced",
+      "kind": "event",
+      "event": "inbox/spliced",
+      "surface": false,
+      "digest": "33cc07d869df168195d8fb844005a257a6a134753457a4699b0ea8c91845c7e6",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 39,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 40,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "inserted",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "outcome",
+                "type": 35,
+                "optional": true
+              },
+              {
+                "name": "removedCount",
+                "type": 8,
+                "optional": true
+              },
+              {
+                "name": "start",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "target",
+                "type": 36,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "array",
+            "element": 3
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "attachments",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "id",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "mention",
+                "type": 18,
+                "optional": true
+              },
+              {
+                "name": "source",
+                "type": 20,
+                "optional": false
+              },
+              {
+                "name": "text",
+                "type": 7,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "array",
+            "element": 5
+          },
+          {
+            "kind": "union",
+            "types": [
+              6,
+              16
+            ]
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "attachmentId",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "bytes",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "height",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "mediaType",
+                "type": 9,
+                "optional": false
+              },
+              {
+                "name": "name",
+                "type": 7,
+                "optional": true
+              },
+              {
+                "name": "originalDimensions",
+                "type": 14,
+                "optional": true
+              },
+              {
+                "name": "type",
+                "type": 15,
+                "optional": false
+              },
+              {
+                "name": "width",
+                "type": 8,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "union",
+            "types": [
+              10,
+              11,
+              12,
+              13
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "image/jpeg"
+          },
+          {
+            "kind": "literal",
+            "value": "image/png"
+          },
+          {
+            "kind": "literal",
+            "value": "image/gif"
+          },
+          {
+            "kind": "literal",
+            "value": "image/webp"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "height",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "width",
+                "type": 8,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "image"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "attachmentId",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "bytes",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "name",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 17,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "file"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 19,
+                "optional": false
+              },
+              {
+                "name": "name",
+                "type": 7,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "subagent"
+          },
+          {
+            "kind": "union",
+            "types": [
+              21,
+              23,
+              25,
+              33
+            ]
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "clientTimeZone",
+                "type": 7,
+                "optional": true
+              },
+              {
+                "name": "kind",
+                "type": 22,
+                "optional": false
+              },
+              {
+                "name": "requestId",
+                "type": 7,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "user"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "goalId",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "kind",
+                "type": 24,
+                "optional": false
+              },
+              {
+                "name": "revision",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "round",
+                "type": 8,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "goal"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 26,
+                "optional": false
+              },
+              {
+                "name": "reason",
+                "type": 27,
+                "optional": true
+              },
+              {
+                "name": "senderSessionId",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "summary",
+                "type": 7,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "subagent-settled"
+          },
+          {
+            "kind": "union",
+            "types": [
+              28,
+              29,
+              30,
+              31,
+              32
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "refusal"
+          },
+          {
+            "kind": "literal",
+            "value": "aborted"
+          },
+          {
+            "kind": "literal",
+            "value": "completed"
+          },
+          {
+            "kind": "literal",
+            "value": "error"
+          },
+          {
+            "kind": "literal",
+            "value": "max-tokens"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 34,
+                "optional": false
+              },
+              {
+                "name": "senderSessionId",
+                "type": 7,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "agent-message"
+          },
+          {
+            "kind": "literal",
+            "value": "canceled"
+          },
+          {
+            "kind": "union",
+            "types": [
+              37,
+              38
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "next-step"
+          },
+          {
+            "kind": "literal",
+            "value": "next-turn"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "literal",
+            "value": "inbox/spliced"
+          }
+        ]
+      }
+    },
+    {
+      "key": "event:turn/start",
+      "kind": "event",
+      "event": "turn/start",
+      "surface": false,
+      "digest": "b09ee7a0447c21a9cb884f9b78af45f1fa6f11018e3e7944ca06c2f0d991b8a9",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 34,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 35,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "union",
+            "types": [
+              2,
+              20,
+              22,
+              30,
+              32
+            ]
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "attachments",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "clientTimeZone",
+                "type": 6,
+                "optional": true
+              },
+              {
+                "name": "kind",
+                "type": 17,
+                "optional": false
+              },
+              {
+                "name": "mention",
+                "type": 18,
+                "optional": true
+              },
+              {
+                "name": "requestId",
+                "type": 6,
+                "optional": true
+              },
+              {
+                "name": "runId",
+                "type": 6,
+                "optional": true
+              },
+              {
+                "name": "text",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "array",
+            "element": 4
+          },
+          {
+            "kind": "union",
+            "types": [
+              5,
+              15
+            ]
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "attachmentId",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "bytes",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "height",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "mediaType",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "name",
+                "type": 6,
+                "optional": true
+              },
+              {
+                "name": "originalDimensions",
+                "type": 13,
+                "optional": true
+              },
+              {
+                "name": "type",
+                "type": 14,
+                "optional": false
+              },
+              {
+                "name": "width",
+                "type": 7,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "union",
+            "types": [
+              9,
+              10,
+              11,
+              12
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "image/png"
+          },
+          {
+            "kind": "literal",
+            "value": "image/webp"
+          },
+          {
+            "kind": "literal",
+            "value": "image/gif"
+          },
+          {
+            "kind": "literal",
+            "value": "image/jpeg"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "height",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "width",
+                "type": 7,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "image"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "attachmentId",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "bytes",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "name",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 16,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "file"
+          },
+          {
+            "kind": "literal",
+            "value": "message"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 19,
+                "optional": false
+              },
+              {
+                "name": "name",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "subagent"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "goalId",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "kind",
+                "type": 21,
+                "optional": false
+              },
+              {
+                "name": "revision",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "round",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "text",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "goal"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 23,
+                "optional": false
+              },
+              {
+                "name": "reason",
+                "type": 24,
+                "optional": true
+              },
+              {
+                "name": "senderSessionId",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "summary",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "text",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "subagent-settled"
+          },
+          {
+            "kind": "union",
+            "types": [
+              25,
+              26,
+              27,
+              28,
+              29
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "aborted"
+          },
+          {
+            "kind": "literal",
+            "value": "completed"
+          },
+          {
+            "kind": "literal",
+            "value": "error"
+          },
+          {
+            "kind": "literal",
+            "value": "max-tokens"
+          },
+          {
+            "kind": "literal",
+            "value": "refusal"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "senderSessionId",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "text",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "agent-message"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 33,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "resume"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "literal",
+            "value": "turn/start"
+          }
+        ]
+      }
+    }
+  ],
+  "types": []
+}

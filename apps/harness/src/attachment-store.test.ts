@@ -8,6 +8,7 @@ import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/
 import { join } from 'node:path';
 
 import type { SessionEvent } from '@nexus/core';
+import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { scopeOfEvents } from './attachment-route.js';
@@ -332,9 +333,10 @@ describe('存一張圖（#732）', () => {
     expect(Buffer.from(await store.readImage(ref))).toEqual(PNG);
   });
 
-  it('存的時候就不是圖（儲存不驗內容）：讀的時候拋 ATTACHMENT_CORRUPT', async () => {
+  it('物件根本不是圖（同一份內容以檔案存進來、參照被造成圖）：讀的時候拋 ATTACHMENT_CORRUPT', async () => {
     const text = Buffer.from('not an image at all');
-    const ref = await store.saveImage({ data: text, ...facts });
+    const file = await store.save({ data: text, name: 'x.txt' });
+    const ref = { attachmentId: file.attachmentId, bytes: file.bytes, ...facts };
     await expect(store.readImage(ref)).rejects.toMatchObject({
       code: 'ATTACHMENT_CORRUPT',
       message: expect.stringMatching(/檔頭對不上/) as unknown,
@@ -446,5 +448,93 @@ describe('檔案現在還在不在（#732）', () => {
     expect(await store.hasFile({ ...ref, attachmentId: 'nope' })).toBe(false);
     await rm(store.pathOf(ref));
     expect(await store.hasFile(ref)).toBe(false);
+  });
+});
+
+describe('存圖之前規範化（#2033）', () => {
+  const big = (background: string) =>
+    sharp({ create: { width: 3000, height: 2000, channels: 3, background } })
+      .png()
+      .toBuffer();
+
+  async function objectNames(): Promise<string[]> {
+    const objects = join(store.rootDir, 'file-objects');
+    const dirs = await readdir(objects).catch(() => [] as string[]);
+    return (await Promise.all(dirs.map((dir) => readdir(join(objects, dir))))).flat();
+  }
+
+  it('縮過的圖：參照記規範化那一份的寬高與雜湊，另記 originalDimensions；讀得回同一份，原圖不留', async () => {
+    const source = await big('#246');
+    const ref = await store.saveImage({ data: source, mediaType: 'image/png', name: 'b.png' });
+    expect(ref).toMatchObject({
+      mediaType: 'image/jpeg',
+      width: 2508,
+      height: 1672,
+      name: 'b.png',
+      originalDimensions: { width: 3000, height: 2000 },
+    });
+    const stored = await store.readImage(ref);
+    expect(ref.attachmentId).toBe(`sha256:${sha(stored)}`);
+    expect(ref.bytes).toBe(stored.byteLength);
+    expect(await objectNames()).toEqual([sha(stored)]);
+  });
+
+  it('一句話的圖整批先預備：有一張解不開，整批不寫', async () => {
+    const good = await big('#462');
+    const broken = good.subarray(0, 200);
+    await expect(
+      store.saveImages([
+        { bytes: good, mediaType: 'image/png', label: '第 1 張圖' },
+        { bytes: broken, mediaType: 'image/png', label: '第 2 張圖' },
+      ]),
+    ).rejects.toMatchObject({ name: 'ImageIntakeError', code: 'INVALID_IMAGE' });
+    expect(await objectNames()).toEqual([]);
+  });
+
+  it('轉碼限流：同時湧入超過上限的圖時排隊，同時在跑的不超過上限', async () => {
+    const limited = new AttachmentStore(attachmentsRootOf(home), {
+      imageCompressionConcurrency: 2,
+    });
+    const sources = await Promise.all(['#111', '#222', '#333', '#444', '#555', '#666'].map(big));
+    let peak = 0;
+    const sampler = setInterval(() => {
+      peak = Math.max(peak, limited.compression.active);
+    }, 1);
+    try {
+      await Promise.all(sources.map((data) => limited.saveImage({ data, mediaType: 'image/png' })));
+    } finally {
+      clearInterval(sampler);
+    }
+    expect(peak).toBe(2);
+    expect(limited.compression.active).toBe(0);
+  });
+
+  it('併發上限不在 1 到 8 的整數就建不起來', () => {
+    for (const bad of [0, 9, 1.5, Number.NaN]) {
+      expect(
+        () => new AttachmentStore(attachmentsRootOf(home), { imageCompressionConcurrency: bad }),
+        String(bad),
+      ).toThrow(/imageCompressionConcurrency/);
+    }
+    expect(
+      () => new AttachmentStore(attachmentsRootOf(home), { imageCompressionConcurrency: 8 }),
+    ).not.toThrow();
+  });
+
+  it('規範化之前落盤的原圖（帶 EXIF 6、參照記檔頭的軸）照樣讀得回', async () => {
+    const raw = await sharp({ create: { width: 40, height: 20, channels: 3, background: '#a26' } })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    // 規範化之前落盤的圖就是位元組原樣進 `file-objects/`，寬高記檔頭的軸；同一份物件以檔案存進來即可。
+    const file = await store.save({ data: raw, name: 'old.jpg' });
+    const legacy = {
+      attachmentId: file.attachmentId,
+      mediaType: 'image/jpeg',
+      bytes: file.bytes,
+      width: 40,
+      height: 20,
+    } as const;
+    expect(Buffer.from(await store.readImage(legacy))).toEqual(raw);
   });
 });

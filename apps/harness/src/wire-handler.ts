@@ -2183,20 +2183,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       resolved.set(attachment, ref);
     }
     try {
-      const admittedImages = admitImages(images);
-      const saved = new Map<PromptAttachment, ImageAttachmentRef>();
-      for (const [index, image] of admittedImages.entries()) {
-        saved.set(
-          images[index]!,
-          await store.saveImage({
-            data: image.bytes,
-            mediaType: image.mediaType,
-            width: image.width,
-            height: image.height,
-            name: image.name,
-          }),
-        );
-      }
+      const refs = await store.saveImages(admitImages(images));
+      const saved = new Map<PromptAttachment, ImageAttachmentRef>(
+        refs.map((ref, index) => [images[index]!, ref]),
+      );
       return {
         kind: 'admitted',
         restore,

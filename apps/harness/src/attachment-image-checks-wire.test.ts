@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
 import type { SessionLog } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
+import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -89,6 +90,14 @@ function pngHeader(width: number, height: number): string {
   return out.toString('base64');
 }
 
+/** 解得開的整張 PNG（存圖會整張解碼，只有檔頭的圖過不了）。 */
+async function solidPng(width: number, height: number): Promise<string> {
+  const png = await sharp({ create: { width, height, channels: 3, background: '#c00' } })
+    .png()
+    .toBuffer();
+  return png.toString('base64');
+}
+
 describe('收圖：單邊上限（照 dsh DEFAULT_MAX_IMAGE_DIMENSION）', () => {
   it('8193×1 的圖：run.start 回 invalid_argument、訊息帶 8192，日誌不動；8192×1 照收', async () => {
     const c = await connect();
@@ -106,9 +115,82 @@ describe('收圖：單邊上限（照 dsh DEFAULT_MAX_IMAGE_DIMENSION）', () =>
 
       expect(
         await c.client.runStart(THREAD, '這張', {
-          attachments: [{ type: 'image', mediaType: 'image/png', data: pngHeader(8192, 1) }],
+          attachments: [{ type: 'image', mediaType: 'image/png', data: await solidPng(8192, 1) }],
         }),
       ).toMatchObject({ type: 'success' });
+    } finally {
+      await c.handler.close();
+    }
+  });
+});
+
+describe('收圖：整張解碼（#2033）', () => {
+  it('檔頭完整、後面壞掉的圖：run.start 回 invalid_argument，日誌不動；宣告的型別不符也一樣', async () => {
+    const c = await connect();
+    try {
+      const opened = await c.client.uploadFile(THREAD, new Uint8Array([1]), 'x.txt');
+      expect(opened.kind).toBe('ok');
+      const before = c.log().events.length;
+      const whole = await sharp({
+        create: {
+          width: 64,
+          height: 64,
+          channels: 3,
+          background: '#c00',
+          noise: { type: 'gaussian', mean: 128, sigma: 60 },
+        },
+      })
+        .png()
+        .toBuffer();
+      const truncated = whole.subarray(0, Math.floor(whole.byteLength / 2)).toString('base64');
+      const broken = await c.client.runStart(THREAD, '這張', {
+        attachments: [
+          { type: 'image', mediaType: 'image/png', data: PNG_7X5 },
+          { type: 'image', mediaType: 'image/png', data: truncated },
+        ],
+      });
+      expect(broken).toMatchObject({ type: 'error', error: 'invalid_argument' });
+      expect(JSON.stringify(broken)).toContain('第 2 張圖');
+      const mislabeled = await c.client.runStart(THREAD, '這張', {
+        attachments: [{ type: 'image', mediaType: 'image/png', data: GIF_7X5 }],
+      });
+      expect(mislabeled).toMatchObject({ type: 'error', error: 'invalid_argument' });
+      expect(JSON.stringify(mislabeled)).toContain('image/gif');
+      expect(c.log().events.length).toBe(before);
+    } finally {
+      await c.handler.close();
+    }
+  });
+
+  it('規範化之前落盤的原圖（帶 EXIF 6、參照記檔頭的軸）：網頁照樣讀得到同一份位元組', async () => {
+    const c = await connect();
+    try {
+      const opened = await c.client.uploadFile(THREAD, new Uint8Array([1]), 'x.txt');
+      expect(opened.kind).toBe('ok');
+      const raw = await sharp({
+        create: { width: 40, height: 20, channels: 3, background: '#a26' },
+      })
+        .jpeg()
+        .withMetadata({ orientation: 6 })
+        .toBuffer();
+      // 規範化之前落盤的圖就是位元組原樣進 `file-objects/`、寬高記檔頭的軸；同一份物件以檔案存進來即可。
+      const file = await store.save({ data: raw, name: 'old.jpg' });
+      const legacy = {
+        attachmentId: file.attachmentId,
+        mediaType: 'image/jpeg',
+        bytes: file.bytes,
+        width: 40,
+        height: 20,
+      } as const;
+      c.log().append('turn/start', {
+        kind: 'message',
+        text: '舊圖',
+        attachments: [{ type: 'image', ...legacy }],
+      } as never);
+      expect(await c.client.readAttachment(THREAD, legacy.attachmentId)).toMatchObject({
+        kind: 'ok',
+        result: { data: raw.toString('base64') },
+      });
     } finally {
       await c.handler.close();
     }
@@ -121,10 +203,15 @@ describe('讀圖：檔頭要對得上日誌記的參照（照 dsh readImageFile�
     try {
       const opened = await c.client.uploadFile(THREAD, new Uint8Array([1]), 'x.txt');
       expect(opened.kind).toBe('ok');
-      // 儲存本身不驗內容（收圖的檢查在 wire 那一側），所以造得出「參照與位元組對不上」的物件；雜湊照樣對得上。
+      // 存圖會整張解碼、比型別，造不出「參照與位元組對不上」的圖；同一份位元組以檔案存進來（物件與圖共用 `file-objects/`），
+      // 再把參照造成圖，雜湊照樣對得上。
       const facts = { mediaType: 'image/png', width: 7, height: 5 } as const;
-      const mislabeled = await store.saveImage({ data: Buffer.from(GIF_7X5, 'base64'), ...facts });
-      const honest = await store.saveImage({ data: Buffer.from(PNG_7X5, 'base64'), ...facts });
+      const gif = await store.save({ data: Buffer.from(GIF_7X5, 'base64'), name: 'g.gif' });
+      const mislabeled = { attachmentId: gif.attachmentId, bytes: gif.bytes, ...facts };
+      const honest = await store.saveImage({
+        data: Buffer.from(PNG_7X5, 'base64'),
+        mediaType: 'image/png',
+      });
       c.log().append('turn/start', {
         kind: 'message',
         text: '圖',

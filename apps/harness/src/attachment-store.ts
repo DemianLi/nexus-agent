@@ -12,6 +12,9 @@
  * - **檔名清成葉名**（`fileLeafName`，逐條照 dsh）：兩種分隔符都手動剝，不信 `basename`（POSIX 把 `\` 當一般字元，
  *   Windows 客戶端的整條本機路徑會漏進參照與日誌）。
  * - 串流進來、不聚合：上傳不吃記憶體。
+ * - **圖落盤前先規範化**（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)；存哪一份見 #1827）：整張解碼、轉正、轉 8-bit sRGB、總像素縮到 2048² 以內再編碼，
+ *   落盤與送模型的都是這一份，附件 id 是它的 sha256，原圖不留；已經合格的原樣通過。一句話的圖整批先預備完才寫，轉碼有併發上限（`compression-limiter.ts`）。
+ *   細節見 `image-normalization.ts`。
  * - **讀與去重都重算雜湊**（`ATTACHMENT_CORRUPT`，[#1338](https://github.com/DemianLi/nexus-agent/issues/1338)）：
  *   物件路徑就是雜湊，所以讀圖時重算一次、去重碰到既有物件時重算一次，對不上就拋，不把來路不明的位元組交出去、
  *   也不讓壞物件「認領」新上傳。讀圖時再重讀檔頭比媒體類型與寬高（dsh `readImageFile`，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結不重算內容，只比 inode：跟物件不同
@@ -30,13 +33,10 @@
  * 1. **模型讀它走虛擬前綴 {@link ATTACHMENTS_PREFIX}，不是主機絕對路徑。** 同 `tool-result-stash.ts`：路徑是 `CompositeBackend`
  *    的一條唯讀路由（根是 `<root>/files`），圍欄看不到的主機路徑不出現在模型面前，續接之後同一個路徑照讀。dsh 的 `read_file`
  *    收到的是主機路徑（它的檔案工具不在工作區圍欄裡）；我們的 backend 有圍欄，所以走路由。基座表達不出的是「圍欄外的絕對路徑」。
- * 2. **圖片沒有正規化／縮圖。** dsh 在收下時把圖轉成 8-bit sRGB 並縮小到 2048×2048 以內、4 MB 上下（`normalization.ts`，靠 sharp）；
- *    我們沒有影像函式庫，圖按收到的位元組原樣存（`saveImage`），超過上限的拒收而不縮（`image-intake.ts`）。送進模型的是原圖。
- *    **類別：過渡**（[#1566](https://github.com/DemianLi/nexus-agent/issues/1566) 補標）。兩種理由都套不上：理由 1 不成立，sharp 有
- *    linux-x64 的預編譯檔，引進來是相依與打包的成本，不是基座做不到；理由 2 不成立，這不是 dsh 射程外的產品需求。
- *    **撤除條件**：另開卡引進影像函式庫，先確認它進得了 Release 的 tar.gz、在內網主機上裝得起來，再照 dsh `normalization.ts`
- *    做正規化。撤除時一併撤掉跟著這條走的幾處：`image-intake.ts` 檔頭的偏離 1、2（不整張解碼、不套 EXIF 轉向），以及
- *    `@nexus/core` `attachment-projection.ts` 檔頭把手那幾條。
+ * 2. **送模型的圖沒有另做請求版本：送的就是落盤那一份。** 新收的圖落盤前已經規範化（`saveImages`，見 `image-normalization.ts`）；
+ *    **規範化之前就落盤的圖**（舊 thread 的原圖）照原樣送，不依路由的預算另縮。
+ *    TODO([#2033](https://github.com/DemianLi/nexus-agent/issues/2033))：依路由的預算另做請求版本並快取；做了之後一併改
+ *    `@nexus/core` `attachment-projection.ts` 檔頭「寬高用參照記的」那一條。
  * 3. **儲存沒有逐會話目錄，但模型讀附件的路由按 thread 收窄**（理由 2，[#1773](https://github.com/DemianLi/nexus-agent/issues/1773)，#1675 Q3 (a)，
  *    demian 2026-10-20 拍板）。**儲存照 dsh**：附件根是全域內容定址（`attachments/v1`），不按會話分，同樣的內容只存一份。**路由不照 dsh**：
  *    dsh 是單人桌面，模型讀的是主機路徑、沒有路由；nexus 是一台主機多人共用，所有 web 使用者在同一個 OS 帳號底下，`0700` 分不開人
@@ -66,7 +66,10 @@ import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@nex
 import { syncDirectory } from './atomic-file.js';
 import { ThreadScopedAttachmentBackend } from './attachment-route.js';
 import type { AttachmentScope } from './attachment-route.js';
+import { CompressionLimiter } from './compression-limiter.js';
 import { probeImageHeader } from './image-intake.js';
+import { DEFAULT_NORMALIZATION_POLICY, prepareImage } from './image-normalization.js';
+import type { ImageSubmission, PreparedImage } from './image-normalization.js';
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
 import { assertPrivateFile } from './plugin-config.js';
 import type { PrivateFileRole } from './plugin-config.js';
@@ -77,6 +80,11 @@ export const ATTACHMENTS_LAYOUT_VERSION = 'v1';
 
 /** 模型讀附件的虛擬前綴（沒有結尾斜線；路由鍵加斜線，見 `agent-factory.ts`）。 */
 export const ATTACHMENTS_PREFIX = ATTACHMENTS_MODEL_PREFIX;
+
+/** 同時規範化的圖數的出廠值。 */
+export const DEFAULT_IMAGE_COMPRESSION_CONCURRENCY = 2;
+/** 同時規範化的圖數可設的上限；設定的 schema 與建構子都擋。 */
+export const MAX_IMAGE_COMPRESSION_CONCURRENCY = 8;
 
 /** 物件檔的權限：只讀，只有擁有者。 */
 const OBJECT_FILE_MODE = 0o400;
@@ -224,16 +232,44 @@ export class AttachmentStore {
   /** harness home：`<home>/attachments/v1` 往上兩層，逐層 fsync 的邊界（dsh `dirname(dirname(root))`）。 */
   readonly #home: string;
   readonly #warn: (line: string) => void;
+  readonly #compression: CompressionLimiter;
   #prepared: Promise<void> | undefined;
 
   /**
    * @param rootDir - 絕對路徑，通常是 {@link attachmentsRootOf}。
    * @param options.warn - 伺服器日誌（home 以上的祖先開不了時講一次）；省略即標準錯誤。
+   * @param options.imageCompressionConcurrency - 同時規範化的圖數上限，1 到 {@link MAX_IMAGE_COMPRESSION_CONCURRENCY}
+   *   的整數；省略是 {@link DEFAULT_IMAGE_COMPRESSION_CONCURRENCY}。
+   * @throws {Error} 併發上限不在範圍內。
    */
-  constructor(rootDir: string, options: { readonly warn?: (line: string) => void } = {}) {
+  constructor(
+    rootDir: string,
+    options: {
+      readonly warn?: (line: string) => void;
+      readonly imageCompressionConcurrency?: number;
+    } = {},
+  ) {
     this.#root = resolve(rootDir);
     this.#home = dirname(dirname(this.#root));
     this.#warn = options.warn ?? ((line) => process.stderr.write(`${line}\n`));
+    const concurrency =
+      options.imageCompressionConcurrency ?? DEFAULT_IMAGE_COMPRESSION_CONCURRENCY;
+    // 設定的 schema 已經擋過範圍；不經設定、直接建構的呼叫端在這裡擋。
+    if (
+      !Number.isSafeInteger(concurrency) ||
+      concurrency < 1 ||
+      concurrency > MAX_IMAGE_COMPRESSION_CONCURRENCY
+    ) {
+      throw new Error(
+        `imageCompressionConcurrency 要是 1 到 ${String(MAX_IMAGE_COMPRESSION_CONCURRENCY)} 的整數`,
+      );
+    }
+    this.#compression = new CompressionLimiter(concurrency);
+  }
+
+  /** 圖片轉碼的限流器：起動日誌讀它的 `concurrency`，測試讀 `active` 量峰值。 */
+  get compression(): CompressionLimiter {
+    return this.#compression;
   }
 
   /** 附件根（絕對路徑）。 */
@@ -331,35 +367,69 @@ export class AttachmentStore {
   }
 
   /**
-   * 存一張圖，位元組原樣（這一版不縮圖、不轉檔，見檔頭偏離 2）。圖的事實（媒體類型、寬高）由呼叫端先驗好、傳進來。
+   * 存一句話的圖：**整批先在限流內預備完**（整張解碼、比宣告的型別、規範化；重新編碼的輸出再解一次驗），
+   * 預備時有一張不行就整批不寫；全過才照順序一張一張落盤，落盤途中失敗時已經寫進去的物件不收回。限流只包預備，不包寫盤。
+   * 落盤的是規範化之後那一份，參照的寬高與附件 id 都是它的；縮過的另記 `originalDimensions`（轉向之後的原寬高）。
+   *
    * 物件跟檔案共用 `file-objects/`（內容定址，同樣的位元組只有一份），**不建檔名的硬連結**：模型不經檔案路徑讀圖。
    *
+   * @param inputs - 已經過檔頭那一關（`admitImages`）的圖，照順序。
+   * @returns 參照，順序不變。
+   * @throws {ImageIntakeError} 有一張解不開或型別不符。
+   * @throws {AttachmentError} 規範化失敗或存不下。
+   */
+  async saveImages(inputs: readonly ImageSubmission[]): Promise<ImageAttachmentRef[]> {
+    const prepared = await Promise.all(
+      inputs.map((input) =>
+        this.#compression.run(() => prepareImage(input, DEFAULT_NORMALIZATION_POLICY)),
+      ),
+    );
+    const refs: ImageAttachmentRef[] = [];
+    for (const image of prepared) refs.push(await this.#commitImage(image));
+    return refs;
+  }
+
+  /**
+   * 存一張圖，見 {@link saveImages}。**不經檔頭那一關**（`admitImages`）：位元組與像素上限不在這裡判，呼叫端只能給已知在上限內的位元組。
+   *
    * @param input.data - 完整的編碼後位元組。
+   * @param input.mediaType - 宣告的媒體類型；跟位元組不符就拒收。
    * @param input.name - 顯示名；清成葉名，沒給就不記。
-   * @throws {AttachmentError} 存不下。
+   * @throws {ImageIntakeError} 解不開或型別不符。
+   * @throws {AttachmentError} 規範化失敗或存不下。
    */
   async saveImage(input: {
     readonly data: Uint8Array;
     readonly mediaType: ImageMediaType;
-    readonly width: number;
-    readonly height: number;
     readonly name?: string | undefined;
   }): Promise<ImageAttachmentRef> {
+    const [ref] = await this.saveImages([
+      { bytes: input.data, mediaType: input.mediaType, name: input.name, label: '這張圖' },
+    ]);
+    return ref!;
+  }
+
+  async #commitImage(image: PreparedImage): Promise<ImageAttachmentRef> {
+    const { normalized, source } = image;
     try {
       await this.#prepare();
-      const staged = await this.#stage(input.data, undefined, undefined);
+      const staged = await this.#stage(normalized.data, undefined, undefined);
       try {
         await this.#publish(staged.path, this.#objectPath(staged.sha256), staged.sha256);
       } finally {
         await unlink(staged.path).catch(() => {});
       }
+      const downscaled = source.width !== normalized.width || source.height !== normalized.height;
       return {
         attachmentId: `sha256:${staged.sha256}`,
-        mediaType: input.mediaType,
+        mediaType: normalized.mediaType,
         bytes: staged.bytes,
-        width: input.width,
-        height: input.height,
-        ...(input.name === undefined ? {} : { name: fileLeafName(input.name) }),
+        width: normalized.width,
+        height: normalized.height,
+        ...(image.name === undefined ? {} : { name: fileLeafName(image.name) }),
+        ...(downscaled
+          ? { originalDimensions: { width: source.width, height: source.height } }
+          : {}),
       };
     } catch (error) {
       if (error instanceof AttachmentError) throw error;
@@ -403,9 +473,8 @@ export class AttachmentStore {
     }
     // 雜湊只證明位元組是當初存的那份，不證明參照的其他欄位：日誌裡的寬高、媒體類型被改過，畫面與模型會照著錯的
     // 那份走。照 dsh `readImageFile`（`store.ts:450-458`，`687f282e`）重讀檔頭再比一次，只讀檔頭、不解碼像素。
-    // **限制**：參照的寬高是收下時用同一支 `probeImageHeader` 認的，所以今天兩邊一定對得上。哪天它改了寬高的語意（例如開始套
-    // EXIF 轉向，`image-intake.ts` 的偏離 2），所有舊參照會一起變成 `ATTACHMENT_CORRUPT`：改檔頭辨識的那張卡要一併處理舊參照
-    // （[#1566](https://github.com/DemianLi/nexus-agent/issues/1566) N0019）。
+    // **這一支刻意不套 EXIF 轉向**：規範化之前落盤的舊參照記的是檔頭裡存的軸，改成轉向之後的軸會讓它們一起變成
+    // `ATTACHMENT_CORRUPT`。規範化之後的圖不帶轉向，檔頭的軸就是看起來的軸；收下時 `image-normalization.ts` 用同一支比過。
     const facts = probeImageHeader(data);
     if (
       facts === undefined ||

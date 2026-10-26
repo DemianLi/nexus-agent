@@ -67,12 +67,16 @@ const IMAGE: PromptAttachment = {
   name: 's.png',
 };
 
-/** `saveImage` 可以卡在一道閘上：讓「准入的 `await`」跨過 `stopAdmission()`。 */
+/** `saveImages` 可以卡在一道閘上：讓「准入的 `await`」跨過 `stopAdmission()`。`held` 是卡在閘上的次數。 */
 class GatedStore extends AttachmentStore {
   hold: Promise<void> | undefined;
-  override async saveImage(...args: Parameters<AttachmentStore['saveImage']>) {
-    if (this.hold !== undefined) await this.hold;
-    return super.saveImage(...args);
+  held = 0;
+  override async saveImages(...args: Parameters<AttachmentStore['saveImages']>) {
+    if (this.hold !== undefined) {
+      this.held += 1;
+      await this.hold;
+    }
+    return super.saveImages(...args);
   }
 }
 
@@ -237,8 +241,8 @@ describe('窗內：run.start 回 server_closing', () => {
       attachments: [IMAGE],
       requestId: 'req-image',
     });
-    // 請求卡在 `saveImage`（准入的 await）裡；這時時間窗開始。
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    // 請求卡在 `saveImages`（准入的 await）裡；這時時間窗開始。
+    await until(() => store.held === 1);
     r.handler.stopAdmission();
     release.open();
     expect(await pending).toMatchObject(CLOSING);
@@ -258,11 +262,11 @@ describe('窗內：被拒的那一句不吞收據', () => {
     if (uploaded.kind !== 'ok') throw new Error('上傳沒成功');
     const file: PromptAttachment = { type: 'file', receiptId: uploaded.receipt.receiptId };
 
-    // 一句帶收據＋圖的話：收據在准入開頭就從表裡取走，接著卡在 `saveImage`；這時時間窗開始。
+    // 一句帶收據＋圖的話：收據在准入開頭就從表裡取走，接著卡在 `saveImages`；這時時間窗開始。
     const release = gate();
     store.hold = release.opened;
     const pending = r.client.runStart(thread, '附檔附圖', { attachments: [file, IMAGE] });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await until(() => store.held === 1);
     r.handler.stopAdmission();
     release.open();
     expect(await pending).toMatchObject(CLOSING);
