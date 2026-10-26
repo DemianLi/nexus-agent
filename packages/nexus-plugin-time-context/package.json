@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
-    "zod": "^4.3.6"
+    "zod": "^4.6.6"
   },
   "peerDependencies": {
     "@nexus/agent-loop": "workspace:*",
