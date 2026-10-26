@@ -253,7 +253,7 @@ describe('宿主建的 middleware', () => {
       'skill-invocation 多一個鍵',
       { kind: 'skill-invocation', name: 'deploy', form: 'instructions', extra: 1 },
     ],
-  ])('listener 交%s：拋錯，不加訊息、不記日誌', async (_, source) => {
+  ])('listener 交 %s：拋錯，不加訊息、不記日誌', async (_, source) => {
     const sessions = fakeSessions();
     const middleware = createPreStepMiddleware(
       NAME,
