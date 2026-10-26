@@ -91,7 +91,7 @@ import { startGuardServer, type GuardServer } from './server';
  *    `rounded-md`（#1827 G2）、有焦點外框；空狀態那句說明與鈕上的字過 4.5。
  * 27. **會話清單的狀態**（#1696 S1-C，`?overlay=thread-statuses`，產品的 `AppSidebar`）：能點的每列（目前這條停用，不量）的標題與狀態字過 4.5、有焦點外框；
  *    色條 3px、顏色是該狀態的 token，沒有狀態的列是透明；每列的報讀名稱只唸一次狀態；手機抽屜（375）與桌面最窄的側欄（1024）裡，
- *    標題獨佔一行、寬度不少於 150px；第二行只有目前這條放不下、被截掉。
+ *    標題獨佔一行、寬度不少於 150px；第二行在釘住的時鐘（`THREAD_CLOCK`）下只有目前這條放不下、被截掉。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
