@@ -539,7 +539,7 @@ export interface LaunchPathsCheck {
  * （`packages/sandbox/sandbox-policy/src/index.ts:131`），所以專案那份 `.env` 本來就在工作區根，讀取也照本機檔案系統走
  * （`packages/fs/fs-sandbox/README.zh.md:12`）。dsh 是單人的寫程式代理，跟模型對話的人就是 key 的主人。我們的 serve 是
  * 多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key。**補的是**啟動時這一道路徑重疊檢查；
- * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）、讀取面照舊不圍（#1291）。只做 serve（Q4）：CLI 是一個人在自己的
+ * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）。讀取面經連結出根的由 backend 擋（#1982）。只做 serve（Q4）：CLI 是一個人在自己的
  * 終端機跑，跟 dsh 同一個形狀；放在這裡，CLI 之後要用可以直接叫。
  *
  * ## #1775 的例外（#1620 Q3，demian 接受）：私有可寫根落在 home 底下
@@ -550,10 +550,8 @@ export interface LaunchPathsCheck {
  * `..` 被 backend 擋下，絕對路徑會被當成根底下的子路徑。基底寫死在 home 底下的 `thread-roots`（不開成設定列），所以 home 本身、home 的上層與
  * home 根目錄那一層的狀態檔不可能落進任何一條 thread 的根。
  *
- * **剩下的風險**：私有根裡若出現指向 home 的目錄連結，讀得穿（同 #1291 已接受的那一格；模型沒有 shell，自己做不出連結）。
- *
- * **擋不到的**：工作區裡指向 home 或 `.env` 的目錄連結。要擋得掃整棵樹，而且連結可以在啟動之後才建；這是 #1291
- * 已經接受的「目錄符號連結讀穿」同一格，寫在 `docs/operations.md`。
+ * **這道檢查不掃連結**：工作區或私有根裡指向 home 或 `.env` 的連結，要擋得掃整棵樹，而且連結可以在啟動之後才建。
+ * 那一格歸 backend：`danger-full-access` 以外，讀寫都在 canonicalize 之後判落不落在根內，經連結落到根外的拒（`contained-backend.ts`，#1982）。
  *
  * @param check - 見 {@link LaunchPathsCheck}。
  * @throws 有任何一個路徑跟工作區重疊；或解路徑時遇到 ENOENT／ENOTDIR 以外的錯。
