@@ -23,7 +23,9 @@ import { modelCallLimitMiddleware } from 'langchain';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import type { EventDispatcher } from './events.js';
 import { createApprovalGateMiddleware } from './approval.js';
+import { createApprovalPolicyPromptMiddleware } from './approval-policy-prompt.js';
 import type { ApprovalPolicySource } from './approval-policy.js';
+import { DEFAULT_APPROVAL_POLICY } from './approval-policy.js';
 import {
   createSubagentDelegationMiddleware,
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
@@ -581,6 +583,12 @@ export function foldRegistry(
   // 政策與管道就是 root 當下的（`options.approvals.policy` 每次要問人之前問一次，#437）。沒有人的入口、沒有存檔點、政策 `never`
   // 時一樣確定性回絕，理由說的是真正的原因。**背景子代理不走這裡**：它們背後沒有人，圖由 {@link createBackgroundApprovalGate}
   // 那一顆（管道固定 `policy-never`，#324／#737 照 dsh `child-agent.ts:220-247`）在編圖時換掉。
+  // 核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）跟閘門用同一組事實：同一個管道、同一個政策來源，
+  // 所以前景子代理也共用這一顆；背景圖編圖時換成管道固定 `policy-never` 的那顆（{@link createBackgroundApprovalPolicyPrompt}）。
+  const approvalPolicyPrompt = createApprovalPolicyPromptMiddleware(
+    foldApprovalChannel(options),
+    options.approvals?.policy ?? (() => DEFAULT_APPROVAL_POLICY),
+  );
   const subagentDelegation = createSubagentDelegationMiddleware(
     FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   );
@@ -787,6 +795,9 @@ export function foldRegistry(
     shared('sessionCheckpoint', sessionCheckpoint),
     // 其餘 plugin 的：排在子代理 `spec.middleware` 外層，plugin 打底、自帶的在內側，同 `tools` 那條「全域 → 自帶」的軸線。
     { name: 'plugins.rest', root: same(plugins.rest), subagent: same(subagentPlugins.rest) },
+    // 核准政策句排在其餘 plugin 內側：沙箱政策句由 `plugins.rest` 裡的那一顆附加，這一句附加在其餘 plugin 的文字之後。
+    // 在子代理自帶的與 `last` 的外側，它們附加的文字在這一句之後。
+    shared('approvalPolicyPrompt', approvalPolicyPrompt),
     // 子代理自己帶的 middleware：每個子代理不同，所以是「逐個取」而不是共用。
     subagentOnly(
       'spec.middleware',
@@ -1117,18 +1128,22 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  * `enabled` 與 checkpointer 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */
 function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): AgentMiddleware {
-  const channel: ApprovalChannel = deriveApprovalChannel({
+  return createApprovalGateMiddleware(
+    registry.approvals.listeners(),
+    foldApprovalChannel(options),
+    registry.sessions,
+    options.approvals?.policy,
+  );
+}
+
+/** 這個組裝的核准管道，閘門與政策句共用：`enabled` 與 checkpointer 兩格的映射見 {@link ApprovalChannel}。 */
+function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
+  return deriveApprovalChannel({
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
     hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
-  return createApprovalGateMiddleware(
-    registry.approvals.listeners(),
-    channel,
-    registry.sessions,
-    options.approvals?.policy,
-  );
 }
 
 /**
@@ -1147,6 +1162,18 @@ export function createBackgroundApprovalGate(registry: PluginRegistry): AgentMid
     registry.approvals.listeners(),
     { kind: 'policy-never' },
     registry.sessions,
+  );
+}
+
+/**
+ * 背景子代理的核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）：管道固定 `policy-never`，跟
+ * {@link createBackgroundApprovalGate} 同一組事實，所以講的一定是「一律自動回絕」那句。同樣由
+ * {@link ./subagent-graph.ts | compileSubagentGraph} 的呼叫端在編背景圖時傳進去，換掉規格裡跟 root 同一顆的那個。
+ */
+export function createBackgroundApprovalPolicyPrompt(): AgentMiddleware {
+  return createApprovalPolicyPromptMiddleware(
+    { kind: 'policy-never' },
+    () => DEFAULT_APPROVAL_POLICY,
   );
 }
 

@@ -200,6 +200,8 @@ describe('同名取代是唯一的縫', () => {
         'nexusModelUsage',
         // 耐久檢查點（#599）：緊貼用量記錄器內側。
         'nexusSessionCheckpoint',
+        // 核准政策句（#1986）：其餘 plugin 的內側；這份清單沒有其餘 plugin，所以緊接檢查點。
+        'nexusApprovalPolicyPrompt',
         // `tools/post-execute` 的生產者（#1248）：在輸出校驗等貼著工具本體的那幾顆外側、plugin middleware 內側。
         'nexusToolPostExecute',
         // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。

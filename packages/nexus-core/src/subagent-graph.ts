@@ -44,6 +44,7 @@ import { mergeMiddlewareStack, subagentDefaultMiddleware } from './agent-assembl
 import type { AgentCheckpointer } from './base-types.js';
 import type { FoldedAgentParams } from './fold.js';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
+import { APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME } from './approval-policy-prompt.js';
 import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME } from './model-selection.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
@@ -77,6 +78,11 @@ export interface SubagentGraphOptions {
    * 跟 root 同一顆、會把中斷冒到人面前）。背景子代理背後沒有人，呼叫端傳 {@link ./fold.ts | createBackgroundApprovalGate}。**省略＝規格自己的那顆**。
    */
   readonly approvalGate?: AgentMiddleware;
+  /**
+   * 這張圖的核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）：同上，換掉規格裡同名的那一顆。句子要跟
+   * {@link approvalGate} 用同一組事實推，所以背景子代理也要換：呼叫端傳管道固定 `policy-never` 的那一顆。**省略＝規格自己的那顆**。
+   */
+  readonly approvalPolicyPrompt?: AgentMiddleware;
   /**
    * 這張圖的委派聲明：同上，換掉規格裡同名的那一顆（前景那句說「核准交給使用者」，背景不是）。呼叫端傳
    * `createSubagentDelegationMiddleware()`（預設那句：需要核准的操作會自動被拒）。**省略＝規格自己的那顆**。
@@ -165,9 +171,13 @@ export function compileSubagentGraph(
         .map((each) =>
           options.approvalGate !== undefined && each.name === APPROVAL_GATE_MIDDLEWARE_NAME
             ? options.approvalGate
-            : options.delegation !== undefined && each.name === SUBAGENT_DELEGATION_MIDDLEWARE_NAME
-              ? options.delegation
-              : each,
+            : options.approvalPolicyPrompt !== undefined &&
+                each.name === APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME
+              ? options.approvalPolicyPrompt
+              : options.delegation !== undefined &&
+                  each.name === SUBAGENT_DELEGATION_MIDDLEWARE_NAME
+                ? options.delegation
+                : each,
         ),
     ),
     name: declarative.name,
