@@ -68,8 +68,12 @@ describe('相依關係', () => {
 
   it('主入口對 @nexus/core 只有單向轉出（#1574 Q3 (a)），不 import 它來用；core 放 peer、devDependencies 留 workspace 版本', () => {
     const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
-    // 只准 `export … from '@nexus/core'`：定義本身不依賴核心，轉出的那幾個是給插件的（插件不能 import core）。
-    expect(read('./index.ts')).not.toMatch(/^import[^;]*from '@nexus\/core'/mu);
+    // 只准指名的 `export { … } from '@nexus/core'`：定義本身不依賴核心，轉出的那幾個是給插件的（插件不能 import core）；
+    // `export *` 會把核心整包轉給插件。
+    const fromCore = read('./index.ts').match(/^(?:import|export)\b[^;]*'@nexus\/core'/gmu) ?? [];
+    expect(fromCore).not.toEqual([]);
+    for (const statement of fromCore)
+      expect(statement).toMatch(/^export (?:type )?\{[^}]*\} from '@nexus\/core'$/u);
     expect(read('./provider.ts')).toMatch(/from '@nexus\/core'/u);
     const pkg = JSON.parse(read('../package.json')) as {
       dependencies?: Record<string, string>;
