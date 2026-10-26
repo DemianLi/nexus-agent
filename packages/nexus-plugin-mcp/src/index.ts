@@ -336,10 +336,11 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 export default mcpPlugin;
 
 /**
- * 自己連的那條「連不上」的出口：寫了 `failOnStartupError` 就拋，否則警告、這一次沒有工具。
+ * 這一列連不上（憑證解析不了，或自己連時連不上、列不出工具、註冊不上）的出口：寫了 `failOnStartupError` 就拋，否則警告、
+ * 這一次沒有工具。
  *
- * 照 dsh：資源 provider 的登記不看連線成敗，名字照列、呼叫時才報不可用。**沒有 `failOnStartupError` 的這一列才登記**
- * ——寫了 `true` 的那一列拋出去，不留任何東西在 hub 裡。
+ * 資源 provider 的登記不看連線成敗：名字照列，呼叫時才報不可用。**沒有 `failOnStartupError` 的這一列才登記**——寫了 `true`
+ * 的那一列拋出去，不在 hub 留任何東西。
  */
 function unreachable(registry: PluginRegistry, config: McpConfig, error: unknown): void {
   const { serverName } = config;

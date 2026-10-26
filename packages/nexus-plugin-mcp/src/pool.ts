@@ -79,7 +79,7 @@ export interface McpConnectionPoolOptions {
  * - **elicitation 旗標是實際的那一個**（設定開著、而且這次組裝有人可以回答）：它是握手時宣告給 server 的 client 能力，旗標
  *   不同的組裝不能共用一條連線（Q3 (a)）。
  * - **憑證引用放名字（在設定裡）加代入值的指紋**（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：值換了，下一次
- *   取用連新的一份，舊的照 A′ 留著。指紋是行程內隨機金鑰的 HMAC，鍵裡沒有值。
+ *   取用連新的一份，舊的照上面「舊的一份留到 serve 結束」留著。指紋是行程內隨機金鑰的 HMAC，鍵裡沒有值。
  */
 export function poolKey(
   config: McpConfig,
@@ -120,6 +120,7 @@ export class McpConnectionPool {
    * 取這份設定的那一份連線；沒有就建，已放棄重連就重開。建立那一份的取用等第一次連線落定，其餘最多等
    * {@link FIRST_CONNECT_WAIT_MS}。**找表與建立之間沒有 `await`**，同時來的取用不會各建一份。
    *
+   * @param credentials - 這一列已解析的憑證（名字 → 值）。值不同就是另一份連線；鍵裡只放名字與值的指紋。
    * @throws 第一次就連不上（或等到期限還沒連上）而且寫了 `failOnStartupError: true`；池已經關了。
    */
   async acquire(

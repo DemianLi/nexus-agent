@@ -5,8 +5,8 @@
  * | 入口 | 量什麼 | 拿掉哪一處會紅 |
  * | --- | --- | --- |
  * | 組裝根（`createCliAgent`）＋ store 的憑證服務 | 夾具 server 的 `read_env` 讀到受管檔的值 | `assembly-root.ts` 交 `mcp:credentials` 那一格、`connection.ts` 的代入 |
- * | 同上，受管檔 0644、名字不存在 | 那一列沒有工具，警告指名憑證、不帶值 | `credentials.ts` 的權限檢查 |
- * | 同上，帶池、受管值換了 | 下一條 thread 拿到新值，開著的照舊 | `pool.ts` 鍵裡的指紋 |
+ * | 同上，受管檔 0644、名字不存在 | 那一列沒有工具，警告指名憑證、不帶值 | `credentials.ts`（harness）`stored()` 的權限檢查 |
+ * | 同上，帶池、受管值換了 | 下一條 thread 拿到新值（開著的照舊在 plugin 那一側量） | `pool.ts` 鍵裡的指紋 |
  * | `runCli`（沒帶 `--live`） | 啟動環境的值到得了子行程；受管檔的值到不了（不讀它） | `cli.ts` 交憑證服務那一格 |
  * | `runCli --dump-config` | 只有憑證名 | — |
  * | `runServe`（沒帶 `--live`） | 受管檔的值到得了子行程，server 日誌沒有值；受管檔 0644 時 serve 照樣起來、那一列連不上 | `serve.ts` 交憑證服務那一格 |
@@ -70,7 +70,7 @@ function managedFile(home: string, value: string, mode = 0o600): void {
   chmodSync(file, mode);
 }
 
-/** 一列 stdio MCP：`MCP_TOKEN` 引用 {@link NAME}。夾具只回資料，整台不問。 */
+/** 一列 stdio MCP：`MCP_TOKEN` 引用 {@link NAME}。夾具只回資料，所以核准整台設 allow，這一輪不停下來問人。 */
 const ROW: McpPluginOptions = {
   serverName: 'srv',
   connection: {
@@ -97,14 +97,15 @@ function lastToolResult(prompts: readonly (readonly BaseMessage[])[]): string | 
     .at(-1);
 }
 
-/** 走組裝根跑一輪，回模型收到的工具結果與這次組裝的警告。 */
+/** 走組裝根跑一輪，回模型收到的工具結果與這次組裝的警告。`launch` 是憑證服務看到的啟動環境。 */
 async function assembleAndRun(
   home: string,
   session: { readonly mcpPool?: McpConnectionPool } = {},
+  launch: NodeJS.ProcessEnv = {},
 ): Promise<{ result: string | undefined; warnings: string[] }> {
   const credentials = createCredentialService({
     home,
-    launchEnv: processLaunchEnv({}),
+    launchEnv: processLaunchEnv(launch),
     store: true,
     warn: () => {},
   });
@@ -135,8 +136,7 @@ describe('組裝根交憑證服務（serve 的規則：受管檔最優先）', (
   it('子行程讀到受管檔的值；啟動環境同名也輪不到它', async () => {
     const home = scratch();
     managedFile(home, FROM_FILE);
-    vi.stubEnv(NAME, FROM_ENV);
-    const { result } = await assembleAndRun(home);
+    const { result } = await assembleAndRun(home, {}, { [NAME]: FROM_ENV });
     expect(result).toContain(`"MCP_TOKEN":"${FROM_FILE}"`);
   }, 60_000);
 
@@ -158,7 +158,7 @@ describe('組裝根交憑證服務（serve 的規則：受管檔最優先）', (
     60_000,
   );
 
-  it('帶池、受管值換了：下一條 thread 拿到新值，開著的那一份照舊', async () => {
+  it('帶池、受管值換了：下一條 thread 拿到新值', async () => {
     const home = scratch();
     const pool = new McpConnectionPool({ log: () => {} });
     try {

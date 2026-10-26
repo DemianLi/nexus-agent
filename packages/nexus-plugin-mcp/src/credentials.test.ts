@@ -176,7 +176,7 @@ describe('池鍵與換值', () => {
     expect(poolKey(config, false, new Map([['GITHUB_PAT', `${SECRET}-2`]]))).not.toBe(key);
   });
 
-  it('受管值換了：下一份組裝拿到新值，開著的那一份照舊用舊值', async () => {
+  it('服務給的值換了：下一份組裝拿到新值，開著的那一份照舊用舊值', async () => {
     const values: Record<string, string> = { GITHUB_PAT: 'first-value' };
     const service: McpCredentials = { resolve: (name) => values[name] };
     const pool = new McpConnectionPool({ log: () => {} });
@@ -198,7 +198,7 @@ describe('池鍵與換值', () => {
 });
 
 describe('mcpConfigSchema 的 JSON Schema', () => {
-  it('env 與 headers 改成聯集之後，connection 底下沒有不完整、憑證名的 pattern 照樣輸出', () => {
+  it('env 與 headers 是字串或憑證引用的聯集：connection 底下沒有不完整，憑證名的 pattern 照樣輸出', () => {
     const result = configToJsonSchema(mcpConfigSchema);
     expect(result.losses.filter((loss) => loss.path[0] === 'connection')).toEqual([]);
     expect(JSON.stringify(result.schema)).toContain(

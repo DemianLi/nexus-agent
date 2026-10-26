@@ -678,7 +678,8 @@ async function startServer(
   // 之後在記憶體裡驗。
   const env = options.env ?? process.env;
   // **沒帶 `--live` 也建一份憑證服務**（#1989）：MCP 設定裡的憑證引用跟模型 key 同一條規則（受管檔 > 啟動環境），只是沒有 `.env`
-  // 那兩層。受管檔不在這裡檢查：引用它的列連線時才讀，壞了只讓那幾列連不上。
+  // 那兩層。受管檔不在這裡檢查，引用它的列連線時才讀：從沒讀成功過就壞了，只讓引用它的那幾列連不上；讀成功過之後再壞，照憑證服務的
+  // 規則續用上一份並警告。
   const credentials =
     liveLaunch?.credentials ??
     createCredentialService({

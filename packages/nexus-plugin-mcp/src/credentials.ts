@@ -3,7 +3,7 @@
  * 可以寫 `{ credential: <名字> }`，建連線那一刻向宿主的 {@link MCP_CREDENTIALS_SERVICE} 要值、代入。
  *
  * - **值只存在交給 adapter 的連線選項裡**：`McpConfig`、池鍵字串、`label`、錯誤訊息都只帶名字。
- * - **解析是同步的**：池的「找表與建立之間沒有 `await`」靠它（`pool.ts`）。
+ * - **解析是同步的**（{@link McpCredentials.resolve}）：`apply` 在取用池之前就解析完，池只拿到解析好的名字 → 值。
  * - **一份連線建立時抓住值**：重連用同一個 adapter client，不重新解析；值換了，池鍵裡的指紋跟著換，下一次取用連新的一份。
  * - 宿主沒有提供服務、名字沒有值、服務拋錯，都是這一列連不上（走 `failOnStartupError` 那條），訊息寫列、欄位與憑證名。
  *
@@ -61,7 +61,7 @@ function referencesOf(config: McpConfig): { readonly field: string; readonly nam
 }
 
 /**
- * 解析這一列引用到的每一把憑證。沒有引用就不碰服務（serve 的受管檔因此只在有列引用時才讀）。
+ * 解析這一列引用到的每一把憑證。沒有引用就不呼叫服務。
  *
  * @throws 服務缺席、名字沒有值、服務拋錯；訊息只有列、欄位與憑證名。
  */
