@@ -625,7 +625,9 @@ export function foldRegistry(
   const sharedWorkspacePrefix =
     typeof sharedWorkspaceService === 'string' ? sharedWorkspaceService : undefined;
   const mountPrefixes = registry.backend.mounts().map(([prefix]) => prefix);
-  settleFsService(registry.services.get(FS_SERVICE), backend, {
+  // 技能來源也在這裡交給把手（#1919）：把手用自己的共用區與全部路由前綴換一次，模型清單、`/名字`、`skill.list` 都讀它換好的那一份。
+  const settledFs = settleFsService(registry.services.get(FS_SERVICE), backend, {
+    skillSources: registry.skills.sources(),
     hasWorkspace: registry.capabilities.has(WORKSPACE_CAPABILITY),
     mountPrefixes,
     // 這一條 thread 的可寫根（#1774）：組裝點提供的 host 服務 `workspaceRoot`，只在有圍堵時有；不是字串就當沒有。
@@ -848,11 +850,14 @@ export function foldRegistry(
     shared('turnCancelModelSignal', turnCancelModelSignal),
   ];
 
-  // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿同一份，`/名字` 與 `skill.list` 經同一支換。
-  const skills = threadSkillSources(registry.skills.sources(), {
-    sharedWorkspacePrefix: () => sharedWorkspacePrefix,
-    offWorkspacePrefixes: () => [...(options.reservedBackendPrefixes ?? []), ...mountPrefixes],
-  });
+  // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿把手上換好的那一份（#1919）。沒有把手（組裝點沒提供 `fs`）
+  // 就沒有 `/名字` 與 `skill.list` 要對齊，照保留前綴與 mount 自己換。
+  const skills =
+    settledFs?.skillSources() ??
+    threadSkillSources(registry.skills.sources(), {
+      sharedWorkspacePrefix: () => sharedWorkspacePrefix,
+      offWorkspacePrefixes: () => [...(options.reservedBackendPrefixes ?? []), ...mountPrefixes],
+    });
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),

@@ -916,6 +916,7 @@ describe('讀整份與單檔上限，經各入口的組裝（#1533）', () => {
         hasWorkspace: () => true,
         workspaceRoot: () => undefined,
         sharedWorkspacePrefix: () => prefix,
+        skillSources: () => [],
       };
       const listener = createAgentInstructionsListener(
         { maxBytes: DEFAULT_MAX_BYTES, maxSourceBytes: 1024 },

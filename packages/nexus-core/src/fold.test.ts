@@ -1935,6 +1935,7 @@ describe('fs 服務', () => {
       hasWorkspace: () => false,
       workspaceRoot: () => undefined,
       sharedWorkspacePrefix: () => undefined,
+      skillSources: () => [],
     };
     await fold([createHostServicesPlugin({ fs })], { defaultBackend: fakeBackend('default') });
     expect(marker(fs.backend())).toBe('own');
