@@ -54,6 +54,9 @@ export function clientOptions(
  * 首連那條）。池的每一代與 plugin 自己連的首連、重連都走這裡（#1824、#1572 N0516）。工具物件只包一次 {@link throwOnToolError}、
  * 不改名，留給呼叫端建自己的委派物件。
  *
+ * 一拿到 SDK client 就建這一代、掛上 `onclose`，並把「真的關掉了」交給 `onAttached`：之後哪一步拋，呼叫端都等得到這次嘗試開的
+ * 子行程關掉（[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗的嘗試拿不到 SDK client，不會叫它。
+ *
  * **`execution.taskSupport: 'required'` 的工具在這裡就改成當場拒絕**，照 dsh（`mcp-client/src/tools.ts:123` 的 `cacheMode: 'refresh'`、`:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
  * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。偏離：dsh 在自己的 bridge 裡讀 `tool.execution`，這裡的工具是
  * adapter 轉出來的，而 `@langchain/mcp-adapters` 2.0.0 轉工具時丟掉了 `execution`（`dist/tools.js` 沒有 `taskSupport` 的任何處理），
@@ -62,11 +65,14 @@ export function clientOptions(
 export async function connectGeneration(
   client: MultiServerMCPClient,
   config: McpConfig,
-): Promise<Generation & { readonly listed: Listed }> {
+  onAttached?: (closed: Promise<void>) => void,
+): Promise<ListedGeneration> {
   const calls = new Map<string, ToolCall>();
   const tools: StructuredTool[] = [];
   const listed = await client.getTools();
   const sdk = await client.getClient(config.serverName);
+  const generation = generationOf(calls, sdk);
+  onAttached?.(generation.closed);
   const taskRequired = await taskRequiredNames(sdk, listed.length);
   for (const tool of listed) {
     throwOnToolError(tool);
@@ -75,7 +81,47 @@ export async function connectGeneration(
     tools.push(tool);
   }
   const instructions = instructionsOf(sdk?.getInstructions(), config);
-  return generationOf(calls, sdk, { tools, instructions }) as Generation & { listed: Listed };
+  // 補在同一個物件上：`onclose` 通報的是建的當下那一個。
+  return Object.assign(generation, { listed: { tools, instructions } });
+}
+
+/** {@link connectGeneration} 連成的一代。 */
+export type ListedGeneration = Generation & { readonly listed: Listed };
+
+/** 一個 adapter client 上的連線嘗試，見 {@link attemptsOn}。 */
+export interface Attempts {
+  /** 這個 client 的第一次連線。 */
+  first(): Promise<ListedGeneration>;
+  /** 重連：先把整個 adapter client 收掉，再連一代。 */
+  connect(): Promise<ListedGeneration>;
+  /**
+   * 收掉剛失敗的那次嘗試：關掉整個 adapter client，再等那次開的子行程真的關掉
+   * （[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗（拿不到 SDK client）的嘗試沒有東西可等，立刻落定。不拋。
+   */
+  abandon(): Promise<void>;
+}
+
+/** 一個 adapter client 上的連線嘗試：每次都記下那一次的 close 訊號，給 {@link Attempts.abandon} 等。CLI 與池共用。 */
+export function attemptsOn(client: MultiServerMCPClient, config: McpConfig): Attempts {
+  let closed: Promise<void> = Promise.resolve();
+  const first = (): Promise<ListedGeneration> => {
+    closed = Promise.resolve();
+    return connectGeneration(client, config, (signal) => {
+      closed = signal;
+    });
+  };
+  return {
+    first,
+    async connect() {
+      await client.close();
+      return first();
+    },
+    async abandon() {
+      // 監督者的 hook 契約是不拋；收不乾淨的由監督者的期限與 dispose 的 `release` 接手。
+      await client.close().catch(() => {});
+      await closed;
+    },
+  };
 }
 
 /**
@@ -178,15 +224,12 @@ export interface Listed {
 export function generationOf(
   calls: ReadonlyMap<string, ToolCall>,
   sdk: SdkClient | undefined,
-  listed?: Listed,
 ): Generation {
-  if (sdk === undefined)
-    return { calls, sdk, closed: Promise.resolve(), ...(listed && { listed }) };
+  if (sdk === undefined) return { calls, sdk, closed: Promise.resolve() };
   let markClosed!: () => void;
   const generation: Generation = {
     calls,
     sdk,
-    ...(listed && { listed }),
     closed: new Promise<void>((resolve) => {
       markClosed = resolve;
     }),

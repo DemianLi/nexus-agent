@@ -32,7 +32,7 @@ import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
-import { clientOptions, connectGeneration } from './connection.js';
+import { attemptsOn, clientOptions } from './connection.js';
 import {
   envValueSchema,
   headerValueSchema,
@@ -241,7 +241,8 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     const error = report;
     try {
       // 首連與重連、池走同一個 `connectGeneration`（#1572 N0516）：`taskSupport: 'required'` 的拒絕與指引上限只寫一處。
-      const first = await connectGeneration(client, config);
+      const attempts = attemptsOn(client, config);
+      const first = await attempts.first();
       const names: string[] = [];
       // 核准閘門用的對照：模型叫的是 public name，宣告寫的是 raw name。
       const rawNameOf = new Map<string, string>();
@@ -279,13 +280,11 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
           // 新子行程、新的 SDK client（實測）。舊的工具物件永遠綁著死掉的 client，所以只取它們的呼叫，不取物件。
           // 跟池共用 `connectGeneration`：每次重連都查指引上限，超過就算這次嘗試失敗，照 dsh（`mcp-client/src/connection.ts:318-322`，
           // #1824）。新指引只拿來查，不換掉載入期定下的那一份（#1820 偏離 3）。
-          async connect() {
-            await client.close();
-            return connectGeneration(client, config);
-          },
+          connect: () => attempts.connect(),
+          abandon: () => attempts.abandon(),
           close: () => client.close(),
           closed: (generation) => generation.closed,
-          // 失敗的嘗試可能把連線留在 adapter 裡（例如列出了工具、檢查卻拋了）；dispose 最後整個收掉，連一次都沒連上的間隙也算。
+          // dispose 最後把整個 adapter 收掉：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
           release: () => client.close(),
           watch(generation, onDown) {
             generation.onDown = onDown;
