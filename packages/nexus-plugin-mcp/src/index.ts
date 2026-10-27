@@ -32,7 +32,7 @@ import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
-import { clientOptions, connectGeneration } from './connection.js';
+import { attemptsOn, clientOptions } from './connection.js';
 import {
   envValueSchema,
   headerValueSchema,
@@ -241,7 +241,8 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     const error = report;
     try {
       // 首連與重連、池走同一個 `connectGeneration`（#1572 N0516）：`taskSupport: 'required'` 的拒絕與指引上限只寫一處。
-      const first = await connectGeneration(client, config);
+      const attempts = attemptsOn(client, config);
+      const first = await attempts.first();
       const names: string[] = [];
       // 核准閘門用的對照：模型叫的是 public name，宣告寫的是 raw name。
       const rawNameOf = new Map<string, string>();
@@ -271,11 +272,6 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       // 超過上限算連線失敗，跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
       const { instructions } = first.listed;
       const policy: ReconnectPolicy = config.reconnect;
-      // 這一次嘗試開的子行程真的關掉時落定；每次 connect 先重設成已落定，握手就失敗（拿不到 SDK client）的嘗試就沒有東西可等。
-      let attemptClosed: Promise<void> = Promise.resolve();
-      const track = (closed: Promise<void>): void => {
-        attemptClosed = closed;
-      };
       const current = (supervisor = new Supervisor<Generation>(
         {
           label,
@@ -284,17 +280,8 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
           // 新子行程、新的 SDK client（實測）。舊的工具物件永遠綁著死掉的 client，所以只取它們的呼叫，不取物件。
           // 跟池共用 `connectGeneration`：每次重連都查指引上限，超過就算這次嘗試失敗，照 dsh（`mcp-client/src/connection.ts:318-322`，
           // #1824）。新指引只拿來查，不換掉載入期定下的那一份（#1820 偏離 3）。
-          async connect() {
-            await client.close();
-            attemptClosed = Promise.resolve();
-            return connectGeneration(client, config, track);
-          },
-          // 失敗的嘗試當場收掉整個 adapter client，再等這次開的子行程真的關掉（#1835）。
-          async abandon() {
-            // hook 契約是不拋；收不乾淨的由監督者的期限與 dispose 的 `release` 接手。
-            await client.close().catch(() => {});
-            await attemptClosed;
-          },
+          connect: () => attempts.connect(),
+          abandon: () => attempts.abandon(),
           close: () => client.close(),
           closed: (generation) => generation.closed,
           // dispose 最後把整個 adapter 收掉：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。

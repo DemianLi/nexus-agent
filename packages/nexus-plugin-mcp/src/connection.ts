@@ -66,7 +66,7 @@ export async function connectGeneration(
   client: MultiServerMCPClient,
   config: McpConfig,
   onAttached?: (closed: Promise<void>) => void,
-): Promise<Generation & { readonly listed: Listed }> {
+): Promise<ListedGeneration> {
   const calls = new Map<string, ToolCall>();
   const tools: StructuredTool[] = [];
   const listed = await client.getTools();
@@ -83,6 +83,45 @@ export async function connectGeneration(
   const instructions = instructionsOf(sdk?.getInstructions(), config);
   // 補在同一個物件上：`onclose` 通報的是建的當下那一個。
   return Object.assign(generation, { listed: { tools, instructions } });
+}
+
+/** {@link connectGeneration} 連成的一代。 */
+export type ListedGeneration = Generation & { readonly listed: Listed };
+
+/** 一個 adapter client 上的連線嘗試，見 {@link attemptsOn}。 */
+export interface Attempts {
+  /** 這個 client 的第一次連線。 */
+  first(): Promise<ListedGeneration>;
+  /** 重連：先把整個 adapter client 收掉，再連一代。 */
+  connect(): Promise<ListedGeneration>;
+  /**
+   * 收掉剛失敗的那次嘗試：關掉整個 adapter client，再等那次開的子行程真的關掉
+   * （[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗（拿不到 SDK client）的嘗試沒有東西可等，立刻落定。不拋。
+   */
+  abandon(): Promise<void>;
+}
+
+/** 一個 adapter client 上的連線嘗試：每次都記下那一次的 close 訊號，給 {@link Attempts.abandon} 等。CLI 與池共用。 */
+export function attemptsOn(client: MultiServerMCPClient, config: McpConfig): Attempts {
+  let closed: Promise<void> = Promise.resolve();
+  const first = (): Promise<ListedGeneration> => {
+    closed = Promise.resolve();
+    return connectGeneration(client, config, (signal) => {
+      closed = signal;
+    });
+  };
+  return {
+    first,
+    async connect() {
+      await client.close();
+      return first();
+    },
+    async abandon() {
+      // 監督者的 hook 契約是不拋；收不乾淨的由監督者的期限與 dispose 的 `release` 接手。
+      await client.close().catch(() => {});
+      await closed;
+    },
+  };
 }
 
 /**

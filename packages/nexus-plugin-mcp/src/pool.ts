@@ -35,7 +35,7 @@
  */
 
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
-import { clientOptions, connectGeneration } from './connection.js';
+import { attemptsOn, clientOptions } from './connection.js';
 import { credentialFingerprint } from './credentials.js';
 import type { ResolvedCredentials } from './credentials.js';
 import type { Generation, Listed } from './connection.js';
@@ -179,27 +179,14 @@ export class McpConnectionPool {
     const { log } = this.options;
     const error = this.options.error ?? log;
     let last: Listed | undefined;
-    // 這一次嘗試開的子行程真的關掉時落定；每次 connect 先重設成已落定，握手就失敗（拿不到 SDK client）的嘗試就沒有東西可等。
-    let attemptClosed: Promise<void> = Promise.resolve();
-    const track = (closed: Promise<void>): void => {
-      attemptClosed = closed;
-    };
+    const attempts = attemptsOn(client, config);
     const supervisor = new Supervisor<Generation>(
       {
         label,
         policy: config.reconnect,
         // 同 plugin 自己連的那條：把整個 adapter client 收掉再重新列工具，新子行程、新的 SDK client。
-        async connect() {
-          await client.close();
-          attemptClosed = Promise.resolve();
-          return connectGeneration(client, config, track);
-        },
-        // 失敗的嘗試當場收掉整個 adapter client，再等這次開的子行程真的關掉（#1835）。
-        async abandon() {
-          // hook 契約是不拋；收不乾淨的由監督者的期限與 dispose 的 `release` 接手。
-          await client.close().catch(() => {});
-          await attemptClosed;
-        },
+        connect: () => attempts.connect(),
+        abandon: () => attempts.abandon(),
         close: () => client.close(),
         closed: (generation) => generation.closed,
         // dispose 最後把整個 adapter 收掉：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
@@ -212,7 +199,7 @@ export class McpConnectionPool {
         report: log,
         error,
       },
-      connectGeneration(client, config, track),
+      attempts.first(),
       // `failOnStartupError` 那一列第一次就連不上不在背景重試：建立那一份的取用拋出去、收掉這一份（同 dsh 讓那一列失敗）。
       { retryFirstFailure: !config.failOnStartupError },
     );
