@@ -374,7 +374,6 @@ describe('關閉的期限（#1543，照 dsh GENERATION_CLOSE_TIMEOUT_MS）', () 
     expect(h.supervisor.current()?.id).toBe(1);
   });
 
-  /** 失敗的嘗試照 dsh 當場收掉（[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)，`connection.ts:323-331`）。 */
   it('嘗試失敗：當場收掉那一次，每次失敗收一次；用完次數放棄時沒有留著沒收的', async () => {
     const h = harness({ maxAttempts: 2 });
     h.state.failures = 2;

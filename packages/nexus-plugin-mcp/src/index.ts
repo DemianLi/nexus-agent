@@ -271,7 +271,7 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       // 超過上限算連線失敗，跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
       const { instructions } = first.listed;
       const policy: ReconnectPolicy = config.reconnect;
-      // 這一次嘗試開的子行程真的關掉了；握手就失敗的嘗試沒有東西可等。
+      // 這一次嘗試開的子行程真的關掉時落定；每次 connect 先重設成已落定，握手就失敗（拿不到 SDK client）的嘗試就沒有東西可等。
       let attemptClosed: Promise<void> = Promise.resolve();
       const track = (closed: Promise<void>): void => {
         attemptClosed = closed;
@@ -289,14 +289,15 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
             attemptClosed = Promise.resolve();
             return connectGeneration(client, config, track);
           },
-          // 失敗的嘗試當場收掉、等子行程關掉，不留到 dispose（#1835）。
+          // 失敗的嘗試當場收掉整個 adapter client，再等這次開的子行程真的關掉（#1835）。
           async abandon() {
+            // hook 契約是不拋；收不乾淨的由監督者的期限與 dispose 的 `release` 接手。
             await client.close().catch(() => {});
             await attemptClosed;
           },
           close: () => client.close(),
           closed: (generation) => generation.closed,
-          // 失敗的嘗試可能把連線留在 adapter 裡（例如列出了工具、檢查卻拋了）；dispose 最後整個收掉，連一次都沒連上的間隙也算。
+          // dispose 最後把整個 adapter 收掉：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
           release: () => client.close(),
           watch(generation, onDown) {
             generation.onDown = onDown;
