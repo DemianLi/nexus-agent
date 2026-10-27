@@ -60,7 +60,7 @@ import { createSpillPolicyMiddleware } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
 import { capSearchResults, createSearchOverflowMiddleware } from './search-overflow.js';
 import type { SearchOverflowOptions } from './search-overflow.js';
-import { createSharedReadMarkMiddleware } from './shared-read-mark.js';
+import { createSharedGrepMark, createSharedReadMarkMiddleware } from './shared-read-mark.js';
 import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -660,16 +660,6 @@ export function foldRegistry(
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
-  // 搜尋結果的筆數上限（#735）：middleware 與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
-  // `permissions` 規則（同搜尋卡）就整對不掛。見 {@link ./search-overflow.ts}。
-  const searchOverflow =
-    options.searchOverflow !== undefined &&
-    backend !== undefined &&
-    searchMetaAllowed(registry, permissions)
-      ? options.searchOverflow
-      : undefined;
-  const searchOverflowMiddleware =
-    searchOverflow === undefined ? undefined : createSearchOverflowMiddleware(searchOverflow);
   // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿把手上換好的那一份（#1919）。沒有填得進值的把手
   // （組裝點沒提供 `fs`，或給的不是 `createFsService` 建的）就照保留前綴與 mount 自己換。
   const skills =
@@ -684,6 +674,26 @@ export function foldRegistry(
     backend === undefined || sharedWorkspacePrefix === undefined
       ? undefined
       : createSharedReadMarkMiddleware(sharedWorkspacePrefix, skills);
+  // 搜尋結果的筆數上限（#735）：middleware 與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
+  // `permissions` 規則（同搜尋卡）就整對不掛。見 {@link ./search-overflow.ts}。
+  const searchOverflow =
+    options.searchOverflow !== undefined &&
+    backend !== undefined &&
+    searchMetaAllowed(registry, permissions)
+      ? options.searchOverflow
+      : undefined;
+  // 有共用區時，超過上限的 `grep` 由上限層用前綴層同一份判準判完整清單（#2065）。
+  const searchOverflowMiddleware =
+    searchOverflow === undefined
+      ? undefined
+      : createSearchOverflowMiddleware(
+          sharedWorkspacePrefix === undefined
+            ? searchOverflow
+            : {
+                ...searchOverflow,
+                sharedMark: createSharedGrepMark(sharedWorkspacePrefix, skills),
+              },
+        );
   const subagentPlugins = subagentPluginMiddleware(plugins);
   // 工具過濾（#707）遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），
   // 不必扣自帶的。
