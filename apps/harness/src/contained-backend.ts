@@ -1020,11 +1020,15 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       internals: this.ripgrepInternals,
     });
     if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    const parsed = this.parseRipgrepJson(outcome.stdout);
+    if (typeof parsed === 'string') {
+      return searchFailure(
+        SEARCH_FAILED,
+        `grep received malformed ripgrep --json output (${parsed})`,
+      );
+    }
     noteSearchSkipped(outcome.unreadable);
-    return applyGrepMaxCount({
-      result: { matches: this.parseRipgrepJson(outcome.stdout) },
-      maxCount: maxCount ?? null,
-    });
+    return applyGrepMaxCount({ result: { matches: parsed }, maxCount: maxCount ?? null });
   }
 
   /**
@@ -1214,32 +1218,49 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 解 `rg --json` 的輸出，換算成虛擬路徑。邏輯照基座 `ripgrepSearch`（`src-C9o7b5C6.js:951-978`）：
-   * 只收 `match`，路徑相對 `cwd` 換成 `/…`，跑到根外的丟掉，壞行略過。
+   * 解 `rg --json` 的輸出，換算成虛擬路徑；**輸出壞了回一句說明**（呼叫端判 `SEARCH_FAILED`），不回半份結果。
+   *
+   * `rg --json` 是內部的傳輸格式，不是給人看的：一行不是 JSON、紀錄不是物件、`match` 紀錄缺了路徑文字、行號或行內容，都表示這一次
+   * 的輸出不可信。檔名不是 UTF-8 時 rg 送 `path.bytes`，同樣算缺路徑文字。`type` 不是 `match` 的紀錄（`begin`／`end`／`summary` 等）
+   * 一律略過。行不是 UTF-8 時 rg 送 `lines.bytes` 而不是 `text`，換成一句佔位，不算壞。路徑相對 `cwd` 換成 `/…`，跑到根外或就是根
+   * 本身的丟掉。
    */
-  private parseRipgrepJson(stdout: string): Array<{ path: string; line: number; text: string }> {
+  private parseRipgrepJson(
+    stdout: string,
+  ): Array<{ path: string; line: number; text: string }> | string {
     const matches: Array<{ path: string; line: number; text: string }> = [];
     for (const line of stdout.split('\n')) {
       if (line.trim() === '') continue;
+      let parsed: unknown;
       try {
-        const data = JSON.parse(line) as {
-          type?: string;
-          data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } };
-        };
-        if (data.type !== 'match') continue;
-        const file = data.data?.path?.text;
-        const lineNumber = data.data?.line_number;
-        if (file === undefined || file === '' || lineNumber === undefined) continue;
-        const rel = relative(this.cwd, resolve(this.cwd, file));
-        if (escapesRoot(rel)) continue;
-        matches.push({
-          path: `/${rel.split(sep).join('/')}`,
-          line: lineNumber,
-          text: data.data?.lines?.text?.replace(/\n$/, '') ?? '',
-        });
+        parsed = JSON.parse(line);
       } catch {
-        continue;
+        return 'a line is not JSON';
       }
+      if (typeof parsed !== 'object' || parsed === null) return 'a record is not an object';
+      const record = parsed as { type?: unknown; data?: unknown };
+      if (record.type !== 'match') continue;
+      if (typeof record.data !== 'object' || record.data === null) {
+        return 'a match record has no data';
+      }
+      const data = record.data as { path?: unknown; line_number?: unknown; lines?: unknown };
+      const file =
+        typeof data.path === 'object' && data.path !== null
+          ? (data.path as { text?: unknown }).text
+          : undefined;
+      if (typeof file !== 'string') return 'a match record has no path text';
+      if (typeof data.line_number !== 'number') return 'a match record has no line number';
+      if (typeof data.lines !== 'object' || data.lines === null) {
+        return 'a match record has no line content';
+      }
+      const lines = data.lines as { text?: unknown; bytes?: unknown };
+      let text: string;
+      if (typeof lines.text === 'string') text = lines.text.replace(/\n$/, '');
+      else if (typeof lines.bytes === 'string') text = '(line is not valid UTF-8)';
+      else return 'a match record has neither line text nor bytes';
+      const rel = relative(this.cwd, resolve(this.cwd, file));
+      if (rel === '' || escapesRoot(rel)) continue;
+      matches.push({ path: `/${rel.split(sep).join('/')}`, line: data.line_number, text });
     }
     return matches;
   }
