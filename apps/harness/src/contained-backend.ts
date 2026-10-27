@@ -233,7 +233,7 @@ export function invalidGrepGlob(glob: string): string | undefined {
  */
 export type GrepPathsResult = GrepResult & { readonly errorCode?: SearchErrorCode };
 
-/** {@link ContainedFilesystemBackend.globPaths} 的結果：同 {@link GrepPathsResult}，多一格 `errorCode`。 */
+/** {@link ContainedFilesystemBackend.globPaths} 的結果：`GlobResult` 多一格 `errorCode`，給子類分辨該不該把錯誤原文交給模型。 */
 export type GlobPathsResult = GlobResult & { readonly errorCode?: SearchErrorCode };
 
 /**
@@ -1070,7 +1070,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * {@link glob} 的本體，**一次 rg 列多個起點**；起點之間不存在或不是目錄的略過、全都略過回 `{ files: [] }`，其餘與單一起點完全一樣。
-   * 給附件路由「只列這條 thread 引用過的目錄」用，條件同 {@link grepPaths}：呼叫端負責去重、起點不能互相包含。
+   * 給附件路由「只列這條 thread 引用過的目錄」用，條件與界限同 {@link grepPaths}：呼叫端負責去重、起點不能互相包含；起點一次全放進
+   * argv、不分批。
    *
    * @param dirPaths - 起點的虛擬路徑。
    * @returns 檔案清單；失敗時帶 `error` 與 `errorCode`（{@link GlobPathsResult}）。

@@ -250,13 +250,12 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
   }
 
   /**
-   * **rg 的原始訊息只在會帶出檔名的兩種錯誤換掉**（#1822）：`SEARCH_FAILED`（rg 非 0／1 結束，stderr 會帶出同一個附件目錄下、
-   * 這條 thread 沒引用過的別名檔名，`…/SECRET.txt: Permission denied`）與 `SEARCH_INVALID_PATTERN`（rg 的 stderr 同樣原樣接上）。
-   * 結果過濾只擋得到命中的那幾行、擋不到錯誤字串。模型拿固定的一句，原文寫進伺服器日誌給管理者（帶 thread id 與錯誤碼）。
-   * **其餘照舊**：`SEARCH_ABORTED`（使用者按停止）與 `SEARCH_RAW_OUTPUT_OVERFLOW`（「縮小 pattern 再試」的提示）的字句固定、不帶路徑，
+   * **rg 的原始訊息在 `SEARCH_FAILED` 與 `SEARCH_INVALID_PATTERN` 換成固定的一句**（#1822、#1994）：這兩種把 rg 的 stderr 原樣接在
+   * 訊息後面。grep 讀到同一個附件目錄下這條 thread 沒引用過的別名檔，stderr 會帶出那個檔名（`…/SECRET.txt: Permission denied`）；
+   * glob 的 `--files` 不開檔，帶不出別名，但 stderr 的內容不由這裡決定，一併換掉。結果過濾只擋得到命中與列出的條目，擋不到錯誤字串。
+   * 模型拿固定的一句，原文寫進伺服器日誌給管理者（帶 thread id、工具名與錯誤碼）。
+   * `SEARCH_ABORTED`（使用者按停止）與 `SEARCH_RAW_OUTPUT_OVERFLOW`（「縮小 pattern 再試」的提示）原句交給模型：字句固定、不帶路徑；
    * 換掉會讓 overflow 的提示不見，也會讓按停止寫出一行 warn（`serve.ts` 的 warn 是給要人處理的事）。
-   * dsh 沒有對應做法（單人桌面、沒有「這條 thread 引用過哪些檔」的引用集；`search-core.ts` 的 `classifyRunFailure` 把 stderr 原樣接在訊息後面），
-   * 這是偏離 2（#1773，理由 2）帶出來的需求。
    */
   #hideRawError(
     tool: 'grep' | 'glob',
