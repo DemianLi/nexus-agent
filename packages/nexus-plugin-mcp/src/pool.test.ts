@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHANNEL_SERVICE, createHostServicesPlugin, loadPlugins } from '@nexus/core';
 import type { PluginRegistry, PreToolDecision, PreToolListener } from '@nexus/core';
@@ -418,6 +418,42 @@ describe('放棄重連之後（Q5 (b)）', () => {
     expect(x.shared).not.toBe(old);
     expect(y.shared).toBe(x.shared);
     expect(r.pids()).toHaveLength(1);
+  }, 30_000);
+
+  /**
+   * 嘗試在 `tools/list` 之後才失敗（重連拿到超過上限的指引，#1824）：那一次的子行程照 dsh 當場收掉
+   * （[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)），放棄之後、關池之前一個都不剩。
+   */
+  it('嘗試在握手之後才失敗：放棄之後、關池之前沒有子行程', async () => {
+    const { pool: shared, logged } = pool();
+    const r = row({ reconnect: { initialDelayMs: 20, maxDelayMs: 40, maxAttempts: 2 } });
+    const file = join(mkdtempSync(join(tmpdir(), 'nexus-mcp-pool-instructions-')), 'instructions');
+    cleanup.push(() => {
+      rmSync(dirname(file), { recursive: true, force: true });
+    });
+    // 出處標頭 21 位元組 + 一個中文字 3 位元組 = 24，沒超過 40。
+    writeFileSync(file, '短');
+    const options: McpPluginOptions = {
+      ...r.options,
+      maxInstructionBytes: 40,
+      connection: {
+        ...(r.options.connection as { transport: 'stdio'; command: string; args: string[] }),
+        env: { FIXTURE_INSTRUCTIONS_FILE: file },
+      },
+    };
+    await shared.acquire(mcpConfigSchema.parse(options), false);
+    expect(r.pids()).toHaveLength(1);
+
+    // 21 + 30 = 51 位元組，超過 40。
+    writeFileSync(file, '字'.repeat(10));
+    killAll(r.pids());
+    await waitFor(() => logged.some((m) => m.includes('giving up after 2 consecutive')));
+    const attempts = logged.filter((m) => m.includes('connection attempt failed'));
+    expect(attempts).toHaveLength(2);
+    for (const message of attempts) {
+      expect(message).toContain('server instructions exceed maxInstructionBytes (40)');
+    }
+    expect(r.pids()).toEqual([]);
   }, 30_000);
 });
 

@@ -179,6 +179,11 @@ export class McpConnectionPool {
     const { log } = this.options;
     const error = this.options.error ?? log;
     let last: Listed | undefined;
+    // 這一次嘗試開的子行程真的關掉了；握手就失敗的嘗試沒有東西可等。
+    let attemptClosed: Promise<void> = Promise.resolve();
+    const track = (closed: Promise<void>): void => {
+      attemptClosed = closed;
+    };
     const supervisor = new Supervisor<Generation>(
       {
         label,
@@ -186,7 +191,13 @@ export class McpConnectionPool {
         // 同 plugin 自己連的那條：把整個 adapter client 收掉再重新列工具，新子行程、新的 SDK client。
         async connect() {
           await client.close();
-          return connectGeneration(client, config);
+          attemptClosed = Promise.resolve();
+          return connectGeneration(client, config, track);
+        },
+        // 失敗的嘗試當場收掉、等子行程關掉，不留到 dispose（#1835）。
+        async abandon() {
+          await client.close().catch(() => {});
+          await attemptClosed;
         },
         close: () => client.close(),
         closed: (generation) => generation.closed,
@@ -200,7 +211,7 @@ export class McpConnectionPool {
         report: log,
         error,
       },
-      connectGeneration(client, config),
+      connectGeneration(client, config, track),
       // `failOnStartupError` 那一列第一次就連不上不在背景重試：建立那一份的取用拋出去、收掉這一份（同 dsh 讓那一列失敗）。
       { retryFirstFailure: !config.failOnStartupError },
     );

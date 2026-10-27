@@ -271,6 +271,11 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       // 超過上限算連線失敗，跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
       const { instructions } = first.listed;
       const policy: ReconnectPolicy = config.reconnect;
+      // 這一次嘗試開的子行程真的關掉了；握手就失敗的嘗試沒有東西可等。
+      let attemptClosed: Promise<void> = Promise.resolve();
+      const track = (closed: Promise<void>): void => {
+        attemptClosed = closed;
+      };
       const current = (supervisor = new Supervisor<Generation>(
         {
           label,
@@ -281,7 +286,13 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
           // #1824）。新指引只拿來查，不換掉載入期定下的那一份（#1820 偏離 3）。
           async connect() {
             await client.close();
-            return connectGeneration(client, config);
+            attemptClosed = Promise.resolve();
+            return connectGeneration(client, config, track);
+          },
+          // 失敗的嘗試當場收掉、等子行程關掉，不留到 dispose（#1835）。
+          async abandon() {
+            await client.close().catch(() => {});
+            await attemptClosed;
           },
           close: () => client.close(),
           closed: (generation) => generation.closed,
