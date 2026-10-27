@@ -7,15 +7,19 @@
  * - **分母**：走出貨的 `runServe --live`，模型是立即回應的假端點（`log-derived-history.fixture.ts`），量一輪從
  *   `run.start` 到 root 收尾的牆鐘時間，除以這一輪打到端點的請求數。端點在同一個行程裡，SSE 各幀同步寫完、不等待。
  *   這段時間除了 harness（中介層、圖、工具、落盤、下行）之外，還含端點解析請求 body 與客戶端解碼下行，兩者都隨日誌
- *   變長；所以另外量端點解析一次最後那份 body 的時間，讓呼叫端扣掉。下行只排空、不折疊。
+ *   變長；所以另外量端點解析一次最後那份 body 的時間，讓呼叫端扣掉。下行只排空、不折疊。除數只數主呼叫（帶工具的那幾份）；
+ *   不帶工具的輔助呼叫另外計數，花的時間留在牆鐘裡。
  * - **複製次數**：替換 `SessionLog.prototype` 上 `events` 的 getter，計次並計時（只改這個行程裡的物件）。
  * - **歸因**：同一個規模再跑一個窗口，開 `node:inspector` 的取樣剖析，數堆疊上有那幾支函式的樣本佔非閒置樣本多少。
  *   V8 會把小函式 inline 進呼叫者，所以另做微基準互相核對：對同一份日誌各呼叫 `imageOffloadData` 以外的那幾支（它要一顆 `image/offload`，夾具不帶圖片），取單次的中位數。
  *
+ * 金鑰：`--live` 要有一把才肯組模型。這裡在跑的期間把 `NVIDIA_API_KEY` 換成一把假的，跑完還原；模型的 `baseUrl` 是本行程在
+ * loopback 上開的假端點，這把不會送到別處。
+ *
  * @module
  */
 
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { Session } from 'node:inspector/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,6 +40,7 @@ import type { Event as WireEvent } from '@nexus/wire';
 
 import { serveClient } from '../fixtures.js';
 import { HARNESS_HOME_ENV } from '../harness-home.js';
+import { LIVE_API_KEY_ENV } from '../live-model.js';
 import { fakeEndpoint, hasTools, liveModelPatch } from '../log-derived-history.fixture.js';
 import type { Reply } from '../log-derived-history.fixture.js';
 import { runServe } from '../serve.js';
@@ -68,10 +73,13 @@ export interface ScanOptions {
 export interface WindowStats {
   /** 量測開始時 root 日誌的筆數。 */
   readonly events: number;
-  /** 計時窗口（不含剖析窗口）跑了幾輪、打了幾次端點。 */
+  /** 計時窗口（不含剖析窗口）跑了幾輪、打了幾次主呼叫（帶工具的）。 */
   readonly turns: number;
   readonly requests: number;
-  /** 每次請求的 harness 時間（毫秒）：一輪的牆鐘時間除以那一輪的請求數，取各輪的中位數與 p95。 */
+  /** 同一個窗口裡不帶工具的輔助呼叫數（窗口裡是摘要器的），與日誌裡新增的 `compaction/summary`（摘要成功）筆數。 */
+  readonly auxRequests: number;
+  readonly summaries: number;
+  /** 每次請求的 harness 時間（毫秒）：一輪的牆鐘時間除以那一輪的主呼叫數，取各輪的中位數與 p95。 */
   readonly perRequestMs: { readonly median: number; readonly p95: number };
   /** 每次請求複製 `events` 幾次、花幾毫秒。 */
   readonly copiesPerRequest: number;
@@ -210,6 +218,8 @@ function attribute(profile: {
 /**
  * 跑一條會話，在每個量測點各量一個計時窗口加一個剖析窗口。
  *
+ * 跑的期間換掉 `SessionLog.prototype.events` 與 `NVIDIA_API_KEY`，結束時還原；同一行程不要並行呼叫。
+ *
  * @param options - 量測點、窗口大小與設定。
  * @returns 每個量測點一筆。
  */
@@ -218,13 +228,19 @@ export async function measureSessionScans(options: ScanOptions): Promise<WindowS
   let turn = 0;
   let step = 0;
   let requests = 0;
+  let auxRequests = 0;
   const upstream = await fakeEndpoint((_index, body) => {
+    if (!hasTools(body)) {
+      auxRequests += 1;
+      return { content: '【輔助呼叫】' };
+    }
     requests += 1;
-    if (!hasTools(body)) return { content: '【輔助呼叫】' };
     const reply = replyFor(turn, step);
     step += 1;
     return reply;
   }, true);
+  const previousKey = process.env[LIVE_API_KEY_ENV];
+  process.env[LIVE_API_KEY_ENV] = 'nvapi-fake-for-scan-measure';
   const home = await mkdtemp(join(tmpdir(), 'nexus-scan-home-'));
   const logs = await mkdtemp(join(tmpdir(), 'nexus-scan-logs-'));
   const patch = join(home, 'patch.yml');
@@ -241,14 +257,32 @@ export async function measureSessionScans(options: ScanOptions): Promise<WindowS
     })) as RunningServe;
     const client = await serveClient(running);
     const events = await client.openEvents('alpha');
-    const rootLength = (): number =>
-      Math.max(0, ...[...instrument.logs].map((log) => instrument.original(log).length));
+    /** 呼叫過 getter 的日誌裡最長的那份就是 root。 */
+    const rootLog = (): SessionLog | undefined =>
+      [...instrument.logs].reduce<SessionLog | undefined>(
+        (a, b) =>
+          a !== undefined && instrument.original(a).length >= instrument.original(b).length ? a : b,
+        undefined,
+      );
+    const rootEvents = (): readonly SessionEvent[] => {
+      const root = rootLog();
+      return root === undefined ? [] : instrument.original(root);
+    };
+    const rootLength = (): number => rootEvents().length;
+    const summaryCount = (): number =>
+      rootEvents().filter((event) => event.type === 'compaction/summary').length;
 
-    /** 說一句、等 root 收尾，回這一輪的牆鐘時間、請求數與複製。 */
+    /** 說一句、等 root 收尾，回這一輪的牆鐘時間與計數。 */
     const oneTurn = async () => {
       turn += 1;
       step = 0;
-      const before = { requests, count: instrument.counter.count, ms: instrument.counter.ms };
+      const before = {
+        requests,
+        auxRequests,
+        summaries: summaryCount(),
+        count: instrument.counter.count,
+        ms: instrument.counter.ms,
+      };
       const start = performance.now();
       await client.runStart('alpha', `第 ${turn} 句`);
       for (;;) {
@@ -259,6 +293,8 @@ export async function measureSessionScans(options: ScanOptions): Promise<WindowS
       return {
         ms: performance.now() - start,
         requests: requests - before.requests,
+        auxRequests: auxRequests - before.auxRequests,
+        summaries: summaryCount() - before.summaries,
         copies: instrument.counter.count - before.count,
         copyMs: instrument.counter.ms - before.ms,
       };
@@ -282,9 +318,7 @@ export async function measureSessionScans(options: ScanOptions): Promise<WindowS
       session.disconnect();
       const attributed = attribute(profile as Parameters<typeof attribute>[0]);
 
-      const root = [...instrument.logs].reduce((a, b) =>
-        instrument.original(a).length >= instrument.original(b).length ? a : b,
-      );
+      const root = rootLog()!;
       const snapshot = instrument.original(root);
       const route = recordedRoute(snapshot);
       const microMicros = {
@@ -306,6 +340,8 @@ export async function measureSessionScans(options: ScanOptions): Promise<WindowS
         events: size,
         turns: timed.length,
         requests: totalRequests,
+        auxRequests: timed.reduce((sum, t) => sum + t.auxRequests, 0),
+        summaries: timed.reduce((sum, t) => sum + t.summaries, 0),
         perRequestMs: { median: quantile(perRequest, 0.5), p95: quantile(perRequest, 0.95) },
         copiesPerRequest: timed.reduce((sum, t) => sum + t.copies, 0) / totalRequests,
         copyMsPerRequest: timed.reduce((sum, t) => sum + t.copyMs, 0) / totalRequests,
@@ -320,6 +356,10 @@ export async function measureSessionScans(options: ScanOptions): Promise<WindowS
     await running?.close();
     await upstream.close();
     instrument.restore();
+    if (previousKey === undefined) delete process.env[LIVE_API_KEY_ENV];
+    else process.env[LIVE_API_KEY_ENV] = previousKey;
+    await rm(home, { recursive: true, force: true });
+    await rm(logs, { recursive: true, force: true });
   }
   return out;
 }
