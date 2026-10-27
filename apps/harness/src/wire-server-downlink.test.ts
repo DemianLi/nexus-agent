@@ -216,9 +216,9 @@ describe('背壓不因打開 gzip 而退化（#1570 驗收 5）', () => {
   });
 
   /**
-   * `compression` 1.8.2 只改寫 `res.on`：`'drain'` 掛到 gzip 串流上，`off`／`removeListener` 卻還是對 res 做
-   * （[#1903](https://github.com/DemianLi/nexus-agent/issues/1903)）。每顆 frame 都比 gzip 串流的緩衝大，`write()` 幾乎每次回 `false`；
-   * 抓下 compression 建的那一條串流，數它卡了幾次、每次寫入時掛著幾個 drain listener。
+   * gzip 串流上的 drain listener 拆不掉，原因見 `wire-server.ts` 檔頭與 [#1903](https://github.com/DemianLi/nexus-agent/issues/1903)。
+   * 每顆 frame 都比 gzip 串流的寫入緩衝大，`write()` 幾乎每次回 `false`；抓下 compression 建的那一條串流，數它卡了幾次、每次寫入時
+   * 掛著幾個 drain listener。
    */
   it('會被壓的串流卡 drain 200 次以上：gzip 串流上的 drain listener 數不跟著長，不出現 MaxListenersExceededWarning', async () => {
     const stalls = { count: 0, maxDrainListeners: 0 };
@@ -255,7 +255,8 @@ describe('背壓不因打開 gzip 而退化（#1570 驗收 5）', () => {
       expect(await until(() => stalls.count >= 200, 20_000)).toBe(true);
       // warning 在 nextTick 才發。
       await sleep(50);
-      expect(stalls.maxDrainListeners).toBeLessThanOrEqual(2);
+      // 一個回應只掛一組：compression 自己的 drain listener 掛在 res 上，不在 gzip 串流上。
+      expect(stalls.maxDrainListeners).toBe(1);
       expect(warnings.filter((w) => w.startsWith('MaxListenersExceededWarning'))).toEqual([]);
     } finally {
       process.off('warning', onWarning);

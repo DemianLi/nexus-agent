@@ -13,8 +13,9 @@
  *   `packages/client/connection/src/http-bridge.ts:106-124`（`1517a4db`，與 `687f282e` 的 blob 相同）。沒有它，對方不收時
  *   Node 照樣把每一顆 frame 收進寫入緩衝，緩衝沒有上限。斷線之後照 dsh 把 body 讀完但不寫。
  *   **一個回應只掛一組常駐的 listener**，每次卡住只換喚醒的函式（[#1903](https://github.com/DemianLi/nexus-agent/issues/1903)）：
- *   `compression` 1.8.2 只改寫 `res.on`，`'drain'` 掛到 gzip 串流上，`off`／`once` 的自我移除卻對 res 做，拆不掉；每卡一次掛一個
- *   的寫法會在 gzip 串流上一路累積，超過 10 個就印 `MaxListenersExceededWarning`。
+ *   `compression` 1.8.2 在 listener 的方法裡只改寫 `res.on`：壓縮時 `'drain'` 掛到 gzip 串流上，`off`／`removeListener` 與
+ *   `once` 的自我移除卻對 res 做，拆不掉。若每次卡住都掛一組新的，它們會在 gzip 串流上一路累積，超過 10 個就印
+ *   `MaxListenersExceededWarning`。
  * - **SSE 心跳與死線**：對應 dsh `packages/api/gateway/src/stream-server.ts`（`MAX_MISSED_HEARTBEATS = 2`、預設間隔 2000 ms）。
  *   一支共用、`unref()` 的計時器，第一條 SSE 開線時才起，`close()` 先清它。
  *
