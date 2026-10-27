@@ -75,8 +75,8 @@ export function registerFixtureTools(server: McpServer): void {
     content: [{ type: 'text', text: FAILURE_TEXT }],
   }));
 
-  // 欄位可為 null、又有可省略的聯集：2.0.0 起 adapter 不再簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
-  // 字串帶 `min(1)`：zod 4.6 起沒有其他約束的原始型別會收成 `type` 陣列，不產生 `anyOf`。
+  // 欄位可為 null、又有可省略的聯集：adapter 2.x 不簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
+  // 字串帶 `min(1)` 是為了讓 schema 保有 `anyOf`：zod 4.6 起，成員都是沒有其他約束的原始型別的 nullable／聯集會收成 `type` 陣列。
   server.registerTool(
     'nullable_args',
     {

@@ -18,7 +18,7 @@ import plan_ci
 from check_audit import EXCEPTIONS, NO_PATCH, ROOT, check, main, read_exceptions
 
 TODAY = date(2026, 10, 21)
-GHSA = 'GHSA-2222-3333-4444'
+GHSA = 'GHSA-3333-4444-5555'
 PATH = 'apps__harness>parent-pkg>vuln-pkg'
 
 
