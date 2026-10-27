@@ -262,7 +262,7 @@ class PostMerge(unittest.TestCase):
         # PyYAML 把 `on` 讀成 True。
         triggers = self.wf[True]
         self.assertEqual(set(triggers), {'push', 'workflow_dispatch'})
-        self.assertEqual(triggers['push'], {'branches': ['develop', 'ci/develop-full-run']})
+        self.assertEqual(triggers['push'], {'branches': ['develop']})
 
     def test_nothing_is_named_gate(self) -> None:
         """required check 比對的是 job 的 name；這支若有 job 叫 gate，它在 develop sha 上的結果會被 develop → main 的 PR 當成 gate。"""

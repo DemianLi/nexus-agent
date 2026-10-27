@@ -8,7 +8,7 @@ name: 合併後完整一輪
 # 呼叫端若設同一個 group，GitHub 會判成 deadlock 並取消整輪。
 on:
   push:
-    branches: [develop, ci/develop-full-run]
+    branches: [develop]
   # 手動觸發：跑所選分支最新的 commit（這支檔要先在預設分支上才觸發得了）。要重跑某個舊 commit，到那一輪按 Re-run。
   workflow_dispatch:
 
