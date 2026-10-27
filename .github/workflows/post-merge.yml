@@ -8,7 +8,7 @@ name: 合併後完整一輪
 # 呼叫端若設成同一個 group，兩邊會搶同一組。
 on:
   push:
-    branches: [develop]
+    branches: [develop, ci/gate-60s]
   # 手動觸發：跑所選分支最新的 commit（這支檔要先在預設分支上才觸發得了）。要重跑某個舊 commit，到那一輪按 Re-run。
   workflow_dispatch:
 

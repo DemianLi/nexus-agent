@@ -69,7 +69,7 @@ FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 
 def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False) -> dict[str, str]:
     """`force_full` 是合併後完整一輪（`post-merge.yml` 呼叫 ci.yml 時帶 `full: true`）：不看異動，一律全跑。"""
-    feature_pr = event == 'pull_request' and base_ref == 'develop'
+    feature_pr = event == 'pull_request' and base_ref in ('develop', 'ci/gate-60s')
     if feature_pr and not force_full and not any(FULL_RE.search(p) for p in changed):
         return {'mode': 'light', 'ts': 'false'}
     scan = force_full or any(TS_RE.search(p) or any(rx.search(p) for rx in SCAN_RES) for p in changed)
