@@ -279,7 +279,7 @@ class PostMerge(unittest.TestCase):
         self.assertEqual(self.ci[True]['workflow_call']['inputs']['full']['type'], 'boolean')
 
     def test_called_run_is_never_cancelled(self) -> None:
-        """被呼叫時 group 每個 commit 一個、不取消；呼叫端不另設 concurrency（同 group 會被判成 deadlock 取消）。"""
+        """被呼叫時 group 每個 commit 一個、不取消；呼叫端不另設 concurrency（設成同一個 group 會跟被呼叫端搶同一組）。"""
         self.assertNotIn('concurrency', self.wf)
         concurrency = self.ci['concurrency']
         self.assertIn('(inputs.full && github.sha)', concurrency['group'])

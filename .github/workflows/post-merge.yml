@@ -5,7 +5,7 @@ name: 合併後完整一輪
 # 紅了怎麼處理見 AGENTS.md「分支策略」。
 #
 # 這支刻意不設 concurrency：ci.yml 被呼叫時用 sha 當 group、不取消（見 ci.yml 的 concurrency）。
-# 呼叫端若設同一個 group，GitHub 會判成 deadlock 並取消整輪。
+# 呼叫端若設成同一個 group，兩邊會搶同一組。
 on:
   push:
     branches: [develop]
