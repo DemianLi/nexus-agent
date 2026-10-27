@@ -8,7 +8,7 @@ name: 合併後完整一輪
 # 呼叫端再設同一個 group 會跟被呼叫端互等。
 on:
   push:
-    branches: [develop]
+    branches: [develop, ci/develop-full-run]
   # 補跑某個 commit 用。只認預設分支上的這支檔，合併前不能在功能分支上觸發。
   workflow_dispatch:
 
