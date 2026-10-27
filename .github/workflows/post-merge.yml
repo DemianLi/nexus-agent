@@ -1,10 +1,62 @@
 name: 合併後完整一輪
 
+# 每個合進 develop 的 commit 各跑一輪完整的 ci.yml（不看異動、一律全跑），而且不被下一個 commit 取消，
+# 紅了就能指出是哪一張 PR。不擋合併，也不能設成 required check。
+# 合併的 dev session 開下一張 PR 之前，先確認自己那個合併 commit 的這一輪是綠的；紅了先撤回再修（見 AGENTS.md「分支策略」）。
+#
+# 這支刻意不設 concurrency：ci.yml 被呼叫時用 sha 當 group、不取消（見 ci.yml 的 concurrency）。
+# 呼叫端再設同一個 group 會跟被呼叫端互等。
 on:
+  push:
+    branches: [develop]
+  # 補跑某個 commit 用。只認預設分支上的這支檔，合併前不能在功能分支上觸發。
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
-  probe:
+  full:
+    name: 完整一輪
+    uses: ./.github/workflows/ci.yml
+    with:
+      full: true
+
+  # 被呼叫的 ci.yml 裡的 gate 已經逐個判過每個 job；這裡只把結論對到 commit 與 PR。
+  report:
+    name: 結果
+    needs: full
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: echo probe
+      - name: 寫出 commit 與 PR
+        env:
+          RESULT: ${{ needs.full.result }}
+          SHA: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          # commit 訊息是外部輸入，一律經環境變數傳，不經 shell 展開。手動觸發時沒有這個值。
+          MESSAGE: ${{ github.event.head_commit.message }}
+          COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
+          PULL_URL: ${{ github.server_url }}/${{ github.repository }}/pull
+        run: |
+          title=$(printf '%s\n' "$MESSAGE" | head -n 1)
+          # squash 合併的標題結尾是 `(#N)`。
+          pr=$(printf '%s' "$title" | sed -nE 's/.*\(#([0-9]+)\)$/\1/p')
+          if [ -n "$pr" ]; then
+            pr_line="[#$pr]($PULL_URL/$pr)"
+          elif [ "$EVENT" = "workflow_dispatch" ]; then
+            pr_line="手動觸發（$REF_NAME），沒有對應的 PR"
+          else
+            pr_line="標題裡沒有 PR 號（$REF_NAME）"
+          fi
+          {
+            echo "### 合併後完整一輪：$RESULT"
+            echo ""
+            echo "- commit：[\`${SHA:0:8}\`]($COMMIT_URL) ${title:-（手動觸發，沒有 commit 訊息）}"
+            echo "- PR：$pr_line"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$RESULT" != "success" ]; then
+            echo "::error::完整一輪是 '$RESULT'：commit ${SHA:0:8}，PR ${pr:+#$pr}${pr:-不明}。先開撤回 PR，讓 develop 恢復綠，修好再重新開。"
+            exit 1
+          fi

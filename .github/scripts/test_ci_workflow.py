@@ -136,7 +136,7 @@ class Gate(unittest.TestCase):
 
 class Budget(unittest.TestCase):
     def test_peak_active_jobs_within_limit(self) -> None:
-        """ci.yml 檔頭的算式：plan 之後、gate 之前那一段同時活躍的 job 數。"""
+        """ci.yml 檔頭的算式：plan 之後、gate 之前那一段同時活躍的 job 數。全跑的形狀，也就是合併後完整一輪的峰值。"""
         jobs = load(CI)['jobs']
         peak = 0
         for name, job in jobs.items():
@@ -249,3 +249,57 @@ class PersistenceChanges(unittest.TestCase):
 
     def test_verifier_test_always_runs(self) -> None:
         self.assertIn('persistence-changes.test.ts', [Path(p).name for p in plan_ci.SUITES['harness'].always_run()])
+
+
+class PostMerge(unittest.TestCase):
+    """合併後完整一輪（#2089）：每個 develop commit 一輪全跑、不被取消、不是 gate。這幾處改錯了 PR 上不會有任何東西紅。"""
+
+    def setUp(self) -> None:
+        self.wf = load(CI.with_name('post-merge.yml'))
+        self.ci = load(CI)
+
+    def test_triggers_on_develop_push_and_dispatch_only(self) -> None:
+        # PyYAML 把 `on` 讀成 True。
+        triggers = self.wf[True]
+        self.assertEqual(set(triggers), {'push', 'workflow_dispatch'})
+        self.assertEqual(triggers['push'], {'branches': ['develop']})
+
+    def test_nothing_is_named_gate(self) -> None:
+        """required check 綁的是 `gate`；這支的名稱與 job 都不能叫它。"""
+        self.assertNotIn('gate', self.wf['name'].lower())
+        for job_id, job in self.wf['jobs'].items():
+            with self.subTest(job=job_id):
+                self.assertNotIn('gate', job_id.lower())
+                self.assertNotIn('gate', job.get('name', '').lower())
+
+    def test_calls_ci_with_full(self) -> None:
+        full = self.wf['jobs']['full']
+        self.assertEqual(full['uses'], './.github/workflows/ci.yml')
+        self.assertIs(full['with']['full'], True)
+        self.assertEqual(self.ci[True]['workflow_call']['inputs']['full']['type'], 'boolean')
+
+    def test_called_run_is_never_cancelled(self) -> None:
+        """被呼叫時 group 每個 commit 一個、不取消；呼叫端不另設 concurrency（同 group 會互等）。"""
+        self.assertNotIn('concurrency', self.wf)
+        concurrency = self.ci['concurrency']
+        self.assertIn('(inputs.full && github.sha)', concurrency['group'])
+        self.assertEqual(concurrency['cancel-in-progress'], '${{ !inputs.full }}')
+
+    def test_plan_receives_force_full(self) -> None:
+        step = next(s for s in self.ci['jobs']['plan']['steps'] if s.get('id') == 'plan')
+        self.assertEqual(step['env']['FORCE_FULL'], '${{ inputs.full }}')
+
+    def test_force_full_ignores_changes(self) -> None:
+        self.assertEqual(plan_ci.plan(['README.md'], 'push', '')['ts'], 'false')
+        result = plan_ci.plan(['README.md'], 'push', '', force_full=True)
+        self.assertEqual(result['ts'], 'true')
+        self.assertEqual(result['test_mode'], 'full')
+        self.assertEqual(result['harness_shard_total'], str(plan_ci.HARNESS_SHARDS))
+
+    def test_report_turns_red_with_the_run(self) -> None:
+        report = self.wf['jobs']['report']
+        self.assertEqual(report['needs'], 'full')
+        self.assertEqual(report['if'], 'always()')
+        step = report['steps'][0]
+        self.assertEqual(step['env']['RESULT'], '${{ needs.full.result }}')
+        self.assertIn('if [ "$RESULT" != "success" ]', step['run'])
