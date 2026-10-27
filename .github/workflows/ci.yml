@@ -134,7 +134,11 @@ jobs:
         if: steps.plan.outputs.mode == 'light' && steps.scope.outputs.node == 'true'
         run: |
           L="$RUNNER_TEMP/light"
-          run() { local name="$1" rc=0; shift; "$@" > "$RUNNER_TEMP/$name.log" 2>&1 || rc=$?; echo $rc > "$RUNNER_TEMP/$name.rc"; }
+          run() {
+            local name="$1" rc=0 start=$SECONDS; shift
+            "$@" > "$RUNNER_TEMP/$name.log" 2>&1 || rc=$?
+            echo $rc > "$RUNNER_TEMP/$name.rc"; echo $((SECONDS - start)) > "$RUNNER_TEMP/$name.sec"
+          }
           # $1 是「目錄<TAB>檔」的清單，其餘是指令：每個目錄各跑一次，檔接在指令後面。
           per_dir() {
             local tsv="$1" rc=0 d; shift
@@ -172,11 +176,11 @@ jobs:
           wait
           echo "affected=$(cat "$RUNNER_TEMP/affected.txt" 2>/dev/null || echo 0)" >> "$GITHUB_OUTPUT"
           rc=0
-          echo "| 檢查 | exit |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| --- | --- |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| 檢查 | exit | 秒 |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| --- | --- | --- |" >> "$GITHUB_STEP_SUMMARY"
           for name in typecheck format lint tests; do
             echo "::group::$name"; cat "$RUNNER_TEMP/$name.log"; echo "::endgroup::"
-            echo "| $name | $(cat "$RUNNER_TEMP/$name.rc") |" >> "$GITHUB_STEP_SUMMARY"
+            echo "| $name | $(cat "$RUNNER_TEMP/$name.rc") | $(cat "$RUNNER_TEMP/$name.sec") |" >> "$GITHUB_STEP_SUMMARY"
             [ "$(cat "$RUNNER_TEMP/$name.rc")" = "0" ] || { echo "::error::$name 失敗"; rc=1; }
           done
           exit $rc
