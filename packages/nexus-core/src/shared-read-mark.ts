@@ -8,9 +8,10 @@
  *
  * - **`read_file`**：路徑落在共用區路由上的成功結果。空檔（空文字，或基座空檔提示那一句）不標。
  * - **`grep` 的 `content` 模式**：行內看得到的命中裡，只要有一個檔在共用區路由上、又不在技能來源底下，整則開頭加一次；不逐筆插，
- *   基座的排版不動。外溢層存下的全文就是加過前綴的這一則（讀回來時路徑不在共用區，不會再加一次）；搜尋上限存下的完整清單
- *   從槽位重排、不經過這一層，沒有前綴。
- *   `files_with_matches`、`count` 兩種模式只有檔名或計數，不標。
+ *   基座的排版不動。外溢層存下的全文就是加過前綴的這一則（讀回來時路徑不在共用區，不會再加一次）。`files_with_matches`、`count`
+ *   兩種模式只有檔名或計數，不標。
+ * - **超過搜尋上限的 `grep`**（[#2065](https://github.com/DemianLi/nexus-agent/issues/2065)）：完整清單從槽位重排、不經過這一層，所以由搜尋上限那一層
+ *   用同一份判準（{@link createSharedGrepMark}）判完整清單：有要標的命中，行內與存檔兩份開頭都加；行內已經被這一層標過的不再加。
  * - 失敗的（`status: 'error'`，由貼著工具本體的 `fsToolErrors` 標好）、不是 `ToolMessage` 的（`Command`）原樣放過。
  * - `glob`、`ls`、附件、私有根、工具結果存檔都不標。
  * - **這條 thread 的技能來源底下不標**，含同目錄的範本與腳本：基座的技能提示詞要模型讀 `SKILL.md` 再照做，有共用區的 thread
@@ -132,6 +133,31 @@ function marked(content: ToolMessage['content']): ToolMessage['content'] {
     return [{ ...first, text: `${notice}\n\n${first.text}` }, ...rest] as ToolMessage['content'];
   }
   return [{ type: 'text', text: notice }, ...content] as ToolMessage['content'];
+}
+
+/** 搜尋上限那一層判完整清單用的那一份判準，見 {@link createSharedGrepMark}。 */
+export interface SharedGrepMark {
+  /** 這一次 `grep`（參數與照基座格式排版的文字）要不要標：`content` 模式下，有一個檔名行在共用區路由上、又不在技能來源底下。 */
+  isMarked(args: unknown, text: string): boolean;
+  /** 文字開頭加前綴；已經以前綴開頭的原樣回。 */
+  mark(text: string): string;
+}
+
+/**
+ * `grep` 的判準與加法，跟 {@link createSharedReadMarkMiddleware} 同一套，交給搜尋上限那一層判完整清單。
+ *
+ * @param prefix - 這條 thread 的共用區前綴（不含結尾斜線）。
+ * @param skillSources - 這條 thread 的技能來源，底下的不標。省略即沒有。
+ */
+export function createSharedGrepMark(
+  prefix: string,
+  skillSources: readonly string[] = [],
+): SharedGrepMark {
+  const head = `${SHARED_WORKSPACE_CONTENT_NOTICE}\n\n`;
+  return {
+    isMarked: (args, text) => grepIsMarked(args, text, prefix, skillSources),
+    mark: (text) => (text.startsWith(head) ? text : `${head}${text}`),
+  };
 }
 
 /**

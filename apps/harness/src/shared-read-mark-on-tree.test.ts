@@ -303,6 +303,87 @@ describe('外溢', () => {
   }, 60000);
 });
 
+describe('超過搜尋上限：判完整清單（#2065）', () => {
+  let stashRoot: string;
+  beforeEach(async () => {
+    stashRoot = await mkdtemp(join(tmpdir(), 'nexus-shared-mark-cap-'));
+  });
+  afterEach(async () => {
+    await rm(stashRoot, { recursive: true, force: true });
+  });
+
+  const NOTICE_RE = NOTICE.replace(/\./g, '\\.');
+
+  /** 搜一次，再把存檔分兩段讀回來（開頭一段、第 `tailFrom` 行起的 50 行）。 */
+  async function capped(
+    pattern: string,
+    path: string,
+    tailFrom: number,
+  ): Promise<{ inline: string; head: string; tail: string }> {
+    const extra = { toolResultStash: { rootDir: stashRoot, session: 'shared-mark-cap' } };
+    const [inline] = (await run([call('grep', { pattern, path })], true, extra)).tools;
+    const stored = /\/large_tool_results\/\S+?-grep-results\.txt/u.exec(inline!)?.[0];
+    expect(stored).toBeDefined();
+    const [head, tail] = (
+      await run(
+        [
+          call('read_file', { file_path: stored! }),
+          call('read_file', { file_path: stored!, offset: tailFrom, limit: 50 }),
+        ],
+        true,
+        extra,
+      )
+    ).tools;
+    return { inline: inline!, head: head!, tail: tail! };
+  }
+
+  /** 私有根 `/a.md` 有 300 筆，排在 `/shared/` 的命中前面：行內的前 250 筆全在私有根。 */
+  async function privateFirst(): Promise<void> {
+    await writeFile(
+      join(priv, 'a.md'),
+      `${Array.from({ length: 300 }, (_, index) => `cap-hit-${index}`).join('\n')}\n`,
+      'utf8',
+    );
+  }
+
+  it('共用區的命中只在存檔裡：行內在 Found … matches 之後、存檔在開頭，各有一次前綴', async () => {
+    await privateFirst();
+    await writeFile(join(shared, 'ref.md'), 'cap-hit-shared\n', 'utf8');
+    const { inline, head, tail } = await capped('cap-hit-', '/', 295);
+    expect(inline).toMatch(new RegExp(`^Found 250 of 301 matches\\n\\n${NOTICE_RE}\\n\\n/a\\.md:`));
+    expect(inline).not.toContain('/shared/ref.md');
+    expect(inline.split(NOTICE)).toHaveLength(2);
+    expect(head).toMatch(
+      new RegExp(`^\\s*1\\t${NOTICE_RE}\\n\\s*2\\t\\n\\s*3\\tFound 301 matches`),
+    );
+    expect(tail).toContain('/shared/ref.md:');
+    expect(`${head}${tail}`.split(NOTICE)).toHaveLength(2);
+  }, 60000);
+
+  it('行內已經有共用區的命中：行內只標一次，存檔也標', async () => {
+    const many = Array.from({ length: 300 }, (_, index) => `deployer-${index}`).join('\n');
+    await writeFile(join(shared, 'many.md'), `${many}\n`, 'utf8');
+    const { inline, head } = await capped('deployer-', '/shared', 1);
+    expect(inline.split(NOTICE)).toHaveLength(2);
+    expect(head).toMatch(new RegExp(`^\\s*1\\t${NOTICE_RE}$`, 'mu'));
+  }, 60000);
+
+  it('命中全在私有根：行內與存檔都沒有前綴', async () => {
+    await privateFirst();
+    const { inline, head, tail } = await capped('cap-hit-', '/', 295);
+    expect(`${inline}${head}${tail}`).not.toContain(NOTICE);
+  }, 60000);
+
+  it('共用區的命中全在技能目錄：行內與存檔都沒有前綴', async () => {
+    await privateFirst();
+    await mkdir(join(shared, 'skills', 'demo'), { recursive: true });
+    await writeFile(join(shared, 'skills', 'demo', 'SKILL.md'), 'cap-hit-skill\n', 'utf8');
+    const { inline, head, tail } = await capped('cap-hit-', '/', 295);
+    expect(tail).toContain('/shared/skills/demo/SKILL.md:');
+    expect(`${inline}${head}${tail}`).not.toContain(NOTICE);
+  }, 60000);
+});
+
 describe('子代理', () => {
   it('子代理讀 /shared/：同樣帶前綴', async () => {
     const { results } = await run([

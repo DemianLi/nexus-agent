@@ -23,7 +23,8 @@
  * 1. {@link createSearchOverflowMiddleware}（`wrapToolCall`）在那三顆工具的呼叫外面開一個槽，記著上限；
  * 2. {@link capSearchResults} 包 backend，在**這次呼叫的第一次** `grep`／`glob`／`ls` 拿到結構化結果時，超過上限就把
  *    完整的放進槽、只把前段交給基座的工具本體；
- * 3. 工具回來之後，middleware 把完整的那份照基座的格式排好存檔，在基座排好的前段後面接上定位。
+ * 3. 工具回來之後，middleware 把完整的那份照基座的格式排好存檔，在基座排好的前段後面接上定位。有 `sharedMark` 時，`grep` 的完整清單
+ *    也在這裡判共用區前綴（前綴層只看得到行內那一份），判中了行內與存檔兩份開頭都加。
  *
  * 只掛一半會靜默失效（沒有槽，包裝什麼都不做；沒有包裝，槽永遠是空的），所以兩半都只由 `foldRegistry` 組起來（#698）。
  *
@@ -54,6 +55,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { resolveToolName } from './containment.js';
+import type { SharedGrepMark } from './shared-read-mark.js';
 import type { SpillRef, SpillStore } from './spill-policy.js';
 
 /** 這一層 middleware 的名字。 */
@@ -109,6 +111,11 @@ export interface SearchOverflowOptions {
   readonly store?: SpillStore;
   /** 沒存到時講一聲。缺席就不講。 */
   readonly warn?: (message: string) => void;
+  /**
+   * 共用區前綴的判準（[#2065](https://github.com/DemianLi/nexus-agent/issues/2065)）：給了，`grep` 超過上限時判**完整**清單；清單裡有在共用區路由上、
+   * 又不在技能來源底下的命中，行內與存檔兩份開頭都加前綴，行內已經以前綴開頭的不再加。只有有共用區的 thread 給；缺席就不判。見 `shared-read-mark.ts`。
+   */
+  readonly sharedMark?: SharedGrepMark;
 }
 
 /** 管的三顆工具。 */
@@ -409,8 +416,15 @@ export function createSearchOverflowMiddleware(options: SearchOverflowOptions): 
       const overflow = slot.overflow;
       if (overflow === undefined) return result;
       if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
-      const text = plainText(result.content);
-      if (text === undefined) return result;
+      const inline = plainText(result.content);
+      if (inline === undefined) return result;
+      const full = fullText(overflow);
+      // 前綴層只看得到行內那一份，完整清單在這裡判；判中了兩份都標，行內已經標過的不重複。
+      const shared =
+        toolName === 'grep' && options.sharedMark?.isMarked(slot.args, full) === true
+          ? options.sharedMark
+          : undefined;
+      const text = shared?.mark(inline) ?? inline;
       let ref: SpillRef | undefined;
       if (options.store === undefined) {
         options.warn?.(`search-overflow: 沒有存檔服務，${toolName} 的完整結果沒存到`);
@@ -425,7 +439,7 @@ export function createSearchOverflowMiddleware(options: SearchOverflowOptions): 
               label: 'result',
             },
             suggestedName: `${toolName}-results.txt`,
-            content: fullText(overflow),
+            content: shared?.mark(full) ?? full,
           });
         } catch (error: unknown) {
           // 照 dsh：存不下不讓搜尋失敗，也不藏起行內那份，結尾講明沒存到。
