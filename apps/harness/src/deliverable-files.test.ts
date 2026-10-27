@@ -46,7 +46,7 @@ import {
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
-import { locateDeliverable } from './deliverable-files.js';
+import { locateDeliverable, locateDeliverableFile } from './deliverable-files.js';
 import {
   deliverableFilesConfigSchema,
   DEFAULT_DELIVERABLE_MAX_LINES,
@@ -773,6 +773,36 @@ describe('閘門', () => {
       expect(outcome.seq).toBe(-1);
     } finally {
       await outcome.close();
+    }
+  });
+
+  // 下面兩條直接打 `locateDeliverableFile`：判的是解出來的父目錄落不落在根內，跟錨與宣告無關；根是 `/` 也沒辦法經產品組裝在測試裡造出來。
+  it('工作區根是 `/`：根底下的檔讀得到，不會每一份都被拒成工作區外', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nexus-deliverable-root-'));
+    try {
+      await writeFile(join(dir, 'a.md'), 'hello\n');
+      const found = await locateDeliverableFile('/', join(dir, 'a.md'));
+      expect(found).toMatchObject({
+        kind: 'ok',
+        value: { stat: { path: join(dir, 'a.md'), bytes: 6 } },
+      });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('中間一層目錄是指到工作區外的符號連結：拒成工作區外', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nexus-deliverable-escape-'));
+    try {
+      await mkdir(join(dir, 'root'));
+      await mkdir(join(dir, 'outside'));
+      await writeFile(join(dir, 'outside', 'secret.md'), 'secret\n');
+      await symlink(join(dir, 'outside'), join(dir, 'root', 'via'));
+      const refused = await locateDeliverableFile(join(dir, 'root'), 'via/secret.md');
+      expect(refused).toMatchObject({ kind: 'refused', reason: 'not-found' });
+      expect(refused.kind === 'refused' && refused.message).toContain('工作區外');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });
