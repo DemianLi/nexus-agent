@@ -43,6 +43,7 @@ jobs:
           title=$(printf '%s\n' "$MESSAGE" | head -n 1)
           # squash 合併的標題結尾是 `(#N)`。
           pr=$(printf '%s' "$title" | sed -nE 's/.*\(#([0-9]+)\)$/\1/p')
+          pr_ref=${pr:+#$pr}
           if [ -n "$pr" ]; then
             pr_line="[#$pr]($PULL_URL/$pr)"
           elif [ "$EVENT" = "workflow_dispatch" ]; then
@@ -57,6 +58,6 @@ jobs:
             echo "- PR：$pr_line"
           } >> "$GITHUB_STEP_SUMMARY"
           if [ "$RESULT" != "success" ]; then
-            echo "::error::完整一輪是 '$RESULT'：commit ${SHA:0:8}，PR ${pr:+#$pr}${pr:-不明}。先開撤回 PR，讓 develop 恢復綠，修好再重新開。"
+            echo "::error::完整一輪是 '$RESULT'：commit ${SHA:0:8}，PR ${pr_ref:-不明}。先開撤回 PR，讓 develop 恢復綠，修好再重新開。"
             exit 1
           fi
