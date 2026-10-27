@@ -85,8 +85,9 @@ def changed_plugin_dirs(changed: list[str]) -> list[str]:
     return sorted(d for d in dirs if (ROOT / d / 'package.json').exists())
 
 
-def plan(changed: list[str], event: str, base_ref: str) -> dict[str, str]:
-    forced = any(rx.search(p) for p in changed for rx in FULL_RES)
+def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False) -> dict[str, str]:
+    """`force_full` 是合併後完整一輪（`post-merge.yml` 呼叫 ci.yml 時帶 `full: true`）：不看異動，一律全跑。"""
+    forced = force_full or any(rx.search(p) for p in changed for rx in FULL_RES)
     if not (forced or any(TS_RE.search(p) for p in changed)):
         return {
             'ts': 'false',
@@ -173,7 +174,12 @@ SUITES = {
 def main(argv: list[str]) -> int:
     cmd = argv[1] if len(argv) > 1 else ''
     if cmd == 'plan':
-        result = plan(read_changed(), os.environ.get('EVENT_NAME', ''), os.environ.get('BASE_REF', ''))
+        result = plan(
+            read_changed(),
+            os.environ.get('EVENT_NAME', ''),
+            os.environ.get('BASE_REF', ''),
+            os.environ.get('FORCE_FULL', '') == 'true',
+        )
         print(json.dumps(result, ensure_ascii=False, indent=2))
         target = os.environ.get('GITHUB_OUTPUT')
         if target:
