@@ -179,7 +179,7 @@ jobs:
           echo "| 檢查 | exit | 秒 |" >> "$GITHUB_STEP_SUMMARY"
           echo "| --- | --- | --- |" >> "$GITHUB_STEP_SUMMARY"
           for name in typecheck format lint tests; do
-            echo "::group::$name"; cat "$RUNNER_TEMP/$name.log"; echo "::endgroup::"
+            echo "::group::$name（$(cat "$RUNNER_TEMP/$name.sec") 秒）"; cat "$RUNNER_TEMP/$name.log"; echo "::endgroup::"
             echo "| $name | $(cat "$RUNNER_TEMP/$name.rc") | $(cat "$RUNNER_TEMP/$name.sec") |" >> "$GITHUB_STEP_SUMMARY"
             [ "$(cat "$RUNNER_TEMP/$name.rc")" = "0" ] || { echo "::error::$name 失敗"; rc=1; }
           done
