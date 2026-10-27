@@ -12,6 +12,9 @@
  * - **寫入等 drain**：`write` 回 `false` 且連線還沒毀，就等 `'drain'` 或 `'close'` 其中一個，照 dsh
  *   `packages/client/connection/src/http-bridge.ts:106-124`（`1517a4db`，與 `687f282e` 的 blob 相同）。沒有它，對方不收時
  *   Node 照樣把每一顆 frame 收進寫入緩衝，緩衝沒有上限。斷線之後照 dsh 把 body 讀完但不寫。
+ *   **一個回應只掛一組常駐的 listener**，每次卡住只換喚醒的函式（[#1903](https://github.com/DemianLi/nexus-agent/issues/1903)）：
+ *   `compression` 1.8.2 只改寫 `res.on`，`'drain'` 掛到 gzip 串流上，`off`／`once` 的自我移除卻對 res 做，拆不掉；每卡一次掛一個
+ *   的寫法會在 gzip 串流上一路累積，超過 10 個就印 `MaxListenersExceededWarning`。
  * - **SSE 心跳與死線**：對應 dsh `packages/api/gateway/src/stream-server.ts`（`MAX_MISSED_HEARTBEATS = 2`、預設間隔 2000 ms）。
  *   一支共用、`unref()` 的計時器，第一條 SSE 開線時才起，`close()` 先清它。
  *
@@ -378,6 +381,15 @@ async function writeResponse(
     heartbeat.watch(outgoing, path);
   }
   const reader = response.body.getReader();
+  // 卡在 drain 時的喚醒函式；'drain' 與 'close' 都叫它（見檔頭）。
+  let wake: (() => void) | undefined;
+  const onWritable = (): void => {
+    const resume = wake;
+    wake = undefined;
+    resume?.();
+  };
+  outgoing.on('drain', onWritable);
+  outgoing.on('close', onWritable);
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -391,19 +403,16 @@ async function writeResponse(
       // 'close' 也算一個出口，斷線時迴圈才不會停在這裡。
       if (!outgoing.write(value) && !outgoing.destroyed) {
         await new Promise<void>((resolve) => {
-          const done = (): void => {
-            outgoing.off('drain', done);
-            outgoing.off('close', done);
-            resolve();
-          };
-          outgoing.once('drain', done);
-          outgoing.once('close', done);
+          wake = resolve;
         });
       }
     }
   } catch {
     // 對方先斷線是正常結束，不是錯誤。
   } finally {
+    // 壓縮時 'drain' 那一個拆不掉，跟著 gzip 串流在回應結束後一起回收；每個回應最多留這一個。
+    outgoing.off('drain', onWritable);
+    outgoing.off('close', onWritable);
     reader.releaseLock();
     outgoing.end();
   }

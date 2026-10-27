@@ -5,6 +5,8 @@ import { request as httpRequest } from 'node:http';
 import type { ServerResponse } from 'node:http';
 import { connect } from 'node:net';
 import type { Socket } from 'node:net';
+import zlib from 'node:zlib';
+import type { Gzip } from 'node:zlib';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { WireHandler } from './wire-handler.js';
@@ -212,6 +214,54 @@ describe('背壓不因打開 gzip 而退化（#1570 驗收 5）', () => {
     expect(first).toBeLessThan(PRODUCE_CEILING / 2);
     expect(second - first).toBeLessThanOrEqual(1);
   });
+
+  /**
+   * `compression` 1.8.2 只改寫 `res.on`：`'drain'` 掛到 gzip 串流上，`off`／`removeListener` 卻還是對 res 做
+   * （[#1903](https://github.com/DemianLi/nexus-agent/issues/1903)）。每顆 frame 都比 gzip 串流的緩衝大，`write()` 幾乎每次回 `false`；
+   * 抓下 compression 建的那一條串流，數它卡了幾次、每次寫入時掛著幾個 drain listener。
+   */
+  it('會被壓的串流卡 drain 200 次以上：gzip 串流上的 drain listener 數不跟著長，不出現 MaxListenersExceededWarning', async () => {
+    const stalls = { count: 0, maxDrainListeners: 0 };
+    const create = zlib.createGzip.bind(zlib);
+    const spy = vi.spyOn(zlib, 'createGzip').mockImplementation((options) => {
+      const gzip: Gzip = create(options);
+      const write = gzip.write.bind(gzip) as (chunk: Buffer) => boolean;
+      (gzip as unknown as { write: typeof write }).write = (chunk) => {
+        stalls.maxDrainListeners = Math.max(stalls.maxDrainListeners, gzip.listenerCount('drain'));
+        const ok = write(chunk);
+        if (!ok) stalls.count += 1;
+        return ok;
+      };
+      return gzip;
+    });
+    const warnings: string[] = [];
+    const onWarning = (warning: Error): void => {
+      warnings.push(`${warning.name}: ${warning.message}`);
+    };
+    process.on('warning', onWarning);
+    try {
+      const source = bulkSource({
+        contentType: 'application/json',
+        frame: randomBytes(FRAME_BYTES).toString('base64'),
+      });
+      running = await startWireServer({
+        handler: source.handler,
+        heartbeatIntervalMs: 60_000,
+        ...GZIP,
+      });
+      const socket = await openRawClient(running.url, 'Accept-Encoding: gzip\r\n');
+      socket.resume();
+
+      expect(await until(() => stalls.count >= 200, 20_000)).toBe(true);
+      // warning 在 nextTick 才發。
+      await sleep(50);
+      expect(stalls.maxDrainListeners).toBeLessThanOrEqual(2);
+      expect(warnings.filter((w) => w.startsWith('MaxListenersExceededWarning'))).toEqual([]);
+    } finally {
+      process.off('warning', onWarning);
+      spy.mockRestore();
+    }
+  }, 30_000);
 });
 
 describe('SSE 不壓、第一顆 frame 照樣即時到（#1570 驗收 3）', () => {
