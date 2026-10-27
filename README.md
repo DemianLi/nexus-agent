@@ -94,7 +94,7 @@ pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 
 （含怎麼參照 DeepSeek Harness 選做法）見 [AGENTS.md](AGENTS.md)。
 
 CI 只有 `gate` 一個 required status check，無條件觸發，`gate` 只是把其他 job 的結果收斂成單一燈號。
-功能分支 → `develop` 的 PR 走輕的模式：`plan` job 只做擋樹的檢查（PR 標題與格式、受影響套件的型別檢查、異動檔的
+功能分支 → `develop` 的 PR 走輕的模式：`plan` job 只做擋樹的檢查（PR 標題與格式、CI 腳本的測試、lockfile 新版本的發布年齡、受影響套件的型別檢查、異動檔的
 format 與 lint、改到的測試檔加上同名測試檔），沒東西可查時不安裝相依——純文件的 PR 不會卡住。全套測試與 web build
 在合併進 `develop` 之後的那一輪跑。動到 `.github/workflows|scripts|actions` 的功能 PR、`develop → main` 的 PR 與
 `main` 的 push 一律全跑（判斷邏輯見 [`.github/scripts/plan_ci.py`](.github/scripts/plan_ci.py)）。

@@ -99,9 +99,9 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 | `main` | 發佈分支。唯一能產出 GitHub Release 的分支。 |
 
 - **兩條分支都禁止直接 push**，一律走 Pull Request。
-- **`gate` CI 必須綠燈**才能合併。功能分支 → `develop` 的 PR 走輕的模式，在 `plan` 裡只跑：PR 標題與格式、受影響套件
-  （含下游）的型別檢查、異動檔的 format 與 lint、改到的測試檔加上改到的原始檔同名的測試檔。全套測試、瀏覽器護欄、
-  web build、packed-install、node-compat 在合併後那一輪跑；動到 `.github/workflows|scripts|actions` 的 PR 照樣全跑
+- **`gate` CI 必須綠燈**才能合併。功能分支 → `develop` 的 PR 走輕的模式，在 `plan` 裡只跑：PR 標題與格式、CI 腳本的測試、
+  lockfile 新版本的發布年齡、受影響套件（含下游）的型別檢查、異動檔的 format 與 lint、改到的測試檔加上改到的
+  原始檔同名的測試檔。全套測試、瀏覽器護欄、web build、packed-install、node-compat 在合併後那一輪跑；動到 `.github/workflows|scripts|actions` 的 PR 照樣全跑
   （`.github/workflows/ci.yml` 檔頭）。只改 PR 內文不會重跑 gate，改標題會。
 - **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（Actions 的「合併後完整一輪」，`.github/workflows/post-merge.yml`）。
   它不擋合併，但合併的 dev session **開下一張 PR 之前，先確認自己那個合併 commit 的這一輪是綠的**。
