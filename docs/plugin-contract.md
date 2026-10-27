@@ -418,10 +418,8 @@ ctx.effect(() => {
 「一支中央測試自動對每顆跑 `checkConformance`」做不到，因為 `row`、`providers`、`residue` 是每顆插件各自的東西，所以
 gate 檢查的是「這條測試存在」。
 
-**CI 上哪裡跑**：lint 在 static job 的 `pnpm -r run lint`；gate 在 harness 的測試。只動某顆插件的 PR 走選擇性測試，
-harness 只跑 import 圖上的測試，而 gate 是動態載入、不在圖上，所以 `plan_ci.py` 的 harness 必跑集合用
-`collectMigratedPluginViolations` 這個字面（gate 測試本來就會呼叫它）把它釘進去。只動 `packages/nexus-sdk` 的 PR 一律
-全跑（`FULL_RES`）。
+**CI 上哪裡跑**：lint 在全跑那一層 static job 的 `pnpm -r run lint`，輕的模式只 lint 異動檔；gate 在 harness 的測試，
+功能 PR 不跑它（輕的模式只跑改到的測試檔與同名測試檔），合併進 `develop` 之後的那一輪跑。
 
 ## 能比版本路由早上樹的插件
 
@@ -596,8 +594,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
   （`PluginTree.#build` 與 `mountDetached` 兩處）、`RowVerdict.active` 多一格、`#snapshot` 把登記處的 `entries()` 分給列；
   (3) `startup-audit.ts` 的 `REQUIRED_TREE_ENTRY_IDS` 加上那一列的 id（它起不來，函式插件沒有地方掛）；
   (4) `plugin-config.ts` 的 `FoldedContributions` 與 `registerFolded` 多一格，折進 registry 的對應通道；
-  (5) 一致性套件的 `residue` 由消費者的測試指到提供者的登記筆數（`registrations()`），而且要掛上後比掛上前多；
-  (6) `.github/scripts/plan_ci.py` 的 `FULL_RES` 加上新的定義套件（遷出的插件都相依它，改了就不能只跑改動的那幾顆插件）。
+  (5) 一致性套件的 `residue` 由消費者的測試指到提供者的登記筆數（`registrations()`），而且要掛上後比掛上前多。
 - **設定帶 `__jsExpr` 整份拒絕**：Loader 的 `interpolate` 會把它當 JavaScript `eval`。相容層讀清單時掃走橋接那幾列的最終
   `config`（寫入前驗證走同一條，所以寫入口當場擋下，不會把一條讓之後每次啟動都失敗的東西寫進紀錄），推上樹之前再掃一遍
   整份 patch 當後盾。第三道在 vendor 的 Include（`vendor/README.md` 本地修改第 11 條，#1461）：它讀完出貨檔、疊完 patch、

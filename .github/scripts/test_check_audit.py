@@ -217,9 +217,9 @@ class CommittedList(unittest.TestCase):
         self.assertEqual(problems, [])
 
     def test_editing_the_list_runs_this_test(self) -> None:
-        # 這條測試在 static 跑，static 只在全跑或有 TypeScript 異動時跑：只改清單的 PR 要被 plan 判成全跑。
+        # 這條測試在輕的模式的 plan 裡每一輪都跑；全跑那一層在 static 跑，static 只在 plan 判成要掃時跑：只改清單的 commit 也要掃。
         changed = EXCEPTIONS.relative_to(ROOT).as_posix()
-        self.assertTrue(any(rx.search(changed) for rx in plan_ci.FULL_RES), changed)
+        self.assertEqual(plan_ci.plan([changed], 'push', '')['ts'], 'true', changed)
 
 
 if __name__ == '__main__':
