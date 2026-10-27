@@ -1,15 +1,15 @@
 name: 合併後完整一輪
 
 # 每個合進 develop 的 commit 各跑一輪完整的 ci.yml（不看異動、一律全跑），而且不被下一個 commit 取消，
-# 紅了就能指出是哪一張 PR。不擋合併，也不能設成 required check。
-# 合併的 dev session 開下一張 PR 之前，先確認自己那個合併 commit 的這一輪是綠的；紅了先撤回再修（見 AGENTS.md「分支策略」）。
+# 紅了就能指出是哪一張 PR。不擋合併，也不能設成 required check：它只在 push 時跑，PR 上永遠等不到它。
+# 紅了怎麼處理見 AGENTS.md「分支策略」。
 #
 # 這支刻意不設 concurrency：ci.yml 被呼叫時用 sha 當 group、不取消（見 ci.yml 的 concurrency）。
-# 呼叫端再設同一個 group 會跟被呼叫端互等。
+# 呼叫端若設同一個 group，GitHub 會判成 deadlock 並取消整輪。
 on:
   push:
     branches: [develop, ci/develop-full-run]
-  # 補跑某個 commit 用。只認預設分支上的這支檔，合併前不能在功能分支上觸發。
+  # 手動觸發：跑所選分支最新的 commit（這支檔要先在預設分支上才觸發得了）。要重跑某個舊 commit，到那一輪按 Re-run。
   workflow_dispatch:
 
 permissions:
@@ -22,7 +22,7 @@ jobs:
     with:
       full: true
 
-  # 被呼叫的 ci.yml 裡的 gate 已經逐個判過每個 job；這裡只把結論對到 commit 與 PR。
+  # needs.full.result 是被呼叫那一輪所有 job 的彙總（gate 也在其中）；這裡只把結論對到 commit 與 PR。
   report:
     name: 結果
     needs: full
@@ -35,7 +35,7 @@ jobs:
           SHA: ${{ github.sha }}
           EVENT: ${{ github.event_name }}
           REF_NAME: ${{ github.ref_name }}
-          # commit 訊息是外部輸入，一律經環境變數傳，不經 shell 展開。手動觸發時沒有這個值。
+          # commit 訊息是外部輸入，經環境變數傳，不用 ${{ }} 內插進 run，免得被當成指令。手動觸發時沒有這個值。
           MESSAGE: ${{ github.event.head_commit.message }}
           COMMIT_URL: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}
           PULL_URL: ${{ github.server_url }}/${{ github.repository }}/pull

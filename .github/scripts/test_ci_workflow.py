@@ -252,7 +252,7 @@ class PersistenceChanges(unittest.TestCase):
 
 
 class PostMerge(unittest.TestCase):
-    """合併後完整一輪（#2089）：每個 develop commit 一輪全跑、不被取消、不是 gate。這幾處改錯了 PR 上不會有任何東西紅。"""
+    """合併後完整一輪（#2089）：每個 develop commit 一輪全跑、不被取消、不是 gate。post-merge.yml 不在 PR 上跑，這幾處改錯了只有這組測試會紅。"""
 
     def setUp(self) -> None:
         self.wf = load(CI.with_name('post-merge.yml'))
@@ -265,7 +265,7 @@ class PostMerge(unittest.TestCase):
         self.assertEqual(triggers['push'], {'branches': ['develop', 'ci/develop-full-run']})
 
     def test_nothing_is_named_gate(self) -> None:
-        """required check 綁的是 `gate`；這支的名稱與 job 都不能叫它。"""
+        """required check 比對的是 job 的 name；這支若有 job 叫 gate，它在 develop sha 上的結果會被 develop → main 的 PR 當成 gate。"""
         self.assertNotIn('gate', self.wf['name'].lower())
         for job_id, job in self.wf['jobs'].items():
             with self.subTest(job=job_id):
@@ -279,7 +279,7 @@ class PostMerge(unittest.TestCase):
         self.assertEqual(self.ci[True]['workflow_call']['inputs']['full']['type'], 'boolean')
 
     def test_called_run_is_never_cancelled(self) -> None:
-        """被呼叫時 group 每個 commit 一個、不取消；呼叫端不另設 concurrency（同 group 會互等）。"""
+        """被呼叫時 group 每個 commit 一個、不取消；呼叫端不另設 concurrency（同 group 會被判成 deadlock 取消）。"""
         self.assertNotIn('concurrency', self.wf)
         concurrency = self.ci['concurrency']
         self.assertIn('(inputs.full && github.sha)', concurrency['group'])

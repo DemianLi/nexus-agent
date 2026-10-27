@@ -6,7 +6,7 @@ on:
     # 需要 edited：標題被格式檢查擋下後，改標題要能重跑 gate。
     types: [opened, synchronize, reopened, edited]
   # push 只留 main：develop 的 push 會與 develop → main 的 PR 落在同一個 sha 上，產生兩個 gate，合併時要等兩輪。
-  # 合進 develop 之後的完整一輪由 post-merge.yml 呼叫這支（下面的 workflow_call）來跑，不是 gate。
+  # 合進 develop 之後的完整一輪見下方「兩層」。
   push:
     branches: [main]
   workflow_call:
@@ -16,8 +16,8 @@ on:
         type: boolean
         default: false
 
-# 被呼叫時，github.workflow 與 github.ref 是呼叫端的，所以完整一輪的 group 帶 sha、而且不取消：
-# 同一個 group 只容得下一輪在跑、一輪排隊，第三輪會把排隊的那一輪取消，group 要每個 commit 各一個。
+# 被呼叫時 github.* 是呼叫端的，不帶 sha 的話每個 develop commit 都落在同一個 group；一個 group 只容一輪在跑、
+# 一輪排隊，第三輪會取消排隊的那一輪。所以完整一輪的 group 帶 sha，也不取消進行中的。
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || (inputs.full && github.sha) || github.ref }}
   cancel-in-progress: ${{ !inputs.full }}
@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 # 兩層：
-#   - PR 與 main 的 push：這支，收斂成 required check `gate`，擋合併。
+#   - PR 與 main 的 push：這支，收斂成 required check `gate`。PR 上擋合併；main 的 push 是發版前的保險。
 #   - 合進 develop 之後：post-merge.yml 帶 `full: true` 呼叫這支，每個 develop commit 一輪全跑、不被下一個 commit 取消。
 #     不擋合併、不是 required check；check 名稱帶呼叫端 job 的前綴（`完整一輪 / gate`），跟 required 的 `gate` 不同名。
 #
@@ -45,7 +45,7 @@ permissions:
 # 同時活躍的峰值是中間那一段：static 1 ＋ typecheck 2 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ packed-install 1
 # ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）＝ 9。plan 在它之前、gate 在它之後，不同時。
 # 這個算式由 .github/scripts/test_ci_workflow.py 釘住，加 job 或加矩陣格時它會紅。
-# 合併後的完整一輪就是全跑的形狀（峰值 9），跟兩張 PR 同時跑時會超過 20，多出來的 job 排隊等，不會變紅。
+# 合併後的完整一輪就是全跑的形狀（峰值 9），跟兩張 PR 同時跑時可能超過 20（兩張都全跑時是 27），多出來的 job 排隊等，不會變紅。
 #
 # 新增檢查：往現有 job 加 step，或新增 job 並把它列進 gate 的 needs 與判斷（不列進去的 job 掛了 gate 也不會紅）。
 #
