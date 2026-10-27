@@ -47,6 +47,7 @@ import {
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   resumeClosingInterruptedTurn,
   SessionFormatUnsupportedError,
+  SessionLogOffset,
   turnReachedMaxTokens,
   type SessionLog,
 } from '@nexus/core';
@@ -1245,7 +1246,10 @@ async function runLaunched(
           ...(workspaceRoot !== undefined && { workspaceRoot }),
           // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
           ...(resumed !== undefined && {
-            resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+            resumedRoot: {
+              stored: resumed.stored,
+              storedCount: SessionLogOffset(resumed.events.length),
+            },
           }),
           // **背景寫入被拒只有這一行看得見**（協調器自己吞掉，響亮的那次歸 `flush`）。
           // 走 `printer.error` 而不是 `console.warn`，理由同不變量那條：前綴是唯一分得出

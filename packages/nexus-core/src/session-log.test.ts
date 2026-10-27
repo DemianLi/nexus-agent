@@ -17,6 +17,8 @@ import {
   SESSION_EVENT_MAX_DEPTH,
   SessionEventDepthError,
   SessionLog,
+  SessionLogOffset,
+  SessionSeq,
 } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 
@@ -136,6 +138,27 @@ describe('SessionLog', () => {
 
     expect(event.data).toEqual(payload);
     expect(event.data).not.toBe(payload);
+  });
+});
+
+describe.each([
+  ['SessionSeq', SessionSeq],
+  ['SessionLogOffset', SessionLogOffset],
+] as const)('%s 的建構函式', (name, construct) => {
+  it('非負的安全整數原樣收下', () => {
+    expect(construct(0)).toBe(0);
+    expect(construct(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
+  it.each([
+    ['-0', -0],
+    ['負數', -1],
+    ['小數', 1.5],
+    ['超出安全整數', Number.MAX_SAFE_INTEGER + 1],
+    ['NaN', Number.NaN],
+  ])('%s 拋 TypeError', (_label, value) => {
+    expect(() => construct(value)).toThrow(TypeError);
+    expect(() => construct(value)).toThrow(name);
   });
 });
 
@@ -549,7 +572,7 @@ describe('認得的事件種類與可忽略旗標（#507）', () => {
 
   it('seed 接上來的標記原樣活過', () => {
     const resumed = new SessionLog('t', {
-      seed: [{ type: 'turn/end', seq: 0, time: 1, data: {}, ignorable: true }],
+      seed: [{ type: 'turn/end', seq: SessionSeq(0), time: 1, data: {}, ignorable: true }],
     });
     expect(resumed.events[0]?.ignorable).toBe(true);
   });
@@ -696,7 +719,7 @@ describe('JSON 快照照 dsh 的規則（#1526）', () => {
         seed: [
           {
             type: 'tool/result',
-            seq: 0,
+            seq: SessionSeq(0),
             time: 0,
             data: { callId: shape, isError: false, meta: value },
           },
@@ -771,7 +794,7 @@ describe('寫入那一關的深度上限（#1661）', () => {
       seed: [
         {
           type: 'tool/result',
-          seq: 0,
+          seq: SessionSeq(0),
           time: 0,
           data: { callId: 'old', isError: false, meta: nested(3_000, 'array') },
         },

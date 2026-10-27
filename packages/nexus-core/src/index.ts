@@ -811,6 +811,8 @@ export {
   SESSION_EVENT_MAX_DEPTH,
   SessionEventDepthError,
   SessionLog,
+  SessionLogOffset,
+  SessionSeq,
   snapshotJsonValue,
   validateSessionEventData,
 } from './session-log.js';

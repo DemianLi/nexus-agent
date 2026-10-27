@@ -12,7 +12,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SESSION_LOG_FORMAT_VERSION, attachSessionPersistence, SessionRegistry } from '@nexus/core';
+import {
+  SESSION_LOG_FORMAT_VERSION,
+  attachSessionPersistence,
+  SessionLogOffset,
+  SessionRegistry,
+} from '@nexus/core';
 import type { SessionEvent, SessionStore, StoredSession, StoredSessionHeader } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -61,7 +66,7 @@ describe('子代理收尾失敗，root 的寫租約照樣放掉（#1511）', () 
     };
     const sessions = new SessionRegistry('root', { rootSeed: resumed.events });
     const persistence = attachSessionPersistence(sessions, store, {
-      resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+      resumedRoot: { stored: resumed.stored, storedCount: SessionLogOffset(resumed.events.length) },
       warn: () => {},
     });
     // 排在 root 後面的子代理；倒著收，它先收、先拋錯。

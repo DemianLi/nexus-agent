@@ -15,7 +15,12 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { SESSION_LOG_FORMAT_VERSION, SessionCorruptionError, SessionLog } from '@nexus/core';
+import {
+  SESSION_LOG_FORMAT_VERSION,
+  SessionCorruptionError,
+  SessionLog,
+  SessionSeq,
+} from '@nexus/core';
 
 import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
 import { isListedThread } from './session-list.js';
@@ -168,7 +173,7 @@ describe('相容（驗收 6）', () => {
     const resumed = await openJsonlSessionStore({ directory }).resume('a');
     // 換版是續寫時的原子取代（#1509），同 `jsonl-session-store-header-replace.test.ts`。
     await resumed.stored.append([
-      { type: 'session/end-seed', seq: resumed.events.length, time: 2, data: {} },
+      { type: 'session/end-seed', seq: SessionSeq(resumed.events.length), time: 2, data: {} },
     ]);
     await resumed.stored.close();
     expect(SESSION_LOG_FORMAT_VERSION).toBe(51);
