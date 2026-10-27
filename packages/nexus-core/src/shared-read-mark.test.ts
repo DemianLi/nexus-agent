@@ -9,7 +9,7 @@ import { CompositeBackend, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
 import { EMPTY_CONTENT_WARNING } from './read-continuation.js';
-import { createSharedReadMarkMiddleware } from './shared-read-mark.js';
+import { createSharedGrepMark, createSharedReadMarkMiddleware } from './shared-read-mark.js';
 import { SHARED_WORKSPACE_CONTENT_NOTICE as NOTICE } from './untrusted-content.js';
 
 type Wrapper = (
@@ -228,4 +228,24 @@ describe('技能來源底下不標', () => {
 it.each(['glob', 'ls', 'write_file', 'edit_file'])('%s：不看', async (name) => {
   const result = message('/shared/ref.md:');
   expect(await through(name, { path: '/shared', file_path: '/shared/a.md' }, result)).toBe(result);
+});
+
+describe('createSharedGrepMark：搜尋上限那一層判完整清單用的同一份判準（#2065）', () => {
+  const mark = createSharedGrepMark('/shared', ['/shared/skills/']);
+
+  it.each([
+    ['共用區其他檔', '/a.md:\n  1: hit\n/shared/ref.md:\n  1: hit', {}, true],
+    ['只在私有根', '/a.md:\n  1: hit', {}, false],
+    ['只在技能目錄', '/shared/skills/demo/SKILL.md:\n  1: hit', {}, false],
+    ['檔名模式', '/shared/ref.md:', { output_mode: 'files_with_matches' }, false],
+    ['縮排的命中行不算檔名行', '/a.md:\n  1: /shared/ref.md:', {}, false],
+  ])('%s', (_label, text, args, expected) => {
+    expect(mark.isMarked({ pattern: 'hit', ...args }, text)).toBe(expected);
+  });
+
+  it('加在開頭；已經以前綴開頭的不再加', () => {
+    const once = mark.mark('/shared/ref.md:\n  1: hit');
+    expect(once).toBe(`${NOTICE}\n\n/shared/ref.md:\n  1: hit`);
+    expect(mark.mark(once)).toBe(once);
+  });
 });

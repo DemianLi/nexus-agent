@@ -162,6 +162,8 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
   **技能來源目錄底下也沒有**（出廠是 `/skills/`，有共用區的新 thread 換到 `/shared/skills/`），含同目錄的範本與腳本：模型要讀 `SKILL.md` 再照做，
   標了技能就失效。所以不是技能的參考資料別放進技能來源目錄；`grep` 的命中只要有一個檔在共用區、又不在技能來源底下，整則照樣有這一行。
   `grep` 的結果外溢時，存下的全文就是加過這一行的那一則，所以從 `/large_tool_results/` 讀回來時第一行就是它；讀回來那一次不會再加第二行。
+  `grep` 的命中超過筆數上限（`grepMaxMatches`，預設 250）時，判的是**完整**清單（[#2065](https://github.com/DemianLi/nexus-agent/issues/2065)）：共用區的命中就算全被擠出行內的前 250 筆、只在存檔裡，
+  行內那一則（排在 `Found … matches` 之後，只有一次）與存下的完整清單開頭都有這一行；從存檔讀回來時第一行就是它。
 - **外掛掛的 backend 路由不得與組裝點自己的路由重疊**（`/shared/`、`/conversation_history/`、工具結果暫存與附件的前綴，以及根 `/`）：外掛的路由
   包在組裝點預設路由的外面，重疊會蓋掉 `/shared/` 的唯讀，所以載入當場拒絕並點名外掛與前綴。
 - **舊 thread 不搬**：header 記的根就是 `--workspace`、或 header 沒有那一格的對話，繼續把 `--workspace` 當可寫根（沒有 `/shared`），
