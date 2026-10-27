@@ -30,6 +30,7 @@ import {
   replayConversation,
   resumeClosingInterruptedTurn,
   SessionLog,
+  SessionSeq,
 } from '@nexus/core';
 import type { SessionEvent, SessionFormatCatalog } from '@nexus/core';
 
@@ -170,7 +171,7 @@ describe.each(names)('夾具 %s', (name) => {
       expect(resumed.storedFormatVersion).toBe(expected.sessions[id]!.headerVersion);
       const next: SessionEvent = {
         type: 'turn/start',
-        seq: resumed.events.length,
+        seq: SessionSeq(resumed.events.length),
         time: 1,
         data: { kind: 'message', text: '夾具續寫' },
       };

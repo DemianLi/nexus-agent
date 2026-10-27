@@ -6,7 +6,7 @@
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { SessionLog, toLoggedMessage } from '@nexus/core';
+import { SessionLog, SessionSeq, toLoggedMessage } from '@nexus/core';
 import type { LoggedMessage } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
@@ -210,7 +210,12 @@ describe('日誌裡凍過的深 meta（#1526）', () => {
     // 上限之前寫下、續接回來的舊日誌裡。
     const event = new SessionLog('t', {
       seed: [
-        { type: 'tool/result', seq: 0, time: 0, data: { callId: 'c1', isError: false, meta } },
+        {
+          type: 'tool/result',
+          seq: SessionSeq(0),
+          time: 0,
+          data: { callId: 'c1', isError: false, meta },
+        },
       ],
     }).events[0]!;
     const logged = (event.data as { meta: unknown }).meta;

@@ -77,6 +77,7 @@ import {
   SESSION_LOG_FORMAT_VERSION,
   sessionPersistencePlugin,
   SessionFormatUnsupportedError,
+  SessionLogOffset,
   SessionNotFoundError,
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
@@ -1575,7 +1576,7 @@ async function startServer(
                   ...(resumed !== undefined && {
                     resumedRoot: {
                       stored: resumed.stored,
-                      storedCount: resumed.events.length,
+                      storedCount: SessionLogOffset(resumed.events.length),
                       // 讀回來的 header 交給 `rootHeader()`：搜尋拿它跟盤上那份比（#1599）。
                       header: resumed.header,
                     },
