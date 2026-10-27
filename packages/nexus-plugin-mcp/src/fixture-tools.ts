@@ -76,13 +76,17 @@ export function registerFixtureTools(server: McpServer): void {
   }));
 
   // 欄位可為 null、又有可省略的聯集：2.0.0 起 adapter 不再簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
+  // 字串帶 `min(1)`：zod 4.6 起沒有其他約束的原始型別會收成 `type` 陣列，不產生 `anyOf`。
   server.registerTool(
     'nullable_args',
     {
       description: '收一個可為 null 的字串與一個字串或數字的聯集。',
       inputSchema: {
-        label: z.string().nullable().describe('標籤，可為 null'),
-        value: z.union([z.string(), z.number()]).optional().describe('字串或數字'),
+        label: z.string().min(1).nullable().describe('標籤，可為 null'),
+        value: z
+          .union([z.string().min(1), z.number()])
+          .optional()
+          .describe('字串或數字'),
       },
     },
     ({ label, value }) => ({ content: [{ type: 'text', text: JSON.stringify({ label, value }) }] }),

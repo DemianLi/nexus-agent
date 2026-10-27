@@ -92,8 +92,11 @@ export function registerModernTools(server: McpServer): void {
     {
       description: '收一個可為 null 的字串與一個字串或數字的聯集。',
       inputSchema: z.object({
-        label: z.string().nullable().describe('標籤，可為 null'),
-        value: z.union([z.string(), z.number()]).optional().describe('字串或數字'),
+        label: z.string().min(1).nullable().describe('標籤，可為 null'),
+        value: z
+          .union([z.string().min(1), z.number()])
+          .optional()
+          .describe('字串或數字'),
       }),
     },
     ({ label, value }): CallToolResult => ({

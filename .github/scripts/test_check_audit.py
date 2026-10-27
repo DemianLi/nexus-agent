@@ -18,8 +18,8 @@ import plan_ci
 from check_audit import EXCEPTIONS, NO_PATCH, ROOT, check, main, read_exceptions
 
 TODAY = date(2026, 10, 21)
-GHSA = 'GHSA-vfj7-8cjw-p6xm'
-PATH = 'apps__harness>deepagents>micromatch>braces'
+GHSA = 'GHSA-2222-3333-4444'
+PATH = 'apps__harness>parent-pkg>vuln-pkg'
 
 
 def advisory(
@@ -27,7 +27,7 @@ def advisory(
     severity: str = 'high',
     patched: str = NO_PATCH,
     paths: tuple[str, ...] = (PATH,),
-    module: str = 'braces',
+    module: str = 'vuln-pkg',
 ) -> dict:
     """`pnpm audit --json` 裡一筆 advisory 用得到的欄位。"""
     return {
@@ -160,7 +160,7 @@ class ListedAdvisory(unittest.TestCase):
         self.assertIn('有修補版了', problems[0])
 
     def test_unlisted_path_fails(self) -> None:
-        other = 'apps__harness>fast-glob>micromatch>braces'
+        other = 'apps__harness>other-parent>vuln-pkg'
         problems = run(audit(advisory(paths=(PATH, other))), listed(entry()))
         self.assertEqual(len(problems), 1)
         self.assertIn(other, problems[0])

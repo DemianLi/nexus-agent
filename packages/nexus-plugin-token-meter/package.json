@@ -21,9 +21,9 @@
   },
   "devDependencies": {
     "@langchain/core": "^1.2.9",
-    "@nexus/core": "workspace:*",
     "@nexus/cordis": "workspace:*",
     "@nexus/cordis-plugin-loader": "workspace:*",
+    "@nexus/core": "workspace:*",
     "@nexus/projections": "workspace:*",
     "@nexus/sdk": "workspace:*",
     "@types/node": "^24.10.0",
@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@nexus/wire": "workspace:*",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@nexus/cordis": "workspace:*",
