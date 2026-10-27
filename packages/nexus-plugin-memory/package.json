@@ -27,6 +27,6 @@
   },
   "dependencies": {
     "@nexus/core": "workspace:*",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   }
 }

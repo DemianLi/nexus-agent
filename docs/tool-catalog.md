@@ -159,13 +159,9 @@ Returns matching files or content per `output_mode`. Offloaded large tool result
     "glob": {
       "default": null,
       "description": "One glob filter for which files to search (e.g. \"*.ts\", \"*.{js,jsx}\"). Not a list; negation is not supported.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
+      "type": [
+        "string",
+        "null"
       ]
     },
     "max_count": {

@@ -75,14 +75,18 @@ export function registerFixtureTools(server: McpServer): void {
     content: [{ type: 'text', text: FAILURE_TEXT }],
   }));
 
-  // 欄位可為 null、又有可省略的聯集：2.0.0 起 adapter 不再簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
+  // 欄位可為 null、又有可省略的聯集：adapter 2.x 不簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
+  // 字串帶 `min(1)` 是為了讓 schema 保有 `anyOf`：zod 4.6 起，成員都是沒有其他約束的原始型別的 nullable／聯集會收成 `type` 陣列。
   server.registerTool(
     'nullable_args',
     {
       description: '收一個可為 null 的字串與一個字串或數字的聯集。',
       inputSchema: {
-        label: z.string().nullable().describe('標籤，可為 null'),
-        value: z.union([z.string(), z.number()]).optional().describe('字串或數字'),
+        label: z.string().min(1).nullable().describe('標籤，可為 null'),
+        value: z
+          .union([z.string().min(1), z.number()])
+          .optional()
+          .describe('字串或數字'),
       },
     },
     ({ label, value }) => ({ content: [{ type: 'text', text: JSON.stringify({ label, value }) }] }),

@@ -28,11 +28,11 @@
   "dependencies": {
     "@nexus/core": "workspace:*",
     "@nexus/timeout": "workspace:*",
-    "zod": "^4.3.6",
     "@opentelemetry/api-logs": "^0.221.0",
     "@opentelemetry/exporter-logs-otlp-http": "^0.221.0",
     "@opentelemetry/otlp-exporter-base": "^0.221.0",
     "@opentelemetry/resources": "^2.10.0",
-    "@opentelemetry/sdk-logs": "^0.221.0"
+    "@opentelemetry/sdk-logs": "^0.221.0",
+    "zod": "^4.6.7"
   }
 }
