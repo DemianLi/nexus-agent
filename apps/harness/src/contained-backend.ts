@@ -453,6 +453,22 @@ export interface ContainedFilesystemBackendOptions {
    * 讀不到的檔屬於別的 thread（#1822），都不開。判準與起點讀不到的規則見 `ripgrep-runner.ts` 檔頭。
    */
   readonly tolerateUnreadable?: boolean;
+  /**
+   * 不論模式、也不認領升級都拒絕變更的地方（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）。`write`、`edit`、`delete` 落在這裡的回
+   * `[containment]` 拒絕，`uploadFiles` 回 `permission_denied`；四者都不認領 grant、不接升級指引：升級是這條 thread 的使用者核准的，這幾個地方影響的是別人的 thread。**逐次呼叫讀**，
+   * 呼叫端可以在建構之後才知道清單。省略就沒有。
+   */
+  readonly reservedWrites?: () => readonly ReservedWrite[];
+}
+
+/** {@link ContainedFilesystemBackendOptions.reservedWrites} 的一格。 */
+export interface ReservedWrite {
+  /** 這個 backend 的虛擬路徑。 */
+  readonly path: string;
+  /** `true`：這個目錄本身與底下全部；`false`：只有這個路徑本身。 */
+  readonly subtree: boolean;
+  /** 拒絕訊息裡的理由。 */
+  readonly reason: string;
 }
 
 /** 讀檔改用串流的檔案大小門檻（位元組）。同 dsh 的 `STREAM_MIN_SIZE`（`read.ts:21`）。 */
@@ -509,6 +525,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private readonly atomicInternals: AtomicWriteInternals | undefined;
   /** 讀檔改串流的大小門檻。 */
   private readonly streamMinSize: number;
+  /** 不論模式都拒絕變更的地方；`undefined` 就是沒有。 */
+  private readonly reservedWrites: (() => readonly ReservedWrite[]) | undefined;
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
@@ -533,6 +551,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     this.tolerateUnreadable = options.tolerateUnreadable === true;
     this.atomicInternals = options.atomicInternals;
     this.streamMinSize = options.streamMinSize ?? READ_STREAM_MIN_SIZE;
+    this.reservedWrites = options.reservedWrites;
   }
 
   /**
@@ -1245,6 +1264,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
     // 指向兩個不同的模式。dsh 的「一次呼叫一份政策」在這個形狀底下就是這一行。
     const standing = this.mode;
+    // 保留的地方排在模式之前：全開與核准來的 grant 都蓋不過它，所以不記拒絕、不接指引。
+    const reserved = await this.reservedDenial(standing, filePath, operation);
+    if (reserved !== undefined) return { error: reserved };
     const first = await this.verdict(standing, filePath, operation);
     if (typeof first === 'string') return first;
 
@@ -1344,6 +1366,48 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // 基座那一次 lexical resolve 走的是實際位置。合法路徑走到這裡通常原封不動。
     const inside = relative(realRoot, realTarget);
     return inside === '' ? '/' : `/${inside.split(sep).join('/')}`;
+  }
+
+  /**
+   * 變更落在保留的地方（{@link ContainedFilesystemBackendOptions.reservedWrites}）就拒，不看模式。
+   *
+   * 兩邊都 canonicalize 之後比，經符號連結的別名（`/docs/AGENTS.md`，`docs` 指向根）也擋得到；解析失敗的退回字面位置比。
+   * **不分大小寫**：不分大小寫的檔案系統上，`/claude.md` 跟 `/CLAUDE.md` 是同一個檔。代價是分大小寫的檔案系統上，只差大小寫的名字也寫不進去。
+   * 路徑本身不合法（`..`、`~`、跑出根）的不在這裡判，交給 {@link verdict} 與基座。
+   *
+   * @param mode - 這一次呼叫用的模式，只用在拒絕訊息。
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 出現在拒絕訊息裡的操作名。
+   * @returns 落在保留的地方時的拒絕訊息；其餘 `undefined`。
+   */
+  private async reservedDenial(
+    mode: SandboxMode,
+    filePath: string,
+    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+  ): Promise<string | undefined> {
+    const reserved = this.reservedWrites?.() ?? [];
+    if (reserved.length === 0) return undefined;
+    const target = await this.placeOf(filePath);
+    if (target === undefined) return undefined;
+    for (const entry of reserved) {
+      const place = await this.placeOf(entry.path);
+      if (place === undefined) continue;
+      const hit = entry.subtree ? isWithin(place, target) : place === target;
+      if (hit) return this.denial(mode, operation, filePath, entry.reason);
+    }
+    return undefined;
+  }
+
+  /** {@link reservedDenial} 比對用的位置：canonicalize 之後轉小寫；解析失敗退回字面位置，路徑不合法回 `undefined`。 */
+  private async placeOf(virtualPath: string): Promise<string | undefined> {
+    let resolved: string;
+    try {
+      resolved = this.resolveVirtual(virtualPath);
+    } catch {
+      return undefined;
+    }
+    const place = await canonicalize(resolved).catch(() => resolved);
+    return place.toLowerCase();
   }
 
   /**
