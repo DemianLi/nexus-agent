@@ -59,6 +59,8 @@ import {
   createHostServicesPlugin,
   SessionRegistry,
   deriveApprovalChannel,
+  FS_SERVICE,
+  type FsService,
   type SessionLog,
   TokenAnchorBook,
 } from '@nexus/core';
@@ -101,6 +103,7 @@ import { subagentDefinitionValidator } from './subagent-definition.js';
 import { createModelSelectionHost, createModelSelectionPlugin } from './model-selection-host.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
 import { createFileReferencePlugin } from './file-references.js';
+import { sharedReservedWrites } from './shared-reserved-writes.js';
 
 /** 一次呼叫解析出來的東西。`prompt` 缺席即 REPL。 */
 export interface CliInvocation {
@@ -860,6 +863,11 @@ export async function createCliAgent(
      */
     readonly sharedWorkspaceRoot?: string;
     /**
+     * **可寫根就是新 thread 讀的共用區**（舊 thread，[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）：給了，圍堵 backend 對根目錄的指示檔與
+     * 技能來源目錄一律拒絕變更（`shared-reserved-writes.ts`）。只有 serve 依 placer 給；CLI 沒有新 thread 讀共用區，不給。
+     */
+    readonly rootIsShared?: boolean;
+    /**
      * 全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）：**只有 serve 給**，起動期建一份、每條 thread 的組裝
      * 共用同一份（名額是整台 serve 的，不是這條 thread 的）。對話、換模型別顆、背景子代理指定的模型、標題（含跟隨主路由的那顆）都從
      * 這一份取名額。省略＝不建閘（CLI、REPL、嵌入方與沒設 `maxConcurrentRequests` 的 serve）。
@@ -1108,6 +1116,8 @@ export async function createCliAgent(
   const approvalPolicy = new ApprovalPolicyController(
     invocation.approvalPolicy ?? (invocation.sandbox === 'danger-full-access' ? 'never' : 'ask'),
   );
+  /** 這次組裝 fold 完的 fs 把手，`createNexusAgent` 回來之後才填；保留清單讀它。 */
+  const settled: { fs?: FsService } = {};
   const backend =
     workspaceRoot === undefined
       ? undefined
@@ -1119,6 +1129,10 @@ export async function createCliAgent(
           grants: sandboxMode,
           // 多人共用主機上的使用者工作區：別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗（偏離 dsh，#1704）。
           tolerateUnreadable: true,
+          // 技能來源要 fold 完才知道，所以逐次讀下面填的 fs 把手。
+          ...(invocation.rootIsShared === true && {
+            reservedWrites: () => sharedReservedWrites(settled.fs),
+          }),
         });
   // **每會話模型選擇只在 `--live` 時有**（#723）：假模型沒有型錄可選。控制器由組裝點建、經 `createNexusAgent` 折進 root，
   // 同一個 host 回傳給呼叫端（serve 的 `model.catalog`／`model.select` 用它驗型錄）。
@@ -1246,6 +1260,7 @@ export async function createCliAgent(
     ...(invocation.attachments !== undefined && { attachments: invocation.attachments }),
     ...(invocation.spillPolicy !== undefined && { spillPolicy: invocation.spillPolicy }),
   });
+  settled.fs = services.get(FS_SERVICE);
   // **權限組合的起始值**（#1491 Q3 (a)）：向 `permission-presets` 那一列要（它提供、折進這條 thread 的 `permissionPresets` 服務），再對兩顆控制器
   // **靜默** `switchTo` 回來的值。呼叫點在 `createNexusAgent` 回來之後、回傳之前——控制器與 fence 早在 `createNexusAgent` 之前就建好了，
   // 折進來的服務要等它回來才拿得到。**這時還沒有日誌接著**（`attachSessions` 在呼叫端），所以不寫事件，新會話日誌上 `sandbox/mode` 仍只有一顆；

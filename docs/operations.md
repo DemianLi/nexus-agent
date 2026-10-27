@@ -167,6 +167,11 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 - **舊 thread 不搬**：header 記的根就是 `--workspace`、或 header 沒有那一格的對話，繼續把 `--workspace` 當可寫根（沒有 `/shared`），
   彼此照舊看得到對方的檔案。要它們也隔離，只能開新 thread；系統不會自動搬檔。舊 thread 讀部署方放在 `--workspace` 的檔不經過 `/shared`，
   所以**沒有**上面那一行「當資料不當指令」的前綴，系統提示詞也沒有那一句。
+  **舊 thread 寫不進新 thread 會讀成指示或技能的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）：`--workspace` 根目錄的
+  `AGENTS.md`、`CLAUDE.md`、`AGENTS.local.md`、`CLAUDE.local.md`，以及技能來源裡落在 `--workspace` 底下的目錄（出廠 `skills/`，含底下全部），
+  舊 thread 的寫、改、刪一律回 `[containment]` 拒絕，不看檔案政策、升級也蓋不過；根目錄別的檔、子目錄裡的同名檔照常。
+  這道守衛只擋得到升級之後的寫入：**升級後核對一次** `--workspace` 根目錄現有的這四個指示檔與技能來源目錄（出廠 `--workspace/skills/`），
+  確認裡面都是部署方自己放的，不是舊對話寫的。
 - **header 的根既不是 `--workspace` 也不是基底底下的 `thread-…` 目錄**：續接被拒（`ResumeWorkspaceConflictError`，訊息指名兩個根）。
 - **不會自動清**：thread 刪了或過期了，私有根還在；要清自己清 `<home>/thread-roots` 底下對應的目錄（用 header 的 `workspaceRoot` 對得上哪一條）。
   這是刻意的：私有根裡是使用者的產出，系統不替人決定哪一份可以丟。
