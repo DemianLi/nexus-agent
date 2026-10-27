@@ -8,8 +8,7 @@
  * （驗證器，⓪b-2；這裡改成比指紋）。
  *
  * 最後兩格跑真的 repo：已提交的 `docs/persistence-schema.json` 沒過期，以及每一種事件都在、每個可達節點都有指紋。
- * 掃描的根字面寫在這個檔裡（含 `apps/web/src`），是因為 `.github/scripts/plan_ci.py` 靠測試檔的內容判斷「這支一律要跑」
- * （同 `known-event-types.test.ts`）；那串字面值是事件探索的根，跟抽取器 program 收哪些檔是兩回事（web 不進 program）。
+ * 事件探索的根（含 `apps/web/src`）跟抽取器 program 收哪些檔是兩回事（web 不進 program）。
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';

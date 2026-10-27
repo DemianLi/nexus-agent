@@ -147,10 +147,6 @@ export function findViolations(file: string, text: string): Violation[] {
   return found;
 }
 
-/**
- * 掃哪些原始碼。**`'apps/web/src'` 要寫成字面值出現在這裡**：`.github/scripts/plan_ci.py` 靠檔案裡有這串字面值，
- * 才把它認成「掃整個樹的絆索」而在選擇性測試時也必跑（同 `no-bare-dispatcher.test.ts`）。
- */
 const SOURCE_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages', 'scripts'] as const;
 
 /**

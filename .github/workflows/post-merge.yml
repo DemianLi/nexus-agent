@@ -12,8 +12,10 @@ on:
   # 手動觸發：跑所選分支最新的 commit（這支檔要先在預設分支上才觸發得了）。要重跑某個舊 commit，到那一輪按 Re-run。
   workflow_dispatch:
 
+# 被呼叫的 ci.yml 要的權限不能多過呼叫端給的，所以照 ci.yml 的 permissions 給。
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
   full:

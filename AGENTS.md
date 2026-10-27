@@ -99,7 +99,10 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 | `main` | 發佈分支。唯一能產出 GitHub Release 的分支。 |
 
 - **兩條分支都禁止直接 push**，一律走 Pull Request。
-- **`gate` CI 必須綠燈**才能合併。
+- **`gate` CI 必須綠燈**才能合併。功能分支 → `develop` 的 PR 走輕的模式，在 `plan` 裡只跑：PR 標題與格式、CI 腳本的測試、
+  lockfile 新版本的發布年齡、受影響套件（含下游）的型別檢查、異動檔的 format 與 lint、改到的測試檔加上改到的
+  原始檔同名的測試檔。全套測試、瀏覽器護欄、web build、packed-install、node-compat 在合併後那一輪跑；動到 `.github/workflows|scripts|actions` 的 PR 照樣全跑
+  （`.github/workflows/ci.yml` 檔頭）。只改 PR 內文不會重跑 gate，改標題會。
 - **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（Actions 的「合併後完整一輪」，`.github/workflows/post-merge.yml`）。
   它不擋合併，但合併的 dev session **開下一張 PR 之前，先確認自己那個合併 commit 的這一輪是綠的**。
 - **這一輪紅了，先撤回再修**：該張 PR 的作者 session 開撤回 PR，讓 `develop` 先恢復綠，修好再重新開 PR。
@@ -166,7 +169,7 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
    （主機要預裝 Node：22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準），在 repo 外解開、用純 `node` 驗過起得來之後，自行打 tag 並建立 GitHub Release，
    把 tar.gz、SBOM（`.cdx.json`）與各自的 `.sha256` 附上（核對方式見 `docs/operations.md`〈核對安裝內容〉）。因為 `workflow_dispatch` 限定在 `main` 執行，「從 develop 發版」在機制上不可能發生。
 
-同一套打包與驗證在每張動到 TypeScript 的 PR 上都會跑（`gate` 的 `packed-install`），所以 Release 當天不會是第一次試。
+同一套打包與驗證在每個合進 `develop` 的 commit 與 `develop → main` 的 PR 上都會跑（`ci.yml` 的 `packed-install`），所以 Release 當天不會是第一次試。
 
 版號規則在 1.0 之前從簡：**完成一個 Phase 跳 minor，其餘一律 patch**。1.0 之前 semver 本來就不承諾
 相容性，此刻套用完整規則只是徒增判斷成本。
@@ -197,9 +200,9 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
 - **格式**：frontmatter 恰好 `kind: upgrade-guide` 與一句說「什麼壞了」的 `description`；一個 `#` 標題，之後恰好
   `## 變更`、`## 遷移` 兩段。「變更」寫舊行為、新行為、誰受影響；「遷移」是編號步驟，指名檔、鍵、指令，最後一步寫
   怎麼確認改好了。
-- **gate**：`.github/scripts/check_upgrade_guides.py`，跑在 `ci.yml` 的 `plan`（純文件 PR 也跑），檢查路徑形狀、
+- **gate**：`.github/scripts/check_upgrade_guides.py`，跑在 `ci.yml` 的 `plan`（`.github/actions/plan-checks`，純文件 PR 也跑），檢查路徑形狀、
   版本目錄是已存在的 tag、frontmatter 與段落。tag 只驗存在，不驗是不是最近一個：發版之後還寫進
-  舊目錄的，gate 擋不住，要靠審查。指南裡的相對連結由 `.github/scripts/check_md_links.py` 驗（同樣跑在 `plan`，
+  舊目錄的，gate 擋不住，要靠審查。指南裡的相對連結由 `.github/scripts/check_md_links.py` 驗（同樣跑在 `plan-checks`，
   掃 `README.md`、`AGENTS.md`、`GLOSSARY-MAP.md`、`docs/**`、`.docs/**`、`.github/**`、`.agents/skills/**`、`packages/*` 三層、
   `apps/*` 兩層與兩份本地寫的 vendor README，目標檔要存在、`#片段` 要對到標題）。指到不進版控的 `references/` 的連結不查。
 
