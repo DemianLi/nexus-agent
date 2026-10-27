@@ -125,6 +125,12 @@ async function until(predicate: () => boolean | Promise<boolean>, what: string):
   throw new Error(`等不到：${what}`);
 }
 
+/** 這條 thread 現在是不是有一輪在跑：用「跑著斜線命令會被擋」這條既有的閘門當探針（`/goal` 不在放行名單上）。 */
+async function isBusy(client: WireClient, thread: string): Promise<boolean> {
+  const probe = await client.slashRun(thread, '/goal');
+  return probe.kind === 'rejected' && probe.message.includes('這條 thread 正在跑');
+}
+
 /** 起一台、說第一句讓模型建目標；回來時下行上已經看得到 `armed`。 */
 async function armed(thread: string, where = layout()) {
   const server = await start(where, CREATE_THEN_SLOW);
@@ -142,6 +148,8 @@ describe('授權變了才送', () => {
       kind: 'success',
     });
     await until(() => states(tapped.seen).includes('disarmed'), '暫停之後收到 disarmed');
+    // `disarmed` 在暫停寫下去時就送，被暫停的續行輪這時可能還沒收尾；還在跑的時候 `/goal resume` 會被擋。
+    await until(async () => !(await isBusy(client, 'activation-edges')), '暫停之後閒下來');
     expect(await client.slashRun('activation-edges', '/goal resume')).toMatchObject({
       kind: 'success',
     });
