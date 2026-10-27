@@ -120,3 +120,4 @@ export interface GoalClearChangeMeta {
 /** `goal/change` 收下的兩種東西。 */
 export type GoalChangeMeta = GoalSnapshotChangeMeta | GoalClearChangeMeta;
 // 取樣 core1 1793122287
+// 取樣 core2 1793122466
