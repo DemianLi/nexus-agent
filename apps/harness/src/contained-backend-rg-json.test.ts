@@ -64,6 +64,11 @@ describe('壞掉的 `rg --json` 輸出：整次 SEARCH_FAILED', () => {
       'a match record has no path text',
     ],
     [
+      '檔名不是 UTF-8（rg 送 path.bytes）',
+      match({ path: { bytes: '/w==' }, lines: { text: 'x' }, line_number: 1 }),
+      'a match record has no path text',
+    ],
+    [
       'match 紀錄沒有行號',
       match({ path: { text: 'a.ts' }, lines: { text: 'x' } }),
       'a match record has no line number',

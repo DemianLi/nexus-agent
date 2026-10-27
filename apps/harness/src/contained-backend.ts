@@ -1220,9 +1220,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 解 `rg --json` 的輸出，換算成虛擬路徑；**輸出壞了回一句說明**（呼叫端判 `SEARCH_FAILED`），不回半份結果。
    *
-   * `rg --json` 是內部的傳輸格式，不是給人看的：一行不是 JSON、紀錄不是物件、`match` 紀錄缺了路徑、行號或行內容，都表示這一次
-   * 的輸出不可信。只收 `match`，其餘種類（`begin`／`end`／`context`／`summary`）是框架，略過。行不是 UTF-8 時 rg 送 `bytes`
-   * 而不是 `text`，換成一句佔位，不算壞。路徑相對 `cwd` 換成 `/…`，跑到根外的丟掉。
+   * `rg --json` 是內部的傳輸格式，不是給人看的：一行不是 JSON、紀錄不是物件、`match` 紀錄缺了路徑文字、行號或行內容，都表示這一次
+   * 的輸出不可信。檔名不是 UTF-8 時 rg 送 `path.bytes`，同樣算缺路徑文字。`type` 不是 `match` 的紀錄（`begin`／`end`／`summary` 等）
+   * 一律略過。行不是 UTF-8 時 rg 送 `lines.bytes` 而不是 `text`，換成一句佔位，不算壞。路徑相對 `cwd` 換成 `/…`，跑到根外或就是根
+   * 本身的丟掉。
    */
   private parseRipgrepJson(
     stdout: string,
