@@ -27,6 +27,7 @@ import {
   SESSION_LOG_FORMAT_VERSION,
   SessionAlreadyExistsError,
   SessionAlreadyOwnedError,
+  SessionSeq,
 } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
@@ -328,7 +329,9 @@ describe('檔名基底是單射的', () => {
     const store = createJsonlSessionStore({ rootDir: root });
     for (const [index, id] of ids.entries()) {
       const stored = store.create({ version: SESSION_LOG_FORMAT_VERSION, id, createdAt: index });
-      await stored.append([{ type: 'turn/start', seq: 0, time: index, data: { kind: 'resume' } }]);
+      await stored.append([
+        { type: 'turn/start', seq: SessionSeq(0), time: index, data: { kind: 'resume' } },
+      ]);
       await stored.close();
     }
     return (await readdir(store.directory)).filter((name) => name.endsWith('.jsonl')).sort();
@@ -381,7 +384,9 @@ describe('後端的兩條拒絕', () => {
       createdAt: 1,
     };
     const first = store.create(header);
-    await first.append([{ type: 'turn/start', seq: 0, time: 1, data: { kind: 'resume' } }]);
+    await first.append([
+      { type: 'turn/start', seq: SessionSeq(0), time: 1, data: { kind: 'resume' } },
+    ]);
     expect(() => store.create(header)).toThrow(SessionAlreadyExistsError);
     await expect(store.resume('x')).rejects.toThrow(SessionAlreadyOwnedError);
     await first.close();
@@ -397,7 +402,9 @@ describe('後端的兩條拒絕', () => {
     const store = createJsonlSessionStore({ rootDir: root });
     const stored = store.create({ version: SESSION_LOG_FORMAT_VERSION, id: 'y', createdAt: 1 });
     await expect(
-      stored.append([{ type: 'turn/start', seq: 3, time: 1, data: { kind: 'resume' } }]),
+      stored.append([
+        { type: 'turn/start', seq: SessionSeq(3), time: 1, data: { kind: 'resume' } },
+      ]),
     ).rejects.toThrow(/seq 是 3，應該是 0/);
     await stored.close();
   });

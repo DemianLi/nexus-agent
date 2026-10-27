@@ -32,6 +32,7 @@ import { z } from 'zod';
 import { errorChain } from './error-chain.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
+import { SessionLogOffset } from './session-log.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
 import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
 import type {
@@ -64,11 +65,10 @@ export interface SessionPersistenceCoordinatorOptions {
    * 日誌前面有幾筆**已經在把手那一側了**。省略即 0。
    *
    * 續接（[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）用它：一份帶
-   * seed 開出來的日誌，seed 那幾筆就是從把手讀回來的，再送一次會跟已存的撞號。照 dsh 的
-   * `storedCount` ＋ `appendUnstoredSuffix`——只寫還沒存的後綴，第一筆就是那顆
-   * `session/end-seed`。
+   * seed 開出來的日誌，seed 那幾筆就是從把手讀回來的，再送一次會跟已存的撞號。只寫還沒存的
+   * 後綴，第一筆就是那顆 `session/end-seed`。
    */
-  readonly storedCount?: number;
+  readonly storedCount?: SessionLogOffset;
 }
 
 /**
@@ -303,7 +303,7 @@ export function attachSessionPersistence(
     readonly warn?: (message: string) => void;
     readonly resumedRoot?: {
       readonly stored: StoredSession;
-      readonly storedCount: number;
+      readonly storedCount: SessionLogOffset;
       /** 讀回來的那一份 header，只拿來交給 `rootHeader()`（#1599）；省略時續接的 root 的 `rootHeader()` 是 `undefined`。 */
       readonly header?: StoredSessionHeader;
     };
@@ -394,7 +394,7 @@ export function attachSessionPersistence(
     // 接回來的有兩種：root 由入口在建構時給（`resumedRoot`），子代理冷復活（#1271）由執行期開日誌時帶在 entry 上。
     const resumed =
       entry.resume !== undefined
-        ? { stored: entry.resume.stored, storedCount: entry.resume.events.length }
+        ? { stored: entry.resume.stored, storedCount: SessionLogOffset(entry.resume.events.length) }
         : address.kind === 'root'
           ? options.resumedRoot
           : undefined;

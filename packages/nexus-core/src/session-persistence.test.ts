@@ -9,7 +9,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { buildForkSeed, SessionLog } from './session-log.js';
+import { buildForkSeed, SessionLog, SessionLogOffset } from './session-log.js';
 import { SessionRegistry } from './session-registry.js';
 import {
   attachSessionPersistence,
@@ -526,7 +526,7 @@ describe('續接：只寫還沒存的後綴', () => {
       },
     };
     const persistence = attachSessionPersistence(sessions, store, {
-      resumedRoot: { stored: resumed, storedCount: earlier.length },
+      resumedRoot: { stored: resumed, storedCount: SessionLogOffset(earlier.length) },
     });
     sessions.root.append('turn/start', { kind: 'message', text: '二' });
     await persistence.flush();
@@ -568,7 +568,7 @@ describe('續接：只寫還沒存的後綴', () => {
       },
     };
     const persistence = attachSessionPersistence(sessions, store, {
-      resumedRoot: { stored: fakeStored(), storedCount: earlier.length },
+      resumedRoot: { stored: fakeStored(), storedCount: SessionLogOffset(earlier.length) },
       workspaceRoot: '/今天的根',
       // #1025：這一次的建置與模型同樣碰不到 root 那一份。
       buildMetadata: { build: { commit: 'b'.repeat(40), dirty: true }, plugins: [] },
@@ -615,7 +615,7 @@ describe('續接：只寫還沒存的後綴', () => {
           resume: () => Promise.reject(new Error('不續接')),
         },
         {
-          resumedRoot: { stored, storedCount: seed.length },
+          resumedRoot: { stored, storedCount: SessionLogOffset(seed.length) },
           ...(buildMetadata !== undefined && { buildMetadata }),
         },
       );
@@ -712,8 +712,26 @@ describe('續接：只寫還沒存的後綴', () => {
   it('已存筆數比日誌還長就拒絕——那不是續接，是接錯了檔', () => {
     const log = new SessionLog('root-r');
     expect(
-      () => new SessionPersistenceCoordinator({ log, stored: fakeStored(), storedCount: 1 }),
+      () =>
+        new SessionPersistenceCoordinator({
+          log,
+          stored: fakeStored(),
+          storedCount: SessionLogOffset(1),
+        }),
     ).toThrow(/已存筆數 1 對不上日誌長度 0/);
+  });
+
+  it('已存筆數只收 SessionLogOffset：裸的 number 與事件位置都過不了型別', () => {
+    const log = new SessionLog('root-b');
+    const first = log.append('turn/start', { kind: 'message', text: 'hi' });
+    new SessionPersistenceCoordinator({
+      log,
+      stored: fakeStored(),
+      // @ts-expect-error 長度要先收成 SessionLogOffset
+      storedCount: log.events.length,
+    });
+    // @ts-expect-error 事件位置不是筆數
+    new SessionPersistenceCoordinator({ log, stored: fakeStored(), storedCount: first.seq });
   });
 });
 
@@ -1070,7 +1088,11 @@ describe('rootHeader()（#1599：搜尋拿它跟盤上那份比）', () => {
     const sessions = new SessionRegistry('root-h', { rootSeed: earlier.events });
     const persistence = attachSessionPersistence(sessions, recordingStore([]), {
       cwd: '/專案',
-      resumedRoot: { stored: fakeStored(), storedCount: earlier.length, header: stored },
+      resumedRoot: {
+        stored: fakeStored(),
+        storedCount: SessionLogOffset(earlier.length),
+        header: stored,
+      },
     });
     sessions.open({ kind: 'subagent', runId: 'r1' });
     expect(persistence.rootHeader()).toBe(stored);
@@ -1079,7 +1101,7 @@ describe('rootHeader()（#1599：搜尋拿它跟盤上那份比）', () => {
     const bare = attachSessionPersistence(
       new SessionRegistry('root-h', { rootSeed: earlier.events }),
       recordingStore([]),
-      { resumedRoot: { stored: fakeStored(), storedCount: earlier.length } },
+      { resumedRoot: { stored: fakeStored(), storedCount: SessionLogOffset(earlier.length) } },
     );
     expect(bare.rootHeader()).toBeUndefined();
     await bare.dispose();

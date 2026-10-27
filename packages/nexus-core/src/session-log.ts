@@ -36,6 +36,8 @@
  */
 
 import type { MessageContent } from '@langchain/core/messages';
+import { brandNumber } from '@nexus/brand';
+import type { BrandedNumber } from '@nexus/brand';
 import type { AttachmentRef } from './attachment-ref.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
 import type { ModelRoute } from './model-route.js';
@@ -1453,6 +1455,43 @@ export interface SessionEventMap {
   'session/resumed': SessionHeaderBuildMetadata;
 }
 
+/**
+ * 一份日誌裡某一筆既有事件的位置（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567) N0788）。跟 {@link SessionLogOffset} 分開：
+ * 位置指的是那一筆，位移是筆數（長度、前綴長、讀到哪），可以等於事件總數。兩者都是 number，把一個當另一個傳型別要擋。
+ */
+export type SessionSeq = BrandedNumber<'SessionSeq'>;
+
+/**
+ * 把一個數字收成事件位置。
+ *
+ * @param value - 事件在日誌裡的位置，從 0 起。
+ * @returns 同一個數字，帶 `SessionSeq` 品牌。
+ * @throws TypeError 不是非負的安全整數（含 `-0`）。
+ */
+export function SessionSeq(value: number): SessionSeq {
+  if (!Number.isSafeInteger(value) || value < 0 || Object.is(value, -0)) {
+    throw new TypeError(`SessionSeq 必須是非負的安全整數，拿到 ${String(value)}`);
+  }
+  return brandNumber<SessionSeq>(value);
+}
+
+/** 一份日誌的筆數、前綴長或讀到哪：可以等於事件總數，見 {@link SessionSeq}。 */
+export type SessionLogOffset = BrandedNumber<'SessionLogOffset'>;
+
+/**
+ * 把一個數字收成日誌位移。
+ *
+ * @param value - 當作筆數或前綴長的數字。
+ * @returns 同一個數字，帶 `SessionLogOffset` 品牌。
+ * @throws TypeError 不是非負的安全整數（含 `-0`）。
+ */
+export function SessionLogOffset(value: number): SessionLogOffset {
+  if (!Number.isSafeInteger(value) || value < 0 || Object.is(value, -0)) {
+    throw new TypeError(`SessionLogOffset 必須是非負的安全整數，拿到 ${String(value)}`);
+  }
+  return brandNumber<SessionLogOffset>(value);
+}
+
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */
 /**
  * 日誌裡的一筆。
@@ -1467,7 +1506,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = T exte
   ? {
       readonly type: T;
       /** 這一筆在這份日誌裡的位置。**append 當下由長度決定**，一個 session 內單調遞增。 */
-      readonly seq: number;
+      readonly seq: SessionSeq;
       /** Unix epoch 毫秒。 */
       readonly time: number;
       readonly data: SessionEventMap[T];
@@ -2148,7 +2187,7 @@ export interface SessionLogView {
   /** 目前的長度，也就是下一筆會拿到的 `seq`。 */
   readonly length: number;
   /** 分叉繼承來的前綴有幾顆，見 {@link inheritedEventCount}；不是分叉來的是 0。 */
-  readonly inheritedEventCount: number;
+  readonly inheritedEventCount: SessionLogOffset;
   /** 切點之後、這一份自己的事件。見 {@link SessionLog.ownEvents}。 */
   ownEvents(): readonly SessionEvent[];
   /** 這個位置是不是這一份自己的。見 {@link SessionLog.isOwnSeq}。 */
@@ -2158,19 +2197,19 @@ export interface SessionLogView {
 /**
  * 分叉的切點：**最後一顆** `session/end-seed {inherited: true}` 的 `seq`，沒有就是 0（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
  *
- * 照 dsh 讀盤時的求法（`packages/session/session-format-v1-to-v2/src/codec.ts:114-116`、`session-format-v3-to-v4/src/validation.ts:70-71`，
- * `687f282e`）：切點不另外落盤，從標記推。它等於複製進來的事件數（{@link buildForkSeed} 把標記放在 `boundary + 1`），標記自己算這一份的。
+ * 切點不另外落盤，從標記推。它等於複製進來的事件數（{@link buildForkSeed} 把標記放在 `boundary + 1`），標記自己算這一份的。
  * 分叉再分叉時前綴裡也有祖先的標記，所以取最後一顆。
  *
  * @param events - 一份日誌，照 `seq` 排、從 0 連續。
  * @returns 切點；之前的是繼承來的，之後（含）是這一份自己的。
  */
-export function inheritedEventCount(events: readonly SessionEvent[]): number {
+export function inheritedEventCount(events: readonly SessionEvent[]): SessionLogOffset {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event?.type === 'session/end-seed' && event.data.inherited === true) return event.seq;
+    if (event?.type === 'session/end-seed' && event.data.inherited === true)
+      return SessionLogOffset(event.seq);
   }
-  return 0;
+  return SessionLogOffset(0);
 }
 
 /**
@@ -2199,7 +2238,7 @@ export function buildForkSeed(events: readonly SessionEvent[], boundary: number)
   const prefix = events.slice(0, boundary + 1);
   prefix.push({
     type: 'session/end-seed',
-    seq: boundary + 1,
+    seq: SessionSeq(boundary + 1),
     time: cut.time,
     data: { inherited: true },
   } as SessionEvent);
@@ -2233,7 +2272,7 @@ export class SessionLog implements SessionLogView {
   /** 正在回呼中。重入防護唯一的狀態。 */
   #publishing = false;
   /** 分叉的切點，接 seed 時算一次。end-seed 只有建構子能合法寫（見那顆事件的說明），所以之後不會變。 */
-  #inheritedEventCount = 0;
+  #inheritedEventCount = SessionLogOffset(0);
 
   constructor(sessionId: string, options: SessionLogOptions = {}) {
     this.#sessionId = sessionId;
@@ -2276,7 +2315,7 @@ export class SessionLog implements SessionLogView {
     this.#events.push(
       deepFreeze({
         type: 'session/end-seed',
-        seq: this.#events.length,
+        seq: SessionSeq(this.#events.length),
         time: Date.now(),
         data: {},
       }) as SessionEvent,
@@ -2299,7 +2338,7 @@ export class SessionLog implements SessionLogView {
   }
 
   /** 分叉繼承來的前綴有幾顆（{@link inheritedEventCount}）；不是分叉來的是 0。 */
-  get inheritedEventCount(): number {
+  get inheritedEventCount(): SessionLogOffset {
     return this.#inheritedEventCount;
   }
 
@@ -2384,7 +2423,7 @@ export class SessionLog implements SessionLogView {
     // 未解析的 `T` 展開，所以字面量對不上 `SessionEvent<T>`。欄位本身完全吻合。
     const event = deepFreeze({
       type,
-      seq: this.#events.length,
+      seq: SessionSeq(this.#events.length),
       time: Date.now(),
       data: snapshot,
       ...(options.ignorable === true && { ignorable: true }),

@@ -18,7 +18,12 @@ import {
 import type { ConversationReplay } from './conversation-replay.js';
 import type { GoalId } from './goal.js';
 import { toLoggedMessage } from './logged-message.js';
-import { isModelVisibleEvent, MODEL_VISIBLE_EVENT_TYPES, SessionLog } from './session-log.js';
+import {
+  isModelVisibleEvent,
+  MODEL_VISIBLE_EVENT_TYPES,
+  SessionLog,
+  SessionSeq,
+} from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolErrorOf } from './tool-events.js';
 import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
@@ -339,7 +344,7 @@ describe('沒配到結果的呼叫', () => {
     const log = crashed();
     const replay = replayConversation([
       ...log.events,
-      { type: 'session/end-seed', seq: log.length, time: 0, data: {} },
+      { type: 'session/end-seed', seq: SessionSeq(log.length), time: 0, data: {} },
     ]);
 
     expect(shape(replay)).toEqual([
@@ -456,7 +461,7 @@ describe('壓縮', () => {
       origin: (message, event) => seqOf.set(message, event.seq),
     });
     if (replay.kind !== 'replayed') throw new Error(replay.reason);
-    const typeOf = new Map(log.events.map((event) => [event.seq, event.type]));
+    const typeOf = new Map<number, string>(log.events.map((event) => [event.seq, event.type]));
     expect(
       replay.messages.map((message) => {
         const seq = seqOf.get(message);

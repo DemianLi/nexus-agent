@@ -42,6 +42,7 @@ import type { ToolMessage } from '@langchain/core/messages';
 import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
 import { closer, requestedCalls } from './conversation-replay.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
+import { SessionSeq } from './session-log.js';
 import type { SessionEvent, SessionEventMap } from './session-log.js';
 import type {
   ResumedStoredSession,
@@ -178,22 +179,22 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
   const last = events.at(-1);
   if (!open || last === undefined) return [];
 
-  let seq = last.seq + 1;
+  let next = last.seq + 1;
   const closers: SessionEvent[] = [];
   for (const { data } of unansweredCallResults(events)) {
-    closers.push({ type: 'tool/result', seq: seq++, time: last.time, data });
+    closers.push({ type: 'tool/result', seq: SessionSeq(next++), time: last.time, data });
   }
   for (const modelCall of openModelStarts) {
     closers.push({
       type: 'model/end',
-      seq: seq++,
+      seq: SessionSeq(next++),
       time: last.time,
       data: { modelCall, outcome: 'error' },
     });
   }
   closers.push({
     type: 'turn/end',
-    seq: seq++,
+    seq: SessionSeq(next++),
     time: last.time,
     data: { reason: { kind: 'interrupted' } },
   });
