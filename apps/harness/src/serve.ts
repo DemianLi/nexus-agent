@@ -1350,6 +1350,8 @@ async function startServer(
             ...(placement.sharedRoot !== undefined && {
               sharedWorkspaceRoot: placement.sharedRoot,
             }),
+            // 舊 thread 的可寫根就是新 thread 讀的共用區（#1960）。
+            ...(placement.rootIsShared === true && { rootIsShared: true }),
             // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
             stepInbox: true,
             ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),

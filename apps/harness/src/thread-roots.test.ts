@@ -103,12 +103,15 @@ describe('createThreadPlacer：每一列', () => {
 
   it('續接，header 的根就是這一次的 --workspace：舊 thread，可寫根是共用區、沒有共用前綴', async () => {
     const { shared, place } = await setup();
-    expect(await place(request('a', header(shared)))).toEqual({ root: shared });
+    expect(await place(request('a', header(shared)))).toEqual({ root: shared, rootIsShared: true });
   });
 
   it('續接，header 沒有那一格（格式 13 以前）：以共用區為可寫根', async () => {
     const { shared, place } = await setup();
-    expect(await place(request('a', header(undefined)))).toEqual({ root: shared });
+    expect(await place(request('a', header(undefined)))).toEqual({
+      root: shared,
+      rootIsShared: true,
+    });
   });
 
   it('續接，header 的根是基底的直接子目錄：照用，不用 thread id 重算（分叉的子 thread）', async () => {
