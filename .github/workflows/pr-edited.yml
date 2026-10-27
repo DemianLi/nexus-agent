@@ -9,7 +9,7 @@ name: PR 編輯後重驗
 # job 不能叫 gate：只改功能 PR 內文時它被跳過，跳過的 required check 算成通過。
 on:
   pull_request:
-    branches: [develop, main, ci/gate-60s]
+    branches: [develop, main]
     types: [edited]
 
 permissions:

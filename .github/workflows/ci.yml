@@ -2,7 +2,7 @@ name: CI
 
 on:
   pull_request:
-    branches: [develop, main, ci/gate-60s]
+    branches: [develop, main]
     # 不收 edited：只改 PR 內文不重跑、也不取消正在跑的這一輪。改標題、改 base，以及 develop → main 改內文時，
     # 由 pr-edited.yml 重跑這一輪（rerun）。
   # push 只留 main：develop 的 push 會與 develop → main 的 PR 落在同一個 sha 上，產生兩個 gate，合併時要等兩輪。
