@@ -105,7 +105,9 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
   （`.github/workflows/ci.yml` 檔頭）。只改 PR 內文不會重跑 gate，改標題會。
 - **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（Actions 的「合併後完整一輪」，`.github/workflows/post-merge.yml`）。
   它不擋合併，但合併的 dev session **開下一張 PR 之前，先確認自己那個合併 commit 的這一輪是綠的**。
-- **這一輪紅了，先撤回再修**：該張 PR 的作者 session 開撤回 PR，讓 `develop` 先恢復綠，修好再重新開 PR。
+- **這一輪紅了，先只重跑失敗的 job 一次**（Actions 的 Re-run failed jobs）。轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發：
+  開 backlog 卡（已有的就在卡上記一筆），不撤回。還是紅，就**撤回再修**：該張 PR 的作者 session 開撤回 PR，讓 `develop` 先恢復綠，
+  修好再重新開 PR。
 - **`main` 只接受來自 `develop` 的 PR**，由 `gate` 檢查 head branch 強制執行。緊急修補同樣先進 `develop`。
 - **禁止 force push 與刪除分支**，無人可繞過規則（含 repo owner）。
 - **`develop` 要求分支與 base 同步（strict）**；**`main` 刻意不開 strict** —— 因為 `develop → main` 的
