@@ -876,8 +876,13 @@ export {
   classifyStoredFormatVersion,
   createSessionFormatCatalog,
 } from './session-format.js';
-export type { SessionFilenames } from './session-filename.js';
-export { parseSessionHeaderFilename, sessionFilenames } from './session-filename.js';
+export type { LegacyTwoFileSessionFilenames, SessionFilenames } from './session-filename.js';
+export {
+  legacyTwoFileSessionFilenames,
+  parseLegacyTwoFileHeaderFilename,
+  parseSessionHeaderFilename,
+  sessionFilenames,
+} from './session-filename.js';
 
 export { errorChain } from './error-chain.js';
 export { LLM_FAILURE_FALLBACK_MESSAGE, llmFailure, thrownMessage } from './llm-failure.js';
