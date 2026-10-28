@@ -1,10 +1,40 @@
 /**
- * 會話檔名的唯一定義（#1857 驗收 B）：三個檔名、由 header 檔名認回基底、其餘的檔一律不認。
+ * 會話檔名的唯一定義（#1857 驗收 B）：三個檔名、由 header 檔名認回基底、其餘的檔一律不認。舊兩檔佈局（#1872）另外用
+ * 字面量釘住：已出貨的資料就是這幾個檔名，寫方目前的佈局換掉時它不能跟著變。
  */
 
 import { describe, expect, it } from 'vitest';
 
-import { parseSessionHeaderFilename, sessionFilenames } from './session-filename.js';
+import {
+  legacyTwoFileSessionFilenames,
+  parseLegacyTwoFileHeaderFilename,
+  parseSessionHeaderFilename,
+  sessionFilenames,
+} from './session-filename.js';
+
+describe('legacyTwoFileSessionFilenames', () => {
+  it('已出貨的三個檔名：<base>.header.json、<base>.jsonl、<base>.lock', () => {
+    expect(legacyTwoFileSessionFilenames('cli%2frun-1')).toEqual({
+      header: 'cli%2frun-1.header.json',
+      log: 'cli%2frun-1.jsonl',
+      lock: 'cli%2frun-1.lock',
+    });
+  });
+});
+
+describe('parseLegacyTwoFileHeaderFilename', () => {
+  it('只認 header 檔，跟 legacyTwoFileSessionFilenames 互逆', () => {
+    expect(parseLegacyTwoFileHeaderFilename('cli%2frun-1.header.json')).toBe('cli%2frun-1');
+    for (const filename of [
+      'cli.jsonl',
+      'cli.lock',
+      'cli.header.json.0123456789ab.tmp',
+      'cli.jsonl.0123456789ab.tmp',
+    ]) {
+      expect(parseLegacyTwoFileHeaderFilename(filename)).toBeUndefined();
+    }
+  });
+});
 
 describe('sessionFilenames', () => {
   it('由基底給出 header、日誌、鎖檔三個檔名', () => {
