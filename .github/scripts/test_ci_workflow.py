@@ -408,6 +408,13 @@ class TypecheckCache(unittest.TestCase):
         run = next(s['run'] for s in self.typecheck['steps'] if s.get('name') == 'Typecheck')
         self.assertEqual(run, ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'")
 
+    def test_root_script_matches_full_layer(self) -> None:
+        # 開發時的 `pnpm typecheck` 跟全跑同一支、同一組篩選：宣告檔輸出才有的錯，本機與 CI 一起紅。
+        manifest = json.loads((ROOT / 'package.json').read_text(encoding='utf-8'))
+        self.assertEqual(
+            manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'"
+        )
+
 
 class LightScope(unittest.TestCase):
     """`plan_ci.light` 的範圍（#2088 決議第 5、7 條）。"""

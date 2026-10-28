@@ -9,7 +9,7 @@
   },
   "scripts": {
     "lint": "pnpm run build:lib && pnpm -r run lint",
-    "typecheck": "pnpm -r run typecheck",
+    "typecheck": ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'",
     "verify-package-invariants": "pnpm --filter @nexus/harness run verify-package-invariants",
     "test": "pnpm -r run test",
     "format": "prettier --write .",
