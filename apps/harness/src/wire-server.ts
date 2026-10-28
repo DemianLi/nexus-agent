@@ -24,7 +24,7 @@
  * 我們的載體是已拍板的 SSE（`.docs/development-plan.md` 決策 6），HTTP/1.1 回應沒有 ping／pong 控制幀，對方無從回應，
  * 「漏了 pong」這個判準做不出來。退到最接近的：每拍寫 `: ping\n\n`（解碼端本來就跳過註解）；dsh 判準裡做得到的那一半是
  * 「排過隊之後才完成的寫入」＝ `'drain'`，另外**緩衝縮小也算活著**（對方有在收，只是慢）。只有寫入緩衝裡有位元組卡著
- * （`writableLength > 0`）、又沒有任何進展的那一拍算漏拍；閒著、緩衝是空的線不算漏拍，不然健康的閒置線兩拍就被殺。
+ * （`writableLength > 0`）、又沒有任何進展的那一拍算漏拍；閒著、緩衝是空的線不算漏拍，不然健康的閒置線閒過兩個間隔就被殺。
  * **代價**：沒有 frame 在流、緩衝是空的死線，serve 判不出來——TCP 的對端是 sshd 不是使用者的機器，這一段要靠 sshd 的
  * `ClientAliveInterval` 收（`docs/operations.md`）。
  *
@@ -182,7 +182,7 @@ export interface StartWireServerOptions {
    */
   readonly warn?: (error: Error, request: WarnedRequest) => void;
   /**
-   * SSE 心跳間隔（毫秒），預設 {@link DEFAULT_SSE_HEARTBEAT_INTERVAL_MS}。連續 {@link MAX_MISSED_HEARTBEATS} 拍緩衝卡著、
+   * SSE 心跳間隔（毫秒），預設 {@link DEFAULT_SSE_HEARTBEAT_INTERVAL_MS}。緩衝卡著、連 {@link MAX_MISSED_HEARTBEATS} 個間隔
    * 沒有任何排出去的進展，就斷那一條線（#1504）。
    */
   readonly heartbeatIntervalMs?: number;
@@ -279,8 +279,9 @@ export type BeatVerdict = 'ping' | 'hold' | 'evict';
 /**
  * 一拍裡判一條線（純函式，改的只有 `line` 的兩個計數）。
  *
- * - 寫入緩衝是空的：對方收得完，或線閒著——**不算漏拍**（不然健康的閒置線兩拍就被殺），寫心跳。
- * - 緩衝有位元組：比上一拍小＝對方有在收、只是慢，歸零；沒縮小才漏拍 +1。漏到 {@link MAX_MISSED_HEARTBEATS} 就淘汰。
+ * - 寫入緩衝是空的：對方收得完，或線閒著——**不算漏拍**（不然健康的閒置線連 {@link MAX_MISSED_HEARTBEATS} 個間隔沒有新事件就被殺），寫心跳。
+ * - 緩衝有位元組：比上一拍小＝對方有在收、只是慢，歸零。已經漏滿 {@link MAX_MISSED_HEARTBEATS} 拍、這一拍還卡著就淘汰，
+ *   否則漏拍 +1。先判再加：歸零之後要再連 {@link MAX_MISSED_HEARTBEATS} 個間隔都沒有進展才斷，歸零之後的第一拍不會致命。
  *   `'drain'` 的歸零在 {@link SseHeartbeat.watch}，不在這裡。
  */
 export function judgeBeat(
@@ -292,9 +293,11 @@ export function judgeBeat(
     line.lastBuffered = 0;
     return 'ping';
   }
-  line.missed = buffered < line.lastBuffered ? 0 : line.missed + 1;
+  if (buffered < line.lastBuffered) line.missed = 0;
   line.lastBuffered = buffered;
-  return line.missed >= MAX_MISSED_HEARTBEATS ? 'evict' : 'hold';
+  if (line.missed >= MAX_MISSED_HEARTBEATS) return 'evict';
+  line.missed += 1;
+  return 'hold';
 }
 
 /** 所有 SSE 線共用的那一支計時器，見檔頭。 */
