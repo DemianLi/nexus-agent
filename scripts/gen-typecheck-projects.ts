@@ -5,14 +5,16 @@
  * 每個套件經 `tsconfig.base.json` 的 `paths` 讀別的套件的 `src/`，各自 `tsc --noEmit` 的話，core 的原始碼要在每個下游重查一遍。
  * 這裡替每個非 vendor 的 workspace 套件在自己的 `node_modules/.cache/nexus-typecheck/` 產生一份 tsconfig：
  *
- * - `extends` 套件自己的 `tsconfig.json`，`include` 與選項照舊；
- * - `references` 指它在 `package.json` 宣告的 workspace 相依（四種 dependencies 都算）；
+ * - `extends` 套件自己的 `tsconfig.json`，沿用它的 `include` 與選項；
+ * - `references` 指它在 `package.json` 宣告的非 vendor workspace 相依（四種 dependencies 都算）；vendor 的型別來自各自
+ *   `prepare` 產的宣告檔，不進 references；
  * - 被別人引用的開 `composite`，只輸出宣告檔到 `out/`，下游讀那份宣告檔；沒人引用的只開 `incremental`。
  *
- * 被引用的套件要能輸出宣告檔，所以比各自 `tsc --noEmit` 多擋幾類錯：匯出無法命名的型別（TS4094、TS4058 這一類）、
- * import 了沒宣告的 workspace 套件（TS6307）、相依繞成圈（TS6202）。
+ * 被引用的套件要輸出宣告檔，所以會擋只有輸出宣告檔才有的錯：推斷的型別無法命名（TS2742、TS4058 這類）、匯出匿名 class 的
+ * private／protected 成員（TS4094）、程式拉進 `include` 以外的檔（TS6307，例如 import 了沒宣告的 workspace 套件）、
+ * references 繞成圈（TS6202）。沒人引用的套件只開 incremental，不擋這幾類。
  *
- * `apps/web` 不在這裡，`typecheck.sh` 照舊對它單獨 `tsc --noEmit`。`packages/*`、`apps/*` 底下其餘有 `package.json` 的目錄
+ * `apps/web` 不在這裡，`typecheck.sh` 對它單獨 `tsc --noEmit`。`packages/*`、`apps/*` 底下其餘有 `package.json` 的目錄
  * 都要有一份，漏了就丟錯：少查一個套件，CI 不會紅。
  *
  * 內容沒變不重寫：設定檔比 buildinfo 新，`tsc -b` 會判成過期。
@@ -28,7 +30,10 @@ import { ROOT, workspacePackages } from './workspace-packages.js';
 /** 每個套件放產生物的位置，相對套件目錄。 */
 export const CACHE_DIR = 'node_modules/.cache/nexus-typecheck';
 
-/** 單獨檢查、不進 project references 的套件。 */
+/**
+ * 單獨檢查、不進 project references 的套件。沒有套件引用 web，放進 references 也省不到重查；單獨跑能跟單執行緒的
+ * `tsc -b` 同時用到另一顆核心。`typecheck.sh` 寫死同一份清單，harness 的測試核對兩邊一致。
+ */
 export const STANDALONE = ['apps/web'] as const;
 
 const DEPENDENCY_FIELDS = [
@@ -90,10 +95,12 @@ export function renderProject(project: TypecheckProject): string {
         composite: true,
         noEmit: false,
         emitDeclarationOnly: true,
-        // 取 repo 根：import 了沒宣告的套件時，那些檔的宣告檔也落在 out/ 底下，不寫到別的套件的 src 旁邊。
+        // composite 的 rootDir 預設是設定檔所在的快取目錄，套件的 src 不在裡面，所以要設。取 repo 根：import 了沒宣告的
+        // 套件時，那些檔的宣告檔也落在 out/ 底下；rootDir 以外的檔，宣告檔會寫到原始檔旁邊。
         rootDir: rel(ROOT),
         outDir: 'out',
-        tsBuildInfoFile: 'tsconfig.tsbuildinfo',
+        // 跟宣告檔放同一個目錄，一起在、一起不在：只剩 buildinfo 時，tsc -b 判上游不必重出，下游讀不到宣告檔就紅。
+        tsBuildInfoFile: 'out/tsconfig.tsbuildinfo',
       }
     : { incremental: true, tsBuildInfoFile: 'tsconfig.tsbuildinfo' };
   const config = {

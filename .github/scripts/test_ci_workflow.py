@@ -396,7 +396,7 @@ class TypecheckCache(unittest.TestCase):
         self.assertIn(f'cache={TYPECHECK_CACHE}\n', script)
         generator = (ROOT / 'scripts' / 'gen-typecheck-projects.ts').read_text(encoding='utf-8')
         self.assertIn(f"CACHE_DIR = '{TYPECHECK_CACHE}'", generator)
-        # 整個目錄：產生的設定、buildinfo 與宣告檔都要在，少了宣告檔下游會從頭查。
+        # 整個目錄：少了宣告檔，tsc -b 照 buildinfo 判上游不必重出，下游讀不到宣告檔就紅。
         self.assertEqual(
             self.save['with']['path'].split(),
             [f'packages/*/{TYPECHECK_CACHE}', f'apps/*/{TYPECHECK_CACHE}'],

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  STANDALONE,
   renderProject,
   typecheckProjects,
   uncoveredDirs,
@@ -11,7 +12,8 @@ import {
 import { ROOT } from '../../../scripts/workspace-packages.js';
 
 /**
- * 型別檢查的 project references（#2096）。references 少一條，下游讀不到上游的宣告檔就紅；漏掉一個套件，CI 少查它卻照樣綠。
+ * 型別檢查的 project references（#2096）。references 少一條，composite 的下游把上游原始碼拉進來而報 TS6307，沒人引用的
+ * 照樣綠、只是多查一份；漏掉一個套件，CI 少查它卻照樣綠。
  * 期望值直接讀 `package.json`，不經產生器借用的 `workspacePackages()`。
  */
 
@@ -71,6 +73,14 @@ describe('對著真的 repo', () => {
   });
 });
 
+describe('typecheck.sh', () => {
+  it('寫死的單獨檢查清單跟 STANDALONE 一致', () => {
+    const script = readFileSync(join(ROOT, '.github/scripts/typecheck.sh'), 'utf8');
+    const hardcoded = [...script.matchAll(/"\$dir" = "\$PWD\/([^"]+)"/g)].map((match) => match[1]);
+    expect(hardcoded).toEqual([...STANDALONE]);
+  });
+});
+
 describe('擋得住', () => {
   it('漏掉的套件會被點名', () => {
     const projects = typecheckProjects().filter(
@@ -98,7 +108,7 @@ describe('產生的設定', () => {
         emitDeclarationOnly: true,
         rootDir: '../../../../..',
         outDir: 'out',
-        tsBuildInfoFile: 'tsconfig.tsbuildinfo',
+        tsBuildInfoFile: 'out/tsconfig.tsbuildinfo',
       },
       references: [
         { path: '../../../../nexus-brand/node_modules/.cache/nexus-typecheck/tsconfig.json' },
