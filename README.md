@@ -84,7 +84,7 @@ pnpm --filter @nexus/harness run serve      # 印出「nexus-agent 在 http://12
 
 ```bash
 pnpm lint         # eslint（遞迴全部套件）
-pnpm typecheck    # tsc --noEmit
+pnpm typecheck    # 型別檢查（跟 CI 同一支 .github/scripts/typecheck.sh）
 pnpm test         # vitest run
 pnpm build        # vite build
 pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 元件

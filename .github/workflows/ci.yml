@@ -36,7 +36,7 @@ permissions:
 #   - 全跑：develop → main 的 PR、main 的 push、合進 develop 之後，以及動到 `.github/workflows|scripts|actions` 的功能 PR
 #     （改壞了 CI 自己，合併前只有全跑驗得出來）。合進 develop 之後那一輪由 post-merge.yml 帶 `full: true` 呼叫這支，
 #     每個 develop commit 一輪、不被下一個 commit 取消、不擋合併；check 名稱帶呼叫端前綴 `完整一輪 / gate`，
-#     跟 required 的 `gate` 不同名。這一輪的 typecheck 把 buildinfo 存成快取，給輕的模式讀。
+#     跟 required 的 `gate` 不同名。這一輪的 typecheck 把 buildinfo 與宣告檔存成快取，給輕的模式讀。
 #
 # 全跑的結構：plan 算出模式與要不要掃，各項檢查平行跑，最後由 gate 收斂成單一 required check。
 # 輕的模式，中間那一段整排 skipped，gate 照 plan 輸出的模式接受它們 skipped。
@@ -122,8 +122,8 @@ jobs:
         if: steps.plan.outputs.mode == 'light' && steps.scope.outputs.typecheck == 'true'
         with:
           path: |
-            packages/*/node_modules/.cache/nexus-typecheck.tsbuildinfo
-            apps/*/node_modules/.cache/nexus-typecheck.tsbuildinfo
+            packages/*/node_modules/.cache/nexus-typecheck
+            apps/*/node_modules/.cache/nexus-typecheck
           key: typecheck-${{ steps.base.outputs.sha }}
           restore-keys: typecheck-
 
@@ -321,7 +321,7 @@ jobs:
           pnpm run build:lib
           pnpm --filter @nexus/plugin-echo run lint
 
-  # 從零查全部套件，不讀快取：全跑是對照組。合併後那一輪查完把 buildinfo 存成快取，key 是這個 develop commit，
+  # 從零查全部套件，不讀快取：全跑是對照組。合併後那一輪查完把 buildinfo 與宣告檔存成快取，key 是這個 develop commit，
   # 輕的模式用 PR 的分歧點去取（develop 是 strict，合併前最後一輪的分歧點就是最新的 develop）。
   typecheck:
     name: typecheck
@@ -339,8 +339,8 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: |
-            packages/*/node_modules/.cache/nexus-typecheck.tsbuildinfo
-            apps/*/node_modules/.cache/nexus-typecheck.tsbuildinfo
+            packages/*/node_modules/.cache/nexus-typecheck
+            apps/*/node_modules/.cache/nexus-typecheck
           key: typecheck-${{ github.sha }}
 
   # 沒有測試的套件照樣會紅（vitest 找不到測試檔就失敗，見 docs/standards.md）。
