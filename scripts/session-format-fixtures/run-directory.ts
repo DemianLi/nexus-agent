@@ -1,8 +1,8 @@
 /**
  * 產生器讀 run 目錄的那幾支（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857)）：哪幾份會話、兩個檔叫什麼、
- * 事件與 header 怎麼讀。檔名照 `@nexus/core` 的 `session-filename.ts` 的**舊兩檔佈局**，不自己拼（#1872）：run 目錄是舊 tag
- * 的 CLI 寫的，寫方目前的佈局換掉之後照樣是舊兩檔。例外是混版 `mixed-v44-v49` 的後半，由今天的 CLI `--resume` 續寫，
- * 寫方換佈局（#1594 ③）時那一格要另外處理。
+ * 事件與 header 怎麼讀。檔名照 `@nexus/core` 的 `session-filename.ts` 的**舊兩檔佈局**，不自己拼（#1872）：各 tag 與混版前半
+ * （`MIXED_FIRST.rev`）的 CLI 寫的 run 目錄都是舊兩檔，寫方換佈局之後照樣是。今天的工作樹寫的兩格不在此列：`v49` 整份，
+ * 與 `mixed-v44-v49` 的後半（`--resume` 續寫）。它們今天也是舊兩檔；寫方換佈局（#1594 ③）時，這兩格要在同一張改。
  *
  * **不走後端的 `readSessionEntry`**：夾具要凍的是寫入器寫出來的原樣位元組與它記的版號，那支會把 header 的 `version`
  * 轉譯成這一版（#1856），產生器要的不是那個。產生器整支是同步的，也是原因之一。

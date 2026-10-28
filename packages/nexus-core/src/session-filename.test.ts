@@ -25,6 +25,9 @@ describe('legacyTwoFileSessionFilenames', () => {
 describe('parseLegacyTwoFileHeaderFilename', () => {
   it('只認 header 檔，跟 legacyTwoFileSessionFilenames 互逆', () => {
     expect(parseLegacyTwoFileHeaderFilename('cli%2frun-1.header.json')).toBe('cli%2frun-1');
+    expect(
+      parseLegacyTwoFileHeaderFilename(legacyTwoFileSessionFilenames('cli%2frun-1').header),
+    ).toBe('cli%2frun-1');
     for (const filename of [
       'cli.jsonl',
       'cli.lock',

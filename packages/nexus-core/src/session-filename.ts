@@ -1,18 +1,17 @@
 /**
  * 一份會話落盤的檔名，**只在這裡定義**（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857)，#1594 拆刀 ①）。
  *
- * 照 dsh `packages/session/session-format/src/filename.ts:14-31`（`sessionFormatLogFilename`／
- * `parseSessionFormatLogFilename`，SHA `687f282e`）：檔名的規則跟版本目錄放在同一個格式層，持久化後端與離線讀方都 import
- * 這一份，不各自拼。這裡跟著版本目錄（`session-format.ts`）放在 `@nexus/core`，位置等價。
+ * 檔名的規則跟版本目錄（`session-format.ts`）放在同一個格式層：持久化後端與離線讀方（eval 掃描、發版驗證、夾具產生器）都
+ * import 這一份，不各自拼。
  *
  * 兩組定義：
  *
- * - **寫方目前的佈局**（`sessionFilenames`／`parseSessionHeaderFilename`）：後端今天寫什麼、讀什麼。今天就是舊兩檔佈局。
- *   寫方切到世代檔（#1594 ③）時換掉這一組，讀方因為都經過這裡，不必跟著逐處改。
+ * - **寫方目前的佈局**（`sessionFilenames`／`parseSessionHeaderFilename`）：後端今天寫、讀的佈局（今天就是舊兩檔）。
+ *   寫方切到世代檔（#1594 ③）時換掉這一組，讀方的檔名因為都經過這裡，不必逐處改。
  * - **舊兩檔佈局**（`legacyTwoFileSessionFilenames`／`parseLegacyTwoFileHeaderFilename`，#1872）：已出貨的版本寫的佈局，
- *   一份會話三個檔並排：`<base>.header.json`、`<base>.jsonl`、`<base>.lock`。檔名不帶格式版本，這份會話是哪一世代看
- *   header 的 `version`。已出貨的資料要永久讀得懂，所以這一組**不隨寫方換佈局而變**；讀已出貨資料的讀方（夾具產生器讀舊 tag
- *   的 run 目錄、#1594 ② 認舊佈局的讀方）綁這一組。
+ *   一份會話三個檔並排：`<base>.header.json`、`<base>.jsonl`、`<base>.lock`。檔名不帶格式版本，格式版本看 header 的
+ *   `version`。已出貨的資料要永久讀得懂，所以這一組**不隨寫方換佈局而變**。今天綁這一組的是夾具產生器
+ *   （`scripts/session-format-fixtures/run-directory.ts`）；#1594 ② 認舊佈局的讀方也要綁這一組。
  *
  * `base` 由後端從 session id 算出來（`apps/harness` 的 `safeBaseName`），不歸這裡。
  *
