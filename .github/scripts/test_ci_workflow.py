@@ -31,7 +31,7 @@ PLAN_CHECKS = ROOT / '.github' / 'actions' / 'plan-checks' / 'action.yml'
 # ci.yml 檔頭：免費額度同時 20 個 job。合併後的一輪加上兩張功能 PR 的輕 gate 同時跑，要在這之內。
 JOB_LIMIT = 20
 LIGHT_IF = "steps.plan.outputs.mode == 'light'"
-TSBUILDINFO = 'node_modules/.cache/nexus-typecheck.tsbuildinfo'
+TYPECHECK_CACHE = 'node_modules/.cache/nexus-typecheck'
 COMPAT_NODES = {'22.19', '26'}
 
 
@@ -393,9 +393,14 @@ class TypecheckCache(unittest.TestCase):
     def test_paths_match_typecheck_script(self) -> None:
         self.assertEqual(self.save['with']['path'], self.restore['with']['path'])
         script = (ROOT / '.github' / 'scripts' / 'typecheck.sh').read_text(encoding='utf-8')
-        self.assertIn(f'--tsBuildInfoFile {TSBUILDINFO}', script)
-        for line in self.save['with']['path'].split():
-            self.assertTrue(line.endswith(f'/{TSBUILDINFO}'), line)
+        self.assertIn(f'cache={TYPECHECK_CACHE}\n', script)
+        generator = (ROOT / 'scripts' / 'gen-typecheck-projects.ts').read_text(encoding='utf-8')
+        self.assertIn(f"CACHE_DIR = '{TYPECHECK_CACHE}'", generator)
+        # 整個目錄：產生的設定、buildinfo 與宣告檔都要在，少了宣告檔下游會從頭查。
+        self.assertEqual(
+            self.save['with']['path'].split(),
+            [f'packages/*/{TYPECHECK_CACHE}', f'apps/*/{TYPECHECK_CACHE}'],
+        )
 
     def test_full_layer_checks_every_package_from_scratch(self) -> None:
         uses = [str(s.get('uses', '')) for s in self.typecheck['steps']]
