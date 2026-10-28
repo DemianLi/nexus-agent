@@ -247,7 +247,7 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
     '#settings/downlink',
     '這一列不裝任何東西，只講下行串流的心跳間隔與每條線的位元組上限。關掉它不會讓保護消失' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（2000 毫秒、2 MiB），' +
-      '卡住的線照樣兩拍內被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
+      '卡住的線照樣連兩拍沒排出去就被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
   ],
   [
     '#settings/session-reference',

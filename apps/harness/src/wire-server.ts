@@ -280,7 +280,8 @@ export type BeatVerdict = 'ping' | 'hold' | 'evict';
  * 一拍裡判一條線（純函式，改的只有 `line` 的兩個計數）。
  *
  * - 寫入緩衝是空的：對方收得完，或線閒著——**不算漏拍**（不然健康的閒置線兩拍就被殺），寫心跳。
- * - 緩衝有位元組：比上一拍小＝對方有在收、只是慢，歸零；沒縮小才漏拍 +1。漏到 {@link MAX_MISSED_HEARTBEATS} 就淘汰。
+ * - 緩衝有位元組：比上一拍小＝對方有在收、只是慢，歸零。已經漏滿 {@link MAX_MISSED_HEARTBEATS} 拍、這一拍還卡著就淘汰，
+ *   否則漏拍 +1。先判再加：歸零之後要再連 {@link MAX_MISSED_HEARTBEATS} 個間隔都沒有進展才斷，歸零之後的第一拍不會致命。
  *   `'drain'` 的歸零在 {@link SseHeartbeat.watch}，不在這裡。
  */
 export function judgeBeat(
@@ -292,9 +293,11 @@ export function judgeBeat(
     line.lastBuffered = 0;
     return 'ping';
   }
-  line.missed = buffered < line.lastBuffered ? 0 : line.missed + 1;
+  if (buffered < line.lastBuffered) line.missed = 0;
   line.lastBuffered = buffered;
-  return line.missed >= MAX_MISSED_HEARTBEATS ? 'evict' : 'hold';
+  if (line.missed >= MAX_MISSED_HEARTBEATS) return 'evict';
+  line.missed += 1;
+  return 'hold';
 }
 
 /** 所有 SSE 線共用的那一支計時器，見檔頭。 */

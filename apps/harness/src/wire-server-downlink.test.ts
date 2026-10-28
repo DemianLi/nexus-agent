@@ -407,29 +407,31 @@ describe('每一拍的裁決（單元）', () => {
     }
   });
 
-  it('緩衝卡著、沒縮小：連 MAX_MISSED_HEARTBEATS 拍才淘汰，前面是 hold，而且不寫心跳', () => {
+  it('緩衝卡著、沒縮小：漏滿 MAX_MISSED_HEARTBEATS 拍之後的下一拍才淘汰，前面是 hold，而且不寫心跳', () => {
     const line = { missed: 0, lastBuffered: 0 };
     const verdicts: string[] = [];
-    for (let beat = 0; beat < MAX_MISSED_HEARTBEATS; beat += 1) {
+    for (let beat = 0; beat <= MAX_MISSED_HEARTBEATS; beat += 1) {
       verdicts.push(judgeBeat(line, 1000));
     }
-    expect(verdicts).toEqual([...Array<string>(MAX_MISSED_HEARTBEATS - 1).fill('hold'), 'evict']);
+    expect(verdicts).toEqual([...Array<string>(MAX_MISSED_HEARTBEATS).fill('hold'), 'evict']);
   });
 
-  it('緩衝比上一拍小：對方有在收，漏拍歸零', () => {
+  it('緩衝比上一拍小：對方有在收，漏拍歸零、不累積', () => {
     const line = { missed: 0, lastBuffered: 0 };
     let buffered = 100_000;
     for (let beat = 0; beat < 20; beat += 1) {
       expect(judgeBeat(line, buffered)).not.toBe('evict');
       buffered -= 1000;
     }
-    expect(line.missed).toBe(0);
+    // 歸零之後這一拍照樣算一拍，跟拍與拍之間來了 drain 一樣。
+    expect(line.missed).toBe(1);
   });
 
   it('緩衝變大不算進展', () => {
     const line = { missed: 0, lastBuffered: 0 };
     expect(judgeBeat(line, 10)).toBe('hold');
-    expect(judgeBeat(line, 20)).toBe('evict');
+    expect(judgeBeat(line, 20)).toBe('hold');
+    expect(judgeBeat(line, 30)).toBe('evict');
   });
 });
 
@@ -472,13 +474,13 @@ describe('SseHeartbeat（假計時器）', () => {
     vi.useRealTimers();
   });
 
-  it('卡住的線：第 2 拍排淘汰，setImmediate 裡確認後 destroy 一次，warn 一行', async () => {
+  it('卡住的線：第 3 拍排淘汰，setImmediate 裡確認後 destroy 一次，warn 一行', async () => {
     vi.useFakeTimers({ toFake: FAKE_TIMERS });
     const { heartbeat, warned, response } = setup();
     response.writableLength = 4096;
-    await vi.advanceTimersByTimeAsync(INTERVAL);
+    await vi.advanceTimersByTimeAsync(INTERVAL * 2);
     expect(response.destroyed).toBe(false);
-    // 同步推進：第 2 拍只是排了淘汰，真的 setImmediate 還沒機會跑。
+    // 同步推進：第 3 拍只是排了淘汰，真的 setImmediate 還沒機會跑。
     vi.advanceTimersByTime(INTERVAL);
     // 要等 setImmediate 裡再確認。
     expect(response.destroyed).toBe(false);
@@ -504,12 +506,33 @@ describe('SseHeartbeat（假計時器）', () => {
     heartbeat.close();
   });
 
+  /**
+   * 持續背壓下 `writableLength` 每拍取樣都停在同一個值（一顆 frame），「緩衝縮小」不成立，進展只看得到 drain。
+   * drain 在某一拍之前剛來過，之後一個間隔沒有 drain（事件迴圈被佔住、對方晚一拍讀）：不殺，要連兩個間隔都沒有才殺（#2100）。
+   */
+  it('drain 之後只隔一個間隔沒有進展：不殺；連兩個間隔都沒有才排淘汰', async () => {
+    vi.useFakeTimers({ toFake: FAKE_TIMERS });
+    const { heartbeat, warned, response } = setup();
+    response.writableLength = 4096;
+    await vi.advanceTimersByTimeAsync(INTERVAL - 1);
+    response.emit('drain');
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    await flushImmediate();
+    expect(response.destroyed).toBe(false);
+    await vi.advanceTimersByTimeAsync(INTERVAL);
+    await flushImmediate();
+    expect(response.destroyed).toBe(true);
+    expect(warned).toHaveLength(1);
+    heartbeat.close();
+  });
+
   it('淘汰前的最後一刻 drain 來了：setImmediate 裡再確認時放過它', async () => {
     vi.useFakeTimers({ toFake: FAKE_TIMERS });
     const { heartbeat, response } = setup();
     response.writableLength = 4096;
-    await vi.advanceTimersByTimeAsync(INTERVAL);
-    // 第 2 拍：跑拍的回呼，但先不讓 setImmediate 跑。
+    await vi.advanceTimersByTimeAsync(INTERVAL * 2);
+    // 第 3 拍：跑拍的回呼，但先不讓 setImmediate 跑。
     vi.advanceTimersByTime(INTERVAL);
     response.emit('drain');
     await flushImmediate();
