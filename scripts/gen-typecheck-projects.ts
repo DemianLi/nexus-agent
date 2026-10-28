@@ -31,8 +31,8 @@ import { ROOT, workspacePackages } from './workspace-packages.js';
 export const CACHE_DIR = 'node_modules/.cache/nexus-typecheck';
 
 /**
- * 單獨檢查、不進 project references 的套件。沒有套件引用 web，放進 references 也省不到重查；單獨跑能跟單執行緒的
- * `tsc -b` 同時用到另一顆核心。`typecheck.sh` 寫死同一份清單，harness 的測試核對兩邊一致。
+ * 單獨檢查、不進 project references 的套件。沒有套件 import web 的原始碼（harness 只在執行期讀它的 `dist`），放進
+ * references 也省不到重查；單獨跑能跟單執行緒的 `tsc -b` 同時用到另一顆核心。`typecheck.sh` 寫死同一份清單，harness 的測試核對兩邊一致。
  */
 export const STANDALONE = ['apps/web'] as const;
 
