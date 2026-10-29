@@ -102,14 +102,15 @@ describe('encodeSegment', () => {
   });
 
   it('任何碼元單獨、前面接 a 或後面接 a，都編不出單獨的 ~，也編不出結尾的 ~', () => {
+    const offending: string[] = [];
     for (let code = 0; code <= 0xffff; code += 1) {
       const char = String.fromCharCode(code);
       for (const raw of [char, `a${char}`, `${char}a`]) {
         const encoded = encodeSegment(raw);
-        expect(encoded).not.toBe('~');
-        expect(encoded.endsWith('~')).toBe(false);
+        if (encoded === '~' || encoded.endsWith('~')) offending.push(raw);
       }
     }
+    expect(offending).toEqual([]);
   });
 });
 
