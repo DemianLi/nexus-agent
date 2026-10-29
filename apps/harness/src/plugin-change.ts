@@ -25,11 +25,11 @@
  * `apply` 裡才會發生的事（值檢查、`requires` 缺件、撞名）靠試掛（`plugin-trial.ts`，#2073）：照 serve 啟動試組那一次組一份寫下去之後的
  * 清單，有新冒出的失敗就拒收。「新」的判法：必掛的列一律算新；樹上的列缺服務是等提供者，不算；同一列、同一步、同一句原因、
  * 宣告也沒變的失敗不算。寫下去之後的那一份有列掉了，才再試掛一次現在的清單當基準。試掛的環境只有呼叫端給的 `--patch` 與
- * `--workspace`，只在 serve 環境裡掉的列照舊到 thread 組裝時才掉（`thread-plugin-list.ts`）。
+ * `--workspace`，只在 serve 環境裡掉的列在 thread 組裝時才掉（`thread-plugin-list.ts`）。
  *
- * **試掛在鎖外跑**：MCP 握手卡住時一次要等到 SDK 逾時（約 120 秒），比紀錄鎖的等待上限長。所以先在鎖裡算出要寫的那一筆、
- * 記下最後一筆的序號，放開鎖去試掛，再進鎖核對序號：沒變才照試掛的結果收或拒（紀錄只增不改，序號沒變就是試掛看到的那一份）；
- * 變了就放開鎖、照新的紀錄重試，累計重試 {@link TRIAL_RETRY_LIMIT} 次還是變了就拒收，請人重下。
+ * **試掛在鎖外跑**：MCP 握手卡住時一次試掛實測約 120 秒，比紀錄鎖的等待上限長。所以先在鎖裡算出要寫的那一筆、
+ * 記下最後一筆的序號，放開鎖去試掛，再進鎖核對序號與重算的那一筆：都沒變才照試掛的結果收或拒（紀錄只增不改，序號沒變
+ * 就是試掛看到的那一份）；任一變了就放開鎖、照新的紀錄重試，累計重試 {@link TRIAL_RETRY_LIMIT} 次還是變了就拒收，請人重下。
  *
  * ## 偏離登記
  *
@@ -38,8 +38,8 @@
  * 2. **變更歷史**：dsh 完全沒有；這是產品需求（決議 §3-5 第 18 條）。
  * 3. **寫入回報帶 actor、序號、前後值**：dsh 的 `ChangeResult` 只有 `reason`。CLI 與日誌**不印設定值**，只印哪幾個欄位變了（加 7）。
  * 4. **沒有「寫入後協調失敗就寫回舊文件」**：dsh 的 `edit` 寫完立刻在同一個行程裡 reconcile 活的 Loader 樹，失敗寫回。
- *    我們的寫入口是另一個行程，樹在 serve 裡，下一條 thread 才重讀；紀錄追加之後沒有可以協調的對象，所以把驗證全部
- *    搬到追加之前，`apply` 那一段在這個行程裡另建一棵樹試掛。
+ *    我們的寫入口是另一個行程，樹在 serve 裡，下一條 thread 才重讀；紀錄追加之後沒有可以協調的對象，所以才把驗證全部
+ *    搬到追加之前。
  * 5. **紀錄裡留著舊的 `disable`、而那一列後來改成關不掉時，救得回來**（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）：
  *    找列與找繼承值不檢查保護名單，只有寫入之後的整份清單才檢查，所以 `enable` 寫得進去、新的 `disable` 照樣被拒；
  *    清單還壞著時別的改動也被拒，訊息帶 `plugin enable <id>` 那一句修法（`plugin-config.ts` 的 `assertNotProtected`）。
@@ -238,6 +238,7 @@ export async function changePlugin(
     cwd: options.cwd ?? process.cwd(),
     ...(options.workspace !== undefined && { workspace: options.workspace }),
   };
+  // 試掛讀的是鎖裡讀過的同一份清單，警告由那一次收，這裡不重複收。
   const quiet = { ...base, warn: () => {} };
   const introducedFailures = async (body: JournalBody): Promise<{ rejection?: string }> => {
     const failing = (
@@ -477,7 +478,7 @@ export async function changePlugin(
         ) {
           if (pass > TRIAL_RETRY_LIMIT) {
             return reject(
-              `試掛期間變更紀錄一直被別人追加（重試 ${TRIAL_RETRY_LIMIT} 次），有人同時在改插件設定。這一筆沒寫；等對方改完，照新的清單重下一次。`,
+              `試掛期間清單一直在變（重試 ${TRIAL_RETRY_LIMIT} 次），多半是有人同時在改插件設定。這一筆沒寫；等對方改完，照新的清單重下一次。`,
             );
           }
           pending = { body, seq };

@@ -6,7 +6,7 @@
  * 相容層的列在組裝時跑 `apply`。不送模型請求；serve 裡跑著的 thread 不受影響。
  *
  * **試組的環境不是 serve 的環境。** 旗標只拿得到呼叫端給的 `--patch` 與 `--workspace`；只在 serve 環境裡掉的列，這裡看不到，
- * 照舊在 thread 組裝時才掉（`thread-plugin-list.ts`）。
+ * 在 thread 組裝時才掉（`thread-plugin-list.ts`）。
  *
  * @module
  */

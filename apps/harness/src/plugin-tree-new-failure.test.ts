@@ -213,7 +213,7 @@ describe('serve：樹上那一列在 apply 掉', () => {
     expect(failedOf(p.dir)).toEqual([]);
   }, 120000);
 
-  // 寫入口看不到的失敗（例如只在 serve 環境裡掉的列）照舊到 thread 組裝時才掉：繞過寫入口直接追加那一筆。
+  // 寫入口看不到的失敗（例如只在 serve 環境裡掉的列）在 thread 組裝時才掉：繞過寫入口直接追加那一筆。
   it('紀錄裡的設定讓它在 apply 掉：下一條 thread 照樣建得起來；伺服器日誌記一次、紀錄記一筆 failed、快照上那一列掉在 apply', async () => {
     const p = probe();
     const env = { [HARNESS_HOME_ENV]: p.dir };
