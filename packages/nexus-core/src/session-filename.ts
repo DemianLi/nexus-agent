@@ -124,11 +124,16 @@ const EMPTY_ID_DIRECTORY_NAME = '~';
  *
  * - 一般情形是 `encodeSegment(id)`。
  * - 編出來超過 {@link MAX_DIRECTORY_NAME_LENGTH} 字元的，取前 {@link TRUNCATED_PREFIX_LENGTH} 字元、接 `-`、再接完整 id 的
- *   SHA-256 前 {@link DIGEST_LENGTH} 位十六進位。編碼後最長是一個碼元六字元，截短後一律進得去 255 位元組的單段上限。
- * - 空 id 對到 `~`。這條對應是 nexus 自有的：dsh 的 session id 不會是空字串。
+ *   SHA-256 前 {@link DIGEST_LENGTH} 位十六進位。`encodeSegment` 的輸出全是 ASCII：不截短的不超過 120 位元組，截短後固定
+ *   109 位元組，都在 255 位元組的單段上限內。
+ * - 空 id 對到 `~`。
  *
- * 兩種撞名照實記下：截短之後，只有沒截短的 id 會碰上不分大小寫的檔案系統的大小寫撞名（長 id 的摘要算在原始 id 上，只差大小寫
- * 的兩個長 id 各自一個目錄）；短 id 可以刻意取成某個長 id 截短後的名字，兩者落在同一個目錄，後建的那一份報撞名、不覆寫。
+ * 兩種撞名：
+ *
+ * - 不分大小寫的檔案系統上，大小寫撞名只發生在至少一方沒截短的組合上：長 id 的摘要算在原始 id 上，只差大小寫的兩個長 id
+ *   各自一個目錄。
+ * - 短 id 可以刻意取成某個長 id 截短後的名字，兩者落在同一個目錄名。兩份都在單檔佈局時，後建的那一份報撞名、不覆寫；一份在
+ *   舊兩檔、一份在單檔佈局時，`create` 擋不到，見 [#2132](https://github.com/DemianLi/nexus-agent/issues/2132)。
  *
  * @param id - session id。
  */

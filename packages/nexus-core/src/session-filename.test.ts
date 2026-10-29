@@ -101,7 +101,7 @@ describe('encodeSegment', () => {
     expect(() => encodeSegment('')).toThrow();
   });
 
-  it('任何碼元單獨或接在任何碼元後面，都編不出單獨的 ~，也編不出結尾的 ~', () => {
+  it('任何碼元單獨、前面接 a 或後面接 a，都編不出單獨的 ~，也編不出結尾的 ~', () => {
     for (let code = 0; code <= 0xffff; code += 1) {
       const char = String.fromCharCode(code);
       for (const raw of [char, `a${char}`, `${char}a`]) {
@@ -114,13 +114,13 @@ describe('encodeSegment', () => {
 });
 
 describe('sessionDirectoryName', () => {
-  it('不超過 120 字元就是 encodeSegment(id)', () => {
+  it('編出來不超過 120 字元就是 encodeSegment(id)', () => {
     expect(sessionDirectoryName('t1/bg-1')).toBe(encodeSegment('t1/bg-1'));
     const atLimit = 'a'.repeat(120);
     expect(sessionDirectoryName(atLimit)).toBe(atLimit);
   });
 
-  it('超過 120 字元取前 96 字元、接 -、再接完整 id 的 SHA-256 前 12 位', () => {
+  it('編出來超過 120 字元取前 96 字元、接 -、再接完整 id 的 SHA-256 前 12 位', () => {
     const id = `${'a'.repeat(120)}/${'中'.repeat(40)}`;
     const digest = createHash('sha256').update(id).digest('hex').slice(0, 12);
     expect(sessionDirectoryName(id)).toBe(`${'a'.repeat(96)}-${digest}`);

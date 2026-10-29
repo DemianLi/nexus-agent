@@ -1320,9 +1320,9 @@ export async function readStableSnapshot(
 
 /**
  * 讀日誌本文，原始位元組（不給 encoding）：換行與位元組偏移都要算在 Buffer 上，見 {@link parseJsonlSessionBody}。
- * 走 {@link readStableSnapshot}（#1509），順序同 dsh：先穩定讀、再解碼。
- * 舊兩檔的本文**不在是空的**：只有 header 是「還沒寫第一筆就當了」。世代檔不在則拋 `vanished()` 給的錯：header 就在那個檔裡，
- * 挑定之後它不見了，不是空會話。
+ * 走 {@link readStableSnapshot}（#1509）：先穩定讀、再解碼。
+ * 沒給 `vanished`（舊兩檔）：**不在是空的**，只有 header 是「還沒寫第一筆就當了」。給了（世代檔）：不在就拋它給的錯，
+ * header 就在那個檔裡，挑定之後它不見了不是空會話。
  */
 async function readBody(
   logPath: string,
@@ -1333,7 +1333,7 @@ async function readBody(
 }
 
 /**
- * 同 {@link readBody}，另交證明它穩定的那次 `stat` 的身分（格式同 {@link fileRevision}，不在就是 `missing`）：冷讀快取
+ * 同 {@link readBody}，另交證明它穩定的那次 `stat` 的身分（格式同 {@link fileRevision}；沒給 `vanished` 時不在就是 `missing`）：冷讀快取
  * 拿它當日誌的 revision，不另外再 `stat` 一次。
  */
 async function readBodySnapshot(
@@ -1350,12 +1350,12 @@ async function readBodySnapshot(
   }
 }
 
-/** {@link readBody} 給世代檔的 `vanished`：挑定的世代檔在讀本文之前不見了。 */
+/** 讀世代檔本文時給的 `vanished`：挑定的世代檔在讀本文之前不見了。 */
 function generationVanished(id: string): () => SessionNotFoundError {
   return () => new SessionNotFoundError(id, `會話 "${id}" 挑定的世代檔在讀本文之前不見了`);
 }
 
-/** 日誌本文現在有幾個位元組（位元組額度要的，#2115）。不在就是 0，同 {@link readBodySnapshot}。 */
+/** 日誌本文現在有幾個位元組（位元組額度要的，#2115）。不在就是 0；世代檔不在由之後的 {@link readBodySnapshot} 報錯。 */
 async function logBytesOf(logPath: string, fs: StableReadFileSystem): Promise<number> {
   try {
     return Number((await fs.stat(logPath)).size);
@@ -1367,7 +1367,7 @@ async function logBytesOf(logPath: string, fs: StableReadFileSystem): Promise<nu
 
 /** {@link readSessionEntry} 的選項。 */
 export interface ReadSessionEntryOptions extends ParseHeaderOptions {
-  /** 讀 header 與日誌本文用的檔案系統。**只給測試換**，同 {@link readStableSnapshot}。 */
+  /** 讀舊兩檔的 header 與兩種佈局的本文用的檔案系統。**只給測試換**，同 {@link readStableSnapshot}。 */
   readonly fs?: StableReadFileSystem;
   /** 讀世代檔的第一行時，每讀一塊之前看一次（同列表的 `signal`）。 */
   readonly signal?: AbortSignal;
@@ -1390,7 +1390,10 @@ export interface SessionEntry {
   readonly header: StoredSessionHeader;
   /** 同 {@link ParsedSessionHeader.storedFormatVersion}。 */
   readonly storedFormatVersion: number;
-  /** 日誌本文的原始位元組（單檔佈局不含 header 行），走 {@link readStableSnapshot}。日誌不在就是空的。 */
+  /**
+   * 日誌本文的原始位元組（單檔佈局不含 header 行），走 {@link readStableSnapshot}。舊兩檔的日誌不在就是空的；單檔佈局挑定的
+   * 世代檔不在就拋 `SessionNotFoundError`。
+   */
   readBody(): Promise<Buffer>;
 }
 
@@ -1421,8 +1424,8 @@ type TwoFileSite = Extract<SessionSite, { readonly layout: 'two-file' }>;
 export type SessionDirent = Pick<Dirent, 'name' | 'isDirectory'>;
 
 /**
- * 探單檔佈局的路徑時，哪幾種錯算「不在」：`ENOENT`；`ENAMETOOLONG`（`sessionDirectoryName` 會截短，這一版算出來的目錄名不會
- * 超過單段上限；留著是因為上層目錄本身就長到整條路徑超限時，那份會話不可能落在單檔佈局）；`ENOTDIR`（同名的是個檔）。其餘的錯照拋。
+ * 探單檔佈局的路徑時，哪幾種錯算「不在」：`ENOENT`；`ENAMETOOLONG`（`sessionDirectoryName` 截短後不超過單段上限，但上層目錄
+ * 長到整條路徑超限時，那份會話不可能落在單檔佈局）；`ENOTDIR`（同名的是個檔）。其餘的錯照拋。
  */
 function isAbsentPath(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
@@ -1543,7 +1546,6 @@ function twoFileSite(directory: string, base: string): TwoFileSite {
 
 /**
  * 照 id 找一份會話，兩種佈局都看（open、續接、夾具用）。舊兩檔看 header 在不在；單檔佈局看會話目錄裡有沒有正規的世代檔。
- * 空 id 編不成目錄名，只看舊兩檔。
  *
  * **同一個 id 兩種佈局都有就拋**（#1594）：分不出哪一份才算數，不默默挑一個。
  *
@@ -1688,11 +1690,11 @@ async function readSite(
  *
  * @param directory - 會話所在的目錄。
  * @param entry - 目錄裡的一個目錄項。
- * @param options - 同 {@link parseHeader}，另加測試用的檔案系統；它只管舊兩檔的 header 與兩種佈局的本文，挑世代與讀世代檔的
- *   第一行走真的檔案系統。
+ * @param options - 同 {@link parseHeader}，另加測試用的檔案系統與 `signal`。檔案系統只管舊兩檔的 header 與兩種佈局的本文，
+ *   挑世代與讀世代檔的第一行走真的檔案系統；`signal` 只在讀世代檔的第一行時看。
  * @returns 不是一份會話，header 在讀目錄與讀檔之間不見了，或世代檔是空的、第一行還沒有換行，都是 `undefined`。
  * @throws 同 {@link parseHeader}；{@link SessionCorruptionError} 世代檔名跟 header 版本對不上（單檔佈局的錯都帶
- *   `location`）；其餘檔案系統的錯（例如 `EACCES`）照拋。
+ *   `location`）；`signal` 取消時拋它的 `reason`；其餘檔案系統的錯（例如 `EACCES`）照拋。
  */
 export async function readSessionEntry(
   directory: string,
@@ -2241,8 +2243,8 @@ function materializeCreateHeader(header: StoredSessionHeader): StoredSessionHead
  * （`sessions.observe` 的回呼）也是同步的（#1559 Q1 (a)）。
  *
  * - 舊兩檔看 header 與日誌兩個檔，任一個在都算建過（例如 header 被外部刪掉、只剩日誌）。不在才放行，其餘的錯原樣拋。
- * - 單檔佈局看會話目錄裡有沒有正規的世代檔。目錄不在、名字太長、同名的是個檔都算不在（{@link isAbsentPath}），其餘的錯
- *   原樣拋。空 id 編不成目錄名，只看舊兩檔。
+ * - 單檔佈局看會話目錄裡有沒有正規的世代檔。目錄不在、路徑太長、同名的是個檔都算不在（{@link isAbsentPath}），其餘的錯
+ *   原樣拋。
  */
 function existsOnDisk(directory: string, id: string): boolean {
   const files = legacyTwoFileSessionFilenames(safeBaseName(id));
