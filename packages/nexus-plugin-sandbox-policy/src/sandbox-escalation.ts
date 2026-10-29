@@ -362,7 +362,7 @@ function createEscalationTool(
       if (sharedPrefix !== undefined && isUnderSharedPrefix(target, sharedPrefix)) {
         return refuse(sharedReadOnlyRefusal(sharedPrefix));
       }
-      // 舊 thread 的保留清單（#2078）：同上，fence 怎樣都不讓寫。
+      // 舊 thread 的保留清單（#2078）：也判在加寬之前，fence 不論模式都不讓寫，見模組註解。
       const reserved = await reservedReason?.(target);
       if (reserved !== undefined) return refuse(reservedTargetRefusal(reserved));
       // resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次：人看卡片的那段時間裡，

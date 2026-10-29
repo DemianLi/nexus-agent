@@ -1408,11 +1408,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 變更落在保留的地方（{@link ContainedFilesystemBackendOptions.reservedWrites}）就拒，不看模式。
-   *
-   * 兩邊都 canonicalize 之後比，經符號連結的別名（`/docs/AGENTS.md`，`docs` 指向根）也擋得到；解析失敗的退回字面位置比。
-   * **不分大小寫**：不分大小寫的檔案系統上，`/claude.md` 跟 `/CLAUDE.md` 是同一個檔。代價是分大小寫的檔案系統上，只差大小寫的名字也寫不進去。
-   * 路徑本身不合法（`..`、`~`、跑出根）的不在這裡判，交給 {@link verdict} 與基座。
+   * 變更落在保留的地方（{@link reservedReason} 有理由）就拒，不看模式。
    *
    * @param mode - 這一次呼叫用的模式，只用在拒絕訊息。
    * @param filePath - 模型給的虛擬路徑。
@@ -1429,11 +1425,15 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * `filePath` 落在保留的地方嗎（{@link ContainedFilesystemBackendOptions.reservedWrites}）。變更的拒絕與升級工具（#2078）問的都是這一個，
-   * 比對規則見 {@link reservedDenial}。
+   * `filePath` 落在保留的地方嗎（{@link ContainedFilesystemBackendOptions.reservedWrites}）。變更的拒絕（{@link reservedDenial}）與
+   * 升級工具（#2078）問的都是這一個。
+   *
+   * 兩邊都 canonicalize 之後比，經符號連結的別名（`/docs/AGENTS.md`，`docs` 指向根）也擋得到；解析失敗的退回字面位置比。
+   * **不分大小寫**：不分大小寫的檔案系統上，`/claude.md` 跟 `/CLAUDE.md` 是同一個檔。代價是分大小寫的檔案系統上，只差大小寫的名字也寫不進去。
+   * 路徑本身不合法（`..`、`~`、跑出根）的不在這裡判，交給 {@link verdict} 與基座。
    *
    * @param filePath - 模型給的虛擬路徑。
-   * @returns 落在保留的地方時是那一格的理由；其餘 `undefined`。
+   * @returns 落在保留的地方時是那一格的理由；其餘（含路徑不合法）`undefined`。
    */
   async reservedReason(filePath: string): Promise<string | undefined> {
     const reserved = this.reservedWrites?.() ?? [];
@@ -1449,7 +1449,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     return undefined;
   }
 
-  /** {@link reservedDenial} 比對用的位置：canonicalize 之後轉小寫；解析失敗退回字面位置，路徑不合法回 `undefined`。 */
+  /** {@link reservedReason} 比對用的位置：canonicalize 之後轉小寫；解析失敗退回字面位置，路徑不合法回 `undefined`。 */
   private async placeOf(virtualPath: string): Promise<string | undefined> {
     let resolved: string;
     try {

@@ -11,15 +11,26 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
-import { SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
+import type { FsService } from '@nexus/core';
+import { reservedTargetRefusal, SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { sharedReservedWrites } from './shared-reserved-writes.js';
 
 const shipped = await shippedPlugins();
+
+/** 守衛的兩種理由：指示檔一格、技能來源一格。 */
+const [instructionReason, skillReason] = (() => {
+  const reserved = sharedReservedWrites({
+    skillSources: () => ['/skills/'],
+    offWorkspacePrefixes: () => [],
+  } as unknown as FsService);
+  return [reserved[0]?.reason ?? '', reserved.at(-1)?.reason ?? ''];
+})();
 
 let workspace: string;
 beforeEach(async () => {
@@ -70,20 +81,19 @@ async function escalateOnLegacyThread(target: string): Promise<{ card: boolean; 
 
 describe('舊 thread 對守衛擋的目標升級：不掛核准卡（#2078）', () => {
   it.each([
-    ['/AGENTS.md', '工作區指示'],
-    ['/CLAUDE.md', '工作區指示'],
-    ['/./AGENTS.local.md', '工作區指示'],
-    ['/claude.local.md', '工作區指示'],
-    ['/skills/normal/SKILL.md', '技能來源'],
-    ['/skills/rogue/SKILL.md', '技能來源'],
-    ['/skills', '技能來源'],
+    ['/AGENTS.md', instructionReason],
+    ['/CLAUDE.md', instructionReason],
+    ['/./AGENTS.local.md', instructionReason],
+    ['/claude.local.md', instructionReason],
+    ['/skills/normal/SKILL.md', skillReason],
+    ['/skills/rogue/SKILL.md', skillReason],
+    ['/skills', skillReason],
   ])(
     '對 %s 升級：沒有核准卡，回不能升級與守衛的理由',
     async (target, reason) => {
       const { card, reply } = await escalateOnLegacyThread(target);
       expect(card).toBe(false);
-      expect(reply).toContain('沒有去問人');
-      expect(reply).toContain(reason);
+      expect(reply).toContain(reservedTargetRefusal(reason));
       expect(await readFile(join(workspace, 'AGENTS.md'), 'utf8')).toBe('DEPLOY-RULE');
     },
     60000,
@@ -93,7 +103,7 @@ describe('舊 thread 對守衛擋的目標升級：不掛核准卡（#2078）', 
     await symlink(workspace, join(workspace, 'docs'));
     const { card, reply } = await escalateOnLegacyThread('/docs/AGENTS.md');
     expect(card).toBe(false);
-    expect(reply).toContain('工作區指示');
+    expect(reply).toContain(reservedTargetRefusal(instructionReason));
   }, 60000);
 
   it('反例：根目錄別的檔、子目錄裡的指示檔名、名字像技能來源的目錄：照舊掛核准卡', async () => {
