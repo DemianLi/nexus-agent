@@ -101,8 +101,7 @@ function holdsGeneration(dir: string, id: string): boolean {
 function directoriesHolding(root: string, id: string, twoFileOnly = false): string[] {
   return directoriesUnder(root).filter(
     (dir) =>
-      existsSync(sessionPathsIn(dir, id).header) ||
-      (!twoFileOnly && holdsGeneration(dir, id)),
+      existsSync(sessionPathsIn(dir, id).header) || (!twoFileOnly && holdsGeneration(dir, id)),
   );
 }
 

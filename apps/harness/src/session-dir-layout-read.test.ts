@@ -36,7 +36,11 @@ import {
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import { readSessionLogs } from './eval/session-scan.js';
-import { openJsonlSessionStore, readSessionEntryById, sessionPathsIn } from './jsonl-session-store.js';
+import {
+  openJsonlSessionStore,
+  readSessionEntryById,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
 import type { JsonlSessionStoreOptions } from './jsonl-session-store.js';
 import type { SessionLogBudget } from './session-log-budget.js';
 
