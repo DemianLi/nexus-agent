@@ -2,7 +2,7 @@
  * 離線掃描（`readSessionLogs`）跟寫方同時動的兩種情形（#1857 審查）：掃描改走後端的讀取接縫（`readSessionEntry`）之後，
  * 這兩條是刻意的行為，各一格釘住。
  *
- * - header 在讀目錄與讀檔之間不見了：跳過那一份，不讓整次掃描失敗（同 `list`）。
+ * - header 在讀目錄與讀檔之間不見了：跳過那一份，不讓整次掃描失敗（同 `list`）。單檔佈局挑定的世代檔在讀本文之前不見了也一樣。
  * - 讀日誌本文的當下有人在寫：照穩定快照讀，第二次還在變就截到讀前的大小（dsh `readStableSnapshot`）。
  *
  * 真的磁碟上造不出「剛好在那一下」，所以照 `jsonl-session-store-header-replace.test.ts` 的做法 mock `node:fs/promises`，
@@ -10,12 +10,16 @@
  */
 
 import type { BigIntStats } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import {
+  generationLogFilename,
+  SESSION_LOG_FORMAT_VERSION,
+  sessionDirectoryName,
+} from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 
 interface Injection {
@@ -94,6 +98,23 @@ describe('離線掃描跟寫方同時動', () => {
       JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 'ghost', createdAt: 0 }),
     );
     // 掃描列目錄時它還在，讀它的那一下才不見。
+    inject.beforeReadFile = async (path) => {
+      if (path === ghost) await rm(ghost);
+    };
+
+    const { logs, unreadable } = await readSessionLogs([root]);
+    expect(logs.map((log) => log.header.id)).toEqual(['cli']);
+    expect(unreadable).toEqual([]);
+  });
+
+  it('單檔佈局挑定的世代檔在讀本文之前不見了：跳過那一份，其餘照讀，不算讀不懂', async () => {
+    const run = await written('cli', 2);
+    const ghostDir = join(run, sessionDirectoryName('ghost'));
+    await mkdir(ghostDir);
+    const ghost = join(ghostDir, generationLogFilename(SESSION_LOG_FORMAT_VERSION));
+    const header = { version: SESSION_LOG_FORMAT_VERSION, id: 'ghost', createdAt: 0 };
+    await writeFile(ghost, `${JSON.stringify(header)}\n${JSON.stringify(event(0))}\n`);
+    // header 行讀得到，讀本文的那一下才不見。
     inject.beforeReadFile = async (path) => {
       if (path === ghost) await rm(ghost);
     };
