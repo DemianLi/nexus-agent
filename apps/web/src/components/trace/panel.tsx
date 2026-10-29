@@ -311,18 +311,21 @@ const Timeline = memo(function Timeline({
     }
     finishLocate(pending.key, target);
   }, [pending, model, finishLocate]);
-  // 按「載入這一輪的細節」拉完（#2009）：鈕跟著摘要收掉、焦點掉了，就落在那一輪的標題（同「看這一輪」）。拉回來的輪排在最前面，
+  // 「載入這一輪的細節」拉完（#2009）：焦點在鈕上、鈕跟著摘要收掉，就落在那一輪的標題（同「看這一輪」）。拉回來的輪排在最前面，
   // 可能在「顯示更早的輪」後面：先展開到那一組，畫出來之後再交。
   const handoff = useFocusHandoff<number>();
   const onPull = useMemo(
     () =>
       puller === undefined
         ? undefined
-        : (seq: number, button: HTMLElement) => {
-            handoff.arm(seq, button);
+        : (seq: number) => {
             void puller.pull({ seq });
           },
-    [puller, handoff],
+    [puller],
+  );
+  const onArm = useCallback(
+    (seq: number, button: HTMLElement) => handoff.arm(seq, button),
+    [handoff],
   );
   useEffect(() => {
     const seq = handoff.pending();
@@ -376,6 +379,7 @@ const Timeline = memo(function Timeline({
             reveal={revealIn === 'digests' && !pullHold ? placed : undefined}
             statusOf={statusFor}
             onPull={onPull}
+            onArm={onArm}
             revealedSeq={revealedSeq}
             onRevealed={onDigestRevealed}
           />
@@ -407,6 +411,7 @@ const Timeline = memo(function Timeline({
                 : undefined
             }
             onPull={onPull}
+            onArm={onArm}
           />
         ))}
         <Limits structured={model.structured} />

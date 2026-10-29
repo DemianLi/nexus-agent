@@ -476,6 +476,18 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     expect(document.activeElement).toBe(document.body);
   });
 
+  it('焦點停在鈕上、捲動帶動翻到最後一頁（#2009）：鈕收掉，焦點落在 viewport', async () => {
+    const { client } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+    screen.getByRole('button', { name: LOAD_EARLIER_LABEL }).focus();
+    fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    expect(document.activeElement).toBe(viewport());
+  });
+
   it('按下去的當下焦點不在鈕上（#2009，例如 Safari 用滑鼠點鈕不聚焦）：翻到最後一頁也不搬焦點', async () => {
     const { client } = threePages();
     render(<App client={client} />);

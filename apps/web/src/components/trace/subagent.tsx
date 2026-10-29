@@ -185,7 +185,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
     };
   }, []);
 
-  // 按鈕拉完（#2009）：鈕收掉、焦點掉了，就落在拉回來的第一輪的標題；這一區沒有輪就落在「重新載入」。
+  // 拉完（#2009）：焦點在鈕上、鈕收掉了，就落在拉回來的第一輪的標題；這一區沒有輪就落在「重新載入」。
   const handoff = useFocusHandoff<number>();
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -223,10 +223,6 @@ export function SubagentCalls({ runId }: { runId: string }) {
     // `snapshots` 只用來畫拉回來的那一輪；它每個 frame 都是新的，不該讓拉取的函式跟著換。
     [puller, runId],
   );
-  const pressPull = (seq: number, button: HTMLElement) => {
-    handoff.arm(seq, button);
-    pullSeq(seq);
-  };
 
   // 前景子代理整段只有一份摘要、推送沒有逐呼叫結構：展開就拉，不讓人再多按一下。
   const only =
@@ -273,7 +269,8 @@ export function SubagentCalls({ runId }: { runId: string }) {
                   variant="ghost"
                   size="sm"
                   className="min-h-11 text-ui lg:min-h-8"
-                  onClick={(event) => pressPull(digest.seq, event.currentTarget)}
+                  onFocus={(event) => handoff.arm(digest.seq, event.currentTarget)}
+                  onClick={() => pullSeq(digest.seq)}
                 >
                   {SUBAGENT_CALLS_RELOAD_LABEL}
                 </Button>
@@ -298,7 +295,8 @@ export function SubagentCalls({ runId }: { runId: string }) {
             ) : (
               <PullControl
                 status={pull ?? { kind: 'idle' }}
-                onPull={(button) => pressPull(digest.seq, button)}
+                onPull={() => pullSeq(digest.seq)}
+                onArm={(button) => handoff.arm(digest.seq, button)}
               />
             )}
           </section>

@@ -37,6 +37,7 @@ export function TurnGroup({
   canLoadThrough = false,
   pullStatus,
   onPull,
+  onArm,
 }: {
   turn: TraceTurn;
   structured: boolean;
@@ -49,7 +50,9 @@ export function TurnGroup({
   canLoadThrough?: boolean;
   /** 只有摘要的組才有：載入細節的進度（沒給就不畫載入鈕）。 */
   pullStatus?: PullStatus | undefined;
-  onPull?: ((seq: number, button: HTMLElement) => void) | undefined;
+  onPull?: ((seq: number) => void) | undefined;
+  /** 載入鈕被聚焦（焦點交接，`hooks/use-focus-handoff.ts`）。 */
+  onArm?: ((seq: number, button: HTMLElement) => void) | undefined;
 }) {
   const title = turn.head === undefined ? '' : `第 ${turn.head.number} 輪`;
   const [shown, setShown] = useState(ROW_PAGE);
@@ -73,7 +76,11 @@ export function TurnGroup({
         turn.seq !== undefined &&
         pullStatus !== undefined &&
         onPull !== undefined && (
-          <PullControl status={pullStatus} onPull={(button) => onPull(turn.seq!, button)} />
+          <PullControl
+            status={pullStatus}
+            onPull={() => onPull(turn.seq!)}
+            onArm={(button) => onArm?.(turn.seq!, button)}
+          />
         )}
       {structured && turn.legacy && (
         <p className="text-muted-foreground px-2 pt-1 text-tip" data-testid="trace-legacy-group">
@@ -119,12 +126,15 @@ export function Digests({
   onRevealed,
   statusOf: pullStatusOf,
   onPull,
+  onArm,
 }: {
   digests: readonly TraceDigest[];
   omitted: number;
   /** 載入某一輪細節的進度與動作（沒給就不畫載入鈕）。 */
   statusOf?: ((seq: number) => PullStatus) | undefined;
-  onPull?: ((seq: number, button: HTMLElement) => void) | undefined;
+  onPull?: ((seq: number) => void) | undefined;
+  /** 載入鈕被聚焦（焦點交接，`hooks/use-focus-handoff.ts`）。 */
+  onArm?: ((seq: number, button: HTMLElement) => void) | undefined;
   /** 要顯示的是這裡面的某一輪：展開區塊、展開到那一輪那一頁，再捲過去。 */
   reveal: { readonly seq: number; readonly nonce: number } | undefined;
   revealedSeq: number | undefined;
@@ -198,7 +208,8 @@ export function Digests({
               {pullStatusOf !== undefined && onPull !== undefined && (
                 <PullControl
                   status={pullStatusOf(digest.seq)}
-                  onPull={(button) => onPull(digest.seq, button)}
+                  onPull={() => onPull(digest.seq)}
+                  onArm={(button) => onArm?.(digest.seq, button)}
                 />
               )}
             </li>

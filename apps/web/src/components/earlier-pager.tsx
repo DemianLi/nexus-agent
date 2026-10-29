@@ -53,25 +53,25 @@ export function earlierLoadedNotice(loaded: number | undefined): string {
   return loaded > 0 ? `載入了較早的 ${loaded} 則。` : '載入了更早的對話。';
 }
 
-/** 讀取中的鈕畫得跟 #1695 X4-B 的「DotLoader 加字」一樣：沒有框、沒有底，字是次要色，滑過去沒有反應。 */
+/** 讀取中的鈕畫得跟 #1695 X4（B，SG DotLoader）一樣：沒有框、沒有底，字是次要色，滑過去沒有反應。 */
 const LOADING_CLASS =
-  'text-muted-foreground gap-2 px-0 text-ui font-normal data-[disabled]:pointer-events-none';
+  'text-muted-foreground gap-2 border-0 px-0 text-ui font-normal data-[disabled]:pointer-events-none';
 
 /**
- * `onPress` 給呼叫端記下「是按鈕帶動的」（`hooks/use-focus-handoff.ts`）。讀取中鈕不卸載，`disabled`＋`focusableWhenDisabled`
+ * `onArm`：鈕被聚焦時交給呼叫端，讀完時焦點交接用（`hooks/use-focus-handoff.ts`）。讀取中鈕不卸載，`disabled`＋`focusableWhenDisabled`
  * （`aria-disabled`）：焦點留在鈕上、再按不會再拉一次；名稱維持按下去之前那一句（{@link useSettledLabel}）。
  */
 export function EarlierPager({
   earlier,
-  onPress,
+  onArm,
 }: {
   earlier: EarlierHistory;
-  onPress?: (button: HTMLElement) => void;
+  onArm?: (button: HTMLElement) => void;
 }) {
   const failed = earlier.error !== undefined;
   const label = failed ? RETRY_EARLIER_LABEL : LOAD_EARLIER_LABEL;
   const name = useSettledLabel(label, earlier.loading);
-  // 內層的最小高度等於 sm 鈕（vendor Button 的 `h-7`），待命與讀取中一樣高，接上一頁之前畫面不跳。
+  // 待命與讀取中是同一顆 sm 鈕（vendor Button 的 `h-7`），高度不變，接上一頁之前畫面不跳。
   return (
     <div className="mx-auto w-full max-w-2xl px-6 pt-4">
       <div className="flex min-h-7 flex-wrap items-center justify-center gap-2">
@@ -83,10 +83,8 @@ export function EarlierPager({
           disabled={earlier.loading}
           focusableWhenDisabled
           aria-label={earlier.loading ? name : undefined}
-          onClick={(event) => {
-            onPress?.(event.currentTarget);
-            earlier.onLoad();
-          }}
+          onFocus={(event) => onArm?.(event.currentTarget)}
+          onClick={earlier.onLoad}
         >
           {earlier.loading ? (
             <>

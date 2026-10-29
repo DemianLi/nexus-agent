@@ -19,21 +19,23 @@ export const TRACE_PULL_FAILED_TEXT = '無法載入這一輪的細節：';
 
 /** 讀取中的鈕畫得跟 #1690 T6 的「DotLoader 加一行灰字」一樣：沒有框、沒有底，滑過去沒有反應。 */
 const LOADING_CLASS =
-  'text-muted-foreground h-auto gap-2 px-2 font-normal whitespace-normal data-[disabled]:pointer-events-none';
+  'text-muted-foreground h-auto gap-2 border-0 px-2 font-normal whitespace-normal data-[disabled]:pointer-events-none';
 
 /**
  * 一列摘要、或只有摘要的組：載入那一輪的細節（#1690 T6）。待命與失敗是 outline 鈕帶圖示，失敗的原因接在鈕後面、掛在鈕的
  * `aria-describedby`；進行中同一顆鈕換成 SG `DotLoader` 加一行灰字。按下去是唯讀拉取，「重試」是重新載入，都不重跑模型，也不自動重試。
  *
  * 讀取中鈕不卸載（#2009）：`disabled`＋`focusableWhenDisabled`（`aria-disabled`），焦點留在鈕上、再按不會再拉一次，名稱維持
- * 按下去之前那一句（`useSettledLabel`）。`onPull` 收到這顆鈕，給呼叫端記下「是按鈕帶動的」（`hooks/use-focus-handoff.ts`）。
+ * 按下去之前那一句（`useSettledLabel`）。`onArm`：鈕被聚焦時交給呼叫端，拉完時焦點交接用（`hooks/use-focus-handoff.ts`）。
  */
 export function PullControl({
   status,
   onPull,
+  onArm,
 }: {
   status: PullStatus;
-  onPull: (button: HTMLElement) => void;
+  onPull: () => void;
+  onArm?: (button: HTMLElement) => void;
 }) {
   const failureId = useId();
   const loading = status.kind === 'loading';
@@ -55,7 +57,8 @@ export function PullControl({
         focusableWhenDisabled
         aria-label={loading ? name : undefined}
         aria-describedby={failed ? failureId : undefined}
-        onClick={(event) => onPull(event.currentTarget)}
+        onFocus={(event) => onArm?.(event.currentTarget)}
+        onClick={onPull}
       >
         {loading ? (
           <>

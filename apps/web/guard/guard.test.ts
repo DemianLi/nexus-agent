@@ -65,7 +65,7 @@ import { startGuardServer, type GuardServer } from './server';
  * 18. **工具卡的 diff**（#1685 PR B，`?overlay=diff-view`，產品的 `ToolRun`＋`ToolCard`）：SG `DiffView` 每一種行（`diff --git`、`@@`、
  *    新增、刪除、上下文、`... 還有 N 行沒畫`）在 `StepList` 裡與單獨放在頁面上都過 4.5；疊在清單裡的沒有 blur、單獨的照 SG 有（第 65 條）；
  *    聚焦時 2px 外框沒被切掉、方向鍵捲得動（patch `0024`）。
- * 19. **對話流裡的列**（#1695 PR A，`?overlay=transcript-rows`）：重試提示、往前翻、空白畫面的字過 4.5，往前翻兩顆鈕的焦點外框；
+ * 19. **對話流裡的列**（#1695 PR A，`?overlay=transcript-rows`）：重試提示、往前翻、空白畫面的字過 4.5，往前翻三顆鈕（含讀取中）的焦點外框；
  *    SG `DotLoader` 的點 3px、`--status-running` 色，平常在閃、減少動態時停在全亮；往前翻待命與讀取中一樣高，375 與 1280 寬不橫向溢出。
  * 20. **會話引用與 G2 圓角**（#1695 PR B，`?overlay=transcript-refs`，產品的 `Transcript`＋`StatusLine`）：能點的引用一直帶 brand 色底線、
  *    底線對泡泡底過 3，不能點的沒有底線；兩種引用與決定紀錄 chip 的字過 4.5；引用與「立刻重連」的焦點外框；決定紀錄的 chip 是 SG Badge 的圓角，
@@ -80,7 +80,8 @@ import { startGuardServer, type GuardServer } from './server';
  * 23. **觀測分頁**（#1690 PR A，`?overlay=trace-*`）：一輪標頭的狀態膠囊九種收法的色調與字過 4.5、圓角是 `rounded-4xl`，完成與停在中斷點
  *    字前面的圓點對膠囊底過 3，只有進行中帶 `DotLoader`；
  *    空狀態的標題與說明過 4.5；計劃那一列的結果 chip 是 `rounded-4xl`、定位鈕是 `rounded-md`、有焦點外框；載入細節的鈕（待命、重試）與失敗原因過 4.5、
- *    鈕是 `rounded-sm`、有焦點外框，讀取中不是鈕、是 `DotLoader` 加一行字（只有摘要的組、更早的摘要、子代理三處都量），分頁只有一格
+ *    鈕是 `rounded-sm`、有焦點外框，讀取中是同一顆停用的鈕（`aria-disabled`、名稱不變，#2009）、畫成 `DotLoader` 加一行字（只有摘要的組、
+ *    更早的摘要、子代理三處都量），分頁只有一格
  *    `role=status`；375 寬時重試鈕與讀取中那一行 44px 高、頁面不橫向溢出。
  * 24. **觀測分頁的列**（#1690 PR B，`?overlay=trace-steps`）：不能展開的列、SG `StepRow` 的列與它的失敗字、展開後的時刻、模型呼叫的數字格與欄位表、
  *    系統提示詞的 `OutputBlock`、子代理那一輪的 `StepGroup` 計數過 4.5；列、計數、結果框有焦點外框；分頁只有一格 `role=status`；
@@ -4209,7 +4210,7 @@ describe('瀏覽器量工具卡的 diff 的覆寫與焦點（#1685 PR B）', () 
 
 /**
  * 對話流裡的列（#1695 PR A，`?overlay=transcript-rows`）：重試提示（X3-B）、往前翻（X4-B）、空白畫面（E1-C）。
- * 字過 4.5、往前翻兩顆鈕的焦點外框；SG `DotLoader` 的點是 3px、`--status-running` 色，平常在閃、減少動態時停在全亮；
+ * 字過 4.5、往前翻三顆鈕（待命、讀取中、失敗）的焦點外框（讀取中也停得上焦點，#2009）；SG `DotLoader` 的點是 3px、`--status-running` 色，平常在閃、減少動態時停在全亮；
  * 往前翻待命與讀取中一樣高（接上一頁之前畫面不跳）。
  */
 const transcriptRowMarks: Record<string, Record<string, string>> = {
@@ -4220,8 +4221,9 @@ const transcriptRowMarks: Record<string, Record<string, string>> = {
     'data-guard-text': 'pager-idle',
     'data-guard-focus': 'pager-idle',
   },
-  '[data-guard-pager="loading"] span:has(> span > .animate-dot-flash)': {
+  '[data-guard-pager="loading"] button': {
     'data-guard-text': 'pager-loading',
+    'data-guard-focus': 'pager-loading',
   },
   '[data-guard-pager="fail"] button': {
     'data-guard-text': 'pager-fail',
@@ -4233,7 +4235,7 @@ const transcriptRowMarks: Record<string, Record<string, string>> = {
 };
 
 describe.each<Theme>(['light', 'dark'])('瀏覽器量對話流裡的列（#1695 PR A）：%s', (theme) => {
-  test('字過 4.5，往前翻的鈕聚焦時是 2px 外框', async () => {
+  test('字過 4.5，往前翻的鈕（含讀取中，#2009）聚焦時是 2px 外框', async () => {
     const page = await openOverlay('transcript-rows', theme, { marks: transcriptRowMarks });
     try {
       expectTexts(
@@ -4250,7 +4252,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量對話流裡的列（#1695 
         `transcript-rows:${theme}`,
       );
       const focus = await collectFocus(page);
-      expect(focus.map((f) => f.name)).toEqual(['pager-idle-0', 'pager-fail-0']);
+      expect(focus.map((f) => f.name)).toEqual(['pager-idle-0', 'pager-loading-0', 'pager-fail-0']);
       expectFocus(focus, `transcript-rows:${theme}`);
     } finally {
       await page.close();
@@ -4797,12 +4799,14 @@ async function loadTraceGroup(page: Page): Promise<void> {
   await page.mouse.move(0, 0);
 }
 
-/** 讀取中那幾格：沒有鈕、一個 `DotLoader`（三個點）、字；外加整頁 `role=status` 有幾格。 */
+/** 讀取中那幾格：一顆停用的鈕（名稱）、一個 `DotLoader`（三個點）、字；外加整頁 `role=status` 有幾格。 */
 function readTraceLoading(page: Page) {
   return page.evaluate(
     (loading) => ({
       rows: [...document.querySelectorAll(loading)].map((el) => ({
         buttons: el.querySelectorAll('button').length,
+        disabled: el.querySelector('button')?.getAttribute('aria-disabled') ?? null,
+        name: el.querySelector('button')?.getAttribute('aria-label') ?? null,
         dots: el.querySelectorAll('.animate-dot-flash').length,
         text: el.textContent,
       })),
@@ -4940,15 +4944,21 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁（#1690 PR A�
     }
   });
 
-  test('T6：讀取中不是鈕，是 DotLoader 加一行字（只有摘要的組、更早的摘要、子代理），分頁只有一格 role=status', async () => {
-    const expected = { buttons: 0, dots: 3, text: '正在載入這一輪的細節…' };
+  test('T6：讀取中是同一顆停用的鈕、名稱不變，畫成 DotLoader 加一行字（只有摘要的組、更早的摘要、子代理），分頁只有一格 role=status', async () => {
+    const expected = {
+      buttons: 1,
+      disabled: 'true',
+      name: '載入這一輪的細節',
+      dots: 3,
+      text: '正在載入這一輪的細節…',
+    };
     const group = await openOverlay('trace-groups', theme, {
       marks: { '[data-guard-reveal]': {} },
       prepare: async (page) => {
         await loadTraceGroup(page);
         await page
           .locator(TRACE_LOADING)
-          .locator('p')
+          .locator('button')
           .evaluate((el) => el.setAttribute('data-guard-text', 'pull-loading'));
       },
     });
@@ -5015,7 +5025,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁（#1690 PR A�
             Math.round(document.querySelector(selector)!.getBoundingClientRect().height);
           return {
             retry: height(`${turn200} ${pull} button`),
-            loading: height(`${turn300} ${pull} p`),
+            loading: height(`${turn300} ${pull} button`),
             overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
           };
         },

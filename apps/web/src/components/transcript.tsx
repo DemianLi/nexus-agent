@@ -719,7 +719,7 @@ export function Transcript({
         >
           {/* 在 content 外面，prepend 保位才動得了手（見 `earlier-pager.tsx`）。 */}
           {earlier?.hasMore === true && (
-            <EarlierPager earlier={earlier} onPress={(button) => handoff.arm(true, button)} />
+            <EarlierPager earlier={earlier} onArm={(button) => handoff.arm(true, button)} />
           )}
           <MessageScrollerContent
             aria-live="off"

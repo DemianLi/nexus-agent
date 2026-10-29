@@ -41,7 +41,7 @@ import {
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
-  // jsdom 沒有版面：拉完交焦點前會先捲過去（#2009）。
+  // jsdom 沒有 `scrollIntoView`：拉完交焦點前會先捲過去（#2009），不補就丟錯。
   Element.prototype.scrollIntoView = () => {};
 });
 
@@ -385,6 +385,32 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     });
     expect(within(block).getByRole('button', { name: TRACE_PULL_RETRY_LABEL })).toBe(button);
     expect(document.activeElement).toBe(button);
+  });
+
+  it('前景子代理一展開就自己拉（#2009）：焦點停到讀取中的鈕上，拉回來就交到那一輪的標題', async () => {
+    const { client, waiting } = fakeClient();
+    mount(
+      scenario('tools:u1', {
+        trajectory: view([], { digests: [digest(0, { seq: 5, kind: 'run', end: undefined })] }),
+      }),
+      client,
+    );
+    const block = await expandSubagent();
+    const button = within(block).getByRole('button', { name: TRACE_PULL_LABEL });
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    button.focus();
+    await act(async () => {
+      waiting[0]!({
+        kind: 'ok',
+        result: {
+          turns: [turn(0, { seq: 5, kind: 'run', end: undefined, calls: [call(6)] })],
+          seq: 9,
+        },
+      });
+    });
+    expect(document.activeElement).toBe(
+      within(block).getByTestId('trace-subagent-turn').querySelector('[data-subagent-turn-head]'),
+    );
   });
 
   it('分頁關掉（卸載）時，還在飛的拉取被取消', async () => {
