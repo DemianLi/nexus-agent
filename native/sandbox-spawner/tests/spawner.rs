@@ -14,13 +14,14 @@ use std::time::{Duration, Instant};
 const SPAWNER: &str = env!("CARGO_BIN_EXE_nexus-sandbox-spawner");
 
 /// 探針複製到暫存目錄再用：建置目錄可能在 virtiofs 之類的掛載上（Docker Desktop 的 bind mount），Landlock 在那裡授權不到。
+/// 用外部的 `cp` 複製：寫入的 fd 若開在測試行程裡，別的測試執行緒這時 fork 出去的子行程會帶著它，exec 探針就拿到 ETXTBSY。
 fn probe() -> PathBuf {
     static COPY: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     COPY.get_or_init(|| {
         let built = Path::new(SPAWNER).parent().unwrap().join("examples/probe");
         let dir = temp_dir("probe");
         let copy = dir.join("probe");
-        std::fs::copy(&built, &copy).unwrap();
+        assert!(Command::new("cp").arg(&built).arg(&copy).status().unwrap().success());
         copy
     })
     .clone()
@@ -371,6 +372,12 @@ fn signals_reach_the_whole_group_and_the_group_dies_with_the_leader() {
     let mut line = [0u8; 32];
     let n = stdout.read(&mut line).unwrap();
     let background: i32 = String::from_utf8_lossy(&line[..n]).trim().parse().unwrap();
+    // 等背景成員 exec 成 sleep 再送：dash fork 出來、還沒清掉 trap 的那一小段，SIGTERM 會被 trap 接走、清 trap 時丟掉。
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::fs::read_to_string(format!("/proc/{background}/comm")).map_or(true, |c| c.trim() != "sleep") {
+        assert!(Instant::now() < deadline, "背景成員沒有 exec 成 sleep");
+        std::thread::sleep(Duration::from_millis(5));
+    }
     s.send(&Request::Signal { id: 1, signo: libc::SIGTERM });
     assert!(dies_soon(&background.to_string()), "背景成員還在");
     assert!(matches!(s.event_for(1), Event::Exited { id: 1, .. }));
@@ -503,6 +510,8 @@ fn closing_stdin_or_sigterm_kills_every_running_tool() {
         } else {
             // SAFETY：送給自己起的 spawner。
             unsafe { libc::kill(s.child.id() as i32, libc::SIGTERM) };
+            // 還在跑的工具照樣收到結局。
+            assert_eq!(s.event_for(1), Event::Exited { id: 1, code: -1, signal: libc::SIGKILL });
         }
         assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0), "{how}");
         assert!(dies_soon(&pid), "{how}：工具還在");
@@ -582,8 +591,10 @@ fn a_request_still_waiting_for_stdio_fails_when_the_spawner_stops() {
     let mut s = spawner!();
     let ws = temp_dir("ws");
     s.send(&Request::Spawn(request(1, &ws, &["/bin/true"])));
-    // 等這筆要求進了 spawner 再叫它結束：先跑完一筆別的，控制通道是依序處理的。
-    let (_, _) = s.run(request(2, &ws, &["/bin/true"]));
+    // 等這筆要求進了 spawner 再叫它結束：先跑完一筆不接 stdio 的，控制通道是依序處理的。
+    s.send(&Request::Spawn(Spawn { pipes: 0, ..request(2, &ws, &["/bin/true"]) }));
+    assert!(matches!(s.event_for(2), Event::Started { id: 2, .. }));
+    assert!(matches!(s.event_for(2), Event::Exited { id: 2, code: 0, .. }));
     // SAFETY：送給自己起的 spawner。
     unsafe { libc::kill(s.child.id() as i32, libc::SIGTERM) };
     assert!(matches!(s.event_for(1), Event::Failed { id: 1, kind: FailKind::Resource, .. }));
