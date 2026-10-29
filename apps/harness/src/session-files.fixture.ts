@@ -1,9 +1,10 @@
 /**
  * 測試找會話檔的輔助（[#1868](https://github.com/DemianLi/nexus-agent/issues/1868)）：「這份會話在哪、它的事件、它的 header」
  * 一律從這裡拿，不在測試裡自己拼 `<id>.header.json`、`<id>.jsonl`。佈局換掉（#1594 ③）時改這一檔，不改幾十個測試。
+ * 找與讀兩種佈局都認（舊兩檔、每會話目錄裡的世代檔）；改 header（{@link rewriteSessionHeader}）只改舊兩檔。
  *
  * 檔名經 `@nexus/core` 的 `session-filename.ts`（`sessionPathsIn` 也是轉呼叫它），讀一份經後端的讀取接縫
- * {@link readSessionEntry}（#1857）。照 dsh 的快照基建 `packages/test-support/session-snapshot/src/session-files.ts:192-210`
+ * {@link readSessionEntry} 與 {@link readSessionEntryById}（#1857）。照 dsh 的快照基建 `packages/test-support/session-snapshot/src/session-files.ts:192-210`
  * （`persistedSessionFilename` 經格式模組）。這一檔在 `session-files-single-owner.test.ts` 的掃描範圍內，不寫字面量。
  *
  * **不在這裡的**：刻意手寫兩檔來驗舊格式的測試（舊佈局型）、量原始位元組的（截尾、補壞行、canary、sha1）、改版號的
@@ -12,11 +13,12 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 
+import { parseGenerationLogFilename, sessionDirectoryName } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
-import { readSessionEntry, sessionPathsIn } from './jsonl-session-store.js';
+import { readSessionEntry, readSessionEntryById, sessionPathsIn } from './jsonl-session-store.js';
 import type { SessionEntry } from './jsonl-session-store.js';
 
 /** 一份會話：它在哪個目錄、兩個檔的路徑、經接縫讀出的 header。 */
@@ -24,6 +26,7 @@ export interface SessionOnDisk {
   readonly directory: string;
   /** header 記的 id。 */
   readonly id: string;
+  /** 舊兩檔是 `<base>.header.json`；單檔佈局的 header 在世代檔第一行，這一格就是世代檔（同 {@link logPath}）。 */
   readonly headerPath: string;
   readonly logPath: string;
   /**
@@ -40,7 +43,10 @@ function onDisk(directory: string, entry: SessionEntry): SessionOnDisk {
   return {
     directory,
     id: entry.header.id,
-    headerPath: sessionPathsIn(directory, entry.header.id).header,
+    headerPath:
+      entry.layout === 'two-file'
+        ? sessionPathsIn(directory, entry.header.id).header
+        : entry.logPath,
     logPath: entry.logPath,
     header: entry.header as StoredSessionHeader & Readonly<Record<string, unknown>>,
     storedFormatVersion: entry.storedFormatVersion,
@@ -57,9 +63,34 @@ function directoriesUnder(root: string): string[] {
   return out;
 }
 
-/** `root` 底下（遞迴）有 `id` 這一份 header 的目錄。只看檔在不在，不讀：旁邊那份壞了也不干擾。 */
-function directoriesHolding(root: string, id: string): string[] {
-  return directoriesUnder(root).filter((dir) => existsSync(sessionPathsIn(dir, id).header));
+/**
+ * `dir` 底下有沒有 `id` 的會話目錄，裡面有正規的世代檔（一般檔）。目錄不在、名字太長、同名的是個檔都算沒有，同後端的
+ * 撞名檢查；其餘的錯照拋。
+ */
+function holdsGeneration(dir: string, id: string): boolean {
+  let entries;
+  try {
+    entries = readdirSync(join(dir, sessionDirectoryName(id)), { withFileTypes: true });
+  } catch (error: unknown) {
+    const code = (error as { code?: unknown } | null)?.code;
+    if (code === 'ENOENT' || code === 'ENAMETOOLONG' || code === 'ENOTDIR') return false;
+    throw error;
+  }
+  return entries.some(
+    (entry) => entry.isFile() && parseGenerationLogFilename(entry.name) !== undefined,
+  );
+}
+
+/**
+ * `root` 底下（遞迴）有 `id` 這一份的目錄：舊兩檔的 header，或（`twoFileOnly` 沒開時）單檔佈局的會話目錄。只看檔在不在，
+ * 不讀：旁邊那份壞了也不干擾。
+ */
+function directoriesHolding(root: string, id: string, twoFileOnly = false): string[] {
+  return directoriesUnder(root).filter(
+    (dir) =>
+      existsSync(sessionPathsIn(dir, id).header) ||
+      (!twoFileOnly && id.length > 0 && holdsGeneration(dir, id)),
+  );
 }
 
 function onlyOne(root: string, id: string, found: readonly string[]): string | undefined {
@@ -71,12 +102,12 @@ function onlyOne(root: string, id: string, found: readonly string[]): string | u
  * `root` 底下（遞迴）id 是 `id` 的那一份。照 `open(id)` 的做法照 id 算檔名，**只讀那一份**。還沒寫出 header 就是
  * `undefined`；同一棵樹裡有兩份同 id 的（例如兩個 CLI run 目錄都叫 `cli`）就拋錯，要呼叫方把 `root` 給窄一點。
  *
- * @throws 那一份的 header 讀不懂（同 {@link readSessionEntry}）。
+ * @throws 同 {@link readSessionEntryById}：那一份的 header 讀不懂，或同一個目錄裡同一個 id 兩種佈局並存。
  */
 export async function findSession(root: string, id: string): Promise<SessionOnDisk | undefined> {
   const directory = onlyOne(root, id, directoriesHolding(root, id));
   if (directory === undefined) return undefined;
-  const entry = await readSessionEntry(directory, basename(sessionPathsIn(directory, id).header));
+  const entry = await readSessionEntryById(directory, id);
   return entry === undefined ? undefined : onDisk(directory, entry);
 }
 
@@ -94,8 +125,9 @@ export async function sessionOf(root: string, id: string): Promise<SessionOnDisk
 export async function sessionsUnder(root: string): Promise<SessionOnDisk[]> {
   const out: SessionOnDisk[] = [];
   for (const directory of directoriesUnder(root)) {
-    for (const name of readdirSync(directory).sort()) {
-      const entry = await readSessionEntry(directory, name);
+    const dirents = readdirSync(directory, { withFileTypes: true });
+    for (const dirent of dirents.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))) {
+      const entry = await readSessionEntry(directory, dirent);
       if (entry !== undefined) out.push(onDisk(directory, entry));
     }
   }
@@ -180,8 +212,8 @@ export async function rewriteSessionHeader(
   id: string,
   edit: (header: Record<string, unknown>) => Record<string, unknown> | string,
 ): Promise<() => Promise<void>> {
-  const directory = onlyOne(root, id, directoriesHolding(root, id));
-  if (directory === undefined) throw new Error(`${root} 底下找不到會話 ${id}`);
+  const directory = onlyOne(root, id, directoriesHolding(root, id, true));
+  if (directory === undefined) throw new Error(`${root} 底下找不到舊兩檔的會話 ${id}`);
   const path = sessionPathsIn(directory, id).header;
   const original = await readFile(path, 'utf8');
   const before = jsonObject(original);

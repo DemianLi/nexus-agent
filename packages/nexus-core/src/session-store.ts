@@ -1138,10 +1138,12 @@ export class SessionCorruptionError extends Error {
   /**
    * @param id - 哪一份會話。
    * @param reason - 哪裡壞了。
+   * @param location - 那份日誌在哪裡（後端知道的話）。不接進訊息，理由同 {@link SessionFormatUnsupportedError.location}。
    */
   constructor(
     readonly id: string,
     reason: string,
+    readonly location?: SessionLocation,
   ) {
     super(`會話 "${id}" 的存檔壞了：${reason}`);
   }

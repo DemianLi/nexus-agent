@@ -86,8 +86,8 @@ import {
   inheritedEventCount,
   isKnownSessionEventType,
   isSubagentSessionHeader,
-  parseSessionHeaderFilename,
-  sessionFilenames,
+  legacyTwoFileSessionFilenames,
+  parseLegacyTwoFileHeaderFilename,
   subagentLinks,
   repeatCallKey,
   repeatReminderTracks,
@@ -398,7 +398,9 @@ function headerOf({ header, storedFormatVersion }: SessionEntry): SessionLogHead
  * 從幾個根目錄往下找每一份日誌讀進來。**唯讀**：不拿租約、不截尾巴、不改 header。
  *
  * 認檔名、讀 header 與日誌本文都走 JSONL 後端那一支（`jsonl-session-store.ts` 的 `readSessionEntry`，本文是穩定快照讀），
- * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。不走 `SessionStore.list`：
+ * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。兩種佈局都認（#1594 ②）：舊兩檔的
+ * header 檔，與裡面有正規世代檔的會話目錄（挑最高世代）；讀不出一份會話的目錄（沒有世代檔，或最高世代是空檔、第一行還沒
+ * 換行）才往下走。不走 `SessionStore.list`：
  * 它不讀比這一版新的，也不說讀不懂的原因（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
  * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，跳過。
  *
@@ -417,26 +419,34 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(path);
+      let base: string | undefined;
+      if (entry.isFile()) {
+        base = parseLegacyTwoFileHeaderFilename(entry.name);
+        if (base === undefined) continue;
+      } else if (!entry.isDirectory()) {
         continue;
       }
-      const base = entry.isFile() ? parseSessionHeaderFilename(entry.name) : undefined;
-      if (base === undefined) continue;
       let session: SessionEntry | undefined;
       try {
-        session = await readSessionEntry(directory, entry.name, { acceptNewer: true });
+        session = await readSessionEntry(directory, entry, { acceptNewer: true });
       } catch (error: unknown) {
         if (error instanceof SessionCorruptionError) {
           unreadable.push({
-            file: join(directory, sessionFilenames(base).log),
+            // 單檔佈局報挑中的那個世代檔：它的錯都帶 `location`。
+            file:
+              base === undefined
+                ? (error.location?.path ?? path)
+                : join(directory, legacyTwoFileSessionFilenames(base).log),
             reason: error.message,
           });
           continue;
         }
         throw error;
       }
-      if (session === undefined) continue;
+      if (session === undefined) {
+        if (entry.isDirectory()) await visit(path);
+        continue;
+      }
       const file = session.logPath;
       const header = headerOf(session);
       const body = await session.readBody();

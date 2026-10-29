@@ -6,7 +6,7 @@
  * - 讀日誌本文的當下有人在寫：照穩定快照讀，第二次還在變就截到讀前的大小（dsh `readStableSnapshot`）。
  *
  * 真的磁碟上造不出「剛好在那一下」，所以照 `jsonl-session-store-header-replace.test.ts` 的做法 mock `node:fs/promises`，
- * 在 `readdir` 之後、`stat` 與 `readFile` 上放注入點。
+ * 在 `readFile` 之前、`stat` 與 `readFile` 上放注入點。
  */
 
 import type { BigIntStats } from 'node:fs';
@@ -19,8 +19,8 @@ import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 
 interface Injection {
-  /** `readdir` 回來之後、交給呼叫方之前執行。 */
-  afterReaddir?: (path: string) => Promise<void>;
+  /** `readFile` 讀這個路徑之前執行。 */
+  beforeReadFile?: (path: string) => Promise<void>;
   /** 這個路徑的 `stat`／`readFile`（不帶 encoding）照劇本走。 */
   unstable?: {
     readonly path: string;
@@ -38,11 +38,6 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return {
     ...actual,
-    readdir: async (path: unknown, options?: unknown) => {
-      const result = await actual.readdir(path as never, options as never);
-      await inject.afterReaddir?.(String(path));
-      return result;
-    },
     stat: async (path: unknown, options?: unknown) => {
       const real = await actual.stat(path as never, options as never);
       const script = inject.unstable;
@@ -53,6 +48,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       return real;
     },
     readFile: async (path: unknown, options?: unknown) => {
+      await inject.beforeReadFile?.(String(path));
       const script = inject.unstable;
       if (script !== undefined && path === script.path && options === undefined)
         return script.bytes;
@@ -97,8 +93,9 @@ describe('離線掃描跟寫方同時動', () => {
       ghost,
       JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 'ghost', createdAt: 0 }),
     );
-    inject.afterReaddir = async (path) => {
-      if (path === run) await rm(ghost);
+    // 掃描列目錄時它還在，讀它的那一下才不見。
+    inject.beforeReadFile = async (path) => {
+      if (path === ghost) await rm(ghost);
     };
 
     const { logs, unreadable } = await readSessionLogs([root]);
