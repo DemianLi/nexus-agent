@@ -394,7 +394,8 @@ export function describeDrop(drop: StartupDrop): string {
   return dropLine(drop, false).trimStart();
 }
 
-function requiredIds(options: StartupAuditOptions): ReadonlySet<string> {
+/** 必掛名單：這幾列掉了就起不來。 */
+export function requiredIds(options: StartupAuditOptions): ReadonlySet<string> {
   return options.live ? new Set([...REQUIRED_ENTRY_IDS, LIVE_MODEL_ENTRY_ID]) : REQUIRED_ENTRY_IDS;
 }
 

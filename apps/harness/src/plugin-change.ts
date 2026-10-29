@@ -22,8 +22,10 @@
  * 追加一筆 `rejected`**（操作者、要做的操作、列 id、原因原文，**不帶要寫入的值**，#1414），再拋 {@link PluginChangeRejected}；
  * 它不折，清單不變。「沒有改變任何東西，沒有寫」（已經是那個狀態）不是拒絕，照舊什麼都不寫。
  *
- * 驗不到的是 `apply` 裡才會發生的事（值檢查、`requires` 缺件、撞名）：那要整個組裝一次，跟 serve 每條 thread 重讀時
- * 的處置一樣，掉了只讓那一列不掛（`thread-plugin-list.ts`）。
+ * `apply` 裡才會發生的事（值檢查、`requires` 缺件、撞名）靠試掛（`plugin-trial.ts`，#2073）：照 serve 啟動試組那一次組一份寫下去之後的
+ * 清單，有新冒出的失敗就拒收。「新」的判法：必掛的列一律算新；樹上的列缺服務是等提供者，不算；同一列、同一步、同一句原因、
+ * 宣告也沒變的失敗不算。寫下去之後的那一份有列掉了，才再試掛一次現在的清單當基準。試掛的環境只有呼叫端給的 `--patch` 與
+ * `--workspace`，只在 serve 環境裡掉的列照舊到 thread 組裝時才掉（`thread-plugin-list.ts`）。
  *
  * ## 偏離登記
  *
@@ -32,8 +34,8 @@
  * 2. **變更歷史**：dsh 完全沒有；這是產品需求（決議 §3-5 第 18 條）。
  * 3. **寫入回報帶 actor、序號、前後值**：dsh 的 `ChangeResult` 只有 `reason`。CLI 與日誌**不印設定值**，只印哪幾個欄位變了（加 7）。
  * 4. **沒有「寫入後協調失敗就寫回舊文件」**：dsh 的 `edit` 寫完立刻在同一個行程裡 reconcile 活的 Loader 樹，失敗寫回。
- *    我們的寫入口是另一個行程，樹在 serve 裡，下一條 thread 才重讀；紀錄追加之後沒有可以協調的對象，所以才把驗證全部
- *    搬到追加之前。
+ *    我們的寫入口是另一個行程，樹在 serve 裡，下一條 thread 才重讀；紀錄追加之後沒有可以協調的對象，所以把驗證全部
+ *    搬到追加之前，`apply` 那一段在這個行程裡另建一棵樹試掛。
  * 5. **紀錄裡留著舊的 `disable`、而那一列後來改成關不掉時，救得回來**（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）：
  *    找列與找繼承值不檢查保護名單，只有寫入之後的整份清單才檢查，所以 `enable` 寫得進去、新的 `disable` 照樣被拒；
  *    清單還壞著時別的改動也被拒，訊息帶 `plugin enable <id>` 那一句修法（`plugin-config.ts` 的 `assertNotProtected`）。
@@ -69,6 +71,8 @@ import {
 import type { JournalActor, JournalBody, JournalRecord } from './plugin-journal.js';
 import { pluginSnapshotPath } from './plugin-snapshot.js';
 import { classOfRow } from './plugin-row-classes.js';
+import { trialMount } from './plugin-trial.js';
+import type { TrialFailure } from './plugin-trial.js';
 
 /** 一次變更。 */
 export type PluginChange =
@@ -113,6 +117,10 @@ export interface PluginChangeOptions {
   readonly actor?: JournalActor;
   /** 其他警告往哪裡講，省略即收進結果。 */
   readonly warn?: (message: string) => void;
+  /** serve 帶的 `--workspace`：試掛時照它組。不給就照沒有 `--workspace` 的 serve 組。 */
+  readonly workspace?: string;
+  /** `--workspace` 的解析基準，省略即行程的工作目錄。 */
+  readonly cwd?: string;
 }
 
 /** {@link changePlugin} 的結果。**record 裡有明文設定值，呼叫端不要印它。** */
@@ -163,6 +171,16 @@ const WORKSPACE_REQUIRED_ROWS: ReadonlySet<string> = new Set([
   'permission-presets',
 ]);
 
+/** 同一列、同一步、同一句原因，宣告也沒變：不算新冒出的。 */
+function sameFailure(previous: TrialFailure, failure: TrialFailure): boolean {
+  return (
+    previous.id === failure.id &&
+    previous.stage === failure.stage &&
+    previous.message === failure.message &&
+    isDeepStrictEqual(previous.declaration, failure.declaration)
+  );
+}
+
 function changedKeys(
   before: Record<string, unknown> | null,
   after: Record<string, unknown> | null,
@@ -182,7 +200,8 @@ function changedKeys(
  * @param change - 要做什麼。
  * @param options - env、`--patch`、時間、誰。
  * @returns 結果；`recorded` 或 `unchanged`（沒有改變任何東西，沒寫）。
- * @throws {PluginChangeRejected} 驗不過：不存在的 id、關不掉的列、設定格式不合、被 `--patch` 蓋掉的設定。已記成 `rejected`。
+ * @throws {PluginChangeRejected} 驗不過：不存在的 id、關不掉的列、設定格式不合、被 `--patch` 蓋掉的設定、試掛時有新冒出的失敗。
+ *   已記成 `rejected`。
  * @throws {PluginConfigError} 清單本身讀不了，或舊的 patch 檔壞了。
  * @throws {PluginJournalError} 紀錄壞了（不在壞掉的檔後面追加）、等不到鎖。
  */
@@ -399,7 +418,37 @@ export async function changePlugin(
         }
       }
 
-      // 5. 什麼時候生效。
+      // 5. 試掛：寫下去之後有沒有新冒出的失敗。
+      const trialOptions = {
+        env,
+        cwd: options.cwd ?? process.cwd(),
+        ...(options.workspace !== undefined && { workspace: options.workspace }),
+      };
+      const quiet = { ...base, warn: () => {} };
+      const failing = (
+        await trialMount(defaultSources({ ...quiet, pending: [body] }), trialOptions)
+      ).filter((failure) => !failure.pending);
+      if (failing.length > 0) {
+        const before = await trialMount(defaultSources(quiet), trialOptions);
+        const introduced = failing.filter(
+          (failure) =>
+            failure.required || !before.some((previous) => sameFailure(previous, failure)),
+        );
+        if (introduced.length > 0) {
+          return reject(
+            [
+              '這一筆寫下去之後，試掛時有新的列掛不上：',
+              ...introduced.map(
+                (failure) =>
+                  `  ${JSON.stringify(failure.id)}（${failure.stage}${failure.required ? '，必掛' : ''}）：${failure.message}`,
+              ),
+              'serve 帶了 --patch 或 --workspace 的話，這裡也要帶同一組，試掛的結果才對得上 serve。',
+            ].join('\n'),
+          );
+        }
+      }
+
+      // 6. 什麼時候生效。
       const kind = classOfRow(change.id, pluginName);
       const needsRestart =
         kind === 'startup-read' ||

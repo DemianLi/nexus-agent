@@ -18,9 +18,9 @@ import { createCordisRoot } from './cordis-root.js';
 import type { CordisRoot } from './cordis-root.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { changePlugin } from './plugin-change.js';
+import { changePlugin, PluginChangeRejected } from './plugin-change.js';
 import { loadPluginConfig } from './plugin-config.js';
-import { journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
+import { appendRaw, journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
 import { readJournal } from './plugin-journal.js';
 import type { JournalRecord } from './plugin-journal.js';
 import { pluginSnapshotPath } from './plugin-snapshot.js';
@@ -187,7 +187,34 @@ async function say(server: RunningServe, thread: string): Promise<string | undef
 }
 
 describe('serve：寫入口接受的設定讓樹上那一列在 apply 掉', () => {
-  it('寫入當下回成功；下一條 thread 照樣建得起來；伺服器日誌記一次、紀錄記一筆 failed、快照上那一列掉在 apply', async () => {
+  // 寫入口試掛這一筆（#2073），樹上那一列在 apply 掉就當場拒收。
+  it('寫入口當場拒收：紀錄裡沒有被接受的那一筆，thread 照常', async () => {
+    const p = probe();
+    const env = { [HARNESS_HOME_ENV]: p.dir };
+    seedHomePatch(
+      p.dir,
+      `- insert:\n    - id: probe\n      name: 'file://${p.module}'\n      config:\n        ok: true\n`,
+    );
+    const server = (await runServe({ argv: ['--port', '0'], log: () => {}, env })) as RunningServe;
+    running = server;
+    expect(await say(server, 'warm')).toBeUndefined();
+
+    const error = await changePlugin(
+      { op: 'config-set', id: 'probe', config: { ok: false } },
+      { env },
+    ).catch((thrown: unknown) => thrown);
+    expect(error).toBeInstanceOf(PluginChangeRejected);
+    expect((error as Error).message).toContain('"probe"（apply）');
+    expect((error as Error).message).toContain(REASON);
+    const records = readJournal(journalPathOf(p.dir))?.records ?? [];
+    expect(records.map((record) => record.op)).toEqual(['patch', 'rejected']);
+
+    for (const thread of ['a', 'b']) expect(await say(server, thread)).toBeUndefined();
+    expect(failedOf(p.dir)).toEqual([]);
+  }, 120000);
+
+  // 寫入口看不到的失敗（例如只在 serve 環境裡掉的列）照舊到 thread 組裝時才掉：繞過寫入口直接追加那一筆。
+  it('紀錄裡的設定讓它在 apply 掉：下一條 thread 照樣建得起來；伺服器日誌記一次、紀錄記一筆 failed、快照上那一列掉在 apply', async () => {
     const p = probe();
     const env = { [HARNESS_HOME_ENV]: p.dir };
     seedHomePatch(
@@ -203,13 +230,13 @@ describe('serve：寫入口接受的設定讓樹上那一列在 apply 掉', () =
     running = server;
     expect(await say(server, 'warm')).toBeUndefined();
 
-    // 寫入前驗證不掛樹上的列，所以看不到 apply 會掉：照寫、回成功（偏離登記在 `docs/plugin-contract.md`，#2073）。
-    const result = await changePlugin(
-      { op: 'config-set', id: 'probe', config: { ok: false } },
-      { env },
-    );
-    expect(result.outcome).toBe('recorded');
-    const seq = result.record?.seq;
+    const { seq } = await appendRaw(p.dir, {
+      op: 'config-set',
+      id: 'probe',
+      name: `file://${p.module}`,
+      before: { ok: true },
+      after: { ok: false },
+    });
 
     for (const thread of ['a', 'b', 'c']) expect(await say(server, thread)).toBeUndefined();
 
