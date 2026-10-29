@@ -7,7 +7,17 @@
  * 以及：單檔撕裂尾巴從 header 行之後截、續接不建出舊兩檔、只有「不在」那幾種錯算不在。
  */
 
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  truncate,
+  writeFile,
+} from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -26,7 +36,7 @@ import {
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import { readSessionLogs } from './eval/session-scan.js';
-import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
+import { openJsonlSessionStore, readSessionEntryById, sessionPathsIn } from './jsonl-session-store.js';
 import type { JsonlSessionStoreOptions } from './jsonl-session-store.js';
 import type { SessionLogBudget } from './session-log-budget.js';
 
@@ -396,9 +406,9 @@ describe('續接單檔佈局：往挑中的世代檔續寫', () => {
 });
 
 describe('探單檔佈局時只有「不在」那幾種錯算不在', () => {
-  it('id 長到編出來的目錄名超過單段上限（ENAMETOOLONG）：舊兩檔照舊打開、續接，create 照樣撞名', async () => {
+  it('長 id 探的是截短後的目錄名：舊兩檔照舊打開、續接，create 照樣撞名', async () => {
     const id = '中'.repeat(120);
-    expect(Buffer.byteLength(sessionDirectoryName(id))).toBeGreaterThan(255);
+    expect(sessionDirectoryName(id)).toHaveLength(96 + 1 + 12);
     await writeTwoFile(dir, id, EVENTS);
     expect(await (await store().open(id, 'read')).read()).toEqual(EVENTS);
     const resumed = await store().resume(id);
@@ -441,10 +451,41 @@ describe('探單檔佈局時只有「不在」那幾種錯算不在', () => {
     expect(existsSync(sessionPathsIn(dir, 'empty').lock)).toBe(false);
   });
 
-  it('空 id：不探單檔佈局，舊兩檔照舊建、讀、撞名', async () => {
+  it('空 id：舊兩檔照舊建、讀、撞名', async () => {
     await writeTwoFile(dir, '', EVENTS);
     expect(await (await store().open('', 'read')).read()).toEqual(EVENTS);
     expect(() => store().create(header(''))).toThrow(SessionAlreadyExistsError);
+  });
+});
+
+describe('目錄名截短與空 id 的 ~', () => {
+  it('長 id 的世代檔在截短後的目錄名下：列表、打開、續接都讀得到，create 撞名', async () => {
+    const id = '中'.repeat(120);
+    await writeGeneration(dir, id, CURRENT, EVENTS);
+    expect((await store().list()).sessions.map(({ header: h }) => h.id)).toEqual([id]);
+    expect(await (await store().open(id, 'read')).read()).toEqual(EVENTS);
+    const resumed = await store().resume(id);
+    expect(resumed.events).toEqual(EVENTS);
+    await resumed.stored.close();
+    expect(() => store().create(header(id))).toThrow(SessionAlreadyExistsError);
+  });
+
+  it('空 id 的世代檔在 ~ 底下：列表、打開、續接都讀得到，create 撞名', async () => {
+    await writeGeneration(dir, '', CURRENT, EVENTS);
+    expect(sessionDir(dir, '')).toBe(join(dir, '~'));
+    expect((await store().list()).sessions.map(({ header: h }) => h.id)).toEqual(['']);
+    expect(await (await store().open('', 'read')).read()).toEqual(EVENTS);
+    const resumed = await store().resume('');
+    expect(resumed.events).toEqual(EVENTS);
+    await resumed.stored.close();
+    expect(() => store().create(header(''))).toThrow(SessionAlreadyExistsError);
+  });
+
+  it('空 id 的舊兩檔與 ~ 底下的世代檔並存：兩份都不列、算一份讀不懂；打開拒讀，不挑一份', async () => {
+    await writeTwoFile(dir, '', EVENTS);
+    await writeGeneration(dir, '', CURRENT, EVENTS);
+    expect(await store().list()).toEqual({ sessions: [], unreadable: 1 });
+    expect(await errorOf(store().open('', 'read'))).toBeInstanceOf(SessionCorruptionError);
   });
 });
 
@@ -459,5 +500,43 @@ describe('放舊兩檔的那一層不是會話目錄', () => {
     expect(await store().list()).toEqual({ sessions: [], unreadable: 0 });
     expect(await errorOf(store().open('run', 'read'))).toBeInstanceOf(SessionNotFoundError);
     expect(() => store().create(header('run'))).not.toThrow();
+  });
+});
+
+describe('挑定的世代檔在讀本文之前不見了', () => {
+  it('唯讀把手讀的時候報找不到，不回零顆事件，也不寫進冷讀快取', async () => {
+    const path = await writeGeneration(dir, 't1', CURRENT, EVENTS);
+    const backend = store();
+    const opened = await backend.open('t1', 'read');
+    await rm(path);
+    expect(await errorOf(opened.read())).toBeInstanceOf(SessionNotFoundError);
+    // 寫回同一個路徑之後，同一個把手讀得到內容：前一次的失敗沒有留下什麼擋住它。
+    await writeGeneration(dir, 't1', CURRENT, EVENTS);
+    expect(await opened.read()).toEqual(EVENTS);
+  });
+
+  it('離線掃描經接縫讀本文時也報找不到', async () => {
+    const path = await writeGeneration(dir, 't1', CURRENT, EVENTS);
+    const entry = await readSessionEntryById(dir, 't1');
+    await rm(path);
+    expect(await errorOf(entry!.readBody())).toBeInstanceOf(SessionNotFoundError);
+  });
+});
+
+describe('列表讀世代檔的第一行時看 signal', () => {
+  it('第一行沒有換行的大檔，讀到一半取消就拋，不等讀到檔尾', async () => {
+    // 稀疏檔：全是 0、沒有換行，要讀到檔尾才知道第一行沒寫完。取消排在讀第一行開始之後，每份開始前那一次看不到它。
+    const path = await writeGeneration(dir, 'big', CURRENT, [], '');
+    await truncate(path, 256 * 1024 * 1024);
+    const controller = new AbortController();
+    const started = Date.now();
+    const listing = store().list({ signal: controller.signal });
+    const timer = setTimeout(() => controller.abort(), 50);
+    try {
+      expect(await errorOf(listing)).toMatchObject({ name: 'AbortError' });
+    } finally {
+      clearTimeout(timer);
+    }
+    expect(Date.now() - started).toBeGreaterThanOrEqual(50);
   });
 });

@@ -102,7 +102,7 @@ function directoriesHolding(root: string, id: string, twoFileOnly = false): stri
   return directoriesUnder(root).filter(
     (dir) =>
       existsSync(sessionPathsIn(dir, id).header) ||
-      (!twoFileOnly && id.length > 0 && holdsGeneration(dir, id)),
+      (!twoFileOnly && holdsGeneration(dir, id)),
   );
 }
 

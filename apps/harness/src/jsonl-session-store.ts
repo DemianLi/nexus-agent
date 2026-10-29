@@ -1321,13 +1321,15 @@ export async function readStableSnapshot(
 /**
  * 讀日誌本文，原始位元組（不給 encoding）：換行與位元組偏移都要算在 Buffer 上，見 {@link parseJsonlSessionBody}。
  * 走 {@link readStableSnapshot}（#1509），順序同 dsh：先穩定讀、再解碼。
- * **不在是空的**：只有 header 是「還沒寫第一筆就當了」。
+ * 舊兩檔的本文**不在是空的**：只有 header 是「還沒寫第一筆就當了」。世代檔不在則拋 `vanished()` 給的錯：header 就在那個檔裡，
+ * 挑定之後它不見了，不是空會話。
  */
 async function readBody(
   logPath: string,
   fs: StableReadFileSystem = defaultStableReadFs,
+  vanished?: () => Error,
 ): Promise<Buffer> {
-  return (await readBodySnapshot(logPath, fs)).bytes;
+  return (await readBodySnapshot(logPath, fs, vanished)).bytes;
 }
 
 /**
@@ -1337,13 +1339,20 @@ async function readBody(
 async function readBodySnapshot(
   logPath: string,
   fs: StableReadFileSystem,
+  vanished?: () => Error,
 ): Promise<{ readonly bytes: Buffer; readonly identity: string }> {
   try {
     return await readStableSnapshot(logPath, fs);
   } catch (error: unknown) {
-    if (isNotFound(error)) return { bytes: Buffer.alloc(0), identity: MISSING_REVISION };
-    throw error;
+    if (!isNotFound(error)) throw error;
+    if (vanished !== undefined) throw vanished();
+    return { bytes: Buffer.alloc(0), identity: MISSING_REVISION };
   }
+}
+
+/** {@link readBody} 給世代檔的 `vanished`：挑定的世代檔在讀本文之前不見了。 */
+function generationVanished(id: string): () => SessionNotFoundError {
+  return () => new SessionNotFoundError(id, `會話 "${id}" 挑定的世代檔在讀本文之前不見了`);
 }
 
 /** 日誌本文現在有幾個位元組（位元組額度要的，#2115）。不在就是 0，同 {@link readBodySnapshot}。 */
@@ -1360,6 +1369,8 @@ async function logBytesOf(logPath: string, fs: StableReadFileSystem): Promise<nu
 export interface ReadSessionEntryOptions extends ParseHeaderOptions {
   /** 讀 header 與日誌本文用的檔案系統。**只給測試換**，同 {@link readStableSnapshot}。 */
   readonly fs?: StableReadFileSystem;
+  /** 讀世代檔的第一行時，每讀一塊之前看一次（同列表的 `signal`）。 */
+  readonly signal?: AbortSignal;
 }
 
 /** 目錄裡的一份會話：header 已經讀過，日誌本文要的時候才讀。 */
@@ -1410,8 +1421,8 @@ type TwoFileSite = Extract<SessionSite, { readonly layout: 'two-file' }>;
 export type SessionDirent = Pick<Dirent, 'name' | 'isDirectory'>;
 
 /**
- * 探單檔佈局的路徑時，哪幾種錯算「不在」：`ENOENT`；`ENAMETOOLONG`（`encodeSegment` 不截短，長 id 編出來的目錄名可能超過
- * 單段上限，那種會話今天只會在舊兩檔，截短歸 #1594 ③）；`ENOTDIR`（同名的是個檔）。其餘的錯照拋。
+ * 探單檔佈局的路徑時，哪幾種錯算「不在」：`ENOENT`；`ENAMETOOLONG`（`sessionDirectoryName` 會截短，這一版算出來的目錄名不會
+ * 超過單段上限；留著是因為上層目錄本身就長到整條路徑超限時，那份會話不可能落在單檔佈局）；`ENOTDIR`（同名的是個檔）。其餘的錯照拋。
  */
 function isAbsentPath(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
@@ -1478,16 +1489,17 @@ const FIRST_LINE_CHUNK_BYTES = 8192;
 
 /**
  * 讀檔案的第一個完整行（不含換行）：一塊 {@link FIRST_LINE_CHUNK_BYTES} 地讀，讀到換行所在那一塊就停；第一行一直沒有換行
- * 就讀到檔尾才回 `undefined`。
+ * 就讀到檔尾才回 `undefined`。每讀一塊之前看一次 `signal`：沒有換行的大檔要讀到檔尾，取消的列舉不等它讀完。
  *
  * @returns 第一行的原始位元組；空檔或第一行沒有換行就是 `undefined`。
  */
-async function readFirstLine(path: string): Promise<Buffer | undefined> {
+async function readFirstLine(path: string, signal?: AbortSignal): Promise<Buffer | undefined> {
   const handle = await open(path, 'r');
   try {
     const chunks: Buffer[] = [];
     const buffer = Buffer.alloc(FIRST_LINE_CHUNK_BYTES);
     for (;;) {
+      signal?.throwIfAborted();
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
       if (bytesRead === 0) return undefined;
       const slice = buffer.subarray(0, bytesRead);
@@ -1551,13 +1563,11 @@ async function locateSession(
     if (!isNotFound(error)) throw error;
     twoFileExists = false;
   }
-  if (id.length > 0) {
-    const name = sessionDirectoryName(id);
-    const generation = await resolveGeneration(join(directory, name));
-    if (generation !== undefined) {
-      if (twoFileExists) throw coexistingLayouts(id, generation.logPath);
-      return { layout: 'generation', name, ...generation };
-    }
+  const name = sessionDirectoryName(id);
+  const generation = await resolveGeneration(join(directory, name));
+  if (generation !== undefined) {
+    if (twoFileExists) throw coexistingLayouts(id, generation.logPath);
+    return { layout: 'generation', name, ...generation };
   }
   return twoFileExists ? twoFile : undefined;
 }
@@ -1573,9 +1583,9 @@ function coexistingLayouts(id: string, generationPath: string): SessionCorruptio
 /**
  * 世代檔的 header 行（{@link readFirstLine}）。檔不在、空檔、第一行還沒換行都是 `undefined`：當成不在，不算讀不懂。
  */
-async function headerLineOf(logPath: string): Promise<Buffer | undefined> {
+async function headerLineOf(logPath: string, signal?: AbortSignal): Promise<Buffer | undefined> {
   try {
-    return await readFirstLine(logPath);
+    return await readFirstLine(logPath, signal);
   } catch (error: unknown) {
     if (isNotFound(error)) return undefined;
     throw error;
@@ -1618,7 +1628,7 @@ async function readSite(
   site: SessionSite,
   options: ReadSessionEntryOptions,
 ): Promise<SessionEntry | undefined> {
-  const { fs = defaultStableReadFs, ...parseOptions } = options;
+  const { fs = defaultStableReadFs, signal, ...parseOptions } = options;
   if (site.layout === 'two-file') {
     let text: string;
     try {
@@ -1639,7 +1649,7 @@ async function readSite(
       readBody: () => readBody(logPath, fs),
     };
   }
-  const line = await headerLineOf(site.logPath);
+  const line = await headerLineOf(site.logPath, signal);
   if (line === undefined) return undefined;
   const location = parseOptions.location ?? locate(site);
   const { header, storedFormatVersion } = parseHeader(line.toString('utf8'), {
@@ -1663,7 +1673,8 @@ async function readSite(
     bodyOffset,
     header,
     storedFormatVersion,
-    readBody: async () => (await readBody(logPath, fs)).subarray(bodyOffset),
+    readBody: async () =>
+      (await readBody(logPath, fs, generationVanished(header.id))).subarray(bodyOffset),
   };
 }
 
@@ -1841,7 +1852,7 @@ async function listStoredSessions(
         const revision = await siteRevision(site, fs);
         let entry: SessionEntry | undefined;
         try {
-          entry = await readSite(site, { catalog, fs });
+          entry = await readSite(site, { catalog, fs, signal });
         } catch (error: unknown) {
           if (
             error instanceof SessionCorruptionError ||
@@ -1885,10 +1896,9 @@ async function listStoredSessions(
   return { sessions, unreadable };
 }
 
-/** 一份 id 是 `id` 的會話，在某種佈局裡的目錄項該叫什麼。空 id 編不成會話目錄名，單檔佈局裡不會有它。 */
-function expectedEntryName(layout: SessionSite['layout'], id: string): string | undefined {
-  if (layout === 'two-file') return safeBaseName(id);
-  return id.length === 0 ? undefined : sessionDirectoryName(id);
+/** 一份 id 是 `id` 的會話，在某種佈局裡的目錄項該叫什麼。 */
+function expectedEntryName(layout: SessionSite['layout'], id: string): string {
+  return layout === 'two-file' ? safeBaseName(id) : sessionDirectoryName(id);
 }
 
 /**
@@ -1911,7 +1921,6 @@ async function otherLayoutEntry(
       return undefined;
     }
   }
-  if (id.length === 0) return undefined;
   const name = sessionDirectoryName(id);
   return (await resolveGeneration(join(directory, name))) === undefined ? undefined : name;
 }
@@ -1981,7 +1990,11 @@ async function openStoredSessionForRead(
       }
       // 讀之前先佔額度（#2115），解析完就還：放不下的連 `readFile` 都不做。量的是實際要讀的那個檔（單檔佈局含 header 行）。
       const reservation = await logBudget.reserveForRead(id, await logBytesOf(logPath, fs));
-      const { bytes, identity } = await readBodySnapshot(logPath, fs).catch((error: unknown) => {
+      const { bytes, identity } = await readBodySnapshot(
+        logPath,
+        fs,
+        site.layout === 'generation' ? generationVanished(id) : undefined,
+      ).catch((error: unknown) => {
         reservation.release();
         throw error;
       });
@@ -2241,7 +2254,7 @@ function existsOnDisk(directory: string, id: string): boolean {
       if (!isNotFound(error)) throw error;
     }
   }
-  return id.length > 0 && hasGenerationSync(join(directory, sessionDirectoryName(id)));
+  return hasGenerationSync(join(directory, sessionDirectoryName(id)));
 }
 
 /** 落在 `directory` 上的後端。兩個工廠差在目錄是新開的還是既有的。 */
