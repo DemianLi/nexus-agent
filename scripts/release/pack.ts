@@ -22,7 +22,7 @@
  * 內容 `{ "commit": "<sha>", "dirty": false }`。`build:lib` 不寫它。
  *
  * **沙箱 spawner**（#1946）：Linux 的產物要帶它。這一步不編 Rust，從 `--spawner <目錄>` 拿 CI 的 Rust job 打好的 bundle
- *（`.github/actions/sandbox-spawner`：執行檔加上連進去的 Rust 程式碼的授權全文，形狀見 `spawner.ts`），原樣放進產物根。
+ *（`.github/actions/sandbox-spawner`：執行檔加上連進去的程式碼的授權全文，形狀見 `spawner.ts`），原樣放進產物根。
  * Linux 上沒給就停；其他平台不收。
  *
  * 用法：`pnpm run release:pack [--out <目錄>] [--skip-build] [--spawner <目錄>]`。本機跑完會用 `pnpm install --offline --frozen-lockfile`

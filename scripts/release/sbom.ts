@@ -15,10 +15,11 @@
  *
  * 產生那一支漏了哪一段（例如拿掉 `optionalDependencies`，平台二進位套件就會漏），核對那一支照樣列得到，`sbomProblems` 就會紅。
  *
- * **沙箱 spawner**（#1946）：Linux 的產物帶一支 Rust 執行檔，它不在 npm 閉包裡，另外列三種元件：執行檔本身
- * （`pkg:generic/nexus-sandbox-spawner`，雜湊是執行檔的 SHA-256）、Rust 標準函式庫（`pkg:generic/rust-std`）、連進執行檔的 crate
- * （`pkg:cargo/<名>@<版本>`，雜湊是 `Cargo.lock` 的 checksum）。產生用 `spawner.ts` 的 `runtimeCrates`（crate 表加 `Cargo.lock`），
- * 核對用產物裡的授權目錄（`bundledCrates`，CI 的 `cargo tree` 收的），同樣是兩種獨立的列法。
+ * **沙箱 spawner**（#1946）：Linux 的產物帶一支 Rust 執行檔，它不在 npm 閉包裡，另外列四種元件：執行檔本身
+ * （`pkg:generic/nexus-sandbox-spawner`，雜湊是執行檔的 SHA-256）、Rust 標準函式庫（`pkg:generic/rust-std`）、工具鏈自帶的
+ * C 函式庫（`pkg:generic/musl`、`pkg:generic/llvm-libunwind`）、連進執行檔的 crate（`pkg:cargo/<名>@<版本>`，雜湊是 `Cargo.lock`
+ * 的 checksum）。crate 產生用 `spawner.ts` 的 `runtimeCrates`（crate 表加 `Cargo.lock`），核對用產物裡的授權目錄（`bundledCrates`，
+ * CI 的 `cargo tree` 收的），同樣是兩種獨立的列法。
  *
  * **我們自己的套件**（`@nexus/*`，含 `vendor/*`）：lockfile 不記 workspace 套件的 integrity，所以不帶 `hashes`。版本與 tarball
  * 一起由 `.sha256` 釘住。`apps/*`、`packages/*` 的 manifest 沒有 `license` 欄位，授權取 repo 根 `LICENSE`（MIT，見
@@ -39,7 +40,9 @@ import { ROOT } from '../workspace-packages.js';
 import { SBOM_FILE, installedPackage } from './payload.js';
 import {
   RUST_STD_COPYRIGHT,
+  SPAWNER_LICENSES_DIR,
   SPAWNER_LOCK,
+  SPAWNER_NATIVE_LIBS,
   SPAWNER_PATH,
   bundledCrates,
   lockedCrates,
@@ -304,7 +307,7 @@ const RUST_STD_PURL = 'pkg:generic/rust-std';
 const RUST_STD_LICENSE = 'MIT OR Apache-2.0';
 
 /**
- * 產物裡有 spawner 時，它與標準函式庫、連進去的 crate 的元件；沒有就是空的。
+ * 產物裡有 spawner 時，它與標準函式庫、C 函式庫、連進去的 crate 的元件；沒有就是空的。
  *
  * @param root - 產物根。
  * @param lockText - spawner 的 `Cargo.lock` 全文。
@@ -347,6 +350,17 @@ function spawnerComponents(
       purl: stdPurl,
       licenses: [cycloneDxLicense(RUST_STD_LICENSE, 'rust-std')],
     },
+    ...SPAWNER_NATIVE_LIBS.map((lib): CycloneDxComponent => {
+      const purl = `pkg:generic/${lib.name}@${lib.version}`;
+      return {
+        type: 'library',
+        'bom-ref': purl,
+        name: lib.name,
+        version: lib.version,
+        purl,
+        licenses: [cycloneDxLicense(lib.license, purl)],
+      };
+    }),
     ...runtimeCrates(lockText).map((crate): CycloneDxComponent => {
       const purl = `pkg:cargo/${crate.name}@${crate.version}`;
       if (crate.checksum === undefined) {
@@ -436,13 +450,14 @@ function componentId(entry: { group?: unknown; name?: unknown; version?: unknown
 }
 
 /**
- * SBOM 裡不是 npm 的元件比對用的鍵：cargo 帶版本（版本從產物的授權目錄名讀得到），generic 只到名字（產物裡讀不到版本，
- * spawner 改用雜湊對）。認不得的 purl 回 undefined。
+ * SBOM 裡不是 npm 的元件比對用的鍵：cargo 與 C 函式庫帶版本（版本從產物的授權目錄名讀得到）；執行檔與標準函式庫只到名字
+ * （產物裡讀不到版本，執行檔改用雜湊對）。認不得的 purl 回 undefined。
  */
 function nonNpmKey(purl: string): string | undefined {
   if (purl.startsWith('pkg:cargo/')) return purl;
-  if (purl.startsWith('pkg:generic/')) return purl.replace(/@[^@/]*$/u, '');
-  return undefined;
+  if (!purl.startsWith('pkg:generic/')) return undefined;
+  const base = purl.replace(/@[^@/]*$/u, '');
+  return base === SPAWNER_PURL || base === RUST_STD_PURL ? base : purl;
 }
 
 /**
@@ -466,6 +481,11 @@ function spawnerSbomProblems(
   const present = new Set(
     bundledCrates(root).map((crate) => `pkg:cargo/${crate.name}@${crate.version}`),
   );
+  for (const lib of SPAWNER_NATIVE_LIBS) {
+    if (existsSync(join(root, SPAWNER_LICENSES_DIR, `${lib.name}-${lib.version}`))) {
+      present.add(`pkg:generic/${lib.name}@${lib.version}`);
+    }
+  }
   if (existsSync(binary)) present.add(SPAWNER_PURL);
   if (existsSync(join(root, RUST_STD_COPYRIGHT))) present.add(RUST_STD_PURL);
   for (const key of [...present].sort()) {
@@ -539,10 +559,19 @@ function licenseText(entry: CycloneDxLicense): string {
 }
 
 /**
+ * spawner 那一側審過的非寬鬆授權：purl（不含版本）對到它唯一放行的授權字串。LLVM libunwind 由 #1827 D62 審過；換一個授權、
+ * 或別的元件帶同樣的授權，都照樣報。
+ */
+const REVIEWED_NATIVE_LICENSES: ReadonlyMap<string, string> = new Map([
+  ['pkg:generic/llvm-libunwind', 'Apache-2.0 WITH LLVM-exception'],
+]);
+
+/**
  * 閉包裡每一顆的授權都要是寬鬆授權，或是審過的例外（`gen-third-party-notices.ts` 的 `isReviewedNonPermissive`）。
  * `THIRD_PARTY_NOTICES.md` 的授權檢查只看直接相依；遞移進來的非寬鬆授權（例如 sharp 底下的 libvips）只有在這裡、對著實際出貨的
  * 閉包才看得到（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
- * 審過的例外是逐個 npm 套件審的，只對 npm 元件放行；spawner 那一側（cargo、generic）一律要是寬鬆授權，報的時候用 purl 指名。
+ * 審過的例外是逐個 npm 套件審的，只對 npm 元件放行；spawner 那一側（cargo、generic）要是寬鬆授權，唯一的例外是
+ * {@link REVIEWED_NATIVE_LICENSES}，報的時候用 purl 指名。
  *
  * @param bom - 產生的或產物裡的 SBOM。
  * @returns 問題清單；空代表都合格。
@@ -566,8 +595,8 @@ export function licenseProblems(bom: {
           `閉包裡的 ${name}@${entry.version} 授權是 ${license}，不是寬鬆授權也不在審過的例外裡`,
         );
       }
-    } else {
-      problems.push(`產物裡的 ${entry.purl} 授權是 ${license}，不是寬鬆授權`);
+    } else if (REVIEWED_NATIVE_LICENSES.get(entry.purl.replace(/@[^@/]*$/u, '')) !== license) {
+      problems.push(`產物裡的 ${entry.purl} 授權是 ${license}，不是寬鬆授權也不在審過的例外裡`);
     }
   }
   return problems;

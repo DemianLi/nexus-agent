@@ -472,9 +472,21 @@ class SandboxSpawner(unittest.TestCase):
         build = self.steps['編譯']['run']
         self.assertIn('--release', build)
         self.assertNotIn('--features', build)
-        test = self.steps['測試']
-        self.assertIn('--features test-hooks', test['run'])
-        self.assertEqual(test['env']['NEXUS_REQUIRE_LANDLOCK'], '1')
+        for name in ('測試（musl）', '測試（glibc 的子行程）'):
+            test = self.steps[name]
+            self.assertIn('--features test-hooks', test['run'])
+            self.assertEqual(test['env']['NEXUS_REQUIRE_LANDLOCK'], '1')
+
+    def test_ships_and_tests_the_static_musl_build(self) -> None:
+        """出貨的是 musl 版（#1827 D61 a）：編與 musl 那輪測試都帶 musl target，target 由安裝那一步依架構裝好。"""
+        install = self.steps['安裝釘住的 Rust']['run']
+        self.assertIn('--target "$(uname -m)-unknown-linux-musl"', install)
+        self.assertIn('SPAWNER_TARGET=$(uname -m)-unknown-linux-musl', install)
+        self.assertIn('--target "$SPAWNER_TARGET"', self.steps['編譯']['run'])
+        self.assertIn('--target "$SPAWNER_TARGET"', self.steps['測試（musl）']['run'])
+        self.assertNotIn('--target', self.steps['測試（glibc 的子行程）']['run'])
+        bundle = (ROOT / 'native' / 'sandbox-spawner' / 'bundle.sh').read_text(encoding='utf-8')
+        self.assertIn('target="$(uname -m)-unknown-linux-musl"', bundle)
 
     def test_toolchain_is_pinned(self) -> None:
         toolchain = (ROOT / 'native' / 'sandbox-spawner' / 'rust-toolchain.toml').read_text(encoding='utf-8')

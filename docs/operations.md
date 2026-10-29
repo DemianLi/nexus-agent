@@ -871,12 +871,12 @@ export HTTP_PROXY=http://127.0.0.1:7890
 | --- | --- |
 | `nexus-agent-<版本>-linux-x64.tar.gz` | 產物本身（`pnpm deploy --prod` 的完整閉包，見〈用 systemd 常駐〉） |
 | `nexus-agent-<版本>-linux-x64.tar.gz.sha256` | tarball 的雜湊 |
-| `nexus-agent-<版本>-linux-x64.cdx.json` | SBOM：閉包裡每一顆套件的 name、version、license，第三方的再加 lockfile 記的 integrity；另列沙箱 spawner 的執行檔、Rust 標準函式庫與連進執行檔的 crate（CycloneDX 1.6 JSON） |
+| `nexus-agent-<版本>-linux-x64.cdx.json` | SBOM：閉包裡每一顆套件的 name、version、license，第三方的再加 lockfile 記的 integrity；另列沙箱 spawner 的執行檔、Rust 標準函式庫、工具鏈自帶的 C 函式庫（musl、LLVM libunwind）與連進執行檔的 crate（CycloneDX 1.6 JSON） |
 | `nexus-agent-<版本>-linux-x64.cdx.json.sha256` | SBOM 的雜湊 |
 | `nexus-agent-<版本>-audit.json` | 發版當下的漏洞掃描結果，見下面〈漏洞掃描〉 |
 | `nexus-agent-<版本>-audit.json.sha256` | 掃描結果的雜湊 |
 
-tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）、`licenses/`（內附的 libvips 要附的 LGPL 3.0 與 GPL 3.0 全文，以及 `licenses/sandbox-spawner/` 底下沙箱 spawner 連進去的 Rust 程式碼的授權全文）、`native/nexus-sandbox-spawner`（沙箱 spawner 的執行檔，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
+tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）、`licenses/`（內附的 libvips 要附的 LGPL 3.0 與 GPL 3.0 全文，以及 `licenses/sandbox-spawner/` 底下沙箱 spawner 連進去的程式碼的授權全文）、`native/nexus-sandbox-spawner`（沙箱 spawner 的執行檔，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
 以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這些檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
 閉包，平台套件（原生二進位、內附的 ripgrep）也是 linux-x64 那一版：Release 只出這一個平台。第 4 步有測試盯著
 （`apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
@@ -909,11 +909,12 @@ for(const entry of fs.readdirSync(store,{withFileTypes:true})){
   }
 }
 const lic="licenses/sandbox-spawner";
-if(fs.existsSync(lic))for(const d of fs.readdirSync(lic))if(d!=="rust-std")installed.add("cargo:"+d.replace(/-(\d+\.\d+\.\d+\S*)$/,"@$1"));
+const clibs=["musl","llvm-libunwind"];
+if(fs.existsSync(lic))for(const d of fs.readdirSync(lic))if(d!=="rust-std"){const m=/^(.+)-(\d+\.\d+\.\d+\S*)$/.exec(d);installed.add((m&&clibs.includes(m[1])?"":"cargo:")+(m?m[1]+"@"+m[2]:d))}
 if(fs.existsSync(lic+"/rust-std/COPYRIGHT-library.html"))installed.add("rust-std");
 if(fs.existsSync("native/nexus-sandbox-spawner"))installed.add("nexus-sandbox-spawner");
 const bom=JSON.parse(fs.readFileSync("sbom.cdx.json","utf8"));
-const key=(c)=>{const p=c.purl||"";return p.startsWith("pkg:generic/")?c.name:(p.startsWith("pkg:cargo/")?"cargo:":"")+(c.group?c.group+"/":"")+c.name+"@"+c.version};
+const key=(c)=>{const p=c.purl||"";return p.startsWith("pkg:generic/")&&!clibs.includes(c.name)?c.name:(p.startsWith("pkg:cargo/")?"cargo:":"")+(c.group?c.group+"/":"")+c.name+"@"+c.version};
 const listed=new Set([bom.metadata.component,...bom.components].map(key));
 const missing=[...installed].filter((x)=>!listed.has(x)),extra=[...listed].filter((x)=>!installed.has(x));
 if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆")}else{console.log("SBOM 漏了："+missing.join("、")+"\nSBOM 多了："+extra.join("、"));process.exitCode=1}'
@@ -921,7 +922,7 @@ if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆
 <!-- verify-install:end -->
 
 第 4 步跟發版時 `release:verify-packed-install` 做的是同一件事（`scripts/release/sbom.ts` 的 `sbomProblems`）：每一顆都在 SBOM 裡，SBOM 裡也沒有閉包外的。
-沙箱 spawner 那一側，crate 從 `licenses/sandbox-spawner/` 的目錄名讀，執行檔與標準函式庫只看檔（`native/nexus-sandbox-spawner`、`licenses/sandbox-spawner/rust-std/COPYRIGHT-library.html`）在不在，crate 印成 `cargo:<名>@<版本>`；`sbomProblems` 另外核對執行檔的 SHA-256 等於 SBOM 記的。
+沙箱 spawner 那一側，crate 與 C 函式庫（musl、LLVM libunwind）從 `licenses/sandbox-spawner/` 的目錄名讀，執行檔與標準函式庫只看檔（`native/nexus-sandbox-spawner`、`licenses/sandbox-spawner/rust-std/COPYRIGHT-library.html`）在不在，crate 印成 `cargo:<名>@<版本>`、C 函式庫印成 `<名>@<版本>`；`sbomProblems` 另外核對執行檔的 SHA-256 等於 SBOM 記的。
 同一件事 CI 的 `packed-install` 跑在每個合進 `develop` 的 commit（合併後完整一輪）、動到 TypeScript 或相依這類要掃的檔的 `develop → main` PR 與 push 到 `main`、動到 `.github/workflows|scripts|actions/` 的功能 PR，其他功能 PR 走輕的模式，不打包；每次 Release 也由 `release:verify-packed-install` 跑一次。主機上再跑一次，核的是「解開之後到現在，沒有人往 `node_modules` 裡加或換過套件版本」。
 
 - **SBOM 的雜湊是 registry tarball 的。** 第三方套件的 `hashes` 取自閉包 lockfile 的 integrity（npm registry 上那個 `.tgz` 的 SHA-512），

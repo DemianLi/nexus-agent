@@ -1,8 +1,9 @@
 name: 沙箱 spawner
 description: >-
-  編沙箱 spawner（#1946，`native/sandbox-spawner/`）並在這台 runner 的核心上跑整合測試：裝 rust-toolchain.toml 釘住的 Rust，
-  編出貨的 release 版，再用 test-hooks 跑測試（核心沒有 Landlock 時紅，不准自我跳過）。給了 `bundle` 就把 release 執行檔與
-  連進去的 Rust 程式碼的授權全文打成 bundle（`bundle.sh`），包成 tar 上傳：upload-artifact 不保留執行權限，tar 保留。
+  編沙箱 spawner（#1946，`native/sandbox-spawner/`）並在這台 runner 的核心上跑整合測試：裝 rust-toolchain.toml 釘住的 Rust
+  與這台架構的 musl target，編出貨的 release 版（靜態連結 musl），再用 test-hooks 跑測試（核心沒有 Landlock 時紅，不准自我跳過）。
+  給了 `bundle` 就把 release 執行檔與連進去的程式碼的授權全文打成 bundle（`bundle.sh`），包成 tar 上傳：upload-artifact 不保留
+  執行權限，tar 保留。
   ci.yml 與 release.yml 共用。
 
 inputs:
@@ -21,7 +22,10 @@ runs:
     - name: 安裝釘住的 Rust
       shell: bash
       working-directory: native/sandbox-spawner
-      run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
+      run: |
+        rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal \
+          --target "$(uname -m)-unknown-linux-musl"
+        echo "SPAWNER_TARGET=$(uname -m)-unknown-linux-musl" >> "$GITHUB_ENV"
     - if: inputs.cache == 'true'
       uses: actions/cache@v6
       with:
@@ -38,8 +42,16 @@ runs:
     - name: 編譯
       shell: bash
       working-directory: native/sandbox-spawner
-      run: cargo build --release --locked
-    - name: 測試
+      run: cargo build --release --locked --target "$SPAWNER_TARGET"
+    # 兩輪：musl 那輪對著出貨的 libc 驗；不帶 target 那輪的 probe 是 glibc 程式，它的 `thread` 驗 glibc（2.34 起先試
+    # clone3）拿到 ENOSYS 會退回 clone，工具子行程就是主機上這類 glibc 程式。
+    - name: 測試（musl）
+      shell: bash
+      working-directory: native/sandbox-spawner
+      env:
+        NEXUS_REQUIRE_LANDLOCK: '1'
+      run: cargo test --locked --features test-hooks --target "$SPAWNER_TARGET"
+    - name: 測試（glibc 的子行程）
       shell: bash
       working-directory: native/sandbox-spawner
       env:

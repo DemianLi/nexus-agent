@@ -39,9 +39,11 @@ import { pathToFileURL } from 'node:url';
 import parseSpdx from 'spdx-expression-parse';
 
 import {
+  NATIVE_LICENSES_SOURCE,
   SPAWNER_CRATES,
   SPAWNER_LICENSES_DIR,
   SPAWNER_LOCK,
+  SPAWNER_NATIVE_LIBS,
   SPAWNER_PATH,
   lockedCrates,
   rustChannel,
@@ -623,16 +625,31 @@ function renderSpawnerCrates(): string {
     buildOnly.length === 0
       ? ''
       : `\n${buildOnly.map((entry) => `\`${entry.name}\`（${entry.license}）`).join('、')} 只在編譯期跑，程式碼不會連進執行檔。\n`;
+  const native = SPAWNER_NATIVE_LIBS.map(
+    (lib) => `| [${lib.name}](${lib.repo}) | ${lib.version} | ${lib.license} | 是 |`,
+  );
+  const texts = SPAWNER_NATIVE_LIBS.map((lib) => {
+    const dir = join(ROOT, NATIVE_LICENSES_SOURCE, `${lib.name}-${lib.version}`);
+    const files = readdirSync(dir).sort();
+    if (files.length === 0) throw new Error(`gen-third-party-notices：${dir} 沒有授權原文`);
+    return files
+      .map(
+        (file) =>
+          `\n### ${lib.name} ${lib.version}：\`${file}\`\n\n\`\`\`\`text\n${readFileSync(join(dir, file), 'utf8').trimEnd()}\n\`\`\`\`\n`,
+      )
+      .join('');
+  });
   return `
-## 沙箱 spawner 的 Rust 相依
+## 沙箱 spawner 連進去的程式碼
 
-\`native/sandbox-spawner/\` 編成 Linux 產物裡的 \`${SPAWNER_PATH}\`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。下表是 [\`${SPAWNER_LOCK}\`](${SPAWNER_LOCK}) 的每一個外部 crate，加上 Rust 的標準函式庫。連進執行檔的 crate 與標準函式庫，授權全文放在產物的 \`${SPAWNER_LICENSES_DIR}/\`；標準函式庫自己內附的第三方程式碼列在那裡的 \`rust-std/COPYRIGHT-library.html\`。
+\`native/sandbox-spawner/\` 編成 Linux 產物裡的 \`${SPAWNER_PATH}\`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)），靜態連結 musl。下表是 [\`${SPAWNER_LOCK}\`](${SPAWNER_LOCK}) 的每一個外部 crate，加上 Rust 的標準函式庫與工具鏈自帶、跟著它連進執行檔的 C 函式庫。連進執行檔的每一項，授權全文放在產物的 \`${SPAWNER_LICENSES_DIR}/\`；標準函式庫自己內附的第三方程式碼列在那裡的 \`rust-std/COPYRIGHT-library.html\`；C 函式庫的授權原文也附在本節最後。
 
 | crate | 版本 | 授權 | 連進執行檔 |
 | --- | --- | --- | --- |
 | [Rust 標準函式庫](https://github.com/rust-lang/rust) | ${channel} | MIT OR Apache-2.0 | 是 |
+${native.join('\n')}
 ${rows.join('\n')}
-${note}`;
+${note}${texts.join('')}`;
 }
 
 function renderNonPermissiveNote(deps: ExternalDep[]): string {

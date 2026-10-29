@@ -58,14 +58,16 @@ import {
   walkClosure,
 } from '../../../scripts/release/sbom.js';
 import {
-  GLIBC_FLOOR,
+  NATIVE_LICENSES_SOURCE,
   RUST_STD_COPYRIGHT,
   SPAWNER_CRATES,
   SPAWNER_LICENSES_DIR,
   SPAWNER_LOCK,
+  SPAWNER_NATIVE_LIBS,
   SPAWNER_PATH,
   elfProblems,
   lockedCrates,
+  nativeLicenseDirs,
   runtimeLicenseDirs,
   spawnerCrateProblems,
 } from '../../../scripts/release/spawner.js';
@@ -240,7 +242,7 @@ const FONT_LICENSES = ['Geist-OFL.txt', 'GeistMono-OFL.txt', 'NotoSansTC-OFL.txt
  *
  * @param machine - `e_machine`（x64 是 62、arm64 是 183）。
  * @param options - `interp` 帶一個 PT_INTERP（動態連結），`tail` 接在後面的位元組（放 glibc 符號版本字串），
- *   `type` 是 `e_type`（預設 3，PIE）。
+ *   `type` 是 `e_type`（預設 3，static-pie 與 PIE 都是這個）。
  */
 function elf(
   machine: number,
@@ -288,7 +290,7 @@ function goodTree(root: string): void {
   put('node_modules/.pnpm/@vscode+ripgrep@1.18.0/node_modules/@vscode/ripgrep/lib/index.js', '');
   put(RG_BINARY, '');
   chmodSync(join(root, RG_BINARY), 0o755);
-  // 沙箱 spawner（#1946）：靜態連結的 x64 執行檔，連進去的 crate 與標準函式庫各有授權全文。
+  // 沙箱 spawner（#1946）：x64 的 static-pie，連進去的 crate、C 函式庫與標準函式庫各有授權全文。
   mkdirSync(dirname(join(root, SPAWNER_PATH)), { recursive: true });
   writeFileSync(join(root, SPAWNER_PATH), elf(62));
   chmodSync(join(root, SPAWNER_PATH), 0o755);
@@ -296,6 +298,7 @@ function goodTree(root: string): void {
   for (const dir of runtimeLicenseDirs(readFileSync(join(ROOT, SPAWNER_LOCK), 'utf8'))) {
     put(`${SPAWNER_LICENSES_DIR}/${dir}/LICENSE-MIT`, 'MIT');
   }
+  for (const dir of nativeLicenseDirs()) put(`${SPAWNER_LICENSES_DIR}/${dir}/LICENSE`, 'text');
 }
 
 const RG_BINARY =
@@ -455,6 +458,11 @@ describe('產物樹的內容檢查', () => {
       /沙箱 spawner ELF 的架構是 183，x64 應為 62/u,
     ],
     [
+      '缺 musl 的授權原文',
+      () => rmSync(join(root, SPAWNER_LICENSES_DIR, 'musl-1.2.5'), { recursive: true }),
+      /licenses\/sandbox-spawner\/musl-1\.2\.5 連進執行檔的 C 函式庫缺授權全文/u,
+    ],
+    [
       '缺標準函式庫的版權說明',
       () => rmSync(join(root, RUST_STD_COPYRIGHT)),
       /缺 Rust 標準函式庫的版權說明/u,
@@ -543,24 +551,22 @@ describe('沙箱 spawner 的執行檔', () => {
     expect(spawnerOptionProblem('darwin', '/b')).toMatch(/darwin 的產物不收 --spawner/u);
   });
 
-  it('靜態連結、架構對就通過；PIE 與傳統的可執行型別都收', () => {
+  it('x64 要是 static-pie；arm64 只要求靜態連結，傳統的可執行型別也收', () => {
     expect(elfProblems(elf(62), 'x64')).toEqual([]);
+    expect(elfProblems(elf(62, { type: 2 }), 'x64')).toEqual([
+      'ELF 型別是 2，x64 要是 static-pie（3）',
+    ]);
     expect(elfProblems(elf(183), 'arm64')).toEqual([]);
-    expect(elfProblems(elf(62, { type: 2 }), 'x64')).toEqual([]);
+    expect(elfProblems(elf(183, { type: 2 }), 'arm64')).toEqual([]);
   });
 
-  it('動態連 glibc：符號版本到下限 2.28 為止通過，超過就報出每一個', () => {
-    expect(GLIBC_FLOOR).toEqual([2, 28]);
-    expect(
-      elfProblems(elf(62, { interp: true, tail: 'GLIBC_2.2.5\0GLIBC_2.28\0' }), 'x64'),
-    ).toEqual([]);
-    expect(
-      elfProblems(elf(62, { interp: true, tail: 'GLIBC_2.28\0GLIBC_2.34\0GLIBC_3.0\0' }), 'x64'),
-    ).toEqual(['動態連 glibc，用到 GLIBC_2.34、GLIBC_3.0，超過主機下限 glibc 2.28']);
-  });
-
-  it('靜態連結時不看字串裡的 glibc 版本', () => {
-    expect(elfProblems(elf(62, { tail: 'GLIBC_2.39' }), 'x64')).toEqual([]);
+  it('擋下編成 gnu 版的：動態連結、或檔內帶 glibc 的符號版本', () => {
+    expect(elfProblems(elf(62, { interp: true }), 'x64')).toEqual([
+      '是動態連結（有 PT_INTERP），要靜態連結 musl',
+    ]);
+    expect(elfProblems(elf(183, { tail: 'GLIBC_2.17\0GLIBC_2.2.5\0' }), 'arm64')).toEqual([
+      '帶 glibc 的符號版本 GLIBC_2.17、GLIBC_2.2.5，不是 musl 版',
+    ]);
   });
 
   it.each<[string, Buffer, string, RegExp]>([
@@ -609,6 +615,16 @@ describe('沙箱 spawner 的 crate 清單', () => {
 
   it('讀不出 name 或 version 就停，不靜靜少一列', () => {
     expect(() => lockedCrates('[[package]]\nname = "x"\n')).toThrow(/讀不出 name 或 version/u);
+  });
+
+  it('C 函式庫的清單跟 repo 裡的授權原文目錄兩個方向都對上，每個目錄都有檔', () => {
+    const dir = join(ROOT, NATIVE_LICENSES_SOURCE);
+    expect(readdirSync(dir).sort()).toEqual(nativeLicenseDirs());
+    for (const name of nativeLicenseDirs()) expect(readdirSync(join(dir, name))).not.toEqual([]);
+    expect(SPAWNER_NATIVE_LIBS.map((lib) => [lib.name, lib.license])).toEqual([
+      ['llvm-libunwind', 'Apache-2.0 WITH LLVM-exception'],
+      ['musl', 'MIT'],
+    ]);
   });
 
   it('連進執行檔的都是寬鬆授權', () => {
@@ -1058,6 +1074,10 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
       writeFileSync(join(root, SPAWNER_LICENSES_DIR, 'libc-0.2.191/LICENSE-MIT'), 'MIT');
       mkdirSync(dirname(join(root, RUST_STD_COPYRIGHT)), { recursive: true });
       writeFileSync(join(root, RUST_STD_COPYRIGHT), '<html></html>');
+      for (const dir of nativeLicenseDirs()) {
+        mkdirSync(join(root, SPAWNER_LICENSES_DIR, dir), { recursive: true });
+        writeFileSync(join(root, SPAWNER_LICENSES_DIR, dir, 'LICENSE'), 'text');
+      }
     });
 
     const write = (bom: ReturnType<typeof buildSbom>): void =>
@@ -1067,7 +1087,7 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
       components: bom.components.filter((entry) => entry.purl !== purl),
     });
 
-    it('列執行檔（雜湊是執行檔的 SHA-256）、標準函式庫、連進去的 crate（雜湊是 Cargo.lock 的 checksum）；只在編譯期用的不列', () => {
+    it('列執行檔（雜湊是執行檔的 SHA-256）、標準函式庫、C 函式庫、連進去的 crate（雜湊是 Cargo.lock 的 checksum）；只在編譯期用的不列', () => {
       const bom = buildSbom(root, options);
       const byPurl = new Map(bom.components.map((entry) => [entry.purl, entry]));
       expect(byPurl.get('pkg:generic/nexus-sandbox-spawner@0.0.0')).toMatchObject({
@@ -1084,8 +1104,16 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
         licenses: [{ expression: 'MIT OR Apache-2.0' }],
         hashes: [{ alg: 'SHA-256', content: libcSum }],
       });
+      expect(byPurl.get('pkg:generic/llvm-libunwind@22.1.8')).toMatchObject({
+        licenses: [{ expression: 'Apache-2.0 WITH LLVM-exception' }],
+      });
+      expect(byPurl.get('pkg:generic/musl@1.2.5')).toMatchObject({
+        licenses: [{ license: { id: 'MIT' } }],
+      });
       expect([...byPurl.keys()].filter((purl) => !purl.startsWith('pkg:npm/'))).toEqual([
         'pkg:cargo/libc@0.2.191',
+        'pkg:generic/llvm-libunwind@22.1.8',
+        'pkg:generic/musl@1.2.5',
         'pkg:generic/nexus-sandbox-spawner@0.0.0',
         'pkg:generic/rust-std@1.98.1',
       ]);
@@ -1138,6 +1166,19 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
         ['SBOM 漏了產物裡的 pkg:generic/rust-std'],
       ],
       [
+        'SBOM 漏了 musl',
+        (bom) => without(bom, 'pkg:generic/musl@1.2.5'),
+        () => {},
+        ['SBOM 漏了產物裡的 pkg:generic/musl@1.2.5'],
+      ],
+      [
+        '產物沒附 LLVM libunwind 的授權，SBOM 卻列了',
+        (bom) => bom,
+        () =>
+          rmSync(join(root, SPAWNER_LICENSES_DIR, 'llvm-libunwind-22.1.8'), { recursive: true }),
+        ['SBOM 列了產物裡沒有的 pkg:generic/llvm-libunwind@22.1.8'],
+      ],
+      [
         'SBOM 漏了執行檔',
         (bom) => without(bom, 'pkg:generic/nexus-sandbox-spawner@0.0.0'),
         () => {},
@@ -1180,11 +1221,16 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
         spawnSync(process.execPath, ['-e', script], { cwd: root, encoding: 'utf8' });
       const bom = buildSbom(root, options);
       write(bom);
-      expect([run().status, run().stdout.trim()]).toEqual([0, '一致：7 顆']);
+      expect([run().status, run().stdout.trim()]).toEqual([0, '一致：9 顆']);
       write(without(bom, 'pkg:cargo/libc@0.2.191'));
       expect([run().status, run().stdout.trim()]).toEqual([
         1,
         'SBOM 漏了：cargo:libc@0.2.191\nSBOM 多了：',
+      ]);
+      write(without(bom, 'pkg:generic/musl@1.2.5'));
+      expect([run().status, run().stdout.trim()]).toEqual([
+        1,
+        'SBOM 漏了：musl@1.2.5\nSBOM 多了：',
       ]);
     });
 
@@ -1203,9 +1249,36 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
       expect(
         licenseProblems({ components: [entry('pkg:cargo/sharp-libvips-linux-x64@1.0.0')] }),
       ).toEqual([
-        '產物裡的 pkg:cargo/sharp-libvips-linux-x64@1.0.0 授權是 LGPL-3.0-or-later，不是寬鬆授權',
+        '產物裡的 pkg:cargo/sharp-libvips-linux-x64@1.0.0 授權是 LGPL-3.0-or-later，不是寬鬆授權也不在審過的例外裡',
       ]);
       expect(licenseProblems(buildSbom(root, options))).toEqual([]);
+    });
+
+    it('LLVM 的例外只放行 llvm-libunwind 的 Apache-2.0 WITH LLVM-exception：換授權、換元件都照樣報', () => {
+      const lib = (purl: string, license: string) => ({
+        name: 'x',
+        version: '1',
+        purl,
+        licenses: [{ expression: license }],
+      });
+      expect(
+        licenseProblems({
+          components: [lib('pkg:generic/llvm-libunwind@22.1.8', 'Apache-2.0 WITH LLVM-exception')],
+        }),
+      ).toEqual([]);
+      expect(
+        licenseProblems({
+          components: [
+            lib('pkg:generic/llvm-libunwind@22.1.8', 'GPL-2.0-only WITH Classpath-exception-2.0'),
+            lib('pkg:generic/compiler-rt@22.1.8', 'Apache-2.0 WITH LLVM-exception'),
+            lib('pkg:cargo/llvm-libunwind@22.1.8', 'Apache-2.0 WITH LLVM-exception'),
+          ],
+        }),
+      ).toEqual([
+        '產物裡的 pkg:generic/llvm-libunwind@22.1.8 授權是 GPL-2.0-only WITH Classpath-exception-2.0，不是寬鬆授權也不在審過的例外裡',
+        '產物裡的 pkg:generic/compiler-rt@22.1.8 授權是 Apache-2.0 WITH LLVM-exception，不是寬鬆授權也不在審過的例外裡',
+        '產物裡的 pkg:cargo/llvm-libunwind@22.1.8 授權是 Apache-2.0 WITH LLVM-exception，不是寬鬆授權也不在審過的例外裡',
+      ]);
     });
   });
 
