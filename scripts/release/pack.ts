@@ -111,7 +111,7 @@ export function spawnerOptionProblem(
  * @param options - `out` 產物目錄、`skipBuild` 跳過 build、`commit` 寫進戳記的 commit（省略即 `git rev-parse HEAD`）、
  *   `spawner` 沙箱 spawner 的 bundle 目錄（Linux 必給，其他平台不收）。
  * @returns tarball、SBOM 與兩份 `.sha256` 的路徑、版本、平台。
- * @throws Linux 上沒給 `spawner`，或非 Linux 給了 `spawner`。
+ * @throws `spawner` 給得不對（{@link spawnerOptionProblem}），或產物沒通過靜態檢查（內容、閉包、授權）。
  */
 export function pack(options: {
   out: string;

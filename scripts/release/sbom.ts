@@ -310,7 +310,7 @@ const RUST_STD_LICENSE = 'MIT OR Apache-2.0';
  * @param lockText - spawner 的 `Cargo.lock` 全文。
  * @param channel - 標準函式庫的版本。
  * @param firstPartyLicense - 執行檔本身的授權。
- * @throws 連進去的 crate 在 `Cargo.lock` 沒有 checksum。
+ * @throws `Cargo.lock` 沒有 spawner 自己、有讀不出 name 或 version 的 `[[package]]`，或連進去的 crate 沒有 checksum。
  */
 function spawnerComponents(
   root: string,
@@ -373,7 +373,8 @@ function spawnerComponents(
  * @param options - `lockfile`：閉包 lockfile 的原文（省略即讀 {@link CLOSURE_LOCKFILE}）；`firstPartyLicense`：我們自己的
  *   套件沒宣告 license 時用的 SPDX id（省略即讀 repo 根 `LICENSE`）；`spawnerLock`、`rustChannel`：spawner 的 `Cargo.lock` 原文與
  *   標準函式庫的版本（省略即讀 repo 的）。
- * @throws 第三方套件查不到 integrity、或沒有合法的 license。
+ * @throws 第三方套件查不到 integrity、或沒有合法的 license；產物帶 spawner 時，`Cargo.lock` 或 `rust-toolchain.toml`
+ *   讀不出需要的欄位。
  */
 export function buildSbom(
   root: string,

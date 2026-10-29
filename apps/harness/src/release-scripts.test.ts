@@ -1184,7 +1184,7 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
       write(without(bom, 'pkg:cargo/libc@0.2.191'));
       expect([run().status, run().stdout.trim()]).toEqual([
         1,
-        'SBOM 漏了：libc@0.2.191\nSBOM 多了：',
+        'SBOM 漏了：cargo:libc@0.2.191\nSBOM 多了：',
       ]);
     });
 

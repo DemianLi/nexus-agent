@@ -909,10 +909,11 @@ for(const entry of fs.readdirSync(store,{withFileTypes:true})){
   }
 }
 const lic="licenses/sandbox-spawner";
-if(fs.existsSync(lic))for(const d of fs.readdirSync(lic))installed.add(d==="rust-std"?"rust-std":d.replace(/-(\d+\.\d+\.\d+\S*)$/,"@$1"));
+if(fs.existsSync(lic))for(const d of fs.readdirSync(lic))if(d!=="rust-std")installed.add("cargo:"+d.replace(/-(\d+\.\d+\.\d+\S*)$/,"@$1"));
+if(fs.existsSync(lic+"/rust-std/COPYRIGHT-library.html"))installed.add("rust-std");
 if(fs.existsSync("native/nexus-sandbox-spawner"))installed.add("nexus-sandbox-spawner");
 const bom=JSON.parse(fs.readFileSync("sbom.cdx.json","utf8"));
-const key=(c)=>c.purl.startsWith("pkg:generic/")?c.name:(c.group?c.group+"/":"")+c.name+"@"+c.version;
+const key=(c)=>{const p=c.purl||"";return p.startsWith("pkg:generic/")?c.name:(p.startsWith("pkg:cargo/")?"cargo:":"")+(c.group?c.group+"/":"")+c.name+"@"+c.version};
 const listed=new Set([bom.metadata.component,...bom.components].map(key));
 const missing=[...installed].filter((x)=>!listed.has(x)),extra=[...listed].filter((x)=>!installed.has(x));
 if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆")}else{console.log("SBOM 漏了："+missing.join("、")+"\nSBOM 多了："+extra.join("、"));process.exitCode=1}'
@@ -920,7 +921,7 @@ if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆
 <!-- verify-install:end -->
 
 第 4 步跟發版時 `release:verify-packed-install` 做的是同一件事（`scripts/release/sbom.ts` 的 `sbomProblems`）：每一顆都在 SBOM 裡，SBOM 裡也沒有閉包外的。
-沙箱 spawner 那一側，crate 從 `licenses/sandbox-spawner/` 的目錄名讀，執行檔與標準函式庫只看檔在不在；`sbomProblems` 另外核對執行檔的 SHA-256 等於 SBOM 記的。
+沙箱 spawner 那一側，crate 從 `licenses/sandbox-spawner/` 的目錄名讀，執行檔與標準函式庫只看檔（`native/nexus-sandbox-spawner`、`licenses/sandbox-spawner/rust-std/COPYRIGHT-library.html`）在不在，crate 印成 `cargo:<名>@<版本>`；`sbomProblems` 另外核對執行檔的 SHA-256 等於 SBOM 記的。
 CI 在每張動到 TypeScript 的 PR 與每次 Release 上都跑過；主機上再跑一次，核的是「解開之後到現在，沒有人往 `node_modules` 裡加或換過套件版本」。
 
 - **SBOM 的雜湊是 registry tarball 的。** 第三方套件的 `hashes` 取自閉包 lockfile 的 integrity（npm registry 上那個 `.tgz` 的 SHA-512），

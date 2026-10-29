@@ -130,7 +130,13 @@ export function lockedCrates(text: string): LockedCrate[] {
   return crates;
 }
 
-/** 連進執行檔的 crate（{@link SPAWNER_CRATES} 標了 `runtime` 的），版本與 checksum 取自 `Cargo.lock`。 */
+/**
+ * 連進執行檔的 crate（{@link SPAWNER_CRATES} 標了 `runtime` 的），版本與 checksum 取自 `Cargo.lock`。
+ *
+ * @param lockText - `Cargo.lock` 全文。
+ * @returns 依 `Cargo.lock` 的順序，同名多版本各一列。
+ * @throws `Cargo.lock` 有讀不出 name 或 version 的 `[[package]]`。
+ */
 export function runtimeCrates(lockText: string): (LockedCrate & { license: string })[] {
   const runtime = new Map(
     SPAWNER_CRATES.filter((entry) => entry.runtime).map((entry) => [entry.name, entry.license]),
@@ -146,7 +152,7 @@ export function runtimeCrates(lockText: string): (LockedCrate & { license: strin
  * 是兩種獨立的列法：這一份來自 CI 的 `cargo tree`，那一份來自 {@link SPAWNER_CRATES} 與 `Cargo.lock`。
  *
  * @param root - 產物根。
- * @returns 依名字排序；目錄名拆不出版本的回 `version: ''`，讓核對報出來。
+ * @returns 依目錄名排序；目錄名拆不出版本的回 `version: ''`，讓核對報出來。
  */
 export function bundledCrates(root: string): { name: string; version: string }[] {
   const dir = join(root, SPAWNER_LICENSES_DIR);
@@ -162,7 +168,12 @@ export function bundledCrates(root: string): { name: string; version: string }[]
     });
 }
 
-/** 標準函式庫的版本：`rust-toolchain.toml` 釘住的 channel。 */
+/**
+ * 標準函式庫的版本：`rust-toolchain.toml` 釘住的 channel。
+ *
+ * @param text - `rust-toolchain.toml` 全文；省略即讀 repo 的。
+ * @throws 讀不出 channel。
+ */
 export function rustChannel(
   text: string = readFileSync(join(ROOT, 'native/sandbox-spawner/rust-toolchain.toml'), 'utf8'),
 ): string {
