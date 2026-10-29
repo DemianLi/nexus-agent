@@ -231,6 +231,42 @@ describe('觀測分頁：結構化模式', () => {
     ]);
   });
 
+  it('核准：回覆看不懂（#2040）的中斷列寫沒有有效回覆，工具列說沒有執行，不說人拒絕了', async () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '幫我跑'),
+      ...script.ai('a', { text: '跑' }),
+      script.started('c1', 'bash', { command: 'ls' }),
+      script.approval('int-1', 'bash'),
+      script.failed('c1', '收到的核准回覆看不懂', 'APPROVAL_INVALID_REPLY'),
+      ...script.ai('b', { text: '沒跑' }),
+      script.completed(),
+    ]);
+    const trajectory = view([
+      turn(0, {
+        end: 'completed',
+        calls: [call(5, { reply: reply(11, 'run-a') })],
+        decisions: [
+          decision('interrupt', 10, {
+            id: 'int-1',
+            approval: { tool: 'bash', outcome: 'unavailable', decidedAt: 1_700_000_013_000 },
+          }),
+        ],
+      }),
+    ]);
+    mount(withTrajectory(state, script, trajectory));
+    await act(async () => {});
+    const signal = screen
+      .getAllByTestId('trace-row')
+      .find((row) => row.getAttribute('data-kind') === 'signal')!;
+    expect(signal.textContent).toContain('核准 bash：沒有有效回覆（等了 13.0 秒）');
+    expect(screen.getAllByTestId('trace-approval-code').map((chip) => chip.textContent)).toEqual([
+      '回覆看不懂，沒有執行',
+    ]);
+    expect(document.body.textContent).not.toContain('人拒絕了');
+  });
+
   it('呼叫段落展開：缺席的欄位寫「—」不寫 0；指到已被擠掉的快照寫「已不保留」', async () => {
     const { script, state, trajectory } = conversation();
     mount(
