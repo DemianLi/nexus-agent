@@ -66,11 +66,13 @@ import {
   closeTab,
   isPanelTab,
   openTab,
+  planTab,
   readLayout,
   readWidth,
   selectTab,
   setChangesIndex,
   setOpen,
+  setPlanTitle,
   tabKey,
   writeLayout,
   writeWidth,
@@ -134,14 +136,9 @@ export function RightSidebarProvider({
   const locateFocus = useRef<HTMLElement | null>(null);
   const [reveal, setReveal] = useState<TurnReveal | undefined>(undefined);
   const revealCount = useRef(0);
-  const [scannedPlanTitles, setScannedPlanTitles] = useState<ReadonlyMap<string, string>>(
-    () => new Map(),
-  );
-  const noteScannedPlan = useCallback(
-    (id: string, title: string) =>
-      setScannedPlanTitles((previous) =>
-        previous.get(id) === title ? previous : new Map(previous).set(id, title),
-      ),
+  const notePlanTitle = useCallback(
+    (id: string, title: string | undefined) =>
+      setLayout((current) => setPlanTitle(current, id, title)),
     [],
   );
   useEffect(() => {
@@ -162,22 +159,27 @@ export function RightSidebarProvider({
     [],
   );
   const canPreview = sources.deliverableFiles !== undefined;
-  const api = useMemo<RightSidebarApi>(
-    () => ({
+  const api = useMemo<RightSidebarApi>(() => {
+    /** 已經開著就留著它記下的標題：再打開不該把它洗掉。標題由掛上之後的 `PlanTab` 記（`notePlanTitle`）。 */
+    const openPlanTab = (current: SidebarLayout, id: string) =>
+      openTab(
+        current,
+        current.tabs.find((tab) => tab.kind === 'plan' && tab.id === id) ?? planTab(id, undefined),
+      );
+    return {
       openChanges: (seq, index) =>
         update((current) => openTab(current, { kind: 'changes', seq, index })),
       openDeliverable: canPreview
         ? (file) => update((current) => openTab(current, { kind: 'deliverable', file }))
         : undefined,
       openPlan: (id, from) => {
-        const tab: SidebarTab = { kind: 'plan', id };
-        focusTab.current = tabKey(tab);
+        focusTab.current = tabKey({ kind: 'plan', id });
         returnFocus.current = from ?? null;
-        update((current) => openTab(current, tab));
+        update((current) => openPlanTab(current, id));
       },
       autoOpenPlan: (id) => {
         if (isMobile) return false;
-        update((current) => openTab(current, { kind: 'plan', id }));
+        update((current) => openPlanTab(current, id));
         return true;
       },
       openPanel: (kind, from) => {
@@ -210,9 +212,8 @@ export function RightSidebarProvider({
         }
         return true;
       },
-    }),
-    [update, canPreview, isMobile],
-  );
+    };
+  }, [update, canPreview, isMobile]);
   const control = useMemo<RightSidebarControl>(
     () => ({
       api,
@@ -224,26 +225,13 @@ export function RightSidebarProvider({
       focusTab,
       returnFocus,
       locateFocus,
-      scannedPlanTitles,
-      noteScannedPlan,
+      notePlanTitle,
       reveal,
       settleReveal,
       update,
       setWidth,
     }),
-    [
-      api,
-      layout,
-      sources,
-      isMobile,
-      width,
-      scannedPlanTitles,
-      noteScannedPlan,
-      reveal,
-      settleReveal,
-      update,
-      setWidth,
-    ],
+    [api, layout, sources, isMobile, width, notePlanTitle, reveal, settleReveal, update, setWidth],
   );
   return <Control.Provider value={control}>{children}</Control.Provider>;
 }
@@ -504,10 +492,11 @@ function EmptyState() {
  * 計劃分頁（#654）。那一份不在載入的對話裡時（重新整理後還原的分頁、計劃在更早的輪），另外往前讀歷史找它
  *（#1798，`Conversation.findPlan`），**不動對話窗口**：找到先在這裡顯示全文，旁邊一顆鈕先 `loadThrough` 載到那一頁
  * （同觀測分頁，#1601）、計劃出現在對話裡之後再捲到那張計劃卡。掃完沒有、讀取失敗都只講一句。**「待定位」記在這一層**：載完之後
- * 計劃庫裡有了它，鈕那一格卸掉。掃到時把標題記進提供者（`noteScannedPlan`），分頁標籤在定位之前就寫得出標題。
+ * 計劃庫裡有了它，鈕那一格卸掉。知道標題（條目裡有、或掃到了）就記進版面（`notePlanTitle`，#2014），分頁標籤在定位之前、
+ * 重新整理之後都寫得出標題；掃完沒有就清掉，標籤退回「計劃」，跟這裡那一句一致。讀取失敗不清：讀不到不代表它不在了。
  */
 function PlanTab({ id }: { id: string }) {
-  const { api, sources, isMobile, noteScannedPlan } = useControl();
+  const { api, sources, isMobile, notePlanTitle } = useControl();
   /** 對話條目裡的那一份：有它才定位得到。 */
   const entriesPlan = sources.plans?.get(id);
   const { findPlan, loadThrough } = sources;
@@ -535,10 +524,12 @@ function PlanTab({ id }: { id: string }) {
   const found =
     entriesPlan === undefined && scan !== 'scanning' && scan?.kind === 'found' ? scan : undefined;
   const shown = entriesPlan ?? found?.plan;
-  const foundTitle = found?.plan.title;
+  const knownTitle = shown?.title;
+  const gone = entriesPlan === undefined && scan !== 'scanning' && scan?.kind === 'not-found';
   useEffect(() => {
-    if (foundTitle !== undefined) noteScannedPlan(id, foundTitle);
-  }, [foundTitle, id, noteScannedPlan]);
+    if (knownTitle !== undefined) notePlanTitle(id, knownTitle);
+    else if (gone) notePlanTitle(id, undefined);
+  }, [knownTitle, gone, id, notePlanTitle]);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'settled' | 'missing'>('idle');
   const preview = useRef<HTMLElement>(null);
   const stillMissing = useRef<HTMLParagraphElement>(null);
@@ -746,7 +737,7 @@ export function changesTabTitle(
 }
 
 function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefined } {
-  const { sources, scannedPlanTitles } = useControl();
+  const { sources } = useControl();
   const store = sources.changes?.summary;
   const seq = tab.kind === 'changes' ? tab.seq : undefined;
   const summary = useSyncExternalStore(store?.subscribe ?? noSubscribe, () =>
@@ -758,7 +749,7 @@ function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefin
   if (isPanelTab(tab)) return { label: PANELS[tab.kind].title, detail: undefined };
   if (tab.kind === 'deliverable') return { label: basename(tab.file.path), detail: tab.file.path };
   if (tab.kind === 'plan') {
-    const title = sources.plans?.get(tab.id)?.title ?? scannedPlanTitles.get(tab.id) ?? '計劃';
+    const title = sources.plans?.get(tab.id)?.title ?? tab.title ?? '計劃';
     return { label: title, detail: title };
   }
   return changesTabTitle(typeof summary === 'object' ? summary : undefined);

@@ -13,10 +13,12 @@ import {
   closeTab,
   openTab,
   parseLayout,
+  planTab,
   readLayout,
   readWidth,
   selectTab,
   setChangesIndex,
+  setPlanTitle,
   tabKey,
   writeLayout,
   writeWidth,
@@ -175,10 +177,56 @@ describe('存下來的版面', () => {
     ['同一個分頁兩次', { open: true, tabs: [changes(1), changes(1)], active: 'changes:1' }],
     ['計劃沒有 id', { open: true, tabs: [{ kind: 'plan', id: '' }], active: 'plan:' }],
     ['計劃的 id 不是字串', { open: true, tabs: [{ kind: 'plan', id: 3 }], active: 'plan:3' }],
+    [
+      '計劃的標題不是字串（#2014）',
+      { open: true, tabs: [{ kind: 'plan', id: 'call_1', title: 3 }], active: 'plan:call_1' },
+    ],
     ['選中的不在分頁裡', { open: true, tabs: [changes(1)], active: 'changes:2' }],
     ['有分頁卻沒有選中的', { open: true, tabs: [changes(1)] }],
   ])('%s：整份不信', (_name, value) => {
     expect(parseLayout(value)).toBeUndefined();
+  });
+});
+
+describe('計劃分頁的標題（#2014）', () => {
+  const plan = (id: string, title?: string): SidebarLayout => ({
+    open: true,
+    tabs: [changes(1), planTab(id, title)],
+    active: `plan:${id}`,
+  });
+
+  it.each([
+    ['帶標題', { kind: 'plan', id: 'call_1', title: '改登入頁' }, planTab('call_1', '改登入頁')],
+    ['不帶標題（舊版面）', { kind: 'plan', id: 'call_1' }, { kind: 'plan', id: 'call_1' }],
+    [
+      '`review:` 的標題不收：它不在日誌裡，中斷結束後就找不到',
+      { kind: 'plan', id: 'review:int-1', title: '改登入頁' },
+      { kind: 'plan', id: 'review:int-1' },
+    ],
+  ])('讀回來：%s', (_name, stored, expected) => {
+    const id = (stored as { id: string }).id;
+    expect(parseLayout({ open: true, tabs: [stored], active: `plan:${id}` })?.tabs).toEqual([
+      expected,
+    ]);
+  });
+
+  it('記下、換掉、清掉', () => {
+    const titled = setPlanTitle(plan('call_1'), 'call_1', '改登入頁');
+    expect(titled.tabs[1]).toEqual({ kind: 'plan', id: 'call_1', title: '改登入頁' });
+    expect(setPlanTitle(titled, 'call_1', undefined).tabs[1]).toEqual({
+      kind: 'plan',
+      id: 'call_1',
+    });
+    // 別的分頁不動。
+    expect(titled.tabs[0]).toEqual(changes(1));
+  });
+
+  it('沒變、沒開著這個分頁、`review:` 的：原樣回傳', () => {
+    const titled = plan('call_1', '改登入頁');
+    expect(setPlanTitle(titled, 'call_1', '改登入頁')).toBe(titled);
+    expect(setPlanTitle(titled, 'call_2', '別的')).toBe(titled);
+    const review = plan('review:int-1');
+    expect(setPlanTitle(review, 'review:int-1', '改登入頁')).toBe(review);
   });
 });
 
