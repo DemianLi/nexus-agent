@@ -1,15 +1,16 @@
 /**
  * harness 測試的分片與排序看上一輪的耗時（[#2093](https://github.com/DemianLi/nexus-agent/issues/2093)）。
  *
- * vitest 的 `--shard` 照檔名雜湊切、不看耗時，兩片差到兩分鐘；它自己排序時會看結果快取（`results.json`），但 CI 每次都是乾淨的，
+ * vitest 的 `--shard` 照檔名雜湊切、不看耗時，兩片不均（量測見 #2093）；它自己排序時會看結果快取（`results.json`），但 CI 每次都是乾淨的，
  * 沒有快取就退回看檔案大小。這裡讀 {@link DURATIONS_DIR_ENV} 指到的目錄裡的 `results.json`（vitest 自己寫的格式，合併後那一輪各片存一份，
  * 見 `.github/workflows/ci.yml` 的 test-harness），用來：
  *
  * - **分片**：耗時由長到短，每個檔放進目前合計最少的那一片。兩片讀同一份資料、跑同一個算法，所以切法一致。
  * - **排序**：片內由長到短，最慢的檔先開跑，不會壓在最後拖長整片。
  *
- * 資料只影響分得平不平均，不影響跑哪些檔：沒有資料的檔（新加的）照已知耗時的中位數估；目錄沒設、不存在、裡面沒有一份讀得懂的，
- * 退回 vitest 原本的雜湊切法與排序。每個檔恰好落在一片由 `partition` 保證，`test-shard-sequencer.test.ts` 釘住。
+ * 資料只影響分得平不平均，不影響跑哪些檔：沒有資料的檔（新加的）照這一輪有資料的檔的耗時中位數估（見 {@link estimate}）；
+ * 目錄沒設、讀不到、裡面沒有一份讀得懂的，退回 vitest 內建的雜湊切法與排序（排序時「上一輪失敗的檔先跑」也照內建）；
+ * 用耗時排序時只看長短。每個檔恰好落在一片由 `partition` 保證，`test-shard-sequencer.test.ts` 釘住。
  */
 
 import { createHash } from 'node:crypto';
@@ -18,13 +19,13 @@ import { join, relative } from 'node:path';
 import { BaseSequencer } from 'vitest/node';
 import type { TestSpecification } from 'vitest/node';
 
-/** 放上一輪 `results.json` 的目錄；CI 的 test-harness 設它，本機不設就照 vitest 原本的做法。 */
+/** 放上一輪 `results.json` 的目錄；CI 的 test-harness 設它，本機不設就照 vitest 內建的做法。 */
 export const DURATIONS_DIR_ENV = 'NEXUS_TEST_DURATIONS_DIR';
 
 /**
  * 讀 `dir` 底下每一份 `.json`（vitest `results.json` 的格式：`{ results: [["<project>:<相對路徑>", { duration }], …] }`），
- * 合成「相對路徑 → 毫秒」。讀不懂的那一份跳過並記進 `skipped`；同一個檔出現在兩份裡取較長的。
- * @param dir 目錄；不存在時當成沒有資料。
+ * 合成「相對路徑 → 毫秒」。讀不到或讀不懂的那一份跳過並記進 `skipped`；同一個檔出現在兩份裡取較長的。
+ * @param dir 目錄；讀不到（含不存在）時當成沒有資料。
  * @returns 耗時表與跳過的檔名。
  */
 export function readDurations(dir: string): { durations: Map<string, number>; skipped: string[] } {
@@ -73,7 +74,7 @@ function parseResults(text: string): [string, number][] | undefined {
 }
 
 /**
- * 每個檔的估計耗時：有資料用資料，沒有的照已知耗時的中位數。
+ * 每個檔的估計耗時：有資料用資料；沒有的照 `paths` 裡有資料那些檔的耗時中位數（偶數個取較大的中間值），全都沒有就是 0。
  * @param paths 這一輪要跑的檔（相對路徑）。
  * @param durations 上一輪的耗時。
  * @returns 相對路徑 → 估計毫秒。

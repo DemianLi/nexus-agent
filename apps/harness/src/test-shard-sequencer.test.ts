@@ -1,7 +1,7 @@
 /**
  * `test-shard-sequencer.ts`：資料只影響分得平不平均，不影響跑哪些檔（#2093）。
  *
- * 「每個檔恰好落在一片」對三種資料各驗一次：讀得懂的、讀不懂的、缺新檔的；目錄不存在時要跟 vitest 原本的雜湊切法一模一樣。
+ * 「每個檔恰好落在一片」對四種資料各驗一次：讀得懂的、讀不懂的、缺新檔的、有一份讀不到（子目錄）的；目錄不存在時要跟 vitest 內建的雜湊切法一模一樣。
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -65,7 +65,7 @@ function expectExactCover(split: string[][], paths: readonly string[]): void {
   expect(new Set(all)).toEqual(new Set(paths));
 }
 
-/** 每個檔只靠檔名決定耗時，讓測試不依賴隨機。 */
+/** 前三個檔各 60 秒、其餘約 1.0–2.4 秒的固定耗時表：大檔夠大，切錯就看得出兩片不均。 */
 const uneven = Object.fromEntries(PATHS.map((path, i) => [path, i < 3 ? 60_000 : 1_000 + i * 37]));
 
 describe('partition', () => {
@@ -160,7 +160,7 @@ describe('DurationSequencer.shard（兩片各切一次，跟 CI 一樣）', () =
     ).not.toBe(inputDigest(base));
   });
 
-  it('快取不存在：跟 vitest 原本的雜湊切法一模一樣', async () => {
+  it('快取不存在：跟 vitest 內建的雜湊切法一模一樣', async () => {
     vi.stubEnv(DURATIONS_DIR_ENV, '/var/tmp/nexus-shard-durations-does-not-exist');
     const split = await shards(PATHS);
     vi.unstubAllEnvs();

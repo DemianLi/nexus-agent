@@ -96,8 +96,8 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: echo "sha=$(git merge-base "origin/$BASE_REF" HEAD)" >> "$GITHUB_OUTPUT"
 
-      # 全跑時 test-harness 兩片要讀的耗時（#2093）：合併後那一輪每片各存一份，這裡只查鍵、不下載。先找分歧點那一份，
-      # 沒有就退回最近的一份（GitHub 會清掉 7 天沒人取的快取，都沒有時兩片退回 vitest 的雜湊切法）。
+      # 全跑時 test-harness 兩片要讀的耗時（#2093）：合併後那一輪每片各存一份，這裡只查鍵、不下載。PR 先找分歧點那一份，
+      # 沒有（或不是 PR）就退回最近的一份；都沒有時（GitHub 會清掉 7 天沒人取的快取）兩片退回 vitest 的雜湊切法。
       # 兩片拿這裡查到的同一個鍵去取，讀到的是同一份資料，切法才一致。
       - uses: actions/cache/restore@v6
         id: durations-1
@@ -393,7 +393,7 @@ jobs:
 
   # harness 是關鍵路徑，切兩片平行跑；web 一片就比 harness 的一片短，不分。
   # 分片看上一輪的耗時（#2093，`apps/harness/src/test-shard-sequencer.ts`）：plan 查到鍵就取那兩份，跑完由合併後那一輪各片存回自己這一份。
-  # 取不到時兩片都退回 vitest 的雜湊切法；兩片取的是 plan 查到的同一個鍵，取不到就讓這一片紅，不會一片看耗時、一片看雜湊而漏跑檔。
+  # plan 沒查到鍵時兩片都退回 vitest 的雜湊切法；plan 查到了、這一片卻取不到就紅，不會一片看耗時、一片看雜湊而漏跑檔。
   test-harness:
     name: test-harness (${{ matrix.shard }}/2)
     needs: plan
