@@ -27,6 +27,10 @@
  * 宣告也沒變的失敗不算。寫下去之後的那一份有列掉了，才再試掛一次現在的清單當基準。試掛的環境只有呼叫端給的 `--patch` 與
  * `--workspace`，只在 serve 環境裡掉的列照舊到 thread 組裝時才掉（`thread-plugin-list.ts`）。
  *
+ * **試掛在鎖外跑**：MCP 握手卡住時一次要等到 SDK 逾時（約 120 秒），比紀錄鎖的等待上限長。所以先在鎖裡算出要寫的那一筆、
+ * 記下最後一筆的序號，放開鎖去試掛，再進鎖核對序號：沒變才照試掛的結果收或拒（紀錄只增不改，序號沒變就是試掛看到的那一份）；
+ * 變了就放開鎖、照新的紀錄重試，累計重試 {@link TRIAL_RETRY_LIMIT} 次還是變了就拒收，請人重下。
+ *
  * ## 偏離登記
  *
  * 1. **記「誰」**：dsh 沒有使用者身分（`ChangeResult` 與 `plugin-manager/changed` 只帶 `reason`，`plugin-manager/src/types.ts:244-246`）。
@@ -121,6 +125,8 @@ export interface PluginChangeOptions {
   readonly workspace?: string;
   /** `--workspace` 的解析基準，省略即行程的工作目錄。 */
   readonly cwd?: string;
+  /** 試掛那一步，省略即 {@link trialMount}。 */
+  readonly trial?: typeof trialMount;
 }
 
 /** {@link changePlugin} 的結果。**record 裡有明文設定值，呼叫端不要印它。** */
@@ -170,6 +176,9 @@ const WORKSPACE_REQUIRED_ROWS: ReadonlySet<string> = new Set([
   'sandbox-policy',
   'permission-presets',
 ]);
+
+/** 試掛期間紀錄被追加時，最多重試幾次。 */
+const TRIAL_RETRY_LIMIT = 5;
 
 /** 同一列、同一步、同一句原因，宣告也沒變：不算新冒出的。 */
 function sameFailure(previous: TrialFailure, failure: TrialFailure): boolean {
@@ -223,252 +232,282 @@ export async function changePlugin(
     warn,
   };
 
+  const trial = options.trial ?? trialMount;
+  const trialOptions = {
+    env,
+    cwd: options.cwd ?? process.cwd(),
+    ...(options.workspace !== undefined && { workspace: options.workspace }),
+  };
+  const quiet = { ...base, warn: () => {} };
+  const introducedFailures = async (body: JournalBody): Promise<{ rejection?: string }> => {
+    const failing = (
+      await trial(defaultSources({ ...quiet, pending: [body] }), trialOptions)
+    ).filter((failure) => !failure.pending);
+    if (failing.length === 0) return {};
+    const before = await trial(defaultSources(quiet), trialOptions);
+    const introduced = failing.filter(
+      (failure) => failure.required || !before.some((previous) => sameFailure(previous, failure)),
+    );
+    if (introduced.length === 0) return {};
+    return {
+      rejection: [
+        '這一筆寫下去之後，試掛時有新的列掛不上：',
+        ...introduced.map(
+          (failure) =>
+            `  ${JSON.stringify(failure.id)}（${failure.stage}${failure.required ? '，必掛' : ''}）：${failure.message}`,
+        ),
+        'serve 帶了 --patch 或 --workspace 的話，這裡也要帶同一組，試掛的結果才對得上 serve。',
+      ].join('\n'),
+    };
+  };
+
   let effect: ChangeEffect | undefined;
   let fields: string[] = [];
   let unchangedReason: string | undefined;
   // 驗不過的那一次：在鎖裡換成一筆 `rejected` 寫下去，寫完再拋這個錯（#1414）。
   let rejection: PluginChangeRejected | undefined;
+  // 上一次放開鎖時要試掛的那一筆，與當時最後一筆的序號。
+  let pending: { body: JournalBody; seq: number | undefined } | undefined;
+  // 那一筆的試掛結果：有新冒出的失敗時是拒收訊息。
+  let verdict: { body: JournalBody; seq: number | undefined; rejection?: string } | undefined;
 
-  const record = await appendJournalRecord(
-    path,
-    {
-      actor: options.actor ?? hostActor(env),
-      ...(options.now !== undefined && { now: options.now }),
-      warn: (message) => warnings.push(message),
-      check: (file) => assertPrivateFile(file, JOURNAL_FILE_ROLE),
-    },
-    async (records): Promise<JournalBody | undefined> => {
-      // 驗不過不在這裡拋：換成一筆 `rejected` 交給 `appendJournalRecord` 寫進去，寫完才在下面拋（#1414）。
-      // 原文進紀錄（0600，前後值本來就是明文）；要寫入的值一個位元組都不進來。
-      const reject = (message: string): JournalBody => {
-        rejection = new PluginChangeRejected(message);
-        return { op: 'rejected', requested: change.op, id: change.id, reason: message };
-      };
+  let record: JournalRecord | undefined;
+  for (let pass = 0; ; pass += 1) {
+    if (pending !== undefined) {
+      verdict = { ...pending, ...(await introducedFailures(pending.body)) };
+      pending = undefined;
+    }
+    notes.length = 0;
+    warnings.length = 0;
+    record = await appendJournalRecord(
+      path,
+      {
+        actor: options.actor ?? hostActor(env),
+        ...(options.now !== undefined && { now: options.now }),
+        warn: (message) => warnings.push(message),
+        check: (file) => assertPrivateFile(file, JOURNAL_FILE_ROLE),
+      },
+      async (records): Promise<JournalBody | undefined> => {
+        // 驗不過不在這裡拋：換成一筆 `rejected` 交給 `appendJournalRecord` 寫進去，寫完才在下面拋（#1414）。
+        // 原文進紀錄（0600，前後值本來就是明文）；要寫入的值一個位元組都不進來。
+        const reject = (message: string): JournalBody => {
+          rejection = new PluginChangeRejected(message);
+          return { op: 'rejected', requested: change.op, id: change.id, reason: message };
+        };
 
-      // 1. 這一列。用不含 `--patch` 的清單找：寫入口看的是「紀錄加出貨」。
-      // **找列這一步不檢查保護名單**（#1619）：紀錄裡留著一筆舊的 `disable`（那一列以前關得掉）時，這裡也拋的話連 `enable`
-      // 都寫不進去，沒有任何指令救得回來。這一步只拿 target 與 name；寫入之後的整份清單照樣在第 3 步完整驗過。
-      const own = defaultSources({ serve: true, env, warn });
-      const current = composeEntries(own, { allowDisabledProtected: true });
-      const target: ConfigEntry | undefined = current.find((entry) => entry.id === change.id);
-      if (target === undefined) {
-        return reject(
-          `沒有 id 為 ${JSON.stringify(change.id)} 的列。` +
-            '清單上有哪些 id，用 `--dump-config`（serve 的清單另含 cordis.serve.yml 那幾列）。',
-        );
-      }
-      const name = target.name;
-      const override = journalOverrideOf(records, change.id, name);
-
-      // 2. 這一筆長什麼樣、有沒有改變任何東西。
-      let body: JournalBody | undefined;
-      let inheritedConfig: Record<string, unknown> | undefined;
-      const inheritedWithout = (): Record<string, unknown> => {
-        if (inheritedConfig !== undefined) return inheritedConfig;
-        // 同第 1 步：只拿繼承值，保護名單交給第 3 步（不然紀錄裡留著舊 `disable` 時，這裡拋的錯不會記成 `rejected`）。
-        const without = composeEntries(
-          defaultSources({
-            serve: true,
-            env,
-            warn,
-            pending: [{ op: 'config-reset', id: change.id, name, before: null, after: null }],
-          }),
-          { allowDisabledProtected: true },
-        ).find((entry) => entry.id === change.id);
-        inheritedConfig = without?.config ?? {};
-        return inheritedConfig;
-      };
-
-      switch (change.op) {
-        case 'disable':
-        case 'enable': {
-          const want = change.op === 'disable';
-          if (override?.disabled === want) {
-            unchangedReason = `紀錄裡這一列已經是${want ? '停用' : '啟用'}，沒有寫。`;
-            return undefined;
-          }
-          body =
-            change.op === 'disable'
-              ? {
-                  op: 'disable',
-                  id: change.id,
-                  name,
-                  before: target.disabled === true,
-                  after: true,
-                }
-              : {
-                  op: 'enable',
-                  id: change.id,
-                  name,
-                  before: target.disabled === true,
-                  after: false,
-                };
-          fields = ['disabled'];
-          break;
+        // 1. 這一列。用不含 `--patch` 的清單找：寫入口看的是「紀錄加出貨」。
+        // **找列這一步不檢查保護名單**（#1619）：紀錄裡留著一筆舊的 `disable`（那一列以前關得掉）時，這裡也拋的話連 `enable`
+        // 都寫不進去，沒有任何指令救得回來。這一步只拿 target 與 name；寫入之後的整份清單照樣在第 3 步完整驗過。
+        const own = defaultSources({ serve: true, env, warn });
+        const current = composeEntries(own, { allowDisabledProtected: true });
+        const target: ConfigEntry | undefined = current.find((entry) => entry.id === change.id);
+        if (target === undefined) {
+          return reject(
+            `沒有 id 為 ${JSON.stringify(change.id)} 的列。` +
+              '清單上有哪些 id，用 `--dump-config`（serve 的清單另含 cordis.serve.yml 那幾列）。',
+          );
         }
-        case 'config-set': {
-          const inherited = inheritedWithout();
-          if (isDeepStrictEqual(change.config, inherited)) {
-            // 照 dsh `config-editor/src/index.ts:119-125`：新值等於繼承值，就是拿掉那一列的覆蓋。
-            if (override?.config === undefined) {
-              unchangedReason = '新值等於繼承值，而紀錄裡這一列本來就沒有設定覆蓋，沒有寫。';
+        const name = target.name;
+        const override = journalOverrideOf(records, change.id, name);
+
+        // 2. 這一筆長什麼樣、有沒有改變任何東西。
+        let body: JournalBody | undefined;
+        let inheritedConfig: Record<string, unknown> | undefined;
+        const inheritedWithout = (): Record<string, unknown> => {
+          if (inheritedConfig !== undefined) return inheritedConfig;
+          // 同第 1 步：只拿繼承值，保護名單交給第 3 步（不然紀錄裡留著舊 `disable` 時，這裡拋的錯不會記成 `rejected`）。
+          const without = composeEntries(
+            defaultSources({
+              serve: true,
+              env,
+              warn,
+              pending: [{ op: 'config-reset', id: change.id, name, before: null, after: null }],
+            }),
+            { allowDisabledProtected: true },
+          ).find((entry) => entry.id === change.id);
+          inheritedConfig = without?.config ?? {};
+          return inheritedConfig;
+        };
+
+        switch (change.op) {
+          case 'disable':
+          case 'enable': {
+            const want = change.op === 'disable';
+            if (override?.disabled === want) {
+              unchangedReason = `紀錄裡這一列已經是${want ? '停用' : '啟用'}，沒有寫。`;
               return undefined;
             }
+            body =
+              change.op === 'disable'
+                ? {
+                    op: 'disable',
+                    id: change.id,
+                    name,
+                    before: target.disabled === true,
+                    after: true,
+                  }
+                : {
+                    op: 'enable',
+                    id: change.id,
+                    name,
+                    before: target.disabled === true,
+                    after: false,
+                  };
+            fields = ['disabled'];
+            break;
+          }
+          case 'config-set': {
+            const inherited = inheritedWithout();
+            if (isDeepStrictEqual(change.config, inherited)) {
+              // 照 dsh `config-editor/src/index.ts:119-125`：新值等於繼承值，就是拿掉那一列的覆蓋。
+              if (override?.config === undefined) {
+                unchangedReason = '新值等於繼承值，而紀錄裡這一列本來就沒有設定覆蓋，沒有寫。';
+                return undefined;
+              }
+              body = {
+                op: 'config-reset',
+                id: change.id,
+                name,
+                before: override.config,
+                after: inherited,
+                requested: 'config-set',
+              };
+              fields = changedKeys(override.config, inherited);
+              notes.push('新值等於繼承值，已記成「恢復成繼承值」。');
+            } else {
+              if (
+                override?.config !== undefined &&
+                isDeepStrictEqual(override.config, change.config)
+              ) {
+                unchangedReason = '新值與紀錄裡這一列的設定相同，沒有寫。';
+                return undefined;
+              }
+              body = {
+                op: 'config-set',
+                id: change.id,
+                name,
+                before: target.config ?? null,
+                after: change.config,
+              };
+              fields = changedKeys(target.config ?? null, change.config);
+            }
+            break;
+          }
+          case 'config-reset': {
+            if (override?.config === undefined) {
+              unchangedReason = '紀錄裡這一列沒有設定覆蓋，已經是繼承值，沒有寫。';
+              return undefined;
+            }
+            const inherited = inheritedWithout();
             body = {
               op: 'config-reset',
               id: change.id,
               name,
               before: override.config,
               after: inherited,
-              requested: 'config-set',
             };
             fields = changedKeys(override.config, inherited);
-            notes.push('新值等於繼承值，已記成「恢復成繼承值」。');
-          } else {
-            if (
-              override?.config !== undefined &&
-              isDeepStrictEqual(override.config, change.config)
-            ) {
-              unchangedReason = '新值與紀錄裡這一列的設定相同，沒有寫。';
-              return undefined;
-            }
-            body = {
-              op: 'config-set',
-              id: change.id,
-              name,
-              before: target.config ?? null,
-              after: change.config,
-            };
-            fields = changedKeys(target.config ?? null, change.config);
+            break;
           }
-          break;
         }
-        case 'config-reset': {
-          if (override?.config === undefined) {
-            unchangedReason = '紀錄裡這一列沒有設定覆蓋，已經是繼承值，沒有寫。';
-            return undefined;
-          }
-          const inherited = inheritedWithout();
-          body = {
-            op: 'config-reset',
-            id: change.id,
-            name,
-            before: override.config,
-            after: inherited,
-          };
-          fields = changedKeys(override.config, inherited);
-          break;
-        }
-      }
 
-      // 3. 寫入前驗證：整份疊完（含 `--patch`）、驗形狀與關不掉的名單、那一列載得進來。
-      let loaded;
-      try {
-        loaded = await loadPluginConfig(defaultSources({ ...base, pending: [body] }));
-      } catch (error) {
-        if (error instanceof PluginConfigError) return reject(error.message);
-        throw error;
-      }
-      const drop = loaded.dropped.find((candidate) => candidate.id === change.id);
-      if (drop !== undefined) {
-        return reject(
-          `這一筆寫下去之後，${JSON.stringify(change.id)} 會在「${drop.stage}」這一步掉：${drop.message}`,
-        );
-      }
-      const composed = loaded.entries.find((entry) => entry.id === change.id);
-      if (composed === undefined) {
-        return reject(`疊完之後找不到 ${JSON.stringify(change.id)}，這一筆不會有作用。`);
-      }
-      // 停用的列不經過 `loadPluginConfig` 的設定驗證：新設定要照樣驗，不然寫進去的是下次啟用才爆的東西。
-      let pluginName: string | undefined;
-      try {
-        const entry = await resolveEntryModule({ ...composed, disabled: false });
-        pluginName = entry.plugin.name;
-        if (body.op === 'config-set') {
-          const [resolution] = resolveEntriesPerEntry([entry]);
-          if (resolution?.configError !== undefined) {
+        // 3. 寫入前驗證：整份疊完（含 `--patch`）、驗形狀與關不掉的名單、那一列載得進來。
+        let loaded;
+        try {
+          loaded = await loadPluginConfig(defaultSources({ ...base, pending: [body] }));
+        } catch (error) {
+          if (error instanceof PluginConfigError) return reject(error.message);
+          throw error;
+        }
+        const drop = loaded.dropped.find((candidate) => candidate.id === change.id);
+        if (drop !== undefined) {
+          return reject(
+            `這一筆寫下去之後，${JSON.stringify(change.id)} 會在「${drop.stage}」這一步掉：${drop.message}`,
+          );
+        }
+        const composed = loaded.entries.find((entry) => entry.id === change.id);
+        if (composed === undefined) {
+          return reject(`疊完之後找不到 ${JSON.stringify(change.id)}，這一筆不會有作用。`);
+        }
+        // 停用的列不經過 `loadPluginConfig` 的設定驗證：新設定要照樣驗，不然寫進去的是下次啟用才爆的東西。
+        let pluginName: string | undefined;
+        try {
+          const entry = await resolveEntryModule({ ...composed, disabled: false });
+          pluginName = entry.plugin.name;
+          if (body.op === 'config-set') {
+            const [resolution] = resolveEntriesPerEntry([entry]);
+            if (resolution?.configError !== undefined) {
+              return reject(
+                `新設定驗不過 ${JSON.stringify(change.id)} 的格式：${resolution.configError.message}`,
+              );
+            }
+          }
+        } catch (error) {
+          if (error instanceof PluginConfigError) {
+            if (body.op === 'config-set' || body.op === 'enable') return reject(error.message);
+          } else {
+            throw error;
+          }
+        }
+
+        // 4. 被更高層蓋掉。
+        const coveredBy = loaded.layers.overlays
+          .filter((overlay) => overlay.rows.includes(change.id))
+          .map((overlay) => overlay.file);
+        let overridden = false;
+        if (body.op === 'disable' || body.op === 'enable') {
+          overridden = (composed.disabled === true) !== (body.op === 'disable');
+        } else {
+          const expected = body.op === 'config-set' ? body.after : inheritedWithout();
+          if (!isDeepStrictEqual(composed.config ?? {}, expected)) {
             return reject(
-              `新設定驗不過 ${JSON.stringify(change.id)} 的格式：${resolution.configError.message}`,
+              `${JSON.stringify(change.id)} 的設定被 --patch 蓋掉了` +
+                `${coveredBy.length > 0 ? `（${coveredBy.join('、')}）` : ''}，` +
+                '寫進紀錄也不會生效，所以沒寫（照 dsh：config-editor/src/index.ts:140-143）。要改就改那個 --patch 檔。',
             );
           }
         }
-      } catch (error) {
-        if (error instanceof PluginConfigError) {
-          if (body.op === 'config-set' || body.op === 'enable') return reject(error.message);
-        } else {
-          throw error;
-        }
-      }
 
-      // 4. 被更高層蓋掉。
-      const coveredBy = loaded.layers.overlays
-        .filter((overlay) => overlay.rows.includes(change.id))
-        .map((overlay) => overlay.file);
-      let overridden = false;
-      if (body.op === 'disable' || body.op === 'enable') {
-        overridden = (composed.disabled === true) !== (body.op === 'disable');
-      } else {
-        const expected = body.op === 'config-set' ? body.after : inheritedWithout();
-        if (!isDeepStrictEqual(composed.config ?? {}, expected)) {
-          return reject(
-            `${JSON.stringify(change.id)} 的設定被 --patch 蓋掉了` +
-              `${coveredBy.length > 0 ? `（${coveredBy.join('、')}）` : ''}，` +
-              '寫進紀錄也不會生效，所以沒寫（照 dsh：config-editor/src/index.ts:140-143）。要改就改那個 --patch 檔。',
+        // 5. 試掛：寫下去之後有沒有新冒出的失敗。試掛在鎖外，這裡只認同一份紀錄、同一筆的結果。
+        const seq = records.at(-1)?.seq;
+        if (
+          verdict === undefined ||
+          verdict.seq !== seq ||
+          !isDeepStrictEqual(verdict.body, body)
+        ) {
+          if (pass > TRIAL_RETRY_LIMIT) {
+            return reject(
+              `試掛期間變更紀錄一直被別人追加（重試 ${TRIAL_RETRY_LIMIT} 次），有人同時在改插件設定。這一筆沒寫；等對方改完，照新的清單重下一次。`,
+            );
+          }
+          pending = { body, seq };
+          return undefined;
+        }
+        if (verdict.rejection !== undefined) return reject(verdict.rejection);
+
+        // 6. 什麼時候生效。
+        const kind = classOfRow(change.id, pluginName);
+        const needsRestart =
+          kind === 'startup-read' ||
+          (kind === 'mount-restart' && (body.op === 'disable' || body.op === 'enable'));
+        effect = overridden ? 'overridden' : needsRestart ? 'restart' : 'next-thread';
+        if (overridden) {
+          warnings.push(
+            `${JSON.stringify(change.id)} 的 disabled 被 --patch 蓋掉${coveredBy.length > 0 ? `（${coveredBy.join('、')}）` : ''}：` +
+              '紀錄照寫，但清單上的效果不變。',
           );
         }
-      }
-
-      // 5. 試掛：寫下去之後有沒有新冒出的失敗。
-      const trialOptions = {
-        env,
-        cwd: options.cwd ?? process.cwd(),
-        ...(options.workspace !== undefined && { workspace: options.workspace }),
-      };
-      const quiet = { ...base, warn: () => {} };
-      const failing = (
-        await trialMount(defaultSources({ ...quiet, pending: [body] }), trialOptions)
-      ).filter((failure) => !failure.pending);
-      if (failing.length > 0) {
-        const before = await trialMount(defaultSources(quiet), trialOptions);
-        const introduced = failing.filter(
-          (failure) =>
-            failure.required || !before.some((previous) => sameFailure(previous, failure)),
-        );
-        if (introduced.length > 0) {
-          return reject(
-            [
-              '這一筆寫下去之後，試掛時有新的列掛不上：',
-              ...introduced.map(
-                (failure) =>
-                  `  ${JSON.stringify(failure.id)}（${failure.stage}${failure.required ? '，必掛' : ''}）：${failure.message}`,
-              ),
-              'serve 帶了 --patch 或 --workspace 的話，這裡也要帶同一組，試掛的結果才對得上 serve。',
-            ].join('\n'),
+        if (body.op === 'disable' && WORKSPACE_REQUIRED_ROWS.has(change.id)) {
+          warnings.push(
+            `停用 ${change.id}：serve 帶 --workspace 時，之後每條新 thread 都會建不起來` +
+              '（assembly-root.ts:803-818）。照寫了；要救回來就啟用它。',
           );
         }
-      }
-
-      // 6. 什麼時候生效。
-      const kind = classOfRow(change.id, pluginName);
-      const needsRestart =
-        kind === 'startup-read' ||
-        (kind === 'mount-restart' && (body.op === 'disable' || body.op === 'enable'));
-      effect = overridden ? 'overridden' : needsRestart ? 'restart' : 'next-thread';
-      if (overridden) {
-        warnings.push(
-          `${JSON.stringify(change.id)} 的 disabled 被 --patch 蓋掉${coveredBy.length > 0 ? `（${coveredBy.join('、')}）` : ''}：` +
-            '紀錄照寫，但清單上的效果不變。',
-        );
-      }
-      if (body.op === 'disable' && WORKSPACE_REQUIRED_ROWS.has(change.id)) {
-        warnings.push(
-          `停用 ${change.id}：serve 帶 --workspace 時，之後每條新 thread 都會建不起來` +
-            '（assembly-root.ts:803-818）。照寫了；要救回來就啟用它。',
-        );
-      }
-      return body;
-    },
-  );
+        return body;
+      },
+    );
+    if (pending === undefined) break;
+  }
   if (rejection !== undefined) {
     if (record !== undefined) rejection.seq = record.seq;
     throw rejection;
@@ -481,7 +520,7 @@ export async function changePlugin(
         '（sudo 會改環境，NEXUS_AGENT_HOME 沒帶過去的話這裡就是預設位置）。紀錄寫了，但 serve 讀不讀得到這一份，請自己確認。',
     );
   }
-  warnings.push(...collected.filter((message) => !warnings.includes(message)));
+  for (const message of collected) if (!warnings.includes(message)) warnings.push(message);
 
   if (record === undefined) {
     return {

@@ -3,7 +3,7 @@
  * 原本就壞、這次仍然壞的列不擋無關的修改。樹上的列在 `apply` 掉那一條在 `plugin-tree-new-failure.test.ts`（要起 serve 對照）。
  *
  * 量具：home 底下一顆相容層的插件 `probe`，設定的 `ok` 不是 `true` 就在 `apply` 拋；`ws-probe` 沒有 `--workspace` 就在 `apply` 拋；
- * 一顆樹上的插件 `waiting`，要一個沒人提供的服務，所以一直缺服務。
+ * 一顆樹上的插件 `waiting`，要一個沒人提供的服務，所以一直缺服務。試掛期間別人追加紀錄，用注入的 `trial` 在試掛裡追加，不靠計時。
  */
 
 import { chmodSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -13,10 +13,13 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { HARNESS_HOME_ENV } from './harness-home.js';
+import { composeEntries, defaultSources } from './plugin-config.js';
 import { changePlugin, PluginChangeRejected } from './plugin-change.js';
 import type { PluginChange, PluginChangeOptions } from './plugin-change.js';
 import { appendRaw, journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
 import { readJournal } from './plugin-journal.js';
+import type { JournalBody } from './plugin-journal.js';
+import { trialMount } from './plugin-trial.js';
 
 const temporary: string[] = [];
 
@@ -156,5 +159,83 @@ describe('--workspace', () => {
     const result = await changePlugin(change, { env, workspace });
     expect(result.outcome).toBe('recorded');
     expect(readdirSync(workspace)).toEqual([]);
+  });
+});
+
+describe('試掛在鎖外跑，進鎖再核對紀錄', () => {
+  const nameOf = (env: NodeJS.ProcessEnv, id: string): string => {
+    const entry = composeEntries(defaultSources({ serve: true, env })).find(
+      (candidate) => candidate.id === id,
+    );
+    if (entry === undefined) throw new Error(`清單上沒有 ${id}`);
+    return entry.name;
+  };
+
+  /** 照常試掛；前 `times` 次試掛期間，別人追加 `bodies()` 那一筆。 */
+  function racing(dir: string, times: number, bodies: () => JournalBody) {
+    let calls = 0;
+    const trial: typeof trialMount = async (sources, options) => {
+      calls += 1;
+      const failures = await trialMount(sources, options);
+      if (calls <= times) await appendRaw(dir, bodies());
+      return failures;
+    };
+    return { trial, calls: () => calls };
+  }
+
+  it('試掛期間被追加一次：照新的紀錄重試一次，照收', async () => {
+    const { dir, env } = home(probeRow(true));
+    const disableTodo = (): JournalBody => ({
+      op: 'disable',
+      id: 'todo',
+      name: nameOf(env, 'todo'),
+      before: false,
+      after: true,
+    });
+    const race = racing(dir, 1, disableTodo);
+    const result = await changePlugin(
+      { op: 'config-set', id: 'probe', config: { ok: true, n: 1 } },
+      { env, trial: race.trial },
+    );
+    expect(result.outcome).toBe('recorded');
+    expect(race.calls()).toBe(2);
+    expect(opsOf(dir)).toEqual(['patch', 'disable', 'config-set']);
+  });
+
+  it('試掛期間別人把那一列改壞：重試時看到，拒收', async () => {
+    const { dir, env } = home(
+      `    - id: probe\n      name: './probe.ts'\n      disabled: true\n      config:\n        ok: true\n`,
+    );
+    const breakProbe = (): JournalBody => ({
+      op: 'config-set',
+      id: 'probe',
+      name: nameOf(env, 'probe'),
+      before: null,
+      after: { ok: false },
+    });
+    const race = racing(dir, 1, breakProbe);
+    const error = await rejected({ op: 'enable', id: 'probe' }, { env, trial: race.trial });
+    expect(error.message).toContain(REASON);
+    expect(opsOf(dir)).toEqual(['patch', 'config-set', 'rejected']);
+  });
+
+  it('每次試掛都被追加，超過重試上限：拒收，請人重下', async () => {
+    const { dir, env } = home(probeRow(true));
+    const disableTodo = (): JournalBody => ({
+      op: 'disable',
+      id: 'todo',
+      name: nameOf(env, 'todo'),
+      before: false,
+      after: true,
+    });
+    const race = racing(dir, Number.POSITIVE_INFINITY, disableTodo);
+    const error = await rejected(
+      { op: 'config-set', id: 'probe', config: { ok: true, n: 1 } },
+      { env, trial: race.trial },
+    );
+    expect(error.message).toContain('有人同時在改');
+    expect(error.message).toContain('重下');
+    expect(race.calls()).toBe(6);
+    expect(opsOf(dir)).toEqual(['patch', ...Array<string>(6).fill('disable'), 'rejected']);
   });
 });
