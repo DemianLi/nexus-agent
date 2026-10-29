@@ -3,6 +3,8 @@
  * 字面量釘住：已出貨的資料就是這幾個檔名，寫方目前的佈局換掉時它不能跟著變。
  */
 
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -99,8 +101,47 @@ describe('encodeSegment', () => {
     expect(() => encodeSegment('')).toThrow();
   });
 
-  it('sessionDirectoryName 就是 encodeSegment(id)', () => {
+  it('任何碼元單獨、前面接 a 或後面接 a，都編不出單獨的 ~，也編不出結尾的 ~', () => {
+    const offending: string[] = [];
+    for (let code = 0; code <= 0xffff; code += 1) {
+      const char = String.fromCharCode(code);
+      for (const raw of [char, `a${char}`, `${char}a`]) {
+        const encoded = encodeSegment(raw);
+        if (encoded === '~' || encoded.endsWith('~')) offending.push(raw);
+      }
+    }
+    expect(offending).toEqual([]);
+  });
+});
+
+describe('sessionDirectoryName', () => {
+  it('編出來不超過 120 字元就是 encodeSegment(id)', () => {
     expect(sessionDirectoryName('t1/bg-1')).toBe(encodeSegment('t1/bg-1'));
+    const atLimit = 'a'.repeat(120);
+    expect(sessionDirectoryName(atLimit)).toBe(atLimit);
+  });
+
+  it('編出來超過 120 字元取前 96 字元、接 -、再接完整 id 的 SHA-256 前 12 位', () => {
+    const id = `${'a'.repeat(120)}/${'中'.repeat(40)}`;
+    const digest = createHash('sha256').update(id).digest('hex').slice(0, 12);
+    expect(sessionDirectoryName(id)).toBe(`${'a'.repeat(96)}-${digest}`);
+    expect(sessionDirectoryName('a'.repeat(121))).toHaveLength(96 + 1 + 12);
+  });
+
+  it('截短後前綴一樣的兩個 id 靠摘要分開；只差大小寫的兩個長 id 也分開', () => {
+    const prefix = 'p'.repeat(130);
+    expect(sessionDirectoryName(`${prefix}x`)).not.toBe(sessionDirectoryName(`${prefix}y`));
+    expect(sessionDirectoryName(`${prefix}X`).toLowerCase()).not.toBe(
+      sessionDirectoryName(`${prefix}x`).toLowerCase(),
+    );
+  });
+
+  it('最壞的碼元也進得去 255 位元組的單段上限', () => {
+    expect(Buffer.byteLength(sessionDirectoryName('中'.repeat(1000)))).toBeLessThanOrEqual(255);
+  });
+
+  it('空 id 對到 ~', () => {
+    expect(sessionDirectoryName('')).toBe('~');
   });
 });
 

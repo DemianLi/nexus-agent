@@ -80,6 +80,7 @@ import {
   hasForkButton,
 } from '@/lib/thread-fork';
 import { RetryNotice } from '@/components/retry-notice';
+import { useFocusHandoff } from '@/hooks/use-focus-handoff';
 import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
 import { useStableNames } from '@/hooks/use-stable-names';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
@@ -699,6 +700,12 @@ export function Transcript({
   const autoLoad = useEarlierAutoLoad(earlier);
   const viewport = useRef<HTMLDivElement>(null);
   useScrollButtonClearance(viewport);
+  // 按往前翻讀完（#2009）：最後一頁的鈕收掉、焦點掉了，就落在對話的 viewport（region「對話訊息」）；鈕還在就不動。
+  const handoff = useFocusHandoff<true>();
+  const loadingEarlier = earlier?.loading === true;
+  useEffect(() => {
+    if (!loadingEarlier && handoff.pending() !== undefined) handoff.land(viewport.current);
+  }, [loadingEarlier, handoff]);
 
   return (
     <MessageScrollerProvider autoScroll>
@@ -711,7 +718,9 @@ export function Transcript({
           {...autoLoad}
         >
           {/* 在 content 外面，prepend 保位才動得了手（見 `earlier-pager.tsx`）。 */}
-          {earlier?.hasMore === true && <EarlierPager earlier={earlier} />}
+          {earlier?.hasMore === true && (
+            <EarlierPager earlier={earlier} onArm={(button) => handoff.arm(true, button)} />
+          )}
           <MessageScrollerContent
             aria-live="off"
             className="mx-auto w-full max-w-2xl gap-4 px-6 pt-4 pb-10"

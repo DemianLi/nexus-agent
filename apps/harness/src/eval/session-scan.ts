@@ -94,6 +94,7 @@ import {
   resolveRepeatReminderSettings,
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
+  SessionNotFoundError,
   turnStartSource,
 } from '@nexus/core';
 import type {
@@ -403,7 +404,8 @@ function headerOf({ header, storedFormatVersion }: SessionEntry): SessionLogHead
  * `session.v<N>.jsonl` 是舊兩檔的日誌，不算世代檔）；讀不出一份會話的目錄（沒有世代檔，或最高世代是空檔、第一行還沒
  * 換行）才往下走。不走 `SessionStore.list`：
  * 它不讀比這一版新的，也不說讀不懂的原因（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
- * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，跳過。
+ * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，與單檔佈局挑定的世代檔
+ * 在讀本文之前不見了的，跳過。
  *
  * @param roots - 會話根、run 目錄或 projectKey 那一格，都行。
  * @returns 讀得懂的，與讀得到但讀不懂的（壞行、缺號、header 壞了）。後者不擋其餘的。
@@ -450,7 +452,13 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
       }
       const file = session.logPath;
       const header = headerOf(session);
-      const body = await session.readBody();
+      let body: Buffer;
+      try {
+        body = await session.readBody();
+      } catch (error: unknown) {
+        if (error instanceof SessionNotFoundError) continue;
+        throw error;
+      }
       try {
         logs.push({
           file,
