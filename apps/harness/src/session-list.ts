@@ -66,6 +66,7 @@ import {
   readColdSession,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
   SessionNotFoundError,
 } from '@nexus/core';
 import type {
@@ -225,6 +226,16 @@ export async function listStoredThreads(
       events = await (await store.open(header.id, 'read')).read({ salvage: true });
     } catch (error: unknown) {
       if (error instanceof SessionNotFoundError) continue;
+      // 太大、這個行程讀不進來（#2115）：不是壞了，照樣列，只是不掃標題——打開時才講為什麼開不了。
+      if (error instanceof SessionLogTooLargeError) {
+        items.push({
+          threadId: header.id,
+          updatedAt: header.createdAt,
+          blank: false,
+          ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
+        });
+        continue;
+      }
       if (
         error instanceof SessionCorruptionError ||
         error instanceof SessionFormatUnsupportedError

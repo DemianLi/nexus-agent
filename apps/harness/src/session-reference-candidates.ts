@@ -32,6 +32,7 @@ import {
   readColdSession,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
   SessionNotFoundError,
 } from '@nexus/core';
 import type {
@@ -313,7 +314,9 @@ export class SessionReferenceCandidates {
       if (
         error instanceof SessionNotFoundError ||
         error instanceof SessionCorruptionError ||
-        error instanceof SessionFormatUnsupportedError
+        error instanceof SessionFormatUnsupportedError ||
+        // 太大讀不進來（#2115）：引用了也帶不進去，不列。
+        error instanceof SessionLogTooLargeError
       ) {
         return undefined;
       }

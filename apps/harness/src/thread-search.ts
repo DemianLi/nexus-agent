@@ -97,6 +97,7 @@ import {
   replayConversation,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
   SessionNotFoundError,
 } from '@nexus/core';
 import type {
@@ -765,7 +766,9 @@ async function readForSearch(
     if (
       error instanceof SessionNotFoundError ||
       error instanceof SessionCorruptionError ||
-      error instanceof SessionFormatUnsupportedError
+      error instanceof SessionFormatUnsupportedError ||
+      // 太大讀不進來（#2115）：搜不到它的內容，同壞檔，不讓一條拖垮整次搜尋。
+      error instanceof SessionLogTooLargeError
     ) {
       return undefined;
     }

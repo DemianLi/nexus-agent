@@ -1092,6 +1092,44 @@ export class SessionHandleClosedError extends Error {
   }
 }
 
+/**
+ * 這份會話的日誌太大，這個行程放不下，所以**在讀之前就不讀**（[#2115](https://github.com/DemianLi/nexus-agent/issues/2115)）。
+ *
+ * 不是壞檔，也不是讀不懂：給這個行程更多記憶體，同一份就讀得回來。分兩種：
+ * - `too-large`：這一份單獨就超過行程能收的上限，什麼時候都不收；
+ * - `busy`：這一份放得下，但別的會話正佔著那份額度，等它們收掉（thread 閒置逐出、關掉）再試。
+ *
+ * 有自己的型別，是讓列表、搜尋、引用候選那幾處分得出「太大」與「壞了」：太大的照樣列得出來，只是開不了。
+ * 訊息不帶路徑（理由同 {@link SessionFormatUnsupportedError} 的 `location`：會原樣送到瀏覽器）。
+ */
+export class SessionLogTooLargeError extends Error {
+  override readonly name = 'SessionLogTooLargeError';
+
+  /**
+   * @param id - 哪一份會話。
+   * @param reason - 見類別說明。
+   * @param logBytes - 這份日誌本文的位元組數。
+   * @param limitBytes - 行程能收的日誌位元組上限（所有開著的會話合計）。
+   * @param heldBytes - 別的會話已經佔掉的位元組數（`busy` 才有意義）。
+   */
+  constructor(
+    readonly id: string,
+    readonly reason: 'too-large' | 'busy',
+    readonly logBytes: number,
+    readonly limitBytes: number,
+    readonly heldBytes: number,
+  ) {
+    const mib = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+    super(
+      reason === 'too-large'
+        ? `會話 "${id}" 的日誌有 ${mib(logBytes)}，超過這個行程能收的 ${mib(limitBytes)}，沒有讀它（讀進來會把整個行程的記憶體用完）。` +
+            '檔案沒有壞。要打開它，請管理者給這個行程更多記憶體（容器或 systemd 的記憶體上限，與跟著它的 --max-old-space-size）後重啟。'
+        : `會話 "${id}" 的日誌有 ${mib(logBytes)}；別的會話已經佔掉 ${mib(heldBytes)}，上限 ${mib(limitBytes)}，這一份現在放不下，沒有讀它。` +
+            '檔案沒有壞。等其他開著的大會話關掉或閒置逐出後再試，或請管理者給這個行程更多記憶體後重啟。',
+    );
+  }
+}
+
 /** 存檔讀得到但讀不懂：header 或中段某一行不是這一版寫得出來的形狀、或 `seq` 不連續。 */
 export class SessionCorruptionError extends Error {
   override readonly name = 'SessionCorruptionError';

@@ -182,6 +182,8 @@ import type {
 } from '@nexus/core';
 import { acquireSessionLease } from './session-lease.js';
 import type { LeaseUnavailable, SessionWriteLease, TryLock } from './session-lease.js';
+import { processSessionLogBudget } from './session-log-budget.js';
+import type { SessionLogBudget, SessionLogReservation } from './session-log-budget.js';
 import {
   assertStoredEventData,
   assertStoredHeaderFields,
@@ -283,6 +285,8 @@ interface ResumePoint {
   readonly headerStale?: true;
   /** 讀之前就拿到的租約；這個平台拿不到就是 `undefined`。 */
   readonly lease: SessionWriteLease | undefined;
+  /** 這份日誌在位元組額度上佔的那一筆（#2115），關把手時跟租約一起還。 */
+  readonly reservation: SessionLogReservation;
 }
 
 /**
@@ -330,6 +334,8 @@ interface LeaseContext {
    * 兩個 `list()` 同時跑，加起來也最多 `listConcurrency` 份在讀。
    */
   readonly listLimit: ListLimit;
+  /** 會話日誌的位元組額度（#2115，見 {@link JsonlSessionStoreOptions.logBudget}）。 */
+  readonly logBudget: SessionLogBudget;
 }
 
 /**
@@ -650,6 +656,8 @@ class JsonlStoredSession implements StoredSession {
     } catch (error: unknown) {
       failures.push(error);
     }
+    // 額度跟租約一樣，不論收尾哪一步失敗都還：把手關了，這份的事件不再由它握著。
+    this.#resume?.reservation.release();
     if (failures.length > 1) {
       throw new AggregateError(
         failures,
@@ -1310,6 +1318,16 @@ async function readBodySnapshot(
   }
 }
 
+/** 日誌本文現在有幾個位元組（位元組額度要的，#2115）。不在就是 0，同 {@link readBodySnapshot}。 */
+async function logBytesOf(logPath: string, fs: StableReadFileSystem): Promise<number> {
+  try {
+    return Number((await fs.stat(logPath)).size);
+  } catch (error: unknown) {
+    if (isNotFound(error)) return 0;
+    throw error;
+  }
+}
+
 /** {@link readSessionEntry} 的選項。 */
 export interface ReadSessionEntryOptions extends ParseHeaderOptions {
   /** 讀 header 與日誌本文用的檔案系統。**只給測試換**，同 {@link readStableSnapshot}。 */
@@ -1551,7 +1569,7 @@ async function openStoredSessionForRead(
   id: string,
   context: LeaseContext,
 ): Promise<ReadonlyStoredSession> {
-  const { catalog, fs, coldLogs } = context;
+  const { catalog, fs, coldLogs, logBudget } = context;
   const files = sessionFilenames(safeBaseName(id));
   const headerPath = join(directory, files.header);
   const location = locate(directory, files);
@@ -1574,7 +1592,14 @@ async function openStoredSessionForRead(
         );
         if (memoized !== undefined) return memoized.events;
       }
-      const { bytes: body, identity } = await readBodySnapshot(logPath, fs);
+      // 讀之前先佔額度（#2115），解析完就還：放不下的連 `readFile` 都不做。
+      const reservation = await logBudget.reserveForRead(id, await logBytesOf(logPath, fs));
+      const { bytes: body, identity } = await readBodySnapshot(logPath, fs).catch(
+        (error: unknown) => {
+          reservation.release();
+          throw error;
+        },
+      );
       try {
         // 開了 salvage 的先走 strict、失敗才撿回：salvage 的語意（已登記的偏離）維持今天的樣子，不被 recoverable 搶先丟掉。
         const { events, validBytes } = parseJsonlSessionBody(id, body, {
@@ -1600,6 +1625,8 @@ async function openStoredSessionForRead(
           return salvageJsonlSessionBody(id, body, storedFormatVersion, location);
         }
         throw error;
+      } finally {
+        reservation.release();
       }
     },
   };
@@ -1632,7 +1659,14 @@ async function resumeStoredSession(
   // **在讀之前拿**，照 dsh：別人握著的話，該在什麼都還沒讀之前就講；也不讓兩個續接者同時換版。
   // header 換版是原子取代（#1509），唯讀的讀方不拿租約也只會看到舊的或新的完整一份。
   const lease = await leaseFor(context, join(directory, files.lock), id);
+  let reservation: SessionLogReservation | undefined;
   try {
+    // **位元組額度（#2115）在讀之前佔**：放不下就拋，一個位元組都不讀。冷讀快取命中也佔——事件同樣要握在記憶體裡，
+    // 佔到把手關掉為止。
+    reservation = context.logBudget.holdForSession(
+      id,
+      await logBytesOf(join(directory, files.log), fs),
+    );
     // 冷讀快取（#1559 N0625）：**租約拿到之後**才比兩個檔的 revision——比對之後到第一次寫之前，別人寫不進來。
     // 對上了就省掉 readFile 與解析；對不上照常讀。
     const memoized = coldLogs.get(
@@ -1670,10 +1704,12 @@ async function resumeStoredSession(
         ...(storedFormatVersion !== SESSION_LOG_FORMAT_VERSION && { headerStale: true as const }),
         ...(droppedBytes > 0 && { torn: { truncateTo: validBytes, droppedBytes } }),
         lease,
+        reservation,
       }),
     };
   } catch (error: unknown) {
-    // 讀壞了就沒有把手可關，租約得在這裡放。
+    // 讀壞了就沒有把手可關，租約與額度得在這裡放。
+    reservation?.release();
     await lease?.release();
     throw error;
   }
@@ -1744,6 +1780,11 @@ export interface JsonlSessionStoreOptions {
    * 製造讀檔失敗。寫入不經過它。
    */
   readonly fs?: StableReadFileSystem;
+  /**
+   * 會話日誌的位元組額度（#2115）：續接佔到把手關掉、唯讀讀完就還，放不下的在讀之前拋
+   * {@link @nexus/core!SessionLogTooLargeError}。省略即這個行程共用的那一本（{@link processSessionLogBudget}）；測試換小的。
+   */
+  readonly logBudget?: SessionLogBudget;
 }
 
 /**
@@ -1816,6 +1857,7 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
     pending: new Set(),
     coldLogs: new ColdLogMemo(),
     listLimit: createListLimit(listConcurrency),
+    logBudget: options.logBudget ?? processSessionLogBudget(),
     unavailable: (outcome) => {
       if (warned) return;
       warned = true;
