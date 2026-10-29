@@ -324,7 +324,7 @@ export const APPROVAL_OUTCOME_LABEL: Readonly<Record<TrajectoryApprovalOutcome, 
   'allowed-once': '允許一次',
   rejected: '已拒絕',
   cancelled: '已取消',
-  unavailable: '無法回答',
+  unavailable: '沒有有效回覆',
 };
 
 /** 還沒有結局時寫的話：**不推一個結果**——還沒答、或停在這裡沒人答就關掉了（重開之後一樣）。 */
@@ -346,13 +346,15 @@ export function approvalText(approval: TrajectoryApproval, raisedAt: number): st
 }
 
 /**
- * 不必問人就確定的核准，結局在那一次工具呼叫的錯誤碼（`tool/result.error.code`，`TrajectoryTool.code`）：沒有人被擋下來等，
- * 所以軌跡上沒有中斷列。`error.name` 都是 `ApprovalDenied`，與工具自己失敗分得開。其他的碼不在這裡（原樣不顯示）。
+ * 核准被拒時，那一次工具呼叫帶的錯誤碼（`tool/result.error.code`，`TrajectoryTool.code`）。四個 `APPROVAL_*` 的 `error.name` 是
+ * `ApprovalDenied`，攔截器的是 `PreExecuteDenied`，都與工具自己失敗分得開。不必問人就確定的（政策、沒有管道、攔截器）軌跡上沒有
+ * 中斷列，結局只在這裡；問過人的（人拒絕、回覆看不懂）另有中斷列寫結局，這裡說的是為什麼沒有執行。其他的碼只顯示碼本身，不加說法。
  */
 export const APPROVAL_CODE_LABEL: Readonly<Record<string, string>> = {
   APPROVAL_POLICY_NEVER: '核准政策一律不允許',
   APPROVAL_NO_CHANNEL: '沒有人可以問',
   APPROVAL_REJECTED_BY_USER: '人拒絕了',
+  APPROVAL_INVALID_REPLY: '回覆看不懂，沒有執行',
   TOOL_DENIED_BY_LISTENER: '被攔截器拒絕',
 };
 
