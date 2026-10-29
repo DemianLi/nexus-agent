@@ -862,6 +862,7 @@ export {
   SessionCorruptionError,
   SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
 } from './session-store.js';
 export type {
   SessionFormatCatalog,
