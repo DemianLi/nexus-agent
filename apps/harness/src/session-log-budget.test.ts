@@ -28,18 +28,14 @@ function refusal(error: unknown): SessionLogTooLargeError {
   return error as SessionLogTooLargeError;
 }
 
-describe('續接：佔到 release 為止，放不下當場拒收', () => {
-  it('單份超過容量是 too-large，訊息寫出大小、上限與下一步', () => {
+describe('續接：佔到 release 為止，開著的 thread 佔滿就當場拒收', () => {
+  it('單份超過容量是 too-large，訊息寫出大小、上限與下一步', async () => {
     const budget = createSessionLogBudget(100 * MiB);
     const error = refusal(
-      (() => {
-        try {
-          budget.holdForSession('alpha', 101 * MiB);
-        } catch (caught: unknown) {
-          return caught;
-        }
-        return undefined;
-      })(),
+      await budget.holdForSession('alpha', 101 * MiB).then(
+        () => undefined,
+        (caught: unknown) => caught,
+      ),
     );
     expect(error.reason).toBe('too-large');
     expect(error.message).toContain('101.0 MiB');
@@ -47,22 +43,66 @@ describe('續接：佔到 release 為止，放不下當場拒收', () => {
     expect(error.message).toContain('--max-old-space-size');
   });
 
-  it('剛好等於容量收得下；別人佔著時放不下是 busy，還掉之後同一份收得下', () => {
+  it('剛好等於容量收得下；別的 thread 佔著時放不下是 busy，還掉之後同一份收得下', async () => {
     const budget = createSessionLogBudget(100);
-    const first = budget.holdForSession('alpha', 60);
-    expect(() => budget.holdForSession('beta', 41)).toThrow(SessionLogTooLargeError);
-    try {
-      budget.holdForSession('beta', 41);
-    } catch (error: unknown) {
-      expect(refusal(error)).toMatchObject({ reason: 'busy', heldBytes: 60, limitBytes: 100 });
-    }
-    expect(() => budget.holdForSession('gamma', 40).release()).not.toThrow();
+    const first = await budget.holdForSession('alpha', 60);
+    await expect(budget.holdForSession('beta', 41)).rejects.toMatchObject({
+      reason: 'busy',
+      heldBytes: 60,
+      limitBytes: 100,
+    });
+    (await budget.holdForSession('gamma', 40)).release();
     first.release();
     // release 叫兩次只算一次：不會把別人的額度也還掉。
     first.release();
-    const whole = budget.holdForSession('beta', 100);
-    expect(() => budget.holdForSession('delta', 1)).toThrow(SessionLogTooLargeError);
+    const whole = await budget.holdForSession('beta', 100);
+    await expect(budget.holdForSession('delta', 1)).rejects.toBeInstanceOf(SessionLogTooLargeError);
     whole.release();
+  });
+
+  it('只是唯讀佔著：續接等它讀完，不拒收', async () => {
+    const budget = createSessionLogBudget(100);
+    const reading = await budget.reserveForRead('a', 60);
+    let resumed = false;
+    const held = budget.holdForSession('alpha', 60).then((r) => {
+      resumed = true;
+      return r;
+    });
+    await Promise.resolve();
+    expect(resumed).toBe(false);
+    reading.release();
+    (await held).release();
+    expect(resumed).toBe(true);
+  });
+
+  it('等著的續接排在已經排隊的唯讀前面，後來的唯讀也不插到它前面', async () => {
+    const budget = createSessionLogBudget(100);
+    // a（60）與 d（10）讀著：b（40）排隊；續接 60 等它們；c（10）放得下，但前面有人排，不插隊。
+    const reading = await budget.reserveForRead('a', 60);
+    const other = await budget.reserveForRead('d', 10);
+    const order: string[] = [];
+    const queuedRead = budget.reserveForRead('b', 40).then((r) => {
+      order.push('b');
+      return r;
+    });
+    const resumed = budget.holdForSession('alpha', 60).then((r) => {
+      order.push('alpha');
+      return r;
+    });
+    const laterRead = budget.reserveForRead('c', 10).then((r) => {
+      order.push('c');
+      return r;
+    });
+    // d 讀完：b 放得下了，但續接還在等 a，b 不能先走。
+    other.release();
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    reading.release();
+    const held = await resumed;
+    (await queuedRead).release();
+    (await laterRead).release();
+    expect(order).toEqual(['alpha', 'b', 'c']);
+    held.release();
   });
 });
 
@@ -90,7 +130,7 @@ describe('唯讀：讀完就還，等得到的排隊、等不到的拒收', () =
 
   it('續接佔掉的扣掉之後還放不下，不排隊、當場 busy；單份超過容量是 too-large', async () => {
     const budget = createSessionLogBudget(100);
-    const held = budget.holdForSession('alpha', 80);
+    const held = await budget.holdForSession('alpha', 80);
     await expect(budget.reserveForRead('beta', 30)).rejects.toMatchObject({ reason: 'busy' });
     await expect(budget.reserveForRead('gamma', 101)).rejects.toMatchObject({
       reason: 'too-large',
@@ -105,7 +145,7 @@ describe('唯讀：讀完就還，等得到的排隊、等不到的拒收', () =
     // 30＋80 放不下，排著等 a 讀完。
     const waiting = budget.reserveForRead('b', 80);
     // 續接佔 30 之後，就算 a 讀完，30＋80 也放不下：b 等的是 thread 撤掉，拒掉。
-    const held = budget.holdForSession('alpha', 30);
+    const held = await budget.holdForSession('alpha', 30);
     await expect(waiting).rejects.toMatchObject({ reason: 'busy' });
     reading.release();
     (await budget.reserveForRead('c', 70)).release();
@@ -223,9 +263,9 @@ describe('JSONL 存放處', () => {
     const budget = createSessionLogBudget(bytes);
     const store = openJsonlSessionStore({ directory, logBudget: budget });
     const resumed = await store.resume('alpha');
-    expect(() => budget.holdForSession('other', 1)).toThrow(SessionLogTooLargeError);
+    await expect(budget.holdForSession('other', 1)).rejects.toBeInstanceOf(SessionLogTooLargeError);
     await resumed.stored.close();
-    budget.holdForSession('other', bytes).release();
+    (await budget.holdForSession('other', bytes)).release();
     // 同一份再接一次也還得起來。
     await (await store.resume('alpha')).stored.close();
   });
@@ -235,7 +275,7 @@ describe('JSONL 存放處', () => {
     const budget = createSessionLogBudget(bytes);
     const store = openJsonlSessionStore({ directory, logBudget: budget });
     expect(await (await store.open('alpha', 'read')).read({ salvage: true })).toHaveLength(5);
-    budget.holdForSession('other', bytes).release();
+    (await budget.holdForSession('other', bytes)).release();
 
     const fs = countingFs();
     const small = openJsonlSessionStore({

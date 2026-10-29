@@ -32,6 +32,8 @@ import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import { threadCapacityPlugin } from './settings/thread-capacity.js';
+import { sessionLogBudgetFromSetting } from './session-log-budget.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { HARNESS_VERSION } from './harness-version.js';
@@ -1031,6 +1033,10 @@ async function runLaunched(
   );
   const invariantTap =
     invariantLogPath === undefined ? undefined : createInvariantLog(invariantLogPath);
+  // 會話日誌額度（#2115）：同 serve，讀 `thread-capacity` 的 `sessionLogBudgetMiB`；那一列其餘的格是 serve 的，CLI 不用。
+  const logBudget = sessionLogBudgetFromSetting(
+    startupSetting(plugins, threadCapacityPlugin).sessionLogBudgetMiB,
+  );
   const sessionStore = !persistenceMounted
     ? undefined
     : resumeDir === undefined
@@ -1041,8 +1047,9 @@ async function runLaunched(
             options.env ?? process.env,
           ),
           warn: sessionLogWarn,
+          logBudget,
         })
-      : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn });
+      : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn, logBudget });
   // 落盤確認（#1606）讀回比對用的 store：樹上 `session-durability` 那一列在讀清單時依清單掛上，做法在被呼叫當下才讀它。
   if (sessionStore !== undefined) root.tree.bindDurableStore(sessionStore);
   // 過大工具結果的暫存（#734）：根與保留天數從清單解一次；**啟動時清一次**超過保留期的檔（別人改得動的根

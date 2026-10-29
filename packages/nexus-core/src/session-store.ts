@@ -1110,7 +1110,7 @@ export class SessionLogTooLargeError extends Error {
    * @param reason - 見類別說明。
    * @param logBytes - 這份日誌本文的位元組數。
    * @param limitBytes - 行程能收的日誌位元組上限（開著的會話與正在讀的合計）。
-   * @param heldBytes - 已經被佔掉的位元組數，含正在讀的唯讀（`busy` 才有意義）。
+   * @param heldBytes - 開著的會話已經佔掉的位元組數，不含正在讀的唯讀（`busy` 才有意義：只有它們佔滿才拒收）。
    */
   constructor(
     readonly id: string,

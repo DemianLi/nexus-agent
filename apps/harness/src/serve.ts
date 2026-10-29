@@ -191,7 +191,7 @@ import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { ThreadSearch } from './thread-search.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
-import { createSessionLogBudget, defaultLogBudgetBytes } from './session-log-budget.js';
+import { sessionLogBudgetFromSetting } from './session-log-budget.js';
 import type { SessionLogBudget } from './session-log-budget.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
@@ -824,14 +824,7 @@ async function startServer(
   // 寫了就固定，`0` 是不限。
   const configuredLogBudgetMiB = threadCapacity.sessionLogBudgetMiB;
   const sessionLogBudget =
-    options.sessionLogBudget ??
-    (configuredLogBudgetMiB === undefined
-      ? createSessionLogBudget(() => defaultLogBudgetBytes())
-      : createSessionLogBudget(
-          configuredLogBudgetMiB === 0
-            ? Number.POSITIVE_INFINITY
-            : configuredLogBudgetMiB * 1024 * 1024,
-        ));
+    options.sessionLogBudget ?? sessionLogBudgetFromSetting(configuredLogBudgetMiB);
   // 目標續行的操作者上限（#1623）：人每授權一次最多續行幾輪。關掉那一列就只剩目標自己那條；`--no-goal-driver` 時不起作用。
   // **掛沒掛先問**：`startupSetting` 對關掉的列回 schema 預設，不先問會把關掉讀成 20。
   const goalRoundCap: GoalRoundCap | undefined = startupEntryMounted(plugins, goalRoundCapPlugin)

@@ -8,8 +8,9 @@
  *
  * **一本帳、兩種持有時間：**
  * - **續接**佔到那份會話的把手關掉為止（thread 撤掉、閒置逐出、關機）：載入之後事件還握在記憶體裡，讀完就還的話，
- *   第二條大的會被放進來，兩條一起把行程撐死。放不下就當場拒收（`busy`），**不排隊**：佔著的是活著的 thread，
- *   不會自己很快還回來（同 thread 條數上限，#1476）。
+ *   第二條大的會被放進來，兩條一起把行程撐死。開著的 thread 佔的加上這一份放不下，就當場拒收（`busy`），**不排隊**：
+ *   佔著的是活著的 thread，不會自己很快還回來（同 thread 條數上限，#1476）。只是正在讀的唯讀佔著的話，等它們讀完，
+ *   而且排在已經排隊的唯讀前面：側欄剛好在讀別的日誌，不該讓打開一條 thread 失敗。
  * - **唯讀**（列表、冷讀、引用候選、背景子代理的冷檢查）：讀完、解析完就還。暫時放不下但等
  *   別的唯讀讀完就放得下的，**排隊等**；連續接佔掉的都扣掉之後還是放不下的，拒收。
  *
@@ -29,8 +30,11 @@ export interface SessionLogReservation {
 export interface SessionLogBudget {
   /** 總容量（位元組）；`Infinity` 是不限。 */
   readonly limitBytes: number;
-  /** 續接：佔到 `release` 為止。放不下就拋 {@link SessionLogTooLargeError}，不等。 */
-  holdForSession(id: string, logBytes: number): SessionLogReservation;
+  /**
+   * 續接：佔到 `release` 為止。只是正在讀的唯讀佔著的話等它們讀完（排在排隊的唯讀前面）；開著的 thread 佔的加上這一份
+   * 就放不下的，reject {@link SessionLogTooLargeError}，不等。
+   */
+  holdForSession(id: string, logBytes: number): Promise<SessionLogReservation>;
   /**
    * 唯讀：讀完就 `release`。等別的唯讀讀完就放得下的排隊（先來先放）；等不到的 reject {@link SessionLogTooLargeError}，
    * 排隊中途續接佔進來而變成等不到的也是。
@@ -106,12 +110,15 @@ export function createSessionLogBudget(limit: number | (() => number)): SessionL
   if (typeof limit === 'number') capacity();
   let heldBySessions = 0;
   let heldByReads = 0;
-  const waiting: {
+  interface Waiter {
     readonly id: string;
     readonly bytes: number;
     readonly grant: () => void;
     readonly refuse: (error: SessionLogTooLargeError) => void;
-  }[] = [];
+  }
+  // 續接排在唯讀前面：續接等的只是正在讀的那幾份讀完，排在唯讀後面的話，一串唯讀就能讓打開一條 thread 一直等。
+  const waitingSessions: Waiter[] = [];
+  const waitingReads: Waiter[] = [];
 
   const reservation = (onRelease: () => void): SessionLogReservation => {
     let released = false;
@@ -123,27 +130,37 @@ export function createSessionLogBudget(limit: number | (() => number)): SessionL
       },
     };
   };
-  // 先來先放：排頭放不下，後面的也不插隊（不讓一份大的被一串小的餓死）。續接佔得更多之後，連唯讀都還掉也放不下的
-  // 先拒掉：它們要等的是 thread 撤掉，不是別的讀完，排著只會擋住後面的。
-  const drain = () => {
-    for (let index = waiting.length - 1; index >= 0; index -= 1) {
-      const entry = waiting[index]!;
+  const busy = (id: string, bytes: number) =>
+    new SessionLogTooLargeError(id, 'busy', bytes, capacity(), heldBySessions);
+  // 只有開著的 thread 佔的加上這一份放不下，才是等不到：那要等 thread 撤掉，不是等別的讀完，排著只會擋住後面的。
+  const refuseUnreachable = (queue: Waiter[]) => {
+    for (let index = queue.length - 1; index >= 0; index -= 1) {
+      const entry = queue[index]!;
       if (heldBySessions + entry.bytes > capacity()) {
-        waiting.splice(index, 1);
-        entry.refuse(
-          new SessionLogTooLargeError(
-            entry.id,
-            'busy',
-            entry.bytes,
-            capacity(),
-            heldBySessions + heldByReads,
-          ),
-        );
+        queue.splice(index, 1);
+        entry.refuse(busy(entry.id, entry.bytes));
       }
     }
-    while (waiting.length > 0 && heldBySessions + heldByReads + waiting[0]!.bytes <= capacity()) {
-      waiting.shift()!.grant();
+  };
+  const fits = (bytes: number) => heldBySessions + heldByReads + bytes <= capacity();
+  // 每一排都先來先放：排頭放不下，後面的也不插隊（不讓一份大的被一串小的餓死）。續接放進來一份，排著的續接與唯讀
+  // 都可能從此等不到，所以每放一份續接就重篩一次。唯讀要等續接排空才放。
+  const drain = () => {
+    for (;;) {
+      refuseUnreachable(waitingSessions);
+      if (waitingSessions.length === 0 || !fits(waitingSessions[0]!.bytes)) break;
+      waitingSessions.shift()!.grant();
     }
+    refuseUnreachable(waitingReads);
+    if (waitingSessions.length > 0) return;
+    while (waitingReads.length > 0 && fits(waitingReads[0]!.bytes)) waitingReads.shift()!.grant();
+  };
+  const sessionReservation = (bytes: number) => {
+    heldBySessions += bytes;
+    return reservation(() => {
+      heldBySessions -= bytes;
+      drain();
+    });
   };
   const readReservation = (bytes: number) => {
     heldByReads += bytes;
@@ -152,70 +169,61 @@ export function createSessionLogBudget(limit: number | (() => number)): SessionL
       drain();
     });
   };
+  const admit = (
+    id: string,
+    logBytes: number,
+    queue: Waiter[],
+    ahead: readonly Waiter[][],
+    grant: (bytes: number) => SessionLogReservation,
+  ): Promise<SessionLogReservation> => {
+    let limitBytes: number;
+    try {
+      limitBytes = capacity();
+    } catch (error: unknown) {
+      return Promise.reject(error);
+    }
+    if (logBytes > limitBytes) {
+      return Promise.reject(new SessionLogTooLargeError(id, 'too-large', logBytes, limitBytes, 0));
+    }
+    if (heldBySessions + logBytes > limitBytes) return Promise.reject(busy(id, logBytes));
+    if (ahead.every((waiting) => waiting.length === 0) && fits(logBytes)) {
+      const granted = grant(logBytes);
+      // 續接佔進來之後，排著的唯讀可能再也等不到。
+      drain();
+      return Promise.resolve(granted);
+    }
+    return new Promise((resolve, reject) => {
+      queue.push({ id, bytes: logBytes, grant: () => resolve(grant(logBytes)), refuse: reject });
+    });
+  };
 
   return {
     get limitBytes() {
       return capacity();
     },
-    holdForSession(id, logBytes) {
-      const limitBytes = capacity();
-      if (logBytes > limitBytes) {
-        throw new SessionLogTooLargeError(id, 'too-large', logBytes, limitBytes, 0);
-      }
-      const held = heldBySessions + heldByReads;
-      if (held + logBytes > limitBytes) {
-        throw new SessionLogTooLargeError(id, 'busy', logBytes, limitBytes, held);
-      }
-      heldBySessions += logBytes;
-      drain();
-      return reservation(() => {
-        heldBySessions -= logBytes;
-        drain();
-      });
-    },
-    reserveForRead(id, logBytes) {
-      let limitBytes: number;
-      try {
-        limitBytes = capacity();
-      } catch (error: unknown) {
-        return Promise.reject(error);
-      }
-      if (logBytes > limitBytes) {
-        return Promise.reject(
-          new SessionLogTooLargeError(id, 'too-large', logBytes, limitBytes, 0),
-        );
-      }
-      if (heldBySessions + logBytes > limitBytes) {
-        return Promise.reject(
-          new SessionLogTooLargeError(
-            id,
-            'busy',
-            logBytes,
-            limitBytes,
-            heldBySessions + heldByReads,
-          ),
-        );
-      }
-      if (waiting.length === 0 && heldBySessions + heldByReads + logBytes <= limitBytes) {
-        return Promise.resolve(readReservation(logBytes));
-      }
-      return new Promise((resolve, reject) => {
-        waiting.push({
-          id,
-          bytes: logBytes,
-          grant: () => resolve(readReservation(logBytes)),
-          refuse: reject,
-        });
-      });
-    },
+    holdForSession: (id, logBytes) =>
+      admit(id, logBytes, waitingSessions, [waitingSessions], sessionReservation),
+    reserveForRead: (id, logBytes) =>
+      admit(id, logBytes, waitingReads, [waitingSessions, waitingReads], readReservation),
   };
+}
+
+/**
+ * 照 `thread-capacity` 的 `sessionLogBudgetMiB` 開一本：不寫是第一次用到時照 {@link defaultLogBudgetBytes} 算，正整數是那麼多
+ * MiB，`0` 是不限。serve 與 CLI 都從這裡開，同一個設定在兩邊是同一個意思。
+ */
+export function sessionLogBudgetFromSetting(configuredMiB: number | undefined): SessionLogBudget {
+  if (configuredMiB === undefined) return createSessionLogBudget(() => defaultLogBudgetBytes());
+  return createSessionLogBudget(
+    configuredMiB === 0 ? Number.POSITIVE_INFINITY : configuredMiB * 1024 * 1024,
+  );
 }
 
 let processBudget: SessionLogBudget | undefined;
 
 /**
- * 沒給 `logBudget` 的存放處共用的那一本（CLI 的 run 目錄、量測工具）：記憶體是整個行程一份，同一個行程裡不另開第二本。
- * serve 自己照 `thread-capacity` 開一本，不用這個。第一次用到時照 {@link defaultLogBudgetBytes} 算容量。
+ * 沒給 `logBudget` 的存放處共用的那一本（量測工具、沒給 `openStore` 的引用候選）：記憶體是整個行程一份，同一個行程裡不另開第二本。
+ * serve 與 CLI 照 `thread-capacity` 各開一本（{@link sessionLogBudgetFromSetting}），不用這個。這一本第一次用到時照 {@link defaultLogBudgetBytes} 算容量。
  */
 export function processSessionLogBudget(): SessionLogBudget {
   processBudget ??= createSessionLogBudget(() => defaultLogBudgetBytes());

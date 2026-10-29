@@ -1661,9 +1661,9 @@ async function resumeStoredSession(
   const lease = await leaseFor(context, join(directory, files.lock), id);
   let reservation: SessionLogReservation | undefined;
   try {
-    // **位元組額度（#2115）在讀之前佔**：放不下就拋，一個位元組都不讀。冷讀快取命中也佔——事件同樣要握在記憶體裡，
-    // 佔到把手關掉為止。
-    reservation = context.logBudget.holdForSession(
+    // **位元組額度（#2115）在讀之前佔**：只是唯讀佔著就等它們讀完，開著的 thread 佔滿就拋，一個位元組都不讀。冷讀快取
+    // 命中也佔——事件同樣要握在記憶體裡，佔到把手關掉為止。
+    reservation = await context.logBudget.holdForSession(
       id,
       await logBytesOf(join(directory, files.log), fs),
     );
@@ -1783,7 +1783,7 @@ export interface JsonlSessionStoreOptions {
   /**
    * 會話日誌的位元組額度（#2115）：續接佔到把手關掉、唯讀讀完就還，放不下的在讀之前拋
    * {@link @nexus/core!SessionLogTooLargeError}。省略即這個行程共用的那一本（{@link processSessionLogBudget}）；
-   * serve 傳它照 `thread-capacity` 開的那一本，測試換小的。
+   * serve 與 CLI 傳各自照 `thread-capacity` 開的那一本，測試換小的。
    */
   readonly logBudget?: SessionLogBudget;
 }

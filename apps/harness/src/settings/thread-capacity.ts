@@ -94,7 +94,7 @@ export const threadCapacityConfigSchema = z.strictObject({
   /**
    * 會話日誌額度（#2115，`../session-log-budget.ts`）：同時開著與正在讀的會話日誌合計最多幾 MiB，超過的在讀之前拒收。
    * **不寫就照記憶體上限自動算**（出廠）；寫正整數就固定成那個數；`0` 是不限（回到不看大小的讀法，大日誌可能把整個行程撐死）。
-   * 自動算的值見啟動輸出那一行 `會話日誌額度：…`。
+   * serve 與 CLI 都讀這一格（這一列其餘的格只有 serve 用）。自動算的值見 serve 啟動輸出那一行 `會話日誌額度：…`。
    */
   sessionLogBudgetMiB: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
 });
