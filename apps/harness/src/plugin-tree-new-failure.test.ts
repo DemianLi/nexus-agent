@@ -186,7 +186,7 @@ async function say(server: RunningServe, thread: string): Promise<string | undef
   }
 }
 
-describe('serve：寫入口接受的設定讓樹上那一列在 apply 掉', () => {
+describe('serve：樹上那一列在 apply 掉', () => {
   // 寫入口試掛這一筆（#2073），樹上那一列在 apply 掉就當場拒收。
   it('寫入口當場拒收：紀錄裡沒有被接受的那一筆，thread 照常', async () => {
     const p = probe();

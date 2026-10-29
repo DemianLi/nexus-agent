@@ -2427,10 +2427,15 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   清單不變，但這一次被拒絕會留一筆 `rejected`（見下面「被拒絕與掛不上也進紀錄」）。
   關掉 `sandbox-policy`／`permission-presets` 不會被拒絕（`validateEntries` 沒有這條），但輸出會警告：serve 帶 `--workspace`
   時，之後每條新對話都會建不起來。
+- **寫之前也先照 serve 試掛一次**（[#2073](https://github.com/DemianLi/nexus-agent/issues/2073)）：在這個行程裡把寫下去之後的清單組一份、
+  組完就收，有列**新**掛不上（`apply` 拋錯、相容層的列 `requires` 缺件）就拒絕，訊息帶列 id、哪一步、原因。原本就掛不上、這次一樣掛不上的列
+  不擋無關的修改；必掛的列掛不上一律擋；樹上的列缺服務是在等提供者，不算。試掛不送模型請求，有 MCP 的列會連一次再關掉。
+  試掛只知道你給的旗標：**serve 帶了 `--patch` 或 `--workspace`，這裡也帶同一組**，不然要 `--workspace` 才起得來的列會被誤擋；
+  只在 serve 那邊掉的列（例如 `.env` 或工作目錄不同）這裡看不到，照舊到下一條新對話組裝時才掉（見「被拒絕、掛不上、自己停用也進紀錄」的 `failed`）。
 - **輸出講的**：紀錄檔的完整路徑、第幾筆、操作者、改了哪些**欄位名**（不印值）、什麼時候生效——`新對話生效`，或
   `待重啟`（啟動時讀一次的那幾列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
   `plugin-snapshot.json` 不在的話輸出會警告（serve 沒開過，或指到別的 home），不擋寫入。
-- **要跟 serve 帶同一組 `--patch`**：`plugin` 也收 `--patch <檔>`（可多次）。`--patch` 排在變更紀錄之後，被它蓋住的列，
+- **要跟 serve 帶同一組 `--patch` 與 `--workspace`**：`plugin` 也收 `--patch <檔>`（可多次）與 `--workspace <目錄>`（試掛用，見上一條）。`--patch` 排在變更紀錄之後，被它蓋住的列，
   寫入口照寫紀錄但回報 `被 --patch 蓋住`（設定的那一類直接拒絕，因為寫了也不會生效）。沒帶同一組，它看不出誰被蓋住。
 - **操作者記的是自報**：記的是有效帳號，以及 `sudo` 之前的帳號（讀 `SUDO_USER`，沒有就讀 `LOGNAME`，並標明出處）。
   那是環境變數，不是身分認證；**要能追責，靠主機本身的存取控制**（誰能登入、誰能 `sudo`）。
@@ -2461,7 +2466,7 @@ home 是 `0700`；不要把它貼進 issue 或聊天）。直接 `cat` 就能讀
 
 | `op` | 誰寫 | 什麼時候 | 帶什麼 |
 |---|---|---|---|
-| `rejected` | `plugin` 寫入口（`actor` 是主機帳號） | 驗證那一段拒絕了：id 不存在、設定不合 schema、關的是必掛的列、設定被 `--patch` 蓋住 | `requested`（要做的操作：`disable`／`enable`／`config-set`／`config-reset`）、`id`、`reason`（驗證器的原文） |
+| `rejected` | `plugin` 寫入口（`actor` 是主機帳號） | 驗證那一段拒絕了：id 不存在、設定不合 schema、關的是必掛的列、設定被 `--patch` 蓋住、試掛時有列新掛不上 | `requested`（要做的操作：`disable`／`enable`／`config-set`／`config-reset`）、`id`、`reason`（驗證器的原文） |
 | `failed` | serve（`actor` 是 `{"kind":"serve","effective":"<帳號>"}`） | 某一列掛不上，**而那一列在紀錄裡有被接受的改動**；或它依賴的列被關掉、它剛掉在 `requires`（見下面「依賴的列被關掉」） | `id`、`triggerSeq`（**歸因**到的那一筆的 `seq`，見下面「`triggerSeq` 是歸因，不是因果」）、`stage`（`module`／`config`／`apply`／`requires`）、`reason` |
 | `self-disabled` | serve（`actor` 同 `failed`：沿用 `serve`，「是插件自己停的」由 `op` 承載；#1424） | 樹上的函式插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 處理自我停用的那一格）；同一個行程裡同一列同一份宣告只記一次，重啟或宣告（模組名、設定）改了才會再記 | `id`、`name`（模組名）。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌 |
 
