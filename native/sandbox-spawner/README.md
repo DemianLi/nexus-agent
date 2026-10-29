@@ -17,7 +17,7 @@ docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARG
 ```
 
 - `--security-opt seccomp=unconfined`：拿掉 Docker 預設的 seccomp 設定檔，測試看到的拒絕才確定是 spawner 自己的過濾器擋的。
-- `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial。出貨的建置不帶它。
+- `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下。出貨的建置不帶它。
 - `NEXUS_REQUIRE_LANDLOCK=1`：核心沒有 Landlock 時，整合測試直接紅，不跳過。CI 會設。
 
 CI 的 `sandbox-spawner` job（`.github/workflows/ci.yml`）只在動到這個目錄、動到 CI，或合併後完整一輪時跑。

@@ -365,19 +365,22 @@ fn exec_failures_carry_the_execvp_errno() {
 fn signals_reach_the_whole_group_and_the_group_dies_with_the_leader() {
     let mut s = spawner!();
     let ws = temp_dir("ws");
-    let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "sleep 100 & echo $!; wait"]));
+    // leader 收到 SIGTERM 後還活 3 秒：背景成員要在這段時間內就死，才證明訊號送到了整個群組，而不是 leader 結束時順便收掉。
+    let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "trap 'sleep 3' TERM; sleep 100 & echo $!; wait"]));
     let mut stdout = stdout.unwrap();
     let mut line = [0u8; 32];
     let n = stdout.read(&mut line).unwrap();
     let background: i32 = String::from_utf8_lossy(&line[..n]).trim().parse().unwrap();
     s.send(&Request::Signal { id: 1, signo: libc::SIGTERM });
-    assert_eq!(s.event_for(1), Event::Exited { id: 1, code: -1, signal: libc::SIGTERM });
     assert!(dies_soon(&background.to_string()), "背景成員還在");
+    assert!(matches!(s.event_for(1), Event::Exited { id: 1, .. }));
 
-    // leader 自己先結束：留在背景的成員一起收掉，stdout 也因此關上。
+    // leader 自己先結束：留在背景的成員一起收掉，stdout 也因此關上（沒收掉的話 sleep 抓著 stdout，讀到期限就紅）。
     let (_, stdout, _) = s.launch(request(2, &ws, &["/bin/sh", "-c", "sleep 100 & echo $!"]));
+    let mut stdout = stdout.unwrap();
+    stdout.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
     let mut out = String::new();
-    stdout.unwrap().read_to_string(&mut out).unwrap();
+    stdout.read_to_string(&mut out).expect("stdout 沒有關上");
     assert_eq!(s.event_for(2), Event::Exited { id: 2, code: 0, signal: 0 });
     assert!(dies_soon(out.trim()), "背景成員還在");
 }
@@ -490,7 +493,8 @@ fn closing_stdin_or_sigterm_kills_every_running_tool() {
     for how in ["eof", "sigterm"] {
         let mut s = spawner!();
         let ws = temp_dir("ws");
-        let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "echo $$; exec sleep 100"]));
+        // 看背景成員：leader 有 PDEATHSIG，spawner 一死它就跟著死；背景成員只有群組 SIGKILL 收得掉。
+        let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "sleep 100 & echo $!; wait"]));
         let mut line = [0u8; 32];
         let n = stdout.unwrap().read(&mut line).unwrap();
         let pid = String::from_utf8_lossy(&line[..n]).trim().to_string();
@@ -500,17 +504,22 @@ fn closing_stdin_or_sigterm_kills_every_running_tool() {
             // SAFETY：送給自己起的 spawner。
             unsafe { libc::kill(s.child.id() as i32, libc::SIGTERM) };
         }
-        assert_eq!(s.child.wait().unwrap().code(), Some(0), "{how}");
-        assert!(!alive(&pid), "{how}：工具還在");
+        assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0), "{how}");
+        assert!(dies_soon(&pid), "{how}：工具還在");
     }
 }
 
 #[test]
 fn a_signal_sent_before_start_arrives_after_start() {
-    let mut s = spawner!();
+    // 子行程在 setsid 之前先睡 0.3 秒：這時對群組送訊號一定打不到（ESRCH），要等 Started 才送。
+    let (mut s, first) = start_with(&[("NEXUS_SPAWNER_TEST_CHILD_DELAY_US", "300000")], None);
+    if !matches!(first, Event::Ready { .. }) {
+        assert_ne!(std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(), Ok("1"), "{first:?}");
+        return;
+    }
     let ws = temp_dir("ws");
-    // 要求與訊號同一次寫進去：spawner 處理訊號時，子行程還在 Launching。
-    let spawn = Request::Spawn(Spawn { pipes: 0, ..request(1, &ws, &["sleep", "100"]) });
+    // 要求與訊號同一次寫進去：spawner 處理訊號時，子行程還在 Launching。訊號弄丟的話，sleep 5 會自己正常結束。
+    let spawn = Request::Spawn(Spawn { pipes: 0, ..request(1, &ws, &["sleep", "5"]) });
     let signal = Request::Signal { id: 1, signo: libc::SIGTERM };
     let bytes = [protocol::frame(&protocol::encode_request(&spawn)), protocol::frame(&protocol::encode_request(&signal))].concat();
     s.stdin.write_all(&bytes).unwrap();

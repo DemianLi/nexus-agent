@@ -80,6 +80,16 @@ fn test_abi_cap() -> Option<i32> {
     None
 }
 
+#[cfg(feature = "test-hooks")]
+fn test_child_delay_us() -> u32 {
+    std::env::var("NEXUS_SPAWNER_TEST_CHILD_DELAY_US").ok().and_then(|v| v.parse().ok()).unwrap_or(0)
+}
+
+#[cfg(not(feature = "test-hooks"))]
+fn test_child_delay_us() -> u32 {
+    0
+}
+
 fn listen(path: &str) -> Result<libc::c_int, String> {
     let cpath = CString::new(path).map_err(|_| "socket 路徑含 NUL".to_string())?;
     // SAFETY：sockaddr_un 先清零再填；路徑長度先檢查過。
@@ -214,6 +224,7 @@ struct Spawner {
     uid: libc::uid_t,
     /// 事件寫不出去過：主迴圈看到就收尾。
     lost: bool,
+    test_delay_us: u32,
 }
 
 /// argv[0] 沒有 `/` 時，照 request 帶來的 PATH 列出候選；PATH 沒給就用 execvp 的預設。
@@ -418,6 +429,7 @@ impl Spawner {
             candidates,
             argv: null_terminated(&argv),
             envp: null_terminated(&env),
+            test_delay_us: self.test_delay_us,
         };
         // SAFETY：單執行緒的 fork；子行程只走 child::run，不會回來。
         let pid = unsafe { libc::fork() };
@@ -532,14 +544,9 @@ impl Spawner {
         self.pending.values().map(|p| p.deadline).chain(self.conns.iter().map(|c| c.deadline)).min()
     }
 
-    /// 殺掉所有群組、收完、結束。
+    /// 殺掉所有群組、收完、結束（`on_exit` 會對每個群組送 SIGKILL 再收屍）。
     fn shutdown(&mut self, path: &CString) -> ! {
         let ids: Vec<u32> = self.children.keys().copied().collect();
-        for id in &ids {
-            let pid = self.children[id].pid;
-            // SAFETY：送給自己起的群組。
-            unsafe { libc::kill(-pid, libc::SIGKILL) };
-        }
         for id in ids {
             self.on_exit(id);
         }
@@ -582,6 +589,7 @@ fn main() {
         parent: unsafe { libc::getppid() },
         uid: unsafe { libc::getuid() },
         lost: false,
+        test_delay_us: test_child_delay_us(),
     };
     let mut input: Vec<u8> = Vec::new();
 

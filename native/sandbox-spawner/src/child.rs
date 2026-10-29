@@ -23,6 +23,8 @@ pub struct Prepared {
     pub candidates: Vec<CString>,
     pub argv: Vec<*const libc::c_char>,
     pub envp: Vec<*const libc::c_char>,
+    /// 只有測試建置會大於 0：`setsid` 之前先睡這麼久，讓測試穩穩造出「子行程還沒自成一組」的時間窗。
+    pub test_delay_us: u32,
 }
 
 fn errno() -> i32 {
@@ -49,6 +51,9 @@ unsafe fn fail(fd: libc::c_int, kind: FailKind, err: i32, detail: &str) -> ! {
 /// # Safety
 /// 只能在 fork 出來的子行程裡呼叫。
 pub unsafe fn run(p: &Prepared) -> ! {
+    if p.test_delay_us > 0 {
+        libc::usleep(p.test_delay_us);
+    }
     // 自己一個 session：spawner 對整個行程群組送訊號（`kill(-pid)`），也脫離 serve 的控制終端，終端的 Ctrl-C 不會打到工具。
     libc::setsid();
     // spawner 被硬殺時，工具不留下來。設好之後再核一次父行程，避開「設之前父行程就已經死了」的空窗。
