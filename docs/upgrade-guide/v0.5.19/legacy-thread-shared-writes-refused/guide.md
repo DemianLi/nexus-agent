@@ -20,6 +20,7 @@ v0.5.19 的 serve 上，每條對話都以 `--workspace` 為可寫根。升上�
 | --- | --- |
 | 寫、改、刪 `--workspace` 根目錄的那四個指示檔 | 回 `[containment]` 拒絕 |
 | 寫、改、刪技能來源裡落在 `--workspace` 底下的目錄（含底下全部） | 回 `[containment]` 拒絕 |
+| 對上面這幾處呼叫 `request_sandbox_escalation` | 直接回不能升級與原因，不掛核准卡（#2078） |
 | 根目錄別的檔、子目錄裡的同名檔（例如 `sub/AGENTS.md`）、技能來源以外的目錄 | 照常 |
 
 不看檔案政策，`danger-full-access` 與核准過的升級都蓋不過；比對時不分大小寫。新 thread 與 CLI 不受影響。

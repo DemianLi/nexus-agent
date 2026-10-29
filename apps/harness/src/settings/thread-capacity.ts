@@ -1,7 +1,7 @@
 /**
  * serve 行程裡 thread 數上限與閒置逐出的**設定條目**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，
  * 「底座保險絲」逐級降載的第 2 級；背景是 [#1464](https://github.com/DemianLi/nexus-agent/issues/1464)：
- * 每條 thread 常駐約 2 MB heap、讀歷史也有。第 1 級 [#1484](https://github.com/DemianLi/nexus-agent/issues/1484) 讓閒置夠久的 thread 被撤掉，
+ * 每條 thread 常駐約 1.2 MB heap（#1983，短對話），只讀歷史也佔（#1464）。第 1 級 [#1484](https://github.com/DemianLi/nexus-agent/issues/1484) 讓閒置夠久的 thread 被撤掉，
  * 同一列多一格 `idleEvictAfterMs`）。上限的檢查本體在 `../wire-handler.ts` 的 `threadFor`，逐出在同檔的 `evictThread`。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-search` 那一列：值由 `startupSetting` 在起動期讀出來，
@@ -29,9 +29,10 @@
  *
  * - **`maxThreads` 500**，正整數，沒有「不限」。**偏離：理由 2（產品需求超出 dsh）**——dsh 沒有會話數上限，所以也沒有可照抄的數字。
  *   推法：dsh 記憶體 bench 最小的機型是 4 GB（`docs/defensive-patterns/general.zh.md:184`，`687f282e`）；**假設**留一半給主機上的
- *   其他人（假設，不是量的），serve 約有 2 GB；扣掉閒置的行程樹 533 MB（#1464，macOS），剩約 1.5 GB；除以每條短 thread 2.97 MB，約 500 條。
+ *   其他人（假設，不是量的），serve 約有 2 GB。thread 開到撐不住時先用完的是 V8 heap：死點約等於 heap 上限 ÷ 每條約 1.2 MB
+ *   （#1983，Linux、發版包、短 thread、不掛 MCP、逐出關掉），2 GB 的容器死在 800–826 條，500 對它留約四成餘裕，只對短 thread 成立。
  *   **這是後盾，不是記憶體保證**：長對話每輪還要再加幾 MB，thread 數上限擋得住「很多」、擋不住「很長」，後者歸 #1490、#1493。
- *   定得寬，因為讀歷史也佔名額，定太低正常使用就會被擋；逐出打開之後名額會自己回來。數字是 macOS 的，#1490 量完 Linux 再重估。
+ *   定得寬，因為讀歷史也佔名額，定太低正常使用就會被擋；逐出打開之後名額會自己回來。
  *   「沒有不限、最小 1」照 dsh 各入口的上限（`jobs-local` 的 `maxConcurrentJobsPerOwner`、`terminal-controller` 的 `maxTerminals`、
  *   `subagent` 的 `maxActiveSubagents`，都是 `min(1)` 加有限的預設）。
  * - **`idleEvictAfterMs` 7 200 000（2 小時）**，非負整數，**`0` 表示不逐出**。照 dsh 終端的 `unattendedTimeoutMs`

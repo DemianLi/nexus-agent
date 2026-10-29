@@ -172,6 +172,8 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
   **舊 thread 寫不進新 thread 會讀成指示或技能的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）：`--workspace` 根目錄的
   `AGENTS.md`、`CLAUDE.md`、`AGENTS.local.md`、`CLAUDE.local.md`，以及技能來源裡落在 `--workspace` 底下的目錄（出廠 `skills/`，含底下全部），
   舊 thread 的寫、改、刪一律回 `[containment]` 拒絕，不看檔案政策、升級也蓋不過；根目錄別的檔、子目錄裡的同名檔照常。
+  模型對這幾處呼叫 `request_sandbox_escalation`，工具直接回「不論升到哪一格都寫不進去」與原因，**不掛核准卡**
+  （[#2078](https://github.com/DemianLi/nexus-agent/issues/2078)，同 `/shared` 那一條）。
   這道守衛只擋得到升級之後的寫入：**升級後核對一次** `--workspace` 根目錄現有的這四個指示檔與技能來源目錄（出廠 `--workspace/skills/`），
   確認裡面都是部署方自己放的，不是舊對話寫的。
 - **header 的根既不是 `--workspace` 也不是基底底下的 `thread-…` 目錄**：續接被拒（`ResumeWorkspaceConflictError`，訊息指名兩個根）。
@@ -2157,7 +2159,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **窗口一律查型錄**。型錄裡沒有的模型（續接的會話選過、後來被拿掉的那顆）這一輪在打供應商之前就失敗，所以這一格的預算沒有人看得到。
 
 **`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)、[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）給 serve 行程裡的 thread 數設上限（第 2 級），
-並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（量測與背景見 #1464：每條 thread 常駐約 2 MB heap，只讀歷史也有）。
+並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（每條 thread 常駐約 1.2 MB heap，#1983 用短對話量的；只讀歷史也會組一份 agent、佔記憶體，#1464）。
 **出廠兩格都開著**：上限 500 條、閒置 2 小時撤出。出貨清單那一列寫的就是這一組，值的家在 schema（`apps/harness/src/settings/thread-capacity.ts`）。
 要放寬就把數值調大，放進自己的 `--patch <檔>`（或 `plugin config set thread-capacity --file -`）：
 
@@ -2170,7 +2172,11 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 
 - **`config` 是整份替換，但只寫一格不會丟掉另一格**：沒寫的那一格由 schema 補上出廠值。上面兩格都寫出來，是為了讀的人一眼看得到現在是多少。
 - **500 怎麼來的**（這個數字 dsh 沒有，登記為「產品需求超出 dsh」）：dsh 記憶體量測最小的機型是 4 GB；**假設**留一半給主機上的其他人（這是假設，不是量的），
-  serve 約有 2 GB；扣掉閒置的行程樹約 533 MB，剩約 1.5 GB；除以每條短 thread 約 3 MB，約 500 條（數字是 macOS 上量的，Linux 量完會重估）。
+  serve 約有 2 GB。thread 一直開下去，**先用完的是 V8 heap，不是容器記憶體**：死點約等於 heap 上限 ÷ 每條約 1.2 MB（#1983）。
+  2 GB 的容器 heap 上限約 1 GB，死在 800–826 條；4 GB 約 2 GB，死在 1725–1750 條；兩種都是 heap 先到，容器記憶體只用到約 64%。
+  500 對 2 GB 留約四成餘裕，**這四成只對短 thread 成立**。量測條件：Linux aarch64、Node 22、發版包用 `node` 直接起、develop `1cd7606c`；
+  每條 thread 一輪短對話（讀一個檔、搜一次），不掛 MCP，逐出關掉。掛 MCP 不會讓每條 thread 多一個子行程：連線由整台 serve 共用
+  （#1677，`packages/nexus-plugin-mcp/src/pool.ts`）；每條 thread 的 heap 因此多多少沒有量。
   **這是後盾，不是記憶體保證**：長對話每輪還要再加幾 MB，thread 數上限擋得住「thread 很多」，擋不住「thread 很長」。
   定得寬是刻意的：讀歷史也佔名額，定太低的話，一個人在側欄連點很多舊對話就能把其他人擋在外面。
 - **數的是行程裡的 thread 數，含還在組裝中的**。到了上限，**新的** thread 一律拒收：送訊息、開下行、讀歷史、續聊磁碟上的舊
@@ -2427,10 +2433,17 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   清單不變，但這一次被拒絕會留一筆 `rejected`（見下面「被拒絕與掛不上也進紀錄」）。
   關掉 `sandbox-policy`／`permission-presets` 不會被拒絕（`validateEntries` 沒有這條），但輸出會警告：serve 帶 `--workspace`
   時，之後每條新對話都會建不起來。
+- **寫之前也先照 serve 試掛一次**（[#2073](https://github.com/DemianLi/nexus-agent/issues/2073)）：在這個行程裡把寫下去之後的清單組一份、
+  組完就收，有列**新**掛不上（`apply` 拋錯、相容層的列 `requires` 缺件）就拒絕，訊息帶列 id、哪一步、原因。原本就掛不上、這次一樣掛不上的列
+  不擋無關的修改；必掛的列掛不上一律擋；樹上的列缺服務是在等提供者，不算。試掛不送模型請求，有 MCP 的列會連一次再關掉。
+  試掛只知道你給的旗標：**serve 帶了 `--patch` 或 `--workspace`，這裡也帶同一組**，不然要 `--workspace` 才起得來的列會被誤擋；
+  只在 serve 那邊掉的列（例如 `.env` 或工作目錄不同）這裡看不到，照舊到下一條新對話組裝時才掉（見「被拒絕、掛不上、自己停用也進紀錄」的 `failed`）。
+  試掛不佔紀錄的鎖，所以會久：有 MCP 握手卡住時，一次試掛要等約 120 秒。試掛期間有人寫進紀錄，就照新的紀錄重試，
+  最多重試 5 次，還是有人在寫就拒絕，訊息會說有人同時在改，等對方改完再重下。
 - **輸出講的**：紀錄檔的完整路徑、第幾筆、操作者、改了哪些**欄位名**（不印值）、什麼時候生效——`新對話生效`，或
   `待重啟`（啟動時讀一次的那幾列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
   `plugin-snapshot.json` 不在的話輸出會警告（serve 沒開過，或指到別的 home），不擋寫入。
-- **要跟 serve 帶同一組 `--patch`**：`plugin` 也收 `--patch <檔>`（可多次）。`--patch` 排在變更紀錄之後，被它蓋住的列，
+- **要跟 serve 帶同一組 `--patch` 與 `--workspace`**：`plugin` 也收 `--patch <檔>`（可多次）與 `--workspace <目錄>`（試掛用，見上一條）。`--patch` 排在變更紀錄之後，被它蓋住的列，
   寫入口照寫紀錄但回報 `被 --patch 蓋住`（設定的那一類直接拒絕，因為寫了也不會生效）。沒帶同一組，它看不出誰被蓋住。
 - **操作者記的是自報**：記的是有效帳號，以及 `sudo` 之前的帳號（讀 `SUDO_USER`，沒有就讀 `LOGNAME`，並標明出處）。
   那是環境變數，不是身分認證；**要能追責，靠主機本身的存取控制**（誰能登入、誰能 `sudo`）。
@@ -2461,7 +2474,7 @@ home 是 `0700`；不要把它貼進 issue 或聊天）。直接 `cat` 就能讀
 
 | `op` | 誰寫 | 什麼時候 | 帶什麼 |
 |---|---|---|---|
-| `rejected` | `plugin` 寫入口（`actor` 是主機帳號） | 驗證那一段拒絕了：id 不存在、設定不合 schema、關的是必掛的列、設定被 `--patch` 蓋住 | `requested`（要做的操作：`disable`／`enable`／`config-set`／`config-reset`）、`id`、`reason`（驗證器的原文） |
+| `rejected` | `plugin` 寫入口（`actor` 是主機帳號） | 驗證那一段拒絕了：id 不存在、設定不合 schema、關的是必掛的列、設定被 `--patch` 蓋住、試掛時有列新掛不上 | `requested`（要做的操作：`disable`／`enable`／`config-set`／`config-reset`）、`id`、`reason`（驗證器的原文） |
 | `failed` | serve（`actor` 是 `{"kind":"serve","effective":"<帳號>"}`） | 某一列掛不上，**而那一列在紀錄裡有被接受的改動**；或它依賴的列被關掉、它剛掉在 `requires`（見下面「依賴的列被關掉」） | `id`、`triggerSeq`（**歸因**到的那一筆的 `seq`，見下面「`triggerSeq` 是歸因，不是因果」）、`stage`（`module`／`config`／`apply`／`requires`）、`reason` |
 | `self-disabled` | serve（`actor` 同 `failed`：沿用 `serve`，「是插件自己停的」由 `op` 承載；#1424） | 樹上的函式插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 處理自我停用的那一格）；同一個行程裡同一列同一份宣告只記一次，重啟或宣告（模組名、設定）改了才會再記 | `id`、`name`（模組名）。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌 |
 
