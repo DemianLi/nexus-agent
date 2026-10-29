@@ -1419,7 +1419,32 @@ function isAbsentPath(error: unknown): boolean {
 }
 
 /**
- * 一個會話目錄裡數字最大的正規世代。**最高世代比讀方新也照樣挑它**，不退回次高的：讀不讀得了交給 {@link parseHeader} 判（太新就拒讀）。只認一般檔：同名的目錄不算世代。
+ * 目錄項裡數字最大的正規世代檔。只認一般檔：同名的目錄不算世代。**跟旁邊舊兩檔的日誌同名的不算**：id 是空字串、`session`、
+ * `session.v3` 這類的舊兩檔會話，日誌就叫 `session.jsonl`、`session.v3.jsonl`；同一層有它的 `.header.json` 時，這一層是放舊兩檔的
+ * 目錄，不是會話目錄。
+ */
+function latestGenerationIn(
+  entries: readonly Dirent[],
+): { readonly name: string; readonly version: number } | undefined {
+  const legacyLogs = new Set<string>();
+  for (const entry of entries) {
+    const base = entry.isDirectory() ? undefined : parseLegacyTwoFileHeaderFilename(entry.name);
+    if (base !== undefined) legacyLogs.add(legacyTwoFileSessionFilenames(base).log);
+  }
+  let latest: { readonly name: string; readonly version: number } | undefined;
+  for (const entry of entries) {
+    if (!entry.isFile() || legacyLogs.has(entry.name)) continue;
+    const version = parseGenerationLogFilename(entry.name);
+    if (version !== undefined && (latest === undefined || version > latest.version)) {
+      latest = { name: entry.name, version };
+    }
+  }
+  return latest;
+}
+
+/**
+ * 一個會話目錄裡數字最大的正規世代（{@link latestGenerationIn}）。**最高世代比讀方新也照樣挑它**，不退回次高的：讀不讀得了交給
+ * {@link parseHeader} 判（太新就拒讀）。
  *
  * @returns 目錄不在（見 {@link isAbsentPath}）或裡面沒有正規的世代檔，就是 `undefined`。
  */
@@ -1433,13 +1458,7 @@ async function resolveGeneration(
     if (isAbsentPath(error)) return undefined;
     throw error;
   }
-  let latest: { readonly name: string; readonly version: number } | undefined;
-  for (const entry of entries) {
-    const version = entry.isFile() ? parseGenerationLogFilename(entry.name) : undefined;
-    if (version !== undefined && (latest === undefined || version > latest.version)) {
-      latest = { name: entry.name, version };
-    }
-  }
+  const latest = latestGenerationIn(entries);
   return latest && { logPath: join(sessionDirectory, latest.name), version: latest.version };
 }
 
@@ -1452,9 +1471,7 @@ function hasGenerationSync(sessionDirectory: string): boolean {
     if (isAbsentPath(error)) return false;
     throw error;
   }
-  return entries.some(
-    (entry) => entry.isFile() && parseGenerationLogFilename(entry.name) !== undefined,
-  );
+  return latestGenerationIn(entries) !== undefined;
 }
 
 const FIRST_LINE_CHUNK_BYTES = 8192;
@@ -1554,6 +1571,18 @@ function coexistingLayouts(id: string, generationPath: string): SessionCorruptio
 }
 
 /**
+ * 世代檔的 header 行（{@link readFirstLine}）。檔不在、空檔、第一行還沒換行都是 `undefined`：當成不在，不算讀不懂。
+ */
+async function headerLineOf(logPath: string): Promise<Buffer | undefined> {
+  try {
+    return await readFirstLine(logPath);
+  } catch (error: unknown) {
+    if (isNotFound(error)) return undefined;
+    throw error;
+  }
+}
+
+/**
  * 一份會話此刻的 revision：舊兩檔是 header 與日誌兩個檔的 {@link fileRevision}（續接換版會取代 header，只算日誌看不出來）；
  * 單檔佈局是挑中的世代版本加那個檔的 revision。呼叫方要先重新挑世代再算：新世代發佈時舊世代檔不變，只算舊檔會命中舊內容。
  */
@@ -1610,14 +1639,7 @@ async function readSite(
       readBody: () => readBody(logPath, fs),
     };
   }
-  let line: Buffer | undefined;
-  try {
-    line = await readFirstLine(site.logPath);
-  } catch (error: unknown) {
-    if (isNotFound(error)) return undefined;
-    throw error;
-  }
-  // 空檔或第一行沒換行：當成不在，不算讀不懂。
+  const line = await headerLineOf(site.logPath);
   if (line === undefined) return undefined;
   const location = parseOptions.location ?? locate(site);
   const { header, storedFormatVersion } = parseHeader(line.toString('utf8'), {
@@ -1779,8 +1801,9 @@ function settledValues<R>(results: readonly PromiseSettledResult<R>[]): R[] {
  * 算讀不懂的，除了 header 讀不懂、版本讀不了（含最高世代比這一版新）、世代檔名跟 header 版本對不上之外還有兩種：
  *
  * - **目錄項的名字對不上 header 記的 id**：`open(id)` 照 id 算名字，找不到它。只有手動改過名字才會這樣。
- * - **同一個 id 兩種佈局都讀得懂**：兩份都不列，算一份讀不懂（`open`／`resume` 碰到同樣的並存會拋，見 {@link locateSession}）。
- *   其中一份讀不懂時它自己算一份，另一份照列。照 `session-store.ts` 檔頭登記的 unreadable 計數，不讓一份拖垮整份清單。
+ * - **同一個 id 兩種佈局都在**：跟 {@link locateSession} 一樣只看在不在、不看讀不讀得懂，兩份都不列，合起來算一份讀不懂
+ *   （`open`／`resume` 碰到同樣的並存會拋）。讀得懂的那份也不列：列出一項點不開的，等於默默挑了一份。照 `session-store.ts`
+ *   檔頭登記的 unreadable 計數，不讓一份拖垮整份清單。
  */
 async function listStoredSessions(
   directory: string,
@@ -1806,8 +1829,8 @@ async function listStoredSessions(
       async (
         dirent,
       ): Promise<
-        | { snapshot: StoredSessionSnapshot; layout: SessionSite['layout'] }
-        | 'unreadable'
+        | { snapshot: StoredSessionSnapshot; coexisting?: string }
+        | { unreadable: string }
         | undefined
       > => {
         signal?.throwIfAborted();
@@ -1823,35 +1846,41 @@ async function listStoredSessions(
             error instanceof SessionCorruptionError ||
             error instanceof SessionFormatUnsupportedError
           ) {
-            return 'unreadable';
+            return { unreadable: dirent.name };
           }
           throw error;
         }
         // 讀目錄與讀檔之間被刪掉：不是壞檔，就是不在了。
         if (entry === undefined) return undefined;
-        if (expectedEntryName(entry.layout, entry.header.id) !== entry.name) return 'unreadable';
         const { header, storedFormatVersion } = entry;
-        return { snapshot: { header, storedFormatVersion, revision }, layout: entry.layout };
+        if (expectedEntryName(entry.layout, header.id) !== entry.name) {
+          return { unreadable: dirent.name };
+        }
+        const snapshot = { header, storedFormatVersion, revision };
+        const other = await otherLayoutEntry(directory, entry.layout, header.id, fs);
+        return other === undefined ? { snapshot } : { snapshot, coexisting: other };
       },
     ),
   );
-  const layoutsById = new Map<string, Set<SessionSite['layout']>>();
+  // 並存的那一對：讀得懂的那份記下另一份的目錄項名字，另一份讀不懂時就不再單獨算。
+  const coexistingIds = new Set<string>();
+  const coexistingNames = new Set<string>();
   for (const outcome of outcomes) {
-    if (outcome === 'unreadable' || outcome === undefined) continue;
-    const { id } = outcome.snapshot.header;
-    const layouts = layoutsById.get(id) ?? new Set();
-    layouts.add(outcome.layout);
-    layoutsById.set(id, layouts);
+    if (outcome !== undefined && 'snapshot' in outcome && outcome.coexisting !== undefined) {
+      coexistingIds.add(outcome.snapshot.header.id);
+      coexistingNames.add(outcome.coexisting);
+    }
   }
   const sessions: StoredSessionSnapshot[] = [];
-  let unreadable = 0;
+  let unreadable = coexistingIds.size;
   for (const outcome of outcomes) {
-    if (outcome === 'unreadable') unreadable += 1;
-    else if (outcome !== undefined && layoutsById.get(outcome.snapshot.header.id)?.size === 1) {
+    if (outcome === undefined) continue;
+    if ('unreadable' in outcome) {
+      if (!coexistingNames.has(outcome.unreadable)) unreadable += 1;
+    } else if (outcome.coexisting === undefined) {
       sessions.push(outcome.snapshot);
     }
   }
-  for (const layouts of layoutsById.values()) if (layouts.size > 1) unreadable += 1;
   return { sessions, unreadable };
 }
 
@@ -1859,6 +1888,30 @@ async function listStoredSessions(
 function expectedEntryName(layout: SessionSite['layout'], id: string): string | undefined {
   if (layout === 'two-file') return safeBaseName(id);
   return id.length === 0 ? undefined : sessionDirectoryName(id);
+}
+
+/**
+ * 同一個 id 的另一種佈局在不在（只看在不在，同 {@link locateSession}）；在的話回它在 `directory` 裡的目錄項名字。
+ */
+async function otherLayoutEntry(
+  directory: string,
+  layout: SessionSite['layout'],
+  id: string,
+  fs: StableReadFileSystem,
+): Promise<string | undefined> {
+  if (layout === 'generation') {
+    const name = legacyTwoFileSessionFilenames(safeBaseName(id)).header;
+    try {
+      await fs.stat(join(directory, name));
+      return name;
+    } catch (error: unknown) {
+      if (!isNotFound(error)) throw error;
+      return undefined;
+    }
+  }
+  if (id.length === 0) return undefined;
+  const name = sessionDirectoryName(id);
+  return (await resolveGeneration(join(directory, name))) === undefined ? undefined : name;
 }
 
 /**
@@ -1979,8 +2032,14 @@ async function resumeStoredSession(
   context: LeaseContext,
 ): Promise<ResumedStoredSession> {
   const { catalog, fs, coldLogs } = context;
-  // **先認得有這份，再拿租約**：打錯的 `--resume` 不該留下一個鎖檔。
-  if ((await locateSession(directory, id, fs)) === undefined) throw notFoundIn(directory, id);
+  // **先認得有這份，再拿租約**：打錯的 `--resume` 不該留下一個鎖檔。單檔佈局要讀得到 header 行才算有，同 readSite。
+  const found = await locateSession(directory, id, fs);
+  if (
+    found === undefined ||
+    (found.layout === 'generation' && (await headerLineOf(found.logPath)) === undefined)
+  ) {
+    throw notFoundIn(directory, id);
+  }
   // **在讀之前拿**，照 dsh：別人握著的話，該在什麼都還沒讀之前就講；也不讓兩個續接者同時換版。
   // header 換版是原子取代（#1509），唯讀的讀方不拿租約也只會看到舊的或新的完整一份。
   const lease = await leaseFor(

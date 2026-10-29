@@ -216,6 +216,18 @@ describe('新出現的狀態各歸一類', () => {
     }
   });
 
+  it('並存而其中一份讀不懂：讀得懂的那份也不列，合起來算一份讀不懂', async () => {
+    await writeTwoFile(dir, 'legacy-ok', EVENTS);
+    await writeGeneration(dir, 'legacy-ok', OLDER, [], `${JSON.stringify(header('legacy-ok'))}\n`);
+    await writeTwoFile(dir, 'generation-ok', EVENTS);
+    await writeFile(sessionPathsIn(dir, 'generation-ok').header, 'not json');
+    await writeGeneration(dir, 'generation-ok', CURRENT, EVENTS);
+    await writeGeneration(dir, 'other', CURRENT, EVENTS);
+    const { sessions, unreadable } = await store().list();
+    expect(sessions.map(({ header: h }) => h.id)).toEqual(['other']);
+    expect(unreadable).toBe(2);
+  });
+
   it('名字以 .header.json 結尾的目錄：列表與離線掃描都不失敗', async () => {
     await mkdir(join(dir, 'weird.header.json'));
     await writeGeneration(dir, 'good', CURRENT, EVENTS);
@@ -423,9 +435,29 @@ describe('探單檔佈局時只有「不在」那幾種錯算不在', () => {
     }
   });
 
+  it('只有空的世代檔：續接是找不到，不留下鎖檔', async () => {
+    await writeGeneration(dir, 'empty', CURRENT, [], '');
+    expect(await errorOf(store().resume('empty'))).toBeInstanceOf(SessionNotFoundError);
+    expect(existsSync(sessionPathsIn(dir, 'empty').lock)).toBe(false);
+  });
+
   it('空 id：不探單檔佈局，舊兩檔照舊建、讀、撞名', async () => {
     await writeTwoFile(dir, '', EVENTS);
     expect(await (await store().open('', 'read')).read()).toEqual(EVENTS);
     expect(() => store().create(header(''))).toThrow(SessionAlreadyExistsError);
+  });
+});
+
+describe('放舊兩檔的那一層不是會話目錄', () => {
+  // 空 id 與 `session.v3` 的舊日誌叫 `session.jsonl`、`session.v3.jsonl`，名字跟世代檔一樣。
+  it('離線掃描往下走、照掃那一層的每一份；列表、打開、create 照樣把它當成沒有', async () => {
+    const run = join(dir, 'run');
+    for (const id of ['', 'session.v3', 'other']) await writeTwoFile(run, id, EVENTS);
+    const scanned = await readSessionLogs([dir]);
+    expect(scanned.unreadable).toEqual([]);
+    expect(scanned.logs.map((log) => log.header.id).sort()).toEqual(['', 'other', 'session.v3']);
+    expect(await store().list()).toEqual({ sessions: [], unreadable: 0 });
+    expect(await errorOf(store().open('run', 'read'))).toBeInstanceOf(SessionNotFoundError);
+    expect(() => store().create(header('run'))).not.toThrow();
   });
 });

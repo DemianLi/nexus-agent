@@ -14,7 +14,12 @@ import { existsSync, readdirSync } from 'node:fs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { parseGenerationLogFilename, sessionDirectoryName } from '@nexus/core';
+import {
+  legacyTwoFileSessionFilenames,
+  parseGenerationLogFilename,
+  parseLegacyTwoFileHeaderFilename,
+  sessionDirectoryName,
+} from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import { readSessionEntry, readSessionEntryById, sessionPathsIn } from './jsonl-session-store.js';
@@ -63,8 +68,8 @@ function directoriesUnder(root: string): string[] {
 }
 
 /**
- * `dir` 底下有沒有 `id` 的會話目錄，裡面有正規的世代檔（一般檔）。目錄不在、名字太長、同名的是個檔都算沒有，同後端的
- * 撞名檢查；其餘的錯照拋。
+ * `dir` 底下有沒有 `id` 的會話目錄，裡面有正規的世代檔（一般檔，而且旁邊沒有同名舊日誌的 `.header.json`：那是放舊兩檔的
+ * 一層）。目錄不在、名字太長、同名的是個檔都算沒有，同後端的撞名檢查；其餘的錯照拋。
  */
 function holdsGeneration(dir: string, id: string): boolean {
   let entries;
@@ -75,8 +80,17 @@ function holdsGeneration(dir: string, id: string): boolean {
     if (code === 'ENOENT' || code === 'ENAMETOOLONG' || code === 'ENOTDIR') return false;
     throw error;
   }
+  const legacyLogs = new Set(
+    entries.flatMap((entry) => {
+      const base = entry.isDirectory() ? undefined : parseLegacyTwoFileHeaderFilename(entry.name);
+      return base === undefined ? [] : [legacyTwoFileSessionFilenames(base).log];
+    }),
+  );
   return entries.some(
-    (entry) => entry.isFile() && parseGenerationLogFilename(entry.name) !== undefined,
+    (entry) =>
+      entry.isFile() &&
+      !legacyLogs.has(entry.name) &&
+      parseGenerationLogFilename(entry.name) !== undefined,
   );
 }
 
