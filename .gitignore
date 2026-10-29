@@ -39,3 +39,6 @@ eval-results/
 
 # 打包產物（scripts/release/pack.ts）
 .release-out/
+
+# 沙箱 spawner 的建置輸出（#1946）。
+/native/sandbox-spawner/target/
