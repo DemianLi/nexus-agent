@@ -311,7 +311,8 @@ function drained(stream: NodeJS.WriteStream): Promise<void> {
 if (import.meta.main) {
   const code = await runPluginCli({ argv: process.argv.slice(2) });
   // 排空輸出就 exit，不等事件迴圈自己收空：試掛丟下、還在握手的 MCP 子行程（`@nexus/plugin-mcp` `supervisor.ts` 檔頭偏離 6）
-  // 握著 pipe，要等 SDK 的請求逾時才放（版本協商兩輪，最久約 120 秒）。exit 之後那個子行程的 stdin 收到 EOF，自己退出。
+  // 握著 pipe，要等 SDK 的請求逾時才放（版本協商兩輪，最久約 120 秒）。exit 之後子行程的 stdin 收到 EOF：照 stdio 慣例
+  // 會自己退出，不理 EOF 的會留成孤兒（`docs/operations.md`〈孤兒行程〉）。
   await Promise.all([drained(process.stdout), drained(process.stderr)]);
   process.exit(code);
 }

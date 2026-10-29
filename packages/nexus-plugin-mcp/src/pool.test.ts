@@ -362,7 +362,7 @@ describe('第一次握手卡住（PM 審查擋 1）', () => {
 });
 
 describe('建立那一份的取用的期限（#2125）', () => {
-  /** 一份組裝握手卡住時，過 `ms` 之後落定了沒。 */
+  /** 組一份，過 `ms` 之後落定了沒。 */
   async function settledAfter(shared: McpConnectionPool, options: McpPluginOptions, ms: number) {
     let settled = false;
     void assemble(shared, options).then(

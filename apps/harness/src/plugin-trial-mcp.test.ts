@@ -53,7 +53,7 @@ function pidsOf(marker: string): number[] {
   }
 }
 
-/** 一個 home，紀錄裡插一列 stdio MCP；回 `defaultSources` 要的 env 與那一列 server 的記號。 */
+/** 一個 home，紀錄裡插一列 stdio MCP；回 home 目錄與 `defaultSources` 要的 env。 */
 function home(
   connection: { args: string[]; env?: Record<string, string> },
   failOnStartupError: boolean,
@@ -144,11 +144,12 @@ describe('plugin 行程（#2125）', () => {
     expect(code).toBe(0);
     // home 沒有 serve 留的快照，所以 stderr 只有那一句警告；整句連換行都要在。
     expect(stderr.join('')).toMatch(/^警告：[^\n]*沒有 plugin-snapshot\.json[^\n]*請自己確認。\n$/);
-    // 上界：一次試掛（等期限＋收池）加行程起動；沒有這道 exit 的話要等到握手逾時，約 120 秒。
+    // 上界：一次試掛（等期限＋收池）加行程起動；沒有 `plugin-cli.ts` 進入點的 `process.exit`，要等到握手逾時，約 120 秒。
     expect(wall).toBeLessThan(FIRST_CONNECT_WAIT_MS + CLOSE_LIMIT_MS + 15_000);
     const lines = stdout.join('').trimEnd().split('\n');
     expect(lines[0]).toMatch(/^已寫入 /);
     expect(lines.at(-1)).toBe('  生效：新對話生效（下一條 thread 起）；開著的對話不變');
+    // 子行程收到 EOF 到退出的餘裕；留下來的話，3 秒後 pgrep 還找得到。
     await new Promise((resolve) => setTimeout(resolve, 3_000));
     expect(pidsOf(h.marker)).toEqual([]);
   }, 60_000);

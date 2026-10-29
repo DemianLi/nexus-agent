@@ -2443,14 +2443,14 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   各列**依序**連，連得上的照實際握手時間；連不上的分兩種：
   - **沒寫 `failOnStartupError`**：最多等 5 秒，到期照連不上處理（不算掉，同 serve 只警告）。
   - **寫了 `failOnStartupError: true`**：等到連線落定，判法同 serve：連不上算掉、這一筆被拒。握手卡住要約 120 秒
-    （SDK 先試新協定、再試舊協定，各等 60 秒的請求逾時），serve 起動時也一樣久。
+    （SDK 先試新協定、再試舊協定，各等 60 秒的請求逾時），serve 啟動時也一樣久。
 
-  一次試掛最多約「5 秒 × 沒寫的卡住列數 + 120 秒 × 寫了的卡住列數」，再加收池約 5 秒（各列同時收）。**平常**一筆只試掛一次，
+  一次試掛最多約「5 秒 × 沒寫的卡住列數 + 120 秒 × 寫了的卡住列數」，加上連得上的列各自的握手時間，再加收池約 5 秒（各列同時收）。**平常**一筆只試掛一次，
   寫下去之後那一份有列掉了才再組一份現在的當基準，所以是一到兩次；**最壞**是試掛期間紀錄一直被別人追加，2 次試掛 × 6 輪。
   例：一列握手卡住、沒寫 `failOnStartupError`，`plugin disable` 從起到結束實測約 13 秒。
   寫完、輸出交出去之後行程就結束，**不等**試掛丟下、還在握手的子行程。
-- **孤兒行程**：那個子行程是靠 stdin 收到 EOF 自己退出的。不理 stdin EOF 的 MCP server 會留下來，父行程變成 1，不會自己結束。
-  找：`ps -axo pid,ppid,etime,command | awk '$2 == 1'`，再對那一列 MCP 設定的 `command`；收：`kill <pid>`（不退再 `kill -9`）。
+- **孤兒行程**：那個子行程是靠 stdin 收到 EOF 自己退出的。不理 stdin EOF 的 MCP server 會留下來、不會自己結束，父行程通常變成 1（容器裡有 tini 這類 subreaper 的話是它）。
+  找：`ps -axo pid,ppid,etime,command | awk '$2 == 1'`（subreaper 底下改比它的 pid），再對那一列 MCP 設定的 `command`；收：`kill <pid>`（不退再 `kill -9`）。
 - **輸出講的**：紀錄檔的完整路徑、第幾筆、操作者、改了哪些**欄位名**（不印值）、什麼時候生效——`新對話生效`，或
   `待重啟`（啟動時讀一次的那幾列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
   `plugin-snapshot.json` 不在的話輸出會警告（serve 沒開過，或指到別的 home），不擋寫入。
