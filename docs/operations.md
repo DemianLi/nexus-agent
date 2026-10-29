@@ -922,7 +922,7 @@ if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆
 
 第 4 步跟發版時 `release:verify-packed-install` 做的是同一件事（`scripts/release/sbom.ts` 的 `sbomProblems`）：每一顆都在 SBOM 裡，SBOM 裡也沒有閉包外的。
 沙箱 spawner 那一側，crate 從 `licenses/sandbox-spawner/` 的目錄名讀，執行檔與標準函式庫只看檔（`native/nexus-sandbox-spawner`、`licenses/sandbox-spawner/rust-std/COPYRIGHT-library.html`）在不在，crate 印成 `cargo:<名>@<版本>`；`sbomProblems` 另外核對執行檔的 SHA-256 等於 SBOM 記的。
-CI 在每張動到 TypeScript 的 PR 與每次 Release 上都跑過；主機上再跑一次，核的是「解開之後到現在，沒有人往 `node_modules` 裡加或換過套件版本」。
+同一件事 CI 的 `packed-install` 跑在每個合進 `develop` 的 commit（合併後完整一輪）、動到 TypeScript 或相依這類要掃的檔的 `develop → main` PR 與 push 到 `main`、動到 `.github/workflows|scripts|actions/` 的功能 PR，其他功能 PR 走輕的模式，不打包；每次 Release 也由 `release:verify-packed-install` 跑一次。主機上再跑一次，核的是「解開之後到現在，沒有人往 `node_modules` 裡加或換過套件版本」。
 
 - **SBOM 的雜湊是 registry tarball 的。** 第三方套件的 `hashes` 取自閉包 lockfile 的 integrity（npm registry 上那個 `.tgz` 的 SHA-512），
   拿來對弱點資料庫或 registry 都對得上，但**不能**拿主機上解開的檔案重算出來。我們自己的套件（`@nexus/*`）lockfile 不記 integrity，所以沒有 `hashes`，

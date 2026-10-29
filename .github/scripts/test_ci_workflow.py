@@ -408,6 +408,13 @@ class SandboxSpawner(unittest.TestCase):
         steps = {s.get('name'): s for s in job['steps']}
         self.assertIn('--spawner "$RUNNER_TEMP/spawner"', steps['打包']['run'])
 
+    def test_cache_can_be_turned_off(self) -> None:
+        """發版傳 cache: 'false'：快取那一步要真的看這個 input。"""
+        action = load(SPAWNER_ACTION)
+        self.assertEqual(action['inputs']['cache']['default'], 'true')
+        cache = next(s for s in action['runs']['steps'] if str(s.get('uses', '')).startswith('actions/cache@'))
+        self.assertEqual(cache['if'], "inputs.cache == 'true'")
+
     def test_bundle_keeps_the_exec_bit(self) -> None:
         """upload-artifact 不保留執行權限，所以先包成 tar。"""
         self.assertIn('tar -cf', self.steps['打 bundle']['run'])
@@ -435,9 +442,10 @@ class SandboxSpawner(unittest.TestCase):
         self.assertIn('"refs/heads/main"', check['run'])
         x64 = next(s for s in jobs['sandbox-spawner']['steps'] if s.get('uses') == './.github/actions/sandbox-spawner')
         self.assertEqual(x64['with']['bundle'], 'sandbox-spawner-linux-x64')
+        self.assertEqual(x64['with']['cache'], 'false')
         self.assertEqual(jobs['sandbox-spawner-arm64']['runs-on'], 'ubuntu-24.04-arm')
         arm = next(s for s in jobs['sandbox-spawner-arm64']['steps'] if s.get('uses') == './.github/actions/sandbox-spawner')
-        self.assertNotIn('with', arm, 'arm64 不出貨，不打 bundle')
+        self.assertEqual(arm['with'], {'cache': 'false'}, 'arm64 不出貨、不打 bundle；發版不用快取')
         steps = jobs['release']['steps']
         download = next(s for s in steps if str(s.get('uses', '')).startswith('actions/download-artifact@'))
         self.assertEqual(download['with']['name'], 'sandbox-spawner-linux-x64')
