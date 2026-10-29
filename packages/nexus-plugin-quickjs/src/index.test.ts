@@ -81,6 +81,28 @@ describe('正常的路', () => {
   });
 });
 
+/** 逾時看的是 interrupt handler 有沒有觸發，程式丟出來的值偽造不了種類（[#1846](https://github.com/DemianLi/nexus-agent/issues/1846)）。 */
+describe('失敗種類由 host 判定', () => {
+  it('頂層 throw null：exception', async () => {
+    const error = await runFailing({}, 'throw null');
+    expect(error.kind).toBe('exception');
+    expect(error.message).toBe('code run failed (exception): null');
+  });
+
+  it.each([
+    ['丟假的中斷物件', 'throw { name: "InternalError", message: "interrupted" }'],
+    [
+      '丟名字是 InternalError 的例外',
+      'throw Object.assign(new Error("interrupted"), { name: "InternalError" })',
+    ],
+    ['用假的中斷物件 reject', 'Promise.reject({ name: "InternalError", message: "interrupted" })'],
+  ])('%s：照一般例外轉述，不是逾時', async (_label, code) => {
+    const error = await runFailing({}, code);
+    expect(error.kind).toBe('exception');
+    expect(error.message).toBe('code run failed (exception): InternalError: interrupted');
+  });
+});
+
 /**
  * 完成值必須是無損的 JSON（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572) N0672），照 dsh 的 `prepareCompletion`
  * （`ptc-runtime-node/src/bootstrap.ts:164-188`）。以前 `0/0` 回 `null`、`new Map()` 回 `{}`、`{a: undefined}` 少一格，全部當成功——
@@ -131,7 +153,6 @@ describe('完成值必須是無損的 JSON', () => {
       '(() => { const o = {}; Object.defineProperty(o, "h", { value: 1 }); return o; })()',
     ],
     ['class 實例', '(() => { class P { constructor() { this.x = 1; } } return new P(); })()'],
-    ['循環參照', '(() => { const a = {}; a.self = a; return a; })()'],
     ['包裝物件', 'new Number(1)'],
     ['藏在深處的 NaN', '({ a: [{ b: [{ c: 0 / 0 }] }] })'],
   ])('%s：拋 invalid-output，不再默默變成 null 或 {}', async (_label, code) => {
@@ -223,10 +244,36 @@ describe('完成值必須是無損的 JSON', () => {
     });
   });
 
-  // 快照自己撞到資源上限不是「值不合格」：getter 裡的無窮迴圈要報逾時，不能被收成 invalid-output。
+  // 快照裡撞到記憶體上限算 invalid-output，所以記憶體上限給大、逾時給短：循環檢查壞了的話快照停不下來，跑成 timeout 而紅。
+  it('循環參照：拋 invalid-output', async () => {
+    const error = await runFailing(
+      { memoryLimitBytes: 256 * 1024 * 1024, timeoutMs: 200 },
+      '(() => { const a = {}; a.self = a; return a; })()',
+    );
+    expect(error.kind).toBe('invalid-output');
+  });
+
+  // 中斷觸發過就是逾時，跟它在快照的哪一步發生無關。
   it('快照裡的 getter 無窮迴圈：逾時，不是 invalid-output', async () => {
     const error = await runFailing({ timeoutMs: 200 }, '({ get a() { for (;;) {} } })');
     expect(error.kind).toBe('timeout');
+  });
+
+  // 沒觸發中斷，快照拋什麼都是「讀不出一份無損的值」，種類不看丟出來的值長什麼樣（#1846）。
+  it.each([
+    ['throw null', '({ get a() { throw null; } })'],
+    [
+      '丟假的中斷物件',
+      '({ get a() { throw { name: "InternalError", message: "interrupted" }; } })',
+    ],
+    [
+      '丟名字是 InternalError 的例外',
+      '({ get a() { throw Object.assign(new Error("interrupted"), { name: "InternalError" }); } })',
+    ],
+  ])('快照裡的 getter %s：invalid-output', async (_label, code) => {
+    const error = await runFailing({}, code);
+    expect(error.kind).toBe('invalid-output');
+    expect(error.message).toBe(`code run failed (invalid-output): ${LOSSLESS}`);
   });
 
   // 快照迭代走訪、不遞迴（#1841 當初量到 5000 層以上整顆 VM 中止）。
