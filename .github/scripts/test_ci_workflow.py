@@ -7,7 +7,8 @@
 - gate 的 needs 列了每一個 job，判斷段也讀了每一個 job 的結果——只列 needs 不判斷，skipped 會被當成通過；
 - 兩處釘在下限的 Node（packed-install、node-compat 的 22.19）對得上 `engines`；
 - 同時活躍的 job 峰值在上限之內（ci.yml 檔頭的算式）；
-- 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）。
+- 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）；
+- test-harness 的兩片讀同一份耗時、合併後那一輪各片存回自己那一份（#2093）。
 """
 
 from __future__ import annotations
@@ -380,7 +381,11 @@ class TypecheckCache(unittest.TestCase):
         jobs = load(CI)['jobs']
         self.typecheck = jobs['typecheck']
         self.save = next(s for s in self.typecheck['steps'] if str(s.get('uses', '')).startswith('actions/cache/save@'))
-        self.restore = next(s for s in jobs['plan']['steps'] if str(s.get('uses', '')).startswith('actions/cache/restore@'))
+        self.restore = next(
+            s
+            for s in jobs['plan']['steps']
+            if str(s.get('uses', '')).startswith('actions/cache/restore@') and TYPECHECK_CACHE in s['with']['path']
+        )
 
     def test_only_post_merge_saves(self) -> None:
         self.assertEqual(self.save['if'], 'inputs.full')
@@ -414,6 +419,71 @@ class TypecheckCache(unittest.TestCase):
         self.assertEqual(
             manifest['scripts']['typecheck'], ".github/scripts/typecheck.sh '--filter=./packages/*' '--filter=./apps/*'"
         )
+
+
+class HarnessDurations(unittest.TestCase):
+    """test-harness 分片看的耗時（#2093）。路徑或鍵對不上時快取靜靜沒效、退回雜湊切法，gate 照樣綠，只是兩片又不均；
+    兩片取到的不是同一份時切法不一致，會有檔兩片都沒跑。"""
+
+    SHARDS = (1, 2)
+
+    def setUp(self) -> None:
+        jobs = load(CI)['jobs']
+        self.plan = jobs['plan']
+        self.harness = jobs['test-harness']
+        self.lookups = {s['id']: s for s in self.plan['steps'] if str(s.get('id', '')).startswith('durations-')}
+        harness_steps = self.harness['steps']
+        self.restores = [s for s in harness_steps if str(s.get('uses', '')).startswith('actions/cache/restore@')]
+        self.save = next(s for s in harness_steps if str(s.get('uses', '')).startswith('actions/cache/save@'))
+        self.collect = next(s for s in harness_steps if s.get('name') == '收這一片的耗時')
+        self.test = next(s for s in harness_steps if s.get('name') == 'Test')
+
+    def path(self, shard: int | str) -> str:
+        return f'.harness-durations/results-{shard}.json'
+
+    def test_plan_only_looks_up_in_full_mode(self) -> None:
+        self.assertEqual(sorted(self.lookups), [f'durations-{n}' for n in self.SHARDS])
+        for n in self.SHARDS:
+            with self.subTest(shard=n):
+                step = self.lookups[f'durations-{n}']
+                self.assertEqual(step['if'], "steps.plan.outputs.mode == 'full'")
+                self.assertIs(step['with']['lookup-only'], True)
+                self.assertEqual(step['with']['path'], self.path(n))
+                self.assertEqual(step['with']['key'], f'harness-durations-{n}-${{{{ steps.base.outputs.sha || github.sha }}}}')
+                self.assertEqual(step['with']['restore-keys'], f'harness-durations-{n}-')
+                self.assertEqual(
+                    self.plan['outputs'][f'durations_key_{n}'],
+                    f'${{{{ steps.durations-{n}.outputs.cache-matched-key }}}}',
+                )
+
+    def test_both_shards_restore_exactly_what_plan_found(self) -> None:
+        # 兩片都取兩份；鍵是 plan 查到的那一個、取不到就紅，所以兩片看到的資料相同。
+        self.assertEqual(len(self.restores), len(self.SHARDS))
+        for n, step in zip(self.SHARDS, self.restores):
+            with self.subTest(shard=n):
+                self.assertEqual(step['if'], f"needs.plan.outputs.durations_key_{n} != ''")
+                self.assertEqual(step['with']['key'], f'${{{{ needs.plan.outputs.durations_key_{n} }}}}')
+                self.assertEqual(step['with']['path'], self.path(n))
+                self.assertIs(step['with']['fail-on-cache-miss'], True)
+                self.assertNotIn('restore-keys', step['with'])
+        names = [s.get('name') or s.get('uses') for s in self.harness['steps']]
+        self.assertLess(names.index(self.restores[-1]['uses']), names.index('Test'))
+
+    def test_sequencer_reads_the_restored_dir(self) -> None:
+        source = (ROOT / 'apps' / 'harness' / 'src' / 'test-shard-sequencer.ts').read_text(encoding='utf-8')
+        env = re.search(r"DURATIONS_DIR_ENV = '([A-Z_]+)'", source)
+        assert env is not None
+        self.assertEqual(self.test['env'], {env.group(1): '${{ github.workspace }}/.harness-durations'})
+        config = (ROOT / 'apps' / 'harness' / 'vitest.config.ts').read_text(encoding='utf-8')
+        self.assertIn('sequence: { sequencer: DurationSequencer }', config)
+
+    def test_only_post_merge_saves_its_own_shard(self) -> None:
+        for step in (self.collect, self.save):
+            self.assertEqual(step['if'], 'inputs.full && !cancelled()')
+        self.assertEqual(self.save['with']['path'], self.path('${{ matrix.shard }}'))
+        self.assertEqual(self.save['with']['key'], 'harness-durations-${{ matrix.shard }}-${{ github.sha }}')
+        self.assertIn(f'"{self.path("${{ matrix.shard }}")}"', self.collect['run'])
+        self.assertEqual(self.harness['strategy']['matrix']['shard'], list(self.SHARDS))
 
 
 class LightScope(unittest.TestCase):

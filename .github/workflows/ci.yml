@@ -70,6 +70,8 @@ jobs:
       base_sha: ${{ steps.base.outputs.sha }}
       changed_count: ${{ steps.checks.outputs.count }}
       affected: ${{ steps.light.outputs.affected }}
+      durations_key_1: ${{ steps.durations-1.outputs.cache-matched-key }}
+      durations_key_2: ${{ steps.durations-2.outputs.cache-matched-key }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -93,6 +95,27 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: echo "sha=$(git merge-base "origin/$BASE_REF" HEAD)" >> "$GITHUB_OUTPUT"
+
+      # 全跑時 test-harness 兩片要讀的耗時（#2093）：合併後那一輪每片各存一份，這裡只查鍵、不下載。先找分歧點那一份，
+      # 沒有就退回最近的一份（GitHub 會清掉 7 天沒人取的快取，都沒有時兩片退回 vitest 的雜湊切法）。
+      # 兩片拿這裡查到的同一個鍵去取，讀到的是同一份資料，切法才一致。
+      - uses: actions/cache/restore@v6
+        id: durations-1
+        if: steps.plan.outputs.mode == 'full'
+        with:
+          path: .harness-durations/results-1.json
+          key: harness-durations-1-${{ steps.base.outputs.sha || github.sha }}
+          restore-keys: harness-durations-1-
+          lookup-only: true
+
+      - uses: actions/cache/restore@v6
+        id: durations-2
+        if: steps.plan.outputs.mode == 'full'
+        with:
+          path: .harness-durations/results-2.json
+          key: harness-durations-2-${{ steps.base.outputs.sha || github.sha }}
+          restore-keys: harness-durations-2-
+          lookup-only: true
 
       # 以下是輕的模式：擋合併所需的檢查都在這個 job 跑完，中間那一段整排 skipped。
 
@@ -368,8 +391,9 @@ jobs:
       - name: Test
         run: pnpm --filter @nexus/web run test
 
-  # harness 是關鍵路徑，切兩片平行跑。量測（2026-09-29，GitHub 公開倉庫的標準 runner）：harness 單片約 190 秒，兩片各約 80–110 秒，
-  # 三片沒有更快（vitest 依檔名雜湊分片、不看耗時，片間不均）。web 單片約 85 秒，低於 harness 的一片，不需要分。
+  # harness 是關鍵路徑，切兩片平行跑；web 一片就比 harness 的一片短，不分。
+  # 分片看上一輪的耗時（#2093，`apps/harness/src/test-shard-sequencer.ts`）：plan 查到鍵就取那兩份，跑完由合併後那一輪各片存回自己這一份。
+  # 取不到時兩片都退回 vitest 的雜湊切法；兩片取的是 plan 查到的同一個鍵，取不到就讓這一片紅，不會一片看耗時、一片看雜湊而漏跑檔。
   test-harness:
     name: test-harness (${{ matrix.shard }}/2)
     needs: plan
@@ -383,8 +407,34 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+      - uses: actions/cache/restore@v6
+        if: needs.plan.outputs.durations_key_1 != ''
+        with:
+          path: .harness-durations/results-1.json
+          key: ${{ needs.plan.outputs.durations_key_1 }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v6
+        if: needs.plan.outputs.durations_key_2 != ''
+        with:
+          path: .harness-durations/results-2.json
+          key: ${{ needs.plan.outputs.durations_key_2 }}
+          fail-on-cache-miss: true
       - name: Test
+        env:
+          NEXUS_TEST_DURATIONS_DIR: ${{ github.workspace }}/.harness-durations
         run: pnpm --filter @nexus/harness exec vitest run --shard="${{ matrix.shard }}/2"
+      # vitest 跑完把這一片每個檔的耗時寫進自己的結果快取；CI 的 node_modules 是新裝的，裡面只有這一片的檔。測試紅了也存。
+      - name: 收這一片的耗時
+        if: inputs.full && !cancelled()
+        run: |
+          mkdir -p .harness-durations
+          cp apps/harness/node_modules/.vite/vitest/*/results.json ".harness-durations/results-${{ matrix.shard }}.json"
+      - name: 存這一片的耗時
+        if: inputs.full && !cancelled()
+        uses: actions/cache/save@v6
+        with:
+          path: .harness-durations/results-${{ matrix.shard }}.json
+          key: harness-durations-${{ matrix.shard }}-${{ github.sha }}
 
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
