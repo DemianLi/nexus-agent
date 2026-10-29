@@ -2,12 +2,12 @@
 //!
 //! 框：`u32 LE 長度` 接著那麼多 bytes 的內容。內容第一個 byte 是種類，其餘是欄位：
 //! 數字一律 `u32 LE`（有號的值照二補數存），字串與位元組串是 `u32 LE 長度 + bytes`，清單是 `u32 LE 個數 + 每一項`。
-//! 不用分隔字元，所以參數、路徑、環境變數裡有 tab、換行、NUL 以外的任何 byte 都原樣送到（NUL 進不了 argv，回 `Protocol`）。
+//! 不用分隔字元，所以參數、路徑、環境變數裡的任何 byte（含 tab、換行）都原樣送到；只有 NUL 進不了 argv，回 `Protocol`。
 
 /// 一框最多多大。超過就當成通道壞掉，spawner 結束。
 pub const MAX_FRAME: usize = 1 << 20;
 
-/// 檔案效果政策，照 dsh 的 `ConfinedSandboxMode`（`danger-full-access` 不經 spawner）。
+/// 檔案效果政策。全權模式不經 spawner，所以這裡只有兩種。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     ReadOnly,
@@ -22,9 +22,9 @@ pub struct Spawn {
     pub pipes: u8,
     /// 子行程的工作目錄。
     pub cwd: Vec<u8>,
-    /// 讀得到（含執行）的根。spawner 不帶固定清單，由 Node 決定，同 dsh launcher 的 `--ro`。
+    /// 讀得到（含執行）的根。spawner 不帶固定清單，由 Node 決定。
     pub readable: Vec<Vec<u8>>,
-    /// 寫得進去的根，同 dsh launcher 的 `--rw`。`read-only` 時 spawner 不看這一份。`/dev/null` 一律可寫，不必列。
+    /// 寫得進去的根。`read-only` 時 spawner 不看這一份。`/dev/null` 一律可寫，不必列。
     pub writable: Vec<Vec<u8>>,
     pub argv: Vec<Vec<u8>>,
     /// `NAME=value`。子行程的環境就是這一份，不繼承 spawner 自己的。
@@ -34,20 +34,22 @@ pub struct Spawn {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Request {
     Spawn(Spawn),
-    /// 送訊號給整個行程群組。
+    /// 送訊號給整個行程群組。不回任何事件：id 不認得、已經 `Failed` 或已經結束都靜靜忽略；
+    /// 還沒 `Started` 時先排著，`Started` 之後才送。
     Signal { id: u32, signo: i32 },
 }
 
-/// 沒起成的原因。種類讓 Node 不必解析文字就能分流（dsh postmortem 0004：通知與子行程的失敗混在同一條通道會誤判）。
+/// 沒起成的原因。種類讓 Node 不必解析文字就能分流：沙箱不可用要照 fail-closed 處理，跟工具自己起不來不能混在同一條判斷。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailKind {
-    /// Landlock 不能用（none）、設不上，或授權的路徑打不開（同 dsh launcher：不默默縮小授權）：`SANDBOX_UNAVAILABLE`。
+    /// Landlock 不能用（none）、設不上，或授權的路徑打不開（不默默縮小授權）：`SANDBOX_UNAVAILABLE`。
     SandboxUnavailable = 1,
     /// 工作目錄不存在或進不去。跟沙箱無關，要另外說（#1945）。
     StartDir = 2,
-    /// exec 失敗：找不到執行檔、沒有執行權限。
+    /// execve 失敗，`errno` 帶原因（找不到、沒有執行權限、格式不對……）。
     Exec = 3,
-    /// 要求本身不成立：argv 空的、含 NUL、等不到 stdio 連線。
+    /// 要求本身不成立：id 重複、argv 空的、argv／env／cwd／PATH 含 NUL、env 不是 `NAME=value`、
+    /// 連進來的 stdio 不在要求裡、等不到 stdio 連線。
     Protocol = 4,
     /// fork、pipe 這類資源用盡。
     Resource = 5,
@@ -68,16 +70,16 @@ impl FailKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// spawner 起不來：Landlock 是 none、seccomp 裝不上、自我檢查沒過、監聽 socket 建不起來。送完這一框 spawner 就結束，
+    /// spawner 起不來：啟動的任何一步失敗（Landlock 是 none、signalfd、監聽 socket、seccomp、自我檢查）。送完這一框 spawner 就結束，
     /// 之後 Node 對每個工具子行程都回 `SANDBOX_UNAVAILABLE`。
     Unavailable { errno: i32, detail: Vec<u8> },
     /// spawner 準備好了：過濾器裝好、自我檢查通過。帶上過濾器的指令數與 Landlock 的 ABI 版本。
     Ready { filter_insns: u32, landlock_abi: u32 },
-    /// 已 exec。`partial` 是 Landlock 只部分生效（核心的 ABI 比要的舊）：照 dsh 照跑，由 Node 印通知。
+    /// 已 exec。`partial` 是 Landlock 只部分生效（核心的 ABI 比要的舊）：照跑，由 Node 印通知。
     Started { id: u32, pid: u32, partial: bool },
     /// 沒 exec。`errno` 是失敗那一步的錯誤碼（沒有就是 0）。
     Failed { id: u32, kind: FailKind, errno: i32, detail: Vec<u8> },
-    /// 結束。被訊號殺掉時 `code` 是 -1、`signal` 是訊號編號。
+    /// 結束。被訊號殺掉時 `code` 是 -1、`signal` 是訊號編號。spawner 關機時還在跑的也會送（被 SIGKILL）。
     Exited { id: u32, code: i32, signal: i32 },
 }
 

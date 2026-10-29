@@ -440,7 +440,7 @@ jobs:
           key: harness-durations-${{ matrix.shard }}-${{ github.sha }}
 
   # 沙箱 spawner（#1946，`native/sandbox-spawner/`）：Rust，在真的核心上跑整合測試。plan 的 `rust` 決定跑不跑，跟模式無關：
-  # 動到它或 CI 自己的功能 PR（輕的模式也跑）與合併後完整一輪（D55，接受超過 60 秒）。核心沒有 Landlock 時測試紅，不准自我跳過。
+  # 動到它或 CI 自己的功能 PR（輕的模式也跑，#1827 D55：接受超過 60 秒）與合併後完整一輪。核心沒有 Landlock 時測試紅，不准自我跳過。
   sandbox-spawner:
     name: sandbox-spawner
     needs: plan

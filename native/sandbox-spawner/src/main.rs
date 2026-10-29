@@ -8,18 +8,25 @@
 //!
 //! 啟動順序（順序本身是安全性的一部分）：
 //!
-//! 1. 查 Landlock：核心不支援（none）就送 `Unavailable` 後結束，同 dsh 的 fail-closed（S2）。
-//! 2. 建監聽用的 `AF_UNIX` socket、chmod 0600。一定要在裝過濾器之前：S1 擋 `socket(AF_UNIX)`，裝完之後只用 `accept4`。
-//! 3. `NO_NEW_PRIVS`＋seccomp，只裝這一次，之後 fork 的子行程都繼承。裝不上就送 `Unavailable` 後結束（S2）。
-//! 4. 自我檢查：`socket(AF_INET)` 要拿到 EACCES、`socket(AF_UNIX)` 要拿到 EPERM。
-//! 5. 送 `Ready`。
+//! 1. 查 Landlock：核心不支援（none）就 fail-closed（S2）。
+//! 2. 擋下 SIGINT／SIGTERM／SIGHUP，改由 signalfd 收。
+//! 3. 建監聽用的 `AF_UNIX` socket、chmod 0600。一定要在裝過濾器之前：S1 擋 `socket(AF_UNIX)`，裝完之後只用 `accept4`。
+//! 4. `NO_NEW_PRIVS`＋seccomp，只裝這一次，之後 fork 的子行程都繼承。
+//! 5. 自我檢查：`socket(AF_INET)` 要拿到 EACCES、`socket(AF_UNIX)` 要拿到 EPERM。
+//! 6. 送 `Ready`。
+//!
+//! 1 到 5 任何一步失敗，都送 `Unavailable` 後結束。
 //!
 //! stdio：Node 對監聽 socket 每接一條 fd 就 connect 一次，先寫 8 bytes 標頭（id `u32 LE`、fd `u32 LE`，fd ∈ {0,1,2}），之後就是資料。
 //! 連進來的對方要是起這個 spawner 的那個行程（`SO_PEERCRED` 的 pid 等於 `getppid()`，uid 相同），否則直接關掉。
 //! 要求與它要的連線都到齊才 fork；等太久（[`STDIO_WAIT`]）回 `Protocol`。
 //!
-//! 每個 id 恰好收到一個結局：`Failed`，或 `Started` 之後一個 `Exited`。工具結束時（leader 結束），整個行程群組一起 SIGKILL，
-//! 不留背景成員抓著 stdout。stdin 收到 EOF、或收到 SIGINT／SIGTERM／SIGHUP：殺掉所有群組、收完、結束。
+//! 每個 id 恰好收到一個結局：`Failed`，或 `Started` 之後一個 `Exited`。例外只有 id 重複：那是 Node 的錯，回一個帶同一個 id
+//! 的 `Failed`（`Protocol`），原本那筆照常進行。關機時還在跑的每個 id 照樣收到 `Exited`（被 SIGKILL）。
+//! 工具結束時（leader 結束），整個行程群組一起 SIGKILL，不留背景成員抓著 stdout。
+//!
+//! 結束：stdin 收到 EOF、收到 SIGINT／SIGTERM／SIGHUP、事件寫不出去（Node 不在了）、控制通道上有解不開的框
+//! （兩邊對協定的認知不一致，不能猜那筆要求的 id）：殺掉所有群組、收完、結束。
 
 mod child;
 
@@ -52,7 +59,7 @@ fn write_all(fd: libc::c_int, mut bytes: &[u8]) -> bool {
     true
 }
 
-/// 送一筆事件。控制通道寫不出去代表 Node 不在了：殺掉所有群組後結束。
+/// 送一筆事件；回 false 代表控制通道寫不出去。
 fn emit(event: &Event) -> bool {
     write_all(1, &protocol::frame(&protocol::encode_event(event)))
 }
@@ -192,6 +199,8 @@ struct Child {
     status: libc::c_int,
     partial: bool,
     phase: Phase,
+    /// Launching 時收到的訊號：子行程 `setsid` 之前 `kill(-pid)` 打不到，exec 之前殺掉又會被看成起來了，所以等 `Started` 再送。
+    queued: Vec<i32>,
 }
 
 struct Spawner {
@@ -203,6 +212,8 @@ struct Spawner {
     me: libc::pid_t,
     parent: libc::pid_t,
     uid: libc::uid_t,
+    /// 事件寫不出去過：主迴圈看到就收尾。
+    lost: bool,
 }
 
 /// argv[0] 沒有 `/` 時，照 request 帶來的 PATH 列出候選；PATH 沒給就用 execvp 的預設。
@@ -232,8 +243,14 @@ fn null_terminated(items: &[CString]) -> Vec<*const libc::c_char> {
 }
 
 impl Spawner {
-    fn fail(&self, id: u32, kind: FailKind, err: i32, detail: &str) {
-        emit(&Event::Failed { id, kind, errno: err, detail: detail.as_bytes().to_vec() });
+    fn emit(&mut self, event: &Event) {
+        if !emit(event) {
+            self.lost = true;
+        }
+    }
+
+    fn fail(&mut self, id: u32, kind: FailKind, err: i32, detail: &str) {
+        self.emit(&Event::Failed { id, kind, errno: err, detail: detail.as_bytes().to_vec() });
     }
 
     fn on_request(&mut self, request: Request) {
@@ -258,11 +275,15 @@ impl Spawner {
                 self.try_spawn(id);
             }
             Request::Signal { id, signo } => {
-                if let Some(child) = self.children.get(&id) {
-                    if child.phase != Phase::Failed {
+                if let Some(child) = self.children.get_mut(&id) {
+                    match child.phase {
+                        Phase::Launching => child.queued.push(signo),
                         // leader 還沒被收屍，pgid 不會被重用。
                         // SAFETY：送訊號給自己起的群組。
-                        unsafe { libc::kill(-child.pid, signo) };
+                        Phase::Running => unsafe {
+                            libc::kill(-child.pid, signo);
+                        },
+                        Phase::Failed => {}
                     }
                 }
             }
@@ -411,18 +432,20 @@ impl Spawner {
         // SAFETY：對剛 fork 的子行程開 pidfd；它還沒被收屍，pid 不會被重用。
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
         if pidfd < 0 {
+            let err = errno();
             // 沒有 pidfd 就等不了它：殺掉、收屍。Landlock 需要的核心（5.13）一定有 pidfd_open（5.3），這裡照理到不了。
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
                 libc::waitpid(pid, std::ptr::null_mut(), 0);
             }
             close(status[0]);
-            return Err((FailKind::Resource, errno(), "pidfd_open".to_string()));
+            return Err((FailKind::Resource, err, "pidfd_open".to_string()));
         }
-        Ok(Child { pid, pidfd, status: status[0], partial: self.abi < landlock::WANTED_ABI, phase: Phase::Launching })
+        Ok(Child { pid, pidfd, status: status[0], partial: self.abi < landlock::WANTED_ABI, phase: Phase::Launching, queued: Vec::new() })
     }
 
-    /// 狀態 pipe 有結果：EOF 是 exec 成功，有字是失敗紀錄。子行程已經死了的話，讀到的一定是完整的結果。
+    /// 狀態 pipe 有結果：EOF 是 exec 成功，有字是失敗紀錄（子行程每條失敗路徑都會寫）。
+    /// 例外：exec 之前被外部殺掉（例如 OOM killer）也是 EOF，會被看成 `Started`，接著的 `Exited` 帶那個訊號。
     fn on_status(&mut self, id: u32) {
         let Some(child) = self.children.get_mut(&id) else { return };
         let mut record = Vec::new();
@@ -442,7 +465,12 @@ impl Spawner {
         child.status = -1;
         if record.is_empty() {
             child.phase = Phase::Running;
-            emit(&Event::Started { id, pid: child.pid as u32, partial: child.partial });
+            let event = Event::Started { id, pid: child.pid as u32, partial: child.partial };
+            for signo in std::mem::take(&mut child.queued) {
+                // SAFETY：送訊號給自己起的群組，leader 還沒被收屍。
+                unsafe { libc::kill(-child.pid, signo) };
+            }
+            self.emit(&event);
             return;
         }
         child.phase = Phase::Failed;
@@ -454,7 +482,7 @@ impl Spawner {
             ),
             _ => (FailKind::Resource, 0, record.clone()),
         };
-        emit(&Event::Failed { id, kind, errno: err, detail });
+        self.emit(&Event::Failed { id, kind, errno: err, detail });
     }
 
     /// leader 結束了：先把狀態讀完（它可能 exec 完馬上結束），群組整個 SIGKILL，再收屍。
@@ -478,7 +506,7 @@ impl Spawner {
             } else {
                 (-2, 0)
             };
-            emit(&Event::Exited { id, code, signal });
+            self.emit(&Event::Exited { id, code, signal });
         }
     }
 
@@ -553,10 +581,14 @@ fn main() {
         me: unsafe { libc::getpid() },
         parent: unsafe { libc::getppid() },
         uid: unsafe { libc::getuid() },
+        lost: false,
     };
     let mut input: Vec<u8> = Vec::new();
 
     loop {
+        if s.lost {
+            s.shutdown(&cpath);
+        }
         // 前兩格固定是 stdin 與 signalfd，第三格是監聽 socket；之後依序是連線、狀態 pipe、pidfd。
         let mut fds = vec![
             libc::pollfd { fd: 0, events: libc::POLLIN, revents: 0 },
@@ -605,7 +637,10 @@ fn main() {
                     match protocol::take_frame(&mut input) {
                         Ok(Some(payload)) => match protocol::decode_request(&payload) {
                             Ok(request) => s.on_request(request),
-                            Err(e) => eprintln!("nexus-sandbox-spawner: 看不懂的要求：{}", e.0),
+                            Err(e) => {
+                                eprintln!("nexus-sandbox-spawner: 看不懂的要求：{}", e.0);
+                                s.shutdown(&cpath);
+                            }
                         },
                         Ok(None) => break,
                         Err(e) => {
@@ -619,7 +654,7 @@ fn main() {
         if fds[2].revents != 0 {
             s.on_accept();
         }
-        // 連線：倒著處理，swap_remove 不會打亂還沒處理的那些。
+        // on_conn 會 swap_remove，index 會變：每次用 fd 重新找。
         for (i, &fd) in conns.iter().enumerate().rev() {
             if fds[3 + i].revents != 0 {
                 if let Some(index) = s.conns.iter().position(|c| c.fd == fd) {

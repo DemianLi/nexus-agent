@@ -1,5 +1,5 @@
 //! 真的 spawner、真的核心（#1946）。只在 Linux 跑；核心沒有 Landlock 時整組跳過，
-//! 但設了 `NEXUS_REQUIRE_LANDLOCK=1`（CI）就改成紅，免得跳過看起來跟綠燈一樣（同 dsh `sandbox.yml` grep `2 passed`）。
+//! 但設了 `NEXUS_REQUIRE_LANDLOCK=1`（CI）就改成紅，免得跳過看起來跟綠燈一樣。
 //!
 //! 需要 `--features test-hooks`（partial 那條用它把 ABI 壓低）。
 
@@ -26,7 +26,7 @@ fn probe() -> PathBuf {
     .clone()
 }
 
-/// 研究 S5 用的那份窄讀清單（`~/.nexus-agent-evidence/2026-10-23/sandbox-1946/src/run-in-container.sh`），加上探針所在的目錄。
+/// #1946 S5 的窄讀清單：系統目錄，加上探針所在的目錄。
 fn readable() -> Vec<Vec<u8>> {
     let mut roots: Vec<Vec<u8>> = ["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc", "/opt"]
         .iter()
@@ -203,6 +203,18 @@ fn alive(pid: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// SIGKILL 送出之後要一小段時間才生效：行程先關掉檔案（讀的一方因此看到 EOF），之後才變成殭屍。
+fn dies_soon(pid: &str) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while alive(pid) {
+        if Instant::now() > deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    true
+}
+
 fn errno_line(e: i32) -> String {
     format!("errno={e}")
 }
@@ -360,14 +372,14 @@ fn signals_reach_the_whole_group_and_the_group_dies_with_the_leader() {
     let background: i32 = String::from_utf8_lossy(&line[..n]).trim().parse().unwrap();
     s.send(&Request::Signal { id: 1, signo: libc::SIGTERM });
     assert_eq!(s.event_for(1), Event::Exited { id: 1, code: -1, signal: libc::SIGTERM });
-    assert!(!alive(&background.to_string()), "背景成員還在");
+    assert!(dies_soon(&background.to_string()), "背景成員還在");
 
     // leader 自己先結束：留在背景的成員一起收掉，stdout 也因此關上。
     let (_, stdout, _) = s.launch(request(2, &ws, &["/bin/sh", "-c", "sleep 100 & echo $!"]));
     let mut out = String::new();
     stdout.unwrap().read_to_string(&mut out).unwrap();
     assert_eq!(s.event_for(2), Event::Exited { id: 2, code: 0, signal: 0 });
-    assert!(!alive(out.trim()), "背景成員還在");
+    assert!(dies_soon(out.trim()), "背景成員還在");
 }
 
 #[test]
@@ -416,6 +428,9 @@ fn many_concurrent_spawns_all_finish() {
         assert_eq!(out, format!("{id}\n"));
         assert_eq!(s.event_for(id), Event::Exited { id, code: 0, signal: 0 });
     }
+    // fork 之後子行程會配置記憶體，只有單執行緒才安全：跑過一輪之後 spawner 還是只有一條執行緒。
+    let status = std::fs::read_to_string(format!("/proc/{}/status", s.child.id())).unwrap();
+    assert!(status.lines().any(|l| l == "Threads:\t1"), "{status}");
 }
 
 #[test]
@@ -488,4 +503,54 @@ fn closing_stdin_or_sigterm_kills_every_running_tool() {
         assert_eq!(s.child.wait().unwrap().code(), Some(0), "{how}");
         assert!(!alive(&pid), "{how}：工具還在");
     }
+}
+
+#[test]
+fn a_signal_sent_before_start_arrives_after_start() {
+    let mut s = spawner!();
+    let ws = temp_dir("ws");
+    // 要求與訊號同一次寫進去：spawner 處理訊號時，子行程還在 Launching。
+    let spawn = Request::Spawn(Spawn { pipes: 0, ..request(1, &ws, &["sleep", "100"]) });
+    let signal = Request::Signal { id: 1, signo: libc::SIGTERM };
+    let bytes = [protocol::frame(&protocol::encode_request(&spawn)), protocol::frame(&protocol::encode_request(&signal))].concat();
+    s.stdin.write_all(&bytes).unwrap();
+    assert!(matches!(s.event_for(1), Event::Started { id: 1, .. }));
+    assert_eq!(s.event_for(1), Event::Exited { id: 1, code: -1, signal: libc::SIGTERM });
+}
+
+/// 等 spawner 自己結束，最多 `limit`；回結束碼。
+fn exits_within(child: &mut Child, limit: Duration) -> Option<i32> {
+    let deadline = Instant::now() + limit;
+    while Instant::now() < deadline {
+        if let Some(status) = child.try_wait().unwrap() {
+            return Some(status.code().unwrap_or(-1));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    child.kill().ok();
+    None
+}
+
+#[test]
+fn an_undecodable_frame_ends_the_spawner_and_its_tools() {
+    let mut s = spawner!();
+    let ws = temp_dir("ws");
+    let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "echo $$; exec sleep 100"]));
+    let mut line = [0u8; 32];
+    let n = stdout.unwrap().read(&mut line).unwrap();
+    let pid = String::from_utf8_lossy(&line[..n]).trim().to_string();
+    s.stdin.write_all(&protocol::frame(b"Z")).unwrap();
+    assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0));
+    assert!(!alive(&pid), "工具還在");
+}
+
+#[test]
+fn losing_the_event_channel_ends_the_spawner() {
+    let Spawner { mut child, mut stdin, stdout, .. } = spawner!();
+    drop(stdout);
+    let ws = temp_dir("ws");
+    // 下一筆事件寫不出去：stdin 還開著，spawner 也要自己收尾。
+    let spawn = Request::Spawn(Spawn { pipes: 0, ..request(1, &ws, &["/bin/true"]) });
+    stdin.write_all(&protocol::frame(&protocol::encode_request(&spawn))).unwrap();
+    assert_eq!(exits_within(&mut child, Duration::from_secs(5)), Some(0));
 }
