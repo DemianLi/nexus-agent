@@ -28,11 +28,11 @@
  *   加壓縮換到的是第二套解碼路徑，沒有人要。
  * - **寫租約照抄了**（`session-lease.ts`）：新開的在第一次實體化寫入之前拿，續接的在讀
  *   之前拿，把手關掉才放。一份會話一把，鎖檔跟日誌並排（`<base>.lock`）——理由在那個模組。
- *   **續接單檔佈局的會話也拿這一把**，不拿會話目錄裡的 `session.lock`：寫世代檔的版本（#1594）先拿 `<base>.lock`、
- *   再拿 `session.lock`，順序固定，所以這一版的續接者跟它互斥，兩個行程也不會各握一把互等。
+ *   **續接單檔佈局的會話也拿這一把**，不拿會話目錄裡的 `session.lock`。#1594 ③ 的遷移寫方要先拿 `<base>.lock`、
+ *   再拿 `session.lock`（順序固定，兩個行程不會各握一把互等），寫完舊路徑的墓碑才放；這一版的續接者因此跟它互斥。
  *   撞名跟租約各擋一件事：**撞名在 `create` 當下就報**（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559)，
- *   照 dsh `index.ts:360-379`）——同一個後端建過還沒實體化的（行程內的 pending），或磁碟上 header、日誌任一個已經在的，
- *   都同步拋 `SessionAlreadyExistsError`。實體化時的 `link` 與日誌的 `wx` 仍然在，**檔案已經在就拒絕**，不覆寫也不續寫：
+ *   照 dsh `index.ts:360-379`）——同一個後端建過還沒實體化的（行程內的 pending），或磁碟上舊兩檔的 header、日誌任一個已經在，
+ *   或會話目錄裡已有正規世代檔的，都同步拋 `SessionAlreadyExistsError`。實體化時的 `link` 與日誌的 `wx` 仍然在，**檔案已經在就拒絕**，不覆寫也不續寫：
  *   擋的是 `create` 之後才出現的競態，撞上的 `EEXIST` 一樣換成 `SessionAlreadyExistsError`（`cause` 留著原錯）。
  *
  *   **拿租約是惰性的，所以輸的可能是先起來的那個**：一個行程還沒寫第一筆（還沒拿），另一個
@@ -72,7 +72,7 @@
  * - **目錄 `fsync` 的錯往外拋，不吞**（dsh `syncDirPosix`）。`plugin-journal.ts` 那支不分平台吞掉所有錯，不能拿來用：
  *   一次 `EIO` 會悄悄關掉目錄 `fsync`。
  * - **header 的目錄項落盤之後才建日誌**（`wx`，再 `fsync` 一次目錄）。反過來的話，斷電可能留下「有日誌、沒 header」：
- *   列表看不到它，同一個 id 之後再建時 `create` 就拒（看的是 header 與日誌兩個檔，同 dsh 的 `findLog` 看日誌）。
+ *   列表看不到它，同一個 id 之後再建時 `create` 就拒（{@link existsOnDisk}）。
  * - 發佈是**可重試、不撞上自己**的：`link` 一成功就記下 header 已發佈，之後的重試只補做目錄 `fsync`；
  *   日誌開成了但目錄 `fsync` 失敗，重試也沿用同一個把手，不再 `wx` 一次。跟租約的 `??=` 同一個理由。
  *
@@ -85,7 +85,7 @@
  * 2. **Windows：照樣 `link` 發佈，不做目錄 `fsync`**（理由 1，基座表達不出來）：Node 在 Windows 上開不了目錄，
  *    也沒有 dsh 用來呼叫 `MoveFileExW` 的 FFI。判斷依據是 `process.platform === 'win32'`，**不是吞錯**；
  *    比照 `session-lease.ts` 已登記的 Windows 偏離。
- * 3. 不清當機後殘留的 `*.tmp`，同 dsh。殘留檔不會被讀方撿到：從目錄項認會話的只認 `@nexus/core` 的
+ * 3. 不清當機後殘留的 `*.tmp`。殘留檔不會被讀方撿到：從目錄項認會話的只認 `@nexus/core` 的
  *    `parseLegacyTwoFileHeaderFilename` 與 `parseGenerationLogFilename` 認得的名字，照 id 找的由 id 算名字；
  *    `<base>.header.json.<hex>.tmp` 與世代目錄裡的暫存名（如 `session.migration.<hex>.tmp.jsonl`）都不認。
  *
@@ -129,7 +129,7 @@
  * 新建的會話寫舊兩檔：一份會話三個檔並排，`<base>.header.json`、`<base>.jsonl`、`<base>.lock`（`base` 見
  * {@link safeBaseName}）。讀方另外認每會話目錄的單檔佈局：`<sessionDirectoryName(id)>/session.v<N>.jsonl`，header 在第一行，
  * 同一個目錄裡挑最高世代；續接這種會話時往挑中的世代檔追加；同一個 id 兩種佈局都有就大聲拒讀（見 {@link locateSession}）。
- * 新建會話改寫單檔佈局是 #1594 ③。檔名只在 `@nexus/core` 的 `session-filename.ts` 定義，跟版本目錄同一個格式層。
+ * 新建會話改寫單檔佈局是 #1594 ③。檔名只在 `@nexus/core` 的 `session-filename.ts` 定義，跟版本目錄（`@nexus/core` 的 `session-format.ts`）同一個格式層。
  * 讀一份會話都經 `readSite`（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857)），兩個入口：從目錄項認的
  * {@link readSessionEntry}（離線掃描 [#665](https://github.com/DemianLi/nexus-agent/issues/665)、`session-files.fixture.ts`；
  * 列表走同一條 `siteOfEntry` → `readSite`），照 id 找的 {@link readSessionEntryById}（唯讀打開、續接走同一條
@@ -378,7 +378,8 @@ const COLD_LOG_MEMO_MAX_ENTRIES = 2;
  * 冷復活先唯讀打開檢查一次（`background-cold.ts` 的 inspect），緊接著續接又讀一次：同一份日誌整份解析兩次。
  * 這裡記住最近兩份的解析結果，**鍵是 id，守衛是那一份的 revision**（{@link siteRevision}）：舊兩檔是 header 與日誌兩個檔的
  * {@link fileRevision}（#1509 穩定讀的那組身分），單檔佈局是**先挑世代、再取那個世代檔**的世代版本與 revision：別的行程
- * 發佈新世代時舊世代檔一個位元組都沒變，只比舊檔的 revision 會命中舊內容。對不上就當沒有、照常讀。別的行程寫進去，revision 就變了；本後端自己寫的，寫之前先刪掉那一筆
+ * 發佈新世代時舊世代檔一個位元組都沒變，不先重挑世代、只比舊檔的 revision 會命中舊內容。對不上就當沒有、照常讀。
+ * 別的行程寫進去，revision 就變了；本後端自己寫的，寫之前先刪掉那一筆
  * （同 dsh `:752`）。只存預設讀法（`recoverable`）的結果，`salvage` 撿回來的不存——續接不走撿回，存了會讓一份該拒的
  * 檔靜靜續接成功（同 dsh `:860-868` 只存驗過的）。
  *
@@ -1537,28 +1538,24 @@ async function locateSession(
     const name = sessionDirectoryName(id);
     const generation = await resolveGeneration(join(directory, name));
     if (generation !== undefined) {
-      if (twoFileExists) throw coexistingLayouts(id, twoFile.headerPath, generation.logPath);
+      if (twoFileExists) throw coexistingLayouts(id, generation.logPath);
       return { layout: 'generation', name, ...generation };
     }
   }
   return twoFileExists ? twoFile : undefined;
 }
 
-function coexistingLayouts(
-  id: string,
-  headerPath: string,
-  generationPath: string,
-): SessionCorruptionError {
+function coexistingLayouts(id: string, generationPath: string): SessionCorruptionError {
   return new SessionCorruptionError(
     id,
-    `同一個 id 同時有舊兩檔（${headerPath}）與單檔佈局（${generationPath}），` +
-      `分不出哪一份才算數，兩份都不讀`,
+    '同一個 id 同時有舊兩檔與單檔佈局，分不出哪一份才算數，兩份都不讀',
+    { kind: 'jsonl', path: resolve(generationPath) },
   );
 }
 
 /**
  * 一份會話此刻的 revision：舊兩檔是 header 與日誌兩個檔的 {@link fileRevision}（續接換版會取代 header，只算日誌看不出來）；
- * 單檔佈局是挑中的世代版本加那個檔的 revision（新世代發佈時舊世代檔不變，要靠世代分辨）。
+ * 單檔佈局是挑中的世代版本加那個檔的 revision。呼叫方要先重新挑世代再算：新世代發佈時舊世代檔不變，只算舊檔會命中舊內容。
  */
 async function siteRevision(site: SessionSite, fs: StableReadFileSystem): Promise<string> {
   return composeRevision(
@@ -2167,9 +2164,9 @@ function materializeCreateHeader(header: StoredSessionHeader): StoredSessionHead
 
 /**
  * 磁碟上這個 id 已經在了沒有（#1559 N0622），兩種佈局都看（#1594 ②）。**同步**：`SessionStore.create` 是同步介面，它的呼叫方
- * （`sessions.observe` 的回呼）也是同步的（Q1 (a)）；dsh 建構子同樣用同步的 `readdirSync`。
+ * （`sessions.observe` 的回呼）也是同步的（#1559 Q1 (a)）。
  *
- * - 舊兩檔看 header 與日誌兩個檔：「header 不在、日誌在」（首次落盤兩步之間當掉）也算建過。不在才放行，其餘的錯原樣拋。
+ * - 舊兩檔看 header 與日誌兩個檔，任一個在都算建過（例如 header 被外部刪掉、只剩日誌）。不在才放行，其餘的錯原樣拋。
  * - 單檔佈局看會話目錄裡有沒有正規的世代檔。目錄不在、名字太長、同名的是個檔都算不在（{@link isAbsentPath}），其餘的錯
  *   原樣拋。空 id 編不成目錄名，只看舊兩檔。
  */

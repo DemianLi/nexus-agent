@@ -197,13 +197,23 @@ describe('新出現的狀態各歸一類', () => {
 
   it('同一個 id 新目錄與舊兩檔並存：兩份都不列、算一份讀不懂；打開與續接都拋，不默默挑一份', async () => {
     await writeTwoFile(dir, 'both', EVENTS);
-    await writeGeneration(dir, 'both', CURRENT, EVENTS);
+    const generation = await writeGeneration(dir, 'both', CURRENT, EVENTS);
     await writeGeneration(dir, 'other', CURRENT, EVENTS);
     const { sessions, unreadable } = await store().list();
     expect(sessions.map(({ header: h }) => h.id)).toEqual(['other']);
     expect(unreadable).toBe(1);
-    expect(await errorOf(store().open('both', 'read'))).toBeInstanceOf(SessionCorruptionError);
-    expect(await errorOf(store().resume('both'))).toBeInstanceOf(SessionCorruptionError);
+    for (const error of [
+      await errorOf(store().open('both', 'read')),
+      await errorOf(store().resume('both')),
+    ]) {
+      expect(error).toBeInstanceOf(SessionCorruptionError);
+      // 訊息會原樣送到瀏覽器：路徑只放 location（#1558 Q1 (a)）。
+      expect((error as SessionCorruptionError).location).toEqual({
+        kind: 'jsonl',
+        path: generation,
+      });
+      expect((error as Error).message).not.toContain(dir);
+    }
   });
 
   it('名字以 .header.json 結尾的目錄：列表與離線掃描都不失敗', async () => {

@@ -4,8 +4,7 @@
  * 找與讀兩種佈局都認（舊兩檔、每會話目錄裡的世代檔）；改 header（{@link rewriteSessionHeader}）只改舊兩檔。
  *
  * 檔名經 `@nexus/core` 的 `session-filename.ts`（`sessionPathsIn` 也是轉呼叫它），讀一份經後端的讀取接縫
- * {@link readSessionEntry} 與 {@link readSessionEntryById}（#1857）。照 dsh 的快照基建 `packages/test-support/session-snapshot/src/session-files.ts:192-210`
- * （`persistedSessionFilename` 經格式模組）。這一檔在 `session-files-single-owner.test.ts` 的掃描範圍內，不寫字面量。
+ * {@link readSessionEntry} 與 {@link readSessionEntryById}（#1857）。這一檔在 `session-files-single-owner.test.ts` 的掃描範圍內，不寫字面量。
  *
  * **不在這裡的**：刻意手寫兩檔來驗舊格式的測試（舊佈局型）、量原始位元組的（截尾、補壞行、canary、sha1）、改版號的
  * ——那些要的就是檔本身，直接拿 `sessionPathsIn(...)` 的路徑。
@@ -21,7 +20,7 @@ import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 import { readSessionEntry, readSessionEntryById, sessionPathsIn } from './jsonl-session-store.js';
 import type { SessionEntry } from './jsonl-session-store.js';
 
-/** 一份會話：它在哪個目錄、兩個檔的路徑、經接縫讀出的 header。 */
+/** 一份會話：它在哪個目錄、它的 header 與日誌路徑（單檔佈局兩格相同）、經接縫讀出的 header。 */
 export interface SessionOnDisk {
   readonly directory: string;
   /** header 記的 id。 */
