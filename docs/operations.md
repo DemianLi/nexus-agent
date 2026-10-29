@@ -2250,7 +2250,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **已知限制**：額度只算日誌大小，不算 thread 開著之後對話再長出來的部分；冷讀快取（最多兩份）握著的事件也不算。很多條中等大小的 thread
   各佔一份，加起來仍受額度管；很多條小 thread 長期常駐，仍是 thread 數上限與 `memory-gauge` 的事。
 - **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh 讀會話日誌也是整份讀（`session-persistence-jsonl/src/generation.ts:262-282`、
-  `index.ts:808-811`，`f3803c96`），沒有大小上限。比較與取捨見 PR 內文。
+  `index.ts:814-834`，`f3803c96`），沒有大小上限。比較與取捨見 [#2115](https://github.com/DemianLi/nexus-agent/issues/2115) 的 PR。
 
 **`memory-gauge`（[#1490](https://github.com/DemianLi/nexus-agent/issues/1490)）**讓 serve 把自己的記憶體寫進日誌，給管理者看「serve 多大、容器還剩多少、主機還剩多少」。**預設關閉**：不寫這一列，或寫 `reportIntervalMs: 0`，除了清單多一列（`[對照快照]` 的列數、`plugin-snapshot.json`、`--dump-config`），serve 的行為與日誌和沒有這一列時一樣。
 
