@@ -38,6 +38,7 @@ import { parse as parseYaml } from 'yaml';
 
 import { isMachineMessage } from './message-source.js';
 import { isReminder } from './repeat-reminder.js';
+import { isUnderAnyPrefix } from './sandbox.js';
 import { isSummarizationMessage } from './summarization.js';
 
 /** 一份技能誰叫得到。兩格都照 dsh 的 `SkillInvocationPolicy`。 */
@@ -390,15 +391,9 @@ export function threadSkillSources(
   if (shared === undefined) return sources;
   const routes = [shared, ...placement.offWorkspacePrefixes()];
   const placed = sources.map((source) =>
-    routes.some((prefix) => isUnderPrefix(source, prefix)) ? source : `${shared}${source}`,
+    isUnderAnyPrefix(source, routes) ? source : `${shared}${source}`,
   );
   return placed.filter((source, index) => placed.indexOf(source, index + 1) === -1);
-}
-
-/** `path` 是不是 `prefix` 本身或在它底下；兩邊的結尾斜線都不算數。 */
-function isUnderPrefix(path: string, prefix: string): boolean {
-  const base = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
-  return path === base || path.startsWith(`${base}/`);
 }
 
 /**

@@ -129,6 +129,7 @@ export type {
 export {
   hostPathOf,
   isSandboxMode,
+  isUnderAnyPrefix,
   SANDBOX_MODES,
   SHARED_WORKSPACE_SERVICE,
   virtualPathOf,
