@@ -172,6 +172,8 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
   **舊 thread 寫不進新 thread 會讀成指示或技能的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）：`--workspace` 根目錄的
   `AGENTS.md`、`CLAUDE.md`、`AGENTS.local.md`、`CLAUDE.local.md`，以及技能來源裡落在 `--workspace` 底下的目錄（出廠 `skills/`，含底下全部），
   舊 thread 的寫、改、刪一律回 `[containment]` 拒絕，不看檔案政策、升級也蓋不過；根目錄別的檔、子目錄裡的同名檔照常。
+  模型對這幾處呼叫 `request_sandbox_escalation`，工具直接回「不論升到哪一格都寫不進去」與原因，**不掛核准卡**
+  （[#2078](https://github.com/DemianLi/nexus-agent/issues/2078)，同 `/shared` 那一條）。
   這道守衛只擋得到升級之後的寫入：**升級後核對一次** `--workspace` 根目錄現有的這四個指示檔與技能來源目錄（出廠 `--workspace/skills/`），
   確認裡面都是部署方自己放的，不是舊對話寫的。
 - **header 的根既不是 `--workspace` 也不是基底底下的 `thread-…` 目錄**：續接被拒（`ResumeWorkspaceConflictError`，訊息指名兩個根）。

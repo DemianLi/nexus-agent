@@ -1424,6 +1424,18 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     filePath: string,
     operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
   ): Promise<string | undefined> {
+    const reason = await this.reservedReason(filePath);
+    return reason === undefined ? undefined : this.denial(mode, operation, filePath, reason);
+  }
+
+  /**
+   * `filePath` 落在保留的地方嗎（{@link ContainedFilesystemBackendOptions.reservedWrites}）。變更的拒絕與升級工具（#2078）問的都是這一個，
+   * 比對規則見 {@link reservedDenial}。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @returns 落在保留的地方時是那一格的理由；其餘 `undefined`。
+   */
+  async reservedReason(filePath: string): Promise<string | undefined> {
     const reserved = this.reservedWrites?.() ?? [];
     if (reserved.length === 0) return undefined;
     const target = await this.placeOf(filePath);
@@ -1432,7 +1444,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       const place = await this.placeOf(entry.path);
       if (place === undefined) continue;
       const hit = entry.subtree ? isWithin(place, target) : place === target;
-      if (hit) return this.denial(mode, operation, filePath, entry.reason);
+      if (hit) return entry.reason;
     }
     return undefined;
   }
