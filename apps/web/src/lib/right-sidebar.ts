@@ -58,7 +58,8 @@ export type SidebarTab =
       /** 交出這份計劃的那次工具呼叫 id（#654）；審核請求沒帶的話是 `review:<interruptId>`。 */
       readonly id: string;
       /**
-       * 知道過的計劃標題（#2014），還原時當標籤，不必往前掃。工具呼叫的參數不會變，記下來的不會過期。`review:` 的不記：
+       * 知道過的計劃標題（#2014）。標籤先讀計劃庫，沒有才用它，所以重新整理後沒選過、還沒掃的分頁也寫得出標題。工具呼叫的
+       * 參數不會變，記下來的不會過期。`review:` 的不記：
        * 它不在日誌裡，中斷結束後就找不到了（{@link planTab}）。
        */
       readonly title?: string;
@@ -129,7 +130,8 @@ export function setOpen(layout: SidebarLayout, open: boolean): SidebarLayout {
 }
 
 /**
- * 記下或清掉計劃分頁的標題（`undefined` 是清掉）。沒開著這個分頁、或標題沒變時原樣回傳，呼叫端拿來判斷要不要重畫。
+ * 記下或清掉計劃分頁的標題（`undefined` 是清掉；`review:` 的不記，見 {@link planTab}）。分頁裡沒有它、標題沒變或是 `review:`
+ * 的時候回傳同一個參考，`setLayout` 才會略過重畫與落盤。
  */
 export function setPlanTitle(
   layout: SidebarLayout,

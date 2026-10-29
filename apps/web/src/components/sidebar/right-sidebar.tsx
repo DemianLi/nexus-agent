@@ -493,7 +493,7 @@ function EmptyState() {
  *（#1798，`Conversation.findPlan`），**不動對話窗口**：找到先在這裡顯示全文，旁邊一顆鈕先 `loadThrough` 載到那一頁
  * （同觀測分頁，#1601）、計劃出現在對話裡之後再捲到那張計劃卡。掃完沒有、讀取失敗都只講一句。**「待定位」記在這一層**：載完之後
  * 計劃庫裡有了它，鈕那一格卸掉。知道標題（條目裡有、或掃到了）就記進版面（`notePlanTitle`，#2014），分頁標籤在定位之前、
- * 重新整理之後都寫得出標題；掃完沒有就清掉，標籤退回「計劃」，跟這裡那一句一致。讀取失敗不清：讀不到不代表它不在了。
+ * 重新整理之後都寫得出標題；掃完沒有就清掉，標籤退回「計劃」，跟分頁裡「找不到」那一句（`PLAN_TAB_MISSING_TEXT`）一致。讀取失敗不清：讀不到不代表它不在了。
  */
 function PlanTab({ id }: { id: string }) {
   const { api, sources, isMobile, notePlanTitle } = useControl();

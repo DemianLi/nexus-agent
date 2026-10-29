@@ -25,9 +25,9 @@ export interface RightSidebarControl {
   /** 1024 以下定位之後，抽屜關掉時焦點要去的那一格（`locate`）。 */
   readonly locateFocus: RefObject<HTMLElement | null>;
   /**
-   * 把計劃分頁的標題記進版面（`undefined` 是清掉，#2014），給 `PlanTab` 在知道標題或掃完沒有時呼叫。**不算人動過**：
-   * 這一下不落盤；打開分頁那一下已經算動過，或者等人下次動右側欄時一起寫。分頁標籤先讀計劃庫（`sources.plans`，只有載入的
-   * 對話），沒有才讀記下的標題。
+   * 把計劃分頁的標題記進版面（`undefined` 是清掉，#2014），給 `PlanTab` 在知道標題或掃完沒有時呼叫。**不算人動過**（不設
+   * `touched`）：已經動過的話，隨這次版面變動一起寫進去；還沒動過（只是還原後掛上）就不寫，等人下次動右側欄時一起寫。分頁標籤
+   * 先讀計劃庫（`sources.plans`，只有載入的對話），沒有才讀記下的標題。
    */
   notePlanTitle(id: string, title: string | undefined): void;
   /** 還沒被觀測分頁消費的「顯示某一輪」請求。 */
