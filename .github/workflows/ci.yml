@@ -47,12 +47,14 @@ permissions:
 #         ├─ test-web ─────────┼─► gate
 #         ├─ test-harness ─────┤   兩片
 #         ├─ packed-install ───┤   打成 tarball、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
-#         └─ node-compat ──────┘   Node 下限 22.19 與下一版 26 各跑一輪相容冒煙，依序跑（#1546）
+#         ├─ node-compat ──────┤   Node 下限 22.19 與下一版 26 各跑一輪相容冒煙，依序跑（#1546）
+#         └─ sandbox-spawner ──┘   Rust 的沙箱 spawner（#1946）。不看模式，看 plan 的 rust：輕的模式也會跑
 #
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
 # static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ packed-install 1
-# ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）＝ 8。plan 在它之前、gate 在它之後，不同時。
-# 輕的一輪是 plan 接 gate，同時只有 1 個，所以合併後的一輪加上兩張功能 PR 同時跑是 8 ＋ 1 ＋ 1 ＝ 10，在 20 之內。
+# ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）＋ sandbox-spawner 1 ＝ 9。plan 在它之前、gate 在它之後，不同時。
+# 輕的一輪是 plan 接 gate（動到 spawner 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
+# 所以合併後的一輪加上兩張功能 PR 同時跑是 9 ＋ 1 ＋ 1 ＝ 11，在 20 之內。
 # 這兩個算式由 .github/scripts/test_ci_workflow.py 釘住，加 job 或加矩陣格時它會紅。
 #
 # 新增檢查：往現有 job 加 step，或新增 job 並把它列進 gate 的 needs 與判斷（不列進去的 job 掛了 gate 也不會紅）。
@@ -67,6 +69,7 @@ jobs:
     outputs:
       mode: ${{ steps.plan.outputs.mode }}
       ts: ${{ steps.plan.outputs.ts }}
+      rust: ${{ steps.plan.outputs.rust }}
       base_sha: ${{ steps.base.outputs.sha }}
       changed_count: ${{ steps.checks.outputs.count }}
       affected: ${{ steps.light.outputs.affected }}
@@ -436,6 +439,39 @@ jobs:
           path: .harness-durations/results-${{ matrix.shard }}.json
           key: harness-durations-${{ matrix.shard }}-${{ github.sha }}
 
+  # 沙箱 spawner（#1946，`native/sandbox-spawner/`）：Rust，在真的核心上跑整合測試。plan 的 `rust` 決定跑不跑，跟模式無關：
+  # 動到它或 CI 自己的功能 PR（輕的模式也跑）與合併後完整一輪（D55，接受超過 60 秒）。核心沒有 Landlock 時測試紅，不准自我跳過。
+  sandbox-spawner:
+    name: sandbox-spawner
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: native/sandbox-spawner
+    steps:
+      - uses: actions/checkout@v7
+      - name: 安裝釘住的 Rust
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            native/sandbox-spawner/target
+          key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/sandbox-spawner/Cargo.lock', 'native/sandbox-spawner/rust-toolchain.toml') }}
+      - name: 核心與 LSM
+        run: |
+          uname -r
+          cat /sys/kernel/security/lsm
+      # 出貨的形狀：不帶 test-hooks。
+      - name: 編譯
+        run: cargo build --release --locked
+      - name: 測試
+        env:
+          NEXUS_REQUIRE_LANDLOCK: '1'
+        run: cargo test --locked --features test-hooks
+
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
   # GitHub 把 required check 的 skipped 當成通過，而上游失敗時下游預設是被 skip 而不是變紅，
@@ -446,7 +482,17 @@ jobs:
   gate:
     name: gate
     needs:
-      [plan, static, typecheck, test-packages, test-web, test-harness, packed-install, node-compat]
+      [
+        plan,
+        static,
+        typecheck,
+        test-packages,
+        test-web,
+        test-harness,
+        packed-install,
+        node-compat,
+        sandbox-spawner,
+      ]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -464,6 +510,8 @@ jobs:
           TEST_HARNESS: ${{ needs.test-harness.result }}
           PACKED_INSTALL: ${{ needs.packed-install.result }}
           NODE_COMPAT: ${{ needs.node-compat.result }}
+          RUST: ${{ needs.plan.outputs.rust }}
+          SANDBOX_SPAWNER: ${{ needs.sandbox-spawner.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
         run: |
           {
@@ -484,6 +532,7 @@ jobs:
             echo "| test-harness | $TEST_HARNESS |"
             echo "| packed-install | $PACKED_INSTALL |"
             echo "| node-compat | $NODE_COMPAT |"
+            echo "| sandbox-spawner | $SANDBOX_SPAWNER |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail() { echo "::error::$1"; exit 1; }
@@ -501,4 +550,13 @@ jobs:
             done
           else
             fail "plan 輸出的模式是 '$MODE'、ts 是 '$TS'，無法判斷該跑什麼。"
+          fi
+
+          # sandbox-spawner 不看模式，看 plan 的 rust。
+          if [ "$RUST" = "true" ]; then
+            [ "$SANDBOX_SPAWNER" = "success" ] || fail "sandbox-spawner 的結果是 '$SANDBOX_SPAWNER'，需要 success。"
+          elif [ "$RUST" = "false" ]; then
+            [ "$SANDBOX_SPAWNER" = "skipped" ] || fail "不需要跑，sandbox-spawner 卻是 '$SANDBOX_SPAWNER'。"
+          else
+            fail "plan 輸出的 rust 是 '$RUST'，無法判斷 sandbox-spawner 該不該跑。"
           fi
