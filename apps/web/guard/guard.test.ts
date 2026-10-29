@@ -80,8 +80,8 @@ import { startGuardServer, type GuardServer } from './server';
  * 23. **觀測分頁**（#1690 PR A，`?overlay=trace-*`）：一輪標頭的狀態膠囊九種收法的色調與字過 4.5、圓角是 `rounded-4xl`，完成與停在中斷點
  *    字前面的圓點對膠囊底過 3，只有進行中帶 `DotLoader`；
  *    空狀態的標題與說明過 4.5；計劃那一列的結果 chip 是 `rounded-4xl`、定位鈕是 `rounded-md`、有焦點外框；載入細節的鈕（待命、重試）與失敗原因過 4.5、
- *    鈕是 `rounded-sm`、有焦點外框，讀取中是一顆停用的鈕（`aria-disabled`，#2009）、畫成 `DotLoader` 加待命那一句（不覆寫名稱）（只有摘要的組、
- *    更早的摘要、子代理三處都量），分頁只有一格
+ *    鈕是 `rounded-sm`、有焦點外框，讀取中是一顆停用的鈕（`aria-disabled`，#2009）、畫成 `DotLoader` 加待命那一句、不覆寫名稱，只有摘要的組、
+ *    更早的摘要、子代理三處都量，分頁只有一格
  *    `role=status`；375 寬時重試鈕與讀取中的鈕 44px 高、頁面不橫向溢出。
  * 24. **觀測分頁的列**（#1690 PR B，`?overlay=trace-steps`）：不能展開的列、SG `StepRow` 的列與它的失敗字、展開後的時刻、模型呼叫的數字格與欄位表、
  *    系統提示詞的 `OutputBlock`、子代理那一輪的 `StepGroup` 計數過 4.5；列、計數、結果框有焦點外框；分頁只有一格 `role=status`；

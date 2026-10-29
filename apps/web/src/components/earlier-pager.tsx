@@ -58,7 +58,7 @@ const LOADING_CLASS =
 
 /**
  * `onArm`：鈕被聚焦時交給呼叫端，讀完時焦點交接用（`hooks/use-focus-handoff.ts`）。讀取中鈕不卸載，`disabled`＋`focusableWhenDisabled`
- * （`aria-disabled`）：焦點留在鈕上、再按不會再拉一次；字維持按下去之前那一句、前面加 `DotLoader`（{@link useSettledLabel}），報讀名稱就是看得見的字。
+ * （`aria-disabled`）：焦點留在鈕上、再按不會再拉一次；字維持讀取開始前那一句（{@link useSettledLabel}），圖示換成 `DotLoader`；不覆寫名稱，報讀名稱就是看得見的字。
  */
 export function EarlierPager({
   earlier,

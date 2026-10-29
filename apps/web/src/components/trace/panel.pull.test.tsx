@@ -214,7 +214,7 @@ describe('摘要列的「載入這一輪的細節」', () => {
     return { ...fake, ...utils };
   }
 
-  it('按下去：進行中是同一顆鈕，停用、字與名稱不變，前面加 DotLoader；拉回來就換成完整的一組', async () => {
+  it('按下去：進行中是同一顆鈕，停用、字與名稱不變，圖示換成 DotLoader；拉回來就換成完整的一組', async () => {
     const { client, waiting, queries } = await opened();
     const row = digestRow(100)!;
     const button = within(row).getByRole('button', { name: TRACE_PULL_LABEL });

@@ -23,10 +23,10 @@ const LOADING_CLASS =
 
 /**
  * 一列摘要、或只有摘要的組：載入那一輪的細節（#1690 T6）。待命與失敗是 outline 鈕帶圖示，失敗的原因接在鈕後面、掛在鈕的
- * `aria-describedby`；進行中同一顆鈕換成 SG `DotLoader` 加灰字。按下去是唯讀拉取，「重試」是重新載入，都不重跑模型，也不自動重試。
+ * `aria-describedby`；進行中同一顆鈕的圖示換成 SG `DotLoader`、字變灰。按下去是唯讀拉取，「重試」是重新載入，都不重跑模型，也不自動重試。
  *
  * 讀取中鈕不卸載（#2009）：`disabled`＋`focusableWhenDisabled`（`aria-disabled`），焦點留在鈕上、再按不會再拉一次，字維持
- * 按下去之前那一句（`useSettledLabel`），報讀名稱就是看得見的字。`onArm`：鈕被聚焦時交給呼叫端，拉完時焦點交接用（`hooks/use-focus-handoff.ts`）。
+ * 讀取開始前那一句（`useSettledLabel`），不覆寫名稱，報讀名稱就是看得見的字。`onArm`：鈕被聚焦時交給呼叫端，拉完時焦點交接用（`hooks/use-focus-handoff.ts`）。
  */
 export function PullControl({
   status,

@@ -415,7 +415,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     expect(earlierCalls()).toBe(1);
   });
 
-  it('讀取中按鈕停用、字不變只加 DotLoader、焦點留在上面；讀完另一格報讀接上幾則，回覆完成那一格不被蓋掉；最後一頁焦點落在 viewport', async () => {
+  it('讀取中按鈕停用、字不變、圖示換成 DotLoader、焦點留在上面；讀完另一格報讀接上幾則，回覆完成那一格不被蓋掉；最後一頁焦點落在 viewport', async () => {
     let release: (() => void) | undefined;
     const { client } = fakeClient(async (_threadId, query) => {
       if (query?.beforeSeq === undefined) {
