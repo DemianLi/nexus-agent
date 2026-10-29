@@ -1,6 +1,6 @@
 import type { Event, ThreadHistoryQuery, ThreadHistoryResult, WireClient } from '@nexus/wire';
 import { THREAD_AT_CAPACITY, THREAD_HISTORY_TOO_DEEP } from '@nexus/wire';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App, LEGACY_THREAD_NOTICE } from '@/App';
@@ -442,7 +442,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     release?.();
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
     expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
-    expect(document.activeElement).toBe(viewport());
+    await waitFor(() => expect(document.activeElement).toBe(viewport()));
     // 一頁一輪：人打的一句＋模型的一則回覆（工具卡不算，同 wire 一頁的單位）。
     expect(screen.getByTestId('earlier-notice').textContent).toBe('載入了較早的 2 則。');
     // 「回覆完成」那一格（第一個 polite 區）不被蓋掉。
@@ -470,6 +470,8 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
     expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
+    // 文字一出現 waitFor 就回來了，交接的 effect 可能還沒跑：先讓它跑完，「不搬」才量得到。
+    await act(async () => {});
     expect(document.activeElement).toBe(document.body);
   });
 
@@ -482,7 +484,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
     fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
-    expect(document.activeElement).toBe(viewport());
+    await waitFor(() => expect(document.activeElement).toBe(viewport()));
   });
 
   it('按下去的當下焦點不在鈕上（#2009，例如 Safari 用滑鼠點鈕不聚焦）：翻到最後一頁也不搬焦點', async () => {
@@ -494,6 +496,8 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
     expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
+    // 文字一出現 waitFor 就回來了，交接的 effect 可能還沒跑：先讓它跑完，「不搬」才量得到。
+    await act(async () => {});
     expect(document.activeElement).toBe(document.body);
   });
 
