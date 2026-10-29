@@ -67,7 +67,7 @@ export const RUN_JAVASCRIPT_TOOL_NAME = 'run_javascript';
  * 程式本身失敗時分成哪幾種，詞彙照 dsh 的 `PtcRunFailure.kind`
  * （`packages/ptc-runtime/ptc-runtime/src/types.ts:130-141` 的 `PtcRunFailure.kind`，`687f282e`）。這裡用得到其中三個：
  *
- * - `exception`：程式拋出來的，或它回傳的 promise 被 reject。記憶體、堆疊上限也走這一條——
+ * - `exception`：程式拋出來的，或它回傳的 promise 被 reject。求值時撞到記憶體、堆疊上限也走這一條（檢查完成值時撞到的算 `invalid-output`）——
  *   QuickJS 把它們報成 VM 裡的 `InternalError`／`RangeError`，跟程式自己拋的沒有兩樣。host 的堆疊先用完
  *   （見 {@link runInVm}）也是這一條。
  * - `timeout`：interrupt handler 觸發過，也就是撞到 {@link QuickJsPluginOptions.timeoutMs} 被中斷；以及回傳一個
@@ -354,7 +354,6 @@ interface Run {
   interrupted: boolean;
 }
 
-/** 逾時的失敗。 */
 function timedOut(run: Run): CodeRunFailedError {
   return new CodeRunFailedError('timeout', `執行超過 ${run.timeoutMs} 毫秒的上限，已中斷。`);
 }

@@ -270,6 +270,7 @@ describe('完成值必須是無損的 JSON', () => {
       '丟名字是 InternalError 的例外',
       '({ get a() { throw Object.assign(new Error("interrupted"), { name: "InternalError" }); } })',
     ],
+    ['撞到堆疊上限', '({ get a() { return (function f() { return f(); })(); } })'],
   ])('快照裡的 getter %s：invalid-output', async (_label, code) => {
     const error = await runFailing({}, code);
     expect(error.kind).toBe('invalid-output');
