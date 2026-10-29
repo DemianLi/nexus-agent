@@ -1420,8 +1420,8 @@ function isAbsentPath(error: unknown): boolean {
 
 /**
  * 目錄項裡數字最大的正規世代檔。只認一般檔：同名的目錄不算世代。**跟旁邊舊兩檔的日誌同名的不算**：id 是空字串、`session`、
- * `session.v3` 這類的舊兩檔會話，日誌就叫 `session.jsonl`、`session.v3.jsonl`；同一層有它的 `.header.json` 時，這一層是放舊兩檔的
- * 目錄，不是會話目錄。
+ * `session.v3` 這類的舊兩檔會話，日誌就叫 `session.jsonl`、`session.v3.jsonl`；同一層有它的 `.header.json` 時，那個檔是舊兩檔
+ * 會話的日誌，不是世代。
  */
 function latestGenerationIn(
   entries: readonly Dirent[],
@@ -1801,8 +1801,9 @@ function settledValues<R>(results: readonly PromiseSettledResult<R>[]): R[] {
  * 算讀不懂的，除了 header 讀不懂、版本讀不了（含最高世代比這一版新）、世代檔名跟 header 版本對不上之外還有兩種：
  *
  * - **目錄項的名字對不上 header 記的 id**：`open(id)` 照 id 算名字，找不到它。只有手動改過名字才會這樣。
- * - **同一個 id 兩種佈局都在**：跟 {@link locateSession} 一樣只看在不在、不看讀不讀得懂，兩份都不列，合起來算一份讀不懂
- *   （`open`／`resume` 碰到同樣的並存會拋）。讀得懂的那份也不列：列出一項點不開的，等於默默挑了一份。照 `session-store.ts`
+ * - **同一個 id 兩種佈局都在、而且至少一份讀得懂**：跟 {@link locateSession} 一樣，另一份只看在不在、不看讀不讀得懂。
+ *   兩份都不列，合起來算一份讀不懂（`open`／`resume` 碰到同樣的並存會拋）。讀得懂的那份也不列：列出一項點不開的，等於默默
+ *   挑了一份。兩份都讀不懂時認不出 id，各算一份。照 `session-store.ts`
  *   檔頭登記的 unreadable 計數，不讓一份拖垮整份清單。
  */
 async function listStoredSessions(
@@ -1891,7 +1892,8 @@ function expectedEntryName(layout: SessionSite['layout'], id: string): string | 
 }
 
 /**
- * 同一個 id 的另一種佈局在不在（只看在不在，同 {@link locateSession}）；在的話回它在 `directory` 裡的目錄項名字。
+ * 同一個 id 的另一種佈局在不在（只看在不在，同 {@link locateSession}）；在的話回它的目錄項名字（`readdir` 交出來的：舊兩檔是
+ * `<base>.header.json`，單檔佈局是會話目錄名），對得上列表裡的 `dirent.name`。
  */
 async function otherLayoutEntry(
   directory: string,

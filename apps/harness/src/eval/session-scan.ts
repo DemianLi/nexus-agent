@@ -399,7 +399,8 @@ function headerOf({ header, storedFormatVersion }: SessionEntry): SessionLogHead
  *
  * 認檔名、讀 header 與日誌本文都走 JSONL 後端那一支（`jsonl-session-store.ts` 的 `readSessionEntry`，本文是穩定快照讀），
  * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。兩種佈局都認（#1594 ②）：舊兩檔的
- * header 檔，與裡面有正規世代檔的會話目錄（挑最高世代）；讀不出一份會話的目錄（沒有世代檔，或最高世代是空檔、第一行還沒
+ * header 檔，與裡面有正規世代檔的會話目錄（挑最高世代；同一層有對應 `<base>.header.json` 的 `session.jsonl`、
+ * `session.v<N>.jsonl` 是舊兩檔的日誌，不算世代檔）；讀不出一份會話的目錄（沒有世代檔，或最高世代是空檔、第一行還沒
  * 換行）才往下走。不走 `SessionStore.list`：
  * 它不讀比這一版新的，也不說讀不懂的原因（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
  * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，跳過。

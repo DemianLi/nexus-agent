@@ -68,8 +68,8 @@ function directoriesUnder(root: string): string[] {
 }
 
 /**
- * `dir` 底下有沒有 `id` 的會話目錄，裡面有正規的世代檔（一般檔，而且旁邊沒有同名舊日誌的 `.header.json`：那是放舊兩檔的
- * 一層）。目錄不在、名字太長、同名的是個檔都算沒有，同後端的撞名檢查；其餘的錯照拋。
+ * `dir` 底下有沒有 `id` 的會話目錄，裡面有正規的世代檔（一般檔，而且不是旁邊某個 `<base>.header.json` 的日誌：那是舊兩檔
+ * 會話的日誌）。目錄不在、名字太長、同名的是個檔都算沒有，同後端的撞名檢查；其餘的錯照拋。
  */
 function holdsGeneration(dir: string, id: string): boolean {
   let entries;
