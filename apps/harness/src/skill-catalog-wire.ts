@@ -42,7 +42,7 @@
  * @module
  */
 
-import { scanSkills } from '@nexus/core';
+import { isUnderAnyPrefix, scanSkills } from '@nexus/core';
 import type { FsService, SkillCatalogEntry } from '@nexus/core';
 import type { SkillEntry } from '@nexus/wire';
 
@@ -101,13 +101,7 @@ export function createSkillCatalog(lookups: SkillCatalogLookups): SkillCatalog {
  */
 function readableOutsideGraph(fs: SkillCatalogFs, source: string): boolean {
   if (fs.workspaceRoot() !== undefined) return true;
-  return fs.offWorkspacePrefixes().some((prefix) => isUnder(source, prefix));
-}
-
-/** `path` 是不是 `prefix` 本身或在它底下；兩邊的結尾斜線都不算數。 */
-function isUnder(path: string, prefix: string): boolean {
-  const base = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
-  return path === base || path.startsWith(`${base}/`);
+  return isUnderAnyPrefix(source, fs.offWorkspacePrefixes());
 }
 
 /** 一份技能的元資料，逐格照 dsh `skill-catalog.ts:80-86`：不帶正文。 */

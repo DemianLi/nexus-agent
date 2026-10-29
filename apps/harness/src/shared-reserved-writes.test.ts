@@ -6,6 +6,7 @@
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { threadSkillSources } from '@nexus/core';
 import type { FsService } from '@nexus/core';
 import { SANDBOX_ESCALATION_HINT, SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -64,6 +65,30 @@ describe('sharedReservedWrites', () => {
       ['/skills/', true],
       ['/team-skills', true],
     ]);
+  });
+
+  it('擋的技能目錄，就是新 thread 接到共用區底下的那幾個（#2082）', () => {
+    const sources = [
+      '/skills/',
+      '/team-skills',
+      '/routed',
+      '/routed/skills/',
+      '/routedx/',
+      '/mounted/skills',
+      '/mountedx',
+    ];
+    const routes = ['/routed/', '/mounted'];
+    const guarded = sharedReservedWrites(fsOf(sources, routes))
+      .filter((entry) => entry.subtree)
+      .map((entry) => entry.path);
+    const rebased = threadSkillSources(sources, {
+      sharedWorkspacePrefix: () => '/shared',
+      offWorkspacePrefixes: () => routes,
+    })
+      .filter((source) => source.startsWith('/shared/'))
+      .map((source) => source.slice('/shared'.length));
+    expect(new Set(guarded)).toEqual(new Set(rebased));
+    expect(guarded).toEqual(['/skills/', '/team-skills', '/routedx/', '/mountedx']);
   });
 
   it('fold 之前（沒有 fs 把手）只有指示檔', () => {
