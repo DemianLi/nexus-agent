@@ -434,7 +434,6 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     const button = screen.getByRole('button', { name: LOAD_EARLIER_LABEL });
     button.focus();
     fireEvent.click(button);
-    // 讀取中是同一顆鈕（#2009）：停用但焦點留在上面，報讀名稱不變，看得見的是 DotLoader 加「讀取中」。
     await waitFor(() => expect(button.getAttribute('aria-disabled')).toBe('true'));
     expect(button.textContent).toBe(LOADING_EARLIER_LABEL);
     expect(button.querySelectorAll('.animate-dot-flash')).toHaveLength(3);
@@ -443,7 +442,6 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
 
     release?.();
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
-    // 最後一頁：鈕收掉，焦點落在對話的 viewport。
     expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
     expect(document.activeElement).toBe(viewport());
     // 一頁一輪：人打的一句＋模型的一則回覆（工具卡不算，同 wire 一頁的單位）。
@@ -541,7 +539,6 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     const button = screen.getByRole('button', { name: LOAD_EARLIER_LABEL });
     button.focus();
     fireEvent.click(button);
-    // 失敗（#2009）：同一顆鈕改成「再試一次」，焦點還在上面。
     expect(await screen.findByRole('button', { name: RETRY_EARLIER_LABEL })).toBe(button);
     expect(document.activeElement).toBe(button);
     expect(within(viewport()).getByText('讀不到更早的對話：日誌讀到一半斷了')).toBeTruthy();

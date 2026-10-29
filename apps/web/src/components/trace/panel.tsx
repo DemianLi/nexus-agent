@@ -311,8 +311,8 @@ const Timeline = memo(function Timeline({
     }
     finishLocate(pending.key, target);
   }, [pending, model, finishLocate]);
-  // 「載入這一輪的細節」拉完（#2009）：焦點在鈕上、鈕跟著摘要收掉，就落在那一輪的標題（同「看這一輪」）。拉回來的輪排在最前面，
-  // 可能在「顯示更早的輪」後面：先展開到那一組，畫出來之後再交。
+  // 「載入這一輪的細節」拉完（#2009）：焦點在鈕上、鈕跟著摘要收掉，就落在那一輪的標題（同「看這一輪」）。拉回來的輪排在較前面
+  // （從摘要列拉的在最前面），可能在「顯示更早的輪」後面：先展開到那一組，畫出來之後再交。
   const handoff = useFocusHandoff<number>();
   const onPull = useMemo(
     () =>
