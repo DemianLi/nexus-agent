@@ -10,7 +10,7 @@
  * - **續接**佔到那份會話的把手關掉為止（thread 撤掉、閒置逐出、關機）：載入之後事件還握在記憶體裡，讀完就還的話，
  *   第二條大的會被放進來，兩條一起把行程撐死。開著的 thread 佔的加上這一份放不下，就當場拒收（`busy`），**不排隊**：
  *   佔著的是活著的 thread，不會自己很快還回來（同 thread 條數上限，#1476）。只是正在讀的唯讀佔著的話，等它們讀完，
- *   而且排在已經排隊的唯讀前面：側欄剛好在讀別的日誌，不該讓打開一條 thread 失敗。
+ *   而且排在所有唯讀前面（已經排隊的與之後才來的）：側欄剛好在讀別的日誌，不該讓打開一條 thread 失敗。
  * - **唯讀**（列表、冷讀、引用候選、背景子代理的冷檢查）：讀完、解析完就還。暫時放不下但等
  *   別的唯讀讀完就放得下的，**排隊等**；連續接佔掉的都扣掉之後還是放不下的，拒收。
  *
@@ -31,8 +31,9 @@ export interface SessionLogBudget {
   /** 總容量（位元組）；`Infinity` 是不限。 */
   readonly limitBytes: number;
   /**
-   * 續接：佔到 `release` 為止。只是正在讀的唯讀佔著的話等它們讀完（排在排隊的唯讀前面）；開著的 thread 佔的加上這一份
-   * 就放不下的，reject {@link SessionLogTooLargeError}，不等。
+   * 續接：佔到 `release` 為止。只是正在讀的唯讀佔著的話等它們讀完，排在所有唯讀前面（已經排隊的與之後才來的）；
+   * 開著的 thread 佔的加上這一份放不下的，reject {@link SessionLogTooLargeError}，不等；排隊中途前面的續接佔進來而變成
+   * 放不下的也是。
    */
   holdForSession(id: string, logBytes: number): Promise<SessionLogReservation>;
   /**
@@ -76,8 +77,8 @@ export function readMemory(): MemoryReadings {
 
 /**
  * 出廠的總容量：剩下的記憶體（上限減掉現在的 RSS）與剩下的 heap（heap 上限減掉現在已用），各除以自己的倍率，取小的。
- * 讀的是叫它當下的量，所以呼叫方要在起動完、還沒讀任何會話日誌時叫；serve 與 {@link processSessionLogBudget} 都等第一次
- * 用到才叫。
+ * 讀的是叫它當下的量，所以呼叫方要在起動完、還沒讀任何會話日誌時叫；serve、CLI（{@link sessionLogBudgetFromSetting}）
+ * 與 {@link processSessionLogBudget} 都等第一次用到才叫。
  *
  * @param readings - 預設讀這個行程自己的。
  * @returns 位元組，至少 0。
@@ -144,7 +145,7 @@ export function createSessionLogBudget(limit: number | (() => number)): SessionL
   };
   const fits = (bytes: number) => heldBySessions + heldByReads + bytes <= capacity();
   // 每一排都先來先放：排頭放不下，後面的也不插隊（不讓一份大的被一串小的餓死）。續接放進來一份，排著的續接與唯讀
-  // 都可能從此等不到，所以每放一份續接就重篩一次。唯讀要等續接排空才放。
+  // 都可能從此等不到：每放一份續接就重篩排著的續接，續接放完再篩一次唯讀。唯讀要等續接排空才放。
   const drain = () => {
     for (;;) {
       refuseUnreachable(waitingSessions);
