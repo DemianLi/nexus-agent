@@ -430,6 +430,42 @@ describe('資源邊界——只有設定的那麼強', () => {
 
     expect(error.message).toContain('stack overflow');
   });
+
+  // #1841：預設上限下的無窮遞迴要撞到 VM 自己的堆疊上限，拿到 VM 裡乾淨的錯。
+  it('預設上限下的無窮遞迴：VM 的 stack overflow，不是 host 的堆疊先用完', async () => {
+    for (const code of [
+      '(function f() { return f(); })()',
+      'try { (function f() { return f(); })(); } catch (e) { throw e; }',
+      '({ get x() { return this.x; } }).x',
+    ]) {
+      const error = await runFailing({}, code);
+      expect(error.kind, code).toBe('exception');
+      expect(error.message, code).toContain('stack overflow');
+    }
+  });
+
+  // #1841：QuickJS 在 WASM 裡遞迴吃的是 host 的原生堆疊。堆疊上限大到 host 先用完時，host 從 VM 外面丟 RangeError，
+  // VM 停在一半，收它會讓整個 WASM 模組 abort。上限給 2 MiB：Node 預設的堆疊下，大約 0.3 到 4 MiB 之間都是 host 先用完；
+  // 再大的話先到的是 WASM 自己的上限，又變回 VM 裡的錯。
+  const HOST_OVERFLOW_STACK_BYTES = 2 * 1024 * 1024;
+
+  it('host 的堆疊先用完：回 exception，下一次呼叫照常', async () => {
+    const { registry } = await loadPlugins([
+      createQuickJsPlugin({ maxStackSizeBytes: HOST_OVERFLOW_STACK_BYTES, timeoutMs: 10_000 }),
+    ]);
+    const tool = registry.tools.resolve(RUN_JAVASCRIPT_TOOL_NAME)!.value as StructuredTool;
+
+    for (let round = 0; round < 3; round += 1) {
+      const error: unknown = await tool.invoke({ code: '(function f() { return f(); })()' }).then(
+        (value: unknown) => new Error(`預期失敗，卻回了：${String(value)}`),
+        (thrown: unknown) => thrown,
+      );
+      expect(error).toBeInstanceOf(CodeRunFailedError);
+      expect((error as CodeRunFailedError).kind).toBe('exception');
+      expect((error as CodeRunFailedError).message).toContain('Maximum call stack size exceeded');
+      expect(String(await tool.invoke({ code: '1 + 1' }))).toBe('2');
+    }
+  });
 });
 
 describe('plugin 的接線', () => {

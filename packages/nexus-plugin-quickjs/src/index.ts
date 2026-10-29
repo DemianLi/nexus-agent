@@ -48,8 +48,8 @@
 import { tool } from '@langchain/core/tools';
 import { HarnessError } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
-import { getQuickJS, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
-import type { QuickJSContext, QuickJSHandle } from 'quickjs-emscripten';
+import { newQuickJSWASMModule, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
+import type { QuickJSContext, QuickJSHandle, QuickJSWASMModule } from 'quickjs-emscripten';
 import { z } from 'zod';
 
 /**
@@ -66,7 +66,8 @@ export const RUN_JAVASCRIPT_TOOL_NAME = 'run_javascript';
  * （`packages/ptc-runtime/ptc-runtime/src/types.ts:130-141` 的 `PtcRunFailure.kind`，`687f282e`）。這裡用得到其中三個：
  *
  * - `exception`：程式拋出來的，或它回傳的 promise 被 reject。記憶體、堆疊上限也走這一條——
- *   QuickJS 把它們報成 VM 裡的 `InternalError`／`RangeError`，跟程式自己拋的沒有兩樣。
+ *   QuickJS 把它們報成 VM 裡的 `InternalError`／`RangeError`，跟程式自己拋的沒有兩樣。host 的堆疊先用完
+ *   （見 {@link runInVm}）也是這一條。
  * - `timeout`：撞到 {@link QuickJsPluginOptions.timeoutMs} 被中斷；以及回傳一個永遠不會完成的
  *   promise（見 {@link runInVm}）。
  * - `invalid-output`：完成值不是無損的 JSON（`NaN`、`Infinity`、`-0`、`Map`、函式、`undefined` 欄位、
@@ -108,8 +109,14 @@ export const DEFAULT_TIMEOUT_MS = 1_000;
 /** 一個 VM 的預設記憶體上限。 */
 export const DEFAULT_MEMORY_LIMIT_BYTES = 16 * 1024 * 1024;
 
-/** 一個 VM 的預設堆疊上限。 */
-export const DEFAULT_MAX_STACK_SIZE_BYTES = 512 * 1024;
+/**
+ * 一個 VM 的預設堆疊上限。
+ *
+ * QuickJS 在 WASM 裡遞迴，吃的是 host 的原生堆疊，所以這個上限要在 host 的堆疊用完之前先到，VM 才拿得到自己乾淨的
+ * `stack overflow`。host 剩多少要看呼叫當下已經用掉多少，這個值在 Node 預設的堆疊下留了大約一半給呼叫端（#1841 實測）；
+ * 遞迴大約到 600 到 700 層，看函式的大小。
+ */
+export const DEFAULT_MAX_STACK_SIZE_BYTES = 128 * 1024;
 
 /**
  * 這個 plugin 的設定：三條資源上限。
@@ -139,11 +146,13 @@ export type QuickJsPluginOptions = z.input<typeof quickJsConfigSchema>;
  *
  * `apply` 是 async 的，唯一的理由是**在載入期就把 WASM 模組拉起來**。載不起來就讓整份
  * plugin 清單載入失敗，而不是等模型第一次呼叫工具時才在對話中間變成一句錯誤字串——
- * 共同軸線的 fail-closed 在這個 plugin 上的樣子。模組本身是 `getQuickJS()` 快取住的
- * 行程級單例，重複掛載不會重複載入。
+ * 共同軸線的 fail-closed 在這個 plugin 上的樣子。
+ *
+ * **每次掛載自己持有一個 WASM 模組**，不用 `getQuickJS()` 的行程級單例：host 的堆疊用完會讓模組停在一半，那個模組
+ * 要整個丟掉換新（見 {@link runInVm}），共用的單例丟不掉，同一個行程裡其他對話跟著受影響。
  *
  * **這裡刻意不接 `lifecycle.onDispose`。** 那條通道是給「有活的 handle 要收」的 plugin
- * 的（`@nexus/plugin-mcp` 的 stdio 子行程）。這裡沒有：WASM 模組是行程級快取，runtime 與
+ * 的（`@nexus/plugin-mcp` 的 stdio 子行程）。這裡沒有：WASM 模組沒有要關的東西，丟掉就由 GC 收，runtime 與
  * context 是**每次呼叫現建現拆**、在 `finally` 裡收掉。登記一個什麼都不做的 disposer
  * 只會讓關機清單看起來比實際上熱鬧。
  *
@@ -156,11 +165,31 @@ export const quickJsPlugin: NexusPlugin<QuickJsConfig> = {
   Config: quickJsConfigSchema,
   async apply(registry: PluginRegistry, config: QuickJsConfig): Promise<void> {
     const { timeoutMs, memoryLimitBytes, maxStackSizeBytes } = config;
-    const quickjs = await getQuickJS();
+    const limits = { timeoutMs, memoryLimitBytes, maxStackSizeBytes };
+    let module = newQuickJSWASMModule();
+    await module;
 
     registry.tools.register(
       tool(
-        ({ code }) => runInVm(quickjs, code, { timeoutMs, memoryLimitBytes, maxStackSizeBytes }),
+        async ({ code }) => {
+          // 同一輪的工具呼叫會並行：等待期間另一個呼叫可能已經把模組換掉，那就改等新的。
+          let awaited: Promise<QuickJSWASMModule>;
+          let quickjs: QuickJSWASMModule;
+          do {
+            awaited = module;
+            quickjs = await awaited;
+          } while (awaited !== module);
+          try {
+            return runInVm(quickjs, code, limits);
+          } catch (error) {
+            if (error instanceof CodeRunFailedError) throw error;
+            module = newQuickJSWASMModule();
+            if (error instanceof RangeError) {
+              throw new CodeRunFailedError('exception', `${error.name}: ${error.message}`);
+            }
+            throw error;
+          }
+        },
         {
           name: RUN_JAVASCRIPT_TOOL_NAME,
           description:
@@ -203,12 +232,12 @@ interface VmLimits {
  * 上的東西下一次看得到，而且記憶體上限會變成跨呼叫累計的——第五次呼叫因為第一次配置的
  * 東西而失敗，那個錯誤訊息沒有人讀得懂。代價是每次都要建 runtime，換來的是每次呼叫的
  * 資源預算都是乾淨的。
+ *
+ * **拋出 {@link CodeRunFailedError} 以外的東西，代表這個模組不能再用。** QuickJS 在 WASM 裡遞迴吃的是 host 的原生堆疊；
+ * host 的堆疊比 VM 的堆疊上限先用完時，host 從 VM 外面丟 `RangeError`，C 那一側停在一半。這時收 runtime 會讓整個
+ * WASM 模組 abort，蓋掉原本的錯，所以這裡什麼都不收、原樣拋出，由呼叫端把模組丟掉換新。
  */
-function runInVm(
-  quickjs: Awaited<ReturnType<typeof getQuickJS>>,
-  code: string,
-  limits: VmLimits,
-): string {
+function runInVm(quickjs: QuickJSWASMModule, code: string, limits: VmLimits): string {
   // deadline 在建 runtime 的時候才算，不是在建 plugin 的時候——`shouldInterruptAfterDeadline`
   // 收的是一個絕對時刻，提早算等於把載入到呼叫之間的時間也算進預算裡。
   const runtime = quickjs.newRuntime({
@@ -217,6 +246,7 @@ function runInVm(
     maxStackSizeBytes: limits.maxStackSizeBytes,
   });
 
+  let intact = true;
   try {
     const context = runtime.newContext();
     let snapshot: QuickJSHandle | undefined;
@@ -238,12 +268,17 @@ function runInVm(
       if (pending.error) return consume(context, pending.error, (detail) => fail(detail, limits));
 
       return formatResult(context, snapshot, result.value, limits);
+    } catch (error) {
+      if (!(error instanceof CodeRunFailedError)) intact = false;
+      throw error;
     } finally {
-      snapshot?.dispose();
-      context.dispose();
+      if (intact) {
+        snapshot?.dispose();
+        context.dispose();
+      }
     }
   } finally {
-    runtime.dispose();
+    if (intact) runtime.dispose();
   }
 }
 
