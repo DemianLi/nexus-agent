@@ -21,7 +21,8 @@ export function replaceModule(): Promise<QuickJSWASMModule> {
 }
 
 /**
- * 目前的模組，還沒有就建。等待期間模組可能被換掉（同一輪的工具呼叫會並行，另一個呼叫讓它停在一半），那就改等新的。
+ * 目前的模組，還沒有就建。等待期間模組可能被別的呼叫換掉（同一輪並行的，或別條對話的），那就改等新的。
+ * 新模組建不起來時原樣 reject，下一次呼叫重建（見 {@link replaceModule}）。
  */
 export async function currentModule(): Promise<QuickJSWASMModule> {
   for (;;) {

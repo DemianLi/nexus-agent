@@ -156,8 +156,8 @@ export type QuickJsPluginOptions = z.input<typeof quickJsConfigSchema>;
  *
  * **這裡刻意不接 `lifecycle.onDispose`。** 那條通道是給「有活的 handle 要收」的 plugin
  * 的（`@nexus/plugin-mcp` 的 stdio 子行程）。這裡沒有：WASM 模組沒有要關的東西，丟掉就由 GC 收，runtime 與
- * context 是**每次呼叫現建現拆**、在 `finally` 裡收掉（host 的堆疊用完時不收，整個模組換掉，見 {@link runInVm}）。登記一個什麼都不做的 disposer
- * 只會讓關機清單看起來比實際上熱鬧。
+ * context 是**每次呼叫現建現拆**、在 `finally` 裡收掉（host 的堆疊用完時不收，整個模組換掉，見 {@link runInVm}）。
+ * 登記一個什麼都不做的 disposer 只會讓關機清單看起來比實際上熱鬧。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
  * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
@@ -229,8 +229,8 @@ interface VmLimits {
  * 東西而失敗，那個錯誤訊息沒有人讀得懂。代價是每次都要建 runtime，換來的是每次呼叫的
  * 資源預算都是乾淨的。
  *
- * **拋出 {@link CodeRunFailedError} 以外的東西時，這次的 runtime 與 context 不收，模組的狀態不可信，呼叫端要換掉模組。** QuickJS 在 WASM 裡遞迴吃的是 host 的原生堆疊；
- * host 的堆疊比 VM 的堆疊上限先用完時，host 從 VM 外面丟 `RangeError`，C 那一側停在一半。這時收 runtime 會讓整個
+ * **拋出 {@link CodeRunFailedError} 以外的東西時，這次的 runtime 與 context 不收，模組的狀態不可信，呼叫端要換掉模組。**
+ * QuickJS 在 WASM 裡遞迴吃的是 host 的原生堆疊；host 的堆疊比 VM 的堆疊上限先用完時，host 從 VM 外面丟 `RangeError`，C 那一側停在一半。這時收 runtime 會讓整個
  * WASM 模組 abort，蓋掉原本的錯，所以這裡什麼都不收、原樣拋出，由呼叫端把模組丟掉換新。
  */
 function runInVm(quickjs: QuickJSWASMModule, code: string, limits: VmLimits): string {
