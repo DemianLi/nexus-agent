@@ -12,6 +12,7 @@
  * @module
  */
 
+import { isUnderAnyPrefix } from '@nexus/core';
 import type { FsService } from '@nexus/core';
 import { INSTRUCTION_FILE_CANDIDATES } from '@nexus/plugin-agent-instructions';
 
@@ -44,13 +45,7 @@ export function sharedReservedWrites(fs: FsService | undefined): readonly Reserv
   const routes = fs.offWorkspacePrefixes();
   const skills = fs
     .skillSources()
-    .filter((source) => !routes.some((prefix) => isUnderPrefix(source, prefix)))
+    .filter((source) => !isUnderAnyPrefix(source, routes))
     .map((source) => ({ path: source, subtree: true, reason: SKILL_SOURCE_REASON }));
   return [...files, ...skills];
-}
-
-/** `path` 是不是 `prefix` 本身或在它底下；兩邊的結尾斜線都不算數。 */
-function isUnderPrefix(path: string, prefix: string): boolean {
-  const base = prefix.endsWith('/') ? prefix.slice(0, -1) : prefix;
-  return path === base || path.startsWith(`${base}/`);
 }
