@@ -431,7 +431,7 @@ describe('資源邊界——只有設定的那麼強', () => {
     expect(error.message).toContain('stack overflow');
   });
 
-  // #1841：預設上限下的無窮遞迴要撞到 VM 自己的堆疊上限，拿到 VM 裡乾淨的錯。
+  // #1841
   it('預設上限下的無窮遞迴：VM 的 stack overflow，不是 host 的堆疊先用完', async () => {
     for (const code of [
       '(function f() { return f(); })()',
@@ -444,9 +444,8 @@ describe('資源邊界——只有設定的那麼強', () => {
     }
   });
 
-  // #1841：QuickJS 在 WASM 裡遞迴吃的是 host 的原生堆疊。堆疊上限大到 host 先用完時，host 從 VM 外面丟 RangeError，
-  // VM 停在一半，收它會讓整個 WASM 模組 abort。上限給 2 MiB：Node 預設的堆疊下，大約 0.3 到 4 MiB 之間都是 host 先用完；
-  // 再大的話先到的是 WASM 自己的上限，又變回 VM 裡的錯。
+  // #1841：要 host 的堆疊比 VM 上限先用完（機制見 index.ts 的 runInVm）。Node 預設的堆疊下，大約 0.3 到 4 MiB 之間是 host
+  // 先用完；再大的話先到的是 WASM 自己的上限，又變回 VM 裡的錯。取 2 MiB 落在中間。
   const HOST_OVERFLOW_STACK_BYTES = 2 * 1024 * 1024;
 
   it('host 的堆疊先用完：回 exception，下一次呼叫照常', async () => {

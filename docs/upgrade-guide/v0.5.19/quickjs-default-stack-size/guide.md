@@ -18,8 +18,8 @@ v0.5.19 的 `@nexus/plugin-quickjs` 沒寫 `maxStackSizeBytes` 時是 512 KiB。
   `InternalError: stack overflow`，工具回 `exception`。代價是遞迴的深度變淺：v0.5.19 一個參數的遞迴跑得到約 2200 層，新版約 600 層，
   中間那一段以前跑得完的程式，現在回 `stack overflow`。
 - host 的堆疊還是先用完時（例如自己把 `maxStackSizeBytes` 設大），工具回 `exception`、訊息是
-  `RangeError: Maximum call stack size exceeded`，插件把那個 WASM 模組丟掉換新的，下一次呼叫照常。每次掛載自己持有一個模組，
-  不再共用 `quickjs-emscripten` 的行程級單例。
+  `RangeError: Maximum call stack size exceeded`，插件把那個 WASM 模組丟掉換新的，下一次呼叫照常。模組由插件自己持有、整個行程共用一個，
+  不再用 `quickjs-emscripten` 的單例。
 
 受影響的：在 patch 檔用 `insert` 掛了 `@nexus/plugin-quickjs`、沒寫 `maxStackSizeBytes` 的主機。它不在出廠清單裡，沒掛的主機不受影響。
 
@@ -36,5 +36,5 @@ v0.5.19 的 `@nexus/plugin-quickjs` 沒寫 `maxStackSizeBytes` 時是 512 KiB。
            maxStackSizeBytes: 524288
    ```
 
-   設得越大，越常是 host 的堆疊先用完；那時回的是 `RangeError: Maximum call stack size exceeded`，不再讓模組 abort。
+   大約 0.5 到 4 MiB 之間通常是 host 的堆疊先用完，那時回 `RangeError: Maximum call stack size exceeded`，不再讓模組 abort。
 3. 確認：叫模型用 `run_javascript` 跑 `(function f() { return f(); })()`，預設值下工具回的錯含 `stack overflow`。
