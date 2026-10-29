@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[2]
 CI = ROOT / '.github' / 'workflows' / 'ci.yml'
 SETUP = ROOT / '.github' / 'actions' / 'setup' / 'action.yml'
 PLAN_CHECKS = ROOT / '.github' / 'actions' / 'plan-checks' / 'action.yml'
+SPAWNER_ACTION = ROOT / '.github' / 'actions' / 'sandbox-spawner' / 'action.yml'
 
 # ci.yml 檔頭：免費額度同時 20 個 job。合併後的一輪加上兩張功能 PR 的輕 gate 同時跑，要在這之內。
 JOB_LIMIT = 20
@@ -133,8 +134,8 @@ class Gate(unittest.TestCase):
         script = self.step['run']
         on, off = gate_branches(script)
         required, skipped = loop_pairs(on, 'success'), loop_pairs(off, 'skipped')
-        # sandbox-spawner 看 plan 的 rust，不看模式，另有 SandboxSpawner 那組。
-        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner'}:
+        # sandbox-spawner 看 plan 的 rust、sandbox-spawner-arm64 看是不是合併後完整一輪，都不看模式，另有 SandboxSpawner 那組。
+        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner', 'sandbox-spawner-arm64'}:
             with self.subTest(job=job):
                 keys = [k for k, v in env.items() if v == f'${{{{ needs.{job}.result }}}}']
                 self.assertEqual(len(keys), 1, f'{job} 的結果沒有經 env 交給判斷段')
@@ -149,11 +150,19 @@ class Gate(unittest.TestCase):
         self.assertIn(GATE_SKIP, script)
 
 
+# 接在中間那一段某個 job 後面跑的：跟它依序，不另外佔一格。
+CHAINED = {'packed-install': 'sandbox-spawner'}
+
+
 def full_peak(jobs: dict) -> int:
     """全跑時 plan 之後、gate 之前那一段同時活躍的 job 數，也就是合併後完整一輪的峰值。"""
     peak = 0
     for name, job in jobs.items():
         if name in ('plan', 'gate'):
+            continue
+        if name in CHAINED:
+            if job.get('needs') != ['plan', CHAINED[name]] or job.get('strategy') is not None:
+                raise AssertionError(f'{name} 沒有單純接在 {CHAINED[name]} 後面，算式要重寫')
             continue
         if job.get('needs') != 'plan':
             raise AssertionError(f'{name} 不在中間那一段，算式要重寫')
@@ -178,8 +187,10 @@ class Budget(unittest.TestCase):
         # sandbox-spawner 例外，輕的模式也會跑，但它也等 plan、gate 也等它，三個依序，同時仍只有 1 個。
         self.assertEqual(jobs['sandbox-spawner']['needs'], 'plan')
         self.assertIn('sandbox-spawner', jobs['gate']['needs'])
+        # sandbox-spawner-arm64 只在合併後完整一輪跑，功能 PR 上不跑。
+        self.assertEqual(jobs['sandbox-spawner-arm64']['if'], 'inputs.full')
         for name, job in jobs.items():
-            if name not in ('plan', 'gate', 'sandbox-spawner'):
+            if name not in ('plan', 'gate', 'sandbox-spawner', 'sandbox-spawner-arm64'):
                 self.assertTrue(job['if'].startswith("needs.plan.outputs.mode == 'full'"), name)
         light_peak = 1
         self.assertLessEqual(full_peak(jobs) + 2 * light_peak, JOB_LIMIT)
@@ -364,7 +375,7 @@ class SandboxSpawner(unittest.TestCase):
     def setUp(self) -> None:
         self.ci = load(CI)
         self.job = self.ci['jobs']['sandbox-spawner']
-        self.steps = {s.get('name'): s for s in self.job['steps']}
+        self.steps = {s.get('name'): s for s in load(SPAWNER_ACTION)['runs']['steps']}
 
     def rust(self, changed: list[str], event: str = 'pull_request', base: str = 'develop', full: bool = False) -> str:
         return plan_ci.plan(changed, event, base, force_full=full)['rust']
@@ -374,8 +385,59 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['native/sandbox-spawner/Cargo.lock']), 'true')
         self.assertEqual(self.rust(['.github/workflows/ci.yml']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/a.ts', 'docs/a.md']), 'false')
-        self.assertEqual(self.rust(['apps/harness/src/a.ts'], event='push', base=''), 'false')
+        self.assertEqual(self.rust(['docs/a.md'], event='push', base=''), 'false')
         self.assertEqual(self.rust(['README.md'], event='push', base='', full=True), 'true')
+
+    def test_builds_whenever_packed_install_runs(self) -> None:
+        """包裡的 spawner 是這個 job 編的：develop → main 的 PR 只改 TypeScript 也要編。"""
+        result = plan_ci.plan(['apps/harness/src/a.ts'], 'pull_request', 'main')
+        self.assertEqual((result['mode'], result['ts'], result['rust']), ('full', 'true', 'true'))
+        self.assertEqual(self.rust(['docs/a.md'], base='main'), 'false')
+
+    def test_packed_install_packs_the_bundle_this_job_built(self) -> None:
+        job = self.ci['jobs']['packed-install']
+        self.assertEqual(job['needs'], ['plan', 'sandbox-spawner'])
+        use = next(s for s in self.job['steps'] if s.get('uses') == './.github/actions/sandbox-spawner')
+        self.assertEqual(
+            use['with']['bundle'],
+            "${{ needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true' && 'sandbox-spawner-linux-x64' || '' }}",
+        )
+        self.assertEqual(job['if'], "needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true'")
+        download = next(s for s in job['steps'] if str(s.get('uses', '')).startswith('actions/download-artifact@'))
+        self.assertEqual(download['with']['name'], 'sandbox-spawner-linux-x64')
+        steps = {s.get('name'): s for s in job['steps']}
+        self.assertIn('--spawner "$RUNNER_TEMP/spawner"', steps['打包']['run'])
+
+    def test_bundle_keeps_the_exec_bit(self) -> None:
+        """upload-artifact 不保留執行權限，所以先包成 tar。"""
+        self.assertIn('tar -cf', self.steps['打 bundle']['run'])
+        self.assertIn('./bundle.sh', self.steps['打 bundle']['run'])
+
+    def test_arm64_builds_and_tests_only_in_the_post_merge_run(self) -> None:
+        job = self.ci['jobs']['sandbox-spawner-arm64']
+        self.assertEqual(job['if'], 'inputs.full')
+        self.assertEqual(job['runs-on'], 'ubuntu-24.04-arm')
+        use = next(s for s in job['steps'] if s.get('uses') == './.github/actions/sandbox-spawner')
+        self.assertNotIn('with', use, 'arm64 不出貨，不打 bundle')
+        step = next(s for s in self.ci['jobs']['gate']['steps'] if s.get('name') == '彙總')
+        self.assertEqual(step['env']['FULL'], '${{ inputs.full }}')
+        self.assertEqual(step['env']['SANDBOX_SPAWNER_ARM64'], '${{ needs.sandbox-spawner-arm64.result }}')
+        self.assertIn('[ "$SANDBOX_SPAWNER_ARM64" = "success" ] || fail', step['run'])
+        self.assertIn('[ "$SANDBOX_SPAWNER_ARM64" = "skipped" ] || fail', step['run'])
+
+    def test_release_packs_the_x64_bundle_and_only_builds_arm64(self) -> None:
+        jobs = load(CI.with_name('release.yml'))['jobs']
+        self.assertEqual(jobs['release']['needs'], ['sandbox-spawner', 'sandbox-spawner-arm64'])
+        x64 = next(s for s in jobs['sandbox-spawner']['steps'] if s.get('uses') == './.github/actions/sandbox-spawner')
+        self.assertEqual(x64['with']['bundle'], 'sandbox-spawner-linux-x64')
+        self.assertEqual(jobs['sandbox-spawner-arm64']['runs-on'], 'ubuntu-24.04-arm')
+        arm = next(s for s in jobs['sandbox-spawner-arm64']['steps'] if s.get('uses') == './.github/actions/sandbox-spawner')
+        self.assertNotIn('with', arm, 'arm64 不出貨，不打 bundle')
+        steps = jobs['release']['steps']
+        download = next(s for s in steps if str(s.get('uses', '')).startswith('actions/download-artifact@'))
+        self.assertEqual(download['with']['name'], 'sandbox-spawner-linux-x64')
+        names = [s.get('name') for s in steps]
+        self.assertIn('--spawner "$RUNNER_TEMP/spawner"', steps[names.index('打包')]['run'])
 
     def test_light_mode_still_builds(self) -> None:
         result = plan_ci.plan(['native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')

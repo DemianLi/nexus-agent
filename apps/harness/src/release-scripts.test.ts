@@ -52,6 +52,18 @@ import {
   sbomProblems,
   walkClosure,
 } from '../../../scripts/release/sbom.js';
+import {
+  GLIBC_FLOOR,
+  RUST_STD_COPYRIGHT,
+  SPAWNER_CRATES,
+  SPAWNER_LICENSES_DIR,
+  SPAWNER_LOCK,
+  SPAWNER_PATH,
+  elfProblems,
+  lockedCrates,
+  runtimeLicenseDirs,
+  spawnerCrateProblems,
+} from '../../../scripts/release/spawner.js';
 import { assertInputMatches } from '../../../scripts/release/version.js';
 import {
   attachedSbomProblems,
@@ -218,6 +230,29 @@ describe('sha256', () => {
  */
 const FONT_LICENSES = ['Geist-OFL.txt', 'GeistMono-OFL.txt', 'NotoSansTC-OFL.txt'];
 
+/**
+ * 最小的 64 位元小端 ELF：檔頭加上一個 program header。
+ *
+ * @param machine - `e_machine`（x64 是 62、arm64 是 183）。
+ * @param options - `interp` 帶一個 PT_INTERP（動態連結），`tail` 接在後面的位元組（放 glibc 符號版本字串）。
+ */
+function elf(
+  machine: number,
+  options: { interp?: boolean; tail?: string; type?: number } = {},
+): Buffer {
+  const header = Buffer.alloc(64 + 56);
+  header.writeUInt32BE(0x7f454c46, 0);
+  header[4] = 2;
+  header[5] = 1;
+  header.writeUInt16LE(options.type ?? 3, 16);
+  header.writeUInt16LE(machine, 18);
+  header.writeBigUInt64LE(64n, 32);
+  header.writeUInt16LE(56, 54);
+  header.writeUInt16LE(1, 56);
+  header.writeUInt32LE(options.interp === true ? 3 : 1, 64);
+  return Buffer.concat([header, Buffer.from(options.tail ?? '', 'latin1')]);
+}
+
 /** 一棵最小的、合格的產物樹。 */
 function goodTree(root: string): void {
   const put = (path: string, text = '{}'): void => {
@@ -247,6 +282,14 @@ function goodTree(root: string): void {
   put('node_modules/.pnpm/@vscode+ripgrep@1.18.0/node_modules/@vscode/ripgrep/lib/index.js', '');
   put(RG_BINARY, '');
   chmodSync(join(root, RG_BINARY), 0o755);
+  // 沙箱 spawner（#1946）：靜態連結的 x64 執行檔，連進去的 crate 與標準函式庫各有授權全文。
+  mkdirSync(dirname(join(root, SPAWNER_PATH)), { recursive: true });
+  writeFileSync(join(root, SPAWNER_PATH), elf(62));
+  chmodSync(join(root, SPAWNER_PATH), 0o755);
+  put(RUST_STD_COPYRIGHT, '<html></html>');
+  for (const dir of runtimeLicenseDirs(readFileSync(join(ROOT, SPAWNER_LOCK), 'utf8'))) {
+    put(`${SPAWNER_LICENSES_DIR}/${dir}/LICENSE-MIT`, 'MIT');
+  }
 }
 
 const RG_BINARY =
@@ -394,6 +437,32 @@ describe('產物樹的內容檢查', () => {
       () => chmodSync(join(root, RG_BINARY), 0o644),
       /內附的 rg 沒有執行權限/u,
     ],
+    ['缺沙箱 spawner', () => rmSync(join(root, SPAWNER_PATH)), /沙箱 spawner 的執行檔不在/u],
+    [
+      '沙箱 spawner 沒有執行權限',
+      () => chmodSync(join(root, SPAWNER_PATH), 0o644),
+      /沙箱 spawner 沒有執行權限/u,
+    ],
+    [
+      '沙箱 spawner 是別的架構',
+      () => writeFileSync(join(root, SPAWNER_PATH), elf(183)),
+      /沙箱 spawner ELF 的架構是 183，x64 應為 62/u,
+    ],
+    [
+      '缺標準函式庫的版權說明',
+      () => rmSync(join(root, RUST_STD_COPYRIGHT)),
+      /缺 Rust 標準函式庫的版權說明/u,
+    ],
+    [
+      '連進執行檔的 crate 缺授權全文',
+      () => rmSync(join(root, SPAWNER_LICENSES_DIR, 'libc-0.2.191'), { recursive: true }),
+      /libc-0\.2\.191 連進執行檔的 crate 缺授權全文/u,
+    ],
+    [
+      '多一個表上沒標成連進執行檔的 crate',
+      () => mkdirSync(join(root, SPAWNER_LICENSES_DIR, 'syn-2.0.119')),
+      /syn-2\.0\.119 SPAWNER_CRATES 沒把它標成連進執行檔/u,
+    ],
     ['絕對符號連結', () => symlinkSync('/etc/hosts', join(root, 'abs')), /絕對路徑/u],
     ['斷掉的符號連結', () => symlinkSync('./nowhere', join(root, 'dangling')), /解不開/u],
     [
@@ -457,6 +526,85 @@ describe('產物樹的內容檢查', () => {
     symlinkSync('/somewhere/else/apps/harness', link);
     expect(removeSelfLink(root)).toBe(true);
     expect(removeSelfLink(root)).toBe(false);
+  });
+});
+
+describe('沙箱 spawner 的執行檔', () => {
+  it('靜態連結、架構對就通過；PIE 與傳統的可執行型別都收', () => {
+    expect(elfProblems(elf(62), 'x64')).toEqual([]);
+    expect(elfProblems(elf(183), 'arm64')).toEqual([]);
+    expect(elfProblems(elf(62, { type: 2 }), 'x64')).toEqual([]);
+  });
+
+  it('動態連 glibc：符號版本到下限 2.28 為止通過，超過就報出每一個', () => {
+    expect(GLIBC_FLOOR).toEqual([2, 28]);
+    expect(
+      elfProblems(elf(62, { interp: true, tail: 'GLIBC_2.2.5\0GLIBC_2.28\0' }), 'x64'),
+    ).toEqual([]);
+    expect(
+      elfProblems(elf(62, { interp: true, tail: 'GLIBC_2.28\0GLIBC_2.34\0GLIBC_3.0\0' }), 'x64'),
+    ).toEqual(['動態連 glibc，用到 GLIBC_2.34、GLIBC_3.0，超過主機下限 glibc 2.28']);
+  });
+
+  it('靜態連結時不看字串裡的 glibc 版本', () => {
+    expect(elfProblems(elf(62, { tail: 'GLIBC_2.39' }), 'x64')).toEqual([]);
+  });
+
+  it.each<[string, Buffer, string, RegExp]>([
+    ['不是 ELF', Buffer.from('#!/bin/sh\n'.padEnd(80)), 'x64', /^不是 ELF$/u],
+    [
+      '32 位元',
+      Buffer.concat([elf(62).subarray(0, 4), Buffer.from([1, 1]), elf(62).subarray(6)]),
+      'x64',
+      /不是 64 位元小端/u,
+    ],
+    ['共享物件以外的型別', elf(62, { type: 1 }), 'x64', /ELF 型別是 1/u],
+    ['不認得的目標架構', elf(62), 'riscv64', /不認得目標架構 riscv64/u],
+  ])('壞的要報：%s', (_label, bytes, arch, pattern) => {
+    expect(elfProblems(bytes, arch).join('\n')).toMatch(pattern);
+  });
+});
+
+describe('沙箱 spawner 的 crate 清單', () => {
+  const lock = readFileSync(join(ROOT, SPAWNER_LOCK), 'utf8');
+  const block = (name: string, version: string): string =>
+    `[[package]]\nname = "${name}"\nversion = "${version}"\n`;
+
+  it('跟 repo 的 Cargo.lock 對得上', () => {
+    expect(spawnerCrateProblems(lock)).toEqual([]);
+  });
+
+  it('同名多版本各一列，連進執行檔的目錄名帶版本', () => {
+    const text = `version = 4\n\n${block('syn', '2.0.1')}\n${block('syn', '3.0.1')}\n${block('libc', '0.2.1')}`;
+    expect(lockedCrates(text)).toEqual([
+      { name: 'syn', version: '2.0.1' },
+      { name: 'syn', version: '3.0.1' },
+      { name: 'libc', version: '0.2.1' },
+    ]);
+    expect(runtimeLicenseDirs(text)).toEqual(['libc-0.2.1']);
+  });
+
+  it('Cargo.lock 多一個、或表上多一個，兩個方向都報', () => {
+    expect(spawnerCrateProblems(`${lock}\n${block('rand', '0.9.0')}`).join('\n')).toMatch(
+      /有 rand，SPAWNER_CRATES 沒有/u,
+    );
+    const without = lock.replace(/\[\[package\]\]\nname = "quote"\n[^[]*/u, '');
+    expect(spawnerCrateProblems(without).join('\n')).toMatch(
+      /SPAWNER_CRATES 有 quote，[^ ]+ 沒有/u,
+    );
+  });
+
+  it('讀不出 name 或 version 就停，不靜靜少一列', () => {
+    expect(() => lockedCrates('[[package]]\nname = "x"\n')).toThrow(/讀不出 name 或 version/u);
+  });
+
+  it('連進執行檔的都是寬鬆授權', () => {
+    expect(SPAWNER_CRATES.filter((entry) => entry.runtime).map((entry) => entry.license)).toEqual([
+      'MIT OR Apache-2.0',
+      'MIT OR Apache-2.0',
+      'MIT OR Apache-2.0',
+      'MIT OR Apache-2.0',
+    ]);
   });
 });
 

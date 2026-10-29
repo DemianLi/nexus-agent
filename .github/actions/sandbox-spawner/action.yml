@@ -1,0 +1,56 @@
+name: 沙箱 spawner
+description: >-
+  編沙箱 spawner（#1946，`native/sandbox-spawner/`）並在這台 runner 的核心上跑整合測試：裝 rust-toolchain.toml 釘住的 Rust，
+  編出貨的 release 版，再用 test-hooks 跑測試（核心沒有 Landlock 時紅，不准自我跳過）。給了 `bundle` 就把 release 執行檔與
+  連進去的 Rust 程式碼的授權全文打成 bundle（`bundle.sh`），包成 tar 上傳：upload-artifact 不保留執行權限，tar 保留。
+  ci.yml 與 release.yml 共用。
+
+inputs:
+  bundle:
+    description: bundle 上傳成的 artifact 名；空的就不打 bundle
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: 安裝釘住的 Rust
+      shell: bash
+      working-directory: native/sandbox-spawner
+      run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
+    - uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry
+          native/sandbox-spawner/target
+        key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/sandbox-spawner/Cargo.lock', 'native/sandbox-spawner/rust-toolchain.toml') }}
+    - name: 核心與 LSM
+      shell: bash
+      run: |
+        uname -r
+        cat /sys/kernel/security/lsm
+    # 出貨的形狀：不帶 test-hooks。
+    - name: 編譯
+      shell: bash
+      working-directory: native/sandbox-spawner
+      run: cargo build --release --locked
+    - name: 測試
+      shell: bash
+      working-directory: native/sandbox-spawner
+      env:
+        NEXUS_REQUIRE_LANDLOCK: '1'
+      run: cargo test --locked --features test-hooks
+    - name: 打 bundle
+      if: inputs.bundle != ''
+      shell: bash
+      working-directory: native/sandbox-spawner
+      run: |
+        ./bundle.sh "$RUNNER_TEMP/spawner-bundle"
+        tar -cf "$RUNNER_TEMP/spawner-bundle.tar" -C "$RUNNER_TEMP/spawner-bundle" .
+    - if: inputs.bundle != ''
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.bundle }}
+        path: ${{ runner.temp }}/spawner-bundle.tar
+        if-no-files-found: error
+        retention-days: 7

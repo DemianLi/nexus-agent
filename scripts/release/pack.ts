@@ -21,7 +21,11 @@
  * **戳記只在這一步寫**：`build-stamp.json` 放在產物根（`lib/` 的上一層，`build-version.ts` 的 `BUILD_STAMP_PATH`），
  * 內容 `{ "commit": "<sha>", "dirty": false }`。`build:lib` 不寫它。
  *
- * 用法：`pnpm run release:pack [--out <目錄>] [--skip-build]`。本機跑完會用 `pnpm install --offline --frozen-lockfile`
+ * **沙箱 spawner**（#1946）：Linux 的產物要帶它。這一步不編 Rust，從 `--spawner <目錄>` 拿 CI 的 Rust job 打好的 bundle
+ *（`.github/actions/sandbox-spawner`：執行檔加上連進去的 Rust 程式碼的授權全文，形狀見 `spawner.ts`），原樣放進產物根。
+ * Linux 上沒給就停；其他平台不收。
+ *
+ * 用法：`pnpm run release:pack [--out <目錄>] [--skip-build] [--spawner <目錄>]`。本機跑完會用 `pnpm install --offline --frozen-lockfile`
  * 把開發相依還原（legacy deploy 會動到本機 `node_modules`）；CI（`CI=true`）是用過即丟的 checkout，不還原。
  *
  * @module
@@ -29,7 +33,15 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -76,10 +88,16 @@ function run(command: string, args: readonly string[], cwd: string = ROOT, timeo
 /**
  * 打包。
  *
- * @param options - `out` 產物目錄、`skipBuild` 跳過 build、`commit` 寫進戳記的 commit（省略即 `git rev-parse HEAD`）。
+ * @param options - `out` 產物目錄、`skipBuild` 跳過 build、`commit` 寫進戳記的 commit（省略即 `git rev-parse HEAD`）、
+ *   `spawner` 沙箱 spawner 的 bundle 目錄（Linux 必給，其他平台不收）。
  * @returns tarball、SBOM 與兩份 `.sha256` 的路徑、版本、平台。
  */
-export function pack(options: { out: string; skipBuild?: boolean; commit?: string }): {
+export function pack(options: {
+  out: string;
+  skipBuild?: boolean;
+  commit?: string;
+  spawner?: string;
+}): {
   tarball: string;
   checksum: string;
   sbom: string;
@@ -89,6 +107,12 @@ export function pack(options: { out: string; skipBuild?: boolean; commit?: strin
   const platform = `${process.platform}-${process.arch}`;
   const version = sharedVersion(releaseMembers());
   const name = productName(version, platform);
+  if (process.platform === 'linux' && options.spawner === undefined) {
+    throw new Error('Linux 的產物要帶沙箱 spawner：用 --spawner 給 CI 打好的 bundle 目錄');
+  }
+  if (process.platform !== 'linux' && options.spawner !== undefined) {
+    throw new Error(`沙箱 spawner 只在 Linux 上跑，${platform} 的產物不收 --spawner`);
+  }
   const commit =
     options.commit ??
     execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
@@ -132,6 +156,7 @@ export function pack(options: { out: string; skipBuild?: boolean; commit?: strin
       mkdirSync(dirname(join(staging, file)), { recursive: true });
       copyFileSync(join(ROOT, file), join(staging, file));
     }
+    if (options.spawner !== undefined) cpSync(options.spawner, staging, { recursive: true });
     const bom = buildSbom(staging);
     const sbomText = renderSbom(bom);
     writeFileSync(join(staging, SBOM_FILE), sbomText);
@@ -168,9 +193,14 @@ if (import.meta.main) {
     options: {
       out: { type: 'string', default: join(ROOT, '.release-out') },
       'skip-build': { type: 'boolean', default: false },
+      spawner: { type: 'string' },
     },
   });
-  const result = pack({ out: values.out, skipBuild: values['skip-build'] });
+  const result = pack({
+    out: values.out,
+    skipBuild: values['skip-build'],
+    ...(values.spawner === undefined ? {} : { spawner: values.spawner }),
+  });
   console.log(
     `release:pack：${result.tarball}（${result.version}，${result.platform}）\n  ${result.checksum}\n  ${result.sbom}`,
   );

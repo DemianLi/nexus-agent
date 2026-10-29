@@ -68,6 +68,7 @@ FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 
 
 # 沙箱 spawner 的 Rust（#1946）：只有動到它或 CI 自己時編，合併後完整一輪一律編（D55）。跟模式無關，輕的模式也編。
+# packed-install 要跑的一輪也編：包裡的 spawner 是 sandbox-spawner 那個 job 編的（develop → main 的 PR 走這一條）。
 RUST_RE = re.compile(r'^native/sandbox-spawner/')
 
 
@@ -78,7 +79,7 @@ def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False
     if feature_pr and not force_full and not any(FULL_RE.search(p) for p in changed):
         return {'mode': 'light', 'ts': 'false', 'rust': rust}
     scan = force_full or any(TS_RE.search(p) or any(rx.search(p) for rx in SCAN_RES) for p in changed)
-    return {'mode': 'full', 'ts': 'true' if scan else 'false', 'rust': rust}
+    return {'mode': 'full', 'ts': 'true' if scan else 'false', 'rust': 'true' if scan else rust}
 
 
 # 輕的模式只型別檢查受影響的套件：改到的，加上它的下游（由 pnpm 的 `...` 算）。

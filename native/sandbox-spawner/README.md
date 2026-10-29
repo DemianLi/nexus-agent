@@ -20,4 +20,10 @@ docker run --rm --security-opt seccomp=unconfined -v "$PWD":/src -w /src -e CARG
 - `--features test-hooks`：只給整合測試用，可以把 Landlock ABI 壓低來造出 partial、讓子行程在 `setsid` 之前先睡一下。出貨的建置不帶它。
 - `NEXUS_REQUIRE_LANDLOCK=1`：核心沒有 Landlock 時，整合測試直接紅，不跳過。CI 會設。
 
-CI 的 `sandbox-spawner` job（`.github/workflows/ci.yml`）只在動到這個目錄、動到 CI，或合併後完整一輪時跑。
+CI 的 `sandbox-spawner` job（`.github/workflows/ci.yml`，步驟在 `.github/actions/sandbox-spawner`）在動到這個目錄、動到 CI、要打包的一輪（`packed-install` 跑的時候），以及合併後完整一輪時跑。`sandbox-spawner-arm64` 只在合併後完整一輪與發版時跑，在 arm64 的 runner 上原生編與測，不出貨。
+
+## 出貨
+
+Linux 的離線包帶 x64 的 release 執行檔，放在 `native/nexus-sandbox-spawner`。`bundle.sh` 把執行檔與連進去的 Rust 程式碼的授權全文（`cargo tree -e normal,no-proc-macro` 收到的 crate，加上標準函式庫的 `COPYRIGHT-library.html`）打成 bundle，`pnpm run release:pack --spawner <目錄>` 原樣放進產物。bundle 的形狀與產物裡的檢查在 `scripts/release/spawner.ts`。
+
+改了相依（`Cargo.lock`）就同步改 `scripts/release/spawner.ts` 的 `SPAWNER_CRATES`，再跑 `pnpm run gen-third-party-notices`。

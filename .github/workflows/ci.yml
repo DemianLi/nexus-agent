@@ -46,13 +46,14 @@ permissions:
 #         ├─ test-packages ────┤
 #         ├─ test-web ─────────┼─► gate
 #         ├─ test-harness ─────┤   兩片
-#         ├─ packed-install ───┤   打成 tarball、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
 #         ├─ node-compat ──────┤   Node 下限 22.19 與下一版 26 各跑一輪相容冒煙，依序跑（#1546）
-#         └─ sandbox-spawner ──┘   Rust 的沙箱 spawner（#1946）。不看模式，看 plan 的 rust：輕的模式也會跑
+#         ├─ sandbox-spawner ──┤   Rust 的沙箱 spawner（#1946）。不看模式，看 plan 的 rust：輕的模式也會跑
+#         │  └ packed-install ─┤   接在 spawner 後面：打成 tarball（帶 spawner 的 bundle）、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
+#         └─ sandbox-spawner-arm64 ┘ 只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
 #
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
-# static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ packed-install 1
-# ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）＋ sandbox-spawner 1 ＝ 9。plan 在它之前、gate 在它之後，不同時。
+# static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
+# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＝ 9。plan 在它之前、gate 在它之後，不同時。
 # 輕的一輪是 plan 接 gate（動到 spawner 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
 # 所以合併後的一輪加上兩張功能 PR 同時跑是 9 ＋ 1 ＋ 1 ＝ 11，在 20 之內。
 # 這兩個算式由 .github/scripts/test_ci_workflow.py 釘住，加 job 或加矩陣格時它會紅。
@@ -279,9 +280,10 @@ jobs:
   # 這裡是下限上的「已安裝產物」冒煙；同一個下限上的「原始碼」冒煙在 node-compat 的 22.19 那一格。兩邊的版本由
   # .github/scripts/test_ci_workflow.py 對著 `engines` 釘住。
   # 只在動到 TypeScript 相關檔案時跑（同 static）；`.github/workflows/`、`.github/scripts/` 的異動 plan 也算進去。
+  # 包裡的 spawner 用 sandbox-spawner 這一輪編好、測過的那一份，這裡不編 Rust。plan 保證這個 job 要跑時 rust 為 true。
   packed-install:
     name: packed-install
-    needs: plan
+    needs: [plan, sandbox-spawner]
     if: needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -294,8 +296,14 @@ jobs:
           cache: pnpm
       - name: 安裝相依套件
         run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          name: sandbox-spawner-linux-x64
+          path: ${{ runner.temp }}
+      - name: 解開沙箱 spawner 的 bundle
+        run: mkdir "$RUNNER_TEMP/spawner" && tar -xf "$RUNNER_TEMP/spawner-bundle.tar" -C "$RUNNER_TEMP/spawner"
       - name: 打包
-        run: pnpm run release:pack
+        run: pnpm run release:pack --spawner "$RUNNER_TEMP/spawner"
       - name: 核對 sha256
         working-directory: .release-out
         run: sha256sum -c ./*.sha256
@@ -447,30 +455,23 @@ jobs:
     if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    defaults:
-      run:
-        working-directory: native/sandbox-spawner
     steps:
       - uses: actions/checkout@v7
-      - name: 安裝釘住的 Rust
-        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
-      - uses: actions/cache@v6
+      - uses: ./.github/actions/sandbox-spawner
         with:
-          path: |
-            ~/.cargo/registry
-            native/sandbox-spawner/target
-          key: sandbox-spawner-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/sandbox-spawner/Cargo.lock', 'native/sandbox-spawner/rust-toolchain.toml') }}
-      - name: 核心與 LSM
-        run: |
-          uname -r
-          cat /sys/kernel/security/lsm
-      # 出貨的形狀：不帶 test-hooks。
-      - name: 編譯
-        run: cargo build --release --locked
-      - name: 測試
-        env:
-          NEXUS_REQUIRE_LANDLOCK: '1'
-        run: cargo test --locked --features test-hooks
+          bundle: ${{ needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true' && 'sandbox-spawner-linux-x64' || '' }}
+
+  # arm64 的 spawner 只在合併後完整一輪編與測（#1827 D55），不進包、不掛 Release（#1946 issuecomment-6508052433）。
+  # 用 GitHub 的 arm64 runner 原生編，不交叉編譯：同一台機器順便在 aarch64 的真核心上跑整合測試。
+  sandbox-spawner-arm64:
+    name: sandbox-spawner-arm64
+    needs: plan
+    if: inputs.full
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/sandbox-spawner
 
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
@@ -492,6 +493,7 @@ jobs:
         packed-install,
         node-compat,
         sandbox-spawner,
+        sandbox-spawner-arm64,
       ]
     if: always()
     runs-on: ubuntu-latest
@@ -512,6 +514,8 @@ jobs:
           NODE_COMPAT: ${{ needs.node-compat.result }}
           RUST: ${{ needs.plan.outputs.rust }}
           SANDBOX_SPAWNER: ${{ needs.sandbox-spawner.result }}
+          FULL: ${{ inputs.full }}
+          SANDBOX_SPAWNER_ARM64: ${{ needs.sandbox-spawner-arm64.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
         run: |
           {
@@ -533,6 +537,7 @@ jobs:
             echo "| packed-install | $PACKED_INSTALL |"
             echo "| node-compat | $NODE_COMPAT |"
             echo "| sandbox-spawner | $SANDBOX_SPAWNER |"
+            echo "| sandbox-spawner-arm64 | $SANDBOX_SPAWNER_ARM64 |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail() { echo "::error::$1"; exit 1; }
@@ -559,4 +564,11 @@ jobs:
             [ "$SANDBOX_SPAWNER" = "skipped" ] || fail "不需要跑，sandbox-spawner 卻是 '$SANDBOX_SPAWNER'。"
           else
             fail "plan 輸出的 rust 是 '$RUST'，無法判斷 sandbox-spawner 該不該跑。"
+          fi
+
+          # sandbox-spawner-arm64 只在合併後完整一輪跑。
+          if [ "$FULL" = "true" ]; then
+            [ "$SANDBOX_SPAWNER_ARM64" = "success" ] || fail "sandbox-spawner-arm64 的結果是 '$SANDBOX_SPAWNER_ARM64'，需要 success。"
+          else
+            [ "$SANDBOX_SPAWNER_ARM64" = "skipped" ] || fail "不是合併後完整一輪，sandbox-spawner-arm64 卻是 '$SANDBOX_SPAWNER_ARM64'。"
           fi

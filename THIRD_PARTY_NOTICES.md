@@ -155,3 +155,23 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [`licenses/LGPL-
 | [`vitest`](https://github.com/vitest-dev/vitest) | MIT |
 
 `axe-core`（MPL-2.0） 只在開發時當工具跑，程式碼不會連結進、也不會隨 nexus 的任何產物發出去。
+
+## 沙箱 spawner 的 Rust 相依
+
+`native/sandbox-spawner/` 編成 Linux 產物裡的 `native/nexus-sandbox-spawner`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。下表是 [`native/sandbox-spawner/Cargo.lock`](native/sandbox-spawner/Cargo.lock) 的每一個外部 crate，加上 Rust 的標準函式庫。連進執行檔的 crate 與標準函式庫，授權全文放在產物的 `licenses/sandbox-spawner/`；標準函式庫自己內附的第三方程式碼列在那裡的 `rust-std/COPYRIGHT-library.html`。
+
+| crate | 版本 | 授權 | 連進執行檔 |
+| --- | --- | --- | --- |
+| [Rust 標準函式庫](https://github.com/rust-lang/rust) | 1.98.1 | MIT OR Apache-2.0 | 是 |
+| [`enumflags2`](https://github.com/meithecatte/enumflags2) | 0.7.12 | MIT OR Apache-2.0 | 是 |
+| [`enumflags2_derive`](https://github.com/meithecatte/enumflags2) | 0.7.12 | MIT OR Apache-2.0 | 否，只在編譯期跑 |
+| [`landlock`](https://github.com/landlock-lsm/rust-landlock) | 0.4.7 | MIT OR Apache-2.0 | 是 |
+| [`libc`](https://github.com/rust-lang/libc) | 0.2.191 | MIT OR Apache-2.0 | 是 |
+| [`proc-macro2`](https://github.com/dtolnay/proc-macro2) | 1.0.107 | MIT OR Apache-2.0 | 否，只在編譯期跑 |
+| [`quote`](https://github.com/dtolnay/quote) | 1.0.47 | MIT OR Apache-2.0 | 否，只在編譯期跑 |
+| [`syn`](https://github.com/dtolnay/syn) | 2.0.119、3.0.9 | MIT OR Apache-2.0 | 否，只在編譯期跑 |
+| [`thiserror`](https://github.com/dtolnay/thiserror) | 2.0.21 | MIT OR Apache-2.0 | 是 |
+| [`thiserror-impl`](https://github.com/dtolnay/thiserror) | 2.0.21 | MIT OR Apache-2.0 | 否，只在編譯期跑 |
+| [`unicode-ident`](https://github.com/dtolnay/unicode-ident) | 1.0.27 | (MIT OR Apache-2.0) AND Unicode-3.0 | 否，只在編譯期跑 |
+
+`unicode-ident`（(MIT OR Apache-2.0) AND Unicode-3.0） 只在編譯期跑，程式碼不會連進執行檔。
