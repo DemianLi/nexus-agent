@@ -2,15 +2,15 @@
  * **會話日誌的位元組額度**（[#2115](https://github.com/DemianLi/nexus-agent/issues/2115)）：一個行程同時讀進記憶體的會話日誌，
  * 合計不能超過一個上限。超過的**在讀之前**就拒收（{@link SessionLogTooLargeError}），不讓一條大日誌把整個行程拖死。
  *
- * 為什麼要這一道：續接與唯讀打開都把整份日誌讀成一個 Buffer、再解析成整個事件陣列。量到的成本（#2115 PR 內文有表）
- * 是日誌大小的好幾倍，而且 Buffer 在 V8 heap 外，cgroup 先殺——heap 判斷的警告（#1493）來不及響，thread 條數上限
- * （`maxThreads`）也不看大小。
+ * 為什麼要這一道：續接與唯讀打開都把整份日誌讀成一個 Buffer、再解析成整個事件陣列，成本是日誌大小的好幾倍
+ * （量測：#2115，摘要在 `docs/operations.md`〈會話日誌額度〉）。Buffer 在 V8 heap 外，cgroup 會先殺。#1493 的用量警告只講
+ * 不擋，而且跟著取樣開關（出廠關著）；thread 條數上限（`maxThreads`）也不看大小。
  *
  * **一本帳、兩種持有時間：**
  * - **續接**佔到那份會話的把手關掉為止（thread 撤掉、閒置逐出、關機）：載入之後事件還握在記憶體裡，讀完就還的話，
  *   第二條大的會被放進來，兩條一起把行程撐死。放不下就當場拒收（`busy`），**不排隊**：佔著的是活著的 thread，
  *   不會自己很快還回來（同 thread 條數上限，#1476）。
- * - **唯讀**（列表、冷讀、引用候選、背景子代理的冷檢查）與 #1594 ③ 的遷移驗證：讀完、解析完就還。暫時放不下但等
+ * - **唯讀**（列表、冷讀、引用候選、背景子代理的冷檢查）：讀完、解析完就還。暫時放不下但等
  *   別的唯讀讀完就放得下的，**排隊等**；連續接佔掉的都扣掉之後還是放不下的，拒收。
  *
  * 單份上限就是這本帳的總容量：一份超過它的，什麼時候都不收（`too-large`）。總容量的出廠值見 {@link defaultLogBudgetBytes}。
@@ -31,13 +31,16 @@ export interface SessionLogBudget {
   readonly limitBytes: number;
   /** 續接：佔到 `release` 為止。放不下就拋 {@link SessionLogTooLargeError}，不等。 */
   holdForSession(id: string, logBytes: number): SessionLogReservation;
-  /** 唯讀與遷移：讀完就 `release`。等別的唯讀讀完就放得下的排隊（先來先放），否則拋 {@link SessionLogTooLargeError}。 */
+  /**
+   * 唯讀：讀完就 `release`。等別的唯讀讀完就放得下的排隊（先來先放）；等不到的 reject {@link SessionLogTooLargeError}，
+   * 排隊中途續接佔進來而變成等不到的也是。
+   */
   reserveForRead(id: string, logBytes: number): Promise<SessionLogReservation>;
 }
 
 /**
  * 每 1 位元組日誌，serve 打開它時行程記憶體（RSS）最多漲多少。量的是 serve 經 `threadFor` 打開一條大 thread
- * （1g／4g 容器、長行與小行兩種形狀，實測 5.2–6.4 倍，表在 #2115 的 PR 內文），取最壞的那一格再留餘裕。
+ * （1g／4g 容器、長行與小行兩種形狀，實測 5.2–6.4 倍，量測：#2115），取最壞的那一格再留餘裕。
  * 存檔層自己只要約 2.5 倍（#2075），多出來的是組裝 agent 那一段；唯讀路徑也用這個數，對它們偏保守。
  */
 export const RSS_BYTES_PER_LOG_BYTE = 7;
@@ -69,7 +72,8 @@ export function readMemory(): MemoryReadings {
 
 /**
  * 出廠的總容量：剩下的記憶體（上限減掉現在的 RSS）與剩下的 heap（heap 上限減掉現在已用），各除以自己的倍率，取小的。
- * 在 serve 起動、還沒有 thread 的時候算一次，所以「現在」就是 serve 自己的底。
+ * 讀的是叫它當下的量，所以呼叫方要在起動完、還沒讀任何會話日誌時叫；serve 與 {@link processSessionLogBudget} 都等第一次
+ * 用到才叫。
  *
  * @param readings - 預設讀這個行程自己的。
  * @returns 位元組，至少 0。
@@ -170,7 +174,12 @@ export function createSessionLogBudget(limit: number | (() => number)): SessionL
       });
     },
     reserveForRead(id, logBytes) {
-      const limitBytes = capacity();
+      let limitBytes: number;
+      try {
+        limitBytes = capacity();
+      } catch (error: unknown) {
+        return Promise.reject(error);
+      }
       if (logBytes > limitBytes) {
         return Promise.reject(
           new SessionLogTooLargeError(id, 'too-large', logBytes, limitBytes, 0),
@@ -205,8 +214,8 @@ export function createSessionLogBudget(limit: number | (() => number)): SessionL
 let processBudget: SessionLogBudget | undefined;
 
 /**
- * 這個行程共用的那一本：記憶體是整個行程一份，所以同一個行程裡開的每一個後端（serve 的專案格、引用候選逐格開的、
- * CLI 的 run 目錄）都記在同一本。第一次用到時照 {@link defaultLogBudgetBytes} 算容量。
+ * 沒給 `logBudget` 的存放處共用的那一本（CLI 的 run 目錄、量測工具）：記憶體是整個行程一份，同一個行程裡不另開第二本。
+ * serve 自己照 `thread-capacity` 開一本，不用這個。第一次用到時照 {@link defaultLogBudgetBytes} 算容量。
  */
 export function processSessionLogBudget(): SessionLogBudget {
   processBudget ??= createSessionLogBudget(() => defaultLogBudgetBytes());

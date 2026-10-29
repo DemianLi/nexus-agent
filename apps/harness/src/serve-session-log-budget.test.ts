@@ -2,8 +2,7 @@
  * 會話日誌太大，serve 在讀之前就拒收那一條，**其他 thread 照常**（[#2115](https://github.com/DemianLi/nexus-agent/issues/2115)）。
  *
  * 從 `runServe` 起：真的 serve、真的 JSONL 存放處、真的 wire client。不造幾百 MiB 的日誌，把額度換成比那份日誌小一個位元組
- * （`RunServeOptions.sessionLogBudget`）：拒收的判準只看大小，跟換出廠的哪個數無關。出廠容量怎麼算見 `session-log-budget.test.ts`，
- * 實機在 1g 容器的前後對照在 PR 內文。
+ * （`RunServeOptions.sessionLogBudget`）：拒收的判準只看大小，跟換出廠的哪個數無關。出廠容量怎麼算見 `session-log-budget.test.ts`。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */

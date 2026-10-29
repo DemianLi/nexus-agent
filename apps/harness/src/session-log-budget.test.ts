@@ -147,9 +147,15 @@ describe('出廠容量', () => {
     ).toBe(0);
   });
 
-  it('容量不是 0 以上的有限數就拋', () => {
+  it('容量不是 0 以上的數就拋；惰性算的唯讀走 rejected Promise', () => {
     expect(() => createSessionLogBudget(-1)).toThrow(RangeError);
     expect(() => createSessionLogBudget(Number.NaN)).toThrow(RangeError);
+    const lazy = createSessionLogBudget(() => -1);
+    let pending: Promise<unknown> | undefined;
+    expect(() => {
+      pending = lazy.reserveForRead('a', 1);
+    }).not.toThrow();
+    return expect(pending).rejects.toBeInstanceOf(RangeError);
   });
 });
 

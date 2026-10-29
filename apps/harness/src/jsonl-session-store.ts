@@ -1708,7 +1708,7 @@ async function resumeStoredSession(
       }),
     };
   } catch (error: unknown) {
-    // 讀壞了就沒有把手可關，租約與額度得在這裡放。
+    // 沒交出把手（額度拒收或讀壞）就沒有把手可關，租約與額度得在這裡放。
     reservation?.release();
     await lease?.release();
     throw error;
@@ -1782,7 +1782,8 @@ export interface JsonlSessionStoreOptions {
   readonly fs?: StableReadFileSystem;
   /**
    * 會話日誌的位元組額度（#2115）：續接佔到把手關掉、唯讀讀完就還，放不下的在讀之前拋
-   * {@link @nexus/core!SessionLogTooLargeError}。省略即這個行程共用的那一本（{@link processSessionLogBudget}）；測試換小的。
+   * {@link @nexus/core!SessionLogTooLargeError}。省略即這個行程共用的那一本（{@link processSessionLogBudget}）；
+   * serve 傳它照 `thread-capacity` 開的那一本，測試換小的。
    */
   readonly logBudget?: SessionLogBudget;
 }

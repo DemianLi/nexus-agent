@@ -767,7 +767,7 @@ async function readForSearch(
       error instanceof SessionNotFoundError ||
       error instanceof SessionCorruptionError ||
       error instanceof SessionFormatUnsupportedError ||
-      // 太大讀不進來（#2115）：搜不到它的內容，同壞檔，不讓一條拖垮整次搜尋。
+      // 讀不進這個行程（#2115，太大或額度被佔滿）：搜不到它的內容，同壞檔，不讓一條拖垮整次搜尋。
       error instanceof SessionLogTooLargeError
     ) {
       return undefined;

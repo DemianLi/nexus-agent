@@ -1099,7 +1099,7 @@ export class SessionHandleClosedError extends Error {
  * - `too-large`：這一份單獨就超過行程能收的上限，什麼時候都不收；
  * - `busy`：這一份放得下，但別的會話正佔著那份額度，等它們收掉（thread 閒置逐出、關掉）再試。
  *
- * 有自己的型別，是讓列表、搜尋、引用候選那幾處分得出「太大」與「壞了」：太大的照樣列得出來，只是開不了。
+ * 有自己的型別，是讓列表分得出「太大」與「壞了」：太大的照樣列（不算進讀不了的），只是開不了；搜尋與引用候選跳過它，同壞檔。
  * 訊息不帶路徑（理由同 {@link SessionFormatUnsupportedError} 的 `location`：會原樣送到瀏覽器）。
  */
 export class SessionLogTooLargeError extends Error {
@@ -1109,8 +1109,8 @@ export class SessionLogTooLargeError extends Error {
    * @param id - 哪一份會話。
    * @param reason - 見類別說明。
    * @param logBytes - 這份日誌本文的位元組數。
-   * @param limitBytes - 行程能收的日誌位元組上限（所有開著的會話合計）。
-   * @param heldBytes - 別的會話已經佔掉的位元組數（`busy` 才有意義）。
+   * @param limitBytes - 行程能收的日誌位元組上限（開著的會話與正在讀的合計）。
+   * @param heldBytes - 已經被佔掉的位元組數，含正在讀的唯讀（`busy` 才有意義）。
    */
   constructor(
     readonly id: string,
@@ -1123,7 +1123,8 @@ export class SessionLogTooLargeError extends Error {
     super(
       reason === 'too-large'
         ? `會話 "${id}" 的日誌有 ${mib(logBytes)}，超過這個行程能收的 ${mib(limitBytes)}，沒有讀它（讀進來會把整個行程的記憶體用完）。` +
-            '檔案沒有壞。要打開它，請管理者給這個行程更多記憶體（容器或 systemd 的記憶體上限，與跟著它的 --max-old-space-size）後重啟。'
+            '檔案沒有壞。要打開它，請管理者給這個行程更多記憶體（容器或 systemd 的記憶體上限，與跟著它的 --max-old-space-size）後重啟；' +
+            '或在 thread-capacity 的 sessionLogBudgetMiB 調高額度（調得比記憶體撐得住的大，就可能把整個行程撐死）。'
         : `會話 "${id}" 的日誌有 ${mib(logBytes)}；別的會話已經佔掉 ${mib(heldBytes)}，上限 ${mib(limitBytes)}，這一份現在放不下，沒有讀它。` +
             '檔案沒有壞。等其他開著的大會話關掉或閒置逐出後再試，或請管理者給這個行程更多記憶體後重啟。',
     );

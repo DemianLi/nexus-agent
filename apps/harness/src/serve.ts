@@ -820,7 +820,8 @@ async function startServer(
   // `threadFor` 裡，所以值在這裡解、往下傳一份。出廠開著、關不掉（#1619，`settings/thread-capacity.ts`）。
   const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
   // 會話日誌額度（#2115）：serve 的存放處與引用候選逐格開的共用這一本。`thread-capacity` 的 `sessionLogBudgetMiB` 不寫就自動算——
-  // 等第一次用到（最晚是下面起動披露那一行）才算，那時 RSS 是 serve 起動完的底；寫了就固定，`0` 是不限。
+  // 等第一次用到（最晚是下面起動披露那一行）才算，起動披露之前沒有請求讀過日誌的話，那時 RSS 是 serve 起動完的底；
+  // 寫了就固定，`0` 是不限。
   const configuredLogBudgetMiB = threadCapacity.sessionLogBudgetMiB;
   const sessionLogBudget =
     options.sessionLogBudget ??
@@ -1745,7 +1746,8 @@ async function startServer(
   // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
   // serve 的那一刻就看得到，不必等第一個人開對話。
   for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
-  // 會話日誌的位元組額度講出來（#2115）：自動算的在這裡第一次算，起動的東西都載入了，「現在的 RSS」就是 serve 自己的底。
+  // 會話日誌的位元組額度講出來（#2115）：自動算的最晚在這裡算；起動披露之前沒有請求讀過日誌的話，「現在的 RSS」就是
+  // serve 起動完的底。
   // 沒落盤就沒有日誌要讀，不印。
   if (sessionStore !== undefined) {
     const { limitBytes } = sessionLogBudget;
