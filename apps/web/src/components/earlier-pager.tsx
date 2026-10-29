@@ -25,7 +25,6 @@ import { DotLoader } from '@/components/ui/dot-loader';
 import { useSettledLabel } from '@/hooks/use-focus-handoff';
 
 export const LOAD_EARLIER_LABEL = '載入更早的對話';
-export const LOADING_EARLIER_LABEL = '讀取中';
 export const RETRY_EARLIER_LABEL = '再試一次';
 
 /** 離頂端多近算「到了」。 */
@@ -59,7 +58,7 @@ const LOADING_CLASS =
 
 /**
  * `onArm`：鈕被聚焦時交給呼叫端，讀完時焦點交接用（`hooks/use-focus-handoff.ts`）。讀取中鈕不卸載，`disabled`＋`focusableWhenDisabled`
- * （`aria-disabled`）：焦點留在鈕上、再按不會再拉一次；名稱維持按下去之前那一句（{@link useSettledLabel}）。
+ * （`aria-disabled`）：焦點留在鈕上、再按不會再拉一次；字維持按下去之前那一句、前面加 `DotLoader`（{@link useSettledLabel}），報讀名稱就是看得見的字。
  */
 export function EarlierPager({
   earlier,
@@ -82,14 +81,13 @@ export function EarlierPager({
           className={earlier.loading ? LOADING_CLASS : undefined}
           disabled={earlier.loading}
           focusableWhenDisabled
-          aria-label={earlier.loading ? name : undefined}
           onFocus={(event) => onArm?.(event.currentTarget)}
           onClick={earlier.onLoad}
         >
           {earlier.loading ? (
             <>
               <DotLoader />
-              {LOADING_EARLIER_LABEL}
+              {name}
             </>
           ) : (
             <>

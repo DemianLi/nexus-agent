@@ -214,7 +214,7 @@ describe('摘要列的「載入這一輪的細節」', () => {
     return { ...fake, ...utils };
   }
 
-  it('按下去：進行中是同一顆鈕，停用、名稱不變，畫成 DotLoader 加一行進度字；拉回來就換成完整的一組', async () => {
+  it('按下去：進行中是同一顆鈕，停用、字與名稱不變，前面加 DotLoader；拉回來就換成完整的一組', async () => {
     const { client, waiting, queries } = await opened();
     const row = digestRow(100)!;
     const button = within(row).getByRole('button', { name: TRACE_PULL_LABEL });
@@ -223,7 +223,7 @@ describe('摘要列的「載入這一輪的細節」', () => {
     expect(queries.at(-1)).toEqual({ seq: 100 });
     const pull = within(row).getByTestId('trace-pull');
     expect(pull.getAttribute('data-status')).toBe('loading');
-    expect(pull.textContent).toBe(TRACE_PULL_LOADING_TEXT);
+    expect(pull.textContent).toBe(TRACE_PULL_LABEL);
     expect(pull.querySelectorAll('.animate-dot-flash')).toHaveLength(3);
     expect(within(pull).getByRole('button', { name: TRACE_PULL_LABEL })).toBe(button);
     expect(button.getAttribute('aria-disabled')).toBe('true');
@@ -315,7 +315,9 @@ describe('摘要列的「載入這一輪的細節」', () => {
     fireEvent.click(button);
     await flush();
     expect(document.activeElement).toBe(button);
-    expect(button.getAttribute('aria-label')).toBe(TRACE_PULL_RETRY_LABEL);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.textContent).toBe(TRACE_PULL_RETRY_LABEL);
+    expect(within(summary).getByRole('button', { name: TRACE_PULL_RETRY_LABEL })).toBe(button);
     await act(async () => {
       waiting.at(-1)!(okTurns(detail(3)));
     });

@@ -7,7 +7,6 @@ import { App, LEGACY_THREAD_NOTICE } from '@/App';
 import {
   EARLIER_EDGE_PX,
   LOAD_EARLIER_LABEL,
-  LOADING_EARLIER_LABEL,
   RETRY_EARLIER_LABEL,
 } from '@/components/earlier-pager';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
@@ -416,7 +415,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     expect(earlierCalls()).toBe(1);
   });
 
-  it('讀取中按鈕換字並停用、焦點留在上面；讀完另一格報讀接上幾則，回覆完成那一格不被蓋掉；最後一頁焦點落在 viewport', async () => {
+  it('讀取中按鈕停用、字不變只加 DotLoader、焦點留在上面；讀完另一格報讀接上幾則，回覆完成那一格不被蓋掉；最後一頁焦點落在 viewport', async () => {
     let release: (() => void) | undefined;
     const { client } = fakeClient(async (_threadId, query) => {
       if (query?.beforeSeq === undefined) {
@@ -435,7 +434,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     button.focus();
     fireEvent.click(button);
     await waitFor(() => expect(button.getAttribute('aria-disabled')).toBe('true'));
-    expect(button.textContent).toBe(LOADING_EARLIER_LABEL);
+    expect(button.textContent).toBe(LOAD_EARLIER_LABEL);
     expect(button.querySelectorAll('.animate-dot-flash')).toHaveLength(3);
     expect(screen.getByRole('button', { name: LOAD_EARLIER_LABEL })).toBe(button);
     expect(document.activeElement).toBe(button);
@@ -550,7 +549,9 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     expect(calls).toBe(1);
 
     fireEvent.click(button);
-    // 讀取中名稱維持按下去之前那一句「再試一次」：錯誤在按下去的當下就清掉了。
+    // 讀取中的字與名稱維持按下去之前那一句「再試一次」：錯誤在按下去的當下就清掉了。
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.textContent).toBe(RETRY_EARLIER_LABEL);
     expect(screen.getByRole('button', { name: RETRY_EARLIER_LABEL })).toBe(button);
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
     expect(calls).toBe(2);

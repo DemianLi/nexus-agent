@@ -357,6 +357,7 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     fireEvent.click(button);
     expect(document.activeElement).toBe(button);
     expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.textContent).toBe(TRACE_PULL_LABEL);
     expect(within(block).getByRole('button', { name: TRACE_PULL_LABEL })).toBe(button);
     fireEvent.click(button);
     expect(queries).toHaveLength(1);

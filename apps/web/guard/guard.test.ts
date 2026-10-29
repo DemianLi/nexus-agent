@@ -80,7 +80,7 @@ import { startGuardServer, type GuardServer } from './server';
  * 23. **觀測分頁**（#1690 PR A，`?overlay=trace-*`）：一輪標頭的狀態膠囊九種收法的色調與字過 4.5、圓角是 `rounded-4xl`，完成與停在中斷點
  *    字前面的圓點對膠囊底過 3，只有進行中帶 `DotLoader`；
  *    空狀態的標題與說明過 4.5；計劃那一列的結果 chip 是 `rounded-4xl`、定位鈕是 `rounded-md`、有焦點外框；載入細節的鈕（待命、重試）與失敗原因過 4.5、
- *    鈕是 `rounded-sm`、有焦點外框，讀取中是一顆停用的鈕（`aria-disabled`、名稱是待命那一句，#2009）、畫成 `DotLoader` 加一行字（只有摘要的組、
+ *    鈕是 `rounded-sm`、有焦點外框，讀取中是一顆停用的鈕（`aria-disabled`，#2009）、畫成 `DotLoader` 加待命那一句（不覆寫名稱）（只有摘要的組、
  *    更早的摘要、子代理三處都量），分頁只有一格
  *    `role=status`；375 寬時重試鈕與讀取中的鈕 44px 高、頁面不橫向溢出。
  * 24. **觀測分頁的列**（#1690 PR B，`?overlay=trace-steps`）：不能展開的列、SG `StepRow` 的列與它的失敗字、展開後的時刻、模型呼叫的數字格與欄位表、
@@ -4799,14 +4799,14 @@ async function loadTraceGroup(page: Page): Promise<void> {
   await page.mouse.move(0, 0);
 }
 
-/** 讀取中那幾格：一顆停用的鈕（名稱）、一個 `DotLoader`（三個點）、字；外加整頁 `role=status` 有幾格。 */
+/** 讀取中那幾格：一顆停用的鈕（有沒有覆寫名稱）、一個 `DotLoader`（三個點）、字；外加整頁 `role=status` 有幾格。 */
 function readTraceLoading(page: Page) {
   return page.evaluate(
     (loading) => ({
       rows: [...document.querySelectorAll(loading)].map((el) => ({
         buttons: el.querySelectorAll('button').length,
         disabled: el.querySelector('button')?.getAttribute('aria-disabled') ?? null,
-        name: el.querySelector('button')?.getAttribute('aria-label') ?? null,
+        ariaLabel: el.querySelector('button')?.getAttribute('aria-label') ?? null,
         dots: el.querySelectorAll('.animate-dot-flash').length,
         text: el.textContent,
       })),
@@ -4944,13 +4944,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量觀測分頁（#1690 PR A�
     }
   });
 
-  test('T6：讀取中是一顆停用的鈕、名稱是待命那一句，畫成 DotLoader 加一行字（只有摘要的組、更早的摘要、子代理），分頁只有一格 role=status', async () => {
+  test('T6：讀取中是一顆停用的鈕、字是待命那一句、名稱就是那句字，畫成 DotLoader 加字（只有摘要的組、更早的摘要、子代理），分頁只有一格 role=status', async () => {
     const expected = {
       buttons: 1,
       disabled: 'true',
-      name: '載入這一輪的細節',
+      ariaLabel: null,
       dots: 3,
-      text: '正在載入這一輪的細節…',
+      text: '載入這一輪的細節',
     };
     const group = await openOverlay('trace-groups', theme, {
       marks: { '[data-guard-reveal]': {} },
