@@ -6,9 +6,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  encodeSegment,
+  generationLogFilename,
   legacyTwoFileSessionFilenames,
+  parseGenerationLogFilename,
   parseLegacyTwoFileHeaderFilename,
   parseSessionHeaderFilename,
+  sessionDirectoryName,
   sessionFilenames,
 } from './session-filename.js';
 
@@ -68,5 +72,65 @@ describe('parseSessionHeaderFilename', () => {
     ['不相干的檔', 'notes.json'],
   ])('%s不認：%s', (_what, filename) => {
     expect(parseSessionHeaderFilename(filename)).toBeUndefined();
+  });
+});
+
+describe('encodeSegment', () => {
+  it('安全的碼元原樣，其餘（含 ~）寫成 ~XXXX', () => {
+    expect(encodeSegment('cli')).toBe('cli');
+    expect(encodeSegment('t1/bg-1')).toBe('t1~002Fbg-1');
+    expect(encodeSegment('a~b')).toBe('a~007Eb');
+    expect(encodeSegment('Alpha_1.x')).toBe('Alpha_1.x');
+    expect(encodeSegment('中')).toBe('~4E2D');
+  });
+
+  it('. 與 .. 整段編碼，不會變成路徑穿越', () => {
+    expect(encodeSegment('.')).toBe('~002E');
+    expect(encodeSegment('..')).toBe('~002E~002E');
+    expect(encodeSegment('...')).toBe('...');
+  });
+
+  it('孤立的代理碼元照碼元編碼；跟剛好長得像編碼結果的字串不撞', () => {
+    expect(encodeSegment('\ud800x')).toBe('~D800x');
+    expect(encodeSegment('~D800x')).not.toBe(encodeSegment('\ud800x'));
+  });
+
+  it('空字串拋錯', () => {
+    expect(() => encodeSegment('')).toThrow();
+  });
+
+  it('sessionDirectoryName 就是 encodeSegment(id)', () => {
+    expect(sessionDirectoryName('t1/bg-1')).toBe(encodeSegment('t1/bg-1'));
+  });
+});
+
+describe('generationLogFilename／parseGenerationLogFilename', () => {
+  it('互逆；版本 0 是 session.jsonl', () => {
+    expect(generationLogFilename(0)).toBe('session.jsonl');
+    expect(generationLogFilename(51)).toBe('session.v51.jsonl');
+    for (const version of [0, 1, 51, Number.MAX_SAFE_INTEGER]) {
+      expect(parseGenerationLogFilename(generationLogFilename(version))).toBe(version);
+    }
+  });
+
+  it.each([-1, -0, 1.5, Number.MAX_SAFE_INTEGER + 1, Number.NaN])(
+    '版本不是非負安全整數就拋：%s',
+    (version) => {
+      expect(() => generationLogFilename(version)).toThrow(TypeError);
+    },
+  );
+
+  it.each([
+    'session.v0.jsonl',
+    'session.v01.jsonl',
+    'session.V1.jsonl',
+    'session.v1.backup.jsonl',
+    'session.migration.deadbeef.tmp.jsonl',
+    'session.v1.jsonl.zstd',
+    'session.v9007199254740992.jsonl',
+    'session.lock',
+    'cli.jsonl',
+  ])('不是正規世代檔名就不認：%s', (filename) => {
+    expect(parseGenerationLogFilename(filename)).toBeUndefined();
   });
 });

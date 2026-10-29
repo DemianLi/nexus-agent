@@ -880,9 +880,12 @@ export {
 } from './session-format.js';
 export type { LegacyTwoFileSessionFilenames, SessionFilenames } from './session-filename.js';
 export {
+  generationLogFilename,
   legacyTwoFileSessionFilenames,
+  parseGenerationLogFilename,
   parseLegacyTwoFileHeaderFilename,
   parseSessionHeaderFilename,
+  sessionDirectoryName,
   sessionFilenames,
 } from './session-filename.js';
 
