@@ -336,6 +336,14 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     return screen.getByRole('region', { name: '對話訊息' });
   }
 
+  /**
+   * 斷言「焦點不動」之前先呼叫：文字一出現 waitFor 就回來了，Transcript 交接焦點的 effect（`components/transcript.tsx`）
+   * 可能還沒跑，先讓它跑完，「不動」才量得到。
+   */
+  function effectsSettled(): Promise<void> {
+    return act(async () => {});
+  }
+
   /** jsdom 的 `scrollTop` 不會動，直接蓋一個值。 */
   function at(element: HTMLElement, scrollTop: number): HTMLElement {
     Object.defineProperty(element, 'scrollTop', {
@@ -458,6 +466,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     fireEvent.click(button);
     await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
     expect(screen.getByRole('button', { name: LOAD_EARLIER_LABEL })).toBe(button);
+    await effectsSettled();
     expect(document.activeElement).toBe(button);
   });
 
@@ -470,8 +479,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
     expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
-    // 文字一出現 waitFor 就回來了，交接的 effect 可能還沒跑：先讓它跑完，「不搬」才量得到。
-    await act(async () => {});
+    await effectsSettled();
     expect(document.activeElement).toBe(document.body);
   });
 
@@ -496,8 +504,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
     expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
-    // 文字一出現 waitFor 就回來了，交接的 effect 可能還沒跑：先讓它跑完，「不搬」才量得到。
-    await act(async () => {});
+    await effectsSettled();
     expect(document.activeElement).toBe(document.body);
   });
 
@@ -543,6 +550,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     button.focus();
     fireEvent.click(button);
     expect(await screen.findByRole('button', { name: RETRY_EARLIER_LABEL })).toBe(button);
+    await effectsSettled();
     expect(document.activeElement).toBe(button);
     expect(within(viewport()).getByText('讀不到更早的對話：日誌讀到一半斷了')).toBeTruthy();
     expect(screen.queryByText(/之前說過的話拿不回來/)).toBeNull();
