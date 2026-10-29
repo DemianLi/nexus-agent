@@ -1,0 +1,39 @@
+# 只在量測分支上（#1946 第 5 條，PM 在 #2138 要的補量），不合進 develop。
+name: measure-1946b
+on:
+  push:
+    branches: [ci/measure-1946-batch]
+permissions:
+  contents: read
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.19.0
+      - name: 環境
+        run: |
+          uname -a; nproc; lscpu | grep -E 'Model name|Vendor ID' || true
+          git rev-parse HEAD
+      - name: 安裝 Rust
+        working-directory: native/sandbox-spawner
+        run: rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
+      - name: 編譯
+        working-directory: native/sandbox-spawner
+        run: cargo build --release --locked
+      - name: 並行 8，從批次起點算（N=100，三個種子）
+        env:
+          SPAWNER: ${{ github.workspace }}/native/sandbox-spawner/target/release/nexus-sandbox-spawner
+          WS: /tmp/ws
+        run: |
+          mkdir -p /tmp/ws
+          [ -e /lib64 ] && export EXTRA_RO=/lib64
+          cd .measure-1946
+          for i in 1 2 3; do node bench.mjs 100 $((1946500+i)) 8; done
