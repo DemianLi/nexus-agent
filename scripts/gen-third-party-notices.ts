@@ -10,6 +10,8 @@
  * - 授權 allowlist 照 dsh `:652-699`（`PERMISSIVE_LICENSES`、`isPermissive`、`assertRuntimeLicenses`）：執行期那層的授權
  *   不在清單上就硬失敗；開發那層只標註。
  * - vendor 的原始碼另列一段（dsh `:438-493`）：`vendor/` 的 Cordis，以及網頁的 solid-glass。
+ * - 沙箱 spawner 的 Rust crate 另列一段（#1946）：清單在 `scripts/release/spawner.ts` 的 `SPAWNER_CRATES`，跟 `Cargo.lock` 兩個方向核對；
+ *   連進執行檔的那幾個授權照執行期那層擋。
  *
  * 套件的 license 與 repository 讀安裝好的 store，所以要先 `pnpm install`。`--check` 只比對、不寫檔。
  *
@@ -36,6 +38,17 @@ import { pathToFileURL } from 'node:url';
 
 import parseSpdx from 'spdx-expression-parse';
 
+import {
+  NATIVE_LICENSES_SOURCE,
+  SPAWNER_CRATES,
+  SPAWNER_LICENSES_DIR,
+  SPAWNER_LOCK,
+  SPAWNER_NATIVE_LIBS,
+  SPAWNER_PATH,
+  lockedCrates,
+  rustChannel,
+  spawnerCrateProblems,
+} from './release/spawner.js';
 import { ROOT } from './workspace-packages.js';
 
 export const OUT = 'THIRD_PARTY_NOTICES.md';
@@ -583,6 +596,62 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [\`licenses/LGPL
 `;
 }
 
+/**
+ * 沙箱 spawner 那一段：`Cargo.lock` 的每一個外部 crate，加上標準函式庫（版本取自 `rust-toolchain.toml`）。
+ *
+ * @throws `SPAWNER_CRATES` 跟 `Cargo.lock` 對不上、連進執行檔的 crate 不是寬鬆授權、`Cargo.lock` 有讀不出 name 或 version 的
+ *   `[[package]]`，或 `rust-toolchain.toml` 讀不出 channel。
+ */
+function renderSpawnerCrates(): string {
+  const lock = readFileSync(join(ROOT, SPAWNER_LOCK), 'utf8');
+  const problems = spawnerCrateProblems(lock);
+  if (problems.length > 0) throw new Error(`gen-third-party-notices：${problems.join('\n')}`);
+  assertRuntimeLicenses(SPAWNER_CRATES.filter((entry) => entry.runtime));
+  const channel = rustChannel();
+  const versions = new Map<string, string[]>();
+  for (const entry of lockedCrates(lock)) {
+    versions.set(entry.name, [...(versions.get(entry.name) ?? []), entry.version]);
+  }
+  const rows = [...SPAWNER_CRATES]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(
+      (entry) =>
+        `| [\`${entry.name}\`](${entry.repo}) | ${(versions.get(entry.name) ?? []).join('、')} | ${entry.license} | ${entry.runtime ? '是' : '否，只在編譯期跑'} |`,
+    );
+  const buildOnly = SPAWNER_CRATES.filter(
+    (entry) => !entry.runtime && !isPermissive(entry.license),
+  );
+  const note =
+    buildOnly.length === 0
+      ? ''
+      : `\n${buildOnly.map((entry) => `\`${entry.name}\`（${entry.license}）`).join('、')} 只在編譯期跑，程式碼不會連進執行檔。\n`;
+  const native = SPAWNER_NATIVE_LIBS.map(
+    (lib) => `| [${lib.name}](${lib.repo}) | ${lib.version} | ${lib.license} | 是 |`,
+  );
+  const texts = SPAWNER_NATIVE_LIBS.map((lib) => {
+    const dir = join(ROOT, NATIVE_LICENSES_SOURCE, `${lib.name}-${lib.version}`);
+    const files = readdirSync(dir).sort();
+    if (files.length === 0) throw new Error(`gen-third-party-notices：${dir} 沒有授權原文`);
+    return files
+      .map(
+        (file) =>
+          `\n### ${lib.name} ${lib.version}：\`${file}\`\n\n\`\`\`\`text\n${readFileSync(join(dir, file), 'utf8').trimEnd()}\n\`\`\`\`\n`,
+      )
+      .join('');
+  });
+  return `
+## 沙箱 spawner 連進去的程式碼
+
+\`native/sandbox-spawner/\` 編成 Linux 產物裡的 \`${SPAWNER_PATH}\`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)），靜態連結 musl。下表是 [\`${SPAWNER_LOCK}\`](${SPAWNER_LOCK}) 的每一個外部 crate，加上 Rust 的標準函式庫與工具鏈自帶、跟著它連進執行檔的 C 函式庫。連進執行檔的每一項，授權全文放在產物的 \`${SPAWNER_LICENSES_DIR}/\`；標準函式庫自己內附的第三方程式碼列在那裡的 \`rust-std/COPYRIGHT-library.html\`；C 函式庫的授權原文也附在本節最後。
+
+| crate | 版本 | 授權 | 連進執行檔 |
+| --- | --- | --- | --- |
+| [Rust 標準函式庫](https://github.com/rust-lang/rust) | ${channel} | MIT OR Apache-2.0 | 是 |
+${native.join('\n')}
+${rows.join('\n')}
+${note}${texts.join('')}`;
+}
+
 function renderNonPermissiveNote(deps: ExternalDep[]): string {
   if (deps.length === 0) return '';
   const named = deps.map((dep) => `\`${dep.name}\`（${dep.license}）`).join('、');
@@ -655,7 +724,7 @@ ${renderOflFonts(runtimeDeps)}${renderLibvips()}
 只為開發、測試、型別或工具**直接**宣告的外部套件，不在執行期安裝，也沒有打包進網頁。這裡的套件仍可能被某個執行期相依遞移帶進來，那以 \`pnpm-lock.yaml\` 為準。
 
 ${renderNpmTable(devDeps)}
-${renderNonPermissiveNote(devDeps.filter((dep) => !isPermissive(dep.license)))}`;
+${renderNonPermissiveNote(devDeps.filter((dep) => !isPermissive(dep.license)))}${renderSpawnerCrates()}`;
 }
 
 /** CLI：預設寫檔，`--check` 比對進版控的那份。import 這個模組做測試時不會寫檔、也不會 `process.exit`。 */
