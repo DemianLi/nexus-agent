@@ -1,0 +1,58 @@
+# 只在量測分支上（#1946 第 5、6 條），不合進 develop。
+name: measure-1946
+on:
+  push:
+    branches: [ci/measure-1946-x64]
+permissions:
+  contents: read
+jobs:
+  measure:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.19.0
+      - name: 環境
+        run: |
+          uname -a; nproc; lscpu | grep -E 'Model name|Vendor ID' || true
+          cat /sys/kernel/security/lsm; echo
+          for k in kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone user.max_user_namespaces; do sysctl $k 2>&1; done
+          ldd --version | head -1
+      - name: 安裝 Rust 與 bwrap
+        working-directory: native/sandbox-spawner
+        run: |
+          rustup toolchain install "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)" --profile minimal
+          sudo apt-get install -y bubblewrap >/dev/null
+          bwrap --version
+      - name: 編譯
+        working-directory: native/sandbox-spawner
+        run: cargo build --release --locked
+      - name: 整合測試（x32、i386、clone3 回退）
+        working-directory: native/sandbox-spawner
+        env:
+          NEXUS_REQUIRE_LANDLOCK: '1'
+        run: cargo test --locked --features test-hooks -- --nocapture 2>&1 | tail -40
+      - name: bwrap（直接跑，沒有 spawner）
+        run: |
+          set +e
+          bwrap --ro-bind / / --dev /dev /bin/true; echo "plain rc=$?"
+          bwrap --ro-bind / / --dev /dev --unshare-all /bin/true; echo "unshare-all rc=$?"
+          unshare --user /bin/true; echo "unshare --user rc=$?"
+      - name: bwrap（經 spawner 的子行程）
+        env:
+          SPAWNER: ${{ github.workspace }}/native/sandbox-spawner/target/release/nexus-sandbox-spawner
+        run: mkdir -p /tmp/ws && WS=/tmp/ws node .measure-1946/bwrap.mjs
+      - name: p50（單發 N=600、並行 8 N=100）
+        env:
+          SPAWNER: ${{ github.workspace }}/native/sandbox-spawner/target/release/nexus-sandbox-spawner
+          WS: /tmp/ws
+        run: |
+          [ -e /lib64 ] && export EXTRA_RO=/lib64
+          cd .measure-1946
+          for i in 1 2 3; do node bench.mjs 600 $((1946200+i)) 1; node bench.mjs 100 $((1946300+i)) 8; done
