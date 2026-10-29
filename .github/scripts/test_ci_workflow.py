@@ -8,7 +8,8 @@
 - 兩處釘在下限的 Node（packed-install、node-compat 的 22.19）對得上 `engines`；
 - 同時活躍的 job 峰值在上限之內（ci.yml 檔頭的算式）；
 - 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）；
-- test-harness 的兩片讀同一份耗時、合併後那一輪各片存回自己那一份（#2093）。
+- test-harness 的兩片讀同一份耗時、合併後那一輪各片存回自己那一份（#2093）；
+- sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）。
 """
 
 from __future__ import annotations
@@ -132,7 +133,8 @@ class Gate(unittest.TestCase):
         script = self.step['run']
         on, off = gate_branches(script)
         required, skipped = loop_pairs(on, 'success'), loop_pairs(off, 'skipped')
-        for job in set(self.gate['needs']) - {'plan'}:
+        # sandbox-spawner 看 plan 的 rust，不看模式，另有 SandboxSpawner 那組。
+        for job in set(self.gate['needs']) - {'plan', 'sandbox-spawner'}:
             with self.subTest(job=job):
                 keys = [k for k, v in env.items() if v == f'${{{{ needs.{job}.result }}}}']
                 self.assertEqual(len(keys), 1, f'{job} 的結果沒有經 env 交給判斷段')
@@ -167,14 +169,17 @@ def full_peak(jobs: dict) -> int:
 
 class Budget(unittest.TestCase):
     def test_peak_matches_header(self) -> None:
-        self.assertEqual(full_peak(load(CI)['jobs']), 8)
+        self.assertEqual(full_peak(load(CI)['jobs']), 9)
 
     def test_post_merge_and_two_light_gates_fit(self) -> None:
         """ci.yml 檔頭的算式：合併後一輪的峰值，加上兩張功能 PR 的輕 gate（各同時只有一個 job）。"""
         jobs = load(CI)['jobs']
         # 輕的一輪是 plan 接 gate：中間那一段都只在全跑時跑，gate 等 plan 跑完才開始，同時只有 1 個。
+        # sandbox-spawner 例外，輕的模式也會跑，但它也等 plan、gate 也等它，三個依序，同時仍只有 1 個。
+        self.assertEqual(jobs['sandbox-spawner']['needs'], 'plan')
+        self.assertIn('sandbox-spawner', jobs['gate']['needs'])
         for name, job in jobs.items():
-            if name not in ('plan', 'gate'):
+            if name not in ('plan', 'gate', 'sandbox-spawner'):
                 self.assertTrue(job['if'].startswith("needs.plan.outputs.mode == 'full'"), name)
         light_peak = 1
         self.assertLessEqual(full_peak(jobs) + 2 * light_peak, JOB_LIMIT)
@@ -310,7 +315,7 @@ class PostMerge(unittest.TestCase):
 
     def test_force_full_ignores_changes(self) -> None:
         self.assertEqual(plan_ci.plan(['README.md'], 'push', '')['ts'], 'false')
-        self.assertEqual(plan_ci.plan(['README.md'], 'push', '', force_full=True), {'mode': 'full', 'ts': 'true'})
+        self.assertEqual(plan_ci.plan(['README.md'], 'push', '', force_full=True), {'mode': 'full', 'ts': 'true', 'rust': 'true'})
 
     def test_grants_what_ci_asks(self) -> None:
         """被呼叫的 workflow 要的權限不能多過呼叫端給的，否則合併後那一輪一開始就失敗。"""
@@ -351,6 +356,55 @@ class LightMode(unittest.TestCase):
     def test_lockfile_age_runs_before_install(self) -> None:
         names = [s.get('name') or s.get('uses') for s in self.light_steps]
         self.assertLess(names.index('lockfile 新版本的發布年齡'), names.index('./.github/actions/setup'))
+
+
+class SandboxSpawner(unittest.TestCase):
+    """沙箱 spawner 的 Rust（#1946，D55）：只有該編時編；編了就要真的在有 Landlock 的核心上測，跳過不算綠。"""
+
+    def setUp(self) -> None:
+        self.ci = load(CI)
+        self.job = self.ci['jobs']['sandbox-spawner']
+        self.steps = {s.get('name'): s for s in self.job['steps']}
+
+    def rust(self, changed: list[str], event: str = 'pull_request', base: str = 'develop', full: bool = False) -> str:
+        return plan_ci.plan(changed, event, base, force_full=full)['rust']
+
+    def test_builds_only_when_the_spawner_or_ci_changes(self) -> None:
+        self.assertEqual(self.rust(['native/sandbox-spawner/src/main.rs']), 'true')
+        self.assertEqual(self.rust(['native/sandbox-spawner/Cargo.lock']), 'true')
+        self.assertEqual(self.rust(['.github/workflows/ci.yml']), 'true')
+        self.assertEqual(self.rust(['apps/harness/src/a.ts', 'docs/a.md']), 'false')
+        self.assertEqual(self.rust(['apps/harness/src/a.ts'], event='push', base=''), 'false')
+        self.assertEqual(self.rust(['README.md'], event='push', base='', full=True), 'true')
+
+    def test_light_mode_still_builds(self) -> None:
+        result = plan_ci.plan(['native/sandbox-spawner/src/main.rs'], 'pull_request', 'develop')
+        self.assertEqual((result['mode'], result['rust']), ('light', 'true'))
+
+    def test_runs_on_the_plan_flag_not_the_mode(self) -> None:
+        self.assertEqual(self.job['if'], "needs.plan.outputs.rust == 'true'")
+        self.assertEqual(self.ci['jobs']['plan']['outputs']['rust'], '${{ steps.plan.outputs.rust }}')
+
+    def test_gate_judges_it_by_the_rust_flag(self) -> None:
+        step = next(s for s in self.ci['jobs']['gate']['steps'] if s.get('name') == '彙總')
+        self.assertEqual(step['env']['RUST'], '${{ needs.plan.outputs.rust }}')
+        self.assertEqual(step['env']['SANDBOX_SPAWNER'], '${{ needs.sandbox-spawner.result }}')
+        script = step['run']
+        self.assertIn('[ "$SANDBOX_SPAWNER" = "success" ] || fail', script)
+        self.assertIn('[ "$SANDBOX_SPAWNER" = "skipped" ] || fail', script)
+
+    def test_shipped_build_has_no_test_hooks_and_tests_require_landlock(self) -> None:
+        build = self.steps['編譯']['run']
+        self.assertIn('--release', build)
+        self.assertNotIn('--features', build)
+        test = self.steps['測試']
+        self.assertIn('--features test-hooks', test['run'])
+        self.assertEqual(test['env']['NEXUS_REQUIRE_LANDLOCK'], '1')
+
+    def test_toolchain_is_pinned(self) -> None:
+        toolchain = (ROOT / 'native' / 'sandbox-spawner' / 'rust-toolchain.toml').read_text(encoding='utf-8')
+        self.assertRegex(toolchain, r'(?m)^channel = "\d+\.\d+\.\d+"$')
+        self.assertIn('rust-toolchain.toml', self.steps['安裝釘住的 Rust']['run'])
 
 
 class Mode(unittest.TestCase):

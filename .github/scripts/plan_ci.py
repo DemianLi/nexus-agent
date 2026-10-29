@@ -2,7 +2,7 @@
 
 兩個子指令：
 
-    plan_ci.py plan            讀 changed.txt 與環境變數，把模式（`mode`）與要不要掃（`ts`）寫到 $GITHUB_OUTPUT
+    plan_ci.py plan            讀 changed.txt 與環境變數，把模式（`mode`）、要不要掃（`ts`）、要不要編沙箱 spawner（`rust`）寫到 $GITHUB_OUTPUT
     plan_ci.py light <dir>     輕的模式：讀 changed.txt，把要型別檢查的套件、要 format、lint、測試的檔寫進 <dir>
 
 功能分支 → develop 的 PR 走輕的模式，只有動到 CI 自己時全跑；`develop → main` 的 PR、`main` 的 push、
@@ -67,13 +67,18 @@ def read_changed(path: str = 'changed.txt') -> list[str]:
 FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 
 
+# 沙箱 spawner 的 Rust（#1946）：只有動到它或 CI 自己時編，合併後完整一輪一律編（D55）。跟模式無關，輕的模式也編。
+RUST_RE = re.compile(r'^native/sandbox-spawner/')
+
+
 def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False) -> dict[str, str]:
     """`force_full` 是合併後完整一輪（`post-merge.yml` 呼叫 ci.yml 時帶 `full: true`）：不看異動，一律全跑。"""
     feature_pr = event == 'pull_request' and base_ref == 'develop'
+    rust = 'true' if force_full or any(RUST_RE.search(p) or FULL_RE.search(p) for p in changed) else 'false'
     if feature_pr and not force_full and not any(FULL_RE.search(p) for p in changed):
-        return {'mode': 'light', 'ts': 'false'}
+        return {'mode': 'light', 'ts': 'false', 'rust': rust}
     scan = force_full or any(TS_RE.search(p) or any(rx.search(p) for rx in SCAN_RES) for p in changed)
-    return {'mode': 'full', 'ts': 'true' if scan else 'false'}
+    return {'mode': 'full', 'ts': 'true' if scan else 'false', 'rust': rust}
 
 
 # 輕的模式只型別檢查受影響的套件：改到的，加上它的下游（由 pnpm 的 `...` 算）。
