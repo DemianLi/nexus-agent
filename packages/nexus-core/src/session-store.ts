@@ -835,8 +835,9 @@ export interface SessionStore {
    *
    * @param id - 要續接的會話 id，就是當初 `create` 的 `header.id`。
    * @returns 讀回來的 header（`version` 是存的那個）、事件，與 next-seq 等於事件數的把手。
-   * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
-   * @throws {@link SessionCorruptionError} header 讀不懂，或某一行讀不懂／`seq` 不連續**而且它之後還有收尾事件**。
+   * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新；後端換不了舊版本的檔時，比這一版舊也拋（JSONL 後端的單檔佈局）。
+   * @throws {@link SessionCorruptionError} header 讀不懂，或某一行讀不懂／`seq` 不連續**而且它之後還有收尾事件**；後端特有的壞法（例如
+   *   JSONL 後端同一個 id 兩種佈局並存）見各後端。
    * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
    */
   resume(id: string): Promise<ResumedStoredSession>;
@@ -857,7 +858,7 @@ export interface SessionStore {
    * @param access - 只有 `'read'`。寫的那一條是 {@link resume}。
    * @returns header 已讀好的把手；本文等 {@link ReadonlyStoredSession.read} 才讀。
    * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
-   * @throws {@link SessionCorruptionError} header 讀不懂。
+   * @throws {@link SessionCorruptionError} header 讀不懂；後端特有的壞法（例如 JSONL 後端同一個 id 兩種佈局並存）見各後端。
    * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
    */
   open(id: string, access: 'read'): Promise<ReadonlyStoredSession>;
@@ -889,7 +890,7 @@ export interface StoredSessionSnapshot {
 export interface StoredSessionListing {
   readonly sessions: readonly StoredSessionSnapshot[];
   /**
-   * header 讀不懂、版本比這一版新而沒列的份數。**dsh 沒有這一格**（它的 JSONL `list` 略過不數），見模組說明。
+   * header 讀不懂、版本比這一版新，或後端特有的理由（例如 JSONL 後端同一個 id 兩種佈局並存）而沒列的份數。**dsh 沒有這一格**（它的 JSONL `list` 略過不數），見模組說明。
    */
   readonly unreadable: number;
 }
@@ -1138,10 +1139,12 @@ export class SessionCorruptionError extends Error {
   /**
    * @param id - 哪一份會話。
    * @param reason - 哪裡壞了。
+   * @param location - 那份日誌在哪裡（後端知道的話）。不接進訊息，理由同 {@link SessionFormatUnsupportedError.location}。
    */
   constructor(
     readonly id: string,
     reason: string,
+    readonly location?: SessionLocation,
   ) {
     super(`會話 "${id}" 的存檔壞了：${reason}`);
   }

@@ -32,7 +32,7 @@ import {
   readSessionEntry,
   sessionPathsIn,
 } from './jsonl-session-store.js';
-import type { SessionEntry, StableReadFileSystem } from './jsonl-session-store.js';
+import type { SessionDirent, SessionEntry, StableReadFileSystem } from './jsonl-session-store.js';
 
 let dir: string;
 
@@ -256,6 +256,11 @@ function stats(size: number, mtimeNs: number): BigIntStats {
   } as unknown as BigIntStats;
 }
 
+/** 一個一般檔的目錄項，給 {@link readSessionEntry}。 */
+function fileEntry(name: string): SessionDirent {
+  return { name, isDirectory: () => false };
+}
+
 describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
   it('日誌本文走穩定快照讀：讀的當下被寫了，重讀一次，交出第二次讀到的', async () => {
     await written('a', 1);
@@ -271,7 +276,7 @@ describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
       readFile: async (path) =>
         path === join(dir, 'a.jsonl') ? Buffer.from(reads.shift()!) : readFile(path),
     };
-    const entry = await readSessionEntry(dir, 'a.header.json', { fs });
+    const entry = await readSessionEntry(dir, fileEntry('a.header.json'), { fs });
     expect((await entry!.readBody()).toString()).toBe('hello!!!');
     expect(reads).toEqual([]);
     expect(new Set(paths)).toEqual(new Set([entry!.logPath]));
@@ -291,7 +296,7 @@ describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
 
     const outcome = async (name: string): Promise<SessionEntry | string | undefined> => {
       try {
-        return await readSessionEntry(dir, name);
+        return await readSessionEntry(dir, fileEntry(name));
       } catch (error: unknown) {
         return (error as Error).constructor.name;
       }
@@ -310,7 +315,7 @@ describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
     expect(await outcome('future.header.json')).toBe(SessionFormatUnsupportedError.name);
     // 檔名基底對不上 id 不歸接縫判：交出來，列表自己算讀不懂。
     const moved = (await outcome('moved.header.json')) as SessionEntry;
-    expect([moved.base, moved.header.id]).toEqual(['moved', 'renamed']);
+    expect([moved.name, moved.header.id]).toEqual(['moved', 'renamed']);
     for (const name of ['good.jsonl', 'good.lock', 'good.header.json.0123456789ab.tmp']) {
       expect(await outcome(name)).toBeUndefined();
     }
@@ -327,7 +332,9 @@ describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
       join(dir, 'future.header.json'),
       JSON.stringify(header('future', { version: SESSION_LOG_FORMAT_VERSION + 1 })),
     );
-    const entry = await readSessionEntry(dir, 'future.header.json', { acceptNewer: true });
+    const entry = await readSessionEntry(dir, fileEntry('future.header.json'), {
+      acceptNewer: true,
+    });
     expect(entry?.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
     expect(entry?.storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION + 1);
   });
