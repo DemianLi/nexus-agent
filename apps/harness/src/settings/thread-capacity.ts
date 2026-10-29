@@ -1,7 +1,7 @@
 /**
  * serve 行程裡 thread 數上限與閒置逐出的**設定條目**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，
  * 「底座保險絲」逐級降載的第 2 級；背景是 [#1464](https://github.com/DemianLi/nexus-agent/issues/1464)：
- * 每條 thread 常駐約 1.2 MB heap（#1983，Linux）、讀歷史也有。第 1 級 [#1484](https://github.com/DemianLi/nexus-agent/issues/1484) 讓閒置夠久的 thread 被撤掉，
+ * 每條 thread 常駐約 1.2 MB heap（#1983，短對話），只讀歷史也佔（#1464）。第 1 級 [#1484](https://github.com/DemianLi/nexus-agent/issues/1484) 讓閒置夠久的 thread 被撤掉，
  * 同一列多一格 `idleEvictAfterMs`）。上限的檢查本體在 `../wire-handler.ts` 的 `threadFor`，逐出在同檔的 `evictThread`。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-search` 那一列：值由 `startupSetting` 在起動期讀出來，

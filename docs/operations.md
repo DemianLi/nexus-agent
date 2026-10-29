@@ -2159,7 +2159,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **窗口一律查型錄**。型錄裡沒有的模型（續接的會話選過、後來被拿掉的那顆）這一輪在打供應商之前就失敗，所以這一格的預算沒有人看得到。
 
 **`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)、[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）給 serve 行程裡的 thread 數設上限（第 2 級），
-並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（量測與背景見 #1464、#1983：每條 thread 常駐約 1.2 MB heap，只讀歷史也有）。
+並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（每條 thread 常駐約 1.2 MB heap，#1983 用短對話量的；只讀歷史也會組一份 agent、佔記憶體，#1464）。
 **出廠兩格都開著**：上限 500 條、閒置 2 小時撤出。出貨清單那一列寫的就是這一組，值的家在 schema（`apps/harness/src/settings/thread-capacity.ts`）。
 要放寬就把數值調大，放進自己的 `--patch <檔>`（或 `plugin config set thread-capacity --file -`）：
 
@@ -2176,7 +2176,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   2 GB 的容器 heap 上限約 1 GB，死在 800–826 條；4 GB 約 2 GB，死在 1725–1750 條；兩種都是 heap 先到，容器記憶體只用到約 64%。
   500 對 2 GB 留約四成餘裕，**這四成只對短 thread 成立**。量測條件：Linux aarch64、Node 22、發版包用 `node` 直接起、develop `1cd7606c`；
   每條 thread 一輪短對話（讀一個檔、搜一次），不掛 MCP，逐出關掉。掛 MCP 不會讓每條 thread 多一個子行程：連線由整台 serve 共用
-  （#1677，`packages/nexus-plugin-mcp/src/pool.ts`）。
+  （#1677，`packages/nexus-plugin-mcp/src/pool.ts`）；每條 thread 的 heap 因此多多少沒有量。
   **這是後盾，不是記憶體保證**：長對話每輪還要再加幾 MB，thread 數上限擋得住「thread 很多」，擋不住「thread 很長」。
   定得寬是刻意的：讀歷史也佔名額，定太低的話，一個人在側欄連點很多舊對話就能把其他人擋在外面。
 - **數的是行程裡的 thread 數，含還在組裝中的**。到了上限，**新的** thread 一律拒收：送訊息、開下行、讀歷史、續聊磁碟上的舊
