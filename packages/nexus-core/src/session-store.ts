@@ -922,6 +922,7 @@ export interface ReadonlyStoredSession {
    *
    * @throws {@link SessionCorruptionError} 某一行讀不懂、或 `seq` 不連續，**而且它之後還有收尾事件**（開了
    *   {@link StoredSessionReadOptions.salvage}：任何一行壞就先拋、再撿回，所以不拋）。
+   * @throws {@link SessionNotFoundError} 打開之後、讀的當下，這一份已經不在了（例如 JSONL 後端挑定的世代檔被刪掉）。
    */
   read(options?: StoredSessionReadOptions): Promise<readonly SessionEvent[]>;
 }

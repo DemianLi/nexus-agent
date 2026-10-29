@@ -101,8 +101,7 @@ function holdsGeneration(dir: string, id: string): boolean {
 function directoriesHolding(root: string, id: string, twoFileOnly = false): string[] {
   return directoriesUnder(root).filter(
     (dir) =>
-      existsSync(sessionPathsIn(dir, id).header) ||
-      (!twoFileOnly && id.length > 0 && holdsGeneration(dir, id)),
+      existsSync(sessionPathsIn(dir, id).header) || (!twoFileOnly && holdsGeneration(dir, id)),
   );
 }
 
@@ -158,7 +157,7 @@ export interface SessionEvents {
   readonly complete: boolean;
 }
 
-/** 經接縫的 `readBody()` 讀日誌本文（穩定快照讀）。日誌還不在就是空的、完整的。 */
+/** 經接縫的 `readBody()` 讀日誌本文（穩定快照讀）。舊兩檔的日誌還不在就是空的、完整的；單檔佈局的世代檔不見了照拋。 */
 export async function sessionEvents(session: SessionOnDisk): Promise<SessionEvents> {
   const body = await session.entry.readBody();
   const end = body.lastIndexOf(0x0a) + 1;
