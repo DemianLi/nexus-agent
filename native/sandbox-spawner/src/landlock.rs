@@ -11,7 +11,8 @@ use std::ffi::OsStr;
 use std::os::fd::{AsFd, AsRawFd};
 use std::os::unix::ffi::OsStrExt;
 
-/// 一個授權路徑的規則。不是目錄的路徑只留檔案用得到的權限，`/dev/null` 靠這個成立；是不是目錄看開好的 fd，不再回頭查路徑。
+/// 一個授權路徑的規則。不是目錄的路徑只留檔案用得到的權限，`/dev/null` 靠這個成立。是不是目錄，用 fstat 看同一個已開的 fd：
+/// 路徑在開檔與判斷之間被換掉，也不會放寬權限。
 /// 打不開就回錯：crate 的 `path_beneath_rules` 會默默跳過打不開的路徑，那等於縮小授權，所以不用它。
 fn rule(path: &[u8], access: BitFlags<AccessFs>, abi: ABI) -> Result<PathBeneath<PathFd>, String> {
     let path = OsStr::from_bytes(path);

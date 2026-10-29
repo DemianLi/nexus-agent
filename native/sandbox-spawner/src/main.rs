@@ -21,12 +21,13 @@
 //! 連進來的對方要是起這個 spawner 的那個行程（`SO_PEERCRED` 的 pid 等於 `getppid()`，uid 相同），否則直接關掉。
 //! 要求與它要的連線都到齊才 fork；等太久（[`STDIO_WAIT`]）回 `Protocol`。
 //!
-//! 每個 id 恰好收到一個結局：`Failed`，或 `Started` 之後一個 `Exited`。例外只有 id 重複：那是 Node 的錯，回一個帶同一個 id
-//! 的 `Failed`（`Protocol`），原本那筆照常進行。關機時還在跑的每個 id 照樣收到 `Exited`（被 SIGKILL）。
+//! 每個收到的要求恰好得到一個結局：`Failed`，或 `Started` 之後一個 `Exited`。例外只有 id 重複：那是 Node 的錯，回一個帶同一個 id
+//! 的 `Failed`（`Protocol`），原本那筆照常進行。關機時，還在跑的收到 `Exited`（被 SIGKILL），還在等 stdio 連線的收到
+//! `Failed`（`Resource`）；因為事件寫不出去而關機時，這些都送不出去。
 //! 工具結束時（leader 結束），整個行程群組一起 SIGKILL，不留背景成員抓著 stdout。
 //!
-//! 結束：stdin 收到 EOF、收到 SIGINT／SIGTERM／SIGHUP、事件寫不出去（Node 不在了）、控制通道上有解不開的框
-//! （兩邊對協定的認知不一致，不能猜那筆要求的 id）：殺掉所有群組、收完、結束。
+//! 結束：stdin 收到 EOF 或讀錯、收到 SIGINT／SIGTERM／SIGHUP、事件寫不出去（Node 不在了）、控制通道上的框太大或解不開
+//! （兩邊對協定的認知不一致，不能猜那筆要求的 id）、poll 出錯：殺掉所有群組、收完、結束。
 
 mod child;
 
@@ -59,7 +60,7 @@ fn write_all(fd: libc::c_int, mut bytes: &[u8]) -> bool {
     true
 }
 
-/// 送一筆事件；回 false 代表控制通道寫不出去。
+/// 送一筆事件；回 false 代表控制通道寫不出去。Rust 執行期預設忽略 SIGPIPE，寫斷掉的 pipe 回 EPIPE，不會被殺。
 fn emit(event: &Event) -> bool {
     write_all(1, &protocol::frame(&protocol::encode_event(event)))
 }
@@ -178,11 +179,13 @@ struct Pending {
     request: Option<Spawn>,
     fds: [libc::c_int; 3],
     deadline: Instant,
+    /// 要求到了、還沒 fork 時收到的訊號，fork 之後轉給 `Child::queued`。
+    queued: Vec<i32>,
 }
 
 impl Pending {
     fn new(deadline: Instant) -> Pending {
-        Pending { request: None, fds: [-1; 3], deadline }
+        Pending { request: None, fds: [-1; 3], deadline, queued: Vec::new() }
     }
 
     fn close_all(&mut self) {
@@ -209,7 +212,8 @@ struct Child {
     status: libc::c_int,
     partial: bool,
     phase: Phase,
-    /// Launching 時收到的訊號：子行程 `setsid` 之前 `kill(-pid)` 打不到，exec 之前殺掉又會被看成起來了，所以等 `Started` 再送。
+    /// 還沒讀到 exec 結果時收到的訊號：子行程 `setsid` 之前 `kill(-pid)` 打不到，exec 之前殺掉又會被看成起來了，
+    /// 所以讀到 exec 成功之後才送。
     queued: Vec<i32>,
 }
 
@@ -227,7 +231,7 @@ struct Spawner {
     test_delay_us: u32,
 }
 
-/// argv[0] 沒有 `/` 時，照 request 帶來的 PATH 列出候選；PATH 沒給就用 execvp 的預設。
+/// argv[0] 沒有 `/` 時，照 request 帶來的 PATH 列出候選；PATH 沒給就用 glibc execvp 的預設（`_CS_PATH`）。
 fn candidates(argv0: &[u8], env: &[Vec<u8>]) -> Vec<Vec<u8>> {
     if argv0.contains(&b'/') {
         return vec![argv0.to_vec()];
@@ -236,7 +240,7 @@ fn candidates(argv0: &[u8], env: &[Vec<u8>]) -> Vec<Vec<u8>> {
         .iter()
         .rev()
         .find_map(|entry| entry.strip_prefix(b"PATH=").map(<[u8]>::to_vec))
-        .unwrap_or_else(|| b"/usr/local/bin:/usr/bin:/bin".to_vec());
+        .unwrap_or_else(|| b"/bin:/usr/bin".to_vec());
     path.split(|&b| b == b':')
         .map(|dir| {
             let dir: &[u8] = if dir.is_empty() { b"." } else { dir };
@@ -286,7 +290,9 @@ impl Spawner {
                 self.try_spawn(id);
             }
             Request::Signal { id, signo } => {
-                if let Some(child) = self.children.get_mut(&id) {
+                if let Some(p) = self.pending.get_mut(&id).filter(|p| p.request.is_some()) {
+                    p.queued.push(signo);
+                } else if let Some(child) = self.children.get_mut(&id) {
                     match child.phase {
                         Phase::Launching => child.queued.push(signo),
                         // leader 還沒被收屍，pgid 不會被重用。
@@ -324,7 +330,8 @@ impl Spawner {
     }
 
     /// 讀連線的標頭；讀齊了就交給那個 id。
-    fn on_conn(&mut self, index: usize) {
+    fn on_conn(&mut self, fd: libc::c_int) {
+        let Some(index) = self.conns.iter().position(|c| c.fd == fd) else { return };
         let conn = &mut self.conns[index];
         let mut buf = [0u8; 8];
         let want = 8 - conn.header.len();
@@ -377,7 +384,8 @@ impl Spawner {
         let mut p = self.pending.remove(&id).unwrap();
         let request = p.request.take().unwrap();
         match self.spawn(&request, &mut p.fds) {
-            Ok(child) => {
+            Ok(mut child) => {
+                child.queued = std::mem::take(&mut p.queued);
                 self.children.insert(id, child);
             }
             Err((kind, err, detail)) => self.fail(id, kind, err, &detail),
@@ -544,11 +552,24 @@ impl Spawner {
         self.pending.values().map(|p| p.deadline).chain(self.conns.iter().map(|c| c.deadline)).min()
     }
 
-    /// 殺掉所有群組、收完、結束（`on_exit` 會對每個群組送 SIGKILL 再收屍）。
+    /// 殺掉所有群組、收完、結束。先殺再收：還沒 exec 的子行程可能卡在 chdir 之類的地方，`on_exit` 讀它的狀態 pipe 會等到它死。
+    /// leader 另外單獨殺一次，因為 `setsid` 之前 `kill(-pid)` 打不到它。
     fn shutdown(&mut self, path: &CString) -> ! {
         let ids: Vec<u32> = self.children.keys().copied().collect();
+        for id in &ids {
+            let pid = self.children[id].pid;
+            // SAFETY：送給自己起的行程與群組，都還沒被收屍。
+            unsafe {
+                libc::kill(-pid, libc::SIGKILL);
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
         for id in ids {
             self.on_exit(id);
+        }
+        let waiting: Vec<u32> = self.pending.iter().filter(|(_, p)| p.request.is_some()).map(|(&id, _)| id).collect();
+        for id in waiting {
+            self.fail(id, FailKind::Resource, 0, "spawner 結束");
         }
         // SAFETY：刪掉自己建的 socket 檔。
         unsafe { libc::unlink(path.as_ptr()) };
@@ -662,12 +683,9 @@ fn main() {
         if fds[2].revents != 0 {
             s.on_accept();
         }
-        // on_conn 會 swap_remove，index 會變：每次用 fd 重新找。
-        for (i, &fd) in conns.iter().enumerate().rev() {
+        for (i, &fd) in conns.iter().enumerate() {
             if fds[3 + i].revents != 0 {
-                if let Some(index) = s.conns.iter().position(|c| c.fd == fd) {
-                    s.on_conn(index);
-                }
+                s.on_conn(fd);
             }
         }
         let base = 3 + conns.len();
@@ -702,6 +720,6 @@ mod tests {
             candidates(b"git", &env),
             vec![b"/c/git".to_vec(), b"./git".to_vec(), b"/d/git".to_vec()]
         );
-        assert_eq!(candidates(b"git", &[]).len(), 3);
+        assert_eq!(candidates(b"git", &[]), vec![b"/bin/git".to_vec(), b"/usr/bin/git".to_vec()]);
     }
 }

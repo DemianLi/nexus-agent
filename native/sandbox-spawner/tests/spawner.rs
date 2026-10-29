@@ -1,7 +1,7 @@
 //! 真的 spawner、真的核心（#1946）。只在 Linux 跑；核心沒有 Landlock 時整組跳過，
 //! 但設了 `NEXUS_REQUIRE_LANDLOCK=1`（CI）就改成紅，免得跳過看起來跟綠燈一樣。
 //!
-//! 需要 `--features test-hooks`（partial 那條用它把 ABI 壓低）。
+//! 需要 `--features test-hooks`（partial 那條用它把 ABI 壓低，啟動前訊號那條用它延後子行程的 setsid）。
 
 use nexus_sandbox_spawner::protocol::{self, Event, FailKind, Mode, Request, Spawn};
 use std::io::{Read, Write};
@@ -26,9 +26,9 @@ fn probe() -> PathBuf {
     .clone()
 }
 
-/// #1946 S5 的窄讀清單：系統目錄，加上探針所在的目錄。
+/// S5 的窄讀清單（`.docs/nexus-cordis-rust-feasibility-2026-10-22.md` 的 S5），加上探針所在的目錄。
 fn readable() -> Vec<Vec<u8>> {
-    let mut roots: Vec<Vec<u8>> = ["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc", "/opt"]
+    let mut roots: Vec<Vec<u8>> = ["/usr", "/bin", "/lib", "/lib64", "/etc", "/proc"]
         .iter()
         .filter(|p| Path::new(p).exists())
         .map(|p| p.as_bytes().to_vec())
@@ -203,7 +203,7 @@ fn alive(pid: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// SIGKILL 送出之後要一小段時間才生效：行程先關掉檔案（讀的一方因此看到 EOF），之後才變成殭屍。
+/// 訊號送出之後要一小段時間才生效：行程先關掉檔案（讀的一方因此看到 EOF），之後才變成殭屍。
 fn dies_soon(pid: &str) -> bool {
     let deadline = Instant::now() + Duration::from_secs(2);
     while alive(pid) {
@@ -544,13 +544,14 @@ fn exits_within(child: &mut Child, limit: Duration) -> Option<i32> {
 fn an_undecodable_frame_ends_the_spawner_and_its_tools() {
     let mut s = spawner!();
     let ws = temp_dir("ws");
-    let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "echo $$; exec sleep 100"]));
+    // 看背景成員：leader 有 PDEATHSIG，spawner 只要結束它就會死，分不出有沒有收尾。
+    let (_, stdout, _) = s.launch(request(1, &ws, &["/bin/sh", "-c", "sleep 100 & echo $!; wait"]));
     let mut line = [0u8; 32];
     let n = stdout.unwrap().read(&mut line).unwrap();
     let pid = String::from_utf8_lossy(&line[..n]).trim().to_string();
     s.stdin.write_all(&protocol::frame(b"Z")).unwrap();
     assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0));
-    assert!(!alive(&pid), "工具還在");
+    assert!(dies_soon(&pid), "工具還在");
 }
 
 #[test]
@@ -562,4 +563,29 @@ fn losing_the_event_channel_ends_the_spawner() {
     let spawn = Request::Spawn(Spawn { pipes: 0, ..request(1, &ws, &["/bin/true"]) });
     stdin.write_all(&protocol::frame(&protocol::encode_request(&spawn))).unwrap();
     assert_eq!(exits_within(&mut child, Duration::from_secs(5)), Some(0));
+}
+
+#[test]
+fn a_signal_sent_while_waiting_for_stdio_arrives_after_start() {
+    let mut s = spawner!();
+    let ws = temp_dir("ws");
+    // stdout 還沒接上，spawner 還沒 fork；訊號弄丟的話，sleep 5 會自己正常結束。
+    s.send(&Request::Spawn(request(1, &ws, &["sleep", "5"])));
+    s.send(&Request::Signal { id: 1, signo: libc::SIGTERM });
+    let _stdout = s.connect(1, 1);
+    assert!(matches!(s.event_for(1), Event::Started { id: 1, .. }));
+    assert_eq!(s.event_for(1), Event::Exited { id: 1, code: -1, signal: libc::SIGTERM });
+}
+
+#[test]
+fn a_request_still_waiting_for_stdio_fails_when_the_spawner_stops() {
+    let mut s = spawner!();
+    let ws = temp_dir("ws");
+    s.send(&Request::Spawn(request(1, &ws, &["/bin/true"])));
+    // 等這筆要求進了 spawner 再叫它結束：先跑完一筆別的，控制通道是依序處理的。
+    let (_, _) = s.run(request(2, &ws, &["/bin/true"]));
+    // SAFETY：送給自己起的 spawner。
+    unsafe { libc::kill(s.child.id() as i32, libc::SIGTERM) };
+    assert!(matches!(s.event_for(1), Event::Failed { id: 1, kind: FailKind::Resource, .. }));
+    assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0));
 }

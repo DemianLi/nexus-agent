@@ -2,7 +2,8 @@
 //!
 //! 框：`u32 LE 長度` 接著那麼多 bytes 的內容。內容第一個 byte 是種類，其餘是欄位：
 //! 數字一律 `u32 LE`（有號的值照二補數存），字串與位元組串是 `u32 LE 長度 + bytes`，清單是 `u32 LE 個數 + 每一項`。
-//! 不用分隔字元，所以參數、路徑、環境變數裡的任何 byte（含 tab、換行）都原樣送到；只有 NUL 進不了 argv，回 `Protocol`。
+//! 不用分隔字元，所以參數、路徑、環境變數裡的任何 byte（含 tab、換行）都原樣送到。只有 NUL 例外：argv、env、cwd 含 NUL
+//! 回 `Protocol`；授權路徑含 NUL 開不起來，回 `SandboxUnavailable`。
 
 /// 一框最多多大。超過就當成通道壞掉，spawner 結束。
 pub const MAX_FRAME: usize = 1 << 20;
@@ -35,7 +36,7 @@ pub struct Spawn {
 pub enum Request {
     Spawn(Spawn),
     /// 送訊號給整個行程群組。不回任何事件：id 不認得、已經 `Failed` 或已經結束都靜靜忽略；
-    /// 還沒 `Started` 時先排著，`Started` 之後才送。
+    /// 要求已到、還沒讀到 exec 結果時（含還在等 stdio 連線）先排著，讀到 exec 成功之後、送 `Started` 之前送出。
     Signal { id: u32, signo: i32 },
 }
 
@@ -48,10 +49,10 @@ pub enum FailKind {
     StartDir = 2,
     /// execve 失敗，`errno` 帶原因（找不到、沒有執行權限、格式不對……）。
     Exec = 3,
-    /// 要求本身不成立：id 重複、argv 空的、argv／env／cwd／PATH 含 NUL、env 不是 `NAME=value`、
+    /// 要求本身不成立：id 重複、argv 空的、argv／env／cwd 含 NUL、env 不是 `NAME=value`、
     /// 連進來的 stdio 不在要求裡、等不到 stdio 連線。
     Protocol = 4,
-    /// fork、pipe 這類資源用盡。
+    /// fork、pipe 這類資源用盡，或還在等 stdio 連線時 spawner 就結束了。
     Resource = 5,
 }
 
@@ -79,7 +80,7 @@ pub enum Event {
     Started { id: u32, pid: u32, partial: bool },
     /// 沒 exec。`errno` 是失敗那一步的錯誤碼（沒有就是 0）。
     Failed { id: u32, kind: FailKind, errno: i32, detail: Vec<u8> },
-    /// 結束。被訊號殺掉時 `code` 是 -1、`signal` 是訊號編號。spawner 關機時還在跑的也會送（被 SIGKILL）。
+    /// 結束。被訊號殺掉時 `code` 是 -1、`signal` 是訊號編號。spawner 關機時還在跑的也會送（被 SIGKILL；事件還寫得出去時）。
     Exited { id: u32, code: i32, signal: i32 },
 }
 

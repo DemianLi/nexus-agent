@@ -71,7 +71,7 @@ pub unsafe fn run(p: &Prepared) -> ! {
         fail(p.status, FailKind::Resource, errno(), "dup2 status");
     }
     libc::fcntl(STATUS_FD, libc::F_SETFD, libc::FD_CLOEXEC);
-    // fd 4 以上全部關掉：監聽 socket、signalfd、別的 id 的連線、pidfd 與狀態 pipe，都不留給工具。
+    // fd 3 上原本的東西已被狀態 pipe 蓋掉；fd 4 以上全部關掉：監聽 socket、signalfd、別的 id 的連線、pidfd 與狀態 pipe，都不留給工具。
     if libc::syscall(libc::SYS_close_range, 4u32, u32::MAX, 0u32) != 0 {
         fail(STATUS_FD, FailKind::Resource, errno(), "close_range");
     }
@@ -93,7 +93,7 @@ pub unsafe fn run(p: &Prepared) -> ! {
     }
     // 逐一試候選：EACCES 記下來繼續找，找完都沒有就回它；ENOENT、ENOTDIR、ESTALE、ENODEV、ETIMEDOUT 繼續找；
     // 其他錯誤當場停，回那一個。
-    // 跟 glibc execvp 的差別：ENOEXEC 不改用 `/bin/sh` 跑（沒有 shebang 的檔案就是 exec 失敗）。
+    // 跟 glibc execvp 的差別只有一處：ENOEXEC 不改用 `/bin/sh` 跑（沒有 shebang 的檔案就是 exec 失敗）。
     let mut saw_eacces = false;
     let mut last = libc::ENOENT;
     for candidate in &p.candidates {
