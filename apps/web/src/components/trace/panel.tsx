@@ -40,6 +40,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty';
+import { focusLost, useFocusHandoff } from '@/hooks/use-focus-handoff';
 import { useStableNames } from '@/hooks/use-stable-names';
 import { useTrajectoryPull } from '@/hooks/use-trajectory-pull';
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot';
@@ -310,15 +311,34 @@ const Timeline = memo(function Timeline({
     }
     finishLocate(pending.key, target);
   }, [pending, model, finishLocate]);
+  // 按「載入這一輪的細節」拉完（#2009）：鈕跟著摘要收掉、焦點掉了，就落在那一輪的標題（同「看這一輪」）。拉回來的輪排在最前面，
+  // 可能在「顯示更早的輪」後面：先展開到那一組，畫出來之後再交。
+  const handoff = useFocusHandoff<number>();
   const onPull = useMemo(
     () =>
       puller === undefined
         ? undefined
-        : (seq: number) => {
+        : (seq: number, button: HTMLElement) => {
+            handoff.arm(seq, button);
             void puller.pull({ seq });
           },
-    [puller],
+    [puller, handoff],
   );
+  useEffect(() => {
+    const seq = handoff.pending();
+    if (seq === undefined || pull === undefined || statusOf(pull, seq).kind === 'loading') return;
+    const at = model.turns.findIndex((turn) => turn.seq === seq);
+    if (at >= 0 && model.turns.length - at > shown && focusLost()) {
+      setShown(model.turns.length - at);
+      return;
+    }
+    const group = section.current?.querySelector<HTMLElement>(
+      `section[data-testid="trace-turn"][data-seq="${seq}"]`,
+    );
+    handoff.land(group?.querySelector<HTMLElement>('[data-reveal-target]') ?? section.current, {
+      scroll: true,
+    });
+  }, [pull, model, shown, handoff]);
   const statusFor = useMemo(
     () =>
       pull === undefined || puller === undefined ? undefined : (seq: number) => statusOf(pull, seq),

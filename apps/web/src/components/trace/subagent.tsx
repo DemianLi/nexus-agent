@@ -14,6 +14,7 @@ import { TOOL_STATUS_LABEL } from '@/components/tool/card';
 import { Button } from '@/components/ui/button';
 import { StepGroup } from '@/components/ui/tool-steps';
 import type { Step } from '@/components/ui/tool-steps';
+import { useFocusHandoff } from '@/hooks/use-focus-handoff';
 import { subagentDigestHead, subagentTurnView } from '@/lib/trace-view';
 import type { SubagentCallView, SubagentTurnView } from '@/lib/trace-view';
 import type { TrajectoryPuller } from '@/lib/trajectory-pull';
@@ -136,7 +137,13 @@ function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
   const grouped = steps.length > 1 || steps.some((step) => step.status === 'running');
   return (
     <section className="mb-2" data-testid="trace-subagent-turn" data-seq={turn.seq}>
-      <p className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-tip">
+      <p
+        className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-tip outline-none"
+        // 按「載入這一輪的細節」拉回來之後焦點交到這裡（#2009）；平常不在 Tab 順序裡。不用 `data-reveal-target`：
+        // 「看這一輪」找的是主對話那一組的標題，子代理的輪也帶 `data-seq`，標了會被它找錯。
+        data-subagent-turn-head=""
+        tabIndex={-1}
+      >
         <span>{SUBAGENT_TURN_LABEL(turn.head.kind)}</span>
         <HeadFacts head={turn.head} noEnd={turn.head.kind === 'run'} />
       </p>
@@ -178,6 +185,19 @@ export function SubagentCalls({ runId }: { runId: string }) {
     };
   }, []);
 
+  // 按鈕拉完（#2009）：鈕收掉、焦點掉了，就落在拉回來的第一輪的標題；這一區沒有輪就落在「重新載入」。
+  const handoff = useFocusHandoff<number>();
+  const root = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const seq = handoff.pending();
+    if (seq === undefined || pulls.get(seq)?.kind === 'loading') return;
+    const block = root.current?.querySelector<HTMLElement>(`[data-pulled-seq="${seq}"]`);
+    handoff.land(
+      block?.querySelector<HTMLElement>('[data-subagent-turn-head]') ??
+        block?.querySelector<HTMLElement>('button'),
+      { scroll: true },
+    );
+  }, [pulls, handoff]);
   const pullSeq = useCallback(
     (seq: number) => {
       if (puller === undefined) return;
@@ -203,6 +223,10 @@ export function SubagentCalls({ runId }: { runId: string }) {
     // `snapshots` 只用來畫拉回來的那一輪；它每個 frame 都是新的，不該讓拉取的函式跟著換。
     [puller, runId],
   );
+  const pressPull = (seq: number, button: HTMLElement) => {
+    handoff.arm(seq, button);
+    pullSeq(seq);
+  };
 
   // 前景子代理整段只有一份摘要、推送沒有逐呼叫結構：展開就拉，不讓人再多按一下。
   const only =
@@ -228,7 +252,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
     digests.push(digest);
   });
   return (
-    <div data-testid="trace-subagent-calls">
+    <div ref={root} data-testid="trace-subagent-calls">
       <p className="text-muted-foreground px-2 pb-1 text-tip">{SUBAGENT_CALLS_CONTENT_TEXT}</p>
       {child.omitted > 0 && (
         <p className="text-muted-foreground px-2 pb-1 text-tip">
@@ -239,7 +263,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
         const pull = pulls.get(digest.seq);
         if (pull?.kind === 'loaded') {
           return (
-            <div key={digest.seq}>
+            <div key={digest.seq} data-pulled-seq={digest.seq}>
               {pull.turns.map((turn) => (
                 <SubagentTurn key={turn.seq} turn={turn} />
               ))}
@@ -249,7 +273,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
                   variant="ghost"
                   size="sm"
                   className="min-h-11 text-ui lg:min-h-8"
-                  onClick={() => pullSeq(digest.seq)}
+                  onClick={(event) => pressPull(digest.seq, event.currentTarget)}
                 >
                   {SUBAGENT_CALLS_RELOAD_LABEL}
                 </Button>
@@ -272,7 +296,10 @@ export function SubagentCalls({ runId }: { runId: string }) {
             {puller === undefined ? (
               <p className="text-muted-foreground px-2 text-tip">{SUBAGENT_CALLS_NO_PULL_TEXT}</p>
             ) : (
-              <PullControl status={pull ?? { kind: 'idle' }} onPull={() => pullSeq(digest.seq)} />
+              <PullControl
+                status={pull ?? { kind: 'idle' }}
+                onPull={(button) => pressPull(digest.seq, button)}
+              />
             )}
           </section>
         );

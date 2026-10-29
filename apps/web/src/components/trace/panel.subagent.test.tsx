@@ -22,6 +22,7 @@ import {
   SUBAGENT_CALLS_RELOAD_LABEL,
   SUBAGENT_CALLS_TITLE,
 } from '@/components/trace/subagent';
+import { TRACE_PULL_LABEL, TRACE_PULL_RETRY_LABEL } from '@/components/trace/pull-control';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';
@@ -40,6 +41,8 @@ import {
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
+  // jsdom 沒有版面：拉完交焦點前會先捲過去（#2009）。
+  Element.prototype.scrollIntoView = () => {};
 });
 
 afterEach(() => {
@@ -338,6 +341,50 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
       waiting[0]!({ kind: 'rejected', code: 'SUBAGENT_NOT_FOUND', message: '找不到這個子代理' });
     });
     expect(block.textContent).toContain('找不到這個子代理');
+  });
+
+  it('鍵盤按「載入這一輪的細節」（#2009）：讀取中焦點留在同一顆鈕上、再按不會再拉；拉回來落在拉回來那一輪的標題', async () => {
+    const { client, queries, waiting } = fakeClient();
+    mount(
+      scenario('bg-1', {
+        trajectory: view([childTurn(3)], { digests: [digest(1, { seq: 10 })] }),
+      }),
+      client,
+    );
+    const block = await expandSubagent();
+    const button = within(block).getByRole('button', { name: TRACE_PULL_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    expect(document.activeElement).toBe(button);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(within(block).getByRole('button', { name: TRACE_PULL_LABEL })).toBe(button);
+    fireEvent.click(button);
+    expect(queries).toHaveLength(1);
+    await act(async () => {
+      waiting[0]!({ kind: 'ok', result: { turns: [childTurn(1)], seq: 99 } });
+    });
+    const pulled = within(block).getAllByTestId('trace-subagent-turn')[0]!;
+    expect(pulled.getAttribute('data-seq')).toBe('10');
+    expect(document.activeElement).toBe(pulled.querySelector('[data-subagent-turn-head]'));
+  });
+
+  it('鍵盤按下去失敗（#2009）：焦點留在同一顆鈕上，它改成「重試」', async () => {
+    const { client, waiting } = fakeClient();
+    mount(
+      scenario('bg-1', {
+        trajectory: view([childTurn(3)], { digests: [digest(1, { seq: 10 })] }),
+      }),
+      client,
+    );
+    const block = await expandSubagent();
+    const button = within(block).getByRole('button', { name: TRACE_PULL_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await act(async () => {
+      waiting[0]!({ kind: 'rejected', code: 'SUBAGENT_NOT_FOUND', message: '找不到這個子代理' });
+    });
+    expect(within(block).getByRole('button', { name: TRACE_PULL_RETRY_LABEL })).toBe(button);
+    expect(document.activeElement).toBe(button);
   });
 
   it('分頁關掉（卸載）時，還在飛的拉取被取消', async () => {
