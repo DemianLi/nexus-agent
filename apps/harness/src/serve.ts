@@ -191,7 +191,7 @@ import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { ThreadSearch } from './thread-search.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
-import { processSessionLogBudget } from './session-log-budget.js';
+import { createSessionLogBudget, defaultLogBudgetBytes } from './session-log-budget.js';
 import type { SessionLogBudget } from './session-log-budget.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
@@ -404,7 +404,7 @@ export interface RunServeOptions {
   readonly workspaceRootOf?: WorkspaceRootOf;
   /**
    * 會話日誌的位元組額度（#2115），只給測試用：換一本小的，才量得出「太大的拒收、小的照常」而不必造幾百 MiB 的日誌。
-   * 產品路徑不設，用這個行程共用的那一本（{@link processSessionLogBudget}）。serve 自己的存放處與引用候選逐格開的都記在這一本。
+   * 產品路徑不設，照 `thread-capacity` 的 `sessionLogBudgetMiB` 開一本（不寫就自動算）。serve 自己的存放處與引用候選逐格開的都記在這一本。
    */
   readonly sessionLogBudget?: SessionLogBudget;
 }
@@ -819,6 +819,18 @@ async function startServer(
   // thread 數上限（#1476，保險絲第 2 級）。**server 的性質**：`threads` 表一台伺服器一張，檢查在 `createWireHandler` 的
   // `threadFor` 裡，所以值在這裡解、往下傳一份。出廠開著、關不掉（#1619，`settings/thread-capacity.ts`）。
   const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
+  // 會話日誌額度（#2115）：serve 的存放處與引用候選逐格開的共用這一本。`thread-capacity` 的 `sessionLogBudgetMiB` 不寫就自動算——
+  // 等第一次用到（最晚是下面起動披露那一行）才算，那時 RSS 是 serve 起動完的底；寫了就固定，`0` 是不限。
+  const configuredLogBudgetMiB = threadCapacity.sessionLogBudgetMiB;
+  const sessionLogBudget =
+    options.sessionLogBudget ??
+    (configuredLogBudgetMiB === undefined
+      ? createSessionLogBudget(() => defaultLogBudgetBytes())
+      : createSessionLogBudget(
+          configuredLogBudgetMiB === 0
+            ? Number.POSITIVE_INFINITY
+            : configuredLogBudgetMiB * 1024 * 1024,
+        ));
   // 目標續行的操作者上限（#1623）：人每授權一次最多續行幾輪。關掉那一列就只剩目標自己那條；`--no-goal-driver` 時不起作用。
   // **掛沒掛先問**：`startupSetting` 對關掉的列回 schema 預設，不先問會把關掉讀成 20。
   const goalRoundCap: GoalRoundCap | undefined = startupEntryMounted(plugins, goalRoundCapPlugin)
@@ -1007,7 +1019,7 @@ async function startServer(
       ? undefined
       : openJsonlSessionStore({
           directory: join(sessionLogDir, projectKey(cwd)),
-          ...(options.sessionLogBudget !== undefined && { logBudget: options.sessionLogBudget }),
+          logBudget: sessionLogBudget,
           // 後端講話（例如這個平台拿不到寫租約）走伺服器日誌，前綴同協調器那條。
           warn: (message) => {
             warn(`[會話日誌] ${message}`);
@@ -1095,10 +1107,8 @@ async function startServer(
           title: threadTitle,
           limit: sessionReference.candidateLimit,
           warn,
-          ...(options.sessionLogBudget !== undefined && {
-            openStore: (directory: string) =>
-              openJsonlSessionStore({ directory, logBudget: options.sessionLogBudget }),
-          }),
+          openStore: (directory: string) =>
+            openJsonlSessionStore({ directory, logBudget: sessionLogBudget }),
         });
 
   // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出；設成 0 是管理者關掉逐出（#1619，
@@ -1735,17 +1745,22 @@ async function startServer(
   // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
   // serve 的那一刻就看得到，不必等第一個人開對話。
   for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
-  // 已儲存 vs 執行中的對照（#1406）：寫成功才講，寫不進去的警告已經在上面記過。
-  if (startupSnapshotWritten) log(describeSnapshot(startupSnapshot, pluginSnapshotPath(env)));
-  // 會話日誌的位元組額度講出來（#2115）：在這裡第一次算，起動的東西都載入了，「現在的 RSS」就是 serve 自己的底。
+  // 會話日誌的位元組額度講出來（#2115）：自動算的在這裡第一次算，起動的東西都載入了，「現在的 RSS」就是 serve 自己的底。
   // 沒落盤就沒有日誌要讀，不印。
   if (sessionStore !== undefined) {
-    const { limitBytes } = options.sessionLogBudget ?? processSessionLogBudget();
+    const { limitBytes } = sessionLogBudget;
     log(
-      `會話日誌額度：${(limitBytes / 1024 / 1024).toFixed(1)} MiB（同時開著與正在讀的會話日誌合計；` +
-        '超過的在讀之前拒收，跟著容器記憶體上限與 --max-old-space-size 走）',
+      limitBytes === Number.POSITIVE_INFINITY
+        ? '會話日誌額度：不限（thread-capacity 的 sessionLogBudgetMiB 是 0；大日誌可能把整個行程撐死）'
+        : `會話日誌額度：${(limitBytes / 1024 / 1024).toFixed(1)} MiB（同時開著與正在讀的會話日誌合計，超過的在讀之前拒收；${
+            configuredLogBudgetMiB === undefined || options.sessionLogBudget !== undefined
+              ? '照容器記憶體上限與 --max-old-space-size 自動算'
+              : 'thread-capacity 的 sessionLogBudgetMiB 設的'
+          }）`,
     );
   }
+  // 已儲存 vs 執行中的對照（#1406）：寫成功才講，寫不進去的警告已經在上面記過。
+  if (startupSnapshotWritten) log(describeSnapshot(startupSnapshot, pluginSnapshotPath(env)));
 
   // 記憶體量具（#1490）：放在所有起動披露之後，讓第一行讀數是 serve 全部起來之後的樣子。關著（預設）就一個字都不印、不建計時器。
   const memoryGauge =

@@ -27,7 +27,7 @@ export interface SessionLogReservation {
 
 /** 見檔頭。 */
 export interface SessionLogBudget {
-  /** 總容量（位元組）。 */
+  /** 總容量（位元組）；`Infinity` 是不限。 */
   readonly limitBytes: number;
   /** 續接：佔到 `release` 為止。放不下就拋 {@link SessionLogTooLargeError}，不等。 */
   holdForSession(id: string, logBytes: number): SessionLogReservation;
@@ -83,13 +83,23 @@ export function defaultLogBudgetBytes(readings: MemoryReadings = readMemory()): 
 /**
  * 開一本帳。
  *
- * @param limitBytes - 總容量。
- * @throws `RangeError` 不是 0 以上的有限數。
+ * @param limit - 總容量（位元組，`Infinity` 是不限），或第一次用到時才算容量的函式：serve 在起動完之前就要把帳交給存放處，
+ *   出廠容量卻要等起動完、RSS 是 serve 自己的底時才算（{@link defaultLogBudgetBytes}）。
+ * @throws `RangeError` 容量不是 0 以上的數（給函式的話，在第一次用到時拋）。
  */
-export function createSessionLogBudget(limitBytes: number): SessionLogBudget {
-  if (!Number.isFinite(limitBytes) || limitBytes < 0) {
-    throw new RangeError(`會話日誌的位元組額度要是 0 以上的有限數，拿到 ${String(limitBytes)}`);
-  }
+export function createSessionLogBudget(limit: number | (() => number)): SessionLogBudget {
+  let resolved: number | undefined;
+  const capacity = (): number => {
+    if (resolved === undefined) {
+      const value = typeof limit === 'function' ? limit() : limit;
+      if (Number.isNaN(value) || value < 0) {
+        throw new RangeError(`會話日誌的位元組額度要是 0 以上的數，拿到 ${String(value)}`);
+      }
+      resolved = value;
+    }
+    return resolved;
+  };
+  if (typeof limit === 'number') capacity();
   let heldBySessions = 0;
   let heldByReads = 0;
   const waiting: {
@@ -114,20 +124,20 @@ export function createSessionLogBudget(limitBytes: number): SessionLogBudget {
   const drain = () => {
     for (let index = waiting.length - 1; index >= 0; index -= 1) {
       const entry = waiting[index]!;
-      if (heldBySessions + entry.bytes > limitBytes) {
+      if (heldBySessions + entry.bytes > capacity()) {
         waiting.splice(index, 1);
         entry.refuse(
           new SessionLogTooLargeError(
             entry.id,
             'busy',
             entry.bytes,
-            limitBytes,
+            capacity(),
             heldBySessions + heldByReads,
           ),
         );
       }
     }
-    while (waiting.length > 0 && heldBySessions + heldByReads + waiting[0]!.bytes <= limitBytes) {
+    while (waiting.length > 0 && heldBySessions + heldByReads + waiting[0]!.bytes <= capacity()) {
       waiting.shift()!.grant();
     }
   };
@@ -140,8 +150,11 @@ export function createSessionLogBudget(limitBytes: number): SessionLogBudget {
   };
 
   return {
-    limitBytes,
+    get limitBytes() {
+      return capacity();
+    },
     holdForSession(id, logBytes) {
+      const limitBytes = capacity();
       if (logBytes > limitBytes) {
         throw new SessionLogTooLargeError(id, 'too-large', logBytes, limitBytes, 0);
       }
@@ -157,6 +170,7 @@ export function createSessionLogBudget(limitBytes: number): SessionLogBudget {
       });
     },
     reserveForRead(id, logBytes) {
+      const limitBytes = capacity();
       if (logBytes > limitBytes) {
         return Promise.reject(
           new SessionLogTooLargeError(id, 'too-large', logBytes, limitBytes, 0),
@@ -195,6 +209,6 @@ let processBudget: SessionLogBudget | undefined;
  * CLI 的 run 目錄）都記在同一本。第一次用到時照 {@link defaultLogBudgetBytes} 算容量。
  */
 export function processSessionLogBudget(): SessionLogBudget {
-  processBudget ??= createSessionLogBudget(defaultLogBudgetBytes());
+  processBudget ??= createSessionLogBudget(() => defaultLogBudgetBytes());
   return processBudget;
 }

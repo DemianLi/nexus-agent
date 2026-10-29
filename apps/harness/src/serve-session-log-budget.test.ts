@@ -139,4 +139,32 @@ describe('會話日誌超過額度（#2115）', () => {
     await foldTurn(reopened);
     await reopened.return?.(undefined);
   });
+
+  it.each([
+    ['不寫：照記憶體上限自動算', '', /^會話日誌額度：\d+\.\d MiB（.*自動算）$/u],
+    [
+      '寫正整數：固定成那個數',
+      '    sessionLogBudgetMiB: 64\n',
+      /^會話日誌額度：64\.0 MiB（.*sessionLogBudgetMiB 設的）$/u,
+    ],
+    [
+      '寫 0：不限',
+      '    sessionLogBudgetMiB: 0\n',
+      /^會話日誌額度：不限（thread-capacity 的 sessionLogBudgetMiB 是 0/u,
+    ],
+  ])('thread-capacity 的 sessionLogBudgetMiB %s，起動輸出講出來', async (_name, row, expected) => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-log-budget-'));
+    temporary.push(root);
+    const lines: string[] = [];
+    serve = await startScriptedServe(TURNS as never, {
+      argv: ['--session-log', root],
+      extraRows: row === '' ? '' : `- id: thread-capacity\n  config:\n${row}`,
+      log: (line) => lines.push(line),
+    });
+    const disclosed = lines
+      .map((line) => line.replace(/^.*?(?=會話日誌額度：)/u, ''))
+      .filter((line) => line.startsWith('會話日誌額度：'));
+    expect(disclosed).toHaveLength(1);
+    expect(disclosed[0]).toMatch(expected);
+  });
 });

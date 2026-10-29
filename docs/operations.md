@@ -2225,6 +2225,33 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **偏離 dsh（登記）**：dsh 頂層沒有閒置逐出（程式碼裡是 legacy TODO）；出廠值 2 小時與「0 是不逐出」照 dsh 終端的 `unattendedTimeoutMs`。閒置條件借的是**子代理結算**（沒有輪、沒有佇列、沒有未收完的子工作），
   計時方式借的是 **terminal retention**（條件全成立才開始算、任何一次忙碌就歸零、到 T 才收）。形狀逐點見 `src/wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
 
+**會話日誌額度（[#2115](https://github.com/DemianLi/nexus-agent/issues/2115)）**：一個行程同時讀進記憶體的會話日誌，合計有上限；超過的**在讀之前就拒收**，
+不讓一條大日誌把整個行程拖死。thread 數上限只數條數，擋不住「一條很大」。打開一條 thread 的記憶體約是它日誌大小的 5 到 6 倍
+（RSS 峰值；heap 峰值約 4 倍），而讀進來的整份日誌在 V8 heap 之外：1g 容器裡 506 MiB 的日誌，heap 才到上限的五成多，行程就先被 cgroup 殺掉
+（退出碼 137、`OOMKilled=true`），上面 70% 那一段「heap 先到」只對很多條小 thread 成立。
+
+- **額度怎麼算**：`serve` 起動完、還沒有 thread 時算一次，`min((記憶體上限 − 當下 RSS) ÷ 7, (heap 上限 − 已用) ÷ 5)`。記憶體上限是 cgroup 的
+  （`process.constrainedMemory()`），沒有就是主機總量；heap 上限跟著 `--max-old-space-size`。照範本的 70% 配，1g 約 110 MiB、4g 約 540 MiB。
+  啟動輸出一律印一行 `會話日誌額度：…`，寫明是自動算的還是設的。
+- **要調**：最好的做法是給行程更多記憶體（`MemoryMax` 與 `--max-old-space-size` 一起調）後重啟，額度跟著自動變大。要固定成某個數或關掉，
+  在 `thread-capacity` 那一列寫 `sessionLogBudgetMiB`（demian 2026-10-29 拍板，#1827 D40）：正整數是固定成那麼多 MiB，`0` 是不限，不寫是自動算。
+  改了要重啟。**調高到超過自動算的值、或設 0，就是拿掉這一道保護**：大日誌會回到把整個行程撐死的樣子。
+
+  ```yaml
+  - id: thread-capacity
+    config:
+      sessionLogBudgetMiB: 200   # 固定 200 MiB；0 是不限；不寫是自動算
+  ```
+
+- **兩種佔法**：續接一條 thread 佔它日誌的大小，佔到這條 thread 撤出記憶體（閒置逐出、關機）；列表、`@` 引用候選、內容搜尋、背景子代理的冷檢查
+  這些唯讀的讀完就還，暫時放不下的排隊。
+- **拒收長這樣**：打開那條 thread 回 `unknown_error`，訊息寫出日誌多大、額度多少與下一步，不帶路徑。單份超過額度是永遠不收；額度被其他開著的
+  大 thread 佔滿是等它們撤出再試。檔案不動。列表照樣列它（沒有標題），`@` 引用候選與內容搜尋不列。
+- **已知限制**：額度只算日誌大小，不算 thread 開著之後對話再長出來的部分；冷讀快取（最多兩份）握著的事件也不算。很多條中等大小的 thread
+  各佔一份，加起來仍受額度管；很多條小 thread 長期常駐，仍是 thread 數上限與 `memory-gauge` 的事。
+- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh 讀會話日誌也是整份讀（`session-persistence-jsonl/src/generation.ts:262-282`、
+  `index.ts:808-811`，`f3803c96`），沒有大小上限。比較與取捨見 PR 內文。
+
 **`memory-gauge`（[#1490](https://github.com/DemianLi/nexus-agent/issues/1490)）**讓 serve 把自己的記憶體寫進日誌，給管理者看「serve 多大、容器還剩多少、主機還剩多少」。**預設關閉**：不寫這一列，或寫 `reportIntervalMs: 0`，除了清單多一列（`[對照快照]` 的列數、`plugin-snapshot.json`、`--dump-config`），serve 的行為與日誌和沒有這一列時一樣。
 
 ```yaml
