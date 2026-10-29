@@ -24,6 +24,7 @@ import {
 } from './index.js';
 import type { McpPluginOptions } from './index.js';
 import { poolKey } from './pool.js';
+import type { McpConnectionPoolOptions } from './pool.js';
 import { modelToolNames } from './tool-names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
@@ -70,12 +71,17 @@ async function waitFor(check: () => Promise<boolean> | boolean, ms = 10_000): Pr
 }
 
 /** 一份池，測試結束時關；`logged` 是池的日誌（serve 給伺服器日誌），`errors` 是 dsh 寫成 error 級的那幾句。 */
-function pool(): { pool: McpConnectionPool; logged: string[]; errors: string[] } {
+function pool(extra: Pick<McpConnectionPoolOptions, 'firstAcquireWaitMs'> = {}): {
+  pool: McpConnectionPool;
+  logged: string[];
+  errors: string[];
+} {
   const logged: string[] = [];
   const errors: string[] = [];
   const created = new McpConnectionPool({
     log: (message) => logged.push(message),
     error: (message) => errors.push(message),
+    ...extra,
   });
   cleanup.push(() => created.close());
   return { pool: created, logged, errors };
@@ -353,6 +359,46 @@ describe('第一次握手卡住（PM 審查擋 1）', () => {
     await waitFor(() => firstSettled, 2000);
     expect(modelToolNames((await first).registry)).toEqual([]);
   }, 40_000);
+});
+
+describe('建立那一份的取用的期限（#2125）', () => {
+  /** 一份組裝握手卡住時，過 `ms` 之後落定了沒。 */
+  async function settledAfter(shared: McpConnectionPool, options: McpPluginOptions, ms: number) {
+    let settled = false;
+    void assemble(shared, options).then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return settled;
+  }
+
+  it('沒帶 firstAcquireWaitMs（serve 的池）：建立那一份照舊等到第一次連線落定', async () => {
+    const { pool: shared } = pool();
+    const h = hangRow();
+    h.hang();
+    expect(await settledAfter(shared, h.options, 1500)).toBe(false);
+  }, 20_000);
+
+  it('帶了、沒寫 failOnStartupError：建立那一份到期就落定，沒有工具並警告', async () => {
+    const { pool: shared } = pool({ firstAcquireWaitMs: 300 });
+    const h = hangRow();
+    h.hang();
+    const started = Date.now();
+    const { registry } = await assemble(shared, h.options);
+    expect(Date.now() - started).toBeLessThan(300 + 2000);
+    expect(modelToolNames(registry)).toEqual([]);
+    expect(warned(registry).some((m) => m.includes('still connecting after 300ms'))).toBe(true);
+  }, 20_000);
+
+  it('帶了、寫了 failOnStartupError：照舊等到落定（連不上要算掉，判法同 serve）', async () => {
+    const { pool: shared } = pool({ firstAcquireWaitMs: 300 });
+    const h = hangRow();
+    h.hang();
+    expect(await settledAfter(shared, { ...h.options, failOnStartupError: true }, 1500)).toBe(
+      false,
+    );
+  }, 20_000);
 });
 
 describe('斷線空窗裡組的 thread（PM 審查擋 2）', () => {

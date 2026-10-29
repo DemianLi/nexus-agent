@@ -11,7 +11,7 @@
  * @module
  */
 
-import { McpConnectionPool } from '@nexus/plugin-mcp';
+import { FIRST_CONNECT_WAIT_MS, McpConnectionPool } from '@nexus/plugin-mcp';
 
 import { AssemblyDropError } from './agent-factory.js';
 import { resolveWorkspaceRoot } from './assembly-root.js';
@@ -66,7 +66,11 @@ export async function trialMount(
     channel: entryApprovalChannel(undefined),
     ...(contained && { contained }),
   });
-  const mcpPool = new McpConnectionPool({ log: () => {}, error: () => {} });
+  const mcpPool = new McpConnectionPool({
+    log: () => {},
+    error: () => {},
+    firstAcquireWaitMs: FIRST_CONNECT_WAIT_MS,
+  });
   try {
     const loaded = await loadPluginConfig(sources, { tree: root.tree });
     const declarationOf = (id: string) => {

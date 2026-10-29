@@ -299,6 +299,19 @@ export async function runPluginCli(options: PluginCliOptions): Promise<number> {
   }
 }
 
+/** 等 `stream` 先前寫進去的都交給作業系統（write callback 回來，出錯也算）。 */
+function drained(stream: NodeJS.WriteStream): Promise<void> {
+  return new Promise((resolve) => {
+    stream.write('', () => {
+      resolve();
+    });
+  });
+}
+
 if (import.meta.main) {
-  process.exitCode = await runPluginCli({ argv: process.argv.slice(2) });
+  const code = await runPluginCli({ argv: process.argv.slice(2) });
+  // 排空輸出就 exit，不等事件迴圈自己收空：試掛丟下、還在握手的 MCP 子行程（`@nexus/plugin-mcp` `supervisor.ts` 檔頭偏離 6）
+  // 握著 pipe，要等 SDK 的請求逾時才放（版本協商兩輪，最久約 120 秒）。exit 之後那個子行程的 stdin 收到 EOF，自己退出。
+  await Promise.all([drained(process.stdout), drained(process.stderr)]);
+  process.exit(code);
 }
