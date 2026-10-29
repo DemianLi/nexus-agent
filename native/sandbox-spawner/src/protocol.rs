@@ -49,10 +49,11 @@ pub enum FailKind {
     StartDir = 2,
     /// execve 失敗，`errno` 帶原因（找不到、沒有執行權限、格式不對……）。
     Exec = 3,
-    /// 要求本身不成立：id 重複、argv 空的、argv／env／cwd 含 NUL、env 不是 `NAME=value`、
+    /// 要求本身不成立：id 重複、argv 或 argv[0] 空的、argv／env／cwd 含 NUL、env 不是 `NAME=value`、
     /// 連進來的 stdio 不在要求裡、等不到 stdio 連線。
     Protocol = 4,
-    /// fork、pipe 這類資源用盡，或還在等 stdio 連線時 spawner 就結束了。
+    /// 其餘沒起成的情形：fork、pipe 這類資源用盡；子行程起來時 spawner 已經不在；還在等 stdio 連線時 spawner 就結束了；
+    /// 子行程的失敗紀錄看不懂。
     Resource = 5,
 }
 

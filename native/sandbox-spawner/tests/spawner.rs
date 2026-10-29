@@ -400,6 +400,8 @@ fn protocol_errors_get_a_failed_event() {
     assert!(matches!(event, Event::Failed { id: 1, kind: FailKind::Protocol, .. }), "{event:?}");
     let (_, _, event) = s.launch(Spawn { argv: vec![b"a\0b".to_vec()], ..request(2, &ws, &[]) });
     assert!(matches!(event, Event::Failed { id: 2, kind: FailKind::Protocol, .. }), "{event:?}");
+    let (_, _, event) = s.launch(Spawn { argv: vec![vec![]], ..request(4, &ws, &[]) });
+    assert!(matches!(event, Event::Failed { id: 4, kind: FailKind::Protocol, .. }), "{event:?}");
     // 同一個 id 還在跑時再要一次。
     let (_, _, started) = s.launch(request(3, &ws, &["sleep", "100"]));
     assert!(matches!(started, Event::Started { .. }));

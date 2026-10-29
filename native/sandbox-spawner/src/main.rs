@@ -21,7 +21,7 @@
 //! 連進來的對方要是起這個 spawner 的那個行程（`SO_PEERCRED` 的 pid 等於 `getppid()`，uid 相同），否則直接關掉。
 //! 要求與它要的連線都到齊才 fork；等太久（[`STDIO_WAIT`]）回 `Protocol`。
 //!
-//! 每個收到的要求恰好得到一個結局：`Failed`，或 `Started` 之後一個 `Exited`。例外只有 id 重複：那是 Node 的錯，回一個帶同一個 id
+//! 每個 `Spawn` 要求恰好得到一個結局：`Failed`，或 `Started` 之後一個 `Exited`。例外只有 id 重複：那是 Node 的錯，回一個帶同一個 id
 //! 的 `Failed`（`Protocol`），原本那筆照常進行。關機時，還在跑的收到 `Exited`（被 SIGKILL），還在等 stdio 連線的收到
 //! `Failed`（`Resource`）；因為事件寫不出去而關機時，這些都送不出去。
 //! 工具結束時（leader 結束），整個行程群組一起 SIGKILL，不留背景成員抓著 stdout。
@@ -231,14 +231,14 @@ struct Spawner {
     test_delay_us: u32,
 }
 
-/// argv[0] 沒有 `/` 時，照 request 帶來的 PATH 列出候選；PATH 沒給就用 glibc execvp 的預設（`_CS_PATH`）。
+/// argv[0] 沒有 `/` 時，照 request 帶來的 PATH 列出候選：有好幾個 `PATH=` 時取第一個，跟工具自己 getenv 看到的一樣；
+/// 沒給就用 glibc execvp 的預設（`_CS_PATH`）。
 fn candidates(argv0: &[u8], env: &[Vec<u8>]) -> Vec<Vec<u8>> {
     if argv0.contains(&b'/') {
         return vec![argv0.to_vec()];
     }
     let path = env
         .iter()
-        .rev()
         .find_map(|entry| entry.strip_prefix(b"PATH=").map(<[u8]>::to_vec))
         .unwrap_or_else(|| b"/bin:/usr/bin".to_vec());
     path.split(|&b| b == b':')
@@ -329,7 +329,7 @@ impl Spawner {
         self.conns.push(Conn { fd, header: Vec::new(), deadline: Instant::now() + STDIO_WAIT });
     }
 
-    /// 讀連線的標頭；讀齊了就交給那個 id。
+    /// 讀連線的標頭；讀齊了就交給那個 id。用 fd 找連線：同一輪前面的呼叫會 swap_remove，index 不穩。
     fn on_conn(&mut self, fd: libc::c_int) {
         let Some(index) = self.conns.iter().position(|c| c.fd == fd) else { return };
         let conn = &mut self.conns[index];
@@ -395,15 +395,16 @@ impl Spawner {
 
     fn spawn(&mut self, r: &Spawn, fds: &mut [libc::c_int; 3]) -> Result<Child, (FailKind, i32, String)> {
         let protocol_error = |detail: &str| (FailKind::Protocol, 0, detail.to_string());
-        if r.argv.is_empty() {
-            return Err(protocol_error("argv 是空的"));
+        if r.argv.first().is_none_or(Vec::is_empty) {
+            return Err(protocol_error("argv 或 argv[0] 是空的"));
         }
         if r.env.iter().any(|e| !e.contains(&b'=')) {
             return Err(protocol_error("環境變數不是 NAME=value"));
         }
         let argv = cstrings(&r.argv).ok_or_else(|| protocol_error("argv 含 NUL"))?;
         let env = cstrings(&r.env).ok_or_else(|| protocol_error("環境變數含 NUL"))?;
-        let candidates = cstrings(&candidates(&r.argv[0], &r.env)).ok_or_else(|| protocol_error("PATH 含 NUL"))?;
+        // 候選由 argv[0] 與 env 裡的 PATH 拼成，兩者上面都已確定不含 NUL。
+        let candidates = cstrings(&candidates(&r.argv[0], &r.env)).expect("候選路徑不含 NUL");
         let cwd = CString::new(r.cwd.clone()).map_err(|_| protocol_error("cwd 含 NUL"))?;
         let devnull = c"/dev/null";
         let mut opened = Vec::new();
@@ -715,7 +716,7 @@ mod tests {
 
     #[test]
     fn path_comes_from_the_request_and_empty_entries_mean_cwd() {
-        let env = vec![b"PATH=/a:/b".to_vec(), b"PATH=/c::/d".to_vec()];
+        let env = vec![b"PATH=/c::/d".to_vec(), b"PATH=/a:/b".to_vec()];
         assert_eq!(
             candidates(b"git", &env),
             vec![b"/c/git".to_vec(), b"./git".to_vec(), b"/d/git".to_vec()]
