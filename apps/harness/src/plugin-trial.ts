@@ -5,13 +5,16 @@
  * 寫入口是另一個行程，serve 那棵長壽的樹碰不到，所以在這個行程裡另建一棵用完即丟的樹：樹上的列在讀清單時掛上，
  * 相容層的列在組裝時跑 `apply`。不送模型請求；serve 裡跑著的 thread 不受影響。
  *
+ * **MCP 列的第一次連線**（[#2125](https://github.com/DemianLi/nexus-agent/issues/2125)）：池帶 `firstAcquireWaitMs`，
+ * 沒寫 `failOnStartupError` 的列最多等 `FIRST_CONNECT_WAIT_MS`（serve 等到落定），寫了的照 serve 等到落定；掉不掉跟 serve 一樣。
+ *
  * **試組的環境不是 serve 的環境。** 旗標只拿得到呼叫端給的 `--patch` 與 `--workspace`；只在 serve 環境裡掉的列，這裡看不到，
  * 在 thread 組裝時才掉（`thread-plugin-list.ts`）。
  *
  * @module
  */
 
-import { McpConnectionPool } from '@nexus/plugin-mcp';
+import { FIRST_CONNECT_WAIT_MS, McpConnectionPool } from '@nexus/plugin-mcp';
 
 import { AssemblyDropError } from './agent-factory.js';
 import { resolveWorkspaceRoot } from './assembly-root.js';
@@ -66,7 +69,11 @@ export async function trialMount(
     channel: entryApprovalChannel(undefined),
     ...(contained && { contained }),
   });
-  const mcpPool = new McpConnectionPool({ log: () => {}, error: () => {} });
+  const mcpPool = new McpConnectionPool({
+    log: () => {},
+    error: () => {},
+    firstAcquireWaitMs: FIRST_CONNECT_WAIT_MS,
+  });
   try {
     const loaded = await loadPluginConfig(sources, { tree: root.tree });
     const declarationOf = (id: string) => {
