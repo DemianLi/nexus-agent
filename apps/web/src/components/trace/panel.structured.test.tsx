@@ -231,7 +231,7 @@ describe('觀測分頁：結構化模式', () => {
     ]);
   });
 
-  it('核准：回覆看不懂（#2040）的中斷列寫無法回答，工具列說沒有執行，不說人拒絕了', async () => {
+  it('核准：回覆看不懂（#2040）的中斷列寫沒有有效回覆，工具列說沒有執行，不說人拒絕了', async () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [
       script.running(),
@@ -260,7 +260,7 @@ describe('觀測分頁：結構化模式', () => {
     const signal = screen
       .getAllByTestId('trace-row')
       .find((row) => row.getAttribute('data-kind') === 'signal')!;
-    expect(signal.textContent).toContain('核准 bash：無法回答（等了 13.0 秒）');
+    expect(signal.textContent).toContain('核准 bash：沒有有效回覆（等了 13.0 秒）');
     expect(screen.getAllByTestId('trace-approval-code').map((chip) => chip.textContent)).toEqual([
       '回覆看不懂，沒有執行',
     ]);

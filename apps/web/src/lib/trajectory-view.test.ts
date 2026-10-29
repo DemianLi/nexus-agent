@@ -79,7 +79,7 @@ describe('signalText：只讀結構化欄位', () => {
     ],
     [
       decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'unavailable' } }),
-      '核准 bash：無法回答',
+      '核准 bash：沒有有效回覆',
     ],
     [
       decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'future' as never } }),

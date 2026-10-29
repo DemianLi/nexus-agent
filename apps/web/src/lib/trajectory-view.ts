@@ -324,7 +324,7 @@ export const APPROVAL_OUTCOME_LABEL: Readonly<Record<TrajectoryApprovalOutcome, 
   'allowed-once': '允許一次',
   rejected: '已拒絕',
   cancelled: '已取消',
-  unavailable: '無法回答',
+  unavailable: '沒有有效回覆',
 };
 
 /** 還沒有結局時寫的話：**不推一個結果**——還沒答、或停在這裡沒人答就關掉了（重開之後一樣）。 */
