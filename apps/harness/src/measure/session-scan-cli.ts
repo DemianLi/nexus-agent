@@ -6,8 +6,8 @@
  * # 剪刀那一列關掉（不剪新的，記過的剪法照樣每次讀日誌套用，#1567 N0780）：
  * pnpm --filter @nexus/harness exec tsx --tsconfig ../../tsconfig.runtime.json src/measure/session-scan-cli.ts --off tool-result-pruner
  * # 摘要那一列的保留量換成固定 token 數（非出廠）。出廠的保留量封在 tokens 門檻的兩成（20,000）；夾具每 10 輪那顆
- * # 10,000 字的工具結果是往前累加跨過 20,000 的那一則時，切點就停在它的工具呼叫前面，之後幾輪的摘要只取代上一顆摘要、
- * # 不比它小，被 `SummaryNotSmallerError` 擋下。保留量小到每輪的新訊息就夠，切點每次都往前，摘要才提交得了：
+ * # 10,000 字的工具結果是往前累加跨過 20,000 的那一則時，切點就停在它的工具呼叫前面，之後幾輪切點前只剩上一顆摘要，
+ * # 摘要器當成沒有東西可摘（#2086）。保留量小到每輪的新訊息就夠，切點每次都往前，摘要才會發生：
  * pnpm --filter @nexus/harness exec tsx --tsconfig ../../tsconfig.runtime.json src/measure/session-scan-cli.ts --retain-tokens 200
  * ```
  */

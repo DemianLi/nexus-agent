@@ -15,7 +15,7 @@
  */
 
 import { ContextOverflowError } from '@langchain/core/errors';
-import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 import {
@@ -222,6 +222,79 @@ describe('門檻到了，但尾巴蓋住全部：什麼都不做', () => {
   });
 });
 
+/**
+ * **可取代的只剩上一顆摘要：一樣什麼都不做**（[#2086](https://github.com/DemianLi/nexus-agent/issues/2086)）。
+ *
+ * 出廠的保留量是 20,000 token。尾巴裡有一則自己就撐過保留量的大工具結果時，切點停在它的工具呼叫前面；之後新進來的小訊息
+ * 推不動它，切點前面只剩上一顆摘要。訊息數一直在 60 以上，每一步都觸發；摘了也只是拿新摘要換舊摘要，沒有新內容可卸。
+ * 所以跟上面那條一樣，當成沒有東西可摘：不打摘要模型、不 warn、不提交。
+ */
+describe('可取代的只剩上一顆摘要：不打摘要模型', () => {
+  const FACTORY_LIMITS = { contextWindow: 700_045, maxOutputTokens: 16_384 };
+  const previousSummary = () =>
+    new HumanMessage({ content: '舊摘要。', additional_kwargs: { lc_source: 'summarization' } });
+  const GIANT = 'x'.repeat(200_000);
+  /** 摘要事件套用之後是 `[舊摘要, 工具呼叫, 大結果, ...small 則小訊息]`；切點之前的舊訊息只在原串裡。 */
+  const stuck = (small: number) => {
+    const old = Array.from({ length: 4 }, (_, index) => new HumanMessage(`舊的第 ${index} 則`));
+    const tail: BaseMessage[] = [
+      new AIMessage({ content: '', tool_calls: [{ id: 'read-1', name: 'read_file', args: {} }] }),
+      new ToolMessage({ content: GIANT, tool_call_id: 'read-1' }),
+      ...Array.from({ length: small }, (_, index) =>
+        index % 2 === 0 ? new HumanMessage(`第 ${index} 句`) : new AIMessage(`第 ${index} 答`),
+      ),
+    ];
+    return {
+      messages: [...old, ...tail],
+      state: {
+        _summarizationEvent: {
+          cutoffIndex: old.length,
+          summaryMessage: previousSummary(),
+          filePath: '/conversation_history/session_x.md',
+        },
+      },
+    };
+  };
+
+  it('前提：大結果自己撐過出廠保留量，後面的小訊息加起來推不過它', () => {
+    const { messages } = stuck(64);
+    expect(estimateMessageTokens(messages[5]!)).toBeGreaterThanOrEqual(20_000);
+    const smalls = messages.slice(6).reduce((sum, m) => sum + estimateMessageTokens(m), 0);
+    expect(smalls).toBeLessThan(20_000);
+  });
+
+  it('連跑三步、每步多兩則：都不打摘要模型、不 warn、不提交，送的是「舊摘要＋切點之後」', async () => {
+    for (const small of [60, 62, 64]) {
+      const { messages, state } = stuck(small);
+      const out = await run({ messages, state, limits: FACTORY_LIMITS });
+      expect(out.error).toBeUndefined();
+      expect(out.model.invokes).toBe(0);
+      expect(out.reports).toEqual([]);
+      expect(readSummarizationEvent(out.result)).toBeUndefined();
+      expect(out.handled).toHaveLength(1);
+      expect(out.handled[0]).toHaveLength(small + 3);
+      expect(String(out.handled[0]![0]!.content)).toBe('舊摘要。');
+    }
+  });
+
+  it('切點前除了舊摘要還有別的：照常摘要', async () => {
+    const { messages, state } = stuck(62);
+    // 工具呼叫前面多一則：切點前是 `[舊摘要, 這一則]`。
+    messages.splice(4, 0, new HumanMessage('切點前多一則'));
+    const out = await run({ messages, state, limits: FACTORY_LIMITS });
+    expect(out.model.invokes).toBe(1);
+  });
+
+  it('後面再來一則撐得過保留量的訊息：切點往前，摘要照常提交', async () => {
+    const { messages, state } = stuck(60);
+    messages.push(new HumanMessage('y'.repeat(200_000)));
+    const out = await run({ messages, state, limits: FACTORY_LIMITS });
+    expect(out.model.invokes).toBe(1);
+    expect(readSummarizationEvent(out.result)).toBeDefined();
+    expect(out.reports).toEqual([]);
+  });
+});
+
 describe('摘要失敗：端點真的回超窗（dsh 的 overflow 路徑）', () => {
   it('留下原本的請求錯誤（同一個物件），不是摘要那個錯；warn 一條', async () => {
     const endpointError = new ContextOverflowError('端點說：超窗了');
@@ -365,7 +438,6 @@ describe('摘要不比被取代的小', () => {
 
   /**
    * **邊界：框好的摘要與被取代的那段一樣大。** dsh 是 `>=`，所以一樣大也不提交；要是寫成 `>`，這一條翻成提交。
-   * 一樣大是真實會碰到的形狀——第 3 輪要取代的只剩上一份摘要、新摘要又與它同長（`summary-shrink.test.ts` 走的就是它）。
    *
    * 被取代的那段取一則純文字，字數逐字加到它的估計值剛好等於、再多一格（`framed + 1`）：兩個都在，才有「剛好等於」可量。
    */

@@ -20,6 +20,7 @@ import {
   effectiveTrigger,
   readSummarizationEvent,
   RETAIN_FALLBACK_MESSAGES,
+  retainedMessageCount,
   retainedTailCount,
   retainTokensFor,
   SUMMARIZATION_MIDDLEWARE_NAME,
@@ -159,6 +160,37 @@ describe('選尾巴（retainedTailCount）：dsh 的「累加到 ≥ 為止、�
       const messages = [...conversation(4), result('孤兒')];
       expect(retainedTailCount(messages, 1)).toBe(1);
     });
+  });
+});
+
+describe('留幾則（retainedMessageCount）：切點前只剩上一顆摘要就是摘不到東西（#2086）', () => {
+  const summary = () =>
+    new HumanMessage({ content: '舊摘要。', additional_kwargs: { lc_source: 'summarization' } });
+  const big = () => new HumanMessage('字'.repeat(80_000));
+  const settings = { trigger: SHIPPED_TRIGGER, retainTokens: 20_000 };
+
+  it('切點前只有上一顆摘要：回整串的長度', () => {
+    const messages = [summary(), big(), ...conversation(4)];
+    expect(retainedTailCount(messages, 20_000)).toBe(messages.length - 1);
+    expect(retainedMessageCount(messages, settings, undefined)).toBe(messages.length);
+  });
+
+  it('切點前只有一則、但不是摘要：照選尾巴的數', () => {
+    const messages = [new HumanMessage('第一句。'), big(), ...conversation(4)];
+    expect(retainedMessageCount(messages, settings, undefined)).toBe(messages.length - 1);
+  });
+
+  it('切點前是摘要加一則：照選尾巴的數', () => {
+    const messages = [summary(), new HumanMessage('多一則。'), big(), ...conversation(4)];
+    expect(retainedMessageCount(messages, settings, undefined)).toBe(messages.length - 2);
+  });
+
+  it('算不出 token 保留量、退回 20 則時也一樣', () => {
+    const onlyMessages = { trigger: [{ type: 'messages', value: 60 }] as const };
+    const messages = [summary(), ...conversation(RETAIN_FALLBACK_MESSAGES)];
+    expect(retainedMessageCount(messages, onlyMessages, undefined)).toBe(messages.length);
+    const plain = [new HumanMessage('第一句。'), ...conversation(RETAIN_FALLBACK_MESSAGES)];
+    expect(retainedMessageCount(plain, onlyMessages, undefined)).toBe(RETAIN_FALLBACK_MESSAGES);
   });
 });
 
