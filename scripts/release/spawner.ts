@@ -1,7 +1,7 @@
 /**
  * 沙箱 spawner（`native/sandbox-spawner/`，[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）在產物裡的樣子。
  *
- * spawner 只在 CI 的 Rust job 編（`.github/actions/sandbox-spawner`），編好的執行檔與它連進去的 Rust 程式碼的授權全文打成一份
+ * 產物裡的 spawner 只由 `.github/actions/sandbox-spawner` 編（ci.yml 與 release.yml 共用），編好的執行檔與它連進去的 Rust 程式碼的授權全文打成一份
  * bundle 交給 `pack.ts --spawner`。這裡定 bundle 與產物裡的位置、連進執行檔的 crate 清單，以及對執行檔本身的檢查。
  *
  * @module
@@ -103,23 +103,73 @@ export const SPAWNER_CRATES: readonly SpawnerCrate[] = [
 /** spawner 自己在 `Cargo.lock` 裡的名字，不算外部 crate。 */
 const SELF = 'nexus-sandbox-spawner';
 
+/** `Cargo.lock` 的一個 `[[package]]`。`checksum` 是 registry 上 `.crate` 檔的 SHA-256（十六進位），自己的 crate 沒有。 */
+export interface LockedCrate {
+  readonly name: string;
+  readonly version: string;
+  readonly checksum?: string;
+}
+
 /**
- * `Cargo.lock` 的 `[[package]]`：名字與版本，同名多版本各一列。
+ * `Cargo.lock` 的 `[[package]]`，同名多版本各一列。
  *
  * @param text - `Cargo.lock` 全文。
  * @returns 依出現順序。
  */
-export function lockedCrates(text: string): { name: string; version: string }[] {
-  const crates: { name: string; version: string }[] = [];
+export function lockedCrates(text: string): LockedCrate[] {
+  const crates: LockedCrate[] = [];
   for (const block of text.split(/^\[\[package\]\]$/mu).slice(1)) {
     const name = /^name = "([^"]+)"$/mu.exec(block)?.[1];
     const version = /^version = "([^"]+)"$/mu.exec(block)?.[1];
     if (name === undefined || version === undefined) {
       throw new Error(`Cargo.lock 有一個 [[package]] 讀不出 name 或 version：${block.trim()}`);
     }
-    crates.push({ name, version });
+    const checksum = /^checksum = "([0-9a-f]{64})"$/mu.exec(block)?.[1];
+    crates.push({ name, version, ...(checksum === undefined ? {} : { checksum }) });
   }
   return crates;
+}
+
+/** 連進執行檔的 crate（{@link SPAWNER_CRATES} 標了 `runtime` 的），版本與 checksum 取自 `Cargo.lock`。 */
+export function runtimeCrates(lockText: string): (LockedCrate & { license: string })[] {
+  const runtime = new Map(
+    SPAWNER_CRATES.filter((entry) => entry.runtime).map((entry) => [entry.name, entry.license]),
+  );
+  return lockedCrates(lockText).flatMap((entry) => {
+    const license = runtime.get(entry.name);
+    return license === undefined ? [] : [{ ...entry, license }];
+  });
+}
+
+/**
+ * 產物（或 bundle）裡附了授權全文的 crate：{@link SPAWNER_LICENSES_DIR} 底下每個 `<名>-<版本>/`。跟 {@link runtimeCrates}
+ * 是兩種獨立的列法：這一份來自 CI 的 `cargo tree`，那一份來自 {@link SPAWNER_CRATES} 與 `Cargo.lock`。
+ *
+ * @param root - 產物根。
+ * @returns 依名字排序；目錄名拆不出版本的回 `version: ''`，讓核對報出來。
+ */
+export function bundledCrates(root: string): { name: string; version: string }[] {
+  const dir = join(root, SPAWNER_LICENSES_DIR);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((entry) => entry !== 'rust-std')
+    .sort()
+    .map((entry) => {
+      const match = /^(.+)-(\d+\.\d+\.\d+\S*)$/u.exec(entry);
+      return match === null
+        ? { name: entry, version: '' }
+        : { name: match[1] ?? entry, version: match[2] ?? '' };
+    });
+}
+
+/** 標準函式庫的版本：`rust-toolchain.toml` 釘住的 channel。 */
+export function rustChannel(
+  text: string = readFileSync(join(ROOT, 'native/sandbox-spawner/rust-toolchain.toml'), 'utf8'),
+): string {
+  const channel = /^channel = "([^"]+)"$/mu.exec(text)?.[1];
+  if (channel === undefined)
+    throw new Error('native/sandbox-spawner/rust-toolchain.toml 讀不出 channel');
+  return channel;
 }
 
 /**
@@ -148,13 +198,13 @@ export function spawnerCrateProblems(lockText: string): string[] {
   ];
 }
 
-/** 連進執行檔的 crate 在 bundle 裡的授權目錄名（`<名>-<版本>`），版本取自 `Cargo.lock`。 */
+/**
+ * 連進執行檔的 crate 在 bundle 裡的授權目錄名（`<名>-<版本>`），版本取自 `Cargo.lock`。
+ *
+ * @param lockText - `Cargo.lock` 全文。
+ */
 export function runtimeLicenseDirs(lockText: string): string[] {
-  const runtime = new Set(
-    SPAWNER_CRATES.filter((entry) => entry.runtime).map((entry) => entry.name),
-  );
-  return lockedCrates(lockText)
-    .filter((entry) => runtime.has(entry.name))
+  return runtimeCrates(lockText)
     .map((entry) => `${entry.name}-${entry.version}`)
     .sort();
 }
@@ -170,7 +220,8 @@ export const GLIBC_FLOOR = [2, 28] as const;
 const PT_INTERP = 3;
 
 /**
- * 對執行檔本身的檢查：64 位元小端的 ELF、可執行或 PIE、架構對、靜態連結或用到的 glibc 符號版本不超過 {@link GLIBC_FLOOR}。
+ * 對執行檔本身的檢查：64 位元小端的 ELF、可執行或 PIE、架構對；動態連結時，檔內出現的 `GLIBC_x.y` 字串（涵蓋符號版本需求）
+ * 都不能超過 {@link GLIBC_FLOOR}。是整檔掃字串，不解析 `.gnu.version_r`：只會多報、不會漏報。
  *
  * @param bytes - 執行檔內容。
  * @param arch - 目標的 `process.arch`。

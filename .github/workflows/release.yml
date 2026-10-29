@@ -19,10 +19,24 @@ permissions:
   contents: write
 
 jobs:
+  # 第一道防線：workflow_dispatch 選到 main 以外的分支就直接停，其他 job 都等它。
+  # 這讓「main 是唯一發佈途徑」成為機制保證，而不是靠約定。
+  branch:
+    name: branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: 確認執行分支為 main
+        run: |
+          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
+            echo "::error::Release 只能在 main 上執行，目前為 ${{ github.ref }}。"
+            exit 1
+          fi
+
   # 沙箱 spawner（#1946）：x64 編、測、打 bundle 給下面打包；arm64 只編與測，不進包、不掛 Release（#1946 issuecomment-6508052433）。
   # 跟 ci.yml 同一個 action，各在自己架構的 runner 上原生編。
   sandbox-spawner:
     name: sandbox-spawner
+    needs: branch
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -33,6 +47,7 @@ jobs:
 
   sandbox-spawner-arm64:
     name: sandbox-spawner-arm64
+    needs: branch
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 30
     steps:
@@ -41,18 +56,9 @@ jobs:
 
   release:
     name: release
-    needs: [sandbox-spawner, sandbox-spawner-arm64]
+    needs: [branch, sandbox-spawner, sandbox-spawner-arm64]
     runs-on: ubuntu-latest
     steps:
-      # 第一道防線：workflow_dispatch 選到 main 以外的分支就直接停。
-      # 這讓「main 是唯一發佈途徑」成為機制保證，而不是靠約定。
-      - name: 確認執行分支為 main
-        run: |
-          if [ "${{ github.ref }}" != "refs/heads/main" ]; then
-            echo "::error::Release 只能在 main 上執行，目前為 ${{ github.ref }}。"
-            exit 1
-          fi
-
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -71,7 +77,7 @@ jobs:
             exit 1
           fi
 
-      # 以下與 ci.yml 的 packed-install 同一套（#1502 刀 2＋3）：Node 鎖在 engines 的下限，產物不帶 node。
+      # 以下三步（pnpm、Node、相依）與 ci.yml 的 packed-install 同一套（#1502 刀 2＋3）：Node 鎖在 engines 的下限，產物不帶 node。
       - uses: pnpm/action-setup@v6
       - uses: actions/setup-node@v7
         with:

@@ -427,7 +427,12 @@ class SandboxSpawner(unittest.TestCase):
 
     def test_release_packs_the_x64_bundle_and_only_builds_arm64(self) -> None:
         jobs = load(CI.with_name('release.yml'))['jobs']
-        self.assertEqual(jobs['release']['needs'], ['sandbox-spawner', 'sandbox-spawner-arm64'])
+        self.assertEqual(jobs['release']['needs'], ['branch', 'sandbox-spawner', 'sandbox-spawner-arm64'])
+        # 選錯分支時，spawner 的建置不先跑：兩個都等分支檢查。
+        self.assertEqual(jobs['sandbox-spawner']['needs'], 'branch')
+        self.assertEqual(jobs['sandbox-spawner-arm64']['needs'], 'branch')
+        check = next(s for s in jobs['branch']['steps'] if s.get('name') == '確認執行分支為 main')
+        self.assertIn('"refs/heads/main"', check['run'])
         x64 = next(s for s in jobs['sandbox-spawner']['steps'] if s.get('uses') == './.github/actions/sandbox-spawner')
         self.assertEqual(x64['with']['bundle'], 'sandbox-spawner-linux-x64')
         self.assertEqual(jobs['sandbox-spawner-arm64']['runs-on'], 'ubuntu-24.04-arm')

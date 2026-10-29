@@ -86,11 +86,32 @@ function run(command: string, args: readonly string[], cwd: string = ROOT, timeo
 }
 
 /**
+ * `--spawner` 給得對不對：Linux 的產物一定要帶沙箱 spawner，其他平台不收。
+ *
+ * @param platform - 目標的 `process.platform`。
+ * @param spawner - `--spawner` 的值。
+ * @returns 不對時的訊息；對就是 `undefined`。
+ */
+export function spawnerOptionProblem(
+  platform: string,
+  spawner: string | undefined,
+): string | undefined {
+  if (platform === 'linux' && spawner === undefined) {
+    return 'Linux 的產物要帶沙箱 spawner：用 --spawner 給 CI 打好的 bundle 目錄';
+  }
+  if (platform !== 'linux' && spawner !== undefined) {
+    return `沙箱 spawner 只在 Linux 上跑，${platform} 的產物不收 --spawner`;
+  }
+  return undefined;
+}
+
+/**
  * 打包。
  *
  * @param options - `out` 產物目錄、`skipBuild` 跳過 build、`commit` 寫進戳記的 commit（省略即 `git rev-parse HEAD`）、
  *   `spawner` 沙箱 spawner 的 bundle 目錄（Linux 必給，其他平台不收）。
  * @returns tarball、SBOM 與兩份 `.sha256` 的路徑、版本、平台。
+ * @throws Linux 上沒給 `spawner`，或非 Linux 給了 `spawner`。
  */
 export function pack(options: {
   out: string;
@@ -107,12 +128,8 @@ export function pack(options: {
   const platform = `${process.platform}-${process.arch}`;
   const version = sharedVersion(releaseMembers());
   const name = productName(version, platform);
-  if (process.platform === 'linux' && options.spawner === undefined) {
-    throw new Error('Linux 的產物要帶沙箱 spawner：用 --spawner 給 CI 打好的 bundle 目錄');
-  }
-  if (process.platform !== 'linux' && options.spawner !== undefined) {
-    throw new Error(`沙箱 spawner 只在 Linux 上跑，${platform} 的產物不收 --spawner`);
-  }
+  const spawnerProblem = spawnerOptionProblem(process.platform, options.spawner);
+  if (spawnerProblem !== undefined) throw new Error(spawnerProblem);
   const commit =
     options.commit ??
     execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();

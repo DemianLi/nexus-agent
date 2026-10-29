@@ -44,6 +44,7 @@ import {
   SPAWNER_LOCK,
   SPAWNER_PATH,
   lockedCrates,
+  rustChannel,
   spawnerCrateProblems,
 } from './release/spawner.js';
 import { ROOT } from './workspace-packages.js';
@@ -596,21 +597,15 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [\`licenses/LGPL
 /**
  * 沙箱 spawner 那一段：`Cargo.lock` 的每一個外部 crate，加上標準函式庫（版本取自 `rust-toolchain.toml`）。
  *
- * @throws `SPAWNER_CRATES` 跟 `Cargo.lock` 對不上，或連進執行檔的 crate 不是寬鬆授權。
+ * @throws `SPAWNER_CRATES` 跟 `Cargo.lock` 對不上、連進執行檔的 crate 不是寬鬆授權、`Cargo.lock` 有讀不出 name 或 version 的
+ *   `[[package]]`，或 `rust-toolchain.toml` 讀不出 channel。
  */
 function renderSpawnerCrates(): string {
   const lock = readFileSync(join(ROOT, SPAWNER_LOCK), 'utf8');
   const problems = spawnerCrateProblems(lock);
   if (problems.length > 0) throw new Error(`gen-third-party-notices：${problems.join('\n')}`);
   assertRuntimeLicenses(SPAWNER_CRATES.filter((entry) => entry.runtime));
-  const channel = /^channel = "([^"]+)"$/mu.exec(
-    readFileSync(join(ROOT, 'native/sandbox-spawner/rust-toolchain.toml'), 'utf8'),
-  )?.[1];
-  if (channel === undefined) {
-    throw new Error(
-      'gen-third-party-notices：native/sandbox-spawner/rust-toolchain.toml 讀不出 channel。',
-    );
-  }
+  const channel = rustChannel();
   const versions = new Map<string, string[]>();
   for (const entry of lockedCrates(lock)) {
     versions.set(entry.name, [...(versions.get(entry.name) ?? []), entry.version]);

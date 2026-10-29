@@ -28,7 +28,12 @@ import {
   replaceManifestVersion,
 } from '../../../scripts/release/bump.js';
 import { releaseMembers, sharedVersion } from '../../../scripts/release/members.js';
-import { fileSha256, productName, sha256Line } from '../../../scripts/release/pack.js';
+import {
+  fileSha256,
+  productName,
+  sha256Line,
+  spawnerOptionProblem,
+} from '../../../scripts/release/pack.js';
 import {
   BUNDLED_LICENSE_TEXTS,
   SBOM_FILE,
@@ -234,7 +239,8 @@ const FONT_LICENSES = ['Geist-OFL.txt', 'GeistMono-OFL.txt', 'NotoSansTC-OFL.txt
  * 最小的 64 位元小端 ELF：檔頭加上一個 program header。
  *
  * @param machine - `e_machine`（x64 是 62、arm64 是 183）。
- * @param options - `interp` 帶一個 PT_INTERP（動態連結），`tail` 接在後面的位元組（放 glibc 符號版本字串）。
+ * @param options - `interp` 帶一個 PT_INTERP（動態連結），`tail` 接在後面的位元組（放 glibc 符號版本字串），
+ *   `type` 是 `e_type`（預設 3，PIE）。
  */
 function elf(
   machine: number,
@@ -530,6 +536,13 @@ describe('產物樹的內容檢查', () => {
 });
 
 describe('沙箱 spawner 的執行檔', () => {
+  it('Linux 的產物一定要給 --spawner，其他平台給了就停', () => {
+    expect(spawnerOptionProblem('linux', '/b')).toBeUndefined();
+    expect(spawnerOptionProblem('darwin', undefined)).toBeUndefined();
+    expect(spawnerOptionProblem('linux', undefined)).toMatch(/Linux 的產物要帶沙箱 spawner/u);
+    expect(spawnerOptionProblem('darwin', '/b')).toMatch(/darwin 的產物不收 --spawner/u);
+  });
+
   it('靜態連結、架構對就通過；PIE 與傳統的可執行型別都收', () => {
     expect(elfProblems(elf(62), 'x64')).toEqual([]);
     expect(elfProblems(elf(183), 'arm64')).toEqual([]);
@@ -558,7 +571,7 @@ describe('沙箱 spawner 的執行檔', () => {
       'x64',
       /不是 64 位元小端/u,
     ],
-    ['共享物件以外的型別', elf(62, { type: 1 }), 'x64', /ELF 型別是 1/u],
+    ['可重定位檔（ET_REL）', elf(62, { type: 1 }), 'x64', /ELF 型別是 1/u],
     ['不認得的目標架構', elf(62), 'riscv64', /不認得目標架構 riscv64/u],
   ])('壞的要報：%s', (_label, bytes, arch, pattern) => {
     expect(elfProblems(bytes, arch).join('\n')).toMatch(pattern);
@@ -1010,6 +1023,190 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
 
     rmSync(join(root, SBOM_FILE));
     expect(sbomProblems(root)).toEqual([`缺 ${SBOM_FILE}`]);
+  });
+
+  describe('沙箱 spawner 的元件（#1946）', () => {
+    const libcSum = 'a'.repeat(64);
+    const cargoLock = [
+      'version = 4',
+      '',
+      '[[package]]',
+      'name = "libc"',
+      'version = "0.2.191"',
+      'source = "registry+https://github.com/rust-lang/crates.io-index"',
+      `checksum = "${libcSum}"`,
+      '',
+      '[[package]]',
+      'name = "nexus-sandbox-spawner"',
+      'version = "0.0.0"',
+      '',
+      '[[package]]',
+      'name = "syn"',
+      'version = "2.0.1"',
+      `checksum = "${'b'.repeat(64)}"`,
+      '',
+    ].join('\n');
+    const options = { firstPartyLicense: 'MIT', spawnerLock: cargoLock, rustChannel: '1.98.1' };
+    const binary = (): string => join(root, SPAWNER_PATH);
+    const sha256 = (path: string): string =>
+      createHash('sha256').update(readFileSync(path)).digest('hex');
+
+    beforeEach(() => {
+      mkdirSync(dirname(binary()), { recursive: true });
+      writeFileSync(binary(), elf(62));
+      mkdirSync(join(root, SPAWNER_LICENSES_DIR, 'libc-0.2.191'), { recursive: true });
+      writeFileSync(join(root, SPAWNER_LICENSES_DIR, 'libc-0.2.191/LICENSE-MIT'), 'MIT');
+      mkdirSync(dirname(join(root, RUST_STD_COPYRIGHT)), { recursive: true });
+      writeFileSync(join(root, RUST_STD_COPYRIGHT), '<html></html>');
+    });
+
+    const write = (bom: ReturnType<typeof buildSbom>): void =>
+      writeFileSync(join(root, SBOM_FILE), renderSbom(bom));
+    const without = (bom: ReturnType<typeof buildSbom>, purl: string) => ({
+      ...bom,
+      components: bom.components.filter((entry) => entry.purl !== purl),
+    });
+
+    it('列執行檔（雜湊是執行檔的 SHA-256）、標準函式庫、連進去的 crate（雜湊是 Cargo.lock 的 checksum）；只在編譯期用的不列', () => {
+      const bom = buildSbom(root, options);
+      const byPurl = new Map(bom.components.map((entry) => [entry.purl, entry]));
+      expect(byPurl.get('pkg:generic/nexus-sandbox-spawner@0.0.0')).toMatchObject({
+        type: 'application',
+        licenses: [{ license: { id: 'MIT' } }],
+        hashes: [{ alg: 'SHA-256', content: sha256(binary()) }],
+      });
+      expect(byPurl.get('pkg:generic/rust-std@1.98.1')).toMatchObject({
+        licenses: [{ expression: 'MIT OR Apache-2.0' }],
+      });
+      expect(byPurl.get('pkg:cargo/libc@0.2.191')).toMatchObject({
+        type: 'library',
+        name: 'libc',
+        licenses: [{ expression: 'MIT OR Apache-2.0' }],
+        hashes: [{ alg: 'SHA-256', content: libcSum }],
+      });
+      expect([...byPurl.keys()].filter((purl) => !purl.startsWith('pkg:npm/'))).toEqual([
+        'pkg:cargo/libc@0.2.191',
+        'pkg:generic/nexus-sandbox-spawner@0.0.0',
+        'pkg:generic/rust-std@1.98.1',
+      ]);
+    });
+
+    it('沒有執行檔的產物不列 spawner 那一側', () => {
+      rmSync(binary());
+      expect(buildSbom(root, options).components.map((entry) => entry.purl)).toEqual([
+        'pkg:npm/%40nexus/core@0.0.0',
+        'pkg:npm/a@1.0.0',
+        'pkg:npm/native-linux@2.0.0',
+      ]);
+    });
+
+    it('連進去的 crate 在 Cargo.lock 沒有 checksum：拋錯', () => {
+      expect(() =>
+        buildSbom(root, { ...options, spawnerLock: cargoLock.replace(/^checksum = .*$/mu, '') }),
+      ).toThrow(/pkg:cargo\/libc@0\.2\.191 在 .* 裡沒有 checksum/u);
+    });
+
+    it('SBOM 與產物相同不報；npm 那一側不把 cargo 元件當成閉包外的', () => {
+      write(buildSbom(root, options));
+      expect(sbomProblems(root)).toEqual([]);
+    });
+
+    it.each<
+      [
+        string,
+        (bom: ReturnType<typeof buildSbom>) => ReturnType<typeof buildSbom>,
+        () => void,
+        string[],
+      ]
+    >([
+      [
+        'SBOM 漏了 crate',
+        (bom) => without(bom, 'pkg:cargo/libc@0.2.191'),
+        () => {},
+        ['SBOM 漏了產物裡的 pkg:cargo/libc@0.2.191'],
+      ],
+      [
+        '產物多附了一個 crate 的授權（cargo tree 收到、表上沒標）',
+        (bom) => bom,
+        () => mkdirSync(join(root, SPAWNER_LICENSES_DIR, 'syn-2.0.1')),
+        ['SBOM 漏了產物裡的 pkg:cargo/syn@2.0.1'],
+      ],
+      [
+        'SBOM 漏了標準函式庫',
+        (bom) => without(bom, 'pkg:generic/rust-std@1.98.1'),
+        () => {},
+        ['SBOM 漏了產物裡的 pkg:generic/rust-std'],
+      ],
+      [
+        'SBOM 漏了執行檔',
+        (bom) => without(bom, 'pkg:generic/nexus-sandbox-spawner@0.0.0'),
+        () => {},
+        ['SBOM 漏了產物裡的 pkg:generic/nexus-sandbox-spawner'],
+      ],
+      [
+        '產物裡沒有執行檔，SBOM 卻列了',
+        (bom) => bom,
+        () => rmSync(binary()),
+        ['SBOM 列了產物裡沒有的 pkg:generic/nexus-sandbox-spawner'],
+      ],
+      [
+        '執行檔被換過',
+        (bom) => bom,
+        () => writeFileSync(binary(), elf(62, { tail: 'x' })),
+        [`SBOM 記的 ${SPAWNER_PATH} 的 SHA-256 跟產物裡的執行檔對不上`],
+      ],
+      [
+        '認不得的 purl',
+        (bom) => ({
+          ...bom,
+          components: [...bom.components, { ...bom.components[0]!, purl: 'pkg:pypi/x@1' }],
+        }),
+        () => {},
+        ['SBOM 有認不得的 purl：pkg:pypi/x@1'],
+      ],
+    ])('壞的要報：%s', (_label, edit, damage, expected) => {
+      write(edit(buildSbom(root, options)));
+      damage();
+      expect(sbomProblems(root)).toEqual(expected);
+    });
+
+    it('docs/operations.md〈核對安裝內容〉第 4 步認得 spawner 那一側：一致；漏一個 crate 就列出來', () => {
+      const block = /<!-- verify-install:start -->([\s\S]*?)<!-- verify-install:end -->/u.exec(
+        readFileSync(join(ROOT, 'docs/operations.md'), 'utf8'),
+      )?.[1];
+      const script = /^# 4\.[^\n]*\nnode -e '([^']*)'/mu.exec(block ?? '')?.[1];
+      if (script === undefined) throw new Error('文件裡找不到第 4 步的 node -e');
+      const run = () =>
+        spawnSync(process.execPath, ['-e', script], { cwd: root, encoding: 'utf8' });
+      const bom = buildSbom(root, options);
+      write(bom);
+      expect([run().status, run().stdout.trim()]).toEqual([0, '一致：7 顆']);
+      write(without(bom, 'pkg:cargo/libc@0.2.191'));
+      expect([run().status, run().stdout.trim()]).toEqual([
+        1,
+        'SBOM 漏了：libc@0.2.191\nSBOM 多了：',
+      ]);
+    });
+
+    it('審過的例外只對 npm 元件放行；cargo 元件不是寬鬆授權就報，用 purl 指名', () => {
+      const entry = (purl: string | undefined) => ({
+        group: '@img',
+        name: 'sharp-libvips-linux-x64',
+        version: '1.0.0',
+        ...(purl === undefined ? {} : { purl }),
+        licenses: [{ expression: 'LGPL-3.0-or-later' }],
+      });
+      expect(
+        licenseProblems({ components: [entry('pkg:npm/%40img/sharp-libvips-linux-x64@1.0.0')] }),
+      ).toEqual([]);
+      expect(licenseProblems({ components: [entry(undefined)] })).toEqual([]);
+      expect(
+        licenseProblems({ components: [entry('pkg:cargo/sharp-libvips-linux-x64@1.0.0')] }),
+      ).toEqual([
+        '產物裡的 pkg:cargo/sharp-libvips-linux-x64@1.0.0 授權是 LGPL-3.0-or-later，不是寬鬆授權',
+      ]);
+      expect(licenseProblems(buildSbom(root, options))).toEqual([]);
+    });
   });
 
   it('第三方在閉包 lockfile 裡查不到 integrity：拋錯，不靜靜省略', () => {

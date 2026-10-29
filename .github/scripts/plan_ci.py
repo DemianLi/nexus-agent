@@ -67,8 +67,8 @@ def read_changed(path: str = 'changed.txt') -> list[str]:
 FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 
 
-# 沙箱 spawner 的 Rust（#1946）：只有動到它或 CI 自己時編，合併後完整一輪一律編（D55）。跟模式無關，輕的模式也編。
-# packed-install 要跑的一輪也編：包裡的 spawner 是 sandbox-spawner 那個 job 編的（develop → main 的 PR 走這一條）。
+# 沙箱 spawner 的 Rust（#1946）在三種情況編：動到它或 CI 自己、packed-install 要跑的一輪（包裡的 spawner 是 sandbox-spawner
+# 那個 job 編的，develop → main 的 PR 走這一條）、合併後完整一輪（#1827 D55）。跟模式無關，輕的模式也編。
 RUST_RE = re.compile(r'^native/sandbox-spawner/')
 
 
