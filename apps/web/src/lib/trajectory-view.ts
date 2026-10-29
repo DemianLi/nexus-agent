@@ -346,9 +346,9 @@ export function approvalText(approval: TrajectoryApproval, raisedAt: number): st
 }
 
 /**
- * 核准被拒時，那一次工具呼叫帶的錯誤碼（`tool/result.error.code`，`TrajectoryTool.code`）。`error.name` 都是 `ApprovalDenied`，
- * 與工具自己失敗分得開。不必問人就確定的（政策、沒有管道、攔截器）軌跡上沒有中斷列，結局只在這裡；問過人的（人拒絕、回覆看不懂）
- * 另有中斷列寫結局，這裡說的是為什麼沒有執行。其他的碼不在這裡（原樣不顯示）。
+ * 核准被拒時，那一次工具呼叫帶的錯誤碼（`tool/result.error.code`，`TrajectoryTool.code`）。四個 `APPROVAL_*` 的 `error.name` 是
+ * `ApprovalDenied`，攔截器的是 `PreExecuteDenied`，都與工具自己失敗分得開。不必問人就確定的（政策、沒有管道、攔截器）軌跡上沒有
+ * 中斷列，結局只在這裡；問過人的（人拒絕、回覆看不懂）另有中斷列寫結局，這裡說的是為什麼沒有執行。其他的碼只顯示碼本身，不加說法。
  */
 export const APPROVAL_CODE_LABEL: Readonly<Record<string, string>> = {
   APPROVAL_POLICY_NEVER: '核准政策一律不允許',
