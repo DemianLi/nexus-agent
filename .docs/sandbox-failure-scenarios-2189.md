@@ -21,7 +21,7 @@
 - 同一支 `pack()`，spawner 是 arm64 musl 版。
 - Mac 的 pnpm store 沒有 linux-arm64 原生套件，這些套件從本機映像 `nexus-demo:b3b55324` 接過來，版本相同。例外是 rollup：用 4.62.5 頂 lockfile 的 4.66.0，只用在建置，不進產物。
 - 因為 pnpm 離線補不了，原生套件先接進 node_modules，再由 deploy 帶進產物。
-- `verify-packed-install` 走到 spawner 驗證（`git --version` 經 spawner 成功，ABI 6）之後，紅在映像沒有 `ps`，後面的步驟沒驗到。
+- `verify-packed-install` 全部通過（exit 0），含 spawner 驗證（`git --version` 經 spawner 成功，ABI 6）。映像沒有 `ps`，這次用讀 `/proc` 的替身（`ps-shim.sh`）；沒有替身時只有「查殘留的 pnpm／tsx 行程」這一條紅，真的 `ps` 沒驗到。
 
 ## 軟連結
 
@@ -104,20 +104,20 @@
 
 ## 缺口
 
-有去向之前都列在這裡，卡號由 PM 排。
+卡都標 backlog，不掛 parent。
 
-1. **根內相對連結讀不到，訊息也看不出原因。** `read_file` 回 `ELOOP`，`grep`、`glob` 靜靜略過。部署方的工作區若有根內連結，使用者只會看到工具失敗或搜不到。
-2. **卡死的 stdio MCP 不會被重啟。** `spin` 之後 server 一直佔滿一顆 CPU，同 server 每次呼叫都等滿 60 秒，只有重啟 serve 才恢復。
-3. **磁碟滿的錯誤是原始字串。** 使用者看到英文 `ENOSPC`，沒有說是哪裡滿、該找誰。`/readyz` 一直回 200，探針看不出來。
-4. **收尾失敗退出碼仍是 0。** 磁碟滿時會話日誌沒寫完，serve 以 0 結束，監控看不出有資料沒落盤。
-5. **未宣告的 MCP 若不理 stdin 結束，`kill -9` 後會留下孤兒，重啟再多一支。** 已知 `SIGKILL` 時 exit listener 不跑，這裡量到會隨重啟累積。宣告沙箱的不會。
-6. **`kill -9` 留下的 `.tmpdir` 沒有人清。** 重啟不掃，`glob` 列得到，也佔私有根的空間。
+1. [#2193](https://github.com/DemianLi/nexus-agent/issues/2193) **根內相對連結讀不到，訊息也看不出原因。** `read_file` 回 `ELOOP`，`grep`、`glob` 靜靜略過。部署方的工作區若有根內連結，使用者只會看到工具失敗或搜不到。
+2. [#2194](https://github.com/DemianLi/nexus-agent/issues/2194) **卡死的 stdio MCP 不會被重啟。** `spin` 之後 server 一直佔滿一顆 CPU，同 server 每次呼叫都等滿 60 秒，只有重啟 serve 才恢復。
+3. [#2195](https://github.com/DemianLi/nexus-agent/issues/2195) **磁碟滿的錯誤是原始字串。** 使用者看到英文 `ENOSPC`，沒有說是哪裡滿、該找誰。`/readyz` 一直回 200，探針看不出來。
+4. [#2196](https://github.com/DemianLi/nexus-agent/issues/2196) **收尾失敗退出碼仍是 0。** 磁碟滿時會話日誌沒寫完，serve 以 0 結束，監控看不出有資料沒落盤。
+5. [#2197](https://github.com/DemianLi/nexus-agent/issues/2197) **未宣告的 MCP 若不理 stdin 結束，`kill -9` 後會留下孤兒，重啟再多一支。** 已知 `SIGKILL` 時 exit listener 不跑，這裡量到會隨重啟累積。宣告沙箱的不會。
+6. [#2198](https://github.com/DemianLi/nexus-agent/issues/2198) **`kill -9` 留下的 `.tmpdir` 沒有人清。** 重啟不掃，`glob` 列得到，也佔私有根的空間。
 
 另有一項發現已走非公開管道。
 
 ## 環境差異
 
-Docker Desktop 的 bind mount 當 `--workspace` 時，`rg` 經 spawner 回 `Permission denied`（`.`），改用 tmpfs 就正常。這次沒查根因，也沒有在真 Linux 主機上驗。部署方若用網路或虛擬檔案系統掛工作區，上線前要先跑一次 `grep`。
+Docker Desktop 的 bind mount 當 `--workspace` 時，`rg` 經 spawner 回 `Permission denied`（`.`），改用 tmpfs 就正常。根因未知，目前只在 Docker Desktop 看到，還沒有在真 Linux 主機上驗，追蹤在 [#2199](https://github.com/DemianLi/nexus-agent/issues/2199)。容器部署常 bind mount 工作區，查清楚之前，部署方上線前要先跑一次 `grep`。
 
 ## 轉成整合測試
 
@@ -151,5 +151,6 @@ docker run --rm --pull=never -u 10001 --security-opt seccomp=unconfined --networ
 | `s4.mjs` | 寫滿磁碟，分開掛 | tmpfs：`/small`、`/small/h`、`/small/h/thread-roots`、`/small/t`，都要 `mode=0700` |
 | `s4d.mjs` | 寫滿磁碟，出廠佈局 | tmpfs：`/small`、`/small/h` |
 | `s5.mjs`、`s5b.mjs`、`s5c.mjs` | 崩潰後清理 | `s5b` 要把一個 400MB 的文字檔掛到 `/big/huge.txt`，`--tmpfs` 調大到 1800m |
+| `s6.mjs` | bind mount 工作區（#2199） | 把一個目錄掛到 `/big` |
 
 **讀結果要注意：** 工具結果是空的就不算數。假模型的回覆 `id` 要唯一；搜尋字串不能等於機密，否則「No matches」的回顯會被當成洩漏。
