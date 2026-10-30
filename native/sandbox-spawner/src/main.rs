@@ -2,7 +2,10 @@
 //!
 //! ```text
 //! nexus-sandbox-spawner --listen <socket 路徑>
+//! nexus-sandbox-spawner --exec [--read <路徑>]... [--write <路徑>]... -- <程式> [參數]...
 //! ```
+//!
+//! `--exec` 是單次模式（見 `exec_confined`），不常駐，下面的啟動順序只管 `--listen`。
 //!
 //! **嚴格單執行緒**：子行程在 fork 之後才配置記憶體（`child.rs`），只有單執行緒才安全。不要在這裡起任何 thread。
 //!
@@ -35,7 +38,8 @@ use nexus_sandbox_spawner::landlock;
 use nexus_sandbox_spawner::protocol::{self, Event, FailKind, Mode, Request, Spawn};
 use nexus_sandbox_spawner::seccomp;
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CString, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::time::{Duration, Instant};
 
 /// 要求到了之後，最多等多久它要的 stdio 連線到齊；連線的標頭也是這個期限。
@@ -590,7 +594,69 @@ impl Spawner {
     }
 }
 
+/// 單次模式解出來的東西。
+struct ExecRequest {
+    readable: Vec<Vec<u8>>,
+    writable: Vec<Vec<u8>>,
+    argv: Vec<CString>,
+}
+
+/// `--exec [--read <路徑>]... [--write <路徑>]... -- <程式> [參數]...`。
+fn parse_exec(args: &[OsString]) -> Result<ExecRequest, String> {
+    let (mut readable, mut writable) = (Vec::new(), Vec::new());
+    let mut rest = args.iter();
+    loop {
+        let flag = rest.next().ok_or("少了 --")?;
+        let target = match flag.to_str() {
+            Some("--") => break,
+            Some("--read") => &mut readable,
+            Some("--write") => &mut writable,
+            _ => return Err(format!("不認得 {}", flag.to_string_lossy())),
+        };
+        target.push(rest.next().ok_or("旗標後面少了路徑")?.as_bytes().to_vec());
+    }
+    let argv = rest.map(|arg| CString::new(arg.as_bytes())).collect::<Result<Vec<_>, _>>().map_err(|_| "參數含 NUL")?;
+    if argv.is_empty() {
+        return Err("少了程式".to_string());
+    }
+    Ok(ExecRequest { readable, writable, argv })
+}
+
+/// 單次模式：替這個行程自己上沙箱再 exec，給一條連線只起一次、stdio 由呼叫端接好的行程用。
+/// 過濾器與 Landlock 跟常駐模式走同一份程式；裝不上就結束，不跑。
+fn exec_confined(args: &[OsString]) -> ! {
+    let die = |detail: String| -> ! {
+        eprintln!("nexus-sandbox-spawner: {detail}");
+        std::process::exit(125);
+    };
+    let request = parse_exec(args).unwrap_or_else(|e| die(e));
+    let abi = landlock::effective_abi(landlock::kernel_abi(), test_abi_cap());
+    if abi < 1 {
+        die("這台主機沒有 Landlock".to_string());
+    }
+    if let Err(e) = seccomp::install() {
+        die(format!("seccomp：{e}"));
+    }
+    if let Err(e) = self_check() {
+        die(e);
+    }
+    if let Err(e) = landlock::restrict_self(abi, &request.readable, &request.writable) {
+        die(format!("landlock：{e}"));
+    }
+    let mut argv: Vec<*const libc::c_char> = request.argv.iter().map(|arg| arg.as_ptr()).collect();
+    argv.push(std::ptr::null());
+    // SAFETY：argv 以 NULL 結尾，指到的 CString 活到 exec。
+    unsafe { libc::execv(argv[0], argv.as_ptr()) };
+    let err = std::io::Error::last_os_error();
+    eprintln!("nexus-sandbox-spawner: exec：{err}");
+    std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) { 127 } else { 126 });
+}
+
 fn main() {
+    let raw: Vec<OsString> = std::env::args_os().collect();
+    if raw.get(1).is_some_and(|arg| arg == "--exec") {
+        exec_confined(&raw[2..]);
+    }
     let args: Vec<String> = std::env::args().collect();
     let Some(path) = args.iter().position(|a| a == "--listen").and_then(|i| args.get(i + 1)).cloned() else {
         eprintln!("usage: nexus-sandbox-spawner --listen <socket path>");

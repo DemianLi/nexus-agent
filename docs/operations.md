@@ -138,6 +138,25 @@ seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽�
 - `.git/config` 的 `include.path` 指到讀不到的檔時 git 直接結束（`fatal: unable to access`），這個 repo 沒有改動卡。
 - **沙箱不可用時改動卡不會出現**，不是出現一張不完整的。那一輪什麼都不記，日誌只講一句，下一輪再試，spawner 恢復就恢復。常駐不可用的主機上改動卡一直不出現，要看起動那一行。
 
+**MCP stdio server 可以宣告要套沙箱（#1946）。** 不宣告就照舊由 serve 直接起，不套沙箱。在 `connection` 加 `sandbox` 鍵就套，`{}` 也算：
+
+```yaml
+connection:
+  transport: stdio
+  command: node
+  args: [/opt/mcp/server.js]
+  sandbox:
+    readable: [/opt/mcp]
+    writable: [/var/lib/mcp-data]
+```
+
+- server 讀得到系統的目錄與檔、`command`、`cwd` 與 `readable`，寫得進 `writable`，其他讀寫都被擋。**連不到網路**：seccomp 擋 `AF_INET`、`AF_INET6`、`AF_UNIX`，要連外的 server 不能宣告。
+- server 自己的程式碼、依賴、直譯器要列進 `readable`，不在系統目錄底下的都一樣。
+- 路徑先 realpath 再判斷。包住 `$HOME` 或 serve 的 home 的路徑、落在 serve 的 home 底下的路徑、不存在的路徑都拒絕，這條 server 不連線。
+- 不看會話模式，`danger-full-access` 也照套。
+- 沙箱不可用（沒有 Landlock、不是 Linux、找不到 spawner）時這條 server **不連線**，日誌講一句，不退回直接起。
+- `--patch` 檔放在工作區裡時，模型改得到它，這個宣告就擋不住，見 [#2162](https://github.com/DemianLi/nexus-agent/issues/2162)。
+
 **本機開發。** Mac 沒有沙箱後端，兩條路：
 
 - 在 Linux 容器裡起 serve；

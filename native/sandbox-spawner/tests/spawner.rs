@@ -720,3 +720,110 @@ fn a_request_still_waiting_for_stdio_fails_when_the_spawner_stops() {
     assert!(matches!(s.event_for(1), Event::Failed { id: 1, kind: FailKind::Resource, .. }));
     assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0));
 }
+
+/// 單次模式起探針。結果是印出來的那一行與結束碼。
+fn exec_probe(envs: &[(&str, &str)], ws: &Path, args: &[&str]) -> (String, Option<i32>) {
+    let mut cmd = Command::new(SPAWNER);
+    cmd.arg("--exec");
+    for root in readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    cmd.arg("--write").arg(ws).arg("--").arg(probe()).args(args);
+    cmd.envs(envs.iter().copied()).current_dir(ws).stderr(Stdio::null());
+    let out = cmd.output().unwrap();
+    (String::from_utf8_lossy(&out.stdout).trim().to_string(), out.status.code())
+}
+
+#[test]
+fn exec_mode_enforces_the_same_rules_as_the_daemon() {
+    let Some(mut s) = start() else { return };
+    let ws = temp_dir("ws");
+    let outside = temp_dir("outside");
+    let token = outside.join("token");
+    std::fs::write(&token, "secret").unwrap();
+    let (inside, out) = (ws.join("f"), token.to_str().unwrap());
+    let inside = inside.to_str().unwrap();
+    std::fs::write(inside, "x").unwrap();
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["tcp"],
+        vec!["udp"],
+        vec!["unix"],
+        vec!["socketpair"],
+        vec!["vsock"],
+        vec!["uring"],
+        vec!["unshare"],
+        vec!["setns"],
+        vec!["clone-newuser"],
+        vec!["clone3"],
+        vec!["read", out],
+        vec!["write", out],
+        vec!["read", inside],
+        vec!["write", inside],
+    ];
+    for (i, case) in cases.iter().enumerate() {
+        let daemon = probe_line(&mut s, 100 + i as u32, &ws, case);
+        let (once, code) = exec_probe(&[], &ws, case);
+        assert_eq!(once, daemon, "{case:?}");
+        assert_eq!(code, Some(0), "{case:?}");
+    }
+    assert!(probe_line(&mut s, 99, &ws, &["read", out]).starts_with("errno="));
+}
+
+#[test]
+fn exec_mode_refuses_to_run_without_landlock() {
+    let ws = temp_dir("ws");
+    let (out, code) = exec_probe(&[("NEXUS_SPAWNER_TEST_ABI_CAP", "0")], &ws, &["tcp"]);
+    assert_eq!((out.as_str(), code), ("", Some(125)));
+}
+
+#[test]
+fn exec_mode_refuses_to_run_without_seccomp() {
+    let ws = temp_dir("ws");
+    let filter = outer_filter(libc::SYS_prctl, Some(libc::PR_SET_SECCOMP as u32), libc::EINVAL);
+    let mut cmd = Command::new(SPAWNER);
+    cmd.args(["--exec", "--"]).arg(probe()).arg("tcp").current_dir(&ws).stderr(Stdio::null());
+    // SAFETY：同 start_with。
+    unsafe {
+        cmd.pre_exec(move || {
+            let fprog = libc::sock_fprog { len: filter.len() as u16, filter: filter.as_ptr() as *mut _ };
+            libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+            libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &fprog as *const _);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    assert_eq!((out.stdout.len(), out.status.code()), (0, Some(125)));
+}
+
+#[test]
+fn exec_mode_refuses_a_root_it_cannot_open_and_bad_usage() {
+    let ws = temp_dir("ws");
+    let run = |args: &[&str]| {
+        let out = Command::new(SPAWNER).args(args).current_dir(&ws).stderr(Stdio::null()).output().unwrap();
+        (out.stdout.len(), out.status.code())
+    };
+    let p = probe();
+    let p = p.to_str().unwrap();
+    assert_eq!(run(&["--exec", "--read", "/no/such/root", "--", p, "tcp"]), (0, Some(125)));
+    assert_eq!(run(&["--exec", "--bogus", "--", p]), (0, Some(125)));
+    assert_eq!(run(&["--exec", p]), (0, Some(125)));
+    assert_eq!(run(&["--exec", "--"]), (0, Some(125)));
+}
+
+#[test]
+fn exec_mode_replaces_itself_and_keeps_stdio() {
+    let mut cmd = Command::new(SPAWNER);
+    cmd.arg("--exec");
+    for root in readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    let mut child = cmd
+        .args(["--", "/bin/cat"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"hello").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!((out.stdout.as_slice(), out.status.code()), (b"hello".as_slice(), Some(0)));
+}

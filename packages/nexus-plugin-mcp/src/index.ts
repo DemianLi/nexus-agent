@@ -65,6 +65,31 @@ export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768;
 /** 一次 `tools/call` 的預設逾時，照 dsh 的 `toolCallTimeoutMs`。 */
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000;
 
+/** 宿主給的 host 服務：把宣告了 `sandbox` 的 stdio 設定換成包過的 command 與 args。不能套就拋。 */
+export const MCP_SANDBOX_SERVICE = 'mcpSandbox';
+
+/** {@link MCP_SANDBOX_SERVICE} 收到的東西。 */
+export interface McpSandboxRequest {
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly cwd?: string | undefined;
+  readonly readable: readonly string[];
+  readonly writable: readonly string[];
+  /** 這條 connection 自己設的 `PATH`，找 `command` 用。 */
+  readonly path?: string | undefined;
+}
+
+/** 見 {@link MCP_SANDBOX_SERVICE}。 */
+export type McpSandboxWrapper = (
+  request: McpSandboxRequest,
+) => Promise<{ readonly command: string; readonly args: readonly string[] }>;
+
+declare module '@nexus/core' {
+  interface NexusServices {
+    [MCP_SANDBOX_SERVICE]: McpSandboxWrapper;
+  }
+}
+
 /** 以子行程方式啟動的 MCP server。 */
 export const mcpStdioConnectionSchema = z.strictObject({
   transport: z.literal('stdio'),
@@ -83,6 +108,18 @@ export const mcpStdioConnectionSchema = z.strictObject({
   env: z.record(z.string(), envValueSchema).optional(),
   /** 子行程的工作目錄。 */
   cwd: z.string().optional(),
+  /**
+   * 要套沙箱：這個鍵存在就套，`{}` 也算（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。不寫就是直接起。
+   * 連不到網路、讀不到這裡沒列的檔；系統目錄、`command`、`cwd` 由宿主補。不看會話模式。沙箱不可用時不連線。
+   */
+  sandbox: z
+    .strictObject({
+      /** 另外讀得到的路徑，例如 server 的程式碼。 */
+      readable: z.array(z.string().min(1)).optional(),
+      /** 寫得進去的路徑。 */
+      writable: z.array(z.string().min(1)).optional(),
+    })
+    .optional(),
 });
 
 /** 走 Streamable HTTP 的 MCP server。 */
@@ -205,10 +242,18 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 export const mcpPlugin: NexusPlugin<McpConfig> = {
   name: 'mcp',
   Config: mcpConfigSchema,
-  async apply(registry: PluginRegistry, config: McpConfig): Promise<void> {
-    const { serverName } = config;
+  async apply(registry: PluginRegistry, declared: McpConfig): Promise<void> {
+    const { serverName } = declared;
     // 名字先佔住，在連線之前：重名是設定寫錯，不是伺服器不在，照 dsh 讓這一列失敗、不收成警告。
     registry.services.provide(`mcp:server:${serverName}`, { serverName });
+    // 包裝在連線、池之前：拿掉 `sandbox` 鍵之後就是一條 command 換過的 stdio 設定，之後的路徑不必知道沙箱。
+    let config: McpConfig;
+    try {
+      config = await confined(declared, registry.services.get(MCP_SANDBOX_SERVICE));
+    } catch (error) {
+      unreachable(registry, declared, error);
+      return;
+    }
     // 有人可以回答才宣告 elicitation 能力；沒人提供 channel 就是沒有答題者（同 ask-user，#669）。
     const channel: ApprovalChannel | undefined = registry.services.get(CHANNEL_SERVICE);
     const elicitation = config.elicitation && channel?.kind === 'human';
@@ -333,6 +378,27 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 };
 
 export default mcpPlugin;
+
+/** 宣告了 `sandbox` 的 stdio 換成包過的；沒宣告原樣回。宿主沒給包裝就拋，不退回直接起。 */
+async function confined(
+  config: McpConfig,
+  wrap: McpSandboxWrapper | undefined,
+): Promise<McpConfig> {
+  const { connection } = config;
+  if (connection.transport !== 'stdio' || connection.sandbox === undefined) return config;
+  if (wrap === undefined) throw new Error('這個宿主沒有沙箱，宣告了 sandbox 的 server 不連線');
+  const { sandbox, ...rest } = connection;
+  const path = connection.env?.['PATH'];
+  const wrapped = await wrap({
+    command: connection.command,
+    args: connection.args ?? [],
+    cwd: connection.cwd,
+    readable: sandbox.readable ?? [],
+    writable: sandbox.writable ?? [],
+    path: typeof path === 'string' ? path : undefined,
+  });
+  return { ...config, connection: { ...rest, command: wrapped.command, args: [...wrapped.args] } };
+}
 
 /**
  * 這一列連不上（憑證解析不了，或自己連時連不上、列不出工具、註冊不上）的出口：寫了 `failOnStartupError` 就拋，否則警告、
