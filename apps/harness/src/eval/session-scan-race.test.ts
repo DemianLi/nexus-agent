@@ -61,7 +61,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-const { createJsonlSessionStore, sessionPathsIn } = await import('../jsonl-session-store.js');
+const { createJsonlSessionStore, legacyTwoFilePathsIn, sessionPathsIn } =
+  await import('../jsonl-session-store.js');
+const { LEGACY_TWO_FILE_FORMAT_VERSION } = await import('../session-files.fixture.js');
 const { readSessionLogs } = await import('./session-scan.js');
 
 let root: string;
@@ -92,10 +94,10 @@ async function written(id: string, count: number): Promise<string> {
 describe('離線掃描跟寫方同時動', () => {
   it('header 在讀目錄與讀檔之間不見了：跳過那一份，其餘照讀，不算讀不懂', async () => {
     const run = await written('cli', 2);
-    const ghost = sessionPathsIn(run, 'ghost').header;
+    const ghost = legacyTwoFilePathsIn(run, 'ghost').header;
     await writeFile(
       ghost,
-      JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 'ghost', createdAt: 0 }),
+      JSON.stringify({ version: LEGACY_TWO_FILE_FORMAT_VERSION, id: 'ghost', createdAt: 0 }),
     );
     // 掃描列目錄時它還在，讀它的那一下才不見。
     inject.beforeReadFile = async (path) => {
@@ -112,7 +114,12 @@ describe('離線掃描跟寫方同時動', () => {
     const ghostDir = join(run, sessionDirectoryName('ghost'));
     await mkdir(ghostDir);
     const ghost = join(ghostDir, generationLogFilename(SESSION_LOG_FORMAT_VERSION));
-    const header = { version: SESSION_LOG_FORMAT_VERSION, id: 'ghost', createdAt: 0 };
+    const header = {
+      type: 'session',
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'ghost',
+      createdAt: 0,
+    };
     await writeFile(ghost, `${JSON.stringify(header)}\n${JSON.stringify(event(0))}\n`);
     // header 行讀得到，讀本文的那一下才不見。
     inject.beforeReadFile = async (path) => {

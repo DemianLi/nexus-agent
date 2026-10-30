@@ -6,13 +6,19 @@
  * 假 `SessionStore`，驗列表只靠介面。
  */
 
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SESSION_LOG_FORMAT_VERSION, SessionNotFoundError } from '@nexus/core';
+import {
+  generationLogFilename,
+  SESSION_LOG_FORMAT_VERSION,
+  SessionNotFoundError,
+  sessionDirectoryName,
+} from '@nexus/core';
 import type { SessionEvent, SessionStore, StoredSessionHeader } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
-import { openJsonlSessionStore } from './jsonl-session-store.js';
+import { legacyTwoFilePathsIn, openJsonlSessionStore } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionOf } from './session-files.fixture.js';
 import { listStoredThreads, readStoredSubagentSession } from './session-list.js';
 
 const CWD = '/專案/甲';
@@ -49,7 +55,7 @@ function store(directory: string): SessionStore {
   return openJsonlSessionStore({ directory });
 }
 
-/** 照 JSONL 後端的檔名寫一份（`base` 省略就是 id）。`events` 省略即只有 header。 */
+/** 照 JSONL 後端舊兩檔的檔名寫一份（`base` 省略就是 id）。`events` 省略即只有 header。 */
 async function writeThread(
   directory: string,
   id: string,
@@ -66,7 +72,7 @@ async function writeThread(
 ): Promise<void> {
   const base = options.base ?? id;
   const header = {
-    version: options.version ?? SESSION_LOG_FORMAT_VERSION,
+    version: options.version ?? LEGACY_TWO_FILE_FORMAT_VERSION,
     id,
     createdAt: options.createdAt ?? 1_000,
     ...(options.cwd === null ? {} : { cwd: options.cwd ?? CWD }),
@@ -192,7 +198,13 @@ describe('listStoredThreads', () => {
       join(directory, 'no-id.header.json'),
       JSON.stringify({ version: 1, createdAt: 1 }),
     );
-    await writeThread(directory, 'future', { version: SESSION_LOG_FORMAT_VERSION + 1, events: [] });
+    // 比這一版新的寫方寫的是世代檔：舊路徑上版本 52 起的 header 是墓碑，驗不到「版本太新」。
+    const future = SESSION_LOG_FORMAT_VERSION + 1;
+    await mkdir(join(directory, sessionDirectoryName('future')), { recursive: true });
+    await writeFile(
+      join(directory, sessionDirectoryName('future'), generationLogFilename(future)),
+      `${JSON.stringify({ type: 'session', version: future, id: 'future', createdAt: 1_000, cwd: CWD })}\n`,
+    );
 
     const listed = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
     expect(listed.items.map((item) => item.threadId)).toEqual(['good']);
@@ -271,22 +283,28 @@ describe('listStoredThreads', () => {
 
   /**
    * **冷讀的一半在這一層就量得到**：續接那條路會拿寫租約，別的把手握著時它拋；列表不拿，所以照樣列得出來，
-   * 而且兩個檔一個位元組都沒動。產品路徑上的另一半（不建 agent）在 `serve-session-list.test.ts`。
+   * 而且這份會話的檔（墓碑、遷移來源的舊日誌、世代檔）一個位元組都沒動。產品路徑上的另一半（不建 agent）在
+   * `serve-session-list.test.ts`。
    */
   it('別的把手握著那一份：照樣列得出來，header 與日誌都沒動', async () => {
     const directory = await dir();
     await writeThread(directory, 'held', { events: [said('握著的', 1_100)], tail: '{"半行' });
-    const headerPath = join(directory, 'held.header.json');
-    const logPath = join(directory, 'held.jsonl');
-    const before = [await readFile(headerPath, 'utf8'), await readFile(logPath, 'utf8')];
+    // 續接先把舊兩檔遷成世代檔、舊 header 換成墓碑：比的是握住之後的樣子（墓碑、遷移來源的日誌、世代檔）。
     const holder = await openJsonlSessionStore({ directory }).resume('held');
+    const paths = [
+      legacyTwoFilePathsIn(directory, 'held').header,
+      legacyTwoFilePathsIn(directory, 'held').log,
+      (await sessionOf(directory, 'held')).logPath,
+    ];
+    const read = () => Promise.all(paths.map((path) => readFile(path, 'utf8')));
+    const before = await read();
     try {
       const { items } = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
       expect(items.map((item) => item.threadId)).toEqual(['held']);
     } finally {
       await holder.stored.close();
     }
-    expect([await readFile(headerPath, 'utf8'), await readFile(logPath, 'utf8')]).toEqual(before);
+    expect(await read()).toEqual(before);
   });
 
   /**

@@ -110,11 +110,26 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 包一層沙箱，也不打算在不改設計的前提下假裝有。細節見 [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)
 的「明文限制」。
 
-**3. 出廠兩個組合，加上部署方可以加回的全開，都是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
-動手；它們不涵蓋子行程與網路；對讀，前兩組一樣只擋經連結出根的路（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
+**3. 出廠兩個組合，加上部署方可以加回的全開，對內建檔案工具都是政策，不是隔離。** 工具子行程另見第 4 條。 `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
+動手；它們不涵蓋網路，子行程見第 4 條；對讀，前兩組一樣只擋經連結出根的路（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
 檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
 並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界；
 怎麼加、怎麼確認做到了，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉。
+
+**4. `grep`／`glob` 起的 rg 經沙箱跑（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。** Linux 上由產物裡的 `native/nexus-sandbox-spawner` 起，
+seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽略規則，讀不到 serve 的 home。`danger-full-access` 不上 Landlock，網路照擋。
+
+- 主機沒有 Landlock，或不是 Linux：`read-only`、`workspace-write` 下的 `grep`／`glob` 回 `SEARCH_FAILED`，訊息裡有 `SANDBOX_UNAVAILABLE`，不退回不設防。
+  稽核只看碼分不出沙箱不可用與搜尋失敗，要看訊息。
+- 核心的 Landlock ABI 不到 6：工具照跑，serve 的日誌印一次「只有部分強制」。
+- workspace-changes 的 git 快照還沒經沙箱，由 serve 直接起。
+
+**本機開發。** Mac 沒有沙箱後端，兩條路：
+
+- 在 Linux 容器裡起 serve；
+- 在本機的 `--patch` 覆寫檔把 `danger-full-access` 加回權限表（寫法見上面〈權限組合〉那一節），用它起。非 Linux 上這一格直接 spawn，不套 OS 沙箱。
+
+從原始碼起的 serve 沒有產物裡那支 spawner，在 Linux 上也回 `SANDBOX_UNAVAILABLE`，要先把編好的執行檔放到 repo 根的 `native/nexus-sandbox-spawner`（編法見 [`native/sandbox-spawner/README.md`](../native/sandbox-spawner/README.md)）。
 
 ### serve：key 與 home 不能跟工作區重疊
 
@@ -512,12 +527,18 @@ banner 那一行改印「只在記憶體裡」並點名是這一列關的。**�
 不碰日誌，回專用碼 **`thread_writer_held`**（[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)），message 寫明是哪一份會話。
 這是暫時的：那個行程關掉這條 thread 或結束之後再送，就不會再因此被拒。
 
-CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一個 `.header.json`。`serve` 吃同一個旗標、同一個預設，
+CLI 每一次啟動各自一個 run 目錄，一份會話一個會話目錄：`<會話>/session.v<格式版本>.jsonl`（第一行是 header 行，之後一行一筆事件）
+加上寫租約的 `<會話>/session.lock`，舊路徑另外留一份 `<會話>.header.json` 墓碑（[#1594](https://github.com/DemianLi/nexus-agent/issues/1594)）。
+目錄名把 `/` 這類字元編成 `~` 加四位十六進位，太長的截短後接一段摘要；空的 id 是 `~`。v0.5.19 以前寫的舊兩檔
+（`<會話>.header.json`、`<會話>.jsonl`）照讀，**續接時遷成新的世代檔**：已接受的那一段原樣複製過去，舊日誌留著不動，舊 header 換成墓碑；
+唯讀打開（列表、搜尋、看內容）不遷。所以遷移當下那份會話要**兩倍的磁碟**，遷完之後舊日誌也一直佔著同樣大小。確定不退版的話，
+**舊路徑的 header 已經是墓碑**（第一行是 `"type":"session"`、版本 52 以上）的會話可以手動刪掉 `<會話>.jsonl`；header 還是舊版的不要刪，
+那是遷移做到一半，讀方要拿舊日誌核對。`serve` 吃同一個旗標、同一個預設，
 會話根按目錄分，底下一條 thread 一個檔——**所以重開 `serve` 之後，網頁的 thread 清單會帶回同一個目錄底下以前的對話**。
 兩者共用同一個根：run 目錄以時間戳開頭，`serve` 那一格以 `--` 開頭，撞不到。eval 那條路沒有會話日誌，而那是一個登記過的決定
 （理由與絆索見 `apps/harness/src/eval/runner.ts` 的檔頭）。
 
-`.header.json` 自格式 30 起記下**寫這份日誌的是誰**（#1025）：程式碼的 commit 與工作樹有沒有未提交的改動、疊完的插件清單
+header（世代檔的第一行；舊兩檔是 `.header.json`）自格式 30 起記下**寫這份日誌的是誰**（#1025）：程式碼的 commit 與工作樹有沒有未提交的改動、疊完的插件清單
 （每一列的 `name`、`id`、是否停用，**不含設定內容**）、整份設定的雜湊，以及 root 用的模型型錄 id（只在 `--live`）。`serve` 記的是
 那條 thread 組裝時重讀的那一份清單（#1405），所以同一台 server 上改了清單之後開的對話，header 跟著不同。續接不改它，
 永遠是最初那一個行程。設定雜湊是帶鍵的，鍵在 `~/.nexus-agent/config-hash-key.json`（`0600`）：**只能跟同一個 home 寫的日誌比**，
@@ -569,14 +590,14 @@ CLI（`nexus-agent` 的單次執行）不在這張的範圍。
 代價是 `fsync` 次數等於批數，不是檢查點數；`session-checkpoint-policy` 的排空本身不再多一次。
 **已經被這個問題寫壞的舊日誌這一刀救不回來**，列表與搜尋讀得到、續接不行。
 
-**新會話第一次落盤是原子的**（[#1510](https://github.com/DemianLi/nexus-agent/issues/1510)）：header 先寫成暫存檔
-（`<會話>.header.json.<12 位十六進位>.tmp`）、`fsync`，再用 `link` 發佈，然後 `fsync` 會話目錄，目錄項斷電後才還在；
-`fsync` 完才建日誌檔。第一次落盤時遇到斷電或行程被殺，結果只有兩種：這份會話整份都在，或整份都不在——
-不會再留下空的或半份的 header，讓這條 thread 之後每次打開都回「建不起來」、id 也重建不了。檢查點的 `flush()`
-說「已落盤」時，新檔的目錄項也一起落盤。目錄 `fsync` 失敗會往外報（不吞），重試只補沒做完的那一步，不會撞上自己剛發佈的 header。
-當機時殘留的 `*.tmp` 不會清（列表與離線掃描只認 `.header.json` 結尾，不會撿到它），可以手動刪。Windows 開不了目錄，
-照樣用 `link` 發佈但不做目錄 `fsync`。**已經被舊版寫成空 header 的 thread 這一刀救不回來**：把那個 `<會話>.header.json` 刪掉，
-同一個 id 才能重建。
+**新會話第一次落盤是原子的**（[#1510](https://github.com/DemianLi/nexus-agent/issues/1510)、#1594）：先建會話目錄（每一層建完都 `fsync`），
+世代檔寫成同一個目錄裡的暫存檔（`session.v<N>.jsonl.<12 位十六進位>.tmp`，header 行加上第一批事件）、`fsync`，再用 `link` 發佈、`fsync` 會話目錄，
+目錄項斷電後才還在；墓碑同樣先寫暫存檔、`link`、`fsync` 專案目錄，最後才用追加模式開世代檔。第一次落盤時遇到斷電或行程被殺，
+結果只有兩種：這份會話整份都在，或整份都不在——不會留下空的或半份的 header，讓這條 thread 之後每次打開都回「建不起來」、id 也重建不了。
+世代檔發佈了、墓碑還沒寫就斷掉的，讀得到，下一次續接補上墓碑。檢查點的 `flush()` 說「已落盤」時，新檔的目錄項也一起落盤。
+目錄 `fsync` 失敗會往外報（不吞），重試只補沒做完的那一步，不會撞上自己剛發佈的檔。當機時殘留的 `*.tmp` 不會清（列表與離線掃描只認
+正規的世代檔名與 `.header.json` 結尾，不會撿到它），可以手動刪。Windows 開不了目錄，照樣用 `link` 發佈但不做目錄 `fsync`。
+**已經被舊版寫成空 header 的舊兩檔 thread 救不回來**：把那個 `<會話>.header.json` 刪掉，同一個 id 才能重建。
 
 **續接不再就地覆寫 header、讀日誌本文走穩定快照**（[#1509](https://github.com/DemianLi/nexus-agent/issues/1509)）：
 以前每次續接都把 header 先截成 0 位元組再寫，當機或斷電會留下空的或半份的 header，那條 thread 從此接不回來、側欄也找不到。
@@ -1036,20 +1057,20 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 
 | 這一段 | 怎麼用 |
 | --- | --- |
-| `thread "t1"` | 會話日誌的檔名：`<harness home>/sessions/<專案目錄>/t1.jsonl` |
+| `thread "t1"` | 會話日誌在 `<harness home>/sessions/<專案目錄>/t1/session.v<N>.jsonl`（`N` 取最大的那個；v0.5.19 以前寫、還沒續接過的是 `<專案目錄>/t1.jsonl`） |
 | `run "…"` | 使用者那一句話在佇列上的編號（`run.start` 回的 `run_id`）。續答核准、不是從佇列來的輪沒有這一段；背景子代理失敗時是子代理自己的 run id，thread 是派它的主對話 |
 | `日誌第 N 筆` | 那份 `.jsonl` 裡 `seq` 等於 N 的事件，就是這一輪的 `turn/failed`；失敗訊息本文在它的 `data.message` |
-| `子代理日誌 "t1/bg-1" 第 N 筆` | **背景子代理**失敗時，N 是子代理**自己那份日誌**的 `seq`（不是 `t1.jsonl` 的），日誌 id 是 `<thread>/<run_id>`。檔案在同一個專案目錄底下，檔名把 `/` 編成 `%2f`：`sessions/<專案目錄>/t1%2fbg-1.jsonl`（run id 含大寫或很長時檔名尾巴會多一段摘要，用 `ls …/t1%2fbg-1*` 照前綴找） |
+| `子代理日誌 "t1/bg-1" 第 N 筆` | **背景子代理**失敗時，N 是子代理**自己那份日誌**的 `seq`（不是 `t1` 那份的），日誌 id 是 `<thread>/<run_id>`。會話目錄在同一個專案目錄底下，目錄名把 `/` 編成 `~002F`：`sessions/<專案目錄>/t1~002Fbg-1/session.v<N>.jsonl`（run id 很長時目錄名會截短、尾巴接一段摘要，用 `ls -d …/t1~002Fbg-1*` 照前綴找） |
 | `SERVER`、`status=502` | 失敗碼與 HTTP 狀態（沒有狀態就省略） |
 | `request_id=gw-123` | 模型供應商回應標頭裡的請求編號（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個非空的）。拿它去問閘道那一側「哪一次請求」；沒有這幾個標頭就省略 |
 
 ```bash
 # 在那份會話日誌裡找這一輪的失敗（N 換成「日誌第 N 筆」）：
-jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1.jsonl
+jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1/session.v*.jsonl
 # 這一條 thread 上所有重試過的失敗，各帶自己的請求編號：
-jq -c 'select(.type == "llm/retry") | .data.failure' ~/.nexus-agent/sessions/<專案目錄>/t1.jsonl
-# 背景子代理那一行（子代理日誌 "t1/bg-1"）：讀它自己的檔，不是 t1.jsonl：
-jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1%2fbg-1.jsonl
+jq -c 'select(.type == "llm/retry") | .data.failure' ~/.nexus-agent/sessions/<專案目錄>/t1/session.v*.jsonl
+# 背景子代理那一行（子代理日誌 "t1/bg-1"）：讀它自己的檔，不是 t1 那份：
+jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1~002Fbg-1/session.v*.jsonl
 ```
 
 - **這一行不放失敗訊息本文**：訊息可能帶路徑或使用者內容，那些只在會話日誌，誰能讀照會話日誌的規矩。

@@ -749,8 +749,9 @@ export async function runServePhases(
 
 export type ServeClient = Awaited<ReturnType<typeof serveClient>>;
 
-/** 一份落盤的日誌：`file` 是相對日誌目錄的路徑（子代理的檔名帶 `%2f`），`events` 照 `seq`。 */
+/** 一份落盤的日誌：`id` 是 session id（子代理的帶 `/`），`file` 是相對日誌目錄的路徑，`events` 照 `seq`。 */
 export interface LogFile {
+  readonly id: string;
   readonly file: string;
   readonly events: SessionEvent[];
 }
@@ -773,20 +774,21 @@ export interface DriverRun {
   readonly mainBodies: Body[];
 }
 
-/** root 的日誌：檔名沒有 `%2f`。 */
+/** root 的日誌：id 沒有 `/`。 */
 export const rootLogOf = (run: DriverRun): LogFile => {
-  const root = run.logs.find((log) => !log.file.includes('%2f'));
+  const root = run.logs.find((log) => !log.id.includes('/'));
   if (root === undefined)
     throw new Error(`找不到 root 日誌：${run.logs.map((l) => l.file).join(', ')}`);
   return root;
 };
 
-/** 子代理的日誌：檔名有 `%2f`（背景的是 `%2fbg-…`，前景的是 `%2ftools%3a…`）。 */
+/** 子代理的日誌：id 有 `/`（背景的是 `<root>/bg-…`，前景的是 `<root>/tools:…`）。 */
 export const childLogsOf = (run: DriverRun): LogFile[] =>
-  run.logs.filter((log) => log.file.includes('%2f'));
+  run.logs.filter((log) => log.id.includes('/'));
 
 async function readAllLogs(root: string): Promise<LogFile[]> {
   return (await sessionsUnder(root)).map((session) => ({
+    id: session.id,
     file: session.logPath.slice(root.length),
     events: session.events,
   }));

@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   bundledRgProblems,
   cliRunProblems,
+  cliSessionLog,
   headerProblems,
   homepageProblems,
   installedGrepProblems,
@@ -40,7 +41,12 @@ import {
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
-import { spawnerProbeProblems } from '../../../scripts/release/spawner-probe.js';
+import {
+  spawnerProbeProblems,
+  spawnerProbeSummary,
+} from '../../../scripts/release/spawner-probe.js';
+import { generationLogFilename, SESSION_LOCK_FILENAME, sessionDirectoryName } from '@nexus/core';
+
 import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const ok = { status: 0, stdout: '', stderr: '' };
@@ -126,10 +132,16 @@ describe('步驟 4e：產物裡的沙箱 spawner 起得來、經它起得了主�
     expect(spawnerProbeProblems(ok)).toEqual([]);
   });
 
-  it('主機沒有 Landlock：直說驗不到，不報成 git 沒起成', () => {
-    expect(spawnerProbeProblems({ ...ok, events: [{ ...ready, landlockAbi: 0 }] })).toEqual([
-      expect.stringContaining('沒有 Landlock'),
-    ]);
+  it('主機沒有 Landlock：全權模式起的 git 照樣算數', () => {
+    const events = [{ ...ready, landlockAbi: 0 }, started, exited];
+    expect(spawnerProbeProblems({ ...ok, events })).toEqual([]);
+  });
+
+  it('印進 log 的那一行帶 ABI 與結局', () => {
+    const line = spawnerProbeSummary(ok);
+    expect(line).toContain('"landlockAbi":6');
+    expect(line).toContain('"code":0');
+    expect(line).toContain('git version 2.39.5');
   });
 
   it.each([
@@ -223,7 +235,24 @@ describe('步驟 5：假模型跑一輪與會話 header', () => {
   });
 
   it('沒有 header 檔：報', () => {
-    expect(headerProblems(undefined, stamp)).toEqual(['cli 跑完沒有 cli.header.json']);
+    expect(headerProblems(undefined, stamp)).toEqual(['cli 跑完沒有會話的世代檔']);
+  });
+
+  it('cli 的世代檔：挑會話目錄裡數字最大的；會話目錄不在、裡面沒有世代檔是 undefined', () => {
+    const run = mkdtempSync(join(tmpdir(), 'verify-cli-log-'));
+    try {
+      expect(cliSessionLog(run)).toBeUndefined();
+      const sessionDirectory = join(run, sessionDirectoryName('cli'));
+      mkdirSync(sessionDirectory);
+      writeFileSync(join(sessionDirectory, SESSION_LOCK_FILENAME), '');
+      expect(cliSessionLog(run)).toBeUndefined();
+      for (const version of [9, 52, 10]) {
+        writeFileSync(join(sessionDirectory, generationLogFilename(version)), '');
+      }
+      expect(cliSessionLog(run)).toBe(join(sessionDirectory, generationLogFilename(52)));
+    } finally {
+      rmSync(run, { recursive: true, force: true });
+    }
   });
 
   it('header 的 commit 是 null 或別的值：報（跟戳記比）', () => {

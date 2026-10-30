@@ -20,7 +20,7 @@
  * - 不在這張卡的範圍、所以沒有的：定稿檢查點 `finalized/vN.json`（dsh `verifyFinalization`）、歷史格式的快照解析
  *   （`parseHistoricalPersistenceSnapshot`，只給 `persistence-review`／`persistence-formats` 用）、人讀的目錄文件
  *   `persistence-catalog.md`（[#1886](https://github.com/DemianLi/nexus-agent/issues/1886)）。
- * - header 根只認 `SessionHeader`、基線必備的根不含 `JsonlHeaderLine`：nexus 沒有那個根（見 `persistence-schema.ts` 檔頭）。
+ * - 基線必備的根不含 `JsonlHeaderLine`：這個根在 #1594 ③（格式 52）才加進來，紀錄歷史的基線比它早。
  * - 生成物缺漏或過期時，訊息指向 `gen-persistence-schema`，不寫 dsh 的「regenerate the persistence catalog」：
  *   這裡沒有 catalog（同上，#1886）。
  *
@@ -328,7 +328,7 @@ export function parsePersistenceSnapshot(value: unknown): PersistenceSchemaInven
         throw new Error(`invalid event root key ${key}`);
       bool(root.surface, 'event surface membership');
     } else if (
-      (root.kind !== 'header' || key !== 'SessionHeader') &&
+      (root.kind !== 'header' || !['SessionHeader', 'JsonlHeaderLine'].includes(key)) &&
       (root.kind !== 'envelope' || key !== 'SessionEventEnvelope')
     )
       throw new Error(`invalid schema root ${key}`);

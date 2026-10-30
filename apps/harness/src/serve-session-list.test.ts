@@ -10,14 +10,12 @@
  * 3. **列出來的切得過去**，而且接回來的是那一份日誌，不是新開。
  */
 
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { THREADS_PATH, createWireClient } from '@nexus/wire';
 import type { ThreadListOutcome } from '@nexus/wire';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   exchangeServeToken,
@@ -32,6 +30,7 @@ import { assemblyWitness, resetAssemblyWitness } from './assembly-witness.fixtur
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionEventsOf } from './session-files.fixture.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -88,13 +87,6 @@ function agentsBuilt(): number {
   return assemblyWitness.applied - 1;
 }
 
-function readEvents(body: string): readonly SessionEvent[] {
-  return body
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
-}
-
 describe('GET /threads', () => {
   it('重開之後列得出以前的 thread：由新到舊、標題是第一句話，列表一條 agent 都不建', async () => {
     const root = await tmp();
@@ -146,9 +138,7 @@ describe('GET /threads', () => {
     await stop(second);
 
     // 切過去接的是那一份：同一個檔接著寫，中間一顆 end-seed。
-    const events = readEvents(
-      await readFile(join(root, projectKey(process.cwd()), 'alpha.jsonl'), 'utf8'),
-    );
+    const events = await sessionEventsOf(join(root, projectKey(process.cwd())), 'alpha');
     expect(events.filter((event) => event.type === 'turn/start')).toHaveLength(2);
     expect(events.filter((event) => event.type === 'session/end-seed')).toHaveLength(1);
   });
@@ -159,11 +149,11 @@ describe('GET /threads', () => {
     await driveTurn(first, 'alpha', '主對話');
     await stop(first);
 
-    // 子代理的日誌是 `<thread>/<runId>`，header 指回 root；手寫一份（真的由背景子代理產出的在 subagent-history-wire.test.ts 量過）。
+    // 子代理的日誌是 `<thread>/<runId>`，header 指回 root；手寫一份舊兩檔（真的由背景子代理產出的在 subagent-history-wire.test.ts 量過）。
     const directory = join(root, projectKey(process.cwd()));
     const runId = 'bg-0123456789ab';
     const header = (id: string, parentSession: string) =>
-      JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1, parentSession });
+      JSON.stringify({ version: LEGACY_TWO_FILE_FORMAT_VERSION, id, createdAt: 1, parentSession });
     const turn = (type: string, seq: number, data: unknown) =>
       `${JSON.stringify({ type, seq, time: seq + 1, data })}\n`;
     await writeFile(

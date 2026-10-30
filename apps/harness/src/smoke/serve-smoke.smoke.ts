@@ -258,11 +258,13 @@ describe('真模型冒煙（serve --live）', () => {
       const raw = await readIfExists(
         sessionPathsIn(join(logRoot, projectKey(process.cwd())), entry.threadId).log,
       );
+      // 世代檔的第一行是 header 行，不是事件。
       const events =
         raw === undefined
           ? []
           : raw
               .split('\n')
+              .slice(1)
               .filter((line) => line.length > 0)
               .map((line) => JSON.parse(line) as SessionEvent);
       logged += events.filter(
