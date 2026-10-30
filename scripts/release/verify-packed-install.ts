@@ -11,7 +11,8 @@
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
  * 4. 目標平台的 `node-addon-system` 載得起來（flock 的原生二進位，#1503／會話租約都靠它）；內附的 ripgrep 在 `PATH` 上沒有 rg
  *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；sharp 與目標平台的 libvips 載得起來，真的縮一張圖
- *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；
+ *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；Linux 上產物裡的沙箱 spawner 起得來、送 `Ready`，
+ *    經它起得了主機上的 git（#1946，`spawner-probe.ts`）；
  * 5. 假模型跑一輪 `lib/cli.js`：會話 header 的 `build.commit` 等於戳記——已安裝的樹沒有 git，戳記是唯一的來源（PM 補驗收）；
  *    戳記本身也查：`commit` 是非空字串、`dirty` 是 `false`（本機驗沒 commit 的改動加 `--allow-dirty`，CI 不加）；
  * 6. 起一次 `lib/serve.js --port 0`：印出網址、啟動日誌講的 grep 用的 ripgrep 在**安裝樹裡**（不是宿主 `PATH` 上的）、
@@ -53,6 +54,7 @@ import {
   walkInstalledGraph,
 } from './payload.js';
 import { installedLicenseProblems, sbomProblems } from './sbom.js';
+import { probeInstalledSpawner, spawnerProbeProblems } from './spawner-probe.js';
 
 /**
  * CLI 那一輪 root 會話的檔名。root 的 id 固定是 `cli`，`safeBaseName` 編碼後不變；檔名照 `@nexus/core` 的那一份
@@ -490,6 +492,11 @@ export async function verifyPackedInstall(
       timeout: 60_000,
     });
     problems.push(...sharpProblems(sharpRun));
+
+    // 4e. 沙箱 spawner（只有 Linux 的產物帶）：起產物裡那一支、等 Ready，再經它起一次主機的 git。
+    if (process.platform === 'linux') {
+      problems.push(...spawnerProbeProblems(await probeInstalledSpawner(root, scratch)));
+    }
 
     // 4c. 安裝樹裡真的跑一次 grep：腳本模型叫 grep，PATH 是空目錄（同 4b），命中只可能來自內附的 rg。
     const grepWork = join(scratch, 'grep-ws');

@@ -345,6 +345,74 @@ mod tests {
         }
     }
 
+    /// `protocol-vectors.json` 裡依序的 `hex`：Node 端的編解碼對同一份測。
+    fn vectors() -> Vec<Vec<u8>> {
+        include_str!("../protocol-vectors.json")
+            .split("\"hex\": \"")
+            .skip(1)
+            .map(|rest| {
+                let hex = &rest[..rest.find('"').unwrap()];
+                (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_shared_vectors_match_both_directions() {
+        let s = |v: &str| v.as_bytes().to_vec();
+        let requests = [
+            Request::Spawn(Spawn {
+                id: 7,
+                mode: Mode::WorkspaceWrite,
+                pipes: 0b110,
+                cwd: s("/w/ws"),
+                readable: vec![s("/usr"), s("/etc/gitconfig")],
+                writable: vec![s("/w/ws"), s("/w/extra dir\twith tab")],
+                argv: vec![s("/usr/bin/git"), s("a\nb"), Vec::new()],
+                env: vec![s("PATH=/usr/bin"), s("LC_ALL=C")],
+            }),
+            Request::Spawn(Spawn {
+                id: 8,
+                mode: Mode::ReadOnly,
+                pipes: 0b010,
+                cwd: s("/"),
+                readable: Vec::new(),
+                writable: Vec::new(),
+                argv: vec![s("rg")],
+                env: Vec::new(),
+            }),
+            Request::Spawn(Spawn {
+                id: u32::MAX,
+                mode: Mode::FullAccess,
+                pipes: 0,
+                cwd: s("/tmp"),
+                readable: Vec::new(),
+                writable: Vec::new(),
+                argv: vec![s("true")],
+                env: vec![s("A=é")],
+            }),
+            Request::Signal { id: 3, signo: libc::SIGTERM },
+        ];
+        let events = [
+            Event::Unavailable { errno: libc::EINVAL, detail: s("seccomp: Invalid argument") },
+            Event::Ready { filter_insns: 70, landlock_abi: 0 },
+            Event::Started { id: 1, pid: 4242, partial: true },
+            Event::Failed { id: 2, kind: FailKind::StartDir, errno: libc::ENOENT, detail: s("chdir") },
+            Event::Failed { id: 9, kind: FailKind::Resource, errno: libc::EMFILE, detail: s("open /dev/null") },
+            Event::Exited { id: 3, code: -1, signal: libc::SIGKILL },
+        ];
+        let vectors = vectors();
+        assert_eq!(vectors.len(), requests.len() + events.len());
+        for (request, bytes) in requests.iter().zip(&vectors) {
+            assert_eq!(&encode_request(request), bytes, "{request:?}");
+            assert_eq!(decode_request(bytes).as_ref(), Ok(request));
+        }
+        for (event, bytes) in events.iter().zip(&vectors[requests.len()..]) {
+            assert_eq!(&encode_event(event), bytes, "{event:?}");
+            assert_eq!(decode_event(bytes).as_ref(), Ok(event));
+        }
+    }
+
     #[test]
     fn truncated_trailing_or_unknown_input_is_rejected() {
         let bytes = encode_request(&Request::Spawn(spawn()));
