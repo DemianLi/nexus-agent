@@ -235,7 +235,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
           data-queue-readonly=""
           data-leaving={leaving || undefined}
           aria-hidden={leaving || undefined}
-          className="animate-in fade-in-0 text-muted-foreground flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
+          className="animate-in fade-in-0 text-muted-foreground flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-150 motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
         >
           {/* 跟人排的那一列同一條線：只有一列時才有圖示，多列時文字左緣對齊。 */}
           {live.length === 1 && <ListEnd aria-hidden className="mt-2.5 size-4 shrink-0 lg:mt-2" />}
@@ -275,7 +275,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
         data-leaving={leaving || undefined}
         aria-hidden={leaving || undefined}
         className={cn(
-          'animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden',
+          'animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-150 motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden',
           goal && 'flex-wrap',
           // 點名的 chip 窄螢幕時換到最後一行（`order-last`），不跟預覽與三顆鈕搶一行。
           item.mention !== undefined && 'max-sm:flex-wrap',

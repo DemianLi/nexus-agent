@@ -20,7 +20,7 @@ import { cn } from '@/lib/utils';
  * 新的可展開列用這個，不要再手寫 `hover:bg-muted … w-full … text-left`（`design-system.test.ts` 會擋）。
  */
 const rowTrigger = cva(
-  'group group/row-trigger hover:bg-muted hover:text-foreground flex min-h-11 w-full min-w-0 items-center text-left transition-colors duration-(--duration-quick)',
+  'group group/row-trigger hover:bg-muted hover:text-foreground flex min-h-11 w-full min-w-0 items-center text-left transition-colors duration-150',
   {
     variants: {
       fit: {

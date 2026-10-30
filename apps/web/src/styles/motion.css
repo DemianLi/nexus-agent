@@ -1,30 +1,11 @@
 /*
- * 動效：token、模式清單、keyframes、reduced-motion。現行規則見 `.docs/web-ui-spec.md` §7；
+ * 動效：模式清單、keyframes、reduced-motion。現行規則見 `.docs/web-ui-spec.md` §7；
  * 從原型 tag `proto-375-design-language` 的 `prototype-375/tokens.css` 搬來（#401）。原型的 `proto-*` class 在這裡去掉前綴
  * （`border-beam`、`text-shimmer`、`stream-caret`）；reduced-motion 只認 media query，沒有 CPU 降速的退路（量過 60fps，規格說不需要）。
  *
  * 進出場的 `--animate-in`／`--animate-out`：`index.css` 的 `@theme` 讓 Tailwind 產出 `animation: var(--animate-in)`，
  * 值在本檔的「進出場」那段逐元素宣告（#1687）；reduced-motion 換成本檔的 `motion-fade-in`／`motion-fade-out`。
  */
-
-/*
- * 動效 token：值取自 Libraries.dev site.css 的 :root，外加按壓與 resize。
- * 元件只能從下面「模式清單」裡挑；清單外沒有動效，只留顏色過渡。
- */
-:root {
-  --duration-stagger: 40ms;
-  --duration-press: 120ms;
-  --duration-quick: 150ms;
-  --duration-fast: 250ms;
-  --duration-medium: 350ms;
-  --distance-micro: 4px;
-  --distance-base: 8px;
-  --scale-large: 0.96;
-  --scale-medium: 0.97;
-  --scale-tiny: 0.99;
-  --resize-dur: 300ms;
-  --resize-ease: var(--ease-smooth-out);
-}
 
 /*
  * ── 進出場：照 SG 的機制，時長與曲線讀元件自己的 `duration-*`／`ease-*`（#1687）──
@@ -50,6 +31,7 @@
  * ── 動效模式清單 ──
  * 浮層彈出、對話框：registry 的 animate-in／out，時長照元件自己寫的（上面「進出場」那段）；側滑抽屜是 SG 的 transition。
  * 換內容、上下題、進場、展開收合、進度、按壓、resize、持續狀態：下面這些。
+ * 元件只能從這份清單挑；清單外沒有動效，只留顏色過渡（規格 §7）。
  *
  * 新增或刪掉 @keyframes 時，同一個 PR 更新 `scripts/check-built-css.mjs` 的允許清單（它量建置出來的 CSS）。
  *
@@ -75,105 +57,112 @@
  * 退場類才用 both（淡出後要保持透明，直到元件卸載）。
  */
 
-/* 進場：新訊息、工具卡。往上 8px 淡入，不縮不模糊（大面積不用 blur）。 */
+/* 進場：新訊息、工具卡。不縮不模糊（大面積不用 blur）。 */
 .motion-rise-in {
-  animation: motion-rise-in var(--duration-fast) var(--ease-smooth-out) backwards;
+  animation: motion-rise-in 250ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
 @keyframes motion-rise-in {
   from {
     opacity: 0;
-    transform: translateY(var(--rise-distance, var(--distance-base)));
+    transform: translateY(8px);
   }
 }
 
-/* 換內容：輸入框 ↔ 核准／提問面板、面板接續。舊的縮到 .99 淡出 150，新的往上 8px、從 .97 長出來 250。 */
+/* 換內容：輸入框 ↔ 核准／提問面板、面板接續。 */
 .motion-swap[data-phase='in'] {
-  animation: motion-swap-in var(--duration-fast) var(--ease-smooth-out) backwards;
+  animation: motion-swap-in 250ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
 .motion-swap[data-phase='out'] {
-  animation: motion-swap-out var(--duration-quick) var(--ease-smooth-out) both;
+  animation: motion-swap-out 150ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes motion-swap-in {
   from {
     opacity: 0;
-    transform: translateY(var(--distance-base)) scale(var(--scale-medium));
+    transform: translateY(8px) scale(0.97);
   }
 }
 
 @keyframes motion-swap-out {
   to {
     opacity: 0;
-    transform: scale(var(--scale-tiny));
+    transform: scale(0.99);
   }
 }
 
-/* 上下題：下一題從右 8px、上一題從左 8px，250。沒有 blur（面板在手機上是大面積）。 */
-[data-page-dir] > [data-slot='questionnaire-item'][data-active] {
-  animation: motion-page-in var(--duration-fast) var(--ease-smooth-out) backwards;
+/* 上下題：方向由 data-page-dir 決定。沒有 blur（面板在手機上是大面積）。 */
+[data-page-dir='next'] > [data-slot='questionnaire-item'][data-active] {
+  animation: motion-page-in-next 250ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
-[data-page-dir='next'] {
-  --page-from: var(--distance-base);
+[data-page-dir='prev'] > [data-slot='questionnaire-item'][data-active] {
+  animation: motion-page-in-prev 250ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }
 
-[data-page-dir='prev'] {
-  --page-from: calc(var(--distance-base) * -1);
-}
-
-@keyframes motion-page-in {
+@keyframes motion-page-in-next {
   from {
     opacity: 0;
-    transform: translateX(var(--page-from));
+    transform: translateX(8px);
   }
 }
 
-/* stagger：同一刻出現的一小組，只給提問選項，最多前 6 個（總延遲 ≤ 240ms）。 */
+@keyframes motion-page-in-prev {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+}
+
+/* stagger：同一刻出現的一小組，只給提問選項，最多前 6 個（總延遲 ≤ 200ms）。 */
 [data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice'] {
-  --rise-distance: var(--distance-micro);
-  animation: motion-rise-in var(--duration-fast) var(--ease-smooth-out) backwards;
+  animation: motion-rise-in-micro 250ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
+}
+
+@keyframes motion-rise-in-micro {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
 }
 
 [data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(2) {
-  animation-delay: calc(var(--duration-stagger) * 1);
+  animation-delay: 40ms;
 }
 [data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(3) {
-  animation-delay: calc(var(--duration-stagger) * 2);
+  animation-delay: 80ms;
 }
 [data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(4) {
-  animation-delay: calc(var(--duration-stagger) * 3);
+  animation-delay: 120ms;
 }
 [data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(5) {
-  animation-delay: calc(var(--duration-stagger) * 4);
+  animation-delay: 160ms;
 }
 [data-slot='questionnaire-item'][data-active] [data-slot='questionnaire-choice']:nth-child(n + 6) {
-  animation-delay: calc(var(--duration-stagger) * 5);
+  animation-delay: 200ms;
 }
 
-/* resize：高度跟著內容變（面板換入換出、上下題），300 smooth-out。只有變化期間才裁切。 */
+/* resize：高度跟著內容變（面板換入換出、上下題）。只有變化期間才裁切。 */
 .motion-resize[data-resizing] {
   overflow: hidden;
-  transition: height var(--resize-dur) var(--resize-ease);
+  transition: height 300ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* 進度：用量環的弧長（#528），250 smooth-out。只動 stroke-dashoffset，一次性的過渡，不是持續動畫。 */
+/* 進度：用量環的弧長（#528）。只動 stroke-dashoffset，一次性的過渡，不是持續動畫。 */
 .motion-progress {
-  transition: stroke-dashoffset var(--duration-fast) var(--ease-smooth-out);
+  transition: stroke-dashoffset 250ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* 按壓：只給實心主按鈕與送出鍵，scale .96、120ms。其他按鈕只換底色。 */
+/* 按壓：只給實心主按鈕與送出鍵。其他按鈕只換底色。 */
 :is(
   [data-slot='button'],
   [data-slot='questionnaire-next'],
   [data-slot='questionnaire-submit']
 )[data-variant='default'] {
   transition-property: color, background-color, box-shadow, opacity, scale;
-  transition-duration:
-    var(--duration-quick), var(--duration-quick), var(--duration-quick), var(--duration-quick),
-    var(--duration-press);
-  transition-timing-function: var(--ease-smooth-out);
+  transition-duration: 150ms, 150ms, 150ms, 150ms, 120ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 :is(
@@ -181,7 +170,7 @@
     [data-slot='questionnaire-next'],
     [data-slot='questionnaire-submit']
   )[data-variant='default']:not(:disabled):active {
-  scale: var(--scale-large);
+  scale: 0.96;
 }
 
 /* ── 持續狀態：串流游標 ── */
@@ -217,7 +206,7 @@
   border-radius: inherit;
   pointer-events: none;
   opacity: 0;
-  transition: opacity var(--duration-medium) var(--ease-smooth-out);
+  transition: opacity 350ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* 線 */
@@ -310,15 +299,6 @@
   :root:root ::after {
     --animate-in: motion-fade-in 150ms ease backwards;
     --animate-out: motion-fade-out 150ms ease both;
-  }
-
-  /*
-   * 元件自己寫的 `animation-duration-*` 直接設 `animation-duration`，蓋掉上面那組變數裡的 150：
-   * 動畫換成了淡入淡出，時長卻還是原本的。這裡把它壓回 150。抽屜改成 SG 的 transition 之後（#1583）已經沒有元件寫，
-   * 去留跟其他沒消費者的 token 一起在 ⑥（#1689）定。
-   */
-  :root:root [class*='animation-duration-'] {
-    animation-duration: 150ms;
   }
 
   :root:root .motion-rise-in,

@@ -30,8 +30,8 @@ import { readCascade } from './css-cascade';
  * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-muted`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
  * 11. **`ui/` 以外不寫原生 `<textarea`**（#1280）：用 `ui/textarea` 的 `Textarea`（邊框、焦點、手機字級都在那裡）。
  *     輸入框裡的是 `InputGroupTextarea`，也在 `ui/`。這條掃 JSX，不是字串字面值。
- * 12. **時長走 `motion.css` 的 token**（#1280）：不寫 `duration-200`、`animation-duration-350` 這種數字，寫
- *     `duration-(--duration-fast)`。這條連 `ui/` 一起管：registry 原文寫死的時長已經換成 token。
+ * 12. **時長只用 {@link DURATION_STEP} 列的 `duration-*` 級距**（#1280；#1827 D21 照 SG）：Tailwind 本身接受任意整數，這裡收窄；
+ *     不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137` 與 `animation-duration-*`。這條連 `ui/` 一起管。
  * 13. **不用細字重**（#1307；`COMPONENTS.md`「次要靠顏色不靠字重」）：`font-thin`／`font-extralight`／`font-light` 擋下。
  *     次要的字靠 `text-muted-foreground`，不靠把字變細——細字在中文與小字級下先糊掉。今天 0 次，是絆索。連 `ui/` 一起管。
  *
@@ -124,7 +124,8 @@ type Rule =
 
 const ROTATE = /^-?rotate-\d+$/;
 const ROTATE_ON_OPEN = /(?:state=open\]?\]?(?:>[^:]*)?|panel-open):-?rotate-\d+$/;
-const RAW_DURATION = /^(?:animation-)?duration-\d/;
+const DURATION = /^(?:animation-)?duration-/;
+const DURATION_STEP = /^duration-(?:0|75|100|150|200|300|500|700|1000)\b/;
 const THIN_WEIGHT = /^font-(?:thin|extralight|light)$/;
 
 function rulesBroken(text: string): { rule: Rule; what: string }[] {
@@ -167,7 +168,7 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
   }
   for (const token of text.split(/\s+/)) {
     const u = utility(token);
-    if (RAW_DURATION.test(u)) found.push({ rule: '時長', what: u });
+    if (DURATION.test(u) && !DURATION_STEP.test(u)) found.push({ rule: '時長', what: u });
     if (THIN_WEIGHT.test(u)) found.push({ rule: '字重', what: u });
     if (ROTATE_ON_OPEN.test(token)) found.push({ rule: '箭頭', what: token });
     if (/(?:^|:)focus-visible:/.test(token) && /^ring(?:-|$)/.test(u)) {
@@ -374,9 +375,7 @@ describe('判準', () => {
 
   test('展開箭頭：手寫的旋轉轉場與跟著 data-state 轉的都擋；不轉場、不跟展開走的旋轉不擋', () => {
     expect(
-      rules(
-        'size-4 transition-transform duration-(--duration-fast) group-data-[state=open]:rotate-180',
-      ),
+      rules('size-4 transition-transform duration-200 group-data-[state=open]:rotate-180'),
     ).toEqual(['箭頭:transition-transform rotate-*', '箭頭:group-data-[state=open]:rotate-180']);
     expect(rules('[&[data-state=open]>svg]:rotate-90')).toEqual([
       '箭頭:[&[data-state=open]>svg]:rotate-90',
@@ -427,12 +426,14 @@ describe('判準', () => {
     expect(rules('max-h-[150px] overflow-auto px-3 pt-1 pb-2 font-mono text-tip')).toEqual([]);
   });
 
-  test('時長：數字的 duration 與 animation-duration 都擋，連同 variant 前綴；token 與 delay 不擋', () => {
-    expect(rules('transition-colors duration-200')).toEqual(['時長:duration-200']);
+  test('時長：只放行 Tailwind 的級距，任意值與 animation-duration 都擋，連同 variant 前綴；delay 不擋', () => {
+    expect(rules('transition-colors duration-150 hover:duration-200')).toEqual([]);
+    expect(rules('duration-[200ms]')).toEqual(['時長:duration-[200ms]']);
+    expect(rules('duration-(--duration-fast)')).toEqual(['時長:duration-(--duration-fast)']);
+    expect(rules('duration-137')).toEqual(['時長:duration-137']);
     expect(rules('data-[state=open]:animation-duration-350')).toEqual([
       '時長:animation-duration-350',
     ]);
-    expect(rules('duration-(--duration-fast) animation-duration-(--duration-medium)')).toEqual([]);
     expect(rules('delay-50 data-[state=closed]:delay-0')).toEqual([]);
   });
 

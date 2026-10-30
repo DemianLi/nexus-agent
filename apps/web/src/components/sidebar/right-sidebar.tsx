@@ -387,7 +387,7 @@ function ResizeHandle() {
       aria-valuenow={width}
       tabIndex={0}
       data-focus="custom"
-      className="hover:bg-border focus-visible:bg-ring absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize transition-colors duration-(--duration-quick)"
+      className="hover:bg-border focus-visible:bg-ring absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize transition-colors duration-150"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -783,7 +783,7 @@ function TabChip({
     <div
       role="none"
       className={cn(
-        'group flex h-9 max-w-56 min-w-28 shrink items-center rounded-lg transition-colors duration-(--duration-quick)',
+        'group flex h-9 max-w-56 min-w-28 shrink items-center rounded-lg transition-colors duration-150',
         selected
           ? 'glass-chosen text-foreground'
           : 'text-muted-foreground hover:bg-muted hover:text-foreground',

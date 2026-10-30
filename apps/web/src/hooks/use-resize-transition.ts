@@ -17,7 +17,7 @@
 import { useLayoutEffect, useRef } from 'react';
 import type { RefObject } from 'react';
 
-/** 等 `transitionend` 的上限：`--resize-dur` 300 再寬限一點。 */
+/** 等 `transitionend` 的上限：resize 的 300ms 再寬限一點。 */
 export const RESIZE_SETTLE_MS = 400;
 
 function reducedMotion(): boolean {

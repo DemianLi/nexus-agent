@@ -106,7 +106,7 @@
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | App 殼（三欄：會話列表／對話／右側欄） | —（純前端） | `ui-layout`（`AppFrame`、`SIDEBAR_AUTO_COLLAPSE = 1024`） | sc `sidebar`（手機 Sheet） | 卡片縮放 `--resize-dur 300ms` | RWD 主載體；2026-09-25 #640 補上右側欄（1024 以上停靠、以下全螢幕覆蓋），殼層三欄齊了 |
+| 1 | App 殼（三欄：會話列表／對話／右側欄） | —（純前端） | `ui-layout`（`AppFrame`、`SIDEBAR_AUTO_COLLAPSE = 1024`） | sc `sidebar`（手機 Sheet） | 卡片縮放 300ms | RWD 主載體；2026-09-25 #640 補上右側欄（1024 以上停靠、以下全螢幕覆蓋），殼層三欄齊了 |
 | 2 | 手機抽屜與頂部列 | —（純前端） | `ui-layout` 的 `narrowExpanded` | sc `sheet`、`drawer` | 抽屜照 SG 的 sheet：transition 200ms、位移 2.5rem 加淡入淡出；下拉選單沒有動畫（規格 §7） | 1024 以下 |
 | 3 | 主題切換（light／dark／system） | —（純前端） | `ui-theme`（`--dsw-*` token、`ThemeRuntime`） | shadcn `.dark` | — | 見 §3.4 分歧 |
 | 4 | 連線狀態指示 | P1（`nexus-wire` 的 `client.ts`／`sse.ts` 沒有連線狀態；`WireChannel` 只是頻道名）**——2026-09-22 複查：這句仍然成立，但畫面上已有前端自推的簡版（`use-conversation.ts:187` 的 `connected`／`connectionError`，`StatusLine` 收）** | `ui-primitives/ConnectionIndicator` | — | `thinking-orbs` `connecting` | 2026-09-25 #593（PR #597）：察覺斷線、照 dsh 退避自動重連，接回時整份重建 |
@@ -130,7 +130,7 @@
 | 11 | 助理訊息（markdown、串流中、被停止） | P0（`AiEntry`，含 `stopped`） | `ui-chat/AssistantMarkdown`、`AssistantNodeView` | AIE `message`（streamdown） | 字元 shimmer（`Solving....` 那種） | #608 已做完：撞到輸出上限（`AiEntry.maxTokens`）的那一輪，最後一則回覆底下一行灰字「（已達輸出上限，這一輪沒寫完）」，沒字的那則也畫；不給續寫、重試鈕（同 dsh 延後）。子代理撞到上限時 `task` 卡那句英文換成中文 |
 | 12 | 推理區塊 | P1（`AiEntry` 沒有 reasoning 欄位，只有 `text`／`streaming`／`attribution`／`error`／`stopped`；`conversation.ts:679` 註解 reasoning 的 delta「這一版不呈現」（2026-09-22 複查：原記 `:496`，行號已漂）） | `ui-chat/ReasoningRow` | AIE `reasoning`、`chain-of-thought` | `thinking-orbs` `composing`（20px） | #527 已做完：推理段落送上線並畫成摺疊區塊 |
 | 13 | 工具呼叫卡（四種狀態） | P0（`ToolEntry.status`） | `ui-tool/ToolCallTree`、`toolviews/` | AIE `tool` | 執行中 `thinking-orbs` `working` | 狀態映射見選型筆記 §3.1 |
-| 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`text`／`meta`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 `--resize-dur` | dsh 是「按工具名換呈現」的 slot。#601 做了 diff（執行中從參數算）與通用卡的結果文字；2026-09-25 #625 讀結果的 `meta`（harness #619）：讀檔卡（行號＋整段高亮）、搜尋卡（分檔的命中、路徑清單，截斷時「顯示 X／共 N」）、改檔完成後畫實際套用的 diff。終端（產品路徑上沒有 `execute`）、網頁、JSON 樹還沒有；出廠沒有抓網頁的工具（MCP 接進來的工具名不固定，走通用卡），網頁卡目前沒有生產者；`run_javascript` 走通用卡的 `code` 類（參數處高亮那段程式、下面接結果），dsh 的 `run_code` 也是走通用列的 `code` 變體、沒有專屬卡（`tool-call-model.ts:64`、`:222`，`ToolRow.tsx:294`，clone `6b1808f`），兩邊一樣；dsh 的 `JsonTree` 只用在 trajectory 檢視器，不在工具卡；讀圖（2026-09-25 查過，dev-harness 用真端點驗）：deepagents 的 `read_file` 讀圖片回一顆 `{type:'image',…}`，`@langchain/openai` 原樣塞進 `role: tool`，NVIDIA 端點回 400（tool 訊息只收文字，換成 `image_url` 塊也是同一個 400，MCP 工具回圖同樣會中），那則訊息又已進了歷史，之後每一輪都失敗（實測：讀到圖的那一輪與下一輪都是 `turn/failed`；沒給 `--workspace` 時模型先 `write_file` 一張 base64 圖再讀，也會讓 thread 之後都失敗；已經壞掉的舊 thread 重新載入會把圖原樣重放，救不回來）；dsh 的一般 `read` 碰到二進位直接拒絕、圖片另走要附件儲存的 `read_image`，所以 harness 照 dsh 在三個地方擋（#642：寫到磁碟的 backend 和沒給 `--workspace` 時用的虛擬 FS 都讓 `read_file` 拒絕二進位檔，回 `Error: cannot read "<path>": binary file`，`isError` 為 true；MCP 回的圖換成一段文字說明），web 走現有的錯誤卡就好，不用另做讀圖卡。#602（PR #628）之後讀檔一頁可到 2000 行，meta 超過上限就整格不給、退回通用卡（第一次讀約 4%）；#630 把讀檔 meta 的上限放寬到 100,000 位元組，語料（nexus 587 檔、dsh 5567 檔）上一個都不再掉，跳脫字元多的內容（tab 縮排、大量引號）仍可能掉 |
+| 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`text`／`meta`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 300ms | dsh 是「按工具名換呈現」的 slot。#601 做了 diff（執行中從參數算）與通用卡的結果文字；2026-09-25 #625 讀結果的 `meta`（harness #619）：讀檔卡（行號＋整段高亮）、搜尋卡（分檔的命中、路徑清單，截斷時「顯示 X／共 N」）、改檔完成後畫實際套用的 diff。終端（產品路徑上沒有 `execute`）、網頁、JSON 樹還沒有；出廠沒有抓網頁的工具（MCP 接進來的工具名不固定，走通用卡），網頁卡目前沒有生產者；`run_javascript` 走通用卡的 `code` 類（參數處高亮那段程式、下面接結果），dsh 的 `run_code` 也是走通用列的 `code` 變體、沒有專屬卡（`tool-call-model.ts:64`、`:222`，`ToolRow.tsx:294`，clone `6b1808f`），兩邊一樣；dsh 的 `JsonTree` 只用在 trajectory 檢視器，不在工具卡；讀圖（2026-09-25 查過，dev-harness 用真端點驗）：deepagents 的 `read_file` 讀圖片回一顆 `{type:'image',…}`，`@langchain/openai` 原樣塞進 `role: tool`，NVIDIA 端點回 400（tool 訊息只收文字，換成 `image_url` 塊也是同一個 400，MCP 工具回圖同樣會中），那則訊息又已進了歷史，之後每一輪都失敗（實測：讀到圖的那一輪與下一輪都是 `turn/failed`；沒給 `--workspace` 時模型先 `write_file` 一張 base64 圖再讀，也會讓 thread 之後都失敗；已經壞掉的舊 thread 重新載入會把圖原樣重放，救不回來）；dsh 的一般 `read` 碰到二進位直接拒絕、圖片另走要附件儲存的 `read_image`，所以 harness 照 dsh 在三個地方擋（#642：寫到磁碟的 backend 和沒給 `--workspace` 時用的虛擬 FS 都讓 `read_file` 拒絕二進位檔，回 `Error: cannot read "<path>": binary file`，`isError` 為 true；MCP 回的圖換成一段文字說明），web 走現有的錯誤卡就好，不用另做讀圖卡。#602（PR #628）之後讀檔一頁可到 2000 行，meta 超過上限就整格不給、退回通用卡（第一次讀約 4%）；#630 把讀檔 meta 的上限放寬到 100,000 位元組，語料（nexus 587 檔、dsh 5567 檔）上一個都不再掉，跳脫字元多的內容（tab 縮排、大量引號）仍可能掉 |
 | 15 | 子代理歸屬標示 | P0（`Attribution`）**——2026-09-22 已實作：`tool-card.tsx:52` 的 `AttributionBadge` ＋ transcript 縮排** | `ui-subagent/SubagentHeaderLineage` | AIE `agent` | — | nexus「未歸屬」要照樣顯示 |
 | 16 | 子代理對話檢視（唯讀 composer） | P1 | `ui-subagent/SubagentReadOnlyComposer` | — | — | 2026-10-01 拍板：子代理留在主對話裡，不做獨立檢視（折疊器本來就把子代理的卡併在主對話）。換成委派卡上的背景子代理：狀態（#870）、寄來的話與傳給誰（#864、#868）、展開讀它自己的對話（#872、#874）、傳話與單獨停止（#873），都是 web 自己做的 |
 | 17 | 回合分隔與用量 | P1 | `ui-chat/TurnUsagePanel`、`StatsPills`、`TurnTailNodeView` | AIE `context` | 數字滾動 | #574（PR #600）在頂列畫整條對話累計的 token 與時間，那是總帳；逐輪的用量還沒有，要線上逐次帶輸入與輸出，跟總帳是兩份投影 |
@@ -168,7 +168,7 @@
 | 31 | 狀態列（`idle`／`running`／`awaiting-input`／`failed`／`stopped`） | P0（`ConversationStatus`，`conversation.ts:175`） | `ui-primitives/StateDot` | AIE `shimmer` | `thinking-orbs` 依狀態換 state | 現有 `status-line.tsx` |
 | 32 | todo 清單 | P1 | `ui-conversation/.../TodoPanel` | AIE `task`、`queue` | 勾選 bounce（`--ease-bounce`） | nexus 有 todo plugin，wire 沒送；#575 已做完：待辦清單送上線並畫出來（上一句「wire 沒送」已過期） |
 | 33 | 目標列 | P1 | `ui-goal/GoalBar`（"docked above the composer"） | — | — | nexus 有 goal plugin；2026-09-25 請 dev-harness 排投影，排在計劃模式、壓縮列之後；2026-10-01 開了 [#897](https://github.com/DemianLi/nexus-agent/issues/897)，先只送持久的目標快照（階段、輪數），「會不會自己續行」要等 #638、#660、#661 落地後另開一張；2026-10-02 harness 半邊已合（PR #903）；web 那半是 [#945](https://github.com/DemianLi/nexus-agent/issues/945)，建議先只讀、動作鈕等 activation 落地 |
-| 34 | context 用量表 | P1 | `ui-conversation/.../ContextMeter` | AIE `context` | 進度條 `--ease-smooth-out` | #528 已做完：輸入框底列畫用掉多少（沒有分母，見 §2.0） |
+| 34 | context 用量表 | P1 | `ui-conversation/.../ContextMeter` | AIE `context` | 進度條 `cubic-bezier(0.22, 1, 0.36, 1)` | #528 已做完：輸入框底列畫用掉多少（沒有分母，見 §2.0） |
 
 ### 2.7 回饋與通知
 
@@ -250,7 +250,7 @@
 
 註解標明這些值來自 transitions.dev。
 
-**「開快關更快、先縮一點再長出來」是 Libraries.dev 這套動效的核心規則**：open 250ms 配 close 150ms、scale 0.96–0.99、`--ease-smooth-out`。nexus 原本模仿的是這條規則；#1687 起進出場改照 SG，對話框、確認框、popover 開關都是 100ms，tooltip 150ms，曲線 `ease`，「開快關更快」不再適用，現行數值以規格 §7 為準。上面這組 token 還有消費者的，留給 ⑥（#1689）一起收。
+**「開快關更快、先縮一點再長出來」是 Libraries.dev 這套動效的核心規則**：open 250ms 配 close 150ms、scale 0.96–0.99、`--ease-smooth-out`。nexus 原本模仿的是這條規則；#1687 起進出場改照 SG，對話框、確認框、popover 開關都是 100ms，tooltip 150ms，曲線 `ease`，「開快關更快」不再適用，現行數值以規格 §7 為準。上面這組 token 在 nexus 已全部刪掉（#1689），還在用的數值直接寫在 `motion.css`。
 
 **agent 狀態 → 動效（提案，未 prototype）**：
 

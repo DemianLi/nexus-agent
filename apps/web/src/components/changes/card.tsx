@@ -30,7 +30,7 @@ export const COLLAPSED_ROWS = 3;
  * `text-muted-foreground` 的（圖示、`FileCounts` 的說明字）用 `group-hover/pressable` 跟著翻。
  */
 const PRESSABLE =
-  'group/pressable hover:bg-muted hover:text-foreground rounded-lg text-left transition-colors duration-(--duration-quick)';
+  'group/pressable hover:bg-muted hover:text-foreground rounded-lg text-left transition-colors duration-150';
 
 export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesStores }) {
   const { summary: store } = changes;
