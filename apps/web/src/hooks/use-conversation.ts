@@ -64,6 +64,7 @@ import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
+import { serverClosingText } from '@/lib/server-closing';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
 import {
@@ -790,9 +791,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return refuse(message);
       }
       if (outcome.kind === 'rejected') {
-        // 這條線拒絕發派——跟 `run.start` 被拒是同一件事，所以走同一個欄位。
-        setCommandError(outcome.message);
-        return refuse(outcome.message);
+        // 這條線拒絕發派，不是命令自己失敗，所以走 commandError，不走 slashError。
+        const message = serverClosingText(outcome.code) ?? outcome.message;
+        setCommandError(message);
+        return refuse(message);
       }
       setCommandError(undefined);
       if (outcome.kind === 'unknown') {
@@ -939,6 +941,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return {
           message:
             threadCapacityText(result.error) ??
+            serverClosingText(result.error) ??
             threadHistoryTooDeepText(result.error) ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
