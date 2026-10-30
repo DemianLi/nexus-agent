@@ -51,6 +51,8 @@ struct Spawner {
     stdout: ChildStdout,
     socket: PathBuf,
     events: Vec<Event>,
+    /// `Ready` 帶來的 Landlock ABI；沒有 `Ready` 就是 0。
+    landlock_abi: u32,
 }
 
 /// 起 spawner，回它和第一筆事件（`Ready` 或 `Unavailable`）。`outer` 是在 exec spawner 之前先裝的外層過濾器（測試設施專用）。
@@ -80,8 +82,11 @@ fn start_with(envs: &[(&str, &str)], outer: Option<Vec<libc::sock_filter>>) -> (
     let mut child = cmd.spawn().unwrap();
     let stdin = child.stdin.take().unwrap();
     let stdout = child.stdout.take().unwrap();
-    let mut s = Spawner { child, stdin, stdout, socket, events: Vec::new() };
+    let mut s = Spawner { child, stdin, stdout, socket, events: Vec::new(), landlock_abi: 0 };
     let first = s.next_event();
+    if let Event::Ready { landlock_abi, .. } = first {
+        s.landlock_abi = landlock_abi;
+    }
     (s, first)
 }
 
@@ -459,6 +464,9 @@ fn partial_landlock_still_runs_and_says_so() {
     let mut out = String::new();
     stdout.unwrap().read_to_string(&mut out).unwrap();
     assert_eq!(out, "hi\n");
+    // 全權模式不上 Landlock，談不上部分生效。
+    let (_, _, started) = s.launch(full_access(2, &ws, &["echo", "hi"]));
+    assert!(matches!(started, Event::Started { id: 2, partial: false, .. }), "{started:?}");
 }
 
 /// 測試設施的外層過濾器：`nr` 這條 syscall（第一個參數等於 `arg0` 時）回 `err`，其餘放行。
@@ -478,11 +486,104 @@ fn outer_filter(nr: i64, arg0: Option<u32>, err: i32) -> Vec<libc::sock_filter> 
     }
 }
 
+/// 全權模式的要求：不帶讀根、寫根，工作目錄是 `ws`。
+fn full_access(id: u32, ws: &Path, argv: &[&str]) -> Spawn {
+    Spawn { mode: Mode::FullAccess, readable: Vec::new(), writable: Vec::new(), ..request(id, ws, argv) }
+}
+
+/// 全權模式不上 Landlock：工作區外寫得進、讀得到；seccomp 照樣擋網路。
+fn assert_full_access_skips_landlock_but_not_seccomp(s: &mut Spawner) {
+    let ws = temp_dir("ws");
+    let outside = temp_dir("outside");
+    std::fs::write(outside.join("token"), "secret").unwrap();
+    let p = probe();
+    let p = p.to_str().unwrap();
+    let target = outside.join("w");
+    let (_, stdout, started) = s.launch(full_access(1, &ws, &[p, "write", target.to_str().unwrap()]));
+    assert!(matches!(started, Event::Started { id: 1, partial: false, .. }), "{started:?}");
+    let mut out = String::new();
+    stdout.unwrap().read_to_string(&mut out).unwrap();
+    assert_eq!(out.trim(), "ok");
+    assert_eq!(std::fs::read_to_string(&target).unwrap(), "x");
+    let (out, _) = s.run(full_access(2, &ws, &[p, "read", outside.join("token").to_str().unwrap()]));
+    assert_eq!(out.trim(), "ok");
+    for (id, what) in [(3, "tcp"), (4, "udp")] {
+        let (out, _) = s.run(full_access(id, &ws, &[p, what]));
+        assert_eq!(out.trim(), errno_line(libc::EACCES), "{what}");
+    }
+    let (out, _) = s.run(full_access(5, &ws, &[p, "unshare"]));
+    assert_eq!(out.trim(), errno_line(libc::EPERM));
+}
+
 #[test]
-fn no_landlock_means_unavailable() {
+fn full_access_skips_landlock_but_keeps_seccomp() {
+    let mut s = spawner!();
+    assert_full_access_skips_landlock_but_not_seccomp(&mut s);
+}
+
+#[test]
+fn without_landlock_only_full_access_starts() {
     let (mut s, first) = start_with(&[], Some(outer_filter(libc::SYS_landlock_create_ruleset, None, libc::ENOSYS)));
-    assert!(matches!(first, Event::Unavailable { errno: libc::ENOSYS, .. }), "{first:?}");
-    assert_eq!(s.child.wait().unwrap().code(), Some(125));
+    assert!(matches!(first, Event::Ready { landlock_abi: 0, .. }), "{first:?}");
+    let ws = temp_dir("ws");
+    for (id, mode) in [(10, Mode::ReadOnly), (11, Mode::WorkspaceWrite)] {
+        let (_, _, event) = s.launch(Spawn { mode, ..request(id, &ws, &["/bin/true"]) });
+        assert!(
+            matches!(event, Event::Failed { kind: FailKind::SandboxUnavailable, errno: libc::ENOSYS, .. }),
+            "{mode:?}: {event:?}"
+        );
+    }
+    assert_full_access_skips_landlock_but_not_seccomp(&mut s);
+}
+
+/// 訊號只送得到同一個 Landlock domain 裡的行程（ABI 6 起）；ABI 壓到 5 就沒有這一層。
+#[test]
+fn abi_6_keeps_signals_inside_the_tool() {
+    let mut s = spawner!();
+    let ws = temp_dir("ws");
+    let (out, _) = s.run(request(1, &ws, &["/bin/sh", "-c", "sleep 1 & kill -0 $! && echo ok"]));
+    assert_eq!(out.trim(), "ok", "同一個 domain 裡的後代要送得到");
+    let abi = s.landlock_abi;
+    if abi < 6 {
+        eprintln!("跳過：這個核心的 Landlock ABI 是 {abi}，沒有訊號 scope");
+        return;
+    }
+    let spawner_pid = s.child.id().to_string();
+    let me = std::process::id().to_string();
+    for (id, target) in [(2, &spawner_pid), (3, &me)] {
+        assert_eq!(probe_line(&mut s, id, &ws, &["kill", target]), errno_line(libc::EPERM), "{target}");
+    }
+    let (mut capped, first) = start_with(&[("NEXUS_SPAWNER_TEST_ABI_CAP", "5")], None);
+    assert!(matches!(first, Event::Ready { landlock_abi: 5, .. }), "{first:?}");
+    assert_eq!(probe_line(&mut capped, 4, &ws, &["kill", &me]), "ok");
+}
+
+/// 開著的 fd 個數與最大的 fd。
+fn open_fds(pid: u32) -> (usize, i32) {
+    let fds: Vec<i32> = std::fs::read_dir(format!("/proc/{pid}/fd"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_str().unwrap().parse().unwrap())
+        .collect();
+    (fds.len(), fds.iter().copied().max().unwrap())
+}
+
+#[test]
+fn running_out_of_fds_for_dev_null_fails_with_resource_and_leaks_nothing() {
+    let mut s = spawner!();
+    let ws = temp_dir("ws");
+    let pid = s.child.id();
+    let (before, highest) = open_fds(pid);
+    // 只留兩個空位：三個 /dev/null 開到第三個失敗。硬上限照舊，一般使用者調不高它。
+    let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY：讀、改自己起的 spawner 的上限，limit 是本地值。
+    unsafe {
+        assert_eq!(libc::prlimit(pid as libc::pid_t, libc::RLIMIT_NOFILE, std::ptr::null(), &mut limit), 0);
+        limit.rlim_cur = (highest + 3) as libc::rlim_t;
+        assert_eq!(libc::prlimit(pid as libc::pid_t, libc::RLIMIT_NOFILE, &limit, std::ptr::null_mut()), 0);
+    }
+    let (_, _, event) = s.launch(Spawn { pipes: 0, ..request(1, &ws, &["/bin/true"]) });
+    assert!(matches!(&event, Event::Failed { id: 1, kind: FailKind::Resource, errno: libc::EMFILE, detail } if detail == b"open /dev/null"), "{event:?}");
+    assert_eq!(open_fds(pid).0, before);
 }
 
 #[test]
