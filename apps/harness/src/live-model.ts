@@ -233,8 +233,9 @@ export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
  *
  * ## 只有標題這種用途會帶
  *
- * 主請求不帶 `chat_template_kwargs`（預設就是開著）；pi-ai 在非 `off` 的等級底下會明著送 `enable_thinking: true`，
- * 我們不送，**沒有量過兩者等價**——見 `model-catalog.ts` 檔頭。
+ * 主請求不帶 `chat_template_kwargs`，`default` 用模型自己的預設；這顆不帶時會推理（上面「不帶」那組）。pi-ai 在非 `off`
+ * 的等級底下會明著送 `enable_thinking: true`，我們不送：**這顆明送跟不送等不等價沒有量過**，別顆量到不等價——見
+ * `model-catalog.ts` 檔頭。
  */
 export const DEFAULT_LIVE_MODEL_ENTRY: ModelEntry = Object.freeze({
   id: DEFAULT_LIVE_MODEL_ID,
