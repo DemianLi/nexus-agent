@@ -64,7 +64,11 @@ function wrapHandle(target: FileHandle, path: string, directory: boolean): FileH
           if (directory) {
             calls.push(`sync-dir ${label(path)}`);
             const dir =
-              path === projectDir ? 'project' : dirname(path) === projectDir ? 'session' : undefined;
+              path === projectDir
+                ? 'project'
+                : dirname(path) === projectDir
+                  ? 'session'
+                  : undefined;
             if (dir !== undefined) {
               directorySyncs[dir] += 1;
               if (
@@ -265,7 +269,9 @@ describe('呼叫順序', () => {
     expect((await readdir(session)).sort()).toEqual([LOG, SESSION_LOCK_FILENAME].sort());
     const [first] = (await readFile(join(session, LOG), 'utf8')).split('\n');
     expect(JSON.parse(first ?? '')).toMatchObject({ type: 'session', id: 'epsilon' });
-    expect(await readFile(join(projectDir, 'epsilon.header.json'), 'utf8')).toBe(`${first ?? ''}\n`);
+    expect(await readFile(join(projectDir, 'epsilon.header.json'), 'utf8')).toBe(
+      `${first ?? ''}\n`,
+    );
   });
 });
 
@@ -281,7 +287,9 @@ describe('目錄 fsync 的錯不吞，也不卡死', () => {
     await stored.close();
 
     expect(calls.filter((call) => call.startsWith('link <p>/zeta/'))).toHaveLength(1);
-    expect((await readdir(join(projectDir, 'zeta'))).filter((name) => name.endsWith('.tmp'))).toEqual([]);
+    expect(
+      (await readdir(join(projectDir, 'zeta'))).filter((name) => name.endsWith('.tmp')),
+    ).toEqual([]);
     const resumed = await store.resume('zeta');
     expect(resumed.events).toHaveLength(1);
     await resumed.stored.close();

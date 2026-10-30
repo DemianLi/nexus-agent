@@ -439,7 +439,9 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
             // 單檔佈局報挑中的那個世代檔、墓碑報墓碑：這兩種的錯都帶 `location`。
             file:
               error.location?.path ??
-              (base === undefined ? path : join(directory, legacyTwoFileSessionFilenames(base).log)),
+              (base === undefined
+                ? path
+                : join(directory, legacyTwoFileSessionFilenames(base).log)),
             reason: error.message,
           });
           continue;

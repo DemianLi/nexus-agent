@@ -127,7 +127,18 @@
  * @module
  */
 
-import { link, mkdir, open, readdir, readFile, rename, rm, rmdir, stat, truncate } from 'node:fs/promises';
+import {
+  link,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  rmdir,
+  stat,
+  truncate,
+} from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { createReadStream, readdirSync, statSync } from 'node:fs';
 import type { BigIntStats, Dirent } from 'node:fs';
@@ -577,7 +588,10 @@ export interface JsonlHeaderLine extends StoredSessionHeader {
 }
 
 /** header 行（含換行）。`type` 排第一格，其餘照 header 的鍵序。 */
-function encodeHeaderLine(header: StoredSessionHeader, migratedFrom?: JsonlMigrationSource): string {
+function encodeHeaderLine(
+  header: StoredSessionHeader,
+  migratedFrom?: JsonlMigrationSource,
+): string {
   const line: JsonlHeaderLine = {
     type: 'session',
     ...header,
@@ -603,7 +617,8 @@ function tombstoneOf(text: string): { readonly id: string } | undefined {
   }
   if (!isRecord(value)) return undefined;
   const { version, id } = value;
-  if (typeof version !== 'number' || !(version >= FIRST_GENERATION_FORMAT_VERSION)) return undefined;
+  if (typeof version !== 'number' || !(version >= FIRST_GENERATION_FORMAT_VERSION))
+    return undefined;
   if (typeof id !== 'string') {
     throw new SessionCorruptionError('（不明）', `舊路徑的墓碑記的 id 是 ${JSON.stringify(id)}`);
   }
@@ -1002,7 +1017,10 @@ async function settleTombstone(
   state: Exclude<LegacyPathState, 'tombstone'>,
 ): Promise<void> {
   if (state === 'missing') return publishTombstone(directory, header);
-  await replaceSyncedFile(legacyTwoFilePathsIn(directory, header.id).header, encodeHeaderLine(header));
+  await replaceSyncedFile(
+    legacyTwoFilePathsIn(directory, header.id).header,
+    encodeHeaderLine(header),
+  );
   await syncDirectory(directory);
 }
 
@@ -1757,7 +1775,8 @@ async function ownGeneration(
   sessionDirectory: string,
   id: string,
 ): Promise<
-  { readonly logPath: string; readonly version: number; readonly migratedFrom?: unknown } | undefined
+  | { readonly logPath: string; readonly version: number; readonly migratedFrom?: unknown }
+  | undefined
 > {
   const generation = await resolveGeneration(sessionDirectory);
   if (generation === undefined) return undefined;
@@ -2467,7 +2486,10 @@ async function resumeSite(
   // **位元組額度（#2115）在讀之前佔**：只是唯讀佔著就等它們讀完；開著的 thread 佔的加上這一份放不下就拋，一個位元組
   // 都不讀。冷讀快取命中也佔——事件同樣要握在記憶體裡，佔到把手關掉為止。量的是實際要讀的那個檔。遷移的峰值也在這裡面：
   // 驗證時讀回來的暫存檔與它解析出的事件，取代第一次讀的那一份，不同時握著兩份。
-  const reservation = await context.logBudget.holdForSession(id, await logBytesOf(site.logPath, fs));
+  const reservation = await context.logBudget.holdForSession(
+    id,
+    await logBytesOf(site.logPath, fs),
+  );
   held(reservation);
   if (site.layout === 'two-file' || site.version < SESSION_LOG_FORMAT_VERSION) {
     const migrated = await migrateToCurrentGeneration(directory, id, site, context, location);
@@ -2681,7 +2703,9 @@ async function verifyMigratedTemp(
   const mismatch = (detail: string): SessionCorruptionError =>
     new SessionCorruptionError(id, `遷移寫出的暫存檔${detail}，不發佈`, location);
   if (bytes.byteLength !== headerBytes + expected.acceptedBytes) {
-    throw mismatch(`有 ${bytes.byteLength} 個位元組，應該是 ${headerBytes + expected.acceptedBytes}`);
+    throw mismatch(
+      `有 ${bytes.byteLength} 個位元組，應該是 ${headerBytes + expected.acceptedBytes}`,
+    );
   }
   if (createHash('sha256').update(body).digest('hex') !== expected.sha256) {
     throw mismatch('的本文跟來源的前綴雜湊對不上');

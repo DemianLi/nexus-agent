@@ -11,7 +11,16 @@
  * B 條同時掛了暫存檔 `fsync` 失敗與「就地 `writeFile` 寫一半」：哪天墓碑改成就地覆寫，舊 header 會真的被寫壞，紅在位元組那個斷言上。
  */
 
-import { appendFile, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -261,15 +270,19 @@ describe('A. 舊路徑的 header 上不准就地截斷', () => {
 describe('B. 遷移中途失敗，舊 header 原樣', () => {
   it('暫存檔 fsync 拋 ENOSPC：續接拒絕、舊兩檔位元組不變、沒有殘留 .tmp、不留會話目錄；撤掉注入再續接成功', async () => {
     await seedLegacy(2);
-    const before = [await readFile(headerPath()), await readFile(legacyTwoFilePathsIn(dir, ID).log)];
+    const before = [
+      await readFile(headerPath()),
+      await readFile(legacyTwoFilePathsIn(dir, ID).log),
+    ];
     inject.tempSyncEnospc = true;
     inject.partialHeaderWrite = true;
 
     await expect(store().resume(ID)).rejects.toThrow(/ENOSPC/);
 
-    expect([await readFile(headerPath()), await readFile(legacyTwoFilePathsIn(dir, ID).log)]).toEqual(
-      before,
-    );
+    expect([
+      await readFile(headerPath()),
+      await readFile(legacyTwoFilePathsIn(dir, ID).log),
+    ]).toEqual(before);
     expect(await leftoverTemps()).toEqual([]);
     expect(await readdir(dir)).not.toContain(sessionDirectoryName(ID));
 
@@ -294,7 +307,10 @@ describe('B. 遷移中途失敗，舊 header 原樣', () => {
     expect(await leftoverTemps()).toEqual([]);
     // 遷移當下當掉的中間狀態：舊日誌對得上新世代記的來源，讀新世代、只列一份。
     expect((await (await store().open(ID, 'read')).read()).length).toBe(3);
-    expect(await store().list()).toMatchObject({ unreadable: 0, sessions: [{ header: { id: ID } }] });
+    expect(await store().list()).toMatchObject({
+      unreadable: 0,
+      sessions: [{ header: { id: ID } }],
+    });
 
     inject = noInjection();
     const resumed = await store().resume(ID);

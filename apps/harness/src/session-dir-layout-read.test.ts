@@ -196,13 +196,7 @@ describe('新出現的狀態各歸一類', () => {
   });
 
   it('世代檔名跟 header 版本對不上：算讀不懂，其餘照列；打開拋 SessionCorruptionError', async () => {
-    await writeGeneration(
-      dir,
-      'mismatch',
-      OLDER,
-      [],
-      headerLine('mismatch', CURRENT),
-    );
+    await writeGeneration(dir, 'mismatch', OLDER, [], headerLine('mismatch', CURRENT));
     await writeGeneration(dir, 'good', CURRENT, EVENTS);
     const { sessions, unreadable } = await store().list();
     expect(sessions.map(({ header: h }) => h.id)).toEqual(['good']);
@@ -366,7 +360,13 @@ describe('位元組額度量的是實際要讀的那個世代檔（#2115）', ()
 describe('續接單檔佈局：往挑中的世代檔續寫', () => {
   it('撕裂的尾巴從 header 行之後截：第一行原樣、讀得懂，追加接在已接受的前綴後面', async () => {
     const first = headerLine('t1');
-    const path = await writeGeneration(dir, 't1', CURRENT, [], `${first}${lines(EVENTS)}{"seq":3,"ti`);
+    const path = await writeGeneration(
+      dir,
+      't1',
+      CURRENT,
+      [],
+      `${first}${lines(EVENTS)}{"seq":3,"ti`,
+    );
     const warnings: string[] = [];
     const backend = store({ warn: (message) => warnings.push(message) });
     const resumed = await backend.resume('t1');
