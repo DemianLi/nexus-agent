@@ -243,7 +243,12 @@ export class StashRoute implements BackendProtocolV2 {
     this.#warn = options.warn;
     this.#inheritedNames = options.inherited?.names ?? new Set();
     this.#ancestors = (options.inherited?.sessions ?? []).map(
-      (session) => new HostStashBackend({ rootDir: options.rootDir, session }),
+      (session) =>
+        new HostStashBackend({
+          rootDir: options.rootDir,
+          session,
+          ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
+        }),
     );
   }
 

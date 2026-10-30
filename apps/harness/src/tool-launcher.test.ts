@@ -209,7 +209,7 @@ describe('取消之後一定收得掉', () => {
 });
 
 describe('backend 的搜尋走產品的 launcher', () => {
-  it('grep 帶著這一格的模式、不給寫根；沙箱不可用的文案開頭就講', async () => {
+  it('grep 帶著這一格的模式、不給寫根；沙箱不可用時訊息裡有 SANDBOX_UNAVAILABLE', async () => {
     expect(productToolLauncher).toBeDefined();
     const root = mkdtempSync(join(tmpdir(), 'nexus-wire-'));
     try {

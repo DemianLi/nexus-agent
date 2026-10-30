@@ -21,7 +21,7 @@ import type { SandboxMode } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
-import { stashSessionDirName } from './tool-result-stash.js';
+import { createToolResultStash, stashSessionDirName } from './tool-result-stash.js';
 
 vi.mock('./tool-launcher.js', async (importActual) => {
   const actual = await importActual<typeof import('./tool-launcher.js')>();
@@ -93,6 +93,22 @@ describe('沒有沙箱後端的主機上，搜 / 碰到路由', () => {
   it('會話是 read-only：照 fail-closed', async () => {
     expect(await searchAll('read-only')).toContain('SANDBOX_UNAVAILABLE');
     expect(await searchAll('read-only', 'glob')).toContain('SANDBOX_UNAVAILABLE');
+  });
+
+  it('分叉的子 thread 搜繼承來的暫存檔，祖先那一格也跟著 toolMode', async () => {
+    const ancestorDir = join(stashRoot, stashSessionDirName('ancestor'));
+    await mkdir(ancestorDir, { recursive: true, mode: 0o700 });
+    await writeFile(join(ancestorDir, 'inherited.txt'), 'needle\n');
+    const grepInherited = (mode: SandboxMode) =>
+      createToolResultStash({
+        rootDir: stashRoot,
+        session: 'route-mode',
+        toolMode: () => mode,
+        inherited: { names: new Set(['inherited.txt']), sessions: ['ancestor'] },
+      }).grep('needle', '/inherited.txt');
+    expect((await grepInherited('danger-full-access')).error).toBeUndefined();
+    expect((await grepInherited('danger-full-access')).matches).toHaveLength(1);
+    expect((await grepInherited('read-only')).error).toContain('SANDBOX_UNAVAILABLE');
   });
 
   describe('三條路由都跟著 toolMode', () => {
