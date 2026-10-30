@@ -385,6 +385,10 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['native/sandbox-spawner/Cargo.lock']), 'true')
         self.assertEqual(self.rust(['.github/workflows/ci.yml']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/a.ts', 'docs/a.md']), 'false')
+        self.assertEqual(self.rust(['apps/harness/src/sandbox-protocol.ts']), 'true')
+        self.assertEqual(self.rust(['apps/harness/src/sandbox-spawner-client.ts']), 'true')
+        self.assertEqual(self.rust(['apps/harness/src/tool-process.ts']), 'true')
+        self.assertEqual(self.rust(['apps/harness/src/ripgrep-sandbox.ts']), 'true')
         self.assertEqual(self.rust(['docs/a.md'], event='push', base=''), 'false')
         self.assertEqual(self.rust(['README.md'], event='push', base='', full=True), 'true')
 

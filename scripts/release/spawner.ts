@@ -13,8 +13,9 @@ import { join } from 'node:path';
 
 import { ROOT } from '../workspace-packages.js';
 
-/** 執行檔在產物（與 bundle）裡的位置。 */
-export const SPAWNER_PATH = 'native/nexus-sandbox-spawner';
+import { SPAWNER_PATH } from '../../apps/harness/src/sandbox-protocol.js';
+
+export { SPAWNER_PATH };
 
 /**
  * 連進執行檔的程式碼的授權全文：每個 crate 與 {@link SPAWNER_NATIVE_LIBS} 各一個 `<名>-<版本>/`，標準函式庫一個 `rust-std/`。
