@@ -2430,6 +2430,7 @@ function ComposerPage({ state }: { state: string }) {
             approxTokens: 5,
             messageCount: 12,
             messagesCompactable: false,
+            breakdown: { systemTokens: 4, toolsTokens: 3, messageTokens: 0 },
             thresholds: [
               { type: 'tokens', value: 10 },
               { type: 'messages', value: 60 },

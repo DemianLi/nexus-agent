@@ -14,7 +14,9 @@
  *
  * ## 「不知道」與「是 0」
  *
- * - 供應商沒報用量的呼叫（`unknownSteps`）不是 0：有這種呼叫，token 那幾格標「下限」。
+ * - 供應商沒報用量的呼叫（`unknownSteps`）不是 0。會話總計、更早合併的、輪外是部分和，有這種呼叫時 token 那幾格標「下限」。
+ * - 一輪看 `tokensProven`（#1571 N1201，見 {@link turnTokenProof}）：證不出才標下限，還沒收尾的輪不標；舊 server 收尾的輪
+ *   沒有這一格，退回看 `unknownSteps`。
  * - `unaccountedMs` **可能是負的**（三段互不重疊的前提被破壞），照實寫、加標記，不夾 0。
  *
  * @module
@@ -88,7 +90,7 @@ export const COST_STRUCTURED_HEADLINE =
 
 export const COST_STRUCTURED_LIMITS = {
   scope:
-    '這裡的 token 是供應商報的：含失敗與中止的呼叫；輸入只算未快取的，快取讀、快取寫另列（完整的輸入是三項相加，舊 server 的輸入則已含快取讀取）；不含生摘要的那一次（另列）、不含產生會話標題的那一次。供應商沒報用量的呼叫不是 0，有這種呼叫時 token 是下限。',
+    '這裡的 token 是供應商報的：含失敗與中止的呼叫；輸入只算未快取的，快取讀、快取寫另列（完整的輸入是三項相加，舊 server 的輸入則已含快取讀取）；不含生摘要的那一次（另列）、不含產生會話標題的那一次。供應商沒報用量的呼叫不是 0，有這種呼叫時 token 是下限（還沒收尾的輪先標還沒定案）。',
   time: '時間分三段加一格殘差：模型（扣掉重試退避）、工具（平行的取聯集）、等待（重試退避加核准等待）；殘差是三段都沒覆蓋到的，可能是負的，那代表前提被破壞。',
   window:
     '逐輪只列最近的幾輪，更早的併成一列；每一輪的「在觀測分頁看這一輪」只在觀測分頁還有那一輪的資料時能按。',
@@ -129,12 +131,31 @@ const tokenValue = (count: number, lowerBound: boolean): string =>
 const cacheValue = (count: number | undefined, lowerBound: boolean): string =>
   count === undefined ? cacheCountText(count) : tokenValue(count, lowerBound);
 
+/** 一輪的 token 定案了沒，寫在 `tokensProven` 那一格的字。 */
+export const TOKEN_PROOF_TEXT = {
+  exact: '準數',
+  lower: '下限',
+  pending: '還沒定案',
+} as const;
+
 /**
- * 一段事件的數字換成列。一輪（`turn`）才有殘差。**零值的選填格不畫**（沒有失敗、沒有重試、沒有摘要就不佔版面），
+ * 這一輪的 token 算哪一種。`tokensProven` 只有收尾了的輪才有（`fold.ts`），所以缺席要分兩種：沒有 `end` 是還沒收尾，
+ * 不是證不出也不是準數；有 `end` 還缺席是舊 server，回 `undefined` 讓呼叫端退回看 `unknownSteps`。
+ * 舊 server 還沒收尾的輪分不出來，一起算還沒定案：它的數字確實還會變。
+ */
+export function turnTokenProof(turn: TokenMeterTurn): keyof typeof TOKEN_PROOF_TEXT | undefined {
+  if (turn.end === undefined) return 'pending';
+  if (turn.tokensProven === undefined) return undefined;
+  return turn.tokensProven ? 'exact' : 'lower';
+}
+
+/**
+ * 一段事件的數字換成列。一輪（`turn`）才有殘差；`tokensProven` 那一格只有 {@link turnTokenProof} 判得出時才畫。**零值的選填格不畫**（沒有失敗、沒有重試、沒有摘要就不佔版面），
  * 但 token 與呼叫數永遠畫：0 是真的答案。
  */
 export function spanRows(span: TokenMeterSpan, turn?: TokenMeterTurn): readonly FieldRow[] {
-  const lower = span.unknownSteps > 0;
+  const proof = turn === undefined ? undefined : turnTokenProof(turn);
+  const lower = proof === undefined ? span.unknownSteps > 0 : proof === 'lower';
   // 四桶互不重疊，**不讀 `inputTokens`**（#724）：它之後會改成只算未快取，畫面的數字不能跟著動。投影沒給未快取那一格
   // （舊 server）就退回 `inputTokens`（完整 prompt，含快取），跟以前一樣。
   const buckets = usageBuckets(span);
@@ -153,6 +174,7 @@ export function spanRows(span: TokenMeterSpan, turn?: TokenMeterTurn): readonly 
         ['outputTokens', '輸出', tokenValue(buckets.output, lower)],
         ['tokensTotalBuckets', '合計', tokenValue(buckets.total, lower || cacheMissing)],
       ];
+  if (proof !== undefined) rows.unshift(['tokensProven', 'token 數字', TOKEN_PROOF_TEXT[proof]]);
   if (hitRate !== undefined) rows.push(['cacheHitRate', '快取命中率', cacheHitRateText(hitRate)]);
   // 失敗與生摘要的輸入跟主帳同一個口徑：新 server 是未快取的，快取讀寫各一格（缺席寫「沒記」，不是 0；摘要的另列、
   // 不在主帳的快取裡）；舊 server（沒有未快取那一格）的輸入含快取，沒有快取兩格。

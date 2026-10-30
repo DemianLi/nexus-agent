@@ -18,7 +18,7 @@ import {
  * - **色階照 SG**：70% 琥珀、90% destructive（#1468 Q8）。SG 寫死的顏色在覆寫檔壓回 status token（README 本地修改第 37 條）。
  *   弧長的 500ms transition 在減少動態時直接跳到新值（第 38 條）。
  * - **點開是 popover**：手機上沒有 hover。明細整段是 nexus 的（patch `0008` 的 `children`）：「目前大小」是供應商報的實數，
- *   「距離自動摘要」是估算，每道門檻各一行，最近那一行加粗。
+ *   「距離自動摘要」是估算，每道門檻各一行，最近那一行加粗。有 `breakdown` 時多「組成」三行（#1571 N1193）。
  * - **報讀**：按鈕名稱是「對話用量：約 N%，點開看明細」（`0008` 的 `label`）。不掛 `role="status"`：代理的現況只由狀態列唸
  *   （§8），每次模型呼叫都唸一次太吵。最近那一行不只靠粗體，另有一句給報讀的「（最近）」。明細的名稱是標題那一行
  *   （Base UI 的 `Popover.Title` 自己接上 `aria-labelledby`）。
@@ -54,6 +54,32 @@ export function ContextMeter({
             <p className="tabular-nums" data-testid="context-meter-input">
               {view.inputTokens}
             </p>
+          </div>
+        )}
+        {view.breakdown !== undefined && (
+          <div className="text-tip" data-testid="context-meter-breakdown">
+            <p className="text-muted-foreground">組成</p>
+            <ul>
+              {view.breakdown.map((row) => (
+                <li
+                  key={row.part}
+                  data-testid="context-meter-part"
+                  data-part={row.part}
+                  className="flex justify-between gap-3 tabular-nums"
+                >
+                  <span className="text-muted-foreground">{row.label}</span>
+                  <span>{row.text}</span>
+                </li>
+              ))}
+            </ul>
+            {view.breakdownNote !== undefined && (
+              <p
+                className="text-muted-foreground leading-relaxed"
+                data-testid="context-meter-breakdown-note"
+              >
+                {view.breakdownNote}
+              </p>
+            )}
           </div>
         )}
         <div className="text-tip">
