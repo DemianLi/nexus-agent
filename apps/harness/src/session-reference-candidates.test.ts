@@ -481,11 +481,18 @@ describe('read：精確讀一條被引用的會話（準備那一半用）', () 
     expect(events).toEqual(live);
   });
 
-  it('不活著：照舊冷讀並補結', async () => {
+  it('不活著：冷讀並補結', async () => {
     await put(CWD, 'crashed', { events: [said('講到一半', 2_000)] });
     const { events } = await service({ liveEvents: () => undefined }).read('crashed');
     expect(events.at(0)?.type).toBe('turn/start');
     expect(events.at(-1)?.type).toBe('turn/end');
+  });
+
+  it('活著但自己那格沒有檔、別格有同 id：讀別格，事件不混', async () => {
+    await put(OTHER, 'dup', { events: [said('別格的', 2_000), ended(2_100)] });
+    const { header, events } = await service({ liveEvents: () => [] }).read('dup');
+    expect(header.cwd).toBe(OTHER);
+    expect(events).toHaveLength(2);
   });
 
   it('活著但盤上還沒有檔：找不到', async () => {

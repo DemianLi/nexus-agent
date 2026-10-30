@@ -177,6 +177,14 @@ describe('retainReferencedSession：塞進位元組預算', () => {
     expect(retained.data.capturedThroughSeq).toBe(log.events.at(-1)!.seq);
   });
 
+  it('前景子代理第一次模型呼叫還沒回來：不拋，投影是空的', () => {
+    const log = new SessionLog('src/tools:1');
+    log.append('model/start', {});
+    const retained = retainReferencedSession(log.events, header('src/tools:1'), '甲', 4096)!;
+    expect(retained.data.conversation).toEqual([]);
+    expect(retained.data.capturedThroughSeq).toBe(log.events.at(-1)!.seq);
+  });
+
   it('放不下：先丟中間的訊息、留最新的；序列化後不超過上限', () => {
     const log = new SessionLog('src');
     for (let round = 0; round < 6; round += 1)

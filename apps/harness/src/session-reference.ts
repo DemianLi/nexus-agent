@@ -7,7 +7,7 @@
  *
  * 1. **解析與驗證**（{@link parseReferencedText}）：`@[標題](nexus-session:…)` 換成 `@標題`，最多 `maxReferences` 條不同的會話（預設 3，
  *    `session-reference` 那一列，#1573）、不能引用自己。
- * 2. **精確讀**（{@link SessionReferenceReader}）：整份日誌讀回來，壞了就拋，不撿回（dsh 的 `readSurface`）。
+ * 2. **精確讀**（{@link SessionReferenceReader}）：冷讀的整份日誌壞了就拋，不撿回（dsh 的 `readSurface`）。
  * 3. **投影**（{@link projectSessionConversation}）：只留**那條會話現在看得到的**人話與助手文字，工具、推理、外掛塞的、快照本身都不留
  *    ——所以快照不會一層包一層。
  * 4. **預算**（{@link retainReferencedSession}）：每條來源序列化後最多多少位元組照 dsh **跟著模型窗口走**（`session-reference-budget.ts`：
@@ -30,8 +30,8 @@
  *    組裝端有 `limitsOf`，#1573 N0862 起預算照 dsh 跟著模型窗口走，見偏離 5、6。編號保留，別處引用的「偏離 3、4」不跟著動。）
  * 4. **投影靠 `replayConversation`**：dsh 走「目前那一面」（surface）的事件，我們沒有那一軸，「現在看得到的」就是把日誌推回模型歷史
  *    （壓縮會換掉舊的），同 `thread-search.ts` 的做法。**推不出來就拋**（`SESSION_REFERENCE_READ_FAILED`），不像搜尋那樣退回「整份都算」
- *    ——快照會把被壓掉的內容帶進另一條會話，不能亂猜。投影時在副本後面接上補結：正跑到一半的活會話還沒回覆也投影得出人打的字；
- *    `capturedThroughSeq` 不受影響，仍是日誌裡最後一顆。
+ *    ——快照會把被壓掉的內容帶進另一條會話，不能亂猜。投影時在副本後面接上補結（{@link closedForProjection}）：活會話還沒回覆也投影得出人打的字。
+ *    `capturedThroughSeq` 取傳入 `events` 的最後一顆：活的是記憶體最後一顆，冷讀的是補結那一顆。
  * 5. **預算用的路由在「收下領走的那一刻」取，不在這一步組裝完之後**（理由 1，基座表達不出來；#1573 N0862）：dsh 取的是這一步
  *    組裝完的路由（`22ddee37` 是 `agent/pre-step` 帶的 `modelSelection`，`index.ts:133`、`:321`；`1517a4db`／`687f282e` 是
  *    `system-prompt/assemble` 記下的 `assembledRoutes`，`index.ts:97`、`:122-128`）。
@@ -55,6 +55,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import {
   interruptedTurnClosers,
   REFERENCE_WARNING,
+  SessionSeq,
   replayConversation,
   sourceKwargs,
 } from '@nexus/core';
@@ -147,13 +148,13 @@ export function normalizeReferences(
   return normalized;
 }
 
-/** 精確讀一條會話：整份日誌，壞了就拋。 */
+/** 精確讀一條會話：活著的給記憶體裡的事件，其餘冷讀整份日誌，壞了就拋。 */
 export interface SessionReferenceReader {
   /**
    * `storedFormatVersion` 是磁碟上那份寫的版號（`@nexus/core` 的 `ReadonlyStoredSession.storedFormatVersion`），
    * 快照的 `capturedFormatVersion` 記它；`header.version` 已轉譯成這一版。
    *
-   * @throws 找不到、版本太新、日誌壞了；`signal` 中止時拋它的 `reason`。
+   * @throws 找不到、版本太新、冷讀的日誌壞了；`signal` 中止時拋它的 `reason`。
    */
   read(
     sessionId: string,
@@ -208,6 +209,29 @@ export function stringifyTagSafeJson(value: unknown): string {
 const byteLength = (text: string): number => Buffer.byteLength(text, 'utf8');
 
 /**
+ * 投影用的副本：開著的輪補平，冷讀補過的算不出第二份。前景子代理的日誌沒有 `turn/start`，
+ * 第一次模型呼叫還沒回來時 {@link interruptedTurnClosers} 回空，那一顆 `model/start` 在這裡收。
+ */
+function closedForProjection(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  const closers = interruptedTurnClosers(events);
+  if (closers.length > 0) return [...events, ...closers];
+  const last = events.findLast(
+    (event) => event.type === 'model/start' || event.type === 'model/end',
+  );
+  if (last?.type !== 'model/start') return events;
+  const end = events.at(-1)!;
+  return [
+    ...events,
+    {
+      type: 'model/end',
+      seq: SessionSeq(end.seq + 1),
+      time: end.time,
+      data: { modelCall: last.seq, outcome: 'error' },
+    } as SessionEvent,
+  ];
+}
+
+/**
  * 那條會話**現在看得到的**對話：人打的字（一輪開頭的、輪中插的）、助手的文字、壓縮的摘要。
  * 工具、推理、外掛塞的、目標機器排的、快照本身都不留。
  *
@@ -215,7 +239,7 @@ const byteLength = (text: string): number => Buffer.byteLength(text, 'utf8');
  */
 export function projectSessionConversation(events: readonly SessionEvent[]): ProjectedItem[] {
   const origins = new Map<BaseMessage, SessionEvent>();
-  const replay = replayConversation([...events, ...interruptedTurnClosers(events)], {
+  const replay = replayConversation(closedForProjection(events), {
     origin: (message, event) => {
       origins.set(message, event);
     },
