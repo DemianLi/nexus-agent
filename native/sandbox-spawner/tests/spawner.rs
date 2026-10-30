@@ -558,13 +558,12 @@ fn abi_6_keeps_signals_inside_the_tool() {
     assert_eq!(probe_line(&mut capped, 4, &ws, &["kill", &me]), "ok");
 }
 
-/// 開著的 fd 個數與最大的 fd。
-fn open_fds(pid: u32) -> (usize, i32) {
-    let fds: Vec<i32> = std::fs::read_dir(format!("/proc/{pid}/fd"))
+/// 開著的 fd。
+fn open_fds(pid: u32) -> Vec<i32> {
+    std::fs::read_dir(format!("/proc/{pid}/fd"))
         .unwrap()
         .map(|e| e.unwrap().file_name().to_str().unwrap().parse().unwrap())
-        .collect();
-    (fds.len(), fds.iter().copied().max().unwrap())
+        .collect()
 }
 
 #[test]
@@ -572,18 +571,20 @@ fn running_out_of_fds_for_dev_null_fails_with_resource_and_leaks_nothing() {
     let mut s = spawner!();
     let ws = temp_dir("ws");
     let pid = s.child.id();
-    let (before, highest) = open_fds(pid);
-    // 最大的 fd 之上只留兩格：三個 /dev/null 開到第三個失敗。硬上限不動：降了之後一般使用者調不回來。
+    let before = open_fds(pid);
+    // 新開的 fd 取最小的空號，所以上限設在第二個空號之上：只開得了兩個，三個 /dev/null 開到第三個失敗。
+    // 開著的 fd 中間可能有空號（CI 的 runner 上就有），不能用「最大的 fd 之上留兩格」。硬上限不動：降了之後一般使用者調不回來。
+    let second_free = (0..).filter(|fd| !before.contains(fd)).nth(1).unwrap();
     let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
     // SAFETY：讀、改自己起的 spawner 的上限，limit 是本地值。
     unsafe {
         assert_eq!(libc::prlimit(pid as libc::pid_t, libc::RLIMIT_NOFILE, std::ptr::null(), &mut limit), 0);
-        limit.rlim_cur = (highest + 3) as libc::rlim_t;
+        limit.rlim_cur = (second_free + 1) as libc::rlim_t;
         assert_eq!(libc::prlimit(pid as libc::pid_t, libc::RLIMIT_NOFILE, &limit, std::ptr::null_mut()), 0);
     }
     let (_, _, event) = s.launch(Spawn { pipes: 0, ..request(1, &ws, &["/bin/true"]) });
     assert!(matches!(&event, Event::Failed { id: 1, kind: FailKind::Resource, errno: libc::EMFILE, detail } if detail == b"open /dev/null"), "{event:?}");
-    assert_eq!(open_fds(pid).0, before);
+    assert_eq!(open_fds(pid).len(), before.len());
 }
 
 #[test]
