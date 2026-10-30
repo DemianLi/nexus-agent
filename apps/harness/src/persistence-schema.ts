@@ -10,12 +10,12 @@
  * ## 根
  *
  * - `SessionHeader`：`StoredSessionHeader`（邏輯 header；`version` 是 `typeof SESSION_LOG_FORMAT_VERSION`，#1862）。
+ * - `JsonlHeaderLine`：磁碟上的 header 行（世代檔第一行與舊路徑的墓碑），`apps/harness/src/jsonl-session-store.ts` 的
+ *   `JsonlHeaderLine`，從實體格式的宣告直接抽。
+ *   `type` 與 `migratedFrom` 只在這一行，不在邏輯 header 裡。
  * - `SessionEventEnvelope`：每一種事件拿掉 `data`、`type` 換成 `string` 之後的聯集。一般的新事件種類不改它。
  * - `event:<名字>`：每一種事件，名字來自 `known-event-types-catalog.ts` 的掃描，再跟編譯器看到的
  *   `keyof SessionEventMap` 對一次，兩邊不一致就拋。
- *
- * dsh 另有 `JsonlHeaderLine` 這個根（實體 header 行跟邏輯 header 分開），nexus 不建：header 檔就是 `StoredSessionHeader`
- * 直接序列化，沒有另一個實體型別（不是偏離）。
  *
  * 每個事件根照 dsh 帶 `surface` 欄位（不進指紋；dsh 的驗證器 `persistence-changes.ts:299` 拒收沒有這一格的事件根，
  * `:388`、`:397`、`:424` 用它判斷能不能同版新增）。nexus 沒有 surface 那一軸（`session-log.ts` 講事件替換的
@@ -95,6 +95,8 @@ const CONFIG_PATH = 'tsconfig.base.json';
  * 它的別名才不會被記成型別名與宣告位置。
  */
 export const ROOTS_FILE = 'scripts/__persistence_schema_roots__.ts';
+/** 磁碟上 header 行的宣告（`JsonlHeaderLine`）所在的檔。 */
+const PHYSICAL_HEADER_FILE = 'apps/harness/src/jsonl-session-store.ts';
 
 /** 型別圖要追蹤宣告位置、收語意診斷、找 `@persistenceReserved` 的原始碼範圍（相對於 repo 根）。 */
 const TRACKED_PREFIXES = ['packages/', 'vendor/', 'apps/harness/src/'] as const;
@@ -118,7 +120,7 @@ export class PersistenceSchemaError extends Error {
 }
 
 /**
- * 抽出每一種事件、事件封裝與會話 header 的型別圖。
+ * 抽出每一種事件、事件封裝、會話 header 與 header 行的型別圖。
  *
  * @param root - repo 根；`tsconfig.base.json` 與掃描的目錄都相對於它。
  * @returns 每個根的標準指紋，以及所有可達的型別定義。
@@ -227,8 +229,23 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
     );
   }
   const header = declaration('HeaderRoot');
+  // 磁碟上的 header 行（世代檔第一行與墓碑）另立一個根：`type` 與 `migratedFrom` 不在邏輯 header 裡。
+  const physical = program
+    .getSourceFile(resolve(root, PHYSICAL_HEADER_FILE))
+    ?.statements.filter(
+      (node): node is ts.InterfaceDeclaration | ts.TypeAliasDeclaration =>
+        ts.isInterfaceDeclaration(node) || ts.isTypeAliasDeclaration(node),
+    )
+    .filter((node) => node.name.text === 'JsonlHeaderLine');
+  if (physical?.length !== 1) {
+    throw new PersistenceSchemaError(
+      `persistence schema: expected one JsonlHeaderLine declaration in ${PHYSICAL_HEADER_FILE}`,
+    );
+  }
+  const physicalHeader = physical[0]!;
   const declarationSources = validateReachableDeclarations(program, root, [
     ...declarations.values(),
+    physicalHeader,
   ]);
   const extraction = new SchemaExtractor(root, program, declarationSources);
   const roots: RootInput[] = [
@@ -236,6 +253,11 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
       key: 'SessionHeader',
       kind: 'header',
       node: extraction.convert(checker.getTypeFromTypeNode(header.type), header),
+    },
+    {
+      key: 'JsonlHeaderLine',
+      kind: 'header',
+      node: extraction.convert(checker.getTypeAtLocation(physicalHeader), physicalHeader),
     },
   ];
   const envelopes: number[] = [];
@@ -251,7 +273,7 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
     });
     envelopes.push(extraction.envelope(node, event.name));
   }
-  roots.splice(1, 0, {
+  roots.splice(2, 0, {
     key: 'SessionEventEnvelope',
     kind: 'envelope',
     node: extraction.union(envelopes),

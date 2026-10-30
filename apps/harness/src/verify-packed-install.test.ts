@@ -26,6 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   bundledRgProblems,
   cliRunProblems,
+  cliSessionLog,
   headerProblems,
   homepageProblems,
   installedGrepProblems,
@@ -40,6 +41,12 @@ import {
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
+import {
+  spawnerProbeProblems,
+  spawnerProbeSummary,
+} from '../../../scripts/release/spawner-probe.js';
+import { generationLogFilename, SESSION_LOCK_FILENAME, sessionDirectoryName } from '@nexus/core';
+
 import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const ok = { status: 0, stdout: '', stderr: '' };
@@ -115,6 +122,48 @@ describe('步驟 4b：內附 ripgrep 在 PATH 上沒有 rg 的環境裡跑得起
   });
 });
 
+describe('步驟 4e：產物裡的沙箱 spawner 起得來、經它起得了主機的 git', () => {
+  const ready = { type: 'ready', filterInsns: 77, landlockAbi: 6 } as const;
+  const started = { type: 'started', id: 1, pid: 16, partial: false } as const;
+  const exited = { type: 'exited', id: 1, code: 0, signal: 0 } as const;
+  const ok = { events: [ready, started, exited], stdout: 'git version 2.39.5\n', stderr: '' };
+
+  it('Ready、Started、Exited 0、印出版本：沒有 problem', () => {
+    expect(spawnerProbeProblems(ok)).toEqual([]);
+  });
+
+  it('主機沒有 Landlock：全權模式起的 git 照樣算數', () => {
+    const events = [{ ...ready, landlockAbi: 0 }, started, exited];
+    expect(spawnerProbeProblems({ ...ok, events })).toEqual([]);
+  });
+
+  it('印進 log 的那一行帶 ABI 與結局', () => {
+    const line = spawnerProbeSummary(ok);
+    expect(line).toContain('"landlockAbi":6');
+    expect(line).toContain('"code":0');
+    expect(line).toContain('git version 2.39.5');
+  });
+
+  it.each([
+    ['中途出錯', { ...ok, error: '等第一筆事件逾時' }],
+    ['spawner 起不來', { ...ok, events: [{ type: 'unavailable', errno: 22, detail: 'seccomp' }] }],
+    ['沒有任何事件', { ...ok, events: [] }],
+    [
+      'git 沒起成',
+      {
+        ...ok,
+        events: [ready, { type: 'failed', id: 1, kind: 'exec', errno: 13, detail: 'exec' }],
+      },
+    ],
+    ['git 沒正常結束', { ...ok, events: [ready, started, { ...exited, code: 128 }] }],
+    ['只有 Started', { ...ok, events: [ready, started] }],
+    ['結局是別的 id 的', { ...ok, events: [ready, { ...started, id: 2 }, { ...exited, id: 2 }] }],
+    ['stdout 不是版本', { ...ok, stdout: '' }],
+  ] as const)('%s：有一條 problem', (_, outcome) => {
+    expect(spawnerProbeProblems(outcome)).toHaveLength(1);
+  });
+});
+
 describe('步驟 4c：安裝樹裡真的跑一次 grep', () => {
   const hit =
     '{"type":"tool","data":{"content":"/a.txt:\\n  2: needle-1502 here","name":"grep","status":"success"}}';
@@ -186,7 +235,24 @@ describe('步驟 5：假模型跑一輪與會話 header', () => {
   });
 
   it('沒有 header 檔：報', () => {
-    expect(headerProblems(undefined, stamp)).toEqual(['cli 跑完沒有 cli.header.json']);
+    expect(headerProblems(undefined, stamp)).toEqual(['cli 跑完沒有會話的世代檔']);
+  });
+
+  it('cli 的世代檔：挑會話目錄裡數字最大的；會話目錄不在、裡面沒有世代檔是 undefined', () => {
+    const run = mkdtempSync(join(tmpdir(), 'verify-cli-log-'));
+    try {
+      expect(cliSessionLog(run)).toBeUndefined();
+      const sessionDirectory = join(run, sessionDirectoryName('cli'));
+      mkdirSync(sessionDirectory);
+      writeFileSync(join(sessionDirectory, SESSION_LOCK_FILENAME), '');
+      expect(cliSessionLog(run)).toBeUndefined();
+      for (const version of [9, 52, 10]) {
+        writeFileSync(join(sessionDirectory, generationLogFilename(version)), '');
+      }
+      expect(cliSessionLog(run)).toBe(join(sessionDirectory, generationLogFilename(52)));
+    } finally {
+      rmSync(run, { recursive: true, force: true });
+    }
   });
 
   it('header 的 commit 是 null 或別的值：報（跟戳記比）', () => {

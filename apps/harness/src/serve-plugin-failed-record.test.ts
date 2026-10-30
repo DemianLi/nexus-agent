@@ -16,6 +16,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { changePlugin } from './plugin-change.js';
+import { composeEntries, defaultSources } from './plugin-config.js';
 import type { PluginChange } from './plugin-change.js';
 import { appendRaw, journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
 import { readJournal } from './plugin-journal.js';
@@ -68,6 +69,23 @@ function home(failUnlessOk = true): Home {
   };
 }
 
+/**
+ * 繞過寫入口，直接在紀錄裡追加一筆改 probe 設定的 `config-set`。寫入口會試掛、拒收讓 probe 在 `apply` 掉的修改（#2073）；
+ * 這裡量的是寫入口看不到的那一類（例如只在 serve 環境裡掉的列）到了 serve 怎麼處置，所以不經過它。
+ */
+async function setProbe(
+  h: Home,
+  before: Record<string, unknown>,
+  after: Record<string, unknown>,
+): Promise<number> {
+  // 名字照寫入口記的：疊完的那一列的 `name`（相對路徑已解成絕對的）。
+  const name = composeEntries(defaultSources({ serve: true, env: h.env })).find(
+    (entry) => entry.id === 'probe',
+  )?.name;
+  if (name === undefined) throw new Error('清單上沒有 probe');
+  return (await h.raw({ op: 'config-set', id: 'probe', name, before, after })).seq;
+}
+
 function probeRow(ok: boolean): string {
   return `- insert:\n    - id: probe\n      name: './probe.ts'\n      config:\n        ok: ${String(ok)}\n`;
 }
@@ -116,7 +134,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 1000
   }
 }
 
-describe('寫入口改的設定讓那一列 apply 掛不上（驗收 C、D）', () => {
+describe('紀錄裡改的設定讓那一列 apply 掛不上（驗收 C、D）', () => {
   it('記一筆 failed（歸因到的 seq、stage、原因）；再開十條 thread、重啟都不再多記；再改一次又掛，指向新的 seq', async () => {
     const h = home();
     h.seed(probeRow(true));
@@ -125,7 +143,7 @@ describe('寫入口改的設定讓那一列 apply 掛不上（驗收 C、D）', 
     expect(await say(server, 'warm')).toBeUndefined();
     expect(failedOf(h.dir)).toEqual([]);
 
-    const first = await h.change({ op: 'config-set', id: 'probe', config: { ok: false } });
+    const first = await setProbe(h, { ok: true }, { ok: false });
     expect(first).toBe(2);
     expect(await say(server, 'a')).toBeUndefined();
     await waitFor(() => failedOf(h.dir).length === 1, '第一筆 failed');
@@ -152,7 +170,7 @@ describe('寫入口改的設定讓那一列 apply 掛不上（驗收 C、D）', 
 
     // 驗收 D：再改一次那一列，又掛不上。
     server = await start(h.env, lines);
-    const second = await h.change({ op: 'config-set', id: 'probe', config: { ok: false, n: 2 } });
+    const second = await setProbe(h, { ok: false }, { ok: false, n: 2 });
     expect(second).toBe(4);
     expect(await say(server, 'again')).toBeUndefined();
     await waitFor(() => failedOf(h.dir).length === 2, '第二筆 failed');
@@ -174,7 +192,7 @@ describe('寫入口改的設定讓那一列 apply 掛不上（驗收 C、D）', 
     expect(await h.change({ op: 'config-set', id: 'probe', config: { ok: true } })).toBe(3);
     expect(await say(server, 'fixed')).toBeUndefined();
     // 改回去：疊出來的宣告跟啟動那一份一樣，讀清單的記憶把它標成已知掉了、不重試。
-    expect(await h.change({ op: 'config-set', id: 'probe', config: { ok: false } })).toBe(4);
+    expect(await setProbe(h, { ok: true }, { ok: false })).toBe(4);
     expect(await say(server, 'reverted')).toBeUndefined();
     await waitFor(() => failedOf(h.dir).length === 2, '改回去之後的 failed');
     expect(failedOf(h.dir)[1]).toMatchObject({ id: 'probe', triggerSeq: 4, stage: 'apply' });
@@ -325,7 +343,7 @@ describe('寫不進去不擋 thread（驗收 G）', () => {
     h.seed(probeRow(true));
     const lines: string[] = [];
     const server = await start(h.env, lines);
-    expect(await h.change({ op: 'config-set', id: 'probe', config: { ok: false } })).toBe(2);
+    expect(await setProbe(h, { ok: true }, { ok: false })).toBe(2);
 
     const lock = `${journalPathOf(h.dir)}.lock`;
     // 活著的持有者：自己的 PID（接手只接「行程已不在」的）。

@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { journalPathOf } from './plugin-journal.fixture.js';
+import { journalPathOf, seedHomePatch } from './plugin-journal.fixture.js';
 import { readJournal } from './plugin-journal.js';
 import { runPluginCli } from './plugin-cli.js';
 
@@ -136,6 +136,36 @@ describe('輸出與紀錄日誌不印設定值（加 7）', () => {
     );
     expect(bad.code).toBe(1);
     expect([...bad.out, ...bad.err].join('\n')).not.toContain(secret);
+  });
+});
+
+describe('--workspace（#2073）', () => {
+  it('帶到寫入前的試掛：要它才起得來的列，沒帶拒收、帶了照收；空字串是用法錯', async () => {
+    const { dir, env } = home();
+    writeFileSync(
+      join(dir, 'ws-probe.ts'),
+      "export default { name: 'ws-probe', apply(registry) { if (registry.services.get('workspaceRoot') === undefined) throw new Error('要 --workspace'); } };\n",
+      { mode: 0o600 },
+    );
+    seedHomePatch(
+      dir,
+      "- insert:\n    - id: ws-probe\n      name: './ws-probe.ts'\n      config:\n        n: 1\n",
+    );
+    const config = JSON.stringify({ n: 2 });
+    const without = await run(['config', 'set', 'ws-probe', '--file', '-'], env, config);
+    expect(without.code).not.toBe(0);
+    expect(without.err.join('\n')).toContain('要 --workspace');
+
+    const workspace = mkdtempSync(join(tmpdir(), 'nexus-plugin-cli-ws-'));
+    temporary.push(workspace);
+    const withFlag = await run(
+      ['config', 'set', 'ws-probe', '--file', '-', '--workspace', workspace],
+      env,
+      config,
+    );
+    expect(withFlag.code).toBe(0);
+
+    expect((await run(['disable', 'todo', '--workspace', ''], env)).code).toBe(2);
   });
 });
 

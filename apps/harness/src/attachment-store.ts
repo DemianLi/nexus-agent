@@ -65,6 +65,7 @@ import { syncDirectory } from './atomic-file.js';
 import { AttachmentError } from './attachment-error.js';
 import { ThreadScopedAttachmentBackend } from './attachment-route.js';
 import type { AttachmentScope } from './attachment-route.js';
+import type { SandboxModeSource } from './contained-backend.js';
 import { CompressionLimiter } from './compression-limiter.js';
 import { probeImageHeader } from './image-intake.js';
 import { DEFAULT_NORMALIZATION_POLICY, prepareImage } from './image-normalization.js';
@@ -308,13 +309,18 @@ export class AttachmentStore {
    * `files` 目錄都看得到」的版本，免得有人漏傳而路由悄悄變回全開。
    *
    * @param scope - 這條 thread 的 root 日誌的口，路由在每次呼叫當下才讀。
+   * @param toolMode - 起 `rg` 用哪個模式，見 `ContainedFilesystemBackendOptions.toolMode`。
    */
-  async readOnlyRoute(scope: AttachmentScope): Promise<ThreadScopedAttachmentBackend> {
+  async readOnlyRoute(
+    scope: AttachmentScope,
+    toolMode?: SandboxModeSource,
+  ): Promise<ThreadScopedAttachmentBackend> {
     await this.#prepare();
     return new ThreadScopedAttachmentBackend({
       rootDir: this.filesDir,
       scope,
       warn: this.#warn,
+      ...(toolMode !== undefined && { toolMode }),
     });
   }
 

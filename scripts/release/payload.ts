@@ -5,7 +5,7 @@
  * 3 只在 `verify-packed-install` 跑**（相依圖走訪要走完整棵樹，打包當下的暫存樹還沒定形）：
  *
  * 1. {@link collectPayloadViolations}：照 dsh `scripts/publication-payload.ts` 拒收 `src/` 與 `.map`，再加上我們自己的必備檔、
- *    不該進閉包的開發工具、相對符號連結要解得開、目標平台的 `node-addon-system` 二進位與內附 ripgrep（#1502 刀 4）在。
+ *    不該進閉包的開發工具、相對符號連結要解得開、目標平台的 `node-addon-system` 二進位、內附 ripgrep（#1502 刀 4）與 Linux 的沙箱 spawner（#1946，`spawner.ts`）在。
  * 2. {@link collectClosureViolations}：照 dsh `scripts/verify-runtime-closure.ts`，`cordis.yml`／`cordis.serve.yml` 每一列的
  *    `name:` 都要能從產物根解析到。
  * 3. {@link walkInstalledGraph}：照 dsh `scripts/release/installed-product-isolation.ts:23-57`，從產物根沿 `dependencies`／
@@ -31,6 +31,7 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { ROOT } from '../workspace-packages.js';
+import { spawnerProblems } from './spawner.js';
 
 /** 一條違規：哪個路徑、為什麼。 */
 export interface PayloadViolation {
@@ -343,6 +344,11 @@ export function collectPayloadViolations(
         violations.push({ path: rel(binary), message: '內附的 rg 沒有執行權限' });
       }
     }
+  }
+
+  // 沙箱 spawner（#1946）只在 Linux 上跑，所以只有 Linux 的產物要帶。
+  if (options.nativeSuffix?.startsWith('linux-') === true) {
+    violations.push(...spawnerProblems(root, options.nativeSuffix.slice('linux-'.length)));
   }
 
   // 整棵樹：.map、符號連結。

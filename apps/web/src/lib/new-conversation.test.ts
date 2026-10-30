@@ -16,7 +16,7 @@ function listed(...items: ThreadSummary[]): ThreadListResult {
 }
 
 /**
- * 「新對話」挑哪一條（#313）。「目前這條還是空白就留在原地」在畫面那一側判，驗在 `App.test.tsx`。
+ * 「新對話」挑哪一條（#313）。「目前這條還是空白就留在原地」在畫面那一側判，驗在 `App.threads.test.tsx`。
  */
 describe('newConversationTarget', () => {
   it('清單讀不出來：開新的', () => {

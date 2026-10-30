@@ -86,14 +86,15 @@ import {
   inheritedEventCount,
   isKnownSessionEventType,
   isSubagentSessionHeader,
-  parseSessionHeaderFilename,
-  sessionFilenames,
+  legacyTwoFileSessionFilenames,
+  parseLegacyTwoFileHeaderFilename,
   subagentLinks,
   repeatCallKey,
   repeatReminderTracks,
   resolveRepeatReminderSettings,
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
+  SessionNotFoundError,
   turnStartSource,
 } from '@nexus/core';
 import type {
@@ -106,7 +107,7 @@ import type {
 // 讀的事件種類（`feedback/*`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
 // `todo/write` 不在這裡：它的事件擴充住在 core 的 `session-log.ts`（#1463 Q2 (a)）。
 import type {} from '@nexus/plugin-feedback';
-import { parseJsonlSessionBody, readSessionEntry } from '../jsonl-session-store.js';
+import { bodyFirstLine, parseJsonlSessionBody, readSessionEntry } from '../jsonl-session-store.js';
 import type { SessionEntry } from '../jsonl-session-store.js';
 import {
   formatSessionHeaderMetadata,
@@ -398,9 +399,14 @@ function headerOf({ header, storedFormatVersion }: SessionEntry): SessionLogHead
  * 從幾個根目錄往下找每一份日誌讀進來。**唯讀**：不拿租約、不截尾巴、不改 header。
  *
  * 認檔名、讀 header 與日誌本文都走 JSONL 後端那一支（`jsonl-session-store.ts` 的 `readSessionEntry`，本文是穩定快照讀），
- * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。不走 `SessionStore.list`：
+ * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。兩種佈局都認（#1594 ②）：舊兩檔的
+ * header 檔，與裡面有正規世代檔的會話目錄（挑最高世代；同一層有對應 `<base>.header.json` 的 `session.jsonl`、
+ * `session.v<N>.jsonl` 是舊兩檔的日誌，不算世代檔）；讀不出一份會話的目錄（沒有世代檔，或最高世代是空檔、第一行還沒
+ * 換行）才往下走。不走 `SessionStore.list`：
  * 它不讀比這一版新的，也不說讀不懂的原因（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
- * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，跳過。
+ * 舊路徑的墓碑（#1594 ③）由它的會話目錄代表，跳過；會話目錄不見了的墓碑算讀不懂。
+ * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，與單檔佈局挑定的世代檔
+ * 在讀本文之前不見了的，跳過。
  *
  * @param roots - 會話根、run 目錄或 projectKey 那一格，都行。
  * @returns 讀得懂的，與讀得到但讀不懂的（壞行、缺號、header 壞了）。後者不擋其餘的。
@@ -417,29 +423,44 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(path);
+      let base: string | undefined;
+      if (entry.isFile()) {
+        base = parseLegacyTwoFileHeaderFilename(entry.name);
+        if (base === undefined) continue;
+      } else if (!entry.isDirectory()) {
         continue;
       }
-      const base = entry.isFile() ? parseSessionHeaderFilename(entry.name) : undefined;
-      if (base === undefined) continue;
       let session: SessionEntry | undefined;
       try {
-        session = await readSessionEntry(directory, entry.name, { acceptNewer: true });
+        session = await readSessionEntry(directory, entry, { acceptNewer: true });
       } catch (error: unknown) {
         if (error instanceof SessionCorruptionError) {
           unreadable.push({
-            file: join(directory, sessionFilenames(base).log),
+            // 單檔佈局報挑中的那個世代檔、墓碑報墓碑：這兩種的錯都帶 `location`。
+            file:
+              error.location?.path ??
+              (base === undefined
+                ? path
+                : join(directory, legacyTwoFileSessionFilenames(base).log)),
             reason: error.message,
           });
           continue;
         }
         throw error;
       }
-      if (session === undefined) continue;
+      if (session === undefined) {
+        if (entry.isDirectory()) await visit(path);
+        continue;
+      }
       const file = session.logPath;
       const header = headerOf(session);
-      const body = await session.readBody();
+      let body: Buffer;
+      try {
+        body = await session.readBody();
+      } catch (error: unknown) {
+        if (error instanceof SessionNotFoundError) continue;
+        throw error;
+      }
       try {
         logs.push({
           file,
@@ -450,6 +471,7 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
             acceptUnknownEvents: true,
             newerFormat: classifyStoredFormatVersion(header.version) === 'newer',
             recovery: 'strict',
+            firstLine: bodyFirstLine(session.layout),
           }).events,
         });
       } catch (error: unknown) {

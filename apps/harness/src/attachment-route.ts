@@ -51,7 +51,7 @@ import type { SessionEvent } from '@nexus/core';
 
 import { referencedFilePaths } from './attachment-reference.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import type { GlobPathsResult, GrepPathsResult } from './contained-backend.js';
+import type { GlobPathsResult, GrepPathsResult, SandboxModeSource } from './contained-backend.js';
 import type { RipgrepInternals } from './ripgrep-runner.js';
 
 /** 附件路由 grep 出錯時模型看到的那一句：固定字串、不帶任何路徑（#1822）。 */
@@ -140,6 +140,8 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     readonly scope: AttachmentScope;
     /** 測試接縫（數 rg 起了幾次）。 */
     readonly ripgrep?: RipgrepInternals;
+    /** 起 `rg` 用哪個模式，見 `ContainedFilesystemBackendOptions.toolMode`。 */
+    readonly toolMode?: SandboxModeSource;
     /** 伺服器日誌：搜尋出錯時 rg 的原始訊息只寫在這裡（#1822）。省略即標準錯誤。 */
     readonly warn?: (line: string) => void;
   }) {
@@ -150,6 +152,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
       // 連「有幾個」都不交給模型（#1822）。維持 dsh 的做法：整次失敗，原始訊息只進伺服器日誌。
       tolerateUnreadable: false,
       ...(options.ripgrep === undefined ? {} : { ripgrep: options.ripgrep }),
+      ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
     });
     this.#scope = options.scope;
     this.#warn = options.warn ?? ((line) => process.stderr.write(`${line}\n`));

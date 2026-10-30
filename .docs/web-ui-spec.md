@@ -286,7 +286,7 @@
 - 換題：進度條 `aria-live` 關掉，legend 前放 sr-only「第 2 題，共 3 題」。
 - AI 回覆：`role="log"` 設 `aria-live="off"`，串流不逐字唸，結束時把全文丟進 polite 區唸一次。
 - 往前翻讀完：另一格 polite 唸「載入了較早的 N 則。」（N＝人打的字與模型的回覆，同 wire 一頁的單位），**不唸接上來的內容**，也不跟上一條共用一格（2026-09-25，inventory 列 9）。
-- 工具卡狀態變化不唸。狀態列的 glyph（SG `StatusGlyph`）旁已有同義文字時 `aria-hidden`；`DotLoader` 本身沒有名稱，旁邊一定有同義的字。glyph 是裝飾，非文字對比以裝飾性豁免（WCAG 1.4.11 只管辨識內容所需的圖形；這一刻在做什麼由狀態列的字與工具列的字講，不靠 glyph）。
+- 工具卡狀態變化不唸。狀態列的 glyph（SG `StatusGlyph`）旁已有同義文字時 `aria-hidden`；`DotLoader` 本身沒有名稱，旁邊要有同義的字，或者放在停用（`aria-disabled`）的鈕裡，由停用狀態表達讀取中（#2009，[PR #2134 審查 (c)](https://github.com/DemianLi/nexus-agent/pull/2134#issuecomment-6503528626)）。glyph 是裝飾，非文字對比以裝飾性豁免（WCAG 1.4.11 只管辨識內容所需的圖形；這一刻在做什麼由狀態列的字與工具列的字講，不靠 glyph）。
 - **工具卡與工具段**（#1682，SG 的 `StepRow`／`StepGroup`）：
   - 列是一顆帶 `aria-expanded` 的按鈕，名稱＝標題＋摘要＋列尾看得見的字（工具名、計數、歸屬、狀態字）。狀態一定有字（Badge），不靠顏色、圖示或動效。
   - 群組按鈕的名稱＝「N 個工具呼叫，讀取 ×3、寫入檔案」（段裡只收完成的工具）。摘要是純字串、會被報讀，用「，」「、」接，不用「·」。段裡有寫檔／改檔時名稱後面接整段的合計「新增 N 行，刪除 M 行」（#1685，看得見的「+N −M」`aria-hidden`）。

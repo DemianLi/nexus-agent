@@ -76,6 +76,11 @@ function fixture(payload: string, options: { event?: string } = {}): string {
   );
   mkdirSync(join(root, 'apps/harness/src'), { recursive: true });
   mkdirSync(join(root, 'apps/web/src'), { recursive: true });
+  put(
+    root,
+    'apps/harness/src/jsonl-session-store.ts',
+    "import type { StoredSessionHeader } from '@nexus/core';\nexport interface JsonlHeaderLine extends StoredSessionHeader { readonly type: 'session' }\n",
+  );
   put(root, PAYLOAD, payload);
   put(
     root,
@@ -121,18 +126,25 @@ function digestOf(inventory: PersistenceSchemaInventory, key: string): string | 
 }
 
 describe('從原始碼抽持久化型別', { timeout: EXTRACT_TIMEOUT }, () => {
-  it('根依序是 header、事件封裝、每一種事件；header 的版號是字面量', () => {
+  it('根依序是 header、header 行、事件封裝、每一種事件；header 的版號是字面量', () => {
     const inventory = extractPersistenceSchema(fixture('export interface Payload { id: string }'));
     expect(inventory.formatVersion).toBe(1);
     expect(inventory.roots.map((item) => item.key)).toEqual([
       'SessionHeader',
+      'JsonlHeaderLine',
       'SessionEventEnvelope',
       'event:test/record',
     ]);
-    // 事件根照 dsh 帶 surface；nexus 沒有那一軸，一律 false。header 與封裝沒有這一格。
-    expect(inventory.roots.map((item) => item.surface)).toEqual([undefined, undefined, false]);
+    // 事件根帶 surface 這一格；nexus 沒有這一軸，一律 false。header、header 行與封裝沒有這一格。
+    expect(inventory.roots.map((item) => item.surface)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      false,
+    ]);
     expect(Object.keys(inventory.roots[0]!)).not.toContain('surface');
     expect(Object.keys(inventory.roots[1]!)).not.toContain('surface');
+    expect(Object.keys(inventory.roots[2]!)).not.toContain('surface');
     const header = inventory.roots[0]!.schema;
     const object = header.nodes[0];
     if (object?.kind !== 'object') throw new Error('header is not an object');
@@ -723,7 +735,9 @@ describe('這個 repo 的持久化型別圖', { timeout: EXTRACT_TIMEOUT }, () =
         .events.map((item) => item.name)
         .sort(),
     );
-    expect(inventory.roots.filter((item) => item.kind === 'header')).toHaveLength(1);
+    expect(
+      inventory.roots.filter((item) => item.kind === 'header').map((item) => item.key),
+    ).toEqual(['SessionHeader', 'JsonlHeaderLine']);
     expect(inventory.roots.filter((item) => item.kind === 'envelope')).toHaveLength(1);
     for (const item of inventory.roots) {
       expect(item.surface, item.key).toBe(item.kind === 'event' ? false : undefined);

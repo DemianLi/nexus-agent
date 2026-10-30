@@ -26,6 +26,11 @@
  * 要跟 serve 帶**同一組** `--patch`：寫入口是另一個行程，只能從命令列知道那一層。不給的話偵測不到被蓋掉
  * （開關回報不了 `overridden`，改設定也不會被預先拒絕）。
  *
+ * ## `--workspace`
+ *
+ * 寫入前照 serve 試掛一次（`plugin-trial.ts`），所以 serve 帶了 `--workspace` 的話這裡也要帶同一個：要它才起得來的列，
+ * 這一筆動到它（或它是必掛的列）而沒帶，就會被當成新冒出的失敗拒收。相對路徑照這個行程的工作目錄解。
+ *
  * @module
  */
 
@@ -49,6 +54,7 @@ export const PLUGIN_CLI_USAGE = `用法：plugin <命令> [選項]
 
 選項：
   --patch <file>            serve 帶的 --patch（可多次，照同樣的順序）。不給就偵測不到被它蓋掉
+  --workspace <dir>         serve 帶的 --workspace。寫入前照 serve 試掛一次，有列新掛不上就拒收
   --file <路徑|->           config set 的新設定；- 是標準輸入
   --help                    印這段話
   --version                 印這個 harness 的版本就退出
@@ -91,6 +97,7 @@ interface Parsed {
   readonly change:
     PluginChange | { readonly op: 'config-set'; readonly id: string; readonly file: string };
   readonly patches: readonly string[];
+  readonly workspace?: string;
 }
 
 function parse(argv: readonly string[]): Parsed | 'help' | 'version' {
@@ -100,6 +107,7 @@ function parse(argv: readonly string[]): Parsed | 'help' | 'version' {
       args: [...argv],
       options: {
         patch: { type: 'string', multiple: true },
+        workspace: { type: 'string' },
         file: { type: 'string' },
         help: { type: 'boolean', default: false },
         version: { type: 'boolean', default: false },
@@ -119,6 +127,13 @@ function parse(argv: readonly string[]): Parsed | 'help' | 'version' {
   if (patches.some((patch) => patch.trim() === '')) {
     throw new UsageError(`--patch 要給一個檔案路徑。\n\n${PLUGIN_CLI_USAGE}`);
   }
+  if (values.workspace?.trim() === '') {
+    throw new UsageError(`--workspace 要給一個目錄。\n\n${PLUGIN_CLI_USAGE}`);
+  }
+  const flags = {
+    patches,
+    ...(values.workspace !== undefined && { workspace: values.workspace }),
+  };
   const [command, ...rest] = positionals;
   const only = (expected: number, what: string): string[] => {
     if (rest.length !== expected) {
@@ -133,7 +148,7 @@ function parse(argv: readonly string[]): Parsed | 'help' | 'version' {
       throw new UsageError(`--file 只有 config set 用。\n\n${PLUGIN_CLI_USAGE}`);
     }
     const [id] = only(1, command);
-    return { change: { op: command, id: id as string }, patches };
+    return { change: { op: command, id: id as string }, ...flags };
   }
   if (command === 'config') {
     const [sub, ...args] = rest;
@@ -147,7 +162,7 @@ function parse(argv: readonly string[]): Parsed | 'help' | 'version' {
       if (values.file === undefined || values.file === '') {
         throw new UsageError(`config set 要用 --file <路徑|-> 給新設定。\n\n${PLUGIN_CLI_USAGE}`);
       }
-      return { change: { op: 'config-set', id: args[0] as string, file: values.file }, patches };
+      return { change: { op: 'config-set', id: args[0] as string, file: values.file }, ...flags };
     }
     if (sub === 'reset') {
       if (args.length !== 1) {
@@ -156,7 +171,7 @@ function parse(argv: readonly string[]): Parsed | 'help' | 'version' {
       if (values.file !== undefined) {
         throw new UsageError(`--file 只有 config set 用。\n\n${PLUGIN_CLI_USAGE}`);
       }
-      return { change: { op: 'config-reset', id: args[0] as string }, patches };
+      return { change: { op: 'config-reset', id: args[0] as string }, ...flags };
     }
   }
   throw new UsageError(`不認得的命令。\n\n${PLUGIN_CLI_USAGE}`);
@@ -237,6 +252,7 @@ export async function runPluginCli(options: PluginCliOptions): Promise<number> {
     const result = await changePlugin(change, {
       ...(options.env !== undefined && { env: options.env }),
       ...(parsed.patches.length > 0 && { patches: parsed.patches }),
+      ...(parsed.workspace !== undefined && { workspace: parsed.workspace }),
       ...(options.now !== undefined && { now: options.now }),
     });
     for (const warning of result.warnings) printer.error(`警告：${warning}`);
@@ -283,6 +299,20 @@ export async function runPluginCli(options: PluginCliOptions): Promise<number> {
   }
 }
 
+/** 等 `stream` 先前寫進去的都交給作業系統（write callback 回來，出錯也算）。 */
+function drained(stream: NodeJS.WriteStream): Promise<void> {
+  return new Promise((resolve) => {
+    stream.write('', () => {
+      resolve();
+    });
+  });
+}
+
 if (import.meta.main) {
-  process.exitCode = await runPluginCli({ argv: process.argv.slice(2) });
+  const code = await runPluginCli({ argv: process.argv.slice(2) });
+  // 排空輸出就 exit，不等事件迴圈自己收空：試掛丟下、還在握手的 MCP 子行程（`@nexus/plugin-mcp` `supervisor.ts` 檔頭偏離 6）
+  // 握著 pipe，要等 SDK 的請求逾時才放（版本協商兩輪，最久約 120 秒）。exit 之後子行程的 stdin 收到 EOF：照 stdio 慣例
+  // 會自己退出，不理 EOF 的會留成孤兒（`docs/operations.md`〈孤兒行程〉）。
+  await Promise.all([drained(process.stdout), drained(process.stderr)]);
+  process.exit(code);
 }

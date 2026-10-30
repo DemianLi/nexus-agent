@@ -1,13 +1,12 @@
 import type { Event, ThreadHistoryQuery, ThreadHistoryResult, WireClient } from '@nexus/wire';
 import { THREAD_AT_CAPACITY, THREAD_HISTORY_TOO_DEEP } from '@nexus/wire';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App, LEGACY_THREAD_NOTICE } from '@/App';
 import {
   EARLIER_EDGE_PX,
   LOAD_EARLIER_LABEL,
-  LOADING_EARLIER_LABEL,
   RETRY_EARLIER_LABEL,
 } from '@/components/earlier-pager';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
@@ -22,7 +21,7 @@ import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
  * `serve-history.test.ts`）。這裡只驗畫面這一層：歷史畫出來了、之後的即時回覆接得上、送出等歷史、兩句披露、往前翻。
  */
 
-/** 同 `App.test.tsx` 那一份：Node 25 的全域已由 `vitest.shared.ts` 統一關掉（#1602），stub 留著是為了每條測試之間隔離。 */
+/** 同 `@/test/app-harness.fixture` 那一份：Node 25 的全域已由 `vitest.shared.ts` 統一關掉（#1602），stub 留著是為了每條測試之間隔離。 */
 function memoryStorage(): Storage {
   const entries = new Map<string, string>();
   return {
@@ -337,6 +336,14 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     return screen.getByRole('region', { name: '對話訊息' });
   }
 
+  /**
+   * 斷言「焦點不動」之前先呼叫：文字一出現 waitFor 就回來了，Transcript 交接焦點的 effect（`components/transcript.tsx`）
+   * 可能還沒跑，先讓它跑完，「不動」才量得到。
+   */
+  function effectsSettled(): Promise<void> {
+    return act(async () => {});
+  }
+
   /** jsdom 的 `scrollTop` 不會動，直接蓋一個值。 */
   function at(element: HTMLElement, scrollTop: number): HTMLElement {
     Object.defineProperty(element, 'scrollTop', {
@@ -416,7 +423,7 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     expect(earlierCalls()).toBe(1);
   });
 
-  it('讀取中按鈕換字並停用；讀完另一格報讀接上幾則，回覆完成那一格不被蓋掉', async () => {
+  it('讀取中按鈕停用、字不變、圖示換成 DotLoader、焦點留在上面；讀完另一格報讀接上幾則，回覆完成那一格不被蓋掉；最後一頁焦點落在 viewport', async () => {
     let release: (() => void) | undefined;
     const { client } = fakeClient(async (_threadId, query) => {
       if (query?.beforeSeq === undefined) {
@@ -431,18 +438,74 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
 
-    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
-    const loading = await screen.findByText(LOADING_EARLIER_LABEL);
-    expect(loading.closest('button')).toBeNull();
-    expect(loading.querySelectorAll('.animate-dot-flash')).toHaveLength(3);
-    expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
+    const button = screen.getByRole('button', { name: LOAD_EARLIER_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await waitFor(() => expect(button.getAttribute('aria-disabled')).toBe('true'));
+    expect(button.textContent).toBe(LOAD_EARLIER_LABEL);
+    expect(button.querySelectorAll('.animate-dot-flash')).toHaveLength(3);
+    expect(screen.getByRole('button', { name: LOAD_EARLIER_LABEL })).toBe(button);
+    expect(document.activeElement).toBe(button);
 
     release?.();
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(viewport()));
     // 一頁一輪：人打的一句＋模型的一則回覆（工具卡不算，同 wire 一頁的單位）。
     expect(screen.getByTestId('earlier-notice').textContent).toBe('載入了較早的 2 則。');
     // 「回覆完成」那一格（第一個 polite 區）不被蓋掉。
     expect(document.querySelector('[aria-live="polite"]')?.textContent).not.toMatch(/載入了/);
+  });
+
+  it('鍵盤按往前翻、還有更早的（#2009）：讀完鈕還在，焦點不動', async () => {
+    const { client } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+    const button = screen.getByRole('button', { name: LOAD_EARLIER_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    expect(screen.getByRole('button', { name: LOAD_EARLIER_LABEL })).toBe(button);
+    await effectsSettled();
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('捲動帶動的往前翻（#2009）：翻到最後一頁也不搬焦點', async () => {
+    const { client } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+    fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
+    await effectsSettled();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('焦點停在鈕上、捲動帶動翻到最後一頁（#2009）：鈕收掉，焦點落在 viewport', async () => {
+    const { client } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+    screen.getByRole('button', { name: LOAD_EARLIER_LABEL }).focus();
+    fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    fireEvent.wheel(at(viewport(), 0), { deltaY: -100 });
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    await waitFor(() => expect(document.activeElement).toBe(viewport()));
+  });
+
+  it('按下去的當下焦點不在鈕上（#2009，例如 Safari 用滑鼠點鈕不聚焦）：翻到最後一頁也不搬焦點', async () => {
+    const { client } = threePages();
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    await waitFor(() => expect(screen.getByText('中間的回覆')).toBeTruthy());
+    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
+    await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
+    expect(screen.queryByRole('button', { name: LOAD_EARLIER_LABEL })).toBeNull();
+    await effectsSettled();
+    expect(document.activeElement).toBe(document.body);
   });
 
   it('連續兩頁接上一樣多則：報讀那一格讀取中先清空，第二次也唸得到', async () => {
@@ -483,8 +546,12 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByText('後來的回覆')).toBeTruthy());
 
-    fireEvent.click(screen.getByRole('button', { name: LOAD_EARLIER_LABEL }));
-    await screen.findByRole('button', { name: RETRY_EARLIER_LABEL });
+    const button = screen.getByRole('button', { name: LOAD_EARLIER_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    expect(await screen.findByRole('button', { name: RETRY_EARLIER_LABEL })).toBe(button);
+    await effectsSettled();
+    expect(document.activeElement).toBe(button);
     expect(within(viewport()).getByText('讀不到更早的對話：日誌讀到一半斷了')).toBeTruthy();
     expect(screen.queryByText(/之前說過的話拿不回來/)).toBeNull();
 
@@ -493,7 +560,11 @@ describe('往前翻：自動載入、讀取中、失敗與報讀', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(calls).toBe(1);
 
-    fireEvent.click(screen.getByRole('button', { name: RETRY_EARLIER_LABEL }));
+    fireEvent.click(button);
+    // 讀取中的字與名稱維持按下去之前那一句「再試一次」：錯誤在按下去的當下就清掉了。
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.textContent).toBe(RETRY_EARLIER_LABEL);
+    expect(screen.getByRole('button', { name: RETRY_EARLIER_LABEL })).toBe(button);
     await waitFor(() => expect(screen.getByText('最早的回覆')).toBeTruthy());
     expect(calls).toBe(2);
     expect(screen.queryByText(/讀不到更早的對話/)).toBeNull();

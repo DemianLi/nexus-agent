@@ -123,6 +123,25 @@ export function virtualPathOf(path: string): string {
 }
 
 /**
+ * `path` 是不是某個路由前綴本身或在它底下（[#2082](https://github.com/DemianLi/nexus-agent/issues/2082)）。前綴的結尾斜線不算數，
+ * 比的是整段：`/large_tool_results_x/a.md` **不**在 `/large_tool_results/` 底下。`path` 原樣比，不正規化：要先正規化的自己過 {@link virtualPathOf}。
+ *
+ * 技能來源在新 thread 接不接到共用區底下（`threadSkillSources`）、舊 thread 的守衛擋哪幾個技能目錄、技能清單在圖外讀不讀得到、
+ * present 認不認某個檔在工作區外，都問這一條。前兩個必須算出同一組（`apps/harness/src/shared-reserved-writes.test.ts` 釘）：
+ * 分成兩份寫的話，一邊改了另一邊不會報錯，守衛就靜靜漏擋或多擋一個技能目錄。
+ *
+ * @param path - 虛擬路徑。
+ * @param prefixes - 路由前綴，有沒有結尾斜線都行。
+ * @returns 在其中任何一個底下就是真。
+ */
+export function isUnderAnyPrefix(path: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => {
+    const base = prefix.replace(/\/+$/u, '');
+    return path === base || path.startsWith(`${base}/`);
+  });
+}
+
+/**
  * 模型給檔案工具的路徑，對到工作區根底下的主機路徑。規則見 {@link virtualPathOf}：`/a.md` 與 `a.md`
  * 都是根底下的 `a.md`，`..` 夾回根之內。**主機絕對路徑不會被認出來**：`/<根>/a.md` 是根底下的
  * 一條子路徑，跟 backend 一樣（sandbox-policy 檔頭「沒選的另一條路」講的就是這件事）。
