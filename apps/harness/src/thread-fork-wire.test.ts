@@ -477,7 +477,7 @@ describe('thread.fork', () => {
     });
   }
 
-  it('真的落盤、發佈之後第一次開世代檔失敗：fork 拒絕，子 thread 的世代檔留著，下一次分叉換 id 不受影響', async () => {
+  it('真的落盤、發佈之後第一次開世代檔失敗：fork 拒絕，子 thread 的世代檔留著', async () => {
     let left = 1;
     const openLog: OpenLogFile = async (path, flags, mode) => {
       if (flags === 'a' && left > 0) {
