@@ -16,6 +16,7 @@ pub struct Prepared {
     pub status: libc::c_int,
     pub spawner: libc::pid_t,
     pub cwd: CString,
+    /// 0 是全權模式：不上 Landlock。
     pub abi: i32,
     pub readable: Vec<Vec<u8>>,
     pub writable: Vec<Vec<u8>>,
@@ -88,8 +89,10 @@ pub unsafe fn run(p: &Prepared) -> ! {
     if libc::chdir(p.cwd.as_ptr()) != 0 {
         fail(STATUS_FD, FailKind::StartDir, errno(), "chdir");
     }
-    if let Err(e) = landlock::restrict_self(p.abi, &p.readable, &p.writable) {
-        fail(STATUS_FD, FailKind::SandboxUnavailable, 0, &format!("landlock: {e}"));
+    if p.abi > 0 {
+        if let Err(e) = landlock::restrict_self(p.abi, &p.readable, &p.writable) {
+            fail(STATUS_FD, FailKind::SandboxUnavailable, 0, &format!("landlock: {e}"));
+        }
     }
     // 逐一試候選：EACCES 記下來繼續找，找完都沒有就回它；ENOENT、ENOTDIR、ESTALE、ENODEV、ETIMEDOUT 繼續找；
     // 其他錯誤當場停，回那一個。
