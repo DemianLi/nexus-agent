@@ -5,7 +5,7 @@
  * **列全部會話**（含別的專案與子代理），排除自己，同工作區的排前面、沒記目錄的次之、其餘最後，最多 50 筆，
  * 對 id／目錄／標題做不分大小寫的子字串比對，**不搜內文**。
  *
- * ## 讀法：經過 `SessionStore`，冷讀
+ * ## 列的讀法：經過 `SessionStore`，冷讀（精確讀見 {@link SessionReferenceCandidates.read}）
  *
  * 列走 `list`、標題走 `open(id, 'read')`（[#665](https://github.com/DemianLi/nexus-agent/issues/665)），**不為它建起任何 thread**，
  * 不拿寫租約。跨專案的部分列的是會話根底下每一格專案目錄（{@link listSessionStoreDirectories}），每一格各開一個唯讀把手。
@@ -73,6 +73,11 @@ export interface SessionReferenceCandidatesOptions {
   readonly warn?: (message: string) => void;
   /** 最多回幾筆。省略是 {@link DEFAULT_SESSION_REFERENCE_CANDIDATE_LIMIT}。 */
   readonly limit?: number;
+  /**
+   * 同一行程裡活著的會話（root 與子代理）現在的事件；不活著是 `undefined`。serve 在 wire handler 建好之後
+   * 才拿得到，所以給的是一支延遲讀 handler 的函式。省略就一律冷讀。
+   */
+  readonly liveEvents?: (sessionId: string) => readonly SessionEvent[] | undefined;
 }
 
 interface Row {
@@ -192,9 +197,11 @@ export class SessionReferenceCandidates {
 
   /**
    * 精確讀一條會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713) 的準備那一半，給 `SessionReferenceReader` 用）：
-   * 整份日誌，**壞了就拋，不撿回**——快照會把內容帶進另一條會話，撿回來的殘缺版本不能當成那條會話的樣子。
+   * 冷讀的整份日誌**壞了就拋，不撿回**——快照會把內容帶進另一條會話，撿回來的殘缺版本不能當成那條會話的樣子。
+   * **同一行程裡活著的讀記憶體**（[#1940](https://github.com/DemianLi/nexus-agent/issues/1940)）：只看自己那一格，事件取記憶體裡的、不補結，
+   * 批次窗口還沒寫出去的也在；header 與版號讀磁碟那一份，自己那格還沒有檔就往下找。其餘
    * 經 `readColdSession`（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)）：死在一輪中間的那一份在記憶體補平，
-   * 第一次模型呼叫就當掉的也投影得出人打的字；`events` 的最後一顆可能是補結，同 dsh `readSurface` 的 `capturedThroughSeq`。
+   * 第一次模型呼叫就當掉的也投影得出人打的字；`events` 的最後一顆可能是補結。
    *
    * 找的範圍與 {@link SessionReferenceCandidates.list} 一致：只在專案目錄裡找，自己的那一格優先；同 id 出現在兩格時取先找到的，
    * 跟列出來的是同一份。**唯讀**：不拿租約，別的把手握著照樣讀得到。
@@ -210,10 +217,20 @@ export class SessionReferenceCandidates {
     readonly events: readonly SessionEvent[];
   }> {
     signal?.throwIfAborted();
+    const own = projectKey(this.#options.cwd);
     for (const directory of await this.#projectDirectories()) {
       signal?.throwIfAborted();
       let cold;
       try {
+        const live =
+          basename(directory) === own ? this.#options.liveEvents?.(sessionId) : undefined;
+        if (live !== undefined) {
+          const { header, storedFormatVersion } = await this.#storeOf(directory).open(
+            sessionId,
+            'read',
+          );
+          return { header, storedFormatVersion, events: live };
+        }
         cold = await readColdSession(this.#storeOf(directory), sessionId);
       } catch (error: unknown) {
         if (error instanceof SessionNotFoundError) continue;

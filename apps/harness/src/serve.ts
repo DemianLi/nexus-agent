@@ -1111,6 +1111,7 @@ async function startServer(
           warn,
           openStore: (directory: string) =>
             openJsonlSessionStore({ directory, logBudget: sessionLogBudget }),
+          liveEvents: (sessionId) => handler.liveSessionEvents(sessionId),
         });
 
   // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出；設成 0 是管理者關掉逐出（#1619，
