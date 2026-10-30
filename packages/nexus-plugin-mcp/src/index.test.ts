@@ -155,6 +155,8 @@ describe('接上一台真的 MCP server', () => {
         'mcp__fixture__read_env',
         'mcp__fixture__fetch_url',
         'mcp__fixture__cite_sources',
+        'mcp__fixture__only_image',
+        'mcp__fixture__two_texts',
         'mcp__fixture__embed_blob',
         'mcp__fixture__embed_text',
         'mcp__fixture__big_image',
@@ -214,8 +216,7 @@ describe('接上一台真的 MCP server', () => {
         args: {},
       })) as ToolMessage;
       expect(message.content).toEqual([
-        { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
-        { type: 'text', text: '畫面之前' },
+        { type: 'text', text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n畫面之前` },
         { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
         { type: 'text', text: '畫面之後' },
       ]);
@@ -236,8 +237,7 @@ describe('接上一台真的 MCP server', () => {
         args: {},
       })) as ToolMessage;
       expect(message.content).toEqual([
-        { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
-        { type: 'text', text: CITE_TEXT },
+        { type: 'text', text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n${CITE_TEXT}` },
         ...CITE_LINKS.map((link) => ({
           type: 'text',
           text: `Resource link: ${link.name} (${link.uri})`,
