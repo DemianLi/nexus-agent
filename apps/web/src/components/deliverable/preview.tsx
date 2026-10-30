@@ -40,6 +40,13 @@
  * `offset + i + 1`：`offset` 是路由給的權威值（0 起算），畫面上的行號因此不會跟檔案的行號分岔。dsh 算同一個數
  * 但不顯示（只拿來跳行）；這裡畫出來，用 `::before` 畫，所以複製文字時不會被帶走。
  *
+ * ## Markdown 檔（[#2142](https://github.com/DemianLi/nexus-agent/issues/2142)）
+ *
+ * `.md`、`.markdown` 預設畫成文件，走對話同一個 {@link MarkdownText}：raw HTML 當文字、連結過 allowlist、圖片不自動載入。
+ * 讀到的前綴接成一份字，還沒到檔尾時走串流那一臂：已凍結的 block 不重解，只重解尾段。到檔尾整份解析一次，TeX 與跨凍結
+ * 邊界的引用定義要到這時才畫出來。文件模式不分塊，沒有 {@link BLOCK_LINES} 的上限，讀到多少畫多少。
+ * 「顯示原文」切回帶行號的文字。鏈上有長行就只畫原文、不給切換：一條超過頁上限的行不是能讀的段落。
+ *
  * ## 讀不到的幾種
  *
  * 各自有話講（見 {@link DeliverableFileState}）：座標不對是 bug、錨不住是正常的、太大是拒絕不是截斷、不是文字要
@@ -56,7 +63,7 @@
  */
 
 import type { DeliverableFilePage } from '@nexus/wire';
-import { WrapText } from 'lucide-react';
+import { FileCode2, WrapText } from 'lucide-react';
 import {
   Fragment,
   createContext,
@@ -72,6 +79,7 @@ import {
 import type { CSSProperties, ReactNode, RefObject } from 'react';
 
 import { DownloadAction } from '@/components/deliverable/download-button';
+import { MarkdownText } from '@/components/markdown-text';
 import { Button } from '@/components/ui/button';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type {
@@ -158,6 +166,25 @@ export function loadedChain(
  */
 export function linesOf(page: DeliverableFilePage): string[] {
   return page.lines === 0 ? [] : page.text.split('\n');
+}
+
+/** 這個檔要不要畫成文件。路徑是前端唯一知道的型別線索。 */
+export function isMarkdownFile(path: string): boolean {
+  return /\.(?:md|markdown)$/iu.test(path);
+}
+
+/**
+ * 讀到的前綴接成一份 Markdown。每一段的 `text` 結尾沒有換行，所以段與段之間要補一個。
+ *
+ * @returns 整份字；鏈上有長行時是 `undefined`（見檔頭）。
+ */
+export function markdownOf(entries: readonly DeliverableFileEntry[]): string | undefined {
+  const pages: string[] = [];
+  for (const entry of entries) {
+    if (isLongLine(entry)) return undefined;
+    if (entry.lines > 0) pages.push(entry.text);
+  }
+  return pages.join('\n');
 }
 
 /**
@@ -427,12 +454,14 @@ function PreviewBody({
   downloader,
   scroller,
   wrap,
+  asDocument,
 }: {
   file: LocatedFile;
   store: DeliverableFileStore;
   downloader: DeliverableDownloader | undefined;
   scroller: RefObject<HTMLDivElement | null>;
   wrap: boolean;
+  asDocument: boolean;
 }) {
   const { seq, index } = file;
   // 訂閱整個 store；鏈每一次都從 `read` 重新走出來（便宜：步數是已讀的段數）。
@@ -459,7 +488,9 @@ function PreviewBody({
   const lastLine =
     last === undefined ? 0 : isLongLine(last) ? last.offset + 1 : last.offset + last.lines;
   const digits = String(lastLine).length;
-  useCharsPerRow(text, scroller, digits, started);
+  const markdown = asDocument ? markdownOf(entries) : undefined;
+  // 切到原文時文字容器才掛上，要重量一次。
+  useCharsPerRow(text, scroller, digits, started && markdown === undefined);
 
   if (!started) {
     if (tail.kind === 'failed') {
@@ -485,26 +516,34 @@ function PreviewBody({
   const gutter = { '--gutter': `${digits}ch` } as CSSProperties;
   return (
     <>
-      <div
-        className={cn(
-          'py-2 font-mono text-tip leading-5',
-          wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'w-max min-w-full whitespace-pre',
-        )}
-        style={gutter}
-        ref={text}
-        data-preview-wrap={wrap || undefined}
-        data-testid="preview-text"
-      >
-        <WrapMode.Provider value={wrap}>
-          {entries.map((entry) =>
-            isLongLine(entry) ? (
-              <LongLineView key={`long:${entry.offset}`} line={entry} />
-            ) : (
-              <Page key={entry.offset} page={entry} />
-            ),
+      {markdown === undefined ? (
+        <div
+          className={cn(
+            'py-2 font-mono text-tip leading-5',
+            wrap
+              ? 'whitespace-pre-wrap [overflow-wrap:anywhere]'
+              : 'w-max min-w-full whitespace-pre',
           )}
-        </WrapMode.Provider>
-      </div>
+          style={gutter}
+          ref={text}
+          data-preview-wrap={wrap || undefined}
+          data-testid="preview-text"
+        >
+          <WrapMode.Provider value={wrap}>
+            {entries.map((entry) =>
+              isLongLine(entry) ? (
+                <LongLineView key={`long:${entry.offset}`} line={entry} />
+              ) : (
+                <Page key={entry.offset} page={entry} />
+              ),
+            )}
+          </WrapMode.Provider>
+        </div>
+      ) : (
+        <div className="text-body mx-auto max-w-3xl px-6 py-4" data-testid="preview-document">
+          <MarkdownText text={markdown} streaming={tail.kind !== 'end'} />
+        </div>
+      )}
       {tail.kind === 'loading' && (
         <Status busy>{tail.window ? '正在讀取這一行的下一段…' : '正在讀取下一段…'}</Status>
       )}
@@ -535,6 +574,11 @@ export function DeliverablePreviewTab({
   // **預設換行**，同 dsh 文字預覽的 `wrap`（由讀的人關掉）。隔壁改動審查預設不換行 —— 那是比較兩側，這裡是讀。
   // 跟著這個分頁走：切到別的分頁再回來還在，關掉分頁就沒了。
   const [wrap, setWrap] = useState(true);
+  useSyncExternalStore(store.subscribe, store.revision);
+  const { entries } = loadedChain(store, file.seq, file.index);
+  const documentable = isMarkdownFile(file.path) && markdownOf(entries) !== undefined;
+  const [showSource, setShowSource] = useState(false);
+  const asDocument = documentable && !showSource;
   const scroller = useRef<HTMLDivElement>(null);
 
   return (
@@ -543,11 +587,24 @@ export function DeliverablePreviewTab({
         <p className="text-muted-foreground min-w-0 flex-1 font-mono text-tip break-all">
           {file.path}
         </p>
+        {documentable && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            aria-pressed={showSource}
+            onClick={() => setShowSource((value) => !value)}
+          >
+            <FileCode2 />
+            顯示原文
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"
           size="sm"
           aria-pressed={wrap}
+          disabled={asDocument}
           onClick={() => setWrap((value) => !value)}
         >
           <WrapText />
@@ -561,6 +618,7 @@ export function DeliverablePreviewTab({
           downloader={downloader}
           scroller={scroller}
           wrap={wrap}
+          asDocument={asDocument}
         />
       </div>
     </div>
