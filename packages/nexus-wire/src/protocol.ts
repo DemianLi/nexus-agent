@@ -448,8 +448,7 @@ export const THREAD_WRITER_HELD = 'thread_writer_held';
  * 上傳過的檔案收據放在 serve 的記憶體表裡，被拒時雖然放回去，重啟之後表是空的，**檔案要重新上傳**；圖片是隨請求帶來的，重送即可。
  * 重試馬上沒用——這台 serve 是在關機——要等它重新起來。
  *
- * **message 是寫給使用者看的**，不是給管理者的（本專案其他碼的 message 多半給管理者看）：web 目前直接把 `result.message` 顯示在輸入框旁，
- * 所以這裡寫的是「這句話沒有送出；稍後再送一次」的口吻。要讓 web 改用自己的固定文案，認這個碼就行（同 `thread_at_capacity`）。
+ * **message 給管理者與接 wire 的人看**，同本專案其他碼；要顯示給使用者的客戶端認這個碼、用自己的文案（web 見 `apps/web/src/lib/server-closing.ts`，同 `thread_at_capacity`）。
  */
 export const SERVER_CLOSING = 'server_closing';
 
