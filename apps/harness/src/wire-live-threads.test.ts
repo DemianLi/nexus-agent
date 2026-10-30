@@ -60,6 +60,40 @@ async function writeThread(directory: string, id: string, said: string): Promise
   );
 }
 
+describe('liveSessionEvents()（#1940）', () => {
+  it('root 與子代理都讀得到；不活著是 undefined', async () => {
+    let child: SessionLog | undefined;
+    const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
+      createAgent: async () => ({
+        ...(await realAgent()),
+        attachPersistence: (sessions) => {
+          child = sessions.open({ kind: 'subagent', runId: 'tools:1' });
+          return {
+            flush: () => Promise.resolve(),
+            dispose: () => Promise.resolve(),
+            rootHeader: () => undefined,
+          };
+        },
+      }),
+    });
+    await handler.handle(
+      loopbackRequest(`${BASE}${historyPath('a')}`, {
+        method: 'GET',
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    expect(handler.liveSessionEvents('a')).toBeDefined();
+    expect(child).toBeDefined();
+    child?.append('turn/start', { kind: 'message', text: '子代理的話' });
+    expect(handler.liveSessionEvents(child?.sessionId ?? '')).toEqual(child?.events);
+    expect(child?.events.length).toBeGreaterThan(0);
+    expect(handler.liveSessionEvents('nobody')).toBeUndefined();
+    await handler.close();
+    expect(handler.liveSessionEvents('a')).toBeUndefined();
+  });
+});
+
 describe('liveThreads()（#1599）', () => {
   it('還在建的那一條不算：搜尋不等它組裝，照盤上那份冷讀；建好之後才算活的', async () => {
     const calls: string[] = [];

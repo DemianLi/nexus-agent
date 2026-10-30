@@ -675,6 +675,14 @@ export interface IdleSweepingWireHandler extends WireHandler {
    */
   liveThreads(): readonly LiveThread[];
   /**
+   * 一份活著的會話現在的事件，子代理也算（[#1940](https://github.com/DemianLi/nexus-agent/issues/1940)，`@` 引用用）。活不活的判法同
+   * {@link liveThreads}：還在建的、正在撤的都不算。
+   *
+   * @param sessionId - root 是 thread id，子代理是 `<root>/<runId>`。
+   * @returns 事件的副本；不活著是 `undefined`。
+   */
+  liveSessionEvents(sessionId: string): readonly SessionEvent[] | undefined;
+  /**
    * `close()` 已經開始了沒（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，`/readyz` 據此回 503）。**只讀**：叫 `close()` 的那一刻同步變 `true`，不會變回來。
    */
   isClosing(): boolean;
@@ -3901,6 +3909,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         log: state.pump.sessionLog,
         header: state.storedHeader(),
       })),
+    liveSessionEvents: (sessionId) => {
+      for (const state of ready.values()) {
+        for (const { log } of state.pump.sessions.list()) {
+          if (log.sessionId === sessionId) return log.events;
+        }
+      }
+      return undefined;
+    },
     isClosing: () => closed,
     stopAdmission: () => {
       admissionStopped = true;
