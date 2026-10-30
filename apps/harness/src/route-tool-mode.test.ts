@@ -1,6 +1,6 @@
 /**
  * 路由自己的檔案政策是寫死的，但 rg 上不上 OS 沙箱要跟著會話（#1946）：沒有 Landlock 的主機用 `danger-full-access` 時，路由的根
- * 一存在，搜 `/` 就會走到路由，路由回 sandbox-unavailable 會讓 `grep` 整筆回 error，`glob` 則少掉路由的結果。
+ * 一存在，搜 `/` 就會走到路由，路由回 sandbox-unavailable 會讓 `grep` 與 `glob` 都整筆回 error。
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -47,11 +47,15 @@ describe('沒有沙箱後端的主機上，搜 / 碰到路由', () => {
   });
   afterEach(() => rm(base, { recursive: true, force: true }));
 
-  async function searchAll(sandbox: SandboxMode, tool: 'grep' | 'glob' = 'grep'): Promise<string> {
+  async function searchAll(
+    sandbox: SandboxMode,
+    tool: 'grep' | 'glob' = 'grep',
+    workspace: { readonly root: string | undefined } = { root },
+  ): Promise<string> {
     const built = await createCliAgent(
       {
         live: false,
-        workspace: root,
+        workspaceRoot: workspace.root,
         sandbox,
         toolResultStash: { rootDir: stashRoot, session: 'route-mode' },
       },
@@ -93,6 +97,12 @@ describe('沒有沙箱後端的主機上，搜 / 碰到路由', () => {
   it('會話是 read-only：照 fail-closed', async () => {
     expect(await searchAll('read-only')).toContain('SANDBOX_UNAVAILABLE');
     expect(await searchAll('read-only', 'glob')).toContain('SANDBOX_UNAVAILABLE');
+  });
+
+  it('沒有工作區（預設是記憶體）：路由的錯誤不會說成沒有檔案（#2158）', async () => {
+    expect(await searchAll('read-only', 'glob', { root: undefined })).toContain(
+      'SANDBOX_UNAVAILABLE',
+    );
   });
 
   it('分叉的子 thread 搜繼承來的暫存檔，祖先那一格也跟著 toolMode', async () => {
