@@ -5,6 +5,8 @@
 
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { createSocket } from 'node:dgram';
+import type { Socket } from 'node:dgram';
 import { createServer } from 'node:net';
 import type { AddressInfo, Server } from 'node:net';
 import { tmpdir } from 'node:os';
@@ -20,6 +22,29 @@ import { createMcpSandboxWrapper } from './mcp-sandbox.js';
 
 const BINARY = process.env.NEXUS_SPAWNER_BIN;
 
+/** 回一筆 A 紀錄 127.0.0.2 的本機 DNS：`queries` 數收到幾個請求，看解析有沒有真的送出去。 */
+async function startFakeDns(): Promise<{ socket: Socket; port: string; queries: () => number }> {
+  const socket = createSocket('udp4');
+  let queries = 0;
+  socket.on('message', (query, peer) => {
+    queries += 1;
+    const answer = [0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 1, 0, 4, 127, 0, 0, 2];
+    const flags = [0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0];
+    socket.send(
+      Buffer.concat([
+        query.subarray(0, 2),
+        Buffer.from(flags),
+        query.subarray(12),
+        Buffer.from(answer),
+      ]),
+      peer.port,
+      peer.address,
+    );
+  });
+  await new Promise<void>((resolve) => socket.bind(0, '127.0.0.1', resolve));
+  return { socket, port: String(socket.address().port), queries: () => queries };
+}
+
 const python = ((): string | undefined => {
   try {
     return execFileSync('sh', ['-c', 'command -v python3']).toString().trim();
@@ -28,15 +53,24 @@ const python = ((): string | undefined => {
   }
 })();
 
-/** 手寫的 MCP：一行一筆 JSON-RPC，沒有相依，三支工具 read、connect、env。 */
+/** 手寫的 MCP：一行一筆 JSON-RPC，沒有相依，四支工具 read、connect、env、dns。 */
 const NODE_SERVER = `
+const dns = require('node:dns');
 const fs = require('node:fs');
 const net = require('node:net');
 const readline = require('node:readline');
 const text = (value) => ({ content: [{ type: 'text', text: value }] });
 const schema = { type: 'object', properties: { value: { type: 'string' } }, required: ['value'] };
-const tools = ['read', 'connect', 'env'].map((name) => ({ name, description: name, inputSchema: schema }));
+const tools = ['read', 'connect', 'env', 'dns'].map((name) => ({ name, description: name, inputSchema: schema }));
 const call = (name, value) => new Promise((resolve) => {
+  if (name === 'dns') {
+    const resolver = new dns.promises.Resolver({ timeout: 2000, tries: 1 });
+    resolver.setServers(['127.0.0.1:' + value]);
+    return resolver.resolve4('svc.nexus.test').then(
+      (addresses) => resolve(text('resolved:' + addresses[0])),
+      (error) => resolve(text('denied:' + error.code)),
+    );
+  }
   if (name === 'env') return resolve(text(process.env[value] ?? 'unset'));
   if (name === 'read') {
     try { return resolve(text(fs.readFileSync(value, 'utf8'))); }
@@ -180,6 +214,30 @@ describe.skipIf(BINARY === undefined).each(servers)(
       expect(read).toContain('denied:');
       expect(read).not.toContain('token');
       expect(await call('connect', port)).toContain('denied:');
+    });
+
+    it.runIf(file === 'server.js')('宣告了：名稱解析立刻失敗，請求沒有送出去', async () => {
+      const resolver = await startFakeDns();
+      try {
+        const call = await connect({ readable: [base], writable: [] });
+        const started = Date.now();
+        expect(await call('dns', resolver.port)).toContain('denied:');
+        expect(Date.now() - started).toBeLessThan(1_000);
+        expect(resolver.queries()).toBe(0);
+      } finally {
+        await new Promise<void>((resolve) => resolver.socket.close(() => resolve()));
+      }
+    });
+
+    it.runIf(file === 'server.js')('沒宣告（正對照）：同一支 server 解析得到', async () => {
+      const resolver = await startFakeDns();
+      try {
+        const call = await connect(undefined);
+        expect(await call('dns', resolver.port)).toContain('resolved:127.0.0.2');
+        expect(resolver.queries()).toBe(1);
+      } finally {
+        await new Promise<void>((resolve) => resolver.socket.close(() => resolve()));
+      }
     });
 
     it('沒宣告（正對照）：同一支 server 讀得到、連得出去', async () => {
