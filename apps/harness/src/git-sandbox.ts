@@ -6,7 +6,7 @@
  * 讀根清單不列 serve 的 home，也不列包住 `$HOME` 的目錄，repo 落在 `$HOME` 底下時給的是 repo：
  *
  * - 系統執行期的目錄與檔（{@link GIT_SYSTEM_READABLE}）與 git 本身；
- * - 工作目錄、最近的 repo、它的 git 目錄、common 目錄與物件庫的 alternates。工作目錄或 repo 根包住 `$HOME` 時不給那一層，寧可沒有快照也不擴權；
+ * - 工作目錄、最近的 repo、它的 git 目錄、common 目錄與物件庫的 alternates。工作目錄包住 `$HOME` 時不給那一層，repo 根包住 `$HOME` 時整個不拍快照。這些路徑的內容在工作區裡時只開得了工作區內的讀權，見 {@link gitDirectories}；
  * - global 與 system 的設定檔、它們 include 的檔（含空的）、`core.excludesFile`、`core.attributesFile`。
  *
  * include 的檔讀不到時 git 整個結束（`fatal: unable to access`），不存在才跳過，所以 include 要照列；而 `core.excludesFile` 漏了不會報錯，
@@ -17,9 +17,9 @@
  * @module
  */
 
-import { readFile, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { SandboxMode } from '@nexus/core';
 import type { GitOutcome, GitStartFailure, GitStarter } from '@nexus/plugin-workspace-changes';
@@ -65,23 +65,62 @@ async function repoRootOf(cwd: string): Promise<string | undefined> {
   }
 }
 
-/** git 目錄、common 目錄與物件庫的 alternates。 */
-async function gitDirectories(root: string): Promise<readonly string[]> {
+const realOf = (path: string): Promise<string | undefined> => realpath(path).catch(() => undefined);
+
+const within = (root: string, path: string): boolean => {
+  const fromRoot = relative(root, path);
+  return fromRoot !== '..' && !fromRoot.startsWith('../') && !isAbsolute(fromRoot);
+};
+
+/** `gitDir` 是不是這個 `.git` 的 linked worktree：`<common>/worktrees/<名字>/gitdir` 要指回來。工作區外的這個檔，工作區裡的東西改不到。 */
+async function pointsBackTo(gitDir: string, dotGit: string): Promise<boolean> {
+  if (basename(dirname(gitDir)) !== 'worktrees') return false;
+  const back = (await readText(join(gitDir, 'gitdir')))?.trim();
+  if (back === undefined || back === '') return false;
+  const [pointed, here] = await Promise.all([realOf(resolve(gitDir, back)), realOf(dotGit)]);
+  return pointed !== undefined && pointed === here;
+}
+
+/**
+ * git 目錄、common 目錄與物件庫的 alternates，都是 realpath。
+ *
+ * `.git`、`gitdir:`、`commondir`、alternates 的內容在工作區裡就是模型寫得到的，所以它們只能開工作區內的讀權。
+ * 例外是 {@link pointsBackTo} 驗過的 linked worktree 與它的 common 目錄，以及 repo 根本來就在工作區外的情形。工作區外的 alternates 一律不給。
+ */
+async function gitDirectories(root: string, workspace: string): Promise<readonly string[]> {
   const dotGit = join(root, '.git');
-  const found = [dotGit];
-  let gitDir = dotGit;
-  if (await isKind(dotGit, 'isFile')) {
+  const realDot = await realOf(dotGit);
+  if (realDot === undefined) return [];
+  const realRoot = (await realOf(root)) ?? root;
+  const fromWorkspace = within(workspace, realRoot);
+  let gitDir = realDot;
+  const found: string[] = [];
+  if (await isKind(realDot, 'isDirectory')) {
+    if (fromWorkspace && !within(workspace, realDot)) return [];
+  } else {
+    found.push(dotGit);
     const named = /^gitdir:\s*(.+?)\s*$/mu.exec((await readText(dotGit)) ?? '')?.[1];
-    if (named === undefined) return found;
-    gitDir = resolve(root, named);
-    found.push(gitDir);
+    const target = named === undefined ? undefined : await realOf(resolve(root, named));
+    if (target === undefined) return found;
+    gitDir = target;
+    const trusted =
+      !fromWorkspace || within(workspace, gitDir) || (await pointsBackTo(gitDir, dotGit));
+    if (!trusted) return found;
   }
+  found.push(gitDir);
   const commondir = (await readText(join(gitDir, 'commondir')))?.trim();
-  const common = commondir === undefined ? gitDir : resolve(gitDir, commondir);
-  if (common !== gitDir) found.push(common);
+  const common = commondir === undefined ? gitDir : await realOf(resolve(gitDir, commondir));
+  if (common === undefined) return found;
+  if (common !== gitDir) {
+    const verified = !within(workspace, gitDir) && common === dirname(dirname(gitDir));
+    if (!within(workspace, common) && !verified) return found;
+    found.push(common);
+  }
   const objects = join(common, 'objects');
   for (const line of ((await readText(join(objects, 'info/alternates'))) ?? '').split('\n')) {
-    if (line !== '' && !line.startsWith('#')) found.push(resolve(objects, line));
+    if (line === '' || line.startsWith('#')) continue;
+    const alternate = await realOf(resolve(objects, line));
+    if (alternate !== undefined && within(workspace, alternate)) found.push(alternate);
   }
   return found;
 }
@@ -191,26 +230,30 @@ async function configFiles(
  * @param launch - 問全域設定用的工具接縫。
  * @param executable - git 的路徑。
  * @param cwd - 工作目錄。
+ * @param workspace - 工作區根：這底下的檔是模型寫得到的。
  * @param env - 給 git 的環境：它用這份環境找全域設定。
- * @returns 讀根；問不到全域設定時回失敗原因，不帶著不完整的清單跑。
+ * @returns 讀根；問不到全域設定、或 repo 根包住 `$HOME` 時回失敗原因。後者給了讀權就是整個 home，不給又讀不到上層的 `.gitignore`，被忽略的檔會進快照。
  */
 export async function gitReadRoots(
   launch: ToolLauncher,
   executable: string,
   cwd: string,
+  workspace: string,
   env: NodeJS.ProcessEnv,
 ): Promise<readonly string[] | GitStartFailure> {
   const repo = await repoRootOf(cwd);
   const configs = await configFiles(launch, executable, cwd, repo, env);
   if (typeof configs === 'string') return configs;
   const home = env['HOME'] ?? homedir();
-  const coversHome = (path: string): boolean => {
-    const fromPath = relative(path, home);
-    return fromPath !== '..' && !fromPath.startsWith('../') && !isAbsolute(fromPath);
-  };
+  const realHome = (await realOf(home)) ?? home;
+  const realWorkspace = (await realOf(workspace)) ?? workspace;
+  const coversHome = async (path: string): Promise<boolean> =>
+    within((await realOf(path)) ?? path, realHome);
+  if (repo !== undefined && (await coversHome(repo))) return 'repo-covers-home';
   const directories = [
-    ...(repo === undefined ? [] : await gitDirectories(repo)),
-    ...[cwd, ...(repo === undefined ? [] : [repo])].filter((path) => !coversHome(path)),
+    ...(repo === undefined ? [] : await gitDirectories(repo, realWorkspace)),
+    ...(repo === undefined ? [] : [repo]),
+    ...((await coversHome(cwd)) ? [] : [cwd]),
   ];
   const candidates = [...GIT_SYSTEM_READABLE, executable, ...directories, ...configs];
   const existing = await Promise.all(
@@ -230,27 +273,37 @@ const outcome = (result: ToolResult): GitOutcome =>
  * 沙箱不可用時 recorder 不講話（那一輪留 `failed`，下一輪重試），這裡講一次；起成過之後再壞會再講一次。spawner 重起的過程另有監控的 log。
  *
  * @param mode - 會話當下的模式。
+ * @param workspace - 工作區根。
  * @param launcher - 工具接縫，省略是產品那一支。
  * @param report - 診斷往哪裡講。
  */
 export function createGitStarter(
   mode: () => SandboxMode,
+  workspace: string,
   launcher: () => ToolLauncher = productToolLauncher,
   report: (line: string) => void = reportSandbox,
 ): GitStarter {
-  let noted = false;
-  const unavailable = (): GitStartFailure => {
-    if (!noted) report('workspace-changes：工具沙箱不可用，這段期間不記 git 快照的改動');
-    noted = true;
-    return 'sandbox-unavailable';
+  let noted: GitStartFailure | undefined;
+  const quiet = (reason: 'sandbox-unavailable' | 'repo-covers-home'): GitStartFailure => {
+    if (noted !== reason) {
+      report(
+        reason === 'repo-covers-home'
+          ? 'workspace-changes：repo 根包住 $HOME，不記 git 快照的改動'
+          : 'workspace-changes：工具沙箱不可用，這段期間不記 git 快照的改動',
+      );
+    }
+    noted = reason;
+    return reason;
   };
   return async (start) => {
     const launch = launcher();
     const fullAccess = mode() === 'danger-full-access';
     const readable = fullAccess
       ? []
-      : await gitReadRoots(launch, start.executable, start.cwd, start.env);
-    if (readable === 'sandbox-unavailable') return unavailable();
+      : await gitReadRoots(launch, start.executable, start.cwd, workspace, start.env);
+    if (readable === 'sandbox-unavailable' || readable === 'repo-covers-home') {
+      return quiet(readable);
+    }
     if (typeof readable === 'string') return readable;
     const started = await launch({
       executable: start.executable,
@@ -262,9 +315,9 @@ export function createGitStarter(
       env: start.env,
       ...(start.stdin === undefined ? {} : { stdin: start.stdin }),
     });
-    if (started === 'sandbox-unavailable') return unavailable();
+    if (started === 'sandbox-unavailable') return quiet(started);
     if (typeof started === 'string') return started;
-    noted = false;
+    noted = undefined;
     return {
       stdout: started.stdout,
       stderr: started.stderr,

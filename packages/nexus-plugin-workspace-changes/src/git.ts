@@ -116,8 +116,9 @@ class TailBuffer {
   }
 }
 
-/** git 沒有跑起來的原因。沙箱不可用要跟 git 自己起不來分開：前者那一輪不記也不報錯，下一輪重試。 */
-export type GitStartFailure = 'sandbox-unavailable' | 'start-dir' | 'not-found' | 'launch-failed';
+/** git 沒有跑起來的原因。沙箱不可用與 repo 根包住 `$HOME` 要跟 git 自己起不來分開：前兩者那一輪不記也不報錯，下一輪重試。 */
+export type GitStartFailure =
+  'sandbox-unavailable' | 'repo-covers-home' | 'start-dir' | 'not-found' | 'launch-failed';
 
 /** 一次執行的結局。 */
 export type GitOutcome =

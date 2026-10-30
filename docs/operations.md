@@ -127,13 +127,14 @@ seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽�
 **主機條件。** 兩條下限分開看：
 
 - **Landlock 要核心 5.13 以上**，而且開機的 LSM 清單要有它。編進核心不夠，`cat /sys/kernel/security/lsm` 看不到 `landlock` 就是沒開，要在開機參數 `lsm=` 加上。ABI 6 要核心 6.12 以上。發行版的預設差很多，**一律以這台主機的輸出為準**。
-- **spawner 本身要核心 5.3 以上**（`pidfd_open`）。比它舊的主機連 `danger-full-access` 也跑不了工具，`沙箱 spawner 起不來` 那一行會講。5.3 到 5.13 之間只有 `danger-full-access` 跑得了；比 5.3 舊的主機沒有退路，發行版把 `pidfd_open` backport 到舊核心的情形要實機看那一行。
+- **spawner 本身要核心 5.3 以上**（`pidfd_open`）。比它舊的主機連 `danger-full-access` 也跑不了工具，`沙箱 spawner 起不來` 那一行會講。5.3 到 5.13 之間只有 `danger-full-access` 跑得了；**5.3 以下不支援**（#1827 D69），沒有退路。
 
 **git 怎麼跑。** 快照、比較與 `check-ignore` 都經 spawner，模式跟著會話：`danger-full-access` 不上 Landlock，其餘（含 `read-only`）一律 workspace-write 的權限，寫根只有這條 thread 的私有目錄，repo 的 `.git` 不會被寫。git 只讀得到系統的目錄與檔、工作目錄、repo 與它的 git 目錄、global 與 system 的設定及其 include、`core.excludesFile`、`core.attributesFile`，讀不到 serve 的 home；repo 自己帶的 `core.fsmonitor`、alias 指令也關在同一份權限裡。
 
 - **git 要裝在 `/usr` 或 `/lib` 底下**，其他位置（例如 `/opt`）只有 git 本身可讀，它要的支援檔讀不到。
-- 全域設定的路徑在每個 HOME 加 repo 第一次用到時問一次，**改了全域 git 設定要重起 serve**。
-- 工作目錄或 repo 根包住 `$HOME`（例如把 home 當 repo）時不給那一層的讀權，寧可沒有快照也不擴權，改動卡不出現。
+- 全域設定的路徑在每個 HOME 加 repo 第一次用到時問一次，**改了全域 git 設定要重起 serve**。`includeIf "onbranch:"` 也一樣：換分支後新的 include 沒有讀權，git 會結束，要重起 serve 才恢復。
+- repo 根包住 `$HOME`（例如把 home 當 repo）時整個不拍快照，改動卡不出現，工作目錄在哪一層都一樣。
+- `.git`、`gitdir:`、`commondir`、`objects/info/alternates` 的內容在工作區裡，只開得了工作區內的讀權。指到工作區外的就不給，這種 repo 沒有改動卡：`clone --reference`、`--separate-git-dir`、submodule（git 目錄在上層 repo 裡）、`.git` 是指到外面的 symlink。例外是真的 linked worktree：`<git 目錄>/gitdir` 要指回這個 `.git`。
 - `.git/config` 的 `include.path` 指到讀不到的檔時 git 直接結束（`fatal: unable to access`），這個 repo 沒有改動卡。
 - **沙箱不可用時改動卡不會出現**，不是出現一張不完整的。那一輪什麼都不記，日誌只講一句，下一輪再試，spawner 恢復就恢復。常駐不可用的主機上改動卡一直不出現，要看起動那一行。
 

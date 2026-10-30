@@ -1191,7 +1191,7 @@ export async function createCliAgent(
               // **工作區根也是一格 host 服務**（#669 第 4 步）：`workspace-changes` 等要根的列在 `apply` 當下讀它，沒有就不合格
               // （照 dsh 的 `eligible`）；以前是組裝點把根塞進那一列的 Config，那一列就進不了出貨清單。
               workspaceRoot,
-              [GIT_STARTER_SERVICE]: createGitStarter(sandboxMode.source),
+              [GIT_STARTER_SERVICE]: createGitStarter(sandboxMode.source, workspaceRoot),
               fsContainment: CONTAINED_FILESYSTEM,
               sandboxPolicy: {
                 controller: sandboxMode,

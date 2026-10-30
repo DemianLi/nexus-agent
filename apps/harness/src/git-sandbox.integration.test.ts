@@ -12,6 +12,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -27,6 +28,7 @@ import {
 } from '@nexus/plugin-workspace-changes/src/git.js';
 
 import { createGitStarter, forgetGitConfigAnswers } from './git-sandbox.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
 import { SpawnerSupervisor } from './sandbox-spawner-client.js';
 
 const BINARY = process.env.NEXUS_SPAWNER_BIN;
@@ -46,12 +48,16 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 git', () => {
   const shell = (args: string[], cwd = repo): void => {
     execFileSync(GIT, args, { cwd, stdio: 'ignore', env: { ...process.env, HOME: home.value } });
   };
-  const runner = (mode: 'read-only' | 'danger-full-access' = 'read-only'): GitRunner =>
+  const runner = (
+    mode: 'read-only' | 'danger-full-access' = 'read-only',
+    workspaceFor?: string,
+  ): GitRunner =>
     new GitRunner(
       GIT,
       LIMITS,
       createGitStarter(
         () => mode,
+        workspaceFor ?? repo,
         () => supervisor.launch,
       ),
     );
@@ -178,17 +184,93 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 git', () => {
     expect(existsSync(join(scratch, 'stolen'))).toBe(true);
   });
 
-  it('repo 根就是 $HOME：不開整個 home 的讀權', async () => {
-    const secret = join(home.value, 'secret');
-    writeFileSync(secret, 'token\n');
-    shell(['init', '-q', '.'], home.value);
-    writeFileSync(join(home.value, '.git/config'), `[alias]\n\tleak = !cat ${secret}\n`);
-    const git = runner();
-    const leak = await git.run(['leak'], {
-      cwd: home.value,
-      signal: new AbortController().signal,
+  describe('repo 根包住 $HOME', () => {
+    it.each(['.', 'proj'])('工作目錄 %s：整個不拍快照', async (sub) => {
+      const cwd = join(home.value, sub);
+      mkdirSync(cwd, { recursive: true });
+      shell(['init', '-q', '.'], home.value);
+      writeFileSync(join(home.value, '.gitignore'), '.env\n');
+      writeFileSync(join(cwd, '.env'), 'token\n');
+      const git = runner('read-only', cwd);
+      await expect(
+        locateGitWorkspace(git, cwd, () => Promise.resolve(scratch), new AbortController().signal),
+      ).rejects.toMatchObject({ reason: 'repo-covers-home' });
     });
-    expect(leak.stdout).not.toContain('token');
+  });
+
+  describe('工作區裡的檔開不了工作區外的讀權', () => {
+    /** 同一份讀根起 `cat`，直接看 Landlock 放不放行。 */
+    const read = (file: string, mode?: 'danger-full-access') =>
+      new GitRunner(
+        '/bin/cat',
+        LIMITS,
+        createGitStarter(
+          () => mode ?? 'read-only',
+          repo,
+          () => supervisor.launch,
+        ),
+      ).run([file], { cwd: repo, signal: new AbortController().signal });
+
+    const replaceDotGit = (): void => rmSync(join(repo, '.git'), { recursive: true });
+
+    const plant: Record<string, (target: string) => void> = {
+      alternates: (target) => {
+        writeFileSync(join(repo, '.git/objects/info/alternates'), `${target}\n`);
+      },
+      commondir: (target) => writeFileSync(join(repo, '.git/commondir'), `${target}\n`),
+      'gitdir 指標檔': (target) => {
+        replaceDotGit();
+        writeFileSync(join(repo, '.git'), `gitdir: ${target}\n`);
+      },
+      '.git symlink': (target) => {
+        replaceDotGit();
+        symlinkSync(target, join(repo, '.git'));
+      },
+    };
+
+    const places: Record<string, () => string> = {
+      '~/.ssh': () => join(home.value, '.ssh'),
+      $HOME: () => home.value,
+      'serve 的 home': () => process.env[HARNESS_HOME_ENV] ?? '',
+    };
+
+    describe.each(Object.keys(plant))('%s', (vector) => {
+      it.each(Object.keys(places))('指到 %s：讀不到', async (place) => {
+        const target = places[place]!();
+        mkdirSync(target, { recursive: true });
+        const secret = join(target, 'id_rsa');
+        writeFileSync(secret, 'token\n');
+        plant[vector]!(target);
+        const outcome = await read(secret).catch((error: unknown) => error);
+        expect(JSON.stringify(outcome)).not.toContain('token');
+        const open = await read(secret, 'danger-full-access');
+        expect(open.stdout).toContain('token');
+      });
+    });
+  });
+
+  it('真的 linked worktree：快照照跑', async () => {
+    const tree = join(base, 'tree');
+    shell(['worktree', 'add', '-q', tree, '-b', 'w']);
+    const git = runner('read-only', tree);
+    const { workspace, signal } = await locate(git, tree);
+    expect(workspace.root).toBe(tree);
+    const first = await snapshotTree(git, workspace, signal);
+    writeFileSync(join(tree, 'a.txt'), 'b\n');
+    const second = await snapshotTree(git, workspace, signal);
+    const changed = await diffTrees(git, workspace, first, second, signal);
+    expect(changed.map((entry) => entry.path)).toEqual(['a.txt']);
+  });
+
+  it('alternates 在工作區外（`clone --shared`）：比較失敗，不出假 diff', async () => {
+    const copy = join(base, 'copy');
+    shell(['clone', '-q', '--shared', repo, copy], base);
+    const git = runner('read-only', copy);
+    const { workspace, signal } = await locate(git, copy);
+    const first = await snapshotTree(git, workspace, signal);
+    writeFileSync(join(copy, 'a.txt'), 'b\n');
+    const second = await snapshotTree(git, workspace, signal);
+    await expect(diffTrees(git, workspace, first, second, signal)).rejects.toThrow('diff-tree');
   });
 
   it('全權模式讀得到外面', async () => {
