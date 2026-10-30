@@ -194,8 +194,11 @@ describe('窗內：run.start 回 server_closing', () => {
     r.handler.stopAdmission();
     const refused = await r.client.runStart(thread, '窗內', { requestId: 'req-window' });
     expect(refused).toMatchObject(CLOSING);
-    // 訊息是寫給使用者看的：說這句話沒有送出，並指出下一步。
-    expect((refused as { message: string }).message).toContain('沒有送出');
+    // 訊息給管理者與接 wire 的人看：說清楚是 serve 在收尾，並指出下一步。
+    const { message } = refused as { message: string };
+    expect(message).toContain('serve 正在收尾');
+    expect(message).toContain('request_id');
+    expect(message).not.toContain('這句話');
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(r.upstream()).toBe(1);
     expect(r.turnStarts()).toHaveLength(1);

@@ -1150,7 +1150,7 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1~002Fbg-1/ses
   沒有這一段時，`server.close()` 一開頭就會斷掉所有連線，監控只會看到連不上（也算沒就緒，但看不到「正在關機」這個狀態）。
   - **只有 `/readyz` 被抓過才等**：從起動到收尾都沒有人抓過，等了也沒人聽，直接關。
   - **探針間隔比時間窗長就有機會漏掉**：500 毫秒的時間窗，抓取間隔 5 秒的監控大多看不到 503，只會看到連不上。要讓這種監控看得到，把 `drainMs` 調大；上限 2000，因為行程收尾整體有 5 秒（收到第二次訊號當場結束，[#599](https://github.com/DemianLi/nexus-agent/issues/599)），時間窗之外還要留給 thread 收尾與落盤。
-  - **時間窗內不再收新的一輪**（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：立旗的同時，會開新一輪的上行命令回 wire 錯誤碼 **`server_closing`**（HTTP 仍是 200，同其他 wire 錯誤），message 是寫給使用者看的「伺服器正在重新啟動，這句話沒有送出；稍後再送一次」，web 目前直接把它顯示在輸入框旁、草稿留著。
+  - **時間窗內不再收新的一輪**（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：立旗的同時，會開新一輪的上行命令回 wire 錯誤碼 **`server_closing`**（HTTP 仍是 200，同其他 wire 錯誤），message 給管理者與接 wire 的人看（「serve 正在收尾，這個請求沒有處理；等它重新起來再送一次（run.start 帶同一個 request_id）」）。web 認這個碼，顯示自己的固定文案「伺服器正在重新啟動，這次沒有送出。請稍後再送一次。」，草稿留著。
     - **會被拒的**：`run.start`；`subagent.send`；`slash.run` 裡會開一輪的命令——`/plan <話>`、`/goal <目標>`（建立）、`/goal resume`、`/goal edit`（進行中或已完成的目標）、`/goal` 帶附件。`/goal` 那幾種不 steer，但目標一變成進行中排程器就自己起一輪，所以**在寫 `goal/change` 之前**就拒：沒有目標被建起來、也沒有被續上。拒收不留痕跡：沒有 `turn/start`、上游請求 0 次；冷的 thread 不為它組 agent。重送的 `request_id` 窗前已經收過的，照樣拿回原本的 `run_id`（去重排在拒絕之前）。
     - **照常服務的**：`run.cancel`、`input.respond`、`queue.update`、`/goal pause`／`clear`、讀取、下行、探針——窗前就在跑的那一輪可以按停止，也可以答完核准。
     - **窗前就在跑的那一輪，在窗末會被切斷**（`server.close()` 一開頭就斷掉所有連線），它已經送出的上游請求不會因此取消。
