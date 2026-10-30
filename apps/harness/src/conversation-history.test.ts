@@ -172,7 +172,7 @@ describe('日誌 → 畫面', () => {
    * 接起來，現在照 dsh 的規則不是剛好一塊就不給——退路是錯誤碼，再退是「未指名的錯誤」。
    * 今天樹上沒有產多塊內容的工具，所以這條釘的是規則，不是現況。
    */
-  it('失敗訊息是多塊內容：不自己拼，紅字退回錯誤碼', () => {
+  it('失敗訊息是多塊文字：接起來當紅字，碼另外有自己那一格', () => {
     const state = screen(
       log(
         human('跑'),
@@ -200,7 +200,7 @@ describe('日誌 → 畫面', () => {
       ),
     );
 
-    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:FS_SANDBOX_DENIED']);
+    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:第一塊\n\n第二塊']);
     // 碼另外有自己那一格（#667），跟紅字的退路無關。
     expect(state.entries.find((entry) => entry.kind === 'tool')).toMatchObject({
       errorCode: 'FS_SANDBOX_DENIED',

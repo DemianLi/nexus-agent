@@ -40,12 +40,7 @@ describe('抽字的規則', () => {
     expect(toolResultText(logged([{ type: 'text', text: '寫好了' }]))).toBe('寫好了');
   });
 
-  /**
-   * **不自己把幾塊接起來**，照 dsh 的 `singleResultText`
-   * （`packages/client/ui-tool/src/client/tool/models/raw-tool-call.ts:46-50`，`ddefc45`）：
-   * 接出來的那串字是我們發明的，dsh 的卡在同樣的輸入下什麼都不顯示。
-   */
-  it('多塊就不給——不是把它們接起來', () => {
+  it('多塊文字：空一行接起來', () => {
     expect(
       toolResultText(
         logged([
@@ -53,7 +48,22 @@ describe('抽字的規則', () => {
           { type: 'text', text: '第二塊' },
         ]),
       ),
+    ).toBe('第一塊\n\n第二塊');
+  });
+
+  it('文字混了圖片就不給，不拿其中的文字代表整個結果', () => {
+    expect(
+      toolResultText(
+        logged([
+          { type: 'text', text: '前綴' },
+          { type: 'image', source: {} },
+        ]),
+      ),
     ).toBeUndefined();
+  });
+
+  it('空陣列不是一段文字', () => {
+    expect(toolResultText(logged([]))).toBeUndefined();
   });
 
   it('那一塊不是文字（圖片、檔案）也不給', () => {
