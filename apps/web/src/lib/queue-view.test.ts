@@ -170,6 +170,8 @@ describe('commandToken 跟伺服器的 parseCommand 同一套（#1929）', () =>
     '/plan off',
     '/plan\toff',
     '/plan\noff',
+    '/plan\u3000off',
+    '/plan\u3000',
     '/planning',
     '/Plan',
     '/plan-b',
@@ -188,6 +190,7 @@ describe('commandToken 跟伺服器的 parseCommand 同一套（#1929）', () =>
 
   it('對照組裡兩種結果都有', () => {
     expect(commandToken('/plan off')).toBe('plan');
+    expect(commandToken('/plan\u3000off')).toBe('plan');
     expect(commandToken('/planning')).toBe('planning');
     expect(commandToken('/計劃')).toBeUndefined();
   });
@@ -221,10 +224,12 @@ describe('commandArm：命令走哪一路（#1971，dsh matchEnter）', () => {
   it.each([
     ['/plan', 'claim'],
     ['/plan off', 'claim'],
+    ['/plan\u3000off', 'claim'],
     [' /goal 把登入改好 ', 'claim'],
     ['/goal pause', 'claim'],
     ['/compact', 'detached'],
     [' /compact\t', 'detached'],
+    ['/compact\u3000', 'detached'],
     ['/compact 留下最近三輪', undefined],
     ['/compact\n留下', undefined],
     ['/deploy 今天', undefined],
@@ -243,6 +248,7 @@ describe('slashRunsWhileBusy 跟伺服器的閘門同一套（#1517）', () => {
     '/goal  pause',
     '/goal\tpause',
     '/goal\npause',
+    '/goal\u3000pause',
     '/goal PAUSE',
     '/goal Pause',
     '/goal pause 1',
