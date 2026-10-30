@@ -3,7 +3,7 @@
  * 以及給產品路徑外的讀方用的接縫（`readSessionEntry`、`sessionPathsIn`，#1857）、header 解析與會話根的格子列舉。
  * 契約見 `@nexus/core` 的 `session-store.ts`；檔名本身的單元測試在 `@nexus/core` 的 `session-filename.test.ts`。
  *
- * 會話都經後端寫；要壞掉、版本太新的才手寫。
+ * 會話都經後端寫；要壞掉、版本太新、舊兩檔佈局的才手寫。
  */
 
 import { existsSync } from 'node:fs';
@@ -19,11 +19,14 @@ import {
   SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
   SessionNotFoundError,
+  generationLogFilename,
+  sessionDirectoryName,
 } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import {
   createJsonlSessionStore,
+  legacyTwoFilePathsIn,
   listSessionStoreDirectories,
   openJsonlSessionStore,
   parseHeader,
@@ -33,6 +36,7 @@ import {
   sessionPathsIn,
 } from './jsonl-session-store.js';
 import type { SessionDirent, SessionEntry, StableReadFileSystem } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, rewriteSessionHeader } from './session-files.fixture.js';
 
 let dir: string;
 
@@ -51,6 +55,11 @@ function header(id: string, extra: Partial<OnDiskHeader> = {}): OnDiskHeader {
   return { version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1, cwd: '/tmp', ...extra };
 }
 
+/** 手寫舊兩檔用的 header：版本 {@link LEGACY_TWO_FILE_FORMAT_VERSION}（版本 52 起舊路徑上的 header 是墓碑）。 */
+function legacyHeader(id: string, extra: Partial<OnDiskHeader> = {}): OnDiskHeader {
+  return header(id, { version: LEGACY_TWO_FILE_FORMAT_VERSION, ...extra });
+}
+
 /** 這一版寫方給 `create` 的 header。 */
 function current(id: string): StoredSessionHeader {
   return { ...header(id), version: SESSION_LOG_FORMAT_VERSION };
@@ -61,26 +70,56 @@ function event(seq: number): SessionEvent {
   return { type: 'model/usage', seq, time: 1, data: {} } as unknown as SessionEvent;
 }
 
-/** 經後端寫一份 `count` 筆的會話然後關掉。 */
-async function written(id: string, count = 1, extra: Partial<OnDiskHeader> = {}) {
-  const onDisk = header(id, extra);
-  const stored = openJsonlSessionStore({ directory: dir }).create({
-    ...onDisk,
-    version: SESSION_LOG_FORMAT_VERSION,
-  });
+/** 經後端寫一份 `count` 筆的會話然後關掉（世代檔，版本是這一版）。 */
+async function written(
+  id: string,
+  count = 1,
+  extra: Partial<Omit<StoredSessionHeader, 'version'>> = {},
+) {
+  const stored = openJsonlSessionStore({ directory: dir }).create({ ...current(id), ...extra });
   await stored.append(Array.from({ length: count }, (_, seq) => event(seq)));
   await stored.close();
-  // 版號不是這一版：假裝是舊的寫方寫的。`create` 只收這一版（#1559 N0622），落盤後直接改寫 header 檔。
-  if (onDisk.version !== SESSION_LOG_FORMAT_VERSION) {
-    await writeFile(join(dir, `${id}.header.json`), JSON.stringify(onDisk));
-  }
 }
 
-/** 目錄裡每個檔的名字與內容：唯讀的兩條前後要一模一樣。 */
+/** 寫方寫的世代檔（這一版）。 */
+function logOf(id: string): string {
+  return sessionPathsIn(dir, id).log;
+}
+
+/** 換掉世代檔的本文（header 行之後），header 行原樣。 */
+async function replaceBody(id: string, body: string): Promise<void> {
+  const text = await readFile(logOf(id), 'utf8');
+  await writeFile(logOf(id), `${text.slice(0, text.indexOf('\n') + 1)}${body}`);
+}
+
+/** 手寫一份世代檔：會話目錄裡的 `session.v<version>.jsonl`，只有 header 行。 */
+async function writeGeneration(id: string, version: number): Promise<void> {
+  const sessionDirectory = join(dir, sessionDirectoryName(id));
+  await mkdir(sessionDirectory, { recursive: true });
+  await writeFile(
+    join(sessionDirectory, generationLogFilename(version)),
+    `${JSON.stringify({ type: 'session', ...header(id, { version }) })}\n`,
+  );
+}
+
+/** 手寫一份舊兩檔：header 與日誌本文。 */
+async function writeLegacy(id: string, body: string): Promise<void> {
+  const paths = legacyTwoFilePathsIn(dir, id);
+  await writeFile(paths.header, JSON.stringify(legacyHeader(id)));
+  await writeFile(paths.log, body);
+}
+
+/** 目錄裡（含會話目錄）每個檔的相對路徑與內容：唯讀的兩條前後要一模一樣。 */
 async function snapshot(): Promise<Record<string, string>> {
-  const names = (await readdir(dir)).sort();
+  const entries = await readdir(dir, { recursive: true, withFileTypes: true });
+  const names = entries
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name))
+    .sort();
   return Object.fromEntries(
-    await Promise.all(names.map(async (name) => [name, await readFile(join(dir, name), 'utf8')])),
+    await Promise.all(
+      names.map(async (path) => [path.slice(dir.length), await readFile(path, 'utf8')]),
+    ),
   );
 }
 
@@ -103,12 +142,9 @@ describe('list', () => {
   it('header 讀不懂、版本太新、檔名對不上 id 的不列，但數出來', async () => {
     await written('good');
     await writeFile(join(dir, 'broken.header.json'), '{壞的');
-    await writeFile(
-      join(dir, 'future.header.json'),
-      JSON.stringify(header('future', { version: SESSION_LOG_FORMAT_VERSION + 1 })),
-    );
+    await writeGeneration('future', SESSION_LOG_FORMAT_VERSION + 1);
     // `open('renamed')` 照 id 算檔名，找不到這一份：列了也打不開。
-    await writeFile(join(dir, 'moved.header.json'), JSON.stringify(header('renamed')));
+    await writeFile(join(dir, 'moved.header.json'), JSON.stringify(legacyHeader('renamed')));
 
     const { sessions, unreadable } = await openJsonlSessionStore({ directory: dir }).list();
     expect(sessions.map(({ header: h }) => h.id)).toEqual(['good']);
@@ -130,26 +166,25 @@ describe('list', () => {
     ).rejects.toThrow('不要了');
   });
 
-  it('revision：沒動就相等；本文多一筆、header 被改寫（續接會改 version）都會變', async () => {
+  it('revision：沒動就相等；本文多一筆、header 行被改寫都會變', async () => {
     await written('a', 2);
     const store = openJsonlSessionStore({ directory: dir });
     const revision = async () => (await store.list()).sessions[0]!.revision;
     const first = await revision();
     expect(await revision()).toBe(first);
 
-    await appendFile(join(dir, 'a.jsonl'), `${JSON.stringify(event(2))}\n`);
+    await appendFile(logOf('a'), `${JSON.stringify(event(2))}\n`);
     const appended = await revision();
     expect(appended).not.toBe(first);
 
     // 同樣長度、只改內容：大小不變，靠的是修改時間。
-    const text = await readFile(join(dir, 'a.header.json'), 'utf8');
-    await writeFile(join(dir, 'a.header.json'), text.replace('"cwd": "/tmp"', '"cwd": "/tm2"'));
+    await rewriteSessionHeader(dir, 'a', (h) => ({ ...h, cwd: '/tm2' }));
     expect(await revision()).not.toBe(appended);
   });
 
   it('不拿租約、不讀本文：別的把手握著照樣列，一個位元組都不改', async () => {
     await written('held', 2);
-    await appendFile(join(dir, 'held.jsonl'), '{"半行');
+    await appendFile(logOf('held'), '{"半行');
     const holder = await openJsonlSessionStore({ directory: dir }).resume('held');
     try {
       const before = await snapshot();
@@ -164,15 +199,12 @@ describe('list', () => {
 
 describe("open(id, 'read')", () => {
   it('不拿租約、不截尾巴、不動 header：別的把手握著照樣讀得到，一個位元組都不改', async () => {
-    await written('held', 2, { version: SESSION_LOG_FORMAT_VERSION - 1 });
-    await appendFile(join(dir, 'held.jsonl'), '{"type":"turn/end","seq":');
+    await written('held', 2);
+    await appendFile(logOf('held'), '{"type":"turn/end","seq":');
     const holder = await openJsonlSessionStore({ directory: dir }).resume('held');
     try {
       const before = await snapshot();
       const reader = await openJsonlSessionStore({ directory: dir }).open('held', 'read');
-      // 磁碟上的 header 不動（下面的 snapshot 比對）；交出來的 header 轉譯成這一版，原版號在 storedFormatVersion（#1856）。
-      expect(reader.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
-      expect(reader.storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION - 1);
       expect((await reader.read()).map((e) => e.seq)).toEqual([0, 1]);
       expect(await snapshot()).toEqual(before);
     } finally {
@@ -180,20 +212,37 @@ describe("open(id, 'read')", () => {
     }
   });
 
+  it('比這一版舊的舊兩檔：不遷移、不寫墓碑、不截尾巴，交出的 header 轉譯成這一版', async () => {
+    // 續接舊兩檔會先遷成這一版的世代，所以這一條沒有別的把手握著：握著的那個續接已經遷完了。
+    expect(LEGACY_TWO_FILE_FORMAT_VERSION).toBeLessThan(SESSION_LOG_FORMAT_VERSION);
+    await writeLegacy(
+      'old',
+      `${JSON.stringify(event(0))}\n${JSON.stringify(event(1))}\n{"type":"turn/end","seq":`,
+    );
+    const before = await snapshot();
+    const reader = await openJsonlSessionStore({ directory: dir }).open('old', 'read');
+    // 磁碟上的 header 不動（下面的 snapshot 比對）；交出來的 header 轉譯成這一版，原版號在 storedFormatVersion（#1856）。
+    expect(reader.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(reader.storedFormatVersion).toBe(LEGACY_TWO_FILE_FORMAT_VERSION);
+    expect((await reader.read()).map((e) => e.seq)).toEqual([0, 1]);
+    expect(await snapshot()).toEqual(before);
+  });
+
   it('只有 header 是零顆；每叫一次 read 讀一次當下的', async () => {
     await written('a', 1);
     const reader = await openJsonlSessionStore({ directory: dir }).open('a', 'read');
     expect(await reader.read()).toHaveLength(1);
-    await appendFile(join(dir, 'a.jsonl'), `${JSON.stringify(event(1))}\n`);
+    await appendFile(logOf('a'), `${JSON.stringify(event(1))}\n`);
     expect(await reader.read()).toHaveLength(2);
-    await rm(join(dir, 'a.jsonl'));
+    // 只剩 header 行。
+    await replaceBody('a', '');
     expect(await reader.read()).toEqual([]);
   });
 
   it('壞行之後沒有完整收尾：預設 read 丟掉壞尾；salvage 撿回讀得懂的，撕裂的尾巴兩邊都不算', async () => {
     await written('torn');
-    await writeFile(
-      join(dir, 'torn.jsonl'),
+    await replaceBody(
+      'torn',
       [
         JSON.stringify(event(0)),
         '{壞掉',
@@ -211,8 +260,8 @@ describe("open(id, 'read')", () => {
   it('壞行之後有完整的收尾（turn/end 或 turn/failed）：預設拋，訊息指向第一個壞行', async () => {
     await written('closed');
     for (const closer of ['turn/end', 'turn/failed']) {
-      await writeFile(
-        join(dir, 'closed.jsonl'),
+      await replaceBody(
+        'closed',
         [
           JSON.stringify(event(0)),
           '{壞掉',
@@ -221,7 +270,8 @@ describe("open(id, 'read')", () => {
         ].join('\n'),
       );
       const reader = await openJsonlSessionStore({ directory: dir }).open('closed', 'read');
-      await expect(reader.read()).rejects.toThrow(/第 2 行不是 JSON/u);
+      // 行號照檔算：世代檔第 1 行是 header 行，壞行在第 3 行。
+      await expect(reader.read()).rejects.toThrow(/第 3 行不是 JSON/u);
       await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
       // salvage 的語意不動：撿回讀得懂的。
       expect((await reader.read({ salvage: true })).map((e) => e.seq)).toEqual([0, 2]);
@@ -231,17 +281,16 @@ describe("open(id, 'read')", () => {
   it('找不到、版本太新、header 記的 id 對不上：各拋各的', async () => {
     const store = openJsonlSessionStore({ directory: dir });
     await expect(store.open('nobody', 'read')).rejects.toBeInstanceOf(SessionNotFoundError);
-    await writeFile(
-      join(dir, 'future.header.json'),
-      JSON.stringify(header('future', { version: SESSION_LOG_FORMAT_VERSION + 1 })),
-    );
+    await writeGeneration('future', SESSION_LOG_FORMAT_VERSION + 1);
     await expect(store.open('future', 'read')).rejects.toBeInstanceOf(
       SessionFormatUnsupportedError,
     );
-    await writeFile(join(dir, 'moved.header.json'), JSON.stringify(header('renamed')));
+    await writeFile(join(dir, 'moved.header.json'), JSON.stringify(legacyHeader('renamed')));
     await expect(store.open('moved', 'read')).rejects.toBeInstanceOf(SessionCorruptionError);
-    // 找不到的那一次不留鎖檔。
-    expect((await readdir(dir)).filter((name) => name.endsWith('.lock'))).toEqual([]);
+    // 找不到的那一次不留鎖檔（會話目錄裡也沒有）。
+    expect(
+      (await readdir(dir, { recursive: true })).filter((name) => name.endsWith('.lock')),
+    ).toEqual([]);
   });
 });
 
@@ -261,47 +310,58 @@ function fileEntry(name: string): SessionDirent {
   return { name, isDirectory: () => false };
 }
 
+/** 一份會話的會話目錄的目錄項，給 {@link readSessionEntry}。 */
+function sessionDirectoryEntry(id: string): SessionDirent {
+  return { name: sessionDirectoryName(id), isDirectory: () => true };
+}
+
 describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
   it('日誌本文走穩定快照讀：讀的當下被寫了，重讀一次，交出第二次讀到的', async () => {
     await written('a', 1);
+    // 世代檔的本文是 header 行之後那一段：假的讀到的也帶著真的 header 行。
+    const text = await readFile(logOf('a'), 'utf8');
+    const headerLine = text.slice(0, text.indexOf('\n') + 1);
     const paths: string[] = [];
-    const statResults = [stats(5, 100), stats(8, 200), stats(8, 200)];
-    const reads = ['hello', 'hello!!!'];
+    const statResults = [
+      stats(headerLine.length + 5, 100),
+      stats(headerLine.length + 8, 200),
+      stats(headerLine.length + 8, 200),
+    ];
+    const reads = [`${headerLine}hello`, `${headerLine}hello!!!`];
     const fs: StableReadFileSystem = {
       stat: async (path) => {
         paths.push(path);
         return statResults.shift()!;
       },
-      // header 也經同一個 fs 讀（#1559 N0625 的 revision 要對到同一份讀法），讀真檔；日誌本文才換成假的。
+      // 舊兩檔的 header 也經同一個 fs 讀（#1559 N0625 的 revision 要對到同一份讀法），讀真檔；日誌本文才換成假的。
       readFile: async (path) =>
-        path === join(dir, 'a.jsonl') ? Buffer.from(reads.shift()!) : readFile(path),
+        path === logOf('a') ? Buffer.from(reads.shift()!) : readFile(path),
     };
-    const entry = await readSessionEntry(dir, fileEntry('a.header.json'), { fs });
+    const entry = await readSessionEntry(dir, sessionDirectoryEntry('a'), { fs });
     expect((await entry!.readBody()).toString()).toBe('hello!!!');
     expect(reads).toEqual([]);
     expect(new Set(paths)).toEqual(new Set([entry!.logPath]));
-    expect(entry!.logPath).toBe(join(dir, 'a.jsonl'));
+    expect(entry!.logPath).toBe(logOf('a'));
   });
 
   it('分類跟 list 一致：只有 header 是零顆、讀不懂與版本太新照拋、不是 header 檔或讀之前不見了是 undefined', async () => {
     await written('good', 2);
-    await writeFile(join(dir, 'lonely.header.json'), JSON.stringify(header('lonely')));
+    await writeFile(join(dir, 'lonely.header.json'), JSON.stringify(legacyHeader('lonely')));
     await writeFile(join(dir, 'broken.header.json'), '{壞的');
-    await writeFile(
-      join(dir, 'future.header.json'),
-      JSON.stringify(header('future', { version: SESSION_LOG_FORMAT_VERSION + 1 })),
-    );
-    await writeFile(join(dir, 'moved.header.json'), JSON.stringify(header('renamed')));
+    await writeGeneration('future', SESSION_LOG_FORMAT_VERSION + 1);
+    await writeFile(join(dir, 'moved.header.json'), JSON.stringify(legacyHeader('renamed')));
     await writeFile(join(dir, 'good.header.json.0123456789ab.tmp'), '{殘留');
 
-    const outcome = async (name: string): Promise<SessionEntry | string | undefined> => {
+    const outcome = async (
+      name: string | SessionDirent,
+    ): Promise<SessionEntry | string | undefined> => {
       try {
-        return await readSessionEntry(dir, fileEntry(name));
+        return await readSessionEntry(dir, typeof name === 'string' ? fileEntry(name) : name);
       } catch (error: unknown) {
         return (error as Error).constructor.name;
       }
     };
-    const good = (await outcome('good.header.json')) as SessionEntry;
+    const good = (await outcome(sessionDirectoryEntry('good'))) as SessionEntry;
     expect(good.header.id).toBe('good');
     expect(
       parseJsonlSessionBody('good', await good.readBody(), {
@@ -312,11 +372,17 @@ describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
     const lonely = (await outcome('lonely.header.json')) as SessionEntry;
     expect((await lonely.readBody()).byteLength).toBe(0);
     expect(await outcome('broken.header.json')).toBe(SessionCorruptionError.name);
-    expect(await outcome('future.header.json')).toBe(SessionFormatUnsupportedError.name);
+    expect(await outcome(sessionDirectoryEntry('future'))).toBe(SessionFormatUnsupportedError.name);
     // 檔名基底對不上 id 不歸接縫判：交出來，列表自己算讀不懂。
     const moved = (await outcome('moved.header.json')) as SessionEntry;
     expect([moved.name, moved.header.id]).toEqual(['moved', 'renamed']);
-    for (const name of ['good.jsonl', 'good.lock', 'good.header.json.0123456789ab.tmp']) {
+    // 舊路徑上的墓碑不是一份會話：會話目錄那一項代表它。
+    for (const name of [
+      'good.header.json',
+      'good.jsonl',
+      'good.lock',
+      'good.header.json.0123456789ab.tmp',
+    ]) {
       expect(await outcome(name)).toBeUndefined();
     }
     expect(await outcome('gone.header.json')).toBeUndefined();
@@ -328,11 +394,8 @@ describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
   });
 
   it('acceptNewer 照傳給 header 的讀法：比這一版新的照讀，原版號另交', async () => {
-    await writeFile(
-      join(dir, 'future.header.json'),
-      JSON.stringify(header('future', { version: SESSION_LOG_FORMAT_VERSION + 1 })),
-    );
-    const entry = await readSessionEntry(dir, fileEntry('future.header.json'), {
+    await writeGeneration('future', SESSION_LOG_FORMAT_VERSION + 1);
+    const entry = await readSessionEntry(dir, sessionDirectoryEntry('future'), {
       acceptNewer: true,
     });
     expect(entry?.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
@@ -344,10 +407,13 @@ describe('sessionPathsIn', () => {
   it('對到後端真的寫出來的檔：基底照 safeBaseName（subagent 的斜線編碼掉）', async () => {
     await written('Alpha/sub-1', 1, { parentSession: 'Alpha' });
     const paths = sessionPathsIn(dir, 'Alpha/sub-1');
-    expect(existsSync(paths.header)).toBe(true);
+    expect(existsSync(paths.tombstone)).toBe(true);
     expect(existsSync(paths.log)).toBe(true);
-    expect(paths.lock.startsWith(dir)).toBe(true);
-    expect(paths.header).not.toContain('Alpha/sub-1');
+    expect(paths.log.startsWith(paths.sessionDirectory)).toBe(true);
+    expect(paths.lock.startsWith(paths.sessionDirectory)).toBe(true);
+    expect(paths.sessionDirectory.startsWith(dir)).toBe(true);
+    expect(paths.tombstone).not.toContain('Alpha/sub-1');
+    expect(paths.sessionDirectory).not.toContain('Alpha/sub-1');
   });
 });
 
@@ -400,7 +466,7 @@ function futureEvent(seq: number, extra: Record<string, unknown> = {}): string {
 describe('不認得的事件種類', () => {
   async function plant(id: string, lines: readonly string[]): Promise<void> {
     await written(id, 2);
-    await appendFile(join(dir, `${id}.jsonl`), `${lines.join('\n')}\n`);
+    await appendFile(logOf(id), `${lines.join('\n')}\n`);
   }
 
   it("open(id, 'read')：沒標可忽略的拒絕整份，是「讀不懂」不是「壞了」，點得出哪一筆", async () => {
@@ -423,7 +489,7 @@ describe('不認得的事件種類', () => {
       const id = order === '壞行在前' ? 'salvage-bad-first' : 'salvage-bad-last';
       await written(id, 1);
       const lines = order === '壞行在前' ? ['{壞掉', futureEvent(2)] : [futureEvent(1), '{壞掉'];
-      await appendFile(join(dir, `${id}.jsonl`), `${lines.join('\n')}\n`);
+      await appendFile(logOf(id), `${lines.join('\n')}\n`);
       const reader = await openJsonlSessionStore({ directory: dir }).open(id, 'read');
       await expect(reader.read({ salvage: true }), order).rejects.toBeInstanceOf(
         SessionEventUnsupportedError,
@@ -433,10 +499,7 @@ describe('不認得的事件種類', () => {
 
   it('撿回模式：標了可忽略的照撿，壞行照略過', async () => {
     await written('salvage-ok', 1);
-    await appendFile(
-      join(dir, 'salvage-ok.jsonl'),
-      `{壞掉\n${futureEvent(2, { ignorable: true })}\n`,
-    );
+    await appendFile(logOf('salvage-ok'), `{壞掉\n${futureEvent(2, { ignorable: true })}\n`);
     const reader = await openJsonlSessionStore({ directory: dir }).open('salvage-ok', 'read');
     expect((await reader.read({ salvage: true })).map((e) => e.type)).toEqual([
       'model/usage',
@@ -497,7 +560,8 @@ describe('不認得的事件種類', () => {
     expect(events.map((e) => e.type)).toEqual(['model/usage', 'model/usage', 'future/thing']);
     await stored.append([{ ...event(3) }]);
     await stored.close();
-    const lines = (await readFile(join(dir, 'skippable.jsonl'), 'utf8')).trimEnd().split('\n');
+    // 第一行是 header 行，事件從第二行起。
+    const lines = (await readFile(logOf('skippable'), 'utf8')).trimEnd().split('\n').slice(1);
     expect(lines[2]).toBe(futureEvent(2, { ignorable: true }));
     expect(lines).toHaveLength(4);
   });

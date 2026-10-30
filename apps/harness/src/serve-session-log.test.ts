@@ -33,7 +33,7 @@ import {
   sessionHeaderOf,
   sessionsUnder,
 } from './session-files.fixture.js';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import { generationLogFilename, SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
 
@@ -105,9 +105,15 @@ function eventsOn(root: string, threadId: string): Promise<SessionEvent[]> {
   return sessionEventsOf(projectDirOf(root), threadId);
 }
 
-/** 同一份的日誌檔。只給要動位元組的（補行、改行、比原文）。 */
+/** 同一份的日誌檔（世代檔：第一行是 header 行，事件從第二行起）。只給要動位元組的（補行、改行、比原文）。 */
 function logOn(root: string, threadId: string): string {
   return sessionPathsIn(projectDirOf(root), threadId).log;
+}
+
+/** 世代檔的 header 行（不含換行）。 */
+async function headerLineOn(root: string, threadId: string): Promise<string> {
+  const text = await readFile(logOn(root, threadId), 'utf8');
+  return text.slice(0, text.indexOf('\n'));
 }
 
 describe('serve 的 --session-log', () => {
@@ -509,14 +515,17 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(first);
     const log = logOn(root, 'alpha');
     // 把這一顆從檔上拿掉，重排 seq：等於一份 #437 之前寫的日誌。
-    const [header, ...rest] = (await readFile(log, 'utf8'))
+    const [headerLine, head, ...rest] = (await readFile(log, 'utf8'))
       .split('\n')
       .filter((line) => line !== '');
     const kept = rest
       .map((line) => JSON.parse(line) as SessionEvent)
       .filter((event) => event.type !== 'approval/policy')
-      .map((event, index) => ({ ...event, seq: index + 1 })); // 檔頭那一行佔 seq 0
-    await writeFile(log, `${[header, ...kept.map((event) => JSON.stringify(event))].join('\n')}\n`);
+      .map((event, index) => ({ ...event, seq: index + 1 })); // header 行之後的第一顆佔 seq 0
+    await writeFile(
+      log,
+      `${[headerLine, head, ...kept.map((event) => JSON.stringify(event))].join('\n')}\n`,
+    );
 
     const second = await start(root);
     await driveTurn(second, 'alpha');
@@ -533,7 +542,8 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(first);
     const log = logOn(root, 'alpha');
     const lines = (await readFile(log, 'utf8')).split('\n');
-    lines[0] = '{壞的';
+    // lines[0] 是 header 行：壞的是第一顆事件。
+    lines[1] = '{壞的';
     await writeFile(log, lines.join('\n'));
     const before = await readFile(log, 'utf8');
 
@@ -552,9 +562,18 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const { header, log } = sessionPathsIn(projectDirOf(root), 'alpha');
-    const stored = JSON.parse(await readFile(header, 'utf8')) as Record<string, unknown>;
-    await writeFile(header, JSON.stringify({ ...stored, version: SESSION_LOG_FORMAT_VERSION + 1 }));
+    // 會話目錄裡多一份比這一版新的世代：這一版的世代檔原樣抄過去，只把 header 行的版號換成下一版。
+    const current = await readFile(logOn(root, 'alpha'), 'utf8');
+    const newline = current.indexOf('\n');
+    const stored = JSON.parse(current.slice(0, newline)) as Record<string, unknown>;
+    const log = join(
+      sessionPathsIn(projectDirOf(root), 'alpha').sessionDirectory,
+      generationLogFilename(SESSION_LOG_FORMAT_VERSION + 1),
+    );
+    await writeFile(
+      log,
+      `${JSON.stringify({ ...stored, version: SESSION_LOG_FORMAT_VERSION + 1 })}${current.slice(newline)}`,
+    );
 
     const serverLines: string[] = [];
     const second = await start(root, [], bodyLog(serverLines));
@@ -744,7 +763,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const rewritten = events.map((event, index) =>
       index === last ? { ...event, data: { mode: 'bogus' } } : event,
     );
-    await writeFile(log, `${rewritten.map((event) => JSON.stringify(event)).join('\n')}\n`);
+    await writeFile(
+      log,
+      `${[await headerLineOn(root, 'alpha'), ...rewritten.map((event) => JSON.stringify(event))].join('\n')}\n`,
+    );
 
     // 違規走伺服器日誌的 error 等級（#1534），不再是 `console.error`。
     const serverLines: string[] = [];

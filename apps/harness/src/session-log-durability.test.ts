@@ -21,13 +21,15 @@ import { describe, expect, it } from 'vitest';
 import { runCli } from './cli.js';
 import { resolveSessionLogDir, SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { createJsonlSessionStore } from './jsonl-session-store.js';
+import { createJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
 import { sessionHeaderOf } from './session-files.fixture.js';
 import {
+  generationLogFilename,
   SESSION_LOG_FORMAT_VERSION,
   SessionAlreadyExistsError,
   SessionAlreadyOwnedError,
   SessionSeq,
+  sessionDirectoryName,
 } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
@@ -66,6 +68,20 @@ async function runOnce(argv: readonly string[], cwd?: string): Promise<string> {
   return stdout();
 }
 
+/** CLI 那份會話的世代檔：第一行是 header 行，事件從第二行起。 */
+function cliLog(runDir: string): string {
+  return sessionPathsIn(runDir, 'cli').log;
+}
+
+/** 世代檔裡 header 行之後的每一行（不含結尾的空字串）。 */
+async function eventLinesOf(path: string): Promise<string[]> {
+  const [, ...lines] = (await readFile(path, 'utf8')).split('\n');
+  return lines.filter((line) => line.length > 0);
+}
+
+/** run 目錄裡 CLI 那份會話的目錄項：會話目錄與舊路徑上的墓碑。 */
+const CLI_ENTRIES = ['cli', 'cli.header.json'];
+
 /** run 目錄底下唯一的那一個。 */
 async function onlyRunDir(root: string): Promise<string> {
   const entries = await readdir(root);
@@ -79,11 +95,11 @@ describe('--session-log 給了', () => {
     await runOnce(['--session-log', root, '把這句話回聲一次。']);
 
     const runDir = await onlyRunDir(root);
-    const body = await readFile(join(runDir, 'cli.jsonl'), 'utf8');
-    const events = body
-      .split('\n')
-      .filter((line) => line.length > 0)
-      .map((line) => JSON.parse(line) as SessionEvent);
+    const [first] = (await readFile(cliLog(runDir), 'utf8')).split('\n');
+    expect(JSON.parse(first ?? '')).toMatchObject({ type: 'session', id: 'cli' });
+    const events = (await eventLinesOf(cliLog(runDir))).map(
+      (line) => JSON.parse(line) as SessionEvent,
+    );
 
     expect(events.length).toBeGreaterThan(0);
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
@@ -91,7 +107,7 @@ describe('--session-log 給了', () => {
     expect(events.map((event) => event.type)).toContain('turn/end');
   });
 
-  it('header 跟日誌分開存，帶格式版本與身分', async () => {
+  it('header 行帶格式版本與身分', async () => {
     const root = await tmp('nexus-log-');
     const cwd = await tmp('nexus-cwd-');
     await runOnce(['--session-log', root, '把這句話回聲一次。'], cwd);
@@ -120,8 +136,9 @@ describe('--session-log 給了', () => {
     const entries = await readdir(root);
     expect(entries).toHaveLength(2);
     for (const entry of entries) {
-      expect(await readdir(join(root, entry))).toEqual(
-        expect.arrayContaining(['cli.header.json', 'cli.jsonl']),
+      expect(await readdir(join(root, entry))).toEqual(expect.arrayContaining(CLI_ENTRIES));
+      expect(await readdir(join(root, entry, 'cli'))).toContain(
+        generationLogFilename(SESSION_LOG_FORMAT_VERSION),
       );
     }
   });
@@ -154,7 +171,7 @@ describe('--session-log 沒給', () => {
 
     const root = join(home, 'sessions');
     const runDir = await onlyRunDir(root);
-    expect(await readdir(runDir)).toEqual(expect.arrayContaining(['cli.header.json', 'cli.jsonl']));
+    expect(await readdir(runDir)).toEqual(expect.arrayContaining(CLI_ENTRIES));
     expect(printed).toContain(`會話日誌：${runDir}`);
     expect(printed).not.toContain('只在記憶體裡');
     // 預設的位置是 home，不是跑的地方。
@@ -169,9 +186,13 @@ describe('--session-log 沒給', () => {
 
     const root = join(home, 'sessions');
     const runDir = await onlyRunDir(root);
-    for (const dir of [home, root, runDir]) expect(await modeOf(dir)).toBe(0o700);
-    expect(await modeOf(join(runDir, 'cli.jsonl'))).toBe(0o600);
-    expect(await modeOf(join(runDir, 'cli.header.json'))).toBe(0o600);
+    const paths = sessionPathsIn(runDir, 'cli');
+    for (const dir of [home, root, runDir, paths.sessionDirectory]) {
+      expect(await modeOf(dir)).toBe(0o700);
+    }
+    for (const file of [paths.log, paths.lock, paths.tombstone]) {
+      expect(await modeOf(file)).toBe(0o600);
+    }
   });
 
   it('給了 --session-log 就只寫那裡，home 底下一個目錄都不開', async () => {
@@ -259,12 +280,12 @@ describe('清單把落盤關掉', () => {
     const root = await tmp('nexus-log-');
     await runOnce(['--session-log', root, '第一次。']);
     const runDir = await onlyRunDir(root);
-    const before = await readFile(join(runDir, 'cli.jsonl'), 'utf8');
+    const before = await readFile(cliLog(runDir), 'utf8');
 
     await expect(
       runOnce(['--patch', PERSISTENCE_OFF_PATCH, '--resume', runDir, '第二次。']),
     ).rejects.toThrow(/--resume 接不起來.*session-persistence.*disabled/su);
-    expect(await readFile(join(runDir, 'cli.jsonl'), 'utf8')).toBe(before);
+    expect(await readFile(cliLog(runDir), 'utf8')).toBe(before);
     // 租約也沒拿：拿了沒放的話，下一次正常的續接會撞上它。
     const printed = await runOnce(['--resume', runDir, '第三次。']);
     expect(printed).toContain(`會話日誌：${runDir}`);
@@ -302,11 +323,12 @@ describe('日誌不落在 agent 的工作區裡', () => {
     await runOnce(['--workspace', workspace, '--session-log', root, '把這句話回聲一次。']);
 
     const runDir = await onlyRunDir(root);
-    expect(await readdir(runDir)).toEqual(expect.arrayContaining(['cli.header.json', 'cli.jsonl']));
+    expect(await readdir(runDir)).toEqual(expect.arrayContaining(CLI_ENTRIES));
     // 工作區裡只有假模型自己寫的東西，沒有任何 jsonl。
-    const inWorkspace = await readdir(workspace);
+    const inWorkspace = await readdir(workspace, { recursive: true });
     expect(inWorkspace.filter((name) => name.endsWith('.jsonl'))).toEqual([]);
     expect(inWorkspace).not.toContain('cli.header.json');
+    expect(inWorkspace).not.toContain('cli');
   });
 
   it('沒有 --workspace 時不擋——沒有圍籬就沒有「在裡面」', () => {
@@ -334,7 +356,14 @@ describe('檔名基底是單射的', () => {
       ]);
       await stored.close();
     }
-    return (await readdir(store.directory)).filter((name) => name.endsWith('.jsonl')).sort();
+    // 會話目錄（墓碑以外的目錄項），每個裡面都有世代檔。
+    const names = (await readdir(store.directory)).filter((name) => !name.endsWith('.header.json'));
+    for (const name of names) {
+      expect(await readdir(join(store.directory, name))).toContain(
+        generationLogFilename(SESSION_LOG_FORMAT_VERSION),
+      );
+    }
+    return names.sort();
   }
 
   it('壓平後同名的 id 各自一個檔', async () => {
@@ -344,20 +373,31 @@ describe('檔名基底是單射的', () => {
 
   it('subagent 的斜線還是不會變成子目錄，而且還讀得懂', async () => {
     const names = await fileNames(['cli/run-1']);
-    expect(names).toEqual(['cli%2frun-1.jsonl']);
+    expect(names).toEqual(['cli~002Frun-1']);
+    expect(names).toEqual([sessionDirectoryName('cli/run-1')]);
   });
 
-  it('自己就帶百分號的 id 不會撞上被編碼出來的那個', async () => {
-    // **這是編碼那條規則的對抗案例**：`a~b` 編出來就是 `a%7eb`，所以一個字面上
-    // 帶著 `a%7eb` 的呼叫端必須落到別的地方去——`%` 自己也被編碼（`%25`）就是為了
+  it('自己就帶跳脫字元的 id 不會撞上被編碼出來的那個', async () => {
+    // **這是編碼那條規則的對抗案例**：`a~b` 編出來就是 `a~007Eb`，所以一個字面上
+    // 帶著 `a~007Eb` 的呼叫端必須落到別的地方去——`~` 自己也被編碼就是為了
     // 這個。編碼錯了的話，剛修好的撞名會從這條路原封不動地回來。
-    expect(await fileNames(['a~b', 'a%7eb'])).toHaveLength(2);
+    expect(await fileNames(['a~b', 'a~007Eb', 'a%7eb'])).toHaveLength(3);
   });
 
-  it('只差大小寫的 id 也各自一個檔', async () => {
-    // macOS 與 Windows 的檔案系統預設不分大小寫，所以這一條在 Linux 上是恆真的，
-    // 在開發機上才擋得到東西——而開發機正是 `serve` 會被跑起來的地方。
-    expect(await fileNames(['Alpha', 'alpha'])).toHaveLength(2);
+  it('只差大小寫的短 id：分大小寫的檔案系統上各自一個目錄，不分的上面後建的那一份報撞名、不覆寫', async () => {
+    // macOS 與 Windows 的檔案系統預設不分大小寫，所以這一條在 Linux 上走的是第一支，
+    // 在開發機上走第二支——而開發機正是 `serve` 會被跑起來的地方。第二支照 D10（#2132 N7）。
+    const probe = await tmp('nexus-case-');
+    await mkdir(join(probe, 'A'));
+    const caseInsensitive = await stat(join(probe, 'a')).then(
+      () => true,
+      () => false,
+    );
+    if (!caseInsensitive) {
+      expect(await fileNames(['Alpha', 'alpha'])).toHaveLength(2);
+      return;
+    }
+    await expect(fileNames(['Alpha', 'alpha'])).rejects.toThrow(SessionAlreadyExistsError);
   });
 
   it('超長的 id 截短之後仍然分得開', async () => {
@@ -424,10 +464,10 @@ describe('後端的兩條拒絕', () => {
  * CLI 寫一份真的日誌、事後補一行更新的版本才會寫的種類、再 `--resume`。單元層的斷言在 `session-store-read.test.ts`。
  */
 describe('--resume 碰到不認得的事件種類', () => {
-  /** 在一份剛寫完的日誌尾巴補一行 `future/thing`。回傳補之前有幾行。 */
+  /** 在一份剛寫完的日誌尾巴補一行 `future/thing`。回傳補之前有幾顆事件。 */
   async function plantFutureEvent(runDir: string, extra: Record<string, unknown>): Promise<number> {
-    const path = join(runDir, 'cli.jsonl');
-    const lines = (await readFile(path, 'utf8')).split('\n').filter((line) => line.length > 0);
+    const path = cliLog(runDir);
+    const lines = await eventLinesOf(path);
     await appendFile(
       path,
       `${JSON.stringify({ type: 'future/thing', seq: lines.length, time: 1, data: {}, ...extra })}\n`,
@@ -440,12 +480,12 @@ describe('--resume 碰到不認得的事件種類', () => {
     await runOnce(['--session-log', root, '第一次。']);
     const runDir = await onlyRunDir(root);
     const seq = await plantFutureEvent(runDir, {});
-    const before = await readFile(join(runDir, 'cli.jsonl'), 'utf8');
+    const before = await readFile(cliLog(runDir), 'utf8');
 
     await expect(runOnce(['--resume', runDir, '第二次。'])).rejects.toThrow(
       new RegExp(`第 ${seq} 筆事件種類是 "future/thing".*不認得.*沒標可忽略`, 'su'),
     );
-    expect(await readFile(join(runDir, 'cli.jsonl'), 'utf8')).toBe(before);
+    expect(await readFile(cliLog(runDir), 'utf8')).toBe(before);
   });
 
   it('標了 ignorable: true：接得回來，那一行原樣留著，新事件接在它後面、seq 連續', async () => {
@@ -453,14 +493,12 @@ describe('--resume 碰到不認得的事件種類', () => {
     await runOnce(['--session-log', root, '第一次。']);
     const runDir = await onlyRunDir(root);
     const seq = await plantFutureEvent(runDir, { ignorable: true });
-    const planted = (await readFile(join(runDir, 'cli.jsonl'), 'utf8')).split('\n')[seq];
+    const planted = (await eventLinesOf(cliLog(runDir)))[seq];
 
     const printed = await runOnce(['--resume', runDir, '第二次。']);
     expect(printed).toContain('第二次。');
 
-    const lines = (await readFile(join(runDir, 'cli.jsonl'), 'utf8'))
-      .split('\n')
-      .filter((line) => line.length > 0);
+    const lines = await eventLinesOf(cliLog(runDir));
     expect(lines[seq]).toBe(planted);
     const events = lines.map((line) => JSON.parse(line) as SessionEvent);
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));

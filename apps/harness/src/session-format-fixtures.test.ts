@@ -5,7 +5,7 @@
  * `scripts/session-format-fixtures/generate.ts`，PR 內文貼了每個 tag 的產生指令與 rev 核對），旁邊的 `expected.json`
  * 記事件數、`type` 序列、推回模型的角色序列（逐格標明是哪一版的讀方算的），以及觸發讀方相容分支的那幾條的輸出。
  *
- * 每份複製到暫存目錄再讀：續接會改寫 header 與日誌，夾具本身不能被動到。
+ * 每份複製到暫存目錄再讀：續接會把舊兩檔遷成這一版的世代檔、舊 header 換成墓碑，夾具本身不能被動到。
  */
 
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
@@ -36,7 +36,12 @@ import type { SessionEvent, SessionFormatCatalog } from '@nexus/core';
 
 import { historyFrames } from './conversation-history.js';
 import { MEMORY_DURABILITY } from './feedback.fixture.js';
-import { openJsonlSessionStore, parseJsonlSessionBody } from './jsonl-session-store.js';
+import {
+  legacyTwoFilePathsIn,
+  openJsonlSessionStore,
+  parseJsonlSessionBody,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
 import { assertSameWorkspaceRoot } from './resume-guards.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/session-format/', import.meta.url));
@@ -162,9 +167,11 @@ describe.each(names)('夾具 %s', (name) => {
   });
 
   it.each(ids)(
-    '續接 %s 之後再寫一筆、收掉，strict 整份重讀：seq 連續、header 是這一版',
+    '續接 %s 之後再寫一筆、收掉：遷成這一版的世代檔，strict 整份重讀 seq 連續；舊日誌一個位元組都沒動、舊 header 換成墓碑',
     async (id) => {
       const directory = await copied(name);
+      const legacy = legacyTwoFilePathsIn(directory, id);
+      const source = await readFile(legacy.log);
       const store = openJsonlSessionStore({ directory });
       const resumed = await resumeClosingInterruptedTurn(store, id);
       expect(resumed.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
@@ -178,12 +185,17 @@ describe.each(names)('夾具 %s', (name) => {
       await resumed.stored.append([next]);
       await resumed.stored.close();
 
-      const header = JSON.parse(await readFile(join(directory, `${id}.header.json`), 'utf8')) as {
-        version: number;
-      };
-      expect(header.version).toBe(SESSION_LOG_FORMAT_VERSION);
-      const { events } = parseJsonlSessionBody(id, await readFile(join(directory, `${id}.jsonl`)), {
-        version: header.version,
+      expect(await readFile(legacy.log)).toEqual(source);
+      const generation = await readFile(sessionPathsIn(directory, id).log);
+      const newline = generation.indexOf(0x0a);
+      const headerLine = generation.toString('utf8', 0, newline);
+      const { migratedFrom, ...rest } = JSON.parse(headerLine) as Record<string, unknown>;
+      expect(rest).toMatchObject({ type: 'session', id, version: SESSION_LOG_FORMAT_VERSION });
+      expect(migratedFrom).toMatchObject({ bytes: source.byteLength });
+      // 墓碑是同一份 header 行，只少了遷移來源。
+      expect(JSON.parse(await readFile(legacy.header, 'utf8'))).toEqual(rest);
+      const { events } = parseJsonlSessionBody(id, generation.subarray(newline + 1), {
+        version: SESSION_LOG_FORMAT_VERSION,
         recovery: 'strict',
       });
       expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
@@ -304,6 +316,7 @@ describe('規則（驗收 D）', () => {
       [33, "if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
       [34, "return recordedApprovalPolicy(events) ?? 'ask';"],
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
+      [52, "if (site.layout === 'two-file') {"],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
     expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);

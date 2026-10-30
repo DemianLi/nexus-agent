@@ -8,7 +8,11 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import {
+  generationLogFilename,
+  SESSION_LOG_FORMAT_VERSION,
+  sessionDirectoryName,
+} from '@nexus/core';
 import type { SessionStore } from '@nexus/core';
 import { decodeSessionReferenceUri, parseSessionReferenceText } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -16,7 +20,9 @@ import {
   createJsonlSessionStore,
   openJsonlSessionStore,
   projectKey,
+  sessionPathsIn,
 } from './jsonl-session-store.js';
+import { sessionOf } from './session-files.fixture.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { projectSessionConversation } from './session-reference.js';
 
@@ -94,12 +100,8 @@ async function put(
     await stored.close();
   }
   if (options.tail !== undefined) {
-    const log = (await readdir(directory)).find((name) => name === `${id}.jsonl`);
-    if (log === undefined) throw new Error('夾具：撕裂的尾巴只給簡單的 id');
-    await writeFile(
-      join(directory, log),
-      `${await readFile(join(directory, log), 'utf8')}${options.tail}`,
-    );
+    const log = (await sessionOf(directory, id)).logPath;
+    await writeFile(log, `${await readFile(log, 'utf8')}${options.tail}`);
   }
   return directory;
 }
@@ -116,8 +118,8 @@ async function putRaw(projectCwd: string, id: string, header: unknown): Promise<
 }
 
 /**
- * 一次放 `count` 份會話（id 是 `s00`、`s01`…，`createdAt` 是 1000 起每份加一）：**只有第一份經後端寫**，其餘照它的檔案複製，
- * 改 header 的 id 與 createdAt（#1814）。
+ * 一次放 `count` 份會話（id 是 `s00`、`s01`…，`createdAt` 是 1000 起每份加一）：**只有第一份經後端寫**，其餘照它的檔案複製
+ * （世代檔與舊路徑的墓碑），改 header 行與墓碑的 id 與 createdAt（#1814）。
  *
  * 每份經後端寫要 `fsync` 好幾次（日誌批次、header 暫存檔、目錄），單份約 25 ms；55 份在忙的機器上超過 5 秒期限，逾時後這個
  * 迴圈還在跑，下一條測試的 `root` 已經換了，殘留的寫入跑進去（`s44`、`s45` 出現在別條測試的清單裡）。這裡要的只是「目錄裡有 N 份
@@ -125,18 +127,23 @@ async function putRaw(projectCwd: string, id: string, header: unknown): Promise<
  */
 async function putMany(projectCwd: string, count: number): Promise<void> {
   const directory = await put(projectCwd, 's00', { createdAt: 1_000, events: [] });
-  const header = JSON.parse(await readFile(join(directory, 's00.header.json'), 'utf8')) as {
-    id: string;
-    createdAt: number;
-  };
-  const log = await readFile(join(directory, 's00.jsonl'));
+  const first = sessionPathsIn(directory, 's00');
+  const log = await readFile(first.log, 'utf8');
+  const newline = log.indexOf('\n');
+  const header = JSON.parse(log.slice(0, newline)) as Record<string, unknown>;
+  const tombstone = JSON.parse(await readFile(first.tombstone, 'utf8')) as Record<string, unknown>;
   for (let i = 1; i < count; i += 1) {
     const id = `s${String(i).padStart(2, '0')}`;
+    const paths = sessionPathsIn(directory, id);
+    await mkdir(paths.sessionDirectory, { recursive: true });
     await writeFile(
-      join(directory, `${id}.header.json`),
-      `${JSON.stringify({ ...header, id, createdAt: 1_000 + i }, null, 2)}\n`,
+      paths.log,
+      `${JSON.stringify({ ...header, id, createdAt: 1_000 + i })}${log.slice(newline)}`,
     );
-    await writeFile(join(directory, `${id}.jsonl`), log);
+    await writeFile(
+      paths.tombstone,
+      `${JSON.stringify({ ...tombstone, id, createdAt: 1_000 + i })}\n`,
+    );
   }
 }
 
@@ -280,12 +287,13 @@ describe('SessionReferenceCandidates.list', () => {
   it('header 讀不懂、版本太新的不列；日誌中段壞掉的照列（撿回讀得懂的）', async () => {
     await put(CWD, 'good', { events: [said('好的', 2_000)] });
     await putRaw(CWD, 'broken', '{壞的');
-    await putRaw(CWD, 'future', {
-      version: SESSION_LOG_FORMAT_VERSION + 1,
-      id: 'future',
-      createdAt: 1,
-      cwd: CWD,
-    });
+    // 比這一版新的寫方寫的是世代檔：舊路徑上版本 52 起的 header 是墓碑，驗不到「版本太新」。
+    const future = join(root, projectKey(CWD), sessionDirectoryName('future'));
+    await mkdir(future, { recursive: true });
+    await writeFile(
+      join(future, generationLogFilename(SESSION_LOG_FORMAT_VERSION + 1)),
+      `${JSON.stringify({ type: 'session', version: SESSION_LOG_FORMAT_VERSION + 1, id: 'future', createdAt: 1, cwd: CWD })}\n`,
+    );
     await put(CWD, 'torn', { events: [said('壞在中間', 2_000)], tail: '{壞掉\n' });
     expect(ids(await service().list('me', '')).sort()).toEqual(['good', 'torn']);
   });
@@ -347,7 +355,7 @@ describe('標題快取', () => {
     expect(opened).toEqual([]);
 
     const line = `${JSON.stringify({ type: 'session/title', seq: 1, time: 3_000, data: { title: '改名了', messageSeqs: [0], source: { kind: 'fallback' } } })}\n`;
-    const path = join(directory, 'a.jsonl');
+    const path = (await sessionOf(directory, 'a')).logPath;
     await writeFile(path, `${await readFile(path, 'utf8')}${line}`);
     const candidates = await s.list('me', '改名');
     expect(opened).toEqual(['a']);
@@ -420,7 +428,10 @@ describe('標題快取', () => {
 
   it('日誌壞到撿回來是空的，也照 revision 記下、沒變就不再讀', async () => {
     const directory = await put(CWD, 'torn', { events: [said('好', 2_000)] });
-    await writeFile(join(directory, 'torn.jsonl'), '{壞掉\n');
+    // 事件全換成一行壞的；世代檔第一行的 header 行留著。
+    const path = (await sessionOf(directory, 'torn')).logPath;
+    const text = await readFile(path, 'utf8');
+    await writeFile(path, `${text.slice(0, text.indexOf('\n') + 1)}{壞掉\n`);
     const { opened, openStore } = counting();
     const s = service({ openStore });
     await s.list('me', '');
@@ -432,8 +443,8 @@ describe('標題快取', () => {
     const directory = await put(CWD, 'gone', { events: [said('要被刪', 2_000)] });
     const s = service();
     expect(ids(await s.list('me', ''))).toEqual(['gone']);
-    await rm(join(directory, 'gone.header.json'));
-    await rm(join(directory, 'gone.jsonl'));
+    await rm(sessionPathsIn(directory, 'gone').tombstone);
+    await rm(sessionPathsIn(directory, 'gone').sessionDirectory, { recursive: true });
     expect(await s.list('me', '')).toEqual([]);
   });
 });
@@ -475,45 +486,42 @@ describe('read：精確讀一條被引用的會話（準備那一半用）', () 
 
   it('壞的日誌不撿回：拋 SessionCorruptionError（撿回來的殘缺版本不能當成那條會話的樣子）', async () => {
     const directory = await put(CWD, 'torn', { events: [said('好', 2_000), said('二', 3_000)] });
-    const lines = (await readFile(join(directory, 'torn.jsonl'), 'utf8')).split('\n');
-    // 壞行之後要有收尾才是壞檔；沒有收尾的壞行是當機的尾巴，預設讀取會丟掉它（#1508）。
+    const path = (await sessionOf(directory, 'torn')).logPath;
+    const lines = (await readFile(path, 'utf8')).split('\n');
+    // 壞行插在第一顆事件之後（第一行是 header 行）。壞行之後要有收尾才是壞檔；沒有收尾的壞行是當機的尾巴，預設讀取會丟掉它（#1508）。
     const closer = JSON.stringify({ type: 'turn/end', seq: 99, time: 1, data: {} });
     await writeFile(
-      join(directory, 'torn.jsonl'),
-      `${[lines[0], '{壞掉', ...lines.slice(1)].join('\n')}${closer}\n`,
+      path,
+      `${[lines[0], lines[1], '{壞掉', ...lines.slice(2)].join('\n')}${closer}\n`,
     );
     await expect(service().read('torn')).rejects.toMatchObject({ name: 'SessionCorruptionError' });
   });
 
   it('唯讀：不改任何位元組；已經中止就不開始讀', async () => {
-    const directory = await put(CWD, 'held', { events: [said('好', 2_000)] });
-    const before = await Promise.all(
-      (await readdir(directory))
-        .sort()
-        .map(async (name) => [name, await readFile(join(directory, name), 'utf8')]),
-    );
+    await put(CWD, 'held', { events: [said('好', 2_000)] });
+    const before = await snapshot();
     const controller = new AbortController();
     await service().read('held');
     controller.abort(new Error('不要了'));
     await expect(service().read('held', controller.signal)).rejects.toThrow('不要了');
-    const after = await Promise.all(
-      (await readdir(directory))
-        .sort()
-        .map(async (name) => [name, await readFile(join(directory, name), 'utf8')]),
-    );
-    expect(after).toEqual(before);
+    expect(await snapshot()).toEqual(before);
   });
 
   it('死在第一次模型呼叫的那一份（#1598）：冷讀在記憶體補平，投影得出那句人打的字；檔的位元組與 mtime 都不變', async () => {
     const directory = await put(CWD, 'crashed', {
       events: [said('那句人打的字', 2_000), { type: 'model/start', time: 2_001, data: {} }],
     });
+    // 專案目錄底下（含會話目錄）的每個檔都比：世代檔、舊路徑的墓碑。
     const snapshot = async () =>
       Promise.all(
-        (await readdir(directory)).sort().map(async (name) => {
-          const path = join(directory, name);
-          return [name, await readFile(path, 'utf8'), (await stat(path)).mtimeMs] as const;
-        }),
+        (await readdir(directory, { recursive: true, withFileTypes: true }))
+          .filter((entry) => entry.isFile())
+          .map((entry) => join(entry.parentPath, entry.name))
+          .sort()
+          .map(
+            async (path) =>
+              [path, await readFile(path, 'utf8'), (await stat(path)).mtimeMs] as const,
+          ),
       );
     const before = await snapshot();
 

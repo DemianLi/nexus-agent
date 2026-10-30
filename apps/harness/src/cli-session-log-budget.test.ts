@@ -15,6 +15,7 @@ import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { runCli } from './cli.js';
+import { sessionOf } from './session-files.fixture.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -41,8 +42,9 @@ describe('CLI 的會話日誌額度', () => {
     await cli(['--session-log', logs], `/${PERMISSION_COMMAND_NAME} read-only\n/exit\n`);
     const [run] = await readdir(logs);
     const runDir = join(logs, run!);
-    const log = (await readdir(runDir)).find((name) => name.endsWith('.jsonl'));
-    await appendFile(join(runDir, log!), 'x'.repeat(1024 * 1024 + 1));
+    // CLI 的 root id 一律是 `cli`。
+    const { logPath } = await sessionOf(runDir, 'cli');
+    await appendFile(logPath, 'x'.repeat(1024 * 1024 + 1));
 
     const patch = join(root, 'budget.patch.yml');
     await writeFile(patch, '- id: thread-capacity\n  config:\n    sessionLogBudgetMiB: 1\n');

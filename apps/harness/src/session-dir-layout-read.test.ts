@@ -1,7 +1,8 @@
 /**
  * 讀方認得每會話目錄的單檔佈局（[#2122](https://github.com/DemianLi/nexus-agent/issues/2122)）：
- * `<目錄>/<sessionDirectoryName(id)>/session.v<N>.jsonl`，header 在第一行，同一個目錄裡挑最高世代。新建的會話照舊寫兩檔，所以
- * 單檔佈局的會話在這裡一律手寫（{@link writeGeneration}）；檔名都經 `@nexus/core` 產生。
+ * `<目錄>/<sessionDirectoryName(id)>/session.v<N>.jsonl`，header 在第一行，同一個目錄裡挑最高世代。要哪一版、哪種壞法的世代檔
+ * 都造得出來，所以單檔佈局的會話在這裡手寫（{@link writeGeneration}）；舊兩檔也手寫（{@link writeTwoFile}，寫方從 #1594 ③ 起
+ * 只寫世代檔）。檔名都經 `@nexus/core` 產生。寫方本身（墓碑、遷移）見 `session-generation-writer.test.ts`。
  *
  * 蓋的是卡上的驗收：等價、每種新狀態的歸類、挑最高世代、撞名、冷讀快取換世代、`.header.json` 結尾的目錄、位元組額度量的檔，
  * 以及：單檔撕裂尾巴從 header 行之後截、續接不建出舊兩檔、只有「不在」那幾種錯算不在、目錄名截短與空 id 的 `~`、挑定的世代檔
@@ -38,11 +39,13 @@ import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import { readSessionLogs } from './eval/session-scan.js';
 import {
+  legacyTwoFilePathsIn,
   openJsonlSessionStore,
   readSessionEntryById,
   sessionPathsIn,
 } from './jsonl-session-store.js';
 import type { JsonlSessionStoreOptions } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 import type { SessionLogBudget } from './session-log-budget.js';
 
 let dir: string;
@@ -76,8 +79,13 @@ function sessionDir(directory: string, id: string): string {
   return join(directory, sessionDirectoryName(id));
 }
 
+/** 世代檔的 header 行（含換行）：`type: 'session'` 加上 header 各格。 */
+function headerLine(id: string, version = CURRENT): string {
+  return `${JSON.stringify({ type: 'session', ...header(id, version) })}\n`;
+}
+
 /**
- * 手寫一個世代檔：第一行是 header（單行 JSON），之後一行一顆事件。`raw` 給了就整份照寫。
+ * 手寫一個世代檔：第一行是 header 行，之後一行一顆事件。`raw` 給了就整份照寫。
  *
  * @returns 世代檔的路徑。
  */
@@ -90,19 +98,20 @@ async function writeGeneration(
 ): Promise<string> {
   await mkdir(sessionDir(directory, id), { recursive: true });
   const path = join(sessionDir(directory, id), generationLogFilename(version));
-  await writeFile(path, raw ?? `${JSON.stringify(header(id, version))}\n${lines(events)}`);
+  await writeFile(path, raw ?? `${headerLine(id, version)}${lines(events)}`);
   return path;
 }
 
-/** 經寫方寫一份舊兩檔的會話。 */
+/** 手寫一份舊兩檔的會話（v0.5.19 以前的寫方寫的樣子，版本 {@link LEGACY_TWO_FILE_FORMAT_VERSION}）。 */
 async function writeTwoFile(
   directory: string,
   id: string,
   events: readonly SessionEvent[],
 ): Promise<void> {
-  const stored = openJsonlSessionStore({ directory }).create(header(id));
-  await stored.append(events);
-  await stored.close();
+  const paths = legacyTwoFilePathsIn(directory, id);
+  await mkdir(directory, { recursive: true });
+  await writeFile(paths.header, JSON.stringify(header(id, LEGACY_TWO_FILE_FORMAT_VERSION)));
+  await writeFile(paths.log, lines(events));
 }
 
 /** 記下額度收到的位元組數，永遠放行。 */
@@ -144,8 +153,9 @@ describe('單檔佈局讀得到，跟同內容的兩檔等價', () => {
   it('列表、唯讀打開、續接、離線掃描都讀得到同樣的 header 與事件', async () => {
     const twoFileDir = join(dir, 'two-file');
     await writeTwoFile(twoFileDir, 't1', EVENTS);
+    // 兩邊同一個版本：列表比的含 storedFormatVersion。續接兩邊都遷成這一版的世代，之後的掃描讀的是遷過去的那一份。
     const generationDir = join(dir, 'generation');
-    await writeGeneration(generationDir, 't1', CURRENT, EVENTS);
+    await writeGeneration(generationDir, 't1', LEGACY_TWO_FILE_FORMAT_VERSION, EVENTS);
 
     const read = async (directory: string) => {
       const backend = openJsonlSessionStore({ directory, warn: () => undefined });
@@ -181,7 +191,7 @@ describe('新出現的狀態各歸一類', () => {
   });
 
   it('第一行沒有換行：列表略過、不算讀不懂', async () => {
-    await writeGeneration(dir, 'half', CURRENT, [], JSON.stringify(header('half')));
+    await writeGeneration(dir, 'half', CURRENT, [], headerLine('half').trimEnd());
     expect(await store().list()).toEqual({ sessions: [], unreadable: 0 });
   });
 
@@ -191,7 +201,7 @@ describe('新出現的狀態各歸一類', () => {
       'mismatch',
       OLDER,
       [],
-      `${JSON.stringify(header('mismatch', CURRENT))}\n`,
+      headerLine('mismatch', CURRENT),
     );
     await writeGeneration(dir, 'good', CURRENT, EVENTS);
     const { sessions, unreadable } = await store().list();
@@ -233,9 +243,9 @@ describe('新出現的狀態各歸一類', () => {
 
   it('並存而其中一份讀不懂：讀得懂的那份也不列，合起來算一份讀不懂', async () => {
     await writeTwoFile(dir, 'legacy-ok', EVENTS);
-    await writeGeneration(dir, 'legacy-ok', OLDER, [], `${JSON.stringify(header('legacy-ok'))}\n`);
+    await writeGeneration(dir, 'legacy-ok', OLDER, [], headerLine('legacy-ok'));
     await writeTwoFile(dir, 'generation-ok', EVENTS);
-    await writeFile(sessionPathsIn(dir, 'generation-ok').header, 'not json');
+    await writeFile(legacyTwoFilePathsIn(dir, 'generation-ok').header, 'not json');
     await writeGeneration(dir, 'generation-ok', CURRENT, EVENTS);
     await writeGeneration(dir, 'other', CURRENT, EVENTS);
     const { sessions, unreadable } = await store().list();
@@ -255,7 +265,7 @@ describe('新出現的狀態各歸一類', () => {
   });
 
   it('離線掃描：世代檔名跟 header 版本對不上的報在讀不懂裡（報挑中的世代檔），其餘照掃', async () => {
-    await writeGeneration(dir, 'mismatch', OLDER, [], `${JSON.stringify(header('mismatch'))}\n`);
+    await writeGeneration(dir, 'mismatch', OLDER, [], headerLine('mismatch'));
     await writeGeneration(dir, 'good', CURRENT, EVENTS);
     const scanned = await readSessionLogs([dir]);
     expect(scanned.logs.map((log) => log.header.id)).toEqual(['good']);
@@ -272,8 +282,8 @@ describe('舊兩檔照舊認得', () => {
     const linked = join(dir, 'linked');
     await mkdir(linked);
     for (const path of [
-      sessionPathsIn(elsewhere, 't1').header,
-      sessionPathsIn(elsewhere, 't1').log,
+      legacyTwoFilePathsIn(elsewhere, 't1').header,
+      legacyTwoFilePathsIn(elsewhere, 't1').log,
     ]) {
       await symlink(path, join(linked, path.slice(elsewhere.length + 1)));
     }
@@ -298,7 +308,7 @@ describe('同一個目錄裡有幾個世代就挑最高的', () => {
   });
 
   it('世代檔名的數字照數值比，不照字串比', async () => {
-    await writeGeneration(dir, 't1', 9, [event(0, 'nine')], `${JSON.stringify(header('t1', 9))}\n`);
+    await writeGeneration(dir, 't1', 9, [event(0, 'nine')], headerLine('t1', 9));
     await writeGeneration(dir, 't1', CURRENT, [event(0, 'current')]);
     expect(await (await store().open('t1', 'read')).read()).toEqual([event(0, 'current')]);
   });
@@ -355,14 +365,8 @@ describe('位元組額度量的是實際要讀的那個世代檔（#2115）', ()
 
 describe('續接單檔佈局：往挑中的世代檔續寫', () => {
   it('撕裂的尾巴從 header 行之後截：第一行原樣、讀得懂，追加接在已接受的前綴後面', async () => {
-    const headerLine = `${JSON.stringify(header('t1'))}\n`;
-    const path = await writeGeneration(
-      dir,
-      't1',
-      CURRENT,
-      [],
-      `${headerLine}${lines(EVENTS)}{"seq":3,"ti`,
-    );
+    const first = headerLine('t1');
+    const path = await writeGeneration(dir, 't1', CURRENT, [], `${first}${lines(EVENTS)}{"seq":3,"ti`);
     const warnings: string[] = [];
     const backend = store({ warn: (message) => warnings.push(message) });
     const resumed = await backend.resume('t1');
@@ -371,20 +375,20 @@ describe('續接單檔佈局：往挑中的世代檔續寫', () => {
     await resumed.stored.close();
 
     const bytes = await readFile(path, 'utf8');
-    expect(bytes).toBe(`${headerLine}${lines([...EVENTS, event(3)])}`);
+    expect(bytes).toBe(`${first}${lines([...EVENTS, event(3)])}`);
     expect(warnings.join('\n')).toContain(
-      `已截到第 ${Buffer.byteLength(headerLine + lines(EVENTS))} 個位元組`,
+      `已截到第 ${Buffer.byteLength(first + lines(EVENTS))} 個位元組`,
     );
     expect(await (await store().open('t1', 'read')).read()).toEqual([...EVENTS, event(3)]);
   });
 
-  it('續接追加之後不建出舊兩檔；再打開讀得到追加的那幾筆', async () => {
+  it('續接追加之後不建出舊兩檔，舊路徑只補墓碑；再打開讀得到追加的那幾筆', async () => {
     await writeGeneration(dir, 't1', CURRENT, EVENTS);
     const resumed = await store().resume('t1');
     await resumed.stored.append([event(3), event(4)]);
     await resumed.stored.close();
-    const legacy = sessionPathsIn(dir, 't1');
-    expect(existsSync(legacy.header)).toBe(false);
+    const legacy = legacyTwoFilePathsIn(dir, 't1');
+    expect(await readFile(legacy.header, 'utf8')).toBe(headerLine('t1'));
     expect(existsSync(legacy.log)).toBe(false);
     expect(await (await store().open('t1', 'read')).read()).toEqual([
       ...EVENTS,
@@ -397,16 +401,24 @@ describe('續接單檔佈局：往挑中的世代檔續寫', () => {
     });
   });
 
-  it('世代比這一版舊：拒絕續接（換世代歸 #1594 ③），唯讀打開照樣讀得到', async () => {
+  it('世代比這一版舊：唯讀打開照讀、不發佈；續接遷成這一版的世代，來源原樣，追加進新世代', async () => {
     const path = await writeGeneration(dir, 't1', OLDER, EVENTS);
     const before = await readFile(path);
     const backend = store();
-    expect(await errorOf(backend.resume('t1'))).toBeInstanceOf(SessionFormatUnsupportedError);
-    expect(await readFile(path)).toEqual(before);
-    // 拒絕時租約放掉了：同一個後端再續接一次，拿到的仍是同一個拒絕，不是「另一方還握著」。
-    expect(await errorOf(backend.resume('t1'))).toBeInstanceOf(SessionFormatUnsupportedError);
     expect(await (await backend.open('t1', 'read')).read()).toEqual(EVENTS);
-    expect(existsSync(sessionPathsIn(dir, 't1').header)).toBe(false);
+    expect(existsSync(sessionPathsIn(dir, 't1').log)).toBe(false);
+
+    const resumed = await backend.resume('t1');
+    expect(resumed.events).toEqual(EVENTS);
+    expect(resumed.storedFormatVersion).toBe(OLDER);
+    await resumed.stored.append([event(3)]);
+    await resumed.stored.close();
+    expect(await readFile(path)).toEqual(before);
+    // 新世代：這一版的 header 行（不記 migratedFrom：來源不是舊兩檔），舊世代的事件原樣，追加接在後面。
+    expect(await readFile(sessionPathsIn(dir, 't1').log, 'utf8')).toBe(
+      `${headerLine('t1')}${lines([...EVENTS, event(3)])}`,
+    );
+    expect(await (await store().open('t1', 'read')).read()).toEqual([...EVENTS, event(3)]);
   });
 });
 
@@ -415,7 +427,7 @@ describe('探單檔佈局時只有「不在」那幾種錯算不在', () => {
   // （上層＋120 字元）要超過，舊兩檔的檔名（72 字元的基底加副檔名與暫存後綴）要進得去。
   const PATH_MAX = process.platform === 'darwin' ? 1024 : process.platform === 'linux' ? 4096 : 0;
   it.skipIf(PATH_MAX === 0)(
-    '上層目錄長到探世代目錄的路徑超限（ENAMETOOLONG）：舊兩檔照舊打開、續接，create 照樣撞名',
+    '上層目錄長到探世代目錄的路徑超限（ENAMETOOLONG）：舊兩檔照舊打開，續接建不出會話目錄就照拋、來源原樣，create 照樣撞名',
     async () => {
       const id = '/'.repeat(24);
       expect(sessionDirectoryName(id)).toHaveLength(120);
@@ -427,9 +439,11 @@ describe('探單檔佈局時只有「不在」那幾種錯算不在', () => {
       await writeTwoFile(deep, id, EVENTS);
       const backend = openJsonlSessionStore({ directory: deep, warn: () => undefined });
       expect(await (await backend.open(id, 'read')).read()).toEqual(EVENTS);
-      const resumed = await backend.resume(id);
-      expect(resumed.events).toEqual(EVENTS);
-      await resumed.stored.close();
+      // 續接要遷成世代檔，會話目錄建不出來：照拋，不退回往舊兩檔續寫。
+      const legacy = legacyTwoFilePathsIn(deep, id);
+      const before = [await readFile(legacy.header), await readFile(legacy.log)];
+      expect(await errorOf(backend.resume(id))).toMatchObject({ code: 'ENAMETOOLONG' });
+      expect([await readFile(legacy.header), await readFile(legacy.log)]).toEqual(before);
       expect(() => backend.create(header(id))).toThrow(SessionAlreadyExistsError);
     },
   );
@@ -475,7 +489,7 @@ describe('探單檔佈局時只有「不在」那幾種錯算不在', () => {
 });
 
 describe('目錄名截短與空 id 的 ~', () => {
-  it('長 id 探的是截短後的目錄名：舊兩檔照舊打開、續接，create 照樣撞名', async () => {
+  it('長 id 探的是截短後的目錄名：舊兩檔照舊打開，續接遷進截短後的目錄，create 照樣撞名', async () => {
     const id = '中'.repeat(120);
     expect(sessionDirectoryName(id)).toHaveLength(96 + 1 + 12);
     await writeTwoFile(dir, id, EVENTS);
@@ -484,6 +498,7 @@ describe('目錄名截短與空 id 的 ~', () => {
     expect(resumed.events).toEqual(EVENTS);
     await resumed.stored.close();
     expect((await store().list()).sessions.map(({ header: h }) => h.id)).toEqual([id]);
+    expect(existsSync(sessionPathsIn(dir, id).log)).toBe(true);
     expect(() => store().create(header(id))).toThrow(SessionAlreadyExistsError);
   });
 

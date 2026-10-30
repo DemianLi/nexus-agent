@@ -178,8 +178,8 @@ function flakyStore(inner: SessionStore, failAppends: number): SessionStore {
 }
 
 /**
- * 開日誌照真的開（header 已經發佈、日誌已經 `wx` 建出來），**第一個新日誌把手的第一次 `writeFile`** 才拋 ENOSPC：
- * 這才是「實體化了、第一批寫不進去」（#1580 刀 2a 審查 B1）。
+ * 開檔照真的開（世代檔的暫存檔已經 `wx` 建出來），**第一個 `wx` 把手的第一次 `writeFile`**（header 行加首批）才拋 ENOSPC：
+ * 「實體化了、第一批寫不進去」（#1580 刀 2a 審查 B1）。世代檔還沒 `link` 發佈，後端整個收回。
  */
 function firstLogWriteFails(): OpenLogFile {
   let left = 1;
@@ -204,8 +204,8 @@ function firstLogWriteFails(): OpenLogFile {
 }
 
 /**
- * 第一次 `open(<日誌>, 'wx')` 就拋 EMFILE：header 已經 `link` 發佈、日誌沒開成，實體化在寫入之前就失敗（#1580 刀 2a 審查）。
- * 之後照真的開。
+ * 第一次 `open(<暫存檔>, 'wx')` 就拋 EMFILE：會話目錄與鎖檔已經建了、世代檔的暫存檔沒開成，實體化在寫入之前就失敗
+ * （#1580 刀 2a 審查）。之後照真的開。
  */
 function firstLogOpenFails(): OpenLogFile {
   let left = 1;
@@ -455,7 +455,7 @@ describe('thread.fork', () => {
     ['第一次排空在交給把手之前就被拒（還沒實體化）', () => ({ failAppends: 1 })],
     ['第一次排空實體化了、第一批寫不進去（B1）', () => ({ openLog: firstLogWriteFails() })],
     [
-      '第一次排空實體化到一半（header 發佈了、日誌開不成）',
+      '第一次排空實體化到一半（會話目錄建了、世代檔的暫存檔開不成）',
       () => ({ openLog: firstLogOpenFails() }),
     ],
   ] as const) {

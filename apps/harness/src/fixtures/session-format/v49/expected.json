@@ -53,5 +53,23 @@
       }
     }
   },
-  "triggers": []
+  "triggers": [
+    {
+      "edge": 52,
+      "session": "cli",
+      "computedBy": "today",
+      "replay": {
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    }
+  ]
 }

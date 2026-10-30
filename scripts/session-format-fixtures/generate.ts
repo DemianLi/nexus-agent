@@ -76,8 +76,9 @@ const HERE = join(ROOT, 'scripts/session-format-fixtures');
 const PROMPT = '你好';
 
 /**
- * 讀方分支的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root` 與 `approval-policy-missing` 不用補寫
- * （12 以前的 header 本來就沒有 `workspaceRoot`，34 以前的日誌本來就沒有 `approval/policy`），只記今天的讀方對它的輸出。
+ * 讀方分支的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root`、`approval-policy-missing` 與
+ * `two-file-layout` 不用補寫（12 以前的 header 本來就沒有 `workspaceRoot`，34 以前的日誌本來就沒有 `approval/policy`，52 以前
+ * 的寫入器本來就寫舊兩檔），只記今天的讀方對它的輸出。
  */
 type Trigger =
   | 'turn-feedback'
@@ -85,7 +86,8 @@ type Trigger =
   | 'summary-missing'
   | 'open-turn'
   | 'workspace-root'
-  | 'approval-policy-missing';
+  | 'approval-policy-missing'
+  | 'two-file-layout';
 
 interface Target {
   /** 夾具目錄名。 */
@@ -97,6 +99,8 @@ interface Target {
   readonly triggers?: readonly Trigger[];
   /** 有沒有 `replayConversation`（格式 9 起）。 */
   readonly ownReplay: boolean;
+  /** 這一版有沒有出過貨。沒給就看 `rev`：tag 是出過貨的。 */
+  readonly released?: boolean;
 }
 
 const TARGETS: readonly Target[] = [
@@ -121,7 +125,15 @@ const TARGETS: readonly Target[] = [
     triggers: ['open-turn', 'approval-policy-missing'],
     ownReplay: true,
   },
-  { name: 'v49', rev: undefined, version: 49, ownReplay: true },
+  // 今天的工作樹寫的是格式 52 的世代檔，所以 v49 釘在最後寫它的那個 commit（沒出過貨）。
+  {
+    name: 'v49',
+    rev: 'fe52c279c58fa6a07e4f934cd75826b2e518a301',
+    version: 49,
+    triggers: ['two-file-layout'],
+    ownReplay: true,
+    released: false,
+  },
 ];
 /** 混版的前半。 */
 const MIXED_FIRST = { rev: '09398dd523471a1d03852e18c7bbae6ecc672414', version: 44 } as const;
@@ -377,6 +389,15 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
           },
         ];
       }
+      case 'two-file-layout':
+        return [
+          {
+            edge: 52,
+            session: 'cli',
+            computedBy: 'today',
+            replay: todayReplay(readEvents(directory, 'cli')),
+          },
+        ];
       case 'approval-policy-missing': {
         const events = readEvents(directory, 'cli');
         return [
@@ -424,7 +445,7 @@ function generate(target: Target): void {
           ? git('rev-parse', 'HEAD')
           : git('rev-parse', `${target.rev}^{commit}`),
       formatVersion: target.version,
-      released: target.rev !== undefined,
+      released: target.released ?? target.rev !== undefined,
     };
     freeze(
       target.name,

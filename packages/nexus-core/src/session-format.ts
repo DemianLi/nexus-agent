@@ -12,7 +12,7 @@
  * ## 跟 dsh 不一樣的
  *
  * dsh 的邊是真的遷移（凍結的 codec 加轉換），我們到今天一條都沒有：每一版的檔頭都寫「舊檔直接讀」（`session-store.ts`），
- * 續接就地續寫、把 header 蓋成最新。所以這裡的邊只有兩種：
+ * 續接把舊檔的事件原樣搬進這一版的世代檔，只把 header 換成最新（#1594 ③）。所以這裡的邊只有兩種：
  *
  * - **`additive`**：比 `to` 舊的檔，今天的讀方直接讀得對。有些靠讀方裡為舊形狀留的分支，記在 `readerBranch`——
  *   那些分支哪天被當成死碼清掉，夾具測試（`apps/harness/src/session-format-fixtures.test.ts`）會紅。
@@ -20,8 +20,8 @@
  *   `older-without-migration`，`parseHeader` 拋 `SessionFormatUnsupportedError`），列表算進讀不懂。今天沒有任何一條，
  *   它是第一次出現非加性變更、而遷移還沒落地時唯一失敗即關閉的選項。真的遷移（`transform`）等 #1529 第四刀。
  *
- * 就地續寫只在加性區間成立：從存的版本走到目前版本，路上全是 `additive`，續寫進去的新詞彙舊讀方本來就讀得懂。
- * 路上有一條 `breaking`，`parseHeader` 就擋掉，走不到續寫。
+ * 事件原樣搬進新世代只在加性區間成立：從存的版本走到目前版本，路上全是 `additive`，舊事件這一版的讀方本來就讀得懂。
+ * 路上有一條 `breaking`，`parseHeader` 就擋掉，走不到續接。
  *
  * ## 升版時要做的
  *
@@ -212,6 +212,13 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
   { from: 48, to: 49, kind: 'additive', ref: '#1629' },
   { from: 49, to: 50, kind: 'additive', ref: '#1624' },
   { from: 50, to: 51, kind: 'additive', ref: '#1579' },
+  {
+    from: 51,
+    to: 52,
+    kind: 'additive',
+    ref: '#2132',
+    readerBranch: 'apps/harness/src/jsonl-session-store.ts:1875',
+  },
 ];
 
 /** 產品用的目錄。模組載入時就驗，不合就拋。 */
