@@ -3,7 +3,7 @@
 //! ```text
 //! probe read <path> | write <path> | tcp | udp | unix | socketpair | vsock | uring
 //!       unshare | setns | clone-newuser | clone3 | thread | syscall <nr>
-//!       x32 | i386 | connect <socket> <id> <fd> | kill <pid>
+//!       x32 | i386 | connect <socket> <id> <fd> | kill <pid> | pdeathsig
 //! ```
 
 use std::io::Write;
@@ -58,6 +58,11 @@ fn main() {
                 }
             }
             "udp" => report(socket(libc::AF_INET, libc::SOCK_DGRAM)),
+            "pdeathsig" => {
+                let mut sig: libc::c_int = 0;
+                libc::prctl(libc::PR_GET_PDEATHSIG, &mut sig as *mut libc::c_int);
+                println!("sig={sig}");
+            }
             "udp6" => report(socket(libc::AF_INET6, libc::SOCK_DGRAM)),
             "unix" => report(socket(libc::AF_UNIX, libc::SOCK_STREAM)),
             "vsock" => report(socket(libc::AF_VSOCK, libc::SOCK_STREAM)),

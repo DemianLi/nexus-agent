@@ -11,7 +11,7 @@ v0.5.19 的 `@nexus/plugin-mcp` 在掛上那一刻連不上、列不出工具、
 `run.start` 回 `這條 thread 建不起來：<id> (mcp) 的 apply 失敗…`。新版：
 
 - **預設收住**（PR #768，照 dsh 的 `failOnStartupError: false`）：那一列照樣掛上，**這台 server 沒有工具**，對話照常。
-  啟動輸出與每次組裝各有一則警告：`MCP 伺服器 "<serverName>" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具（要讓這一列失敗就寫 failOnStartupError: true）：…`。
+  啟動輸出與每次組裝各有一則警告：`MCP 伺服器 "<serverName>" 套不上沙箱、連不上、列不出工具或工具註冊不上，這一次沒有它的工具（要讓這一列失敗就寫 failOnStartupError: true）：…`。
   掛上那一刻就連不上的：`serve` 照 dsh 在背景退避重試，連上之後開的對話有工具（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）；CLI 不重試。掛上之後才掉的線會退避重連（PR #1237）。
 - 新增 `failOnStartupError: true` 讓那一列失敗，但 insert 的列是可少掛的，結果是**那一列掉了加一行警告**，對話照常，不會回到 v0.5.19 那樣每條都建不起來。
 - **server 的使用指引進提示詞**（PR #1235）：`initialize` 回的 `instructions` 會加進系統提示詞，上限 `maxInstructionBytes`（預設 32768 位元組）。
