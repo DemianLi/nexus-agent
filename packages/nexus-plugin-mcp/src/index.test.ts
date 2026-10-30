@@ -376,7 +376,9 @@ describe('接上一台真的 MCP server', () => {
       expect(registry.logger.warnings()).toHaveLength(1);
       expect(registry.logger.warnings()[0]).toMatchObject({
         origin: { name: 'mcp' },
-        message: expect.stringMatching(/^MCP 伺服器 "missing" 連不上、列不出工具或工具註冊不上/u),
+        message: expect.stringMatching(
+          /^MCP 伺服器 "missing" 套不上沙箱、連不上、列不出工具或工具註冊不上/u,
+        ),
       });
       await vi.waitFor(() => expect(childProcessCount()).toBe(0));
     } finally {

@@ -364,7 +364,7 @@ describe.each(TARGETS.filter((target) => target.transport === 'http'))(
         expect(modelToolNames(registry)).toEqual([]);
         expect(registry.logger.warnings()).toHaveLength(1);
         expect(registry.logger.warnings()[0]?.message).toMatch(
-          /^MCP 伺服器 "srv" 連不上、列不出工具或工具註冊不上/u,
+          /^MCP 伺服器 "srv" 套不上沙箱、連不上、列不出工具或工具註冊不上/u,
         );
         // 它真的走到了 tools/list（而不是更早就連不上）：失敗是我們注入在這個方法上的。
         expect(http.requests.some((request) => request.rpcMethods.includes('tools/list'))).toBe(
@@ -433,7 +433,9 @@ describe('HTTP 連不上', () => {
     try {
       expect(modelToolNames(registry)).toEqual([]);
       expect(registry.logger.warnings()).toHaveLength(1);
-      expect(registry.logger.warnings()[0]?.message).toMatch(/^MCP 伺服器 "srv" 連不上/u);
+      expect(registry.logger.warnings()[0]?.message).toMatch(
+        /^MCP 伺服器 "srv" 套不上沙箱、連不上/u,
+      );
     } finally {
       await dispose();
     }

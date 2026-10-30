@@ -138,6 +138,28 @@ seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽�
 - `.git/config` 的 `include.path` 指到讀不到的檔時 git 直接結束（`fatal: unable to access`），這個 repo 沒有改動卡。
 - **沙箱不可用時改動卡不會出現**，不是出現一張不完整的。那一輪什麼都不記，日誌只講一句，下一輪再試，spawner 恢復就恢復。常駐不可用的主機上改動卡一直不出現，要看起動那一行。
 
+**MCP stdio server 可以宣告要套沙箱（#1946）。** 不宣告就照舊由 serve 直接起，不套沙箱。在 `connection` 加 `sandbox` 鍵就套，`{}` 也算：
+
+```yaml
+connection:
+  transport: stdio
+  command: node
+  args: [/opt/mcp/server.js]
+  sandbox:
+    readable: [/opt/mcp]
+    writable: [/var/lib/mcp-data]
+```
+
+- server 讀得到系統的目錄與檔、`command`、`cwd` 與 `readable`，讀寫與執行得到 `writable`，`/dev/null` 一律可寫，其他都被擋。**連不到網路**：seccomp 擋 `AF_INET`、`AF_INET6`、`AF_UNIX`、`AF_VSOCK`，要連外的 server 不能宣告。這是黑名單，serve 以 root 或帶 `CAP_NET_RAW` 跑時 `AF_PACKET` 開得起來，不要這樣跑。
+- `command` 之外的程式碼、依賴、直譯器（例如 shebang 指到的）要列進 `readable`，不在系統目錄底下的都一樣。
+- 系統目錄若包住 `$HOME` 或 serve 的 home，那一項不給，server 可能起不來。
+- 路徑先 realpath 再判斷。包住 `$HOME` 或 serve 的 home 的路徑、落在 serve 的 home 底下的路徑、不存在的路徑都拒絕，這條 server 不連線。
+- 不看會話模式，`danger-full-access` 也照套。
+- 不是 Linux 或找不到 spawner 時這條 server **不連線**，日誌講一句，不退回直接起；寫了 `failOnStartupError: true` 就讓這一列失敗。沒有 Landlock 時 spawner 以 125 結束，同樣是連線失敗，原因在 serve 的 stderr。
+- 核心的 Landlock ABI 不到 6 時照跑，強度跟著降低（例如沒有訊號 scope），spawner 往 stderr 講一句。
+- 重連時讀根寫根若被換成連結，spawner 拒絕，這條 server 連不回來。`command` 本身是連結時改了指向不會被拒，仍受讀根限制。下次組裝會重新檢查。
+- `--patch` 檔放在工作區裡時，模型改得到它，這個宣告就擋不住，見 [#2162](https://github.com/DemianLi/nexus-agent/issues/2162)。
+
 **本機開發。** Mac 沒有沙箱後端，兩條路：
 
 - 在 Linux 容器裡起 serve；
