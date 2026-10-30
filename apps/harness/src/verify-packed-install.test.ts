@@ -40,6 +40,7 @@ import {
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
+import { spawnerProbeProblems } from '../../../scripts/release/spawner-probe.js';
 import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const ok = { status: 0, stdout: '', stderr: '' };
@@ -112,6 +113,42 @@ describe('步驟 4b：內附 ripgrep 在 PATH 上沒有 rg 的環境裡跑得起
     ).toEqual([expect.stringContaining('@vscode/ripgrep')]);
     expect(bundledRgProblems({ ...ok, stdout: 'FAIL spawn ENOENT' })).toHaveLength(1);
     expect(bundledRgProblems({ status: null, stdout: '', stderr: '' })).toHaveLength(1);
+  });
+});
+
+describe('步驟 4e：產物裡的沙箱 spawner 起得來、經它起得了主機的 git', () => {
+  const ready = { type: 'ready', filterInsns: 77, landlockAbi: 6 } as const;
+  const started = { type: 'started', id: 1, pid: 16, partial: false } as const;
+  const exited = { type: 'exited', id: 1, code: 0, signal: 0 } as const;
+  const ok = { events: [ready, started, exited], stdout: 'git version 2.39.5\n', stderr: '' };
+
+  it('Ready、Started、Exited 0、印出版本：沒有 problem', () => {
+    expect(spawnerProbeProblems(ok)).toEqual([]);
+  });
+
+  it('主機沒有 Landlock：直說驗不到，不報成 git 沒起成', () => {
+    expect(spawnerProbeProblems({ ...ok, events: [{ ...ready, landlockAbi: 0 }] })).toEqual([
+      expect.stringContaining('沒有 Landlock'),
+    ]);
+  });
+
+  it.each([
+    ['中途出錯', { ...ok, error: '等第一筆事件逾時' }],
+    ['spawner 起不來', { ...ok, events: [{ type: 'unavailable', errno: 22, detail: 'seccomp' }] }],
+    ['沒有任何事件', { ...ok, events: [] }],
+    [
+      'git 沒起成',
+      {
+        ...ok,
+        events: [ready, { type: 'failed', id: 1, kind: 'exec', errno: 13, detail: 'exec' }],
+      },
+    ],
+    ['git 沒正常結束', { ...ok, events: [ready, started, { ...exited, code: 128 }] }],
+    ['只有 Started', { ...ok, events: [ready, started] }],
+    ['結局是別的 id 的', { ...ok, events: [ready, { ...started, id: 2 }, { ...exited, id: 2 }] }],
+    ['stdout 不是版本', { ...ok, stdout: '' }],
+  ] as const)('%s：有一條 problem', (_, outcome) => {
+    expect(spawnerProbeProblems(outcome)).toHaveLength(1);
   });
 });
 
