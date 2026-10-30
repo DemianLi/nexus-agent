@@ -1,12 +1,12 @@
 {
   "writer": {
-    "rev": "today",
+    "rev": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
     "commit": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
     "formatVersion": 49,
     "released": false
   },
   "computedByToday": {
-    "head": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "head": "343b90a3d4363281077b910227054d4c1f150b6c",
     "dirty": false
   },
   "sessions": {
@@ -39,7 +39,7 @@
         "turn/end"
       ],
       "replay": {
-        "computedBy": "today",
+        "computedBy": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
         "kind": "replayed",
         "roles": [
           "human",
