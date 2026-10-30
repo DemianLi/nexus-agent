@@ -1,11 +1,13 @@
 //! Landlock：每個子行程在 exec 之前各自上一份，讀根與寫根由 Node 在每次要求裡帶來。
 //!
-//! 要的 ABI 上限是 5；核心支援的版本比 5 舊就是 partial（照跑、由 Node 印通知），核心根本不支援就是 none
-//! （spawner 不啟動，回 `SANDBOX_UNAVAILABLE`）。ABI 4 起也管 TCP：沒有任何 TCP 規則，等於 bind、connect 都不准。
+//! 要的 ABI 上限是 6；核心支援的版本比 6 舊就是 partial（照跑，`Started` 帶 `partial`），核心根本不支援就是 none
+//! （只有全權模式起得來，其餘回 `SandboxUnavailable`）。ABI 4 起也管 TCP：沒有任何 TCP 規則，等於 bind、connect 都不准。
+//! ABI 6 起也管訊號：上了 Landlock 的子行程只能對同一個 Landlock domain 裡的行程（自己與自己的後代）送訊號，送不到 spawner、serve
+//! 與同一個使用者的其他行程。
 
 use landlock::{
     Access, AccessFs, AccessNet, BitFlags, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset, RulesetAttr,
-    RulesetCreatedAttr, ABI,
+    RulesetCreatedAttr, Scope, ABI,
 };
 use std::ffi::OsStr;
 use std::os::fd::{AsFd, AsRawFd};
@@ -28,7 +30,7 @@ fn rule(path: &[u8], access: BitFlags<AccessFs>, abi: ABI) -> Result<PathBeneath
 }
 
 /// 要的 ABI 上限。
-pub const WANTED_ABI: i32 = 5;
+pub const WANTED_ABI: i32 = 6;
 
 /// 核心支援的 Landlock ABI 版本；不支援（`ENOSYS`、`EOPNOTSUPP`）就是 0。
 pub fn kernel_abi() -> i32 {
@@ -56,15 +58,17 @@ pub fn effective_abi(kernel: i32, test_cap: Option<i32>) -> i32 {
 
 fn abi_of(v: i32) -> ABI {
     match v {
+        ..=0 => unreachable!("Landlock ABI {v}：none 不上 Landlock"),
         1 => ABI::V1,
         2 => ABI::V2,
         3 => ABI::V3,
         4 => ABI::V4,
-        _ => ABI::V5,
+        5 => ABI::V5,
+        _ => ABI::V6,
     }
 }
 
-/// 對目前的行程上 Landlock。`abi` 必須 ≥ 1（none 的情形 spawner 根本不會啟動）。
+/// 對目前的行程上 Landlock。`abi` 必須 ≥ 1。
 ///
 /// 有任何一個授權路徑打不開就整個失敗：不默默縮小授權。
 pub fn restrict_self(abi: i32, readable: &[Vec<u8>], writable: &[Vec<u8>]) -> Result<(), String> {
@@ -75,6 +79,9 @@ pub fn restrict_self(abi: i32, readable: &[Vec<u8>], writable: &[Vec<u8>]) -> Re
         .map_err(|e| e.to_string())?;
     if abi >= ABI::V4 {
         ruleset = ruleset.handle_access(AccessNet::from_all(abi)).map_err(|e| e.to_string())?;
+    }
+    if abi >= ABI::V6 {
+        ruleset = ruleset.scope(Scope::Signal).map_err(|e| e.to_string())?;
     }
     let mut rules = Vec::new();
     for path in readable {
@@ -97,8 +104,8 @@ mod tests {
 
     #[test]
     fn effective_abi_takes_the_smallest() {
-        assert_eq!(effective_abi(6, None), 5);
-        assert_eq!(effective_abi(4, None), 4);
+        assert_eq!(effective_abi(7, None), 6);
+        assert_eq!(effective_abi(5, None), 5);
         assert_eq!(effective_abi(0, None), 0);
         assert_eq!(effective_abi(6, Some(3)), 3);
         assert_eq!(effective_abi(2, Some(3)), 2);
