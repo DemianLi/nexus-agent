@@ -13,6 +13,7 @@ import {
   REPEAT_REMINDER_MARKER,
   SessionLog,
   toLoggedMessage,
+  toolCallIds,
 } from '@nexus/core';
 import { ProjectionDetailError } from '@nexus/core';
 import type { ApprovalOutcome, SessionEvent } from '@nexus/core';
@@ -1222,5 +1223,131 @@ describe('按需拉一個邏輯輪（#1083）', () => {
 
   it('單元註冊的 detail 就是這個函式', () => {
     expect(trajectoryUnit.detail).toBe(trajectoryTurnDetail);
+  });
+});
+
+describe('歸屬表分塊', () => {
+  /** 一則回覆帶 `ids[n]` 那些工具呼叫，輪流記；`attributed` 回 false 的那幾則歸不到（`null`）。 */
+  function logOf(
+    ids: readonly (readonly string[])[],
+    attributed: (n: number) => boolean = () => true,
+  ): SessionLog {
+    const log = new SessionLog('owners');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    ids.forEach((batch, n) => {
+      const start = log.append('model/start', {});
+      log.append('assistant/message', reply(attributed(n) ? start.seq : undefined, '', ...batch));
+    });
+    return log;
+  }
+  const serial = (count: number) => Array.from({ length: count }, (_, n) => [`id_${n}`]);
+  const stateOf = (events: readonly SessionEvent[]) =>
+    events.reduce((state, event) => applyTrajectory(state, event), initialTrajectory());
+  const entriesOf = (state: ReturnType<typeof initialTrajectory>) =>
+    state.owners.chunks.flatMap((chunk) => Object.entries(chunk));
+
+  /** 分塊之前的演算法：整張表一份，先刪再放、超過 2000 從最舊的丟。比對的對照組。 */
+  function referenceOwners(events: readonly SessionEvent[]): [string, number | null][] {
+    let owners: Record<string, number | null> = {};
+    for (const event of events) {
+      if (event.type !== 'assistant/message') continue;
+      const ids = toolCallIds(event as SessionEvent<'assistant/message'>);
+      const owner = event.data.modelCall ?? null;
+      const next = { ...owners };
+      for (const id of ids) {
+        delete next[`#${id}`];
+        next[`#${id}`] = owner;
+      }
+      const keys = Object.keys(next);
+      for (let drop = 0; drop < keys.length - 2000; drop += 1) delete next[keys[drop]!];
+      owners = next;
+    }
+    return Object.entries(owners);
+  }
+
+  it.each([
+    ['全新的 id', 0],
+    ['每三則重用一個舊 id', 3],
+    ['同一則裡重複、超過一塊的批次', 7],
+  ])('表的內容與淘汰順序跟整張表的算法逐筆相同：%s', (_name, reuse) => {
+    const ids = Array.from({ length: 5000 }, (_, n) => {
+      if (reuse === 0) return [`id_${n}`];
+      if (reuse === 3) return n % 3 === 0 ? [`id_${(n * 7) % 2500}`] : [`id_${n}`];
+      return n % 500 === 0
+        ? Array.from({ length: 300 }, (_x, at) => `b_${n}_${at % 200}`)
+        : [`id_${n % 2600}`, `id_${(n * 3) % 2600}`];
+    });
+    const log = logOf(ids, (n) => n % 5 !== 0);
+    const state = stateOf(log.events);
+    const expected = referenceOwners(log.events);
+    expect(entriesOf(state)).toEqual(expected);
+    expect(state.owners.size).toBe(expected.length);
+  });
+
+  it('上限剛好 2000：第 2001 筆把最舊的那一筆擠掉，一筆都不多留', () => {
+    const exact = entriesOf(stateOf(logOf(serial(2000)).events));
+    expect(exact).toHaveLength(2000);
+    const over = entriesOf(stateOf(logOf(serial(2001)).events));
+    expect(over).toHaveLength(2000);
+    expect(over[0]![0]).toBe('#id_1');
+  });
+
+  it('記一筆只動幾塊：其餘的塊在前後兩份狀態之間是同一個參照', () => {
+    const log = logOf(serial(5000));
+    const before = stateOf(log.events);
+    expect(before.owners.chunks.length).toBeLessThanOrEqual(17);
+    for (const chunk of before.owners.chunks) {
+      expect(Object.keys(chunk).length).toBeLessThanOrEqual(128);
+    }
+    const start = log.append('model/start', {});
+    const message = log.append('assistant/message', reply(start.seq, '', 'id_new'));
+    const after = applyTrajectory(applyTrajectory(before, start), message);
+    const shared = after.owners.chunks.filter((chunk) => before.owners.chunks.includes(chunk));
+    expect(shared.length).toBeGreaterThanOrEqual(before.owners.chunks.length - 2);
+  });
+
+  it('不改傳進來的狀態：同一份舊狀態分岔，舊的一字不變、兩邊各記各的', () => {
+    const log = logOf(serial(5000));
+    const base = stateOf(log.events);
+    const copy = JSON.stringify(base);
+    const start = log.append('model/start', {});
+    // 這三則分別踩到：新 id、舊 id 重新排到最新、把最舊的擠掉。
+    const fresh = reply(start.seq, '', 'id_new');
+    const again = reply(start.seq, '', 'id_4000');
+    const left = applyTrajectory(
+      applyTrajectory(base, start),
+      log.append('assistant/message', fresh),
+    );
+    const right = applyTrajectory(
+      applyTrajectory(base, start),
+      log.append('assistant/message', again),
+    );
+    expect(JSON.stringify(base)).toBe(copy);
+    expect(entriesOf(left).at(-1)![0]).toBe('#id_new');
+    expect(entriesOf(right).at(-1)![0]).toBe('#id_4000');
+    expect(entriesOf(right).some(([key]) => key === '#id_new')).toBe(false);
+  });
+
+  it('`__proto__` 這種 id 照常歸屬', () => {
+    const log = logOf([['__proto__']]);
+    log.append('tool/call', call('__proto__'));
+    const turn = stateOf(log.events).turns.at(-1)!;
+    expect(turn.calls[0]!.tools.map((tool) => tool.callId)).toEqual(['__proto__']);
+  });
+
+  it('seed、fold、逐顆 push 的值相同，過了上限的遲到事件也一樣', () => {
+    const log = logOf(serial(5000));
+    // id_2000 已被擠掉、id_4990 還在表上。
+    log.append('tool/call', call('id_2000'));
+    log.append('tool/call', call('id_4990'));
+    const fold = createProjectionFold([trajectoryUnit]);
+    const pushed = fold.session();
+    for (const event of log.events) pushed.push(event);
+    const seeded = fold.session(log.events.slice(0, -1));
+    seeded.push(log.events.at(-1)!);
+    const folded = fold.fold(log.events);
+    expect(pushed.current()).toEqual(folded);
+    expect(seeded.current()).toEqual(folded);
+    expect(fold.session(log.events).current()).toEqual(folded);
   });
 });
