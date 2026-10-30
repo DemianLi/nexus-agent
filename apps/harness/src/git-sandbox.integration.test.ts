@@ -16,7 +16,7 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   diffTrees,
@@ -39,7 +39,6 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 git', () => {
     log: () => undefined,
   });
   const home = { value: '' };
-  const previousHome = process.env.HOME;
   let base: string;
   let repo: string;
   let scratch: string;
@@ -63,17 +62,10 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 git', () => {
     return { workspace, signal };
   };
 
-  beforeAll(() => {
-    // 全域設定要從 serve 的環境進 git：`scrubbedParentEnv` 讀的是這個行程的環境。
-    home.value = realpathSync(mkdtempSync(join(tmpdir(), 'nexus-git-home-')));
-    process.env.HOME = home.value;
-  });
-  afterAll(() => {
-    process.env.HOME = previousHome;
-    rmSync(home.value, { recursive: true, force: true });
-  });
   beforeEach(() => {
     forgetGitConfigAnswers();
+    // 全域設定要從 serve 的環境進 git：`test-home.setup.ts` 每條測試換一個 HOME，就寫在那裡。
+    home.value = realpathSync(process.env.HOME ?? '');
     base = realpathSync(mkdtempSync(join(tmpdir(), 'nexus-git-it-')));
     repo = join(base, 'repo');
     scratch = join(base, 'scratch');
@@ -131,10 +123,11 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 git', () => {
     expect(changed.map((entry) => entry.path)).toEqual(['a.txt']);
     const listed = await git.run(['ls-tree', '-r', '--name-only', second], {
       cwd: repo,
+      writable: [scratch],
       env: workspace.env,
       signal,
     });
-    expect(listed.stdout).not.toContain('secret.env');
+    expect(listed.stdout.trim().split('\n')).toEqual(['a.txt']);
   });
 
   it('repo 帶進來的指令也在沙箱裡：讀不到 home 的秘密檔，寫不進工作區', async () => {
