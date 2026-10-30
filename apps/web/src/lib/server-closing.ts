@@ -2,8 +2,7 @@
  * serve 正在收尾、不收新的一輪（`server_closing`，[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）時，
  * 給使用者看的那一句（[#1995](https://github.com/DemianLi/nexus-agent/issues/1995)）。
  *
- * **不顯示 server 的 message**：那句寫的是「這句話」，命令與對子代理說話也會收到這個碼。這句只寫一份，`run.start`、`slash.run`、
- * `subagent.send` 三條路共用。
+ * **不顯示 server 的 message**：那句給管理者與接 wire 的人看。這句只寫一份，`run.start`、`slash.run`、`subagent.send` 三條路共用。
  *
  * @module
  */
