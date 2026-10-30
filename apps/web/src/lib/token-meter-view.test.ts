@@ -1,4 +1,4 @@
-import type { TokenMeterSpan } from '@nexus/wire';
+import type { TokenMeterSpan, TokenMeterTurn } from '@nexus/wire';
 import {
   TOKEN_METER_CALIBER,
   TOKEN_METER_PROJECTION,
@@ -128,6 +128,49 @@ describe('spanRows：每一格都帶口徑表的鍵', () => {
     expect(byField.unknownSteps).toBe('1 次');
   });
 
+  describe('逐輪讀 tokensProven（#1571 N1201）', () => {
+    const shown = (overrides: Partial<TokenMeterTurn>) => {
+      const turn = meterTurn(0, { inputTokens: 100, outputTokens: 10, ...overrides });
+      return Object.fromEntries(spanRows(turn, turn).map(([f, , v]) => [f, v]));
+    };
+    const open = { end: undefined } as const;
+
+    it.each([
+      ['true', { tokensProven: true }, '準數', '100 token'],
+      ['false', { tokensProven: false }, '下限', '100 token（下限）'],
+      ['缺席（還沒收尾）', open, '還沒定案', '100 token'],
+      ['缺席（還沒收尾）且有沒報用量的呼叫', { ...open, unknownSteps: 1 }, '還沒定案', '100 token'],
+    ])('%s', (_name, overrides, proof, input) => {
+      const row = shown(overrides);
+      expect(row.tokensProven).toBe(proof);
+      expect(row.inputTokens).toBe(input);
+    });
+
+    it('false 不靠 unknownSteps：收尾時有開著的呼叫也是下限', () => {
+      expect(shown({ tokensProven: false, unknownSteps: 0 }).outputTokens).toBe('10 token（下限）');
+    });
+
+    it.each([
+      ['有沒報用量的呼叫', 1, '100 token（下限）'],
+      ['全部都報了', 0, '100 token'],
+    ])(
+      '舊 server（收尾了但沒有這一格）：%s，照 unknownSteps 判，不畫這一格',
+      (_n, unknownSteps, input) => {
+        const row = shown({ unknownSteps });
+        expect(row.tokensProven).toBeUndefined();
+        expect(row.inputTokens).toBe(input);
+      },
+    );
+
+    it('會話總計不看 tokensProven，也沒有那一格', () => {
+      const rows = spanRows(span({ steps: 1, unknownSteps: 1, inputTokens: 100 }));
+      expect(rows.some(([f]) => f === 'tokensProven')).toBe(false);
+      expect(Object.fromEntries(rows.map(([f, , v]) => [f, v])).inputTokens).toBe(
+        '100 token（下限）',
+      );
+    });
+  });
+
   it('沒有沒報用量的呼叫：不標下限', () => {
     const rows = spanRows(span({ steps: 1, inputTokens: 100 }));
     expect(rows.find(([f]) => f === 'inputTokens')?.[2]).toBe('100 token');
@@ -237,6 +280,36 @@ describe('spanRows：四桶（#724）', () => {
     });
   const byField = (rows: ReturnType<typeof spanRows>) =>
     Object.fromEntries(rows.map(([f, , v]) => [f, v]));
+
+  describe('快取桶缺席時一輪的合計（#1978）', () => {
+    const turnRows = (over: Partial<TokenMeterTurn>) => {
+      const turn = { ...meterTurn(0), ...buckets({ cacheWriteTokens: undefined }), ...over };
+      return byField(spanRows(turn, turn));
+    };
+    const proven = { tokensProven: true } as const;
+
+    it('準數＋缺一桶：合計不標下限，缺的那格寫沒記', () => {
+      const rows = turnRows(proven);
+      expect(rows.tokensProven).toBe('準數');
+      expect(rows.tokensTotalBuckets).toBe('950 token');
+      expect(rows.cacheWriteTokens).toBe('沒記');
+    });
+
+    it('準數＋缺兩桶：合計不標下限，兩格都寫沒記', () => {
+      const rows = turnRows({ ...proven, cacheReadTokens: undefined });
+      expect(rows.tokensTotalBuckets).toBe('250 token');
+      expect(rows.cacheReadTokens).toBe('沒記');
+      expect(rows.cacheWriteTokens).toBe('沒記');
+    });
+
+    it.each([
+      ['還沒定案', { end: undefined }, '950 token（下限）'],
+      ['下限', { tokensProven: false }, '950 token（下限）'],
+      ['舊 server', {}, '950 token（下限）'],
+    ])('%s＋缺一桶：合計仍標下限', (_name, over, total) => {
+      expect(turnRows(over).tokensTotalBuckets).toBe(total);
+    });
+  });
 
   it('有未快取那一格：輸入只算未快取，快取讀、快取寫另列，合計四項相加，帶命中率', () => {
     const rows = spanRows(buckets());
