@@ -40,7 +40,7 @@
 - **次要靠顏色，不靠字重；次要色本身要過 4.5:1**。說明、附註、時間一律 `text-muted-foreground`，不要把字變細（細字在中文與小字級下先糊掉）。`font-thin`／`font-extralight`／`font-light` 會被 `design-system.test.ts` 擋下。次要色的對比度由 `tokens-contrast.test.ts` 守著——次要色看不清楚，就等於沒寫。
 - **一個面一顆實心按鈕**。一張卡、一個面板、一列操作裡，只有主動作用實心（`Button` 預設 variant）；其他用 `outline`、`ghost`、`secondary`。按壓縮放也只給實心主按鈕（規格 §7）。條件渲染會讓同一個檔裡兩顆實心按鈕不同時出現，靜態量不準，**不寫測試，靠 review**。
 
-陰影也照同一個方向：亮色每一層投影的透明度有上限，上限是 solid-glass 現在的值（浮起來的那一層 `--glass-shade` 0.28、貼地的 `--glass-contact` 0.06……全表在 `src/styles/shadow-alpha.test.ts`），只准一樣或更淡，不要把一層調濃（[#1468](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q8 外觀照 solid-glass，[#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。`guard/guard.test.ts` 在真的 Chrome 裡量元件的每層投影。暗底上投影要更濃才看得到，不套上限。
+陰影也照同一個方向：亮色每一層投影的透明度有上限，上限是 solid-glass 現在的值（浮起來的那一層 `--glass-shade` 0.28、貼地的 `--glass-contact` 0.06……全表在 `src/styles/shadow-alpha.test.ts`），只准一樣或更淡，不要把一層調濃（[#1468](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q8 外觀照 solid-glass，[#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。`guard/*.test.ts` 在真的 Chrome 裡量元件的每層投影。暗底上投影要更濃才看得到，不套上限。
 
 ## 字級的主次
 

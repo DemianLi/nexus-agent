@@ -1,5 +1,5 @@
 /**
- * 瀏覽器護欄的測試頁（#1512）：把關鍵元件原樣畫出來，`guard.test.ts` 用真的 Chrome 量它們在**出貨 CSS** 下的計算值。
+ * 瀏覽器護欄的測試頁（#1512）：把關鍵元件原樣畫出來，`*.test.ts` 用真的 Chrome 量它們在**出貨 CSS** 下的計算值。
  *
  * - 本頁**不寫任何 class**，版面只用 inline style：寫了 class 也不在出貨的 CSS 裡，量到的會是「沒有樣式」（`src/guard-page.test.ts` 擋）。
  * - 要量的元素掛 `data-guard-*`：
@@ -31,7 +31,7 @@
  *   - `data-guard-height`：下拉選單的選項，量畫出來的高度（觸控高度：1024 以下 44px、以上 32px，#1583 本地修改第 25 條）。
  *   - `data-guard-shown`：側欄列的「⋯」，量 `opacity`（選單開著時要看得見：Trigger 開著掛 `data-popup-open`，#1583）。
  *   - `data-guard-checks`：command 勾選的那一列，量它看得見的勾有幾顆、報讀名稱是什麼（vendor 附的勾由覆寫檔藏掉，#1583 本地修改第 27 條）。
- *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `guard.test.ts` 開頁後補上，見 `OVERLAY_MARKS`。
+ *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `*.test.ts` 開頁後補上，見 `OVERLAY_MARKS`。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  * - `?overlay=<名字>` 換成只畫一個開著的 modal 浮層（#1583）：modal 會把頁面其他部分設成 inert，跟主頁的焦點量測放不到一起。
@@ -48,13 +48,13 @@
  * - `?overlay=questionnaire` 畫產品的提問面板（#1638 PR C），量選項的焦點外框（offset、不帶 ring）與字的對比。
  * - `?overlay=tool-steps` 畫 SG 的 tool-steps（nexus 的包裝層，#1682 PR A）：一段展開的群組（執行中、完成、失敗各一列，完成與失敗的列展開）
  *   與一列單獨放在頁面上、展開的列。量執行中不閃、結果框聚焦的外框、1024 以下 44px、減少動態時箭頭不轉場、疊在清單裡的結果框不 blur
- *   （README 本地修改第 61–65 條）。兩塊各包一層 `data-guard-tool`（`group`、`standalone`）給 `guard.test.ts` 找。
+ *   （README 本地修改第 61–65 條）。兩塊各包一層 `data-guard-tool`（`group`、`standalone`）給 `*.test.ts` 找。
  * - `?overlay=tool-cards` 畫產品的工具卡與工具段（#1682 PR B）：一段打開的工具段（兩張完成的卡，第一張展開）、單獨的卡（執行中、
  *   等你回答、完成展開、失敗展開、停止的提問、子代理歸屬、背景子代理、撞到輸出上限）。量三種底上的字（頁面、清單的 `--panel`、結果框）、
  *   Badge、背景子代理的狀態字、錯誤框與撞到上限那段說明的紅字，列、群組、結果框的焦點；`data-guard-cards` 包整頁。
  * - `?overlay=stage-surfaces` 畫其餘畫在 stage 上的面（#1689）：讀檔、搜尋、交付、待辦四張展開的工具卡，撞到輸出上限、帶半段輸出的
  *   子代理卡，交付清單，回覆裡的程式碼區塊（`.md-code`），以及經過換手層、MCP 反問、帶「拒絕」的提問面板（釘在底部的那一列）。
- *   `guard.test.ts` 不量這一頁：它讓 stage 的每一種消費者都畫得出來，給換底色時逐一實量面、字與 sticky 的差，以及前後截圖。
+ *   `*.test.ts` 不量這一頁：它讓 stage 的每一種消費者都畫得出來，給換底色時逐一實量面、字與 sticky 的差，以及前後截圖。
  * - `?overlay=reasoning` 畫產品的推理列（SG 的 `Reasoning`，#1683）：講完的一列（內文有粗體、清單、行內 code、連結）、還在想的一列
  *   （摘要很長，量 375 寬往左裁）、夾在一段打開的工具段裡的一列（`StepList` 的 `--panel` 上）。量字的對比（頁面與 `--panel` 兩種底、
  *   「思考中」的漸層與減少動態時停住的那一格）、焦點、AX 樹、箭頭、44px、shimmer、`white-space`；三塊各包一層 `data-guard-reasoning`
@@ -2081,7 +2081,7 @@ function TranscriptRefsPage() {
  * - `fits`：一張檔案卡、寬度放得下，不會溢出（量左右淡出不出現）。
  * - `overflows`：五張、寬度放不下（量頭尾的淡出），涵蓋圖的縮圖、可移除的檔案、上傳中（有進度與不確定長度兩種，標題 shimmer）、上傳失敗。
  * - `sent`：已送出的檔案卡（沒有按鈕）。
- * 元件內部的按鈕掛不了屬性，由 `guard.test.ts` 開頁後補標記。
+ * 元件內部的按鈕掛不了屬性，由 `*.test.ts` 開頁後補標記。
  */
 const PIXEL =
   'data:image/svg+xml,' +
@@ -2195,7 +2195,7 @@ function OverlayPage({ name }: { name: string }) {
       return (
         <SidebarProvider>
           <OpenMobileSidebar />
-          {/* 手機側欄把 props 交給 Sheet 的 Root（沒有 DOM），屬性掛不上抽屜：由 `guard.test.ts` 的 `OVERLAY_MARKS` 補。 */}
+          {/* 手機側欄把 props 交給 Sheet 的 Root（沒有 DOM），屬性掛不上抽屜：由 `*.test.ts` 的 `OVERLAY_MARKS` 補。 */}
           <Sidebar>手機側欄</Sidebar>
         </SidebarProvider>
       );
@@ -2347,7 +2347,7 @@ function OverlayPage({ name }: { name: string }) {
   }
 }
 
-/** 關著的選單：鍵盤 Enter 打開、選項上按 Enter 觸發 `onClick`，選了什麼寫在頁面上給 `guard.test.ts` 讀（#1583 驗收 D）。 */
+/** 關著的選單：鍵盤 Enter 打開、選項上按 Enter 觸發 `onClick`，選了什麼寫在頁面上給 `*.test.ts` 讀（#1583 驗收 D）。 */
 function KeyboardMenu() {
   const [picked, setPicked] = useState('');
   return (
@@ -2406,7 +2406,7 @@ function OpenCommand() {
  * - `locked`：權限鎖住（一輪在跑；`aria-disabled`，第 39 條）。
  * - `pick-open`：模型的清單開著（量選項的字與觸控高度）。
  * - `tones`：三個用量環，50%、70%、90%（量三個色階，第 37 條）。
- * - `dormant`：用量環有一道不會觸發的門檻（`guard.test.ts` 點開它量明細的字）。
+ * - `dormant`：用量環有一道不會觸發的門檻（`*.test.ts` 點開它量明細的字）。
  */
 function ComposerPage({ state }: { state: string }) {
   const running = state.startsWith('running');
