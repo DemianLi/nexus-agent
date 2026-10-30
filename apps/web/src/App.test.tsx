@@ -15,6 +15,7 @@ import {
   GOAL,
   GOAL_ACTIVATION,
   PLAN_MODE,
+  SERVER_CLOSING,
   THREAD_AT_CAPACITY,
   THREAD_HISTORY_TOO_DEEP,
   THREAD_IS_SUBAGENT,
@@ -31,6 +32,7 @@ import { connectionStall, HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/lib/
 import { STOPPED_QUESTION_TEXT } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
+import { SERVER_CLOSING_TEXT } from '@/lib/server-closing';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
@@ -1070,6 +1072,28 @@ describe('斜線命令', () => {
   });
 });
 
+describe('slash.run 遇到 serve 收尾（#1995）', () => {
+  it('狀態列畫 web 的那一句，不接 server 的原文；草稿留著', async () => {
+    setSeq(0);
+    const { client } = fakeClient([], {
+      commands: [{ name: 'plan', description: '進出計劃模式。', input: { hint: '[off]' } }],
+      run: () => ({ kind: 'rejected', code: SERVER_CLOSING, message: 'serve 給的原文' }),
+    });
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '/plan 想一下' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain(SERVER_CLOSING_TEXT),
+    );
+    expect(screen.getByRole('status').textContent).not.toContain('serve 給的原文');
+    expect(input.value).toBe('/plan 想一下');
+  });
+});
+
 describe('開頭的字是命令才走 slash.run，其餘送給模型（#1929，#1574 Q2 (a)）', () => {
   const planCommand: SlashDescriptor = { name: 'plan', description: '進出計劃模式。' };
   const deploy: SkillEntry = {
@@ -2005,6 +2029,27 @@ describe('上行被拒絕的時候', () => {
     const card = await toastWith(THREAD_AT_CAPACITY_TEXT);
     expect(card.textContent).not.toContain('#1478 toast');
     expect(input.value).toBe('滿了的那一句');
+  });
+
+  it('serve 收尾中（#1995）：草稿放回去，說明換成 web 的那一句，不接 server 的原文', async () => {
+    setSeq(0);
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const runStart = async (): Promise<UplinkResult> => ({
+      type: 'error',
+      id: 1,
+      error: SERVER_CLOSING,
+      message: 'serve 給的原文（#1995 toast）',
+    });
+    render(<App client={{ ...fake.client, runStart }} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '收尾中的那一句' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    const card = await toastWith(SERVER_CLOSING_TEXT);
+    expect(card.textContent).not.toContain('#1995 toast');
+    expect(input.value).toBe('收尾中的那一句');
   });
 
   it('歷史太深（#1753）：草稿放回去，說明換成給使用者看的那一句，不接 server 的原文', async () => {
