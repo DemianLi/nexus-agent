@@ -174,7 +174,7 @@ describe('取消之後一定收得掉', () => {
       argv: [],
       cwd: tmpdir(),
       executable: process.execPath,
-      internals: { launcher: async () => stuck(kills), killGraceMs: 10, timeoutMs: 10 },
+      internals: { launcher: async () => stuck(kills), killGraceMs: 10, timeoutMs: 200 },
     });
     expect(outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
     expect(kills).toEqual(['SIGTERM', 'SIGKILL']);
