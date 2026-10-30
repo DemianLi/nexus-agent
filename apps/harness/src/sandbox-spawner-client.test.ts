@@ -101,6 +101,9 @@ describe('SpawnerSupervisor', () => {
     expect(log.at(-1)).toContain('停止重啟');
     expect(await supervisor.launch(REQUEST)).toBe(PROCESS);
     expect(generations).toHaveLength(5);
+    generations.at(-1)?.close();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(generations).toHaveLength(6);
   });
 
   it('起不來的一代回 sandbox-unavailable，不是丟例外', async () => {

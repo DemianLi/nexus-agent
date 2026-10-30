@@ -16,6 +16,7 @@ import {
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -29,6 +30,7 @@ import type { ToolLauncher, ToolRequest } from './tool-process.js';
 
 const BINARY = process.env.NEXUS_SPAWNER_BIN;
 const NEEDLE = 'needle';
+const HARNESS_DIR = fileURLToPath(new URL('..', import.meta.url));
 
 describe.skipIf(BINARY === undefined)('真的 spawner 跑 rg', () => {
   const logs: string[] = [];
@@ -156,6 +158,33 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 rg', () => {
       }
     },
   );
+
+  it('沒有別的東西撐著事件迴圈：搜尋等得到結局，搜完行程自己結束', async () => {
+    put(join(ws, 'a.txt'));
+    const driver = join(HARNESS_DIR, `spawner-driver-${String(process.pid)}.mts`);
+    writeFileSync(
+      driver,
+      `import { ContainedFilesystemBackend } from './src/contained-backend.ts';
+import { SpawnerSupervisor } from './src/sandbox-spawner-client.ts';
+const { launch } = new SpawnerSupervisor({ binary: process.argv[2], log: console.error });
+const backend = new ContainedFilesystemBackend({
+  rootDir: process.argv[3],
+  mode: 'workspace-write',
+  ripgrep: { launcher: launch },
+});
+console.log(JSON.stringify(await backend.grep('needle', '/')));
+`,
+    );
+    try {
+      const out = execFileSync(process.execPath, ['--import', 'tsx', driver, BINARY ?? '', ws], {
+        cwd: HARNESS_DIR,
+        timeout: 15_000,
+      }).toString();
+      expect(JSON.parse(out)).toMatchObject({ matches: [{ path: '/a.txt' }] });
+    } finally {
+      rmSync(driver, { force: true });
+    }
+  }, 20_000);
 
   it('執行檔不在：說 rg 找不到', async () => {
     const target = new ContainedFilesystemBackend({

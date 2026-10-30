@@ -87,6 +87,13 @@ describe('backend 的搜尋走產品的 launcher', () => {
       expect(result.error).toContain('SANDBOX_UNAVAILABLE');
       expect(launched.at(-1)).toMatchObject({ mode: 'read-only', writable: [] });
       expect(launched.at(-1)?.readable).toContain(root);
+      const full = new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: 'danger-full-access',
+        ripgrep: { executable: process.execPath },
+      });
+      await full.glob('*', '/');
+      expect(launched.at(-1)).toMatchObject({ mode: 'danger-full-access', readable: [] });
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
