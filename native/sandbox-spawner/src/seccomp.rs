@@ -193,6 +193,11 @@ mod tests {
     }
 
     #[test]
+    fn pidfd_open_is_allowed() {
+        assert_eq!(run(libc::SYS_pidfd_open, 0), ALLOW);
+    }
+
+    #[test]
     fn io_uring_and_namespaces_get_eperm() {
         for nr in [libc::SYS_io_uring_enter, libc::SYS_io_uring_register, libc::SYS_unshare, libc::SYS_setns] {
             assert_eq!(run(nr, 0), errno(libc::EPERM), "nr {nr}");

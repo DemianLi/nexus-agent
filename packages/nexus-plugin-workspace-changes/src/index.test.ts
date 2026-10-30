@@ -39,12 +39,14 @@ import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
 
 import {
   createWorkspaceChanges,
+  directGitStarter,
+  GIT_STARTER_SERVICE,
   WORKSPACE_CHANGES_LIMITS,
   WORKSPACE_CHANGES_SERVICE,
   workspaceChangesConfigSchema,
   workspaceChangesPlugin,
 } from './index.js';
-import type { WorkspaceChanges, WorkspaceChangesLimits } from './index.js';
+import type { GitStarter, WorkspaceChanges, WorkspaceChangesLimits } from './index.js';
 
 /**
  * 把一個條目掛上一個 registry，回它提供的服務。
@@ -57,12 +59,14 @@ function applyWorkspaceChangesTo(
   entry: PluginEntry,
   root: string,
   id = 'workspace-changes#0',
+  gitStarter?: GitStarter,
 ): WorkspaceChanges {
   // 根走 host 服務（#669），同產品組裝：組裝點在最前面交 `workspaceRoot`，這一列在 `apply` 當下讀。
   // 同一個 registry 掛第二次時服務已經在了，不重複提供（重複提供那一條測的是 `workspaceChanges` 服務）。
   if (registry.services.get(WORKSPACE_ROOT_SERVICE) === undefined) {
     const host = registry.enter({ id: 'host-services#0', name: 'host-services' });
     registry.services.provide(WORKSPACE_ROOT_SERVICE, root);
+    registry.services.provide(GIT_STARTER_SERVICE, gitStarter ?? directGitStarter);
     host();
   }
   const exit = registry.enter({ id, name: entry.plugin.name });
@@ -121,6 +125,7 @@ async function mount(
     /** 事先準備好的工作區根（例如一個 repo）；給了就不寫 `files`。 */
     readonly root?: string;
     readonly git?: string | null;
+    readonly gitStarter?: GitStarter;
   } = {},
 ): Promise<Mounted> {
   const root = options.root ?? (await directory('nexus-wc-root-'));
@@ -137,7 +142,7 @@ async function mount(
     ...(options.git !== undefined && { git: options.git }),
   });
   const registry = createRegistry();
-  const service = applyWorkspaceChangesTo(registry, wcEntry, root);
+  const service = applyWorkspaceChangesTo(registry, wcEntry, root, undefined, options.gitStarter);
   const sessions = new SessionRegistry('wc');
   registry.sessions.bind(sessions);
   const log = sessions.root;
@@ -885,6 +890,63 @@ describe('git 快照（#461）', () => {
     // 沒有快照就沒有私有物件庫。
     const [scratch] = await readdir(m.tempRoot);
     expect(await readdir(join(m.tempRoot, scratch!))).toEqual(['captures']);
+  });
+
+  describe('沙箱不可用（#1946）', () => {
+    /** 這一支 starter 的開關：`down` 時回 `sandbox-unavailable`，其餘直接 spawn。 */
+    const switchable = (): { starter: GitStarter; down: boolean } => {
+      const state: { starter: GitStarter; down: boolean } = {
+        down: false,
+        starter: (start) =>
+          state.down ? Promise.resolve('sandbox-unavailable') : directGitStarter(start),
+      };
+      return state;
+    };
+    const turn = async (m: Mounted): Promise<void> => {
+      m.log.append('turn/start', { kind: 'message', text: '改。' });
+      await m.settle();
+    };
+
+    it('基準快照失敗、輪末恢復：這一輪不記，不出假 diff；不 warn；下一輪恢復記錄', async () => {
+      const root = await repository({ 'a.md': 'a\n' });
+      const gate = switchable();
+      const m = await mount({}, {}, { root, gitStarter: gate.starter });
+      gate.down = true;
+      await turn(m);
+      gate.down = false;
+      await m.tool('edit_file', { file_path: 'a.md', old_string: 'a', new_string: 'b' }, () =>
+        writeFile(join(root, 'a.md'), 'b\n'),
+      );
+      result(m.log);
+      await m.afterAgent();
+      m.log.append('turn/end', {});
+      await m.settle();
+      expect(m.changes()).toEqual([]);
+      expect(m.warnings).toEqual([]);
+
+      await turn(m);
+      await writeFile(join(root, 'a.md'), 'c\n');
+      result(m.log, 'd');
+      await m.afterAgent();
+      const [event] = m.changes();
+      expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
+      expect(m.warnings).toEqual([]);
+    });
+
+    it('其他失敗照舊每次講', async () => {
+      const root = await repository({ 'a.md': 'a\n' });
+      const m = await mount({}, {}, { root, gitStarter: () => Promise.resolve('launch-failed') });
+      for (const id of ['c', 'd']) {
+        m.log.append('turn/start', { kind: 'message', text: '改。' });
+        await m.settle();
+        result(m.log, id);
+        await m.afterAgent();
+        m.log.append('turn/end', {});
+        await m.settle();
+      }
+      expect(m.warnings).toHaveLength(2);
+      expect(m.changes()).toEqual([]);
+    });
   });
 
   it('git 失敗的一輪什麼都不記、留一行 warn，下一輪重來', async () => {

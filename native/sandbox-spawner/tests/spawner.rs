@@ -589,6 +589,21 @@ fn running_out_of_fds_for_dev_null_fails_with_resource_and_leaks_nothing() {
 }
 
 #[test]
+fn kernel_without_pidfd_open_means_unavailable_at_startup() {
+    let filter = outer_filter(libc::SYS_pidfd_open, None, libc::ENOSYS);
+    let (mut s, first) = start_with(&[], Some(filter));
+    assert!(matches!(&first, Event::Unavailable { errno: libc::ENOSYS, detail } if detail.starts_with(b"pidfd_open")), "{first:?}");
+    assert_eq!(s.child.wait().unwrap().code(), Some(125));
+}
+
+#[test]
+fn pidfd_open_failing_for_other_reasons_is_not_unavailable_at_startup() {
+    let filter = outer_filter(libc::SYS_pidfd_open, None, libc::EMFILE);
+    let (_s, first) = start_with(&[], Some(filter));
+    assert!(matches!(first, Event::Ready { .. }), "{first:?}");
+}
+
+#[test]
 fn seccomp_that_cannot_be_installed_means_unavailable() {
     let filter = outer_filter(libc::SYS_prctl, Some(libc::PR_SET_SECCOMP as u32), libc::EINVAL);
     let (mut s, first) = start_with(&[], Some(filter));

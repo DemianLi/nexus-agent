@@ -147,7 +147,7 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { createRequestGate } from './request-gate.js';
 import { formatRipgrepDisclosure, ripgrepStatus } from './rg-path.js';
-import { reportSandboxTo } from './tool-launcher.js';
+import { productSandboxStatus, reportSandboxTo } from './tool-launcher.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { STARTUP_READ_PLUGINS } from './plugin-row-classes.js';
@@ -1689,6 +1689,8 @@ async function startServer(
   // 但每一次 grep 都會以 SEARCH_FAILED 失敗、沒有退路——管理者要在啟動這一行就看得到，不必等模型第一次搜尋。
   log(formatRipgrepDisclosure(await ripgrepStatus()));
   reportSandboxTo(log);
+  // 同上：沒有沙箱時工具全部跑不了，也別等到模型第一次用工具才知道。
+  log(await productSandboxStatus());
   // **披露，不是設定。** 每一條 thread 的對話都會寫上磁碟（#444 起預設就寫），寫去哪裡
   // 不該要讀文件才知道；清單把落盤關掉（#612）時，講的是「只在記憶體裡」與是哪一列關的。
   log(

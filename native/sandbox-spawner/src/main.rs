@@ -12,7 +12,7 @@
 //! 2. 擋下 SIGINT／SIGTERM／SIGHUP，改由 signalfd 收。
 //! 3. 建監聽用的 `AF_UNIX` socket、chmod 0600。一定要在裝過濾器之前：S1 擋 `socket(AF_UNIX)`，裝完之後只用 `accept4`。
 //! 4. `NO_NEW_PRIVS`＋seccomp，只裝這一次，之後 fork 的子行程都繼承。
-//! 5. 自我檢查：`socket(AF_INET)` 要拿到 EACCES、`socket(AF_UNIX)` 要拿到 EPERM。
+//! 5. 自我檢查：`socket(AF_INET)` 要拿到 EACCES、`socket(AF_UNIX)` 要拿到 EPERM；核心要有 `pidfd_open`。
 //! 6. 送 `Ready`。
 //!
 //! socket 路徑含 NUL，或 2 到 5 任何一步失敗，都送 `Unavailable` 後結束。
@@ -138,6 +138,18 @@ fn self_check() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// 核心有沒有 `pidfd_open`（5.3 起）。沒有它等不了工具，連全權模式都起不來，所以在啟動時就講，不等到每一筆工具才失敗。
+/// 只認 ENOSYS：fd 用盡這類是當下的狀況，留給每一筆工具的 `Resource` 失敗去講，不是這台主機不支援。
+fn kernel_lacks_pidfd() -> bool {
+    // SAFETY：對自己開 pidfd，開了就關。
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0) } as libc::c_int;
+    if fd < 0 {
+        return errno() == libc::ENOSYS;
+    }
+    close(fd);
+    false
 }
 
 /// 擋掉要改由 signalfd 收的訊號，回 signalfd。
@@ -454,7 +466,7 @@ impl Spawner {
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
         if pidfd < 0 {
             let err = errno();
-            // 沒有 pidfd 就等不了它：殺掉、收屍。核心比 5.3 舊（沒有 pidfd_open）時，每一筆都在這裡回 `Resource`。
+            // 沒有 pidfd 就等不了它：殺掉、收屍。核心沒有 pidfd_open 的情形啟動時就擋了，這裡只剩 fd 用盡這類。
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
                 libc::waitpid(pid, std::ptr::null_mut(), 0);
@@ -592,6 +604,9 @@ fn main() {
     let insns = seccomp::install().unwrap_or_else(|e| unavailable(e.raw_os_error().unwrap_or(0), &format!("seccomp: {e}")));
     if let Err(e) = self_check() {
         unavailable(0, &e);
+    }
+    if kernel_lacks_pidfd() {
+        unavailable(libc::ENOSYS, "pidfd_open：核心要 5.3 以上");
     }
     if !emit(&Event::Ready { filter_insns: insns as u32, landlock_abi: abi as u32 }) {
         std::process::exit(3);
