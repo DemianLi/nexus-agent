@@ -53,7 +53,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { ROOT } from '../workspace-packages.js';
 import {
@@ -281,7 +281,7 @@ function freeze(
   const files = new Map<string, string>();
   const sessions: Record<string, unknown> = {};
   for (const id of sessionsIn(directory)) {
-    for (const file of frozenFilesOf(id)) {
+    for (const file of frozenFilesOf(directory, id)) {
       files.set(file, readFileSync(join(directory, file), 'utf8'));
     }
     const header = readRawHeader<{ version: number }>(directory, id);
@@ -313,7 +313,11 @@ function flush(): void {
     const into = join(FIXTURES, name);
     rmSync(into, { recursive: true, force: true });
     mkdirSync(into, { recursive: true });
-    for (const [file, content] of files) writeFileSync(join(into, file), content);
+    for (const [file, content] of files) {
+      // 世代檔在會話目錄裡（`<id>/session.v<N>.jsonl`）。
+      mkdirSync(dirname(join(into, file)), { recursive: true });
+      writeFileSync(join(into, file), content);
+    }
     log(`寫好 ${into}`);
   }
 }
