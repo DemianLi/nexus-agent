@@ -5,11 +5,13 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { findSpawnerBinary, productToolLauncher, selectToolLauncher } from './tool-launcher.js';
-import type { ToolLauncher, ToolRequest } from './tool-process.js';
+import { runRipgrep } from './ripgrep-runner.js';
+import type { ToolLauncher, ToolProcess, ToolRequest, ToolResult } from './tool-process.js';
 
 const launched = vi.hoisted(() => [] as ToolRequest[]);
 vi.mock('./tool-launcher.js', async (importActual) => ({
@@ -70,6 +72,38 @@ describe('findSpawnerBinary', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe('起 rg 的途中取消', () => {
+  it('起來之後照樣 SIGTERM，寬限到了升級 SIGKILL', async () => {
+    const kills: string[] = [];
+    let finish!: (result: ToolResult) => void;
+    let started!: (process: ToolProcess) => void;
+    const launcher: ToolLauncher = () => new Promise((resolve) => (started = resolve));
+    const controller = new AbortController();
+    const outcome = runRipgrep({
+      argv: [],
+      cwd: tmpdir(),
+      executable: process.execPath,
+      signal: controller.signal,
+      internals: { launcher, killGraceMs: 10 },
+    });
+    await vi.waitFor(() => expect(started).toBeDefined());
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    started({
+      pid: 1,
+      stdout: Readable.from([]),
+      stderr: Readable.from([]),
+      kill: (signal) => {
+        kills.push(signal);
+        if (signal === 'SIGKILL') finish({ kind: 'exited', code: null, signal });
+      },
+      done: new Promise((resolve) => (finish = resolve)),
+    });
+    expect(await outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
+    expect(kills).toEqual(['SIGTERM', 'SIGKILL']);
   });
 });
 

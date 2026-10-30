@@ -74,7 +74,7 @@ export function spawnerProbeProblems(outcome: SpawnerProbeOutcome): string[] {
   return [];
 }
 
-/** 印進 log 的一行：這台主機上實際走了哪個模式、收到哪些事件。 */
+/** 印進 log 的一行：收到的事件（`Ready` 的 ABI 決定模式）與 stdout。 */
 export function spawnerProbeSummary(outcome: SpawnerProbeOutcome): string {
   return `沙箱 spawner：事件 ${JSON.stringify(outcome.events)}，stdout ${JSON.stringify(outcome.stdout.trim())}`;
 }

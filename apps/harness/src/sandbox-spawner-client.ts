@@ -1,5 +1,5 @@
 /**
- * 常駐沙箱 spawner 的 client 與過渡版監控（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。一個 serve 行程一個
+ * 常駐沙箱 spawner 的 client 與過渡版監控（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。一個行程一個
  * spawner，工具子行程都由它起。協定在 `sandbox-protocol.ts`。
  *
  * 一代（{@link startGeneration}）是一支 spawner 行程：還在跑的工具全綁在它身上，它結束時一起以 `sandbox-unavailable` 收場。
@@ -33,7 +33,7 @@ import type {
 const INITIAL_DELAY_MS = 500;
 /** 退避上限（毫秒），也是一代要連續活多久才算撐過這次故障。 */
 const MAX_DELAY_MS = 30_000;
-/** 一次故障最多連續失敗幾次。 */
+/** 一次故障最多重起幾次。 */
 const MAX_ATTEMPTS = 10;
 /** 等 `Ready` 多久（毫秒）。 */
 const READY_TIMEOUT_MS = 10_000;
@@ -74,9 +74,8 @@ function privateSocketDir(): string {
 /** 一支活著的 spawner。 */
 export interface SpawnerGeneration {
   readonly landlockAbi: number;
+  /** 經這一代起一支工具。這一代已死時回 `sandbox-unavailable`；`Started` 或 `Failed` 之前不 settle。 */
   spawn(request: ToolRequest): Promise<ToolProcess | ToolLaunchFailure>;
-  /** 收掉這一代：關 stdin，spawner 殺掉所有工具後結束。 */
-  stop(): void;
 }
 
 /** {@link startGeneration} 的回呼。 */
@@ -122,6 +121,7 @@ export function startGeneration(
   (child.stdin as unknown as Socket).unref();
   (child.stderr as unknown as Socket).unref();
   events.unref();
+  // spawner 掛掉時寫入會 EPIPE；結局由 'close' 收，這裡只防未處理的 error。
   child.stdin.on('error', () => {});
 
   const inFlight = new Map<number, InFlight>();
@@ -142,7 +142,6 @@ export function startGeneration(
 
     const generation = (landlockAbi: number): SpawnerGeneration => ({
       landlockAbi,
-      stop: () => child.stdin.end(),
       spawn: (request) => {
         if (dead) return Promise.resolve<ToolLaunchFailure>('sandbox-unavailable');
         const id = nextId++;
@@ -283,7 +282,7 @@ export interface SpawnerSupervisorOptions {
   readonly start?: typeof startGeneration;
 }
 
-/** 過渡版監控，活在 serve 裡。 */
+/** 過渡版監控，活在 serve 裡；第 3 段搬進主機級的樹（#1948）。 */
 export class SpawnerSupervisor {
   readonly #binary: string;
   readonly #log: (line: string) => void;
@@ -311,8 +310,8 @@ export class SpawnerSupervisor {
   /** 接到工具接縫上的進入點。 */
   readonly launch: ToolLauncher = async (request) => {
     if (this.#retry !== undefined) return 'sandbox-unavailable';
-    this.#current ??= this.#connect();
     try {
+      this.#current ??= this.#connect();
       return await (await this.#current).spawn(request);
     } catch {
       return 'sandbox-unavailable';
@@ -325,6 +324,7 @@ export class SpawnerSupervisor {
       onPartial: () => this.#notePartial(generation),
       onClosed: () => this.#generationDown(),
     });
+    // 重起的那一代沒有人 await：失敗由 onClosed 收，這裡只防未處理的 rejection。
     generation.then(
       () => (this.#connectedAt = Date.now()),
       () => {},
@@ -351,7 +351,7 @@ export class SpawnerSupervisor {
     this.#current = undefined;
     this.#failedAttempts += 1;
     if (this.#failedAttempts > maxAttempts) {
-      this.#log(`沙箱 spawner 連續失敗 ${String(maxAttempts)} 次，停止重啟；下一次工具呼叫再試`);
+      this.#log(`沙箱 spawner 重起 ${String(maxAttempts)} 次都失敗，停止重啟；下一次工具呼叫再試`);
       this.#failedAttempts = 0;
       return;
     }

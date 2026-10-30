@@ -1,6 +1,6 @@
 /**
- * rg 在沙箱裡能讀什麼（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946) 偏離 #14）：只給工作區、rg 本身，與 rg 會讀的
- * 忽略規則，逐檔列出。絕不給 serve 的 home 與整個 `$HOME`。
+ * rg 在沙箱裡能讀什麼（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）：只給工作區、rg 本身，與 rg 會讀的
+ * 忽略規則，逐檔列出。清單本身不列 serve 的 home 與整個 `$HOME`；工作區落在裡面時另論。
  *
  * 內附的 rg 是靜態連結，不用系統函式庫的目錄。忽略規則漏了不會報錯：rg 讀不到就當沒有，被忽略的檔悄悄進結果，所以這份清單要對著
  * 輸出比，不是對著結束碼。rg 會讀的（`ignore` crate）：
@@ -40,7 +40,7 @@ async function isDirectory(path: string): Promise<boolean> {
 const readText = (path: string): Promise<string | undefined> =>
   readFile(path, 'utf8').catch(() => undefined);
 
-/** `.git` 指標檔：回 `info/exclude` 所在的目錄與沿路要讀的檔。 */
+/** `.git` 指標檔：回沿路要讀的檔（指標檔、`commondir`、`info/exclude`）；解不出 `gitdir` 時只有指標檔。 */
 async function gitDirBehind(pointer: string): Promise<readonly string[]> {
   const gitdir = /^gitdir:\s*(.+?)\s*$/mu.exec((await readText(pointer)) ?? '')?.[1];
   if (gitdir === undefined) return [pointer];
@@ -74,7 +74,7 @@ async function repoIgnoreFiles(cwd: string): Promise<readonly string[]> {
   }
 }
 
-/** 全域的忽略規則：兩份設定檔，與它們指到的檔；都沒指定就是 XDG 的 `git/ignore`。 */
+/** 全域的忽略規則：兩份設定檔、它們指到的檔，與 XDG 的 `git/ignore`。相對路徑的 `excludesFile` 不列。 */
 async function globalIgnoreFiles(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
   const home = env.HOME;
   const configHome =
@@ -115,7 +115,7 @@ export async function ripgrepReadRoots(
   );
   return [
     ...((await isDirectory(cwd)) ? [cwd] : []),
-    executable,
+    ...((await isFile(executable)) ? [executable] : []),
     ...new Set(files.filter((path) => path !== undefined)),
   ];
 }

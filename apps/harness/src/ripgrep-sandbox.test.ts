@@ -1,5 +1,5 @@
 /**
- * rg 的讀根（#1946 偏離 #14）。清單是不是夠，由 `sandbox-spawner.integration.test.ts` 對著 rg 的輸出驗。
+ * rg 的讀根（#1946）。清單是不是夠，由 `sandbox-spawner.integration.test.ts` 對著 rg 的輸出驗。
  */
 
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -35,8 +35,10 @@ describe('ripgrepReadRoots', () => {
     put(join(repo, '.rgignore'));
     put(join(home, '.env'), 'NVIDIA_API_KEY=x');
     mkdirSync(join(repo, '.ignore'));
-    const roots = await ripgrepReadRoots(ws, '/opt/rg', { HOME: home });
-    expect(roots.slice(0, 2)).toEqual([ws, '/opt/rg']);
+    const rg = join(base, 'rg');
+    put(rg);
+    const roots = await ripgrepReadRoots(ws, rg, { HOME: home });
+    expect(roots.slice(0, 2)).toEqual([ws, rg]);
     expect(roots).toContain(join(repo, '.gitignore'));
     expect(roots).toContain(join(repo, '.rgignore'));
     expect(roots).not.toContain(join(repo, '.ignore'));
@@ -82,7 +84,7 @@ describe('ripgrepReadRoots', () => {
     expect(roots).toContain(join(main, 'info/exclude'));
   });
 
-  it('起點不存在時不列它：要讓它照起點讀不到失敗，不是沙箱不可用', async () => {
-    expect(await ripgrepReadRoots(join(base, 'gone'), '/rg', {})).toEqual(['/rg']);
+  it('起點與 rg 不存在時不列：要照它們自己的原因失敗，不是沙箱不可用', async () => {
+    expect(await ripgrepReadRoots(join(base, 'gone'), join(base, 'no-rg'), {})).toEqual([]);
   });
 });

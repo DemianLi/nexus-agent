@@ -7,6 +7,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { ChildProcessByStdio } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import type { Readable } from 'node:stream';
 
@@ -52,7 +53,7 @@ export interface ToolProcess {
 /** 不會 reject：起不來回 {@link ToolLaunchFailure}。 */
 export type ToolLauncher = (request: ToolRequest) => Promise<ToolProcess | ToolLaunchFailure>;
 
-/** 起點進不去。spawn 分不出這件事跟執行檔不在（兩邊都可能是 `ENOENT`），所以先問。 */
+/** 起點進得去嗎。spawn 分不出這件事跟執行檔不在（兩邊都可能是 `ENOENT`），所以先問。 */
 function startDirUsable(cwd: string): boolean {
   try {
     accessSync(cwd, constants.X_OK);
@@ -63,15 +64,21 @@ function startDirUsable(cwd: string): boolean {
 }
 
 /**
- * 不經沙箱直接 spawn：只有非 Linux 的 `danger-full-access` 與測試設施走這裡。serve 走 `process.exit` 結束時由 core 同步收掉。
+ * 不經沙箱直接 spawn：只有非 Linux 的 `danger-full-access` 與測試設施走這裡。`process.exit` 時由 core 同步 SIGKILL（只殺直接子行程，
+ * 不做 process group，#1542）。
  */
 export const directToolLauncher: ToolLauncher = (request) => {
   if (!startDirUsable(request.cwd)) return Promise.resolve('start-dir');
-  const child = spawn(request.executable, [...request.args], {
-    cwd: request.cwd,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: request.env,
-  });
+  let child: ChildProcessByStdio<null, Readable, Readable>;
+  try {
+    child = spawn(request.executable, [...request.args], {
+      cwd: request.cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: request.env,
+    });
+  } catch {
+    return Promise.resolve('launch-failed');
+  }
   const untrack = trackHostExitChild(child);
   const done = new Promise<ToolResult>((resolve) => {
     child.once('error', (error: NodeJS.ErrnoException) => {

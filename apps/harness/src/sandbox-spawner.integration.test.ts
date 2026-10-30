@@ -216,7 +216,7 @@ console.log(JSON.stringify(await backend.grep('needle', '/')));
       rootDir: ws,
       mode: 'workspace-write',
       ripgrep: {
-        launcher: (request) => supervisor.launch({ ...request, readable: [ws] }),
+        launcher: supervisor.launch,
         executable: join(ws, 'no-such-rg'),
       },
     });

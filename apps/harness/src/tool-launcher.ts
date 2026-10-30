@@ -2,7 +2,7 @@
  * 產品用哪一支 {@link ToolLauncher}（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）：Linux 一律經 spawner，
  * 非 Linux 沒有沙箱後端，只有 `danger-full-access` 直接 spawn，其餘回 `sandbox-unavailable`。
  *
- * 這裡沒有關掉沙箱的開關。測試設施在 `test-home.setup.ts` 整個換掉這個模組。
+ * 這裡沒有關掉沙箱的開關。測試設施在 `test-home.setup.ts` 換掉 {@link productToolLauncher}。
  *
  * @module
  */
@@ -11,12 +11,10 @@ import { existsSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { SPAWNER_PATH } from './sandbox-protocol.js';
 import { SpawnerSupervisor } from './sandbox-spawner-client.js';
 import { directToolLauncher } from './tool-process.js';
 import type { ToolLauncher } from './tool-process.js';
-
-/** 執行檔在產物裡的位置，同 `scripts/release/spawner.ts` 的 `SPAWNER_PATH`。 */
-const SPAWNER_PATH = 'native/nexus-sandbox-spawner';
 
 let report: (line: string) => void = (line) => console.error(line);
 
@@ -52,7 +50,7 @@ export function selectToolLauncher(
 
 let product: ToolLauncher | undefined;
 
-/** 這個 serve 行程共用的那一支：一個行程一個 spawner，不是一條 thread 一個。 */
+/** 這個行程共用的那一支：一個行程一個 spawner，不是一條 thread 一個。 */
 export function productToolLauncher(): ToolLauncher {
   product ??= selectToolLauncher(process.platform, findSpawnerBinary());
   return product;

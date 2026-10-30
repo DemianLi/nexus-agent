@@ -1148,7 +1148,6 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * `grep` 與 `glob` 起 rg 之前共用的準備：確認工作區根、解出搜尋起點、解出內附 rg。
    *
-   * `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。
    * **根不存在不是錯誤，是「沒有東西可找」**（`empty`，同基座對不存在的起點）：暫存 backend 的根是第一次存東西才建的
    * （`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
    *
@@ -1191,7 +1190,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       try {
         executable = await resolveRgPath();
       } catch {
-        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `launchFailedMessage`）。
+        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `FAILURE_REASONS`）。
         // 管理者從 serve 啟動日誌那一行看得到原因。
         return {
           kind: 'failed',

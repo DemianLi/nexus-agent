@@ -27,7 +27,6 @@ function harness() {
   const live: SpawnerGeneration = {
     landlockAbi: 5,
     spawn: () => Promise.resolve(PROCESS),
-    stop: () => {},
   };
   const supervisor = new SpawnerSupervisor({
     binary: '/spawner',

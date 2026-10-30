@@ -8,7 +8,7 @@
  *
  * 這裡照 dsh `packages/fs/tool-fs-search/src/search-core.ts:222-287` 的 `runRipgrep`（`687f282e`）：
  *
- * - argv 開頭是 `--no-config`（`:240`）。spawn 不受沙箱限制，宿主的 `RIPGREP_CONFIG_PATH` 可以注入 `--pre`。
+ * - argv 開頭是 `--no-config`（`:240`）。宿主的 `RIPGREP_CONFIG_PATH` 可以注入 `--pre`，`danger-full-access` 下也沒有 Landlock 擋著。
  * - stdout 累計位元組，超過 {@link RAW_OUTPUT_MAX_BYTES} 就收掉 rg，回 `SEARCH_RAW_OUTPUT_OVERFLOW`，**不解析半份輸出**。
  *   stderr 只留最後 {@link STDERR_MAX_BYTES}，當診斷用。
  * - 取消：呼叫端的 signal 與 {@link SEARCH_TIMEOUT_MS} 的逾時合成一個，觸發時先 `SIGTERM`，{@link KILL_GRACE_MS} 後還在就
@@ -61,9 +61,8 @@
  *
  * ## 執行檔
  *
- * **呼叫端給執行檔的絕對路徑**（`rg-path.ts` 解出的內附 rg），這裡不查 `PATH`、也沒有預設值。`ENOENT` 就是
- * `SEARCH_FAILED`：產物裡的 rg 不見了，沒有退路（#1502 刀 4 拿掉了 #1532 偏離 1 的 `ENOENT` 退路）。
- * `cwd` 不存在時 Node 也回 `spawn … ENOENT`，兩者分不出來，所以呼叫端要在 spawn 之前先確認 `cwd` 存在。
+ * **呼叫端給執行檔的絕對路徑**（`rg-path.ts` 解出的內附 rg），這裡不查 `PATH`、也沒有預設值。產物裡的 rg 不見了就是
+ * `SEARCH_FAILED`，沒有退路（#1502 刀 4 拿掉了 #1532 偏離 1 的 `ENOENT` 退路）。`cwd` 進不去也是 `SEARCH_FAILED`，文案不同（#1945）。
  *
  * @module
  */
@@ -101,7 +100,7 @@ const FAILURE_REASONS: Record<ToolLaunchFailure, string> = {
   // 兩條起法同一句（#1945）：起點讀不到不是 rg 壞了，也不是沙箱不可用。
   'start-dir': 'the search directory is not accessible',
   'sandbox-unavailable':
-    'SANDBOX_UNAVAILABLE: no usable sandbox on this host, refusing to run it unconfined',
+    'SANDBOX_UNAVAILABLE: the tool sandbox is not available, refusing to run it unconfined',
 };
 const launchFailure = (tool: RipgrepTool, reason: ToolLaunchFailure): string =>
   `${tool} could not start its search command (${FAILURE_REASONS[reason]})`;
@@ -136,7 +135,6 @@ export interface RipgrepRunOptions {
   readonly executable: string;
   /** `--no-config` 之後的 argv。 */
   readonly argv: readonly string[];
-  /** 工作目錄。 */
   readonly cwd: string;
   /** 這一次的沙箱模式；預設 `read-only`。rg 不寫檔，`workspace-write` 也照 `read-only` 起。 */
   readonly mode?: SandboxMode | undefined;
@@ -259,7 +257,7 @@ function classifyExit(
 /**
  * 起一次 `rg` 並等它結束。
  *
- * 判斷順序（`close` 時）：**取消 → 輸出超限 → 被訊號殺 → 結束碼**。輸出超限與取消都是我們自己 kill 的，`close` 會帶
+ * 判斷順序（工具的 `done` 時）：**取消 → 輸出超限 → 被訊號殺 → 結束碼**。輸出超限與取消都是我們自己 kill 的，`done` 會帶
  * `SIGTERM`／`SIGKILL`，順序反過來就會被當成「被訊號殺」。
  *
  * @param options - 見 {@link RipgrepRunOptions}。
@@ -305,8 +303,11 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
 
     /** 收掉 rg：先 `SIGTERM`，寬限之後還沒結束就 `SIGKILL`。 */
     const terminate = (): void => {
-      child?.kill('SIGTERM');
-      killTimer ??= setTimeout(() => child?.kill('SIGKILL'), graceMs);
+      // 還在起：起來之後 `attach` 會再進來一次。
+      if (child === undefined) return;
+      const running = child;
+      running.kill('SIGTERM');
+      killTimer ??= setTimeout(() => running.kill('SIGKILL'), graceMs);
     };
 
     function onAbort(): void {
@@ -316,7 +317,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     signal.addEventListener('abort', onAbort, { once: true });
 
     const failed = (reason: ToolLaunchFailure): void => {
-      // 起不來的同時已經被取消：回「取消」不回「起不來」（照 dsh `search-core.ts:257-259`，spawn 失敗後再看一次 `signal.aborted`）。
+      // 起不來的同時已經被取消：回「取消」不回「起不來」。
       settle(
         wasAborted || signal.aborted
           ? aborted()
@@ -345,7 +346,6 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
       }
       child = started;
       internals.onChild?.({ pid: child.pid });
-      // 在起 rg 的這段時間裡已經取消的話，事件不會再來。
       if (signal.aborted) onAbort();
 
       child.stdout.on('data', (chunk: Buffer) => {
