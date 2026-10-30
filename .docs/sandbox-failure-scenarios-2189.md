@@ -113,7 +113,7 @@
 5. [#2197](https://github.com/DemianLi/nexus-agent/issues/2197) **未宣告的 MCP 若不理 stdin 結束，`kill -9` 後會留下孤兒，重啟再多一支。** 已知 `SIGKILL` 時 exit listener 不跑，這裡量到會隨重啟累積。宣告沙箱的不會。
 6. [#2198](https://github.com/DemianLi/nexus-agent/issues/2198) **`kill -9` 留下的 `.tmpdir` 沒有人清。** 重啟不掃，`glob` 列得到，也佔私有根的空間。
 
-另有一項發現已走非公開管道。
+另有工具錯誤文字帶主機路徑一項，見 [#2201](https://github.com/DemianLi/nexus-agent/issues/2201)。
 
 ## 環境差異
 
