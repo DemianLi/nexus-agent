@@ -251,7 +251,7 @@ describe('JSONL 存放處', () => {
       logBytes: bytes,
     });
     // 經注入的 fs 讀過的只有舊路徑的墓碑（拿租約之前與之後各找一次這份會話，分辨墓碑與舊兩檔），世代檔沒有：本文是經它
-    // 讀的。世代檔的 header 行在判額度之前讀，走真的檔案系統（第一行讀到換行為止，同 dsh `readFirstLine`），這個計數看不到。
+    // 讀的。世代檔的 header 行在判額度之前讀，走真的檔案系統（第一行讀到換行為止），這個計數看不到。
     const { tombstone } = sessionPathsIn(directory, 'alpha');
     expect(fs.read).toEqual([tombstone, tombstone]);
     const resumed = await openJsonlSessionStore({

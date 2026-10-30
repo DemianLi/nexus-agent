@@ -135,7 +135,7 @@ describe('從原始碼抽持久化型別', { timeout: EXTRACT_TIMEOUT }, () => {
       'SessionEventEnvelope',
       'event:test/record',
     ]);
-    // 事件根照 dsh 帶 surface；nexus 沒有那一軸，一律 false。header、header 行與封裝沒有這一格。
+    // 事件根帶 surface 這一格；nexus 沒有這一軸，一律 false。header、header 行與封裝沒有這一格。
     expect(inventory.roots.map((item) => item.surface)).toEqual([
       undefined,
       undefined,

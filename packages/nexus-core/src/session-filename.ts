@@ -67,7 +67,7 @@ export function parseLegacyTwoFileHeaderFilename(filename: string): string | und
  */
 export const FIRST_GENERATION_FORMAT_VERSION = 52;
 
-/** 會話目錄裡寫租約的鎖檔名，同 dsh `lease.ts:40`。 */
+/** 會話目錄裡寫租約的鎖檔名。 */
 export const SESSION_LOCK_FILENAME = 'session.lock';
 
 /**

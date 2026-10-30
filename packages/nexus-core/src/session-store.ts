@@ -630,7 +630,7 @@ import type { SessionEvent } from './session-log.js';
  * ## 52：寫方改寫每會話目錄的世代檔，舊路徑留墓碑
  *
  * [#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③（[#2132](https://github.com/DemianLi/nexus-agent/issues/2132)），
- * 落盤佈局照 dsh（`packages/session/session-persistence-jsonl/src/format.ts:267-298`，`f3803c96`）：
+ * 落盤佈局：
  * - 新會話寫成 `<目錄>/<sessionDirectoryName(id)>/session.v52.jsonl`，第一行是 header 行（`type: 'session'` 加上 header 各格），
  *   之後一行一顆事件。header 行與首批事件一次 `link` 發佈。寫租約是同一個目錄裡的 `session.lock`。
  * - 續接一份舊兩檔或比這一版舊的世代，先把事件原樣搬進一份新的 `session.v52.jsonl`，header 換成這一版；來源一個位元組都不動。
@@ -640,7 +640,7 @@ import type { SessionEvent } from './session-log.js';
  * **升版，不是可選的**：不升的話，舊兩檔與 `session.v51.jsonl` 都是 51，同一個 id 兩種佈局都在時分不出誰優先；墓碑也要比
  * v0.5.19 寫得出的版本新，那一版才會以「格式太新」拒讀，而不是把它當成一份零事件的會話、另開一份分叉的日誌。
  *
- * **讀舊檔**：51 以前的舊兩檔直接讀，跟這一版之前一樣；手寫的舊世代也直接讀。事件詞彙沒變，所以這條邊是加性的。
+ * **讀舊檔**：51 以前的舊兩檔與手寫的舊世代都直接讀。事件詞彙沒變，所以這條邊是加性的。
  * **回滾的後果**：被 52 碰過的 thread（新建，或續接過一次的舊 thread），v0.5.19 的 runtime 讀到墓碑，續接與列表都當成
  * 格式太新拒讀。
  */

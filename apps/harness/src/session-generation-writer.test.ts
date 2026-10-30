@@ -2,7 +2,7 @@
  * 寫方的世代檔、墓碑與遷移（[#2132](https://github.com/DemianLi/nexus-agent/issues/2132)，#1594 ③）。讀方認佈局見
  * `session-dir-layout-read.test.ts`；發佈順序與失敗注入見 `jsonl-session-store-materialize.test.ts`。
  *
- * 蓋的是卡上的裁決：續接時遷移、唯讀不遷（Q1 (a)）；墓碑在而會話目錄不見報讀不懂（Q2、N8）；墓碑加比這一版新的世代報不支援；
+ * 蓋的是：續接時遷移、唯讀不遷；墓碑在而會話目錄不見報讀不懂（含舊路徑 header 版本 ≥ 52 的）；墓碑加比這一版新的世代報不支援；
  * 遷移當下當掉（`pending`）與遷移之後舊兩檔又被寫過（並存）；來源不動、撕裂的尾巴不帶過去。
  */
 
@@ -271,7 +271,7 @@ describe('遷移當下當掉與並存', () => {
 });
 
 describe('墓碑', () => {
-  it('墓碑在、會話目錄不見了（N8）：唯讀與續接都報讀不懂，不當成沒有', async () => {
+  it('墓碑在、會話目錄不見了：唯讀與續接都報讀不懂，不當成沒有', async () => {
     const stored = store().create(header('gone', CURRENT));
     await stored.append([event(0)]);
     await stored.close();
@@ -282,7 +282,7 @@ describe('墓碑', () => {
     expect(await errorOf(store().resume('gone'))).toBeInstanceOf(SessionCorruptionError);
   });
 
-  it('舊路徑的 header 版本 ≥ 52、旁邊沒有會話目錄：報讀不懂（Q2）', async () => {
+  it('舊路徑的 header 版本 ≥ 52、旁邊沒有會話目錄：報讀不懂', async () => {
     await writeTwoFile('q2', EVENTS);
     await writeFile(legacyTwoFilePathsIn(dir, 'q2').header, JSON.stringify(header('q2', CURRENT)));
     expect(await errorOf(store().open('q2', 'read'))).toBeInstanceOf(SessionCorruptionError);

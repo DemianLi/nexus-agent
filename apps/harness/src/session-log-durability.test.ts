@@ -386,7 +386,7 @@ describe('檔名基底是單射的', () => {
 
   it('只差大小寫的短 id：分大小寫的檔案系統上各自一個目錄，不分的上面後建的那一份報撞名、不覆寫', async () => {
     // macOS 與 Windows 的檔案系統預設不分大小寫，所以這一條在 Linux 上走的是第一支，
-    // 在開發機上走第二支——而開發機正是 `serve` 會被跑起來的地方。第二支照 D10（#2132 N7）。
+    // 在開發機上走第二支——而開發機正是 `serve` 會被跑起來的地方。第二支：後建的那一份報撞名、不覆寫（#2132）。
     const probe = await tmp('nexus-case-');
     await mkdir(join(probe, 'A'));
     const caseInsensitive = await stat(join(probe, 'a')).then(

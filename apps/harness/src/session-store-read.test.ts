@@ -213,7 +213,7 @@ describe("open(id, 'read')", () => {
   });
 
   it('比這一版舊的舊兩檔：不遷移、不寫墓碑、不截尾巴，交出的 header 轉譯成這一版', async () => {
-    // 續接舊兩檔會先遷成這一版的世代，所以這一條沒有別的把手握著：握著的那個續接已經遷完了。
+    // 這一條不另開續接把手：續接會先把舊兩檔遷成世代檔，就量不到唯讀直接讀舊兩檔。
     expect(LEGACY_TWO_FILE_FORMAT_VERSION).toBeLessThan(SESSION_LOG_FORMAT_VERSION);
     await writeLegacy(
       'old',
@@ -333,7 +333,7 @@ describe('readSessionEntry：讀一份會話的接縫（#1857 C）', () => {
         paths.push(path);
         return statResults.shift()!;
       },
-      // 舊兩檔的 header 也經同一個 fs 讀（#1559 N0625 的 revision 要對到同一份讀法），讀真檔；日誌本文才換成假的。
+      // 舊兩檔的 header 也經同一個 fs 讀（#1559 的 revision 要對到同一份讀法），讀真檔；日誌本文才換成假的。
       readFile: async (path) =>
         path === logOf('a') ? Buffer.from(reads.shift()!) : readFile(path),
     };

@@ -179,7 +179,7 @@ function flakyStore(inner: SessionStore, failAppends: number): SessionStore {
 
 /**
  * 開檔照真的開（世代檔的暫存檔已經 `wx` 建出來），**第一個 `wx` 把手的第一次 `writeFile`**（header 行加首批）才拋 ENOSPC：
- * 「實體化了、第一批寫不進去」（#1580 刀 2a 審查 B1）。世代檔還沒 `link` 發佈，後端整個收回。
+ * 「實體化了、第一批寫不進去」（#1580）。世代檔還沒 `link` 發佈，後端整個收回。
  */
 function firstLogWriteFails(): OpenLogFile {
   let left = 1;
@@ -205,7 +205,7 @@ function firstLogWriteFails(): OpenLogFile {
 
 /**
  * 第一次 `open(<暫存檔>, 'wx')` 就拋 EMFILE：會話目錄與鎖檔已經建了、世代檔的暫存檔沒開成，實體化在寫入之前就失敗
- * （#1580 刀 2a 審查）。之後照真的開。
+ * （#1580）。之後照真的開。
  */
 function firstLogOpenFails(): OpenLogFile {
   let left = 1;

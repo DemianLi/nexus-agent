@@ -30,7 +30,7 @@ import {
 import type { SessionEntry } from './jsonl-session-store.js';
 
 /**
- * 舊兩檔佈局的最後一版：**手寫舊兩檔的 header 用它，不用 `SESSION_LOG_FORMAT_VERSION`**（#1594 ③，PM 2026-10-30 裁決 Q2）。
+ * 舊兩檔佈局的最後一版：**手寫舊兩檔的 header 用它，不用 `SESSION_LOG_FORMAT_VERSION`**（#1594 ③）。
  * 版本 52 起舊路徑上的 header 是墓碑：寫這一版的版號，讀方會當成墓碑，旁邊沒有會話目錄就報壞檔。釘成字面量，不從
  * `FIRST_GENERATION_FORMAT_VERSION` 推：v0.5.19 以前寫出來的就是這些版號，之後升版它也不跟著變。
  */
@@ -227,7 +227,7 @@ function jsonObject(text: string): Record<string, unknown> | undefined {
  * 舊兩檔的 `<base>.header.json`。
  *
  * - **不准改 `version`**：改版號的測試量的是磁碟上那個數字，留在 `sessionPathsIn(...)`／`legacyTwoFilePathsIn(...)` 的路徑直接寫，
- *   佈局換掉時 tsc 會逐處點名（#1868 裁決 Q1）。回的字串解得開 JSON 也照樣比。
+ *   佈局換掉時 tsc 會逐處點名（#1868）。回的字串解得開 JSON 也照樣比。
  * - 回的字串不是 JSON 物件（解不開，或是 `null`、陣列、數字）就是要寫一份壞的 header，原樣寫入。
  *
  * **原文本身就不是 JSON 物件就拋錯**：這支只改好的 header，`edit` 拿到的一定是物件。寫壞之後要還原，用它回傳的函式，不要再呼叫

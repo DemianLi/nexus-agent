@@ -8,9 +8,9 @@
  * 那個檔還是鎖到的那個，不是就重來（dsh 同條，上限三次）。釋放不刪鎖檔：留著的檔保住
  * 後來的人要驗的那個 inode。讀方不碰鎖。
  *
- * ## 鎖檔在哪、和 dsh 不同的一處
+ * ## 鎖檔在哪；Windows 不鎖
  *
- * 一份會話一把，鎖檔是會話目錄裡的 `session.lock`，同 dsh（`lease.ts:40`）：每份會話（含每一個 subagent）各有自己的
+ * 一份會話一把，鎖檔是會話目錄裡的 `session.lock`：每份會話（含每一個 subagent）各有自己的
  * 會話目錄（`@nexus/core` 的 `sessionDirectoryName`），root 不會跟自己的 subagent 搶同一把——flock 以 open file description
  * 為單位，同一個行程開兩次同一個檔也會互斥（實測：第二次回 `EAGAIN`）。v0.5.19 以前寫的舊兩檔用並排的 `<base>.lock`，
  * 續接遷移時另外拿那一把（`jsonl-session-store.ts` 檔頭）。

@@ -4,8 +4,7 @@
  * 形狀照 dsh 隨產品交付的 `session-persistence-jsonl`（`docs/subsystems/persistence.zh.md`，
  * 本地 clone SHA `d347e703908d0406b7a7ef80e3a0e594d86b2215`）：逐 session 的僅追加日誌、
  * **header 與日誌邏輯上分開**（dsh 明文：元資料在日誌之外，`stat`／`list` 讀 header 不掃正文）、
- * 實體化延後到第一次寫。實體上同 dsh，header 是世代檔的第一行（header 行，{@link JsonlHeaderLine}；dsh `format.ts` 的
- * `toHeaderLine`），檔在 `<目錄>/<sessionDirectoryName(id)>/session.v<N>.jsonl`（#1594 ③）。v0.5.19 以前寫的舊兩檔
+ * 實體化延後到第一次寫。header 是世代檔的第一行（header 行，{@link JsonlHeaderLine}），檔在 `<目錄>/<sessionDirectoryName(id)>/session.v<N>.jsonl`（#1594 ③）。v0.5.19 以前寫的舊兩檔
  * （`<base>.header.json`、`<base>.jsonl`）照讀，續接時遷成世代檔，舊路徑留墓碑（見下面〈遷移與墓碑〉）。
  *
  * **選 JSONL 不選 SQLite 是一個有代價的選擇，代價登記在這裡。** dsh 兩個 provider 都出
@@ -27,7 +26,7 @@
  *   [#268](https://github.com/DemianLi/nexus-agent/issues/268)，唯讀，共用 {@link parseJsonlSessionBody}）。
  *   加壓縮換到的是第二套解碼路徑，沒有人要。
  * - **寫租約照抄了**（`session-lease.ts`）：新開的在第一次實體化寫入之前拿，續接的在讀
- *   之前拿，把手關掉才放。一份會話一把，鎖檔在會話目錄裡（`session.lock`，同 dsh `lease.ts:40`）。續接時要動舊路徑的
+ *   之前拿，把手關掉才放。一份會話一把，鎖檔在會話目錄裡（`session.lock`）。續接時要動舊路徑的
  *   （遷移舊兩檔、補墓碑）另外先拿舊路徑的 `<base>.lock`：v0.5.19 以前的版本寫舊兩檔時拿的就是它，遷移跟同時跑的舊版本因此
  *   互斥。順序固定是 `<base>.lock` 先、`session.lock` 後，兩個行程不會各握一把互等；`<base>.lock` 在交把手之前就放。
  *   撞名跟租約各擋一件事：**撞名在 `create` 當下就報**（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559)，
@@ -84,8 +83,8 @@
  *
  * ## 遷移與墓碑（[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③）
  *
- * - **續接時遷移，唯讀不遷**：續接舊兩檔、或比這一版舊的世代，先遷成這一版的世代檔再交把手（{@link migrateToCurrentGeneration}，
- *   照 dsh `open(id, 'write')` 先 `publishStoredMigration`，`index.ts:388-465`）。來源的已接受前綴**原樣複製**、讀回來比位元組數
+ * - **續接時遷移，唯讀不遷**：續接舊兩檔、或比這一版舊的世代，先遷成這一版的世代檔再交把手（{@link migrateToCurrentGeneration}）。
+ *   來源的已接受前綴**原樣複製**、讀回來比位元組數
  *   與雜湊、照這一版解析，來源沒變才 `link` 發佈。失敗時來源不動。唯讀打開（`list`、`open(id, 'read')`）照讀舊的，不發佈。
  * - **墓碑**：舊路徑的 `<base>.header.json` 換成這一版的 header 行（版本 52 起，{@link tombstoneOf}）。v0.5.19 讀到它會報「比這一版
  *   新」而拒讀，不會把舊兩檔當成還在、往裡面續寫（退版的後果見 `@nexus/core` 的 `session-store.ts` 檔頭 ## 52）。新建的會話也寫一份，
@@ -564,7 +563,7 @@ function eventLines(events: readonly SessionEvent[]): string {
 }
 
 /**
- * 從舊兩檔遷過來的世代，header 行記下來源（#1594 ③，N1 (a)）：遷移在 `link` 新世代與寫墓碑之間當掉時，讀方靠它分辨
+ * 從舊兩檔遷過來的世代，header 行記下來源（#1594 ③）：遷移在 `link` 新世代與寫墓碑之間當掉時，讀方靠它分辨
  * 「舊兩檔還是遷移當下那一份」（讀新世代）跟「遷移之後舊兩檔又被寫過」（大聲拒讀）。
  */
 export interface JsonlMigrationSource {
@@ -577,7 +576,7 @@ export interface JsonlMigrationSource {
 }
 
 /**
- * 世代檔的第一行，照 dsh 的 `HeaderLine`（`session-persistence-jsonl/src/format.ts:83-94`，`f3803c96`）：`type: 'session'` 加上
+ * 世代檔的第一行：`type: 'session'` 加上
  * header 各格。跟邏輯 header（{@link StoredSessionHeader}）分開：`type` 與 {@link migratedFrom} 只在這一行，讀的時候拿掉
  * （{@link parseHeader} 的 `line`）。舊路徑的墓碑也是這個形狀（沒有 `migratedFrom`）。
  */
@@ -601,7 +600,7 @@ function encodeHeaderLine(
 }
 
 /**
- * 舊路徑那個 header 檔是不是墓碑：版本不小於 {@link FIRST_GENERATION_FORMAT_VERSION}（判法 (甲)，#1594 PM 2026-10-27 裁決第 4 點）。
+ * 舊路徑那個 header 檔是不是墓碑：版本不小於 {@link FIRST_GENERATION_FORMAT_VERSION}（#1594）。
  * 舊兩檔的寫方寫不出這種版本。只看 `version` 與 `id`，不走 {@link parseHeader} 的白名單：墓碑是給退回去的舊版本讀的，這一版只要它
  * 指的是哪一份。
  *
@@ -717,7 +716,7 @@ class JsonlStoredSession implements StoredSession {
    * `AggregateError`，照 dsh `storage.ts:246-258`。以前關檔的錯會蓋掉落盤的錯，「哪些位元組沒落盤」就看不見了。
    */
   async #shutdown(): Promise<void> {
-    // 新建的關掉之後，這個 id 在這個後端上不再算建過（dsh `storage.ts:473`、`:499`）：沒發佈的，同一個 id 可以再 `create`；
+    // 新建的關掉之後，這個 id 在這個後端上不再算建過：沒發佈的，同一個 id 可以再 `create`；
     // 發佈過的，磁碟上的檔擋 `create`。
     if (this.#resume === undefined) this.#context.pending.delete(this.#header.id);
     const failures: unknown[] = [];
@@ -891,7 +890,7 @@ class JsonlStoredSession implements StoredSession {
       await syncDirectory(this.#sessionDirectory);
       progress.directorySynced = true;
     }
-    // 暫存檔在目錄項落盤之後才盡力刪（同 dsh）：刪不掉不讓這次寫入失敗（殘留檔讀方不認）。
+    // 暫存檔在目錄項落盤之後才盡力刪：刪不掉不讓這次寫入失敗（殘留檔讀方不認）。
     if (progress.temp !== undefined) {
       await rm(progress.temp, { force: true }).catch(() => undefined);
       delete progress.temp;
@@ -973,7 +972,7 @@ class JsonlStoredSession implements StoredSession {
 }
 
 /**
- * 在舊路徑寫墓碑：`<base>.header.json`，內容是這一版的 header 行（#1594 ③，#1827 D9 (ii)），舊路徑本來**沒有東西**時用。暫存檔加
+ * 在舊路徑寫墓碑：`<base>.header.json`，內容是這一版的 header 行（#1594 ③），舊路徑本來**沒有東西**時用。暫存檔加
  * `link`，再 fsync 目錄。撞上 `EEXIST`：那一份是這個 id 的墓碑（例如上一次發佈到一半）就算寫好了；不是的話，世代發佈之後別的行程在
  * 舊路徑建了同一個 id 的舊兩檔，報 `SessionAlreadyExistsError`，世代檔留著，讀方會把兩份當成並存而拒讀。
  */
@@ -1137,7 +1136,7 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Par
   if (typeof value['createdAt'] !== 'number') {
     throw new SessionCorruptionError(id, 'header 沒有 createdAt', options.location);
   }
-  // 52 起的寫方一定寫 `type`；比 52 舊的世代只有手寫的，當時沒規定這一格，有的話也要是 "session"。
+  // 52 起的寫方一定寫 `type`；比 {@link FIRST_GENERATION_FORMAT_VERSION} 舊的世代只會是手寫的，可以沒有這一格，有的話也要是 "session"。
   if (
     options.line === true &&
     !newer &&
@@ -1729,7 +1728,7 @@ function twoFileSite(directory: string, base: string): TwoFileSite {
  * | 有 | 墓碑 | 世代，`tombstone` |
  * | 有 | 舊兩檔，`migratedFrom` 對得上 | 世代，`pending`（遷移當下當掉） |
  * | 有 | 舊兩檔，對不上 | 並存，拋 |
- * | 沒有 | 墓碑 | 會話目錄不見了（N8），拋 |
+ * | 沒有 | 墓碑 | 會話目錄不見了，拋 |
  * | 沒有 | 舊兩檔 | 舊兩檔 |
  *
  * @returns 兩種都沒有就是 `undefined`。
@@ -1765,7 +1764,7 @@ async function locateSession(
 }
 
 /**
- * 會話目錄裡挑中的世代（{@link resolveGeneration}），**header 行記的 id 是別人的就當沒有**（N7）：`sessionDirectoryName` 截短過，
+ * 會話目錄裡挑中的世代（{@link resolveGeneration}），**header 行記的 id 是別人的就當沒有**：`sessionDirectoryName` 截短過，
  * 短 id 可以刻意取成長 id 截短之後的名字，兩份撞進同一個目錄名。header 行讀不出 id（空檔、不是 JSON）的照樣算這個 id 的，
  * 讀不懂交給 {@link readSite} 報。
  *
@@ -1833,7 +1832,7 @@ function coexistingLayouts(id: string, generationPath: string): SessionCorruptio
   );
 }
 
-/** 舊路徑是墓碑、會話目錄裡卻沒有世代檔（N8）：墓碑指的那一份不見了，不當成沒有這份會話。 */
+/** 舊路徑是墓碑、會話目錄裡卻沒有世代檔：墓碑指的那一份不見了，不當成沒有這份會話。 */
 function orphanTombstone(id: string, tombstonePath: string): SessionCorruptionError {
   return new SessionCorruptionError(
     id,
@@ -1901,7 +1900,7 @@ async function readSite(
     }
     const tombstone = tombstoneOf(text);
     if (tombstone !== undefined) {
-      // 墓碑不是一份會話：會話目錄在就由那一項代表，不在是 N8。
+      // 墓碑不是一份會話：會話目錄在就由那一項代表，不在就是孤兒墓碑（{@link orphanTombstone}）。
       const sessionDirectory = join(dirname(site.headerPath), sessionDirectoryName(tombstone.id));
       if ((await resolveGeneration(sessionDirectory)) !== undefined) return undefined;
       throw orphanTombstone(tombstone.id, site.headerPath);
@@ -2118,10 +2117,10 @@ function settledValues<R>(results: readonly PromiseSettledResult<R>[]): R[] {
  *   在不在、不看讀不讀得懂。兩份都不列，合起來算一份讀不懂（`open`／`resume` 碰到同樣的並存會拋）。讀得懂的那份也不列：列出
  *   一項點不開的，等於默默挑了一份。兩份都讀不懂時認不出 id，各算一份。照 `session-store.ts`
  *   檔頭登記的 unreadable 計數，不讓一份拖垮整份清單。
- * - **舊路徑是墓碑、會話目錄卻不在**（N8，{@link orphanTombstone}）。
+ * - **舊路徑是墓碑、會話目錄卻不在**（{@link orphanTombstone}）。
  *
  * 不算並存、也不重複列的：墓碑（會話目錄那一項代表它）、遷移當下當掉留著的舊兩檔（`migratedFrom` 對得上，讀新世代，同
- * {@link locateSession}）、會話目錄裡記的是別的 id 的世代（N7，那一份照它自己的 id 列）。
+ * {@link locateSession}）、會話目錄裡記的是別的 id 的世代（那一份照它自己的 id 列）。
  */
 async function listStoredSessions(
   directory: string,
@@ -2361,8 +2360,7 @@ async function openStoredSessionForRead(
  * **只有 header、沒有日誌不是壞檔**：v0.5.19 以前的版本先發佈 header 再開日誌，兩步之間當掉就是這個樣子——一份一筆都還沒寫進去
  * 的會話。
  *
- * **寫打開時先遷移，再交把手**（#1594 ③，照 dsh `open(id, 'write')` 先 `publishStoredMigration`，
- * `session-persistence-jsonl/src/index.ts:388-465`，`f3803c96`）：舊兩檔、比這一版舊的世代，都先遷成這一版的世代檔
+ * **寫打開時先遷移，再交把手**（#1594 ③）：舊兩檔、比這一版舊的世代，都先遷成這一版的世代檔
  * （{@link migrateToCurrentGeneration}），把手往新世代追加。已經是這一版的世代往它追加，撕裂的尾巴從 header 行之後起算、截到
  * `bodyOffset + validBytes`。舊路徑不是墓碑的（遷移的來源、`missing`、`pending`）在交把手之前落定成墓碑（{@link settleTombstone}）。
  *
@@ -2508,7 +2506,7 @@ async function resumeSite(
       }),
     };
   }
-  // 冷讀快取（#1559 N0625）：**租約拿到之後**才比 revision——比對之後到第一次寫之前，別人寫不進來。
+  // 冷讀快取（#1559）：**租約拿到之後**才比 revision——比對之後到第一次寫之前，別人寫不進來。
   // 對上了就省掉 readFile 與解析；對不上照常讀。
   const memoized = coldLogs.get(id, await siteRevision(site, fs));
   let read: Omit<ColdLog, 'revision'>;
@@ -2568,8 +2566,8 @@ interface MigratedSession {
 }
 
 /**
- * 把一份舊的會話（舊兩檔，或比這一版舊的世代）遷成這一版的世代檔（#1594 ③），照 dsh 的 `publishPreparedMigration`
- * （`generation.ts:884-944`，`f3803c96`）。呼叫方握著 `session.lock`，來源是舊兩檔的還握著 `<base>.lock`。
+ * 把一份舊的會話（舊兩檔，或比這一版舊的世代）遷成這一版的世代檔（#1594 ③）。
+ * 呼叫方握著 `session.lock`，來源是舊兩檔的還握著 `<base>.lock`。
  *
  * 1. 穩定讀來源、照 `recoverable` 解析並驗證；撕裂的尾巴不帶過去（講一行）。
  * 2. 暫存檔：header 行（來源是舊兩檔的記 `migratedFrom`）加上**原樣複製**的已接受前綴，fsync。

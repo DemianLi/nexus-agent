@@ -11,7 +11,7 @@
  *
  * - `SessionHeader`：`StoredSessionHeader`（邏輯 header；`version` 是 `typeof SESSION_LOG_FORMAT_VERSION`，#1862）。
  * - `JsonlHeaderLine`：磁碟上的 header 行（世代檔第一行與舊路徑的墓碑），`apps/harness/src/jsonl-session-store.ts` 的
- *   `JsonlHeaderLine`，照 dsh 從實體格式的宣告直接抽（dsh 是 `session-persistence-jsonl/src/format.ts` 的 `HeaderLine`）。
+ *   `JsonlHeaderLine`，從實體格式的宣告直接抽。
  *   `type` 與 `migratedFrom` 只在這一行，不在邏輯 header 裡。
  * - `SessionEventEnvelope`：每一種事件拿掉 `data`、`type` 換成 `string` 之後的聯集。一般的新事件種類不改它。
  * - `event:<名字>`：每一種事件，名字來自 `known-event-types-catalog.ts` 的掃描，再跟編譯器看到的
@@ -229,7 +229,7 @@ export function extractPersistenceSchema(root: string): PersistenceSchemaInvento
     );
   }
   const header = declaration('HeaderRoot');
-  // 磁碟上的 header 行（世代檔第一行與墓碑），照 dsh 另立一個根：`type` 與 `migratedFrom` 不在邏輯 header 裡。
+  // 磁碟上的 header 行（世代檔第一行與墓碑）另立一個根：`type` 與 `migratedFrom` 不在邏輯 header 裡。
   const physical = program
     .getSourceFile(resolve(root, PHYSICAL_HEADER_FILE))
     ?.statements.filter(
