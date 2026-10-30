@@ -208,6 +208,20 @@ function checkout(scratch: string, rev: string): string {
     cwd: tree,
     env: installEnv(),
   });
+  // 有 `build:lib` 的 rev，workspace 套件從 `lib/` 解析（#1385 之後）：先建出來，CLI 才 import 得到；vendor 的型別檔由它們的
+  // `prepare` 產生，`--ignore-scripts` 跳過了，in-tree 腳本的型別檢查要它。
+  const scripts = (
+    JSON.parse(readFileSync(join(tree, 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>;
+    }
+  ).scripts;
+  if (scripts?.['build:lib'] !== undefined) {
+    run('pnpm', ['run', 'build:lib'], { cwd: tree, env: installEnv() });
+    run('pnpm', ['--filter', './vendor/**', 'run', '--if-present', 'prepare'], {
+      cwd: tree,
+      env: installEnv(),
+    });
+  }
   return tree;
 }
 

@@ -40,7 +40,7 @@ v0.5.19 的系統提示詞不講核准政策：模型不知道這個 session 要
    會話日誌預設在 home 的 `sessions/` 底下（[`docs/operations.md`〈會話日誌〉](../../../operations.md#會話日誌)；banner 的「會話日誌：」那一行印的是實際目錄）：
 
    ```bash
-   grep -h '"request/system"' ~/.nexus-agent/sessions/<那一次的目錄>/*.jsonl | grep -oE '這個 session (開著|關掉了)核准提示'
+   grep -h '"request/system"' ~/.nexus-agent/sessions/<那一次的目錄>/*/session.v*.jsonl | grep -oE '這個 session (開著|關掉了)核准提示'
    ```
 
    設過 `NEXUS_AGENT_HOME` 或 `--session-log` 的換成那個目錄。印出來的要對上上表：「開著核准提示」是會問的那一句，
