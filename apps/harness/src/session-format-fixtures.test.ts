@@ -8,6 +8,7 @@
  * 每份複製到暫存目錄再讀：續接會把舊兩檔遷成這一版的世代檔、舊 header 換成墓碑，夾具本身不能被動到。
  */
 
+import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -191,7 +192,15 @@ describe.each(names)('夾具 %s', (name) => {
       const headerLine = generation.toString('utf8', 0, newline);
       const { migratedFrom, ...rest } = JSON.parse(headerLine) as Record<string, unknown>;
       expect(rest).toMatchObject({ type: 'session', id, version: SESSION_LOG_FORMAT_VERSION });
-      expect(migratedFrom).toMatchObject({ bytes: source.byteLength });
+      const { bytes, acceptedBytes, sha256 } = migratedFrom as Record<string, number | string>;
+      expect(bytes).toBe(source.byteLength);
+      expect(acceptedBytes).toBeLessThanOrEqual(source.byteLength);
+      const prefix = source.subarray(0, Number(acceptedBytes));
+      expect(sha256).toBe(createHash('sha256').update(prefix).digest('hex'));
+      // 新世代的本文從已接受的前綴原樣開頭，續寫接在後面。
+      expect(generation.subarray(newline + 1, newline + 1 + prefix.byteLength).equals(prefix)).toBe(
+        true,
+      );
       // 墓碑是同一份 header 行，只少了遷移來源。
       expect(JSON.parse(await readFile(legacy.header, 'utf8'))).toEqual(rest);
       const { events } = parseJsonlSessionBody(id, generation.subarray(newline + 1), {

@@ -217,7 +217,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 52,
     kind: 'additive',
     ref: '#2132',
-    readerBranch: 'apps/harness/src/jsonl-session-store.ts:1875',
+    readerBranch: 'apps/harness/src/jsonl-session-store.ts:1894',
   },
 ];
 

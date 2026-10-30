@@ -44,6 +44,8 @@ let inject: Injection = {
   rmTempFails: false,
 };
 const directorySyncs = { session: 0, project: 0 };
+/** 日誌與暫存檔的把手（目錄與鎖檔不算）開了幾個、關了幾個。 */
+const fileHandles = { opened: 0, closed: 0 };
 
 /** 路徑換成不隨每次執行變動的標籤。 */
 function label(path: string): string {
@@ -84,6 +86,12 @@ function wrapHandle(target: FileHandle, path: string, directory: boolean): FileH
           return real.sync();
         };
       }
+      if (property === 'close' && !directory && !path.endsWith('.lock')) {
+        return async () => {
+          fileHandles.closed += 1;
+          return real.close();
+        };
+      }
       if (property === 'writeFile') {
         return async (data: string, encoding?: BufferEncoding) => {
           if (inject.partialTempWrite && path.endsWith('.tmp')) {
@@ -119,6 +127,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
         throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
       }
       const handle = await actual.open(p, flags as never, mode as never);
+      if (!directory && !p.endsWith('.lock')) fileHandles.opened += 1;
       return wrapHandle(handle, p, directory);
     },
     link: async (from: string, to: string) => {
@@ -157,6 +166,8 @@ beforeEach(async () => {
     directorySyncEio: undefined,
     rmTempFails: false,
   };
+  fileHandles.opened = 0;
+  fileHandles.closed = 0;
 });
 
 afterEach(async () => {
@@ -318,6 +329,9 @@ describe('目錄 fsync 的錯不吞，也不卡死', () => {
     const stored = store.create(header('theta'));
     await expect(stored.flush()).rejects.toThrow(/EIO/);
     await expect(stored.close()).resolves.toBeUndefined();
+    // 開過的把手都關了：不洩漏到行程結束。
+    expect(fileHandles.opened).toBeGreaterThan(0);
+    expect(fileHandles.closed).toBe(fileHandles.opened);
 
     expect(await exists(join(projectDir, 'theta', LOG))).toBe(true);
     expect(await exists(join(projectDir, 'theta.header.json'))).toBe(false);
