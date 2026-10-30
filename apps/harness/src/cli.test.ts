@@ -896,12 +896,12 @@ describe('--patch 與工作區（#2162）', () => {
     await writeFile(join(outside, 'p.yml'), '[]\n', { mode: 0o600 });
     const { printer, stdout } = recorder();
     await runCli({
-      argv: ['--dump-config-schema', '--workspace', workspace, '--patch', join(outside, 'p.yml')],
+      argv: ['--dump-config', '--workspace', workspace, '--patch', join(outside, 'p.yml')],
       input: new PassThrough(),
       output: new PassThrough(),
       printer,
     });
-    expect(JSON.parse(stdout())).toBeTypeOf('object');
+    expect(stdout()).toContain('# == ');
     await rm(workspace, { recursive: true, force: true });
     await rm(outside, { recursive: true, force: true });
   });
