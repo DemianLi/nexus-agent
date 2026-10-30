@@ -1,4 +1,4 @@
-//! 沙箱 spawner（#1946 S3）：常駐模式，加上給 MCP 用的單次模式 `--exec`。由 Node 用 stdio pipe 起：stdin 收要求、stdout 送事件（格式見 `protocol.rs`），stderr 只給人看。
+//! 沙箱 spawner（#1946 S3）：常駐模式，加上給 MCP 用的單次模式 `--exec`。常駐模式由 Node 用 stdio pipe 起：stdin 收要求、stdout 送事件（格式見 `protocol.rs`），stderr 只給人看。
 //!
 //! ```text
 //! nexus-sandbox-spawner --listen <socket 路徑>
@@ -624,6 +624,7 @@ fn parse_exec(args: &[OsString]) -> Result<ExecRequest, String> {
 
 /// 單次模式：替這個行程自己上沙箱再 exec，給一條連線只起一次、stdio 由呼叫端接好的行程用。
 /// 過濾器與 Landlock 跟常駐模式走同一份程式；裝不上就結束，不跑。
+/// `<程式>` 是路徑，不找 PATH，呼叫端解好。exec 失敗照 shell 慣例回 127／126，其他失敗回 125。
 /// 讀根寫根要是 realpath：呼叫端檢查過路徑，重起時路徑若被換成連結，這裡拒絕，不跟過去。
 fn exec_confined(args: &[OsString]) -> ! {
     let die = |detail: String| -> ! {
@@ -644,7 +645,9 @@ fn exec_confined(args: &[OsString]) -> ! {
     if abi < landlock::WANTED_ABI {
         eprintln!("nexus-sandbox-spawner: Landlock ABI {abi}，只有部分強制（完整強制要 ABI {}）", landlock::WANTED_ABI);
     }
-    // 同 child.rs：脫離呼叫端的控制終端與行程群組、呼叫端死了跟著走、fd 3 以上不留給它。
+    let caller = unsafe { libc::getppid() };
+    // 脫離呼叫端的控制終端與行程群組、呼叫端死了跟著走、fd 3 以上不留給它。
+    // 設好 PDEATHSIG 之後再核一次父行程，避開「設好之前呼叫端就死了」。
     // SAFETY：這幾個呼叫只動這個行程自己；Rust 執行期把 SIGPIPE 設成忽略，exec 會帶過去，所以還原。
     unsafe {
         // 呼叫端已經替它開了 session 時 setsid 回 EPERM，目的已達成。
@@ -652,6 +655,9 @@ fn exec_confined(args: &[OsString]) -> ! {
             die(format!("setsid：{}", std::io::Error::last_os_error()));
         }
         libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+        if libc::getppid() != caller {
+            die("呼叫端已經不在".to_string());
+        }
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
         if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32) != 0 {
             die(format!("close_range：{}", std::io::Error::last_os_error()));
@@ -682,7 +688,7 @@ fn main() {
     }
     let args: Vec<String> = std::env::args().collect();
     let Some(path) = args.iter().position(|a| a == "--listen").and_then(|i| args.get(i + 1)).cloned() else {
-        eprintln!("usage: nexus-sandbox-spawner --listen <socket path>");
+        eprintln!("usage: nexus-sandbox-spawner --listen <socket path> | --exec [--read <path>]... [--write <path>]... -- <program> [args]...");
         std::process::exit(2);
     };
     let cpath = CString::new(path.as_bytes()).unwrap_or_else(|_| unavailable(0, "socket 路徑含 NUL"));

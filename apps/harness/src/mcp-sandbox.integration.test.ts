@@ -1,6 +1,6 @@
 /**
  * 真的 Node 與 Python stdio MCP server 經真的 spawner 單次模式（#1946）：連得上、呼叫得到工具，讀不到 serve 的 home，連不出網路。
- * 只在 Linux 跑，`NEXUS_SPAWNER_BIN` 指到執行檔。CI 上沒有 python3 就紅，本機容器沒有就跳過。
+ * `NEXUS_SPAWNER_BIN` 指到執行檔才跑（只有 Linux 建得出來）。CI 上沒有 python3 就紅，本機容器沒有就跳過。
  */
 
 import { execFileSync } from 'node:child_process';

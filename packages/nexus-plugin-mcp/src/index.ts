@@ -212,7 +212,7 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 /**
  * MCP plugin。
  *
- * `apply` 是 async 的，裡面做五件事：預留這台伺服器的名字、宣告了 `sandbox` 就包進沙箱、連上 server、`tools/list` 拿工具、逐個註冊。四件事
+ * `apply` 是 async 的，裡面做五件事：預留這台伺服器的名字、宣告了 `sandbox` 就包進沙箱、連上 server、`tools/list` 拿工具、逐個註冊。五件事
  * **都在載入期**——agent 跑起來的時候工具集合已經定了。
  *
  * **失敗照 dsh 分兩類**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：
@@ -221,8 +221,7 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
  *   先預留名字、重複就讓那一個實例失敗（`packages/mcp/mcp-client/src/index.ts:160-176`）。預留用一個服務名
  *   （`mcp:server:<serverName>`）：服務是單一佔位、重名就拋，而且訊息指名兩個 plugin。
  * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、交出一則警告
- *   （`registry.logger`），那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。dsh 在初次
- *   同步時也是三種一起管（連線與列工具經 `ready`，註冊經 `registrationFailure`，`connection.ts:130-140`）。
+ *   （`registry.logger`），那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。
  *
  * 收住的做法是自己 `catch`，不是把 adapter 換成 `onConnectionError: 'ignore'`：那一格只管連線，列不出工具照樣拋，
  * 蓋不到 dsh 的三種。

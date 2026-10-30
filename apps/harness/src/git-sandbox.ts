@@ -27,7 +27,7 @@ import type { GitOutcome, GitStartFailure, GitStarter } from '@nexus/plugin-work
 import { reportSandbox, productToolLauncher } from './tool-launcher.js';
 import type { ToolLauncher, ToolProcess, ToolResult } from './tool-process.js';
 
-/** 涵蓋常見發行版放執行檔、載入器與函式庫的位置，加上 git 與它的 helper 會讀的系統檔。主機上不存在的不給。 */
+/** 涵蓋常見發行版放執行檔、載入器與函式庫的位置，加上執行期會讀的系統檔。主機上不存在的不給。 */
 export const SYSTEM_READABLE = [
   '/usr',
   '/lib',

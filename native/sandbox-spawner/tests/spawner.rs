@@ -870,7 +870,7 @@ fn exec_mode_detaches_like_a_daemon_child() {
         cmd.arg("--read").arg(String::from_utf8(root).unwrap());
     }
     cmd.args(["--", "/bin/sh", "-c", "cat /proc/self/stat; grep SigIgn /proc/$$/status; ls /proc/$$/fd"]);
-    // SAFETY：只 dup 一個 fd，不清 CLOEXEC 以外的東西。
+    // SAFETY：pre_exec 裡只有 dup2，不配置記憶體。fd 9 沒有 CLOEXEC，exec 之後還在，驗得出 close_range。
     unsafe {
         cmd.pre_exec(|| {
             libc::dup2(2, 9);

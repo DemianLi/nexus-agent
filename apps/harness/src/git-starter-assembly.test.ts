@@ -16,7 +16,7 @@ import { shippedPlugins } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
-/** 掛在清單最後，看 host 服務裡有沒有 starter。 */
+/** 掛在清單最後，看 host 服務裡有沒有 starter 與 MCP 包裝。 */
 function spyOn(seen: { value?: unknown; mcp?: unknown }): PluginEntry {
   return {
     plugin: {

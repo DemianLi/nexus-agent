@@ -98,6 +98,17 @@ describe('createMcpSandboxWrapper', () => {
     expect(wrapped.args).not.toContain('/usr');
   });
 
+  it('相對的 cwd 以行程的 cwd 為基準，只解一次', async () => {
+    const before = process.cwd();
+    process.chdir(join(base, 'user'));
+    try {
+      const wrapped = await wrap({ cwd: 'project', readable: ['.'] });
+      expect(wrapped.args).toContain(join(base, 'user/project'));
+    } finally {
+      process.chdir(before);
+    }
+  });
+
   it('command 沒有斜線：照 PATH 找', async () => {
     const wrapped = await createMcpSandboxWrapper(() => host)({
       command: 'server',

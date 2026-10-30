@@ -47,10 +47,11 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `connection.args`      | stdio     | 否   | 參數                                                                                       |
 | `connection.env`       | stdio     | 否   | 額外的環境變數，疊在清洗過的父環境上（見下）；值可以寫 `{ credential: <名字> }`（見憑證）  |
 | `connection.cwd`       | stdio     | 否   | 子行程的工作目錄                                                                           |
+| `connection.sandbox`   | stdio     | 否   | 要套沙箱：鍵存在就套，`{}` 也算；`readable`、`writable` 見 `docs/operations.md`            |
 | `connection.url`       | http      | 是   | server 網址                                                                                |
 | `connection.headers`   | http      | 否   | 額外標頭（授權用）；值可以寫 `{ credential: <名字>, prefix?: <前綴> }`（見憑證）           |
 | `toolCallTimeoutMs`    | 兩者      | 否   | 一次 `tools/call` 的逾時，預設 60000                                                       |
-| `failOnStartupError`   | 兩者      | 否   | 掛上那一刻連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
+| `failOnStartupError`   | 兩者      | 否   | 掛上那一刻套不上沙箱、連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
 | `maxInstructionBytes`  | 兩者      | 否   | server 指引**連同出處標頭**的 UTF-8 位元組上限，預設 32768；超過算連線失敗（同上，不截斷） |
 | `approval`             | 兩者      | 否   | 哪些工具要先讓人核准，預設 `{ default: ask }`：整台都問（見核准）                          |
 
@@ -187,7 +188,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 
 照 dsh 的 `Known Limitations` 模式：這些是缺口，不是待補的功能。
 
-- **MCP 工具自己的檔案存取不受任何管束。** 它們是外部程序、走自己的檔案系統，既不經過
+- **沒宣告 `sandbox` 的 MCP 工具，檔案存取不受管束。** 它們是外部程序、走自己的檔案系統，既不經過
   `permissions` 也不經過 backend——deepagents 明文「custom tools from the agent or other
   middleware are left untouched」。harness 管得住的是「MCP 讀來的資料經由內建 `write_file`
   寫進虛擬 FS」那條路。沒宣告 `connection.sandbox` 的 server 不受管束，宣告了見

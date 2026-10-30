@@ -41,7 +41,7 @@ describe('MCP 的 sandbox 宣告', () => {
     return loaded.registry;
   };
 
-  it('鍵存在就要套，`{}` 也算；包裝收到路徑與 PATH，連線用它回的 command', async () => {
+  it('包裝收到路徑與 PATH', async () => {
     const seen: McpSandboxRequest[] = [];
     const registry = await load(
       {
@@ -58,6 +58,13 @@ describe('MCP 的 sandbox 宣告', () => {
       { command: process.execPath, readable: ['/r'], writable: ['/w'], path: '/p' },
     ]);
     expect(modelToolNames(registry).length).toBeGreaterThan(0);
+  });
+
+  it('連線用包裝回的 command，不用設定寫的', async () => {
+    const registry = await load({ ...stdio, sandbox: {} }, () =>
+      Promise.resolve({ command: '/no/such/spawner', args: [] }),
+    );
+    expect(modelToolNames(registry)).toEqual([]);
   });
 
   it('`{}` 也走包裝', async () => {

@@ -3,8 +3,8 @@
  * spawner 的單次模式，它上好沙箱再 exec。不走常駐那一支：stdio 由 adapter 自己接，它沒有注入 transport 的位子。
  *
  * 讀根是系統執行期的目錄與檔、`command`、`cwd` 與宣告的 `readable`，寫根是宣告的 `writable`。宣告的路徑、`command`、`cwd` 都不能包住
- * `$HOME` 或 serve 的 home，也不能落在 serve 的 home 底下；判斷前先 realpath，違反就不連線。args 裡全是 realpath：重連用同一份 args，
- * 路徑若被換成連結，單次模式拒絕。
+ * `$HOME` 或 serve 的 home，也不能落在 serve 的 home 底下；判斷前先 realpath，違反就不連線。系統那幾項若包住這兩個 home，那一項不給，不算拒絕。
+ * `--read`、`--write` 全是 realpath：重連用同一份 args，這些路徑若被換成連結，單次模式拒絕。
  *
  * @module
  */
@@ -34,7 +34,7 @@ const within = (root: string, path: string): boolean => {
 
 /** `PATH` 裡第一支能執行的；帶斜線的以 `cwd` 為基準。 */
 async function resolveCommand(request: McpSandboxRequest): Promise<string> {
-  const base = request.cwd ?? process.cwd();
+  const base = resolve(request.cwd ?? '.');
   const candidates = request.command.includes('/')
     ? [resolve(base, request.command)]
     : (request.path ?? process.env['PATH'] ?? '')
@@ -75,7 +75,7 @@ const productHost = (): McpSandboxHost => ({
  * 組裝點交給 MCP 插件的那一格。
  *
  * @param host - 主機事實，每次包裝才讀（`apply` 一次，重連沿用）。
- * @returns 包裝函式；不是 Linux、找不到 spawner、路徑不合規時拋。沒有 Landlock 由 spawner 以 125 結束，變成連線失敗。
+ * @returns 包裝函式；它在不是 Linux、找不到 spawner、找不到 command、路徑不合規時 reject。沒有 Landlock 由 spawner 以 125 結束，變成連線失敗。
  */
 export function createMcpSandboxWrapper(
   host: () => McpSandboxHost = productHost,
@@ -91,7 +91,7 @@ export function createMcpSandboxWrapper(
     const forbidden = (path: string): boolean =>
       homes.some((home) => within(path, home)) || within(path, serve) || within(serve, path);
     const declared = async (path: string): Promise<string> => {
-      const found = await realpath(resolve(request.cwd ?? process.cwd(), path)).catch(() => {
+      const found = await realpath(resolve(request.cwd ?? '.', path)).catch(() => {
         throw new Error(`sandbox 的路徑不存在：${path}`);
       });
       if (forbidden(found)) throw new Error(`sandbox 不能開這個路徑：${path}`);
@@ -100,7 +100,7 @@ export function createMcpSandboxWrapper(
     const command = await resolveCommand(request);
     const given = [
       command,
-      ...(request.cwd === undefined ? [] : [request.cwd]),
+      ...(request.cwd === undefined ? [] : [resolve(request.cwd)]),
       ...request.readable,
     ];
     const readable = await Promise.all(given.map(declared));
