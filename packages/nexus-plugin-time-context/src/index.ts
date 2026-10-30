@@ -3,16 +3,18 @@
  * 對上 dsh 的 `@deepseek-ai/dsh-time-context`（`packages/context/time-context`，`687f282e`），web-app 的 standard、cordis、ptc 三個 preset
  * 都掛它（`packages/bundle/web-app/presets/*.patch.yml`），所以是出廠就開的。
  *
- * 在一次 agent 呼叫開頭追加**一則持久的讀數**（同一條 thread 至多每 `refreshIntervalMs` 一次），三行：
+ * 在一次 agent 呼叫開頭追加**一則持久的讀數**（同一條 thread 至多每 `refreshIntervalMs` 一次），四行：
  *
  * ```text
  * Time sampled while preparing turn <turn>, step <step>: <timestamp>
  * Browser time zone for this request: <policy>
  * Elapsed since the preceding <baseline>: <duration>.
+ * When the user gives a date without a year, infer the year from the timestamp above and choose the closest matching date.
  * ```
  *
- * 讀數**只追加在請求尾端，不進 system prompt**：prompt cache 的前綴不會因此失效（dsh README 的同一個理由）。文字照 dsh 的英文逐字搬，
- * 不翻成中文——這是給模型看的，跟 agent-instructions 一樣。
+ * 讀數**只追加在請求尾端，不進 system prompt**：prompt cache 的前綴不會因此失效（dsh README 的同一個理由）。前三行照 dsh 的英文逐字搬，
+ * 第四行是本專案加的（[#2154](https://github.com/DemianLi/nexus-agent/issues/2154)）：讀數排在人話之後，小模型沒有這行時常把沒寫年份的日期算成舊年份。
+ * 全部不翻成中文——這是給模型看的，跟 agent-instructions 一樣。
  *
  * ## 瀏覽器時區（第二行）：三種讀數（#1629）
  *
@@ -102,6 +104,10 @@ export const TIME_CONTEXT_MARKER = 'nexus.timeContext';
 
 /** 兩次注入之間至少隔多久（毫秒）的預設值：10 分鐘，照 dsh。 */
 export const DEFAULT_REFRESH_INTERVAL_MS = 600_000;
+
+/** 讀數的第四行：沒寫年份的日期怎麼補年份（#2154）。 */
+const YEARLESS_DATE_RULE =
+  'When the user gives a date without a year, infer the year from the timestamp above and choose the closest matching date.';
 
 /** 嚴格的瀏覽器時區格式：`UTC`，或 IANA 的 `Area/Location` 樣式（和 `@nexus/wire` 的 `canonicalClientTimeZone` 同一條，插件不 import wire，照 dsh 也是各抄一份）。 */
 const IANA_TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+.-]*(?:\/[A-Za-z0-9_+.-]+)+$/u;
@@ -228,7 +234,7 @@ export function formatDuration(elapsedMs: number): string {
 }
 
 /**
- * 渲染一則讀數。逐字照 dsh `renderText`。
+ * 渲染一則讀數。前三行逐字照 dsh `renderText`，第四行是 {@link YEARLESS_DATE_RULE}。
  *
  * @param now - 取樣時間（epoch 毫秒）。
  * @param turn - 第幾輪。
@@ -237,7 +243,7 @@ export function formatDuration(elapsedMs: number): string {
  * @param formatter - 第一行用的格式器。
  * @param timeZone - 第一行方括號裡的時區名。
  * @param browser - 這一輪的瀏覽器時區事實；省略就是 `missing`。
- * @returns 三行文字。
+ * @returns 四行文字。
  */
 export function renderTimeContext(
   now: number,
@@ -253,7 +259,8 @@ export function renderTimeContext(
   return (
     `Time sampled while preparing turn ${turn}, step ${step}: ${formatTimestamp(now, formatter, timeZone)}\n` +
     `${renderBrowserTimeZoneContext(browser)}\n` +
-    `Elapsed since the preceding ${baseline}: ${elapsed}.`
+    `Elapsed since the preceding ${baseline}: ${elapsed}.\n` +
+    YEARLESS_DATE_RULE
   );
 }
 
