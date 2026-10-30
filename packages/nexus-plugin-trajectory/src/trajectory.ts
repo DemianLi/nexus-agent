@@ -67,13 +67,16 @@ import type {
   TrajectoryView,
 } from '@nexus/wire';
 
-/** 表裡的鍵：加前綴，免得 `"0"`、`"1"` 這種整數形的 id 被物件按數字序排到前面，把「最舊的先丟」弄反。 */
+/** 表裡的鍵：加前綴，免得 `"0"`、`"1"` 這種整數形的 id 被物件按數字序排到前面，把「最舊的先丟」的順序弄反。 */
 const ownerKey = (callId: string): string => `#${callId}`;
 
-/** 工具 id→呼叫 的表最多留幾筆；超過從最舊的丟。恢復（resume）要用到的只是還沒落定的那幾筆。 */
+/** 工具 id→呼叫 的表最多留幾筆；超過從最舊的丟。恢復（resume）要用到的只是還沒落定的那幾個，遠遠小於這個數。 */
 const OWNERS_CAP = 2000;
 
-/** 歸屬表每塊最多幾筆。記一筆只複製它碰到的塊，所以成本跟著這個數走，不跟著 {@link OWNERS_CAP}。 */
+/**
+ * 歸屬表每塊最多幾筆。記一筆只複製它碰到的塊，相鄰兩塊裝得下就併成一塊，所以塊數不超過
+ * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`，成本跟著這兩個數走，不跟著 {@link OWNERS_CAP}。
+ */
 const OWNERS_CHUNK = 128;
 
 /**
@@ -458,7 +461,16 @@ function ownerOf(owners: OwnerTable, callId: string): number | null | undefined 
   return at < 0 ? undefined : owners.chunks[at]![key];
 }
 
-/** 工具表：從 `chunks` 的第 `at` 塊拿掉這些鍵，空了就連塊拿掉。`chunks` 是呼叫端自己的副本。 */
+/** 工具表：第 `at` 塊與下一塊裝得下一塊就併起來。`chunks` 是呼叫端自己的副本。 */
+function mergeOwnerChunks(chunks: Readonly<Record<string, number | null>>[], at: number): void {
+  const left = chunks[at];
+  const right = chunks[at + 1];
+  if (left === undefined || right === undefined) return;
+  if (Object.keys(left).length + Object.keys(right).length > OWNERS_CHUNK) return;
+  chunks.splice(at, 2, { ...left, ...right });
+}
+
+/** 工具表：從 `chunks` 的第 `at` 塊拿掉這些鍵，空了就連塊拿掉，再跟前後的塊併。`chunks` 是呼叫端自己的副本。 */
 function dropOwnerKeys(
   chunks: Readonly<Record<string, number | null>>[],
   at: number,
@@ -468,9 +480,15 @@ function dropOwnerKeys(
   for (const key of keys) delete next[key];
   if (Object.keys(next).length === 0) chunks.splice(at, 1);
   else chunks[at] = next;
+  mergeOwnerChunks(chunks, at);
+  mergeOwnerChunks(chunks, at - 1);
 }
 
-/** 工具表：加進一筆擁有者，超過上限從最舊的丟。回新的表，傳進來的不動：推送的投影要純，狀態會被通道拿去比對。 */
+/**
+ * 工具表：加進一批擁有者，超過上限從最舊的丟。
+ *
+ * @returns 新的表，`ids` 是空的時回同一個參照。傳進來的不動：推送的投影要純，狀態會被通道拿去比對。
+ */
 function noteOwners(owners: OwnerTable, ids: readonly string[], owner: number | null): OwnerTable {
   if (ids.length === 0) return owners;
   const chunks = [...owners.chunks];

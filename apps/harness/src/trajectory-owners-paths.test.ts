@@ -1,7 +1,8 @@
 /**
  * 軌跡的歸屬表（`@nexus/plugin-trajectory`）在產品的每條折疊路上值都一樣：
  * 歷史路由的最新一頁（`historyPage`）、子代理的值（`childProjectionData`）與即時逐顆推送（`createProjectionFold`）。
- * 日誌過了 2000 筆上限，尾巴兩顆遲到事件一顆還認得、一顆已被擠掉，表多留或少留一筆都會在這裡現形。
+ * 日誌過了 2000 筆上限，尾巴四顆遲到事件兩顆還認得、兩顆已被擠掉，`id_500`／`id_499` 正好在邊界，
+ * 表多留或少留一筆都會在這裡現形。
  */
 
 import { createProjectionFold, SessionLog, toLoggedMessage } from '@nexus/core';

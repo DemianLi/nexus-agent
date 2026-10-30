@@ -1246,7 +1246,7 @@ describe('歸屬表分塊', () => {
   const entriesOf = (state: ReturnType<typeof initialTrajectory>) =>
     state.owners.chunks.flatMap((chunk) => Object.entries(chunk));
 
-  /** 分塊之前的演算法：整張表一份，先刪再放、超過 2000 從最舊的丟。比對的對照組。 */
+  /** 整張表一份的參考算法：先刪再放、超過 2000 從最舊的丟。比對的對照組。 */
   function referenceOwners(events: readonly SessionEvent[]): [string, number | null][] {
     let owners: Record<string, number | null> = {};
     for (const event of events) {
@@ -1269,9 +1269,11 @@ describe('歸屬表分塊', () => {
     ['全新的 id', 0],
     ['每三則重用一個舊 id', 3],
     ['同一則裡重複、超過一塊的批次', 7],
+    ['反覆重用一小撮 id', 127],
   ])('表的內容與淘汰順序跟整張表的算法逐筆相同：%s', (_name, reuse) => {
     const ids = Array.from({ length: 5000 }, (_, n) => {
       if (reuse === 0) return [`id_${n}`];
+      if (reuse === 127) return [n % 128 === 0 ? `fresh_${n}` : `id_${n % 127}`];
       if (reuse === 3) return n % 3 === 0 ? [`id_${(n * 7) % 2500}`] : [`id_${n}`];
       return n % 500 === 0
         ? Array.from({ length: 300 }, (_x, at) => `b_${n}_${at % 200}`)
@@ -1282,6 +1284,15 @@ describe('歸屬表分塊', () => {
     const expected = referenceOwners(log.events);
     expect(entriesOf(state)).toEqual(expected);
     expect(state.owners.size).toBe(expected.length);
+  });
+
+  it('反覆重用 id 時塊會併回來，塊數不跟著重用次數長', () => {
+    // 每 128 則才一個新 id，其餘重用同一小撮：每一塊被掏到只剩那一個新 id。
+    const ids = Array.from({ length: 20_000 }, (_, n) => [
+      n % 128 === 0 ? `fresh_${n}` : `id_${n % 127}`,
+    ]);
+    const { owners } = stateOf(logOf(ids).events);
+    expect(owners.chunks.length).toBeLessThanOrEqual((2 * owners.size) / 128 + 1);
   });
 
   it('上限剛好 2000：第 2001 筆把最舊的那一筆擠掉，一筆都不多留', () => {
@@ -1311,7 +1322,7 @@ describe('歸屬表分塊', () => {
     const base = stateOf(log.events);
     const copy = JSON.stringify(base);
     const start = log.append('model/start', {});
-    // 這三則分別踩到：新 id、舊 id 重新排到最新、把最舊的擠掉。
+    // 這兩則分別踩到：新 id（同時把最舊的擠掉）、舊 id 重新排到最新。
     const fresh = reply(start.seq, '', 'id_new');
     const again = reply(start.seq, '', 'id_4000');
     const left = applyTrajectory(
