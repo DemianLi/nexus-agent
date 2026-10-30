@@ -553,15 +553,17 @@ describe('驗收 4、8：樹上叫得出來，落點在基線之後、讀數之�
       form: 'instructions',
     });
 
-    // 落盤再讀回（同版登記的實讀證據）：這份事件原樣寫成 JSONL，讀盤驗證（#1549）不擋這個來源，唯讀打開與續接都照常，
-    // 讀回的那一則與記下的相同。
+    // 落盤再讀回（同版登記的實讀證據）：這份事件原樣寫成這一版的世代檔（header 行之後逐行一顆），讀盤驗證（#1549）不擋
+    // 這個來源，唯讀打開與續接都照常，讀回的那一則與記下的相同。
     const directory = scratch('nexus-skill-invocation-store-');
     const paths = sessionPathsIn(directory, 'a');
+    mkdirSync(paths.sessionDirectory);
     await writeFile(
-      paths.header,
-      JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 'a', createdAt: 1 }),
+      paths.log,
+      [{ type: 'session', version: SESSION_LOG_FORMAT_VERSION, id: 'a', createdAt: 1 }, ...events]
+        .map((line) => `${JSON.stringify(line)}\n`)
+        .join(''),
     );
-    await writeFile(paths.log, events.map((event) => `${JSON.stringify(event)}\n`).join(''));
     const store = openJsonlSessionStore({ directory });
     const read = await (await store.open('a', 'read')).read();
     expect(invocationEvents(read)).toEqual(logged);

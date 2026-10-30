@@ -27,6 +27,7 @@ import {
 import { describe, expect, it, vi } from 'vitest';
 
 import { openJsonlSessionStore } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 import {
   makeSnippet,
   searchDocuments,
@@ -59,7 +60,7 @@ async function dir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'nexus-thread-search-'));
 }
 
-/** 照 JSONL 後端的檔名寫一份。 */
+/** 照 JSONL 後端的舊兩檔檔名寫一份（讀方照讀，續接時遷成世代檔）。 */
 async function writeThread(
   directory: string,
   id: string,
@@ -69,7 +70,7 @@ async function writeThread(
   await writeFile(
     join(directory, `${id}.header.json`),
     JSON.stringify({
-      version: SESSION_LOG_FORMAT_VERSION,
+      version: LEGACY_TWO_FILE_FORMAT_VERSION,
       id,
       createdAt: 1_000,
       ...(header.cwd === null ? {} : { cwd: header.cwd ?? CWD }),
@@ -944,7 +945,7 @@ describe('隊伍、收尾與失敗的種類（#1552）', () => {
   });
 });
 
-/** 盤上那份 header 的樣子，同 {@link writeThread} 寫的。 */
+/** 盤上那份 header 經讀方讀出來的樣子：同 {@link writeThread} 寫的那幾格，`version` 是這一版（讀方蓋過）。 */
 function headerOf(id: string, extra: Partial<StoredSessionHeader> = {}): StoredSessionHeader {
   return { version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1_000, cwd: CWD, ...extra };
 }
@@ -1001,7 +1002,10 @@ describe('活的 thread 讀記憶體（#1599）', () => {
         calls += 1;
         // 第一次對帳提交之前：`b` 剛寫下、而且活著。用同步寫：這一支是同步的。
         if (calls === 2) {
-          writeFileSync(join(directory, 'b.header.json'), JSON.stringify(headerOf('b')));
+          writeFileSync(
+            join(directory, 'b.header.json'),
+            JSON.stringify({ ...headerOf('b'), version: LEGACY_TWO_FILE_FORMAT_VERSION }),
+          );
           writeFileSync(join(directory, 'b.jsonl'), jsonl(said('途中寫下的暗號').events));
         }
         return calls === 1 ? [] : [live('b', said('途中寫下的暗號'))];

@@ -350,11 +350,15 @@ describe('嚴格解析器的事件 metadata', () => {
         roots: snapshot.roots.map((root) => ({ ...root, key: 'event:wrong/key' })),
       }),
     ).toThrow('invalid event root key');
-    // nexus 沒有 JsonlHeaderLine 這個根（見 persistence-schema.ts 檔頭）。
-    const header = { ...typeRoot('SessionHeader', { id: 'string' }), key: 'JsonlHeaderLine' };
+    // header 根只認 SessionHeader 與 JsonlHeaderLine 兩個名字。
+    const header = { ...typeRoot('SessionHeader', { id: 'string' }), key: 'SessionHeaderLine' };
     expect(() =>
       parsePersistenceSnapshot({ formatVersion: 1, types: [], roots: [header] }),
-    ).toThrow('invalid schema root JsonlHeaderLine');
+    ).toThrow('invalid schema root SessionHeaderLine');
+    const line = { ...typeRoot('SessionHeader', { id: 'string' }), key: 'JsonlHeaderLine' };
+    expect(() =>
+      parsePersistenceSnapshot({ formatVersion: 1, types: [], roots: [line] }),
+    ).not.toThrow();
   });
 });
 
@@ -1404,6 +1408,11 @@ function sourceTree(payload: string): string {
   );
   mkdirSync(join(root, 'apps', 'harness', 'src'), { recursive: true });
   mkdirSync(join(root, 'apps', 'web', 'src'), { recursive: true });
+  put(
+    root,
+    'apps/harness/src/jsonl-session-store.ts',
+    "import type { StoredSessionHeader } from '@nexus/core';\nexport interface JsonlHeaderLine extends StoredSessionHeader { readonly type: 'session' }\n",
+  );
   put(root, PAYLOAD, payload);
   put(
     root,

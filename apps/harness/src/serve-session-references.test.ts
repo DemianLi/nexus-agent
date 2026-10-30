@@ -9,7 +9,7 @@
  * 4. **快照記的是被引用那份磁碟上的版號**（#1856）：header 讀回來轉譯成這一版，`capturedFormatVersion` 仍記原版號。
  */
 
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,9 +21,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { assemblyWitness, resetAssemblyWitness } from './assembly-witness.fixture.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_DIR_NAME } from './harness-home.js';
-import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
+import {
+  legacyTwoFilePathsIn,
+  openJsonlSessionStore,
+  projectKey,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 import { TOOL_RESULT_STASH_DIR_NAME } from './settings/tool-result-stash.js';
 
 let running: RunningServe | undefined;
@@ -163,13 +169,21 @@ describe('GET /threads/:id/session-references', () => {
     await first.close();
     running = undefined;
 
-    // 把 alpha 的 header 改成上一版寫的樣子：50 是加性的，本文照上一版讀得懂。
+    // 把 alpha 換成上一版寫的舊兩檔：header 是世代檔的 header 行拿掉 `type`、版號換成上一版，日誌是世代檔第二行起的原樣
+    // 本文（本文照上一版讀得懂）。會話目錄刪掉：留著的話兩種佈局並存，讀方拒讀。
     const directory = join(root, projectKey(process.cwd()));
-    // 改的是版號，直接寫檔（#1868 裁決 Q1）。
-    const headerPath = sessionPathsIn(directory, 'alpha').header;
-    const older = SESSION_LOG_FORMAT_VERSION - 1;
-    const onDisk = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
+    const generation = sessionPathsIn(directory, 'alpha');
+    const headerPath = legacyTwoFilePathsIn(directory, 'alpha').header;
+    const older = LEGACY_TWO_FILE_FORMAT_VERSION;
+    const text = await readFile(generation.log, 'utf8');
+    const newline = text.indexOf('\n');
+    const { type: _type, ...onDisk } = JSON.parse(text.slice(0, newline)) as Record<
+      string,
+      unknown
+    >;
     await writeFile(headerPath, JSON.stringify({ ...onDisk, version: older }));
+    await writeFile(legacyTwoFilePathsIn(directory, 'alpha').log, text.slice(newline + 1));
+    await rm(generation.sessionDirectory, { recursive: true });
 
     const second = await start(root);
     const candidate = available(await references(second, 'beta', '')).find(
@@ -186,7 +200,7 @@ describe('GET /threads/:id/session-references', () => {
     expect(snapshot?.data.source).toMatchObject({
       references: [{ sessionId: 'alpha', capturedFormatVersion: older }],
     });
-    // 被引用的那份只被讀，沒被續接：磁碟上仍是舊版號。
+    // 被引用的那份只被讀，沒被續接（續接會遷成世代、舊路徑換成這一版的墓碑）：磁碟上仍是舊版號。
     expect((JSON.parse(await readFile(headerPath, 'utf8')) as { version: number }).version).toBe(
       older,
     );
