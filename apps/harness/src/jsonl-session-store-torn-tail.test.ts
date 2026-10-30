@@ -185,51 +185,69 @@ describe('壞尾可復原', () => {
   });
 });
 
-describe('壞行之後有收尾：拒絕', () => {
+/** 兩種佈局：世代檔的第 1 行是 header 行，行號比舊兩檔多 1。 */
+const LAYOUTS = [
+  { name: '世代檔', put: plant, bytes: logBytes, offset: 1 },
+  { name: '舊兩檔', put: plantLegacy, bytes: legacyLogBytes, offset: 0 },
+];
+
+describe.each(LAYOUTS)('壞行之後有收尾，$name：拒絕', ({ put, bytes, offset }) => {
   it.each(['turn/end', 'turn/failed'])(
     '壞行之後接完整的 %s：resume 與預設 read 都拋，檔案原樣',
     async (closer) => {
-      await plantLegacy(OPEN_TURN, BAD_LINE, line(4, closer));
-      const before = await legacyLogBytes();
+      await put(OPEN_TURN, BAD_LINE, line(4, closer));
+      const before = await bytes();
+      const message = new RegExp(`第 ${4 + offset} 行不是 JSON`, 'u');
 
       await expect(store().resume(ID)).rejects.toBeInstanceOf(SessionCorruptionError);
-      await expect(store().resume(ID)).rejects.toThrow(/第 4 行不是 JSON/u);
+      await expect(store().resume(ID)).rejects.toThrow(message);
       const reader = await store().open(ID, 'read');
-      await expect(reader.read()).rejects.toThrow(/第 4 行不是 JSON/u);
+      await expect(reader.read()).rejects.toThrow(message);
 
-      expect((await legacyLogBytes()).equals(before)).toBe(true);
+      expect((await bytes()).equals(before)).toBe(true);
       expect(warnings).toEqual([]);
     },
   );
 
-  it('壞行本身就是 parse 得了的收尾（seq 錯）：立即拋', async () => {
-    await plantLegacy(OPEN_TURN, line(9, 'turn/end'));
-    await expect(store().resume(ID)).rejects.toThrow(/第 4 行的 seq 是 9，應該是 3/u);
-    const reader = await store().open(ID, 'read');
-    await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
-  });
+  it.each(['turn/end', 'turn/failed'])(
+    '壞行本身就是 parse 得了的 %s（seq 錯）：立即拋，檔案原樣',
+    async (closer) => {
+      await put(OPEN_TURN, line(9, closer));
+      const before = await bytes();
+      await expect(store().resume(ID)).rejects.toThrow(
+        new RegExp(`第 ${4 + offset} 行的 seq 是 9，應該是 3`, 'u'),
+      );
+      const reader = await store().open(ID, 'read');
+      await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
+      expect((await bytes()).equals(before)).toBe(true);
+      expect(warnings).toEqual([]);
+    },
+  );
 
   it('壞行之後的收尾沒有換行（撕裂）：不算收尾，丟掉', async () => {
-    await plantLegacy(OPEN_TURN, BAD_LINE, '{"type":"turn/end","seq":4');
+    await put(OPEN_TURN, BAD_LINE, '{"type":"turn/end","seq":4');
     const reader = await store().open(ID, 'read');
     expect((await reader.read()).map((e) => e.seq)).toEqual([0, 1, 2]);
   });
 });
 
 describe('准入先於復原', () => {
-  it('壞行之後接一行不認得、沒標 ignorable 的種類：拋 SessionEventUnsupportedError，不是靜靜截掉', async () => {
-    await plantLegacy(OPEN_TURN, BAD_LINE, line(4, 'future/thing'));
-    const before = await legacyLogBytes();
+  it.each(LAYOUTS)(
+    '$name，壞行之後接一行不認得、沒標 ignorable 的種類：拋 SessionEventUnsupportedError，不是靜靜截掉',
+    async ({ put, bytes }) => {
+      await put(OPEN_TURN, BAD_LINE, line(4, 'future/thing'));
+      const before = await bytes();
 
-    await expect(store().resume(ID)).rejects.toBeInstanceOf(SessionEventUnsupportedError);
-    const reader = await store().open(ID, 'read');
-    await expect(reader.read()).rejects.toBeInstanceOf(SessionEventUnsupportedError);
-    expect((await legacyLogBytes()).equals(before)).toBe(true);
-    expect(warnings).toEqual([]);
-  });
+      await expect(store().resume(ID)).rejects.toBeInstanceOf(SessionEventUnsupportedError);
+      const reader = await store().open(ID, 'read');
+      await expect(reader.read()).rejects.toBeInstanceOf(SessionEventUnsupportedError);
+      expect((await bytes()).equals(before)).toBe(true);
+      expect(warnings).toEqual([]);
+    },
+  );
 
-  it('標了 ignorable 的不認得種類，壞行之後照丟', async () => {
-    await plantLegacy(OPEN_TURN, BAD_LINE, line(4, 'future/thing', { ignorable: true }));
+  it.each(LAYOUTS)('$name，標了 ignorable 的不認得種類，壞行之後照丟', async ({ put }) => {
+    await put(OPEN_TURN, BAD_LINE, line(4, 'future/thing', { ignorable: true }));
     const reader = await store().open(ID, 'read');
     expect((await reader.read()).map((e) => e.seq)).toEqual([0, 1, 2]);
   });

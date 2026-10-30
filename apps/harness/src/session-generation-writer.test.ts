@@ -221,6 +221,105 @@ describe('遷移途中來源被改', () => {
     expect(existsSync(sessionPathsIn(dir, 'race').log)).toBe(false);
     expect(await readFile(legacy.header, 'utf8')).toBe(headerBefore);
   });
+
+  it('讀完之後只有舊 header 被改：不發佈新世代', async () => {
+    await writeTwoFile('hdr', EVENTS);
+    const legacy = legacyTwoFilePathsIn(dir, 'hdr');
+    const changed = JSON.stringify({
+      ...header('hdr', LEGACY_TWO_FILE_FORMAT_VERSION),
+      createdAt: 1,
+    });
+    const fs: StableReadFileSystem = {
+      stat: (path: string) => stat(path, { bigint: true }),
+      readFile: async (path: string) => {
+        const content = await readFile(path);
+        if (path === legacy.log) await writeFile(legacy.header, changed);
+        return content;
+      },
+    };
+    await expect(store({ fs }).resume('hdr')).rejects.toThrow(/遷移途中被改了/);
+    expect(existsSync(sessionPathsIn(dir, 'hdr').log)).toBe(false);
+    expect(await readFile(legacy.header, 'utf8')).toBe(changed);
+  });
+});
+
+describe('發佈之後開世代檔失敗', () => {
+  /** 第一次 `open(世代檔, 'a')` 拋 EMFILE：`link`、目錄 fsync、墓碑都做完了。 */
+  function firstAppendOpenFails(): OpenLogFile {
+    let left = 1;
+    return async (path, flags, mode) => {
+      if (flags === 'a' && left > 0) {
+        left -= 1;
+        throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+      }
+      return (await open(path, flags, mode)) as unknown as Awaited<ReturnType<OpenLogFile>>;
+    };
+  }
+
+  it('第一批拒絕；同一批重送成功，不撞自己的世代檔、事件不重複', async () => {
+    const stored = store({ openLog: firstAppendOpenFails() }).create(header('a1', CURRENT));
+    await expect(stored.append([event(0), event(1)])).rejects.toThrow(/EMFILE/);
+    await stored.append([event(0), event(1)]);
+    await stored.close();
+    expect((await resumeAndClose('a1')).events).toEqual([event(0), event(1)]);
+  });
+
+  it('重送的批比發佈時長：只寫多出來的', async () => {
+    const stored = store({ openLog: firstAppendOpenFails() }).create(header('a2', CURRENT));
+    await expect(stored.append([event(0), event(1)])).rejects.toThrow(/EMFILE/);
+    await stored.append([event(0), event(1), event(2)]);
+    await stored.close();
+    expect((await resumeAndClose('a2')).events).toEqual(EVENTS);
+  });
+});
+
+describe('header 行的形狀', () => {
+  async function plantHeaderLine(id: string, fields: Record<string, unknown>): Promise<void> {
+    const path = await writeGeneration(id, CURRENT, EVENTS);
+    const text = await readFile(path, 'utf8');
+    const line = { type: 'session', ...header(id, CURRENT), ...fields };
+    await writeFile(path, `${JSON.stringify(line)}${text.slice(text.indexOf('\n'))}`);
+  }
+
+  it('type 不是 session：報讀不懂', async () => {
+    await plantHeaderLine('t', { type: 'other' });
+    expect(await errorOf(store().resume('t'))).toBeInstanceOf(SessionCorruptionError);
+  });
+
+  it.each([
+    ['鍵不對', { bytes: 1, acceptedBytes: 1 }, /migratedFrom 的鍵/],
+    ['不是物件', 1, /migratedFrom 不是一個物件/],
+    [
+      'acceptedBytes 比 bytes 大',
+      { bytes: 1, acceptedBytes: 2, sha256: 'a'.repeat(64) },
+      /acceptedBytes/,
+    ],
+    ['sha256 不對', { bytes: 1, acceptedBytes: 1, sha256: 'xyz' }, /sha256/],
+  ])('migratedFrom %s：報讀不懂', async (_name, migratedFrom, message) => {
+    await plantHeaderLine('s', { migratedFrom });
+    const error = await errorOf(store().resume('s'));
+    expect(error).toBeInstanceOf(SessionCorruptionError);
+    expect((error as Error).message).toMatch(message);
+  });
+});
+
+describe('空 id', () => {
+  it('新建：目錄名是 ~，續接讀得回來', async () => {
+    const stored = store().create(header('', CURRENT));
+    await stored.append([event(0)]);
+    await stored.close();
+    expect(existsSync(join(dir, '~', generationLogFilename(CURRENT)))).toBe(true);
+    expect((await resumeAndClose('')).events).toEqual([event(0)]);
+  });
+
+  it('既有的舊兩檔：遷進 ~ 之後再續接', async () => {
+    await writeTwoFile('', EVENTS);
+    const resumed = await store().resume('');
+    await resumed.stored.append([event(3)]);
+    await resumed.stored.close();
+    expect(existsSync(join(dir, '~', generationLogFilename(CURRENT)))).toBe(true);
+    expect((await resumeAndClose('')).events).toEqual([...EVENTS, event(3)]);
+  });
 });
 
 describe('續接比這一版舊的世代', () => {
@@ -230,6 +329,28 @@ describe('續接比這一版舊的世代', () => {
     expect((await resumeAndClose('g')).events).toEqual(EVENTS);
     expect(await readFile(older, 'utf8')).toBe(before);
     expect((await headerLineOf(sessionPathsIn(dir, 'g').log))['version']).toBe(CURRENT);
+  });
+
+  it('舊路徑什麼都沒有：續接補上墓碑（當掉或手寫才有這個樣子），退版時看到的是墓碑', async () => {
+    await writeGeneration('m', LEGACY_TWO_FILE_FORMAT_VERSION, EVENTS);
+    const { tombstone } = sessionPathsIn(dir, 'm');
+    expect(existsSync(tombstone)).toBe(false);
+    await resumeAndClose('m');
+    expect(JSON.parse(await readFile(tombstone, 'utf8'))).toMatchObject({
+      type: 'session',
+      id: 'm',
+      version: CURRENT,
+    });
+  });
+
+  it('只讀打開：讀得到，不發佈新世代、不寫墓碑', async () => {
+    const older = await writeGeneration('r', LEGACY_TWO_FILE_FORMAT_VERSION, EVENTS);
+    const before = await readFile(older, 'utf8');
+    expect(await (await store().open('r', 'read')).read()).toEqual(EVENTS);
+    const paths = sessionPathsIn(dir, 'r');
+    expect(existsSync(paths.log)).toBe(false);
+    expect(existsSync(paths.tombstone)).toBe(false);
+    expect(await readFile(older, 'utf8')).toBe(before);
   });
 });
 

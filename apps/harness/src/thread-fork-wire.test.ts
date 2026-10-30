@@ -459,7 +459,7 @@ describe('thread.fork', () => {
       () => ({ openLog: firstLogOpenFails() }),
     ],
   ] as const) {
-    it(`真的落盤、${name}：磁碟上不留子 thread 的檔、名額回到原數；同一個 id 重試成功，檔才出現`, async () => {
+    it(`真的落盤、${name}（link 之前）：磁碟上不留子 thread 的檔、名額回到原數；同一個 id 重試成功，檔才出現`, async () => {
       const { directory, handler, client } = await realRig(failure());
       const refused = await client.threadFork('src', 'm1');
       expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
@@ -476,6 +476,23 @@ describe('thread.fork', () => {
       expect(child?.header).toMatchObject({ parentSession: 'src', isSeeded: true });
     });
   }
+
+  it('真的落盤、發佈之後第一次開世代檔失敗：fork 拒絕，子 thread 的世代檔留著，下一次分叉換 id 不受影響', async () => {
+    let left = 1;
+    const openLog: OpenLogFile = async (path, flags, mode) => {
+      if (flags === 'a' && left > 0) {
+        left -= 1;
+        throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+      }
+      return (await open(path, flags, mode)) as unknown as LogFileHandle;
+    };
+    const { directory, handler, client } = await realRig({ openLog });
+    const refused = await client.threadFork('src', 'm1');
+    expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+    expect(handler.threadCount()).toBe(0);
+    const orphan = await findSession(directory, 'child');
+    expect(orphan?.header).toMatchObject({ parentSession: 'src', isSeeded: true });
+  });
 
   it('切點上還排著的件（Q2 (a)）：seed 在 inherited 標記之後補取消全部的 inbox/spliced', async () => {
     const log = new SessionLog('src');

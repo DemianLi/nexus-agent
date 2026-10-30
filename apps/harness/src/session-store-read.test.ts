@@ -182,6 +182,17 @@ describe('list', () => {
     expect(await revision()).not.toBe(appended);
   });
 
+  it('revision（舊兩檔）：只有 header 被等長改寫也會變', async () => {
+    const paths = legacyTwoFilePathsIn(dir, 'old');
+    await writeFile(paths.header, JSON.stringify(legacyHeader('old', { cwd: '/tm1' })));
+    await writeFile(paths.log, `${JSON.stringify(event(0))}\n`);
+    const store = openJsonlSessionStore({ directory: dir });
+    const first = (await store.list()).sessions[0]!.revision;
+
+    await writeFile(paths.header, JSON.stringify(legacyHeader('old', { cwd: '/tm2' })));
+    expect((await store.list()).sessions[0]!.revision).not.toBe(first);
+  });
+
   it('不拿租約、不讀本文：別的把手握著照樣列，一個位元組都不改', async () => {
     await written('held', 2);
     await appendFile(logOf('held'), '{"半行');

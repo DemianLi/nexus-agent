@@ -48,7 +48,7 @@
  * 不截掉，重送的內容就接在它後面，變成中段壞行或重複的 `seq`。
  *
  * **第一批同時是這份新會話的第一次實體化時，沒有東西要截**：header 行與第一批是同一次 `link` 發佈的（下一節），寫不進去就
- * 什麼都沒發佈，同 dsh `materializePosix`（`index.ts:1284-1324`，`f3803c96`）。發佈之後的步驟（目錄 `fsync`、墓碑）失敗時
+ * 什麼都沒發佈。發佈之後的步驟（目錄 `fsync`、墓碑）失敗時
  * 不撤，重試只補沒做完的；協調器重送的那批從 seq 0 起算，已經在世代檔裡的那幾顆不再寫。
  *
  * **和 dsh 唯一的形狀差異是把手的壽命**：dsh 每批開關一次，這裡成功路徑一個把手用到會話結束；失敗路徑
@@ -58,7 +58,7 @@
  * ## 首次落盤是原子的（[#1510](https://github.com/DemianLi/nexus-agent/issues/1510)）
  *
  * 一份新會話第一次寫入時，斷電或行程被殺只會有兩種結果：整份都在，或整份都不在——不會留下空的或半份的 header，
- * 讓這條 thread 之後每次打開都回「建不起來」。照 dsh `materializePosix`（`index.ts:1284-1324`，`f3803c96`）：
+ * 讓這條 thread 之後每次打開都回「建不起來」：
  *
  * - 逐層 `mkdir`，每建一層就 `fsync` 它的父目錄；**每次物化都 fsync，不看目錄本來在不在**（別的會話剛建、還沒
  *   fsync 完的目錄，看到它在就跳過的話會漏掉）。
@@ -837,7 +837,7 @@ class JsonlStoredSession implements StoredSession {
   }
 
   /**
-   * 新會話的第一次實體化，照 dsh `materializePosix`（`index.ts:1284-1324`，`f3803c96`）：逐層建目錄、每層 fsync 父目錄
+   * 新會話的第一次實體化：逐層建目錄、每層 fsync 父目錄
    * （**每次都做，不看它本來在不在**）→ 拿 `session.lock` → header 行加首批事件寫成暫存檔、fsync → **`link` 發佈**（目標已經在就
    * `EEXIST`，換成 `SessionAlreadyExistsError`，不覆寫）→ fsync 會話目錄 → 盡力刪暫存檔。之後在舊路徑寫墓碑
    * （{@link #writeFreshTombstone}）。
