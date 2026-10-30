@@ -104,7 +104,7 @@ export const DERIVED_CALIBER: Readonly<Record<string, string>> = {
   tokensTotal:
     '輸入加輸出：整筆帳（舊 server 才有這一格：它的輸入已含快取讀取，新 server 改列四項合計）。',
   tokensTotalBuckets:
-    '輸入（未快取）、快取讀、快取寫、輸出四項相加：整筆帳。有一個快取桶沒記時，合計不含那一項，是下限。',
+    '輸入（未快取）、快取讀、快取寫、輸出四項相加：整筆帳。有快取桶沒記時，合計不含那一項，是下限；標「準數」的輪不標下限：一輪每次呼叫都沒報那一桶時，那一份留在輸入裡，合計沒有少算（有報有沒報的輪仍會少算，畫面分不出來）。',
   cacheHitRate:
     '快取讀 ÷（未快取＋快取讀＋快取寫），這一段加起來算，不是各次呼叫比例的平均；有一個快取桶沒記就寫「沒記」，不寫 0%。',
   subagentTokens:
@@ -160,7 +160,11 @@ export function spanRows(span: TokenMeterSpan, turn?: TokenMeterTurn): readonly 
   // （舊 server）就退回 `inputTokens`（完整 prompt，含快取），跟以前一樣。
   const buckets = usageBuckets(span);
   const hitRate = cacheHitRate(buckets);
-  const cacheMissing = buckets.cacheRead === undefined || buckets.cacheWrite === undefined;
+  // 「準數」的輪每次呼叫都沒報某一桶時，那一份還留在未快取那一桶（`validateUsage` 只減報了的），合計沒有少算。
+  // 有報有沒報的輪，報過的那份已減掉、桶又不上 wire，合計會少，但 wire 上跟前者分不出來。
+  const totalLower =
+    lower ||
+    (proof !== 'exact' && (buckets.cacheRead === undefined || buckets.cacheWrite === undefined));
   const rows: FieldRow[] = buckets.cacheInInput
     ? [
         ['inputTokens', '輸入', tokenValue(buckets.input, lower)],
@@ -172,7 +176,7 @@ export function spanRows(span: TokenMeterSpan, turn?: TokenMeterTurn): readonly 
         ['cacheReadTokens', '快取讀', cacheValue(buckets.cacheRead, lower)],
         ['cacheWriteTokens', '快取寫', cacheValue(buckets.cacheWrite, lower)],
         ['outputTokens', '輸出', tokenValue(buckets.output, lower)],
-        ['tokensTotalBuckets', '合計', tokenValue(buckets.total, lower || cacheMissing)],
+        ['tokensTotalBuckets', '合計', tokenValue(buckets.total, totalLower)],
       ];
   if (proof !== undefined) rows.unshift(['tokensProven', 'token 數字', TOKEN_PROOF_TEXT[proof]]);
   if (hitRate !== undefined) rows.push(['cacheHitRate', '快取命中率', cacheHitRateText(hitRate)]);

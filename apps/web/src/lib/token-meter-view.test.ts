@@ -281,6 +281,36 @@ describe('spanRows：四桶（#724）', () => {
   const byField = (rows: ReturnType<typeof spanRows>) =>
     Object.fromEntries(rows.map(([f, , v]) => [f, v]));
 
+  describe('快取桶缺席時一輪的合計（#1978）', () => {
+    const turnRows = (over: Partial<TokenMeterTurn>) => {
+      const turn = { ...meterTurn(0), ...buckets({ cacheWriteTokens: undefined }), ...over };
+      return byField(spanRows(turn, turn));
+    };
+    const proven = { tokensProven: true } as const;
+
+    it('準數＋缺一桶：合計不標下限，缺的那格寫沒記', () => {
+      const rows = turnRows(proven);
+      expect(rows.tokensProven).toBe('準數');
+      expect(rows.tokensTotalBuckets).toBe('950 token');
+      expect(rows.cacheWriteTokens).toBe('沒記');
+    });
+
+    it('準數＋缺兩桶：合計不標下限，兩格都寫沒記', () => {
+      const rows = turnRows({ ...proven, cacheReadTokens: undefined });
+      expect(rows.tokensTotalBuckets).toBe('250 token');
+      expect(rows.cacheReadTokens).toBe('沒記');
+      expect(rows.cacheWriteTokens).toBe('沒記');
+    });
+
+    it.each([
+      ['還沒定案', { end: undefined }, '950 token（下限）'],
+      ['下限', { tokensProven: false }, '950 token（下限）'],
+      ['舊 server', {}, '950 token（下限）'],
+    ])('%s＋缺一桶：合計仍標下限', (_name, over, total) => {
+      expect(turnRows(over).tokensTotalBuckets).toBe(total);
+    });
+  });
+
   it('有未快取那一格：輸入只算未快取，快取讀、快取寫另列，合計四項相加，帶命中率', () => {
     const rows = spanRows(buckets());
     expect(rows.slice(0, 6).map(([f, l, v]) => [f, l, v])).toEqual([
