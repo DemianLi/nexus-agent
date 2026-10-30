@@ -6,7 +6,7 @@ import { App } from '@/App';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { attachmentGate, fakeClient, frame, setSeq } from '@/test/app-harness';
 
-// 附件功能預設關著（#733）：整條送出路徑的測試把 `attachmentGate` 打開，其餘照舊。
+// `serverSupportsAttachments` 的真實作回 true（#733）；這裡接到 `attachmentGate`，預設關著，測附件的測試才打開。
 vi.mock('@/lib/attachments', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/attachments')>()),
   serverSupportsAttachments: () => attachmentGate.on,

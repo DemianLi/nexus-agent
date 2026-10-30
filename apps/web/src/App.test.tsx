@@ -63,7 +63,7 @@ import {
   toastWith,
 } from '@/test/app-harness';
 
-// 附件功能預設關著（#733）：整條送出路徑的測試把 `attachmentGate` 打開，其餘照舊。
+// `serverSupportsAttachments` 的真實作回 true（#733）；這裡接到 `attachmentGate`，預設關著。這一檔沒有測試打開它。
 vi.mock('@/lib/attachments', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/attachments')>()),
   serverSupportsAttachments: () => attachmentGate.on,

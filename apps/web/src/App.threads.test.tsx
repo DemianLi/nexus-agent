@@ -57,7 +57,7 @@ import {
   threadRows,
 } from '@/test/app-harness';
 
-// 附件功能預設關著（#733）：整條送出路徑的測試把 `attachmentGate` 打開，其餘照舊。
+// `serverSupportsAttachments` 的真實作回 true（#733）；這裡接到 `attachmentGate`，預設關著。這一檔沒有測試打開它。
 vi.mock('@/lib/attachments', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/attachments')>()),
   serverSupportsAttachments: () => attachmentGate.on,
@@ -469,7 +469,7 @@ describe('非安全環境（#1548）', () => {
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
 
-    // 這一檔的清單讀不到（`UNWIRED_THREAD_LIST`），所以沒有可重用的空白會話，走「開新的」那一支。
+    // `fakeClient` 預設讀不到清單（`UNWIRED_THREAD_LIST`），所以沒有可重用的空白會話，走「開新的」那一支。
     fireEvent.click(screen.getByRole('button', { name: '新對話' }));
 
     await waitFor(() => expect(opened).toHaveLength(2));

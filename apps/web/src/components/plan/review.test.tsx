@@ -21,7 +21,7 @@ import { WithRightSidebar, memoryStorage } from '@/test/right-sidebar';
 
 /**
  * 計劃審核的畫面（#654）：面板、計劃卡、右側欄的「計劃」分頁。送出去的形狀與「要求修改」不停這一輪驗在
- * `App*.test.tsx`；規則驗在 `lib/plan-review.test.ts`。
+ * `App.threads.test.tsx`；規則驗在 `lib/plan-review.test.ts`。
  */
 
 const PLAN = '# 改登入頁\n\n先把**文案**改成中文。\n\n## 步驟\n\n- 改文案\n- 補測試';

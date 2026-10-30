@@ -1,6 +1,9 @@
 /**
  * `App` 的畫面測試（`src/App*.test.tsx`）共用的東西：假的 `WireClient`、幀的 helper、每條測試的隔離 hook。
- * 每個測試檔 import 這裡時各自登記一組 `beforeEach`／`afterEach`。`vi.mock` 只對寫它的檔生效，所以附件開關的 mock 留在各測試檔，這裡只放它讀的 `attachmentGate`。
+ * 每個測試檔 import 這裡時各自登記一組 `beforeEach`／`afterEach`。附件開關的 `vi.mock` 要留在測試檔：只有寫在測試檔才會提升到該檔所有 import 之前，寫在這裡會晚於 `@/App` 的 import，App 拿到真的。這裡只放它讀的 `attachmentGate`。
+ *
+ * 這些測試只驗「折出來的東西有沒有畫出來」，所以 client 是假的、frame 是手餵的；折疊的正確性驗在 `@nexus/wire`（單元）與
+ * `@nexus/harness`（對著真的 agent 跑過真的線）。
  */
 import type { Event, SlashDescriptor, SlashRunOutcome, WireClient } from '@nexus/wire';
 import { cleanup, screen, waitFor, within } from '@testing-library/react';
@@ -19,12 +22,6 @@ export const PANEL_WAIT = { timeout: 5_000 };
 /** 換手層上的面板（核准、提問、計劃審核），名稱與狀態列同一句。 */
 export const findPanel = (name: string) => screen.findByRole('region', { name }, PANEL_WAIT);
 
-/**
- * 一份活在記憶體裡的 `Storage`。
- *
- * Node 25 自帶的全域 `localStorage` 蓋住 jsdom 那一份的問題，已由 `vitest.shared.ts` 統一關掉（`--no-webstorage`，
- * #1602）；這份 stub 留著是為了每條測試之間隔離，上一條寫進去的不會留到下一條。
- */
 /** 側欄清單裡的會話列。搜尋框有字時的 ×（#1307）也是按鈕，不是列。 */
 export function threadRows(list: HTMLElement): HTMLElement[] {
   return within(list)
@@ -32,6 +29,12 @@ export function threadRows(list: HTMLElement): HTMLElement[] {
     .filter((button) => button.getAttribute('aria-label') !== CLEAR_SEARCH_LABEL);
 }
 
+/**
+ * 一份活在記憶體裡的 `Storage`。
+ *
+ * Node 25 自帶的全域 `localStorage` 蓋住 jsdom 那一份的問題，已由 `vitest.shared.ts` 統一關掉（`--no-webstorage`，
+ * #1602）；這份 stub 留著是為了每條測試之間隔離，上一條寫進去的不會留到下一條。
+ */
 export function memoryStorage(): Storage {
   const entries = new Map<string, string>();
   return {
@@ -46,7 +49,7 @@ export function memoryStorage(): Storage {
   };
 }
 
-// 測試檔的 `vi.mock` 讀這個開關（#733）：預設關著，整條送出路徑的測試才打開。
+/** 測試檔的 `vi.mock` 讀這個開關（#733）：預設關著，測附件的測試才打開，每條測試後歸零。 */
 export const attachmentGate = { on: false };
 
 // App 會把 thread id 記進 `localStorage`；每條一份新的，不然下一條測試就成了「接回上一次」。
@@ -61,15 +64,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/**
- * 畫面這一層。
- *
- * **折疊的正確性不在這裡驗**——那在 `@nexus/wire`（單元）與 `@nexus/harness`
- * （對著真的 agent 跑過真的線）。這裡只驗「折出來的東西有沒有畫出來」，所以 client
- * 是假的、frame 是手餵的。
- */
-
-/** 列檔（`@` 引用，#651）這一檔沒有接：`@` 的選單查一次就收起來。要它的測試自己換掉這一格。 */
+/** 列檔（`@` 引用，#651）`fakeClient` 沒有接：`@` 的選單查一次就收起來。要它的測試自己換掉這一格。 */
 export const UNWIRED_FILE_REFERENCES: Pick<WireClient, 'fileReferences'> = {
   fileReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列檔' }),
 };
@@ -79,23 +74,24 @@ export const SILENT_THREAD_FEED: Pick<WireClient, 'openThreadFeed'> = {
   openThreadFeed: () => new Promise<never>(() => undefined),
 };
 
-/** 按內容搜尋（#631）這一檔沒有接：開不起來也不失敗。 */
+/** 按內容搜尋（#631）`fakeClient` 沒有接：開不起來也不失敗。 */
 export const UNWIRED_THREAD_SEARCH: Pick<WireClient, 'searchThreads'> = {
   searchThreads: () => new Promise<never>(() => undefined),
 };
 
-/** 列會話候選（`@` 引用別的會話，#713）這一檔沒有接。 */
+/** 列會話候選（`@` 引用別的會話，#713）`fakeClient` 沒有接。 */
 export const UNWIRED_SESSION_REFERENCES: Pick<WireClient, 'sessionReferences'> = {
   sessionReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列會話' }),
 };
 
 let seq = 0;
 
-/** 下一幀的序號從 `value` 起算。 */
+/** 下一幀的序號從 `value` 起算。`seq` 不隨測試重置，要固定序號的測試自己設。 */
 export function setSeq(value: number): void {
   seq = value;
 }
 
+/** 造一幀，序號取模組的 `seq` 再加一，`event_id` 跟著序號。 */
 export function frame(method: string, namespace: readonly string[], data: unknown): Event {
   const current = seq++;
   return {
@@ -123,7 +119,7 @@ export function textFrames(id: string, namespace: readonly string[], body: strin
 }
 
 /**
- * 回饋那四個 method 在這一檔裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；這裡的測試
+ * 回饋那四個 method 在 `fakeClient` 裡一律「收不了」。**評分的畫面驗在 `feedback-ui.test.tsx`**；`App*.test.tsx` 的測試
  * 不碰它們，碰到就是測試寫錯了，所以回拒絕而不是回成功。
  */
 export const UNWIRED_FEEDBACK: Pick<
@@ -137,7 +133,7 @@ export const UNWIRED_FEEDBACK: Pick<
 };
 
 /**
- * 送出佇列的改與刪同一條理由：這一檔的測試不碰它，碰到就是測試寫錯了，所以回拒絕。
+ * 送出佇列的改與刪同一條理由：`App*.test.tsx` 的測試不碰它，碰到就是測試寫錯了，所以回拒絕。
  */
 export const UNWIRED_QUEUE: Pick<WireClient, 'queueUpdate'> = {
   queueUpdate: async () => ({
@@ -148,7 +144,7 @@ export const UNWIRED_QUEUE: Pick<WireClient, 'queueUpdate'> = {
   }),
 };
 
-/** 對單一背景子代理傳話、單獨停（#865）同一條理由：這一檔的測試不碰它。 */
+/** 對單一背景子代理傳話、單獨停（#865）同一條理由：`App*.test.tsx` 的測試不碰它。 */
 export const UNWIRED_SUBAGENT: Pick<
   WireClient,
   'subagentSend' | 'subagentInterrupt' | 'subagentHistory' | 'trajectoryTurn'
