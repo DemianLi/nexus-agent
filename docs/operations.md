@@ -116,13 +116,27 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界；
 怎麼加、怎麼確認做到了，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉。
 
-**4. `grep`／`glob` 起的 rg 經沙箱跑（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。** Linux 上由產物裡的 `native/nexus-sandbox-spawner` 起，
+**4. `grep`／`glob` 起的 rg 與 workspace-changes 的 git 經沙箱跑（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。** Linux 上由產物裡的 `native/nexus-sandbox-spawner` 起，
 seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽略規則，讀不到 serve 的 home。`danger-full-access` 不上 Landlock，網路照擋。
 
 - 主機沒有 Landlock，或不是 Linux：`read-only`、`workspace-write` 下的 `grep`／`glob` 回 `SEARCH_FAILED`，訊息裡有 `SANDBOX_UNAVAILABLE`，不退回不設防。
   稽核只看碼分不出沙箱不可用與搜尋失敗，要看訊息。
 - 核心的 Landlock ABI 不到 6：工具照跑，serve 的日誌印一次「只有部分強制」。
-- workspace-changes 的 git 快照還沒經沙箱，由 serve 直接起。
+- serve 起動時印一行 `沙箱：…`：完整強制、部分強制、spawner 起不來或找不到，不必等第一次用工具。
+
+**主機條件。** 兩條下限分開看：
+
+- **Landlock 要核心 5.13 以上**，而且開機的 LSM 清單要有它。編進核心不夠，`cat /sys/kernel/security/lsm` 看不到 `landlock` 就是沒開，要在開機參數 `lsm=` 加上。ABI 6 要核心 6.12 以上。發行版的預設差很多，**一律以這台主機的輸出為準**。
+- **spawner 本身要核心 5.3 以上**（`pidfd_open`）。比它舊的主機連 `danger-full-access` 也跑不了工具，`沙箱 spawner 起不來` 那一行會講。5.3 到 5.13 之間只有 `danger-full-access` 跑得了；**5.3 以下不支援**（#1827 D69），沒有退路。
+
+**git 怎麼跑。** 快照、比較與 `check-ignore` 都經 spawner，模式跟著會話：`danger-full-access` 不上 Landlock，其餘（含 `read-only`）一律 workspace-write 的權限，寫根只有這條 thread 的私有目錄，repo 的 `.git` 不會被寫。git 只讀得到系統的目錄與檔、工作目錄、repo 與它的 git 目錄、global 與 system 的設定及其 include、`core.excludesFile`、`core.attributesFile`，讀不到 serve 的 home；repo 自己帶的 `core.fsmonitor`、alias 指令也關在同一份權限裡。
+
+- **git 要裝在 `/usr` 或 `/lib` 底下**，其他位置（例如 `/opt`）只有 git 本身可讀，它要的支援檔讀不到。
+- 全域設定的路徑在每個 HOME 加 repo 第一次用到時問一次，**改了全域 git 設定要重起 serve**。`includeIf "onbranch:"` 也一樣：換分支後新的 include 沒有讀權，git 會結束，要重起 serve 才恢復。
+- repo 根包住 `$HOME`（例如把 home 當 repo）時整個不拍快照，改動卡不出現，工作目錄在哪一層都一樣。
+- `.git`、`gitdir:`、`commondir`、`objects/info/alternates` 的內容在工作區裡，只開得了工作區內的讀權。指到工作區外的就不給，這種 repo 沒有改動卡：`clone --reference`、`--separate-git-dir`、submodule（git 目錄在上層 repo 裡）、`.git` 是指到外面的 symlink。例外是真的 linked worktree：`<git 目錄>/gitdir` 要指回這個 `.git`。
+- `.git/config` 的 `include.path` 指到讀不到的檔時 git 直接結束（`fatal: unable to access`），這個 repo 沒有改動卡。
+- **沙箱不可用時改動卡不會出現**，不是出現一張不完整的。那一輪什麼都不記，日誌只講一句，下一輪再試，spawner 恢復就恢復。常駐不可用的主機上改動卡一直不出現，要看起動那一行。
 
 **本機開發。** Mac 沒有沙箱後端，兩條路：
 

@@ -463,7 +463,7 @@ jobs:
           bundle: ${{ needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true' && 'sandbox-spawner-linux-x64' || '' }}
       - uses: ./.github/actions/setup
       - name: 真的 spawner 跑 rg
-        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration
+        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
 
@@ -480,7 +480,7 @@ jobs:
       - uses: ./.github/actions/sandbox-spawner
       - uses: ./.github/actions/setup
       - name: 真的 spawner 跑 rg
-        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration
+        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration src/git-sandbox.integration
         env:
           NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
 

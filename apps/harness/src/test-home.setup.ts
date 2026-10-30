@@ -26,6 +26,7 @@ vi.mock('./tool-launcher.js', async (importActual) => {
   return {
     ...(await importActual<typeof import('./tool-launcher.js')>()),
     productToolLauncher: () => directToolLauncher,
+    productSandboxStatus: () => Promise.resolve('沙箱：測試直接 spawn'),
   };
 });
 

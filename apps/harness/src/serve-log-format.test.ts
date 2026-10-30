@@ -74,6 +74,7 @@ describe('出廠預設：每一行都帶等級與名字，印出來的行和以�
     expect(model).toMatch(/\[I\] serve 模型：/u);
     expect(lines.some((line) => /\[I\] serve plugin：/u.test(line))).toBe(true);
     expect(lines.some((line) => /\[I\] serve thread 上限：500（/u.test(line))).toBe(true);
+    expect(lines.some((line) => /\[I\] serve 沙箱：/u.test(line))).toBe(true);
   });
 });
 

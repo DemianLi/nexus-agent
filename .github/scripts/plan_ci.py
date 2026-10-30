@@ -71,7 +71,8 @@ FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 # 那個 job 編的，develop → main 的 PR 走這一條）、合併後完整一輪（#1827 D55）。跟模式無關，輕的模式也編。
 RUST_RE = re.compile(
     r'^native/sandbox-spawner/'
-    r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner)\.'
+    r'|^packages/nexus-plugin-workspace-changes/src/git\.'
+    r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*)\.'
 )
 
 
