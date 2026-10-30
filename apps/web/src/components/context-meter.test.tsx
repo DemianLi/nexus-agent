@@ -3,6 +3,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ContextMeter } from '@/components/context-meter';
+import { BREAKDOWN_OVER_TEXT } from '@/lib/context-meter-view';
 import { axeViolations } from '@/test/axe';
 
 /**
@@ -35,6 +36,36 @@ function arc() {
 }
 
 const AROUND = 2 * Math.PI * 6;
+
+describe('組成三行（#1571 N1193）', () => {
+  const parts = () => screen.getAllByTestId('context-meter-part').map((row) => row.textContent);
+
+  it('有 breakdown：三行都在，順序是系統提示、工具定義、對話', () => {
+    const breakdown = { systemTokens: 1200, toolsTokens: 3400, messageTokens: 900 };
+    render(<ContextMeter pressure={{ measure: { ...measure, approxTokens: 5500, breakdown } }} />);
+    fireEvent.click(meter());
+    expect(parts()).toEqual(['系統提示約 1.2k', '工具定義約 3.4k', '對話約 900']);
+    expect(screen.getByTestId('context-meter-breakdown').textContent).not.toContain(
+      BREAKDOWN_OVER_TEXT,
+    );
+  });
+
+  it('沒有 breakdown：整段不在（舊日誌），不是三個 0', () => {
+    render(<ContextMeter pressure={{ measure }} />);
+    fireEvent.click(meter());
+    expect(screen.queryByTestId('context-meter-breakdown')).toBeNull();
+  });
+
+  it('系統加工具比總數大：對話是 0，說明三行相加不等於總數', () => {
+    const breakdown = { systemTokens: 4, toolsTokens: 3, messageTokens: 0 };
+    render(<ContextMeter pressure={{ measure: { ...measure, breakdown } }} />);
+    fireEvent.click(meter());
+    expect(parts()).toEqual(['系統提示約 4', '工具定義約 3', '對話約 0']);
+    expect(screen.getByTestId('context-meter-breakdown').textContent).toContain(
+      BREAKDOWN_OVER_TEXT,
+    );
+  });
+});
 
 describe('用量表（#528）', () => {
   it.each<[string, WireContextPressure | null]>([
