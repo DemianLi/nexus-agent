@@ -28,14 +28,13 @@ describe('reduced-motion 下的 SG 動畫', () => {
 
   test.each(ENTRANCES)('%s：reduced-motion 下改成短的淡入，不是 SG 的 none', (selector) => {
     expect(cascade.winner([selector], 'animation', REDUCED)).toMatchObject({
-      value: 'motion-fade-in var(--duration-quick) var(--ease-smooth-out)',
+      value: 'motion-fade-in 150ms cubic-bezier(0.22, 1, 0.36, 1)',
       layer: null,
       file: 'styles/solid-glass.overrides.css',
     });
   });
 
-  test('淡入只動透明度、不超過 150ms', () => {
-    expect(cascade.value([':root'], '--duration-quick')).toBe('150ms');
+  test('淡入只動透明度', () => {
     const keyframes = /@keyframes motion-fade-in\s*\{([\s\S]*?)\n\}/.exec(motionCss)?.[1];
     expect(keyframes).toBeDefined();
     const properties = [...(keyframes ?? '').matchAll(/([a-z-]+)\s*:/g)].map((m) => m[1]);

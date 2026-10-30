@@ -23,7 +23,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { pendingLabel } from '@/lib/pending-label';
 import { isPlanReview } from '@/lib/plan-review';
 
-/** 舊的那一邊淡出多久（`--duration-quick`）；淡完才換成新的（§7）。 */
+/** 舊的那一邊淡出多久，要等於 `motion.css` 的 `.motion-swap[data-phase='out']`；淡完才換成新的（§7）。 */
 const SWAP_OUT_MS = 150;
 
 const COMPOSER = 'composer';
@@ -144,7 +144,7 @@ function PendingPanel({
       {collapsible && (
         <CollapsibleTrigger
           ref={trigger}
-          className="hover:bg-muted hover:text-foreground flex size-11 shrink-0 items-center justify-center rounded-md transition-colors duration-(--duration-quick) lg:size-8"
+          className="hover:bg-muted hover:text-foreground flex size-11 shrink-0 items-center justify-center rounded-md transition-colors duration-150 lg:size-8"
           aria-label={open ? '收起這些問題' : '展開這些問題'}
         >
           <Chevron open={open} />

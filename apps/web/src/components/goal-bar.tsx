@@ -83,7 +83,7 @@ export function GoalBar({
             onClick={() => void pause()}
             data-testid="goal-pause"
             // 停用時不亮：SG 的 hover:bg-muted 寫在 layer 外，要 ! 才蓋得過。
-            className="hover:bg-muted enabled:hover:text-foreground relative -my-2 -mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-md transition-colors duration-(--duration-quick) after:absolute after:-inset-1.5 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent! lg:after:hidden"
+            className="hover:bg-muted enabled:hover:text-foreground relative -my-2 -mr-1.5 flex size-8 shrink-0 items-center justify-center rounded-md transition-colors duration-150 after:absolute after:-inset-1.5 disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent! lg:after:hidden"
           >
             <Pause aria-hidden className="size-4" />
           </button>

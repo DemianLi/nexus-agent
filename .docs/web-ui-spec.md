@@ -213,7 +213,7 @@
 - 進出場照 SG 的機制（#1687）：`--animate-in`／`--animate-out` 讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。`@theme` **不用 `inline`**（inline 會讓 reduced-motion 換掉的變數沒人讀）；值逐元素宣告在 `styles/motion.css` 的 `*` 上，因為只宣告在 `:root` 的話 `var(--tw-duration)` 在 `:root` 就解掉了（vendor README 本地修改第 81 條，`guard/` 與 `check-built-css` 量）。
 - 進場 fill-mode `backwards`，退場 `both`。
 
-**token**：SG 沒有定義任何時長、曲線或 `--animate-*` 變數，它的時長寫死在自己的規則裡（transition 150ms ease-out `:982-987`；進場 `sg-float-in` 220ms、`sg-fade-in` 240ms `:1297-1301`；持續動畫 1.2s／2.4s／1.6s `:1259-1293`），元件則自己寫 `duration-*`。進出場與展開收合 #1687 已換成 SG 的機制；下面這組 nexus 的 token 還有消費者或待清，**留給 ⑥（#1689）一起收**（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。時長、位移、縮放、resize 的值取自 Libraries.dev（時長 40／150／250／350，位移 4／8，縮放 .96／.97／.99，resize 300），外加 `--duration-press` 120；只留有人用的那幾階。
+**數值**：SG 沒有定義任何時長、曲線或 `--animate-*` 變數，它的時長寫死在自己的規則裡（transition 150ms ease-out `:982-987`；進場 `sg-float-in` 220ms、`sg-fade-in` 240ms `:1297-1301`；持續動畫 1.2s／2.4s／1.6s `:1259-1293`），元件則自己寫 `duration-*`。nexus 照這個寫法（#1827 D21）：元件只用 Tailwind 的 `duration-*` 級距，不寫任意值；`motion.css` 直接寫數字，不設動效 token。那裡的時長、位移、縮放、resize 取自 Libraries.dev（時長 40／150／250／350，位移 4／8，縮放 .96／.97／.99，resize 300），外加按壓 120，曲線是 `cubic-bezier(0.22, 1, 0.36, 1)`。
 
 **模式清單封閉**：浮層彈出、對話框、側滑抽屜、換內容、展開收合、進場、進度、按壓、持續狀態。清單外沒有動效，只留 100–150ms 顏色過渡。
 
