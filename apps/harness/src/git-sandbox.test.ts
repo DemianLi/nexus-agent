@@ -41,17 +41,19 @@ const fakeLauncher = (
 };
 
 describe('parseConfigPaths', () => {
-  it('取值，相對路徑以來源檔為基準，非檔案來源的相對路徑不要', () => {
+  it('取值，include 的相對路徑以來源檔為基準，core.* 的相對路徑與非檔案來源的不要', () => {
     const output = [
       'file:/h/.gitconfig',
       'include.path\n/h/inc/a',
+      'file:/h/inc/a',
+      'include.path\nrel/b',
       'file:/h/inc/a',
       'core.excludesfile\nrel/ig',
       'command line:',
       'include.path\nrel',
       '',
     ].join('\0');
-    expect(parseConfigPaths(output)).toEqual(['/h/inc/a', '/h/inc/rel/ig']);
+    expect(parseConfigPaths(output)).toEqual(['/h/inc/a', '/h/inc/rel/b']);
   });
 });
 
