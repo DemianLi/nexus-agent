@@ -7,7 +7,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import type { ChildProcessByStdio } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import { accessSync, constants } from 'node:fs';
 import type { Readable } from 'node:stream';
 
@@ -27,6 +27,8 @@ export interface ToolRequest {
   readonly writable: readonly string[];
   /** 子行程的環境就是這一份，呼叫端要自己刷洗。 */
   readonly env: NodeJS.ProcessEnv;
+  /** 寫進工具 stdin 的內容，寫完就關。省略時 stdin 是 `/dev/null`。 */
+  readonly stdin?: string;
 }
 
 /**
@@ -46,7 +48,9 @@ export interface ToolProcess {
   readonly stderr: Readable;
   /** 對工具送訊號。工具已經結束時什麼都不做。 */
   kill(signal: 'SIGTERM' | 'SIGKILL'): void;
-  /** 不會 reject。要有人讀完 stdout、stderr 才會 settle。 */
+  /** 工具結束或沒起成就 settle，不等輸出。不會 reject。 */
+  readonly exited: Promise<ToolResult>;
+  /** 不會 reject。要有人讀完 stdout、stderr 才會 settle；後代抓著輸出時，呼叫端要自己在 {@link exited} 之後 `destroy`。 */
   readonly done: Promise<ToolResult>;
 }
 
@@ -69,18 +73,23 @@ function startDirUsable(cwd: string): boolean {
  */
 export const directToolLauncher: ToolLauncher = (request) => {
   if (!startDirUsable(request.cwd)) return Promise.resolve('start-dir');
-  let child: ChildProcessByStdio<null, Readable, Readable>;
+  let child: ChildProcess;
   try {
     child = spawn(request.executable, [...request.args], {
       cwd: request.cwd,
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: [request.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       env: request.env,
     });
   } catch {
     return Promise.resolve('launch-failed');
   }
   const untrack = trackHostExitChild(child);
-  const done = new Promise<ToolResult>((resolve) => {
+  if (request.stdin !== undefined) {
+    // 工具不讀完 stdin 就結束時寫入會 EPIPE；結果由結束碼決定。
+    child.stdin?.on('error', () => undefined);
+    child.stdin?.end(request.stdin);
+  }
+  const failure = new Promise<ToolResult>((resolve) => {
     child.once('error', (error: NodeJS.ErrnoException) => {
       untrack();
       resolve({
@@ -88,21 +97,33 @@ export const directToolLauncher: ToolLauncher = (request) => {
         reason: error.code === 'ENOENT' ? 'not-found' : 'launch-failed',
       });
     });
-    child.once('close', (code, signal) => {
-      untrack();
-      resolve({ kind: 'exited', code, signal });
-    });
   });
+  const exited = Promise.race([
+    failure,
+    new Promise<ToolResult>((resolve) => {
+      child.once('exit', (code, signal) => resolve({ kind: 'exited', code, signal }));
+    }),
+  ]);
+  const done = Promise.race([
+    failure,
+    new Promise<ToolResult>((resolve) => {
+      child.once('close', (code, signal) => {
+        untrack();
+        resolve({ kind: 'exited', code, signal });
+      });
+    }),
+  ]);
   return Promise.resolve({
     pid: child.pid,
-    stdout: child.stdout,
-    stderr: child.stderr,
+    stdout: child.stdout!,
+    stderr: child.stderr!,
     kill(signal) {
       if (child.exitCode !== null || child.signalCode !== null) return;
       // 起不來的 child 沒有 pid（'error' 事件還沒送到）：此時 `kill()` 會對 pid 0 送訊號，也就是整個行程群組（包括 serve 自己）。
       if (child.pid === undefined) return;
       child.kill(signal);
     },
+    exited,
     done,
   });
 };

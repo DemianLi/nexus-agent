@@ -387,6 +387,8 @@ class SandboxSpawner(unittest.TestCase):
         self.assertEqual(self.rust(['apps/harness/src/a.ts', 'docs/a.md']), 'false')
         self.assertEqual(self.rust(['apps/harness/src/sandbox-protocol.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/sandbox-spawner-client.ts']), 'true')
+        self.assertEqual(self.rust(['apps/harness/src/git-sandbox.ts']), 'true')
+        self.assertEqual(self.rust(['packages/nexus-plugin-workspace-changes/src/git.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/tool-process.ts']), 'true')
         self.assertEqual(self.rust(['apps/harness/src/ripgrep-sandbox.ts']), 'true')
         self.assertEqual(self.rust(['docs/a.md'], event='push', base=''), 'false')
