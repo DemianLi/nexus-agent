@@ -2711,6 +2711,8 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
               value: getComputedStyle(el).getPropertyValue('--scroll-fade-b'),
             };
           });
+        // 開頁時的定位交給 primitive，負載高時會停在離最底 1px（scrollTop 620／最底 621，#2024 實測），進度讀到 0.9896：先自己捲到底再讀。
+        await scrollMessages(page, 'end');
         const end = await read();
         await scrollMessages(page, 'top');
         const top = await read();
