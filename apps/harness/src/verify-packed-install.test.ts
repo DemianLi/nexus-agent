@@ -126,11 +126,16 @@ describe('步驟 4e：產物裡的沙箱 spawner 起得來、經它起得了主�
     expect(spawnerProbeProblems(ok)).toEqual([]);
   });
 
+  it('主機沒有 Landlock：直說驗不到，不報成 git 沒起成', () => {
+    expect(spawnerProbeProblems({ ...ok, events: [{ ...ready, landlockAbi: 0 }] })).toEqual([
+      expect.stringContaining('沒有 Landlock'),
+    ]);
+  });
+
   it.each([
     ['中途出錯', { ...ok, error: '等第一筆事件逾時' }],
     ['spawner 起不來', { ...ok, events: [{ type: 'unavailable', errno: 22, detail: 'seccomp' }] }],
     ['沒有任何事件', { ...ok, events: [] }],
-    ['主機沒有 Landlock', { ...ok, events: [{ ...ready, landlockAbi: 0 }] }],
     [
       'git 沒起成',
       {
