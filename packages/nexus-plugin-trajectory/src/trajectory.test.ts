@@ -377,10 +377,10 @@ describe('歸屬不看位置', () => {
     expect(view.turns[0]?.unattributed).toBe(0);
   });
 
-  it('人寫 /名字 帶出的技能正文（#1574）不是輪中輸入，也不是插件訊息', () => {
+  it('人寫 /名字 帶出的技能正文（#1574）記成叫用技能（#2062），不是輪中輸入，也不是插件訊息', () => {
     const log = new SessionLog('t');
     log.append('turn/start', { kind: 'message', text: '/deploy' });
-    log.append('user/message', {
+    const injected = log.append('user/message', {
       message: toLoggedMessage(new HumanMessage('<skill_content name="deploy">…</skill_content>')),
       source: { kind: 'skill-invocation', name: 'deploy', form: 'instructions' },
     });
@@ -389,7 +389,29 @@ describe('歸屬不看位置', () => {
     log.append('model/end', { modelCall: start.seq });
     const turn = foldAll(log.events).turns[0]!;
     expect(turn.inputs).toEqual([]);
-    expect(turn.decisions).toEqual([]);
+    expect(turn.decisions).toEqual([
+      { kind: 'skill-invocation', seq: injected.seq, time: injected.time, name: 'deploy' },
+    ]);
+  });
+
+  it('指示檔的注入記成插件訊息，不是技能叫用（#2062）', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const injected = log.append('user/message', {
+      message: toLoggedMessage(new HumanMessage('<system-reminder>…</system-reminder>')),
+      source: { kind: 'plugin', plugin: 'agent-instructions' },
+    });
+    const start = log.append('model/start', {});
+    log.append('assistant/message', reply(start.seq, 'ok'));
+    log.append('model/end', { modelCall: start.seq });
+    expect(foldAll(log.events).turns[0]?.decisions).toEqual([
+      {
+        kind: 'plugin-message',
+        seq: injected.seq,
+        time: injected.time,
+        plugin: 'agent-instructions',
+      },
+    ]);
   });
 
   it('輪外的佇列變動不歸任何一輪', () => {

@@ -35,8 +35,8 @@ export const TRAJECTORY_PROJECTION = 'trajectory';
 export const REQUEST_SNAPSHOTS_PROJECTION = 'request-snapshots';
 
 /** `trajectory` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-// 7：呼叫與一輪的 `inputTokens` 改成未快取的那一桶（#724），原本是含快取讀寫的完整 prompt。
-export const TRAJECTORY_VERSION = 7;
+// 8：決策點含 `skill-invocation`（#2062）。
+export const TRAJECTORY_VERSION = 8;
 /** `request-snapshots` 的 `stateVersion`。 */
 export const REQUEST_SNAPSHOTS_VERSION = 1;
 
@@ -211,6 +211,13 @@ export type TrajectoryDecision =
       readonly seq: number;
       readonly time: number;
       readonly plugin: string;
+    }
+  | {
+      /** 人寫 `/名字` 叫用的技能（#2062，`user/message` 的來源 `skill-invocation`）。 */
+      readonly kind: 'skill-invocation';
+      readonly seq: number;
+      readonly time: number;
+      readonly name: string;
     }
   | {
       readonly kind: 'goal';
