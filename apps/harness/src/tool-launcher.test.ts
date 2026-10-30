@@ -9,7 +9,12 @@ import { Readable } from 'node:stream';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import { findSpawnerBinary, productToolLauncher, selectToolLauncher } from './tool-launcher.js';
+import {
+  findSpawnerBinary,
+  formatSandboxStatus,
+  productToolLauncher,
+  selectToolLauncher,
+} from './tool-launcher.js';
 import { runRipgrep } from './ripgrep-runner.js';
 import type { ToolLauncher, ToolProcess, ToolRequest, ToolResult } from './tool-process.js';
 
@@ -59,6 +64,19 @@ describe('selectToolLauncher', () => {
   });
 });
 
+describe('formatSandboxStatus', () => {
+  it.each([
+    ['darwin', '/s', undefined, '只有 danger-full-access'],
+    ['linux', undefined, undefined, '找不到 spawner'],
+    ['linux', '/s', undefined, 'spawner 起不來'],
+    ['linux', '/s', 0, '沒有 Landlock'],
+    ['linux', '/s', 4, 'ABI 4，只有部分強制'],
+    ['linux', '/s', 6, 'ABI 6，完整強制'],
+  ] as const)('%s %s ABI %s', (platform, binary, abi, expected) => {
+    expect(formatSandboxStatus(platform, binary, abi)).toContain(expected);
+  });
+});
+
 describe('findSpawnerBinary', () => {
   it('從模組往上找產物裡的 native/ 目錄', () => {
     const root = mkdtempSync(join(tmpdir(), 'nexus-find-spawner-'));
@@ -100,6 +118,7 @@ describe('起 rg 的途中取消', () => {
         kills.push(signal);
         if (signal === 'SIGKILL') finish({ kind: 'exited', code: null, signal });
       },
+      exited: new Promise(() => undefined),
       done: new Promise((resolve) => (finish = resolve)),
     });
     expect(await outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
@@ -115,6 +134,7 @@ describe('取消之後一定收得掉', () => {
     kill: (signal) => {
       kills.push(signal);
     },
+    exited: new Promise<ToolResult>(() => undefined),
     done: new Promise<ToolResult>(() => undefined),
   });
   const run = (launcher: ToolLauncher, signal: AbortSignal, killGraceMs = 10) =>
@@ -154,7 +174,7 @@ describe('取消之後一定收得掉', () => {
       argv: [],
       cwd: tmpdir(),
       executable: process.execPath,
-      internals: { launcher: async () => stuck(kills), killGraceMs: 10, timeoutMs: 10 },
+      internals: { launcher: async () => stuck(kills), killGraceMs: 10, timeoutMs: 200 },
     });
     expect(outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
     expect(kills).toEqual(['SIGTERM', 'SIGKILL']);

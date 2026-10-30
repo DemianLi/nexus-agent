@@ -1,8 +1,11 @@
-//! 常駐 spawner（#1946 S3）。由 Node 用 stdio pipe 起：stdin 收要求、stdout 送事件（格式見 `protocol.rs`），stderr 只給人看。
+//! 沙箱 spawner（#1946 S3）：常駐模式，加上給 MCP 用的單次模式 `--exec`。常駐模式由 Node 用 stdio pipe 起：stdin 收要求、stdout 送事件（格式見 `protocol.rs`），stderr 只給人看。
 //!
 //! ```text
 //! nexus-sandbox-spawner --listen <socket 路徑>
+//! nexus-sandbox-spawner --exec [--read <路徑>]... [--write <路徑>]... -- <程式> [參數]...
 //! ```
+//!
+//! `--exec` 是單次模式（見 `exec_confined`），不常駐，下面的啟動順序只管 `--listen`。
 //!
 //! **嚴格單執行緒**：子行程在 fork 之後才配置記憶體（`child.rs`），只有單執行緒才安全。不要在這裡起任何 thread。
 //!
@@ -12,7 +15,7 @@
 //! 2. 擋下 SIGINT／SIGTERM／SIGHUP，改由 signalfd 收。
 //! 3. 建監聽用的 `AF_UNIX` socket、chmod 0600。一定要在裝過濾器之前：S1 擋 `socket(AF_UNIX)`，裝完之後只用 `accept4`。
 //! 4. `NO_NEW_PRIVS`＋seccomp，只裝這一次，之後 fork 的子行程都繼承。
-//! 5. 自我檢查：`socket(AF_INET)` 要拿到 EACCES、`socket(AF_UNIX)` 要拿到 EPERM。
+//! 5. 自我檢查：`socket(AF_INET)` 要拿到 EACCES、`socket(AF_UNIX)` 要拿到 EPERM；核心要有 `pidfd_open`。
 //! 6. 送 `Ready`。
 //!
 //! socket 路徑含 NUL，或 2 到 5 任何一步失敗，都送 `Unavailable` 後結束。
@@ -35,7 +38,8 @@ use nexus_sandbox_spawner::landlock;
 use nexus_sandbox_spawner::protocol::{self, Event, FailKind, Mode, Request, Spawn};
 use nexus_sandbox_spawner::seccomp;
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CString, OsString};
+use std::os::unix::ffi::OsStrExt;
 use std::time::{Duration, Instant};
 
 /// 要求到了之後，最多等多久它要的 stdio 連線到齊；連線的標頭也是這個期限。
@@ -138,6 +142,18 @@ fn self_check() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// 核心有沒有 `pidfd_open`（5.3 起）。沒有它等不了工具，連全權模式都起不來，所以在啟動時就講，不等到每一筆工具才失敗。
+/// 只認 ENOSYS：其他錯（fd 用盡、外層 seccomp 擋下）不判定主機不支援，留給每一筆工具的 `Resource` 失敗去講。
+fn kernel_lacks_pidfd() -> bool {
+    // SAFETY：對自己開 pidfd，開了就關。
+    let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0) } as libc::c_int;
+    if fd < 0 {
+        return errno() == libc::ENOSYS;
+    }
+    close(fd);
+    false
 }
 
 /// 擋掉要改由 signalfd 收的訊號，回 signalfd。
@@ -454,7 +470,7 @@ impl Spawner {
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
         if pidfd < 0 {
             let err = errno();
-            // 沒有 pidfd 就等不了它：殺掉、收屍。核心比 5.3 舊（沒有 pidfd_open）時，每一筆都在這裡回 `Resource`。
+            // 沒有 pidfd 就等不了它：殺掉、收屍。核心沒有 pidfd_open 的情形啟動時就擋了，這裡是別的錯。
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
                 libc::waitpid(pid, std::ptr::null_mut(), 0);
@@ -578,10 +594,101 @@ impl Spawner {
     }
 }
 
+/// 單次模式解出來的東西。
+struct ExecRequest {
+    readable: Vec<Vec<u8>>,
+    writable: Vec<Vec<u8>>,
+    argv: Vec<CString>,
+}
+
+/// `--exec [--read <路徑>]... [--write <路徑>]... -- <程式> [參數]...`。
+fn parse_exec(args: &[OsString]) -> Result<ExecRequest, String> {
+    let (mut readable, mut writable) = (Vec::new(), Vec::new());
+    let mut rest = args.iter();
+    loop {
+        let flag = rest.next().ok_or("少了 --")?;
+        let target = match flag.to_str() {
+            Some("--") => break,
+            Some("--read") => &mut readable,
+            Some("--write") => &mut writable,
+            _ => return Err(format!("不認得 {}", flag.to_string_lossy())),
+        };
+        target.push(rest.next().ok_or("旗標後面少了路徑")?.as_bytes().to_vec());
+    }
+    let argv = rest.map(|arg| CString::new(arg.as_bytes())).collect::<Result<Vec<_>, _>>().map_err(|_| "參數含 NUL")?;
+    if argv.is_empty() {
+        return Err("少了程式".to_string());
+    }
+    Ok(ExecRequest { readable, writable, argv })
+}
+
+/// 單次模式：替這個行程自己上沙箱再 exec，給一條連線只起一次、stdio 由呼叫端接好的行程用。
+/// 過濾器與 Landlock 跟常駐模式走同一份程式；裝不上就結束，不跑。
+/// `<程式>` 是路徑，不找 PATH，呼叫端解好。exec 失敗照 shell 慣例回 127／126，其他失敗回 125。
+/// 讀根寫根要是 realpath：呼叫端檢查過路徑，重起時路徑若被換成連結，這裡拒絕，不跟過去。
+fn exec_confined(args: &[OsString]) -> ! {
+    let die = |detail: String| -> ! {
+        eprintln!("nexus-sandbox-spawner: {detail}");
+        std::process::exit(125);
+    };
+    let request = parse_exec(args).unwrap_or_else(|e| die(e));
+    for root in request.readable.iter().chain(&request.writable) {
+        let path = std::path::Path::new(std::ffi::OsStr::from_bytes(root));
+        if std::fs::canonicalize(path).ok().as_deref() != Some(path) {
+            die(format!("{} 不是 realpath", path.display()));
+        }
+    }
+    let abi = landlock::effective_abi(landlock::kernel_abi(), test_abi_cap());
+    if abi < 1 {
+        die("這台主機沒有 Landlock".to_string());
+    }
+    if abi < landlock::WANTED_ABI {
+        eprintln!("nexus-sandbox-spawner: Landlock ABI {abi}，只有部分強制（完整強制要 ABI {}）", landlock::WANTED_ABI);
+    }
+    let caller = unsafe { libc::getppid() };
+    // 脫離呼叫端的控制終端與行程群組、呼叫端死了跟著走、fd 3 以上不留給它。
+    // 設好 PDEATHSIG 之後再核一次父行程，避開「設好之前呼叫端就死了」。
+    // SAFETY：這幾個呼叫只動這個行程自己；Rust 執行期把 SIGPIPE 設成忽略，exec 會帶過去，所以還原。
+    unsafe {
+        // 呼叫端已經替它開了 session 時 setsid 回 EPERM，目的已達成。
+        if libc::setsid() < 0 && libc::getsid(0) != libc::getpid() {
+            die(format!("setsid：{}", std::io::Error::last_os_error()));
+        }
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+        if libc::getppid() != caller {
+            die("呼叫端已經不在".to_string());
+        }
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+        if libc::syscall(libc::SYS_close_range, 3u32, u32::MAX, 0u32) != 0 {
+            die(format!("close_range：{}", std::io::Error::last_os_error()));
+        }
+    }
+    if let Err(e) = seccomp::install() {
+        die(format!("seccomp：{e}"));
+    }
+    if let Err(e) = self_check() {
+        die(e);
+    }
+    if let Err(e) = landlock::restrict_self(abi, &request.readable, &request.writable) {
+        die(format!("landlock：{e}"));
+    }
+    let mut argv: Vec<*const libc::c_char> = request.argv.iter().map(|arg| arg.as_ptr()).collect();
+    argv.push(std::ptr::null());
+    // SAFETY：argv 以 NULL 結尾，指到的 CString 活到 exec。
+    unsafe { libc::execv(argv[0], argv.as_ptr()) };
+    let err = std::io::Error::last_os_error();
+    eprintln!("nexus-sandbox-spawner: exec：{err}");
+    std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) { 127 } else { 126 });
+}
+
 fn main() {
+    let raw: Vec<OsString> = std::env::args_os().collect();
+    if raw.get(1).is_some_and(|arg| arg == "--exec") {
+        exec_confined(&raw[2..]);
+    }
     let args: Vec<String> = std::env::args().collect();
     let Some(path) = args.iter().position(|a| a == "--listen").and_then(|i| args.get(i + 1)).cloned() else {
-        eprintln!("usage: nexus-sandbox-spawner --listen <socket path>");
+        eprintln!("usage: nexus-sandbox-spawner --listen <socket path> | --exec [--read <path>]... [--write <path>]... -- <program> [args]...");
         std::process::exit(2);
     };
     let cpath = CString::new(path.as_bytes()).unwrap_or_else(|_| unavailable(0, "socket 路徑含 NUL"));
@@ -592,6 +699,9 @@ fn main() {
     let insns = seccomp::install().unwrap_or_else(|e| unavailable(e.raw_os_error().unwrap_or(0), &format!("seccomp: {e}")));
     if let Err(e) = self_check() {
         unavailable(0, &e);
+    }
+    if kernel_lacks_pidfd() {
+        unavailable(libc::ENOSYS, "pidfd_open：核心要 5.3 以上");
     }
     if !emit(&Event::Ready { filter_insns: insns as u32, landlock_abi: abi as u32 }) {
         std::process::exit(3);

@@ -1,4 +1,4 @@
-//! seccomp 過濾器：spawner 啟動時裝一次，之後 fork 出來的每個子行程都繼承（#1946 S1、S3）。
+//! seccomp 過濾器：spawner 啟動時裝一次（單次模式在 exec 之前裝），之後 fork 出來的每個子行程都繼承（#1946 S1、S3）。
 //!
 //! 規則照 S1（#1827 issuecomment-6369593415）：
 //!
@@ -190,6 +190,11 @@ mod tests {
         assert_eq!(run(libc::SYS_socket, libc::AF_VSOCK as u32), errno(libc::EPERM));
         assert_eq!(run(libc::SYS_socketpair, libc::AF_UNIX as u32), ALLOW);
         assert_eq!(run(libc::SYS_socket, libc::AF_NETLINK as u32), ALLOW);
+    }
+
+    #[test]
+    fn pidfd_open_is_allowed() {
+        assert_eq!(run(libc::SYS_pidfd_open, 0), ALLOW);
     }
 
     #[test]

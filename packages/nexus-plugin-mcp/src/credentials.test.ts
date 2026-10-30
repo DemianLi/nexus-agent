@@ -109,7 +109,7 @@ describe('stdio 的 env 引用憑證', () => {
     ]);
     expect(registry.tools.resolve('mcp__srv__read_env')).toBeUndefined();
     const [warning] = warned(registry);
-    expect(warning).toContain('MCP 伺服器 "srv" 連不上');
+    expect(warning).toContain('MCP 伺服器 "srv" 套不上沙箱、連不上');
     expect(warning).toContain('connection.env.MCP_TOKEN 引用的憑證 "GITHUB_PAT"');
     expect(warning).toContain(reason);
   });

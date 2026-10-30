@@ -10,6 +10,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['guard/**/*.test.ts'],
+    // 檔數與 runner 的 4 核對齊：vitest 預設開核數減一個 worker，第四個檔就要等前面一個檔跑完。
+    maxWorkers: 4,
     testTimeout: 60_000,
     execArgv: vitestExecArgv,
     hookTimeout: 120_000,

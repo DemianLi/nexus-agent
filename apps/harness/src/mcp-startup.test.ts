@@ -121,7 +121,7 @@ async function until(predicate: () => boolean, lines: readonly string[]): Promis
 }
 
 const WARNED =
-  /^ {2}mcp-late（@nexus\/plugin-mcp）：MCP 伺服器 "late" 連不上、列不出工具或工具註冊不上/u;
+  /^ {2}mcp-late（@nexus\/plugin-mcp）：MCP 伺服器 "late" 套不上沙箱、連不上、列不出工具或工具註冊不上/u;
 
 describe('MCP 連不上、沒寫 failOnStartupError', () => {
   it('CLI 起得來、警告指名它、沒有那台的工具；對照：伺服器在就有', async () => {

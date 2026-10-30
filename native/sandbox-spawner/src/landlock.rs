@@ -1,4 +1,4 @@
-//! Landlock：每個子行程在 exec 之前各自上一份，讀根與寫根由 Node 在每次要求裡帶來。
+//! Landlock：每個子行程（單次模式是自己）在 exec 之前各自上一份，讀根與寫根由 Node 在每次要求裡帶來。
 //!
 //! 要的 ABI 上限是 6；核心支援的版本比 6 舊就是 partial（照跑，`Started` 帶 `partial`），核心根本不支援就是 none
 //! （只有全權模式起得來，其餘回 `SandboxUnavailable`）。ABI 4 起也管 TCP：沒有任何 TCP 規則，等於 bind、connect 都不准。

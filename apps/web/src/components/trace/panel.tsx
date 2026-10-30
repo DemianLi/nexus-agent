@@ -29,7 +29,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import type { ConversationState } from '@nexus/wire';
 
 import type { PanelBodyProps, TurnReveal } from '@/lib/right-sidebar-api';
-import { Digests, TurnGroup } from '@/components/trace/groups';
+import { Digests, TurnGroup, mainTurnSelector } from '@/components/trace/groups';
 import { TRACE_PULL_FAILED_TEXT, TRACE_PULL_LOADING_TEXT } from '@/components/trace/pull-control';
 import { SubagentSourceContext } from '@/components/trace/subagent';
 import { Button } from '@/components/ui/button';
@@ -231,7 +231,7 @@ const Timeline = memo(function Timeline({
   }, [reveal, revealIn, placed, model, onRevealed, pullHold, pullNote]);
   useEffect(() => {
     if (placed === undefined || readyTurn !== placed.nonce) return;
-    const group = section.current?.querySelector<HTMLElement>(`section[data-seq="${placed.seq}"]`);
+    const group = section.current?.querySelector<HTMLElement>(mainTurnSelector(placed.seq));
     if (group === null || group === undefined) return;
     group.scrollIntoView({ block: 'start' });
     group.querySelector<HTMLElement>('[data-reveal-target]')?.focus({ preventScroll: true });
@@ -335,9 +335,7 @@ const Timeline = memo(function Timeline({
       setShown(model.turns.length - at);
       return;
     }
-    const group = section.current?.querySelector<HTMLElement>(
-      `section[data-testid="trace-turn"][data-seq="${seq}"]`,
-    );
+    const group = section.current?.querySelector<HTMLElement>(mainTurnSelector(seq));
     handoff.land(group?.querySelector<HTMLElement>('[data-reveal-target]') ?? section.current, {
       scroll: true,
     });

@@ -11,7 +11,6 @@ import { CallRow } from '@/components/trace/call';
 import { PullControl } from '@/components/trace/pull-control';
 import { HeadFacts } from '@/components/trace/turn-head';
 import { TOOL_STATUS_LABEL } from '@/components/tool/card';
-import { Button } from '@/components/ui/button';
 import { StepGroup } from '@/components/ui/tool-steps';
 import type { Step } from '@/components/ui/tool-steps';
 import { useFocusHandoff } from '@/hooks/use-focus-handoff';
@@ -46,10 +45,21 @@ export const SubagentSourceContext = createContext<
   { readonly state: ConversationState; readonly puller: TrajectoryPuller | undefined } | undefined
 >(undefined);
 
+/** 拉回來過的內容。`load` 每拉成一次加一：整塊換新，鈕跟著換，焦點才會照首次載入那樣交給標題。 */
+type PulledTurns = { readonly turns: readonly SubagentTurnView[]; readonly load: number };
+
 type ChildPull =
-  | { readonly kind: 'loading' }
-  | { readonly kind: 'failed'; readonly code: string; readonly message: string }
-  | { readonly kind: 'loaded'; readonly turns: readonly SubagentTurnView[] };
+  | { readonly kind: 'loading'; readonly shown?: PulledTurns }
+  | {
+      readonly kind: 'failed';
+      readonly code: string;
+      readonly message: string;
+      readonly shown?: PulledTurns;
+    }
+  | ({ readonly kind: 'loaded' } & PulledTurns);
+
+const shownOf = (pull: ChildPull | undefined): PulledTurns | undefined =>
+  pull?.kind === 'loaded' ? pull : pull?.shown;
 
 function SubagentTool({ tool }: { tool: SubagentCallView['tools'][number] }) {
   return (
@@ -140,7 +150,7 @@ function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
       <p
         className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-tip outline-none"
         // 按「載入這一輪的細節」拉回來之後焦點交到這裡（#2009）；平常不在 Tab 順序裡。不用 `data-reveal-target`：
-        // 「看這一輪」找的是主對話那一組的標題，子代理的輪也帶 `data-seq`，標了會被它找錯。
+        // 「看這一輪」在主對話那一組裡找它，子代理的輪巢在組內，沒有標題的組會找到這一列。
         data-subagent-turn-head=""
         tabIndex={-1}
       >
@@ -203,21 +213,31 @@ export function SubagentCalls({ runId }: { runId: string }) {
       if (puller === undefined) return;
       const abort = new AbortController();
       aborts.current.add(abort);
-      setPulls((old) => new Map(old).set(seq, { kind: 'loading' }));
+      setPulls((old) => {
+        const shown = shownOf(old.get(seq));
+        return new Map(old).set(seq, { kind: 'loading', ...(shown && { shown }) });
+      });
       void puller.fetchTurns({ runId, seq }, abort.signal).then((outcome) => {
         aborts.current.delete(abort);
         if (abort.signal.aborted) return;
-        setPulls((old) =>
-          new Map(old).set(
+        setPulls((old) => {
+          const shown = shownOf(old.get(seq));
+          return new Map(old).set(
             seq,
             outcome.ok
               ? {
                   kind: 'loaded',
                   turns: outcome.turns.map((turn) => subagentTurnView(turn, snapshots)),
+                  load: (shown?.load ?? 0) + 1,
                 }
-              : { kind: 'failed', code: outcome.code, message: outcome.message },
-          ),
-        );
+              : {
+                  kind: 'failed',
+                  code: outcome.code,
+                  message: outcome.message,
+                  ...(shown && { shown }),
+                },
+          );
+        });
       });
     },
     // `snapshots` 只用來畫拉回來的那一輪；它每個 frame 都是新的，不該讓拉取的函式跟著換。
@@ -257,24 +277,21 @@ export function SubagentCalls({ runId }: { runId: string }) {
       )}
       {digests.map((digest) => {
         const pull = pulls.get(digest.seq);
-        if (pull?.kind === 'loaded') {
+        const shown = shownOf(pull);
+        const status =
+          pull === undefined || pull.kind === 'loaded' ? { kind: 'idle' as const } : pull;
+        if (shown !== undefined) {
           return (
-            <div key={digest.seq} data-pulled-seq={digest.seq}>
-              {pull.turns.map((turn) => (
+            <div key={`${digest.seq}:${shown.load}`} data-pulled-seq={digest.seq}>
+              {shown.turns.map((turn) => (
                 <SubagentTurn key={turn.seq} turn={turn} />
               ))}
-              <div className="px-2 pb-1">
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="min-h-11 text-ui lg:min-h-8"
-                  onFocus={(event) => handoff.arm(digest.seq, event.currentTarget)}
-                  onClick={() => pullSeq(digest.seq)}
-                >
-                  {SUBAGENT_CALLS_RELOAD_LABEL}
-                </Button>
-              </div>
+              <PullControl
+                status={status}
+                reloadLabel={SUBAGENT_CALLS_RELOAD_LABEL}
+                onPull={() => pullSeq(digest.seq)}
+                onArm={(button) => handoff.arm(digest.seq, button)}
+              />
             </div>
           );
         }
@@ -294,7 +311,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
               <p className="text-muted-foreground px-2 text-tip">{SUBAGENT_CALLS_NO_PULL_TEXT}</p>
             ) : (
               <PullControl
-                status={pull ?? { kind: 'idle' }}
+                status={status}
                 onPull={() => pullSeq(digest.seq)}
                 onArm={(button) => handoff.arm(digest.seq, button)}
               />

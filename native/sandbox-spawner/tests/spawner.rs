@@ -589,6 +589,21 @@ fn running_out_of_fds_for_dev_null_fails_with_resource_and_leaks_nothing() {
 }
 
 #[test]
+fn kernel_without_pidfd_open_means_unavailable_at_startup() {
+    let filter = outer_filter(libc::SYS_pidfd_open, None, libc::ENOSYS);
+    let (mut s, first) = start_with(&[], Some(filter));
+    assert!(matches!(&first, Event::Unavailable { errno: libc::ENOSYS, detail } if detail.starts_with(b"pidfd_open")), "{first:?}");
+    assert_eq!(s.child.wait().unwrap().code(), Some(125));
+}
+
+#[test]
+fn pidfd_open_failing_for_other_reasons_is_not_unavailable_at_startup() {
+    let filter = outer_filter(libc::SYS_pidfd_open, None, libc::EMFILE);
+    let (_s, first) = start_with(&[], Some(filter));
+    assert!(matches!(first, Event::Ready { .. }), "{first:?}");
+}
+
+#[test]
 fn seccomp_that_cannot_be_installed_means_unavailable() {
     let filter = outer_filter(libc::SYS_prctl, Some(libc::PR_SET_SECCOMP as u32), libc::EINVAL);
     let (mut s, first) = start_with(&[], Some(filter));
@@ -704,4 +719,184 @@ fn a_request_still_waiting_for_stdio_fails_when_the_spawner_stops() {
     unsafe { libc::kill(s.child.id() as i32, libc::SIGTERM) };
     assert!(matches!(s.event_for(1), Event::Failed { id: 1, kind: FailKind::Resource, .. }));
     assert_eq!(exits_within(&mut s.child, Duration::from_secs(5)), Some(0));
+}
+
+/// 單次模式起探針。結果是印出來的那一行與結束碼。
+fn exec_probe(envs: &[(&str, &str)], ws: &Path, args: &[&str]) -> (String, Option<i32>) {
+    let mut cmd = Command::new(SPAWNER);
+    cmd.arg("--exec");
+    for root in exec_readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    cmd.arg("--write").arg(ws).arg("--").arg(probe()).args(args);
+    cmd.envs(envs.iter().copied()).current_dir(ws).stderr(Stdio::null());
+    let out = cmd.output().unwrap();
+    (String::from_utf8_lossy(&out.stdout).trim().to_string(), out.status.code())
+}
+
+/// 單次模式只收 realpath：`/bin`、`/lib` 在多數發行版是連結。
+fn exec_readable() -> Vec<Vec<u8>> {
+    let mut roots: Vec<Vec<u8>> = readable()
+        .iter()
+        .map(|root| {
+            let path = Path::new(std::str::from_utf8(root).unwrap());
+            std::fs::canonicalize(path).unwrap().to_str().unwrap().as_bytes().to_vec()
+        })
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
+}
+
+#[test]
+fn exec_mode_enforces_the_same_rules_as_the_daemon() {
+    let Some(mut s) = start() else { return };
+    let ws = temp_dir("ws");
+    let outside = temp_dir("outside");
+    let token = outside.join("token");
+    std::fs::write(&token, "secret").unwrap();
+    let (inside, out) = (ws.join("f"), token.to_str().unwrap());
+    let inside = inside.to_str().unwrap();
+    std::fs::write(inside, "x").unwrap();
+    let cases: Vec<Vec<&str>> = vec![
+        vec!["tcp"],
+        vec!["udp"],
+        vec!["unix"],
+        vec!["socketpair"],
+        vec!["vsock"],
+        vec!["uring"],
+        vec!["unshare"],
+        vec!["setns"],
+        vec!["clone-newuser"],
+        vec!["clone3"],
+        vec!["read", out],
+        vec!["write", out],
+        vec!["read", inside],
+        vec!["write", inside],
+    ];
+    for (i, case) in cases.iter().enumerate() {
+        let daemon = probe_line(&mut s, 100 + i as u32, &ws, case);
+        let (once, code) = exec_probe(&[], &ws, case);
+        assert_eq!(once, daemon, "{case:?}");
+        assert_eq!(code, Some(0), "{case:?}");
+    }
+    assert!(probe_line(&mut s, 99, &ws, &["read", out]).starts_with("errno="));
+}
+
+#[test]
+fn exec_mode_refuses_to_run_without_landlock() {
+    let ws = temp_dir("ws");
+    let (out, code) = exec_probe(&[("NEXUS_SPAWNER_TEST_ABI_CAP", "0")], &ws, &["tcp"]);
+    assert_eq!((out.as_str(), code), ("", Some(125)));
+}
+
+#[test]
+fn exec_mode_refuses_to_run_without_seccomp() {
+    let ws = temp_dir("ws");
+    let filter = outer_filter(libc::SYS_prctl, Some(libc::PR_SET_SECCOMP as u32), libc::EINVAL);
+    let mut cmd = Command::new(SPAWNER);
+    cmd.args(["--exec", "--"]).arg(probe()).arg("tcp").current_dir(&ws).stderr(Stdio::null());
+    // SAFETY：同 start_with。
+    unsafe {
+        cmd.pre_exec(move || {
+            let fprog = libc::sock_fprog { len: filter.len() as u16, filter: filter.as_ptr() as *mut _ };
+            libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
+            libc::prctl(libc::PR_SET_SECCOMP, libc::SECCOMP_MODE_FILTER, &fprog as *const _);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    assert_eq!((out.stdout.len(), out.status.code()), (0, Some(125)));
+}
+
+#[test]
+fn exec_mode_refuses_a_root_it_cannot_open_and_bad_usage() {
+    let ws = temp_dir("ws");
+    let run = |args: &[&str]| {
+        let out = Command::new(SPAWNER).args(args).current_dir(&ws).stderr(Stdio::null()).output().unwrap();
+        (out.stdout.len(), out.status.code())
+    };
+    let p = probe();
+    let p = p.to_str().unwrap();
+    assert_eq!(run(&["--exec", "--read", "/no/such/root", "--", p, "tcp"]), (0, Some(125)));
+    assert_eq!(run(&["--exec", "--bogus", "--", p]), (0, Some(125)));
+    assert_eq!(run(&["--exec", p]), (0, Some(125)));
+    assert_eq!(run(&["--exec", "--"]), (0, Some(125)));
+}
+
+#[test]
+fn exec_mode_replaces_itself_and_keeps_stdio() {
+    let mut cmd = Command::new(SPAWNER);
+    cmd.arg("--exec");
+    for root in exec_readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    let mut child = cmd
+        .args(["--", "/bin/cat"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"hello").unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert_eq!((out.stdout.as_slice(), out.status.code()), (b"hello".as_slice(), Some(0)));
+}
+
+#[test]
+fn exec_mode_refuses_a_root_that_is_not_a_realpath() {
+    let ws = temp_dir("ws");
+    let link = ws.join("link");
+    std::os::unix::fs::symlink(temp_dir("outside"), &link).unwrap();
+    let out = Command::new(SPAWNER)
+        .args(["--exec", "--read"])
+        .arg(&link)
+        .arg("--")
+        .arg(probe())
+        .arg("tcp")
+        .stderr(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!((out.stdout.len(), out.status.code()), (0, Some(125)));
+}
+
+#[test]
+fn exec_mode_detaches_like_a_daemon_child() {
+    let ws = temp_dir("ws");
+    let (line, code) = exec_probe(&[], &ws, &["pdeathsig"]);
+    assert_eq!((line.as_str(), code), ("sig=9", Some(0)));
+    let mut cmd = Command::new(SPAWNER);
+    cmd.arg("--exec");
+    for root in exec_readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    cmd.args(["--", "/bin/sh", "-c", "cat /proc/self/stat; grep SigIgn /proc/$$/status; ls /proc/$$/fd"]);
+    // SAFETY：pre_exec 裡只有 dup2，不配置記憶體。fd 9 沒有 CLOEXEC，exec 之後還在，驗得出 close_range。
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::dup2(2, 9);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut fields = text.lines().next().unwrap().split(' ');
+    let session = fields.nth(5).unwrap();
+    // SAFETY：getsid 只查詢。
+    assert_ne!(session, unsafe { libc::getsid(0) }.to_string());
+    let ignored = text.lines().find_map(|line| line.strip_prefix("SigIgn:\t")).unwrap();
+    let sigpipe = 1u64 << (libc::SIGPIPE - 1);
+    assert_eq!(u64::from_str_radix(ignored, 16).unwrap() & sigpipe, 0, "{text}");
+    assert!(!text.lines().any(|line| line == "9"), "{text}");
+}
+
+#[test]
+fn exec_mode_says_so_when_landlock_is_partial() {
+    let ws = temp_dir("ws");
+    let mut cmd = Command::new(SPAWNER);
+    cmd.env("NEXUS_SPAWNER_TEST_ABI_CAP", "3").arg("--exec");
+    for root in exec_readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    let out = cmd.arg("--write").arg(&ws).arg("--").arg(probe()).arg("tcp").output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stderr).contains("部分強制"));
 }

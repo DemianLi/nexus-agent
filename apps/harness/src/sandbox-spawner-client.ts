@@ -150,7 +150,7 @@ export function startGeneration(
           type: 'spawn',
           id,
           mode: SPAWN_MODES[request.mode],
-          pipes: 0b110,
+          pipes: request.stdin === undefined ? 0b110 : 0b111,
           cwd: request.cwd,
           readable: request.readable,
           writable: request.writable,
@@ -164,15 +164,25 @@ export function startGeneration(
         stdout.write(stdioHeader(id, 1));
         stderr.write(stdioHeader(id, 2));
         const conns = [stdout, stderr];
+        if (request.stdin !== undefined) {
+          // 工具不讀完 stdin 就結束時寫入會 EPIPE，下面的 'error' 收掉；結果由結束碼決定。
+          const stdin = createConnection(socket);
+          stdin.write(stdioHeader(id, 0));
+          stdin.end(request.stdin);
+          conns.push(stdin);
+        }
         for (const conn of conns) conn.on('error', () => conn.destroy());
         return new Promise<ToolProcess | ToolLaunchFailure>((settleStart) => {
           let finish!: (result: ToolResult) => void;
           const done = new Promise<ToolResult>((settleDone) => (finish = settleDone));
+          let finishExit!: (result: ToolResult) => void;
+          const exited = new Promise<ToolResult>((settleExit) => (finishExit = settleExit));
           inFlight.set(id, {
             conns,
             settle: (result) => {
               inFlight.delete(id);
               if (inFlight.size === 0) events.unref();
+              finishExit(result);
               if (result.kind === 'failed') {
                 for (const conn of conns) conn.destroy();
                 settleStart(result.reason);
@@ -192,6 +202,7 @@ export function startGeneration(
                 kill: (signal) => {
                   if (running) send({ type: 'signal', id, signo: SIGNAL_NUMBERS[signal] });
                 },
+                exited,
                 done,
               });
             },
@@ -317,6 +328,17 @@ export class SpawnerSupervisor {
       return 'sandbox-unavailable';
     }
   };
+
+  /** 起一代並回它的 Landlock ABI；起不來或正在退避回 `undefined`。serve 起動時用來講這台主機的狀態。 */
+  async landlockAbi(): Promise<number | undefined> {
+    if (this.#retry !== undefined) return undefined;
+    try {
+      this.#current ??= this.#connect();
+      return (await this.#current).landlockAbi;
+    } catch {
+      return undefined;
+    }
+  }
 
   #connect(): Promise<SpawnerGeneration> {
     const generation = this.#start(this.#binary, {

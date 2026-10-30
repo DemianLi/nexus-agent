@@ -27,6 +27,10 @@ export const TRACE_MORE_DIGESTS_LABEL = '顯示更早的摘要';
 export const TRACE_MORE_ROWS_LABEL = '顯示更早的列';
 export const TRACE_LEGACY_GROUP_TEXT = '沒有結構資料的一輪：以人說的那一句切開';
 
+/** 主對話那一組：子代理的輪也是 `section[data-seq]`，而且 `seq` 是它自己日誌上的位置，會跟主對話撞號。 */
+export const mainTurnSelector = (seq: number) =>
+  `section[data-testid="trace-turn"][data-seq="${seq}"]`;
+
 export function TurnGroup({
   turn,
   structured,
@@ -157,7 +161,9 @@ export function Digests({
   }, [reveal, digests]);
   useEffect(() => {
     if (reveal === undefined || ready !== reveal.nonce) return;
-    const target = list.current?.querySelector<HTMLElement>(`[data-seq="${reveal.seq}"]`);
+    const target = list.current?.querySelector<HTMLElement>(
+      `li[data-testid="trace-digest"][data-seq="${reveal.seq}"]`,
+    );
     if (target === null || target === undefined) return;
     target.scrollIntoView({ block: 'center' });
     target.focus({ preventScroll: true });
