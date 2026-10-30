@@ -150,7 +150,7 @@ function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
       <p
         className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-tip outline-none"
         // 按「載入這一輪的細節」拉回來之後焦點交到這裡（#2009）；平常不在 Tab 順序裡。不用 `data-reveal-target`：
-        // 「看這一輪」找的是主對話那一組的標題，子代理的輪也帶 `data-seq`，標了會被它找錯。
+        // 「看這一輪」在主對話那一組裡找它，子代理的輪巢在組內，沒有標題的組會找到這一列。
         data-subagent-turn-head=""
         tabIndex={-1}
       >

@@ -1,6 +1,7 @@
 import type {
   ConversationState,
   RequestSnapshotsView,
+  TrajectoryTurn,
   TrajectoryTurnOutcome,
   TrajectoryView,
 } from '@nexus/wire';
@@ -15,6 +16,7 @@ import {
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import {
   SUBAGENT_CALLS_NO_DATA_TEXT,
@@ -61,10 +63,14 @@ const link = (runId: string) => ({
   catalogSeq: 7,
 });
 
-/** root：一輪、一次呼叫、一顆派出子代理的工具（`subagent` 這顆）。 */
+/** root：一輪、一次呼叫、一顆派出子代理的工具（`subagent` 這顆）；`laterTurns` 接在這一輪之後。 */
 function scenario(
   runId: string | undefined,
-  child?: { trajectory?: TrajectoryView; snapshots?: RequestSnapshotsView },
+  child?: {
+    trajectory?: TrajectoryView;
+    snapshots?: RequestSnapshotsView;
+    laterTurns?: readonly TrajectoryTurn[];
+  },
 ) {
   const script = new Script();
   let state: ConversationState = reduceAll(emptyConversation(), [
@@ -91,6 +97,7 @@ function scenario(
           }),
         ],
       }),
+      ...(child?.laterTurns ?? []),
     ]),
   );
   if (runId !== undefined && child?.trajectory !== undefined) {
@@ -151,6 +158,16 @@ function mount(state: ConversationState, client?: ReturnType<typeof fakeClient>[
     >
       <RightSidebarToggle />
     </WithRightSidebar>,
+  );
+}
+
+/** 成本分頁「看這一輪」按下去的事：用探針直接叫 `revealTurn`。 */
+function RevealProbe({ seq }: { seq: number }) {
+  const api = useRightSidebar();
+  return (
+    <button type="button" onClick={() => api?.revealTurn(seq)}>
+      看這一輪
+    </button>
   );
 }
 
@@ -465,6 +482,40 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     expect(document.activeElement).toBe(
       within(block).getByTestId('trace-subagent-turn').querySelector('[data-subagent-turn-head]'),
     );
+  });
+
+  it('主對話與子代理有同樣 seq 的輪：「看這一輪」落在主對話那一份（#2136）', async () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    localStorage.setItem(LAYOUT_KEY_PREFIX + 't', JSON.stringify(open));
+    render(
+      <WithRightSidebar
+        sources={{
+          conversation: createConversationStore(
+            scenario('bg-1', {
+              trajectory: view([childTurn(3)]),
+              laterTurns: [turn(1, { seq: 30, calls: [call(40)] })],
+            }),
+          ),
+        }}
+      >
+        <RightSidebarToggle />
+        <RevealProbe seq={30} />
+      </WithRightSidebar>,
+    );
+    await expandSubagent();
+    const nested = screen.getByTestId('trace-subagent-turn');
+    expect(nested.getAttribute('data-seq')).toBe('30');
+    fireEvent.click(screen.getByRole('button', { name: '看這一輪' }));
+    await flush();
+    const main = document.querySelector<HTMLElement>(
+      'section[data-testid="trace-turn"][data-seq="30"]',
+    )!;
+    expect(document.activeElement).toBe(main.querySelector('[data-reveal-target]'));
+    expect(scrolled).toContain(main);
+    expect(scrolled).not.toContain(nested);
   });
 
   it('分頁關掉（卸載）時，還在飛的拉取被取消', async () => {
