@@ -3,16 +3,18 @@
 //! 框：`u32 LE 長度` 接著那麼多 bytes 的內容。內容第一個 byte 是種類，其餘是欄位：
 //! 數字一律 `u32 LE`（有號的值照二補數存），字串與位元組串是 `u32 LE 長度 + bytes`，清單是 `u32 LE 個數 + 每一項`。
 //! 不用分隔字元，所以參數、路徑、環境變數裡的任何 byte（含 tab、換行）都原樣送到。只有 NUL 例外：argv、env、cwd 含 NUL
-//! 回 `Protocol`；授權路徑含 NUL 開不起來，回 `SandboxUnavailable`。
+//! 回 `Protocol`；授權路徑含 NUL 開不起來，回 `SandboxUnavailable`（`FullAccess` 不看授權路徑）。
 
 /// 一框最多多大。超過就當成通道壞掉，spawner 結束。
 pub const MAX_FRAME: usize = 1 << 20;
 
-/// 檔案效果政策。全權模式不經 spawner，所以這裡只有兩種。
+/// 檔案效果政策。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     ReadOnly,
     WorkspaceWrite,
+    /// 不上 Landlock，讀根、寫根都不看；seccomp 照樣繼承（網路照擋）。Landlock 是 none 時只有這個模式起得來。
+    FullAccess,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,7 +45,7 @@ pub enum Request {
 /// 沒起成的原因。種類讓 Node 不必解析文字就能分流：沙箱不可用要照 fail-closed 處理，跟工具自己起不來不能混在同一條判斷。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FailKind {
-    /// Landlock 不能用（none）、設不上，或授權的路徑打不開（不默默縮小授權）：`SANDBOX_UNAVAILABLE`。
+    /// Landlock 不能用（none，而要求不是 `FullAccess`）、設不上，或授權的路徑打不開（不默默縮小授權）：`SANDBOX_UNAVAILABLE`。
     SandboxUnavailable = 1,
     /// 工作目錄不存在或進不去。跟沙箱無關，要另外說（#1945）。
     StartDir = 2,
@@ -72,12 +74,12 @@ impl FailKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// spawner 起不來：啟動的任何一步失敗（Landlock 是 none、signalfd、監聽 socket、seccomp、自我檢查）。送完這一框 spawner 就結束，
-    /// 之後 Node 對每個工具子行程都回 `SANDBOX_UNAVAILABLE`。
+    /// spawner 起不來：啟動的任何一步失敗（socket 路徑含 NUL、signalfd、監聽 socket、seccomp、自我檢查）。送完這一框 spawner 就結束。
     Unavailable { errno: i32, detail: Vec<u8> },
-    /// spawner 準備好了：過濾器裝好、自我檢查通過。帶上過濾器的指令數與 Landlock 的 ABI 版本。
+    /// spawner 準備好了：過濾器裝好、自我檢查通過。帶上過濾器的指令數與 Landlock 的 ABI 版本；版本是 0（none）時，
+    /// 只有 `FullAccess` 的要求起得來，其餘回 `Failed`（`SandboxUnavailable`）。
     Ready { filter_insns: u32, landlock_abi: u32 },
-    /// 已 exec。`partial` 是 Landlock 只部分生效（核心的 ABI 比要的舊）：照跑，由 Node 印通知。
+    /// 已 exec。`partial` 是 Landlock 只部分生效（核心的 ABI 比要的舊），照跑。`FullAccess` 不上 Landlock，一律是 false。
     Started { id: u32, pid: u32, partial: bool },
     /// 沒 exec。`errno` 是失敗那一步的錯誤碼（沒有就是 0）。
     Failed { id: u32, kind: FailKind, errno: i32, detail: Vec<u8> },
@@ -173,6 +175,7 @@ pub fn decode_request(payload: &[u8]) -> Result<Request, DecodeError> {
             let mode = match r.u8()? {
                 0 => Mode::ReadOnly,
                 1 => Mode::WorkspaceWrite,
+                2 => Mode::FullAccess,
                 _ => return Err(DecodeError("不認得的模式")),
             };
             let pipes = r.u8()?;
@@ -206,6 +209,7 @@ pub fn encode_request(request: &Request) -> Vec<u8> {
             w.u8(match s.mode {
                 Mode::ReadOnly => 0,
                 Mode::WorkspaceWrite => 1,
+                Mode::FullAccess => 2,
             });
             w.u8(s.pipes);
             w.bytes(&s.cwd);
@@ -321,7 +325,8 @@ mod tests {
 
     #[test]
     fn requests_round_trip_with_separator_bytes_inside_fields() {
-        for request in [Request::Spawn(spawn()), Request::Signal { id: 3, signo: libc::SIGTERM }] {
+        let modes = [Mode::ReadOnly, Mode::WorkspaceWrite, Mode::FullAccess].map(|mode| Request::Spawn(Spawn { mode, ..spawn() }));
+        for request in modes.into_iter().chain([Request::Signal { id: 3, signo: libc::SIGTERM }]) {
             assert_eq!(decode_request(&encode_request(&request)), Ok(request));
         }
     }
@@ -339,6 +344,74 @@ mod tests {
         }
     }
 
+    /// `protocol-vectors.json` 裡依序的 `hex`：Node 端的編解碼對同一份測。
+    fn vectors() -> Vec<Vec<u8>> {
+        include_str!("../protocol-vectors.json")
+            .split("\"hex\": \"")
+            .skip(1)
+            .map(|rest| {
+                let hex = &rest[..rest.find('"').unwrap()];
+                (0..hex.len()).step_by(2).map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap()).collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_shared_vectors_match_both_directions() {
+        let s = |v: &str| v.as_bytes().to_vec();
+        let requests = [
+            Request::Spawn(Spawn {
+                id: 7,
+                mode: Mode::WorkspaceWrite,
+                pipes: 0b110,
+                cwd: s("/w/ws"),
+                readable: vec![s("/usr"), s("/etc/gitconfig")],
+                writable: vec![s("/w/ws"), s("/w/extra dir\twith tab")],
+                argv: vec![s("/usr/bin/git"), s("a\nb"), Vec::new()],
+                env: vec![s("PATH=/usr/bin"), s("LC_ALL=C")],
+            }),
+            Request::Spawn(Spawn {
+                id: 8,
+                mode: Mode::ReadOnly,
+                pipes: 0b010,
+                cwd: s("/"),
+                readable: Vec::new(),
+                writable: Vec::new(),
+                argv: vec![s("rg")],
+                env: Vec::new(),
+            }),
+            Request::Spawn(Spawn {
+                id: u32::MAX,
+                mode: Mode::FullAccess,
+                pipes: 0,
+                cwd: s("/tmp"),
+                readable: Vec::new(),
+                writable: Vec::new(),
+                argv: vec![s("true")],
+                env: vec![s("A=é")],
+            }),
+            Request::Signal { id: 3, signo: libc::SIGTERM },
+        ];
+        let events = [
+            Event::Unavailable { errno: libc::EINVAL, detail: s("seccomp: Invalid argument") },
+            Event::Ready { filter_insns: 70, landlock_abi: 0 },
+            Event::Started { id: 1, pid: 4242, partial: true },
+            Event::Failed { id: 2, kind: FailKind::StartDir, errno: libc::ENOENT, detail: s("chdir") },
+            Event::Failed { id: 9, kind: FailKind::Resource, errno: libc::EMFILE, detail: s("open /dev/null") },
+            Event::Exited { id: 3, code: -1, signal: libc::SIGKILL },
+        ];
+        let vectors = vectors();
+        assert_eq!(vectors.len(), requests.len() + events.len());
+        for (request, bytes) in requests.iter().zip(&vectors) {
+            assert_eq!(&encode_request(request), bytes, "{request:?}");
+            assert_eq!(decode_request(bytes).as_ref(), Ok(request));
+        }
+        for (event, bytes) in events.iter().zip(&vectors[requests.len()..]) {
+            assert_eq!(&encode_event(event), bytes, "{event:?}");
+            assert_eq!(decode_event(bytes).as_ref(), Ok(event));
+        }
+    }
+
     #[test]
     fn truncated_trailing_or_unknown_input_is_rejected() {
         let bytes = encode_request(&Request::Spawn(spawn()));
@@ -352,6 +425,9 @@ mod tests {
         let mut bad_pipes = encode_request(&Request::Spawn(Spawn { pipes: 0, ..spawn() }));
         bad_pipes[6] = 0b1000;
         assert_eq!(decode_request(&bad_pipes), Err(DecodeError("stdio 位元超出 0..2")));
+        let mut bad_mode = bytes.clone();
+        bad_mode[5] = 3;
+        assert_eq!(decode_request(&bad_mode), Err(DecodeError("不認得的模式")));
     }
 
     #[test]

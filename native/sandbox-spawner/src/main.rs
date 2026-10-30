@@ -8,14 +8,14 @@
 //!
 //! 啟動順序（順序本身是安全性的一部分）：
 //!
-//! 1. 查 Landlock：核心不支援（none）就 fail-closed（S2）。
+//! 1. 查 Landlock 的 ABI。none 不擋啟動：之後只有全權模式的要求起得來，其餘回 `Failed`（`SandboxUnavailable`）。
 //! 2. 擋下 SIGINT／SIGTERM／SIGHUP，改由 signalfd 收。
 //! 3. 建監聽用的 `AF_UNIX` socket、chmod 0600。一定要在裝過濾器之前：S1 擋 `socket(AF_UNIX)`，裝完之後只用 `accept4`。
 //! 4. `NO_NEW_PRIVS`＋seccomp，只裝這一次，之後 fork 的子行程都繼承。
 //! 5. 自我檢查：`socket(AF_INET)` 要拿到 EACCES、`socket(AF_UNIX)` 要拿到 EPERM。
 //! 6. 送 `Ready`。
 //!
-//! 1 到 5 任何一步失敗，都送 `Unavailable` 後結束。
+//! socket 路徑含 NUL，或 2 到 5 任何一步失敗，都送 `Unavailable` 後結束。
 //!
 //! stdio：Node 對監聽 socket 每接一條 fd 就 connect 一次，先寫 8 bytes 標頭（id `u32 LE`、fd `u32 LE`，fd ∈ {0,1,2}），之後就是資料。
 //! 連進來的對方要是起這個 spawner 的那個行程（`SO_PEERCRED` 的 pid 等於 `getppid()`，uid 相同），否則直接關掉。
@@ -406,20 +406,18 @@ impl Spawner {
         // 候選由 argv[0] 與 env 裡的 PATH 拼成，兩者上面都已確定不含 NUL。
         let candidates = cstrings(&candidates(&r.argv[0], &r.env)).expect("候選路徑不含 NUL");
         let cwd = CString::new(r.cwd.clone()).map_err(|_| protocol_error("cwd 含 NUL"))?;
+        if r.mode != Mode::FullAccess && self.abi < 1 {
+            return Err((FailKind::SandboxUnavailable, libc::ENOSYS, "Landlock 不能用（核心不支援或沒開）".to_string()));
+        }
         let devnull = c"/dev/null";
-        let mut opened = Vec::new();
         for i in 0..3 {
             if fds[i] < 0 {
-                // SAFETY：開 /dev/null，交給子行程後由 close_all 關掉。
+                // SAFETY：開 /dev/null 放進 fds，不論成敗都由呼叫端的 close_all 關掉。
                 let fd = unsafe { libc::open(devnull.as_ptr(), libc::O_RDWR | libc::O_CLOEXEC) };
                 if fd < 0 {
-                    for fd in opened {
-                        close(fd);
-                    }
                     return Err((FailKind::Resource, errno(), "open /dev/null".to_string()));
                 }
                 fds[i] = fd;
-                opened.push(fd);
             }
         }
         let mut status = [-1; 2];
@@ -432,7 +430,7 @@ impl Spawner {
             status: status[1],
             spawner: self.me,
             cwd,
-            abi: self.abi,
+            landlock: (r.mode != Mode::FullAccess).then_some(self.abi),
             readable: r.readable.clone(),
             writable: if r.mode == Mode::WorkspaceWrite { r.writable.clone() } else { Vec::new() },
             candidates,
@@ -454,7 +452,7 @@ impl Spawner {
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
         if pidfd < 0 {
             let err = errno();
-            // 沒有 pidfd 就等不了它：殺掉、收屍。Landlock 需要的核心（5.13）一定有 pidfd_open（5.3），這裡照理到不了。
+            // 沒有 pidfd 就等不了它：殺掉、收屍。核心比 5.3 舊（沒有 pidfd_open）時，每一筆都在這裡回 `Resource`。
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
                 libc::waitpid(pid, std::ptr::null_mut(), 0);
@@ -462,7 +460,7 @@ impl Spawner {
             close(status[0]);
             return Err((FailKind::Resource, err, "pidfd_open".to_string()));
         }
-        Ok(Child { pid, pidfd, status: status[0], partial: self.abi < landlock::WANTED_ABI, phase: Phase::Launching, queued: Vec::new() })
+        Ok(Child { pid, pidfd, status: status[0], partial: r.mode != Mode::FullAccess && self.abi < landlock::WANTED_ABI, phase: Phase::Launching, queued: Vec::new() })
     }
 
     /// 狀態 pipe 有結果：EOF 是 exec 成功，有字是失敗紀錄（子行程每條失敗路徑都會寫）。
@@ -587,9 +585,6 @@ fn main() {
     let cpath = CString::new(path.as_bytes()).unwrap_or_else(|_| unavailable(0, "socket 路徑含 NUL"));
 
     let abi = landlock::effective_abi(landlock::kernel_abi(), test_abi_cap());
-    if abi < 1 {
-        unavailable(libc::ENOSYS, "Landlock 不能用（核心不支援或沒開）");
-    }
     let sigfd = signal_fd().unwrap_or_else(|e| unavailable(errno(), &e));
     let lfd = listen(&path).unwrap_or_else(|e| unavailable(errno(), &e));
     let insns = seccomp::install().unwrap_or_else(|e| unavailable(e.raw_os_error().unwrap_or(0), &format!("seccomp: {e}")));

@@ -3,7 +3,7 @@
 //! ```text
 //! probe read <path> | write <path> | tcp | udp | unix | socketpair | vsock | uring
 //!       unshare | setns | clone-newuser | clone3 | thread | syscall <nr>
-//!       x32 | i386 | connect <socket> <id> <fd>
+//!       x32 | i386 | connect <socket> <id> <fd> | kill <pid>
 //! ```
 
 use std::io::Write;
@@ -94,6 +94,8 @@ fn main() {
                 std::arch::asm!("int 0x80", inlateout("rax") 20i64 => ret, options(nostack));
                 println!("ret={ret}");
             }
+            // 訊號 0 只做權限檢查，不真的送。
+            "kill" => report(i64::from(libc::kill(arg(2).parse().unwrap(), 0))),
             "connect" => {
                 use std::os::unix::net::UnixStream;
                 let mut s = UnixStream::connect(arg(2)).unwrap();
