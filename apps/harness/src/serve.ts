@@ -47,6 +47,7 @@ import {
   serveGoalDriver,
   resolveInvariantLogPath,
   assertLaunchPathsOutsideWorkspace,
+  assertPatchesOutsideWorkspace,
   resolveSessionLogDir,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
@@ -502,6 +503,12 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
 
   // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要綁 port，也不該因為 port 被佔住
   // 就看不到設定。
+  await assertPatchesOutsideWorkspace({
+    workspace: invocation.workspace,
+    cwd: options.cwd ?? process.cwd(),
+    patches: invocation.patches,
+  });
+
   if (invocation.dumpConfigSchema) {
     // 同 `cli.ts`：標準輸出只放那份 JSON，診斷走標準錯誤；不完整時文件印完之後拋 `ConfigSchemaIncompleteError`。
     await runDumpConfigSchema(

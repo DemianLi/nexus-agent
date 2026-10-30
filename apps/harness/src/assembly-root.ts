@@ -14,7 +14,7 @@
  * 改措辭是模型看得到的行為變更，不在這一張。
  */
 
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import type {
@@ -485,6 +485,7 @@ export function resolveInvariantLogPath(
  * | `resolveInvariantLogPath`（`:443`，走本函式） | `serve.ts:757`、`cli.ts:1004` | 量測記錄 ⇄ `--workspace` | 不改，且仍是「只不寫」不拋 |
  * | `loadConfigHashKey`（`session-header-metadata.ts:142`，走本函式） | `serve.ts:814`、`:947`（經 `createSessionHeaderMetadataResolver`）、`cli.ts:1183`（經 `resolveSessionHeaderMetadata`） | 設定雜湊鍵檔 ⇄ `--workspace` | 不改。**這三處是安全檢查，不是顯示用的**（#1783 內文把它們標成 header metadata／顯示用，那一格分類是錯的） |
  * | `--resume` 的日誌路徑 | `cli.ts:354` | 續接的日誌 ⇄ `--workspace` | 不改，CLI 的可寫根仍是 `--workspace` |
+ * | `assertPatchesOutsideWorkspace` | `runServe`、`runCli`、`plugin` | 每份 `--patch` ⇄ `--workspace` | 例外：判準是寫得到，不是讀得到；覆寫檔能換 MCP 的 `command`。不比新 thread 的私有根 |
  */
 export function outsideWorkspace(
   path: string,
@@ -622,6 +623,39 @@ export async function assertLaunchPathsOutsideWorkspace(check: LaunchPathsCheck)
       `出路（擇一）：把 .env 搬到工作區外面，或改在啟動環境 export 那些變數；把 ${HARNESS_HOME_ENV} 設到工作區外面；` +
       '或換一個不跟這些路徑重疊的 --workspace。',
   );
+}
+
+/**
+ * **`--patch` 的檔不能落在工作區裡**（[#2162](https://github.com/DemianLi/nexus-agent/issues/2162)）：
+ * CLI 與 serve 的舊 thread 改得到工作區，而覆寫檔能換掉 MCP 的 `command`，下次起動就以起它的帳號跑。
+ *
+ * 排在印設定之前：`--dump-config-schema` 會載入覆寫檔 `insert` 的模組。字面路徑、解開父目錄、解開到底三種位置都比，
+ * 工作區裡的連結不論指到哪都算在裡面，工作區外的連結指進來也算；檔案不存在也照比。有 `--workspace` 才檢查。
+ * 判準是寫得到，而且只比 `--workspace`，不看 serve 新 thread 的私有根。
+ *
+ * @param check - `--workspace` 那串字、相對路徑的基準、`--patch` 的路徑。
+ * @throws 有任何一份落在工作區裡；或解路徑時遇到 ENOENT／ENOTDIR 以外的錯。
+ */
+export async function assertPatchesOutsideWorkspace(check: {
+  readonly workspace: string | undefined;
+  readonly cwd: string;
+  readonly patches: readonly string[] | undefined;
+}): Promise<void> {
+  const root = resolveWorkspaceRoot(check.workspace, check.cwd);
+  if (root === undefined || check.patches === undefined) return;
+  const workspace = await canonicalize(root);
+  for (const patch of check.patches) {
+    const literal = resolve(check.cwd, patch);
+    const real = await canonicalize(literal);
+    const placed = join(await canonicalize(dirname(literal)), basename(literal));
+    if (isWithin(root, literal) || isWithin(workspace, placed) || isWithin(workspace, real)) {
+      throw new Error(
+        `--patch ${patch} 不能在 --workspace 底下（實際位置 ${real}，工作區 ${workspace}）。` +
+          '工作區可能被模型改動，覆寫檔能換掉 MCP 的 command，下次起動就以這個帳號跑。' +
+          '把它搬到工作區外面，或換一個不包含它的 --workspace。',
+      );
+    }
+  }
 }
 
 /** 假模型腳本寫出去的那個檔。測試靠它確認檔案真的落在 `--workspace` 指的目錄底下。 */

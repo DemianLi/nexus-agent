@@ -39,6 +39,7 @@ import { parseArgs } from 'node:util';
 
 import { parse as parseYaml } from 'yaml';
 
+import { assertPatchesOutsideWorkspace } from './assembly-root.js';
 import { HARNESS_VERSION } from './harness-version.js';
 import { changePlugin, PluginChangeRejected } from './plugin-change.js';
 import type { PluginChange, PluginChangeResult } from './plugin-change.js';
@@ -241,6 +242,11 @@ export async function runPluginCli(options: PluginCliOptions): Promise<number> {
     return 0;
   }
   try {
+    await assertPatchesOutsideWorkspace({
+      workspace: parsed.workspace,
+      cwd: process.cwd(),
+      patches: parsed.patches,
+    });
     const change: PluginChange =
       'file' in parsed.change
         ? {
