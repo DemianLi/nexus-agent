@@ -102,6 +102,7 @@ import {
   launchWorkspaceRootOf,
   resolveWorkspaceRoot,
   outsideWorkspace,
+  assertPatchesOutsideWorkspace,
   THREAD_ID,
   formatGoalDriverDisclosure,
   type NexusAgent,
@@ -865,6 +866,12 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     printer.log(HARNESS_VERSION);
     return;
   }
+
+  await assertPatchesOutsideWorkspace({
+    workspace: invocation.workspace,
+    cwd: options.cwd ?? process.cwd(),
+    patches: invocation.patches,
+  });
 
   // 同 `--dump-config` 的位置與理由。標準輸出只放那份 JSON（`printer.log` 是標準輸出），診斷走 `printer.error`；
   // 不完整時文件印完之後拋 `ConfigSchemaIncompleteError`，由 `main` 設退出碼 1。

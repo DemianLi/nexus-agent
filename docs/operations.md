@@ -158,7 +158,7 @@ connection:
 - 不是 Linux 或找不到 spawner 時這條 server **不連線**，日誌講一句，不退回直接起；寫了 `failOnStartupError: true` 就讓這一列失敗。沒有 Landlock 時 spawner 以 125 結束，同樣是連線失敗，原因在 serve 的 stderr。
 - 核心的 Landlock ABI 不到 6 時照跑，強度跟著降低（例如沒有訊號 scope），spawner 往 stderr 講一句。
 - 重連時讀根寫根若被換成連結，spawner 拒絕，這條 server 連不回來。`command` 本身是連結時改了指向不會被拒，仍受讀根限制。下次組裝會重新檢查。
-- `--patch` 檔放在工作區裡時，模型改得到它，這個宣告就擋不住，見 [#2162](https://github.com/DemianLi/nexus-agent/issues/2162)。
+- 給了 `--workspace` 時，`--patch` 檔落在工作區裡就起不來（`serve`、CLI、`plugin` 都是）。這道檢查只比 `--workspace`，不看 serve 新 thread 的私有根：覆寫檔放進 `<home>/thread-roots` 起得來，而模型改得到它，這個宣告就擋不住，不要放。
 
 **本機開發。** Mac 沒有沙箱後端，兩條路：
 
@@ -1728,7 +1728,7 @@ agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的一�
 2. **變更紀錄** `$NEXUS_AGENT_HOME/plugin-journal.jsonl`（預設 `~/.nexus-agent/plugin-journal.jsonl`）：用 `plugin` 寫入口
    停用、啟用、改設定寫進去，只增不改，清單從它導出（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)，
    見下面「後台改清單」）
-3. 任意個 `--patch <檔>`，照命令列順序
+3. 任意個 `--patch <檔>`，照命令列順序。給了 `--workspace` 時檔案不能落在工作區裡
 
 **home 的 `cordis.patch.yml` 不再是一層**：第一次啟動時它的每條 patch 被遷進變更紀錄（見「後台改清單」的遷移），
 之後放一個進來只會警告、不讀。下面講的 patch 檔格式仍然是 `--patch <檔>` 的格式，也是變更紀錄裡 `patch` 那種紀錄的內容。

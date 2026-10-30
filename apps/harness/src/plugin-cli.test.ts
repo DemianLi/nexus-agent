@@ -3,7 +3,7 @@
  * [#1414](https://github.com/DemianLi/nexus-agent/issues/1414) 的驗收 A（告訴人記了哪一筆）與 B。
  */
 
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -212,5 +212,22 @@ describe('驗不過', () => {
     const { env } = home();
     expect((await run(['--help'], env)).code).toBe(0);
     expect((await run(['frobnicate'], env)).code).toBe(2);
+  });
+});
+
+describe('--patch 與工作區（#2162）', () => {
+  it('在工作區裡：不寫紀錄，也不試掛', async () => {
+    const { dir, env } = home();
+    const workspace = mkdtempSync(join(tmpdir(), 'nexus-2162-ws-'));
+    temporary.push(workspace);
+    const patch = join(workspace, 'p.yml');
+    writeFileSync(patch, '[]\n');
+    const { code, err } = await run(
+      ['disable', 'todo', '--workspace', workspace, '--patch', patch],
+      env,
+    );
+    expect(code).toBe(1);
+    expect(err.join('\n')).toContain('不能在 --workspace 底下');
+    expect(existsSync(join(dir, 'plugin-journal.jsonl'))).toBe(false);
   });
 });

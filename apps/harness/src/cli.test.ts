@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -887,4 +887,52 @@ describe('CLI 行程', () => {
     const control = await runProcess(['說點什麼']);
     expect(control.code).toBe(0);
   }, 120_000);
+});
+
+describe('--patch 與工作區（#2162）', () => {
+  it('在工作區外：照常起', async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-ws-')));
+    const outside = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-out-')));
+    await writeFile(join(outside, 'p.yml'), '[]\n', { mode: 0o600 });
+    const { printer, stdout } = recorder();
+    await runCli({
+      argv: ['--dump-config', '--workspace', workspace, '--patch', join(outside, 'p.yml')],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    });
+    expect(stdout()).toContain('# == ');
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it('在工作區裡：起不來，一輪都沒跑', async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-ws-')));
+    await writeFile(join(workspace, 'p.yml'), '[]\n', { mode: 0o600 });
+    const { printer, stdout } = recorder();
+    await expect(
+      runCli({
+        argv: ['--workspace', workspace, '--patch', join(workspace, 'p.yml'), '說點什麼'],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer,
+      }),
+    ).rejects.toThrow('不能在 --workspace 底下');
+    expect(stdout()).toBe('');
+    await expect(
+      runCli({
+        argv: [
+          '--dump-config-schema',
+          '--workspace',
+          workspace,
+          '--patch',
+          join(workspace, 'p.yml'),
+        ],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer,
+      }),
+    ).rejects.toThrow('不能在 --workspace 底下');
+    await rm(workspace, { recursive: true, force: true });
+  });
 });
