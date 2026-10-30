@@ -74,8 +74,9 @@ const ownerKey = (callId: string): string => `#${callId}`;
 const OWNERS_CAP = 2000;
 
 /**
- * 歸屬表每塊最多幾筆。記一筆只複製它碰到的塊，相鄰兩塊裝得下就併成一塊，所以塊數不超過
- * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`，成本跟著這兩個數走，不跟著 {@link OWNERS_CAP}。
+ * 歸屬表每塊最多幾筆。相鄰兩塊裝得下就併，所以任兩塊相鄰的筆數和都超過這個數，塊數不超過
+ * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一筆只複製塊清單與它碰到的塊，成本跟著塊數與這個數走，
+ * 不跟著整張表的筆數。
  */
 const OWNERS_CHUNK = 128;
 

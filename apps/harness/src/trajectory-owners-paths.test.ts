@@ -1,5 +1,5 @@
 /**
- * 軌跡的歸屬表（`@nexus/plugin-trajectory`）在產品的每條折疊路上值都一樣：
+ * 軌跡的歸屬表（`@nexus/plugin-trajectory`）在這三條折疊路上值都一樣：
  * 歷史路由的最新一頁（`historyPage`）、子代理的值（`childProjectionData`）與即時逐顆推送（`createProjectionFold`）。
  * 日誌過了 2000 筆上限，尾巴四顆遲到事件兩顆還認得、兩顆已被擠掉，`id_500`／`id_499` 正好在邊界，
  * 表多留或少留一筆都會在這裡現形。
@@ -43,7 +43,7 @@ function pushed(events: readonly SessionEvent[]): unknown {
   return live.current()[0]!.view;
 }
 
-describe('歸屬表走每條折疊路都同值', () => {
+describe('歸屬表走歷史頁、子代理、即時推送都同值', () => {
   const events = bigLog();
   const expected = pushed(events);
 

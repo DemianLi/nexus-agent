@@ -1227,7 +1227,7 @@ describe('按需拉一個邏輯輪（#1083）', () => {
 });
 
 describe('歸屬表分塊', () => {
-  /** 一則回覆帶 `ids[n]` 那些工具呼叫，輪流記；`attributed` 回 false 的那幾則歸不到（`null`）。 */
+  /** 同一輪裡依序記幾則回覆，第 n 則帶 `ids[n]` 那些工具呼叫；`attributed` 回 false 的那幾則歸不到（`null`）。 */
   function logOf(
     ids: readonly (readonly string[])[],
     attributed: (n: number) => boolean = () => true,
@@ -1287,7 +1287,7 @@ describe('歸屬表分塊', () => {
   });
 
   it('反覆重用 id 時塊會併回來，塊數不跟著重用次數長', () => {
-    // 每 128 則才一個新 id，其餘重用同一小撮：每一塊被掏到只剩那一個新 id。
+    // 每 128 則才一個新 id，其餘重用同一小撮：不併塊的話每塊會被掏到只剩那一個新 id，塊數跟著重用次數長。
     const ids = Array.from({ length: 20_000 }, (_, n) => [
       n % 128 === 0 ? `fresh_${n}` : `id_${n % 127}`,
     ]);

@@ -395,8 +395,7 @@ ctx.effect(() => {
 - `const c = ctx; c.root`、把參數取別的名字、從別的名字解構，抓不到；它只認叫 `ctx` 的識別字。
 - 頂層的 `const state = { count: 0 }`（物件本身可變）不在清單裡。
 - 頂層的**常數查表**也會中 `top-level-collection`（`const KNOWN = new Set([...])`）：語法分不出它是不是只讀。**不為它
-  放寬**（PM 決定）：遷移卡碰到時二選一，把它搬進 `apply` 的閉包，或寫一行窄例外並寫理由。
-- `trajectory` 的 `TURN_KINDS` 是常數查表，改成唯讀陣列加 `includes`，不必例外。
+  放寬**（PM 決定）：遷移卡碰到時二選一，把它搬進 `apply` 的閉包，或寫一行窄例外並寫理由。`trajectory` 的 `TURN_KINDS` 用唯讀陣列加 `includes`，這條規則只擋 `new` 出來的集合，不必例外。
 - 這些由審查與一致性套件的 `unload` 那一格補：副作用沒走 `ctx.effect`，卸載後就有殘留，`unload` 會紅。真的有人繞過，
   再升級成帶型別的規則。
 
