@@ -22,8 +22,7 @@
  *
  * ## 與 dsh 的偏離
  *
- * 1. **git 由組裝點注入的 {@link GIT_STARTER_SERVICE} 起**，不是 dsh 的 `subprocess` 能力：我們沒有這個服務。能力層附帶的環境淨化、
- *    逾時、輸出上限、找執行檔明著抄過來，見 `git.ts` 檔頭。
+ * 1. **git 由組裝點注入的 {@link GIT_STARTER_SERVICE} 起**。環境淨化、逾時、輸出上限、找執行檔見 `git.ts` 檔頭。
  * 2. **事件不帶 `turn`**，時序因此另有要求；接上時重播的舊輪不拍快照。見 `recorder.ts` 檔頭。
  * 3. **擷取的工具換成我們基座的那三個**，見 `capture.ts` 的 `mutationPath`。`delete` 是 dsh 沒有的工具。
  * 4. **掛點**：dsh 的 `tools/pre-execute`、`agent/turn-stopping` 與 `session/event`，在我們這裡是 middleware 的

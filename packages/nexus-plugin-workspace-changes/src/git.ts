@@ -3,8 +3,7 @@
  *
  * ## 與 dsh 的偏離：git 怎麼起由組裝點決定
  *
- * dsh 經由 `subprocess` 能力（`@deepseek-ai/dsh-subprocess`）跑 git；我們沒有這個服務。起行程的介面（{@link GitStarter}）定在這個
- * 套件，產品由 harness 經 {@link GIT_STARTER_SERVICE} 注入，走沙箱 spawner（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）；
+ * 起行程的介面（{@link GitStarter}）定在這個套件，產品由 harness 經 {@link GIT_STARTER_SERVICE} 注入，走沙箱 spawner（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）；
  * {@link directGitStarter} 直接 spawn，只給測試。**退掉的是載體，隨載體來的規則明著抄過來**：
  *
  * - **環境**：dsh 的 `scrubbedParentEnv()`（`packages/subprocess/subprocess/src/index.ts:47-80`）拿掉名字像
@@ -16,8 +15,8 @@
  * - **逾時、輸出上限與管線排空**：能力層提供的 `AbortSignal`、`graceMs`、stdout 位元組上限（保留尾端），在
  *   {@link GitRunner.run} 裡自己做。**管線排空**也在這裡：dsh 的 `bindManagedProcess`
  *   （`packages/subprocess/subprocess-local/src/spawn.ts:409-415`）在直接子行程 `exit` 之後給 `graceMs` 讓管線排空，
- *   到時間就強制結算並銷毀收集用的管線，不等後代把 pipe 關掉。`run` 同樣以 `'exit'` 為界、到 {@link TERMINATE_GRACE_MS}
- *   銷毀 stdout／stderr、用 exit 的結束碼結算（#1560 N1110）；只聽 `'close'` 的話，後代（會自己 fork 背景行程的
+ *   到時間就強制結算並銷毀收集用的管線，不等後代把 pipe 關掉。`run` 以 {@link GitProcess.exited} 為界、到 {@link TERMINATE_GRACE_MS}
+ *   銷毀 stdout／stderr、用它的結束碼結算（#1560 N1110）；只等 `done` 的話，後代（會自己 fork 背景行程的
  *   clean filter、fsmonitor）握著管線時 `run` 永遠不回來，recorder 的 dispose 與 thread 的閒置逐出都會等它。
  * - **找執行檔**：能力層的 `resolveExecutable` 在淨化過的 `PATH` 裡找，見 {@link resolveGitExecutable}。
  * - **行程結束時同步強殺**（[#1542](https://github.com/DemianLi/nexus-agent/issues/1542)）：serve 被強制結束時 git 的逾時沒人數，
@@ -117,7 +116,7 @@ class TailBuffer {
   }
 }
 
-/** git 沒有跑起來的原因。沙箱不可用要跟 git 自己起不來分開：前者降級成沒有 git，不是每輪都報錯。 */
+/** git 沒有跑起來的原因。沙箱不可用要跟 git 自己起不來分開：前者那一輪不記也不報錯，下一輪重試。 */
 export type GitStartFailure = 'sandbox-unavailable' | 'start-dir' | 'not-found' | 'launch-failed';
 
 /** 一次執行的結局。 */
@@ -206,7 +205,7 @@ export const directGitStarter: GitStarter = (start) => {
     kill: (signal) => {
       if (child.exitCode !== null || child.signalCode !== null) return;
       // 起不來的 child 沒有 pid（'error' 事件還沒送到）：此時 `kill()` 會對 pid 0 送訊號，也就是整個行程群組（包括 serve 自己）
-      // （#1742；照 dsh `signalTree` 的 `if (pid === undefined) return`）。'error' 隨後會把這一趟 reject。
+      // （#1742）。'error' 隨後會把這一趟 reject。
       if (child.pid === undefined) return;
       child.kill(signal);
     },
@@ -278,7 +277,7 @@ export class GitRunner {
       cwd: options.cwd,
       env: {
         ...scrubbedParentEnv(),
-        // 淨化會拿掉 `GIT_CONFIG_KEY_<n>`，所以明著把環境裡的索引設定關掉，同 dsh。
+        // 淨化會拿掉 `GIT_CONFIG_KEY_<n>`，所以明著把環境裡的索引設定關掉。
         GIT_CONFIG_COUNT: '0',
         GIT_TERMINAL_PROMPT: '0',
         GIT_OPTIONAL_LOCKS: '0',
@@ -316,8 +315,7 @@ export class GitRunner {
       };
       // 'close' 要等 stdio 全關；後代行程（會自己 fork 背景行程的 clean filter、fsmonitor）繼承了管線的話，
       // 直接子行程死了它也不來，逾時與 SIGKILL 殺的都是已經死掉的那一個。所以以結束為界：之後給管線
-      // 一段時間排空，到了就銷毀收集用的管線、用結束碼結算，不等後代（同 dsh `bindManagedProcess`，
-      // 見檔頭「管線排空」）。
+      // 一段時間排空，到了就銷毀收集用的管線、用結束碼結算，不等後代（見檔頭「管線排空」）。
       const settleWith = (outcome: GitOutcome): void => {
         if (outcome.kind === 'failed') {
           if (finish()) reject(new GitStartError(outcome.reason, this.executable));

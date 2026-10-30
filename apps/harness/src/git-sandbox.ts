@@ -3,10 +3,10 @@
  * 工具接縫。會話是 `danger-full-access` 時用全權（不上 Landlock，網路照擋），每次都讀當下的模式；其餘一律 `workspace-write`，寫根只有
  * 私有目錄。git 不是模型呼叫的工具，`read-only` 的會話也要拍快照。
  *
- * 讀根清單不列 serve 的 home 與整個 `$HOME`，repo 落在 `$HOME` 底下時給的是 repo：
+ * 讀根清單不列 serve 的 home，也不列包住 `$HOME` 的目錄，repo 落在 `$HOME` 底下時給的是 repo：
  *
- * - 系統執行期目錄（{@link GIT_SYSTEM_READABLE}）與 git 本身；
- * - 工作目錄、最近的 repo、它的 git 目錄、common 目錄與物件庫的 alternates。repo 根包住 `$HOME` 時不給 repo 根，快照會失敗，不擴權；
+ * - 系統執行期的目錄與檔（{@link GIT_SYSTEM_READABLE}）與 git 本身；
+ * - 工作目錄、最近的 repo、它的 git 目錄、common 目錄與物件庫的 alternates。工作目錄或 repo 根包住 `$HOME` 時不給那一層，寧可沒有快照也不擴權；
  * - global 與 system 的設定檔、它們 include 的檔（含空的）、`core.excludesFile`、`core.attributesFile`。
  *
  * include 的檔讀不到時 git 整個結束（`fatal: unable to access`），不存在才跳過，所以 include 要照列；而 `core.excludesFile` 漏了不會報錯，
@@ -19,7 +19,7 @@
 
 import { readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { SandboxMode } from '@nexus/core';
 import type { GitOutcome, GitStartFailure, GitStarter } from '@nexus/plugin-workspace-changes';
@@ -32,6 +32,8 @@ export const GIT_SYSTEM_READABLE = [
   '/usr',
   '/lib',
   '/lib64',
+  '/bin',
+  '/sbin',
   '/etc/ld.so.cache',
   '/dev/urandom',
   '/etc/gitconfig',
@@ -84,16 +86,19 @@ async function gitDirectories(root: string): Promise<readonly string[]> {
   return found;
 }
 
-/** `--show-origin --get-regexp -z` 的輸出：`file:<來源>\0<鍵>\n<值>\0`。相對路徑以來源檔為基準。 */
+/** `--show-origin --get-regexp -z` 的輸出：`file:<來源>\0<鍵>\n<值>\0`。`include` 的相對路徑以來源檔為基準；`core.*` 的由 git 以工作目錄解析，落在 repo 裡，不必列。 */
 export function parseConfigPaths(output: string): readonly string[] {
   const fields = output.split('\0');
   const paths: string[] = [];
   for (let i = 0; i + 1 < fields.length; i += 2) {
-    const value = fields[i + 1]!.split('\n').slice(1).join('\n');
+    const [key = '', ...rest] = fields[i + 1]!.split('\n');
+    const value = rest.join('\n');
     const origin = fields[i]!.startsWith('file:') ? fields[i]!.slice('file:'.length) : undefined;
     if (value === '') continue;
     if (isAbsolute(value)) paths.push(value);
-    else if (origin !== undefined) paths.push(resolve(dirname(origin), value));
+    else if (origin !== undefined && key.startsWith('include')) {
+      paths.push(resolve(dirname(origin), value));
+    }
   }
   return paths;
 }
@@ -109,7 +114,7 @@ function collect(process: ToolProcess): Promise<{ stdout: string; result: ToolRe
   });
 }
 
-/** 一個範圍的路徑類設定。git 自己起不來就回失敗原因；沒有那個範圍的設定檔不算失敗。 */
+/** 一個範圍的路徑類設定。結束碼 1 是沒有符合的鍵；其他非 0 與起不來一樣回失敗原因，答案不完整就不跑。沒有那個範圍的設定檔不算失敗。 */
 async function askScope(
   launch: ToolLauncher,
   scope: '--global' | '--system',
@@ -138,7 +143,8 @@ async function askScope(
   if (typeof started === 'string') return started;
   const { stdout, result } = await collect(started);
   if (result.kind === 'failed') return result.reason;
-  return result.code === 0 ? parseConfigPaths(stdout) : [];
+  if (result.code === 0) return parseConfigPaths(stdout);
+  return result.code === 1 ? [] : 'launch-failed';
 }
 
 const configAnswers = new Map<string, readonly string[]>();
@@ -148,7 +154,7 @@ export function forgetGitConfigAnswers(): void {
   configAnswers.clear();
 }
 
-/** global 與 system 的設定帶來的讀根，含兩份預設位置，還沒過濾存不存在。 */
+/** global 與 system 的設定帶來的讀根，含 `~/.gitconfig` 與 XDG 的 `git/{config,ignore,attributes}`，還沒過濾存不存在。 */
 async function configFiles(
   launch: ToolLauncher,
   executable: string,
@@ -168,7 +174,9 @@ async function configFiles(
       ? []
       : ['config', 'ignore', 'attributes'].map((name) => join(configHome, 'git', name))),
   ];
-  for (const scope of ['--global', '--system'] as const) {
+  // 沒有 HOME 也沒有 XDG 時 `--global` 直接 fatal，那個範圍本來就沒有檔。
+  const scopes = files.length === 0 ? (['--system'] as const) : (['--global', '--system'] as const);
+  for (const scope of scopes) {
     const answer = await askScope(launch, scope, executable, cwd, env);
     if (typeof answer === 'string') return answer;
     files.push(...answer);
@@ -196,11 +204,13 @@ export async function gitReadRoots(
   const configs = await configFiles(launch, executable, cwd, repo, env);
   if (typeof configs === 'string') return configs;
   const home = env['HOME'] ?? homedir();
-  const repoCoversHome = repo !== undefined && `${home}/`.startsWith(`${repo}/`);
+  const coversHome = (path: string): boolean => {
+    const fromPath = relative(path, home);
+    return fromPath !== '..' && !fromPath.startsWith('../') && !isAbsolute(fromPath);
+  };
   const directories = [
-    cwd,
     ...(repo === undefined ? [] : await gitDirectories(repo)),
-    ...(repo === undefined || repoCoversHome ? [] : [repo]),
+    ...[cwd, ...(repo === undefined ? [] : [repo])].filter((path) => !coversHome(path)),
   ];
   const candidates = [...GIT_SYSTEM_READABLE, executable, ...directories, ...configs];
   const existing = await Promise.all(

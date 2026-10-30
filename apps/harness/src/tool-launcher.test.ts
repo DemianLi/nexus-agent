@@ -69,6 +69,7 @@ describe('formatSandboxStatus', () => {
     ['darwin', '/s', undefined, '只有 danger-full-access'],
     ['linux', undefined, undefined, '找不到 spawner'],
     ['linux', '/s', undefined, 'spawner 起不來'],
+    ['linux', '/s', 0, '沒有 Landlock'],
     ['linux', '/s', 4, 'ABI 4，只有部分強制'],
     ['linux', '/s', 6, 'ABI 6，完整強制'],
   ] as const)('%s %s ABI %s', (platform, binary, abi, expected) => {

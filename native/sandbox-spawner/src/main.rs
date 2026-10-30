@@ -141,7 +141,7 @@ fn self_check() -> Result<(), String> {
 }
 
 /// 核心有沒有 `pidfd_open`（5.3 起）。沒有它等不了工具，連全權模式都起不來，所以在啟動時就講，不等到每一筆工具才失敗。
-/// 只認 ENOSYS：fd 用盡這類是當下的狀況，留給每一筆工具的 `Resource` 失敗去講，不是這台主機不支援。
+/// 只認 ENOSYS：其他錯（fd 用盡、外層 seccomp 擋下）不判定主機不支援，留給每一筆工具的 `Resource` 失敗去講。
 fn kernel_lacks_pidfd() -> bool {
     // SAFETY：對自己開 pidfd，開了就關。
     let fd = unsafe { libc::syscall(libc::SYS_pidfd_open, libc::getpid(), 0) } as libc::c_int;
@@ -466,7 +466,7 @@ impl Spawner {
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
         if pidfd < 0 {
             let err = errno();
-            // 沒有 pidfd 就等不了它：殺掉、收屍。核心沒有 pidfd_open 的情形啟動時就擋了，這裡只剩 fd 用盡這類。
+            // 沒有 pidfd 就等不了它：殺掉、收屍。核心沒有 pidfd_open 的情形啟動時就擋了，這裡是別的錯。
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
                 libc::waitpid(pid, std::ptr::null_mut(), 0);

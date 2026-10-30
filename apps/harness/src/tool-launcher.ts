@@ -72,9 +72,14 @@ export function formatSandboxStatus(
   binary: string | undefined,
   landlockAbi: number | undefined,
 ): string {
-  if (platform !== 'linux') return '沙箱：這個平台沒有沙箱後端，只有 danger-full-access 跑得了工具';
-  if (binary === undefined) return '沙箱：找不到 spawner，工具一律跑不了';
-  if (landlockAbi === undefined) return '沙箱：spawner 起不來，工具一律跑不了，原因見上一行';
+  if (platform !== 'linux')
+    return '沙箱：這個平台沒有沙箱後端，grep、glob 與改動卡的 git 只有 danger-full-access 跑得了';
+  if (binary === undefined) return '沙箱：找不到 spawner，grep、glob 與改動卡的 git 跑不了';
+  if (landlockAbi === undefined)
+    return '沙箱：spawner 起不來，grep、glob 與改動卡的 git 跑不了，原因見上一行';
+  if (landlockAbi < 1) {
+    return '沙箱：這台主機沒有 Landlock，grep、glob 與改動卡的 git 只有 danger-full-access 跑得了';
+  }
   if (landlockAbi < WANTED_LANDLOCK_ABI) {
     return `沙箱：Landlock ABI ${String(landlockAbi)}，只有部分強制（完整強制要 ABI ${String(WANTED_LANDLOCK_ABI)}）`;
   }

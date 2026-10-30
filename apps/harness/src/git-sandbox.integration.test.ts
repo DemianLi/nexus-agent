@@ -178,6 +178,19 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 git', () => {
     expect(existsSync(join(scratch, 'stolen'))).toBe(true);
   });
 
+  it('repo 根就是 $HOME：不開整個 home 的讀權', async () => {
+    const secret = join(home.value, 'secret');
+    writeFileSync(secret, 'token\n');
+    shell(['init', '-q', '.'], home.value);
+    writeFileSync(join(home.value, '.git/config'), `[alias]\n\tleak = !cat ${secret}\n`);
+    const git = runner();
+    const leak = await git.run(['leak'], {
+      cwd: home.value,
+      signal: new AbortController().signal,
+    });
+    expect(leak.stdout).not.toContain('token');
+  });
+
   it('全權模式讀得到外面', async () => {
     const secret = join(home.value, 'secret');
     writeFileSync(secret, 'token\n');

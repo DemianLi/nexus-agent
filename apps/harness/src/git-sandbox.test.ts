@@ -155,7 +155,23 @@ describe('gitReadRoots', () => {
     await mkdir(join(repo, 'home'));
     const found = await roots(fakeLauncher().launch, join(repo, 'home'));
     expect(found).not.toContain(repo);
+    expect(found).not.toContain(join(repo, 'home'));
     expect(found).toContain(join(repo, '.git'));
+  });
+
+  it('工作目錄就是包住 $HOME 的 repo 根：快照走的是這條，也不給', async () => {
+    env = { HOME: join(repo, 'home') };
+    await mkdir(join(repo, 'home'));
+    const found = await roots(fakeLauncher().launch, repo);
+    expect(found).not.toContain(repo);
+    expect(found).toContain(join(repo, '.git'));
+  });
+
+  it('沒有 HOME 也沒有 XDG：不問 --global', async () => {
+    env = {};
+    const { launch, requests } = fakeLauncher();
+    await roots(launch);
+    expect(requests.map((request) => request.args[1])).toEqual(['--system']);
   });
 });
 

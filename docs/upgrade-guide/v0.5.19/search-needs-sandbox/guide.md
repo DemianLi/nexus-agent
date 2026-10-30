@@ -10,7 +10,7 @@ description: grep、glob 與改動卡的 git 改經沙箱跑；沒有 Landlock �
 v0.5.19 的 `grep`、`glob` 由 serve 直接起 rg，不套作業系統的沙箱。新版（#1946）在 Linux 上一律經產物裡的 `native/nexus-sandbox-spawner` 起：seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽略規則。
 
 - **沒有 Landlock 的 Linux 主機，以及非 Linux：** `read-only`、`workspace-write` 下的 `grep`、`glob` 一律失敗，工具結果的碼是 `SEARCH_FAILED`，訊息裡有 `SANDBOX_UNAVAILABLE`。不會退回不設防的 rg。
-- **改動卡：** workspace-changes 的 git 同樣經 spawner，模式跟著會話。上面那些主機上改動卡不會出現，日誌只講一句，也不會退回不設防的 git。git 要裝在 `/usr` 或 `/lib` 底下；改了全域 git 設定要重起 serve；repo 根包住 `$HOME` 時快照失敗。
+- **改動卡：** workspace-changes 的 git 同樣經 spawner，模式跟著會話。上面那些主機上改動卡不會出現，日誌只講一句，也不會退回不設防的 git。git 要裝在 `/usr` 或 `/lib` 底下；改了全域 git 設定要重起 serve；repo 根包住 `$HOME` 時改動卡不出現。
 - **核心比 5.3 舊的主機：** spawner 起不來，連 `danger-full-access` 也跑不了工具。
 - **Landlock ABI 不到 6 的主機：** 工具照跑，serve 的日誌印一次「只有部分強制」。
 - **`danger-full-access`：** 不上 Landlock，有沒有 Landlock 都能跑（核心要 5.3 以上）；Linux 上網路照擋。
