@@ -34,7 +34,7 @@ import {
 } from './harness';
 
 describe.each(['light', 'dark'] as const)('瀏覽器量問答與附件（#1638 PR C）：%s', (theme) => {
-  test('問答選項聚焦：外框 2px、offset 2px 畫在選項上（本地修改第 46 條；外框顏色、box-shadow 不變由上面的浮層那組量）', async () => {
+  test('問答選項聚焦：外框 2px、offset 2px 畫在選項上（本地修改第 46 條；外框顏色、box-shadow 不變由 guard.test.ts 的 modal 浮層那組量）', async () => {
     const page = await openOverlay('questionnaire', theme, {
       marks: { [QUESTIONNAIRE_INPUT]: {} },
     });
