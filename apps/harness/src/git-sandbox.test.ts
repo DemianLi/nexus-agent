@@ -244,6 +244,16 @@ describe('gitReadRoots', () => {
       expect(found).not.toContain(join(repo, '.git'));
     });
 
+    it('.git 是 symlink，指到工作區外的檔', async () => {
+      const key = join(secret, 'id_rsa');
+      await writeFile(key, 'k');
+      await rm(join(repo, '.git'), { recursive: true });
+      await symlink(key, join(repo, '.git'));
+      const found = await roots(fakeLauncher().launch);
+      expect(found).not.toContain(key);
+      expect(found).not.toContain(join(repo, '.git'));
+    });
+
     it('alternates 是工作區內的 symlink，指到外面', async () => {
       await symlink(secret, join(repo, 'link'));
       await writeFile(join(repo, '.git/objects/info/alternates'), `${join(repo, 'link')}\n`);

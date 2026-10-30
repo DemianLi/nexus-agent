@@ -93,11 +93,10 @@ async function gitDirectories(root: string, workspace: string): Promise<readonly
   if (realDot === undefined) return [];
   const realRoot = (await realOf(root)) ?? root;
   const fromWorkspace = within(workspace, realRoot);
+  if (fromWorkspace && !within(workspace, realDot)) return [];
   let gitDir = realDot;
   const found: string[] = [];
-  if (await isKind(realDot, 'isDirectory')) {
-    if (fromWorkspace && !within(workspace, realDot)) return [];
-  } else {
+  if (!(await isKind(realDot, 'isDirectory'))) {
     found.push(dotGit);
     const named = /^gitdir:\s*(.+?)\s*$/mu.exec((await readText(dotGit)) ?? '')?.[1];
     const target = named === undefined ? undefined : await realOf(resolve(root, named));

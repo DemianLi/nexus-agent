@@ -234,6 +234,18 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 git', () => {
       'serve 的 home': () => process.env[HARNESS_HOME_ENV] ?? '',
     };
 
+    it('.git 是 symlink，指到工作區外的檔：讀不到', async () => {
+      const dotSsh = join(home.value, '.ssh');
+      mkdirSync(dotSsh, { recursive: true });
+      const secret = join(dotSsh, 'id_rsa');
+      writeFileSync(secret, 'token\n');
+      replaceDotGit();
+      symlinkSync(secret, join(repo, '.git'));
+      const outcome = await read(join(repo, '.git')).catch((error: unknown) => error);
+      expect(JSON.stringify(outcome)).not.toContain('token');
+      expect((await read(secret, 'danger-full-access')).stdout).toContain('token');
+    });
+
     describe.each(Object.keys(plant))('%s', (vector) => {
       it.each(Object.keys(places))('指到 %s：讀不到', async (place) => {
         const target = places[place]!();
