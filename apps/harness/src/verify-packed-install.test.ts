@@ -40,7 +40,7 @@ import {
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
-import { spawnerProbeProblems } from '../../../scripts/release/spawner-probe.js';
+import { spawnerProbeProblems, spawnerProbeSummary } from '../../../scripts/release/spawner-probe.js';
 import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const ok = { status: 0, stdout: '', stderr: '' };
@@ -126,10 +126,16 @@ describe('步驟 4e：產物裡的沙箱 spawner 起得來、經它起得了主�
     expect(spawnerProbeProblems(ok)).toEqual([]);
   });
 
-  it('主機沒有 Landlock：直說驗不到，不報成 git 沒起成', () => {
-    expect(spawnerProbeProblems({ ...ok, events: [{ ...ready, landlockAbi: 0 }] })).toEqual([
-      expect.stringContaining('沒有 Landlock'),
-    ]);
+  it('主機沒有 Landlock：全權模式起的 git 照樣算數', () => {
+    const events = [{ ...ready, landlockAbi: 0 }, started, exited];
+    expect(spawnerProbeProblems({ ...ok, events })).toEqual([]);
+  });
+
+  it('印進 log 的那一行帶 ABI 與結局', () => {
+    const line = spawnerProbeSummary(ok);
+    expect(line).toContain('"landlockAbi":6');
+    expect(line).toContain('"code":0');
+    expect(line).toContain('git version 2.39.5');
   });
 
   it.each([

@@ -42,3 +42,6 @@ eval-results/
 
 # 沙箱 spawner 的建置輸出（#1946）。
 /native/sandbox-spawner/target/
+
+# 從原始碼在 Linux 上起 serve 時放編好的 spawner 的位置（#1946）
+/native/nexus-sandbox-spawner

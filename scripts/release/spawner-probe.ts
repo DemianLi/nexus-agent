@@ -49,8 +49,7 @@ export interface SpawnerProbeOutcome {
 }
 
 /**
- * 步驟 4e 的判斷：先 `Ready` 而且 Landlock ABI ≥ 1（沒有 Landlock 直說驗不到），id 1 的那支 `Started`、`Exited` 0，
- * stdout 是 git 的版本。
+ * 步驟 4e 的判斷：先 `Ready`，id 1 的那支 `Started`、`Exited` 0，stdout 是 git 的版本。
  */
 export function spawnerProbeProblems(outcome: SpawnerProbeOutcome): string[] {
   const tail = `stderr ${JSON.stringify(outcome.stderr.slice(-400))}`;
@@ -59,8 +58,6 @@ export function spawnerProbeProblems(outcome: SpawnerProbeOutcome): string[] {
   if (first?.type !== 'ready') {
     return [`產物裡的沙箱 spawner 沒有送 Ready：${JSON.stringify(first)}；${tail}`];
   }
-  if (first.landlockAbi < 1)
-    return ['這台主機沒有 Landlock，產物裡的沙箱 spawner 驗不到套上沙箱的那一條路'];
   const mine = outcome.events.filter((e) => 'id' in e && e.id === 1);
   const started = mine.find((e) => e.type === 'started');
   const exited = mine.find((e) => e.type === 'exited');
@@ -77,9 +74,14 @@ export function spawnerProbeProblems(outcome: SpawnerProbeOutcome): string[] {
   return [];
 }
 
+/** 印進 log 的一行：這台主機上實際走了哪個模式、收到哪些事件。 */
+export function spawnerProbeSummary(outcome: SpawnerProbeOutcome): string {
+  return `沙箱 spawner：事件 ${JSON.stringify(outcome.events)}，stdout ${JSON.stringify(outcome.stdout.trim())}`;
+}
+
 /**
- * 起 `<root>/native/nexus-sandbox-spawner`，等第一筆事件；是 Landlock ABI ≥ 1 的 `Ready` 才經它在 `scratch` 底下的工作區
- * 起 {@link SPAWNER_PROBE_ARGV}，收到結局、stdout 讀完為止。不丟例外：逾時、spawner 起不來、看不懂的框都寫進 `error`。
+ * 起 `<root>/native/nexus-sandbox-spawner`，等第一筆事件；是 `Ready` 就經它在 `scratch` 底下的工作區起
+ * {@link SPAWNER_PROBE_ARGV}（沒有 Landlock 的主機用全權模式，照樣驗到 musl 的 spawner 起得了 glibc 的程式），收到結局、stdout 讀完為止。不丟例外：逾時、spawner 起不來、看不懂的框都寫進 `error`。
  * 收尾一律關掉 spawner 的 stdin（它收到 EOF 就殺掉所有工具、結束），5 秒內沒結束就 `SIGKILL`。
  */
 export async function probeInstalledSpawner(
@@ -135,13 +137,13 @@ export async function probeInstalledSpawner(
   };
   try {
     await until(() => events.length > 0, '第一筆事件');
-    if (events[0]?.type === 'ready' && events[0].landlockAbi > 0) {
+    if (events[0]?.type === 'ready') {
       child.stdin.write(
         frame(
           encodeRequest({
             type: 'spawn',
             id: 1,
-            mode: 'workspace-write',
+            mode: events[0].landlockAbi > 0 ? 'workspace-write' : 'full-access',
             pipes: 0b010,
             cwd: ws,
             readable: SPAWNER_PROBE_READABLE.filter((path) => existsSync(path)),

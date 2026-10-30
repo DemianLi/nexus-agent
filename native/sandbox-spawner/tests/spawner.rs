@@ -545,6 +545,7 @@ fn abi_6_keeps_signals_inside_the_tool() {
     assert_eq!(out.trim(), "ok", "同一個 domain 裡的後代要送得到");
     let abi = s.landlock_abi;
     if abi < 6 {
+        assert_ne!(std::env::var("NEXUS_REQUIRE_LANDLOCK").as_deref(), Ok("1"), "Landlock ABI 是 {abi}，要 6");
         eprintln!("跳過：這個核心的 Landlock ABI 是 {abi}，沒有訊號 scope");
         return;
     }

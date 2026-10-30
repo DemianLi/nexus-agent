@@ -67,9 +67,12 @@ def read_changed(path: str = 'changed.txt') -> list[str]:
 FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 
 
-# 沙箱 spawner 的 Rust（#1946）在三種情況編：動到它或 CI 自己、packed-install 要跑的一輪（包裡的 spawner 是 sandbox-spawner
+# 沙箱 spawner 的 Rust（#1946）在三種情況編：動到它、TS 那一側的接縫與 client、CI 自己、packed-install 要跑的一輪（包裡的 spawner 是 sandbox-spawner
 # 那個 job 編的，develop → main 的 PR 走這一條）、合併後完整一輪（#1827 D55）。跟模式無關，輕的模式也編。
-RUST_RE = re.compile(r'^native/sandbox-spawner/')
+RUST_RE = re.compile(
+    r'^native/sandbox-spawner/'
+    r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner)\.'
+)
 
 
 def plan(changed: list[str], event: str, base_ref: str, force_full: bool = False) -> dict[str, str]:

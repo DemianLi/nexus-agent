@@ -110,11 +110,26 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 包一層沙箱，也不打算在不改設計的前提下假裝有。細節見 [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)
 的「明文限制」。
 
-**3. 出廠兩個組合，加上部署方可以加回的全開，都是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
-動手；它們不涵蓋子行程與網路；對讀，前兩組一樣只擋經連結出根的路（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
+**3. 出廠兩個組合，加上部署方可以加回的全開，對內建檔案工具都是政策，不是隔離。** 工具子行程另見第 4 條。 `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
+動手；它們不涵蓋網路，子行程見第 4 條；對讀，前兩組一樣只擋經連結出根的路（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
 檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
 並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界；
 怎麼加、怎麼確認做到了，見〈[多人共用主機的部署清單](#多人共用主機的部署清單)〉。
+
+**4. `grep`／`glob` 起的 rg 經沙箱跑（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。** Linux 上由產物裡的 `native/nexus-sandbox-spawner` 起，
+seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽略規則，讀不到 serve 的 home。`danger-full-access` 不上 Landlock，網路照擋。
+
+- 主機沒有 Landlock，或不是 Linux：`read-only`、`workspace-write` 下的 `grep`／`glob` 回 `SEARCH_FAILED`，訊息開頭是 `SANDBOX_UNAVAILABLE`，不退回不設防。
+  稽核只看碼分不出沙箱不可用與搜尋失敗，要看訊息。
+- 核心的 Landlock ABI 不到 6：工具照跑，serve 的日誌印一次「只有部分強制」。
+- workspace-changes 的 git 快照還沒經沙箱，由 serve 直接起。
+
+**本機開發。** Mac 沒有沙箱後端，兩條路：
+
+- 在 Linux 容器裡起 serve；
+- 在本機的 `--patch` 覆寫檔把 `danger-full-access` 加回權限表（寫法見上面〈權限組合〉那一節），用它起。非 Linux 上這一格直接 spawn，不套 OS 沙箱。
+
+從原始碼起的 serve 沒有產物裡那支 spawner，在 Linux 上也回 `SANDBOX_UNAVAILABLE`，要先把編好的執行檔放到 repo 根的 `native/nexus-sandbox-spawner`（編法見 [`native/sandbox-spawner/README.md`](../native/sandbox-spawner/README.md)）。
 
 ### serve：key 與 home 不能跟工作區重疊
 

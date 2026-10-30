@@ -54,7 +54,7 @@ import {
   walkInstalledGraph,
 } from './payload.js';
 import { installedLicenseProblems, sbomProblems } from './sbom.js';
-import { probeInstalledSpawner, spawnerProbeProblems } from './spawner-probe.js';
+import { probeInstalledSpawner, spawnerProbeProblems, spawnerProbeSummary } from './spawner-probe.js';
 
 /**
  * CLI 那一輪 root 會話的檔名。root 的 id 固定是 `cli`，`safeBaseName` 編碼後不變；檔名照 `@nexus/core` 的那一份
@@ -495,7 +495,9 @@ export async function verifyPackedInstall(
 
     // 4e. 沙箱 spawner（只有 Linux 的產物帶）：起產物裡那一支、等 Ready，再經它起一次主機的 git。
     if (process.platform === 'linux') {
-      problems.push(...spawnerProbeProblems(await probeInstalledSpawner(root, scratch)));
+      const spawnerProbe = await probeInstalledSpawner(root, scratch);
+      console.log(spawnerProbeSummary(spawnerProbe));
+      problems.push(...spawnerProbeProblems(spawnerProbe));
     }
 
     // 4c. 安裝樹裡真的跑一次 grep：腳本模型叫 grep，PATH 是空目錄（同 4b），命中只可能來自內附的 rg。

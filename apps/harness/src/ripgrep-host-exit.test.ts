@@ -7,7 +7,7 @@
  * 做法照 `packages/nexus-plugin-workspace-changes/src/git-host-exit.test.ts`。
  *
  * 對照組用裸 `spawn` 起同一支假 rg：Node 不替你收子行程，它要還活著，「grep 起的不在了」才有意義。
- * 拿掉 `ripgrep-runner.ts` 裡的 `trackHostExitChild` 那一行，第二條會紅。
+ * 拿掉 `tool-process.ts` 裡的 `trackHostExitChild` 那一行，第二條會紅。
  */
 
 import { execFile } from 'node:child_process';
@@ -23,6 +23,7 @@ import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const run = promisify(execFile);
 const BACKEND_SOURCE = fileURLToPath(new URL('./contained-backend.ts', import.meta.url));
+const TOOL_PROCESS_SOURCE = fileURLToPath(new URL('./tool-process.ts', import.meta.url));
 const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url));
 
 /** 假 rg：把 pid 寫進檔、忽略 SIGTERM、一直掛著；`FAKE_RG_QUICK=1` 時寫完就以「零筆」結束。 */
@@ -41,12 +42,13 @@ const DRIVER = (mode: string) => `
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { ContainedFilesystemBackend } from ${JSON.stringify(BACKEND_SOURCE)};
+import { directToolLauncher } from ${JSON.stringify(TOOL_PROCESS_SOURCE)};
 
 const [fakeRg, pidFile, root] = process.argv.slice(2);
 const waitForPid = async () => {
   while (!existsSync(pidFile)) await new Promise((resolve) => setTimeout(resolve, 10));
 };
-const backend = new ContainedFilesystemBackend({ rootDir: root, ripgrep: { executable: fakeRg } });
+const backend = new ContainedFilesystemBackend({ rootDir: root, ripgrep: { executable: fakeRg, launcher: directToolLauncher } });
 if (${JSON.stringify(mode)} === 'tracked') {
   void backend.grep('needle', '/');
   await waitForPid();

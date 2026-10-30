@@ -17,8 +17,17 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeEach } from 'vitest';
+import { afterAll, beforeEach, vi } from 'vitest';
 import { HARNESS_HOME_ENV } from './harness-home.js';
+
+// 一般測試不編 Rust，Mac 上也沒有 spawner：工具子行程直接 spawn。測真執行檔的測試用 `vi.unmock` 或自己給 launcher。
+vi.mock('./tool-launcher.js', async (importActual) => {
+  const { directToolLauncher } = await import('./tool-process.js');
+  return {
+    ...(await importActual<typeof import('./tool-launcher.js')>()),
+    productToolLauncher: () => directToolLauncher,
+  };
+});
 
 const root = mkdtempSync(join(tmpdir(), 'nexus-agent-home-'));
 
