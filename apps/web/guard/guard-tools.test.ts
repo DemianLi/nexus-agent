@@ -732,14 +732,20 @@ describe('瀏覽器量推理列的行為與覆寫（#1683）', () => {
         })),
       );
       const open = await page.$eval(reasoningIn('done'), (row) => (row as HTMLDetailsElement).open);
-      // `getAnimations` 不回報 `::details-content`；時間凍著時它上面的高度動畫會停在起點。
-      const contentHeight = await page.$eval(reasoningIn('done'), (row) =>
-        Number.parseFloat(getComputedStyle(row, '::details-content').height),
-      );
+      // `getAnimations` 不回報 `::details-content`，高度動效要靠高度本身看：時間凍著時到不了內容高度。
+      const heights = await page.$eval(reasoningIn('done'), (row) => {
+        const content = [...row.children].filter((el) => el.tagName !== 'SUMMARY');
+        const rects = content.map((el) => el.getBoundingClientRect());
+        return {
+          box: Number.parseFloat(getComputedStyle(row, '::details-content').height),
+          content: Math.max(...rects.map((r) => r.bottom)) - Math.min(...rects.map((r) => r.top)),
+        };
+      });
       report['reasoning:animations'] = animations;
       expect(open).toBe(true);
-      expect(contentHeight).toBeGreaterThan(0);
-      // 量具自檢：箭頭那條轉場量得到，代表動畫時間真的凍住了。
+      expect(heights.content).toBeGreaterThan(0);
+      expect(heights.box).toBeCloseTo(heights.content, 0);
+      // 量具自檢：箭頭那條轉場量得到，代表讀的當下動畫還在。
       expect(animations).toEqual([{ kind: 'CSSTransition', what: 'rotate', target: 'svg' }]);
     } finally {
       await page.close();

@@ -246,7 +246,7 @@ afterAll(async ({}, suite) => {
 });
 
 /**
- * 把這一頁的動畫時間凍在當下。之後起的轉場與動畫都停在起點等讀，所以負載高時讀得晚也不會錯過窗口（#2146）。
+ * 把這一頁的動畫時間凍在當下。之後起的轉場與動畫都停在起點附近（可能已走一幀）等讀，所以負載高時讀得晚也不會錯過窗口（#2146）。
  * `finish()` 與調 `currentTime` 照常有效；`settle` 會等不到結束，凍住之後不要再呼叫。
  */
 export async function freezeAnimations(page: Page): Promise<void> {

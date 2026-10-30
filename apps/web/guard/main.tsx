@@ -1782,6 +1782,7 @@ function TurnStatusPage() {
       __setTurnActivity?: (a: string) => void;
       __openingPose?: (a: string) => string[][];
     };
+    // 同步 commit：測試換完只等一幀就讀姿勢，要趕在這一幀之前畫上新 activity。
     hooks.__setTurnActivity = (a) => flushSync(() => setActivity(a));
     // 每種 activity 的起始姿勢（減少動態時 glyph 停在這裡），照 vendor `draw` 取到小數兩位、四個屬性都給。
     // 1.7 是 vendor 沒 export 的 `RADIUS`（`src/test/glyph-env.ts` 的 `GLYPH_RADIUS`，`registry-edits.test.ts` 釘住原文）。
