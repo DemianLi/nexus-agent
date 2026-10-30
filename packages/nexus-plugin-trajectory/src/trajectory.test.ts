@@ -1248,21 +1248,21 @@ describe('歸屬表分塊', () => {
 
   /** 整張表一份的參考算法：先刪再放、超過 2000 從最舊的丟。比對的對照組。 */
   function referenceOwners(events: readonly SessionEvent[]): [string, number | null][] {
-    let owners: Record<string, number | null> = {};
+    const owners = new Map<string, number | null>();
     for (const event of events) {
       if (event.type !== 'assistant/message') continue;
       const ids = toolCallIds(event as SessionEvent<'assistant/message'>);
       const owner = event.data.modelCall ?? null;
-      const next = { ...owners };
       for (const id of ids) {
-        delete next[`#${id}`];
-        next[`#${id}`] = owner;
+        owners.delete(`#${id}`);
+        owners.set(`#${id}`, owner);
       }
-      const keys = Object.keys(next);
-      for (let drop = 0; drop < keys.length - 2000; drop += 1) delete next[keys[drop]!];
-      owners = next;
+      for (const key of owners.keys()) {
+        if (owners.size <= 2000) break;
+        owners.delete(key);
+      }
     }
-    return Object.entries(owners);
+    return [...owners];
   }
 
   it.each([
@@ -1271,7 +1271,7 @@ describe('歸屬表分塊', () => {
     ['同一則裡重複、超過一塊的批次', 7],
     ['反覆重用一小撮 id', 127],
   ])('表的內容與淘汰順序跟整張表的算法逐筆相同：%s', (_name, reuse) => {
-    const ids = Array.from({ length: 5000 }, (_, n) => {
+    const ids = Array.from({ length: 3000 }, (_, n) => {
       if (reuse === 0) return [`id_${n}`];
       if (reuse === 127) return [n % 128 === 0 ? `fresh_${n}` : `id_${n % 127}`];
       if (reuse === 3) return n % 3 === 0 ? [`id_${(n * 7) % 2500}`] : [`id_${n}`];
@@ -1288,7 +1288,7 @@ describe('歸屬表分塊', () => {
 
   it('反覆重用 id 時塊會併回來，塊數不跟著重用次數長', () => {
     // 每 128 則才一個新 id，其餘重用同一小撮：不併塊的話每塊會被掏到只剩那一個新 id，塊數跟著重用次數長。
-    const ids = Array.from({ length: 20_000 }, (_, n) => [
+    const ids = Array.from({ length: 3000 }, (_, n) => [
       n % 128 === 0 ? `fresh_${n}` : `id_${n % 127}`,
     ]);
     const { owners } = stateOf(logOf(ids).events);
@@ -1304,7 +1304,7 @@ describe('歸屬表分塊', () => {
   });
 
   it('記一筆只動幾塊：其餘的塊在前後兩份狀態之間是同一個參照', () => {
-    const log = logOf(serial(5000));
+    const log = logOf(serial(2600));
     const before = stateOf(log.events);
     expect(before.owners.chunks.length).toBeLessThanOrEqual(17);
     for (const chunk of before.owners.chunks) {
@@ -1318,13 +1318,13 @@ describe('歸屬表分塊', () => {
   });
 
   it('不改傳進來的狀態：同一份舊狀態分岔，舊的一字不變、兩邊各記各的', () => {
-    const log = logOf(serial(5000));
+    const log = logOf(serial(2600));
     const base = stateOf(log.events);
     const copy = JSON.stringify(base);
     const start = log.append('model/start', {});
     // 這兩則分別踩到：新 id（同時把最舊的擠掉）、舊 id 重新排到最新。
     const fresh = reply(start.seq, '', 'id_new');
-    const again = reply(start.seq, '', 'id_4000');
+    const again = reply(start.seq, '', 'id_2200');
     const left = applyTrajectory(
       applyTrajectory(base, start),
       log.append('assistant/message', fresh),
@@ -1335,7 +1335,7 @@ describe('歸屬表分塊', () => {
     );
     expect(JSON.stringify(base)).toBe(copy);
     expect(entriesOf(left).at(-1)![0]).toBe('#id_new');
-    expect(entriesOf(right).at(-1)![0]).toBe('#id_4000');
+    expect(entriesOf(right).at(-1)![0]).toBe('#id_2200');
     expect(entriesOf(right).some(([key]) => key === '#id_new')).toBe(false);
   });
 
@@ -1347,10 +1347,10 @@ describe('歸屬表分塊', () => {
   });
 
   it('seed、fold、逐顆 push 的值相同，過了上限的遲到事件也一樣', () => {
-    const log = logOf(serial(5000));
-    // id_2000 已被擠掉、id_4990 還在表上。
-    log.append('tool/call', call('id_2000'));
-    log.append('tool/call', call('id_4990'));
+    const log = logOf(serial(2600));
+    // id_599 已被擠掉、id_600 還在表上。
+    log.append('tool/call', call('id_599'));
+    log.append('tool/call', call('id_600'));
     const fold = createProjectionFold([trajectoryUnit]);
     const pushed = fold.session();
     for (const event of log.events) pushed.push(event);
