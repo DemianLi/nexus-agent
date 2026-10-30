@@ -136,8 +136,7 @@ describe('forkAncestors：沿 header 往上找分叉來源', () => {
   });
 });
 
-// 這一組沒有等待，平常每條約 20ms；CI 上曾整檔跑到近 10 秒，其中一條超過預設的 5 秒。
-describe('StashRoute：名單內的讀轉到祖先，其餘留在自己', { timeout: 30_000 }, () => {
+describe('StashRoute：名單內的讀轉到祖先，其餘留在自己', () => {
   async function seeded(files: Readonly<Record<string, Readonly<Record<string, string>>>>) {
     const root = await mkdtemp(join(tmpdir(), 'fork-stash-'));
     for (const [session, entries] of Object.entries(files)) {
