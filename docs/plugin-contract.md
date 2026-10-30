@@ -395,11 +395,7 @@ ctx.effect(() => {
 - `const c = ctx; c.root`、把參數取別的名字、從別的名字解構，抓不到；它只認叫 `ctx` 的識別字。
 - 頂層的 `const state = { count: 0 }`（物件本身可變）不在清單裡。
 - 頂層的**常數查表**也會中 `top-level-collection`（`const KNOWN = new Set([...])`）：語法分不出它是不是只讀。**不為它
-  放寬**（PM 決定）：遷移卡碰到時二選一，把它搬進 `apply` 的閉包，或寫一行窄例外並寫理由。
-- **已登記的窄例外**（#1435 Q2 (b)）：`trajectory` 的 `inPlaceSizes`（`trajectory.ts`，`top-level-collection`）。它是以投影重放
-  自己的歸屬表物件為鍵的 `WeakMap` 快取：鍵被回收項目就消失，不跨單元實例共用到別人的狀態，卸載後沒有會被誤用的東西；
-  dsh 的生產碼有同樣的做法（`packages/compaction/compaction/src/tool-pairing.ts:26` 的 `balanceCacheBySession`）。同一支的
-  `TURN_KINDS` 是常數查表，改成唯讀陣列加 `includes`，不必例外。
+  放寬**（PM 決定）：遷移卡碰到時二選一，把它搬進 `apply` 的閉包，或寫一行窄例外並寫理由。`trajectory` 的 `TURN_KINDS` 用唯讀陣列加 `includes`，這條規則只擋 `new` 出來的集合，不必例外。
 - 這些由審查與一致性套件的 `unload` 那一格補：副作用沒走 `ctx.effect`，卸載後就有殘留，`unload` 會紅。真的有人繞過，
   再升級成帶型別的規則。
 
