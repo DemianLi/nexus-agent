@@ -6,7 +6,8 @@
  * 1. **列候選一條 agent 都不建**，連提問的那條 thread 也不建。量具是一顆只記次數的見證 plugin（`assembly-witness.fixture.ts`）。
  * 2. **跨專案**：會話根底下別格的會話列得出來，標同工作區與否。
  * 3. **沒落盤就是「不提供」**，不是空清單。
- * 4. **快照記的是被引用那份磁碟上的版號**（#1856）：header 讀回來轉譯成這一版，`capturedFormatVersion` 仍記原版號。
+ * 4. **同一行程裡活著的 thread 被引用時讀記憶體**（#1940）。
+ * 5. **快照記的是被引用那份磁碟上的版號**（#1856）：header 讀回來轉譯成這一版，`capturedFormatVersion` 仍記原版號。
  */
 
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -74,6 +75,14 @@ async function references(server: RunningServe, threadId: string, query: string)
 function available(result: SessionReferenceListResult) {
   if (!result.available) throw new Error('這台 server 說它不提供列會話');
   return result.candidates;
+}
+
+async function until(check: () => Promise<boolean>): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!(await check())) {
+    if (Date.now() > deadline) throw new Error('等不到條件成立');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 describe('GET /threads/:id/session-references', () => {
@@ -160,6 +169,38 @@ describe('GET /threads/:id/session-references', () => {
     // 這一輪正常收尾，不是失敗。
     expect(beta.some((event) => event.type === 'turn/failed')).toBe(false);
     expect(beta.some((event) => event.type === 'turn/end')).toBe(true);
+  });
+
+  it('同一台 serve 上活著的 thread 被 @：快照讀記憶體，不是盤上那份（#1940）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-refs-live-'));
+    const server = await start(root);
+    await driveTurn(server, 'alpha', '記憶體裡的蘋果派');
+    const directory = join(root, projectKey(process.cwd()));
+    let logPath: string | undefined;
+    await until(async () => {
+      for (const entry of await readdir(directory, { recursive: true, withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        const path = join(entry.parentPath, entry.name);
+        if ((await readFile(path, 'utf8')).includes('記憶體裡的蘋果派')) logPath = path;
+      }
+      return logPath !== undefined;
+    });
+    const disk = await readFile(logPath!, 'utf8');
+    await writeFile(logPath!, disk.replaceAll('記憶體裡的蘋果派', '盤上被改過的話'));
+
+    const candidate = available(await references(server, 'beta', '')).find(
+      ({ sessionId }) => sessionId === 'alpha',
+    )!;
+    await driveTurn(server, 'beta', `接著 ${candidate.mention} 說`);
+    await server.close();
+    running = undefined;
+
+    const store = openJsonlSessionStore({ directory });
+    const beta = await (await store.open('beta', 'read')).read();
+    const snapshot = beta.find(
+      (event) => event.type === 'user/message' && event.data.source.kind === 'session-reference',
+    ) as SessionEvent<'user/message'>;
+    expect(JSON.stringify(snapshot.data.message)).toContain('記憶體裡的蘋果派');
   });
 
   it('被引用的是舊版寫的：落盤的快照記原版號，不是轉譯後的這一版（#1856，出貨組裝、真的落盤）', async () => {

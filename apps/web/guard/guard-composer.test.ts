@@ -471,7 +471,7 @@ describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#159
     }
   });
 
-  test('用量環點開：明細的標題、每一行（含不會觸發的那一行與它底下的小字）、說明都過 4.5', async () => {
+  test('用量環點開：明細的標題、組成三行、每一行（含不會觸發的那一行與它底下的小字）、說明都過 4.5', async () => {
     const page = await openOverlay('composer-dormant', theme, {
       marks: { [RING]: {} },
       prepare: async (p) => {
@@ -487,17 +487,28 @@ describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#159
           mark('[data-testid="context-meter-percent"]', 'ring-percent');
           mark('[data-testid="context-meter-row"]', 'ring-row');
           mark('[data-testid="context-meter-dormant"]', 'ring-dormant');
+          mark('[data-testid="context-meter-part"] span', 'ring-part');
+          mark('[data-testid="context-meter-breakdown-note"]', 'ring-part-note');
           mark('[data-testid="context-meter-note"]', 'ring-note');
         });
       },
     });
     try {
       const texts = await collectTexts(page);
-      // 量具自檢：兩道門檻都量到，其中一道是不會觸發的。
+      // 量具自檢：兩道門檻都量到，其中一道是不會觸發的；組成三行的標籤與數字共 6 段。
       expect(texts.filter((t) => t.name === 'ring-row')).toHaveLength(2);
+      expect(texts.filter((t) => t.name === 'ring-part')).toHaveLength(6);
       expectTexts(
         texts,
-        ['ring-title', 'ring-percent', 'ring-row', 'ring-dormant', 'ring-note'],
+        [
+          'ring-title',
+          'ring-percent',
+          'ring-row',
+          'ring-part',
+          'ring-part-note',
+          'ring-dormant',
+          'ring-note',
+        ],
         `footer:${theme}:ring-open`,
       );
     } finally {

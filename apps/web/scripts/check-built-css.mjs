@@ -30,9 +30,11 @@ const KEYFRAMES_ALLOWED = new Set([
   'motion-fade-in',
   'motion-fade-out',
   'motion-rise-in',
+  'motion-rise-in-micro',
   'motion-swap-in',
   'motion-swap-out',
-  'motion-page-in',
+  'motion-page-in-next',
+  'motion-page-in-prev',
   'motion-beam-pulse',
   'motion-shimmer',
   'motion-caret',
@@ -323,8 +325,8 @@ for (const rule of rules) {
     failures.push(`第 5 條：${rule.selector} 的 infinite 動畫在 reduced-motion 下沒有被蓋掉`);
 }
 
-// 第 3 條的延伸：元件寫的 `animation-duration-*` 直接設時長，會蓋掉 reduced-motion 換成 150 的那組變數
-// （#403：抽屜淡入卻還是 350）。有超過 150ms 的，reduced-motion 裡就要有一條把它壓回 150 以下的。
+// 第 3 條的延伸：`animation-duration-*` 直接設時長，會蓋掉 reduced-motion 換成 150 的那組變數（#403：抽屜淡入卻還是 350）。
+// 規則 12 不掃 vendor 原樣的檔，這裡是最後一道：同步帶進超過 150ms 的，要在 `motion.css` 的 reduced-motion 段補一條壓回 150 以下。
 const seconds = (v) => (/ms$/.test(v) ? parseFloat(v) / 1000 : parseFloat(v));
 const longDurations = rules.filter(
   (r) =>
@@ -375,7 +377,7 @@ if (slides.length > 0)
       failures.push(`第 3 條：reduced-motion 下 ${surface} 的 transition 時長沒有壓到 150ms 以下`);
   }
 
-// 動效 token 都要有宣告（#1687 驗收 D1）：`var()` 指到不存在的變數時 CSS 不報錯，時長會變成 0、曲線變成預設。
+// `var()` 指到沒宣告的時長、位移、縮放、模糊、曲線變數時 CSS 不報錯，動效會無聲變樣（#1687 驗收 D1）。
 const declared = new Set(
   rules.flatMap((r) => [...declarations(r.body).keys()].filter((k) => k.startsWith('--'))),
 );

@@ -69,11 +69,11 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
   - 減少動態時不是全關：拿掉位移、縮放、模糊，留 150ms 以內的淡入淡出。
 - **從哪裡來**：
   - 進出場的時長與曲線、展開收合不做高度動效：SG（#1687）。
-  - 「先縮一點再長出來」與其餘時長、位移、縮放、模糊 token：Libraries.dev（元件清單 §3.3）；這組 token 還有消費者，留給 ⑥（#1689）一起收。
+  - 「先縮一點再長出來」與其餘時長、位移、縮放的數值：Libraries.dev（元件清單 §3.3）；元件用 Tailwind 的 `duration-*` 級距，`motion.css` 直接寫數字，不設動效 token（#1827 D21）。
   - 封閉清單、按壓只給主按鈕、減少動態的退法：[#378 動效策略](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887)。
   - 不裝 `thinking-orbs`、`border-beam`，改純 CSS 仿：demian 看過原型後的決定（[#375 原型結論](https://github.com/DemianLi/nexus-agent/issues/375#issuecomment-5708312161)，由 #378 拍板）。
   - 按壓不擴大到 ghost 按鈕：「一按就縮，在一排工具卡上會很吵」（比對文件 §4）。
-- **規則在哪**：規格 §7；`apps/web/src/styles/motion.css`；`design-system.test.ts`（時長只能用 token）；`scripts/check-built-css.mjs`（`@keyframes` 允許清單、無限動畫在減少動態下都有對應）。
+- **規則在哪**：規格 §7；`apps/web/src/styles/motion.css`；`design-system.test.ts`（時長只用 Tailwind 的級距）；`scripts/check-built-css.mjs`（`@keyframes` 允許清單、無限動畫在減少動態下都有對應）。
 
 ### 1.6 AI 的過程：集中、收著也有重點、要人決定時換掉輸入框
 

@@ -260,7 +260,7 @@
   - 我們桌面收起時整條 `inert`。
 - **吸收（要先改規格）**：GlideMenu 的滑動高亮，也就是一層底色跟著 hover 與焦點在列之間滑動。
   - 這是規格 §7 清單外的新模式，要先在 §7 加「指示器滑動」，由 demian 拍板。
-  - 做的話寫成我們自己的積木：時長用 `--duration-fast`（250）＋`--ease-smooth-out`，reduced-motion 下瞬間到位。
+  - 做的話寫成我們自己的積木：時長 250ms、曲線 `cubic-bezier(0.22, 1, 0.36, 1)`，reduced-motion 下瞬間到位。
   - cmdk 那幾個選單要另外量 `data-selected` 的位置，不能直接套。
   - 中。
 - **不吸收**：
@@ -357,8 +357,8 @@
 |---|---|---|---|
 | 陰影 | card／raised／overlay 都是「1px 細線環＋5–6 層、每層 ≤ 0.05」（層數由它的 shadow-plugin 產生，實機用 computed style 讀） | material：細線環＋2 層（0.06／0.04）；menu：細線環＋2 層（0.05／0.06） | **不補**。兩邊同一個思路（細線環＋淡投影），差在層數。多疊幾層的差別在截圖上要放大才看得出來，不值得換掉已經過對比與實機驗收的數值 |
 | 按下縮放 | `atoms/Button.tsx:14` 所有變體 `active:scale-[0.96]`；全站還有 0.94（4 次）、0.97（4）、0.98（8）、0.99（2），0.96 共 14 次 | 只給實心主按鈕與送出鍵，scale .96、120ms（`styles/motion.css:160-178`）；token 有 .96–.99 四階 | **不補**。我們已有，而且範圍更窄是規格 §7 刻意的：ghost 按鈕一按就縮，在一排工具卡上會很吵 |
-| 緩動曲線 | `--ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1)` | `--ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1)`（`index.css:33`） | **不換**。兩條肉眼分不出來 |
-| 時長 | 用量最多的是 `duration-150`（69 次）、`duration-100`（50 次），都直接寫數字 | 階梯 40／80／120／150／200／250／350／400／500，元件只能用 token（#1280 起有測試擋） | 不換 |
+| 緩動曲線 | `--ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1)` | `cubic-bezier(0.22, 1, 0.36, 1)`（`motion.css`） | **不換**。兩條肉眼分不出來 |
+| 時長 | 用量最多的是 `duration-150`（69 次）、`duration-100`（50 次），都直接寫數字 | 元件同樣直接寫數字，只用 Tailwind 的級距（#1827 D21，`design-system.test.ts` 擋）；`motion.css` 另有 40／120／250／300／350 | 不換 |
 | 字級 | `components/primitives`＋`components/atoms` 共 201 次任意字級、14 種值：13px×52、12px×44、12.5px×38、11.5px×23、11px×18……；連展示站共 295 次 | 規格四階；任意字級 2 次（`ui/questionnaire.tsx:142` 的快捷鍵字、`session-reference.tsx:25` 的 0.9em） | 不換。字級主次是另一張卡 #1281 |
 
 ### 對比度（瀏覽器實測）

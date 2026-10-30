@@ -1,5 +1,5 @@
 /**
- * key 來源與 home 跟 `--workspace` 重疊的檢查（[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)），
+ * `--patch` 落在工作區的檢查（#2162），以及 key 來源與 home 跟 `--workspace` 重疊的檢查（[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)），
  * 與它用的分隔符感知判斷。serve 那一端的端到端在 `serve-launch-paths.test.ts`。
  */
 
@@ -8,7 +8,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { assertLaunchPathsOutsideWorkspace, outsideWorkspace } from './assembly-root.js';
+import {
+  assertLaunchPathsOutsideWorkspace,
+  assertPatchesOutsideWorkspace,
+  outsideWorkspace,
+} from './assembly-root.js';
 import { isWithin } from './canonical-path.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 
@@ -44,6 +48,75 @@ describe('outsideWorkspace：`--workspace /` 的洞補上了', () => {
     expect(() => outsideWorkspace('/home/x/.nexus-agent/sessions', '/', '/', '日誌根')).toThrow(
       '日誌根 不能在 --workspace 底下',
     );
+  });
+});
+
+describe('assertPatchesOutsideWorkspace', () => {
+  const check = (workspace: string | undefined, patches: string[] | undefined, cwd = '/') =>
+    assertPatchesOutsideWorkspace({ workspace, cwd, patches });
+
+  it('在工作區裡：拒絕，檔案不存在也算', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    await expect(check(workspace, [join(workspace, 'p.yml')])).rejects.toThrow(
+      '不能在 --workspace 底下',
+    );
+  });
+
+  it('相對路徑以 cwd 為基準', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    await expect(check(workspace, ['p.yml'], workspace)).rejects.toThrow('不能在 --workspace 底下');
+  });
+
+  it('工作區外的連結指進工作區：拒絕', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    const outside = await tmp('nexus-2162-out-');
+    await writeFile(join(workspace, 'p.yml'), '[]\n');
+    await symlink(join(workspace, 'p.yml'), join(outside, 'p.yml'));
+    await expect(check(workspace, [join(outside, 'p.yml')])).rejects.toThrow('實際位置');
+  });
+
+  it('工作區裡的連結指到外面：拒絕，檔案連結與目錄連結都是', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    const outside = await tmp('nexus-2162-out-');
+    await writeFile(join(outside, 'p.yml'), '[]\n');
+    await symlink(join(outside, 'p.yml'), join(workspace, 'link.yml'));
+    await symlink(outside, join(workspace, 'dir'));
+    await expect(check(workspace, [join(workspace, 'link.yml')])).rejects.toThrow('不能在');
+    await expect(check(workspace, [join(workspace, 'dir/p.yml')])).rejects.toThrow('不能在');
+  });
+
+  it('工作區外的目錄連結進到工作區，再經裡面的連結指到外面：拒絕', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    const outside = await tmp('nexus-2162-out-');
+    await writeFile(join(outside, 'p.yml'), '[]\n');
+    await symlink(join(outside, 'p.yml'), join(workspace, 'link.yml'));
+    await symlink(workspace, join(outside, 'in'));
+    await expect(check(workspace, [join(outside, 'in/link.yml')])).rejects.toThrow('不能在');
+  });
+
+  it('工作區是連結：比實際位置', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    const outside = await tmp('nexus-2162-out-');
+    await symlink(workspace, join(outside, 'link'));
+    await expect(check(join(outside, 'link'), [join(workspace, 'p.yml')])).rejects.toThrow(
+      '不能在 --workspace 底下',
+    );
+  });
+
+  it('多份裡有一份在工作區裡就拒絕；訊息點名那一份', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    const outside = await tmp('nexus-2162-out-');
+    await expect(
+      check(workspace, [join(outside, 'ok.yml'), join(workspace, 'bad.yml')]),
+    ).rejects.toThrow('bad.yml');
+  });
+
+  it('工作區外、沒給 --patch、沒給 --workspace：不擋', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    const outside = await tmp('nexus-2162-out-');
+    await expect(check(workspace, [join(outside, 'p.yml')])).resolves.toBeUndefined();
+    await expect(check(workspace, undefined)).resolves.toBeUndefined();
+    await expect(check(undefined, [join(workspace, 'p.yml')])).resolves.toBeUndefined();
   });
 });
 
