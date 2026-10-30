@@ -22,7 +22,7 @@ const LOADING_CLASS =
   'text-muted-foreground h-auto gap-2 border-0 px-2 font-normal whitespace-normal data-[disabled]:pointer-events-none';
 
 /**
- * 一列摘要、或只有摘要的組：載入那一輪的細節（#1690 T6）。待命與失敗是 outline 鈕帶圖示，失敗的原因接在鈕後面、掛在鈕的
+ * 一列摘要、或只有摘要的組：載入那一輪的細節（#1690 T6）。待命與失敗是 outline 鈕帶圖示（`reloadLabel` 例外，見該 prop），失敗的原因接在鈕後面、掛在鈕的
  * `aria-describedby`；進行中同一顆鈕的圖示換成 SG `DotLoader`、字變灰。按下去是唯讀拉取，「重試」是重新載入，都不重跑模型，也不自動重試。
  *
  * 讀取中鈕不卸載（#2009）：`disabled`＋`focusableWhenDisabled`（`aria-disabled`），焦點留在鈕上、再按不會再拉一次，字維持
@@ -32,25 +32,31 @@ export function PullControl({
   status,
   onPull,
   onArm,
+  reloadLabel,
 }: {
   status: PullStatus;
   onPull: () => void;
   onArm?: (button: HTMLElement) => void;
+  /** 已經拉回來過：待命時是這句字的 ghost 鈕，不畫圖示；讀取中與失敗照常。 */
+  reloadLabel?: string;
 }) {
   const failureId = useId();
   const loading = status.kind === 'loading';
   const failed = status.kind === 'failed';
-  const label = failed ? TRACE_PULL_RETRY_LABEL : TRACE_PULL_LABEL;
+  const label = failed ? TRACE_PULL_RETRY_LABEL : (reloadLabel ?? TRACE_PULL_LABEL);
   const name = useSettledLabel(label, loading);
   return (
     <div
-      className="flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pt-1 pb-1"
+      className={cn(
+        'flex flex-wrap items-center gap-x-2 gap-y-1 px-2 pb-1',
+        reloadLabel === undefined && 'pt-1',
+      )}
       data-testid="trace-pull"
       data-status={status.kind}
     >
       <Button
         type="button"
-        variant={loading ? 'ghost' : 'outline'}
+        variant={loading || (reloadLabel !== undefined && !failed) ? 'ghost' : 'outline'}
         size="sm"
         className={cn('min-h-11 text-ui lg:min-h-8', loading && LOADING_CLASS)}
         disabled={loading}
@@ -66,7 +72,11 @@ export function PullControl({
           </>
         ) : (
           <>
-            {failed ? <RotateCw aria-hidden /> : <Download aria-hidden />}
+            {failed ? (
+              <RotateCw aria-hidden />
+            ) : (
+              reloadLabel === undefined && <Download aria-hidden />
+            )}
             {label}
           </>
         )}
