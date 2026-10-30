@@ -890,6 +890,22 @@ describe('CLI 行程', () => {
 });
 
 describe('--patch 與工作區（#2162）', () => {
+  it('在工作區外：照常起', async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-ws-')));
+    const outside = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-out-')));
+    await writeFile(join(outside, 'p.yml'), '[]\n', { mode: 0o600 });
+    const { printer, stdout } = recorder();
+    await runCli({
+      argv: ['--dump-config-schema', '--workspace', workspace, '--patch', join(outside, 'p.yml')],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    });
+    expect(JSON.parse(stdout())).toBeTypeOf('object');
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
   it('在工作區裡：起不來，一輪都沒跑', async () => {
     const workspace = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-ws-')));
     await writeFile(join(workspace, 'p.yml'), '[]\n', { mode: 0o600 });
