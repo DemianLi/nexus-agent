@@ -1184,10 +1184,11 @@ export async function createCliAgent(
         }),
         // 唯讀共用區的前綴（#1775）：缺席＝這條 thread 沒有共用區（舊 thread、CLI）。**與有沒有圍堵無關**：落盤關掉的新 thread 沒有圍堵、共用區照樣在。
         ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: SHARED_WORKSPACE_PREFIX }),
+        // MCP 的沙箱包裝（#1946）：缺席＝宣告了 sandbox 的列不連線。
+        [MCP_SANDBOX_SERVICE]: createMcpSandboxWrapper(),
         // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
         // 分岔——有圍堵就掛控制器、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
         // 那一列載入當場拋（有圍堵卻缺控制器）。
-        [MCP_SANDBOX_SERVICE]: createMcpSandboxWrapper(),
         ...(workspaceRoot === undefined
           ? {}
           : {

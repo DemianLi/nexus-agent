@@ -140,7 +140,7 @@ describe.skipIf(BINARY === undefined).each(servers)(
         platform: 'linux',
         binary: BINARY,
         serveHome: serve,
-        userHome: '/no-such-home',
+        userHomes: ['/no-such-home'],
       }));
       const loaded = await loadPlugins([
         {

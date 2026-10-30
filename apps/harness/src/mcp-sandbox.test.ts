@@ -21,7 +21,7 @@ describe('createMcpSandboxWrapper', () => {
       platform: 'linux',
       binary: '/opt/spawner',
       serveHome: join(base, 'serve'),
-      userHome: join(base, 'user'),
+      userHomes: [join(base, 'user')],
     };
   });
   afterEach(() => rm(base, { recursive: true, force: true }));

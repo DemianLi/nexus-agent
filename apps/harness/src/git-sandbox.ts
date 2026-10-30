@@ -28,7 +28,7 @@ import { reportSandbox, productToolLauncher } from './tool-launcher.js';
 import type { ToolLauncher, ToolProcess, ToolResult } from './tool-process.js';
 
 /** 涵蓋常見發行版放執行檔、載入器與函式庫的位置，加上 git 與它的 helper 會讀的系統檔。主機上不存在的不給。 */
-export const GIT_SYSTEM_READABLE = [
+export const SYSTEM_READABLE = [
   '/usr',
   '/lib',
   '/lib64',
@@ -36,11 +36,13 @@ export const GIT_SYSTEM_READABLE = [
   '/sbin',
   '/etc/ld.so.cache',
   '/dev/urandom',
-  '/etc/gitconfig',
   '/etc/passwd',
   '/etc/group',
   '/etc/nsswitch.conf',
 ] as const;
+
+/** git 的讀根：系統的加上 system 設定檔。 */
+const GIT_SYSTEM_READABLE = [...SYSTEM_READABLE, '/etc/gitconfig'] as const;
 
 /** 問設定檔的期限（毫秒）。 */
 const PROBE_TIMEOUT_MS = 10_000;

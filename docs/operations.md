@@ -150,11 +150,13 @@ connection:
     writable: [/var/lib/mcp-data]
 ```
 
-- server 讀得到系統的目錄與檔、`command`、`cwd` 與 `readable`，寫得進 `writable`，其他讀寫都被擋。**連不到網路**：seccomp 擋 `AF_INET`、`AF_INET6`、`AF_UNIX`，要連外的 server 不能宣告。
+- server 讀得到系統的目錄與檔、`command`、`cwd` 與 `readable`，寫得進 `writable`，其他讀寫都被擋。**連不到網路**：seccomp 擋 `AF_INET`、`AF_INET6`、`AF_UNIX`、`AF_VSOCK`，要連外的 server 不能宣告。這是黑名單，serve 以 root 或帶 `CAP_NET_RAW` 跑時 `AF_PACKET` 開得起來，不要這樣跑。
 - server 自己的程式碼、依賴、直譯器要列進 `readable`，不在系統目錄底下的都一樣。
 - 路徑先 realpath 再判斷。包住 `$HOME` 或 serve 的 home 的路徑、落在 serve 的 home 底下的路徑、不存在的路徑都拒絕，這條 server 不連線。
 - 不看會話模式，`danger-full-access` 也照套。
-- 沙箱不可用（沒有 Landlock、不是 Linux、找不到 spawner）時這條 server **不連線**，日誌講一句，不退回直接起。
+- 不是 Linux 或找不到 spawner 時這條 server **不連線**，日誌講一句，不退回直接起。沒有 Landlock 時 spawner 以 125 結束，同樣是連線失敗，原因在 serve 的 stderr。
+- 核心的 Landlock ABI 不到 6 時照跑，強度跟著降低（例如沒有訊號 scope），spawner 往 stderr 講一句。
+- 重連時路徑若被換成連結，spawner 拒絕，這條 server 連不回來。
 - `--patch` 檔放在工作區裡時，模型改得到它，這個宣告就擋不住，見 [#2162](https://github.com/DemianLi/nexus-agent/issues/2162)。
 
 **本機開發。** Mac 沒有沙箱後端，兩條路：

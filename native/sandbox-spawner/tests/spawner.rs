@@ -725,13 +725,27 @@ fn a_request_still_waiting_for_stdio_fails_when_the_spawner_stops() {
 fn exec_probe(envs: &[(&str, &str)], ws: &Path, args: &[&str]) -> (String, Option<i32>) {
     let mut cmd = Command::new(SPAWNER);
     cmd.arg("--exec");
-    for root in readable() {
+    for root in exec_readable() {
         cmd.arg("--read").arg(String::from_utf8(root).unwrap());
     }
     cmd.arg("--write").arg(ws).arg("--").arg(probe()).args(args);
     cmd.envs(envs.iter().copied()).current_dir(ws).stderr(Stdio::null());
     let out = cmd.output().unwrap();
     (String::from_utf8_lossy(&out.stdout).trim().to_string(), out.status.code())
+}
+
+/// 單次模式只收 realpath：`/bin`、`/lib` 在多數發行版是連結。
+fn exec_readable() -> Vec<Vec<u8>> {
+    let mut roots: Vec<Vec<u8>> = readable()
+        .iter()
+        .map(|root| {
+            let path = Path::new(std::str::from_utf8(root).unwrap());
+            std::fs::canonicalize(path).unwrap().to_str().unwrap().as_bytes().to_vec()
+        })
+        .collect();
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 #[test]
@@ -814,7 +828,7 @@ fn exec_mode_refuses_a_root_it_cannot_open_and_bad_usage() {
 fn exec_mode_replaces_itself_and_keeps_stdio() {
     let mut cmd = Command::new(SPAWNER);
     cmd.arg("--exec");
-    for root in readable() {
+    for root in exec_readable() {
         cmd.arg("--read").arg(String::from_utf8(root).unwrap());
     }
     let mut child = cmd
@@ -826,4 +840,63 @@ fn exec_mode_replaces_itself_and_keeps_stdio() {
     child.stdin.take().unwrap().write_all(b"hello").unwrap();
     let out = child.wait_with_output().unwrap();
     assert_eq!((out.stdout.as_slice(), out.status.code()), (b"hello".as_slice(), Some(0)));
+}
+
+#[test]
+fn exec_mode_refuses_a_root_that_is_not_a_realpath() {
+    let ws = temp_dir("ws");
+    let link = ws.join("link");
+    std::os::unix::fs::symlink(temp_dir("outside"), &link).unwrap();
+    let out = Command::new(SPAWNER)
+        .args(["--exec", "--read"])
+        .arg(&link)
+        .arg("--")
+        .arg(probe())
+        .arg("tcp")
+        .stderr(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!((out.stdout.len(), out.status.code()), (0, Some(125)));
+}
+
+#[test]
+fn exec_mode_detaches_like_a_daemon_child() {
+    let ws = temp_dir("ws");
+    let (line, code) = exec_probe(&[], &ws, &["pdeathsig"]);
+    assert_eq!((line.as_str(), code), ("sig=9", Some(0)));
+    let mut cmd = Command::new(SPAWNER);
+    cmd.arg("--exec");
+    for root in exec_readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    cmd.args(["--", "/bin/sh", "-c", "cat /proc/self/stat; grep SigIgn /proc/$$/status; ls /proc/$$/fd"]);
+    // SAFETY：只 dup 一個 fd，不清 CLOEXEC 以外的東西。
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::dup2(2, 9);
+            Ok(())
+        });
+    }
+    let out = cmd.output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let mut fields = text.lines().next().unwrap().split(' ');
+    let session = fields.nth(5).unwrap();
+    // SAFETY：getsid 只查詢。
+    assert_ne!(session, unsafe { libc::getsid(0) }.to_string());
+    let ignored = text.lines().find_map(|line| line.strip_prefix("SigIgn:\t")).unwrap();
+    let sigpipe = 1u64 << (libc::SIGPIPE - 1);
+    assert_eq!(u64::from_str_radix(ignored, 16).unwrap() & sigpipe, 0, "{text}");
+    assert!(!text.lines().any(|line| line == "9"), "{text}");
+}
+
+#[test]
+fn exec_mode_says_so_when_landlock_is_partial() {
+    let ws = temp_dir("ws");
+    let mut cmd = Command::new(SPAWNER);
+    cmd.env("NEXUS_SPAWNER_TEST_ABI_CAP", "3").arg("--exec");
+    for root in exec_readable() {
+        cmd.arg("--read").arg(String::from_utf8(root).unwrap());
+    }
+    let out = cmd.arg("--write").arg(&ws).arg("--").arg(probe()).arg("tcp").output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stderr).contains("部分強制"));
 }

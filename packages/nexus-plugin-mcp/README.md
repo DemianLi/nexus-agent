@@ -190,8 +190,8 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 - **MCP 工具自己的檔案存取不受任何管束。** 它們是外部程序、走自己的檔案系統，既不經過
   `permissions` 也不經過 backend——deepagents 明文「custom tools from the agent or other
   middleware are left untouched」。harness 管得住的是「MCP 讀來的資料經由內建 `write_file`
-  寫進虛擬 FS」那條路。要圍堵 MCP server 本身只能從啟動它的方式下手（`connection.sandbox`，見 `docs/operations.md`；或容器），
-  不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
+  寫進虛擬 FS」那條路。沒宣告 `connection.sandbox` 的 server 不受管束，宣告了見
+  [`docs/operations.md`](../../docs/operations.md)。其他圍堵方式（容器）不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
 - **Prompts 不橋接。** dsh 也不支援 MCP prompt templates；工具、指引與資源見上一節。
 - **`tools/list_changed` 不處理，重連也不改工具集合。** dsh 在 server 通知工具清單變了、或重連之後會重新同步並換掉註冊的工具；
   deepagents 建好之後工具集合不可變，註冊表上的工具換不掉。所以：新工具要到下一次組裝才有；重連回來的新一代若少了某個原本有的

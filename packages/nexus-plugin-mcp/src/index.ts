@@ -212,7 +212,7 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 /**
  * MCP plugin。
  *
- * `apply` 是 async 的，裡面做四件事：預留這台伺服器的名字、連上 server、`tools/list` 拿工具、逐個註冊。四件事
+ * `apply` 是 async 的，裡面做五件事：預留這台伺服器的名字、宣告了 `sandbox` 就包進沙箱、連上 server、`tools/list` 拿工具、逐個註冊。四件事
  * **都在載入期**——agent 跑起來的時候工具集合已經定了。
  *
  * **失敗照 dsh 分兩類**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：
@@ -220,7 +220,7 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
  * - **同一個 `serverName` 掛兩次**：不管 {@link McpConfig.failOnStartupError}，這一列 `apply` 拋錯。dsh 在連線之前
  *   先預留名字、重複就讓那一個實例失敗（`packages/mcp/mcp-client/src/index.ts:160-176`）。預留用一個服務名
  *   （`mcp:server:<serverName>`）：服務是單一佔位、重名就拋，而且訊息指名兩個 plugin。
- * - **連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、交出一則警告
+ * - **套不上沙箱、連不上、列不出工具、工具註冊不上**：預設收住——撤掉這一列已經註冊的工具、收掉連線、交出一則警告
  *   （`registry.logger`），那一列照樣掛上、這台伺服器沒有工具。寫 `failOnStartupError: true` 才拋。dsh 在初次
  *   同步時也是三種一起管（連線與列工具經 `ready`，註冊經 `registrationFailure`，`connection.ts:130-140`）。
  *
@@ -401,7 +401,7 @@ async function confined(
 }
 
 /**
- * 這一列連不上（憑證解析不了，或自己連時連不上、列不出工具、註冊不上）的出口：寫了 `failOnStartupError` 就拋，否則警告、
+ * 這一列連不上（沙箱包裝不了，憑證解析不了，或自己連時連不上、列不出工具、註冊不上）的出口：寫了 `failOnStartupError` 就拋，否則警告、
  * 這一次沒有工具。
  *
  * 資源 provider 的登記不看連線成敗：名字照列，呼叫時才報不可用。**沒有 `failOnStartupError` 的這一列才登記**——寫了 `true`
@@ -412,7 +412,7 @@ function unreachable(registry: PluginRegistry, config: McpConfig, error: unknown
   if (config.failOnStartupError) throw error;
   const reason = error instanceof Error ? error.message : String(error);
   registry.logger.warn(
-    `MCP 伺服器 "${serverName}" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
+    `MCP 伺服器 "${serverName}" 套不上沙箱、連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
       `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
   );
   const hubUndo = ensureHub(registry).add(
@@ -477,7 +477,7 @@ async function applyShared(
     if (config.failOnStartupError) throw error;
     const reason = error instanceof Error ? error.message : String(error);
     registry.logger.warn(
-      `MCP 伺服器 "${serverName}" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
+      `MCP 伺服器 "${serverName}" 套不上沙箱、連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
         `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
     );
   }
