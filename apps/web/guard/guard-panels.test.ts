@@ -192,9 +192,15 @@ describe('瀏覽器量狀態列的行為（#1684）', () => {
     try {
       const a = await readPose(page);
       await page.waitForTimeout(300);
-      const b = await readPose(page);
+      let b = await readPose(page);
+      // 姿勢由 rAF 推，負載高時這段可能一幀都沒跑，要等到下一幀才算數。
+      await expect
+        .poll(async () => {
+          b = await readPose(page);
+          return b;
+        })
+        .not.toEqual(a);
       report['turn-status:glyph-normal'] = { a, b };
-      expect(b).not.toEqual(a);
     } finally {
       await page.close();
     }

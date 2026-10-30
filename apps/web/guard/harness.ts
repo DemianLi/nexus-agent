@@ -246,6 +246,16 @@ afterAll(async ({}, suite) => {
 });
 
 /**
+ * 把這一頁的動畫時間凍在當下。之後起的轉場與動畫都停在起點等讀，所以負載高時讀得晚也不會錯過窗口（#2146）。
+ * `finish()` 與調 `currentTime` 照常有效；`settle` 會等不到結束，凍住之後不要再呼叫。
+ */
+export async function freezeAnimations(page: Page): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Animation.enable');
+  await cdp.send('Animation.setPlaybackRate', { playbackRate: 0 });
+}
+
+/**
  * 等有限長度的動畫與轉場跑完（無限的，例如呼吸光，不等）。只等跟著時間跑的：scroll-driven 的（對話區的底部淡出，#1638 PR B）
  * 跟著捲動位置走，沒捲到底就永遠不會 finished。
  */

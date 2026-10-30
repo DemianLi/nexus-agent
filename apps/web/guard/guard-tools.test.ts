@@ -10,6 +10,7 @@ import {
   collectTexts,
   expectFocus,
   expectTexts,
+  freezeAnimations,
   HANDOFF_RUNNING,
   handoffMarks,
   markReasoningBody,
@@ -716,10 +717,7 @@ describe('瀏覽器量推理列的行為與覆寫（#1683）', () => {
   test('打開後只有箭頭轉：沒有高度動效、沒有其他動畫（#1683 決定題 2）', async () => {
     const page = await openOverlay('reasoning', 'light', { marks });
     try {
-      // 動畫時間凍在 0：打開時起的動畫都停著等讀，負載高時讀得晚也不會錯過。
-      const cdp = await page.context().newCDPSession(page);
-      await cdp.send('Animation.enable');
-      await cdp.send('Animation.setPlaybackRate', { playbackRate: 0 });
+      await freezeAnimations(page);
       await openReasoningRows(page, ['done']);
       const animations = await page.$eval(reasoningIn('done'), (row) =>
         row.getAnimations({ subtree: true }).map((a) => ({
