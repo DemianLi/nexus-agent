@@ -8,14 +8,14 @@
 //!
 //! 啟動順序（順序本身是安全性的一部分）：
 //!
-//! 1. 查 Landlock 的 ABI。none 不擋啟動：之後只有全權模式的要求起得來，其餘回 `Failed`（`SandboxUnavailable`），照 S2 fail-closed。
+//! 1. 查 Landlock 的 ABI。none 不擋啟動：之後只有全權模式的要求起得來，其餘回 `Failed`（`SandboxUnavailable`）。
 //! 2. 擋下 SIGINT／SIGTERM／SIGHUP，改由 signalfd 收。
 //! 3. 建監聽用的 `AF_UNIX` socket、chmod 0600。一定要在裝過濾器之前：S1 擋 `socket(AF_UNIX)`，裝完之後只用 `accept4`。
 //! 4. `NO_NEW_PRIVS`＋seccomp，只裝這一次，之後 fork 的子行程都繼承。
 //! 5. 自我檢查：`socket(AF_INET)` 要拿到 EACCES、`socket(AF_UNIX)` 要拿到 EPERM。
 //! 6. 送 `Ready`。
 //!
-//! 2 到 5 任何一步失敗，都送 `Unavailable` 後結束。
+//! socket 路徑含 NUL，或 2 到 5 任何一步失敗，都送 `Unavailable` 後結束。
 //!
 //! stdio：Node 對監聽 socket 每接一條 fd 就 connect 一次，先寫 8 bytes 標頭（id `u32 LE`、fd `u32 LE`，fd ∈ {0,1,2}），之後就是資料。
 //! 連進來的對方要是起這個 spawner 的那個行程（`SO_PEERCRED` 的 pid 等於 `getppid()`，uid 相同），否則直接關掉。
@@ -430,7 +430,7 @@ impl Spawner {
             status: status[1],
             spawner: self.me,
             cwd,
-            abi: if r.mode == Mode::FullAccess { 0 } else { self.abi },
+            landlock: (r.mode != Mode::FullAccess).then_some(self.abi),
             readable: r.readable.clone(),
             writable: if r.mode == Mode::WorkspaceWrite { r.writable.clone() } else { Vec::new() },
             candidates,
@@ -452,7 +452,7 @@ impl Spawner {
         let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as libc::c_int;
         if pidfd < 0 {
             let err = errno();
-            // 沒有 pidfd 就等不了它：殺掉、收屍。Landlock 需要的核心（5.13）一定有 pidfd_open（5.3），這裡照理到不了。
+            // 沒有 pidfd 就等不了它：殺掉、收屍。核心比 5.3 舊（沒有 pidfd_open）時，每一筆都在這裡回 `Resource`。
             unsafe {
                 libc::kill(pid, libc::SIGKILL);
                 libc::waitpid(pid, std::ptr::null_mut(), 0);

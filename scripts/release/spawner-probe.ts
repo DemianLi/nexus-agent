@@ -6,7 +6,7 @@
  * spawner，等它送 `Ready`，再經它起一次主機的 `/usr/bin/git --version`，收 stdout 與結局。判斷是純函式
  * {@link spawnerProbeProblems}，單元測試在 `apps/harness/src/verify-packed-install.test.ts`。
  *
- * 控制通道的編解碼與 harness 共用 `apps/harness/src/sandbox-protocol.ts`。stdio 連線要由起 spawner 的這個行程自己 connect：
+ * 控制通道的編解碼用 `apps/harness/src/sandbox-protocol.ts`。stdio 連線要由起 spawner 的這個行程自己 connect：
  * spawner 用 `SO_PEERCRED` 核對對方是不是它的父行程。
  *
  * @module
@@ -31,8 +31,9 @@ import { SPAWNER_PATH } from './spawner.js';
 export const SPAWNER_PROBE_ARGV = ['/usr/bin/git', '--version'] as const;
 
 /**
- * 給它的讀根：主機上 exec 一支動態連 glibc 的程式要的執行檔、載入器、函式庫與 `ld.so.cache`。主機上不存在的路徑不給
- * （spawner 打不開授權路徑就整筆回 `SandboxUnavailable`）。
+ * 給它的讀根：涵蓋常見發行版放執行檔、載入器與函式庫的位置（沒合併 /usr 的主機另在 /lib、/lib64），是超集
+ * （量測：Debian 12 上 git --version 只要 /usr/bin/git 與 /usr/lib）。主機上不存在的路徑不給（spawner 打不開授權路徑
+ * 就整筆回 `SandboxUnavailable`）。
  */
 export const SPAWNER_PROBE_READABLE = ['/usr', '/lib', '/lib64', '/etc/ld.so.cache'] as const;
 
@@ -47,7 +48,10 @@ export interface SpawnerProbeOutcome {
   readonly error?: string;
 }
 
-/** 步驟 4e 的判斷：先 `Ready`，id 1 的那支 `Started`、`Exited` 0，stdout 是 git 的版本。 */
+/**
+ * 步驟 4e 的判斷：先 `Ready` 而且 Landlock ABI ≥ 1（沒有 Landlock 直說驗不到），id 1 的那支 `Started`、`Exited` 0，
+ * stdout 是 git 的版本。
+ */
 export function spawnerProbeProblems(outcome: SpawnerProbeOutcome): string[] {
   const tail = `stderr ${JSON.stringify(outcome.stderr.slice(-400))}`;
   if (outcome.error !== undefined) return [`沙箱 spawner 驗證中途出錯：${outcome.error}；${tail}`];
@@ -74,8 +78,9 @@ export function spawnerProbeProblems(outcome: SpawnerProbeOutcome): string[] {
 }
 
 /**
- * 起 `<root>/native/nexus-sandbox-spawner`，等 `Ready`，經它在 `scratch` 底下的工作區起 {@link SPAWNER_PROBE_ARGV}，
- * 收到結局、stdout 讀完為止。收尾一律關掉 spawner 的 stdin（它收到 EOF 就殺掉所有工具、結束），等不到就 `SIGKILL`。
+ * 起 `<root>/native/nexus-sandbox-spawner`，等第一筆事件；是 Landlock ABI ≥ 1 的 `Ready` 才經它在 `scratch` 底下的工作區
+ * 起 {@link SPAWNER_PROBE_ARGV}，收到結局、stdout 讀完為止。不丟例外：逾時、spawner 起不來、看不懂的框都寫進 `error`。
+ * 收尾一律關掉 spawner 的 stdin（它收到 EOF 就殺掉所有工具、結束），5 秒內沒結束就 `SIGKILL`。
  */
 export async function probeInstalledSpawner(
   root: string,

@@ -1,6 +1,6 @@
 /**
  * 沙箱 spawner 控制通道的編解碼（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）：**純函式、不依賴任何套件**，
- * harness 與樹外的驗證腳本（`scripts/release/verify-packed-install.ts`）共用這一份。格式的定義在
+ * 樹外的 `scripts/release/spawner-probe.ts` 也直接 import 這一份。格式的定義在
  * `native/sandbox-spawner/src/protocol.rs` 的檔頭；兩邊對同一份向量檔（`native/sandbox-spawner/protocol-vectors.json`）測。
  *
  * @module
@@ -19,7 +19,9 @@ export interface SpawnRequest {
   /** 第 i 位元是 1：fd i 接 Node 連進去的那條連線；是 0：接 `/dev/null`。 */
   readonly pipes: number;
   readonly cwd: string;
+  /** 讀根。`full-access` 不看。 */
   readonly readable: readonly string[];
+  /** 寫根。只有 `workspace-write` 看。 */
   readonly writable: readonly string[];
   readonly argv: readonly string[];
   /** `NAME=value`。子行程的環境就是這一份。 */
@@ -95,6 +97,10 @@ function list(values: readonly string[]): Buffer {
   return Buffer.concat([u32(values.length), ...values.map(bytes)]);
 }
 
+/**
+ * 編一筆要求的內容（不含長度前綴，用 {@link frame} 加）。不檢查內容：argv 空、含 NUL、env 不是 `NAME=value` 由 spawner 回
+ * `failed`（`protocol`）。字串一律編成 UTF-8，表達不了不是 UTF-8 的路徑或參數。
+ */
 export function encodeRequest(request: SpawnerRequest): Buffer {
   if (request.type === 'signal') {
     return Buffer.concat([Buffer.from([REQ_SIGNAL]), u32(request.id), u32(request.signo)]);
@@ -148,6 +154,7 @@ class Reader {
   }
 }
 
+/** 解一框事件的內容（不含長度前綴）。截斷、框尾有多餘內容、不認得的事件或失敗種類都丟 {@link SpawnerProtocolError}。 */
 export function decodeEvent(payload: Buffer): SpawnerEvent {
   const r = new Reader(payload);
   let event: SpawnerEvent;

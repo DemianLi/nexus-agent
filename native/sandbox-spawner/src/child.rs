@@ -16,8 +16,8 @@ pub struct Prepared {
     pub status: libc::c_int,
     pub spawner: libc::pid_t,
     pub cwd: CString,
-    /// 0 是全權模式：不上 Landlock。
-    pub abi: i32,
+    /// 要上的 Landlock ABI；全權模式是 `None`，不上 Landlock。
+    pub landlock: Option<i32>,
     pub readable: Vec<Vec<u8>>,
     pub writable: Vec<Vec<u8>>,
     /// 依序試的執行檔路徑（argv[0] 有 `/` 時只有它自己；沒有時是 PATH 裡的每一個候選）。
@@ -89,8 +89,8 @@ pub unsafe fn run(p: &Prepared) -> ! {
     if libc::chdir(p.cwd.as_ptr()) != 0 {
         fail(STATUS_FD, FailKind::StartDir, errno(), "chdir");
     }
-    if p.abi > 0 {
-        if let Err(e) = landlock::restrict_self(p.abi, &p.readable, &p.writable) {
+    if let Some(abi) = p.landlock {
+        if let Err(e) = landlock::restrict_self(abi, &p.readable, &p.writable) {
             fail(STATUS_FD, FailKind::SandboxUnavailable, 0, &format!("landlock: {e}"));
         }
     }

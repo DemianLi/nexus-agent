@@ -3,7 +3,7 @@
 //! 框：`u32 LE 長度` 接著那麼多 bytes 的內容。內容第一個 byte 是種類，其餘是欄位：
 //! 數字一律 `u32 LE`（有號的值照二補數存），字串與位元組串是 `u32 LE 長度 + bytes`，清單是 `u32 LE 個數 + 每一項`。
 //! 不用分隔字元，所以參數、路徑、環境變數裡的任何 byte（含 tab、換行）都原樣送到。只有 NUL 例外：argv、env、cwd 含 NUL
-//! 回 `Protocol`；授權路徑含 NUL 開不起來，回 `SandboxUnavailable`。
+//! 回 `Protocol`；授權路徑含 NUL 開不起來，回 `SandboxUnavailable`（`FullAccess` 不看授權路徑）。
 
 /// 一框最多多大。超過就當成通道壞掉，spawner 結束。
 pub const MAX_FRAME: usize = 1 << 20;
@@ -74,13 +74,12 @@ impl FailKind {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Event {
-    /// spawner 起不來：啟動的任何一步失敗（signalfd、監聽 socket、seccomp、自我檢查）。送完這一框 spawner 就結束，
-    /// 之後 Node 對每個工具子行程都回 `SANDBOX_UNAVAILABLE`。
+    /// spawner 起不來：啟動的任何一步失敗（socket 路徑含 NUL、signalfd、監聽 socket、seccomp、自我檢查）。送完這一框 spawner 就結束。
     Unavailable { errno: i32, detail: Vec<u8> },
     /// spawner 準備好了：過濾器裝好、自我檢查通過。帶上過濾器的指令數與 Landlock 的 ABI 版本；版本是 0（none）時，
     /// 只有 `FullAccess` 的要求起得來，其餘回 `Failed`（`SandboxUnavailable`）。
     Ready { filter_insns: u32, landlock_abi: u32 },
-    /// 已 exec。`partial` 是 Landlock 只部分生效（核心的 ABI 比要的舊）：照跑，由 Node 印通知。`FullAccess` 不上 Landlock，一律是 false。
+    /// 已 exec。`partial` 是 Landlock 只部分生效（核心的 ABI 比要的舊），照跑。`FullAccess` 不上 Landlock，一律是 false。
     Started { id: u32, pid: u32, partial: bool },
     /// 沒 exec。`errno` 是失敗那一步的錯誤碼（沒有就是 0）。
     Failed { id: u32, kind: FailKind, errno: i32, detail: Vec<u8> },

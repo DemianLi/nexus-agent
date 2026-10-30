@@ -491,7 +491,7 @@ fn full_access(id: u32, ws: &Path, argv: &[&str]) -> Spawn {
     Spawn { mode: Mode::FullAccess, readable: Vec::new(), writable: Vec::new(), ..request(id, ws, argv) }
 }
 
-/// 全權模式不上 Landlock：工作區外寫得進、讀得到；seccomp 照樣擋網路。
+/// 全權模式不上 Landlock：工作區外寫得進、讀得到；seccomp 照樣擋網路與 namespace。
 fn assert_full_access_skips_landlock_but_not_seccomp(s: &mut Spawner) {
     let ws = temp_dir("ws");
     let outside = temp_dir("outside");
@@ -573,7 +573,7 @@ fn running_out_of_fds_for_dev_null_fails_with_resource_and_leaks_nothing() {
     let ws = temp_dir("ws");
     let pid = s.child.id();
     let (before, highest) = open_fds(pid);
-    // 只留兩個空位：三個 /dev/null 開到第三個失敗。硬上限照舊，一般使用者調不高它。
+    // 最大的 fd 之上只留兩格：三個 /dev/null 開到第三個失敗。硬上限不動：降了之後一般使用者調不回來。
     let mut limit = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
     // SAFETY：讀、改自己起的 spawner 的上限，limit 是本地值。
     unsafe {

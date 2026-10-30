@@ -1,8 +1,8 @@
 //! Landlock：每個子行程在 exec 之前各自上一份，讀根與寫根由 Node 在每次要求裡帶來。
 //!
-//! 要的 ABI 上限是 6；核心支援的版本比 6 舊就是 partial（照跑、由 Node 印通知），核心根本不支援就是 none
-//! （只有全權模式起得來，其餘回 `SANDBOX_UNAVAILABLE`）。ABI 4 起也管 TCP：沒有任何 TCP 規則，等於 bind、connect 都不准。
-//! ABI 6 起也管訊號：子行程只能對同一個 Landlock domain 裡的行程（自己與自己的後代）送訊號，送不到 spawner、serve
+//! 要的 ABI 上限是 6；核心支援的版本比 6 舊就是 partial（照跑，`Started` 帶 `partial`），核心根本不支援就是 none
+//! （只有全權模式起得來，其餘回 `SandboxUnavailable`）。ABI 4 起也管 TCP：沒有任何 TCP 規則，等於 bind、connect 都不准。
+//! ABI 6 起也管訊號：上了 Landlock 的子行程只能對同一個 Landlock domain 裡的行程（自己與自己的後代）送訊號，送不到 spawner、serve
 //! 與同一個使用者的其他行程。
 
 use landlock::{
@@ -58,6 +58,7 @@ pub fn effective_abi(kernel: i32, test_cap: Option<i32>) -> i32 {
 
 fn abi_of(v: i32) -> ABI {
     match v {
+        ..=0 => unreachable!("Landlock ABI {v}：none 不上 Landlock"),
         1 => ABI::V1,
         2 => ABI::V2,
         3 => ABI::V3,
@@ -67,7 +68,7 @@ fn abi_of(v: i32) -> ABI {
     }
 }
 
-/// 對目前的行程上 Landlock。`abi` 必須 ≥ 1（none 時只有全權模式起得來，而全權模式不呼叫這裡）。
+/// 對目前的行程上 Landlock。`abi` 必須 ≥ 1。
 ///
 /// 有任何一個授權路徑打不開就整個失敗：不默默縮小授權。
 pub fn restrict_self(abi: i32, readable: &[Vec<u8>], writable: &[Vec<u8>]) -> Result<(), String> {
