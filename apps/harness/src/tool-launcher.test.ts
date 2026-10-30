@@ -87,11 +87,11 @@ describe('起 rg 的途中取消', () => {
       cwd: tmpdir(),
       executable: process.execPath,
       signal: controller.signal,
-      internals: { launcher, killGraceMs: 10 },
+      internals: { launcher, killGraceMs: 200 },
     });
     await vi.waitFor(() => expect(started).toBeDefined());
     controller.abort();
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 20));
     started({
       pid: 1,
       stdout: Readable.from([]),
@@ -104,6 +104,107 @@ describe('起 rg 的途中取消', () => {
     });
     expect(await outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
     expect(kills).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+});
+
+describe('取消之後一定收得掉', () => {
+  const stuck = (kills: string[], output: readonly Buffer[] = []): ToolProcess => ({
+    pid: 1,
+    stdout: Readable.from(output),
+    stderr: Readable.from([]),
+    kill: (signal) => {
+      kills.push(signal);
+    },
+    done: new Promise<ToolResult>(() => undefined),
+  });
+  const run = (launcher: ToolLauncher, signal: AbortSignal, killGraceMs = 10) =>
+    runRipgrep({
+      argv: [],
+      cwd: tmpdir(),
+      executable: process.execPath,
+      signal,
+      internals: { launcher, killGraceMs },
+    });
+
+  it('launch 永遠不回', async () => {
+    const controller = new AbortController();
+    const outcome = run(() => new Promise(() => undefined), controller.signal);
+    controller.abort();
+    expect(await outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
+  });
+
+  it('起來了但 SIGKILL 之後 done 永遠不 settle', async () => {
+    const kills: string[] = [];
+    const controller = new AbortController();
+    let launched!: () => void;
+    const ready = new Promise<void>((resolve) => (launched = resolve));
+    const outcome = run(async () => {
+      setTimeout(launched, 0);
+      return stuck(kills);
+    }, controller.signal);
+    await ready;
+    controller.abort();
+    expect(await outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
+    expect(kills).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('逾時走同一條路', async () => {
+    const kills: string[] = [];
+    const outcome = await runRipgrep({
+      argv: [],
+      cwd: tmpdir(),
+      executable: process.execPath,
+      internals: { launcher: async () => stuck(kills), killGraceMs: 10, timeoutMs: 10 },
+    });
+    expect(outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
+    expect(kills).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('輸出超限之後卡住：回超限，不回取消', async () => {
+    const kills: string[] = [];
+    const outcome = await runRipgrep({
+      argv: [],
+      cwd: tmpdir(),
+      executable: process.execPath,
+      internals: {
+        launcher: async () => stuck(kills, [Buffer.alloc(100)]),
+        killGraceMs: 10,
+        rawOutputMaxBytes: 10,
+      },
+    });
+    expect(outcome).toMatchObject({ code: 'SEARCH_RAW_OUTPUT_OVERFLOW' });
+    expect(kills).toEqual(['SIGTERM', 'SIGKILL']);
+  });
+
+  it('已經收掉之後才 Started：工具被殺掉，輸出照樣排空', async () => {
+    const kills: string[] = [];
+    const controller = new AbortController();
+    let started!: (process: ToolProcess) => void;
+    const outcome = run(() => new Promise((resolve) => (started = resolve)), controller.signal);
+    await vi.waitFor(() => expect(started).toBeDefined());
+    controller.abort();
+    expect(await outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
+    const late = stuck(kills, [Buffer.from('late')]);
+    started(late);
+    await vi.waitFor(() => expect(kills).toEqual(['SIGKILL']));
+    await vi.waitFor(() => expect(late.stdout.readableEnded).toBe(true));
+  });
+
+  it('計時器已經升級過才 Started：直接 SIGKILL，不用再等一輪 SIGTERM', async () => {
+    const kills: string[] = [];
+    const controller = new AbortController();
+    let started!: (process: ToolProcess) => void;
+    const outcome = run(
+      () => new Promise((resolve) => (started = resolve)),
+      controller.signal,
+      150,
+    );
+    await vi.waitFor(() => expect(started).toBeDefined());
+    controller.abort();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    started(stuck(kills));
+    expect(await outcome).toMatchObject({ code: 'SEARCH_ABORTED' });
+    expect(kills).toEqual(['SIGKILL']);
   });
 });
 

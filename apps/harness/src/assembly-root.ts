@@ -1261,6 +1261,7 @@ export async function createCliAgent(
         ...(workspaceRoot !== undefined && { sandbox: sandboxMode }),
       },
     }),
+    toolMode: sandboxMode.source,
     ...(invocation.toolResultStash !== undefined && {
       toolResultStash: invocation.toolResultStash,
     }),

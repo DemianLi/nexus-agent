@@ -119,7 +119,7 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 **4. `grep`／`glob` 起的 rg 經沙箱跑（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。** Linux 上由產物裡的 `native/nexus-sandbox-spawner` 起，
 seccomp 擋網路，Landlock 只給讀工作區、rg 本身與 rg 會讀的忽略規則，讀不到 serve 的 home。`danger-full-access` 不上 Landlock，網路照擋。
 
-- 主機沒有 Landlock，或不是 Linux：`read-only`、`workspace-write` 下的 `grep`／`glob` 回 `SEARCH_FAILED`，訊息開頭是 `SANDBOX_UNAVAILABLE`，不退回不設防。
+- 主機沒有 Landlock，或不是 Linux：`read-only`、`workspace-write` 下的 `grep`／`glob` 回 `SEARCH_FAILED`，訊息裡有 `SANDBOX_UNAVAILABLE`，不退回不設防。
   稽核只看碼分不出沙箱不可用與搜尋失敗，要看訊息。
 - 核心的 Landlock ABI 不到 6：工具照跑，serve 的日誌印一次「只有部分強制」。
 - workspace-changes 的 git 快照還沒經沙箱，由 serve 直接起。

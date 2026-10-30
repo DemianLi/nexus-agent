@@ -104,6 +104,7 @@ import { TextOnlyStateBackend } from './binary-read.js';
 import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import type { SandboxModeSource } from './contained-backend.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { AttachmentStore } from './attachment-store.js';
 import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
@@ -254,6 +255,8 @@ export interface CreateNexusAgentOptions {
    * default backend 是 Phase 2 `feat/fs-backends` 的事**，現在這個不設防。
    */
   readonly backend?: AnyBackendProtocol;
+  /** 路由起 `rg` 用哪個模式，見 `ContainedFilesystemBackendOptions.toolMode`。省略就各照路由自己的模式。 */
+  readonly toolMode?: SandboxModeSource;
   /** 工具呈現順序。省略即字典序（省略不代表隨便排，代表另一種確定的排法）。 */
   readonly toolOrder?: readonly string[];
   /**
@@ -862,7 +865,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const stashRoute =
       options.toolResultStash === undefined
         ? undefined
-        : createToolResultStash(options.toolResultStash);
+        : createToolResultStash({
+            ...options.toolResultStash,
+            ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
+          });
     const params = foldRegistry(registry, {
       // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
       events: registry.dispatch,
@@ -883,13 +889,14 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           stashRoute,
           options.attachments === undefined
             ? undefined
-            : await options.attachments.readOnlyRoute(attachmentScope),
+            : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode),
           options.sharedWorkspace === undefined
             ? undefined
             : // 固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
               new ContainedFilesystemBackend({
                 rootDir: options.sharedWorkspace.rootDir,
                 mode: 'read-only',
+                ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
               }),
         ),
       ),

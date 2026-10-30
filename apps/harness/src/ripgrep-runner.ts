@@ -284,6 +284,8 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     const argv = ['--no-config', ...options.argv];
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
+    let giveUpTimer: NodeJS.Timeout | undefined;
+    let escalated = false;
     let wasAborted = false;
     let overflowed = false;
     let stdoutBytes = 0;
@@ -294,20 +296,37 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     const settle = (outcome: RipgrepOutcome): void => {
       if (settled) return;
       settled = true;
-      if (killTimer !== undefined) clearTimeout(killTimer);
+      clearTimeout(killTimer);
+      clearTimeout(giveUpTimer);
       signal.removeEventListener('abort', onAbort);
       resolve(outcome);
     };
 
     let child: ToolProcess | undefined;
 
-    /** 收掉 rg：先 `SIGTERM`，寬限之後還沒結束就 `SIGKILL`。 */
+    const overflowOutcome = (): RipgrepOutcome => ({
+      kind: 'error',
+      code: SEARCH_RAW_OUTPUT_OVERFLOW,
+      message: `${tool} produced more than ${String(maxBytes)} bytes of raw output; narrow pattern, path, or glob and retry`,
+    });
+
+    /**
+     * 收掉 rg：先 `SIGTERM`，寬限之後 `SIGKILL`，再一段寬限還沒有結局就不等了。結局走 spawner 的控制通道，SIGKILL 也不保證等得到，
+     * 工具呼叫不能跟著卡住。還在起時 `child` 是空的：計時照走，起來之後 `attach` 會再進來一次。
+     */
     const terminate = (): void => {
-      // 還在起：起來之後 `attach` 會再進來一次。
-      if (child === undefined) return;
-      const running = child;
-      running.kill('SIGTERM');
-      killTimer ??= setTimeout(() => running.kill('SIGKILL'), graceMs);
+      if (escalated) {
+        child?.kill('SIGKILL');
+        return;
+      }
+      child?.kill('SIGTERM');
+      killTimer ??= setTimeout(() => {
+        escalated = true;
+        child?.kill('SIGKILL');
+        giveUpTimer = setTimeout(() => {
+          settle(wasAborted || signal.aborted ? aborted() : overflowOutcome());
+        }, graceMs);
+      }, graceMs);
     };
 
     function onAbort(): void {
@@ -344,6 +363,13 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
         failed(started);
         return;
       }
+      if (settled) {
+        started.kill('SIGKILL');
+        // 沒人讀的話 `done` 永遠等不到兩條流讀完。
+        started.stdout.resume();
+        started.stderr.resume();
+        return;
+      }
       child = started;
       internals.onChild?.({ pid: child.pid });
       if (signal.aborted) onAbort();
@@ -378,11 +404,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
         return;
       }
       if (overflowed) {
-        settle({
-          kind: 'error',
-          code: SEARCH_RAW_OUTPUT_OVERFLOW,
-          message: `${tool} produced more than ${String(maxBytes)} bytes of raw output; narrow pattern, path, or glob and retry`,
-        });
+        settle(overflowOutcome());
         return;
       }
       if (killedBy !== null || exitCode === null) {

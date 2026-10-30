@@ -66,6 +66,7 @@ import { SPILL_RETRIEVAL_HINT } from '@nexus/core';
 import type { SpillRef, SpillSaveRequest, SpillStore } from '@nexus/core';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import type { SandboxModeSource } from './contained-backend.js';
 import { assertPrivateFile } from './plugin-config.js';
 import type { PrivateFileRole } from './plugin-config.js';
 
@@ -107,6 +108,8 @@ export interface ToolResultStashOptions {
   readonly session: string;
   /** 退回記憶體時講一聲；每個 backend 最多講一次。缺席就不講。 */
   readonly warn?: (message: string) => void;
+  /** 起 `rg` 用哪個模式，見 `ContainedFilesystemBackendOptions.toolMode`。 */
+  readonly toolMode?: SandboxModeSource;
   /**
    * 分叉的子 thread 從祖先繼承來的暫存檔（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)，`fork-stash.ts`）：
    * `names` 裡的檔名讀取時沿 `sessions`（祖先的會話鑰匙，近的在前）逐代找，取第一個有的。缺席就是不是分叉來的。
@@ -133,7 +136,11 @@ export class HostStashBackend extends ContainedFilesystemBackend {
 
   constructor(options: ToolResultStashOptions) {
     const sessionDir = join(options.rootDir, stashSessionDirName(options.session));
-    super({ rootDir: sessionDir, mode: 'workspace-write' });
+    super({
+      rootDir: sessionDir,
+      mode: 'workspace-write',
+      ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
+    });
     this.#rootDir = options.rootDir;
     this.#sessionDir = sessionDir;
   }

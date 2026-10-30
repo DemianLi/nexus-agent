@@ -433,6 +433,11 @@ export interface ContainedFilesystemBackendOptions {
    * 恆定的函式，兩者在 fence 眼裡沒有差別。
    */
   readonly mode?: SandboxMode | SandboxModeSource;
+  /**
+   * 起 `rg` 用哪個模式，省略就跟 {@link mode}。路由的 {@link mode} 是寫死的檔案政策，上不上 OS 沙箱卻要跟著會話：`danger-full-access`
+   * 在沒有沙箱後端的主機上是唯一起得來的模式，搜 `/` 碰到路由時得走同一條退路。
+   */
+  readonly toolMode?: SandboxModeSource;
   /** 單檔大小上限，原樣轉給基座。 */
   readonly maxFileSizeMb?: number;
   /**
@@ -513,6 +518,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /** 圍堵強度的來源。建構期給的字面值在這裡已經被包成一個恆定的函式。 */
   private readonly resolveMode: SandboxModeSource;
 
+  /** 起 `rg` 用的模式，見 {@link ContainedFilesystemBackendOptions.toolMode}。 */
+  private readonly resolveToolMode: SandboxModeSource;
+
   /** 升級的 grant 從哪裡認領；`undefined` 就是這道 fence 沒有升級。 */
   private readonly grants: SandboxGrantLedger | undefined;
 
@@ -549,6 +557,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     });
     const mode = options.mode ?? 'workspace-write';
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
+    this.resolveToolMode = options.toolMode ?? this.resolveMode;
     this.grants = options.grants;
     this.ripgrepInternals = options.ripgrep;
     this.tolerateUnreadable = options.tolerateUnreadable === true;
@@ -1018,7 +1027,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         ...prepared.searchArgs,
       ],
       cwd: this.cwd,
-      mode: this.mode,
+      mode: this.resolveToolMode(),
       signal: currentToolCallSignal(),
       ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
@@ -1103,7 +1112,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         ...prepared.searchArgs,
       ],
       cwd: this.cwd,
-      mode: this.mode,
+      mode: this.resolveToolMode(),
       tool: 'glob',
       signal,
       ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
