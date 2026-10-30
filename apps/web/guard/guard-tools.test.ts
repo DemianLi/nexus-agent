@@ -1,35 +1,40 @@
 // @vitest-environment node
-/** 瀏覽器護欄（#1512）：問答與附件、tool-steps 與工具卡、推理列。量具在 `harness.ts`。 */
+/** 瀏覽器護欄（#1512）：問答與附件、tool-steps 與工具卡、推理列、核准與換手。量具在 `harness.ts`。 */
 import { type Page } from 'playwright-core';
 import { describe, expect, test } from 'vitest';
 
 import {
   ATTACHMENT_BUTTONS,
   CARDS,
-  MODES,
-  QUESTIONNAIRE_INPUT,
-  REASONING_BODY,
-  REASONING_HEAD,
-  REASONING_ROWS,
-  TEXT_MIN,
-  TOOL_GROUP,
-  TOOL_STANDALONE,
-  type TextSample,
   collectFocus,
   collectTexts,
   expectFocus,
   expectTexts,
+  HANDOFF_RUNNING,
+  handoffMarks,
   markReasoningBody,
+  MODES,
   openOverlay,
   openReasoningRows,
+  QUESTIONNAIRE_INPUT,
+  readRadii,
+  REASONING_BODY,
+  REASONING_HEAD,
+  REASONING_ROWS,
   reasoningIn,
   reasoningMarks,
   report,
   round,
   sameShadow,
   settle,
+  TEXT_MIN,
+  type TextSample,
+  type Theme,
+  TOOL_GROUP,
+  TOOL_STANDALONE,
   toolCardsMarks,
   toolStepsMarks,
+  typeIntoSubagent,
   worstOn,
 } from './harness';
 
@@ -811,6 +816,96 @@ describe('瀏覽器量推理列的行為與覆寫（#1683）', () => {
       expect(measured.innerLeft).toBeLessThan(measured.outerLeft);
       expect(Math.abs(measured.innerRight - measured.outerRight)).toBeLessThanOrEqual(0.5);
       expect(measured.pageOverflow).toBe(false);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe.each<Theme>(['light', 'dark'])('瀏覽器量核准與換手（#1694）：%s', (theme) => {
+  test('子代理面板的字過 4.5；面板、核准卡、收起鈕、取消委派鈕聚焦時有外框', async () => {
+    const page = await openOverlay('handoff', theme, {
+      marks: handoffMarks,
+      prepare: typeIntoSubagent,
+    });
+    try {
+      expectTexts(
+        await collectTexts(page),
+        ['sub-caption', 'sub-stop', 'sub-send'],
+        `handoff:${theme}`,
+      );
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name)).toEqual([
+        'approval-0',
+        'approval-1',
+        'approval-stop-0',
+        'pending-collapse-0',
+        'mention-remove-0',
+        'sub-reload-0',
+        'sub-stop-0',
+        'sub-input-0',
+        'sub-send-0',
+      ]);
+      expectFocus(focus, `handoff:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('375 寬：子代理面板的輸入框與三顆鈕都是 44px 高，頁面不橫向溢出', async () => {
+    const page = await openOverlay('handoff', theme, {
+      marks: handoffMarks,
+      viewport: { width: 375, height: 900 },
+    });
+    try {
+      const sizes = await page.evaluate((running) => {
+        const height = (selector: string) =>
+          document.querySelector(`${running} ${selector}`)!.getBoundingClientRect().height;
+        return {
+          input: height('[data-slot="input-group"] input'),
+          send: height('button[aria-label="送出給背景子代理"]'),
+          stop: height('button[aria-label="只停這個子代理"]'),
+          reload: height('button[aria-label="重新讀取子代理的對話"]'),
+          overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        };
+      }, HANDOFF_RUNNING);
+      report[`handoff:${theme}:375`] = sizes;
+      expect(sizes).toEqual({ input: 44, send: 44, stop: 44, reload: 44, overflow: 0 });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('G2：核准卡的鈕（含「停止這一輪」）、收起鈕、輸入框群組是 rounded-md，取消委派的小鈕是 rounded-sm', async () => {
+    const page = await openOverlay('handoff', theme, { marks: handoffMarks });
+    try {
+      const { probe, radii } = await readRadii(page, {
+        approval: '[data-guard-handoff="approval"] [data-testid="approval-card"] button',
+        stop: '[data-guard-handoff="approval-stuck"] [data-testid="approval-card"] > div:last-child > button',
+        collapse: '[data-guard-handoff="question"] button[aria-label="收起這些問題"]',
+        group: `${HANDOFF_RUNNING} [data-slot="input-group"]`,
+        remove: '[data-guard-handoff="chips"] button[aria-label^="取消委派"]',
+      });
+      // 核准卡在換手層裡：呼吸光幾圈，數這一塊裡在跑動畫的元素（只記錄）。
+      const animated = await page.evaluate(() => {
+        const approval = document.querySelector('[data-guard-handoff="approval"]')!;
+        return [approval, ...approval.querySelectorAll('*')].filter((el) => {
+          const style = getComputedStyle(el);
+          return [
+            style.animationName,
+            getComputedStyle(el, '::before').animationName,
+            getComputedStyle(el, '::after').animationName,
+          ].some((name) => name !== 'none');
+        }).length;
+      });
+      report[`handoff:${theme}:radii`] = { probe, radii, animated };
+      expect(radii).toEqual({
+        approval: [probe.md, probe.md],
+        stop: [probe.md],
+        collapse: [probe.md],
+        group: [probe.md],
+        remove: [probe.sm],
+      });
     } finally {
       await page.close();
     }
