@@ -77,7 +77,8 @@ async function repoIgnoreFiles(cwd: string): Promise<readonly string[]> {
 /** 全域的忽略規則：兩份設定檔，與它們指到的檔；都沒指定就是 XDG 的 `git/ignore`。 */
 async function globalIgnoreFiles(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
   const home = env.HOME;
-  const configHome = env.XDG_CONFIG_HOME || (home === undefined ? undefined : join(home, '.config'));
+  const configHome =
+    env.XDG_CONFIG_HOME || (home === undefined ? undefined : join(home, '.config'));
   const configs = [
     ...(configHome === undefined ? [] : [join(configHome, 'git/config')]),
     ...(home === undefined ? [] : [join(home, '.gitconfig')]),
@@ -108,10 +109,7 @@ export async function ripgrepReadRoots(
   executable: string,
   env: NodeJS.ProcessEnv,
 ): Promise<readonly string[]> {
-  const candidates = [
-    ...(await repoIgnoreFiles(cwd)),
-    ...(await globalIgnoreFiles(env)),
-  ];
+  const candidates = [...(await repoIgnoreFiles(cwd)), ...(await globalIgnoreFiles(env))];
   const files = await Promise.all(
     candidates.map(async (path) => ((await isFile(path)) ? path : undefined)),
   );

@@ -40,7 +40,10 @@ import {
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
-import { spawnerProbeProblems, spawnerProbeSummary } from '../../../scripts/release/spawner-probe.js';
+import {
+  spawnerProbeProblems,
+  spawnerProbeSummary,
+} from '../../../scripts/release/spawner-probe.js';
 import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const ok = { status: 0, stdout: '', stderr: '' };

@@ -138,21 +138,24 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 rg', () => {
     expect(await started.done).toMatchObject({ kind: 'exited', code: 0 });
   });
 
-  it.skipIf(process.getuid?.() === 0)('起點讀不到：兩條路同一句，不說成沙箱不可用（#1945）', async () => {
-    chmodSync(ws, 0o000);
-    try {
-      // backend 的起點檢查會先擋掉讀不到的根，所以根留在外層，到 launcher 才換成讀不到的起點。
-      const request = async (launcher: ToolLauncher): Promise<string | undefined> => {
-        const wrapped: ToolLauncher = (req: ToolRequest) => launcher({ ...req, cwd: ws });
-        return (await backend(wrapped, 'workspace-write', repo).grep(NEEDLE, '/')).error;
-      };
-      const viaSpawner = await request(supervisor.launch);
-      expect(viaSpawner).toContain('the search directory is not accessible');
-      expect(viaSpawner).toBe(await request(directToolLauncher));
-    } finally {
-      chmodSync(ws, 0o755);
-    }
-  });
+  it.skipIf(process.getuid?.() === 0)(
+    '起點讀不到：兩條路同一句，不說成沙箱不可用（#1945）',
+    async () => {
+      chmodSync(ws, 0o000);
+      try {
+        // backend 的起點檢查會先擋掉讀不到的根，所以根留在外層，到 launcher 才換成讀不到的起點。
+        const request = async (launcher: ToolLauncher): Promise<string | undefined> => {
+          const wrapped: ToolLauncher = (req: ToolRequest) => launcher({ ...req, cwd: ws });
+          return (await backend(wrapped, 'workspace-write', repo).grep(NEEDLE, '/')).error;
+        };
+        const viaSpawner = await request(supervisor.launch);
+        expect(viaSpawner).toContain('the search directory is not accessible');
+        expect(viaSpawner).toBe(await request(directToolLauncher));
+      } finally {
+        chmodSync(ws, 0o755);
+      }
+    },
+  );
 
   it('執行檔不在：說 rg 找不到', async () => {
     const target = new ContainedFilesystemBackend({
@@ -193,9 +196,9 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 rg', () => {
     if (typeof started === 'string') throw new Error(started);
     signalPid(Number(spawner), 'SIGKILL');
     expect(await started.done).toEqual({ kind: 'failed', reason: 'sandbox-unavailable' });
-    await expect.poll(() => found(backend()).catch(() => []), { timeout: 5_000 }).toEqual([
-      '/a.txt',
-    ]);
+    await expect
+      .poll(() => found(backend()).catch(() => []), { timeout: 5_000 })
+      .toEqual(['/a.txt']);
     expect(logs.join('\n')).toContain('後重起');
   });
 });

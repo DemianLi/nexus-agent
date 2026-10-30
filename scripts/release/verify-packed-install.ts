@@ -54,7 +54,11 @@ import {
   walkInstalledGraph,
 } from './payload.js';
 import { installedLicenseProblems, sbomProblems } from './sbom.js';
-import { probeInstalledSpawner, spawnerProbeProblems, spawnerProbeSummary } from './spawner-probe.js';
+import {
+  probeInstalledSpawner,
+  spawnerProbeProblems,
+  spawnerProbeSummary,
+} from './spawner-probe.js';
 
 /**
  * CLI 那一輪 root 會話的檔名。root 的 id 固定是 `cli`，`safeBaseName` 編碼後不變；檔名照 `@nexus/core` 的那一份
