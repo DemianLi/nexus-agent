@@ -1,22 +1,7 @@
 /**
- * 瀏覽器護欄（#1512）各測試檔共用的量具：瀏覽器與靜態伺服器的生命週期、開頁、量測的 helper（#2091 拆檔）。
+ * 瀏覽器護欄（#1512、#2091）各測試檔共用的量具：瀏覽器與靜態伺服器的生命週期、開頁、量測的 helper。
  * 每個 `*.test.ts` import 這裡時各自登記一組 `beforeAll`／`afterAll`，所以每個檔自己開一個 Chrome、一台伺服器，vitest 才能平行跑。
- */
-import { writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
-import { chromium, type Browser, type Page } from 'playwright-core';
-import { afterAll, beforeAll, expect } from 'vitest';
-import {
-  backdrops,
-  composite,
-  contrastRatio,
-  parseColor,
-  shadowLayers,
-  type BackgroundLayer,
-} from '../src/styles/color-math';
-import { startGuardServer, type GuardServer } from './server';
-
-/**
+ *
  * 瀏覽器那一層的樣式護欄（#1512）：用真的 Chrome 開測試頁（`guard/main.tsx`），量元件在**出貨 CSS**（`dist/`）下的計算值。
  * 靜態那一層（`src/styles/*.test.ts`）量的是 token 與選擇器文字，量不到 specificity、`color-mix()` 現場合成的底色、
  * 半透明的面實際疊在什麼上面；這裡量的是畫出來的結果。
@@ -104,6 +89,19 @@ import { startGuardServer, type GuardServer } from './server';
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
  * 瀏覽器用本機裝的 Chrome（`channel: 'chrome'`），不另外下載。`GUARD_REPORT=<檔案>` 會把量到的數字與瀏覽器版本寫成 JSON，每個測試檔一份（檔名插上測試檔名）。
  */
+import { writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
+import { chromium, type Browser, type Page } from 'playwright-core';
+import { afterAll, beforeAll, expect } from 'vitest';
+import {
+  backdrops,
+  composite,
+  contrastRatio,
+  parseColor,
+  shadowLayers,
+  type BackgroundLayer,
+} from '../src/styles/color-math';
+import { startGuardServer, type GuardServer } from './server';
 
 export type Theme = 'light' | 'dark';
 
@@ -229,8 +227,7 @@ beforeAll(async () => {
   }
 }, 60_000);
 
-// vitest 要求 hook 的第一個參數寫成解構，這裡只用第二個參數拿測試檔名。
-// eslint-disable-next-line no-empty-pattern
+// eslint-disable-next-line no-empty-pattern -- vitest 要求 hook 的第一個參數寫成解構；這裡只用第二個參數 suite 拿測試檔名
 afterAll(async ({}, suite) => {
   try {
     await browser?.close();

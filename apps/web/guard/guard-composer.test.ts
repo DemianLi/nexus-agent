@@ -1,4 +1,5 @@
 // @vitest-environment node
+/** 瀏覽器護欄（#1512）：modal 浮層的版面與動效、輸入框與底列、桌面側欄、展開收合、對話區。量具在 `harness.ts`。 */
 import { type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { parseColor } from '../src/styles/color-math';

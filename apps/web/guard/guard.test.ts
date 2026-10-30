@@ -1,4 +1,5 @@
 // @vitest-environment node
+/** 瀏覽器護欄（#1512）：出貨 CSS 的焦點、對比、陰影與 modal 浮層。量具與 Chrome、伺服器的生命週期在 `harness.ts`。 */
 import { type Page } from 'playwright-core';
 import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { parseColor, shadowLayers } from '../src/styles/color-math';

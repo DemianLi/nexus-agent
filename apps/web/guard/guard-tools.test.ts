@@ -1,4 +1,5 @@
 // @vitest-environment node
+/** 瀏覽器護欄（#1512）：問答與附件、tool-steps 與工具卡、推理列。量具在 `harness.ts`。 */
 import { type Page } from 'playwright-core';
 import { describe, expect, test } from 'vitest';
 

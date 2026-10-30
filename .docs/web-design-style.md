@@ -145,7 +145,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 | --- | --- |
 | 只用系統的值：顏色、字級、圓角、時長、表面、積木、焦點外框、細字重 | `src/styles/design-system.test.ts` |
 | 同一元素不同時用 `border` 與陰影 | `src/styles/border-shadow.test.ts` |
-| 亮色每層陰影透明度不超過上限（solid-glass 現在的值） | `src/styles/shadow-alpha.test.ts`（token）、`guard/*.test.ts`（瀏覽器量元件） |
+| 亮色每層陰影透明度不超過上限（solid-glass 現在的值） | `src/styles/shadow-alpha.test.ts`（token）、`guard/guard.test.ts`（瀏覽器量元件） |
 | 文字、非文字、狀態色的對比度，亮暗共用目標 | `src/styles/tokens-contrast.test.ts` |
 | 按鈕、觸發鈕、選單項不縮成說明字級 | `src/styles/type-hierarchy.test.ts` |
 | 焦點外框畫得出來 | `src/styles/focus-outline.test.ts` |

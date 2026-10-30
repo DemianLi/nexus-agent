@@ -31,7 +31,7 @@
  *   - `data-guard-height`：下拉選單的選項，量畫出來的高度（觸控高度：1024 以下 44px、以上 32px，#1583 本地修改第 25 條）。
  *   - `data-guard-shown`：側欄列的「⋯」，量 `opacity`（選單開著時要看得見：Trigger 開著掛 `data-popup-open`，#1583）。
  *   - `data-guard-checks`：command 勾選的那一列，量它看得見的勾有幾顆、報讀名稱是什麼（vendor 附的勾由覆寫檔藏掉，#1583 本地修改第 27 條）。
- *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `*.test.ts` 開頁後補上，見 `OVERLAY_MARKS`。
+ *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `harness.ts` 的 `openOverlay` 開頁後照 `OVERLAYS` 的 `marks` 補上。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  * - `?overlay=<名字>` 換成只畫一個開著的 modal 浮層（#1583）：modal 會把頁面其他部分設成 inert，跟主頁的焦點量測放不到一起。
@@ -2081,7 +2081,7 @@ function TranscriptRefsPage() {
  * - `fits`：一張檔案卡、寬度放得下，不會溢出（量左右淡出不出現）。
  * - `overflows`：五張、寬度放不下（量頭尾的淡出），涵蓋圖的縮圖、可移除的檔案、上傳中（有進度與不確定長度兩種，標題 shimmer）、上傳失敗。
  * - `sent`：已送出的檔案卡（沒有按鈕）。
- * 元件內部的按鈕掛不了屬性，由 `*.test.ts` 開頁後補標記。
+ * 元件內部的按鈕掛不了屬性，由 `harness.ts` 的 `OVERLAYS`（`attachments` 的 `marks`）開頁後補標記。
  */
 const PIXEL =
   'data:image/svg+xml,' +
@@ -2195,7 +2195,7 @@ function OverlayPage({ name }: { name: string }) {
       return (
         <SidebarProvider>
           <OpenMobileSidebar />
-          {/* 手機側欄把 props 交給 Sheet 的 Root（沒有 DOM），屬性掛不上抽屜：由 `*.test.ts` 的 `OVERLAY_MARKS` 補。 */}
+          {/* 手機側欄把 props 交給 Sheet 的 Root（沒有 DOM），屬性掛不上抽屜：由 `harness.ts` 的 `OVERLAYS`（`mobile-sidebar` 那筆的 `marks`）補。 */}
           <Sidebar>手機側欄</Sidebar>
         </SidebarProvider>
       );

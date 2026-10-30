@@ -1,4 +1,5 @@
 // @vitest-environment node
+/** 瀏覽器護欄（#1512）：狀態列、增刪行數與 diff、對話流、核准換手、計劃、觀測、成本、右側欄、會話清單。量具在 `harness.ts`。 */
 import { type Page } from 'playwright-core';
 import { describe, expect, test } from 'vitest';
 import { PLAN_CHIP_RUNNING_HINT } from '../src/lib/plan-chip';
