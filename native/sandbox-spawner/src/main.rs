@@ -383,14 +383,16 @@ impl Spawner {
         }
         let mut p = self.pending.remove(&id).unwrap();
         let request = p.request.take().unwrap();
-        match self.spawn(&request, &mut p.fds) {
+        let spawned = self.spawn(&request, &mut p.fds);
+        // 先關再送事件：對方收到 `Failed` 時，這筆的 fd 已經還了。
+        p.close_all();
+        match spawned {
             Ok(mut child) => {
                 child.queued = std::mem::take(&mut p.queued);
                 self.children.insert(id, child);
             }
             Err((kind, err, detail)) => self.fail(id, kind, err, &detail),
         }
-        p.close_all();
     }
 
     fn spawn(&mut self, r: &Spawn, fds: &mut [libc::c_int; 3]) -> Result<Child, (FailKind, i32, String)> {
