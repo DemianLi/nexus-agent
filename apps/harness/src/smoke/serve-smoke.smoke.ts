@@ -143,6 +143,19 @@ async function readIfExists(path: string): Promise<string | undefined> {
   }
 }
 
+/** 這條 thread 的私有根：serve 配的，記在日誌的 header 行（#1775）。模型的 `/output.txt` 落在這裡，`--workspace` 是唯讀的 `/shared`。 */
+async function threadRoot(threadId: string): Promise<string> {
+  const { log } = sessionPathsIn(join(logRoot, projectKey(process.cwd())), threadId);
+  const [header = ''] = (await readFile(log, 'utf8')).split('\n');
+  return (JSON.parse(header) as { workspaceRoot: string }).workspaceRoot;
+}
+
+/** 從外面重讀模型寫的檔；`/shared` 裡不該長出同名檔，長出來就是唯讀破了。 */
+async function readWritten(threadId: string, name: string): Promise<string | undefined> {
+  expect(await readIfExists(join(workspace, name))).toBeUndefined();
+  return readIfExists(join(await threadRoot(threadId), name));
+}
+
 async function sentinelViolations(): Promise<Violation[]> {
   const now = await readIfExists(join(workspace, 'sentinel.txt'));
   return now === SENTINEL ? [] : [{ kind: 'sentinel-changed', detail: 'sentinel.txt' }];
@@ -168,12 +181,12 @@ describe('真模型冒煙（serve --live）', () => {
     const events = await client.openEvents(entry.threadId);
     await client.runStart(
       entry.threadId,
-      '請用工具讀 input.txt，然後用工具把它的內容一個字都不差地寫進 output.txt。不要動其他任何檔案。做完只回答「完成」。',
+      '請用工具讀 /shared/input.txt，然後用工具把它的內容一個字都不差地寫進 /output.txt。不要動其他任何檔案。做完只回答「完成」。',
     );
     const { frames, aborted } = await drain(events);
     await events.return?.(undefined);
 
-    const written = await readIfExists(join(workspace, 'output.txt'));
+    const written = await readWritten(entry.threadId, 'output.txt');
     entry.extra = await sentinelViolations();
     entry.passed = !aborted && written?.trim() === token;
     expect(aborted).toBe(false);
@@ -200,12 +213,12 @@ describe('真模型冒煙（serve --live）', () => {
     const first = await drain(events);
     await client.runStart(
       entry.threadId,
-      '請用工具把我剛才給你的暗號寫進 code.txt，檔案裡只放暗號、不要別的字。做完只回答「完成」。',
+      '請用工具把我剛才給你的暗號寫進 /code.txt，檔案裡只放暗號、不要別的字。做完只回答「完成」。',
     );
     const second = await drain(events);
     await events.return?.(undefined);
 
-    const written = await readIfExists(join(workspace, 'code.txt'));
+    const written = await readWritten(entry.threadId, 'code.txt');
     entry.extra = await sentinelViolations();
     entry.passed = !first.aborted && !second.aborted && written?.trim() === secret;
     expect(written?.trim()).toBe(secret);
