@@ -163,7 +163,14 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
               'mcp__srv__cite_sources',
               ...BIG_TOOLS,
             ]
-          : ['mcp__srv__read_env', 'mcp__srv__fetch_url', 'mcp__srv__cite_sources', ...BIG_TOOLS],
+          : [
+              'mcp__srv__read_env',
+              'mcp__srv__fetch_url',
+              'mcp__srv__cite_sources',
+              'mcp__srv__only_image',
+              'mcp__srv__two_texts',
+              ...BIG_TOOLS,
+            ],
       );
     });
   });
@@ -202,8 +209,7 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         args: {},
       })) as ToolMessage;
       expect(message.content).toEqual([
-        { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
-        { type: 'text', text: '畫面之前' },
+        { type: 'text', text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n畫面之前` },
         { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
         { type: 'text', text: '畫面之後' },
       ]);
@@ -219,8 +225,7 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         args: {},
       })) as ToolMessage;
       expect(message.content).toEqual([
-        { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
-        { type: 'text', text: CITE_TEXT },
+        { type: 'text', text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n${CITE_TEXT}` },
         ...CITE_LINKS.map((link) => ({
           type: 'text',
           text: `Resource link: ${link.name} (${link.uri})`,

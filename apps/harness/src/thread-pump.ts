@@ -766,7 +766,7 @@ interface ForwardedFinish {
  * 把日誌的判定套到一顆 `tool-finished` 的 data 上。
  *
  * `message` 是**這次呼叫的結果文字**，成功與失敗都帶（#439）：成功時就是日誌那一則的內容，
- * 沒抽出文字（多塊內容）就不帶這一格；失敗時取同一段字，沒有的話退回本體自己說的，再退回
+ * 沒抽出文字（內容混了非文字）就不帶這一格；失敗時取同一段字，沒有的話退回本體自己說的，再退回
  * 「未指名的錯誤」。畫面上分紅字還是輸出，看的是 `failed`，同 dsh 的 content ＋ isError。
  */
 function applyVerdict(
