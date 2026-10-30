@@ -6,11 +6,11 @@
  * `cd5ef8148158c3a752a658978873241fdf8e2bbc`）。詞彙在 `@nexus/core` 的
  * {@link @nexus/core!CommandDefinition}，這裡是**執行那一半**。
  *
- * ## 兩件從 dsh 抄過來、看起來像細節其實是語意的事
+ * ## 兩件看起來像細節其實是語意的事
  *
- * 1. **`parseCommand` 的 lookahead。** `/^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u` ——
- *    名字後面要嘛是行尾、要嘛是空白，緊接著別的字元就整行不是命令。它擋的是**名字字元以外的
- *    非空白**：沒有那個 `(?=$|[\t\n\r ])`，`/usr/bin/env` 會被解析成 `usr` 加上 `/bin/env`，
+ * 1. **`parseCommand` 的 lookahead。** `/^\/([a-z][a-z0-9_-]*)(?=$|\s)/u` ——
+ *    名字後面要嘛是行尾、要嘛是空白（`\s`，含中文輸入法打出的全形空白），緊接著別的字元就整行不是命令。
+ *    它擋的是**名字字元以外的非空白**：沒有那個 `(?=$|\s)`，`/usr/bin/env` 會被解析成 `usr` 加上 `/bin/env`，
  *    `/plan.md` 會被解析成 `plan` 加上 `.md`。**它不是在防 `/planning` 被截成 `/plan`**：名字的
  *    量詞是貪婪的，拿掉 lookahead 之後 `/planning` 照樣整個吃成 `planning`（2026-10-11 實測：
  *    拿掉之後 `index.test.ts` 的路徑、標點、冒號、大寫四條紅，`/planning` 那條照綠）。
@@ -18,13 +18,6 @@
  *    任何痕跡**（dsh 的原話：「Admission misses (syntax or unknown name) log nothing —
  *    they never entered a handler.」）。發派的那一側收到 `undefined` 就照原樣把那行
  *    送去該去的地方——在 CLI 就是送給模型，跟今天 `/foo` 的行為一樣。
- *
- * ## 這裡沒有偏離要標
- *
- * [#116](https://github.com/DemianLi/nexus-agent/issues/116) 的計劃模式退到
- * `stateSchema` ＋ checkpointer，是因為 **plugin** 拿不到 `SessionLog`。命令不一樣：
- * **產生者是進入點**（`runRepl` 手上就有那份日誌），所以 `command/run` / `command/done`
- * 走的就是 dsh 的形狀，沒有退。
  *
  * @see [#118](https://github.com/DemianLi/nexus-agent/issues/118)
  * @module
@@ -105,8 +98,8 @@ export interface CommandExecution {
  * @returns 解析結果，或這行根本不是命令時的 `undefined`。
  */
 export function parseCommand(line: string): ParsedCommand | undefined {
-  // lookahead 不是裝飾：少了它，`/planning` 會被當成 `/plan`。
-  const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u.exec(line);
+  // lookahead 擋 `/plan.md`、`/usr/bin/env` 這類名字後面緊接非空白的行。
+  const match = /^\/([a-z][a-z0-9_-]*)(?=$|\s)/u.exec(line);
   if (match === null) return undefined;
   const name = match[1];
   if (name === undefined) return undefined;
@@ -271,6 +264,8 @@ export interface CommandExecutor {
  * **序列性是這個形狀的前提，也是不變量檢查的依據**：一個 REPL 一次只跑一個命令，
  * `execute` 回來之前不會有第二次。並行呼叫同一個執行器會讓兩次執行在日誌裡交錯，
  * 而 `@nexus/plugin-commands` 的配套入口會把那件事報成違規——那是對的，不是誤報。
+ *
+ * `command/run`／`command/done` 由執行器寫進宿主傳入的 `sessionLog`；REPL 與 `serve` 各建一個。
  *
  * @param options - 命令來源、日誌、與圍堵的去處。
  * @returns 發派面。
