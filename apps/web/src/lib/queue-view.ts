@@ -161,8 +161,8 @@ export function canSendText(
   return connected && (line.trim() !== '' || hasAttachments) && status !== 'awaiting-input';
 }
 
-/** 跟 `parseCommand` 同一條：lookahead 讓 `/planning` 不會被當成 `/plan`。 */
-const COMMAND_TOKEN = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u;
+/** 跟 `parseCommand` 同一條：名字後面緊接非空白（`/plan.md`）就不是命令。 */
+const COMMAND_TOKEN = /^\/([a-z][a-z0-9_-]*)(?=$|\s)/u;
 
 /** 這一行開頭像不像一個命令（`/名字`，名字照 `parseCommand`）；不管清單上有沒有。不像就回 `undefined`。 */
 export function commandToken(line: string): string | undefined {

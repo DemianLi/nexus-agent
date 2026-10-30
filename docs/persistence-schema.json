@@ -7816,7 +7816,7 @@
       "digest": "792b3c9204dabf5978a3df37a0818049b97ebed33e6cba4d3fdd4f24546543fe",
       "names": [],
       "sources": [
-        "packages/nexus-plugin-commands/src/index.ts:469"
+        "packages/nexus-plugin-commands/src/index.ts:464"
       ]
     },
     {
@@ -8019,7 +8019,7 @@
       "sources": [
         "packages/nexus-core/src/session-log.ts:193",
         "packages/nexus-core/src/session-log.ts:283",
-        "packages/nexus-plugin-commands/src/index.ts:461"
+        "packages/nexus-plugin-commands/src/index.ts:456"
       ]
     },
     {
@@ -8901,7 +8901,7 @@
       "digest": "f4df6ce1b64340f7895e630168d908f33d391852895fd974c8a7e779a945be00",
       "names": [],
       "sources": [
-        "packages/nexus-plugin-commands/src/index.ts:457"
+        "packages/nexus-plugin-commands/src/index.ts:452"
       ]
     },
     {
