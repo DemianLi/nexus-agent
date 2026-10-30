@@ -121,6 +121,7 @@ import type {
 } from '@nexus/wire';
 import { Check, MoreHorizontal } from 'lucide-react';
 import { StrictMode, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
 import { AgentMentionChip } from '@/components/agent-mention-chip';
@@ -1781,7 +1782,8 @@ function TurnStatusPage() {
       __setTurnActivity?: (a: string) => void;
       __openingPose?: (a: string) => string[][];
     };
-    hooks.__setTurnActivity = setActivity;
+    // 同步 commit：測試換完只等一幀就讀姿勢，要趕在這一幀之前畫上新 activity。
+    hooks.__setTurnActivity = (a) => flushSync(() => setActivity(a));
     // 每種 activity 的起始姿勢（減少動態時 glyph 停在這裡），照 vendor `draw` 取到小數兩位、四個屬性都給。
     // 1.7 是 vendor 沒 export 的 `RADIUS`（`src/test/glyph-env.ts` 的 `GLYPH_RADIUS`，`registry-edits.test.ts` 釘住原文）。
     hooks.__openingPose = (a) =>

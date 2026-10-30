@@ -5,29 +5,30 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import { parseColor } from '../src/styles/color-math';
 
 import {
-  COMPOSER_MAIN_ENABLED,
-  COMPOSER_STATES,
-  type FocusSample,
-  MODES,
-  NON_TEXT_MIN,
-  OVERLAYS,
-  RING,
-  SCROLL_BUTTON,
-  type TextSample,
-  WIDTHS,
-  WIDTH_MARKS,
   collectFocus,
   collectSurfaces,
   collectTexts,
+  COMPOSER_MAIN_ENABLED,
+  COMPOSER_STATES,
   composerMarks,
   expectFocus,
   expectTexts,
+  type FocusSample,
   footerMarks,
+  freezeAnimations,
+  MODES,
+  NON_TEXT_MIN,
   open,
   openOverlay,
+  OVERLAYS,
   report,
+  RING,
+  SCROLL_BUTTON,
   scrollMessages,
   settle,
+  type TextSample,
+  WIDTH_MARKS,
+  WIDTHS,
 } from './harness';
 
 describe('瀏覽器量 modal 浮層的版面與動效（#1583）', () => {
@@ -700,6 +701,7 @@ describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', (
 
   /** 點開摘要列，回傳內容在展開動效 40% 時的高度、第一幀的高度與動效跑完的高度。 */
   async function expand(page: Page) {
+    await freezeAnimations(page);
     await page.click(TRIGGER);
     return page.evaluate(async (row) => {
       const panel = () =>
@@ -711,16 +713,16 @@ describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', (
       const grow = el
         .getAnimations()
         .find((a) => (a as CSSAnimation).animationName === 'collapsible-down');
+      const animations = el.getAnimations().length;
       let mid: number | undefined;
       if (grow !== undefined) {
         grow.pause();
         grow.currentTime = Number(grow.effect?.getComputedTiming().duration) * 0.4;
         mid = el.getBoundingClientRect().height;
-        grow.finish();
       }
-      await Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined)));
+      for (const animation of el.getAnimations()) animation.finish();
       return {
-        animations: el.getAnimations().length,
+        animations,
         grows: grow !== undefined,
         first,
         mid,
@@ -927,6 +929,7 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
         // 量具自檢：版面上挑得到這樣的目標。
         expect(picked).toBe(true);
         await scrollMessages(page, 'end');
+        await freezeAnimations(page);
         const measured = await page.$eval(
           '[data-slot="message-scroller-viewport"]',
           async (viewport, reduced) => {
