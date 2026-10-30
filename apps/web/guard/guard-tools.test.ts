@@ -716,6 +716,10 @@ describe('瀏覽器量推理列的行為與覆寫（#1683）', () => {
   test('打開後只有箭頭轉：沒有高度動效、沒有其他動畫（#1683 決定題 2）', async () => {
     const page = await openOverlay('reasoning', 'light', { marks });
     try {
+      // 動畫時間凍在 0：打開時起的動畫都停著等讀，負載高時讀得晚也不會錯過。
+      const cdp = await page.context().newCDPSession(page);
+      await cdp.send('Animation.enable');
+      await cdp.send('Animation.setPlaybackRate', { playbackRate: 0 });
       await openReasoningRows(page, ['done']);
       const animations = await page.$eval(reasoningIn('done'), (row) =>
         row.getAnimations({ subtree: true }).map((a) => ({
@@ -730,9 +734,14 @@ describe('瀏覽器量推理列的行為與覆寫（#1683）', () => {
         })),
       );
       const open = await page.$eval(reasoningIn('done'), (row) => (row as HTMLDetailsElement).open);
+      // `getAnimations` 不回報 `::details-content`；時間凍著時它上面的高度動畫會停在起點。
+      const contentHeight = await page.$eval(reasoningIn('done'), (row) =>
+        Number.parseFloat(getComputedStyle(row, '::details-content').height),
+      );
       report['reasoning:animations'] = animations;
       expect(open).toBe(true);
-      // 量具自檢：箭頭那條轉場量得到，代表打開的當下就在讀。
+      expect(contentHeight).toBeGreaterThan(0);
+      // 量具自檢：箭頭那條轉場量得到，代表動畫時間真的凍住了。
       expect(animations).toEqual([{ kind: 'CSSTransition', what: 'rotate', target: 'svg' }]);
     } finally {
       await page.close();
