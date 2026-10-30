@@ -1,4 +1,4 @@
-/** `App` 的畫面測試：輸入框的座位與附件：模型座、權限座、附件送出。共用的假 client 與 hook 在 `@/test/app-harness`。 */
+/** `App` 的畫面測試：輸入框的座位與附件：模型座、權限座、附件送出。共用的假 client 與 hook 在 `@/test/app-harness.fixture`。 */
 import type {
   Event,
   ModelCatalogResult,
@@ -22,7 +22,7 @@ import {
   frame,
   setSeq,
   toastWith,
-} from '@/test/app-harness';
+} from '@/test/app-harness.fixture';
 
 // `serverSupportsAttachments` 的真實作回 true（#733）；這裡接到 `attachmentGate`，預設關著，測附件的測試才打開。
 vi.mock('@/lib/attachments', async (importOriginal) => ({

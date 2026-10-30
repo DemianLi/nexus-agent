@@ -15,7 +15,7 @@ import { applyTheme, readThemePreference, THEME_PREFERENCE_KEY } from '@/lib/the
 const html = readFileSync(resolve(process.cwd(), 'index.html'), 'utf8');
 const inlineScript = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1] ?? '';
 
-/** 每條測試給一份乾淨的 `localStorage`，為了測試之間隔離（同 `@/test/app-harness`）；Node 25 的全域已由 `vitest.shared.ts` 統一關掉（#1602）。 */
+/** 每條測試給一份乾淨的 `localStorage`，為了測試之間隔離（同 `@/test/app-harness.fixture`）；Node 25 的全域已由 `vitest.shared.ts` 統一關掉（#1602）。 */
 function memoryStorage(): Storage {
   const data = new Map<string, string>();
   return {

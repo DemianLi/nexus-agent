@@ -1,4 +1,4 @@
-/** `App` 的畫面測試：對話介面：送出與回覆、核准、斜線命令、目標與計劃標籤、停止、上行被拒、提問面板。共用的假 client 與 hook 在 `@/test/app-harness`。 */
+/** `App` 的畫面測試：對話介面：送出與回覆、核准、斜線命令、目標與計劃標籤、停止、上行被拒、提問面板。共用的假 client 與 hook 在 `@/test/app-harness.fixture`。 */
 import type {
   CommandOutcome,
   Event,
@@ -61,7 +61,7 @@ import {
   stoppedQuestionFrames,
   textFrames,
   toastWith,
-} from '@/test/app-harness';
+} from '@/test/app-harness.fixture';
 
 // `serverSupportsAttachments` 的真實作回 true（#733）；這裡接到 `attachmentGate`，預設關著。這一檔沒有測試打開它。
 vi.mock('@/lib/attachments', async (importOriginal) => ({

@@ -1,10 +1,10 @@
-/** `App` 的畫面測試：輸入框的提及與命令：@子代理、命令在途、沒有 input 的命令。共用的假 client 與 hook 在 `@/test/app-harness`。 */
+/** `App` 的畫面測試：輸入框的提及與命令：@子代理、命令在途、沒有 input 的命令。共用的假 client 與 hook 在 `@/test/app-harness.fixture`。 */
 import type { Event, SlashRunOutcome, UplinkResult, WireClient } from '@nexus/wire';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '@/App';
 import { stubCmdkLayout } from '@/test/cmdk';
-import { attachmentGate, fakeClient, frame, setSeq } from '@/test/app-harness';
+import { attachmentGate, fakeClient, frame, setSeq } from '@/test/app-harness.fixture';
 
 // `serverSupportsAttachments` 的真實作回 true（#733）；這裡接到 `attachmentGate`，預設關著，測附件的測試才打開。
 vi.mock('@/lib/attachments', async (importOriginal) => ({

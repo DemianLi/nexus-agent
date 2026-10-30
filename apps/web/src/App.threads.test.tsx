@@ -1,4 +1,4 @@
-/** `App` 的畫面測試：會話：記住與接回、以前的會話、側欄的即時狀態、引用別的會話、標題、背景子代理的輸入框接線。共用的假 client 與 hook 在 `@/test/app-harness`。 */
+/** `App` 的畫面測試：會話：記住與接回、以前的會話、側欄的即時狀態、引用別的會話、標題、背景子代理的輸入框接線。共用的假 client 與 hook 在 `@/test/app-harness.fixture`。 */
 import type {
   Event,
   SessionReferenceCandidate,
@@ -55,7 +55,7 @@ import {
   setSeq,
   textFrames,
   threadRows,
-} from '@/test/app-harness';
+} from '@/test/app-harness.fixture';
 
 // `serverSupportsAttachments` 的真實作回 true（#733）；這裡接到 `attachmentGate`，預設關著。這一檔沒有測試打開它。
 vi.mock('@/lib/attachments', async (importOriginal) => ({
