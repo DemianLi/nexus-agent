@@ -27,7 +27,10 @@ const sample = [
 describe('highlightLines 的長行上限與時間預算（#992）', () => {
   it('分段高亮的結果與整段一次高亮相同（含跨行的註解與樣板字串）', () => {
     const whole = new StreamingHighlightSession().update(sample, 'ts');
-    expect(highlightLines(sample, 'ts')).toEqual(whole?.slice(0, -1));
+    // 預算傳無限大：這條比分段的結果，真時鐘在負載高時可能超過預算、回傳的行數變少，斷言就紅。超過預算的行為由下面注入時鐘的那條釘。
+    expect(highlightLines(sample, 'ts', { budgetMs: Number.POSITIVE_INFINITY })).toEqual(
+      whole?.slice(0, -1),
+    );
   });
 
   it('一行達到上限：那一行畫成沒有顏色的一段，前後的行照常上色', () => {
