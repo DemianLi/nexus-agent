@@ -896,6 +896,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
               new ContainedFilesystemBackend({
                 rootDir: options.sharedWorkspace.rootDir,
                 mode: 'read-only',
+                // 共用區就是部署方的 `--workspace`，別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗，理由同工作區那格（#1704、#2158）。
+                tolerateUnreadable: true,
                 ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
               }),
         ),

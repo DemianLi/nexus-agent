@@ -8,7 +8,7 @@
  * **零憑證、零外部連線**：模型是腳本。
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -114,6 +114,30 @@ const loggedText = (data: unknown): string =>
 
 const systemOf = (prompt: readonly BaseMessage[] | undefined): string =>
   flatten(prompt?.find((message) => message.getType() === 'system')?.content ?? '');
+
+describe.skipIf(process.getuid?.() === 0)('/shared 底下有讀不到的項目（#2158）', () => {
+  /** 別人的 0700 目錄與 0600 檔：這條行程進不去。 */
+  let locked: string[];
+  beforeEach(async () => {
+    locked = [join(shared, 'other-user'), join(shared, 'other-user.md')];
+    await mkdir(locked[0]!);
+    await writeFile(locked[1]!, 'secret\n');
+    await Promise.all(locked.map((path) => chmod(path, 0)));
+  });
+  afterEach(() => Promise.all(locked.map((path) => chmod(path, 0o700))));
+
+  it('從 / 搜 glob：工作區與共用區的命中都在', async () => {
+    const { tools } = await run([call('glob', { pattern: '**/*.md', path: '/' })]);
+    expect(tools[0]).toContain('own.md');
+    expect(tools[0]).toContain('ref.md');
+  }, 60000);
+
+  it('從 / 搜 grep：工作區與共用區的命中都在', async () => {
+    const { tools } = await run([call('grep', { pattern: '-line', path: '/' })]);
+    expect(tools[0]).toContain('own.md');
+    expect(tools[0]).toContain('ref.md');
+  }, 60000);
+});
 
 describe('read_file', () => {
   it('讀 /shared/ 底下的檔：模型拿到的與日誌記的都以前綴開頭，本文一字不改', async () => {
