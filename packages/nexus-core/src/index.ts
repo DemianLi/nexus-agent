@@ -878,15 +878,15 @@ export {
   classifyStoredFormatVersion,
   createSessionFormatCatalog,
 } from './session-format.js';
-export type { LegacyTwoFileSessionFilenames, SessionFilenames } from './session-filename.js';
+export type { LegacyTwoFileSessionFilenames } from './session-filename.js';
 export {
+  FIRST_GENERATION_FORMAT_VERSION,
+  SESSION_LOCK_FILENAME,
   generationLogFilename,
   legacyTwoFileSessionFilenames,
   parseGenerationLogFilename,
   parseLegacyTwoFileHeaderFilename,
-  parseSessionHeaderFilename,
   sessionDirectoryName,
-  sessionFilenames,
 } from './session-filename.js';
 
 export { errorChain } from './error-chain.js';

@@ -238,7 +238,7 @@ describe('JSONL 存放處', () => {
     };
   }
 
-  it('續接放不下：拋 too-large、一個位元組都沒讀、租約放掉了（額度夠的後端接得起來）', async () => {
+  it('續接放不下：拋 too-large、日誌本文一個位元組都沒讀、租約放掉了（額度夠的後端接得起來）', async () => {
     const { directory, bytes } = await seeded();
     const fs = countingFs();
     const small = openJsonlSessionStore({
@@ -250,7 +250,10 @@ describe('JSONL 存放處', () => {
       reason: 'too-large',
       logBytes: bytes,
     });
-    expect(fs.read).toEqual([]);
+    // 經注入的 fs 讀過的只有舊路徑的墓碑（拿租約之前與之後各找一次這份會話，分辨墓碑與舊兩檔），世代檔沒有：本文是經它
+    // 讀的。世代檔的 header 行在判額度之前讀，走真的檔案系統（第一行讀到換行為止），這個計數看不到。
+    const { tombstone } = sessionPathsIn(directory, 'alpha');
+    expect(fs.read).toEqual([tombstone, tombstone]);
     const resumed = await openJsonlSessionStore({
       directory,
       logBudget: createSessionLogBudget(bytes),

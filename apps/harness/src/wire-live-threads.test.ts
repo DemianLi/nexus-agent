@@ -19,6 +19,7 @@ import { createNexusAgent } from './agent-factory.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { composeAttachSessions } from './session-attach.js';
 import { ThreadSearch } from './thread-search.js';
@@ -43,7 +44,7 @@ async function realAgent(): Promise<ThreadAgent> {
   };
 }
 
-/** 照 JSONL 後端的檔名寫一份只有一輪的日誌。 */
+/** 照 JSONL 後端的舊兩檔（讀方照讀的 v0.5.19 以前的佈局）寫一份只有一輪的日誌。 */
 async function writeThread(directory: string, id: string, said: string): Promise<void> {
   const log = new SessionLog(id);
   log.append('turn/start', { kind: 'message', text: said });
@@ -51,7 +52,7 @@ async function writeThread(directory: string, id: string, said: string): Promise
   log.append('turn/end', {});
   await writeFile(
     join(directory, `${id}.header.json`),
-    JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1_000, cwd: CWD }),
+    JSON.stringify({ version: LEGACY_TWO_FILE_FORMAT_VERSION, id, createdAt: 1_000, cwd: CWD }),
   );
   await writeFile(
     join(directory, `${id}.jsonl`),
