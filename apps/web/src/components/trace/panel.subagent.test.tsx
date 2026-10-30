@@ -327,6 +327,59 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     ]);
   });
 
+  describe('重新載入的焦點（#2135）', () => {
+    async function pulledBlock() {
+      const { client, waiting } = fakeClient();
+      mount(
+        scenario('bg-1', {
+          trajectory: view([childTurn(3)], { digests: [digest(1, { seq: 10 })] }),
+        }),
+        client,
+      );
+      const block = await expandSubagent();
+      fireEvent.click(within(block).getByRole('button', { name: /拉|載入|看/ }));
+      await act(async () => {
+        waiting[0]!({ kind: 'ok', result: { turns: [childTurn(1)], seq: 99 } });
+      });
+      const button = within(block).getByRole('button', { name: SUBAGENT_CALLS_RELOAD_LABEL });
+      button.focus();
+      fireEvent.click(button);
+      return { block, button, waiting };
+    }
+
+    it('讀取中焦點留在鈕上，看得見的字就是報讀名稱，再按不會多拉一次', async () => {
+      const { block, button, waiting } = await pulledBlock();
+      expect(button.isConnected).toBe(true);
+      expect(document.activeElement).toBe(button);
+      expect(button.getAttribute('aria-disabled')).toBe('true');
+      expect(within(block).getByRole('button', { name: SUBAGENT_CALLS_RELOAD_LABEL })).toBe(button);
+      expect(button.textContent).toBe(SUBAGENT_CALLS_RELOAD_LABEL);
+      fireEvent.click(button);
+      expect(waiting).toHaveLength(2);
+    });
+
+    it('讀完落在拉回來那一輪的標題', async () => {
+      const { block, waiting } = await pulledBlock();
+      await act(async () => {
+        waiting[1]!({ kind: 'ok', result: { turns: [childTurn(1)], seq: 99 } });
+      });
+      const pulled = within(block).getAllByTestId('trace-subagent-turn')[0]!;
+      expect(document.activeElement).toBe(pulled.querySelector('[data-subagent-turn-head]'));
+    });
+
+    it('失敗落在重試，拉回來過的內容留著', async () => {
+      const { block, button, waiting } = await pulledBlock();
+      await act(async () => {
+        waiting[1]!({ kind: 'rejected', code: 'SUBAGENT_NOT_FOUND', message: '找不到這個子代理' });
+      });
+      const retry = within(block).getByRole('button', { name: TRACE_PULL_RETRY_LABEL });
+      expect(retry).toBe(button);
+      expect(document.activeElement).toBe(retry);
+      expect(block.textContent).toContain('找不到這個子代理');
+      expect(within(block).getAllByTestId('trace-subagent-turn')).toHaveLength(2);
+    });
+  });
+
   it('拉取失敗：顯示伺服器的原因，可重試', async () => {
     const { client, waiting } = fakeClient();
     mount(
