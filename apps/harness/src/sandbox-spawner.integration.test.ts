@@ -91,6 +91,31 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 rg', () => {
     expect(sandboxed).toEqual(['/plain.txt']);
   });
 
+  it('工具結束了但 stdout 還沒讀完：done 不先 settle，輸出不會被截斷', async () => {
+    put(join(ws, 'a.txt'));
+    const rg = await resolveRgPath();
+    const started = await supervisor.launch({
+      executable: rg,
+      args: ['--no-config', NEEDLE, 'a.txt'],
+      cwd: ws,
+      mode: 'read-only',
+      readable: await ripgrepReadRoots(ws, rg, {}),
+      writable: [],
+      env: {},
+    });
+    if (typeof started === 'string') throw new Error(started);
+    started.stderr.resume();
+    const early = await Promise.race([
+      started.done,
+      new Promise<string>((resolve) => setTimeout(() => resolve('pending'), 300)),
+    ]);
+    expect(early).toBe('pending');
+    let out = '';
+    started.stdout.on('data', (chunk: Buffer) => (out += chunk.toString()));
+    expect(await started.done).toMatchObject({ kind: 'exited', code: 0 });
+    expect(out).toBe(`${NEEDLE}\n`);
+  });
+
   it('glob 也走得通', async () => {
     put(join(ws, 'a.txt'));
     const result = await backend().glob('*.txt', '/');
