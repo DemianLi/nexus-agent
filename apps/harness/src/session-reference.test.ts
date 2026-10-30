@@ -168,6 +168,15 @@ describe('retainReferencedSession：塞進位元組預算', () => {
     expect(retained.data.capturedThroughSeq).toBe(log.events.at(-1)!.seq);
   });
 
+  it('正跑到一半、還沒回覆：投影得出人打的字，capturedThroughSeq 是日誌最後一顆', () => {
+    const log = new SessionLog('src');
+    log.append('turn/start', { kind: 'message', text: '還在想' });
+    log.append('model/start', { model: 'm' } as never);
+    const retained = retainReferencedSession(log.events, header('src'), '甲', 4096)!;
+    expect(retained.data.conversation).toEqual([{ role: 'user', text: '還在想' }]);
+    expect(retained.data.capturedThroughSeq).toBe(log.events.at(-1)!.seq);
+  });
+
   it('放不下：先丟中間的訊息、留最新的；序列化後不超過上限', () => {
     const log = new SessionLog('src');
     for (let round = 0; round < 6; round += 1)

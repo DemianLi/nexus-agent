@@ -30,7 +30,8 @@
  *    組裝端有 `limitsOf`，#1573 N0862 起預算照 dsh 跟著模型窗口走，見偏離 5、6。編號保留，別處引用的「偏離 3、4」不跟著動。）
  * 4. **投影靠 `replayConversation`**：dsh 走「目前那一面」（surface）的事件，我們沒有那一軸，「現在看得到的」就是把日誌推回模型歷史
  *    （壓縮會換掉舊的），同 `thread-search.ts` 的做法。**推不出來就拋**（`SESSION_REFERENCE_READ_FAILED`），不像搜尋那樣退回「整份都算」
- *    ——快照會把被壓掉的內容帶進另一條會話，不能亂猜。
+ *    ——快照會把被壓掉的內容帶進另一條會話，不能亂猜。投影時在副本後面接上補結：正跑到一半的活會話還沒回覆也投影得出人打的字；
+ *    `capturedThroughSeq` 不受影響，仍是日誌裡最後一顆。
  * 5. **預算用的路由在「收下領走的那一刻」取，不在這一步組裝完之後**（理由 1，基座表達不出來；#1573 N0862）：dsh 取的是這一步
  *    組裝完的路由（`22ddee37` 是 `agent/pre-step` 帶的 `modelSelection`，`index.ts:133`、`:321`；`1517a4db`／`687f282e` 是
  *    `system-prompt/assemble` 記下的 `assembledRoutes`，`index.ts:97`、`:122-128`）。
@@ -51,7 +52,12 @@
 
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { REFERENCE_WARNING, replayConversation, sourceKwargs } from '@nexus/core';
+import {
+  interruptedTurnClosers,
+  REFERENCE_WARNING,
+  replayConversation,
+  sourceKwargs,
+} from '@nexus/core';
 import type {
   SessionEvent,
   SessionReferenceSourceEntry,
@@ -209,7 +215,7 @@ const byteLength = (text: string): number => Buffer.byteLength(text, 'utf8');
  */
 export function projectSessionConversation(events: readonly SessionEvent[]): ProjectedItem[] {
   const origins = new Map<BaseMessage, SessionEvent>();
-  const replay = replayConversation(events, {
+  const replay = replayConversation([...events, ...interruptedTurnClosers(events)], {
     origin: (message, event) => {
       origins.set(message, event);
     },

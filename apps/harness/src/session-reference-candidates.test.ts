@@ -470,6 +470,30 @@ describe('read：精確讀一條被引用的會話（準備那一半用）', () 
     expect((await s.read('delegated/tools:abc')).header.parentSession).toBe('me');
   });
 
+  it('活著的讀記憶體：不補結；header 與版號讀磁碟', async () => {
+    await put(CWD, 'running', { events: [said('盤上的', 2_000)] });
+    const live = [said('記憶體的', 2_000)].map((draft, seq) => ({ ...draft, seq })) as never[];
+    const { header, storedFormatVersion, events } = await service({
+      liveEvents: (id) => (id === 'running' ? live : undefined),
+    }).read('running');
+    expect(header.id).toBe('running');
+    expect(storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(events).toEqual(live);
+  });
+
+  it('不活著：照舊冷讀並補結', async () => {
+    await put(CWD, 'crashed', { events: [said('講到一半', 2_000)] });
+    const { events } = await service({ liveEvents: () => undefined }).read('crashed');
+    expect(events.at(0)?.type).toBe('turn/start');
+    expect(events.at(-1)?.type).toBe('turn/end');
+  });
+
+  it('活著但盤上還沒有檔：找不到', async () => {
+    await expect(service({ liveEvents: () => [] }).read('nobody')).rejects.toMatchObject({
+      name: 'SessionNotFoundError',
+    });
+  });
+
   it('沒有這一份：SessionNotFoundError；CLI 的 run 目錄不算', async () => {
     const stored = createJsonlSessionStore({ rootDir: root }).create({
       version: SESSION_LOG_FORMAT_VERSION,

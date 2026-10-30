@@ -73,6 +73,11 @@ export interface SessionReferenceCandidatesOptions {
   readonly warn?: (message: string) => void;
   /** 最多回幾筆。省略是 {@link DEFAULT_SESSION_REFERENCE_CANDIDATE_LIMIT}。 */
   readonly limit?: number;
+  /**
+   * 同一行程裡活著的會話（root 與子代理）現在的事件；不活著是 `undefined`。serve 在 wire handler 建好之後
+   * 才拿得到，所以給的是一支延遲讀 handler 的函式。省略就一律冷讀。
+   */
+  readonly liveEvents?: (sessionId: string) => readonly SessionEvent[] | undefined;
 }
 
 interface Row {
@@ -193,6 +198,8 @@ export class SessionReferenceCandidates {
   /**
    * 精確讀一條會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713) 的準備那一半，給 `SessionReferenceReader` 用）：
    * 整份日誌，**壞了就拋，不撿回**——快照會把內容帶進另一條會話，撿回來的殘缺版本不能當成那條會話的樣子。
+   * **同一行程裡活著的讀記憶體**（[#1940](https://github.com/DemianLi/nexus-agent/issues/1940)）：事件取記憶體裡的、不補結，批次窗口還沒寫出去的
+   * 也在；header 與版號讀磁碟那一份，所以檔案還沒出現的活會話同樣是找不到。其餘
    * 經 `readColdSession`（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)）：死在一輪中間的那一份在記憶體補平，
    * 第一次模型呼叫就當掉的也投影得出人打的字；`events` 的最後一顆可能是補結，同 dsh `readSurface` 的 `capturedThroughSeq`。
    *
@@ -214,6 +221,16 @@ export class SessionReferenceCandidates {
       signal?.throwIfAborted();
       let cold;
       try {
+        const live = this.#options.liveEvents?.(sessionId);
+        if (live !== undefined) {
+          const { header, storedFormatVersion } = await this.#storeOf(directory).open(
+            sessionId,
+            'read',
+          );
+          signal?.throwIfAborted();
+          const events = this.#options.liveEvents?.(sessionId) ?? live;
+          return { header, storedFormatVersion, events };
+        }
         cold = await readColdSession(this.#storeOf(directory), sessionId);
       } catch (error: unknown) {
         if (error instanceof SessionNotFoundError) continue;
