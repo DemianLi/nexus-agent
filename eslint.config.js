@@ -10,6 +10,8 @@ export default tseslint.config(
       '**/coverage/**',
       // tsdown 編出來的產物（#1502）。相對各套件目錄；`apps/web/src/lib/` 是原始碼，不是這個。
       'lib/**',
+      // 實跑紀錄附的一次性量具，不是產品碼（#2189）。
+      '.docs/**',
       // web vendor 的 solid-glass 元件是上游原樣（sha256 釘在 manifest.json，#1523）：不照我們的規則改，也就不檢查。
       'apps/web/src/vendor/solid-glass/components/**',
     ],
