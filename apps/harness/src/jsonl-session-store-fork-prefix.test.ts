@@ -9,7 +9,7 @@
  * - 子代理目錄的唯一性只看切點之後（撤掉 #1549 N0603 的過渡）。
  */
 
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,7 +22,8 @@ import {
   SessionSeq,
 } from '@nexus/core';
 
-import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
+import { legacyTwoFilePathsIn, openJsonlSessionStore } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionHeaderOf } from './session-files.fixture.js';
 import { isListedThread } from './session-list.js';
 
 const roots: string[] = [];
@@ -31,17 +32,20 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-/** 同 `jsonl-session-store-read-validation.test.ts` 的 `written`：物件補 `seq` 與 `time: 1`，字串原樣寫成一行。 */
+/**
+ * 同 `jsonl-session-store-read-validation.test.ts` 的 `written`：手寫一份舊兩檔（版本 {@link LEGACY_TWO_FILE_FORMAT_VERSION}），
+ * 物件補 `seq` 與 `time: 1`，字串原樣寫成一行。
+ */
 async function written(
   events: readonly (Record<string, unknown> | string)[],
   header: Record<string, unknown> = {},
 ): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'nexus-1579-'));
   roots.push(directory);
-  const paths = sessionPathsIn(directory, 'a');
+  const paths = legacyTwoFilePathsIn(directory, 'a');
   await writeFile(
     paths.header,
-    JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 'a', createdAt: 1, ...header }),
+    JSON.stringify({ version: LEGACY_TWO_FILE_FORMAT_VERSION, id: 'a', createdAt: 1, ...header }),
   );
   await writeFile(
     paths.log,
@@ -171,16 +175,14 @@ describe('相容（驗收 6）', () => {
   it('50 的檔續接、續寫一筆之後 header 是這一版、沒有 isSeeded 也沒有 origin', async () => {
     const directory = await written([turnStart, turnEnd], { version: 50, parentSession: 'root' });
     const resumed = await openJsonlSessionStore({ directory }).resume('a');
-    // 換版是續寫時的原子取代（#1509），同 `jsonl-session-store-header-replace.test.ts`。
+    // 換版在續接時：舊兩檔遷成這一版的世代檔，header 行是這一版。
     await resumed.stored.append([
       { type: 'session/end-seed', seq: SessionSeq(resumed.events.length), time: 2, data: {} },
     ]);
     await resumed.stored.close();
-    expect(SESSION_LOG_FORMAT_VERSION).toBe(51);
-    const header = JSON.parse(
-      await readFile(sessionPathsIn(directory, 'a').header, 'utf8'),
-    ) as Record<string, unknown>;
-    expect(header['version']).toBe(51);
+    expect(SESSION_LOG_FORMAT_VERSION).toBe(52);
+    const { header, storedFormatVersion } = await sessionHeaderOf(directory, 'a');
+    expect(storedFormatVersion).toBe(52);
     expect(header).not.toHaveProperty('isSeeded');
     expect(header).not.toHaveProperty('origin');
   });

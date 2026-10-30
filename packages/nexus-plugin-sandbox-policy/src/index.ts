@@ -204,6 +204,11 @@ export interface SandboxPolicyService {
   readonly controller: SandboxModeController;
   /** 可寫根在主機上的絕對路徑。只用在 `/permission` 報給人看（`@nexus/plugin-permission-presets`）；講給模型聽的那句不用它，理由見模組註解的登記。 */
   readonly rootDir: string;
+  /**
+   * 這個目標是不是不論模式、不認領 grant 都寫不進去；是的話回理由。升級工具據它不掛核准卡（#2078）。
+   * 判斷跟 fence 擋變更的是同一份規則，所以由組裝點從 fence 拿來交。省略＝沒有這種目標。
+   */
+  readonly reservedReason?: (target: string) => Promise<string | undefined>;
 }
 
 /**
@@ -300,7 +305,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
           '——沒有控制器就沒有東西可以回報政策、切換或升級。組裝點要把這兩個服務一起提供。',
       );
     }
-    const { controller } = registry.services.use(SANDBOX_POLICY_SERVICE);
+    const { controller, reservedReason } = registry.services.use(SANDBOX_POLICY_SERVICE);
     const resolveMode = controller.source;
     // **這顆在，工作區就在**：`present` 據它回答「有沒有工作區」（#441），見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
     registry.capabilities.provide(WORKSPACE_CAPABILITY);
@@ -315,7 +320,10 @@ export const sandboxPolicyPlugin: NexusPlugin = {
       return undefined;
     });
     // **升級跟著 fence 掛**：沒有圍堵的組裝沒有東西可以升。它也是 read-only 那句「照升級指引做」成立的前提。
-    registerSandboxEscalation(registry, controller, sharedPrefix);
+    registerSandboxEscalation(registry, controller, {
+      ...(sharedPrefix !== undefined && { sharedPrefix }),
+      ...(reservedReason !== undefined && { reservedReason }),
+    });
     registry.middleware.use(
       createMiddleware({
         ...policyPromptMiddleware(resolveMode, {
@@ -373,6 +381,7 @@ export {
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
   rejectedRefusal,
+  reservedTargetRefusal,
   SANDBOX_ESCALATION_HINT,
   SANDBOX_ESCALATION_TOOL_NAME,
   SANDBOX_MODE_WIDTH,

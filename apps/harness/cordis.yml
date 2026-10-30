@@ -492,7 +492,7 @@
     candidateLimit: 50
     referenceContextFraction: 0.1
 
-# serve 行程裡最多同時有幾條 thread（#1476，「底座保險絲」第 2 級；背景 #1464：每條 thread 常駐約 2 MB heap、serve 不回收），
+# serve 行程裡最多同時有幾條 thread（#1476，「底座保險絲」第 2 級；每條 thread 常駐約 1.2 MB heap（#1983），不逐出就一直留著），
 # 以及閒置的 thread 多久之後撤出記憶體（#1484，第 1 級）。**兩格出廠都開著**（#1619，demian 2026-10-18 拍板）：上限 500 條、閒置 2 小時撤出。
 # 值的家在 schema（`src/settings/thread-capacity.ts`），這裡照抄同一組讓人看得到；patch 是整份替換 `config`，只寫一格的話另一格由 schema 補。
 # 到了上限，新 thread（含讀歷史、續聊磁碟上的舊 thread）回 `thread_at_capacity`，已在行程裡的照常；閒置條件全成立滿 2 小時的 thread

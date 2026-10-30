@@ -381,10 +381,14 @@ export function retainedTailCount(messages: readonly BaseMessage[], retainTokens
  * {@link RETAIN_FALLBACK_MESSAGES} 則。{@link withRetainedTail}（交給基座的 `keep`）與 {@link isUnderCompactionPressure}
  * （剪刀的閘門）用的是這同一個數，兩邊才會對「這一步摘不摘得到東西」有同一個答案。
  *
+ * **切點前只剩上一顆摘要，也算摘不到東西**（[#2086](https://github.com/DemianLi/nexus-agent/issues/2086)）：回整串的長度。
+ * 這時摘要只會拿新摘要換舊摘要，沒有新的內容卸得掉。少了這條，切點被一則自己就撐過保留量的大訊息卡住、
+ * 訊息數門檻（`messages`）每一步都成立時，每一步都會多打一次摘要模型。
+ *
  * @param messages - 摘要器眼中的那一串（{@link effectiveMessages}）。
  * @param settings - 補滿的設定。
  * @param limits - 這一步模型的上限；不知道就是 `undefined`。
- * @returns 尾巴則數；`>= messages.length` 就是尾巴蓋住全部、基座切不出東西。
+ * @returns 尾巴則數；`>= messages.length` 就是這一步摘不到東西（尾巴蓋住全部，或切點前只剩上一顆摘要），基座不摘要。
  */
 export function retainedMessageCount(
   messages: readonly BaseMessage[],
@@ -392,7 +396,11 @@ export function retainedMessageCount(
   limits: ModelContextLimits | undefined,
 ): number {
   const retain = retainTokensFor(settings, limits, effectiveTrigger(settings.trigger, limits));
-  return retain === undefined ? RETAIN_FALLBACK_MESSAGES : retainedTailCount(messages, retain);
+  const retained =
+    retain === undefined ? RETAIN_FALLBACK_MESSAGES : retainedTailCount(messages, retain);
+  const onlyPreviousSummary =
+    messages.length - retained === 1 && isSummarizationMessage(messages[0]!);
+  return onlyPreviousSummary ? messages.length : retained;
 }
 
 /** 舊訊息裡過大的工具**參數**要不要剪。剪工具**結果**是另一件事，見 [#149](https://github.com/DemianLi/nexus-agent/issues/149)。 */
@@ -1094,7 +1102,8 @@ export class SummaryNotSmallerError extends Error {
 
 /**
  * dsh 的 shrink 檢查（`compaction-basic/src/region.ts:417-420`）：摘要生出來、提交之前，框好的摘要訊息要**比它取代的那段小**，
- * 不然整次壓縮不提交。擋的是「只剩舊摘要一則」這類壓了反而變大或沒變小的壓縮（S6 第 3 輪）。
+ * 不然整次壓縮不提交。擋的是壓了反而變大或沒變小的壓縮。照保留量切時，切點前只剩舊摘要那一類在 {@link retainedMessageCount}
+ * 就判成摘不到、不會到這裡；端點超窗、保留量降到 0 時仍可能走到。
  *
  * - **框好的摘要**：基座生完摘要緊接著交下去的那份請求的第一則（`buildSummaryMessage` 加過框架與歷史檔路徑）。
  * - **被取代的那段**：這一步開始時摘要器眼中的有效串（{@link effectiveMessages}），去掉交下去那份留下的尾巴。

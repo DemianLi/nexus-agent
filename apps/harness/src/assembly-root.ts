@@ -1191,7 +1191,14 @@ export async function createCliAgent(
               // （照 dsh 的 `eligible`）；以前是組裝點把根塞進那一列的 Config，那一列就進不了出貨清單。
               workspaceRoot,
               fsContainment: CONTAINED_FILESYSTEM,
-              sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot },
+              sandboxPolicy: {
+                controller: sandboxMode,
+                rootDir: workspaceRoot,
+                // 舊 thread 的保留清單（#1960）：升級工具據它不對寫不進去的目標掛卡（#2078）。
+                ...(backend !== undefined && {
+                  reservedReason: (target: string) => backend.reservedReason(target),
+                }),
+              },
             }),
       }),
       ...plugins,
@@ -1254,6 +1261,7 @@ export async function createCliAgent(
         ...(workspaceRoot !== undefined && { sandbox: sandboxMode }),
       },
     }),
+    toolMode: sandboxMode.source,
     ...(invocation.toolResultStash !== undefined && {
       toolResultStash: invocation.toolResultStash,
     }),

@@ -3,6 +3,8 @@
  *
  * **#1412 之後「改設定」走真的寫入口**（`plugin-change.ts`）：home 的 `cordis.patch.yml` 不再是一層，這一層是只增不改的
  * 變更紀錄。要寫「寫入口不會放行」的壞狀態（驗證之後才壞掉的設定、被人手動改壞的紀錄）走 `appendRaw`／`writeJournalText`。
+ * 寫入口的試掛（#2073）在這裡換成不掛：正式環境的寫入口是另一個行程，同一個行程裡試掛的 `apply` 會寫進同一個見證檔；
+ * 試掛本身量在 `plugin-change-trial.test.ts`。
  *
  * 量具是一顆插進清單的假插件：每次 `apply` 把拿到的設定寫進一個見證檔，模組被求值一次就在另一個見證檔記一筆。
  */
@@ -89,7 +91,7 @@ function home(failUnlessOk = false): Home {
     applied: () => read(appliedPath).split('\n').filter(Boolean),
     evaluations: () => read(evaluatedPath).length,
     seed: (body) => seedHomePatch(dir, body),
-    change: (change) => changePlugin(change, { env }),
+    change: (change) => changePlugin(change, { env, trial: async () => [] }),
     raw: (body) => appendRaw(dir, body),
     text(body) {
       if (body !== undefined) writeJournalText(dir, body);

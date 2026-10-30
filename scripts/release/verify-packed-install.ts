@@ -11,7 +11,8 @@
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
  * 4. 目標平台的 `node-addon-system` 載得起來（flock 的原生二進位，#1503／會話租約都靠它）；內附的 ripgrep 在 `PATH` 上沒有 rg
  *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；sharp 與目標平台的 libvips 載得起來，真的縮一張圖
- *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；
+ *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；Linux 上產物裡的沙箱 spawner 起得來、送 `Ready`，
+ *    經它起得了主機上的 git（#1946，`spawner-probe.ts`）；
  * 5. 假模型跑一輪 `lib/cli.js`：會話 header 的 `build.commit` 等於戳記——已安裝的樹沒有 git，戳記是唯一的來源（PM 補驗收）；
  *    戳記本身也查：`commit` 是非空字串、`dirty` 是 `false`（本機驗沒 commit 的改動加 `--allow-dirty`，CI 不加）；
  * 6. 起一次 `lib/serve.js --port 0`：印出網址、啟動日誌講的 grep 用的 ripgrep 在**安裝樹裡**（不是宿主 `PATH` 上的）、
@@ -43,7 +44,10 @@ import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { sessionFilenames } from '../../packages/nexus-core/src/session-filename.js';
+import {
+  parseGenerationLogFilename,
+  sessionDirectoryName,
+} from '../../packages/nexus-core/src/session-filename.js';
 import { serverLogBody } from '../../apps/harness/src/server-log-line.js';
 import { fileSha256 } from './pack.js';
 import {
@@ -53,12 +57,32 @@ import {
   walkInstalledGraph,
 } from './payload.js';
 import { installedLicenseProblems, sbomProblems } from './sbom.js';
+import {
+  probeInstalledSpawner,
+  spawnerProbeProblems,
+  spawnerProbeSummary,
+} from './spawner-probe.js';
 
 /**
- * CLI 那一輪 root 會話的檔名。root 的 id 固定是 `cli`，`safeBaseName` 編碼後不變；檔名照 `@nexus/core` 的那一份
- * （#1857）。import 的是葉模組本身，不經 `@nexus/core` 的入口：發版腳本不拉整包 core 進來，同上面的 `server-log-line`。
+ * CLI 那一輪 root 會話的世代檔：`<run 目錄>/<sessionDirectoryName('cli')>/` 裡數字最大的 `session.v<N>.jsonl`，header 在第一行
+ * （#1594 ③）。檔名照 `@nexus/core` 的那一份（#1857）；import 的是葉模組本身，不經 `@nexus/core` 的入口：發版腳本不拉整包
+ * core 進來，同上面的 `server-log-line`。
+ *
+ * @param runDirectory - CLI 這一輪的 run 目錄。
+ * @returns 世代檔的路徑；會話目錄不在或裡面沒有世代檔就是 `undefined`。
  */
-const CLI_SESSION = sessionFilenames('cli');
+export function cliSessionLog(runDirectory: string): string | undefined {
+  const sessionDirectory = join(runDirectory, sessionDirectoryName('cli'));
+  if (!existsSync(sessionDirectory)) return undefined;
+  let latest: { readonly name: string; readonly version: number } | undefined;
+  for (const name of readdirSync(sessionDirectory)) {
+    const version = parseGenerationLogFilename(name);
+    if (version !== undefined && (latest === undefined || version > latest.version)) {
+      latest = { name, version };
+    }
+  }
+  return latest === undefined ? undefined : join(sessionDirectory, latest.name);
+}
 
 /** 乾淨的子行程環境：宿主的 tsx hook、NODE_PATH 都不能替產物補洞。 */
 export function cleanEnv(home: string): NodeJS.ProcessEnv {
@@ -201,7 +225,7 @@ export const GREP_PROBE_NEEDLE = 'needle-1502';
  * 只看啟動那一行（`ripgrepDisclosureProblems`）驗不到「已安裝的 serve 搜尋走內附 rg」（#1502 驗收 6）。
  *
  * @param run - `lib/cli.js` 這一輪的結果。
- * @param sessionLog - 這一輪的會話日誌（`cli.jsonl`）原文；沒有就傳 `undefined`。
+ * @param sessionLog - 這一輪的會話日誌（{@link cliSessionLog}）原文；沒有就傳 `undefined`。
  */
 export function installedGrepProblems(
   run: CommandOutcome,
@@ -287,7 +311,7 @@ export function cliRunProblems(run: CommandOutcome): string[] {
 /**
  * 步驟 5b：會話 header 的 `build.commit` 等於戳記（以及 CI 給的打包 commit）。
  *
- * @param header - `cli.header.json` 解開的內容；檔不在傳 `undefined`。
+ * @param header - 世代檔第一行（header 行）解開的內容；檔不在傳 `undefined`。
  * @param stamp - 產物的戳記。
  * @param expectCommit - 打包的 commit（CI 給 `GITHUB_SHA`）。給了，header 就要等於它，
  *   而不只是等於產物自己的戳記——戳記被拿掉時兩邊同時不見，只比戳記會漏。
@@ -297,7 +321,7 @@ export function headerProblems(
   stamp: BuildStampShape | undefined,
   expectCommit?: string,
 ): string[] {
-  if (header === undefined) return [`cli 跑完沒有 ${CLI_SESSION.header}`];
+  if (header === undefined) return ['cli 跑完沒有會話的世代檔'];
   const problems: string[] = [];
   const actual = header.build?.commit;
   const stampCommit = typeof stamp?.commit === 'string' ? stamp.commit : undefined;
@@ -491,6 +515,13 @@ export async function verifyPackedInstall(
     });
     problems.push(...sharpProblems(sharpRun));
 
+    // 4e. 沙箱 spawner（只有 Linux 的產物帶）：起產物裡那一支、等 Ready，再經它起一次主機的 git。
+    if (process.platform === 'linux') {
+      const spawnerProbe = await probeInstalledSpawner(root, scratch);
+      console.log(spawnerProbeSummary(spawnerProbe));
+      problems.push(...spawnerProbeProblems(spawnerProbe));
+    }
+
     // 4c. 安裝樹裡真的跑一次 grep：腳本模型叫 grep，PATH 是空目錄（同 4b），命中只可能來自內附的 rg。
     const grepWork = join(scratch, 'grep-ws');
     mkdirSync(grepWork, { recursive: true });
@@ -532,13 +563,11 @@ export async function verifyPackedInstall(
     );
     const [grepRunDir] = existsSync(grepLogs) ? readdirSync(grepLogs) : [];
     const grepLogFile =
-      grepRunDir === undefined ? undefined : join(grepLogs, grepRunDir, CLI_SESSION.log);
+      grepRunDir === undefined ? undefined : cliSessionLog(join(grepLogs, grepRunDir));
     problems.push(
       ...installedGrepProblems(
         grepRun,
-        grepLogFile !== undefined && existsSync(grepLogFile)
-          ? readFileSync(grepLogFile, 'utf8')
-          : undefined,
+        grepLogFile === undefined ? undefined : readFileSync(grepLogFile, 'utf8'),
       ),
     );
 
@@ -558,11 +587,13 @@ export async function verifyPackedInstall(
     problems.push(...cliProblems);
     if (cliProblems.length === 0) {
       const [run] = existsSync(logs) ? readdirSync(logs) : [];
-      const headerPath = run === undefined ? undefined : join(logs, run, CLI_SESSION.header);
+      const logFile = run === undefined ? undefined : cliSessionLog(join(logs, run));
       const header =
-        headerPath !== undefined && existsSync(headerPath)
-          ? (JSON.parse(readFileSync(headerPath, 'utf8')) as { build?: { commit?: string | null } })
-          : undefined;
+        logFile === undefined
+          ? undefined
+          : (JSON.parse(readFileSync(logFile, 'utf8').split('\n', 1)[0]!) as {
+              build?: { commit?: string | null };
+            });
       problems.push(...headerProblems(header, stamp, options.expectCommit));
     }
 

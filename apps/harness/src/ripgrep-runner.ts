@@ -8,7 +8,7 @@
  *
  * 這裡照 dsh `packages/fs/tool-fs-search/src/search-core.ts:222-287` 的 `runRipgrep`（`687f282e`）：
  *
- * - argv 開頭是 `--no-config`（`:240`）。spawn 不受沙箱限制，宿主的 `RIPGREP_CONFIG_PATH` 可以注入 `--pre`。
+ * - argv 開頭是 `--no-config`（`:240`）。宿主的 `RIPGREP_CONFIG_PATH` 可以注入 `--pre`，`danger-full-access` 下也沒有 Landlock 擋著。
  * - stdout 累計位元組，超過 {@link RAW_OUTPUT_MAX_BYTES} 就收掉 rg，回 `SEARCH_RAW_OUTPUT_OVERFLOW`，**不解析半份輸出**。
  *   stderr 只留最後 {@link STDERR_MAX_BYTES}，當診斷用。
  * - 取消：呼叫端的 signal 與 {@link SEARCH_TIMEOUT_MS} 的逾時合成一個，觸發時先 `SIGTERM`，{@link KILL_GRACE_MS} 後還在就
@@ -61,23 +61,24 @@
  *
  * ## 執行檔
  *
- * **呼叫端給執行檔的絕對路徑**（`rg-path.ts` 解出的內附 rg），這裡不查 `PATH`、也沒有預設值。`ENOENT` 就是
- * `SEARCH_FAILED`：產物裡的 rg 不見了，沒有退路（#1502 刀 4 拿掉了 #1532 偏離 1 的 `ENOENT` 退路）。
- * `cwd` 不存在時 Node 也回 `spawn … ENOENT`，兩者分不出來，所以呼叫端要在 spawn 之前先確認 `cwd` 存在。
+ * **呼叫端給執行檔的絕對路徑**（`rg-path.ts` 解出的內附 rg），這裡不查 `PATH`、也沒有預設值。產物裡的 rg 不見了就是
+ * `SEARCH_FAILED`，沒有退路（#1502 刀 4 拿掉了 #1532 偏離 1 的 `ENOENT` 退路）。`cwd` 進不去也是 `SEARCH_FAILED`，文案不同（#1945）。
  *
  * @module
  */
 
-import { spawn } from 'node:child_process';
 import {
   SEARCH_ABORTED,
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
   SEARCH_RAW_OUTPUT_OVERFLOW,
   scrubbedParentEnv,
-  trackHostExitChild,
 } from '@nexus/core';
-import type { SearchErrorCode } from '@nexus/core';
+import type { SandboxMode, SearchErrorCode } from '@nexus/core';
+
+import { ripgrepReadRoots } from './ripgrep-sandbox.js';
+import { productToolLauncher } from './tool-launcher.js';
+import type { ToolLaunchFailure, ToolLauncher, ToolProcess } from './tool-process.js';
 
 /** 完整 stdout 的上限（位元組）。dsh `RAW_OUTPUT_MAX_BYTES`（`search-core.ts:36`），同 Claude Code 的 ripgrep 緩衝。 */
 export const RAW_OUTPUT_MAX_BYTES = 20_000_000;
@@ -93,10 +94,16 @@ export const STDERR_MAX_BYTES = 64 * 1024;
  * （`spawn /opt/…/rg ENOENT`）。照 dsh `packages/fs/tool-fs-search/src/search-core.ts:260`：訊息固定、原始錯誤不接在後面。
  * 要查是哪個路徑，看 serve 啟動日誌那一行「搜尋（grep）：內附 ripgrep …」（給管理者的，`rg-path.ts`）。
  */
-const launchFailedMessage = (tool: RipgrepTool): string =>
-  `${tool} could not start its search command (ripgrep launch failed)`;
-const notFoundMessage = (tool: RipgrepTool): string =>
-  `${tool} could not start its search command (bundled ripgrep not found)`;
+const FAILURE_REASONS: Record<ToolLaunchFailure, string> = {
+  'launch-failed': 'ripgrep launch failed',
+  'not-found': 'bundled ripgrep not found',
+  // 兩條起法同一句（#1945）：起點讀不到不是 rg 壞了，也不是沙箱不可用。
+  'start-dir': 'the search directory is not accessible',
+  'sandbox-unavailable':
+    'SANDBOX_UNAVAILABLE: the tool sandbox is not available, refusing to run it unconfined',
+};
+const launchFailure = (tool: RipgrepTool, reason: ToolLaunchFailure): string =>
+  `${tool} could not start its search command (${FAILURE_REASONS[reason]})`;
 
 /** 收掉 rg 時 `SIGTERM` 之後等多久升級到 `SIGKILL`（毫秒）。dsh `SEARCH_GRACE_MS`（`:53`）。 */
 export const KILL_GRACE_MS = 3_000;
@@ -128,8 +135,9 @@ export interface RipgrepRunOptions {
   readonly executable: string;
   /** `--no-config` 之後的 argv。 */
   readonly argv: readonly string[];
-  /** 工作目錄；呼叫端要先確認它存在。 */
   readonly cwd: string;
+  /** 這一次的沙箱模式；預設 `read-only`。rg 不寫檔，`workspace-write` 也照 `read-only` 起。 */
+  readonly mode?: SandboxMode | undefined;
   /**
    * 結束碼 2、stderr 全是「讀不到」（而且讀不到的不是搜尋起點）時照樣交出 stdout（偏離 1，#1704）。**不給就是 dsh 的做法**：
    * 只有呼叫端確定「子樹讀不到不是秘密、少搜幾個檔可以接受」才給（工作區的 `grep`／`glob`）；附件路由不給
@@ -153,6 +161,8 @@ export interface RipgrepInternals {
   readonly killGraceMs?: number;
   /** 每次真的要 spawn 之前呼叫一次（測試用來數「取消後不起 rg」）。 */
   readonly onSpawn?: (argv: readonly string[], executable: string) => void;
+  /** 換掉起子行程的方式。 */
+  readonly launcher?: ToolLauncher;
   /** 子行程起來之後給測試一個把手（斷言「行程已經結束」）。 */
   readonly onChild?: (child: { readonly pid: number | undefined }) => void;
 }
@@ -247,7 +257,7 @@ function classifyExit(
 /**
  * 起一次 `rg` 並等它結束。
  *
- * 判斷順序（`close` 時）：**取消 → 輸出超限 → 被訊號殺 → 結束碼**。輸出超限與取消都是我們自己 kill 的，`close` 會帶
+ * 判斷順序（工具的 `done` 時）：**取消 → 輸出超限 → 被訊號殺 → 結束碼**。輸出超限與取消都是我們自己 kill 的，`done` 會帶
  * `SIGTERM`／`SIGKILL`，順序反過來就會被當成「被訊號殺」。
  *
  * @param options - 見 {@link RipgrepRunOptions}。
@@ -274,6 +284,8 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     const argv = ['--no-config', ...options.argv];
     let settled = false;
     let killTimer: NodeJS.Timeout | undefined;
+    let giveUpTimer: NodeJS.Timeout | undefined;
+    let escalated = false;
     let wasAborted = false;
     let overflowed = false;
     let stdoutBytes = 0;
@@ -281,50 +293,39 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     let stderrTail = Buffer.alloc(0);
     let stderrTruncated = false;
 
-    /** 行程被強制結束時由 core 同步 SIGKILL 的登記（#1542）；自己結束了就拿掉。 */
-    const untrackers: Array<() => void> = [];
     const settle = (outcome: RipgrepOutcome): void => {
       if (settled) return;
       settled = true;
-      for (const untrack of untrackers.splice(0)) untrack();
-      if (killTimer !== undefined) clearTimeout(killTimer);
+      clearTimeout(killTimer);
+      clearTimeout(giveUpTimer);
       signal.removeEventListener('abort', onAbort);
       resolve(outcome);
     };
 
-    let child: ReturnType<typeof spawn>;
-    try {
-      internals.onSpawn?.(argv, executable);
-      child = spawn(executable, argv, {
-        cwd: options.cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: scrubbedParentEnv(),
-      });
-    } catch {
-      resolve(
-        signal.aborted
-          ? aborted()
-          : {
-              kind: 'error',
-              code: SEARCH_FAILED,
-              message: launchFailedMessage(tool),
-            },
-      );
-      return;
-    }
-    // spawn 之後立刻登記：serve 走 `process.exit` 結束而 rg 還在跑時，今天沒有人收它。只殺直接子行程，不做 process group
-    // ——#1542 登記的偏離（理由 1，沒有 subprocess 服務）同樣適用，寫法照 `nexus-plugin-workspace-changes/src/git.ts`。
-    untrackers.push(trackHostExitChild(child));
-    internals.onChild?.({ pid: child.pid });
+    let child: ToolProcess | undefined;
 
-    /** 收掉 rg：先 `SIGTERM`，寬限之後還沒結束就 `SIGKILL`。 */
+    const overflowOutcome = (): RipgrepOutcome => ({
+      kind: 'error',
+      code: SEARCH_RAW_OUTPUT_OVERFLOW,
+      message: `${tool} produced more than ${String(maxBytes)} bytes of raw output; narrow pattern, path, or glob and retry`,
+    });
+
+    /**
+     * 收掉 rg：先 `SIGTERM`，寬限之後 `SIGKILL`，再一段寬限還沒有結局就不等了。結局走 spawner 的控制通道，SIGKILL 也不保證等得到，
+     * 工具呼叫不能跟著卡住。還在起時 `child` 是空的：計時照走，起來之後 `attach` 會再進來一次。
+     */
     const terminate = (): void => {
-      if (child.exitCode !== null || child.signalCode !== null) return;
-      // 起不來的 child 沒有 pid（'error' 事件還沒送到）：此時 `kill()` 會對 pid 0 送訊號，也就是整個行程群組（包括 serve 自己）。
-      if (child.pid === undefined) return;
-      child.kill('SIGTERM');
+      if (escalated) {
+        child?.kill('SIGKILL');
+        return;
+      }
+      child?.kill('SIGTERM');
       killTimer ??= setTimeout(() => {
-        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        escalated = true;
+        child?.kill('SIGKILL');
+        giveUpTimer = setTimeout(() => {
+          settle(wasAborted || signal.aborted ? aborted() : overflowOutcome());
+        }, graceMs);
       }, graceMs);
     };
 
@@ -333,52 +334,77 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
       terminate();
     }
     signal.addEventListener('abort', onAbort, { once: true });
-    // 在 spawn 同步結束到掛上監聽之間已經取消的話，事件不會再來。
-    if (signal.aborted) onAbort();
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      if (overflowed) return;
-      stdoutBytes += chunk.length;
-      if (stdoutBytes > maxBytes) {
-        overflowed = true;
-        stdoutChunks.length = 0;
-        terminate();
-        return;
-      }
-      stdoutChunks.push(chunk);
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrTail = Buffer.concat([stderrTail, chunk]);
-      if (stderrTail.length > STDERR_MAX_BYTES) {
-        stderrTail = stderrTail.subarray(stderrTail.length - STDERR_MAX_BYTES);
-        stderrTruncated = true;
-      }
-    });
+    const failed = (reason: ToolLaunchFailure): void => {
+      // 起不來的同時已經被取消：回「取消」不回「起不來」。
+      settle(
+        wasAborted || signal.aborted
+          ? aborted()
+          : { kind: 'error', code: SEARCH_FAILED, message: launchFailure(tool, reason) },
+      );
+    };
 
-    child.on('error', (error: NodeJS.ErrnoException) => {
-      // 起不來的同時已經被取消：回「取消」不回「起不來」（照 dsh `search-core.ts:257-259`，spawn 失敗後再看一次 `signal.aborted`）。
-      if (wasAborted || signal.aborted) {
-        settle(aborted());
-        return;
-      }
-      settle({
-        kind: 'error',
-        code: SEARCH_FAILED,
-        message: error.code === 'ENOENT' ? notFoundMessage(tool) : launchFailedMessage(tool),
+    const attach = async (): Promise<void> => {
+      internals.onSpawn?.(argv, executable);
+      const launch = internals.launcher ?? productToolLauncher();
+      const env = scrubbedParentEnv();
+      const fullAccess = options.mode === 'danger-full-access';
+      const started = await launch({
+        executable,
+        args: argv,
+        cwd: options.cwd,
+        // rg 不寫檔：`workspace-write` 也不給寫根。
+        mode: fullAccess ? 'danger-full-access' : 'read-only',
+        readable: fullAccess ? [] : await ripgrepReadRoots(options.cwd, executable, env),
+        writable: [],
+        env,
       });
-    });
+      if (typeof started === 'string') {
+        failed(started);
+        return;
+      }
+      if (settled) {
+        started.kill('SIGKILL');
+        // 沒人讀的話 `done` 永遠等不到兩條流讀完。
+        started.stdout.resume();
+        started.stderr.resume();
+        return;
+      }
+      child = started;
+      internals.onChild?.({ pid: child.pid });
+      if (signal.aborted) onAbort();
 
-    child.on('close', (exitCode, killedBy) => {
+      child.stdout.on('data', (chunk: Buffer) => {
+        if (overflowed) return;
+        stdoutBytes += chunk.length;
+        if (stdoutBytes > maxBytes) {
+          overflowed = true;
+          stdoutChunks.length = 0;
+          terminate();
+          return;
+        }
+        stdoutChunks.push(chunk);
+      });
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderrTail = Buffer.concat([stderrTail, chunk]);
+        if (stderrTail.length > STDERR_MAX_BYTES) {
+          stderrTail = stderrTail.subarray(stderrTail.length - STDERR_MAX_BYTES);
+          stderrTruncated = true;
+        }
+      });
+
+      const result = await child.done;
+      if (result.kind === 'failed') {
+        failed(result.reason);
+        return;
+      }
+      const { code: exitCode, signal: killedBy } = result;
       if (wasAborted || signal.aborted) {
         settle(aborted());
         return;
       }
       if (overflowed) {
-        settle({
-          kind: 'error',
-          code: SEARCH_RAW_OUTPUT_OVERFLOW,
-          message: `${tool} produced more than ${String(maxBytes)} bytes of raw output; narrow pattern, path, or glob and retry`,
-        });
+        settle(overflowOutcome());
         return;
       }
       if (killedBy !== null || exitCode === null) {
@@ -409,6 +435,8 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
         noMatches: exitCode === 1,
         unreadable,
       });
-    });
+    };
+
+    attach().catch(() => failed('launch-failed'));
   });
 }

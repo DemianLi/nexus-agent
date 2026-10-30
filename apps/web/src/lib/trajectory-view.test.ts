@@ -79,7 +79,7 @@ describe('signalText：只讀結構化欄位', () => {
     ],
     [
       decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'unavailable' } }),
-      '核准 bash：無法回答',
+      '核准 bash：沒有有效回覆',
     ],
     [
       decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'future' as never } }),
@@ -160,11 +160,12 @@ describe('輪的起因標籤', () => {
   });
 });
 
-describe('approvalCodeText：不必問人的核准結局', () => {
+describe('approvalCodeText：核准被拒的碼', () => {
   it.each([
     ['APPROVAL_POLICY_NEVER', '核准政策一律不允許'],
     ['APPROVAL_NO_CHANNEL', '沒有人可以問'],
     ['APPROVAL_REJECTED_BY_USER', '人拒絕了'],
+    ['APPROVAL_INVALID_REPLY', '回覆看不懂，沒有執行'],
     ['TOOL_DENIED_BY_LISTENER', '被攔截器拒絕'],
   ])('%s → %s', (code, text) => {
     expect(approvalCodeText(code)).toBe(text);

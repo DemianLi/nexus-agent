@@ -1,0 +1,110 @@
+{
+  "requests": [
+    {
+      "value": {
+        "type": "spawn",
+        "id": 7,
+        "mode": "workspace-write",
+        "pipes": 6,
+        "cwd": "/w/ws",
+        "readable": ["/usr", "/etc/gitconfig"],
+        "writable": ["/w/ws", "/w/extra dir\twith tab"],
+        "argv": ["/usr/bin/git", "a\nb", ""],
+        "env": ["PATH=/usr/bin", "LC_ALL=C"]
+      },
+      "hex": "53070000000106050000002f772f777302000000040000002f7573720e0000002f6574632f676974636f6e66696702000000050000002f772f7773150000002f772f657874726120646972097769746820746162030000000c0000002f7573722f62696e2f67697403000000610a6200000000020000000d000000504154483d2f7573722f62696e080000004c435f414c4c3d43"
+    },
+    {
+      "value": {
+        "type": "spawn",
+        "id": 8,
+        "mode": "read-only",
+        "pipes": 2,
+        "cwd": "/",
+        "readable": [],
+        "writable": [],
+        "argv": ["rg"],
+        "env": []
+      },
+      "hex": "53080000000002010000002f00000000000000000100000002000000726700000000"
+    },
+    {
+      "value": {
+        "type": "spawn",
+        "id": 4294967295,
+        "mode": "full-access",
+        "pipes": 0,
+        "cwd": "/tmp",
+        "readable": [],
+        "writable": [],
+        "argv": ["true"],
+        "env": ["A=é"]
+      },
+      "hex": "53ffffffff0200040000002f746d7000000000000000000100000004000000747275650100000004000000413dc3a9"
+    },
+    {
+      "value": {
+        "type": "signal",
+        "id": 3,
+        "signo": 15
+      },
+      "hex": "4b030000000f000000"
+    }
+  ],
+  "events": [
+    {
+      "value": {
+        "type": "unavailable",
+        "errno": 22,
+        "detail": "seccomp: Invalid argument"
+      },
+      "hex": "551600000019000000736563636f6d703a20496e76616c696420617267756d656e74"
+    },
+    {
+      "value": {
+        "type": "ready",
+        "filterInsns": 70,
+        "landlockAbi": 0
+      },
+      "hex": "524600000000000000"
+    },
+    {
+      "value": {
+        "type": "started",
+        "id": 1,
+        "pid": 4242,
+        "partial": true
+      },
+      "hex": "53010000009210000001"
+    },
+    {
+      "value": {
+        "type": "failed",
+        "id": 2,
+        "kind": "start-dir",
+        "errno": 2,
+        "detail": "chdir"
+      },
+      "hex": "46020000000202000000050000006368646972"
+    },
+    {
+      "value": {
+        "type": "failed",
+        "id": 9,
+        "kind": "resource",
+        "errno": 24,
+        "detail": "open /dev/null"
+      },
+      "hex": "460900000005180000000e0000006f70656e202f6465762f6e756c6c"
+    },
+    {
+      "value": {
+        "type": "exited",
+        "id": 3,
+        "code": -1,
+        "signal": 9
+      },
+      "hex": "4503000000ffffffff09000000"
+    }
+  ]
+}

@@ -433,6 +433,11 @@ export interface ContainedFilesystemBackendOptions {
    * 恆定的函式，兩者在 fence 眼裡沒有差別。
    */
   readonly mode?: SandboxMode | SandboxModeSource;
+  /**
+   * 起 `rg` 用哪個模式，省略就跟 {@link mode}。路由的 {@link mode} 是寫死的檔案政策，上不上 OS 沙箱卻要跟著會話：`danger-full-access`
+   * 在沒有沙箱後端的主機上是唯一起得來的模式，搜 `/` 碰到路由時得走同一條退路。
+   */
+  readonly toolMode?: SandboxModeSource;
   /** 單檔大小上限，原樣轉給基座。 */
   readonly maxFileSizeMb?: number;
   /**
@@ -513,6 +518,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /** 圍堵強度的來源。建構期給的字面值在這裡已經被包成一個恆定的函式。 */
   private readonly resolveMode: SandboxModeSource;
 
+  /** 起 `rg` 用的模式，見 {@link ContainedFilesystemBackendOptions.toolMode}。 */
+  private readonly resolveToolMode: SandboxModeSource;
+
   /** 升級的 grant 從哪裡認領；`undefined` 就是這道 fence 沒有升級。 */
   private readonly grants: SandboxGrantLedger | undefined;
 
@@ -549,6 +557,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     });
     const mode = options.mode ?? 'workspace-write';
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
+    this.resolveToolMode = options.toolMode ?? this.resolveMode;
     this.grants = options.grants;
     this.ripgrepInternals = options.ripgrep;
     this.tolerateUnreadable = options.tolerateUnreadable === true;
@@ -1018,6 +1027,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         ...prepared.searchArgs,
       ],
       cwd: this.cwd,
+      mode: this.resolveToolMode(),
       signal: currentToolCallSignal(),
       ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
@@ -1102,6 +1112,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         ...prepared.searchArgs,
       ],
       cwd: this.cwd,
+      mode: this.resolveToolMode(),
       tool: 'glob',
       signal,
       ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
@@ -1146,7 +1157,6 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * `grep` 與 `glob` 起 rg 之前共用的準備：確認工作區根、解出搜尋起點、解出內附 rg。
    *
-   * `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。
    * **根不存在不是錯誤，是「沒有東西可找」**（`empty`，同基座對不存在的起點）：暫存 backend 的根是第一次存東西才建的
    * （`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
    *
@@ -1189,7 +1199,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       try {
         executable = await resolveRgPath();
       } catch {
-        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `launchFailedMessage`）。
+        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `FAILURE_REASONS`）。
         // 管理者從 serve 啟動日誌那一行看得到原因。
         return {
           kind: 'failed',
@@ -1408,11 +1418,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 變更落在保留的地方（{@link ContainedFilesystemBackendOptions.reservedWrites}）就拒，不看模式。
-   *
-   * 兩邊都 canonicalize 之後比，經符號連結的別名（`/docs/AGENTS.md`，`docs` 指向根）也擋得到；解析失敗的退回字面位置比。
-   * **不分大小寫**：不分大小寫的檔案系統上，`/claude.md` 跟 `/CLAUDE.md` 是同一個檔。代價是分大小寫的檔案系統上，只差大小寫的名字也寫不進去。
-   * 路徑本身不合法（`..`、`~`、跑出根）的不在這裡判，交給 {@link verdict} 與基座。
+   * 變更落在保留的地方（{@link reservedReason} 有理由）就拒，不看模式。
    *
    * @param mode - 這一次呼叫用的模式，只用在拒絕訊息。
    * @param filePath - 模型給的虛擬路徑。
@@ -1424,6 +1430,22 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     filePath: string,
     operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
   ): Promise<string | undefined> {
+    const reason = await this.reservedReason(filePath);
+    return reason === undefined ? undefined : this.denial(mode, operation, filePath, reason);
+  }
+
+  /**
+   * `filePath` 落在保留的地方嗎（{@link ContainedFilesystemBackendOptions.reservedWrites}）。變更的拒絕（{@link reservedDenial}）與
+   * 升級工具（#2078）問的都是這一個。
+   *
+   * 兩邊都 canonicalize 之後比，經符號連結的別名（`/docs/AGENTS.md`，`docs` 指向根）也擋得到；解析失敗的退回字面位置比。
+   * **不分大小寫**：不分大小寫的檔案系統上，`/claude.md` 跟 `/CLAUDE.md` 是同一個檔。代價是分大小寫的檔案系統上，只差大小寫的名字也寫不進去。
+   * 路徑本身不合法（`..`、`~`、跑出根）的不在這裡判，交給 {@link verdict} 與基座。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @returns 落在保留的地方時是那一格的理由；其餘（含路徑不合法）`undefined`。
+   */
+  async reservedReason(filePath: string): Promise<string | undefined> {
     const reserved = this.reservedWrites?.() ?? [];
     if (reserved.length === 0) return undefined;
     const target = await this.placeOf(filePath);
@@ -1432,12 +1454,12 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       const place = await this.placeOf(entry.path);
       if (place === undefined) continue;
       const hit = entry.subtree ? isWithin(place, target) : place === target;
-      if (hit) return this.denial(mode, operation, filePath, entry.reason);
+      if (hit) return entry.reason;
     }
     return undefined;
   }
 
-  /** {@link reservedDenial} 比對用的位置：canonicalize 之後轉小寫；解析失敗退回字面位置，路徑不合法回 `undefined`。 */
+  /** {@link reservedReason} 比對用的位置：canonicalize 之後轉小寫；解析失敗退回字面位置，路徑不合法回 `undefined`。 */
   private async placeOf(virtualPath: string): Promise<string | undefined> {
     let resolved: string;
     try {

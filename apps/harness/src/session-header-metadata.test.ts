@@ -32,7 +32,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -45,12 +45,12 @@ import { parse as parseYaml } from 'yaml';
 import { runCli } from './cli.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { projectKey, sessionPathsIn } from './jsonl-session-store.js';
+import { legacyTwoFilePathsIn, projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
 import type { ConfigEntry } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import { sessionHeaderOf } from './session-files.fixture.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionHeaderOf } from './session-files.fixture.js';
 import {
   CONFIG_HASH_KEY_FILE,
   CONFIG_HASH_PREFIX,
@@ -154,6 +154,50 @@ async function dumpEntries(
 function unkeyedHash(entries: readonly ConfigEntry[]): string {
   const digest = createHash('sha256').update(stableStringify(entries)).digest('hex');
   return `${CONFIG_HASH_PREFIX}${digest.slice(0, 16)}`;
+}
+
+/** 一份會話的世代檔：第一行的 header 行原文（不含換行）與其後的事件本文。 */
+async function generationOf(
+  directory: string,
+  id: string,
+): Promise<{ headerLine: string; body: Buffer }> {
+  const bytes = await readFile(sessionPathsIn(directory, id).log);
+  const newline = bytes.indexOf(0x0a);
+  return { headerLine: bytes.toString('utf8', 0, newline), body: bytes.subarray(newline + 1) };
+}
+
+/** 寫上磁碟的 header 原文：世代檔的 header 行，與舊路徑上的墓碑（同一份 header 的另一處）。 */
+async function headerTextsOf(
+  directory: string,
+  id: string,
+): Promise<{ headerLine: string; tombstone: string }> {
+  return {
+    headerLine: (await generationOf(directory, id)).headerLine,
+    tombstone: await readFile(sessionPathsIn(directory, id).tombstone, 'utf8'),
+  };
+}
+
+/**
+ * 把一份會話換成舊兩檔（v0.5.19 以前寫的樣子）：舊路徑寫 `header`，日誌是世代檔第二行起的原樣本文；會話目錄刪掉（留著的話
+ * 兩種佈局並存，讀方拒讀）。續接時遷成這一版的世代，新的 header 行記下這份日誌的位元組數與雜湊（`migratedFrom`）。
+ *
+ * @returns 續接遷過去之後，新世代 header 行該記的 `migratedFrom`。
+ */
+async function toLegacyTwoFile(
+  directory: string,
+  id: string,
+  header: Record<string, unknown>,
+): Promise<{ bytes: number; acceptedBytes: number; sha256: string }> {
+  const { body } = await generationOf(directory, id);
+  const legacy = legacyTwoFilePathsIn(directory, id);
+  await writeFile(legacy.header, JSON.stringify(header));
+  await writeFile(legacy.log, body);
+  await rm(sessionPathsIn(directory, id).sessionDirectory, { recursive: true });
+  return {
+    bytes: body.byteLength,
+    acceptedBytes: body.byteLength,
+    sha256: createHash('sha256').update(body).digest('hex'),
+  };
 }
 
 /** 建置版本那一格的形狀：產品路徑上的值取決於跑測試的機器，只驗形狀。 */
@@ -342,10 +386,12 @@ describe('CLI：寫上磁碟的 header', () => {
     const patch = writePatch(home, canaryPatch(`https://${CANARY}.invalid/v1`));
 
     const runDir = await cliRun(home, logs, ['--session-log', logs, '--patch', patch]);
-    const raw = await readFile(sessionPathsIn(runDir, 'cli').header, 'utf8');
-    // 量的是交付物：寫上磁碟的那一行原文。
+    const { headerLine: raw, tombstone } = await headerTextsOf(runDir, 'cli');
+    // 量的是交付物：寫上磁碟的那一行原文。header 寫在兩處（世代檔第一行與舊路徑的墓碑），兩處都量。
     expect(raw).not.toContain(CANARY);
     expect(raw).not.toContain('canary');
+    expect(tombstone).not.toContain(CANARY);
+    expect(tombstone).not.toContain('canary');
     const header = JSON.parse(raw) as Record<string, unknown>;
 
     expect(header['version']).toBe(SESSION_LOG_FORMAT_VERSION);
@@ -382,8 +428,9 @@ describe('CLI：寫上磁碟的 header', () => {
       printer: { log: () => undefined, error: () => undefined },
     }).catch(() => undefined);
     const [runDir] = readdirSync(logs);
-    const raw = await readFile(sessionPathsIn(join(logs, runDir!), 'cli').header, 'utf8');
+    const { headerLine: raw, tombstone } = await headerTextsOf(join(logs, runDir!), 'cli');
     expect(raw).not.toContain(CANARY);
+    expect(tombstone).not.toContain(CANARY);
     expect(JSON.parse(raw)).toMatchObject({ modelEntryId: DEFAULT_LIVE_MODEL_ID });
   });
 
@@ -391,27 +438,35 @@ describe('CLI：寫上磁碟的 header', () => {
     const home = privateDir('nexus-hdr-home-');
     const logs = privateDir('nexus-hdr-logs-');
     const runDir = await cliRun(home, logs, ['--session-log', logs]);
-    // 改的是版號，直接寫檔（#1868 裁決 Q1）。
-    const headerPath = sessionPathsIn(runDir, 'cli').header;
-    const written = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
+    const { type: _type, ...written } = JSON.parse(
+      (await generationOf(runDir, 'cli')).headerLine,
+    ) as Record<string, unknown>;
     // 前提：第一次跑真的寫了這幾格。
     expectBuildShape(written);
     expect(written['configHash']).toMatch(/^hmac-sha256:/u);
 
-    // 換成這個行程不可能算出來的值，假裝是更早一版的程式寫的：續接要是重算了，就會蓋掉它們。
+    // 換成這個行程不可能算出來的值，假裝是更早一版的程式寫的舊兩檔：續接遷成這一版的世代時要是重算了，就會蓋掉它們。
     const original = {
       ...written,
-      version: SESSION_LOG_FORMAT_VERSION - 1,
+      version: LEGACY_TWO_FILE_FORMAT_VERSION,
       build: { commit: 'f'.repeat(40), dirty: false },
       plugins: [{ name: '@nexus/最初那一列', id: 'first', disabled: false }],
       configHash: 'hmac-sha256:feedfacefeedface',
     };
-    await writeFile(headerPath, JSON.stringify(original));
+    const migratedFrom = await toLegacyTwoFile(runDir, 'cli', original);
 
     await cliRun(home, logs, ['--resume', runDir]);
 
-    const after = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
-    expect(after).toEqual({ ...original, version: SESSION_LOG_FORMAT_VERSION });
+    const after = JSON.parse((await generationOf(runDir, 'cli')).headerLine) as Record<
+      string,
+      unknown
+    >;
+    expect(after).toEqual({
+      type: 'session',
+      ...original,
+      version: SESSION_LOG_FORMAT_VERSION,
+      migratedFrom,
+    });
   });
 
   /**
@@ -536,11 +591,12 @@ describe('serve：寫上磁碟的 header', () => {
     await running.close();
     running = undefined;
 
-    const raw = await readFile(
-      sessionPathsIn(join(root, projectKey(process.cwd())), 'alpha').header,
-      'utf8',
+    const { headerLine: raw, tombstone } = await headerTextsOf(
+      join(root, projectKey(process.cwd())),
+      'alpha',
     );
     expect(raw).not.toContain(CANARY);
+    expect(tombstone).not.toContain(CANARY);
     const header = JSON.parse(raw) as Record<string, unknown>;
     expectBuildShape(header);
     const dumped = await dumpEntries(home, patch, 'serve');
@@ -578,33 +634,42 @@ describe('serve：寫上磁碟的 header', () => {
     }
 
     await sayOnFreshServer([]);
-    // 改的是版號，直接寫檔（#1868 裁決 Q1）。
-    const headerPath = sessionPathsIn(join(root, projectKey(process.cwd())), 'alpha').header;
-    const written = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
+    const directory = join(root, projectKey(process.cwd()));
+    const { type: _type, ...written } = JSON.parse(
+      (await generationOf(directory, 'alpha')).headerLine,
+    ) as Record<string, unknown>;
     // 前提：第一台真的寫了這四格。
     expectBuildShape(written);
     expect(written['configHash']).toMatch(/^hmac-sha256:/u);
     expect(written['modelEntryId']).toBe(DEFAULT_LIVE_MODEL_ID);
 
-    // 換成這個行程算不出來的值：第二台要是重算並寫回，就會蓋掉它們。
+    // 換成這個行程算不出來的值、換成舊兩檔：第二台遷成這一版的世代時要是重算並寫回，就會蓋掉它們。
     const original = {
       ...written,
-      version: SESSION_LOG_FORMAT_VERSION - 1,
+      version: LEGACY_TWO_FILE_FORMAT_VERSION,
       build: { commit: 'f'.repeat(40), dirty: false },
       plugins: [{ name: '@nexus/最初那一列', id: 'first', disabled: false }],
       configHash: 'hmac-sha256:feedfacefeedface',
       modelEntryId: 'vendor/最初那一筆',
     };
-    await writeFile(headerPath, JSON.stringify(original));
+    const migratedFrom = await toLegacyTwoFile(directory, 'alpha', original);
 
     const lines: string[] = [];
     await sayOnFreshServer(lines);
 
     // 前提：第二台走的真的是續接那條路，不是把 alpha 當成新的 thread。
     expect(lines.join('\n')).toContain('[會話日誌] thread "alpha" 接回來了');
-    const after = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
+    const after = JSON.parse((await generationOf(directory, 'alpha')).headerLine) as Record<
+      string,
+      unknown
+    >;
     // 版本升到這一版也是前提：它證明續接真的把 header 重寫了一次，上面那四格是「重寫時保留」，不是「根本沒寫」。
-    expect(after).toEqual({ ...original, version: SESSION_LOG_FORMAT_VERSION });
+    expect(after).toEqual({
+      type: 'session',
+      ...original,
+      version: SESSION_LOG_FORMAT_VERSION,
+      migratedFrom,
+    });
   }, 60_000);
 
   /**

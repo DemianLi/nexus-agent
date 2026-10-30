@@ -14,9 +14,10 @@
  * - **監督者一建立就擁有第一次連線**（照 dsh `connection.ts:346` 的 `settling = connectGeneration(true)`）：表裡同步放進那一份，
  *   同一份設定同時取用只連一次。
  * - **建立那一份的取用等第一次連線落定**（照 dsh 的 `await connection.ready`，`index.ts:199`）：寫了 `failOnStartupError: true`
- *   就拋、池裡不留；沒寫就照 dsh 在背景重試（`supervisor.ts`），連上之後開的 thread 拿得到工具。
- * - **其餘的取用最多等 {@link FIRST_CONNECT_WAIT_MS}**：握手卡住時要等 SDK 的請求逾時才收（#1820 重審用新協定、不回 initialize
- *   的夾具量到 60.3 秒），不讓同一把鍵上之後的每一次組裝都跟著卡住。到期就照「連不上」處理這一份組裝：警告、沒有工具
+ *   就拋、池裡不留；沒寫就照 dsh 在背景重試（`supervisor.ts`），連上之後開的 thread 拿得到工具。建池時給了
+ *   {@link McpConnectionPoolOptions.firstAcquireWaitMs}，沒寫 `failOnStartupError` 的列最多只等那麼久，到期照下一條處理。
+ * - **其餘的取用最多等 {@link FIRST_CONNECT_WAIT_MS}**：握手卡住時要等 SDK 的請求逾時才收（版本協商 `auto` 先試新協定、
+ *   再試舊協定，各等 60 秒；#2125 實測 120 秒），不讓同一把鍵上之後的每一次組裝都跟著卡住。到期就照「連不上」處理這一份組裝：警告、沒有工具
  *   （`failOnStartupError: true` 就拋），連線照樣在背景繼續。偏離見下。
  * - **斷線空窗裡組的 thread 照最近一代的工具清單登記**（照 dsh：`generationDown` 只清 client，工具登記到放棄才撤，
  *   `connection.ts:180-185`、`:226-232`）：委派讀的是目前這一代，空窗期呼叫回 `server is disconnected`，重連之後同一條 thread
@@ -70,6 +71,11 @@ export interface McpConnectionPoolOptions {
   log(message: string): void;
   /** dsh 是 error 級的那幾句：關閉確認不到。省略即寫進 {@link log}。 */
   error?(message: string): void;
+  /**
+   * 建立那一份的取用最多等第一次連線多久（毫秒），只套在沒寫 `failOnStartupError` 的列：那種列連不上只警告、不算掉，
+   * 截短等待不改變它掉不掉，只少了這一份組裝的工具。省略即等到落定（serve）。寫入口試掛給 {@link FIRST_CONNECT_WAIT_MS}。
+   */
+  firstAcquireWaitMs?: number;
 }
 
 /**
@@ -117,8 +123,8 @@ export class McpConnectionPool {
   }
 
   /**
-   * 取這份設定的那一份連線；沒有就建，已放棄重連就重開。建立那一份的取用等第一次連線落定，其餘最多等
-   * {@link FIRST_CONNECT_WAIT_MS}。**找表與建立之間沒有 `await`**，同時來的取用不會各建一份。
+   * 取這份設定的那一份連線；沒有就建，已放棄重連就重開。建立那一份的取用等第一次連線落定（建池給了
+   * `firstAcquireWaitMs`、又沒寫 `failOnStartupError` 時最多等那麼久），其餘最多等 {@link FIRST_CONNECT_WAIT_MS}。**找表與建立之間沒有 `await`**，同時來的取用不會各建一份。
    *
    * @param credentials - 這一列已解析的憑證（名字 → 值）。值不同就是另一份連線；鍵裡只放名字與值的指紋。
    * @throws 第一次就連不上（或等到期限還沒連上）而且寫了 `failOnStartupError: true`；池已經關了。
@@ -133,6 +139,10 @@ export class McpConnectionPool {
     const existing = this.entries.get(key);
     if (existing === undefined || existing.supervisor.gaveUp) {
       const shared = this.open(key, config, elicitation, credentials);
+      const wait = config.failOnStartupError ? undefined : this.options.firstAcquireWaitMs;
+      if (wait !== undefined && (await within(shared.supervisor.ready, wait)) === undefined) {
+        return { shared, error: stillConnecting(shared, wait) };
+      }
       const outcome = await shared.supervisor.ready;
       if (outcome.ok) return { shared, error: undefined };
       if (config.failOnStartupError) {
@@ -145,9 +155,7 @@ export class McpConnectionPool {
     const outcome = await within(existing.supervisor.ready, FIRST_CONNECT_WAIT_MS);
     const error =
       outcome === undefined
-        ? new Error(
-            `${existing.label}: still connecting after ${String(FIRST_CONNECT_WAIT_MS)}ms — this assembly goes without its tools; the connection keeps trying in the background`,
-          )
+        ? stillConnecting(existing, FIRST_CONNECT_WAIT_MS)
         : outcome.ok
           ? undefined
           : outcome.error;
@@ -212,6 +220,13 @@ export class McpConnectionPool {
     this.opened.push(shared);
     return shared;
   }
+}
+
+/** 等到期限、第一次連線還沒落定時，這份組裝拿到的錯誤。 */
+function stillConnecting(shared: SharedConnection, ms: number): Error {
+  return new Error(
+    `${shared.label}: still connecting after ${String(ms)}ms — this assembly goes without its tools; the connection keeps trying in the background`,
+  );
 }
 
 /** `work` 在 `ms` 內落定就回它的值，逾時回 `undefined`。計時器 `unref`、落定就清掉。 */

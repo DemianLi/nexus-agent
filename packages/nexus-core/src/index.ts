@@ -129,6 +129,7 @@ export type {
 export {
   hostPathOf,
   isSandboxMode,
+  isUnderAnyPrefix,
   SANDBOX_MODES,
   SHARED_WORKSPACE_SERVICE,
   virtualPathOf,
@@ -862,6 +863,7 @@ export {
   SessionCorruptionError,
   SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
 } from './session-store.js';
 export type {
   SessionFormatCatalog,
@@ -876,12 +878,15 @@ export {
   classifyStoredFormatVersion,
   createSessionFormatCatalog,
 } from './session-format.js';
-export type { LegacyTwoFileSessionFilenames, SessionFilenames } from './session-filename.js';
+export type { LegacyTwoFileSessionFilenames } from './session-filename.js';
 export {
+  FIRST_GENERATION_FORMAT_VERSION,
+  SESSION_LOCK_FILENAME,
+  generationLogFilename,
   legacyTwoFileSessionFilenames,
+  parseGenerationLogFilename,
   parseLegacyTwoFileHeaderFilename,
-  parseSessionHeaderFilename,
-  sessionFilenames,
+  sessionDirectoryName,
 } from './session-filename.js';
 
 export { errorChain } from './error-chain.js';

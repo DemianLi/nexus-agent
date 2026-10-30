@@ -56,6 +56,9 @@ export type { FsService, SessionAddress } from '@nexus/core';
 // workspace-changes 共用那一份，不在這裡另寫）。
 export { virtualPathOf } from '@nexus/core';
 
+// 路由前綴的判斷（#2082）：「在不在 `offWorkspacePrefixes()` 某一個底下」跟上面同一個理由跟 fs 走，實作同樣留在 core。
+export { isUnderAnyPrefix } from '@nexus/core';
+
 /**
  * 契約版本（semver）。介面破壞性改動跳 major，消費者的範圍擋下不相容的提供者。
  *

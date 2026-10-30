@@ -1,14 +1,26 @@
 /**
- * 續接不再就地覆寫 header、日誌本文走穩定快照讀（[#1509](https://github.com/DemianLi/nexus-agent/issues/1509)）。
+ * 續接遷移時舊 header 換成墓碑（[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③）、日誌本文走穩定快照讀
+ * （[#1509](https://github.com/DemianLi/nexus-agent/issues/1509)）。
  *
- * header 版本已經是這一版就整步不寫；較舊才換，換法是暫存檔＋`fsync`＋`rename`＋目錄 `fsync`，header 落定之後才截日誌尾、
- * 開日誌。讀日誌本文讀前讀後各 `stat`，變了重讀一次，不拼出垃圾行、也不讓續接照錯的位置截檔。
+ * 舊路徑的 header 從不就地覆寫：已經是墓碑就整步不碰；舊兩檔遷成世代檔時，新世代落定（`link`＋會話目錄 `fsync`）之後才把舊
+ * header 換成墓碑，換法是暫存檔＋`fsync`＋`rename`＋目錄 `fsync`，然後才交把手、開世代檔續寫。換到一半失敗，舊 header 原樣，
+ * 新世代留著（遷移當下當掉的中間狀態），下一次續接補上墓碑。讀日誌本文讀前讀後各 `stat`，變了重讀一次，不拼出垃圾行、也不讓
+ * 續接照錯的位置截檔。
  *
  * 照 `jsonl-session-store-materialize.test.ts` 的做法包一層 `node:fs/promises`，記下呼叫順序、在指定處注入失敗。
- * B 條同時掛了新實作的暫存檔 `fsync` 失敗與舊實作的「就地 `writeFile` 寫一半」：改回就地覆寫時 header 會真的被寫壞，紅在位元組那個斷言上。
+ * B 條同時掛了暫存檔 `fsync` 失敗與「就地 `writeFile` 寫一半」：哪天墓碑改成就地覆寫，舊 header 會真的被寫壞，紅在位元組那個斷言上。
  */
 
-import { appendFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -16,13 +28,19 @@ import { join, relative } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import { SESSION_LOG_FORMAT_VERSION, sessionDirectoryName } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 /** 失敗注入。每條測試開頭重設。 */
 interface Injection {
   /** 暫存檔的 `sync` 拋 ENOSPC。 */
   tempSyncEnospc: boolean;
+  /** 暫存檔的路徑符合才拋（省略即 `tempSyncEnospc` 對所有暫存檔）。 */
+  tempSyncOnly: RegExp | undefined;
+  /** 這個目錄（標籤）的 fsync 拋一次 EIO。 */
+  directorySyncEio: string | undefined;
+  /** `directorySyncEio` 等到第一次 `rename` 之後才生效。 */
+  directorySyncAfterRename: boolean;
   /** 舊實作的路徑：就地 `writeFile(<header>)` 先寫一半再拋 ENOSPC。新實作不會走到，掛著是為了讓改回就地覆寫時 header 真的變壞。 */
   partialHeaderWrite: boolean;
   /** `rename` 拋這個碼（`times` 次後恢復）；`Infinity` 是永遠。 */
@@ -39,6 +57,9 @@ let inject: Injection = noInjection();
 function noInjection(): Injection {
   return {
     tempSyncEnospc: false,
+    tempSyncOnly: undefined,
+    directorySyncEio: undefined,
+    directorySyncAfterRename: false,
     partialHeaderWrite: false,
     renameFails: undefined,
     firstLogRead: undefined,
@@ -59,10 +80,17 @@ function wrapHandle(target: FileHandle, path: string, directory: boolean): FileH
     get(real, property) {
       if (property === 'sync') {
         return async () => {
-          if (directory) calls.push(`sync-dir ${label(path)}`);
-          else if (path.endsWith('.tmp')) {
+          if (directory) {
+            calls.push(`sync-dir ${label(path)}`);
+            const armed =
+              !inject.directorySyncAfterRename || calls.some((c) => c.startsWith('rename '));
+            if (armed && inject.directorySyncEio === label(path)) {
+              inject.directorySyncEio = undefined;
+              throw Object.assign(new Error('EIO: i/o error, fsync'), { code: 'EIO' });
+            }
+          } else if (path.endsWith('.tmp')) {
             calls.push(`sync ${label(path)}`);
-            if (inject.tempSyncEnospc) {
+            if (inject.tempSyncEnospc && (inject.tempSyncOnly?.test(path) ?? true)) {
               throw Object.assign(new Error('ENOSPC: no space left on device, fsync'), {
                 code: 'ENOSPC',
               });
@@ -138,7 +166,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   };
 });
 
-const { openJsonlSessionStore, readStableSnapshot } = await import('./jsonl-session-store.js');
+const { legacyTwoFilePathsIn, openJsonlSessionStore, readStableSnapshot, sessionPathsIn } =
+  await import('./jsonl-session-store.js');
 import type { StableReadFileSystem } from './jsonl-session-store.js';
 
 const ID = 'hdr';
@@ -168,23 +197,45 @@ function line(seq: number): string {
   return `${JSON.stringify({ type: 'model/usage', seq, time: 1, data: {} })}\n`;
 }
 
-const headerPath = () => join(dir, `${ID}.header.json`);
-const logPath = () => join(dir, `${ID}.jsonl`);
+/** 舊路徑：舊兩檔的 header，遷移之後是墓碑。 */
+const headerPath = () => legacyTwoFilePathsIn(dir, ID).header;
+/** 這一版的世代檔。 */
+const logPath = () => sessionPathsIn(dir, ID).log;
+/** 會話目錄在呼叫紀錄裡的標籤。 */
+const SESSION_DIR = `p/${sessionDirectoryName(ID)}`;
 
 function store() {
   return openJsonlSessionStore({ directory: dir, warn: () => undefined });
 }
 
-/** 寫一份有 3 顆事件的會話；`version` 給舊值就把 header 改成上一版寫的樣子。 */
-async function seedSession(version: number = CURRENT): Promise<void> {
+/** 寫方寫一份有 3 顆事件的會話（世代檔，舊路徑有墓碑）。 */
+async function seedSession(): Promise<void> {
   const created = store().create(header());
   await created.append([event(0), event(1), event(2)]);
   await created.close();
-  if (version !== CURRENT) {
-    const old = JSON.parse(await readFile(headerPath(), 'utf8')) as Record<string, unknown>;
-    await writeFile(headerPath(), `${JSON.stringify({ ...old, version }, null, 2)}\n`);
-  }
   calls.length = 0;
+}
+
+/** 手寫一份 v0.5.19 以前寫的舊兩檔，有 3 顆事件，header 是 `version` 那一版寫的。 */
+async function seedLegacy(version: number): Promise<void> {
+  const paths = legacyTwoFilePathsIn(dir, ID);
+  await mkdir(dir, { recursive: true });
+  await writeFile(paths.header, `${JSON.stringify({ ...header(), version }, null, 2)}\n`);
+  await writeFile(paths.log, line(0) + line(1) + line(2));
+  calls.length = 0;
+}
+
+/** 墓碑：這一版的 header 行。 */
+function tombstone(): Record<string, unknown> {
+  return { type: 'session', ...header() };
+}
+
+/** 會話所在的目錄與會話目錄裡殘留的暫存檔。 */
+async function leftoverTemps(): Promise<string[]> {
+  const entries = [...(await readdir(dir))];
+  const sessionDirectory = join(dir, sessionDirectoryName(ID));
+  const inner = await readdir(sessionDirectory).catch(() => [] as string[]);
+  return [...entries, ...inner].filter((entry) => entry.endsWith('.tmp'));
 }
 
 async function identity(path: string) {
@@ -197,9 +248,9 @@ function headerCalls(): string[] {
   return calls.filter((call) => /\.header\.json(?!\.)/u.test(call) && !call.includes('.tmp'));
 }
 
-describe('A. header 路徑上不准就地截斷', () => {
-  it('舊版 header 續接並寫一筆：header 唯一的變化是一次 rename 蓋上來，沒有以 w 開、truncate、writeFile', async () => {
-    await seedSession(2);
+describe('A. 舊路徑的 header 上不准就地截斷', () => {
+  it('遷移舊兩檔並寫一筆：舊 header 唯一的變化是一次 rename 蓋上墓碑，沒有以 w 開、truncate、writeFile', async () => {
+    await seedLegacy(2);
     const resumed = await store().resume(ID);
     await resumed.stored.append([event(resumed.events.length)]);
     await resumed.stored.close();
@@ -210,67 +261,130 @@ describe('A. header 路徑上不准就地截斷', () => {
     expect(calls.some((call) => /open .*\.header\.json (w|w\+)$/u.test(call))).toBe(false);
   });
 
-  it('header 落定（暫存檔 fsync → rename → 目錄 fsync）之後才開日誌續寫', async () => {
-    await seedSession(2);
+  it('新世代落定（暫存檔 fsync → 會話目錄 fsync）之後才換墓碑，墓碑落定（rename → 目錄 fsync）之後才開世代檔續寫', async () => {
+    await seedLegacy(2);
     const resumed = await store().resume(ID);
     await resumed.stored.append([event(resumed.events.length)]);
     await resumed.stored.close();
 
-    const at = (needle: string | RegExp) =>
-      calls.findIndex((call) => (typeof needle === 'string' ? call === needle : needle.test(call)));
-    const tempSync = at(`sync p/${ID}.header.json.tmp`);
+    const at = (needle: string) => calls.indexOf(needle);
+    const generationSync = at(`sync ${SESSION_DIR}/session.v${String(CURRENT)}.jsonl.tmp`);
+    const sessionDirSync = calls.findIndex(
+      (call, index) => index > generationSync && call === `sync-dir ${SESSION_DIR}`,
+    );
+    const tombstoneTempSync = at(`sync p/${ID}.header.json.tmp`);
     const rename = at(`rename p/${ID}.header.json`);
     const dirSync = calls.findIndex((call, index) => index > rename && call === 'sync-dir p');
-    const logOpen = at(`open p/${ID}.jsonl a`);
-    expect(tempSync).toBeGreaterThanOrEqual(0);
-    expect(rename).toBeGreaterThan(tempSync);
+    const logOpen = at(`open ${SESSION_DIR}/session.v${String(CURRENT)}.jsonl a`);
+    expect(generationSync).toBeGreaterThanOrEqual(0);
+    expect(sessionDirSync).toBeGreaterThan(generationSync);
+    expect(tombstoneTempSync).toBeGreaterThan(sessionDirSync);
+    expect(rename).toBeGreaterThan(tombstoneTempSync);
     expect(dirSync).toBeGreaterThan(rename);
     expect(logOpen).toBeGreaterThan(dirSync);
   });
 });
 
-describe('B. 取代中途失敗，header 原樣', () => {
-  for (const [name, arm] of [
-    [
-      '暫存檔 fsync 拋 ENOSPC',
-      () => {
-        inject.tempSyncEnospc = true;
-        inject.partialHeaderWrite = true;
-      },
-    ],
-    [
-      'rename 拋 ENOSPC',
-      () => (inject.renameFails = { code: 'ENOSPC', times: Number.POSITIVE_INFINITY }),
-    ],
-  ] as const) {
-    it(`${name}：這次寫入拒絕、header 位元組不變且讀得懂、沒有殘留 .tmp；撤掉注入再寫成功，header 是新版本`, async () => {
-      await seedSession(2);
-      const before = await readFile(headerPath());
-      const resumed = await store().resume(ID);
+describe('B. 遷移中途失敗，舊 header 原樣', () => {
+  it('暫存檔 fsync 拋 ENOSPC：續接拒絕、舊兩檔位元組不變、沒有殘留 .tmp、不留會話目錄；撤掉注入再續接成功', async () => {
+    await seedLegacy(2);
+    const before = [
+      await readFile(headerPath()),
+      await readFile(legacyTwoFilePathsIn(dir, ID).log),
+    ];
+    inject.tempSyncEnospc = true;
+    inject.partialHeaderWrite = true;
 
-      arm();
-      await expect(resumed.stored.append([event(resumed.events.length)])).rejects.toThrow(/ENOSPC/);
+    await expect(store().resume(ID)).rejects.toThrow(/ENOSPC/);
 
-      expect(await readFile(headerPath())).toEqual(before);
-      expect(JSON.parse(before.toString('utf8'))).toMatchObject({ version: 2, id: ID });
-      expect((await readdir(dir)).filter((entry) => entry.endsWith('.tmp'))).toEqual([]);
-      // 同一個把手還握著租約，失敗後的 read 不受影響。
-      expect((await (await store().open(ID, 'read')).read()).length).toBe(3);
+    expect([
+      await readFile(headerPath()),
+      await readFile(legacyTwoFilePathsIn(dir, ID).log),
+    ]).toEqual(before);
+    expect(await leftoverTemps()).toEqual([]);
+    expect(await readdir(dir)).not.toContain(sessionDirectoryName(ID));
 
-      inject = noInjection();
-      await resumed.stored.append([event(resumed.events.length)]);
-      await resumed.stored.close();
-      expect(JSON.parse(await readFile(headerPath(), 'utf8'))).toEqual({
-        ...header(),
-        version: CURRENT,
-      });
-      expect((await (await store().open(ID, 'read')).read()).length).toBe(4);
+    inject = noInjection();
+    const resumed = await store().resume(ID);
+    await resumed.stored.append([event(resumed.events.length)]);
+    await resumed.stored.close();
+    expect(JSON.parse(await readFile(headerPath(), 'utf8'))).toEqual(tombstone());
+    expect((await (await store().open(ID, 'read')).read()).length).toBe(4);
+  });
+
+  it('換墓碑的 rename 拋 ENOSPC：續接拒絕、舊 header 不變；新世代留著照讀，下一次續接補上墓碑', async () => {
+    await seedLegacy(2);
+    const before = await readFile(headerPath());
+    inject.renameFails = { code: 'ENOSPC', times: Number.POSITIVE_INFINITY };
+    inject.partialHeaderWrite = true;
+
+    await expect(store().resume(ID)).rejects.toThrow(/ENOSPC/);
+
+    expect(await readFile(headerPath())).toEqual(before);
+    expect(JSON.parse(before.toString('utf8'))).toMatchObject({ version: 2, id: ID });
+    expect(await leftoverTemps()).toEqual([]);
+    // 遷移當下當掉的中間狀態：舊日誌對得上新世代記的來源，讀新世代、只列一份。
+    expect((await (await store().open(ID, 'read')).read()).length).toBe(3);
+    expect(await store().list()).toMatchObject({
+      unreadable: 0,
+      sessions: [{ header: { id: ID } }],
     });
-  }
+
+    inject = noInjection();
+    const resumed = await store().resume(ID);
+    await resumed.stored.append([event(resumed.events.length)]);
+    await resumed.stored.close();
+    expect(JSON.parse(await readFile(headerPath(), 'utf8'))).toEqual(tombstone());
+    expect((await (await store().open(ID, 'read')).read()).length).toBe(4);
+  });
 });
 
-describe('C. 同版本不重寫', () => {
-  it('已是這一版：續接並寫一筆，header 的 ino／mtimeNs／ctimeNs 前後相同，沒有任何對 header 的呼叫', async () => {
+describe('B2. 遷移發佈之後的每一步失敗', () => {
+  /** 拒絕之後：舊 header 不變，新世代留著照讀；撤掉注入，下一次續接補上墓碑。 */
+  async function rejectedThenRecovered(pattern: RegExp): Promise<void> {
+    const before = await readFile(headerPath());
+    await expect(store().resume(ID)).rejects.toThrow(pattern);
+    expect(await readFile(headerPath())).toEqual(before);
+    expect(await leftoverTemps()).toEqual([]);
+    expect((await (await store().open(ID, 'read')).read()).length).toBe(3);
+
+    inject = noInjection();
+    const resumed = await store().resume(ID);
+    await resumed.stored.append([event(resumed.events.length)]);
+    await resumed.stored.close();
+    expect(JSON.parse(await readFile(headerPath(), 'utf8'))).toEqual(tombstone());
+    expect((await (await store().open(ID, 'read')).read()).length).toBe(4);
+  }
+
+  it('link 之後會話目錄 fsync 拋 EIO', async () => {
+    await seedLegacy(2);
+    inject.directorySyncEio = `p/${sessionDirectoryName(ID)}`;
+    await rejectedThenRecovered(/EIO/);
+  });
+
+  it('墓碑暫存檔 fsync 拋 ENOSPC', async () => {
+    await seedLegacy(2);
+    inject.tempSyncEnospc = true;
+    inject.tempSyncOnly = /\.header\.json\.[0-9a-f]{12}\.tmp$/u;
+    await rejectedThenRecovered(/ENOSPC/);
+  });
+
+  it('rename 之後專案目錄 fsync 拋 EIO：墓碑已換上，新世代照讀，再續接不重遷', async () => {
+    await seedLegacy(2);
+    inject.directorySyncEio = 'p';
+    inject.directorySyncAfterRename = true;
+    await expect(store().resume(ID)).rejects.toThrow(/EIO/);
+    expect(JSON.parse(await readFile(headerPath(), 'utf8'))).toEqual(tombstone());
+    expect(await leftoverTemps()).toEqual([]);
+
+    const resumed = await store().resume(ID);
+    expect(resumed.events.length).toBe(3);
+    await resumed.stored.close();
+  });
+});
+
+describe('C. 已經是墓碑就不碰', () => {
+  it('寫方寫的：續接並寫一筆，墓碑的 ino／mtimeNs／ctimeNs 前後相同，沒有任何對舊路徑 header 的呼叫', async () => {
     await seedSession();
     const before = await identity(headerPath());
     const bytes = await readFile(headerPath());
@@ -285,8 +399,8 @@ describe('C. 同版本不重寫', () => {
     expect((await (await store().open(ID, 'read')).read()).length).toBe(4);
   });
 
-  it('舊版本：ino 換了，內容是 { ...header, version: 這一版 }', async () => {
-    await seedSession(2);
+  it('舊兩檔：遷移之後 ino 換了，內容是這一版的 header 行', async () => {
+    await seedLegacy(2);
     const before = await identity(headerPath());
 
     const resumed = await store().resume(ID);
@@ -294,10 +408,7 @@ describe('C. 同版本不重寫', () => {
     await resumed.stored.close();
 
     expect((await identity(headerPath())).ino).not.toBe(before.ino);
-    expect(JSON.parse(await readFile(headerPath(), 'utf8'))).toEqual({
-      ...header(),
-      version: CURRENT,
-    });
+    expect(JSON.parse(await readFile(headerPath(), 'utf8'))).toEqual(tombstone());
   });
 });
 
@@ -312,38 +423,33 @@ describe('Windows：rename 暫時性錯誤有界重試', () => {
     }
   }
 
-  it('EBUSY 兩次後恢復：取代成功，rename 共三次', async () => {
-    await seedSession(2);
-    const resumed = await store().resume(ID);
+  it('EBUSY 兩次後恢復：換墓碑成功，rename 共三次', async () => {
+    await seedLegacy(2);
     inject.renameFails = { code: 'EBUSY', times: 2 };
-    await onWin32(() => resumed.stored.append([event(resumed.events.length)]));
+    const resumed = await onWin32(() => store().resume(ID));
     await resumed.stored.close();
 
     expect(calls.filter((call) => call === `rename p/${ID}.header.json`)).toHaveLength(3);
     expect(JSON.parse(await readFile(headerPath(), 'utf8'))).toMatchObject({ version: CURRENT });
   });
 
-  it('一直 EPERM：試 1 + 8 次後拋原錯，header 原樣、沒有殘留 .tmp', async () => {
-    await seedSession(2);
+  it('一直 EPERM：試 1 + 8 次後拋原錯，舊 header 原樣、沒有殘留 .tmp', async () => {
+    await seedLegacy(2);
     const before = await readFile(headerPath());
-    const resumed = await store().resume(ID);
     inject.renameFails = { code: 'EPERM', times: Number.POSITIVE_INFINITY };
 
-    await expect(
-      onWin32(() => resumed.stored.append([event(resumed.events.length)])),
-    ).rejects.toThrow(/EPERM/);
+    await expect(onWin32(() => store().resume(ID))).rejects.toThrow(/EPERM/);
 
     expect(calls.filter((call) => call === `rename p/${ID}.header.json`)).toHaveLength(9);
     expect(await readFile(headerPath())).toEqual(before);
-    expect((await readdir(dir)).filter((entry) => entry.endsWith('.tmp'))).toEqual([]);
+    expect(await leftoverTemps()).toEqual([]);
   });
 
   it('不是 win32：EBUSY 不重試，一次就拋', async () => {
-    await seedSession(2);
-    const resumed = await store().resume(ID);
+    await seedLegacy(2);
     inject.renameFails = { code: 'EBUSY', times: Number.POSITIVE_INFINITY };
 
-    await expect(resumed.stored.append([event(resumed.events.length)])).rejects.toThrow(/EBUSY/);
+    await expect(store().resume(ID)).rejects.toThrow(/EBUSY/);
     expect(calls.filter((call) => call === `rename p/${ID}.header.json`)).toHaveLength(1);
   });
 });

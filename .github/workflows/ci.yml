@@ -46,13 +46,16 @@ permissions:
 #         ├─ test-packages ────┤
 #         ├─ test-web ─────────┼─► gate
 #         ├─ test-harness ─────┤   兩片
-#         ├─ packed-install ───┤   打成 tarball、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
-#         └─ node-compat ──────┘   Node 下限 22.19 與下一版 26 各跑一輪相容冒煙，依序跑（#1546）
+#         ├─ node-compat ──────┤   Node 下限 22.19 與下一版 26 各跑一輪相容冒煙，依序跑（#1546）
+#         ├─ sandbox-spawner ──┤   Rust 的沙箱 spawner（#1946）。不看模式，看 plan 的 rust：輕的模式也會跑
+#         │  └ packed-install ─┤   接在 spawner 後面：打成 tarball（帶 spawner 的 bundle）、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
+#         └─ sandbox-spawner-arm64 ┘ 只在合併後完整一輪：arm64 的 spawner 只編、只測，不出貨（#1946）
 #
 # job 數是有代價的：免費額度同時只跑 20 個 job。全跑一輪的峰值是中間那一段：
-# static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ packed-install 1
-# ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）＝ 8。plan 在它之前、gate 在它之後，不同時。
-# 輕的一輪是 plan 接 gate，同時只有 1 個，所以合併後的一輪加上兩張功能 PR 同時跑是 8 ＋ 1 ＋ 1 ＝ 10，在 20 之內。
+# static 1 ＋ typecheck 1 ＋ test-packages 1 ＋ test-web 1 ＋ test-harness 2 ＋ node-compat 1（`max-parallel: 1`，兩格依序跑）
+# ＋ sandbox-spawner 接 packed-install 1（依序，同時只有一個）＋ sandbox-spawner-arm64 1 ＝ 9。plan 在它之前、gate 在它之後，不同時。
+# 輕的一輪是 plan 接 gate（動到 spawner 時中間多一個 sandbox-spawner），依序跑，同時只有 1 個，
+# 所以合併後的一輪加上兩張功能 PR 同時跑是 9 ＋ 1 ＋ 1 ＝ 11，在 20 之內。
 # 這兩個算式由 .github/scripts/test_ci_workflow.py 釘住，加 job 或加矩陣格時它會紅。
 #
 # 新增檢查：往現有 job 加 step，或新增 job 並把它列進 gate 的 needs 與判斷（不列進去的 job 掛了 gate 也不會紅）。
@@ -67,9 +70,12 @@ jobs:
     outputs:
       mode: ${{ steps.plan.outputs.mode }}
       ts: ${{ steps.plan.outputs.ts }}
+      rust: ${{ steps.plan.outputs.rust }}
       base_sha: ${{ steps.base.outputs.sha }}
       changed_count: ${{ steps.checks.outputs.count }}
       affected: ${{ steps.light.outputs.affected }}
+      durations_key_1: ${{ steps.durations-1.outputs.cache-matched-key }}
+      durations_key_2: ${{ steps.durations-2.outputs.cache-matched-key }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -93,6 +99,27 @@ jobs:
         env:
           BASE_REF: ${{ github.base_ref }}
         run: echo "sha=$(git merge-base "origin/$BASE_REF" HEAD)" >> "$GITHUB_OUTPUT"
+
+      # 全跑時 test-harness 兩片要讀的耗時（#2093）：合併後那一輪每片各存一份，這裡只查鍵、不下載。PR 先找分歧點那一份，
+      # 沒有（或不是 PR）就退回最近的一份；都沒有時（GitHub 會清掉 7 天沒人取的快取）兩片退回 vitest 的雜湊切法。
+      # 兩片拿這裡查到的同一個鍵去取，讀到的是同一份資料，切法才一致。
+      - uses: actions/cache/restore@v6
+        id: durations-1
+        if: steps.plan.outputs.mode == 'full'
+        with:
+          path: .harness-durations/results-1.json
+          key: harness-durations-1-${{ steps.base.outputs.sha || github.sha }}
+          restore-keys: harness-durations-1-
+          lookup-only: true
+
+      - uses: actions/cache/restore@v6
+        id: durations-2
+        if: steps.plan.outputs.mode == 'full'
+        with:
+          path: .harness-durations/results-2.json
+          key: harness-durations-2-${{ steps.base.outputs.sha || github.sha }}
+          restore-keys: harness-durations-2-
+          lookup-only: true
 
       # 以下是輕的模式：擋合併所需的檢查都在這個 job 跑完，中間那一段整排 skipped。
 
@@ -253,9 +280,10 @@ jobs:
   # 這裡是下限上的「已安裝產物」冒煙；同一個下限上的「原始碼」冒煙在 node-compat 的 22.19 那一格。兩邊的版本由
   # .github/scripts/test_ci_workflow.py 對著 `engines` 釘住。
   # 只在動到 TypeScript 相關檔案時跑（同 static）；`.github/workflows/`、`.github/scripts/` 的異動 plan 也算進去。
+  # 包裡的 spawner 用 sandbox-spawner 這一輪編好、測過的那一份，這裡不編 Rust。plan 保證這個 job 要跑時 rust 為 true。
   packed-install:
     name: packed-install
-    needs: plan
+    needs: [plan, sandbox-spawner]
     if: needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -268,8 +296,14 @@ jobs:
           cache: pnpm
       - name: 安裝相依套件
         run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v8
+        with:
+          name: sandbox-spawner-linux-x64
+          path: ${{ runner.temp }}
+      - name: 解開沙箱 spawner 的 bundle
+        run: mkdir "$RUNNER_TEMP/spawner" && tar -xf "$RUNNER_TEMP/spawner-bundle.tar" -C "$RUNNER_TEMP/spawner"
       - name: 打包
-        run: pnpm run release:pack
+        run: pnpm run release:pack --spawner "$RUNNER_TEMP/spawner"
       - name: 核對 sha256
         working-directory: .release-out
         run: sha256sum -c ./*.sha256
@@ -368,8 +402,9 @@ jobs:
       - name: Test
         run: pnpm --filter @nexus/web run test
 
-  # harness 是關鍵路徑，切兩片平行跑。量測（2026-09-29，GitHub 公開倉庫的標準 runner）：harness 單片約 190 秒，兩片各約 80–110 秒，
-  # 三片沒有更快（vitest 依檔名雜湊分片、不看耗時，片間不均）。web 單片約 85 秒，低於 harness 的一片，不需要分。
+  # harness 是關鍵路徑，切兩片平行跑；web 一片就比 harness 的一片短，不分。
+  # 分片看上一輪的耗時（#2093，`apps/harness/src/test-shard-sequencer.ts`）：plan 查到鍵就取那兩份，跑完由合併後那一輪各片存回自己這一份。
+  # plan 沒查到鍵時兩片都退回 vitest 的雜湊切法；plan 查到了、這一片卻取不到就紅，不會一片看耗時、一片看雜湊而漏跑檔。
   test-harness:
     name: test-harness (${{ matrix.shard }}/2)
     needs: plan
@@ -383,8 +418,71 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+      - uses: actions/cache/restore@v6
+        if: needs.plan.outputs.durations_key_1 != ''
+        with:
+          path: .harness-durations/results-1.json
+          key: ${{ needs.plan.outputs.durations_key_1 }}
+          fail-on-cache-miss: true
+      - uses: actions/cache/restore@v6
+        if: needs.plan.outputs.durations_key_2 != ''
+        with:
+          path: .harness-durations/results-2.json
+          key: ${{ needs.plan.outputs.durations_key_2 }}
+          fail-on-cache-miss: true
       - name: Test
+        env:
+          NEXUS_TEST_DURATIONS_DIR: ${{ github.workspace }}/.harness-durations
         run: pnpm --filter @nexus/harness exec vitest run --shard="${{ matrix.shard }}/2"
+      # vitest 跑完把這一片每個檔的耗時寫進自己的結果快取；CI 的 node_modules 是新裝的，裡面只有這一片的檔。測試紅了也存。
+      - name: 收這一片的耗時
+        if: inputs.full && !cancelled()
+        run: |
+          mkdir -p .harness-durations
+          cp apps/harness/node_modules/.vite/vitest/*/results.json ".harness-durations/results-${{ matrix.shard }}.json"
+      - name: 存這一片的耗時
+        if: inputs.full && !cancelled()
+        uses: actions/cache/save@v6
+        with:
+          path: .harness-durations/results-${{ matrix.shard }}.json
+          key: harness-durations-${{ matrix.shard }}-${{ github.sha }}
+
+  # 沙箱 spawner（#1946，`native/sandbox-spawner/`）：Rust，在真的核心上跑整合測試，再用編好的執行檔跑 TS 那一側。plan 的 `rust` 決定跑不跑，跟模式無關：
+  # 動到它、TS 那一側的接縫與 client 或 CI 自己的功能 PR（輕的模式也跑，#1827 D55：接受超過 60 秒）、packed-install 要跑的一輪（並打 bundle 給它）與合併後完整一輪。
+  # 核心沒有 Landlock 時測試紅，不准自我跳過。
+  sandbox-spawner:
+    name: sandbox-spawner
+    needs: plan
+    if: needs.plan.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/sandbox-spawner
+        with:
+          bundle: ${{ needs.plan.outputs.mode == 'full' && needs.plan.outputs.ts == 'true' && 'sandbox-spawner-linux-x64' || '' }}
+      - uses: ./.github/actions/setup
+      - name: 真的 spawner 跑 rg
+        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration
+        env:
+          NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
+
+  # arm64 的 spawner 只在合併後完整一輪編與測（#1827 D55），不進包、不掛 Release（#1946 issuecomment-6508052433）。
+  # 用 GitHub 的 arm64 runner 原生編，不交叉編譯：同一台機器順便在 aarch64 的真核心上跑整合測試。
+  sandbox-spawner-arm64:
+    name: sandbox-spawner-arm64
+    needs: plan
+    if: inputs.full
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/sandbox-spawner
+      - uses: ./.github/actions/setup
+      - name: 真的 spawner 跑 rg
+        run: pnpm --filter @nexus/harness exec vitest run src/sandbox-spawner.integration
+        env:
+          NEXUS_SPAWNER_BIN: ${{ github.workspace }}/native/sandbox-spawner/target/${{ env.SPAWNER_TARGET }}/release/nexus-sandbox-spawner
 
   # 這個 job 的名稱就是 ruleset 綁定的 required status check，永遠不要改。
   #
@@ -396,7 +494,18 @@ jobs:
   gate:
     name: gate
     needs:
-      [plan, static, typecheck, test-packages, test-web, test-harness, packed-install, node-compat]
+      [
+        plan,
+        static,
+        typecheck,
+        test-packages,
+        test-web,
+        test-harness,
+        packed-install,
+        node-compat,
+        sandbox-spawner,
+        sandbox-spawner-arm64,
+      ]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -414,6 +523,10 @@ jobs:
           TEST_HARNESS: ${{ needs.test-harness.result }}
           PACKED_INSTALL: ${{ needs.packed-install.result }}
           NODE_COMPAT: ${{ needs.node-compat.result }}
+          RUST: ${{ needs.plan.outputs.rust }}
+          SANDBOX_SPAWNER: ${{ needs.sandbox-spawner.result }}
+          FULL: ${{ inputs.full }}
+          SANDBOX_SPAWNER_ARM64: ${{ needs.sandbox-spawner-arm64.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
         run: |
           {
@@ -434,6 +547,8 @@ jobs:
             echo "| test-harness | $TEST_HARNESS |"
             echo "| packed-install | $PACKED_INSTALL |"
             echo "| node-compat | $NODE_COMPAT |"
+            echo "| sandbox-spawner | $SANDBOX_SPAWNER |"
+            echo "| sandbox-spawner-arm64 | $SANDBOX_SPAWNER_ARM64 |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail() { echo "::error::$1"; exit 1; }
@@ -451,4 +566,19 @@ jobs:
             done
           else
             fail "plan 輸出的模式是 '$MODE'、ts 是 '$TS'，無法判斷該跑什麼。"
+          fi
+
+          # sandbox-spawner 不看模式，看 plan 的 rust。
+          if [ "$RUST" = "true" ]; then
+            [ "$SANDBOX_SPAWNER" = "success" ] || fail "sandbox-spawner 的結果是 '$SANDBOX_SPAWNER'，需要 success。"
+          elif [ "$RUST" = "false" ]; then
+            [ "$SANDBOX_SPAWNER" = "skipped" ] || fail "不需要跑，sandbox-spawner 卻是 '$SANDBOX_SPAWNER'。"
+          else
+            fail "plan 輸出的 rust 是 '$RUST'，無法判斷 sandbox-spawner 該不該跑。"
+          fi
+
+          if [ "$FULL" = "true" ]; then
+            [ "$SANDBOX_SPAWNER_ARM64" = "success" ] || fail "sandbox-spawner-arm64 的結果是 '$SANDBOX_SPAWNER_ARM64'，需要 success。"
+          else
+            [ "$SANDBOX_SPAWNER_ARM64" = "skipped" ] || fail "不是合併後完整一輪，sandbox-spawner-arm64 卻是 '$SANDBOX_SPAWNER_ARM64'。"
           fi

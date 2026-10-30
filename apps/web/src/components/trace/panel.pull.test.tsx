@@ -214,23 +214,70 @@ describe('摘要列的「載入這一輪的細節」', () => {
     return { ...fake, ...utils };
   }
 
-  it('按下去：進行中不是鈕，是 DotLoader 加一行進度字；拉回來就換成完整的一組', async () => {
+  it('按下去：進行中是同一顆鈕，停用、字與名稱不變，圖示換成 DotLoader；拉回來就換成完整的一組', async () => {
     const { client, waiting, queries } = await opened();
     const row = digestRow(100)!;
-    fireEvent.click(within(row).getByRole('button', { name: TRACE_PULL_LABEL }));
+    const button = within(row).getByRole('button', { name: TRACE_PULL_LABEL });
+    fireEvent.click(button);
     await flush();
     expect(queries.at(-1)).toEqual({ seq: 100 });
     const pull = within(row).getByTestId('trace-pull');
     expect(pull.getAttribute('data-status')).toBe('loading');
-    expect(pull.textContent).toBe(TRACE_PULL_LOADING_TEXT);
+    expect(pull.textContent).toBe(TRACE_PULL_LABEL);
     expect(pull.querySelectorAll('.animate-dot-flash')).toHaveLength(3);
-    expect(within(pull).queryByRole('button')).toBeNull();
+    expect(within(pull).getByRole('button', { name: TRACE_PULL_LABEL })).toBe(button);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
     expect(client.trajectoryTurn).toHaveBeenCalledTimes(3);
     await act(async () => {
       waiting.at(-1)!(okTurns(detail(1)));
     });
     expect(group(100)).not.toBeNull();
     expect(screen.queryByTestId('trace-digests')).toBeNull();
+  });
+
+  it('鍵盤按下去（#2009）：讀取中焦點留在鈕上；拉回來落在那一輪的標題、捲過去', async () => {
+    const { waiting } = await opened();
+    const button = within(digestRow(100)!).getByRole('button', { name: TRACE_PULL_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await flush();
+    expect(document.activeElement).toBe(button);
+    await act(async () => {
+      waiting.at(-1)!(okTurns(detail(1)));
+    });
+    const head = group(100)!.querySelector('[data-reveal-target]');
+    expect(document.activeElement).toBe(head);
+    expect(scrolled).toContain(head);
+  });
+
+  it('鍵盤按下去失敗（#2009）：焦點留在同一顆鈕上，它改成「重試」', async () => {
+    const { waiting } = await opened();
+    const button = within(digestRow(100)!).getByRole('button', { name: TRACE_PULL_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await flush();
+    await act(async () => {
+      waiting.at(-1)!({ kind: 'rejected', code: 'invalid_argument', message: '錨點不對' });
+    });
+    expect(within(digestRow(100)!).getByRole('button', { name: TRACE_PULL_RETRY_LABEL })).toBe(
+      button,
+    );
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('讀取中人自己把焦點移走（#2009）：拉回來不搶', async () => {
+    const { waiting } = await opened();
+    const button = within(digestRow(100)!).getByRole('button', { name: TRACE_PULL_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await flush();
+    const elsewhere = screen.getByTestId('right-sidebar-panel-trace');
+    elsewhere.focus();
+    await act(async () => {
+      waiting.at(-1)!(okTurns(detail(1)));
+    });
+    expect(group(100)).not.toBeNull();
+    expect(document.activeElement).toBe(elsewhere);
   });
 
   it('失敗：把伺服器給的原因原樣說出來（不加前綴詞以外的東西），給重試；重試成功就好', async () => {
@@ -250,6 +297,58 @@ describe('摘要列的「載入這一輪的細節」', () => {
       waiting.at(-1)!(okTurns(detail(1)));
     });
     expect(group(100)).not.toBeNull();
+  });
+
+  it('只有摘要的組（#2009）：鍵盤按「重試」拉回來，焦點落在同一組的標題', async () => {
+    const { client, waiting } = fakeClient();
+    mount(scenario(), client);
+    await flush();
+    // 第 3 輪預拉失敗、第 2 輪拉到：第 3 輪變成只有摘要的組，帶「重試」。
+    await act(async () => {
+      waiting[0]!({ kind: 'rejected', code: 'invalid_argument', message: '錨點不對' });
+      waiting[1]!(okTurns(detail(2)));
+    });
+    const summary = group(300)!;
+    expect(within(summary).getByTestId('trace-summary-only')).toBeTruthy();
+    const button = within(summary).getByRole('button', { name: TRACE_PULL_RETRY_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await flush();
+    expect(document.activeElement).toBe(button);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.textContent).toBe(TRACE_PULL_RETRY_LABEL);
+    expect(within(summary).getByRole('button', { name: TRACE_PULL_RETRY_LABEL })).toBe(button);
+    await act(async () => {
+      waiting.at(-1)!(okTurns(detail(3)));
+    });
+    expect(within(group(300)!).queryByTestId('trace-summary-only')).toBeNull();
+    expect(document.activeElement).toBe(group(300)!.querySelector('[data-reveal-target]'));
+  });
+
+  it('拉回來的輪排在「顯示更早的輪」後面（#2009）：先展開到那一組，焦點才交得過去', async () => {
+    const digests = Array.from({ length: 14 }, (_, i) => digest(i + 1));
+    const state = withTrajectory(
+      reduceAll(emptyConversation(), []),
+      new Script(),
+      view([turn(15)], { digests }),
+    );
+    const { client, waiting } = fakeClient();
+    mount(state, client);
+    await flush();
+    await act(async () => {
+      for (const resolve of waiting.splice(0))
+        resolve({ kind: 'rejected', code: 'invalid_argument', message: '先不拉' });
+    });
+    fireEvent.click(screen.getByRole('button', { name: /更早的 14 輪/ }));
+    const button = within(digestRow(100)!).getByRole('button', { name: TRACE_PULL_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await flush();
+    await act(async () => {
+      waiting.at(-1)!(okTurns(detail(1)));
+    });
+    expect(group(100)).not.toBeNull();
+    expect(document.activeElement).toBe(group(100)!.querySelector('[data-reveal-target]'));
   });
 
   it('沒有拉取（沒給 trajectoryPull）：摘要列沒有載入鈕', async () => {

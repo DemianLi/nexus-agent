@@ -4,7 +4,7 @@
     {
       "key": "SessionHeader",
       "kind": "header",
-      "digest": "eb5bcaa512ec4a442a07dabbe20ac46594b5f651143a54303ce54251d4755a54",
+      "digest": "ba31a0d94f50107e9024da4742e2e86d1f95594991f2d386c1e28237e5ea1245",
       "schema": {
         "root": 0,
         "nodes": [
@@ -155,7 +155,201 @@
           },
           {
             "kind": "literal",
-            "value": 51
+            "value": 52
+          }
+        ]
+      }
+    },
+    {
+      "key": "JsonlHeaderLine",
+      "kind": "header",
+      "digest": "442070964ed30dc9c303b6475184f2e0c849e342ad5db8765066dc6e79ec160f",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "build",
+                "type": 1,
+                "optional": true
+              },
+              {
+                "name": "configHash",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "createdAt",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "cwd",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "id",
+                "type": 4,
+                "optional": false
+              },
+              {
+                "name": "isSeeded",
+                "type": 8,
+                "optional": true
+              },
+              {
+                "name": "migratedFrom",
+                "type": 9,
+                "optional": true
+              },
+              {
+                "name": "modelEntryId",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "origin",
+                "type": 10,
+                "optional": true
+              },
+              {
+                "name": "parentSession",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "plugins",
+                "type": 11,
+                "optional": true
+              },
+              {
+                "name": "type",
+                "type": 13,
+                "optional": false
+              },
+              {
+                "name": "version",
+                "type": 14,
+                "optional": false
+              },
+              {
+                "name": "workspaceRoot",
+                "type": 4,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "commit",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "dirty",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "union",
+            "types": [
+              3,
+              4
+            ]
+          },
+          {
+            "kind": "primitive",
+            "type": "null"
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "union",
+            "types": [
+              3,
+              6
+            ]
+          },
+          {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "acceptedBytes",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "bytes",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "sha256",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "subagent"
+          },
+          {
+            "kind": "array",
+            "element": 12
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "disabled",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "id",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "name",
+                "type": 4,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "session"
+          },
+          {
+            "kind": "literal",
+            "value": 52
           }
         ]
       }
@@ -6826,11 +7020,6 @@
       "sources": []
     },
     {
-      "digest": "14300f36238fb83cfa7c1845a83977986cdb3da57109c2c0c17fae43226f7ac9",
-      "names": [],
-      "sources": []
-    },
-    {
       "digest": "1456b14221b7b11fda1ed6228e18180e0646291b8bd94b8a4a987ace483822b4",
       "names": [
         "packages/nexus-core/src/request-snapshot.ts#RequestConfig"
@@ -7172,6 +7361,15 @@
       "sources": []
     },
     {
+      "digest": "442070964ed30dc9c303b6475184f2e0c849e342ad5db8765066dc6e79ec160f",
+      "names": [
+        "apps/harness/src/jsonl-session-store.ts#JsonlHeaderLine"
+      ],
+      "sources": [
+        "apps/harness/src/jsonl-session-store.ts:583"
+      ]
+    },
+    {
       "digest": "44c24999817bf0b220c991b5c3c7854aabacb3b006b23b9ab9ba336f8bd76b9a",
       "names": [],
       "sources": []
@@ -7287,7 +7485,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionBuild"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:636"
+        "packages/nexus-core/src/session-store.ts:655"
       ]
     },
     {
@@ -7471,6 +7669,11 @@
       "sources": [
         "packages/nexus-core/src/session-log.ts:1506"
       ]
+    },
+    {
+      "digest": "67adbc440b48218b82c4a2dd3581b7046e165c2a3d21cc953380b97b1e12355f",
+      "names": [],
+      "sources": []
     },
     {
       "digest": "68410262cb0260e56cfd2ff7138b16ebbaffe4fc41c286591ce74e2649d42077",
@@ -7782,7 +7985,7 @@
         "packages/nexus-core/src/session-store.ts#SessionHeaderBuildMetadata"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:661"
+        "packages/nexus-core/src/session-store.ts:680"
       ]
     },
     {
@@ -8004,6 +8207,15 @@
       ]
     },
     {
+      "digest": "a9eea4bc8c9426fce17ccef7f36b296ad93c8d29c1fb89ac4fa8affd5d333fba",
+      "names": [
+        "apps/harness/src/jsonl-session-store.ts#JsonlMigrationSource"
+      ],
+      "sources": [
+        "apps/harness/src/jsonl-session-store.ts:569"
+      ]
+    },
+    {
       "digest": "ab1b49c12a33cda6dc06869d69bb1b5007e55982047fe0e0a3ee5c9a4d596b7e",
       "names": [],
       "sources": []
@@ -8142,6 +8354,15 @@
       "names": [],
       "sources": [
         "packages/nexus-core/src/session-log.ts:953"
+      ]
+    },
+    {
+      "digest": "ba31a0d94f50107e9024da4742e2e86d1f95594991f2d386c1e28237e5ea1245",
+      "names": [
+        "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
+      ],
+      "sources": [
+        "packages/nexus-core/src/session-store.ts:693"
       ]
     },
     {
@@ -8477,6 +8698,11 @@
       "sources": []
     },
     {
+      "digest": "dc9819633346587bba330e63ca5898004b570cc228f4c484b81aa88aae8acbfa",
+      "names": [],
+      "sources": []
+    },
+    {
       "digest": "dcd249366e892c36b59d7fd447cd0155cb62e2b50a31fb00df4e4ee727cb2633",
       "names": [],
       "sources": []
@@ -8608,15 +8834,6 @@
       "sources": []
     },
     {
-      "digest": "eb5bcaa512ec4a442a07dabbe20ac46594b5f651143a54303ce54251d4755a54",
-      "names": [
-        "packages/nexus-core/src/session-store.ts#StoredSessionHeader"
-      ],
-      "sources": [
-        "packages/nexus-core/src/session-store.ts:674"
-      ]
-    },
-    {
       "digest": "eb707d506998a536f6c826474ac403b6cbaaaef6304feec6520c38676b93dbe5",
       "names": [],
       "sources": []
@@ -8665,7 +8882,7 @@
         "packages/nexus-core/src/session-store.ts#StoredSessionPluginRow"
       ],
       "sources": [
-        "packages/nexus-core/src/session-store.ts:648"
+        "packages/nexus-core/src/session-store.ts:667"
       ]
     },
     {

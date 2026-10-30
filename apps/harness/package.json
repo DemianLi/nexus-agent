@@ -39,7 +39,7 @@
     "gen-tool-catalog": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-tool-catalog.ts"
   },
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@types/compression": "^1.8.1",
     "@types/js-yaml": "^4.0.9",
     "@types/negotiator": "^0.6.5",
