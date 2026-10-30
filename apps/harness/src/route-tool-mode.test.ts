@@ -1,6 +1,6 @@
 /**
  * 路由自己的檔案政策是寫死的，但 rg 上不上 OS 沙箱要跟著會話（#1946）：沒有 Landlock 的主機用 `danger-full-access` 時，路由的根
- * 一存在，搜 `/` 就會走到路由，路由回 sandbox-unavailable 會讓基座整筆回 error。
+ * 一存在，搜 `/` 就會走到路由，路由回 sandbox-unavailable 會讓 `grep` 整筆回 error，`glob` 則少掉路由的結果。
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';

@@ -208,8 +208,8 @@ export interface CreateNexusAgentOptions {
    * 只有這條 thread 有私有可寫根時才給；舊 thread 的可寫根本來就是共用區，不再另掛。**省略就不掛**（CLI、eval、spike）。
    *
    * 偏離登記（理由 2，#1775 兩條之第 2 條；延伸＝工作區指示檔從共用區讀、落盤關掉時可寫根在記憶體，登記在 `thread-roots.ts` 檔頭）：`--workspace` 退成唯讀共用區，且**不吃升級**（Q8 (a)）。部署方要放全員共用的參考資料，
-   * 又不能讓一條對話改到別條對話看得到的檔；一條 thread 的核准，別條 thread 的使用者沒有核准過。補的是**一條固定唯讀的路由**：mode 是字面值
-   * `'read-only'`（不接沙箱控制器的 source），也不傳 `grants`（認領不到任何 grant），所以 `danger-full-access` 與核准過的升級都改不了它。
+   * 又不能讓一條對話改到別條對話看得到的檔；一條 thread 的核准，別條 thread 的使用者沒有核准過。補的是**一條固定唯讀的路由**：檔案政策是字面值
+   * `'read-only'`（不接沙箱控制器的 source；只有 `toolMode` 跟會話，決定 `rg` 上不上 OS 沙箱），也不傳 `grants`（認領不到任何 grant），所以 `danger-full-access` 與核准過的升級都改不了它。
    * 同附件路由的形狀（`attachment-store.ts` 的 `readOnlyRoute`：固定 `read-only`、不吃控制器與 grant）。
    */
   readonly sharedWorkspace?: { readonly rootDir: string };
@@ -892,7 +892,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode),
           options.sharedWorkspace === undefined
             ? undefined
-            : // 固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
+            : // 檔案政策固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
               new ContainedFilesystemBackend({
                 rootDir: options.sharedWorkspace.rootDir,
                 mode: 'read-only',
