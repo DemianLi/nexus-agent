@@ -50,15 +50,23 @@ describe('highlightLines 的長行上限與時間預算（#992）', () => {
   });
 
   it('超過預算就停：回傳的陣列比行數短，沒輪到的行沒有那一筆', () => {
-    const code = Array.from({ length: 40 }, (_, at) => `const v${at} = ${at};`).join('\n');
+    const source = Array.from({ length: 40 }, (_, at) => `const v${at} = ${at};`);
     let clock = 0;
-    const lines = highlightLines(code, 'ts', {
+    const lines = highlightLines(source.join('\n'), 'ts', {
       budgetMs: 10,
       now: () => (clock += 6),
     });
-    expect(lines?.length).toBeGreaterThan(0);
-    expect(lines?.length).toBeLessThan(40);
-    expect(lines?.[lines.length]).toBeUndefined();
+    // 每次檢查過 6 ms：畫完 4 行累計 6、畫完 8 行累計 12 超過預算 10，第三段沒輪到。
+    expect(lines).toEqual(
+      highlightLines(source.slice(0, 8).join('\n'), 'ts', { budgetMs: Number.POSITIVE_INFINITY }),
+    );
+  });
+
+  it('累計剛好等於預算還不算超過', () => {
+    const code = Array.from({ length: 40 }, (_, at) => `const v${at} = ${at};`).join('\n');
+    let clock = 0;
+    const lines = highlightLines(code, 'ts', { budgetMs: 10, now: () => (clock += 5) });
+    expect(lines).toHaveLength(12);
   });
 
   it('預算夠就全部上色；第一段不受預算影響', () => {
@@ -67,13 +75,28 @@ describe('highlightLines 的長行上限與時間預算（#992）', () => {
     expect(highlightLines(code, 'ts', { budgetMs: -1 })?.length).toBeGreaterThan(0);
   });
 
-  it('預算的預設值夠一頁普通程式碼（1,250 行）上色', () => {
-    expect(HIGHLIGHT_BUDGET_MS).toBeGreaterThanOrEqual(100);
+  describe('預算的預設值', () => {
     const code = Array.from(
       { length: 1250 },
       (_, at) => `  const value${at} = compute(${at});`,
     ).join('\n');
-    expect(highlightLines(code, 'ts', { budgetMs: Number.POSITIVE_INFINITY })).toHaveLength(1250);
+    /** 每 4 行檢查一次，第一段不檢查：1,250 行檢查 312 次。 */
+    const CHECKS = 312;
+    /** 時鐘把 `totalMs` 平均分給每次檢查。 */
+    const clockSpending = (totalMs: number) => {
+      let clock = 0;
+      return () => (clock += totalMs / CHECKS);
+    };
+
+    it('夠一頁普通程式碼（1,250 行實測約 134 ms）上色', () => {
+      expect(highlightLines(code, 'ts', { now: clockSpending(134) })).toHaveLength(1250);
+    });
+
+    it('超過預設值就停', () => {
+      // 平均分攤 151 ms：第 310 次檢查才過 150 ms，那時畫完 1,240 行。
+      const now = clockSpending(HIGHLIGHT_BUDGET_MS + 1);
+      expect(highlightLines(code, 'ts', { now })).toHaveLength(1240);
+    });
   });
 });
 
