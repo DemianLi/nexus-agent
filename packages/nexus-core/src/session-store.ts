@@ -49,10 +49,12 @@
  * - **原版號另外交一格 `storedFormatVersion`**（{@link ReadonlyStoredSession.storedFormatVersion} 等三處；理由 1，
  *   **類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：dsh 的邏輯 header 永遠是目前版，
  *   舊的實體 header 走遷移鏈寫成新一代的檔、轉譯完才進介面（`packages/core/session/src/types.ts:96-100`，`687f282e`），
- *   所以介面上沒有原版號。我們的寫方今天就地續寫加性區間，舊檔就是舊版號的那一份，讀方（本文解析、`headerStale`、
- *   引用快照的 `capturedFormatVersion`、離線掃描的版本門檻）真的要知道它。header 照 dsh 轉譯成目前版，原版號另交這一格，
- *   要它的讀方被型別逼著明講。**撤除條件**：[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) 的 ③
- *   （寫方切到世代檔）落地、舊檔都經遷移成目前版之後，拿掉這一格；屆時若還有讀方需要原版號，在 ③ 的 PR 裡另外登記。
+ *   所以介面上沒有原版號。我們沒有遷移鏈：續接把舊檔的事件原樣搬進目前版的世代檔
+ *   （[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③），只讀打開不遷，舊檔一直是舊版號的那一份。讀方
+ *   （本文解析、引用快照的 `capturedFormatVersion`、離線掃描的版本門檻）真的要知道它。header 照 dsh 轉譯成目前版，原版號另交
+ *   這一格，要它的讀方被型別逼著明講。**撤除條件**：遷移鏈把舊版的事件轉成目前版再交給讀方
+ *   （[#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第四刀）落地。跟 #1594 ③ 的遷移無關：只讀不寫的會話永遠
+ *   不遷，這一格在它們身上一直有意義。
  * - **引用快照的 `capturedFormatVersion` 記原版號**（`SessionReferenceSourceEntry.capturedFormatVersion`，寫在
  *   `apps/harness/src/session-reference.ts`；理由 1，**類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：
  *   dsh 記 `snapshot.session.version`（`packages/context/session-reference/src/index.ts:409`，`687f282e`），也就是目前版——
@@ -624,8 +626,25 @@ import type { SessionEvent } from './session-log.js';
  *
  * **讀舊檔**：50 以前沒有這三樣，等於不是分叉、子代理靠 `parentSession` 認（{@link isSubagentSessionHeader} 的退路）。續接一份 50 的檔，
  * header 改寫成 51 但不補 `origin`、不寫 `isSeeded`（續接改寫只動 `version`）。**回滾的後果**同 49：被 51 碰過的 thread，50 的 runtime 打不開。
+ *
+ * ## 52：寫方改寫每會話目錄的世代檔，舊路徑留墓碑
+ *
+ * [#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③（[#2132](https://github.com/DemianLi/nexus-agent/issues/2132)），
+ * 落盤佈局：
+ * - 新會話寫成 `<目錄>/<sessionDirectoryName(id)>/session.v52.jsonl`，第一行是 header 行（`type: 'session'` 加上 header 各格），
+ *   之後一行一顆事件。header 行與首批事件一次 `link` 發佈。寫租約是同一個目錄裡的 `session.lock`。
+ * - 續接一份舊兩檔或比這一版舊的世代，先把事件原樣搬進一份新的 `session.v52.jsonl`，header 換成這一版；來源一個位元組都不動。
+ *   從舊兩檔搬來的，header 行多記一格 `migratedFrom`（來源日誌的大小、已接受前綴的位元組數與 SHA-256）。只讀打開不搬。
+ * - 新建與從舊兩檔搬過來的，都在舊路徑 `<base>.header.json` 留一份版本 52 的 header 行當墓碑，不留 `<base>.jsonl`。
+ *
+ * **升版，不是可選的**：不升的話，舊兩檔與 `session.v51.jsonl` 都是 51，同一個 id 兩種佈局都在時分不出誰優先；墓碑也要比
+ * v0.5.19 寫得出的版本新，那一版才會以「格式太新」拒讀，而不是把它當成一份零事件的會話、另開一份分叉的日誌。
+ *
+ * **讀舊檔**：51 以前的舊兩檔與手寫的舊世代都直接讀。事件詞彙沒變，所以這條邊是加性的。
+ * **回滾的後果**：被 52 碰過的 thread（新建，或續接過一次的舊 thread），v0.5.19 的 runtime 讀到墓碑，續接與列表都當成
+ * 格式太新拒讀。
  */
-export const SESSION_LOG_FORMAT_VERSION = 51;
+export const SESSION_LOG_FORMAT_VERSION = 52;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

@@ -21,7 +21,12 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AIMessage } from '@langchain/core/messages';
 
-import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError, toLoggedMessage } from '@nexus/core';
+import {
+  generationLogFilename,
+  SESSION_LOG_FORMAT_VERSION,
+  SessionAlreadyOwnedError,
+  toLoggedMessage,
+} from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
 import {
@@ -37,12 +42,17 @@ import {
   ResumeWorkspaceConflictError,
 } from './resume-guards.js';
 import {
+  LEGACY_TWO_FILE_FORMAT_VERSION,
   rewriteSessionHeader,
   sessionEventsOf,
   sessionHeaderOf,
   sessionsUnder,
 } from './session-files.fixture.js';
-import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
+import {
+  legacyTwoFilePathsIn,
+  openJsonlSessionStore,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
 import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
@@ -84,9 +94,49 @@ function readLog(runDir: string): Promise<SessionEvent[]> {
   return sessionEventsOf(runDir, 'cli');
 }
 
-/** 同一份的日誌檔。只給要動位元組的（補行、改行、截尾、比原文）。 */
+/** 同一份的日誌檔（世代檔：第一行是 header 行，事件從第二行起）。只給要動位元組的（補行、改行、截尾、比原文）。 */
 function logOf(runDir: string): string {
   return sessionPathsIn(runDir, 'cli').log;
+}
+
+/** 世代檔的 header 行（不含換行）與其後的事件本文。 */
+async function splitGeneration(runDir: string): Promise<{ headerLine: string; body: string }> {
+  const text = await readFile(logOf(runDir), 'utf8');
+  const newline = text.indexOf('\n');
+  return { headerLine: text.slice(0, newline), body: text.slice(newline + 1) };
+}
+
+/**
+ * 把 run 目錄裡 `cli` 那一份換成舊兩檔（v0.5.19 以前寫的樣子），給驗續接遷移的用：header 是世代檔的 header 行拿掉 `type`、
+ * 版號換成 `version`，日誌是世代檔第二行起的原樣本文。會話目錄刪掉：留著的話兩種佈局並存，讀方拒讀。舊路徑的墓碑被這份
+ * header 蓋掉。
+ *
+ * @returns 寫進舊路徑的 header。
+ */
+async function toLegacyTwoFile(runDir: string, version: number): Promise<Record<string, unknown>> {
+  const { headerLine, body } = await splitGeneration(runDir);
+  const { type: _type, ...fields } = JSON.parse(headerLine) as Record<string, unknown>;
+  const header = { ...fields, version };
+  const legacy = legacyTwoFilePathsIn(runDir, 'cli');
+  await writeFile(legacy.header, JSON.stringify(header));
+  await writeFile(legacy.log, body);
+  await rm(sessionPathsIn(runDir, 'cli').sessionDirectory, { recursive: true });
+  return header;
+}
+
+/** 在 `cli` 的會話目錄裡寫一份比這一版新的世代檔：這一版的世代檔原樣抄過去，只把 header 行的版號換成下一版。 */
+async function plantNewerGeneration(runDir: string): Promise<string> {
+  const { headerLine, body } = await splitGeneration(runDir);
+  const header = JSON.parse(headerLine) as Record<string, unknown>;
+  const newer = join(
+    sessionPathsIn(runDir, 'cli').sessionDirectory,
+    generationLogFilename(SESSION_LOG_FORMAT_VERSION + 1),
+  );
+  await writeFile(
+    newer,
+    `${JSON.stringify({ ...header, version: SESSION_LOG_FORMAT_VERSION + 1 })}\n${body}`,
+  );
+  return newer;
 }
 
 let workspace: string;
@@ -225,10 +275,8 @@ describe('往原檔續寫', () => {
   it('seq 從上一次的長度接下去，中間只有一顆 `session/end-seed`，header 升到這一版', async () => {
     const runDir = await firstRun();
     const before = await readLog(runDir);
-    // 讓 header 看起來是上一版寫的：續接要把它蓋成這一版（續寫進去的是這一版的詞彙）。改的是版號，直接寫檔（#1868 裁決 Q1）。
-    const headerPath = sessionPathsIn(runDir, 'cli').header;
-    const header = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
-    await writeFile(headerPath, JSON.stringify({ ...header, version: 2 }));
+    // 讓這一份看起來是上一版寫的舊兩檔：續接要把它遷成這一版的世代（續寫進去的是這一版的詞彙）。
+    const header = await toLegacyTwoFile(runDir, LEGACY_TWO_FILE_FORMAT_VERSION);
 
     await cli(['--workspace', workspace, '--resume', runDir]);
 
@@ -238,8 +286,9 @@ describe('往原檔續寫', () => {
     expect(after.filter((event) => event.type === 'session/end-seed')).toEqual([
       expect.objectContaining({ seq: before.length }),
     ]);
-    const rewritten = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
-    expect(rewritten).toEqual({ ...header, version: SESSION_LOG_FORMAT_VERSION });
+    const rewritten = await sessionHeaderOf(runDir, 'cli');
+    expect(rewritten.storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(rewritten.header).toEqual({ ...header, version: SESSION_LOG_FORMAT_VERSION });
     // 沒有另開目錄：續接不是把舊的抄進新的。
     expect(await readdir(logs)).toHaveLength(1);
   });
@@ -497,7 +546,11 @@ describe('認不得的沙箱模式', () => {
     const rewritten = events.map((event, index) =>
       index === last ? { ...event, data: { mode: 'bogus' } } : event,
     );
-    await writeFile(logPath, `${rewritten.map((event) => JSON.stringify(event)).join('\n')}\n`);
+    const { headerLine } = await splitGeneration(runDir);
+    await writeFile(
+      logPath,
+      `${[headerLine, ...rewritten.map((event) => JSON.stringify(event))].join('\n')}\n`,
+    );
 
     const { stdout, stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
 
@@ -514,20 +567,21 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
   // 這兩條的日誌只有命令、沒有輪，所以壞行之後補一顆完整的 `turn/end` 才站得住「壞檔」。
   const CLOSER = `${JSON.stringify({ type: 'turn/end', seq: 999, time: 1, data: { reason: { kind: 'done' } } })}\n`;
 
+  // 世代檔的 lines[0] 是 header 行，事件從 lines[1] 起：seq 1 在 lines[2]。訊息裡的行號照檔算（header 行是第 1 行）。
   it('中段一行壞了、之後有收尾：是壞檔', async () => {
     const runDir = await firstRun();
     const logPath = logOf(runDir);
     const lines = (await readFile(logPath, 'utf8')).split('\n');
-    lines[1] = '這不是 JSON';
+    lines[2] = '這不是 JSON';
     await writeFile(logPath, lines.join('\n') + CLOSER);
-    await expect(cli(['--resume', runDir])).rejects.toThrow(/存檔壞了：第 2 行不是 JSON/);
+    await expect(cli(['--resume', runDir])).rejects.toThrow(/存檔壞了：第 3 行不是 JSON/);
   });
 
   it('缺號、之後有收尾：是壞檔，不是當掉', async () => {
     const runDir = await firstRun();
     const logPath = logOf(runDir);
     const lines = (await readFile(logPath, 'utf8')).split('\n').filter((line) => line !== '');
-    await writeFile(logPath, `${[lines[0], ...lines.slice(2)].join('\n')}\n${CLOSER}`);
+    await writeFile(logPath, `${[lines[0], lines[1], ...lines.slice(3)].join('\n')}\n${CLOSER}`);
     await expect(cli(['--resume', runDir])).rejects.toThrow(/缺號或重號/);
   });
 
@@ -535,32 +589,21 @@ describe('讀不了的時候在什麼都還沒起來之前就講', () => {
     const runDir = await firstRun();
     const logPath = logOf(runDir);
     const lines = (await readFile(logPath, 'utf8')).split('\n');
-    lines[1] = '這不是 JSON';
+    lines[2] = '這不是 JSON';
     await writeFile(logPath, lines.join('\n'));
     await expect(cli(['--resume', runDir])).resolves.toBeDefined();
   });
 
   it('版本比這一版新：不是壞的，是讀不懂', async () => {
     const runDir = await firstRun();
-    // 改的是版號，直接寫檔（#1868 裁決 Q1）。
-    const headerPath = sessionPathsIn(runDir, 'cli').header;
-    const header = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
-    await writeFile(
-      headerPath,
-      JSON.stringify({ ...header, version: SESSION_LOG_FORMAT_VERSION + 1 }),
-    );
+    await plantNewerGeneration(runDir);
     await expect(cli(['--resume', runDir])).rejects.toThrow(/檔案沒有壞，是比這一版新/);
   });
 
   // #1559 N0646：錯誤訊息本身不帶路徑（serve 會把它送到瀏覽器），CLI 的終端機是本機使用者自己的，所以另印一行。
   it('版本比這一版新：終端機印出原始日誌在哪裡', async () => {
     const runDir = await firstRun();
-    const { header: headerPath, log } = sessionPathsIn(runDir, 'cli');
-    const header = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
-    await writeFile(
-      headerPath,
-      JSON.stringify({ ...header, version: SESSION_LOG_FORMAT_VERSION + 1 }),
-    );
+    const log = await plantNewerGeneration(runDir);
     const { printer, stderr } = recorder();
     const input = new PassThrough();
     input.end('/exit\n');

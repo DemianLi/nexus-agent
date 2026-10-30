@@ -53,7 +53,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { ROOT } from '../workspace-packages.js';
 import {
@@ -76,8 +76,9 @@ const HERE = join(ROOT, 'scripts/session-format-fixtures');
 const PROMPT = '你好';
 
 /**
- * 讀方分支的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root` 與 `approval-policy-missing` 不用補寫
- * （12 以前的 header 本來就沒有 `workspaceRoot`，34 以前的日誌本來就沒有 `approval/policy`），只記今天的讀方對它的輸出。
+ * 讀方分支的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root`、`approval-policy-missing` 與
+ * `two-file-layout` 不用補寫（12 以前的 header 本來就沒有 `workspaceRoot`，34 以前的日誌本來就沒有 `approval/policy`，52 以前
+ * 的寫入器本來就寫舊兩檔），只記今天的讀方對它的輸出。
  */
 type Trigger =
   | 'turn-feedback'
@@ -85,7 +86,8 @@ type Trigger =
   | 'summary-missing'
   | 'open-turn'
   | 'workspace-root'
-  | 'approval-policy-missing';
+  | 'approval-policy-missing'
+  | 'two-file-layout';
 
 interface Target {
   /** 夾具目錄名。 */
@@ -97,6 +99,8 @@ interface Target {
   readonly triggers?: readonly Trigger[];
   /** 有沒有 `replayConversation`（格式 9 起）。 */
   readonly ownReplay: boolean;
+  /** 這一版有沒有出過貨。沒給就看 `rev`：tag 是出過貨的。 */
+  readonly released?: boolean;
 }
 
 const TARGETS: readonly Target[] = [
@@ -121,7 +125,15 @@ const TARGETS: readonly Target[] = [
     triggers: ['open-turn', 'approval-policy-missing'],
     ownReplay: true,
   },
-  { name: 'v49', rev: undefined, version: 49, ownReplay: true },
+  // 今天的工作樹寫的是格式 52 的世代檔，所以 v49 釘在最後寫它的那個 commit（沒出過貨）。
+  {
+    name: 'v49',
+    rev: 'fe52c279c58fa6a07e4f934cd75826b2e518a301',
+    version: 49,
+    triggers: ['two-file-layout'],
+    ownReplay: true,
+    released: false,
+  },
 ];
 /** 混版的前半。 */
 const MIXED_FIRST = { rev: '09398dd523471a1d03852e18c7bbae6ecc672414', version: 44 } as const;
@@ -196,6 +208,20 @@ function checkout(scratch: string, rev: string): string {
     cwd: tree,
     env: installEnv(),
   });
+  // 有 `build:lib` 的 rev，workspace 套件從 `lib/` 解析（#1385 之後）：先建出來，CLI 才 import 得到；vendor 的型別檔由它們的
+  // `prepare` 產生，`--ignore-scripts` 跳過了，in-tree 腳本的型別檢查要它。
+  const scripts = (
+    JSON.parse(readFileSync(join(tree, 'package.json'), 'utf8')) as {
+      scripts?: Record<string, string>;
+    }
+  ).scripts;
+  if (scripts?.['build:lib'] !== undefined) {
+    run('pnpm', ['run', 'build:lib'], { cwd: tree, env: installEnv() });
+    run('pnpm', ['--filter', './vendor/**', 'run', '--if-present', 'prepare'], {
+      cwd: tree,
+      env: installEnv(),
+    });
+  }
   return tree;
 }
 
@@ -269,7 +295,7 @@ function freeze(
   const files = new Map<string, string>();
   const sessions: Record<string, unknown> = {};
   for (const id of sessionsIn(directory)) {
-    for (const file of frozenFilesOf(id)) {
+    for (const file of frozenFilesOf(directory, id)) {
       files.set(file, readFileSync(join(directory, file), 'utf8'));
     }
     const header = readRawHeader<{ version: number }>(directory, id);
@@ -301,7 +327,11 @@ function flush(): void {
     const into = join(FIXTURES, name);
     rmSync(into, { recursive: true, force: true });
     mkdirSync(into, { recursive: true });
-    for (const [file, content] of files) writeFileSync(join(into, file), content);
+    for (const [file, content] of files) {
+      // 世代檔在會話目錄裡（`<id>/session.v<N>.jsonl`）。
+      mkdirSync(dirname(join(into, file)), { recursive: true });
+      writeFileSync(join(into, file), content);
+    }
     log(`寫好 ${into}`);
   }
 }
@@ -377,6 +407,15 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
           },
         ];
       }
+      case 'two-file-layout':
+        return [
+          {
+            edge: 52,
+            session: 'cli',
+            computedBy: 'today',
+            replay: todayReplay(readEvents(directory, 'cli')),
+          },
+        ];
       case 'approval-policy-missing': {
         const events = readEvents(directory, 'cli');
         return [
@@ -424,7 +463,7 @@ function generate(target: Target): void {
           ? git('rev-parse', 'HEAD')
           : git('rev-parse', `${target.rev}^{commit}`),
       formatVersion: target.version,
-      released: target.rev !== undefined,
+      released: target.released ?? target.rev !== undefined,
     };
     freeze(
       target.name,

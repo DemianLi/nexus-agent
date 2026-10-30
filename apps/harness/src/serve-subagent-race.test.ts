@@ -78,16 +78,17 @@ afterEach(async () => {
 describe('冷讀與續接之間檔案被換掉：第二次核對', () => {
   it('續接回來的 header 帶 parentSession：丟 thread_is_subagent，而且續接的寫把手被關掉', async () => {
     const { writeFile, mkdir } = await import('node:fs/promises');
-    const { SESSION_LOG_FORMAT_VERSION } = await import('@nexus/core');
+    const { LEGACY_TWO_FILE_FORMAT_VERSION } = await import('./session-files.fixture.js');
     const { projectKey } = await import('./jsonl-session-store.js');
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-subagent-race-'));
     temporary.push(root);
     const directory = join(root, projectKey(process.cwd()));
     await mkdir(directory, { recursive: true });
+    // 手寫一份舊兩檔：續接時遷成這一版的世代，遷過去的 header 照樣帶 parentSession。
     await writeFile(
       join(directory, 'alpha%2fbg-0123456789ab.header.json'),
       JSON.stringify({
-        version: SESSION_LOG_FORMAT_VERSION,
+        version: LEGACY_TWO_FILE_FORMAT_VERSION,
         id: 'alpha/bg-0123456789ab',
         createdAt: 1,
         // 真的子代理 header 有 cwd（`session-persistence.ts`）；少了它，拿掉第二次核對後會被 `assertSameCwd` 先擋下，測到的就不是核對。

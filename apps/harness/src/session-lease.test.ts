@@ -130,8 +130,11 @@ describe('一份會話一把', () => {
     await root.append([event(0)]);
     await sub.append([event(0)]);
 
-    const locks = (await readdir(dir)).filter((name) => name.endsWith('.lock')).sort();
-    expect(locks).toEqual(['cli%2frun-1.lock', 'cli.lock']);
+    // 鎖檔在各自的會話目錄裡（`sessionDirectoryName`：`/` 編成 `~002F`）。
+    const locks = (await readdir(dir, { recursive: true }))
+      .filter((name) => name.endsWith('.lock'))
+      .sort();
+    expect(locks).toEqual([join('cli', 'session.lock'), join('cli~002Frun-1', 'session.lock')]);
     await root.close();
     await sub.close();
   });

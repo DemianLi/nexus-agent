@@ -11,6 +11,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { sessionDirectoryName } from '@nexus/core';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
@@ -377,6 +378,12 @@ const script = (tool: string): Script => {
   };
 };
 
+/**
+ * alpha 底下子代理那一份的會話目錄名前綴：子代理的 id 是 `alpha/<runId>`，目錄名逐字編碼，所以以 `alpha/` 編出來的那一段開頭
+ * （root 的目錄名是 `alpha` 編出來的，不含它）。
+ */
+const ALPHA_CHILD_PREFIX = sessionDirectoryName('alpha/');
+
 function liveThreadsOf(run: DriverRun): string[] {
   const snapshot = JSON.parse(
     readFileSync(join(run.home, PLUGIN_SNAPSHOT_FILE_NAME), 'utf8'),
@@ -393,8 +400,8 @@ describe('子代理只綁 root（#1442 驗收 F2）', () => {
       await ctx.fold(idleWithContent);
       await settle(3000);
     }, script('subagent'));
-    // 日誌裡確實有子代理那一份（`%2f`），不然這條什麼也沒量到。
-    expect(run.logs.some((log) => log.file.includes('%2f'))).toBe(true);
+    // 日誌裡確實有子代理那一份，不然這條什麼也沒量到。
+    expect(run.logs.some((log) => log.file.includes(ALPHA_CHILD_PREFIX))).toBe(true);
     expect(liveThreadsOf(run)).toEqual(['alpha']);
   }, 90_000);
 
@@ -412,7 +419,7 @@ describe('子代理只綁 root（#1442 驗收 F2）', () => {
         '    maxActiveSubagents: 8',
       ].join('\n'),
     );
-    expect(run.logs.some((log) => log.file.includes('%2f'))).toBe(true);
+    expect(run.logs.some((log) => log.file.includes(ALPHA_CHILD_PREFIX))).toBe(true);
     expect(liveThreadsOf(run)).toEqual(['alpha']);
   }, 90_000);
 });

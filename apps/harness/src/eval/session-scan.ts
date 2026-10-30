@@ -107,7 +107,7 @@ import type {
 // 讀的事件種類（`feedback/*`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
 // `todo/write` 不在這裡：它的事件擴充住在 core 的 `session-log.ts`（#1463 Q2 (a)）。
 import type {} from '@nexus/plugin-feedback';
-import { parseJsonlSessionBody, readSessionEntry } from '../jsonl-session-store.js';
+import { bodyFirstLine, parseJsonlSessionBody, readSessionEntry } from '../jsonl-session-store.js';
 import type { SessionEntry } from '../jsonl-session-store.js';
 import {
   formatSessionHeaderMetadata,
@@ -404,6 +404,7 @@ function headerOf({ header, storedFormatVersion }: SessionEntry): SessionLogHead
  * `session.v<N>.jsonl` 是舊兩檔的日誌，不算世代檔）；讀不出一份會話的目錄（沒有世代檔，或最高世代是空檔、第一行還沒
  * 換行）才往下走。不走 `SessionStore.list`：
  * 它不讀比這一版新的，也不說讀不懂的原因（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
+ * 舊路徑的墓碑（#1594 ③）由它的會話目錄代表，跳過；會話目錄不見了的墓碑算讀不懂。
  * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，與單檔佈局挑定的世代檔
  * 在讀本文之前不見了的，跳過。
  *
@@ -435,11 +436,12 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
       } catch (error: unknown) {
         if (error instanceof SessionCorruptionError) {
           unreadable.push({
-            // 單檔佈局報挑中的那個世代檔：它的錯都帶 `location`。
+            // 單檔佈局報挑中的那個世代檔、墓碑報墓碑：這兩種的錯都帶 `location`。
             file:
-              base === undefined
-                ? (error.location?.path ?? path)
-                : join(directory, legacyTwoFileSessionFilenames(base).log),
+              error.location?.path ??
+              (base === undefined
+                ? path
+                : join(directory, legacyTwoFileSessionFilenames(base).log)),
             reason: error.message,
           });
           continue;
@@ -469,6 +471,7 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
             acceptUnknownEvents: true,
             newerFormat: classifyStoredFormatVersion(header.version) === 'newer',
             recovery: 'strict',
+            firstLine: bodyFirstLine(session.layout),
           }).events,
         });
       } catch (error: unknown) {

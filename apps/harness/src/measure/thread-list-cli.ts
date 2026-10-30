@@ -15,7 +15,7 @@
  * 造資料的規矩（量得準的前提，每一條都有人因為沒做而量到假的東西）：
  * - **內容每份都不同**：填的是隨機位元組，不用 APFS clone——否則共用區塊的快取會讓第二份以後的讀取白送。
  * - **大部分是長行**（工具輸出那種），夾著少數 `turn/start` 與 `session/title`；每份至少一則人打的 `turn/start`。
- * - 一份至少一次經 `openJsonlSessionStore` 寫出來，其餘用同一格式直接寫；`.header.json` 與 `.jsonl` 同前綴成對。
+ * - 一份至少一次經 `openJsonlSessionStore` 寫出來，其餘用同一格式直接寫：會話目錄裡的世代檔，header 行在第一行。
  * - 每格量完驗 `items` 數、`unreadable`、每列 `blank === false` 且有標題，不成立那格作廢。
  * - 沖快取：這台不能 `purge`，用一個超過記憶體的墊檔讀過去把頁面快取擠掉，第一次標「沖過快取」，其餘標「熱」。
  */
@@ -237,9 +237,12 @@ async function generate(dir: string, cell: Cell, cwd: string): Promise<number> {
         createdAt: 1_700_000_000_000 + index * 60_000,
         cwd,
       };
+      // 寫方的佈局（#1594 ③）：會話目錄裡的世代檔，第一行是 header 行；舊路徑留墓碑，列表要多讀的那一項也量進去。
       const paths = sessionPathsIn(dir, id);
-      await writeFile(paths.header, JSON.stringify(header));
-      await writeFile(paths.log, body);
+      const headerLine = `${JSON.stringify({ type: 'session', ...header })}\n`;
+      await mkdir(paths.sessionDirectory, { recursive: true });
+      await writeFile(paths.log, `${headerLine}${body}`);
+      await writeFile(paths.tombstone, headerLine);
     }
     total += body.length;
   }

@@ -178,8 +178,8 @@ function flakyStore(inner: SessionStore, failAppends: number): SessionStore {
 }
 
 /**
- * 開日誌照真的開（header 已經發佈、日誌已經 `wx` 建出來），**第一個新日誌把手的第一次 `writeFile`** 才拋 ENOSPC：
- * 這才是「實體化了、第一批寫不進去」（#1580 刀 2a 審查 B1）。
+ * 開檔照真的開（世代檔的暫存檔已經 `wx` 建出來），**第一個 `wx` 把手的第一次 `writeFile`**（header 行加首批）才拋 ENOSPC：
+ * 「實體化了、第一批寫不進去」（#1580）。世代檔還沒 `link` 發佈，後端整個收回。
  */
 function firstLogWriteFails(): OpenLogFile {
   let left = 1;
@@ -204,8 +204,8 @@ function firstLogWriteFails(): OpenLogFile {
 }
 
 /**
- * 第一次 `open(<日誌>, 'wx')` 就拋 EMFILE：header 已經 `link` 發佈、日誌沒開成，實體化在寫入之前就失敗（#1580 刀 2a 審查）。
- * 之後照真的開。
+ * 第一次 `open(<暫存檔>, 'wx')` 就拋 EMFILE：會話目錄與鎖檔已經建了、世代檔的暫存檔沒開成，實體化在寫入之前就失敗
+ * （#1580）。之後照真的開。
  */
 function firstLogOpenFails(): OpenLogFile {
   let left = 1;
@@ -455,11 +455,11 @@ describe('thread.fork', () => {
     ['第一次排空在交給把手之前就被拒（還沒實體化）', () => ({ failAppends: 1 })],
     ['第一次排空實體化了、第一批寫不進去（B1）', () => ({ openLog: firstLogWriteFails() })],
     [
-      '第一次排空實體化到一半（header 發佈了、日誌開不成）',
+      '第一次排空實體化到一半（會話目錄建了、世代檔的暫存檔開不成）',
       () => ({ openLog: firstLogOpenFails() }),
     ],
   ] as const) {
-    it(`真的落盤、${name}：磁碟上不留子 thread 的檔、名額回到原數；同一個 id 重試成功，檔才出現`, async () => {
+    it(`真的落盤、${name}（link 之前）：磁碟上不留子 thread 的檔、名額回到原數；同一個 id 重試成功，檔才出現`, async () => {
       const { directory, handler, client } = await realRig(failure());
       const refused = await client.threadFork('src', 'm1');
       expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
@@ -476,6 +476,23 @@ describe('thread.fork', () => {
       expect(child?.header).toMatchObject({ parentSession: 'src', isSeeded: true });
     });
   }
+
+  it('真的落盤、發佈之後第一次開世代檔失敗：fork 拒絕，子 thread 的世代檔留著', async () => {
+    let left = 1;
+    const openLog: OpenLogFile = async (path, flags, mode) => {
+      if (flags === 'a' && left > 0) {
+        left -= 1;
+        throw Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
+      }
+      return (await open(path, flags, mode)) as unknown as LogFileHandle;
+    };
+    const { directory, handler, client } = await realRig({ openLog });
+    const refused = await client.threadFork('src', 'm1');
+    expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+    expect(handler.threadCount()).toBe(0);
+    const orphan = await findSession(directory, 'child');
+    expect(orphan?.header).toMatchObject({ parentSession: 'src', isSeeded: true });
+  });
 
   it('切點上還排著的件（Q2 (a)）：seed 在 inherited 標記之後補取消全部的 inbox/spliced', async () => {
     const log = new SessionLog('src');
