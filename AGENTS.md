@@ -85,7 +85,7 @@ git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git referenc
 
 這條規則撐起了 [`.docs/development-plan.md`](.docs/development-plan.md) 裡大半的設計決定；來龍去脈見已關閉的地圖 [#26](https://github.com/DemianLi/nexus-agent/issues/26)。
 
-**不在這條範圍內的：web 的 UI/UX**（視覺、設計 token、互動、動效）。這一塊以 **shadcn＋Tailwind 為基底**，外觀與設計 token 用 **[solid-glass](https://github.com/deeplethe/solid-glass)**（以下稱 SG）：SG 的檔**原樣 vendor** 在 [`apps/web/src/vendor/solid-glass/`](apps/web/src/vendor/solid-glass/README.md)，vendor 檔不動，要改的寫在後載入、layer 外的覆寫檔並逐條登記在該目錄 README 的「本地修改」；對比、焦點、reduced-motion 這些無障礙門檻照本專案的（[`.docs/web-ui-spec.md`](.docs/web-ui-spec.md) §8；對比度目標與焦點外框的數值在 §5，reduced-motion 在 §7），SG 的色值配合調整。元件目前仍是 shadcn registry 的 Radix 版，換成 SG 的 Base UI 版在地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497) 的第 ③ 步。視覺、設計 token、動效的數值以 SG 為準；[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 只當**元件多樣性與交互模式**的參考，用在 SG 沒有定義的元件或互動上（例如 #1497 第 ⑤ 步的設計稿）（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。最後長成本專案自己的系統風格。AI 專屬元件（思考過程、工具呼叫、核准、串流回覆這類）另以 [beautiful-ui](https://github.com/slev12397/beautiful-ui) 為參考對象：**不安裝、不複製程式碼**，要吸收就用本專案的元件與設計數值重寫，比對與取捨見 [`.docs/beautiful-ui-comparison.md`](.docs/beautiful-ui-comparison.md)（地圖 [#1278](https://github.com/DemianLi/nexus-agent/issues/1278)）。「不複製程式碼」管的是 beautiful-ui；SG 是例外，照上面的 vendor 規則。tool-run、reasoning-row、status-line、context-meter、changes、question-panel、composer 這 7 組在 #1497 的第 ④ 步改用 SG 自家的 AI 元件，wire 到 props 由本專案的轉接層接，執行語意照下一句。SG 的來龍去脈見 [#1468 的拍板留言](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)。dsh 在 UI/UX 上**最多只參考元件的多樣性**（有哪些元件、哪些面），不拿來當建議的依據，也不需要寫對照紀錄。會動到執行語意的介面行為（例如按下去這一輪停不停）仍照上面的規則。來龍去脈見地圖 [#372](https://github.com/DemianLi/nexus-agent/issues/372) 的 Notes。
+**web 的 UI/UX**（視覺、設計 token、互動、動效）不在這條範圍內，規則見 [`apps/web/AGENTS.md`](apps/web/AGENTS.md)，碰 `apps/web` 的檔時自動載入。會動到執行語意的介面行為仍照上面的規則。
 
 ## 分支策略
 
@@ -137,90 +137,15 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
 
 ### 一個明文例外：跨套件的型別收緊必須原子落地
 
-`packages/*` 的一次型別收緊會讓消費它的 `apps/*` **當場編不過**。拆成兩張 PR 的話，中間那段
-時間樹是紅的，而 `develop` 要求 gate 綠燈 —— 兩張都合不進去。
-
-**先確認拆不開。** 很多收緊其實拆得開，而拆開是預設：加一個必填欄位就是 —— 對方那一刀
-（把新欄位補進測試建構器之類）在**還沒有那個欄位的樹上**照樣編得過、照樣綠，先合它完全無害。
-判準是實測，不是直覺：把對方那一刀單獨套在今天的 `develop` 上，typecheck 與測試跑一遍。
-
-拆不開的長這樣：**聯集少一支、欄位改名、函式簽名換形狀** —— 對方的適配在舊樹上編不過，
-你的改動在對方適配之前也編不過，**沒有一個順序是綠的**。這一節管的就是這一類。
-
-那時候：**提出改動的那一方可以連同對方目錄裡那份最小機械適配一起送**，四個條件要全部成立：
-
-- **真的拆不開**，而且是上面那段的實測判準說拆不開，不是覺得麻煩。
-- **只做機械適配**，不做對方領域的設計判斷。分不出算不算「機械」的時候，它就不算 —— 停下來
-  交回去問。
-- **足跡取最小**。改一個共用的測試建構器，勝過改二十個呼叫點：對方正在改的東西撞上你的機會
-  跟著變小。
-- **PR 內文寫明動了哪個目錄、為什麼必須同批**，而且**當面知會那個 session**。
-
-這條例外只管「編不過」。對方領域裡**行為**要跟著改的那一類（畫面、互動、文案），不在射程內
-—— 那是一張自己的卡。
+`packages/*` 的型別收緊讓 `apps/*` 編不過，又實測拆不開時，可連同對方目錄的最小機械適配同批送。判準與四個條件見 [`docs/standards.md`](docs/standards.md#跨套件的型別收緊必須原子落地)。
 
 ## 發版
 
-發版分兩段：
-
-1. **版號 PR。** 版號寫在 repo 裡，不是 CI 裡推出來的（照 dsh `scripts/release/bump.ts`）。先跑
-   `pnpm run release:bump <patch|minor|major|x.y.z>`，它把同一個版本寫進根、`apps/*`、`packages/*` 的每一份
-   `package.json`（`vendor/*` 跟著上游，不動），再開一張 `chore:` 的版號 PR 合進 `develop`，隨後照常 `develop → main`。
-2. **發版。** 到 Actions 頁面執行 **Release** workflow，branch 選 `main` 並輸入版號（`vX.Y.Z`）。輸入值**只拿來核對**
-   manifest 裡的版本，不一樣就停。workflow 會建置、用 `pnpm deploy --prod` 打成 `nexus-agent-<版本>-linux-x64.tar.gz`
-   （主機要預裝 Node：22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準），在 repo 外解開、用純 `node` 驗過起得來之後，自行打 tag 並建立 GitHub Release，
-   把 tar.gz、SBOM（`.cdx.json`）與各自的 `.sha256` 附上（核對方式見 `docs/operations.md`〈核對安裝內容〉）。因為 `workflow_dispatch` 限定在 `main` 執行，「從 develop 發版」在機制上不可能發生。
-
-同一套打包與驗證在每個合進 `develop` 的 commit 與 `develop → main` 的 PR 上都會跑（`ci.yml` 的 `packed-install`），所以 Release 當天不會是第一次試。
-
-版號規則在 1.0 之前從簡：**完成一個 Phase 跳 minor，其餘一律 patch**。1.0 之前 semver 本來就不承諾
-相容性，此刻套用完整規則只是徒增判斷成本。
-
-不維護手寫的 CHANGELOG。release notes 由 `--generate-notes` 依 PR 標題自動生成，而 PR 標題規範已經
-強制每個變更都有一句可讀的中文描述 —— 那就是 changelog 的原料。
+發版分兩段：版號 PR（`pnpm run release:bump`）合進 `develop`、`develop → main` 之後，到 Actions 跑 **Release** workflow（branch 選 `main`）。步驟與版號規則見 [`docs/release.md`](docs/release.md)。
 
 ### 升級指南
 
-標題只說做了什麼，不說營運者要改哪個設定。所以**外部看得到的不相容變更，在引入它的那張 PR 裡就寫一份升級指南**，
-不留到發版前（照 dsh `AGENTS.md:11` 與 `.agents/skills/dsh-create-upgrade-guide/SKILL.md`）。
-
-- **範圍**：升上來之後，照舊版的做法、設定或檔案，行為會變、會壞或會被拒的：
-  - `serve` 與 CLI 的旗標、子命令；
-  - `cordis.yml`、`cordis.serve.yml`、`--patch` 覆寫檔、變更紀錄裡的列 id 與 config 鍵、允許的值；
-  - home 底下的檔與格式：`sessions/`、`attachments/`、`tool-results/`、`plugin-journal.jsonl`、`thread-organization.json`、
-    `browser-session.json`、`.credentials.yaml`、`config-hash-key.json`、`.env`、`serve.lock`；
-  - `@nexus/sdk` 給外部插件的面；
-  - wire 協定裡 web 以外的客戶端會用到的部分。
-
-  web 與 harness 在同一張 PR 一起改的 wire 變更不必寫：消費者同一張都改到了，同 dsh。純新增、而且不改既有預設行為的
-  旗標、鍵、插件也不必寫；出廠就掛上、會改變模型看到的內容或多打模型的插件不算純新增，要寫。
-  會話日誌格式的升版紀錄在 `packages/nexus-core/src/session-store.ts` 檔頭，指南只寫讀者要做的事，再連到那裡。
-- **位置**：`docs/upgrade-guide/v<版號>/<item>/guide.md`。`<版號>` 是**最近一個 Release 的 tag**，也就是讀者正在跑的
-  那一版；`<item>` 是 kebab-case 的變更名。每個 item 目錄只有 `guide.md` 一份。
-- **維護**：下一版發出之前，最新的版本目錄描述「那一版到 `develop`」的差異。之後的 PR 再碰同一個面，就在同一張 PR
-  改那份指南；變更撤回就刪掉它。發版之後舊目錄凍結，新的不相容變更寫進新 tag 的目錄。一份指南不跨兩版。
-- **格式**：frontmatter 恰好 `kind: upgrade-guide` 與一句說「什麼壞了」的 `description`；一個 `#` 標題，之後恰好
-  `## 變更`、`## 遷移` 兩段。「變更」寫舊行為、新行為、誰受影響；「遷移」是編號步驟，指名檔、鍵、指令，最後一步寫
-  怎麼確認改好了。
-- **gate**：`.github/scripts/check_upgrade_guides.py`，跑在 `ci.yml` 的 `plan`（`.github/actions/plan-checks`，純文件 PR 也跑），檢查路徑形狀、
-  版本目錄是已存在的 tag、frontmatter 與段落。tag 只驗存在，不驗是不是最近一個：發版之後還寫進
-  舊目錄的，gate 擋不住，要靠審查。指南裡的相對連結由 `.github/scripts/check_md_links.py` 驗（同樣跑在 `plan-checks`，
-  掃 `README.md`、`AGENTS.md`、`GLOSSARY-MAP.md`、`docs/**`、`.docs/**`、`.github/**`、`.agents/skills/**`、`packages/*` 三層、
-  `apps/*` 兩層與兩份本地寫的 vendor README，目標檔要存在、`#片段` 要對到標題）。指到不進版控的 `references/` 的連結不查。
-
-Release 的說明開頭會連到 `docs/upgrade-guide/v<上一個 tag>/`，有這個目錄才連。升級前要備份什麼、怎麼確認、出事怎麼
-退回去，見 [`docs/operations.md`](docs/operations.md)〈升級與回滾〉。
-
-和 dsh 不同的兩處：
-
-- **只寫中文一份**（產品需求：本 repo 的文件只有中文）。dsh 每份有英、中兩份加配對紀錄，500 字上限只套英文；本 repo 的文件只有中文，所以只有
-  `guide.md`，段落名用 dsh 中文版的「變更」「遷移」，不設字數上限（同 dsh 中文版）。
-- **`<版號>` 取 tag，不取根 `package.json`**（現況做不到：manifest 的版號跟 tag 對不上）。dsh 的 `<version>` 是讀者正在跑的那一版，從根 manifest 讀；
-  發版順序兩邊一樣，都是版號 commit 先合、再打 tag（dsh `scripts/release/bump.ts` 檔頭）。不同在 manifest 的值：
-  本 repo 的 manifest 今天還是 `0.0.0`，跟已發出的 `v0.5.19` 對不上，照抄會把指南全寫進 `v0.0.0/`；而且版號 PR
-  合進去到 Release 發出之間，manifest 已經是還沒發的那一版，這段時間合進來的 PR 會把指南放進讀者還沒在跑的目錄。
-  撤除條件（兩條都成立）：根 `package.json` 的 `version` 等於最近一個 Release tag 去掉 `v`；而且「發版」寫明版號 PR
-  合進去到 Release 發出之間 `develop` 不收其他 PR。
+**外部看得到的不相容變更，在引入它的那張 PR 裡就寫一份升級指南**，放 `docs/upgrade-guide/v<最近一個 Release tag>/<item>/guide.md`，不留到發版前。gate 只驗格式，不驗有沒有寫。範圍、格式、連結掃描範圍、和 dsh 不同的兩處與撤除條件見 [`docs/release.md`](docs/release.md#升級指南)。
 
 ## Agent skills
 
