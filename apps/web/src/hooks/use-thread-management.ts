@@ -5,6 +5,7 @@ import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
 import { threadLogBudgetText } from '@/lib/thread-log-budget';
+import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import { explainThreadFailure, normalizeTitle, readSets } from '@/lib/thread-management';
 import type { ThreadActionResult, ArchiveAnswer, ThreadManagement } from '@/lib/thread-management';
 
@@ -51,12 +52,13 @@ async function settle<V>(
   }
   if (outcome.kind !== 'ok') {
     // thread 數滿了（改名經 server 的 `threadFor`，冷會話也算）：message 是給管理者的原文，換成給使用者看的那一句（#1483）。
-    // 歷史太深（#1753）、日誌超過額度（#2203）同理。
+    // 歷史太深（#1753）、日誌超過額度（#2203）、被別處握著（#2214）同理。
     return {
       message:
         threadCapacityText(outcome.code) ??
         threadHistoryTooDeepText(outcome.code) ??
         threadLogBudgetText(outcome.code) ??
+        threadWriterHeldText(outcome.code) ??
         (outcome.code === 'not_supported' ? '這個伺服器還不支援這個動作。' : outcome.message),
     };
   }

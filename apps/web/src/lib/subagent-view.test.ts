@@ -1,8 +1,9 @@
-import { THREAD_LOG_BUSY, THREAD_LOG_TOO_LARGE } from '@nexus/wire';
+import { THREAD_LOG_BUSY, THREAD_LOG_TOO_LARGE, THREAD_WRITER_HELD } from '@nexus/wire';
 import type { Attribution, ConversationEntry, ToolEntry } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
+import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 
 import {
   agentMessageCaption,
@@ -149,6 +150,10 @@ describe('背景子代理的狀態與輸入框（#869）', () => {
   it('主對話的日誌超過額度（#2203）：講那兩句，不接 server 的原文', () => {
     expect(subagentSendError(THREAD_LOG_TOO_LARGE, '115 MiB')).toBe(THREAD_LOG_TOO_LARGE_TEXT);
     expect(subagentSendError(THREAD_LOG_BUSY, '115 MiB')).toBe(THREAD_LOG_BUSY_TEXT);
+  });
+
+  it('主對話被別的寫入者握著（#2214）：講那一句，不接 server 的原文', () => {
+    expect(subagentSendError(THREAD_WRITER_HELD, '會話 alpha')).toBe(THREAD_WRITER_HELD_TEXT);
   });
 
   it('冷叫醒的三句照 PM 定的文案（#1271）；叫醒失敗帶原因，不疊兩個句號', () => {

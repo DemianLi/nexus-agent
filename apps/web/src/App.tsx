@@ -97,6 +97,7 @@ import type { ConnectionStall } from '@/lib/connection-stall';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
 import { threadLogBudgetText } from '@/lib/thread-log-budget';
+import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
 import { randomUuid } from '@/lib/uuid';
@@ -723,10 +724,11 @@ function ConversationView({
             )}
             {conversation.historyError !== undefined && (
               <p className="text-destructive text-tip">
-                {/* thread 數滿了、歷史太深、日誌超過額度都不是歷史掉了：換成那一句，不加這個前綴（#1478、#1753、#2203）。 */}
+                {/* thread 數滿了、歷史太深、日誌超過額度、被別處握著都不是歷史掉了：換成那一句，不加這個前綴（#1478、#1753、#2203、#2214）。 */}
                 {threadCapacityText(conversation.historyError.code) ??
                   threadHistoryTooDeepText(conversation.historyError.code) ??
                   threadLogBudgetText(conversation.historyError.code) ??
+                  threadWriterHeldText(conversation.historyError.code) ??
                   `之前說過的話拿不回來：${conversation.historyError.message}`}
               </p>
             )}

@@ -10,6 +10,7 @@ import {
   THREAD_HISTORY_TOO_DEEP,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
+  THREAD_WRITER_HELD,
   UplinkTransportError,
 } from '@nexus/wire';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
@@ -36,6 +37,7 @@ describe('worthRereading（#1483）', () => {
     ['網路層拋錯', { thrown: new TypeError('Failed to fetch') }, true],
     ['載體層 5xx', { thrown: new UplinkTransportError(502, '') }, true],
     ['額度被別的會話佔滿（#2203）', { code: THREAD_LOG_BUSY }, true],
+    ['被別的寫入者握著（#2214）', { code: THREAD_WRITER_HELD }, true],
     ['這個組裝沒有', { code: 'not_supported' }, false],
     ['紀錄太大，等也沒用（#2203）', { code: THREAD_LOG_TOO_LARGE }, false],
     ['歷史太深、灌不回去（#1753）', { code: THREAD_HISTORY_TOO_DEEP }, false],
