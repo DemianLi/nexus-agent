@@ -50,6 +50,7 @@ describe('signalText：只讀結構化欄位', () => {
     [decision('reminder', 1, { tool: 'ls', count: 3 }), '重複呼叫：ls 連續第 3 次'],
     [decision('reminder', 1, {}), '重複呼叫：同一個工具'],
     [decision('plugin-message', 1, { plugin: 'goal' }), '外掛 goal 插了一則訊息'],
+    [decision('skill-invocation', 1, { name: 'deploy' }), '叫用技能 deploy'],
     [decision('goal', 1, { operation: 'create', phase: 'active' }), '建立目標（進行中）'],
     [decision('goal', 1, { operation: 'block', phase: 'blocked' }), '目標卡住了（卡住）'],
     [decision('goal', 1, { operation: 'future-op' }), '目標：future-op'],
