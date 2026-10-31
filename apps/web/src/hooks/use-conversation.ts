@@ -72,6 +72,7 @@ import {
   threadLogBusyText,
   threadLogTooLargeText,
 } from '@/lib/thread-log-budget';
+import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import {
   THREAD_PROTOCOL_ERROR_PAGE_TEXT,
   THREAD_PROTOCOL_ERROR_TEXT,
@@ -747,7 +748,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           }
           const refused =
             error instanceof WireRejectedError
-              ? (threadCapacityText(error.code) ?? threadLogBusyText(error.code))
+              ? (threadCapacityText(error.code) ??
+                threadLogBusyText(error.code) ??
+                threadWriterHeldText(error.code))
               : undefined;
           lose(
             refused !== undefined
@@ -802,7 +805,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       if (outcome.kind === 'rejected') {
         // 這條線拒絕發派，不是命令自己失敗，所以走 commandError，不走 slashError。
         const message =
-          serverClosingText(outcome.code) ?? threadLogBudgetText(outcome.code) ?? outcome.message;
+          serverClosingText(outcome.code) ??
+          threadLogBudgetText(outcome.code) ??
+          threadWriterHeldText(outcome.code) ??
+          outcome.message;
         setCommandError(message);
         return refuse(message);
       }
@@ -954,6 +960,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             serverClosingText(result.error) ??
             threadHistoryTooDeepText(result.error) ??
             threadLogBudgetText(result.error) ??
+            threadWriterHeldText(result.error) ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
         };

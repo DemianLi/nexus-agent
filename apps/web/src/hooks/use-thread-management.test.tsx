@@ -4,6 +4,7 @@ import {
   THREAD_HISTORY_TOO_DEEP,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
+  THREAD_WRITER_HELD,
 } from '@nexus/wire';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -13,6 +14,7 @@ import type { Listing, ThreadDirectory } from '@/hooks/use-thread-directory';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
+import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 
 /** 側欄會話管理的接線（#633）：集合以 server 回的為準、舊回應不蓋新的、列表一來蓋在上面的就作廢。 */
 
@@ -301,6 +303,23 @@ describe('日誌超過額度（#2203，冷會話改名經 `threadFor`）', () =>
     const { hook } = setup(client, okListing(listed([], [])));
     await act(async () => {
       expect(await hook.result.current!.onRename('t1', '標題')).toBe(text);
+    });
+    expect(hook.result.current?.titles.size).toBe(0);
+  });
+});
+
+describe('被別的寫入者握著（#2214，冷會話改名經 `threadFor`）', () => {
+  it('講給使用者看的那一句，不接 server 的原文', async () => {
+    const client = {
+      threadRename: vi.fn(async () => ({
+        kind: 'rejected' as const,
+        code: THREAD_WRITER_HELD,
+        message: '會話 "t1" 正由另一個寫入者握著',
+      })),
+    };
+    const { hook } = setup(client, okListing(listed([], [])));
+    await act(async () => {
+      expect(await hook.result.current!.onRename('t1', '標題')).toBe(THREAD_WRITER_HELD_TEXT);
     });
     expect(hook.result.current?.titles.size).toBe(0);
   });
