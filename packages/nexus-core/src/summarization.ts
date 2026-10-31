@@ -1113,6 +1113,8 @@ export class SummaryNotSmallerError extends Error {
  *
  * 估不出來（形狀不對、估算拋）就不擋：檢查不能反過來把摘要殺掉。
  *
+ * 累加到超過框好的摘要就放行，不量完那段：那段被剪過的工具結果是新字串，全量是一次冷編碼，而被取代的內容之後不再送出。
+ *
  * @throws {SummaryNotSmallerError} 框好的摘要 ≥ 被取代的那段。
  */
 function assertSummaryShrinks(
@@ -1122,18 +1124,20 @@ function assertSummaryShrinks(
   const head = sent.messages?.[0];
   if (head === undefined) return;
   let framed: number;
-  let replaced: number;
+  let replaced = 0;
   try {
     const before = effectiveMessages(request.messages ?? [], request.state);
     const kept = Math.max(0, (sent.messages?.length ?? 1) - 1);
     const span = before.slice(0, Math.max(0, before.length - kept));
     if (span.length === 0) return;
     framed = estimateMessageTokens(head);
-    replaced = span.reduce((total, message) => total + estimateMessageTokens(message), 0);
+    for (const message of span) {
+      replaced += estimateMessageTokens(message);
+      if (framed < replaced) return;
+    }
   } catch {
     return;
   }
-  if (framed < replaced) return;
   const error = new SummaryNotSmallerError(framed, replaced);
   summaryCallFailures.add(error);
   throw error;
