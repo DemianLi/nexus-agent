@@ -134,6 +134,13 @@ const TARGETS: readonly Target[] = [
     ownReplay: true,
     released: false,
   },
+  // 下一個 Release 要發的版本：tag 要發完才有，所以釘在凍夾具當下的 develop commit。
+  {
+    name: 'v52',
+    rev: '54d5a80dbe6f64d0ad49f2a51c9e1be95d901172',
+    version: 52,
+    ownReplay: true,
+  },
 ];
 /** 混版的前半。 */
 const MIXED_FIRST = { rev: '09398dd523471a1d03852e18c7bbae6ecc672414', version: 44 } as const;

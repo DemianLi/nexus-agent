@@ -252,8 +252,9 @@ export function classifyStoredFormatVersion(
 
 /**
  * 隨 GitHub Release 出過貨的格式版本：每個 tag 的 `SESSION_LOG_FORMAT_VERSION`，去重（v0.4.0 到 v0.5.19；v0.1.0 到
- * v0.3.0 沒有會話日誌）。每一版在 `apps/harness/src/fixtures/session-format/v<N>/` 都有一份由那一版的寫入器寫出的夾具。
+ * v0.3.0 沒有會話日誌），加上下一個 Release 要發的版本（52）。每一版在 `apps/harness/src/fixtures/session-format/v<N>/`
+ * 都有一份由那一版的寫入器寫出的夾具。
  */
 export const RELEASED_SESSION_FORMAT_VERSIONS: readonly number[] = Object.freeze([
-  2, 3, 4, 8, 9, 10, 12, 13, 14,
+  2, 3, 4, 8, 9, 10, 12, 13, 14, 52,
 ]);
