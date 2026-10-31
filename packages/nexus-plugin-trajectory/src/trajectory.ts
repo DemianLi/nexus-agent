@@ -74,6 +74,13 @@ const ownerKey = (callId: string): string => `#${callId}`;
 const OWNERS_CAP = 2000;
 
 /**
+ * 歸屬表每塊最多幾筆。相鄰兩塊裝得下就併，所以任兩塊相鄰的筆數和都超過這個數，塊數不超過
+ * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一筆只複製塊清單與它碰到的塊，成本跟著塊數與這個數走，
+ * 不跟著整張表的筆數。
+ */
+const OWNERS_CHUNK = 128;
+
+/**
  * 一輪被單輪上限摺掉的東西的累計。**計數要含它們**（`callCount`／`toolCount`…不能因為摺掉而變小），所以摺掉的當下就把
  * 它們該貢獻的數字記在這裡。
  */
@@ -133,6 +140,16 @@ type TurnState = Omit<
   | 'elided'
 > & { readonly carry: Carry };
 
+/**
+ * callId → 呼叫的歸屬表，由舊到新分塊，每個 id 只在一塊裡，所以接起來就是一張照新舊排的表。
+ * 塊一旦放進表就不再改：要動的那幾塊換成新的，其餘在前後兩份狀態之間共用。
+ */
+interface OwnerTable {
+  readonly chunks: readonly Readonly<Record<string, number | null>>[];
+  /** 全部的筆數。 */
+  readonly size: number;
+}
+
 /** 折疊狀態。純 JSON（沒有 `undefined`）。 */
 export interface TrajectoryState {
   readonly turns: readonly TurnState[];
@@ -141,7 +158,7 @@ export interface TrajectoryState {
   /** 到目前為止開過幾輪（下一輪的 `index`）。 */
   readonly total: number;
   /** callId → 發出它的那次呼叫的識別；`null` 表示最近一則帶這個 id 的回覆歸不到（舊日誌）。 */
-  readonly owners: Readonly<Record<string, number | null>>;
+  readonly owners: OwnerTable;
   /** 最近一份系統提示詞快照的位置、最近一份設定快照的位置與其中的模型 id；還沒看過就是 `null`。 */
   readonly system: number | null;
   readonly header: number | null;
@@ -176,7 +193,7 @@ export function initialTrajectory(): TrajectoryState {
     digests: [],
     omitted: 0,
     total: 0,
-    owners: {},
+    owners: { chunks: [], size: 0 },
     system: null,
     header: null,
     model: null,
@@ -430,52 +447,73 @@ function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectorySt
   });
 }
 
-/**
- * 就地改的歸屬表目前有幾筆（只有按需拉細節的重放用就地改，見 {@link TrimPolicy.ownersInPlace}）。
- *
- * **SDK lint 的窄例外**（#1435 Q2 (b)，`top-level-collection`）：規則擋的是「跨掛載存活、卸載不會清的狀態」，這份快取不是那一種——
- * 鍵是每次投影重放自己的歸屬表物件，所以不會跨單元實例共用到別人的狀態；`WeakMap` 的鍵被回收項目就跟著消失，卸載後沒有會被
- * 誤用的東西。dsh 的生產碼有同樣的做法：`packages/compaction/compaction/src/tool-pairing.ts:26` 的 `balanceCacheBySession`。
- */
-// eslint-disable-next-line no-restricted-syntax -- 鍵是每次重放自己的歸屬表物件、不跨單元實例共用，鍵被回收項目就消失；dsh 先例 tool-pairing.ts:26（#1435 Q2 (b)）
-const inPlaceSizes = new WeakMap<object, number>();
+/** 工具表：`key` 在哪一塊，新的塊先找；沒有回 -1。 */
+function ownerChunkAt(chunks: OwnerTable['chunks'], key: string): number {
+  for (let at = chunks.length - 1; at >= 0; at -= 1) {
+    if (Object.hasOwn(chunks[at]!, key)) return at;
+  }
+  return -1;
+}
 
-/** 工具表：加進一筆擁有者，超過上限從最舊的丟。 */
-function noteOwners(
-  owners: Readonly<Record<string, number | null>>,
-  ids: readonly string[],
-  owner: number | null,
-  inPlace: boolean,
-): Readonly<Record<string, number | null>> {
+/** 工具表：查一個 id 的擁有者；沒記過或已被丟掉回 undefined。 */
+function ownerOf(owners: OwnerTable, callId: string): number | null | undefined {
+  const key = ownerKey(callId);
+  const at = ownerChunkAt(owners.chunks, key);
+  return at < 0 ? undefined : owners.chunks[at]![key];
+}
+
+/** 工具表：第 `at` 塊與下一塊裝得下一塊就併起來。`chunks` 是呼叫端自己的副本。 */
+function mergeOwnerChunks(chunks: Readonly<Record<string, number | null>>[], at: number): void {
+  const left = chunks[at];
+  const right = chunks[at + 1];
+  if (left === undefined || right === undefined) return;
+  if (Object.keys(left).length + Object.keys(right).length > OWNERS_CHUNK) return;
+  chunks.splice(at, 2, { ...left, ...right });
+}
+
+/** 工具表：從 `chunks` 的第 `at` 塊拿掉這些鍵，空了就連塊拿掉，再跟前後的塊併。`chunks` 是呼叫端自己的副本。 */
+function dropOwnerKeys(
+  chunks: Readonly<Record<string, number | null>>[],
+  at: number,
+  keys: readonly string[],
+): void {
+  const next = { ...chunks[at] };
+  for (const key of keys) delete next[key];
+  if (Object.keys(next).length === 0) chunks.splice(at, 1);
+  else chunks[at] = next;
+  mergeOwnerChunks(chunks, at);
+  mergeOwnerChunks(chunks, at - 1);
+}
+
+/**
+ * 工具表：加進一批擁有者，超過上限從最舊的丟。
+ *
+ * @returns 新的表，`ids` 是空的時回同一個參照。傳進來的不動：推送的投影要純，狀態會被通道拿去比對。
+ */
+function noteOwners(owners: OwnerTable, ids: readonly string[], owner: number | null): OwnerTable {
   if (ids.length === 0) return owners;
-  if (inPlace) {
-    // 重放自己獨佔這張表：每筆都複製整張（上限 2000）會讓重放成本隨會話長度平方長。就地改，語意相同（先刪再放、丟最舊的）。
-    const table = owners as Record<string, number | null>;
-    let size = inPlaceSizes.get(table) ?? Object.keys(table).length;
-    for (const id of ids) {
-      if (Object.hasOwn(table, ownerKey(id))) size -= 1;
-      delete table[ownerKey(id)];
-      table[ownerKey(id)] = owner;
-      size += 1;
-    }
-    // 批次丟：超過兩倍上限才一次丟回上限，攤下來每筆 O(1)。代價是重放的表最多比推送的多留 {@link OWNERS_CAP} 筆較舊的歸屬——
-    // 更遠以前的遲到事件在這裡認得出歸屬、在推送的投影裡認不出（那裡窗口外的輪本來就丟掉遲到事件），細節比骨架完整，不是更差。
-    if (size > OWNERS_CAP * 2) {
-      for (const key of Object.keys(table).slice(0, size - OWNERS_CAP)) delete table[key];
-      size = OWNERS_CAP;
-    }
-    inPlaceSizes.set(table, size);
-    return table;
-  }
-  const next: Record<string, number | null> = { ...owners };
+  const chunks = [...owners.chunks];
+  let size = owners.size;
   for (const id of ids) {
+    const key = ownerKey(id);
     // 先刪再放：同一個 id 重新出現要排到最新。
-    delete next[ownerKey(id)];
-    next[ownerKey(id)] = owner;
+    const at = ownerChunkAt(chunks, key);
+    if (at >= 0) {
+      dropOwnerKeys(chunks, at, [key]);
+      size -= 1;
+    }
+    const last = chunks.at(-1);
+    if (last === undefined || Object.keys(last).length >= OWNERS_CHUNK)
+      chunks.push({ [key]: owner });
+    else chunks[chunks.length - 1] = { ...last, [key]: owner };
+    size += 1;
   }
-  const keys = Object.keys(next);
-  for (let drop = 0; drop < keys.length - OWNERS_CAP; drop += 1) delete next[keys[drop]!];
-  return next;
+  while (size > OWNERS_CAP) {
+    const oldest = Object.keys(chunks[0]!).slice(0, size - OWNERS_CAP);
+    dropOwnerKeys(chunks, 0, oldest);
+    size -= oldest.length;
+  }
+  return { chunks, size };
 }
 
 // ── 工具 ────────────────────────────────────────────────────────────────────────────
@@ -498,7 +536,7 @@ function applyTool(
   callId: string,
   change: (previous: TrajectoryTool | undefined) => TrajectoryTool | undefined,
 ): TrajectoryState {
-  const owner = state.owners[ownerKey(callId)];
+  const owner = ownerOf(state.owners, callId);
   if (owner === undefined || owner === null) {
     // 歸不到：放進目前開著那一輪的 looseTools（輪外沒有地方放，丟）。
     if (openTurn(state) === undefined) return state;
@@ -597,8 +635,6 @@ interface TrimPolicy {
   readonly detailTurns: number;
   /** 以輪的 `seq` 判斷；省略就都不釘。 */
   readonly pinned?: (seq: number) => boolean;
-  /** 歸屬表就地改。**只有獨佔狀態的重放可以開**（推送的投影要純，狀態會被通道拿去比對）。 */
-  readonly ownersInPlace?: true;
 }
 
 const DEFAULT_TRIM: TrimPolicy = { detailTurns: TRAJECTORY_DETAIL_TURNS };
@@ -844,12 +880,7 @@ export function applyTrajectory(
       const at = modelCall === null ? undefined : locateCall(state, modelCall);
       const ids = toolCallIds(event as SessionEvent<'assistant/message'>);
       // 工具的歸屬先記：歸不到的回覆也要蓋掉同 id 較早的歸屬（null），否則工具會落到更早一次呼叫上。
-      const owners = noteOwners(
-        state.owners,
-        ids,
-        at === undefined ? null : modelCall,
-        trim.ownersInPlace === true,
-      );
+      const owners = noteOwners(state.owners, ids, at === undefined ? null : modelCall);
       const withOwners = owners === state.owners ? state : { ...state, owners };
       if (at === undefined) return unattributed(withOwners);
       const messageId = message === undefined ? undefined : loggedMessageId(message as never);
@@ -1057,9 +1088,17 @@ function onUserMessage(
       plugin,
     });
   }
-  // 人插的話、子代理來信與結算通知：輪中的輸入。`session-reference` 的快照是模型讀的背景，不是輸入；
-  // `skill-invocation`（人寫 `/名字` 帶出的技能正文，#1574）同理，是那句人話帶出來的，不是另一則輸入。
-  if (kind === 'session-reference' || kind === 'skill-invocation') return state;
+  // `skill-invocation`（人寫 `/名字` 帶出的技能正文，#1574）是那句人話帶出來的，不是另一則輸入，只記叫了哪個技能。
+  if (kind === 'skill-invocation') {
+    return withDecision(state, {
+      kind: 'skill-invocation',
+      seq: event.seq,
+      time: event.time,
+      name: typeof source['name'] === 'string' ? source['name'] : 'unknown',
+    });
+  }
+  // 人插的話、子代理來信與結算通知：輪中的輸入。`session-reference` 的快照是模型讀的背景，不是輸入。
+  if (kind === 'session-reference') return state;
   const message = isRecord(data['message']) ? data['message'] : {};
   const inner = isRecord(message['data']) ? message['data'] : {};
   const text = textOfContent(inner['content']);
@@ -1191,7 +1230,6 @@ export function trajectoryTurnDetail(
   const trim: TrimPolicy = {
     detailTurns: TRAJECTORY_DETAIL_TURNS,
     pinned: (turnSeq) => turnSeq >= from && turnSeq < until,
-    ownersInPlace: true,
   };
   let state = initialTrajectory();
   for (const event of events) state = applyTrajectory(state, event, trim);

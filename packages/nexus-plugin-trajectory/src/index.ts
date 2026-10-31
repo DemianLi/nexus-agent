@@ -45,7 +45,6 @@
  * - 兩個單元是純函式的折疊，不碰 `ctx`：樹上這一列卸了之後，開著的對話手上的舊單元照樣能折（決議 §3-2 第 6 條，插件更新只給新對話）。
  * - **沒有設定**：`Config` 是空的 `strictObject`。過去這一列寫了 `config` 只會在啟動時被當成「寫了沒作用」警告；現在寫了未知欄位
  *   會讓這一列在 `config` 那一步掉了（登記的偏離，理由同 `echo`：未知欄位讓載入失敗）。
- * - 唯一的 SDK lint 窄例外：{@link ./trajectory.ts} 的 `inPlaceSizes`（以歸屬表物件為鍵的 `WeakMap` 快取，理由寫在那一行）。
  *
  * 舊的 `NexusPlugin` 外殼（`createTrajectoryPlugin`）不在這裡：它是測試夾具，住在 `apps/harness` 的 `trajectory.fixture.ts`，
  * 包同一個 {@link trajectoryUnit} 與 {@link requestSnapshotsUnit}，讓單元只有一個出處。

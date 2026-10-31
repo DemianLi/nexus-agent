@@ -12,15 +12,16 @@
  * ## 形狀
  *
  * - **字串結果（單塊文字）**：`<前綴>\n\n<本文>`，空一行，照 dsh（`fetch.ts:329` 的 `…\n\n${NOTICE}\n\n<本文>`、`search.ts:74` 的 `parts.join('\n\n')`）。
- * - **多塊結果**：最前面多一塊只有前綴的文字塊，其餘原樣、順序不變。非文字塊先由 {@link projectNonText} 換成文字說明，再標記，
- *   所以說明文字（連結的名稱與 URI 都是 server 給的）一樣在前綴之後。
+ * - **多塊結果**：前綴併進第一塊（`<前綴>\n\n<第一塊>`），塊數不變，其餘原樣、順序不變。外溢層用一個換行接各塊
+ *   （`@nexus/core` 的 `spill-policy.ts`），前綴自成一塊的話外溢之後後面就不是空一行，web 剝不掉（#1930）。
+ *   非文字塊先由 {@link projectNonText} 換成文字說明，再標記，所以說明文字（連結的名稱與 URI 都是 server 給的）一樣在前綴之後。
  * - **空結果不標——跟 dsh 不同**：dsh 的 web 工具不管本文空不空都先放前綴；這裡沒有本文就沒有東西要當資料看，一行孤零零的前綴
  *   只是雜訊，也會讓 #1562 要補的 `(no output)` 佔位字變成前綴加佔位字。空結果的處理交給 #1562（#1676 計畫第 2 點）。
  * - **`isError` 不標**：adapter 在 server 回 `isError` 時直接換成錯誤訊息，不經過 `afterToolCall`（`@langchain/mcp-adapters` 2.0.0
  *   `dist/tools.js` 的 `_callTool`），所以這裡根本看不到錯誤文字；另一條路徑是協定層的錯誤，一律拋出，沒有本文。
  * - **artifact 不動**：它不給模型看，原始結果照舊留在 artifact（上限處理見 `artifact-bound.ts`）。
  *
- * 換在工具本體裡（`connection.ts` 的 `afterToolCall`），所以進 state、會話日誌的 `tool/result`、還原與畫面看到的都是標過的那一份，
+ * 換在工具本體裡（`connection.ts` 的 `afterToolCall`），所以進 state、會話日誌的 `tool/result`、還原與送給模型的都是標過的那一份（工具卡不畫這一行，#1930），
  * 跟 dsh「render 之後才記錄」同一個位置。
  *
  * @module
@@ -31,7 +32,7 @@ import { EXTERNAL_MCP_CONTENT_NOTICE } from '@nexus/core';
 /**
  * 給有本文的結果加上前綴。
  *
- * @param content - adapter 正規化過的 content：字串，或內容塊陣列（已過 `projectNonText`）。
+ * @param content - adapter 正規化過的 content：字串，或全是文字塊的陣列（已過 `projectNonText`）。
  * @returns 標過的新值；空的（空字串、空陣列）原樣回傳同一個值。
  */
 export function markUntrusted<T>(content: string | readonly T[]): string | T[] {
@@ -39,5 +40,6 @@ export function markUntrusted<T>(content: string | readonly T[]): string | T[] {
     return content === '' ? content : `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n${content}`;
   }
   if (content.length === 0) return content as T[];
-  return [{ type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE } as T, ...content];
+  const [first, ...rest] = content as readonly [T & { readonly text: string }, ...T[]];
+  return [{ ...first, text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n${first.text}` }, ...rest];
 }

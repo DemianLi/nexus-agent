@@ -259,6 +259,7 @@ export type SignalKind = Exclude<TrajectoryDecision['kind'], 'compaction'>;
 export const SIGNAL_LABEL: Readonly<Record<SignalKind, string>> = {
   reminder: '系統提醒',
   'plugin-message': '外掛訊息',
+  'skill-invocation': '技能',
   goal: '目標',
   plan: '計劃模式',
   todo: '待辦',
@@ -297,6 +298,8 @@ export function signalText(decision: Exclude<TrajectoryDecision, { kind: 'compac
     }
     case 'plugin-message':
       return `外掛 ${decision.plugin} 插了一則訊息`;
+    case 'skill-invocation':
+      return `叫用技能 ${decision.name}`;
     case 'goal': {
       const operation =
         decision.operation === undefined

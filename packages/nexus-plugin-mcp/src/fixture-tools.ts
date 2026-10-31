@@ -154,6 +154,26 @@ export function registerFixtureTools(server: McpServer): void {
     }),
   );
 
+  // 工具卡的結果文字（#2174）：只回一張圖，以及一個結果分成兩塊文字。
+  server.registerTool(
+    'only_image',
+    { description: '只回一張圖，沒有文字。', inputSchema: {} },
+    () => ({ content: [{ type: 'image', data: SNAPSHOT_PNG, mimeType: 'image/png' }] }),
+  );
+  server.registerTool(
+    'two_texts',
+    {
+      description: '回兩塊文字；`kb` 給了就把第一塊撐到這個大小。',
+      inputSchema: { kb: z.number().optional() },
+    },
+    ({ kb }) => ({
+      content: [
+        { type: 'text', text: kb === undefined ? '第一段' : filler(kb) },
+        { type: 'text', text: '第二段' },
+      ],
+    }),
+  );
+
   // 原始資料會不會整份進日誌與串流（#1320）。四種內容各一支，大小由參數 `kb` 決定：
   // 內嵌二進位資源、內嵌文字資源、圖片、結構化內容。
   const sizeArg = { kb: z.number().describe('內容大小（KB）') };

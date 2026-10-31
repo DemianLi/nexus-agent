@@ -46,7 +46,12 @@ describe.skipIf(BINARY === undefined)('真的 spawner 跑 git', () => {
   let scratch: string;
 
   const shell = (args: string[], cwd = repo): void => {
-    execFileSync(GIT, args, { cwd, stdio: 'ignore', env: { ...process.env, HOME: home.value } });
+    // `git commit` 會在背景留一支自動維護，commit 回來之後它還在跑；這裡要的是測試動 `.git` 時沒有別的行程在碰它。
+    execFileSync(GIT, ['-c', 'maintenance.auto=false', '-c', 'gc.auto=0', ...args], {
+      cwd,
+      stdio: 'ignore',
+      env: { ...process.env, HOME: home.value },
+    });
   };
   const runner = (
     mode: 'read-only' | 'danger-full-access' = 'read-only',

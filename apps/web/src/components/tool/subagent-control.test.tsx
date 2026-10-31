@@ -6,7 +6,7 @@ import type {
   UplinkResult,
   WireClient,
 } from '@nexus/wire';
-import { emptyConversation } from '@nexus/wire';
+import { emptyConversation, SERVER_CLOSING } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,7 @@ import { Transcript } from '@/components/transcript';
 import { SCROLL_BUTTON_AVOID, SCROLL_BUTTON_OBSCURING } from '@/hooks/use-scroll-button-clearance';
 import { HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/lib/connection-stall';
 import type { ConnectionStall } from '@/lib/connection-stall';
+import { SERVER_CLOSING_TEXT } from '@/lib/server-closing';
 import { stubGlyphEnvironment } from '@/test/glyph-env';
 
 /**
@@ -212,6 +213,7 @@ describe('對它說話', () => {
     ['subagent_closed', '正在關閉'],
     ['invalid_argument', '不能是空白'],
     ['unknown_error', '叫醒失敗：被拒。可以再送一次。'],
+    [SERVER_CLOSING, SERVER_CLOSING_TEXT],
   ])('被拒（%s）：卡內一行紅字，輸入的話還在', async (code, snippet) => {
     const { client } = fakeClient({ subagentSend: vi.fn(async () => refused(code)) });
     render(<Harness client={client} status={{ 'bg-1': 'running' }} />);

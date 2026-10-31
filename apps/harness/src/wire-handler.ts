@@ -1411,8 +1411,9 @@ export class SubagentSessionError extends Error {
   }
 }
 
-/** 收尾中拒收這一句時回給使用者的話。**給使用者看**：web 目前直接顯示 `result.message`（理由見 `SERVER_CLOSING`）。 */
-const SERVER_CLOSING_MESSAGE = '伺服器正在重新啟動，這句話沒有送出；稍後再送一次。';
+/** 收尾中拒收時的 message。給管理者與接 wire 的人看，使用者看到的文案由客戶端認碼決定（見 `SERVER_CLOSING`）。 */
+const SERVER_CLOSING_MESSAGE =
+  'serve 正在收尾，這個請求沒有處理；等它重新起來再送一次（run.start 帶同一個 request_id）。';
 
 /**
  * 上行命令的 `params` 精確檢查（N1228，[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)）：照 dsh 的 `assertExactArguments`
