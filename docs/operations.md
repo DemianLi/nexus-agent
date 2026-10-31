@@ -1889,6 +1889,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `notifications/cancelled`，這次呼叫當場結束，這一輪不等它跑完就收尾；日誌上那一筆 `tool/result` 的碼是 `ABORTED`，同其他被停止
   打斷的工具。沒按停止、是 MCP 自己的逾時（`toolCallTimeoutMs`）到點的，照舊是沒有碼的工具失敗。伺服器收到取消之後停不停手、
   做到一半的事怎麼收，看伺服器自己；接伺服器之前確認它對取消的處理。
+- **卡死的 stdio MCP 伺服器會被收掉重啟**（[#2194](https://github.com/DemianLi/nexus-agent/issues/2194)）：呼叫逾時或被停止之後送一次
+  `tools/list` 探活，`livenessTimeoutMs`（預設 15000）內沒回應就收掉子行程、照退避重連，伺服器日誌記 `server stopped responding`。只是某個呼叫
+  慢的伺服器回得了探活，不受影響；一次只處理一個請求的伺服器跑長呼叫時回不了，要把這個值調到比最長的呼叫還久。
 - **MCP 伺服器的使用指引與資源也進得來**（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、
   [#430](https://github.com/DemianLi/nexus-agent/issues/430)）：伺服器 `initialize` 回的 `instructions` 會加上
   `### MCP server: <名字>` 接在系統提示詞後面，模型另有 `list_mcp_resources`、`list_mcp_resource_templates`、

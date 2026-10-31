@@ -236,6 +236,20 @@ describe('一次只有一個嘗試', () => {
     expect(h.state.reports).toHaveLength(1);
     expect(h.state.closed).toEqual([0]);
   });
+
+  it('判定卡死：記一句、照掉線收掉重連；舊一代的遲來判定不算', async () => {
+    const h = harness();
+    h.supervisor.stalled(h.first);
+    expect(h.state.reports[0]).toContain('server stopped responding');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.closed).toEqual([0]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.state.connects).toBe(1);
+
+    const reports = h.state.reports.length;
+    h.supervisor.stalled(h.first);
+    expect(h.state.reports).toHaveLength(reports);
+  });
 });
 
 describe('關閉', () => {
