@@ -68,6 +68,11 @@ import { serverClosingText } from '@/lib/server-closing';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
 import {
+  threadLogBudgetText,
+  threadLogBusyText,
+  threadLogTooLargeText,
+} from '@/lib/thread-log-budget';
+import {
   THREAD_PROTOCOL_ERROR_PAGE_TEXT,
   THREAD_PROTOCOL_ERROR_TEXT,
 } from '@/lib/thread-protocol-error';
@@ -729,17 +734,21 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             return;
           }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
-          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）。
+          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）。
           const permanent =
             error instanceof WireRejectedError
-              ? (threadSubagentText(error.code) ?? threadHistoryTooDeepText(error.code))
+              ? (threadSubagentText(error.code) ??
+                threadHistoryTooDeepText(error.code) ??
+                threadLogTooLargeText(error.code))
               : undefined;
           if (permanent !== undefined) {
             refuse(permanent);
             return;
           }
           const refused =
-            error instanceof WireRejectedError ? threadCapacityText(error.code) : undefined;
+            error instanceof WireRejectedError
+              ? (threadCapacityText(error.code) ?? threadLogBusyText(error.code))
+              : undefined;
           lose(
             refused !== undefined
               ? undefined
@@ -792,7 +801,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       }
       if (outcome.kind === 'rejected') {
         // 這條線拒絕發派，不是命令自己失敗，所以走 commandError，不走 slashError。
-        const message = serverClosingText(outcome.code) ?? outcome.message;
+        const message =
+          serverClosingText(outcome.code) ?? threadLogBudgetText(outcome.code) ?? outcome.message;
         setCommandError(message);
         return refuse(message);
       }
@@ -943,6 +953,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             threadCapacityText(result.error) ??
             serverClosingText(result.error) ??
             threadHistoryTooDeepText(result.error) ??
+            threadLogBudgetText(result.error) ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
         };

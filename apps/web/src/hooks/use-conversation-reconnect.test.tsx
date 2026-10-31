@@ -5,6 +5,8 @@ import {
   streamPath,
   THREAD_AT_CAPACITY,
   THREAD_HISTORY_TOO_DEEP,
+  THREAD_LOG_BUSY,
+  THREAD_LOG_TOO_LARGE,
   THREAD_IS_SUBAGENT,
   WireProtocolError,
   WireRejectedError,
@@ -17,6 +19,7 @@ import { RECONNECT_MAX_MS, RECOVERED_NOTICE_MS } from '@/lib/reconnect';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
+import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 
 /**
@@ -213,6 +216,37 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
     await tick(60_000);
     expect(openEvents).toHaveBeenCalledOnce();
     expect(result.current.refusal).toBe(THREAD_HISTORY_TOO_DEEP_TEXT);
+  });
+
+  it('紀錄太大（#2203）：永久的，講那一句、不排重試，立刻重連與 online 也不再開', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_LOG_TOO_LARGE, '會話日誌 115 MiB 超過額度 109 MiB'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_LOG_TOO_LARGE_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+
+    await tick(60_000);
+    act(() => result.current.reconnectNow());
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('額度被佔滿（#2203）：暫時的，照退避重試，講那一句、不接 server 的原文', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_LOG_BUSY, '額度已佔 100 MiB，上限 109 MiB'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_LOG_BUSY_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
+
+    await tick(60_000);
+    expect(openEvents.mock.calls.length).toBeGreaterThan(1);
   });
 
   it('對照組：thread 數滿了是暫時的，照退避重試，refusal 是另一句', async () => {

@@ -1,5 +1,10 @@
 import type { Event, ThreadHistoryQuery, ThreadHistoryResult, WireClient } from '@nexus/wire';
-import { THREAD_AT_CAPACITY, THREAD_HISTORY_TOO_DEEP } from '@nexus/wire';
+import {
+  THREAD_AT_CAPACITY,
+  THREAD_HISTORY_TOO_DEEP,
+  THREAD_LOG_BUSY,
+  THREAD_LOG_TOO_LARGE,
+} from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -11,6 +16,7 @@ import {
 } from '@/components/earlier-pager';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
+import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
 import { fakeDownlink } from '@/test/downlink';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
@@ -299,6 +305,25 @@ describe('畫面照日誌重播', () => {
     expect(screen.queryByText(/之前說過的話拿不回來/)).toBeNull();
     expect(screen.queryByText(/3000|上限 600|建不起來/)).toBeNull();
   });
+
+  it.each([
+    [THREAD_LOG_TOO_LARGE, THREAD_LOG_TOO_LARGE_TEXT],
+    [THREAD_LOG_BUSY, THREAD_LOG_BUSY_TEXT],
+  ])(
+    '日誌超過額度（%s，#2203）：換成那一句，沒有「拿不回來」的前綴，也不接原文',
+    async (code, text) => {
+      const { client } = fakeClient(async () => ({
+        kind: 'rejected',
+        code,
+        message: '會話日誌 115 MiB 超過額度 109 MiB',
+      }));
+      render(<App client={client} />);
+
+      await waitFor(() => expect(screen.getByText(text)).toBeTruthy());
+      expect(screen.queryByText(/之前說過的話拿不回來/)).toBeNull();
+      expect(screen.queryByText(/115 MiB|額度/)).toBeNull();
+    },
+  );
 
   it('往前翻：帶上一頁的位置與第一頁的上界，更早的接在最上面，翻到底按鈕就收掉', async () => {
     const queries: (ThreadHistoryQuery | undefined)[] = [];
