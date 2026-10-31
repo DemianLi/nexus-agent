@@ -31,6 +31,12 @@
  * （根是容器的話算第 1 層，純量不算），量的是交給 `JSON.stringify` 之後的樣子（先 `toJSON`、再過 `_default`）。
  * 加上的 {@link CHECKPOINT_WRAPPER_DEPTH} 層是實測出來的，見那一格的註解。
  *
+ * ## `messages` 不走這顆（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116)）
+ *
+ * 訊息留在記憶體不序列化，寫入吞錯與讀回層數上限這兩件事碰不到它們。`pruned-memory-saver.ts` 的 `seal` 用同一個
+ * {@link CHECKPOINT_MAX_DEPTH} 量新進的訊息，邊界跟量整份存檔點相同：日誌收得下的事件進得了 state，太深的拋
+ * {@link CheckpointDepthError}。這顆管 `files` 等其他 channel、metadata 與 pending writes。
+ *
  * ## 與 dsh 的偏離（理由 1）
  *
  * dsh 沒有存檔點這一層（一輪到下一輪的狀態是會話日誌加記憶體，見 `pruned-memory-saver.ts`），這一份是 LangGraph 基座才有的。

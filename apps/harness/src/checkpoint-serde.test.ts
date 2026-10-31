@@ -30,7 +30,6 @@ import {
   CHECKPOINT_MAX_DEPTH,
   CHECKPOINT_PRECHECK_DEPTH,
   CHECKPOINT_UNSERIALIZABLE,
-  CHECKPOINT_WRAPPER_DEPTH,
   DepthCheckedSerializer,
   checkpointDepth,
 } from './checkpoint-serde.js';
@@ -389,8 +388,6 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
         expect(jsonDepth((JSON.parse(logged!) as { data: unknown }).data)).toBe(
           SESSION_EVENT_MAX_DEPTH,
         );
-        // 實測：存檔點那一次寫入剛好比日誌多 CHECKPOINT_WRAPPER_DEPTH 層，就在上限上。
-        expect(Math.max(...dumpedDepths)).toBe(SESSION_EVENT_MAX_DEPTH + CHECKPOINT_WRAPPER_DEPTH);
       }
     },
     60_000,
@@ -564,8 +561,6 @@ describe('續接：日誌裡的舊事件比上限深（#1658）', () => {
       expect(argsIn(requestFor(resumed.rig.upstream, `然後-${name}`), `call-${name}`)).toEqual(
         deep[name],
       );
-      if (name === 'e600')
-        expect(Math.max(...dumpedDepths)).toBe(SESSION_EVENT_MAX_DEPTH + CHECKPOINT_WRAPPER_DEPTH);
     },
     60_000,
   );

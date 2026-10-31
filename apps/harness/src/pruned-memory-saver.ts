@@ -37,6 +37,21 @@
  *   「它結束了」，所以每個結束的子代理命名空間會殘留最新那一份。這是已知的殘餘，量級是「每次子代理呼叫一份小狀態」，
  *   不是歷史平方。
  *
+ * ## 訊息不序列化（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116)）
+ *
+ * 整串序列化的話，大日誌在第一次讀回就把行程撐死，而這顆 saver 不耐久，序列化換不到什麼。
+ * 所以 `messages` 不進 `MemorySaver`，換成記號，活物件留在側表：
+ *
+ * - **活物件要防就地改**：新進的訊息量過層數就深凍結，已凍結的跳過，成本是 O(新)。層數上限與寫進存檔點時
+ *   相同（{@link CHECKPOINT_MESSAGE_WRAPPER_DEPTH}），日誌收得下的照樣收得下。
+ * - **工具派工也帶整份 state**：`ReactAgent` 用 `Send` 派工具，`args` 是整份 state，進 `__pregel_tasks`，
+ *   中斷時跟著存檔點落下來。不換的話工具步驟照樣序列化整串，大到超過 V8 字串上限。所以 `args` 也進側表。
+ * - **讀回解不開就拋**：缺項不能變成空對話。`getTuple` 與 `list` 都換回，記號不漏進 channel。
+ * - **最後一則 AI 給可寫副本**：langchain 的 hitl 中介層就地改它的 `tool_calls`（`agents/middleware/hitl.js:498`）。
+ * - **側表跟著存檔點走**：修剪與刪 thread 一起收。寫入失敗不進側表，存檔點留在上一顆。
+ *
+ * `files` 等其他 channel 照舊序列化，層數檢查與讀回上限（#1658）都還在。
+ *
  * @module
  */
 
@@ -44,7 +59,78 @@ import type { RunnableConfig } from '@langchain/core/runnables';
 import { MemorySaver } from '@langchain/langgraph';
 import type { Checkpoint, CheckpointMetadata } from '@langchain/langgraph-checkpoint';
 
-import { DepthCheckedSerializer } from './checkpoint-serde.js';
+import {
+  CHECKPOINT_MAX_DEPTH,
+  CHECKPOINT_PRECHECK_DEPTH,
+  CheckpointDepthError,
+  DepthCheckedSerializer,
+  checkpointDepth,
+} from './checkpoint-serde.js';
+
+/** 存檔點裡換掉 `messages` 與工具派工 `args` 的記號鍵。 */
+const LIVE_MARK = '__nexusLiveState';
+
+/** 工具派工所在的 channel（`@langchain/langgraph` 的 `TASKS`，1.x）。 */
+const TASKS = '__pregel_tasks';
+
+/**
+ * 一則訊息寫進存檔點時外面還有幾層：存檔點 → `channel_values` → `messages`。
+ *
+ * `seal` 量的是訊息自己，加回這幾層，邊界才跟量整份存檔點相同。
+ */
+export const CHECKPOINT_MESSAGE_WRAPPER_DEPTH = 3;
+
+/** 工具派工的形狀，只看 `args`。 */
+interface TaskLike {
+  args?: Record<string, unknown>;
+}
+
+/** 工具派工換成記號之後的 `args`。 */
+interface TaskMark {
+  readonly [LIVE_MARK]: string;
+  readonly task: number;
+}
+
+function deepFreeze(root: unknown): void {
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (value === null || (typeof value !== 'object' && typeof value !== 'function')) continue;
+    if (ArrayBuffer.isView(value) || value instanceof ArrayBuffer || Object.isFrozen(value)) {
+      continue;
+    }
+    Object.freeze(value);
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor !== undefined && 'value' in descriptor) stack.push(descriptor.value);
+    }
+  }
+}
+
+/** 新進的訊息量層數並深凍結；已凍結的跳過，所以成本是 O(新)。 */
+function seal(messages: readonly unknown[]): void {
+  for (const message of messages) {
+    if (Object.isFrozen(message)) continue;
+    const depth =
+      checkpointDepth(message, CHECKPOINT_PRECHECK_DEPTH) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH;
+    if (depth > CHECKPOINT_MAX_DEPTH) throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH);
+    deepFreeze(message);
+  }
+  Object.freeze(messages);
+}
+
+/** 是不是這顆 saver 放的記號。 */
+function isMark(value: unknown): value is Record<typeof LIVE_MARK, string> {
+  return typeof value === 'object' && value !== null && LIVE_MARK in value;
+}
+
+/** 最後一則是 AI 就換成可寫的淺副本：hitl 中介層就地改它的 `tool_calls`。 */
+function withWritableLastAi(messages: readonly unknown[]): readonly unknown[] {
+  const last = messages.at(-1) as { getType?: () => string } | undefined;
+  if (last?.getType?.() !== 'ai') return messages;
+  const copy = Object.assign(Object.create(Object.getPrototypeOf(last) as object) as object, last);
+  return [...messages.slice(0, -1), copy];
+}
 
 /** 每個 (thread, ns) 留幾份存檔點。1＝只留最新那一份；續行、`getState`、`updateState` 讀的都是它。 */
 export const RETAINED_CHECKPOINTS = 1;
@@ -60,6 +146,10 @@ export const RUN_DURABILITY = 'exit' as const;
 /** 只留最新存檔點的 `MemorySaver`。見檔頭。 */
 export class PrunedMemorySaver extends MemorySaver {
   readonly #keep: number;
+  /** 存檔點鍵 → 活的 `messages`。 */
+  readonly #liveMessages = new Map<string, readonly unknown[]>();
+  /** 存檔點鍵 → 工具派工的 `args`，下標是記號裡的 `task`。 */
+  readonly #liveTasks = new Map<string, readonly Record<string, unknown>[]>();
 
   /**
    * @param keep - 每個 (thread, ns) 留幾份，至少 1。
@@ -76,7 +166,7 @@ export class PrunedMemorySaver extends MemorySaver {
   }
 
   /**
-   * @inheritdoc 存完之後修剪這條鏈。
+   * @inheritdoc `messages` 與工具派工的 `args` 換成記號再存，存完之後修剪這條鏈。
    *
    * **寫不進去時收掉空的鏈**（#1658）：`MemorySaver.put` 先建好 (thread, ns) 那一格才序列化，序列化拋錯就留下一格空的，
    * 之後 `getTuple` 拿空的那格當「有存檔點」去拆，拋 `undefined is not iterable`，把原本那顆錯蓋掉。
@@ -88,9 +178,41 @@ export class PrunedMemorySaver extends MemorySaver {
   ): Promise<RunnableConfig> {
     const thread = config.configurable?.thread_id as string;
     const namespace = (config.configurable?.checkpoint_ns as string | undefined) ?? '';
+    const key = checkpointKey(thread, namespace, checkpoint.id);
+    const values = checkpoint.channel_values;
+    const messages = values['messages'];
+    const replaced: Record<string, unknown> = {};
+    const carried: Record<string, unknown>[] = [];
     let saved: RunnableConfig;
     try {
-      saved = await super.put(config, checkpoint, metadata);
+      if (Array.isArray(messages)) {
+        seal(messages);
+        replaced['messages'] = { [LIVE_MARK]: key };
+      }
+      const tasks = values[TASKS];
+      if (Array.isArray(tasks)) {
+        replaced[TASKS] = (tasks as TaskLike[]).map((task) => {
+          const list = task?.args?.['messages'];
+          if (!Array.isArray(list)) return task;
+          const owned = [...(list as unknown[])];
+          seal(owned);
+          const mark: TaskMark = {
+            [LIVE_MARK]: key,
+            task: carried.push({ ...task.args, messages: owned }) - 1,
+          };
+          return Object.assign(
+            Object.create(Object.getPrototypeOf(task) as object) as object,
+            task,
+            {
+              args: mark,
+            },
+          );
+        });
+      }
+      const stored = { ...checkpoint, channel_values: { ...values, ...replaced } };
+      saved = await super.put(config, stored, metadata);
+      if ('messages' in replaced) this.#liveMessages.set(key, messages as unknown[]);
+      if (carried.length > 0) this.#liveTasks.set(key, carried);
     } catch (error) {
       const chain = this.storage[thread]?.[namespace];
       if (chain !== undefined && Object.keys(chain).length === 0) {
@@ -103,6 +225,53 @@ export class PrunedMemorySaver extends MemorySaver {
     return saved;
   }
 
+  /** 側表裡有幾份存檔點的活物件。 */
+  get liveCheckpoints(): number {
+    return new Set([...this.#liveMessages.keys(), ...this.#liveTasks.keys()]).size;
+  }
+
+  /** @inheritdoc 記號換回活物件。 */
+  override async getTuple(config: RunnableConfig) {
+    return this.#reveal(await super.getTuple(config));
+  }
+
+  /** @inheritdoc 記號換回活物件。 */
+  override async *list(config: RunnableConfig, options?: Parameters<MemorySaver['list']>[1]) {
+    for await (const tuple of super.list(config, options)) yield this.#reveal(tuple);
+  }
+
+  /** @inheritdoc 側表一起收。 */
+  override async deleteThread(threadId: string): Promise<void> {
+    await super.deleteThread(threadId);
+    for (const table of [this.#liveMessages, this.#liveTasks]) {
+      for (const key of table.keys()) {
+        if ((JSON.parse(key) as string[])[0] === threadId) table.delete(key);
+      }
+    }
+  }
+
+  /** 把讀回來的那一份裡的記號換回活物件。解不開就拋，不能變成空對話。 */
+  #reveal<T extends { checkpoint: Checkpoint } | undefined>(tuple: T): T {
+    if (tuple === undefined) return tuple;
+    const values = tuple.checkpoint.channel_values;
+    const tasks = values[TASKS];
+    if (Array.isArray(tasks)) {
+      for (const task of tasks as TaskLike[]) {
+        const mark = task?.args as (TaskMark & Record<string, unknown>) | undefined;
+        if (!isMark(mark)) continue;
+        const args = this.#liveTasks.get(mark[LIVE_MARK])?.[mark.task];
+        if (args === undefined) throw new Error(`工具派工不在側表：${mark[LIVE_MARK]}`);
+        task.args = { ...args };
+      }
+    }
+    const mark = values['messages'];
+    if (!isMark(mark)) return tuple;
+    const live = this.#liveMessages.get(mark[LIVE_MARK]);
+    if (live === undefined) throw new Error(`存檔點的訊息不在側表：${mark[LIVE_MARK]}`);
+    values['messages'] = withWritableLastAi(live);
+    return tuple;
+  }
+
   /** 這條鏈只留最新 `#keep` 份，再掃掉這條鏈上沒有存檔點可掛的 writes。 */
   #prune(thread: string, namespace: string): void {
     const chain = this.storage[thread]?.[namespace];
@@ -111,6 +280,9 @@ export class PrunedMemorySaver extends MemorySaver {
     for (const id of newestFirst.slice(this.#keep)) {
       delete chain[id];
       delete this.writes[writesKey(thread, namespace, id)];
+      const key = checkpointKey(thread, namespace, id);
+      this.#liveMessages.delete(key);
+      this.#liveTasks.delete(key);
     }
     // 孤兒：key 指向這條鏈上已經不在的存檔點。
     for (const key of Object.keys(this.writes)) {
@@ -120,6 +292,11 @@ export class PrunedMemorySaver extends MemorySaver {
       }
     }
   }
+}
+
+/** 側表的鍵。 */
+function checkpointKey(thread: string, namespace: string, id: string): string {
+  return JSON.stringify([thread, namespace, id]);
 }
 
 /** `MemorySaver` 內部 writes 的鍵（`_generateKey`，沒有匯出）。 */
