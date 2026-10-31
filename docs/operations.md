@@ -2484,13 +2484,16 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 ### 時間讀數：`time-context`
 
 模型自己沒有時鐘。`time-context` 這一列（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)，照 dsh 的 `time-context`）在每次 agent
-呼叫開頭、`agent-instructions` 的基線之後，追加**一則持久的使用者訊息**，三行：
+呼叫開頭、`agent-instructions` 的基線之後，追加**一則持久的使用者訊息**，四行：
 
 ```text
 Time sampled while preparing turn 3, step 1: 2026-10-18T09:15:00+08:00[Asia/Taipei]
 Browser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.
 Elapsed since the preceding model-visible message: 15m 0s.
+When the user gives a date without a year, infer the year from the timestamp above and choose the closest matching date.
 ```
+
+- **第四行是本專案加的**（[#2154](https://github.com/DemianLi/nexus-agent/issues/2154)，前三行照 dsh）：讀數排在人話之後，小模型沒有這行時常把「11/4」算成舊年份。它擋不住所有日期：實測 Bolt E4B 對跨年的「1/5」與相對日期「下週三」仍常算錯，查詢類工具的日期要另外確認。
 
 - **第二行看這一輪的人話帶不帶時區**（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，照 dsh 的 `deriveBrowserTimeZoneContext`）：`run.start` 帶了 `client_time_zone` 的話（`subagent.send` 也帶，記在子代理自己的日誌上，[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)），唯一的時區寫「Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.」，**第一行的時鐘也改用這個時區**；同一輪有不同時區的人話（輪中插話換了時區）寫 `mixed ["America/New_York","Asia/Tokyo"]` 並請模型向使用者確認；都沒帶就是 `unavailable`（舊客戶端、CLI、目標續行）。web 真的送出時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630)，在那之前實際跑出來仍是 `unavailable`。**沒帶時區時**第一行的時區只是顯示用的回退，**不代表使用者在哪個時區**。
 - **只進請求尾端，不進系統提示詞**：前綴快取不會因此失效；已經送出的讀數記在日誌上，續接舊會話時原樣回到模型手上，不改寫。

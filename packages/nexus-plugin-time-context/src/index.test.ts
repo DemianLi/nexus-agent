@@ -67,12 +67,13 @@ describe('文字格式', () => {
     );
   });
 
-  it('三行逐字：第 1 步、沒有基線', () => {
+  it('四行逐字：第 1 步、沒有基線', () => {
     expect(renderTimeContext(T0, 1, 1, undefined, taipei, 'Asia/Taipei')).toBe(
       [
         'Time sampled while preparing turn 1, step 1: 2026-10-18T09:00:00+08:00[Asia/Taipei]',
         'Browser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.',
         'Elapsed since the preceding model-visible message: unavailable.',
+        'When the user gives a date without a year, infer the year from the timestamp above and choose the closest matching date.',
       ].join('\n'),
     );
   });
