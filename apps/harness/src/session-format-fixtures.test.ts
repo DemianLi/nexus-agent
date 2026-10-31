@@ -142,6 +142,10 @@ function lifecycles(events: readonly SessionEvent[]): unknown[] {
 describe.each(names)('夾具 %s', (name) => {
   const expected = expectedOf(name);
   const ids = Object.keys(expected.sessions).sort();
+  const twoFileIds = ids.filter((id) =>
+    existsSync(legacyTwoFilePathsIn(join(FIXTURES, name), id).log),
+  );
+  const generationIds = ids.filter((id) => !twoFileIds.includes(id));
 
   it('list 列得出每一條，沒有讀不懂的', async () => {
     const listing = await openJsonlSessionStore({ directory: await copied(name) }).list();
@@ -167,7 +171,7 @@ describe.each(names)('夾具 %s', (name) => {
     expect(replaySummary(events)).toEqual(replay);
   });
 
-  it.each(ids)(
+  it.each(twoFileIds)(
     '續接 %s 之後再寫一筆、收掉：遷成這一版的世代檔，strict 整份重讀 seq 連續；舊日誌一個位元組都沒動、舊 header 換成墓碑',
     async (id) => {
       const directory = await copied(name);
@@ -210,6 +214,41 @@ describe.each(names)('夾具 %s', (name) => {
       expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
       expect(events).toHaveLength(resumed.events.length + 1);
       expect(events.at(-1)?.type).toBe('turn/start');
+    },
+  );
+
+  it.each(generationIds)(
+    '續接 %s 之後再寫一筆、收掉：接在同一份世代檔後面，不遷移；原本的位元組與舊路徑的墓碑都沒動',
+    async (id) => {
+      const directory = await copied(name);
+      const paths = sessionPathsIn(directory, id);
+      const legacy = legacyTwoFilePathsIn(directory, id);
+      const source = await readFile(paths.log);
+      const tombstone = await readFile(legacy.header);
+      const store = openJsonlSessionStore({ directory });
+      const resumed = await resumeClosingInterruptedTurn(store, id);
+      expect(resumed.storedFormatVersion).toBe(expected.sessions[id]!.headerVersion);
+      const next: SessionEvent = {
+        type: 'turn/start',
+        seq: SessionSeq(resumed.events.length),
+        time: 1,
+        data: { kind: 'message', text: '夾具續寫' },
+      };
+      await resumed.stored.append([next]);
+      await resumed.stored.close();
+
+      const generation = await readFile(paths.log);
+      expect(generation.subarray(0, source.byteLength).equals(source)).toBe(true);
+      expect(await readFile(legacy.header)).toEqual(tombstone);
+      const newline = generation.indexOf(0x0a);
+      const header = JSON.parse(generation.toString('utf8', 0, newline)) as Record<string, unknown>;
+      expect(header).not.toHaveProperty('migratedFrom');
+      const { events } = parseJsonlSessionBody(id, generation.subarray(newline + 1), {
+        version: SESSION_LOG_FORMAT_VERSION,
+        recovery: 'strict',
+      });
+      expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+      expect(events).toHaveLength(resumed.events.length + 1);
     },
   );
 

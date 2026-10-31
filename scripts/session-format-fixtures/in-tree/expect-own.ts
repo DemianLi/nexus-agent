@@ -8,7 +8,8 @@
  * 用法：tsx __session-format-expect-own.ts <夾具目錄> <會話 id>...
  */
 
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { replayConversation } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
@@ -16,9 +17,21 @@ import type { SessionEvent } from '@nexus/core';
 const [directory, ...ids] = process.argv.slice(2);
 if (directory === undefined || ids.length === 0) throw new Error('要給夾具目錄與會話 id。');
 
+/** 日誌本文：舊兩檔是 `<id>.jsonl`，世代檔（格式 52 起）是 `<id>/session.v<N>.jsonl`，第一行是 header 行。 */
+async function bodyOf(root: string, id: string): Promise<string> {
+  const sessionDirectory = join(root, id);
+  if (!existsSync(sessionDirectory)) return readFile(join(root, `${id}.jsonl`), 'utf8');
+  const generation = (await readdir(sessionDirectory)).find((name) =>
+    /^session\.v\d+\.jsonl$/.test(name),
+  );
+  if (generation === undefined) throw new Error(`${sessionDirectory} 裡沒有世代檔。`);
+  const text = await readFile(join(sessionDirectory, generation), 'utf8');
+  return text.slice(text.indexOf('\n') + 1);
+}
+
 const out: Record<string, unknown> = {};
 for (const id of ids) {
-  const body = await readFile(join(directory, `${id}.jsonl`), 'utf8');
+  const body = await bodyOf(directory, id);
   const events = body
     .split('\n')
     .filter((line) => line.length > 0)
