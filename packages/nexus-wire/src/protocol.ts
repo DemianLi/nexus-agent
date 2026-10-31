@@ -437,6 +437,20 @@ export const THREAD_HISTORY_TOO_DEEP = 'thread_history_too_deep';
 export const THREAD_WRITER_HELD = 'thread_writer_held';
 
 /**
+ * 這條 thread 的會話日誌本身就超過這個行程能收的額度，serve 在讀之前就拒收（`SessionLogTooLargeError` 的 `too-large`，
+ * [#2115](https://github.com/DemianLi/nexus-agent/issues/2115)、[#2203](https://github.com/DemianLi/nexus-agent/issues/2203)）。日誌檔沒有壞、一個位元組都沒動。
+ * **重試沒用**：要等管理者給行程更多記憶體或調高 `sessionLogBudgetMiB` 後重啟。任何會經 `threadFor` 續接舊 thread 的路都可能回。message 寫了大小、額度與下一步。
+ */
+export const THREAD_LOG_TOO_LARGE = 'thread_log_too_large';
+
+/**
+ * 這條 thread 的會話日誌單獨放得下，但額度現在被別的開著的 thread 佔滿（`SessionLogTooLargeError` 的 `busy`，
+ * [#2115](https://github.com/DemianLi/nexus-agent/issues/2115)、[#2203](https://github.com/DemianLi/nexus-agent/issues/2203)）。日誌檔沒有壞、一個位元組都沒動。
+ * **是暫時的**：別的 thread 關掉或閒置逐出之後再送就可能放得下。任何會經 `threadFor` 續接舊 thread 的路都可能回。message 寫了大小、已佔、上限與下一步。
+ */
+export const THREAD_LOG_BUSY = 'thread_log_busy';
+
+/**
  * serve 正在收尾（`close()` 已經開始：收到 `SIGTERM`／`SIGINT`，或致命例外；`close()` 一開始就停收新的一輪，**不論有沒有 `/readyz` 時間窗**——
  * `drainMs: 0`、沒人抓過 `/readyz`、致命例外不等時間窗的路徑都一樣，[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)），
  * **這一句話沒有送出**：會開新一輪的上行命令一律回這個碼，HTTP 照舊 200：
@@ -465,6 +479,8 @@ export type WireErrorCode =
   | typeof THREAD_IS_SUBAGENT
   | typeof THREAD_HISTORY_TOO_DEEP
   | typeof THREAD_WRITER_HELD
+  | typeof THREAD_LOG_TOO_LARGE
+  | typeof THREAD_LOG_BUSY
   | typeof SERVER_CLOSING
   | typeof MODEL_DOES_NOT_SUPPORT_IMAGES
   | typeof ATTACHMENT_NOT_FOUND;

@@ -115,6 +115,8 @@ import {
   THREAD_AT_CAPACITY,
   THREAD_HISTORY_TOO_DEEP,
   THREAD_IS_SUBAGENT,
+  THREAD_LOG_BUSY,
+  THREAD_LOG_TOO_LARGE,
   THREAD_WRITER_HELD,
   isSkillMethod,
   isSlashMethod,
@@ -146,6 +148,7 @@ import {
   forkBoundaryOf,
   ProjectionDetailError,
   SessionAlreadyOwnedError,
+  SessionLogTooLargeError,
 } from '@nexus/core';
 import { childForkSeed } from './thread-fork.js';
 import type { GoalId } from '@nexus/goal';
@@ -1986,7 +1989,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 還有**這個 id 是子代理的會話**（{@link SubagentSessionError}，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：回 `thread_is_subagent`；
    * 以及**日誌裡有一則太深、灌不回存檔點**（`checkpoint_depth_exceeded`，[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：回 `thread_history_too_deep`，
    * 認 `cause` 鏈上任何一環的碼（同 `classifyTurnFailure` 認碼不認訊息）；
-   * 還有**寫租約被別的寫入者握著**（{@link SessionAlreadyOwnedError}，[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)）：回 `thread_writer_held`。
+   * 還有**寫租約被別的寫入者握著**（{@link SessionAlreadyOwnedError}，[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)）：回 `thread_writer_held`；
+   * 以及**日誌超過這個行程的額度**（{@link SessionLogTooLargeError}，[#2203](https://github.com/DemianLi/nexus-agent/issues/2203)）：單份太大回 `thread_log_too_large`，額度被佔滿回 `thread_log_busy`。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
@@ -2016,6 +2020,16 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             THREAD_WRITER_HELD,
             `會話 "${error.id}" 正由另一個寫入者握著（多半是另一個行程還開著這條 thread），serve 沒有開它。` +
               '等握著它的那個行程關掉這條 thread 或結束之後再試。',
+          ),
+        );
+      }
+      // 日誌超過額度不是壞了（#2203）：專用碼、不加「建不起來」的前綴，兩種的差別是等了有沒有用。
+      if (error instanceof SessionLogTooLargeError) {
+        return json(
+          errorResponse(
+            id,
+            error.reason === 'too-large' ? THREAD_LOG_TOO_LARGE : THREAD_LOG_BUSY,
+            error.message,
           ),
         );
       }
