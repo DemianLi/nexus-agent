@@ -1,15 +1,15 @@
 import type { CommandOutcome } from '@nexus/wire';
-import { THREAD_AT_CAPACITY, UplinkTransportError } from '@nexus/wire';
+import { THREAD_AT_CAPACITY, THREAD_LOG_BUSY, UplinkTransportError } from '@nexus/wire';
 import { useEffect, useRef, useState } from 'react';
 
 /**
  * 這一次讀失敗，值不值得在下行**下一次接上**時再讀一次（[#1483](https://github.com/DemianLi/nexus-agent/issues/1483)）。
  *
- * 只認**暫時的**失敗：thread 起不來時 server 的 `threadOrError` 回的兩種碼（`thread_at_capacity`、`unknown_error`），
+ * 只認**暫時的**失敗：thread 起不來時 server 的 `threadOrError` 回的 `thread_at_capacity`、`thread_log_busy`、`unknown_error`，
  * 以及網路層拋的錯。**永久的「沒有」不算**——`not_supported`（這個組裝沒有）、載體層的 4xx（舊 server 不認得這個 method
- * 回 404）、`result.ok === false` 的業務回答：接回來也一樣，重讀只是每次接回多打一次。`threadOrError` 的另外兩種碼也是永久的：
- * `thread_is_subagent`（子代理的會話，#1544）與 `thread_history_too_deep`（日誌裡有一則太深、灌不回去，#1668／#1753），
- * 同一份日誌每次都一樣。
+ * 回 404）、`result.ok === false` 的業務回答：接回來也一樣，重讀只是每次接回多打一次。`threadOrError` 的這三種碼也是永久的：
+ * `thread_is_subagent`（子代理的會話，#1544）、`thread_history_too_deep`（日誌裡有一則太深、灌不回去，#1668／#1753）與
+ * `thread_log_too_large`（日誌單獨就超過額度，#2203），同一份日誌每次都一樣。
  */
 export function worthRereading(
   failure: { readonly code?: string } | { readonly thrown: unknown },
@@ -18,7 +18,11 @@ export function worthRereading(
     const error = failure.thrown;
     return !(error instanceof UplinkTransportError && error.status >= 400 && error.status < 500);
   }
-  return failure.code === THREAD_AT_CAPACITY || failure.code === 'unknown_error';
+  return (
+    failure.code === THREAD_AT_CAPACITY ||
+    failure.code === THREAD_LOG_BUSY ||
+    failure.code === 'unknown_error'
+  );
 }
 
 /**

@@ -1,11 +1,17 @@
 import type { ThreadListResult, WireClient } from '@nexus/wire';
-import { THREAD_AT_CAPACITY, THREAD_HISTORY_TOO_DEEP } from '@nexus/wire';
+import {
+  THREAD_AT_CAPACITY,
+  THREAD_HISTORY_TOO_DEEP,
+  THREAD_LOG_BUSY,
+  THREAD_LOG_TOO_LARGE,
+} from '@nexus/wire';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useAcceptedTitles, useThreadManagement } from '@/hooks/use-thread-management';
 import type { Listing, ThreadDirectory } from '@/hooks/use-thread-directory';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
+import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 
 /** 側欄會話管理的接線（#633）：集合以 server 回的為準、舊回應不蓋新的、列表一來蓋在上面的就作廢。 */
@@ -275,6 +281,26 @@ describe('改名', () => {
     const { hook } = setup(client, okListing(listed([], [])));
     await act(async () => {
       expect(await hook.result.current!.onRename('t1', '標題')).toBe(THREAD_HISTORY_TOO_DEEP_TEXT);
+    });
+    expect(hook.result.current?.titles.size).toBe(0);
+  });
+});
+
+describe('日誌超過額度（#2203，冷會話改名經 `threadFor`）', () => {
+  it.each([
+    [THREAD_LOG_TOO_LARGE, THREAD_LOG_TOO_LARGE_TEXT],
+    [THREAD_LOG_BUSY, THREAD_LOG_BUSY_TEXT],
+  ])('%s：講給使用者看的那一句，不接 server 的原文', async (code, text) => {
+    const client = {
+      threadRename: vi.fn(async () => ({
+        kind: 'rejected' as const,
+        code,
+        message: '會話日誌 115 MiB 超過額度 109 MiB',
+      })),
+    };
+    const { hook } = setup(client, okListing(listed([], [])));
+    await act(async () => {
+      expect(await hook.result.current!.onRename('t1', '標題')).toBe(text);
     });
     expect(hook.result.current?.titles.size).toBe(0);
   });
