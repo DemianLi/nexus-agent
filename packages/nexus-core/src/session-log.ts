@@ -576,11 +576,11 @@ export interface SessionEventMap {
    *
    * 詞彙照 dsh 的 `ApprovalOutcome`：`allowed-once` 是唯一的放行；`rejected` 是人按了拒絕，**也是政策關掉核准時的確定性
    * 拒絕**（dsh 同：`approval` 服務在 `never` 政策下直接回 `rejected`）；`cancelled` 是問題在被答之前被收回（按了停止）；
-   * `unavailable` 是沒有人可以答（沒有管道）。**fail closed**：除了 `allowed-once` 都不執行。
+   * `unavailable` 是沒有拿到有效的決定：沒有管道，或問了人但回覆看不懂。**fail closed**：除了 `allowed-once` 都不執行。
    *
-   * 「是誰拒的」在 dsh 靠 `approval/policy` 事件分；我們多一格「入口沒有人在」（不進日誌），所以日誌上分人拒與政策拒
-   * 最準的是那一次 `tool/result` 的碼（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／
-   * `APPROVAL_NO_CHANNEL`，見 `tool-events.ts`）。
+   * 這顆事件分不出原因：`rejected` 可能是人拒或政策拒（含不進日誌的「入口沒有人在」），`unavailable` 可能是沒有管道或回覆看不懂。
+   * 要分原因看那一次 `tool/result` 的碼（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／
+   * `APPROVAL_NO_CHANNEL`／`APPROVAL_INVALID_REPLY`，見 `tool-events.ts`）。
    */
   'approval/decided': {
     readonly id: string;
