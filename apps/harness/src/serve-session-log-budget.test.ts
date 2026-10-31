@@ -11,7 +11,7 @@ import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { WireRejectedError } from '@nexus/wire';
+import { THREAD_LOG_BUSY, THREAD_LOG_TOO_LARGE, WireRejectedError } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
@@ -73,7 +73,8 @@ describe('會話日誌超過額度（#2115）', () => {
     const client = await serveClient(second.running);
 
     const refused = await rejection(client.openEvents('alpha'));
-    expect(refused.code).toBe('unknown_error');
+    expect(refused.code).toBe(THREAD_LOG_TOO_LARGE);
+    expect(refused.serverMessage).not.toContain('建不起來');
     expect(refused.serverMessage).toContain('alpha');
     expect(refused.serverMessage).toContain('超過這個行程能收的');
     expect(refused.serverMessage).toContain('--max-old-space-size');
@@ -86,7 +87,7 @@ describe('會話日誌超過額度（#2115）', () => {
 
     // 拒收沒留下租約：再開一次是同一個「太大」，不是「別的寫入者握著」。
     const again = await rejection(client.openEvents('alpha'));
-    expect(again.code).toBe('unknown_error');
+    expect(again.code).toBe(THREAD_LOG_TOO_LARGE);
     expect(again.serverMessage).toContain('超過這個行程能收的');
 
     // 列表：太大的照列（沒有標題），不算進讀不了的。
@@ -116,6 +117,38 @@ describe('會話日誌超過額度（#2115）', () => {
       expect(hits).toContain('beta');
       expect(hits).not.toContain('alpha');
     }
+  });
+
+  it('額度被開著的 thread 佔滿：回暫時的碼、不加「建不起來」（#2203）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-log-budget-'));
+    temporary.push(root);
+
+    const first = await start(root);
+    const firstClient = await serveClient(first.running);
+    for (const id of ['alpha', 'beta']) {
+      const events = await firstClient.openEvents(id);
+      await firstClient.runStart(id, '第一句');
+      await foldTurn(events);
+      await events.return?.(undefined);
+    }
+    await first.close();
+    serve = undefined;
+
+    const alphaBytes = (await stat((await sessionOf(root, 'alpha')).logPath)).size;
+    const betaBytes = (await stat((await sessionOf(root, 'beta')).logPath)).size;
+    // 各自放得下、合起來放不下。
+    const second = await start(
+      root,
+      createSessionLogBudget(Math.max(alphaBytes, betaBytes) + Math.min(alphaBytes, betaBytes) - 1),
+    );
+    const client = await serveClient(second.running);
+
+    const alpha = await client.openEvents('alpha');
+    const refused = await rejection(client.openEvents('beta'));
+    expect(refused.code).toBe(THREAD_LOG_BUSY);
+    expect(refused.serverMessage).toContain('這一份現在放不下');
+    expect(refused.serverMessage).not.toContain('建不起來');
+    await alpha.return?.(undefined);
   });
 
   it('額度夠的時候同一份照常續接：判準是大小，不是這條 thread', async () => {
