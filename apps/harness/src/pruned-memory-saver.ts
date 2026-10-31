@@ -18,8 +18,8 @@
  *
  * ## 它與 `durability: 'exit'` 是兩件事，要一起用
  *
- * 修剪只解決記憶體；每個步驟仍會把整段歷史序列化一次，CPU 照樣隨輪數變長。`durability: 'exit'`
- * （{@link RUN_DURABILITY}）把每輪的存檔點從約 13 份降到 1 份，才是 CPU 那一半。四格對照見 #1106。
+ * 修剪只解決留存；`durability: 'exit'`（{@link RUN_DURABILITY}）把每輪的存檔點從約 13 份降到 1 份，
+ * 每步才不必做 `seal` 的全串掃描與其他 channel 的序列化。四格對照見 #1106（量的是整串序列化時的數字）。
  *
  * ## 修剪的範圍與保護
  *
@@ -39,15 +39,16 @@
  *
  * ## 訊息不序列化（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116)）
  *
- * 整串序列化的話，大日誌在第一次讀回就把行程撐死，而這顆 saver 不耐久，序列化換不到什麼。
- * 所以 `messages` 不進 `MemorySaver`，換成記號，活物件留在側表：
+ * 整串序列化的話，大日誌送第一句就把行程撐死，而這顆 saver 不耐久，序列化換不到什麼。
+ * 所以存檔點的 `messages` 不進 `MemorySaver`，換成記號，活物件留在側表（pending writes 裡的訊息照舊序列化）：
  *
- * - **活物件要防就地改**：新進的訊息量過層數就深凍結，已凍結的跳過，成本是 O(新)。層數上限與寫進存檔點時
+ * - **活物件要防就地改**：新進的訊息量過層數就深凍結，已凍結的跳過，全串只多一次 `isFrozen` 掃描。層數上限與寫進存檔點時
  *   相同（{@link CHECKPOINT_MESSAGE_WRAPPER_DEPTH}），日誌收得下的照樣收得下。
  * - **工具派工也帶整份 state**：`ReactAgent` 用 `Send` 派工具，`args` 是整份 state，進 `__pregel_tasks`，
- *   中斷時跟著存檔點落下來。不換的話工具步驟照樣序列化整串，大到超過 V8 字串上限。所以 `args` 也進側表。
+ *   中斷或出錯時跟著存檔點落下來。不換的話工具步驟照樣序列化整串，大到超過 V8 字串上限。所以帶 `messages` 的
+ *   `args` 也整份進側表。
  * - **讀回解不開就拋**：缺項不能變成空對話。`getTuple` 與 `list` 都換回，記號不漏進 channel。
- * - **最後一則 AI 給可寫副本**：langchain 的 hitl 中介層就地改它的 `tool_calls`（`agents/middleware/hitl.js:498`）。
+ * - **最後一則 AI 給可寫副本**：langchain 的 hitl 中介層就地改它的 `tool_calls`（`agents/middleware/hitl.js:498`，langchain 1.5.10）。
  * - **側表跟著存檔點走**：修剪與刪 thread 一起收。寫入失敗不進側表，存檔點留在上一顆。
  *
  * `files` 等其他 channel 照舊序列化，層數檢查與讀回上限（#1658）都還在。
@@ -70,7 +71,7 @@ import {
 /** 存檔點裡換掉 `messages` 與工具派工 `args` 的記號鍵。 */
 const LIVE_MARK = '__nexusLiveState';
 
-/** 工具派工所在的 channel（`@langchain/langgraph` 的 `TASKS`，1.x）。 */
+/** 工具派工所在的 channel（`@langchain/langgraph` 的 `TASKS`，1.4.19，沒有匯出，這裡照抄）。 */
 const TASKS = '__pregel_tasks';
 
 /**
@@ -91,6 +92,7 @@ interface TaskMark {
   readonly task: number;
 }
 
+/** 迭代深凍結，訊息可以到幾百層。有元素的 TypedArray 凍不了，跳過，內容仍可改；accessor 不走。 */
 function deepFreeze(root: unknown): void {
   const stack: unknown[] = [root];
   while (stack.length > 0) {
@@ -107,7 +109,7 @@ function deepFreeze(root: unknown): void {
   }
 }
 
-/** 新進的訊息量層數並深凍結；已凍結的跳過，所以成本是 O(新)。 */
+/** 新進的訊息量層數並深凍結；已凍結的只看一眼就跳過。 */
 function seal(messages: readonly unknown[]): void {
   for (const message of messages) {
     if (Object.isFrozen(message)) continue;
@@ -167,6 +169,8 @@ export class PrunedMemorySaver extends MemorySaver {
 
   /**
    * @inheritdoc `messages` 與工具派工的 `args` 換成記號再存，存完之後修剪這條鏈。
+   *
+   * 傳進來的 `messages` 陣列與訊息就地深凍結；太深拋 {@link CheckpointDepthError}，這時存檔點與側表都不動。
    *
    * **寫不進去時收掉空的鏈**（#1658）：`MemorySaver.put` 先建好 (thread, ns) 那一格才序列化，序列化拋錯就留下一格空的，
    * 之後 `getTuple` 拿空的那格當「有存檔點」去拆，拋 `undefined is not iterable`，把原本那顆錯蓋掉。
@@ -230,12 +234,12 @@ export class PrunedMemorySaver extends MemorySaver {
     return new Set([...this.#liveMessages.keys(), ...this.#liveTasks.keys()]).size;
   }
 
-  /** @inheritdoc 記號換回活物件。 */
+  /** @inheritdoc 記號換回活物件：訊息是深凍結的同一份，最後一則 AI 是可寫的淺副本；側表缺項就 reject。 */
   override async getTuple(config: RunnableConfig) {
     return this.#reveal(await super.getTuple(config));
   }
 
-  /** @inheritdoc 記號換回活物件。 */
+  /** @inheritdoc 同 {@link getTuple}。 */
   override async *list(config: RunnableConfig, options?: Parameters<MemorySaver['list']>[1]) {
     for await (const tuple of super.list(config, options)) yield this.#reveal(tuple);
   }

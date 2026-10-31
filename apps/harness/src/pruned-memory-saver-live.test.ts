@@ -1,6 +1,12 @@
+/**
+ * 訊息不序列化：`messages` 與工具派工的 `args` 換成記號，活物件留在側表（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116)）。
+ *
+ * 存檔器自己的行為加一張真的圖。大日誌的記憶體量級不在這裡測（見 #2116），這裡釘語意。
+ */
+
 import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { END, MessagesAnnotation, Send, START, StateGraph } from '@langchain/langgraph';
+import { END, MessagesAnnotation, Send, START, StateGraph, interrupt } from '@langchain/langgraph';
 import type { Checkpoint, CheckpointMetadata } from '@langchain/langgraph-checkpoint';
 import { describe, expect, it } from 'vitest';
 
@@ -10,12 +16,6 @@ import {
   checkpointDepth,
 } from './checkpoint-serde.js';
 import { CHECKPOINT_MESSAGE_WRAPPER_DEPTH, PrunedMemorySaver } from './pruned-memory-saver.js';
-
-/**
- * 訊息不序列化：`messages` 與工具派工的 `args` 換成記號，活物件留在側表（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116)）。
- *
- * 存檔器自己的行為加一張真的圖。大日誌的記憶體是量具的事，這裡釘語意。
- */
 
 const META: CheckpointMetadata = { source: 'loop', step: 0, parents: {} };
 const config = (thread: string) => ({ configurable: { thread_id: thread, checkpoint_ns: '' } });
@@ -114,6 +114,30 @@ describe('訊息留在側表', () => {
     expect(task?.node).toBe('tools');
     expect(task?.args).toMatchObject({ files: { '/a': '派工帶的檔案' } });
     expect((task?.args as { messages: unknown[] }).messages).toHaveLength(1);
+  });
+
+  it('真的圖停在核准點：派工帶的整串訊息不落進存檔點（基座改 TASKS 的名字會紅）', async () => {
+    const saver = new PrunedMemorySaver();
+    const graph = new StateGraph(MessagesAnnotation)
+      .addNode('call', () => ({ messages: [new AIMessage({ content: '派' })] }))
+      .addNode('tool', () => {
+        interrupt('等人');
+        return {};
+      })
+      .addEdge(START, 'call')
+      .addConditionalEdges('call', (state) => new Send('tool', { messages: state.messages }), [
+        'tool',
+      ])
+      .addEdge('tool', END)
+      .compile({ checkpointer: saver });
+
+    const input = { messages: [new HumanMessage({ content: '只在側表的句子' })] };
+    await graph.invoke(input, config('t'));
+
+    expect(storedText(saver, 't')).toContain('__nexusLiveState');
+    expect(storedText(saver, 't')).not.toContain('只在側表的句子');
+    const state = await graph.getState(config('t'));
+    expect(state.tasks[0]?.interrupts).toHaveLength(1);
   });
 
   it('不帶 messages 的派工照舊序列化', async () => {

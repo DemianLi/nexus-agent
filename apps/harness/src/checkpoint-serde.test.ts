@@ -4,7 +4,7 @@
  * 深的東西進 graph state 有兩條路，兩條都走真的 `serve`（`--live` 對假端點）：
  *
  * - **同台**：模型回一個參數很深的工具呼叫。日誌那一關最多收 {@link SESSION_EVENT_MAX_DEPTH} 層，但 state 不經過那一關，
- *   比上限深的照樣進 state，這一輪結束寫存檔點時才碰到序列化。
+ *   比上限深的照樣進 state，這一輪結束寫存檔點時才碰到 `seal` 的層數檢查。
  * - **續接**：日誌裡的舊事件（上限出現之前寫下的）灌回 state（`conversation-restore.ts`）。這裡用改檔造：第一台真跑一輪，
  *   把那一行的工具參數換成深的，`additional_kwargs` 裡的原始字串一起換。
  *

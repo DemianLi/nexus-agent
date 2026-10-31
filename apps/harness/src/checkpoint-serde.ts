@@ -27,15 +27,17 @@
  *
  * ## 上限怎麼定
  *
- * 從 {@link SESSION_EVENT_MAX_DEPTH} 推：日誌收得下的事件，帶的訊息灌回 state 之後要寫得進存檔點。層數的算法跟日誌同一套
+ * 從 {@link SESSION_EVENT_MAX_DEPTH} 推：日誌收得下的事件，帶的訊息灌回 state 之後要過得了 `seal`（訊息不寫進存檔點，層數照寫進去的形狀算）。層數的算法跟日誌同一套
  * （根是容器的話算第 1 層，純量不算），量的是交給 `JSON.stringify` 之後的樣子（先 `toJSON`、再過 `_default`）。
  * 加上的 {@link CHECKPOINT_WRAPPER_DEPTH} 層是實測出來的，見那一格的註解。
  *
- * ## `messages` 不走這顆（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116)）
+ * ## 存檔點裡的 `messages` 不走這顆（[#2116](https://github.com/DemianLi/nexus-agent/issues/2116)）
  *
- * 訊息留在記憶體不序列化，寫入吞錯與讀回層數上限這兩件事碰不到它們。`pruned-memory-saver.ts` 的 `seal` 用同一個
+ * `channel_values.messages` 與工具派工的 `args` 留在記憶體不序列化，寫入吞錯與讀回層數上限這兩件事碰不到它們。
+ * `pruned-memory-saver.ts` 的 `seal` 用同一個
  * {@link CHECKPOINT_MAX_DEPTH} 量新進的訊息，邊界跟量整份存檔點相同：日誌收得下的事件進得了 state，太深的拋
- * {@link CheckpointDepthError}。這顆管 `files` 等其他 channel、metadata 與 pending writes。
+ * {@link CheckpointDepthError}。這顆管 `files` 等其他 channel、metadata 與 pending writes；
+ * 中斷或出錯那一輪已完成任務的 `messages` 寫入屬於 pending writes，照樣走這顆。
  *
  * ## 與 dsh 的偏離（理由 1）
  *
@@ -59,15 +61,16 @@ export const CHECKPOINT_DEPTH_EXCEEDED = 'checkpoint_depth_exceeded';
 export const CHECKPOINT_UNSERIALIZABLE = 'checkpoint_unserializable';
 
 /**
- * 一則日誌事件裡的訊息，寫進存檔點之後比在日誌裡深幾層。
+ * 一則日誌事件裡的訊息，照寫進存檔點的形狀算，比在日誌裡深幾層。
  *
  * 日誌裡訊息的欄位在第 3 層（`data` → `message` → `data`），存檔點裡在第 5 層（存檔點 → `channel_values` →
  * `messages` → 那一則的 `{lc, type, id, kwargs}` → `kwargs`），所以是 2。實測見 `checkpoint-serde.test.ts` 的
- * 「剛好 600 層」那幾格：真的組裝、真的 `serve`，一則日誌事件剛好 {@link SESSION_EVENT_MAX_DEPTH} 層，量存檔點每一次寫入。
+ * 「剛好 600 層」那幾格：真的組裝、真的 `serve`，一則日誌事件剛好 {@link SESSION_EVENT_MAX_DEPTH} 層，過得了 `seal`，
+ * 下一輪模型收到的參數不變。
  */
 export const CHECKPOINT_WRAPPER_DEPTH = 2;
 
-/** 一次寫入（存檔點、metadata、每一筆 write）最多巢狀幾層。讀回時同一個數字傳給 `load`。 */
+/** 一次寫入（存檔點、metadata、每一筆 write）最多巢狀幾層，`seal` 量訊息用同一個數字。讀回時同一個數字傳給 `load`。 */
 export const CHECKPOINT_MAX_DEPTH = SESSION_EVENT_MAX_DEPTH + CHECKPOINT_WRAPPER_DEPTH;
 
 /**
