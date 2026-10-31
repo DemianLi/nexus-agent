@@ -15,7 +15,13 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { connectGeneration, generationOf, isRequestTimeout, probeLiveness } from './connection.js';
 import type { Generation, SdkClient } from './connection.js';
 import { RELEASE_NOTE } from './fixture-tools.js';
-import { createMcpPlugin, MCP_POOL_SERVICE, McpConnectionPool, mcpConfigSchema } from './index.js';
+import {
+  createMcpPlugin,
+  MAX_LIVENESS_TIMEOUT_MS,
+  MCP_POOL_SERVICE,
+  McpConnectionPool,
+  mcpConfigSchema,
+} from './index.js';
 import type { McpPluginOptions } from './index.js';
 
 const SERVERS = [
@@ -233,6 +239,18 @@ describe('卡死之後', () => {
       connection: { transport: 'stdio', command: 'x' },
     });
     expect(parsed.livenessTimeoutMs).toBe(15_000);
+  });
+
+  it('窗口不能超過計時器的上限：再大一就溢位成立刻到點', () => {
+    const row = (livenessTimeoutMs: number) => ({
+      serverName: 'srv',
+      connection: { transport: 'stdio', command: 'x' },
+      livenessTimeoutMs,
+    });
+    expect(mcpConfigSchema.parse(row(MAX_LIVENESS_TIMEOUT_MS)).livenessTimeoutMs).toBe(
+      MAX_LIVENESS_TIMEOUT_MS,
+    );
+    expect(mcpConfigSchema.safeParse(row(MAX_LIVENESS_TIMEOUT_MS + 1)).success).toBe(false);
   });
 });
 

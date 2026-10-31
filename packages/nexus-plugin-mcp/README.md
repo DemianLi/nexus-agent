@@ -51,7 +51,7 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `connection.url`       | http      | 是   | server 網址                                                                                |
 | `connection.headers`   | http      | 否   | 額外標頭（授權用）；值可以寫 `{ credential: <名字>, prefix?: <前綴> }`（見憑證）           |
 | `toolCallTimeoutMs`    | 兩者      | 否   | 一次 `tools/call` 的逾時，預設 60000                                                       |
-| `livenessTimeoutMs`    | stdio     | 否   | 呼叫逾時或被停止之後等探活回應多久，預設 15000；沒回應就收掉重連（見行為）                |
+| `livenessTimeoutMs`    | stdio     | 否   | 呼叫逾時或被停止之後等探活回應多久，預設 15000，上限 2147483647；沒回應就收掉重連（見行為） |
 | `failOnStartupError`   | 兩者      | 否   | 掛上那一刻套不上沙箱、連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
 | `maxInstructionBytes`  | 兩者      | 否   | server 指引**連同出處標頭**的 UTF-8 位元組上限，預設 32768；超過算連線失敗（同上，不截斷） |
 | `approval`             | 兩者      | 否   | 哪些工具要先讓人核准，預設 `{ default: ask }`：整台都問（見核准）                          |

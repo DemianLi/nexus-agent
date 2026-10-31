@@ -68,6 +68,9 @@ export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000;
 /** 呼叫被放棄之後等探活回應的預設窗口，見 {@link McpConfig.livenessTimeoutMs}。 */
 export const DEFAULT_LIVENESS_TIMEOUT_MS = 15_000;
 
+/** {@link McpConfig.livenessTimeoutMs} 的上限：SDK 直接交給 `setTimeout`，超過就溢位成約 1 毫秒，呼叫一逾時就判定卡死。 */
+export const MAX_LIVENESS_TIMEOUT_MS = 2_147_483_647;
+
 /** 宿主給的 host 服務：把宣告了 `sandbox` 的 stdio 設定換成包過的 command 與 args。不能套就拋。 */
 export const MCP_SANDBOX_SERVICE = 'mcpSandbox';
 
@@ -171,7 +174,12 @@ export const mcpConfigSchema = z.strictObject({
    * stdio 的呼叫逾時或被停止之後，等探活回應多久（毫秒）；沒回應就判定 server 卡死，收掉重連。省略即
    * {@link DEFAULT_LIVENESS_TIMEOUT_MS}。一次只處理一個請求的 server，把它調到比最長的呼叫還久。
    */
-  livenessTimeoutMs: z.number().int().positive().default(DEFAULT_LIVENESS_TIMEOUT_MS),
+  livenessTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_LIVENESS_TIMEOUT_MS)
+    .default(DEFAULT_LIVENESS_TIMEOUT_MS),
   /**
    * 掛上那一刻連不上、列不出工具、或工具註冊不上時，要不要讓這一列失敗。照 dsh 的 `failOnStartupError`，**預設
    * `false`**：那一列照樣掛上、這台伺服器沒有工具、交出一則警告。寫 `true` 就在 `apply` 裡拋——清單上的可少掛列
