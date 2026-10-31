@@ -6,7 +6,7 @@
  * `outward-symlink` 那一列不是那個 commit 的行為，是 [#1982](https://github.com/DemianLi/nexus-agent/issues/1982) 加的讀取面圍堵。
  *
  * 兩處**刻意**不在這裡：行長截斷（驗收 1）與副檔名不再決定（驗收 6），它們是這張要改的行為，各有自己的測試。
- * 錯誤訊息裡帶根目錄的絕對路徑（基座的 `stat '…'`、`open '…'`），比對前換成 `<ROOT>`。
+ * 錯誤訊息比對前把根換成 `<ROOT>`；errno 的主機路徑不交給模型（#2201），這裡逐字釘住。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
@@ -78,8 +78,7 @@ describe('ContainedFilesystemBackend.read：十種情況與切片，字句與內
       0,
       2000,
       {
-        error:
-          "Error reading file '/nope.txt': ENOENT: no such file or directory, stat '<ROOT>/nope.txt'",
+        error: "Error reading file '/nope.txt': ENOENT: no such file or directory",
       },
     ],
     ['directory', '/dir', 0, 2000, { error: "File '/dir' not found" }],
@@ -89,8 +88,7 @@ describe('ContainedFilesystemBackend.read：十種情況與切片，字句與內
       0,
       2000,
       {
-        error:
-          "Error reading file '/link.txt': ELOOP: too many symbolic links encountered, open '<ROOT>/link.txt'",
+        error: "Error reading file '/link.txt': ELOOP: too many symbolic links encountered",
       },
     ],
     [
@@ -154,7 +152,7 @@ describe('真的 read_file 工具：ToolMessage 逐字不變', () => {
     [
       '/nope.txt',
       'error',
-      "Error: Error reading file '/nope.txt': ENOENT: no such file or directory, stat '<ROOT>/nope.txt'",
+      "Error: Error reading file '/nope.txt': ENOENT: no such file or directory",
     ],
     ['/dir', 'error', "Error: File '/dir' not found"],
     ['/nul.txt', 'error', 'Error: cannot read "/nul.txt": binary file'],
