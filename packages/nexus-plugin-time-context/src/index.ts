@@ -12,8 +12,8 @@
  * When the user gives a date without a year, infer the year from the timestamp above and choose the closest matching date.
  * ```
  *
- * 讀數**只追加在請求尾端，不進 system prompt**：prompt cache 的前綴不會因此失效（dsh README 的同一個理由）。前三行照 dsh 的英文逐字搬，
- * 第四行是本專案加的（[#2154](https://github.com/DemianLi/nexus-agent/issues/2154)）：讀數排在人話之後，小模型沒有這行時常把沒寫年份的日期算成舊年份。
+ * 讀數**只追加在請求尾端，不進 system prompt**：prompt cache 的前綴不會因此失效。
+ * 第四行（[#2154](https://github.com/DemianLi/nexus-agent/issues/2154)）是因為讀數排在人話之後，小模型沒有這行時常把沒寫年份的日期算成舊年份。
  * 全部不翻成中文——這是給模型看的，跟 agent-instructions 一樣。
  *
  * ## 瀏覽器時區（第二行）：三種讀數（#1629）
@@ -234,7 +234,7 @@ export function formatDuration(elapsedMs: number): string {
 }
 
 /**
- * 渲染一則讀數。前三行逐字照 dsh `renderText`，第四行是 {@link YEARLESS_DATE_RULE}。
+ * 渲染一則讀數：取樣時間、瀏覽器時區、經過時長，第四行是 {@link YEARLESS_DATE_RULE}。
  *
  * @param now - 取樣時間（epoch 毫秒）。
  * @param turn - 第幾輪。

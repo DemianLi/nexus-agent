@@ -11,7 +11,7 @@ description: 出貨清單多了幾列會改變模型看到的內容或多打模�
 
 | 列 id | 做什麼 | 來源 |
 | --- | --- | --- |
-| `time-context` | 每次 agent 呼叫開頭追加一則使用者訊息，寫著當下時間、瀏覽器時區、距上一則訊息多久；同一條 thread 10 分鐘內不重複。網頁送來的那一輪用瀏覽器時區；CLI、目標續行這類沒帶時區的，退回這一列的 `timeZone`，沒設就是行程的 `TZ`（容器裡常是 UTC） | PR #1723 |
+| `time-context` | 每次 agent 呼叫開頭追加一則使用者訊息，寫著當下時間、瀏覽器時區、距上一則訊息多久，以及一句沒寫年份的日期怎麼補年份的規則；同一條 thread 10 分鐘內不重複。網頁送來的那一輪用瀏覽器時區；CLI、目標續行這類沒帶時區的，退回這一列的 `timeZone`，沒設就是行程的 `TZ`（容器裡常是 UTC） | PR #1723 |
 | `skill-invocation` | 人在 root 的話裡寫 `/名字`（前後是空白或行首行尾，例如 `請 /deploy`；`/usr/bin/env`、`5/8`、`/deploy/x` 不算），而技能來源裡有那份技能、沒標 `user-invocable: false`，就在這次 agent 呼叫開頭追加一則使用者訊息，內容是那份 `SKILL.md` 的正文（`<skill_content name="…">`）。標了 `disable-model-invocation: true`、模型清單上看不到的技能也叫得出來，這是它唯一的入口。v0.5.19 的 `/deploy` 只是一般文字。子代理、目標續行、引用別的會話的快照裡的 `/名字` 不算 | #1574 |
 | `system-prompt` | 系統提示詞從 v0.5.19 寫死的兩行（「你是 nexus-agent 的命令列助手。」「需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。」，v0.5.19 `apps/harness/src/cli.ts:526-529`）換成英文的身分句、`personaPrefix`、`personaSuffix`（出貨值見 `apps/harness/cordis.yml` 的那一列）；子代理也帶 | PR #820 |
 | `sandbox-policy` | 沒給 `--workspace` 時也講一句不宣稱圍堵的檔案政策；v0.5.19 這種情況什麼都不講 | PR #1172 |
