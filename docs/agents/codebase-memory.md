@@ -13,11 +13,13 @@
 | `nexus-agent` | repo 根目錄 | 照 `.gitignore` 排除 `references/`、`node_modules/`；`.claude/` 也被排除 |
 | `deepseek-harness` | `references/deepseek-harness` | 技術實現標準（見 [AGENTS.md](../../AGENTS.md#技術實現標準)），另外索引 |
 | `cordis` | `references/cordis` | 上游 [cordiverse/cordis](https://github.com/cordiverse/cordis)，checkout 在 `v4.0.0-rc.12`（`01b39624`）：Cordis 的比對基準是 rc.12（demian 2026-10-23，[#1937](https://github.com/DemianLi/nexus-agent/issues/1937)），`vendor/` 本身仍停在 rc.11（見 [vendor/README.md](../../vendor/README.md)） |
+| `rutis` | `references/rutis` | [arcships/rutis](https://github.com/arcships/rutis)，Rust 主機層加 Node 子行程裡跑 Cordis，跟 nexus 的兩層樹同形。只當實作參考，不當依賴（比較見 [#1948](https://github.com/DemianLi/nexus-agent/issues/1948#issuecomment-6533525395)） |
 
 ```
 index_repository(repo_path: "<repo>", name: "nexus-agent", mode: "full")
 index_repository(repo_path: "<repo>/references/deepseek-harness", name: "deepseek-harness", mode: "full")
 index_repository(repo_path: "<repo>/references/cordis", name: "cordis", mode: "full")
+index_repository(repo_path: "<repo>/references/rutis", name: "rutis", mode: "full")
 ```
 
 `references/cordis` 同樣不進版控，要自己拉一份並釘在 tag 上：
@@ -29,9 +31,15 @@ git -C references/cordis checkout v4.0.0-rc.12
 
 它釘在 tag，不 pull；基準換版時，checkout 新 tag 再重跑上面那行 `index_repository(... name: "cordis" ...)`。
 
+`references/rutis` 同樣不進版控，追上游最新，引用時附 SHA：
+
+```bash
+git clone --depth 1 https://github.com/arcships/rutis.git references/rutis
+```
+
 ### 圖譜不會自己跟上
 
-背景監看只追「目前 MCP session 開在哪個專案」那一份；從 CLI 或從別的專案的 session 建的索引都不監看（[v0.12.0 release notes](https://github.com/DeusData/codebase-memory-mcp/releases/tag/v0.12.0)〈Upgrade notes〉）。上表三份在 worktree 裡開的 session 都不算：session 開在 `.claude/worktrees/<名字>`，`nexus-agent` 指向主 checkout，另外兩份在 `references/` 底下。所以三份都要手動重建，才會跟上原始碼。
+背景監看只追「目前 MCP session 開在哪個專案」那一份；從 CLI 或從別的專案的 session 建的索引都不監看（[v0.12.0 release notes](https://github.com/DeusData/codebase-memory-mcp/releases/tag/v0.12.0)〈Upgrade notes〉）。上表四份在 worktree 裡開的 session 都不算：session 開在 `.claude/worktrees/<名字>`，`nexus-agent` 指向主 checkout，另外三份在 `references/` 底下。所以四份都要手動重建，才會跟上原始碼。
 
 要知道某一份有沒有被監看，看 `index_status` 的 `watch`：
 
@@ -59,7 +67,7 @@ index_status(project: "nexus-agent")
 - **透過欄位或介面呼叫的方法，呼叫者會漏報。** `trace_path` 查 `JsonlStoredSession.append` 回 0 個呼叫者，但 `thread-pump.ts` 裡有十幾處 `this.#sessions.root.append(...)`：接收者的型別圖解不出來，這條邊就不存在。一般函式不受影響（`runCli`、`acquireHomeLock` 的呼叫者與 grep 完全一致）。查方法的呼叫者時，圖回 0 或回很少，一律再用 grep 掃方法名（0.12.1 實測）。
 - **全文搜尋會被測試檔淹沒。** `search_graph` 的 `query` 前幾名常是 `*.test.ts` 裡的輔助函式，要限定範圍就加 `file_pattern`（例如 `packages/**/src/**`）；知道名字時改用 `name_pattern` 精確比對。`trace_path` 預設就排除測試，要看測試加 `include_tests: true`。
 - **`semantic_query` 不可靠。** 以「serve 鎖檔，確保一個 home 只跑一個 server」查，回的全是 `.docs/chat-agent-research/verify/*.py` 的研究腳本，`home-lock.ts` 沒出現（0.12.1 實測）。不要用它找程式碼，改用 `name_pattern` 或加 `file_pattern` 的 `query`。
-- **部分解析失敗的檔案**：`nexus-agent` 只有 `apps/web/src/index.css`，無關緊要；`deepseek-harness` 有上百個，查不到東西時先 `check_index_coverage` 看那個檔案有沒有被標記。
+- **部分解析失敗的檔案**：`nexus-agent` 只有 `apps/web/src/index.css`，無關緊要；`deepseek-harness` 有上百個，`rutis` 有 54 個，查不到東西時先 `check_index_coverage` 看那個檔案有沒有被標記。
 
 ## 引用 deepseek-harness 之前
 
