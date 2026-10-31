@@ -492,7 +492,7 @@ describe('暫存在主機上的私有目錄', { timeout: 30_000 }, () => {
     const shared = await stashRoot();
     await chmod(shared, 0o777);
     const warnings: string[] = [];
-    const { readBack } = await fetchThenRead(OVERSIZED, undefined, [], {
+    const { first, readBack } = await fetchThenRead(OVERSIZED, undefined, [], {
       rootDir: join(shared, 'stash'),
       session: 's',
       warn: (message) => warnings.push(message),
@@ -500,6 +500,9 @@ describe('暫存在主機上的私有目錄', { timeout: 30_000 }, () => {
     expect(readBack).toContain(MARK);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('群組或其他人可寫');
+    // 帶主機路徑的那句只進管理者的警告，模型拿到的是退回記憶體之後的結果（#2201）。
+    expect(warnings[0]).toContain(shared);
+    expect(first).not.toContain(shared);
     // 檔案沒有寫進那個別人改得動的目錄底下。
     expect(await readdir(join(shared, 'stash')).catch(() => [])).toEqual([
       expect.stringMatching(/^session-/),

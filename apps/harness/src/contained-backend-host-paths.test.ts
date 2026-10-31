@@ -161,6 +161,25 @@ it('根本身經符號連結：cwd 與 realpath 兩種寫法都換掉', async ()
   expectVirtual(result.error);
 });
 
+it('cwd 是 realpath 的後綴：換完不留前綴', async () => {
+  // 形狀同 macOS 的 `/var/…` 與 `/private/var/…`：先換短的會把長的打斷。
+  const alias = join(base, 'alias');
+  const real = `${base}/private${alias}`;
+  await mkdir(real, { recursive: true });
+  await symlink(real, alias);
+  const fence = new ContainedFilesystemBackend({
+    rootDir: alias,
+    mode: 'workspace-write',
+    atomicInternals: {
+      afterWrite: () => {
+        throw new Error(`壞在 ${real}/a.txt`);
+      },
+    },
+  });
+  const result = await fence.write('/b.txt', '內容');
+  expect(result.error).toBe("Error writing file '/b.txt': 壞在 /a.txt");
+});
+
 describe('pathlessReason', () => {
   it('errno 的路徑不在根裡也不留：真的 ENOENT 只剩碼與說明', async () => {
     const error = await readFile(join(outside, 'missing.txt')).catch((caught: unknown) => caught);

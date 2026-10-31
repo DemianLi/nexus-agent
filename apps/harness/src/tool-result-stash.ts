@@ -65,7 +65,7 @@ import type {
 import { SPILL_RETRIEVAL_HINT } from '@nexus/core';
 import type { SpillRef, SpillSaveRequest, SpillStore } from '@nexus/core';
 import { TextOnlyStateBackend } from './binary-read.js';
-import { ContainedFilesystemBackend, pathlessReason } from './contained-backend.js';
+import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxModeSource } from './contained-backend.js';
 import { assertPrivateFile } from './plugin-config.js';
 import type { PrivateFileRole } from './plugin-config.js';
@@ -189,7 +189,7 @@ export class HostStashBackend extends ContainedFilesystemBackend {
       try {
         await this.#prepare();
       } catch (error: unknown) {
-        return { error: `工具結果暫存目錄不可用：${pathlessReason(error)}` };
+        return { error: `工具結果暫存目錄不可用：${(error as Error).message}` };
       }
       result = await super.write(filePath, content);
       if (result.error === undefined || !(await this.#sessionDirGone())) break;
@@ -199,7 +199,7 @@ export class HostStashBackend extends ContainedFilesystemBackend {
     try {
       await chmod(join(this.#sessionDir, filePath.replace(/^\/+/u, '')), FILE_MODE);
     } catch (error: unknown) {
-      return { error: `工具結果暫存檔權限設不了：${pathlessReason(error)}` };
+      return { error: `工具結果暫存檔權限設不了：${(error as Error).message}` };
     }
     return result;
   }

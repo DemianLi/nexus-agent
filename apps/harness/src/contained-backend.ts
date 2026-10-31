@@ -168,7 +168,6 @@ function noteErrno(error: unknown, missing: boolean): void {
   else if (missing && (code === 'ENOENT' || code === 'ENOTDIR')) noteFsError(FS_NOT_FOUND);
 }
 
-/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2，理由見檔頭）。 */
 /**
  * 例外換成交給模型的原因（[#2201](https://github.com/DemianLi/nexus-agent/issues/2201)）。Node 的 errno 訊息結尾是 `, <syscall> '<主機路徑>'`，
  * 而模型的回覆使用者看得到，所以從 syscall 起整段不帶，留下碼與說明；呼叫端的句子已經寫了模型給的虛擬路徑。
@@ -184,6 +183,7 @@ export function pathlessReason(error: unknown): string {
   return end === -1 ? code : message.slice(0, end);
 }
 
+/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2，理由見檔頭）。 */
 function decodeWhole(bytes: Uint8Array): string {
   try {
     return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
@@ -1599,7 +1599,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private async withoutRoot(text: string): Promise<string> {
     const real = await realpath(this.cwd).catch(() => this.cwd);
     let scrubbed = text;
-    for (const root of new Set([this.cwd, real])) {
+    // 長的先換：`cwd` 可能是 realpath 的後綴（`/var/x` 與 `/private/var/x`），先換短的會留下 `/private`。
+    for (const root of [...new Set([this.cwd, real])].sort((a, b) => b.length - a.length)) {
       scrubbed = scrubbed.replaceAll(`${root}${sep}`, '/').replaceAll(root, '/');
     }
     return scrubbed;
