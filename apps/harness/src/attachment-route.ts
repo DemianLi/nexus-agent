@@ -182,7 +182,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     return normal !== undefined && visible.files.has(normal);
   }
 
-  /** 基座對「不存在的檔」讀檔時的錯誤（`stat` 的 ENOENT 原句），沒引用過的檔回這一句。 */
+  /** 基座的 `readRaw` 對「不存在的檔」拋的錯誤（`stat` 的 ENOENT 原句），沒引用過的檔拋這一句。呼叫端都接住，不到模型。 */
   #notFoundMessage(virtualPath: string): string {
     return `ENOENT: no such file or directory, stat '${this.resolveVirtual(virtualPath)}'`;
   }
@@ -194,7 +194,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     if (normal === undefined || visible.files.has(normal) || visible.dirs.has(normal)) {
       return super.read(filePath, offset, limit);
     }
-    return { error: `Error reading file '${filePath}': ${this.#notFoundMessage(filePath)}` };
+    return { error: `Error reading file '${filePath}': ENOENT: no such file or directory` };
   }
 
   override async readRaw(filePath: string): Promise<ReadRawResult> {

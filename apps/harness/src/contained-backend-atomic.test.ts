@@ -49,6 +49,10 @@ afterEach(async () => {
   await rm(base, { recursive: true, force: true });
 });
 
+/** 基座的 errno 句子帶主機路徑，我們的不帶（#2201）：其餘字句相同。 */
+const withoutErrnoPath = (error: string | undefined): string | undefined =>
+  error?.replace(/, \w+ '[^']*'$/u, '');
+
 function contained(
   mode?: SandboxMode,
   atomicInternals?: AtomicWriteInternals,
@@ -289,8 +293,6 @@ describe('跟基座同一套字句與位元組', () => {
   }
 
   /** 把兩個根裡的路徑換成佔位，字句才比得起來。 */
-  const norm = (text: string | undefined, dir: string): string | undefined =>
-    text?.split(dir).join('<root>');
 
   it('edit 的 String not found 與 multiple occurrences 逐字相同', async () => {
     const { bare, ours, bareRoot } = await twin();
@@ -316,8 +318,8 @@ describe('跟基座同一套字句與位元組', () => {
   it('edit 一個不存在的檔、改一個目錄：字句相同', async () => {
     const { bare, ours, bareRoot } = await twin();
     for (const dir of [root, bareRoot]) await mkdir(join(dir, 'd'));
-    expect(norm((await ours.edit('/nope.txt', 'a', 'b')).error, root)).toBe(
-      norm((await bare.edit('/nope.txt', 'a', 'b')).error, bareRoot),
+    expect((await ours.edit('/nope.txt', 'a', 'b')).error).toBe(
+      withoutErrnoPath((await bare.edit('/nope.txt', 'a', 'b')).error),
     );
     expect((await ours.edit('/d', 'a', 'b')).error).toBe((await bare.edit('/d', 'a', 'b')).error);
   });
@@ -329,8 +331,8 @@ describe('跟基座同一套字句與位元組', () => {
       await symlink(join(dir, 'real.txt'), join(dir, 'ln.txt'));
     }
     expect((await ours.write('/ln.txt', 'y')).error).toBe((await bare.write('/ln.txt', 'y')).error);
-    expect(norm((await ours.edit('/ln.txt', 'x', 'y')).error, root)).toBe(
-      norm((await bare.edit('/ln.txt', 'x', 'y')).error, bareRoot),
+    expect((await ours.edit('/ln.txt', 'x', 'y')).error).toBe(
+      withoutErrnoPath((await bare.edit('/ln.txt', 'x', 'y')).error),
     );
     expect(await readFile(join(root, 'real.txt'), 'utf8')).toBe('x');
   });

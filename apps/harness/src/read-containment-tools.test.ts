@@ -6,7 +6,7 @@
  * **走產品組裝**：`createCliAgent` ＋ 出貨清單，模型換成腳本提供者。**零憑證、零外部連線。**
  */
 
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
@@ -107,6 +107,44 @@ describe('經往外指的符號連結讀：工具回錯誤、內容不進日誌'
       ['error', 'Error finding files: [containment] 拒絕 glob "/home"'],
     ]);
     expect(JSON.stringify(built.sessionLog.events)).not.toContain('sk-根外的假金鑰');
+  }, 30000);
+
+  it('模型看到的錯誤沒有主機路徑：write_file 經連結出去、read_file 撞 ELOOP（#2201）', async () => {
+    await symlink(join(root, 'loop'), join(root, 'loop'));
+    const calls = [
+      { name: 'write_file', args: { file_path: '/home/new.txt', content: '寫穿' } },
+      { name: 'read_file', args: { file_path: '/loop/x.txt' } },
+    ];
+    const built = await createCliAgent(
+      { live: false, workspace: root, sandbox: 'workspace-write' },
+      withScriptedModel(shipped, [
+        ...calls.map((call) => ({ content: '', toolCalls: [call] })),
+        { content: '收工。' },
+      ]),
+      root,
+    );
+    const detach = built.attachSession(built.sessions);
+    let state: { messages: BaseMessage[] };
+    try {
+      state = (await built.agent.invoke(toAgentInvocation('寫寫看。'), {
+        configurable: { thread_id: 'host-paths' },
+      })) as { messages: BaseMessage[] };
+    } finally {
+      detach();
+      await built.dispose();
+    }
+
+    const seen = state.messages
+      .filter((message): message is ToolMessage => ToolMessage.isInstance(message))
+      .map(textOf);
+    expect(seen).toHaveLength(2);
+    expect(seen[0]).toContain('落在可寫根之外');
+    expect(seen[1]).toContain('ELOOP');
+    const realBase = await realpath(base);
+    for (const text of seen) {
+      expect(text).not.toContain(base);
+      expect(text).not.toContain(realBase);
+    }
   }, 30000);
 
   it('submit_record 經連結讀表頭（readRaw）：表頭不進日誌', async () => {

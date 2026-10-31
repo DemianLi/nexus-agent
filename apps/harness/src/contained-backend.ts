@@ -33,7 +33,7 @@
  * `createIfAbsent` 的 hard link 發佈，理由 1）與偏離 2（不做 Windows，理由 2）見 `atomic-workspace-write.ts`。
  * 路徑仍走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根）：`danger-full-access` 下 `verdict` 不檢查，那是唯一一道。
  * 結果形狀與錯誤字句照基座，`edit` 的字串替換逐字照抄 `performStringReplacement`；唯一不同的一句是寫到目錄上，
- * 基座是 `EISDIR` 的開檔錯誤，這裡是 `not a regular file`（卡上第 2 步的字句）。
+ * 基座是 `EISDIR` 的開檔錯誤，這裡是 `not a regular file`（卡上第 2 步的字句）；另外 errno 的訊息不帶主機路徑（{@link pathlessReason}）。
  *
  * ## `read` 自己讀一次、大檔串流（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）
  *
@@ -166,6 +166,21 @@ function noteErrno(error: unknown, missing: boolean): void {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'EACCES' || code === 'EPERM') noteFsError(FS_PERMISSION_DENIED);
   else if (missing && (code === 'ENOENT' || code === 'ENOTDIR')) noteFsError(FS_NOT_FOUND);
+}
+
+/**
+ * 例外換成交給模型的原因（[#2201](https://github.com/DemianLi/nexus-agent/issues/2201)）。Node 的 errno 訊息結尾是 `, <syscall> '<主機路徑>'`，
+ * 而模型的回覆使用者看得到，所以從 syscall 起整段不帶，留下碼與說明；呼叫端的句子已經寫了模型給的虛擬路徑。
+ * 沒有 errno 形狀的錯誤原樣回，訊息裡的根由 {@link ContainedFilesystemBackend} 再換掉。
+ *
+ * @param error - 接到的例外。
+ * @returns 不含 errno 路徑的原因。
+ */
+export function pathlessReason(error: unknown): string {
+  const { code, syscall, message } = error as NodeJS.ErrnoException;
+  if (typeof code !== 'string' || typeof syscall !== 'string') return message;
+  const end = message.indexOf(`, ${syscall}`);
+  return end === -1 ? code : message.slice(0, end);
 }
 
 /** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2，理由見檔頭）。 */
@@ -615,7 +630,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       if (error instanceof ScanAborted || signal?.aborted === true) return { error: READ_ABORTED };
       if (error instanceof NotUtf8) return notText(filePath, 'invalid UTF-8 text');
       noteErrno(error, true);
-      return { error: `Error reading file '${filePath}': ${(error as Error).message}` };
+      return { error: `Error reading file '${filePath}': ${await this.reasonFor(error)}` };
     }
   }
 
@@ -782,7 +797,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       });
     } catch (error: unknown) {
       noteErrno(error, false);
-      return { error: `Error writing file '${checked}': ${(error as Error).message}` };
+      return { error: `Error writing file '${checked}': ${await this.reasonFor(error)}` };
     }
   }
 
@@ -862,7 +877,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         return { error: `cannot edit "${checked}": invalid UTF-8 text` };
       }
       noteErrno(error, true);
-      return { error: `Error editing file '${checked}': ${(error as Error).message}` };
+      return { error: `Error editing file '${checked}': ${await this.reasonFor(error)}` };
     }
   }
 
@@ -873,7 +888,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   override async delete(filePath: string): Promise<DeleteResult> {
     const checked = await this.checkedPath(filePath, 'delete', []);
-    return typeof checked === 'string' ? super.delete(checked) : denied(checked);
+    if (typeof checked !== 'string') return denied(checked);
+    const result = await super.delete(checked);
+    return result.error === undefined
+      ? result
+      : { ...result, error: await this.withoutRoot(result.error) };
   }
 
   /**
@@ -1032,7 +1051,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
     });
-    if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    if (outcome.kind === 'error') {
+      return searchFailure(outcome.code, await this.withoutRoot(outcome.message));
+    }
     const parsed = this.parseRipgrepJson(outcome.stdout);
     if (typeof parsed === 'string') {
       return searchFailure(
@@ -1118,7 +1139,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
     });
-    if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    if (outcome.kind === 'error') {
+      return searchFailure(outcome.code, await this.withoutRoot(outcome.message));
+    }
     noteSearchSkipped(outcome.unreadable);
 
     const relatives: string[] = [];
@@ -1386,7 +1409,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     try {
       realRoot = await realpath(this.cwd);
     } catch {
-      return { error: this.denial(mode, operation, filePath, `可寫根 ${this.cwd} 不存在`) };
+      return { error: this.denial(mode, operation, filePath, '可寫根不存在') };
     }
 
     // `canonicalize()` 只把 ENOENT/ENOTDIR 當「還不存在」，其餘（ELOOP、EACCES…）會 rethrow。
@@ -1402,12 +1425,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
     if (!isWithin(realRoot, realTarget)) {
       return {
-        error: this.denial(
-          mode,
-          operation,
-          filePath,
-          `canonicalize 之後是 ${realTarget}，落在可寫根之外`,
-        ),
+        error: this.denial(mode, operation, filePath, '經符號連結解析之後落在可寫根之外'),
       };
     }
 
@@ -1567,6 +1585,25 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private withHint(denied: { error: string }): { error: string } {
     const hint = this.grants?.escalationHint;
     return hint === undefined ? denied : { error: `${denied.error}\n${hint}` };
+  }
+
+  /** {@link pathlessReason} 再換掉訊息裡的根。 */
+  private async reasonFor(error: unknown): Promise<string> {
+    return this.withoutRoot(pathlessReason(error));
+  }
+
+  /**
+   * 把文字裡的根換成虛擬路徑的 `/`（[#2201](https://github.com/DemianLi/nexus-agent/issues/2201)）：`cwd` 與它的 realpath 都換，
+   * 根經過符號連結時兩種寫法都可能出現。擋的是我們拿不到例外、只拿得到字串的地方：基座的 `delete`、rg 的 stderr、包過一層的錯誤。
+   */
+  private async withoutRoot(text: string): Promise<string> {
+    const real = await realpath(this.cwd).catch(() => this.cwd);
+    let scrubbed = text;
+    // 長的先換：`cwd` 可能是 realpath 的後綴（`/var/x` 與 `/private/var/x`），先換短的會留下 `/private`。
+    for (const root of [...new Set([this.cwd, real])].sort((a, b) => b.length - a.length)) {
+      scrubbed = scrubbed.replaceAll(`${root}${sep}`, '/').replaceAll(root, '/');
+    }
+    return scrubbed;
   }
 
   /**
