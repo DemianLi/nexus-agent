@@ -31,10 +31,13 @@ import type { ModelChoice } from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { readSessionLogs, scanSessionLog, UNCODED_ERROR } from './eval/session-scan.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
-import { createLiveModel } from './live-model.js';
+import { createLiveModel, DEFAULT_LIVE_MODEL_ENTRY } from './live-model.js';
+import { createModelSelectionHost } from './model-selection-host.js';
 import type { ModelEntry } from './model-catalog.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { liveModelConfigSchema } from './settings/live-model.js';
+import { subagentDefinitionValidator } from './subagent-definition.js';
 import {
   baselineChoice,
   describeSubagentModels,
@@ -101,7 +104,11 @@ describe('resolveModelSelection', () => {
       ok: true,
       choice: { model: 'cheap', effort: 'off' },
     });
-    expect(resolve({ model: 'cheap', reasoning_effort: 'default' })).toMatchObject({ ok: false }); // cheap 沒宣告 default
+    expect(resolve({ model: 'cheap', reasoning_effort: 'default' })).toEqual({
+      ok: true,
+      choice: { model: 'cheap' },
+    });
+    expect(resolve({ model: 'plain', reasoning_effort: 'default' })).toMatchObject({ ok: false });
     expect(resolve({ model: 'strong', reasoning_effort: 'default' })).toEqual({
       ok: true,
       choice: undefined,
@@ -278,6 +285,47 @@ describe('resolveModelSelection 帶基線', () => {
         { parent: { model: 'strong', effort: 'off' }, defaultModelId: 'silent' },
       ),
     ).toEqual({ ok: true, choice: { model: 'strong' } });
+  });
+});
+
+describe('宣告 { off: null } 的模型指定 default：三條路徑一致（#1863）', () => {
+  const model = 'off-only';
+  const models = [
+    { ...structuredClone(DEFAULT_LIVE_MODEL_ENTRY), id: model, reasoningEfforts: { off: null } },
+  ];
+  const liveModel = liveModelConfigSchema.parse({
+    baseUrl: 'http://127.0.0.1:1',
+    modelId: model,
+    models,
+  });
+
+  it('web 選等級、子代理定義檔、派子代理時指定，都等於不加設定', () => {
+    const host = createModelSelectionHost({ liveModel, credentials: undefined });
+    expect(host.validate({ modelId: model, reasoningEffort: 'default' })).toEqual({ model });
+
+    const validate = subagentDefinitionValidator(liveModel.models);
+    expect(() =>
+      validate({
+        name: 'worker',
+        description: '幹活的。',
+        systemPrompt: '你是 worker。',
+        model,
+        reasoningEffort: 'default',
+      }),
+    ).not.toThrow();
+
+    const config: ModelSelectionConfig = {
+      allowedModels: [model],
+      rootModelId: model,
+      catalog: liveModel.models,
+    };
+    expect(resolveModelSelection(config, { model, reasoning_effort: 'default' })).toEqual({
+      ok: true,
+      choice: undefined,
+    });
+    expect(describeSubagentModels(config, { model })).toBe(
+      `${model}\nReasoning efforts:\noff\ndefault`,
+    );
   });
 });
 
@@ -622,7 +670,7 @@ describe('產品路徑：subagent 工具帶 model／reasoning_effort', () => {
     try {
       const texts = toolTexts((await run.say()).messages);
       expect(texts[0]).toBe('strong（主對話目前用的）\ncheap');
-      expect(texts[1]).toBe('cheap\nReasoning efforts:\noff');
+      expect(texts[1]).toBe('cheap\nReasoning efforts:\noff\ndefault');
       expect(texts[2]).toMatch(/不在.*授權/);
     } finally {
       await run.close();

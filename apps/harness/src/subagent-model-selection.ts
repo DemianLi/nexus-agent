@@ -7,7 +7,8 @@
  * - **都沒給＝走基線**（定義釘的，沒釘就是主對話此刻的選擇，見 {@link DelegationBaseline}），不查政策（dsh 的 `hasDelegationModelRequest` 先擋掉）。
  * - **只要給了任何一格，有效路由就必須在授權清單裡**——包括只給 `reasoning_effort` 的時候（有效路由是基線的模型：定義釘的，沒釘就是主對話此刻那顆）：dsh 的
  *   `assertAllowedModelSelection` 用的是「有效路由」，不是「有沒有給 model」。
- * - **換了路由卻沒給推理等級＝用新模型的預設**；給了就必須是那顆型錄條目宣告過的名字。
+ * - **換了路由卻沒給推理等級＝用新模型的預設**；給了就必須是那顆型錄條目宣告過的名字，`default` 例外：
+ *   模型宣告了任何等級就收，同 {@link ./model-selection-host.ts} 的登記。
  *
  * ## 與 dsh 的偏離（照 AGENTS.md 登記）
  *
@@ -171,7 +172,7 @@ export function resolveModelSelection(
         error: `模型 "${effective}" 沒有宣告可選的推理等級，不能指定 reasoning_effort`,
       };
     }
-    if (!declared.includes(effort)) {
+    if (effort !== 'default' && !declared.includes(effort)) {
       return {
         ok: false,
         error: `模型 "${effective}" 沒有推理等級 "${effort}"（宣告過的：${declared.join('、')}）`,
@@ -223,9 +224,11 @@ export function describeSubagentModels(
     );
   }
   const entry = findModelEntry(config.catalog, request.model);
-  const efforts = (entry === undefined ? [] : declaredEfforts(entry)).filter((name) =>
-    SUPPORTED_EFFORTS.includes(name),
-  );
+  const declared = entry === undefined ? [] : declaredEfforts(entry);
+  const efforts =
+    declared.length === 0
+      ? []
+      : [...new Set([...declared, 'default'])].filter((name) => SUPPORTED_EFFORTS.includes(name));
   return (
     `${request.model}\nReasoning efforts:\n` +
     (efforts.length === 0 ? '(no advertised reasoning efforts)' : efforts.join('\n'))
