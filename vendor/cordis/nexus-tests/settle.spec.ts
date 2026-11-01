@@ -64,6 +64,33 @@ describe('非 ACTIVE 的 fiber 卸載後收斂到 DISPOSED（#127）', () => {
     ])
   })
 
+  it('FAILED：失敗前登記的 effect，卸載時收掉（對照，有沒有 patches/0001 都成立）', async () => {
+    const root = new Context()
+    root.logger.error = vi.fn()
+    const undo = vi.fn()
+    const fiber = root.plugin((ctx) => {
+      ctx.effect(() => undo)
+      throw new Error('boom')
+    })
+    await expect(fiber.await()).rejects.toThrow('boom')
+    expect(fiber.state).toBe(FiberState.FAILED)
+    await fiber.dispose()
+    expect(undo).toHaveBeenCalledTimes(1)
+  })
+
+  // 沒有 patches/0001 時這條會紅：上游 rc.12（#133）直接到 DISPOSED、不跑 `_unload()`，effect 留著沒收。
+  it('PENDING：觀察者趁著發佈登記的 effect，卸載時收掉', async () => {
+    const root = new Context()
+    const undo = vi.fn()
+    root.on('internal/plugin', (fiber) => {
+      fiber.ctx.effect(() => undo)
+    })
+    const fiber = root.inject(['never-provided'], () => {})
+    expect(fiber.state).toBe(FiberState.PENDING)
+    await fiber.dispose()
+    expect(undo).toHaveBeenCalledTimes(1)
+  })
+
   it('ACTIVE 的卸載順序不變（對照）', async () => {
     const root = new Context()
     const fiber = root.plugin(() => {})

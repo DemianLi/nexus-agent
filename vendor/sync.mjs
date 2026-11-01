@@ -150,7 +150,7 @@ function closeWriteBack(source) {
  * Loader 會把樹上任何帶 `__jsExpr` 的值 `eval` 掉（`interpolate`、`Entry._resolveDisabled`）；rc.11 起（上游 #179）
  * `disabled` 也在其中。宿主的承諾是「樹上的設定不接受表達式」，所以檢查要做在 Loader **真正會 eval 的那份資料**上：
  * `_scheduleApply` 算出來、緊接著交給 `root.update` 的那個物件。這裡掃的就是它，不另外再讀一次檔，讀檔與檢查之間沒有空隙。
- * 述詞用 Loader 自己的 `isJsExpr`（與 eval 的那一側同一支）。同步地拋，`_read`（初次載入、重讀）與 `internal/update`
+ * 只看鍵名，跟 `apps/harness/src/plugin-tree.ts` 的 `findJsExpr` 同一把尺：Loader 自己的 `isJsExpr` 只認字串值，非字串的 `__jsExpr` 不會被 eval，但一樣不是合法設定。同步地拋，`_read`（初次載入、重讀）與 `internal/update`
  * 的呼叫鏈都接得住；放在 `_applyTask` 裡拋會變成沒人接的 rejection。
  *
  * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
@@ -167,13 +167,13 @@ function rejectJsExpr(source) {
     `export class Include extends EntryTree {
 `,
     `/**
- * nexus local modification: where in \`value\` the Loader would \`eval\` something (a \`__jsExpr\` value, judged by the
- * Loader's own \`isJsExpr\`), or \`undefined\`. \`seen\`: YAML aliases make the structure shared or cyclic, visit each object once.
+ * nexus local modification: where in \`value\` the Loader would \`eval\` something (any \`__jsExpr\` key, string or not, the
+ * same rule as the host's \`findJsExpr\`), or \`undefined\`. \`seen\`: YAML aliases make the structure shared or cyclic, visit each object once.
  */
 function findJsExpr(value: unknown, path: string, seen = new WeakSet<object>()): string | undefined {
   if (typeof value !== 'object' || value === null || seen.has(value)) return undefined
   seen.add(value)
-  if (isJsExpr(value)) return path
+  if ('__jsExpr' in value) return path
   for (const [key, item] of Object.entries(value)) {
     const found = findJsExpr(item, Array.isArray(value) ? \`\${path}[\${key}]\` : \`\${path}.\${key}\`, seen)
     if (found !== undefined) return found

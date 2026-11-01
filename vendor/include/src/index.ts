@@ -161,13 +161,13 @@ function seek(document: Document, path: PropertyKey[]): Range | null | undefined
 }
 
 /**
- * nexus local modification: where in `value` the Loader would `eval` something (a `__jsExpr` value, judged by the
- * Loader's own `isJsExpr`), or `undefined`. `seen`: YAML aliases make the structure shared or cyclic, visit each object once.
+ * nexus local modification: where in `value` the Loader would `eval` something (any `__jsExpr` key, string or not, the
+ * same rule as the host's `findJsExpr`), or `undefined`. `seen`: YAML aliases make the structure shared or cyclic, visit each object once.
  */
 function findJsExpr(value: unknown, path: string, seen = new WeakSet<object>()): string | undefined {
   if (typeof value !== 'object' || value === null || seen.has(value)) return undefined
   seen.add(value)
-  if (isJsExpr(value)) return path
+  if ('__jsExpr' in value) return path
   for (const [key, item] of Object.entries(value)) {
     const found = findJsExpr(item, Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`, seen)
     if (found !== undefined) return found
