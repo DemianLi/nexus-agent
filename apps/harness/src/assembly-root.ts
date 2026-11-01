@@ -76,7 +76,7 @@ import { canonicalize, canonicalizeExisting, isWithin } from './canonical-path.j
 import { LEGACY_ENV_FILE, legacyEnvFileFor } from './launch-env.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
-import { MCP_SANDBOX_SERVICE } from '@nexus/plugin-mcp';
+import { MCP_GUARD_SERVICE, MCP_SANDBOX_SERVICE } from '@nexus/plugin-mcp';
 import { GIT_STARTER_SERVICE, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
@@ -105,7 +105,7 @@ import { createModelSelectionHost, createModelSelectionPlugin } from './model-se
 import type { ModelSelectionHost } from './model-selection-host.js';
 import { createFileReferencePlugin } from './file-references.js';
 import { createGitStarter } from './git-sandbox.js';
-import { createMcpSandboxWrapper } from './mcp-sandbox.js';
+import { createMcpGuardWrapper, createMcpSandboxWrapper } from './mcp-sandbox.js';
 import { sharedReservedWrites } from './shared-reserved-writes.js';
 
 /** 一次呼叫解析出來的東西。`prompt` 缺席即 REPL。 */
@@ -1220,6 +1220,8 @@ export async function createCliAgent(
         ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: SHARED_WORKSPACE_PREFIX }),
         // MCP 的沙箱包裝（#1946）：缺席＝宣告了 sandbox 的列不連線。
         [MCP_SANDBOX_SERVICE]: createMcpSandboxWrapper(),
+        // 沒宣告沙箱的 stdio 也跟著宿主行程走（#2197）：缺席或包不了＝照舊直接起。
+        [MCP_GUARD_SERVICE]: createMcpGuardWrapper(),
         // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
         // 分岔——有圍堵就掛控制器、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
         // 那一列載入當場拋（有圍堵卻缺控制器）。

@@ -37,7 +37,7 @@
  *      跟 {@link GENERATION_CLOSE_TIMEOUT_MS} 賽跑，到期就記 dsh 那一句、照常回來。被丟下的嘗試落定之後照樣收（連上了就關、
  *      失敗了 adapter 自己收），所以那個子行程比 dispose 多活一段，最久到握手逾時（版本協商 `auto` 兩輪各 60 秒，60 秒時
  *      會換一個子行程）。行程先結束的話（寫入口 `plugin-cli.ts` 排空輸出就 exit）沒有人收，子行程只能靠 stdin 的 EOF
- *      自己退出，不理 EOF 的會留成孤兒（`docs/operations.md`〈孤兒行程〉）。
+ *      自己退出；掛著 `--guard` 的跟著行程走，其餘不理 EOF 的會留成孤兒（`docs/operations.md`〈孤兒行程〉）。
  *    - **失敗的嘗試當場收掉**（{@link SupervisorHooks.abandon}，#1835），期限內確認關掉了才排下一次。握手就失敗時 adapter
  *      自己收掉 client 與 transport（`@langchain/mcp-adapters` 2.0.0 `connection.js:122-124`），拿不到 close 訊號，這類嘗試
  *      沒有屏障，靠 SDK stdio 自帶的兩段 2 秒寬限之後 SIGKILL；握手之後才失敗的（例如指引超過上限）等得到。已連上的那一代

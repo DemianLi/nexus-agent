@@ -7,8 +7,18 @@ import { loadPlugins } from '@nexus/core';
 import type { PluginEntry, PluginRegistry } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createMcpPlugin, MCP_SANDBOX_SERVICE, mcpConfigSchema } from './index.js';
-import type { McpSandboxRequest, McpSandboxWrapper } from './index.js';
+import {
+  createMcpPlugin,
+  MCP_GUARD_SERVICE,
+  MCP_SANDBOX_SERVICE,
+  mcpConfigSchema,
+} from './index.js';
+import type {
+  McpGuardRequest,
+  McpGuardWrapper,
+  McpSandboxRequest,
+  McpSandboxWrapper,
+} from './index.js';
 import { modelToolNames } from './tool-names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
@@ -40,6 +50,47 @@ describe('MCP 的 sandbox 宣告', () => {
     dispose = loaded.dispose;
     return loaded.registry;
   };
+
+  const loadGuarded = async (connection: object, guard: McpGuardWrapper) => {
+    const loaded = await loadPlugins([
+      {
+        plugin: {
+          name: 'host',
+          apply: (registry) => void registry.services.provide(MCP_GUARD_SERVICE, guard),
+        },
+      },
+      createMcpPlugin({ serverName: 'srv', connection } as never),
+    ]);
+    dispose = loaded.dispose;
+    return loaded.registry;
+  };
+
+  it('沒宣告的 stdio 走 guard，包過的設定就是連線用的那一份（#2197）', async () => {
+    const seen: McpGuardRequest[] = [];
+    const registry = await loadGuarded(
+      { ...stdio, env: { PATH: process.env['PATH'] } },
+      (request) => {
+        seen.push(request);
+        return Promise.resolve({ command: process.execPath, args: stdio.args });
+      },
+    );
+    expect(seen).toMatchObject([{ command: process.execPath, path: process.env['PATH'] }]);
+    expect(modelToolNames(registry).length).toBeGreaterThan(0);
+  });
+
+  it('guard 回 undefined：照舊直接起（#2197）', async () => {
+    const registry = await loadGuarded(stdio, () => Promise.resolve(undefined));
+    expect(modelToolNames(registry).length).toBeGreaterThan(0);
+  });
+
+  it('宣告了 sandbox 的不走 guard（#2197）', async () => {
+    let guarded = 0;
+    await loadGuarded({ ...stdio, sandbox: {} }, () => {
+      guarded += 1;
+      return Promise.resolve(undefined);
+    });
+    expect(guarded).toBe(0);
+  });
 
   it('包裝收到路徑與 PATH', async () => {
     const seen: McpSandboxRequest[] = [];

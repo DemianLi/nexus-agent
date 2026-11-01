@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createMcpSandboxWrapper } from './mcp-sandbox.js';
+import { createMcpGuardWrapper, createMcpSandboxWrapper, mcpGuardNotice } from './mcp-sandbox.js';
 import type { McpSandboxHost } from './mcp-sandbox.js';
 
 describe('createMcpSandboxWrapper', () => {
@@ -130,5 +130,81 @@ describe('createMcpSandboxWrapper', () => {
         path: '/no/such',
       }),
     ).rejects.toThrow('找不到');
+  });
+});
+
+describe('createMcpGuardWrapper（#2197）', () => {
+  const linux = { platform: 'linux', binary: '/opt/spawner' } as const;
+  let base: string;
+
+  beforeEach(async () => {
+    base = await realpath(await mkdtemp(join(tmpdir(), 'nexus-mcp-guard-')));
+  });
+  afterEach(() => rm(base, { recursive: true, force: true }));
+
+  /** 檔名固定 `server`：裸名的測試靠 `path: base` 找到它。 */
+  const program = async (content: string | Uint8Array, mode = 0o755): Promise<string> => {
+    const path = join(base, 'server');
+    await writeFile(path, content, { mode });
+    return path;
+  };
+
+  it('#! 的腳本：command 原樣交給 --guard，不換成解好的路徑，argv[0] 與 PATH 跟直接起一樣', async () => {
+    await program('#!/bin/sh\n');
+    const guard = createMcpGuardWrapper(() => linux);
+    await expect(guard({ command: 'server', args: ['-x'], path: base })).resolves.toEqual({
+      command: '/opt/spawner',
+      args: ['--guard', '--', 'server', '-x'],
+    });
+  });
+
+  it('ELF 包', async () => {
+    const path = await program(new Uint8Array([0x7f, 0x45, 0x4c, 0x46, 2, 1]));
+    await expect(
+      createMcpGuardWrapper(() => linux)({ command: path, args: [] }),
+    ).resolves.toMatchObject({ command: '/opt/spawner' });
+  });
+
+  it.each([
+    ['沒有 #! 的腳本', 'echo hello\n'],
+    ['只有 ELF 前幾個位元組', new Uint8Array([0x7f, 0x45])],
+    ['空檔', ''],
+  ])('%s 不包：直接起才會退回 /bin/sh', async (_name, content) => {
+    const path = await program(content);
+    await expect(
+      createMcpGuardWrapper(() => linux)({ command: path, args: [] }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('讀不到檔頭不包', async () => {
+    const path = await program('#!/bin/sh\n', 0o111);
+    // root 不受檔案模式限制，讀得到檔頭。
+    const readable = process.getuid?.() === 0;
+    const wrapped = await createMcpGuardWrapper(() => linux)({ command: path, args: [] });
+    expect(wrapped === undefined).toBe(!readable);
+  });
+
+  it('找不到程式不包：直接起才報得出找不到程式', async () => {
+    const guard = createMcpGuardWrapper(() => linux);
+    await expect(guard({ command: 'no-such-program-2197', args: [] })).resolves.toBeUndefined();
+    await program('#!/bin/sh\n');
+    await expect(
+      guard({ command: 'server', args: [], path: '/no/such/dir' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['不是 Linux', { platform: 'darwin', binary: '/opt/spawner' }],
+    ['找不到 spawner', { platform: 'linux', binary: undefined }],
+  ] as const)('%s：照舊直接起，起動講一次', async (_name, host) => {
+    const path = await program('#!/bin/sh\n');
+    await expect(
+      createMcpGuardWrapper(() => host)({ command: path, args: [] }),
+    ).resolves.toBeUndefined();
+    expect(mcpGuardNotice(host)).toContain('孤兒');
+  });
+
+  it('包得了就不講', () => {
+    expect(mcpGuardNotice(linux)).toBeUndefined();
   });
 });
