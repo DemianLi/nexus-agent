@@ -58,8 +58,8 @@
  * o200k 的實作是 `gpt-tokenizer`（純 JS、零相依、MIT），不是 `js-tiktoken`。換的理由是速度，而且 token 數**逐位相同**
  * （`token-estimate.test.ts` 的「編碼器對照」用 js-tiktoken 當對照組重算過各種素材）：同一台機器上，一次全新的 10 萬字元
  * 隨機漢字（最壞的素材）js-tiktoken 4.4 秒、gpt-tokenizer 0.13 秒；一般中文散文差約兩個數量級。載入也輕：載入後常駐堆
- * +17 MB（js-tiktoken +72 MB）、載入含初始化 76 ms（222 ms）。它內部有一個合併結果的 LRU（上限 10 萬筆），實測對抗性輸入
- * 之後最多增 14 MB，不會無界成長。**這一換讓 `estimateTextTokens`（外溢層的精確數）同樣變快，數字不變。**
+ * +17 MB（js-tiktoken +72 MB）、載入含初始化 76 ms（222 ms）。它內部合併結果的 LRU 是關掉的（#2241）。
+ * **這一換讓 `estimateTextTokens`（外溢層的精確數）同樣變快，數字不變。**
  * 抽樣（{@link sampledTokens}）與它的誤差界線**沒有動**；編碼器夠快之後還要不要抽樣是另一個問題。
  *
  * ## 量到的
@@ -110,6 +110,10 @@ import { createHash } from 'node:crypto';
 import type { BaseMessage } from '@langchain/core/messages';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
+
+// 關掉合併快取：高熵長文（base64）有快取比沒有慢 10 倍以上，還多佔 100 MiB 以上 RSS；
+// 真實文字不快取也比較快（#2241）。快取只存結果，token 數不變。編碼器是全行程單例，這裡只設這一次。
+o200k_base.setMergeCacheSize(0);
 
 /** 每則訊息的角色框架開銷。#586 的評估用同一個值。 */
 const MESSAGE_OVERHEAD = 4;
