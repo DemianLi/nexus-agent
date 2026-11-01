@@ -966,3 +966,47 @@ fn guard_mode_reports_exec_failures_and_bad_usage() {
     assert_eq!(code(&["--guard", "--"]), Some(125));
     assert_eq!(code(&["--guard", "true"]), Some(125));
 }
+
+/// 起 `--flock`，把 `lock` 接成它的 fd 3；`None` 就讓 fd 3 關著。
+fn flock_on(lock: Option<&std::fs::File>) -> std::process::Output {
+    use std::os::fd::AsRawFd;
+    use std::os::unix::process::CommandExt;
+    let raw = lock.map(AsRawFd::as_raw_fd);
+    let mut command = Command::new(SPAWNER);
+    command.arg("--flock").stdin(Stdio::null());
+    // SAFETY：fork 之後只呼叫 async-signal-safe 的 dup2、fcntl、close。
+    unsafe {
+        command.pre_exec(move || {
+            let ok = match raw {
+                // 把手剛好就是 3 時 dup2 什麼都不做，close-on-exec 還在。
+                Some(3) => libc::fcntl(3, libc::F_SETFD, 0) == 0,
+                Some(fd) => libc::dup2(fd, 3) == 3,
+                None => libc::close(3) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EBADF),
+            };
+            if ok { Ok(()) } else { Err(std::io::Error::last_os_error()) }
+        });
+    }
+    command.output().unwrap()
+}
+
+#[test]
+fn flock_mode_leaves_the_lock_with_the_caller() {
+    let path = std::env::temp_dir().join(format!("spawner-flock-{}", std::process::id()));
+    let held = std::fs::File::create(&path).unwrap();
+    assert_eq!(flock_on(Some(&held)).status.code(), Some(0));
+
+    // 拿鎖的行程結束了，鎖還在呼叫端的把手上。
+    let other = std::fs::File::create(&path).unwrap();
+    assert_eq!(flock_on(Some(&other)).status.code(), Some(10));
+
+    drop(held);
+    assert_eq!(flock_on(Some(&other)).status.code(), Some(0));
+    std::fs::remove_file(&path).unwrap();
+}
+
+#[test]
+fn flock_mode_reports_other_errors_as_errno() {
+    let out = flock_on(None);
+    assert_eq!(out.status.code(), Some(11));
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), libc::EBADF.to_string());
+}

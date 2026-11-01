@@ -11,6 +11,8 @@
 
 單次模式 `--guard`：不上沙箱，只設 `PR_SET_PDEATHSIG` 再 `execvp`，給沒宣告沙箱的 MCP server 用（#2197）。
 
+單次模式 `--flock`：對繼承來的 fd 3 拿 `flock(LOCK_EX | LOCK_NB)` 就結束，不上沙箱，給 harness 的 home 鎖與會話寫租約用（#2253）。鎖屬於 open file description，所以這個行程結束之後還在，呼叫端關掉把手或死掉才放。結束碼：0 拿到、10 別人握著、11 其他失敗（errno 的數字印在 stdout）。
+
 協定（控制通道與 stdio 怎麼接）在 `src/protocol.rs` 與 `src/main.rs` 的檔頭。
 
 ## 建置與測試

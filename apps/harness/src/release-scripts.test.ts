@@ -76,6 +76,7 @@ import {
   attachedSbomProblems,
   checksumProblems,
   cleanEnv,
+  secondServeProblems,
   smokeInstalledServe,
   strayProcesses,
 } from '../../../scripts/release/verify-packed-install.js';
@@ -281,10 +282,6 @@ function goodTree(root: string): void {
   put('node_modules/.pnpm/@nexus+core@file+x/node_modules/@nexus/core/lib/index.js', '');
   put('node_modules/.pnpm/@nexus+cordis@file+v/node_modules/@nexus/cordis/lib/index.js', '');
   put('node_modules/.pnpm/@nexus+cordis@file+v/node_modules/@nexus/cordis/src/index.ts', '');
-  put(
-    'node_modules/.pnpm/@deepseek-ai+node-addon-system-linux-x64@0.1.2/node_modules/x/bin/system.node',
-    '',
-  );
   put('node_modules/.pnpm/zod@4/node_modules/zod/index.js', '');
   // 內附 ripgrep（#1502 刀 4）：本體加目標平台的平台套件，rg 要有執行權限。
   put('node_modules/.pnpm/@vscode+ripgrep@1.18.0/node_modules/@vscode/ripgrep/lib/index.js', '');
@@ -399,14 +396,6 @@ describe('產物樹的內容檢查', () => {
           recursive: true,
         }),
       /開發工具/u,
-    ],
-    [
-      '缺目標平台二進位',
-      () =>
-        rmSync(join(root, 'node_modules/.pnpm/@deepseek-ai+node-addon-system-linux-x64@0.1.2'), {
-          recursive: true,
-        }),
-      /node-addon-system-linux-x64/u,
     ],
     [
       '缺內附 ripgrep 本體',
@@ -777,6 +766,29 @@ describe('verify-packed-install 的環境與收尾（#1657 審查第 4、5 項�
     const pid = Number(readFileSync(pidFile, 'utf8'));
     expect(() => process.kill(pid, 0)).toThrow(/ESRCH/u);
   }, 30_000);
+});
+
+describe('verify-packed-install 的第二台 serve（#2253）', () => {
+  const run = (
+    status: number | null,
+    stderr: string,
+  ): Parameters<typeof secondServeProblems>[0] => ({
+    status,
+    stdout: '',
+    stderr,
+  });
+
+  it('被 home 鎖拒絕：沒有問題', () => {
+    expect(secondServeProblems(run(1, '這個 home（/h）已經有另一個 serve 在用：鎖檔'))).toEqual([]);
+  });
+
+  it.each([
+    ['起來了（逾時被殺）', run(null, '')],
+    ['別的原因結束', run(1, 'EACCES')],
+    ['以 0 結束', run(0, '已經有另一個 serve 在用')],
+  ])('%s：報', (_label, outcome) => {
+    expect(secondServeProblems(outcome)).toHaveLength(1);
+  });
 });
 
 describe('SBOM（#1545 步驟 4、驗收 6）', () => {

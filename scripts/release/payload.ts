@@ -5,7 +5,7 @@
  * 3 只在 `verify-packed-install` 跑**（相依圖走訪要走完整棵樹，打包當下的暫存樹還沒定形）：
  *
  * 1. {@link collectPayloadViolations}：照 dsh `scripts/publication-payload.ts` 拒收 `src/` 與 `.map`，再加上我們自己的必備檔、
- *    不該進閉包的開發工具、相對符號連結要解得開、目標平台的 `node-addon-system` 二進位、內附 ripgrep（#1502 刀 4）與 Linux 的沙箱 spawner（#1946，`spawner.ts`）在。
+ *    不該進閉包的開發工具、相對符號連結要解得開、內附 ripgrep（#1502 刀 4）與 Linux 的沙箱 spawner（#1946，`spawner.ts`）在。
  * 2. {@link collectClosureViolations}：照 dsh `scripts/verify-runtime-closure.ts`，`cordis.yml`／`cordis.serve.yml` 每一列的
  *    `name:` 都要能從產物根解析到。
  * 3. {@link walkInstalledGraph}：照 dsh `scripts/release/installed-product-isolation.ts:23-57`，從產物根沿 `dependencies`／
@@ -43,8 +43,8 @@ export interface PayloadViolation {
 /** 檢查的設定。 */
 export interface PayloadOptions {
   /**
-   * 目標平台的後綴：`node-addon-system` 的二進位套件（例如 `linux-x64-gnu`，用 `includes` 比）與內附 ripgrep 的平台套件
-   * `@vscode/ripgrep-<後綴>`（`pack.ts` 傳的是 `${process.platform}-${process.arch}`，要完全相等）都用它查。
+   * 目標平台的後綴：查內附 ripgrep 的平台套件 `@vscode/ripgrep-<後綴>`（`pack.ts` 傳的是
+   * `${process.platform}-${process.arch}`，要完全相等）與 Linux 的沙箱 spawner。
    * 注意執行期 `@vscode/ripgrep` 自己挑平台套件看的是 `process.env.npm_config_arch || process.arch`（`lib/index.js:5`）：啟動 serve 的環境若設了
    * `npm_config_arch`，它會去找別的架構的套件、找不到就讓 grep 不可用（啟動日誌那一行會說「不可用」）；打包這一側不看那個變數。`undefined` 代表不查（單元測試用）。
    */
@@ -289,20 +289,6 @@ export function collectPayloadViolations(
           });
         }
       }
-    }
-  }
-
-  // 目標平台的原生二進位。
-  if (options.nativeSuffix !== undefined) {
-    const expected = `node-addon-system-${options.nativeSuffix}`;
-    const found = existsSync(store)
-      ? readdirSync(store).filter((entry) => entry.includes('node-addon-system-'))
-      : [];
-    if (!found.some((entry) => entry.includes(expected))) {
-      violations.push({
-        path: 'node_modules/.pnpm',
-        message: `缺目標平台的 @deepseek-ai/node-addon-system-${options.nativeSuffix}（找到：${found.join('、') || '無'}）`,
-      });
     }
   }
 

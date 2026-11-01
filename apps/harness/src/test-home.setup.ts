@@ -30,6 +30,18 @@ vi.mock('./tool-launcher.js', async (importActual) => {
   };
 });
 
+// 同一個理由：home 鎖與會話寫租約用系統 perl 拿真的 kernel 鎖（`test-flock.fixture.ts`）。
+// mock 只在這個行程：另起的子行程走產品路徑，沒有 spawner 就退到不鎖。
+vi.mock('./kernel-file-lock.js', async (importActual) => {
+  const actual = await importActual<typeof import('./kernel-file-lock.js')>();
+  const { perlFlock } = await import('./test-flock.fixture.js');
+  const lock = perlFlock(actual.spawnerFlock);
+  return {
+    ...actual,
+    lockFileExclusive: (path: string, chosen = lock) => actual.lockFileExclusive(path, chosen),
+  };
+});
+
 const root = mkdtempSync(join(tmpdir(), 'nexus-agent-home-'));
 
 /** 把 `HOME` 與 harness home 換到 `home`，當場確認 `homedir()` 跟著變了。 */

@@ -11,9 +11,9 @@
  * （`-jsonl` 與 `-sqlite`），我們先做 JSONL，理由三條：不必現場編譯（SQLite 那條要
  * `better-sqlite3`，而我們的 `onlyBuiltDependencies` 只放了 `esbuild`）、人讀得懂、
  * 以及未來 Proteus 的 `read_trace` 解析的就是 jsonl。丟掉的是頻繁更新時的效率，而
- * 僅追加的日誌本來就沒有頻繁更新。**第一條原本寫的是「零原生相依」，寫租約之後不成立了**：
- * 租約吃一個原生模組，但它是預編譯的、沒有 install script（見 `session-lease.ts`），所以
- * 真正擋掉 SQLite 的那件事——要在裝的機器上編——這條路仍然沒有。
+ * 僅追加的日誌本來就沒有頻繁更新。
+ * 不必現場編譯這一條，租約也守得住：
+ * 租約的鎖在 spawner 裡（見 `session-lease.ts`），spawner 是打包時編好的。
  *
  * ## 一條沒抄的、一條照抄的
  *

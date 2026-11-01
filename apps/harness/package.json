@@ -54,7 +54,6 @@
     "vitest": "^4.1.11"
   },
   "dependencies": {
-    "@deepseek-ai/node-addon-system": "0.1.2",
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.13",
     "@langchain/langgraph-checkpoint": "^1.1.5",

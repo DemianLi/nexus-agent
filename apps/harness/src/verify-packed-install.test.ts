@@ -30,7 +30,6 @@ import {
   headerProblems,
   homepageProblems,
   installedGrepProblems,
-  nativeLockProblems,
   ripgrepDisclosureProblems,
   serveOutputProblems,
   SHARP_PROBE,
@@ -38,6 +37,8 @@ import {
   sharpProblems,
   shutdownProblems,
   smokeInstalledServe,
+  spawnerLockProbe,
+  spawnerLockProblems,
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
@@ -68,13 +69,19 @@ describe('步驟 3：--version', () => {
   });
 });
 
-describe('步驟 4：flock 原生二進位', () => {
-  it('印 locked：不報；載不起來、印別的：報並帶 stderr 尾巴', () => {
-    expect(nativeLockProblems({ ...ok, stdout: 'locked\n' })).toEqual([]);
-    expect(nativeLockProblems({ status: 1, stdout: '', stderr: 'ERR_DLOPEN_FAILED' })).toEqual([
-      expect.stringContaining('ERR_DLOPEN_FAILED'),
+describe('步驟 4：spawner 的鎖', () => {
+  it('印 locked：不報；鎖不住、印別的：報並帶 stderr 尾巴', () => {
+    expect(spawnerLockProblems({ ...ok, stdout: 'locked\n' })).toEqual([]);
+    expect(spawnerLockProblems({ status: 1, stdout: '', stderr: '第二個沒被擋下' })).toEqual([
+      expect.stringContaining('第二個沒被擋下'),
     ]);
-    expect(nativeLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
+    expect(spawnerLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
+  });
+
+  it('探針直接跑出貨的執行檔，不 import 打包後不存在的內部模組', () => {
+    const probe = spawnerLockProbe('/x/spawner', '/x/probe.lock');
+    expect(probe).toContain('"/x/spawner"');
+    expect(probe).not.toContain('./lib/');
   });
 });
 
