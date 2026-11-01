@@ -135,6 +135,63 @@ describe('serve 行程層收尾共用一份 dispose', () => {
     }
   });
 
+  it.each([
+    ['SIGTERM', 'SIGTERM'],
+    ['SIGINT', 'SIGINT'],
+  ])(
+    '%s 之後 close() 拒絕：以 1 結束，監管程式看得出有東西沒收好（#2196）',
+    async (_label, signal) => {
+      const { proc, exits, fire } = fakeProc();
+      const { running, release } = fakeRunning({ fail: new Error('2 條 thread 收尾失敗') });
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        installServeProcessLifecycle(proc).attach(running);
+        fire(signal);
+        release();
+        await vi.waitFor(() => {
+          expect(exits).toEqual([1]);
+        });
+        expect(error).toHaveBeenCalledWith('2 條 thread 收尾失敗');
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
+
+  it('close() 成功：SIGTERM 照舊是 0、SIGINT 照舊是 130', async () => {
+    for (const [signal, code] of [
+      ['SIGTERM', 0],
+      ['SIGINT', 130],
+    ] as const) {
+      const { proc, exits, fire } = fakeProc();
+      const { running, release } = fakeRunning();
+      installServeProcessLifecycle(proc).attach(running);
+      fire(signal);
+      release();
+      await vi.waitFor(() => {
+        expect(exits).toEqual([code]);
+      });
+    }
+  });
+
+  it('收尾中第二次訊號：當場以訊號的碼結束，不等 close() 的結果', async () => {
+    const { proc, exits, fire } = fakeProc();
+    const { running, release } = fakeRunning({ fail: new Error('之後才失敗') });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      installServeProcessLifecycle(proc).attach(running);
+      fire('SIGTERM');
+      await Promise.resolve();
+      fire('SIGTERM');
+      expect(exits).toEqual([0]);
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(exits).toEqual([0]);
+    } finally {
+      error.mockRestore();
+    }
+  });
+
   it('runServe 還沒回來（沒有 attach）就致命：沒有東西可收，直接以 1 結束', async () => {
     const { proc, written, exits, fire } = fakeProc();
     installServeProcessLifecycle(proc);

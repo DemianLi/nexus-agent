@@ -1861,6 +1861,8 @@ export interface ServeProcessLifecycle {
  * 照 dsh `apps/cli/src/profile-boot.ts:282-311`）。
  *
  * - 訊號（`SIGTERM` 回 0、`SIGINT` 回 130）走 {@link createProcessShutdown}：5 秒上限、收尾中再來一次就當場結束（#599）。
+ *   **`close()` 拒絕時兩者都回 1**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：有東西沒收好（會話日誌沒落盤這類），監管程式要從退出碼看得出來。
+ *   逾時與第二次訊號照舊回訊號的碼：那兩條沒有等到 `close()` 的結果。
  * - 未處理的 rejection／未捕捉的例外走 {@link installFailLoud}：印一行帶標籤的診斷，最多等 2 秒走**同一份** dispose，
  *   然後以 1 結束。**不讓 serve 存活**：一條 thread 的半套狀態被其他人繼續用，比全部重連更糟。
  * - 兩邊等同一顆 promise，所以收尾進行中來另一邊，`running.close()` 只跑一次；退出碼以**先到的**為準
@@ -1875,6 +1877,7 @@ export interface ServeProcessLifecycle {
 export function installServeProcessLifecycle(proc: ServeProcess = process): ServeProcessLifecycle {
   let running: RunningServe | undefined;
   let disposal: Promise<void> | undefined;
+  let closeFailed = false;
   // **誰先開始收尾誰決定要不要等 `/readyz` 時間窗**：訊號等（#1777），致命例外不等（#1787）。兩邊仍共用同一顆 promise，
   // 所以訊號先到、致命隨後時，致命路徑也在同一個收尾裡（它自己的 2 秒上限仍在 `installFailLoud`）。
   const disposeWith = (drain: boolean): Promise<void> =>
@@ -1885,6 +1888,7 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
       } catch (error) {
         // 控制器在收尾失敗時只強制結束、不講原因；會話日誌寫不下去是這裡最該聽見的那種。
         console.error(error instanceof Error ? error.message : String(error));
+        closeFailed = true;
         throw error;
       }
     })());
@@ -1894,7 +1898,7 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
   const shutdown = createProcessShutdown(
     () => disposeWith(true),
     (code) => {
-      proc.exit(code);
+      proc.exit(closeFailed ? 1 : code);
     },
     (code) => {
       proc.exitCode = code;

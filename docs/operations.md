@@ -598,8 +598,9 @@ header（世代檔的第一行；舊兩檔是 `.header.json`）自格式 30 起�
 工具呼叫與它的結果、外掛塞進對話的話、壓縮的摘要。要留 live 跑的證據，留 JSONL 就夠了。
 
 **停 `serve` 按一次 Ctrl-C 就好**（[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。第一次
-訊號會把每一條 thread 的日誌排空、關檔之後才結束（退出碼 130；`SIGTERM` 是 0）；收尾最多等 5 秒，
-到了就強制結束。**收尾中再按一次是「我不等了」**，當場結束，沒排空的那一截會丟——一輪之中已經有
+訊號會把每一條 thread 的日誌排空、關檔之後才結束（退出碼 130；`SIGTERM` 是 0）；**收尾失敗**（磁碟滿寫不完這類，
+原因印在標準錯誤）**退出碼是 1**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)），沒寫進去的那幾筆重啟後不在。收尾最多等 5 秒，
+到了就強制結束，退出碼是訊號的碼，不代表都收好了。**收尾中再按一次是「我不等了」**，當場結束，沒排空的那一截會丟——一輪之中已經有
 檢查點把使用者那句話與之前每一步先寫下去（`session-checkpoint-policy`，見下面 core 那幾顆），所以
 最多丟最後一步的尾巴。用腳本或監管程式停它時，送一次訊號、等它自己結束，不要連送。
 
@@ -1286,6 +1287,7 @@ KillSignal=SIGTERM
 TimeoutStopSec=10
 
 # 只在失敗時重啟：systemctl stop 與 SIGTERM 的退出碼 0 不會被拉起來，致命例外（退出碼 1）會。
+# SIGTERM 的收尾失敗也是退出碼 1：systemctl stop 不重啟、單元進 failed；其他來源的 SIGTERM 會重啟。
 Restart=on-failure
 RestartSec=5
 

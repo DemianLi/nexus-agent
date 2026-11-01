@@ -9,7 +9,7 @@
  *   （`@nexus/core` 的 `sessionCheckpointPlugin`）。
  * - 收尾有上限（{@link PROCESS_SHUTDOWN_TIMEOUT_MS}），到了就強制結束：一個卡住的
  *   `dispose` 不能讓 Ctrl-C 失效。
- * - 收尾本身失敗也強制結束，用同一個碼。
+ * - 收尾本身失敗也強制結束，用同一個碼；serve 要換碼在 `forceExit` 裡換（`installServeProcessLifecycle`）。
  *
  * 舊的做法是 `process.once('SIGINT', stop)`：第一次之後 listener 就沒了，第二次訊號落回
  * 預設動作（tsx 底下是它的 preflight 代為 `exit(130)`），而且收尾沒有上限。行為上「第二次
