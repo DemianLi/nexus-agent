@@ -2118,8 +2118,11 @@ export function classifyTurnFailure(error: unknown, fromModelCall = false): LlmF
   let storageFull = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
+  // {@link CredentialRejectedError} 自己就是模型呼叫的錯：`cause` 上有原文，不靠外面有沒有包，它要永遠是 `AUTH`。
   const modelCall =
-    fromModelCall || wrappedModelCall || links.some((link) => isModelCallFailure(link));
+    fromModelCall ||
+    wrappedModelCall ||
+    links.some((link) => isModelCallFailure(link) || link instanceof CredentialRejectedError);
   for (const link of links) {
     // 狀態要是 100–599 的整數（#1557，dsh `LlmError` 的欄位規則）：`NaN`、`99`、`429.5` 不是狀態，當作沒有這一格。
     const found = readField(link, 'status');

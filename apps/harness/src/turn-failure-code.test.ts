@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { MemorySaver } from '@langchain/langgraph';
+import { OpenAIClient } from '@langchain/openai';
 import type { PluginEntry } from '@nexus/core';
 import {
   AUTH_FAILURE_MESSAGE,
@@ -28,7 +29,12 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ambientCredentials } from './credentials.js';
 import type { CredentialService } from './credentials.js';
-import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
+import {
+  createLiveModel,
+  CredentialRejectedError,
+  LIVE_API_KEY_ENV,
+  turnFailureOf,
+} from './live-model.js';
 import { createRequestGate } from './request-gate.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { composeAttachSessions } from './session-attach.js';
@@ -278,6 +284,33 @@ describe('一輪失敗的錯誤碼', () => {
     ).rejects.toThrow(AUTH_FAILURE_MESSAGE);
     await expect(model.bindTools([]).invoke('嗨')).rejects.toThrow(AUTH_FAILURE_MESSAGE);
   }, 20000);
+
+  it('root 串流中段的真 401：下行、turn/failed、冷讀歷史都是固定句', async () => {
+    midStream = true;
+    const rejected: string[] = [];
+    const credentials = ambientCredentials();
+    credentials.onRejected((line) => rejected.push(line));
+    const run = await runThroughWire(live(credentials), failed);
+    for (const state of [run.live, run.history]) {
+      expect(state).toMatchObject({ error: AUTH_FAILURE_MESSAGE, errorCode: 'AUTH' });
+    }
+    expect(JSON.stringify(run.frames)).not.toContain(LEAK);
+    expect(JSON.stringify(run.coldFrames)).not.toContain(LEAK);
+    expect(rejected.join('\n')).toContain(LEAK);
+  }, 20000);
+
+  it('沒被基座包過的串流中段憑證錯誤：照樣是 AUTH 與固定句，原文不進 turn/failed', () => {
+    const inband = new OpenAIClient.APIError(
+      undefined,
+      { code: 401, message: LEAK },
+      undefined,
+      undefined as never,
+    );
+    const failure = turnFailureOf(new CredentialRejectedError(inband));
+    expect(failure.error.code).toBe('AUTH');
+    expect(failure.message).toBe(AUTH_FAILURE_MESSAGE);
+    expect(JSON.stringify(failure)).not.toContain(LEAK);
+  });
 
   it('前景子代理的其他失敗（真的 400）：文字照舊，憑證那條不寫', async () => {
     status = 400;
