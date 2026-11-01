@@ -110,6 +110,18 @@ describe('serve 的磁碟滿探針（#2195）', () => {
     expect(await fullGauges(server, token)).toEqual({ home: 1, 'thread-roots': 0 });
   });
 
+  it('--workspace 是唯讀共用區，滿了也不算：/readyz 200、指標 0', async () => {
+    const { server, token } = await start(
+      ({ base }) => join(base, 'shared'),
+      (base) => {
+        mkdirSync(join(base, 'shared'));
+        return ['--workspace', join(base, 'shared')];
+      },
+    );
+    expect(await fullGauges(server, token)).toEqual({ home: 0, 'thread-roots': 0 });
+    expect((await fetch(`${server.url}/readyz`)).status).toBe(200);
+  });
+
   it('thread 根滿了：只有這一區是 1，/readyz 一樣 503', async () => {
     const { server, token } = await start(({ home }) =>
       resolveThreadRootsBase({ [HARNESS_HOME_ENV]: home }),

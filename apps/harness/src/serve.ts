@@ -1154,7 +1154,8 @@ async function startServer(
 
   // serve 自己的 `close()` 開始了沒：`/readyz` 在 server 關掉之前就要回 503（#1535）。
   let closing = false;
-  // 只列 serve 自己寫進去的地方（#2195）：`--session-log`、工具結果暫存根可以不在 home 底下，算在 home 這一區。
+  // 只列 serve 自己寫進去的地方（#2195）；`--session-log`、工具結果暫存根可以不在 home 底下，算在 home 這一區。
+  // `--workspace` 不列：對新 thread 是唯讀共用區，它滿了或在唯讀檔案系統上都不影響寫入，列了可能一直 503；舊 thread 仍寫它，撞滿時只有工具與輪次的失敗看得到。
   const storageProbe = new StorageProbe({
     areas: {
       home: [
@@ -1162,10 +1163,7 @@ async function startServer(
         stashRoot,
         ...(sessionLogDir === undefined ? [] : [sessionLogDir]),
       ],
-      'thread-roots': [
-        threadRootsBase,
-        ...(sharedWorkspaceRoot === undefined ? [] : [sharedWorkspaceRoot]),
-      ],
+      'thread-roots': [threadRootsBase],
     },
     warn,
   });

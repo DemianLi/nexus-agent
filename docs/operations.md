@@ -1132,7 +1132,7 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1~002Fbg-1/ses
 
 - **三個路徑都先過信任圍欄**，跟 wire 同一道：`Host` 不是 loopback（`localhost`、`127.x.x.x`、`[::1]`）、`Sec-Fetch-Site: cross-site`、`Origin` 與 `Host` 不一致，一律 `403`。只收 `GET`／`HEAD`，其餘 `405`。
 - **探針免登入，本文只有狀態字**（`ok`／`closing`／`storage-full`），不帶數字、版本或任何細節。同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽。
-- **寫資料的地方滿了回 `503 storage-full`**（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)），`closing` 優先；釋放後回 200，不用重啟。查的目錄分兩區：`home`（harness home、`--session-log` 指到的目錄、工具結果暫存根）與 `thread-roots`（thread-roots 基底、`--workspace`）。thread 到上限是設計好的狀態，磁碟滿是壞了，所以只有後者算沒就緒。
+- **寫資料的地方滿了回 `503 storage-full`**（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)），`closing` 優先；釋放後回 200，不用重啟。查的目錄分兩區：`home`（harness home、`--session-log` 指到的目錄、工具結果暫存根）與 `thread-roots`（thread-roots 基底）。`--workspace` 不查：對新 thread 它是唯讀共用區，放在唯讀檔案系統或滿的知識庫磁碟上都不影響寫入，查了可能一直 503；舊 thread 寫它撞滿時，只有工具與輪次的失敗看得到。thread 到上限是設計好的狀態，磁碟滿是壞了，所以只有後者算沒就緒。
   - 判準是區塊或 inode 用完，看非特權可用的 `bavail`。`files` 回 0 的檔案系統（btrfs、部分 NFS）只看區塊。
   - 最多每 5 秒查一次，舊的一次還沒回來不發新的；1 秒沒回來就沿用上一次的狀態並記一行 warn，探針不因此回 503。
   - **配額滿（`EDQUOT`）看不到**：`statfs` 不知道配額，這時 `/readyz` 回 200，工具與輪次仍會回報空間用完。
