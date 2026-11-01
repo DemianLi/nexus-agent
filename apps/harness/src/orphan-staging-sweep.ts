@@ -11,7 +11,9 @@
  * - **不用路徑刪根裡的東西**：`lstat` 之後目錄可能被換成連結，`unlink <dir>/x.tmp` 會穿過連結刪到根外。
  *   所以先 `rename` 整個目錄項到模型碰不到的暫放區（`rename` 不跟最後一段的連結），搬完再 `lstat` 一次才刪；搬不動（含 `EXDEV`）就留著。
  *   上層路徑的連結 `rename` 照樣會跟：`rename` 之前比對一次上層的實際位置，這只縮小窗口，沒有關掉。Node 沒有 `renameat`。
- *   窗口裡被換走時，搬得動的也只有根外同形、同擁有者、夠舊的暫存目錄。
+ *   `rename` 之後只看型別，擁有者、mtime、內容都不再驗；窗口裡的限制是（推論）：`rename` 的最後一段是候選的完整名字，
+ *   根外要有名字逐字相同的目錄項才搬得動。出廠權限組下模型寫不到根外，也讀不到別條 thread 的根；讀得到的是 `/shared`，
+ *   所以舊 thread 留在 `--workspace` 的暫存名字可能被用上（同一個檔案系統時）。`danger-full-access` 不在這個限制內。
  *
  * 暫放區在基底底下（{@link STAGING_QUARANTINE_DIR_NAME}）：跟私有根同一個檔案系統，名字不是 `thread-<雜湊>` 的形狀，
  * 不會被當成一條 thread 的根。崩潰留在裡面的，下次起動整個刪掉；一個 home 只有一台 serve（`serve.lock`），這時沒有別人在用它。
@@ -117,7 +119,7 @@ async function reapIfOrphan(
 
 /**
  * 走過一個根，最多看 {@link MAX_ENTRIES_PER_SWEEP} 個目錄項。目錄項是連結就不往下走；走到一半被換成連結時可能讀到根外，
- * 但 {@link reapIfOrphan} 會比對實際位置。讀不了的目錄跳過，清不掉的留著。
+ * {@link reapIfOrphan} 的位置比對只縮小這個窗口。讀不了的目錄跳過，清不掉的留著。
  *
  * @returns 有沒有撞到上限，以及第一個清不掉的錯誤碼。
  */
