@@ -227,7 +227,7 @@ connection:
   （[#2078](https://github.com/DemianLi/nexus-agent/issues/2078)，同 `/shared` 那一條）。
   這道守衛只擋得到升級之後的寫入：**升級後核對一次** `--workspace` 根目錄現有的這四個指示檔與技能來源目錄（出廠 `--workspace/skills/`），
   確認裡面都是部署方自己放的，不是舊對話寫的。
-- **header 的根既不是 `--workspace` 也不是基底底下的 `thread-…` 目錄**：續接被拒（`ResumeWorkspaceConflictError`，訊息指名兩個根）。
+- **header 的根既不是 `--workspace` 也不是基底底下的 `thread-…` 目錄**：續接被拒。wire 回專用碼 **`thread_root_mismatch`**（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)），message 寫明是哪一份會話與出路，不帶主機路徑；兩個根印在 serve 的日誌（`ResumeWorkspaceConflictError`）。
 - **不會自動清**：thread 刪了或過期了，私有根還在；要清自己清 `<home>/thread-roots` 底下對應的目錄（用 header 的 `workspaceRoot` 對得上哪一條）。
   這是刻意的：私有根裡是使用者的產出，系統不替人決定哪一份可以丟。
 - **落盤關掉時**（`session-persistence` 那一列關掉）——**偏離 2 的延伸**（dsh 沒有「每條 thread 一個私有根」，落盤關掉時 dsh 也沒有東西可以對照）：
@@ -561,7 +561,8 @@ banner 那一行改印「只在記憶體裡」並點名是這一列關的。**�
 **同一份會話同時只能有一個寫入者**（寫租約：跟日誌並排的 `<base>.lock` 上的 `flock`）。續接一條 thread 時，它的寫租約如果被別的行程握著
 （另一個 serve 行程用同一個 `--session-log` 目錄與工作目錄、但不同的 home，還開著它；同一個 home 起不了第二台 serve），serve 不開這條 thread、
 不碰日誌，回專用碼 **`thread_writer_held`**（[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)），message 寫明是哪一份會話。
-這是暫時的：那個行程關掉這條 thread 或結束之後再送，就不會再因此被拒。
+那個行程關掉這條 thread 或結束之後，再送就不會再因為寫租約被拒。但兩台用的是不同 home 時，對話的私有根在另一台的 home 底下，這條 thread 接著回
+**`thread_root_mismatch`**：要回原本的 home 才打得開，重試沒用。
 
 CLI 每一次啟動各自一個 run 目錄，一份會話一個會話目錄：`<會話>/session.v<格式版本>.jsonl`（第一行是 header 行，之後一行一筆事件）
 加上寫租約的 `<會話>/session.lock`，舊路徑另外留一份 `<會話>.header.json` 墓碑（[#1594](https://github.com/DemianLi/nexus-agent/issues/1594)）。
@@ -1443,8 +1444,8 @@ serve 啟動時會讀 home 底下幾份狀態檔（[#1507](https://github.com/De
    只會在新的桶裡建一條空的（實測）；把桶目錄改名也接不回來，續接會因為目錄不同而拒絕。從原始碼 checkout 用
    `pnpm --filter @nexus/harness run serve` 起的舊版（v0.5.19 都是），目錄是 `<checkout>/apps/harness`，不是〈用 systemd 常駐〉範例裡的 home；
    要沿用舊對話，unit 的 `WorkingDirectory` 寫舊的那個目錄。
-   **`--workspace` 也要跟舊版一樣**：舊版給過 `--workspace` 的話，會話 header 記著那個工作區根，新版用不同的根續接會被拒絕
-   （`apps/harness/src/resume-guards.ts` 的 `ResumeWorkspaceConflictError`，訊息指名兩個根）；〈用 systemd 常駐〉範例的
+   **`--workspace` 也要跟舊版一樣**：舊版給過 `--workspace` 的話，會話 header 記著那個工作區根，新版用不同的根續接會被拒絕，回 `thread_root_mismatch`
+   （`apps/harness/src/resume-guards.ts` 的 `ResumeWorkspaceConflictError`，serve 的日誌指名兩個根）；〈用 systemd 常駐〉範例的
    `--workspace /srv/nexus-agent/workspace` 要改成舊版給的那個。舊版沒給過的不受影響。
    **升到有私有根的版本之後**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：舊對話照舊把 `--workspace` 當可寫根（接得回來、不隔離），
    只有新開的對話配私有根；`<home>/thread-roots` 是升級後第一次有新 thread 才會建。回滾到沒有這一版的程式時，header 記著私有根的對話會被

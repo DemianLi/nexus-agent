@@ -19,7 +19,7 @@ import { appendFile, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promi
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createDeliverableClient, createWireClient } from '@nexus/wire';
+import { createDeliverableClient, createWireClient, THREAD_ROOT_MISMATCH } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
 import { SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
@@ -654,16 +654,18 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const log = logOn(root, 'alpha');
     const before = await readFile(log, 'utf8');
 
-    const second = await start(root, ['--workspace', other]);
+    const lines: string[] = [];
+    const second = await start(root, ['--workspace', other], (line) => lines.push(line));
     await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     expect(await readFile(log, 'utf8')).toBe(before);
-    // **訊息要活著到瀏覽器那端**（卡上寫的是「訊息指名兩個根」）。只斷言「拋了」的話，有人
-    // 把 `threadOrError` 的錯包成一句通用的「thread 不可用」，這一條照樣綠，而多人共用主機上
-    // 的維運者失去唯一改得動的線索。形狀同下面那條沙箱檢查：協定層回 `rejected`，不是拋。
+    // **碼要活著到瀏覽器那端，兩個根留在 serve 的日誌**（#2222）。只斷言「拋了」的話，有人把 `threadOrError` 的錯
+    // 包成一句通用的「thread 不可用」，這一條照樣綠。形狀同下面那條沙箱檢查：協定層回 `rejected`，不是拋。
     const refused = await (await serveClient(second)).slashRun('alpha', '/permission');
-    expect(refused).toMatchObject({ kind: 'rejected' });
-    expect(JSON.stringify(refused)).toContain(workspace);
-    expect(JSON.stringify(refused)).toContain(other);
+    expect(refused).toMatchObject({ kind: 'rejected', code: THREAD_ROOT_MISMATCH });
+    expect(JSON.stringify(refused)).not.toContain(workspace);
+    expect(JSON.stringify(refused)).not.toContain(other);
+    expect(lines.join('\n')).toContain(workspace);
+    expect(lines.join('\n')).toContain(other);
     await stop(second);
 
     const third = await start(root, ['--workspace', workspace]);

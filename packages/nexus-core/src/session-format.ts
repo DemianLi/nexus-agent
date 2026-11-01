@@ -154,7 +154,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 13,
     kind: 'additive',
     ref: '#504',
-    readerBranch: 'apps/harness/src/resume-guards.ts:162',
+    readerBranch: 'apps/harness/src/resume-guards.ts:164',
   },
   { from: 13, to: 14, kind: 'additive', ref: '#528' },
   { from: 14, to: 15, kind: 'additive', ref: '#433' },
