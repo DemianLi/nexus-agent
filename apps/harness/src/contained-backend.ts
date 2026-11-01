@@ -53,7 +53,7 @@
  *
  * 讀得到內容的六個入口——`read`、`readRaw`、`ls`、`grep`／`glob` 的起點、`downloadFiles`——讀之前都 canonicalize，
  * 落在根外就拒，碼同樣是 `FS_SANDBOX_DENIED`。擋的是工作區裡往外指的符號連結：連結指向 harness home 或 `.env` 時，
- * 經它讀得到 key。`grep`／`glob` 從根往下搜時 rg 本來就不跟樹內的連結，所以只看起點。判法與例外見 `readDenial`。
+ * 經它讀得到 key。`grep`／`glob` 從根往下搜時 rg 本來就不跟樹內的連結，所以只看起點，根內的連結也搜不到（#2193）。判法與例外見 `readDenial`。
  * 讀能看到什麼的其餘策略仍歸 `permissions`。
  *
  * ## 形狀照 dsh 的 `fs-sandbox`
@@ -517,6 +517,15 @@ const READ_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
   'ENAMETOOLONG',
 ]);
 
+/** 讀取面的圍堵擋的入口，出現在拒絕訊息裡。 */
+type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | RipgrepTool;
+
+/** 讀取面的圍堵判完的結果：拒絕訊息，或比過根的實際位置。 */
+interface ReadScope {
+  readonly denial?: string;
+  readonly realTarget?: string;
+}
+
 /** 讀檔被取消（使用者停止、工具逾時）時回的錯誤字句。 */
 const READ_ABORTED = 'read aborted';
 
@@ -592,10 +601,12 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 讀檔（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：**自己讀，只讀一次**，不再先 `super.read` 整份、
    * 再讀一次原始位元組判二進位，也不再讓「先讀後改」為了記版本整份 `readRaw`。
    *
-   * 開檔之前先過讀取面的圍堵（{@link readDenial}）：經符號連結落在根外的回 `[containment]` 拒絕，碼 `FS_SANDBOX_DENIED`。
+   * 開檔之前先過讀取面的圍堵（{@link readScope}）：經符號連結落在根外的回 `[containment]` 拒絕，碼 `FS_SANDBOX_DENIED`。
+   * 根內的連結讀得到：開的是比過根的那個實際位置，只解析這一次；它之後被換成連結，`O_NOFOLLOW` 回 `ELOOP`
+   * （[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）。
    *
    * 其餘路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
-   * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔（符號連結是 `ELOOP`），其餘例外回 `Error reading file '…': …`。
+   * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔，其餘例外回 `Error reading file '…': …`。
    * 判二進位照 dsh（`fsio.ts` 的 `readWholeText`／`streamWholeText`）：前 {@link BINARY_SAMPLE_BYTES} 位元組有 NUL 是
    * `binary file`，fatal 解碼失敗是 `invalid UTF-8 text`；**看內容，不看副檔名**（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。
    *
@@ -620,14 +631,15 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     const signal = currentToolCallSignal();
     try {
       const resolved = this.resolveVirtual(filePath);
-      const refused = await this.readDenial(filePath, 'read');
-      if (refused !== undefined) return denied({ error: refused });
+      const scope = await this.readScope(filePath, 'read');
+      if (scope.denial !== undefined) return denied({ error: scope.denial });
       if (signal?.aborted === true) return { error: READ_ABORTED };
-      if (!(await stat(resolved)).isFile()) {
+      const target = scope.realTarget ?? resolved;
+      if (!(await stat(target)).isFile()) {
         noteFsError(FS_NOT_REGULAR_FILE);
         return { error: `File '${filePath}' not found` };
       }
-      const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         return await this.readOpened(handle, filePath, offset, limit, signal);
       } finally {
@@ -742,8 +754,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * 寫與改前比對用的版本，只做 `lstat`、不讀內容（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。token 跟 {@link read}
-   * 回報的同一種（{@link statVersion}）。路徑同 {@link read}：基座的 `resolvePath`；不是一般檔（含最後一節是符號連結，`read` 開檔是
-   * `O_NOFOLLOW`）回不存在。`lstat` 的錯原樣拋，observation 收成不存在，同它對 `readRaw` 拋錯的處理。
+   * 回報的同一種（{@link statVersion}）。路徑是基座的 `resolvePath`，不解連結；不是一般檔（含最後一節是符號連結）回不存在。`lstat` 的錯原樣拋，observation 收成不存在，同它對 `readRaw` 拋錯的處理。
    *
    * @param filePath - 虛擬路徑。
    */
@@ -1507,7 +1518,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *   的，原樣交給基座或自己的讀法，錯誤字句是下游自己的——開檔走同一串路徑，會撞上同一個錯。其餘（`EMFILE`、`EIO` 這類暫時性的錯）
    *   拒，措辭同 {@link verdict} 的「路徑解析失敗」：這一刻判不了，下一刻開檔卻可能成功，就經連結讀出去了。
    *
-   * 最後一段是指向根外的檔案連結也在這裡被拒，到不了開檔那一步；指向根內的檔案連結在開檔時是 `ELOOP`（`O_NOFOLLOW`）。
+   * 最後一段是指向根外的檔案連結也在這裡被拒，到不了開檔那一步。
    * 殘留的 TOCTOU（檢查之後、開檔之前祖先被換成連結）跟寫入面同一個取捨，見檔頭。
    *
    * @param filePath - 模型給的虛擬路徑。
@@ -1516,15 +1527,25 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   private async readDenial(
     filePath: string,
-    operation: 'read' | 'readRaw' | 'ls' | 'downloadFiles' | RipgrepTool,
+    operation: ReadOperation,
   ): Promise<string | undefined> {
+    return (await this.readScope(filePath, operation)).denial;
+  }
+
+  /**
+   * {@link readDenial} 的判斷，連同比過根的那個實際位置一起回。解析交給下游的情況沒有 `realTarget`。
+   * `danger-full-access` 不比根，位置照樣解開，所以連結在這一格一律讀得到，往外的也是。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 出現在拒絕訊息裡的操作名。
+   */
+  private async readScope(filePath: string, operation: ReadOperation): Promise<ReadScope> {
     const mode = this.mode;
-    if (mode === 'danger-full-access') return undefined;
     let resolved: string;
     try {
       resolved = this.resolveVirtual(filePath);
     } catch {
-      return undefined;
+      return {};
     }
     let realRoot: string;
     let realTarget: string;
@@ -1533,11 +1554,14 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       realTarget = await canonicalize(resolved);
     } catch (error) {
       const code = (error as NodeJS.ErrnoException).code;
-      if (code !== undefined && READ_PASSTHROUGH_CODES.has(code)) return undefined;
-      return this.denial(mode, operation, filePath, `路徑解析失敗（${code ?? '未知'}）`);
+      if (mode === 'danger-full-access') return {};
+      if (code !== undefined && READ_PASSTHROUGH_CODES.has(code)) return {};
+      return {
+        denial: this.denial(mode, operation, filePath, `路徑解析失敗（${code ?? '未知'}）`),
+      };
     }
-    if (isWithin(realRoot, realTarget)) return undefined;
-    return this.denial(mode, operation, filePath, '經符號連結解析之後落在根之外');
+    if (mode === 'danger-full-access' || isWithin(realRoot, realTarget)) return { realTarget };
+    return { denial: this.denial(mode, operation, filePath, '經符號連結解析之後落在根之外') };
   }
 
   /**

@@ -7,7 +7,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
-import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
@@ -173,8 +173,9 @@ describe('驗收 2：一次 read_file 只讀一次檔', () => {
 
   // #1776：上面只 spy `readOpened`，在 `read` 開檔前多開一次檔（再 `readFile`）它一樣是 1 次。這裡數 `node:fs/promises` 的 `open` 與用路徑讀的 `readFile`。
   it('同一路徑只開一次檔（數 fs 的 open 與用路徑的 readFile，不是我們自己的方法）', async () => {
-    const file = join(root, 'once-open.txt');
-    await writeFile(file, 'a\nb\nc\n');
+    await writeFile(join(root, 'once-open.txt'), 'a\nb\nc\n');
+    // `read` 開的是解析過的實際位置；macOS 的暫存目錄本身經連結。
+    const file = await realpath(join(root, 'once-open.txt'));
     const before = openCountOf(file);
     const [result] = await run(backend, [read('/once-open.txt')]);
     expect(result?.text).toContain('(End of file - total 3 lines)');

@@ -236,7 +236,7 @@ describe('讀取面的圍堵', () => {
     }
   });
 
-  it('指向根內的目錄連結照常讀；指向根內的檔案連結是 ELOOP', async () => {
+  it('指向根內的目錄連結與檔案連結都照常讀', async () => {
     await mkdir(join(terrain.root, '實際位置'));
     await writeFile(join(terrain.root, '實際位置/a.md'), '根內的內容');
     await symlink(join(terrain.root, '實際位置'), join(terrain.root, '捷徑'));
@@ -245,7 +245,7 @@ describe('讀取面的圍堵', () => {
 
     expect(await backend.read('/捷徑/a.md')).toMatchObject({ content: '根內的內容' });
     expect((await backend.ls('/捷徑')).files?.map((f) => f.path)).toEqual(['/捷徑/a.md']);
-    expect((await backend.read('/a-link.md')).error).toContain('ELOOP');
+    expect(await backend.read('/a-link.md')).toMatchObject({ content: '根內的內容' });
   });
 
   it('根本身經連結進來的照常讀：比的是兩邊的實際位置', async () => {
