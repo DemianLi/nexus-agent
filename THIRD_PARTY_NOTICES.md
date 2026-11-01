@@ -93,6 +93,7 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`tailwindcss`](https://github.com/tailwindlabs/tailwindcss) | MIT |
 | [`tw-animate-css`](https://github.com/Wombosvideo/tw-animate-css) | MIT |
 | [`undici`](https://github.com/nodejs/undici) | MIT |
+| [`ws`](https://github.com/websockets/ws) | MIT |
 | [`yaml`](https://github.com/eemeli/yaml) | ISC |
 | [`zod`](https://github.com/colinhacks/zod) | MIT |
 
@@ -133,6 +134,7 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [`licenses/LGPL-
 | [`@types/react-dom`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/semver`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/spdx-expression-parse`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
+| [`@types/ws`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@vitejs/plugin-react`](https://github.com/vitejs/vite-plugin-react) | MIT |
 | [`ajv`](https://github.com/ajv-validator/ajv) | MIT |
 | [`axe-core`](https://github.com/dequelabs/axe-core) | MPL-2.0 |
