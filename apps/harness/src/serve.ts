@@ -172,6 +172,7 @@ import { downlinkPlugin } from './settings/downlink.js';
 import { startMemoryGauge } from './memory-gauge.js';
 import { loadOrCreateMetricsToken, METRICS_TOKEN_FILE } from './metrics-token.js';
 import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
+import { StorageProbe } from './storage-probe.js';
 import type { OpsEndpoints } from './ops-endpoints.js';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
 import {
@@ -1153,12 +1154,28 @@ async function startServer(
 
   // serve 自己的 `close()` 開始了沒：`/readyz` 在 server 關掉之前就要回 503（#1535）。
   let closing = false;
+  // 只列 serve 自己寫進去的地方（#2195）：`--session-log`、工具結果暫存根可以不在 home 底下，算在 home 這一區。
+  const storageProbe = new StorageProbe({
+    areas: {
+      home: [
+        resolveHarnessHome(env),
+        stashRoot,
+        ...(sessionLogDir === undefined ? [] : [sessionLogDir]),
+      ],
+      'thread-roots': [
+        threadRootsBase,
+        ...(sharedWorkspaceRoot === undefined ? [] : [sharedWorkspaceRoot]),
+      ],
+    },
+    warn,
+  });
   // 指標的計數與取樣（#1535）：只有打開才建（關著的時候不起事件圈取樣、不計數）。thread 數與上限抓取當下才現算。
   const opsMetrics = opsConfig.metrics.enabled
     ? new OpsMetrics(() => ({
         threads: handler.threadCount() - handler.closingCount(),
         threadsClosing: handler.closingCount(),
         maxThreads: threadCapacity.maxThreads,
+        storageFull: storageProbe.full,
       }))
     : undefined;
   const handler = createWireHandler({
@@ -1631,9 +1648,16 @@ async function startServer(
   const opsEndpoints = createOpsEndpoints({
     isClosing: () => closing || handler.isClosing(),
     probes: opsConfig.probes.enabled,
+    storage: storageProbe,
     ...(opsMetrics !== undefined &&
       metricsToken !== undefined && {
-        metrics: { token: metricsToken, render: () => opsMetrics.render() },
+        metrics: {
+          token: metricsToken,
+          render: async () => {
+            await storageProbe.refresh();
+            return opsMetrics.render();
+          },
+        },
       }),
   });
 

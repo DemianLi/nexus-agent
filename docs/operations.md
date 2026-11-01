@@ -1127,11 +1127,16 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1~002Fbg-1/ses
 | 路徑 | 預設 | 要登入嗎 | 回應 |
 | --- | --- | --- | --- |
 | `GET /livez` | 開 | 不用 | `200 ok`：handler 跑得到就回，不查任何狀態（回得了，就代表事件圈在轉）。 |
-| `GET /readyz` | 開 | 不用 | `200 ok`：在聽、收尾還沒開始。`503 closing`：收尾已經開始（serve 收到 SIGTERM／SIGINT 後第一件事就是立旗，**之後 listener 再照常在聽一小段時間窗**，這段時間內抓到的是 503，時間窗過了才關 listener，之後是連不上）。 |
+| `GET /readyz` | 開 | 不用 | `200 ok`：在聽、收尾還沒開始。`503 storage-full`：寫資料的地方滿了。`503 closing`：收尾已經開始（serve 收到 SIGTERM／SIGINT 後第一件事就是立旗，**之後 listener 再照常在聽一小段時間窗**，這段時間內抓到的是 503，時間窗過了才關 listener，之後是連不上）。 |
 | `GET /metrics` | **關** | `Authorization: Bearer <token>` | Prometheus 文字格式 0.0.4（`text/plain; version=0.0.4`）。 |
 
 - **三個路徑都先過信任圍欄**，跟 wire 同一道：`Host` 不是 loopback（`localhost`、`127.x.x.x`、`[::1]`）、`Sec-Fetch-Site: cross-site`、`Origin` 與 `Host` 不一致，一律 `403`。只收 `GET`／`HEAD`，其餘 `405`。
-- **探針免登入，本文只有狀態字**（`ok`／`closing`），不帶數字、版本或任何細節。同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽。
+- **探針免登入，本文只有狀態字**（`ok`／`closing`／`storage-full`），不帶數字、版本或任何細節。同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽。
+- **寫資料的地方滿了回 `503 storage-full`**（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)），`closing` 優先；釋放後回 200，不用重啟。查的目錄分兩區：`home`（harness home、`--session-log` 指到的目錄、工具結果暫存根）與 `thread-roots`（thread-roots 基底、`--workspace`）。thread 到上限是設計好的狀態，磁碟滿是壞了，所以只有後者算沒就緒。
+  - 判準是區塊或 inode 用完，看非特權可用的 `bavail`。`files` 回 0 的檔案系統（btrfs、部分 NFS）只看區塊。
+  - 最多每 5 秒查一次，舊的一次還沒回來不發新的；1 秒沒回來就沿用上一次的狀態並記一行 warn，探針不因此回 503。
+  - **配額滿（`EDQUOT`）看不到**：`statfs` 不知道配額，這時 `/readyz` 回 200，工具與輪次仍會回報空間用完。
+  - 使用者看到的字不講是哪一區（多人共用主機不帶路徑）。管理者看 `nexus_storage_full{area="home|thread-roots"}` 與日誌的 `[儲存]`、`[輪次]` 行。指標不受 `probes.enabled` 影響。
 - **thread 數到上限不算沒就緒。** 已經開著的 thread 照樣服務，而且同一個 home 只有一台 serve（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)），沒有別台可以分流；到上限要看指標（`nexus_threads` 對 `nexus_threads_max`），不看探針。
 - **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給外面的監控判斷這台能不能接新請求。經反向代理連進來今天不支援，要等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（見〈serve 綁的位址與前面那一層〉）。
 
@@ -1199,6 +1204,7 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 | `nexus_threads` | gauge | 行程裡的 thread 數（含建構中的，不含撤到一半的）。 |
 | `nexus_threads_closing` | gauge | 撤到一半、還佔著名額的 thread 數。 |
 | `nexus_threads_max` | gauge | thread 數上限（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）；`threads + closing` 到這個數就拒收新 thread。 |
+| `nexus_storage_full{area}` | gauge | `area` 是 `home` 或 `thread-roots`，這一區寫資料的地方滿了是 1（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)）。查法同 `/readyz`，不帶路徑。 |
 | `nexus_http_requests_total{surface,code_class}` | counter | 回完的請求數。`surface` 是 `wire`（`/threads`）、`web`（網頁與其他）、`ops`（這三個路徑）；`code_class` 是 `2xx`…`5xx`。 |
 | `nexus_turn_failures_total{code}` | counter | 失敗收場的回合數（含背景子代理），`code` 是失敗分類的碼，跟伺服器日誌 `[回合]` 那一行同一個。 |
 | `nexus_event_loop_delay_seconds{quantile="0.5\|0.99"}`、`nexus_event_loop_delay_max_seconds` | gauge | **上一次抓取以來**的事件圈延遲（`perf_hooks.monitorEventLoopDelay`，每次抓取後歸零）。事件圈被同步工作卡住時，`livez` 一樣會逾時，這個數字告訴你卡了多久。 |
@@ -2103,7 +2109,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   這種空回覆照同一份預算重打，預算用盡就是這一輪失敗、`turn/failed.error.code` 是 `EMPTY_RESPONSE`（使用者看到的是失敗訊息，不再是什麼都沒有）。
   **只有推理、沒有答案的回覆不重打**（沒有失敗訊息，網頁上只多一段折起來的思考過程）。
   不在清單裡的不重打，不管預設或自己寫的清單怎麼寫：401／403 `AUTH`、402／配額 `QUOTA`、400／413 `INVALID_REQUEST`、上下文溢出
-  `CONTEXT_WINDOW_EXCEEDED`、其他 4xx `HTTP_<狀態>`（404、408、410、418、422、425…，**依 dsh，不是量到的救回率**）、回覆巢狀太深、日誌收不下 `NESTING_TOO_DEEP`（見〈會話日誌〉）、解不開的回應 `UNKNOWN`。
+  `CONTEXT_WINDOW_EXCEEDED`、其他 4xx `HTTP_<狀態>`（404、408、410、418、422、425…，**依 dsh，不是量到的救回率**）、回覆巢狀太深、空間用完 `STORAGE_FULL`、日誌收不下 `NESTING_TOO_DEEP`（見〈會話日誌〉）、解不開的回應 `UNKNOWN`。
   把 `HTTP_422` 之類加進 `retryableCodes` 就會重打它。標題、摘要器與 eval 的呼叫不經過「空回覆算失敗」那一步（它們沒有「這一步沒有答案就失敗」的語意）。
   供應商給的 `retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動），**超過就直接放棄**、不重打；每次等待是 `initialDelayMs` 倍增、
   封頂 `maxDelayMs`，抖動之後再夾到上限。**`mode: always`（無限重試）拒收**：這是對 dsh 的登記偏離——一輪沒有盡頭、中段失敗每次重付整個回覆，
