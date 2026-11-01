@@ -1,11 +1,11 @@
 /**
- * 沒有專用碼的內部失敗，原因不上線（#2230）：每一條路都讓底下拋一個帶主機路徑的 Node fs 錯誤，
- * 回應只有固定訊息，原因在 `warn`。釘選在 `thread-organization-wire.test.ts`，讀圖要真的日誌，在 `attachment-image-checks-wire.test.ts`；改名這裡沒有接縫，沒有測試。
+ * 沒有專用碼的內部失敗，原因不上線（#2230）：每一條路都讓底下拋一個帶主機路徑的錯誤，
+ * 回應只有固定訊息，原因在 `warn`。釘選在 `thread-organization-wire.test.ts`，讀圖要真的日誌，在 `attachment-image-checks-wire.test.ts`。
  *
- * **零憑證、零外部連線**：底下全是替身，只量 `wire-handler.ts` 這一層。
+ * **零憑證、零外部連線**：除了列檔走真的 fs，底下都是替身，只量 `wire-handler.ts` 這一層。
  */
 
-import type { ProjectionUnit } from '@nexus/core';
+import type { ProjectionUnit, SessionLog } from '@nexus/core';
 import { createWireClient, TRAJECTORY_PROJECTION } from '@nexus/wire';
 import type { WireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
@@ -139,6 +139,24 @@ const ROUTES: readonly Route[] = [
     log: '[子代理] run bg-x：',
   },
   {
+    name: '改名寫不進日誌',
+    parts: {
+      agent: {
+        attachSessions: (sessions: { readonly root: SessionLog }) => {
+          const append = sessions.root.append.bind(sessions.root);
+          sessions.root.append = ((type: string, data: unknown) => {
+            if (type === 'session/title') throw fsError();
+            return append(type as never, data as never);
+          }) as SessionLog['append'];
+          return { detach: async () => undefined };
+        },
+      },
+    },
+    call: (client) => client.threadRename(THREAD, '新標題'),
+    message: '改名沒做成，原因記在 serve 的日誌',
+    log: `[thread] "${THREAD}" 改名沒做成：`,
+  },
+  {
     name: '分叉的來源',
     parts: { readStoredThread: refuse },
     call: (client) => client.threadFork(THREAD, 'm1'),
@@ -225,7 +243,7 @@ describe.each(ROUTES)('$name', (route) => {
     const { client, lines } = await rig(route.parts);
     const outcome = await route.call(client);
     expect(JSON.stringify(outcome)).not.toContain(SECRET);
-    // `subagent.send` 與 `thread.fork` 的 client 回原始封包，其餘回 `rejected`。
+    // `subagent.send` 與 `run.start` 的 client 回原始封包，其餘回 `rejected`。
     const { code, error, message } = outcome as Record<string, unknown>;
     expect(code ?? error).toBe('unknown_error');
     expect(message).toBe(route.message);

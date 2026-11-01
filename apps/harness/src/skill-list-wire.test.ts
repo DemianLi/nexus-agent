@@ -234,7 +234,7 @@ describe('紅燈 3：沒掛、掛了沒有、掃描不完整，三種分得出�
 });
 
 describe('清單本身拋錯', () => {
-  it('unknown_error，原因進日誌，不上線（#2230）', async () => {
+  it('unknown_error，原因不上線（#2230）', async () => {
     const skillCatalog: SkillCatalog = async () => {
       throw new Error('磁碟不見了');
     };

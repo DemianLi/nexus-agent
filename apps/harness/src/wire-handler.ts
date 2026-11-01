@@ -722,7 +722,7 @@ async function* requestBodyChunks(
 
 /**
  * 沒有專用碼的內部失敗：原因經 `warn` 進 serve 的日誌，回傳上線的固定訊息（[#2230](https://github.com/DemianLi/nexus-agent/issues/2230)，做法同 `threadOrError` 的 #2225）。
- * 這些原因多半是 Node 的 fs 錯誤，帶主機路徑，所以不逐類清洗。`what` 上線，web 會接在自己的前綴後面，也會在後面再接一句，所以不收句號。
+ * 這些原因多半是 Node 的 fs 錯誤，帶主機路徑，所以不逐類清洗。回傳值上線，web 會接在自己的前綴後面，所以不收句號。
  */
 function withheldReason(
   warn: ((message: string) => void) | undefined,
@@ -737,8 +737,7 @@ function withheldReason(
 
 /**
  * `skill.list` 的回應（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929）。組裝沒有清單、或清單說「沒有技能可列」回
- * `not_supported`（dsh 是 registry 不在的 `gateway/internal`，見 `skill-catalog-wire.ts`）；掃描本身拋了回 `unknown_error`
- * （dsh 的 `skill listing failed` 也是 `gateway/internal`，`skill-catalog.ts:88-90`），原因只進日誌。
+ * `not_supported`（見 `skill-catalog-wire.ts`）；掃描本身拋了回 `unknown_error`，原因只進日誌。
  */
 async function skillListResponse(
   catalog: SkillCatalog | undefined,
@@ -3426,6 +3425,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       result = await options.searchThreads(query, signal);
     } catch (error: unknown) {
+      // 這兩種的訊息接了原始錯誤，可能帶主機路徑；其餘種類的訊息是自己組的固定字句，照舊上線。
       if (
         !(error instanceof ThreadSearchError) ||
         error.kind === 'index-failed' ||
