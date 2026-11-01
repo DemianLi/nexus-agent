@@ -1773,7 +1773,7 @@ async function startServer(
   // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
   // serve 的那一刻就看得到，不必等第一個人開對話。
   for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
-  // 包不了 `--guard`（#2197）照舊直接起，起動講一次：這台主機上 serve 被硬殺時，不理 stdin 的 MCP 會留下來。
+  // 主機沒有 spawner（#2197）照舊直接起，起動講一次：這台主機上 serve 被硬殺時，不理 stdin 的 MCP 會留下來。
   const guardNotice = mcpGuardNotice();
   if (guardNotice !== undefined) warn(guardNotice);
   // 會話日誌的位元組額度講出來（#2115）：自動算的最晚在這裡算；起動披露之前沒有請求讀過日誌的話，「現在的 RSS」就是

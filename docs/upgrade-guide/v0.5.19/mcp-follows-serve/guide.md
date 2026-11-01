@@ -13,7 +13,7 @@ v0.5.19 沒宣告 `sandbox` 的 stdio MCP 由 serve 直接起。serve 被 `kill 
 
 受影響的：靠「serve 死了 server 還活著」做事的部署，例如 serve 崩潰後還要讓 server 把手上的工作做完。這類 server 現在會跟著被 SIGKILL，收不到 SIGTERM。自己 daemon 化（fork 之後父行程退出）的 server 不受影響。
 
-沒有 spawner 的主機（非 Linux、找不到執行檔）照舊直接起，serve 起動講一行 `[MCP] 這台主機沒有 spawner…`。孫行程（`npx xxx` 底下的 server）與 setuid／setgid 程式收不到，見 [`docs/operations.md`](../../../operations.md)〈孤兒行程〉。
+沒有 spawner 的主機（非 Linux、找不到執行檔）照舊直接起，serve 起動講一行 `[MCP] 這台主機沒有 spawner…`。`command` 開頭看不出是 ELF 或 `#!` 的（沒有 shebang 的腳本、讀不到檔頭）不包，照舊直接起。孫行程（`npx xxx` 底下的 server）與 setuid／setgid 程式收不到，見 [`docs/operations.md`](../../../operations.md)〈孤兒行程〉。
 
 ## 遷移
 

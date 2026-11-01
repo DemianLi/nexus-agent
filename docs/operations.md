@@ -150,7 +150,7 @@ connection:
     writable: [/var/lib/mcp-data]
 ```
 
-不宣告的 server 在 Linux 上經 spawner 的 `--guard` 起（[#2197](https://github.com/DemianLi/nexus-agent/issues/2197)）：不上沙箱，只讓它跟著 serve 走，serve 被 `kill -9` 也不留孤兒。pid、PATH、env、cwd、stdio、行程群組都跟直接起一樣。連線時找不到程式，報的錯也跟直接起一樣；連上之後程式才被移走，重連時看到的是 spawner 回 127 斷線。例外見〈孤兒行程〉。
+不宣告的 server 在 Linux 上經 spawner 的 `--guard` 起（[#2197](https://github.com/DemianLi/nexus-agent/issues/2197)）：不上沙箱，只讓它跟著 serve 走，serve 被 `kill -9` 也不留孤兒。pid、PATH、env、cwd、stdio、行程群組都跟直接起一樣。連線時找不到程式，或程式開頭看不出是 ELF 或 `#!`（含讀不到檔頭），就不包，照舊直接起，報的錯也跟直接起一樣；連上之後程式才被移走，重連時看到的是 spawner 回 127 斷線。例外見〈孤兒行程〉。
 
 - server 讀得到系統的目錄與檔、`command`、`cwd` 與 `readable`，讀寫與執行得到 `writable`，`/dev/null` 一律可寫，其他都被擋。**連不到網路**：seccomp 擋 `AF_INET`、`AF_INET6`、`AF_UNIX`、`AF_VSOCK`，要連外的 server 不能宣告。這是黑名單，serve 以 root 或帶 `CAP_NET_RAW` 跑時 `AF_PACKET` 開得起來，不要這樣跑。
 - `command` 之外的程式碼、依賴、直譯器（例如 shebang 指到的）要列進 `readable`，不在系統目錄底下的都一樣。
@@ -2564,7 +2564,8 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
 - **孤兒行程**：那個子行程是靠 stdin 收到 EOF 自己退出的。Linux 上有 spawner 時，stdio MCP 都掛著 `PR_SET_PDEATHSIG`，起它的行程一死就被 SIGKILL（[#2197](https://github.com/DemianLi/nexus-agent/issues/2197)）；底下這幾種沒有這層保護，不理 stdin EOF 的 MCP server 會留下來、不會自己結束，父行程通常變成 1（容器裡有 tini 這類 subreaper 的話是它）：
   - 非 Linux，或找不到 spawner（serve 起動講一行 `[MCP] 這台主機沒有 spawner…`，照舊直接起）；
   - 孫行程：`npx xxx` 這種，收到訊號的只有 `npx` 本身，底下的 server 不會跟著走；
-  - `command` 是 setuid／setgid 或帶 file capabilities 的程式：exec 時核心清掉 PDEATHSIG。
+  - `command` 是 setuid／setgid 或帶 file capabilities 的程式：exec 時核心清掉 PDEATHSIG；
+  - `command` 開頭看不出是 ELF 或 `#!`（沒有 shebang 的腳本、讀不到檔頭之類）：不包，照舊直接起，直接起才會退回 `/bin/sh`。
   真的 daemon 化（fork 之後父行程退出）的 server 不受影響，也不會被收：它本來就不綁 serve。
   找：`ps -axo pid,ppid,etime,command | awk '$2 == 1'`（subreaper 底下改比它的 pid），再對那一列 MCP 設定的 `command`；收：`kill <pid>`（不退再 `kill -9`）。
 - **輸出講的**：紀錄檔的完整路徑、第幾筆、操作者、改了哪些**欄位名**（不印值）、什麼時候生效——`新對話生效`，或

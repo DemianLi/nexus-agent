@@ -684,7 +684,7 @@ fn exec_confined(args: &[OsString]) -> ! {
 
 /// 單次模式：不上沙箱，只讓這個行程跟著呼叫端走，再 exec（#2197）。給沒宣告沙箱的 MCP：呼叫端被 SIGKILL 時沒有人收它，
 /// 不理 stdin EOF 的 server 會留成孤兒。pid 不變，呼叫端照舊用同一個 pid 送訊號。
-/// `<程式>` 走 `execvp`，PATH 與 argv[0] 跟呼叫端直接起一樣。不做 `setsid`、不關 fd：除了 PDEATHSIG 與 SIGPIPE 還原，行為跟直接起一樣。
+/// `<程式>` 走 `execvp`，PATH 與 argv[0] 跟呼叫端直接起一樣。不做 `setsid`、不關 fd：除了 PDEATHSIG、SIGPIPE 還原與 ENOEXEC 不退回 `/bin/sh`（呼叫端只包 ELF 與 `#!`），行為跟直接起一樣。
 /// exec 失敗照 shell 慣例回 127／126，其他失敗回 125。
 fn exec_guarded(args: &[OsString]) -> ! {
     let die = |detail: &str| -> ! {
