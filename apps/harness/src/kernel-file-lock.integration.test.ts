@@ -47,7 +47,9 @@ describe.skipIf(BINARY === undefined)('真的 spawner', () => {
     const holder = spawn(
       process.execPath,
       [
-        fileURLToPath(new URL('./kernel-file-lock-holder.fixture.mjs', import.meta.url)),
+        '--import',
+        'tsx',
+        fileURLToPath(new URL('./kernel-file-lock-holder.fixture.ts', import.meta.url)),
         BINARY as string,
         path,
       ],
