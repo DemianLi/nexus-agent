@@ -14,7 +14,7 @@ import { TOOL_STATUS_LABEL } from '@/components/tool/card';
 import { StepGroup } from '@/components/ui/tool-steps';
 import type { Step } from '@/components/ui/tool-steps';
 import { useFocusHandoff } from '@/hooks/use-focus-handoff';
-import { subagentDigestHead, subagentTurnView } from '@/lib/trace-view';
+import { cutByParentClock, subagentDigestHead, subagentTurnView } from '@/lib/trace-view';
 import type { SubagentCallView, SubagentTurnView } from '@/lib/trace-view';
 import type { TrajectoryPuller } from '@/lib/trajectory-pull';
 import {
@@ -180,8 +180,16 @@ function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
 /**
  * 派出子代理的那顆工具底下：那個子代理自己的呼叫結構（#1015 的驗收缺口）。推送的最新一輪直接畫；更早的輪與前景子代理
  * （整段只有一份摘要）展開時才向伺服器拉（`fetchTurns({ runId, seq })`）。
+ *
+ * `parentCutByClock`：派它的那一輪（含續接段）被時鐘切斷；只影響前景子代理的呼叫列，見 {@link cutByParentClock}。
  */
-export function SubagentCalls({ runId }: { runId: string }) {
+export function SubagentCalls({
+  runId,
+  parentCutByClock = false,
+}: {
+  runId: string;
+  parentCutByClock?: boolean;
+}) {
   const source = useContext(SubagentSourceContext);
   const child = source === undefined ? undefined : subagentTrajectoryOf(source.state, runId);
   const snapshots = source === undefined ? undefined : subagentSnapshotsOf(source.state, runId);
@@ -194,6 +202,8 @@ export function SubagentCalls({ runId }: { runId: string }) {
       for (const abort of live) abort.abort();
     };
   }, []);
+
+  const shownTurn = (turn: SubagentTurnView) => (parentCutByClock ? cutByParentClock(turn) : turn);
 
   // 拉完（#2009）：焦點在鈕上、鈕收掉了，就落在拉回來的第一輪的標題；這一區沒有輪就落在「重新載入」。
   const handoff = useFocusHandoff<number>();
@@ -284,7 +294,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
           return (
             <div key={`${digest.seq}:${shown.load}`} data-pulled-seq={digest.seq}>
               {shown.turns.map((turn) => (
-                <SubagentTurn key={turn.seq} turn={turn} />
+                <SubagentTurn key={turn.seq} turn={shownTurn(turn)} />
               ))}
               <PullControl
                 status={status}
@@ -320,7 +330,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
         );
       })}
       {child.turns.map((turn) => (
-        <SubagentTurn key={turn.seq} turn={subagentTurnView(turn, snapshots)} />
+        <SubagentTurn key={turn.seq} turn={shownTurn(subagentTurnView(turn, snapshots))} />
       ))}
     </div>
   );

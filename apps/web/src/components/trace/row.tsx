@@ -148,7 +148,10 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
           <ToolDetail row={row} names={names} />
           {row.subagentRunId !== undefined && (
             <SnapshotBlock testId="trace-subagent-block" title={SUBAGENT_CALLS_TITLE}>
-              <SubagentCalls runId={row.subagentRunId} />
+              <SubagentCalls
+                runId={row.subagentRunId}
+                parentCutByClock={row.parentCutByClock === true}
+              />
             </SnapshotBlock>
           )}
         </ExpandableLine>
