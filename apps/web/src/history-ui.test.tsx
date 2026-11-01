@@ -4,6 +4,7 @@ import {
   THREAD_HISTORY_TOO_DEEP,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
+  THREAD_ROOT_MISMATCH,
   THREAD_WRITER_HELD,
 } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -18,6 +19,7 @@ import {
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
+import { THREAD_ROOT_MISMATCH_TEXT } from '@/lib/thread-root-mismatch';
 import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 import { fakeDownlink } from '@/test/downlink';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
@@ -311,8 +313,9 @@ describe('畫面照日誌重播', () => {
   it.each([
     [THREAD_LOG_TOO_LARGE, THREAD_LOG_TOO_LARGE_TEXT],
     [THREAD_LOG_BUSY, THREAD_LOG_BUSY_TEXT],
+    [THREAD_ROOT_MISMATCH, THREAD_ROOT_MISMATCH_TEXT],
   ])(
-    '日誌超過額度（%s，#2203）：換成那一句，沒有「拿不回來」的前綴，也不接原文',
+    '伺服器給專用碼（%s，#2203、#2222）：換成那一句，沒有「拿不回來」的前綴，也不接原文',
     async (code, text) => {
       const { client } = fakeClient(async () => ({
         kind: 'rejected',

@@ -4,6 +4,7 @@ import {
   THREAD_HISTORY_TOO_DEEP,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
+  THREAD_ROOT_MISMATCH,
   THREAD_WRITER_HELD,
 } from '@nexus/wire';
 import { act, cleanup, renderHook } from '@testing-library/react';
@@ -13,6 +14,7 @@ import { useAcceptedTitles, useThreadManagement } from '@/hooks/use-thread-manag
 import type { Listing, ThreadDirectory } from '@/hooks/use-thread-directory';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
+import { THREAD_ROOT_MISMATCH_TEXT } from '@/lib/thread-root-mismatch';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 
@@ -288,10 +290,11 @@ describe('改名', () => {
   });
 });
 
-describe('日誌超過額度（#2203，冷會話改名經 `threadFor`）', () => {
+describe('日誌超過額度與開在別的 home（#2203、#2222，冷會話改名經 `threadFor`）', () => {
   it.each([
     [THREAD_LOG_TOO_LARGE, THREAD_LOG_TOO_LARGE_TEXT],
     [THREAD_LOG_BUSY, THREAD_LOG_BUSY_TEXT],
+    [THREAD_ROOT_MISMATCH, THREAD_ROOT_MISMATCH_TEXT],
   ])('%s：講給使用者看的那一句，不接 server 的原文', async (code, text) => {
     const client = {
       threadRename: vi.fn(async () => ({
