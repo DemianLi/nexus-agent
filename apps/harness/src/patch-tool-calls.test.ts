@@ -50,6 +50,60 @@ function history(): BaseMessage[] {
   ];
 }
 
+const call = (id: string | undefined) => ({ id, name: 'ls', args: {} });
+
+const edgeCases: Record<string, () => BaseMessage[]> = {
+  同一個呼叫多則結果: () => [
+    new AIMessage({ content: '', tool_calls: [call('a')] }),
+    new ToolMessage({ content: '一', tool_call_id: 'a', name: 'ls' }),
+    new HumanMessage('中間'),
+    new ToolMessage({ content: '二', tool_call_id: 'a', name: 'ls' }),
+  ],
+  重複的呼叫_id: () => [
+    new AIMessage({ content: '', tool_calls: [call('a')] }),
+    new ToolMessage({ content: '一', tool_call_id: 'a', name: 'ls' }),
+    new AIMessage({ content: '', tool_calls: [call('a')] }),
+  ],
+  結果只在呼叫之前: () => [
+    new ToolMessage({ content: '早到', tool_call_id: 'a', name: 'ls' }),
+    new AIMessage({ content: '', tool_calls: [call('a')] }),
+  ],
+  結果前後都有: () => [
+    new ToolMessage({ content: '早到', tool_call_id: 'a', name: 'ls' }),
+    new AIMessage({ content: '', tool_calls: [call('a')] }),
+    new ToolMessage({ content: '晚到', tool_call_id: 'a', name: 'ls' }),
+  ],
+  沒有結果的呼叫: () => [
+    new AIMessage({ content: '', tool_calls: [call('a'), call('b')] }),
+    new HumanMessage('繼續'),
+  ],
+  呼叫沒有_id: () => [new AIMessage({ content: '', tool_calls: [call(undefined)] })],
+};
+
+/** 用固定種子產生一串訊息：id 池很小，重複、早到、懸空、孤兒都會撞到。 */
+function randomHistory(seed: number): BaseMessage[] {
+  let state = seed;
+  const next = (limit: number) => {
+    state = (Math.imul(state, 1_664_525) + 1_013_904_223) >>> 0;
+    return Math.floor((state / 2 ** 32) * limit);
+  };
+  const id = () => (next(8) === 0 ? undefined : `id-${next(6)}`);
+  const messages: BaseMessage[] = [new HumanMessage('開始')];
+  for (let count = next(16); count >= 0; count -= 1) {
+    const kind = next(3);
+    if (kind === 0) messages.push(new HumanMessage('繼續'));
+    else if (kind === 1) {
+      const calls = Array.from({ length: next(3) + 1 }, () => call(id()));
+      messages.push(new AIMessage({ content: '', tool_calls: calls }));
+    } else {
+      messages.push(
+        new ToolMessage({ content: '結果', tool_call_id: `id-${next(6)}`, name: 'ls' }),
+      );
+    }
+  }
+  return messages;
+}
+
 async function run(
   middleware: ReturnType<typeof createPatchToolCallsMiddleware>,
   input: BaseMessage[],
@@ -108,5 +162,30 @@ describe('自有補懸空呼叫 middleware', () => {
     const own = await run(createPatchToolCallsMiddleware(), clean);
     const base = await run(createBasePatchToolCallsMiddleware() as never, clean);
     expect(own).toEqual(base);
+  });
+
+  it.each(Object.entries(edgeCases))('%s：與基座那顆相同', async (_name, build) => {
+    expect(await run(createPatchToolCallsMiddleware(), build())).toEqual(
+      await run(createBasePatchToolCallsMiddleware() as never, build()),
+    );
+  });
+
+  it('隨機訊息串：與基座那顆相同', async () => {
+    for (let seed = 1; seed <= 200; seed += 1) {
+      const own = await run(createPatchToolCallsMiddleware(), randomHistory(seed));
+      const base = await run(createBasePatchToolCallsMiddleware() as never, randomHistory(seed));
+      expect(own, `seed ${seed}`).toEqual(base);
+    }
+  });
+
+  it('十萬次工具呼叫的歷史不是平方複雜度', () => {
+    const messages: BaseMessage[] = [];
+    for (let index = 0; index < 100_000; index += 1) {
+      messages.push(
+        new AIMessage({ content: '', tool_calls: [call(`call-${index}`)] }),
+        new ToolMessage({ content: 'ok', tool_call_id: `call-${index}`, name: 'ls' }),
+      );
+    }
+    expect(patchDanglingToolCalls(messages).needsPatch).toBe(false);
   });
 });

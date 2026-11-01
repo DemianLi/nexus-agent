@@ -51,13 +51,18 @@ export function patchDanglingToolCalls(messages: readonly BaseMessage[]): {
 } {
   if (messages.length === 0) return { patchedMessages: [], needsPatch: false };
 
-  // 第一遍：收齊所有 AI 訊息的呼叫 id，才認得出孤兒結果。
+  // 第一遍：收齊所有 AI 訊息的呼叫 id，才認得出孤兒結果；同時記下每個 id 最後一則結果的位置，
+  // 第二遍查表就知道某個呼叫「之後」有沒有結果，歷史再長也是線性。
   const allToolCallIds = new Set<string>();
-  for (const msg of messages) {
+  const lastResultAt = new Map<string | undefined, number>();
+  for (let index = 0; index < messages.length; index += 1) {
+    const msg = messages[index] as BaseMessage;
     if (AIMessage.isInstance(msg) && msg.tool_calls != null) {
       for (const toolCall of msg.tool_calls) {
         if (toolCall.id) allToolCallIds.add(toolCall.id);
       }
+    } else if (ToolMessage.isInstance(msg)) {
+      lastResultAt.set(msg.tool_call_id, index);
     }
   }
 
@@ -77,10 +82,7 @@ export function patchDanglingToolCalls(messages: readonly BaseMessage[]): {
 
     if (AIMessage.isInstance(msg) && msg.tool_calls != null) {
       for (const toolCall of msg.tool_calls) {
-        const answered = messages
-          .slice(index + 1)
-          .some((later) => ToolMessage.isInstance(later) && later.tool_call_id === toolCall.id);
-        if (answered) continue;
+        if ((lastResultAt.get(toolCall.id) ?? -1) > index) continue;
         needsPatch = true;
         patchedMessages.push(
           new ToolMessage({
