@@ -29,6 +29,7 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -242,6 +243,43 @@ describe('盤點 :64 那一對：A 寫的檔，B 看不到；重啟之後 A 還�
     expect(await privateRoots(fx)).toEqual(before);
     const names = await readdir(join(base(fx), before[0]!));
     expect(names).toContain('r.csv');
+  }, 90000);
+});
+
+describe('崩潰留下的原子寫入暫存（#2198）', () => {
+  const STAGING = '.w.bin.7.0f8fad5b-d9cb-469f-a165-70867728950e.tmpdir';
+
+  async function plantOrphan(directory: string): Promise<string> {
+    const staging = join(directory, STAGING);
+    await mkdir(staging, { mode: 0o700 });
+    await writeFile(join(staging, 'w.bin.tmp'), 'HALF', 'utf8');
+    await utimes(staging, new Date(1_000_000), new Date(1_000_000));
+    return staging;
+  }
+
+  it('續接時背景清掉私有根裡的孤兒，使用者的檔留著', async () => {
+    const fx = await fixture();
+    await turn(await start(fx, WRITE), 'a');
+    const [name] = await privateRoots(fx);
+    const staging = await plantOrphan(join(base(fx), name!));
+    await turn(await start(fx, PROBE), 'a');
+    await running?.close();
+    running = undefined;
+    await expect(stat(staging)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(join(base(fx), name!))).toContain('r.csv');
+  }, 90000);
+
+  it('舊 thread 的可寫根是 --workspace：不掃', async () => {
+    const fx = await fixture();
+    await turn(await start(fx, WRITE), 'a');
+    await rewriteHeader(fx.home, 'a', (header) => {
+      header['workspaceRoot'] = fx.shared;
+    });
+    const staging = await plantOrphan(fx.shared);
+    await turn(await start(fx, PROBE), 'a');
+    await running?.close();
+    running = undefined;
+    expect((await stat(staging)).isDirectory()).toBe(true);
   }, 90000);
 });
 
