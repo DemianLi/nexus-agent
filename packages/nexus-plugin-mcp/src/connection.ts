@@ -82,7 +82,12 @@ export async function connectGeneration(
   }
   const instructions = instructionsOf(sdk?.getInstructions(), config);
   // 補在同一個物件上：`onclose` 通報的是建的當下那一個。
-  return Object.assign(generation, { listed: { tools, instructions } });
+  return Object.assign(generation, {
+    listed: { tools, instructions },
+    ...(config.connection.transport === 'stdio' && {
+      livenessTimeoutMs: config.livenessTimeoutMs,
+    }),
+  });
 }
 
 /** {@link connectGeneration} 連成的一代。 */
@@ -158,6 +163,41 @@ function rejectTaskRequired(tool: StructuredTool): void {
     );
 }
 
+/**
+ * 一個呼叫逾時或被停止之後，在背景探一次這一代還活不活著（[#2194](https://github.com/DemianLi/nexus-agent/issues/2194)），不擋那個呼叫回去。
+ * 探的是 `tools/list`：新協議（`2026-07-28`）拿掉了 `ping`，SDK 當場拒絕、根本不送，而每台 server 都要回 `tools/list`。
+ * 只有探活本身逾時才算卡死，交給 `stalled` 收掉重連；任何回應都算活著，錯誤回應也是（代表有人在讀）。連線掉了的 reject 由
+ * `onclose` 那條管。同一代一次只探一個：卡死時不往讀不動的 stdin 再塞。只探 stdio：HTTP 沒有子行程可收，重連救不了對端。
+ */
+export function probeLiveness(generation: Generation, stalled: () => void): void {
+  const { sdk, livenessTimeoutMs: timeout } = generation;
+  if (sdk === undefined || timeout === undefined || generation.probing === true) return;
+  generation.probing = true;
+  sdk.listTools(undefined, { timeout, cacheMode: 'refresh' }).then(
+    () => {
+      generation.probing = false;
+    },
+    (error: unknown) => {
+      generation.probing = false;
+      if (isRequestTimeout(error)) stalled();
+    },
+  );
+}
+
+/** 請求是逾時或被中止放棄的：SDK 兩者都拋 `REQUEST_TIMEOUT`，經 LangChain 的訊號來的是 `TimeoutError`。沿 `cause` 往下找。 */
+export function isRequestTimeout(error: unknown): boolean {
+  for (let current = error, depth = 0; current !== undefined && depth < 5; depth += 1) {
+    const { code, name, cause } = (current ?? {}) as {
+      code?: unknown;
+      name?: unknown;
+      cause?: unknown;
+    };
+    if (code === 'REQUEST_TIMEOUT' || name === 'TimeoutError') return true;
+    current = cause;
+  }
+  return false;
+}
+
 /** SDK client 上，這個檔會用到的那幾個方法；結構型別，不直接依賴 `@modelcontextprotocol/client`。 */
 export interface SdkClient {
   onclose?: () => void;
@@ -204,6 +244,10 @@ export interface Generation {
   readonly closed: Promise<void>;
   /** 監督者掛上的「這一代斷了」通報。 */
   onDown?: () => void;
+  /** 探活等多久（毫秒）；只有 stdio 的一代有，見 {@link probeLiveness}。 */
+  readonly livenessTimeoutMs?: number;
+  /** 這一代有一次探活還沒落定。 */
+  probing?: boolean;
   /**
    * {@link connectGeneration} 建的一代才有（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）：這一代 `tools/list` 列出的
    * adapter 工具物件（已經過 {@link throwOnToolError}、名字仍是 raw name）與帶出處標頭的指引。池的每份組裝照它們建自己的委派物件，

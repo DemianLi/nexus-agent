@@ -64,6 +64,21 @@ export interface ProtocolInfo {
 
 /** 把這一組工具掛到一台新協議的 server 上。 */
 export function registerModernTools(server: McpServer): void {
+  // 同 `fixture-tools.ts` 的 `hang`、`spin`（#2194）。
+  if (process.env['FIXTURE_STALL_TOOLS'] === '1') {
+    server.registerTool(
+      'hang',
+      { description: '永遠不回。', inputSchema: {} },
+      () => new Promise<never>(() => {}),
+    );
+    server.registerTool('spin', { description: '回完之後卡死。', inputSchema: {} }, () => {
+      setTimeout(() => {
+        for (;;);
+      }, 20);
+      return { content: [{ type: 'text' as const, text: 'spinning' }] };
+    });
+  }
+
   server.registerTool(
     'fetch_release_note',
     {

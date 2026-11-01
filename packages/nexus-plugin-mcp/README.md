@@ -51,6 +51,7 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `connection.url`       | http      | 是   | server 網址                                                                                |
 | `connection.headers`   | http      | 否   | 額外標頭（授權用）；值可以寫 `{ credential: <名字>, prefix?: <前綴> }`（見憑證）           |
 | `toolCallTimeoutMs`    | 兩者      | 否   | 一次 `tools/call` 的逾時，預設 60000                                                       |
+| `livenessTimeoutMs`    | stdio     | 否   | 呼叫逾時或被停止之後等探活回應多久，預設 15000，上限 2147483647；沒回應就收掉重連（見行為） |
 | `failOnStartupError`   | 兩者      | 否   | 掛上那一刻套不上沙箱、連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
 | `maxInstructionBytes`  | 兩者      | 否   | server 指引**連同出處標頭**的 UTF-8 位元組上限，預設 32768；超過算連線失敗（同上，不截斷） |
 | `approval`             | 兩者      | 否   | 哪些工具要先讓人核准，預設 `{ default: ask }`：整台都問（見核准）                          |
@@ -95,6 +96,11 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   照舊各自註冊工具（各自的工具物件與核准閘門），呼叫都委派給池裡那一條連線；對話撤掉不關連線，`serve` 收掉才關。池的鍵是整份
   設定（`approval` 除外，它只管閘門）加實際的 elicitation 旗標：改了那一列的設定，新對話連到新的一份，開著的照舊用舊的，舊的一份
   **留到 `serve` 重啟**（不數使用者、不回收），所以重啟之前出現過幾種設定，最多就有幾個子行程。CLI 不給池，照舊每次組裝自己連。
+- **卡死的 stdio server 會被收掉重連**（[#2194](https://github.com/DemianLi/nexus-agent/issues/2194)）：呼叫逾時或被停止本身不算斷線，
+  工具永遠不回的 server 還活著，同一條連線上別的呼叫照常。呼叫被放棄之後在背景送一次 `tools/list` 探活（新協議沒有 `ping`），等 `livenessTimeoutMs`：有回應（錯誤
+  回應也算）就什麼都不做；沒回應就判定卡死，收掉子行程、走下面的重連。收掉時進行中的呼叫回 `Connection closed`，不重送（工具不一定
+  能重跑）；重連期間的呼叫當場回 `server is disconnected`。一次只處理一個請求的 server 跑長呼叫時同樣回不了探活，會被當成卡死，
+  把 `livenessTimeoutMs` 調到比最長的呼叫還久。只有 stdio 探活：HTTP 沒有子行程可收。
 - **連不上照樣掛上，照 dsh**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
   連不上、列不出、註冊撞名，任何一件發生時：已經註冊的工具撤掉、連線收掉、這一列照樣掛上但
   **這台 server 一個工具都沒有**，並經 `registry.logger` 交出一則警告。出貨的啟動程式把它印在

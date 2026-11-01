@@ -50,6 +50,21 @@ export const STRUCTURED_ROW = { id: 1, label: 'row', note: '結構化資料的�
 
 /** 把這一組工具掛到一台舊協議的 server 上。 */
 export function registerFixtureTools(server: McpServer): void {
+  // 卡死的兩種樣子（#2194）：`hang` 永遠不回，事件迴圈還在跑；`spin` 回完之後事件迴圈空轉，什麼都收不到。
+  if (process.env['FIXTURE_STALL_TOOLS'] === '1') {
+    server.registerTool(
+      'hang',
+      { description: '永遠不回。', inputSchema: {} },
+      () => new Promise<never>(() => {}),
+    );
+    server.registerTool('spin', { description: '回完之後卡死。', inputSchema: {} }, () => {
+      setTimeout(() => {
+        for (;;);
+      }, 20);
+      return { content: [{ type: 'text', text: 'spinning' }] };
+    });
+  }
+
   server.registerTool(
     'fetch_release_note',
     {

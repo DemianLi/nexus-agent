@@ -183,6 +183,16 @@ export class Supervisor<G> {
     this.attempt = this.retire(generation);
   }
 
+  /**
+   * 通報某一代卡死了：transport 還開著，但 server 不回應。記一句，其餘同 {@link down}，所以關掉時進行中的呼叫會收到連線關閉。
+   * @param generation - 探活沒有回應的那一代。
+   */
+  stalled(generation: G): void {
+    if (this.disposed || this.generation !== generation) return;
+    this.hooks.report(`${this.hooks.label}: server stopped responding; restarting it`);
+    this.down(generation);
+  }
+
   /** 先確認掉線的那一代真的關掉，才排重連；確認不到就停下（照 dsh `settleFailedGeneration`，`connection.ts:187-197`）。 */
   private async retire(generation: G): Promise<void> {
     const confirmed = await settlesWithin(this.closeAndWait(generation));

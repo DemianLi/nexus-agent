@@ -32,7 +32,7 @@ import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
-import { attemptsOn, clientOptions } from './connection.js';
+import { attemptsOn, clientOptions, isRequestTimeout, probeLiveness } from './connection.js';
 import {
   envValueSchema,
   headerValueSchema,
@@ -64,6 +64,12 @@ export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768;
 
 /** 一次 `tools/call` 的預設逾時，照 dsh 的 `toolCallTimeoutMs`。 */
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000;
+
+/** 呼叫被放棄之後等探活回應的預設窗口，見 {@link McpConfig.livenessTimeoutMs}。 */
+export const DEFAULT_LIVENESS_TIMEOUT_MS = 15_000;
+
+/** {@link McpConfig.livenessTimeoutMs} 的上限：SDK 直接交給 `setTimeout`，超過就溢位成約 1 毫秒，呼叫一逾時就判定卡死。 */
+export const MAX_LIVENESS_TIMEOUT_MS = 2_147_483_647;
 
 /** 宿主給的 host 服務：把宣告了 `sandbox` 的 stdio 設定換成包過的 command 與 args。不能套就拋。 */
 export const MCP_SANDBOX_SERVICE = 'mcpSandbox';
@@ -164,6 +170,16 @@ export const mcpConfigSchema = z.strictObject({
   connection: mcpConnectionSchema,
   /** 一次 `tools/call` 的逾時。省略即 {@link DEFAULT_TOOL_CALL_TIMEOUT_MS}。 */
   toolCallTimeoutMs: z.number().int().positive().default(DEFAULT_TOOL_CALL_TIMEOUT_MS),
+  /**
+   * stdio 的呼叫逾時或被停止之後，等探活回應多久（毫秒）；沒回應就判定 server 卡死，收掉重連。省略即
+   * {@link DEFAULT_LIVENESS_TIMEOUT_MS}。一次只處理一個請求的 server，把它調到比最長的呼叫還久。
+   */
+  livenessTimeoutMs: z
+    .number()
+    .int()
+    .positive()
+    .max(MAX_LIVENESS_TIMEOUT_MS)
+    .default(DEFAULT_LIVENESS_TIMEOUT_MS),
   /**
    * 掛上那一刻連不上、列不出工具、或工具註冊不上時，要不要讓這一列失敗。照 dsh 的 `failOnStartupError`，**預設
    * `false`**：那一列照樣掛上、這台伺服器沒有工具、交出一則警告。寫 `true` 就在 `apply` 裡拋——清單上的可少掛列
@@ -351,6 +367,11 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
                 lost: () => {
                   current.down(generation);
                 },
+                suspect: () => {
+                  probeLiveness(generation, () => {
+                    current.stalled(generation);
+                  });
+                },
               };
         }),
       );
@@ -491,6 +512,11 @@ async function applyShared(
             lost: () => {
               supervisor.down(generation);
             },
+            suspect: () => {
+              probeLiveness(generation, () => {
+                supervisor.stalled(generation);
+              });
+            },
           };
     }),
   );
@@ -541,6 +567,9 @@ export function isConnectionLost(error: unknown): boolean {
  * **這一輪的停止訊號在這裡併進交給 adapter 的 config**（[#1985](https://github.com/DemianLi/nexus-agent/issues/1985)，見
  * {@link callSignalOf}）。adapter 的工具不拿 `config.signal` 跟本體競速，所以放在這一層不會丟下呼叫。按了停止之後，呼叫的 reject
  * 換成 `AbortError`（{@link asTurnAbort}），斷線判斷在換之前做。
+ *
+ * **逾時不算斷線**：工具永遠不回的 server 還活著，同一條連線上別的呼叫照常。呼叫被放棄之後才探活，沒回應才收掉重連（#2194）；
+ * 收掉時進行中的呼叫回連線關閉、不重送，重連期間的呼叫當場回 `server is disconnected`。
  */
 function delegateTo(
   tool: StructuredTool,
@@ -566,6 +595,11 @@ function delegateTo(
       return await call(...withTurnSignal(args));
     } catch (error) {
       if (isConnectionLost(error)) supervisor.down(generation);
+      else if (isRequestTimeout(error)) {
+        probeLiveness(generation, () => {
+          supervisor.stalled(generation);
+        });
+      }
       throw asTurnAbort(error, args[2]);
     }
   };
@@ -605,13 +639,13 @@ function hideTools(
 
 /**
  * 一台 server 登記進 hub 的那一份。`acquire` 回目前這一代的 SDK client 與「這一代斷了」的通報；沒有（連不上、掉線等待重連、
- * 已放棄、已關閉）就是 dsh 那句 `server is disconnected`。
+ * 已放棄、已關閉）就是 dsh 那句 `server is disconnected`。逾時或被停止的請求要探活，同工具呼叫（{@link delegateTo}）。
  */
 function resourceSource(
   serverName: string,
   instructions: string,
   timeout: number,
-  acquire: () => { sdk: SdkClient; lost: () => void } | undefined,
+  acquire: () => { sdk: SdkClient; lost: () => void; suspect: () => void } | undefined,
 ): McpSource {
   return {
     serverName,
@@ -632,6 +666,7 @@ function resourceSource(
         }
       } catch (error) {
         if (isConnectionLost(error)) held.lost();
+        else if (isRequestTimeout(error)) held.suspect();
         throw error;
       }
     },
