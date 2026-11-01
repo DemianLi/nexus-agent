@@ -2326,8 +2326,8 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   計時方式借的是 **terminal retention**（條件全成立才開始算、任何一次忙碌就歸零、到 T 才收）。形狀逐點見 `src/wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
 
 **會話日誌額度（[#2115](https://github.com/DemianLi/nexus-agent/issues/2115)）**：一個行程同時讀進記憶體的會話日誌，合計有上限；超過的**在讀之前就拒收**，
-不讓一條大日誌把整個行程拖死。thread 數上限只數條數，擋不住「一條很大」。打開一條 thread、送出幾句的記憶體，最壞形狀（訊息很多的小行日誌）約是它日誌大小的 9 到 12 倍
-（RSS 峰值；V8 heap 已用約 8 倍，都扣掉起動時的底），見 [#2205](https://github.com/DemianLi/nexus-agent/issues/2205)。先撞到哪一道不一定：1g 容器裡 91.4 MiB 的日誌是 heap 用完（退出碼 133、`OOMKilled=false`），107.6 MiB 的是被 cgroup 殺掉
+不讓一條大日誌把整個行程拖死。thread 數上限只數條數，擋不住「一條很大」。打開一條 thread、送出幾句的記憶體，最壞形狀（訊息很多的小行日誌）貼近額度時約是它日誌大小的 9 到 12 倍
+（RSS 峰值；V8 heap 已用約 8 倍，都扣掉起動時的底；日誌比可用記憶體小很多時 RSS 倍率到 16 倍，但峰值離上限遠），見 [#2205](https://github.com/DemianLi/nexus-agent/issues/2205)。先撞到哪一道不一定：1g 容器裡 91.4 MiB 的日誌是 heap 用完（退出碼 133、`OOMKilled=false`），107.6 MiB 的是被 cgroup 殺掉
 （退出碼 137、`OOMKilled=true`），兩種都是整個行程死掉。
 
 - **額度怎麼算**：`serve` 起動完、還沒有 thread 時算一次（CLI 在第一次續接時算），`min((記憶體上限 − 當下 RSS) ÷ 13, (heap 上限 − 已用) ÷ 11)`。記憶體上限是 cgroup 的

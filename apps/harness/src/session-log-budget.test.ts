@@ -174,6 +174,8 @@ describe('出廠容量', () => {
       heapUsedBytes: 105 * MiB,
     });
     expect(rssBound).toBe(Math.floor((764 * MiB) / RSS_BYTES_PER_LOG_BYTE));
+    expect(rssBound).toBeGreaterThan(50 * MiB);
+    expect(rssBound).toBeLessThan(64.5 * MiB);
   });
 
   it('已經用超過上限算出 0，不是負數', () => {
