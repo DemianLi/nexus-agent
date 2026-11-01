@@ -10,9 +10,9 @@
 
 import { THREAD_ROOT_MISMATCH } from '@nexus/wire';
 
-/** 這條會話開在別的 home 或工作區。說對話沒有壞、要回原本那邊，指向管理者；不提路徑或 id。 */
+/** 這條會話開在別的 home 或工作區。說對話沒有壞、要回原本那邊，指向管理者；用的人不知道 home 與工作區這些詞，一律說「環境」，也不提路徑或 id。 */
 export const THREAD_ROOT_MISMATCH_TEXT =
-  '這條對話是在別的 home 或工作區開的，這裡打不開。對話沒有壞，要回原本的 home 或工作區才打得開，請聯絡管理者。';
+  '這條對話是在別的環境開的，這裡打不開。對話沒有壞，要回原本的環境才打得開，請聯絡管理者。';
 
 /** 錯誤碼是「可寫根接不上」就回 {@link THREAD_ROOT_MISMATCH_TEXT}，其他碼回 `undefined`。 */
 export function threadRootMismatchText(code: string | undefined): string | undefined {
