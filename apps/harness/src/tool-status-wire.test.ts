@@ -9,7 +9,7 @@
  * 兩層：
  *
  * - **產品路徑**：真的組裝、真的 pump、真的折疊器（`@nexus/wire` 的 `reduceConversation`），在
- *   `handler` 之後改結果的四個生產者各一條，外加成功的對照與子代理裡的一顆。這一層量得到「真的會對」，
+ *   `handler` 之後改結果的四個生產者各一條，外加成功的對照、子代理裡的一顆與沒開跑就被中止的一顆。這一層量得到「真的會對」，
  *   **量不到先後**——日誌判定與那顆 frame 誰先到 pump 是自然發生的那一種。
  * - **送達的兩種先後**：假的 agent 自己排，判定在 frame 之前、之後各一次。只有這一層分得出兩條分支。
  *
@@ -36,6 +36,13 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+
+/**
+ * web 判斷工具被中止時手寫的兩個碼（`apps/web/src/lib/tool-aborted.ts`、`question-view.ts`）。web 的產品碼不從 `@nexus/core` 取值，core 改字串編譯不會紅，
+ * 所以這裡刻意也寫字面值，不從 core 匯入。量得到的只有生產者那一側；web 改值時要同改這兩個常數。
+ */
+const WEB_TOOL_ABORTED_CODE = 'ABORTED';
+const WEB_ABORTED_BEFORE_DISPATCH_CODE = 'ABORTED_BEFORE_DISPATCH';
 
 type ToolEntry = Extract<ConversationState['entries'][number], { kind: 'tool' }>;
 
@@ -237,6 +244,71 @@ describe('產品路徑：handler 之後被改成錯誤的結果，web 畫成失�
         name: 'slow_write',
         status: 'failed',
         error: TOOL_ABORTED_TEXT,
+        errorCode: WEB_TOOL_ABORTED_CODE,
+      });
+    } finally {
+      release();
+      await run.close();
+    }
+  }, 20000);
+
+  it('排在後面的工具沒開跑就按停止：碼是 web 手寫的 ABORTED_BEFORE_DISPATCH', async () => {
+    let started = 0;
+    let queuedRan = false;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tools: PluginEntry = {
+      plugin: {
+        name: 'stop-probes',
+        apply(registry) {
+          registry.tools.register(
+            tool(
+              async () => {
+                started += 1;
+                await gate;
+                return '寫好了';
+              },
+              { name: 'slow_write', description: '慢慢寫。', schema: z.object({}) },
+            ),
+          );
+          registry.tools.register(
+            tool(
+              () => {
+                queuedRan = true;
+                return 'pong';
+              },
+              { name: 'queued_ping', description: '排在後面。', schema: z.object({}) },
+            ),
+          );
+        },
+      },
+    };
+    const run = await assemble(
+      [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'slow_write', args: {} },
+            { name: 'queued_ping', args: {} },
+          ],
+        },
+        { content: '不該走到這裡。' },
+      ],
+      { plugins: [tools] },
+    );
+    try {
+      const turn = run.pump.submit({ kind: 'message', text: '寫' });
+      await until(() => started === 1);
+      expect(run.pump.cancel()).toBe('run');
+      release();
+      await turn;
+      await until(() => run.frames.some(isRootDone));
+      expect(queuedRan).toBe(false);
+      expect(toolEntries(run.frames).find((entry) => entry.name === 'queued_ping')).toMatchObject({
+        status: 'failed',
+        errorCode: WEB_ABORTED_BEFORE_DISPATCH_CODE,
       });
     } finally {
       release();
