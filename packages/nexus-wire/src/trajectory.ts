@@ -136,7 +136,7 @@ export interface TrajectoryReply {
   readonly time: number;
   /** 日誌上那則訊息自己的 id；有些供應商不給。 */
   readonly messageId?: string;
-  /** 被人按停止切斷的半段。 */
+  /** 這一輪被中止時切斷的半段。 */
   readonly interrupted?: true;
   readonly textChars: number;
   /** 推理區塊的總字數。**日誌不記供應商給的是全文還是摘要版**，所以這裡只有字數、沒有判斷。 */
@@ -153,7 +153,8 @@ export interface TrajectoryCall {
   readonly endTime?: number;
   readonly durationMs?: number;
   /**
-   * 這次呼叫沒有正常回來的方式（`model/end.outcome`，#1022）：`error` ＝ 拋錯，`aborted` ＝ 使用者按了停止。
+   * 這次呼叫沒有正常回來的方式（`model/end.outcome`，#1022）：`error` ＝ 拋錯，`aborted` ＝ 被中止，原因見所屬那一輪的
+   * `TrajectoryDigest.endCause`；前景子代理的日誌沒有 `turn/end`，那裡查不到。
    * 沒有這一格 ＝ 正常回來，或舊日誌。失敗的呼叫若供應商報過用量，數字在 `usage` 裡。
    */
   readonly outcome?: 'error' | 'aborted';

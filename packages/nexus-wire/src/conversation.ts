@@ -191,7 +191,7 @@ export interface AiEntry {
   readonly attribution: Attribution;
   readonly error?: string;
   /**
-   * 講到一半被人按了停止（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**只標在那一刻
+   * 講到一半被中止（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**只標在那一刻
    * 還在吐字的那幾則上**：講完的那些不是被打斷的。伺服器那側把這半段存回對話，下一輪模型看得到
    * 它說到哪。
    */
@@ -220,7 +220,7 @@ export interface AiEntry {
    */
   readonly turnTail?: true;
   /**
-   * 這一輪是失敗收尾的（`failed`，不含人按停止）：跟 {@link AiEntry.turnTail} 一起標在收尾那則上
+   * 這一輪是失敗收尾的（`failed`，不含被中止）：跟 {@link AiEntry.turnTail} 一起標在收尾那則上
    * （[#1581](https://github.com/DemianLi/nexus-agent/issues/1581)）。web 的分支鈕對這種輪不給，同 server 的 `fork_unavailable`
    * 與 dsh `turn-tail.ts` 的 `branchUnavailable`。即時與歷史都在 {@link reduceConversation} 收尾那一步標。
    */
@@ -515,7 +515,7 @@ export function isQuestionPending(pending: PendingInput): pending is PendingQues
  * `awaiting-input` 是停在核准點——**不是結束**。基座在中斷時照樣發
  * `lifecycle completed / root`，所以那顆不能當「跑完了」用（決策 6 第 2 條）。
  *
- * `stopped` 是人按了停止、這一輪收了——**不是失敗**（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+ * `stopped` 是這一輪被中止、收了——**不是失敗**（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。原因見 {@link TurnStopCause}。
  * 它讀的是 root 那顆收尾 `lifecycle` 上的 `aborted`：那一格是 pump 補的分類，協定的 `AgentStatus`
  * 沒有「被中止」這一種（`interrupted` 是停下來等輸入），而被切斷的那一次基座發的是 `failed`。
  */
@@ -2255,7 +2255,7 @@ interface LifecycleData {
   readonly event: string;
   readonly graph_name?: string;
   readonly error?: string;
-  /** 人按了停止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
+  /** 這一輪被中止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
   readonly aborted?: boolean;
   /** 為什麼停，跟 `aborted` 一起補（#1624），見 {@link TurnStopCause}。 */
   readonly cause?: TurnStopCause;
@@ -2356,7 +2356,7 @@ function reduceLifecycle(
     return state;
   }
   if (data.aborted === true) {
-    // **人按了停止**（#276）。先於 `failed`／`completed` 判：被切斷的那一次基座發的是 `failed`，
+    // **被中止**（#276）。先於 `failed`／`completed` 判：被切斷的那一次基座發的是 `failed`，
     // 那不是失敗。停在核准點時的收回也走這裡，所以掛著的卡片一起收掉——伺服器那側已經收回了。
     // 還在吐字的那幾則標成被打斷，還沒有結果的工具卡收成失敗。原因（#1624）照帶來的記下，沒帶就不寫。
     const cause = data.cause === undefined ? {} : { stopCause: data.cause };
