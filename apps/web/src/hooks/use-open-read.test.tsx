@@ -10,6 +10,7 @@ import {
   THREAD_HISTORY_TOO_DEEP,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
+  THREAD_ROOT_MISMATCH,
   THREAD_WRITER_HELD,
   UplinkTransportError,
 } from '@nexus/wire';
@@ -40,6 +41,7 @@ describe('worthRereading（#1483）', () => {
     ['被別的寫入者握著（#2214）', { code: THREAD_WRITER_HELD }, true],
     ['這個組裝沒有', { code: 'not_supported' }, false],
     ['紀錄太大，等也沒用（#2203）', { code: THREAD_LOG_TOO_LARGE }, false],
+    ['開在別的 home，等也沒用（#2222）', { code: THREAD_ROOT_MISMATCH }, false],
     ['歷史太深、灌不回去（#1753）', { code: THREAD_HISTORY_TOO_DEEP }, false],
     ['沒有碼的拒絕', {}, false],
     [
