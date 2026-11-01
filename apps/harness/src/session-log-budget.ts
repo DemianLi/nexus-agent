@@ -2,9 +2,9 @@
  * **會話日誌的位元組額度**（[#2115](https://github.com/DemianLi/nexus-agent/issues/2115)）：一個行程同時讀進記憶體的會話日誌，
  * 合計不能超過一個上限。超過的**在讀之前**就拒收（{@link SessionLogTooLargeError}），不讓一條大日誌把整個行程拖死。
  *
- * 為什麼要這一道：續接與唯讀打開都把整份日誌讀成一個 Buffer、再解析成整個事件陣列，成本是日誌大小的好幾倍
- * （量測：#2115，摘要在 `docs/operations.md`〈會話日誌額度〉）。Buffer 在 V8 heap 外，cgroup 會先殺。#1493 的用量警告只講
- * 不擋，而且跟著取樣開關（出廠關著）；thread 條數上限（`maxThreads`）也不看大小。
+ * 為什麼要這一道：續接與唯讀打開都把整份日誌讀成一個 Buffer、再解析成整個事件陣列，第一句還要把整段歷史組成請求，成本是日誌
+ * 大小的十倍上下（量測：#2205，摘要在 `docs/operations.md`〈會話日誌額度〉）。先撞到的可能是 V8 heap，也可能是 cgroup，超過時
+ * 行程都是整個死掉。#1493 的用量警告只講不擋，而且跟著取樣開關（出廠關著）；thread 條數上限（`maxThreads`）也不看大小。
  *
  * **一本帳、兩種持有時間：**
  * - **續接**佔到那份會話的把手關掉為止（thread 撤掉、閒置逐出、關機）：載入之後事件還握在記憶體裡，讀完就還的話，
@@ -49,13 +49,17 @@ export interface SessionLogBudget {
 }
 
 /**
- * 每 1 位元組日誌，serve 打開它時行程記憶體（RSS）最多漲多少。量的是 serve 經 `threadFor` 打開一條大 thread
- * （1g／4g 容器、長行與小行兩種形狀，實測 5.2–6.4 倍，量測：#2115），取最壞的那一格再留餘裕。
- * 存檔層自己只要約 2.5 倍（#2075），多出來的是組裝 agent 那一段；唯讀路徑也用這個數，對它們偏保守。
+ * 每 1 位元組日誌，serve 打開它、送完兩句時行程記憶體（RSS）最多漲多少。量的是最壞的小行形狀（#2205）：1g／4g 容器實測
+ * 9.1–11.7 倍，取 13。1g 算出約 58 MiB，比實測活得下來的 64.5 MiB 低；額度內 55.9 MiB 那格 RSS 峰值 925 MiB。
+ * 唯讀路徑也用這個數，對它們偏保守。
  */
-export const RSS_BYTES_PER_LOG_BYTE = 7;
-/** 同 {@link RSS_BYTES_PER_LOG_BYTE}，量的是 V8 heap 已用的峰值（實測 3.7–4.6 倍）。 */
-export const HEAP_BYTES_PER_LOG_BYTE = 5;
+export const RSS_BYTES_PER_LOG_BYTE = 13;
+/**
+ * 同 {@link RSS_BYTES_PER_LOG_BYTE}，量的是 V8 heap 扣掉起動已用：活得下來與死掉的格子把活物件的倍率夾在 6.6–7.6，500 毫秒取樣的
+ * 已用峰值最高 7.9，取 11。照範本的 70% 配 heap，1g 與 4g 都是這一項先卡住：1g 約 56 MiB（64.5 MiB 那格 heap 已用到 86%），
+ * 4g 約 250 MiB（269 MiB 那格用到 76%、323 MiB 那格用到 90%）。
+ */
+export const HEAP_BYTES_PER_LOG_BYTE = 11;
 
 /** {@link defaultLogBudgetBytes} 讀的量。**只給測試換**。 */
 export interface MemoryReadings {

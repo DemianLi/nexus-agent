@@ -984,8 +984,9 @@ export class SessionFormatUnsupportedError extends Error {
    * @param version - 存檔上寫的版本，原樣。
    * @param message - 子類說明自己是怎麼發現的；省略即「版本比這一版新」。
    * @param location - 那份日誌在哪裡（後端知道的話）。**不接進訊息**：偏離 dsh（`errors.ts:111-121` 的訊息帶路徑），
-   *   理由 2——serve 是多人共用的內網主機，訊息會原樣進協定錯誤送到瀏覽器（`wire-handler.ts` 的 `threadOrError`），
-   *   路徑只放這一格與伺服器日誌（[#1558](https://github.com/DemianLi/nexus-agent/issues/1558) Q1 (a)）。
+   *   理由 2——serve 是多人共用的內網主機，`threadOrError` 把訊息記進 serve 的日誌、不上線
+   *   （[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)），路徑只放這一格，由 `serve.ts` 與 CLI 自己記
+   *   （[#1558](https://github.com/DemianLi/nexus-agent/issues/1558) Q1 (a)）。
    */
   constructor(
     readonly id: string,
@@ -1121,7 +1122,7 @@ export class SessionHandleClosedError extends Error {
  * - `busy`：這一份放得下，但別的會話正佔著那份額度，等它們收掉（thread 閒置逐出、關掉）再試。
  *
  * 有自己的型別，是讓列表分得出「太大」與「壞了」：太大的照樣列（不算進讀不了的），只是開不了；搜尋與引用候選跳過它，同壞檔。
- * 訊息不帶路徑（理由同 {@link SessionFormatUnsupportedError} 的 `location`：會原樣送到瀏覽器）。
+ * 訊息不帶路徑：它會原樣上線（`wire-handler.ts` 的 `threadOrError` 回 `thread_log_too_large`、`thread_log_busy`）。
  */
 export class SessionLogTooLargeError extends Error {
   override readonly name = 'SessionLogTooLargeError';

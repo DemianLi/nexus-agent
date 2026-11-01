@@ -155,25 +155,25 @@ describe('唯讀：讀完就還，等得到的排隊、等不到的拒收', () =
 
 describe('出廠容量', () => {
   it('剩下的記憶體與剩下的 heap 各除以自己的倍率，取小的', () => {
-    // #2115 的 1g 容器：cgroup 1024 MiB、serve 起來後 RSS 約 260、heap 上限 717、已用約 40。
+    // 1g 容器：cgroup 1024 MiB、serve 起來後 RSS 約 260、heap 上限 717、已用約 105。
     const oneGig = defaultLogBudgetBytes({
       memoryLimitBytes: 1024 * MiB,
       rssBytes: 260 * MiB,
       heapLimitBytes: 717 * MiB,
-      heapUsedBytes: 40 * MiB,
+      heapUsedBytes: 105 * MiB,
     });
-    expect(oneGig).toBe(Math.floor((764 * MiB) / RSS_BYTES_PER_LOG_BYTE));
-    // 101 MiB（1g 上 serve 實測活得下來）收，506 MiB（實測被殺）拒。
-    expect(oneGig).toBeGreaterThan(101 * MiB);
-    expect(oneGig).toBeLessThan(506 * MiB);
+    expect(oneGig).toBe(Math.floor((612 * MiB) / HEAP_BYTES_PER_LOG_BYTE));
+    // 小行形狀（#2205）：1g 上 91 MiB 實測 heap 爆掉，額度還要壓在活得下來的 64.5 MiB 下面。
+    expect(oneGig).toBeGreaterThan(50 * MiB);
+    expect(oneGig).toBeLessThan(64.5 * MiB);
 
-    const heapBound = defaultLogBudgetBytes({
-      memoryLimitBytes: 64 * 1024 * MiB,
-      rssBytes: 300 * MiB,
-      heapLimitBytes: 2048 * MiB,
-      heapUsedBytes: 48 * MiB,
+    const rssBound = defaultLogBudgetBytes({
+      memoryLimitBytes: 1024 * MiB,
+      rssBytes: 260 * MiB,
+      heapLimitBytes: 8192 * MiB,
+      heapUsedBytes: 105 * MiB,
     });
-    expect(heapBound).toBe(Math.floor((2000 * MiB) / HEAP_BYTES_PER_LOG_BYTE));
+    expect(rssBound).toBe(Math.floor((764 * MiB) / RSS_BYTES_PER_LOG_BYTE));
   });
 
   it('已經用超過上限算出 0，不是負數', () => {

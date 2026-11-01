@@ -17,12 +17,12 @@ v0.5.19 打開一條 thread（續接、讀歷史、列表、`@` 引用、內容�
 - 一份日誌單獨就超過額度，打開它回 `thread_log_too_large`，重試沒用，訊息是「會話 "…" 的日誌有 … MiB，超過這個行程能收的 … MiB，沒有讀它」與下一步。
   額度被其他開著的大 thread 佔滿時回 `thread_log_busy`，訊息改說要等它們關掉，關掉之後再試。兩種訊息都不帶「建不起來」。檔案不動、沒有壞。
 - 列表照樣列得出這條，只是沒有標題；`@` 引用候選與內容搜尋不列它。
-- 額度出廠在 `serve` 起動時（CLI 在第一次續接時）從記憶體上限算出來：`min((記憶體上限 − 起動時 RSS) ÷ 7, (heap 上限 − 已用) ÷ 5)`。記憶體上限是
-  容器或 systemd 的上限（`process.constrainedMemory()`），沒有就是主機總量；heap 上限跟著 `--max-old-space-size`。1g 容器約 110 MiB，
-  4g 約 540 MiB。`serve` 的啟動輸出多一行 `會話日誌額度：…`。要固定或關掉，寫 `thread-capacity` 那一列新的 `sessionLogBudgetMiB`（正整數是 MiB，`0` 是不限）；
+- 額度出廠在 `serve` 起動時（CLI 在第一次續接時）從記憶體上限算出來：`min((記憶體上限 − 起動時 RSS) ÷ 13, (heap 上限 − 已用) ÷ 11)`。記憶體上限是
+  容器或 systemd 的上限（`process.constrainedMemory()`），沒有就是主機總量；heap 上限跟著 `--max-old-space-size`。1g 容器約 56 MiB，
+  4g 約 250 MiB。`serve` 的啟動輸出多一行 `會話日誌額度：…`。要固定或關掉，寫 `thread-capacity` 那一列新的 `sessionLogBudgetMiB`（正整數是 MiB，`0` 是不限）；
   `serve` 與 CLI 讀同一格。
 
-受影響的：有很大的 thread 的主機。今天打得開、但日誌超過額度的 thread 升上來之後會被拒收：例如 4g 容器裡約 540 MiB 以上的（578 MiB 的小行日誌今天在 4g 開得起來，峰值約 3.4 GiB）。自己接 wire 的客戶端要認這兩個新碼。
+受影響的：有很大的 thread 的主機。今天打得開、但日誌超過額度的 thread 升上來之後會被拒收：例如 4g 容器裡約 250 MiB 以上的（323 MiB 的小行日誌今天在 4g 送得出第一句，但 heap 已用到上限的九成；430 MiB 的 heap 用完，整個 `serve` 死掉）。自己接 wire 的客戶端要認這兩個新碼。
 
 ## 遷移
 
