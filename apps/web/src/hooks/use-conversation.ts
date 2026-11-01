@@ -72,6 +72,7 @@ import {
   threadLogBusyText,
   threadLogTooLargeText,
 } from '@/lib/thread-log-budget';
+import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
 import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import {
   THREAD_PROTOCOL_ERROR_PAGE_TEXT,
@@ -216,8 +217,9 @@ export interface Conversation {
   /** 上一次開線失敗、或下行斷掉的原因。接回來就清掉。串流自己正常收掉時沒有原因可講，這一格不在。 */
   readonly connectionError?: string;
   /**
-   * 下行被伺服器明說不收、而且有一句給使用者看的話時，就是那一句；這時 {@link connectionError} 不在——server 的原文不往畫面送。
+   * 下行被伺服器明說不收時，就是給使用者看的那一句；這時 {@link connectionError} 不在——server 的原文不往畫面送。
    * thread 數滿了（[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)）是暫時的：重試照舊，接回來就清掉。
+   * 沒有專用文案的碼（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）也當暫時的，說同一句固定的話。
    * 子代理的會話（[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）是永久的：不排重試，{@link reconnecting} 不在。
    * 伺服器送來看不懂的資料（#1601 `N0758`）也是這一格，{@link connectionError} 同樣不在：停止自動重連，{@link reconnecting} 照樣在，
    * 等人按 {@link reconnectNow}。
@@ -750,7 +752,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             error instanceof WireRejectedError
               ? (threadCapacityText(error.code) ??
                 threadLogBusyText(error.code) ??
-                threadWriterHeldText(error.code))
+                threadWriterHeldText(error.code) ??
+                THREAD_REFUSED_TEXT)
               : undefined;
           lose(
             refused !== undefined
