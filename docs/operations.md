@@ -1132,7 +1132,7 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1~002Fbg-1/ses
 - **三個路徑都先過信任圍欄**，跟 wire 同一道：`Host` 不是 loopback（`localhost`、`127.x.x.x`、`[::1]`）、`Sec-Fetch-Site: cross-site`、`Origin` 與 `Host` 不一致，一律 `403`。只收 `GET`／`HEAD`，其餘 `405`。
 - **探針免登入，本文只有狀態字**（`ok`／`closing`），不帶數字、版本或任何細節。同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽。
 - **thread 數到上限不算沒就緒。** 已經開著的 thread 照樣服務，而且同一個 home 只有一台 serve（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)），沒有別台可以分流；到上限要看指標（`nexus_threads` 對 `nexus_threads_max`），不看探針。
-- **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給前面有反向代理的部署。
+- **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給外面的監控判斷這台能不能接新請求。經反向代理連進來今天不支援，要等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（見〈serve 綁的位址與前面那一層〉）。
 
 ### 打開指標
 
@@ -1226,7 +1226,7 @@ token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會�
 - **不壓什麼**：`text/event-stream`（SSE 下行）與帶 `Content-Range` 的回應。壓縮串流會把逐顆 frame 積在緩衝裡，等於關掉 SSE 的即時性，所以 SSE 一律照原樣送；帶 range 的回應壓了位元組範圍就對不上。探針與 `/metrics` 照同一套規則：因為門檻不生效，抓取端帶 `Accept-Encoding: gzip` 時連只有 `ok` 兩個字的探針本文也會被壓（實測壓成 22 位元組），抓取端不需要這個的話不要帶。
 - **三個旗標逐欄獨立驗**（同 dsh）：等級超出 0 到 9、門檻不是非負整數、`--compression` 不是 `none`／`gzip` 都是 usage error，在任何檔案寫入之前失敗；沒打開 gzip 時給等級或門檻照收但不生效。
 - **設定走旗標，不走 `cordis.yml` 的列**：listener 的設定（`--port`）本來就是旗標，將來的 `--host` 與 TLS（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）也一樣。起動時決定，改了要重啟。
-- **前面有反向代理的部署**：代理已經在壓的話不必再打開，兩層各壓一次只是白耗 CPU。
+- **今天只支援 SSH 轉 port**：經反向代理連進來要等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（見〈serve 綁的位址與前面那一層〉），所以 gzip 只有 `serve` 這一層會壓。
 - **偏離 dsh**：無。形狀照抄 dsh `packages/host/webserver/src/index.ts` 的 `createGzipMiddleware`（`:218-246`）與接在 listener 最外層的做法（`:443-457`），只是載體從 Cordis 的 `WebServer` 服務換成 `wire-server.ts`。
 
 ## 用 systemd 常駐
@@ -1633,7 +1633,7 @@ dsh 是在 `turn/end` 抵達的當下收回（`goal-round-driver/src/index.ts:35
 
 - **上限是每個主對話各 8，不是整台主機的。** 同時在跑的背景子代理到「會話數 × 8」這個量級；主機上開的 thread 越多，這個量越大。
   已經做完的不佔名額；滿了再派會被拒絕，模型收到說明上限的錯誤結果。
-- **主對話按停止不連帶停背景子代理。** 停止只作用在主對話當下那一輪；背景子代理各自跑完，要停得靠模型呼叫 `interrupt_agent`。
+- **主對話按停止不連帶停背景子代理。** 停止只作用在主對話當下那一輪，背景子代理各自跑完。要停某一個背景子代理有兩條路：使用者在委派卡展開後按「只停這個子代理」（wire 方法 `subagent.interrupt`），或模型呼叫 `interrupt_agent`。兩條都只停它當下那一輪，排著的輪次暫停到下一次有話送給它。
 - **模型用量會變多。** 每個子代理做完都會叫醒主對話多跑一輪；一次委派多個子代理時，
   主對話的輪數大約是「派出去那一輪 ＋ 每個子代理各一輪」。
 - **模型可能在子代理做完之前就先答了使用者**，之後才被結算通知叫醒補上結論。畫面上這一輪不是使用者說的話，不畫成使用者的泡泡。

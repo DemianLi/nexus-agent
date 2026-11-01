@@ -17,7 +17,7 @@ export const DELIVERABLES_PRESENTED = 'deliverables/presented';
 
 /** 一個宣告交付的檔案，模型給的原樣。 */
 export interface WirePresentedFile {
-  /** 相對路徑以工作區根為準。前端不解析它。 */
+  /** 相對路徑以工作區根為準。前端只拿它當標籤與型別線索，不當成主機路徑解析。 */
   readonly path: string;
   /** 給使用者的一句說明。沒給就沒有這個 key。 */
   readonly description?: string;
@@ -57,7 +57,7 @@ export interface DeliverablesPresentedPayload {
  * {@link DeliverableFileStat.path}：模型宣告時給的原字串，前端本來就拿它當標籤。
  */
 export interface DeliverableFileStat {
-  /** 模型宣告當下給的那個字串，原樣。前端不解析它（同 {@link WirePresentedFile.path}）。 */
+  /** 模型宣告當下給的那個字串，原樣。前端只拿它當標籤與型別線索，不當成主機路徑解析（同 {@link WirePresentedFile.path}）。 */
   readonly path: string;
   /** 這一次 stat 拍到的新鮮度標記，**不解析**，同 dsh 的 `version`。同值即同一份內容。 */
   readonly version: string;

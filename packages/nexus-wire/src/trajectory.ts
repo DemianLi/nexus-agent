@@ -13,7 +13,7 @@
  *
  * - 工具：`callId`（工具卡的鍵）。
  * - 回覆：`messageId`（日誌上那則訊息自己的 id）與 `seq`（歷史頁的 `history-<seq>`）。
- * - 輪：`seq` 是 `turn/start` 在 root 日誌上的位置。
+ * - 輪：`seq` 是 `turn/start` 在所屬那份日誌上的位置。主對話與子代理的日誌各算各的，兩邊的號可能相同。
  *
  * ## 窗口
  *
@@ -282,7 +282,7 @@ export interface TrajectoryElided {
 export interface TrajectoryDigest {
   /** 第幾輪（0 起，每顆 `turn/start` 一輪，含 `resume`）。 */
   readonly index: number;
-  /** `turn/start` 在 root 日誌上的位置。 */
+  /** `turn/start` 在所屬那份日誌上的位置。 */
   readonly seq: number;
   readonly time: number;
   readonly kind: TrajectoryTurnKind;
