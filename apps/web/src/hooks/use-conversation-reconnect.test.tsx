@@ -7,6 +7,7 @@ import {
   THREAD_HISTORY_TOO_DEEP,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
+  THREAD_ROOT_MISMATCH,
   THREAD_IS_SUBAGENT,
   THREAD_WRITER_HELD,
   WireProtocolError,
@@ -22,6 +23,7 @@ import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
 import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
+import { THREAD_ROOT_MISMATCH_TEXT } from '@/lib/thread-root-mismatch';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 
@@ -227,6 +229,24 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
     const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
     await tick();
     expect(result.current.refusal).toBe(THREAD_LOG_TOO_LARGE_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+
+    await tick(60_000);
+    act(() => result.current.reconnectNow());
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('開在別的 home 或工作區（#2222）：永久的，講那一句、不排重試，立刻重連與 online 也不再開', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_ROOT_MISMATCH, '會話 "t" 的檔案在另一個 harness home 底下'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_ROOT_MISMATCH_TEXT);
     expect(result.current.connectionError).toBeUndefined();
     expect(result.current.reconnecting).toBeUndefined();
 

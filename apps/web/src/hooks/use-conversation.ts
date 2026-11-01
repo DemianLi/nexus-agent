@@ -73,6 +73,7 @@ import {
   threadLogTooLargeText,
 } from '@/lib/thread-log-budget';
 import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
+import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
 import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import {
   THREAD_PROTOCOL_ERROR_PAGE_TEXT,
@@ -220,7 +221,7 @@ export interface Conversation {
    * 下行被伺服器明說不收時，就是給使用者看的那一句；這時 {@link connectionError} 不在——server 的原文不往畫面送。
    * thread 數滿了（[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)）是暫時的：重試照舊，接回來就清掉。
    * 沒有專用文案的碼（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）也當暫時的，說同一句固定的話。
-   * 子代理的會話（[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）是永久的：不排重試，{@link reconnecting} 不在。
+   * 子代理的會話（[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）、歷史太深、紀錄太大、開在別的 home 或工作區是永久的：不排重試，{@link reconnecting} 不在。
    * 伺服器送來看不懂的資料（#1601 `N0758`）也是這一格，{@link connectionError} 同樣不在：停止自動重連，{@link reconnecting} 照樣在，
    * 等人按 {@link reconnectNow}。
    */
@@ -737,12 +738,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             return;
           }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
-          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）。
+          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）、開在別的 home 或工作區（#2222）。
           const permanent =
             error instanceof WireRejectedError
               ? (threadSubagentText(error.code) ??
                 threadHistoryTooDeepText(error.code) ??
-                threadLogTooLargeText(error.code))
+                threadLogTooLargeText(error.code) ??
+                threadRootMismatchText(error.code))
               : undefined;
           if (permanent !== undefined) {
             refuse(permanent);
@@ -811,6 +813,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           serverClosingText(outcome.code) ??
           threadLogBudgetText(outcome.code) ??
           threadWriterHeldText(outcome.code) ??
+          threadRootMismatchText(outcome.code) ??
           outcome.message;
         setCommandError(message);
         return refuse(message);
@@ -964,6 +967,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
             threadHistoryTooDeepText(result.error) ??
             threadLogBudgetText(result.error) ??
             threadWriterHeldText(result.error) ??
+            threadRootMismatchText(result.error) ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
         };
