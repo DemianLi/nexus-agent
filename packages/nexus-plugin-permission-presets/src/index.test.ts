@@ -6,6 +6,7 @@
  * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core` 造日誌與跑參與者；`src/index.ts` 不行。
  */
 
+import { createAgentLoopProvider } from '@nexus/agent-loop/provider';
 import { createCommandsProvider } from '@nexus/commands/provider';
 import { createSessionRunner, SessionLog, SessionRegistry } from '@nexus/core';
 import type { FsService, SessionAddress } from '@nexus/core';
@@ -275,6 +276,7 @@ async function mountFor(
     commands: commands.Provider,
     projections: projections.Provider,
     'session-lookup': lookup.Provider,
+    'agent-loop': createAgentLoopProvider().Provider,
     'permission-presets': permissionPresets,
   });
   const create = (options: { id: string; name: string; config?: unknown }) =>
@@ -283,6 +285,7 @@ async function mountFor(
   await create({ id: 'commands', name: 'cordis:commands' });
   await create({ id: 'projections', name: 'cordis:projections' });
   await create({ id: 'session-lookup', name: 'cordis:session-lookup' });
+  await create({ id: 'agent-loop', name: 'cordis:agent-loop' });
   await create({ id: 'permission-presets-row', name: 'cordis:permission-presets', config });
   await root.loader.await();
   const service = root.get(permissionPresetsToken.name) as PermissionPresetsService | undefined;
@@ -338,6 +341,7 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
     let latestCommands = createCommandsProvider();
     let latestProjections = createProjectionsProvider();
     let latestLookup = createSessionLookupProvider(() => ({ kind: 'not-attached' }));
+    let latestLoop = createAgentLoopProvider();
     const failures = await checkConformance({
       row: 'permission-presets',
       module: permissionPresets,
@@ -362,11 +366,16 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
           latestLookup = createSessionLookupProvider(() => ({ kind: 'not-attached' }));
           return latestLookup.Provider;
         },
+        agentLoop: () => {
+          latestLoop = createAgentLoopProvider();
+          return latestLoop.Provider;
+        },
       },
       residue: () =>
         latestCommands.registrations() +
         latestProjections.registrations() +
-        latestLookup.registrations(),
+        latestLookup.registrations() +
+        latestLoop.preSteps().length,
     });
     expect(failures).toEqual([]);
   });
@@ -380,6 +389,7 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
       { token: 'commands', range: '^1.0.0' },
       { token: 'projections', range: '^1.0.0' },
       { token: 'sessionLookup', range: '^1.1.0' },
+      { token: 'agentLoop', range: '^1.0.0' },
     ]);
     expect(permissionPresets.name).toBe('permission-presets');
     expect('default' in permissionPresets).toBe(false);

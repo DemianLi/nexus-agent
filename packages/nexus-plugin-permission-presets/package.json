@@ -20,12 +20,14 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/agent-loop": "workspace:*",
     "@nexus/commands": "workspace:*",
     "@nexus/cordis": "workspace:*",
     "@nexus/cordis-plugin-loader": "workspace:*",
     "@nexus/core": "workspace:*",
     "@nexus/fs": "workspace:*",
     "@nexus/permission-presets": "workspace:*",
+    "@nexus/plugin-commands": "workspace:*",
     "@nexus/projections": "workspace:*",
     "@nexus/sdk": "workspace:*",
     "@nexus/session": "workspace:*",
@@ -39,6 +41,7 @@
     "zod": "^4.6.7"
   },
   "peerDependencies": {
+    "@nexus/agent-loop": "workspace:*",
     "@nexus/commands": "workspace:*",
     "@nexus/cordis": "workspace:*",
     "@nexus/fs": "workspace:*",

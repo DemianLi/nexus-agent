@@ -32,12 +32,7 @@
  *    的每個人都切得到，所以出廠只留兩組。CLI 跟著少一組屬理由 1：出貨層只有一份表，表達不出「serve 少、CLI 照舊」。部署方要全開就把整張表
  *    重寫一份加回（見 `presets.ts` 的 `DEFAULT_PRESETS`）；沒加回又用 `--sandbox danger-full-access` 起，新會話在起動當下失敗。
  * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn、起始值在宿主的組 thread 那一步算。**
- *    這四條偏離的理由、類別與撤除條件登記在 `@nexus/permission-presets` 的檔頭第 1 至 4 條與 `docs/plugin-contract.md`；
- *    該檔頭第 5 條是下面第 8 條（`/permission` 不對模型講一聲）。
- * 8. **切換核准政策時沒有對模型講一聲。** dsh 的 `user-approval` 在政策變動時用 `agent.inject` 排一則使用者訊息給下一步模型
- *    （`packages/interaction/user-approval/src/index.ts:184-187`，`687f282e`：「The approval policy changed from … to … (changed by the user).」）；
- *    我們的 `/permission` 一直沒有這一步（相容層就沒有，這張遷移不改行為）。
- *    類別：遷移卡不改行為（暫時）。**撤除條件**：之後的權限卡決定要不要補這則訊息（補了就是行為改變，要自己一張卡）。
+ *    這四條偏離的理由、類別與撤除條件登記在 `@nexus/permission-presets` 的檔頭第 1 至 4 條與 `docs/plugin-contract.md`。
  * 9. **續接時，日誌記的沙箱比表裡每一組都寬就收回預設組（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) 第 2 步）。**
  *    dsh 續接照日誌裡的值，表怎麼變都不動它；我們的 serve 多人共用一台主機，出廠拿掉全開（偏離 6）之後，升級前已經切到全開的會話若續接照舊，
  *    等於那一條 thread 永遠留著表裡不存在的全開。收的條件只有「比每一組都寬」（部署方加回全開不收；`read-only` 被刪掉後停在 `read-only` 的會話比
@@ -66,17 +61,18 @@
  * ## 形狀（#1491：第十四顆搬上 Cordis 樹的插件）
  *
  * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**。相依只有 `@nexus/sdk`、`@nexus/fs`（工作區根）、
- * `@nexus/commands`、`@nexus/projections`、`@nexus/session`（會話參與者）、`@nexus/permission-presets`（服務的定義）與 `@nexus/wire`（詞彙）：
+ * `@nexus/commands`、`@nexus/projections`、`@nexus/session`（會話參與者）、`@nexus/agent-loop`（`preStep`）、`@nexus/plugin-commands`（只取型別）、`@nexus/permission-presets`（服務的定義）與 `@nexus/wire`（詞彙）：
  * **沒有一行 import `@nexus/core`**（決議 §3-4 第 17 條；#1420 的 lint 規則擋它）。
  *
  * - **插件不碰控制器。** 以前 `apply` 從 host 服務抓兩顆控制器 `switchTo`；現在宿主組一條 thread 時呼叫 {@link PermissionPresetsService.start}
  *   （純函式）拿起始值，自己靜默切控制器。`/permission` 直接寫 root 日誌，控制器跟著日誌走。
- * - **提供一個服務、消費四個接縫。**
+ * - **提供一個服務、消費五個接縫。**
  * - 舊的 `NexusPlugin` 外殼（`createPermissionPresetsPlugin`）沒有搬成夾具：遷完之後全 repo 沒有任何呼叫端（`git grep -n "createPermissionPresetsPlugin"` 零筆），測試改走真的 `Loader` 與提供者，所以直接刪掉。
  *
  * @module
  */
 
+import { agentLoopToken } from '@nexus/agent-loop';
 import { commandsToken } from '@nexus/commands';
 import type { Context } from '@nexus/cordis';
 import { fsToken } from '@nexus/fs';
@@ -91,7 +87,7 @@ import type {
 import { projectionsToken } from '@nexus/projections';
 import { ContractService, defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { sessionLookupToken } from '@nexus/session';
-import type { SessionEvent } from '@nexus/session';
+import type { SessionEvent, SessionLog } from '@nexus/session';
 
 import { createPermissionsUnit, foldPermissionKnobs } from './fold.js';
 import {
@@ -104,6 +100,11 @@ import {
 } from './presets.js';
 import type { PermissionPresetsConfig, PresetTable } from './presets.js';
 import { assertPresetConfig, narrowingOf, startPresets } from './start.js';
+import {
+  createPolicyNoticeListener,
+  POLICY_NOTICE_LISTENER_NAME,
+  PolicyNoticeLedger,
+} from './policy-notice.js';
 
 export {
   applyPermissionEvent,
@@ -133,12 +134,13 @@ export type {
 /** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`、必掛判斷用）。 */
 export const name = 'permission-presets';
 
-/** 要的服務：fs（行程級的「有沒有圍堵」與逐條 thread 的可寫根）、命令、投影、會話查找（參與者接縫）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併。 */
+/** 要的服務：fs（行程級的「有沒有圍堵」與逐條 thread 的可寫根）、命令、投影、會話查找（參與者接縫）、agent-loop（切換政策的通知）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併。 */
 export const inject = injectOf(
   need(fsToken, '^2.0.0'),
   need(commandsToken, '^1.0.0'),
   need(projectionsToken, '^1.0.0'),
   need(sessionLookupToken, '^1.1.0'),
+  need(agentLoopToken, '^1.0.0'),
 );
 
 /** 設定的 schema，與 {@link manifest}.config 是同一個物件（一致性套件比對）。 */
@@ -154,6 +156,7 @@ export const manifest = defineManifest({
     { token: commandsToken.name, range: '^1.0.0' },
     { token: projectionsToken.name, range: '^1.0.0' },
     { token: sessionLookupToken.name, range: '^1.1.0' },
+    { token: agentLoopToken.name, range: '^1.0.0' },
   ],
   config: permissionPresetsConfigSchema,
   // 換程式碼要重啟行程；設定一改，下一條 thread 看到新的組合表，開著的不動（#1405、決議 §3-2 第 6 條）。
@@ -236,12 +239,25 @@ export function apply(ctx: Context, config: PermissionPresetsConfig): void {
   // 用 `new` 不用 `ctx.plugin(Class)`：不開子 fiber，歸屬就是這一列。建構子 `provide` 是 effect，列卸載時服務跟著撤。
   new PermissionPresetsServiceImpl(ctx, table, config.defaultPreset);
 
-  service(ctx, sessionLookupToken).join((subject) => {
+  const sessionLookup = service(ctx, sessionLookupToken);
+  const notices = new WeakMap<SessionLog, PolicyNoticeLedger>();
+  service(ctx, agentLoopToken).preStep(
+    POLICY_NOTICE_LISTENER_NAME,
+    createPolicyNoticeListener(
+      (found) => notices.get(found.log),
+      (invocation) => sessionLookup.forCall(invocation),
+    ),
+  );
+
+  sessionLookup.join((subject) => {
     // 這條 thread 沒有圍堵（#1775，落盤關掉的新 thread：可寫根是記憶體，`--workspace` 只以唯讀共用區掛上）：行程級的 `hasContainment()` 是真的，
     // 所以參與者裝上來了，但這條 thread 沒有 fence 可捆，兩顆旋鈕也不存在；往它的日誌釘 `permission/preset` 或收回只會留下一顆沒有意義的事件。
     // 查不到這條 thread 的把手（沒登記）時照舊往下走，不在這裡猜。子代理的日誌 id 不同，所以認 root 日誌的會話 id（就是 thread id）。
     if (fs.forThread(subject.rootLog.sessionId)?.hasWorkspace() === false) return undefined;
     if (subject.address.kind === 'root') {
+      const ledger = new PolicyNoticeLedger();
+      subject.observe((event) => ledger.advance(event));
+      notices.set(subject.log, ledger);
       // 釘起始組合（dsh `pinInitialPermission`）：日誌上沒有 `permission/preset` 才釘，續接與空轉的重接什麼都不寫。
       // 兩顆旋鈕的值讀這份日誌：approval-gate 與 sandbox-policy 的參與者排在前面，已經把起始值釘進來了（`approval/policy` → `sandbox/mode` →
       // `permission/preset` 的順序靠這一列在清單上的位置）。
