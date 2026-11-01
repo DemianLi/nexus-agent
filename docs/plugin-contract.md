@@ -288,9 +288,9 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 - **錯誤進的是提供者的 logger**，不是消費者的。要把它對回消費者那一列（啟動結算、後台插件頁），靠 `ContractError` 上的
   結構化欄位 `consumer`／`provider`／`service`／`provided`／`range`，不要解析訊息。
 - **範圍怎麼合併**（實測，`packages/nexus-sdk/src/contract.test.ts`，vendor rc.12 `01b39624`）：`check` 用
-  `Service.resolveIntercept`，插件自己的 `inject` 墊底、Loader 列的 `intercept` 疊在上面，同一個鍵列的贏（往嚴往鬆都蓋得掉）；
-  列的 `inject` 由 Loader 併進插件的 `inject`，寫範圍會照它檢查，只寫名字會蓋掉插件自己的範圍。rc.11 時權威是插件自己的
-  `inject`（上游 #206 改的，見 #1937）。nexus 的列不接受 `inject`／`intercept`（`entrySchema` 是 `strictObject`），所以產品路徑上
+  `Service.resolveIntercept`，插件自己的 `inject` 墊底、Loader 列的 `intercept` 疊在上面，列有寫 `range` 就以列為準（往嚴往鬆都蓋得掉）；
+  列的 `inject` 由 Loader 併進插件的 `inject`，寫範圍會照它檢查，只寫名字會蓋掉插件自己的範圍（上游 #206，定案見 #1827 C2）。
+  nexus 的列不接受 `inject`／`intercept`（`entrySchema` 是 `strictObject`），所以產品路徑上
   宿主仍然改不了插件的範圍。`manifest.consumes` 不是第三個地方：它跟 `inject`
   是同一份宣告的兩個面，一致性套件的 `export-form` 一格比對兩邊。
 - **宿主消費的服務，宿主自己檢查（#1456）。** 上面這道檢查只在**消費者的 fiber** 注入時跑；宿主從 root 讀服務**沒有 fiber**，
@@ -364,7 +364,7 @@ export default [...base, ...pluginLintConfig];
 
 | 規則 | 擋什麼 | 改用什麼 |
 | --- | --- | --- |
-| `ctx-root` | `ctx.root`（含 `ctx['root']`、`this.ctx.root`、`const { root } = ctx`），以及 rc.12 起的 `ctx[Context.root]`、`ctx[Symbol.for('cordis.root')]`（含 `this.ctx[…]`） | `inject` 宣告服務，`apply` 裡 `ctx.get(token)` |
+| `ctx-root` | `ctx.root`（含 `ctx['root']`、`this.ctx.root`、`const { root } = ctx`），以及 `ctx[Context.root]`、`ctx[Symbol.for('cordis.root')]`（含 `this.ctx[…]`） | `inject` 宣告服務，`apply` 裡 `ctx.get(token)` |
 | `ctx-registry` | `ctx.registry`（同上各種寫法） | 服務的 `register()`（內部包 `ctx.effect`）、`inject` 後 `ctx.get(token)` |
 | `internal-name` | 以 `internal/` 開頭的字串或樣板字串（服務名、事件名） | 公開的事件用 `ctx.on`，登記東西用 `ctx.effect` |
 | `process-on` ／ `process-once` ／ `process-addListener` ／ `process-prependListener` | `process.on`／`once`／`addListener`／`prependListener`，以及從 `node:process` 具名 import 它們 | 今天宿主沒有行程事件的服務；必須用時，`ctx.effect` 裡掛、回傳撤除函式（`process.off`），那一行寫窄例外 |

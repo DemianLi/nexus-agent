@@ -22,7 +22,7 @@
  * ## 已知的洞（Q3 (a) 的代價）
  *
  * 純語法認不出別名：`const c = ctx; c.root`、把參數取別的名字、`const { root } = someOtherName`、把 `Context` 改名 import
- * 後的 `ctx[C.root]`、先把 `Symbol.for('cordis.root')` 存進變數再取，都抓不到；
+ * 後的 `ctx[C.root]`、先把 `Symbol.for('cordis.root')` 存進變數再取、`const { [Context.root]: r } = ctx`，都抓不到；
  * 頂層的 `const state = { count: 0 }` 這種「物件本身可變」也不在清單裡。這些由審查與一致性套件的 `unload`
  * 那一格補（副作用沒走 `ctx.effect`，卸載後就有殘留，`unload` 會紅）。真的有人繞過，再升級成帶型別的規則。
  *

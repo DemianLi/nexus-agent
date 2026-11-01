@@ -84,7 +84,7 @@ const VIOLATIONS: readonly (Violation & { readonly expected: () => string })[] =
       'export function apply(ctx: any) { const { root } = ctx; return root; }',
       'export class P { ctx: any; run() { return this.ctx.root; } }',
       'export function apply(ctx: any) { return ctx?.root; }',
-      // 上游 #207（rc.12）把根搬到 `ctx[Context.root]`（`Symbol.for('cordis.root')`）：兩種寫法、點取與 `this.ctx` 都要擋。
+      // 根在 `ctx[Context.root]`（`Symbol.for('cordis.root')`，上游 #207）：兩種鍵、`this.ctx` 與 `?.` 都要擋。
       'export function apply(ctx: any, Context: any) { return ctx[Context.root]; }',
       "export function apply(ctx: any) { return ctx[Symbol.for('cordis.root')]; }",
       'export class P { ctx: any; run(Context: any) { return this.ctx[Context.root]; } }',

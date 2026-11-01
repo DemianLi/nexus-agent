@@ -1,10 +1,10 @@
 // 我們自己的回歸測試，不是上游的：vendor/sync.mjs 不碰這個目錄。
 //
 // cordiverse/cordis#127：fiber 不是 ACTIVE 時被卸載，狀態停在原地、收不到 DISPOSED。
-// 上游兩份修補（#133、#140）的測試只量 PENDING 與 FAILED，這裡三種起點都量。
+// 上游 #133 的測試只量 PENDING 與 FAILED，這裡三種起點都量。
 //
-// 修它的是 patches/0001（上游 #185）：從沒啟用過的 fiber 卸載時也跑一次 `_unload()`，所以會經過 UNLOADING
-// 再到 DISPOSED。#133／#140 那一行在 #185 之上是多餘的，它們的測試預期直接跳到 DISPOSED，與 #185 衝突，沒有移植。
+// patches/0001（上游 #185）讓從沒啟用過與失敗過的 fiber 卸載時也跑一次 `_unload()`，所以會經過 UNLOADING 再到 DISPOSED。
+// 上游 #133 讓它們直接到 DISPOSED，與這裡的期待不同，所以 patches/0002 改了上游那兩條測試（#1827 C1）。
 import { Context, FiberState } from '../src/index.ts'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -64,7 +64,7 @@ describe('非 ACTIVE 的 fiber 卸載後收斂到 DISPOSED（#127）', () => {
     ])
   })
 
-  it('FAILED：失敗前登記的 effect，卸載時收掉（對照，有沒有 patches/0001 都成立）', async () => {
+  it('FAILED：失敗前登記的 effect 在失敗當下就收掉，卸載不重收（對照，有沒有 patches/0001 都成立）', async () => {
     const root = new Context()
     root.logger.error = vi.fn()
     const undo = vi.fn()
@@ -74,6 +74,7 @@ describe('非 ACTIVE 的 fiber 卸載後收斂到 DISPOSED（#127）', () => {
     })
     await expect(fiber.await()).rejects.toThrow('boom')
     expect(fiber.state).toBe(FiberState.FAILED)
+    expect(undo).toHaveBeenCalledTimes(1)
     await fiber.dispose()
     expect(undo).toHaveBeenCalledTimes(1)
   })

@@ -161,8 +161,8 @@ function seek(document: Document, path: PropertyKey[]): Range | null | undefined
 }
 
 /**
- * nexus local modification: where in `value` the Loader would `eval` something (any `__jsExpr` key, string or not, the
- * same rule as the host's `findJsExpr`), or `undefined`. `seen`: YAML aliases make the structure shared or cyclic, visit each object once.
+ * nexus local modification: where in `value` a `__jsExpr` key sits, string or not (the same rule as the host's `findJsExpr`; the Loader
+ * only `eval`s the string ones), or `undefined`. `seen`: YAML aliases make the structure shared or cyclic, visit each object once.
  */
 function findJsExpr(value: unknown, path: string, seen = new WeakSet<object>()): string | undefined {
   if (typeof value !== 'object' || value === null || seen.has(value)) return undefined
@@ -578,7 +578,7 @@ export class Include extends EntryTree {
     const tree = only === undefined ? data : data.filter((options) => only.includes(options.name))
     this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
     // nexus local modification: `_pendingTree` is the object `root.update` is about to hand to the Loader, which `eval`s
-    // every `__jsExpr` it finds. Reject the whole tree here, before anything of it is applied (the tree already applied stays).
+    // every string `__jsExpr` it finds. Reject any `__jsExpr` key here, before anything of the tree is applied (the tree already applied stays).
     for (const [index, options] of (this._pendingTree ?? []).entries()) {
       const found = findJsExpr(options, `entry ${JSON.stringify(options?.id ?? index)}`)
       if (found === undefined) continue

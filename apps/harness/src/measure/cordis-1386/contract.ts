@@ -3,8 +3,9 @@
  *
  * 用的是 Cordis 本來就有的一條路，不加任何東西：
  *
- * - 消費者宣告範圍的地方有兩個——插件自己的 `inject: { memory: { range } }`，或 Loader 列上的 `intercept: { memory: { range } }`。
- *   rc.12 起（上游 #206）`inject` 不再複製進 `Context.intercept`，由 `Service.resolveIntercept` 在讀取時經 `locate()` 合併，
+ * - 消費者宣告範圍的地方有三個——插件自己的 `inject: { memory: { range } }`、Loader 列上的 `intercept: { memory: { range } }`，
+ *   以及列的 `inject`（Loader 的 `Inject.resolve` 按鍵蓋進 `fiber.inject`，只寫名字會抹掉插件的範圍）。
+ *   `Service.resolveIntercept` 在讀取時合併：`inject` 經 `locate()` 取得、墊在最底（上游 #206），
  *   列的 `intercept`（vendor/loader/src/config/isolate.ts 的 patch-context）疊在上面。
  * - 提供者是 `Service`：它的 `[Service.check]` 由**消費者的** fiber 呼叫（`Fiber._checkImpl`），`this` 是追蹤到消費者 ctx 的代理，
  *   所以 `this[Service.resolveIntercept]()` 讀到的是消費者宣告的範圍，`this.ctx.fiber.entry` 是消費者那一列。

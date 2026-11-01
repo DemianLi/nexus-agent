@@ -4,11 +4,11 @@
  * 用的是 Cordis 本來就有的一條路，不加任何東西（探針 [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) ⑤，
  * 原型在 `apps/harness/src/measure/cordis-1386/contract.ts`，這裡是它搬進 SDK 的正式版）：
  *
- * - 消費者宣告範圍的地方有兩個——插件自己的 `inject: { tools: { range } }`（{@link injectOf} 組的就是這個），或
- *   Loader 列上的 `intercept`。`check` 用 `Service.resolveIntercept` 合併（rc.12，上游 #206）：插件的 `inject` 墊底、
- *   列的 `intercept` 疊在上面，**同一個鍵列的贏**；列的 `inject` 由 Loader 併進插件的 `inject`，也蓋得掉（實測，
- *   `contract.test.ts`；rc.11 時權威是插件自己的 `inject`，見 #1937）。nexus 的列不接受 `inject`／`intercept`
- *   （`apps/harness/src/plugin-config.ts` 的 `entrySchema`），所以產品路徑碰不到這個差別。
+ * - 消費者宣告範圍的地方有三個——插件自己的 `inject: { tools: { range } }`（{@link injectOf} 組的就是這個）、Loader 列上的
+ *   `intercept`，以及列的 `inject`。`check` 用 `Service.resolveIntercept` 合併（上游 #206）：`fiber.inject` 墊底、列的 `intercept`
+ *   疊在上面，列有寫 `range` 就以列為準。列的 `inject` 由 Loader 按鍵蓋進 `fiber.inject`：寫範圍就照它檢查，只寫名字會抹掉
+ *   插件的範圍（實測，`contract.test.ts`；#1827 C2）。相容層疊完的清單不接受 `inject`／`intercept`
+ *   （`apps/harness/src/plugin-config.ts` 的 `entrySchema`），所以產品路徑的組裝碰不到這個差別。
  * - 提供者必須是 `Service`：它的 `[Service.check]` 由**消費者的** fiber 呼叫，`this` 是追蹤到消費者 ctx 的代理，
  *   所以讀得到消費者的範圍與列 id。plain object 提供者的 `check` 讀不到，不相容也會放行（探針 ⑤ 的負對照）——
  *   所以契約服務一律繼承 {@link ContractService}。

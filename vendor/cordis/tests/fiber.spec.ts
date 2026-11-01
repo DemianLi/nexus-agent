@@ -255,7 +255,7 @@ describe('Fiber', () => {
       expect(fiber.uid).to.equal(null)
       expect(fiber.inertia).to.equal(undefined)
       expect(fiber.state).to.equal(FiberState.DISPOSED)
-      // nexus (patches/0001, upstream #185): a fiber that never activated still runs `_unload()`, so it passes UNLOADING
+      // nexus (patches/0001, upstream #185): a failed fiber still runs `_unload()` on disposal, so it passes UNLOADING
       expect(transitions).to.deep.equal([
         [FiberState.FAILED, FiberState.UNLOADING],
         [FiberState.UNLOADING, FiberState.DISPOSED],
