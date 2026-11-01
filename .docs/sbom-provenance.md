@@ -20,9 +20,6 @@ SBOM 的 `nexus-sandbox-spawner` 執行檔也是第一方。
 
 ## 結果
 
-- **solid-glass 的來源：** `deeplethe/solid-glass` 屬於 GitHub 組織 DeepLethe，組織建立於 2026-05-08，repo 建立於 2026-10-12，MIT。我們釘的 `6e8903e4` 在上游存在，作者 WaylandYang，2026-10-16。組織成員不公開；WaylandYang 的個人頁自述 DeepLethe、新加坡／中國、`deeplethe.com`。**法律實體查不到。**
-- **`@deepseek-ai/node-addon-system`：** 兩顆的 `repository` 都寫 `deepseek-harness/deepseek-harness`，GitHub 回 404；組織 `deepseek-harness` 存在（2026-05-26 建立）。公開的 `deepseek-ai/deepseek-harness` 是否就是它的原始碼，沒有查證。維護者 imccyu、tianyicui-deepseek。
-- **Cordis：** 四顆 vendor 的上游是 `cordiverse/cordis`，npm 維護者只有 shigma；閉包裡的 `cosmokit` 同一人。
 - **單一維護者：** 237 列裡 119 列只有一位維護者。
 - **授權：** 全部查得到。非寬鬆的只有 `@img/sharp-libvips-linux-x64` 的 LGPL-3.0-or-later，與 #1545 已審過的相同；OFL-1.1 是字型。這裡記的是 registry 欄位，不是逐檔授權審查。
 
