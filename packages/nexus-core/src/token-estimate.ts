@@ -390,6 +390,37 @@ export function estimateMessageTokens(message: BaseMessage): number {
   return messageTokens(message).tokens;
 }
 
+/** {@link warmMessageTokens} 每連續編這麼久（毫秒）就在下一則之前讓出事件迴圈。一則編到一半不讓出，所以實際占用是這個值再加一則的編碼；一則要編的字元數不超過 {@link SAMPLE_OVER_CHARS}，超過就抽樣，見 {@link sampledTokens}。 */
+const WARM_SLICE_MS = 20;
+
+/**
+ * 把一串訊息先編進備忘，時間片用完就在下一則之前讓出事件迴圈（[#2202](https://github.com/DemianLi/nexus-agent/issues/2202)）。
+ *
+ * 估算全是同步的：重開的長對話第一步一次冷編整段歷史，事件迴圈卡到編完，`/livez` 與別條 thread 都跟著停。這裡在同步
+ * 估算之前把訊息走過一次，結果進 `perMessage`，之後估同一個物件只是查表；內容相同、物件換了的只付雜湊與掃數字。這裡不改
+ * 任何數字。換了字串的訊息（被剪過、截過）、system 與工具定義不在這裡編，同步估算碰到時照舊冷編。
+ *
+ * @param messages - 接下來要估的訊息。
+ * @param cancelled - 只在讓出回來時問；回 `true` 就不編剩下的。
+ * @returns `false` 表示讓出回來時被取消，剩下的沒編、已編的留在備忘；`true` 表示全部走完，過程中沒讓出就不曾問過 `cancelled`。
+ * @throws 編碼或序列化訊息內容時拋的錯原樣往外，已編的留在備忘。
+ */
+export async function warmMessageTokens(
+  messages: readonly BaseMessage[],
+  cancelled: () => boolean,
+): Promise<boolean> {
+  let sliceStart = performance.now();
+  for (const message of messages) {
+    if (performance.now() - sliceStart >= WARM_SLICE_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      if (cancelled()) return false;
+      sliceStart = performance.now();
+    }
+    messageTokens(message);
+  }
+  return true;
+}
+
 /** 每則訊息的角色框架開銷，加在 o200k 那一截上。 */
 function withOverhead(counted: Counted): Counted {
   return { tokens: counted.tokens + MESSAGE_OVERHEAD, excess: counted.excess };

@@ -187,7 +187,7 @@ function blockHere(request: unknown): AIMessage {
  *
  * 那則空訊息只活在子代理的狀態裡，子代理跑完它的狀態就丟了；它不是一則使用者看得到的回覆。
  */
-function stopHere(request: unknown, cause?: unknown): AIMessage {
+export function stopHere(request: unknown, cause?: unknown): AIMessage {
   if (inSubagent(request)) {
     return new AIMessage({ content: '', additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true } });
   }
