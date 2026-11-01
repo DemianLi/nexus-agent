@@ -3,7 +3,8 @@
  * （`959e9af7`）上 `ContainedFilesystemBackend.read` 與真的 `read_file` 工具對每一種檔回的東西逐字記下來。之後把 `read`
  * 改成自己讀、串流、建視窗，這份要一直綠——字句與內容「逐字相同」不是靠讀基座原始碼抄，是靠這份對照。
  *
- * `outward-symlink` 那一列不是那個 commit 的行為，是 [#1982](https://github.com/DemianLi/nexus-agent/issues/1982) 加的讀取面圍堵。
+ * `outward-symlink` 那一列不是那個 commit 的行為，是 [#1982](https://github.com/DemianLi/nexus-agent/issues/1982) 加的讀取面圍堵；
+ * `symlink` 那一列也不是，指向根內的連結讀得到是 [#2193](https://github.com/DemianLi/nexus-agent/issues/2193)。
  *
  * 兩處**刻意**不在這裡：行長截斷（驗收 1）與副檔名不再決定（驗收 6），它們是這張要改的行為，各有自己的測試。
  * 錯誤訊息比對前把根換成 `<ROOT>`；errno 的主機路徑不交給模型（#2201），這裡逐字釘住。
@@ -82,15 +83,7 @@ describe('ContainedFilesystemBackend.read：十種情況與切片，字句與內
       },
     ],
     ['directory', '/dir', 0, 2000, { error: "File '/dir' not found" }],
-    [
-      'symlink',
-      '/link.txt',
-      0,
-      2000,
-      {
-        error: "Error reading file '/link.txt': ELOOP: too many symbolic links encountered",
-      },
-    ],
+    ['symlink', '/link.txt', 0, 2000, { content: 'a\nb\n', mimeType: 'text/plain' }],
     [
       'outward-symlink',
       '/out-link.txt',

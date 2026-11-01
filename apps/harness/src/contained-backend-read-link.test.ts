@@ -81,6 +81,11 @@ describe('read', () => {
     expect(result.content).toBeUndefined();
   });
 
+  it('danger-full-access 不比根：往外指的連結讀得到', async () => {
+    await symlink(join(outside, 'secret.txt'), join(root, 'away.txt'));
+    expect((await backend('danger-full-access').read('/away.txt')).content).toContain(SECRET);
+  });
+
   it('懸空連結與連結迴圈都回錯，不讀到東西', async () => {
     await symlink('gone.txt', join(root, 'dangling.txt'));
     await symlink('loop-b', join(root, 'loop-a'));
