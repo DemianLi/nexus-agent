@@ -70,6 +70,7 @@ function scenario(
     trajectory?: TrajectoryView;
     snapshots?: RequestSnapshotsView;
     laterTurns?: readonly TrajectoryTurn[];
+    parentTurn?: Partial<TrajectoryTurn>;
   },
 ) {
   const script = new Script();
@@ -86,6 +87,7 @@ function scenario(
     script,
     view([
       turn(0, {
+        ...child?.parentTurn,
         calls: [
           call(5, {
             tools: [
@@ -313,6 +315,87 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     });
     expect(within(block).queryByTestId('trace-subagent-digest')).toBeNull();
     expect(within(block).getAllByTestId('trace-subagent-turn')).toHaveLength(2);
+  });
+
+  describe('前景子代理的呼叫被時鐘切斷（#2240）', () => {
+    const clock = { kind: 'hook', reason: 'turn-timeout' } as const;
+    const foreground = view([
+      turn(0, { seq: 5, kind: 'run', end: undefined, calls: [call(6, { outcome: 'aborted' })] }),
+    ]);
+
+    async function outcomeShown(parent: Parameters<typeof scenario>[1]) {
+      mount(scenario('tools:u1', parent));
+      const block = await expandSubagent();
+      const label = within(block).getByText(/已中止/);
+      return [label.textContent, label.className.includes('text-destructive')];
+    }
+
+    it('父輪時鐘到點：講時間到，不用紅字', async () => {
+      expect(
+        await outcomeShown({
+          trajectory: foreground,
+          parentTurn: { end: 'aborted', endCause: clock },
+        }),
+      ).toEqual(['超過時間上限，已中止', false]);
+    });
+
+    it('時鐘切在核准之後的續接段：看整組最後一段', async () => {
+      expect(
+        await outcomeShown({
+          trajectory: foreground,
+          parentTurn: { end: 'interrupted' },
+          laterTurns: [turn(1, { seq: 40, logical: false, end: 'aborted', endCause: clock })],
+        }),
+      ).toEqual(['超過時間上限，已中止', false]);
+    });
+
+    it.each([
+      ['人按的', { end: 'aborted', endCause: { kind: 'user' } }],
+      ['別的 hook', { end: 'aborted', endCause: { kind: 'hook', reason: 'some-other-hook' } }],
+      ['沒帶原因', { end: 'aborted' }],
+    ] as const)('父輪是%s：維持「已中止」', async (_name, parentTurn) => {
+      expect(await outcomeShown({ trajectory: foreground, parentTurn })).toEqual(['已中止', true]);
+    });
+
+    it('背景子代理不借父輪的原因：它自己沒帶就維持「已中止」', async () => {
+      expect(
+        await outcomeShown({
+          trajectory: view([
+            turn(0, { seq: 5, end: 'aborted', calls: [call(6, { outcome: 'aborted' })] }),
+          ]),
+          parentTurn: { end: 'aborted', endCause: clock },
+        }),
+      ).toEqual(['已中止', true]);
+    });
+
+    it('拉回來的那一段也一樣', async () => {
+      const { client, waiting } = fakeClient();
+      mount(
+        scenario('tools:u1', {
+          trajectory: view([], { digests: [digest(0, { seq: 5, kind: 'run', end: undefined })] }),
+          parentTurn: { end: 'aborted', endCause: clock },
+        }),
+        client,
+      );
+      const block = await expandSubagent();
+      await act(async () => {
+        waiting[0]!({
+          kind: 'ok',
+          result: {
+            turns: [
+              turn(0, {
+                seq: 5,
+                kind: 'run',
+                end: undefined,
+                calls: [call(6, { outcome: 'aborted' })],
+              }),
+            ],
+            seq: 9,
+          },
+        });
+      });
+      expect(within(block).getByText(/已中止/).textContent).toBe('超過時間上限，已中止');
+    });
   });
 
   it('前景子代理整段只有一份摘要：展開就自己拉，拉回來的是「一段執行」，可重新載入', async () => {
