@@ -1,7 +1,7 @@
 /**
  * **舊 thread 對守衛擋的目標升級：不掛核准卡，直接說明不能升級**（[#2078](https://github.com/DemianLi/nexus-agent/issues/2078)）。
  *
- * 舊 thread 的可寫根就是 `--workspace`，根目錄的指示檔與技能來源不論模式、不認領 grant 都寫不進去（#1960，`shared-reserved-writes.ts`）。
+ * 舊 thread 的可寫根就是 `--workspace`，根目錄的指示檔、技能來源與共用區的記憶來源不論模式、不認領 grant 都寫不進去（#1960，`shared-reserved-writes.ts`）。
  * 對這些目標掛核准卡，問的是一個核准了也不會成功的問題，比照唯讀共用區（#1800，`shared-workspace-grants.test.ts`）在升級工具就拒。
  *
  * 舊 thread 照組裝點的旗標造：可寫根是 `--workspace`、`rootIsShared`、沒有共用區前綴。案例都在 `read-only` 下跑，升到 `workspace-write`
@@ -123,6 +123,79 @@ describe('舊 thread 對守衛擋的目標升級：不掛核准卡（#2078）', 
   it('反例：根目錄別的檔、子目錄裡的指示檔名、名字像技能來源的目錄：照舊掛核准卡', async () => {
     for (const target of ['/notes.md', '/sub/AGENTS.md', '/skillsx/a.md']) {
       expect((await escalateOnLegacyThread(target)).card).toBe(true);
+    }
+  }, 60000);
+});
+
+describe('舊 thread 改不動，新 thread 載入的記憶內容不變（#2270）', () => {
+  it('真組裝：舊 thread 的 edit 被拒，新 thread 的 memoryContents 是部署方那份', async () => {
+    await writeFile(join(workspace, 'MEMORY.md'), 'DEPLOY-MEMORY', 'utf8');
+    const memory = createMemoryPlugin({ sources: ['/shared/MEMORY.md'] });
+
+    const legacy = await createCliAgent(
+      {
+        live: false,
+        workspace,
+        workspaceRoot: workspace,
+        rootIsShared: true,
+        sandbox: 'workspace-write',
+      },
+      withScriptedModel(
+        [...shipped, memory],
+        [
+          { content: '', toolCalls: [{ name: 'read_file', args: { file_path: '/MEMORY.md' } }] },
+          {
+            content: '',
+            toolCalls: [
+              {
+                name: 'edit_file',
+                args: {
+                  file_path: '/MEMORY.md',
+                  old_string: 'DEPLOY-MEMORY',
+                  new_string: 'LEGACY-MEMORY',
+                },
+              },
+            ],
+          },
+          { content: '完。' },
+        ],
+      ),
+      workspace,
+    );
+    const detachLegacy = legacy.attachSession(legacy.sessions);
+    try {
+      await legacy.agent.invoke(toAgentInvocation('改記憶。'), {
+        configurable: { thread_id: 'legacy-memory' },
+      });
+    } finally {
+      detachLegacy();
+      await legacy.dispose();
+    }
+
+    const privateRoot = await mkdtemp(join('/var/tmp', 'nexus-legacy-escalation-private-'));
+    const fresh = await createCliAgent(
+      {
+        live: false,
+        workspace: privateRoot,
+        workspaceRoot: privateRoot,
+        sharedWorkspaceRoot: workspace,
+        sandbox: 'workspace-write',
+      },
+      withScriptedModel([...shipped, memory], [{ content: '好。' }]),
+      privateRoot,
+    );
+    const detachFresh = fresh.attachSession(fresh.sessions);
+    try {
+      const config = { configurable: { thread_id: 'fresh-memory' } };
+      await fresh.agent.invoke(toAgentInvocation('嗨。'), config);
+      const { values } = await fresh.agent.getState(config);
+      expect((values as { memoryContents?: unknown }).memoryContents).toEqual({
+        '/shared/MEMORY.md': 'DEPLOY-MEMORY',
+      });
+    } finally {
+      detachFresh();
+      await fresh.dispose();
+      await rm(privateRoot, { recursive: true, force: true });
     }
   }, 60000);
 });

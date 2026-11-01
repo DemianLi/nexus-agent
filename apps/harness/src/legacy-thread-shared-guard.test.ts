@@ -1,8 +1,8 @@
 /**
- * **舊 thread 寫不進新 thread 會讀成指示或技能的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）。
+ * **舊 thread 寫不進新 thread 會讀成指示、技能或記憶的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）。
  *
  * 舊 thread（header 的根就是 `--workspace`，或沒記根）的可寫根就是新 thread 的唯讀共用區。新 thread 從共用區根目錄讀指示檔、從共用區底下的
- * 技能來源讀技能，所以舊 thread 寫進那幾個地方的東西，會變成之後每條新 thread 的工作區指示或叫得出的技能，不分使用者。
+ * 技能來源讀技能、從 `memory` 插件的來源讀記憶，所以舊 thread 寫進那幾個地方的東西，會變成之後每條新 thread 的工作區指示、叫得出的技能或記憶，不分使用者。
  *
  * 從 `runServe` 起量（#1427）：真的 serve、出貨的組裝、產品的 placer、真的 JSONL 日誌；唯一換掉的是模型（腳本）。
  * 舊 thread 照 `thread-private-root.test.ts` 的做法造：先用固定根的接縫跑一輪，header 就記著 `--workspace`，再換回產品的 placer 續接。

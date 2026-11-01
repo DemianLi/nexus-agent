@@ -1153,7 +1153,7 @@ export async function createCliAgent(
   const approvalPolicy = new ApprovalPolicyController(
     invocation.approvalPolicy ?? (invocation.sandbox === 'danger-full-access' ? 'never' : 'ask'),
   );
-  /** 這次組裝 fold 完的 fs 把手，`createNexusAgent` 回來之後才填；保留清單讀它。 */
+  /** 這次組裝 fold 完的 fs 把手與 `memory` 來源，`createNexusAgent` 回來之後才填；保留清單讀它們。 */
   const settled: { fs?: FsService; memorySources?: readonly string[] } = {};
   const backend =
     workspaceRoot === undefined
@@ -1166,7 +1166,7 @@ export async function createCliAgent(
           grants: sandboxMode,
           // 多人共用主機上的使用者工作區：別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗（偏離 dsh，#1704）。
           tolerateUnreadable: true,
-          // 技能來源要 fold 完才知道，所以逐次讀下面填的 fs 把手。
+          // 技能來源與記憶來源要 fold 完才知道，所以逐次讀下面填的 `settled`。
           ...(invocation.rootIsShared === true && {
             reservedWrites: () => sharedReservedWrites(settled.fs, settled.memorySources),
           }),
