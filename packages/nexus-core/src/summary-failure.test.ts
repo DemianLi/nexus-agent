@@ -17,7 +17,9 @@
 import { ContextOverflowError } from '@langchain/core/errors';
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { describe, expect, it } from 'vitest';
+import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
+import { randomUUID } from 'node:crypto';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createSummarizer,
   DEFAULT_SUMMARIZATION,
@@ -426,6 +428,41 @@ describe('摘要不比被取代的小', () => {
     expect(out.reports).toHaveLength(1);
     expect(out.reports[0]).toContain('不比被取代');
     expect(out.reports[0]).toContain('保留原本的請求錯誤');
+  });
+
+  it('擋下時報的被取代量是整段的總和', async () => {
+    const messages = tiny();
+    const out = await run({ messages, settings: { trigger: [{ type: 'messages', value: 3 }] } });
+    const reported = Number(/被取代的 (\d+) token/.exec(out.reports[0] ?? '')?.[1]);
+    const whole = messages
+      .slice(0, 6)
+      .reduce((total, message) => total + estimateMessageTokens(message), 0);
+    expect(reported).toBe(whole);
+  });
+
+  /** 大工具結果被剪過之後是新字串，整段量完是一次冷編碼，見 `assertSummaryShrinks`。 */
+  it('累加到超過摘要就放行，後面的訊息不編碼', async () => {
+    const page = (word: string) => `${word} `.repeat(400);
+    const first = `first${randomUUID()}`;
+    const later = `later${randomUUID()}`;
+    const encode = vi.spyOn(o200k_base, 'encode');
+    try {
+      const out = await run({
+        messages: [
+          new HumanMessage(page(first)),
+          new AIMessage(page(later)),
+          new HumanMessage(page(later)),
+          new HumanMessage('短問題'),
+        ],
+        settings: { trigger: [{ type: 'messages', value: 3 }] },
+      });
+      expect(readSummarizationEvent(out.result)).toBeDefined();
+      const sent = encode.mock.calls.map(([text]) => text);
+      expect(sent.some((text) => text.includes(first))).toBe(true);
+      expect(sent.some((text) => text.includes(later))).toBe(false);
+    } finally {
+      encode.mockRestore();
+    }
   });
 
   it('被取代的遠比摘要大：照常提交，沒有 warn', async () => {
