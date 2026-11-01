@@ -99,7 +99,7 @@ describe('listener 的成本不隨日誌長度成長', () => {
       () => ledger,
       () => ({ kind: 'ok', log }) as never,
     );
-    const got = (await listener([], {})) as readonly PreStepInjection[];
+    const got = (await listener([], { configurable: undefined })) as readonly PreStepInjection[];
     expect(got.map((item) => item.content)).toEqual([policyNoticeText('ask', 'never')]);
   });
 
@@ -108,6 +108,6 @@ describe('listener 的成本不隨日誌長度成長', () => {
       () => undefined,
       () => ({ kind: 'ok', log: {} }) as never,
     );
-    expect(await listener([], {})).toBeUndefined();
+    expect(await listener([], { configurable: undefined })).toBeUndefined();
   });
 });
