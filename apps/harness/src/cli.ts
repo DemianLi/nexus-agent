@@ -1079,7 +1079,7 @@ async function runLaunched(
       ? undefined
       : // 當掉那一輪的收尾在這裡寫回檔上（#721），下面吃 `resumed.events` 的各處拿到的已含補結。
         await resumeClosingInterruptedTurn(sessionStore, THREAD_ID).catch((error: unknown) => {
-          // 這一版讀不懂的日誌：原始檔在哪裡印給本機使用者（#1559 N0646）。錯誤訊息本身不帶路徑（serve 會把它送到瀏覽器），
+          // 這一版讀不懂的日誌：原始檔在哪裡印給本機使用者（#1559 N0646）。錯誤訊息本身不帶路徑，
           // CLI 的終端機就是使用者自己的，所以在這裡補上。
           if (error instanceof SessionFormatUnsupportedError && error.location !== undefined) {
             printer.error(`原始日誌：${error.location.path}`);

@@ -234,7 +234,7 @@ describe('紅燈 3：沒掛、掛了沒有、掃描不完整，三種分得出�
 });
 
 describe('清單本身拋錯', () => {
-  it('unknown_error，訊息帶原因（同 dsh 的 skill listing failed）', async () => {
+  it('unknown_error，原因不上線（#2230）', async () => {
     const skillCatalog: SkillCatalog = async () => {
       throw new Error('磁碟不見了');
     };
@@ -260,7 +260,7 @@ describe('清單本身拋錯', () => {
       expect(await client.skillList('t')).toEqual({
         kind: 'rejected',
         code: 'unknown_error',
-        message: '技能清單讀不出來：磁碟不見了',
+        message: '技能清單讀不出來，原因記在 serve 的日誌',
       });
     } finally {
       await handler.close();

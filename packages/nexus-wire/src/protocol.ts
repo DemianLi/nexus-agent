@@ -353,7 +353,7 @@ export const STEER_UNAVAILABLE = 'steer_unavailable';
  * **重啟之後的冷子代理（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)，缺口源自 #737）**：`subagent.send` 對一條只在磁碟上、
  * 還沒載入的 thread 會把它建起來（`subagent.interrupt` 仍不建），載體冷讀 root 日誌認得重啟之前派出的子代理；對冷的送話就是叫醒它，
  * 之後同一般投遞。這條 thread 本身的寫租約被別的行程握著回 {@link THREAD_WRITER_HELD}；叫醒子代理失敗（別的行程握著它的寫入把手、日誌壞了……）
- * 回 `unknown_error`，原因寫在 message，子代理仍是冷的、可以再送。
+ * 回 `unknown_error`，原因只進 serve 的日誌，子代理仍是冷的、可以再送。
  * 並存名額在重建之前佔：滿了回 {@link SUBAGENT_AT_CAPACITY}，沒去握租約。叫不醒的（舊日誌沒有身分）回 {@link SUBAGENT_NOT_FOUND}，
  * message 說明原因。磁碟上也沒有這條 thread：{@link SUBAGENT_NOT_FOUND}，不建 agent。`subagent.interrupt` 對冷的是被接受的 no-op（dsh）。
  *

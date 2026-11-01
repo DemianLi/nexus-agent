@@ -261,9 +261,11 @@ describe('沒有 agent 的 thread：形狀與錯誤碼', () => {
 
   it('儲存體讀不動、或寫不進去：協定層錯誤（unknown_error），不是 thread_not_found', async () => {
     const threadOrganization = await ThreadOrganization.open(dir);
+    const logged: string[] = [];
     const broken = rig({
       createAgent: stubAgent,
       threadOrganization,
+      warn: (line) => logged.push(line),
       storedThreadKnown: async () => {
         throw new Error('磁碟壞了');
       },
@@ -271,8 +273,10 @@ describe('沒有 agent 的 thread：形狀與錯誤碼', () => {
     for (const method of ['thread.pin', 'thread.archive']) {
       const reply = await broken.raw('a', method);
       expect(reply).toMatchObject({ type: 'error', error: 'unknown_error' });
-      expect(JSON.stringify(reply)).toContain('磁碟壞了');
+      expect(JSON.stringify(reply)).toContain('釘選與封存沒做成，原因記在 serve 的日誌');
+      expect(JSON.stringify(reply)).not.toContain('磁碟壞了');
     }
+    expect(logged.join('\n')).toContain('[thread] "a" 釘選與封存沒做成：磁碟壞了');
     expect(threadOrganization.pinnedThreadIds).toEqual([]);
     expect(threadOrganization.archivedThreadIds).toEqual([]);
 

@@ -223,7 +223,7 @@ describe('替身控制面：wire 這一層', () => {
     }
   });
 
-  it('叫醒失敗（resume-failed）沒有專屬的碼：unknown_error，原因照帶', async () => {
+  it('叫醒失敗（resume-failed）沒有專屬的碼：unknown_error，原因不上線', async () => {
     const { control } = recorder(
       new BackgroundSubagentError('resume-failed', '租約被別的行程握著'),
     );
@@ -232,7 +232,7 @@ describe('替身控制面：wire 這一層', () => {
     expect(await client.subagentSend('t1', 'bg-x', '嗨')).toMatchObject({
       type: 'error',
       error: 'unknown_error',
-      message: '租約被別的行程握著',
+      message: '子代理叫不醒，原因記在 serve 的日誌',
     });
   });
 

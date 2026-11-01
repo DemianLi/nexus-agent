@@ -227,7 +227,7 @@ describe('新出現的狀態各歸一類', () => {
       await errorOf(store().resume('both')),
     ]) {
       expect(error).toBeInstanceOf(SessionCorruptionError);
-      // 訊息會原樣送到瀏覽器：路徑只放 location（#1558 Q1 (a)）。
+      // 訊息不帶路徑：路徑只放 location（#1558 Q1 (a)）。
       expect((error as SessionCorruptionError).location).toEqual({
         kind: 'jsonl',
         path: generation,

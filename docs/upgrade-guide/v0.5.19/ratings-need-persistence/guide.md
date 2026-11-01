@@ -13,7 +13,7 @@ v0.5.19 評一則回覆，寫進記憶體裡的日誌就回成功，不等磁碟
 - **清單把落盤關掉時**（`--patch` 或 `cordis.yml` 裡 `session-persistence` 那一列 `disabled: true`），評分整個不能用：`feedback.put`、
   `feedback.list`、`feedback.delete` 回 `not_supported`，訊息是「這個組裝沒有掛落盤，評分存不住」，畫面上的讚／踩按了會報錯。
   評語（`/feedback` 與 `feedback.record`）照常。
-- **落盤開著、但那一筆寫不進去時**（磁碟滿、權限被改），評分回 `unknown_error`「評分沒存成：…」，不再回成功。
+- **落盤開著、但那一筆寫不進去時**（磁碟滿、權限被改），評分回 `unknown_error`「評分沒存成，原因記在 serve 的日誌」，不再回成功。
 - **日誌裡有一顆評分事件結構不對時**，那條對話的評分讀寫回 `unknown_error`「評分紀錄壞了：…」；對話本身與歷史照常讀得到。
 
 受影響的：把落盤關掉、只放記憶體跑的主機，以及會直接打 wire 的 `feedback.*` 的客戶端。
