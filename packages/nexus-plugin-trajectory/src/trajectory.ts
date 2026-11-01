@@ -450,6 +450,19 @@ function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectorySt
   });
 }
 
+/**
+ * 工具表：把幾塊照傳入順序接成新的一塊。用無原型的物件：V8 讓它一開始就走字典模式，不必替每個不同的 id
+ * 長一份隱藏類別。這張表每記一筆都換塊，打開長日誌時分配取樣裡 `noteOwners` 佔最大宗（量測 #2205：單獨折
+ * s100 夾具，RSS 增量 +24 MiB，用一般物件是 +755 MiB）。
+ */
+function ownerChunk(
+  ...sources: readonly Readonly<Record<string, number | null>>[]
+): Record<string, number | null> {
+  const chunk = Object.create(null) as Record<string, number | null>;
+  for (const source of sources) for (const key in source) chunk[key] = source[key]!;
+  return chunk;
+}
+
 /** 工具表：`key` 在哪一塊，新的塊先找；沒有回 -1。 */
 function ownerChunkAt(chunks: OwnerTable['chunks'], key: string): number {
   for (let at = chunks.length - 1; at >= 0; at -= 1) {
@@ -471,7 +484,7 @@ function mergeOwnerChunks(chunks: Readonly<Record<string, number | null>>[], at:
   const right = chunks[at + 1];
   if (left === undefined || right === undefined) return;
   if (Object.keys(left).length + Object.keys(right).length > OWNERS_CHUNK) return;
-  chunks.splice(at, 2, { ...left, ...right });
+  chunks.splice(at, 2, ownerChunk(left, right));
 }
 
 /** 工具表：從 `chunks` 的第 `at` 塊拿掉這些鍵，空了就連塊拿掉，再跟前後的塊併。`chunks` 是呼叫端自己的副本。 */
@@ -480,7 +493,7 @@ function dropOwnerKeys(
   at: number,
   keys: readonly string[],
 ): void {
-  const next = { ...chunks[at] };
+  const next = ownerChunk(chunks[at]!);
   for (const key of keys) delete next[key];
   if (Object.keys(next).length === 0) chunks.splice(at, 1);
   else chunks[at] = next;
@@ -507,8 +520,8 @@ function noteOwners(owners: OwnerTable, ids: readonly string[], owner: number | 
     }
     const last = chunks.at(-1);
     if (last === undefined || Object.keys(last).length >= OWNERS_CHUNK)
-      chunks.push({ [key]: owner });
-    else chunks[chunks.length - 1] = { ...last, [key]: owner };
+      chunks.push(ownerChunk({ [key]: owner }));
+    else chunks[chunks.length - 1] = ownerChunk(last, { [key]: owner });
     size += 1;
   }
   while (size > OWNERS_CAP) {
