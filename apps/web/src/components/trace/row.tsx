@@ -17,6 +17,7 @@ import {
   User,
   Wrench,
 } from 'lucide-react';
+import type { ToolEntry } from '@nexus/wire';
 import { memo } from 'react';
 
 import { CompactionRow } from '@/components/compaction-row';
@@ -33,6 +34,7 @@ import { EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/lib/plan-review';
 import { reasoningRunning } from '@/lib/reasoning-view';
 import { ENDING_LABEL, TRACE_TARGET_MISSING_TEXT, sameRow } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
+import { abortedToolLabel } from '@/lib/tool-aborted';
 import {
   SIGNAL_LABEL,
   toolCodeText,
@@ -63,13 +65,22 @@ function ToolDetail({
   );
 }
 
+function interruptedOf(entry: ToolEntry): string | undefined {
+  return entry.status === 'failed' ? abortedToolLabel(entry.name, entry.errorCode) : undefined;
+}
+
 function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
   const { entry, outcome } = row;
   const codeText = entry.errorCode === undefined ? undefined : toolCodeText(entry.errorCode);
+  const interrupted = interruptedOf(entry);
   return (
     <>
-      <span className={entry.status === 'failed' ? 'text-destructive' : undefined}>
-        {TOOL_STATUS_LABEL[entry.status]}
+      <span
+        className={
+          entry.status === 'failed' && interrupted === undefined ? 'text-destructive' : undefined
+        }
+      >
+        {interrupted ?? TOOL_STATUS_LABEL[entry.status]}
       </span>
       {entry.errorCode !== undefined && (
         <code className="font-mono" data-testid="trace-error-code">
@@ -142,7 +153,9 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
             attribution: row.attribution,
             meta: toolMeta(row),
             time: toolTime(row),
-            ...(row.entry.status === 'failed' ? { tone: 'danger' as const } : {}),
+            ...(row.entry.status === 'failed' && interruptedOf(row.entry) === undefined
+              ? { tone: 'danger' as const }
+              : {}),
           }}
         >
           <ToolDetail row={row} names={names} />

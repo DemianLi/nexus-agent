@@ -14,6 +14,7 @@ import { TOOL_STATUS_LABEL } from '@/components/tool/card';
 import { StepGroup } from '@/components/ui/tool-steps';
 import type { Step } from '@/components/ui/tool-steps';
 import { useFocusHandoff } from '@/hooks/use-focus-handoff';
+import { abortedToolLabel } from '@/lib/tool-aborted';
 import { cutByParentClock, subagentDigestHead, subagentTurnView } from '@/lib/trace-view';
 import type { SubagentCallView, SubagentTurnView } from '@/lib/trace-view';
 import type { TrajectoryPuller } from '@/lib/trajectory-pull';
@@ -61,19 +62,29 @@ type ChildPull =
 const shownOf = (pull: ChildPull | undefined): PulledTurns | undefined =>
   pull?.kind === 'loaded' ? pull : pull?.shown;
 
-function SubagentTool({ tool }: { tool: SubagentCallView['tools'][number] }) {
+type SubagentToolView = SubagentCallView['tools'][number];
+
+function interruptedOf(tool: SubagentToolView): string | undefined {
+  return tool.status === 'error' ? abortedToolLabel(tool.name, tool.code) : undefined;
+}
+
+function SubagentTool({ tool }: { tool: SubagentToolView }) {
+  const interrupted = interruptedOf(tool);
   return (
     <li
       className="text-muted-foreground flex min-w-0 flex-wrap gap-x-2 text-tip"
       data-testid="trace-subagent-tool"
     >
       <code className="text-foreground font-mono">{tool.name}</code>
-      <span className={tool.status === 'error' ? 'text-destructive' : undefined}>
-        {
+      <span
+        className={
+          tool.status === 'error' && interrupted === undefined ? 'text-destructive' : undefined
+        }
+      >
+        {interrupted ??
           TOOL_STATUS_LABEL[
             tool.status === 'error' ? 'failed' : tool.status === 'ok' ? 'done' : 'running'
-          ]
-        }
+          ]}
       </span>
       {tool.code !== undefined && <code className="font-mono">{tool.code}</code>}
       <span>
@@ -87,7 +98,9 @@ function SubagentTool({ tool }: { tool: SubagentCallView['tools'][number] }) {
 /** 一輪收著那一行：呼叫與工具各幾個、幾個失敗，有工具還沒結束時再接「執行中」。純字串、會被報讀，所以用「，」接。 */
 function subagentStepsSummary(calls: readonly SubagentCallView[]): string {
   const tools = calls.flatMap((call) => call.tools);
-  const failed = tools.filter((tool) => tool.status === 'error').length;
+  const failed = tools.filter(
+    (tool) => tool.status === 'error' && interruptedOf(tool) === undefined,
+  ).length;
   const running = tools.some((tool) => tool.status !== 'ok' && tool.status !== 'error');
   return [
     `${calls.length} 次呼叫`,
