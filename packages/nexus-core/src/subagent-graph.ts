@@ -84,7 +84,7 @@ export interface SubagentGraphOptions {
    */
   readonly approvalPolicyPrompt?: AgentMiddleware;
   /**
-   * 這張圖的委派聲明：同上，換掉規格裡同名的那一顆（前景那句說「核准交給使用者」，背景不是）。呼叫端傳
+   * 這張圖的委派聲明：同上，換掉規格裡同名的那一顆（它依 root 的管道與政策現算，可能講「核准交給使用者」，背景子代理永遠不是）。呼叫端傳
    * `createSubagentDelegationMiddleware()`（預設那句：需要核准的操作會自動被拒）。**省略＝規格自己的那顆**。
    */
   readonly delegation?: AgentMiddleware;

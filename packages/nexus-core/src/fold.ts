@@ -28,7 +28,7 @@ import type { ApprovalPolicySource } from './approval-policy.js';
 import { DEFAULT_APPROVAL_POLICY } from './approval-policy.js';
 import {
   createSubagentDelegationMiddleware,
-  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  foregroundDelegationContext,
 } from './subagent-delegation.js';
 import {
   assertToolFilter,
@@ -588,12 +588,14 @@ export function foldRegistry(
   // 那一顆（管道固定 `policy-never`，#324／#737 照 dsh `child-agent.ts:220-247`）在編圖時換掉。
   // 核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）跟閘門用同一組事實：同一個管道、同一個政策來源，
   // 所以前景子代理也共用這一顆；背景圖編圖時換成管道固定 `policy-never` 的那顆（{@link createBackgroundApprovalPolicyPrompt}）。
+  const approvalChannel = foldApprovalChannel(options);
+  const approvalPolicySource = options.approvals?.policy ?? (() => DEFAULT_APPROVAL_POLICY);
   const approvalPolicyPrompt = createApprovalPolicyPromptMiddleware(
-    foldApprovalChannel(options),
-    options.approvals?.policy ?? (() => DEFAULT_APPROVAL_POLICY),
+    approvalChannel,
+    approvalPolicySource,
   );
-  const subagentDelegation = createSubagentDelegationMiddleware(
-    FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  const subagentDelegation = createSubagentDelegationMiddleware(() =>
+    foregroundDelegationContext(approvalChannel, approvalPolicySource()),
   );
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
