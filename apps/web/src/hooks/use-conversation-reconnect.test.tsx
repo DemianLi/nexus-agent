@@ -21,6 +21,7 @@ import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
+import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 
@@ -263,6 +264,22 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
     await tick(60_000);
     expect(openEvents.mock.calls.length).toBeGreaterThan(1);
   });
+
+  it.each(['unknown_error', 'invalid_argument', 'not_supported', 'code_from_a_newer_server'])(
+    '碼沒有專用文案（#2222，%s）：照退避重試，講固定的那一句，不接 server 的原文',
+    async (code) => {
+      const { client, openEvents, setFailOpen } = scriptedClient();
+      setFailOpen(rejected(code, '這條 thread 建不起來：/srv/home-a/sessions/t 不在私有根底下'));
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      expect(result.current.refusal).toBe(THREAD_REFUSED_TEXT);
+      expect(result.current.connectionError).toBeUndefined();
+      expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
+
+      await tick(60_000);
+      expect(openEvents.mock.calls.length).toBeGreaterThan(1);
+    },
+  );
 
   it('對照組：thread 數滿了是暫時的，照退避重試，refusal 是另一句', async () => {
     const { client, openEvents, setFailOpen } = scriptedClient();
