@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import { approvalReasonOf, defaultApprovalReason } from '@/lib/approval-reason';
 
-/** core 的閘門（web 不相依那個套件，改了那邊這裡要紅）。 */
+/** core 的閘門（web 的產品碼不從 core 取值，改了那邊這裡要紅）。 */
 const CORE_APPROVAL = '../../../../packages/nexus-core/src/approval.ts';
 const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
 
