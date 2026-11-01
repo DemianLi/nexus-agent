@@ -451,8 +451,9 @@ function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectorySt
 }
 
 /**
- * 工具表：把幾塊接成新的一塊。用無原型的物件：V8 一開始就把它放進字典模式，id 每個都不一樣時，
- * 一般物件每加一個鍵就多長一份隱藏類別，存活在老生代，打開長日誌時堆會白白撐大。
+ * 工具表：把幾塊照傳入順序接成新的一塊。用無原型的物件：V8 讓它一開始就走字典模式，不必替每個不同的 id
+ * 長一份隱藏類別。這張表每記一筆都換塊，打開長日誌時分配取樣裡 `noteOwners` 佔最大宗（量測 #2205：單獨折
+ * s100 夾具，RSS 增量 +24 MiB，用一般物件是 +755 MiB）。
  */
 function ownerChunk(
   ...sources: readonly Readonly<Record<string, number | null>>[]

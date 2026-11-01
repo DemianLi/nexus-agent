@@ -1347,7 +1347,7 @@ describe('歸屬表分塊', () => {
     expect(owners.chunks.length).toBeLessThanOrEqual((2 * owners.size) / 128 + 1);
   });
 
-  it('每一塊都是無原型的物件：id 再多也不會一鍵長一份隱藏類別', () => {
+  it('每一塊都是無原型的物件，歸屬表才走得到字典模式', () => {
     const { owners } = stateOf(logOf(serial(2100)).events);
     for (const chunk of owners.chunks) expect(Object.getPrototypeOf(chunk)).toBeNull();
   });
