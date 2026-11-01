@@ -176,6 +176,7 @@ export function createThreadPlacer(options: ThreadPlacerOptions): ThreadPlacer {
           ? `這是一個私有根（不在目前的私有根基底 ${options.base} 底下），多半是換過 harness home（NEXUS_AGENT_HOME）。` +
               '換回原來的 home 再接；不要把它當 --workspace 給——那會讓這條對話的私有根變成所有新對話都讀得到的共用區。'
           : `這條對話記的根既不是 --workspace，也不在私有根基底 ${options.base} 底下。用 --workspace ${String(recorded)} 再接。`,
+        privateShaped,
       );
     }
     // 新 thread：落盤關掉就沒有磁碟上的可寫根（偏離 2 的延伸，(f)）：`root` 明著回 `undefined`＝記憶體，`--workspace` 照樣掛成唯讀共用區。

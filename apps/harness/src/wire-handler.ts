@@ -117,6 +117,7 @@ import {
   THREAD_IS_SUBAGENT,
   THREAD_LOG_BUSY,
   THREAD_LOG_TOO_LARGE,
+  THREAD_ROOT_MISMATCH,
   THREAD_WRITER_HELD,
   isSkillMethod,
   isSlashMethod,
@@ -206,6 +207,7 @@ import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { isTrustedWireRequest } from './request-trust.js';
+import { ResumeWorkspaceConflictError } from './resume-guards.js';
 import { readProjectionChildSeeds } from './projection-children.js';
 import type { StoredThreadList } from './session-list.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
@@ -1990,7 +1992,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 以及**日誌裡有一則太深、灌不回存檔點**（`checkpoint_depth_exceeded`，[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：回 `thread_history_too_deep`，
    * 認 `cause` 鏈上任何一環的碼（同 `classifyTurnFailure` 認碼不認訊息）；
    * 還有**寫租約被別的寫入者握著**（{@link SessionAlreadyOwnedError}，[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)）：回 `thread_writer_held`；
-   * 以及**日誌超過這個行程的額度**（{@link SessionLogTooLargeError}，[#2203](https://github.com/DemianLi/nexus-agent/issues/2203)）：單份太大回 `thread_log_too_large`，額度被佔滿回 `thread_log_busy`。
+   * 以及**日誌超過這個行程的額度**（{@link SessionLogTooLargeError}，[#2203](https://github.com/DemianLi/nexus-agent/issues/2203)）：單份太大回 `thread_log_too_large`，額度被佔滿回 `thread_log_busy`；
+   * 還有**日誌記的可寫根這台接不上**（{@link ResumeWorkspaceConflictError}，[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）：回 `thread_root_mismatch`，訊息不帶主機路徑。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
@@ -2030,6 +2033,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             id,
             error.reason === 'too-large' ? THREAD_LOG_TOO_LARGE : THREAD_LOG_BUSY,
             error.message,
+          ),
+        );
+      }
+      // 可寫根接不上不是壞了（#2222）：專用碼，兩個根只進 serve 的日誌，不上線。
+      if (error instanceof ResumeWorkspaceConflictError) {
+        return json(
+          errorResponse(
+            id,
+            THREAD_ROOT_MISMATCH,
+            error.otherHome
+              ? `會話 "${error.sessionId}" 的檔案在另一個 harness home 底下，這台 serve 沒有開它。要回原本的 home 才打得開。`
+              : `會話 "${error.sessionId}" 跑在另一個 --workspace，這台 serve 沒有開它。要用原本的 --workspace 才打得開。`,
           ),
         );
       }

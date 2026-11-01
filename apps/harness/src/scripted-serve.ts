@@ -73,6 +73,8 @@ export async function startScriptedServe(
     readonly workspaceRootOf?: (threadId: string) => string | undefined;
     /** 測試接縫（`RunServeOptions.sessionLogBudget`）：會話日誌的位元組額度換一本小的。 */
     readonly sessionLogBudget?: SessionLogBudget;
+    /** 行程環境（`RunServeOptions.env`）；省略即空的。 */
+    readonly env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<ScriptedServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-scripted-serve-'));
@@ -88,7 +90,7 @@ export async function startScriptedServe(
       ...(options.argv ?? []),
     ],
     log: options.log ?? (() => undefined),
-    env: {},
+    env: options.env ?? {},
     ...(options.memoryGaugeDeps === undefined ? {} : { memoryGaugeDeps: options.memoryGaugeDeps }),
     ...(options.workspaceRootOf === undefined ? {} : { workspaceRootOf: options.workspaceRootOf }),
     ...(options.sessionLogBudget === undefined

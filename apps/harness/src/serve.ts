@@ -82,7 +82,7 @@ import {
   SessionNotFoundError,
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
-import { assertSameCwd } from './resume-guards.js';
+import { assertSameCwd, ResumeWorkspaceConflictError } from './resume-guards.js';
 import { McpConnectionPool } from '@nexus/plugin-mcp';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
@@ -1330,6 +1330,10 @@ async function startServer(
           entry: 'serve',
           threadId,
           resumedHeader: history?.header,
+        }).catch((error: unknown) => {
+          // wire 的訊息不帶主機路徑（#2222），管理者要的兩個根在這裡。
+          if (error instanceof ResumeWorkspaceConflictError) warn(error.message);
+          throw error;
         });
         const threadWorkspaceRoot = placement.root;
         // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有
