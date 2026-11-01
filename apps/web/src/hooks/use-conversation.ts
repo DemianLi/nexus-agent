@@ -62,7 +62,7 @@ import { CommandDirectory } from '@/lib/command-directory';
 import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
-import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
+import { RECOVERED_NOTICE_MS, reconnectDelay, SLOW_CONNECT_MS } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { serverClosingText } from '@/lib/server-closing';
 import { threadCapacityText } from '@/lib/thread-capacity';
@@ -238,6 +238,8 @@ export interface Conversation {
    * 回到線上才從頭算。
    */
   readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  /** 這次連線（開下行到歷史回來）等了 {@link SLOW_CONNECT_MS} 還沒成功或失敗（#2250）；等退避的時間不算。 */
+  readonly slowConnect: boolean;
   /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
   readonly recovered: boolean;
   /** 不等退避，立刻重接一次，退避從頭算；停止自動重連的（#1601）也從這裡重開。下行開著、或被永久拒絕時什麼都不做。 */
@@ -454,6 +456,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const [connections, setConnections] = useState(0);
   const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
+  const [slowConnect, setSlowConnect] = useState(false);
   const [recovered, setRecovered] = useState(false);
   /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
   const [generation, setGeneration] = useState(0);
@@ -589,6 +592,11 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    const slowTimer = setTimeout(() => setSlowConnect(true), SLOW_CONNECT_MS);
+    const settled = () => {
+      clearTimeout(slowTimer);
+      setSlowConnect(false);
+    };
     /**
      * 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。
      * `refused` 是伺服器明說不收時給使用者看的那一句（#1478）；**每次都重設**，上一次被拒的話不會留到下一次斷線。
@@ -654,6 +662,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (cancelled) {
           return;
         }
+        settled();
         // **從空的重折，不接在現有的後面**（#593）：重接時傳輸 seq 可能從 0 重算（serve 重開過），折疊器又丟掉
         // `seq <= lastSeq` 的 frame，沿用舊的那份的話，新來的會全被當成重複。重接等於重新打開這一頁，只存在
         // 本地的東西（例如「已核准：X」）跟重新整理一樣不在了。第一次開線時現有的那份本來就是空的。
@@ -733,6 +742,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (!cancelled) lose(undefined);
       } catch (error) {
         if (!cancelled) {
+          settled();
           if (error instanceof WireProtocolError) {
             halt(error);
             return;
@@ -773,6 +783,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       // **收的是這條線，不是 agent。** server 端不會因為瀏覽器離開就停掉 run。
       cancelled = true;
       controller.abort();
+      settled();
       setConnected(false);
     };
   }, [client, threadId, advance, generation, scheduleRetry, ratingsController, commandDirectory]);
@@ -1348,6 +1359,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     store,
     connected,
     attempted,
+    slowConnect,
     recovered,
     reconnectNow,
     ...(reconnecting === undefined ? {} : { reconnecting }),

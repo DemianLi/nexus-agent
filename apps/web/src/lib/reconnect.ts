@@ -21,6 +21,13 @@ export const RECONNECT_MAX_MS = 10_000;
 export const RECOVERED_NOTICE_MS = 2_000;
 
 /**
+ * 一次連線（開下行到歷史回來）等了多久還沒有成功或失敗，狀態列才提分頁太多（#2250）。等退避的時間不算。
+ * 伺服器沒開、瀏覽器離線的請求很快就失敗，不會等到這裡；一直等著多半是瀏覽器對這個 host 的 HTTP/1.1
+ * 連線被占滿，但伺服器很慢、封包被丟時也會，所以話要留餘地。
+ */
+export const SLOW_CONNECT_MS = 6_000;
+
+/**
  * 第 `attempt` 次重試（從 1 起算）要等多久。
  *
  * @param attempt - 這是連續第幾次重試。

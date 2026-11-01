@@ -17,7 +17,7 @@ import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useConversation } from '@/hooks/use-conversation';
-import { RECONNECT_MAX_MS, RECOVERED_NOTICE_MS } from '@/lib/reconnect';
+import { RECONNECT_MAX_MS, RECOVERED_NOTICE_MS, SLOW_CONNECT_MS } from '@/lib/reconnect';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
@@ -163,6 +163,57 @@ describe.each([false, true])('useConversation 斷線與重接的主線（StrictM
 
     await tick(RECOVERED_NOTICE_MS);
     expect(result.current.recovered).toBe(false);
+  });
+});
+
+describe('useConversation 連線一直等不到結果（#2250）', () => {
+  const hanging = () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    return { gate, release: () => release() };
+  };
+
+  it('歷史一直不回來（下行開好了）：到點才翻，回來就收', async () => {
+    const { gate, release } = hanging();
+    const { client } = scriptedClient({
+      threadHistory: async () => {
+        await gate;
+        return {
+          kind: 'ok',
+          result: { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
+        };
+      },
+    });
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS - 1);
+    expect(result.current.slowConnect).toBe(false);
+    await tick(1);
+    expect(result.current.slowConnect).toBe(true);
+    expect(result.current.connected).toBe(false);
+    release();
+    await tick();
+    expect(result.current.slowConnect).toBe(false);
+    expect(result.current.connected).toBe(true);
+  });
+
+  it('開下行本身一直不回來：一樣會翻', async () => {
+    const { client } = scriptedClient({ openEvents: () => new Promise(() => {}) });
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS);
+    expect(result.current.slowConnect).toBe(true);
+  });
+
+  it('伺服器掛了（開線很快失敗、一直重試）：等再久都不翻', async () => {
+    // 亂數取大：退避等得比 `SLOW_CONNECT_MS` 久，等退避的時間不能算成等連線。
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const { client, setFailOpen } = scriptedClient();
+    setFailOpen('Failed to fetch');
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    for (let elapsed = 0; elapsed < RECONNECT_MAX_MS * 3; elapsed += 500) {
+      await tick(500);
+      expect(result.current.slowConnect).toBe(false);
+    }
+    expect(result.current.reconnecting).toBeDefined();
   });
 });
 
