@@ -231,6 +231,7 @@ connection:
   （[#2078](https://github.com/DemianLi/nexus-agent/issues/2078)，同 `/shared` 那一條）。
   這道守衛只擋得到升級之後的寫入：**升級後核對一次** `--workspace` 根目錄現有的這四個指示檔與技能來源目錄（出廠 `--workspace/skills/`），
   確認裡面都是部署方自己放的，不是舊對話寫的。
+- **`memory` 插件的來源起動時會檢查**（[#2271](https://github.com/DemianLi/nexus-agent/issues/2271)）：有 `--workspace` 時，來源不在 `/shared/` 底下、或在底下但讀不到，serve 起動各印一行 `[記憶]` 警告，寫明來源與要怎麼改。只警告，不擋啟動；經符號連結指到 `--workspace` 外的來源這裡不判，要自己確認。
 - **header 的根既不是 `--workspace` 也不是基底底下的 `thread-…` 目錄**：續接被拒。wire 回專用碼 **`thread_root_mismatch`**（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)），message 寫明是哪一份會話與出路，不帶主機路徑；兩個根印在 serve 的日誌（`ResumeWorkspaceConflictError`）。
 - **不會自動清**：thread 刪了或過期了，私有根還在；要清自己清 `<home>/thread-roots` 底下對應的目錄（用 header 的 `workspaceRoot` 對得上哪一條）。
   這是刻意的：私有根裡是使用者的產出，系統不替人決定哪一份可以丟。

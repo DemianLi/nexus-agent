@@ -1054,6 +1054,8 @@ export async function createCliAgent(
   dropped: readonly AssemblyDrop[];
   /** 外掛在 `apply` 裡交出的警告（#751），例如 MCP 連不上而照樣掛上。 */
   warnings: readonly PluginWarning[];
+  /** 折進這次組裝的 `memory` 來源（`serve` 起動時檢查，`memory-source-check.ts`）。 */
+  memorySources: readonly string[];
   /** 組裝之後外掛執行期交出的警告（#1099），例如 MCP 掉線重連的進度；回傳取消訂閱。印在哪由呼叫端決定。 */
   onWarning: (listener: (warning: PluginWarning) => void) => () => void;
   /** 這一次組裝收不收插話（#710），見 `stepInbox` 那一格。 */
@@ -1411,6 +1413,7 @@ export async function createCliAgent(
     attachTitle,
     dropped,
     warnings,
+    memorySources,
     onWarning,
     stepInbox,
     spillStore,
