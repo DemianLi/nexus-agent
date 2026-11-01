@@ -9,7 +9,9 @@
  * - 判斷孤兒看四件事，全部成立才動：名字形狀、`lstat` 是真目錄、擁有者是這個行程、內容是空的或只有那個 `<basename>.tmp`；
  * - 寫入中的不靠 pid 分辨（容器裡的 pid 常常固定）：mtime 早於這台 serve 起動的才算，孤兒只會來自上一個行程；
  * - **不用路徑刪根裡的東西**：`lstat` 之後目錄可能被換成連結，`unlink <dir>/x.tmp` 會穿過連結刪到根外。
- *   所以先 `rename` 整個目錄項到模型碰不到的暫放區（`rename` 不跟連結），搬完再 `lstat` 一次才刪；搬不動（含 `EXDEV`）就留著。
+ *   所以先 `rename` 整個目錄項到模型碰不到的暫放區（`rename` 不跟最後一段的連結），搬完再 `lstat` 一次才刪；搬不動（含 `EXDEV`）就留著。
+ *   上層路徑的連結 `rename` 照樣會跟：`rename` 之前比對一次上層的實際位置，這只縮小窗口，沒有關掉。Node 沒有 `renameat`。
+ *   窗口裡被換走時，搬得動的也只有根外同形、同擁有者、夠舊的暫存目錄。
  *
  * 暫放區在基底底下（{@link STAGING_QUARANTINE_DIR_NAME}）：跟私有根同一個檔案系統，名字不是 `thread-<雜湊>` 的形狀，
  * 不會被當成一條 thread 的根。崩潰留在裡面的，下次起動整個刪掉；一個 home 只有一台 serve（`serve.lock`），這時沒有別人在用它。
@@ -49,9 +51,7 @@ const STAGING_DIR_RE =
 export interface OrphanStagingInternals {
   /** 目錄項數上限；省略即 {@link MAX_ENTRIES_PER_SWEEP}。 */
   readonly maxEntries?: number;
-  /** 候選目錄檢查之前。測試用它換掉上一層。 */
-  readonly beforeInspect?: (parent: string) => void | Promise<void>;
-  /** 判斷完、`rename` 之前。測試用它在這個空檔換掉目錄項。 */
+  /** 判斷完、最後一次比對位置之前。測試用它在這個空檔換掉目錄項或上一層。 */
   readonly beforeMove?: (path: string) => void | Promise<void>;
 }
 
@@ -88,19 +88,9 @@ async function holdsOnlyStagingFile(path: string, targetName: string): Promise<b
   return (await lstat(join(path, names[0]))).isFile();
 }
 
-/** 搬進暫放區之後刪掉。到了這裡模型已經碰不到它，只差確認它還是不是目錄，不是就不往裡走。 */
-async function moveOutAndRemove(path: string, quarantine: string): Promise<void> {
-  await mkdir(quarantine, { recursive: true, mode: 0o700 });
-  await chmod(quarantine, 0o700);
-  const moved = join(quarantine, randomUUID());
-  await rename(path, moved);
-  if ((await lstat(moved)).isDirectory()) await rm(moved, { recursive: true, force: true });
-  else await unlink(moved);
-}
-
 /**
- * 符合孤兒的條件就清掉。`parent` 是根底下這一層，`canonicalParent` 是這一層該有的實際位置：
- * 走到這裡的路上中間那一段被換成連結時，兩者對不上，不動。
+ * 符合孤兒的條件就搬進暫放區再刪。`parent` 是根底下這一層，`canonicalParent` 是這一層該有的實際位置，對不上就不動。
+ * 搬完模型碰不到它；目錄項可能已被換成連結，所以刪之前再看一次型別。
  */
 async function reapIfOrphan(
   parent: string,
@@ -110,19 +100,24 @@ async function reapIfOrphan(
   run: SweepRun,
 ): Promise<void> {
   const path = join(parent, name);
-  await run.internals.beforeInspect?.(parent);
-  if ((await realpath(parent)) !== canonicalParent) return;
   const stats = await lstat(path);
   if (!stats.isDirectory()) return;
   if (stats.uid !== process.geteuid?.()) return;
   if (stats.mtimeMs >= run.startedAtMs) return;
   if (!(await holdsOnlyStagingFile(path, targetName))) return;
   await run.internals.beforeMove?.(path);
-  await moveOutAndRemove(path, run.quarantine);
+  await mkdir(run.quarantine, { recursive: true, mode: 0o700 });
+  await chmod(run.quarantine, 0o700);
+  if ((await realpath(parent)) !== canonicalParent) return;
+  const moved = join(run.quarantine, randomUUID());
+  await rename(path, moved);
+  if ((await lstat(moved)).isDirectory()) await rm(moved, { recursive: true, force: true });
+  else await unlink(moved);
 }
 
 /**
- * 走過一個根。不跟連結，整棵樹看不到 {@link MAX_ENTRIES_PER_SWEEP} 個目錄項以上；讀不了的目錄跳過，清不掉的留著。
+ * 走過一個根，最多看 {@link MAX_ENTRIES_PER_SWEEP} 個目錄項。目錄項是連結就不往下走；走到一半被換成連結時可能讀到根外，
+ * 但 {@link reapIfOrphan} 會比對實際位置。讀不了的目錄跳過，清不掉的留著。
  *
  * @returns 有沒有撞到上限，以及第一個清不掉的錯誤碼。
  */
@@ -158,11 +153,13 @@ async function sweepRoot(
           targetName,
           run,
         ).catch((error: unknown) => {
-          failure ??= (error as NodeJS.ErrnoException).code ?? 'UNKNOWN';
+          const code = (error as NodeJS.ErrnoException).code ?? 'UNKNOWN';
+          // 目錄項剛好消失就沒有東西要清。
+          if (code !== 'ENOENT') failure ??= code;
         });
       }
     } catch {
-      // 掃到一半目錄被搬走：這一層到此為止，其他層照走。
+      // 讀到一半失敗（例如目錄被刪掉）：這一層到此為止，其他層照走。
     }
   }
   return { truncated: false, failure };

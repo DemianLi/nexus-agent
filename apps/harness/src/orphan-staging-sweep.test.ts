@@ -244,8 +244,8 @@ describe('掃描途中目錄項被換掉', () => {
     const victim = await plant(b.outside);
     let swapped = false;
     await sweepOnce(b, {
-      beforeInspect: async (parent) => {
-        if (swapped || parent !== nested) return;
+      beforeMove: async (path) => {
+        if (swapped || !path.startsWith(nested)) return;
         swapped = true;
         await rename(nested, join(b.root, 'a-moved'));
         await symlink(b.outside, nested);
@@ -267,6 +267,15 @@ describe('掃描途中目錄項被換掉', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('thread-1');
     expect(warnings[0]).not.toContain(b.root);
+  });
+
+  it('判斷之後目錄項消失：沒有東西要清，不 warn', async () => {
+    const b = await bed();
+    await plant(b.root);
+    const warnings = await sweepOnce(b, {
+      beforeMove: (path) => rm(path, { recursive: true }),
+    });
+    expect(warnings).toEqual([]);
   });
 
   it('rename 回 EXDEV：留著不動，不退回路徑式刪除', async () => {

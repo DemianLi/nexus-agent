@@ -233,7 +233,7 @@ connection:
 - **不會自動清**：thread 刪了或過期了，私有根還在；要清自己清 `<home>/thread-roots` 底下對應的目錄（用 header 的 `workspaceRoot` 對得上哪一條）。
   這是刻意的：私有根裡是使用者的產出，系統不替人決定哪一份可以丟。
 - **崩潰留下的寫入暫存會清**（[#2198](https://github.com/DemianLi/nexus-agent/issues/2198)）：`kill -9` 打斷寫檔時，私有根裡會留下 `.<檔名>.<pid>.<uuid>.tmpdir`。
-  thread 續接時，serve 在背景掃一次它的私有根，每個根每個 serve 行程只掃一次，所以續接後短時間內 `glob` 還可能列到。mtime 早於這台 serve 起動、內容只有那個暫存檔的才清，
+  thread 續接時，serve 在背景掃一次它的私有根，每個根每個 serve 行程只掃一次，所以續接後短時間內 `glob` 還可能列到。mtime 早於這台 serve 起動、內容是空的或只有那個暫存檔的才清，
   清的時候先搬進 `<home>/thread-roots/.staging-quarantine` 再刪，那個目錄下次起動會整個清掉；搬不動（例如 `thread-roots` 底下掛了別的檔案系統）就留著，日誌有一行 warn。
   一次最多看 20 萬個目錄項，超過就停並 warn。**只掃私有根**：舊 thread 寫在 `--workspace` 留下的不收，要清自己清。沒有再開的 thread 不會被掃。
 - **落盤關掉時**（`session-persistence` 那一列關掉）——**偏離 2 的延伸**（dsh 沒有「每條 thread 一個私有根」，落盤關掉時 dsh 也沒有東西可以對照）：
