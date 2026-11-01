@@ -696,6 +696,7 @@ function ConversationView({
             <StatusLine
               state={conversation.state}
               connected={conversation.connected}
+              slowConnect={conversation.slowConnect}
               {...(conversation.connectionError === undefined
                 ? {}
                 : { connectionError: conversation.connectionError })}
