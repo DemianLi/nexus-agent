@@ -10,7 +10,10 @@ import { Readable, Writable } from 'node:stream';
 import type { BaseMessage } from '@langchain/core/messages';
 import { emptyConversation, reduceAll } from '@nexus/wire';
 import type { WireClient } from '@nexus/wire';
-import { policyNoticeText } from '@nexus/plugin-permission-presets/src/policy-notice.js';
+import {
+  PolicyNoticeLedger,
+  policyNoticeText,
+} from '@nexus/plugin-permission-presets/src/policy-notice.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runCli } from './cli.js';
@@ -171,6 +174,20 @@ describe('切換核准政策時對模型講一聲（#2057）', () => {
     expect(noticesIn(lastMain())).toEqual([ASK_TO_NEVER]);
     await turn(second, 't');
     expect(noticesIn(lastMain())).toEqual([ASK_TO_NEVER]);
+  }, 60000);
+
+  it('升級前的日誌（切換之後已有回覆、沒有通知）：續接不補發', async () => {
+    const fx = await home();
+    const first = await client(fx);
+    await turn(first, 't');
+    const silenced = vi.spyOn(PolicyNoticeLedger.prototype, 'pending').mockReturnValue([]);
+    await first.slashRun('t', '/permission danger-full-access');
+    await turn(first, 't');
+    silenced.mockRestore();
+    expect(noticesIn(lastMain())).toEqual([]);
+
+    await turn(await client(fx), 't');
+    expect(noticesIn(lastMain())).toEqual([]);
   }, 60000);
 
   it('不顯示成使用者打的話：網頁即時與冷讀歷史', async () => {

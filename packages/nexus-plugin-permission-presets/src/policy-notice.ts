@@ -2,7 +2,8 @@
  * 切換核准政策時對模型講一聲（[#2057](https://github.com/DemianLi/nexus-agent/issues/2057)）。
  *
  * 要發的通知由日誌推出來：`/permission` 那一對 `command/run`／`command/done` 之間值真的變了的 `approval/policy`，
- * 扣掉已經記成 `user/message` 的通知。起始值與續接收回不在命令裡，不發。
+ * 扣掉已經記成 `user/message` 的通知。起始值與續接收回不在命令裡，不發。`/permission` 只跑在兩輪之間，下一輪的 `preStep`
+ * 一定先於模型回覆，所以切換之後已有 `assistant/message` 的（#2057 之前寫的日誌）算過期，不補發。
  *
  * `PolicyNoticeLedger` 經 `observe` 逐顆吃（接上時它先重播已有的事件），listener 不碰 `log.events`（那是整份副本）。
  *
@@ -61,10 +62,12 @@ export class PolicyNoticeLedger {
       event.data.source.plugin === POLICY_NOTICE_LISTENER_NAME
     ) {
       this.#pending.shift();
+    } else if (event.type === 'assistant/message') {
+      this.#pending.length = 0;
     }
   }
 
-  /** @returns 還沒發出去的通知，照切換的先後。記成 `user/message` 之後才消掉。 */
+  /** @returns 還沒發出去的通知，照切換的先後。記成 `user/message` 或等到模型回覆之後才消掉。 */
   pending(): readonly string[] {
     return this.#pending;
   }

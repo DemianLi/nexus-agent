@@ -60,6 +60,16 @@ describe('PolicyNoticeLedger', () => {
     expect(ledgerOf([...SWITCH, DELIVERED]).pending()).toEqual([]);
   });
 
+  it('切換之後已有模型回覆、沒有通知（升級前的日誌）：過期，不補發', () => {
+    const ledger = ledgerOf([...SWITCH, ['assistant/message', {}]]);
+    expect(ledger.pending()).toEqual([]);
+  });
+
+  it('模型回覆之後的切換照發', () => {
+    const ledger = ledgerOf([['assistant/message', {}], ...SWITCH]);
+    expect(ledger.pending()).toEqual([policyNoticeText('ask', 'never')]);
+  });
+
   it('每個政策值都有名稱', () => {
     expect(policyNoticeText('ask', 'never')).toBe(
       '使用者把核准政策從「詢問使用者核准」改成「不詢問使用者核准」。',
