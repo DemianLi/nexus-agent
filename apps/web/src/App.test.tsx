@@ -40,6 +40,7 @@ import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
+import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 import { axeViolations } from '@/test/axe';
@@ -798,13 +799,12 @@ describe('對話介面', () => {
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
   });
 
-  it('下行被拒但不是滿了（#1478）：照舊講連不上與原因', async () => {
+  it('下行被拒、碼沒有專用文案（#2222）：講固定的那一句，不接原文', async () => {
     render(<App client={refusedOnce('unknown_error')} />);
 
-    await waitFor(() =>
-      expect(screen.getByRole('status').textContent).toContain('連不上 agent：下行被拒：'),
-    );
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(THREAD_REFUSED_TEXT));
     expect(screen.queryByText(THREAD_AT_CAPACITY_TEXT)).toBeNull();
+    expect(screen.queryByText(/2／2|重啟 serve|下行被拒/)).toBeNull();
   });
 });
 
