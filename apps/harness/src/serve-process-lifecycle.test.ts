@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { FailLoudEvent } from './fail-loud.js';
+import { PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
 import { installServeProcessLifecycle } from './serve.js';
 import type { RunningServe, ServeProcess } from './serve.js';
 
@@ -171,6 +172,25 @@ describe('serve 行程層收尾共用一份 dispose', () => {
       await vi.waitFor(() => {
         expect(exits).toEqual([code]);
       });
+    }
+  });
+
+  it('5 秒逾時：以訊號的碼結束，之後 close() 才拒絕也不改碼', async () => {
+    vi.useFakeTimers();
+    const { proc, exits, fire } = fakeProc();
+    const { running, release } = fakeRunning({ fail: new Error('逾時之後才失敗') });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      installServeProcessLifecycle(proc).attach(running);
+      fire('SIGTERM');
+      await vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS);
+      expect(exits).toEqual([0]);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exits).toEqual([0]);
+    } finally {
+      error.mockRestore();
+      vi.useRealTimers();
     }
   });
 

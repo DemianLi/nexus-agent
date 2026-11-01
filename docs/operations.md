@@ -1281,13 +1281,13 @@ MemoryMax=4G
 # systemd 要求絕對路徑；node 不在 /usr/bin 就改成 which node 印出來的那個。
 ExecStart=/usr/bin/node --max-old-space-size=2867 /opt/nexus-agent/current/lib/serve.js --live --workspace /srv/nexus-agent/workspace --port 8787
 
-# SIGTERM 是 serve 的一般停止要求（退出碼 0）。serve 自己的收尾上限是 5 秒，到了就自己結束，
+# SIGTERM 是 serve 的一般停止要求（退出碼 0，收尾失敗是 1）。serve 自己的收尾上限是 5 秒，到了就自己結束，
 # 所以這裡留 10 秒：serve 先自己收完，systemd 的 SIGKILL 只是最後一道。
 KillSignal=SIGTERM
 TimeoutStopSec=10
 
 # 只在失敗時重啟：systemctl stop 與 SIGTERM 的退出碼 0 不會被拉起來，致命例外（退出碼 1）會。
-# SIGTERM 的收尾失敗也是退出碼 1：systemctl stop 不重啟、單元進 failed；其他來源的 SIGTERM 會重啟。
+# SIGTERM 收尾失敗也是退出碼 1，結果見下面〈收尾失敗之後〉。
 Restart=on-failure
 RestartSec=5
 
@@ -1298,8 +1298,10 @@ WantedBy=multi-user.target
 
 - **`TimeoutStopSec` 要大於 serve 的收尾上限。** 收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
   [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
-  到了就強制結束、退出碼仍是 0。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
+  到了就強制結束、退出碼仍是 0。**所以逾時的 0 不代表都收好了**，日誌有沒有排空要看標準錯誤。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
   這兩個數字改其中一個，另一個要跟著改。
+- **收尾失敗之後**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：serve 以 1 結束，原因印在標準錯誤。照 systemd 的語意（**沒有實跑過**），上面這份 `Restart=on-failure` 的單元：`systemctl stop` 不重啟，單元進 `failed`，
+  排除原因後 `systemctl reset-failed nexus-agent` 再啟動；不是 `systemctl stop` 送的 `SIGTERM` 會重啟，連續失敗滿 `StartLimitBurst` 後單元進 `failed`。
 - **記憶體上限：`MemoryMax` 與 `--max-old-space-size` 成對，heap 取 70%**（[#1767](https://github.com/DemianLi/nexus-agent/issues/1767)）。
   Node 沒給旗標時，V8 的 heap 上限是依容器上限推出來的一個**較小的值**（1g 約 520 MiB、4g 約 2080 MiB，約一半），
   容器多給的記憶體 heap 用不到，會先以 `FATAL ERROR: … JavaScript heap out of memory`（退出碼 134、不是 cgroup OOM kill）死掉；
