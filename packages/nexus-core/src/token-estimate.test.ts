@@ -116,6 +116,26 @@ describe('E：o200k 的純估算', () => {
 /** 沒有另一半的代理碼元。 */
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u;
 
+describe('合併快取（#2241）', () => {
+  afterEach(() => {
+    vi.doUnmock('gpt-tokenizer/encoding/o200k_base');
+    vi.resetModules();
+  });
+
+  it('載入時關掉，全行程只設一次', async () => {
+    const setMergeCacheSize = vi.fn();
+    vi.resetModules();
+    vi.doMock('gpt-tokenizer/encoding/o200k_base', () => ({
+      default: { ...o200k_base, setMergeCacheSize },
+    }));
+
+    await import('./token-estimate.js');
+    await import('./token-estimate.js');
+
+    expect(setMergeCacheSize.mock.calls).toEqual([[0]]);
+  });
+});
+
 describe('內容備忘與超長抽樣（#952）', () => {
   /** 數編碼器這段時間被餵了幾次、共多少字元。 */
   function countEncoding() {
