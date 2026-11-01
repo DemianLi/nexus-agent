@@ -27,8 +27,9 @@ export const STOPPED_QUESTION_TEXT = '已停止，請直接打字回覆';
 
 /**
  * 停止時 pump 替懸著的那顆呼叫寫進結果的**錯誤碼**（`@nexus/core` 的 `TOOL_ABORTED_BEFORE_DISPATCH`）。
- * web 的產品碼不從 core 取值（只取型別），值手寫；由 harness 的
- * `ask-user-wire.test.ts`（#667）用真的 `ask_user_question` 對即時與歷史兩顆 `tool-finished` 斷言這個字面值。
+ * web 的產品碼不從 core 取值（只取型別），值手寫。harness 的 `ask-user-wire.test.ts`（#667）用真的
+ * `ask_user_question` 對即時與歷史兩顆 `tool-finished` 斷言這個字面值，釘住的是 core 這一側；
+ * web 改值時要同改那邊與 `tool-status-wire.test.ts`、`plan-review-wire.test.ts` 的字面值。
  */
 export const ABORTED_BEFORE_DISPATCH_CODE = 'ABORTED_BEFORE_DISPATCH';
 
