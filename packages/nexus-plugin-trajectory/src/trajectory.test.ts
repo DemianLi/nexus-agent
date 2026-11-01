@@ -1347,6 +1347,11 @@ describe('歸屬表分塊', () => {
     expect(owners.chunks.length).toBeLessThanOrEqual((2 * owners.size) / 128 + 1);
   });
 
+  it('每一塊都是無原型的物件：id 再多也不會一鍵長一份隱藏類別', () => {
+    const { owners } = stateOf(logOf(serial(2100)).events);
+    for (const chunk of owners.chunks) expect(Object.getPrototypeOf(chunk)).toBeNull();
+  });
+
   it('上限剛好 2000：第 2001 筆把最舊的那一筆擠掉，一筆都不多留', () => {
     const exact = entriesOf(stateOf(logOf(serial(2000)).events));
     expect(exact).toHaveLength(2000);
