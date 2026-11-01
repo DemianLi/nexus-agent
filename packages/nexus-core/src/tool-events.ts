@@ -66,12 +66,12 @@ export interface ToolErrorInfo {
 /** 工具等太久。dsh `guard/timeout-policy` 的 `TOOL_TIMEOUT`。 */
 export const TOOL_TIMEOUT = 'TOOL_TIMEOUT';
 /**
- * 使用者取消了這次呼叫：**本體已經開始**，落定之後結果被換掉。dsh `packages/core/tools` 的
+ * 這一輪被中止，取消了這次呼叫：**本體已經開始**，落定之後結果被換掉。dsh `packages/core/tools` 的
  * `TOOL_ABORTED`，字串是 `ABORTED`（`packages/core/tools/src/index.ts:462`）。
  */
 export const TOOL_ABORTED = 'ABORTED';
 /**
- * 使用者取消了這次呼叫：**本體從沒開始**。dsh 同檔 `:465` 的 `TOOL_ABORTED_BEFORE_DISPATCH`。
+ * 這一輪被中止，取消了這次呼叫：**本體從沒開始**。dsh 同檔 `:465` 的 `TOOL_ABORTED_BEFORE_DISPATCH`。
  * 生產者見 `turn-cancel.ts`，與停在核准點被收回的那幾顆（`apps/harness` 的 pump）。
  */
 export const TOOL_ABORTED_BEFORE_DISPATCH = 'ABORTED_BEFORE_DISPATCH';

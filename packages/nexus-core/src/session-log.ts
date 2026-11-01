@@ -127,8 +127,8 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 理由同 `model/usage`：同一個 middleware 實例、同一次模型呼叫，也寫得進 subagent 那份。
  * 見 [#266](https://github.com/DemianLi/nexus-agent/issues/266)。
  *
- * **`tool/result` 有第二個寫者：web 的 pump**，只在一種情況——停在核准點時人按了停止，那幾顆
- * 等核准的呼叫被收回（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。那時沒有 run 在跑，
+ * **`tool/result` 有第二個寫者：web 的 pump**，兩種情況。一輪失敗時替沒配到結果的呼叫補結（#2029，`#closeUnansweredCalls`）；以及停在核准點時被人中止
+ * （停止鍵、暫停目標、封存時一起停下工作），那幾顆等核准的呼叫被收回（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。收回時沒有 run 在跑，
  * 圍堵看不到它們，所以由 pump 寫 `turn/start {kind:'resume'}` → 每一顆的 `tool/result`
  * （`ABORTED_BEFORE_DISPATCH`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
  * `tool/call`。
@@ -145,8 +145,8 @@ import type { ToolErrorInfo } from './tool-events.js';
  *
  * `assistant/message` 生產者同第四種（{@link ./model-calls.ts | createModelCallRecorder}，就是寫
  * `model/start`／`model/end` 那一顆），理由同 `model/usage`，也寫得進 subagent 那份。**它有第二個
- * 寫者：web 的 pump**，只在一種情況——人按了停止、模型講到一半，那半段由 pump 寫回對話，同時寫
- * 一顆 `interrupted: true` 的（CLI 沒有停止這條路，見 `cli.ts` 的 `runRepl`）。
+ * 寫者：web 的 pump**，只在一種情況——root 這一輪被中止、模型講到一半，那半段由 pump 寫回對話，同時寫
+ * 一顆 `interrupted: true` 的（CLI 沒有中止這條路：沒有停止鍵，也不套一輪的時鐘，見 `cli.ts` 的 `runRepl`）。
  *
  * `user/message` 兩個寫者各走一條舊路：repeat-reminder 走 `model/usage` 那條（fold 自己建的
  * middleware，它的 `beforeModel`），goal 的收尾走 `tool/result` 那條（圍堵，從工具回的 `Command`
@@ -508,7 +508,7 @@ export interface SessionEventMap {
   /**
    * 一輪結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。
    *
-   * **被人中止的那一輪也以這一顆收尾，帶 `reason`**；正常結束時整個不放這個 key（同
+   * **被中止的那一輪也以這一顆收尾，帶 `reason`**；正常結束時整個不放這個 key（同
    * `command/done` 的 `text`）。照 dsh 的 `turn/end {reason: {kind: 'aborted', reason: cause}}`
    * （`packages/core/session/src/types.ts:203`，`c291e79`），dsh 沒有 `turn/cancelled`。
    * 內層那一格叫 `cause` 不叫 dsh 的 `reason`：外層已經叫 `reason`，兩層同名讀起來會混
@@ -701,7 +701,7 @@ export interface SessionEventMap {
     /** 寫進快取的輸入 token。缺席＝沒記。 */
     readonly cacheWriteTokens?: number;
     /**
-     * 這次呼叫沒有正常回來：`error` ＝ 拋錯，`aborted` ＝ 使用者按了停止。**只有失敗那一種才帶這一格。**
+     * 這次呼叫沒有正常回來：`error` ＝ 拋錯，`aborted` ＝ 被中止，原因見 {@link TurnAbortCause}。**只有失敗那一種才帶這一格。**
      * 讀者**都照常讀**：加總的照加，「目前大小」讀最新一筆的也照讀——同 dsh，它的 `contextPressure` 連
      * `assistant/attempt` 的用量也取樣（那份請求真的送出去過，prompt 大小是真的）。名字借 dsh `TurnEndReason` 的
      * `kind`（`aborted`／`error`，`core/session/src/types.ts:204-212`）。
@@ -742,7 +742,7 @@ export interface SessionEventMap {
    * 個進入的步恰好一顆 `step/end`」。
    *
    * **`outcome` 只在沒有正常回來時帶**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：拋錯是 `error`、
-   * 使用者按了停止是 `aborted`，兩者同 {@link ModelCallOutcome}。這一格讓「這次呼叫燒了多少不知道」讀得出來——配對的
+   * 被中止是 `aborted`，兩者同 {@link ModelCallOutcome}。這一格讓「這次呼叫燒了多少不知道」讀得出來——配對的
    * `model/usage` 不在，而這裡有 `outcome`。沒有這一格 ＝ 正常回來，或舊日誌（那時只能看後面有沒有 `turn/failed`）。
    *
    * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
@@ -842,7 +842,7 @@ export interface SessionEventMap {
    *
    * ## `interrupted`
    *
-   * 人按了停止、畫面上已經有字時，那半段以這一顆記下，帶 `interrupted: true`；正常的回覆整個不放
+   * root 這一輪被中止、畫面上已經有字時，那半段以這一顆記下，帶 `interrupted: true`；正常的回覆整個不放
    * 這個 key。**這一顆由 pump 在這一輪收尾時寫，落在 `model/end` 之後**——被切斷的那次呼叫在寫入點
    * 看到的是拋錯，不是回覆。一個字都沒送出就整顆不寫，同 dsh：沒有看得見的內容就不算一則回覆。
    * 子代理那一層被切斷時回的空訊息同理不寫（`turn-cancel.ts` 的 `stopHere`）。
