@@ -222,9 +222,9 @@ describe('觀測分頁：結構化模式', () => {
       .getAllByTestId('trace-row')
       .find((row) => row.getAttribute('data-kind') === 'signal')!;
     expect(signal.textContent).toContain('核准 edit_file：允許一次（等了 13.0 秒）');
-    const chips = screen.getAllByTestId('trace-approval-code');
+    const chips = screen.getAllByTestId('trace-code-text');
     expect(chips.map((chip) => chip.textContent)).toEqual(['核准政策一律不允許']);
-    // 不是核准的失敗碼只顯示碼本身。
+    // 沒有對應句子的碼只顯示碼本身。
     expect(screen.getAllByTestId('trace-error-code').map((c) => c.textContent)).toEqual([
       'APPROVAL_POLICY_NEVER',
       'ABORTED',
@@ -261,10 +261,30 @@ describe('觀測分頁：結構化模式', () => {
       .getAllByTestId('trace-row')
       .find((row) => row.getAttribute('data-kind') === 'signal')!;
     expect(signal.textContent).toContain('核准 bash：沒有有效回覆（等了 13.0 秒）');
-    expect(screen.getAllByTestId('trace-approval-code').map((chip) => chip.textContent)).toEqual([
+    expect(screen.getAllByTestId('trace-code-text').map((chip) => chip.textContent)).toEqual([
       '回覆看不懂，沒有執行',
     ]);
     expect(document.body.textContent).not.toContain('人拒絕了');
+  });
+
+  it('工具的磁碟空間滿（FS_NO_SPACE，#2242）：碼旁邊寫中文那一句', async () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '寫檔'),
+      ...script.ai('a', { text: '寫' }),
+      script.started('c1', 'write_file', { file_path: '/a.txt' }),
+      script.failed('c1', '寫不進去', 'FS_NO_SPACE'),
+      ...script.ai('b', { text: '沒寫成' }),
+      script.completed(),
+    ]);
+    const trajectory = view([
+      turn(0, { end: 'completed', calls: [call(5, { reply: reply(11, 'run-a') })] }),
+    ]);
+    mount(withTrajectory(state, script, trajectory));
+    await act(async () => {});
+    expect(screen.getByTestId('trace-error-code').textContent).toBe('FS_NO_SPACE');
+    expect(screen.getByTestId('trace-code-text').textContent).toBe('主機的儲存空間滿了');
   });
 
   it('呼叫段落展開：缺席的欄位寫「—」不寫 0；指到已被擠掉的快照寫「已不保留」', async () => {
