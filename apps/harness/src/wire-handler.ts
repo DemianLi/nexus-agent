@@ -721,11 +721,31 @@ async function* requestBodyChunks(
 }
 
 /**
+ * 沒有專用碼的內部失敗：原因經 `warn` 進 serve 的日誌，回傳上線的固定訊息（[#2230](https://github.com/DemianLi/nexus-agent/issues/2230)，做法同 `threadOrError` 的 #2225）。
+ * 這些原因多半是 Node 的 fs 錯誤，帶主機路徑，所以不逐類清洗。`what` 上線，web 會接在自己的前綴後面，也會在後面再接一句，所以不收句號。
+ */
+function withheldReason(
+  warn: ((message: string) => void) | undefined,
+  what: string,
+  logPrefix: string,
+  error: unknown,
+): string {
+  const reason = error instanceof Error ? error.message : String(error);
+  warn?.(`${logPrefix}：${reason}`);
+  return `${what}，原因記在 serve 的日誌`;
+}
+
+/**
  * `skill.list` 的回應（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929）。組裝沒有清單、或清單說「沒有技能可列」回
  * `not_supported`（dsh 是 registry 不在的 `gateway/internal`，見 `skill-catalog-wire.ts`）；掃描本身拋了回 `unknown_error`
- * （dsh 的 `skill listing failed` 也是 `gateway/internal`，`skill-catalog.ts:88-90`），訊息帶原因。
+ * （dsh 的 `skill listing failed` 也是 `gateway/internal`，`skill-catalog.ts:88-90`），原因只進日誌。
  */
-async function skillListResponse(catalog: SkillCatalog | undefined, id: number): Promise<unknown> {
+async function skillListResponse(
+  catalog: SkillCatalog | undefined,
+  id: number,
+  threadId: string,
+  warn: ((message: string) => void) | undefined,
+): Promise<unknown> {
   const unsupported = () =>
     errorResponse(id, 'not_supported', '這個組裝沒有技能清單（沒掛 skills 那一列）');
   if (catalog === undefined) return unsupported();
@@ -733,8 +753,16 @@ async function skillListResponse(catalog: SkillCatalog | undefined, id: number):
   try {
     skills = await catalog();
   } catch (error: unknown) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return errorResponse(id, 'unknown_error', `技能清單讀不出來：${reason}`);
+    return errorResponse(
+      id,
+      'unknown_error',
+      withheldReason(
+        warn,
+        '技能清單讀不出來',
+        `[技能] thread ${threadId} 的技能清單讀不出來`,
+        error,
+      ),
+    );
   }
   if (skills === undefined) return unsupported();
   const result: SkillListResult = { skills };
@@ -1264,10 +1292,16 @@ function goalResponse(
  * 評分服務拋出來的錯怎麼回（#1606）。三種：
  *
  * - 沒掛落盤（`FeedbackDurabilityUnavailableError`）：`not_supported`，訊息原樣（#1573 Q2 (a) 拍板那句）。
- * - 日誌裡的評分事件壞了（`FeedbackLogCorruptionError`）：`unknown_error`，「評分紀錄壞了：…」。
- * - 其餘（落盤確認被拒、寫不進去）：寫入那兩個方法回 `unknown_error`，「評分沒存成：…」，同改名那一條的寫法；讀與評語不在這一類，原樣往外拋。
+ * - 日誌裡的評分事件壞了（`FeedbackLogCorruptionError`）：`unknown_error`，「評分紀錄壞了：…」。訊息只有事件序號與欄位規則，不帶路徑，所以上線。
+ * - 其餘（落盤確認被拒、寫不進去）：寫入那兩個方法回 `unknown_error`，「評分沒存成，原因記在 serve 的日誌」，同改名那一條的寫法；讀與評語不在這一類，原樣往外拋。
  */
-function feedbackFailure(id: number, error: unknown, writing: boolean): unknown {
+function feedbackFailure(
+  id: number,
+  error: unknown,
+  writing: boolean,
+  threadId: string,
+  warn: ((message: string) => void) | undefined,
+): unknown {
   if (error instanceof FeedbackDurabilityUnavailableError) {
     return errorResponse(id, 'not_supported', error.message);
   }
@@ -1275,8 +1309,11 @@ function feedbackFailure(id: number, error: unknown, writing: boolean): unknown 
     return errorResponse(id, 'unknown_error', `評分紀錄壞了：${error.message}`);
   }
   if (!writing) throw error;
-  const reason = error instanceof Error ? error.message : String(error);
-  return errorResponse(id, 'unknown_error', `評分沒存成：${reason}`);
+  return errorResponse(
+    id,
+    'unknown_error',
+    withheldReason(warn, '評分沒存成', `[回饋] thread ${threadId} 的評分沒存成`, error),
+  );
 }
 
 async function feedbackResponse(
@@ -1284,6 +1321,8 @@ async function feedbackResponse(
   id: number,
   method: FeedbackMethod,
   body: unknown,
+  threadId: string,
+  warn: ((message: string) => void) | undefined,
 ): Promise<unknown> {
   const service = thread?.feedback;
   if (thread !== undefined && service === undefined) {
@@ -1321,7 +1360,7 @@ async function feedbackResponse(
     try {
       return successResponse(id, { ...(await service.list(thread.pump.sessionLog)) });
     } catch (error) {
-      return feedbackFailure(id, error, false);
+      return feedbackFailure(id, error, false, threadId, warn);
     }
   }
 
@@ -1341,7 +1380,7 @@ async function feedbackResponse(
         ...(await service.delete(thread.pump.sessionLog, { messageId, ifVersion: p.ifVersion })),
       });
     } catch (error) {
-      return feedbackFailure(id, error, true);
+      return feedbackFailure(id, error, true, threadId, warn);
     }
   }
 
@@ -1368,7 +1407,7 @@ async function feedbackResponse(
     });
     return successResponse(id, { ...result });
   } catch (error) {
-    return feedbackFailure(id, error, true);
+    return feedbackFailure(id, error, true, threadId, warn);
   }
 }
 
@@ -2092,9 +2131,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (error instanceof AttachmentError && error.code === 'ATTACHMENT_TOO_LARGE') {
         return json(errorResponse(null, 'invalid_argument', error.message));
       }
-      const reason = error instanceof Error ? error.message : String(error);
-      options.warn?.(`[上傳] thread ${threadId} 的上傳沒存成：${reason}`);
-      return json(errorResponse(null, 'unknown_error', `上傳沒存成：${reason}`));
+      return json(
+        errorResponse(
+          null,
+          'unknown_error',
+          withheldReason(
+            options.warn,
+            '上傳沒存成',
+            `[上傳] thread ${threadId} 的上傳沒存成`,
+            error,
+          ),
+        ),
+      );
     }
     // 存的期間這條 thread 被收掉了（`close()`）：收據進不了表，回錯而不是發一張沒人認的收據。
     if (ready.get(threadId) !== thread) {
@@ -2143,9 +2191,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       };
       return json(response);
     } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error);
-      options.warn?.(`[讀圖] thread ${threadId} 的圖 ${attachmentId} 讀不回來：${reason}`);
-      return json(errorResponse(null, 'unknown_error', `圖讀不回來：${reason}`));
+      return json(
+        errorResponse(
+          null,
+          'unknown_error',
+          withheldReason(
+            options.warn,
+            '圖讀不回來',
+            `[讀圖] thread ${threadId} 的圖 ${attachmentId} 讀不回來`,
+            error,
+          ),
+        ),
+      );
     }
   }
 
@@ -2247,9 +2304,16 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (error instanceof ImageIntakeError) {
         return { kind: 'rejected', code: 'invalid_argument', message: error.message };
       }
-      const reason = error instanceof Error ? error.message : String(error);
-      options.warn?.(`[附件] thread ${threadId} 的圖存不下：${reason}`);
-      return { kind: 'rejected', code: 'unknown_error', message: `圖存不下：${reason}` };
+      return {
+        kind: 'rejected',
+        code: 'unknown_error',
+        message: withheldReason(
+          options.warn,
+          '圖存不下',
+          `[附件] thread ${threadId} 的圖存不下`,
+          error,
+        ),
+      };
     }
   }
 
@@ -2420,7 +2484,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // **也不看 `slashInFlight` 與「還在跑」**：跑著、停在核准點都能評（#267 的 Q10）。
       const existing = threads.get(threadId);
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
-      return json(await feedbackResponse(thread, envelope.id, method, body));
+      return json(
+        await feedbackResponse(thread, envelope.id, method, body, threadId, options.warn),
+      );
     }
     if (method === 'thread.rename') {
       // 改名（#633 第二張）：照 dsh 要這條會話是活的，所以**經 `threadFor`**（先確認它存在，免得為一個不存在的 id 建 agent）。
@@ -2486,7 +2552,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (isSkillMethod(method)) {
       // `/名字` 叫得出的技能（#1574 N0929）：經 `threadFor`，同 `slash.list`——打 `/` 多半發生在第一句之前，沒開過的 thread 要為它建起來。
       // **不看「還在跑」、核准點與 `slashInFlight`**：它只讀，沒有東西可以跟誰賽跑。
-      return json(await skillListResponse(thread.skillCatalog, envelope.id));
+      return json(
+        await skillListResponse(thread.skillCatalog, envelope.id, threadId, options.warn),
+      );
     }
     if (isSlashMethod(method)) {
       return handleSlash(thread, threadId, method, envelope.id, body, signal);
@@ -2921,9 +2989,16 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       await background.sendFromUser(params.run_id, params.text, clientTimeZone);
     } catch (error) {
       if (!(error instanceof BackgroundSubagentError)) throw error;
-      // 叫醒本身失敗（租約被別的行程握著、日誌壞了……）沒有專屬的碼：它不是「找不到」「名額滿」「已關閉」，原因寫在 message。
-      if (error.code === 'resume-failed')
-        return json(errorResponse(id, 'unknown_error', error.message));
+      // 叫醒本身失敗（租約被別的行程握著、日誌壞了……）沒有專屬的碼：它不是「找不到」「名額滿」「已關閉」，原因進日誌。
+      if (error.code === 'resume-failed') {
+        return json(
+          errorResponse(
+            id,
+            'unknown_error',
+            withheldReason(options.warn, '子代理叫不醒', `[子代理] run ${params.run_id}`, error),
+          ),
+        );
+      }
       const code =
         error.code === 'not-found'
           ? SUBAGENT_NOT_FOUND
@@ -3122,8 +3197,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
       }
       // 寫不進去、儲存體讀不動：這條線收不了，不是業務失敗。
-      const reason = error instanceof Error ? error.message : String(error);
-      return json(errorResponse(id, 'unknown_error', `釘選與封存沒做成：${reason}`));
+      return json(
+        errorResponse(
+          id,
+          'unknown_error',
+          withheldReason(
+            options.warn,
+            '釘選與封存沒做成',
+            `[thread] "${threadId}" 釘選與封存沒做成`,
+            error,
+          ),
+        ),
+      );
     }
   }
 
@@ -3165,8 +3250,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           }),
         );
       }
-      const reason = error instanceof Error ? error.message : String(error);
-      return json(errorResponse(id, 'unknown_error', `改名沒做成：${reason}`));
+      return json(
+        errorResponse(
+          id,
+          'unknown_error',
+          withheldReason(options.warn, '改名沒做成', `[thread] "${threadId}" 改名沒做成`, error),
+        ),
+      );
     }
   }
 
@@ -3236,8 +3326,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     try {
       source = await observeThread(sourceId, readStored);
     } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error);
-      return json(errorResponse(id, 'unknown_error', `分叉的來源讀不出來：${reason}`));
+      return json(
+        errorResponse(
+          id,
+          'unknown_error',
+          withheldReason(
+            options.warn,
+            '分叉的來源讀不出來',
+            `[thread] "${sourceId}" 分叉的來源讀不出來`,
+            error,
+          ),
+        ),
+      );
     }
     if (source === undefined) {
       return json(successResponse(id, { ok: false, error: { code: 'thread_not_found' } }));
@@ -3273,8 +3373,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     try {
       stored = await options.listThreads(signal);
     } catch (error: unknown) {
-      const reason = error instanceof Error ? error.message : String(error);
-      return json(errorResponse(null, 'unknown_error', `以前的 thread 列不出來：${reason}`));
+      return json(
+        errorResponse(
+          null,
+          'unknown_error',
+          withheldReason(
+            options.warn,
+            '以前的 thread 列不出來',
+            '[列表] 以前的 thread 列不出來',
+            error,
+          ),
+        ),
+      );
     }
     const organization = options.threadOrganization;
     const response: ThreadListResponse = {
@@ -3316,9 +3426,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       result = await options.searchThreads(query, signal);
     } catch (error: unknown) {
-      if (!(error instanceof ThreadSearchError)) {
-        const reason = error instanceof Error ? error.message : String(error);
-        return json(errorResponse(null, 'unknown_error', `搜尋失敗：${reason}`));
+      if (
+        !(error instanceof ThreadSearchError) ||
+        error.kind === 'index-failed' ||
+        error.kind === 'persistence-failed'
+      ) {
+        return json(
+          errorResponse(
+            null,
+            'unknown_error',
+            withheldReason(options.warn, '搜尋失敗', '[搜尋] 搜尋失敗', error),
+          ),
+        );
       }
       return json(errorResponse(null, SEARCH_ERROR_CODES[error.kind], error.message));
     }
@@ -3491,9 +3610,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           ),
         );
       }
-      const reason = error instanceof Error ? error.message : String(error);
-      options.warn?.(`[軌跡] thread ${threadId} 折不出細節：${reason}`);
-      return json(errorResponse(null, 'unknown_error', `軌跡折不出來：${reason}`));
+      return json(
+        errorResponse(
+          null,
+          'unknown_error',
+          withheldReason(
+            options.warn,
+            '軌跡折不出來',
+            `[軌跡] thread ${threadId} 折不出細節`,
+            error,
+          ),
+        ),
+      );
     }
   }
 
@@ -3527,8 +3655,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         response = { type: 'success', result: { available: true, candidates } };
       } catch (error: unknown) {
         signal.throwIfAborted();
-        const reason = error instanceof Error ? error.message : String(error);
-        return changesResponse(errorResponse(null, 'unknown_error', `列不出檔案：${reason}`));
+        return changesResponse(
+          errorResponse(
+            null,
+            'unknown_error',
+            withheldReason(
+              options.warn,
+              '列不出檔案',
+              `[檔案] thread ${threadId} 列不出檔案`,
+              error,
+            ),
+          ),
+        );
       }
     }
     return changesResponse(response);
@@ -3558,8 +3696,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         response = { type: 'success', result: { available: true, candidates } };
       } catch (error: unknown) {
         signal.throwIfAborted();
-        const reason = error instanceof Error ? error.message : String(error);
-        return changesResponse(errorResponse(null, 'unknown_error', `列不出會話：${reason}`));
+        return changesResponse(
+          errorResponse(
+            null,
+            'unknown_error',
+            withheldReason(
+              options.warn,
+              '列不出會話',
+              `[會話] thread ${threadId} 列不出會話`,
+              error,
+            ),
+          ),
+        );
       }
     }
     return changesResponse(response);

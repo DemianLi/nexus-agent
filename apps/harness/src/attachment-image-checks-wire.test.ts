@@ -50,9 +50,11 @@ async function connect() {
     attachments: store,
   });
   let root: SessionLog | undefined;
+  const warnings: string[] = [];
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
     attachments: store,
+    warn: (line) => warnings.push(line),
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
@@ -70,6 +72,7 @@ async function connect() {
   return {
     handler,
     client,
+    warnings,
     log: () => {
       if (root === undefined) throw new Error('這條 thread 還沒建起來');
       return root;
@@ -223,7 +226,8 @@ describe('讀圖：檔頭要對得上日誌記的參照（照 dsh readImageFile�
 
       const outcome = await c.client.readAttachment(THREAD, mislabeled.attachmentId);
       expect(outcome).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
-      expect(JSON.stringify(outcome)).toContain('檔頭對不上');
+      expect(outcome).toMatchObject({ message: '圖讀不回來，原因記在 serve 的日誌' });
+      expect(c.warnings.join('\n')).toContain('檔頭對不上');
       expect(JSON.stringify(outcome)).not.toContain(GIF_7X5);
 
       expect(await c.client.readAttachment(THREAD, honest.attachmentId)).toMatchObject({
