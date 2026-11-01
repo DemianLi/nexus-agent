@@ -90,9 +90,21 @@ export type McpSandboxWrapper = (
   request: McpSandboxRequest,
 ) => Promise<{ readonly command: string; readonly args: readonly string[] }>;
 
+/** 宿主給的 host 服務：沒宣告 `sandbox` 的 stdio 也包一層，宿主行程被硬殺時子行程跟著走（#2197）。包不了回 `undefined`，照舊直接起。 */
+export const MCP_GUARD_SERVICE = 'mcpGuard';
+
+/** {@link MCP_GUARD_SERVICE} 收到的東西。 */
+export type McpGuardRequest = Pick<McpSandboxRequest, 'command' | 'args' | 'cwd' | 'path'>;
+
+/** 見 {@link MCP_GUARD_SERVICE}。 */
+export type McpGuardWrapper = (
+  request: McpGuardRequest,
+) => Promise<{ readonly command: string; readonly args: readonly string[] } | undefined>;
+
 declare module '@nexus/core' {
   interface NexusServices {
     [MCP_SANDBOX_SERVICE]: McpSandboxWrapper;
+    [MCP_GUARD_SERVICE]: McpGuardWrapper;
   }
 }
 
@@ -115,7 +127,7 @@ export const mcpStdioConnectionSchema = z.strictObject({
   /** 子行程的工作目錄。 */
   cwd: z.string().optional(),
   /**
-   * 要套沙箱：這個鍵存在就套，`{}` 也算（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。不寫就是直接起。
+   * 要套沙箱：這個鍵存在就套，`{}` 也算（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)）。不寫就不套沙箱。
    * 連不到網路、讀不到這裡沒列的檔；系統目錄、`command`、`cwd` 由宿主補。不看會話模式。沙箱不可用時不連線。
    */
   sandbox: z
@@ -228,7 +240,7 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
 /**
  * MCP plugin。
  *
- * `apply` 是 async 的，裡面做五件事：預留這台伺服器的名字、宣告了 `sandbox` 就包進沙箱、連上 server、`tools/list` 拿工具、逐個註冊。五件事
+ * `apply` 是 async 的，裡面做五件事：預留這台伺服器的名字、包裝 command（宣告了 `sandbox` 包進沙箱，其餘 stdio 交給 guard）、連上 server、`tools/list` 拿工具、逐個註冊。五件事
  * **都在載入期**——agent 跑起來的時候工具集合已經定了。
  *
  * **失敗照 dsh 分兩類**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：
@@ -261,10 +273,14 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     const { serverName } = declared;
     // 名字先佔住，在連線之前：重名是設定寫錯，不是伺服器不在，照 dsh 讓這一列失敗、不收成警告。
     registry.services.provide(`mcp:server:${serverName}`, { serverName });
-    // 包裝在連線、池之前：拿掉 `sandbox` 鍵之後就是一條 command 換過的 stdio 設定，之後的路徑不必知道沙箱。
+    // 包裝在連線、池之前：之後就是一條 command 換過的 stdio 設定，後面的路徑不必知道沙箱。
     let config: McpConfig;
     try {
-      config = await confined(declared, registry.services.get(MCP_SANDBOX_SERVICE));
+      config = await wrapStdio(
+        declared,
+        registry.services.get(MCP_SANDBOX_SERVICE),
+        registry.services.get(MCP_GUARD_SERVICE),
+      );
     } catch (error) {
       unreachable(registry, declared, error);
       return;
@@ -399,16 +415,27 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 
 export default mcpPlugin;
 
-/** 宣告了 `sandbox` 的 stdio 換成包過的；沒宣告原樣回。宿主沒給包裝就拋，不退回直接起。 */
-async function confined(
+/** 宣告了 `sandbox` 的 stdio 換成包過的，宿主沒給包裝就拋，不退回直接起。沒宣告的 stdio 交給 guard，包不了原樣回；非 stdio 原樣回。 */
+async function wrapStdio(
   config: McpConfig,
   wrap: McpSandboxWrapper | undefined,
+  guard: McpGuardWrapper | undefined,
 ): Promise<McpConfig> {
   const { connection } = config;
-  if (connection.transport !== 'stdio' || connection.sandbox === undefined) return config;
+  if (connection.transport !== 'stdio') return config;
+  const path = connection.env?.['PATH'];
+  if (connection.sandbox === undefined) {
+    const guarded = await guard?.({
+      command: connection.command,
+      args: connection.args ?? [],
+      cwd: connection.cwd,
+      path: typeof path === 'string' ? path : undefined,
+    });
+    if (guarded === undefined) return config;
+    return { ...config, connection: { ...connection, ...guarded, args: [...guarded.args] } };
+  }
   if (wrap === undefined) throw new Error('這個宿主沒有沙箱，宣告了 sandbox 的 server 不連線');
   const { sandbox, ...rest } = connection;
-  const path = connection.env?.['PATH'];
   const wrapped = await wrap({
     command: connection.command,
     args: connection.args ?? [],

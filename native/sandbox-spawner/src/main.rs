@@ -1,11 +1,12 @@
-//! 沙箱 spawner（#1946 S3）：常駐模式，加上給 MCP 用的單次模式 `--exec`。常駐模式由 Node 用 stdio pipe 起：stdin 收要求、stdout 送事件（格式見 `protocol.rs`），stderr 只給人看。
+//! 沙箱 spawner（#1946 S3）：常駐模式，加上給 MCP 用的單次模式 `--exec` 與 `--guard`。常駐模式由 Node 用 stdio pipe 起：stdin 收要求、stdout 送事件（格式見 `protocol.rs`），stderr 只給人看。
 //!
 //! ```text
 //! nexus-sandbox-spawner --listen <socket 路徑>
 //! nexus-sandbox-spawner --exec [--read <路徑>]... [--write <路徑>]... -- <程式> [參數]...
+//! nexus-sandbox-spawner --guard -- <程式> [參數]...
 //! ```
 //!
-//! `--exec` 是單次模式（見 `exec_confined`），不常駐，下面的啟動順序只管 `--listen`。
+//! `--exec`、`--guard` 是單次模式（見 `exec_confined`、`exec_guarded`），不常駐，下面的啟動順序只管 `--listen`。
 //!
 //! **嚴格單執行緒**：子行程在 fork 之後才配置記憶體（`child.rs`），只有單執行緒才安全。不要在這裡起任何 thread。
 //!
@@ -681,14 +682,51 @@ fn exec_confined(args: &[OsString]) -> ! {
     std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) { 127 } else { 126 });
 }
 
+/// 單次模式：不上沙箱，只讓這個行程跟著呼叫端走，再 exec（#2197）。給沒宣告沙箱的 MCP：呼叫端被 SIGKILL 時沒有人收它，
+/// 不理 stdin EOF 的 server 會留成孤兒。pid 不變，呼叫端照舊用同一個 pid 送訊號。
+/// `<程式>` 走 `execvp`，PATH 與 argv[0] 跟呼叫端直接起一樣。不做 `setsid`、不關 fd：除了 PDEATHSIG 與 SIGPIPE 還原，行為跟直接起一樣。
+/// exec 失敗照 shell 慣例回 127／126，其他失敗回 125。
+fn exec_guarded(args: &[OsString]) -> ! {
+    let die = |detail: &str| -> ! {
+        eprintln!("nexus-sandbox-spawner: {detail}");
+        std::process::exit(125);
+    };
+    if args.first().is_none_or(|arg| arg != "--") || args.len() < 2 {
+        die("--guard 的用法是 --guard -- <程式> [參數]...");
+    }
+    let Ok(argv) = args[1..].iter().map(|arg| CString::new(arg.as_bytes())).collect::<Result<Vec<_>, _>>() else {
+        die("參數含 NUL");
+    };
+    let caller = unsafe { libc::getppid() };
+    // 設好 PDEATHSIG 之後再核一次父行程，避開「設好之前呼叫端就死了」。
+    // SAFETY：這幾個呼叫只動這個行程自己；Rust 執行期把 SIGPIPE 設成忽略，exec 會帶過去，要還原。
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL);
+        if libc::getppid() != caller {
+            die("呼叫端已經不在");
+        }
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+    let mut pointers: Vec<*const libc::c_char> = argv.iter().map(|arg| arg.as_ptr()).collect();
+    pointers.push(std::ptr::null());
+    // SAFETY：pointers 以 NULL 結尾，指到的 CString 活到 exec。
+    unsafe { libc::execvp(pointers[0], pointers.as_ptr()) };
+    let err = std::io::Error::last_os_error();
+    eprintln!("nexus-sandbox-spawner: exec：{err}");
+    std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) { 127 } else { 126 });
+}
+
 fn main() {
     let raw: Vec<OsString> = std::env::args_os().collect();
     if raw.get(1).is_some_and(|arg| arg == "--exec") {
         exec_confined(&raw[2..]);
     }
+    if raw.get(1).is_some_and(|arg| arg == "--guard") {
+        exec_guarded(&raw[2..]);
+    }
     let args: Vec<String> = std::env::args().collect();
     let Some(path) = args.iter().position(|a| a == "--listen").and_then(|i| args.get(i + 1)).cloned() else {
-        eprintln!("usage: nexus-sandbox-spawner --listen <socket path> | --exec [--read <path>]... [--write <path>]... -- <program> [args]...");
+        eprintln!("usage: nexus-sandbox-spawner --listen <socket path> | --guard -- <program> [args]... | --exec [--read <path>]... [--write <path>]... -- <program> [args]...");
         std::process::exit(2);
     };
     let cpath = CString::new(path.as_bytes()).unwrap_or_else(|_| unavailable(0, "socket 路徑含 NUL"));

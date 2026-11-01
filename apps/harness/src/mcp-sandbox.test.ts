@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { createMcpSandboxWrapper } from './mcp-sandbox.js';
+import { createMcpGuardWrapper, createMcpSandboxWrapper, mcpGuardNotice } from './mcp-sandbox.js';
 import type { McpSandboxHost } from './mcp-sandbox.js';
 
 describe('createMcpSandboxWrapper', () => {
@@ -130,5 +130,37 @@ describe('createMcpSandboxWrapper', () => {
         path: '/no/such',
       }),
     ).rejects.toThrow('找不到');
+  });
+});
+
+describe('createMcpGuardWrapper（#2197）', () => {
+  const linux = { platform: 'linux', binary: '/opt/spawner' } as const;
+
+  it('command 原樣交給 --guard，不換成解好的路徑：argv[0] 與 PATH 跟直接起一樣', async () => {
+    const guard = createMcpGuardWrapper(() => linux);
+    await expect(guard({ command: 'sh', args: ['-c', 'true'] })).resolves.toEqual({
+      command: '/opt/spawner',
+      args: ['--guard', '--', 'sh', '-c', 'true'],
+    });
+  });
+
+  it('找不到程式不包：直接起才報得出今天那個錯', async () => {
+    const guard = createMcpGuardWrapper(() => linux);
+    await expect(guard({ command: 'no-such-program-2197', args: [] })).resolves.toBeUndefined();
+    await expect(guard({ command: 'sh', args: [], path: '/no/such/dir' })).resolves.toBeUndefined();
+  });
+
+  it.each([
+    ['不是 Linux', { platform: 'darwin', binary: '/opt/spawner' }],
+    ['找不到 spawner', { platform: 'linux', binary: undefined }],
+  ] as const)('%s：照舊直接起，起動講一次', async (_name, host) => {
+    await expect(
+      createMcpGuardWrapper(() => host)({ command: 'sh', args: [] }),
+    ).resolves.toBeUndefined();
+    expect(mcpGuardNotice(host)).toContain('孤兒');
+  });
+
+  it('包得了就不講', () => {
+    expect(mcpGuardNotice(linux)).toBeUndefined();
   });
 });
