@@ -37,6 +37,7 @@ import {
 import type { SessionEvent, SessionFormatCatalog } from '@nexus/core';
 
 import { historyFrames } from './conversation-history.js';
+import { ratingsByTurn } from './eval/session-scan.js';
 import { MEMORY_DURABILITY } from './feedback.fixture.js';
 import {
   legacyTwoFilePathsIn,
@@ -324,7 +325,7 @@ describe.each(names)('夾具 %s', (name) => {
           })),
         ).toEqual(trigger.feedback);
         // 驗收 H（#1606）：同一份舊日誌經插件的 `list`（讀之前先過 schema）照樣讀得出來——回放驗證不能把出貨過的舊格式當成壞掉。
-        // `list` 只回以訊息記的那幾筆（以輪記的舊評分不回，#1606 之前就是這樣，這張不動），所以只比那幾筆。
+        // 對不到回覆的舊評分不回（#1850），所以只比對得到回覆的。
         const listed = await createFeedbackService(
           { maxNoteBytes: 8192 },
           () => MEMORY_DURABILITY,
@@ -367,6 +368,46 @@ describe.each(names)('夾具 %s', (name) => {
       }
     });
   }
+});
+
+describe('對不到回覆的舊評分（#1850）：評分清單不回，離線掃描照算', () => {
+  const service = createFeedbackService({ maxNoteBytes: 8192 }, () => MEMORY_DURABILITY);
+
+  async function fixtureEvents(name: string): Promise<readonly SessionEvent[]> {
+    const opened = await openJsonlSessionStore({ directory: await copied(name) }).open(
+      'cli',
+      'read',
+    );
+    return opened.read();
+  }
+
+  async function listedOf(events: readonly SessionEvent[]): Promise<unknown> {
+    const listed = await service.list(new SessionLog('cli', { seed: events }));
+    return listed.ok && listed.value.items.map((item) => [item.messageId, item.rating]);
+  }
+
+  function scannedOf(events: readonly SessionEvent[]): unknown[] {
+    return [...ratingsByTurn(events)].map(([turn, item]) => [
+      turn,
+      'messageId' in item ? item.messageId : null,
+      item.rating,
+    ]);
+  }
+
+  it('v8：日誌沒有記回覆，那一輪的評分只有掃描讀得到', async () => {
+    const events = await fixtureEvents('v8');
+    expect(await listedOf(events)).toEqual([]);
+    expect(scannedOf(events)).toEqual([[0, null, 'negative']]);
+  });
+
+  it('v9：回覆沒有 id 的那一輪不回，回覆帶 id 的那一輪照回', async () => {
+    const events = await fixtureEvents('v9');
+    expect(await listedOf(events)).toEqual([['fixture-reply', 'positive']]);
+    expect(scannedOf(events)).toEqual([
+      [0, null, 'negative'],
+      [17, 'fixture-reply', 'positive'],
+    ]);
+  });
 });
 
 describe('規則（驗收 D）', () => {
