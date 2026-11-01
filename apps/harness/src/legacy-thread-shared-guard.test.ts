@@ -1,8 +1,8 @@
 /**
- * **舊 thread 寫不進新 thread 會讀成指示或技能的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）。
+ * **舊 thread 寫不進新 thread 會讀成指示、技能或記憶的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）。
  *
  * 舊 thread（header 的根就是 `--workspace`，或沒記根）的可寫根就是新 thread 的唯讀共用區。新 thread 從共用區根目錄讀指示檔、從共用區底下的
- * 技能來源讀技能，所以舊 thread 寫進那幾個地方的東西，會變成之後每條新 thread 的工作區指示或叫得出的技能，不分使用者。
+ * 技能來源讀技能、從 `memory` 插件的來源讀記憶，所以舊 thread 寫進那幾個地方的東西，會變成之後每條新 thread 的工作區指示、叫得出的技能或記憶，不分使用者。
  *
  * 從 `runServe` 起量（#1427）：真的 serve、出貨的組裝、產品的 placer、真的 JSONL 日誌；唯一換掉的是模型（腳本）。
  * 舊 thread 照 `thread-private-root.test.ts` 的做法造：先用固定根的接縫跑一輪，header 就記著 `--workspace`，再換回產品的 placer 續接。
@@ -255,6 +255,76 @@ describe('同一個舊 thread：其他地方照常，四個指示檔名、技能
     ]);
     expect(await exists(join(fx.shared, 'CLAUDE.md'))).toBe(false);
     expect(await exists(join(fx.shared, 'skills', 'x'))).toBe(false);
+  }, 120000);
+});
+
+/** 部署方掛上 `memory` 插件：一份來源在共用區，一份在每條新 thread 自己的私有根。 */
+const MEMORY_ROWS = `- insert:
+    - id: memory
+      name: '@nexus/plugin-memory'
+      config:
+        sources: ['/shared/MEMORY.md', '/NOTES.md']
+`;
+
+describe('舊 thread 改不到新 thread 的記憶來源（#2270）', () => {
+  it('edit 與 write 都被拒，新 thread 讀到部署方那份；私有根的來源不擋', async () => {
+    const fx = await fixture();
+    await writeFile(join(fx.shared, 'MEMORY.md'), 'DEPLOY-MEMORY', 'utf8');
+    const memory = { extraRows: MEMORY_ROWS };
+    await makeOldThread(fx, 'old', memory);
+
+    const old = await turn(
+      await start(
+        fx,
+        oneByOne([
+          { name: 'read_file', args: { file_path: '/MEMORY.md' } },
+          { name: 'read_file', args: { file_path: '/memory.md' } },
+          edit('/MEMORY.md', 'DEPLOY-MEMORY', 'LEGACY-MEMORY'),
+          write('/MEMORY.md', 'LEGACY-MEMORY'),
+          write('/memory.md', 'LEGACY-MEMORY'),
+          write('/NOTES.md', 'NOTE'),
+        ]),
+        memory,
+      ),
+      'old',
+    );
+    expect(old.slice(2).map((tool) => tool.error?.includes('記憶來源') === true)).toEqual([
+      true,
+      true,
+      true,
+      false,
+    ]);
+    expect(await readFile(join(fx.shared, 'MEMORY.md'), 'utf8')).toBe('DEPLOY-MEMORY');
+    expect(await readFile(join(fx.shared, 'NOTES.md'), 'utf8')).toBe('NOTE');
+
+    const fresh = await turn(
+      await start(
+        fx,
+        oneByOne([{ name: 'read_file', args: { file_path: '/shared/MEMORY.md' } }]),
+        memory,
+      ),
+      'fresh',
+    );
+    expect(fresh[0]?.text).toContain('DEPLOY-MEMORY');
+  }, 120000);
+
+  it('反例：沒掛 memory 插件，同一個檔照常能改', async () => {
+    const fx = await fixture();
+    await writeFile(join(fx.shared, 'MEMORY.md'), 'DEPLOY-MEMORY', 'utf8');
+    await makeOldThread(fx, 'old');
+
+    const old = await turn(
+      await start(
+        fx,
+        oneByOne([
+          { name: 'read_file', args: { file_path: '/MEMORY.md' } },
+          write('/MEMORY.md', 'NOTE'),
+        ]),
+      ),
+      'old',
+    );
+    expect(old[1]?.error).toBeUndefined();
+    expect(await readFile(join(fx.shared, 'MEMORY.md'), 'utf8')).toBe('NOTE');
   }, 120000);
 });
 
