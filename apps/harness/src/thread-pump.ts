@@ -191,7 +191,7 @@ import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
 import { startTurnClock, unsettledToolNames } from './turn-clock.js';
 import type { TurnClock } from './turn-clock.js';
 // 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
-import { turnFailureOf } from './live-model.js';
+import { classifyTurnFailure, STORAGE_FULL_CODE, turnFailureOf } from './live-model.js';
 import {
   answerElicitation,
   declineAll,
@@ -1151,6 +1151,18 @@ function isRootCompleted(raw: RawProtocolEvent): boolean {
   return (
     isRootTerminal(raw) && (raw.params.data as { event?: unknown } | null)?.event === 'completed'
   );
+}
+
+function isRootFailed(raw: RawProtocolEvent): boolean {
+  return isRootTerminal(raw) && (raw.params.data as { event?: unknown } | null)?.event === 'failed';
+}
+
+/** 錯誤鏈上是空間用完的話，把這顆 `failed` frame 的字換成給使用者的那句，同 `turn/failed`。 */
+function withStorageFullMessage(raw: RawProtocolEvent, error: unknown): RawProtocolEvent {
+  const { code, message } = classifyTurnFailure(error);
+  if (code !== STORAGE_FULL_CODE) return raw;
+  const data = { ...(raw.params.data as object), error: message };
+  return { ...raw, params: { ...raw.params, data } } as RawProtocolEvent;
 }
 
 function isRootTerminal(raw: RawProtocolEvent): boolean {
@@ -2281,7 +2293,7 @@ export class ThreadPump {
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error(thrownMessage(error), { cause: error });
-      this.#reportTurnFailed(log.append('turn/failed', turnFailureOf(error)));
+      this.#reportTurnFailed(log.append('turn/failed', this.#turnFailureNoted(error)));
       throw failure;
     }
     // 那幾張卡照上面寫的 `tool/result` 收（#297）。**不走日誌的訂閱者**：它只認有 run 的時候，
@@ -2943,6 +2955,15 @@ export class ThreadPump {
     }
   }
 
+  /** {@link turnFailureOf}，空間用完時多寫一行伺服器日誌：`STORAGE_FULL` 的 message 是固定句，原文只留在這裡。 */
+  #turnFailureNoted(error: unknown): ReturnType<typeof turnFailureOf> {
+    const failure = turnFailureOf(error);
+    if (failure.error.code === STORAGE_FULL_CODE) {
+      this.#warn?.(`[輪次] thread ${this.#threadId} 儲存空間滿：${thrownMessage(error)}`);
+    }
+    return failure;
+  }
+
   /** `turn/failed` 寫進日誌之後通知外面（#1536）。回呼拋錯吞掉：通知是附帶的，不能改變這一輪怎麼收尾。 */
   #reportTurnFailed(failed: SessionEvent<'turn/failed'>, runId?: string): void {
     const handler = this.#onTurnFailed;
@@ -3124,14 +3145,31 @@ export class ThreadPump {
       markProjectionsHandled(run);
       // 圖在串流被抽的時候推進，工具在這條 async 鏈上執行：包進 `runScope`，模型在輪內的 `update_goal` 才認得出自己是這一輪。
       await runScope.run(current, async () => {
-        for await (const raw of run) {
-          this.#applyStreamRetrySignal(current, raw);
-          trackRootReply(current, raw);
-          trackUnsettledReply(current, raw);
-          for (const event of this.#translate(raw)) {
-            this.#broadcast(event);
+        // 收尾的 `failed` frame 只帶字串，真的錯要等緊接著的拋出才看得到，所以押到那時候才送。
+        let heldFailure: RawProtocolEvent | undefined;
+        const send = (raw: RawProtocolEvent): void => {
+          for (const event of this.#translate(raw)) this.#broadcast(event);
+        };
+        const releaseFailure = (error?: unknown): void => {
+          if (heldFailure === undefined) return;
+          const raw = heldFailure;
+          heldFailure = undefined;
+          send(error === undefined ? raw : withStorageFullMessage(raw, error));
+        };
+        try {
+          for await (const raw of run) {
+            this.#applyStreamRetrySignal(current, raw);
+            trackRootReply(current, raw);
+            trackUnsettledReply(current, raw);
+            releaseFailure();
+            if (isRootFailed(raw)) heldFailure = raw;
+            else send(raw);
           }
+        } catch (error) {
+          releaseFailure(error);
+          throw error;
         }
+        releaseFailure();
       });
       // 串流抽完就關窗（#710）：圖收尾時通常已經關了（`finish`），這裡擋的是沒經過那顆 middleware 就收掉的圖——停在
       // 核准點的不算，那時之後的插話由 `#pending` 那一條收。
@@ -3181,7 +3219,7 @@ export class ThreadPump {
       this.#reportTurnFailed(
         this.#sessions.root.append(
           'turn/failed',
-          turnFailureOf(failure === thrown ? error : failure),
+          this.#turnFailureNoted(failure === thrown ? error : failure),
         ),
         claimed?.id,
       );
