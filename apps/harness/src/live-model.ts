@@ -2,7 +2,6 @@ import { ContextOverflowError } from '@langchain/core/errors';
 import { parseRetryAfterMs } from '@langchain/core/utils/async_caller';
 import { MiddlewareError } from 'langchain';
 import { ChatOpenAI, OpenAIClient } from '@langchain/openai';
-import type { ChatOpenAIFields } from '@langchain/openai';
 import {
   assertImageBudget,
   beginAttemptReport,
@@ -31,6 +30,8 @@ import { assertUsableApiKey, INVALID_CREDENTIAL_CODE } from './api-key.js';
 import { userAgent } from './attribution.js';
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
 import { GatedChatOpenAI } from './gated-chat-openai.js';
+import { GuardedChatOpenAI } from './guarded-chat-openai.js';
+import type { GuardedChatOpenAIFields } from './guarded-chat-openai.js';
 import { LOCAL_CAPACITY_CODE } from './request-gate.js';
 import type { RequestGate } from './request-gate.js';
 import type { RequestGuard } from './attachment-chat-openai.js';
@@ -1663,6 +1664,37 @@ export function imageBudgetGuard(entry: ModelEntry): RequestGuard | undefined {
 }
 
 /**
+ * 供應商拒絕憑證（401／403）時往外拋的錯。`message` 是固定句，供應商的原話可能帶部分金鑰，留在 `cause`：
+ * {@link classifyTurnFailure} 沿 `cause` 照舊認出 `AUTH`，`failureOriginalText` 照舊讀得到原文。
+ */
+export class CredentialRejectedError extends Error {
+  override readonly name = 'CredentialRejectedError';
+
+  /** @param cause - 模型呼叫拋出來的原錯誤。 */
+  constructor(cause: unknown) {
+    super(AUTH_FAILURE_MESSAGE, { cause });
+  }
+}
+
+/**
+ * {@link GuardedChatOpenAI} 的換錯函式：`AUTH` 換成 {@link CredentialRejectedError}，原文交給憑證服務寫伺服器日誌。
+ * 前景 `task` 的失敗被圍堵翻成工具結果、不經 `turn/failed`，所以在這裡寫，同一輪的 root 失敗會多一行 `[輪次]`。
+ */
+function credentialRejection(
+  credentials: CredentialService,
+  config: LiveModelConfig,
+): (error: unknown) => unknown {
+  return (error) => {
+    if (error instanceof CredentialRejectedError || isAbortLike(error)) return error;
+    if (classifyTurnFailure(error, true).code !== AUTH_FAILURE_CODE) return error;
+    credentials.reportRejected(
+      `[憑證] 模型服務拒絕了 ${config.apiKeyEnv}（模型 ${config.modelId}）：${thrownMessage(error)}`,
+    );
+    return new CredentialRejectedError(error);
+  };
+}
+
+/**
  * 真實供應商的 model。
  *
  * key **每次請求前才向憑證服務取**（`credentials.ts`），缺少時直接失敗，沒有預設值也不 fallback
@@ -1706,7 +1738,7 @@ export function createLiveModel(
   // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
   resolveUsableKey(credentials, config.apiKeyEnv);
 
-  const fields: ChatOpenAIFields = {
+  const fields: GuardedChatOpenAIFields = {
     model: config.modelId,
     // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組；與 #1538 夾在中間外層的完成檢查；
     // 與最外面一層的 `User-Agent`，#1562，只改請求標頭）：最內層是
@@ -1747,6 +1779,7 @@ export function createLiveModel(
     // 分類（下架、溢出、不可重試）與把「這一次值得重打」報給重試那一層，都靠它。
     maxRetries: 0,
     onFailedAttempt: classifyAndReportFailedAttempt,
+    translateFailure: credentialRejection(credentials, config),
     // 用途專屬的請求內容，見 {@link LiveModelPurpose}。**要在建構時給**：建好之後才設 `modelKwargs` 不會進請求
     // （#650 實測，前兩輪的參數就是這樣沒送出去的）。
     ...((purpose === 'session-title' || overrides.thinkingOff === true) &&
@@ -1767,7 +1800,7 @@ export function createLiveModel(
         )
       : requestGate !== undefined
         ? new GatedChatOpenAI(fields, requestGate)
-        : new ChatOpenAI(fields);
+        : new GuardedChatOpenAI(fields);
   // 對話那一顆（含子代理）貼路由標籤（#723）：`model/start.route`、換模型通知與系統提示詞的 `{{model}}` 讀它。標題等別的用途不貼——
   // 它們不是對話的請求，不該冒充「最近一次請求走的路由」。
   return purpose === undefined
@@ -2064,8 +2097,9 @@ export function failureOriginalText(
  * 讀的人不用猜哪個才是人話。`STORAGE_FULL`、`AUTH` 例外：換成固定句，原文可能帶主機路徑或部分金鑰，見 {@link fixedFailureMessage}。
  *
  * @param error - 這一輪拋出來的東西，可能已經被包過很多層。
+ * @param fromModelCall - 呼叫端知道這是模型呼叫拋的（還沒被基座包過，看不出來的時候）。
  */
-export function classifyTurnFailure(error: unknown): LlmFailure {
+export function classifyTurnFailure(error: unknown, fromModelCall = false): LlmFailure {
   const message = thrownMessage(error);
   const { root, wrappedModelCall } = unwrapMiddlewareError(error);
 
@@ -2084,7 +2118,11 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let storageFull = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
-  const modelCall = wrappedModelCall || links.some((link) => isModelCallFailure(link));
+  // {@link CredentialRejectedError} 自己就是模型呼叫的錯：`cause` 上有原文，不靠外面有沒有包，它要永遠是 `AUTH`。
+  const modelCall =
+    fromModelCall ||
+    wrappedModelCall ||
+    links.some((link) => isModelCallFailure(link) || link instanceof CredentialRejectedError);
   for (const link of links) {
     // 狀態要是 100–599 的整數（#1557，dsh `LlmError` 的欄位規則）：`NaN`、`99`、`429.5` 不是狀態，當作沒有這一格。
     const found = readField(link, 'status');

@@ -35,16 +35,17 @@
  * @module
  */
 
-import { ChatOpenAI } from '@langchain/openai';
-import type { ChatOpenAIFields } from '@langchain/openai';
+import type { ChatOpenAI } from '@langchain/openai';
 import type { BaseMessage } from '@langchain/core/messages';
 
+import { GuardedChatOpenAI } from './guarded-chat-openai.js';
+import type { GuardedChatOpenAIFields } from './guarded-chat-openai.js';
 import type { RequestGate } from './request-gate.js';
 
-export class GatedChatOpenAI extends ChatOpenAI {
+export class GatedChatOpenAI extends GuardedChatOpenAI {
   readonly #gate: RequestGate | undefined;
 
-  constructor(fields: ChatOpenAIFields, gate?: RequestGate) {
+  constructor(fields: GuardedChatOpenAIFields, gate?: RequestGate) {
     super(fields);
     this.#gate = gate;
   }

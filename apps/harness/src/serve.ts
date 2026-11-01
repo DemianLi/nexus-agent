@@ -710,6 +710,7 @@ async function startServer(
       launchEnv: processLaunchEnv(),
       store: true,
     });
+  credentials.onRejected(warn);
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455），與 CLI 同一條
   // 路：同一個函式、同一個 home 層、同一組 `--patch`。
   //

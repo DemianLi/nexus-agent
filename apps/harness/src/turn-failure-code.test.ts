@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { MemorySaver } from '@langchain/langgraph';
+import { OpenAIClient } from '@langchain/openai';
 import type { PluginEntry } from '@nexus/core';
 import {
   AUTH_FAILURE_MESSAGE,
@@ -26,7 +27,15 @@ import { createNexusAgent } from './agent-factory.js';
 import { runCli } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
-import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
+import { ambientCredentials } from './credentials.js';
+import type { CredentialService } from './credentials.js';
+import {
+  createLiveModel,
+  CredentialRejectedError,
+  LIVE_API_KEY_ENV,
+  turnFailureOf,
+} from './live-model.js';
+import { createRequestGate } from './request-gate.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { composeAttachSessions } from './session-attach.js';
 import { sessionEventsOf } from './session-files.fixture.js';
@@ -40,17 +49,26 @@ const LEAK = 'sk-FAKE-LEAK-1234567890';
 let server: Server;
 let baseUrl: string;
 let status = 401;
+let midStream = false;
 let hits = 0;
 let dir: string;
 
 beforeEach(async () => {
   status = 401;
+  midStream = false;
   hits = 0;
   vi.stubEnv(LIVE_API_KEY_ENV, 'fake-key-for-loopback');
   dir = await mkdtemp(join(tmpdir(), 'nexus-turn-failure-'));
   server = createServer((request, response) => {
     hits += 1;
     request.resume();
+    if (midStream) {
+      response.writeHead(200, { 'content-type': 'text/event-stream' });
+      const delta = { id: 'x', choices: [{ index: 0, delta: { content: '先講' } }] };
+      const failure = { error: { code: 401, message: `Incorrect API key: ${LEAK}`, type: 'x' } };
+      response.end(`data: ${JSON.stringify(delta)}\n\ndata: ${JSON.stringify(failure)}\n\n`);
+      return;
+    }
     response.writeHead(status, { 'content-type': 'application/json' });
     response.end(JSON.stringify({ error: { message: `Incorrect API key: ${LEAK}`, type: 'x' } }));
   });
@@ -61,15 +79,34 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   server.closeAllConnections();
   await new Promise<void>((done) => server.close(() => done()));
   await rm(dir, { recursive: true, force: true });
 });
 
-const live = () =>
+const live = (credentials: CredentialService = ambientCredentials()) =>
   createLiveModel(
     liveModelConfigSchema.parse({ baseUrl, retryPolicy: { mode: 'normal', maxRetries: 0 } }),
+    undefined,
+    credentials,
   );
+
+const FOREGROUND_TASK = { description: '幹活', subagent_type: 'worker' };
+
+const workerPlugin = (model: unknown): PluginEntry => ({
+  plugin: {
+    name: 'worker-host',
+    apply(registry) {
+      registry.subagents.register({
+        name: 'worker',
+        description: '幹活的。',
+        systemPrompt: '你是 worker。',
+        model: model as never,
+      });
+    },
+  },
+});
 
 async function until(predicate: () => boolean, ms = 8000): Promise<void> {
   const start = Date.now();
@@ -163,6 +200,138 @@ describe('一輪失敗的錯誤碼', () => {
     expect(run.history.errorCode).toBe('INVALID_REQUEST');
     expect(run.live.error).toContain(LEAK);
     expect(run.warnings.join('\n')).not.toContain(LEAK);
+  }, 20000);
+
+  it('前景子代理的真 401：下行、冷讀歷史、回給父模型的結果都是固定句，伺服器日誌含', async () => {
+    const rejected: string[] = [];
+    const credentials = ambientCredentials();
+    credentials.onRejected((line) => rejected.push(line));
+    const root = new ScriptedChatModel({
+      turns: [
+        { content: '委派。', toolCalls: [{ name: 'task', id: 'c1', args: FOREGROUND_TASK }] },
+        { content: '子代理失敗了。' },
+      ],
+    });
+    const run = await runThroughWire(
+      root,
+      (state) => root.prompts.length >= 2 && state.status === 'idle',
+      {
+        plugins: [workerPlugin(live(credentials))],
+      },
+    );
+    expect(hits).toBeGreaterThan(0);
+    expect(JSON.stringify(run.frames)).not.toContain(LEAK);
+    expect(JSON.stringify(run.coldFrames)).not.toContain(LEAK);
+    const fixed = `工具 task 執行失敗：${AUTH_FAILURE_MESSAGE}`;
+    expect(JSON.stringify(run.coldFrames)).toContain(fixed);
+    expect(JSON.stringify(root.lastPrompt)).toContain(fixed);
+    expect(JSON.stringify(root.lastPrompt)).not.toContain(LEAK);
+    expect(rejected.join('\n')).toContain(LEAK);
+  }, 20000);
+
+  it('前景子代理串流中段的憑證失敗：同樣只有固定句', async () => {
+    midStream = true;
+    const rejected: string[] = [];
+    const credentials = ambientCredentials();
+    credentials.onRejected((line) => rejected.push(line));
+    const root = new ScriptedChatModel({
+      turns: [
+        { content: '委派。', toolCalls: [{ name: 'task', id: 'c1', args: FOREGROUND_TASK }] },
+        { content: '子代理失敗了。' },
+      ],
+    });
+    const run = await runThroughWire(
+      root,
+      (state) => root.prompts.length >= 2 && state.status === 'idle',
+      {
+        plugins: [workerPlugin(live(credentials))],
+      },
+    );
+    expect(hits).toBeGreaterThan(0);
+    expect(JSON.stringify(run.frames)).not.toContain(LEAK);
+    expect(JSON.stringify(run.coldFrames)).not.toContain(LEAK);
+    expect(JSON.stringify(root.lastPrompt)).toContain(AUTH_FAILURE_MESSAGE);
+    expect(rejected.join('\n')).toContain(LEAK);
+  }, 20000);
+
+  it('serve 那顆帶閘的模型 bindTools 之後一樣換，重試開著也只打一次', async () => {
+    const rejected: string[] = [];
+    const credentials = ambientCredentials();
+    credentials.onRejected((line) => rejected.push(line));
+    const model = createLiveModel(
+      liveModelConfigSchema.parse({ baseUrl }),
+      undefined,
+      credentials,
+      { requestGate: createRequestGate({ maxConcurrentRequests: 1, maxWaitMs: 1000 })! },
+    );
+    const bound = model.bindTools([]);
+    await expect(bound.invoke('嗨')).rejects.toThrow(AUTH_FAILURE_MESSAGE);
+    await expect(bound.invoke('嗨')).rejects.toMatchObject({
+      name: 'CredentialRejectedError',
+      cause: expect.objectContaining({ status: 401 }) as unknown,
+    });
+    expect(hits).toBe(2);
+    expect(rejected).toHaveLength(2);
+    expect(rejected[0]).toContain(LEAK);
+  }, 20000);
+
+  it('沒有閘的模型：串流與 bindTools 之後一樣換', async () => {
+    const model = live();
+    await expect(
+      (async () => {
+        for await (const _chunk of await model.stream('嗨')) void _chunk;
+      })(),
+    ).rejects.toThrow(AUTH_FAILURE_MESSAGE);
+    await expect(model.bindTools([]).invoke('嗨')).rejects.toThrow(AUTH_FAILURE_MESSAGE);
+  }, 20000);
+
+  it('root 串流中段的真 401：下行、turn/failed、冷讀歷史都是固定句', async () => {
+    midStream = true;
+    const rejected: string[] = [];
+    const credentials = ambientCredentials();
+    credentials.onRejected((line) => rejected.push(line));
+    const run = await runThroughWire(live(credentials), failed);
+    for (const state of [run.live, run.history]) {
+      expect(state).toMatchObject({ error: AUTH_FAILURE_MESSAGE, errorCode: 'AUTH' });
+    }
+    expect(JSON.stringify(run.frames)).not.toContain(LEAK);
+    expect(JSON.stringify(run.coldFrames)).not.toContain(LEAK);
+    expect(rejected.join('\n')).toContain(LEAK);
+  }, 20000);
+
+  it('沒被基座包過的串流中段憑證錯誤：照樣是 AUTH 與固定句，原文不進 turn/failed', () => {
+    const inband = new OpenAIClient.APIError(
+      undefined,
+      { code: 401, message: LEAK },
+      undefined,
+      undefined as never,
+    );
+    const failure = turnFailureOf(new CredentialRejectedError(inband));
+    expect(failure.error.code).toBe('AUTH');
+    expect(failure.message).toBe(AUTH_FAILURE_MESSAGE);
+    expect(JSON.stringify(failure)).not.toContain(LEAK);
+  });
+
+  it('前景子代理的其他失敗（真的 400）：文字照舊，憑證那條不寫', async () => {
+    status = 400;
+    const rejected: string[] = [];
+    const credentials = ambientCredentials();
+    credentials.onRejected((line) => rejected.push(line));
+    const root = new ScriptedChatModel({
+      turns: [
+        { content: '委派。', toolCalls: [{ name: 'task', id: 'c1', args: FOREGROUND_TASK }] },
+        { content: '子代理失敗了。' },
+      ],
+    });
+    const run = await runThroughWire(
+      root,
+      (state) => root.prompts.length >= 2 && state.status === 'idle',
+      {
+        plugins: [workerPlugin(live(credentials))],
+      },
+    );
+    expect(JSON.stringify(run.coldFrames)).toContain(LEAK);
+    expect(rejected).toEqual([]);
   }, 20000);
 
   it('背景子代理的真 401：它自己的歷史與結算都不含原文，伺服器日誌含', async () => {
@@ -314,7 +483,8 @@ describe('取消', () => {
 });
 
 describe('cli', () => {
-  it('真的 401：行程拋出的錯（印進 stderr）帶原文，cli.jsonl 不帶', async () => {
+  it('真的 401：stderr 帶原文，行程拋出的錯與 cli.jsonl 不帶', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockReturnValue(true);
     const root = await mkdtemp(join(dir, 'log-'));
     const patch = join(dir, 'patch.yml');
     await writeFile(
@@ -339,7 +509,8 @@ describe('cli', () => {
       () => undefined,
       (error: unknown) => error,
     );
-    expect(String((thrown as Error).message)).toContain(LEAK);
+    expect(stderr.mock.calls.join('\n')).toContain(LEAK);
+    expect((thrown as Error).message).toBe(AUTH_FAILURE_MESSAGE);
     const [runDir] = await readdir(root);
     const events = await sessionEventsOf(join(root, runDir!), 'cli');
     expect(JSON.stringify(events)).not.toContain(LEAK);
