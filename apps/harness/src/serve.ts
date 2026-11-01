@@ -109,6 +109,7 @@ import {
   verifyThreadRootsBase,
   createFixedThreadPlacer,
   createThreadPlacer,
+  isThreadRootOf,
   resolveThreadRootsBase,
   SHARED_WORKSPACE_PREFIX,
 } from './thread-roots.js';
@@ -166,6 +167,7 @@ import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { launchToolResultStashSweep } from './tool-result-stash-sweep.js';
+import { launchOrphanStagingSweeper } from './orphan-staging-sweep.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
@@ -678,6 +680,8 @@ async function startServer(
   root: CordisRoot,
   mcpPool: McpConnectionPool,
 ): Promise<RunningServe> {
+  // 這裡已經握著 home 鎖：這個時間以前的暫存都來自已經結束的行程（#2198）。
+  const serveStartedAtMs = Date.now();
   // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌的三支在這裡另取名字，不讓兩個 `log` 在同一段裡打架。
   // **每一行伺服器日誌都帶等級**（#1534）：`log` 是狀態披露（info），`warn` 是要人處理的，`fail` 是起不來與收不了的（error）。
   // 傳給別的函式當 `log`／`warn` 回呼時，照那個回呼講的是哪一種接哪一支。
@@ -1075,6 +1079,17 @@ async function startServer(
               ? undefined
               : (threadId) => `${sessionStore.directory}\0${threadId}`,
         });
+  // 崩潰留在私有根的原子寫入暫存（#2198）：只有私有根這條路才有，續接時排一次背景掃描。
+  const orphanStaging =
+    options.workspaceRootOf === undefined &&
+    sharedWorkspaceRoot !== undefined &&
+    sessionStore !== undefined
+      ? launchOrphanStagingSweeper(await root.tree.context(), {
+          base: threadRootsBase,
+          startedAtMs: serveStartedAtMs,
+          warn,
+        })
+      : undefined;
   // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）：鍵與建置版本是 server 的性質，起動期讀一次；清單與雜湊
   // 是那條 thread 組裝時重讀的那一份（#1405），跟 `--dump-config` 同源。落盤關掉就不算。
   const headerMetadataOf =
@@ -1347,6 +1362,13 @@ async function startServer(
           resumedHeader: history?.header,
         });
         const threadWorkspaceRoot = placement.root;
+        // `--workspace` 退成可寫根的舊 thread 不掃：那裡是部署方的地方。
+        if (
+          history !== undefined &&
+          threadWorkspaceRoot !== undefined &&
+          isThreadRootOf(threadRootsBase, threadWorkspaceRoot)
+        )
+          orphanStaging?.sweep(threadWorkspaceRoot, threadId);
         // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有
         // `--workspace` 的話那道 fence 不在路徑上，接回來的 `read-only` 會靜靜蒸發。
         const resumedSandbox =
