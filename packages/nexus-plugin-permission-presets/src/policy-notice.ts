@@ -10,6 +10,7 @@
  */
 
 import type { PreStepInjection, PreStepInvocation, PreStepListener } from '@nexus/agent-loop';
+// 讓 `command/run`／`command/done` 的宣告合併進得了這個編譯單元；沒有執行期的引用。
 import type {} from '@nexus/plugin-commands';
 import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 import type { SessionEvent, SessionLookup } from '@nexus/session';
@@ -72,7 +73,7 @@ export class PolicyNoticeLedger {
 /**
  * 建 listener。
  *
- * @param ledgerOf - 這份日誌的帳；子代理的日誌沒有帳。
+ * @param ledgerOf - 這份日誌的帳；子代理與沒有圍堵的 thread 的日誌沒有帳。
  * @param lookup - 這次呼叫屬於哪份日誌。
  * @returns 登記給 `agentLoop.preStep` 的 listener。
  */

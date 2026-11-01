@@ -32,7 +32,7 @@
  *    的每個人都切得到，所以出廠只留兩組。CLI 跟著少一組屬理由 1：出貨層只有一份表，表達不出「serve 少、CLI 照舊」。部署方要全開就把整張表
  *    重寫一份加回（見 `presets.ts` 的 `DEFAULT_PRESETS`）；沒加回又用 `--sandbox danger-full-access` 起，新會話在起動當下失敗。
  * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn、起始值在宿主的組 thread 那一步算。**
- *    這四條偏離的理由、類別與撤除條件登記在 `@nexus/permission-presets` 的檔頭第 1 至 4 條與 `docs/plugin-contract.md`；
+ *    這四條偏離的理由、類別與撤除條件登記在 `@nexus/permission-presets` 的檔頭第 1 至 4 條與 `docs/plugin-contract.md`。
  * 9. **續接時，日誌記的沙箱比表裡每一組都寬就收回預設組（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) 第 2 步）。**
  *    dsh 續接照日誌裡的值，表怎麼變都不動它；我們的 serve 多人共用一台主機，出廠拿掉全開（偏離 6）之後，升級前已經切到全開的會話若續接照舊，
  *    等於那一條 thread 永遠留著表裡不存在的全開。收的條件只有「比每一組都寬」（部署方加回全開不收；`read-only` 被刪掉後停在 `read-only` 的會話比
@@ -61,12 +61,12 @@
  * ## 形狀（#1491：第十四顆搬上 Cordis 樹的插件）
  *
  * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**。相依只有 `@nexus/sdk`、`@nexus/fs`（工作區根）、
- * `@nexus/commands`、`@nexus/projections`、`@nexus/session`（會話參與者）、`@nexus/permission-presets`（服務的定義）與 `@nexus/wire`（詞彙）：
+ * `@nexus/commands`、`@nexus/projections`、`@nexus/session`（會話參與者）、`@nexus/agent-loop`（`preStep`）、`@nexus/plugin-commands`（只取型別）、`@nexus/permission-presets`（服務的定義）與 `@nexus/wire`（詞彙）：
  * **沒有一行 import `@nexus/core`**（決議 §3-4 第 17 條；#1420 的 lint 規則擋它）。
  *
  * - **插件不碰控制器。** 以前 `apply` 從 host 服務抓兩顆控制器 `switchTo`；現在宿主組一條 thread 時呼叫 {@link PermissionPresetsService.start}
  *   （純函式）拿起始值，自己靜默切控制器。`/permission` 直接寫 root 日誌，控制器跟著日誌走。
- * - **提供一個服務、消費四個接縫。**
+ * - **提供一個服務、消費五個接縫。**
  * - 舊的 `NexusPlugin` 外殼（`createPermissionPresetsPlugin`）沒有搬成夾具：遷完之後全 repo 沒有任何呼叫端（`git grep -n "createPermissionPresetsPlugin"` 零筆），測試改走真的 `Loader` 與提供者，所以直接刪掉。
  *
  * @module
@@ -134,7 +134,7 @@ export type {
 /** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`、必掛判斷用）。 */
 export const name = 'permission-presets';
 
-/** 要的服務：fs（行程級的「有沒有圍堵」與逐條 thread 的可寫根）、命令、投影、會話查找（參與者接縫）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併。 */
+/** 要的服務：fs（行程級的「有沒有圍堵」與逐條 thread 的可寫根）、命令、投影、會話查找（參與者接縫）、agent-loop（切換政策的通知）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併。 */
 export const inject = injectOf(
   need(fsToken, '^2.0.0'),
   need(commandsToken, '^1.0.0'),

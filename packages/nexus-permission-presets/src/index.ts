@@ -7,7 +7,7 @@
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
  * | 定義 | 這個套件：token、{@link PermissionPresetsService}、起始請求與結果的型別、契約版本 | `@nexus/sdk`，與 `@nexus/core`、`@nexus/wire` 的詞彙（見下） |
- * | 提供者 | `@nexus/plugin-permission-presets`，樹上一列函式插件 | 這個套件、`@nexus/sdk`、`@nexus/session`、`@nexus/commands`、`@nexus/projections` |
+ * | 提供者 | `@nexus/plugin-permission-presets`，樹上一列函式插件 | 這個套件、`@nexus/sdk`、`@nexus/session`、`@nexus/commands`、`@nexus/projections`、`@nexus/agent-loop`、`@nexus/fs` |
  * | 消費者 | 宿主（`apps/harness`）：組一條 thread 時從折進來的 `registry.services` 取它，叫 {@link PermissionPresetsService.start} | 這個套件；**不 import 提供者套件**（決議 §3-4 第 16 條） |
  *
  * ## 偏離登記

@@ -732,6 +732,15 @@ const withApprovalPolicyPrompt = (chain: readonly string[]): string[] =>
     name === 'nexusSystemPrompt' ? ['nexusApprovalPolicyPrompt', name] : [name],
   );
 
+/**
+ * `permission-presets` 掛了一位 `agent/pre-step` listener（切換核准政策的通知，#2057）：CLI 與 serve 的樹才有這個插件，鏈上在
+ * `nexusSandboxPolicy` 之後多**恰好一格**。同上，只在這裡插這一格。
+ */
+const withApprovalPolicyNotice = (chain: readonly string[]): string[] =>
+  chain.flatMap((name) =>
+    name === 'nexusSandboxPolicy' ? [name, 'nexusApprovalPolicyNotice'] : [name],
+  );
+
 describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐字相同（出貨清單、CLI、serve 各一次）', () => {
   it('出貨清單（createNexusAgent）', async () => {
     const shipped = await shippedPlugins();
@@ -765,7 +774,7 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
       });
       try {
         expect(middlewareNames(thread.built.agent)).toEqual(
-          withApprovalPolicyPrompt(withTimeContext(expected)),
+          withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
         );
       } finally {
         await closeThread(thread);
