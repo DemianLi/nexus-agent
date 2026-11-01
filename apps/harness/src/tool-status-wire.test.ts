@@ -9,7 +9,7 @@
  * 兩層：
  *
  * - **產品路徑**：真的組裝、真的 pump、真的折疊器（`@nexus/wire` 的 `reduceConversation`），在
- *   `handler` 之後改結果的四個生產者各一條，外加成功的對照與子代理裡的一顆。這一層量得到「真的會對」，
+ *   `handler` 之後改結果的四個生產者各一條，外加成功的對照、子代理裡的一顆與沒開跑就被中止的一顆。這一層量得到「真的會對」，
  *   **量不到先後**——日誌判定與那顆 frame 誰先到 pump 是自然發生的那一種。
  * - **送達的兩種先後**：假的 agent 自己排，判定在 frame 之前、之後各一次。只有這一層分得出兩條分支。
  *
@@ -38,8 +38,8 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
 /**
- * web 判斷工具被中止時手寫的兩個碼（`apps/web/src/lib/tool-aborted.ts`、`question-view.ts`）。web 不相依 `@nexus/core`，core 改字串編譯不會紅，
- * 所以這裡刻意也寫字面值，不從 core 匯入：斷言才量得到 wire 上的值還是 web 認得的那一個。
+ * web 判斷工具被中止時手寫的兩個碼（`apps/web/src/lib/tool-aborted.ts`、`question-view.ts`）。web 的產品碼不從 `@nexus/core` 取值，core 改字串編譯不會紅，
+ * 所以這裡刻意也寫字面值，不從 core 匯入。量得到的只有生產者那一側；web 改值時要同改這兩個常數。
  */
 const WEB_TOOL_ABORTED_CODE = 'ABORTED';
 const WEB_ABORTED_BEFORE_DISPATCH_CODE = 'ABORTED_BEFORE_DISPATCH';
