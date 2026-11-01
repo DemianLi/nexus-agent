@@ -183,8 +183,8 @@ export interface StartWireServerOptions {
    */
   readonly warn?: (error: Error, request: WarnedRequest) => void;
   /**
-   * SSE 心跳間隔（毫秒），預設 {@link DEFAULT_SSE_HEARTBEAT_INTERVAL_MS}。緩衝卡著、連 {@link MAX_MISSED_HEARTBEATS} 個間隔
-   * 沒有任何排出去的進展，就斷那一條線（#1504）。
+   * 下行心跳間隔（毫秒），SSE 與 WebSocket 共用，預設 {@link DEFAULT_SSE_HEARTBEAT_INTERVAL_MS}。SSE 是緩衝卡著、連 {@link MAX_MISSED_HEARTBEATS} 個間隔
+   * 沒有任何排出去的進展，就斷那一條線（#1504）；WebSocket 見 [`wire-mux.ts`](./wire-mux.ts)。
    */
   readonly heartbeatIntervalMs?: number;
   /**

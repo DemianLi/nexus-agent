@@ -28,7 +28,7 @@ import WebSocket, { WebSocketServer } from 'ws';
 
 import type { WireHandler } from './wire-handler.js';
 
-/** 漏幾拍算死，SSE 與 WebSocket 共用。 */
+/** 連續漏幾拍算死，SSE 與 WebSocket 共用。協定常數，不開成設定。 */
 export const MAX_MISSED_HEARTBEATS = 2;
 
 /** 上行只有開線、取消與額度，開線的本文是頻道清單。 */
@@ -69,6 +69,11 @@ export interface WireMuxOptions {
   readonly windowChars?: number;
 }
 
+/** 計數要的 pathname：開線的路徑是對方送的原文，可能帶 query。 */
+function pathOf(target: string): string {
+  return target.split(/[?#]/u, 1)[0] ?? '';
+}
+
 function requestHeaders(incoming: IncomingMessage): Headers {
   const headers = new Headers();
   for (const [name, value] of Object.entries(incoming.headers)) {
@@ -87,8 +92,14 @@ function logicalHeaders(upgrade: Headers): Headers {
   return headers;
 }
 
-/** 升級前拒絕：socket 還不歸 `ws`，回一個 HTTP 回應就關。 */
+/**
+ * 升級前拒絕：socket 還不歸 `ws`，回一個 HTTP 回應就關。`end` 只關寫的那一半，對方不關就一直開著，`closeAllConnections` 也管不到
+ * 進了 `upgrade` 的 socket，不用 cookie 就能把 `server.close` 卡住，所以送完要 `destroy`。
+ */
 function refuse(socket: Duplex, status: number): void {
+  socket.once('finish', () => {
+    socket.destroy();
+  });
   socket.end(
     `HTTP/1.1 ${String(status)} ${STATUS_CODES[status] ?? ''}\r\nConnection: close\r\nContent-Length: 0\r\n\r\n`,
   );
@@ -207,7 +218,7 @@ class MuxConnection {
         ? 'too many streams'
         : undefined;
     if (refused !== undefined) {
-      this.options.count(path, refused === ROUTE_NOT_ALLOWED ? 404 : 429);
+      this.options.count(pathOf(path), refused === ROUTE_NOT_ALLOWED ? 404 : 429);
       // socket 已關：'close' 會收掉每一條。
       void this.#send({ t: 'error', id, message: refused }).catch(() => undefined);
       return;
@@ -331,7 +342,7 @@ export class WireMux {
 
   /** 接一個升級請求。沒過閘門的不交給 `ws`。 */
   handleUpgrade(incoming: IncomingMessage, socket: Duplex, head: Buffer): void {
-    const path = (incoming.url ?? '').split(/[?#]/u, 1)[0] ?? '';
+    const path = pathOf(incoming.url ?? '');
     const reject = (status: number): void => {
       this.options.count(path, status);
       refuse(socket, status);

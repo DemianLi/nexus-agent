@@ -6,6 +6,7 @@ import { createMuxFetch, createWireClient, WIRE_MUX_PATH } from '@nexus/wire';
 import type { MuxSocket } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { connect } from 'node:net';
+import type { Socket } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 
@@ -289,7 +290,7 @@ describe('計數也算失敗的', () => {
     });
     const fetcher = muxFetch(url);
     await expect(fetcher(STREAM, post)).rejects.toThrow('too many streams');
-    await expect(fetcher('http://x/threads/t1/history')).rejects.toThrow('route not allowed');
+    await expect(fetcher('http://x/threads/t1/history?x=1')).rejects.toThrow('route not allowed');
     expect(seen.slice(1)).toEqual(['/threads/t1/stream 429', '/threads/t1/history 404']);
   });
 
@@ -366,6 +367,35 @@ describe('失敗只收在自己身上', () => {
     twice.send(open);
     await expect(closed(twice)).resolves.toBe(1008);
     await expect(firstChunk(await muxFetch(url)(STREAM, post))).resolves.toBe('x');
+  });
+
+  it('被拒絕的對方不關連線：serve 這邊送完就斷，`close` 不被卡住', async () => {
+    const url = await start(() => Promise.resolve(new Response('x')));
+    const { port } = new URL(url);
+    const clients = await Promise.all(
+      [1, 2, 3].map(
+        () =>
+          new Promise<Socket>((resolve) => {
+            const socket = connect({ port: Number(port), host: '127.0.0.1', allowHalfOpen: true });
+            socket.once('data', () => {
+              resolve(socket);
+            });
+            socket.write(
+              `GET ${WIRE_MUX_PATH} HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n`,
+            );
+          }),
+      ),
+    );
+    try {
+      const result = await Promise.race([
+        running?.close().then(() => 'closed'),
+        new Promise((resolve) => setTimeout(resolve, 2000, 'stuck')),
+      ]);
+      expect(result).toBe('closed');
+      running = undefined;
+    } finally {
+      for (const client of clients) client.destroy();
+    }
   });
 
   it('半個握手就斷線不會打掉行程', async () => {

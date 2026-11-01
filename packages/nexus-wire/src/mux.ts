@@ -28,7 +28,7 @@ export type MuxClientMessage =
   | { readonly t: 'cancel'; readonly id: string }
   | { readonly t: 'credit'; readonly id: string; readonly chars: number };
 
-/** 下行的訊息。`head` 對應 `fetch` 兌現的那一刻，`error` 是這一條斷了（開線前後都可能），不是協定層的拒絕。 */
+/** 下行的訊息。`head` 對應 `fetch` 兌現的那一刻；`error` 是這一條斷了或 server 拒開（開線前後都可能），不是協定的拒絕封包。 */
 export type MuxServerMessage =
   | {
       readonly t: 'head';

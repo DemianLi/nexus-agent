@@ -5,9 +5,8 @@
  * 記憶體裡的 handler，兩邊跑的是同一條路徑（對應 dsh 的 `InProcessApiClient`
  * ——「跑完整的協定序列化與校驗路徑而不經過網路」）。
  *
- * **上行只走 HTTP POST，下行只讀不寫。** 下行單向是協定不變量，不是實作細節：
- * dsh 的 `websocket-downlink.ts` 明文「Client messages are a protocol violation:
- * upstream traffic remains on HTTP.」
+ * **命令只走 HTTP POST，下行只讀不寫。** 網頁的下行載體（`mux.ts`）在 socket 上送的
+ * `open`、`cancel`、`credit` 只管開線與流控，不是命令。
  */
 
 import { UPLOAD_NAME_PARAM, attachmentPath, uploadPath } from './attachments.js';
