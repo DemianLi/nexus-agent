@@ -5,7 +5,7 @@
  * 型錄只有組裝點有（registry 自己沒有），所以這裡造出驗證函式交給 `createNexusAgent({ validateSubagent })`。沒連真實供應商的組裝
  * （腳本模型、評估）沒有型錄：字串 `model` 與 `reasoningEffort` 一律拒絕，因為沒有東西能把它們解成模型實例。
  *
- * 推理等級的界線同 {@link ./subagent-model-selection.ts}：型錄宣告過、而且今天實作的（`SUPPORTED_EFFORTS`）才收；`default` 一律收（不加任何東西）。
+ * 推理等級同 {@link ./subagent-model-selection.ts}：型錄宣告過、而且今天實作的（`SUPPORTED_EFFORTS`）才收。`default` 較寬：定義裡一律收（不加任何東西），逐次指定才要求模型宣告了等級。
  *
  * @module
  */
