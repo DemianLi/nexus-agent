@@ -25,7 +25,7 @@ import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promis
 import { join } from 'node:path';
 
 import { PRESENT_TOOL_NAME } from '@nexus/plugin-present';
-import { createDeliverableClient } from '@nexus/wire';
+import { createDeliverableClient, THREAD_ROOT_MISMATCH } from '@nexus/wire';
 import type { DeliverablesEntry } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -89,13 +89,17 @@ async function fixture(): Promise<Fixture> {
   return { home, launch, x, y };
 }
 
-async function start(fx: Fixture, rootOf: (threadId: string) => string | undefined) {
+async function start(
+  fx: Fixture,
+  rootOf: (threadId: string) => string | undefined,
+  log: (line: string) => void = () => undefined,
+) {
   const patch = join(fx.home, '..', `${fx.home.split('/').pop()}.patch.yml`);
   roots.push(patch);
   await writeFile(patch, SCRIPT, 'utf8');
   running = (await runServe({
     argv: ['--port', '0', '--workspace', fx.launch, '--patch', patch],
-    log: () => undefined,
+    log,
     env: { [HARNESS_HOME_ENV]: fx.home },
     workspaceRootOf: rootOf,
   })) as RunningServe;
@@ -174,7 +178,7 @@ describe('可寫根逐條 thread：A 回 X、B 回 Y（兩個都不是 --workspa
 });
 
 describe('續接守衛跟這條 thread 的根比，不跟 --workspace 的 D 比', () => {
-  it('header 記 X、這一次函式回 X：接得回來；回 Z：擋下，訊息指名 X 與 Z', async () => {
+  it('header 記 X、這一次函式回 X：接得回來；回 Z：擋下，專用碼不帶路徑，serve 的日誌指名 X 與 Z', async () => {
     const fx = await fixture();
     const other = await scratch('nexus-root-per-thread-z-');
     const first = await start(fx, () => fx.x);
@@ -193,10 +197,17 @@ describe('續接守衛跟這條 thread 的根比，不跟 --workspace 的 D 比'
     running = undefined;
 
     // header 記 X、函式回 Z：擋下。
-    const changed = await start(fx, () => other);
+    const lines: string[] = [];
+    const changed = await start(
+      fx,
+      () => other,
+      (line) => lines.push(line),
+    );
     const refused = await (await serveClient(changed)).slashRun('a', '/permission');
-    expect(refused).toMatchObject({ kind: 'rejected' });
-    expect(JSON.stringify(refused)).toContain(fx.x);
-    expect(JSON.stringify(refused)).toContain(other);
+    expect(refused).toMatchObject({ kind: 'rejected', code: THREAD_ROOT_MISMATCH });
+    expect(JSON.stringify(refused)).not.toContain(fx.x);
+    expect(JSON.stringify(refused)).not.toContain(other);
+    expect(lines.join('\n')).toContain(fx.x);
+    expect(lines.join('\n')).toContain(other);
   }, 120000);
 });

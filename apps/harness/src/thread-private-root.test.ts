@@ -34,7 +34,7 @@ import {
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createDeliverableClient } from '@nexus/wire';
+import { createDeliverableClient, THREAD_ROOT_MISMATCH } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
@@ -365,18 +365,21 @@ describe('續接一律讀 header，不用 thread id 重算', () => {
     expect(await privateRoots(fx)).toEqual([]);
   }, 90000);
 
-  it('header 的根既不是共用區、也不在基底底下：接不回來，訊息指名兩個根', async () => {
+  it('header 的根既不是共用區、也不在基底底下：接不回來，專用碼不帶路徑，serve 的日誌指名兩個根', async () => {
     const fx = await fixture();
     await makeOldThread(fx, 'old');
     const elsewhere = await scratch('nexus-private-root-elsewhere-');
     await rewriteHeader(fx.home, 'old', (header) => {
       header.workspaceRoot = elsewhere;
     });
-    const client = await serveClient(await start(fx, PROBE));
+    const lines: string[] = [];
+    const client = await serveClient(await start(fx, PROBE, { log: (line) => lines.push(line) }));
     const refused = await client.slashRun('old', '/permission');
-    expect(refused).toMatchObject({ kind: 'rejected' });
-    expect(JSON.stringify(refused)).toContain(elsewhere);
-    expect(JSON.stringify(refused)).toContain(fx.shared);
+    expect(refused).toMatchObject({ kind: 'rejected', code: THREAD_ROOT_MISMATCH });
+    expect(JSON.stringify(refused)).not.toContain(elsewhere);
+    expect(JSON.stringify(refused)).not.toContain(fx.shared);
+    expect(lines.join('\n')).toContain(elsewhere);
+    expect(lines.join('\n')).toContain(fx.shared);
   }, 90000);
 
   it.each([
