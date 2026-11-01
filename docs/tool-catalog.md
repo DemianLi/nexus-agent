@@ -100,7 +100,7 @@ Usage:
 描述：
 
 ```text
-Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns absolute paths in modification-time order, oldest first. Symbolic links are not followed, so linked files are skipped; `read_file` can still open a link that stays inside the workspace.
+Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns absolute paths in modification-time order, oldest first. Directory searches skip symbolic links; `read_file` can still open a link that stays inside the workspace.
 
 Supports `*` (any characters), `**` (any directories), `?` (single character), e.g. `**/*.py`, `*.txt`, `/subdir/**/*.md`.
 ```
@@ -137,7 +137,7 @@ Search file contents with a ripgrep regular expression.
 
 Files under `/conversation_history/` are the exception: they are searched as literal text.
 
-Symbolic links are not followed, so linked files are skipped; `read_file` can still open a link that stays inside the workspace.
+Directory searches skip symbolic links; `read_file` can still open a link that stays inside the workspace.
 
 Returns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.
 ```

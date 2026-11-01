@@ -53,7 +53,7 @@
  *
  * 讀得到內容的六個入口——`read`、`readRaw`、`ls`、`grep`／`glob` 的起點、`downloadFiles`——讀之前都 canonicalize，
  * 落在根外就拒，碼同樣是 `FS_SANDBOX_DENIED`。擋的是工作區裡往外指的符號連結：連結指向 harness home 或 `.env` 時，
- * 經它讀得到 key。`grep`／`glob` 從根往下搜時 rg 本來就不跟樹內的連結，所以只看起點，根內的連結也搜不到（#2193，同 dsh）。判法與例外見 `readDenial`。
+ * 經它讀得到 key。`grep`／`glob` 從根往下搜時 rg 本來就不跟樹內的連結，所以只看起點，根內的連結也搜不到（#2193）。判法與例外見 `readDenial`。
  * 讀能看到什麼的其餘策略仍歸 `permissions`。
  *
  * ## 形狀照 dsh 的 `fs-sandbox`
@@ -602,8 +602,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 再讀一次原始位元組判二進位，也不再讓「先讀後改」為了記版本整份 `readRaw`。
    *
    * 開檔之前先過讀取面的圍堵（{@link readScope}）：經符號連結落在根外的回 `[containment]` 拒絕，碼 `FS_SANDBOX_DENIED`。
-   * 根內的連結讀得到：開的是比過根的那個實際位置，不再解析第二次；它之後被換成連結，`O_NOFOLLOW` 回 `ELOOP`
-   * （[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)，方向同 dsh `packages/fs/fs-local/src/fsio.ts` 讀 `targetKey`）。
+   * 根內的連結讀得到：開的是比過根的那個實際位置，只解析這一次；它之後被換成連結，`O_NOFOLLOW` 回 `ELOOP`
+   * （[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）。
    *
    * 其餘路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
    * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔，其餘例外回 `Error reading file '…': …`。
@@ -1534,7 +1534,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * {@link readDenial} 的判斷，連同比過根的那個實際位置一起回。解析交給下游的情況沒有 `realTarget`。
-   * `danger-full-access` 不比根，位置照樣解開，所以根內的連結在每一格都讀得到。
+   * `danger-full-access` 不比根，位置照樣解開，所以連結在這一格一律讀得到，往外的也是。
    *
    * @param filePath - 模型給的虛擬路徑。
    * @param operation - 出現在拒絕訊息裡的操作名。

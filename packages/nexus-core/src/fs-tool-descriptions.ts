@@ -52,9 +52,9 @@ export type FilesystemToolDescriptions = Readonly<
 const BASE_GREP_LITERAL_HEAD_END = '\n\nReturns matching files';
 const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across files (NOT regex).';
 
-/** `grep`、`glob` 都不跟連結（#2193，同 dsh），模型要知道搜不到不等於沒有。 */
+/** `grep`、`glob` 都不跟連結（#2193），模型要知道搜不到不等於沒有。 */
 const SYMLINKS_NOT_SEARCHED =
-  'Symbolic links are not followed, so linked files are skipped; `read_file` can still open a link that stays inside the workspace.';
+  'Directory searches skip symbolic links; `read_file` can still open a link that stays inside the workspace.';
 
 /**
  * 換進去的正規式說法：第一句**照 dsh 原句**（`grep.ts:286`），後面接一句 `/conversation_history/` 的例外。

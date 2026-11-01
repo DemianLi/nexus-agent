@@ -1,5 +1,5 @@
 /**
- * 指向根內的符號連結（[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）：`read` 讀得到，`grep`／`glob` 不跟，寫入類維持落在本尊。
+ * 指向根內的符號連結（[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）：`read` 讀得到，`grep`／`glob` 不跟，寫入類落在本尊。
  *
  * `canonicalize` 包一層，讓測試在「比完根之後、開檔之前」換掉目標，量得到開的是比過根的那個位置，也量得到 `O_NOFOLLOW` 還在。
  * 目錄都在真的檔案系統上。
@@ -74,7 +74,7 @@ describe('read', () => {
     expect(await backend().read('/dir-link')).toEqual({ error: "File '/dir-link' not found" });
   });
 
-  it('往外指的連結照舊拒絕', async () => {
+  it('往外指的連結被拒', async () => {
     await symlink(join(outside, 'secret.txt'), join(root, 'away.txt'));
     const result = await backend().read('/away.txt');
     expect(result.error).toContain('經符號連結解析之後落在根之外');
@@ -117,7 +117,7 @@ describe('read', () => {
   });
 });
 
-describe('其他工具維持原樣', () => {
+describe('其他工具', () => {
   it('grep、glob 掃目錄時不跟連結，只有本尊', async () => {
     const found = await backend().grep('PLAIN-CONTENT', '/');
     expect(JSON.stringify(found)).toContain('plain.txt');
