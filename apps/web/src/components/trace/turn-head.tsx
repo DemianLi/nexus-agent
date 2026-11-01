@@ -2,6 +2,8 @@
 
 import { Badge } from '@/components/ui/badge';
 import { DotLoader } from '@/components/ui/dot-loader';
+import { stoppedByTurnClock } from '@/lib/stop-cause';
+import { ENDING_LABEL } from '@/lib/trace-view';
 import type { TurnHead } from '@/lib/trace-view';
 import {
   TURN_END_LABEL,
@@ -37,6 +39,9 @@ function EndFact({ head }: { head: TurnHead }) {
         {TURN_END_LABEL.failed}（{failureCodeText(head.failureCode)}）
       </span>
     );
+  }
+  if (head.end === 'aborted' && stoppedByTurnClock(head.endCause)) {
+    return <span>{ENDING_LABEL['timed-out']}</span>;
   }
   return <span>{TURN_END_LABEL[head.end]}</span>;
 }

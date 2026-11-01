@@ -86,6 +86,7 @@ import type {
   TrajectoryTurn,
   TrajectoryTurnKind,
   TrajectoryView,
+  TurnStopCause,
 } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 
@@ -158,10 +159,14 @@ export function loadsThrough(row: TraceRow): boolean {
 /** 目標要先往前載入時，載入期間唸的那一句。 */
 export const TRACE_LOCATE_LOADING_TEXT = '正在載入更早的對話，載完就捲過去';
 
-/** 投影有、條目沒載入的呼叫段落底下那一句。 */
-/** 一次模型呼叫沒有正常回來的說法：拋錯，或使用者按了停止。 */
-export const CALL_OUTCOME_LABEL = { error: '失敗', aborted: '已中止' } as const;
+/** 一次模型呼叫沒有正常回來的說法：拋錯、被中止，或被那一輪的時鐘切斷。 */
+export const CALL_OUTCOME_LABEL = {
+  error: '失敗',
+  aborted: '已中止',
+  'timed-out': '超過時間上限，已中止',
+} as const;
 
+/** 投影有、條目沒載入的呼叫段落底下那一句。 */
 export const TRACE_CALL_UNLOADED_TEXT = '這次呼叫的內文不在目前載入的對話裡。';
 
 export type EndingReason = 'stopped' | 'timed-out' | 'max-tokens' | 'blocked' | 'failed';
@@ -252,8 +257,11 @@ export type TraceRow =
       readonly cacheWriteTokens?: number;
       readonly toolCount: number;
       readonly retryCount: number;
-      /** 這次呼叫沒有正常回來的方式（投影的 `TrajectoryCall.outcome`）；沒有這一格 ＝ 正常回來，或舊日誌。 */
-      readonly outcome?: 'error' | 'aborted';
+      /**
+       * 這次呼叫沒有正常回來的方式（投影的 `TrajectoryCall.outcome`）；沒有這一格 ＝ 正常回來，或舊日誌。
+       * `timed-out` 是 `aborted` 而且那一輪時鐘到點（`TrajectoryDigest.endCause`，#1847）：一輪只會被中止一次，中止的呼叫就是那次原因切斷的。
+       */
+      readonly outcome?: keyof typeof CALL_OUTCOME_LABEL;
       readonly system: SnapshotState;
       readonly systemChars?: number;
       readonly systemTruncated?: boolean;
@@ -304,6 +312,8 @@ export interface TurnHead {
    * 沒有 `error`），標頭只寫「失敗」，不補成「原因不明」。
    */
   readonly failureCode?: string;
+  /** `end` 是 `aborted` 時為什麼停（`TrajectoryDigest.endCause`，#1847）。**缺席就是「沒記」**，標頭只寫「已停止」，不猜原因。 */
+  readonly endCause?: TurnStopCause;
   /** 這一輪（含併進來的續接）收尾的時刻；還沒結束沒有。 */
   readonly endTime?: number;
   /** 牆鐘：第一顆 `turn/start` 到最後收尾，**含停在核准點等人的時間**（同 #1028）。 */
@@ -445,7 +455,7 @@ function itemsOf(state: ConversationState): Item[] {
         key: entry.id,
         target: entry.id,
         entry,
-        summary: settledNoticeText(entry.reason),
+        summary: settledNoticeText(entry.reason, entry.stopCause),
       });
     } else if (entry.kind === 'agent-message') {
       rows.push({
@@ -729,6 +739,7 @@ function headOf(digest: TrajectoryDigest, number: number): TurnHead {
     ...bucketFields(digest),
     ...(digest.end === undefined ? {} : { end: digest.end }),
     ...(digest.failureCode === undefined ? {} : { failureCode: digest.failureCode }),
+    ...(digest.endCause === undefined ? {} : { endCause: digest.endCause }),
     ...(digest.endTime === undefined ? {} : { endTime: digest.endTime }),
     ...(digest.durationMs === undefined ? {} : { durationMs: digest.durationMs }),
   };
@@ -756,6 +767,7 @@ function mergeHead(first: TurnHead, resume: TurnHead): TurnHead {
     }),
     ...(resume.end === undefined ? {} : { end: resume.end }),
     ...(resume.failureCode === undefined ? {} : { failureCode: resume.failureCode }),
+    ...(resume.endCause === undefined ? {} : { endCause: resume.endCause }),
     ...(resume.endTime === undefined
       ? {}
       : { endTime: resume.endTime, durationMs: resume.endTime - first.time }),
@@ -870,8 +882,11 @@ function callRowOf(
     readonly target: string | undefined;
     readonly loaded: boolean;
     readonly snapshotParts: (call: TrajectoryCall) => SnapshotParts;
+    readonly endCause: TurnStopCause | undefined;
   },
 ): Extract<TraceRow, { kind: 'call' }> {
+  const outcome =
+    call.outcome === 'aborted' && stoppedByTurnClock(options.endCause) ? 'timed-out' : call.outcome;
   return {
     kind: 'call',
     key: `call-${call.id}`,
@@ -886,7 +901,7 @@ function callRowOf(
       (call.reply !== undefined && call.reply.textChars + call.reply.reasoningChars > 0),
     ...(call.endTime === undefined ? {} : { endTime: call.endTime }),
     ...(call.durationMs === undefined ? {} : { durationMs: call.durationMs }),
-    ...(call.outcome === undefined ? {} : { outcome: call.outcome }),
+    ...(outcome === undefined ? {} : { outcome }),
     ...(call.model === undefined ? {} : { model: call.model }),
     ...(call.usage === undefined
       ? {}
@@ -944,7 +959,13 @@ export function subagentTurnView(
     head: headOf(turn, 1),
     ...(skipped === 0 ? {} : { elidedCalls: skipped }),
     calls: turn.calls.map((call, c) => ({
-      row: callRowOf(call, { n: skipped + c + 1, target: undefined, loaded: true, snapshotParts }),
+      row: callRowOf(call, {
+        n: skipped + c + 1,
+        target: undefined,
+        loaded: true,
+        snapshotParts,
+        endCause: turn.endCause,
+      }),
       retries: call.retries.map((retry) => ({
         kind: 'retry' as const,
         key: `retry-${call.id}-${retry.retry}`,
@@ -1057,6 +1078,7 @@ function structuredTurns(
           target: callTarget[t]?.[c],
           loaded: loadedRows.length > 0,
           snapshotParts,
+          endCause: turn.endCause,
         }),
       );
       for (const retry of call.retries) {
