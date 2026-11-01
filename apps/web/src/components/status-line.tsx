@@ -61,6 +61,13 @@ function RunningElapsed({ since }: { since: number | undefined }) {
 }
 
 /**
+ * 連線一直等不到結果時那一句（#2250）。分頁太多是推論（見 `lib/livez-probe.ts`），所以寫「可能」，
+ * 並講能做什麼。
+ */
+export const SLOW_CONNECT_TEXT =
+  '連線比平常久。可能是這個瀏覽器開了太多 nexus-agent 分頁，關掉其他分頁試試。';
+
+/**
  * 斷線那一行怎麼講。`refusal` 是伺服器明說不收這條下行時給人看的話（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)），
  * 或伺服器送來看不懂的資料（[#1601](https://github.com/DemianLi/nexus-agent/issues/1601)）：不管之前連上過沒有都換成它，**不接 server 的原文**。
  * 前者背景的重試照舊；後者停了自動重連。兩種「立刻重連」都還在。
@@ -69,9 +76,11 @@ function lostText(
   reconnecting: { readonly wasConnected: boolean; readonly offline: boolean },
   connectionError: string | undefined,
   refusal: string | undefined,
+  slowConnect: boolean,
 ): string {
   if (reconnecting.offline) return '網路離線：恢復之後會自動重新連線';
   if (refusal !== undefined) return refusal;
+  if (slowConnect) return SLOW_CONNECT_TEXT;
   if (reconnecting.wasConnected) return '連線中斷，正在重新連線…';
   return `連不上 agent${connectionError === undefined ? '' : `：${connectionError}`}。正在重試…`;
 }
@@ -85,6 +94,7 @@ export function StatusLine({
   slashError,
   slashNotice,
   reconnecting,
+  slowConnect = false,
   recovered = false,
   onReconnect,
 }: {
@@ -98,6 +108,8 @@ export function StatusLine({
   refusal?: string;
   /** 下行斷了、等著重接：多半是自動重接，看不懂的資料時只等人按（見 `useConversation` 的 `reconnecting`）。 */
   reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  /** 連線等太久、探測也逾時（#2250，見 `useConversation` 的 `slowConnect`）。 */
+  slowConnect?: boolean;
   /** 剛重新接上。 */
   recovered?: boolean;
   /** 「立刻重連」。 */
@@ -110,7 +122,7 @@ export function StatusLine({
     return (
       <div className="flex items-center gap-2">
         <p className="text-status-interrupted text-body" role="status">
-          {lostText(reconnecting, connectionError, refusal)}
+          {lostText(reconnecting, connectionError, refusal, slowConnect)}
         </p>
         {onReconnect !== undefined && (
           <Button
@@ -142,8 +154,13 @@ export function StatusLine({
   }
   if (!connected) {
     return (
-      <p className="text-muted-foreground text-body" role="status">
-        連線中…
+      <p
+        className={
+          slowConnect ? 'text-status-interrupted text-body' : 'text-muted-foreground text-body'
+        }
+        role="status"
+      >
+        {slowConnect ? SLOW_CONNECT_TEXT : '連線中…'}
       </p>
     );
   }
