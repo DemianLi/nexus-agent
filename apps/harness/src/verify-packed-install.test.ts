@@ -30,7 +30,7 @@ import {
   headerProblems,
   homepageProblems,
   installedGrepProblems,
-  nativeLockProblems,
+  spawnerLockProblems,
   ripgrepDisclosureProblems,
   serveOutputProblems,
   SHARP_PROBE,
@@ -68,13 +68,13 @@ describe('步驟 3：--version', () => {
   });
 });
 
-describe('步驟 4：flock 原生二進位', () => {
-  it('印 locked：不報；載不起來、印別的：報並帶 stderr 尾巴', () => {
-    expect(nativeLockProblems({ ...ok, stdout: 'locked\n' })).toEqual([]);
-    expect(nativeLockProblems({ status: 1, stdout: '', stderr: 'ERR_DLOPEN_FAILED' })).toEqual([
-      expect.stringContaining('ERR_DLOPEN_FAILED'),
+describe('步驟 4：spawner 的鎖', () => {
+  it('印 locked：不報；鎖不住、印別的：報並帶 stderr 尾巴', () => {
+    expect(spawnerLockProblems({ ...ok, stdout: 'locked\n' })).toEqual([]);
+    expect(spawnerLockProblems({ status: 1, stdout: '', stderr: '第二個沒被擋下' })).toEqual([
+      expect.stringContaining('第二個沒被擋下'),
     ]);
-    expect(nativeLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
+    expect(spawnerLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
   });
 });
 

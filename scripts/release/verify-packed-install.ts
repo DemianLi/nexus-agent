@@ -9,14 +9,14 @@
  * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；SBOM 與實際裝了的
  *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），SBOM 列的每一顆授權都是寬鬆授權或審過的例外（`installedLicenseProblems`），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
- * 4. 打包裡的 spawner 真的鎖得住（#1503／會話租約都靠它，第二個搶不到、持有者 SIGKILL 之後拿得到）；內附的 ripgrep 在 `PATH` 上沒有 rg
+ * 4. Linux 上打包裡的 spawner 真的鎖得住（#1503／會話租約都靠它，第二個搶不到、持有者 SIGKILL 之後拿得到）；內附的 ripgrep 在 `PATH` 上沒有 rg
  *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；sharp 與目標平台的 libvips 載得起來，真的縮一張圖
  *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；Linux 上產物裡的沙箱 spawner 起得來、送 `Ready`，
  *    經它起得了主機上的 git（#1946，`spawner-probe.ts`）；
  * 5. 假模型跑一輪 `lib/cli.js`：會話 header 的 `build.commit` 等於戳記——已安裝的樹沒有 git，戳記是唯一的來源（PM 補驗收）；
  *    戳記本身也查：`commit` 是非空字串、`dirty` 是 `false`（本機驗沒 commit 的改動加 `--allow-dirty`，CI 不加）；
  * 6. 起一次 `lib/serve.js --port 0`：印出網址、啟動日誌講的 grep 用的 ripgrep 在**安裝樹裡**（不是宿主 `PATH` 上的）、
- *    首頁 200 且是網頁 index、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0。
+ *    首頁 200 且是網頁 index、Linux 上第二台 serve 被 home 鎖拒絕、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0。
  *
  * 子行程環境清掉 `NODE_OPTIONS`、`NODE_PATH`、`TSX_TSCONFIG_PATH`，`NEXUS_AGENT_HOME`／`HOME` 指進暫存目錄，`cwd` 在 repo 外。
  * 不論成敗，暫存目錄一律收掉。放 `/var/tmp`（不放 `os.tmpdir()`：那裡有暫存目錄規則會干擾，見 smoke-built-bin）。
@@ -163,14 +163,14 @@ export function versionProblems(run: CommandOutcome, expected: string): string[]
 }
 
 /** 步驟 4：打包裡的 spawner 真的拿得到鎖、擋得住第二個，持有者死了放得掉。 */
-export function nativeLockProblems(run: CommandOutcome): string[] {
+export function spawnerLockProblems(run: CommandOutcome): string[] {
   if (run.status !== 0 || run.stdout.trim() !== 'locked') {
     return [`打包裡的 spawner 鎖不住：${run.stdout.slice(-200)}${run.stderr.slice(-400)}`];
   }
   return [];
 }
 
-/** 步驟 7 的一環：同一個 home 已有 serve 活著，第二台要被 home 鎖拒絕。 */
+/** 步驟 6 的一環：同一個 home 已有 serve 活著，第二台要被 home 鎖拒絕。 */
 export function secondServeProblems(run: CommandOutcome): string[] {
   if (run.status !== 1 || !run.stderr.includes('已經有另一個 serve 在用')) {
     return [
@@ -499,6 +499,7 @@ export async function verifyPackedInstall(
         "import { lockFileExclusive } from './lib/kernel-file-lock.js';\n" +
         `const lockFile = ${JSON.stringify(lockFile)};\n` +
         `const holder = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(holder)}], { stdio: ['ignore', 'pipe', 'inherit'] });\n` +
+        "process.on('exit', () => holder.kill('SIGKILL'));\n" +
         "const [first] = await once(holder.stdout, 'data');\n" +
         "if (String(first).trim() !== 'held') throw new Error('持有者沒拿到鎖：' + first);\n" +
         'const second = await lockFileExclusive(lockFile);\n' +
@@ -507,13 +508,13 @@ export async function verifyPackedInstall(
         'const third = await lockFileExclusive(lockFile);\n' +
         "if (!('held' in third)) throw new Error('持有者死了還拿不到：' + JSON.stringify(third));\n" +
         "await third.held.close(); console.log('locked');";
-      const native = spawnSync(process.execPath, ['--input-type=module', '--eval', lockProbe], {
+      const lockRun = spawnSync(process.execPath, ['--input-type=module', '--eval', lockProbe], {
         cwd: root,
         env,
         encoding: 'utf8',
         timeout: 60_000,
       });
-      problems.push(...nativeLockProblems(native));
+      problems.push(...spawnerLockProblems(lockRun));
     }
 
     // 4b. 內附的 ripgrep：PATH 換成一個空目錄（宿主有沒有 rg 都不能替它補洞），從產物根解析 `@vscode/ripgrep` 並跑 `--version`。
@@ -779,7 +780,7 @@ if (import.meta.main) {
     process.exitCode = 1;
   } else {
     console.log(
-      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、授權、--version、原生二進位、sharp 與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
+      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、授權、--version、spawner 的鎖、sharp 與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
     );
   }
 }

@@ -30,7 +30,7 @@
  *   （「只有一個活動寫入方」）。nexus 是一台主機多人共用、由管理者用系統帳號起 serve，誤用同一個 home 的機會比個人桌面
  *   高，而且蓋掉的是封存這種會影響模型請求的狀態。所以把 dsh 只寫在文件上的拓撲，在 serve 這個入口變成硬檢查。
  *   **只擋 serve 對 serve**：一次性 CLI 與 `plugin-change` 照 dsh 共用 home（#1412 寫入口的前提）。
- * - **平台拿不到 flock 時照常起來**（Q1 (a)）：同 `session-lease.ts` 已登記的偏離，兩道鎖退化的條件一致。呼叫端講一聲。
+ * - **平台拿不到 flock 時照常起來**（Q1 (a)）：同會話寫租約（`session-lease.ts`），兩道鎖退化的條件一致。呼叫端講一聲。
  *   `EACCES` 這類其餘錯誤原樣往外拋，不吞成「退到不鎖」。
  *
  * @module
@@ -89,7 +89,7 @@ export class HomeLock {
  * @param lock - 拿鎖的那一下；預設走 spawner。測試換得掉。
  * @returns 握著的鎖，或這個平台拿不到的理由（呼叫端講一聲、照常起來）。
  * @throws {@link HomeInUseError} 別的行程握著。
- * @throws 其餘任何建目錄、開檔、flock 的錯誤，原樣。
+ * @throws 建目錄的錯誤原樣拋；其餘見 {@link lockFileExclusive}。
  */
 export async function acquireHomeLock(
   home: string,

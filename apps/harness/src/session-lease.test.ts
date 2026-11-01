@@ -153,8 +153,9 @@ describe('打錯的 --resume', () => {
   });
 });
 
-describe('失敗分四種，只有「這個平台沒有」退到不鎖', () => {
-  it.each(['ERR_FLOCK_UNSUPPORTED_PLATFORM'])('%s：退到不鎖，帶著原本那句話', async (code) => {
+describe('失敗分三種，只有「這個平台沒有」退到不鎖', () => {
+  it('ERR_FLOCK_UNAVAILABLE：退到不鎖，帶著原本那句話', async () => {
+    const code = 'ERR_FLOCK_UNAVAILABLE';
     const outcome = await acquireSessionLease(join(dir, 'x.lock'), 'x', failing(code));
     expect(outcome).toEqual({ unavailable: `boom ${code}` });
   });
@@ -179,7 +180,7 @@ describe('這個平台拿不到鎖', () => {
     const store = openJsonlSessionStore({
       directory: dir,
       warn: (message) => void warnings.push(message),
-      lock: failing('ERR_FLOCK_UNSUPPORTED_PLATFORM'),
+      lock: failing('ERR_FLOCK_UNAVAILABLE'),
     });
     const root = store.create(header('cli'));
     const sub = store.create(header('cli/run-1'));

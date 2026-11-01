@@ -9,14 +9,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { spawnerFlock } from './kernel-file-lock.js';
+import { lockFileExclusive, spawnerFlock } from './kernel-file-lock.js';
 
 const BINARY = process.env.NEXUS_SPAWNER_BIN;
-
-const { lockFileExclusive } =
-  await vi.importActual<typeof import('./kernel-file-lock.js')>('./kernel-file-lock.js');
 
 let dir: string;
 

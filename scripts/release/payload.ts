@@ -43,8 +43,8 @@ export interface PayloadViolation {
 /** 檢查的設定。 */
 export interface PayloadOptions {
   /**
-   * 目標平台的後綴：內附 ripgrep 的平台套件
-   * `@vscode/ripgrep-<後綴>`（`pack.ts` 傳的是 `${process.platform}-${process.arch}`，要完全相等）都用它查。
+   * 目標平台的後綴：查內附 ripgrep 的平台套件 `@vscode/ripgrep-<後綴>`（`pack.ts` 傳的是
+   * `${process.platform}-${process.arch}`，要完全相等）與 Linux 的沙箱 spawner。
    * 注意執行期 `@vscode/ripgrep` 自己挑平台套件看的是 `process.env.npm_config_arch || process.arch`（`lib/index.js:5`）：啟動 serve 的環境若設了
    * `npm_config_arch`，它會去找別的架構的套件、找不到就讓 grep 不可用（啟動日誌那一行會說「不可用」）；打包這一側不看那個變數。`undefined` 代表不查（單元測試用）。
    */

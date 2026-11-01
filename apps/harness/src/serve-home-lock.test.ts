@@ -1,9 +1,9 @@
 /**
  * 同一個 home 只能起一個 serve（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：量的是產品路徑
- * （`runServe` 加真的 wire client），鎖本身是真的 kernel flock，沒有替身——同一個行程對同一個鎖檔開兩次，
+ * （`runServe` 加真的 wire client），鎖本身是真的 kernel flock（拿鎖的是系統 perl，`test-flock.fixture.ts`）——同一個行程對同一個鎖檔開兩次，
  * flock 一樣互斥（以 open file description 為單位），兩台 `runServe` 就是兩個行程的縮影。只有「這個平台拿不到」與
- * `EACCES` 兩條路換了拿鎖的那一下（`RunServeOptions.homeLock`）：macOS 與 CI 的 Linux 上走不到它們。
- * 行程死了 kernel 放鎖、致命退出之後重啟拿得到，要真的有另一個行程，在 `serve-shutdown.test.ts`。
+ * `EACCES` 兩條路換了拿鎖的那一下（`RunServeOptions.homeLock`）：perl 走不到它們。
+ * 行程死了 kernel 放鎖要真的有另一個行程，在 `kernel-file-lock.integration.test.ts` 與 `verify-packed-install` 的步驟 4。
  */
 
 import {
@@ -294,16 +294,16 @@ describe('平台拿不到 flock 與其他錯誤分得開', () => {
     throw Object.assign(new Error(`boom ${code}`), { code });
   };
 
-  it('ERR_FLOCK_UNSUPPORTED_PLATFORM：照常起來，伺服器日誌講一行；第二台也不被擋', async () => {
+  it('ERR_FLOCK_UNAVAILABLE：照常起來，伺服器日誌講一行；第二台也不被擋', async () => {
     const { env } = newHome();
     const lines: string[] = [];
-    await start(env, { lines, homeLock: failing('ERR_FLOCK_UNSUPPORTED_PLATFORM') });
+    await start(env, { lines, homeLock: failing('ERR_FLOCK_UNAVAILABLE') });
     const notice = lines.filter((line) => line.includes('[home 鎖]'));
     expect(notice).toHaveLength(1);
     expect(notice[0]).toContain('不擋第二個 serve');
-    expect(notice[0]).toContain('boom ERR_FLOCK_UNSUPPORTED_PLATFORM');
+    expect(notice[0]).toContain('boom ERR_FLOCK_UNAVAILABLE');
 
-    await start(env, { homeLock: failing('ERR_FLOCK_UNSUPPORTED_PLATFORM') });
+    await start(env, { homeLock: failing('ERR_FLOCK_UNAVAILABLE') });
   });
 
   it('EACCES：serve 起不來，錯誤原樣，不是 HomeInUseError，也不吞成「退到不鎖」', async () => {

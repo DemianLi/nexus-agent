@@ -8,7 +8,7 @@
  * 那個檔還是鎖到的那個，不是就重來（dsh 同條，上限三次）。釋放不刪鎖檔：留著的檔保住
  * 後來的人要驗的那個 inode。讀方不碰鎖。
  *
- * ## 鎖檔在哪；Windows 不鎖
+ * ## 鎖檔在哪；只有 Linux 鎖得到
  *
  * 一份會話一把，鎖檔是會話目錄裡的 `session.lock`：每份會話（含每一個 subagent）各有自己的
  * 會話目錄（`@nexus/core` 的 `sessionDirectoryName`），root 不會跟自己的 subagent 搶同一把——flock 以 open file description
@@ -20,10 +20,10 @@
  *
  * ## 退到不鎖的只有「這個平台沒有」，不是「出了錯」
  *
- * （開檔、flock、驗 inode、這四種分類的實作住在 `kernel-file-lock.ts`，home 鎖共用，#1503。）
+ * （開檔、flock、驗 inode、這三種分類的實作住在 `kernel-file-lock.ts`，home 鎖共用，#1503。）
  *
- * 失敗分四種，只有兩種退：搶不到（`EAGAIN`／`EWOULDBLOCK`）是 {@link SessionAlreadyOwnedError}；
- * 平台不支援、或原生模組載不起來（缺平台套件、libc 對不上）是 {@link LeaseUnavailable}；
+ * 失敗分三種，只有一種退：搶不到（`EAGAIN`／`EWOULDBLOCK`）是 {@link SessionAlreadyOwnedError}；
+ * 不是 Linux、或找不到 spawner 是 {@link LeaseUnavailable}；
  * **其餘一律往外拋**（`EACCES`、`EIO`……）。一個什麼錯都吞成「退到不鎖」的分類，會讓一次
  * 權限問題悄悄關掉整道租約——護欄還在，但沒在擋。
  *
@@ -67,7 +67,7 @@ export class SessionWriteLease {
  * @param lock - 拿鎖的那一下；預設走 spawner。
  * @returns 握著的租約，或這個平台拿不到的理由。
  * @throws {@link SessionAlreadyOwnedError} 別人握著。
- * @throws 其餘任何開檔、stat、或 flock 的錯誤，原樣。
+ * @throws 見 {@link lockFileExclusive}。
  */
 export async function acquireSessionLease(
   path: string,

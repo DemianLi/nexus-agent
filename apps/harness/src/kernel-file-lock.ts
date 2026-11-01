@@ -6,10 +6,9 @@
  * 最多三次）。握到把手關掉為止；行程死了 kernel 放鎖。**刻意沒有逾期**，卡住但活著的持有者不會被搶。釋放不刪鎖檔。
  *
  * 這裡只管「拿到沒有」，不管拿不到的時候丟什麼錯、怎麼講：那是呼叫端的語言（`SessionAlreadyOwnedError`、
- * `HomeInUseError`）。從 `session-lease.ts` 原樣抽出，行為不變——開檔方式（`'w'`、`0600`）、失敗的四種分類、
- * 退到不鎖的條件都沒動。
+ * `HomeInUseError`）。開檔用 `'w'`、`0600`。
  *
- * ## 失敗分四種，只有兩種退
+ * ## 失敗分三種，只有一種退到不鎖
  *
  * 搶不到（`EAGAIN`／`EWOULDBLOCK`，或三次都撞上被換掉的 inode）是 `contended`；不是 Linux、或找不到
  * spawner 是 `unavailable`；**其餘一律往外拋**（`EACCES`、`EIO`……）。一個什麼錯都吞成
@@ -21,7 +20,7 @@
  * 由兩邊共用，所以留在這裡的把手上，釋放與行程死掉時的行為跟在本行程呼叫 `flock(2)` 一樣。
  * spawner 只在 Linux 出貨（#2253），其他平台是 `unavailable`。
  *
- * **`contended` 只來自 spawner 的結束碼。** `spawn` 本身在行程數到頂時也丟 `EAGAIN`，那不是別人握著鎖，
+ * **flock 這一下的 `contended` 只看 spawner 的結束碼。** `spawn` 本身在行程數到頂時也丟 `EAGAIN`，那不是別人握著鎖，
  * 所以起不了 spawner 的錯一律包成 `ERR_FLOCK_SPAWN` 往外拋。
  *
  * @module
@@ -60,12 +59,6 @@ export interface LockContended {
   readonly contended: true;
 }
 
-/** 認得出來的「這個平台沒有」。其餘的錯不在這裡。 */
-const UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
-  // 不是 Linux，或這棵樹裡沒有 spawner。
-  'ERR_FLOCK_UNSUPPORTED_PLATFORM',
-]);
-
 /** `--flock` 的結束碼，同 `native/sandbox-spawner/src/main.rs`。 */
 const FLOCK_CONTENDED = 10;
 const FLOCK_FAILED = 11;
@@ -89,12 +82,15 @@ function errnoName(value: number): string {
  *
  * @param binary - spawner 的路徑；`undefined` 是這裡拿不到鎖。
  * @param start - 起行程的那一下；測試換得掉。
+ * @returns 搶不到時以 `EWOULDBLOCK` reject；沒有 spawner 或路徑不存在時以 `ERR_FLOCK_UNAVAILABLE` reject；
+ *   起不了 spawner 時以 `ERR_FLOCK_SPAWN` reject；spawner 回報其他 errno 時以該 errno 的名字 reject；
+ *   被訊號殺掉或結束碼不認得時以 `ERR_FLOCK_HELPER_FAILED` reject。
  */
 export function spawnerFlock(binary: string | undefined, start: StartHelper = spawn): TryLock {
   return (fd) =>
     new Promise<void>((resolve, reject) => {
       if (binary === undefined) {
-        reject(lockError('找不到 spawner', 'ERR_FLOCK_UNSUPPORTED_PLATFORM'));
+        reject(lockError('找不到 spawner', 'ERR_FLOCK_UNAVAILABLE'));
         return;
       }
       const child = start(binary, ['--flock'], { stdio: ['ignore', 'pipe', 'ignore', fd] });
@@ -105,7 +101,7 @@ export function spawnerFlock(binary: string | undefined, start: StartHelper = sp
       child.once('error', (error: Error) => {
         reject(
           codeOf(error) === 'ENOENT'
-            ? lockError(`spawner 不存在：${binary}`, 'ERR_FLOCK_UNSUPPORTED_PLATFORM', error)
+            ? lockError(`spawner 不存在：${binary}`, 'ERR_FLOCK_UNAVAILABLE', error)
             : lockError(`起不了 spawner：${error.message}`, 'ERR_FLOCK_SPAWN', error),
         );
       });
@@ -138,7 +134,7 @@ function productLock(): TryLock {
  * @param path - 鎖檔路徑。
  * @param lock - 拿鎖的那一下；預設是 {@link spawnerFlock}。
  * @returns 握著的把手、別人握著、或這個平台拿不到。
- * @throws 其餘任何開檔、stat、或 flock 的錯誤，原樣。
+ * @throws 其餘開檔、stat、flock 的錯誤原樣拋；起不了 spawner 是 `ERR_FLOCK_SPAWN`，spawner 異常結束是 `ERR_FLOCK_HELPER_FAILED`。
  */
 export async function lockFileExclusive(
   path: string,
@@ -156,7 +152,7 @@ export async function lockFileExclusive(
           await handle.close();
           return { contended: true };
         }
-        if (typeof code === 'string' && UNAVAILABLE_CODES.has(code)) {
+        if (code === 'ERR_FLOCK_UNAVAILABLE') {
           await handle.close();
           return { unavailable: error instanceof Error ? error.message : String(error) };
         }
