@@ -62,6 +62,7 @@ import { CommandDirectory } from '@/lib/command-directory';
 import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
+import { probeLivez } from '@/lib/livez-probe';
 import { RECOVERED_NOTICE_MS, reconnectDelay, SLOW_CONNECT_MS } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { serverClosingText } from '@/lib/server-closing';
@@ -238,7 +239,10 @@ export interface Conversation {
    * 回到線上才從頭算。
    */
   readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
-  /** 這次連線（開下行到歷史回來）等了 {@link SLOW_CONNECT_MS} 還沒成功或失敗（#2250）；等退避的時間不算。 */
+  /**
+   * 這次連線（開下行到歷史回來）等了 {@link SLOW_CONNECT_MS} 還沒成功或失敗，而且 `/livez` 探測也逾時
+   * （#2250，`lib/livez-probe.ts`）；等退避的時間不算。
+   */
   readonly slowConnect: boolean;
   /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
   readonly recovered: boolean;
@@ -592,9 +596,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
-    const slowTimer = setTimeout(() => setSlowConnect(true), SLOW_CONNECT_MS);
+    const probe = new AbortController();
+    const slowTimer = setTimeout(() => {
+      void probeLivez(probe.signal).then((outcome) => {
+        // 逾時中止後請求可能晚一點才拒絕，連線在這段時間有了結果的話，這個 `timed-out` 不算數。
+        if (outcome === 'timed-out' && !probe.signal.aborted) setSlowConnect(true);
+      });
+    }, SLOW_CONNECT_MS);
     const settled = () => {
       clearTimeout(slowTimer);
+      probe.abort();
       setSlowConnect(false);
     };
     /**

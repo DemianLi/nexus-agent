@@ -61,7 +61,7 @@ function RunningElapsed({ since }: { since: number | undefined }) {
 }
 
 /**
- * 連線一直等不到結果時那一句（#2250）。分頁太多是推論（見 `SLOW_CONNECT_MS`），所以寫「可能」，
+ * 連線一直等不到結果時那一句（#2250）。分頁太多是推論（見 `lib/livez-probe.ts`），所以寫「可能」，
  * 並講能做什麼。
  */
 export const SLOW_CONNECT_TEXT =
@@ -108,7 +108,7 @@ export function StatusLine({
   refusal?: string;
   /** 下行斷了、等著重接：多半是自動重接，看不懂的資料時只等人按（見 `useConversation` 的 `reconnecting`）。 */
   reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
-  /** 這次連線等太久還沒有結果（#2250）。 */
+  /** 連線等太久、探測也逾時（#2250，見 `useConversation` 的 `slowConnect`）。 */
   slowConnect?: boolean;
   /** 剛重新接上。 */
   recovered?: boolean;

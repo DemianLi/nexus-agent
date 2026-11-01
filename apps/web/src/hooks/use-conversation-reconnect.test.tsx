@@ -17,6 +17,7 @@ import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useConversation } from '@/hooks/use-conversation';
+import { LIVEZ_PROBE_TIMEOUT_MS } from '@/lib/livez-probe';
 import { RECONNECT_MAX_MS, RECOVERED_NOTICE_MS, SLOW_CONNECT_MS } from '@/lib/reconnect';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
@@ -167,29 +168,50 @@ describe.each([false, true])('useConversation 斷線與重接的主線（StrictM
 });
 
 describe('useConversation 連線一直等不到結果（#2250）', () => {
+  const opened = {
+    kind: 'ok',
+    result: { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
+  };
   const hanging = () => {
     let release = () => {};
     const gate = new Promise<void>((resolve) => (release = resolve));
     return { gate, release: () => release() };
   };
-
-  it('歷史一直不回來（下行開好了）：到點才翻，回來就收', async () => {
+  /** 歷史一直不回來的 client，`release` 放行。 */
+  const slowHistory = () => {
     const { gate, release } = hanging();
     const { client } = scriptedClient({
       threadHistory: async () => {
         await gate;
-        return {
-          kind: 'ok',
-          result: { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
-        };
+        return opened;
       },
     });
+    return { client, release };
+  };
+  /** `/livez` 排不上：收到中止才拒絕。 */
+  const stuckProbe = () => {
+    const doFetch = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal!.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    vi.stubGlobal('fetch', doFetch);
+    return doFetch;
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('`/livez` 也排不上：到點加探測逾時才翻，回來就收', async () => {
+    const doFetch = stuckProbe();
+    const { client, release } = slowHistory();
     const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
     await tick(SLOW_CONNECT_MS - 1);
+    expect(doFetch).not.toHaveBeenCalled();
+    await tick(LIVEZ_PROBE_TIMEOUT_MS);
+    expect(doFetch).toHaveBeenCalledTimes(1);
     expect(result.current.slowConnect).toBe(false);
     await tick(1);
     expect(result.current.slowConnect).toBe(true);
-    expect(result.current.connected).toBe(false);
     release();
     await tick();
     expect(result.current.slowConnect).toBe(false);
@@ -197,15 +219,76 @@ describe('useConversation 連線一直等不到結果（#2250）', () => {
   });
 
   it('開下行本身一直不回來：一樣會翻', async () => {
+    stuckProbe();
     const { client } = scriptedClient({ openEvents: () => new Promise(() => {}) });
     const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
-    await tick(SLOW_CONNECT_MS);
+    await tick(SLOW_CONNECT_MS + LIVEZ_PROBE_TIMEOUT_MS);
     expect(result.current.slowConnect).toBe(true);
   });
 
-  it('伺服器掛了（開線很快失敗、一直重試）：等再久都不翻', async () => {
+  it('`/livez` 回來了（歷史只是慢）：不翻', async () => {
+    vi.stubGlobal('fetch', async () => new Response('ok'));
+    const { client } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS + LIVEZ_PROBE_TIMEOUT_MS * 3);
+    expect(result.current.slowConnect).toBe(false);
+  });
+
+  it('`/livez` 打出去直接失敗：不翻', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const { client } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS + LIVEZ_PROBE_TIMEOUT_MS * 3);
+    expect(result.current.slowConnect).toBe(false);
+  });
+
+  it('探測到一半卸載：請求收掉，不留著占位', async () => {
+    const doFetch = stuckProbe();
+    const { client } = slowHistory();
+    const { unmount } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS);
+    expect(doFetch.mock.calls[0]![1].signal!.aborted).toBe(false);
+    unmount();
+    expect(doFetch.mock.calls[0]![1].signal!.aborted).toBe(true);
+  });
+
+  it('探測到一半歷史回來：請求收掉，不翻', async () => {
+    const doFetch = stuckProbe();
+    const { client, release } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS);
+    release();
+    await tick();
+    expect(doFetch.mock.calls[0]![1].signal!.aborted).toBe(true);
+    await tick(LIVEZ_PROBE_TIMEOUT_MS);
+    expect(result.current.slowConnect).toBe(false);
+  });
+
+  it('探測逾時的結果晚於歷史回來：不翻', async () => {
+    vi.stubGlobal(
+      'fetch',
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal!.addEventListener('abort', () => {
+            setTimeout(() => reject(new Error('aborted')), 10);
+          });
+        }),
+    );
+    const { client, release } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS + LIVEZ_PROBE_TIMEOUT_MS);
+    release();
+    await tick(10);
+    expect(result.current.connected).toBe(true);
+    expect(result.current.slowConnect).toBe(false);
+  });
+
+  it('伺服器掛了（開線很快失敗、一直重試）：不探測，也不翻', async () => {
     // 亂數取大：退避等得比 `SLOW_CONNECT_MS` 久，等退避的時間不能算成等連線。
     vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const doFetch = stuckProbe();
     const { client, setFailOpen } = scriptedClient();
     setFailOpen('Failed to fetch');
     const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
@@ -213,6 +296,7 @@ describe('useConversation 連線一直等不到結果（#2250）', () => {
       await tick(500);
       expect(result.current.slowConnect).toBe(false);
     }
+    expect(doFetch).not.toHaveBeenCalled();
     expect(result.current.reconnecting).toBeDefined();
   });
 });
