@@ -258,6 +258,76 @@ describe('同一個舊 thread：其他地方照常，四個指示檔名、技能
   }, 120000);
 });
 
+/** 部署方掛上 `memory` 插件：一份來源在共用區，一份在每條新 thread 自己的私有根。 */
+const MEMORY_ROWS = `- insert:
+    - id: memory
+      name: '@nexus/plugin-memory'
+      config:
+        sources: ['/shared/MEMORY.md', '/NOTES.md']
+`;
+
+describe('舊 thread 改不到新 thread 的記憶來源（#2270）', () => {
+  it('edit 與 write 都被拒，新 thread 讀到部署方那份；私有根的來源不擋', async () => {
+    const fx = await fixture();
+    await writeFile(join(fx.shared, 'MEMORY.md'), 'DEPLOY-MEMORY', 'utf8');
+    const memory = { extraRows: MEMORY_ROWS };
+    await makeOldThread(fx, 'old', memory);
+
+    const old = await turn(
+      await start(
+        fx,
+        oneByOne([
+          { name: 'read_file', args: { file_path: '/MEMORY.md' } },
+          { name: 'read_file', args: { file_path: '/memory.md' } },
+          edit('/MEMORY.md', 'DEPLOY-MEMORY', 'LEGACY-MEMORY'),
+          write('/MEMORY.md', 'LEGACY-MEMORY'),
+          write('/memory.md', 'LEGACY-MEMORY'),
+          write('/NOTES.md', 'NOTE'),
+        ]),
+        memory,
+      ),
+      'old',
+    );
+    expect(old.slice(2).map((tool) => tool.error?.includes('記憶來源') === true)).toEqual([
+      true,
+      true,
+      true,
+      false,
+    ]);
+    expect(await readFile(join(fx.shared, 'MEMORY.md'), 'utf8')).toBe('DEPLOY-MEMORY');
+    expect(await readFile(join(fx.shared, 'NOTES.md'), 'utf8')).toBe('NOTE');
+
+    const fresh = await turn(
+      await start(
+        fx,
+        oneByOne([{ name: 'read_file', args: { file_path: '/shared/MEMORY.md' } }]),
+        memory,
+      ),
+      'fresh',
+    );
+    expect(fresh[0]?.text).toContain('DEPLOY-MEMORY');
+  }, 120000);
+
+  it('反例：沒掛 memory 插件，同一個檔照常能改', async () => {
+    const fx = await fixture();
+    await writeFile(join(fx.shared, 'MEMORY.md'), 'DEPLOY-MEMORY', 'utf8');
+    await makeOldThread(fx, 'old');
+
+    const old = await turn(
+      await start(
+        fx,
+        oneByOne([
+          { name: 'read_file', args: { file_path: '/MEMORY.md' } },
+          write('/MEMORY.md', 'NOTE'),
+        ]),
+      ),
+      'old',
+    );
+    expect(old[1]?.error).toBeUndefined();
+    expect(await readFile(join(fx.shared, 'MEMORY.md'), 'utf8')).toBe('NOTE');
+  }, 120000);
+});
+
 describe('新 thread 不受這道守衛影響', () => {
   it('寫自己私有根的 /CLAUDE.md 與 /skills/x/SKILL.md 照常，不會被注入', async () => {
     const fx = await fixture();

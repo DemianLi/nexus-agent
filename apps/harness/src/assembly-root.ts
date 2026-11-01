@@ -1154,7 +1154,7 @@ export async function createCliAgent(
     invocation.approvalPolicy ?? (invocation.sandbox === 'danger-full-access' ? 'never' : 'ask'),
   );
   /** 這次組裝 fold 完的 fs 把手，`createNexusAgent` 回來之後才填；保留清單讀它。 */
-  const settled: { fs?: FsService } = {};
+  const settled: { fs?: FsService; memorySources?: readonly string[] } = {};
   const backend =
     workspaceRoot === undefined
       ? undefined
@@ -1168,7 +1168,7 @@ export async function createCliAgent(
           tolerateUnreadable: true,
           // 技能來源要 fold 完才知道，所以逐次讀下面填的 fs 把手。
           ...(invocation.rootIsShared === true && {
-            reservedWrites: () => sharedReservedWrites(settled.fs),
+            reservedWrites: () => sharedReservedWrites(settled.fs, settled.memorySources),
           }),
         });
   // **每會話模型選擇只在 `--live` 時有**（#723）：假模型沒有型錄可選。控制器由組裝點建、經 `createNexusAgent` 折進 root，
@@ -1198,6 +1198,7 @@ export async function createCliAgent(
     stepInbox,
     spillStore,
     subagentKinds,
+    memorySources,
   } = await createNexusAgent({
     model,
     // 沒傳就在這裡按型錄建一本（#1102）：fold 自己 new 的那本不認得哪些模型逐位切詞。
@@ -1311,6 +1312,7 @@ export async function createCliAgent(
     ...(invocation.spillPolicy !== undefined && { spillPolicy: invocation.spillPolicy }),
   });
   settled.fs = services.get(FS_SERVICE);
+  settled.memorySources = memorySources;
   // **權限組合的起始值**（#1491 Q3 (a)）：向 `permission-presets` 那一列要（它提供、折進這條 thread 的 `permissionPresets` 服務），再對兩顆控制器
   // **靜默** `switchTo` 回來的值。呼叫點在 `createNexusAgent` 回來之後、回傳之前——控制器與 fence 早在 `createNexusAgent` 之前就建好了，
   // 折進來的服務要等它回來才拿得到。**這時還沒有日誌接著**（`attachSessions` 在呼叫端），所以不寫事件，新會話日誌上 `sandbox/mode` 仍只有一顆；

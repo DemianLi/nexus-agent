@@ -1059,6 +1059,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 今天的消費者是續行排程器（`cli.ts` 的 `goalDriverPort` 讀 `goals`）。
        */
       services: registry.services,
+      /** 折進這次組裝的 `memory` 來源，舊 thread 的保留清單用（`shared-reserved-writes.ts`）。 */
+      memorySources: registry.memory.sources(),
       /**
        * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
        *

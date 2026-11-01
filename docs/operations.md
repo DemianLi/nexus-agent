@@ -224,8 +224,8 @@ connection:
 - **舊 thread 不搬**：header 記的根就是 `--workspace`、或 header 沒有那一格的對話，繼續把 `--workspace` 當可寫根（沒有 `/shared`），
   彼此照舊看得到對方的檔案。要它們也隔離，只能開新 thread；系統不會自動搬檔。舊 thread 讀部署方放在 `--workspace` 的檔不經過 `/shared`，
   所以**沒有**上面那一行「當資料不當指令」的前綴，系統提示詞也沒有那一句。
-  **舊 thread 寫不進新 thread 會讀成指示或技能的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）：`--workspace` 根目錄的
-  `AGENTS.md`、`CLAUDE.md`、`AGENTS.local.md`、`CLAUDE.local.md`，以及技能來源裡落在 `--workspace` 底下的目錄（出廠 `skills/`，含底下全部），
+  **舊 thread 寫不進新 thread 會讀成指示、技能或記憶的地方**（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)、[#2270](https://github.com/DemianLi/nexus-agent/issues/2270)）：`--workspace` 根目錄的
+  `AGENTS.md`、`CLAUDE.md`、`AGENTS.local.md`、`CLAUDE.local.md`，技能來源裡落在 `--workspace` 底下的目錄（出廠 `skills/`，含底下全部），以及選配的 `memory` 插件寫成 `/shared/…` 的來源，
   舊 thread 的寫、改、刪一律回 `[containment]` 拒絕，不看檔案政策、升級也蓋不過；根目錄別的檔、子目錄裡的同名檔照常。
   模型對這幾處呼叫 `request_sandbox_escalation`，工具直接回「不論升到哪一格都寫不進去」與原因，**不掛核准卡**
   （[#2078](https://github.com/DemianLi/nexus-agent/issues/2078)，同 `/shared` 那一條）。

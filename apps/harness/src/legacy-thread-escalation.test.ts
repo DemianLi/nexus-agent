@@ -11,7 +11,8 @@
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { FsService } from '@nexus/core';
+import type { FsService, PluginEntry } from '@nexus/core';
+import { createMemoryPlugin } from '@nexus/plugin-memory';
 import { reservedTargetRefusal, SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -54,10 +55,13 @@ const escalate = (file_path: string): ScriptedTurn => ({
 });
 
 /** 舊 thread 對 `target` 升級一次：回有沒有掛核准卡、工具回了什麼。 */
-async function escalateOnLegacyThread(target: string): Promise<{ card: boolean; reply: string }> {
+async function escalateOnLegacyThread(
+  target: string,
+  plugins: readonly PluginEntry[] = shipped,
+): Promise<{ card: boolean; reply: string }> {
   const built = await createCliAgent(
     { live: false, workspace, workspaceRoot: workspace, rootIsShared: true, sandbox: 'read-only' },
-    withScriptedModel(shipped, [escalate(target), { content: '停。' }]),
+    withScriptedModel(plugins, [escalate(target), { content: '停。' }]),
     workspace,
   );
   const detach = built.attachSession(built.sessions);
@@ -99,6 +103,16 @@ describe('舊 thread 對守衛擋的目標升級：不掛核准卡（#2078）', 
     60000,
   );
 
+  it('記憶來源（#2270）：沒有核准卡，回不能升級與守衛的理由', async () => {
+    const reason = sharedReservedWrites(undefined, ['/shared/MEMORY.md']).at(-1)?.reason ?? '';
+    const { card, reply } = await escalateOnLegacyThread('/MEMORY.md', [
+      ...shipped,
+      createMemoryPlugin({ sources: ['/shared/MEMORY.md'] }),
+    ]);
+    expect(card).toBe(false);
+    expect(reply).toContain(reservedTargetRefusal(reason));
+  }, 60000);
+
   it('經符號連結指到根目錄的指示檔：同一份規則，一樣不掛卡', async () => {
     await symlink(workspace, join(workspace, 'docs'));
     const { card, reply } = await escalateOnLegacyThread('/docs/AGENTS.md');
@@ -110,5 +124,36 @@ describe('舊 thread 對守衛擋的目標升級：不掛核准卡（#2078）', 
     for (const target of ['/notes.md', '/sub/AGENTS.md', '/skillsx/a.md']) {
       expect((await escalateOnLegacyThread(target)).card).toBe(true);
     }
+  }, 60000);
+});
+
+describe('CLI 的可寫根不是共用區：記憶來源照常能改（#2270）', () => {
+  it('改得動', async () => {
+    await writeFile(join(workspace, 'MEMORY.md'), 'OLD', 'utf8');
+    const built = await createCliAgent(
+      { live: false, workspace, workspaceRoot: workspace, sandbox: 'workspace-write' },
+      withScriptedModel(
+        [...shipped, createMemoryPlugin({ sources: ['/MEMORY.md'] })],
+        [
+          { content: '', toolCalls: [{ name: 'read_file', args: { file_path: '/MEMORY.md' } }] },
+          {
+            content: '',
+            toolCalls: [{ name: 'write_file', args: { file_path: '/MEMORY.md', content: 'NEW' } }],
+          },
+          { content: '完。' },
+        ],
+      ),
+      workspace,
+    );
+    const detach = built.attachSession(built.sessions);
+    try {
+      await built.agent.invoke(toAgentInvocation('記下來。'), {
+        configurable: { thread_id: 'cli-memory' },
+      });
+    } finally {
+      detach();
+      await built.dispose();
+    }
+    expect(await readFile(join(workspace, 'MEMORY.md'), 'utf8')).toBe('NEW');
   }, 60000);
 });
