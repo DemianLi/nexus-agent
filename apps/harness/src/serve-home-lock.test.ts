@@ -306,13 +306,6 @@ describe('平台拿不到 flock 與其他錯誤分得開', () => {
     await start(env, { homeLock: failing('ERR_FLOCK_UNSUPPORTED_PLATFORM') });
   });
 
-  it('原生模組載不起來（ERR_DLOPEN_FAILED）同一條：照常起來', async () => {
-    const { env } = newHome();
-    const lines: string[] = [];
-    await start(env, { lines, homeLock: failing('ERR_DLOPEN_FAILED') });
-    expect(lines.some((line) => line.includes('[home 鎖]'))).toBe(true);
-  });
-
   it('EACCES：serve 起不來，錯誤原樣，不是 HomeInUseError，也不吞成「退到不鎖」', async () => {
     const { env } = newHome();
     const lines: string[] = [];

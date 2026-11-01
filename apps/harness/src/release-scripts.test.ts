@@ -281,10 +281,6 @@ function goodTree(root: string): void {
   put('node_modules/.pnpm/@nexus+core@file+x/node_modules/@nexus/core/lib/index.js', '');
   put('node_modules/.pnpm/@nexus+cordis@file+v/node_modules/@nexus/cordis/lib/index.js', '');
   put('node_modules/.pnpm/@nexus+cordis@file+v/node_modules/@nexus/cordis/src/index.ts', '');
-  put(
-    'node_modules/.pnpm/@deepseek-ai+node-addon-system-linux-x64@0.1.2/node_modules/x/bin/system.node',
-    '',
-  );
   put('node_modules/.pnpm/zod@4/node_modules/zod/index.js', '');
   // 內附 ripgrep（#1502 刀 4）：本體加目標平台的平台套件，rg 要有執行權限。
   put('node_modules/.pnpm/@vscode+ripgrep@1.18.0/node_modules/@vscode/ripgrep/lib/index.js', '');
@@ -399,14 +395,6 @@ describe('產物樹的內容檢查', () => {
           recursive: true,
         }),
       /開發工具/u,
-    ],
-    [
-      '缺目標平台二進位',
-      () =>
-        rmSync(join(root, 'node_modules/.pnpm/@deepseek-ai+node-addon-system-linux-x64@0.1.2'), {
-          recursive: true,
-        }),
-      /node-addon-system-linux-x64/u,
     ],
     [
       '缺內附 ripgrep 本體',

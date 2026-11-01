@@ -1,12 +1,13 @@
-//! 沙箱 spawner（#1946 S3）：常駐模式，加上給 MCP 用的單次模式 `--exec` 與 `--guard`。常駐模式由 Node 用 stdio pipe 起：stdin 收要求、stdout 送事件（格式見 `protocol.rs`），stderr 只給人看。
+//! 沙箱 spawner（#1946 S3）：常駐模式，加上給 MCP 用的單次模式 `--exec` 與 `--guard`，以及給 harness 拿鎖用的單次模式 `--flock`。常駐模式由 Node 用 stdio pipe 起：stdin 收要求、stdout 送事件（格式見 `protocol.rs`），stderr 只給人看。
 //!
 //! ```text
 //! nexus-sandbox-spawner --listen <socket 路徑>
 //! nexus-sandbox-spawner --exec [--read <路徑>]... [--write <路徑>]... -- <程式> [參數]...
 //! nexus-sandbox-spawner --guard -- <程式> [參數]...
+//! nexus-sandbox-spawner --flock
 //! ```
 //!
-//! `--exec`、`--guard` 是單次模式（見 `exec_confined`、`exec_guarded`），不常駐，下面的啟動順序只管 `--listen`。
+//! `--exec`、`--guard`、`--flock` 是單次模式（見 `exec_confined`、`exec_guarded`、`flock_inherited`），不常駐，下面的啟動順序只管 `--listen`。
 //!
 //! **嚴格單執行緒**：子行程在 fork 之後才配置記憶體（`child.rs`），只有單執行緒才安全。不要在這裡起任何 thread。
 //!
@@ -716,8 +717,31 @@ fn exec_guarded(args: &[OsString]) -> ! {
     std::process::exit(if err.raw_os_error() == Some(libc::ENOENT) { 127 } else { 126 });
 }
 
+/// `--flock` 的結束碼：別的 open file description 握著這把鎖。
+const FLOCK_CONTENDED: i32 = 10;
+/// `--flock` 的結束碼：其他失敗，errno 的數字印在 stdout。
+const FLOCK_FAILED: i32 = 11;
+
+/// 單次模式：對繼承來的 fd 3 拿非阻塞的排他鎖就結束（#2253）。`flock(2)` 的鎖屬於 open file description，
+/// 由開檔的呼叫端與這個行程共用，所以這個行程結束之後鎖還在，呼叫端關掉把手或死掉才放。不上沙箱。
+fn flock_inherited() -> ! {
+    // SAFETY：只動 fd 3 的鎖，不碰記憶體。
+    if unsafe { libc::flock(3, libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        std::process::exit(0);
+    }
+    let code = errno();
+    if code == libc::EWOULDBLOCK {
+        std::process::exit(FLOCK_CONTENDED);
+    }
+    println!("{code}");
+    std::process::exit(FLOCK_FAILED);
+}
+
 fn main() {
     let raw: Vec<OsString> = std::env::args_os().collect();
+    if raw.get(1).is_some_and(|arg| arg == "--flock") {
+        flock_inherited();
+    }
     if raw.get(1).is_some_and(|arg| arg == "--exec") {
         exec_confined(&raw[2..]);
     }
@@ -726,7 +750,7 @@ fn main() {
     }
     let args: Vec<String> = std::env::args().collect();
     let Some(path) = args.iter().position(|a| a == "--listen").and_then(|i| args.get(i + 1)).cloned() else {
-        eprintln!("usage: nexus-sandbox-spawner --listen <socket path> | --guard -- <program> [args]... | --exec [--read <path>]... [--write <path>]... -- <program> [args]...");
+        eprintln!("usage: nexus-sandbox-spawner --listen <socket path> | --guard -- <program> [args]... | --flock | --exec [--read <path>]... [--write <path>]... -- <program> [args]...");
         std::process::exit(2);
     };
     let cpath = CString::new(path.as_bytes()).unwrap_or_else(|_| unavailable(0, "socket 路徑含 NUL"));

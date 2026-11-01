@@ -38,7 +38,6 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | 套件 | 授權 |
 | --- | --- |
 | [`@base-ui/react`](https://github.com/mui/base-ui) | MIT |
-| [`@deepseek-ai/node-addon-system`](https://github.com/deepseek-harness/deepseek-harness) | BSD-3-Clause |
 | [`@eslint-community/regexpp`](https://github.com/eslint-community/regexpp) | MIT |
 | [`@fontsource-variable/geist`](https://github.com/fontsource/font-files) | OFL-1.1 |
 | [`@fontsource-variable/geist-mono`](https://github.com/fontsource/font-files) | OFL-1.1 |

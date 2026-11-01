@@ -395,7 +395,7 @@ export interface RunServeOptions {
   readonly webDist?: string;
   /**
    * home 鎖拿鎖的那一下，只給測試用（#1503）：「這個平台拿不到」與 `EACCES` 兩條路在 macOS 與 CI 的 Linux 上走不到，
-   * 不換就是沒驗過就出貨。產品路徑不設，用 dsh 的 `tryLockExclusive`。
+   * 不換就是沒驗過就出貨。產品路徑不設，走 spawner（`kernel-file-lock.ts`）。
    */
   readonly homeLock?: TryLock;
   /**

@@ -6,7 +6,7 @@
 
 | 來源 | 列數 | 取法 |
 | --- | --- | --- |
-| npm 閉包 | 112 | 從 `pnpm-lock.yaml` 的 `apps/harness` 走正式相依，含符合平台的 optional（其中 4 顆同時打包進 web） |
+| npm 閉包 | 110 | 從 `pnpm-lock.yaml` 的 `apps/harness` 走正式相依，含符合平台的 optional（其中 4 顆同時打包進 web） |
 | web 打包 | 105 | `vite build --sourcemap` 產物的 `sources`，加 web CSS 的 `@import`／`@plugin`；都是 devDependency，不在 Release 的 SBOM 裡 |
 | web vendor | 2 | `apps/web/src/vendor/solid-glass/manifest.json` |
 | vendor | 4 | `vendor/README.md`，維護者取上游 npm 最新版 |
@@ -28,7 +28,6 @@ SBOM 的 `nexus-sandbox-spawner` 執行檔也是第一方。
 | 項目 | 欄位 |
 | --- | --- |
 | `@langchain/protocol` 0.0.18、0.0.19 | repo：manifest 沒寫 |
-| `@deepseek-ai/node-addon-system`、`-linux-x64` | repo 擁有者：宣告的 repo 404 |
 | `llvm-libunwind`、`musl`、`rust-std` | 維護者、發布者：不走 registry |
 | `musl` | repo 擁有者：不在 GitHub |
 | `libc` | 發布者：crates.io 沒回 |
@@ -69,8 +68,6 @@ pnpm exec tsx .docs/sbom-provenance/collect.ts --platform darwin-arm64 --check-s
 | @base-ui/react | 1.9.0 | web 打包 | https://github.com/mui/base-ui | mui（Organization） | oliviertassinari、atomiks、lukastyla、janpotoms、colmtuite、mnajdova、michaldudak、mj12albert | GitHub Actions | MIT |  |
 | @base-ui/utils | 0.5.0 | web 打包 | https://github.com/mui/base-ui | mui（Organization） | oliviertassinari、atomiks、lukastyla、janpotoms、colmtuite、mnajdova、michaldudak、mj12albert | GitHub Actions | MIT |  |
 | @cfworker/json-schema | 4.1.1 | npm 閉包 | https://github.com/cfworker/cfworker | cfworker（Organization） | jdanyow | jdanyow | MIT |  |
-| @deepseek-ai/node-addon-system-linux-x64 | 0.1.2 | npm 閉包 | https://github.com/deepseek-harness/deepseek-harness | 查不到 | imccyu、tianyicui-deepseek | imccyu | BSD-3-Clause |  |
-| @deepseek-ai/node-addon-system | 0.1.2 | npm 閉包 | https://github.com/deepseek-harness/deepseek-harness | 查不到 | imccyu、tianyicui-deepseek | imccyu | BSD-3-Clause |  |
 | @eslint-community/regexpp | 4.12.2 | npm 閉包 | https://github.com/eslint-community/regexpp | eslint-community（Organization） | eslint-community-bot、michaeldeboey | GitHub Actions | MIT |  |
 | @floating-ui/core | 1.8.0 | web 打包 | https://github.com/floating-ui/floating-ui | floating-ui（Organization） | fezvrasta、atomiks | GitHub Actions | MIT |  |
 | @floating-ui/dom | 1.8.0 | web 打包 | https://github.com/floating-ui/floating-ui | floating-ui（Organization） | fezvrasta、atomiks | GitHub Actions | MIT |  |

@@ -154,12 +154,7 @@ describe('打錯的 --resume', () => {
 });
 
 describe('失敗分四種，只有「這個平台沒有」退到不鎖', () => {
-  it.each([
-    'ERR_FLOCK_UNSUPPORTED_PLATFORM',
-    'MODULE_NOT_FOUND',
-    'ERR_MODULE_NOT_FOUND',
-    'ERR_DLOPEN_FAILED',
-  ])('%s：退到不鎖，帶著原本那句話', async (code) => {
+  it.each(['ERR_FLOCK_UNSUPPORTED_PLATFORM'])('%s：退到不鎖，帶著原本那句話', async (code) => {
     const outcome = await acquireSessionLease(join(dir, 'x.lock'), 'x', failing(code));
     expect(outcome).toEqual({ unavailable: `boom ${code}` });
   });

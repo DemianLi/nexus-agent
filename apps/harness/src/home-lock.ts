@@ -23,7 +23,7 @@
  * - **偏離 1（基座表達不出來）**：dsh 的行程級獨佔是 Desktop 的 Electron `requestSingleInstanceLock()`
  *   （`apps/desktop/src/single-instance.ts:16-26`，在碰 profile 之前拿、握一整個行程、拿不到就 `quit()`；
  *   `apps/desktop/README.md:118` 寫明 "before any profile access"）。serve 是純 Node 行程，沒有這個 API。退到最接近的
- *   實作：dsh 自己會話租約那顆 `flock`（`@deepseek-ai/node-addon-system/flock`）對 home 底下一個鎖檔取排他鎖。語意對齊
+ *   實作：跟會話租約同一顆 `flock`（`kernel-file-lock.ts`）對 home 底下一個鎖檔取排他鎖。語意對齊
  *   Electron 那把：碰 home 之前拿、整個行程握著、拿不到就不啟動。**不抄**「把後來的啟動轉給持有者」：serve 沒有視窗可以
  *   拉，持有者的網址帶 token，不能印給另一個行程。
  * - **偏離 2（產品需求超出 dsh 的射程）**：dsh 的 CLI／web 對同一個 `$DSH_HOME` 不擋第二個行程，只在文件上定拓撲
@@ -86,7 +86,7 @@ export class HomeLock {
  * 先建 `home`（`0700`，同 `prepareJournal` 建 home 的權限），鎖檔 `0600`。
  *
  * @param home - 已解析的 harness home。
- * @param lock - 拿鎖的那一下；預設是 dsh 的 `tryLockExclusive`。測試換得掉。
+ * @param lock - 拿鎖的那一下；預設走 spawner。測試換得掉。
  * @returns 握著的鎖，或這個平台拿不到的理由（呼叫端講一聲、照常起來）。
  * @throws {@link HomeInUseError} 別的行程握著。
  * @throws 其餘任何建目錄、開檔、flock 的錯誤，原樣。

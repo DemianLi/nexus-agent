@@ -795,7 +795,7 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
   行程不管怎麼死（`kill -9`、當機、致命退出），kernel 都放鎖，沒有要手動清的殘骸；鎖檔本身留著，不用刪。**正常停 `serve`** 時鎖是最後一步放的，
   排在日誌、thread、插件都收完之後。致命退出（上面那條）後**馬上**重啟，若舊行程還在做那最多 2 秒的收尾，新行程會被這把鎖擋一下，舊行程一結束就拿得到。
   只擋 serve 對 serve：一次性 CLI 與 `plugin-change` 照樣能在 serve 跑著時用同一個 home。
-  只有 macOS 與 Linux 鎖得到（原生模組 `@deepseek-ai/node-addon-system` 載不起來也一樣）；其他情形 `serve` 照常起來，伺服器日誌講一行 `[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve`，
+  只有 Linux 鎖得到，拿鎖的是出貨包裡的 `native/nexus-sandbox-spawner`（找不到它也算鎖不到）；其他情形 `serve` 照常起來，伺服器日誌講一行 `[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve`，
   同會話寫租約。拿不到鎖的原因是 `EACCES` 這類權限／IO 錯誤則不照常起來，原樣報出。
 
 **網頁與 API 都要瀏覽器會話。** `serve` 印出來的網址帶著這個行程的 token，開一次就換到一顆 cookie

@@ -15,11 +15,8 @@
  * 為單位，同一個行程開兩次同一個檔也會互斥（實測：第二次回 `EAGAIN`）。v0.5.19 以前寫的舊兩檔用並排的 `<base>.lock`，
  * 續接遷移時另外拿那一把（`jsonl-session-store.ts` 檔頭）。
  *
- * - **只有 macOS 與 Linux 鎖得到。** 原生那一半是 dsh 自己出的預編譯 Node-API 模組
- *   `@deepseek-ai/node-addon-system`（平台二進位走 optionalDependencies，沒有 install
- *   script，所以 `onlyBuiltDependencies` 不必動）。它只出 darwin／linux；dsh 的 Windows 走
- *   另一條具名 semaphore，我們沒抄。**拿不到鎖的平台照常寫、講一聲**——這是一條偏離：
- *   dsh 在那些平台上有鎖，我們退到「沒有租約」，也就是這一刀之前的狀態。
+ * - **只有 Linux 鎖得到。** 拿鎖的那一下在 spawner 裡（`kernel-file-lock.ts`），spawner 只在 Linux 出貨。
+ *   **拿不到鎖的平台照常寫、講一聲**，也就是沒有租約。
  *
  * ## 退到不鎖的只有「這個平台沒有」，不是「出了錯」
  *
@@ -67,7 +64,7 @@ export class SessionWriteLease {
  *
  * @param path - 鎖檔路徑。
  * @param id - 它守的那份會話，錯誤訊息用。
- * @param lock - 拿鎖的那一下；預設是 dsh 的 `tryLockExclusive`。
+ * @param lock - 拿鎖的那一下；預設走 spawner。
  * @returns 握著的租約，或這個平台拿不到的理由。
  * @throws {@link SessionAlreadyOwnedError} 別人握著。
  * @throws 其餘任何開檔、stat、或 flock 的錯誤，原樣。

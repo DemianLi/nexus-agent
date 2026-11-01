@@ -9,7 +9,7 @@
  * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；SBOM 與實際裝了的
  *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），SBOM 列的每一顆授權都是寬鬆授權或審過的例外（`installedLicenseProblems`），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
- * 4. 目標平台的 `node-addon-system` 載得起來（flock 的原生二進位，#1503／會話租約都靠它）；內附的 ripgrep 在 `PATH` 上沒有 rg
+ * 4. 打包裡的 spawner 真的鎖得住（#1503／會話租約都靠它，第二個搶不到、持有者 SIGKILL 之後拿得到）；內附的 ripgrep 在 `PATH` 上沒有 rg
  *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；sharp 與目標平台的 libvips 載得起來，真的縮一張圖
  *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；Linux 上產物裡的沙箱 spawner 起得來、送 `Ready`，
  *    經它起得了主機上的 git（#1946，`spawner-probe.ts`）；
@@ -162,10 +162,10 @@ export function versionProblems(run: CommandOutcome, expected: string): string[]
   return [];
 }
 
-/** 步驟 4：目標平台的 flock 原生二進位載得起來、拿得到鎖。 */
+/** 步驟 4：打包裡的 spawner 真的拿得到鎖、擋得住第二個，持有者死了放得掉。 */
 export function nativeLockProblems(run: CommandOutcome): string[] {
   if (run.status !== 0 || run.stdout.trim() !== 'locked') {
-    return [`目標平台的 flock 原生二進位拿不到鎖：${run.stderr.slice(-400)}`];
+    return [`打包裡的 spawner 鎖不住：${run.stdout.slice(-200)}${run.stderr.slice(-400)}`];
   }
   return [];
 }
@@ -476,19 +476,35 @@ export async function verifyPackedInstall(
     });
     problems.push(...versionProblems(version, manifest.version));
 
-    // 4. 原生二進位載得起來，而且真的拿得到鎖（`importing alone does not load it`：要呼叫一次才會載 .node）。
-    const lockProbe =
-      "import { tryLockExclusive } from '@deepseek-ai/node-addon-system/flock';\n" +
-      "import { openSync, closeSync } from 'node:fs';\n" +
-      `const fd = openSync(${JSON.stringify(join(scratch, 'probe.lock'))}, 'w');\n` +
-      "await tryLockExclusive(fd); closeSync(fd); console.log('locked');";
-    const native = spawnSync(process.execPath, ['--input-type=module', '--eval', lockProbe], {
-      cwd: root,
-      env,
-      encoding: 'utf8',
-      timeout: 60_000,
-    });
-    problems.push(...nativeLockProblems(native));
+    // 4. 走產品那條路拿鎖，退到不鎖（`unavailable`）就紅。spawner 只在 Linux 出貨。
+    if (process.platform === 'linux') {
+      const lockFile = join(scratch, 'probe.lock');
+      const holder =
+        "import { lockFileExclusive } from './lib/kernel-file-lock.js';\n" +
+        `const got = await lockFileExclusive(${JSON.stringify(lockFile)});\n` +
+        "console.log('held' in got ? 'held' : JSON.stringify(got)); setInterval(() => {}, 1000);";
+      const lockProbe =
+        "import { spawn } from 'node:child_process';\n" +
+        "import { once } from 'node:events';\n" +
+        "import { lockFileExclusive } from './lib/kernel-file-lock.js';\n" +
+        `const lockFile = ${JSON.stringify(lockFile)};\n` +
+        `const holder = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(holder)}], { stdio: ['ignore', 'pipe', 'inherit'] });\n` +
+        "const [first] = await once(holder.stdout, 'data');\n" +
+        "if (String(first).trim() !== 'held') throw new Error('持有者沒拿到鎖：' + first);\n" +
+        'const second = await lockFileExclusive(lockFile);\n' +
+        "if (!('contended' in second)) throw new Error('第二個沒被擋下：' + JSON.stringify(second));\n" +
+        "holder.kill('SIGKILL'); await once(holder, 'exit');\n" +
+        'const third = await lockFileExclusive(lockFile);\n' +
+        "if (!('held' in third)) throw new Error('持有者死了還拿不到：' + JSON.stringify(third));\n" +
+        "await third.held.close(); console.log('locked');";
+      const native = spawnSync(process.execPath, ['--input-type=module', '--eval', lockProbe], {
+        cwd: root,
+        env,
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      problems.push(...nativeLockProblems(native));
+    }
 
     // 4b. 內附的 ripgrep：PATH 換成一個空目錄（宿主有沒有 rg 都不能替它補洞），從產物根解析 `@vscode/ripgrep` 並跑 `--version`。
     const emptyBin = join(scratch, 'empty-bin');
