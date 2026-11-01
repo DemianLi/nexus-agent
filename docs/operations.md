@@ -91,6 +91,8 @@
 
 - **工作區裡往外指的連結讀不出去。** 包括 `read_file`、`ls`、`grep`、`glob`，以及 `submit_record` 讀表頭、技能目錄的掃描。
   目錄連結與檔案連結都拒，連結底下還不存在的路徑也拒。指向 harness home 或 `.env` 的連結因此讀不到 key。
+- **指向根內的連結 `read_file` 讀得到，`grep`、`glob` 搜不到**（[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）。搜尋不跟連結，掃目錄時直接略過，明確指到連結上會回拒絕；
+  所以連結本身不會出現在搜尋結果裡，要找內容請看本尊，要讀就給連結的路徑。對連結用 `edit_file` 會被拒，訊息是檔案「不見了」，重讀也一樣，要改就改本尊。
 - **技能目錄裡有一條往外指的連結，全部技能都會消失。** 技能掃描讀不到任何一份就算不完整，不完整時一份都不列：
   模型清單、`/名字`、web 的技能清單都是空的，serve 記含 `掃描不完整` 的 warn。技能要放在工作區裡，不要用連結指到外面
   （遷移見 `docs/upgrade-guide/v0.5.19/read-outward-symlinks-refused/guide.md`）。

@@ -52,6 +52,10 @@ export type FilesystemToolDescriptions = Readonly<
 const BASE_GREP_LITERAL_HEAD_END = '\n\nReturns matching files';
 const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across files (NOT regex).';
 
+/** `grep`、`glob` 都不跟連結（#2193，同 dsh），模型要知道搜不到不等於沒有。 */
+const SYMLINKS_NOT_SEARCHED =
+  'Symbolic links are not followed, so linked files are skipped; `read_file` can still open a link that stays inside the workspace.';
+
 /**
  * 換進去的正規式說法：第一句**照 dsh 原句**（`grep.ts:286`），後面接一句 `/conversation_history/` 的例外。
  *
@@ -67,7 +71,8 @@ const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across f
  */
 export const GREP_REGEXP_HEAD =
   'Search file contents with a ripgrep regular expression.\n\n' +
-  'Files under `/conversation_history/` are the exception: they are searched as literal text.';
+  'Files under `/conversation_history/` are the exception: they are searched as literal text.\n\n' +
+  SYMLINKS_NOT_SEARCHED;
 
 /** 基座 `glob` 描述的第一句（`GLOB_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）。後面講 `*`、`**`、`?` 的一段原樣留著。 */
 const BASE_GLOB_HEAD = 'Find files matching a glob pattern, returning absolute paths.';
@@ -79,7 +84,8 @@ const BASE_GLOB_HEAD = 'Find files matching a glob pattern, returning absolute p
  */
 export const GLOB_HEAD =
   'Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. ' +
-  'Returns absolute paths in modification-time order, oldest first.';
+  'Returns absolute paths in modification-time order, oldest first. ' +
+  SYMLINKS_NOT_SEARCHED;
 
 /** 基座 `read_file` 描述裡講預設行數的那一句（`READ_FILE_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js:1951-1963`）。 */
 const BASE_READ_DEFAULT = 'By default, it reads up to 100 lines';

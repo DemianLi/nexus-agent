@@ -90,13 +90,6 @@ describe('系統錯誤：留下原因，路徑只有模型給的那一個', () =
     expectVirtual(result.error);
   });
 
-  it('read_file 碰指向根內的檔案連結：ELOOP，沒有主機路徑', async () => {
-    await symlink(join(root, 'a.txt'), join(root, 'a-link.txt'));
-    const result = await backend().read('/a-link.txt');
-    expect(result.error).toMatch(/^Error reading file '\/a-link\.txt': ELOOP/);
-    expectVirtual(result.error);
-  });
-
   it('read_file 在根不存在時：ENOENT，沒有主機路徑', async () => {
     await rm(root, { recursive: true, force: true });
     const result = await backend().read('/a.txt');
