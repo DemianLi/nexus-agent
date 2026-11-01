@@ -173,6 +173,7 @@ import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { downlinkPlugin } from './settings/downlink.js';
 import { startMemoryGauge } from './memory-gauge.js';
+import { memorySourceWarnings } from './memory-source-check.js';
 import { loadOrCreateMetricsToken, METRICS_TOKEN_FILE } from './metrics-token.js';
 import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
 import { StorageProbe } from './storage-probe.js';
@@ -1053,6 +1054,9 @@ async function startServer(
     });
     // 基底（或還沒有基底時的 home）的擁有者與權限現在就驗，壞了起不來，不等第一條新 thread 才拋。
     verifyThreadRootsBase(threadRootsBase);
+    for (const line of await memorySourceWarnings(trial.memorySources, sharedWorkspaceRoot)) {
+      warn(line);
+    }
     // 落盤關掉（#612）：沒有 header、不能續接、沒有會話鑰匙，新 thread 的可寫根是記憶體，`--workspace` 照樣唯讀掛成共用區（PM 裁決 (f)，偏離 2 的延伸）。
     // **照實講**，不靜靜收下：`--sandbox` 在這個組合下一個位元組都影響不到（可寫根不在磁碟上，共用區固定唯讀），所以直接拒絕（同 `parseSandboxMode`
     // 沒配 `--workspace` 的理由）；其餘不適用的（`present`、`@` 列檔、改動摘要、`/permission` 的檔案政策）跟沒給 `--workspace` 一樣，在這一行講明。
