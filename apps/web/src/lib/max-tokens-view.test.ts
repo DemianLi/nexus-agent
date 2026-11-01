@@ -28,7 +28,7 @@ function task(patch: Partial<ToolEntry>): ToolEntry {
 }
 
 describe('子代理撞到輸出上限的 task', () => {
-  it('抄來的字跟 `@nexus/core` 對得上（web 不相依 core，改了那邊這裡要紅）', () => {
+  it('抄來的字跟 `@nexus/core` 對得上（web 的產品碼不從 core 取值，改了那邊這裡要紅）', () => {
     const core = read('../../../../packages/nexus-core/src/max-tokens.ts');
     expect(/SUBAGENT_MAX_TOKENS_REASON = '([^']*)'/.exec(core)?.[1]).toBe(
       SUBAGENT_MAX_TOKENS_REASON,

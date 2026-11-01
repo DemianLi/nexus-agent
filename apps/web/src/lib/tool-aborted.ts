@@ -6,7 +6,8 @@ export const STOPPED_STATUS_LABEL = '已停止';
 
 /**
  * 本體開始後被中止時寫入的**錯誤碼**（`@nexus/core` 的 `TOOL_ABORTED`，core 與 pump 都會寫）。
- * web 不相依 `@nexus/core`，值手寫。
+ * web 的產品碼不從 core 取值（只取型別），值手寫；harness 的 `tool-status-wire.test.ts` 用字面值釘住 core 這一側，
+ * web 改值時要同改那邊的常數。
  */
 const TOOL_ABORTED_CODE = 'ABORTED';
 
