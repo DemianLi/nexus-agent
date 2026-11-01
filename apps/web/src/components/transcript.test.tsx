@@ -7,7 +7,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { Transcript } from '@/components/transcript';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { STOPPED_FOOTER_TEXT, TIMED_OUT_FOOTER_TEXT } from '@/lib/stop-cause';
-import { SETTLED_NOTICE_TEXT, SETTLED_NOTICE_UNKNOWN_TEXT } from '@/lib/queue-view';
+import {
+  SETTLED_NOTICE_TEXT,
+  SETTLED_NOTICE_TIMED_OUT_TEXT,
+  SETTLED_NOTICE_UNKNOWN_TEXT,
+} from '@/lib/queue-view';
 
 /**
  * 推理列與正文空的回覆（[#527](https://github.com/DemianLi/nexus-agent/issues/527)、#565）。只想、只呼叫工具的
@@ -410,6 +414,24 @@ describe('背景子代理結算通知（#851）', () => {
     } as ReturnType<typeof emptyConversation>;
     render(<Transcript state={state} isFresh={() => false} />);
     expect(screen.getByText(text).closest('[data-settled-notice]')).not.toBeNull();
+  });
+
+  it('歷史重播的 notice 帶時鐘到點的原因（#1847）：講超過時間上限', () => {
+    const stopCause = { kind: 'hook', reason: 'turn-timeout' } as const;
+    const state: ReturnType<typeof emptyConversation> = {
+      ...emptyConversation(),
+      entries: [
+        {
+          kind: 'notice',
+          id: 'history-7',
+          source: 'subagent-settled',
+          reason: 'aborted',
+          stopCause,
+        },
+      ],
+    };
+    render(<Transcript state={state} isFresh={() => false} />);
+    expect(screen.getByText(SETTLED_NOTICE_TIMED_OUT_TEXT)).toBeTruthy();
   });
 
   it('即時：排著時說「被停止」，領走後同一格換成同一句，原因沒有在換格時丟掉（#884）', () => {

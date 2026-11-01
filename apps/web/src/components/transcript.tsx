@@ -345,7 +345,7 @@ export function Entry({
   if (entry.kind === 'notice') {
     // 折疊器長出來的「這一輪是被什麼叫醒的」（#851）：背景子代理結算的通知，不是人的話。id 跟排著時那一行同一個
     // （`inbox:<件 id>`），同一格換成正式的；歷史重播長出來的（`history-<seq>`）畫成同一個樣子。
-    return <SettledNotice caption={settledNoticeText(entry.reason)} />;
+    return <SettledNotice caption={settledNoticeText(entry.reason, entry.stopCause)} />;
   }
 
   if (entry.kind === 'agent-message') {

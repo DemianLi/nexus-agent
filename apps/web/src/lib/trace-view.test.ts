@@ -16,6 +16,7 @@ import { describe, expect, it } from 'vitest';
 
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { PLAN_REVIEW_DISMISSED_TEXT } from '@/lib/plan-review';
+import { SETTLED_NOTICE_TIMED_OUT_TEXT } from '@/lib/queue-view';
 import { Script } from '@/test/conversation-frames';
 import {
   ENDING_LABEL,
@@ -278,6 +279,24 @@ describe('提問的答案', () => {
 });
 
 describe('收尾', () => {
+  it('結算通知列的摘要分開講時間到（#1847）', () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      script.completed(),
+      script.custom(SETTLE_NOTICE, {
+        id: 'history-5',
+        reason: 'aborted',
+        cause: { kind: 'hook', reason: 'turn-timeout' },
+      }),
+    ]);
+    const rows = traceTurns(state).flatMap((turn) => turn.rows);
+    const notice = rows.find((row) => row.kind === 'notice');
+    expect(notice?.kind === 'notice' ? notice.summary : undefined).toBe(
+      SETTLED_NOTICE_TIMED_OUT_TEXT,
+    );
+  });
+
   it('被擋下（封存的會話）：人的那句後面跟一列「已擋下」，不是失敗；沒被擋下的人話沒有（#633）', () => {
     const script = new Script();
     const blocked = reduceAll(emptyConversation(), [
