@@ -2,7 +2,7 @@
  * serve 行程層的收尾：訊號與致命例外**共用同一份、記住自己的 dispose**
  * （[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 驗收 3）。
  *
- * 用假的 `proc` 與假的 `RunningServe`，只問兩件事：`close()` 跑了幾次、先到的是誰的退出碼。
+ * 用假的 `proc` 與假的 `RunningServe`，只問兩件事：`close()` 跑了幾次、各條路的退出碼（先到的訊號、`close()` 拒絕、逾時、第二次訊號）。
  * 真的行程接線（有沒有裝、收尾真的跑了、標籤那一行）在 `serve-shutdown.test.ts` 的子行程那一組。
  */
 
@@ -159,7 +159,7 @@ describe('serve 行程層收尾共用一份 dispose', () => {
     },
   );
 
-  it('close() 成功：SIGTERM 照舊是 0、SIGINT 照舊是 130', async () => {
+  it('close() 成功：SIGTERM 是 0、SIGINT 是 130', async () => {
     for (const [signal, code] of [
       ['SIGTERM', 0],
       ['SIGINT', 130],
