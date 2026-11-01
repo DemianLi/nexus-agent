@@ -118,7 +118,7 @@ async function start(env: NodeJS.ProcessEnv, lines: string[]): Promise<RunningSe
 /** 在這條 thread 上說一句，跑完一輪；建不起來就回錯誤訊息。 */
 async function say(server: RunningServe, thread: string): Promise<string | undefined> {
   const client = await serveClient(server);
-  // 建不起來的 thread，開下行那一步就被拒，錯誤帶著原因。
+  // 建不起來的 thread，開下行那一步就被拒，原因在 serve 的日誌。
   const events = await client.openEvents(thread).catch((error: unknown) => error as Error);
   if (events instanceof Error) return events.message;
   try {
@@ -179,14 +179,16 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
   it('清單讀不起來：只有那一條建不起來，伺服器照常，改好之後下一條建得起來', async () => {
     const h = home();
     h.seed(probeRow('      config:\n        tag: one\n'));
-    const server = await start(h.env, []);
+    const lines: string[] = [];
+    const server = await start(h.env, lines);
     const good = h.text();
     // 紀錄中間壞了一行（後面還有合法的一筆）：讀端拋、指名第幾行。
     h.text(`${good}{這不是 JSON\n${good.split('\n')[0] ?? ''}\n`);
     const refused = await say(server, 'a');
-    expect(refused).toBeDefined();
-    expect(refused).toContain('plugin-journal.jsonl');
-    expect(refused).toMatch(/第 \d+ 行/u);
+    expect(refused).toContain('原因記在 serve 的日誌');
+    expect(refused).not.toContain('plugin-journal.jsonl');
+    expect(lines.join('\n')).toContain('plugin-journal.jsonl');
+    expect(lines.join('\n')).toMatch(/第 \d+ 行/u);
     // 照 PM 說明的救援：備份、把壞行拿掉。
     h.text(good);
     await h.change({ op: 'config-set', id: 'probe', config: { tag: 'two' } });
@@ -194,9 +196,10 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(h.applied()).toEqual(['{"tag":"one"}', '{"tag":"two"}']);
   }, 60000);
 
-  it('必掛的列掉了：只有那一條建不起來，訊息同啟動那一次', async () => {
+  it('必掛的列掉了：只有那一條建不起來，日誌同啟動那一次', async () => {
     const h = home();
-    const server = await start(h.env, []);
+    const lines: string[] = [];
+    const server = await start(h.env, lines);
     // 寫入口不會放行這個值；驗證之後才壞掉（例如手動改紀錄、或下一版收緊了設定格式）的狀態用 raw 造。
     await h.raw({
       op: 'config-set',
@@ -206,8 +209,9 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
       after: { maxAgeDays: 0 },
     });
     const refused = await say(server, 'a');
-    expect(refused).toMatch(/起不來/u);
-    expect(refused).toContain('browser-session');
+    expect(refused).toContain('原因記在 serve 的日誌');
+    expect(lines.join('\n')).toMatch(/起不來/u);
+    expect(lines.join('\n')).toContain('browser-session');
     // 恢復成繼承值之後，下一條建得起來。
     expect(await h.change({ op: 'config-reset', id: 'browser-session' })).toMatchObject({
       outcome: 'recorded',
@@ -302,7 +306,8 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
 
   it('重讀時關核准閘門：那一條建不起來', async () => {
     const h = home();
-    const server = await start(h.env, []);
+    const lines: string[] = [];
+    const server = await start(h.env, lines);
     await h.raw({
       op: 'disable',
       id: 'approval-gate',
@@ -310,6 +315,7 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
       before: false,
       after: true,
     });
-    expect(await say(server, 'a')).toContain('approval-gate');
+    expect(await say(server, 'a')).toContain('原因記在 serve 的日誌');
+    expect(lines.join('\n')).toContain('approval-gate');
   }, 60000);
 });

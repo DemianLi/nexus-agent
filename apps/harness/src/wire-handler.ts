@@ -1986,7 +1986,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * `handle()` 不接錯、`wire-server.ts` 也不接，所以讓 `threadFor` 的 rejection 往上冒的話，
    * 那個請求一個位元組都不回、client 永遠卡著，而那顆 rejection 沒有人處理。它屬於協定層：
    * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、目錄對不上……）。
-   * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`——原因寫在 message 裡。
+   * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`。**原因只進 serve 的日誌，不上線**（[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)）：
+   * 走到這裡的錯有 Node 的 fs 錯誤、設定層訊息、帶堆疊的 `StartupError`，都帶主機路徑，而且數不完，所以不逐類清洗。
    * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`；
    * 還有**這個 id 是子代理的會話**（{@link SubagentSessionError}，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：回 `thread_is_subagent`；
    * 以及**日誌裡有一則太深、灌不回存檔點**（`checkpoint_depth_exceeded`，[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：回 `thread_history_too_deep`，
@@ -2053,7 +2054,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       if (hasCode(error, CHECKPOINT_DEPTH_EXCEEDED)) {
         return json(errorResponse(id, THREAD_HISTORY_TOO_DEEP, `這條 thread 建不起來：${reason}`));
       }
-      return json(errorResponse(id, 'unknown_error', `這條 thread 建不起來：${reason}`));
+      options.warn?.(`[thread] "${threadId}" 建不起來：${reason}`);
+      return json(
+        errorResponse(id, 'unknown_error', '這條 thread 建不起來，原因記在 serve 的日誌。'),
+      );
     }
   }
 

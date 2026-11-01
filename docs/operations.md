@@ -558,6 +558,8 @@ banner 那一行改印「只在記憶體裡」並點名是這一列關的。**�
 那句人話留在日誌上、那則回覆不記，下一輪照常。上限出現之前寫下的舊日誌裡如果有更深的事件，續接那條 thread 回專用碼
 **`thread_history_too_deep`**，message 寫明是日誌第幾顆事件、幾層；同一份日誌每次都一樣深，重試沒用。
 
+**對話建不起來、又沒有專用碼時**，wire 回 `unknown_error`，message 固定是「這條 thread 建不起來，原因記在 serve 的日誌。」；完整原因在 serve 的日誌，警告等級，開頭是 `[thread] "<對話 id>" 建不起來：`（[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)）。原因常帶主機路徑或堆疊，所以不上線。
+
 **同一份會話同時只能有一個寫入者**（寫租約：跟日誌並排的 `<base>.lock` 上的 `flock`）。續接一條 thread 時，它的寫租約如果被別的行程握著
 （另一個 serve 行程用同一個 `--session-log` 目錄與工作目錄、但不同的 home，還開著它；同一個 home 起不了第二台 serve），serve 不開這條 thread、
 不碰日誌，回專用碼 **`thread_writer_held`**（[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)），message 寫明是哪一份會話。

@@ -271,7 +271,8 @@ describe('三個發現點與必掛的列（驗收 F）', () => {
 
   it('這一條 thread 組裝時必掛的列因紀錄掉了：那條建不起來，伺服器照常，那一筆在拋之前已經寫進去', async () => {
     const h = home(false);
-    const server = await start(h.env, []);
+    const lines: string[] = [];
+    const server = await start(h.env, lines);
     const bad = await h.raw({
       op: 'config-set',
       id: 'browser-session',
@@ -279,8 +280,8 @@ describe('三個發現點與必掛的列（驗收 F）', () => {
       before: null,
       after: { maxAgeDays: 0 },
     });
-    const refused = await say(server, 'a');
-    expect(refused).toMatch(/起不來/u);
+    expect(await say(server, 'a')).toContain('原因記在 serve 的日誌');
+    expect(lines.join('\n')).toMatch(/起不來/u);
     expect(failedOf(h.dir)).toHaveLength(1);
     expect(failedOf(h.dir)[0]).toMatchObject({ id: 'browser-session', triggerSeq: bad.seq });
     // 照常：恢復之後下一條建得起來。
@@ -314,17 +315,18 @@ describe('組裝時才掉的必掛列（apply 那一步，驗收 F）', () => {
 
   it('這一條 thread 組裝時：那條建不起來，伺服器照常，那一筆在拋之前已經寫進去', async () => {
     const h = home(false);
-    const server = await start(h.env, []);
+    const lines: string[] = [];
+    const server = await start(h.env, lines);
     const bad = await h.raw(BAD_PREFIX);
-    const refused = await say(server, 'a');
+    expect(await say(server, 'a')).toContain('原因記在 serve 的日誌');
+    const logged = lines.join('\n');
     // #1477 之後 `system-prompt` 是樹上的列：壞掉的設定在讀清單時被必掛稽核接住（`StartupError`），外層從「組裝失敗」變成「起不來」，
     // 與同檔 browser-session 的那一條同一個形狀；同一類錯誤、同一列、同一格、同一個變數名，內層 `SystemPromptTemplateError` 的文字逐字不變。
-    expect(refused).toMatch(/起不來/u);
-    expect(refused).not.toMatch(/組裝失敗/u);
-    expect(refused).toContain('system-prompt');
-    // 下行是 JSON，引號帶著反斜線。
-    expect(refused).toContain(
-      'system-prompt 的 personaPrefix 引用了不存在的變數 \\"{{nope}}\\"；可用的變數：model、cwd',
+    expect(logged).toMatch(/起不來/u);
+    expect(logged).not.toMatch(/組裝失敗/u);
+    expect(logged).toContain('system-prompt');
+    expect(logged).toContain(
+      'system-prompt 的 personaPrefix 引用了不存在的變數 "{{nope}}"；可用的變數：model、cwd',
     );
     expect(failedOf(h.dir)).toHaveLength(1);
     expect(failedOf(h.dir)[0]).toMatchObject({
@@ -532,12 +534,14 @@ describe('權限組合的起始值與 --sandbox 矛盾（#1491）', () => {
 
   it('這一條 thread 組裝時：那條建不起來，伺服器照常，那一筆在拋之前已經寫進去；改回來之後下一條建得起來', async () => {
     const h = home(false);
-    const server = await start(h.env, [], workspaceArgs());
+    const lines: string[] = [];
+    const server = await start(h.env, lines, workspaceArgs());
     expect(await say(server, 'warm')).toBeUndefined();
     const bad = await h.raw(CONTRADICTION);
-    const refused = await say(server, 'a');
-    expect(refused).toContain('permission-presets');
-    expect(refused).toContain('互相矛盾');
+    expect(await say(server, 'a')).toContain('原因記在 serve 的日誌');
+    const logged = lines.join('\n');
+    expect(logged).toContain('permission-presets');
+    expect(logged).toContain('互相矛盾');
     expect(failedOf(h.dir)).toHaveLength(1);
     expect(failedOf(h.dir)[0]).toMatchObject({
       id: 'permission-presets',

@@ -137,8 +137,10 @@ function newRig(): Rig {
 /** 連上一個 handler，第一次組裝帶 `first` 的故障，之後都不帶。回每一次組裝的 rig。 */
 function connect(first: Faults, workspaceRoot?: string) {
   const rigs: Rig[] = [];
+  const warnings: string[] = [];
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
+    warn: (message) => warnings.push(message),
     createAgent: async () => {
       const rig = newRig();
       rigs.push(rig);
@@ -149,7 +151,7 @@ function connect(first: Faults, workspaceRoot?: string) {
     baseUrl: BASE_URL,
     fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
   });
-  return { handler, client, rigs };
+  return { handler, client, rigs, warnings };
 }
 
 /** 開一條下行，回它（成功）或錯誤訊息（建不起來）。 */
@@ -162,10 +164,10 @@ async function open(client: ReturnType<typeof createWireClient>): Promise<string
 
 describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
   it('落盤接不上（attachSessions 已接）：會話接線、agent 都收掉，同 id 下一次組得起來、只有新的活著', async () => {
-    const { handler, client, rigs } = connect({ persistence: true });
+    const { handler, client, rigs, warnings } = connect({ persistence: true });
 
-    const failure = await open(client);
-    expect(failure).toContain('落盤接不上');
+    await open(client);
+    expect(warnings.join('\n')).toContain('落盤接不上');
     // 失敗真的發生在 attachSessions 之後，而且之前的東西是接上過的。
     expect(rigs[0]?.attached).toEqual(['sessions']);
     expect(rigs[0]?.live.size).toBe(0);
@@ -180,9 +182,10 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
   });
 
   it('標題接不上（落盤已接）：落盤與會話接線都收掉，順序是落盤、會話之前的先收、agent 最後', async () => {
-    const { handler, client, rigs } = connect({ title: true });
+    const { handler, client, rigs, warnings } = connect({ title: true });
 
-    expect(await open(client)).toContain('標題接不上');
+    expect(await open(client)).toBeDefined();
+    expect(warnings.join('\n')).toContain('標題接不上');
     expect(rigs[0]?.attached).toEqual(['sessions', 'persistence']);
     expect(rigs[0]?.live.size).toBe(0);
     // 成功路徑 `state.dispose` 的順序：會話接線 → 落盤 → agent。
@@ -199,9 +202,10 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
     workspaces.push(workspace);
     const disposeFileSearch = vi.spyOn(WorkspaceFileSearch.prototype, 'dispose');
     executorFault.fail = true;
-    const { handler, client, rigs } = connect({}, workspace);
+    const { handler, client, rigs, warnings } = connect({}, workspace);
 
-    expect(await open(client)).toContain('指令執行器建不起來');
+    expect(await open(client)).toBeDefined();
+    expect(warnings.join('\n')).toContain('指令執行器建不起來');
     expect(rigs[0]?.attached).toEqual(['sessions', 'persistence', 'title']);
     expect(rigs[0]?.live.size).toBe(0);
     // 標題最先、列檔索引接著、再會話接線、落盤、agent（成功路徑 `state.dispose` 的順序）。
@@ -216,12 +220,11 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
   });
 
   it('收尾本身拋錯：對外回的仍是原本那個錯，而且後面的步驟照收（一步出錯不跳過其餘）', async () => {
-    const { handler, client, rigs } = connect({ title: true, detach: true });
+    const { handler, client, rigs, warnings } = connect({ title: true, detach: true });
 
-    const failure = await open(client);
-    // 對外是原本的錯，不是收尾的錯。
-    expect(failure).toContain('標題接不上');
-    expect(failure).not.toContain('會話接線收不掉');
+    await open(client);
+    // 日誌講原本的錯，收尾的錯不蓋過它。
+    expect(warnings.join('\n')).toContain('標題接不上');
     // 會話接線的 detach 拋了，落盤與 agent 仍然收了。
     expect(rigs[0]?.order).toEqual(['sessions', 'persistence', 'agent']);
     expect(rigs[0]?.live.size).toBe(0);
@@ -230,11 +233,10 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
   });
 
   it('收尾裡落盤的 dispose 拋：同樣不蓋過原本的錯，agent 仍收', async () => {
-    const { handler, client, rigs } = connect({ title: true, persistenceDispose: true });
+    const { handler, client, rigs, warnings } = connect({ title: true, persistenceDispose: true });
 
-    const failure = await open(client);
-    expect(failure).toContain('標題接不上');
-    expect(failure).not.toContain('落盤收不掉');
+    await open(client);
+    expect(warnings.join('\n')).toContain('標題接不上');
     expect(rigs[0]?.order).toEqual(['sessions', 'persistence', 'agent']);
     expect(rigs[0]?.agentDisposed).toBe(1);
     await handler.close();
@@ -260,8 +262,10 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
 
   it('attachSessions 本身拋：之前沒有東西接上，agent 照收（既有行為）', async () => {
     const rigs: Rig[] = [];
+    const warnings: string[] = [];
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
+      warn: (message) => warnings.push(message),
       createAgent: async () => {
         const rig = newRig();
         rigs.push(rig);
@@ -277,7 +281,8 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
       baseUrl: BASE_URL,
       fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
-    expect(await open(client)).toContain('會話接線接不上');
+    expect(await open(client)).toBeDefined();
+    expect(warnings.join('\n')).toContain('會話接線接不上');
     expect(rigs[0]?.agentDisposed).toBe(1);
     expect(rigs[0]?.live.size).toBe(0);
     await handler.close();
