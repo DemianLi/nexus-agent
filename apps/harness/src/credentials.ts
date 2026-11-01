@@ -92,6 +92,20 @@ export interface CredentialService {
    * @throws 任何一項不過。
    */
   check(): void;
+  /** 模型服務拒絕了憑證（[#2267](https://github.com/DemianLi/nexus-agent/issues/2267)）。原文可能帶部分金鑰，往外拋的錯只有固定句，這裡是唯一留原文的地方。 */
+  reportRejected(line: string): void;
+  /** 換掉 {@link reportRejected} 的去處，預設是 stderr。serve 的日誌比憑證服務晚建好，所以是事後接。 */
+  onRejected(sink: (line: string) => void): void;
+}
+
+function rejectionChannel(): Pick<CredentialService, 'reportRejected' | 'onRejected'> {
+  let sink = (line: string): void => void process.stderr.write(`${line}\n`);
+  return {
+    reportRejected: (line) => sink(line),
+    onRejected: (next) => {
+      sink = next;
+    },
+  };
 }
 
 /**
@@ -241,6 +255,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
 
   return {
     store,
+    ...rejectionChannel(),
     resolve(name) {
       // 受管檔最優先（serve）；一次性入口整格跳過，連 `stat` 都不做。
       if (store) {
@@ -299,6 +314,7 @@ export function describeKeySource(
 export function ambientCredentials(env: NodeJS.ProcessEnv = process.env): CredentialService {
   return {
     store: false,
+    ...rejectionChannel(),
     resolve(name) {
       const value = env[name];
       return value === undefined || value.length === 0 ? undefined : { value, source: 'env' };
