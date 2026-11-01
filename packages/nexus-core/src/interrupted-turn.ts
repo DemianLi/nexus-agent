@@ -26,7 +26,7 @@
  *   （dsh `packages/core/session/src/invariant.ts:142-145`，我們的 `invariant.ts` 同）。
  * - **開著的 `model/start` 補 `model/end`**，對應 dsh 補 `step/end`。這一對不是 dsh 的 step（`session-log.ts` 的 `model/start`），
  *   但「每一個進入的呼叫恰好一顆結尾」同一條規則（`model/end` 的檔頭）。`outcome` 用 `'error'`（#1022 的詞彙裡表示失敗的那一格；
- *   行程死了不是使用者按的停止，所以不是 `'aborted'`），`modelCall` 指回那顆 `model/start`。
+ *   行程死了不是這一輪被中止，所以不是 `'aborted'`），`modelCall` 指回那顆 `model/start`。
  * - **掃描遇到 `session/end-seed` 不重設**（dsh `repair.ts:107-109`）。dsh 的日誌**會**有「開著的輪後面接 end-seed」
  *   （fork seed 先接 end-seed、再接補結，`fork.ts:21-29`），不變量對 end-seed 不設限（`invariant.ts:155-156`）。我們的舊檔
  *   「開著的輪＋end-seed、之後沒有新輪」（#934 之前續接過、又沒有新輪就停了）因此會補，補結接在 end-seed **後面**；

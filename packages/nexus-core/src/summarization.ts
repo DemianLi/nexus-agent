@@ -125,7 +125,11 @@ import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
 import { retryModelCall } from './stream-retry.js';
 import type { StreamRetryOptions } from './stream-retry.js';
-import { estimateAnchoredTokens, estimateMessageTokens } from './token-estimate.js';
+import {
+  estimateAnchoredTokens,
+  estimateMessageTokens,
+  warmMessageTokens,
+} from './token-estimate.js';
 import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
 import {
   applyRecordedArgTruncations,
@@ -136,7 +140,7 @@ import {
 import { withSummaryCatchUp } from './summary-catch-up.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { applyRecordedPrunes, recordedPrunesOf } from './tool-result-prune-log.js';
-import { turnCancelSignalOf } from './turn-cancel.js';
+import { modelCallAborted, stopHere, turnCancelSignalOf } from './turn-cancel.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
   PruneRequest,
@@ -758,9 +762,11 @@ export function createSummarizer(
   // 暫存的範圍要罩住基座的寫入與日誌那層記下事件的時點，所以在預算層外面、剪刀裡面。
   const staged =
     staging === undefined || sessions === undefined ? budgeted : staging.wrap(budgeted, sessions);
-  // 最外層：state 的摘要事件在這一步請求之前先跟上日誌（#1390）。外面的預算與剪刀看到的有效訊息串要是補過的。
+  // 最外層：state 的摘要事件在這一步請求之前先跟上日誌（#1390），再預熱。裡面的預熱、預算與剪刀看到的有效訊息串要是補過的。
   const catchUp = (middleware: AgentMiddleware): AgentMiddleware =>
-    sessions === undefined ? middleware : withSummaryCatchUp(middleware, sessions);
+    sessions === undefined
+      ? withTokenWarmup(middleware)
+      : withSummaryCatchUp(withTokenWarmup(middleware), sessions);
   // 剪刀關掉：不剪新的，但記過的照樣換上去（#1567 N0780）。續接灌回 state 的是原文，換上去的只有這一層。
   if (pruning === false) {
     return catchUp(
@@ -788,6 +794,38 @@ export function createSummarizer(
       sessions === undefined ? undefined : pruneLogOf(sessions, warn),
     ),
   );
+}
+
+/**
+ * 進同步的估算之前，先把有效訊息串編進備忘，編的時候讓出事件迴圈，見 {@link warmMessageTokens}。包在補摘要事件的裡面，
+ * 看到的才是補過的有效串。
+ *
+ * 預熱是加速，不是判定：編的時候拋錯就略過，同步估算照舊往下走（只是慢）。按了停止不算失敗，在這裡收，不進同步那一段，
+ * 收法見 {@link stopHere}。
+ *
+ * @param base - 其餘各層包好的 middleware：最外是剪刀；剪刀關掉又沒有會話註冊表時最外是預算那層。
+ * @returns 同名、同狀態、請求前多一道預熱的 middleware。
+ */
+function withTokenWarmup(base: AgentMiddleware): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  /* v8 ignore next -- 摘要器一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
+  if (inner === undefined) return base;
+  return {
+    ...base,
+    wrapModelCall: async (request, handler) => {
+      let finished = true;
+      try {
+        finished = await warmMessageTokens(
+          effectiveMessages(request.messages ?? [], request.state),
+          () => modelCallAborted(request),
+        );
+      } catch {
+        // 預熱停在這則，剩下的交給同步估算；同步那邊碰到同一則的處理不受影響。
+      }
+      if (!finished) return stopHere(request);
+      return inner(request, handler);
+    },
+  } as AgentMiddleware;
 }
 
 /** 剪刀關掉時的壓力判斷：永遠沒到，於是只換記過的、不剪新的。 */
