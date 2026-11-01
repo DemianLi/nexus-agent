@@ -7524,7 +7524,7 @@
         "apps/harness/src/jsonl-session-store.ts#JsonlHeaderLine"
       ],
       "sources": [
-        "apps/harness/src/jsonl-session-store.ts:583"
+        "apps/harness/src/jsonl-session-store.ts:584"
       ]
     },
     {
@@ -8410,7 +8410,7 @@
         "apps/harness/src/jsonl-session-store.ts#JsonlMigrationSource"
       ],
       "sources": [
-        "apps/harness/src/jsonl-session-store.ts:569"
+        "apps/harness/src/jsonl-session-store.ts:570"
       ]
     },
     {

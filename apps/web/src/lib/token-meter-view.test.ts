@@ -200,6 +200,7 @@ describe('spanRows：每一格都帶口徑表的鍵', () => {
     const byField = Object.fromEntries(rows.map(([f, , v]) => [f, v]));
     expect(byField.failedInputTokens).toBe('30 token');
     expect(byField.failedSteps).toBe('1 次');
+    expect(TOKEN_METER_CALIBER.failedSteps).toContain('拋錯或被中止');
     expect(byField.retries).toBe('2 次');
     expect(byField.retryWaitMs).toBe('1.5 秒');
     expect(byField.waitMs).toBe('2 秒');
