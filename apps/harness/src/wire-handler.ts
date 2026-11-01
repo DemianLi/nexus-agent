@@ -618,7 +618,6 @@ export interface WireHandlerOptions {
    * - 退回標題寫不進去（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：那一輪照跑，同 dsh；經 pump 的建構子傳下去。
    * - 模型標題寫不成（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：留著退回標題，同上。
    * - 拒收新 thread（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，{@link maxThreads}）：回應是專用錯誤碼，但管理者要在日誌看到目前數量與上限。
-   *
    * - 一條 thread 建不起來的原因（[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)）與接不上的兩個根（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）。
    *
    * 缺席就是不講，第二類的細節也就沒了；要斷言原因的測試自己接線。
@@ -2048,7 +2047,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             id,
             THREAD_ROOT_MISMATCH,
             error.otherHome
-              ? `會話 "${error.sessionId}" 的檔案在另一個 harness home 底下，這台 serve 沒有開它。要回原本的 home 才打得開。`
+              ? `會話 "${error.sessionId}" 的檔案多半在另一個 harness home 底下，這台 serve 沒有開它。要回原本的 home 才打得開。`
               : `會話 "${error.sessionId}" 跑在另一個 --workspace，這台 serve 沒有開它。要用原本的 --workspace 才打得開。`,
           ),
         );

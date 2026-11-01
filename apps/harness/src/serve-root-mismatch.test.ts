@@ -83,6 +83,7 @@ describe('日誌記的可寫根這台 serve 接不上（#2222）', () => {
     const { refused, logged } = await refusedAfterHandover(homed('home-a'), homed('home-b'));
     expect(refused.code).toBe(THREAD_ROOT_MISMATCH);
     expect(refused.serverMessage).toContain('alpha');
+    expect(refused.serverMessage).toContain('多半在另一個 harness home 底下');
     expect(refused.serverMessage).toContain('要回原本的 home');
     expect(refused.serverMessage).not.toContain(root);
     expect(refused.serverMessage).not.toContain('建不起來');

@@ -1180,7 +1180,7 @@ async function startServer(
           idleEvictMs,
           onThreadEvicted: () => threadPluginList.republishSnapshot(),
         }),
-    // 一條 thread 建不起來的原因（#2225）、可寫根接不上時的兩個根（#2222）、一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
+    // 哪些事走它見 `WireHandlerOptions.warn`。
     warn,
     // 閒置逐出把一條 thread 撤出記憶體是正常狀態（#1534）：info，門檻調到 warn 的主機不為它出一行。
     info: log,
