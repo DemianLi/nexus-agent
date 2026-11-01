@@ -72,7 +72,7 @@ FULL_RE = re.compile(r'^\.github/(workflows|scripts|actions)/')
 RUST_RE = re.compile(
     r'^native/sandbox-spawner/'
     r'|^packages/nexus-plugin-workspace-changes/src/git\.'
-    r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*|mcp-sandbox\S*)\.'
+    r'|^apps/harness/src/(sandbox-protocol|sandbox-spawner\S*|tool-process|tool-launcher|ripgrep-sandbox|ripgrep-runner|git-sandbox\S*|mcp-sandbox\S*|kernel-file-lock\S*)\.'
 )
 
 

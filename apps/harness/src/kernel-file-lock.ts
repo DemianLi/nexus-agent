@@ -28,6 +28,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { open, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import { constants } from 'node:os';
@@ -36,6 +37,13 @@ import { findSpawnerBinary } from './tool-launcher.js';
 
 /** 對一個已開的 fd 拿非阻塞的排他鎖。預設是 {@link spawnerFlock}；測試換得掉。 */
 export type TryLock = (fd: number) => Promise<void>;
+
+/** 起 spawner 的那一下。預設是 `spawn`；測試換得掉。 */
+export type StartHelper = (
+  binary: string,
+  args: readonly string[],
+  options: SpawnOptions,
+) => ChildProcess;
 
 /** 這個平台拿不到鎖：照常往下走，由呼叫端講一聲。 */
 export interface LockUnavailable {
@@ -82,7 +90,7 @@ function errnoName(value: number): string {
  * @param binary - spawner 的路徑；`undefined` 是這裡拿不到鎖。
  * @param start - 起行程的那一下；測試換得掉。
  */
-export function spawnerFlock(binary: string | undefined, start: typeof spawn = spawn): TryLock {
+export function spawnerFlock(binary: string | undefined, start: StartHelper = spawn): TryLock {
   return (fd) =>
     new Promise<void>((resolve, reject) => {
       if (binary === undefined) {

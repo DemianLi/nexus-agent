@@ -170,6 +170,16 @@ export function nativeLockProblems(run: CommandOutcome): string[] {
   return [];
 }
 
+/** 步驟 7 的一環：同一個 home 已有 serve 活著，第二台要被 home 鎖拒絕。 */
+export function secondServeProblems(run: CommandOutcome): string[] {
+  if (run.status !== 1 || !run.stderr.includes('已經有另一個 serve 在用')) {
+    return [
+      `第二台 serve 沒被 home 鎖擋下：exit ${String(run.status)}，stderr ${JSON.stringify(run.stderr.slice(-400))}`,
+    ];
+  }
+  return [];
+}
+
 /** 步驟 4b：內附的 ripgrep 在乾淨環境（`PATH` 上沒有 rg）裡跑得起來，印出自己的版本。 */
 export function bundledRgProblems(run: CommandOutcome): string[] {
   if (run.status !== 0 || !run.stdout.startsWith('ripgrep ')) {
@@ -614,7 +624,19 @@ export async function verifyPackedInstall(
     }
 
     // 6. serve
-    problems.push(...(await smokeInstalledServe(root, work, env, scratch)));
+    // spawner 只在 Linux 出貨，其他平台拿不到 home 鎖，第二台擋不下來。
+    const whileServing = (): string[] =>
+      process.platform === 'linux'
+        ? secondServeProblems(
+            spawnSync(process.execPath, [join(root, 'lib/serve.js'), '--port', '0'], {
+              cwd: work,
+              env,
+              encoding: 'utf8',
+              timeout: 60_000,
+            }),
+          )
+        : [];
+    problems.push(...(await smokeInstalledServe(root, work, env, scratch, {}, whileServing)));
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -630,7 +652,7 @@ export interface ServeSmokeTimeouts {
 }
 
 /**
- * 起 `lib/serve.js --port 0`，等網址、打首頁、查行程、送 SIGTERM。
+ * 起 `lib/serve.js --port 0`，等網址、打首頁、跑 `whileServing`、查行程、送 SIGTERM。
  *
  * serve 以 `detached: true` 起成自己的行程群組：逾時要 `SIGKILL` 時送給整個群組（`process.kill(-pid)`），
  * serve 自己起的子行程（MCP server、git）不會變孤兒。一般的 `SIGTERM` 只送 serve 本身，
@@ -645,6 +667,7 @@ export async function smokeInstalledServe(
   env: NodeJS.ProcessEnv,
   scratch: string,
   timeouts: ServeSmokeTimeouts = {},
+  whileServing: () => string[] = () => [],
 ): Promise<string[]> {
   const problems: string[] = [];
   const child = spawn(process.execPath, [join(root, 'lib/serve.js'), '--port', '0'], {
@@ -705,6 +728,7 @@ export async function smokeInstalledServe(
       } catch (error) {
         problems.push(`打首頁失敗：${(error as Error).message}`);
       }
+      problems.push(...whileServing());
     }
     const stray = strayProcesses(scratch);
     if (stray.problem !== undefined) problems.push(stray.problem);
