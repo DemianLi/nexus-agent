@@ -109,6 +109,7 @@ import {
   FS_NOT_FOUND,
   FS_NOT_REGULAR_FILE,
   FS_NOT_TEXT,
+  FS_NO_SPACE,
   FS_PERMISSION_DENIED,
   noteFsError,
   noteReadVersion,
@@ -160,17 +161,22 @@ function notText(filePath: string, reason: 'binary file' | 'invalid UTF-8 text')
  * 作業系統的錯誤碼 → 檔案工具的原因碼（#1563），記在這一次工具呼叫上；錯誤文字不動。`EACCES`／`EPERM` 是 `FS_PERMISSION_DENIED`
  * （**依卡面要求，不是照 dsh**：dsh 只在 `listDirectory` 轉這個碼，`fsio.ts:282`，這裡 `read`／`write`／`edit` 碰到也記）；
  * `ENOENT`／`ENOTDIR` 是 `FS_NOT_FOUND`，但只有 `missing` 為真（呼叫端的目標本來就該存在：`read`、`edit`）時才算——`write` 會自己建父目錄，
- * 碰到它們是別的原因。認不得的不記碼。
+ * 碰到它們是別的原因。`ENOSPC`／`EDQUOT` 是 `FS_NO_SPACE`。認不得的不記碼。
  */
 function noteErrno(error: unknown, missing: boolean): void {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'EACCES' || code === 'EPERM') noteFsError(FS_PERMISSION_DENIED);
+  else if (code === 'ENOSPC' || code === 'EDQUOT') noteFsError(FS_NO_SPACE);
   else if (missing && (code === 'ENOENT' || code === 'ENOTDIR')) noteFsError(FS_NOT_FOUND);
 }
 
+/** 空間用完時交給模型的說明：重試沒用，要讓使用者知道找誰（#2195）。 */
+const NO_SPACE_REASON =
+  'the host is out of storage space; retrying will not help, tell the user to contact the administrator';
+
 /**
  * 例外換成交給模型的原因（[#2201](https://github.com/DemianLi/nexus-agent/issues/2201)）。Node 的 errno 訊息結尾是 `, <syscall> '<主機路徑>'`，
- * 而模型的回覆使用者看得到，所以從 syscall 起整段不帶，留下碼與說明；呼叫端的句子已經寫了模型給的虛擬路徑。
+ * 而模型的回覆使用者看得到，所以從 syscall 起整段不帶，留下碼與說明（`ENOSPC`／`EDQUOT` 的說明換成 {@link NO_SPACE_REASON}）；呼叫端的句子已經寫了模型給的虛擬路徑。
  * 沒有 errno 形狀的錯誤原樣回，訊息裡的根由 {@link ContainedFilesystemBackend} 再換掉。
  *
  * @param error - 接到的例外。
@@ -179,6 +185,7 @@ function noteErrno(error: unknown, missing: boolean): void {
 export function pathlessReason(error: unknown): string {
   const { code, syscall, message } = error as NodeJS.ErrnoException;
   if (typeof code !== 'string' || typeof syscall !== 'string') return message;
+  if (code === 'ENOSPC' || code === 'EDQUOT') return `${code}: ${NO_SPACE_REASON}`;
   const end = message.indexOf(`, ${syscall}`);
   return end === -1 ? code : message.slice(0, end);
 }

@@ -83,7 +83,7 @@ import type {
 
 import type { ColdChildStore, ColdInspection, ColdResumed } from './background-cold.js';
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
-import { turnFailureOf } from './live-model.js';
+import { STORAGE_FULL_CODE, turnFailureOf } from './live-model.js';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { declineAll, parseMcpElicitation } from './mcp-elicitation.js';
 import type { McpElicitation } from './mcp-elicitation.js';
@@ -1461,6 +1461,8 @@ export class BackgroundSubagentHost {
       stop = 'error';
       const failure = turnFailureOf(error);
       const { message } = failure;
+      // 固定句蓋掉了原文，原文只留在伺服器日誌。
+      if (failure.error.code === STORAGE_FULL_CODE) this.#warnFailure(job, thrownMessage(error));
       // 拿不到日誌的失敗（註冊表開不出來）沒地方記，只能講一聲。
       if (log === undefined) this.#warnFailure(job, message);
       else {

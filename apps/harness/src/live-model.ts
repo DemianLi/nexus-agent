@@ -1966,6 +1966,10 @@ function isConnectionLink(link: object, modelCall: boolean): boolean {
 
 /** 這一輪因為巢狀太深而失敗的碼（#1668），見 {@link classifyTurnFailure}「巢狀太深」。不在預設可重試集：同一份歷史重打一樣深。 */
 export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
+/** 主機空間用完（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)）：錯誤鏈上有 `ENOSPC`／`EDQUOT` 的 errno。 */
+export const STORAGE_FULL_CODE = 'STORAGE_FULL';
+/** {@link STORAGE_FULL_CODE} 給使用者的那句。不講哪一區：多人共用主機不帶路徑，管理者看日誌與指標。 */
+const STORAGE_FULL_MESSAGE = '主機的儲存空間滿了，這一輪沒做完，請聯絡管理員。';
 
 /**
  * 把「這一輪為什麼失敗」描述成日誌裡的 {@link LlmFailure}（[#434](https://github.com/DemianLi/nexus-agent/issues/434)），
@@ -1992,6 +1996,7 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}），或模型呼叫的錯誤鏈上有 {@link TIMEOUT_ERROR_CODES} 的碼 | `TIMEOUT` | 是 |
  * | 本機排隊等不到名額（`request-gate.ts` 拋的 `LocalCapacityError`，沒有送請求，#1505） | `LOCAL_CAPACITY` | 否 |
  * | 巢狀太深：任何一環的 `code` 是日誌那一關的 `session_event_depth_exceeded`（`@nexus/core` 的 `SessionEventDepthError`）或存檔點的 `checkpoint_depth_exceeded`（`checkpoint-serde.ts` 的 `CheckpointDepthError`）（#1668） | {@link NESTING_TOO_DEEP_CODE} | 否 |
+ * | 空間用完：任何一環的 `code` 是 `ENOSPC`／`EDQUOT` 而且 `errno` 是數字（#2195） | {@link STORAGE_FULL_CODE} | 否 |
  * | 空回覆（{@link createEmptyResponseMiddleware} 拋的 `EmptyResponseError`） | `EMPTY_RESPONSE` | 是 |
  * | 沒有狀態、連線層的（`APIConnectionError`、模型呼叫的錯誤鏈上有 {@link NETWORK_ERROR_CODES} 的碼、讀串流時被切斷，見 {@link connectionFailures}） | `TRANSPORT` | 是 |
  * | **其餘——不是供應商的錯，或解不開的回應** | `UNKNOWN` | 否 |
@@ -2034,7 +2039,7 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * 沒有這串中介層，照舊靠 `onFailedAttempt`（{@link classifyFailedAttempt}）標。
  *
  * `message` 是呼叫端照舊寫進 `turn/failed.message` 的那句（最外層的 `error.message`），不是底下那個：兩處同一句，
- * 讀的人不用猜哪個才是人話。
+ * 讀的人不用猜哪個才是人話。`STORAGE_FULL` 例外：換成固定句，原文可能帶主機路徑。
  *
  * @param error - 這一輪拋出來的東西，可能已經被包過很多層。
  */
@@ -2054,6 +2059,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let localCapacity = false;
   let invalidCredential = false;
   let tooDeep = false;
+  let storageFull = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
   const modelCall = wrappedModelCall || links.some((link) => isModelCallFailure(link));
@@ -2101,6 +2107,9 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
     if (name === 'LocalCapacityError') localCapacity = true;
     if (name === 'InvalidCredentialError') invalidCredential = true;
     if (code === SESSION_EVENT_DEPTH_EXCEEDED || code === CHECKPOINT_DEPTH_EXCEEDED) tooDeep = true;
+    if ((code === 'ENOSPC' || code === 'EDQUOT') && typeof readField(link, 'errno') === 'number') {
+      storageFull = true;
+    }
     if (inband === undefined && modelCall && guarded(() => isInbandApiError(link), false)) {
       const body = readField(link, 'error');
       const envelope =
@@ -2130,14 +2139,21 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
                   ? LOCAL_CAPACITY_CODE
                   : tooDeep
                     ? NESTING_TOO_DEEP_CODE
-                    : empty
-                      ? 'EMPTY_RESPONSE'
-                      : timedOut
-                        ? 'TIMEOUT'
-                        : connection
-                          ? 'TRANSPORT'
-                          : 'UNKNOWN';
-  return llmFailure({ message, code, status, requestId });
+                    : storageFull
+                      ? STORAGE_FULL_CODE
+                      : empty
+                        ? 'EMPTY_RESPONSE'
+                        : timedOut
+                          ? 'TIMEOUT'
+                          : connection
+                            ? 'TRANSPORT'
+                            : 'UNKNOWN';
+  return llmFailure({
+    message: code === STORAGE_FULL_CODE ? STORAGE_FULL_MESSAGE : message,
+    code,
+    status,
+    requestId,
+  });
 }
 
 /** `errorChain` 渲染不出來的節點寫的字（`@nexus/core` 的 `error-chain.ts`）。 */
@@ -2148,13 +2164,13 @@ const UNRENDERABLE_VALUE = '<unrenderable value>';
  * 四個寫入點（`thread-pump.ts` 兩處、`background-subagents.ts`、`cli.ts`）都用它，所以全程不會因為拋出來的東西怪（`toString` 會拋、
  * `status` 是 `NaN`）而讓記失敗那一步自己拋錯。
  *
- * 碼不是 `UNKNOWN` 的，訊息維持最外層那一句：模型呼叫的失敗，最外層就是供應商的原話，對應 dsh 的 `LlmError.failure.message`。
+ * 碼不是 `UNKNOWN`、`STORAGE_FULL` 的，訊息維持最外層那一句：模型呼叫的失敗，最外層就是供應商的原話，對應 dsh 的 `LlmError.failure.message`。
  * **碼是 `UNKNOWN` 的（多半是工具 middleware 的 bug、狀態錯誤）換成 {@link errorChain}**，照 dsh `agent-loop/src/agent.ts:375-381`
  * 對非 `LlmError` 的失敗寫 `{ message: errorChain(error), code: 'UNKNOWN' }`——重新整理後的歷史看得到整條原因鏈
  * （例如「寫入失敗: EACCES: permission denied」）。渲染的是**拆掉 `MiddlewareError` 之後**那一顆：基座每一層都抄底下那一層的
  * `message`，直接渲染最外層會讓同一句重複十幾次。
  *
- * 即時那一顆 `lifecycle failed` frame 由基座發、訊息是最外層那一句，這裡不動它：`UNKNOWN` 的失敗，即時看到短句、重新整理後看到整條。
+ * 即時那一顆 `lifecycle failed` frame 由基座發、訊息是最外層那一句，這裡不動它（`STORAGE_FULL` 例外：`ThreadPump` 換成同一句固定字）：`UNKNOWN` 的失敗，即時看到短句、重新整理後看到整條。
  *
  * @param error - catch 到的值（`unknown`，可以是任何東西）。
  * @returns `message`（`turn/failed.message`）與 `error`（`turn/failed.error`，`error.message` 與 `message` 同一句）。

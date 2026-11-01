@@ -18,7 +18,7 @@ v0.5.19 的 `edit_file`（以及外部插件經 `@nexus/fs` 的 `fs.backend()` �
   `read_file`（只有模型那條工具）讀出來的每一行不再帶尾端的 `\r`；backend 自己的 `.read()` 不變，`\r` 原樣。
 - **空的 `old_string` 一律回 `FS_EDIT_NOT_FOUND`**，連空檔也一樣（以前對空檔配空字串會直接寫入新內容）；要寫入空檔請用 `write_file`。
 - **混合行尾的檔會被統一**：同一個檔裡 CRLF 與 LF 並存時，改完整份都變成多數那一種（同 dsh 的已知限制）。
-- 檔案工具失敗時，`tool/result` 事件的 `error` 多帶一個原因碼（`FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE`、`FS_NOT_TEXT`、`FS_EDIT_NOT_FOUND`、`FS_AMBIGUOUS_EDIT`、`FS_PERMISSION_DENIED`），錯誤文字不變；這一點是純新增。
+- 檔案工具失敗時，`tool/result` 事件的 `error` 多帶一個原因碼（`FS_NOT_FOUND`、`FS_NOT_REGULAR_FILE`、`FS_NOT_TEXT`、`FS_EDIT_NOT_FOUND`、`FS_AMBIGUOUS_EDIT`、`FS_PERMISSION_DENIED`、`FS_NO_SPACE`），錯誤文字不變；這一點是純新增。
 
 受影響的：用 `backend.edit` 改二進位或非 UTF-8 檔的外部插件與腳本（升級後得到錯誤結果，不再改壞檔）；依賴 `read_file` 輸出尾端 `\r` 的腳本；
 手上有混合行尾檔案、期待改完只動被改的那幾行的人。
