@@ -36,8 +36,8 @@
  * 呼叫的起訖與耗時、工具的耗時取自投影：重新整理後條目上模型回覆的 `startedAt` 等於 `settledAt`（#1048），算出來是錯的。
  * 缺席的欄位寫 `—`，不補 0。
  *
- * **子代理自己的軌跡今天沒有**：插件沒有宣告 `children`，`subagentProjections` 裡沒有它的值。子代理的列照舊以歸屬標籤
- * 夾在主對話的列之間，要看它內部的呼叫結構得先有 harness 那一側的投影。
+ * **子代理自己的軌跡在 `subagentProjections[runId]`**（#1070）。子代理的條目列照舊以歸屬標籤夾在主對話的列之間；它內部的呼叫結構畫在
+ * 派它的那顆工具底下（`components/trace/subagent.tsx`）。前景子代理的日誌沒有輪尾，被時鐘切斷的呼叫靠父輪的原因分開講，見 {@link cutByParentClock}。
  *
  * ## 第 0 版的切輪靠「人那一格」，而這會錯
  *
@@ -224,6 +224,8 @@ export type TraceRow =
       readonly durationMs?: number;
       /** 這顆工具派出的子代理（`runId`）：展開它的呼叫結構要用。 */
       readonly subagentRunId?: string;
+      /** 派它的那一輪（含續接段）被時鐘切斷（只放原始值，理由同 `call` 那一列）。前景子代理的呼叫靠它分開講，見 {@link cutByParentClock}。 */
+      readonly parentCutByClock?: true;
     })
   | (RowBase & {
       readonly kind: 'decision';
@@ -259,7 +261,7 @@ export type TraceRow =
       readonly retryCount: number;
       /**
        * 這次呼叫沒有正常回來的方式（投影的 `TrajectoryCall.outcome`）；沒有這一格 ＝ 正常回來，或舊日誌。
-       * `timed-out` 是 `aborted` 而且那一輪時鐘到點（`TrajectoryDigest.endCause`，#1847）：一輪只會被中止一次，中止的呼叫就是那次原因切斷的。
+       * `timed-out` 是 `aborted` 而且那一輪時鐘到點（`TrajectoryDigest.endCause`，#1847）；前景子代理沒有自己的原因，讀派它那一輪（含續接段）的，見 {@link cutByParentClock}。一輪只會被中止一次，中止的呼叫就是那次原因切斷的。
        */
       readonly outcome?: keyof typeof CALL_OUTCOME_LABEL;
       readonly system: SnapshotState;
@@ -568,6 +570,7 @@ interface ToolFact {
   readonly time: number;
   readonly durationMs: number | undefined;
   readonly subagentRunId: string | undefined;
+  readonly parentCutByClock: boolean;
 }
 
 interface ViewIndex {
@@ -575,19 +578,30 @@ interface ViewIndex {
   readonly tools: ReadonlyMap<string, ToolFact>;
 }
 
-/** 條目鍵 → 位置。鍵的形狀見檔頭的表。 */
-function toolFact(tool: TrajectoryTool): ToolFact {
+function toolFact(tool: TrajectoryTool, parentCutByClock: boolean): ToolFact {
   return {
     time: tool.time,
     durationMs: tool.durationMs,
     subagentRunId: tool.subagent?.runId,
+    parentCutByClock,
   };
 }
 
+/**
+ * 這一輪連同接著它的續接輪是不是被時鐘切斷。工具可能開在核准之前、被切斷在續接那一段，所以看整組最後一段。
+ */
+function groupCutByClock(turns: readonly TrajectoryTurn[], index: number): boolean {
+  let last = index;
+  while (turns[last + 1]?.logical === false) last += 1;
+  return stoppedByTurnClock(turns[last]!.endCause);
+}
+
+/** 條目鍵 → 位置。鍵的形狀見檔頭的表。 */
 function indexView(view: TrajectoryView): ViewIndex {
   const slots = new Map<string, Slot>();
   const tools = new Map<string, ToolFact>();
   view.turns.forEach((turn, t) => {
+    const cutByClock = groupCutByClock(view.turns, t);
     turn.calls.forEach((call, c) => {
       const { reply } = call;
       if (reply !== undefined) {
@@ -597,12 +611,12 @@ function indexView(view: TrajectoryView): ViewIndex {
       }
       for (const tool of call.tools) {
         slots.set(`tool-${tool.callId}`, { turn: t, call: c });
-        tools.set(`tool-${tool.callId}`, toolFact(tool));
+        tools.set(`tool-${tool.callId}`, toolFact(tool, cutByClock));
       }
     });
     for (const tool of turn.looseTools) {
       slots.set(`tool-${tool.callId}`, { turn: t, call: undefined });
-      tools.set(`tool-${tool.callId}`, toolFact(tool));
+      tools.set(`tool-${tool.callId}`, toolFact(tool, cutByClock));
     }
   });
   return { slots, tools };
@@ -919,6 +933,26 @@ export function subagentDigestHead(digest: TrajectoryDigest): TurnHead {
   return headOf(digest, 1);
 }
 
+/**
+ * 派它的那一輪被時鐘切斷時，前景子代理被中止的呼叫也講成時間到（[#2240](https://github.com/DemianLi/nexus-agent/issues/2240)）。
+ * 前景子代理的日誌沒有 `turn/end`，自己沒有 `endCause`；它讀的中止訊號就是派它那一輪的，沒有別的來源，所以父輪的原因就是它的。
+ * 背景子代理（`kind` 不是 `run`）有自己的原因，不動。
+ *
+ * @param view - {@link subagentTurnView} 的結果。
+ * @returns 換過呼叫列的那一份；不是前景子代理就原樣。
+ */
+export function cutByParentClock(view: SubagentTurnView): SubagentTurnView {
+  if (view.head.kind !== 'run') return view;
+  return {
+    ...view,
+    calls: view.calls.map((call) =>
+      call.row.outcome === 'aborted'
+        ? { ...call, row: { ...call.row, outcome: 'timed-out' as const } }
+        : call,
+    ),
+  };
+}
+
 /** 子代理的一次呼叫：呼叫段落列、它的重試、它叫的工具（只有結構，沒有內文）。 */
 export interface SubagentCallView {
   readonly row: Extract<TraceRow, { kind: 'call' }>;
@@ -1165,6 +1199,7 @@ function withToolFact(row: TraceRow, index: ViewIndex): TraceRow {
     time: fact.time,
     ...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }),
     ...(fact.subagentRunId === undefined ? {} : { subagentRunId: fact.subagentRunId }),
+    ...(fact.parentCutByClock ? { parentCutByClock: true as const } : {}),
   };
 }
 
