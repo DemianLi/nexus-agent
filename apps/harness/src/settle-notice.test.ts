@@ -29,6 +29,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { historyPage } from './conversation-history.js';
+import { childForkSeed } from './thread-fork.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
@@ -590,6 +591,132 @@ describe('通知帶上怎麼收的，即時、排隊中與歷史一致（#884）
     } finally {
       await run.close();
     }
+  });
+
+  const TIMED_OUT = { kind: 'hook', reason: 'turn-timeout' } as const;
+  const noticeCauses = (frames: readonly Event[]) =>
+    reduceAll(emptyConversation(), frames).entries.flatMap((entry) =>
+      entry.kind === 'notice' ? [entry.stopCause ?? 'none'] : [],
+    );
+
+  it('閒著開一輪：停止原因記上日誌，即時與歷史都帶（#1847）', async () => {
+    const { agent } = fakeAgent();
+    const run = open(agent);
+    try {
+      run.pump.notifySettled({ ...NOTICE, reason: 'aborted', cause: TIMED_OUT });
+      await run.pump.whenIdle();
+      const start = run.pump.sessionLog.events.find((event) => event.type === 'turn/start');
+      expect(start?.data).toMatchObject({ kind: 'subagent-settled', cause: TIMED_OUT });
+      expect(noticeCauses(run.frames)).toEqual([TIMED_OUT]);
+      expect(noticeCauses(historyPage(run.pump.sessionLog.events).events)).toEqual([TIMED_OUT]);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('輪中插進來：停止原因記在 user/message 的來源上，即時與歷史都帶', async () => {
+    const hold = gate();
+    const { agent, inputs } = fakeAgent([{ holdBeforeClaim: hold.opened }]);
+    const run = open(agent, { stepInbox: true });
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => inputs.length === 1);
+      run.pump.notifySettled({ ...NOTICE, reason: 'aborted', cause: { kind: 'parent' } });
+      hold.open();
+      await first;
+      await run.pump.whenIdle();
+      const message = run.pump.sessionLog.events.find(
+        (event) => event.type === 'user/message' && event.data.source.kind === 'subagent-settled',
+      );
+      expect(message?.data).toMatchObject({ source: { cause: { kind: 'parent' } } });
+      expect(noticeCauses(run.frames)).toEqual([{ kind: 'parent' }]);
+      expect(noticeCauses(historyPage(run.pump.sessionLog.events).events)).toEqual([
+        { kind: 'parent' },
+      ]);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('排隊中那一行也帶停止原因，重開之後從日誌折回來還在', async () => {
+    const hold = gate();
+    const { agent, inputs } = fakeAgent([{ hold: hold.opened }]);
+    const run = open(agent, { stepInbox: false });
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => inputs.length === 1);
+      run.pump.notifySettled({ ...NOTICE, reason: 'aborted', cause: TIMED_OUT });
+      await until(() => reduceAll(emptyConversation(), run.frames).inbox.length > 0);
+      const expected = [{ kind: 'subagent-settled', reason: 'aborted', cause: TIMED_OUT }];
+      expect(reduceAll(emptyConversation(), run.frames).inbox.map((i) => i.source)).toEqual(
+        expected,
+      );
+      const page = historyPage(run.pump.sessionLog.events).events;
+      expect(reduceAll(emptyConversation(), page).inbox.map((i) => i.source)).toEqual(expected);
+      hold.open();
+      await first;
+      await run.pump.whenIdle();
+      expect(noticeCauses(run.frames)).toEqual([TIMED_OUT]);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('分叉：前綴裡的通知帶著停止原因，排著的那件被取消、不帶過去', () => {
+    const settled = { ...NOTICE, reason: 'aborted', cause: TIMED_OUT } as const;
+    const log = new SessionLog('fork');
+    log.append('turn/start', { kind: 'subagent-settled', ...settled });
+    const boundary = log.append('turn/end', {}).seq;
+    log.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [
+        {
+          id: 'q',
+          text: NOTICE.text,
+          source: {
+            kind: 'subagent-settled',
+            summary: NOTICE.summary,
+            reason: 'aborted',
+            cause: { kind: 'parent' },
+            senderSessionId: NOTICE.senderSessionId,
+          },
+        },
+      ],
+    });
+    const seed = childForkSeed(log.events, boundary);
+    expect(noticeCauses(historyPage(seed).events)).toEqual([TIMED_OUT]);
+    expect(reduceAll(emptyConversation(), historyPage(seed).events).inbox).toEqual([]);
+  });
+
+  it('壓縮不改日誌：通知的停止原因在歷史上還在，摘要不帶它', () => {
+    const log = new SessionLog('compact');
+    log.append('turn/start', {
+      kind: 'subagent-settled',
+      ...NOTICE,
+      reason: 'aborted',
+      cause: TIMED_OUT,
+    });
+    log.append('turn/end', {});
+    log.append('compaction/summary', { cutoffIndex: 1, messagesBefore: 2, filePath: null });
+    expect(noticeCauses(historyPage(log.events).events)).toEqual([TIMED_OUT]);
+  });
+
+  it('認不得的停止原因當作沒有；舊日誌也沒有', () => {
+    const frame = (payload: object, seq: number): Event => ({
+      type: 'event',
+      seq,
+      method: 'custom',
+      params: { namespace: [], timestamp: 0, data: { name: 'subagent/settle-notice', payload } },
+    });
+    expect(
+      noticeCauses([
+        frame({ id: 'a', reason: 'aborted', cause: { kind: 'exploded' } }, 0),
+        frame({ id: 'b', reason: 'aborted', cause: { kind: 'hook' } }, 1),
+        frame({ id: 'c', reason: 'aborted', cause: 'user' }, 2),
+        frame({ id: 'd', reason: 'aborted' }, 3),
+      ]),
+    ).toEqual(['none', 'none', 'none', 'none']);
   });
 
   it('舊日誌（沒有 reason）：歷史長出沒有原因的通知，不假裝成完成', () => {

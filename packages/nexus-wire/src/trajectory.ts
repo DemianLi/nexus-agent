@@ -29,6 +29,8 @@
  * @module
  */
 
+import type { TurnStopCause } from './conversation.js';
+
 /** 軌跡投影的 key（`projection` frame 的 `key`）。 */
 export const TRAJECTORY_PROJECTION = 'trajectory';
 /** 請求快照投影的 key。 */
@@ -289,6 +291,11 @@ export interface TrajectoryDigest {
   /** 這一輪是不是開了新的邏輯輪（`resume` 不算，它接著上一輪停在核准點的那幾顆呼叫）。 */
   readonly logical: boolean;
   readonly end?: TrajectoryEnd;
+  /**
+   * 被中止的那一輪為什麼停（[#1847](https://github.com/DemianLi/nexus-agent/issues/1847)，`turn/end` 的 `reason.cause`）。
+   * **只有 `end` 是 `aborted` 且日誌帶了認得的原因才有**，不猜。選填欄位：`version` 不動，舊渲染器照畫、只是沒有這格。
+   */
+  readonly endCause?: TurnStopCause;
   /**
    * 失敗的那一輪是哪一類失敗（`turn/failed` 的 `error.code`，#434／#1115）：`AUTH`、`QUOTA`、`RATE_LIMIT`、
    * `CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`、`HTTP_<n>`、`TIMEOUT`、`TRANSPORT`、`UNKNOWN`（與 `llm/retry`

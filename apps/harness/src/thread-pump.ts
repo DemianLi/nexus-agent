@@ -347,6 +347,7 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         text: item.text,
         summary: source.summary,
         ...(source.reason === undefined ? {} : { reason: source.reason }),
+        ...(source.cause === undefined ? {} : { cause: source.cause }),
         senderSessionId: source.senderSessionId,
       };
     case 'agent-message':
@@ -384,6 +385,7 @@ function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
         form: 'notice',
         summary: source.summary,
         ...(source.reason === undefined ? {} : { reason: source.reason }),
+        ...(source.cause === undefined ? {} : { cause: source.cause }),
         senderSessionId: source.senderSessionId,
       };
     case 'agent-message':
@@ -475,6 +477,8 @@ export type PumpInput =
       readonly summary: string;
       /** 怎麼收的（#884）。選填：從舊日誌折出來的排著的一件沒有。 */
       readonly reason?: SubagentSettleReason;
+      /** `reason` 是 `aborted` 時為什麼停（#1847）。選填，同上。 */
+      readonly cause?: TurnAbortCause;
       readonly senderSessionId: string;
     }
   | {
@@ -830,6 +834,7 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
         text: input.text,
         summary: input.summary,
         ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.cause === undefined ? {} : { cause: input.cause }),
         senderSessionId: input.senderSessionId,
       };
     case 'agent-message':
@@ -1960,18 +1965,21 @@ export class ThreadPump {
    * @param notice.text - 送進模型的那一串字。
    * @param notice.summary - 一行摘要（記在來源上，經 {@link boundContextSummary} 夾到 `CONTEXT_SUMMARY_MAX_CHARS` 以內，#1567 N0136）。
    * @param notice.reason - 怎麼收的（記在來源上，#884）；畫面據它分「完成、被停止、失敗、超出上限」。
+   * @param notice.cause - 被中止時為什麼停（記在來源上，#1847）。
    * @param notice.senderSessionId - 結算的背景子代理的會話 id。
    */
   notifySettled(notice: {
     readonly text: string;
     readonly summary: string;
     readonly reason: SubagentSettleReason;
+    readonly cause?: TurnAbortCause;
     readonly senderSessionId: string;
   }): void {
     this.#deliverMachineInput(notice.text, {
       kind: 'subagent-settled',
       summary: boundContextSummary(notice.summary),
       reason: notice.reason,
+      ...(notice.cause === undefined ? {} : { cause: notice.cause }),
       senderSessionId: notice.senderSessionId,
     });
   }

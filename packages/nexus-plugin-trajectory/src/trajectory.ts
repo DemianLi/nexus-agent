@@ -51,6 +51,7 @@ import {
   TRAJECTORY_TURN_CALLS_CAP,
   TRAJECTORY_TURN_LIST_CAP,
   TRAJECTORY_VERSION,
+  isTurnStopCause,
 } from '@nexus/wire';
 import type {
   TrajectoryApprovalOutcome,
@@ -65,6 +66,7 @@ import type {
   TrajectoryTurnDetail,
   TrajectoryTurnKind,
   TrajectoryView,
+  TurnStopCause,
 } from '@nexus/wire';
 
 /** 表裡的鍵：加前綴，免得 `"0"`、`"1"` 這種整數形的 id 被物件按數字序排到前面，把「最舊的先丟」的順序弄反。 */
@@ -288,6 +290,7 @@ function digestOf(turn: TurnState): TrajectoryDigest {
     kind: full.kind,
     logical: full.logical,
     ...(full.end === undefined ? {} : { end: full.end }),
+    ...(full.endCause === undefined ? {} : { endCause: full.endCause }),
     ...(full.failureCode === undefined ? {} : { failureCode: full.failureCode }),
     ...(full.endTime === undefined ? {} : { endTime: full.endTime }),
     ...(full.durationMs === undefined ? {} : { durationMs: full.durationMs }),
@@ -604,6 +607,13 @@ function endOf(reason: unknown): TrajectoryEnd {
   }
 }
 
+/** `turn/end` 的 `reason` 帶的中止原因；不是中止、舊日誌沒帶或認不得都沒有。 */
+function endCauseOf(reason: unknown): TurnStopCause | undefined {
+  if (!isRecord(reason) || reason['kind'] !== 'aborted') return undefined;
+  const cause = reason['cause'];
+  return isTurnStopCause(cause) ? cause : undefined;
+}
+
 /** 一顆 `turn/start` 的預覽來源。 */
 function startText(data: Record<string, unknown>): string | undefined {
   switch (data['kind']) {
@@ -701,6 +711,7 @@ function closeTurn(
   end: TrajectoryEnd,
   failure?: string,
   failureCode?: string,
+  endCause?: TurnStopCause,
 ): TrajectoryState {
   if (openTurn(state) === undefined) return state;
   return updateLastTurn(state, (turn) => ({
@@ -708,6 +719,7 @@ function closeTurn(
     end,
     endSeq: event.seq,
     endTime: event.time,
+    ...(endCause === undefined ? {} : { endCause }),
     ...(failure === undefined ? {} : { failure: preview(failure) }),
     ...(failureCode === undefined ? {} : { failureCode }),
   }));
@@ -793,8 +805,8 @@ export function applyTrajectory(
     case 'turn/start':
       return startTurn(state, event, trim);
     case 'turn/end': {
-      const end = endOf(data['reason']);
-      return closeTurn(state, event, end);
+      const reason = data['reason'];
+      return closeTurn(state, event, endOf(reason), undefined, undefined, endCauseOf(reason));
     }
     case 'turn/failed':
       return closeTurn(

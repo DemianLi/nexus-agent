@@ -924,6 +924,7 @@ describe('背景子代理（Q-B4 (a)）', () => {
       timers.fire(TIMEOUT_MS);
       await run.outcome;
       expect(settlements.map((settlement) => settlement.reason)).toEqual(['aborted']);
+      expect(settlements[0]?.cause).toEqual({ kind: 'hook', reason: 'turn-timeout' });
     } finally {
       await host.close();
     }
