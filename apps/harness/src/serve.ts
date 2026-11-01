@@ -82,7 +82,7 @@ import {
   SessionNotFoundError,
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
-import { assertSameCwd, ResumeWorkspaceConflictError } from './resume-guards.js';
+import { assertSameCwd } from './resume-guards.js';
 import { McpConnectionPool } from '@nexus/plugin-mcp';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
@@ -1138,8 +1138,7 @@ async function startServer(
 
   /**
    * 這一版讀不懂的日誌（{@link SessionFormatUnsupportedError}）：原始檔在哪裡記進伺服器日誌，錯原樣往外拋（#1559 N0646）。
-   * **路徑只到這裡**：錯誤訊息會進協定錯誤送到瀏覽器（`wire-handler.ts` 的 `threadOrError`），多人共用的主機不把目錄結構
-   * 交給每一個打開那條 thread 的人（偏離 dsh 的訊息帶路徑，理由 2，#1558 Q1 (a)）。
+   * **路徑只到這裡**：錯誤訊息不帶路徑，這一行是管理者找得到原始檔的地方。
    */
   const noteRefusedLog =
     (threadId: string) =>
@@ -1181,7 +1180,7 @@ async function startServer(
           idleEvictMs,
           onThreadEvicted: () => threadPluginList.republishSnapshot(),
         }),
-    // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
+    // 哪些事走它見 `WireHandlerOptions.warn`。
     warn,
     // 閒置逐出把一條 thread 撤出記憶體是正常狀態（#1534）：info，門檻調到 warn 的主機不為它出一行。
     info: log,
@@ -1330,10 +1329,6 @@ async function startServer(
           entry: 'serve',
           threadId,
           resumedHeader: history?.header,
-        }).catch((error: unknown) => {
-          // wire 的訊息不帶主機路徑（#2222），管理者要的兩個根在這裡。
-          if (error instanceof ResumeWorkspaceConflictError) warn(error.message);
-          throw error;
         });
         const threadWorkspaceRoot = placement.root;
         // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有

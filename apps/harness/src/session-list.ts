@@ -51,7 +51,7 @@
  *   不數的話，畫面上「少了一條」跟「本來就沒有」分不出來。
  *
  * **日誌本文壞在中間不在這裡擋**：讀的時候開撿回模式（`salvage`），讀得懂的照算。那一列照樣列出來，點下去由續接
- * 那條路講出原因（`wire-handler.ts` 的 `threadOrError`）。
+ * 那條路拒絕，原因進 serve 的日誌（`wire-handler.ts` 的 `threadOrError`）。
  *
  * ## 標題
  *

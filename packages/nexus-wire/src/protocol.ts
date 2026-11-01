@@ -432,14 +432,14 @@ export const THREAD_HISTORY_TOO_DEEP = 'thread_history_too_deep';
 /**
  * 這條 thread 的會話日誌，寫租約被**別的寫入者**握著（[#2031](https://github.com/DemianLi/nexus-agent/issues/2031)）：多半是另一個
  * serve 行程（不同 home、同一個 `--session-log` 與工作目錄）還開著它。serve 沒有開這條 thread，日誌不動。**是暫時的**：握著的那一方
- * 關掉這條 thread 或結束之後，再送就不會再因為寫租約被拒；那一方用的是不同 home 時，這條 thread 接著回 {@link THREAD_ROOT_MISMATCH}，要回原本的 home 才打得開。
+ * 關掉這條 thread 或結束之後，再送就不會再因為寫租約被拒；日誌記的是那一方 home 底下的私有根、這台又給了 `--workspace` 時，這條 thread 接著回 {@link THREAD_ROOT_MISMATCH}，要回原本的 home 才打得開。
  * 任何會經 `threadFor` 續接舊 thread 的路都可能回。message 寫明是哪一份會話與下一步。
  */
 export const THREAD_WRITER_HELD = 'thread_writer_held';
 
 /**
- * 這條 thread 的日誌記著的可寫根，這台 serve 接不上（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）：私有根在另一個 home 底下，
- * 或對話跑在另一個 `--workspace`。serve 沒有開這條 thread，日誌不動。**重試沒用**：要在原本的 home 或 `--workspace` 上才打得開。
+ * 這條 thread 的日誌記著的可寫根，這台 serve 接不上（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）：記的是私有根、卻不在這台的基底底下
+ * （多半是換過 home），或對話跑在另一個 `--workspace`。serve 沒有開這條 thread，日誌不動。**重試沒用**：要在原本的 home 或 `--workspace` 上才打得開。
  * 任何會經 `threadFor` 續接舊 thread 的路都可能回。message 寫明是哪一份會話與下一步，**不帶主機路徑**；兩個根印在 serve 的日誌。
  */
 export const THREAD_ROOT_MISMATCH = 'thread_root_mismatch';

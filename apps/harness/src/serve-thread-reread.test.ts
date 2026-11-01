@@ -189,14 +189,14 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(refused).not.toContain('plugin-journal.jsonl');
     expect(lines.join('\n')).toContain('plugin-journal.jsonl');
     expect(lines.join('\n')).toMatch(/第 \d+ 行/u);
-    // 照 PM 說明的救援：備份、把壞行拿掉。
+    // 救援：備份、把壞行拿掉。
     h.text(good);
     await h.change({ op: 'config-set', id: 'probe', config: { tag: 'two' } });
     expect(await say(server, 'b')).toBeUndefined();
     expect(h.applied()).toEqual(['{"tag":"one"}', '{"tag":"two"}']);
   }, 60000);
 
-  it('必掛的列掉了：只有那一條建不起來，日誌同啟動那一次', async () => {
+  it('必掛的列掉了：只有那一條建不起來，日誌裡的原因同啟動那一次', async () => {
     const h = home();
     const lines: string[] = [];
     const server = await start(h.env, lines);

@@ -154,7 +154,7 @@ function connect(first: Faults, workspaceRoot?: string) {
   return { handler, client, rigs, warnings };
 }
 
-/** 開一條下行，回它（成功）或錯誤訊息（建不起來）。 */
+/** 開一條下行又關掉，回 undefined（成功）或錯誤訊息（建不起來）。 */
 async function open(client: ReturnType<typeof createWireClient>): Promise<string | undefined> {
   const events = await client.openEvents(THREAD).catch((error: unknown) => error as Error);
   if (events instanceof Error) return events.message;
@@ -219,7 +219,7 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
     await handler.close();
   });
 
-  it('收尾本身拋錯：對外回的仍是原本那個錯，而且後面的步驟照收（一步出錯不跳過其餘）', async () => {
+  it('收尾本身拋錯：日誌記的仍是原本那個錯，而且後面的步驟照收（一步出錯不跳過其餘）', async () => {
     const { handler, client, rigs, warnings } = connect({ title: true, detach: true });
 
     await open(client);
@@ -260,7 +260,7 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
     expect(rigs[0]?.live.size).toBe(0);
   });
 
-  it('attachSessions 本身拋：之前沒有東西接上，agent 照收（既有行為）', async () => {
+  it('attachSessions 本身拋：之前沒有東西接上，agent 照收', async () => {
     const rigs: Rig[] = [];
     const warnings: string[] = [];
     const handler = createWireHandler({
