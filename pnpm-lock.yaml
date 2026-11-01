@@ -998,6 +998,9 @@ importers:
         specifier: ^4.6.7
         version: 4.6.7
     devDependencies:
+      '@nexus/agent-loop':
+        specifier: workspace:*
+        version: link:../nexus-agent-loop
       '@nexus/commands':
         specifier: workspace:*
         version: link:../nexus-commands
@@ -1016,6 +1019,9 @@ importers:
       '@nexus/permission-presets':
         specifier: workspace:*
         version: link:../nexus-permission-presets
+      '@nexus/plugin-commands':
+        specifier: workspace:*
+        version: link:../nexus-plugin-commands
       '@nexus/projections':
         specifier: workspace:*
         version: link:../nexus-projections

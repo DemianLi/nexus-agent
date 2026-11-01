@@ -26,11 +26,6 @@
  *    {@link PermissionPresetsService.start}（純函式，不碰日誌也不碰控制器），宿主據回傳值靜默切兩顆控制器，之後參與者才釘組名。
  *    好處是新會話的日誌只有一顆 `sandbox/mode`、順序逐字不變。
  *    **撤除條件**：兩顆控制器整個拿掉、fence 與閘門改讀日誌投影（#1491 Q1 (c)）時，宿主不再靜默切控制器，起始值就能直接由參與者往日誌套。
- * 5. **`/permission` 切換核准政策時不對模型注入一則使用者訊息**（類別：遷移卡不改行為（暫時））。dsh 的 `user-approval` 在政策變動時用
- *    `agent.inject` 排一則「The approval policy changed from … to … (changed by the user).」給下一步模型
- *    （`packages/interaction/user-approval/src/index.ts:184-187`，`687f282e`）；我們的 `/permission` 從相容層起就沒有這一步，遷移不改行為。
- *    這一條住在提供者（`@nexus/plugin-permission-presets` 檔頭第 8 條），登記在這裡是因為定義套件是偏離登記的總表（`docs/plugin-contract.md` 登記第 5 列）。
- *    **撤除條件**：之後的權限卡決定要不要補這則訊息（補了就是行為改變，要自己一張卡）。
  *
  * ## 相依
  *
