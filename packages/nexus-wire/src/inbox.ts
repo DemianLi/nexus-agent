@@ -36,6 +36,7 @@
  */
 
 import type { WireAttachmentRef } from './attachments.js';
+import type { TurnStopCause } from './conversation.js';
 import type { SubagentMention } from './subagent-list.js';
 
 /** `custom` 事件的 `data.name`：送出佇列現在是這一份。 */
@@ -81,12 +82,21 @@ export function isSettleReason(value: unknown): value is WireSettleReason {
   return SETTLE_REASONS.some((reason) => reason === value);
 }
 
+/** 讀到的值是不是認得的停止原因（#1847）。不認得的一律當作沒有，畫面退成只看 `reason`。 */
+export function isTurnStopCause(value: unknown): value is TurnStopCause {
+  if (typeof value !== 'object' || value === null) return false;
+  const { kind, reason } = value as { kind?: unknown; reason?: unknown };
+  return kind === 'user' || kind === 'parent' || (kind === 'hook' && typeof reason === 'string');
+}
+
 /** {@link SETTLE_NOTICE} 的 `payload`。 */
 export interface SettleNoticePayload {
   /** 那一格 entry 的 `id`，也是去重的鍵：同一個 `id` 第二次出現就忽略。 */
   readonly id: string;
   /** 怎麼收的（#884）。選填：格式 26 以前的日誌沒有，畫面退成中性的說法。 */
   readonly reason?: WireSettleReason;
+  /** `reason` 是 `aborted` 時為什麼停（#1847）。選填：舊日誌沒有。 */
+  readonly cause?: TurnStopCause;
 }
 
 /**
@@ -116,6 +126,8 @@ export type WireQueuedInputSource =
       readonly kind: 'subagent-settled';
       /** 怎麼收的（#884）：排隊中那一行與開跑之後的通知畫同一句。選填，舊日誌沒有。 */
       readonly reason?: WireSettleReason;
+      /** 為什麼停（#1847），同 {@link SettleNoticePayload}。 */
+      readonly cause?: TurnStopCause;
     }
   | { readonly kind: 'agent-message' }
   | {
@@ -175,6 +187,8 @@ export type WireClaimedSource =
       readonly kind: 'subagent-settled';
       /** 怎麼收的（#884），同 {@link WireQueuedInputSource}。選填，舊日誌沒有。 */
       readonly reason?: WireSettleReason;
+      /** 為什麼停（#1847），同 {@link SettleNoticePayload}。 */
+      readonly cause?: TurnStopCause;
     }
   | {
       readonly kind: 'agent-message';

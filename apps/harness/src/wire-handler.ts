@@ -1829,6 +1829,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
               text: settlement.text,
               summary: settlement.summary,
               reason: settlement.reason,
+              ...(settlement.cause === undefined ? {} : { cause: settlement.cause }),
               senderSessionId: settlement.sessionId,
             });
           },

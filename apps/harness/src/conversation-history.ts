@@ -107,6 +107,7 @@ import type {
   SubagentMentionRef,
   SubagentSettleReason,
   TokenUsageTotals,
+  TurnAbortCause,
   UnreplayableReason,
 } from '@nexus/core';
 import {
@@ -329,16 +330,25 @@ export function deliverablesData(
  * 歷史沒有送出佇列，所以另有這一顆，`id` 是 `history-<日誌 seq>`。
  * @param id - 那一格 entry 的 `id`。
  * @param reason - 怎麼收的（日誌上 `source`／`turn/start` 記的，#884）；舊日誌沒有就不給。
+ * @param cause - 被中止時為什麼停（同一處記的，#1847）；舊日誌沒有就不給。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `SettleNoticePayload`。
  */
 export function settleNoticeData(
   id: string,
   reason?: SubagentSettleReason,
+  cause?: TurnAbortCause,
 ): {
   readonly name: typeof SETTLE_NOTICE;
   readonly payload: SettleNoticePayload;
 } {
-  return { name: SETTLE_NOTICE, payload: { id, ...(reason === undefined ? {} : { reason }) } };
+  return {
+    name: SETTLE_NOTICE,
+    payload: {
+      id,
+      ...(reason === undefined ? {} : { reason }),
+      ...(cause === undefined ? {} : { cause }),
+    },
+  };
 }
 
 /**
@@ -495,8 +505,12 @@ export function inboxData(
       id,
       text: shown(text, source),
       source:
-        source.kind === 'subagent-settled' && source.reason !== undefined
-          ? { kind: source.kind, reason: source.reason }
+        source.kind === 'subagent-settled'
+          ? {
+              kind: source.kind,
+              ...(source.reason === undefined ? {} : { reason: source.reason }),
+              ...(source.cause === undefined ? {} : { cause: source.cause }),
+            }
           : { kind: source.kind },
       ...attachmentsField(attachments),
       ...mentionField(mention),
@@ -522,6 +536,7 @@ export function inboxData(
               source: {
                 kind: source.kind,
                 ...(source.reason === undefined ? {} : { reason: source.reason }),
+                ...(source.cause === undefined ? {} : { cause: source.cause }),
               },
             }),
     ...(references === undefined || references.length === 0
@@ -951,7 +966,10 @@ export function historyFrames(
         turnOpen = true;
         if (event.data.kind === 'subagent-settled') {
           frames.push(
-            customFrame(event.time, settleNoticeData(`history-${event.seq}`, event.data.reason)),
+            customFrame(
+              event.time,
+              settleNoticeData(`history-${event.seq}`, event.data.reason, event.data.cause),
+            ),
           );
         }
         // 子代理寫來的話叫醒的一輪（#863）：即時由 `claimed` 長「某某說」，歷史照即時。
@@ -992,7 +1010,11 @@ export function historyFrames(
           frames.push(
             customFrame(
               event.time,
-              settleNoticeData(`history-${event.seq}`, event.data.source.reason),
+              settleNoticeData(
+                `history-${event.seq}`,
+                event.data.source.reason,
+                event.data.source.cause,
+              ),
             ),
           );
         }

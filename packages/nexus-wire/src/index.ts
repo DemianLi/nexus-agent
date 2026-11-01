@@ -284,7 +284,14 @@ export type {
   WireSessionReference,
   WireSettleReason,
 } from './inbox.js';
-export { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, SETTLE_REASONS, isSettleReason } from './inbox.js';
+export {
+  AGENT_MESSAGE,
+  INBOX,
+  SETTLE_NOTICE,
+  SETTLE_REASONS,
+  isSettleReason,
+  isTurnStopCause,
+} from './inbox.js';
 export type { TitlePayload } from './title.js';
 export { SUBAGENT_STATUS } from './subagent-status.js';
 export { SUBAGENT_CATALOG } from './subagent-catalog.js';

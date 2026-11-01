@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
+import { TURN_CANCEL_CONFIG_KEY } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
 import { hasDirectHumanTurn } from '@nexus/plugin-goal';
 import { createWireClient, emptyConversation, reduceConversation } from '@nexus/wire';
@@ -25,6 +26,8 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
+import { REAL_TURN_TIMERS } from './turn-clock.js';
+import type { TurnClock } from './turn-clock.js';
 import { createWireHandler } from './wire-handler.js';
 import { composeAttachSessions } from './session-attach.js';
 
@@ -46,7 +49,11 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
-async function assemble(options: { readonly stepInbox: boolean; readonly workerSends?: boolean }) {
+async function assemble(options: {
+  readonly stepInbox: boolean;
+  readonly workerSends?: boolean;
+  readonly turnClock?: TurnClock;
+}) {
   let release: () => void = () => undefined;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
@@ -81,11 +88,23 @@ async function assemble(options: { readonly stepInbox: boolean; readonly workerS
           }) as never,
         });
         registry.tools.register(
-          tool(async () => (await gate, '放行了'), {
-            name: 'gate',
-            description: '等放行。',
-            schema: z.object({}),
-          }),
+          tool(
+            async (_input, config) => {
+              const signal = config.configurable?.[TURN_CANCEL_CONFIG_KEY] as AbortSignal;
+              await Promise.race([
+                gate,
+                ...(options.turnClock === undefined
+                  ? []
+                  : [new Promise((resolve) => signal.addEventListener('abort', resolve))]),
+              ]);
+              return '放行了';
+            },
+            {
+              name: 'gate',
+              description: '等放行。',
+              schema: z.object({}),
+            },
+          ),
         );
       },
     },
@@ -118,6 +137,7 @@ async function assemble(options: { readonly stepInbox: boolean; readonly workerS
   let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
+    ...(options.turnClock === undefined ? {} : { turnClock: options.turnClock }),
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
@@ -221,6 +241,24 @@ describe('背景子代理做完，閒著的主對話被叫醒', () => {
           .state()
           .entries.some((entry) => entry.kind === 'ai' && entry.text.includes('子代理說結論是 X')),
       ).toBe(true);
+    } finally {
+      await r.close();
+    }
+  });
+
+  it('背景這一輪到點：停止原因走過整條線，記上日誌也到畫面（#1847）', async () => {
+    const r = await assemble({
+      stepInbox: true,
+      turnClock: { timeoutMs: 500, graceMs: 30, timers: REAL_TURN_TIMERS },
+    });
+    const timedOut = { kind: 'hook', reason: 'turn-timeout' };
+    try {
+      await until(() => turnKinds(r.rootLog()).includes('subagent-settled'));
+      const start = r.rootLog().filter((event) => event.type === 'turn/start')[1]!.data;
+      expect(start).toMatchObject({ reason: 'aborted', cause: timedOut });
+      await until(() => r.state().entries.some((entry) => entry.kind === 'notice'));
+      const notices = r.state().entries.filter((entry) => entry.kind === 'notice');
+      expect(notices.map((entry) => entry.stopCause)).toEqual([timedOut]);
     } finally {
       await r.close();
     }

@@ -27,6 +27,7 @@
 
 import type { AttachmentRef } from './attachment-ref.js';
 import type { GoalId } from './goal.js';
+import type { TurnAbortCause } from './session-log.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
 
 /**
@@ -73,6 +74,8 @@ export type QueuedInputSource =
       readonly summary: string;
       /** 怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）；選填只為了格式 26 以前的日誌。 */
       readonly reason?: SubagentSettleReason;
+      /** `reason` 是 `aborted` 時為什麼停（[#1847](https://github.com/DemianLi/nexus-agent/issues/1847)）。舊日誌沒有。 */
+      readonly cause?: TurnAbortCause;
       readonly senderSessionId: string;
     }
   | {

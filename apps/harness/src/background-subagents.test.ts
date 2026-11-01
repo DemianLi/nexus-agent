@@ -2341,6 +2341,7 @@ describe('結算通知（#840）', () => {
     await slow.outcome;
     expect(stopped.settlements[0]?.summary).toMatch(/ was stopped before it finished\.$/);
     expect(stopped.settlements[0]?.reason).toBe('aborted');
+    expect(stopped.settlements[0]?.cause).toEqual({ kind: 'parent' });
 
     const full = setup((_text, _signal, log) =>
       reply(log, '寫到一半', { finish_reason: 'length' }),
@@ -2348,6 +2349,7 @@ describe('結算通知（#840）', () => {
     await full.host.start({ subagent: 'worker', text: '長' }).outcome;
     expect(full.settlements[0]?.summary).toMatch(/ ran out of room before it finished\.$/);
     expect(full.settlements[0]?.reason).toBe('max-tokens');
+    expect(full.settlements[0]).not.toHaveProperty('cause');
     expect(full.settlements[0]?.text).toContain('寫到一半');
     await Promise.all([failed.host.close(), stopped.host.close(), full.host.close()]);
   });
