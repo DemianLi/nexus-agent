@@ -119,26 +119,29 @@ describe('線上那顆 failed frame', () => {
       const data = frame.params.data as { event?: string; error?: string };
       return data.event === 'failed' ? [data.error] : [];
     });
-    return { failed, frames, warnings, pump };
+    const state = frames.reduce(reduceConversation, emptyConversation());
+    return { failed, frames, warnings, pump, state };
   }
 
   it('空間用完：線上與歷史同一句，原文只進日誌', async () => {
-    const { failed, frames, warnings, pump } = await runFailing(errno('ENOSPC'));
+    const { failed, warnings, pump, state } = await runFailing(errno('ENOSPC'));
     expect(failed).toEqual([MESSAGE]);
     const turn = pump.sessionLog.events.find((event) => event.type === 'turn/failed');
     expect(turn?.data).toMatchObject({ message: MESSAGE, error: { code: 'STORAGE_FULL' } });
     expect(warnings.join('\n')).toContain('ENOSPC: no space left on device');
-    const state = frames.reduce(reduceConversation, emptyConversation());
     expect(JSON.stringify(state)).not.toContain('ENOSPC');
+    expect(state.errorCode).toBe('STORAGE_FULL');
   });
 
   it('別的錯：frame 原樣，一顆都不少', async () => {
-    const { failed } = await runFailing(new Error('炸了'));
+    const { failed, state } = await runFailing(new Error('炸了'));
     expect(failed).toEqual(['炸了']);
+    expect(state.errorCode).toBe('UNKNOWN');
   });
 
   it('frame 之後沒有拋：串流結束時照樣送出', async () => {
-    const { failed } = await runFailing(new Error('炸了'), false);
+    const { failed, state } = await runFailing(new Error('炸了'), false);
     expect(failed).toEqual(['炸了']);
+    expect(state.errorCode).toBeUndefined();
   });
 });

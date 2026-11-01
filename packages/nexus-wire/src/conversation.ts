@@ -737,6 +737,11 @@ export interface ConversationState {
    * **只在 {@link status} 是 `stopped` 時有意義**，下一輪開跑時清掉。舊 server 沒帶原因就沒有這一格，畫面照舊當人按了停止。
    */
   readonly stopCause?: TurnStopCause;
+  /**
+   * 這一輪失敗的錯誤碼（[#1844](https://github.com/DemianLi/nexus-agent/issues/1844)），給程式判斷；給人看的是 {@link error}，兩格一起清。
+   * 舊 server、舊日誌沒帶，或 `failed` 之後沒有拋錯（不知道原因）時沒有這一格。
+   */
+  readonly errorCode?: string;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -2255,6 +2260,8 @@ interface LifecycleData {
   readonly event: string;
   readonly graph_name?: string;
   readonly error?: string;
+  /** `failed` 的錯誤碼（`turn/failed.error.code`），見 {@link ConversationState.errorCode}。 */
+  readonly code?: string;
   /** 這一輪被中止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
   readonly aborted?: boolean;
   /** 為什麼停，跟 `aborted` 一起補（#1624），見 {@link TurnStopCause}。 */
@@ -2364,6 +2371,7 @@ function reduceLifecycle(
       ...state,
       status: 'stopped',
       error: undefined,
+      errorCode: undefined,
       pendings: [],
       stopCause: data.cause,
       entries: settleUnfinishedTools(state.entries, time).map((entry) =>
@@ -2385,13 +2393,21 @@ function reduceLifecycle(
     // 其中一顆之後那個新 run 發的，而沒被答到的中斷會在同一個 run 裡帶著原本那顆 id
     // 再度發一次 `input.requested`（實測），上面的覆寫因此是冪等的。留著不清的話，
     // 旁觀的那一端會抱著一張已經被別人答掉、永遠回答不了的卡片。
-    return { ...state, pendings: [], status: 'running', error: undefined, stopCause: undefined };
+    return {
+      ...state,
+      pendings: [],
+      status: 'running',
+      error: undefined,
+      errorCode: undefined,
+      stopCause: undefined,
+    };
   }
   if (data.event === 'failed') {
     return {
       ...state,
       status: 'failed',
       error: data.error ?? '未指名的錯誤',
+      errorCode: data.code,
       entries: settleUnfinishedTools(state.entries, time),
     };
   }

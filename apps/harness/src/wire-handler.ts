@@ -1886,6 +1886,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             touchThread(threadId);
             pump.notifySubagentStatus(items);
           },
+          ...(options.warn !== undefined && { warn: options.warn }),
           // 背景子代理的一輪失敗也進伺服器日誌（#1536）：帶主對話的 thread id 與子代理自己的 run id。
           ...(options.onTurnFailed !== undefined && {
             onTurnFailed: (failure: BackgroundTurnFailure) =>

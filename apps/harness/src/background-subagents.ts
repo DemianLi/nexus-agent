@@ -83,7 +83,7 @@ import type {
 
 import type { ColdChildStore, ColdInspection, ColdResumed } from './background-cold.js';
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
-import { STORAGE_FULL_CODE, turnFailureOf } from './live-model.js';
+import { failureOriginalText, turnFailureOf } from './live-model.js';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { declineAll, parseMcpElicitation } from './mcp-elicitation.js';
 import type { McpElicitation } from './mcp-elicitation.js';
@@ -187,6 +187,8 @@ export interface BackgroundParentPort {
    * 只有編號與失敗碼，不含訊息本文。拋錯只講一聲（`warn`），不影響輪次。
    */
   readonly onTurnFailed?: (failure: BackgroundTurnFailure) => void;
+  /** 寫伺服器日誌。沒接就講不出來，見 {@link BackgroundSubagentHostOptions.warn}。 */
+  readonly warn?: (message: string) => void;
   /** 背景子代理結算了（#840）。 */
   readonly onSettled?: (settlement: BackgroundSettlement) => void;
   /** 背景子代理寫來一則話（#849）。 */
@@ -336,7 +338,7 @@ export interface BackgroundSubagentHostOptions {
    * 它拋錯（例如日誌上沒有記委派那一格）就是這一輪失敗，走 `turn/failed`。
    */
   readonly enter?: <T>(log: SessionLog, run: () => T) => T;
-  /** 拿不到日誌所以沒地方記的失敗，講一聲。不影響輪次。 */
+  /** 寫伺服器日誌：拿不到日誌所以沒地方記的失敗，與 `turn/failed` 記固定句時的原文。不影響輪次。 */
   readonly warn?: (message: string) => void;
   /**
    * 同時存活的背景子代理上限，預設 {@link DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS}，要求是 ≥ 1 的整數。
@@ -1462,7 +1464,10 @@ export class BackgroundSubagentHost {
       const failure = turnFailureOf(error);
       const { message } = failure;
       // 固定句蓋掉了原文，原文只留在伺服器日誌。
-      if (failure.error.code === STORAGE_FULL_CODE) this.#warnFailure(job, thrownMessage(error));
+      const original = failureOriginalText(failure, error);
+      if (original !== undefined) {
+        this.#warn?.(`[背景子代理] ${job.runId} ${failure.error.code}：${original}`);
+      }
       // 拿不到日誌的失敗（註冊表開不出來）沒地方記，只能講一聲。
       if (log === undefined) this.#warnFailure(job, message);
       else {

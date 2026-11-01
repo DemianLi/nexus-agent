@@ -1639,3 +1639,25 @@ describe('時刻（#1030）', () => {
     expect(only(joined, 'tool-c0')).toMatchObject({ startedAt: 20, settledAt: 30 });
   });
 });
+
+describe('失敗的錯誤碼（#1844）', () => {
+  it('失敗的碼跟 error 一起記、一起清', () => {
+    const lifecycle = (data: object) =>
+      ({
+        type: 'event',
+        method: 'lifecycle',
+        params: { namespace: [], timestamp: 0, data: { graph_name: 'root', ...data } },
+      }) as unknown as Event;
+    const failed = reduceConversation(
+      emptyConversation(),
+      lifecycle({ event: 'failed', error: '壞了', code: 'AUTH' }),
+    );
+    expect(failed).toMatchObject({ status: 'failed', error: '壞了', errorCode: 'AUTH' });
+    const running = reduceConversation(failed, lifecycle({ event: 'running' }));
+    expect(running.errorCode).toBeUndefined();
+    const stopped = reduceConversation(failed, lifecycle({ event: 'completed', aborted: true }));
+    expect(stopped.errorCode).toBeUndefined();
+    const uncoded = reduceConversation(emptyConversation(), lifecycle({ event: 'failed' }));
+    expect(uncoded.errorCode).toBeUndefined();
+  });
+});

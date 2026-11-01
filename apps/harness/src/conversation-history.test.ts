@@ -21,6 +21,7 @@ import {
   emptyConversation,
   prependEntries,
   reduceAll,
+  AUTH_FAILURE_MESSAGE,
 } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
@@ -350,6 +351,28 @@ describe('日誌 → 畫面', () => {
 
     const recovered = screen(log(...failed, human('再來'), reply('好了。'), turnEnd));
     expect(recovered.status).toBe('idle');
+  });
+
+  it('失敗的碼跟著歷史走；舊日誌沒有碼就沒有這一格', () => {
+    const coded = log(human('跑'), {
+      type: 'turn/failed',
+      data: { message: '額度用完', error: { message: '額度用完', code: 'QUOTA' } },
+    });
+    expect(screen(coded)).toMatchObject({ error: '額度用完', errorCode: 'QUOTA' });
+    const old = log(human('跑'), { type: 'turn/failed', data: { message: '供應商掛了' } });
+    expect(screen(old).error).toBe('供應商掛了');
+    expect(screen(old).errorCode).toBeUndefined();
+  });
+
+  it('舊日誌的 AUTH 存著供應商原話：讀的時候換成固定句', () => {
+    const state = screen(
+      log(human('跑'), {
+        type: 'turn/failed',
+        data: { message: '401 sk-FAKE', error: { message: '401 sk-FAKE', code: 'AUTH' } },
+      }),
+    );
+    expect(state).toMatchObject({ error: AUTH_FAILURE_MESSAGE, errorCode: 'AUTH' });
+    expect(JSON.stringify(state)).not.toContain('sk-FAKE');
   });
 
   /**

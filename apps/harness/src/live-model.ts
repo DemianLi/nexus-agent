@@ -18,6 +18,7 @@ import {
   thrownMessage,
 } from '@nexus/core';
 import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
+import { AUTH_FAILURE_CODE, AUTH_FAILURE_MESSAGE } from '@nexus/wire';
 import { CHECKPOINT_DEPTH_EXCEEDED } from './checkpoint-serde.js';
 import {
   classifyInbandError,
@@ -1971,6 +1972,27 @@ export const STORAGE_FULL_CODE = 'STORAGE_FULL';
 /** {@link STORAGE_FULL_CODE} 給使用者的那句。不講哪一區：多人共用主機不帶路徑，管理者看日誌與指標。 */
 const STORAGE_FULL_MESSAGE = '主機的儲存空間滿了，這一輪沒做完，請聯絡管理員。';
 
+/** `code` 給使用者的固定句；不是固定句的碼回 `undefined`。這些碼的原文只進伺服器日誌，見 {@link failureOriginalText}。 */
+export function fixedFailureMessage(code: string): string | undefined {
+  if (code === STORAGE_FULL_CODE) return STORAGE_FULL_MESSAGE;
+  return code === AUTH_FAILURE_CODE ? AUTH_FAILURE_MESSAGE : undefined;
+}
+
+/**
+ * 碼是固定句的那幾種的話，回給伺服器日誌的原文（拆掉 `MiddlewareError` 的整條原因鏈）；其餘回 `undefined`。
+ *
+ * @param failure - {@link turnFailureOf} 的結果。
+ * @param error - 這一輪拋出來的錯。
+ * @returns 要記的原文。
+ */
+export function failureOriginalText(
+  failure: { readonly error: LlmFailure },
+  error: unknown,
+): string | undefined {
+  if (fixedFailureMessage(failure.error.code) === undefined) return undefined;
+  return guarded(() => errorChain(unwrapMiddlewareError(error).root), thrownMessage(error));
+}
+
 /**
  * 把「這一輪為什麼失敗」描述成日誌裡的 {@link LlmFailure}（[#434](https://github.com/DemianLi/nexus-agent/issues/434)），
  * 給 `turn/failed.error`**，也給 `llm/retry.failure`**（[#1437](https://github.com/DemianLi/nexus-agent/issues/1437)）。
@@ -2039,7 +2061,7 @@ const STORAGE_FULL_MESSAGE = '主機的儲存空間滿了，這一輪沒做完�
  * 沒有這串中介層，照舊靠 `onFailedAttempt`（{@link classifyFailedAttempt}）標。
  *
  * `message` 是呼叫端照舊寫進 `turn/failed.message` 的那句（最外層的 `error.message`），不是底下那個：兩處同一句，
- * 讀的人不用猜哪個才是人話。`STORAGE_FULL` 例外：換成固定句，原文可能帶主機路徑。
+ * 讀的人不用猜哪個才是人話。`STORAGE_FULL`、`AUTH` 例外：換成固定句，原文可能帶主機路徑或部分金鑰，見 {@link fixedFailureMessage}。
  *
  * @param error - 這一輪拋出來的東西，可能已經被包過很多層。
  */
@@ -2149,7 +2171,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
                             ? 'TRANSPORT'
                             : 'UNKNOWN';
   return llmFailure({
-    message: code === STORAGE_FULL_CODE ? STORAGE_FULL_MESSAGE : message,
+    message: fixedFailureMessage(code) ?? message,
     code,
     status,
     requestId,
@@ -2164,13 +2186,13 @@ const UNRENDERABLE_VALUE = '<unrenderable value>';
  * 四個寫入點（`thread-pump.ts` 兩處、`background-subagents.ts`、`cli.ts`）都用它，所以全程不會因為拋出來的東西怪（`toString` 會拋、
  * `status` 是 `NaN`）而讓記失敗那一步自己拋錯。
  *
- * 碼不是 `UNKNOWN`、`STORAGE_FULL` 的，訊息維持最外層那一句：模型呼叫的失敗，最外層就是供應商的原話，對應 dsh 的 `LlmError.failure.message`。
+ * 碼不是 `UNKNOWN`、`STORAGE_FULL`、`AUTH` 的，訊息維持最外層那一句：模型呼叫的失敗，最外層就是供應商的原話。
  * **碼是 `UNKNOWN` 的（多半是工具 middleware 的 bug、狀態錯誤）換成 {@link errorChain}**，照 dsh `agent-loop/src/agent.ts:375-381`
  * 對非 `LlmError` 的失敗寫 `{ message: errorChain(error), code: 'UNKNOWN' }`——重新整理後的歷史看得到整條原因鏈
  * （例如「寫入失敗: EACCES: permission denied」）。渲染的是**拆掉 `MiddlewareError` 之後**那一顆：基座每一層都抄底下那一層的
  * `message`，直接渲染最外層會讓同一句重複十幾次。
  *
- * 即時那一顆 `lifecycle failed` frame 由基座發、訊息是最外層那一句，這裡不動它（`STORAGE_FULL` 例外：`ThreadPump` 換成同一句固定字）：`UNKNOWN` 的失敗，即時看到短句、重新整理後看到整條。
+ * 即時那一顆 `lifecycle failed` frame 由基座發、訊息是最外層那一句，這裡不動它（`STORAGE_FULL`、`AUTH` 例外：`ThreadPump` 換成同一句固定字）：`UNKNOWN` 的失敗，即時看到短句、重新整理後看到整條。
  *
  * @param error - catch 到的值（`unknown`，可以是任何東西）。
  * @returns `message`（`turn/failed.message`）與 `error`（`turn/failed.error`，`error.message` 與 `message` 同一句）。

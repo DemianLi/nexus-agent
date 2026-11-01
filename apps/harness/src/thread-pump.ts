@@ -191,7 +191,12 @@ import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
 import { startTurnClock, unsettledToolNames } from './turn-clock.js';
 import type { TurnClock } from './turn-clock.js';
 // 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
-import { classifyTurnFailure, STORAGE_FULL_CODE, turnFailureOf } from './live-model.js';
+import {
+  classifyTurnFailure,
+  failureOriginalText,
+  fixedFailureMessage,
+  turnFailureOf,
+} from './live-model.js';
 import {
   answerElicitation,
   declineAll,
@@ -1157,11 +1162,15 @@ function isRootFailed(raw: RawProtocolEvent): boolean {
   return isRootTerminal(raw) && (raw.params.data as { event?: unknown } | null)?.event === 'failed';
 }
 
-/** 錯誤鏈上是空間用完的話，把這顆 `failed` frame 的字換成給使用者的那句，同 `turn/failed`。 */
-function withStorageFullMessage(raw: RawProtocolEvent, error: unknown): RawProtocolEvent {
-  const { code, message } = classifyTurnFailure(error);
-  if (code !== STORAGE_FULL_CODE) return raw;
-  const data = { ...(raw.params.data as object), error: message };
+/** 這顆 `failed` frame 補上錯誤碼，固定句的碼連字一起換，同 `turn/failed`。 */
+function withFailureDetail(raw: RawProtocolEvent, error: unknown): RawProtocolEvent {
+  const { code } = classifyTurnFailure(error);
+  const fixed = fixedFailureMessage(code);
+  const data = {
+    ...(raw.params.data as object),
+    code,
+    ...(fixed !== undefined && { error: fixed }),
+  };
   return { ...raw, params: { ...raw.params, data } } as RawProtocolEvent;
 }
 
@@ -2955,11 +2964,12 @@ export class ThreadPump {
     }
   }
 
-  /** {@link turnFailureOf}，空間用完時多寫一行伺服器日誌：`STORAGE_FULL` 的 message 是固定句，原文只留在這裡。 */
+  /** {@link turnFailureOf}，固定句的碼多寫一行伺服器日誌：原文只留在這裡。 */
   #turnFailureNoted(error: unknown): ReturnType<typeof turnFailureOf> {
     const failure = turnFailureOf(error);
-    if (failure.error.code === STORAGE_FULL_CODE) {
-      this.#warn?.(`[輪次] thread ${this.#threadId} 儲存空間滿：${thrownMessage(error)}`);
+    const original = failureOriginalText(failure, error);
+    if (original !== undefined) {
+      this.#warn?.(`[輪次] thread ${this.#threadId} ${failure.error.code}：${original}`);
     }
     return failure;
   }
@@ -3154,7 +3164,7 @@ export class ThreadPump {
           if (heldFailure === undefined) return;
           const raw = heldFailure;
           heldFailure = undefined;
-          send(error === undefined ? raw : withStorageFullMessage(raw, error));
+          send(error === undefined ? raw : withFailureDetail(raw, error));
         };
         try {
           for await (const raw of run) {
@@ -3577,13 +3587,15 @@ export class ThreadPump {
       // 這一種（`interrupted` 是停下來等輸入），所以用一格我們自己的 `aborted` 讓畫面分得出
       // 「已停止」與「失敗」（#265 的 Q13）。
       current.stopped = true;
+      // 取消不是失敗，不帶碼。
+      const { code: _code, ...data } = raw.params.data as { code?: string };
       yield this.#seal({
         method: raw.method,
         params: {
           namespace: raw.params.namespace,
           timestamp: raw.params.timestamp,
           data: {
-            ...(raw.params.data as object),
+            ...data,
             aborted: true,
             cause: current.cause ?? USER_CAUSE,
           },

@@ -52,6 +52,7 @@ import {
   TRAJECTORY_TURN_LIST_CAP,
   TRAJECTORY_VERSION,
   isTurnStopCause,
+  turnFailureText,
 } from '@nexus/wire';
 import type {
   TrajectoryApprovalOutcome,
@@ -821,18 +822,21 @@ export function applyTrajectory(
       const reason = data['reason'];
       return closeTurn(state, event, endOf(reason), undefined, undefined, endCauseOf(reason));
     }
-    case 'turn/failed':
+    case 'turn/failed': {
+      const code =
+        isRecord(data['error']) &&
+        typeof data['error']['code'] === 'string' &&
+        data['error']['code'] !== ''
+          ? data['error']['code']
+          : undefined;
       return closeTurn(
         state,
         event,
         'failed',
-        typeof data['message'] === 'string' ? data['message'] : '',
-        isRecord(data['error']) &&
-          typeof data['error']['code'] === 'string' &&
-          data['error']['code'] !== ''
-          ? data['error']['code']
-          : undefined,
+        turnFailureText(typeof data['message'] === 'string' ? data['message'] : '', code),
+        code,
       );
+    }
     case 'model/start':
       return startCall(state, event);
     case 'model/end':
