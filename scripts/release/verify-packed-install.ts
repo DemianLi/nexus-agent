@@ -9,7 +9,7 @@
  * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；SBOM 與實際裝了的
  *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），SBOM 列的每一顆授權都是寬鬆授權或審過的例外（`installedLicenseProblems`），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
- * 4. Linux 上打包裡的 spawner `--flock` 真的鎖得住（第二個搶不到、持有者 SIGKILL 之後拿得到；產品走這條路由步驟 6 的第二台 serve 驗）；內附的 ripgrep 在 `PATH` 上沒有 rg
+ * 4. Linux 上打包裡的 spawner `--flock` 真的鎖得住（home 鎖與會話租約都靠它，#1503：第二個搶不到、持有者 SIGKILL 之後拿得到；產品的 `lockFileExclusive` 真的走到它，由步驟 6 的第二台 serve 驗）；內附的 ripgrep 在 `PATH` 上沒有 rg
  *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；sharp 與目標平台的 libvips 載得起來，真的縮一張圖
  *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；Linux 上產物裡的沙箱 spawner 起得來、送 `Ready`，
  *    經它起得了主機上的 git（#1946，`spawner-probe.ts`）；
@@ -22,7 +22,7 @@
  * 不論成敗，暫存目錄一律收掉。放 `/var/tmp`（不放 `os.tmpdir()`：那裡有暫存目錄規則會干擾，見 smoke-built-bin）。
  *
  * 步驟 3 到 6 的判斷都是輸入子行程結果、輸出 problems 的純函式（`versionProblems` 等），單元測試在
- * `apps/harness/src/verify-packed-install.test.ts`（#1666）。serve 以自己的行程群組起，逾時 `SIGKILL` 送整個群組。
+ * `apps/harness/src/verify-packed-install.test.ts` 與 `release-scripts.test.ts`（#1666）。serve 以自己的行程群組起，逾時 `SIGKILL` 送整個群組。
  *
  * 用法：`pnpm run release:verify-packed-install <tarball> [--expect-commit <sha>] [--allow-dirty]`。
  *
@@ -174,6 +174,8 @@ export function spawnerLockProblems(run: CommandOutcome): string[] {
 /**
  * 步驟 4 的探針：對 `binary --flock` 走完「持有者拿到、第二個被擋（結束碼 10）、持有者 SIGKILL 後拿得到」。
  * `lib/` 是打包過的，內部模組沒有自己的檔，所以直接驗出貨的執行檔。
+ *
+ * spawner 拿了鎖就結束，鎖屬於 open file description，留在開檔的行程上：所以 fd 不關，持有者要活著；每次 `lock()` 都開新的 fd。
  */
 export function spawnerLockProbe(binary: string, lockFile: string): string {
   const lock =
