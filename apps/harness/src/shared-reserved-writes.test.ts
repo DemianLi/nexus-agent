@@ -180,4 +180,20 @@ describe('圍堵 backend 的 reservedWrites', () => {
     expect((await backend.write('/CLAUDE.md', 'x')).error).toBeUndefined();
     expect((await backend.write('/skills/rogue/SKILL.md', 'x')).error).toBeUndefined();
   });
+
+  it('記憶來源：只收共用區底下的，換成舊 thread 看到的路徑；沒有來源時清單不變', () => {
+    const fs = fsOf(['/skills/'], []);
+    const paths = (sources?: readonly string[]) =>
+      sharedReservedWrites(fs, sources).map((entry) => entry.path);
+    const added = paths(['/shared/MEMORY.md', '/shared/docs/note.md', '/MEMORY.md', '/sharedx/a']);
+    expect(added.filter((path) => !paths().includes(path))).toEqual([
+      '/MEMORY.md',
+      '/docs/note.md',
+    ]);
+    expect(paths([])).toEqual(paths());
+    const entry = sharedReservedWrites(fs, ['/shared/MEMORY.md']).find(
+      (item) => item.path === '/MEMORY.md',
+    );
+    expect(entry?.subtree).toBe(false);
+  });
 });
