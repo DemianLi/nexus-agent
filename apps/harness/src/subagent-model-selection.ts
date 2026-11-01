@@ -7,15 +7,14 @@
  * - **都沒給＝走基線**（定義釘的，沒釘就是主對話此刻的選擇，見 {@link DelegationBaseline}），不查政策（dsh 的 `hasDelegationModelRequest` 先擋掉）。
  * - **只要給了任何一格，有效路由就必須在授權清單裡**——包括只給 `reasoning_effort` 的時候（有效路由是基線的模型：定義釘的，沒釘就是主對話此刻那顆）：dsh 的
  *   `assertAllowedModelSelection` 用的是「有效路由」，不是「有沒有給 model」。
- * - **換了路由卻沒給推理等級＝用新模型的預設**；給了就必須是那顆型錄條目宣告過的名字，`default` 例外：
- *   模型宣告了任何等級就收，同 {@link ./model-selection-host.ts} 的登記。
+ * - **換了路由卻沒給推理等級＝用新模型的預設**；給了就必須是那顆型錄條目宣告過的名字。
  *
  * ## 與 dsh 的偏離（照 AGENTS.md 登記）
  *
  * - **沒有 `provider`**：我們只有一個端點，路由就是型錄 id。
  * - **推理等級只實作 `off` 與 `default`**：dsh 的等級由 adapter 驗證、請求怎麼帶也是 adapter 的事；我們的 adapter 只有型錄宣告，
  *   而且只有 `off` 有量過的線上寫法（`thinkingOffBody`）。型錄就算宣告了別的名字，也先拒絕，不猜。`default` 不加任何東西，
- *   所以等於沒給（解析時就丟掉，讓圖快取鍵不因為「寫了 default」多出一張一樣的圖）。
+ *   所以等於沒給（解析時就丟掉，讓圖快取鍵不因為「寫了 default」多出一張一樣的圖）；模型宣告了任何等級就收，不必宣告 `default` 本身。
  * - **`list_subagent_models` 兩層**：無參數列授權清單；帶 `model` 看那顆的推理等級（dsh 是 provider／model 三層）。
  *
  * @module
@@ -201,7 +200,7 @@ export function resolveModelSelection(
 }
 
 /**
- * `list_subagent_models` 的輸出：無參數列授權清單；帶 `model` 看那顆的推理等級（只列今天支援的）。
+ * `list_subagent_models` 的輸出：無參數列授權清單；帶 `model` 看那顆能指定的推理等級：宣告過又今天支援的，模型宣告了任何等級時另加 `default`；沒宣告等級就沒有。
  * 授權在前：不在清單裡的 id 一律拒絕，不透露型錄裡有沒有它（dsh 的 “authorizes the exact route before resolving”）。
  *
  * @throws 帶的 `model` 不在授權清單裡（訊息講給模型聽）。

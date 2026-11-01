@@ -336,7 +336,7 @@ describe('describeSubagentModels', () => {
     expect(text.split('\n')).toEqual(['strong（主對話目前用的）', 'cheap', 'plain']);
     expect(text).not.toContain('secret');
   });
-  it('帶 model：只列宣告過又支援的推理等級（strong 的 low 還不支援，不列）', () => {
+  it('帶 model：列宣告過又支援的推理等級，宣告了任何等級就另加 default（strong 的 low 還不支援，不列）', () => {
     expect(describeSubagentModels(c, { model: 'strong' })).toBe(
       'strong\nReasoning efforts:\noff\ndefault',
     );
