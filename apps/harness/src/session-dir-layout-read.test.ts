@@ -124,6 +124,7 @@ function recordingBudget(): { budget: SessionLogBudget; holds: number[]; reads: 
     reads,
     budget: {
       limitBytes: Infinity,
+      knownLimitBytes: Infinity,
       holdForSession: async (_id, bytes) => (holds.push(bytes), release),
       reserveForRead: async (_id, bytes) => (reads.push(bytes), release),
     },

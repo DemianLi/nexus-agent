@@ -180,6 +180,7 @@ import type {
   StoredSessionReadOptions,
   StoredSessionSnapshot,
 } from '@nexus/core';
+import { mib } from './memory-gauge.js';
 import { acquireSessionLease } from './session-lease.js';
 import type { LeaseUnavailable, SessionWriteLease, TryLock } from './session-lease.js';
 import { processSessionLogBudget } from './session-log-budget.js';
@@ -317,7 +318,7 @@ interface LeaseContext {
   readonly lock: TryLock | undefined;
   readonly unavailable: (outcome: LeaseUnavailable) => void;
   readonly openLog: OpenLogFile;
-  /** 後端的 `options.warn`（沒給就是 `console.warn` 加前綴）：截掉尾巴時講一行。 */
+  /** 後端的 `options.warn`（沒給就是 `console.warn` 加前綴）：存放處對營運者講話的那張嘴。 */
   readonly warn: (message: string) => void;
   /** 讀 header 時問的版本邊目錄（見 {@link ParseHeaderOptions.catalog}）。 */
   readonly catalog: SessionFormatCatalog;
@@ -650,6 +651,8 @@ class JsonlStoredSession implements StoredSession {
    * `link` 成功但目錄 `fsync` 拋錯時，重試再 `link` 一次會撞上自己的世代檔（`EEXIST`），這個行程從此寫不進這份會話。
    */
   #publish: PublishProgress = {};
+  /** 這個把手講過日誌長過額度了沒（{@link #warnIfOverBudget}）。 */
+  #overBudgetWarned = false;
 
   /**
    * @param directory - 後端的目錄（CLI 的 run 目錄，或 serve 的專案目錄）。
@@ -783,8 +786,9 @@ class JsonlStoredSession implements StoredSession {
     const rest = batch.slice(published);
     if (rest.length === 0) return;
     const { size: before } = await handle.stat();
+    const lines = eventLines(rest);
     try {
-      await handle.writeFile(eventLines(rest));
+      await handle.writeFile(lines);
       await handle.sync();
     } catch (error: unknown) {
       this.#handle = undefined;
@@ -799,6 +803,21 @@ class JsonlStoredSession implements StoredSession {
       }
       throw error;
     }
+    this.#warnIfOverBudget(before + Buffer.byteLength(lines));
+  }
+
+  /**
+   * 開著的日誌長過額度時講一行（#2215）：只講不擋，每個把手一次；額度還沒算出來就不講。
+   * 超過額度的日誌在這個行程續接不回來，所以一個行程裡同一條 thread 只講一次。自動算的額度隨起動基準浮動，這句只能講「以現在的額度」。
+   */
+  #warnIfOverBudget(logBytes: number): void {
+    const limitBytes = this.#context.logBudget.knownLimitBytes;
+    if (this.#overBudgetWarned || limitBytes === undefined || logBytes <= limitBytes) return;
+    this.#overBudgetWarned = true;
+    this.#context.warn(
+      `會話 "${this.#header.id}" 的日誌長到 ${mib(logBytes)}，比現在的額度 ${mib(limitBytes)} 大：` +
+        '這條 thread 還開著，照常運作；以現在的額度，關掉或被逐出之後重開會被拒收。要保住重開，給行程更多記憶體後重啟，或調高 sessionLogBudgetMiB。',
+    );
   }
 
   /** 另開 `r+` 把日誌截回 `size` 並 fsync，同 dsh `rollbackAppend`（`index.ts:1441-1449`）。 */
@@ -2771,7 +2790,7 @@ export interface JsonlSessionStore extends SessionStore {
 /** 兩個工廠共用的選項。 */
 export interface JsonlSessionStoreOptions {
   /**
-   * 這個平台拿不到寫租約時講的那一句（見 `session-lease.ts`）。一個後端只講一次。
+   * 後端對營運者講話的那張嘴：拿不到寫租約（見 `session-lease.ts`，一個後端只講一次）、截掉或沒搬過去的尾巴、開著的日誌長過額度（每個把手一次）。
    * 省略就走 `console.warn`；產品路徑兩個入口都各自給（CLI 走 `Printer`，serve 走伺服器日誌）。
    */
   readonly warn?: (message: string) => void;
@@ -2794,7 +2813,7 @@ export interface JsonlSessionStoreOptions {
   readonly fs?: StableReadFileSystem;
   /**
    * 會話日誌的位元組額度（#2115）：續接佔到把手關掉、唯讀讀完就還，放不下的在讀之前拋
-   * {@link @nexus/core!SessionLogTooLargeError}。省略即這個行程共用的那一本（{@link processSessionLogBudget}）；
+   * {@link @nexus/core!SessionLogTooLargeError}；開著的日誌長過容量不拋、也不追加佔用，只講一行。省略即這個行程共用的那一本（{@link processSessionLogBudget}）；
    * serve 與 CLI 傳各自照 `thread-capacity` 開的那一本，測試換小的。
    */
   readonly logBudget?: SessionLogBudget;
