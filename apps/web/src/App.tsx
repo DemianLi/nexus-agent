@@ -205,7 +205,7 @@ function renderSubagentEntry(entry: ConversationEntry) {
 /**
  * 對話介面。
  *
- * agent 跑在 Node 那一端，中間是 `@nexus/wire` 那條線（上行 HTTP POST、下行 SSE）。
+ * agent 跑在 Node 那一端，中間是 `@nexus/wire` 那條線（上行 HTTP POST、下行走 WebSocket（退路是 SSE））。
  * 起 agent 的方式：`pnpm --filter @nexus/harness run serve`，dev server 的
  * `/threads` 會轉過去（見 `vite.config.ts`）。
  */

@@ -9,14 +9,14 @@
  */
 
 import type { WireClient } from '@nexus/wire';
-import { createWireClient } from '@nexus/wire';
+import { WIRE_MUX_PATH, createMuxFetch, createWireClient } from '@nexus/wire';
 
 import { clockedFetch } from '@/lib/server-clock';
 
 export interface AgentClientOptions {
   /** 預設同源（空字串＝相對路徑），開發時用 `VITE_AGENT_BASE_URL` 指到 harness。 */
   readonly baseUrl?: string;
-  /** 注入用；預設是全域的 `fetch` 包一層、順手記下回應的 `Date` 標頭（{@link clockedFetch}，換算時鐘差用）。 */
+  /** 注入用；給了就兩條下行也走它，不開 socket。預設是全域的 `fetch` 包一層、順手記下回應的 `Date` 標頭（{@link clockedFetch}，換算時鐘差用），下行走 WebSocket。 */
   readonly fetch?: typeof globalThis.fetch;
 }
 
@@ -26,9 +26,26 @@ export function agentBaseUrl(): string {
   return typeof configured === 'string' ? configured : '';
 }
 
+/** 升級請求的網址：跟 agent 同一個來源，`http` 換成 `ws`。 */
+export function agentMuxUrl(baseUrl: string, pageUrl: string): string {
+  const url = new URL(`${baseUrl.replace(/\/+$/u, '')}${WIRE_MUX_PATH}`, pageUrl);
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+  return url.href;
+}
+
+/** 沒注入 `fetch` 時兩條下行走 WebSocket，要有 `window`（升級網址從頁面算）；socket 到第一條下行才開。 */
 export function createAgentClient(options: AgentClientOptions = {}): WireClient {
+  const baseUrl = options.baseUrl ?? agentBaseUrl();
+  const fetch = options.fetch ?? clockedFetch();
   return createWireClient({
-    baseUrl: options.baseUrl ?? agentBaseUrl(),
-    fetch: options.fetch ?? clockedFetch(),
+    baseUrl,
+    fetch,
+    ...(options.fetch === undefined && {
+      streamFetch: createMuxFetch({
+        url: agentMuxUrl(baseUrl, window.location.href),
+        createSocket: (url) => new WebSocket(url),
+        fallback: fetch,
+      }),
+    }),
   });
 }
