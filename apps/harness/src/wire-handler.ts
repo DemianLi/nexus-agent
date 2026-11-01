@@ -612,14 +612,15 @@ export interface WireHandlerOptions {
   /**
    * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
    *
-   * **今天有四件事走到它**，加它的理由都很窄——發生時回應照樣是 200、畫面照樣對，不講就完全看不見：
+   * **走到它的有兩類**：回應照樣成功、不講就看不見的；回應只給碼或固定訊息、細節留給管理者的。例如：
    *
    * - 一頁歷史的位元組上限是**軟的**（單獨一輪就超標時不從輪中間切，見 `conversation-history.ts` 的 `fitBytes`）。
    * - 退回標題寫不進去（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：那一輪照跑，同 dsh；經 pump 的建構子傳下去。
    * - 模型標題寫不成（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：留著退回標題，同上。
    * - 拒收新 thread（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，{@link maxThreads}）：回應是專用錯誤碼，但管理者要在日誌看到目前數量與上限。
+   * - 一條 thread 建不起來的原因（[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)）與接不上的兩個根（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）。
    *
-   * 缺席就是不講，測試不必為它接線。
+   * 缺席就是不講，第二類的細節也就沒了；要斷言原因的測試自己接線。
    */
   warn?(message: string): void;
   /**
@@ -1982,13 +1983,14 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   }
 
   /**
-   * 這條 thread；**建不起來就回一個協定層的錯**，帶著原因。
+   * 這條 thread；**建不起來就回一個協定層的錯**，不拋。
    *
-   * `handle()` 不接錯、`wire-server.ts` 也不接，所以讓 `threadFor` 的 rejection 往上冒的話，
-   * 那個請求一個位元組都不回、client 永遠卡著，而那顆 rejection 沒有人處理。它屬於協定層：
+   * `handle()` 不接錯，讓 `threadFor` 的 rejection 往上冒的話，`wire-server.ts` 只會回一個空的 400，
+   * client 拿不到錯誤封包。這種失敗屬於協定層：
    * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、目錄對不上……）。
-   * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`。**原因只進 serve 的日誌，不上線**（[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)）：
-   * 走到這裡的錯有 Node 的 fs 錯誤、設定層訊息、帶堆疊的 `StartupError`，都帶主機路徑，而且數不完，所以不逐類清洗。
+   * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`。**原因只經 {@link WireHandlerOptions.warn} 記下，不上線**（[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)）：
+   * 沒接 warn 就沒有地方記。走到這裡的錯來源數不完（Node 的 fs 錯誤、設定層訊息、帶堆疊的 `StartupError`），
+   * 帶不帶主機路徑看來源，所以不逐類清洗。
    * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`；
    * 還有**這個 id 是子代理的會話**（{@link SubagentSessionError}，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：回 `thread_is_subagent`；
    * 以及**日誌裡有一則太深、灌不回存檔點**（`checkpoint_depth_exceeded`，[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：回 `thread_history_too_deep`，
@@ -2040,18 +2042,19 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       // 可寫根接不上不是壞了（#2222）：專用碼，兩個根只進 serve 的日誌，不上線。
       if (error instanceof ResumeWorkspaceConflictError) {
+        options.warn?.(`[thread] "${threadId}" ${error.message}`);
         return json(
           errorResponse(
             id,
             THREAD_ROOT_MISMATCH,
             error.otherHome
-              ? `會話 "${error.sessionId}" 的檔案在另一個 harness home 底下，這台 serve 沒有開它。要回原本的 home 才打得開。`
+              ? `會話 "${error.sessionId}" 的檔案多半在另一個 harness home 底下，這台 serve 沒有開它。要回原本的 home 才打得開。`
               : `會話 "${error.sessionId}" 跑在另一個 --workspace，這台 serve 沒有開它。要用原本的 --workspace 才打得開。`,
           ),
         );
       }
       const reason = error instanceof Error ? error.message : String(error);
-      // 日誌太深不是暫時壞了（#1668）：專用碼，重試沒用。訊息照舊帶「建不起來」與第幾顆事件、幾層。
+      // 日誌太深不是暫時壞了（#1668）：專用碼，重試沒用。這條的原因上線：訊息帶「建不起來」與第幾顆事件、幾層。
       if (hasCode(error, CHECKPOINT_DEPTH_EXCEEDED)) {
         return json(errorResponse(id, THREAD_HISTORY_TOO_DEEP, `這條 thread 建不起來：${reason}`));
       }

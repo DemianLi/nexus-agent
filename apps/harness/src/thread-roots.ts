@@ -161,7 +161,7 @@ export function createThreadPlacer(options: ThreadPlacerOptions): ThreadPlacer {
         await ensurePrivateRoot(options.base, recorded);
         return { root: recorded, sharedRoot: shared };
       }
-      // 其他（換過 `--workspace`、換過基底、header 畸形）：照舊拒絕，訊息指名兩個根。
+      // 其他（換過 `--workspace`、換過基底、header 畸形）：拒絕，例外訊息指名兩個根。
       // **出路依根的名字形狀分兩種**：名字是 `thread-<32 hex>`＝這是某個人的私有根（多半是換過 home / `NEXUS_AGENT_HOME`），
       // 出路是換回原來的 home；**絕不能叫人把它當 `--workspace`**——照做的話，那個人的私有根會變成所有新 thread 的 `/shared`。
       const privateShaped =

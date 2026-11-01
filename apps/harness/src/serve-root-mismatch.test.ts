@@ -2,7 +2,7 @@
  * 續接時日誌記的可寫根這台 serve 接不上，回專用碼 `thread_root_mismatch`，訊息不帶主機路徑
  * （[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）。
  *
- * 從 `runServe` 起：兩台真的 serve、真的 JSONL 存放處、真的 wire client，共用 `--session-log`，home 或 `--workspace` 不同。
+ * 從 `runServe` 起：兩台真的 serve、真的 JSONL 存放處、真的 wire client，共用 `--session-log`，home 或可寫根不同（可寫根走 `workspaceRootOf` 接縫）。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */
@@ -83,6 +83,7 @@ describe('日誌記的可寫根這台 serve 接不上（#2222）', () => {
     const { refused, logged } = await refusedAfterHandover(homed('home-a'), homed('home-b'));
     expect(refused.code).toBe(THREAD_ROOT_MISMATCH);
     expect(refused.serverMessage).toContain('alpha');
+    expect(refused.serverMessage).toContain('多半在另一個 harness home 底下');
     expect(refused.serverMessage).toContain('要回原本的 home');
     expect(refused.serverMessage).not.toContain(root);
     expect(refused.serverMessage).not.toContain('建不起來');
@@ -90,7 +91,8 @@ describe('日誌記的可寫根這台 serve 接不上（#2222）', () => {
     expect(logged).toContain(join(root, 'work'));
   });
 
-  it('換了工作區：同一個專用碼，出路是原本的 --workspace，不叫人回 home', async () => {
+  it('換了可寫根：同一個專用碼，出路是原本的 --workspace，不叫人回 home', async () => {
+    // 要的是舊 thread「--workspace 就是可寫根」的形狀：產品預設配私有根，只換 --workspace 接得回來。
     const rooted =
       (name: string) =>
       (dir: string): Options => ({
