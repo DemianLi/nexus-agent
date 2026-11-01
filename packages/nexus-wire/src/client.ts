@@ -129,6 +129,8 @@ export interface WireClientOptions {
   readonly baseUrl: string;
   /** 注入用；預設是全域的 `fetch`。 */
   readonly fetch?: typeof globalThis.fetch;
+  /** `openEvents`、`openThreadFeed` 兩條下行用的 `fetch`，預設同 {@link fetch}。網頁給 `mux.ts` 的那一支（#2262）。 */
+  readonly streamFetch?: typeof globalThis.fetch;
   /**
    * 上傳要取進度時用的 `XMLHttpRequest` 工廠（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），注入用。
    * 預設：沒注入 {@link fetch} 又有全域 `XMLHttpRequest` 時用它（瀏覽器）；否則上傳走 `fetch`、只在送完時報一次進度。
@@ -936,6 +938,7 @@ function uploadWithXhr(
 export function createWireClient(options: WireClientOptions): WireClient {
   const base = options.baseUrl.replace(/\/+$/, '');
   const doFetch = options.fetch ?? globalThis.fetch;
+  const streamFetch = options.streamFetch ?? doFetch;
   let nextCommandId = 1;
 
   async function postJson(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
@@ -1040,11 +1043,13 @@ export function createWireClient(options: WireClientOptions): WireClient {
 
   return {
     async openEvents(threadId, streamOptions = {}) {
-      const response = await postJson(
-        streamPath(threadId),
-        { channels: streamOptions.channels ?? [...WIRE_CHANNELS] },
-        streamOptions.signal,
-      );
+      const response = await streamFetch(`${base}${streamPath(threadId)}`, {
+        method: 'POST',
+        // 同 `postJson`：只收 application/json 是閘門。
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ channels: streamOptions.channels ?? [...WIRE_CHANNELS] }),
+        signal: streamOptions.signal,
+      });
       if (!response.ok) {
         throw new Error(`下行開不起來：${response.status} ${await response.text()}`);
       }
@@ -1060,7 +1065,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
     },
 
     async openThreadFeed(signal) {
-      const response = await doFetch(`${base}${THREAD_FEED_PATH}`, {
+      const response = await streamFetch(`${base}${THREAD_FEED_PATH}`, {
         method: 'GET',
         // 同列表那一條：沒有它就是一個不發 preflight 的跨來源 simple request，見 `THREAD_FEED_PATH`。
         headers: { 'content-type': 'application/json' },

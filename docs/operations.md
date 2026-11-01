@@ -480,6 +480,8 @@ connection:
 - serve 只綁 `127.0.0.1:8787`，沒有綁其他位址的旗標。同一台主機上的其他帳號連得到這個 port，擋人的是瀏覽器會話的 cookie（〈瀏覽器會話的安全約束〉）。
 - 唯一支援的連法是 SSH 轉 port（同一節）。信任圍欄只認 loopback 的 `Host`（[#387](https://github.com/DemianLi/nexus-agent/issues/387)），所以經反向代理連進來今天沒有支援，等 [#1547](https://github.com/DemianLi/nexus-agent/issues/1547)（`--host` 與 TLS）。
 
+- 網頁的兩條下行共用一條 WebSocket（`/threads/mux`，[#2262](https://github.com/DemianLi/nexus-agent/issues/2262)），解掉 HTTP/1.1 每個來源 6 條連線的上限，分頁開多也不會卡住。升級請求一定要帶同源的 `Origin` 與有效 cookie。一台 serve 最多 1024 條 socket，握手失敗或超過上限時，那一頁改走 SSE，30 秒後再試；走 SSE 時第三分頁起會排隊。
+
 **做什麼**
 
 - 不改綁位址、不架反向代理。

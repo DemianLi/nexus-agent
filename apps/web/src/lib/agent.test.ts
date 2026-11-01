@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createAgentClient } from './agent.js';
+import { agentMuxUrl, createAgentClient } from './agent.js';
 
 /**
  * 瀏覽器這一端只驗兩件事：**解析得到**（`@nexus/wire` 在 Vite／DOM 那份 tsconfig 下
@@ -30,5 +30,16 @@ describe('agent client', () => {
     });
     await client.runStart('t1', '哈囉');
     expect(seen).toEqual(['http://localhost:8787/threads/t1/commands/run.start']);
+  });
+});
+
+describe('agentMuxUrl', () => {
+  it.each([
+    ['', 'http://127.0.0.1:8787/?x=1', 'ws://127.0.0.1:8787/threads/mux'],
+    ['', 'https://nexus.example/', 'wss://nexus.example/threads/mux'],
+    ['http://harness:8787/', 'http://page/', 'ws://harness:8787/threads/mux'],
+    ['https://harness', 'http://page/', 'wss://harness/threads/mux'],
+  ])('base %j、頁面 %s', (base, page, expected) => {
+    expect(agentMuxUrl(base, page)).toBe(expected);
   });
 });

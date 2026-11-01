@@ -48,6 +48,8 @@ import { Readable } from 'node:stream';
 import compressionMiddleware from 'compression';
 import Negotiator from 'negotiator';
 import type { WireHandler } from './wire-handler.js';
+import { WireMux } from './wire-mux.js';
+import type { WireMuxHandler } from './wire-mux.js';
 import { wireRequestBodyMode } from './wire-handler.js';
 import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
@@ -193,7 +195,7 @@ export interface StartWireServerOptions {
   readonly warnDisconnect?: (message: string) => void;
   /**
    * 每個請求回應時叫一次（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，請求計數用）：`path` 是 pathname（不含 query），`status` 是回的狀態碼。
-   * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次。拋了也不影響回應。
+   * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次，WebSocket 升級與其上每條邏輯串流各算一次。拋了也不影響回應。
    */
   readonly onResponse?: (info: { readonly path: string; readonly status: number }) => void;
   /**
@@ -201,6 +203,17 @@ export interface StartWireServerOptions {
    * 給了之後，歷史頁、列表的 JSON 與網頁 bundle 在瀏覽器支援時壓縮再送；SSE 下行與帶 `content-range` 的回應照原樣送。見檔頭。
    */
   readonly compression?: WireCompression;
+  /**
+   * 接 WebSocket 升級的 handler（[#2262](https://github.com/DemianLi/nexus-agent/issues/2262)，見 [`wire-mux.ts`](./wire-mux.ts)）。**不給就不接升級**。
+   * 跟 {@link handler} 分開：`handler` 在 `serve` 是加上網頁與營運端點的那一層，升級只進 wire。
+   */
+  readonly mux?: WireMuxHandler;
+  /** socket 總數、每條的串流數、每條串流的額度；測試用，預設見 `wire-mux.ts`。 */
+  readonly muxLimits?: {
+    readonly maxSockets?: number;
+    readonly maxStreams?: number;
+    readonly windowChars?: number;
+  };
 }
 
 /** 先收完整份的路由，本文超過上限。 */
@@ -444,16 +457,19 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     options.heartbeatIntervalMs ?? DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
     options.warnDisconnect ?? ((message: string) => console.warn(message)),
   );
-  /** 一個請求只算一次：`handle` 內已經算過，最後一道防線就不再補算。 */
-  const counted = new WeakSet<IncomingMessage>();
-  const count = (incoming: IncomingMessage, path: string, status: number): void => {
-    if (options.onResponse === undefined || counted.has(incoming)) return;
-    counted.add(incoming);
+  const report = (path: string, status: number): void => {
     try {
-      options.onResponse({ path, status });
+      options.onResponse?.({ path, status });
     } catch {
       // 計數壞了不該連累回應。
     }
+  };
+  /** 一個請求只算一次：`handle` 內已經算過，最後一道防線就不再補算。 */
+  const counted = new WeakSet<IncomingMessage>();
+  const count = (incoming: IncomingMessage, path: string, status: number): void => {
+    if (counted.has(incoming)) return;
+    counted.add(incoming);
+    report(path, status);
   };
   const handle = async (incoming: IncomingMessage, outgoing: ServerResponse): Promise<void> => {
     const address = server.address() as AddressInfo;
@@ -535,6 +551,35 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     if (gzip === undefined) next();
     else gzip(incoming, outgoing, next);
   });
+  const mux =
+    options.mux === undefined
+      ? undefined
+      : new WireMux({
+          ...options.muxLimits,
+          handler: options.mux,
+          origin: () => `http://${host}:${String((server.address() as AddressInfo).port)}`,
+          heartbeatIntervalMs: options.heartbeatIntervalMs ?? DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
+          warn,
+          warnDisconnect: options.warnDisconnect ?? ((message: string) => console.warn(message)),
+          count: report,
+        });
+  if (mux !== undefined) {
+    server.on('upgrade', (incoming, socket, head) => {
+      // 同最後一道防線：升級失敗只收在這條 socket 上。
+      socket.on('error', () => {
+        socket.destroy();
+      });
+      try {
+        mux.handleUpgrade(incoming, socket, head);
+      } catch (error: unknown) {
+        warn(error instanceof Error ? error : new Error(String(error)), {
+          method: incoming.method ?? '',
+          path: pathnameOf(incoming.url),
+        });
+        socket.destroy();
+      }
+    });
+  }
 
   await new Promise<void>((resolve, reject) => {
     // listen 失敗（最常見的是 port 被佔住）會走 'error' 事件而不是 callback——
@@ -549,12 +594,15 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
 
   return {
     url: `http://${host}:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve) => {
-        // 計時器先清（#1504）：之後 `closeAllConnections` 觸發的 'close' 都不會再碰到它。
-        heartbeat.close();
+    close: async () => {
+      // 計時器先清（#1504）：之後 `closeAllConnections` 觸發的 'close' 都不會再碰到它。
+      heartbeat.close();
+      // 已升級的 socket 不歸 `closeAllConnections` 管。
+      await mux?.close();
+      await new Promise<void>((resolve) => {
         server.closeAllConnections();
         server.close(() => resolve());
-      }),
+      });
+    },
   };
 }
