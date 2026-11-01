@@ -382,6 +382,39 @@ describe('續接一律讀 header，不用 thread id 重算', () => {
     expect(lines.join('\n')).toContain(fx.shared);
   }, 90000);
 
+  it('header 的 cwd 是別的目錄：接不回來，回應是固定訊息，路徑只在 serve 的日誌', async () => {
+    const fx = await fixture();
+    await makeOldThread(fx, 'old');
+    const elsewhere = await scratch('nexus-private-root-cwd-');
+    await rewriteHeader(fx.home, 'old', (header) => {
+      header.cwd = elsewhere;
+    });
+    const lines: string[] = [];
+    const client = await serveClient(await start(fx, PROBE, { log: (line) => lines.push(line) }));
+    const refused = await client.slashRun('old', '/permission');
+    expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+    expect(JSON.stringify(refused)).toContain('原因記在 serve 的日誌');
+    expect(JSON.stringify(refused)).not.toContain(elsewhere);
+    expect(lines.join('\n')).toContain(elsewhere);
+  }, 90000);
+
+  it('私有根的權限被改壞：接不回來，回應是固定訊息，路徑只在 serve 的日誌', async () => {
+    const fx = await fixture();
+    const first = await start(fx, WRITE);
+    await turn(first, 'a');
+    await first.close();
+    running = undefined;
+    const root = (await headerOf(fx.home, 'a')).workspaceRoot!;
+    await chmod(root, 0o750);
+    const lines: string[] = [];
+    const client = await serveClient(await start(fx, PROBE, { log: (line) => lines.push(line) }));
+    const refused = await client.slashRun('a', '/permission');
+    expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+    expect(JSON.stringify(refused)).toContain('原因記在 serve 的日誌');
+    expect(JSON.stringify(refused)).not.toContain(root);
+    expect(lines.join('\n')).toContain(root);
+  }, 90000);
+
   it.each([
     ['基底本身', (fx: Fixture) => base(fx)],
     ['基底底下名字形狀不對的目錄', (fx: Fixture) => join(base(fx), 'someone-else')],

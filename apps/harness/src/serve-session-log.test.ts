@@ -584,10 +584,11 @@ describe('重開 server 之後接得回同一條 thread', () => {
     }).threadHistory('alpha');
     await stop(second);
     expect(page.kind).not.toBe('ok');
-    // 前提：client 拿到的就是那一個拒讀（訊息原樣送過去），只是不帶路徑。
-    expect(JSON.stringify(page)).toContain('是比這一版新');
+    // client 拿到固定訊息，原因與路徑只在 serve 的日誌（#2225）。
+    expect(JSON.stringify(page)).toContain('原因記在 serve 的日誌');
     expect(JSON.stringify(page)).not.toContain(log);
     expect(serverLines.some((line) => line.includes(log) && line.includes('alpha'))).toBe(true);
+    expect(serverLines.some((line) => line.includes('是比這一版新'))).toBe(true);
   });
 
   it('別的把手握著：起不來；它放了之後同一台 server 重試接得回來', async () => {
@@ -730,12 +731,13 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await client.slashRun('alpha', '/permission read-only');
     await stop(first);
 
-    const bare = await start(root);
+    const lines: string[] = [];
+    const bare = await start(root, [], bodyLog(lines));
     // 建不起這條 thread 是協定層的錯（`wire-handler.ts` 的 `threadOrError`）：斜線命令回
-    // `rejected`，不是拋。原因要講到 `--workspace`——那是人唯一改得動的東西。
+    // `rejected`，不是拋。serve 的日誌要講到 `--workspace`——那是人唯一改得動的東西。
     const refused = await (await serveClient(bare)).slashRun('alpha', '/permission');
     expect(refused).toMatchObject({ kind: 'rejected' });
-    expect(JSON.stringify(refused)).toContain('--workspace');
+    expect(lines.join('\n')).toContain('--workspace');
     await stop(bare);
 
     const second = await start(root, ['--workspace', workspace]);

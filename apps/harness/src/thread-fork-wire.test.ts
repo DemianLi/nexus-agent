@@ -434,14 +434,17 @@ describe('thread.fork', () => {
   });
 
   it('第一次排空寫不進去：回錯、子 thread 收掉（關把手）不登記、名額回到原數；下一次照常', async () => {
+    const warnings: string[] = [];
     const { raw, client, record, handler } = rig({
       maxThreads: 1,
       failFlushes: 1,
+      warn: (message) => warnings.push(message),
       readStoredThread: async (id) => (id === 'src' ? cold('src', sourceEvents()) : undefined),
     });
     const refused = await raw('src', 'thread.fork', { messageId: 'm1' });
     expect(refused).toMatchObject({ type: 'error', error: 'unknown_error' });
-    expect(String(refused['message'])).toContain('磁碟滿了');
+    expect(String(refused['message'])).not.toContain('磁碟滿了');
+    expect(warnings.join('\n')).toContain('磁碟滿了');
     expect(record.disposedPersistence).toBe(1);
     expect(handler.threadCount()).toBe(0);
     expect(await client.threadFork('src', 'm1')).toMatchObject({
