@@ -136,6 +136,8 @@ export interface BackgroundSettlement {
   readonly summary: string;
   /** 怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：`summary` 的來源，畫面認這個、不解析英文句。 */
   readonly reason: BackgroundStopReason;
+  /** `reason` 是 `aborted` 時為什麼停（[#1847](https://github.com/DemianLi/nexus-agent/issues/1847)），同這一輪 `turn/end` 記的。 */
+  readonly cause?: TurnAbortCause;
   /**
    * 送進主對話模型的整段字：摘要，加上它最後一則回覆的非空文字，沒有就是 `It left no closing message.`；收尾前剛傳過結果上來
    * 就換成省略的那一句（#2032，見 {@link settlementText}）。
@@ -1492,6 +1494,7 @@ export class BackgroundSubagentHost {
         sessionId: log.sessionId,
         summary,
         reason: stop,
+        ...(stop === 'aborted' ? { cause: running.cause ?? { kind: 'parent' } } : {}),
         text: settlementText(
           summary,
           closingTextOf(log, epoch?.start ?? Number.POSITIVE_INFINITY),

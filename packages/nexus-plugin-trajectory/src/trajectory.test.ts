@@ -251,6 +251,36 @@ describe('一輪的結構', () => {
     expect(view.turns[0]?.failure).toHaveLength(TRAJECTORY_PREVIEW_CHARS);
     expect(view.turns[0]?.failure).not.toMatch(/\n/);
   });
+
+  it('被中止的一輪帶停止原因（#1847）：摘要也有，別的收尾、舊日誌與認不得的值都沒有', () => {
+    const log = new SessionLog('t');
+    const end = (reason?: unknown) => {
+      log.append('turn/start', { kind: 'message', text: 'x' });
+      log.append('turn/end', reason === undefined ? {} : ({ reason } as never));
+    };
+    end({ kind: 'aborted', cause: { kind: 'user' } });
+    end({ kind: 'aborted', cause: { kind: 'hook', reason: 'turn-timeout' } });
+    end({ kind: 'aborted', cause: { kind: 'parent' } });
+    end({ kind: 'aborted' });
+    end({ kind: 'aborted', cause: { kind: 'exploded' } });
+    end({ kind: 'aborted', cause: { kind: 'hook' } });
+    end({ kind: 'max-tokens', cause: { kind: 'user' } });
+    end();
+    const expected = [
+      { kind: 'user' },
+      { kind: 'hook', reason: 'turn-timeout' },
+      { kind: 'parent' },
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ];
+    expect(foldAll(log.events).turns.map((t) => t.endCause)).toEqual(expected);
+    for (let i = 0; i < TRAJECTORY_DETAIL_TURNS; i += 1) end();
+    const { digests } = foldWindowed(log.events);
+    expect(digests.slice(0, expected.length).map((t) => t.endCause)).toEqual(expected);
+  });
 });
 
 describe('失敗的分類碼（#434／#1115）', () => {

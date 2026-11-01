@@ -377,6 +377,8 @@ export type UserMessageSource =
        * 怎麼收的（#884）。**選填只為了格式 26 以前的日誌**：沒帶就是不知道，畫面退成中性的說法，不假裝成「已完成」。
        */
       readonly reason?: SubagentSettleReason;
+      /** `reason` 是 `aborted` 時為什麼停（#1847）。舊日誌沒有。 */
+      readonly cause?: TurnAbortCause;
       /** 結算的那個背景子代理的會話 id。 */
       readonly senderSessionId: string;
     }
@@ -483,6 +485,8 @@ export interface SessionEventMap {
         readonly summary: string;
         /** 怎麼收的，同 {@link UserMessageSource} 的 `subagent-settled`。 */
         readonly reason?: SubagentSettleReason;
+        /** 為什麼停，同 {@link UserMessageSource} 的 `subagent-settled`。 */
+        readonly cause?: TurnAbortCause;
         /**
          * 結算的背景子代理的會話 id。照 dsh 的 `SubagentSettledMessageSource`（`subagent/src/continuation-messages.ts`，`477b4f4`）：
          * 這是**執行期自己的記帳**，不是人說的話、也不是子代理自己寫的話（所以不併進 `agent-message`）。

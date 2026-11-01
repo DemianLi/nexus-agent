@@ -2760,7 +2760,7 @@
       "kind": "event",
       "event": "inbox/spliced",
       "surface": false,
-      "digest": "33cc07d869df168195d8fb844005a257a6a134753457a4699b0ea8c91845c7e6",
+      "digest": "dcb3c88c4bce2c47d1932c3a17055f3b01dee808e3ac4b72804f062fc7166ff3",
       "schema": {
         "root": 0,
         "nodes": [
@@ -2774,7 +2774,7 @@
               },
               {
                 "name": "ignorable",
-                "type": 39,
+                "type": 45,
                 "optional": true
               },
               {
@@ -2789,7 +2789,7 @@
               },
               {
                 "name": "type",
-                "type": 40,
+                "type": 46,
                 "optional": false
               }
             ],
@@ -2805,7 +2805,7 @@
               },
               {
                 "name": "outcome",
-                "type": 35,
+                "type": 41,
                 "optional": true
               },
               {
@@ -2820,7 +2820,7 @@
               },
               {
                 "name": "target",
-                "type": 36,
+                "type": 42,
                 "optional": false
               }
             ],
@@ -2937,15 +2937,15 @@
           },
           {
             "kind": "literal",
+            "value": "image/gif"
+          },
+          {
+            "kind": "literal",
             "value": "image/jpeg"
           },
           {
             "kind": "literal",
             "value": "image/png"
-          },
-          {
-            "kind": "literal",
-            "value": "image/gif"
           },
           {
             "kind": "literal",
@@ -3025,77 +3025,27 @@
             "kind": "union",
             "types": [
               21,
-              23,
-              25,
-              33
+              36,
+              37,
+              39
             ]
           },
           {
             "kind": "object",
             "properties": [
               {
-                "name": "clientTimeZone",
-                "type": 7,
-                "optional": true
-              },
-              {
-                "name": "kind",
+                "name": "cause",
                 "type": 22,
-                "optional": false
-              },
-              {
-                "name": "requestId",
-                "type": 7,
                 "optional": true
-              }
-            ],
-            "indices": []
-          },
-          {
-            "kind": "literal",
-            "value": "user"
-          },
-          {
-            "kind": "object",
-            "properties": [
-              {
-                "name": "goalId",
-                "type": 7,
-                "optional": false
               },
               {
                 "name": "kind",
-                "type": 24,
-                "optional": false
-              },
-              {
-                "name": "revision",
-                "type": 8,
-                "optional": false
-              },
-              {
-                "name": "round",
-                "type": 8,
-                "optional": false
-              }
-            ],
-            "indices": []
-          },
-          {
-            "kind": "literal",
-            "value": "goal"
-          },
-          {
-            "kind": "object",
-            "properties": [
-              {
-                "name": "kind",
-                "type": 26,
+                "type": 29,
                 "optional": false
               },
               {
                 "name": "reason",
-                "type": 27,
+                "type": 30,
                 "optional": true
               },
               {
@@ -3112,17 +3062,75 @@
             "indices": []
           },
           {
+            "kind": "union",
+            "types": [
+              23,
+              25,
+              27
+            ]
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 24,
+                "optional": false
+              },
+              {
+                "name": "reason",
+                "type": 7,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "hook"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 26,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "parent"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 28,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "user"
+          },
+          {
             "kind": "literal",
             "value": "subagent-settled"
           },
           {
             "kind": "union",
             "types": [
-              28,
-              29,
-              30,
               31,
-              32
+              32,
+              33,
+              34,
+              35
             ]
           },
           {
@@ -3149,8 +3157,59 @@
             "kind": "object",
             "properties": [
               {
+                "name": "clientTimeZone",
+                "type": 7,
+                "optional": true
+              },
+              {
                 "name": "kind",
-                "type": 34,
+                "type": 28,
+                "optional": false
+              },
+              {
+                "name": "requestId",
+                "type": 7,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "goalId",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "kind",
+                "type": 38,
+                "optional": false
+              },
+              {
+                "name": "revision",
+                "type": 8,
+                "optional": false
+              },
+              {
+                "name": "round",
+                "type": 8,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "goal"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 40,
                 "optional": false
               },
               {
@@ -3172,17 +3231,17 @@
           {
             "kind": "union",
             "types": [
-              37,
-              38
+              43,
+              44
             ]
           },
           {
             "kind": "literal",
-            "value": "next-step"
+            "value": "next-turn"
           },
           {
             "kind": "literal",
-            "value": "next-turn"
+            "value": "next-step"
           },
           {
             "kind": "literal",
@@ -5932,7 +5991,7 @@
       "kind": "event",
       "event": "turn/start",
       "surface": false,
-      "digest": "b09ee7a0447c21a9cb884f9b78af45f1fa6f11018e3e7944ca06c2f0d991b8a9",
+      "digest": "454064e0c2af8968af406daf1e6e9fbc8b267129827d4dc621efefd7b2e973b0",
       "schema": {
         "root": 0,
         "nodes": [
@@ -5946,7 +6005,7 @@
               },
               {
                 "name": "ignorable",
-                "type": 34,
+                "type": 41,
                 "optional": true
               },
               {
@@ -5961,7 +6020,7 @@
               },
               {
                 "name": "type",
-                "type": 35,
+                "type": 42,
                 "optional": false
               }
             ],
@@ -5972,9 +6031,9 @@
             "types": [
               2,
               20,
-              22,
-              30,
-              32
+              35,
+              37,
+              39
             ]
           },
           {
@@ -6094,6 +6153,10 @@
           },
           {
             "kind": "literal",
+            "value": "image/jpeg"
+          },
+          {
+            "kind": "literal",
             "value": "image/png"
           },
           {
@@ -6103,10 +6166,6 @@
           {
             "kind": "literal",
             "value": "image/gif"
-          },
-          {
-            "kind": "literal",
-            "value": "image/jpeg"
           },
           {
             "kind": "object",
@@ -6186,13 +6245,141 @@
             "kind": "object",
             "properties": [
               {
+                "name": "cause",
+                "type": 21,
+                "optional": true
+              },
+              {
+                "name": "kind",
+                "type": 28,
+                "optional": false
+              },
+              {
+                "name": "reason",
+                "type": 29,
+                "optional": true
+              },
+              {
+                "name": "senderSessionId",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "summary",
+                "type": 6,
+                "optional": false
+              },
+              {
+                "name": "text",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "union",
+            "types": [
+              22,
+              24,
+              26
+            ]
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 23,
+                "optional": false
+              },
+              {
+                "name": "reason",
+                "type": 6,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "hook"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 25,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "parent"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 27,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "user"
+          },
+          {
+            "kind": "literal",
+            "value": "subagent-settled"
+          },
+          {
+            "kind": "union",
+            "types": [
+              30,
+              31,
+              32,
+              33,
+              34
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "aborted"
+          },
+          {
+            "kind": "literal",
+            "value": "completed"
+          },
+          {
+            "kind": "literal",
+            "value": "error"
+          },
+          {
+            "kind": "literal",
+            "value": "max-tokens"
+          },
+          {
+            "kind": "literal",
+            "value": "refusal"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
                 "name": "goalId",
                 "type": 6,
                 "optional": false
               },
               {
                 "name": "kind",
-                "type": 21,
+                "type": 36,
                 "optional": false
               },
               {
@@ -6222,72 +6409,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 23,
-                "optional": false
-              },
-              {
-                "name": "reason",
-                "type": 24,
-                "optional": true
-              },
-              {
-                "name": "senderSessionId",
-                "type": 6,
-                "optional": false
-              },
-              {
-                "name": "summary",
-                "type": 6,
-                "optional": false
-              },
-              {
-                "name": "text",
-                "type": 6,
-                "optional": false
-              }
-            ],
-            "indices": []
-          },
-          {
-            "kind": "literal",
-            "value": "subagent-settled"
-          },
-          {
-            "kind": "union",
-            "types": [
-              25,
-              26,
-              27,
-              28,
-              29
-            ]
-          },
-          {
-            "kind": "literal",
-            "value": "aborted"
-          },
-          {
-            "kind": "literal",
-            "value": "completed"
-          },
-          {
-            "kind": "literal",
-            "value": "error"
-          },
-          {
-            "kind": "literal",
-            "value": "max-tokens"
-          },
-          {
-            "kind": "literal",
-            "value": "refusal"
-          },
-          {
-            "kind": "object",
-            "properties": [
-              {
-                "name": "kind",
-                "type": 31,
+                "type": 38,
                 "optional": false
               },
               {
@@ -6312,7 +6434,7 @@
             "properties": [
               {
                 "name": "kind",
-                "type": 33,
+                "type": 40,
                 "optional": false
               }
             ],
@@ -6338,7 +6460,7 @@
       "kind": "event",
       "event": "user/message",
       "surface": false,
-      "digest": "ff3e70f92ea83a7c8a01307e3c56861722eccd0c7058a2db11de61fb72d1246c",
+      "digest": "8ce7d58ecb2675c0ad02d1513108e397327ef44bcf36655a3586c64266ba1527",
       "schema": {
         "root": 0,
         "nodes": [
@@ -6352,22 +6474,22 @@
               },
               {
                 "name": "ignorable",
-                "type": 41,
+                "type": 47,
                 "optional": true
               },
               {
                 "name": "seq",
-                "type": 31,
+                "type": 37,
                 "optional": false
               },
               {
                 "name": "time",
-                "type": 31,
+                "type": 37,
                 "optional": false
               },
               {
                 "name": "type",
-                "type": 42,
+                "type": 48,
                 "optional": false
               }
             ],
@@ -6504,30 +6626,84 @@
             "kind": "union",
             "types": [
               12,
-              14,
-              17,
-              26,
-              36,
-              39
+              28,
+              29,
+              32,
+              42,
+              45
             ]
           },
           {
             "kind": "object",
             "properties": [
               {
-                "name": "clientTimeZone",
-                "type": 5,
+                "name": "cause",
+                "type": 13,
                 "optional": true
               },
               {
-                "name": "kind",
-                "type": 13,
+                "name": "form",
+                "type": 20,
                 "optional": false
               },
               {
-                "name": "requestId",
-                "type": 5,
+                "name": "kind",
+                "type": 21,
+                "optional": false
+              },
+              {
+                "name": "reason",
+                "type": 22,
                 "optional": true
+              },
+              {
+                "name": "senderSessionId",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "summary",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "union",
+            "types": [
+              14,
+              16,
+              18
+            ]
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 15,
+                "optional": false
+              },
+              {
+                "name": "reason",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "hook"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "kind",
+                "type": 17,
+                "optional": false
               }
             ],
             "indices": []
@@ -6540,13 +6716,87 @@
             "kind": "object",
             "properties": [
               {
+                "name": "kind",
+                "type": 19,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "parent"
+          },
+          {
+            "kind": "literal",
+            "value": "notice"
+          },
+          {
+            "kind": "literal",
+            "value": "subagent-settled"
+          },
+          {
+            "kind": "union",
+            "types": [
+              23,
+              24,
+              25,
+              26,
+              27
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "aborted"
+          },
+          {
+            "kind": "literal",
+            "value": "completed"
+          },
+          {
+            "kind": "literal",
+            "value": "error"
+          },
+          {
+            "kind": "literal",
+            "value": "max-tokens"
+          },
+          {
+            "kind": "literal",
+            "value": "refusal"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "clientTimeZone",
+                "type": 5,
+                "optional": true
+              },
+              {
+                "name": "kind",
+                "type": 17,
+                "optional": false
+              },
+              {
+                "name": "requestId",
+                "type": 5,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
                 "name": "form",
-                "type": 15,
+                "type": 30,
                 "optional": false
               },
               {
                 "name": "kind",
-                "type": 16,
+                "type": 31,
                 "optional": false
               },
               {
@@ -6570,91 +6820,22 @@
             "properties": [
               {
                 "name": "form",
-                "type": 18,
+                "type": 33,
                 "optional": false
               },
               {
                 "name": "kind",
-                "type": 19,
-                "optional": false
-              },
-              {
-                "name": "reason",
-                "type": 20,
-                "optional": true
-              },
-              {
-                "name": "senderSessionId",
-                "type": 5,
-                "optional": false
-              },
-              {
-                "name": "summary",
-                "type": 5,
-                "optional": false
-              }
-            ],
-            "indices": []
-          },
-          {
-            "kind": "literal",
-            "value": "notice"
-          },
-          {
-            "kind": "literal",
-            "value": "subagent-settled"
-          },
-          {
-            "kind": "union",
-            "types": [
-              21,
-              22,
-              23,
-              24,
-              25
-            ]
-          },
-          {
-            "kind": "literal",
-            "value": "aborted"
-          },
-          {
-            "kind": "literal",
-            "value": "completed"
-          },
-          {
-            "kind": "literal",
-            "value": "refusal"
-          },
-          {
-            "kind": "literal",
-            "value": "error"
-          },
-          {
-            "kind": "literal",
-            "value": "max-tokens"
-          },
-          {
-            "kind": "object",
-            "properties": [
-              {
-                "name": "form",
-                "type": 27,
-                "optional": false
-              },
-              {
-                "name": "kind",
-                "type": 28,
+                "type": 34,
                 "optional": false
               },
               {
                 "name": "references",
-                "type": 29,
+                "type": 35,
                 "optional": false
               },
               {
                 "name": "version",
-                "type": 35,
+                "type": 41,
                 "optional": false
               }
             ],
@@ -6670,29 +6851,29 @@
           },
           {
             "kind": "array",
-            "element": 30
+            "element": 36
           },
           {
             "kind": "object",
             "properties": [
               {
                 "name": "capturedFormatVersion",
-                "type": 31,
+                "type": 37,
                 "optional": false
               },
               {
                 "name": "capturedThroughSeq",
-                "type": 32,
+                "type": 38,
                 "optional": false
               },
               {
                 "name": "compacted",
-                "type": 34,
+                "type": 40,
                 "optional": false
               },
               {
                 "name": "inputIndex",
-                "type": 31,
+                "type": 37,
                 "optional": false
               },
               {
@@ -6702,22 +6883,22 @@
               },
               {
                 "name": "omittedBytes",
-                "type": 31,
+                "type": 37,
                 "optional": false
               },
               {
                 "name": "omittedMessages",
-                "type": 31,
+                "type": 37,
                 "optional": false
               },
               {
                 "name": "originalMessages",
-                "type": 31,
+                "type": 37,
                 "optional": false
               },
               {
                 "name": "retainedMessages",
-                "type": 31,
+                "type": 37,
                 "optional": false
               },
               {
@@ -6727,7 +6908,7 @@
               },
               {
                 "name": "truncated",
-                "type": 34,
+                "type": 40,
                 "optional": false
               }
             ],
@@ -6740,8 +6921,8 @@
           {
             "kind": "union",
             "types": [
-              31,
-              33
+              37,
+              39
             ]
           },
           {
@@ -6761,12 +6942,12 @@
             "properties": [
               {
                 "name": "form",
-                "type": 37,
+                "type": 43,
                 "optional": false
               },
               {
                 "name": "kind",
-                "type": 38,
+                "type": 44,
                 "optional": false
               },
               {
@@ -6790,12 +6971,12 @@
             "properties": [
               {
                 "name": "form",
-                "type": 15,
+                "type": 30,
                 "optional": true
               },
               {
                 "name": "kind",
-                "type": 40,
+                "type": 46,
                 "optional": false
               },
               {
@@ -6900,21 +7081,21 @@
       "digest": "00e48d103633cb22f81bf38b9c4882ed15493afe73e2f738a344d59eb88173e2",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:766"
+        "packages/nexus-core/src/session-log.ts:770"
       ]
     },
     {
       "digest": "0449d2c1a11097c8362ad7e19d426efcc5f158ce7a12e3b5a2b7934255b9cd66",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:531"
+        "packages/nexus-core/src/session-log.ts:535"
       ]
     },
     {
       "digest": "04b6f40c567154ea53d65d4a06882da212d158c30fa58a8ea92fe791c8cdf047",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:882"
+        "packages/nexus-core/src/session-log.ts:886"
       ]
     },
     {
@@ -6966,14 +7147,14 @@
       "digest": "0d2720e89f07b8c0aff1363e57c66b15356dcf70ab3561bea82bbf2054112cee",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "103dc14ad4179a892386a0b3a7e4ee80672501b55d4cd8482d726f5739ea2518",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7004,14 +7185,14 @@
       "digest": "13a954b5d3b619a8e73d34ce29f284105294d073eef7b05c94329bb862f65161",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/inbox.ts:78"
+        "packages/nexus-core/src/inbox.ts:81"
       ]
     },
     {
       "digest": "13afaca2ef2b10644ddefb070647a562b0bb31ba8bd2c4b3264ad3cf2eb28864",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:746"
+        "packages/nexus-core/src/session-log.ts:750"
       ]
     },
     {
@@ -7032,14 +7213,14 @@
       "digest": "153de4ae680207f38e170e9bfe1b3439900a27bc916ae942fac1862055b77770",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:423"
+        "packages/nexus-core/src/session-log.ts:425"
       ]
     },
     {
       "digest": "1630d387d4cb5af25b307b25d1caa5ef402078c977397b2640535209a5b2f346",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:686"
+        "packages/nexus-core/src/session-log.ts:690"
       ]
     },
     {
@@ -7066,14 +7247,14 @@
       "digest": "1e1c35d03c129bbdb663cd411431185d2670e4377096c4fd3adcaae4c03925b8",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "1ece56332fab8cb84493c6583e2ae11aaf3acd43101ffc823b12c11a4bf64259",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:735"
+        "packages/nexus-core/src/session-log.ts:739"
       ]
     },
     {
@@ -7103,14 +7284,14 @@
       "digest": "20d009a9d3d8202e68b7d006eb8e26000534b20c1bf375ddfe729b1e63dcec02",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "2187ed08d62b636eed42674cc2376d2d91b4855174f4bd5e68bfe6d0aa4a86aa",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:818"
+        "packages/nexus-core/src/session-log.ts:822"
       ]
     },
     {
@@ -7126,7 +7307,7 @@
       "digest": "244dbff07648bba800ef7d9c6f819b54fe0f0752a0583b911eee168ea2c8fa0d",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7152,7 +7333,7 @@
       "digest": "26833d34e07d376c6a2bd21cbb1cd2671e63c076d6dec6bc9e78f192695d93d3",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7169,7 +7350,7 @@
       "digest": "29a3062425c7534df445dd3edcf1aebb6a6761daaadc53fe6e440909d244cb76",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7200,21 +7381,21 @@
       "digest": "2d3dabed3152115b860f980810068d8baa1978b3cd88ec7dfcba03051e999d41",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "2d78ab9620754902e3d5458f776293138edc3cb69d091365f5b0e5609668ecae",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "2e090119c24e7524b02a177de69fc41e092d4ca1ec40f4b7a79e4d93e8cdf769",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:954"
+        "packages/nexus-core/src/session-log.ts:958"
       ]
     },
     {
@@ -7233,37 +7414,14 @@
       "sources": []
     },
     {
-      "digest": "312d7082a6602e6980ec622c9e1100bd323dec016f6826f10ea33f26559b5d7c",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:923"
-      ]
-    },
-    {
       "digest": "319b17a3e5272eb37cbcb8573bcfbcbd943c7d958ff16a8c6728eebaa550a7c9",
       "names": [],
       "sources": []
     },
     {
-      "digest": "326c0d35e37cffffc3b5c4b860b106291366beb9b4ef1e69beedf600001140e7",
-      "names": [
-        "packages/nexus-core/src/inbox.ts#InboxSplice"
-      ],
-      "sources": [
-        "packages/nexus-core/src/inbox.ts:119"
-      ]
-    },
-    {
       "digest": "331463d80582099e64dadaff342459bca790f8c64cee9a42fb2a363733013b4d",
       "names": [],
       "sources": []
-    },
-    {
-      "digest": "33cc07d869df168195d8fb844005a257a6a134753457a4699b0ea8c91845c7e6",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
-      ]
     },
     {
       "digest": "344eaf7b5fd3da3c9833b74a69dd791eb088d03d561ff5fcdcea9d548d81472b",
@@ -7279,7 +7437,7 @@
       "digest": "363fbac0050a27f87a2aa81e5b73ad8889ec3dee969fc89b589444bc0bdd10c0",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7295,7 +7453,7 @@
       "digest": "38313ef65c9df3616bf507a75f7043c2edbac1730ae2b6d035461492caa112df",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:649"
+        "packages/nexus-core/src/session-log.ts:653"
       ]
     },
     {
@@ -7311,7 +7469,7 @@
       "digest": "3a1db36b8232545cf78fb5cc8b8f4df22a1a4d6e07206d80cb64da40d3a0c9ff",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7323,21 +7481,21 @@
       "digest": "3c31a638acc2ab09b7a87b0b037c81be8d49f2f40aa5ef120812022e57f0adea",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1097"
+        "packages/nexus-core/src/session-log.ts:1101"
       ]
     },
     {
       "digest": "3d1cf966423bf2b390fabe2efbfe34194968fc342e597bed74ae6b595ae5b473",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:493"
+        "packages/nexus-core/src/session-log.ts:497"
       ]
     },
     {
       "digest": "4094ff354433fb29c7af1f1d2756dee3b00db99f9425d9d4a043a3d45e3a5e36",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1439"
+        "packages/nexus-core/src/session-log.ts:1443"
       ]
     },
     {
@@ -7375,6 +7533,13 @@
       "sources": []
     },
     {
+      "digest": "454064e0c2af8968af406daf1e6e9fbc8b267129827d4dc621efefd7b2e973b0",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:1510"
+      ]
+    },
+    {
       "digest": "464d0866fd23d73f20a676c9938be4599e3d2cbb5371a73d82708e15bbabbef2",
       "names": [
         "packages/nexus-core/src/feedback.ts#MessageFeedbackPut"
@@ -7387,7 +7552,7 @@
       "digest": "4658006180707225ea21a3764eb07cabcd388c36e533083d131c1877e10a71b6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7399,14 +7564,14 @@
       "digest": "46c2b6c4d5dbc4271ebe4ef5ec5209ddfc5b267bbe354fc87ce9c5bb3bc70e16",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "477291c0f5e37c0b04a2da90de6ddecc62b069f58c994de6933cc6fda672fdb4",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7422,6 +7587,15 @@
       "digest": "49cdfef66ee1f42ceee25d69d76d47dd16a8865aa5800eda47197d18d00392de",
       "names": [],
       "sources": []
+    },
+    {
+      "digest": "4ad2ab978c05fbab0a7ae4f03c9022f49b50f5601ed6581a53c76fad72876280",
+      "names": [
+        "packages/nexus-core/src/inbox.ts#QueuedInputSource"
+      ],
+      "sources": [
+        "packages/nexus-core/src/inbox.ts:54"
+      ]
     },
     {
       "digest": "4ae5c341d865890b71a9227c14ccbf3b9c029f402965d7561a217791ac48310d",
@@ -7469,14 +7643,14 @@
       "digest": "5343d0aadb5fc0080dcb9edba251610cdfde89ae79ed629d6a52369b96bc776c",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:858"
+        "packages/nexus-core/src/session-log.ts:862"
       ]
     },
     {
       "digest": "538e8474f6b59eea70bf4b80e18c13cbb910e2924575a7e5506684966a573000",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:383"
+        "packages/nexus-core/src/session-log.ts:385"
       ]
     },
     {
@@ -7492,7 +7666,7 @@
       "digest": "560df94130c71b659aa2354e4b5130f822f9fc023f48fee6cbb34d39f7ca5a7b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7504,7 +7678,7 @@
       "digest": "56af1dd63d02bb41d1b26d5735fe079c5e36e119da2d33c602d86fc8813047a9",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7518,7 +7692,7 @@
       "digest": "575e4c1377d9b31802e69a38bb96248065397e05af6d0818a78c4758dd069835",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7530,7 +7704,7 @@
       "digest": "57b3f3db0c978e9b8b1df770ee90d520df15558c438cc4ffbfbaf163c2e33ce5",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7542,13 +7716,20 @@
       "digest": "59c29e2a970325ea7b9fdf41f4c329f6e9f186957d1f12c4e82690cf45f0fd8a",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "5a62ef4ccefb9ddba666296d90820632c2e55e0ff970c698f165881953b6bbd1",
       "names": [],
       "sources": []
+    },
+    {
+      "digest": "5a93e368c61210defa821ea3979f699fb94b1127184b14ef37c7791774f69c24",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:370"
+      ]
     },
     {
       "digest": "5b96869aa8bfb29f0aa8d3e06769d0246cdd0838642c73126383c4b16873ff84",
@@ -7563,7 +7744,7 @@
       "digest": "5d28ab79ee2bbcc1b02930177e71984e97ccddcce3b3f0aa26b62f95145ca10f",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1267"
+        "packages/nexus-core/src/session-log.ts:1271"
       ]
     },
     {
@@ -7579,7 +7760,7 @@
       "digest": "5ee0e1c632983a170547d0eb214bb74adfa1e95e5fc8cd600de9bf2efd1bd77d",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:568"
+        "packages/nexus-core/src/session-log.ts:572"
       ]
     },
     {
@@ -7596,7 +7777,7 @@
       "digest": "5f3b74a932e5979052c7a3a3d7a676979f3a80871d0b1065db21e86852ed8a01",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1050"
+        "packages/nexus-core/src/session-log.ts:1054"
       ]
     },
     {
@@ -7628,7 +7809,7 @@
       "digest": "6583c61555b2abaab85d0b31f5edcd998a25dcc6477a4fe705a3a247c21c5648",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:724"
+        "packages/nexus-core/src/session-log.ts:728"
       ]
     },
     {
@@ -7644,14 +7825,14 @@
       "digest": "66900a491ae6787a50dbbb829a017de5ab8e954dff1a6c7368495f8fcbb6f4ea",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/inbox.ts:83"
+        "packages/nexus-core/src/inbox.ts:86"
       ]
     },
     {
       "digest": "66d9aeeb2176131221e636ac440e02b78c3cf171a2949e189754a93bc0cb207e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7667,7 +7848,7 @@
       "digest": "67a5d3e4f7ef1db7980ddbe236264bb094e34ba15e235098da5981f0e6043908",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7717,7 +7898,14 @@
       "digest": "6b5566a03f01edb2a4819ac08315632ff0e0ea12b7e6cb88f0b049bb9a6a3427",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1144"
+        "packages/nexus-core/src/session-log.ts:1148"
+      ]
+    },
+    {
+      "digest": "6ba34f5b6935c84aed499079ec749800e3e350f1433078b04d9b89fa95ab55b8",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:477"
       ]
     },
     {
@@ -7743,7 +7931,7 @@
       "digest": "6d9822a08de29960dfba096b8244ae846c09c3d0e176bee753f901d2a34c512c",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7759,7 +7947,7 @@
       "digest": "6eea28afdf064f0382681d2b3f7ff22e177e598ad4461627466194427836475e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7781,24 +7969,13 @@
       "digest": "74585b8ee1364035461dc3731b81c779712f543d75d32786e79a708c72c6cc01",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
-      "digest": "763441a69d975034f90f6538953ca1863c5e8bc475318ccb376203a2c87a8485",
-      "names": [
-        "packages/nexus-core/src/inbox.ts#QueuedInput"
-      ],
-      "sources": [
-        "packages/nexus-core/src/inbox.ts:101"
-      ]
-    },
-    {
-      "digest": "774b86357e7e8d25d285aa90965a9f4a00366074784f67b48473e954cd32ab78",
+      "digest": "77a4ae587d6fd49bba1fc5af623dbd78b053714ead77b96c3fa7338128e287f3",
       "names": [],
-      "sources": [
-        "packages/nexus-core/src/inbox.ts:70"
-      ]
+      "sources": []
     },
     {
       "digest": "789e2d1cb4e71f42bce560ea87aad874b8a353d029831677b473aad4400db572",
@@ -7809,7 +7986,7 @@
       "digest": "78d8c22a038fd8714e31156fb5eae3b1b4c129484edbd6d211b33e70da79c193",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -7865,7 +8042,7 @@
       "digest": "7e04c01aa7a3f73c7b65533397a9de2cabddb4dc2abd1180bfac9b1b312e817f",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1205"
+        "packages/nexus-core/src/session-log.ts:1209"
       ]
     },
     {
@@ -7906,13 +8083,22 @@
       "digest": "835bc5eec7b4c22c2212dac42c884731ea203c6b0ee0e0feaf9accbdfe6fe84f",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1119"
+        "packages/nexus-core/src/session-log.ts:1123"
       ]
     },
     {
       "digest": "836290b1931b1742e8179f16fe288eed306a4735cbc7e8b5e10578846504cbd2",
       "names": [],
       "sources": []
+    },
+    {
+      "digest": "849cfa67ebcd172aeddac67bf8c5b9cac4a59e926d3855c1d4050852167cb7b8",
+      "names": [
+        "packages/nexus-core/src/session-log.ts#UserMessageSource"
+      ],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:337"
+      ]
     },
     {
       "digest": "84ad18baaea0b32f471e36a09640c1f7685125200560b5fb0b73b7883d5eaf5f",
@@ -7937,7 +8123,7 @@
       "digest": "85a5bab3a2d4270b4a842900dbb938f3591ac999e512d26a65373caa38bbc10c",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:461"
+        "packages/nexus-core/src/session-log.ts:463"
       ]
     },
     {
@@ -7956,13 +8142,6 @@
       "digest": "8640d9dc600c45fd7550f6979925a16b12fc9c9b1157ac347626e69e8c0f89f3",
       "names": [],
       "sources": []
-    },
-    {
-      "digest": "86560e595a0ef44cdac81c9fa0a7a6a1daf9166a2c2a1e8e54330b9be8fdcb1e",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:475"
-      ]
     },
     {
       "digest": "872e2d90d534a2288209eeec6b43302693a6a5599b28f8bc468ed798bfd70dba",
@@ -8032,6 +8211,13 @@
       ]
     },
     {
+      "digest": "8ce7d58ecb2675c0ad02d1513108e397327ef44bcf36655a3586c64266ba1527",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:1510"
+      ]
+    },
+    {
       "digest": "8fb88d3344464909e469bf61f253026efbd0364006a1173e58f63c7a3ceb8221",
       "names": [],
       "sources": []
@@ -8040,7 +8226,7 @@
       "digest": "90cf7a34c5c388f3e2b83b68a3a17107014003ce01090f59cfd0c2fbc909a4e6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:795"
+        "packages/nexus-core/src/session-log.ts:799"
       ]
     },
     {
@@ -8052,7 +8238,7 @@
       "digest": "9208c016a6f294e1b938cdda50232c7a72c220f668aa23ba0c8743e69159f279",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8071,7 +8257,7 @@
       "digest": "9575db8c968b027261fb2ec523bbd1a558dba32e6e00f66367f106858abb873b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/inbox.ts:54",
+        "packages/nexus-core/src/inbox.ts:55",
         "packages/nexus-core/src/session-log.ts:348"
       ]
     },
@@ -8088,6 +8274,22 @@
       "sources": []
     },
     {
+      "digest": "970ba1b320ec4813b31c64f20b9922c955526173248aedde372d6d6779a1e329",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/inbox.ts:71"
+      ]
+    },
+    {
+      "digest": "9724a15d0eaf30801faeb9f57fde5adc3165635845cd2a7c7632ccf9465d0163",
+      "names": [
+        "packages/nexus-core/src/inbox.ts#QueuedInput"
+      ],
+      "sources": [
+        "packages/nexus-core/src/inbox.ts:104"
+      ]
+    },
+    {
       "digest": "99175b3cf669f7454fc6351cc756c53714ad09a89b17829645c2bc51473d8794",
       "names": [
         "packages/nexus-core/src/session-log.ts#SessionTitleSource"
@@ -8100,7 +8302,7 @@
       "digest": "9940c1ec0906483f53546b800f0d42abb22f10cb42f3835935b637978378d5fc",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1041"
+        "packages/nexus-core/src/session-log.ts:1045"
       ]
     },
     {
@@ -8118,33 +8320,24 @@
       "sources": []
     },
     {
-      "digest": "9a65a9e10694e240c11a93d98f4d78450b56ce565798749e1dde5cc585983d92",
-      "names": [
-        "packages/nexus-core/src/inbox.ts#QueuedInputSource"
-      ],
-      "sources": [
-        "packages/nexus-core/src/inbox.ts:53"
-      ]
-    },
-    {
       "digest": "9b595015033039754b43ef831a701d4cdcc0cf548c41dd26f9cc4425bc08fa43",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:665"
+        "packages/nexus-core/src/session-log.ts:669"
       ]
     },
     {
       "digest": "9b6b08a57be7ca6b0162cc154f6c802aa6ed8e22a3acae211514cdab04a54e9b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "9c132a41fbb1d9de99436b37b08e9864d2be5289919d6289c1cd5e64312c799e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:624"
+        "packages/nexus-core/src/session-log.ts:628"
       ]
     },
     {
@@ -8161,7 +8354,7 @@
       "digest": "a119881bd9722e8c782630a5f47902e552e0b526016581c4e696e29d556a8575",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:994"
+        "packages/nexus-core/src/session-log.ts:998"
       ]
     },
     {
@@ -8173,8 +8366,13 @@
       "digest": "a2d48282011c134f6aac1aba64efac90ef8639eec05489af0b06998721ddf5a6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1153"
+        "packages/nexus-core/src/session-log.ts:1157"
       ]
+    },
+    {
+      "digest": "a3aa27177ea0113aa03dd4dd178069c2911f10739167a362175873e8dd3f6c79",
+      "names": [],
+      "sources": []
     },
     {
       "digest": "a403b2f45c6e9bc18eb2eb6c58926a755baeabf393f2ce125f40aaf9fa7b67b1",
@@ -8189,7 +8387,7 @@
       "digest": "a4ba17585678f177ebd69d71a59c326727360e6fc8da578cf504f561f0c1fda6",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8245,10 +8443,17 @@
       "sources": []
     },
     {
+      "digest": "ac9f8c6675f9582200e611f73344ebefecb012ec351091dfbbc816d58ec4c162",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:927"
+      ]
+    },
+    {
       "digest": "ad13e82544c23e588faca57ad9ac2f42cf039f79debe610432be2dc7cdda6a93",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:778"
+        "packages/nexus-core/src/session-log.ts:782"
       ]
     },
     {
@@ -8260,44 +8465,28 @@
       "digest": "af50268e9099c2469557669086d817f0262dbb4e96afd334a5a86e639cdf5f50",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1403"
-      ]
-    },
-    {
-      "digest": "b09ee7a0447c21a9cb884f9b78af45f1fa6f11018e3e7944ca06c2f0d991b8a9",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1407"
       ]
     },
     {
       "digest": "b149312a7bd621ed5802608fd19577c605f254c112855c739cde09902544d620",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1176"
-      ]
-    },
-    {
-      "digest": "b17934402c935fecd45f8550abab3c8df4d8acbd345e7688b7631dca7409b1ae",
-      "names": [
-        "packages/nexus-core/src/session-log.ts#UserMessageSource"
-      ],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:337"
+        "packages/nexus-core/src/session-log.ts:1180"
       ]
     },
     {
       "digest": "b3468825b74ff7999d216117c105526b0996045271e5ce5cd3193e514ebee7da",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:993"
+        "packages/nexus-core/src/session-log.ts:997"
       ]
     },
     {
       "digest": "b3aab765b83af1d938f60de6c5e378a70b8b9bc4ee1aa7a469deb23ef60ec87d",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8341,7 +8530,7 @@
       "digest": "b9236851030931931f5684abb4ad03cb4b7164049ef05192601dc1a6772f1b15",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8353,7 +8542,7 @@
       "digest": "ba057765895c08b419b1ea73ee3bd701cf8e246416885047aa6c5c075ec6ec82",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:953"
+        "packages/nexus-core/src/session-log.ts:957"
       ]
     },
     {
@@ -8400,7 +8589,7 @@
       "digest": "bcbc70365955647ffb0ce2f54e029c6ebc54dd404299f1f90de4df4fa9aa30bd",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:543"
+        "packages/nexus-core/src/session-log.ts:547"
       ]
     },
     {
@@ -8421,20 +8610,15 @@
       "digest": "beab7f65c0aae46d18359377431c6e8c43df48b6174b7648e10fbece371f9b5b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "beb7e7ac726b7a277b7fdf60854b59f5aee9576634229b0e68ed9dccfa4777ff",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
-    },
-    {
-      "digest": "c049fd54fc0e78fc0a43d8c1540752eb22a8d6798fb71bcdeb00840901780050",
-      "names": [],
-      "sources": []
     },
     {
       "digest": "c0cd00dd6755f816632fc49ca354b14a6e207d88039c48110a0b2f9a8d533b93",
@@ -8455,7 +8639,7 @@
       "digest": "c2629cef9d55faec17007cbfa334e4956ce5f5a59a184e7b48f816d9ce41dbf2",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8467,20 +8651,15 @@
       "digest": "c3753109ad73a4a5ee17d6e0149d9264cb1709099041b3d5c6904d8254e6f550",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:460"
+        "packages/nexus-core/src/session-log.ts:462"
       ]
     },
     {
       "digest": "c3f44b4e9d59c2a98794688686a37dc73b83f34696f0b7c322dda3b90344586e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1318"
+        "packages/nexus-core/src/session-log.ts:1322"
       ]
-    },
-    {
-      "digest": "c3f9c4042a25289d6a96d42ebb7c50fbd2cc0a1aed5c2746a29d6e0245523749",
-      "names": [],
-      "sources": []
     },
     {
       "digest": "c5559c663e38ecdb6d20175e3dad98233ce36c575bc1d94b0550d4f717fbc144",
@@ -8575,7 +8754,7 @@
       "digest": "cf252cf0e7bdb286501224f79867a13b16b6b4b6c79da218e23b3d7dc41a3e85",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8597,7 +8776,7 @@
       "digest": "d1ca2a64271055b36f2497cd42722edc3ae55fee41a3c89e7e00640c029bac51",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1378"
+        "packages/nexus-core/src/session-log.ts:1382"
       ]
     },
     {
@@ -8608,10 +8787,19 @@
       ]
     },
     {
+      "digest": "d2584dbaaffec4a5d94fc4624d8f09107fa37a6cab2fc836587ca6bd182fa976",
+      "names": [
+        "packages/nexus-core/src/inbox.ts#InboxSplice"
+      ],
+      "sources": [
+        "packages/nexus-core/src/inbox.ts:122"
+      ]
+    },
+    {
       "digest": "d2f4e8cd880ba5679d4c6aaf69cd1aad269533eabbb27ffa97da71e4b028bb8d",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1042"
+        "packages/nexus-core/src/session-log.ts:1046"
       ]
     },
     {
@@ -8623,21 +8811,21 @@
       "digest": "d45ef53414a2399b712c1dfb656e90d509709ba4cb0761cb13c2b868a5816a4e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "d4e4fdef4ac125aa6a25e64a999eaa92ce8b93bea64581722b92c2c9a31a9839",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:390"
+        "packages/nexus-core/src/session-log.ts:392"
       ]
     },
     {
       "digest": "d5a5b88770bd6cc55aebacc5d9149ddab84fad10ad4c8efb6ea6196fabeeb310",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8653,7 +8841,7 @@
       "digest": "d7e0aa1a0e8a989c4e38841d832f17635ae56aa995eba5609c2825ff2db71b9b",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:585"
+        "packages/nexus-core/src/session-log.ts:589"
       ]
     },
     {
@@ -8675,7 +8863,7 @@
       "digest": "d9d7f36f5837957be407f076b986a13e957723d3e3ee1fa61a90262c4fedd9f9",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8689,7 +8877,7 @@
       "digest": "dbd94ed5e91b70e2f24a7834cbb6d4f80f2364f2482dc5996c7b5ab518eaafd0",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8701,6 +8889,13 @@
       "digest": "dc9819633346587bba330e63ca5898004b570cc228f4c484b81aa88aae8acbfa",
       "names": [],
       "sources": []
+    },
+    {
+      "digest": "dcb3c88c4bce2c47d1932c3a17055f3b01dee808e3ac4b72804f062fc7166ff3",
+      "names": [],
+      "sources": [
+        "packages/nexus-core/src/session-log.ts:1510"
+      ]
     },
     {
       "digest": "dcd249366e892c36b59d7fd447cd0155cb62e2b50a31fb00df4e4ee727cb2633",
@@ -8726,7 +8921,7 @@
       "digest": "dda12a5bc2750ba4b3f508a1e46adb244f727738355e589e0047292072ba720a",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8753,7 +8948,7 @@
       "digest": "df2bc195e6e8823cfa1fb4062085be6529809eabfafb14843805e6ef82316e2e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8772,24 +8967,17 @@
       "sources": []
     },
     {
-      "digest": "e12be97339bbeb12714021df024816e48980e98822e3da33540167c3a74eda07",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:370"
-      ]
-    },
-    {
       "digest": "e3397373141213208d1af021433328a7992bcb50f5899e0b27e7e0e66a721597",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
       "digest": "e436ba3b86f7031927b102f4f361626674b71ed304910e4e8269c03e88530d25",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8854,7 +9042,7 @@
         "packages/nexus-core/src/inbox.ts#InboxTarget"
       ],
       "sources": [
-        "packages/nexus-core/src/inbox.ts:45"
+        "packages/nexus-core/src/inbox.ts:46"
       ]
     },
     {
@@ -8915,7 +9103,7 @@
       "digest": "f6304d755594247b31cae37f706ff3caf6b891a6be7c3b72f1465f35312e8411",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:518"
+        "packages/nexus-core/src/session-log.ts:522"
       ]
     },
     {
@@ -8924,14 +9112,14 @@
         "packages/nexus-core/src/session-log.ts#SessionSeq"
       ],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1462"
+        "packages/nexus-core/src/session-log.ts:1466"
       ]
     },
     {
       "digest": "f78589344bbb8d05af36277f97ba311931933e90786aadc7f747ea01c6f4cfd9",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
+        "packages/nexus-core/src/session-log.ts:1510"
       ]
     },
     {
@@ -8960,7 +9148,7 @@
       "digest": "fd8953f307c857b5b84b8a18eb8e457b288418e5ddaf2d258c488ba25920606e",
       "names": [],
       "sources": [
-        "packages/nexus-core/src/session-log.ts:533"
+        "packages/nexus-core/src/session-log.ts:537"
       ]
     },
     {
@@ -8979,13 +9167,6 @@
       "digest": "ff0ad6d8c5a2f86bd96f9e4e7afe1b38e3e64a583297898e9ff05eeecf21f228",
       "names": [],
       "sources": []
-    },
-    {
-      "digest": "ff3e70f92ea83a7c8a01307e3c56861722eccd0c7058a2db11de61fb72d1246c",
-      "names": [],
-      "sources": [
-        "packages/nexus-core/src/session-log.ts:1506"
-      ]
     }
   ]
 }

@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFeedbackService } from '@nexus/plugin-feedback';
+import { applyTrajectory, initialTrajectory, viewTrajectory } from '@nexus/plugin-trajectory';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -138,6 +139,46 @@ function lifecycles(events: readonly SessionEvent[]): unknown[] {
     return method === 'lifecycle' ? [params?.data?.event] : [];
   });
 }
+
+describe('格式 52 的日誌沒有停止原因（#1847）', () => {
+  it('歷史、重放與軌跡都走得通，線上不出現這幾個鍵', async () => {
+    const id = Object.keys(expectedOf('v52').sessions)[0]!;
+    const store = openJsonlSessionStore({ directory: await copied('v52') });
+    const events = await (await store.open(id, 'read')).read();
+    // 夾具裡沒有結算通知與中止：接上那一版寫得出的形狀，兩個都沒有 `cause`。
+    const last = events.at(-1)!;
+    const appended = (type: SessionEvent['type'], data: unknown, at: number) =>
+      ({ ...last, seq: last.seq + at, type, data }) as SessionEvent;
+    const reply = events.findLast((event) => event.type === 'assistant/message')!;
+    const all = [
+      ...events,
+      appended(
+        'turn/start',
+        {
+          kind: 'subagent-settled',
+          text: 'stopped',
+          summary: 'stopped',
+          reason: 'aborted',
+          senderSessionId: 'sub',
+        },
+        1,
+      ),
+      appended('assistant/message', reply.data, 2),
+      appended('turn/end', {}, 3),
+      appended('turn/start', { kind: 'message', text: '再一句' }, 4),
+      appended('assistant/message', reply.data, 5),
+      appended('turn/end', { reason: { kind: 'aborted' } }, 6),
+    ];
+    expect(replayConversation(all).kind).toBe('replayed');
+    const trajectory = viewTrajectory(
+      all.reduce((state, event) => applyTrajectory(state, event), initialTrajectory()),
+    );
+    expect(trajectory.turns.at(-1)?.end).toBe('aborted');
+    const wire = JSON.stringify([historyFrames(all, 50_000), trajectory]);
+    expect(wire).toContain('subagent/settle-notice');
+    expect(wire).not.toMatch(/"(?:cause|stopCause|endCause)":/u);
+  });
+});
 
 describe.each(names)('夾具 %s', (name) => {
   const expected = expectedOf(name);
