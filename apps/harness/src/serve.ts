@@ -148,6 +148,7 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { createRequestGate } from './request-gate.js';
 import { formatRipgrepDisclosure, ripgrepStatus } from './rg-path.js';
+import { mcpGuardNotice } from './mcp-sandbox.js';
 import { productSandboxStatus, reportSandboxTo } from './tool-launcher.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
@@ -241,7 +242,7 @@ const USAGE = `用法：
                        只印出貨那一層的設定就退出（不開 server）：不讀 $NEXUS_AGENT_HOME 的變更紀錄，也不收 --patch
                        覆寫檔壞了連 --dump-config 都印不出來時，用它拿一份對照
                        不能配 --dump-config、--dump-config-schema 或 --patch
-  --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
+  --workspace <dir>    新 thread 的唯讀共用區，舊 thread 的可寫根（省略即虛擬檔案系統）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
                        danger-full-access 出廠的權限表沒有，要先在表裡加回那一組，否則起不來
@@ -1772,6 +1773,9 @@ async function startServer(
   // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
   // serve 的那一刻就看得到，不必等第一個人開對話。
   for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
+  // 主機沒有 spawner（#2197）照舊直接起，起動講一次：這台主機上 serve 被硬殺時，不理 stdin 的 MCP 會留下來。
+  const guardNotice = mcpGuardNotice();
+  if (guardNotice !== undefined) warn(guardNotice);
   // 會話日誌的位元組額度講出來（#2115）：自動算的最晚在這裡算；起動披露之前沒有請求讀過日誌的話，「現在的 RSS」就是
   // serve 起動完的底。
   // 沒落盤就沒有日誌要讀，不印。

@@ -900,3 +900,69 @@ fn exec_mode_says_so_when_landlock_is_partial() {
     let out = cmd.arg("--write").arg(&ws).arg("--").arg(probe()).arg("tcp").output().unwrap();
     assert!(String::from_utf8_lossy(&out.stderr).contains("部分強制"));
 }
+
+#[test]
+fn guard_mode_replaces_itself_and_keeps_stdio_path_and_session() {
+    // `$$` 是 exec 之後的 pid：要等於 spawn 拿到的 pid，呼叫端的訊號才送得到。stat 第 6 欄是 session。
+    let mut child = Command::new(SPAWNER)
+        .args(["--guard", "--", "sh", "-c", "echo $$; cut -d' ' -f6 /proc/self/stat; grep SigIgn /proc/$$/status; cat"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id().to_string();
+    child.stdin.take().unwrap().write_all(b"hello").unwrap();
+    let out = child.wait_with_output().unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!((lines[0], out.status.code()), (pid.as_str(), Some(0)), "{text}");
+    // SAFETY：getsid 只查詢。
+    assert_eq!(lines[1], unsafe { libc::getsid(0) }.to_string(), "{text}");
+    let ignored = lines[2].strip_prefix("SigIgn:\t").unwrap();
+    assert_eq!(u64::from_str_radix(ignored, 16).unwrap() & (1u64 << (libc::SIGPIPE - 1)), 0, "{text}");
+    assert_eq!(lines[3], "hello", "{text}");
+}
+
+#[test]
+fn guard_mode_sets_pdeathsig() {
+    let out = Command::new(SPAWNER).args(["--guard", "--"]).arg(probe()).arg("pdeathsig").output().unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "sig=9");
+}
+
+#[test]
+fn guard_mode_dies_with_a_killed_caller() {
+    // sh 是呼叫端：它印出背景那支的 pid 就等著，測試 SIGKILL 它，背景那支不理 stdin，只能靠 PDEATHSIG 走。
+    let script = format!("{SPAWNER} --guard -- sleep 30 >/dev/null 2>&1 & echo $!; wait");
+    let mut caller = Command::new("sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut line = String::new();
+    std::io::BufRead::read_line(&mut std::io::BufReader::new(caller.stdout.take().unwrap()), &mut line).unwrap();
+    let pid = line.trim().to_string();
+    let comm = format!("/proc/{pid}/comm");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while std::fs::read_to_string(&comm).map_or(true, |name| name.trim() != "sleep") {
+        assert!(Instant::now() < deadline, "guard 沒有 exec 成 sleep");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    caller.kill().unwrap();
+    caller.wait().unwrap();
+    let gone = |stat: Option<String>| stat.is_none_or(|text| text.rsplit(") ").next().is_some_and(|tail| tail.starts_with('Z')));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !gone(std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()) {
+        assert!(Instant::now() < deadline, "呼叫端死了，guard 的行程還在");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[test]
+fn guard_mode_reports_exec_failures_and_bad_usage() {
+    let code = |args: &[&str]| Command::new(SPAWNER).args(args).stderr(Stdio::null()).status().unwrap().code();
+    assert_eq!(code(&["--guard", "--", "/no/such/program"]), Some(127));
+    assert_eq!(code(&["--guard", "--", "/etc/hostname"]), Some(126));
+    assert_eq!(code(&["--guard", "--"]), Some(125));
+    assert_eq!(code(&["--guard", "true"]), Some(125));
+}
