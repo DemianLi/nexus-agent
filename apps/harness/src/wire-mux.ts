@@ -13,7 +13,7 @@
  * - **最後一道防線**（#424）：一個請求的失敗只收在那一條，一條 socket 的失敗只收在那一條 socket。
  * - **計數**（#1535）：每條邏輯串流各算一次，升級本身也算。
  * - **背壓與死線**（#1504）：送出等 `ws` 的回呼，所以一條 socket 卡住時每條都停在 `await`；額度讓慢的讀者只卡自己。
- *   停著不讀本體，壓力就回到 `bounded-event-queue.ts`，超限照舊只斷線。心跳用 ping／pong，漏兩拍斷線。
+ *   停著不讀本體，壓力就回到 `bounded-event-queue.ts`，超限只斷線。心跳用 ping／pong，漏兩拍斷線。
  *
  * @module
  */
@@ -28,8 +28,8 @@ import WebSocket, { WebSocketServer } from 'ws';
 
 import type { WireHandler } from './wire-handler.js';
 
-/** 漏幾拍算死，同 SSE（`wire-server.ts`）。 */
-const MAX_MISSED_HEARTBEATS = 2;
+/** 漏幾拍算死，SSE 與 WebSocket 共用。 */
+export const MAX_MISSED_HEARTBEATS = 2;
 
 /** 上行只有開線、取消與額度，開線的本文是頻道清單。 */
 const MAX_CLIENT_MESSAGE_BYTES = 64 * 1024;
@@ -40,7 +40,7 @@ export const DEFAULT_MUX_MAX_SOCKETS = 1024;
 /** 每條 socket 的邏輯串流上限。一頁平常是 `feed` 加一條 `stream`；重連時舊的還沒收完會短暫多一條。 */
 export const DEFAULT_MUX_MAX_STREAMS = 16;
 
-/** 每條邏輯串流讀者還沒讀走的字元上限。 */
+/** 每條邏輯串流的額度（字元）：用完就停止讀本體，手上已讀到的那一段照送，所以實際可多出一段。 */
 export const DEFAULT_MUX_WINDOW_CHARS = 1024 * 1024;
 
 const PROTOCOL_ERROR_CLOSE = 1008;
@@ -61,8 +61,11 @@ export interface WireMuxOptions {
   readonly warn: (error: Error, request: { method: string; path: string }) => void;
   readonly warnDisconnect: (message: string) => void;
   readonly count: (path: string, status: number) => void;
+  /** 預設 {@link DEFAULT_MUX_MAX_SOCKETS}。 */
   readonly maxSockets?: number;
+  /** 預設 {@link DEFAULT_MUX_MAX_STREAMS}。 */
   readonly maxStreams?: number;
+  /** 預設 {@link DEFAULT_MUX_WINDOW_CHARS}。 */
   readonly windowChars?: number;
 }
 
@@ -74,7 +77,7 @@ function requestHeaders(incoming: IncomingMessage): Headers {
   return headers;
 }
 
-/** 開線時交給 `handle` 的標頭：閘門要看的那幾個，定在升級當下。 */
+/** 開線時交給 `handle` 的標頭：閘門要看的那幾個定在升級當下；`content-type` 固定是 JSON，兩條路由的閘門都要它。 */
 function logicalHeaders(upgrade: Headers): Headers {
   const headers = new Headers({ 'content-type': 'application/json' });
   for (const name of ['host', 'cookie', 'origin', 'sec-fetch-site']) {

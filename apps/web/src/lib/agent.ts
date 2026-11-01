@@ -33,6 +33,7 @@ export function agentMuxUrl(baseUrl: string, pageUrl: string): string {
   return url.href;
 }
 
+/** 沒注入 `fetch` 時兩條下行走 WebSocket，要有 `window`（升級網址從頁面算）；socket 到第一條下行才開。 */
 export function createAgentClient(options: AgentClientOptions = {}): WireClient {
   const baseUrl = options.baseUrl ?? agentBaseUrl();
   const fetch = options.fetch ?? clockedFetch();

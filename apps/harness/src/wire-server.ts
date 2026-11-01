@@ -48,7 +48,7 @@ import { Readable } from 'node:stream';
 import compressionMiddleware from 'compression';
 import Negotiator from 'negotiator';
 import type { WireHandler } from './wire-handler.js';
-import { WireMux } from './wire-mux.js';
+import { MAX_MISSED_HEARTBEATS, WireMux } from './wire-mux.js';
 import type { WireMuxHandler } from './wire-mux.js';
 import { wireRequestBodyMode } from './wire-handler.js';
 import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
@@ -63,8 +63,7 @@ export const DEFAULT_MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024;
 /** SSE 心跳間隔預設值（毫秒），照 dsh `websocketHeartbeatIntervalMs` 的預設。 */
 export const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 2_000;
 
-/** 連續漏幾拍就淘汰，照 dsh `MAX_MISSED_HEARTBEATS`。協定常數，不開成設定。 */
-export const MAX_MISSED_HEARTBEATS = 2;
+export { MAX_MISSED_HEARTBEATS };
 
 /** `setInterval` 收得下的最大間隔（毫秒）；也是 dsh 設定範圍的上界。 */
 export const MAX_SSE_HEARTBEAT_INTERVAL_MS = MAX_TIMER_DELAY_MS;
@@ -195,7 +194,7 @@ export interface StartWireServerOptions {
   readonly warnDisconnect?: (message: string) => void;
   /**
    * 每個請求回應時叫一次（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，請求計數用）：`path` 是 pathname（不含 query），`status` 是回的狀態碼。
-   * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次，WebSocket 升級與其上每條邏輯串流各算一次。拋了也不影響回應。
+   * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次，WebSocket 升級與其上每條邏輯串流各算一次（拒開與失敗記 404／429／400，線上送的是 error 訊息）。拋了也不影響回應。
    */
   readonly onResponse?: (info: { readonly path: string; readonly status: number }) => void;
   /**

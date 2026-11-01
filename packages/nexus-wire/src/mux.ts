@@ -1,10 +1,10 @@
 /**
  * 同一分頁的下行共用一條 WebSocket（[#2262](https://github.com/DemianLi/nexus-agent/issues/2262)）：HTTP/1.1 每個來源只有 6 條連線，
- * 一頁佔 2 條長連線，第三、第四分頁就排不到（#2250）。
+ * 一頁佔 2 條長連線，開到第三分頁就用滿，之後的請求都排不到（#2250）。
  *
- * **只換載體。** 這條線上跑的是「一個 HTTP 請求與它的回應」：`open` 帶方法、路徑與本文，server 交給同一支 `handle`，回應的狀態、
+ * **這條線只是載體。** 這條線上跑的是「一個 HTTP 請求與它的回應」：`open` 帶方法、路徑與本文，server 交給同一支 `handle`，回應的狀態、
  * content type 與本文原樣送回來，SSE 的文字一個字不動。解碼、拒絕封包、重連都留在 `client.ts` 與呼叫端，所以 {@link createMuxFetch}
- * 的形狀就是 `fetch`。只有網頁接它；Node 的客戶端（smoke、eval）照舊走 SSE。
+ * 的形狀就是 `fetch`。只有網頁接它；Node 的客戶端（smoke、eval）走 SSE。
  *
  * 額度以字元算：server 每送一段就扣，讀者讀走那一段才還。慢的讀者只卡住自己那一條。
  *
@@ -40,7 +40,7 @@ export type MuxServerMessage =
   | { readonly t: 'end'; readonly id: string }
   | { readonly t: 'error'; readonly id: string; readonly message: string };
 
-/** 這條線只開下行的兩條路由，不是通用隧道：命令照舊走 HTTP。 */
+/** 這條線只開下行的兩條路由，不是通用隧道：命令走 HTTP。 */
 export function isMuxRoute(method: string, path: string): boolean {
   if (method === 'GET') return path === THREAD_FEED_PATH;
   return method === 'POST' && /^\/threads\/[^/?#]+\/stream$/u.test(path);
@@ -317,7 +317,7 @@ class MuxCarrier {
  *   {@link MuxFetchOptions.fallbackMs} 才再試。
  * - **401 換一條 socket 再開一次**：cookie 定在升級當下，重新登入之後舊 socket 帶的還是舊的。舊的那條跑完手上的串流才關，
  *   新開的還是 401 就是真的 401。
- * - **斷線或 server 拒開**：`head` 之前是 `fetch` reject，之後是本體拋錯，跟 SSE 斷線同一種失敗，由呼叫端照舊重開、重讀 `/history`。
+ * - **斷線或 server 拒開**：`head` 之前是 `fetch` reject，之後是本體拋錯，跟 SSE 斷線同一種失敗，由呼叫端重開、重讀 `/history`。
  */
 export function createMuxFetch(options: MuxFetchOptions): typeof globalThis.fetch {
   const now = options.now ?? Date.now;
