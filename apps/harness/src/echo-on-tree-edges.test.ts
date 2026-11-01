@@ -185,7 +185,7 @@ type UpstreamApplyPatches = (
   data: Record<string, unknown>[],
   patches: Record<string, unknown>[] | undefined,
   warn: (format: string, ...args: unknown[]) => void,
-) => Record<string, unknown>[];
+) => { data: Record<string, unknown>[] };
 const UPSTREAM_PATCH_MODULE = '@nexus/cordis-plugin-include/src/patch.ts';
 
 describe('兩支疊 patch 的演算法：相容層的 applyEntryPatches 與上游 Include 的 applyPatches', () => {
@@ -211,7 +211,7 @@ describe('兩支疊 patch 的演算法：相容層的 applyEntryPatches 與上�
   const compat = (patches: Record<string, unknown>[]) =>
     project(applyEntryPatches(base, patches as never, warnNothing));
   const upstream = (patches: Record<string, unknown>[]) =>
-    project(applyPatches(structuredClone(base), patches, warnNothing));
+    project(applyPatches(structuredClone(base), patches, warnNothing).data);
 
   const OPS: readonly (readonly [string, Record<string, unknown>[]])[] = [
     ['disable', [{ id: 'echo', disabled: true }]],

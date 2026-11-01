@@ -408,11 +408,13 @@ Q9、Q10 是量測計畫與下載許可的程序題，不列。Q19、Q20 整理�
 - 計時器綁在生命週期上。
 - 設定值是 `None` 時不覆寫。
 
-**rc.12 改了的三項**：下面「取自 TS rc.11」這一組是照 rc.11 寫的，rc.12 改了其中三項，照 [#1937](https://github.com/DemianLi/nexus-agent/issues/1937) 的實測更新由 #1937 做：
+**rc.12 改了的幾項**：下面「取自 TS rc.11」這一組是照 rc.11 寫的，rc.12 的差異如下，實測見 [#1937](https://github.com/DemianLi/nexus-agent/issues/1937)：
 
-- **fiber 的六種狀態**：上游 #133 讓從沒啟用過與失敗過的 fiber 卸載時直接到 DISPOSED，不經 UNLOADING。這跟 nexus 的本地修補 `0001`（上游 #185）互斥。
-- **isolate**：上游 #209 讓找服務遇到隔離邊界就停。
-- **provide/inject 與 intercept**：上游 #206 讓 inject 宣告的設定不再複製進 `Context.intercept`，改在讀取時合併；`Service.resolveConfig` 改名 `resolveIntercept`。
+- **fiber 的六種狀態**：上游 #133 讓從沒啟用過與失敗過的 fiber 卸載時直接到 DISPOSED。nexus 不照上游：`0001`（上游 #185）重定基之後仍經 UNLOADING 並跑 `_unload()`（demian 2026-10-24，#1827 C1）。Rust 核心照 nexus 的語意。
+- **isolate**：上游 #209 讓找服務（`locate()`）遇到隔離邊界就停。產品路徑不經 isolate，只有探針 ③ 用到。
+- **provide/inject 與 intercept**：上游 #206 讓 inject 宣告的範圍不再複製進 `Context.intercept`，改在讀取時經 `Service.resolveIntercept` 合併；列有寫 `range` 就以列為準，列只寫名字的 `inject` 會抹掉插件宣告的範圍（#1827 C2 照上游）。
+- **`__jsExpr`**：Loader 的 `isJsExpr` 只認字串值（上游 #239）。nexus 的 Include 掃描看鍵名，非字串一樣整份拒絕。
+- **`ctx.root`**：改成 `ctx[Symbol.for('cordis.root')]`（上游 #207），SDK lint 擋兩種寫法。
 
 **取自 TS rc.11**：
 

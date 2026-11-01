@@ -69,8 +69,8 @@ export const name = 'skill-invocation';
 
 /**
  * 要的服務：`agentLoop`（`^1.2.0`，登記 listener；注入要帶自己的 `source`，1.1.0 的宿主會靜靜記成 `plugin`，所以擋在範圍上）、
- * `fs`（`^2.2.0`，呼叫當下拿這條 thread 的 backend、位址與技能來源；來源是 2.2.0 加的 `skillSources`，#1919）。範圍在這裡宣告，落進 Cordis 的
- * `Context.intercept`，提供者的 `check` 讀得到。
+ * `fs`（`^2.2.0`，呼叫當下拿這條 thread 的 backend、位址與技能來源；來源是 2.2.0 加的 `skillSources`，#1919）。範圍在這裡宣告，經
+ * `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(need(agentLoopToken, '^1.2.0'), need(fsToken, '^2.2.0'));
 

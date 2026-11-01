@@ -286,8 +286,8 @@ export const ASK_USER_REGISTER_OPTIONS: ToolRegisterOptions = {
 export const name = 'ask-user';
 
 /**
- * 要的服務：`tools`（`^1.1.0`，要帶選項）與 `approvalChannel`（`^1.0.0`）。範圍在這裡宣告，落進 Cordis 的
- * `Context.intercept`，提供者的 `check` 讀得到。
+ * 要的服務：`tools`（`^1.1.0`，要帶選項）與 `approvalChannel`（`^1.0.0`）。範圍在這裡宣告，經
+ * `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(need(toolsToken, '^1.1.0'), need(approvalChannelToken, '^1.0.0'));
 

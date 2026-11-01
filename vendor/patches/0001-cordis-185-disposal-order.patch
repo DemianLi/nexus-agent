@@ -1,8 +1,6 @@
-diff --git a/packages/core/src/fiber.ts b/packages/core/src/fiber.ts
-index 5c7236de..159edd6b 100644
 --- a/packages/core/src/fiber.ts
 +++ b/packages/core/src/fiber.ts
-@@ -98,6 +98,33 @@ export namespace CordisError {
+@@ -110,6 +110,33 @@
    } as const
  }
  
@@ -36,7 +34,7 @@ index 5c7236de..159edd6b 100644
  const INACTIVE = '__INACTIVE__'
  
  export class Fiber {
-@@ -161,23 +188,15 @@ export class Fiber {
+@@ -167,23 +194,15 @@
          collect,
        }
  
@@ -65,7 +63,7 @@ index 5c7236de..159edd6b 100644
            if (this.ctx.registry.has(runtime.callback)) {
              remove()
              if (!runtime.fibers.length) {
-@@ -185,6 +204,19 @@ export class Fiber {
+@@ -191,6 +210,19 @@
              }
            }
            this._setEpoch(INACTIVE)
@@ -82,11 +80,11 @@ index 5c7236de..159edd6b 100644
 +              return FiberState.UNLOADING
 +            })
 +          }
-           // `this.inertia` itself should never reject — both `_reload` and
-           // `_unload` swallow their own work errors via `ctx.logger.error`.
-           // If it *does* reject, the only remaining cause is the logger
-@@ -196,6 +228,30 @@ export class Fiber {
-           }
+           // `inertia` never rejects: `_reload` and `_unload` both log their
+           // own work errors. A rejection here would mean the logger itself
+           // failed, so let it propagate.
+@@ -203,6 +235,30 @@
+           this._updateState(() => {})
          }
        }, 'ctx.plugin()')
 +
@@ -116,7 +114,7 @@ index 5c7236de..159edd6b 100644
      } else {
        this.uid = 0
        this.ctx = this.context = parent
-@@ -279,6 +335,13 @@ export class Fiber {
+@@ -286,6 +342,13 @@
    effect(execute: () => Effect, label?: string): AsyncDisposable<Promise<void>>
    effect(execute: () => Effect, label = 'anonymous'): any {
      this.assertActive()
@@ -130,20 +128,19 @@ index 5c7236de..159edd6b 100644
  
      const disposables: Disposable[] = []
      const dispose = () => {
-diff --git a/packages/core/tests/dispose.spec.ts b/packages/core/tests/dispose.spec.ts
-index a1e70169..df355500 100644
 --- a/packages/core/tests/dispose.spec.ts
 +++ b/packages/core/tests/dispose.spec.ts
 @@ -1,4 +1,4 @@
--import { Context } from '../src'
-+import { Context, CordisError, FiberState } from '../src'
+-import { Context } from '../src/index.ts'
++import { Context, CordisError, FiberState } from '../src/index.ts'
  import { expect, describe, it, vi } from 'vitest'
  import { mock } from 'node:test'
- import { sleep, withTimers } from './utils'
-@@ -237,4 +237,110 @@ describe('Effects', () => {
+ import { sleep, withTimers } from './utils.ts'
+@@ -236,5 +236,111 @@
+     }
      expect(caught).to.be.instanceOf(Error)
      expect(seq).to.deep.equal([1])
-   })
++  })
 +
 +  // a fiber that never activated still owns whatever an `internal/plugin`
 +  // observer registered on it, and `_setEpoch(INACTIVE)` has no transition to
@@ -226,7 +223,7 @@ index a1e70169..df355500 100644
 +    expect(cleaned.mock.calls).to.have.length(1)
 +    expect(fiber.state).to.equal(FiberState.DISPOSED)
 +    expect(errors.mock.calls.length).to.be.greaterThan(0)
-+  })
+   })
 +
 +  // an observer may dispose the fiber from inside the publication notification,
 +  // so the disposer has to exist by then and the constructor must not carry on

@@ -334,8 +334,8 @@ export function createFeedbackService(
 export const name = 'feedback';
 
 /**
- * 要的服務：`commands`，契約 `^1.0.0`。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。
- * `sessionDurability` 是選配，不放進 `inject`（dsh `packages/AGENTS.md:6`），每次呼叫當下才讀，見檔頭。
+ * 要的服務：`commands`，契約 `^1.0.0`。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
+ * `sessionDurability` 是選配，不放進 `inject`，每次呼叫當下才讀，見檔頭。
  */
 export const inject = injectOf(need(commandsToken, '^1.0.0'));
 

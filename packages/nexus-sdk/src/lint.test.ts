@@ -84,6 +84,12 @@ const VIOLATIONS: readonly (Violation & { readonly expected: () => string })[] =
       'export function apply(ctx: any) { const { root } = ctx; return root; }',
       'export class P { ctx: any; run() { return this.ctx.root; } }',
       'export function apply(ctx: any) { return ctx?.root; }',
+      // 根在 `ctx[Context.root]`（`Symbol.for('cordis.root')`，上游 #207）：兩種鍵、`this.ctx` 與 `?.` 都要擋。
+      'export function apply(ctx: any, Context: any) { return ctx[Context.root]; }',
+      "export function apply(ctx: any) { return ctx[Symbol.for('cordis.root')]; }",
+      'export class P { ctx: any; run(Context: any) { return this.ctx[Context.root]; } }',
+      "export class P { ctx: any; run() { return this.ctx[Symbol.for('cordis.root')]; } }",
+      'export function apply(ctx: any, Context: any) { return ctx?.[Context.root]; }',
     ],
   },
   {
@@ -281,6 +287,15 @@ export function apply(ctx: Context): void {
 
   it('用 ctx.effect／ctx.on／ctx.get、import @nexus/sdk 與定義套件；函式內的 let、Map 與 setTimeout 都放行', async () => {
     expect(await messagesOf(COMPLIANT)).toEqual([]);
+  });
+
+  it("ctx-root 只認樹根的鍵：`ctx[Context.effect]`、`ctx[Symbol.for('cordis.filter')]` 這類別的 symbol 鍵放行", async () => {
+    const code = `
+export function apply(ctx: any, Context: any): void {
+  void ctx[Context.effect]; void ctx[Symbol.for('cordis.filter')]; void ctx[Context]; void ctx[Symbol.for('root')];
+}
+`;
+    expect(await messagesOf(code)).toEqual([]);
   });
 
   it('訊息寫的「改用什麼」走得通：`ctx.effect` 裡加窄例外、成對撤除，lint 0 則訊息（沒用到的例外指令也會報，所以也證明例外有被用到）', async () => {
