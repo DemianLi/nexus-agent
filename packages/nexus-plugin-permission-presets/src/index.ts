@@ -133,7 +133,7 @@ export type {
 /** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`、必掛判斷用）。 */
 export const name = 'permission-presets';
 
-/** 要的服務：fs（行程級的「有沒有圍堵」與逐條 thread 的可寫根）、命令、投影、會話查找（參與者接縫）。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`。 */
+/** 要的服務：fs（行程級的「有沒有圍堵」與逐條 thread 的可寫根）、命令、投影、會話查找（參與者接縫）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併。 */
 export const inject = injectOf(
   need(fsToken, '^2.0.0'),
   need(commandsToken, '^1.0.0'),

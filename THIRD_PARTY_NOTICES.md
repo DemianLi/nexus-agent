@@ -67,7 +67,6 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`deepagents`](https://github.com/langchain-ai/deepagentsjs) | MIT |
 | [`diff`](https://github.com/kpdecker/jsdiff) | BSD-3-Clause |
 | [`gpt-tokenizer`](https://github.com/niieani/gpt-tokenizer) | MIT |
-| [`js-yaml`](https://github.com/nodeca/js-yaml) | MIT |
 | [`katex`](https://github.com/KaTeX/KaTeX) | MIT |
 | [`langchain`](https://github.com/langchain-ai/langchainjs) | MIT |
 | [`langsmith`](https://github.com/langchain-ai/langsmith-sdk) | MIT |
@@ -141,6 +140,7 @@ LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [`licenses/LGPL-
 | [`eslint`](https://github.com/eslint/eslint) | MIT |
 | [`eslint-config-prettier`](https://github.com/prettier/eslint-config-prettier) | MIT |
 | [`js-tiktoken`](https://github.com/dqbd/tiktoken) | MIT |
+| [`js-yaml`](https://github.com/nodeca/js-yaml) | MIT |
 | [`jsdom`](https://github.com/jsdom/jsdom) | MIT |
 | [`micromark-util-types`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-types) | MIT |
 | [`playwright-core`](https://github.com/microsoft/playwright) | Apache-2.0 |

@@ -288,7 +288,7 @@ export const name = 'goal';
 
 /**
  * 要的服務：`tools`（`^1.1.0`，`rootOnly` 與 `outputSchema` 從 `1.1.0` 起）、`commands`（`^1.1.0`，`runWhileBusy` 從 `1.1.0` 起）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，
- * 落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。
+ * 經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
   need(toolsToken, '^1.1.0'),

@@ -50,16 +50,6 @@ function rewrite(dir, transform) {
   }
 }
 
-/** 本地修改第 1 條：core 原始碼的相對 specifier 補上 `.ts`（等同上游 #125）。 */
-function explicitExtensions(source) {
-  return source
-    .replace(/(from |import\(|declare module )'(\.\/[\w/-]+)'/g, "$1'$2.ts'")
-    .replace(
-      "import type { Context, Service } from '.'\n",
-      "import type { Context } from './context.ts'\nimport type { Service } from './service.ts'\n",
-    );
-}
-
 /** 本地修改第 4 條：指向 vendor 套件的 specifier 換成我們的 scope（照 dsh 第 17 條）。 */
 function rescope(source) {
   let out = source;
@@ -140,12 +130,14 @@ function closeWriteBack(source) {
   );
   out = once(
     out,
-    `    const tree = applyPatches(this.cache.data, this.config.patches, this.warn)
-    this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
+    `    const { data, index } = applyPatches(this.cache.data, this.config.patches, this.warn)
+    this.index = index
+    this._pendingTree = applyJournal(data, this.journal, undefined, this.warn)
 `,
-    `    const patched = applyPatches(this.cache.data, this.config.patches, this.warn)
+    `    const { data, index } = applyPatches(this.cache.data, this.config.patches, this.warn)
+    this.index = index
     const only = this.config.only
-    const tree = only === undefined ? patched : patched.filter((options) => only.includes(options.name))
+    const tree = only === undefined ? data : data.filter((options) => only.includes(options.name))
     this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
 `,
   );
@@ -155,10 +147,10 @@ function closeWriteBack(source) {
 /**
  * 本地修改第 11 條（include）：疊完 patch 的那份樹交給 Loader 之前掃一遍，帶 `__jsExpr` 的整份拒絕（#1461）。
  *
- * Loader 會把樹上任何帶 `__jsExpr` 的值 `eval` 掉（`interpolate`、`Entry._resolveDisabled`）；rc.11 起（上游 #179）
- * `disabled` 也在其中。宿主的承諾是「樹上的設定不接受表達式」，所以檢查要做在 Loader **真正會 eval 的那份資料**上：
+ * Loader 會把樹上 `__jsExpr` 是字串的值 `eval` 掉（`interpolate`、`Entry._resolveDisabled`），`disabled` 也在其中（上游 #179）。
+ * 宿主的承諾是「樹上的設定不接受表達式」，所以檢查要做在 Loader **真正會 eval 的那份資料**上：
  * `_scheduleApply` 算出來、緊接著交給 `root.update` 的那個物件。這裡掃的就是它，不另外再讀一次檔，讀檔與檢查之間沒有空隙。
- * 述詞用 Loader 自己的 `isJsExpr`（與 eval 的那一側同一支）。同步地拋，`_read`（初次載入、重讀）與 `internal/update`
+ * 只看鍵名，跟 `apps/harness/src/plugin-tree.ts` 的 `findJsExpr` 同一把尺：Loader 自己的 `isJsExpr` 只認字串值，非字串的 `__jsExpr` 不會被 eval，但一樣不是合法設定。同步地拋，`_read`（初次載入、重讀）與 `internal/update`
  * 的呼叫鏈都接得住；放在 `_applyTask` 裡拋會變成沒人接的 rejection。
  *
  * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
@@ -175,13 +167,13 @@ function rejectJsExpr(source) {
     `export class Include extends EntryTree {
 `,
     `/**
- * nexus local modification: where in \`value\` the Loader would \`eval\` something (a \`__jsExpr\` value, judged by the
- * Loader's own \`isJsExpr\`), or \`undefined\`. \`seen\`: YAML aliases make the structure shared or cyclic, visit each object once.
+ * nexus local modification: where in \`value\` a \`__jsExpr\` key sits, string or not (the same rule as the host's \`findJsExpr\`; the Loader
+ * only \`eval\`s the string ones), or \`undefined\`. \`seen\`: YAML aliases make the structure shared or cyclic, visit each object once.
  */
 function findJsExpr(value: unknown, path: string, seen = new WeakSet<object>()): string | undefined {
   if (typeof value !== 'object' || value === null || seen.has(value)) return undefined
   seen.add(value)
-  if (isJsExpr(value)) return path
+  if ('__jsExpr' in value) return path
   for (const [key, item] of Object.entries(value)) {
     const found = findJsExpr(item, Array.isArray(value) ? \`\${path}[\${key}]\` : \`\${path}.\${key}\`, seen)
     if (found !== undefined) return found
@@ -197,7 +189,7 @@ export class Include extends EntryTree {
     `    this._applyTask ??= (async () => {
 `,
     `    // nexus local modification: \`_pendingTree\` is the object \`root.update\` is about to hand to the Loader, which \`eval\`s
-    // every \`__jsExpr\` it finds. Reject the whole tree here, before anything of it is applied (the tree already applied stays).
+    // every string \`__jsExpr\` it finds. Reject any \`__jsExpr\` key here, before anything of the tree is applied (the tree already applied stays).
     for (const [index, options] of (this._pendingTree ?? []).entries()) {
       const found = findJsExpr(options, \`entry \${JSON.stringify(options?.id ?? index)}\`)
       if (found === undefined) continue
@@ -265,10 +257,11 @@ function selfDisableHook(source) {
     return parts.join(to);
   };
   let out = source;
-  // 上游 rc.11 起（#196）loader 自己 import 了 `FiberState`，目標內容已經在：這一處「已經存在就跳過」，其餘各處照舊剛好命中一次。
+  // 上游 loader 自己 import 了 `FiberState`（#196）時目標內容已經在：這一處「已經存在就跳過」，其餘各處照舊剛好命中一次。
+  // 判準是「從 `@nexus/cordis` 的具名 import 已含 `FiberState`」，不比整行：上游那一行還會多別的名字。
   // 只有這一處放寬，因為它是純 import，目標已在不代表上游的行為變了；`FiberState` 不在也不是舊形狀時，仍然在這裡擋下。
   const importWithFiberState = "import { Context, FiberState, Inject, Service } from '@nexus/cordis'";
-  if (!out.includes(importWithFiberState)) {
+  if (!/^import \{[^}]*\bFiberState\b[^}]*\} from '@nexus\/cordis'$/m.test(out)) {
     out = once(out, "import { Context, Inject, Service } from '@nexus/cordis'", importWithFiberState);
   }
   out = once(
@@ -365,9 +358,8 @@ try {
   for (const [to, from] of COPIES) cpSync(join(base, from), join(out, to), { recursive: true });
   // 本地修改第 5 條：上游測試的 tsconfig extends 上游根目錄的設定，那份沒有 vendor；拿掉後 vitest 用套件自己的 tsconfig。
   rmSync(join(out, 'cordis/tests/tsconfig.json'));
-  rewrite(join(out, 'cordis/src'), explicitExtensions);
   rewrite(join(out, 'loader/src'), rescope);
-  rewrite(join(out, 'include/src'), (source) => rescope(explicitExtensions(source)));
+  rewrite(join(out, 'include/src'), rescope);
   rewrite(join(out, 'include/src'), (source) => (source.includes('class Include') ? rejectJsExpr(closeWriteBack(source)) : source));
   rewrite(join(out, 'cordis/tests'), rescope);
   // 本地修改第 12 條：logger-console 刪瀏覽器版、拿掉 schemastery 與 supports-color。

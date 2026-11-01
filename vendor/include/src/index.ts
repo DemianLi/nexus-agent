@@ -1,23 +1,36 @@
-import { EntryChange, EntryOptions, EntryTree, isJsExpr } from '@nexus/cordis-plugin-loader'
+import { EntryChange, EntryOptions, EntryTree, isJsExpr, SourceLocation } from '@nexus/cordis-plugin-loader'
 import { Context, Service } from '@nexus/cordis'
 import { deepEqual } from 'cosmokit'
 import { basename, dirname, extname, join } from 'node:path'
 import { access, constants, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import * as yaml from 'js-yaml'
+import {
+  Document, isAlias, isMap, isNode, isScalar, isSeq, LineCounter, parseDocument,
+  Range, Scalar, ScalarTag, SchemaOptions, stringify, YAMLError,
+} from 'yaml'
+import { stringifyString } from 'yaml/util'
 import { applyJournal, flatten, Journal, merge, reconcile, record } from './journal.ts'
 import { applyPatches, ensureIds, ensureInsertIds, PatchIndex, PatchOptions, routeJournal } from './patch.ts'
 
-const JsExpr = new yaml.Type('tag:yaml.org,2002:js', {
-  kind: 'scalar',
-  resolve: (data) => typeof data === 'string',
-  construct: (data) => ({ __jsExpr: data }),
-  predicate: isJsExpr,
-  represent: (data) => data['__jsExpr'],
-})
+// A Windows drive-letter path, e.g. `C:\app\cordis.yml` or `C:/app/cordis.yml`.
+const driveLetter = /^[A-Za-z]:[\\/]/
 
-const schema = yaml.JSON_SCHEMA.extend(JsExpr)
+const JsExpr: ScalarTag = {
+  tag: 'tag:yaml.org,2002:js',
+  identify: isJsExpr,
+  resolve: (source) => ({ __jsExpr: source }),
+  // quoted like any other string
+  stringify: (item, ctx, onComment, onChompKeep) => {
+    const scalar = new Scalar((item.value as any).__jsExpr)
+    return stringifyString(Object.assign(scalar, { type: item.type }), ctx, onComment, onChompKeep)
+  },
+}
+
+const yamlOptions: SchemaOptions = {
+  schema: 'core',
+  customTags: [JsExpr],
+}
 
 const types: Record<string, string> = {
   '.json': 'application/json',
@@ -27,16 +40,40 @@ const types: Record<string, string> = {
 
 type ConfigStage = 'read' | 'parse' | 'validate'
 
+/** JSON is parsed as YAML too, for node ranges and line positions. */
+interface Syntax {
+  document: Document
+  lines: LineCounter
+}
+
+function parseSyntax(content: string): Syntax {
+  const lines = new LineCounter()
+  const document = parseDocument(content, { ...yamlOptions, prettyErrors: false, lineCounter: lines })
+  return { document, lines }
+}
+
 interface Snapshot {
   content: string
   data: EntryOptions[]
+  /** Parsed on first use. */
+  syntax?: Syntax
+}
+
+// e.g. `at position 17 (line 2 column 16)`
+const jsonPosition = /\s+at position (\d+)(?: \(line \d+ column \d+\))?$/
+
+export interface ConfigIssue {
+  message: string
+  location: SourceLocation
 }
 
 export class ConfigFileError extends Error {
   name = 'ConfigFileError'
 
-  constructor(public stage: ConfigStage, path: string, cause: unknown) {
-    super(`failed to ${stage} config file ${path}`, { cause })
+  constructor(public stage: ConfigStage, path: string, cause: unknown, public issues: ConfigIssue[] = []) {
+    super([`failed to ${stage} config file ${path}`, ...issues.map(({ message, location }) => {
+      return `  - ${message} (at ${location.filename}:${location.line}:${location.column})`
+    })].join('\n'), { cause })
   }
 }
 
@@ -79,14 +116,58 @@ export namespace Include {
   }
 }
 
+/** Index path of an entry in a nested entry list. */
+function findEntry(entries: EntryOptions[], id: string): PropertyKey[] | undefined {
+  for (const [index, options] of entries.entries()) {
+    if (options.id === id) return [index]
+    if (!options.group || !Array.isArray(options.config)) continue
+    const path = findEntry(options.config, id)
+    if (path) return [index, 'config', ...path]
+  }
+}
+
+function findInvalidEntries(entries: unknown[], prefix: PropertyKey[] = []): PropertyKey[][] {
+  return entries.flatMap((options: any, index) => {
+    if (!options || typeof options !== 'object' || Array.isArray(options)) return [[...prefix, index]]
+    if (!options.group || !Array.isArray(options.config)) return []
+    return findInvalidEntries(options.config, [...prefix, index, 'config'])
+  })
+}
+
 /**
- * nexus local modification: where in `value` the Loader would `eval` something (a `__jsExpr` value, judged by the
- * Loader's own `isJsExpr`), or `undefined`. `seen`: YAML aliases make the structure shared or cyclic, visit each object once.
+ * Range of the node at `path`, or of its deepest ancestor. A collection is
+ * represented by the key that holds it.
+ */
+function seek(document: Document, path: PropertyKey[]): Range | null | undefined {
+  let node: unknown = document.contents
+  let anchor = isNode(node) ? node.range : undefined
+  for (const key of path) {
+    if (isAlias(node)) node = node.resolve(document)
+    if (isMap(node)) {
+      const pair = node.items.find(pair => String(isScalar(pair.key) ? pair.key.value : pair.key) === String(key))
+      if (!pair) break
+      node = pair.value
+      if (isNode(pair.key)) anchor = pair.key.range
+    } else if (isSeq(node)) {
+      const item = node.items[key as number]
+      if (!isNode(item)) break
+      node = item
+      anchor = item.range
+    } else {
+      break
+    }
+  }
+  return isScalar(node) ? node.range : anchor
+}
+
+/**
+ * nexus local modification: where in `value` a `__jsExpr` key sits, string or not (the same rule as the host's `findJsExpr`; the Loader
+ * only `eval`s the string ones), or `undefined`. `seen`: YAML aliases make the structure shared or cyclic, visit each object once.
  */
 function findJsExpr(value: unknown, path: string, seen = new WeakSet<object>()): string | undefined {
   if (typeof value !== 'object' || value === null || seen.has(value)) return undefined
   seen.add(value)
-  if (isJsExpr(value)) return path
+  if ('__jsExpr' in value) return path
   for (const [key, item] of Object.entries(value)) {
     const found = findJsExpr(item, Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`, seen)
     if (found !== undefined) return found
@@ -104,6 +185,8 @@ export class Include extends EntryTree {
   private cache?: Snapshot
   /** Tree-side changes that have not reached the file yet. */
   private journal: Journal = new Map()
+  /** Where the entries of the applied tree come from. */
+  private index?: PatchIndex
   /** Ids we assigned to entries the file leaves anonymous. */
   private anonymous = new Map<string, Anonymous>()
 
@@ -121,7 +204,11 @@ export class Include extends EntryTree {
   constructor(ctx: Context, public config: Include.Config) {
     super(ctx)
     this.enableLogs = config.enableLogs ?? ctx.fiber.entry?.parent.tree.enableLogs ?? false
-    this.filename = fileURLToPath(new URL(this.config.path, this.ctx.baseUrl))
+    // On Windows, a drive-letter path is converted with `pathToFileURL`.
+    // `new URL()` would read its `C:` as a URL scheme, which `fileURLToPath` rejects.
+    this.filename = fileURLToPath(process.platform === 'win32' && driveLetter.test(this.config.path)
+      ? pathToFileURL(this.config.path)
+      : new URL(this.config.path, this.ctx.baseUrl))
     const ext = extname(this.filename)
     if (!types[ext]) {
       throw new Error(`extension "${ext}" not supported`)
@@ -141,7 +228,7 @@ export class Include extends EntryTree {
   }
 
   private warn = (format: string, ...args: any[]) => {
-    this.ctx.root.logger?.('loader').warn(format, ...args)
+    this.ctx[Context.root].logger?.('loader').warn(format, ...args)
   }
 
   async* [Service.init]() {
@@ -233,30 +320,59 @@ export class Include extends EntryTree {
     if (content === this.cache?.content) return
 
     let data: any
-    try {
-      data = this.type === 'application/yaml'
-        ? yaml.load(content, { schema })
-        : JSON.parse(content)
-    } catch (error) {
-      throw new ConfigFileError('parse', this.filename, error)
+    let syntax: Syntax | undefined
+    if (this.type === 'application/yaml') {
+      syntax = parseSyntax(content)
+      const { document, lines } = syntax
+      // unknown tags are only warnings to the parser, but leave the data incomplete
+      const errors: YAMLError[] = [...document.errors, ...document.warnings]
+      if (errors.length) {
+        const issues = errors.map(error => ({ message: error.message, location: this._locate(lines, error.pos[0]) }))
+        throw new ConfigFileError('parse', this.filename, undefined, issues)
+      }
+      data = document.toJS()
+    } else {
+      try {
+        data = JSON.parse(content)
+      } catch (error) {
+        const match = error instanceof SyntaxError && error.message.match(jsonPosition)
+        if (!match) throw new ConfigFileError('parse', this.filename, error)
+        const message = error.message.slice(0, match.index)
+        const location = this._locate(parseSyntax(content).lines, +match[1])
+        throw new ConfigFileError('parse', this.filename, undefined, [{ message, location }])
+      }
     }
     // An empty or truncated file (routine mid-edit) parses to `undefined`, so
     // every non-array shape is rejected here as one "invalid file" signal.
     if (!Array.isArray(data)) {
-      throw new ConfigFileError('validate', this.filename, new TypeError('config file must be a top-level array'))
+      const message = 'config file must be a top-level array'
+      const { document, lines } = syntax ?? parseSyntax(content)
+      const range = document.contents?.range
+      if (!range) throw new ConfigFileError('validate', this.filename, new TypeError(message))
+      throw new ConfigFileError('validate', this.filename, undefined, [{ message, location: this._locate(lines, range[0]) }])
+    }
+    // ids, patches and the journal all assume an entry is an object
+    const invalid = findInvalidEntries(data)
+    if (invalid.length) {
+      const { document, lines } = syntax ?? parseSyntax(content)
+      const issues = invalid.map((path) => {
+        const range = seek(document, path)
+        return { message: 'entry must be an object', location: this._locate(lines, range?.[0] ?? 0) }
+      })
+      throw new ConfigFileError('validate', this.filename, undefined, issues)
     }
 
     this._assignIds(data)
 
     if (this.cache) {
-      const index = new PatchIndex(this.config.patches ?? [])
+      const { index } = applyPatches(data, this.config.patches)
       const conflicts = reconcile(this.journal, flatten(this.cache.data), flatten(data), (id, key) => index.fileOwned(id, key))
       for (const { id, reason } of conflicts) {
         this.ctx.logger.error('config conflict in %C: entry %C %s; file wins', this.filename, id, reason)
       }
     }
 
-    this.cache = { content, data }
+    this.cache = { content, data, syntax }
     this._scheduleApply()
     // the file changed while tree-side changes were pending: write the merge
     if (this.journal.size) this.dirtyWrite = true
@@ -374,64 +490,95 @@ export class Include extends EntryTree {
 
   private dump(data: EntryOptions[]) {
     return this.type === 'application/yaml'
-      ? yaml.dump(data, { schema })
+      ? stringify(data, { ...yamlOptions, singleQuote: true })
       : JSON.stringify(data, null, 2)
+  }
+
+  getLocation(id: string, path: PropertyKey[]): SourceLocation | undefined {
+    if (!this.cache || !this.index) return
+    // values changed at runtime are not written anywhere yet
+    const record = this.journal.get(id)
+    if (record?.kind === 'remove') return
+    if (path.length && record && String(path[0]) in record.changes) return
+
+    const owner = path.length ? this.index.key(id, String(path[0])) : this.index.entry(id)
+    if (owner.type === 'patch') {
+      return this.ctx.fiber.entry?.getLocation(['config', 'patches', owner.index, ...path])
+    } else if (owner.type === 'embedded') {
+      const prefix = findEntry(this.config.patches![owner.index][owner.key], id)
+      if (!prefix) return
+      return this.ctx.fiber.entry?.getLocation(['config', 'patches', owner.index, owner.key, ...prefix, ...path])
+    }
+    const prefix = findEntry(this.cache.data, id)
+    if (!prefix) return
+    const { document, lines } = this.cache.syntax ??= parseSyntax(this.cache.content)
+    const range = seek(document, [...prefix, ...path])
+    if (range) return this._locate(lines, range[0])
+  }
+
+  private _locate(lines: LineCounter, offset: number): SourceLocation {
+    const { line, col } = lines.linePos(offset)
+    return { filename: this.filename, line, column: col }
   }
 
   /**
    * Entries the file leaves anonymous get an id here, before the loader sees
    * them. One that looks exactly like an entry we named on the previous read
-   * keeps that id, so editing a neighbor does not restart it; anything else
-   * gets a fresh id. Assigned ids stay in memory until the next write.
+   * keeps that id, unless it is already explicitly owned, so editing a
+   * neighbor does not restart it; anything else gets a fresh id. Assigned
+   * ids stay in memory until the next write.
    */
   private _assignIds(data: EntryOptions[]) {
     const used = new Set<string>()
-    const pending: { options: EntryOptions; parent: string | null }[] = []
-    const walk = (entries: EntryOptions[], parent: string | null) => {
+    const collect = (entries: EntryOptions[]) => {
       for (const options of entries) {
-        if (options.id) {
-          used.add(options.id)
-        } else {
-          pending.push({ options, parent })
-        }
-        if (options.group && Array.isArray(options.config)) {
-          walk(options.config, options.id ?? null)
-        }
+        if (options.id) used.add(options.id)
+        if (options.group && Array.isArray(options.config)) collect(options.config)
       }
     }
-    walk(data, null)
+    collect(data)
+    for (const patch of this.config.patches ?? []) {
+      if (patch.insert) collect(patch.insert)
+    }
 
     const previous = this.anonymous
     this.anonymous = new Map()
-    for (const { options, parent } of pending) {
-      let id: string | undefined
-      for (const [candidate, info] of previous) {
-        if (info.parent !== parent || !deepEqual(info.options, options)) continue
-        id = candidate
-        previous.delete(candidate)
-        break
+    const assign = (entries: EntryOptions[], parent: string | null) => {
+      for (const options of entries) {
+        if (!options.id) {
+          let id: string | undefined
+          for (const [candidate, info] of previous) {
+            if (info.parent !== parent || used.has(candidate) || !deepEqual(info.options, options)) continue
+            id = candidate
+            previous.delete(candidate)
+            break
+          }
+          if (!id) {
+            do {
+              id = Math.random().toString(16).slice(2, 10)
+            } while (used.has(id) || this.store[id])
+          }
+          used.add(id)
+          this.anonymous.set(id, { parent, options: structuredClone(options) })
+          const rest = { ...options }
+          for (const key of Object.keys(options)) delete options[key]
+          Object.assign(options, { id }, rest)
+        }
+        if (options.group && Array.isArray(options.config)) assign(options.config, options.id)
       }
-      if (!id) {
-        do {
-          id = Math.random().toString(16).slice(2, 10)
-        } while (used.has(id) || this.store[id])
-      }
-      used.add(id)
-      this.anonymous.set(id, { parent, options: structuredClone(options) })
-      const rest = { ...options }
-      for (const key of Object.keys(options)) delete options[key]
-      Object.assign(options, { id }, rest)
     }
+    assign(data, null)
   }
 
   private _scheduleApply() {
     if (this._disposed || !this.cache) return
-    const patched = applyPatches(this.cache.data, this.config.patches, this.warn)
+    const { data, index } = applyPatches(this.cache.data, this.config.patches, this.warn)
+    this.index = index
     const only = this.config.only
-    const tree = only === undefined ? patched : patched.filter((options) => only.includes(options.name))
+    const tree = only === undefined ? data : data.filter((options) => only.includes(options.name))
     this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
     // nexus local modification: `_pendingTree` is the object `root.update` is about to hand to the Loader, which `eval`s
-    // every `__jsExpr` it finds. Reject the whole tree here, before anything of it is applied (the tree already applied stays).
+    // every string `__jsExpr` it finds. Reject any `__jsExpr` key here, before anything of the tree is applied (the tree already applied stays).
     for (const [index, options] of (this._pendingTree ?? []).entries()) {
       const found = findJsExpr(options, `entry ${JSON.stringify(options?.id ?? index)}`)
       if (found === undefined) continue

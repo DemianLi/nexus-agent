@@ -419,7 +419,7 @@ export const name = 'present';
 
 /**
  * 要的服務：`tools`（`^1.3.0`，要 `onResult`）、`sessionLookup`（`^1.0.0`）與 `fs`（`^2.0.0`，要 `hasWorkspace()` 與併了 mounts 的
- * `offWorkspacePrefixes()`）。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。
+ * `offWorkspacePrefixes()`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
   need(toolsToken, '^1.3.0'),
