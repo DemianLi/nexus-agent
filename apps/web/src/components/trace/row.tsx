@@ -35,7 +35,7 @@ import { ENDING_LABEL, TRACE_TARGET_MISSING_TEXT, sameRow } from '@/lib/trace-vi
 import type { TraceRow } from '@/lib/trace-view';
 import {
   SIGNAL_LABEL,
-  approvalCodeText,
+  toolCodeText,
   clockText,
   durationText,
   failureReasonText,
@@ -65,8 +65,7 @@ function ToolDetail({
 
 function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
   const { entry, outcome } = row;
-  const approvalCode =
-    entry.errorCode === undefined ? undefined : approvalCodeText(entry.errorCode);
+  const codeText = entry.errorCode === undefined ? undefined : toolCodeText(entry.errorCode);
   return (
     <>
       <span className={entry.status === 'failed' ? 'text-destructive' : undefined}>
@@ -77,7 +76,7 @@ function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
           {entry.errorCode}
         </code>
       )}
-      {approvalCode !== undefined && <span data-testid="trace-approval-code">{approvalCode}</span>}
+      {codeText !== undefined && <span data-testid="trace-code-text">{codeText}</span>}
       {outcome !== undefined && (
         <span className="bg-muted rounded-4xl px-2 py-0.5" data-testid="trace-plan-outcome">
           {PLAN_OUTCOME_LABEL[outcome]}

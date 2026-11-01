@@ -12,6 +12,7 @@ import { decision, projectionFrame, view } from '@/test/trajectory-fixtures';
 import {
   ABSENT,
   approvalCodeText,
+  toolCodeText,
   clockText,
   durationText,
   FAILURE_CODE_LABEL,
@@ -161,6 +162,20 @@ describe('輪的起因標籤', () => {
   });
 });
 
+describe('toolCodeText：工具列上碼旁邊那一句（#2242）', () => {
+  it('認得磁碟滿與核准的碼', () => {
+    expect(toolCodeText('FS_NO_SPACE')).toBe('主機的儲存空間滿了');
+    expect(toolCodeText('APPROVAL_REJECTED_BY_USER')).toBe('人拒絕了');
+  });
+
+  it.each(['FS_NOT_FOUND', 'ABORTED', '', 'constructor', '__proto__'])(
+    '%j 沒有對應的句子 → undefined，只留原碼',
+    (code) => {
+      expect(toolCodeText(code)).toBeUndefined();
+    },
+  );
+});
+
 describe('approvalCodeText：核准被拒的碼', () => {
   it.each([
     ['APPROVAL_POLICY_NEVER', '核准政策一律不允許'],
@@ -195,6 +210,7 @@ describe('失敗碼：一句話，不認得的原樣顯示', () => {
       'LOCAL_CAPACITY',
       'INVALID_CREDENTIAL',
       'NESTING_TOO_DEEP',
+      'STORAGE_FULL',
       'UNKNOWN',
     ];
     for (const code of vocabulary) {
