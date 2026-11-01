@@ -1690,6 +1690,7 @@ async function startServer(
         createWebStaticHandler({ distRoot: webDist, auth }),
         opsEndpoints,
       ),
+      mux: handler,
       port: invocation.port,
       ...(invocation.compression !== undefined && { compression: invocation.compression }),
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。

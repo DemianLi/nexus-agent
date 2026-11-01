@@ -446,6 +446,15 @@ export type {
   WireClientOptions,
 } from './client.js';
 export { createWireClient } from './client.js';
+export {
+  MUX_FALLBACK_MS,
+  WIRE_MUX_PATH,
+  createMuxFetch,
+  isMuxRoute,
+  parseMuxClientMessage,
+  parseMuxServerMessage,
+} from './mux.js';
+export type { MuxClientMessage, MuxFetchOptions, MuxServerMessage, MuxSocket } from './mux.js';
 export { UplinkTransportError } from './uplink-error.js';
 export { WireRejectedError } from './rejected-error.js';
 export { WireProtocolError } from './protocol-error.js';
