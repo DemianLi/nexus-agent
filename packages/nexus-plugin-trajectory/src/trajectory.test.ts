@@ -24,6 +24,7 @@ import {
   TRAJECTORY_PREVIEW_CHARS,
   TRAJECTORY_TURN_CALLS_CAP,
   TRAJECTORY_TURN_LIST_CAP,
+  AUTH_FAILURE_MESSAGE,
 } from '@nexus/wire';
 import type { TrajectoryApprovalOutcome, TrajectoryView } from '@nexus/wire';
 import {
@@ -284,6 +285,20 @@ describe('一輪的結構', () => {
 });
 
 describe('失敗的分類碼（#434／#1115）', () => {
+  it('舊日誌的 AUTH 存著供應商原話：軌跡換成固定句', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'a' });
+    log.append('turn/failed', {
+      message: '401 sk-FAKE',
+      error: { message: '401 sk-FAKE', code: 'AUTH' },
+    });
+    expect(JSON.stringify(foldAll(log.events))).not.toContain('sk-FAKE');
+    expect(foldAll(log.events).turns[0]).toMatchObject({
+      failure: AUTH_FAILURE_MESSAGE,
+      failureCode: 'AUTH',
+    });
+  });
+
   it('turn/failed 帶 error.code：失敗的那一輪有 failureCode；沒帶（舊日誌）就沒有，不補 UNKNOWN', () => {
     const log = new SessionLog('t');
     log.append('turn/start', { kind: 'message', text: 'a' });

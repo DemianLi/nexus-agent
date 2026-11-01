@@ -95,6 +95,7 @@ import {
   UNFINISHED_TOOL_TEXT,
   WORKSPACE_CHANGES,
   mentionField,
+  turnFailureText,
 } from '@nexus/wire';
 import type {
   AttachmentRef,
@@ -1182,7 +1183,11 @@ export function historyFrames(
         }
         break;
       case 'turn/failed':
-        close(event.time, { event: 'failed', error: event.data.message });
+        close(event.time, {
+          event: 'failed',
+          error: turnFailureText(event.data.message, event.data.error?.code),
+          ...(event.data.error !== undefined && { code: event.data.error.code }),
+        });
         break;
       case 'session/end-seed':
         // 舊檔（#721 之前）：上一個行程死在一輪中間，那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
