@@ -1,6 +1,6 @@
 /**
  * 會話日誌的位元組額度（[#2115](https://github.com/DemianLi/nexus-agent/issues/2115)）：一本帳、兩種持有時間、出廠容量怎麼算，
- * 以及 JSONL 存放處怎麼用它（續接佔到把手關掉、唯讀讀完就還、拒收的連 `readFile` 都不做）。
+ * 以及 JSONL 存放處怎麼用它（開著的日誌長過額度時講一行、續接佔到把手關掉、唯讀讀完就還、拒收的連 `readFile` 都不做）。
  */
 
 import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
@@ -290,5 +290,82 @@ describe('JSONL 存放處', () => {
     await expect(reader.read()).rejects.toMatchObject({ reason: 'too-large' });
     // 只讀了 header（`open` 本來就讀），日誌本文沒讀。
     expect(fs.read).not.toContain(sessionPathsIn(directory, 'alpha').log);
+  });
+
+  describe('開著的日誌長過額度（#2215）', () => {
+    const more = (seq: number): SessionEvent =>
+      ({ type: 'turn/start', seq, time: seq + 1, data: { kind: 'resume' } }) as SessionEvent;
+
+    /** 接回 `alpha`（5 顆事件），額度定在現在的大小加 `room`。 */
+    async function reopened(room: number) {
+      const { directory, bytes } = await seeded();
+      const warnings: string[] = [];
+      const budget = createSessionLogBudget(bytes + room);
+      const store = openJsonlSessionStore({
+        directory,
+        logBudget: budget,
+        warn: (message) => warnings.push(message),
+      });
+      const { stored } = await store.resume('alpha');
+      return { directory, bytes, warnings, store, stored };
+    }
+
+    it('越過額度講一行，之後再寫不重複；說的是「以現在的額度」，而重開真的被拒收', async () => {
+      const { warnings, store, stored } = await reopened(1);
+      await stored.append([more(5)]);
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('"alpha"');
+      expect(warnings[0]).toContain('以現在的額度');
+      expect(warnings[0]).toContain('重開會被拒收');
+      await stored.append([more(6)]);
+      await stored.append([more(7)]);
+      expect(warnings).toHaveLength(1);
+      await stored.close();
+      await expect(store.resume('alpha')).rejects.toMatchObject({ reason: 'too-large' });
+    });
+
+    it('剛好等於額度不講：這個大小重開還收得下', async () => {
+      const line = `${JSON.stringify(more(5))}\n`;
+      const { warnings, store, stored } = await reopened(Buffer.byteLength(line));
+      await stored.append([more(5)]);
+      await stored.close();
+      expect(warnings).toEqual([]);
+      await (await store.resume('alpha')).stored.close();
+    });
+
+    it('額度不限不講', async () => {
+      const { directory } = await seeded();
+      const warnings: string[] = [];
+      const { stored } = await openJsonlSessionStore({
+        directory,
+        logBudget: createSessionLogBudget(Number.POSITIVE_INFINITY),
+        warn: (message) => warnings.push(message),
+      }).resume('alpha');
+      await stored.append([more(5)]);
+      await stored.close();
+      expect(warnings).toEqual([]);
+    });
+
+    it('還沒算的出廠額度，寫入不替它算', async () => {
+      const directory = await mkdtemp(join(tmpdir(), 'nexus-2215-'));
+      roots.push(directory);
+      let computed = 0;
+      const budget = createSessionLogBudget(() => {
+        computed += 1;
+        return 1;
+      });
+      const stored = openJsonlSessionStore({ directory, logBudget: budget }).create({
+        version: SESSION_LOG_FORMAT_VERSION,
+        id: 'alpha',
+        createdAt: 1,
+      });
+      await stored.append([more(0)]);
+      await stored.append([more(1)]);
+      await stored.close();
+      expect(computed).toBe(0);
+      expect(budget.knownLimitBytes).toBeUndefined();
+      expect(budget.limitBytes).toBe(1);
+      expect(budget.knownLimitBytes).toBe(1);
+    });
   });
 });

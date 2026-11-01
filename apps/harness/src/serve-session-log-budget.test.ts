@@ -4,6 +4,8 @@
  * 從 `runServe` 起：真的 serve、真的 JSONL 存放處、真的 wire client。不造幾百 MiB 的日誌，把額度換成比那份日誌小一個位元組
  * （`RunServeOptions.sessionLogBudget`）：拒收的判準只看大小，跟換出廠的哪個數無關。出廠容量怎麼算見 `session-log-budget.test.ts`。
  *
+ * 開著的日誌長過額度時講一行也在這裡量（#2215）。
+ *
  * **零憑證、零外部連線**：模型是腳本。
  */
 
@@ -14,7 +16,7 @@ import { join } from 'node:path';
 import { THREAD_LOG_BUSY, THREAD_LOG_TOO_LARGE, WireRejectedError } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import { sessionOf } from './session-files.fixture.js';
@@ -35,11 +37,16 @@ afterEach(async () => {
 /** 內容搜尋那一列出廠不開（#631），打開它才量得到搜尋那一道。 */
 const OPEN_SEARCH = '- id: thread-search\n  config:\n    openAt: first-search\n';
 
-async function start(root: string, sessionLogBudget?: SessionLogBudget): Promise<ScriptedServe> {
+async function start(
+  root: string,
+  sessionLogBudget?: SessionLogBudget,
+  log?: (line: string) => void,
+): Promise<ScriptedServe> {
   serve = await startScriptedServe(TURNS as never, {
     argv: ['--session-log', root],
     extraRows: OPEN_SEARCH,
     ...(sessionLogBudget !== undefined && { sessionLogBudget }),
+    ...(log !== undefined && { log }),
   });
   return serve;
 }
@@ -170,6 +177,35 @@ describe('會話日誌超過額度（#2115）', () => {
     expect(await client.runStart('alpha', '第二句')).toMatchObject({ type: 'success' });
     await foldTurn(reopened);
     await reopened.return?.(undefined);
+  });
+
+  it('開著的日誌長過額度：serve 日誌講一行，這一輪照常跑完（#2215）', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-serve-log-budget-'));
+    temporary.push(root);
+    const first = await start(root);
+    const firstClient = await serveClient(first.running);
+    const events = await firstClient.openEvents('alpha');
+    await firstClient.runStart('alpha', '第一句');
+    await foldTurn(events);
+    await events.return?.(undefined);
+    await first.close();
+    serve = undefined;
+
+    const alphaBytes = (await stat((await sessionOf(root, 'alpha')).logPath)).size;
+    const lines: string[] = [];
+    const second = await start(root, createSessionLogBudget(alphaBytes), bodyLog(lines));
+    const client = await serveClient(second.running);
+    const reopened = await client.openEvents('alpha');
+    expect(await client.runStart('alpha', '第二句')).toMatchObject({ type: 'success' });
+    await foldTurn(reopened);
+    expect(await client.runStart('alpha', '第三句')).toMatchObject({ type: 'success' });
+    await foldTurn(reopened);
+    await reopened.return?.(undefined);
+    await second.close();
+    serve = undefined;
+    const warned = lines.filter((line) => line.includes('重開會被拒收'));
+    expect(warned).toHaveLength(1);
+    expect(warned[0]).toContain('[會話日誌]');
   });
 
   it.each([

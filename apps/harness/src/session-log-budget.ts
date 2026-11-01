@@ -15,6 +15,7 @@
  *   別的唯讀讀完就放得下的，**排隊等**；連續接佔掉的都扣掉之後還是放不下的，拒收。
  *
  * 單份上限就是這本帳的總容量：一份超過它的，什麼時候都不收（`too-large`）。總容量的出廠值見 {@link defaultLogBudgetBytes}。
+ * 帳只記續接當下的大小：開著之後長出來的不入帳，長過容量由存放處講一行（#2215）。
  */
 import { constrainedMemory } from 'node:process';
 import { totalmem } from 'node:os';
@@ -30,6 +31,10 @@ export interface SessionLogReservation {
 export interface SessionLogBudget {
   /** 總容量（位元組）；`Infinity` 是不限。 */
   readonly limitBytes: number;
+  /**
+   * {@link limitBytes} 已經算出來就回它，還沒算回 `undefined`，不替它算：出廠容量要在起動完才算，寫入路徑不能把它提早算定（#2215）。
+   */
+  readonly knownLimitBytes: number | undefined;
   /**
    * 續接：佔到 `release` 為止。只是正在讀的唯讀佔著的話等它們讀完，排在所有唯讀前面（已經排隊的與之後才來的）；
    * 開著的 thread 佔的加上這一份放不下的，reject {@link SessionLogTooLargeError}，不等；排隊中途前面的續接佔進來而變成
@@ -201,6 +206,9 @@ export function createSessionLogBudget(limit: number | (() => number)): SessionL
   return {
     get limitBytes() {
       return capacity();
+    },
+    get knownLimitBytes() {
+      return resolved;
     },
     holdForSession: (id, logBytes) =>
       admit(id, logBytes, waitingSessions, [waitingSessions], sessionReservation),
