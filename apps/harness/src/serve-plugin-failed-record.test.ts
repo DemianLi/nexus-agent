@@ -320,8 +320,8 @@ describe('組裝時才掉的必掛列（apply 那一步，驗收 F）', () => {
     const bad = await h.raw(BAD_PREFIX);
     expect(await say(server, 'a')).toContain('原因記在 serve 的日誌');
     const logged = lines.join('\n');
-    // #1477 之後 `system-prompt` 是樹上的列：壞掉的設定在讀清單時被必掛稽核接住（`StartupError`），外層從「組裝失敗」變成「起不來」，
-    // 與同檔 browser-session 的那一條同一個形狀；同一類錯誤、同一列、同一格、同一個變數名，內層 `SystemPromptTemplateError` 的文字逐字不變。
+    // `system-prompt` 是樹上的列（#1477）：壞掉的設定在讀清單時被必掛稽核接住（`StartupError`），外層是「起不來」、不是「組裝失敗」，
+    // 與同檔 browser-session 的那一條同一個形狀；內層 `SystemPromptTemplateError` 的文字逐字保留（同一列、同一格、同一個變數名）。
     expect(logged).toMatch(/起不來/u);
     expect(logged).not.toMatch(/組裝失敗/u);
     expect(logged).toContain('system-prompt');

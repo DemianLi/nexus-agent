@@ -100,8 +100,8 @@ export class ResumeWorkspaceConflictError extends Error {
    * @param sessionId - 要續接的那份會話。
    * @param requestedRoot - 這一次 `--workspace` 解析出來的根。
    * @param existingRoot - header 記的那個。
-   * @param remedy - 訊息最後那句出路；省略就是「用 --workspace <header 的根> 再接」。serve 有私有根之後（#1775）另有出路，由它自己講。
-   * @param otherHome - header 的根是別的 home 底下的私有根；wire 的訊息不帶路徑，靠這一格講對出路。
+   * @param remedy - 訊息最後那句出路；省略就是「用 --workspace <header 的根> 再接」。serve 的私有根（#1775）另有出路，由它自己講。
+   * @param otherHome - header 的根名字是私有根的形狀、卻不在目前基底底下（多半是換過 home）；wire 的訊息不帶路徑，靠這一格講對出路。
    */
   constructor(
     readonly entry: string,
