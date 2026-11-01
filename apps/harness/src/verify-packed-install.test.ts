@@ -37,6 +37,8 @@ import {
   sharpProblems,
   shutdownProblems,
   smokeInstalledServe,
+  spawnerLockProbe,
+  spawnerLockProblems,
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
@@ -64,6 +66,22 @@ describe('步驟 3：--version', () => {
     expect(versionProblems({ ...ok, stdout: '1.2.3\n', stderr: 'warn' }, '1.2.3')).toEqual([
       expect.stringMatching(/stderr 不是空的/u),
     ]);
+  });
+});
+
+describe('步驟 4：spawner 的鎖', () => {
+  it('印 locked：不報；鎖不住、印別的：報並帶 stderr 尾巴', () => {
+    expect(spawnerLockProblems({ ...ok, stdout: 'locked\n' })).toEqual([]);
+    expect(spawnerLockProblems({ status: 1, stdout: '', stderr: '第二個沒被擋下' })).toEqual([
+      expect.stringContaining('第二個沒被擋下'),
+    ]);
+    expect(spawnerLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
+  });
+
+  it('探針直接跑出貨的執行檔，不 import 打包後不存在的內部模組', () => {
+    const probe = spawnerLockProbe('/x/spawner', '/x/probe.lock');
+    expect(probe).toContain('"/x/spawner"');
+    expect(probe).not.toContain('./lib/');
   });
 });
 

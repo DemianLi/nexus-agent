@@ -9,7 +9,7 @@
  * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；SBOM 與實際裝了的
  *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），SBOM 列的每一顆授權都是寬鬆授權或審過的例外（`installedLicenseProblems`），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
- * 4. 內附的 ripgrep 在 `PATH` 上沒有 rg
+ * 4. Linux 上打包裡的 spawner `--flock` 真的鎖得住（第二個搶不到、持有者 SIGKILL 之後拿得到；產品走這條路由步驟 6 的第二台 serve 驗）；內附的 ripgrep 在 `PATH` 上沒有 rg
  *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；sharp 與目標平台的 libvips 載得起來，真的縮一張圖
  *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；Linux 上產物裡的沙箱 spawner 起得來、送 `Ready`，
  *    經它起得了主機上的 git（#1946，`spawner-probe.ts`）；
@@ -57,6 +57,7 @@ import {
   walkInstalledGraph,
 } from './payload.js';
 import { installedLicenseProblems, sbomProblems } from './sbom.js';
+import { SPAWNER_PATH } from './spawner.js';
 import {
   probeInstalledSpawner,
   spawnerProbeProblems,
@@ -162,7 +163,42 @@ export function versionProblems(run: CommandOutcome, expected: string): string[]
   return [];
 }
 
-/** 步驟 6 的一環：同一個 home 已有 serve 活著，第二台要被 home 鎖拒絕。 */
+/** 步驟 4：打包裡的 spawner 真的拿得到鎖、擋得住第二個，持有者死了放得掉。 */
+export function spawnerLockProblems(run: CommandOutcome): string[] {
+  if (run.status !== 0 || run.stdout.trim() !== 'locked') {
+    return [`打包裡的 spawner 鎖不住：${run.stdout.slice(-200)}${run.stderr.slice(-400)}`];
+  }
+  return [];
+}
+
+/**
+ * 步驟 4 的探針：對 `binary --flock` 走完「持有者拿到、第二個被擋（結束碼 10）、持有者 SIGKILL 後拿得到」。
+ * `lib/` 是打包過的，內部模組沒有自己的檔，所以直接驗出貨的執行檔。
+ */
+export function spawnerLockProbe(binary: string, lockFile: string): string {
+  const lock =
+    "import { openSync } from 'node:fs';\n" +
+    "import { spawnSync } from 'node:child_process';\n" +
+    `const lock = () => spawnSync(${JSON.stringify(binary)}, ['--flock'], { stdio: ['ignore', 'ignore', 'ignore', openSync(${JSON.stringify(lockFile)}, 'w', 0o600)] }).status;\n`;
+  const holder = `${lock}console.log(lock() === 0 ? 'held' : 'failed'); setInterval(() => {}, 1000);`;
+  return (
+    lock +
+    "import { spawn } from 'node:child_process';\n" +
+    "import { once } from 'node:events';\n" +
+    `const holder = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(holder)}], { stdio: ['ignore', 'pipe', 'inherit'] });\n` +
+    "process.on('exit', () => holder.kill('SIGKILL'));\n" +
+    "const [first] = await once(holder.stdout, 'data');\n" +
+    "if (String(first).trim() !== 'held') throw new Error('持有者沒拿到鎖：' + first);\n" +
+    'const second = lock();\n' +
+    "if (second !== 10) throw new Error('第二個沒被擋下：' + second);\n" +
+    "holder.kill('SIGKILL'); await once(holder, 'exit');\n" +
+    'const third = lock();\n' +
+    "if (third !== 0) throw new Error('持有者死了還拿不到：' + third);\n" +
+    "console.log('locked');"
+  );
+}
+
+/** 步驟 6 的一環：同一個 home 已有 serve 活著，第二台要被 home 鎖拒絕；鎖退到 `unavailable` 時第二台不會被拒，這條就紅。 */
 export function secondServeProblems(run: CommandOutcome): string[] {
   if (run.status !== 1 || !run.stderr.includes('已經有另一個 serve 在用')) {
     return [
@@ -477,6 +513,18 @@ export async function verifyPackedInstall(
       timeout: 60_000,
     });
     problems.push(...versionProblems(version, manifest.version));
+
+    // 4. 打包裡的 spawner 鎖得住。spawner 只在 Linux 出貨。
+    if (process.platform === 'linux') {
+      const lockProbe = spawnerLockProbe(join(root, SPAWNER_PATH), join(scratch, 'probe.lock'));
+      const lockRun = spawnSync(process.execPath, ['--input-type=module', '--eval', lockProbe], {
+        cwd: root,
+        env,
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      problems.push(...spawnerLockProblems(lockRun));
+    }
 
     // 4b. 內附的 ripgrep：PATH 換成一個空目錄（宿主有沒有 rg 都不能替它補洞），從產物根解析 `@vscode/ripgrep` 並跑 `--version`。
     const emptyBin = join(scratch, 'empty-bin');
