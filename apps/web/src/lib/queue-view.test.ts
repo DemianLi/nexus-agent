@@ -35,6 +35,7 @@ import {
   queueHeading,
   queuePreview,
   SETTLED_NOTICE_TEXT,
+  SETTLED_NOTICE_TIMED_OUT_TEXT,
   SETTLED_NOTICE_UNKNOWN_TEXT,
 } from '@/lib/queue-view';
 
@@ -324,11 +325,43 @@ describe('不是人排的那一類（#861）', () => {
   it('佇列列上各寫各的一句，人排的沒有', () => {
     // 沒有 reason＝舊日誌：中性的一句，不是「已完成」
     expect(queuedAgentText(of({ kind: 'subagent-settled' }))).toBe(SETTLED_NOTICE_UNKNOWN_TEXT);
+    expect(
+      queuedAgentText(
+        of({
+          kind: 'subagent-settled',
+          reason: 'aborted',
+          cause: { kind: 'hook', reason: 'turn-timeout' },
+        }),
+      ),
+    ).toBe(SETTLED_NOTICE_TIMED_OUT_TEXT);
     expect(queuedAgentText(of({ kind: 'subagent-settled', reason: 'aborted' }))).toBe(
       SETTLED_NOTICE_TEXT.aborted,
     );
     expect(queuedAgentText(of({ kind: 'agent-message' }))).toBe(AGENT_MESSAGE_QUEUED_TEXT);
     expect(queuedAgentText(of({ kind: 'user' }))).toBeUndefined();
+  });
+});
+
+describe('settledNoticeText 分開講時間到（#1847）', () => {
+  it('被停止而且時鐘到點：講超過時間上限', () => {
+    expect(settledNoticeText('aborted', { kind: 'hook', reason: 'turn-timeout' })).toBe(
+      SETTLED_NOTICE_TIMED_OUT_TEXT,
+    );
+  });
+
+  it.each([
+    [{ kind: 'user' }],
+    [{ kind: 'parent' }],
+    [{ kind: 'hook', reason: 'some-other-hook' }],
+    [undefined],
+  ] as const)('其餘的停法（%o）講被停止，不把原因字串印出來', (cause) => {
+    expect(settledNoticeText('aborted', cause)).toBe(SETTLED_NOTICE_TEXT.aborted);
+  });
+
+  it('原因只在 aborted 時算數', () => {
+    expect(settledNoticeText('completed', { kind: 'hook', reason: 'turn-timeout' })).toBe(
+      SETTLED_NOTICE_TEXT.completed,
+    );
   });
 });
 

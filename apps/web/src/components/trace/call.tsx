@@ -218,7 +218,12 @@ export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
           ? {}
           : {
               meta: (
-                <span className="text-destructive" data-testid="trace-call-outcome">
+                <span
+                  className={
+                    row.outcome === 'timed-out' ? 'text-muted-foreground' : 'text-destructive'
+                  }
+                  data-testid="trace-call-outcome"
+                >
                   {CALL_OUTCOME_LABEL[row.outcome]}
                 </span>
               ),
