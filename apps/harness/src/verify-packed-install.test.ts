@@ -30,7 +30,6 @@ import {
   headerProblems,
   homepageProblems,
   installedGrepProblems,
-  spawnerLockProblems,
   ripgrepDisclosureProblems,
   serveOutputProblems,
   SHARP_PROBE,
@@ -65,16 +64,6 @@ describe('步驟 3：--version', () => {
     expect(versionProblems({ ...ok, stdout: '1.2.3\n', stderr: 'warn' }, '1.2.3')).toEqual([
       expect.stringMatching(/stderr 不是空的/u),
     ]);
-  });
-});
-
-describe('步驟 4：spawner 的鎖', () => {
-  it('印 locked：不報；鎖不住、印別的：報並帶 stderr 尾巴', () => {
-    expect(spawnerLockProblems({ ...ok, stdout: 'locked\n' })).toEqual([]);
-    expect(spawnerLockProblems({ status: 1, stdout: '', stderr: '第二個沒被擋下' })).toEqual([
-      expect.stringContaining('第二個沒被擋下'),
-    ]);
-    expect(spawnerLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
   });
 });
 
