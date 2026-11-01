@@ -106,6 +106,7 @@ import { mentionDisplayText } from '@/lib/session-mention';
 import { stoppedByTurnClock } from '@/lib/stop-cause';
 import { agentMessageCaption, subagentLabel, subagentNames } from '@/lib/subagent-view';
 import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
+import { abortedToolLabel } from '@/lib/tool-aborted';
 import { firstLine, toolSummary, toolTitle } from '@/lib/tool-view';
 import { mergePulled } from '@/lib/trajectory-pull';
 import type { PulledTurn } from '@/lib/trajectory-pull';
@@ -738,6 +739,18 @@ function addBucket(left: number | undefined, right: number | undefined): number 
   return left === undefined || right === undefined ? undefined : left + right;
 }
 
+/**
+ * 細節已載入的一輪裡真的失敗的工具數：`toolErrors` 減掉被中止的（#2247）。摘要沒有逐顆工具，
+ * 被單輪上限摺掉的也沒有，那些維持投影的數。
+ */
+function failedTools(turn: TrajectoryTurn): number {
+  const tools = [...turn.looseTools, ...turn.calls.flatMap((call) => call.tools)];
+  const interrupted = tools.filter(
+    (tool) => tool.status === 'error' && abortedToolLabel(tool.name, tool.code) !== undefined,
+  );
+  return turn.toolErrors - interrupted.length;
+}
+
 function headOf(digest: TrajectoryDigest, number: number): TurnHead {
   return {
     number,
@@ -990,7 +1003,7 @@ export function subagentTurnView(
   const skipped = turn.elided?.calls ?? 0;
   return {
     seq: turn.seq,
-    head: headOf(turn, 1),
+    head: { ...headOf(turn, 1), toolErrors: failedTools(turn) },
     ...(skipped === 0 ? {} : { elidedCalls: skipped }),
     calls: turn.calls.map((call, c) => ({
       row: callRowOf(call, {
@@ -1143,6 +1156,7 @@ function structuredTurns(
     const elidedTools = turn.elided?.tools;
     const head: TurnHead = {
       ...headOf(turn, numbers.get(turn.seq) ?? 1),
+      toolErrors: failedTools(turn),
       ...(skipped > 0 ? { elidedCalls: skipped } : {}),
       ...(elidedTools !== undefined && elidedTools > 0 ? { elidedTools } : {}),
     };

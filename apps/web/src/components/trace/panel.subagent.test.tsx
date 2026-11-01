@@ -427,6 +427,44 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     ]);
   });
 
+  describe('子代理被中止的工具不寫成失敗（#2247）', () => {
+    const tools = [
+      tool('a', { status: 'error', code: 'ABORTED' }),
+      tool('b', { status: 'error', code: 'ABORTED_BEFORE_DISPATCH' }),
+      tool('c', { status: 'error', code: 'FS_NO_SPACE' }),
+    ];
+
+    it('各顆的字與顏色，標頭與收合列只數工具自己失敗的', async () => {
+      mount(
+        scenario('tools:u1', {
+          trajectory: view([
+            turn(0, {
+              seq: 5,
+              toolErrors: 3,
+              calls: [call(6, { tools }), call(7)],
+            }),
+          ]),
+        }),
+      );
+      const block = await expandSubagent();
+      const shown = within(block)
+        .getAllByTestId('trace-subagent-tool')
+        .map((row) => {
+          const status = row.querySelector('span')!;
+          return [status.textContent, status.className.includes('text-destructive')];
+        });
+      expect(shown).toEqual([
+        ['已停止', false],
+        ['沒有執行', false],
+        ['失敗', true],
+      ]);
+      const heading = block.querySelector('[data-subagent-turn-head]')!;
+      expect(heading.textContent).toContain('3 個工具（1 個失敗）');
+      expect(block.textContent?.split('（1 個失敗）')).toHaveLength(3);
+      expect(block.textContent).not.toContain('3 個失敗');
+    });
+  });
+
   describe('重新載入的焦點（#2135）', () => {
     async function pulledBlock() {
       const { client, waiting } = fakeClient();
