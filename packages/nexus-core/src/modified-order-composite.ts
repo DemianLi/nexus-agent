@@ -1,6 +1,7 @@
 /**
  * 產品用的 `CompositeBackend`：`glob` 的結果照**修改時間（舊的在前）**交給模型（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605) N0345），
- * 並把 {@link FILE_VERSION} 照路由轉給子 backend（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。
+ * 並把 {@link FILE_VERSION} 照路由轉給子 backend（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)），
+ * 複製的兩半（{@link COPY_SOURCE}、{@link COPY_INTO}）也一樣（[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）。
  *
  * ## 為什麼要有它
  *
@@ -30,6 +31,8 @@
 
 import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol, GlobResult } from 'deepagents';
+import { COPY_INTO, COPY_SOURCE, copyIntoOf, copySourceOf } from './backend-copy.js';
+import type { CopyIntoResult, CopyRequest, CopySource } from './backend-copy.js';
 import { FILE_VERSION, fileVersionOf } from './observation.js';
 import type { FileVersionLookup } from './observation.js';
 
@@ -57,7 +60,7 @@ interface CompositeInternals {
 }
 
 /**
- * `glob` 照修改時間排、路由出錯就回錯誤，{@link FILE_VERSION} 照路由轉的 `CompositeBackend`，見檔頭。其餘方法與基座逐位元組相同。
+ * `glob` 照修改時間排、路由出錯就回錯誤，{@link FILE_VERSION} 與複製的兩半照路由轉的 `CompositeBackend`，見檔頭。其餘方法與基座逐位元組相同。
  *
  * `modified_at` 是 `Date.prototype.toISOString()` 的形狀（基座與 `ContainedFilesystemBackend` 都是），字串比較等於時間比較。
  */
@@ -65,8 +68,9 @@ export class ModifiedOrderCompositeBackend extends CompositeBackend {
   /**
    * 基座建構時把每個子 backend 換成轉接物件（`adaptBackendProtocol`），{@link FILE_VERSION} 這類基座不認得的方法會掉。
    * 這裡記「轉接物件 → 交進來的原物件」，路由仍走基座的 `getBackendAndKey`，只在最後換回原物件。
-   * 讀的是基座私有的 `default`／`routes`。基座改了欄位名，這張表就是空的，寫前比對退回 `readRaw` 算內容雜湊，但 `read_file`
-   * 照樣回報 stat token，兩邊對不上：讀過再改一律被擋成 `FS_STALE_VERSION`（`contained-read-window.test.ts` 的驗收 2b 會紅）。
+   * 讀的是基座私有的 `default`／`routes`。基座改了 `routes` 的名字，建構時就拋；改了 `default` 的名字，落在 default 的路徑換不回原物件：
+   * 寫前比對退回 `readRaw` 算內容雜湊，但 `read_file` 照樣回報 stat token，兩邊對不上，讀過再改一律被擋成 `FS_STALE_VERSION`；
+   * 複製回「不支援」（`contained-read-window.test.ts` 的驗收 2b 與 `backend-copy.test.ts` 都會紅）。
    */
   private readonly originals = new Map<unknown, AnyBackendProtocol>();
 
@@ -122,9 +126,52 @@ export class ModifiedOrderCompositeBackend extends CompositeBackend {
    * @param path - 這一層座標系的路徑（最外層是模型給的原路徑）。
    */
   async [FILE_VERSION](path: string): Promise<FileVersionLookup> {
-    const [backend, key] = (
-      this as unknown as { getBackendAndKey(key: string): [AnyBackendProtocol, string] }
-    ).getBackendAndKey(path);
+    const [backend, key] = this.route(path);
     return fileVersionOf(this.originals.get(backend), key);
+  }
+
+  /**
+   * 複製的來源那一半照路由分派，前綴剝法同 {@link FILE_VERSION}。子 backend 沒有這一半就回固定錯誤（`copySourceOf`）。
+   *
+   * @param path - 這一層座標系的來源路徑。
+   * @param request - 模型給的原路徑，原樣往下傳。
+   */
+  async [COPY_SOURCE](
+    path: string,
+    request: CopyRequest,
+  ): Promise<CopySource | { readonly error: string }> {
+    const [backend, key] = this.route(path);
+    return copySourceOf(this.originals.get(backend), key, request);
+  }
+
+  /**
+   * 複製的目的地那一半照路由分派。子 backend 回的路徑是它自己座標系的，補回路由前綴再往上交，其餘欄位原樣帶出。
+   * 落在那一格的根（`/`）時回不帶結尾斜線的前綴：模型給 `/plugin` 或 `/plugin/` 都回 `/plugin`。
+   *
+   * @param path - 這一層座標系的目的地路徑。
+   * @param source - 開好的來源，可能來自另一個子 backend。
+   * @param request - 模型給的原路徑，原樣往下傳。
+   */
+  async [COPY_INTO](
+    path: string,
+    source: CopySource,
+    request: CopyRequest,
+  ): Promise<CopyIntoResult> {
+    const [backend, key] = this.route(path);
+    const result = await copyIntoOf(this.originals.get(backend), key, source, request);
+    if ('error' in result) return result;
+    const prefix = Object.entries((this as unknown as CompositeInternals).routes).find(
+      ([, route]) => route === backend,
+    )?.[0];
+    if (prefix === undefined) return result;
+    const root = prefix.slice(0, -1);
+    return { ...result, path: result.path === '/' ? root : root + result.path };
+  }
+
+  /** 基座的 `getBackendAndKey`：回轉接物件與剝過前綴的路徑。 */
+  private route(path: string): [unknown, string] {
+    return (
+      this as unknown as { getBackendAndKey(key: string): [unknown, string] }
+    ).getBackendAndKey(path);
   }
 }
