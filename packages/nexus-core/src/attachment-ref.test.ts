@@ -63,6 +63,40 @@ describe('區塊與參照的形狀', () => {
     expect(isFileBlock({ type: 'file', attachment: FILE })).toBe(false);
   });
 
+  it('正常的參照包成區塊後跟傳進來的那份（去掉 `type`）逐位元組相同：選填欄位不在就不出現，順序不變', () => {
+    const bare = { ...IMAGE, name: undefined };
+    delete bare.name;
+    const scaled = { ...IMAGE, originalDimensions: { width: 1280, height: 440 } };
+    for (const ref of [
+      { type: 'file' as const, ...FILE },
+      { type: 'image' as const, ...IMAGE },
+      { type: 'image' as const, ...bare },
+      { type: 'image' as const, ...scaled },
+    ]) {
+      const { type: _, ...attachment } = ref;
+      expect(JSON.stringify(attachmentBlock(ref).attachment)).toBe(JSON.stringify(attachment));
+    }
+    expect(Object.keys(attachmentBlock({ type: 'image', ...bare }).attachment)).not.toContain(
+      'name',
+    );
+  });
+
+  it('參照帶型別以外的鍵（#2323）：只挑型別裡的欄位，`originalDimensions` 底下也是', () => {
+    const deep = { next: [{ next: 'leaf' }] };
+    const file = attachmentBlock({ type: 'file', ...FILE, extra: deep } as never);
+    const image = attachmentBlock({
+      type: 'image',
+      ...IMAGE,
+      extra: deep,
+      originalDimensions: { width: 1280, height: 440, extra: deep },
+    } as never);
+    expect(file.attachment).toEqual(FILE);
+    expect(image.attachment).toEqual({
+      ...IMAGE,
+      originalDimensions: { width: 1280, height: 440 },
+    });
+  });
+
   it('形狀不合格的一律不認：雜湊、位元組數、媒體類型', () => {
     expect(isAttachmentRef({ type: 'file', ...FILE })).toBe(true);
     expect(isAttachmentRef({ type: 'file', ...FILE, attachmentId: 'sha256:zz' })).toBe(false);

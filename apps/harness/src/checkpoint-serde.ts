@@ -36,10 +36,11 @@
  *
  * `channel_values.messages` 與工具派工的 `args` 留在記憶體不序列化，寫入吞錯與讀回層數上限這兩件事碰不到它們。
  * `pruned-memory-saver.ts` 的 `seal` 用同一個
- * {@link CHECKPOINT_MAX_DEPTH} 量新進的訊息，邊界跟量整份存檔點相同。日誌收得下的日誌訊息（`assistant/message`、`tool/result`、
- * `user/message`、`compaction/summary` 帶的那一則）進得了 state。兩個例外：舊格式只有 `additional_kwargs.tool_calls` 字串的，
- * 解析出來的參數不受日誌那一關限制；`turn/start` 的附件參照帶了多出來的鍵時，那些鍵被包進內容區塊，比在事件裡深
- * （TODO(#2323)）。太深的拋 {@link CheckpointDepthError}。這顆管 `files` 等其他 channel、metadata 與 pending writes；
+ * {@link CHECKPOINT_MAX_DEPTH} 量新進的訊息，邊界跟量整份存檔點相同。日誌收得下的事件進得了 state：日誌訊息（`assistant/message`、
+ * `tool/result`、`user/message`、`compaction/summary` 帶的那一則）照上面的算法；`turn/start` 推出的訊息只由型別裡的欄位組成
+ * （附件參照經 `@nexus/core` 的 `attachmentBlock` 只挑型別欄位，點名換成一個文字區塊，來源只挑固定幾格），欄位值是型別宣告的
+ * 純量時層數固定，不隨事件多帶的鍵變深。例外是舊格式只有 `additional_kwargs.tool_calls` 字串的：解析出來的參數
+ * 不受日誌那一關限制。太深的拋 {@link CheckpointDepthError}。這顆管 `files` 等其他 channel、metadata 與 pending writes；
  * 中斷或出錯那一輪已完成任務的 `messages` 寫入屬於 pending writes，照樣走這顆。
  *
  * ## 與 dsh 的偏離（理由 1）
