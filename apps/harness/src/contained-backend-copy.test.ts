@@ -152,7 +152,7 @@ describe('ContainedFilesystemBackend 複製：來源', () => {
     });
   });
 
-  it('過了圍堵、開檔之前被換成 FIFO：開檔不卡住，用開好的把手判出不是一般檔，不建目的地', async () => {
+  it('過了圍堵、開檔之前被換成 FIFO：開檔不卡住、判出不是一般檔，不建目的地', async () => {
     await writeFile(join(root, 'a.txt'), 'x');
     const result = await contained(undefined, {
       beforeCopyOpen: async (path) => {

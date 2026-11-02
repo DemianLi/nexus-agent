@@ -892,7 +892,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * 複製的來源那一半（`copy_file`，[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）：照 {@link read} 先過讀取面的圍堵（{@link readScope}），
-   * 開比過根的那個實際位置，`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，用開好的把手判一般檔，不是就關掉、拒絕：過圍堵之後被換成 FIFO 的路徑
+   * 開 {@link readScope} 解出的實際位置（解不開、交給下游時退回字面路徑），`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，用開好的把手判一般檔，不是就關掉、拒絕：過圍堵之後被換成 FIFO 的路徑
    * 開檔不會卡住，判的也是實際讀的那一個。內容不解碼，二進位與非 UTF-8 的檔原樣交出。
    *
    * @param sourcePath - 這個 backend 座標系裡的來源路徑。
@@ -924,7 +924,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         }
         size = info.size;
       } catch (error: unknown) {
-        await handle.close();
+        await handle.close().catch(() => undefined);
         throw error;
       }
       return {
