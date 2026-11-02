@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFeedbackService } from '@nexus/plugin-feedback';
+import { deriveBrowserTimeZoneContext } from '@nexus/plugin-time-context';
 import { applyTrajectory, initialTrajectory, viewTrajectory } from '@nexus/plugin-trajectory';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -88,6 +89,7 @@ interface Expected {
     readonly firstHalf?: { readonly eventCount: number; readonly replay: Replay };
     readonly approvalPolicyRecorded?: boolean;
     readonly approvalPolicyOnResume?: string;
+    readonly browserTimeZone?: unknown;
   }[];
 }
 
@@ -365,6 +367,9 @@ describe.each(names)('夾具 %s', (name) => {
       if (trigger.approvalPolicyOnResume !== undefined) {
         expect(recordedApprovalPolicy(events) !== undefined).toBe(trigger.approvalPolicyRecorded);
         expect(approvalPolicyOnResume(events)).toBe(trigger.approvalPolicyOnResume);
+      }
+      if (trigger.browserTimeZone !== undefined) {
+        expect(deriveBrowserTimeZoneContext(events)).toEqual(trigger.browserTimeZone);
       }
     });
   }

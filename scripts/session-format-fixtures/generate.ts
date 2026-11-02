@@ -17,8 +17,9 @@
  * 今天才算得出來的輸出（以輪為目標的評分對到哪一則回覆、續接補結），由這支腳本 import 今天工作樹的 `@nexus/core` 原始碼算，
  * `expected.json` 逐格標明是誰算的。
  *
- * 混版（`mixed-v44-v49`）：`0c9e389c^`（格式 44，#1321 把摘要事件挪到呼叫之前的前一個 commit）的 CLI 寫前半，今天的 CLI
- * `--resume` 續寫後半；兩邊都用 patch 把摘要門檻壓低，讓舊順序與新順序的 `compaction/summary` 各出現一次。
+ * 混版（`mixed-v44-v49`）：`0c9e389c^`（格式 44，#1321 把摘要事件挪到呼叫之前的前一個 commit）的 CLI 寫前半，格式 52 那個
+ * commit 的 CLI `--resume` 續寫後半；兩邊都用 patch 把摘要門檻壓低，讓舊順序與新順序的 `compaction/summary` 各出現一次。
+ * 後半釘在 commit 上，header 的版號與 plugin 清單才不會跟著今天的樹走。
  *
  * ## 固定的東西
  *
@@ -66,6 +67,7 @@ import {
 import type { SessionEvent, StoredSessionHeader } from '../../packages/nexus-core/src/index.ts';
 import { historyFrames } from '../../apps/harness/src/conversation-history.ts';
 import { assertSameWorkspaceRoot } from '../../apps/harness/src/resume-guards.ts';
+import { deriveBrowserTimeZoneContext } from '../../packages/nexus-plugin-time-context/src/index.ts';
 import { frozenFilesOf, readEvents, readRawHeader, sessionsIn } from './run-directory.ts';
 
 /** header 的 `cwd` 記的那個目錄。 */
@@ -76,7 +78,7 @@ const HERE = join(ROOT, 'scripts/session-format-fixtures');
 const PROMPT = '你好';
 
 /**
- * 讀方分支的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root`、`approval-policy-missing` 與
+ * 夾具要留存的形狀的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root`、`approval-policy-missing` 與
  * `two-file-layout` 不用補寫（12 以前的 header 本來就沒有 `workspaceRoot`，34 以前的日誌本來就沒有 `approval/policy`，52 以前
  * 的寫入器本來就寫舊兩檔），只記今天的讀方對它的輸出。
  */
@@ -87,7 +89,8 @@ type Trigger =
   | 'open-turn'
   | 'workspace-root'
   | 'approval-policy-missing'
-  | 'two-file-layout';
+  | 'two-file-layout'
+  | 'client-time-zone';
 
 interface Target {
   /** 夾具目錄名。 */
@@ -142,9 +145,20 @@ const TARGETS: readonly Target[] = [
     ownReplay: true,
     released: true,
   },
+  // `v52` 已凍，時區另放一份：同一個寫入器，CLI 一輪碰不到 `client_time_zone`，由觸發補寫。
+  {
+    name: 'v52-client-time-zone',
+    rev: '54d5a80dbe6f64d0ad49f2a51c9e1be95d901172',
+    version: 52,
+    triggers: ['client-time-zone'],
+    ownReplay: true,
+    released: true,
+  },
 ];
 /** 混版的前半。 */
 const MIXED_FIRST = { rev: '09398dd523471a1d03852e18c7bbae6ecc672414', version: 44 } as const;
+/** 混版的後半：`v52` 的寫入器。 */
+const MIXED_SECOND = { rev: '54d5a80dbe6f64d0ad49f2a51c9e1be95d901172', version: 52 } as const;
 const MIXED_NAME = 'mixed-v44-v49';
 
 const git = (...args: string[]): string =>
@@ -424,6 +438,17 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
             replay: todayReplay(readEvents(directory, 'cli')),
           },
         ];
+      case 'client-time-zone':
+        return [
+          {
+            edge: 49,
+            session: 'client-time-zone',
+            computedBy: 'today',
+            browserTimeZone: deriveBrowserTimeZoneContext(
+              readEvents(directory, 'client-time-zone'),
+            ),
+          },
+        ];
       case 'approval-policy-missing': {
         const events = readEvents(directory, 'cli');
         return [
@@ -487,7 +512,7 @@ function generate(target: Target): void {
 }
 
 function generateMixed(): void {
-  log(`\n== ${MIXED_NAME}（${MIXED_FIRST.rev} 寫前半，今天的工作樹續寫後半）`);
+  log(`\n== ${MIXED_NAME}（${MIXED_FIRST.rev} 寫前半，${MIXED_SECOND.rev} 續寫後半）`);
   const scratch = mkdtempSync(join(realpathSync('/var/tmp'), 'nexus-session-format-'));
   let tree: string | undefined;
   try {
@@ -506,7 +531,8 @@ function generateMixed(): void {
     const firstHalfCount = readEvents(directory, 'cli').length;
     removeTree(tree);
     tree = undefined;
-    const harness = join(ROOT, 'apps/harness');
+    tree = checkout(scratch, MIXED_SECOND.rev);
+    const harness = join(tree, 'apps/harness');
     run(
       join(harness, 'node_modules/.bin/tsx'),
       [
@@ -514,14 +540,17 @@ function generateMixed(): void {
         '--resume',
         directory,
         '--patch',
-        join(HERE, 'summarize-early.today.patch.yml'),
+        join(HERE, 'summarize-early.v52.patch.yml'),
         PROMPT,
       ],
       { cwd: FIXTURE_CWD, env: runEnv(scratch) },
     );
+    if (headerVersion(directory, 'cli') !== MIXED_SECOND.version) {
+      throw new Error(`後半寫出來的版本是 ${String(headerVersion(directory, 'cli'))}。`);
+    }
     const writer = {
-      rev: `${MIXED_FIRST.rev} → today`,
-      commit: `${MIXED_FIRST.rev} → ${git('rev-parse', 'HEAD')}`,
+      rev: `${MIXED_FIRST.rev} → ${MIXED_SECOND.rev}`,
+      commit: `${MIXED_FIRST.rev} → ${MIXED_SECOND.rev}`,
       formatVersion: MIXED_FIRST.version,
       released: false,
     };
