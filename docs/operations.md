@@ -104,7 +104,7 @@
 - 這幾條由 `apps/harness/src/contained-backend.test.ts` 的〈讀取面的圍堵〉釘住，工具層與日誌上的樣子在
   `apps/harness/src/read-containment-tools.test.ts`。
 - 這是 policy fence，不是 kernel boundary：檢查與開檔之間，祖先目錄被換成連結的那一瞬間（TOCTOU）擋不到。要擋惡意的程式，用作業系統層的隔離。
-- 想再擋根內的特定路徑，在 `permissions` 自己加 deny 規則。
+- 出貨的設定沒有能寫 deny 規則的列，營運者擋不了根內的單一路徑：不要模型讀寫的檔，就不要放進工作區。deny 規則只有插件能在 `apply` 裡呼叫 `registry.permissions.deny()` 加，出貨沒有這樣的插件。
 
 **2. 以 stdio 起的 MCP server 子行程不在 fence 底下。** 它們是外部程序，走自己的檔案系統，既不經過 `permissions` 也不經過
 backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MCP 讀來的資料經由內建 `write_file` 寫進工作區」那一條。
