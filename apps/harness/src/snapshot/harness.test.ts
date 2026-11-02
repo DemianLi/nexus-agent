@@ -82,16 +82,16 @@ const SEED = [
 async function scenarioWith(from: Scenario, log: SnapshotLog | 'seed'): Promise<Scenario> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-snapshot-self-'));
   dirs.push(dir);
-  await mkdir(dir, { recursive: true });
   const paths = sessionPathsIn(dir, SNAPSHOT_THREAD_ID);
+  await mkdir(paths.sessionDirectory, { recursive: true });
   if (log === 'seed') {
     const header = {
+      type: 'session',
       version: SESSION_LOG_FORMAT_VERSION,
       id: SNAPSHOT_THREAD_ID,
       createdAt: 0,
       cwd: CWD_TOKEN,
     };
-    await writeFile(paths.header, `${JSON.stringify(header)}\n`, 'utf8');
     const events = SEED.map((message, seq) => ({
       type: 'assistant/message',
       seq,
@@ -100,14 +100,15 @@ async function scenarioWith(from: Scenario, log: SnapshotLog | 'seed'): Promise<
     }));
     await writeFile(
       paths.log,
-      events.map((event) => `${JSON.stringify(event)}\n`).join(''),
+      [header, ...events].map((line) => `${JSON.stringify(line)}\n`).join(''),
       'utf8',
     );
   } else {
-    await writeFile(paths.header, `${JSON.stringify(log.header)}\n`, 'utf8');
     await writeFile(
       paths.log,
-      log.events.map((event) => `${JSON.stringify(event)}\n`).join(''),
+      [{ type: 'session', ...log.header }, ...log.events]
+        .map((line) => `${JSON.stringify(line)}\n`)
+        .join(''),
       'utf8',
     );
   }

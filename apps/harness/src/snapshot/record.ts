@@ -123,14 +123,13 @@ try {
         // 失敗訊息原樣帶著供應商的錯誤本文（可能有帳號識別碼），不進夾具。
         found.push('有一輪失敗了（turn/failed）');
       }
-      const texts = [await readFile(paths.header, 'utf8'), await readFile(paths.log, 'utf8')];
-      if (texts.some((text) => SECRET_LIKE.test(text))) found.push(`命中 ${String(SECRET_LIKE)}`);
+      const text = await readFile(paths.log, 'utf8');
+      if (SECRET_LIKE.test(text)) found.push(`命中 ${String(SECRET_LIKE)}`);
 
       const targetDir = found.length === 0 ? scenario.dir : join(rejectDir, name);
-      await mkdir(targetDir, { recursive: true });
       const target = sessionPathsIn(targetDir, SNAPSHOT_THREAD_ID);
-      await writeFile(target.header, replaceHostPaths(texts[0]!, cwd), 'utf8');
-      await writeFile(target.log, replaceHostPaths(texts[1]!, cwd), 'utf8');
+      await mkdir(target.sessionDirectory, { recursive: true });
+      await writeFile(target.log, replaceHostPaths(text, cwd), 'utf8');
       await writeFile(
         join(targetDir, 'recorded.json'),
         `${JSON.stringify(meta, null, 2)}\n`,

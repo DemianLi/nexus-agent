@@ -31,12 +31,7 @@ import { uniformDecisions } from '@nexus/wire';
 import type { ConversationState, WireClient } from '@nexus/wire';
 
 import { TIME_CONTEXT_OFF_PATCH_ROWS, approvalAt, foldTurn } from '../fixtures.js';
-import {
-  parseJsonlSessionBody,
-  projectKey,
-  readSessionEntry,
-  sessionPathsIn,
-} from '../jsonl-session-store.js';
+import { parseJsonlSessionBody, projectKey, readSessionEntryById } from '../jsonl-session-store.js';
 import { replayScriptFromEvents } from '../llm-replay.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
@@ -161,8 +156,7 @@ ${SNAPSHOT_COMMON_ROWS}${scenarioRows}`;
  * @param threadId - 會話 id。
  */
 export async function readSnapshotLog(directory: string, threadId: string): Promise<SnapshotLog> {
-  const filename = sessionPathsIn(directory, threadId).header.slice(directory.length + 1);
-  const entry = await readSessionEntry(directory, filename, { id: threadId });
+  const entry = await readSessionEntryById(directory, threadId);
   if (entry === undefined) throw new Error(`${directory} 裡沒有會話 ${threadId}`);
   const { events } = parseJsonlSessionBody(threadId, await entry.readBody(), {
     recovery: 'strict',
