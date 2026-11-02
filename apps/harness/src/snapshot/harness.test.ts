@@ -4,11 +4,13 @@
  * - **正規化把每一次都會變的值都收掉了**：同一份夾具重放兩次，正規化之後相等。漏收一個隨機值（中斷 id、送出佇列 id、時間），
  *   真夾具的比對就永遠是紅的，而且紅得跟「產品漂移」長得一樣。
  * - **比對抓得到走歪**：腳本少一則，比對要紅。
+ * - **refresh 只寫回漂移**：拿真場景的副本，夾具沒漂移時一個位元組都不改；改壞一格再 refresh，寫回來的跟原本的逐位元組相同
+ *   （只有真模型給得出的請求標頭也留著）。
  *
  * 種子夾具只有兩則手寫的回覆（形狀照 `llm-replay.test.ts`）；第一次重放落盤的那份當夾具，再重放一次比。
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,6 +27,8 @@ import {
   loadScenario,
   normalizeSnapshotLog,
   readSnapshotLog,
+  refreshFixtureText,
+  refreshScenario,
   scriptAlignmentProblem,
   startReplayServe,
 } from './harness.js';
@@ -121,6 +125,15 @@ async function scenarioWith(from: Scenario, log: SnapshotLog | 'seed'): Promise<
   return { ...from, dir };
 }
 
+/** 真場景目錄的副本（refresh 會寫回夾具，不能動版控裡那份）。 */
+async function scenarioCopy(name: string): Promise<{ scenario: Scenario; fixture: string }> {
+  const from = await loadScenario(name);
+  const dir = await mkdtemp(join(tmpdir(), 'nexus-snapshot-refresh-'));
+  dirs.push(dir);
+  await cp(from.dir, dir, { recursive: true });
+  return { scenario: { ...from, dir }, fixture: sessionPathsIn(dir, SNAPSHOT_THREAD_ID).log };
+}
+
 async function replay(scenario: Scenario): Promise<SnapshotLog> {
   const served = await startReplayServe(scenario);
   try {
@@ -153,4 +166,37 @@ describe('快照 harness', () => {
     const second = await replay(await scenarioWith(approval, fixture));
     expect(normalizeSnapshotLog(second)).not.toEqual(normalizeSnapshotLog(fixture));
   }, 60_000);
+
+  it('refresh：夾具沒漂移時不改任何位元組', async () => {
+    const { scenario, fixture } = await scenarioCopy('approval-resume');
+    const before = await readFile(fixture, 'utf8');
+    expect(await refreshScenario(scenario)).toBe(false);
+    expect(await readFile(fixture, 'utf8')).toBe(before);
+  }, 60_000);
+
+  it('refresh：改壞一格，寫回來的跟原本的逐位元組相同', async () => {
+    const { scenario, fixture } = await scenarioCopy('approval-resume');
+    const original = await readFile(fixture, 'utf8');
+    const lines = original.split('\n');
+    const index = lines.findIndex((line) => line.includes('"context/measure"'));
+    const measure = JSON.parse(lines[index]!) as { data: { approxTokens: number } };
+    measure.data.approxTokens += 1;
+    lines[index] = JSON.stringify(measure);
+    await writeFile(fixture, lines.join('\n'), 'utf8');
+
+    expect(await refreshScenario(scenario)).toBe(true);
+    expect(await readFile(fixture, 'utf8')).toBe(original);
+  }, 60_000);
+
+  it('refresh：模型呼叫次數不同就拋，要重錄', async () => {
+    const { fixture } = await scenarioCopy('approval-resume');
+    const existing = await readFile(fixture, 'utf8');
+    const lines = existing.split('\n');
+    lines.splice(
+      lines.findLastIndex((line) => line.includes('"request/header"')),
+      1,
+    );
+    const fewer = lines.join('\n');
+    expect(() => refreshFixtureText(existing, fewer)).toThrow(/record\.ts 重錄/u);
+  });
 });

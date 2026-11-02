@@ -32,6 +32,7 @@ import type { RunningServe } from '../serve.js';
 import { liveModelConfigSchema } from '../settings/live-model.js';
 import { startCountingProxy } from '../smoke/counting-proxy.js';
 import {
+  SECRET_LIKE,
   SNAPSHOT_COMMON_ROWS,
   SNAPSHOT_THREAD_ID,
   driveScenario,
@@ -65,12 +66,6 @@ if (
   );
 }
 const cwd = resolve(envDir);
-
-/**
- * 夾具裡不該有的：金鑰、授權標頭、請求 id，與供應商錯誤本文裡的帳號（NVIDIA 的 404 帶 `for account '…'`）。
- * 刻意寬：誤中由人看，漏掉的進了版控就收不回來。
- */
-const SECRET_LIKE = /Bearer|api[_-]?key|nvapi-|authorization|x-request-id|for account/iu;
 
 const proxy = await startCountingProxy({ upstream: DEFAULT_LIVE_BASE_URL, cap });
 const problems: string[] = [];
