@@ -1312,6 +1312,8 @@ describe('歸屬表分塊', () => {
     events.reduce((state, event) => applyTrajectory(state, event), initialTrajectory());
   const entriesOf = (state: ReturnType<typeof initialTrajectory>) =>
     state.owners.chunks.flatMap((chunk) => Object.entries(chunk));
+  const realSizes = (state: ReturnType<typeof initialTrajectory>) =>
+    state.owners.chunks.map((chunk) => Object.keys(chunk).length);
 
   /** 整張表一份的參考算法：先刪再放、超過 2000 從最舊的丟。比對的對照組。 */
   function referenceOwners(events: readonly SessionEvent[]): [string, number | null][] {
@@ -1351,6 +1353,7 @@ describe('歸屬表分塊', () => {
     const expected = referenceOwners(log.events);
     expect(entriesOf(state)).toEqual(expected);
     expect(state.owners.size).toBe(expected.length);
+    expect(state.owners.sizes).toEqual(realSizes(state));
   });
 
   it('反覆重用 id 時塊會併回來，塊數不跟著重用次數長', () => {
@@ -1419,6 +1422,7 @@ describe('歸屬表分塊', () => {
     const base = stateOf(log.events);
     expect(Object.keys(base.owners.chunks.at(-1)!).length).toBeLessThan(32);
     for (const chunk of base.owners.chunks) Object.freeze(chunk);
+    Object.freeze(base.owners.sizes);
     const batches = [
       ['n_1', 'n_2', 'n_3'],
       ['n_4', 'n_4', 'id_2005', 'id_15'],
@@ -1433,8 +1437,10 @@ describe('歸屬表分塊', () => {
         log.append('assistant/message', reply(start.seq, '', ...batch)),
       );
       for (const chunk of state.owners.chunks) Object.freeze(chunk);
+      Object.freeze(state.owners.sizes);
     }
     expect(entriesOf(state)).toEqual(referenceOwners(log.events));
+    expect(state.owners.sizes).toEqual(realSizes(state));
   });
 
   it('`__proto__` 這種 id 照常歸屬', () => {

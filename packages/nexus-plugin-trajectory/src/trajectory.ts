@@ -149,6 +149,8 @@ type TurnState = Omit<
  */
 interface OwnerTable {
   readonly chunks: readonly Readonly<Record<string, number | null>>[];
+  /** 每一塊的筆數，跟 `chunks` 一一對應：併塊、加筆不必再數一次塊。 */
+  readonly sizes: readonly number[];
   /** 全部的筆數。 */
   readonly size: number;
 }
@@ -196,7 +198,7 @@ export function initialTrajectory(): TrajectoryState {
     digests: [],
     omitted: 0,
     total: 0,
-    owners: { chunks: [], size: 0 },
+    owners: { chunks: [], sizes: [], size: 0 },
     system: null,
     header: null,
     model: null,
@@ -464,10 +466,10 @@ function ownerChunk(
   return chunk;
 }
 
-/** 工具表：`key` 在哪一塊，新的塊先找；沒有回 -1。 */
+/** 工具表：`key` 在哪一塊，新的塊先找；沒有回 -1。值只有數字與 `null`，所以 `undefined` 就是沒有這個鍵。 */
 function ownerChunkAt(chunks: OwnerTable['chunks'], key: string): number {
   for (let at = chunks.length - 1; at >= 0; at -= 1) {
-    if (Object.hasOwn(chunks[at]!, key)) return at;
+    if (chunks[at]![key] !== undefined) return at;
   }
   return -1;
 }
@@ -479,27 +481,37 @@ function ownerOf(owners: OwnerTable, callId: string): number | null | undefined 
   return at < 0 ? undefined : owners.chunks[at]![key];
 }
 
-/** 工具表：第 `at` 塊與下一塊裝得下一塊就併起來。`chunks` 是呼叫端自己的副本。 */
-function mergeOwnerChunks(chunks: Readonly<Record<string, number | null>>[], at: number): void {
-  const left = chunks[at];
-  const right = chunks[at + 1];
-  if (left === undefined || right === undefined) return;
-  if (Object.keys(left).length + Object.keys(right).length > OWNERS_CHUNK) return;
-  chunks.splice(at, 2, ownerChunk(left, right));
+/** 呼叫端自己的塊清單與筆數清單副本，兩者一一對應。 */
+interface OwnerDraft {
+  readonly chunks: Readonly<Record<string, number | null>>[];
+  readonly sizes: number[];
 }
 
-/** 工具表：從 `chunks` 的第 `at` 塊拿掉這些鍵，空了就連塊拿掉，再跟前後的塊併。`chunks` 是呼叫端自己的副本。 */
-function dropOwnerKeys(
-  chunks: Readonly<Record<string, number | null>>[],
-  at: number,
-  keys: readonly string[],
-): void {
-  const next = ownerChunk(chunks[at]!);
+/** 工具表：第 `at` 塊與下一塊裝得下一塊就併起來。 */
+function mergeOwnerChunks(draft: OwnerDraft, at: number): void {
+  const left = draft.chunks[at];
+  const right = draft.chunks[at + 1];
+  if (left === undefined || right === undefined) return;
+  const merged = draft.sizes[at]! + draft.sizes[at + 1]!;
+  if (merged > OWNERS_CHUNK) return;
+  draft.chunks.splice(at, 2, ownerChunk(left, right));
+  draft.sizes.splice(at, 2, merged);
+}
+
+/** 工具表：第 `at` 塊換成拿掉 `keys` 之後的副本，空了就連塊拿掉，再跟前後的塊併。 */
+function dropOwnerKeys(draft: OwnerDraft, at: number, keys: readonly string[]): void {
+  const next = ownerChunk(draft.chunks[at]!);
   for (const key of keys) delete next[key];
-  if (Object.keys(next).length === 0) chunks.splice(at, 1);
-  else chunks[at] = next;
-  mergeOwnerChunks(chunks, at);
-  mergeOwnerChunks(chunks, at - 1);
+  const kept = draft.sizes[at]! - keys.length;
+  if (kept === 0) {
+    draft.chunks.splice(at, 1);
+    draft.sizes.splice(at, 1);
+  } else {
+    draft.chunks[at] = next;
+    draft.sizes[at] = kept;
+  }
+  mergeOwnerChunks(draft, at);
+  mergeOwnerChunks(draft, at - 1);
 }
 
 /**
@@ -509,7 +521,8 @@ function dropOwnerKeys(
  */
 function noteOwners(owners: OwnerTable, ids: readonly string[], owner: number | null): OwnerTable {
   if (ids.length === 0) return owners;
-  const chunks = [...owners.chunks];
+  const draft: OwnerDraft = { chunks: [...owners.chunks], sizes: [...owners.sizes] };
+  const { chunks, sizes } = draft;
   let size = owners.size;
   // 這一次呼叫自己建的最後一塊：還沒交出去，接著記的直接寫進去，不必每筆再拷一次。
   let fresh: Record<string, number | null> | undefined;
@@ -518,26 +531,30 @@ function noteOwners(owners: OwnerTable, ids: readonly string[], owner: number | 
     // 先刪再放：同一個 id 重新出現要排到最新。
     const at = ownerChunkAt(chunks, key);
     if (at >= 0) {
-      dropOwnerKeys(chunks, at, [key]);
+      dropOwnerKeys(draft, at, [key]);
       size -= 1;
     }
-    const last = chunks.at(-1);
-    if (last === undefined || Object.keys(last).length >= OWNERS_CHUNK) {
+    const last = chunks.length - 1;
+    if (last < 0 || sizes[last]! >= OWNERS_CHUNK) {
       fresh = ownerChunk({ [key]: owner });
       chunks.push(fresh);
-    } else if (last === fresh) fresh[key] = owner;
-    else {
-      fresh = ownerChunk(last, { [key]: owner });
-      chunks[chunks.length - 1] = fresh;
+      sizes.push(1);
+    } else {
+      if (chunks[last] !== fresh) {
+        fresh = ownerChunk(chunks[last]!);
+        chunks[last] = fresh;
+      }
+      fresh![key] = owner;
+      sizes[last] = sizes[last]! + 1;
     }
     size += 1;
   }
   while (size > OWNERS_CAP) {
     const oldest = Object.keys(chunks[0]!).slice(0, size - OWNERS_CAP);
-    dropOwnerKeys(chunks, 0, oldest);
+    dropOwnerKeys(draft, 0, oldest);
     size -= oldest.length;
   }
-  return { chunks, size };
+  return { chunks, sizes, size };
 }
 
 // ── 工具 ────────────────────────────────────────────────────────────────────────────

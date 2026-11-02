@@ -185,9 +185,13 @@ const ZERO_NUMBERS = Object.freeze(
 );
 const EMPTY: Sp = Object.freeze({ n: ZERO_NUMBERS, tools: [], models: [] });
 
+/** 段的數字各加上 `delta`。只走 `delta` 帶的鍵：多數呼叫只動兩三格，不必每次掃完 {@link NUMBERS}。 */
 function bump(sp: Sp, delta: Partial<Record<NumberKey, number>>): Sp {
   const n: Record<NumberKey, number> = { ...sp.n };
-  for (const key of NUMBERS) n[key] += delta[key] ?? 0;
+  for (const key in delta) {
+    if (!Object.hasOwn(ZERO_NUMBERS, key)) continue;
+    n[key as NumberKey] += delta[key as NumberKey] ?? 0;
+  }
   return { ...sp, n };
 }
 
