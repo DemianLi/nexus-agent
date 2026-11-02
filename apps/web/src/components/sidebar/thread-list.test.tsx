@@ -7,6 +7,8 @@ import { CLEAR_SEARCH_LABEL, ThreadList } from '@/components/sidebar/thread-list
 import { SidebarProvider } from '@/components/ui/sidebar';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { SEARCH_DEBOUNCE_MS } from '@/lib/thread-search';
+import { ROW_STATUS_TEXT } from '@/lib/thread-status';
+import type { RowStatus } from '@/lib/thread-status';
 import type { ThreadManagement } from '@/lib/thread-management';
 import { axeViolations } from '@/test/axe';
 
@@ -541,5 +543,73 @@ describe('釘選、封存、改名（#633）', () => {
     expect(await axeViolations(document.body)).toEqual([]);
     // 選單住在 portal 裡、不在側欄的地標內（正式環境也一樣）：`region` 是整頁規則，單掃選單本身。
     expect(await axeViolations(openMenu('幫我改登入頁'))).toEqual([]);
+  });
+});
+
+describe('列上的狀態（#1696 S1-C）', () => {
+  const STATUSES: readonly [string, RowStatus][] = [
+    ['等核准的', 'approval'],
+    ['月報草稿', 'plan-review'],
+    ['等回答的', 'question'],
+    ['在跑的', 'running'],
+    ['跑完沒看的', 'completed'],
+    ['沒事的', undefined],
+  ];
+  const TIME = new Date(NOW).toLocaleString('zh-TW', { dateStyle: 'short', timeStyle: 'short' });
+
+  function renderStatuses() {
+    const items = STATUSES.map(([title], index) => thread(`s${index}`, title));
+    render(
+      <SidebarProvider>
+        <nav aria-label="以前的會話">
+          <ThreadList
+            directory={{
+              ...DIRECTORY,
+              listing: { kind: 'ok', result: { items, unreadable: 0 } },
+              statusOf: (item) => STATUSES[Number(item.threadId.slice(1))]![1],
+            }}
+            currentThreadId="now"
+            currentTitle={null}
+            onPick={() => undefined}
+          />
+        </nav>
+      </SidebarProvider>,
+    );
+  }
+  const rowOf = (title: string) => screen.getByRole('button', { name: new RegExp(`^${title}`) });
+
+  it('每種狀態都寫出字，報讀只唸一次；在跑與跑完沒看的字不一樣', () => {
+    renderStatuses();
+    for (const [title, status] of STATUSES) {
+      const row = rowOf(title);
+      const status_ = within(row).queryByTestId('thread-status');
+      if (status === undefined) {
+        expect(status_).toBeNull();
+        continue;
+      }
+      const { label } = ROW_STATUS_TEXT[status];
+      expect(status_!.textContent).toBe(label);
+      expect(status_!.getAttribute('data-status')).toBe(status);
+      // 列的報讀名稱來自列上的字：狀態字只出現一次，沒有另外藏一句給報讀器。
+      expect(row.textContent!.split(label)).toHaveLength(2);
+      expect(row.querySelector('.sr-only')).toBeNull();
+    }
+    expect(within(rowOf('在跑的')).getByTestId('thread-status').textContent).not.toBe(
+      within(rowOf('跑完沒看的')).getByTestId('thread-status').textContent,
+    );
+  });
+
+  it('等人回答的三種不帶時間、標題加粗；在跑、跑完沒看、沒事的帶時間、標題不加粗', () => {
+    renderStatuses();
+    for (const [title, status] of STATUSES) {
+      const row = rowOf(title);
+      const waiting = status !== undefined && ROW_STATUS_TEXT[status].waiting;
+      expect(row.textContent!.includes(TIME)).toBe(!waiting);
+      expect(within(row).getByTestId('thread-title-text').className.includes('font-medium')).toBe(
+        waiting,
+      );
+    }
+    expect(rowOf('在跑的').textContent).toBe(`在跑的執行中 · ${TIME}`);
+    expect(rowOf('等核准的').textContent).toBe('等核准的等待核准');
   });
 });

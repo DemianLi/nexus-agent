@@ -48,7 +48,9 @@ async function presentThenRead(deliverableFilesPatch: string): Promise<Deliverab
   const dir = await mkdtemp(join(tmpdir(), 'nexus-scripted-provider-'));
   roots.push(dir);
   await writeFile(join(dir, 'big.md'), BIG_LINE, 'utf8');
-  const patch = join(dir, 'scripted.patch.yml');
+  const patchDir = await mkdtemp(join(tmpdir(), 'nexus-scripted-patch-'));
+  roots.push(patchDir);
+  const patch = join(patchDir, 'scripted.patch.yml');
   await writeFile(
     patch,
     `- insert:

@@ -1,6 +1,7 @@
 import type {
   ConversationState,
   RequestSnapshotsView,
+  TrajectoryTurn,
   TrajectoryTurnOutcome,
   TrajectoryView,
 } from '@nexus/wire';
@@ -15,6 +16,7 @@ import {
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import {
   SUBAGENT_CALLS_NO_DATA_TEXT,
@@ -22,6 +24,7 @@ import {
   SUBAGENT_CALLS_RELOAD_LABEL,
   SUBAGENT_CALLS_TITLE,
 } from '@/components/trace/subagent';
+import { TRACE_PULL_LABEL, TRACE_PULL_RETRY_LABEL } from '@/components/trace/pull-control';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';
@@ -40,6 +43,8 @@ import {
 
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
+  // jsdom 沒有 `scrollIntoView`：拉完交焦點前會先捲過去（#2009），不補就丟錯。
+  Element.prototype.scrollIntoView = () => {};
 });
 
 afterEach(() => {
@@ -58,10 +63,15 @@ const link = (runId: string) => ({
   catalogSeq: 7,
 });
 
-/** root：一輪、一次呼叫、一顆派出子代理的工具（`subagent` 這顆）。 */
+/** root：一輪、一次呼叫、一顆派出子代理的工具（`subagent` 這顆）；`laterTurns` 接在這一輪之後。 */
 function scenario(
   runId: string | undefined,
-  child?: { trajectory?: TrajectoryView; snapshots?: RequestSnapshotsView },
+  child?: {
+    trajectory?: TrajectoryView;
+    snapshots?: RequestSnapshotsView;
+    laterTurns?: readonly TrajectoryTurn[];
+    parentTurn?: Partial<TrajectoryTurn>;
+  },
 ) {
   const script = new Script();
   let state: ConversationState = reduceAll(emptyConversation(), [
@@ -77,6 +87,7 @@ function scenario(
     script,
     view([
       turn(0, {
+        ...child?.parentTurn,
         calls: [
           call(5, {
             tools: [
@@ -88,6 +99,7 @@ function scenario(
           }),
         ],
       }),
+      ...(child?.laterTurns ?? []),
     ]),
   );
   if (runId !== undefined && child?.trajectory !== undefined) {
@@ -148,6 +160,16 @@ function mount(state: ConversationState, client?: ReturnType<typeof fakeClient>[
     >
       <RightSidebarToggle />
     </WithRightSidebar>,
+  );
+}
+
+/** 成本分頁「看這一輪」按下去的事：用探針直接叫 `revealTurn`。 */
+function RevealProbe({ seq }: { seq: number }) {
+  const api = useRightSidebar();
+  return (
+    <button type="button" onClick={() => api?.revealTurn(seq)}>
+      看這一輪
+    </button>
   );
 }
 
@@ -214,6 +236,44 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     expect(block.textContent).not.toContain('SYS-CANARY');
   });
 
+  it('一輪收成 SG StepGroup 的一行計數，預設打開；收起來呼叫列就不在（#1690 T7）', async () => {
+    mount(scenario('bg-1', { trajectory: view([childTurn(1)]) }));
+    const block = await expandSubagent();
+    const summary = within(block).getByRole('button', { name: '2 次呼叫，1 個工具' });
+    expect(summary.getAttribute('aria-expanded')).toBe('true');
+    expect(within(block).getAllByTestId('trace-subagent-call')).toHaveLength(2);
+    fireEvent.click(summary);
+    expect(within(block).queryAllByTestId('trace-subagent-call')).toHaveLength(0);
+  });
+
+  it('計數帶失敗與執行中；只有一步的輪不包群組，直接畫那一列', async () => {
+    mount(
+      scenario('bg-1', {
+        trajectory: view([
+          turn(1, {
+            seq: 10,
+            calls: [
+              call(101, {
+                tools: [
+                  tool('k1', { name: 'grep', status: 'error' }),
+                  tool('k2', { name: 'ls', status: 'running' }),
+                ],
+              }),
+            ],
+          }),
+          turn(2, { seq: 20, calls: [call(201)] }),
+        ]),
+      }),
+    );
+    const block = await expandSubagent();
+    const [first, second] = within(block).getAllByTestId('trace-subagent-turn');
+    expect(
+      within(first!).getByRole('button', { name: '1 次呼叫，2 個工具（1 個失敗），執行中' }),
+    ).toBeTruthy();
+    expect(second!.querySelector('[data-slot="step-group"]')).toBeNull();
+    expect(within(second!).getAllByTestId('trace-subagent-call')).toHaveLength(1);
+  });
+
   it('子代理自己的快照：呼叫列的系統提示詞與設定讀它自己的 request-snapshots', async () => {
     const snapshots: RequestSnapshotsView = {
       system: [{ seq: 8, time: 1, reason: 'initial', text: '子代理系統提示', chars: 7 }],
@@ -257,6 +317,87 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     expect(within(block).getAllByTestId('trace-subagent-turn')).toHaveLength(2);
   });
 
+  describe('前景子代理的呼叫被時鐘切斷（#2240）', () => {
+    const clock = { kind: 'hook', reason: 'turn-timeout' } as const;
+    const foreground = view([
+      turn(0, { seq: 5, kind: 'run', end: undefined, calls: [call(6, { outcome: 'aborted' })] }),
+    ]);
+
+    async function outcomeShown(parent: Parameters<typeof scenario>[1]) {
+      mount(scenario('tools:u1', parent));
+      const block = await expandSubagent();
+      const label = within(block).getByText(/已中止/);
+      return [label.textContent, label.className.includes('text-destructive')];
+    }
+
+    it('父輪時鐘到點：講時間到，不用紅字', async () => {
+      expect(
+        await outcomeShown({
+          trajectory: foreground,
+          parentTurn: { end: 'aborted', endCause: clock },
+        }),
+      ).toEqual(['超過時間上限，已中止', false]);
+    });
+
+    it('時鐘切在核准之後的續接段：看整組最後一段', async () => {
+      expect(
+        await outcomeShown({
+          trajectory: foreground,
+          parentTurn: { end: 'interrupted' },
+          laterTurns: [turn(1, { seq: 40, logical: false, end: 'aborted', endCause: clock })],
+        }),
+      ).toEqual(['超過時間上限，已中止', false]);
+    });
+
+    it.each([
+      ['人按的', { end: 'aborted', endCause: { kind: 'user' } }],
+      ['別的 hook', { end: 'aborted', endCause: { kind: 'hook', reason: 'some-other-hook' } }],
+      ['沒帶原因', { end: 'aborted' }],
+    ] as const)('父輪是%s：維持「已中止」', async (_name, parentTurn) => {
+      expect(await outcomeShown({ trajectory: foreground, parentTurn })).toEqual(['已中止', true]);
+    });
+
+    it('背景子代理不借父輪的原因：它自己沒帶就維持「已中止」', async () => {
+      expect(
+        await outcomeShown({
+          trajectory: view([
+            turn(0, { seq: 5, end: 'aborted', calls: [call(6, { outcome: 'aborted' })] }),
+          ]),
+          parentTurn: { end: 'aborted', endCause: clock },
+        }),
+      ).toEqual(['已中止', true]);
+    });
+
+    it('拉回來的那一段也一樣', async () => {
+      const { client, waiting } = fakeClient();
+      mount(
+        scenario('tools:u1', {
+          trajectory: view([], { digests: [digest(0, { seq: 5, kind: 'run', end: undefined })] }),
+          parentTurn: { end: 'aborted', endCause: clock },
+        }),
+        client,
+      );
+      const block = await expandSubagent();
+      await act(async () => {
+        waiting[0]!({
+          kind: 'ok',
+          result: {
+            turns: [
+              turn(0, {
+                seq: 5,
+                kind: 'run',
+                end: undefined,
+                calls: [call(6, { outcome: 'aborted' })],
+              }),
+            ],
+            seq: 9,
+          },
+        });
+      });
+      expect(within(block).getByText(/已中止/).textContent).toBe('超過時間上限，已中止');
+    });
+  });
+
   it('前景子代理整段只有一份摘要：展開就自己拉，拉回來的是「一段執行」，可重新載入', async () => {
     const { client, queries, waiting } = fakeClient();
     mount(
@@ -286,6 +427,97 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     ]);
   });
 
+  describe('子代理被中止的工具不寫成失敗（#2247）', () => {
+    const tools = [
+      tool('a', { status: 'error', code: 'ABORTED' }),
+      tool('b', { status: 'error', code: 'ABORTED_BEFORE_DISPATCH' }),
+      tool('c', { status: 'error', code: 'FS_NO_SPACE' }),
+    ];
+
+    it('各顆的字與顏色，標頭與收合列只數工具自己失敗的', async () => {
+      mount(
+        scenario('tools:u1', {
+          trajectory: view([
+            turn(0, {
+              seq: 5,
+              toolErrors: 3,
+              calls: [call(6, { tools }), call(7)],
+            }),
+          ]),
+        }),
+      );
+      const block = await expandSubagent();
+      const shown = within(block)
+        .getAllByTestId('trace-subagent-tool')
+        .map((row) => {
+          const status = row.querySelector('span')!;
+          return [status.textContent, status.className.includes('text-destructive')];
+        });
+      expect(shown).toEqual([
+        ['已停止', false],
+        ['沒有執行', false],
+        ['失敗', true],
+      ]);
+      const heading = block.querySelector('[data-subagent-turn-head]')!;
+      expect(heading.textContent).toContain('3 個工具（1 個失敗）');
+      expect(block.textContent?.split('（1 個失敗）')).toHaveLength(3);
+      expect(block.textContent).not.toContain('3 個失敗');
+    });
+  });
+
+  describe('重新載入的焦點（#2135）', () => {
+    async function pulledBlock() {
+      const { client, waiting } = fakeClient();
+      mount(
+        scenario('bg-1', {
+          trajectory: view([childTurn(3)], { digests: [digest(1, { seq: 10 })] }),
+        }),
+        client,
+      );
+      const block = await expandSubagent();
+      fireEvent.click(within(block).getByRole('button', { name: /拉|載入|看/ }));
+      await act(async () => {
+        waiting[0]!({ kind: 'ok', result: { turns: [childTurn(1)], seq: 99 } });
+      });
+      const button = within(block).getByRole('button', { name: SUBAGENT_CALLS_RELOAD_LABEL });
+      button.focus();
+      fireEvent.click(button);
+      return { block, button, waiting };
+    }
+
+    it('讀取中焦點留在鈕上，看得見的字就是報讀名稱，再按不會多拉一次', async () => {
+      const { block, button, waiting } = await pulledBlock();
+      expect(button.isConnected).toBe(true);
+      expect(document.activeElement).toBe(button);
+      expect(button.getAttribute('aria-disabled')).toBe('true');
+      expect(within(block).getByRole('button', { name: SUBAGENT_CALLS_RELOAD_LABEL })).toBe(button);
+      expect(button.textContent).toBe(SUBAGENT_CALLS_RELOAD_LABEL);
+      fireEvent.click(button);
+      expect(waiting).toHaveLength(2);
+    });
+
+    it('讀完落在拉回來那一輪的標題', async () => {
+      const { block, waiting } = await pulledBlock();
+      await act(async () => {
+        waiting[1]!({ kind: 'ok', result: { turns: [childTurn(1)], seq: 99 } });
+      });
+      const pulled = within(block).getAllByTestId('trace-subagent-turn')[0]!;
+      expect(document.activeElement).toBe(pulled.querySelector('[data-subagent-turn-head]'));
+    });
+
+    it('失敗落在重試，拉回來過的內容留著', async () => {
+      const { block, button, waiting } = await pulledBlock();
+      await act(async () => {
+        waiting[1]!({ kind: 'rejected', code: 'SUBAGENT_NOT_FOUND', message: '找不到這個子代理' });
+      });
+      const retry = within(block).getByRole('button', { name: TRACE_PULL_RETRY_LABEL });
+      expect(retry).toBe(button);
+      expect(document.activeElement).toBe(retry);
+      expect(block.textContent).toContain('找不到這個子代理');
+      expect(within(block).getAllByTestId('trace-subagent-turn')).toHaveLength(2);
+    });
+  });
+
   it('拉取失敗：顯示伺服器的原因，可重試', async () => {
     const { client, waiting } = fakeClient();
     mount(
@@ -300,6 +532,111 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
       waiting[0]!({ kind: 'rejected', code: 'SUBAGENT_NOT_FOUND', message: '找不到這個子代理' });
     });
     expect(block.textContent).toContain('找不到這個子代理');
+  });
+
+  it('鍵盤按「載入這一輪的細節」（#2009）：讀取中焦點留在同一顆鈕上、再按不會再拉；拉回來落在拉回來那一輪的標題', async () => {
+    const { client, queries, waiting } = fakeClient();
+    mount(
+      scenario('bg-1', {
+        trajectory: view([childTurn(3)], { digests: [digest(1, { seq: 10 })] }),
+      }),
+      client,
+    );
+    const block = await expandSubagent();
+    const button = within(block).getByRole('button', { name: TRACE_PULL_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    expect(document.activeElement).toBe(button);
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    expect(button.textContent).toBe(TRACE_PULL_LABEL);
+    expect(within(block).getByRole('button', { name: TRACE_PULL_LABEL })).toBe(button);
+    fireEvent.click(button);
+    expect(queries).toHaveLength(1);
+    await act(async () => {
+      waiting[0]!({ kind: 'ok', result: { turns: [childTurn(1)], seq: 99 } });
+    });
+    const pulled = within(block).getAllByTestId('trace-subagent-turn')[0]!;
+    expect(pulled.getAttribute('data-seq')).toBe('10');
+    expect(document.activeElement).toBe(pulled.querySelector('[data-subagent-turn-head]'));
+  });
+
+  it('鍵盤按下去失敗（#2009）：焦點留在同一顆鈕上，它改成「重試」', async () => {
+    const { client, waiting } = fakeClient();
+    mount(
+      scenario('bg-1', {
+        trajectory: view([childTurn(3)], { digests: [digest(1, { seq: 10 })] }),
+      }),
+      client,
+    );
+    const block = await expandSubagent();
+    const button = within(block).getByRole('button', { name: TRACE_PULL_LABEL });
+    button.focus();
+    fireEvent.click(button);
+    await act(async () => {
+      waiting[0]!({ kind: 'rejected', code: 'SUBAGENT_NOT_FOUND', message: '找不到這個子代理' });
+    });
+    expect(within(block).getByRole('button', { name: TRACE_PULL_RETRY_LABEL })).toBe(button);
+    expect(document.activeElement).toBe(button);
+  });
+
+  it('前景子代理一展開就自己拉（#2009）：焦點停到讀取中的鈕上，拉回來就交到那一輪的標題', async () => {
+    const { client, waiting } = fakeClient();
+    mount(
+      scenario('tools:u1', {
+        trajectory: view([], { digests: [digest(0, { seq: 5, kind: 'run', end: undefined })] }),
+      }),
+      client,
+    );
+    const block = await expandSubagent();
+    const button = within(block).getByRole('button', { name: TRACE_PULL_LABEL });
+    expect(button.getAttribute('aria-disabled')).toBe('true');
+    button.focus();
+    await act(async () => {
+      waiting[0]!({
+        kind: 'ok',
+        result: {
+          turns: [turn(0, { seq: 5, kind: 'run', end: undefined, calls: [call(6)] })],
+          seq: 9,
+        },
+      });
+    });
+    expect(document.activeElement).toBe(
+      within(block).getByTestId('trace-subagent-turn').querySelector('[data-subagent-turn-head]'),
+    );
+  });
+
+  it('主對話與子代理有同樣 seq 的輪：「看這一輪」落在主對話那一份（#2136）', async () => {
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this);
+    };
+    localStorage.setItem(LAYOUT_KEY_PREFIX + 't', JSON.stringify(open));
+    render(
+      <WithRightSidebar
+        sources={{
+          conversation: createConversationStore(
+            scenario('bg-1', {
+              trajectory: view([childTurn(3)]),
+              laterTurns: [turn(1, { seq: 30, calls: [call(40)] })],
+            }),
+          ),
+        }}
+      >
+        <RightSidebarToggle />
+        <RevealProbe seq={30} />
+      </WithRightSidebar>,
+    );
+    await expandSubagent();
+    const nested = screen.getByTestId('trace-subagent-turn');
+    expect(nested.getAttribute('data-seq')).toBe('30');
+    fireEvent.click(screen.getByRole('button', { name: '看這一輪' }));
+    await flush();
+    const main = document.querySelector<HTMLElement>(
+      'section[data-testid="trace-turn"][data-seq="30"]',
+    )!;
+    expect(document.activeElement).toBe(main.querySelector('[data-reveal-target]'));
+    expect(scrolled).toContain(main);
+    expect(scrolled).not.toContain(nested);
   });
 
   it('分頁關掉（卸載）時，還在飛的拉取被取消', async () => {

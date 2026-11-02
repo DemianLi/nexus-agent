@@ -16,7 +16,7 @@ import {
   offloadedImagesOf,
   replayConversation,
 } from '@nexus/core';
-import type { AttachmentRef, PluginEntry, SessionEvent } from '@nexus/core';
+import type { AttachmentRef, ModelContextLimits, PluginEntry, SessionEvent } from '@nexus/core';
 import { IMAGE_OFFLOAD, emptyConversation, reduceAll } from '@nexus/wire';
 import type { Event } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -74,6 +74,10 @@ async function assemble(
   maxImages: number | undefined,
   onPoke?: () => void,
   seed?: readonly SessionEvent[],
+  limitsOf: () => ModelContextLimits | undefined = () => ({
+    contextWindow: 32_768,
+    maxOutputTokens: 4096,
+  }),
 ) {
   const model = new ScriptedChatModel({
     turns,
@@ -87,7 +91,7 @@ async function assemble(
     plugins: onPoke === undefined ? [] : [pokePlugin(onPoke)],
     ...(onPoke === undefined ? {} : { stepInbox: true }),
     // 有型錄（`modelLimits`）才掛這兩顆 middleware；額度本身在腳本模型上，不在這裡。
-    modelLimits: () => ({ contextWindow: 32_768, maxOutputTokens: 4096 }),
+    modelLimits: limitsOf,
   });
   const pump = new ThreadPump(
     built.agent as unknown as PumpAgent,
@@ -413,5 +417,32 @@ describe('重啟續接（日誌帶回來、對話照日誌灌回）', () => {
         .map((m) => imageFlags(m))
         .filter((flags) => flags.length > 0),
     ).toEqual([[true], [true], [false]]);
+  }, 20000);
+
+  it('續接後換到型錄裡查不到的模型（#1567 N0780）：記過的省略照樣套上，不會把省略過的圖又送出去', async () => {
+    const before = await assemble([{ content: '一' }, { content: '二' }], 1);
+    await before.pump.submit({ kind: 'message', text: '一', id: 'm1', attachments: [FIRST] });
+    await before.pump.whenIdle();
+    await before.pump.submit({ kind: 'message', text: '二', id: 'm2', attachments: [SECOND] });
+    await before.pump.whenIdle();
+    const events = [...before.pump.sessionLog.events];
+    expect(offloadEvents(events)).toHaveLength(1);
+
+    const after = await assemble(
+      [{ content: '三' }],
+      undefined,
+      undefined,
+      events,
+      () => undefined,
+    );
+    await restoreConversation(after.built.agent as never, 'pump-image-offload', events);
+    await after.pump.submit({ kind: 'message', text: '沒有新圖', id: 'm3' });
+    await after.pump.whenIdle();
+    expect(
+      humans(after.model.prompts[0]!)
+        .map((m) => imageFlags(m))
+        .filter((flags) => flags.length > 0),
+    ).toEqual([[true], [false]]);
+    expect(offloadEvents(after.pump.sessionLog.events)).toHaveLength(1);
   }, 20000);
 });

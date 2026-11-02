@@ -5,7 +5,11 @@ import {
   streamPath,
   THREAD_AT_CAPACITY,
   THREAD_HISTORY_TOO_DEEP,
+  THREAD_LOG_BUSY,
+  THREAD_LOG_TOO_LARGE,
+  THREAD_ROOT_MISMATCH,
   THREAD_IS_SUBAGENT,
+  THREAD_WRITER_HELD,
   WireProtocolError,
   WireRejectedError,
 } from '@nexus/wire';
@@ -13,11 +17,16 @@ import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useConversation } from '@/hooks/use-conversation';
-import { RECONNECT_MAX_MS, RECOVERED_NOTICE_MS } from '@/lib/reconnect';
+import { LIVEZ_PROBE_TIMEOUT_MS } from '@/lib/livez-probe';
+import { RECONNECT_MAX_MS, RECOVERED_NOTICE_MS, SLOW_CONNECT_MS } from '@/lib/reconnect';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_PROTOCOL_ERROR_TEXT } from '@/lib/thread-protocol-error';
+import { THREAD_LOG_BUSY_TEXT, THREAD_LOG_TOO_LARGE_TEXT } from '@/lib/thread-log-budget';
+import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
+import { THREAD_ROOT_MISMATCH_TEXT } from '@/lib/thread-root-mismatch';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
+import { THREAD_WRITER_HELD_TEXT } from '@/lib/thread-writer-held';
 
 /**
  * 斷線與重接（#593）。退避公式本身驗在 `lib/reconnect.test.ts`；這裡驗 hook 真的在斷線時翻回沒連上、照退避排
@@ -158,6 +167,140 @@ describe.each([false, true])('useConversation 斷線與重接的主線（StrictM
   });
 });
 
+describe('useConversation 連線一直等不到結果（#2250）', () => {
+  const opened = {
+    kind: 'ok',
+    result: { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false },
+  };
+  const hanging = () => {
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => (release = resolve));
+    return { gate, release: () => release() };
+  };
+  /** 歷史一直不回來的 client，`release` 放行。 */
+  const slowHistory = () => {
+    const { gate, release } = hanging();
+    const { client } = scriptedClient({
+      threadHistory: async () => {
+        await gate;
+        return opened;
+      },
+    });
+    return { client, release };
+  };
+  /** `/livez` 排不上：收到中止才拒絕。 */
+  const stuckProbe = () => {
+    const doFetch = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal!.addEventListener('abort', () => reject(new Error('aborted')));
+        }),
+    );
+    vi.stubGlobal('fetch', doFetch);
+    return doFetch;
+  };
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('`/livez` 也排不上：到點加探測逾時才翻，回來就收', async () => {
+    const doFetch = stuckProbe();
+    const { client, release } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS - 1);
+    expect(doFetch).not.toHaveBeenCalled();
+    await tick(LIVEZ_PROBE_TIMEOUT_MS);
+    expect(doFetch).toHaveBeenCalledTimes(1);
+    expect(result.current.slowConnect).toBe(false);
+    await tick(1);
+    expect(result.current.slowConnect).toBe(true);
+    release();
+    await tick();
+    expect(result.current.slowConnect).toBe(false);
+    expect(result.current.connected).toBe(true);
+  });
+
+  it('開下行本身一直不回來：一樣會翻', async () => {
+    stuckProbe();
+    const { client } = scriptedClient({ openEvents: () => new Promise(() => {}) });
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS + LIVEZ_PROBE_TIMEOUT_MS);
+    expect(result.current.slowConnect).toBe(true);
+  });
+
+  it('`/livez` 回來了（歷史只是慢）：不翻', async () => {
+    vi.stubGlobal('fetch', async () => new Response('ok'));
+    const { client } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS + LIVEZ_PROBE_TIMEOUT_MS * 3);
+    expect(result.current.slowConnect).toBe(false);
+  });
+
+  it('`/livez` 打出去直接失敗：不翻', async () => {
+    vi.stubGlobal('fetch', async () => {
+      throw new TypeError('Failed to fetch');
+    });
+    const { client } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS + LIVEZ_PROBE_TIMEOUT_MS * 3);
+    expect(result.current.slowConnect).toBe(false);
+  });
+
+  it('探測到一半卸載：請求收掉，不留著占位', async () => {
+    const doFetch = stuckProbe();
+    const { client } = slowHistory();
+    const { unmount } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS);
+    expect(doFetch.mock.calls[0]![1].signal!.aborted).toBe(false);
+    unmount();
+    expect(doFetch.mock.calls[0]![1].signal!.aborted).toBe(true);
+  });
+
+  it('探測到一半歷史回來：請求收掉，不翻', async () => {
+    const doFetch = stuckProbe();
+    const { client, release } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS);
+    release();
+    await tick();
+    expect(doFetch.mock.calls[0]![1].signal!.aborted).toBe(true);
+    await tick(LIVEZ_PROBE_TIMEOUT_MS);
+    expect(result.current.slowConnect).toBe(false);
+  });
+
+  it('探測逾時的結果晚於歷史回來：不翻', async () => {
+    vi.stubGlobal(
+      'fetch',
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal!.addEventListener('abort', () => {
+            setTimeout(() => reject(new Error('aborted')), 10);
+          });
+        }),
+    );
+    const { client, release } = slowHistory();
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick(SLOW_CONNECT_MS + LIVEZ_PROBE_TIMEOUT_MS);
+    release();
+    await tick(10);
+    expect(result.current.connected).toBe(true);
+    expect(result.current.slowConnect).toBe(false);
+  });
+
+  it('伺服器掛了（開線很快失敗、一直重試）：不探測，也不翻', async () => {
+    // 亂數取大：退避等得比 `SLOW_CONNECT_MS` 久，等退避的時間不能算成等連線。
+    vi.spyOn(Math, 'random').mockReturnValue(0.99);
+    const doFetch = stuckProbe();
+    const { client, setFailOpen } = scriptedClient();
+    setFailOpen('Failed to fetch');
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    for (let elapsed = 0; elapsed < RECONNECT_MAX_MS * 3; elapsed += 500) {
+      await tick(500);
+      expect(result.current.slowConnect).toBe(false);
+    }
+    expect(doFetch).not.toHaveBeenCalled();
+    expect(result.current.reconnecting).toBeDefined();
+  });
+});
+
 /** serve 拒收下行時 `openEvents` 拋的型別錯誤（#1481）：message 用 serve 的原文，測試要看它沒上畫面。 */
 function rejected(code: string, serverMessage: string) {
   const body = JSON.stringify({ type: 'error', id: null, error: code, message: serverMessage });
@@ -214,6 +357,84 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
     expect(openEvents).toHaveBeenCalledOnce();
     expect(result.current.refusal).toBe(THREAD_HISTORY_TOO_DEEP_TEXT);
   });
+
+  it('紀錄太大（#2203）：永久的，講那一句、不排重試，立刻重連與 online 也不再開', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_LOG_TOO_LARGE, '會話日誌 115 MiB 超過額度 109 MiB'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_LOG_TOO_LARGE_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+
+    await tick(60_000);
+    act(() => result.current.reconnectNow());
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('開在別的 home 或工作區（#2222）：永久的，講那一句、不排重試，立刻重連與 online 也不再開', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_ROOT_MISMATCH, '會話 "t" 的檔案在另一個 harness home 底下'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_ROOT_MISMATCH_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+
+    await tick(60_000);
+    act(() => result.current.reconnectNow());
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('額度被佔滿（#2203）：暫時的，照退避重試，講那一句、不接 server 的原文', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_LOG_BUSY, '額度已佔 100 MiB，上限 109 MiB'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_LOG_BUSY_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
+
+    await tick(60_000);
+    expect(openEvents.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it('被別的寫入者握著（#2214）：暫時的，照退避重試，講那一句、不接 server 的原文', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_WRITER_HELD, '會話 "t" 正由另一個寫入者握著'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_WRITER_HELD_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
+
+    await tick(60_000);
+    expect(openEvents.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it.each(['unknown_error', 'invalid_argument', 'not_supported', 'code_from_a_newer_server'])(
+    '碼沒有專用文案（#2222，%s）：照退避重試，講固定的那一句，不接 server 的原文',
+    async (code) => {
+      const { client, openEvents, setFailOpen } = scriptedClient();
+      setFailOpen(rejected(code, '這條 thread 建不起來：/srv/home-a/sessions/t 不在私有根底下'));
+      const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+      await tick();
+      expect(result.current.refusal).toBe(THREAD_REFUSED_TEXT);
+      expect(result.current.connectionError).toBeUndefined();
+      expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
+
+      await tick(60_000);
+      expect(openEvents.mock.calls.length).toBeGreaterThan(1);
+    },
+  );
 
   it('對照組：thread 數滿了是暫時的，照退避重試，refusal 是另一句', async () => {
     const { client, openEvents, setFailOpen } = scriptedClient();

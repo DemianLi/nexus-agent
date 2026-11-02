@@ -116,7 +116,7 @@ describe('submit_record 被 fence 擋下', () => {
   }, 20000);
 
   it('對照：同一個 read-only、同一顆工具的另一種失敗（欄名對不上表頭）是錯誤但**不帶碼**', async () => {
-    // 讀不歸 fence 管，所以表頭讀得到；拒絕發生在寫之前，fence 一次都沒被問到。
+    // 表頭在根內，讀得到；拒絕發生在寫之前，寫入那道 fence 一次都沒被問到。
     await writeFile(join(root, 'visitors.csv'), '甲,乙\n', 'utf8');
     const { results, message } = await submitAndApprove('read-only');
     expect(results).toEqual([{ callId: expect.any(String), isError: true }]);

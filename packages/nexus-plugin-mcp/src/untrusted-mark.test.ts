@@ -14,18 +14,17 @@ describe('markUntrusted', () => {
     expect(markUntrusted('查到兩筆。')).toBe(`${EXTERNAL_MCP_CONTENT_NOTICE}\n\n查到兩筆。`);
   });
 
-  it('多塊：最前面多一塊只有前綴的文字塊，其餘原樣、順序不變', () => {
+  it('多塊：前綴併進第一塊，塊數不變，其餘原樣、順序不變', () => {
     const blocks = [
       { type: 'text', text: '甲' },
       { type: 'text', text: '乙' },
     ];
     expect(markUntrusted(blocks)).toEqual([
-      { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
-      { type: 'text', text: '甲' },
+      { type: 'text', text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n甲` },
       { type: 'text', text: '乙' },
     ]);
     // 不改傳進來的那一份。
-    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toEqual({ type: 'text', text: '甲' });
   });
 
   it('非文字塊：先換成文字說明，再標；說明（連結的名稱與 URI 是 server 給的）也在前綴之後', () => {
@@ -35,8 +34,7 @@ describe('markUntrusted', () => {
     ];
     const projected = projectNonText(blocks) ?? [];
     expect(markUntrusted(projected)).toEqual([
-      { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
-      { type: 'text', text: '圖在下面。' },
+      { type: 'text', text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n圖在下面。` },
       { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
     ]);
   });

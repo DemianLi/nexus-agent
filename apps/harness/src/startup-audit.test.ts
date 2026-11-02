@@ -78,7 +78,7 @@ const BAD_BROWSER_SESSION = '- id: browser-session\n  config:\n    maxAgeDays: 0
 const BAD_TODO = "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n";
 
 describe('必掛的列掉了：兩個入口都起不來', () => {
-  it('名單上是 browser-session、system-prompt、background-subagents、permission-presets、goal-round-cap 與 turn-timeout，而且比的是條目 id', () => {
+  it('名單上是 browser-session、system-prompt、background-subagents、permission-presets、goal-round-cap、turn-timeout 與 session-reference，而且比的是條目 id', () => {
     expect([...REQUIRED_ENTRY_IDS]).toEqual([
       'browser-session',
       'system-prompt',
@@ -86,6 +86,7 @@ describe('必掛的列掉了：兩個入口都起不來', () => {
       'permission-presets',
       'goal-round-cap',
       'turn-timeout',
+      'session-reference',
     ]);
   });
 
@@ -506,5 +507,54 @@ describe('formatActivationError（#1560 N0053）', () => {
     );
     expect(text).toContain('成員一');
     expect(text).toContain('plain-string');
+  });
+});
+
+/**
+ * 跨會話引用的四個上限寫壞（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862 驗收 D）：dsh 在建構子裡越界就拋
+ * `SESSION_REFERENCE_INVALID_CONFIG`（`session-reference/src/index.ts:100-128`）。寫壞的列會掉，掉了之後值回到 schema 的預設，
+ * 其中比例是 dsh 的 0.2，靜靜拿掉出廠調低的 0.1（fail-open），所以這一列在必掛名單上，同 `goal-round-cap`、`turn-timeout`。
+ * **這一列也關不掉**（`PROTECTED_ENTRY_NAMES`）：`disabled: true` 只會回到同一個預設。
+ */
+describe('session-reference 寫壞：兩個入口都起不來；關不掉', () => {
+  it.each([
+    ['maxReferences', '4'],
+    ['referenceContextFraction', '1.5'],
+    ['candidateLimit', '0'],
+    ['maxReferenceBytes', '0'],
+    ['maxReferences', '0'],
+  ])(
+    '%s 寫成 %s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）與欄位',
+    async (field, raw) => {
+      const env = homeWith(`- id: session-reference\n  config:\n    ${field}: ${raw}\n`);
+
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(
+        /^ {2}session-reference（#settings\/session-reference）〔必掛〕設定驗不過：/mu,
+      );
+      expect(message).toContain(field);
+
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it('disabled: true：起動當場拋，指名這一列（關掉只會回到 dsh 的 0.2，讀起來卻像關掉引用）', async () => {
+    const env = homeWith('- id: session-reference\n  disabled: true\n');
+    const fromCli = await cli(env);
+    expect(fromCli.error).toBeInstanceOf(Error);
+    expect((fromCli.error as Error).message).toContain('#settings/session-reference');
+    expect((fromCli.error as Error).message).toContain('關不掉');
+  });
+
+  it('對照：改成合法的值，兩個入口都起得來', async () => {
+    const env = homeWith(
+      '- id: session-reference\n  config:\n    maxReferences: 2\n    candidateLimit: 5\n    referenceContextFraction: 0.3\n',
+    );
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
   });
 });

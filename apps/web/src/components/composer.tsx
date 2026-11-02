@@ -124,6 +124,7 @@ export function Composer({
   footerStart,
   agentMention,
   locked = false,
+  removalLocked = false,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -198,6 +199,11 @@ export function Composer({
    * 不能加、不能移除，貼上與拖放也不收；`@` 標記不能換也不能拿掉。送出時讀到的才一定是畫面上的值。
    */
   readonly locked?: boolean;
+  /**
+   * 只鎖附件列上的移除（[#1941](https://github.com/DemianLi/nexus-agent/issues/1941)）：附件正在送出，那一批送出當下就取好了，
+   * 移掉的照樣會送出（dsh `facade.ts:330-334`）。文字框、加入、貼上、拖放、取消上傳照舊。
+   */
+  readonly removalLocked?: boolean;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -609,7 +615,7 @@ export function Composer({
                         <AttachmentRail
                           items={attachments.items}
                           onRemove={(id) => {
-                            if (!locked) attachments.onRemove(id);
+                            if (!locked && !removalLocked) attachments.onRemove(id);
                           }}
                           uploads={attachments.uploads}
                           onCancelUpload={attachments.onCancelUpload}

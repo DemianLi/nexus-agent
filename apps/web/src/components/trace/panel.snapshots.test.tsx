@@ -36,12 +36,17 @@ const tool = (name: string) => ({
   parameters: { type: 'object', properties: { path: { type: 'string' } } },
 });
 
-function mountWith(snapshots: RequestSnapshotsView, callOverrides = {}) {
+function mountWith(snapshots: RequestSnapshotsView, callOverrides = {}, turnOverrides = {}) {
   const script = new Script();
   const state: ConversationState = withTrajectory(
     reduceAll(emptyConversation(), [script.running(), script.completed()]),
     script,
-    view([turn(0, { calls: [call(5, { system: 8, header: 9, ...callOverrides })] })]),
+    view([
+      turn(0, {
+        calls: [call(5, { system: 8, header: 9, ...callOverrides })],
+        ...turnOverrides,
+      }),
+    ]),
     snapshots,
   );
   localStorage.setItem(LAYOUT_KEY_PREFIX + 't', JSON.stringify(open));
@@ -163,7 +168,23 @@ describe('觀測分頁：呼叫列的系統提示詞、取樣設定與工具清�
     expect(await axeViolations(container)).toEqual([]);
   });
 
-  it('呼叫沒有正常回來：標題列寫失敗或已中止，展開多一行「結果」；正常的沒有', async () => {
+  it('時鐘切斷的呼叫（#1847）：講超過時間上限，不用紅字', async () => {
+    mountWith(
+      { system: [], header: [] },
+      { outcome: 'aborted' },
+      { end: 'aborted', endCause: { kind: 'hook', reason: 'turn-timeout' } },
+    );
+    await act(async () => {});
+    const outcome = screen.getByTestId('trace-call-outcome');
+    expect(outcome.textContent).toBe('超過時間上限，已中止');
+    expect(outcome.className).not.toContain('text-destructive');
+    fireEvent.click(screen.getByRole('button', { name: /^模型呼叫 #1/ }));
+    expect(screen.getByTestId('trace-call-details').textContent).toContain(
+      '結果超過時間上限，已中止',
+    );
+  });
+
+  it('呼叫沒有正常回來：標題列寫失敗或已中止（都是紅字），展開多一行「結果」；正常的沒有', async () => {
     mountWith({ system: [], header: [] }, { outcome: 'error' });
     await act(async () => {});
     expect(screen.getByTestId('trace-call-outcome').textContent).toContain('失敗');
@@ -173,6 +194,7 @@ describe('觀測分頁：呼叫列的系統提示詞、取樣設定與工具清�
     mountWith({ system: [], header: [] }, { outcome: 'aborted' });
     await act(async () => {});
     expect(screen.getByTestId('trace-call-outcome').textContent).toContain('已中止');
+    expect(screen.getByTestId('trace-call-outcome').className).toContain('text-destructive');
     cleanup();
     mountWith({ system: [], header: [] });
     await act(async () => {});

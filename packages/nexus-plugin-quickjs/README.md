@@ -12,7 +12,7 @@ export default [
   createQuickJsPlugin({
     timeoutMs: 1_000,
     memoryLimitBytes: 16 * 1024 * 1024,
-    maxStackSizeBytes: 512 * 1024,
+    maxStackSizeBytes: 128 * 1024,
   }),
 ];
 ```
@@ -47,13 +47,22 @@ host function 的介面，要加就得改它的原始碼。
 **資源邊界只有設定的那麼強。** 無限迴圈與吃記憶體不是 QuickJS 自己會擋的事，是上面
 那三個上限擋的。三個都有預設值，但改小改大都由呼叫端決定。三條各自對應一種耗盡方式：
 
-| 上限 | 擋的是 | 撞到時 VM 回的 |
+| 上限 | 擋的是 | 撞到時的失敗 |
 | --- | --- | --- |
-| `timeoutMs` | 跑不完的迴圈 | `InternalError: interrupted`（翻成「執行超過 N 毫秒的上限」） |
-| `memoryLimitBytes` | 吃堆積 | `InternalError: out of memory` |
-| `maxStackSizeBytes` | 無窮遞迴 | `InternalError: stack overflow` |
+| `timeoutMs` | 跑不完的迴圈 | `timeout`：執行超過 N 毫秒的上限 |
+| `memoryLimitBytes` | 吃堆積 | `exception`：`InternalError: out of memory` |
+| `maxStackSizeBytes` | 無窮遞迴 | `exception`：`InternalError: stack overflow` |
+| `maxStackSizeBytes` 設大、host 的堆疊先用完 | 無窮遞迴 | `exception`：`RangeError: Maximum call stack size exceeded`；整個 WASM 模組換新 |
 
 堆疊與記憶體刻意分成兩個參數：無窮遞迴吃的是前者，只設記憶體上限擋不住它。
+
+QuickJS 在 WASM 裡遞迴，吃的是 Node 的原生堆疊。`maxStackSizeBytes` 比 host 剩下的堆疊大時，host 先用完、從 VM 外面
+打斷它，那個 WASM 模組停在一半，所以整個丟掉，下一次呼叫跑在新模組上。Node 預設的堆疊下，上限大約從 0.3 到 0.5 MiB 起
+就換成 host 先用完，所以預設是 128 KiB。
+
+**失敗種類看 host 的狀態，不看程式丟出來的值。** 逾時是 interrupt handler 觸發過；程式自己丟一個
+`InternalError: interrupted` 只是 `exception`。檢查回傳值的時候（例如 getter 裡）拋了錯，沒觸發中斷的一律是
+`invalid-output`，包括 getter 裡撞到記憶體或堆疊上限。
 
 **逾時期間主執行緒是塞住的。** `evalCode` 是同步呼叫，中斷靠 QuickJS 執行中回呼的
 interrupt handler。所以 `timeoutMs` 是「最多塞住多久」，不是「多久之後在背景被砍掉」。
@@ -125,6 +134,6 @@ sandbox 等於宣稱一個這裡沒有填的 seam。
 - **沒有網路。**
 - **每次呼叫一個新 VM。** 兩次呼叫之間不共用狀態，前一次留在 global 上的東西下一次
   看不到。資源預算因此也是每次乾淨一份，而不是跨呼叫累計。
-- **不登記關機清理。** 沒有活的 handle 要收：WASM 模組是 `getQuickJS()` 快取住的行程級
-  單例，runtime 與 context 現建現拆。`lifecycle` 通道是給 `@nexus/plugin-mcp` 那種有
+- **不登記關機清理。** 沒有活的 handle 要收：WASM 模組由插件自己持有（`src/module.ts`），
+  整個行程一個，換掉的舊模組由 GC 收；runtime 與 context 現建現拆（host 的堆疊用完時不拆，跟著舊模組一起丟掉）。`lifecycle` 通道是給 `@nexus/plugin-mcp` 那種有
   子行程要收的 plugin 的。

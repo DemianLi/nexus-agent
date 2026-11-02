@@ -19,7 +19,7 @@ import { DELEGATION_TOOL_NAMES } from '@nexus/wire';
 export const MAX_TOKENS_NOTICE = '（已達輸出上限，這一輪沒寫完）';
 
 /**
- * 抄自 `@nexus/core` 的 `max-tokens.ts`（web 不相依 core；`max-tokens-view.test.ts` 讀原始檔比對，那邊改了這裡要紅）。
+ * 抄自 `@nexus/core` 的 `max-tokens.ts`（web 的產品碼不從 core 取值；`max-tokens-view.test.ts` 讀原始檔比對，那邊改了這裡要紅）。
  * 卡上的第一行是 core 的錯誤前綴接這一句，寫到一半的那段另起一行接在 {@link PARTIAL_OUTPUT_HEADING} 後面；沒寫出字
  * 就只有第一行。**前綴只有一個主人**（`apps/harness/src/tool-error-prefix.test.ts`），所以這裡只抄理由、比第一行的
  * 結尾。

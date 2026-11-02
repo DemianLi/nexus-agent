@@ -9,7 +9,7 @@
  * 要看得到截斷的夾具，前綴裡必須有一顆沒收尾的 `turn/start`：補結才算得出來、才會寫。
  */
 
-import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,8 +23,14 @@ import {
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
 
-import { openJsonlSessionStore, parseJsonlSessionBody } from './jsonl-session-store.js';
+import {
+  legacyTwoFilePathsIn,
+  openJsonlSessionStore,
+  parseJsonlSessionBody,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
 import type { LogFileHandle, OpenLogFile } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 
 const ID = 'torn-thread';
 let dir: string;
@@ -43,6 +49,10 @@ function header(): StoredSessionHeader {
   return { version: SESSION_LOG_FORMAT_VERSION, id: ID, createdAt: 1, cwd: '/tmp' };
 }
 
+/** 世代檔的第一行（含換行）：事件行的位元組偏移都要加上它的長度。 */
+const HEADER_LINE = `${JSON.stringify({ type: 'session', ...header() })}\n`;
+const HEADER_BYTES = Buffer.byteLength(HEADER_LINE);
+
 /** 一行事件（含換行）。 */
 function line(seq: number, type = 'model/usage', extra: Record<string, unknown> = {}): string {
   return `${JSON.stringify({ type, seq, time: 1, data: {}, ...extra })}\n`;
@@ -52,13 +62,38 @@ function line(seq: number, type = 'model/usage', extra: Record<string, unknown> 
 const OPEN_TURN = [line(0, 'turn/start'), line(1), line(2)].join('');
 const BAD_LINE = '{壞掉\n';
 
-async function plant(...parts: (string | Buffer)[]): Promise<void> {
-  await writeFile(join(dir, `${ID}.header.json`), JSON.stringify(header()));
-  await writeFile(join(dir, `${ID}.jsonl`), Buffer.concat(parts.map((part) => Buffer.from(part))));
+function bytesOf(parts: readonly (string | Buffer)[]): Buffer {
+  return Buffer.concat(parts.map((part) => Buffer.from(part)));
 }
 
+/**
+ * 手寫一份這一版的世代檔，樣子同寫方建的：會話目錄裡的世代檔是 {@link HEADER_LINE} 加上 `parts`，舊路徑放墓碑。
+ * 續接截尾巴截的是這一種；舊兩檔續接時遷移，不截（見 {@link plantLegacy}）。
+ */
+async function plant(...parts: (string | Buffer)[]): Promise<void> {
+  const paths = sessionPathsIn(dir, ID);
+  await mkdir(paths.sessionDirectory);
+  await writeFile(paths.log, Buffer.concat([Buffer.from(HEADER_LINE), bytesOf(parts)]));
+  await writeFile(paths.tombstone, HEADER_LINE);
+}
+
+/** 世代檔的全部位元組（含 header 行）。 */
 function logBytes(): Promise<Buffer> {
-  return readFile(join(dir, `${ID}.jsonl`));
+  return readFile(sessionPathsIn(dir, ID).log);
+}
+
+/** 手寫一份舊兩檔（版本 {@link LEGACY_TWO_FILE_FORMAT_VERSION}）：只讀、只拒的測試用，讀方照讀，續接先遷移。 */
+async function plantLegacy(...parts: (string | Buffer)[]): Promise<void> {
+  const paths = legacyTwoFilePathsIn(dir, ID);
+  await writeFile(
+    paths.header,
+    JSON.stringify({ ...header(), version: LEGACY_TWO_FILE_FORMAT_VERSION }),
+  );
+  await writeFile(paths.log, bytesOf(parts));
+}
+
+function legacyLogBytes(): Promise<Buffer> {
+  return readFile(legacyTwoFilePathsIn(dir, ID).log);
 }
 
 function store(extra: { openLog?: OpenLogFile } = {}) {
@@ -69,9 +104,9 @@ function store(extra: { openLog?: OpenLogFile } = {}) {
   });
 }
 
-/** 整份檔 strict 解析：乾淨就回事件，有任何壞行就拋。 */
+/** 世代檔的本文（header 行之後）整份 strict 解析：乾淨就回事件，有任何壞行就拋。 */
 async function strictEvents() {
-  return parseJsonlSessionBody(ID, await logBytes(), {
+  return parseJsonlSessionBody(ID, (await logBytes()).subarray(HEADER_BYTES), {
     version: SESSION_LOG_FORMAT_VERSION,
     recovery: 'strict',
   });
@@ -98,13 +133,15 @@ describe('壞尾可復原', () => {
       'model/usage',
       'turn/end',
     ]);
-    expect(validBytes).toBe((await logBytes()).byteLength);
-    expect((await logBytes()).subarray(0, OPEN_TURN.length).toString()).toBe(OPEN_TURN);
+    expect(validBytes).toBe((await logBytes()).byteLength - HEADER_BYTES);
+    expect((await logBytes()).subarray(0, HEADER_BYTES + OPEN_TURN.length).toString()).toBe(
+      HEADER_LINE + OPEN_TURN,
+    );
 
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(ID);
     expect(warnings[0]).toContain(`${Buffer.byteLength(tail)} 個位元組`);
-    expect(warnings[0]).toContain(`第 ${Buffer.byteLength(OPEN_TURN)} 個位元組`);
+    expect(warnings[0]).toContain(`第 ${HEADER_BYTES + Buffer.byteLength(OPEN_TURN)} 個位元組`);
   });
 
   it('純撕裂的半行也照講，並截掉', async () => {
@@ -141,58 +178,76 @@ describe('壞尾可復原', () => {
     const { stored } = await resumeClosingInterruptedTurn(store({ openLog }), ID);
     await stored.close();
     expect(order.slice(0, 3)).toEqual([
-      `open r+ size=${Buffer.byteLength(OPEN_TURN)}`,
+      `open r+ size=${HEADER_BYTES + Buffer.byteLength(OPEN_TURN)}`,
       'sync r+',
-      `open a size=${Buffer.byteLength(OPEN_TURN)}`,
+      `open a size=${HEADER_BYTES + Buffer.byteLength(OPEN_TURN)}`,
     ]);
   });
 });
 
-describe('壞行之後有收尾：拒絕', () => {
+/** 兩種佈局：世代檔的第 1 行是 header 行，行號比舊兩檔多 1。 */
+const LAYOUTS = [
+  { name: '世代檔', put: plant, bytes: logBytes, offset: 1 },
+  { name: '舊兩檔', put: plantLegacy, bytes: legacyLogBytes, offset: 0 },
+];
+
+describe.each(LAYOUTS)('壞行之後有收尾，$name：拒絕', ({ put, bytes, offset }) => {
   it.each(['turn/end', 'turn/failed'])(
     '壞行之後接完整的 %s：resume 與預設 read 都拋，檔案原樣',
     async (closer) => {
-      await plant(OPEN_TURN, BAD_LINE, line(4, closer));
-      const before = await logBytes();
+      await put(OPEN_TURN, BAD_LINE, line(4, closer));
+      const before = await bytes();
+      const message = new RegExp(`第 ${4 + offset} 行不是 JSON`, 'u');
 
       await expect(store().resume(ID)).rejects.toBeInstanceOf(SessionCorruptionError);
-      await expect(store().resume(ID)).rejects.toThrow(/第 4 行不是 JSON/u);
+      await expect(store().resume(ID)).rejects.toThrow(message);
       const reader = await store().open(ID, 'read');
-      await expect(reader.read()).rejects.toThrow(/第 4 行不是 JSON/u);
+      await expect(reader.read()).rejects.toThrow(message);
 
-      expect((await logBytes()).equals(before)).toBe(true);
+      expect((await bytes()).equals(before)).toBe(true);
       expect(warnings).toEqual([]);
     },
   );
 
-  it('壞行本身就是 parse 得了的收尾（seq 錯）：立即拋', async () => {
-    await plant(OPEN_TURN, line(9, 'turn/end'));
-    await expect(store().resume(ID)).rejects.toThrow(/第 4 行的 seq 是 9，應該是 3/u);
-    const reader = await store().open(ID, 'read');
-    await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
-  });
+  it.each(['turn/end', 'turn/failed'])(
+    '壞行本身就是 parse 得了的 %s（seq 錯）：立即拋，檔案原樣',
+    async (closer) => {
+      await put(OPEN_TURN, line(9, closer));
+      const before = await bytes();
+      await expect(store().resume(ID)).rejects.toThrow(
+        new RegExp(`第 ${4 + offset} 行的 seq 是 9，應該是 3`, 'u'),
+      );
+      const reader = await store().open(ID, 'read');
+      await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
+      expect((await bytes()).equals(before)).toBe(true);
+      expect(warnings).toEqual([]);
+    },
+  );
 
   it('壞行之後的收尾沒有換行（撕裂）：不算收尾，丟掉', async () => {
-    await plant(OPEN_TURN, BAD_LINE, '{"type":"turn/end","seq":4');
+    await put(OPEN_TURN, BAD_LINE, '{"type":"turn/end","seq":4');
     const reader = await store().open(ID, 'read');
     expect((await reader.read()).map((e) => e.seq)).toEqual([0, 1, 2]);
   });
 });
 
 describe('准入先於復原', () => {
-  it('壞行之後接一行不認得、沒標 ignorable 的種類：拋 SessionEventUnsupportedError，不是靜靜截掉', async () => {
-    await plant(OPEN_TURN, BAD_LINE, line(4, 'future/thing'));
-    const before = await logBytes();
+  it.each(LAYOUTS)(
+    '$name，壞行之後接一行不認得、沒標 ignorable 的種類：拋 SessionEventUnsupportedError，不是靜靜截掉',
+    async ({ put, bytes }) => {
+      await put(OPEN_TURN, BAD_LINE, line(4, 'future/thing'));
+      const before = await bytes();
 
-    await expect(store().resume(ID)).rejects.toBeInstanceOf(SessionEventUnsupportedError);
-    const reader = await store().open(ID, 'read');
-    await expect(reader.read()).rejects.toBeInstanceOf(SessionEventUnsupportedError);
-    expect((await logBytes()).equals(before)).toBe(true);
-    expect(warnings).toEqual([]);
-  });
+      await expect(store().resume(ID)).rejects.toBeInstanceOf(SessionEventUnsupportedError);
+      const reader = await store().open(ID, 'read');
+      await expect(reader.read()).rejects.toBeInstanceOf(SessionEventUnsupportedError);
+      expect((await bytes()).equals(before)).toBe(true);
+      expect(warnings).toEqual([]);
+    },
+  );
 
-  it('標了 ignorable 的不認得種類，壞行之後照丟', async () => {
-    await plant(OPEN_TURN, BAD_LINE, line(4, 'future/thing', { ignorable: true }));
+  it.each(LAYOUTS)('$name，標了 ignorable 的不認得種類，壞行之後照丟', async ({ put }) => {
+    await put(OPEN_TURN, BAD_LINE, line(4, 'future/thing', { ignorable: true }));
     const reader = await store().open(ID, 'read');
     expect((await reader.read()).map((e) => e.seq)).toEqual([0, 1, 2]);
   });
@@ -241,22 +296,23 @@ describe('位元組偏移算在 Buffer 上', () => {
     await stored.close();
 
     const bytes = await logBytes();
-    expect(bytes.subarray(0, good.byteLength).equals(good)).toBe(true);
+    expect(bytes.subarray(0, HEADER_BYTES).toString()).toBe(HEADER_LINE);
+    expect(bytes.subarray(HEADER_BYTES, HEADER_BYTES + good.byteLength).equals(good)).toBe(true);
     const { events, validBytes } = await strictEvents();
     expect(events.map((e) => e.type)).toEqual(['turn/start', 'turn/end']);
-    expect(validBytes).toBe(bytes.byteLength);
+    expect(validBytes).toBe(bytes.byteLength - HEADER_BYTES);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain(`第 ${good.byteLength} 個位元組`);
+    expect(warnings[0]).toContain(`第 ${HEADER_BYTES + good.byteLength} 個位元組`);
   });
 });
 
 describe('唯讀與沒有寫入的續接不截、不講', () => {
   it('open(id, "read").read()：檔案大小不變、warn 零次', async () => {
     await plant(OPEN_TURN, BAD_LINE, line(4));
-    const size = (await stat(join(dir, `${ID}.jsonl`))).size;
+    const size = (await stat(sessionPathsIn(dir, ID).log)).size;
     const reader = await store().open(ID, 'read');
     expect((await reader.read()).map((e) => e.seq)).toEqual([0, 1, 2]);
-    expect((await stat(join(dir, `${ID}.jsonl`))).size).toBe(size);
+    expect((await stat(sessionPathsIn(dir, ID).log)).size).toBe(size);
     expect(warnings).toEqual([]);
   });
 

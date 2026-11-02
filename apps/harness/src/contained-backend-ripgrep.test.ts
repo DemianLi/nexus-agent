@@ -782,4 +782,24 @@ describe('掛進真的組裝之後', () => {
     expect(String(messages[0]?.content)).toContain('needle 一');
     expect(String(messages[0]?.content)).toContain('needle 二');
   }, 60_000);
+
+  it.skipIf(process.getuid?.() === 0)('起點讀不到不說成 rg 起不來（#1945）', async () => {
+    const closed = await mkdtemp(join(tmpdir(), 'nexus-rg-closed-'));
+    await chmod(closed, 0o000);
+    try {
+      const outcome = await runRipgrep({
+        argv: ['--json'],
+        cwd: closed,
+        executable: process.execPath,
+      });
+      expect(outcome).toMatchObject({
+        kind: 'error',
+        code: SEARCH_FAILED,
+        message: 'grep could not start its search command (the search directory is not accessible)',
+      });
+    } finally {
+      await chmod(closed, 0o700);
+      await rm(closed, { recursive: true, force: true });
+    }
+  });
 });

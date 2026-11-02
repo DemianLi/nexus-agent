@@ -21,6 +21,7 @@ import {
   emptyConversation,
   prependEntries,
   reduceAll,
+  AUTH_FAILURE_MESSAGE,
 } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
@@ -168,11 +169,10 @@ describe('日誌 → 畫面', () => {
   });
 
   /**
-   * **多塊內容的失敗訊息：紅字退回泛用那句**（#439 的副作用，明著釘住）。以前這裡是把每一塊
-   * 接起來，現在照 dsh 的規則不是剛好一塊就不給——退路是錯誤碼，再退是「未指名的錯誤」。
-   * 今天樹上沒有產多塊內容的工具，所以這條釘的是規則，不是現況。
+   * **多塊文字的失敗訊息：抽字規則跟成功時同一條**（`toolResultText`）。內容混了非文字就抽不出字，
+   * 紅字才退回錯誤碼，再退是「未指名的錯誤」。
    */
-  it('失敗訊息是多塊內容：不自己拼，紅字退回錯誤碼', () => {
+  it('失敗訊息是多塊文字：接起來當紅字，碼另外有自己那一格', () => {
     const state = screen(
       log(
         human('跑'),
@@ -200,7 +200,7 @@ describe('日誌 → 畫面', () => {
       ),
     );
 
-    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:FS_SANDBOX_DENIED']);
+    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:第一塊\n\n第二塊']);
     // 碼另外有自己那一格（#667），跟紅字的退路無關。
     expect(state.entries.find((entry) => entry.kind === 'tool')).toMatchObject({
       errorCode: 'FS_SANDBOX_DENIED',
@@ -351,6 +351,28 @@ describe('日誌 → 畫面', () => {
 
     const recovered = screen(log(...failed, human('再來'), reply('好了。'), turnEnd));
     expect(recovered.status).toBe('idle');
+  });
+
+  it('失敗的碼跟著歷史走；舊日誌沒有碼就沒有這一格', () => {
+    const coded = log(human('跑'), {
+      type: 'turn/failed',
+      data: { message: '額度用完', error: { message: '額度用完', code: 'QUOTA' } },
+    });
+    expect(screen(coded)).toMatchObject({ error: '額度用完', errorCode: 'QUOTA' });
+    const old = log(human('跑'), { type: 'turn/failed', data: { message: '供應商掛了' } });
+    expect(screen(old).error).toBe('供應商掛了');
+    expect(screen(old).errorCode).toBeUndefined();
+  });
+
+  it('舊日誌的 AUTH 存著供應商原話：讀的時候換成固定句', () => {
+    const state = screen(
+      log(human('跑'), {
+        type: 'turn/failed',
+        data: { message: '401 sk-FAKE', error: { message: '401 sk-FAKE', code: 'AUTH' } },
+      }),
+    );
+    expect(state).toMatchObject({ error: AUTH_FAILURE_MESSAGE, errorCode: 'AUTH' });
+    expect(JSON.stringify(state)).not.toContain('sk-FAKE');
   });
 
   /**
@@ -921,6 +943,39 @@ describe('舊格式', () => {
     expect(old).toMatchObject({ approxTokens: 33_000, messageCount: 70 });
     expect(old !== undefined && 'messagesCompactable' in old).toBe(false);
     expect(measured({ messagesCompactable: false })?.messagesCompactable).toBe(false);
+  });
+
+  /**
+   * `breakdown`（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）同理：有就三格原樣上線，沒有的舊日誌重放出來就沒有這個 key。
+   */
+  it('context/measure 的 breakdown：有就三格原樣帶上線，沒有就沒有這個 key', () => {
+    const measured = (extra: object) =>
+      reduceAll(
+        emptyConversation(),
+        historyPage(
+          log(
+            human('嗨'),
+            { type: 'model/start', data: {} },
+            reply('嗨。'),
+            { type: 'model/end', data: {} },
+            {
+              type: 'context/measure',
+              data: {
+                approxTokens: 33_000,
+                messageCount: 70,
+                thresholds: [{ type: 'tokens', value: 100_000 }],
+                ...extra,
+              },
+            },
+            turnEnd,
+          ),
+        ).events,
+      ).contextPressure?.measure;
+
+    const old = measured({});
+    expect(old !== undefined && 'breakdown' in old).toBe(false);
+    const breakdown = { systemTokens: 1200, toolsTokens: 0, messageTokens: 31_800 };
+    expect(measured({ breakdown })?.breakdown).toEqual(breakdown);
   });
 });
 

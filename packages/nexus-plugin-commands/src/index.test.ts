@@ -74,6 +74,12 @@ describe('parseCommand', () => {
     expect(parseCommand('/plan\noff')).toEqual({ name: 'plan', rawInput: '\noff' });
   });
 
+  it('全形空白也算分隔（#1935）：參數原樣留著，handler 的 trim 拿得掉', () => {
+    const parsed = parseCommand('/plan\u3000off');
+    expect(parsed).toEqual({ name: 'plan', rawInput: '\u3000off' });
+    expect(parsed?.rawInput.trim()).toBe('off');
+  });
+
   it.each([
     ['沒有斜線', 'plan'],
     ['斜線前有空白', ' /plan'],

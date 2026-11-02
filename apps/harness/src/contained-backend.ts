@@ -17,9 +17,9 @@
  * | `write` | **寫穿了** |
  * | `edit` | **寫穿了** |
  * | `delete` | 被擋（基座的 `resolveDeletePath()` 會 lstat 逐層檢查祖先） |
- * | `read` | 讀穿了（照 [#34](https://github.com/DemianLi/nexus-agent/issues/34)：讀歸 `permissions` 管，fence 不碰） |
+ * | `read` | 讀穿了（`O_NOFOLLOW` 只管最後一段，祖先目錄的連結照跟） |
  *
- * 所以這個 class 要補的是 `write` 與 `edit`。**`delete` 也一起覆寫**，理由不是基座那邊有錯，
+ * 所以這個 class 要補的是 `write` 與 `edit`，以及讀（見下面〈讀取面的圍堵〉）。**`delete` 也一起覆寫**，理由不是基座那邊有錯，
  * 而是**拒絕的措辭要只有一種**：基座擋下來時說的是 `Symlink parent not allowed`，我們說的是
  * 另一句，同一條政策在模型眼裡就有兩套詞彙，測試也得斷言兩個字串。dsh 讓所有拒絕共用一個
  * `FS_SANDBOX_DENIED` 正是這個理由。
@@ -33,7 +33,7 @@
  * `createIfAbsent` 的 hard link 發佈，理由 1）與偏離 2（不做 Windows，理由 2）見 `atomic-workspace-write.ts`。
  * 路徑仍走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根）：`danger-full-access` 下 `verdict` 不檢查，那是唯一一道。
  * 結果形狀與錯誤字句照基座，`edit` 的字串替換逐字照抄 `performStringReplacement`；唯一不同的一句是寫到目錄上，
- * 基座是 `EISDIR` 的開檔錯誤，這裡是 `not a regular file`（卡上第 2 步的字句）。
+ * 基座是 `EISDIR` 的開檔錯誤，這裡是 `not a regular file`（卡上第 2 步的字句）；另外 errno 的訊息不帶主機路徑（{@link pathlessReason}）。
  *
  * ## `read` 自己讀一次、大檔串流（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）
  *
@@ -41,20 +41,26 @@
  * 變成好幾份常駐的字串；單行 3 MB 的檔也整行送出。所以 `read` 也**自己做完**（不 `super.read`）：開檔後用同一個 fd 的 `stat` 定路由，
  * 小於 {@link READ_STREAM_MIN_SIZE}（同 dsh 的 `STREAM_MIN_SIZE`）一次 `readFile`，否則逐 chunk 解碼掃描；兩條路交給同一支
  * `scanWindow`。**在 `read_file` 裡**照 dsh 的 `buildWindow` 建頁（每行截 2000 字元、選到的行累計 50 KiB 停但掃到檔尾數總行數），
- * 並把頁的範圍與邊讀邊算的版本回報給 `@nexus/core`；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
+ * 並把頁的範圍與同一個 fd 的 stat 版本回報給 `@nexus/core`（#2030）；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
  * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2（縮到只剩 BOM，理由 1 基座表達不出來）**：開頭的 BOM 保留，不照 dsh 去掉——
- * 基座 `readRaw` 的版本 token 是從保留 U+FEFF 的字串算的，`read` 不保留就和「先讀後改」寫與改前的比對對不上；`edit` 沿用同一個解碼（`ignoreBOM`），
- * 寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
- * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡；版本 token 仍對含 `\r` 的原文算。
+ * `edit` 沿用同一個解碼（`ignoreBOM`），寫回時 BOM 自然還在（dsh 的 `decodeUtf8` 沒設 `ignoreBOM`，寫回時 BOM 會消失）。行尾 `\r` 則照 dsh 去掉（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
+ * N0335：`edit` 現在對行尾做正規化，保留 `\r` 的理由沒了），只在 `read_file` 裡。
  *
- * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
+ * 另一個會改檔案的方法是 **`uploadFiles`**——`BackendProtocolV2` 上的，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
+ *
+ * ## 讀取面的圍堵（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）
+ *
+ * 讀得到內容的六個入口——`read`、`readRaw`、`ls`、`grep`／`glob` 的起點、`downloadFiles`——讀之前都 canonicalize，
+ * 落在根外就拒，碼同樣是 `FS_SANDBOX_DENIED`。擋的是工作區裡往外指的符號連結：連結指向 harness home 或 `.env` 時，
+ * 經它讀得到 key。`grep`／`glob` 從根往下搜時 rg 本來就不跟樹內的連結，所以只看起點，根內的連結也搜不到（#2193）。判法與例外見 `readDenial`。
+ * 讀能看到什麼的其餘策略仍歸 `permissions`。
  *
  * ## 形狀照 dsh 的 `fs-sandbox`
  *
  * [#34](https://github.com/DemianLi/nexus-agent/issues/34) 的定案，逐條對應
  * （`references/deepseek-harness/packages/fs/fs-sandbox/`）：**繼承**而不是平行實作、
- * **只在寫入路徑加 fence**、**讀一律通過**、canonicalize-then-contain 且在委派前重新
+ * 變更的 fence 只掛在寫入路徑、canonicalize-then-contain 且在委派前重新
  * canonicalize、三個 mode 留一個不設防的逃生口。
  *
  * ## 威脅模型：這是 policy fence，不是 kernel boundary
@@ -77,28 +83,33 @@ import { createHash } from 'node:crypto';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
   DeleteResult,
   EditResult,
+  FileDownloadResponse,
   FileUploadResponse,
   GlobResult,
   GrepResult,
+  LsResult,
+  ReadRawResult,
   ReadResult,
   WriteResult,
 } from 'deepagents';
 
 import {
-  createVersionHasher,
   currentReadWindow,
   currentToolCallSignal,
   EMPTY_CONTENT_WARNING,
+  FILE_VERSION,
   FS_AMBIGUOUS_EDIT,
   FS_EDIT_NOT_FOUND,
   FS_NOT_FOUND,
   FS_NOT_REGULAR_FILE,
   FS_NOT_TEXT,
+  FS_NO_SPACE,
   FS_PERMISSION_DENIED,
   noteFsError,
   noteReadVersion,
@@ -120,6 +131,7 @@ import type { RipgrepInternals, RipgrepTool } from './ripgrep-runner.js';
 import { pageOf, scanWindow, ScanAborted } from './text-window.js';
 import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 import type {
+  FileVersionLookup,
   FsErrorCode,
   SandboxDenial,
   SearchErrorCode,
@@ -149,12 +161,33 @@ function notText(filePath: string, reason: 'binary file' | 'invalid UTF-8 text')
  * 作業系統的錯誤碼 → 檔案工具的原因碼（#1563），記在這一次工具呼叫上；錯誤文字不動。`EACCES`／`EPERM` 是 `FS_PERMISSION_DENIED`
  * （**依卡面要求，不是照 dsh**：dsh 只在 `listDirectory` 轉這個碼，`fsio.ts:282`，這裡 `read`／`write`／`edit` 碰到也記）；
  * `ENOENT`／`ENOTDIR` 是 `FS_NOT_FOUND`，但只有 `missing` 為真（呼叫端的目標本來就該存在：`read`、`edit`）時才算——`write` 會自己建父目錄，
- * 碰到它們是別的原因。認不得的不記碼。
+ * 碰到它們是別的原因。`ENOSPC`／`EDQUOT` 是 `FS_NO_SPACE`。認不得的不記碼。
  */
 function noteErrno(error: unknown, missing: boolean): void {
   const code = (error as NodeJS.ErrnoException | undefined)?.code;
   if (code === 'EACCES' || code === 'EPERM') noteFsError(FS_PERMISSION_DENIED);
+  else if (code === 'ENOSPC' || code === 'EDQUOT') noteFsError(FS_NO_SPACE);
   else if (missing && (code === 'ENOENT' || code === 'ENOTDIR')) noteFsError(FS_NOT_FOUND);
+}
+
+/** 空間用完時交給模型的說明：重試沒用，要讓使用者知道找誰（#2195）。 */
+const NO_SPACE_REASON =
+  'the host is out of storage space; retrying will not help, tell the user to contact the administrator';
+
+/**
+ * 例外換成交給模型的原因（[#2201](https://github.com/DemianLi/nexus-agent/issues/2201)）。Node 的 errno 訊息結尾是 `, <syscall> '<主機路徑>'`，
+ * 而模型的回覆使用者看得到，所以從 syscall 起整段不帶，留下碼與說明（`ENOSPC`／`EDQUOT` 的說明換成 {@link NO_SPACE_REASON}）；呼叫端的句子已經寫了模型給的虛擬路徑。
+ * 沒有 errno 形狀的錯誤原樣回，訊息裡的根由 {@link ContainedFilesystemBackend} 再換掉。
+ *
+ * @param error - 接到的例外。
+ * @returns 不含 errno 路徑的原因。
+ */
+export function pathlessReason(error: unknown): string {
+  const { code, syscall, message } = error as NodeJS.ErrnoException;
+  if (typeof code !== 'string' || typeof syscall !== 'string') return message;
+  if (code === 'ENOSPC' || code === 'EDQUOT') return `${code}: ${NO_SPACE_REASON}`;
+  const end = message.indexOf(`, ${syscall}`);
+  return end === -1 ? code : message.slice(0, end);
 }
 
 /** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2，理由見檔頭）。 */
@@ -222,13 +255,15 @@ export function invalidGrepGlob(glob: string): string | undefined {
  */
 export type GrepPathsResult = GrepResult & { readonly errorCode?: SearchErrorCode };
 
+/** {@link ContainedFilesystemBackend.globPaths} 的結果：`GlobResult` 多一格 `errorCode`，給子類分辨該不該把錯誤原文交給模型。 */
+export type GlobPathsResult = GlobResult & { readonly errorCode?: SearchErrorCode };
+
 /**
  * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
  *
- * `read-only` 只擋得住**變更**——讀不經過這裡（`read` 的覆寫只管讀法；`glob`／`grep` 的覆寫只管怎麼起 rg，
- * 不加任何 fence，見 {@link ContainedFilesystemBackend.grep}、{@link ContainedFilesystemBackend.glob}）。dsh 也是
- * 這樣：它的 fence 同樣只掛在兩個 mutation 上，「read-only」講的是這個 backend 不改東西，
- * 不是「這個 agent 看不到東西」。看不看得到歸 `permissions`。
+ * `read-only` 只擋得住**變更**：「read-only」講的是這個 backend 不改東西，不是「這個 agent 看不到東西」。
+ * 讀在 `read-only` 與 `workspace-write` 下一樣，只擋經符號連結落到根外的（檔頭〈讀取面的圍堵〉）；
+ * 其餘看不看得到歸 `permissions`。
  *
  * **`read-only` 的根上，組裝點預設的摘要器照樣留得住對話歷史**
  * （[#348](https://github.com/DemianLi/nexus-agent/issues/348) 之後）。長對話會觸發基座的
@@ -420,6 +455,11 @@ export interface ContainedFilesystemBackendOptions {
    * 恆定的函式，兩者在 fence 眼裡沒有差別。
    */
   readonly mode?: SandboxMode | SandboxModeSource;
+  /**
+   * 起 `rg` 用哪個模式，省略就跟 {@link mode}。路由的 {@link mode} 是寫死的檔案政策，上不上 OS 沙箱卻要跟著會話：`danger-full-access`
+   * 在沒有沙箱後端的主機上是唯一起得來的模式，搜 `/` 碰到路由時得走同一條退路。
+   */
+  readonly toolMode?: SandboxModeSource;
   /** 單檔大小上限，原樣轉給基座。 */
   readonly maxFileSizeMb?: number;
   /**
@@ -443,16 +483,63 @@ export interface ContainedFilesystemBackendOptions {
    * 讀不到的檔屬於別的 thread（#1822），都不開。判準與起點讀不到的規則見 `ripgrep-runner.ts` 檔頭。
    */
   readonly tolerateUnreadable?: boolean;
+  /**
+   * 不論模式、也不認領升級都拒絕變更的地方（[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）。`write`、`edit`、`delete` 落在這裡的回
+   * `[containment]` 拒絕，`uploadFiles` 回 `permission_denied`；四者都不認領 grant、不接升級指引：升級是這條 thread 的使用者核准的，這幾個地方影響的是別人的 thread。**逐次呼叫讀**，
+   * 呼叫端可以在建構之後才知道清單。省略就沒有。
+   */
+  readonly reservedWrites?: () => readonly ReservedWrite[];
+}
+
+/** {@link ContainedFilesystemBackendOptions.reservedWrites} 的一格。 */
+export interface ReservedWrite {
+  /** 這個 backend 的虛擬路徑。 */
+  readonly path: string;
+  /** `true`：這個目錄本身與底下全部；`false`：只有這個路徑本身。 */
+  readonly subtree: boolean;
+  /** 拒絕訊息裡的理由。 */
+  readonly reason: string;
 }
 
 /** 讀檔改用串流的檔案大小門檻（位元組）。同 dsh 的 `STREAM_MIN_SIZE`（`read.ts:21`）。 */
 export const READ_STREAM_MIN_SIZE = 10 * 1024 * 1024;
 
+/**
+ * 讀取面的圍堵解析失敗時，交給下游處理的錯誤碼（見 `ContainedFilesystemBackend.readDenial`）。`ENOENT`／`ENOTDIR` 只會來自
+ * `realpath(this.cwd)`，也就是根不存在（`canonicalize` 把這兩個碼當成還不存在的尾巴吞掉，不往外拋）；其餘三個是開檔走同一串路徑
+ * 也會撞上的（這三個各有一條在真的檔案系統上做出來的測試，`contained-backend-read-resolve.test.ts`）。不在這裡的一律拒。
+ */
+const READ_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
+  'ENOENT',
+  'ENOTDIR',
+  'ELOOP',
+  'EACCES',
+  'ENAMETOOLONG',
+]);
+
+/** 讀取面的圍堵擋的入口，出現在拒絕訊息裡。 */
+type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | RipgrepTool;
+
+/** 讀取面的圍堵判完的結果：拒絕訊息，或比過根的實際位置。 */
+interface ReadScope {
+  readonly denial?: string;
+  readonly realTarget?: string;
+}
+
 /** 讀檔被取消（使用者停止、工具逾時）時回的錯誤字句。 */
 const READ_ABORTED = 'read aborted';
 
 /**
- * 在寫入路徑上加了 canonicalize-then-contain 的 `FilesystemBackend`。
+ * 檔案的版本 token：`dev:ino:size:mtimeNs:ctimeNs`。不透明，消費端只比相等。同一個時間戳粒度內改成等長的內容認不出來。
+ *
+ * @param info - `bigint: true` 的 stat。
+ */
+function statVersion(info: BigIntStats): string {
+  return `${info.dev}:${info.ino}:${info.size}:${info.mtimeNs}:${info.ctimeNs}`;
+}
+
+/**
+ * 在寫入路徑與讀取面上加了 canonicalize-then-contain 的 `FilesystemBackend`。
  *
  * **一定是 `virtualMode: true`**，而且不給關。`virtualMode: false` 的語義是「絕對路徑原樣
  * 放行」，那個模式底下沒有「根」這回事，圍堵無從談起——留一個關得掉的開關只會讓
@@ -461,6 +548,9 @@ const READ_ABORTED = 'read aborted';
 export class ContainedFilesystemBackend extends FilesystemBackend {
   /** 圍堵強度的來源。建構期給的字面值在這裡已經被包成一個恆定的函式。 */
   private readonly resolveMode: SandboxModeSource;
+
+  /** 起 `rg` 用的模式，見 {@link ContainedFilesystemBackendOptions.toolMode}。 */
+  private readonly resolveToolMode: SandboxModeSource;
 
   /** 升級的 grant 從哪裡認領；`undefined` 就是這道 fence 沒有升級。 */
   private readonly grants: SandboxGrantLedger | undefined;
@@ -477,6 +567,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private readonly atomicInternals: AtomicWriteInternals | undefined;
   /** 讀檔改串流的大小門檻。 */
   private readonly streamMinSize: number;
+  /** 不論模式都拒絕變更的地方；`undefined` 就是沒有。 */
+  private readonly reservedWrites: (() => readonly ReservedWrite[]) | undefined;
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
@@ -496,19 +588,25 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     });
     const mode = options.mode ?? 'workspace-write';
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
+    this.resolveToolMode = options.toolMode ?? this.resolveMode;
     this.grants = options.grants;
     this.ripgrepInternals = options.ripgrep;
     this.tolerateUnreadable = options.tolerateUnreadable === true;
     this.atomicInternals = options.atomicInternals;
     this.streamMinSize = options.streamMinSize ?? READ_STREAM_MIN_SIZE;
+    this.reservedWrites = options.reservedWrites;
   }
 
   /**
    * 讀檔（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：**自己讀，只讀一次**，不再先 `super.read` 整份、
    * 再讀一次原始位元組判二進位，也不再讓「先讀後改」為了記版本整份 `readRaw`。
    *
-   * 路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
-   * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔（符號連結是 `ELOOP`），其餘例外回 `Error reading file '…': …`。
+   * 開檔之前先過讀取面的圍堵（{@link readScope}）：經符號連結落在根外的回 `[containment]` 拒絕，碼 `FS_SANDBOX_DENIED`。
+   * 根內的連結讀得到：開的是比過根的那個實際位置，只解析這一次；它之後被換成連結，`O_NOFOLLOW` 回 `ELOOP`
+   * （[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）。
+   *
+   * 其餘路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
+   * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔，其餘例外回 `Error reading file '…': …`。
    * 判二進位照 dsh（`fsio.ts` 的 `readWholeText`／`streamWholeText`）：前 {@link BINARY_SAMPLE_BYTES} 位元組有 NUL 是
    * `binary file`，fatal 解碼失敗是 `invalid UTF-8 text`；**看內容，不看副檔名**（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。
    *
@@ -516,7 +614,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 解碼、掃描；兩條路交給同一支 {@link scanWindow}，判斷的與讀到的是同一個檔。
    *
    * **在 `read_file` 裡**（`currentReadWindow()` 有值）：照請求建頁——每行截到 2000 字元、選到的行累計 50 KiB 就停但掃到檔尾數總行數——
-   * 並回報頁的範圍（`noteReadWindow`）與邊讀邊算好的版本（`noteReadVersion`，給「先讀後改」）。**不在 `read_file` 裡**（摘要器、
+   * 並回報頁的範圍（`noteReadWindow`）與同一個 fd 的 stat 版本（`noteReadVersion`，給「先讀後改」，#2030）。**不在 `read_file` 裡**（摘要器、
    * `agent-instructions` 的 `discover`、直接呼叫）：語意照基座，回 `lines[offset, offset+limit)`，不截行、不套位元組上限。
    *
    * 取消：`currentToolCallSignal()` 接進讀取，中止時回 `{ error: 'read aborted' }`，不拋。
@@ -533,12 +631,15 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     const signal = currentToolCallSignal();
     try {
       const resolved = this.resolveVirtual(filePath);
+      const scope = await this.readScope(filePath, 'read');
+      if (scope.denial !== undefined) return denied({ error: scope.denial });
       if (signal?.aborted === true) return { error: READ_ABORTED };
-      if (!(await stat(resolved)).isFile()) {
+      const target = scope.realTarget ?? resolved;
+      if (!(await stat(target)).isFile()) {
         noteFsError(FS_NOT_REGULAR_FILE);
         return { error: `File '${filePath}' not found` };
       }
-      const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
+      const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
       try {
         return await this.readOpened(handle, filePath, offset, limit, signal);
       } finally {
@@ -548,7 +649,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       if (error instanceof ScanAborted || signal?.aborted === true) return { error: READ_ABORTED };
       if (error instanceof NotUtf8) return notText(filePath, 'invalid UTF-8 text');
       noteErrno(error, true);
-      return { error: `Error reading file '${filePath}': ${(error as Error).message}` };
+      return { error: `Error reading file '${filePath}': ${await this.reasonFor(error)}` };
     }
   }
 
@@ -560,7 +661,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     limit: number,
     signal: AbortSignal | undefined,
   ): Promise<ReadResult> {
-    const info = await handle.stat();
+    const info = await handle.stat({ bigint: true });
     const window = currentReadWindow();
     // `read_file` 裡行尾的 `\r` 去掉（照 dsh，#1563 N0335）；其餘呼叫維持基座的切片語意。
     const params = window
@@ -577,14 +678,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
           maxLineLength: Infinity,
           maxBytes: Infinity,
         };
-    const hasher = window === undefined ? undefined : createVersionHasher();
-    const options = {
-      ...(hasher === undefined ? {} : { onChunk: (chunk: string) => hasher.update(chunk) }),
-      ...(signal === undefined ? {} : { signal }),
-    };
+    const options = signal === undefined ? {} : { signal };
     let scan;
     // 部署設定給了串流門檻（`tool-fs` 的 `readStreamMinSize`，#1605）就用它，沒給用建構子選項（預設 `READ_STREAM_MIN_SIZE`）。
-    if (info.size < (window?.streamMinSize ?? this.streamMinSize)) {
+    if (Number(info.size) < (window?.streamMinSize ?? this.streamMinSize)) {
       const bytes = await handle.readFile(signal === undefined ? undefined : { signal });
       if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0))
         return notText(filePath, 'binary file');
@@ -606,11 +703,64 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         error: `Line offset ${params.offset} exceeds file length (${page.splitLength} lines)`,
       };
     }
-    if (window !== undefined && hasher !== undefined) {
+    if (window !== undefined) {
       noteReadWindow(page.extent, scan.lines);
-      noteReadVersion(hasher.version(info.mtime.toISOString()));
+      noteReadVersion(statVersion(info));
     }
     return { content: page.content, mimeType: 'text/plain' };
+  }
+
+  /**
+   * 原始內容（`submit_record`、工具結果的中繼資料，以及先讀後改拿不到 stat 版本時走這支）。先過讀取面的圍堵（{@link readDenial}），其餘照基座。
+   *
+   * @param filePath - 虛擬路徑。
+   * @returns 基座的結果，或落在根外時的錯誤結果。
+   */
+  override async readRaw(filePath: string): Promise<ReadRawResult> {
+    const refused = await this.readDenial(filePath, 'readRaw');
+    return refused === undefined ? super.readRaw(filePath) : denied({ error: refused });
+  }
+
+  /**
+   * 列目錄。先過讀取面的圍堵（{@link readDenial}），其餘照基座。
+   *
+   * @param dirPath - 虛擬路徑。
+   * @returns 基座的結果，或落在根外時的錯誤結果。
+   */
+  override async ls(dirPath: string): Promise<LsResult> {
+    const refused = await this.readDenial(dirPath, 'ls');
+    return refused === undefined ? super.ls(dirPath) : denied({ error: refused });
+  }
+
+  /**
+   * 批次下載（技能目錄經它讀 `SKILL.md`），每個檔各自過讀取面的圍堵（{@link readDenial}）。錯誤型別是四個碼的 union，
+   * 跟 {@link uploadFiles} 一樣，落在根外的回 `permission_denied`。
+   *
+   * @param paths - 虛擬路徑。
+   * @returns 逐檔對應的結果，順序與輸入相同。
+   */
+  override async downloadFiles(paths: string[]): Promise<FileDownloadResponse[]> {
+    const results: FileDownloadResponse[] = [];
+    for (const filePath of paths) {
+      if ((await this.readDenial(filePath, 'downloadFiles')) === undefined) {
+        results.push(...(await super.downloadFiles([filePath])));
+      } else {
+        noteSandboxDenial();
+        results.push({ path: filePath, content: null, error: 'permission_denied' });
+      }
+    }
+    return results;
+  }
+
+  /**
+   * 寫與改前比對用的版本，只做 `lstat`、不讀內容（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。token 跟 {@link read}
+   * 回報的同一種（{@link statVersion}）。路徑是基座的 `resolvePath`，不解連結；不是一般檔（含最後一節是符號連結）回不存在。`lstat` 的錯原樣拋，observation 收成不存在，同它對 `readRaw` 拋錯的處理。
+   *
+   * @param filePath - 虛擬路徑。
+   */
+  async [FILE_VERSION](filePath: string): Promise<FileVersionLookup> {
+    const info = await lstat(this.resolveVirtual(filePath), { bigint: true });
+    return info.isFile() ? { kind: 'present', version: statVersion(info) } : { kind: 'absent' };
   }
 
   /**
@@ -665,7 +815,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       });
     } catch (error: unknown) {
       noteErrno(error, false);
-      return { error: `Error writing file '${checked}': ${(error as Error).message}` };
+      return { error: `Error writing file '${checked}': ${await this.reasonFor(error)}` };
     }
   }
 
@@ -745,7 +895,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         return { error: `cannot edit "${checked}": invalid UTF-8 text` };
       }
       noteErrno(error, true);
-      return { error: `Error editing file '${checked}': ${(error as Error).message}` };
+      return { error: `Error editing file '${checked}': ${await this.reasonFor(error)}` };
     }
   }
 
@@ -756,7 +906,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   override async delete(filePath: string): Promise<DeleteResult> {
     const checked = await this.checkedPath(filePath, 'delete', []);
-    return typeof checked === 'string' ? super.delete(checked) : denied(checked);
+    if (typeof checked !== 'string') return denied(checked);
+    const result = await super.delete(checked);
+    return result.error === undefined
+      ? result
+      : { ...result, error: await this.withoutRoot(result.error) };
   }
 
   /**
@@ -864,7 +1018,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 其餘（`--no-config`、上限、取消、錯誤分類、`maxCount` 在解析之後才套）與單一起點完全一樣。
    * 給「要搜的是一堆分散的子目錄」的子類用，免得一個目錄起一次 rg（[#1782](https://github.com/DemianLi/nexus-agent/issues/1782)）。
    *
-   * **偏離 dsh**（理由 2，登記在 `attachment-store.ts` 檔頭偏離 3）：dsh 的 `buildGrepCommand` 只收一個起點；多起點是附件路由
+   * **偏離 dsh**（理由 2，登記在 `attachment-store.ts` 檔頭偏離 2）：dsh 的 `buildGrepCommand` 只收一個起點；多起點是附件路由
    * 「只搜這條 thread 引用過的目錄」那條偏離帶出來的，這裡不為別的用途開放。
    *
    * **呼叫端負責去重**：起點不能重複、也不能互相包含（`['/a', '/a']`、`['/', '/a']` 會讓同一份檔的命中出現兩次）。附件路由給的是
@@ -910,16 +1064,23 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         ...prepared.searchArgs,
       ],
       cwd: this.cwd,
+      mode: this.resolveToolMode(),
       signal: currentToolCallSignal(),
       ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
     });
-    if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    if (outcome.kind === 'error') {
+      return searchFailure(outcome.code, await this.withoutRoot(outcome.message));
+    }
+    const parsed = this.parseRipgrepJson(outcome.stdout);
+    if (typeof parsed === 'string') {
+      return searchFailure(
+        SEARCH_FAILED,
+        `grep received malformed ripgrep --json output (${parsed})`,
+      );
+    }
     noteSearchSkipped(outcome.unreadable);
-    return applyGrepMaxCount({
-      result: { matches: this.parseRipgrepJson(outcome.stdout) },
-      maxCount: maxCount ?? null,
-    });
+    return applyGrepMaxCount({ result: { matches: parsed }, maxCount: maxCount ?? null });
   }
 
   /**
@@ -953,10 +1114,25 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * @returns 檔案清單（`is_dir: false`），失敗時是帶 `error` 的結果。
    */
   override async glob(pattern: string, searchPath = '/'): Promise<GlobResult> {
+    return this.globPaths(pattern, [searchPath || '/']);
+  }
+
+  /**
+   * {@link glob} 的本體，**一次 rg 列多個起點**；起點之間不存在或不是目錄的略過、全都略過回 `{ files: [] }`，其餘與單一起點完全一樣。
+   * 給附件路由「只列這條 thread 引用過的目錄」用，條件與界限同 {@link grepPaths}：呼叫端負責去重、起點不能互相包含；起點一次全放進
+   * argv、不分批。
+   *
+   * @param dirPaths - 起點的虛擬路徑。
+   * @returns 檔案清單；失敗時帶 `error` 與 `errorCode`（{@link GlobPathsResult}）。
+   */
+  protected async globPaths(
+    pattern: string,
+    dirPaths: readonly string[],
+  ): Promise<GlobPathsResult> {
     if (pattern.trim().length === 0) {
       return searchFailure(SEARCH_INVALID_PATTERN, 'glob pattern must be a non-empty string');
     }
-    const prepared = await this.prepareSearch('glob', [searchPath || '/'], true);
+    const prepared = await this.prepareSearch('glob', dirPaths, true);
     if (prepared.kind === 'empty') return { files: [] };
     if (prepared.kind === 'failed') return prepared.failure;
     const signal = currentToolCallSignal();
@@ -975,12 +1151,15 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         ...prepared.searchArgs,
       ],
       cwd: this.cwd,
+      mode: this.resolveToolMode(),
       tool: 'glob',
       signal,
       ...(this.tolerateUnreadable && { tolerateUnreadable: { searchRoots: prepared.searchArgs } }),
       internals: this.ripgrepInternals,
     });
-    if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    if (outcome.kind === 'error') {
+      return searchFailure(outcome.code, await this.withoutRoot(outcome.message));
+    }
     noteSearchSkipped(outcome.unreadable);
 
     const relatives: string[] = [];
@@ -1019,7 +1198,6 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * `grep` 與 `glob` 起 rg 之前共用的準備：確認工作區根、解出搜尋起點、解出內附 rg。
    *
-   * `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。
    * **根不存在不是錯誤，是「沒有東西可找」**（`empty`，同基座對不存在的起點）：暫存 backend 的根是第一次存東西才建的
    * （`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
    *
@@ -1033,7 +1211,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     directoriesOnly: boolean,
   ): Promise<
     | { readonly kind: 'empty' }
-    | { readonly kind: 'failed'; readonly failure: ReturnType<typeof searchFailure> }
+    | {
+        readonly kind: 'failed';
+        readonly failure: { readonly error: string; readonly errorCode?: SearchErrorCode };
+      }
     | { readonly kind: 'ready'; readonly executable: string; readonly searchArgs: string[] }
   > {
     try {
@@ -1048,6 +1229,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         ),
       };
     }
+    for (const dirPath of dirPaths) {
+      const refused = await this.readDenial(dirPath || '.', tool);
+      if (refused !== undefined) return { kind: 'failed', failure: denied({ error: refused }) };
+    }
     const searchArgs = await this.existingSearchArgs(dirPaths, directoriesOnly);
     if (searchArgs.length === 0) return { kind: 'empty' };
     let executable = this.ripgrepInternals?.executable;
@@ -1055,7 +1240,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       try {
         executable = await resolveRgPath();
       } catch {
-        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `launchFailedMessage`）。
+        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `FAILURE_REASONS`）。
         // 管理者從 serve 啟動日誌那一行看得到原因。
         return {
           kind: 'failed',
@@ -1102,32 +1287,49 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 解 `rg --json` 的輸出，換算成虛擬路徑。邏輯照基座 `ripgrepSearch`（`src-C9o7b5C6.js:951-978`）：
-   * 只收 `match`，路徑相對 `cwd` 換成 `/…`，跑到根外的丟掉，壞行略過。
+   * 解 `rg --json` 的輸出，換算成虛擬路徑；**輸出壞了回一句說明**（呼叫端判 `SEARCH_FAILED`），不回半份結果。
+   *
+   * `rg --json` 是內部的傳輸格式，不是給人看的：一行不是 JSON、紀錄不是物件、`match` 紀錄缺了路徑文字、行號或行內容，都表示這一次
+   * 的輸出不可信。檔名不是 UTF-8 時 rg 送 `path.bytes`，同樣算缺路徑文字。`type` 不是 `match` 的紀錄（`begin`／`end`／`summary` 等）
+   * 一律略過。行不是 UTF-8 時 rg 送 `lines.bytes` 而不是 `text`，換成一句佔位，不算壞。路徑相對 `cwd` 換成 `/…`，跑到根外或就是根
+   * 本身的丟掉。
    */
-  private parseRipgrepJson(stdout: string): Array<{ path: string; line: number; text: string }> {
+  private parseRipgrepJson(
+    stdout: string,
+  ): Array<{ path: string; line: number; text: string }> | string {
     const matches: Array<{ path: string; line: number; text: string }> = [];
     for (const line of stdout.split('\n')) {
       if (line.trim() === '') continue;
+      let parsed: unknown;
       try {
-        const data = JSON.parse(line) as {
-          type?: string;
-          data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } };
-        };
-        if (data.type !== 'match') continue;
-        const file = data.data?.path?.text;
-        const lineNumber = data.data?.line_number;
-        if (file === undefined || file === '' || lineNumber === undefined) continue;
-        const rel = relative(this.cwd, resolve(this.cwd, file));
-        if (escapesRoot(rel)) continue;
-        matches.push({
-          path: `/${rel.split(sep).join('/')}`,
-          line: lineNumber,
-          text: data.data?.lines?.text?.replace(/\n$/, '') ?? '',
-        });
+        parsed = JSON.parse(line);
       } catch {
-        continue;
+        return 'a line is not JSON';
       }
+      if (typeof parsed !== 'object' || parsed === null) return 'a record is not an object';
+      const record = parsed as { type?: unknown; data?: unknown };
+      if (record.type !== 'match') continue;
+      if (typeof record.data !== 'object' || record.data === null) {
+        return 'a match record has no data';
+      }
+      const data = record.data as { path?: unknown; line_number?: unknown; lines?: unknown };
+      const file =
+        typeof data.path === 'object' && data.path !== null
+          ? (data.path as { text?: unknown }).text
+          : undefined;
+      if (typeof file !== 'string') return 'a match record has no path text';
+      if (typeof data.line_number !== 'number') return 'a match record has no line number';
+      if (typeof data.lines !== 'object' || data.lines === null) {
+        return 'a match record has no line content';
+      }
+      const lines = data.lines as { text?: unknown; bytes?: unknown };
+      let text: string;
+      if (typeof lines.text === 'string') text = lines.text.replace(/\n$/, '');
+      else if (typeof lines.bytes === 'string') text = '(line is not valid UTF-8)';
+      else return 'a match record has neither line text nor bytes';
+      const rel = relative(this.cwd, resolve(this.cwd, file));
+      if (rel === '' || escapesRoot(rel)) continue;
+      matches.push({ path: `/${rel.split(sep).join('/')}`, line: data.line_number, text });
     }
     return matches;
   }
@@ -1152,6 +1354,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
     // 指向兩個不同的模式。dsh 的「一次呼叫一份政策」在這個形狀底下就是這一行。
     const standing = this.mode;
+    // 保留的地方排在模式之前：全開與核准來的 grant 都蓋不過它，所以不記拒絕、不接指引。
+    const reserved = await this.reservedDenial(standing, filePath, operation);
+    if (reserved !== undefined) return { error: reserved };
     const first = await this.verdict(standing, filePath, operation);
     if (typeof first === 'string') return first;
 
@@ -1222,7 +1427,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     try {
       realRoot = await realpath(this.cwd);
     } catch {
-      return { error: this.denial(mode, operation, filePath, `可寫根 ${this.cwd} 不存在`) };
+      return { error: this.denial(mode, operation, filePath, '可寫根不存在') };
     }
 
     // `canonicalize()` 只把 ENOENT/ENOTDIR 當「還不存在」，其餘（ELOOP、EACCES…）會 rethrow。
@@ -1238,12 +1443,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
     if (!isWithin(realRoot, realTarget)) {
       return {
-        error: this.denial(
-          mode,
-          operation,
-          filePath,
-          `canonicalize 之後是 ${realTarget}，落在可寫根之外`,
-        ),
+        error: this.denial(mode, operation, filePath, '經符號連結解析之後落在可寫根之外'),
       };
     }
 
@@ -1251,6 +1451,117 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // 基座那一次 lexical resolve 走的是實際位置。合法路徑走到這裡通常原封不動。
     const inside = relative(realRoot, realTarget);
     return inside === '' ? '/' : `/${inside.split(sep).join('/')}`;
+  }
+
+  /**
+   * 變更落在保留的地方（{@link reservedReason} 有理由）就拒，不看模式。
+   *
+   * @param mode - 這一次呼叫用的模式，只用在拒絕訊息。
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 出現在拒絕訊息裡的操作名。
+   * @returns 落在保留的地方時的拒絕訊息；其餘 `undefined`。
+   */
+  private async reservedDenial(
+    mode: SandboxMode,
+    filePath: string,
+    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+  ): Promise<string | undefined> {
+    const reason = await this.reservedReason(filePath);
+    return reason === undefined ? undefined : this.denial(mode, operation, filePath, reason);
+  }
+
+  /**
+   * `filePath` 落在保留的地方嗎（{@link ContainedFilesystemBackendOptions.reservedWrites}）。變更的拒絕（{@link reservedDenial}）與
+   * 升級工具（#2078）問的都是這一個。
+   *
+   * 兩邊都 canonicalize 之後比，經符號連結的別名（`/docs/AGENTS.md`，`docs` 指向根）也擋得到；解析失敗的退回字面位置比。
+   * **不分大小寫**：不分大小寫的檔案系統上，`/claude.md` 跟 `/CLAUDE.md` 是同一個檔。代價是分大小寫的檔案系統上，只差大小寫的名字也寫不進去。
+   * 路徑本身不合法（`..`、`~`、跑出根）的不在這裡判，交給 {@link verdict} 與基座。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @returns 落在保留的地方時是那一格的理由；其餘（含路徑不合法）`undefined`。
+   */
+  async reservedReason(filePath: string): Promise<string | undefined> {
+    const reserved = this.reservedWrites?.() ?? [];
+    if (reserved.length === 0) return undefined;
+    const target = await this.placeOf(filePath);
+    if (target === undefined) return undefined;
+    for (const entry of reserved) {
+      const place = await this.placeOf(entry.path);
+      if (place === undefined) continue;
+      const hit = entry.subtree ? isWithin(place, target) : place === target;
+      if (hit) return entry.reason;
+    }
+    return undefined;
+  }
+
+  /** {@link reservedReason} 比對用的位置：canonicalize 之後轉小寫；解析失敗退回字面位置，路徑不合法回 `undefined`。 */
+  private async placeOf(virtualPath: string): Promise<string | undefined> {
+    let resolved: string;
+    try {
+      resolved = this.resolveVirtual(virtualPath);
+    } catch {
+      return undefined;
+    }
+    const place = await canonicalize(resolved).catch(() => resolved);
+    return place.toLowerCase();
+  }
+
+  /**
+   * 讀取面的圍堵（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）：路徑 canonicalize 之後落在根外就拒。
+   * 擋的是工作區裡往外指的符號連結——祖先目錄的連結基座照跟，經它讀得到根外的檔，連結指向 harness home 或 `.env` 時就是 key。
+   *
+   * 跟寫入的 {@link verdict} 同一套 canonicalize-then-contain（`canonical-path.ts`），差在三處：
+   * - **`read-only` 也照判**：那一格擋的是變更，不是讀。只有 `danger-full-access` 放行，跟寫入一致。
+   * - **不認領 grant、不接升級指引**：升級只蓋變更，指引對讀沒有用。
+   * - **判不了時只放行下游必定也失敗的那幾種**：字面檢查（`..`、`~`）擋下的、根不存在、解析撞上 {@link READ_PASSTHROUGH_CODES}
+   *   的，原樣交給基座或自己的讀法，錯誤字句是下游自己的——開檔走同一串路徑，會撞上同一個錯。其餘（`EMFILE`、`EIO` 這類暫時性的錯）
+   *   拒，措辭同 {@link verdict} 的「路徑解析失敗」：這一刻判不了，下一刻開檔卻可能成功，就經連結讀出去了。
+   *
+   * 最後一段是指向根外的檔案連結也在這裡被拒，到不了開檔那一步。
+   * 殘留的 TOCTOU（檢查之後、開檔之前祖先被換成連結）跟寫入面同一個取捨，見檔頭。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 出現在拒絕訊息裡的操作名。
+   * @returns 落在根外時的拒絕訊息；其餘 `undefined`。
+   */
+  private async readDenial(
+    filePath: string,
+    operation: ReadOperation,
+  ): Promise<string | undefined> {
+    return (await this.readScope(filePath, operation)).denial;
+  }
+
+  /**
+   * {@link readDenial} 的判斷，連同比過根的那個實際位置一起回。解析交給下游的情況沒有 `realTarget`。
+   * `danger-full-access` 不比根，位置照樣解開，所以連結在這一格一律讀得到，往外的也是。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 出現在拒絕訊息裡的操作名。
+   */
+  private async readScope(filePath: string, operation: ReadOperation): Promise<ReadScope> {
+    const mode = this.mode;
+    let resolved: string;
+    try {
+      resolved = this.resolveVirtual(filePath);
+    } catch {
+      return {};
+    }
+    let realRoot: string;
+    let realTarget: string;
+    try {
+      realRoot = await realpath(this.cwd);
+      realTarget = await canonicalize(resolved);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (mode === 'danger-full-access') return {};
+      if (code !== undefined && READ_PASSTHROUGH_CODES.has(code)) return {};
+      return {
+        denial: this.denial(mode, operation, filePath, `路徑解析失敗（${code ?? '未知'}）`),
+      };
+    }
+    if (mode === 'danger-full-access' || isWithin(realRoot, realTarget)) return { realTarget };
+    return { denial: this.denial(mode, operation, filePath, '經符號連結解析之後落在根之外') };
   }
 
   /**
@@ -1305,6 +1616,25 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private withHint(denied: { error: string }): { error: string } {
     const hint = this.grants?.escalationHint;
     return hint === undefined ? denied : { error: `${denied.error}\n${hint}` };
+  }
+
+  /** {@link pathlessReason} 再換掉訊息裡的根。 */
+  private async reasonFor(error: unknown): Promise<string> {
+    return this.withoutRoot(pathlessReason(error));
+  }
+
+  /**
+   * 把文字裡的根換成虛擬路徑的 `/`（[#2201](https://github.com/DemianLi/nexus-agent/issues/2201)）：`cwd` 與它的 realpath 都換，
+   * 根經過符號連結時兩種寫法都可能出現。擋的是我們拿不到例外、只拿得到字串的地方：基座的 `delete`、rg 的 stderr、包過一層的錯誤。
+   */
+  private async withoutRoot(text: string): Promise<string> {
+    const real = await realpath(this.cwd).catch(() => this.cwd);
+    let scrubbed = text;
+    // 長的先換：`cwd` 可能是 realpath 的後綴（`/var/x` 與 `/private/var/x`），先換短的會留下 `/private`。
+    for (const root of [...new Set([this.cwd, real])].sort((a, b) => b.length - a.length)) {
+      scrubbed = scrubbed.replaceAll(`${root}${sep}`, '/').replaceAll(root, '/');
+    }
+    return scrubbed;
   }
 
   /**

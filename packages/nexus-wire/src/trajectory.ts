@@ -13,7 +13,7 @@
  *
  * - 工具：`callId`（工具卡的鍵）。
  * - 回覆：`messageId`（日誌上那則訊息自己的 id）與 `seq`（歷史頁的 `history-<seq>`）。
- * - 輪：`seq` 是 `turn/start` 在 root 日誌上的位置。
+ * - 輪：`seq` 是 `turn/start` 在所屬那份日誌上的位置。主對話與子代理的日誌各算各的，兩邊的號可能相同。
  *
  * ## 窗口
  *
@@ -29,14 +29,16 @@
  * @module
  */
 
+import type { TurnStopCause } from './conversation.js';
+
 /** 軌跡投影的 key（`projection` frame 的 `key`）。 */
 export const TRAJECTORY_PROJECTION = 'trajectory';
 /** 請求快照投影的 key。 */
 export const REQUEST_SNAPSHOTS_PROJECTION = 'request-snapshots';
 
 /** `trajectory` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-// 7：呼叫與一輪的 `inputTokens` 改成未快取的那一桶（#724），原本是含快取讀寫的完整 prompt。
-export const TRAJECTORY_VERSION = 7;
+// 8：決策點含 `skill-invocation`（#2062）。
+export const TRAJECTORY_VERSION = 8;
 /** `request-snapshots` 的 `stateVersion`。 */
 export const REQUEST_SNAPSHOTS_VERSION = 1;
 
@@ -134,7 +136,7 @@ export interface TrajectoryReply {
   readonly time: number;
   /** 日誌上那則訊息自己的 id；有些供應商不給。 */
   readonly messageId?: string;
-  /** 被人按停止切斷的半段。 */
+  /** 這一輪被中止時切斷的半段。 */
   readonly interrupted?: true;
   readonly textChars: number;
   /** 推理區塊的總字數。**日誌不記供應商給的是全文還是摘要版**，所以這裡只有字數、沒有判斷。 */
@@ -151,7 +153,8 @@ export interface TrajectoryCall {
   readonly endTime?: number;
   readonly durationMs?: number;
   /**
-   * 這次呼叫沒有正常回來的方式（`model/end.outcome`，#1022）：`error` ＝ 拋錯，`aborted` ＝ 使用者按了停止。
+   * 這次呼叫沒有正常回來的方式（`model/end.outcome`，#1022）：`error` ＝ 拋錯，`aborted` ＝ 被中止，原因見所屬那一輪的
+   * `TrajectoryDigest.endCause`；前景子代理的日誌沒有 `turn/end`，那裡查不到。
    * 沒有這一格 ＝ 正常回來，或舊日誌。失敗的呼叫若供應商報過用量，數字在 `usage` 裡。
    */
   readonly outcome?: 'error' | 'aborted';
@@ -211,6 +214,13 @@ export type TrajectoryDecision =
       readonly seq: number;
       readonly time: number;
       readonly plugin: string;
+    }
+  | {
+      /** 人寫 `/名字` 叫用的技能（#2062，`user/message` 的來源 `skill-invocation`）。 */
+      readonly kind: 'skill-invocation';
+      readonly seq: number;
+      readonly time: number;
+      readonly name: string;
     }
   | {
       readonly kind: 'goal';
@@ -275,7 +285,7 @@ export interface TrajectoryElided {
 export interface TrajectoryDigest {
   /** 第幾輪（0 起，每顆 `turn/start` 一輪，含 `resume`）。 */
   readonly index: number;
-  /** `turn/start` 在 root 日誌上的位置。 */
+  /** `turn/start` 在所屬那份日誌上的位置。 */
   readonly seq: number;
   readonly time: number;
   readonly kind: TrajectoryTurnKind;
@@ -283,8 +293,13 @@ export interface TrajectoryDigest {
   readonly logical: boolean;
   readonly end?: TrajectoryEnd;
   /**
+   * 被中止的那一輪為什麼停（[#1847](https://github.com/DemianLi/nexus-agent/issues/1847)，`turn/end` 的 `reason.cause`）。
+   * **只有 `end` 是 `aborted` 且日誌帶了認得的原因才有**，不猜。選填欄位：`version` 不動，舊渲染器照畫、只是沒有這格。
+   */
+  readonly endCause?: TurnStopCause;
+  /**
    * 失敗的那一輪是哪一類失敗（`turn/failed` 的 `error.code`，#434／#1115）：`AUTH`、`QUOTA`、`RATE_LIMIT`、
-   * `CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`、`HTTP_<n>`、`TIMEOUT`、`TRANSPORT`、`UNKNOWN`（與 `llm/retry`
+   * `CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`、`HTTP_<n>`、`TIMEOUT`、`TRANSPORT`、`STORAGE_FULL`、`UNKNOWN`（與 `llm/retry`
    * 同一份詞彙）。**只有 `end` 是 `failed` 且日誌帶了碼才有**：舊日誌的 `turn/failed` 沒有 `error`，缺席就是「沒記」，
    * 不補 `UNKNOWN`。選填欄位，沒升 {@link TRAJECTORY_VERSION}（#1021／#1022 的先例）。
    */

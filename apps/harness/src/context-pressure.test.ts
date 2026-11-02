@@ -356,6 +356,13 @@ describe('即時與重新整理拿到同一份，只算 root', () => {
       'boolean',
       'boolean',
     ]);
+    // 前提：每一筆都帶 `breakdown`（#1571 N1193），三格是非負整數——「逐一相等」才問得到手抄的 `contextMeasureData` 有沒有把它帶上線。
+    for (const each of rootMeasures) {
+      expect(each.breakdown).toBeDefined();
+      for (const value of Object.values(each.breakdown!)) {
+        expect(Number.isInteger(value) && value >= 0).toBe(true);
+      }
+    }
     // 前提：最後一輪真的失敗了，而且沒有留下任何一筆。
     expect(root.at(-1)?.type).toBe('turn/failed');
 

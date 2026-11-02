@@ -41,6 +41,7 @@ import { compareText } from './compare.js';
 import {
   blobText,
   diffTrees,
+  GitStartError,
   gitlinkPaths,
   ignoredPaths,
   locateGitWorkspace,
@@ -332,8 +333,13 @@ export class TurnRecorder {
       try {
         await task(this.#lifetime.signal);
       } catch (error: unknown) {
-        // 收掉之後的失敗是預期中的取消，不講。
-        if (!this.#lifetime.signal.aborted) this.env.warn(`workspace-changes: ${String(error)}`);
+        // 收掉之後的失敗是預期中的取消，不講。沙箱不可用可能每一輪都來，組裝點的 starter 會講一次。
+        const quiet =
+          error instanceof GitStartError &&
+          (error.reason === 'sandbox-unavailable' || error.reason === 'repo-covers-home');
+        if (!this.#lifetime.signal.aborted && !quiet) {
+          this.env.warn(`workspace-changes: ${String(error)}`);
+        }
       }
     });
     this.#chain = run;

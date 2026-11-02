@@ -29,12 +29,13 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { createDeliverableClient } from '@nexus/wire';
+import { createDeliverableClient, THREAD_ROOT_MISMATCH } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
@@ -245,6 +246,43 @@ describe('盤點 :64 那一對：A 寫的檔，B 看不到；重啟之後 A 還�
   }, 90000);
 });
 
+describe('崩潰留下的原子寫入暫存（#2198）', () => {
+  const STAGING = '.w.bin.7.0f8fad5b-d9cb-469f-a165-70867728950e.tmpdir';
+
+  async function plantOrphan(directory: string): Promise<string> {
+    const staging = join(directory, STAGING);
+    await mkdir(staging, { mode: 0o700 });
+    await writeFile(join(staging, 'w.bin.tmp'), 'HALF', 'utf8');
+    await utimes(staging, new Date(1_000_000), new Date(1_000_000));
+    return staging;
+  }
+
+  it('續接時背景清掉私有根裡的孤兒，使用者的檔留著', async () => {
+    const fx = await fixture();
+    await turn(await start(fx, WRITE), 'a');
+    const [name] = await privateRoots(fx);
+    const staging = await plantOrphan(join(base(fx), name!));
+    await turn(await start(fx, PROBE), 'a');
+    await running?.close();
+    running = undefined;
+    await expect(stat(staging)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readdir(join(base(fx), name!))).toContain('r.csv');
+  }, 90000);
+
+  it('舊 thread 的可寫根是 --workspace：不掃', async () => {
+    const fx = await fixture();
+    await turn(await start(fx, WRITE), 'a');
+    await rewriteHeader(fx.home, 'a', (header) => {
+      header['workspaceRoot'] = fx.shared;
+    });
+    const staging = await plantOrphan(fx.shared);
+    await turn(await start(fx, PROBE), 'a');
+    await running?.close();
+    running = undefined;
+    expect((await stat(staging)).isDirectory()).toBe(true);
+  }, 90000);
+});
+
 describe('唯讀共用區', () => {
   const READ_THEN_WRITE: ScriptedTurn[] = [
     {
@@ -365,18 +403,54 @@ describe('續接一律讀 header，不用 thread id 重算', () => {
     expect(await privateRoots(fx)).toEqual([]);
   }, 90000);
 
-  it('header 的根既不是共用區、也不在基底底下：接不回來，訊息指名兩個根', async () => {
+  it('header 的根既不是共用區、也不在基底底下：接不回來，專用碼不帶路徑，serve 的日誌指名兩個根', async () => {
     const fx = await fixture();
     await makeOldThread(fx, 'old');
     const elsewhere = await scratch('nexus-private-root-elsewhere-');
     await rewriteHeader(fx.home, 'old', (header) => {
       header.workspaceRoot = elsewhere;
     });
-    const client = await serveClient(await start(fx, PROBE));
+    const lines: string[] = [];
+    const client = await serveClient(await start(fx, PROBE, { log: (line) => lines.push(line) }));
     const refused = await client.slashRun('old', '/permission');
-    expect(refused).toMatchObject({ kind: 'rejected' });
-    expect(JSON.stringify(refused)).toContain(elsewhere);
-    expect(JSON.stringify(refused)).toContain(fx.shared);
+    expect(refused).toMatchObject({ kind: 'rejected', code: THREAD_ROOT_MISMATCH });
+    expect(JSON.stringify(refused)).not.toContain(elsewhere);
+    expect(JSON.stringify(refused)).not.toContain(fx.shared);
+    expect(lines.join('\n')).toContain(elsewhere);
+    expect(lines.join('\n')).toContain(fx.shared);
+  }, 90000);
+
+  it('header 的 cwd 是別的目錄：接不回來，回應是固定訊息，路徑只在 serve 的日誌', async () => {
+    const fx = await fixture();
+    await makeOldThread(fx, 'old');
+    const elsewhere = await scratch('nexus-private-root-cwd-');
+    await rewriteHeader(fx.home, 'old', (header) => {
+      header.cwd = elsewhere;
+    });
+    const lines: string[] = [];
+    const client = await serveClient(await start(fx, PROBE, { log: (line) => lines.push(line) }));
+    const refused = await client.slashRun('old', '/permission');
+    expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+    expect(JSON.stringify(refused)).toContain('原因記在 serve 的日誌');
+    expect(JSON.stringify(refused)).not.toContain(elsewhere);
+    expect(lines.join('\n')).toContain(elsewhere);
+  }, 90000);
+
+  it('私有根的權限被改壞：接不回來，回應是固定訊息，路徑只在 serve 的日誌', async () => {
+    const fx = await fixture();
+    const first = await start(fx, WRITE);
+    await turn(first, 'a');
+    await first.close();
+    running = undefined;
+    const root = (await headerOf(fx.home, 'a')).workspaceRoot!;
+    await chmod(root, 0o750);
+    const lines: string[] = [];
+    const client = await serveClient(await start(fx, PROBE, { log: (line) => lines.push(line) }));
+    const refused = await client.slashRun('a', '/permission');
+    expect(refused).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+    expect(JSON.stringify(refused)).toContain('原因記在 serve 的日誌');
+    expect(JSON.stringify(refused)).not.toContain(root);
+    expect(lines.join('\n')).toContain(root);
   }, 90000);
 
   it.each([

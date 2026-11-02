@@ -7,20 +7,22 @@
  *
  * 1. `.sha256` 與 tarball 對得上（等同 `sha256sum -c`）；
  * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；SBOM 與實際裝了的
- *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
+ *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），SBOM 列的每一顆授權都是寬鬆授權或審過的例外（`installedLicenseProblems`），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
- * 4. 目標平台的 `node-addon-system` 載得起來（flock 的原生二進位，#1503／會話租約都靠它）；內附的 ripgrep 在 `PATH` 上沒有 rg
- *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；
+ * 4. Linux 上打包裡的 spawner `--flock` 真的鎖得住（home 鎖與會話租約都靠它，#1503：第二個搶不到、持有者 SIGKILL 之後拿得到；產品的 `lockFileExclusive` 真的走到它，由步驟 6 的第二台 serve 驗）；內附的 ripgrep 在 `PATH` 上沒有 rg
+ *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；sharp 與目標平台的 libvips 載得起來，真的縮一張圖
+ *    （[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）；Linux 上產物裡的沙箱 spawner 起得來、送 `Ready`，
+ *    經它起得了主機上的 git（#1946，`spawner-probe.ts`）；
  * 5. 假模型跑一輪 `lib/cli.js`：會話 header 的 `build.commit` 等於戳記——已安裝的樹沒有 git，戳記是唯一的來源（PM 補驗收）；
  *    戳記本身也查：`commit` 是非空字串、`dirty` 是 `false`（本機驗沒 commit 的改動加 `--allow-dirty`，CI 不加）；
  * 6. 起一次 `lib/serve.js --port 0`：印出網址、啟動日誌講的 grep 用的 ripgrep 在**安裝樹裡**（不是宿主 `PATH` 上的）、
- *    首頁 200 且是網頁 index、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0。
+ *    首頁 200 且是網頁 index、Linux 上第二台 serve 被 home 鎖拒絕、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0。
  *
  * 子行程環境清掉 `NODE_OPTIONS`、`NODE_PATH`、`TSX_TSCONFIG_PATH`，`NEXUS_AGENT_HOME`／`HOME` 指進暫存目錄，`cwd` 在 repo 外。
  * 不論成敗，暫存目錄一律收掉。放 `/var/tmp`（不放 `os.tmpdir()`：那裡有暫存目錄規則會干擾，見 smoke-built-bin）。
  *
  * 步驟 3 到 6 的判斷都是輸入子行程結果、輸出 problems 的純函式（`versionProblems` 等），單元測試在
- * `apps/harness/src/verify-packed-install.test.ts`（#1666）。serve 以自己的行程群組起，逾時 `SIGKILL` 送整個群組。
+ * `apps/harness/src/verify-packed-install.test.ts` 與 `release-scripts.test.ts`（#1666）。serve 以自己的行程群組起，逾時 `SIGKILL` 送整個群組。
  *
  * 用法：`pnpm run release:verify-packed-install <tarball> [--expect-commit <sha>] [--allow-dirty]`。
  *
@@ -42,7 +44,10 @@ import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { sessionFilenames } from '../../packages/nexus-core/src/session-filename.js';
+import {
+  parseGenerationLogFilename,
+  sessionDirectoryName,
+} from '../../packages/nexus-core/src/session-filename.js';
 import { serverLogBody } from '../../apps/harness/src/server-log-line.js';
 import { fileSha256 } from './pack.js';
 import {
@@ -51,13 +56,34 @@ import {
   collectPayloadViolations,
   walkInstalledGraph,
 } from './payload.js';
-import { sbomProblems } from './sbom.js';
+import { installedLicenseProblems, sbomProblems } from './sbom.js';
+import { SPAWNER_PATH } from './spawner.js';
+import {
+  probeInstalledSpawner,
+  spawnerProbeProblems,
+  spawnerProbeSummary,
+} from './spawner-probe.js';
 
 /**
- * CLI 那一輪 root 會話的檔名。root 的 id 固定是 `cli`，`safeBaseName` 編碼後不變；檔名照 `@nexus/core` 的那一份
- * （#1857）。import 的是葉模組本身，不經 `@nexus/core` 的入口：發版腳本不拉整包 core 進來，同上面的 `server-log-line`。
+ * CLI 那一輪 root 會話的世代檔：`<run 目錄>/<sessionDirectoryName('cli')>/` 裡數字最大的 `session.v<N>.jsonl`，header 在第一行
+ * （#1594 ③）。檔名照 `@nexus/core` 的那一份（#1857）；import 的是葉模組本身，不經 `@nexus/core` 的入口：發版腳本不拉整包
+ * core 進來，同上面的 `server-log-line`。
+ *
+ * @param runDirectory - CLI 這一輪的 run 目錄。
+ * @returns 世代檔的路徑；會話目錄不在或裡面沒有世代檔就是 `undefined`。
  */
-const CLI_SESSION = sessionFilenames('cli');
+export function cliSessionLog(runDirectory: string): string | undefined {
+  const sessionDirectory = join(runDirectory, sessionDirectoryName('cli'));
+  if (!existsSync(sessionDirectory)) return undefined;
+  let latest: { readonly name: string; readonly version: number } | undefined;
+  for (const name of readdirSync(sessionDirectory)) {
+    const version = parseGenerationLogFilename(name);
+    if (version !== undefined && (latest === undefined || version > latest.version)) {
+      latest = { name, version };
+    }
+  }
+  return latest === undefined ? undefined : join(sessionDirectory, latest.name);
+}
 
 /** 乾淨的子行程環境：宿主的 tsx hook、NODE_PATH 都不能替產物補洞。 */
 export function cleanEnv(home: string): NodeJS.ProcessEnv {
@@ -137,10 +163,49 @@ export function versionProblems(run: CommandOutcome, expected: string): string[]
   return [];
 }
 
-/** 步驟 4：目標平台的 flock 原生二進位載得起來、拿得到鎖。 */
-export function nativeLockProblems(run: CommandOutcome): string[] {
+/** 步驟 4：打包裡的 spawner 真的拿得到鎖、擋得住第二個，持有者死了放得掉。 */
+export function spawnerLockProblems(run: CommandOutcome): string[] {
   if (run.status !== 0 || run.stdout.trim() !== 'locked') {
-    return [`目標平台的 flock 原生二進位拿不到鎖：${run.stderr.slice(-400)}`];
+    return [`打包裡的 spawner 鎖不住：${run.stdout.slice(-200)}${run.stderr.slice(-400)}`];
+  }
+  return [];
+}
+
+/**
+ * 步驟 4 的探針：對 `binary --flock` 走完「持有者拿到、第二個被擋（結束碼 10）、持有者 SIGKILL 後拿得到」。
+ * `lib/` 是打包過的，內部模組沒有自己的檔，所以直接驗出貨的執行檔。
+ *
+ * spawner 拿了鎖就結束，鎖屬於 open file description，留在開檔的行程上：所以 fd 不關，持有者要活著；每次 `lock()` 都開新的 fd。
+ */
+export function spawnerLockProbe(binary: string, lockFile: string): string {
+  const lock =
+    "import { openSync } from 'node:fs';\n" +
+    "import { spawnSync } from 'node:child_process';\n" +
+    `const lock = () => spawnSync(${JSON.stringify(binary)}, ['--flock'], { stdio: ['ignore', 'ignore', 'ignore', openSync(${JSON.stringify(lockFile)}, 'w', 0o600)] }).status;\n`;
+  const holder = `${lock}console.log(lock() === 0 ? 'held' : 'failed'); setInterval(() => {}, 1000);`;
+  return (
+    lock +
+    "import { spawn } from 'node:child_process';\n" +
+    "import { once } from 'node:events';\n" +
+    `const holder = spawn(process.execPath, ['--input-type=module', '--eval', ${JSON.stringify(holder)}], { stdio: ['ignore', 'pipe', 'inherit'] });\n` +
+    "process.on('exit', () => holder.kill('SIGKILL'));\n" +
+    "const [first] = await once(holder.stdout, 'data');\n" +
+    "if (String(first).trim() !== 'held') throw new Error('持有者沒拿到鎖：' + first);\n" +
+    'const second = lock();\n' +
+    "if (second !== 10) throw new Error('第二個沒被擋下：' + second);\n" +
+    "holder.kill('SIGKILL'); await once(holder, 'exit');\n" +
+    'const third = lock();\n' +
+    "if (third !== 0) throw new Error('持有者死了還拿不到：' + third);\n" +
+    "console.log('locked');"
+  );
+}
+
+/** 步驟 6 的一環：同一個 home 已有 serve 活著，第二台要被 home 鎖拒絕；鎖退到 `unavailable` 時第二台不會被拒，這條就紅。 */
+export function secondServeProblems(run: CommandOutcome): string[] {
+  if (run.status !== 1 || !run.stderr.includes('已經有另一個 serve 在用')) {
+    return [
+      `第二台 serve 沒被 home 鎖擋下：exit ${String(run.status)}，stderr ${JSON.stringify(run.stderr.slice(-400))}`,
+    ];
   }
   return [];
 }
@@ -155,6 +220,42 @@ export function bundledRgProblems(run: CommandOutcome): string[] {
   return [];
 }
 
+/** 步驟 4d 的探針圖：比 {@link SHARP_PROBE_LIMIT} 大，縮完長邊要剛好等於上限。 */
+export const SHARP_PROBE_SOURCE = { width: 3000, height: 2000 } as const;
+/** 步驟 4d 探針自己的長邊上限，只用來確認真的縮了；跟產品的圖片處理沒有綁在一起。 */
+export const SHARP_PROBE_LIMIT = 2048;
+
+/** 步驟 4d 的探針：從 `cwd` 解析 `sharp`，產一張探針圖、依 EXIF 轉正、轉 sRGB、縮進上限、編 JPEG，印出結果的寬高、色彩空間與格式。 */
+export const SHARP_PROBE =
+  "import sharp from 'sharp';\n" +
+  `const source = await sharp({ create: { width: ${String(SHARP_PROBE_SOURCE.width)}, height: ${String(SHARP_PROBE_SOURCE.height)}, channels: 3, background: '#c03030' } }).png().toBuffer();\n` +
+  `const out = await sharp(source).rotate().toColourspace('srgb').resize(${String(SHARP_PROBE_LIMIT)}, ${String(SHARP_PROBE_LIMIT)}, { fit: 'inside' }).jpeg({ quality: 85 }).toBuffer();\n` +
+  'const meta = await sharp(out).metadata();\n' +
+  'process.stdout.write(JSON.stringify({ width: meta.width, height: meta.height, space: meta.space, format: meta.format }));';
+
+/** 步驟 4d：sharp 從產物根載得起來，把探針圖轉成 sRGB、縮進上限、編成 JPEG；子行程印一行 JSON。 */
+export function sharpProblems(run: CommandOutcome): string[] {
+  let result: { width?: unknown; height?: unknown; space?: unknown; format?: unknown } | undefined;
+  try {
+    result = run.status === 0 ? (JSON.parse(run.stdout) as typeof result) : undefined;
+  } catch {
+    // stdout 不是 JSON：result 留 undefined，由下面同一個判斷報。
+  }
+  if (
+    result === undefined ||
+    typeof result.width !== 'number' ||
+    typeof result.height !== 'number' ||
+    Math.max(result.width, result.height) !== SHARP_PROBE_LIMIT ||
+    result.space !== 'srgb' ||
+    result.format !== 'jpeg'
+  ) {
+    return [
+      `sharp 在產物裡縮不了圖：exit ${String(run.status)}，stdout ${JSON.stringify(run.stdout.slice(0, 200))}，stderr ${JSON.stringify(run.stderr.slice(-400))}`,
+    ];
+  }
+  return [];
+}
+
 /** 步驟 4c 的檔案內容與命中：工作區的檔名與那一行要出現在 grep 的工具結果裡。 */
 export const GREP_PROBE_FILE = 'a.txt';
 export const GREP_PROBE_NEEDLE = 'needle-1502';
@@ -164,7 +265,7 @@ export const GREP_PROBE_NEEDLE = 'needle-1502';
  * 只看啟動那一行（`ripgrepDisclosureProblems`）驗不到「已安裝的 serve 搜尋走內附 rg」（#1502 驗收 6）。
  *
  * @param run - `lib/cli.js` 這一輪的結果。
- * @param sessionLog - 這一輪的會話日誌（`cli.jsonl`）原文；沒有就傳 `undefined`。
+ * @param sessionLog - 這一輪的會話日誌（{@link cliSessionLog}）原文；沒有就傳 `undefined`。
  */
 export function installedGrepProblems(
   run: CommandOutcome,
@@ -250,7 +351,7 @@ export function cliRunProblems(run: CommandOutcome): string[] {
 /**
  * 步驟 5b：會話 header 的 `build.commit` 等於戳記（以及 CI 給的打包 commit）。
  *
- * @param header - `cli.header.json` 解開的內容；檔不在傳 `undefined`。
+ * @param header - 世代檔第一行（header 行）解開的內容；檔不在傳 `undefined`。
  * @param stamp - 產物的戳記。
  * @param expectCommit - 打包的 commit（CI 給 `GITHUB_SHA`）。給了，header 就要等於它，
  *   而不只是等於產物自己的戳記——戳記被拿掉時兩邊同時不見，只比戳記會漏。
@@ -260,7 +361,7 @@ export function headerProblems(
   stamp: BuildStampShape | undefined,
   expectCommit?: string,
 ): string[] {
-  if (header === undefined) return [`cli 跑完沒有 ${CLI_SESSION.header}`];
+  if (header === undefined) return ['cli 跑完沒有會話的世代檔'];
   const problems: string[] = [];
   const actual = header.build?.commit;
   const stampCommit = typeof stamp?.commit === 'string' ? stamp.commit : undefined;
@@ -394,6 +495,7 @@ export async function verifyPackedInstall(
     const graph = walkInstalledGraph(root);
     problems.push(...graph.missing.map((chain) => `相依圖缺：${chain}`));
     problems.push(...sbomProblems(root));
+    problems.push(...installedLicenseProblems(root));
     problems.push(...attachedSbomProblems(tarball, root));
 
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
@@ -414,19 +516,17 @@ export async function verifyPackedInstall(
     });
     problems.push(...versionProblems(version, manifest.version));
 
-    // 4. 原生二進位載得起來，而且真的拿得到鎖（`importing alone does not load it`：要呼叫一次才會載 .node）。
-    const lockProbe =
-      "import { tryLockExclusive } from '@deepseek-ai/node-addon-system/flock';\n" +
-      "import { openSync, closeSync } from 'node:fs';\n" +
-      `const fd = openSync(${JSON.stringify(join(scratch, 'probe.lock'))}, 'w');\n` +
-      "await tryLockExclusive(fd); closeSync(fd); console.log('locked');";
-    const native = spawnSync(process.execPath, ['--input-type=module', '--eval', lockProbe], {
-      cwd: root,
-      env,
-      encoding: 'utf8',
-      timeout: 60_000,
-    });
-    problems.push(...nativeLockProblems(native));
+    // 4. 打包裡的 spawner 鎖得住。spawner 只在 Linux 出貨。
+    if (process.platform === 'linux') {
+      const lockProbe = spawnerLockProbe(join(root, SPAWNER_PATH), join(scratch, 'probe.lock'));
+      const lockRun = spawnSync(process.execPath, ['--input-type=module', '--eval', lockProbe], {
+        cwd: root,
+        env,
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      problems.push(...spawnerLockProblems(lockRun));
+    }
 
     // 4b. 內附的 ripgrep：PATH 換成一個空目錄（宿主有沒有 rg 都不能替它補洞），從產物根解析 `@vscode/ripgrep` 並跑 `--version`。
     const emptyBin = join(scratch, 'empty-bin');
@@ -443,6 +543,22 @@ export async function verifyPackedInstall(
       timeout: 60_000,
     });
     problems.push(...bundledRgProblems(bundledRg));
+
+    // 4d. sharp：從產物根解析，原生的 sharp 與 libvips 都要載得起來（import 就會載 .so；真的轉一次，才確認建圖、色彩轉換、縮放與 JPEG 編碼都能跑）。
+    const sharpRun = spawnSync(process.execPath, ['--input-type=module', '--eval', SHARP_PROBE], {
+      cwd: root,
+      env,
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    problems.push(...sharpProblems(sharpRun));
+
+    // 4e. 沙箱 spawner（只有 Linux 的產物帶）：起產物裡那一支、等 Ready，再經它起一次主機的 git。
+    if (process.platform === 'linux') {
+      const spawnerProbe = await probeInstalledSpawner(root, scratch);
+      console.log(spawnerProbeSummary(spawnerProbe));
+      problems.push(...spawnerProbeProblems(spawnerProbe));
+    }
 
     // 4c. 安裝樹裡真的跑一次 grep：腳本模型叫 grep，PATH 是空目錄（同 4b），命中只可能來自內附的 rg。
     const grepWork = join(scratch, 'grep-ws');
@@ -485,13 +601,11 @@ export async function verifyPackedInstall(
     );
     const [grepRunDir] = existsSync(grepLogs) ? readdirSync(grepLogs) : [];
     const grepLogFile =
-      grepRunDir === undefined ? undefined : join(grepLogs, grepRunDir, CLI_SESSION.log);
+      grepRunDir === undefined ? undefined : cliSessionLog(join(grepLogs, grepRunDir));
     problems.push(
       ...installedGrepProblems(
         grepRun,
-        grepLogFile !== undefined && existsSync(grepLogFile)
-          ? readFileSync(grepLogFile, 'utf8')
-          : undefined,
+        grepLogFile === undefined ? undefined : readFileSync(grepLogFile, 'utf8'),
       ),
     );
 
@@ -511,16 +625,30 @@ export async function verifyPackedInstall(
     problems.push(...cliProblems);
     if (cliProblems.length === 0) {
       const [run] = existsSync(logs) ? readdirSync(logs) : [];
-      const headerPath = run === undefined ? undefined : join(logs, run, CLI_SESSION.header);
+      const logFile = run === undefined ? undefined : cliSessionLog(join(logs, run));
       const header =
-        headerPath !== undefined && existsSync(headerPath)
-          ? (JSON.parse(readFileSync(headerPath, 'utf8')) as { build?: { commit?: string | null } })
-          : undefined;
+        logFile === undefined
+          ? undefined
+          : (JSON.parse(readFileSync(logFile, 'utf8').split('\n', 1)[0]!) as {
+              build?: { commit?: string | null };
+            });
       problems.push(...headerProblems(header, stamp, options.expectCommit));
     }
 
     // 6. serve
-    problems.push(...(await smokeInstalledServe(root, work, env, scratch)));
+    // spawner 只在 Linux 出貨，其他平台拿不到 home 鎖，第二台擋不下來。
+    const whileServing = (): string[] =>
+      process.platform === 'linux'
+        ? secondServeProblems(
+            spawnSync(process.execPath, [join(root, 'lib/serve.js'), '--port', '0'], {
+              cwd: work,
+              env,
+              encoding: 'utf8',
+              timeout: 60_000,
+            }),
+          )
+        : [];
+    problems.push(...(await smokeInstalledServe(root, work, env, scratch, {}, whileServing)));
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -536,7 +664,7 @@ export interface ServeSmokeTimeouts {
 }
 
 /**
- * 起 `lib/serve.js --port 0`，等網址、打首頁、查行程、送 SIGTERM。
+ * 起 `lib/serve.js --port 0`，等網址、打首頁、跑 `whileServing`、查行程、送 SIGTERM。
  *
  * serve 以 `detached: true` 起成自己的行程群組：逾時要 `SIGKILL` 時送給整個群組（`process.kill(-pid)`），
  * serve 自己起的子行程（MCP server、git）不會變孤兒。一般的 `SIGTERM` 只送 serve 本身，
@@ -551,6 +679,7 @@ export async function smokeInstalledServe(
   env: NodeJS.ProcessEnv,
   scratch: string,
   timeouts: ServeSmokeTimeouts = {},
+  whileServing: () => string[] = () => [],
 ): Promise<string[]> {
   const problems: string[] = [];
   const child = spawn(process.execPath, [join(root, 'lib/serve.js'), '--port', '0'], {
@@ -611,6 +740,7 @@ export async function smokeInstalledServe(
       } catch (error) {
         problems.push(`打首頁失敗：${(error as Error).message}`);
       }
+      problems.push(...whileServing());
     }
     const stray = strayProcesses(scratch);
     if (stray.problem !== undefined) problems.push(stray.problem);
@@ -661,7 +791,7 @@ if (import.meta.main) {
     process.exitCode = 1;
   } else {
     console.log(
-      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、--version、原生二進位與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
+      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、授權、--version、spawner 的鎖、sharp 與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
     );
   }
 }

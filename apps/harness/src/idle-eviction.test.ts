@@ -707,12 +707,12 @@ describe('G：請求計數擋住落在 admitAttachments 與 start() 之間的逐
       const saving = gate();
       let entered = false;
       class SlowStore extends AttachmentStore {
-        override async saveImage(
-          input: Parameters<AttachmentStore['saveImage']>[0],
-        ): ReturnType<AttachmentStore['saveImage']> {
+        override async saveImages(
+          inputs: Parameters<AttachmentStore['saveImages']>[0],
+        ): ReturnType<AttachmentStore['saveImages']> {
           entered = true;
           await saving.promise;
-          return super.saveImage(input);
+          return super.saveImages(inputs);
         }
       }
       const r = track(rig({ attachments: new SlowStore(attachmentsRootOf(home)) }));

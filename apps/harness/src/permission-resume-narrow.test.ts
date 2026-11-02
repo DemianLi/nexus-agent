@@ -11,7 +11,7 @@
  * 三層：
  * - **組裝**（`createCliAgent` ＋ `attachSession`）：事件的順序與數量、投影、`permissionNarrowed`。
  * - **serve／CLI**：真的 `runServe` 兩台、真的 `runCli --resume`：warn 那一行、web 看到的投影、下一次寫檔的 fence。
- * - **寬窄序**：插件自己放一份（不 import `@nexus/plugin-sandbox-policy`），對照 `isStrictlyWider`（背後是 `WIDER_MODES`）逐格釘住。
+ * - **寬窄序**：插件自己放一份（不 import `@nexus/plugin-sandbox-policy`），對照 `SANDBOX_MODE_WIDTH` 逐格釘住。
  */
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
@@ -22,7 +22,7 @@ import { PassThrough } from 'node:stream';
 
 import type { SessionEvent } from '@nexus/core';
 import { isSandboxWider } from '@nexus/plugin-permission-presets';
-import { isStrictlyWider } from '@nexus/plugin-sandbox-policy';
+import { SANDBOX_MODE_WIDTH } from '@nexus/plugin-sandbox-policy';
 import { PERMISSIONS_PROJECTION_KEY } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -202,13 +202,13 @@ describe('D：收回（組裝層，事件逐顆釘）', () => {
   });
 });
 
-describe('寬窄序：插件自己放一份，對照 sandbox-policy 的 isStrictlyWider（WIDER_MODES）', () => {
+describe('寬窄序：插件自己放一份，對照 sandbox-policy 的 SANDBOX_MODE_WIDTH', () => {
   const modes: Mode[] = ['read-only', 'workspace-write', 'danger-full-access'];
 
   it.each(modes.flatMap((a) => modes.map((b) => [a, b] as const)))(
-    '%s 比 %s 寬嗎：與 isStrictlyWider 一致',
+    '%s 比 %s 寬嗎：與 SANDBOX_MODE_WIDTH 一致',
     (a, b) => {
-      expect(isSandboxWider(a, b)).toBe(isStrictlyWider(b, a));
+      expect(isSandboxWider(a, b)).toBe(SANDBOX_MODE_WIDTH[a] > SANDBOX_MODE_WIDTH[b]);
     },
   );
 });

@@ -64,6 +64,21 @@ export interface ProtocolInfo {
 
 /** 把這一組工具掛到一台新協議的 server 上。 */
 export function registerModernTools(server: McpServer): void {
+  // 同 `fixture-tools.ts` 的 `hang`、`spin`（#2194）。
+  if (process.env['FIXTURE_STALL_TOOLS'] === '1') {
+    server.registerTool(
+      'hang',
+      { description: '永遠不回。', inputSchema: {} },
+      () => new Promise<never>(() => {}),
+    );
+    server.registerTool('spin', { description: '回完之後卡死。', inputSchema: {} }, () => {
+      setTimeout(() => {
+        for (;;);
+      }, 20);
+      return { content: [{ type: 'text' as const, text: 'spinning' }] };
+    });
+  }
+
   server.registerTool(
     'fetch_release_note',
     {
@@ -92,8 +107,11 @@ export function registerModernTools(server: McpServer): void {
     {
       description: '收一個可為 null 的字串與一個字串或數字的聯集。',
       inputSchema: z.object({
-        label: z.string().nullable().describe('標籤，可為 null'),
-        value: z.union([z.string(), z.number()]).optional().describe('字串或數字'),
+        label: z.string().min(1).nullable().describe('標籤，可為 null'),
+        value: z
+          .union([z.string().min(1), z.number()])
+          .optional()
+          .describe('字串或數字'),
       }),
     },
     ({ label, value }): CallToolResult => ({

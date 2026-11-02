@@ -458,18 +458,17 @@ describe('子代理的沙箱模式', () => {
   }, 20000);
 
   it('子代理叫升級：「加寬」照委派那一格判，拿到的是不加寬的拒絕，不是 policy-never 那句', async () => {
+    // 委派那一格是全開，root 之後切到 read-only：照 root 現在那格判的話 workspace-write 升得到，會拿到 delegated 那句。
     const run = await runWithLogs('danger-full-access', [
       delegate,
-      flip('workspace-write'),
-      escalate('/a.txt', 'danger-full-access'),
+      flip('read-only'),
+      escalate('/a.txt', 'workspace-write'),
       { content: '子代理收工。' },
       { content: '根收工。' },
     ]);
     try {
       const [, refused] = subagentToolTexts(run.model);
-      expect(refused).toBe(
-        `Error: ${nonWideningRefusal('danger-full-access', 'danger-full-access')}`,
-      );
+      expect(refused).toBe(`Error: ${nonWideningRefusal('workspace-write', 'danger-full-access')}`);
       expect(refused).not.toContain('沒有人被問到');
     } finally {
       await run.close();

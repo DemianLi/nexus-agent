@@ -36,8 +36,8 @@
  * 呼叫的起訖與耗時、工具的耗時取自投影：重新整理後條目上模型回覆的 `startedAt` 等於 `settledAt`（#1048），算出來是錯的。
  * 缺席的欄位寫 `—`，不補 0。
  *
- * **子代理自己的軌跡今天沒有**：插件沒有宣告 `children`，`subagentProjections` 裡沒有它的值。子代理的列照舊以歸屬標籤
- * 夾在主對話的列之間，要看它內部的呼叫結構得先有 harness 那一側的投影。
+ * **子代理自己的軌跡在 `subagentProjections[runId]`**（#1070）。子代理的條目列照舊以歸屬標籤夾在主對話的列之間；它內部的呼叫結構畫在
+ * 派它的那顆工具底下（`components/trace/subagent.tsx`）。前景子代理的日誌沒有輪尾，被時鐘切斷的呼叫靠父輪的原因分開講，見 {@link cutByParentClock}。
  *
  * ## 第 0 版的切輪靠「人那一格」，而這會錯
  *
@@ -86,6 +86,7 @@ import type {
   TrajectoryTurn,
   TrajectoryTurnKind,
   TrajectoryView,
+  TurnStopCause,
 } from '@nexus/wire';
 import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 
@@ -105,6 +106,7 @@ import { mentionDisplayText } from '@/lib/session-mention';
 import { stoppedByTurnClock } from '@/lib/stop-cause';
 import { agentMessageCaption, subagentLabel, subagentNames } from '@/lib/subagent-view';
 import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
+import { abortedToolLabel } from '@/lib/tool-aborted';
 import { firstLine, toolSummary, toolTitle } from '@/lib/tool-view';
 import { mergePulled } from '@/lib/trajectory-pull';
 import type { PulledTurn } from '@/lib/trajectory-pull';
@@ -136,7 +138,7 @@ export const TRACE_LIMITS = {
  */
 export const TRACE_STRUCTURED_LIMITS = {
   decisions:
-    '核准的結局（允許一次、已拒絕、已取消、無法回答）與等了多久來自軌跡，重新整理後仍在，但只有拿到細節的輪看得到（更早的輪只剩摘要，按「載入這一輪的細節」才有）；沒有結局的核准是還沒回答、或停在那裡就關掉了。問答與計劃審核的回答不在軌跡裡，政策或沒有管道擋下的核准只看得到那張工具卡的錯誤碼。',
+    '核准的結局（允許一次、已拒絕、已取消、沒有有效回覆）與等了多久來自軌跡，重新整理後仍在，但只有拿到細節的輪看得到（更早的輪只剩摘要，按「載入這一輪的細節」才有）；沒有結局的核准是還沒回答、或停在那裡就關掉了。問答與計劃審核的回答不在軌跡裡，政策或沒有管道擋下的核准只看得到那張工具卡的錯誤碼。',
   loaded:
     '內文只列出已載入的對話。軌跡直接帶的只有最近幾輪的逐次呼叫結構，更早的輪只剩一行摘要，按「載入這一輪的細節」向伺服器要；已載入但落在軌跡之前的對話，仍以人說的那一句切開。',
   absent:
@@ -158,10 +160,14 @@ export function loadsThrough(row: TraceRow): boolean {
 /** 目標要先往前載入時，載入期間唸的那一句。 */
 export const TRACE_LOCATE_LOADING_TEXT = '正在載入更早的對話，載完就捲過去';
 
-/** 投影有、條目沒載入的呼叫段落底下那一句。 */
-/** 一次模型呼叫沒有正常回來的說法：拋錯，或使用者按了停止。 */
-export const CALL_OUTCOME_LABEL = { error: '失敗', aborted: '已中止' } as const;
+/** 一次模型呼叫沒有正常回來的說法：拋錯、被中止，或被那一輪的時鐘切斷。 */
+export const CALL_OUTCOME_LABEL = {
+  error: '失敗',
+  aborted: '已中止',
+  'timed-out': '超過時間上限，已中止',
+} as const;
 
+/** 投影有、條目沒載入的呼叫段落底下那一句。 */
 export const TRACE_CALL_UNLOADED_TEXT = '這次呼叫的內文不在目前載入的對話裡。';
 
 export type EndingReason = 'stopped' | 'timed-out' | 'max-tokens' | 'blocked' | 'failed';
@@ -219,6 +225,8 @@ export type TraceRow =
       readonly durationMs?: number;
       /** 這顆工具派出的子代理（`runId`）：展開它的呼叫結構要用。 */
       readonly subagentRunId?: string;
+      /** 派它的那一輪（含續接段）被時鐘切斷（只放原始值，理由同 `call` 那一列）。前景子代理的呼叫靠它分開講，見 {@link cutByParentClock}。 */
+      readonly parentCutByClock?: true;
     })
   | (RowBase & {
       readonly kind: 'decision';
@@ -252,8 +260,11 @@ export type TraceRow =
       readonly cacheWriteTokens?: number;
       readonly toolCount: number;
       readonly retryCount: number;
-      /** 這次呼叫沒有正常回來的方式（投影的 `TrajectoryCall.outcome`）；沒有這一格 ＝ 正常回來，或舊日誌。 */
-      readonly outcome?: 'error' | 'aborted';
+      /**
+       * 這次呼叫沒有正常回來的方式（投影的 `TrajectoryCall.outcome`）；沒有這一格 ＝ 正常回來，或舊日誌。
+       * `timed-out` 是 `aborted` 而且那一輪時鐘到點（`TrajectoryDigest.endCause`，#1847）；前景子代理沒有自己的原因，讀派它那一輪（含續接段）的，見 {@link cutByParentClock}。一輪只會被中止一次，中止的呼叫就是那次原因切斷的。
+       */
+      readonly outcome?: keyof typeof CALL_OUTCOME_LABEL;
       readonly system: SnapshotState;
       readonly systemChars?: number;
       readonly systemTruncated?: boolean;
@@ -304,6 +315,8 @@ export interface TurnHead {
    * 沒有 `error`），標頭只寫「失敗」，不補成「原因不明」。
    */
   readonly failureCode?: string;
+  /** `end` 是 `aborted` 時為什麼停（`TrajectoryDigest.endCause`，#1847）。**缺席就是「沒記」**，標頭只寫「已停止」，不猜原因。 */
+  readonly endCause?: TurnStopCause;
   /** 這一輪（含併進來的續接）收尾的時刻；還沒結束沒有。 */
   readonly endTime?: number;
   /** 牆鐘：第一顆 `turn/start` 到最後收尾，**含停在核准點等人的時間**（同 #1028）。 */
@@ -445,7 +458,7 @@ function itemsOf(state: ConversationState): Item[] {
         key: entry.id,
         target: entry.id,
         entry,
-        summary: settledNoticeText(entry.reason),
+        summary: settledNoticeText(entry.reason, entry.stopCause),
       });
     } else if (entry.kind === 'agent-message') {
       rows.push({
@@ -558,6 +571,7 @@ interface ToolFact {
   readonly time: number;
   readonly durationMs: number | undefined;
   readonly subagentRunId: string | undefined;
+  readonly parentCutByClock: boolean;
 }
 
 interface ViewIndex {
@@ -565,19 +579,30 @@ interface ViewIndex {
   readonly tools: ReadonlyMap<string, ToolFact>;
 }
 
-/** 條目鍵 → 位置。鍵的形狀見檔頭的表。 */
-function toolFact(tool: TrajectoryTool): ToolFact {
+function toolFact(tool: TrajectoryTool, parentCutByClock: boolean): ToolFact {
   return {
     time: tool.time,
     durationMs: tool.durationMs,
     subagentRunId: tool.subagent?.runId,
+    parentCutByClock,
   };
 }
 
+/**
+ * 這一輪連同接著它的續接輪是不是被時鐘切斷。工具可能開在核准之前、被切斷在續接那一段，所以看整組最後一段。
+ */
+function groupCutByClock(turns: readonly TrajectoryTurn[], index: number): boolean {
+  let last = index;
+  while (turns[last + 1]?.logical === false) last += 1;
+  return stoppedByTurnClock(turns[last]!.endCause);
+}
+
+/** 條目鍵 → 位置。鍵的形狀見檔頭的表。 */
 function indexView(view: TrajectoryView): ViewIndex {
   const slots = new Map<string, Slot>();
   const tools = new Map<string, ToolFact>();
   view.turns.forEach((turn, t) => {
+    const cutByClock = groupCutByClock(view.turns, t);
     turn.calls.forEach((call, c) => {
       const { reply } = call;
       if (reply !== undefined) {
@@ -587,12 +612,12 @@ function indexView(view: TrajectoryView): ViewIndex {
       }
       for (const tool of call.tools) {
         slots.set(`tool-${tool.callId}`, { turn: t, call: c });
-        tools.set(`tool-${tool.callId}`, toolFact(tool));
+        tools.set(`tool-${tool.callId}`, toolFact(tool, cutByClock));
       }
     });
     for (const tool of turn.looseTools) {
       slots.set(`tool-${tool.callId}`, { turn: t, call: undefined });
-      tools.set(`tool-${tool.callId}`, toolFact(tool));
+      tools.set(`tool-${tool.callId}`, toolFact(tool, cutByClock));
     }
   });
   return { slots, tools };
@@ -714,6 +739,18 @@ function addBucket(left: number | undefined, right: number | undefined): number 
   return left === undefined || right === undefined ? undefined : left + right;
 }
 
+/**
+ * 細節已載入的一輪裡真的失敗的工具數：`toolErrors` 減掉被中止的（#2247）。摘要沒有逐顆工具，
+ * 被單輪上限摺掉的也沒有，那些維持投影的數。
+ */
+function failedTools(turn: TrajectoryTurn): number {
+  const tools = [...turn.looseTools, ...turn.calls.flatMap((call) => call.tools)];
+  const interrupted = tools.filter(
+    (tool) => tool.status === 'error' && abortedToolLabel(tool.name, tool.code) !== undefined,
+  );
+  return turn.toolErrors - interrupted.length;
+}
+
 function headOf(digest: TrajectoryDigest, number: number): TurnHead {
   return {
     number,
@@ -729,6 +766,7 @@ function headOf(digest: TrajectoryDigest, number: number): TurnHead {
     ...bucketFields(digest),
     ...(digest.end === undefined ? {} : { end: digest.end }),
     ...(digest.failureCode === undefined ? {} : { failureCode: digest.failureCode }),
+    ...(digest.endCause === undefined ? {} : { endCause: digest.endCause }),
     ...(digest.endTime === undefined ? {} : { endTime: digest.endTime }),
     ...(digest.durationMs === undefined ? {} : { durationMs: digest.durationMs }),
   };
@@ -756,6 +794,7 @@ function mergeHead(first: TurnHead, resume: TurnHead): TurnHead {
     }),
     ...(resume.end === undefined ? {} : { end: resume.end }),
     ...(resume.failureCode === undefined ? {} : { failureCode: resume.failureCode }),
+    ...(resume.endCause === undefined ? {} : { endCause: resume.endCause }),
     ...(resume.endTime === undefined
       ? {}
       : { endTime: resume.endTime, durationMs: resume.endTime - first.time }),
@@ -870,8 +909,11 @@ function callRowOf(
     readonly target: string | undefined;
     readonly loaded: boolean;
     readonly snapshotParts: (call: TrajectoryCall) => SnapshotParts;
+    readonly endCause: TurnStopCause | undefined;
   },
 ): Extract<TraceRow, { kind: 'call' }> {
+  const outcome =
+    call.outcome === 'aborted' && stoppedByTurnClock(options.endCause) ? 'timed-out' : call.outcome;
   return {
     kind: 'call',
     key: `call-${call.id}`,
@@ -886,7 +928,7 @@ function callRowOf(
       (call.reply !== undefined && call.reply.textChars + call.reply.reasoningChars > 0),
     ...(call.endTime === undefined ? {} : { endTime: call.endTime }),
     ...(call.durationMs === undefined ? {} : { durationMs: call.durationMs }),
-    ...(call.outcome === undefined ? {} : { outcome: call.outcome }),
+    ...(outcome === undefined ? {} : { outcome }),
     ...(call.model === undefined ? {} : { model: call.model }),
     ...(call.usage === undefined
       ? {}
@@ -902,6 +944,26 @@ function callRowOf(
 /** 子代理一輪的摘要（還沒拉細節）的標題。 */
 export function subagentDigestHead(digest: TrajectoryDigest): TurnHead {
   return headOf(digest, 1);
+}
+
+/**
+ * 派它的那一輪被時鐘切斷時，前景子代理被中止的呼叫也講成時間到（[#2240](https://github.com/DemianLi/nexus-agent/issues/2240)）。
+ * 前景子代理的日誌沒有 `turn/end`，自己沒有 `endCause`；它讀的中止訊號就是派它那一輪的，沒有別的來源，所以父輪的原因就是它的。
+ * 背景子代理（`kind` 不是 `run`）有自己的原因，不動。
+ *
+ * @param view - {@link subagentTurnView} 的結果。
+ * @returns 換過呼叫列的那一份；不是前景子代理就原樣。
+ */
+export function cutByParentClock(view: SubagentTurnView): SubagentTurnView {
+  if (view.head.kind !== 'run') return view;
+  return {
+    ...view,
+    calls: view.calls.map((call) =>
+      call.row.outcome === 'aborted'
+        ? { ...call, row: { ...call.row, outcome: 'timed-out' as const } }
+        : call,
+    ),
+  };
 }
 
 /** 子代理的一次呼叫：呼叫段落列、它的重試、它叫的工具（只有結構，沒有內文）。 */
@@ -941,10 +1003,16 @@ export function subagentTurnView(
   const skipped = turn.elided?.calls ?? 0;
   return {
     seq: turn.seq,
-    head: headOf(turn, 1),
+    head: { ...headOf(turn, 1), toolErrors: failedTools(turn) },
     ...(skipped === 0 ? {} : { elidedCalls: skipped }),
     calls: turn.calls.map((call, c) => ({
-      row: callRowOf(call, { n: skipped + c + 1, target: undefined, loaded: true, snapshotParts }),
+      row: callRowOf(call, {
+        n: skipped + c + 1,
+        target: undefined,
+        loaded: true,
+        snapshotParts,
+        endCause: turn.endCause,
+      }),
       retries: call.retries.map((retry) => ({
         kind: 'retry' as const,
         key: `retry-${call.id}-${retry.retry}`,
@@ -1057,6 +1125,7 @@ function structuredTurns(
           target: callTarget[t]?.[c],
           loaded: loadedRows.length > 0,
           snapshotParts,
+          endCause: turn.endCause,
         }),
       );
       for (const retry of call.retries) {
@@ -1087,6 +1156,7 @@ function structuredTurns(
     const elidedTools = turn.elided?.tools;
     const head: TurnHead = {
       ...headOf(turn, numbers.get(turn.seq) ?? 1),
+      toolErrors: failedTools(turn),
       ...(skipped > 0 ? { elidedCalls: skipped } : {}),
       ...(elidedTools !== undefined && elidedTools > 0 ? { elidedTools } : {}),
     };
@@ -1143,6 +1213,7 @@ function withToolFact(row: TraceRow, index: ViewIndex): TraceRow {
     time: fact.time,
     ...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }),
     ...(fact.subagentRunId === undefined ? {} : { subagentRunId: fact.subagentRunId }),
+    ...(fact.parentCutByClock ? { parentCutByClock: true as const } : {}),
   };
 }
 

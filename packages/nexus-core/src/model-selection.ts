@@ -110,6 +110,8 @@ export interface ModelSelectionOptions {
    * （預設那顆；它在組裝時建好，不為它另建一個實例，也就是沒選過的會話送出去的請求與今天逐欄一致）。
    */
   readonly instanceFor: (route: ModelRoute) => BaseChatModel | undefined;
+  /** 這顆模型還在不在型錄上。省略＝不檢查（沒有型錄的組裝）。 */
+  readonly inCatalog?: (model: string) => boolean;
 }
 
 /**
@@ -148,10 +150,15 @@ export class ModelSelectionController {
    * 順序照 dsh（`agent.ts:295-298`）：沒選過的會話先沿用日誌裡最後一個請求的路由，再沒有才讀部署預設。選擇不會被「消耗」：選了
    * 之後它一直是這條會話的選擇，直到下一次選；所以不能拿「日誌上哪一顆比較新」判斷（一步開頭快照之後、請求之前才選的，
    * `model/selection` 會落在舊路由的 `model/start` 前面）。
+   *
+   * 不在型錄上的（部署換過型錄，舊會話還記著）跳過，順序與 web 的 `effectiveSelection` 相同，座位顯示的就是實際走的。**只在這裡現算，
+   * 不寫進日誌**：選擇留著，那顆回到型錄就走回它；強度跟著被跳過的那一格一起丟掉。
    */
   next(): ModelRoute {
     const { lastUsed, selected } = this.state();
-    return selected ?? lastUsed ?? this.defaultRoute;
+    const routable = (route: ModelRoute | undefined): route is ModelRoute =>
+      route !== undefined && (this.#options.inCatalog?.(route.model) ?? true);
+    return [selected, lastUsed].find(routable) ?? this.defaultRoute;
   }
 
   /**

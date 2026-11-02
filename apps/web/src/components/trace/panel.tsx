@@ -23,15 +23,24 @@
  *   再把焦點交給那一則（`right-sidebar.tsx`）。找不到時在那一列底下講原因。
  */
 
+import { Activity } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 
 import type { ConversationState } from '@nexus/wire';
 
 import type { PanelBodyProps, TurnReveal } from '@/lib/right-sidebar-api';
-import { Digests, TurnGroup } from '@/components/trace/groups';
+import { Digests, TurnGroup, mainTurnSelector } from '@/components/trace/groups';
 import { TRACE_PULL_FAILED_TEXT, TRACE_PULL_LOADING_TEXT } from '@/components/trace/pull-control';
 import { SubagentSourceContext } from '@/components/trace/subagent';
 import { Button } from '@/components/ui/button';
+import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from '@/components/ui/empty';
+import { focusLost, useFocusHandoff } from '@/hooks/use-focus-handoff';
 import { useStableNames } from '@/hooks/use-stable-names';
 import { useTrajectoryPull } from '@/hooks/use-trajectory-pull';
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot';
@@ -51,8 +60,9 @@ import { statusOf } from '@/lib/trajectory-pull';
 import type { PullSnapshot, TrajectoryPuller } from '@/lib/trajectory-pull';
 import { trajectoryOf } from '@/lib/trajectory-view';
 
-/** 面板還沒有資料可畫時那一句（也是 #1031 留下的那一句）。 */
-export const TRACE_EMPTY_TEXT = '尚無資料';
+/** 面板還沒有資料可畫時的空狀態（SG `Empty`，#1690 T1）：`TRACE_EMPTY_TEXT` 是標題，`TRACE_EMPTY_HINT` 是說明。 */
+export const TRACE_EMPTY_TEXT = '還沒有過程可看';
+export const TRACE_EMPTY_HINT = '送出第一句話之後，這裡會一輪一組列出模型呼叫與工具。';
 
 export const TRACE_LOCATED_TEXT = '已在對話裡定位';
 /** 同一句要再唸一次時，清空到填回去之間隔多久（毫秒）。太短報讀器會當成沒變。 */
@@ -221,7 +231,7 @@ const Timeline = memo(function Timeline({
   }, [reveal, revealIn, placed, model, onRevealed, pullHold, pullNote]);
   useEffect(() => {
     if (placed === undefined || readyTurn !== placed.nonce) return;
-    const group = section.current?.querySelector<HTMLElement>(`section[data-seq="${placed.seq}"]`);
+    const group = section.current?.querySelector<HTMLElement>(mainTurnSelector(placed.seq));
     if (group === null || group === undefined) return;
     group.scrollIntoView({ block: 'start' });
     group.querySelector<HTMLElement>('[data-reveal-target]')?.focus({ preventScroll: true });
@@ -301,6 +311,9 @@ const Timeline = memo(function Timeline({
     }
     finishLocate(pending.key, target);
   }, [pending, model, finishLocate]);
+  // 「載入這一輪的細節」拉完（#2009）：焦點在鈕上、鈕跟著摘要收掉，就落在那一輪的標題（同「看這一輪」）。拉回來的輪排在較前面
+  // （從摘要列拉的在最前面），可能在「顯示更早的輪」後面：先展開到那一組，畫出來之後再交。
+  const handoff = useFocusHandoff<number>();
   const onPull = useMemo(
     () =>
       puller === undefined
@@ -310,6 +323,23 @@ const Timeline = memo(function Timeline({
           },
     [puller],
   );
+  const onArm = useCallback(
+    (seq: number, button: HTMLElement) => handoff.arm(seq, button),
+    [handoff],
+  );
+  useEffect(() => {
+    const seq = handoff.pending();
+    if (seq === undefined || pull === undefined || statusOf(pull, seq).kind === 'loading') return;
+    const at = model.turns.findIndex((turn) => turn.seq === seq);
+    if (at >= 0 && model.turns.length - at > shown && focusLost()) {
+      setShown(model.turns.length - at);
+      return;
+    }
+    const group = section.current?.querySelector<HTMLElement>(mainTurnSelector(seq));
+    handoff.land(group?.querySelector<HTMLElement>('[data-reveal-target]') ?? section.current, {
+      scroll: true,
+    });
+  }, [pull, model, shown, handoff]);
   const statusFor = useMemo(
     () =>
       pull === undefined || puller === undefined ? undefined : (seq: number) => statusOf(pull, seq),
@@ -334,7 +364,7 @@ const Timeline = memo(function Timeline({
           <p
             // 讀屏已經從下面的 `role=status` 聽到同一句，這裡只給看得見的人。
             aria-hidden
-            className="bg-chip mb-3 rounded-md px-3 py-2 text-tip"
+            className="bg-muted mb-3 rounded-md px-3 py-2 text-tip"
             data-testid="trace-reveal-notice"
           >
             {notice}
@@ -347,6 +377,7 @@ const Timeline = memo(function Timeline({
             reveal={revealIn === 'digests' && !pullHold ? placed : undefined}
             statusOf={statusFor}
             onPull={onPull}
+            onArm={onArm}
             revealedSeq={revealedSeq}
             onRevealed={onDigestRevealed}
           />
@@ -378,6 +409,7 @@ const Timeline = memo(function Timeline({
                 : undefined
             }
             onPull={onPull}
+            onArm={onArm}
           />
         ))}
         <Limits structured={model.structured} />
@@ -393,19 +425,22 @@ export function TraceBody({ visible, sources, locate, reveal, onRevealed }: Pane
   const state = useVisibleSnapshot(sources.conversation, visible);
   const pull = useVisibleSnapshot(sources.trajectoryPull, visible);
   useTrajectoryPull(sources.trajectoryPull, state, visible);
-  // 條目是空的、但軌跡投影已經有輪（內文沒載入）時照樣畫結構，不寫「尚無資料」。
+  // 條目是空的、但軌跡投影已經有輪（內文沒載入）時照樣畫結構，不畫空狀態。
   const empty =
     state === undefined ||
     (state.entries.length === 0 &&
       (trajectoryOf(state)?.turns.length ?? 0) + (trajectoryOf(state)?.digests.length ?? 0) === 0);
   if (empty) {
     return (
-      <p
-        className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-body"
-        data-testid="right-sidebar-panel-trace"
-      >
-        {TRACE_EMPTY_TEXT}
-      </p>
+      <Empty className="flex-1" data-testid="right-sidebar-panel-trace">
+        <EmptyHeader>
+          <EmptyMedia variant="icon">
+            <Activity aria-hidden />
+          </EmptyMedia>
+          <EmptyTitle>{TRACE_EMPTY_TEXT}</EmptyTitle>
+          <EmptyDescription>{TRACE_EMPTY_HINT}</EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     );
   }
   return (

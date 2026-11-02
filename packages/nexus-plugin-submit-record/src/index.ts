@@ -278,7 +278,7 @@ export const submitRecordGate: ToolGateListener = (exec, next) =>
 export const name = 'submit-record';
 
 /**
- * 要的服務：`tools`（**`^1.2.0`**：要有 `gate`）與 `fs`（`^2.0.0`）。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，
+ * 要的服務：`tools`（**`^1.2.0`**：要有 `gate`）與 `fs`（`^2.0.0`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，
  * 提供者的 `check` 讀得到；`tools` 提供者比 1.2.0 舊時，這一列在 `requires` 階段就掉，不會在「閘門沒掛」的狀態下起來。
  */
 export const inject = injectOf(need(toolsToken, '^1.2.0'), need(fsToken, '^2.0.0'));

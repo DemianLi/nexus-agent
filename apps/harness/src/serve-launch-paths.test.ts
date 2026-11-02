@@ -1,5 +1,5 @@
 /**
- * serve 帶 `--workspace` 起來時，key 來源與 harness home 不能跟工作區重疊
+ * serve 帶 `--workspace` 起來時，`--patch` 不能落在工作區（#2162），key 來源與 harness home 不能跟工作區重疊
  * （[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)）——端到端，走 `runServe`。
  *
  * 函式本身的邊界（相等、`--workspace /`、反方向、舊位置、ELOOP）在 `launch-paths.test.ts`。**這一檔只 import `runServe` 與
@@ -201,5 +201,28 @@ describe('不該擋的照常起來', () => {
       env: { [HARNESS_HOME_ENV]: join(cwd, 'home') },
     });
     expect(error).toBeUndefined();
+  });
+});
+
+describe('--patch 與工作區（#2162）', () => {
+  it('在工作區裡：起不來；在外面：照常起', async () => {
+    const workspace = await tmp('nexus-2162-ws-');
+    const home = await tmp('nexus-2162-home-');
+    const inside = join(workspace, 'p.yml');
+    await writeFile(inside, '[]\n', { mode: 0o600 });
+    const launch = (patch: string): Promise<Error | undefined> =>
+      startOrError({
+        argv: ['--port', '0', '--workspace', workspace, '--patch', patch],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: home },
+      });
+    expect((await launch(inside))?.message).toContain('不能在 --workspace 底下');
+    const dump = await startOrError({
+      argv: ['--dump-config-schema', '--workspace', workspace, '--patch', inside],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+    expect(dump?.message).toContain('不能在 --workspace 底下');
+    expect(await launch(PERSISTENCE_OFF_PATCH)).toBeUndefined();
   });
 });

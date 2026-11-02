@@ -199,7 +199,7 @@ const UNAVAILABLE_ZONE =
   'Browser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.';
 
 describe('A：模型第一次請求裡有一則讀數，文字逐字', () => {
-  it('Date 固定在 2026-10-18T01:00:00Z、行程時區 Asia/Taipei：三行都是預期的字', async () => {
+  it('Date 固定在 2026-10-18T01:00:00Z、行程時區 Asia/Taipei：四行都是預期的字', async () => {
     const booted = await boot(home());
     const thread = await openThread(booted, 'a', [{ content: '好。' }]);
     await runOn(thread, '嗨');
@@ -209,6 +209,7 @@ describe('A：模型第一次請求裡有一則讀數，文字逐字', () => {
         'Time sampled while preparing turn 1, step 1: 2026-10-18T09:00:00+08:00[Asia/Taipei]',
         UNAVAILABLE_ZONE,
         'Elapsed since the preceding model-visible message: unavailable.',
+        'When the user gives a date without a year, infer the year from the timestamp above and choose the closest matching date.',
       ].join('\n'),
     ]);
     // 不進系統提示詞：system 那一段沒有任何時間字樣。
@@ -260,6 +261,7 @@ describe('B：順序是 [人話, AGENTS.md 基線, 讀數]；第二輪的第三�
         'Time sampled while preparing turn 2, step 1: 2026-10-18T09:15:00+08:00[Asia/Taipei]',
         UNAVAILABLE_ZONE,
         'Elapsed since the preceding model-visible message: 15m 0s.',
+        'When the user gives a date without a year, infer the year from the timestamp above and choose the closest matching date.',
       ].join('\n'),
     );
     await closeThread(thread);
@@ -589,6 +591,7 @@ describe('K：瀏覽器時區（#1629）——人話帶的時區到了模型手�
         'Time sampled while preparing turn 1, step 1: 2026-10-17T21:00:00-04:00[America/New_York]',
         'Browser time zone for this request: America/New_York. Interpret otherwise-unqualified dates and times in this zone.',
         'Elapsed since the preceding model-visible message: unavailable.',
+        'When the user gives a date without a year, infer the year from the timestamp above and choose the closest matching date.',
       ].join('\n'),
     );
     expect(JSON.stringify(injectedReadings(rootLog(thread).events))).toContain('America/New_York');

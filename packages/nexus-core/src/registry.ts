@@ -299,7 +299,7 @@ export interface NexusServices {
    * {@link ./summarization.ts | SUMMARIZATION_SERVICE}。
    *
    * **沒人提供不等於「關掉」**——而且這一顆的「關掉」不是「沒有」，是一顆同名空殼
-   * （基座無條件建的那顆要靠同名取代才消得掉）。分野見 {@link DisabledEntryView}。
+   * （基座無條件建的那顆要靠同名取代才消得掉；空殼仍把日誌上記過的剪法換上去，#1567）。分野見 {@link DisabledEntryView}。
    */
   summarization: SummarizationSettings;
   /**

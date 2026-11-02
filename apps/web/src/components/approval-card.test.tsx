@@ -118,28 +118,10 @@ describe('沙箱升級（#1292）', () => {
     expect(screen.getByTestId('approval-escalation').textContent).toBe(reason('workspace-write'));
     expect(screen.queryByText(ESCALATE)).toBeNull();
     expect(screen.queryByText(/"sandbox_permissions"/)).toBeNull();
-    expect(screen.queryByTestId('approval-full-access')).toBeNull();
-  });
-
-  it('升到 danger-full-access：多一句寫入不受工作區限制', () => {
-    card(
-      pending(
-        {
-          file_path: '/outside/a.txt',
-          sandbox_permissions: 'danger-full-access',
-          justification: '要寫系統設定',
-        },
-        ESCALATE,
-        reason('danger-full-access'),
-      ),
-    );
-    expect(screen.getByTestId('approval-full-access').textContent).toBe(
-      '這一次的檔案寫入不受工作區限制。',
-    );
   });
 
   it('沒有描述（較舊的 server）：照一般核准卡畫，不在 web 拼字', () => {
-    card(pending({ sandbox_permissions: 'danger-full-access' }, ESCALATE));
+    card(pending({ sandbox_permissions: 'workspace-write' }, ESCALATE));
     expect(screen.queryByTestId('approval-escalation')).toBeNull();
     expect(screen.getByText(ESCALATE)).toBeTruthy();
   });

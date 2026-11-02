@@ -100,7 +100,7 @@ Usage:
 描述：
 
 ```text
-Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns absolute paths in modification-time order, oldest first.
+Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. Returns absolute paths in modification-time order, oldest first. Directory searches skip symbolic links; `read_file` can still open a link that stays inside the workspace.
 
 Supports `*` (any characters), `**` (any directories), `?` (single character), e.g. `**/*.py`, `*.txt`, `/subdir/**/*.md`.
 ```
@@ -137,6 +137,8 @@ Search file contents with a ripgrep regular expression.
 
 Files under `/conversation_history/` are the exception: they are searched as literal text.
 
+Directory searches skip symbolic links; `read_file` can still open a link that stays inside the workspace.
+
 Returns matching files or content per `output_mode`. Offloaded large tool results live under the artifacts root (`/large_tool_results/` by default); grep that directory to search them when you do not know the exact path.
 ```
 
@@ -159,13 +161,9 @@ Returns matching files or content per `output_mode`. Offloaded large tool result
     "glob": {
       "default": null,
       "description": "One glob filter for which files to search (e.g. \"*.ts\", \"*.{js,jsx}\"). Not a list; negation is not supported.",
-      "anyOf": [
-        {
-          "type": "string"
-        },
-        {
-          "type": "null"
-        }
+      "type": [
+        "string",
+        "null"
       ]
     },
     "max_count": {
@@ -244,7 +242,7 @@ Reads a file from the filesystem. Assume any path the user provides is valid; re
 
 Usage:
 - By default, it reads up to 2000 lines starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.
-- Results are returned with line numbers starting at `offset` + 1 (1 by default), then two spaces, then the source line. Never include these line-number prefixes when editing.
+- Results are returned with line numbers starting at `offset` + 1 (1 by default), then a tab, then the source line. The number and the tab are not file content: never include them in `write_file` content or in `edit_file` old_string or new_string.
 - Lines over 5,000 characters are split with continuation markers (e.g. 5.1, 5.2); `limit` counts source lines, so continuation rows do not consume the budget.
 - Speculatively batch multiple `read_file` calls in one response when several files may be useful.
 - An empty file returns a system-reminder warning in place of contents.
@@ -388,8 +386,7 @@ Usage:
     "sandbox_permissions": {
       "type": "string",
       "enum": [
-        "workspace-write",
-        "danger-full-access"
+        "workspace-write"
       ],
       "description": "要升到哪一格。選夠用的最窄那一格。"
     },

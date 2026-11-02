@@ -15,8 +15,8 @@
  * 形狀照最近的會拋的那個：`JsonRpcResponseError`（`packages/sdk/protocol/src/transport.ts:18`）——建構子參數
  * 屬性保留線上的碼、設 `name`。兩處不同：
  *
- * - `message` 不是線上的原文，而是 `下行被拒：<body 原文>`：這條訊息今天就長這樣，web 直接顯示、既有測試也按字串
- *   斷言，所以逐字維持；線上的 `message` 另放在 {@link WireRejectedError.serverMessage}。
+ * - `message` 不是線上的原文，而是 `下行被拒：<body 原文>`，給管理者與除錯看；
+ *   線上的 `message` 另放在 {@link WireRejectedError.serverMessage}。
  * - `code` 是字串（我們的協定碼），不是 JSON-RPC 的數字。
  *
  * @module

@@ -47,6 +47,7 @@ import {
   serveGoalDriver,
   resolveInvariantLogPath,
   assertLaunchPathsOutsideWorkspace,
+  assertPatchesOutsideWorkspace,
   resolveSessionLogDir,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
@@ -77,6 +78,7 @@ import {
   SESSION_LOG_FORMAT_VERSION,
   sessionPersistencePlugin,
   SessionFormatUnsupportedError,
+  SessionLogOffset,
   SessionNotFoundError,
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
@@ -84,6 +86,7 @@ import { assertSameCwd } from './resume-guards.js';
 import { McpConnectionPool } from '@nexus/plugin-mcp';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
+import { createCredentialService } from './credentials.js';
 import { processLaunchEnv } from './launch-env.js';
 import { DEFAULT_LIVE_MODEL_ID, loadLiveLaunchEnv } from './live-model.js';
 import type { LiveLaunch } from './live-model.js';
@@ -106,6 +109,7 @@ import {
   verifyThreadRootsBase,
   createFixedThreadPlacer,
   createThreadPlacer,
+  isThreadRootOf,
   resolveThreadRootsBase,
   SHARED_WORKSPACE_PREFIX,
 } from './thread-roots.js';
@@ -145,6 +149,8 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { createRequestGate } from './request-gate.js';
 import { formatRipgrepDisclosure, ripgrepStatus } from './rg-path.js';
+import { mcpGuardNotice } from './mcp-sandbox.js';
+import { productSandboxStatus, reportSandboxTo } from './tool-launcher.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { STARTUP_READ_PLUGINS } from './plugin-row-classes.js';
@@ -161,13 +167,16 @@ import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { launchToolResultStashSweep } from './tool-result-stash-sweep.js';
+import { launchOrphanStagingSweeper } from './orphan-staging-sweep.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { downlinkPlugin } from './settings/downlink.js';
 import { startMemoryGauge } from './memory-gauge.js';
+import { memorySourceWarnings } from './memory-source-check.js';
 import { loadOrCreateMetricsToken, METRICS_TOKEN_FILE } from './metrics-token.js';
 import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
+import { StorageProbe } from './storage-probe.js';
 import type { OpsEndpoints } from './ops-endpoints.js';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
 import {
@@ -178,15 +187,19 @@ import {
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
+import { attachmentImagesPlugin } from './settings/attachment-images.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import type { GoalRoundCap } from './goal-driver.js';
 import { turnTimeoutPlugin } from './settings/turn-timeout.js';
 import type { TurnClock } from './turn-clock.js';
+import { sessionReferencePlugin } from './settings/session-reference.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { ThreadSearch } from './thread-search.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
+import { sessionLogBudgetFromSetting } from './session-log-budget.js';
+import type { SessionLogBudget } from './session-log-budget.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 
 /** 預設 port。挑一個不常撞的，`--port` 蓋得掉。 */
@@ -232,7 +245,7 @@ const USAGE = `用法：
                        只印出貨那一層的設定就退出（不開 server）：不讀 $NEXUS_AGENT_HOME 的變更紀錄，也不收 --patch
                        覆寫檔壞了連 --dump-config 都印不出來時，用它拿一份對照
                        不能配 --dump-config、--dump-config-schema 或 --patch
-  --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
+  --workspace <dir>    新 thread 的唯讀共用區，舊 thread 的可寫根（省略即虛擬檔案系統）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
                        danger-full-access 出廠的權限表沒有，要先在表裡加回那一組，否則起不來
@@ -381,8 +394,8 @@ export interface RunServeOptions {
    */
   readonly webDist?: string;
   /**
-   * home 鎖拿鎖的那一下，只給測試用（#1503）：「這個平台拿不到」與 `EACCES` 兩條路在 macOS 與 CI 的 Linux 上走不到，
-   * 不換就是沒驗過就出貨。產品路徑不設，用 dsh 的 `tryLockExclusive`。
+   * home 鎖拿鎖的那一下，只給測試用（#1503）：測試的鎖是系統 perl，「這個平台拿不到」與 `EACCES` 兩條路走不到，
+   * 不換就是沒驗過就出貨。產品路徑不設，走 spawner（`kernel-file-lock.ts`）。
    */
   readonly homeLock?: TryLock;
   /**
@@ -396,6 +409,11 @@ export interface RunServeOptions {
    * `createFixedThreadPlacer`：沒有私有根、沒有 `/shared`，續接守衛逐字比。**有沒有圍堵仍由 `--workspace` 決定**（行程級），這一支只回根的值。
    */
   readonly workspaceRootOf?: WorkspaceRootOf;
+  /**
+   * 會話日誌的位元組額度（#2115），只給測試用：換一本小的，才量得出「太大的拒收、小的照常」而不必造幾百 MiB 的日誌。
+   * 產品路徑不設，照 `thread-capacity` 的 `sessionLogBudgetMiB` 開一本（不寫就自動算）。serve 自己的存放處與引用候選逐格開的都記在這一本。
+   */
+  readonly sessionLogBudget?: SessionLogBudget;
 }
 
 export interface RunningServe {
@@ -487,6 +505,12 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     log(HARNESS_VERSION);
     return undefined;
   }
+
+  await assertPatchesOutsideWorkspace({
+    workspace: invocation.workspace,
+    cwd: options.cwd ?? process.cwd(),
+    patches: invocation.patches,
+  });
 
   // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要綁 port，也不該因為 port 被佔住
   // 就看不到設定。
@@ -657,6 +681,8 @@ async function startServer(
   root: CordisRoot,
   mcpPool: McpConnectionPool,
 ): Promise<RunningServe> {
+  // 這裡已經握著 home 鎖：這個時間以前的暫存都來自已經結束的行程（#2198）。
+  const serveStartedAtMs = Date.now();
   // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌的三支在這裡另取名字，不讓兩個 `log` 在同一段裡打架。
   // **每一行伺服器日誌都帶等級**（#1534）：`log` 是狀態披露（info），`warn` 是要人處理的，`fail` 是起不來與收不了的（error）。
   // 傳給別的函式當 `log`／`warn` 回呼時，照那個回呼講的是哪一種接哪一支。
@@ -675,6 +701,17 @@ async function startServer(
   // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
   // 之後在記憶體裡驗。
   const env = options.env ?? process.env;
+  // **沒帶 `--live` 也建一份憑證服務**（#1989）：MCP 設定裡的憑證引用跟模型 key 同一條規則（受管檔 > 啟動環境），只是沒有 `.env`
+  // 那兩層。受管檔不在這裡檢查，引用它的列連線時才讀：從沒讀成功過就壞了，只讓引用它的那幾列連不上；讀成功過之後再壞，照憑證服務的
+  // 規則續用上一份並警告。
+  const credentials =
+    liveLaunch?.credentials ??
+    createCredentialService({
+      home: resolveHarnessHome(env),
+      launchEnv: processLaunchEnv(),
+      store: true,
+    });
+  credentials.onRejected(warn);
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455），與 CLI 同一條
   // 路：同一個函式、同一個 home 層、同一組 `--patch`。
   //
@@ -792,9 +829,18 @@ async function startServer(
   // 失敗），`openAt: never` 是掛了不開（沒東西可搜時回空）。出廠是後者，見 `settings/thread-search.ts`。
   const threadSearchMounted = startupEntryMounted(plugins, threadSearchPlugin);
   const threadSearchConfig = startupSetting(plugins, threadSearchPlugin);
+  // 跨會話引用那一列（#1573 N0862）：候選上限在下面建 `SessionReferenceCandidates` 時給，引用上限與預算經 handler 交給每條 thread 的 pump。
+  // 這一列在必掛名單上（寫壞整個起不來）也關不掉，所以 `startupSetting` 讀到的一定是清單上那一列，不會是「關掉的列回預設」。
+  const sessionReference = startupSetting(plugins, sessionReferencePlugin);
   // thread 數上限（#1476，保險絲第 2 級）。**server 的性質**：`threads` 表一台伺服器一張，檢查在 `createWireHandler` 的
   // `threadFor` 裡，所以值在這裡解、往下傳一份。出廠開著、關不掉（#1619，`settings/thread-capacity.ts`）。
   const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
+  // 會話日誌額度（#2115）：serve 的存放處與引用候選逐格開的共用這一本。`thread-capacity` 的 `sessionLogBudgetMiB` 不寫就自動算——
+  // 等第一次用到（最晚是下面起動披露那一行）才算，起動披露之前沒有請求讀過日誌的話，那時 RSS 是 serve 起動完的底；
+  // 寫了就固定，`0` 是不限。
+  const configuredLogBudgetMiB = threadCapacity.sessionLogBudgetMiB;
+  const sessionLogBudget =
+    options.sessionLogBudget ?? sessionLogBudgetFromSetting(configuredLogBudgetMiB);
   // 目標續行的操作者上限（#1623）：人每授權一次最多續行幾輪。關掉那一列就只剩目標自己那條；`--no-goal-driver` 時不起作用。
   // **掛沒掛先問**：`startupSetting` 對關掉的列回 schema 預設，不先問會把關掉讀成 20。
   const goalRoundCap: GoalRoundCap | undefined = startupEntryMounted(plugins, goalRoundCapPlugin)
@@ -811,6 +857,8 @@ async function startServer(
   const downlink = startupSetting(plugins, downlinkPlugin);
   // 探針與指標（#1535）：探針預設開，指標預設關。路由與披露在下面，token 檔在瀏覽器密鑰之後讀。
   const opsConfig = startupSetting(plugins, opsEndpointsPlugin);
+  // 圖片轉碼的併發上限（#2033）：一個行程一份限流器，交給下面的附件儲存。出廠 2、關不掉（`settings/attachment-images.ts`）。
+  const attachmentImages = startupSetting(plugins, attachmentImagesPlugin);
   // **先照每條 thread 那一次組一份，組完就收**（#749）。上面那幾列只驗了自己的設定；其餘每一列的設定、重名、
   // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
   // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
@@ -858,7 +906,7 @@ async function startServer(
         ...invocation,
         liveModel,
         ...(requestGate !== undefined && { requestGate }),
-        ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+        credentials,
         threadTitle,
         threadTitleLlm,
         optionalEntries,
@@ -966,6 +1014,7 @@ async function startServer(
   // home 以上的祖先開不了、略過那一層 fsync 時，講在伺服器日誌（#1528 Q1 (b)）。
   const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)), {
     warn,
+    imageCompressionConcurrency: attachmentImages.imageCompressionConcurrency,
   });
 
   // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`
@@ -980,6 +1029,7 @@ async function startServer(
       ? undefined
       : openJsonlSessionStore({
           directory: join(sessionLogDir, projectKey(cwd)),
+          logBudget: sessionLogBudget,
           // 後端講話（例如這個平台拿不到寫租約）走伺服器日誌，前綴同協調器那條。
           warn: (message) => {
             warn(`[會話日誌] ${message}`);
@@ -1004,6 +1054,9 @@ async function startServer(
     });
     // 基底（或還沒有基底時的 home）的擁有者與權限現在就驗，壞了起不來，不等第一條新 thread 才拋。
     verifyThreadRootsBase(threadRootsBase);
+    for (const line of await memorySourceWarnings(trial.memorySources, sharedWorkspaceRoot)) {
+      warn(line);
+    }
     // 落盤關掉（#612）：沒有 header、不能續接、沒有會話鑰匙，新 thread 的可寫根是記憶體，`--workspace` 照樣唯讀掛成共用區（PM 裁決 (f)，偏離 2 的延伸）。
     // **照實講**，不靜靜收下：`--sandbox` 在這個組合下一個位元組都影響不到（可寫根不在磁碟上，共用區固定唯讀），所以直接拒絕（同 `parseSandboxMode`
     // 沒配 `--workspace` 的理由）；其餘不適用的（`present`、`@` 列檔、改動摘要、`/permission` 的檔案政策）跟沒給 `--workspace` 一樣，在這一行講明。
@@ -1031,6 +1084,17 @@ async function startServer(
               ? undefined
               : (threadId) => `${sessionStore.directory}\0${threadId}`,
         });
+  // 崩潰留在私有根的原子寫入暫存（#2198）：只有私有根這條路才有，續接時排一次背景掃描。
+  const orphanStaging =
+    options.workspaceRootOf === undefined &&
+    sharedWorkspaceRoot !== undefined &&
+    sessionStore !== undefined
+      ? launchOrphanStagingSweeper(await root.tree.context(), {
+          base: threadRootsBase,
+          startedAtMs: serveStartedAtMs,
+          warn,
+        })
+      : undefined;
   // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）：鍵與建置版本是 server 的性質，起動期讀一次；清單與雜湊
   // 是那條 thread 組裝時重讀的那一份（#1405），跟 `--dump-config` 同源。落盤關掉就不算。
   const headerMetadataOf =
@@ -1065,7 +1129,11 @@ async function startServer(
           rootDir: sessionLogDir,
           cwd,
           title: threadTitle,
+          limit: sessionReference.candidateLimit,
           warn,
+          openStore: (directory: string) =>
+            openJsonlSessionStore({ directory, logBudget: sessionLogBudget }),
+          liveEvents: (sessionId) => handler.liveSessionEvents(sessionId),
         });
 
   // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出；設成 0 是管理者關掉逐出（#1619，
@@ -1092,8 +1160,7 @@ async function startServer(
 
   /**
    * 這一版讀不懂的日誌（{@link SessionFormatUnsupportedError}）：原始檔在哪裡記進伺服器日誌，錯原樣往外拋（#1559 N0646）。
-   * **路徑只到這裡**：錯誤訊息會進協定錯誤送到瀏覽器（`wire-handler.ts` 的 `threadOrError`），多人共用的主機不把目錄結構
-   * 交給每一個打開那條 thread 的人（偏離 dsh 的訊息帶路徑，理由 2，#1558 Q1 (a)）。
+   * **路徑只到這裡**：錯誤訊息不帶路徑，這一行是管理者找得到原始檔的地方。
    */
   const noteRefusedLog =
     (threadId: string) =>
@@ -1108,12 +1175,26 @@ async function startServer(
 
   // serve 自己的 `close()` 開始了沒：`/readyz` 在 server 關掉之前就要回 503（#1535）。
   let closing = false;
+  // 只列 serve 自己寫進去的地方（#2195）；`--session-log`、工具結果暫存根可以不在 home 底下，算在 home 這一區。
+  // `--workspace` 不列：對新 thread 是唯讀共用區，它滿了或在唯讀檔案系統上都不影響寫入，列了可能一直 503；舊 thread 仍寫它，撞滿時只有工具與輪次的失敗看得到。
+  const storageProbe = new StorageProbe({
+    areas: {
+      home: [
+        resolveHarnessHome(env),
+        stashRoot,
+        ...(sessionLogDir === undefined ? [] : [sessionLogDir]),
+      ],
+      'thread-roots': [threadRootsBase],
+    },
+    warn,
+  });
   // 指標的計數與取樣（#1535）：只有打開才建（關著的時候不起事件圈取樣、不計數）。thread 數與上限抓取當下才現算。
   const opsMetrics = opsConfig.metrics.enabled
     ? new OpsMetrics(() => ({
         threads: handler.threadCount() - handler.closingCount(),
         threadsClosing: handler.closingCount(),
         maxThreads: threadCapacity.maxThreads,
+        storageFull: storageProbe.full,
       }))
     : undefined;
   const handler = createWireHandler({
@@ -1135,7 +1216,7 @@ async function startServer(
           idleEvictMs,
           onThreadEvicted: () => threadPluginList.republishSnapshot(),
         }),
-    // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
+    // 哪些事走它見 `WireHandlerOptions.warn`。
     warn,
     // 閒置逐出把一條 thread 撤出記憶體是正常狀態（#1534）：info，門檻調到 warn 的主機不為它出一行。
     info: log,
@@ -1189,6 +1270,8 @@ async function startServer(
       // 被 `@` 的會話怎麼讀回來（#713）：同一份索引，pump 領走那句話時用。
       sessionReferenceReader: sessionReferenceCandidates,
     }),
+    // 每則訊息最多引用幾條、每條多大（#1573 N0862）；預算跟著每條 thread 下一步會走的模型，見 `createWireHandler`。
+    sessionReferenceSettings: sessionReference,
     // 按內容搜（#631）。沒掛那一列就不給，handler 那時一律回「沒掛」。
     ...(threadSearch !== undefined && {
       searchThreads: (query: unknown, signal: AbortSignal) => threadSearch.search(query, signal),
@@ -1284,6 +1367,13 @@ async function startServer(
           resumedHeader: history?.header,
         });
         const threadWorkspaceRoot = placement.root;
+        // `--workspace` 退成可寫根的舊 thread 不掃：那裡是部署方的地方。
+        if (
+          history !== undefined &&
+          threadWorkspaceRoot !== undefined &&
+          isThreadRootOf(threadRootsBase, threadWorkspaceRoot)
+        )
+          orphanStaging?.sweep(threadWorkspaceRoot, threadId);
         // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有
         // `--workspace` 的話那道 fence 不在路徑上，接回來的 `read-only` 會靜靜蒸發。
         const resumedSandbox =
@@ -1327,6 +1417,8 @@ async function startServer(
             ...(placement.sharedRoot !== undefined && {
               sharedWorkspaceRoot: placement.sharedRoot,
             }),
+            // 舊 thread 的可寫根就是新 thread 讀的共用區（#1960）。
+            ...(placement.rootIsShared === true && { rootIsShared: true }),
             // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
             stepInbox: true,
             ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),
@@ -1340,7 +1432,7 @@ async function startServer(
             }),
             liveModel,
             ...(requestGate !== undefined && { requestGate }),
-            ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+            credentials,
             threadTitle,
             threadTitleLlm,
             optionalEntries: threadList.optionalEntries,
@@ -1479,9 +1571,8 @@ async function startServer(
         ...(permissionPresets !== undefined && { permissionPresets }),
         // 可點名的子代理（#328 第 2 項）：`subagent.list` 與 `run.start` 的 `mention` 驗證讀這一份。
         subagentKinds,
-        // `/名字` 叫得出的技能（#1574 N0929）：來源讀樹上的登記處、backend 與「有沒有磁碟根」讀這條 thread 的 fs 把手，都在 `skill.list` 打進來的當下。
+        // `/名字` 叫得出的技能（#1574 N0929）：來源、backend 與「有沒有磁碟根」都讀這條 thread 的 fs 把手（#1919），在 `skill.list` 打進來的當下。
         skillCatalog: createSkillCatalog({
-          sources: () => tree.skillSources(),
           fs: () => tree.threadSessions.fsForThread(threadId),
           warn: (message) => warn(`[技能] thread "${threadId}" ${message}`),
         }),
@@ -1554,7 +1645,7 @@ async function startServer(
                   ...(resumed !== undefined && {
                     resumedRoot: {
                       stored: resumed.stored,
-                      storedCount: resumed.events.length,
+                      storedCount: SessionLogOffset(resumed.events.length),
                       // 讀回來的 header 交給 `rootHeader()`：搜尋拿它跟盤上那份比（#1599）。
                       header: resumed.header,
                     },
@@ -1583,9 +1674,16 @@ async function startServer(
   const opsEndpoints = createOpsEndpoints({
     isClosing: () => closing || handler.isClosing(),
     probes: opsConfig.probes.enabled,
+    storage: storageProbe,
     ...(opsMetrics !== undefined &&
       metricsToken !== undefined && {
-        metrics: { token: metricsToken, render: () => opsMetrics.render() },
+        metrics: {
+          token: metricsToken,
+          render: async () => {
+            await storageProbe.refresh();
+            return opsMetrics.render();
+          },
+        },
       }),
   });
 
@@ -1597,6 +1695,7 @@ async function startServer(
         createWebStaticHandler({ distRoot: webDist, auth }),
         opsEndpoints,
       ),
+      mux: handler,
       port: invocation.port,
       ...(invocation.compression !== undefined && { compression: invocation.compression }),
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
@@ -1647,6 +1746,9 @@ async function startServer(
   // grep 用的是產物內附的 ripgrep（#1502 刀 4）：講出是哪一支。缺了壞了不讓啟動失敗（照 dsh，rg 路徑是延遲解析的），
   // 但每一次 grep 都會以 SEARCH_FAILED 失敗、沒有退路——管理者要在啟動這一行就看得到，不必等模型第一次搜尋。
   log(formatRipgrepDisclosure(await ripgrepStatus()));
+  reportSandboxTo(log);
+  // 同上：沒有沙箱時 grep、glob 與改動卡的 git 跑不了，別等到模型第一次用它們才知道。
+  log(await productSandboxStatus());
   // **披露，不是設定。** 每一條 thread 的對話都會寫上磁碟（#444 起預設就寫），寫去哪裡
   // 不該要讀文件才知道；清單把落盤關掉（#612）時，講的是「只在記憶體裡」與是哪一列關的。
   log(
@@ -1661,6 +1763,8 @@ async function startServer(
       idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
     }）`,
   );
+  // 轉碼併發講出來（#2033）：讀的是附件儲存手上那一份限流器，不是設定值。
+  log(`圖片轉碼併發：${String(attachmentStore.compression.concurrency)} 張（超過的排隊）`);
   // 一輪的時鐘講出來（#1624）：出廠就有值，關掉那一列是管理者明著拿掉的，兩種都印。
   log(
     turnClock === undefined
@@ -1697,6 +1801,24 @@ async function startServer(
   // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
   // serve 的那一刻就看得到，不必等第一個人開對話。
   for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
+  // 主機沒有 spawner（#2197）照舊直接起，起動講一次：這台主機上 serve 被硬殺時，不理 stdin 的 MCP 會留下來。
+  const guardNotice = mcpGuardNotice();
+  if (guardNotice !== undefined) warn(guardNotice);
+  // 會話日誌的位元組額度講出來（#2115）：自動算的最晚在這裡算；起動披露之前沒有請求讀過日誌的話，「現在的 RSS」就是
+  // serve 起動完的底。
+  // 沒落盤就沒有日誌要讀，不印。
+  if (sessionStore !== undefined) {
+    const { limitBytes } = sessionLogBudget;
+    log(
+      limitBytes === Number.POSITIVE_INFINITY
+        ? '會話日誌額度：不限（thread-capacity 的 sessionLogBudgetMiB 是 0；大日誌可能把整個行程撐死）'
+        : `會話日誌額度：${(limitBytes / 1024 / 1024).toFixed(1)} MiB（同時開著與正在讀的會話日誌合計，超過的在讀之前拒收；${
+            configuredLogBudgetMiB === undefined || options.sessionLogBudget !== undefined
+              ? '照容器記憶體上限與 --max-old-space-size 自動算'
+              : 'thread-capacity 的 sessionLogBudgetMiB 設的'
+          }）`,
+    );
+  }
   // 已儲存 vs 執行中的對照（#1406）：寫成功才講，寫不進去的警告已經在上面記過。
   if (startupSnapshotWritten) log(describeSnapshot(startupSnapshot, pluginSnapshotPath(env)));
 
@@ -1788,6 +1910,8 @@ export interface ServeProcessLifecycle {
  * 照 dsh `apps/cli/src/profile-boot.ts:282-311`）。
  *
  * - 訊號（`SIGTERM` 回 0、`SIGINT` 回 130）走 {@link createProcessShutdown}：5 秒上限、收尾中再來一次就當場結束（#599）。
+ *   **`close()` 拒絕時兩者都回 1**（[#2196](https://github.com/DemianLi/nexus-agent/issues/2196)）：有東西沒收好（會話日誌沒落盤這類），監管程式要從退出碼看得出來。
+ *   逾時與第二次訊號回訊號的碼：那兩條沒有等到 `close()` 的結果。
  * - 未處理的 rejection／未捕捉的例外走 {@link installFailLoud}：印一行帶標籤的診斷，最多等 2 秒走**同一份** dispose，
  *   然後以 1 結束。**不讓 serve 存活**：一條 thread 的半套狀態被其他人繼續用，比全部重連更糟。
  * - 兩邊等同一顆 promise，所以收尾進行中來另一邊，`running.close()` 只跑一次；退出碼以**先到的**為準
@@ -1802,6 +1926,7 @@ export interface ServeProcessLifecycle {
 export function installServeProcessLifecycle(proc: ServeProcess = process): ServeProcessLifecycle {
   let running: RunningServe | undefined;
   let disposal: Promise<void> | undefined;
+  let closeFailed = false;
   // **誰先開始收尾誰決定要不要等 `/readyz` 時間窗**：訊號等（#1777），致命例外不等（#1787）。兩邊仍共用同一顆 promise，
   // 所以訊號先到、致命隨後時，致命路徑也在同一個收尾裡（它自己的 2 秒上限仍在 `installFailLoud`）。
   const disposeWith = (drain: boolean): Promise<void> =>
@@ -1812,6 +1937,7 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
       } catch (error) {
         // 控制器在收尾失敗時只強制結束、不講原因；會話日誌寫不下去是這裡最該聽見的那種。
         console.error(error instanceof Error ? error.message : String(error));
+        closeFailed = true;
         throw error;
       }
     })());
@@ -1821,7 +1947,7 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
   const shutdown = createProcessShutdown(
     () => disposeWith(true),
     (code) => {
-      proc.exit(code);
+      proc.exit(closeFailed ? 1 : code);
     },
     (code) => {
       proc.exitCode = code;

@@ -50,6 +50,21 @@ export const STRUCTURED_ROW = { id: 1, label: 'row', note: '結構化資料的�
 
 /** 把這一組工具掛到一台舊協議的 server 上。 */
 export function registerFixtureTools(server: McpServer): void {
+  // 卡死的兩種樣子（#2194）：`hang` 永遠不回，事件迴圈還在跑；`spin` 回完之後事件迴圈空轉，什麼都收不到。
+  if (process.env['FIXTURE_STALL_TOOLS'] === '1') {
+    server.registerTool(
+      'hang',
+      { description: '永遠不回。', inputSchema: {} },
+      () => new Promise<never>(() => {}),
+    );
+    server.registerTool('spin', { description: '回完之後卡死。', inputSchema: {} }, () => {
+      setTimeout(() => {
+        for (;;);
+      }, 20);
+      return { content: [{ type: 'text', text: 'spinning' }] };
+    });
+  }
+
   server.registerTool(
     'fetch_release_note',
     {
@@ -75,14 +90,18 @@ export function registerFixtureTools(server: McpServer): void {
     content: [{ type: 'text', text: FAILURE_TEXT }],
   }));
 
-  // 欄位可為 null、又有可省略的聯集：2.0.0 起 adapter 不再簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
+  // 欄位可為 null、又有可省略的聯集：adapter 2.x 不簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
+  // 字串帶 `min(1)` 是為了讓 schema 保有 `anyOf`：zod 4.6 起，成員都是沒有其他約束的原始型別的 nullable／聯集會收成 `type` 陣列。
   server.registerTool(
     'nullable_args',
     {
       description: '收一個可為 null 的字串與一個字串或數字的聯集。',
       inputSchema: {
-        label: z.string().nullable().describe('標籤，可為 null'),
-        value: z.union([z.string(), z.number()]).optional().describe('字串或數字'),
+        label: z.string().min(1).nullable().describe('標籤，可為 null'),
+        value: z
+          .union([z.string().min(1), z.number()])
+          .optional()
+          .describe('字串或數字'),
       },
     },
     ({ label, value }) => ({ content: [{ type: 'text', text: JSON.stringify({ label, value }) }] }),
@@ -146,6 +165,26 @@ export function registerFixtureTools(server: McpServer): void {
       content: [
         { type: 'text', text: CITE_TEXT },
         ...CITE_LINKS.map((link) => ({ type: 'resource_link' as const, ...link })),
+      ],
+    }),
+  );
+
+  // 工具卡的結果文字（#2174）：只回一張圖，以及一個結果分成兩塊文字。
+  server.registerTool(
+    'only_image',
+    { description: '只回一張圖，沒有文字。', inputSchema: {} },
+    () => ({ content: [{ type: 'image', data: SNAPSHOT_PNG, mimeType: 'image/png' }] }),
+  );
+  server.registerTool(
+    'two_texts',
+    {
+      description: '回兩塊文字；`kb` 給了就把第一塊撐到這個大小。',
+      inputSchema: { kb: z.number().optional() },
+    },
+    ({ kb }) => ({
+      content: [
+        { type: 'text', text: kb === undefined ? '第一段' : filler(kb) },
+        { type: 'text', text: '第二段' },
       ],
     }),
   );

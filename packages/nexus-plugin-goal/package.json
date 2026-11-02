@@ -1,6 +1,6 @@
 {
   "name": "@nexus/plugin-goal",
-  "version": "0.0.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -38,7 +38,7 @@
   "dependencies": {
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.13",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@nexus/commands": "workspace:*",

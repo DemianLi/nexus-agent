@@ -9,16 +9,16 @@
  * 3. **封存的會話冷啟動也不跑模型**：重啟之後第一句話送到封存的會話，日誌上沒有新的 `turn/start`；取消封存就恢復。
  */
 
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionEventsOf } from './session-files.fixture.js';
 
 let running: RunningServe | undefined;
 
@@ -49,12 +49,8 @@ async function driveTurn(server: RunningServe, threadId: string, prompt: string)
   await events.return?.(undefined);
 }
 
-async function readEvents(root: string, threadId: string): Promise<readonly SessionEvent[]> {
-  const body = await readFile(join(root, projectKey(process.cwd()), `${threadId}.jsonl`), 'utf8');
-  return body
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+function readEvents(root: string, threadId: string): Promise<readonly SessionEvent[]> {
+  return sessionEventsOf(join(root, projectKey(process.cwd())), threadId);
 }
 
 async function blockedEnds(root: string, threadId: string): Promise<number> {
@@ -132,12 +128,12 @@ describe('serve 上的釘選與封存', () => {
     const first = await start(root);
     await driveTurn(first, 'alpha', '這台的');
     await stop(first);
-    // 手寫兩份：一份 header 的 cwd 是別處（列表不列，所以不能釘），一份 header 壞了。
+    // 手寫兩份舊兩檔：一份 header 的 cwd 是別處（列表不列，所以不能釘），一份 header 壞了。
     const directory = join(root, projectKey(process.cwd()));
     await writeFile(
       join(directory, 'elsewhere.header.json'),
       JSON.stringify({
-        version: SESSION_LOG_FORMAT_VERSION,
+        version: LEGACY_TWO_FILE_FORMAT_VERSION,
         id: 'elsewhere',
         createdAt: 1,
         cwd: '/somewhere/else',

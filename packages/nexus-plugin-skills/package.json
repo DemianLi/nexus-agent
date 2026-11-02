@@ -1,6 +1,6 @@
 {
   "name": "@nexus/plugin-skills",
-  "version": "0.0.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -41,6 +41,6 @@
     "@nexus/skills": "workspace:*"
   },
   "dependencies": {
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   }
 }

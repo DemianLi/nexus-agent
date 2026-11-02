@@ -119,6 +119,41 @@ describe('呼叫列帶請求快照的內容', () => {
     expect(number!.headerJson).toBe('42');
   });
 
+  it.each([
+    [{ kind: 'hook', reason: 'turn-timeout' }, 'timed-out'],
+    [{ kind: 'hook', reason: 'some-other-hook' }, 'aborted'],
+    [{ kind: 'user' }, 'aborted'],
+    [undefined, 'aborted'],
+  ] as const)('被中止的呼叫看那一輪的原因（#1847，%o）', (endCause, expected) => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [script.running(), script.completed()]);
+    const calls = [call(5, { outcome: 'aborted' })];
+    const model = traceModel(
+      withTrajectory(
+        state,
+        script,
+        view([turn(0, { calls, end: 'aborted', ...(endCause === undefined ? {} : { endCause }) })]),
+        snapshots(),
+      ),
+    );
+    const [row] = model.turns[0]!.rows.filter((each): each is CallRow => each.kind === 'call');
+    expect(row!.outcome).toBe(expected);
+    expect(model.turns[0]!.head?.endCause).toEqual(endCause);
+  });
+
+  it('子代理被時鐘切斷的呼叫也分開講（#1847）', () => {
+    const out = subagentTurnView(
+      turn(1, {
+        calls: [call(5, { outcome: 'aborted' })],
+        end: 'aborted',
+        endCause: { kind: 'hook', reason: 'turn-timeout' },
+      }),
+      undefined,
+    );
+    expect(out.calls[0]!.row.outcome).toBe('timed-out');
+    expect(out.head.endCause).toEqual({ kind: 'hook', reason: 'turn-timeout' });
+  });
+
   it('呼叫的結果（失敗、已中止）進列；正常回來的沒有這一格', () => {
     const [failed, aborted, fine] = rowsOf(snapshots(), [
       call(5, { outcome: 'error' }),

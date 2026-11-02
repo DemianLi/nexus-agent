@@ -37,7 +37,8 @@ import type {
 import { parse as parseYaml } from 'yaml';
 
 import { isMachineMessage } from './message-source.js';
-import { REPEAT_REMINDER_MARKER } from './repeat-reminder.js';
+import { isReminder } from './repeat-reminder.js';
+import { isUnderAnyPrefix } from './sandbox.js';
 import { isSummarizationMessage } from './summarization.js';
 
 /** 一份技能誰叫得到。兩格都照 dsh 的 `SkillInvocationPolicy`。 */
@@ -357,6 +358,44 @@ export async function scanSkills(
   };
 }
 
+/** {@link threadSkillSources} 讀的這條 thread 的兩件事，形狀同 `FsService` 的同名兩格。 */
+export interface SkillSourcesPlacement {
+  /** 唯讀共用區的前綴（不含結尾斜線）；這條 thread 沒有共用區是 `undefined`。 */
+  sharedWorkspacePrefix(): string | undefined;
+  /** 組裝點與 plugin 包上去的路由前綴；共用區那一格在不在裡面都可以。 */
+  offWorkspacePrefixes(): readonly string[];
+}
+
+/**
+ * 這條 thread 實際要掃的技能來源（[#1928](https://github.com/DemianLi/nexus-agent/issues/1928)）。
+ *
+ * 來源寫的是工作區裡的路徑（出廠 `/skills/`）。新 thread 有私有可寫根，工作區退成掛在共用區前綴底下的唯讀區
+ * （[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)），所以有共用區時，不在任何路由底下的來源一律接到共用區前綴底下：
+ * 讀部署方放的技能，**不讀私有根**——模型寫進私有根的技能，不會變成人用 `/名字` 叫得出、也不會蓋掉部署方同名的那一份。
+ * 已經在路由底下的（部署方明寫的 `/shared/skills/`、plugin 掛的路由）原樣留著。沒有共用區的 thread（舊 thread、CLI）原樣回。
+ *
+ * 換過之後重複的（`/skills/` 換成 `/shared/skills/`，清單上本來也有一個 `/shared/skills/`）只留最後一次出現的那一格：同名後者贏，
+ * 所以優先序跟沒去重時相同；模型的 prompt 每個來源目錄印一行，不去重就會把同一個目錄列兩次。
+ *
+ * 模型清單、`/名字` 叫用、`skill.list` 三條路都經這裡，三邊掃的才是同一組。
+ *
+ * @param sources - 登記的來源，順序就是優先序（後者贏）。
+ * @param placement - 這條 thread 的共用區前綴與路由前綴。
+ * @returns 要掃的來源，順序不變（去掉的重複除外）。
+ */
+export function threadSkillSources(
+  sources: readonly string[],
+  placement: SkillSourcesPlacement,
+): readonly string[] {
+  const shared = placement.sharedWorkspacePrefix();
+  if (shared === undefined) return sources;
+  const routes = [shared, ...placement.offWorkspacePrefixes()];
+  const placed = sources.map((source) =>
+    isUnderAnyPrefix(source, routes) ? source : `${shared}${source}`,
+  );
+  return placed.filter((source, index) => placed.indexOf(source, index + 1) === -1);
+}
+
 /**
  * 一則訊息是不是人講的話——`/名字` 叫用只掃這種（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）。
  *
@@ -364,7 +403,7 @@ export async function scanSkills(
  * `message-source.ts` 的「缺席就是人」：圖上一輪開頭那句人話沒有來源，所以不能照搬「只認 `user`」，改成**排除**機器造的：
  *
  * - 有來源、而且不是 `user`（{@link isMachineMessage}：外掛注入、goal 續行、引用快照、背景子代理的回報、技能叫用本身）；
- * - **重複提醒**：它沒有來源、只帶 {@link REPEAT_REMINDER_MARKER}，詳細那一版會把模型寫的工具參數原樣放進去
+ * - **重複提醒**：它沒有來源、只帶提醒的記號（{@link isReminder}），詳細那一版會把模型寫的工具參數原樣放進去
  *   （`repeat-reminder.ts` 的 `detailedReminder`），參數裡的 ` /deploy ` 不能變成人在叫用；dsh 的提醒帶 `repeat-tool-reminder` 來源；
  * - **基座的摘要訊息**：只帶 `lc_source: 'summarization'`（{@link isSummarizationMessage}），內容是模型寫的。
  *
@@ -376,7 +415,7 @@ export async function scanSkills(
 export function isHumanSpeech(message: BaseMessage): boolean {
   if (!HumanMessage.isInstance(message)) return false;
   if (isMachineMessage(message)) return false;
-  if (message.additional_kwargs[REPEAT_REMINDER_MARKER] != null) return false;
+  if (isReminder(message)) return false;
   return !isSummarizationMessage(message);
 }
 

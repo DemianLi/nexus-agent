@@ -21,7 +21,9 @@ describe('RowTrigger（可展開列的共用觸發鈕）', () => {
     const classes = el.className.split(/\s+/);
     for (const c of [
       'group',
-      'hover:bg-chip-hover',
+      'group/row-trigger',
+      'hover:bg-muted',
+      'hover:text-foreground',
       'min-h-11',
       'rounded-row',
       'gap-2',

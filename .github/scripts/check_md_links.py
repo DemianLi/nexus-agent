@@ -1,23 +1,22 @@
 """檢查 repo 自寫 Markdown 的相對連結：目標檔要存在，指向 .md 的 `#片段` 要對到那份的標題 slug 或 `<a id>`（#1537）。
 
-照 dsh `scripts/verify-md-links.ts`（687f282e）：
-
-- 掃的檔照它的 PATTERNS，扣掉本 repo 沒有的 `README.zh.md`、`.agents/**`；萬用字元不配點開頭的名字，符號連結指到
-  同一份的只掃一次；
-- 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼；
+- 掃的檔是 `PATTERNS` 列的自寫 Markdown（#1755），含 `.agents/skills/` 底下的 skill。vendor 只掃 `vendor/README.md` 與
+  `apps/web/src/vendor/solid-glass/README.md` 兩份本地寫的，其餘是原樣搬來的，不掃。
+- 萬用字元不配點開頭的名字，寫死在 pattern 裡的段（`.docs`、`.github`、`.agents`）照認；符號連結指到同一份的只掃一次。
+- 網址（帶 scheme）、`//` 與 `/` 開頭的不查，純 `#片段` 對本檔查；`?query` 不影響解析；路徑與片段先做百分比解碼。
 - 片段只對指向 .md 的判，指向原始碼的 `#L10` 這類不判。
+- 落在 repo 根目錄 `references/` 底下的目標不查（存在與錨點都不查）：那是 AGENTS.md〈技術實現標準〉要各自 clone 的唯讀參照，
+  `.gitignore` 排除、CI 上不存在。代價是指到那裡的路徑打錯了也抓不到。
 
-和 dsh 不同的地方：
+寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job，理由同 `check_upgrade_guides.py`：純文件 PR 會跳過 `static`，
+`plan` 不裝相依，所以沒有 Markdown 解析器，逐行近似。各處往哪一邊偏：
 
-- `.docs/`（對應 dsh 的 `.agents/notes`）、`.github/`、`apps/` 還沒掃，由 #1755 補。
-- 寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job，理由同 `check_upgrade_guides.py`：純文件 PR 會跳過 `static`，
-  `plan` 不裝相依，所以沒有 Markdown 解析器，逐行近似。各處往哪一邊偏：
-  - 錨點只認 ATX 標題與 `<a id>`。setext 標題、清單項目裡縮排 4 格以上的標題不算，指向它們的連結會被報（報多）。
-    縮排程式碼裡的 `<a id>` 會被收成錨點（放過）。
-  - fence 用去掉行首空白的行判開關，因為清單項目裡的 fence 本來就縮排；縮排程式碼裡出現 ``` 會被當成 fence 開頭，
-    到收尾之前的連結不查（放過）。
-  - 連結只認行內的 `[文字](目標)`、`![圖](目標)` 與 `[標籤]: 目標` 定義；跨行的連結文字、`[文字][標籤]` 的參照式不認，
-    參照式的目標由那一行定義查到。
+- 錨點只認 ATX 標題與 `<a id>`。setext 標題、清單項目裡縮排 4 格以上的標題不算，指向它們的連結會被報（報多）。
+  縮排程式碼裡的 `<a id>` 會被收成錨點（放過）。
+- fence 用去掉行首空白的行判開關，因為清單項目裡的 fence 本來就縮排；縮排程式碼裡出現 ``` 會被當成 fence 開頭，
+  到收尾之前的連結不查（放過）。
+- 連結只認行內的 `[文字](目標)`、`![圖](目標)` 與 `[標籤]: 目標` 定義；跨行的連結文字、`[文字][標籤]` 的參照式不認，
+  參照式的目標由那一行定義查到。
 """
 
 from __future__ import annotations
@@ -37,7 +36,17 @@ PATTERNS = [
     'packages/*/*.md',
     'packages/*/*/*.md',
     'AGENTS.md',
+    'GLOSSARY-MAP.md',
+    '.docs/**/*.md',
+    '.github/**/*.md',
+    'apps/*/*.md',
+    'apps/*/*/*.md',
+    'vendor/README.md',
+    'apps/web/src/vendor/solid-glass/README.md',
+    '.agents/skills/**/*.md',
 ]
+# 不查的目標：repo 根目錄底下的這個目錄（見檔頭）。
+UNCHECKED_ROOT = 'references'
 FRONTMATTER = re.compile(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n')
 # 引言符號：最多 3 格縮排、`>`、可有一格空白，可以疊好幾層。
 QUOTE = re.compile(r'^ {0,3}> ?')
@@ -54,9 +63,11 @@ def source_paths(root: Path) -> list[Path]:
     found: list[Path] = []
     for pattern in PATTERNS:
         matches = [root / pattern] if '*' not in pattern else sorted(root.glob(pattern))
+        # pattern 裡寫死的段照認，萬用字元配到的段才不收點開頭的。
+        literal = len(pattern.split('*', 1)[0].split('/')) - 1
         for path in matches:
             relative = path.relative_to(root).parts
-            if any(part.startswith('.') for part in relative) or not path.is_file():
+            if any(part.startswith('.') for part in relative[literal:]) or not path.is_file():
                 continue
             real = os.path.realpath(path)
             if real in seen:
@@ -67,7 +78,7 @@ def source_paths(root: Path) -> list[Path]:
 
 
 def github_slug(heading: str) -> str:
-    """照 dsh `githubSlug`：小寫，只留字母、數字、`_`、空白、`-`，空白換成 `-`。"""
+    """近似 GitHub 的標題 slug：小寫，只留 Unicode 字母、數字（類別 L*、N*）、`_`、空白、`-`，空白換成 `-`。"""
     kept = ''.join(c for c in heading.lower() if unicodedata.category(c)[0] in 'LN' or c in '_ -')
     return kept.replace(' ', '-')
 
@@ -153,7 +164,7 @@ def link_targets(source: str) -> list[tuple[int, str]]:
     return targets
 
 
-def link_violations(path: Path) -> list[str]:
+def link_violations(path: Path, root: Path) -> list[str]:
     """一份 Markdown 的壞連結：相對目標不存在，或指向 .md 的 `#片段` 對不到標題 slug 與 `<a id>`。"""
     violations: list[str] = []
     for number, url in link_targets(path.read_text(encoding='utf-8')):
@@ -161,6 +172,8 @@ def link_violations(path: Path) -> list[str]:
             continue
         raw_path = re.sub(r'[#?].*$', '', url)
         target = path if raw_path == '' else Path(os.path.normpath(path.parent / unquote(raw_path)))
+        if Path(os.path.relpath(target, root)).parts[:1] == (UNCHECKED_ROOT,):
+            continue
         if not target.exists():
             violations.append(f'第 {number} 行的連結 {url} 指到不存在的檔案')
             continue
@@ -181,7 +194,7 @@ def collect(root: Path) -> tuple[list[Path], int, list[str]]:
         relative = [u for _, u in link_targets(path.read_text(encoding='utf-8'))
                     if not (u.startswith('/') or re.match(r'^[A-Za-z][A-Za-z0-9+.-]*:', u))]
         links += len(relative)
-        violations.extend(f'{path.relative_to(root).as_posix()}：{v}' for v in link_violations(path))
+        violations.extend(f'{path.relative_to(root).as_posix()}：{v}' for v in link_violations(path, root))
     return files, links, violations
 
 

@@ -15,12 +15,10 @@
  * （`@nexus/core` 的 `session-log.ts`；外溢層開著時是外溢換過的那則，見下面）。加上它是序列化過的 LangChain `ToolMessage`，
  * 拆它等於把基座的形狀搬進前端。所以**兩條路一律從 `tool/result.message` 抽**。
  *
- * ## 為什麼拒絕多塊
+ * ## 多塊怎麼接（[#2174](https://github.com/DemianLi/nexus-agent/issues/2174)）
  *
- * 照 dsh 的 `singleResultText`（`ui-tool/src/client/tool/models/raw-tool-call.ts:46-50`）：
- * 內容不是剛好一塊文字就回 `undefined`，**不自己把幾塊拼起來**。拼出來的字是我們發明的，
- * dsh 的卡在同樣的輸入下什麼都不顯示。今天工具結果的內容是字串（實測），所以這條規則
- * 現在只是把「將來多了圖片或檔案區塊」那天的行為先定死。
+ * 全是文字塊就用空一行接起來；混了圖片或檔案就回 `undefined`，不拿其中的文字代表整個結果。
+ * 接在讀的這一邊，不在寫日誌時併：舊日誌裡已經是多塊的結果，重新載入也要有文字。
  *
  * ## 文字放上線不截（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）
  *
@@ -117,15 +115,18 @@ export function capToolText(text: string, maxBytes: number): string {
  * 一則 `tool/result` 的結果文字，**原樣**：不截，見檔頭（#736）。
  *
  * @param message - 日誌記的那一則（格式 9 以前沒有，所以可以是 `undefined`）。
- * @returns 那段文字；沒有訊息、或內容不是剛好一塊文字時 `undefined`。
+ * @returns 那段文字，多塊文字空一行接起來；沒有訊息、沒有內容、或內容不全是文字時 `undefined`。
  */
 export function toolResultText(message: LoggedMessage | undefined): string | undefined {
   if (!message) return undefined;
   const blocks = loggedContentBlocks(message.data.content);
-  if (blocks.length !== 1) return undefined;
-  const only = blocks[0] as { type?: unknown; text?: unknown } | null;
-  if (only?.type !== 'text' || typeof only.text !== 'string') return undefined;
-  return only.text;
+  if (blocks.length === 0) return undefined;
+  const parts: string[] = [];
+  for (const block of blocks as readonly ({ type?: unknown; text?: unknown } | null)[]) {
+    if (block?.type !== 'text' || typeof block.text !== 'string') return undefined;
+    parts.push(block.text);
+  }
+  return parts.join('\n\n');
 }
 
 /** 序列化之後的位元組數。 */

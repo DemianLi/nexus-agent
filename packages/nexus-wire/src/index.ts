@@ -183,6 +183,7 @@ export {
   SUBAGENT_LIST_METHOD,
 } from './subagent-list.js';
 export type { MessageDiscardPayload } from './message-discard.js';
+export { AUTH_FAILURE_CODE, AUTH_FAILURE_MESSAGE, turnFailureText } from './turn-failure.js';
 export { LLM_RETRY, LLM_RETRY_STARTED } from './llm-retry.js';
 export type { LlmRetryPayload, LlmRetryStartedPayload, WireLlmRetry } from './llm-retry.js';
 export { MESSAGE_DISCARD } from './message-discard.js';
@@ -250,6 +251,7 @@ export {
 } from './session-references.js';
 export type {
   ModelUsagePayload,
+  WireContextBreakdown,
   WireContextMeasure,
   WireContextPressure,
   WireSummaryThreshold,
@@ -283,7 +285,14 @@ export type {
   WireSessionReference,
   WireSettleReason,
 } from './inbox.js';
-export { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, SETTLE_REASONS, isSettleReason } from './inbox.js';
+export {
+  AGENT_MESSAGE,
+  INBOX,
+  SETTLE_NOTICE,
+  SETTLE_REASONS,
+  isSettleReason,
+  isTurnStopCause,
+} from './inbox.js';
 export type { TitlePayload } from './title.js';
 export { SUBAGENT_STATUS } from './subagent-status.js';
 export { SUBAGENT_CATALOG } from './subagent-catalog.js';
@@ -336,6 +345,10 @@ export {
   SERVER_CLOSING,
   THREAD_HISTORY_TOO_DEEP,
   THREAD_IS_SUBAGENT,
+  THREAD_LOG_BUSY,
+  THREAD_LOG_TOO_LARGE,
+  THREAD_ROOT_MISMATCH,
+  THREAD_WRITER_HELD,
   THREAD_FEED_PATH,
   THREAD_SEARCH_PATH,
   THREAD_SEARCH_QUERY_MAX_LENGTH,
@@ -434,6 +447,15 @@ export type {
   WireClientOptions,
 } from './client.js';
 export { createWireClient } from './client.js';
+export {
+  MUX_FALLBACK_MS,
+  WIRE_MUX_PATH,
+  createMuxFetch,
+  isMuxRoute,
+  parseMuxClientMessage,
+  parseMuxServerMessage,
+} from './mux.js';
+export type { MuxClientMessage, MuxFetchOptions, MuxServerMessage, MuxSocket } from './mux.js';
 export { UplinkTransportError } from './uplink-error.js';
 export { WireRejectedError } from './rejected-error.js';
 export { WireProtocolError } from './protocol-error.js';

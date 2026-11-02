@@ -12,6 +12,8 @@
  * - **只算會真的觸發的門檻**（[#1444](https://github.com/DemianLi/nexus-agent/issues/1444)）：`messagesCompactable` 是
  *   `false` 時，`messages` 那道到了也摘不到東西（整串都在原樣保留的尾巴裡，#1441），不算進環、不會是最近那道，明細照列並
  *   標成目前不會觸發。沒有這一格（舊日誌）照沒有這一格以前的算法。每一道都不算時環是 0%，不是不畫：環一消失，看起來像量測壞了。
+ * - **組成三行**（#1571 N1193）：有 `breakdown` 才有，寫「約 N」。系統提示與工具定義比總數大時對話夾在 0，三格相加會超過
+ *   總數，所以不畫合計，超過時多一句說明。
  * - **百分比無條件捨去**，最多 100：「100%」只在真的到門檻時出現。比例是估算的，所以前面標「約」。
  * - **色階不在這裡**：環照 SG 的 70／90 上色（`ContextRing` 自己算，#1591）；原本 80% 的 `WARNING_RATIO` 只剩用量表在用，
  *   跟著拿掉。
@@ -19,7 +21,7 @@
  * @module
  */
 
-import type { WireContextPressure, WireSummaryThreshold } from '@nexus/wire';
+import type { WireContextMeasure, WireContextPressure, WireSummaryThreshold } from '@nexus/wire';
 
 /** 明細裡的一道門檻。 */
 export interface ThresholdRow {
@@ -32,6 +34,14 @@ export interface ThresholdRow {
   readonly dormant: boolean;
 }
 
+/** 明細裡組成的一行。 */
+export interface BreakdownRow {
+  readonly part: 'system' | 'tools' | 'messages';
+  readonly label: string;
+  /** 例如「約 8.1k」。 */
+  readonly text: string;
+}
+
 export interface ContextMeterView {
   /** 環要填多滿，0 到 1。 */
   readonly ratio: number;
@@ -40,6 +50,10 @@ export interface ContextMeterView {
   /** 「目前大小」那一行；沒收到 `model/usage` 時沒有這一行。 */
   readonly inputTokens?: string;
   readonly rows: readonly ThresholdRow[];
+  /** 組成三行；舊日誌或還沒量過時沒有這一格。 */
+  readonly breakdown?: readonly BreakdownRow[];
+  /** 三格相加比總數大時的說明。 */
+  readonly breakdownNote?: string;
   /** 明細底下那句：有沒有會觸發的門檻，說法不同。 */
   readonly note: string;
 }
@@ -53,6 +67,25 @@ export const NOTE_ALL_ACTIVE = '到了任何一道門檻，較早的訊息會被
 export const NOTE_SOME_DORMANT = '到了會觸發的門檻，較早的訊息會被摘要成一段。比例是估算的。';
 /** 一道會觸發的都沒有：環是 0%。 */
 export const NOTE_NONE_ACTIVE = '目前沒有會觸發的門檻，不會自動摘要。';
+
+/** 系統提示加工具定義就超過總數時，組成底下那句。 */
+export const BREAKDOWN_OVER_TEXT =
+  '系統提示與工具定義是另外估的，比總數大，所以三行相加不等於總數。';
+
+const breakdownOf = (measure: WireContextMeasure) => {
+  const { breakdown, approxTokens } = measure;
+  if (breakdown === undefined) return {};
+  const { systemTokens, toolsTokens, messageTokens } = breakdown;
+  const about = (count: number) => `約 ${compact(count)}`;
+  return {
+    breakdown: [
+      { part: 'system', label: '系統提示', text: about(systemTokens) },
+      { part: 'tools', label: '工具定義', text: about(toolsTokens) },
+      { part: 'messages', label: '對話', text: about(messageTokens) },
+    ],
+    ...(systemTokens + toolsTokens > approxTokens ? { breakdownNote: BREAKDOWN_OVER_TEXT } : {}),
+  } as const;
+};
 
 /** `null`：不畫。 */
 export function contextMeterView(pressure: WireContextPressure | null): ContextMeterView | null {
@@ -89,6 +122,7 @@ export function contextMeterView(pressure: WireContextPressure | null): ContextM
       ? {}
       : { inputTokens: `${pressure.inputTokens.toLocaleString('en-US')} token` }),
     rows,
+    ...breakdownOf(measure),
     note:
       dormantCount === 0
         ? NOTE_ALL_ACTIVE

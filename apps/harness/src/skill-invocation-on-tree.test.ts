@@ -16,6 +16,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { PreStepInjection, PreStepListener } from '@nexus/agent-loop';
 import {
   createRepeatReminder,
+  fromLoggedMessage,
   MESSAGE_SOURCE_KWARG,
   REPEAT_REMINDER_MARKER,
   replayConversation,
@@ -23,6 +24,7 @@ import {
   SESSION_LOG_FORMAT_VERSION,
   SessionRegistry,
   sourceKwargs,
+  toLoggedMessage,
 } from '@nexus/core';
 import type { MessageSource, PluginEntry, SessionAddress } from '@nexus/core';
 import type { FsLookup } from '@nexus/fs';
@@ -37,6 +39,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { historyFrames } from './conversation-history.js';
+import { restoreConversation } from './conversation-restore.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 import { withScriptedModel } from './fixtures.js';
@@ -98,11 +101,25 @@ const STANDARD = {
 // listener 本身
 // ---------------------------------------------------------------------------------------------
 
+/** 沒有共用區的 fs 把手（舊 thread、CLI 的形狀）：fold 填的來源就是折進這次組裝的那一份，原樣不換。共用區那一條在 `skills-shared-workspace.test.ts`。 */
+function noSharedWorkspace(
+  backend: () => ContainedFilesystemBackend | undefined,
+  sources: () => readonly string[] = () => ['/skills/'],
+): Extract<FsLookup, { kind: 'ok' }>['fs'] {
+  return {
+    backend,
+    sharedWorkspacePrefix: () => undefined,
+    offWorkspacePrefixes: () => [],
+    skillSources: sources,
+  } as never;
+}
+
 function lookupOf(
   backend: ContainedFilesystemBackend | undefined,
   address: SessionAddress = { kind: 'root' },
+  sources?: () => readonly string[],
 ): () => FsLookup {
-  return () => ({ kind: 'ok', fs: { backend: () => backend } as never, address });
+  return () => ({ kind: 'ok', fs: noSharedWorkspace(() => backend, sources), address });
 }
 
 function listenerOn(
@@ -110,8 +127,7 @@ function listenerOn(
   options: { address?: SessionAddress; sources?: readonly string[] } = {},
 ): PreStepListener {
   return createSkillInvocationListener({
-    fs: lookupOf(backend, options.address),
-    sources: () => options.sources ?? ['/skills/'],
+    fs: lookupOf(backend, options.address, () => options.sources ?? ['/skills/']),
   });
 }
 
@@ -139,7 +155,7 @@ const namesOf = (injections: readonly PreStepInjection[] | undefined) =>
   injections?.map((injection) => injection.source?.['name']);
 
 describe('listener：注入什麼', () => {
-  it('人話裡的 /deploy：一則 <skill_content>，來源是 skill-invocation，記號指回那句人話', async () => {
+  it('人話裡的 /deploy：一則 <skill_content>，來源是 skill-invocation，記號是名字', async () => {
     const ws = workspace(STANDARD);
     const injections = await run(listenerOn(backendOf(ws)), [human('請 /deploy 一下', 'h1')]);
     expect(injections).toHaveLength(1);
@@ -164,7 +180,7 @@ describe('listener：注入什麼', () => {
       form: 'instructions',
     });
     expect(injection!.additionalKwargs).toEqual({
-      [SKILL_INVOCATION_MARKER]: { name: 'deploy', forMessageId: 'h1' },
+      [SKILL_INVOCATION_MARKER]: { name: 'deploy' },
     });
   });
 
@@ -299,7 +315,7 @@ describe('驗收 7：不重複', () => {
     ).toBeUndefined();
   });
 
-  it('中途停掉（沒有模型回覆）：那句人話已有同名注入就不再注入；別的名字照注入', async () => {
+  it('中途停掉（沒有模型回覆）：這一段已有同名注入就不再注入；別的名字照注入', async () => {
     const ws = workspace(STANDARD);
     const listener = listenerOn(backendOf(ws));
     const first = await run(listener, [human('/deploy /release-notes', 'h1')]);
@@ -313,13 +329,47 @@ describe('驗收 7：不重複', () => {
     // 只留下 deploy 那一則（release-notes 那則當作沒進到 state）。
     const again = await run(listener, [human('/deploy /release-notes', 'h1'), injected[0]!]);
     expect(namesOf(again)).toEqual(['release-notes']);
-    // 同一個名字、另一句人話（另一個 id）：照注入。
+    // 同一段裡另一句人話也寫 /deploy：正文已經在這一段，不再注入。
     const other = await run(listener, [
       human('/deploy /release-notes', 'h1'),
       ...injected,
       human('/deploy', 'h2'),
     ]);
-    expect(namesOf(other)).toEqual(['deploy']);
+    expect(other).toBeUndefined();
+  });
+
+  it('那句人話換了 id（續接重放之後）或沒有 id：同一段已有同名注入就不再注入', async () => {
+    const ws = workspace(STANDARD);
+    const listener = listenerOn(backendOf(ws));
+    const [injection] = (await run(listener, [human('/deploy', 'h1')]))!;
+    const injected = new HumanMessage({
+      content: injection!.content,
+      additional_kwargs: injection!.additionalKwargs ?? {},
+    });
+    expect(await run(listener, [human('/deploy', 'rebuilt'), injected])).toBeUndefined();
+    expect(
+      await run(listener, [new HumanMessage({ content: '/deploy' }), injected]),
+    ).toBeUndefined();
+  });
+
+  it('帶 /release-notes 的重複提醒走一趟日誌（toLoggedMessage → JSON → fromLoggedMessage），落在最後一則模型回覆之後：不注入', async () => {
+    const reminder = new HumanMessage({
+      content: '你已經連續 5 次呼叫 execute：\n- arguments: {"command":"echo /release-notes done"}',
+      additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool: 'execute', count: 5 } },
+    });
+    const cold = fromLoggedMessage(JSON.parse(JSON.stringify(toLoggedMessage(reminder))));
+    // 前提：記號走過一趟還在，字也還在。
+    expect(cold.additional_kwargs[REPEAT_REMINDER_MARKER]).toEqual({ tool: 'execute', count: 5 });
+    expect(cold.text).toContain(' /release-notes ');
+
+    const ws = workspace(STANDARD);
+    const listener = listenerOn(backendOf(ws));
+    const visible = [human('幫我發版'), new AIMessage('好。')];
+    expect(await run(listener, [...visible, cold])).toBeUndefined();
+    // 對照：同一段字當成人講的話就叫得出來。
+    expect(namesOf(await run(listener, [...visible, human(cold.text, 'plain')]))).toEqual([
+      'release-notes',
+    ]);
   });
 });
 
@@ -348,10 +398,9 @@ describe('掃描不完整：一份都不注入（照 dsh 的提供者語意，PM
     const listener = createSkillInvocationListener({
       fs: () => ({
         kind: 'ok',
-        fs: { backend: () => new FlakyBackend(ws, '/skills/model-only/SKILL.md') } as never,
+        fs: noSharedWorkspace(() => new FlakyBackend(ws, '/skills/model-only/SKILL.md')),
         address: { kind: 'root' },
       }),
-      sources: () => ['/skills/'],
     });
     expect(await run(listener, [human('/deploy')])).toBeUndefined();
     expect(warn).toHaveBeenCalledWith('技能叫用這一次不注入：掃描不完整（/deploy）');
@@ -363,10 +412,7 @@ describe('掃描不完整：一份都不注入（照 dsh 的提供者語意，PM
 describe('其他守衛', () => {
   it('沒有 backend、fs 沒接上：不注入', async () => {
     expect(await run(listenerOn(undefined), [human('/deploy')])).toBeUndefined();
-    const notAttached = createSkillInvocationListener({
-      fs: () => ({ kind: 'not-attached' }),
-      sources: () => ['/skills/'],
-    });
+    const notAttached = createSkillInvocationListener({ fs: () => ({ kind: 'not-attached' }) });
     expect(await run(notAttached, [human('/deploy')])).toBeUndefined();
   });
 
@@ -382,12 +428,11 @@ describe('其他守衛', () => {
     expect(ls).not.toHaveBeenCalled();
   });
 
-  it('來源在呼叫當下讀（登記處是活的）', async () => {
+  it('來源讀這次呼叫那條 thread 的把手，在呼叫當下讀', async () => {
     const ws = workspace({ a: { deploy: { body: 'A 版。' } }, b: { deploy: { body: 'B 版。' } } });
     let sources = ['/a/'];
     const listener = createSkillInvocationListener({
-      fs: lookupOf(backendOf(ws)),
-      sources: () => sources,
+      fs: lookupOf(backendOf(ws), { kind: 'root' }, () => sources),
     });
     expect((await run(listener, [human('/deploy')]))![0]!.content).toContain('A 版。');
     sources = ['/a/', '/b/'];
@@ -490,11 +535,8 @@ describe('驗收 4、8：樹上叫得出來，落點在基線之後、讀數之�
       name: 'release-notes',
       form: 'instructions',
     });
-    // 記號指回那句人話：人話在 state 裡有 id（基座的 reducer 補的）。
-    expect(humans[0]?.id).toEqual(expect.any(String));
     expect(humans[2]?.additional_kwargs[SKILL_INVOCATION_MARKER]).toEqual({
       name: 'release-notes',
-      forMessageId: humans[0]?.id,
     });
 
     // 歷史畫面不把它畫成人話；重放（續接）時回到模型手上、來源照舊。
@@ -511,15 +553,17 @@ describe('驗收 4、8：樹上叫得出來，落點在基線之後、讀數之�
       form: 'instructions',
     });
 
-    // 落盤再讀回（同版登記的實讀證據）：這份事件原樣寫成 JSONL，讀盤驗證（#1549）不擋這個來源，唯讀打開與續接都照常，
-    // 讀回的那一則與記下的相同。
+    // 落盤再讀回（同版登記的實讀證據）：這份事件原樣寫成這一版的世代檔（header 行之後逐行一顆），讀盤驗證（#1549）不擋
+    // 這個來源，唯讀打開與續接都照常，讀回的那一則與記下的相同。
     const directory = scratch('nexus-skill-invocation-store-');
     const paths = sessionPathsIn(directory, 'a');
+    mkdirSync(paths.sessionDirectory);
     await writeFile(
-      paths.header,
-      JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 'a', createdAt: 1 }),
+      paths.log,
+      [{ type: 'session', version: SESSION_LOG_FORMAT_VERSION, id: 'a', createdAt: 1 }, ...events]
+        .map((line) => `${JSON.stringify(line)}\n`)
+        .join(''),
     );
-    await writeFile(paths.log, events.map((event) => `${JSON.stringify(event)}\n`).join(''));
     const store = openJsonlSessionStore({ directory });
     const read = await (await store.open('a', 'read')).read();
     expect(invocationEvents(read)).toEqual(logged);
@@ -539,7 +583,7 @@ describe('驗收 4、8：樹上叫得出來，落點在基線之後、讀數之�
 });
 
 describe('驗收 7（樹上）：第二輪不重複', () => {
-  it('第一輪叫了 /deploy，第二輪沒有手勢：第二輪的請求裡仍只有一份（第一輪落在 state 的那一則），記號的 id 沒變', async () => {
+  it('第一輪叫了 /deploy，第二輪沒有手勢：第二輪的請求裡仍只有一份（第一輪落在 state 的那一則）', async () => {
     const booted = await boot(home());
     const thread = await openThread(
       booted,
@@ -553,12 +597,58 @@ describe('驗收 7（樹上）：第二輪不重複', () => {
     const second = (thread.model.prompts[1] ?? []).filter(isSkillContent);
     expect(first).toHaveLength(1);
     expect(second).toHaveLength(1);
-    expect(second[0]?.additional_kwargs[SKILL_INVOCATION_MARKER]).toEqual(
-      first[0]?.additional_kwargs[SKILL_INVOCATION_MARKER],
-    );
     expect(invocationEvents(thread.rootLog().events)).toHaveLength(1);
     await thread.close();
   }, 60000);
+
+  it('第一輪的 /deploy 當時叫不出來，第二輪之前才放上那份技能：第二輪沒有手勢，不注入', async () => {
+    const booted = await boot(home());
+    const ws = workspace({});
+    const thread = await openThread(
+      booted,
+      't-late',
+      [{ content: '一。' }, { content: '二。' }],
+      ws,
+    );
+    await thread.say('/deploy');
+    mkdirSync(join(ws, 'skills', 'deploy'), { recursive: true });
+    writeFileSync(
+      join(ws, 'skills', 'deploy', 'SKILL.md'),
+      '---\nname: deploy\ndescription: deploy 的說明。\n---\n\n部署的步驟。\n',
+    );
+    await thread.say('再來');
+    expect((thread.model.prompts[1] ?? []).filter(isSkillContent)).toEqual([]);
+    expect(invocationEvents(thread.rootLog().events)).toEqual([]);
+    await thread.close();
+  }, 60000);
+});
+
+describe('驗收 7（冷續接）：停在模型回覆之前，從日誌續接到一條新的 thread', () => {
+  it('續接後的下一句話不再注入同一份：請求裡只有日誌重放回來的那一則，新的日誌沒有 skill-invocation', async () => {
+    const booted = await boot(home());
+    const ws = workspace(STANDARD);
+    // 模型呼叫拋錯：注入已經進 state 也記進日誌，模型一個字都沒回。
+    const before = await openThread(booted, 't-cold', [{ content: '', error: '過載' }], ws);
+    await expect(before.say('/deploy')).rejects.toThrow('過載');
+    const original = (before.model.prompts[0] ?? []).find((message) => message.text === '/deploy');
+    const events = before.rootLog().events;
+    expect(invocationEvents(events)).toHaveLength(1);
+    await before.close();
+
+    // 換一條新的 thread 代替行程重啟（圖的 state 是空的），日誌照 serve 續接走的 `restoreConversation` 灌回去。
+    const after = await openThread(booted, 't-cold-resumed', [{ content: '好。' }], ws);
+    const replay = await restoreConversation(after.built.agent as never, 't-cold-resumed', events);
+    expect(replay.kind).toBe('replayed');
+    await after.say('繼續');
+    const prompt = after.model.prompts[0] ?? [];
+    // 前提：重放回來的那句人話換了 id（一輪開頭那句的 id 是 reducer 補的，日誌不記）。
+    const replayedHuman = prompt.find((message) => message.text === '/deploy');
+    expect(original?.id).toEqual(expect.any(String));
+    expect(replayedHuman?.id).not.toBe(original?.id);
+    expect(prompt.filter(isSkillContent)).toHaveLength(1);
+    expect(invocationEvents(after.rootLog().events)).toEqual([]);
+    await after.close();
+  }, 90000);
 });
 
 describe('驗收 6（樹上）：task 子代理的描述裡寫 /release-notes 叫不出來', () => {

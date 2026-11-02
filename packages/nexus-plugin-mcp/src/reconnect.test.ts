@@ -270,6 +270,8 @@ describe('殺掉 stdio 子行程', () => {
   /**
    * **重連也查指引上限**（[#1824](https://github.com/DemianLi/nexus-agent/issues/1824)），照 dsh（`mcp-client/src/connection.ts:318-322`）：
    * 每次嘗試都查，超過就算這次失敗。首連帶著沒超過的指引連上；改寫指引檔之後殺掉子行程，重連拿到的指引超過上限。
+   * 那些嘗試的子行程在 `tools/list` 之後才失敗，當場收掉（[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）：放棄之後、
+   * dispose 之前就一個都不剩。
    */
   it('重連拿到超過上限的指引：每次嘗試都算失敗、日誌寫明上限，用完次數就放棄', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'nexus-mcp-instructions-'));
@@ -300,6 +302,7 @@ describe('殺掉 stdio 子行程', () => {
         expect(message).toContain('server instructions exceed maxInstructionBytes (40)');
       }
       await expect(invoke(registry, TOOL)).rejects.toThrow('reconnection was given up');
+      expect(s.pids()).toEqual([]);
     } finally {
       await dispose();
       rmSync(dir, { recursive: true, force: true });

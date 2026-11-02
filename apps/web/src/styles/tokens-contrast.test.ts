@@ -87,17 +87,14 @@ const THEMES: Theme[] = ['light', 'dark'];
 
 const TEXT: [string, string][] = [
   ['foreground', 'background'],
-  ['foreground', 'chip'],
+  ['foreground', 'muted'],
   ['card-foreground', 'card'],
   ['popover-foreground', 'popover'],
   ['muted-foreground', 'background'],
   ['muted-foreground', 'card'],
-  ['muted-foreground', 'stage'],
-  ['muted-foreground', 'chip'],
-  ['muted-foreground', 'chip-hover'],
-  ['muted-foreground', 'chip-pressed'],
-  ['foreground', 'chip-hover'],
-  ['foreground', 'chip-pressed'],
+  // 可點的小面（#1689）：平常是 `--muted`，上面是次要字；hover 照 SG ghost 是 `--hover`，字是 foreground。
+  ['muted-foreground', 'muted'],
+  ['foreground', 'hover'],
   ['primary-foreground', 'primary'],
   ['secondary-foreground', 'secondary'],
   ['accent-foreground', 'accent'],
@@ -108,18 +105,31 @@ const TEXT: [string, string][] = [
   ['brand', 'card'],
   ['destructive', 'card'],
   ['success', 'card'],
-  ['warning', 'card'],
-  ['warning', 'chip'],
-  ['warning', 'chip-hover'],
-  ['warning', 'chip-pressed'],
-  ['info', 'card'],
-  // 程式碼區塊（stage）上的語法色（`shiki.css`）。
-  ['foreground', 'stage'],
-  ['brand', 'stage'],
-  ['destructive', 'stage'],
-  ['success', 'stage'],
-  ['warning', 'stage'],
+  ['status-interrupted', 'card'],
+  ['status-done', 'card'],
 ];
+
+/**
+ * 畫在 stage 上的字（#1689）：stage 的面是 SG 的 `--hover-faint`，本身半透明，疊在每一疊頁面上、也疊在每一疊頁面上的卡片上
+ * （工具卡、交付清單在對話裡，提問面板、程式碼區塊也可能在卡片裡），最差的那一疊要過 4.5。語法色見 `shiki.css`，連結是回覆裡的。
+ */
+const STAGE_TEXT = [
+  'foreground',
+  'muted-foreground',
+  'brand',
+  'link',
+  'destructive',
+  'success',
+  'status-interrupted',
+];
+
+function onPagesAndCards(theme: Theme, mode: Mode): string[][] {
+  const pages = bases(theme, mode);
+  return [...pages, ...pages.map((stack) => [...stack, 'card'])];
+}
+
+/** stage 疊在卡片上至少要分得出來：原型 eb800a1 的 stage 對卡片（產生器的 `T.stage`），只疊在底色上量，同 {@link SURFACES}。 */
+const STAGE_ON_CARD = 1.05;
 
 const NON_TEXT: [string, string][] = [
   ['ring', 'background'],
@@ -128,15 +138,7 @@ const NON_TEXT: [string, string][] = [
 ];
 
 /** SG 自己的 `status-*` 也算狀態色、套 5.2（demian，#1512，2026-10-17）。 */
-const STATUS = [
-  'destructive',
-  'success',
-  'warning',
-  'info',
-  'status-done',
-  'status-interrupted',
-  'status-running',
-];
+const STATUS = ['destructive', 'success', 'status-done', 'status-interrupted', 'status-running'];
 
 /**
  * 表面這一層：亮暗要一樣分得出來。**只疊在 `--background` 上量**，不算漸層停點（PM，#1512）：鑑別度問的是「這一片面跟頁面分不分得開」，
@@ -144,10 +146,9 @@ const STATUS = [
  */
 const SURFACES: [string, string][] = [
   ['card', 'background'],
-  ['stage', 'card'],
-  ['chip', 'background'],
+  ['hover-faint', 'card'],
+  ['muted', 'background'],
   ['sidebar', 'background'],
-  ['card-hairline', 'card'],
   ['border', 'background'],
 ];
 
@@ -181,6 +182,21 @@ describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mod
       expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(4.5);
     });
 
+    test.each(STAGE_TEXT)(
+      `${theme}：文字 %s 對 stage（hover-faint 疊在頁面與卡片上）≥ 4.5`,
+      (fg) => {
+        expect(
+          contrast(mode, theme, fg, 'hover-faint', onPagesAndCards(theme, mode)),
+        ).toBeGreaterThanOrEqual(4.5);
+      },
+    );
+
+    test(`${theme}：stage（hover-faint）疊在卡片上 ≥ ${STAGE_ON_CARD}`, () => {
+      expect(contrast(mode, theme, 'hover-faint', 'card', ONLY_BACKGROUND)).toBeGreaterThanOrEqual(
+        STAGE_ON_CARD,
+      );
+    });
+
     test.each(NON_TEXT)(`${theme}：非文字 %s 對 %s ≥ 3`, (fg, bg) => {
       expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(3);
     });
@@ -201,24 +217,6 @@ describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mod
     const light = contrast(mode, 'light', fg, bg, ONLY_BACKGROUND);
     const dark = contrast(mode, 'dark', fg, bg, ONLY_BACKGROUND);
     expect(Math.abs(light - dark)).toBeLessThanOrEqual(0.05);
-  });
-});
-
-/**
- * chip 與 hover 釘在 ② 出貨的值（#1512 PR-B 2ad91a61，#1521）：產生器的 `SHIPPED_CHIP`（PM 裁決，PR #1721 issuecomment-6255648703）。
- * 這張只動 pressed 那一階，全站的 rest 與 hover 逐字不變。撤除條件：⑥ 把 chip 三階換成 SG 的面時，這條跟著拿掉。
- */
-const SHIPPED_CHIP_STEPS: Record<Theme, { chip: string; 'chip-hover': string }> = {
-  light: { chip: 'oklch(0.8812 0 0)', 'chip-hover': 'oklch(0.8729 0 0)' },
-  dark: { chip: 'oklch(0.2289 0 0)', 'chip-hover': 'oklch(0.239 0 0)' },
-};
-
-describe('chip 與 hover 逐字等於 ② 出貨的值', () => {
-  test.each(THEMES)('%s', (theme) => {
-    expect({
-      chip: token(TRANSLUCENT, theme, 'chip'),
-      'chip-hover': token(TRANSLUCENT, theme, 'chip-hover'),
-    }).toEqual(SHIPPED_CHIP_STEPS[theme]);
   });
 });
 

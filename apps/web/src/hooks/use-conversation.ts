@@ -57,15 +57,25 @@ import type { Publication } from '@/lib/frame-publisher';
 import { RatingsController } from '@/lib/feedback-ratings';
 import { goalPauseFailureText } from '@/lib/goal-bar';
 import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
-import { commandToken, namesCommand } from '@/lib/queue-view';
+import { commandArm, commandToken } from '@/lib/queue-view';
 import { CommandDirectory } from '@/lib/command-directory';
 import { submittedPlanOf } from '@/lib/plan-review';
 import type { PlanScanOutcome } from '@/lib/plan-review';
 import type { RatingsView } from '@/lib/feedback-ratings';
-import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
+import { probeLivez } from '@/lib/livez-probe';
+import { RECOVERED_NOTICE_MS, reconnectDelay, SLOW_CONNECT_MS } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
+import { serverClosingText } from '@/lib/server-closing';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
+import {
+  threadLogBudgetText,
+  threadLogBusyText,
+  threadLogTooLargeText,
+} from '@/lib/thread-log-budget';
+import { THREAD_REFUSED_TEXT } from '@/lib/thread-refused';
+import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
+import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import {
   THREAD_PROTOCOL_ERROR_PAGE_TEXT,
   THREAD_PROTOCOL_ERROR_TEXT,
@@ -134,7 +144,11 @@ export interface SendRejected {
  * 這條 thread 的畫面卸載了，什麼都不必說（dsh 的 `onRelease` 不出聲）。
  */
 export type Adjudication =
-  | { readonly kind: 'command' }
+  /**
+   * `detached`：沒宣告 `input`、整行只有 `/名字` 的命令（{@link commandArm}，#1971）：照 dsh 當場拿掉、背景執行，不進在途。
+   * 在認完的那一刻、用認的那份清單判，呼叫端不必再讀自己手上可能較舊的清單。
+   */
+  | { readonly kind: 'command'; readonly detached: boolean }
   | { readonly kind: 'sentence' }
   | { readonly kind: 'failed'; readonly message: string }
   | { readonly kind: 'released' };
@@ -205,9 +219,10 @@ export interface Conversation {
   /** 上一次開線失敗、或下行斷掉的原因。接回來就清掉。串流自己正常收掉時沒有原因可講，這一格不在。 */
   readonly connectionError?: string;
   /**
-   * 下行被伺服器明說不收、而且有一句給使用者看的話時，就是那一句；這時 {@link connectionError} 不在——server 的原文不往畫面送。
+   * 下行被伺服器明說不收時，就是給使用者看的那一句；這時 {@link connectionError} 不在——server 的原文不往畫面送。
    * thread 數滿了（[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)）是暫時的：重試照舊，接回來就清掉。
-   * 子代理的會話（[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）是永久的：不排重試，{@link reconnecting} 不在。
+   * 沒有專用文案的碼（[#2222](https://github.com/DemianLi/nexus-agent/issues/2222)）也當暫時的，說同一句固定的話。
+   * 子代理的會話（[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）、歷史太深、紀錄太大、開在別的 home 或工作區是永久的：不排重試，{@link reconnecting} 不在。
    * 伺服器送來看不懂的資料（#1601 `N0758`）也是這一格，{@link connectionError} 同樣不在：停止自動重連，{@link reconnecting} 照樣在，
    * 等人按 {@link reconnectNow}。
    */
@@ -224,6 +239,11 @@ export interface Conversation {
    * 回到線上才從頭算。
    */
   readonly reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
+  /**
+   * 這次連線（開下行到歷史回來）等了 {@link SLOW_CONNECT_MS} 還沒成功或失敗，而且 `/livez` 探測也逾時
+   * （#2250，`lib/livez-probe.ts`）；等退避的時間不算。
+   */
+  readonly slowConnect: boolean;
   /** 剛重新接上：狀態列短暫講一句，{@link RECOVERED_NOTICE_MS} 後收掉。 */
   readonly recovered: boolean;
   /** 不等退避，立刻重接一次，退避從頭算；停止自動重連的（#1601）也從這裡重開。下行開著、或被永久拒絕時什麼都不做。 */
@@ -440,6 +460,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const [connections, setConnections] = useState(0);
   const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
+  const [slowConnect, setSlowConnect] = useState(false);
   const [recovered, setRecovered] = useState(false);
   /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
   const [generation, setGeneration] = useState(0);
@@ -575,6 +596,18 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
+    const probe = new AbortController();
+    const slowTimer = setTimeout(() => {
+      void probeLivez(probe.signal).then((outcome) => {
+        // 逾時中止後請求可能晚一點才拒絕，連線在這段時間有了結果的話，這個 `timed-out` 不算數。
+        if (outcome === 'timed-out' && !probe.signal.aborted) setSlowConnect(true);
+      });
+    }, SLOW_CONNECT_MS);
+    const settled = () => {
+      clearTimeout(slowTimer);
+      probe.abort();
+      setSlowConnect(false);
+    };
     /**
      * 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。
      * `refused` 是伺服器明說不收時給使用者看的那一句（#1478）；**每次都重設**，上一次被拒的話不會留到下一次斷線。
@@ -640,6 +673,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (cancelled) {
           return;
         }
+        settled();
         // **從空的重折，不接在現有的後面**（#593）：重接時傳輸 seq 可能從 0 重算（serve 重開過），折疊器又丟掉
         // `seq <= lastSeq` 的 frame，沿用舊的那份的話，新來的會全被當成重複。重接等於重新打開這一頁，只存在
         // 本地的東西（例如「已核准：X」）跟重新整理一樣不在了。第一次開線時現有的那份本來就是空的。
@@ -719,22 +753,31 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (!cancelled) lose(undefined);
       } catch (error) {
         if (!cancelled) {
+          settled();
           if (error instanceof WireProtocolError) {
             halt(error);
             return;
           }
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
-          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）。
+          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）、紀錄太大讀不進來（#2203）、開在別的 home 或工作區（#2222）。
           const permanent =
             error instanceof WireRejectedError
-              ? (threadSubagentText(error.code) ?? threadHistoryTooDeepText(error.code))
+              ? (threadSubagentText(error.code) ??
+                threadHistoryTooDeepText(error.code) ??
+                threadLogTooLargeText(error.code) ??
+                threadRootMismatchText(error.code))
               : undefined;
           if (permanent !== undefined) {
             refuse(permanent);
             return;
           }
           const refused =
-            error instanceof WireRejectedError ? threadCapacityText(error.code) : undefined;
+            error instanceof WireRejectedError
+              ? (threadCapacityText(error.code) ??
+                threadLogBusyText(error.code) ??
+                threadWriterHeldText(error.code) ??
+                THREAD_REFUSED_TEXT)
+              : undefined;
           lose(
             refused !== undefined
               ? undefined
@@ -751,6 +794,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       // **收的是這條線，不是 agent。** server 端不會因為瀏覽器離開就停掉 run。
       cancelled = true;
       controller.abort();
+      settled();
       setConnected(false);
     };
   }, [client, threadId, advance, generation, scheduleRetry, ratingsController, commandDirectory]);
@@ -763,8 +807,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   /**
    * 斜線命令那一半。命令不進模型，也就不進 transcript。
    *
-   * 帶了附件（`attachments`）時，命令沒收下（被拒、不認得、命令回錯誤）回 {@link SendRejected}：呼叫端把草稿放回去、附件
-   * 留著；狀態列照舊畫同一句。沒帶附件時一律回 `undefined`，各自報自己的結果（#733）。
+   * 命令沒收下（被拒、不認得、命令回錯誤、拋錯）回 {@link SendRejected}，狀態列照舊畫同一句。「收下」只有命令成功那一種，
+   * 同 dsh `facade.ts:903` 的 `ok: outcome.kind === 'success'`。帶了附件時呼叫端把草稿放回去、附件留著（#733）；沒帶附件時
+   * 呼叫端在途期間沒動草稿，沒收下就照樣不動、收下才清（[#1941](https://github.com/DemianLi/nexus-agent/issues/1941)）。
    */
   const runSlash = useCallback(
     async (
@@ -775,8 +820,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setSlashNotice(undefined);
       const turnsBefore = turnsStarted.current;
       const kept = attachments !== undefined && attachments.length > 0;
-      const refuse = (message: string): SendRejected | undefined =>
-        kept ? { message } : undefined;
+      const refuse = (message: string): SendRejected => ({ message });
       let outcome: SlashRunOutcome;
       try {
         outcome = await clientRef.current.slashRun(threadId, line, kept ? attachments : undefined);
@@ -786,9 +830,15 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return refuse(message);
       }
       if (outcome.kind === 'rejected') {
-        // 這條線拒絕發派——跟 `run.start` 被拒是同一件事，所以走同一個欄位。
-        setCommandError(outcome.message);
-        return refuse(outcome.message);
+        // 這條線拒絕發派，不是命令自己失敗，所以走 commandError，不走 slashError。
+        const message =
+          serverClosingText(outcome.code) ??
+          threadLogBudgetText(outcome.code) ??
+          threadWriterHeldText(outcome.code) ??
+          threadRootMismatchText(outcome.code) ??
+          outcome.message;
+        setCommandError(message);
+        return refuse(message);
       }
       setCommandError(undefined);
       if (outcome.kind === 'unknown') {
@@ -862,7 +912,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           message: commandsFailedText(error instanceof Error ? error.message : String(error)),
         };
       }
-      return namesCommand(commands, line) ? { kind: 'command' } : { kind: 'sentence' };
+      const arm = commandArm(commands, line);
+      return arm === undefined
+        ? { kind: 'sentence' }
+        : { kind: 'command', detached: arm === 'detached' };
     },
     [commandDirectory],
   );
@@ -891,11 +944,12 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return undefined;
       }
       // 開頭那個字是命令清單上的名字才是命令（#1929，#1574 Q2 (a)），其餘整行走 `run.start`：技能的 `/deploy 今天`、
-      // 打錯的 `/plna` 都送給模型。分得出來之前照 dsh 等（`matchEnter` 的 strong-wait）：清單在途就等它、之前失敗就
-      // 重抓；等到的還是失敗才退回、說出原因，草稿與附件原樣留著（「never a silent downgrade」）。
+      // 打錯的 `/plna`、沒宣告 input 卻帶了字的 `/compact 留下三輪`（#1971，dsh `matchEnter` `:361`）都送給模型。
+      // 分得出來之前照 dsh 等（`matchEnter` 的 strong-wait）：清單在途就等它、之前失敗就重抓；等到的還是失敗才退回、
+      // 說出原因，草稿與附件原樣留著（「never a silent downgrade」）。
       if (commandToken(trimmed) !== undefined) {
         // 呼叫端已經認過（`route`）就照它，不再認第二次：兩次之間剛好重連的話，結果可能跟呼叫端決定標記時不同。
-        const verdict: Adjudication =
+        const verdict: Adjudication | { readonly kind: 'command' | 'sentence' } =
           route === undefined ? await adjudicate(trimmed) : { kind: route };
         if (verdict.kind === 'released') return undefined;
         if (verdict.kind === 'failed') return { message: verdict.message };
@@ -931,7 +985,11 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return {
           message:
             threadCapacityText(result.error) ??
+            serverClosingText(result.error) ??
             threadHistoryTooDeepText(result.error) ??
+            threadLogBudgetText(result.error) ??
+            threadWriterHeldText(result.error) ??
+            threadRootMismatchText(result.error) ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
         };
@@ -1065,7 +1123,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     if (current === undefined || !current.hasMore || current.loading || paging.current) return;
     paging.current = true;
     const epoch = historyEpoch.current;
-    // 上一次的錯誤與報讀在按下去的當下清掉：按鈕換成「讀取中…」，旁邊那一句不留著。報讀那一格先清空再寫，
+    // 上一次的錯誤與報讀在按下去的當下清掉：旁邊那一句不留著，按鈕的字由 `useSettledLabel` 記住。報讀那一格先清空再寫，
     // 連續兩頁都是 50 則時第二次才唸得到（文字沒變的話 DOM 不動，polite 區不會再唸）。
     const { error: _previousError, loaded: _previousLoaded, ...rest } = current;
     setHistory({ ...rest, loading: true });
@@ -1312,6 +1370,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     store,
     connected,
     attempted,
+    slowConnect,
     recovered,
     reconnectNow,
     ...(reconnecting === undefined ? {} : { reconnecting }),

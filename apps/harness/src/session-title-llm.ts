@@ -23,7 +23,7 @@
  *
  * 開跑前先確保退回標題已落地（dsh 的 `ensureFallback`），送出前先記一顆 `session/title-llm-request`（真的送出去的系統提示、訊息、輸出上限），成功後追加一顆
  * `session/title {source: {kind:'provider'}}`，由既有的推送與列表讀到（latest-wins）。**兩顆都寫在一輪之外**，
- * 不開一輪、不進模型。失敗只講一聲，退回標題留著，不重試（dsh 的重試要靠顯式 `refresh()`，歸 #633）。
+ * 不開一輪、不進模型。失敗只講一聲，退回標題留著，不重試（dsh 的重試要靠顯式 `refresh()`，它沒有出貨的呼叫者，我們不做，見 #1573）。
  *
  * **寫入延到微任務**：訂閱者的回呼裡不能再 `append`（`SessionLog` 的重入防護），同 dsh 的 `defer`。
  *
@@ -104,7 +104,7 @@ export interface TitleLlmLimits extends ThreadTitleLimits {
 }
 
 /**
- * 系統提示，**逐字照 dsh** 的 `systemPrompt`（`session-title-llm/src/index.ts`）。
+ * 系統提示，**逐字照 dsh** 的 `systemPrompt`（`session-title-first-prompt-llm/src/index.ts`，1517a4db 起五行，#1573）。
  *
  * @param config - 兩個目標值寫進最後一行。
  */
@@ -116,6 +116,7 @@ export function titleSystemPrompt(
     'Return only the title on one line, **in plain text of natural language**, with no quotes, prefix, explanation, Markdown, XML, or terminal control codes. No code is allowed.',
     'Use the language of the messages.',
     `Aim for about ${String(config.targetWords)} words in non-CJK languages or ${String(config.targetCjkCharacters)} CJK characters.`,
+    'If the messages give little to name, still return a short best-effort title, such as Greeting, instead of explaining.',
   ].join('\n');
 }
 
@@ -128,12 +129,39 @@ export function frameTitleMessages(messages: readonly TitleSourceMessage[]): str
   return `Generate the session title from this JSON array of human messages:\n${JSON.stringify(messages)}`;
 }
 
+/** 整行被星號強調包住，例如 `**標題**`。**逐字照 dsh** 的 `EMPHASIS_WRAPPER`。 */
+const EMPHASIS_WRAPPER = /^(?<marker>\*{1,3})(?<inner>\S(?:.*\S)?)\k<marker>$/u;
+
+/**
+ * 從模型輸出取標題：第一個非空行，並剝掉包住整行的星號強調。**逐字照 dsh** 的 `titleFromOutput`
+ * （`session-title-first-prompt-llm/src/index.ts:96-113`，1517a4db；#1573）。
+ *
+ * 不聽「只回一行」的模型會把標題放第一行、說明接在後面。整行都是 `*` 強調的，就算模型是字面上要星號也會被剝；
+ * 內層還有同一個記號的（`**甲** 與 **乙**`）不剝，強調留在一行之內。
+ *
+ * @param text - 模型回的文字。
+ * @returns 第一個非空行（剝過強調）；沒有非空行就是空字串。
+ */
+export function titleFromOutput(text: string): string {
+  const line =
+    text
+      .split(/\r?\n/u)
+      .map((item) => item.trim())
+      .find((item) => item.length > 0) ?? '';
+  const groups = EMPHASIS_WRAPPER.exec(line)?.groups;
+  const marker = groups?.['marker'];
+  const inner = groups?.['inner'];
+  return marker === undefined || inner === undefined || inner.includes(marker) ? line : inner;
+}
+
 /** {@link generateThreadTitle} 要的東西。 */
 export interface GenerateThreadTitleRequest {
   readonly model: TitleModel;
   readonly route: SessionTitleModelIdentity;
   readonly config: ThreadTitleLlmConfig;
   readonly maxTitleBytes: number;
+  /** 這一次請求的推理強度，記進 `session/title-llm-request`；省略就不記這一格。 */
+  readonly reasoningEffort?: string | undefined;
   /** 選好的那幾則（first-prompt 只有一則）。 */
   readonly messages: readonly TitleSourceMessage[];
   /** 記 `session/title-llm-request` 的那一份，root。 */
@@ -180,6 +208,7 @@ export async function generateThreadTitle(
       system,
       messages,
       maxTokens: request.config.maxOutputTokens,
+      ...(request.reasoningEffort !== undefined && { reasoningEffort: request.reasoningEffort }),
     });
     bound.signal.throwIfAborted();
     const reply = await request.model.invoke(
@@ -196,7 +225,7 @@ export async function generateThreadTitle(
     }
     if ((reply.tool_calls?.length ?? 0) > 0) throw new Error('標題模型要求呼叫工具，只收文字');
     // `text` 只串文字區塊、推理區塊不算，同 dsh 的 `BlockAssembler` 只取 `text`。
-    const title = normalizeThreadTitle(reply.text, request.maxTitleBytes);
+    const title = normalizeThreadTitle(titleFromOutput(reply.text), request.maxTitleBytes);
     if (title === '') throw new Error('標題模型沒有產生文字');
     return { title, messageSeqs };
   } finally {
@@ -210,6 +239,11 @@ export interface SessionTitleLlmOptions {
   readonly route: SessionTitleModelIdentity;
   readonly config: ThreadTitleLlmConfig;
   readonly limits: TitleLlmLimits;
+  /**
+   * {@link model} 這一顆送出去的推理強度，原樣記進 `session/title-llm-request`（#1573，dsh 記 `efforts[0]`）。省略＝不記這一格。
+   * 只是紀錄：請求本身怎麼關推理由 {@link model} 自己決定（`live-model` 的 `purpose: 'session-title'`），這裡不改送出的東西。
+   */
+  readonly reasoningEffort?: string;
   /** 重試政策（#1427）：省略或 `maxRetries` 為 0 就只打一次。產品路徑給 `live-model` 那一列的 `retryPolicy`。 */
   readonly retry?: StreamRetryOptions;
   /**
@@ -218,9 +252,14 @@ export interface SessionTitleLlmOptions {
    * `session/title` 的身分；回 `undefined` ＝ 用上面預設的那一組（路由認不出、或不在型錄裡）。
    * 省略就一律用 {@link model}／{@link route}（沒有每會話選擇的組裝、或標題另外指定了模型）。
    */
-  readonly follow?: (
-    mainRoute: ModelRoute,
-  ) => { readonly model: TitleModel; readonly route: SessionTitleModelIdentity } | undefined;
+  readonly follow?: (mainRoute: ModelRoute) =>
+    | {
+        readonly model: TitleModel;
+        readonly route: SessionTitleModelIdentity;
+        /** 跟隨的那一顆自己的推理強度；缺席＝不記（不回頭用上面預設那顆的）。 */
+        readonly reasoningEffort?: string;
+      }
+    | undefined;
 }
 
 /**
@@ -278,6 +317,9 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
           ? chosen
           : withRetryPolicy(chosen, options.retry);
       const route = followed?.route ?? options.route;
+      // 跟著模型走：跟隨的那一顆有自己的條目，強度也是它的，不拿預設那顆的。
+      const reasoningEffort =
+        followed === undefined ? options.reasoningEffort : followed.reasoningEffort;
       const own = new AbortController();
       active = own;
       try {
@@ -291,6 +333,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
           route,
           config: options.config,
           maxTitleBytes: options.limits.maxTitleBytes,
+          reasoningEffort,
           messages: [message],
           log,
           signal: AbortSignal.any([controller.signal, own.signal]),

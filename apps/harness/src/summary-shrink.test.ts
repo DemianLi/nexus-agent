@@ -1,20 +1,20 @@
 /**
- * **摘要不比被取代的內容小，就不提交**（[#1396](https://github.com/DemianLi/nexus-agent/issues/1396)）。
+ * **S6 第 3 輪：摘要之後再來一輪、要取代的只剩上一顆摘要，就不摘**（[#1396](https://github.com/DemianLi/nexus-agent/issues/1396)、
+ * [#2086](https://github.com/DemianLi/nexus-agent/issues/2086)）。
  *
- * 照 dsh `compaction-basic` 的 shrink 檢查（`src/region.ts:417-420`）：生出來的摘要加上框架之後 ≥ 它取代的那一段，
- * 整次壓縮不提交。擋的是 S6 第 3 輪那一類：摘要之後再來一輪、尾巴剛好蓋住全部新內容，要取代的只剩上一份摘要一則——
- * 以前照樣提交，歷史檔多一個空的 `## Summarized at` 區段、日誌多一筆沒有新內容的 `compaction/summary`
- * （#1395 的暫存層只能擋「沒生出摘要」，擋不住「生出來但沒有東西可卸」）。
+ * 尾巴剛好蓋住全部新內容時，照保留量切，切點前只剩上一顆摘要。摘要器把它當成摘不到東西（`retainedMessageCount` 回整串長度），
+ * 不打摘要模型、不提交。提交的話，歷史檔會多一個空的 `## Summarized at` 區段，日誌多一筆沒有新內容的 `compaction/summary`；
+ * #1395 的暫存層只能擋「沒生出摘要」，擋不住「生出來但沒有東西可卸」。
  *
  * 這一檔走產品路徑（`ThreadPump` 管日誌），量兩件事：
  *
- * | 情境 | 以前 | 現在 |
- * | --- | --- | --- |
- * | S6 第 3 輪：要取代的只剩舊摘要，新摘要與它一樣大 | 提交：日誌多一筆、歷史檔多一個空區段 | 不提交：日誌沒有那一筆、歷史檔不變、warn 一條、照原請求送出 |
- * | 前兩輪的正常摘要 | 提交 | **不變** |
+ * | 情境 | 結果 |
+ * | --- | --- |
+ * | S6 第 3 輪：要取代的只剩舊摘要 | 不打摘要模型、不提交：日誌沒有那一筆、歷史檔不變、沒有摘要失敗的 warn、原請求照送 |
+ * | 前兩輪的正常摘要 | 提交 |
  *
- * 「一樣大」是邊界：`>=` 改成 `>` 會讓第一列翻回去提交。逐 token 的等號案例（剛好等於不提交、多一個 token 提交）與
- * 端點超窗那條路在 `packages/nexus-core/src/summary-failure.test.ts`。
+ * shrink 檢查（#1396）自己的案例（被取代的不是只有舊摘要、新摘要卻不比它小；剛好等於不提交、多一個 token 提交）與端點超窗那條路
+ * 在 `packages/nexus-core/src/summary-failure.test.ts`。
  *
  * 零憑證、零外部連線。
  */
@@ -36,7 +36,7 @@ import { toolResultAsSeen } from './conversation-restore.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
-/** 摘要呼叫（沒有系統訊息的那種）回的字串。每次一樣長：第 3 輪新摘要與舊摘要框好之後恰好一樣大。 */
+/** 摘要呼叫（沒有系統訊息的那種）回的字串。 */
 const SUMMARY_TEXT = '摘要：之前聊了一些事。';
 /** 墊料（#1396）：被取代的那段要比「框架＋摘要」大，正常摘要才提交。 */
 const USER_PAD = '內容'.repeat(200);
@@ -196,16 +196,17 @@ function derivedVersusActual(run: Run): string[] {
 describe('S6 第 3 輪：要取代的只剩舊摘要', () => {
   /**
    * 呼叫：1 ＝ 第 1 輪；2 ＝ 摘要、3 ＝ 摘要之後的請求（超窗）、4 ＝ retain 0 的摘要、5 ＝ 重送（超窗）、6 ＝ 再摘要、7 ＝ 重送；
-   * 第 3 輪：8 ＝ 摘要（被擋）、9 ＝ 照原請求送出。
+   * 第 3 輪：8 ＝ 原請求照送，沒有摘要那一次。
    */
-  it('新摘要不比舊摘要小：不提交，日誌沒有那一筆、歷史檔不多空區段、warn 一條、推導等於實送', async () => {
+  it('不打摘要模型、不提交：日誌沒有那一筆、歷史檔不多空區段、沒有摘要失敗的 warn、推導等於實送', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const run = await converse({ overflowOn: [3, 5], turns: 3 });
 
-    // 前提：第 2 輪的兩次超窗真的升級到底（三筆事件，最後切點 3），第 3 輪的摘要呼叫真的發生過。
+    // 前提：第 2 輪的兩次超窗真的升級到底（三筆事件，最後切點 3）。第 3 輪只有一次呼叫，而且是主呼叫。
     expect(run.snapshots[1]!.logCutoffs).toEqual([1, 2, 3]);
     expect(run.snapshots[1]!.stateCutoff).toBe(3);
-    expect(run.model.calls).toBe(9);
+    expect(run.model.calls).toBe(8);
+    expect(run.model.seen[7]![0]).toMatch(/^system:/);
     expect(run.snapshots[2]!.end).toBe('turn/end');
 
     // 第 3 輪：沒有新事件、state 切點不動、歷史檔還是第 2 輪那一段（沒有空區段）。
@@ -214,12 +215,12 @@ describe('S6 第 3 輪：要取代的只剩舊摘要', () => {
     expect(run.snapshots[2]!.sections).toEqual(run.snapshots[1]!.sections);
     expect(run.snapshots[2]!.sections.every((section) => section !== '')).toBe(true);
 
-    // 正好一條 warn：走 #1383 既有的「摘要壞了、照原請求送出」那條路。
+    // 沒有走「摘要壞了、照原請求送出」那條路。
     const lines = warn.mock.calls.map((call) => String(call[0]));
-    expect(lines.filter((line) => line.includes('照原請求送出'))).toHaveLength(1);
-    expect(lines.filter((line) => line.includes('不比被取代'))).toHaveLength(1);
+    expect(lines.filter((line) => line.includes('照原請求送出'))).toEqual([]);
+    expect(lines.filter((line) => line.includes('不比被取代'))).toEqual([]);
 
-    // 日誌推導＝實送：每一次主呼叫（含被擋之後照原請求送出的那一次）。
+    // 日誌推導＝實送：每一次主呼叫。
     expect(derivedVersusActual(run).every((each) => each === 'EQ')).toBe(true);
   });
 });

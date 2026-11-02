@@ -45,6 +45,9 @@ function harness(
     gate: undefined as Promise<void> | undefined,
     /** `close` 回來了，但這一代永遠確認不到關掉（stdio 的 SIGKILL 之後不等就回、孫行程還握著 pipe）。 */
     holdClosed: false,
+    /** 失敗的嘗試收了幾次；`holdAbandon` 時永遠確認不到關掉。 */
+    abandoned: 0,
+    holdAbandon: false,
     closed: [] as number[],
     reports: [] as string[],
     errors: [] as string[],
@@ -69,6 +72,10 @@ function harness(
       } finally {
         state.running -= 1;
       }
+    },
+    abandon() {
+      state.abandoned += 1;
+      return state.holdAbandon ? new Promise<void>(() => {}) : Promise.resolve();
     },
     close(generation) {
       state.closed.push(generation.id);
@@ -229,6 +236,20 @@ describe('一次只有一個嘗試', () => {
     expect(h.state.reports).toHaveLength(1);
     expect(h.state.closed).toEqual([0]);
   });
+
+  it('判定卡死：記一句、照掉線收掉重連；舊一代的遲來判定不算', async () => {
+    const h = harness();
+    h.supervisor.stalled(h.first);
+    expect(h.state.reports[0]).toContain('server stopped responding');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.closed).toEqual([0]);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.state.connects).toBe(1);
+
+    const reports = h.state.reports.length;
+    h.supervisor.stalled(h.first);
+    expect(h.state.reports).toHaveLength(reports);
+  });
 });
 
 describe('關閉', () => {
@@ -365,6 +386,41 @@ describe('關閉的期限（#1543，照 dsh GENERATION_CLOSE_TIMEOUT_MS）', () 
     expect(h.state.connects).toBe(1);
     expect(h.supervisor.gaveUp).toBe(false);
     expect(h.supervisor.current()?.id).toBe(1);
+  });
+
+  it('嘗試失敗：當場收掉那一次，每次失敗收一次；用完次數放棄時沒有留著沒收的', async () => {
+    const h = harness({ maxAttempts: 2 });
+    h.state.failures = 2;
+    h.supervisor.down(h.first);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.state.connects).toBe(1);
+    expect(h.state.abandoned).toBe(1);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.state.connects).toBe(2);
+    expect(h.state.abandoned).toBe(2);
+    expect(h.supervisor.gaveUp).toBe(true);
+  });
+
+  it('失敗的嘗試確認不到關掉：不排下一次、標成放棄、記一句；差 1 ms 還沒決定', async () => {
+    const h = harness();
+    h.state.failures = 1;
+    h.state.holdAbandon = true;
+    h.supervisor.down(h.first);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.state.connects).toBe(1);
+    await vi.advanceTimersByTimeAsync(GENERATION_CLOSE_TIMEOUT_MS - 1);
+    expect(h.supervisor.gaveUp).toBe(false);
+    expect(h.state.errors).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.supervisor.gaveUp).toBe(true);
+    expect(h.state.errors).toHaveLength(1);
+    expect(h.state.errors[0]).toMatch(/reconnect stopped to avoid overlapping server processes/u);
+    expect(h.state.reports.at(-1)).toBe(
+      'mcp-client(t): connection attempt failed: Error: still down',
+    );
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(h.state.connects).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it('還在等上一代關掉時 dispose：不重連、不記「reconnect stopped」', async () => {

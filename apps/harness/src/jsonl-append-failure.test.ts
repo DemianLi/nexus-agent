@@ -2,17 +2,19 @@
  * 會話日誌每批追加都寫滿並 fsync，失敗時截回寫前大小——
  * [#1506](https://github.com/DemianLi/nexus-agent/issues/1506) 的驗收 A 到 G2。
  *
- * **每一條都用真的 JSONL 後端寫到臨時目錄**，只在「開日誌檔」那一下（`openLog`，只給測試換）包住把手，
+ * **每一條都用真的 JSONL 後端寫到臨時目錄**，只在「開日誌檔」那一下（`openLog`，只給測試換；世代檔的暫存檔也經它開）包住把手，
  * 讓寫到一半拋錯、短寫、sync 拋錯、截回拋錯、落盤與關檔拋錯這幾條真的磁碟上量不到的路走得到。
  * 斷言一律回頭讀**檔案**與**續接讀回的事件**：把手回報什麼不重要，下一個行程讀得回來才重要。
  */
 
-import { mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, open, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  generationLogFilename,
+  SESSION_LOCK_FILENAME,
   SESSION_LOG_FORMAT_VERSION,
   SessionAlreadyExistsError,
   SessionLog,
@@ -21,6 +23,7 @@ import {
 import type { SessionEvent, StoredSession, StoredSessionHeader } from '@nexus/core';
 
 import { openJsonlSessionStore } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 import type { LogFileHandle, OpenLogFile } from './jsonl-session-store.js';
 
 let dir: string;
@@ -59,10 +62,10 @@ interface Fault {
   /** 追加把手的 `datasync`／`close` 拋這個錯。 */
   datasyncError?: Error;
   closeError?: Error;
-  /** 下一次 `open(<日誌>, 'wx')` 在開檔之前就拋這個錯（header 已經發佈了）。 */
+  /** 下一次 `open(<世代檔的暫存檔>, 'wx')` 在開檔之前就拋這個錯。 */
   wxError?: Error;
-  /** 卡住追加把手的 `datasync`，直到這個 promise resolve。 */
-  datasyncGate?: Promise<void>;
+  /** 卡住下一次非截回把手的 `sync`（計數之後），直到這個 promise resolve。 */
+  syncGate?: Promise<void>;
   /** 追加把手上的 `sync` 次數；`datasync` 次數；`r+` 截回把手上的 `sync` 次數；每次開檔的 flags。 */
   syncs: number;
   datasyncs: number;
@@ -121,14 +124,14 @@ function faulty(fault: Fault): OpenLogFile {
       sync: async () => {
         if (rollback) fault.rollbackSyncs += 1;
         else fault.syncs += 1;
+        const gate = rollback ? undefined : take(fault, 'syncGate');
+        if (gate !== undefined) await gate;
         const error = rollback ? undefined : take(fault, 'syncError');
         if (error !== undefined) throw error;
         await real.sync();
       },
       datasync: async () => {
         fault.datasyncs += 1;
-        const gate = take(fault, 'datasyncGate');
-        if (gate !== undefined) await gate;
         const error = take(fault, 'datasyncError');
         if (error !== undefined) throw error;
         await real.datasync();
@@ -148,17 +151,24 @@ function faulty(fault: Fault): OpenLogFile {
   };
 }
 
+const LOG = generationLogFilename(SESSION_LOG_FORMAT_VERSION);
+
 function logPath(id: string): string {
-  return join(dir, `${id}.jsonl`);
+  return join(dir, id, LOG);
 }
 
 async function sizeOf(id: string): Promise<number> {
   return (await stat(logPath(id))).size;
 }
 
-/** 目錄裡屬於 `id` 的檔（header、日誌、鎖檔、暫存檔都算）。 */
+/** 目錄裡屬於 `id` 的東西：舊路徑上的檔（墓碑、暫存檔），與會話目錄裡的檔（`<id>/` 開頭；空目錄記成 `<id>/`）。 */
 async function filesOf(id: string): Promise<string[]> {
-  return (await readdir(dir)).filter((name) => name.startsWith(`${id}.`)).sort();
+  const top = (await readdir(dir)).filter((name) => name.startsWith(`${id}.`));
+  const inside = await readdir(join(dir, id)).then(
+    (names) => (names.length === 0 ? [`${id}/`] : names.map((name) => `${id}/${name}`)),
+    () => [],
+  );
+  return [...top, ...inside].sort();
 }
 
 /** 另開一個後端把 `id` 續接讀回來（讀完就關，放掉租約）。 */
@@ -313,13 +323,15 @@ describe('E 每批 sync', () => {
     expect(fault.datasyncs).toBe(1);
   });
 
-  it('這次 flush 才觸發實體化的（一筆都還沒寫），照舊 datasync', async () => {
+  it('這次 flush 才觸發實體化的（一筆都還沒寫）：發佈的暫存檔 sync 一次，不另外 datasync；再 flush 不多', async () => {
     const fault = newFault();
     const stored = create('e2', fault);
     await stored.flush();
-    expect(fault.datasyncs).toBe(1);
+    expect(fault.syncs).toBe(1);
+    expect(fault.datasyncs).toBe(0);
     await stored.flush();
-    expect(fault.datasyncs).toBe(1);
+    expect(fault.syncs).toBe(1);
+    expect(fault.datasyncs).toBe(0);
     await stored.close();
   });
 
@@ -334,7 +346,7 @@ describe('E 每批 sync', () => {
     await stored.close();
   });
 
-  it('失敗路徑照 dsh 開關把手：失敗那批用 r+ 截回，下一批用 a 重開', async () => {
+  it('失敗路徑照 dsh 開關把手：暫存檔用 wx、發佈後用 a 開；失敗那批用 r+ 截回，下一批用 a 重開', async () => {
     const fault = newFault();
     const stored = create('e4', fault);
     await stored.append(batch(0));
@@ -342,7 +354,7 @@ describe('E 每批 sync', () => {
     await expect(stored.append(batch(2))).rejects.toThrow('ENOSPC');
     await stored.append(batch(2));
     await stored.close();
-    expect(fault.opened).toEqual(['wx', 'r+', 'a']);
+    expect(fault.opened).toEqual(['wx', 'a', 'r+', 'a']);
   });
 });
 
@@ -377,18 +389,18 @@ describe('F 走協調器的整條路', () => {
 });
 
 describe('G 串行化', () => {
-  it('flush 的 datasync 還沒回來時進來的 append 排在後面：失敗回滾不會把 flush 腳下的把手關掉', async () => {
+  it('flush 實體化的 sync 還沒回來時進來的 append 排在後面：失敗回滾不會把 flush 腳下的把手關掉', async () => {
     const fault = newFault();
     const stored = create('g', fault);
     let release!: () => void;
-    fault.datasyncGate = new Promise<void>((resolve) => {
+    fault.syncGate = new Promise<void>((resolve) => {
       release = resolve;
     });
 
-    // 一份全新的會話：這次 flush 才觸發實體化，所以真的 datasync，而且被卡在閘門上。
+    // 一份全新的會話：這次 flush 才觸發實體化，發佈用的暫存檔 sync 被卡在閘門上。
     const flushing = stored.flush();
     await vi.waitFor(() => {
-      expect(fault.datasyncs).toBe(1);
+      expect(fault.syncs).toBe(1);
     });
     fault.writeThrowsAfter = 10;
     const appending = stored.append(batch(0));
@@ -396,10 +408,11 @@ describe('G 串行化', () => {
       () => undefined,
       (caught: unknown) => caught,
     );
-    // 閘門還關著：append 一個位元組都不該動。
+    // 閘門還關著：append 一個位元組都不該動（世代檔還沒發佈，追加用的 `a` 把手也還沒開）。
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(await sizeOf('g')).toBe(0);
-    expect(fault.syncs).toBe(0);
+    expect(await filesOf('g')).not.toContain(`g/${LOG}`);
+    expect(fault.opened).toEqual(['wx']);
+    expect(fault.syncs).toBe(1);
 
     release();
     await expect(flushing).resolves.toBeUndefined();
@@ -503,7 +516,7 @@ describe('H 第一批就寫不進去：撤掉這次實體化（#1580 刀 2a 審�
     expect(seqsOf(await readBack('x'))).toEqual([0, 1]);
   });
 
-  it('同一個把手重送：從頭實體化一次（header 再 link 一次，不撞 EEXIST），續接讀得回', async () => {
+  it('同一個把手重送：從頭實體化一次（世代檔再 link 一次，不撞 EEXIST），續接讀得回', async () => {
     const fault = newFault();
     const stored = create('y', fault);
     fault.syncError = new Error('EIO: sync failed');
@@ -513,7 +526,7 @@ describe('H 第一批就寫不進去：撤掉這次實體化（#1580 刀 2a 審�
     await stored.append(batch(0));
     await stored.close();
     expect(seqsOf(await readBack('y'))).toEqual([0, 1]);
-    expect(fault.opened).toEqual(['wx', 'wx']);
+    expect(fault.opened).toEqual(['wx', 'wx', 'a']);
   });
 
   it('撤的途中也失敗（關把手拋錯）：AggregateError，原錯在第一個；其餘步驟照走，檔照樣不在', async () => {
@@ -542,24 +555,27 @@ describe('H 第一批就寫不進去：撤掉這次實體化（#1580 刀 2a 審�
     const fault = newFault();
     const stored = create('w', fault);
     await stored.flush();
+    const headerOnly = await sizeOf('w');
     fault.writeThrowsAfter = 9;
     await expect(stored.append(batch(0))).rejects.toThrow('ENOSPC');
-    expect(await filesOf('w')).toEqual(['w.header.json', 'w.jsonl', 'w.lock']);
-    expect(await sizeOf('w')).toBe(0);
+    expect(await filesOf('w')).toEqual(['w.header.json', `w/${SESSION_LOCK_FILENAME}`, `w/${LOG}`]);
+    // 截回只剩 header 行。
+    expect(await sizeOf('w')).toBe(headerOnly);
+    expect((await readFile(logPath('w'), 'utf8')).split('\n')).toHaveLength(2);
     await stored.close();
   });
 });
 
-describe('I 第一次實體化做到一半就關：header 發佈了、日誌沒開成（#1580 刀 2a 審查）', () => {
-  it('wx 拋 EMFILE 之後不重試就 close：header、日誌、鎖檔都不在；列表看不到；同一個 id 建得回來', async () => {
+describe('I 第一次實體化做到一半就關（#1580 刀 2a 審查）', () => {
+  it('暫存檔 wx 拋 EMFILE 之後不重試就 close：世代檔、墓碑、鎖檔、會話目錄都不在；列表看不到；同一個 id 建得回來', async () => {
     const fault = newFault();
     const store = openJsonlSessionStore({ directory: dir, openLog: faulty(fault) });
     const stored = store.create(header('u'));
 
     fault.wxError = Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' });
     await expect(stored.append(batch(0))).rejects.toThrow('EMFILE');
-    // 前提：header 真的發佈了（這正是改動之前會留下來的那個）。
-    expect(await filesOf('u')).toContain('u.header.json');
+    // 發佈只有世代檔那一次 `link`：它之前失敗，就沒有半份要等 close 收。
+    expect(await filesOf('u')).toEqual([]);
     await stored.close();
 
     expect(await filesOf('u')).toEqual([]);
@@ -570,16 +586,31 @@ describe('I 第一次實體化做到一半就關：header 發佈了、日誌沒�
     expect(seqsOf(await readBack('u'))).toEqual([0, 1]);
   });
 
-  it('header 撞名（link 回 EEXIST，那份是別人的）之後 close：別人的 header 原封不動', async () => {
+  it('世代檔撞名（link 回 EEXIST，那份是別人的）之後 close：別人的世代檔原封不動', async () => {
     const store = openJsonlSessionStore({ directory: dir });
     const stored = store.create(header('v'));
     // `create` 之後才出現的同名：另一個行程搶先發佈了。
-    const theirs = `${JSON.stringify({ ...header('v'), createdAt: 99 })}\n`;
-    await writeFile(join(dir, 'v.header.json'), theirs);
+    const theirs = `${JSON.stringify({ type: 'session', ...header('v'), createdAt: 99 })}\n`;
+    await mkdir(join(dir, 'v'));
+    await writeFile(logPath('v'), theirs);
 
     await expect(stored.append(batch(0))).rejects.toThrow(SessionAlreadyExistsError);
     await stored.close();
 
-    expect(await readFile(join(dir, 'v.header.json'), 'utf8')).toBe(theirs);
+    expect(await readFile(logPath('v'), 'utf8')).toBe(theirs);
+    // 鎖檔是這份會話共用的那一把（真的撞名時是對方的），不刪；墓碑沒寫。
+    expect(await filesOf('v')).toEqual([`v/${SESSION_LOCK_FILENAME}`, `v/${LOG}`]);
+  });
+
+  it('舊路徑撞名（墓碑 link 回 EEXIST，那份是舊版行程寫的舊兩檔 header）：報 SessionAlreadyExistsError，別人的 header 原封不動', async () => {
+    const store = openJsonlSessionStore({ directory: dir });
+    const stored = store.create(header('t'));
+    const theirs = `${JSON.stringify({ ...header('t'), version: LEGACY_TWO_FILE_FORMAT_VERSION, createdAt: 99 })}\n`;
+    await writeFile(join(dir, 't.header.json'), theirs);
+
+    await expect(stored.append(batch(0))).rejects.toThrow(SessionAlreadyExistsError);
+    await stored.close();
+
+    expect(await readFile(join(dir, 't.header.json'), 'utf8')).toBe(theirs);
   });
 });

@@ -8,7 +8,7 @@
  * **零憑證、零外部連線**：模型是 `LoopingChatModel` 與 `ScriptedChatModel`。
  */
 
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HumanMessage } from '@langchain/core/messages';
@@ -17,15 +17,22 @@ import { MemorySaver } from '@langchain/langgraph';
 import { tool } from '@langchain/core/tools';
 import {
   attachSessionPersistence,
+  generationLogFilename,
   REPEAT_REMINDER_MARKER,
   SESSION_LOG_FORMAT_VERSION,
+  sessionDirectoryName,
 } from '@nexus/core';
 import type { PluginEntry, RepeatReminderSettings, SessionEvent } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '../echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from '../agent-factory.js';
-import { createJsonlSessionStore } from '../jsonl-session-store.js';
+import {
+  createJsonlSessionStore,
+  legacyTwoFilePathsIn,
+  sessionPathsIn,
+} from '../jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionOf } from '../session-files.fixture.js';
 import { LoopingChatModel } from '../looping-model.js';
 import type { LoopingChatModelOptions } from '../looping-model.js';
 import { ScriptedChatModel } from '../scripted-model.js';
@@ -426,7 +433,7 @@ describe('照格式版本表態', () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-scan-unknown-'));
     await writeFile(
       join(root, 's.header.json'),
-      JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 's', createdAt: 0 }),
+      JSON.stringify({ version: LEGACY_TWO_FILE_FORMAT_VERSION, id: 's', createdAt: 0 }),
     );
     await writeFile(
       join(root, 's.jsonl'),
@@ -611,20 +618,27 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
     const runA = await writeSession(root, 'cli', [turn('message'), ...same(5)]);
     await writeSession(root, 'cli/sub-1', same(2), { parentSession: 'cli' });
     const runB = await writeSession(root, 'broken', [turn('message')]);
-    // 中段一行壞掉：不是當掉，是壞檔。
-    await writeFile(join(runB, 'broken.jsonl'), 'not json\n{"type":"turn/end"}\n');
+    // 中段一行壞掉：不是當掉，是壞檔。世代檔第一行的 header 行留著，事件換掉。
+    const broken = (await sessionOf(runB, 'broken')).logPath;
+    const headerLine = (await readFile(broken, 'utf8')).split('\n')[0]!;
+    await writeFile(broken, `${headerLine}\nnot json\n{"type":"turn/end"}\n`);
     // 尾巴寫到一半：當掉的常態。
-    const torn = join(runA, 'cli.jsonl');
+    const torn = (await sessionOf(runA, 'cli')).logPath;
     const before = await readFile(torn, 'utf8');
     await writeFile(torn, `${before}{"type":"tool/ca`);
-    // 寫的那一方自己會留鎖檔（租約），所以比的是掃描前後，不是「沒有鎖檔」。
-    const listing = async () => [...(await readdir(runA)), ...(await readdir(runB))].sort();
+    // 寫的那一方自己會留鎖檔（租約），所以比的是掃描前後，不是「沒有鎖檔」。會話目錄裡的也比。
+    const listing = async () =>
+      [
+        ...(await readdir(runA, { recursive: true })),
+        ...(await readdir(runB, { recursive: true })),
+      ].sort();
     const namesBefore = await listing();
 
     const { logs, unreadable } = await readSessionLogs([root]);
     expect(logs.map((log) => log.header.id).sort()).toEqual(['cli', 'cli/sub-1']);
     expect(unreadable).toHaveLength(1);
-    expect(unreadable[0]?.reason).toContain('第 1 行不是 JSON');
+    // 行號照檔算：第 1 行是 header 行，壞的是第 2 行。
+    expect(unreadable[0]?.reason).toContain('第 2 行不是 JSON');
 
     const cli = logs.find((log) => log.header.id === 'cli');
     expect(cli === undefined ? undefined : scanSessionLog(cli).looping).toBe(true);
@@ -638,11 +652,12 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
 
   it('比這一版新的照讀，header 讀不懂的連原因報出來（header 規則是後端那一份，#665）', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-scan-versions-'));
+    // 比這一版新的寫方寫的是世代檔：舊路徑上版本 52 起的 header 是墓碑，驗不到「版本太新」。
     const newer = { version: SESSION_LOG_FORMAT_VERSION + 1, id: 'future', createdAt: 0 };
-    await writeFile(join(root, 'future.header.json'), JSON.stringify(newer));
+    await mkdir(join(root, sessionDirectoryName('future')));
     await writeFile(
-      join(root, 'future.jsonl'),
-      `${JSON.stringify(events([turn('message')])[0])}\n`,
+      join(root, sessionDirectoryName('future'), generationLogFilename(newer.version)),
+      `${JSON.stringify({ type: 'session', ...newer })}\n${JSON.stringify(events([turn('message')])[0])}\n`,
     );
     await writeFile(
       join(root, 'no-date.header.json'),
@@ -666,10 +681,15 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
       ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
     ];
     const directory = await writeSession(root, 'old', entries);
-    // 改成第 6 版寫的樣子：有工具事件與模型起訖，還沒有中止與評分。
-    const headerPath = join(directory, 'old.header.json');
-    const onDisk = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
-    await writeFile(headerPath, JSON.stringify({ ...onDisk, version: 6 }));
+    // 改成第 6 版寫的樣子：有工具事件與模型起訖，還沒有中止與評分。第 6 版是舊兩檔：header 行去掉 `type` 寫進
+    // `<base>.header.json`、事件寫進 `<base>.jsonl`，會話目錄拿掉。
+    const written = sessionPathsIn(directory, 'old');
+    const [headerLine, ...rest] = (await readFile(written.log, 'utf8')).split('\n');
+    const { type: _type, ...onDisk } = JSON.parse(headerLine!) as Record<string, unknown>;
+    await rm(written.sessionDirectory, { recursive: true });
+    const legacy = legacyTwoFilePathsIn(directory, 'old');
+    await writeFile(legacy.header, JSON.stringify({ ...onDisk, version: 6 }));
+    await writeFile(legacy.log, rest.join('\n'));
 
     const { logs } = await readSessionLogs([root]);
     expect(logs.map((log) => [log.header.id, log.header.version])).toEqual([['old', 6]]);

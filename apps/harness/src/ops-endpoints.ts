@@ -4,9 +4,10 @@
  * 今天要知道 serve 活不活著，只能看 port 有沒有開。這一檔補三個**被動抓取**的路徑，serve 不主動往任何地方送，指標預設關著：
  *
  * - **`/livez`**：handler 跑得到就回 `200 ok`。不查任何狀態——回得了，就代表事件圈在轉。
- * - **`/readyz`**：`200 ok` 是「在聽、收尾還沒開始」；`503 closing` 是收尾已經開始（#1777：`close()` 立旗後 listener 還會照常在聽一段時間窗，
+ * - **`/readyz`**：`200 ok` 是「在聽、收尾還沒開始、空間沒滿」；`503 closing` 是收尾已經開始（#1777：`close()` 立旗後 listener 還會照常在聽一段時間窗，
  *   見 `serve.ts`；沒有這段，`server.close()` 一開頭就斷掉所有連線，監控只會看到連不上，看不到 503）。**thread 數到上限不算沒就緒**：已經開著的 thread 照樣服務，
  *   而且同一個 home 只有一台 serve（#1503），沒有別台可以分流。到上限要看指標。
+ *   寫資料的地方滿了回 `503 storage-full`（#2195），先判 `closing`；釋放後下一次查就回 200，不用重啟。
  * - **`/metrics`**：Prometheus 文字格式 0.0.4，手寫。**名單固定、標籤不含 thread id 或路徑**，基數不隨使用者長。
  *
  * 三個路徑**都先過 `isTrustedWireRequest`**（Host 不是 loopback 一律 403，跟 wire 同一道圍欄，不開捷徑），只收 `GET`／`HEAD`，其餘 405。
@@ -29,6 +30,8 @@ import { tokenMatches } from './browser-auth.js';
 import { readMemory } from './memory-gauge.js';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
 import { isTrustedWireRequest } from './request-trust.js';
+import { STORAGE_AREAS } from './storage-probe.js';
+import type { StorageArea, StorageProbe } from './storage-probe.js';
 
 /** 三個路徑。 */
 export const LIVEZ_PATH = '/livez';
@@ -68,6 +71,8 @@ export interface OpsGauges {
   readonly threadsClosing: number;
   /** 上限；沒有就不出現那個指標。 */
   readonly maxThreads?: number;
+  /** 滿了的區（#2195）；沒有就不出現那個指標。 */
+  readonly storageFull?: readonly StorageArea[];
 }
 
 /** 轉成 Prometheus 標籤值：`\`、`"`、換行要跳脫。 */
@@ -141,6 +146,14 @@ export class OpsMetrics {
       lines.push(`nexus_threads_max ${String(gauges.maxThreads)}`);
     }
 
+    if (gauges.storageFull !== undefined) {
+      metric('nexus_storage_full', 'gauge', '這一區寫資料的地方滿了是 1（區塊或 inode 用完）。');
+      for (const area of STORAGE_AREAS) {
+        const full = gauges.storageFull.includes(area) ? 1 : 0;
+        lines.push(`nexus_storage_full{area="${area}"} ${String(full)}`);
+      }
+    }
+
     metric('nexus_http_requests_total', 'counter', '回完的 HTTP 請求數，按面與狀態碼類別。');
     for (const [key, count] of [...this.#requests].sort(([a], [b]) => a.localeCompare(b))) {
       const [surface, codeClass] = key.split('|') as [string, string];
@@ -201,6 +214,8 @@ export interface OpsEndpointsOptions {
   isClosing(): boolean;
   /** `false`：`/livez`、`/readyz` 回 404。預設 `true`。 */
   readonly probes?: boolean;
+  /** 寫資料的地方滿了回 `503 storage-full`（#2195）。沒給就不看。 */
+  readonly storage?: Pick<StorageProbe, 'refresh' | 'full'>;
   /** 沒給就是指標關著：`/metrics` 回 404。給了要帶 bearer。 */
   readonly metrics?: {
     readonly token: string;
@@ -260,6 +275,8 @@ export function createOpsEndpoints(options: OpsEndpointsOptions): OpsEndpoints {
         if (pathname === READYZ_PATH) {
           readyzProbed = true;
           if (options.isClosing()) return text(503, 'closing', {}, head);
+          await options.storage?.refresh();
+          if (options.storage?.full.length) return text(503, 'storage-full', {}, head);
         }
         return text(200, 'ok', {}, head);
       }

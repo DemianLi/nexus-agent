@@ -247,7 +247,13 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
     '#settings/downlink',
     '這一列不裝任何東西，只講下行串流的心跳間隔與每條線的位元組上限。關掉它不會讓保護消失' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（2000 毫秒、2 MiB），' +
-      '卡住的線照樣兩拍內被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
+      '卡住的線照樣連兩拍沒排出去就被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
+  ],
+  [
+    '#settings/session-reference',
+    '這一列不裝任何東西，只講用 `@` 引用別的會話時的四個上限（引用條數、候選筆數、每條來源的位元組、占模型窗口的比例）。關掉它不會讓引用停下來' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，四個值於是回到 schema 的預設，其中比例是 dsh 的 0.2，' +
+      '對中文三條來源逼近摘要門檻，等於靜靜拿掉出廠調低的 0.1，只會讓這份設定讀起來像關掉了引用。要放寬，把數值調大。',
   ],
   [
     '#settings/thread-capacity',
@@ -255,6 +261,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（500 條、閒置 2 小時撤出），' +
       '到了上限照樣拒收新 thread、閒置的照樣被撤，只會讓這份設定讀起來像把保險絲拆了。' +
       '要放寬，把數值調大；要關掉閒置逐出，把 `idleEvictAfterMs` 設成 0。',
+  ],
+  [
+    '#settings/attachment-images',
+    '這一列不裝任何東西，只講同時規範化幾張圖。關掉它不會讓轉碼不再限流' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設 2，' +
+      '超過的照樣排隊，只會讓這份設定讀起來像把限流拆了。要放寬，把數值調大（上限 8）。',
   ],
   [
     '#settings/logger-console',

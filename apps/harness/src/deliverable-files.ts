@@ -47,12 +47,13 @@
 
 import { createReadStream } from 'node:fs';
 import { lstat, open, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, resolve, sep } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
 import { hostPathOf, virtualPathOf } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import type { DeliverableFilePage, DeliverableFileStat } from '@nexus/wire';
 
+import { isWithin } from './canonical-path.js';
 import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
 import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 
@@ -174,7 +175,7 @@ export async function locateDeliverableFile(
   } catch {
     return refuse('not-found', `讀不到：${declaredPath} 的所在目錄不在了。`);
   }
-  if (parent !== root && !parent.startsWith(`${root}${sep}`)) {
+  if (!isWithin(root, parent)) {
     return refuse('not-found', `讀不到：${declaredPath} 解出來落在工作區外。`);
   }
   const target = resolve(parent, basename(lexical));

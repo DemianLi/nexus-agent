@@ -17,8 +17,30 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeEach } from 'vitest';
+import { afterAll, beforeEach, vi } from 'vitest';
 import { HARNESS_HOME_ENV } from './harness-home.js';
+
+// 一般測試不編 Rust，Mac 上也沒有 spawner：工具子行程直接 spawn。測真執行檔的測試自己給 launcher。
+vi.mock('./tool-launcher.js', async (importActual) => {
+  const { directToolLauncher } = await import('./tool-process.js');
+  return {
+    ...(await importActual<typeof import('./tool-launcher.js')>()),
+    productToolLauncher: () => directToolLauncher,
+    productSandboxStatus: () => Promise.resolve('沙箱：測試直接 spawn'),
+  };
+});
+
+// 同一個理由：home 鎖與會話寫租約用系統 perl 拿真的 kernel 鎖（`test-flock.fixture.ts`）。
+// mock 只在這個行程：另起的子行程走產品路徑，沒有 spawner 就退到不鎖。
+vi.mock('./kernel-file-lock.js', async (importActual) => {
+  const actual = await importActual<typeof import('./kernel-file-lock.js')>();
+  const { perlFlock } = await import('./test-flock.fixture.js');
+  const lock = perlFlock(actual.spawnerFlock);
+  return {
+    ...actual,
+    lockFileExclusive: (path: string, chosen = lock) => actual.lockFileExclusive(path, chosen),
+  };
+});
 
 const root = mkdtempSync(join(tmpdir(), 'nexus-agent-home-'));
 

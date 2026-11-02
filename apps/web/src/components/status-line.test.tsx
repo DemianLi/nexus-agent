@@ -3,7 +3,7 @@ import type { AiEntry, ConversationEntry, ConversationState, ToolEntry } from '@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ELAPSED_TICK_MS, StatusLine } from '@/components/status-line';
+import { ELAPSED_TICK_MS, SLOW_CONNECT_TEXT, StatusLine } from '@/components/status-line';
 import { serverClock } from '@/lib/server-clock';
 import { STOPPED_STATUS_TEXT, TIMED_OUT_STATUS_TEXT } from '@/lib/stop-cause';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
@@ -23,6 +23,51 @@ afterEach(() => {
 const idle = emptyConversation();
 
 describe('StatusLine 的連線那幾句（#593）', () => {
+  it('連線等太久（#2250）：講可能分頁太多與能做什麼，取代「連線中…」', () => {
+    render(<StatusLine state={idle} connected={false} slowConnect />);
+    const text = screen.getByRole('status').textContent;
+    expect(text).toBe(SLOW_CONNECT_TEXT);
+    expect(text).toContain('可能');
+    expect(text).toContain('關掉其他分頁');
+  });
+
+  it('重接中等太久（#2250）也講，「立刻重連」還在', () => {
+    render(
+      <StatusLine
+        state={idle}
+        connected={false}
+        slowConnect
+        reconnecting={{ wasConnected: true, offline: false }}
+        onReconnect={() => {}}
+      />,
+    );
+    expect(screen.getByRole('status').textContent).toBe(SLOW_CONNECT_TEXT);
+    expect(screen.getByRole('button', { name: '立刻重連' })).toBeTruthy();
+  });
+
+  it('離線與伺服器明說的話優先，不講分頁太多（#2250）', () => {
+    const { unmount } = render(
+      <StatusLine
+        state={idle}
+        connected={false}
+        slowConnect
+        reconnecting={{ wasConnected: true, offline: true }}
+      />,
+    );
+    expect(screen.getByRole('status').textContent).toContain('網路離線');
+    unmount();
+    render(
+      <StatusLine
+        state={idle}
+        connected={false}
+        slowConnect
+        refusal="滿了"
+        reconnecting={{ wasConnected: true, offline: false }}
+      />,
+    );
+    expect(screen.getByRole('status').textContent).toBe('滿了');
+  });
+
   it('連上過、中斷了：講正在重新連線，旁邊一顆「立刻重連」，按鈕不在 live region 裡', () => {
     const onReconnect = vi.fn();
     render(

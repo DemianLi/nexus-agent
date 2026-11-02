@@ -65,7 +65,7 @@ describe('registry 檔的改動還在', () => {
 
     test('第 35 條：「全開」的警示色寫在覆寫檔；vendor 的 Pick 仍沒有危險狀態、移上去換成字色', () => {
       expect(overrides()).toContain(
-        '[data-slot="permission-pick"][data-danger="true"] [data-slot="dropdown-menu-trigger"]:not([aria-expanded="true"]) {\n  color: var(--warning);\n}',
+        '[data-slot="permission-pick"][data-danger="true"] [data-slot="dropdown-menu-trigger"]:not([aria-expanded="true"]) {\n  color: var(--status-interrupted);\n}',
       );
       // 上游哪天給 Pick 加了危險或警示的樣子，這條紅，提醒回頭看那條還要不要。
       expect(pick()).toMatch(/<DropdownMenuTrigger\b[\s\S]{0,400}\bhover:text-foreground\b/);
@@ -80,10 +80,10 @@ describe('registry 檔的改動還在', () => {
     test('第 37 條：用量環在 vendor 原文仍寫死 text-blue-500 與 text-amber-500（覆寫檔的選擇器錨在這兩個 class 上）', () => {
       expect(ring()).toContain('"text-amber-500" : "text-blue-500"');
       expect(overrides()).toContain(
-        '[data-slot="context-ring"] svg.text-blue-500 {\n  color: var(--info);\n}',
+        '[data-slot="context-ring"] svg.text-blue-500 {\n  color: var(--status-done);\n}',
       );
       expect(overrides()).toContain(
-        '[data-slot="context-ring"] svg.text-amber-500 {\n  color: var(--warning);\n}',
+        '[data-slot="context-ring"] svg.text-amber-500 {\n  color: var(--status-interrupted);\n}',
       );
     });
 

@@ -5,7 +5,7 @@
  * 3 只在 `verify-packed-install` 跑**（相依圖走訪要走完整棵樹，打包當下的暫存樹還沒定形）：
  *
  * 1. {@link collectPayloadViolations}：照 dsh `scripts/publication-payload.ts` 拒收 `src/` 與 `.map`，再加上我們自己的必備檔、
- *    不該進閉包的開發工具、相對符號連結要解得開、目標平台的 `node-addon-system` 二進位與內附 ripgrep（#1502 刀 4）在。
+ *    不該進閉包的開發工具、相對符號連結要解得開、內附 ripgrep（#1502 刀 4）與 Linux 的沙箱 spawner（#1946，`spawner.ts`）在。
  * 2. {@link collectClosureViolations}：照 dsh `scripts/verify-runtime-closure.ts`，`cordis.yml`／`cordis.serve.yml` 每一列的
  *    `name:` 都要能從產物根解析到。
  * 3. {@link walkInstalledGraph}：照 dsh `scripts/release/installed-product-isolation.ts:23-57`，從產物根沿 `dependencies`／
@@ -31,6 +31,7 @@ import { createRequire } from 'node:module';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { ROOT } from '../workspace-packages.js';
+import { spawnerProblems } from './spawner.js';
 
 /** 一條違規：哪個路徑、為什麼。 */
 export interface PayloadViolation {
@@ -42,8 +43,8 @@ export interface PayloadViolation {
 /** 檢查的設定。 */
 export interface PayloadOptions {
   /**
-   * 目標平台的後綴：`node-addon-system` 的二進位套件（例如 `linux-x64-gnu`，用 `includes` 比）與內附 ripgrep 的平台套件
-   * `@vscode/ripgrep-<後綴>`（`pack.ts` 傳的是 `${process.platform}-${process.arch}`，要完全相等）都用它查。
+   * 目標平台的後綴：查內附 ripgrep 的平台套件 `@vscode/ripgrep-<後綴>`（`pack.ts` 傳的是
+   * `${process.platform}-${process.arch}`，要完全相等）與 Linux 的沙箱 spawner。
    * 注意執行期 `@vscode/ripgrep` 自己挑平台套件看的是 `process.env.npm_config_arch || process.arch`（`lib/index.js:5`）：啟動 serve 的環境若設了
    * `npm_config_arch`，它會去找別的架構的套件、找不到就讓 grep 不可用（啟動日誌那一行會說「不可用」）；打包這一側不看那個變數。`undefined` 代表不查（單元測試用）。
    */
@@ -88,6 +89,13 @@ const REQUIRED_FILES = [
   'lib/cli.js',
   'lib/plugin-cli.js',
 ] as const;
+
+/**
+ * 產物內附 LGPL 的原生函式庫（sharp 的 `@img/sharp-libvips-*`，`LGPL-3.0-or-later`），那個套件本身不帶授權檔。
+ * LGPL-3.0 第 4 節 b) 要求 Combined Work 附上 GPL 與 LGPL 兩份全文，所以兩份都從 repo 複製進產物（`pack.ts`），
+ * 少一份就是散布條件沒做到（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
+ */
+export const BUNDLED_LICENSE_TEXTS = ['licenses/LGPL-3.0.txt', 'licenses/GPL-3.0.txt'] as const;
 
 /**
  * 網頁打包進去的三顆字型（OFL-1.1）的授權全文，web 的建置放在 `dist/assets/fonts/`（#1713，PR #1717）。
@@ -139,6 +147,39 @@ export function removeSelfLink(root: string): boolean {
   return true;
 }
 
+/**
+ * 拿掉 `node_modules/.pnpm` 底下沒有任何符號連結指進去的項目，回拿掉的項目名（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
+ *
+ * isolated 佈局裡套件只能經連結被解析到：沒有連結指進去的項目，Node 從產物的任何位置都解析不到它。`pnpm deploy` 會留下這種項目：
+ * 一顆在 workspace lockfile 沒標 `optional` 的套件，只被已經跳過的選用相依引用（sharp 的 wasm 選用鏈帶到的 `tslib`）。
+ * 判準只看連結，所以只剪 Node 解析不到的項目：`walkClosure` 漏走的套件仍有連結指著、不會被剪，`sbomProblems` 照樣抓得到。
+ * 拿掉一個項目之後，它裡面的連結不再算數，所以重算到沒有新的可拿為止。
+ *
+ * @param root - 產物根。
+ * @returns 拿掉的項目名，依名字排序。
+ */
+export function pruneUnlinkedStoreEntries(root: string): string[] {
+  const store = join(root, 'node_modules/.pnpm');
+  if (!existsSync(store)) return [];
+  const removed: string[] = [];
+  for (;;) {
+    const targets: string[] = [];
+    for (const item of walk(root)) {
+      if (item.link) targets.push(resolve(dirname(item.path), readlinkSync(item.path)));
+    }
+    const orphans = readdirSync(store, { withFileTypes: true }).filter((entry) => {
+      if (!entry.isDirectory() || entry.name === 'node_modules') return false;
+      const prefix = join(store, entry.name) + sep;
+      return !targets.some((target) => target.startsWith(prefix));
+    });
+    if (orphans.length === 0) return removed.sort();
+    for (const entry of orphans) {
+      rmSync(join(store, entry.name), { recursive: true, force: true });
+      removed.push(entry.name);
+    }
+  }
+}
+
 function isLinkPath(path: string): boolean {
   try {
     return lstatSync(path).isSymbolicLink();
@@ -188,7 +229,7 @@ export function collectPayloadViolations(
   const rel = (path: string): string => relative(root, path).split(sep).join('/');
   const vendor = new Set(options.vendorNames ?? vendorPackageNames());
 
-  for (const file of REQUIRED_FILES) {
+  for (const file of [...REQUIRED_FILES, ...BUNDLED_LICENSE_TEXTS]) {
     if (!existsSync(join(root, file))) violations.push({ path: file, message: '產物缺這個檔' });
   }
   // 照 dsh `build-python-release.py:256-259` 的 `License-Expression == "MIT"`，見 {@link REQUIRED_FILES} 的三件事。
@@ -251,20 +292,6 @@ export function collectPayloadViolations(
     }
   }
 
-  // 目標平台的原生二進位。
-  if (options.nativeSuffix !== undefined) {
-    const expected = `node-addon-system-${options.nativeSuffix}`;
-    const found = existsSync(store)
-      ? readdirSync(store).filter((entry) => entry.includes('node-addon-system-'))
-      : [];
-    if (!found.some((entry) => entry.includes(expected))) {
-      violations.push({
-        path: 'node_modules/.pnpm',
-        message: `缺目標平台的 @deepseek-ai/node-addon-system-${options.nativeSuffix}（找到：${found.join('、') || '無'}）`,
-      });
-    }
-  }
-
   // 目標平台的內附 ripgrep（#1502 刀 4）：`@vscode/ripgrep` 本體加上它的平台套件，而且那支 `rg` 真的在、有執行權限。
   // 平台套件名是 `@vscode/ripgrep-${platform}-${arch}`（`@vscode/ripgrep/lib/index.js`），跟 `nativeSuffix`（`${platform}-${arch}`）同形。
   // 缺了的話安裝樹裡每一次 grep 都會 SEARCH_FAILED、沒有退路（#1532 的 ENOENT 退路同批拿掉了），所以在打包當下就擋。
@@ -303,6 +330,11 @@ export function collectPayloadViolations(
         violations.push({ path: rel(binary), message: '內附的 rg 沒有執行權限' });
       }
     }
+  }
+
+  // 沙箱 spawner（#1946）只在 Linux 上跑，所以只有 Linux 的產物要帶。
+  if (options.nativeSuffix?.startsWith('linux-') === true) {
+    violations.push(...spawnerProblems(root, options.nativeSuffix.slice('linux-'.length)));
   }
 
   // 整棵樹：.map、符號連結。

@@ -34,6 +34,7 @@ import { formatOrigin, type NexusPlugin } from './plugin.js';
 import type { ApprovalOutcome } from './session-log.js';
 import { isBackgroundAddress } from './session-address.js';
 import {
+  APPROVAL_INVALID_REPLY,
   APPROVAL_NO_CHANNEL,
   APPROVAL_POLICY_NEVER,
   APPROVAL_REJECTED_BY_USER,
@@ -350,7 +351,7 @@ function auditDecision(
  * `5badb15`，log-only 審計）：
  *
  * - **人那條路由 pump 寫**（`apps/harness/src/thread-pump.ts`）：asked 在它記 `interrupt/raised` 的同一刻（`id` 就是
- *   中斷的 id），decided 在收到回覆（核准／拒絕）或收回（`cancelled`）那一刻。**不在這裡寫**：閘門在圖內，
+ *   中斷的 id），decided 在收到回覆（核准／拒絕；看不懂的回覆記 `unavailable`）或收回（`cancelled`）那一刻。**不在這裡寫**：閘門在圖內，
  *   `interrupt()` 回來之後整顆 middleware 從頭重跑，在 `interrupt()` 前寫會是兩筆。中斷酬載多帶 `callId`，
  *   asked 才配得上 `tool/call`。
  * - **不必問人就確定的由這裡寫**（{@link auditDecision}）：政策關掉 → `rejected`，沒有管道 → `unavailable`，
@@ -358,7 +359,7 @@ function auditDecision(
  * - **listener 直接回 `deny` 不寫**：沒有問任何人，dsh 也不寫（只有 `ask` 才進核准服務）。
  *
  * **拒絕的 `tool/result` 帶碼**（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／
- * `TOOL_DENIED_BY_LISTENER`，見 `tool-events.ts`），讓「被人拒」與「工具自己失敗」在日誌上分得開。**這是 dsh 沒有的**
+ * `APPROVAL_INVALID_REPLY`／`TOOL_DENIED_BY_LISTENER`，見 `tool-events.ts`），讓「被人拒」與「工具自己失敗」在日誌上分得開。**這是 dsh 沒有的**
  * （它的核准拒絕不帶 `info`）。依據是 #1018 Q2 的「拒絕帶原因碼」決定，載體是 dsh `deny.info` 那一格，
  * 登記見 `tool-events.ts` 的碼定義。
  *
@@ -459,10 +460,12 @@ export function createApprovalGateMiddleware(
           approvalDenied(APPROVAL_REJECTED_BY_USER),
         );
       }
-      throw new Error(
-        `核准回覆看不懂：${JSON.stringify(answer)}。` +
-          `這一格只收 { decisions: [{ type: "approve" | "reject" }] }，` +
-          `形狀與基座的 HITL 相同，所以 web 那一側不必為此改。`,
+      // 看不懂的回覆收成拒絕（fail closed）；pump 把這一對稽核的結局記成 `unavailable`（#2027）。
+      return denial(
+        exec,
+        `${because}，但收到的核准回覆看不懂（${JSON.stringify(answer)}；只收 approve 或 reject），所以沒有執行。` +
+          `這不是有人拒絕了它——是沒有拿到有效的決定。`,
+        approvalDenied(APPROVAL_INVALID_REPLY),
       );
     },
   });

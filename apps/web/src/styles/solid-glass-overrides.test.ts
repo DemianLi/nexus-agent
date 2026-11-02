@@ -60,9 +60,9 @@ describe('solid-glass 的本地修改：機制類', () => {
     },
   );
 
-  test('「在對話裡定位」的高亮：chip 底色、跟泡泡同一階圓角', () => {
+  test('「在對話裡定位」的高亮：SG 的 muted 底色、跟泡泡同一階圓角', () => {
     const selector = "[data-slot='message-scroller-item'][data-located]";
-    expect(cascade.value([selector], 'background-color')).toBe('var(--chip)');
+    expect(cascade.value([selector], 'background-color')).toBe('var(--muted)');
     expect(cascade.value([selector], 'border-radius')).toBe('var(--radius-3xl)');
   });
 

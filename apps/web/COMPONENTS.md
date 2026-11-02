@@ -4,27 +4,27 @@
 
 ## 放哪一層
 
-| 層 | 放什麼 | 規則 |
-| --- | --- | --- |
-| `src/components/ui/` | shadcn registry 裝進來的元件，或 vendor 的 solid-glass 元件的 nexus 層 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。已換成 solid-glass 的（#1523 起：button、input、textarea、input-group、separator、skeleton、card、badge；#1583 起：dialog、popover、sheet、tooltip、alert-dialog、dropdown-menu、command；#1591 起：composer、context-ring；#1682 起：tool-steps、diff-view）只轉出 `src/vendor/solid-glass/components/ui/` 的原檔，本地修改寫在這一層或覆寫檔，登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。自己的元件不要放這裡 |
-| `src/components/*.tsx`（含各資料夾） | 我們自己的元件 | 資料夾按功能分（`tool/`、`todo/`、`sidebar/`…），檔名不重複資料夾名 |
-| `src/components/row-trigger.tsx` 這類 | 兩處以上共用的自製積木 | 見下面「什麼時候抽」 |
-| `src/lib/` | 不畫畫面的邏輯與投影 | 元件只讀它的結果 |
-| `src/styles/`、`src/index.css` | token 與全域樣式 | token 只在這裡定義 |
+| 層                                    | 放什麼                                                                 | 規則                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/components/ui/`                  | shadcn registry 裝進來的元件，或 vendor 的 solid-glass 元件的 nexus 層 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。已換成 solid-glass 的（#1523 起：button、input、textarea、input-group、separator、skeleton、card、badge；#1583 起：dialog、popover、sheet、tooltip、alert-dialog、dropdown-menu、command；#1591 起：composer、context-ring；#1682 起：tool-steps、diff-view）只轉出 `src/vendor/solid-glass/components/ui/` 的原檔，本地修改寫在這一層或覆寫檔，登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。自己的元件不要放這裡 |
+| `src/components/*.tsx`（含各資料夾）  | 我們自己的元件                                                         | 資料夾按功能分（`tool/`、`todo/`、`sidebar/`…），檔名不重複資料夾名                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `src/components/row-trigger.tsx` 這類 | 兩處以上共用的自製積木                                                 | 見下面「什麼時候抽」                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `src/lib/`                            | 不畫畫面的邏輯與投影                                                   | 元件只讀它的結果                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `src/styles/`、`src/index.css`        | token 與全域樣式                                                       | token 只在這裡定義                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 ## 只能用系統的值
 
 `src/styles/design-system.test.ts` 會掃元件原始碼的字串字面值，下面這些寫了就紅：
 
-- **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-chip-hover`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。
+- **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-muted`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。
 - **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。
-- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card shadow-material rounded-3xl`、`bg-card border rounded-3xl`。
+- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-(--hover-faint) shadow-[inset_0_0_0_1px_var(--border)]`、`bg-card rounded-3xl`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`（照 SG 朝右、打開轉 90 度，#1687），不手寫 `transition-transform … rotate-90`（或跟著 `data-state=open` 轉的 `rotate-*`）。
-- **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-chip-hover active:bg-chip-pressed … w-full … text-left`。
+- **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-muted … w-full … text-left … min-h-11`。
 - **對話泡泡**：用 `ChatBubble`，不手寫 `rounded-3xl px-4 py-2.5`。
-- **程式碼小框**：用 `MonoBlock`，不手寫 `bg-chip … rounded-lg p-2 font-mono`。
+- **程式碼小框**：用 `MonoBlock`，不手寫 `bg-muted … rounded-lg p-2 font-mono`。
 - **多行輸入**：`ui/` 以外不寫原生 `<textarea`，用 `ui/textarea` 的 `Textarea`。
-- **時長**：走 `motion.css` 的 token（`duration-(--duration-fast)`、`animation-duration-(--duration-overlay)`），不寫 `duration-200` 這種數字。這條連 `ui/` 一起管。`vendor/` 裡 SG 元件寫的數字（例如 dialog 的 `duration-100`）原樣留著，進出場的時長就照它（#1687）；這條規則跟 SG 的寫法最後怎麼收，在 ⑥（#1689）定。
+- **時長**：只用 Tailwind 的 `duration-*` 級距（0、75、100、150、200、300、500、700、1000），不寫 `duration-[200ms]`、`duration-(--x)`、`duration-137`，也不寫 `animation-duration-*`（#1827 D21，照 SG）。這條連 `ui/` 一起管。`vendor/` 裡 SG 元件寫的 `duration-*` 原樣留著，進出場的時長就照它（#1687）。
 - **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `styles/solid-glass.overrides.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
 - **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
@@ -36,7 +36,7 @@
 
 三條，來自 beautiful-ui 的比對（[`.docs/beautiful-ui-comparison.md`](../../.docs/beautiful-ui-comparison.md) §3，[#1307](https://github.com/DemianLi/nexus-agent/issues/1307)）。都是我們已經在做的事，寫下來讓新元件照做。
 
-- **顏色只當點綴**。畫面以中性灰為主；帶色相的只有語意 token（brand、success、warning、info、destructive），用在狀態、焦點、需要人注意的地方，不拿來鋪大面積。原生色板與硬寫的色碼由 `design-system.test.ts` 擋；「彩色面積不能大」量不出來，靠 review。
+- **顏色只當點綴**。畫面以中性灰為主；帶色相的只有語意 token（brand、success、destructive、SG 的 `status-*`），用在狀態、焦點、需要人注意的地方，不拿來鋪大面積。原生色板與硬寫的色碼由 `design-system.test.ts` 擋；「彩色面積不能大」量不出來，靠 review。
 - **次要靠顏色，不靠字重；次要色本身要過 4.5:1**。說明、附註、時間一律 `text-muted-foreground`，不要把字變細（細字在中文與小字級下先糊掉）。`font-thin`／`font-extralight`／`font-light` 會被 `design-system.test.ts` 擋下。次要色的對比度由 `tokens-contrast.test.ts` 守著——次要色看不清楚，就等於沒寫。
 - **一個面一顆實心按鈕**。一張卡、一個面板、一列操作裡，只有主動作用實心（`Button` 預設 variant）；其他用 `outline`、`ghost`、`secondary`。按壓縮放也只給實心主按鈕（規格 §7）。條件渲染會讓同一個檔裡兩顆實心按鈕不同時出現，靜態量不準，**不寫測試，靠 review**。
 
@@ -46,12 +46,12 @@
 
 四階各有用途（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)）：
 
-| 階 | 用在 | 例 |
-| --- | --- | --- |
-| `text-body`（14／23） | 內文，與本來就是內文大小的按鈕、選單項 | 對話、`Button` 預設（vendor 原文寫 `text-sm`，同字級）、下拉選單與 cmdk 的項目、右側欄的分頁鈕 |
-| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | 小字的可展開列（待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、成本分頁的區段標題、卡片標頭（計劃、等待核准）；工具卡與工具段那一列的字照 SG（vendor `tool-steps` 寫死 13px／12.5px，#1682）；思考過程照 SG（vendor `reasoning` 標題 12.5px、內文框 13px，#1683）；狀態列執行中那一列照 SG（vendor `turn-status` 寫死 12.5px、高 20px，#1684；其他支仍是 `text-body`，落差記在 #1688） |
-| `text-tip`（12／16） | 小字說明、附註、時間、計數 | 工具名與摘要、`Badge`（vendor 原文寫 `text-xs`，同字級）、`xs` 按鈕（vendor 原文寫 `text-xs`：外觀照 SG，#1468 Q8、Q19 拿掉了 #1281 按鈕那一條，下面「按鈕不縮成 `text-tip`」管的是產品原始碼）、tooltip、快捷鍵提示、時間戳、popover 裡數字上面的欄位名、卡片裡單一區塊上面的小標籤（「子代理的對話」；工具卡的「參數」「結果」「錯誤」是 SG 結果框的標題，照 SG）、錯誤與提示句 |
-| `text-micro`（11） | 只有程式碼區塊的語言標籤。它在 CSS 裡用 `var(--text-micro)`，不是 class，所以搜 `text-micro` 這個 class 搜不到 | 回覆裡程式碼區塊左上角的「ts」（`src/styles/markdown.css` 的 `.md-code-lang`） |
+| 階                    | 用在                                                                                                           | 例                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| --------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `text-body`（14／23） | 內文，與本來就是內文大小的按鈕、選單項                                                                         | 對話、`Button` 預設（vendor 原文寫 `text-sm`，同字級）、下拉選單與 cmdk 的項目、右側欄的分頁鈕                                                                                                                                                                                                                                                                                                                      |
+| `text-ui`（13／18）   | **可以點的**與**當標題的**小字                                                                                 | 小字的可展開列（待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、成本分頁的區段標題、卡片標頭（計劃、等待核准）；工具卡與工具段那一列的字照 SG（vendor `tool-steps` 寫死 13px／12.5px，#1682）；思考過程照 SG（vendor `reasoning` 標題 12.5px、內文框 13px，#1683）；狀態列執行中那一列照 SG（vendor `turn-status` 寫死 12.5px、高 20px，#1684；其他支仍是 `text-body`，落差記在 #1688） |
+| `text-tip`（12／16）  | 小字說明、附註、時間、計數                                                                                     | 工具名與摘要、`Badge`（vendor 原文寫 `text-xs`，同字級）、`xs` 按鈕（vendor 原文寫 `text-xs`：外觀照 SG，#1468 Q8、Q19 拿掉了 #1281 按鈕那一條，下面「按鈕不縮成 `text-tip`」管的是產品原始碼）、tooltip、快捷鍵提示、時間戳、popover 裡數字上面的欄位名、卡片裡單一區塊上面的小標籤（「子代理的對話」；工具卡的「參數」「結果」「錯誤」是 SG 結果框的標題，照 SG）、錯誤與提示句                                   |
+| `text-micro`（11）    | 只有程式碼區塊的語言標籤。它在 CSS 裡用 `var(--text-micro)`，不是 class，所以搜 `text-micro` 這個 class 搜不到 | 回覆裡程式碼區塊左上角的「ts」（`src/styles/markdown.css` 的 `.md-code-lang`）                                                                                                                                                                                                                                                                                                                                      |
 
 怎麼判：
 
@@ -76,7 +76,7 @@
 - **兩處以上手寫同一份配方**（不只是名字像）才抽；只有一處就留在原地。
 - 只抽**共通的部分**，差異用 `className` 補（例：`RowTrigger` 只含底色、最小高度、圓角、過渡，圖示與間距由呼叫端給）。
 - 抽完要證明**畫面沒變**：展開成的 class 集合與原本逐項相等，再加實機前後比對。
-- 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`ChatBubble`（對話裡的文字泡泡，人的話靠右、子代理寄來的話靠左）、`MonoBlock`（夾在說明文字裡的等寬字小框，平的 `bg-chip`；工具輸出那種有標題、有細線的內層底是 `Surface tone="stage"`，不是它）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）、`CopyButton`（複製鈕：交付卡的複製路徑、回覆底下的複製回覆、程式碼區塊的複製程式碼共用同一套行為與回饋，[#1305](https://github.com/DemianLi/nexus-agent/issues/1305)）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
+- 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`ChatBubble`（對話裡的文字泡泡，人的話靠右、子代理寄來的話靠左）、`MonoBlock`（夾在說明文字裡的等寬字小框，平的 `bg-muted`；工具輸出那種有標題、有細線的內層底是 `Surface tone="stage"`，不是它）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）、`CopyButton`（複製鈕：交付卡的複製路徑、回覆底下的複製回覆、程式碼區塊的複製程式碼共用同一套行為與回饋，[#1305](https://github.com/DemianLi/nexus-agent/issues/1305)）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
 - 還沒抽的：`pending-swap`（走 `ui/Card` 覆寫，是 shadcn 元件的用法）。
 
 ## 浮層（Base UI）

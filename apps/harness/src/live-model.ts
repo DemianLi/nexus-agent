@@ -2,7 +2,6 @@ import { ContextOverflowError } from '@langchain/core/errors';
 import { parseRetryAfterMs } from '@langchain/core/utils/async_caller';
 import { MiddlewareError } from 'langchain';
 import { ChatOpenAI, OpenAIClient } from '@langchain/openai';
-import type { ChatOpenAIFields } from '@langchain/openai';
 import {
   assertImageBudget,
   beginAttemptReport,
@@ -18,6 +17,7 @@ import {
   thrownMessage,
 } from '@nexus/core';
 import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
+import { AUTH_FAILURE_CODE, AUTH_FAILURE_MESSAGE } from '@nexus/wire';
 import { CHECKPOINT_DEPTH_EXCEEDED } from './checkpoint-serde.js';
 import {
   classifyInbandError,
@@ -30,6 +30,8 @@ import { assertUsableApiKey, INVALID_CREDENTIAL_CODE } from './api-key.js';
 import { userAgent } from './attribution.js';
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
 import { GatedChatOpenAI } from './gated-chat-openai.js';
+import { GuardedChatOpenAI } from './guarded-chat-openai.js';
+import type { GuardedChatOpenAIFields } from './guarded-chat-openai.js';
 import { LOCAL_CAPACITY_CODE } from './request-gate.js';
 import type { RequestGate } from './request-gate.js';
 import type { RequestGuard } from './attachment-chat-openai.js';
@@ -63,64 +65,59 @@ export const DEFAULT_LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 /**
  * NVIDIA 閘道上的預設模型 id。
  *
- * ## 這是量出來的，不是挑出來的
+ * ## 這顆是指定的，不是盤點選出來的
  *
- * **2026-09-04 重選**（[#165](https://github.com/DemianLi/nexus-agent/issues/165)）。
- * 上一個 `openai/gpt-oss-120b` **下架了** —— 410、`end of life on 2026-09-03T08:00:00Z`，
- * 型錄上也沒有它了。所以它不是被比下去的，是**不能再打了**；重選是被迫的。
+ * 由 [#1974](https://github.com/DemianLi/nexus-agent/issues/1974)（#1827 D126）指定，不走盤點與決選：
+ * `nvidia/nemotron-3-super-120b-a12b` 已下架，這把 key 回 `404 Not found for account`。
  *
- * 重選照原本的方法走兩步。**第一步是盤點**（方法在 [`eval/tiers.ts`](./eval/tiers.ts) 檔頭）：
- * `GET /models` 列 **81** 個，逐一送一個帶 `tools` 的請求，回得出 `finish_reason: tool_calls`
- * 的只有 **9** 個（前一輪是 16 個，四個舊成員現在三次探測全逾時）。這一輪多加一道**免費的
- * 硬門檻**：吃不吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS} —— 我們每一次呼叫都送它，輸出上限比它
- * 小的模型會**每一次**都失敗，而入場探測用的 512 看不出這件事。
- *
- * **第二步是決選四個跑基準任務**（七題 × 3 次 = 84 次執行，零限流、零 `rejected`）：
+ * 它在 2026-09-04 的決選（[#165](https://github.com/DemianLi/nexus-agent/issues/165)，七題 × 3 次）裡是這一行：
  *
  * | | 難題 arg | 七題 arg | 多叫 | token | 秒 | 評到分 |
  * | --- | --- | --- | --- | --- | --- | --- |
  * | `google/gemma-4-31b-it` | 0.93 | 0.97 | 0.57 | 7639 | 17.5 | 21/21 |
- * | `nvidia/nemotron-3.5-lightning-30b-a3b` | 0.93 | 0.97 | 1.33 | 13530 | 38.4 | 21/21 |
- * | **這一個** | **0.98** | **0.99** | **0.29** | 10661 | **8.0** | 21/21 |
- * | `openai/gpt-oss-20b` | 0.92 | 0.96 | 0.45 | **7076** | 17.1 | 20/21 |
+ * | **這一個** | 0.93 | 0.97 | 1.33 | 13530 | 38.4 | 21/21 |
+ * | `nvidia/nemotron-3-super-120b-a12b` | 0.98 | 0.99 | 0.29 | 10661 | 8.0 | 21/21 |
+ * | `openai/gpt-oss-20b` | 0.92 | 0.96 | 0.45 | 7076 | 17.1 | 20/21 |
  *
- * **跟 2026-08-28 那次不同：品質這次沒有打平。** 上一次五階的參數正確性擠在 0.88–0.98，
- * 選型因此落回成本、延遲、失敗模式；這一次難題上是 **0.98 對 0.92–0.93**，而同一個候選**順帶**
- * 拿下延遲（8.0 秒，快一倍）與多叫次數（0.29）。**它唯一輸的是 token**：10661 比最省的
- * `gpt-oss-20b` 多五成。四軸拿三軸，而且贏的那三軸包含品質——所以這次不必在軸之間權衡。
+ * **它比 `nemotron-3-super-120b-a12b` 慢，也比較會多叫**。逾時與摘要門檻對這顆的量測（2026-11-02）：
+ *
+ * | 串流請求 | 首事件 | 段間最大間隔 | 全程 |
+ * | --- | --- | --- | --- |
+ * | 32 token 的中文問答 | 0.4 秒 | 1.0 秒 | 9.6 秒 |
+ * | 100,029 token（摘要門檻的大小） | 4.1 秒 | 0.5 秒 | 16.2 秒 |
+ *
+ * - {@link DEFAULT_LIVE_TIMEOUT_MS} 180 秒、{@link DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS} 90 秒都遠大於上表。
+ * - `turn-timeout` 30 分鐘：32 token 那題非串流量到過 58.2 秒，乘上 serve 一輪最多 23 次模型呼叫約 22 分鐘，蓋得過；這只是單次量到的最慢值。
+ * - 摘要門檻是絕對值 `tokens: 100_000`，約佔這顆窗口 1/8，塞得下。
  *
  * ## 窗口是量到的，而且大得離譜
  *
- * **≥ 700,045 token**（2026-09-04）。判準不是「沒回錯」——那分不出截斷：把一個唯一暗號放在
- * 提示詞**最前面**、再塞 140 萬個字、最後要求它唸回來，它唸對了，`usage.prompt_tokens` 也
- * 一路線性到 700,045。所以**不是截斷，是真的讀到了**。
+ * **≥ 784,369 token**（2026-11-02）。判準不是「沒回錯」——那分不出截斷：把一個唯一暗號放在提示詞**最前面**、再塞 400 萬
+ * 個字元、最後要求它唸回來，推理裡唸對了，`usage.prompt_tokens` 從 392,212 線性到 784,369，連同 `max_tokens` 16384
+ * 都收。所以**不是截斷，是真的讀到了**。那兩次答案都只在推理裡、正文是空的；`serve` 實跑與一般問答正文都有。
+ * 端點自己講的上限是 100 萬（1,098,060 token 回 `400 maximum context length is 1000000 tokens`），這段沒有唸回來量過，型錄記的是唸得回來的下限。
  *
- * 對照組 `openai/gpt-oss-20b` 在同一天量到的是 **131,007**（128K 扣掉約 65 個 template
+ * 對照組 `openai/gpt-oss-20b` 在 2026-09-04 量到的是 **131,007**（128K 扣掉約 65 個 template
  * overhead），做法是反解那個導出來的負 `max_tokens`（見 {@link isDerivedContextOverflow}）。
  * 同一個端點上兩顆模型差五倍以上——**窗口不能從端點推得，只能逐顆量**。
  *
  * **直接後果**：這一顆身上**逼不出上下文溢出**。`DEFAULT_SUMMARIZATION` 的 `tokens: 100_000`
- * 在 700k 的窗口上是 1/7，摘要會遠遠早於任何溢出發生。{@link isDerivedContextOverflow} 因此
+ * 在這個窗口上約 1/8，摘要會遠遠早於任何溢出發生。{@link isDerivedContextOverflow} 因此
  * 對**預設路徑**是備而不用的——它仍然要留著，因為 eval 會把 `gpt-oss-20b` 那一階逐一傳進
  * {@link createLiveModel}，而那一顆 131,007 就滿了。
  *
  * ## 邊界
  *
- * 它是「這把 key 上量得到的最划算的那個」，不是「這是最好的模型」。**候選集合綁在帳號上，
- * 也綁在時間上**：81 / 26 / 9 這三個數字在六天內從 84 / 29 / 14 走到這裡，成員也換過。
- *
- * **而 9 沒有過 [#85](https://github.com/DemianLi/nexus-agent/issues/85) 的十個門檻。**
- * 那張卡寫的退路是「停下來、回報數字、提醒 demian」，決定權在他 —— #165 因此**沒有**動
- * `survey.ts` 的候選清單，也沒有自己去接第二個端點。完整盤點見
- * [`.docs/model-inventory.md`](../../../.docs/model-inventory.md)。
+ * **候選集合綁在帳號上，也綁在時間上**：`GET /models` 列得出來不代表叫得動，同一把 key 幾輪盤點成員就換過。
+ * 盤點方法與 2026-09-04 的完整結果見 [`.docs/model-inventory.md`](../../../.docs/model-inventory.md)。
  *
  * 這是**預設**的 id：`cli:live` / `serve:live` 走 `live-model` 那一列（出貨值與它相同），
  * `spike:live` 直接吃 schema 預設，eval 的尺寸比較則把各道階梯的 id 逐一傳進 {@link createLiveModel}。
  *
- * **換它之前**：這顆是拿「吃不吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}」當淘汰門檻選出來的，
+ * **換它之前**：新的那顆要先量過吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，
  * 兩個是綁著的（`settings/live-model.ts` 的檔頭）。
  */
-export const DEFAULT_LIVE_MODEL_ID = 'nvidia/nemotron-3-super-120b-a12b';
+export const DEFAULT_LIVE_MODEL_ID = 'nvidia/nemotron-3.5-lightning-30b-a3b';
 
 /** 環境變數名。刻意不叫 `OPENAI_API_KEY`（`@langchain/openai` 的預設），免得這把 key 是誰的變模糊。 */
 export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
@@ -211,19 +208,26 @@ export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
  *
  * - `contextWindow`：見 {@link DEFAULT_LIVE_MODEL_ID} 的「窗口是量到的」，記的是量過的**下限**。
  * - `maxTokens`：{@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，這顆每一次請求送出去的 `max_tokens`。
- * - `input`：只有文字。這顆收不收圖沒有量過，先不宣告收圖（#731 量 gemma 那一筆時一起看）。
+ * - `input`：只有文字。這顆收不收圖沒有量過，不宣告收圖。
  * - `reasoningEfforts` 與 `compat`：關推理的寫法，從原本的 `thinkingOffBody` 搬進來（#650）。**只宣告 `off` 與 `default`
  *   兩級**：這顆開著推理時有沒有分級沒在實際端點量過，`default` 是「不送任何東西、用模型自己的預設」，沒有線上的寫法要送。
- *   `enable_thinking` 那一格寫成 `thinking.enabled` 的佔位符，`off` 那一級把它解成 `false`。寫法照
- *   {@link DEFAULT_LIVE_MODEL_ID} 在 build.nvidia.com 的 model card（「Reasoning OFF」那段）。
+ *   `enable_thinking` 那一格寫成 `thinking.enabled` 的佔位符，`off` 那一級把它解成 `false`。寫法的出處見下面
+ *   「關推理的寫法是量出來的」。
+ * - `tokenizer`：數字逐位切詞，量法見下面。
  *
  * ## 關推理的寫法是量出來的
  *
- * 2026-09-26，預設模型、NVIDIA 閘道、非串流，送 dsh 逐字的標題請求（`maxOutputTokens: 64`），三句輸入各兩次：
+ * 2026-11-02，這顆、NVIDIA 閘道、非串流，標題形狀的請求（`maxOutputTokens: 64`）：
  *
- * - **不帶**：0/6。全部 `finish_reason: length`、64 個 token 用滿，推理 157～293 字，而且整段也出現在正文裡。
- * - **帶這一份**：6/6。全部 `stop`、推理 0、輸出 2～23 個 token。
- * - model card 另一個寫法 `low_effort: true`：3/5，有兩次照樣吃光。
+ * - **不帶**：0/1。`finish_reason: length`、64 個 token 全是推理、正文空。
+ * - **帶這一份**：2/2。`stop`、推理 0、輸出 9～10 個 token。
+ *
+ * 這格的寫法出自 `nemotron-3-super-120b-a12b` 的 model card（「Reasoning OFF」那段），那顆量到不帶 0/6、帶 6/6。
+ *
+ * ## 數字逐位切詞是量出來的
+ *
+ * 2026-11-02：6000 位隨機數字的 `prompt_tokens` 是 6019，比 `say ok` 的 18 多 6001，一位一個 token，所以條目宣告
+ * `tokenizer.digits: 'single'`。
  *
  * ## 它跟這一筆的 id 是綁著的
  *
@@ -233,12 +237,13 @@ export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
  *
  * ## 只有標題這種用途會帶
  *
- * 主請求不帶 `chat_template_kwargs`（預設就是開著）；pi-ai 在非 `off` 的等級底下會明著送 `enable_thinking: true`，
- * 我們不送，**沒有量過兩者等價**——見 `model-catalog.ts` 檔頭。
+ * 主請求不帶 `chat_template_kwargs`，`default` 用模型自己的預設；這顆不帶時會推理（上面「不帶」那組）。pi-ai 在非 `off`
+ * 的等級底下會明著送 `enable_thinking: true`，我們不送：**這顆明送跟不送等不等價沒有量過**，別顆量到不等價——見
+ * `model-catalog.ts` 檔頭。
  */
 export const DEFAULT_LIVE_MODEL_ENTRY: ModelEntry = Object.freeze({
   id: DEFAULT_LIVE_MODEL_ID,
-  contextWindow: 700_045,
+  contextWindow: 784_369,
   maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
   input: Object.freeze(['text' as const]) as ModelEntry['input'],
   reasoningEfforts: Object.freeze({ off: null, default: 'default' }),
@@ -277,13 +282,12 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  *
  * ## 它對**預設模型**是備而不用的，而那不是拔掉它的理由
  *
- * 2026-09-04 換掉預設之後（見 {@link DEFAULT_LIVE_MODEL_ID}），這條路在預設模型上**逼不出來** ——
- * `nvidia/nemotron-3-super-120b-a12b` 吃到 700,045 token 都還是 `200`。留著是因為它守的不是
+ * 這條路在預設模型上**逼不出來**（見 {@link DEFAULT_LIVE_MODEL_ID}）——
+ * `nvidia/nemotron-3-super-120b-a12b` 吃到 700,045 token 都還是 `200`，今天的預設吃到 784,369 token 也是。留著是因為它守的不是
  * 預設那一條路：eval 把 `openai/gpt-oss-20b` 逐一傳進 {@link createLiveModel}，而那一顆
  * **131,007 就滿了**，滿了就是這個 body。**換一顆預設就換一個窗口**，而這個判別式跟預設是誰無關。
  *
- * **現況（#1437 M2，2026-10-14）：預設模型超過窗口時，端點回的是另一種 body，不是這一種。** 對
- * `nvidia/nemotron-3-super-120b-a12b` 送約 157 萬 token 的請求，端點回 `400`，信封是
+ * **現況（#1437 M2，2026-10-14）：`nvidia/nemotron-3-super-120b-a12b` 超過窗口時，端點回的是另一種 body，不是這一種。** 對它送約 157 萬 token 的請求，端點回 `400`，信封是
  * `This model's maximum context length is 1000000 tokens. However, your messages resulted in 1579695 tokens…`，
  * 沒有 `param`、也沒有導出的負 `max_tokens`——所以**這個判別式對它一個都不中**；它命中的是
  * `@langchain/openai` 自己的四個溢出字串之一（`maximum context length`），被包成 `ContextOverflowError`，
@@ -1641,8 +1645,9 @@ export function withStreamUsageReport(baseFetch: typeof fetch = fetch): typeof f
  * 一次模型呼叫的用途。照 dsh `GenerateOptions.purpose`（`packages/llm/llm/src/types.ts:547-552`，`477b4f4`）：
  * 「adapters may map the purpose to … purpose-specific generation policy」，一般的對話請求不帶。
  *
- * - `session-title`：標題（#650）。帶上型錄條目的關推理寫法（`thinkingOffBody`），同 dsh 的 DeepSeek adapter 對這個用途關掉思考
- *   （`packages/llm/llm-deepseek/src/serialize.ts:146`）。
+ * - `session-title`：標題（#650）。帶上型錄條目的關推理寫法（`thinkingOffBody`），結果等價於 dsh 標題程式選最低一級（`off`）推理強度（僅限條目宣告了 `off` 的，見 `settings/live-model.ts` 偏離四）
+ *   （`session-title-first-prompt-llm/src/index.ts:74-76` 的 `selectReasoningEffort`，經 `session-title-llm/src/index.ts:252-258` 帶進 `prepareCall`；
+ *   1517a4db 起機制在 provider 端，`llm-deepseek/src/serialize.ts:147` 讀 `options.reasoningEffort`，不再依 `purpose` 關思考，#1573）。
  *
  * dsh 另有 `compaction`，我們的摘要走另一條路，沒有這一格的消費者。
  */
@@ -1657,6 +1662,37 @@ export function imageBudgetGuard(entry: ModelEntry): RequestGuard | undefined {
   const budget = entry.imageBudget;
   if (budget === undefined || acceptsImages(entry) === 'rejects') return undefined;
   return (messages) => assertImageBudget(messages, budget);
+}
+
+/**
+ * 供應商拒絕憑證（401／403）時往外拋的錯。`message` 是固定句，供應商的原話可能帶部分金鑰，留在 `cause`：
+ * {@link classifyTurnFailure} 沿 `cause` 照舊認出 `AUTH`，`failureOriginalText` 照舊讀得到原文。
+ */
+export class CredentialRejectedError extends Error {
+  override readonly name = 'CredentialRejectedError';
+
+  /** @param cause - 模型呼叫拋出來的原錯誤。 */
+  constructor(cause: unknown) {
+    super(AUTH_FAILURE_MESSAGE, { cause });
+  }
+}
+
+/**
+ * {@link GuardedChatOpenAI} 的換錯函式：`AUTH` 換成 {@link CredentialRejectedError}，原文交給憑證服務寫伺服器日誌。
+ * 前景 `task` 的失敗被圍堵翻成工具結果、不經 `turn/failed`，所以在這裡寫，同一輪的 root 失敗會多一行 `[輪次]`。
+ */
+function credentialRejection(
+  credentials: CredentialService,
+  config: LiveModelConfig,
+): (error: unknown) => unknown {
+  return (error) => {
+    if (error instanceof CredentialRejectedError || isAbortLike(error)) return error;
+    if (classifyTurnFailure(error, true).code !== AUTH_FAILURE_CODE) return error;
+    credentials.reportRejected(
+      `[憑證] 模型服務拒絕了 ${config.apiKeyEnv}（模型 ${config.modelId}）：${thrownMessage(error)}`,
+    );
+    return new CredentialRejectedError(error);
+  };
 }
 
 /**
@@ -1703,7 +1739,7 @@ export function createLiveModel(
   // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
   resolveUsableKey(credentials, config.apiKeyEnv);
 
-  const fields: ChatOpenAIFields = {
+  const fields: GuardedChatOpenAIFields = {
     model: config.modelId,
     // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組；與 #1538 夾在中間外層的完成檢查；
     // 與最外面一層的 `User-Agent`，#1562，只改請求標頭）：最內層是
@@ -1744,6 +1780,7 @@ export function createLiveModel(
     // 分類（下架、溢出、不可重試）與把「這一次值得重打」報給重試那一層，都靠它。
     maxRetries: 0,
     onFailedAttempt: classifyAndReportFailedAttempt,
+    translateFailure: credentialRejection(credentials, config),
     // 用途專屬的請求內容，見 {@link LiveModelPurpose}。**要在建構時給**：建好之後才設 `modelKwargs` 不會進請求
     // （#650 實測，前兩輪的參數就是這樣沒送出去的）。
     ...((purpose === 'session-title' || overrides.thinkingOff === true) &&
@@ -1764,7 +1801,7 @@ export function createLiveModel(
         )
       : requestGate !== undefined
         ? new GatedChatOpenAI(fields, requestGate)
-        : new ChatOpenAI(fields);
+        : new GuardedChatOpenAI(fields);
   // 對話那一顆（含子代理）貼路由標籤（#723）：`model/start.route`、換模型通知與系統提示詞的 `{{model}}` 讀它。標題等別的用途不貼——
   // 它們不是對話的請求，不該冒充「最近一次請求走的路由」。
   return purpose === undefined
@@ -1964,6 +2001,31 @@ function isConnectionLink(link: object, modelCall: boolean): boolean {
 
 /** 這一輪因為巢狀太深而失敗的碼（#1668），見 {@link classifyTurnFailure}「巢狀太深」。不在預設可重試集：同一份歷史重打一樣深。 */
 export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
+/** 主機空間用完（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)）：錯誤鏈上有 `ENOSPC`／`EDQUOT` 的 errno。 */
+export const STORAGE_FULL_CODE = 'STORAGE_FULL';
+/** {@link STORAGE_FULL_CODE} 給使用者的那句。不講哪一區：多人共用主機不帶路徑，管理者看日誌與指標。 */
+const STORAGE_FULL_MESSAGE = '主機的儲存空間滿了，這一輪沒做完，請聯絡管理員。';
+
+/** `code` 給使用者的固定句；不是固定句的碼回 `undefined`。這些碼的原文只進伺服器日誌，見 {@link failureOriginalText}。 */
+export function fixedFailureMessage(code: string): string | undefined {
+  if (code === STORAGE_FULL_CODE) return STORAGE_FULL_MESSAGE;
+  return code === AUTH_FAILURE_CODE ? AUTH_FAILURE_MESSAGE : undefined;
+}
+
+/**
+ * 碼是固定句的那幾種的話，回給伺服器日誌的原文（拆掉 `MiddlewareError` 的整條原因鏈）；其餘回 `undefined`。
+ *
+ * @param failure - {@link turnFailureOf} 的結果。
+ * @param error - 這一輪拋出來的錯。
+ * @returns 要記的原文。
+ */
+export function failureOriginalText(
+  failure: { readonly error: LlmFailure },
+  error: unknown,
+): string | undefined {
+  if (fixedFailureMessage(failure.error.code) === undefined) return undefined;
+  return guarded(() => errorChain(unwrapMiddlewareError(error).root), thrownMessage(error));
+}
 
 /**
  * 把「這一輪為什麼失敗」描述成日誌裡的 {@link LlmFailure}（[#434](https://github.com/DemianLi/nexus-agent/issues/434)），
@@ -1990,6 +2052,7 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}），或模型呼叫的錯誤鏈上有 {@link TIMEOUT_ERROR_CODES} 的碼 | `TIMEOUT` | 是 |
  * | 本機排隊等不到名額（`request-gate.ts` 拋的 `LocalCapacityError`，沒有送請求，#1505） | `LOCAL_CAPACITY` | 否 |
  * | 巢狀太深：任何一環的 `code` 是日誌那一關的 `session_event_depth_exceeded`（`@nexus/core` 的 `SessionEventDepthError`）或存檔點的 `checkpoint_depth_exceeded`（`checkpoint-serde.ts` 的 `CheckpointDepthError`）（#1668） | {@link NESTING_TOO_DEEP_CODE} | 否 |
+ * | 空間用完：任何一環的 `code` 是 `ENOSPC`／`EDQUOT` 而且 `errno` 是數字（#2195） | {@link STORAGE_FULL_CODE} | 否 |
  * | 空回覆（{@link createEmptyResponseMiddleware} 拋的 `EmptyResponseError`） | `EMPTY_RESPONSE` | 是 |
  * | 沒有狀態、連線層的（`APIConnectionError`、模型呼叫的錯誤鏈上有 {@link NETWORK_ERROR_CODES} 的碼、讀串流時被切斷，見 {@link connectionFailures}） | `TRANSPORT` | 是 |
  * | **其餘——不是供應商的錯，或解不開的回應** | `UNKNOWN` | 否 |
@@ -2032,11 +2095,12 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * 沒有這串中介層，照舊靠 `onFailedAttempt`（{@link classifyFailedAttempt}）標。
  *
  * `message` 是呼叫端照舊寫進 `turn/failed.message` 的那句（最外層的 `error.message`），不是底下那個：兩處同一句，
- * 讀的人不用猜哪個才是人話。
+ * 讀的人不用猜哪個才是人話。`STORAGE_FULL`、`AUTH` 例外：換成固定句，原文可能帶主機路徑或部分金鑰，見 {@link fixedFailureMessage}。
  *
  * @param error - 這一輪拋出來的東西，可能已經被包過很多層。
+ * @param fromModelCall - 呼叫端知道這是模型呼叫拋的（還沒被基座包過，看不出來的時候）。
  */
-export function classifyTurnFailure(error: unknown): LlmFailure {
+export function classifyTurnFailure(error: unknown, fromModelCall = false): LlmFailure {
   const message = thrownMessage(error);
   const { root, wrappedModelCall } = unwrapMiddlewareError(error);
 
@@ -2052,9 +2116,14 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let localCapacity = false;
   let invalidCredential = false;
   let tooDeep = false;
+  let storageFull = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
-  const modelCall = wrappedModelCall || links.some((link) => isModelCallFailure(link));
+  // {@link CredentialRejectedError} 自己就是模型呼叫的錯：`cause` 上有原文，不靠外面有沒有包，它要永遠是 `AUTH`。
+  const modelCall =
+    fromModelCall ||
+    wrappedModelCall ||
+    links.some((link) => isModelCallFailure(link) || link instanceof CredentialRejectedError);
   for (const link of links) {
     // 狀態要是 100–599 的整數（#1557，dsh `LlmError` 的欄位規則）：`NaN`、`99`、`429.5` 不是狀態，當作沒有這一格。
     const found = readField(link, 'status');
@@ -2099,6 +2168,9 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
     if (name === 'LocalCapacityError') localCapacity = true;
     if (name === 'InvalidCredentialError') invalidCredential = true;
     if (code === SESSION_EVENT_DEPTH_EXCEEDED || code === CHECKPOINT_DEPTH_EXCEEDED) tooDeep = true;
+    if ((code === 'ENOSPC' || code === 'EDQUOT') && typeof readField(link, 'errno') === 'number') {
+      storageFull = true;
+    }
     if (inband === undefined && modelCall && guarded(() => isInbandApiError(link), false)) {
       const body = readField(link, 'error');
       const envelope =
@@ -2128,14 +2200,21 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
                   ? LOCAL_CAPACITY_CODE
                   : tooDeep
                     ? NESTING_TOO_DEEP_CODE
-                    : empty
-                      ? 'EMPTY_RESPONSE'
-                      : timedOut
-                        ? 'TIMEOUT'
-                        : connection
-                          ? 'TRANSPORT'
-                          : 'UNKNOWN';
-  return llmFailure({ message, code, status, requestId });
+                    : storageFull
+                      ? STORAGE_FULL_CODE
+                      : empty
+                        ? 'EMPTY_RESPONSE'
+                        : timedOut
+                          ? 'TIMEOUT'
+                          : connection
+                            ? 'TRANSPORT'
+                            : 'UNKNOWN';
+  return llmFailure({
+    message: fixedFailureMessage(code) ?? message,
+    code,
+    status,
+    requestId,
+  });
 }
 
 /** `errorChain` 渲染不出來的節點寫的字（`@nexus/core` 的 `error-chain.ts`）。 */
@@ -2146,13 +2225,13 @@ const UNRENDERABLE_VALUE = '<unrenderable value>';
  * 四個寫入點（`thread-pump.ts` 兩處、`background-subagents.ts`、`cli.ts`）都用它，所以全程不會因為拋出來的東西怪（`toString` 會拋、
  * `status` 是 `NaN`）而讓記失敗那一步自己拋錯。
  *
- * 碼不是 `UNKNOWN` 的，訊息維持最外層那一句：模型呼叫的失敗，最外層就是供應商的原話，對應 dsh 的 `LlmError.failure.message`。
+ * 碼不是 `UNKNOWN`、`STORAGE_FULL`、`AUTH` 的，訊息維持最外層那一句：模型呼叫的失敗，最外層就是供應商的原話。
  * **碼是 `UNKNOWN` 的（多半是工具 middleware 的 bug、狀態錯誤）換成 {@link errorChain}**，照 dsh `agent-loop/src/agent.ts:375-381`
  * 對非 `LlmError` 的失敗寫 `{ message: errorChain(error), code: 'UNKNOWN' }`——重新整理後的歷史看得到整條原因鏈
  * （例如「寫入失敗: EACCES: permission denied」）。渲染的是**拆掉 `MiddlewareError` 之後**那一顆：基座每一層都抄底下那一層的
  * `message`，直接渲染最外層會讓同一句重複十幾次。
  *
- * 即時那一顆 `lifecycle failed` frame 由基座發、訊息是最外層那一句，這裡不動它：`UNKNOWN` 的失敗，即時看到短句、重新整理後看到整條。
+ * 即時那一顆 `lifecycle failed` frame 由基座發、訊息是最外層那一句，這裡不動它（`STORAGE_FULL`、`AUTH` 例外：`ThreadPump` 換成同一句固定字）：`UNKNOWN` 的失敗，即時看到短句、重新整理後看到整條。
  *
  * @param error - catch 到的值（`unknown`，可以是任何東西）。
  * @returns `message`（`turn/failed.message`）與 `error`（`turn/failed.error`，`error.message` 與 `message` 同一句）。

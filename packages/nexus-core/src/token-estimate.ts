@@ -58,8 +58,8 @@
  * o200k 的實作是 `gpt-tokenizer`（純 JS、零相依、MIT），不是 `js-tiktoken`。換的理由是速度，而且 token 數**逐位相同**
  * （`token-estimate.test.ts` 的「編碼器對照」用 js-tiktoken 當對照組重算過各種素材）：同一台機器上，一次全新的 10 萬字元
  * 隨機漢字（最壞的素材）js-tiktoken 4.4 秒、gpt-tokenizer 0.13 秒；一般中文散文差約兩個數量級。載入也輕：載入後常駐堆
- * +17 MB（js-tiktoken +72 MB）、載入含初始化 76 ms（222 ms）。它內部有一個合併結果的 LRU（上限 10 萬筆），實測對抗性輸入
- * 之後最多增 14 MB，不會無界成長。**這一換讓 `estimateTextTokens`（外溢層的精確數）同樣變快，數字不變。**
+ * +17 MB（js-tiktoken +72 MB）、載入含初始化 76 ms（222 ms）。它內部合併結果的 LRU 是關掉的（#2241）。
+ * **這一換讓 `estimateTextTokens`（外溢層的精確數）同樣變快，數字不變。**
  * 抽樣（{@link sampledTokens}）與它的誤差界線**沒有動**；編碼器夠快之後還要不要抽樣是另一個問題。
  *
  * ## 量到的
@@ -110,6 +110,10 @@ import { createHash } from 'node:crypto';
 import type { BaseMessage } from '@langchain/core/messages';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
+
+// 關掉合併快取：高熵長文（base64）有快取比沒有慢 10 倍以上，還多佔 100 MiB 以上 RSS；
+// 真實文字不快取也比較快（#2241）。快取只存結果，token 數不變。編碼器是全行程單例，這裡只設這一次。
+o200k_base.setMergeCacheSize(0);
 
 /** 每則訊息的角色框架開銷。#586 的評估用同一個值。 */
 const MESSAGE_OVERHEAD = 4;
@@ -390,6 +394,37 @@ export function estimateMessageTokens(message: BaseMessage): number {
   return messageTokens(message).tokens;
 }
 
+/** {@link warmMessageTokens} 每連續編這麼久（毫秒）就在下一則之前讓出事件迴圈。一則編到一半不讓出，所以實際占用是這個值再加一則的編碼；一則要編的字元數不超過 {@link SAMPLE_OVER_CHARS}，超過就抽樣，見 {@link sampledTokens}。 */
+const WARM_SLICE_MS = 20;
+
+/**
+ * 把一串訊息先編進備忘，時間片用完就在下一則之前讓出事件迴圈（[#2202](https://github.com/DemianLi/nexus-agent/issues/2202)）。
+ *
+ * 估算全是同步的：重開的長對話第一步一次冷編整段歷史，事件迴圈卡到編完，`/livez` 與別條 thread 都跟著停。這裡在同步
+ * 估算之前把訊息走過一次，結果進 `perMessage`，之後估同一個物件只是查表；內容相同、物件換了的只付雜湊與掃數字。這裡不改
+ * 任何數字。換了字串的訊息（被剪過、截過）、system 與工具定義不在這裡編，同步估算碰到時照舊冷編。
+ *
+ * @param messages - 接下來要估的訊息。
+ * @param cancelled - 只在讓出回來時問；回 `true` 就不編剩下的。
+ * @returns `false` 表示讓出回來時被取消，剩下的沒編、已編的留在備忘；`true` 表示全部走完，過程中沒讓出就不曾問過 `cancelled`。
+ * @throws 編碼或序列化訊息內容時拋的錯原樣往外，已編的留在備忘。
+ */
+export async function warmMessageTokens(
+  messages: readonly BaseMessage[],
+  cancelled: () => boolean,
+): Promise<boolean> {
+  let sliceStart = performance.now();
+  for (const message of messages) {
+    if (performance.now() - sliceStart >= WARM_SLICE_MS) {
+      await new Promise((resolve) => setImmediate(resolve));
+      if (cancelled()) return false;
+      sliceStart = performance.now();
+    }
+    messageTokens(message);
+  }
+  return true;
+}
+
 /** 每則訊息的角色框架開銷，加在 o200k 那一截上。 */
 function withOverhead(counted: Counted): Counted {
   return { tokens: counted.tokens + MESSAGE_OVERHEAD, excess: counted.excess };
@@ -422,28 +457,69 @@ function systemTokens(system: unknown): Counted {
   return counted;
 }
 
+/** 一份請求的 E 拆成三格（system 一則、全部工具定義、全部訊息）。每一格都是非負整數。 */
+export interface RequestParts {
+  /** system 那一則（含角色框架開銷）。沒有 system 就是 `0`，不是缺席。 */
+  readonly system: number;
+  /** 全部工具定義的 JSON。沒有工具就是 `0`。 */
+  readonly tools: number;
+  /** 全部訊息（含每則的角色框架開銷與圖）。 */
+  readonly messages: number;
+}
+
+/**
+ * 一份請求的 E（不錨），拆成 system／工具／訊息三格（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）。
+ *
+ * **{@link estimateRequestTokens} 就是這三格相加**，所以兩支永遠一致：加 `singleDigits` 時逐位切詞多出來的那一截算在它所屬的那一格，
+ * 不是另外一格。
+ *
+ * **偏離 dsh（理由 1：基座表達不出來）。** dsh 的 `contextBreakdown`（`packages/llm/token-meter/src/breakdown-projection.ts:1-5` 的
+ * 檔頭與按 `surfaceOp` 放節點的 `:70-107`，`1517a4db`；`22ddee37` 只動型別宣告）從日誌裡的 surface 事件折出「現在還留著什麼」。我們的歷史替換由基座的摘要中介層直接改 state，
+ * 日誌沒有 surface 那一軸（沒有 `surfaceOp`，替換不能掛在事件上，`session-log.ts:948`），純讀日誌的折疊無從知道哪些 system 與訊息還在。
+ * 退到最接近的一格：**量測點手上那份實際送出的請求**，在那裡拆（`summarization.ts` 的 `withTokenBudget`）。
+ *
+ * @param request - 要估的請求；`messages` 可以只給一段前綴。
+ * @param options - `singleDigits`：同 {@link estimateRequestTokens}。
+ * @returns 三格 token 數。
+ */
+export function estimateRequestParts(
+  request: EstimatedRequest,
+  options: { readonly singleDigits?: boolean } = {},
+): RequestParts {
+  const withDigits = (counted: Counted): number =>
+    options.singleDigits === true ? counted.tokens + counted.excess : counted.tokens;
+  const sum = (items: Iterable<Counted>): Counted => {
+    let tokens = 0;
+    let excess = 0;
+    for (const counted of items) {
+      tokens += counted.tokens;
+      excess += counted.excess;
+    }
+    return { tokens, excess };
+  };
+  return {
+    system: withDigits(systemTokens(request.systemMessage)),
+    tools: withDigits(
+      sum(Array.isArray(request.tools) ? (request.tools as unknown[]).map(toolTokens) : []),
+    ),
+    messages: withDigits(sum((request.messages ?? []).map(messageTokens))),
+  };
+}
+
 /**
  * 一份請求的 E（不錨）。
  *
  * @param request - 要估的請求；`messages` 可以只給一段前綴。
  * @param options - `singleDigits`：這顆模型把數字逐位切成一個 token 一位（[#1102](https://github.com/DemianLi/nexus-agent/issues/1102)），
  *   連續數字按位數計，不按 o200k 的三位一組。省略就是 o200k 原樣。
- * @returns token 數：o200k 算出來的，加上 `singleDigits` 時逐位切詞多出來的那一截。
+ * @returns token 數：o200k 算出來的，加上 `singleDigits` 時逐位切詞多出來的那一截。三格拆開的樣子見 {@link estimateRequestParts}。
  */
 export function estimateRequestTokens(
   request: EstimatedRequest,
   options: { readonly singleDigits?: boolean } = {},
 ): number {
-  let tokens = 0;
-  let excess = 0;
-  const add = (counted: Counted): void => {
-    tokens += counted.tokens;
-    excess += counted.excess;
-  };
-  add(systemTokens(request.systemMessage));
-  for (const message of request.messages ?? []) add(messageTokens(message));
-  if (Array.isArray(request.tools)) for (const tool of request.tools) add(toolTokens(tool));
-  return options.singleDigits === true ? tokens + excess : tokens;
+  const { system, tools, messages } = estimateRequestParts(request, options);
+  return system + tools + messages;
 }
 
 /** 一則 AI 訊息的實數，與報它的模型。不是 AI 訊息、或沒有正的實數，就是 `undefined`。 */
@@ -635,16 +711,18 @@ function roundTokens(value: number): number {
  *
  * @param request - 要估的請求。錨從它的 `messages` 裡找。
  * @param book - 帳。由進入點注入，見 {@link TokenAnchorBook}。
- * @returns 估算值與它的來源。
+ * @returns 估算值與它的來源；`estimated` 是這份請求的 E（不錨），`parts` 是 E 拆成的三格（{@link estimateRequestParts}，
+ *   用的是這顆模型同一個 `singleDigits`，所以三格相加就是 `estimated`）。
  */
 export function estimateAnchoredTokens(
   request: EstimatedRequest,
   book: TokenAnchorBook,
-): TokenEstimate & { readonly estimated: number } {
+): TokenEstimate & { readonly estimated: number; readonly parts: RequestParts } {
   const messages = request.messages ?? [];
   const current = modelNameOf(request.model);
   const digits = { singleDigits: book.singleDigits(current) };
-  const estimated = estimateRequestTokens(request, digits);
+  const parts = estimateRequestParts(request, digits);
+  const estimated = parts.system + parts.tools + parts.messages;
   const learned = book.learnedRatio(current) ?? 1;
   const { last, first } = anchorsIn(messages, current);
   if (last >= 0) {
@@ -663,6 +741,7 @@ export function estimateAnchoredTokens(
       tokens: roundTokens(tokens + (estimated - before) * (ratio ?? learned)),
       basis: 'anchor',
       estimated,
+      parts,
     };
   }
   const borrowed = book.firstCall(request);
@@ -671,6 +750,7 @@ export function estimateAnchoredTokens(
       tokens: roundTokens(borrowed.tokens + (estimated - borrowed.estimated) * learned),
       basis: 'borrowed',
       estimated,
+      parts,
     };
-  return { tokens: estimated, basis: 'estimate', estimated };
+  return { tokens: estimated, basis: 'estimate', estimated, parts };
 }

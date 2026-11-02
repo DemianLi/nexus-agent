@@ -70,7 +70,7 @@ dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.t
 **沒記過 `tool/call` 的那種也寫回了**（卡上原本留的一條偏離，理由是我們的配對不變量；dsh 對合成的「還沒開始」結果明文放行，
 `packages/core/session/src/invariant.ts:142-145`，不變量現在也放行，見 `invariant.ts`）。**記憶體裡補的 {@link closer} 還在**，
 管的是另一種：一輪**收掉了**、結果卻沒到齊的那一批（停在核准點的輪，在我們的日誌上是收掉的——`interrupt/raised` 之後有
-`turn/end`；以及舊檔），那種不在「開著的最後一輪」，不在寫回的射程。
+`turn/end`；一輪失敗、當場補寫也失敗的；以及舊檔），那種不在「開著的最後一輪」，不在寫回的射程。
  *
  * **補結可能落在 `session/end-seed` 之後**（舊檔「開著的輪＋end-seed、之後沒有新輪」，照 dsh 的掃描在 end-seed 不重設，
  * 補結接在 end-seed 後面，見 `interrupted-turn.ts`）。所以 end-seed 不能立刻把還沒配齊的那一批補完——補寫的結果可能緊跟在後面，

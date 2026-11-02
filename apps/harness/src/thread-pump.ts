@@ -74,6 +74,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
   APPROVAL_INTERRUPT_KIND,
+  boundContextSummary,
   childProjectionUnits,
   createProjectionFold,
   findPromptRequest,
@@ -101,6 +102,7 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
   turnReachedMaxTokens,
+  unansweredCallResults,
   stampImageOrigin,
   userContent,
   withModelCall,
@@ -176,6 +178,7 @@ import {
   type ParsedReferencedText,
   type SessionReferenceReader,
 } from './session-reference.js';
+import type { SessionReferencePolicy } from './session-reference-budget.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import { isBackgroundAddress } from './background-run-id.js';
 import { capToolResultMeta, toolResultText } from './tool-result-text.js';
@@ -188,7 +191,12 @@ import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
 import { startTurnClock, unsettledToolNames } from './turn-clock.js';
 import type { TurnClock } from './turn-clock.js';
 // 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
-import { turnFailureOf } from './live-model.js';
+import {
+  classifyTurnFailure,
+  failureOriginalText,
+  fixedFailureMessage,
+  turnFailureOf,
+} from './live-model.js';
 import {
   answerElicitation,
   declineAll,
@@ -344,6 +352,7 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         text: item.text,
         summary: source.summary,
         ...(source.reason === undefined ? {} : { reason: source.reason }),
+        ...(source.cause === undefined ? {} : { cause: source.cause }),
         senderSessionId: source.senderSessionId,
       };
     case 'agent-message':
@@ -381,6 +390,7 @@ function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
         form: 'notice',
         summary: source.summary,
         ...(source.reason === undefined ? {} : { reason: source.reason }),
+        ...(source.cause === undefined ? {} : { cause: source.cause }),
         senderSessionId: source.senderSessionId,
       };
     case 'agent-message':
@@ -472,6 +482,8 @@ export type PumpInput =
       readonly summary: string;
       /** 怎麼收的（#884）。選填：從舊日誌折出來的排著的一件沒有。 */
       readonly reason?: SubagentSettleReason;
+      /** `reason` 是 `aborted` 時為什麼停（#1847）。選填，同上。 */
+      readonly cause?: TurnAbortCause;
       readonly senderSessionId: string;
     }
   | {
@@ -763,7 +775,7 @@ interface ForwardedFinish {
  * 把日誌的判定套到一顆 `tool-finished` 的 data 上。
  *
  * `message` 是**這次呼叫的結果文字**，成功與失敗都帶（#439）：成功時就是日誌那一則的內容，
- * 沒抽出文字（多塊內容）就不帶這一格；失敗時取同一段字，沒有的話退回本體自己說的，再退回
+ * 沒抽出文字（內容混了非文字）就不帶這一格；失敗時取同一段字，沒有的話退回本體自己說的，再退回
  * 「未指名的錯誤」。畫面上分紅字還是輸出，看的是 `failed`，同 dsh 的 content ＋ isError。
  */
 function applyVerdict(
@@ -827,6 +839,7 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
         text: input.text,
         summary: input.summary,
         ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.cause === undefined ? {} : { cause: input.cause }),
         senderSessionId: input.senderSessionId,
       };
     case 'agent-message':
@@ -1145,6 +1158,22 @@ function isRootCompleted(raw: RawProtocolEvent): boolean {
   );
 }
 
+function isRootFailed(raw: RawProtocolEvent): boolean {
+  return isRootTerminal(raw) && (raw.params.data as { event?: unknown } | null)?.event === 'failed';
+}
+
+/** 這顆 `failed` frame 補上錯誤碼，固定句的碼連字一起換，同 `turn/failed`。 */
+function withFailureDetail(raw: RawProtocolEvent, error: unknown): RawProtocolEvent {
+  const { code } = classifyTurnFailure(error);
+  const fixed = fixedFailureMessage(code);
+  const data = {
+    ...(raw.params.data as object),
+    code,
+    ...(fixed !== undefined && { error: fixed }),
+  };
+  return { ...raw, params: { ...raw.params, data } } as RawProtocolEvent;
+}
+
 function isRootTerminal(raw: RawProtocolEvent): boolean {
   if (raw.method !== 'lifecycle' || raw.params.namespace.length > 0) return false;
   const data = raw.params.data as { event?: unknown; graph_name?: unknown } | null;
@@ -1378,6 +1407,8 @@ export class ThreadPump {
   readonly #turnClock: TurnClock | undefined;
   /** 這條 thread 自己的外溢存檔服務（#1553 N0948），見建構參數 `spillStore`。 */
   readonly #spillStore: SpillStore | undefined;
+  /** 引用別的會話的上限與預算（#1573 N0862），見建構參數 `referencePolicy`。 */
+  readonly #referencePolicy: SessionReferencePolicy | undefined;
   /** 有一件正在跑（一輪 run，或一次收回）。 */
   #busy = false;
   /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
@@ -1445,6 +1476,9 @@ export class ThreadPump {
    * @param spillStore - 這條 thread 自己的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948）：
    *   引用別的會話被截斷時，全文存進這裡、模型拿到讀得回的位址（dsh `session-reference/src/index.ts:348-352`）。同一份實例也給
    *   外溢層與搜尋上限用（`agent-factory.ts`）。**省略即沒有地方存**，說明裡寫 `storage-not-configured`。
+   * @param referencePolicy - 引用別的會話的上限與預算（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862，
+   *   `session-reference` 那一列）：一則訊息最多幾條，與每條來源的位元組預算（跟著這條 thread 下一步會走的模型）。
+   *   **省略即 3 條、每條 64 KiB**（`MAX_SESSION_REFERENCES`、`DEFAULT_MAX_REFERENCE_BYTES`），同今天。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1465,9 +1499,11 @@ export class ThreadPump {
     onTurnFailed?: (report: TurnFailedReport) => void,
     turnClock?: TurnClock,
     spillStore?: SpillStore,
+    referencePolicy?: SessionReferencePolicy,
   ) {
     this.#turnClock = turnClock;
     this.#spillStore = spillStore;
+    this.#referencePolicy = referencePolicy;
     this.#downlinkMaxBytes = downlinkMaxBytes;
     this.#onTurnFailed = onTurnFailed;
     this.#agent = agent;
@@ -1837,7 +1873,8 @@ export class ThreadPump {
    * 它們留在隊裡，等中斷被回答或收回、那一輪收掉之後才照 FIFO 跑。答覆（`resume`）排在它們前面。
    *
    * 回傳的 promise 在**這一段** run 抽完時 resolve（跑完或停在核准點都算）；停住的那段要等它真的
-   * 跑完。收線時還停著的會 reject。上行的 handler 不等它——那是收件回條，不是「跑完了」。
+   * 跑完。收線時還停著的會 reject。這一輪失敗就以原錯 reject；當場補寫沒配到結果的呼叫也失敗時是 `AggregateError`
+   * （`cause` 是原錯，見 {@link ThreadPump.#closeUnansweredCalls}）。上行的 handler 不等它——那是收件回條，不是「跑完了」。
    *
    * **插話**（`steer`，[#710](https://github.com/DemianLi/nexus-agent/issues/710)）：這一輪還收插話（{@link ThreadPump.#acceptsSteer}）
    * 就排進 `next-step`，回的 promise 當場 resolve——它不開一段 run，由跑著的那一段在下一步領走。不收了就照送出開一輪，
@@ -1947,20 +1984,23 @@ export class ThreadPump {
    * 按了停止之後停住的佇列**不被這個叫醒**：那是「下一次人送出」才放行的（#637 的 Q2），機器的通知不替人放行。
    *
    * @param notice.text - 送進模型的那一串字。
-   * @param notice.summary - 一行摘要（記在來源上）。
+   * @param notice.summary - 一行摘要（記在來源上，經 {@link boundContextSummary} 夾到 `CONTEXT_SUMMARY_MAX_CHARS` 以內，#1567 N0136）。
    * @param notice.reason - 怎麼收的（記在來源上，#884）；畫面據它分「完成、被停止、失敗、超出上限」。
+   * @param notice.cause - 被中止時為什麼停（記在來源上，#1847）。
    * @param notice.senderSessionId - 結算的背景子代理的會話 id。
    */
   notifySettled(notice: {
     readonly text: string;
     readonly summary: string;
     readonly reason: SubagentSettleReason;
+    readonly cause?: TurnAbortCause;
     readonly senderSessionId: string;
   }): void {
     this.#deliverMachineInput(notice.text, {
       kind: 'subagent-settled',
-      summary: notice.summary,
+      summary: boundContextSummary(notice.summary),
       reason: notice.reason,
+      ...(notice.cause === undefined ? {} : { cause: notice.cause }),
       senderSessionId: notice.senderSessionId,
     });
   }
@@ -2262,7 +2302,7 @@ export class ThreadPump {
     } catch (error) {
       const failure =
         error instanceof Error ? error : new Error(thrownMessage(error), { cause: error });
-      this.#reportTurnFailed(log.append('turn/failed', turnFailureOf(error)));
+      this.#reportTurnFailed(log.append('turn/failed', this.#turnFailureNoted(error)));
       throw failure;
     }
     // 那幾張卡照上面寫的 `tool/result` 收（#297）。**不走日誌的訂閱者**：它只認有 run 的時候，
@@ -2639,7 +2679,7 @@ export class ThreadPump {
    * @throws {@link SessionReferenceError} 網址壞、引用自己、超過上限、或這條 thread 不收引用。
    */
   referencedText(text: string): ParsedReferencedText {
-    const parsed = parseReferencedText(text, this.#threadId);
+    const parsed = parseReferencedText(text, this.#threadId, this.#referencePolicy?.maxReferences);
     if (
       parsed.references.length > 0 &&
       (this.#referenceReader === undefined || !this.#stepInboxMounted)
@@ -2724,7 +2764,13 @@ export class ThreadPump {
     ];
     const reader = this.#referenceReader;
     const signal = current.controller.signal;
-    const prepared = jobs.some((job) => job.references.length > 0)
+    const hasReferences = jobs.some((job) => job.references.length > 0);
+    // **這一批的預算在第一個 await 之前同步算一次，整批共用**（#1573 N0862）：開場那句與插話走同一處（step-inbox 的 `claim`），
+    // 同一批的兩句不會各算各的。路由用控制器的 `next()`（純讀日誌），不叫 `assembleStep()`／`takeStepRoute()`，見
+    // `ModelSelectionHost.nextContextWindow`。領走發生在這一步的 `beforeModel` 裡、早於後面的 `assembleStep()`，所以這一步的路由
+    // 還沒定，見 `session-reference.ts` 檔頭偏離 5。沒有引用就不算，免得每一步都掃一次日誌。
+    const maxReferenceBytes = hasReferences ? this.#referencePolicy?.budgetBytes() : undefined;
+    const prepared = hasReferences
       ? await Promise.all(
           jobs.map((job) =>
             job.references.length === 0
@@ -2740,6 +2786,7 @@ export class ThreadPump {
                     })(),
                   messageId: job.snapshotId,
                   signal,
+                  ...(maxReferenceBytes !== undefined && { maxReferenceBytes }),
                   ...(this.#spillStore !== undefined && { spillStore: this.#spillStore }),
                 }),
           ),
@@ -2879,6 +2926,52 @@ export class ThreadPump {
       job.resolve();
     }
     this.#stopParked = this.#queue.some((job) => !job.answers);
+  }
+
+  /**
+   * 一輪失敗、寫 `turn/failed` 之前，替這一輪**沒配到結果的呼叫**當場補錯誤結果（[#2029](https://github.com/DemianLi/nexus-agent/issues/2029)）。
+   * 不補的話日誌上那幾顆一直沒有配對：續接的補結看到 `turn/failed` 就當這一輪收了，不會替它補。
+   *
+   * 結果從 {@link unansweredCallResults} 拿，句子與碼同續接的補結。對話那一側也由這裡寫，同 {@link ThreadPump.#withdraw}：
+   * 存檔點上還懸著的那幾顆推同一則 ToolMessage 進去，下一輪就不會由基座補上那句成因錯的話（#265 的 Q12）。
+   * 只推存檔點上真的懸著的：模型那一步還沒進存檔點就失敗的話，那則回覆不在 state 裡，推進去會是一則沒有呼叫的結果。
+   * 先寫日誌、再寫存檔點：存檔點那一步失敗時日誌已經有結果，存檔點沒有，下一輪那幾顆由基座補（句子不同，則數一樣）。
+   *
+   * @param failure - 這一輪的原錯。
+   * @returns 原錯；補寫也失敗時是把兩個錯一起帶出來的 `AggregateError`，`cause` 是原錯，沿 `cause` 認錯的地方照舊認得出原錯。
+   */
+  async #closeUnansweredCalls(failure: Error): Promise<Error> {
+    const log = this.#sessions.root;
+    try {
+      const results = unansweredCallResults(log.events);
+      if (results.length === 0) return failure;
+      for (const { data } of results) log.append('tool/result', data);
+      const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
+      const pending = new Set(
+        danglingToolCalls((await this.#agent.getState(config)).values).map((call) => call.id),
+      );
+      const messages = results
+        .filter(({ data }) => pending.has(data.callId))
+        .map(({ message }) => message);
+      if (messages.length > 0) await this.#agent.updateState(config, { messages });
+      return failure;
+    } catch (recoveryError) {
+      return new AggregateError(
+        [failure, recoveryError],
+        '這一輪失敗，沒配到結果的工具呼叫也補不進去',
+        { cause: failure },
+      );
+    }
+  }
+
+  /** {@link turnFailureOf}，固定句的碼多寫一行伺服器日誌：原文只留在這裡。 */
+  #turnFailureNoted(error: unknown): ReturnType<typeof turnFailureOf> {
+    const failure = turnFailureOf(error);
+    const original = failureOriginalText(failure, error);
+    if (original !== undefined) {
+      this.#warn?.(`[輪次] thread ${this.#threadId} ${failure.error.code}：${original}`);
+    }
+    return failure;
   }
 
   /** `turn/failed` 寫進日誌之後通知外面（#1536）。回呼拋錯吞掉：通知是附帶的，不能改變這一輪怎麼收尾。 */
@@ -3062,14 +3155,31 @@ export class ThreadPump {
       markProjectionsHandled(run);
       // 圖在串流被抽的時候推進，工具在這條 async 鏈上執行：包進 `runScope`，模型在輪內的 `update_goal` 才認得出自己是這一輪。
       await runScope.run(current, async () => {
-        for await (const raw of run) {
-          this.#applyStreamRetrySignal(current, raw);
-          trackRootReply(current, raw);
-          trackUnsettledReply(current, raw);
-          for (const event of this.#translate(raw)) {
-            this.#broadcast(event);
+        // 收尾的 `failed` frame 只帶字串，真的錯要等緊接著的拋出才看得到，所以押到那時候才送。
+        let heldFailure: RawProtocolEvent | undefined;
+        const send = (raw: RawProtocolEvent): void => {
+          for (const event of this.#translate(raw)) this.#broadcast(event);
+        };
+        const releaseFailure = (error?: unknown): void => {
+          if (heldFailure === undefined) return;
+          const raw = heldFailure;
+          heldFailure = undefined;
+          send(error === undefined ? raw : withFailureDetail(raw, error));
+        };
+        try {
+          for await (const raw of run) {
+            this.#applyStreamRetrySignal(current, raw);
+            trackRootReply(current, raw);
+            trackUnsettledReply(current, raw);
+            releaseFailure();
+            if (isRootFailed(raw)) heldFailure = raw;
+            else send(raw);
           }
+        } catch (error) {
+          releaseFailure(error);
+          throw error;
         }
+        releaseFailure();
       });
       // 串流抽完就關窗（#710）：圖收尾時通常已經關了（`finish`），這裡擋的是沒經過那顆 middleware 就收掉的圖——停在
       // 核准點的不算，那時之後的插話由 `#pending` 那一條收。
@@ -3112,10 +3222,15 @@ export class ThreadPump {
       }
       // 失敗的原因已經以 `lifecycle failed` 上了線（實測：失敗 frame 先發、然後才拋），
       // 所以這裡不再合成一顆。下行**不關**——這條線是長期的，下一次 submit 還要用。
-      const failure =
+      const thrown =
         error instanceof Error ? error : new Error(thrownMessage(error), { cause: error });
+      const failure = await this.#closeUnansweredCalls(thrown);
+      // 沒包成 AggregateError 就照舊拿原始的 `error` 分類：非 Error 的拋出物，分類要看它本身，不是包它的那一層。
       this.#reportTurnFailed(
-        this.#sessions.root.append('turn/failed', turnFailureOf(error)),
+        this.#sessions.root.append(
+          'turn/failed',
+          this.#turnFailureNoted(failure === thrown ? error : failure),
+        ),
         claimed?.id,
       );
       this.#stopRequested = false;
@@ -3331,7 +3446,7 @@ export class ThreadPump {
    *
    * @param id - 中斷的 id。
    * @param response - 人的回覆（`{ decisions: [{ type }] }`）；`undefined` 是問題被收回（按了停止）。
-   *   看不懂的回覆**不記**：閘門收到它會拋（`approval.ts` 的「核准回覆看不懂」），沒有結局可言，那一對留著開著。
+   *   不是 `approve` 也不是 `reject` 的回覆記 `unavailable`：沒有拿到有效的決定，提問的一方照拒絕處理，碼是 `APPROVAL_INVALID_REPLY`（#2027）。
    */
   #noteApprovalDecided(id: string, response: unknown): void {
     if (!this.#approvalOpen.delete(id)) return;
@@ -3342,7 +3457,7 @@ export class ThreadPump {
       const type = (response as { decisions?: { type?: unknown }[] } | null)?.decisions?.[0]?.type;
       if (type === 'approve') outcome = 'allowed-once';
       else if (type === 'reject') outcome = 'rejected';
-      else return;
+      else outcome = 'unavailable';
     }
     this.#sessions.root.append('approval/decided', { id, outcome }, { ignorable: true });
   }
@@ -3472,13 +3587,15 @@ export class ThreadPump {
       // 這一種（`interrupted` 是停下來等輸入），所以用一格我們自己的 `aborted` 讓畫面分得出
       // 「已停止」與「失敗」（#265 的 Q13）。
       current.stopped = true;
+      // 取消不是失敗，不帶碼。
+      const { code: _code, ...data } = raw.params.data as { code?: string };
       yield this.#seal({
         method: raw.method,
         params: {
           namespace: raw.params.namespace,
           timestamp: raw.params.timestamp,
           data: {
-            ...(raw.params.data as object),
+            ...data,
             aborted: true,
             cause: current.cause ?? USER_CAUSE,
           },

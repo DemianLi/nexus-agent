@@ -1,4 +1,4 @@
-import type { Context } from '@nexus/cordis';
+import { Context } from '@nexus/cordis';
 import { describe, expect, it } from 'vitest';
 
 import { checkConformance } from './conformance.js';
@@ -161,7 +161,7 @@ describe('一致性套件：插件提供的服務（#1456）', () => {
   it('撤除時不刪服務（服務掛在 root、不隨那一列走）：unload 紅，訊息指名「還留在 root 上」', async () => {
     const leaky = provider((ctx) => {
       class Leaky extends GadgetService {}
-      const leaked = new Leaky(ctx.root as Context);
+      const leaked = new Leaky(ctx[Context.root] as Context);
       (leaked as { provider: string }).provider = 'row-widget';
     });
     const failures = await checkConformance(target({ module: leaky }));

@@ -14,6 +14,8 @@
  *
  * 量具：一顆**遷出的函式插件**（有 `manifest` 匯出），`apply` 裡數一次、`ctx.fiber.dispose()`。出貨清單上沒有任何插件
  * 會這樣做，所以只能用夾具。
+ *
+ * 寫入口的試掛（#2073）在這裡換成不掛：正式環境的寫入口是另一個行程，同一個行程裡試掛的 `apply` 會算進同一個計數。
  */
 
 import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -105,7 +107,8 @@ function home(options: { readonly seedInsert?: boolean; readonly apply?: string 
     dir,
     module,
     applied: () => ((globalThis as Record<string, unknown>)[counter] as number | undefined) ?? 0,
-    change: async (change) => (await changePlugin(change, { env })).record?.seq,
+    change: async (change) =>
+      (await changePlugin(change, { env, trial: async () => [] })).record?.seq,
   };
 }
 

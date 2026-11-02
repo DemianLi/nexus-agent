@@ -1,5 +1,5 @@
 /**
- * 瀏覽器護欄的測試頁（#1512）：把關鍵元件原樣畫出來，`guard.test.ts` 用真的 Chrome 量它們在**出貨 CSS** 下的計算值。
+ * 瀏覽器護欄的測試頁（#1512）：把關鍵元件原樣畫出來，`*.test.ts` 用真的 Chrome 量它們在**出貨 CSS** 下的計算值。
  *
  * - 本頁**不寫任何 class**，版面只用 inline style：寫了 class 也不在出貨的 CSS 裡，量到的會是「沒有樣式」（`src/guard-page.test.ts` 擋）。
  * - 要量的元素掛 `data-guard-*`：
@@ -11,9 +11,9 @@
  *   - `data-guard-docked`：貼在輸入框上方的卡片（`Surface tone="docked"`），量它是不是平的（1px 邊、沒有投影）。
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
- *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、清單開著三種狀態各量一次字色對底色（chip 三階，#1512；#1591 起量底列的 Pick）。
- *   - `data-guard-press`：平常、滑鼠移上去、按著（`:active`）三種狀態各量一次字色對底色：次要字疊在 `chip-hover`、`chip-pressed`
- *     上的真消費者。
+ *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、清單開著三種狀態各量一次字色對底色（輸入框底列的 Pick，#1591）。
+ *   - `data-guard-press`：平常、滑鼠移上去、按著（`:active`）三種狀態各量一次字色對底色：平常是次要字疊在頁面上，移上去與按著
+ *     照 SG ghost 是 foreground 疊在 SG 的 `--hover` 上（#1689）。
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
  *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:642-679`
  *     靠 vendor Button 輸出的 `data-variant` 命中（#1523）。
@@ -31,7 +31,7 @@
  *   - `data-guard-height`：下拉選單的選項，量畫出來的高度（觸控高度：1024 以下 44px、以上 32px，#1583 本地修改第 25 條）。
  *   - `data-guard-shown`：側欄列的「⋯」，量 `opacity`（選單開著時要看得見：Trigger 開著掛 `data-popup-open`，#1583）。
  *   - `data-guard-checks`：command 勾選的那一列，量它看得見的勾有幾顆、報讀名稱是什麼（vendor 附的勾由覆寫檔藏掉，#1583 本地修改第 27 條）。
- *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `guard.test.ts` 開頁後補上，見 `OVERLAY_MARKS`。
+ *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `harness.ts` 的 `openOverlay` 開頁後照 `OVERLAYS` 的 `marks` 補上。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  * - `?overlay=<名字>` 換成只畫一個開著的 modal 浮層（#1583）：modal 會把頁面其他部分設成 inert，跟主頁的焦點量測放不到一起。
@@ -48,10 +48,13 @@
  * - `?overlay=questionnaire` 畫產品的提問面板（#1638 PR C），量選項的焦點外框（offset、不帶 ring）與字的對比。
  * - `?overlay=tool-steps` 畫 SG 的 tool-steps（nexus 的包裝層，#1682 PR A）：一段展開的群組（執行中、完成、失敗各一列，完成與失敗的列展開）
  *   與一列單獨放在頁面上、展開的列。量執行中不閃、結果框聚焦的外框、1024 以下 44px、減少動態時箭頭不轉場、疊在清單裡的結果框不 blur
- *   （README 本地修改第 61–65 條）。兩塊各包一層 `data-guard-tool`（`group`、`standalone`）給 `guard.test.ts` 找。
+ *   （README 本地修改第 61–65 條）。兩塊各包一層 `data-guard-tool`（`group`、`standalone`）給 `*.test.ts` 找。
  * - `?overlay=tool-cards` 畫產品的工具卡與工具段（#1682 PR B）：一段打開的工具段（兩張完成的卡，第一張展開）、單獨的卡（執行中、
  *   等你回答、完成展開、失敗展開、停止的提問、子代理歸屬、背景子代理、撞到輸出上限）。量三種底上的字（頁面、清單的 `--panel`、結果框）、
  *   Badge、背景子代理的狀態字、錯誤框與撞到上限那段說明的紅字，列、群組、結果框的焦點；`data-guard-cards` 包整頁。
+ * - `?overlay=stage-surfaces` 畫其餘畫在 stage 上的面（#1689）：讀檔、搜尋、交付、待辦四張展開的工具卡，撞到輸出上限、帶半段輸出的
+ *   子代理卡，交付清單，回覆裡的程式碼區塊（`.md-code`），以及經過換手層、MCP 反問、帶「拒絕」的提問面板（釘在底部的那一列）。
+ *   `*.test.ts` 不量這一頁：它讓 stage 的每一種消費者都畫得出來，給換底色時逐一實量面、字與 sticky 的差，以及前後截圖。
  * - `?overlay=reasoning` 畫產品的推理列（SG 的 `Reasoning`，#1683）：講完的一列（內文有粗體、清單、行內 code、連結）、還在想的一列
  *   （摘要很長，量 375 寬往左裁）、夾在一段打開的工具段裡的一列（`StepList` 的 `--panel` 上）。量字的對比（頁面與 `--panel` 兩種底、
  *   「思考中」的漸層與減少動態時停住的那一格）、焦點、AX 樹、箭頭、44px、shimmer、`white-space`；三塊各包一層 `data-guard-reasoning`
@@ -64,30 +67,82 @@
  * - `?overlay=diff-stats` 畫增刪行數（SG 的 `DiffStats`＋nexus 包裝層，#1685 PR A）：頁面上一顆、工具段裡寫檔那張卡、改動卡（讀假的
  *   fetch，路徑故意很長）；測試再點開審查頁與選檔器。量 `+`／`−` 在四種底上的對比、算出來的顏色是 `--success`／`--destructive`（第 75 條）、
  *   375 寬不被擠（第 76 條）；三塊各包一層 `data-guard-diffstats`（`page`、`panel`、`changes`）。
+ * - `?overlay=transcript-rows` 畫對話流裡用到 SG `DotLoader`／`Empty` 的三種列（#1695 PR A）：輪尾的重試提示、往前翻的待命／讀取中／
+ *   失敗三格（各包一層 `data-guard-pager`，寬度同 `App.tsx` 的對話欄，最寬 42rem），一格按得動的往前翻（`live`：按下去讀取
+ *   300ms 再回到待命），以及空白畫面。量字的對比、焦點、點的大小與顏色、減少動態時停住，待命、讀取中與 `live` 一樣高。
+ * - `?overlay=transcript-refs` 畫產品的 `Transcript`（#1695 PR B）：一則人話帶兩個會話引用（`@部署腳本除錯` 能點、`@月報` 不能點）、
+ *   一則壓縮標記與一則決定紀錄（置中的 chip），前面墊幾輪對話讓它捲得動（捲到底的鈕）；底下一條斷線中的狀態列（「立刻重連」）
+ *   與封存橫幅。
+ *   量引用的底線、引用與 chip 的字、引用與「立刻重連」的焦點外框，以及兩顆鈕與 chip 的圓角。
+ *   壓縮標記與封存橫幅不量，放著給 X2、X5 的前後截圖對照（#1695〈驗收〉）。
+ * - `?overlay=handoff` 畫核准與換手這一組（#1694）：換手層裡的核准卡（有允許／不允許的、只剩「停止這一輪」的）、可收起的提問面板（收起鈕）、送出佇列、輸入框上方的委派
+ *   chip 與對話裡的委派標記，以及展開的背景子代理卡兩張（跑著、閒著；各包一層 `data-guard-handoff`）。量子代理面板的字、焦點
+ *   外框與幾顆鈕的圓角；核准卡的呼吸光一圈還是兩圈只記錄、不斷言，交給截圖（#1694〈要看稿確認〉）。
+ * - `?overlay=plan` 畫計劃與目標這一組（#1692）：輸入框上方的計劃模式標籤三塊（能按、跑著停用、按下去會回失敗原因；各包一層
+ *   `data-guard-plan`）、計劃審核面板（有右側欄，帶「查看全文」）、帶結果 chip 的計劃卡，以及目標列（帶暫停鈕）。量 SG Badge 不在 Tab
+ *   順序裡、「退出」鈕的名稱與停用、字與焦點外框、圓角（#1827 G2），375 寬時幾顆鈕 44px 高。
+ * - `?overlay=trace-heads` 畫觀測分頁一輪標頭的九種收法（#1690 T8，各包一層 `data-guard-head`）；`trace-empty`、`trace-plan`、
+ *   `trace-digests`、`trace-groups`、`trace-subagent`、`trace-steps` 各畫一個打開觀測分頁的右側欄（產品的 `RightSidebarPanel`，假的
+ *   `trajectoryTurn` 照 seq 回應，`trace-digests` 一律不回）：空狀態、計劃那一列（結果 chip、定位鈕）、更早的摘要、只有摘要的組、子代理的呼叫結構、
+ *   一輪裡的各種列（`trace-steps`，#1690 T3、T5、T7：輸入、重試、成功與失敗的工具、兩次模型呼叫、派出子代理的工具，子代理推了一輪兩次呼叫）。
+ *   量狀態膠囊的字、載入細節的鈕與進度、空狀態、圓角，以及分頁只有一格 `role=status`（#1690）；`trace-steps` 另量列、數字格、結果框的字與焦點外框，375 寬時列高 44px。
+ * - `?overlay=cost` 畫打開成本分頁的右側欄（產品的 `RightSidebarPanel`：root 的總帳、口徑、兩個背景子代理，假的讀取照 runId 回應），
+ *   主區放頂列的用量鈕（#1691）。量用量鈕的圓角（#1827 G2）、字與焦點外框，分頁裡的總計與子代理列的字。
+ * - `?overlay=right-empty` 畫打開、但一個分頁都沒有的右側欄（產品的 `RightSidebarPanel`，#1696）：收起鈕與兩顆「打開某面板」的鈕，
+ *   量圓角（#1827 G2）、字與焦點外框。
+ * - `?overlay=thread-statuses` 畫產品的左側欄（`AppSidebar`，#1696 S1-C）：目前這條在跑，另外五種狀態與一條沒有狀態的各一列，
+ *   有幾條是長標題，每列都有「⋯」。手機寬度時抽屜自己打開。量狀態字、色條、焦點外框、報讀名稱，以及窄側欄裡標題沒被擠掉。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
-import { emptyConversation } from '@nexus/wire';
+import {
+  APPROVAL_PENDING_KIND,
+  MODEL_USAGE,
+  SESSION_STATS,
+  TOKEN_USAGE,
+  TRAJECTORY_PROJECTION,
+  TRAJECTORY_VERSION,
+  emptyConversation,
+  reduceAll,
+} from '@nexus/wire';
 import type {
   ConversationEntry,
+  ConversationState,
+  PendingApproval,
+  WireQueuedInput,
   WireAttachmentRef,
   CompactionEntry,
   PendingQuestion,
+  PlanModePayload,
+  WireGoal,
   ToolEntry,
   WireContextPressure,
   WireTodoItem,
 } from '@nexus/wire';
 import { Check, MoreHorizontal } from 'lucide-react';
 import { StrictMode, useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { createRoot } from 'react-dom/client';
 
+import { AgentMentionChip } from '@/components/agent-mention-chip';
+import { ApprovalCard } from '@/components/approval-card';
+import { ArchivedBanner } from '@/components/archived-banner';
 import { CompactionRow } from '@/components/compaction-row';
+import { EarlierPager } from '@/components/earlier-pager';
+import type { EarlierHistory } from '@/components/earlier-pager';
+import { DelegatedChip } from '@/components/delegated-chip';
+import { EmptyHero } from '@/components/empty-hero';
 import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { PendingSwap } from '@/components/pending-swap';
+import { PlanChip } from '@/components/plan/chip';
+import { PlanReviewPanel, PlanToolCard } from '@/components/plan/review';
+import { GoalBar } from '@/components/goal-bar';
 import { QuestionPanel } from '@/components/question-panel';
+import { QueueDock } from '@/components/queue-dock';
 import { ReasoningRow } from '@/components/reasoning-row';
+import { SessionReferenceContext } from '@/components/session-reference';
 import { StatusLine } from '@/components/status-line';
 import { RetryNotice } from '@/components/retry-notice';
 import { Surface } from '@/components/surface';
@@ -104,14 +159,42 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import { createChangesStores } from '@/lib/changes-diff';
+import type { LocatedFile } from '@/lib/deliverables-view';
+import { PARTIAL_OUTPUT_HEADING, SUBAGENT_MAX_TOKENS_REASON } from '@/lib/max-tokens-view';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
+import { planDocument, planReviewOf } from '@/lib/plan-review';
 import { serverClock } from '@/lib/server-clock';
+import type { SubagentUsageLoader } from '@/lib/subagent-usage';
 import { Script } from '@/test/conversation-frames';
-import { turn, view, withTrajectory } from '@/test/trajectory-fixtures';
+import {
+  call,
+  digest,
+  projectionFrame,
+  tool,
+  turn,
+  view,
+  withTrajectory,
+} from '@/test/trajectory-fixtures';
 import { AttachmentRail } from '@/components/attachment-rail';
 import { SentAttachments } from '@/components/sent-attachments';
 import { ChangesCard } from '@/components/changes/card';
-import { RightSidebarPanel, RightSidebarProvider } from '@/components/sidebar/right-sidebar';
+import { DeliverablesCard } from '@/components/deliverable/card';
+import { MarkdownText } from '@/components/markdown-text';
+import {
+  RightSidebarPanel,
+  RightSidebarProvider,
+  RightSidebarToggle,
+} from '@/components/sidebar/right-sidebar';
+import { AppSidebar } from '@/components/sidebar/app-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
+import { TurnHeader } from '@/components/trace/turn-head';
+import { createConversationStore } from '@/lib/conversation-store';
+import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
+import type { ThreadDirectory } from '@/hooks/use-thread-directory';
+import type { ThreadManagement } from '@/lib/thread-management';
+import type { RowStatus } from '@/lib/thread-status';
+import type { TurnHead } from '@/lib/trace-view';
+import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -345,8 +428,8 @@ function GuardPage() {
         </div>
 
         {/* 輸入框底列的 Pick（#1591 驗收 D）：平常、滑鼠移上去、按下去，12px 的次要字都過 4.5；權限「全開」換成警示色，
-            三種狀態都留著（本地修改第 35 條）。底列在輸入框外面、直接疊在頁面的底上，所以放在頁面上量。重試那一行是平的
-            chip 底加次要文字（#1512）。用量環（#1591 起沒有字）在 composer 頁量。 */}
+            三種狀態都留著（本地修改第 35 條）。底列在輸入框外面、直接疊在頁面的底上，所以放在頁面上量。重試那一行是次要文字、
+            沒有底色（#1512）。用量環（#1591 起沒有字）在 composer 頁量。 */}
         <div style={row}>
           <div data-guard-chip="pick">
             <ComposerPick
@@ -363,8 +446,7 @@ function GuardPage() {
               onSwitch={() => {}}
             />
           </div>
-          {/* 頂列的用量鈕：`text-muted-foreground` 配 `hover:bg-chip-hover active:bg-chip-pressed`，底下沒有 `bg-card`，
-              chip 的兩階真的畫得出來。 */}
+          {/* 頂列的用量鈕：底下沒有 `bg-card`，SG 的 `--hover` 真的畫得出來。 */}
           <div data-guard-press="session-usage">
             <SessionUsage
               tokenUsage={{ inputTokens: 412_380, outputTokens: 9_815 }}
@@ -519,6 +601,711 @@ const QUESTION: PendingQuestion = {
     { id: 'name', question: '訪客姓名？' },
   ],
 };
+
+const HANDOFF_APPROVAL: PendingApproval = {
+  kind: APPROVAL_PENDING_KIND,
+  interruptId: 'a-1',
+  namespace: [],
+  actions: [{ name: 'edit_file', args: { path: 'docs/deploy.md' } }],
+  allowedDecisions: ['approve', 'reject'],
+};
+/** 允許的決定交集為空：卡上只剩「停止這一輪」（#376 第 12 條）。 */
+const HANDOFF_STUCK: PendingApproval = {
+  ...HANDOFF_APPROVAL,
+  interruptId: 'a-2',
+  allowedDecisions: [],
+};
+const HANDOFF_QUEUE: readonly WireQueuedInput[] = [
+  { id: 'q-a', text: '順便把回滾那段也整理一下', source: { kind: 'user' } },
+  { id: 'q-b', text: '整理完列出改了哪幾段', source: { kind: 'user' } },
+];
+const HANDOFF_AGENT = { id: 'researcher', name: 'researcher', description: '查資料' };
+/** 子代理自己的對話：派出的任務與一則回覆；`renderEntry` 只畫字。 */
+const HANDOFF_HISTORY: readonly ConversationEntry[] = [
+  { kind: 'human', id: 'h-task', text: '找出 README 裡講部署的段落。' },
+  {
+    kind: 'ai',
+    id: 'a-found',
+    text: '找到兩段：「部署」與「回滾」。',
+    streaming: false,
+    attribution: { kind: 'root' },
+  },
+];
+
+function handoffSubagents(state: 'running' | 'idle'): SubagentControl {
+  return {
+    connected: true,
+    renderEntry: (entry) => ('text' in entry ? <p>{entry.text}</p> : null),
+    history: async () => ({ ok: true, conversation: { entries: HANDOFF_HISTORY, hasMore: false } }),
+    stateOf: () => state,
+    echoesOf: () => ['先看部署那段'],
+    send: async () => ({ ok: true }),
+    interrupt: async () => undefined,
+  };
+}
+
+function HandoffSubagent({ state }: { readonly state: 'running' | 'idle' }) {
+  return (
+    <div data-guard-handoff={`subagent-${state}`}>
+      <SubagentControlContext.Provider value={handoffSubagents(state)}>
+        <ToolCard
+          entry={CARD({
+            id: `bg-${state}`,
+            name: 'task',
+            input: '{"description":"找部署段落","subagent_type":"researcher"}',
+            text: '已在背景開始',
+            meta: { kind: 'background-subagent', runId: `bg-${state}`, subagentType: 'researcher' },
+          })}
+          defaultOpen
+        />
+      </SubagentControlContext.Provider>
+    </div>
+  );
+}
+
+function HandoffPage() {
+  const approvalRef = useRef<HTMLTextAreaElement>(null);
+  const questionRef = useRef<HTMLTextAreaElement>(null);
+  const stuckRef = useRef<HTMLTextAreaElement>(null);
+  return (
+    <div
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div data-guard-handoff="approval">
+        <PendingSwap
+          pendings={[HANDOFF_APPROVAL]}
+          composerRef={approvalRef}
+          composer={<textarea ref={approvalRef} aria-label="要說的話" />}
+          renderPanel={(pending) =>
+            pending.kind === APPROVAL_PENDING_KIND && (
+              <ApprovalCard pending={pending} busy={false} onDecide={() => {}} onStop={() => {}} />
+            )
+          }
+        />
+      </div>
+      <div data-guard-handoff="approval-stuck">
+        <PendingSwap
+          pendings={[HANDOFF_STUCK]}
+          composerRef={stuckRef}
+          composer={<textarea ref={stuckRef} aria-label="要說的話" />}
+          renderPanel={(pending) =>
+            pending.kind === APPROVAL_PENDING_KIND && (
+              <ApprovalCard pending={pending} busy={false} onDecide={() => {}} onStop={() => {}} />
+            )
+          }
+        />
+      </div>
+      <div data-guard-handoff="question">
+        <PendingSwap
+          pendings={[QUESTION]}
+          composerRef={questionRef}
+          composer={<textarea ref={questionRef} aria-label="要說的話" />}
+          renderPanel={(pending) =>
+            pending.kind === 'question' && (
+              <QuestionPanel pending={pending} busy={false} onAnswer={() => {}} />
+            )
+          }
+        />
+      </div>
+      <div data-guard-handoff="queue">
+        <QueueDock
+          items={HANDOFF_QUEUE}
+          status="running"
+          connected
+          onUpdate={async () => undefined}
+          onFocusFallback={() => {}}
+        />
+      </div>
+      <div data-guard-handoff="chips" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <AgentMentionChip agent={HANDOFF_AGENT} onRemove={() => {}} />
+        <DelegatedChip name="researcher" />
+      </div>
+      <HandoffSubagent state="running" />
+      <HandoffSubagent state="idle" />
+    </div>
+  );
+}
+
+const PLAN_TEXT = '# 改登入頁\n\n先把**文案**改成中文。\n\n## 步驟\n\n- 改文案\n- 補測試';
+const PLAN_PENDING = {
+  kind: 'question',
+  interruptId: 'int-plan',
+  namespace: ['tools:a'],
+  questions: [
+    {
+      id: 'plan-review',
+      question: '同意這份計劃並離開計劃模式？',
+      detail: PLAN_TEXT,
+      options: [{ label: '同意' }, { label: '繼續規劃' }],
+      intent: { kind: 'plan-review', approve: '同意', callId: 'call-plan' },
+    },
+  ],
+} satisfies PendingQuestion;
+const PLAN_REVIEW = planReviewOf(PLAN_PENDING.questions)!;
+const PLAN_ENTRY: ToolEntry = {
+  kind: 'tool',
+  id: 'tool-call-plan-done',
+  callId: 'call-plan-done',
+  name: 'exit_plan_mode',
+  input: JSON.stringify({ plan: PLAN_TEXT }),
+  status: 'done',
+  attribution: { kind: 'root' },
+};
+const PLAN_ON: PlanModePayload = { active: true };
+const PLAN_GOAL: WireGoal = {
+  id: 'g1',
+  revision: 1,
+  objective: '把登入改好',
+  phase: 'active',
+  maxGoalRounds: 10,
+  roundsStarted: 3,
+  createdAt: 0,
+  updatedAt: 0,
+};
+
+function PlanPage() {
+  return (
+    <RightSidebarProvider
+      threadId="guard-plan"
+      sources={{ plans: new Map([['call-plan', planDocument(PLAN_TEXT)]]) }}
+    >
+      <div
+        style={{
+          maxWidth: '48rem',
+          margin: '0 auto',
+          padding: 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+        }}
+      >
+        <div data-guard-plan="chip">
+          <PlanChip planMode={PLAN_ON} status="idle" connected onExit={async () => undefined} />
+        </div>
+        <div data-guard-plan="chip-running">
+          <PlanChip planMode={PLAN_ON} status="running" connected onExit={async () => undefined} />
+        </div>
+        <div data-guard-plan="chip-failed">
+          <PlanChip
+            planMode={PLAN_ON}
+            status="idle"
+            connected
+            onExit={async () => '斜線命令被拒：這一輪還在跑'}
+          />
+        </div>
+        <div data-guard-plan="review">
+          <PlanReviewPanel
+            pending={PLAN_PENDING}
+            review={PLAN_REVIEW}
+            busy={false}
+            onApprove={() => {}}
+            onRevise={() => {}}
+          />
+        </div>
+        <div data-guard-plan="card">
+          <PlanToolCard entry={PLAN_ENTRY} />
+        </div>
+        <div data-guard-plan="goal">
+          <GoalBar goal={PLAN_GOAL} activation="armed" connected onPause={async () => undefined} />
+        </div>
+      </div>
+    </RightSidebarProvider>
+  );
+}
+
+const TRACE_HEAD: TurnHead = {
+  number: 7,
+  kind: 'message',
+  time: 1_700_000_000_000,
+  durationMs: 2500,
+  callCount: 2,
+  toolCount: 3,
+  toolErrors: 1,
+  subagentCount: 0,
+  retryCount: 1,
+  inputTokens: 200,
+  outputTokens: 20,
+};
+const TRACE_HEADS: readonly (readonly [string, Partial<TurnHead>])[] = [
+  ['done', { end: 'completed' }],
+  ['waiting', { end: 'completed', waiting: 'approval' }],
+  ['question', { waiting: 'question' }],
+  ['failed', { end: 'failed', failureCode: 'quota_exceeded' }],
+  ['running', {}],
+  ['aborted', { end: 'aborted' }],
+  ['interrupted', { end: 'interrupted' }],
+  ['max-tokens', { end: 'max-tokens' }],
+  ['blocked', { end: 'blocked' }],
+];
+
+/** 觀測分頁一輪的標頭（#1690 T8）：九種收法，寬度同右側欄的最小寬。 */
+function TraceHeadsPage() {
+  return (
+    <div
+      style={{
+        maxWidth: '20rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      {TRACE_HEADS.map(([name, patch]) => (
+        <div key={name} data-guard-head={name}>
+          <TurnHeader head={{ ...TRACE_HEAD, ...patch }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** 四輪，推送只帶最後一輪的細節，前三輪（seq 100、200、300）是摘要。同 `trace/panel.pull.test.tsx`。 */
+function tracePullState(): ConversationState {
+  const script = new Script();
+  const frames = [];
+  for (const n of [1, 2, 3, 4]) {
+    frames.push(
+      script.running(),
+      ...script.human(`inbox:r${n}`, `第 ${n} 輪`),
+      ...script.ai(`m${n}`, { text: `第 ${n} 輪的回覆` }),
+      script.completed(),
+    );
+  }
+  const state = reduceAll(emptyConversation(), frames);
+  return withTrajectory(
+    state,
+    script,
+    view([turn(4, { calls: [call(40)] })], { digests: [digest(1), digest(2), digest(3)] }),
+  );
+}
+
+/** 一輪派出子代理，子代理的軌跡只剩一行摘要（seq 10），要按鈕才拉。同 `trace/panel.subagent.test.tsx`。 */
+function traceSubagentState(): ConversationState {
+  const script = new Script();
+  const state = reduceAll(emptyConversation(), [
+    script.running(),
+    ...script.human('inbox:r1', '派個子代理'),
+    ...script.ai('a1', { text: '好' }),
+    script.started('c1', 'subagent', { prompt: '去做' }),
+    script.finished('c1', '完成'),
+    script.completed(),
+  ]);
+  const link = { childId: 't/bg-1', runId: 'bg-1', mode: 'one-shot' as const, catalogSeq: 7 };
+  const withRoot = withTrajectory(
+    state,
+    script,
+    view([
+      turn(0, { calls: [call(5, { tools: [tool('c1', { name: 'subagent', subagent: link })] })] }),
+    ]),
+  );
+  return reduceAll(withRoot, [
+    projectionFrame(
+      script,
+      TRAJECTORY_PROJECTION,
+      TRAJECTORY_VERSION,
+      view([], { digests: [digest(1, { seq: 10 })] }),
+      {
+        session: 'bg-1',
+      },
+    ),
+  ]);
+}
+
+function tracePlanState(): ConversationState {
+  const script = new Script();
+  return reduceAll(emptyConversation(), [
+    script.running(),
+    ...script.human('history-0', '規劃一下'),
+    script.started('p1', 'exit_plan_mode', { plan: '# 改登入頁\n\n先改文案。' }),
+    script.finished('p1', '已同意'),
+    script.completed(),
+  ]);
+}
+
+/**
+ * 假的 `trajectoryTurn`：seq 300 回空的、200 回拒絕（「日誌裡沒有」）、100 回第 1 輪；同一個 seq 第二次起、與其他查詢一律
+ * 不回，停在讀取中。所以預拉之後，「只有摘要」的組裡 300 待命、200 失敗，按 300 的鈕就停在讀取中。
+ */
+function tracePullClient(): Parameters<typeof createTrajectoryPuller>[0] {
+  const seen = new Set<string>();
+  return {
+    trajectoryTurn: (_threadId, query) => {
+      const key = JSON.stringify(query);
+      const first = !seen.has(key);
+      seen.add(key);
+      if (first && query.seq === 300)
+        return Promise.resolve({ kind: 'ok', result: { turns: [], seq: 900 } });
+      if (first && query.seq === 200)
+        return Promise.resolve({ kind: 'rejected', code: 'turn_not_found', message: '日誌裡沒有' });
+      if (first && query.seq === 100)
+        return Promise.resolve({
+          kind: 'ok',
+          result: { turns: [turn(1, { calls: [call(10)] })], seq: 900 },
+        });
+      return new Promise(() => {});
+    },
+  };
+}
+
+/** 「看這一輪」：把第 1 輪拉回來，「只有摘要」的組才會出現（`trace-groups`）。 */
+function TraceRevealProbe() {
+  const api = useRightSidebar();
+  return (
+    <button type="button" data-guard-reveal="" onClick={() => api?.revealTurn(100)}>
+      看第 1 輪
+    </button>
+  );
+}
+
+const TRACE_SYSTEM_TEXT = '你是部署助理。\n先讀腳本，再回答。';
+
+/**
+ * 觀測分頁的列、模型呼叫與子代理（#1690 T3、T5、T7，`?overlay=trace-steps`）：一輪裡有輸入、成功與失敗的工具、重試、回覆，
+ * 一顆派出子代理的工具，子代理推送了一輪兩次呼叫、三個工具（一個失敗）。
+ */
+function traceStepsState(): ConversationState {
+  const script = new Script();
+  const state = reduceAll(emptyConversation(), [
+    script.running(),
+    ...script.human('inbox:r1', '幫我看一下部署腳本'),
+    script.started('c1', 'ls', { path: '/srv' }),
+    script.finished('c1', 'deploy.sh'),
+    script.started('c2', 'bash', { command: 'rm -rf /srv' }),
+    script.failed('c2', '政策不允許', 'APPROVAL_POLICY_NEVER'),
+    script.started('c3', 'subagent', { prompt: '讀 deploy.sh' }),
+    script.finished('c3', '讀完了'),
+    ...script.ai('a1', { text: '看完了，腳本沒有問題。' }),
+    script.completed(),
+  ]);
+  const link = { childId: 't/bg-1', runId: 'bg-1', mode: 'one-shot' as const, catalogSeq: 7 };
+  const at = (seconds: number) => 1_700_000_000_000 + seconds * 1000;
+  const withRoot = withTrajectory(
+    state,
+    script,
+    view([
+      turn(0, {
+        end: 'completed',
+        durationMs: 5200,
+        calls: [
+          call(5, {
+            system: 3,
+            header: 4,
+            usage: {
+              inputTokens: 1200,
+              outputTokens: 80,
+              totalTokens: 1280,
+              uncachedInputTokens: 300,
+              cacheReadTokens: 900,
+              cacheWriteTokens: 0,
+            },
+            tools: [tool('c1', { time: at(2), durationMs: 120 })],
+            retries: [
+              {
+                seq: 6,
+                time: at(1),
+                retryId: 'r',
+                retry: 1,
+                maxRetries: 3,
+                code: 'RATE_LIMIT',
+                status: 429,
+                waitedMs: 2000,
+              },
+            ],
+          }),
+          call(20, {
+            tools: [
+              tool('c2', {
+                name: 'bash',
+                status: 'error',
+                time: at(3),
+                code: 'APPROVAL_POLICY_NEVER',
+              }),
+              tool('c3', { name: 'subagent', time: at(4), durationMs: 3100, subagent: link }),
+            ],
+          }),
+        ],
+      }),
+    ]),
+    {
+      system: [
+        {
+          seq: 3,
+          time: at(0),
+          reason: 'initial',
+          text: TRACE_SYSTEM_TEXT,
+          chars: TRACE_SYSTEM_TEXT.length,
+        },
+      ],
+      header: [
+        {
+          seq: 4,
+          time: at(0),
+          reason: 'initial',
+          header: {
+            config: { model: 'fake-model', temperature: 1 },
+            tools: [
+              {
+                name: 'ls',
+                description: '列出目錄',
+                parameters: { type: 'object', properties: { path: { type: 'string' } } },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  );
+  return reduceAll(withRoot, [
+    projectionFrame(
+      script,
+      TRAJECTORY_PROJECTION,
+      TRAJECTORY_VERSION,
+      view([
+        turn(0, {
+          end: 'completed',
+          calls: [
+            call(5, {
+              tools: [
+                tool('s1', { name: 'ls', time: at(5) }),
+                tool('s2', { name: 'read_file', time: at(5), durationMs: 200 }),
+              ],
+            }),
+            call(9, {
+              tools: [tool('s3', { name: 'grep', status: 'error', time: at(6), code: 'EACCES' })],
+            }),
+          ],
+        }),
+      ]),
+      { session: 'bg-1' },
+    ),
+  ]);
+}
+
+/**
+ * 打開觀測分頁的右側欄：版面先寫進 localStorage（提供者只在掛上時讀一次）。1024 以下載入時是收著的，375 寬那條靠「看第 1 輪」（`revealTurn`）打開。
+ * `trace-digests` 的假端點一律不回，預拉的兩列停在讀取中。
+ */
+function TracePanelPage({ name }: { name: string }) {
+  const [sources] = useState(() => {
+    const threadId = `guard-${name}`;
+    localStorage.setItem(
+      LAYOUT_KEY_PREFIX + threadId,
+      JSON.stringify({ open: true, tabs: [{ kind: 'trace' }], active: 'trace' }),
+    );
+    const state =
+      name === 'trace-empty'
+        ? emptyConversation()
+        : name === 'trace-plan'
+          ? tracePlanState()
+          : name === 'trace-subagent'
+            ? traceSubagentState()
+            : name === 'trace-steps'
+              ? traceStepsState()
+              : tracePullState();
+    const client: Parameters<typeof createTrajectoryPuller>[0] =
+      name === 'trace-digests'
+        ? { trajectoryTurn: () => new Promise(() => {}) }
+        : tracePullClient();
+    return {
+      threadId,
+      conversation: createConversationStore(state),
+      trajectoryPull: createTrajectoryPuller(client, threadId),
+    };
+  });
+  return (
+    <RightSidebarProvider
+      threadId={sources.threadId}
+      sources={{ conversation: sources.conversation, trajectoryPull: sources.trajectoryPull }}
+    >
+      <div style={{ display: 'flex', minHeight: '100vh' }}>
+        <main
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: 16,
+            display: 'flex',
+            gap: 8,
+            alignItems: 'flex-start',
+          }}
+        >
+          <RightSidebarToggle />
+          {name === 'trace-groups' && <TraceRevealProbe />}
+        </main>
+        <RightSidebarPanel />
+      </div>
+    </RightSidebarProvider>
+  );
+}
+
+/** 打開、但沒有分頁的右側欄（#1696）。 */
+function RightEmptyPage() {
+  const [sources] = useState(() => {
+    const threadId = 'guard-right-empty';
+    localStorage.setItem(LAYOUT_KEY_PREFIX + threadId, JSON.stringify({ open: true, tabs: [] }));
+    return { threadId, conversation: createConversationStore(emptyConversation()) };
+  });
+  return (
+    <RightSidebarProvider
+      threadId={sources.threadId}
+      sources={{ conversation: sources.conversation }}
+    >
+      <div style={{ display: 'flex', minHeight: '100vh' }}>
+        <main style={{ flex: 1, minWidth: 0, padding: 16 }}>
+          <RightSidebarToggle />
+        </main>
+        <RightSidebarPanel />
+      </div>
+    </RightSidebarProvider>
+  );
+}
+
+/** 左側欄的會話狀態（#1696 S1-C）：`s0` 是目前這條、在跑；其餘五種狀態各一列，加一列沒有狀態的。 */
+const THREAD_STATUSES: readonly (readonly [string, RowStatus])[] = [
+  ['部署腳本除錯', 'running'],
+  ['整理 README 的部署段落與回滾步驟', 'approval'],
+  ['十月月報草稿', 'plan-review'],
+  ['新人問卷題目', 'question'],
+  ['查 CI 為什麼慢：pnpm install 與快取命中率', 'running'],
+  ['週會紀錄', 'completed'],
+  ['讀規格', undefined],
+];
+const THREAD_DIRECTORY: ThreadDirectory = {
+  listing: {
+    kind: 'ok',
+    result: {
+      items: THREAD_STATUSES.map(([title], index) => ({
+        threadId: `s${index}`,
+        updatedAt: Date.now() - index * 60_000,
+        running: false,
+        blank: false,
+        title,
+      })),
+      unreadable: 0,
+    },
+  },
+  statusOf: (item) => THREAD_STATUSES[Number(item.threadId.slice(1))]![1],
+  blankOf: (item) => item.blank,
+  refresh: () => undefined,
+  placeholders: [],
+  addPlaceholder: () => undefined,
+};
+const THREAD_MANAGEMENT: ThreadManagement = {
+  pinnedIds: [],
+  archivedIds: new Set(),
+  titles: new Map(),
+  onPin: async () => undefined,
+  onUnpin: async () => undefined,
+  onArchive: async () => undefined,
+  onUnarchive: async () => undefined,
+  onRename: async () => undefined,
+};
+
+function ThreadStatusesPage() {
+  return (
+    <SidebarProvider>
+      <OpenMobileSidebar />
+      <AppSidebar
+        directory={THREAD_DIRECTORY}
+        currentThreadId="s0"
+        currentTitle={THREAD_STATUSES[0]![0]}
+        onNewConversation={() => undefined}
+        onPick={() => undefined}
+        management={THREAD_MANAGEMENT}
+      />
+      <SidebarInset>會話區</SidebarInset>
+    </SidebarProvider>
+  );
+}
+
+/** 成本分頁（#1691）：root 的總帳加兩個背景子代理，子代理的用量照 runId 回。頂列的用量鈕讀同一份總帳。 */
+const COST_USAGE = {
+  inputTokens: 1_412_380,
+  uncachedInputTokens: 212_380,
+  cacheReadTokens: 1_150_000,
+  cacheWriteTokens: 50_000,
+  outputTokens: 9_815,
+};
+const COST_STATS = { turns: 4, steps: 17, llmMs: 133_000, toolMs: 38_400 };
+
+function costState(): ConversationState {
+  const script = new Script();
+  return reduceAll(emptyConversation(), [
+    script.running(),
+    ...script.human('history-0', '幫我查兩件事'),
+    script.started('d1', 'subagent', { description: '查 A' }),
+    script.finishedWith('d1', '已派出', {
+      kind: 'background-subagent',
+      runId: 'bg-1',
+      subagentType: 'researcher',
+    }),
+    script.started('d2', 'subagent', { description: '查 B' }),
+    script.finishedWith('d2', '已派出', {
+      kind: 'background-subagent',
+      runId: 'bg-2',
+      subagentType: 'writer',
+    }),
+    ...script.ai('a', { text: '派出去了。' }),
+    script.custom(TOKEN_USAGE, COST_USAGE),
+    script.custom(SESSION_STATS, COST_STATS),
+    script.custom(MODEL_USAGE, { inputTokens: 98_200 }),
+    script.completed(),
+  ]);
+}
+
+const costLoader: SubagentUsageLoader = async (runId) => ({
+  ok: true,
+  usage: {
+    tokenUsage:
+      runId === 'bg-1'
+        ? { inputTokens: 52_000, outputTokens: 1_200 }
+        : { inputTokens: 7_400, outputTokens: 310 },
+    sessionStats: { turns: 1, steps: 3, llmMs: 6_200, toolMs: 900 },
+  },
+});
+
+function CostPage() {
+  const [sources] = useState(() => {
+    const threadId = 'guard-cost';
+    localStorage.setItem(
+      LAYOUT_KEY_PREFIX + threadId,
+      JSON.stringify({ open: true, tabs: [{ kind: 'cost' }], active: 'cost' }),
+    );
+    return { threadId, conversation: createConversationStore(costState()) };
+  });
+  return (
+    <RightSidebarProvider
+      threadId={sources.threadId}
+      sources={{ conversation: sources.conversation, subagentUsage: costLoader }}
+    >
+      <div style={{ display: 'flex', minHeight: '100vh' }}>
+        <main
+          style={{
+            flex: 1,
+            minWidth: 0,
+            padding: 16,
+            display: 'flex',
+            gap: 8,
+            alignItems: 'flex-start',
+          }}
+        >
+          <RightSidebarToggle />
+          <div data-guard-cost="usage">
+            <SessionUsage tokenUsage={COST_USAGE} sessionStats={COST_STATS} />
+          </div>
+        </main>
+        <RightSidebarPanel />
+      </div>
+    </RightSidebarProvider>
+  );
+}
 
 /** 展開收合的元件（#1638 PR A）：思考過程、摘要列、工具卡（Root 用 `render` 接 `Surface`）、待辦、提問面板（內容保持掛載）。都是關著畫出來的。 */
 function CollapsiblesPage() {
@@ -745,6 +1532,109 @@ function ToolCardsPage() {
   );
 }
 
+/** stage 上的工具卡：讀檔、搜尋、交付、待辦，以及撞到上限、帶半段輸出的子代理卡（#1689）。 */
+const STAGE_TOOLS: ToolEntry[] = [
+  CARD({
+    id: 'stage-read',
+    name: 'read_file',
+    input: '{"file_path":"docs/plan.md"}',
+    meta: {
+      path: 'docs/plan.md',
+      offset: 1,
+      lines: [
+        { number: 1, text: '# 計畫' },
+        { number: 2, text: '' },
+        { number: 3, text: '三個方案的成本與風險。' },
+      ],
+      totalLines: 3,
+      lang: 'markdown',
+    },
+  }),
+  CARD({
+    id: 'stage-grep',
+    name: 'grep',
+    input: '{"pattern":"成本"}',
+    text: 'docs/plan.md:3:三個方案的成本與風險。',
+    meta: {
+      shape: 'matches',
+      files: [
+        { path: 'docs/plan.md', matches: [{ lineNumber: 3, line: '三個方案的成本與風險。' }] },
+      ],
+      truncated: false,
+      total: 1,
+    },
+  }),
+  CARD({
+    id: 'stage-present',
+    name: 'present',
+    input: JSON.stringify({ files: [{ path: 'out/report.md', description: '三個方案的比較' }] }),
+    text: '已交付',
+  }),
+  CARD({
+    id: 'stage-todos',
+    name: 'todo_write',
+    input: JSON.stringify({ todos: TODOS }),
+    text: '已更新',
+  }),
+  CARD({
+    id: 'stage-max',
+    name: 'task',
+    input: '{"description":"寫報告"}',
+    status: 'failed',
+    error: `Error: ${SUBAGENT_MAX_TOKENS_REASON}\n${PARTIAL_OUTPUT_HEADING}\n報告寫到第二段：方案 B 的成本`,
+    text: undefined,
+  }),
+];
+const STAGE_DELIVERABLES: LocatedFile[] = [
+  { path: 'out/report.md', description: '三個方案的比較', seq: 1, index: 0 },
+  { path: 'out/costs.csv', seq: 1, index: 1 },
+];
+const STAGE_MARKDOWN =
+  '部署腳本改成這樣：\n\n```bash\nset -euo pipefail\n./deploy.sh --dry-run\n```';
+const STAGE_ELICITATION: PendingQuestion = {
+  ...QUESTION,
+  interruptId: 'q-stage',
+  origin: { kind: 'mcp-elicitation', server: 'tickets', tool: 'create_ticket', arguments: {} },
+};
+
+function StageSurfacesPage() {
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  return (
+    <div
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      {STAGE_TOOLS.map((entry) => (
+        <ToolCard key={entry.id} entry={entry} defaultOpen />
+      ))}
+      <DeliverablesCard files={STAGE_DELIVERABLES} />
+      <MarkdownText text={STAGE_MARKDOWN} />
+      {/* 跟產品一樣經過換手層：面板畫在它的卡片裡，釘在底部那一列要對上的是這一疊。 */}
+      <PendingSwap
+        pendings={[STAGE_ELICITATION]}
+        composerRef={composerRef}
+        composer={<textarea ref={composerRef} aria-label="要說的話" />}
+        renderPanel={(pending) =>
+          pending.kind === 'question' && (
+            <QuestionPanel
+              pending={pending}
+              busy={false}
+              onAnswer={() => {}}
+              onDecline={() => {}}
+            />
+          )
+        }
+      />
+    </div>
+  );
+}
+
 /** 推理列（#1683）：內文要有連結與行內 code（量對比），還在想的那列摘要要長（量 375 寬往左裁）。 */
 const REASONING_MD =
   '先讀**需求**，再對照 `docs/plan.md` 的[成本表](https://example.com)。\n\n- 方案 A：成本低、風險高\n- 方案 B：成本中、風險中\n\n建議方案 B。';
@@ -832,6 +1722,54 @@ function runningState(activity: string) {
   return { ...state, status: 'running' as const, entries: TURN_ENTRIES[activity] ?? [] };
 }
 
+function LivePager() {
+  const [loading, setLoading] = useState(false);
+  const earlier: EarlierHistory = {
+    hasMore: true,
+    loading,
+    onLoad: () => {
+      setLoading(true);
+      setTimeout(() => setLoading(false), 300);
+    },
+  };
+  return <EarlierPager earlier={earlier} />;
+}
+
+function TranscriptRowsPage() {
+  const idle = { hasMore: true, loading: false, onLoad: () => undefined };
+  const pagers: [string, EarlierHistory][] = [
+    ['idle', idle],
+    ['loading', { ...idle, loading: true }],
+    ['fail', { ...idle, error: '連線中斷' }],
+  ];
+  return (
+    <div
+      style={{
+        maxWidth: '42rem',
+        margin: '0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div data-guard-rows="retry" style={{ padding: '16px 24px 0' }}>
+        <RetryNotice retry={RETRY} />
+      </div>
+      {pagers.map(([name, earlier]) => (
+        <div key={name} data-guard-pager={name}>
+          <EarlierPager earlier={earlier} />
+        </div>
+      ))}
+      <div data-guard-pager="live">
+        <LivePager />
+      </div>
+      <div data-guard-rows="empty" style={{ display: 'flex', minHeight: 320, padding: '0 24px' }}>
+        <EmptyHero />
+      </div>
+    </div>
+  );
+}
+
 function TurnStatusPage() {
   const [activity, setActivity] = useState('thinking');
   useState(() => {
@@ -844,7 +1782,8 @@ function TurnStatusPage() {
       __setTurnActivity?: (a: string) => void;
       __openingPose?: (a: string) => string[][];
     };
-    hooks.__setTurnActivity = setActivity;
+    // 同步 commit：測試換完只等一幀就讀姿勢，要趕在這一幀之前畫上新 activity。
+    hooks.__setTurnActivity = (a) => flushSync(() => setActivity(a));
     // 每種 activity 的起始姿勢（減少動態時 glyph 停在這裡），照 vendor `draw` 取到小數兩位、四個屬性都給。
     // 1.7 是 vendor 沒 export 的 `RADIUS`（`src/test/glyph-env.ts` 的 `GLYPH_RADIUS`，`registry-edits.test.ts` 釘住原文）。
     hooks.__openingPose = (a) =>
@@ -1090,12 +2029,61 @@ function MessagesPage() {
   );
 }
 
+const REFS_LINKS = {
+  openable: (sessionId: string) => sessionId === 'thread-mine',
+  open: () => undefined,
+};
+const REFS_ENTRIES: ConversationEntry[] = [
+  ...MESSAGES,
+  COMPACTION,
+  {
+    kind: 'human',
+    id: 'h-refs',
+    text: '照 @部署腳本除錯 的結論，順便看 @月報 那份。',
+    references: [
+      { sessionId: 'thread-mine', label: '部署腳本除錯' },
+      { sessionId: 'thread-other', label: '月報' },
+    ],
+  },
+  { kind: 'decision', id: 'decision-refs', decision: 'approve', actions: ['call-1'] },
+];
+
+function TranscriptRefsPage() {
+  return (
+    <div style={{ height: 600, display: 'flex', flexDirection: 'column' }}>
+      <SessionReferenceContext.Provider value={REFS_LINKS}>
+        <Transcript
+          state={{ ...emptyConversation(), entries: REFS_ENTRIES }}
+          isFresh={() => false}
+        />
+      </SessionReferenceContext.Provider>
+      <div
+        data-guard-rows="status"
+        style={{ maxWidth: '42rem', margin: '0 auto', width: '100%', padding: '0 24px' }}
+      >
+        <StatusLine
+          state={emptyConversation()}
+          connected={false}
+          reconnecting={{ wasConnected: true, offline: false }}
+          onReconnect={() => undefined}
+        />
+      </div>
+      <div
+        data-guard-rows="archived"
+        style={{ maxWidth: '42rem', margin: '0 auto', width: '100%', padding: '0 24px' }}
+      >
+        <ArchivedBanner onRestore={() => Promise.resolve(undefined)} />
+      </div>
+    </div>
+  );
+}
+
 /**
  * 附件（#1638 PR C）：輸入框底下的草稿列兩排，與已送出的附件一排。
  * - `fits`：一張檔案卡、寬度放得下，不會溢出（量左右淡出不出現）。
  * - `overflows`：五張、寬度放不下（量頭尾的淡出），涵蓋圖的縮圖、可移除的檔案、上傳中（有進度與不確定長度兩種，標題 shimmer）、上傳失敗。
  * - `sent`：已送出的檔案卡（沒有按鈕）。
- * 元件內部的按鈕掛不了屬性，由 `guard.test.ts` 開頁後補標記。
+ * 元件內部的按鈕掛不了屬性，由 `harness.ts` 的 `OVERLAYS`（`attachments` 的 `marks`）開頁後補標記。
  */
 const PIXEL =
   'data:image/svg+xml,' +
@@ -1209,7 +2197,7 @@ function OverlayPage({ name }: { name: string }) {
       return (
         <SidebarProvider>
           <OpenMobileSidebar />
-          {/* 手機側欄把 props 交給 Sheet 的 Root（沒有 DOM），屬性掛不上抽屜：由 `guard.test.ts` 的 `OVERLAY_MARKS` 補。 */}
+          {/* 手機側欄把 props 交給 Sheet 的 Root（沒有 DOM），屬性掛不上抽屜：由 `harness.ts` 的 `OVERLAYS`（`mobile-sidebar` 那筆的 `marks`）補。 */}
           <Sidebar>手機側欄</Sidebar>
         </SidebarProvider>
       );
@@ -1304,6 +2292,8 @@ function OverlayPage({ name }: { name: string }) {
       return <CollapsiblesPage />;
     case 'messages':
       return <MessagesPage />;
+    case 'transcript-refs':
+      return <TranscriptRefsPage />;
     case 'attachments':
       return <AttachmentsPage />;
     case 'tool-steps':
@@ -1312,12 +2302,35 @@ function OverlayPage({ name }: { name: string }) {
       return <ToolCardsPage />;
     case 'reasoning':
       return <ReasoningPage />;
+    case 'stage-surfaces':
+      return <StageSurfacesPage />;
     case 'diff-stats':
       return <DiffStatsPage />;
     case 'diff-view':
       return <DiffViewPage />;
     case 'turn-status':
       return <TurnStatusPage />;
+    case 'transcript-rows':
+      return <TranscriptRowsPage />;
+    case 'handoff':
+      return <HandoffPage />;
+    case 'plan':
+      return <PlanPage />;
+    case 'trace-heads':
+      return <TraceHeadsPage />;
+    case 'trace-empty':
+    case 'trace-plan':
+    case 'trace-digests':
+    case 'trace-groups':
+    case 'trace-subagent':
+    case 'trace-steps':
+      return <TracePanelPage name={name} />;
+    case 'cost':
+      return <CostPage />;
+    case 'right-empty':
+      return <RightEmptyPage />;
+    case 'thread-statuses':
+      return <ThreadStatusesPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':
@@ -1336,7 +2349,7 @@ function OverlayPage({ name }: { name: string }) {
   }
 }
 
-/** 關著的選單：鍵盤 Enter 打開、選項上按 Enter 觸發 `onClick`，選了什麼寫在頁面上給 `guard.test.ts` 讀（#1583 驗收 D）。 */
+/** 關著的選單：鍵盤 Enter 打開、選項上按 Enter 觸發 `onClick`，選了什麼寫在頁面上給 `*.test.ts` 讀（#1583 驗收 D）。 */
 function KeyboardMenu() {
   const [picked, setPicked] = useState('');
   return (
@@ -1395,7 +2408,7 @@ function OpenCommand() {
  * - `locked`：權限鎖住（一輪在跑；`aria-disabled`，第 39 條）。
  * - `pick-open`：模型的清單開著（量選項的字與觸控高度）。
  * - `tones`：三個用量環，50%、70%、90%（量三個色階，第 37 條）。
- * - `dormant`：用量環有一道不會觸發的門檻（`guard.test.ts` 點開它量明細的字）。
+ * - `dormant`：用量環有一道不會觸發的門檻（`*.test.ts` 點開它量明細的字）。
  */
 function ComposerPage({ state }: { state: string }) {
   const running = state.startsWith('running');
@@ -1417,6 +2430,7 @@ function ComposerPage({ state }: { state: string }) {
             approxTokens: 5,
             messageCount: 12,
             messagesCompactable: false,
+            breakdown: { systemTokens: 4, toolsTokens: 3, messageTokens: 0 },
             thresholds: [
               { type: 'tokens', value: 10 },
               { type: 'messages', value: 60 },

@@ -55,6 +55,25 @@ function mount(state: ConversationState) {
 
 const head = () => screen.getAllByTestId('trace-turn-head').at(-1)!;
 
+describe('觀測分頁：被中止的那一輪標頭分開講時間到與停止（#1847）', () => {
+  it('時鐘到點：寫超過時間上限', async () => {
+    mount(conversation([{ end: 'aborted', endCause: { kind: 'hook', reason: 'turn-timeout' } }]));
+    await act(async () => {});
+    expect(screen.getByTestId('trace-head-status').textContent).toBe('超過時間上限，已停止');
+  });
+
+  it.each([
+    [{ kind: 'user' }],
+    [{ kind: 'parent' }],
+    [{ kind: 'hook', reason: 'some-other-hook' }],
+    [undefined],
+  ] as const)('其餘的停法（%o）寫已停止，不印原因字串', async (endCause) => {
+    mount(conversation([{ end: 'aborted', ...(endCause === undefined ? {} : { endCause }) }]));
+    await act(async () => {});
+    expect(screen.getByTestId('trace-head-status').textContent).toBe('已停止');
+  });
+});
+
 describe('觀測分頁：失敗的那一輪標頭寫它是哪一類失敗（#1121）', () => {
   it('帶了碼：寫「失敗（額度用盡）」，原碼放在 title 與 data-failure-code', async () => {
     mount(conversation([{ end: 'failed', failureCode: 'QUOTA' }]));
@@ -73,6 +92,15 @@ describe('觀測分頁：失敗的那一輪標頭寫它是哪一類失敗（#112
     expect(fact.textContent).toBe('失敗（這則訊息巢狀太深，這一輪沒有完成）');
     expect(fact.getAttribute('data-failure-code')).toBe('NESTING_TOO_DEEP');
     expect(head().textContent).not.toContain('NESTING_TOO_DEEP');
+  });
+
+  it('儲存空間滿（STORAGE_FULL，#2242）：寫中文的那一句，英文碼只留在 title 與 data-failure-code', async () => {
+    mount(conversation([{ end: 'failed', failureCode: 'STORAGE_FULL' }]));
+    await act(async () => {});
+    const fact = screen.getByTestId('trace-head-failure');
+    expect(fact.textContent).toBe('失敗（主機的儲存空間滿了，這一輪沒做完，請聯絡管理員）');
+    expect(fact.getAttribute('data-failure-code')).toBe('STORAGE_FULL');
+    expect(head().textContent).not.toContain('STORAGE_FULL');
   });
 
   it('HTTP_<n> 帶狀態碼；不認得的碼原樣寫在括號裡', async () => {
@@ -165,6 +193,14 @@ describe('traceModel：失敗碼跟著收尾走', () => {
     expect(model.turns).toHaveLength(1);
     expect(model.turns[0]!.head?.end).toBe('failed');
     expect(model.turns[0]!.head?.failureCode).toBe('TIMEOUT');
+  });
+
+  it('核准後續接：時鐘到點在接上去的那一段，併回同一組後原因還在（#1847）', () => {
+    const endCause = { kind: 'hook', reason: 'turn-timeout' } as const;
+    const model = traceModel(
+      conversation([{}, { kind: 'resume', logical: false, end: 'aborted', endCause }]),
+    );
+    expect(model.turns[0]!.head?.endCause).toEqual(endCause);
   });
 
   it('前一段已經收了（停在核准點）又接上一段沒失敗：不留前一段的碼', () => {

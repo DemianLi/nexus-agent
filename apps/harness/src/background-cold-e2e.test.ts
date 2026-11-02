@@ -25,6 +25,7 @@ import {
   attachSessionPersistence,
   resumeClosingInterruptedTurn,
   subagentLinks,
+  SessionLogOffset,
 } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -165,7 +166,7 @@ async function boot(options: {
   const detach = built.attachSession(pump.sessions, { onStatus: (items) => statuses.push(items) });
   const persistence = attachSessionPersistence(pump.sessions, store, {
     ...(resumed !== undefined && {
-      resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+      resumedRoot: { stored: resumed.stored, storedCount: SessionLogOffset(resumed.events.length) },
     }),
   });
   return {

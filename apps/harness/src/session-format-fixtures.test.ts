@@ -5,15 +5,18 @@
  * `scripts/session-format-fixtures/generate.ts`，PR 內文貼了每個 tag 的產生指令與 rev 核對），旁邊的 `expected.json`
  * 記事件數、`type` 序列、推回模型的角色序列（逐格標明是哪一版的讀方算的），以及觸發讀方相容分支的那幾條的輸出。
  *
- * 每份複製到暫存目錄再讀：續接會改寫 header 與日誌，夾具本身不能被動到。
+ * 每份複製到暫存目錄再讀：續接會把舊兩檔遷成這一版的世代檔、舊 header 換成墓碑，夾具本身不能被動到。
  */
 
+import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createFeedbackService } from '@nexus/plugin-feedback';
+import { deriveBrowserTimeZoneContext } from '@nexus/plugin-time-context';
+import { applyTrajectory, initialTrajectory, viewTrajectory } from '@nexus/plugin-trajectory';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -26,16 +29,24 @@ import {
   createSessionFormatCatalog,
   currentMessageFeedback,
   interruptedTurnClosers,
+  isSubagentSessionHeader,
   recordedApprovalPolicy,
   replayConversation,
   resumeClosingInterruptedTurn,
   SessionLog,
+  SessionSeq,
 } from '@nexus/core';
 import type { SessionEvent, SessionFormatCatalog } from '@nexus/core';
 
 import { historyFrames } from './conversation-history.js';
+import { ratingsByTurn } from './eval/session-scan.js';
 import { MEMORY_DURABILITY } from './feedback.fixture.js';
-import { openJsonlSessionStore, parseJsonlSessionBody } from './jsonl-session-store.js';
+import {
+  legacyTwoFilePathsIn,
+  openJsonlSessionStore,
+  parseJsonlSessionBody,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
 import { assertSameWorkspaceRoot } from './resume-guards.js';
 
 const FIXTURES = fileURLToPath(new URL('./fixtures/session-format/', import.meta.url));
@@ -79,6 +90,10 @@ interface Expected {
     readonly firstHalf?: { readonly eventCount: number; readonly replay: Replay };
     readonly approvalPolicyRecorded?: boolean;
     readonly approvalPolicyOnResume?: string;
+    readonly browserTimeZone?: unknown;
+    readonly parentSession?: string;
+    readonly originRecorded?: boolean;
+    readonly subagent?: boolean;
   }[];
 }
 
@@ -132,9 +147,53 @@ function lifecycles(events: readonly SessionEvent[]): unknown[] {
   });
 }
 
+describe('格式 52 的日誌沒有停止原因（#1847）', () => {
+  it('歷史、重放與軌跡都走得通，線上不出現這幾個鍵', async () => {
+    const id = Object.keys(expectedOf('v52').sessions)[0]!;
+    const store = openJsonlSessionStore({ directory: await copied('v52') });
+    const events = await (await store.open(id, 'read')).read();
+    // 夾具裡沒有結算通知與中止：接上那一版寫得出的形狀，兩個都沒有 `cause`。
+    const last = events.at(-1)!;
+    const appended = (type: SessionEvent['type'], data: unknown, at: number) =>
+      ({ ...last, seq: last.seq + at, type, data }) as SessionEvent;
+    const reply = events.findLast((event) => event.type === 'assistant/message')!;
+    const all = [
+      ...events,
+      appended(
+        'turn/start',
+        {
+          kind: 'subagent-settled',
+          text: 'stopped',
+          summary: 'stopped',
+          reason: 'aborted',
+          senderSessionId: 'sub',
+        },
+        1,
+      ),
+      appended('assistant/message', reply.data, 2),
+      appended('turn/end', {}, 3),
+      appended('turn/start', { kind: 'message', text: '再一句' }, 4),
+      appended('assistant/message', reply.data, 5),
+      appended('turn/end', { reason: { kind: 'aborted' } }, 6),
+    ];
+    expect(replayConversation(all).kind).toBe('replayed');
+    const trajectory = viewTrajectory(
+      all.reduce((state, event) => applyTrajectory(state, event), initialTrajectory()),
+    );
+    expect(trajectory.turns.at(-1)?.end).toBe('aborted');
+    const wire = JSON.stringify([historyFrames(all, 50_000), trajectory]);
+    expect(wire).toContain('subagent/settle-notice');
+    expect(wire).not.toMatch(/"(?:cause|stopCause|endCause)":/u);
+  });
+});
+
 describe.each(names)('夾具 %s', (name) => {
   const expected = expectedOf(name);
   const ids = Object.keys(expected.sessions).sort();
+  const twoFileIds = ids.filter((id) =>
+    existsSync(legacyTwoFilePathsIn(join(FIXTURES, name), id).log),
+  );
+  const generationIds = ids.filter((id) => !twoFileIds.includes(id));
 
   it('list 列得出每一條，沒有讀不懂的', async () => {
     const listing = await openJsonlSessionStore({ directory: await copied(name) }).list();
@@ -160,34 +219,84 @@ describe.each(names)('夾具 %s', (name) => {
     expect(replaySummary(events)).toEqual(replay);
   });
 
-  it.each(ids)(
-    '續接 %s 之後再寫一筆、收掉，strict 整份重讀：seq 連續、header 是這一版',
+  it.each(twoFileIds)(
+    '續接 %s 之後再寫一筆、收掉：遷成這一版的世代檔，strict 整份重讀 seq 連續；舊日誌一個位元組都沒動、舊 header 換成墓碑',
     async (id) => {
       const directory = await copied(name);
+      const legacy = legacyTwoFilePathsIn(directory, id);
+      const source = await readFile(legacy.log);
       const store = openJsonlSessionStore({ directory });
       const resumed = await resumeClosingInterruptedTurn(store, id);
       expect(resumed.header.version).toBe(SESSION_LOG_FORMAT_VERSION);
       expect(resumed.storedFormatVersion).toBe(expected.sessions[id]!.headerVersion);
       const next: SessionEvent = {
         type: 'turn/start',
-        seq: resumed.events.length,
+        seq: SessionSeq(resumed.events.length),
         time: 1,
         data: { kind: 'message', text: '夾具續寫' },
       };
       await resumed.stored.append([next]);
       await resumed.stored.close();
 
-      const header = JSON.parse(await readFile(join(directory, `${id}.header.json`), 'utf8')) as {
-        version: number;
-      };
-      expect(header.version).toBe(SESSION_LOG_FORMAT_VERSION);
-      const { events } = parseJsonlSessionBody(id, await readFile(join(directory, `${id}.jsonl`)), {
-        version: header.version,
+      expect(await readFile(legacy.log)).toEqual(source);
+      const generation = await readFile(sessionPathsIn(directory, id).log);
+      const newline = generation.indexOf(0x0a);
+      const headerLine = generation.toString('utf8', 0, newline);
+      const { migratedFrom, ...rest } = JSON.parse(headerLine) as Record<string, unknown>;
+      expect(rest).toMatchObject({ type: 'session', id, version: SESSION_LOG_FORMAT_VERSION });
+      const { bytes, acceptedBytes, sha256 } = migratedFrom as Record<string, number | string>;
+      expect(bytes).toBe(source.byteLength);
+      expect(acceptedBytes).toBeLessThanOrEqual(source.byteLength);
+      const prefix = source.subarray(0, Number(acceptedBytes));
+      expect(sha256).toBe(createHash('sha256').update(prefix).digest('hex'));
+      // 新世代的本文從已接受的前綴原樣開頭，續寫接在後面。
+      expect(generation.subarray(newline + 1, newline + 1 + prefix.byteLength).equals(prefix)).toBe(
+        true,
+      );
+      // 墓碑是同一份 header 行，只少了遷移來源。
+      expect(JSON.parse(await readFile(legacy.header, 'utf8'))).toEqual(rest);
+      const { events } = parseJsonlSessionBody(id, generation.subarray(newline + 1), {
+        version: SESSION_LOG_FORMAT_VERSION,
         recovery: 'strict',
       });
       expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
       expect(events).toHaveLength(resumed.events.length + 1);
       expect(events.at(-1)?.type).toBe('turn/start');
+    },
+  );
+
+  it.each(generationIds)(
+    '續接 %s 之後再寫一筆、收掉：接在同一份世代檔後面，不遷移；原本的位元組與舊路徑的墓碑都沒動',
+    async (id) => {
+      const directory = await copied(name);
+      const paths = sessionPathsIn(directory, id);
+      const legacy = legacyTwoFilePathsIn(directory, id);
+      const source = await readFile(paths.log);
+      const tombstone = await readFile(legacy.header);
+      const store = openJsonlSessionStore({ directory });
+      const resumed = await resumeClosingInterruptedTurn(store, id);
+      expect(resumed.storedFormatVersion).toBe(expected.sessions[id]!.headerVersion);
+      const next: SessionEvent = {
+        type: 'turn/start',
+        seq: SessionSeq(resumed.events.length),
+        time: 1,
+        data: { kind: 'message', text: '夾具續寫' },
+      };
+      await resumed.stored.append([next]);
+      await resumed.stored.close();
+
+      const generation = await readFile(paths.log);
+      expect(generation.subarray(0, source.byteLength).equals(source)).toBe(true);
+      expect(await readFile(legacy.header)).toEqual(tombstone);
+      const newline = generation.indexOf(0x0a);
+      const header = JSON.parse(generation.toString('utf8', 0, newline)) as Record<string, unknown>;
+      expect(header).not.toHaveProperty('migratedFrom');
+      const { events } = parseJsonlSessionBody(id, generation.subarray(newline + 1), {
+        version: SESSION_LOG_FORMAT_VERSION,
+        recovery: 'strict',
+      });
+      expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+      expect(events).toHaveLength(resumed.events.length + 1);
     },
   );
 
@@ -222,7 +331,7 @@ describe.each(names)('夾具 %s', (name) => {
           })),
         ).toEqual(trigger.feedback);
         // 驗收 H（#1606）：同一份舊日誌經插件的 `list`（讀之前先過 schema）照樣讀得出來——回放驗證不能把出貨過的舊格式當成壞掉。
-        // `list` 只回以訊息記的那幾筆（以輪記的舊評分不回，#1606 之前就是這樣，這張不動），所以只比那幾筆。
+        // 對不到回覆的舊評分不回（#1850），所以只比對得到回覆的。
         const listed = await createFeedbackService(
           { maxNoteBytes: 8192 },
           () => MEMORY_DURABILITY,
@@ -263,8 +372,56 @@ describe.each(names)('夾具 %s', (name) => {
         expect(recordedApprovalPolicy(events) !== undefined).toBe(trigger.approvalPolicyRecorded);
         expect(approvalPolicyOnResume(events)).toBe(trigger.approvalPolicyOnResume);
       }
+      if (trigger.subagent !== undefined) {
+        expect(opened.header.parentSession).toBe(trigger.parentSession);
+        expect(opened.header.origin !== undefined).toBe(trigger.originRecorded);
+        expect(isSubagentSessionHeader(opened.header)).toBe(trigger.subagent);
+      }
+      if (trigger.browserTimeZone !== undefined) {
+        expect(deriveBrowserTimeZoneContext(events)).toEqual(trigger.browserTimeZone);
+      }
     });
   }
+});
+
+describe('對不到回覆的舊評分（#1850）：評分清單不回，離線掃描照算', () => {
+  const service = createFeedbackService({ maxNoteBytes: 8192 }, () => MEMORY_DURABILITY);
+
+  async function fixtureEvents(name: string): Promise<readonly SessionEvent[]> {
+    const opened = await openJsonlSessionStore({ directory: await copied(name) }).open(
+      'cli',
+      'read',
+    );
+    return opened.read();
+  }
+
+  async function listedOf(events: readonly SessionEvent[]): Promise<unknown> {
+    const listed = await service.list(new SessionLog('cli', { seed: events }));
+    return listed.ok && listed.value.items.map((item) => [item.messageId, item.rating]);
+  }
+
+  function scannedOf(events: readonly SessionEvent[]): unknown[] {
+    return [...ratingsByTurn(events)].map(([turn, item]) => [
+      turn,
+      'messageId' in item ? item.messageId : null,
+      item.rating,
+    ]);
+  }
+
+  it('v8：日誌沒有記回覆，那一輪的評分只有掃描讀得到', async () => {
+    const events = await fixtureEvents('v8');
+    expect(await listedOf(events)).toEqual([]);
+    expect(scannedOf(events)).toEqual([[0, null, 'negative']]);
+  });
+
+  it('v9：回覆沒有 id 的那一輪不回，回覆帶 id 的那一輪照回', async () => {
+    const events = await fixtureEvents('v9');
+    expect(await listedOf(events)).toEqual([['fixture-reply', 'positive']]);
+    expect(scannedOf(events)).toEqual([
+      [0, null, 'negative'],
+      [17, 'fixture-reply', 'positive'],
+    ]);
+  });
 });
 
 describe('規則（驗收 D）', () => {
@@ -303,6 +460,8 @@ describe('規則（驗收 D）', () => {
       [33, "if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
       [34, "return recordedApprovalPolicy(events) ?? 'ask';"],
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
+      [51, "header.origin === 'subagent' || (header.parentSession !== undefined"],
+      [52, "if (site.layout === 'two-file') {"],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
     expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);

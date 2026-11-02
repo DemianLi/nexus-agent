@@ -141,10 +141,6 @@ describe('量具自檢：每一種寫法都抓得到，逃生口與擁有者不�
   });
 });
 
-/**
- * 掃哪些原始碼。**`'apps/web/src'` 要寫成字面值出現在這裡**：`.github/scripts/plan_ci.py` 靠檔案裡有這串字面值，
- * 才把它認成「掃整個樹的絆索」而在選擇性測試時也必跑；換成別的寫法，只改 web 的 PR 就跑不到這一道。
- */
 const SOURCE_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const;
 
 describe('全樹掃描', () => {

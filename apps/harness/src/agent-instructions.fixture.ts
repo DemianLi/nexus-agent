@@ -48,6 +48,7 @@ export function createAgentInstructionsMiddleware(
     hasWorkspace: () => true,
     workspaceRoot: () => undefined,
     sharedWorkspacePrefix: () => undefined,
+    skillSources: () => [],
   };
   return createPreStepMiddleware(
     AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,

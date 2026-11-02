@@ -58,6 +58,13 @@ export {
   isApprovalPolicy,
   recordedApprovalPolicy,
 } from './approval-policy.js';
+export {
+  APPROVAL_POLICY_ASK_SENTENCE,
+  APPROVAL_POLICY_NEVER_SENTENCE,
+  APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
+  approvalPolicySentence,
+  createApprovalPolicyPromptMiddleware,
+} from './approval-policy-prompt.js';
 export type {
   ApprovalPolicySource,
   ApprovalPolicySwitchOutcome,
@@ -122,6 +129,7 @@ export type {
 export {
   hostPathOf,
   isSandboxMode,
+  isUnderAnyPrefix,
   SANDBOX_MODES,
   SHARED_WORKSPACE_SERVICE,
   virtualPathOf,
@@ -183,8 +191,14 @@ export type {
   SkillCatalogEntry,
   SkillCatalogScan,
   SkillInvocationPolicy,
+  SkillSourcesPlacement,
 } from './skill-catalog.js';
-export { isHumanSpeech, renderSkillInvocation, scanSkills } from './skill-catalog.js';
+export {
+  isHumanSpeech,
+  renderSkillInvocation,
+  scanSkills,
+  threadSkillSources,
+} from './skill-catalog.js';
 export type {
   DispatchMode,
   EventDispatcher,
@@ -215,7 +229,12 @@ export {
   EXTERNAL_MCP_CONTENT_NOTICE,
   REFERENCE_RULE,
   REFERENCE_WARNING,
+  SHARED_WORKSPACE_CONTENT_NOTICE,
 } from './untrusted-content.js';
+export {
+  createSharedReadMarkMiddleware,
+  SHARED_READ_MARK_MIDDLEWARE_NAME,
+} from './shared-read-mark.js';
 export type { HostExitChild } from './host-exit-children.js';
 export { trackHostExitChild } from './host-exit-children.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
@@ -327,6 +346,7 @@ export {
 
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {
+  APPROVAL_INVALID_REPLY,
   APPROVAL_NO_CHANNEL,
   APPROVAL_POLICY_NEVER,
   APPROVAL_REJECTED_BY_USER,
@@ -352,7 +372,7 @@ export {
 
 export {
   createObservationPolicy,
-  createVersionHasher,
+  FILE_VERSION,
   noteReadVersion,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
   OBSERVATION_POLICY_PLUGIN_NAME,
@@ -361,7 +381,7 @@ export {
   OBSERVED_READ_TOOL,
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
-export type { VersionHasher } from './observation.js';
+export type { FileVersionLookup, FileVersionSource } from './observation.js';
 
 // 檔案錯誤與讀到哪各是一對：middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
 // 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。
@@ -372,6 +392,7 @@ export {
   FS_NOT_FOUND,
   FS_NOT_REGULAR_FILE,
   FS_NOT_TEXT,
+  FS_NO_SPACE,
   FS_PERMISSION_DENIED,
   FS_SANDBOX_DENIED,
   FS_TOOL_ERRORS_MIDDLEWARE_NAME,
@@ -463,6 +484,7 @@ export {
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export {
   createBackgroundApprovalGate,
+  createBackgroundApprovalPolicyPrompt,
   foldRegistry,
   ROOT_ONLY_NOTICE,
   rootOnlyRefusal,
@@ -516,8 +538,9 @@ export {
   interruptedTurnClosers,
   readColdSession,
   resumeClosingInterruptedTurn,
+  unansweredCallResults,
 } from './interrupted-turn.js';
-export type { ColdStoredSession } from './interrupted-turn.js';
+export type { ColdStoredSession, UnansweredCallResult } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
   FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
@@ -687,10 +710,11 @@ export {
   summarizationConfigSchema,
   summarizationPlugin,
 } from './summarization.js';
-export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
+export type { EstimatedRequest, RequestParts, TokenEstimate } from './token-estimate.js';
 export {
   estimateAnchoredTokens,
   estimateMessageTokens,
+  estimateRequestParts,
   estimateRequestTokens,
   estimateTextTokens,
   TokenAnchorBook,
@@ -774,7 +798,9 @@ export {
   openTurnStart,
   hasUnansweredInterrupt,
   assertSessionEventEnvelope,
+  boundContextSummary,
   buildForkSeed,
+  CONTEXT_SUMMARY_MAX_CHARS,
   inheritedEventCount,
   isKnownSessionEventType,
   isLogicalTurnStart,
@@ -787,6 +813,8 @@ export {
   SESSION_EVENT_MAX_DEPTH,
   SessionEventDepthError,
   SessionLog,
+  SessionLogOffset,
+  SessionSeq,
   snapshotJsonValue,
   validateSessionEventData,
 } from './session-log.js';
@@ -836,6 +864,7 @@ export {
   SessionCorruptionError,
   SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
 } from './session-store.js';
 export type {
   SessionFormatCatalog,
@@ -850,8 +879,16 @@ export {
   classifyStoredFormatVersion,
   createSessionFormatCatalog,
 } from './session-format.js';
-export type { SessionFilenames } from './session-filename.js';
-export { parseSessionHeaderFilename, sessionFilenames } from './session-filename.js';
+export type { LegacyTwoFileSessionFilenames } from './session-filename.js';
+export {
+  FIRST_GENERATION_FORMAT_VERSION,
+  SESSION_LOCK_FILENAME,
+  generationLogFilename,
+  legacyTwoFileSessionFilenames,
+  parseGenerationLogFilename,
+  parseLegacyTwoFileHeaderFilename,
+  sessionDirectoryName,
+} from './session-filename.js';
 
 export { errorChain } from './error-chain.js';
 export { LLM_FAILURE_FALLBACK_MESSAGE, llmFailure, thrownMessage } from './llm-failure.js';

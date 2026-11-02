@@ -12,6 +12,7 @@ import { decision, projectionFrame, view } from '@/test/trajectory-fixtures';
 import {
   ABSENT,
   approvalCodeText,
+  toolCodeText,
   clockText,
   durationText,
   FAILURE_CODE_LABEL,
@@ -50,6 +51,7 @@ describe('signalText：只讀結構化欄位', () => {
     [decision('reminder', 1, { tool: 'ls', count: 3 }), '重複呼叫：ls 連續第 3 次'],
     [decision('reminder', 1, {}), '重複呼叫：同一個工具'],
     [decision('plugin-message', 1, { plugin: 'goal' }), '外掛 goal 插了一則訊息'],
+    [decision('skill-invocation', 1, { name: 'deploy' }), '叫用技能 deploy'],
     [decision('goal', 1, { operation: 'create', phase: 'active' }), '建立目標（進行中）'],
     [decision('goal', 1, { operation: 'block', phase: 'blocked' }), '目標卡住了（卡住）'],
     [decision('goal', 1, { operation: 'future-op' }), '目標：future-op'],
@@ -79,7 +81,7 @@ describe('signalText：只讀結構化欄位', () => {
     ],
     [
       decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'unavailable' } }),
-      '核准 bash：無法回答',
+      '核准 bash：沒有有效回覆',
     ],
     [
       decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'future' as never } }),
@@ -160,11 +162,26 @@ describe('輪的起因標籤', () => {
   });
 });
 
-describe('approvalCodeText：不必問人的核准結局', () => {
+describe('toolCodeText：工具列上碼旁邊那一句（#2242）', () => {
+  it('認得磁碟滿與核准的碼', () => {
+    expect(toolCodeText('FS_NO_SPACE')).toBe('主機的儲存空間滿了');
+    expect(toolCodeText('APPROVAL_REJECTED_BY_USER')).toBe('人拒絕了');
+  });
+
+  it.each(['FS_NOT_FOUND', 'ABORTED', '', 'constructor', '__proto__'])(
+    '%j 沒有對應的句子 → undefined，只留原碼',
+    (code) => {
+      expect(toolCodeText(code)).toBeUndefined();
+    },
+  );
+});
+
+describe('approvalCodeText：核准被拒的碼', () => {
   it.each([
     ['APPROVAL_POLICY_NEVER', '核准政策一律不允許'],
     ['APPROVAL_NO_CHANNEL', '沒有人可以問'],
     ['APPROVAL_REJECTED_BY_USER', '人拒絕了'],
+    ['APPROVAL_INVALID_REPLY', '回覆看不懂，沒有執行'],
     ['TOOL_DENIED_BY_LISTENER', '被攔截器拒絕'],
   ])('%s → %s', (code, text) => {
     expect(approvalCodeText(code)).toBe(text);
@@ -193,6 +210,7 @@ describe('失敗碼：一句話，不認得的原樣顯示', () => {
       'LOCAL_CAPACITY',
       'INVALID_CREDENTIAL',
       'NESTING_TOO_DEEP',
+      'STORAGE_FULL',
       'UNKNOWN',
     ];
     for (const code of vocabulary) {

@@ -21,7 +21,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { attachSessionPersistence, resumeClosingInterruptedTurn, subagentLinks } from '@nexus/core';
+import {
+  attachSessionPersistence,
+  resumeClosingInterruptedTurn,
+  SessionLogOffset,
+  subagentLinks,
+} from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -173,7 +178,10 @@ async function boot(options: {
       ? undefined
       : attachSessionPersistence(pump.sessions, logs, {
           ...(resumed !== undefined && {
-            resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+            resumedRoot: {
+              stored: resumed.stored,
+              storedCount: SessionLogOffset(resumed.events.length),
+            },
           }),
         });
   return {

@@ -78,6 +78,23 @@ describe('出貨檔那一列帶 __jsExpr：整份拒絕，沒有被 eval', () =>
     expect(tree.registry).toEqual([])
   })
 
+  // Loader 的 `isJsExpr` 只認字串值（上游 #239），這裡看鍵名，跟宿主的 `findJsExpr` 同一把尺。
+  it('非字串的 `__jsExpr`：`disabled` 與 `config` 都整份拒絕', async () => {
+    for (const row of [
+      { ...rows[0], disabled: { __jsExpr: 1 } },
+      { ...rows[0], config: { v: { __jsExpr: 1 } } },
+    ]) {
+      const current = await bootTree({ rows: [row, rows[1]] })
+      tree = current
+      const outcome = await includeOutcome(current)
+      expect(outcome.state).toBe(3)
+      expect(outcome.message).toContain('__jsExpr')
+      expect(current.registry).toEqual([])
+      await current.dispose()
+      tree = undefined
+    }
+  })
+
   it('群組底下的子列：掃的是整份樹，不只頂層', async () => {
     tree = await bootTree({
       rows: [

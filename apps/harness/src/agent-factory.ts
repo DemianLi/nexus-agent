@@ -49,6 +49,7 @@ import {
   foldRegistry,
   formatOrigin,
   createBackgroundApprovalGate,
+  createBackgroundApprovalPolicyPrompt,
   createRegistry,
   createSubagentDelegationMiddleware,
   isFeedbackEvent,
@@ -103,6 +104,7 @@ import { TextOnlyStateBackend } from './binary-read.js';
 import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import type { SandboxModeSource } from './contained-backend.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { AttachmentStore } from './attachment-store.js';
 import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
@@ -206,8 +208,8 @@ export interface CreateNexusAgentOptions {
    * 只有這條 thread 有私有可寫根時才給；舊 thread 的可寫根本來就是共用區，不再另掛。**省略就不掛**（CLI、eval、spike）。
    *
    * 偏離登記（理由 2，#1775 兩條之第 2 條；延伸＝工作區指示檔從共用區讀、落盤關掉時可寫根在記憶體，登記在 `thread-roots.ts` 檔頭）：`--workspace` 退成唯讀共用區，且**不吃升級**（Q8 (a)）。部署方要放全員共用的參考資料，
-   * 又不能讓一條對話改到別條對話看得到的檔；一條 thread 的核准，別條 thread 的使用者沒有核准過。補的是**一條固定唯讀的路由**：mode 是字面值
-   * `'read-only'`（不接沙箱控制器的 source），也不傳 `grants`（認領不到任何 grant），所以 `danger-full-access` 與核准過的升級都改不了它。
+   * 又不能讓一條對話改到別條對話看得到的檔；一條 thread 的核准，別條 thread 的使用者沒有核准過。補的是**一條固定唯讀的路由**：檔案政策是字面值
+   * `'read-only'`（不接沙箱控制器的 source；只有 `toolMode` 跟會話，決定 `rg` 上不上 OS 沙箱），也不傳 `grants`（認領不到任何 grant），所以 `danger-full-access` 與核准過的升級都改不了它。
    * 同附件路由的形狀（`attachment-store.ts` 的 `readOnlyRoute`：固定 `read-only`、不吃控制器與 grant）。
    */
   readonly sharedWorkspace?: { readonly rootDir: string };
@@ -253,6 +255,8 @@ export interface CreateNexusAgentOptions {
    * default backend 是 Phase 2 `feat/fs-backends` 的事**，現在這個不設防。
    */
   readonly backend?: AnyBackendProtocol;
+  /** 路由起 `rg` 用哪個模式，見 `ContainedFilesystemBackendOptions.toolMode`。省略就各照路由自己的模式。 */
+  readonly toolMode?: SandboxModeSource;
   /** 工具呈現順序。省略即字典序（省略不代表隨便排，代表另一種確定的排法）。 */
   readonly toolOrder?: readonly string[];
   /**
@@ -861,7 +865,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const stashRoute =
       options.toolResultStash === undefined
         ? undefined
-        : createToolResultStash(options.toolResultStash);
+        : createToolResultStash({
+            ...options.toolResultStash,
+            ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
+          });
     const params = foldRegistry(registry, {
       // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
       events: registry.dispatch,
@@ -882,13 +889,16 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           stashRoute,
           options.attachments === undefined
             ? undefined
-            : await options.attachments.readOnlyRoute(attachmentScope),
+            : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode),
           options.sharedWorkspace === undefined
             ? undefined
-            : // 固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
+            : // 檔案政策固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
               new ContainedFilesystemBackend({
                 rootDir: options.sharedWorkspace.rootDir,
                 mode: 'read-only',
+                // 共用區就是部署方的 `--workspace`，別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗，理由同工作區那格（#1704、#2158）。
+                tolerateUnreadable: true,
+                ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
               }),
         ),
       ),
@@ -964,6 +974,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
      * @throws 沒有這個子代理、規格不合。
      */
     const backgroundApprovalGate = createBackgroundApprovalGate(registry);
+    const backgroundApprovalPolicyPrompt = createBackgroundApprovalPolicyPrompt();
     const compileSubagent = (
       name: string,
       checkpointer: NonNullable<AgentCheckpointer>,
@@ -980,6 +991,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         follow: false,
         // 背景子代理背後沒有人（#328 第 1 項只開前景）：換成 `policy-never` 的閘門，要核准的操作確定性回絕，不發中斷（#737，照 dsh）。
         approvalGate: backgroundApprovalGate,
+        // 政策句跟閘門用同一組事實（#1986）：閘門換成 `policy-never`，這一句也換成「一律自動回絕」那句。
+        approvalPolicyPrompt: backgroundApprovalPolicyPrompt,
         // 聲明同理換回背景那句：fold 放進規格的是前景用的（核准交給使用者），背景背後沒有人。
         delegation: createSubagentDelegationMiddleware(),
       }).withConfig({
@@ -1046,6 +1059,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 今天的消費者是續行排程器（`cli.ts` 的 `goalDriverPort` 讀 `goals`）。
        */
       services: registry.services,
+      /** 折進這次組裝的 `memory` 來源，舊 thread 的保留清單用（`shared-reserved-writes.ts`）。 */
+      memorySources: registry.memory.sources(),
       /**
        * 掛著的遙測服務說的共享策略，**沒掛任何東西時是 `undefined`**。
        *

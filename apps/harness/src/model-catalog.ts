@@ -34,8 +34,10 @@
  *   （`{ off: null }` 是有意義的宣告：這顆會推理、可以關掉、預設照模型自己的）；鍵不限制在 dsh 的 `THINKING_LEVELS`（出廠那一筆的鍵是
  *   `off` 與 `default`，`default` 不在其中）。`thinkingLevelMap` 本身是 pi-ai 自己的預設行為，不適用。
  * - **`chat_template_kwargs` 只有「關」那一邊會送。** pi-ai 在非 `off` 的等級底下會把 `thinking.enabled` 解成 `true`
- *   一併送出；我們的主請求今天不帶這一格（預設就是開著），只有標題這種要關推理的用途才帶（#650）。**沒有量過
- *   「明著送 `enable_thinking: true`」跟「不送」是不是等價**（這台機器沒有 key，量不了），所以保留今天的送法。
+ *   一併送出；我們的主請求今天不帶這一格，只有標題這種要關推理的用途才帶（#650）。所以 `default` 是模型自己的預設，
+ *   **開不開推理各顆不同，不代表會推理**。主請求都不送時，`nvidia/nemotron-3.5-bolt-e4b` 35 則回覆的推理 token 全是 0，
+ *   `nvidia/nemotron-3.5-super-vl-120b-a12b` 24 則全部大於 0。明著送 `enable_thinking: true` 跟不送不等價：Bolt 這時才推理，
+ *   同一份請求（時間讀數排在問題之後）8 次裡有 6 次不呼叫工具（量測：2026-10-30，NVIDIA 閘道，#2155），所以 `default` 不明送。
  *
  * @module
  */
@@ -224,6 +226,18 @@ export function acceptsImages(entry: ModelEntry): ImageSupport {
 }
 
 /**
+ * 這一筆**宣告了** `off` 那一級（`reasoningEfforts` 有 `off` 這個鍵）。看宣告，不看值：`off: null` 在 dsh 的意思是「支援，但什麼都不送」。
+ * 標題請求紀錄的 `reasoningEffort` 與 {@link thinkingOffBody} 共用這一個判準，記的跟送的出自同一處（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)）。
+ *
+ * @param entry - 型錄條目。
+ * @returns 宣告了就 `true`；沒宣告、`reasoningEfforts` 是 `false`（不推理）或沒寫，都是 `false`。
+ */
+export function declaresOffEffort(entry: ModelEntry): boolean {
+  const efforts = entry.reasoningEfforts;
+  return efforts !== undefined && efforts !== false && Object.hasOwn(efforts, 'off');
+}
+
+/**
  * 要關掉推理時加進請求 body 的東西：`off` 那一級加上 `compat.chatTemplateKwargs`，把 `thinking.enabled` 解成 `false`。
  * 沒宣告 `off` 那一級、不推理的模型、或沒有 chat template 參數，都是空物件（什麼都不加）。
  *
@@ -231,8 +245,7 @@ export function acceptsImages(entry: ModelEntry): ImageSupport {
  * @returns 要疊進請求 body 的頂層欄位。
  */
 export function thinkingOffBody(entry: ModelEntry): Record<string, unknown> {
-  const efforts = entry.reasoningEfforts;
-  if (efforts === undefined || efforts === false || !Object.hasOwn(efforts, 'off')) return {};
+  if (!declaresOffEffort(entry)) return {};
   const template = entry.compat?.chatTemplateKwargs;
   if (template === undefined) return {};
   const resolved: Record<string, unknown> = {};

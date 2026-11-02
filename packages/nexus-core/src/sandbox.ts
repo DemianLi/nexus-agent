@@ -88,8 +88,9 @@ export const WORKSPACE_ROOT_SERVICE = 'workspaceRoot';
  * （例如 `/shared`，不是主機路徑），**只有這條 thread 有私有可寫根、`--workspace` 退成唯讀共用區時才提供**；舊 thread 的可寫根本來就是
  * 共用區，不提供、也不再另掛。
  *
- * 要它是因為三個讀方各自需要知道「這條 thread 有沒有共用區、在哪個前綴」：`fs` 把手（併進 `offWorkspacePrefixes()`，讓 `present` 拒掉）、
- * `agent-instructions`（部署方放在 `--workspace` 的指示檔從這裡讀）、`sandbox-policy`（政策句多講一句「共用參考區在 …，唯讀」）。
+ * 要它是因為四個讀方各自需要知道「這條 thread 有沒有共用區、在哪個前綴」：`fs` 把手（併進 `offWorkspacePrefixes()`，讓 `present` 拒掉）、
+ * `agent-instructions`（部署方放在 `--workspace` 的指示檔從這裡讀）、`sandbox-policy`（政策句多講一句「共用參考區在 …，唯讀」）、
+ * fold 的技能來源（換到共用區底下，#1928）。
  * 照 {@link WORKSPACE_ROOT_SERVICE} 的做法：組裝點最前面交一格，缺席表達「沒有」。
  */
 export const SHARED_WORKSPACE_SERVICE = 'sharedWorkspace';
@@ -119,6 +120,25 @@ export const SHARED_WORKSPACE_SERVICE = 'sharedWorkspace';
 export function virtualPathOf(path: string): string {
   const normalized = posix.normalize(path.startsWith('/') ? path : `/${path}`);
   return normalized.length > 1 && normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
+}
+
+/**
+ * `path` 是不是某個路由前綴本身或在它底下（[#2082](https://github.com/DemianLi/nexus-agent/issues/2082)）。前綴的結尾斜線不算數，
+ * 比的是整段：`/large_tool_results_x/a.md` **不**在 `/large_tool_results/` 底下。`path` 原樣比，不正規化：要先正規化的自己過 {@link virtualPathOf}。
+ *
+ * 技能來源在新 thread 接不接到共用區底下（`threadSkillSources`）、舊 thread 的守衛擋哪幾個技能目錄、技能清單在圖外讀不讀得到、
+ * present 認不認某個檔在工作區外，都問這一條。前兩個必須算出同一組（`apps/harness/src/shared-reserved-writes.test.ts` 釘）：
+ * 分成兩份寫的話，一邊改了另一邊不會報錯，守衛就靜靜漏擋或多擋一個技能目錄。
+ *
+ * @param path - 虛擬路徑。
+ * @param prefixes - 路由前綴，有沒有結尾斜線都行。
+ * @returns 在其中任何一個底下就是真。
+ */
+export function isUnderAnyPrefix(path: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => {
+    const base = prefix.replace(/\/+$/u, '');
+    return path === base || path.startsWith(`${base}/`);
+  });
 }
 
 /**
@@ -240,12 +260,11 @@ export interface SandboxDenial {
 /**
  * fence 向外面認領 grant 的介面。`SandboxModeController` 就是它的實作。
  *
- * **`escalationHint` 在場就等於「這個組裝有升級工具」**——那是掛上工具的那一步寫進去的
- * 同一個事實，所以 fence 不會對一個沒有那顆工具的模型講「可以升級」（照 dsh：
- * `escalationModes` 為空時不公告）。
+ * **`escalationHint` 在場就等於「這個組裝有升級工具，而且這一刻升得上去」**——前一半是掛上工具的那一步寫進去的
+ * 同一個事實，後一半看這一刻的模式，所以 fence 不會對一個沒有那顆工具、或這一刻沒有格子可升的模型講「可以升級」。
  */
 export interface SandboxGrantLedger {
-  /** 被擋下時接在拒絕後面的升級指引；這個組裝沒有升級工具時為 `undefined`。 */
+  /** 被擋下時接在拒絕後面的升級指引；這個組裝沒有升級工具、或這一刻沒有格子升得到時為 `undefined`。 */
   readonly escalationHint: string | undefined;
   /** 現在待消費的那一顆。**只看，不消費。** */
   peekGrant(): SandboxGrant | undefined;

@@ -283,7 +283,9 @@ describe('評一則回覆', () => {
       await wired.client.feedbackPut('t', { messageId, rating: 'negative', ifVersion: null }),
     ]) {
       expect(outcome).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
-      expect(outcome.kind === 'rejected' && outcome.message).toContain('評分沒存成：磁碟滿了');
+      expect(outcome.kind === 'rejected' && outcome.message).toBe(
+        '評分沒存成，原因記在 serve 的日誌',
+      );
     }
   });
 

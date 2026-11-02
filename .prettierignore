@@ -20,6 +20,9 @@ pnpm-lock.yaml
 
 references/
 
+# 本機停用的 skill 備份，不進版控（各自在 .git/info/exclude 排除）；Prettier 不讀 info/exclude，不寫在這裡 pre-push 的 `prettier --check .` 會被它擋下。
+/.claude/skills_bak/
+
 # 已出貨格式的會話日誌夾具（#1529）：由那一版的寫入器寫出、`scripts/session-format-fixtures/generate.ts` 搬進來，位元組原樣。
 # `expected.json` 也是產生器寫的，交給 Prettier 會被改寫，重產時就跟版控對不上。
 apps/harness/src/fixtures/session-format/

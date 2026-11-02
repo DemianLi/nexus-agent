@@ -165,6 +165,8 @@ describe('觀測分頁：結構化模式', () => {
     await act(async () => {});
     const rows = screen.getAllByTestId('trace-row');
     const toolRow = rows.find((row) => row.getAttribute('data-kind') === 'tool')!;
+    // 時刻收在展開區（#1690 T3）：先打開那一列。
+    fireEvent.click(within(toolRow).getAllByRole('button')[0]!);
     expect(toolRow.textContent).toContain(`${clockText(1_700_000_100_000)} · 1.2 秒`);
     const retry = rows.find((row) => row.getAttribute('data-kind') === 'retry')!;
     expect(retry.textContent).toContain('重試 1/3');
@@ -220,13 +222,69 @@ describe('觀測分頁：結構化模式', () => {
       .getAllByTestId('trace-row')
       .find((row) => row.getAttribute('data-kind') === 'signal')!;
     expect(signal.textContent).toContain('核准 edit_file：允許一次（等了 13.0 秒）');
-    const chips = screen.getAllByTestId('trace-approval-code');
+    const chips = screen.getAllByTestId('trace-code-text');
     expect(chips.map((chip) => chip.textContent)).toEqual(['核准政策一律不允許']);
-    // 不是核准的失敗碼只顯示碼本身。
+    // 沒有對應句子的碼只顯示碼本身。
     expect(screen.getAllByTestId('trace-error-code').map((c) => c.textContent)).toEqual([
       'APPROVAL_POLICY_NEVER',
       'ABORTED',
     ]);
+  });
+
+  it('核准：回覆看不懂（#2040）的中斷列寫沒有有效回覆，工具列說沒有執行，不說人拒絕了', async () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '幫我跑'),
+      ...script.ai('a', { text: '跑' }),
+      script.started('c1', 'bash', { command: 'ls' }),
+      script.approval('int-1', 'bash'),
+      script.failed('c1', '收到的核准回覆看不懂', 'APPROVAL_INVALID_REPLY'),
+      ...script.ai('b', { text: '沒跑' }),
+      script.completed(),
+    ]);
+    const trajectory = view([
+      turn(0, {
+        end: 'completed',
+        calls: [call(5, { reply: reply(11, 'run-a') })],
+        decisions: [
+          decision('interrupt', 10, {
+            id: 'int-1',
+            approval: { tool: 'bash', outcome: 'unavailable', decidedAt: 1_700_000_013_000 },
+          }),
+        ],
+      }),
+    ]);
+    mount(withTrajectory(state, script, trajectory));
+    await act(async () => {});
+    const signal = screen
+      .getAllByTestId('trace-row')
+      .find((row) => row.getAttribute('data-kind') === 'signal')!;
+    expect(signal.textContent).toContain('核准 bash：沒有有效回覆（等了 13.0 秒）');
+    expect(screen.getAllByTestId('trace-code-text').map((chip) => chip.textContent)).toEqual([
+      '回覆看不懂，沒有執行',
+    ]);
+    expect(document.body.textContent).not.toContain('人拒絕了');
+  });
+
+  it('工具的磁碟空間滿（FS_NO_SPACE，#2242）：碼旁邊寫中文那一句', async () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '寫檔'),
+      ...script.ai('a', { text: '寫' }),
+      script.started('c1', 'write_file', { file_path: '/a.txt' }),
+      script.failed('c1', '寫不進去', 'FS_NO_SPACE'),
+      ...script.ai('b', { text: '沒寫成' }),
+      script.completed(),
+    ]);
+    const trajectory = view([
+      turn(0, { end: 'completed', calls: [call(5, { reply: reply(11, 'run-a') })] }),
+    ]);
+    mount(withTrajectory(state, script, trajectory));
+    await act(async () => {});
+    expect(screen.getByTestId('trace-error-code').textContent).toBe('FS_NO_SPACE');
+    expect(screen.getByTestId('trace-code-text').textContent).toBe('主機的儲存空間滿了');
   });
 
   it('呼叫段落展開：缺席的欄位寫「—」不寫 0；指到已被擠掉的快照寫「已不保留」', async () => {
@@ -340,14 +398,14 @@ describe('觀測分頁：結構化模式', () => {
     await act(async () => {});
     expect(screen.getAllByTestId('trace-row')).toHaveLength(ROW_PAGE);
     // 畫的是最新的一段：最後一顆工具在，那句人話（最舊）不在。
-    expect(screen.queryByText('做很多事')).toBeNull();
+    expect(screen.queryByText(/做很多事/)).toBeNull();
     const more = screen.getByTestId('trace-more-rows');
     expect(more.textContent).toContain(TRACE_MORE_ROWS_LABEL);
     expect(more.textContent).toContain('還有 51 列');
     fireEvent.click(more);
     expect(screen.getAllByTestId('trace-row')).toHaveLength(total + 1);
     expect(screen.queryByTestId('trace-more-rows')).toBeNull();
-    expect(screen.getByText('做很多事')).toBeTruthy();
+    expect(screen.getByText(/做很多事/)).toBeTruthy();
     // 要畫兩次 200 多列：本機約 1.2 秒、CI 的機器慢四倍（跑過 5.2 秒、撞預設的 5 秒逾時），
     // 所以這顆單獨放寬；列數是要驗的東西，不能為了快而縮小。
   }, 30_000);

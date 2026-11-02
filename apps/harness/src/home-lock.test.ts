@@ -1,5 +1,5 @@
 /**
- * home 鎖本身（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：真的 kernel flock，沒有替身——同一個
+ * home 鎖本身（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：真的 kernel flock（拿鎖的是系統 perl）——同一個
  * 行程對同一個鎖檔開兩次，flock 一樣互斥，兩個把手就是兩個行程的縮影。產品路徑的接線在 `serve-home-lock.test.ts`。
  */
 
@@ -68,7 +68,7 @@ describe('acquireHomeLock', () => {
 
   it('平台不支援：回 unavailable，不拋；EACCES：原樣拋', async () => {
     const outcome = await acquireHomeLock(dir, async () => {
-      throw Object.assign(new Error('no flock here'), { code: 'ERR_FLOCK_UNSUPPORTED_PLATFORM' });
+      throw Object.assign(new Error('no flock here'), { code: 'ERR_FLOCK_UNAVAILABLE' });
     });
     expect(outcome).toEqual({ unavailable: 'no flock here' });
 

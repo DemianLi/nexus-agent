@@ -9,6 +9,8 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { ClientConfig, Connection, MultiServerMCPClient } from '@langchain/mcp-adapters';
 import { scrubbedParentEnv } from '@nexus/core';
+import { substituted } from './credentials.js';
+import type { ResolvedCredentials } from './credentials.js';
 import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
 import { markUntrusted } from './untrusted-mark.js';
@@ -18,9 +20,13 @@ import type { McpConfig } from './index.js';
  * 交給 `MultiServerMCPClient` 的整份選項，只放這一台 server。plugin 自己連與池連都從這裡拿（#1677 第 2 步：池建 client 時沿用
  * 同一份，含 `afterToolCall`）。
  */
-export function clientOptions(config: McpConfig, elicitation: boolean): ClientConfig {
+export function clientOptions(
+  config: McpConfig,
+  elicitation: boolean,
+  credentials: ResolvedCredentials,
+): ClientConfig {
   return {
-    mcpServers: { [config.serverName]: toAdapterConnection(config, elicitation) },
+    mcpServers: { [config.serverName]: toAdapterConnection(config, elicitation, credentials) },
     // 名字由 `publicToolName` 一個地方說了算，所以 adapter 這邊的前綴全部關掉。
     // 開著的話會有兩份拼名字的邏輯，而其中一份不做正規化。
     prefixToolNameWithServerName: false,
@@ -48,6 +54,9 @@ export function clientOptions(config: McpConfig, elicitation: boolean): ClientCo
  * 首連那條）。池的每一代與 plugin 自己連的首連、重連都走這裡（#1824、#1572 N0516）。工具物件只包一次 {@link throwOnToolError}、
  * 不改名，留給呼叫端建自己的委派物件。
  *
+ * 一拿到 SDK client 就建這一代、掛上 `onclose`，並把「真的關掉了」交給 `onAttached`：之後哪一步拋，呼叫端都等得到這次嘗試開的
+ * 子行程關掉（[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗的嘗試拿不到 SDK client，不會叫它。
+ *
  * **`execution.taskSupport: 'required'` 的工具在這裡就改成當場拒絕**，照 dsh（`mcp-client/src/tools.ts:123` 的 `cacheMode: 'refresh'`、`:137` 判 `taskRequired`、`:280` 拋訊息，`687f282e`）：
  * 這個橋不會用 task 執行，請求送出去只會換回伺服器的協定錯誤碼。偏離：dsh 在自己的 bridge 裡讀 `tool.execution`，這裡的工具是
  * adapter 轉出來的，而 `@langchain/mcp-adapters` 2.0.0 轉工具時丟掉了 `execution`（`dist/tools.js` 沒有 `taskSupport` 的任何處理），
@@ -56,11 +65,14 @@ export function clientOptions(config: McpConfig, elicitation: boolean): ClientCo
 export async function connectGeneration(
   client: MultiServerMCPClient,
   config: McpConfig,
-): Promise<Generation & { readonly listed: Listed }> {
+  onAttached?: (closed: Promise<void>) => void,
+): Promise<ListedGeneration> {
   const calls = new Map<string, ToolCall>();
   const tools: StructuredTool[] = [];
   const listed = await client.getTools();
   const sdk = await client.getClient(config.serverName);
+  const generation = generationOf(calls, sdk);
+  onAttached?.(generation.closed);
   const taskRequired = await taskRequiredNames(sdk, listed.length);
   for (const tool of listed) {
     throwOnToolError(tool);
@@ -69,7 +81,52 @@ export async function connectGeneration(
     tools.push(tool);
   }
   const instructions = instructionsOf(sdk?.getInstructions(), config);
-  return generationOf(calls, sdk, { tools, instructions }) as Generation & { listed: Listed };
+  // 補在同一個物件上：`onclose` 通報的是建的當下那一個。
+  return Object.assign(generation, {
+    listed: { tools, instructions },
+    ...(config.connection.transport === 'stdio' && {
+      livenessTimeoutMs: config.livenessTimeoutMs,
+    }),
+  });
+}
+
+/** {@link connectGeneration} 連成的一代。 */
+export type ListedGeneration = Generation & { readonly listed: Listed };
+
+/** 一個 adapter client 上的連線嘗試，見 {@link attemptsOn}。 */
+export interface Attempts {
+  /** 這個 client 的第一次連線。 */
+  first(): Promise<ListedGeneration>;
+  /** 重連：先把整個 adapter client 收掉，再連一代。 */
+  connect(): Promise<ListedGeneration>;
+  /**
+   * 收掉剛失敗的那次嘗試：關掉整個 adapter client，再等那次開的子行程真的關掉
+   * （[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)）。握手就失敗（拿不到 SDK client）的嘗試沒有東西可等，立刻落定。不拋。
+   */
+  abandon(): Promise<void>;
+}
+
+/** 一個 adapter client 上的連線嘗試：每次都記下那一次的 close 訊號，給 {@link Attempts.abandon} 等。CLI 與池共用。 */
+export function attemptsOn(client: MultiServerMCPClient, config: McpConfig): Attempts {
+  let closed: Promise<void> = Promise.resolve();
+  const first = (): Promise<ListedGeneration> => {
+    closed = Promise.resolve();
+    return connectGeneration(client, config, (signal) => {
+      closed = signal;
+    });
+  };
+  return {
+    first,
+    async connect() {
+      await client.close();
+      return first();
+    },
+    async abandon() {
+      // 監督者的 hook 契約是不拋；收不乾淨的由監督者的期限與 dispose 的 `release` 接手。
+      await client.close().catch(() => {});
+      await closed;
+    },
+  };
 }
 
 /**
@@ -104,6 +161,41 @@ function rejectTaskRequired(tool: StructuredTool): void {
         `Tool "${rawName}" requires task-based execution, which this bridge does not support`,
       ),
     );
+}
+
+/**
+ * 一個呼叫逾時或被停止之後，在背景探一次這一代還活不活著（[#2194](https://github.com/DemianLi/nexus-agent/issues/2194)），不擋那個呼叫回去。
+ * 探的是 `tools/list`：新協議（`2026-07-28`）拿掉了 `ping`，SDK 當場拒絕、根本不送，而每台 server 都要回 `tools/list`。
+ * 只有探活本身逾時才算卡死，交給 `stalled` 收掉重連；任何回應都算活著，錯誤回應也是（代表有人在讀）。連線掉了的 reject 由
+ * `onclose` 那條管。同一代一次只探一個：卡死時不往讀不動的 stdin 再塞。只探 stdio：HTTP 沒有子行程可收，重連救不了對端。
+ */
+export function probeLiveness(generation: Generation, stalled: () => void): void {
+  const { sdk, livenessTimeoutMs: timeout } = generation;
+  if (sdk === undefined || timeout === undefined || generation.probing === true) return;
+  generation.probing = true;
+  sdk.listTools(undefined, { timeout, cacheMode: 'refresh' }).then(
+    () => {
+      generation.probing = false;
+    },
+    (error: unknown) => {
+      generation.probing = false;
+      if (isRequestTimeout(error)) stalled();
+    },
+  );
+}
+
+/** 請求是逾時或被中止放棄的：SDK 兩者都拋 `REQUEST_TIMEOUT`，經 LangChain 的訊號來的是 `TimeoutError`。沿 `cause` 往下找。 */
+export function isRequestTimeout(error: unknown): boolean {
+  for (let current = error, depth = 0; current !== undefined && depth < 5; depth += 1) {
+    const { code, name, cause } = (current ?? {}) as {
+      code?: unknown;
+      name?: unknown;
+      cause?: unknown;
+    };
+    if (code === 'REQUEST_TIMEOUT' || name === 'TimeoutError') return true;
+    current = cause;
+  }
+  return false;
 }
 
 /** SDK client 上，這個檔會用到的那幾個方法；結構型別，不直接依賴 `@modelcontextprotocol/client`。 */
@@ -152,6 +244,10 @@ export interface Generation {
   readonly closed: Promise<void>;
   /** 監督者掛上的「這一代斷了」通報。 */
   onDown?: () => void;
+  /** 探活等多久（毫秒）；只有 stdio 的一代有，見 {@link probeLiveness}。 */
+  readonly livenessTimeoutMs?: number;
+  /** 這一代有一次探活還沒落定。 */
+  probing?: boolean;
   /**
    * {@link connectGeneration} 建的一代才有（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）：這一代 `tools/list` 列出的
    * adapter 工具物件（已經過 {@link throwOnToolError}、名字仍是 raw name）與帶出處標頭的指引。池的每份組裝照它們建自己的委派物件，
@@ -172,15 +268,12 @@ export interface Listed {
 export function generationOf(
   calls: ReadonlyMap<string, ToolCall>,
   sdk: SdkClient | undefined,
-  listed?: Listed,
 ): Generation {
-  if (sdk === undefined)
-    return { calls, sdk, closed: Promise.resolve(), ...(listed && { listed }) };
+  if (sdk === undefined) return { calls, sdk, closed: Promise.resolve() };
   let markClosed!: () => void;
   const generation: Generation = {
     calls,
     sdk,
-    ...(listed && { listed }),
     closed: new Promise<void>((resolve) => {
       markClosed = resolve;
     }),
@@ -229,8 +322,12 @@ export function textOf(content: ToolMessage['content']): string {
     .join('\n');
 }
 
-/** 把我們的連線設定翻成 adapter 收的形狀。 */
-export function toAdapterConnection(config: McpConfig, elicitation: boolean): Connection {
+/** 把我們的連線設定翻成 adapter 收的形狀；憑證引用換成 `credentials` 裡的值（`credentials.ts`）。 */
+export function toAdapterConnection(
+  config: McpConfig,
+  elicitation: boolean,
+  credentials: ResolvedCredentials,
+): Connection {
   const timeout = config.toolCallTimeoutMs;
   const connection = config.connection;
   if (connection.transport === 'stdio') {
@@ -242,7 +339,7 @@ export function toAdapterConnection(config: McpConfig, elicitation: boolean): Co
       // **一律傳整份**，照 dsh 的 `buildChildEnv`（`packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）：清洗過的
       // 父環境在前、設定的在後。不傳或只傳設定那幾格的話，底由 adapter（只補 `PATH`）與 SDK
       // （`getDefaultEnvironment()`，六個名字）決定，語系與代理都到不了子行程。
-      env: { ...scrubbedParentEnv(), ...connection.env },
+      env: { ...scrubbedParentEnv(), ...substituted(connection.env ?? {}, credentials) },
       ...(connection.cwd !== undefined && { cwd: connection.cwd }),
       // 2.0.0 的現代協定 server 要問使用者（elicitation）時走 LangGraph interrupt，等一次 resume。**有人可以回答才開**
       // （{@link McpConfig.elicitation}）：沒人的話開著會讓那一輪停在沒人接的 interrupt 上；關掉之後 adapter 把這種呼叫當工具失敗，
@@ -254,7 +351,9 @@ export function toAdapterConnection(config: McpConfig, elicitation: boolean): Co
   return {
     transport: 'http',
     url: connection.url,
-    ...(connection.headers !== undefined && { headers: { ...connection.headers } }),
+    ...(connection.headers !== undefined && {
+      headers: substituted(connection.headers, credentials),
+    }),
     elicitation,
     defaultToolTimeout: timeout,
   };

@@ -33,7 +33,7 @@ export function CompactionRow({ entry }: { readonly entry: CompactionEntry }) {
       {note !== undefined && <span className="shrink-0">· {note}</span>}
     </>
   );
-  const frame = 'bg-chip text-muted-foreground rounded-xl text-tip';
+  const frame = 'bg-muted text-muted-foreground rounded-xl text-tip';
   if (summary === undefined) {
     return (
       <p

@@ -216,6 +216,8 @@ export const TURN_END_LABEL: Readonly<Record<TrajectoryEnd, string>> = {
  *
  * `NESTING_TOO_DEEP` 也是本機的碼（#1668）：這一輪裡有一則訊息巢狀太深，日誌或存檔點寫不下，這一輪停在那裡，不重試
  * （同一份內容重打一樣深）。那句話講是訊息的形狀，不提層數與上限（#1753）。
+ *
+ * `STORAGE_FULL` 也是本機的碼（#2195）：主機的儲存空間滿了，這一輪停在那裡。那句話同 server 給使用者的固定句，不講哪一區（#2242）。
  */
 export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   AUTH: '驗證失敗',
@@ -230,6 +232,7 @@ export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   LOCAL_CAPACITY: '本機排隊太久，請求沒送出，可稍後再送',
   INVALID_CREDENTIAL: '本機金鑰格式不對，請求沒送出，重送無效，請管理者修正',
   NESTING_TOO_DEEP: '這則訊息巢狀太深，這一輪沒有完成',
+  STORAGE_FULL: '主機的儲存空間滿了，這一輪沒做完，請聯絡管理員',
   UNKNOWN: '原因不明',
 };
 
@@ -259,6 +262,7 @@ export type SignalKind = Exclude<TrajectoryDecision['kind'], 'compaction'>;
 export const SIGNAL_LABEL: Readonly<Record<SignalKind, string>> = {
   reminder: '系統提醒',
   'plugin-message': '外掛訊息',
+  'skill-invocation': '技能',
   goal: '目標',
   plan: '計劃模式',
   todo: '待辦',
@@ -297,6 +301,8 @@ export function signalText(decision: Exclude<TrajectoryDecision, { kind: 'compac
     }
     case 'plugin-message':
       return `外掛 ${decision.plugin} 插了一則訊息`;
+    case 'skill-invocation':
+      return `叫用技能 ${decision.name}`;
     case 'goal': {
       const operation =
         decision.operation === undefined
@@ -324,7 +330,7 @@ export const APPROVAL_OUTCOME_LABEL: Readonly<Record<TrajectoryApprovalOutcome, 
   'allowed-once': '允許一次',
   rejected: '已拒絕',
   cancelled: '已取消',
-  unavailable: '無法回答',
+  unavailable: '沒有有效回覆',
 };
 
 /** 還沒有結局時寫的話：**不推一個結果**——還沒答、或停在這裡沒人答就關掉了（重開之後一樣）。 */
@@ -346,17 +352,30 @@ export function approvalText(approval: TrajectoryApproval, raisedAt: number): st
 }
 
 /**
- * 不必問人就確定的核准，結局在那一次工具呼叫的錯誤碼（`tool/result.error.code`，`TrajectoryTool.code`）：沒有人被擋下來等，
- * 所以軌跡上沒有中斷列。`error.name` 都是 `ApprovalDenied`，與工具自己失敗分得開。其他的碼不在這裡（原樣不顯示）。
+ * 核准被拒時，那一次工具呼叫帶的錯誤碼（`tool/result.error.code`，`TrajectoryTool.code`）。四個 `APPROVAL_*` 的 `error.name` 是
+ * `ApprovalDenied`，攔截器的是 `PreExecuteDenied`，都與工具自己失敗分得開。不必問人就確定的（政策、沒有管道、攔截器）軌跡上沒有
+ * 中斷列，結局只在這裡；問過人的（人拒絕、回覆看不懂）另有中斷列寫結局，這裡說的是為什麼沒有執行。工具列上碼旁邊那一句由 {@link toolCodeText} 決定。
  */
 export const APPROVAL_CODE_LABEL: Readonly<Record<string, string>> = {
   APPROVAL_POLICY_NEVER: '核准政策一律不允許',
   APPROVAL_NO_CHANNEL: '沒有人可以問',
   APPROVAL_REJECTED_BY_USER: '人拒絕了',
+  APPROVAL_INVALID_REPLY: '回覆看不懂，沒有執行',
   TOOL_DENIED_BY_LISTENER: '被攔截器拒絕',
 };
 
 /** 錯誤碼對應的一句話；不是核准那幾個碼就 `undefined`（只認自己的鍵，不認 `constructor` 這類原型上的）。 */
 export function approvalCodeText(code: string): string | undefined {
   return Object.hasOwn(APPROVAL_CODE_LABEL, code) ? APPROVAL_CODE_LABEL[code] : undefined;
+}
+
+/** 工具自己失敗的碼裡，營運者要看懂的那幾個（#2242）。 */
+export const TOOL_CODE_LABEL: Readonly<Record<string, string>> = {
+  FS_NO_SPACE: '主機的儲存空間滿了',
+};
+
+/** 工具列上錯誤碼旁邊那一句：核准的碼或 {@link TOOL_CODE_LABEL}。其他的碼 `undefined`，只留原碼。 */
+export function toolCodeText(code: string): string | undefined {
+  if (Object.hasOwn(TOOL_CODE_LABEL, code)) return TOOL_CODE_LABEL[code];
+  return approvalCodeText(code);
 }

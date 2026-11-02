@@ -105,6 +105,7 @@ async function mount(
     hasWorkspace: () => options.workspace ?? true,
     workspaceRoot: () => undefined,
     sharedWorkspacePrefix: () => undefined,
+    skillSources: () => [],
   };
   const sessions = new SessionRegistry('unit');
   const tools = createToolsProvider();

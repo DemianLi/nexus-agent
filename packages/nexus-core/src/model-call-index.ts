@@ -44,7 +44,7 @@ export interface ModelCallRecord {
   /** `llm/retry`：每一次排定的重試。第一次嘗試本身沒有事件。 */
   readonly retries: readonly SessionEvent<'llm/retry'>[];
   readonly retryStarts: readonly SessionEvent<'llm/retry-started'>[];
-  /** 回覆；被人按停止切斷的那半段（`interrupted`）也在這裡，在正常回覆之後。 */
+  /** 回覆；這一輪被中止時切斷的那半段（`interrupted`）也在這裡，在正常回覆之後。 */
   readonly replies: readonly SessionEvent<'assistant/message'>[];
   /** 摘要器量這次請求的那一顆（`context/measure`）。 */
   readonly measures: readonly SessionEvent<'context/measure'>[];

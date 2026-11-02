@@ -314,6 +314,9 @@
       trigger: { type: messages, value: 20 }
       keep: { type: messages, value: 20 }
     historyPathPrefix: /conversation_history
+    # 摘要之後重新量測，仍超過 token 門檻就換最小的保留量再摘一次（#2028）。
+    # 只收 0 或 1；0 是不重試，摘要後仍超過就記一條 warn、照那份送。
+    compactionRetries: 1
 
 # 先讀後改：沒讀過的檔不准改（#273）。照 dsh base 的 `fs-observation-policy`
 # （`packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
@@ -465,7 +468,31 @@
   config:
     openAt: never
 
-# serve 行程裡最多同時有幾條 thread（#1476，「底座保險絲」第 2 級；背景 #1464：每條 thread 常駐約 2 MB heap、serve 不回收），
+# 用 `@` 引用別的會話時的四個上限（#1573 N0862）：一則訊息最多引用幾條（`maxReferences`，不能超過 3）、候選最多回幾筆
+# （`candidateLimit`）、每條來源序列化後最多幾個位元組（`maxReferenceBytes`，**省略即照模型窗口算**，給了就原樣蓋過）、
+# 自動預算占模型窗口的幾成（`referenceContextFraction`）。**欄位名與 schema 的預設（3、50、0.2）都是 dsh 的**
+# （`packages/context/session-reference/src/index.ts:90-95`，`1517a4db`／`687f282e`／`22ddee37`）。自動預算是
+# `max(65536, floor(窗口 × 4 × 比例))` 位元組，窗口跟著**這條 thread 下一步會走的模型**，換了模型下一次引用就用新那顆的窗口。
+#
+# **出廠的比例是 0.1，不是 dsh 的 0.2。偏離登記：理由 2（產品需求超出 dsh 的射程），demian 2026-10-17 拍板 Q4 (b)。**
+# dsh 的 web-app 出貨這一列不給 config、吃 0.2；那個「每 token 4 位元組」是照英文調的。本產品以中文為主：用 nexus 自己的估算器
+# （o200k，`token-estimate.ts`）量中文是約 0.31 token／位元組（2026-10-24 量 `AGENTS.md`、`docs/operations.md`、`docs/standards.md`、
+# `.docs/development-plan.md`：混排 0.3100、只留中日韓字元 0.3114）。出廠模型窗口 784,369：比例 0.2 時每條 627,495 位元組，
+# 三條約 587k–598k token，是摘要門檻 627,495 的 94%–95%，乘上實測的真實÷o200k（中文 1.10，`token-estimate.ts:41`）就超過；
+# 比例 0.1 時每條 313,747 位元組，三條約 294k–301k token，占門檻 47%–48%（乘 1.10 約 51%–53%），留下一半給 system prompt、
+# 工具定義與歷史。測試 `session-reference-budget.test.ts` 的 H 釘住這一點。
+# 部署方可以調：要更多給 `referenceContextFraction`（上限 1），要固定位元組給 `maxReferenceBytes`。patch 是整份替換 `config`，
+# 只寫一格的話另外三格由 schema 補，**包括比例回到 0.2**，所以調別的格時要把比例一起寫。
+# **寫壞整個起不來**（`startup-audit.ts` 的 `REQUIRED_ENTRY_IDS`），**也關不掉**（`PROTECTED_ENTRY_NAMES`）：兩者的理由都是掉了或關了
+# 之後值回到 schema 的 0.2，靜靜把出廠調低的比例拿掉；逐點見 `src/settings/session-reference.ts` 檔頭。起動期讀一次、改了要重啟。
+- id: session-reference
+  name: '#settings/session-reference'
+  config:
+    maxReferences: 3
+    candidateLimit: 50
+    referenceContextFraction: 0.1
+
+# serve 行程裡最多同時有幾條 thread（#1476，「底座保險絲」第 2 級；每條 thread 常駐約 1.2 MB heap（#1983），不逐出就一直留著），
 # 以及閒置的 thread 多久之後撤出記憶體（#1484，第 1 級）。**兩格出廠都開著**（#1619，demian 2026-10-18 拍板）：上限 500 條、閒置 2 小時撤出。
 # 值的家在 schema（`src/settings/thread-capacity.ts`），這裡照抄同一組讓人看得到；patch 是整份替換 `config`，只寫一格的話另一格由 schema 補。
 # 到了上限，新 thread（含讀歷史、續聊磁碟上的舊 thread）回 `thread_at_capacity`，已在行程裡的照常；閒置條件全成立滿 2 小時的 thread
@@ -670,12 +697,12 @@
 # **`models` 是型錄**（#729），照 `llm-pi-ai` 一條路由的 `models` 清單（`packages/llm/llm-pi-ai/README.md:40-103`）：
 # 每筆帶窗口、輸出上限（`maxTokens`，設了就是這顆每次請求送出去的 `max_tokens`）、`input`（收哪些種類，這是對端點
 # 的宣告，不是檢查）、`reasoningEfforts`（`off:` 是不推理）與 `compat`（關推理的 chat template 參數）。
-# **`modelId` 必須在裡面**，不在就是載入期失敗；**patch 寫 `models` 是整份取代**，不是逐筆合併。預設那顆模型是拿
-# 「吃不吃得下 16384」當淘汰門檻選出來的——換一筆之前先確認它的 `maxTokens` 吃得下，吃不下的模型會每一次呼叫都失敗。
+# **`modelId` 必須在裡面**，不在就是載入期失敗；**patch 寫 `models` 是整份取代**，不是逐筆合併。預設那顆模型
+# 量過吃得下 16384——換一筆之前先確認它的 `maxTokens` 吃得下，吃不下的模型會每一次呼叫都失敗。
 #
 # **關推理的寫法（原本的 `thinkingOffBody`，#650）在預設那一筆的 `off` 等級與 `compat`**：標題呼叫（上面
 # `thread-title-llm` 那一列）加進請求 body 的那幾格，用來關掉推理——預設那顆模型不關推理的話，64 個輸出 token 全被推理
-# 吃光、一個標題都回不出來（實測 0/6，關掉 6/6）。`$var: thinking.enabled` 在 `off` 那一級解成 `false`；主請求不帶。
+# 吃光、一個標題都回不出來（實測不帶 0/1，帶 2/2）。`$var: thinking.enabled` 在 `off` 那一級解成 `false`；主請求不帶。
 # 換一顆不認得這幾格的模型，不要寫 `compat`。登記在 `src/settings/live-model.ts` 的檔頭「偏離四」。
 #
 # **設定寫壞時**（#751）：帶 `--live` 就整個起不來，**不退回 schema 的預設值**——那份預設的網址是對外的公開端點，
@@ -688,7 +715,7 @@
     # （受管憑證檔 `refs:`、啟動環境、`.env`，見 docs/operations.md〈金鑰放哪裡〉）。把 `baseUrl` 指到公司內部閘道時改成 `GATEWAY_KEY` 之類，
     # 受管檔與環境裡就用那個名字；環境變數形狀。出廠就是 NVIDIA 端點的名字，不改行為。
     apiKeyEnv: 'NVIDIA_API_KEY'
-    modelId: 'nvidia/nemotron-3-super-120b-a12b'
+    modelId: 'nvidia/nemotron-3.5-lightning-30b-a3b'
     # 逾時拆兩格（#1251，同 dsh 的 `timeoutMs`／`streamIdleTimeoutMs`）：`timeoutMs` 管連線到第一則事件（視覺模型先吃圖，
     # 90b 實測首事件 133 秒，所以 180 秒）；`streamIdleTimeoutMs` 管第一則事件之後兩段位元組之間（90 秒，demian 拍板；
     # dsh 預設 300 秒）。登記在 `src/settings/live-model.ts` 的檔頭「偏離三」。
@@ -721,8 +748,8 @@
     # maxConcurrentRequests: 8
     maxWaitMs: 60000
     models:
-      - id: 'nvidia/nemotron-3-super-120b-a12b'
-        contextWindow: 700045
+      - id: 'nvidia/nemotron-3.5-lightning-30b-a3b'
+        contextWindow: 784369
         maxTokens: 16384
         input: [text]
         reasoningEfforts:

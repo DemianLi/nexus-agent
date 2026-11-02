@@ -53,6 +53,7 @@ import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/lib/agent';
 import { createChangesStores } from '@/lib/changes-diff';
+import { retainedSuffix } from '@/lib/committed-draft';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { createSubagentUsageLoader } from '@/lib/subagent-usage';
@@ -95,6 +96,9 @@ import { connectionStall, disconnectedPlaceholder } from '@/lib/connection-stall
 import type { ConnectionStall } from '@/lib/connection-stall';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
+import { threadLogBudgetText } from '@/lib/thread-log-budget';
+import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
+import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
 import { randomUuid } from '@/lib/uuid';
@@ -201,7 +205,7 @@ function renderSubagentEntry(entry: ConversationEntry) {
 /**
  * 對話介面。
  *
- * agent 跑在 Node 那一端，中間是 `@nexus/wire` 那條線（上行 HTTP POST、下行 SSE）。
+ * agent 跑在 Node 那一端，中間是 `@nexus/wire` 那條線（上行 HTTP POST、下行走 WebSocket（退路是 SSE））。
  * 起 agent 的方式：`pnpm --filter @nexus/harness run serve`，dev server 的
  * `/threads` 會轉過去（見 `vite.config.ts`）。
  */
@@ -489,6 +493,15 @@ function ConversationView({
   const [adjudicating, setAdjudicating] = useState(false);
   // 同一件事給非同步回呼讀：前一句晚到的拒收不能在鎖住期間改寫畫面（dsh `draftInitializationBlocked`）。
   const adjudicatingNow = useRef(false);
+  /**
+   * 認出是命令、`slash.run` 還在途（[#1941](https://github.com/DemianLi/nexus-agent/issues/1941)，dsh 送出狀態機的
+   * `submitting`，`input/machine.ts:138`）：等的期間不收下一次送出、輸入框鎖住；收下才清草稿，沒收下草稿不動。只管不帶附件的
+   * 命令：帶附件的由 {@link sendingAttachments} 擋（#733）。ref 給同一個 tick 裡的第二下與非同步回呼讀。
+   */
+  const [submitting, setSubmitting] = useState(false);
+  const submittingNow = useRef(false);
+  // dsh `InputBar.tsx:147` 的 `machineBusy`：認命令與命令在途兩段一起鎖。
+  const machineBusy = adjudicating || submitting;
   // 上次沒送出去的那一句和它的請求編號（#1335）：原樣重送時沿用，伺服器才認得是同一句；收下了就丟掉。
   const pendingRequest = useRef<PendingRequest | undefined>(undefined);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
@@ -526,8 +539,8 @@ function ConversationView({
       steerableItems(conversation.state.inbox).length,
     ) &&
     !steeringAll.current &&
-    // 等命令清單認的期間不收（dsh `InputBar.tsx:156` 的 `canSteerQueue` 排除 `machineBusy`，#1929）。
-    !adjudicating;
+    // 等命令清單認、命令在途的期間不收（dsh `InputBar.tsx:156` 的 `canSteerQueue` 排除 `machineBusy`，#1929、#1941）。
+    !machineBusy;
   const steerQueue = () => {
     if (steeringAll.current) return;
     steeringAll.current = true;
@@ -587,7 +600,7 @@ function ConversationView({
   };
   // 封存的會話不給送（#633）：橫幅在輸入框上方，送出鈕停用。伺服器端也擋，這一道是第一道。
   const archived = isArchivedThread(threadManagement?.archivedIds, threadId);
-  const canSend = canSendLine(draft) && !sendingAttachments && !archived && !adjudicating;
+  const canSend = canSendLine(draft) && !sendingAttachments && !archived && !machineBusy;
   const hasModelSeat = modelSeat !== null;
   const commands = useMemo(
     () =>
@@ -662,8 +675,8 @@ function ConversationView({
       {/* 基準寬 480：右側欄打開時會話區至少留這麼多，視窗再窄才輪到它讓（#640，見 `right-sidebar.tsx`）。 */}
       <SidebarInset className="flex h-svh min-w-0 flex-col" style={{ flexBasis: 480 }}>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-2">
-          {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
-          <SidebarTrigger className="size-11 rounded-full lg:size-9" />
+          {/* 觸控目標 44px，1024 以上回到 36（§9）。三顆都用 SG 36px 圖示鈕（`icon-lg`）的 `rounded-md`；側欄鈕與主題鈕是 `icon-sm`、自帶 `rounded-sm`，靠這裡蓋掉。 */}
+          <SidebarTrigger className="size-11 rounded-md lg:size-9" />
           {/* 換字不做動效（Q4）；截斷時 `title` 帶全文。 */}
           <h1 className="min-w-0 flex-1 truncate text-body font-medium" title={heading}>
             {heading}
@@ -673,9 +686,9 @@ function ConversationView({
             tokenUsage={conversation.state.tokenUsage}
             sessionStats={conversation.state.sessionStats}
           />
-          <ThemeToggle className="size-11 rounded-full lg:size-9" />
+          <ThemeToggle className="size-11 rounded-md lg:size-9" />
           {/* 會話標頭那一列的右端（#640 決定 2；#655 確認不用再搬）。 */}
-          <RightSidebarToggle className="size-11 rounded-full lg:size-9" />
+          <RightSidebarToggle className="size-11 rounded-md lg:size-9" />
         </header>
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-4">
@@ -683,6 +696,7 @@ function ConversationView({
             <StatusLine
               state={conversation.state}
               connected={conversation.connected}
+              slowConnect={conversation.slowConnect}
               {...(conversation.connectionError === undefined
                 ? {}
                 : { connectionError: conversation.connectionError })}
@@ -712,9 +726,12 @@ function ConversationView({
             )}
             {conversation.historyError !== undefined && (
               <p className="text-destructive text-tip">
-                {/* thread 數滿了、歷史太深都不是歷史掉了：換成那一句，不加這個前綴（#1478、#1753）。 */}
+                {/* thread 數滿了、歷史太深、日誌超過額度、被別處握著、開在別的 home 或工作區都不是歷史掉了：換成那一句，不加這個前綴（#1478、#1753、#2203、#2214、#2222）。 */}
                 {threadCapacityText(conversation.historyError.code) ??
                   threadHistoryTooDeepText(conversation.historyError.code) ??
+                  threadLogBudgetText(conversation.historyError.code) ??
+                  threadWriterHeldText(conversation.historyError.code) ??
+                  threadRootMismatchText(conversation.historyError.code) ??
                   `之前說過的話拿不回來：${conversation.historyError.message}`}
               </p>
             )}
@@ -857,7 +874,7 @@ function ConversationView({
                           type="button"
                           variant="ghost"
                           size="icon"
-                          className="size-11 shrink-0 rounded-full lg:size-8"
+                          className="size-11 shrink-0 lg:size-8"
                           aria-label={STOP_QUESTIONS_LABEL}
                           disabled={!conversation.connected}
                           onClick={() => {
@@ -891,7 +908,8 @@ function ConversationView({
                   ? { sendHint: runningSendHint(navigator.userAgent) }
                   : {})}
                 onSubmit={(gesture) => {
-                  if (!canSend) {
+                  // ref 那兩道擋同一個 tick 裡的第二下：`canSend` 要等重畫才關（#1941）。
+                  if (!canSend || adjudicatingNow.current || submittingNow.current) {
                     return;
                   }
                   const text = draft;
@@ -905,22 +923,51 @@ function ConversationView({
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
                   // `route` 是等清單認出來的結果（沒認就是 `undefined`），一路交給 `send`，不再認第二次（#1929）。等的期間
                   // 輸入框鎖著，這裡讀到的草稿、附件、標記就是畫面上的值。
-                  const submit = (route: 'command' | 'sentence' | undefined) => {
-                    setDraft('');
-                    // 命令不帶提及（留著，同附件）；否則這一句送出就用掉它。開頭是不是命令照送出路由認（#1929）：技能的
-                    // `/deploy 今天` 是一句話，照樣帶。
+                  const submit = (route: 'command' | 'sentence' | undefined, detached = false) => {
+                    // 開頭是不是命令照送出路由認（#1929）：技能的 `/deploy 今天` 是一句話。
                     const isCommand =
                       route === undefined
                         ? namesCommand(conversation.slashCommands, text)
                         : route === 'command';
-                    const mentioned = isCommand ? undefined : mentionedAgent;
-                    if (mentioned !== undefined) setMentionedAgent(undefined);
                     // 只有功能開著才帶附件；`/` 開頭的命令也帶（#733：命令有宣告收附件才收，其餘伺服器回錯誤、草稿與附件留著），
                     // 只有光打 `/feedback`（開回饋框、不送出）不帶，附件留在草稿裡。
                     const items =
                       serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
                         ? draftAttachments.items
                         : [];
+                    // 沒宣告 input、整行只有 `/名字` 的命令照 dsh 的 detached（`ui-commands/src/client/service.ts:361-365` 先
+                    // `consumeVia` 再 `runDetached`，`input/machine.ts:155-175` 收到 `'handled'` 就回 plain，#1971）：當場拿掉、
+                    // 背景執行，不進在途、不鎖輸入框；沒收下由狀態列講（`runSlash`），草稿不放回去。
+                    if (detached && items.length === 0) {
+                      setDraft('');
+                      pendingRequest.current = undefined;
+                      void conversation.send(text, mode, undefined, undefined, undefined, route);
+                      return;
+                    }
+                    // 有 input 的命令照 dsh 的 `submitting`（`input/machine.ts:138`、`:183-192`，#1941）：在途期間不收下一次送出、
+                    // 輸入框鎖住、草稿不動；收下（命令成功）才清掉送出的那段，沒收下草稿原樣，原因由狀態列講（`runSlash`），
+                    // 不另跳 toast。在認命令那一段的回呼裡同步進來，兩段之間沒有空檔。
+                    if (isCommand && items.length === 0) {
+                      submittingNow.current = true;
+                      setSubmitting(true);
+                      pendingRequest.current = undefined;
+                      void conversation
+                        .send(text, mode, undefined, undefined, undefined, route)
+                        .then((rejected) => {
+                          if (rejected === undefined) {
+                            setDraft((current) => retainedSuffix(current, text));
+                          }
+                        })
+                        .finally(() => {
+                          submittingNow.current = false;
+                          setSubmitting(false);
+                        });
+                      return;
+                    }
+                    setDraft('');
+                    // 命令不帶提及（留著，同附件）；否則這一句送出就用掉它。技能的 `/deploy 今天` 照樣帶。
+                    const mentioned = isCommand ? undefined : mentionedAgent;
+                    if (mentioned !== undefined) setMentionedAgent(undefined);
                     // 跟上次沒送出去的那一句完全相同才沿用它的編號；改過字、換了點名、增減附件都是新的一句（#1335）。
                     const sentence: Sentence = {
                       text,
@@ -980,7 +1027,11 @@ function ConversationView({
                       setDraft((current) => (current === '' ? text : current));
                       // 標記不放回鎖住的輸入框：那一行送出時帶的是按 Enter 當下的標記，放回去畫面就跟送出的對不上
                       // （dsh `facade.ts:301-304` 的 `draftInitializationBlocked`，#1929）。草稿那一行不用擋：鎖住時草稿一定不是空的。
-                      if (mentioned !== undefined && !adjudicatingNow.current)
+                      if (
+                        mentioned !== undefined &&
+                        !adjudicatingNow.current &&
+                        !submittingNow.current
+                      )
                         setMentionedAgent((current) => current ?? mentioned);
                       if ('cancelled' in rejected) {
                         toast('已取消上傳', { description: rejected.message });
@@ -1008,7 +1059,7 @@ function ConversationView({
                         toast.error('這一句沒送出去', { description: verdict.message });
                         return;
                       }
-                      submit(verdict.kind);
+                      submit(verdict.kind, verdict.kind === 'command' && verdict.detached);
                     });
                     return;
                   }
@@ -1059,8 +1110,11 @@ function ConversationView({
                   : {})}
                 decorated={DECORATED_COMMANDS}
                 // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 與命令宣告過的那幾行過得去，#1517）。
+                // 認命令或有 input 的命令在途的期間不收（#1941；dsh 那段期間整個 editor 鎖著，選單沒有入口，`InputBar.tsx:147`、
+                // `:154`）。選單直接執行的只有 bare 命令與被裝飾的命令（`applySlashPick`）：照 dsh 背景執行，不進在途
+                // （`ui-commands/src/client/service.ts:271-275` 的 `runDetached`，#1971），沒收下由狀態列講（`runSlash`）。
                 onRunCommand={(line) => {
-                  if (!canSendLine(line)) {
+                  if (adjudicatingNow.current || submittingNow.current || !canSendLine(line)) {
                     return false;
                   }
                   const modelRan = runModelLine(line);
@@ -1069,7 +1123,10 @@ function ConversationView({
                   return true;
                 }}
                 // 一行在等命令清單認的期間整個鎖住：文字框唯讀、附件與 @ 標記改不了（dsh `InputBar.tsx:139-156`，#1929）。
-                locked={adjudicating}
+                locked={machineBusy}
+                // 附件上傳、等伺服器收下的期間，附件列上的移除不收：這一批在按送出當下就取好了，移掉的照樣會送出（#1941，dsh
+                // `facade.ts:330-334`）。加入、貼上、拖放與取消上傳照舊：送出期間才加進來的留著（同一般句子在 dsh 的 detached）。
+                removalLocked={sendingAttachments}
                 // **一輪在跑時才出現**。停在等人時輸入框被面板換掉了（§4.3）：核准面板沒有停止（#376 第 10、11 條），
                 // 提問面板的停止是它自己的 ❌。伺服器只回受理，停下來的事實走下行，所以按下去不自己改狀態。任何分頁
                 // 都按得動，不查是誰起的這一輪（#265 的 Q3）。

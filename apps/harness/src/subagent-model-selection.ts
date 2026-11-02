@@ -14,7 +14,7 @@
  * - **沒有 `provider`**：我們只有一個端點，路由就是型錄 id。
  * - **推理等級只實作 `off` 與 `default`**：dsh 的等級由 adapter 驗證、請求怎麼帶也是 adapter 的事；我們的 adapter 只有型錄宣告，
  *   而且只有 `off` 有量過的線上寫法（`thinkingOffBody`）。型錄就算宣告了別的名字，也先拒絕，不猜。`default` 不加任何東西，
- *   所以等於沒給（解析時就丟掉，讓圖快取鍵不因為「寫了 default」多出一張一樣的圖）。
+ *   所以等於沒給（解析時就丟掉，讓圖快取鍵不因為「寫了 default」多出一張一樣的圖）；模型宣告了任何等級就收，不必宣告 `default` 本身。
  * - **`list_subagent_models` 兩層**：無參數列授權清單；帶 `model` 看那顆的推理等級（dsh 是 provider／model 三層）。
  *
  * @module
@@ -171,7 +171,7 @@ export function resolveModelSelection(
         error: `模型 "${effective}" 沒有宣告可選的推理等級，不能指定 reasoning_effort`,
       };
     }
-    if (!declared.includes(effort)) {
+    if (effort !== 'default' && !declared.includes(effort)) {
       return {
         ok: false,
         error: `模型 "${effective}" 沒有推理等級 "${effort}"（宣告過的：${declared.join('、')}）`,
@@ -200,7 +200,7 @@ export function resolveModelSelection(
 }
 
 /**
- * `list_subagent_models` 的輸出：無參數列授權清單；帶 `model` 看那顆的推理等級（只列今天支援的）。
+ * `list_subagent_models` 的輸出：無參數列授權清單；帶 `model` 看那顆能指定的推理等級：宣告過又今天支援的，模型宣告了任何等級時另加 `default`；沒宣告等級就沒有。
  * 授權在前：不在清單裡的 id 一律拒絕，不透露型錄裡有沒有它（dsh 的 “authorizes the exact route before resolving”）。
  *
  * @throws 帶的 `model` 不在授權清單裡（訊息講給模型聽）。
@@ -223,9 +223,11 @@ export function describeSubagentModels(
     );
   }
   const entry = findModelEntry(config.catalog, request.model);
-  const efforts = (entry === undefined ? [] : declaredEfforts(entry)).filter((name) =>
-    SUPPORTED_EFFORTS.includes(name),
-  );
+  const declared = entry === undefined ? [] : declaredEfforts(entry);
+  const efforts =
+    declared.length === 0
+      ? []
+      : [...new Set([...declared, 'default'])].filter((name) => SUPPORTED_EFFORTS.includes(name));
   return (
     `${request.model}\nReasoning efforts:\n` +
     (efforts.length === 0 ? '(no advertised reasoning efforts)' : efforts.join('\n'))

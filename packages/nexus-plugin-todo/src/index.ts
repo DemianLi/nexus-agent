@@ -311,8 +311,8 @@ export function createTodoTool(
 export const name = 'todo';
 
 /**
- * 要的服務：`tools`（`^1.0.0`，不帶選項）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，落進 Cordis 的
- * `Context.intercept`，提供者的 `check` 讀得到。
+ * 要的服務：`tools`（`^1.0.0`，不帶選項）與 `sessionLookup`（`^1.0.0`）。範圍在這裡宣告，經
+ * `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(need(toolsToken, '^1.0.0'), need(sessionLookupToken, '^1.0.0'));
 

@@ -10,6 +10,8 @@
  * - 授權 allowlist 照 dsh `:652-699`（`PERMISSIVE_LICENSES`、`isPermissive`、`assertRuntimeLicenses`）：執行期那層的授權
  *   不在清單上就硬失敗；開發那層只標註。
  * - vendor 的原始碼另列一段（dsh `:438-493`）：`vendor/` 的 Cordis，以及網頁的 solid-glass。
+ * - 沙箱 spawner 的 Rust crate 另列一段（#1946）：清單在 `scripts/release/spawner.ts` 的 `SPAWNER_CRATES`，跟 `Cargo.lock` 兩個方向核對；
+ *   連進執行檔的那幾個授權照執行期那層擋。
  *
  * 套件的 license 與 repository 讀安裝好的 store，所以要先 `pnpm install`。`--check` 只比對、不寫檔。
  *
@@ -36,6 +38,17 @@ import { pathToFileURL } from 'node:url';
 
 import parseSpdx from 'spdx-expression-parse';
 
+import {
+  NATIVE_LICENSES_SOURCE,
+  SPAWNER_CRATES,
+  SPAWNER_LICENSES_DIR,
+  SPAWNER_LOCK,
+  SPAWNER_NATIVE_LIBS,
+  SPAWNER_PATH,
+  lockedCrates,
+  rustChannel,
+  spawnerCrateProblems,
+} from './release/spawner.js';
 import { ROOT } from './workspace-packages.js';
 
 export const OUT = 'THIRD_PARTY_NOTICES.md';
@@ -64,6 +77,31 @@ const OFL_FONT_PACKAGES: ReadonlySet<string> = new Set([
   '@fontsource-variable/noto-sans-tc',
 ]);
 const OFL_LICENSE = 'OFL-1.1';
+
+/**
+ * sharp 的 libvips 預編譯套件（`@img/sharp-libvips-<平台>`），宣告 `LGPL-3.0-or-later`，經 sharp 的 `optionalDependencies`
+ * 遞移進產物。LGPL 同樣不加進 `PERMISSIVE_LICENSES`，只對這一族套件名（比前綴）、而且授權剛好是這一條時放行。
+ * 引進的決定是 [#1827 D22](https://github.com/DemianLi/nexus-agent/issues/1827)，散布條件見 {@link renderLibvips}。
+ */
+const LIBVIPS_PACKAGE_PREFIX = '@img/sharp-libvips-';
+const LIBVIPS_LICENSE = 'LGPL-3.0-or-later';
+/** 產物只出 linux-x64（glibc），聲明列這一顆的版本。 */
+const SHIPPED_LIBVIPS = `${LIBVIPS_PACKAGE_PREFIX}linux-x64`;
+
+/**
+ * 不是寬鬆授權、但審過可以隨產物散布的套件：OFL 的三顆字型與 sharp 的 libvips。發版腳本的 SBOM 核對用它檢查完整閉包
+ * （`scripts/release/sbom.ts` 的 `licenseProblems`），所以遞移進來的也擋得到。
+ *
+ * @param name - 套件名。
+ * @param license - manifest 的 `license`。
+ * @returns 名字與授權都對上其中一條例外時為 true。
+ */
+export function isReviewedNonPermissive(name: string, license: string): boolean {
+  return (
+    (OFL_FONT_PACKAGES.has(name) && license === OFL_LICENSE) ||
+    (name.startsWith(LIBVIPS_PACKAGE_PREFIX) && license === LIBVIPS_LICENSE)
+  );
+}
 
 /** store 答不出來時的補值。每一條寫為什麼。 */
 const OVERRIDES: Record<string, { license?: string; repo?: string }> = {
@@ -280,16 +318,14 @@ export function isPermissive(license: string): boolean {
 }
 
 /**
- * 執行期相依的授權不是寬鬆授權就擋下（dsh `:687-699`）。例外只有 `OFL_FONT_PACKAGES` 宣告 `OFL-1.1` 的那三顆。
+ * 執行期相依的授權不是寬鬆授權就擋下。例外見 {@link isReviewedNonPermissive}。
  * @throws 有任何一顆不合格時。
  */
 export function assertRuntimeLicenses(
   dependencies: readonly { name: string; license: string }[],
 ): void {
   const rejected = dependencies.filter(
-    (dep) =>
-      !isPermissive(dep.license) &&
-      !(OFL_FONT_PACKAGES.has(dep.name) && dep.license === OFL_LICENSE),
+    (dep) => !isPermissive(dep.license) && !isReviewedNonPermissive(dep.name, dep.license),
   );
   if (rejected.length > 0) {
     throw new Error(
@@ -536,6 +572,86 @@ OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能�
 `;
 }
 
+/**
+ * libvips 那一段：根 lockfile 裡有 {@link SHIPPED_LIBVIPS} 時才產生，版本取自 lockfile（各平台的開發機裝的是自己平台那一顆，
+ * 讀 store 會因機器而異）。這一段同時是 LGPL-3.0 第 4 節 a) 要的「顯著告知」；b) 要的兩份全文由 `scripts/release/pack.ts`
+ * 從 `licenses/` 複製進產物。
+ */
+function renderLibvips(): string {
+  const lock = parseYaml(readFileSync(join(ROOT, 'pnpm-lock.yaml'), 'utf8')) as {
+    packages?: Record<string, unknown>;
+  };
+  const version = Object.keys(lock.packages ?? {})
+    .find((key) => key.startsWith(`${SHIPPED_LIBVIPS}@`))
+    ?.slice(SHIPPED_LIBVIPS.length + 1);
+  if (version === undefined) return '';
+  return `
+## 內附的原生函式庫
+
+產物內附 [\`${SHIPPED_LIBVIPS}\`](https://github.com/lovell/sharp-libvips) ${version}：[libvips](https://github.com/libvips/libvips) 與它的相依，以預編譯的共享函式庫（\`.so\`）原樣散布，由 \`sharp\` 在執行期動態載入，授權是 \`${LIBVIPS_LICENSE}\`。它內附的各個函式庫與各自的授權，列在產物裡那個套件的 \`README.md\`。
+
+LGPL 3.0 的全文與它引用的 GPL 3.0 全文放在產物的 [\`licenses/LGPL-3.0.txt\`](licenses/LGPL-3.0.txt) 與 [\`licenses/GPL-3.0.txt\`](licenses/GPL-3.0.txt)。
+
+引進的決定記在 [#1827 D22](https://github.com/DemianLi/nexus-agent/issues/1827)。
+`;
+}
+
+/**
+ * 沙箱 spawner 那一段：`Cargo.lock` 的每一個外部 crate，加上標準函式庫（版本取自 `rust-toolchain.toml`）。
+ *
+ * @throws `SPAWNER_CRATES` 跟 `Cargo.lock` 對不上、連進執行檔的 crate 不是寬鬆授權、`Cargo.lock` 有讀不出 name 或 version 的
+ *   `[[package]]`，或 `rust-toolchain.toml` 讀不出 channel。
+ */
+function renderSpawnerCrates(): string {
+  const lock = readFileSync(join(ROOT, SPAWNER_LOCK), 'utf8');
+  const problems = spawnerCrateProblems(lock);
+  if (problems.length > 0) throw new Error(`gen-third-party-notices：${problems.join('\n')}`);
+  assertRuntimeLicenses(SPAWNER_CRATES.filter((entry) => entry.runtime));
+  const channel = rustChannel();
+  const versions = new Map<string, string[]>();
+  for (const entry of lockedCrates(lock)) {
+    versions.set(entry.name, [...(versions.get(entry.name) ?? []), entry.version]);
+  }
+  const rows = [...SPAWNER_CRATES]
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .map(
+      (entry) =>
+        `| [\`${entry.name}\`](${entry.repo}) | ${(versions.get(entry.name) ?? []).join('、')} | ${entry.license} | ${entry.runtime ? '是' : '否，只在編譯期跑'} |`,
+    );
+  const buildOnly = SPAWNER_CRATES.filter(
+    (entry) => !entry.runtime && !isPermissive(entry.license),
+  );
+  const note =
+    buildOnly.length === 0
+      ? ''
+      : `\n${buildOnly.map((entry) => `\`${entry.name}\`（${entry.license}）`).join('、')} 只在編譯期跑，程式碼不會連進執行檔。\n`;
+  const native = SPAWNER_NATIVE_LIBS.map(
+    (lib) => `| [${lib.name}](${lib.repo}) | ${lib.version} | ${lib.license} | 是 |`,
+  );
+  const texts = SPAWNER_NATIVE_LIBS.map((lib) => {
+    const dir = join(ROOT, NATIVE_LICENSES_SOURCE, `${lib.name}-${lib.version}`);
+    const files = readdirSync(dir).sort();
+    if (files.length === 0) throw new Error(`gen-third-party-notices：${dir} 沒有授權原文`);
+    return files
+      .map(
+        (file) =>
+          `\n### ${lib.name} ${lib.version}：\`${file}\`\n\n\`\`\`\`text\n${readFileSync(join(dir, file), 'utf8').trimEnd()}\n\`\`\`\`\n`,
+      )
+      .join('');
+  });
+  return `
+## 沙箱 spawner 連進去的程式碼
+
+\`native/sandbox-spawner/\` 編成 Linux 產物裡的 \`${SPAWNER_PATH}\`（[#1946](https://github.com/DemianLi/nexus-agent/issues/1946)），靜態連結 musl。下表是 [\`${SPAWNER_LOCK}\`](${SPAWNER_LOCK}) 的每一個外部 crate，加上 Rust 的標準函式庫與工具鏈自帶、跟著它連進執行檔的 C 函式庫。連進執行檔的每一項，授權全文放在產物的 \`${SPAWNER_LICENSES_DIR}/\`；標準函式庫自己內附的第三方程式碼列在那裡的 \`rust-std/COPYRIGHT-library.html\`；C 函式庫的授權原文也附在本節最後。
+
+| crate | 版本 | 授權 | 連進執行檔 |
+| --- | --- | --- | --- |
+| [Rust 標準函式庫](https://github.com/rust-lang/rust) | ${channel} | MIT OR Apache-2.0 | 是 |
+${native.join('\n')}
+${rows.join('\n')}
+${note}${texts.join('')}`;
+}
+
 function renderNonPermissiveNote(deps: ExternalDep[]): string {
   if (deps.length === 0) return '';
   const named = deps.map((dep) => `\`${dep.name}\`（${dep.license}）`).join('、');
@@ -602,13 +718,13 @@ ${webVendored.map((row) => `| [${row.name}](${row.upstream}) | ${row.pin} | ${ro
 安裝來在執行期使用，或打包進網頁 \`dist\` 的外部套件。網頁打包了哪些，是用 \`apps/web\` 自己的 vite 設定真的 build 一次收集的，不看它宣告在哪一段。這一層涵蓋每一顆可以從 \`cordis.yml\` 掛上的插件，不只預設載入的那些。
 
 ${renderNpmTable(runtimeDeps)}
-${renderOflFonts(runtimeDeps)}
+${renderOflFonts(runtimeDeps)}${renderLibvips()}
 ## 只在開發時用的 npm 相依
 
 只為開發、測試、型別或工具**直接**宣告的外部套件，不在執行期安裝，也沒有打包進網頁。這裡的套件仍可能被某個執行期相依遞移帶進來，那以 \`pnpm-lock.yaml\` 為準。
 
 ${renderNpmTable(devDeps)}
-${renderNonPermissiveNote(devDeps.filter((dep) => !isPermissive(dep.license)))}`;
+${renderNonPermissiveNote(devDeps.filter((dep) => !isPermissive(dep.license)))}${renderSpawnerCrates()}`;
 }
 
 /** CLI：預設寫檔，`--check` 比對進版控的那份。import 這個模組做測試時不會寫檔、也不會 `process.exit`。 */

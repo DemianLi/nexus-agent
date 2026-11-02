@@ -45,17 +45,25 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `connection.transport` | 兩者      | 是   | `"stdio"` 或 `"http"`                                                                      |
 | `connection.command`   | stdio     | 是   | 要執行的程式                                                                               |
 | `connection.args`      | stdio     | 否   | 參數                                                                                       |
-| `connection.env`       | stdio     | 否   | 額外的環境變數，疊在清洗過的父環境上（見下）                                               |
+| `connection.env`       | stdio     | 否   | 額外的環境變數，疊在清洗過的父環境上（見下）；值可以寫 `{ credential: <名字> }`（見憑證）  |
 | `connection.cwd`       | stdio     | 否   | 子行程的工作目錄                                                                           |
+| `connection.sandbox`   | stdio     | 否   | 要套沙箱：鍵存在就套，`{}` 也算；`readable`、`writable` 見 `docs/operations.md`            |
 | `connection.url`       | http      | 是   | server 網址                                                                                |
-| `connection.headers`   | http      | 否   | 額外標頭（授權用）                                                                         |
+| `connection.headers`   | http      | 否   | 額外標頭（授權用）；值可以寫 `{ credential: <名字>, prefix?: <前綴> }`（見憑證）           |
 | `toolCallTimeoutMs`    | 兩者      | 否   | 一次 `tools/call` 的逾時，預設 60000                                                       |
-| `failOnStartupError`   | 兩者      | 否   | 掛上那一刻連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
+| `livenessTimeoutMs`    | stdio     | 否   | 呼叫逾時或被停止之後等探活回應多久，預設 15000，上限 2147483647；沒回應就收掉重連（見行為） |
+| `failOnStartupError`   | 兩者      | 否   | 掛上那一刻套不上沙箱、連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
 | `maxInstructionBytes`  | 兩者      | 否   | server 指引**連同出處標頭**的 UTF-8 位元組上限，預設 32768；超過算連線失敗（同上，不截斷） |
 | `approval`             | 兩者      | 否   | 哪些工具要先讓人核准，預設 `{ default: ask }`：整台都問（見核准）                          |
 
 秘密一律從呼叫端的環境變數來，不寫進程式碼、設定檔或測試 fixture（見
 [`docs/standards.md`](../../docs/standards.md)）。
+
+**憑證**（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：設定檔裡要給秘密時，`connection.env` 或 `connection.headers`
+的值寫成 `{ credential: <名字> }`（標頭可以加 `prefix`，例如 `'Bearer '`）。建連線那一刻向宿主的 `mcp:credentials` 服務要值、代入；
+設定、`--dump-config`、池鍵、錯誤訊息裡都只有名字。名字是環境變數形狀（`[A-Za-z_][A-Za-z0-9_]*`）。宿主沒提供服務、名字沒有值、
+服務拋錯，這一列都算連不上（同 `failOnStartupError`）。serve 與 CLI 從哪裡找值見
+[`docs/operations.md`〈MCP server 要的憑證〉](../../docs/operations.md#mcp-server-要的憑證)。
 
 **stdio server 的環境照 dsh 以清洗過的父環境為底**（[#726](https://github.com/DemianLi/nexus-agent/issues/726)）：
 子行程拿到的是 nexus 這個行程的環境，扣掉名字像憑證的（`/KEY|PASSWORD|SECRET|TOKEN/i`，不分大小寫）與
@@ -88,6 +96,11 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   照舊各自註冊工具（各自的工具物件與核准閘門），呼叫都委派給池裡那一條連線；對話撤掉不關連線，`serve` 收掉才關。池的鍵是整份
   設定（`approval` 除外，它只管閘門）加實際的 elicitation 旗標：改了那一列的設定，新對話連到新的一份，開著的照舊用舊的，舊的一份
   **留到 `serve` 重啟**（不數使用者、不回收），所以重啟之前出現過幾種設定，最多就有幾個子行程。CLI 不給池，照舊每次組裝自己連。
+- **卡死的 stdio server 會被收掉重連**（[#2194](https://github.com/DemianLi/nexus-agent/issues/2194)）：呼叫逾時或被停止本身不算斷線，
+  工具永遠不回的 server 還活著，同一條連線上別的呼叫照常。呼叫被放棄之後在背景送一次 `tools/list` 探活（新協議沒有 `ping`），等 `livenessTimeoutMs`：有回應（錯誤
+  回應也算）就什麼都不做；沒回應就判定卡死，收掉子行程、走下面的重連。收掉時進行中的呼叫回 `Connection closed`，不重送（工具不一定
+  能重跑）；重連期間的呼叫當場回 `server is disconnected`。一次只處理一個請求的 server 跑長呼叫時同樣回不了探活，會被當成卡死，
+  把 `livenessTimeoutMs` 調到比最長的呼叫還久。只有 stdio 探活：HTTP 沒有子行程可收。
 - **連不上照樣掛上，照 dsh**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
   連不上、列不出、註冊撞名，任何一件發生時：已經註冊的工具撤掉、連線收掉、這一列照樣掛上但
   **這台 server 一個工具都沒有**，並經 `registry.logger` 交出一則警告。出貨的啟動程式把它印在
@@ -181,11 +194,11 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 
 照 dsh 的 `Known Limitations` 模式：這些是缺口，不是待補的功能。
 
-- **MCP 工具自己的檔案存取不受任何管束。** 它們是外部程序、走自己的檔案系統，既不經過
+- **沒宣告 `sandbox` 的 MCP 工具，檔案存取不受管束。** 它們是外部程序、走自己的檔案系統，既不經過
   `permissions` 也不經過 backend——deepagents 明文「custom tools from the agent or other
   middleware are left untouched」。harness 管得住的是「MCP 讀來的資料經由內建 `write_file`
-  寫進虛擬 FS」那條路。要圍堵 MCP server 本身只能從啟動它的方式下手（沙箱／容器），
-  不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
+  寫進虛擬 FS」那條路。沒宣告 `connection.sandbox` 的 server 不受管束，宣告了見
+  [`docs/operations.md`](../../docs/operations.md)。其他圍堵方式（容器）不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
 - **Prompts 不橋接。** dsh 也不支援 MCP prompt templates；工具、指引與資源見上一節。
 - **`tools/list_changed` 不處理，重連也不改工具集合。** dsh 在 server 通知工具清單變了、或重連之後會重新同步並換掉註冊的工具；
   deepagents 建好之後工具集合不可變，註冊表上的工具換不掉。所以：新工具要到下一次組裝才有；重連回來的新一代若少了某個原本有的

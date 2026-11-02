@@ -110,6 +110,11 @@ export interface ThreadPlacement {
   readonly root: string | undefined;
   /** 唯讀共用區的根（`--workspace`）；有私有可寫根、或落盤關掉的新 thread（記憶體根）時才有。 */
   readonly sharedRoot?: string;
+  /**
+   * 可寫根就是新 thread 讀的共用區（舊 thread）。組裝點據它擋住這條 thread 寫新 thread 會讀成指示或技能的地方
+   * （[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）。
+   */
+  readonly rootIsShared?: true;
 }
 
 /** {@link ThreadPlacer} 的參數。 */
@@ -148,14 +153,15 @@ export function createThreadPlacer(options: ThreadPlacerOptions): ThreadPlacer {
       const recorded = resumedHeader.workspaceRoot;
       // header 沒有那一格（格式 13 以前）＝舊 thread，今天「沒記就放行」的行為：以共用區為可寫根。
       // 與 header 的根就是這一次的共用區根一樣，舊 thread 的可寫根本來就是共用區，不再另掛唯讀那條。
-      if (recorded === undefined || recorded === shared) return { root: shared };
+      if (recorded === undefined || recorded === shared)
+        return { root: shared, rootIsShared: true };
       // 落在這一次基底底下：照用 header 的根（分叉的子 thread 抄來源的根，走的就是這條，不另配）。
       // header 那一格沒驗證過（`parseHeader` 直接 cast）：不是字串的畸形值一律往下掉到拒絕，不拋 TypeError。
       if (typeof recorded === 'string' && isThreadRootOf(options.base, recorded)) {
         await ensurePrivateRoot(options.base, recorded);
         return { root: recorded, sharedRoot: shared };
       }
-      // 其他（換過 `--workspace`、換過基底、header 畸形）：照舊拒絕，訊息指名兩個根。
+      // 其他（換過 `--workspace`、換過基底、header 畸形）：拒絕，例外訊息指名兩個根。
       // **出路依根的名字形狀分兩種**：名字是 `thread-<32 hex>`＝這是某個人的私有根（多半是換過 home / `NEXUS_AGENT_HOME`），
       // 出路是換回原來的 home；**絕不能叫人把它當 `--workspace`**——照做的話，那個人的私有根會變成所有新 thread 的 `/shared`。
       const privateShaped =
@@ -170,6 +176,7 @@ export function createThreadPlacer(options: ThreadPlacerOptions): ThreadPlacer {
           ? `這是一個私有根（不在目前的私有根基底 ${options.base} 底下），多半是換過 harness home（NEXUS_AGENT_HOME）。` +
               '換回原來的 home 再接；不要把它當 --workspace 給——那會讓這條對話的私有根變成所有新對話都讀得到的共用區。'
           : `這條對話記的根既不是 --workspace，也不在私有根基底 ${options.base} 底下。用 --workspace ${String(recorded)} 再接。`,
+        privateShaped,
       );
     }
     // 新 thread：落盤關掉就沒有磁碟上的可寫根（偏離 2 的延伸，(f)）：`root` 明著回 `undefined`＝記憶體，`--workspace` 照樣掛成唯讀共用區。

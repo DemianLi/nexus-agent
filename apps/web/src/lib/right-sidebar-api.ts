@@ -25,7 +25,7 @@ export interface RightSidebarSources {
   readonly plans?: ReadonlyMap<string, PlanDocument> | undefined;
   /**
    * 對話狀態的可訂閱 store（#1033），觀測分頁讀它。**放的是 store 不是 `ConversationState`**：`sources` 一變身分，
-   * `RightSidebarPanel` 的 `memo` 就擋不住（見該元件的註解）。沒給就是沒有對話可看（觀測分頁畫「尚無資料」）。
+   * `RightSidebarPanel` 的 `memo` 就擋不住（見該元件的註解）。沒給就是沒有對話可看（觀測分頁畫空狀態）。
    */
   readonly conversation?: ConversationStore | undefined;
   /**

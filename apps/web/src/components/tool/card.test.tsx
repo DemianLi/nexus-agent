@@ -152,6 +152,22 @@ describe('對話流裡的工具卡', () => {
     expect(within(trigger).getByText('已停止')).toBeTruthy();
   });
 
+  it('被中止的工具（#2247）：徽章不是危險色，模型看的字不上畫面', () => {
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'echo',
+          status: 'failed',
+          error: 'Error: tool call aborted',
+          errorCode: 'ABORTED',
+        })}
+      />,
+    );
+    const badge = screen.getByText('已停止');
+    expect(badge.getAttribute('data-variant')).not.toBe('destructive');
+    expect(document.body.textContent).not.toContain('tool call aborted');
+  });
+
   describe('答完的提問卡（§4.3）', () => {
     const ask = tool({
       name: 'ask_user_question',
@@ -1455,6 +1471,6 @@ describe('換成 SG 之後每一項資訊都還在（#1682 B2）', () => {
     expect(within(trigger()).getByText('跑著')).toBeTruthy();
     const area = expanded() as HTMLElement;
     expect(area.querySelector('[data-subagent-model]')?.textContent).toBe('模型：m');
-    expect(within(area).getByRole('button', { name: /停止/ })).toBeTruthy();
+    expect(within(area).getByRole('button', { name: '只停這個子代理' })).toBeTruthy();
   });
 });

@@ -49,10 +49,12 @@ import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { downlinkPlugin } from './settings/downlink.js';
 import { goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import { liveModelPlugin } from './settings/live-model.js';
+import { attachmentImagesPlugin } from './settings/attachment-images.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
+import { sessionReferencePlugin } from './settings/session-reference.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { subagentModelSelectionPlugin } from './settings/subagent-model-selection.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
@@ -86,11 +88,13 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   subagentModelSelectionPlugin,
   threadTitleLlmPlugin,
   threadSearchPlugin,
+  sessionReferencePlugin,
   threadCapacityPlugin,
   memoryGaugePlugin,
   opsEndpointsPlugin,
   downlinkPlugin,
   loggerConsolePlugin,
+  attachmentImagesPlugin,
   goalRoundCapPlugin,
   turnTimeoutPlugin,
 ] as readonly NexusPlugin<unknown>[];

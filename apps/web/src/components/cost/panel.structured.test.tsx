@@ -1,5 +1,6 @@
 import type { ConversationState, TokenMeterSpan } from '@nexus/wire';
 import {
+  TOKEN_METER_CALIBER,
   TOKEN_METER_PROJECTION,
   TOKEN_METER_VERSION,
   emptyConversation,
@@ -259,6 +260,27 @@ describe('成本分頁：有用量投影', () => {
     expect(second!.textContent).toContain('停在核准點');
     expect(third!.textContent).toContain('x-new');
     expect(third!.textContent).toContain('進行中');
+  });
+
+  it('每一輪各自標準數、下限、還沒定案，tokensProven 的口徑句列得出來（#1571 N1201）', async () => {
+    const script = new Script();
+    const view = meterView({
+      turns: [
+        meterTurn(0, { seq: 10, tokensProven: true }),
+        meterTurn(1, { seq: 110, tokensProven: false }),
+        { ...meterTurn(2, { seq: 210 }), end: undefined, wallMs: undefined },
+      ],
+    });
+    mount(withMeter(base(script), script, view));
+    await act(async () => {});
+    const proof = screen
+      .getAllByTestId('cost-turn')
+      .map((turn) => turn.querySelector('[data-field="tokensProven"] dd')!.textContent);
+    expect(proof).toEqual(['準數', '下限', '還沒定案']);
+    fireEvent.click(within(screen.getByTestId('cost-calibers')).getByRole('button'));
+    expect(document.querySelector('[data-caliber="tokensProven"]')!.textContent).toContain(
+      TOKEN_METER_CALIBER.tokensProven,
+    );
   });
 
   it('每個畫在畫面上的數字都有口徑：data-field 都在口徑表裡，展開後每一項都有一句話', async () => {

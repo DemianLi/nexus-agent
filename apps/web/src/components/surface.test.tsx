@@ -16,7 +16,13 @@ describe('Surface（卡片與內層 stage 的共用底）', () => {
     );
     const el = container.firstElementChild;
     expect(classes(el)).toEqual(
-      ['bg-stage', 'shadow-stage', 'rounded-xl', 'p-3', 'text-body'].sort(),
+      [
+        'bg-(--hover-faint)',
+        'shadow-[inset_0_0_0_1px_var(--border)]',
+        'rounded-xl',
+        'p-3',
+        'text-body',
+      ].sort(),
     );
     expect(el?.tagName).toBe('DIV');
     expect(el?.getAttribute('data-testid')).toBe('s');
@@ -30,7 +36,7 @@ describe('Surface（卡片與內層 stage 的共用底）', () => {
       </Surface>,
     );
     expect(classes(container.firstElementChild)).toEqual(
-      ['bg-card', 'shadow-material', 'rounded-3xl', 'p-1', 'border-beam'].sort(),
+      ['bg-card', 'rounded-3xl', 'p-1', 'border-beam'].sort(),
     );
   });
 

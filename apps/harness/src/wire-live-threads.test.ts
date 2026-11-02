@@ -19,6 +19,7 @@ import { createNexusAgent } from './agent-factory.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { composeAttachSessions } from './session-attach.js';
 import { ThreadSearch } from './thread-search.js';
@@ -43,7 +44,7 @@ async function realAgent(): Promise<ThreadAgent> {
   };
 }
 
-/** 照 JSONL 後端的檔名寫一份只有一輪的日誌。 */
+/** 照 JSONL 後端的舊兩檔（讀方照讀的 v0.5.19 以前的佈局）寫一份只有一輪的日誌。 */
 async function writeThread(directory: string, id: string, said: string): Promise<void> {
   const log = new SessionLog(id);
   log.append('turn/start', { kind: 'message', text: said });
@@ -51,13 +52,47 @@ async function writeThread(directory: string, id: string, said: string): Promise
   log.append('turn/end', {});
   await writeFile(
     join(directory, `${id}.header.json`),
-    JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id, createdAt: 1_000, cwd: CWD }),
+    JSON.stringify({ version: LEGACY_TWO_FILE_FORMAT_VERSION, id, createdAt: 1_000, cwd: CWD }),
   );
   await writeFile(
     join(directory, `${id}.jsonl`),
     log.events.map((event) => `${JSON.stringify(event)}\n`).join(''),
   );
 }
+
+describe('liveSessionEvents()（#1940）', () => {
+  it('root 與子代理都讀得到；不活著是 undefined', async () => {
+    let child: SessionLog | undefined;
+    const handler = createWireHandler({
+      auth: TEST_BROWSER_AUTH,
+      createAgent: async () => ({
+        ...(await realAgent()),
+        attachPersistence: (sessions) => {
+          child = sessions.open({ kind: 'subagent', runId: 'tools:1' });
+          return {
+            flush: () => Promise.resolve(),
+            dispose: () => Promise.resolve(),
+            rootHeader: () => undefined,
+          };
+        },
+      }),
+    });
+    await handler.handle(
+      loopbackRequest(`${BASE}${historyPath('a')}`, {
+        method: 'GET',
+        headers: { 'content-type': 'application/json' },
+      }),
+    );
+    expect(handler.liveSessionEvents('a')).toBeDefined();
+    expect(child).toBeDefined();
+    child?.append('turn/start', { kind: 'message', text: '子代理的話' });
+    expect(handler.liveSessionEvents(child?.sessionId ?? '')).toEqual(child?.events);
+    expect(child?.events.length).toBeGreaterThan(0);
+    expect(handler.liveSessionEvents('nobody')).toBeUndefined();
+    await handler.close();
+    expect(handler.liveSessionEvents('a')).toBeUndefined();
+  });
+});
 
 describe('liveThreads()（#1599）', () => {
   it('還在建的那一條不算：搜尋不等它組裝，照盤上那份冷讀；建好之後才算活的', async () => {

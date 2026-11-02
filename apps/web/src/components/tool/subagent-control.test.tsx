@@ -6,7 +6,7 @@ import type {
   UplinkResult,
   WireClient,
 } from '@nexus/wire';
-import { emptyConversation } from '@nexus/wire';
+import { emptyConversation, SERVER_CLOSING } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -15,6 +15,8 @@ import { Transcript } from '@/components/transcript';
 import { SCROLL_BUTTON_AVOID, SCROLL_BUTTON_OBSCURING } from '@/hooks/use-scroll-button-clearance';
 import { HALTED_PLACEHOLDER, REFUSED_PLACEHOLDER } from '@/lib/connection-stall';
 import type { ConnectionStall } from '@/lib/connection-stall';
+import { SERVER_CLOSING_TEXT } from '@/lib/server-closing';
+import { stubGlyphEnvironment } from '@/test/glyph-env';
 
 /**
  * 委派卡上對背景子代理說話與單獨停止（[#869](https://github.com/DemianLi/nexus-agent/issues/869)）。
@@ -25,6 +27,7 @@ import type { ConnectionStall } from '@/lib/connection-stall';
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 const delegation = (meta?: ToolEntry['meta']): ToolEntry => ({
@@ -125,7 +128,8 @@ function open() {
 }
 
 const input = () => screen.getByLabelText('對背景子代理說話') as HTMLInputElement;
-const stopButton = () => screen.getByRole('button', { name: '停止這一輪' }) as HTMLButtonElement;
+const stopButton = () =>
+  screen.getByRole('button', { name: '只停這個子代理' }) as HTMLButtonElement;
 
 describe('標頭的小狀態字', () => {
   it.each([
@@ -209,6 +213,7 @@ describe('對它說話', () => {
     ['subagent_closed', '正在關閉'],
     ['invalid_argument', '不能是空白'],
     ['unknown_error', '叫醒失敗：被拒。可以再送一次。'],
+    [SERVER_CLOSING, SERVER_CLOSING_TEXT],
   ])('被拒（%s）：卡內一行紅字，輸入的話還在', async (code, snippet) => {
     const { client } = fakeClient({ subagentSend: vi.fn(async () => refused(code)) });
     render(<Harness client={client} status={{ 'bg-1': 'running' }} />);
@@ -475,11 +480,13 @@ describe('單獨停止', () => {
     fireEvent.click(stopButton());
     expect(interrupt).toHaveBeenCalledExactlyOnceWith('t1', 'bg-1');
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: '停止這一輪' }).textContent).toContain('停止中…'),
+      expect(screen.getByRole('button', { name: '只停這個子代理' }).textContent).toContain(
+        '停止中…',
+      ),
     );
     expect(stopButton().disabled).toBe(true);
     view.rerender(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
-    await waitFor(() => expect(stopButton().textContent).toContain('停止這一輪'));
+    await waitFor(() => expect(stopButton().textContent).toContain('只停這個子代理'));
     expect(stopButton().textContent).not.toContain('停止中');
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -495,7 +502,7 @@ describe('單獨停止', () => {
     await act(async () => void vi.advanceTimersByTime(9_900));
     expect(stopButton().textContent).toContain('停止中…');
     await act(async () => void vi.advanceTimersByTime(200));
-    expect(stopButton().textContent).toBe('停止這一輪');
+    expect(stopButton().textContent).toBe('只停這個子代理');
     expect(stopButton().disabled).toBe(false);
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -508,7 +515,37 @@ describe('單獨停止', () => {
     open();
     fireEvent.click(stopButton());
     expect((await screen.findByRole('alert')).textContent).toContain('壞了');
-    expect(stopButton().textContent).toBe('停止這一輪');
+    expect(stopButton().textContent).toBe('只停這個子代理');
+  });
+});
+
+describe('面板的長相（#1694）', () => {
+  const glyph = () => document.querySelector('[data-subagent-panel] [data-slot="status-glyph"]');
+
+  it.each([
+    [{ 'bg-1': 'running' } as Status, true],
+    [{ 'bg-1': 'idle' } as Status, false],
+    [{} as Status, false],
+  ])('頂端的 StatusGlyph 只在跑著時畫（%o）', (status, shown) => {
+    stubGlyphEnvironment();
+    render(<Harness client={fakeClient().client} status={status} />);
+    open();
+    expect(glyph() !== null).toBe(shown);
+  });
+
+  it('送出鈕在輸入框裡，是表單的送出鈕：點它照樣送', async () => {
+    const { client, send } = fakeClient();
+    render(<Harness client={client} status={{ 'bg-1': 'running' }} />);
+    open();
+    const group = input().closest<HTMLElement>('[data-slot="input-group"]')!;
+    const button = within(group).getByRole('button', {
+      name: '送出給背景子代理',
+    }) as HTMLButtonElement;
+    // vendor 的 `InputGroupButton` 預設是 `type="button"`，沒改的話點了不會送。
+    expect(button.type).toBe('submit');
+    fireEvent.change(input(), { target: { value: '先看 A' } });
+    fireEvent.click(button);
+    await waitFor(() => expect(send).toHaveBeenCalledExactlyOnceWith('t1', 'bg-1', '先看 A'));
   });
 });
 

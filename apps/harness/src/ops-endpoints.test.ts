@@ -27,6 +27,7 @@ import type { OpsEndpoints } from './ops-endpoints.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { composeAttachSessions } from './session-attach.js';
+import type { StorageArea } from './storage-probe.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { ThreadAgent } from './wire-handler.js';
@@ -225,6 +226,45 @@ describe('驗收 3：就緒跟著收尾走', () => {
     expect(await readyz.text()).toBe('closing');
     expect((await r.ops.handle(get('/livez'))).status).toBe(200);
     await closing;
+  });
+
+  it('寫資料的地方滿了：503 storage-full，收尾優先，釋放後回 200（#2195）', async () => {
+    let closing = false;
+    let full: readonly StorageArea[] = ['thread-roots'];
+    let refreshed = 0;
+    const ops = createOpsEndpoints({
+      isClosing: () => closing,
+      storage: {
+        refresh: async () => {
+          refreshed += 1;
+        },
+        get full() {
+          return full;
+        },
+      },
+    });
+    const readyz = await ops.handle(get('/readyz'));
+    expect(readyz.status).toBe(503);
+    expect(await readyz.text()).toBe('storage-full');
+    expect(refreshed).toBe(1);
+    expect((await ops.handle(get('/livez'))).status).toBe(200);
+    closing = true;
+    expect(await (await ops.handle(get('/readyz'))).text()).toBe('closing');
+    expect(refreshed).toBe(1);
+    closing = false;
+    full = [];
+    expect((await ops.handle(get('/readyz'))).status).toBe(200);
+  });
+
+  it('指標只帶區名，不帶路徑（#2195）', async () => {
+    const metrics = new OpsMetrics(
+      () => ({ threads: 0, threadsClosing: 0, storageFull: ['home'] }),
+      memoryDeps({ cgroup: false }),
+    );
+    const text = await metrics.render();
+    metrics.stop();
+    expect(text).toContain('nexus_storage_full{area="home"} 1');
+    expect(text).toContain('nexus_storage_full{area="thread-roots"} 0');
   });
 
   it('serve 自己的收尾旗標也算（isClosing 由呼叫端決定）', async () => {

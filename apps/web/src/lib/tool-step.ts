@@ -34,6 +34,7 @@ import type { PresentedFile } from '@/lib/present-view';
 import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import type { TodoItem } from '@/lib/todo-view';
 import { toolDiffView } from '@/lib/tool-diff';
+import { abortedToolLabel, STOPPED_STATUS_LABEL } from '@/lib/tool-aborted';
 import { readCardOf, searchCardOf } from '@/lib/tool-result-card';
 import type { ReadCard, SearchCard } from '@/lib/tool-result-card';
 import { SUBAGENT_MAX_TOKENS_TEXT, subagentMaxTokensOf } from '@/lib/max-tokens-view';
@@ -57,10 +58,7 @@ export const TOOL_STATUS_LABEL = {
   failed: '失敗',
 } as const satisfies Record<ToolEntry['status'], string>;
 
-/** 停止的提問那一格的狀態字（§4.3，#409）：停止不是失敗（#276）。 */
-export const STOPPED_STATUS_LABEL = '已停止';
-
-/** nexus 的狀態收成 SG 的三態（#1682 Q1 的對照表）：停止的提問與等人回答都不閃，失敗（含被拒、中斷）是 `error`。 */
+/** nexus 的狀態收成 SG 的三態（#1682 Q1 的對照表）：停止的提問、被中止的工具與等人回答都不閃，失敗（含被拒、中斷）是 `error`。 */
 export function sgStatus(entry: ToolEntry, stopped: boolean): Step['status'] {
   if (entry.status === 'running') return 'running';
   if (entry.status === 'failed' && !stopped) return 'error';
@@ -119,7 +117,9 @@ export function toStep(
   }: { answer?: AnswerEntry; subagentNames?: ReadonlyMap<string, string> } = {},
 ): ToolStep {
   const stopped = isStoppedQuestion(entry);
-  const failed = entry.status === 'failed' && !stopped;
+  const interrupted =
+    entry.status === 'failed' ? abortedToolLabel(entry.name, entry.errorCode) : undefined;
+  const failed = entry.status === 'failed' && !stopped && interrupted === undefined;
   const answered = entry.status === 'done';
   const questions = entry.name === ASK_USER_QUESTION ? questionsOf(entry.input) : undefined;
   // 答案優先讀線上那一份（#439）：它不分分頁，重新整理與重播都在。本地那一則是舊日誌（沒有 `text`）的退路。
@@ -179,7 +179,7 @@ export function toStep(
       ? body === undefined
         ? '沒有參數。'
         : undefined
-      : output === undefined && entry.error === undefined
+      : output === undefined && !showsError
         ? entry.status === 'running'
           ? '還沒有結果。'
           : '沒有結果文字。'
@@ -187,7 +187,7 @@ export function toStep(
   const step: Step = {
     id: entry.id,
     label: summary === '' ? title : `${title} ${summary}`,
-    status: sgStatus(entry, stopped),
+    status: sgStatus(entry, stopped || interrupted !== undefined),
     // 寫檔／改檔交給 SG 畫（#1685 B）：列上的 +N −M 與展開後的 `DiffView` 都由 vendor 從這一份算。字串是 `toolDiffView` 記住的那一個，
     // 工具段（`tool-run.tsx`）拿到的是同一個實例。
     ...(diffView === undefined ? {} : { patch: diffView.patch }),
@@ -201,7 +201,7 @@ export function toStep(
   };
   return {
     step,
-    statusText: stopped ? STOPPED_STATUS_LABEL : TOOL_STATUS_LABEL[entry.status],
+    statusText: stopped ? STOPPED_STATUS_LABEL : (interrupted ?? TOOL_STATUS_LABEL[entry.status]),
     failed,
     stopped,
     resultInChildren,

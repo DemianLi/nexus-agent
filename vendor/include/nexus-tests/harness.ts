@@ -5,7 +5,7 @@
 import { Context, Service } from '@nexus/cordis'
 import type { Fiber } from '@nexus/cordis'
 import Loader from '@nexus/cordis-plugin-loader'
-import * as yaml from 'js-yaml'
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml'
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -36,7 +36,7 @@ export interface TreeOptions {
   readonly initial?: Record<string, unknown>[]
   /** 不建檔（驗缺檔那條路）。 */
   readonly noFile?: boolean
-  /** 直接給檔案原文（要寫 YAML 標籤這類 `yaml.dump` 寫不出來的形狀）；有給就不用 `rows` 產生。 */
+  /** 直接給檔案原文（要寫 YAML 標籤這類 `stringifyYaml` 寫不出來的形狀）；有給就不用 `rows` 產生。 */
   readonly source?: string
   /** 額外的內建插件。 */
   readonly builtins?: Record<string, unknown>
@@ -45,7 +45,7 @@ export interface TreeOptions {
 export async function bootTree(options: TreeOptions): Promise<Tree> {
   const dir = mkdtempSync(join(tmpdir(), 'include-nexus-'))
   const file = join(dir, 'cordis.yml')
-  if (options.noFile !== true) writeFileSync(file, options.source ?? yaml.dump(options.rows))
+  if (options.noFile !== true) writeFileSync(file, options.source ?? stringifyYaml(options.rows))
   const registry: string[] = []
   const applied: Record<string, number> = {}
   const logs: string[] = []
@@ -128,7 +128,7 @@ export async function bootTree(options: TreeOptions): Promise<Tree> {
 }
 
 export function readRows(file: string): unknown {
-  return yaml.load(readFileSync(file, 'utf8'))
+  return parseYaml(readFileSync(file, 'utf8'))
 }
 
 export function filesIn(dir: string): string[] {

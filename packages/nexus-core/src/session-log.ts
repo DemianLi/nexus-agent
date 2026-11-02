@@ -36,6 +36,8 @@
  */
 
 import type { MessageContent } from '@langchain/core/messages';
+import { brandNumber } from '@nexus/brand';
+import type { BrandedNumber } from '@nexus/brand';
 import type { AttachmentRef } from './attachment-ref.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
 import type { ModelRoute } from './model-route.js';
@@ -125,8 +127,8 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 理由同 `model/usage`：同一個 middleware 實例、同一次模型呼叫，也寫得進 subagent 那份。
  * 見 [#266](https://github.com/DemianLi/nexus-agent/issues/266)。
  *
- * **`tool/result` 有第二個寫者：web 的 pump**，只在一種情況——停在核准點時人按了停止，那幾顆
- * 等核准的呼叫被收回（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。那時沒有 run 在跑，
+ * **`tool/result` 有第二個寫者：web 的 pump**，兩種情況。一輪失敗時替沒配到結果的呼叫補結（#2029，`#closeUnansweredCalls`）；以及停在核准點時被人中止
+ * （停止鍵、暫停目標、封存時一起停下工作），那幾顆等核准的呼叫被收回（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。收回時沒有 run 在跑，
  * 圍堵看不到它們，所以由 pump 寫 `turn/start {kind:'resume'}` → 每一顆的 `tool/result`
  * （`ABORTED_BEFORE_DISPATCH`）→ `turn/end` 帶 aborted。配對規則不變：每一顆都配著前面那顆沒結果的
  * `tool/call`。
@@ -143,8 +145,8 @@ import type { ToolErrorInfo } from './tool-events.js';
  *
  * `assistant/message` 生產者同第四種（{@link ./model-calls.ts | createModelCallRecorder}，就是寫
  * `model/start`／`model/end` 那一顆），理由同 `model/usage`，也寫得進 subagent 那份。**它有第二個
- * 寫者：web 的 pump**，只在一種情況——人按了停止、模型講到一半，那半段由 pump 寫回對話，同時寫
- * 一顆 `interrupted: true` 的（CLI 沒有停止這條路，見 `cli.ts` 的 `runRepl`）。
+ * 寫者：web 的 pump**，只在一種情況——root 這一輪被中止、模型講到一半，那半段由 pump 寫回對話，同時寫
+ * 一顆 `interrupted: true` 的（CLI 沒有中止這條路：沒有停止鍵，也不套一輪的時鐘，見 `cli.ts` 的 `runRepl`）。
  *
  * `user/message` 兩個寫者各走一條舊路：repeat-reminder 走 `model/usage` 那條（fold 自己建的
  * middleware，它的 `beforeModel`），goal 的收尾走 `tool/result` 那條（圍堵，從工具回的 `Command`
@@ -315,9 +317,34 @@ export interface SessionReferenceSourceEntry {
   readonly inputIndex: number;
 }
 
+/** `notice` 形式那一行摘要（`subagent-settled` 的 `summary`）的上限，以 UTF-16 code unit 計（`String.length`）。 */
+export const CONTEXT_SUMMARY_MAX_CHARS = 120;
+
+/**
+ * 把一行 `notice` 摘要夾在 {@link CONTEXT_SUMMARY_MAX_CHARS} 以內：超過就切到上限少一、結尾補 `…`，總長等於上限。摘要記進日誌
+ * （佇列項與這一輪的來源），而收它的入口收的是任意字串，所以在記錄點夾，不靠生產者自律。
+ *
+ * @param summary - 生產者給的那一行，長度不限。
+ * @returns 夾過的那一行。
+ */
+export function boundContextSummary(summary: string): string {
+  return summary.length <= CONTEXT_SUMMARY_MAX_CHARS
+    ? summary
+    : `${summary.slice(0, CONTEXT_SUMMARY_MAX_CHARS - 1)}…`;
+}
+
 /** `user/message` 是誰塞的，見 {@link SessionEventMap} 的 `user/message`。 */
 export type UserMessageSource =
-  | { readonly kind: 'plugin'; readonly plugin: string }
+  | {
+      readonly kind: 'plugin';
+      readonly plugin: string;
+      /**
+       * 這則是什麼（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567) N0136）：`'instructions'` 是插件塞給模型照做的使用說明，
+       * 今天唯一的生產者是 agent-instructions。只列有生產者的值，新的生產者在這裡加。沒帶就是沒分類：其他插件塞的提醒，以及這一格
+       * 出現之前寫下的日誌。
+       */
+      readonly form?: 'instructions';
+    }
   | {
       readonly kind: 'user';
       /**
@@ -350,6 +377,8 @@ export type UserMessageSource =
        * 怎麼收的（#884）。**選填只為了格式 26 以前的日誌**：沒帶就是不知道，畫面退成中性的說法，不假裝成「已完成」。
        */
       readonly reason?: SubagentSettleReason;
+      /** `reason` 是 `aborted` 時為什麼停（#1847）。舊日誌沒有。 */
+      readonly cause?: TurnAbortCause;
       /** 結算的那個背景子代理的會話 id。 */
       readonly senderSessionId: string;
     }
@@ -448,7 +477,7 @@ export interface SessionEventMap {
     | {
         readonly kind: 'subagent-settled';
         /**
-         * 送進模型的那一串字：一行摘要，加上子代理最後一則回覆的非空文字（沒有就是 `It left no closing message.`）。
+         * 送進模型的那一串字：一行摘要，加上子代理最後一則回覆的非空文字（沒有就是 `It left no closing message.`，收尾前剛傳過結果就是省略結尾的那一句）。
          * **這一份與圖那一份是同一個值**。
          */
         readonly text: string;
@@ -456,6 +485,8 @@ export interface SessionEventMap {
         readonly summary: string;
         /** 怎麼收的，同 {@link UserMessageSource} 的 `subagent-settled`。 */
         readonly reason?: SubagentSettleReason;
+        /** 為什麼停，同 {@link UserMessageSource} 的 `subagent-settled`。 */
+        readonly cause?: TurnAbortCause;
         /**
          * 結算的背景子代理的會話 id。照 dsh 的 `SubagentSettledMessageSource`（`subagent/src/continuation-messages.ts`，`477b4f4`）：
          * 這是**執行期自己的記帳**，不是人說的話、也不是子代理自己寫的話（所以不併進 `agent-message`）。
@@ -477,7 +508,7 @@ export interface SessionEventMap {
   /**
    * 一輪結束——**跑完與停在核准點都算**，停在核准點時前面會有一顆 `interrupt/raised`。
    *
-   * **被人中止的那一輪也以這一顆收尾，帶 `reason`**；正常結束時整個不放這個 key（同
+   * **被中止的那一輪也以這一顆收尾，帶 `reason`**；正常結束時整個不放這個 key（同
    * `command/done` 的 `text`）。照 dsh 的 `turn/end {reason: {kind: 'aborted', reason: cause}}`
    * （`packages/core/session/src/types.ts:203`，`c291e79`），dsh 沒有 `turn/cancelled`。
    * 內層那一格叫 `cause` 不叫 dsh 的 `reason`：外層已經叫 `reason`，兩層同名讀起來會混
@@ -549,11 +580,11 @@ export interface SessionEventMap {
    *
    * 詞彙照 dsh 的 `ApprovalOutcome`：`allowed-once` 是唯一的放行；`rejected` 是人按了拒絕，**也是政策關掉核准時的確定性
    * 拒絕**（dsh 同：`approval` 服務在 `never` 政策下直接回 `rejected`）；`cancelled` 是問題在被答之前被收回（按了停止）；
-   * `unavailable` 是沒有人可以答（沒有管道）。**fail closed**：除了 `allowed-once` 都不執行。
+   * `unavailable` 是沒有拿到有效的決定：沒有管道，或問了人但回覆看不懂。**fail closed**：除了 `allowed-once` 都不執行。
    *
-   * 「是誰拒的」在 dsh 靠 `approval/policy` 事件分；我們多一格「入口沒有人在」（不進日誌），所以日誌上分人拒與政策拒
-   * 最準的是那一次 `tool/result` 的碼（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／
-   * `APPROVAL_NO_CHANNEL`，見 `tool-events.ts`）。
+   * 這顆事件分不出原因：`rejected` 可能是人拒或政策拒（含不進日誌的「入口沒有人在」），`unavailable` 可能是沒有管道或回覆看不懂。
+   * 要分原因看那一次 `tool/result` 的碼（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／
+   * `APPROVAL_NO_CHANNEL`／`APPROVAL_INVALID_REPLY`，見 `tool-events.ts`）。
    */
   'approval/decided': {
     readonly id: string;
@@ -670,7 +701,7 @@ export interface SessionEventMap {
     /** 寫進快取的輸入 token。缺席＝沒記。 */
     readonly cacheWriteTokens?: number;
     /**
-     * 這次呼叫沒有正常回來：`error` ＝ 拋錯，`aborted` ＝ 使用者按了停止。**只有失敗那一種才帶這一格。**
+     * 這次呼叫沒有正常回來：`error` ＝ 拋錯，`aborted` ＝ 被中止，原因見 {@link TurnAbortCause}。**只有失敗那一種才帶這一格。**
      * 讀者**都照常讀**：加總的照加，「目前大小」讀最新一筆的也照讀——同 dsh，它的 `contextPressure` 連
      * `assistant/attempt` 的用量也取樣（那份請求真的送出去過，prompt 大小是真的）。名字借 dsh `TurnEndReason` 的
      * `kind`（`aborted`／`error`，`core/session/src/types.ts:204-212`）。
@@ -711,7 +742,7 @@ export interface SessionEventMap {
    * 個進入的步恰好一顆 `step/end`」。
    *
    * **`outcome` 只在沒有正常回來時帶**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：拋錯是 `error`、
-   * 使用者按了停止是 `aborted`，兩者同 {@link ModelCallOutcome}。這一格讓「這次呼叫燒了多少不知道」讀得出來——配對的
+   * 被中止是 `aborted`，兩者同 {@link ModelCallOutcome}。這一格讓「這次呼叫燒了多少不知道」讀得出來——配對的
    * `model/usage` 不在，而這裡有 `outcome`。沒有這一格 ＝ 正常回來，或舊日誌（那時只能看後面有沒有 `turn/failed`）。
    *
    * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
@@ -811,7 +842,7 @@ export interface SessionEventMap {
    *
    * ## `interrupted`
    *
-   * 人按了停止、畫面上已經有字時，那半段以這一顆記下，帶 `interrupted: true`；正常的回覆整個不放
+   * root 這一輪被中止、畫面上已經有字時，那半段以這一顆記下，帶 `interrupted: true`；正常的回覆整個不放
    * 這個 key。**這一顆由 pump 在這一輪收尾時寫，落在 `model/end` 之後**——被切斷的那次呼叫在寫入點
    * 看到的是拋錯，不是回覆。一個字都沒送出就整顆不寫，同 dsh：沒有看得見的內容就不算一則回覆。
    * 子代理那一層被切斷時回的空訊息同理不寫（`turn-cancel.ts` 的 `stopHere`）。
@@ -1136,6 +1167,22 @@ export interface SessionEventMap {
      */
     readonly messagesCompactable?: boolean;
     /**
+     * 這份請求的組成：system 提示、工具定義、對話訊息各約多少 token（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）。
+     * 三格都是非負整數，**沒有系統提示或沒有工具時是 `0`，不是缺席**。`systemTokens`、`toolsTokens` 是摘要器交給下一層的那份請求的純估算
+     * （`estimateRequestParts`）；`messageTokens` 是 `max(0, approxTokens − systemTokens − toolsTokens)`，所以三格相加等於環上的
+     * `approxTokens`（錨在供應商實數上的修正量全算給訊息，那是唯一會被錨移動的一格）。`systemTokens + toolsTokens` 大過
+     * `approxTokens` 時夾在 `0`，三格相加會比 `approxTokens` 大。
+     *
+     * **偏離 dsh（理由 1：基座表達不出來）**：dsh 的 `contextBreakdown` 從日誌的 surface 事件折出，我們的日誌沒有那一軸
+     * （`session-log.ts:948`），退到量測點手上那份實際送出的請求，見 `estimateRequestParts`。這一格出現以前的日誌沒有它——沒有就是沒量，
+     * 不是 `0`。加它沒有升日誌格式版本，紀錄見 `docs/persistence-changes/2026-10-24-context-measure-breakdown.md`。
+     */
+    readonly breakdown?: {
+      readonly systemTokens: number;
+      readonly toolsTokens: number;
+      readonly messageTokens: number;
+    };
+    /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
      * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
      */
@@ -1412,6 +1459,43 @@ export interface SessionEventMap {
   'session/resumed': SessionHeaderBuildMetadata;
 }
 
+/**
+ * 一份日誌裡某一筆既有事件的位置（[#1567](https://github.com/DemianLi/nexus-agent/issues/1567) N0788）。跟 {@link SessionLogOffset} 分開：
+ * 位置指的是那一筆，位移是筆數（長度、前綴長、讀到哪），可以等於事件總數。兩者都是 number，把一個當另一個傳型別要擋。
+ */
+export type SessionSeq = BrandedNumber<'SessionSeq'>;
+
+/**
+ * 把一個數字收成事件位置。
+ *
+ * @param value - 事件在日誌裡的位置，從 0 起。
+ * @returns 同一個數字，帶 `SessionSeq` 品牌。
+ * @throws TypeError 不是非負的安全整數（含 `-0`）。
+ */
+export function SessionSeq(value: number): SessionSeq {
+  if (!Number.isSafeInteger(value) || value < 0 || Object.is(value, -0)) {
+    throw new TypeError(`SessionSeq 必須是非負的安全整數，拿到 ${String(value)}`);
+  }
+  return brandNumber<SessionSeq>(value);
+}
+
+/** 一份日誌的筆數、前綴長或讀到哪：可以等於事件總數，見 {@link SessionSeq}。 */
+export type SessionLogOffset = BrandedNumber<'SessionLogOffset'>;
+
+/**
+ * 把一個數字收成日誌位移。
+ *
+ * @param value - 當作筆數或前綴長的數字。
+ * @returns 同一個數字，帶 `SessionLogOffset` 品牌。
+ * @throws TypeError 不是非負的安全整數（含 `-0`）。
+ */
+export function SessionLogOffset(value: number): SessionLogOffset {
+  if (!Number.isSafeInteger(value) || value < 0 || Object.is(value, -0)) {
+    throw new TypeError(`SessionLogOffset 必須是非負的安全整數，拿到 ${String(value)}`);
+  }
+  return brandNumber<SessionLogOffset>(value);
+}
+
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */
 /**
  * 日誌裡的一筆。
@@ -1426,7 +1510,7 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = T exte
   ? {
       readonly type: T;
       /** 這一筆在這份日誌裡的位置。**append 當下由長度決定**，一個 session 內單調遞增。 */
-      readonly seq: number;
+      readonly seq: SessionSeq;
       /** Unix epoch 毫秒。 */
       readonly time: number;
       readonly data: SessionEventMap[T];
@@ -2107,7 +2191,7 @@ export interface SessionLogView {
   /** 目前的長度，也就是下一筆會拿到的 `seq`。 */
   readonly length: number;
   /** 分叉繼承來的前綴有幾顆，見 {@link inheritedEventCount}；不是分叉來的是 0。 */
-  readonly inheritedEventCount: number;
+  readonly inheritedEventCount: SessionLogOffset;
   /** 切點之後、這一份自己的事件。見 {@link SessionLog.ownEvents}。 */
   ownEvents(): readonly SessionEvent[];
   /** 這個位置是不是這一份自己的。見 {@link SessionLog.isOwnSeq}。 */
@@ -2117,19 +2201,19 @@ export interface SessionLogView {
 /**
  * 分叉的切點：**最後一顆** `session/end-seed {inherited: true}` 的 `seq`，沒有就是 0（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
  *
- * 照 dsh 讀盤時的求法（`packages/session/session-format-v1-to-v2/src/codec.ts:114-116`、`session-format-v3-to-v4/src/validation.ts:70-71`，
- * `687f282e`）：切點不另外落盤，從標記推。它等於複製進來的事件數（{@link buildForkSeed} 把標記放在 `boundary + 1`），標記自己算這一份的。
+ * 切點不另外落盤，從標記推。它等於複製進來的事件數（{@link buildForkSeed} 把標記放在 `boundary + 1`），標記自己算這一份的。
  * 分叉再分叉時前綴裡也有祖先的標記，所以取最後一顆。
  *
  * @param events - 一份日誌，照 `seq` 排、從 0 連續。
  * @returns 切點；之前的是繼承來的，之後（含）是這一份自己的。
  */
-export function inheritedEventCount(events: readonly SessionEvent[]): number {
+export function inheritedEventCount(events: readonly SessionEvent[]): SessionLogOffset {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
-    if (event?.type === 'session/end-seed' && event.data.inherited === true) return event.seq;
+    if (event?.type === 'session/end-seed' && event.data.inherited === true)
+      return SessionLogOffset(event.seq);
   }
-  return 0;
+  return SessionLogOffset(0);
 }
 
 /**
@@ -2158,7 +2242,7 @@ export function buildForkSeed(events: readonly SessionEvent[], boundary: number)
   const prefix = events.slice(0, boundary + 1);
   prefix.push({
     type: 'session/end-seed',
-    seq: boundary + 1,
+    seq: SessionSeq(boundary + 1),
     time: cut.time,
     data: { inherited: true },
   } as SessionEvent);
@@ -2192,7 +2276,7 @@ export class SessionLog implements SessionLogView {
   /** 正在回呼中。重入防護唯一的狀態。 */
   #publishing = false;
   /** 分叉的切點，接 seed 時算一次。end-seed 只有建構子能合法寫（見那顆事件的說明），所以之後不會變。 */
-  #inheritedEventCount = 0;
+  #inheritedEventCount = SessionLogOffset(0);
 
   constructor(sessionId: string, options: SessionLogOptions = {}) {
     this.#sessionId = sessionId;
@@ -2235,7 +2319,7 @@ export class SessionLog implements SessionLogView {
     this.#events.push(
       deepFreeze({
         type: 'session/end-seed',
-        seq: this.#events.length,
+        seq: SessionSeq(this.#events.length),
         time: Date.now(),
         data: {},
       }) as SessionEvent,
@@ -2258,7 +2342,7 @@ export class SessionLog implements SessionLogView {
   }
 
   /** 分叉繼承來的前綴有幾顆（{@link inheritedEventCount}）；不是分叉來的是 0。 */
-  get inheritedEventCount(): number {
+  get inheritedEventCount(): SessionLogOffset {
     return this.#inheritedEventCount;
   }
 
@@ -2343,7 +2427,7 @@ export class SessionLog implements SessionLogView {
     // 未解析的 `T` 展開，所以字面量對不上 `SessionEvent<T>`。欄位本身完全吻合。
     const event = deepFreeze({
       type,
-      seq: this.#events.length,
+      seq: SessionSeq(this.#events.length),
       time: Date.now(),
       data: snapshot,
       ...(options.ignorable === true && { ignorable: true }),

@@ -51,7 +51,7 @@
  *   不數的話，畫面上「少了一條」跟「本來就沒有」分不出來。
  *
  * **日誌本文壞在中間不在這裡擋**：讀的時候開撿回模式（`salvage`），讀得懂的照算。那一列照樣列出來，點下去由續接
- * 那條路講出原因（`wire-handler.ts` 的 `threadOrError`）。
+ * 那條路拒絕，原因進 serve 的日誌（`wire-handler.ts` 的 `threadOrError`）。
  *
  * ## 標題
  *
@@ -66,6 +66,7 @@ import {
   readColdSession,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
   SessionNotFoundError,
 } from '@nexus/core';
 import type {
@@ -225,6 +226,17 @@ export async function listStoredThreads(
       events = await (await store.open(header.id, 'read')).read({ salvage: true });
     } catch (error: unknown) {
       if (error instanceof SessionNotFoundError) continue;
+      // 這個行程現在讀不進來（#2115：太大，或額度被開著的 thread 佔滿）：不是壞了，照樣列，只是不讀本文——沒有標題、
+      // `updatedAt` 退回建立時間；打開時才講為什麼開不了。
+      if (error instanceof SessionLogTooLargeError) {
+        items.push({
+          threadId: header.id,
+          updatedAt: header.createdAt,
+          blank: false,
+          ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
+        });
+        continue;
+      }
       if (
         error instanceof SessionCorruptionError ||
         error instanceof SessionFormatUnsupportedError

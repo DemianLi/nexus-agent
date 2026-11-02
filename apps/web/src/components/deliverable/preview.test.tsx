@@ -2,10 +2,20 @@ import type { DeliverableFilePage } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BLOCK_LINES, linesOf, loadedChain } from '@/components/deliverable/preview';
+import {
+  BLOCK_LINES,
+  isMarkdownFile,
+  linesOf,
+  loadedChain,
+  markdownOf,
+} from '@/components/deliverable/preview';
 import { DeliverablesCard } from '@/components/deliverable/card';
 import { MISSING_REASON, createDeliverableFileStore } from '@/lib/deliverable-file';
-import type { DeliverableFileState, DeliverableLongLine } from '@/lib/deliverable-file';
+import type {
+  DeliverableFileEntry,
+  DeliverableFileState,
+  DeliverableLongLine,
+} from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
 import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
@@ -77,7 +87,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const FILE: LocatedFile = { path: 'out/report.md', seq: 11, index: 0 };
+const FILE: LocatedFile = { path: 'out/report.txt', seq: 11, index: 0 };
 
 /** 路由真的形狀：`text` 是 `join('\n')`，結尾沒有換行。 */
 const PAGE: DeliverableFilePage = {
@@ -151,8 +161,8 @@ describe('交付檔預覽', () => {
       params: { seq: 11, index: 0 },
     });
     // **在預覽分頁裡面找**：卡片那一列也印著同一個路徑，整頁找會撞到兩個。分頁的標題是檔名。
-    expect(within(screen.getByRole('tabpanel')).getByText('out/report.md')).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'report.md' })).toBeTruthy();
+    expect(within(screen.getByRole('tabpanel')).getByText('out/report.txt')).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'report.txt' })).toBeTruthy();
   });
 
   it('座標取自那一列，不是列表位置（#452）', async () => {
@@ -206,6 +216,164 @@ describe('交付檔預覽', () => {
     mount(() => pageReply({ ...PAGE, text: '', lines: 0, eof: true }));
     open();
     expect(await screen.findByText('這個檔是空的')).toBeTruthy();
+  });
+
+  describe('Markdown 檔', () => {
+    const REPORT: LocatedFile = { ...FILE, path: 'out/report.md' };
+    const SOURCE = '# 季報\n\n- 第一項\n- 第二項';
+
+    function report(text: string, over: Partial<typeof PAGE> = {}) {
+      return { ...PAGE, text, lines: text.split('\n').length, eof: true, ...over };
+    }
+
+    it('預設畫成文件：標題與清單是元素，不是原文', async () => {
+      mount(() => pageReply(report(SOURCE)), [REPORT]);
+      open(REPORT);
+      expect(await screen.findByRole('heading', { name: '季報' })).toBeTruthy();
+      expect(within(screen.getByTestId('preview-document')).getAllByRole('listitem')).toHaveLength(
+        2,
+      );
+      expect(screen.queryByTestId('preview-text')).toBeNull();
+    });
+
+    it('「顯示原文」切回帶行號的文字，再按一次回文件', async () => {
+      mount(() => pageReply(report(SOURCE)), [REPORT]);
+      open(REPORT);
+      await screen.findByRole('heading', { name: '季報' });
+      const toggle = screen.getByRole('button', { name: '顯示原文' });
+      expect(toggle.getAttribute('aria-pressed')).toBe('false');
+
+      fireEvent.click(toggle);
+      expect(shownLineNumbers()).toEqual([1, 2, 3, 4]);
+      expect(screen.queryByRole('heading', { name: '季報' })).toBeNull();
+      expect(toggle.getAttribute('aria-pressed')).toBe('true');
+
+      fireEvent.click(toggle);
+      expect(screen.getByRole('heading', { name: '季報' })).toBeTruthy();
+    });
+
+    it('自動換行只管原文：文件模式停用，原文模式可按', async () => {
+      mount(() => pageReply(report(SOURCE)), [REPORT]);
+      open(REPORT);
+      await screen.findByRole('heading', { name: '季報' });
+      const wrap = screen.getByRole('button', { name: '自動換行' }) as HTMLButtonElement;
+      expect(wrap.disabled).toBe(true);
+      fireEvent.click(screen.getByRole('button', { name: '顯示原文' }));
+      expect(wrap.disabled).toBe(false);
+    });
+
+    it('副檔名大小寫不拘，別的副檔名是原文、沒有切換鈕', async () => {
+      expect(isMarkdownFile('A/REPORT.MD')).toBe(true);
+      expect(isMarkdownFile('notes.markdown')).toBe(true);
+      expect(isMarkdownFile('report.md.txt')).toBe(false);
+      mount(() => pageReply(report(SOURCE)));
+      open();
+      await screen.findByTestId('preview-text');
+      expect(screen.queryByRole('button', { name: '顯示原文' })).toBeNull();
+    });
+
+    it('接續讀到的下一頁接在同一份文件後面，跨頁的段落不被切開', async () => {
+      const replies = [
+        report('# 季報\n\n第一段', { eof: false }),
+        report('接著的同一段\n\n## 下一節', { offset: 10 }),
+      ];
+      mount(() => pageReply(replies.shift() ?? PAGE), [REPORT]);
+      open(REPORT);
+      await screen.findByRole('heading', { name: '季報' });
+      expect(screen.queryByRole('heading', { name: '下一節' })).toBeNull();
+      nearBottom();
+      expect(await screen.findByRole('heading', { name: '下一節' })).toBeTruthy();
+      expect(screen.getByText(/第一段\s+接著的同一段/u).tagName).toBe('P');
+    });
+
+    it('切到原文才掛上的文字容器量得到 --cpr', async () => {
+      vi.stubGlobal(
+        'ResizeObserver',
+        class {
+          observe() {}
+          disconnect() {}
+        },
+      );
+      vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+        width: 800,
+      } as DOMRect);
+      mount(() => pageReply(report(SOURCE)), [REPORT]);
+      open(REPORT);
+      await screen.findByRole('heading', { name: '季報' });
+      fireEvent.click(screen.getByRole('button', { name: '顯示原文' }));
+      const text = screen.getByTestId('preview-text');
+      expect(text.style.getPropertyValue('--cpr')).not.toBe('');
+      vi.restoreAllMocks();
+    });
+
+    it('鏈上有長行就畫原文：沒有切換鈕，自動換行可按', async () => {
+      const bytes = new TextEncoder().encode('L'.repeat(16));
+      mount(
+        (call) =>
+          call.method === 'deliverable.read'
+            ? tooLargeReply()
+            : bytesReply({
+                path: REPORT.path,
+                version: 'v1',
+                bytes: bytes.length,
+                offset: 0,
+                data: bytes,
+                eof: true,
+              }),
+        [REPORT],
+      );
+      open(REPORT);
+      expect(await screen.findByTestId('preview-text')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: '顯示原文' })).toBeNull();
+      const wrap = screen.getByRole('button', { name: '自動換行' }) as HTMLButtonElement;
+      expect(wrap.disabled).toBe(false);
+    });
+
+    it('markdownOf：鏈上有長行回 undefined', () => {
+      const long: DeliverableLongLine = {
+        kind: 'long-line',
+        version: 'v1',
+        offset: 0,
+        start: 0,
+        text: 'x',
+        bytes: 1,
+        done: true,
+        eof: true,
+      };
+      expect(markdownOf([long])).toBeUndefined();
+    });
+
+    it('空頁不多出一個換行', () => {
+      const page = (text: string, lines: number) =>
+        ({ ...PAGE, text, lines }) satisfies DeliverableFileEntry;
+      expect(markdownOf([page('a', 1), page('', 0), page('b', 1)])).toBe('a\nb');
+    });
+
+    it('模型寫的 HTML 當文字，不成元素', async () => {
+      const text = '<script>window.pwned = 1</script>\n\n<img src="http://evil.test/x.png">';
+      mount(() => pageReply(report(text)), [REPORT]);
+      open(REPORT);
+      const body = await screen.findByTestId('preview-document');
+      expect(body.querySelector('script, img')).toBeNull();
+      expect(body.textContent).toContain('<script>');
+    });
+
+    it('javascript: 連結不成連結，Markdown 圖片不產生 <img>', async () => {
+      const text = '[點我](javascript:alert(1))\n\n![圖](http://evil.test/x.png)';
+      mount(() => pageReply(report(text)), [REPORT]);
+      open(REPORT);
+      const body = await screen.findByTestId('preview-document');
+      expect(body.querySelector('[href^="javascript:" i]')).toBeNull();
+      expect(body.querySelector('img')).toBeNull();
+      expect(document.querySelector('img[src*="evil.test"]')).toBeNull();
+    });
+
+    it('axe：畫成文件的預覽沒有違規', async () => {
+      mount(() => pageReply(report(SOURCE)), [REPORT]);
+      open(REPORT);
+      await screen.findByRole('heading', { name: '季報' });
+      expect(await axeViolations(document.body)).toEqual([]);
+    });
   });
 
   it('axe：開著的預覽沒有違規', async () => {

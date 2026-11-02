@@ -7,8 +7,8 @@
  *   **窄螢幕載入時一律從收起開始**，不照存下來的「開著」恢復：一進來整個對話就被蓋住不是人要的。
  * - **分頁第一次被選中才掛上**：重新整理後恢復十個分頁，不該一口氣打十份讀取。掛過之後切走只是藏起來。
  * - **計劃（#654）**：審核面板與計劃卡按「查看全文」打開同一個分頁，焦點進分頁，停靠時收起鈕把焦點交回按下去的那顆；
- *   待審時 1024 以上自動停靠一次（`autoOpenPlan`），1024 以下不自動開。內容讀的是對話裡那一份（`sources.plans`），
- *   不另外打讀取。
+ *   待審時 1024 以上自動停靠一次（`autoOpenPlan`），1024 以下不自動開。內容先讀對話裡那一份（`sources.plans`）；
+ *   不在載入的對話裡時往前掃歷史找它（#1798），見 `PlanTab`。
  *
  * 檔案分工：契約型別（`RightSidebarSources`、`RightSidebarApi`、`PanelBodyProps`、`TurnReveal`）在 `lib/right-sidebar-api.ts`，
  * context 與卡片用的 `useRightSidebar` 在 `right-sidebar-context.ts`；面板與卡片只取這兩處，不 import 回這個檔（#1127）。
@@ -66,11 +66,13 @@ import {
   closeTab,
   isPanelTab,
   openTab,
+  planTab,
   readLayout,
   readWidth,
   selectTab,
   setChangesIndex,
   setOpen,
+  setPlanTitle,
   tabKey,
   writeLayout,
   writeWidth,
@@ -134,6 +136,11 @@ export function RightSidebarProvider({
   const locateFocus = useRef<HTMLElement | null>(null);
   const [reveal, setReveal] = useState<TurnReveal | undefined>(undefined);
   const revealCount = useRef(0);
+  const notePlanTitle = useCallback(
+    (id: string, title: string | undefined) =>
+      setLayout((current) => setPlanTitle(current, id, title)),
+    [],
+  );
   useEffect(() => {
     if (touched.current) writeLayout(threadId, layout);
   }, [threadId, layout]);
@@ -152,22 +159,27 @@ export function RightSidebarProvider({
     [],
   );
   const canPreview = sources.deliverableFiles !== undefined;
-  const api = useMemo<RightSidebarApi>(
-    () => ({
+  const api = useMemo<RightSidebarApi>(() => {
+    /** 已經開著就留著它記下的標題：再打開不該把它洗掉。標題由掛上之後的 `PlanTab` 記（`notePlanTitle`）。 */
+    const openPlanTab = (current: SidebarLayout, id: string) =>
+      openTab(
+        current,
+        current.tabs.find((tab) => tab.kind === 'plan' && tab.id === id) ?? planTab(id, undefined),
+      );
+    return {
       openChanges: (seq, index) =>
         update((current) => openTab(current, { kind: 'changes', seq, index })),
       openDeliverable: canPreview
         ? (file) => update((current) => openTab(current, { kind: 'deliverable', file }))
         : undefined,
       openPlan: (id, from) => {
-        const tab: SidebarTab = { kind: 'plan', id };
-        focusTab.current = tabKey(tab);
+        focusTab.current = tabKey({ kind: 'plan', id });
         returnFocus.current = from ?? null;
-        update((current) => openTab(current, tab));
+        update((current) => openPlanTab(current, id));
       },
       autoOpenPlan: (id) => {
         if (isMobile) return false;
-        update((current) => openTab(current, { kind: 'plan', id }));
+        update((current) => openPlanTab(current, id));
         return true;
       },
       openPanel: (kind, from) => {
@@ -200,9 +212,8 @@ export function RightSidebarProvider({
         }
         return true;
       },
-    }),
-    [update, canPreview, isMobile],
-  );
+    };
+  }, [update, canPreview, isMobile]);
   const control = useMemo<RightSidebarControl>(
     () => ({
       api,
@@ -214,12 +225,13 @@ export function RightSidebarProvider({
       focusTab,
       returnFocus,
       locateFocus,
+      notePlanTitle,
       reveal,
       settleReveal,
       update,
       setWidth,
     }),
-    [api, layout, sources, isMobile, width, reveal, settleReveal, update, setWidth],
+    [api, layout, sources, isMobile, width, notePlanTitle, reveal, settleReveal, update, setWidth],
   );
   return <Control.Provider value={control}>{children}</Control.Provider>;
 }
@@ -375,7 +387,7 @@ function ResizeHandle() {
       aria-valuenow={width}
       tabIndex={0}
       data-focus="custom"
-      className="hover:bg-border focus-visible:bg-ring absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize transition-colors duration-(--duration-quick)"
+      className="hover:bg-border focus-visible:bg-ring absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize transition-colors duration-150"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -404,7 +416,7 @@ function PanelContents() {
           type="button"
           variant="ghost"
           size="icon"
-          className="size-11 shrink-0 rounded-full lg:size-9"
+          className="size-11 shrink-0 lg:size-9"
           aria-label="收起右側欄"
           title="收起右側欄"
           onClick={() => {
@@ -451,7 +463,9 @@ function EmptyState() {
   const { api } = useControl();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-      <p className="text-muted-foreground text-body">{RIGHT_SIDEBAR_EMPTY_TEXT}</p>
+      <p className="text-muted-foreground text-body" data-testid="right-sidebar-empty">
+        {RIGHT_SIDEBAR_EMPTY_TEXT}
+      </p>
       <div className="flex gap-2">
         {PANEL_KINDS.map((kind) => {
           const { title, Icon } = PANELS[kind];
@@ -460,7 +474,7 @@ function EmptyState() {
               key={kind}
               type="button"
               variant="outline"
-              className="h-11 rounded-full lg:h-9"
+              className="h-11 lg:h-9"
               data-testid={`right-sidebar-open-${kind}`}
               onClick={(event) => api.openPanel(kind, event.currentTarget)}
             >
@@ -475,13 +489,14 @@ function EmptyState() {
 }
 
 /**
- * 計劃分頁（#654）。那一份不在載入的對話裡時（重新整理後還原的分頁、計劃在更早的輪），照 dsh 的 `planResourceProvider` 另外往前
- * 讀歷史找它（#1798，`Conversation.findPlan`），**不動對話窗口**：找到先在這裡顯示全文，旁邊一顆鈕先 `loadThrough` 載到那一頁
+ * 計劃分頁（#654）。那一份不在載入的對話裡時（重新整理後還原的分頁、計劃在更早的輪），另外往前讀歷史找它
+ *（#1798，`Conversation.findPlan`），**不動對話窗口**：找到先在這裡顯示全文，旁邊一顆鈕先 `loadThrough` 載到那一頁
  * （同觀測分頁，#1601）、計劃出現在對話裡之後再捲到那張計劃卡。掃完沒有、讀取失敗都只講一句。**「待定位」記在這一層**：載完之後
- * 計劃庫裡有了它，鈕那一格卸掉。
+ * 計劃庫裡有了它，鈕那一格卸掉。知道標題（條目裡有、或掃到了）就記進版面（`notePlanTitle`，#2014），分頁標籤在定位之前、
+ * 重新整理之後都寫得出標題；掃完沒有就清掉，標籤退回「計劃」，跟分頁裡「找不到」那一句（`PLAN_TAB_MISSING_TEXT`）一致。讀取失敗不清：讀不到不代表它不在了。
  */
 function PlanTab({ id }: { id: string }) {
-  const { api, sources, isMobile } = useControl();
+  const { api, sources, isMobile, notePlanTitle } = useControl();
   /** 對話條目裡的那一份：有它才定位得到。 */
   const entriesPlan = sources.plans?.get(id);
   const { findPlan, loadThrough } = sources;
@@ -509,6 +524,12 @@ function PlanTab({ id }: { id: string }) {
   const found =
     entriesPlan === undefined && scan !== 'scanning' && scan?.kind === 'found' ? scan : undefined;
   const shown = entriesPlan ?? found?.plan;
+  const knownTitle = shown?.title;
+  const gone = entriesPlan === undefined && scan !== 'scanning' && scan?.kind === 'not-found';
+  useEffect(() => {
+    if (knownTitle !== undefined) notePlanTitle(id, knownTitle);
+    else if (gone) notePlanTitle(id, undefined);
+  }, [knownTitle, gone, id, notePlanTitle]);
   const [phase, setPhase] = useState<'idle' | 'loading' | 'settled' | 'missing'>('idle');
   const preview = useRef<HTMLElement>(null);
   const stillMissing = useRef<HTMLParagraphElement>(null);
@@ -728,7 +749,7 @@ function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefin
   if (isPanelTab(tab)) return { label: PANELS[tab.kind].title, detail: undefined };
   if (tab.kind === 'deliverable') return { label: basename(tab.file.path), detail: tab.file.path };
   if (tab.kind === 'plan') {
-    const title = sources.plans?.get(tab.id)?.title ?? '計劃';
+    const title = sources.plans?.get(tab.id)?.title ?? tab.title ?? '計劃';
     return { label: title, detail: title };
   }
   return changesTabTitle(typeof summary === 'object' ? summary : undefined);
@@ -762,8 +783,10 @@ function TabChip({
     <div
       role="none"
       className={cn(
-        'group flex h-9 max-w-56 min-w-28 shrink items-center rounded-lg transition-colors duration-(--duration-quick)',
-        selected ? 'bg-chip-hover text-foreground' : 'text-muted-foreground hover:bg-chip-hover',
+        'group flex h-9 max-w-56 min-w-28 shrink items-center rounded-lg transition-colors duration-150',
+        selected
+          ? 'glass-chosen text-foreground'
+          : 'text-muted-foreground hover:bg-muted hover:text-foreground',
       )}
       data-testid="right-sidebar-tab"
     >
@@ -786,7 +809,7 @@ function TabChip({
       {/* 不可聚焦、讀屏看不到：鍵盤用 Delete 關（見檔頭）。 */}
       <span
         aria-hidden
-        className="hover:bg-chip-pressed mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md"
+        className="hover:bg-muted mr-1 flex size-6 shrink-0 cursor-pointer items-center justify-center rounded-md"
         onClick={onClose}
         data-testid="right-sidebar-tab-close"
       >

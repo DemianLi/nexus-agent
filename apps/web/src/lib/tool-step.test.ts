@@ -35,6 +35,47 @@ const ASK = {
   input: JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] }),
 };
 
+describe('被中止的工具不寫成失敗（#2247）', () => {
+  const failed = (name: string, errorCode: string) =>
+    toStep(
+      tool({
+        name,
+        input: name === ASK.name ? ASK.input : '{"message":"嗨"}',
+        status: 'failed',
+        error: 'Error: tool call aborted',
+        errorCode,
+      }),
+    );
+
+  it.each([
+    ['ABORTED', '已停止'],
+    [ABORTED_BEFORE_DISPATCH_CODE, '沒有執行'],
+  ])('%s：字是「%s」，SG 不是 error，模型看的字不上畫面', (code, label) => {
+    const view = failed('echo', code);
+    expect(view.statusText).toBe(label);
+    expect(view.failed).toBe(false);
+    expect(view.step.status).toBe('done');
+    expect(view.step.error).toBeUndefined();
+    expect(view.step.label).toBe('回聲 嗨');
+  });
+
+  it('工具自己失敗、帶別的碼的仍是失敗', () => {
+    const view = failed('echo', 'FS_NO_SPACE');
+    expect(view.statusText).toBe('失敗');
+    expect(view.failed).toBe(true);
+    expect(view.step.status).toBe('error');
+    expect(view.step.error).toBe('Error: tool call aborted');
+  });
+
+  it('提問卡不變：ABORTED 仍是失敗，收回的碼仍是停止的提問', () => {
+    const aborted = failed(ASK.name, 'ABORTED');
+    expect([aborted.statusText, aborted.failed]).toEqual(['失敗', true]);
+    const withdrawn = failed(ASK.name, ABORTED_BEFORE_DISPATCH_CODE);
+    expect([withdrawn.statusText, withdrawn.stopped]).toEqual(['已停止', true]);
+    expect(withdrawn.step.label).toContain(STOPPED_QUESTION_TEXT);
+  });
+});
+
 describe('狀態對照（Q1）', () => {
   it('running（含停在核准閘門：wire 那一格也是 running）→ SG running、字是「執行中」', () => {
     const view = toStep(tool({ status: 'running' }));

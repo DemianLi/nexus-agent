@@ -31,7 +31,7 @@ import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
-import { openJsonlSessionStore } from './jsonl-session-store.js';
+import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
 import { readStoredSubagentSession } from './session-list.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -349,14 +349,23 @@ describe('背景子代理自己的歷史', () => {
       },
       { type: 'tool/call', time: 13, data: { callId: 'c1', name: 'lookup', arguments: '{}' } },
     ]);
-    const files = async () =>
-      Promise.all(
-        (await readdir(directory)).sort().map(async (name) => {
+    // 每一個檔（遞迴：會話目錄裡的世代檔與鎖檔、舊路徑的墓碑）的內容與修改時間。
+    const files = async () => {
+      const names = (await readdir(directory, { recursive: true })).sort();
+      const entries = await Promise.all(
+        names.map(async (name) => {
           const path = join(directory, name);
-          return [name, await readFile(path, 'utf8'), (await stat(path)).mtimeMs] as const;
+          const info = await stat(path);
+          return info.isFile() ? [[name, await readFile(path, 'utf8'), info.mtimeMs] as const] : [];
         }),
       );
+      return entries.flat();
+    };
     const before = await files();
+    // 前提：量得到子代理那一份的世代檔，不然「一個位元組都不動」比的是空的。
+    expect(before.map(([name]) => join(directory, name))).toContain(
+      sessionPathsIn(directory, `t1/${id}`).log,
+    );
 
     const rig = await assemble({
       readSubagentSession: (threadId, runId) => readStoredSubagentSession(store, threadId, runId),

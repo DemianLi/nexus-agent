@@ -248,14 +248,14 @@ describe('B：出貨清單上的 agent-instructions 經樹進來，位置與名�
     });
   }, 60000);
 
-  it('樹上的 agentLoop 服務：歸屬是 pre-step 那一列、契約 1.2.0（#1533 加了 signal、#1574 加了 source）；pre-step 是必掛的內建列', async () => {
+  it('樹上的 agentLoop 服務：歸屬是 pre-step 那一列、契約 1.3.0（#1533 加了 signal、#1574 加了 source、#1567 plugin 來源加 form）；pre-step 是必掛的內建列', async () => {
     const root = newRoot();
     await loadDefaultPlugins({ env: home(), warn: warnNothing }, { tree: root.tree });
     const tree = await root.tree.context();
     const agentLoop = tree.get('agentLoop') as
       { provider?: string; contractVersion?: string } | undefined;
     expect(agentLoop?.provider).toBe('pre-step');
-    expect(agentLoop?.contractVersion).toBe('1.2.0');
+    expect(agentLoop?.contractVersion).toBe('1.3.0');
     expect(REQUIRED_TREE_ENTRY_IDS.has('pre-step')).toBe(true);
   }, 60000);
 });
@@ -535,7 +535,7 @@ describe('三個入口各有一條（拿掉任一入口的接線要紅）', () =
 
 describe('D：輪數不變——這顆 middleware 每次 invoke 一格、每輪零格，有沒有 --workspace 都一樣', () => {
   /**
-   * 預設上限 100、出貨清單、CLI 的形狀（沒有插話載體）：`floor((100 - 1) / 3) = 33` 是提醒器打底的輪數；清單上有三位 pre-step
+   * 預設上限 100、出貨清單、CLI 的形狀（沒有插話載體）：`floor((100 - 1) / 3) = 33` 是提醒器打底的輪數；不經樹時有三位 pre-step
    * listener（這顆、`skill-invocation`、`time-context`），各一顆 `beforeAgent`，2026-10-23 實測是 31（`floor((100 - 2 - 3) / 3)`，
    * `settings/recursion-limit.ts` 引用的數字；只有這顆的年代是 32）。**沒給 `--workspace` 時組裝點照樣墊一顆 StateBackend，宿主的
    * middleware 照建**，所以兩種組裝一樣是 31；若沒有 backend 就不建，沒給 workspace 的那一邊會多出輪數。
@@ -565,6 +565,32 @@ describe('D：輪數不變——這顆 middleware 每次 invoke 一格、每輪�
       expect(model.calls).toBe(31);
       // 有 workspace 時第一輪 prompt 裡有基線，沒有時沒有——輪數相同，內容不同。
       expect(baselineTexts(model.seen[0] ?? [])).toHaveLength(withWorkspace ? 1 : 0);
+    },
+    60000,
+  );
+
+  /** 有圍堵的樹上有四位 pre-step listener（比不經樹的組裝多 `nexusApprovalPolicyNotice`，#2057）；serve 另掛插話載體，每輪四格。 */
+  it.each([
+    ['CLI', 'cli', {}, 31],
+    ['serve', 'serve', { stepInbox: true }, 23],
+  ] as const)(
+    '%s 的樹在預設上限下的輪數',
+    async (_label, entry, invocation, rounds) => {
+      const looping = new LoopingChatModel();
+      const generate = vi
+        .spyOn(ScriptedChatModel.prototype, '_generate')
+        .mockImplementation((messages) => looping._generate(messages));
+      const booted = await boot(home(), entry);
+      const thread = await openThread(booted, `rounds-${entry}`, [{ content: '好。' }], {
+        invocation,
+      });
+      try {
+        await expect(runOn(thread)).rejects.toThrow(/Recursion limit/);
+      } finally {
+        await closeThread(thread);
+        generate.mockRestore();
+      }
+      expect(looping.calls).toBe(rounds);
     },
     60000,
   );
@@ -723,6 +749,24 @@ const withTimeContext = (chain: readonly string[]): string[] =>
       : [name],
   );
 
+/**
+ * fold 在其餘 plugin 內側放一格 `nexusApprovalPolicyPrompt`（核准政策句，#1986），`b0a74042` 錄的名單沒有它：鏈上在其餘 plugin
+ * 之後、以 `last` 掛的 `nexusSystemPrompt` 之前多**恰好一格**。同上，只在這裡插這一格。
+ */
+const withApprovalPolicyPrompt = (chain: readonly string[]): string[] =>
+  chain.flatMap((name) =>
+    name === 'nexusSystemPrompt' ? ['nexusApprovalPolicyPrompt', name] : [name],
+  );
+
+/**
+ * `permission-presets` 掛了一位 `agent/pre-step` listener（切換核准政策的通知，#2057）：CLI 與 serve 的樹才有這個插件，鏈上在
+ * `nexusSandboxPolicy` 之後多**恰好一格**。同上，只在這裡插這一格。
+ */
+const withApprovalPolicyNotice = (chain: readonly string[]): string[] =>
+  chain.flatMap((name) =>
+    name === 'nexusSandboxPolicy' ? [name, 'nexusApprovalPolicyNotice'] : [name],
+  );
+
 describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐字相同（出貨清單、CLI、serve 各一次）', () => {
   it('出貨清單（createNexusAgent）', async () => {
     const shipped = await shippedPlugins();
@@ -736,7 +780,9 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
       }),
     });
     try {
-      expect(middlewareNames(agent)).toEqual(withTimeContext(CHAIN_SHIPPED));
+      expect(middlewareNames(agent)).toEqual(
+        withApprovalPolicyPrompt(withTimeContext(CHAIN_SHIPPED)),
+      );
     } finally {
       await dispose();
     }
@@ -753,7 +799,9 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
         workspace: workspaceWith('規矩。'),
       });
       try {
-        expect(middlewareNames(thread.built.agent)).toEqual(withTimeContext(expected));
+        expect(middlewareNames(thread.built.agent)).toEqual(
+          withApprovalPolicyNotice(withApprovalPolicyPrompt(withTimeContext(expected))),
+        );
       } finally {
         await closeThread(thread);
       }
@@ -903,6 +951,7 @@ describe('讀整份與單檔上限，經各入口的組裝（#1533）', () => {
         hasWorkspace: () => true,
         workspaceRoot: () => undefined,
         sharedWorkspacePrefix: () => prefix,
+        skillSources: () => [],
       };
       const listener = createAgentInstructionsListener(
         { maxBytes: DEFAULT_MAX_BYTES, maxSourceBytes: 1024 },

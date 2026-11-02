@@ -1,6 +1,6 @@
 {
   "name": "@nexus/plugin-mcp",
-  "version": "0.0.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
   "main": "lib/index.js",
@@ -21,7 +21,7 @@
   },
   "devDependencies": {
     "@modelcontextprotocol/node": "^2.1.1",
-    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "@modelcontextprotocol/server": "^2.3.1",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
@@ -34,6 +34,6 @@
     "@langchain/mcp-adapters": "^2.0.0",
     "@nexus/core": "workspace:*",
     "langchain": "^1.5.10",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   }
 }

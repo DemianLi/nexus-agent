@@ -720,11 +720,10 @@ describe('線的兩端與真實組裝點對得上', () => {
 });
 
 /**
- * **建不起這條 thread 時，兩條路都要回一個協定層的錯，不能讓 client 卡住。**
+ * **建不起這條 thread 時，兩條路都要回一個協定層的錯，不能掉成空的 400。**
  *
- * `handle()` 本身不接錯，`wire-server.ts` 也不接——`createAgent` 一拋，那個請求就一個位元組
- * 都不回，而那顆 rejection 沒有人處理。以前走得到它的只有「plugin 載不起來」這類；serve 的
- * 續接之後，壞掉的日誌、別的行程握著、目錄對不上都走得到。照這一層的分層（載體層用 HTTP
+ * `handle()` 本身不接錯，讓 `createAgent` 的錯往上冒的話，`wire-server.ts` 只能回空的 400。壞掉的日誌、
+ * 別的行程握著、目錄對不上都走得到。照這一層的分層（載體層用 HTTP
  * status，協定層用 200 加 error 封包），它屬於後者：請求本身沒有錯，是這條 thread 起不來。
  */
 describe('建不起這條 thread', () => {
@@ -739,13 +738,15 @@ describe('建不起這條 thread', () => {
       );
   }
 
-  it('createAgent 拋了：下行與上行都回 error 封包，帶著原因；下一次請求重試', async () => {
+  it('createAgent 拋了：下行與上行都回 error 封包，固定訊息，原因只進日誌；下一次請求重試', async () => {
     let attempts = 0;
+    const warnings: string[] = [];
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
+      warn: (message) => warnings.push(message),
       createAgent: async () => {
         attempts += 1;
-        throw new Error('這條 thread 的日誌壞了');
+        throw new Error('這條 thread 的日誌壞了：/srv/secret/session.jsonl');
       },
     });
     const post = postTo(handler);
@@ -760,7 +761,11 @@ describe('建不起這條 thread', () => {
     });
     const packet = (await command.json()) as { type: string; id: number; message: string };
     expect(packet).toMatchObject({ type: 'error', id: 4 });
-    expect(packet.message).toContain('這條 thread 的日誌壞了');
+    expect(packet.message).toBe('這條 thread 建不起來，原因記在 serve 的日誌。');
+    expect(warnings).toEqual([
+      '[thread] "broken" 建不起來：這條 thread 的日誌壞了：/srv/secret/session.jsonl',
+      '[thread] "broken" 建不起來：這條 thread 的日誌壞了：/srv/secret/session.jsonl',
+    ]);
 
     expect(attempts).toBe(2);
     await handler.close();

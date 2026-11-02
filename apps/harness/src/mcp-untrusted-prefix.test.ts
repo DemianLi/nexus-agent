@@ -169,9 +169,12 @@ describe('前綴進會話日誌的 tool/result（#1768）', () => {
         expect(typeof note).toBe('string');
         expect((note as string).split('\n').slice(0, 2)).toEqual([EXTERNAL_MCP_CONTENT_NOTICE, '']);
 
-        // 多塊：最前面多一塊只有前綴的文字塊。
+        // 多塊：前綴併進第一塊，後面空一行才是本文。
         expect(Array.isArray(cite)).toBe(true);
-        expect((cite as unknown[])[0]).toEqual({ type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE });
+        expect((cite as { text: string }[])[0]?.text.split('\n').slice(0, 2)).toEqual([
+          EXTERNAL_MCP_CONTENT_NOTICE,
+          '',
+        ]);
 
         // isError：錯誤文字原樣，沒有前綴。
         expect(JSON.stringify(fail)).toContain('upstream exploded: 503');

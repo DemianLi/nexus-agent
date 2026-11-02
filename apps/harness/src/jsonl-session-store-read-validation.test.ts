@@ -12,7 +12,7 @@
  * 出貨夾具照常讀回由 `session-format-fixtures.test.ts` 管（新規則跑在同一條讀取路徑上）。
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -23,15 +23,18 @@ import {
   SessionCorruptionError,
   SessionFormatUnsupportedError,
   SessionLog,
+  generationLogFilename,
+  sessionDirectoryName,
 } from '@nexus/core';
 
 import { readSessionLogs } from './eval/session-scan.js';
 import {
+  legacyTwoFilePathsIn,
   openJsonlSessionStore,
   parseHeader,
   parseJsonlSessionBody,
-  sessionPathsIn,
 } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 
 const roots: string[] = [];
 
@@ -39,29 +42,52 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
+/** 一行一筆的日誌本文：物件補上 `seq`（它的位置）與 `time: 1` 再序列化；字串原樣寫成一行（`JSON.stringify` 寫不出的東西，例如 `-0`）。 */
+function body(events: readonly (Record<string, unknown> | string)[]): string {
+  return events
+    .map(
+      (event, seq) =>
+        `${typeof event === 'string' ? event : JSON.stringify({ seq, time: 1, ...event })}\n`,
+    )
+    .join('');
+}
+
+async function freshDirectory(): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'nexus-1549-'));
+  roots.push(directory);
+  return directory;
+}
+
 /**
- * 手寫一份會話：header 與一行一筆的日誌。物件補上 `seq`（它的位置）與 `time: 1` 再序列化；字串原樣寫成一行
- * （`JSON.stringify` 寫不出的東西，例如 `-0`）。`header` 蓋掉預設的任何一格。
+ * 手寫一份舊兩檔的會話（版本 {@link LEGACY_TWO_FILE_FORMAT_VERSION}）：header 與一行一筆的日誌（{@link body}）。
+ * `header` 蓋掉預設的任何一格（版本除外：版本 52 起舊路徑上的 header 是墓碑，比這一版新的用 {@link writtenGeneration}）。
  */
 async function written(
   events: readonly (Record<string, unknown> | string)[],
   header: Record<string, unknown> = {},
 ): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), 'nexus-1549-'));
-  roots.push(directory);
-  const paths = sessionPathsIn(directory, 'a');
+  const directory = await freshDirectory();
+  const paths = legacyTwoFilePathsIn(directory, 'a');
   await writeFile(
     paths.header,
-    JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 'a', createdAt: 1, ...header }),
+    JSON.stringify({ version: LEGACY_TWO_FILE_FORMAT_VERSION, id: 'a', createdAt: 1, ...header }),
   );
+  await writeFile(paths.log, body(events));
+  return directory;
+}
+
+/** 手寫一份世代檔：會話目錄裡的 `session.v<version>.jsonl`，第一行是 header 行，之後同 {@link body}。 */
+async function writtenGeneration(
+  version: number,
+  events: readonly (Record<string, unknown> | string)[],
+  header: Record<string, unknown> = {},
+): Promise<string> {
+  const directory = await freshDirectory();
+  const sessionDirectory = join(directory, sessionDirectoryName('a'));
+  await mkdir(sessionDirectory);
   await writeFile(
-    paths.log,
-    events
-      .map(
-        (event, seq) =>
-          `${typeof event === 'string' ? event : JSON.stringify({ seq, time: 1, ...event })}\n`,
-      )
-      .join(''),
+    join(sessionDirectory, generationLogFilename(version)),
+    `${JSON.stringify({ type: 'session', version, id: 'a', createdAt: 1, ...header })}\n${body(events)}`,
   );
   return directory;
 }
@@ -153,9 +179,7 @@ describe('N0556 讀盤逐行的信封（照 dsh decodeEvent）', () => {
     });
 
     it('E2b newer 的檔：帶這一版不合格的信封也照讀', async () => {
-      const directory = await written([usage, badTime], {
-        version: SESSION_LOG_FORMAT_VERSION + 1,
-      });
+      const directory = await writtenGeneration(SESSION_LOG_FORMAT_VERSION + 1, [usage, badTime]);
       const { logs, unreadable } = await readSessionLogs([directory]);
       expect(unreadable).toHaveLength(0);
       expect(logs[0]?.events).toHaveLength(2);
@@ -211,7 +235,7 @@ describe('header', () => {
   });
 
   it('順序：比這一版新、又帶這一版不認得的鍵，報的是版本太新，不是壞檔', async () => {
-    const directory = await written([usage], { version: SESSION_LOG_FORMAT_VERSION + 1, foo: 1 });
+    const directory = await writtenGeneration(SESSION_LOG_FORMAT_VERSION + 1, [usage], { foo: 1 });
     for (const error of await failures(directory)) {
       expect(error).toBeInstanceOf(SessionFormatUnsupportedError);
     }

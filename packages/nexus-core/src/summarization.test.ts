@@ -22,7 +22,12 @@ import {
 import type { SummarizationThreshold } from './summarization.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEventMap } from './session-log.js';
-import { estimateMessageTokens, estimateRequestTokens, TokenAnchorBook } from './token-estimate.js';
+import {
+  estimateMessageTokens,
+  estimateRequestParts,
+  estimateRequestTokens,
+  TokenAnchorBook,
+} from './token-estimate.js';
 import { TOOL_RESULT_PRUNE_MARKER } from './tool-result-pruner.js';
 
 /** 一串長到任何門檻都會成立的原始訊息。 */
@@ -466,6 +471,133 @@ describe('context/measure 帶 messagesCompactable（接線）', () => {
 
     expect(measure.messageCount).toBe(61);
     expect('messagesCompactable' in measure).toBe(false);
+  });
+});
+
+/**
+ * **`context/measure` 帶 `breakdown`**（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）：系統提示、工具定義、對話訊息各約多少 token。
+ * 一律走 `createSummarizer`，看日誌上摘要器真的寫的那一筆——拿掉 `withTokenBudget` 寫 `breakdown` 的那幾行，這一組全紅。
+ */
+describe('context/measure 帶 breakdown（接線）', () => {
+  const LIMITS = { contextWindow: 700_045, maxOutputTokens: 16_384 };
+  const MODEL = { profile: {}, invoke: async () => ({ text: '這是摘要。' }) } as never;
+  const TOOLS = [
+    {
+      type: 'function',
+      function: {
+        name: 'read_file',
+        description: '讀一個檔案。',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'write_file',
+        description: '寫一個檔案。',
+        parameters: { type: 'object', properties: { path: { type: 'string' } } },
+      },
+    },
+  ];
+
+  async function measureOf(request: {
+    readonly messages: readonly BaseMessage[];
+    readonly systemMessage?: SystemMessage;
+    readonly tools?: readonly unknown[];
+  }) {
+    const log = new SessionLog('breakdown');
+    const book = new TokenAnchorBook();
+    const middleware = createSummarizer(
+      { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
+      DEFAULT_SUMMARIZATION,
+      book,
+      { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      undefined,
+      () => LIMITS,
+    );
+    await middleware.wrapModelCall?.(
+      { ...request, state: {}, model: MODEL } as never,
+      (() => new AIMessage('好。')) as never,
+    );
+    const measure = log.events.flatMap((event) =>
+      event.type === 'context/measure' ? [event.data as SessionEventMap['context/measure']] : [],
+    );
+    expect(measure).toHaveLength(1);
+    return measure[0]!;
+  }
+
+  it('帶系統提示與兩個工具：三格都是非負整數，加起來等於 approxTokens，前兩格等於 estimateRequestParts', async () => {
+    const request = {
+      messages: longHistory(6),
+      systemMessage: new SystemMessage('你是助理。請簡短回答。'),
+      tools: TOOLS,
+    };
+    const measure = await measureOf(request);
+    const parts = estimateRequestParts(request as never);
+
+    const { breakdown } = measure;
+    expect(breakdown).toBeDefined();
+    for (const value of Object.values(breakdown!)) {
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value).toBeGreaterThanOrEqual(0);
+    }
+    expect(breakdown!.systemTokens).toBeGreaterThan(0);
+    expect(breakdown!.toolsTokens).toBeGreaterThan(0);
+    expect(breakdown!.systemTokens).toBe(parts.system);
+    expect(breakdown!.toolsTokens).toBe(parts.tools);
+    expect(breakdown!.systemTokens + breakdown!.toolsTokens + breakdown!.messageTokens).toBe(
+      measure.approxTokens,
+    );
+  });
+
+  it('沒有工具、沒有系統提示：兩格是 0（不是缺席），訊息那一格就是整個 approxTokens', async () => {
+    const measure = await measureOf({ messages: longHistory(6) });
+    expect(measure.breakdown).toEqual({
+      systemTokens: 0,
+      toolsTokens: 0,
+      messageTokens: measure.approxTokens,
+    });
+  });
+
+  it('錨在供應商實數上：修正量全算給訊息那一格，三格仍然等於環上的數', async () => {
+    const reply = new AIMessage({
+      content: '答',
+      id: 'a1',
+      usage_metadata: { input_tokens: 5000, output_tokens: 1, total_tokens: 5001 },
+    });
+    const request = {
+      messages: [new HumanMessage('問'), reply, new HumanMessage('再問')],
+      systemMessage: new SystemMessage('你是助理。'),
+      tools: TOOLS,
+    };
+    const measure = await measureOf(request);
+    const parts = estimateRequestParts(request as never);
+    // 前提：真的錨上了（環上的數不是純估算）。
+    expect(measure.approxTokens).toBeGreaterThan(parts.system + parts.tools + parts.messages);
+    expect(measure.breakdown!.systemTokens).toBe(parts.system);
+    expect(measure.breakdown!.toolsTokens).toBe(parts.tools);
+    expect(
+      measure.breakdown!.systemTokens +
+        measure.breakdown!.toolsTokens +
+        measure.breakdown!.messageTokens,
+    ).toBe(measure.approxTokens);
+  });
+
+  it('系統與工具兩格就比 approxTokens 大：訊息那一格夾在 0（三格相加會比 approxTokens 大，欄位說明寫了）', async () => {
+    const reply = new AIMessage({
+      content: '答',
+      id: 'a1',
+      usage_metadata: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
+    });
+    const measure = await measureOf({
+      messages: [new HumanMessage('問'), reply],
+      systemMessage: new SystemMessage('你是助理。'.repeat(200)),
+      tools: TOOLS,
+    });
+    expect(measure.approxTokens).toBeLessThan(
+      measure.breakdown!.systemTokens + measure.breakdown!.toolsTokens,
+    );
+    expect(measure.breakdown!.messageTokens).toBe(0);
   });
 });
 

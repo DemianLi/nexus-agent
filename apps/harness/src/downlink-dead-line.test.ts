@@ -5,7 +5,7 @@
  * 對面是一條開了下行卻永遠不讀的真 client（`openEvents` 兌現之後不抽）：undici 的緩衝填滿後不再讀 socket，等同筆電闔上、
  * `ssh -L` 斷在半路。問的是：
  *
- * - 死線兩拍內被斷，server 端的訂閱放掉（`pump.subscriberCount` 回到 0）；
+ * - 死線連兩拍沒排出去就被斷，server 端的訂閱放掉（`pump.subscriberCount` 回到 0）；
  * - 於是這條 thread 變成「閒置」，`sweepIdle` 撤得掉它——沒有這一張卡，訂閱永遠是 1，這條 thread 永遠撤不掉、一直佔著名額。
  *
  * 每一步都先證它真的發生過（斷線的 warn 出現、撤掉的 thread 在名單上），不是「沒出事」。
@@ -101,7 +101,7 @@ afterEach(async () => {
 });
 
 describe('死線放掉訂閱，閒置逐出撤得掉這條 thread', () => {
-  it('不讀的下行：兩拍內被斷、warn 一行、訂閱放掉；之後 sweepIdle 把這條 thread 撤掉', async () => {
+  it('不讀的下行：連兩拍沒排出去就被斷、warn 一行、訂閱放掉；之後 sweepIdle 把這條 thread 撤掉', async () => {
     const fed = fedAgent();
     const clock = { now: 1_000_000 };
     const evicted: string[] = [];

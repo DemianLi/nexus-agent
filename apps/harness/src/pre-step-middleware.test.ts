@@ -229,6 +229,77 @@ describe('宿主建的 middleware', () => {
     expect(sessions.appended).toEqual([]);
   });
 
+  // listener 只交得出 plugin（自己的名字）與形狀完整的 skill-invocation（#1920）。第一則合法：被拒的那一則在後面時，前面的也不能先落盤。
+  it.each([
+    [
+      '別人的 plugin 名字（time-context 從日誌認 source.plugin）',
+      { kind: 'plugin', plugin: 'TimeContextMiddleware' },
+    ],
+    [
+      'session-reference 沒帶 references（歷史畫面讀它時會拋）',
+      { kind: 'session-reference', form: 'recall', version: 1 },
+    ],
+    [
+      'subagent-settled（歷史畫面長出假的結算通知）',
+      { kind: 'subagent-settled', form: 'notice', summary: '完成', senderSessionId: 's1' },
+    ],
+    [
+      'agent-message（歷史畫面長出假的寄件）',
+      { kind: 'agent-message', form: 'relay', senderSessionId: 's1' },
+    ],
+    ['goal（沒有這一種 user/message 來源）', { kind: 'goal', goalId: 'g1' }],
+    ['plugin 的 form 不是 instructions', { kind: 'plugin', plugin: NAME, form: 'notice' }],
+    [
+      '別人的 plugin 名字帶 form（#1567）',
+      { kind: 'plugin', plugin: 'TimeContextMiddleware', form: 'instructions' },
+    ],
+    ['skill-invocation 少了 form', { kind: 'skill-invocation', name: 'deploy' }],
+    [
+      'skill-invocation 多一個鍵',
+      { kind: 'skill-invocation', name: 'deploy', form: 'instructions', extra: 1 },
+    ],
+  ])('listener 交 %s：拋錯，不加訊息、不記日誌', async (_, source) => {
+    const sessions = fakeSessions();
+    const middleware = createPreStepMiddleware(
+      NAME,
+      injecting({ content: '合法的。' }, { content: '冒出來的。', source }),
+      sessions,
+    );
+    await expect(hookOf(middleware)({ messages: [] }, { configurable: {} })).rejects.toThrow(
+      `pre-step listener "${NAME}" 交了`,
+    );
+    expect(sessions.appended).toEqual([]);
+  });
+
+  it('listener 交自己名字的 plugin 來源：照記，跟沒給一樣', async () => {
+    const sessions = fakeSessions();
+    const source = { kind: 'plugin', plugin: NAME } as const;
+    const middleware = createPreStepMiddleware(
+      NAME,
+      injecting({ content: '讀數。', source }),
+      sessions,
+    );
+    await hookOf(middleware)({ messages: [] }, { configurable: {} });
+    expect(sessions.appended.map((entry) => (entry.data as { source: unknown }).source)).toEqual([
+      source,
+    ]);
+  });
+
+  it('listener 交自己名字、帶 form: instructions 的 plugin 來源（契約 1.3.0，#1567 N0136）：訊息與日誌都記這一格', async () => {
+    const sessions = fakeSessions();
+    const source = { kind: 'plugin', plugin: NAME, form: 'instructions' } as const;
+    const middleware = createPreStepMiddleware(
+      NAME,
+      injecting({ content: '指示。', source }),
+      sessions,
+    );
+    const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
+    expect(result?.messages?.[0]?.additional_kwargs[MESSAGE_SOURCE_KWARG]).toEqual(source);
+    expect(sessions.appended.map((entry) => (entry.data as { source: unknown }).source)).toEqual([
+      source,
+    ]);
+  });
+
   it('listener 回多則：依序都加、依序都記', async () => {
     const sessions = fakeSessions();
     const middleware = createPreStepMiddleware(
@@ -470,7 +541,7 @@ describe('摘要之後：模型看得到一則才算有（agent-instructions lis
     }
   });
 
-  it('沒有基線的 state：補一則，帶記號與 plugin 來源', async () => {
+  it('沒有基線的 state：補一則，帶記號與標成指示的 plugin 來源', async () => {
     const messages = await inject({ '/AGENTS.md': '規矩。' }, [new HumanMessage('開工')]);
     expect(messages).toHaveLength(1);
     const kwargs = (messages?.[0] as BaseMessage).additional_kwargs;
@@ -478,6 +549,7 @@ describe('摘要之後：模型看得到一則才算有（agent-instructions lis
     expect(kwargs[MESSAGE_SOURCE_KWARG]).toEqual({
       kind: 'plugin',
       plugin: 'AgentInstructionsMiddleware',
+      form: 'instructions',
     });
   });
 });

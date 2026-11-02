@@ -12,6 +12,10 @@
  * - **寫入等 drain**：`write` 回 `false` 且連線還沒毀，就等 `'drain'` 或 `'close'` 其中一個，照 dsh
  *   `packages/client/connection/src/http-bridge.ts:106-124`（`1517a4db`，與 `687f282e` 的 blob 相同）。沒有它，對方不收時
  *   Node 照樣把每一顆 frame 收進寫入緩衝，緩衝沒有上限。斷線之後照 dsh 把 body 讀完但不寫。
+ *   **一個回應只掛一組常駐的 listener**，每次卡住只換喚醒的函式（[#1903](https://github.com/DemianLi/nexus-agent/issues/1903)）：
+ *   `compression` 1.8.2 在 listener 的方法裡只改寫 `res.on`：壓縮時 `'drain'` 掛到 gzip 串流上，`off`／`removeListener` 與
+ *   `once` 的自我移除卻對 res 做，拆不掉。若每次卡住都掛一組新的，它們會在 gzip 串流上一路累積，超過 10 個就印
+ *   `MaxListenersExceededWarning`。
  * - **SSE 心跳與死線**：對應 dsh `packages/api/gateway/src/stream-server.ts`（`MAX_MISSED_HEARTBEATS = 2`、預設間隔 2000 ms）。
  *   一支共用、`unref()` 的計時器，第一條 SSE 開線時才起，`close()` 先清它。
  *
@@ -20,7 +24,7 @@
  * 我們的載體是已拍板的 SSE（`.docs/development-plan.md` 決策 6），HTTP/1.1 回應沒有 ping／pong 控制幀，對方無從回應，
  * 「漏了 pong」這個判準做不出來。退到最接近的：每拍寫 `: ping\n\n`（解碼端本來就跳過註解）；dsh 判準裡做得到的那一半是
  * 「排過隊之後才完成的寫入」＝ `'drain'`，另外**緩衝縮小也算活著**（對方有在收，只是慢）。只有寫入緩衝裡有位元組卡著
- * （`writableLength > 0`）、又沒有任何進展的那一拍算漏拍；閒著、緩衝是空的線不算漏拍，不然健康的閒置線兩拍就被殺。
+ * （`writableLength > 0`）、又沒有任何進展的那一拍算漏拍；閒著、緩衝是空的線不算漏拍，不然健康的閒置線閒過兩個間隔就被殺。
  * **代價**：沒有 frame 在流、緩衝是空的死線，serve 判不出來——TCP 的對端是 sshd 不是使用者的機器，這一段要靠 sshd 的
  * `ClientAliveInterval` 收（`docs/operations.md`）。
  *
@@ -44,6 +48,8 @@ import { Readable } from 'node:stream';
 import compressionMiddleware from 'compression';
 import Negotiator from 'negotiator';
 import type { WireHandler } from './wire-handler.js';
+import { MAX_MISSED_HEARTBEATS, WireMux } from './wire-mux.js';
+import type { WireMuxHandler } from './wire-mux.js';
 import { wireRequestBodyMode } from './wire-handler.js';
 import { MAX_TIMER_DELAY_MS } from '@nexus/timeout';
 
@@ -57,8 +63,7 @@ export const DEFAULT_MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024;
 /** SSE 心跳間隔預設值（毫秒），照 dsh `websocketHeartbeatIntervalMs` 的預設。 */
 export const DEFAULT_SSE_HEARTBEAT_INTERVAL_MS = 2_000;
 
-/** 連續漏幾拍就淘汰，照 dsh `MAX_MISSED_HEARTBEATS`。協定常數，不開成設定。 */
-export const MAX_MISSED_HEARTBEATS = 2;
+export { MAX_MISSED_HEARTBEATS };
 
 /** `setInterval` 收得下的最大間隔（毫秒）；也是 dsh 設定範圍的上界。 */
 export const MAX_SSE_HEARTBEAT_INTERVAL_MS = MAX_TIMER_DELAY_MS;
@@ -178,8 +183,8 @@ export interface StartWireServerOptions {
    */
   readonly warn?: (error: Error, request: WarnedRequest) => void;
   /**
-   * SSE 心跳間隔（毫秒），預設 {@link DEFAULT_SSE_HEARTBEAT_INTERVAL_MS}。連續 {@link MAX_MISSED_HEARTBEATS} 拍緩衝卡著、
-   * 沒有任何排出去的進展，就斷那一條線（#1504）。
+   * 下行心跳間隔（毫秒），SSE 與 WebSocket 共用，預設 {@link DEFAULT_SSE_HEARTBEAT_INTERVAL_MS}。SSE 是緩衝卡著、連 {@link MAX_MISSED_HEARTBEATS} 個間隔
+   * 沒有任何排出去的進展，就斷那一條線（#1504）；WebSocket 見 [`wire-mux.ts`](./wire-mux.ts)。
    */
   readonly heartbeatIntervalMs?: number;
   /**
@@ -189,7 +194,7 @@ export interface StartWireServerOptions {
   readonly warnDisconnect?: (message: string) => void;
   /**
    * 每個請求回應時叫一次（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，請求計數用）：`path` 是 pathname（不含 query），`status` 是回的狀態碼。
-   * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次。拋了也不影響回應。
+   * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次，WebSocket 升級與其上每條邏輯串流各算一次（拒開與失敗記 404／429／400，線上送的是 error 訊息）。拋了也不影響回應。
    */
   readonly onResponse?: (info: { readonly path: string; readonly status: number }) => void;
   /**
@@ -197,6 +202,17 @@ export interface StartWireServerOptions {
    * 給了之後，歷史頁、列表的 JSON 與網頁 bundle 在瀏覽器支援時壓縮再送；SSE 下行與帶 `content-range` 的回應照原樣送。見檔頭。
    */
   readonly compression?: WireCompression;
+  /**
+   * 接 WebSocket 升級的 handler（[#2262](https://github.com/DemianLi/nexus-agent/issues/2262)，見 [`wire-mux.ts`](./wire-mux.ts)）。**不給就不接升級**。
+   * 跟 {@link handler} 分開：`handler` 在 `serve` 是加上網頁與營運端點的那一層，升級只進 wire。
+   */
+  readonly mux?: WireMuxHandler;
+  /** socket 總數、每條的串流數、每條串流的額度；測試用，預設見 `wire-mux.ts`。 */
+  readonly muxLimits?: {
+    readonly maxSockets?: number;
+    readonly maxStreams?: number;
+    readonly windowChars?: number;
+  };
 }
 
 /** 先收完整份的路由，本文超過上限。 */
@@ -275,8 +291,9 @@ export type BeatVerdict = 'ping' | 'hold' | 'evict';
 /**
  * 一拍裡判一條線（純函式，改的只有 `line` 的兩個計數）。
  *
- * - 寫入緩衝是空的：對方收得完，或線閒著——**不算漏拍**（不然健康的閒置線兩拍就被殺），寫心跳。
- * - 緩衝有位元組：比上一拍小＝對方有在收、只是慢，歸零；沒縮小才漏拍 +1。漏到 {@link MAX_MISSED_HEARTBEATS} 就淘汰。
+ * - 寫入緩衝是空的：對方收得完，或線閒著——**不算漏拍**（不然健康的閒置線連 {@link MAX_MISSED_HEARTBEATS} 個間隔沒有新事件就被殺），寫心跳。
+ * - 緩衝有位元組：比上一拍小＝對方有在收、只是慢，歸零。已經漏滿 {@link MAX_MISSED_HEARTBEATS} 拍、這一拍還卡著就淘汰，
+ *   否則漏拍 +1。先判再加：歸零之後要再連 {@link MAX_MISSED_HEARTBEATS} 個間隔都沒有進展才斷，歸零之後的第一拍不會致命。
  *   `'drain'` 的歸零在 {@link SseHeartbeat.watch}，不在這裡。
  */
 export function judgeBeat(
@@ -288,9 +305,11 @@ export function judgeBeat(
     line.lastBuffered = 0;
     return 'ping';
   }
-  line.missed = buffered < line.lastBuffered ? 0 : line.missed + 1;
+  if (buffered < line.lastBuffered) line.missed = 0;
   line.lastBuffered = buffered;
-  return line.missed >= MAX_MISSED_HEARTBEATS ? 'evict' : 'hold';
+  if (line.missed >= MAX_MISSED_HEARTBEATS) return 'evict';
+  line.missed += 1;
+  return 'hold';
 }
 
 /** 所有 SSE 線共用的那一支計時器，見檔頭。 */
@@ -378,6 +397,15 @@ async function writeResponse(
     heartbeat.watch(outgoing, path);
   }
   const reader = response.body.getReader();
+  // 卡在 drain 時的喚醒函式；'drain' 與 'close' 都叫它（見檔頭）。
+  let wake: (() => void) | undefined;
+  const onWritable = (): void => {
+    const resume = wake;
+    wake = undefined;
+    resume?.();
+  };
+  outgoing.on('drain', onWritable);
+  outgoing.on('close', onWritable);
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -391,19 +419,16 @@ async function writeResponse(
       // 'close' 也算一個出口，斷線時迴圈才不會停在這裡。
       if (!outgoing.write(value) && !outgoing.destroyed) {
         await new Promise<void>((resolve) => {
-          const done = (): void => {
-            outgoing.off('drain', done);
-            outgoing.off('close', done);
-            resolve();
-          };
-          outgoing.once('drain', done);
-          outgoing.once('close', done);
+          wake = resolve;
         });
       }
     }
   } catch {
     // 對方先斷線是正常結束，不是錯誤。
   } finally {
+    // 壓縮時 'drain' 那一個拆不掉，跟著 gzip 串流在回應結束後一起回收；每個回應最多留這一個。
+    outgoing.off('drain', onWritable);
+    outgoing.off('close', onWritable);
     reader.releaseLock();
     outgoing.end();
   }
@@ -431,16 +456,19 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     options.heartbeatIntervalMs ?? DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
     options.warnDisconnect ?? ((message: string) => console.warn(message)),
   );
-  /** 一個請求只算一次：`handle` 內已經算過，最後一道防線就不再補算。 */
-  const counted = new WeakSet<IncomingMessage>();
-  const count = (incoming: IncomingMessage, path: string, status: number): void => {
-    if (options.onResponse === undefined || counted.has(incoming)) return;
-    counted.add(incoming);
+  const report = (path: string, status: number): void => {
     try {
-      options.onResponse({ path, status });
+      options.onResponse?.({ path, status });
     } catch {
       // 計數壞了不該連累回應。
     }
+  };
+  /** 一個請求只算一次：`handle` 內已經算過，最後一道防線就不再補算。 */
+  const counted = new WeakSet<IncomingMessage>();
+  const count = (incoming: IncomingMessage, path: string, status: number): void => {
+    if (counted.has(incoming)) return;
+    counted.add(incoming);
+    report(path, status);
   };
   const handle = async (incoming: IncomingMessage, outgoing: ServerResponse): Promise<void> => {
     const address = server.address() as AddressInfo;
@@ -522,6 +550,35 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     if (gzip === undefined) next();
     else gzip(incoming, outgoing, next);
   });
+  const mux =
+    options.mux === undefined
+      ? undefined
+      : new WireMux({
+          ...options.muxLimits,
+          handler: options.mux,
+          origin: () => `http://${host}:${String((server.address() as AddressInfo).port)}`,
+          heartbeatIntervalMs: options.heartbeatIntervalMs ?? DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
+          warn,
+          warnDisconnect: options.warnDisconnect ?? ((message: string) => console.warn(message)),
+          count: report,
+        });
+  if (mux !== undefined) {
+    server.on('upgrade', (incoming, socket, head) => {
+      // 同最後一道防線：升級失敗只收在這條 socket 上。
+      socket.on('error', () => {
+        socket.destroy();
+      });
+      try {
+        mux.handleUpgrade(incoming, socket, head);
+      } catch (error: unknown) {
+        warn(error instanceof Error ? error : new Error(String(error)), {
+          method: incoming.method ?? '',
+          path: pathnameOf(incoming.url),
+        });
+        socket.destroy();
+      }
+    });
+  }
 
   await new Promise<void>((resolve, reject) => {
     // listen 失敗（最常見的是 port 被佔住）會走 'error' 事件而不是 callback——
@@ -536,12 +593,15 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
 
   return {
     url: `http://${host}:${address.port}`,
-    close: () =>
-      new Promise<void>((resolve) => {
-        // 計時器先清（#1504）：之後 `closeAllConnections` 觸發的 'close' 都不會再碰到它。
-        heartbeat.close();
+    close: async () => {
+      // 計時器先清（#1504）：之後 `closeAllConnections` 觸發的 'close' 都不會再碰到它。
+      heartbeat.close();
+      // 已升級的 socket 不歸 `closeAllConnections` 管。
+      await mux?.close();
+      await new Promise<void>((resolve) => {
         server.closeAllConnections();
         server.close(() => resolve());
-      }),
+      });
+    },
   };
 }

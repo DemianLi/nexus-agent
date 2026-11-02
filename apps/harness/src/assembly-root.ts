@@ -14,7 +14,7 @@
  * 改措辭是模型看得到的行為變更，不在這一張。
  */
 
-import { resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import type {
@@ -42,7 +42,7 @@ import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import type { ThreadTitleConfig } from './settings/thread-title.js';
-import { findModelEntry, singleDigitModelIds } from './model-catalog.js';
+import { declaresOffEffort, findModelEntry, singleDigitModelIds } from './model-catalog.js';
 import { resolveDefaultModel } from './model-provider.js';
 import type { ModelSelectionPolicy } from './model-selection-policy.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
@@ -51,14 +51,16 @@ import type { ToolResultStashOptions } from './tool-result-stash.js';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { createSessionTitleLlm } from './session-title-llm.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
-import { MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
-import type { McpConnectionPool } from '@nexus/plugin-mcp';
+import { MCP_CREDENTIALS_SERVICE, MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
+import type { McpConnectionPool, McpCredentials } from '@nexus/plugin-mcp';
 import {
   ApprovalPolicyController,
   type ApprovalPolicyValue,
   createHostServicesPlugin,
   SessionRegistry,
   deriveApprovalChannel,
+  FS_SERVICE,
+  type FsService,
   type SessionLog,
   TokenAnchorBook,
 } from '@nexus/core';
@@ -74,7 +76,8 @@ import { canonicalize, canonicalizeExisting, isWithin } from './canonical-path.j
 import { LEGACY_ENV_FILE, legacyEnvFileFor } from './launch-env.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
-import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
+import { MCP_GUARD_SERVICE, MCP_SANDBOX_SERVICE } from '@nexus/plugin-mcp';
+import { GIT_STARTER_SERVICE, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
@@ -101,6 +104,9 @@ import { subagentDefinitionValidator } from './subagent-definition.js';
 import { createModelSelectionHost, createModelSelectionPlugin } from './model-selection-host.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
 import { createFileReferencePlugin } from './file-references.js';
+import { createGitStarter } from './git-sandbox.js';
+import { createMcpGuardWrapper, createMcpSandboxWrapper } from './mcp-sandbox.js';
+import { sharedReservedWrites } from './shared-reserved-writes.js';
 
 /** 一次呼叫解析出來的東西。`prompt` 缺席即 REPL。 */
 export interface CliInvocation {
@@ -479,6 +485,7 @@ export function resolveInvariantLogPath(
  * | `resolveInvariantLogPath`（`:443`，走本函式） | `serve.ts:757`、`cli.ts:1004` | 量測記錄 ⇄ `--workspace` | 不改，且仍是「只不寫」不拋 |
  * | `loadConfigHashKey`（`session-header-metadata.ts:142`，走本函式） | `serve.ts:814`、`:947`（經 `createSessionHeaderMetadataResolver`）、`cli.ts:1183`（經 `resolveSessionHeaderMetadata`） | 設定雜湊鍵檔 ⇄ `--workspace` | 不改。**這三處是安全檢查，不是顯示用的**（#1783 內文把它們標成 header metadata／顯示用，那一格分類是錯的） |
  * | `--resume` 的日誌路徑 | `cli.ts:354` | 續接的日誌 ⇄ `--workspace` | 不改，CLI 的可寫根仍是 `--workspace` |
+ * | `assertPatchesOutsideWorkspace` | `runServe`、`runCli`、`plugin` | 每份 `--patch` ⇄ `--workspace` | 例外：判準是寫得到，不是讀得到；覆寫檔能換 MCP 的 `command`。不比新 thread 的私有根 |
  */
 export function outsideWorkspace(
   path: string,
@@ -539,7 +546,7 @@ export interface LaunchPathsCheck {
  * （`packages/sandbox/sandbox-policy/src/index.ts:131`），所以專案那份 `.env` 本來就在工作區根，讀取也照本機檔案系統走
  * （`packages/fs/fs-sandbox/README.zh.md:12`）。dsh 是單人的寫程式代理，跟模型對話的人就是 key 的主人。我們的 serve 是
  * 多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key。**補的是**啟動時這一道路徑重疊檢查；
- * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）、讀取面照舊不圍（#1291）。只做 serve（Q4）：CLI 是一個人在自己的
+ * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）。讀取面經連結出根的由 backend 擋（#1982）。只做 serve（Q4）：CLI 是一個人在自己的
  * 終端機跑，跟 dsh 同一個形狀；放在這裡，CLI 之後要用可以直接叫。
  *
  * ## #1775 的例外（#1620 Q3，demian 接受）：私有可寫根落在 home 底下
@@ -550,10 +557,8 @@ export interface LaunchPathsCheck {
  * `..` 被 backend 擋下，絕對路徑會被當成根底下的子路徑。基底寫死在 home 底下的 `thread-roots`（不開成設定列），所以 home 本身、home 的上層與
  * home 根目錄那一層的狀態檔不可能落進任何一條 thread 的根。
  *
- * **剩下的風險**：私有根裡若出現指向 home 的目錄連結，讀得穿（同 #1291 已接受的那一格；模型沒有 shell，自己做不出連結）。
- *
- * **擋不到的**：工作區裡指向 home 或 `.env` 的目錄連結。要擋得掃整棵樹，而且連結可以在啟動之後才建；這是 #1291
- * 已經接受的「目錄符號連結讀穿」同一格，寫在 `docs/operations.md`。
+ * **這道檢查不掃連結**：工作區或私有根裡指向 home 或 `.env` 的連結，要擋得掃整棵樹，而且連結可以在啟動之後才建。
+ * 那一格歸 backend：`danger-full-access` 以外，讀寫都在 canonicalize 之後判落不落在根內，經連結落到根外的拒（`contained-backend.ts`，#1982）。
  *
  * @param check - 見 {@link LaunchPathsCheck}。
  * @throws 有任何一個路徑跟工作區重疊；或解路徑時遇到 ENOENT／ENOTDIR 以外的錯。
@@ -618,6 +623,39 @@ export async function assertLaunchPathsOutsideWorkspace(check: LaunchPathsCheck)
       `出路（擇一）：把 .env 搬到工作區外面，或改在啟動環境 export 那些變數；把 ${HARNESS_HOME_ENV} 設到工作區外面；` +
       '或換一個不跟這些路徑重疊的 --workspace。',
   );
+}
+
+/**
+ * **`--patch` 的檔不能落在工作區裡**（[#2162](https://github.com/DemianLi/nexus-agent/issues/2162)）：
+ * CLI 與 serve 的舊 thread 改得到工作區，而覆寫檔能換掉 MCP 的 `command`，下次起動就以起它的帳號跑。
+ *
+ * 排在印設定之前：`--dump-config-schema` 會載入覆寫檔 `insert` 的模組。字面路徑、解開父目錄、解開到底三種位置都比，
+ * 工作區裡的連結不論指到哪都算在裡面，工作區外的連結指進來也算；檔案不存在也照比。有 `--workspace` 才檢查。
+ * 判準是寫得到，而且只比 `--workspace`，不看 serve 新 thread 的私有根。
+ *
+ * @param check - `--workspace` 那串字、相對路徑的基準、`--patch` 的路徑。
+ * @throws 有任何一份落在工作區裡；或解路徑時遇到 ENOENT／ENOTDIR 以外的錯。
+ */
+export async function assertPatchesOutsideWorkspace(check: {
+  readonly workspace: string | undefined;
+  readonly cwd: string;
+  readonly patches: readonly string[] | undefined;
+}): Promise<void> {
+  const root = resolveWorkspaceRoot(check.workspace, check.cwd);
+  if (root === undefined || check.patches === undefined) return;
+  const workspace = await canonicalize(root);
+  for (const patch of check.patches) {
+    const literal = resolve(check.cwd, patch);
+    const real = await canonicalize(literal);
+    const placed = join(await canonicalize(dirname(literal)), basename(literal));
+    if (isWithin(root, literal) || isWithin(workspace, placed) || isWithin(workspace, real)) {
+      throw new Error(
+        `--patch ${patch} 不能在 --workspace 底下（實際位置 ${real}，工作區 ${workspace}）。` +
+          '工作區可能被模型改動，覆寫檔能換掉 MCP 的 command，下次起動就以這個帳號跑。' +
+          '把它搬到工作區外面，或換一個不包含它的 --workspace。',
+      );
+    }
+  }
 }
 
 /** 假模型腳本寫出去的那個檔。測試靠它確認檔案真的落在 `--workspace` 指的目錄底下。 */
@@ -862,6 +900,11 @@ export async function createCliAgent(
      */
     readonly sharedWorkspaceRoot?: string;
     /**
+     * **可寫根就是新 thread 讀的共用區**（舊 thread，[#1960](https://github.com/DemianLi/nexus-agent/issues/1960)）：給了，圍堵 backend 對根目錄的指示檔與
+     * 技能來源目錄一律拒絕變更（`shared-reserved-writes.ts`）。只有 serve 依 placer 給；CLI 沒有新 thread 讀共用區，不給。
+     */
+    readonly rootIsShared?: boolean;
+    /**
      * 全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）：**只有 serve 給**，起動期建一份、每條 thread 的組裝
      * 共用同一份（名額是整台 serve 的，不是這條 thread 的）。對話、換模型別顆、背景子代理指定的模型、標題（含跟隨主路由的那顆）都從
      * 這一份取名額。省略＝不建閘（CLI、REPL、嵌入方與沒設 `maxConcurrentRequests` 的 serve）。
@@ -1011,6 +1054,8 @@ export async function createCliAgent(
   dropped: readonly AssemblyDrop[];
   /** 外掛在 `apply` 裡交出的警告（#751），例如 MCP 連不上而照樣掛上。 */
   warnings: readonly PluginWarning[];
+  /** 折進這次組裝的 `memory` 來源（`serve` 起動時檢查，`memory-source-check.ts`）。 */
+  memorySources: readonly string[];
   /** 組裝之後外掛執行期交出的警告（#1099），例如 MCP 掉線重連的進度；回傳取消訂閱。印在哪由呼叫端決定。 */
   onWarning: (listener: (warning: PluginWarning) => void) => () => void;
   /** 這一次組裝收不收插話（#710），見 `stepInbox` 那一格。 */
@@ -1110,6 +1155,8 @@ export async function createCliAgent(
   const approvalPolicy = new ApprovalPolicyController(
     invocation.approvalPolicy ?? (invocation.sandbox === 'danger-full-access' ? 'never' : 'ask'),
   );
+  /** 這次組裝 fold 完的 fs 把手與 `memory` 來源，`createNexusAgent` 回來之後才填；保留清單讀它們。 */
+  const settled: { fs?: FsService; memorySources?: readonly string[] } = {};
   const backend =
     workspaceRoot === undefined
       ? undefined
@@ -1121,6 +1168,10 @@ export async function createCliAgent(
           grants: sandboxMode,
           // 多人共用主機上的使用者工作區：別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗（偏離 dsh，#1704）。
           tolerateUnreadable: true,
+          // 技能來源與記憶來源要 fold 完才知道，所以逐次讀下面填的 `settled`。
+          ...(invocation.rootIsShared === true && {
+            reservedWrites: () => sharedReservedWrites(settled.fs, settled.memorySources),
+          }),
         });
   // **每會話模型選擇只在 `--live` 時有**（#723）：假模型沒有型錄可選。控制器由組裝點建、經 `createNexusAgent` 折進 root，
   // 同一個 host 回傳給呼叫端（serve 的 `model.catalog`／`model.select` 用它驗型錄）。
@@ -1149,6 +1200,7 @@ export async function createCliAgent(
     stepInbox,
     spillStore,
     subagentKinds,
+    memorySources,
   } = await createNexusAgent({
     model,
     // 沒傳就在這裡按型錄建一本（#1102）：fold 自己 new 的那本不認得哪些模型逐位切詞。
@@ -1163,8 +1215,16 @@ export async function createCliAgent(
         approvalPolicy,
         // MCP 連線池（#1677）：缺席＝每列自己連（CLI）。
         [MCP_POOL_SERVICE]: mcpPool,
+        // MCP 設定裡的憑證引用（#1989）：跟模型 key 同一份憑證服務、同一條規則；缺席＝寫了引用的列連不上。
+        ...(invocation.credentials !== undefined && {
+          [MCP_CREDENTIALS_SERVICE]: mcpCredentialsOf(invocation.credentials),
+        }),
         // 唯讀共用區的前綴（#1775）：缺席＝這條 thread 沒有共用區（舊 thread、CLI）。**與有沒有圍堵無關**：落盤關掉的新 thread 沒有圍堵、共用區照樣在。
         ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: SHARED_WORKSPACE_PREFIX }),
+        // MCP 的沙箱包裝（#1946）：缺席＝宣告了 sandbox 的列不連線。
+        [MCP_SANDBOX_SERVICE]: createMcpSandboxWrapper(),
+        // 沒宣告沙箱的 stdio 也跟著宿主行程走（#2197）：缺席或包不了＝照舊直接起。
+        [MCP_GUARD_SERVICE]: createMcpGuardWrapper(),
         // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
         // 分岔——有圍堵就掛控制器、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
         // 那一列載入當場拋（有圍堵卻缺控制器）。
@@ -1174,8 +1234,16 @@ export async function createCliAgent(
               // **工作區根也是一格 host 服務**（#669 第 4 步）：`workspace-changes` 等要根的列在 `apply` 當下讀它，沒有就不合格
               // （照 dsh 的 `eligible`）；以前是組裝點把根塞進那一列的 Config，那一列就進不了出貨清單。
               workspaceRoot,
+              [GIT_STARTER_SERVICE]: createGitStarter(sandboxMode.source, workspaceRoot),
               fsContainment: CONTAINED_FILESYSTEM,
-              sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot },
+              sandboxPolicy: {
+                controller: sandboxMode,
+                rootDir: workspaceRoot,
+                // 舊 thread 的保留清單（#1960）：升級工具據它不對寫不進去的目標掛卡（#2078）。
+                ...(backend !== undefined && {
+                  reservedReason: (target: string) => backend.reservedReason(target),
+                }),
+              },
             }),
       }),
       ...plugins,
@@ -1238,12 +1306,15 @@ export async function createCliAgent(
         ...(workspaceRoot !== undefined && { sandbox: sandboxMode }),
       },
     }),
+    toolMode: sandboxMode.source,
     ...(invocation.toolResultStash !== undefined && {
       toolResultStash: invocation.toolResultStash,
     }),
     ...(invocation.attachments !== undefined && { attachments: invocation.attachments }),
     ...(invocation.spillPolicy !== undefined && { spillPolicy: invocation.spillPolicy }),
   });
+  settled.fs = services.get(FS_SERVICE);
+  settled.memorySources = memorySources;
   // **權限組合的起始值**（#1491 Q3 (a)）：向 `permission-presets` 那一列要（它提供、折進這條 thread 的 `permissionPresets` 服務），再對兩顆控制器
   // **靜默** `switchTo` 回來的值。呼叫點在 `createNexusAgent` 回來之後、回傳之前——控制器與 fence 早在 `createNexusAgent` 之前就建好了，
   // 折進來的服務要等它回來才拿得到。**這時還沒有日誌接著**（`attachSessions` 在呼叫端），所以不寫事件，新會話日誌上 `sandbox/mode` 仍只有一顆；
@@ -1342,11 +1413,21 @@ export async function createCliAgent(
     attachTitle,
     dropped,
     warnings,
+    memorySources,
     onWarning,
     stepInbox,
     spillStore,
     modelSelection,
   };
+}
+
+/**
+ * 交給 MCP 那幾列的憑證服務（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：只要值，來源層不往外交。
+ *
+ * @param credentials - 這次啟動的憑證服務。
+ */
+export function mcpCredentialsOf(credentials: CredentialService): McpCredentials {
+  return { resolve: (name) => credentials.resolve(name)?.value };
 }
 
 /**
@@ -1370,6 +1451,26 @@ export function liveSubagentModelFor(
       ...(choice.effort === 'off' && { thinkingOff: true }),
       ...(requestGate !== undefined && { requestGate }),
     });
+}
+
+/**
+ * 標題請求要記的推理強度（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573)，照 dsh 1517a4db `session-title-first-prompt-llm/src/index.ts:74-76`
+ * 取最低一級）。標題那顆以 `purpose: 'session-title'` 建，`live-model` 會依型錄條目關推理（`thinkingOffBody`）；這裡用
+ * 同一個判準（{@link declaresOffEffort}）決定記不記 `'off'`，只讓紀錄多一格，不碰送出去的請求。
+ *
+ * **只有條目宣告了 `off` 時才跟 dsh 一致。** 沒宣告 `off` 的條目，dsh 取 `efforts[0]`（最低一級），紀錄和送出都用它；nexus 兩樣都不做
+ * （沒有 `off` 以外的線上寫法），已登記為理由 1，見 `model-catalog.ts` 檔頭「`reasoningEfforts` 的驗證只搬 dsh 的前三條」那一條。
+ *
+ * @param models - `live-model` 的型錄。
+ * @param modelId - 這顆標題模型的 id。
+ * @returns 條目宣告了 `off` 就 `{ reasoningEffort: 'off' }`；沒宣告（或不在型錄）就 `{}`，紀錄上沒有這個 key。
+ */
+function titleReasoningEffort(
+  models: LiveModelConfig['models'],
+  modelId: string,
+): { readonly reasoningEffort?: string } {
+  const entry = findModelEntry(models, modelId);
+  return entry !== undefined && declaresOffEffort(entry) ? { reasoningEffort: 'off' } : {};
 }
 
 /**
@@ -1405,6 +1506,7 @@ function titleLlmFor(
       ...(requestGate !== undefined && { requestGate }),
     }),
     route: { provider: liveModel.baseUrl, model: modelId },
+    ...titleReasoningEffort(liveModel.models, modelId),
     config,
     limits,
     // 標題不在模型呼叫圖裡，SDK 層又不重試了（#1427）：自己吃同一份政策，不記日誌。
@@ -1432,6 +1534,7 @@ function titleLlmFor(
           return {
             model: followed,
             route: { provider: liveModel.baseUrl, model: mainRoute.model },
+            ...titleReasoningEffort(liveModel.models, mainRoute.model),
           };
         },
       }),

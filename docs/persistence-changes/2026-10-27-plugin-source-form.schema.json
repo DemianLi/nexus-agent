@@ -1,0 +1,494 @@
+{
+  "formatVersion": 1,
+  "roots": [
+    {
+      "key": "event:user/message",
+      "kind": "event",
+      "event": "user/message",
+      "surface": false,
+      "digest": "ff3e70f92ea83a7c8a01307e3c56861722eccd0c7058a2db11de61fb72d1246c",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 41,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 42,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "message",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "source",
+                "type": 11,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 3,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "additional_kwargs",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "content",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "id",
+                "type": 5,
+                "optional": true
+              },
+              {
+                "name": "name",
+                "type": 5,
+                "optional": true
+              },
+              {
+                "name": "response_metadata",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "role",
+                "type": 5,
+                "optional": true
+              },
+              {
+                "name": "tool_call_id",
+                "type": 5,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [],
+            "indices": [
+              {
+                "key": 5,
+                "value": 6
+              }
+            ]
+          },
+          {
+            "kind": "primitive",
+            "type": "string"
+          },
+          {
+            "kind": "opaque",
+            "reason": "any"
+          },
+          {
+            "kind": "union",
+            "types": [
+              5,
+              8
+            ]
+          },
+          {
+            "kind": "array",
+            "element": 9
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "id",
+                "type": 5,
+                "optional": true
+              },
+              {
+                "name": "type",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": [
+              {
+                "key": 5,
+                "value": 10
+              }
+            ]
+          },
+          {
+            "kind": "opaque",
+            "reason": "unknown"
+          },
+          {
+            "kind": "union",
+            "types": [
+              12,
+              14,
+              17,
+              26,
+              36,
+              39
+            ]
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "clientTimeZone",
+                "type": 5,
+                "optional": true
+              },
+              {
+                "name": "kind",
+                "type": 13,
+                "optional": false
+              },
+              {
+                "name": "requestId",
+                "type": 5,
+                "optional": true
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "user"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "form",
+                "type": 15,
+                "optional": false
+              },
+              {
+                "name": "kind",
+                "type": 16,
+                "optional": false
+              },
+              {
+                "name": "name",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "instructions"
+          },
+          {
+            "kind": "literal",
+            "value": "skill-invocation"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "form",
+                "type": 18,
+                "optional": false
+              },
+              {
+                "name": "kind",
+                "type": 19,
+                "optional": false
+              },
+              {
+                "name": "reason",
+                "type": 20,
+                "optional": true
+              },
+              {
+                "name": "senderSessionId",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "summary",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "notice"
+          },
+          {
+            "kind": "literal",
+            "value": "subagent-settled"
+          },
+          {
+            "kind": "union",
+            "types": [
+              21,
+              22,
+              23,
+              24,
+              25
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "aborted"
+          },
+          {
+            "kind": "literal",
+            "value": "completed"
+          },
+          {
+            "kind": "literal",
+            "value": "refusal"
+          },
+          {
+            "kind": "literal",
+            "value": "error"
+          },
+          {
+            "kind": "literal",
+            "value": "max-tokens"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "form",
+                "type": 27,
+                "optional": false
+              },
+              {
+                "name": "kind",
+                "type": 28,
+                "optional": false
+              },
+              {
+                "name": "references",
+                "type": 29,
+                "optional": false
+              },
+              {
+                "name": "version",
+                "type": 35,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "recall"
+          },
+          {
+            "kind": "literal",
+            "value": "session-reference"
+          },
+          {
+            "kind": "array",
+            "element": 30
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "capturedFormatVersion",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "capturedThroughSeq",
+                "type": 32,
+                "optional": false
+              },
+              {
+                "name": "compacted",
+                "type": 34,
+                "optional": false
+              },
+              {
+                "name": "inputIndex",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "label",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "omittedBytes",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "omittedMessages",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "originalMessages",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "retainedMessages",
+                "type": 31,
+                "optional": false
+              },
+              {
+                "name": "sessionId",
+                "type": 5,
+                "optional": false
+              },
+              {
+                "name": "truncated",
+                "type": 34,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "union",
+            "types": [
+              31,
+              33
+            ]
+          },
+          {
+            "kind": "primitive",
+            "type": "null"
+          },
+          {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          {
+            "kind": "literal",
+            "value": 1
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "form",
+                "type": 37,
+                "optional": false
+              },
+              {
+                "name": "kind",
+                "type": 38,
+                "optional": false
+              },
+              {
+                "name": "senderSessionId",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "relay"
+          },
+          {
+            "kind": "literal",
+            "value": "agent-message"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "form",
+                "type": 15,
+                "optional": true
+              },
+              {
+                "name": "kind",
+                "type": 40,
+                "optional": false
+              },
+              {
+                "name": "plugin",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "literal",
+            "value": "plugin"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "literal",
+            "value": "user/message"
+          }
+        ]
+      }
+    }
+  ],
+  "types": []
+}

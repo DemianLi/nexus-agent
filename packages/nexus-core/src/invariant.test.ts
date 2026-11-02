@@ -403,3 +403,93 @@ describe('送出佇列（#637）', () => {
     expect(violations).toEqual([]);
   });
 });
+
+describe('核准稽核落在開著的輪內（#2026）', () => {
+  const asked = (log: SessionLog, id: string) =>
+    log.append('approval/asked', { id, toolName: 'danger', callId: `call-${id}` });
+  const decided = (log: SessionLog, id: string, outcome: 'allowed-once' | 'cancelled') =>
+    log.append('approval/decided', { id, outcome });
+
+  it('輪外的 approval/asked 報違規', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('turn/end', {});
+    asked(log, 'a-1');
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('approval/asked（seq 2）落在任何開著的輪之外'),
+    ]);
+  });
+
+  it('輪外的 approval/decided 報違規', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('turn/end', {});
+    decided(log, 'a-1', 'allowed-once');
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('approval/decided（seq 2）落在任何開著的輪之外'),
+    ]);
+  });
+
+  it('政策路徑：同一輪裡一對 asked／decided 夾在 tool/call 與 tool/result 之間', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('tool/call', { callId: 'call-a-1', name: 'danger', arguments: '{}' });
+    asked(log, 'a-1');
+    log.append('approval/decided', { id: 'a-1', outcome: 'rejected' });
+    log.append('tool/result', { callId: 'call-a-1', isError: true });
+    log.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
+  it('沒有輪的日誌（前景子代理的形狀）：不判', () => {
+    // 前景子代理的日誌沒有 `turn/*`；政策路徑把稽核寫進子代理自己那份日誌（呼叫者就是子代理）。
+    const log = new SessionLog('web/tools:1');
+    const violations = watch(log);
+    log.append('tool/call', { callId: 'call-a-1', name: 'danger', arguments: '{}' });
+    asked(log, 'a-1');
+    log.append('approval/decided', { id: 'a-1', outcome: 'rejected' });
+    log.append('tool/result', { callId: 'call-a-1', isError: true });
+    expect(violations).toEqual([]);
+  });
+
+  it('人那條跨兩輪：提問那一輪記 asked，續接那一輪的 turn/start 之後記 decided', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('interrupt/raised', { interruptId: 'i-1' });
+    asked(log, 'i-1');
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'resume' });
+    decided(log, 'i-1', 'allowed-once');
+    log.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
+  it('人那條被收回：收回那一輪的 turn/start 之後記 decided（cancelled）', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('interrupt/raised', { interruptId: 'i-1' });
+    asked(log, 'i-1');
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'resume' });
+    decided(log, 'i-1', 'cancelled');
+    log.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
+  it('跨 session/end-seed 不重設：續接之後輪外的稽核照樣報', () => {
+    const earlier = new SessionLog('web');
+    earlier.append('turn/start', { kind: 'message', text: '刪檔' });
+    earlier.append('turn/end', {});
+    const resumed = new SessionLog('web', { seed: earlier.events });
+    const violations = watch(resumed);
+    asked(resumed, 'a-1');
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('approval/asked'),
+    ]);
+  });
+});

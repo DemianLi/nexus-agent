@@ -1,10 +1,10 @@
 /**
- * `read_file` 描述的換法（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：看 middleware 在不在，換基座原文裡的**一句**。
+ * `read_file` 描述的換法（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：看 middleware 在不在，換基座原文裡指定的片段。
  * 掛進整個 agent、模型實際收到什麼，在 `apps/harness/src/observation.test.ts`、`read-limits-openai.test.ts` 與 `assembly-parity.test.ts`。
  */
 
 import { createFilesystemMiddleware } from 'deepagents';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
 import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
@@ -19,6 +19,15 @@ function baseDescription(name: string): string {
   return String(found.description);
 }
 
+/** 把行號那一句換回基座的原文，剩下的差異才看得出來。 */
+function withBaseLinePrefix(read: string): string {
+  return read.replace(
+    'then a tab, then the source line. The number and the tab are not file content: ' +
+      'never include them in `write_file` content or in `edit_file` old_string or new_string.',
+    'then two spaces, then the source line. Never include these line-number prefixes when editing.',
+  );
+}
+
 describe('filesystemToolDescriptions', () => {
   it('讀檔續讀不在 → 不換（組成與基座逐位元組相同）', () => {
     expect(filesystemToolDescriptions([])).toBeUndefined();
@@ -31,7 +40,7 @@ describe('filesystemToolDescriptions', () => {
     ).toBeUndefined();
   });
 
-  it('讀檔續讀在場 → 只換 read_file 的預設行數（2000），其餘一字不動', () => {
+  it('讀檔續讀在場 → 只換 read_file 的預設行數（2000）與行號那一句，其餘一字不動', () => {
     const descriptions = filesystemToolDescriptions([
       { name: READ_CONTINUATION_MIDDLEWARE_NAME },
       { name: OBSERVATION_POLICY_MIDDLEWARE_NAME },
@@ -40,7 +49,38 @@ describe('filesystemToolDescriptions', () => {
     const read = descriptions?.read_file ?? '';
     expect(read).toContain('By default, it reads up to 2000 lines');
     expect(read).not.toContain('up to 100 lines');
-    expect(read.replace('up to 2000 lines', 'up to 100 lines')).toBe(baseDescription('read_file'));
+    expect(withBaseLinePrefix(read).replace('up to 2000 lines', 'up to 100 lines')).toBe(
+      baseDescription('read_file'),
+    );
+  });
+
+  it('講行號的那一句照實際輸出寫 tab，禁止範圍涵蓋 write_file 與 edit_file（#2286）', () => {
+    const read =
+      filesystemToolDescriptions([{ name: READ_CONTINUATION_MIDDLEWARE_NAME }])?.read_file ?? '';
+    expect(read).toContain('then a tab, then the source line');
+    expect(read).toContain('`write_file` content');
+    expect(read).toContain('`edit_file` old_string or new_string');
+    expect(read).not.toContain('two spaces');
+    expect(read).not.toContain('when editing');
+  });
+
+  it('基座講行號的那一句改了就拋，不會悄悄兩套說法並存（#2286）', async () => {
+    vi.resetModules();
+    vi.doMock('deepagents', async (original) => ({
+      ...(await original<typeof import('deepagents')>()),
+      createFilesystemMiddleware: () => ({
+        tools: [{ name: 'read_file', description: 'By default, it reads up to 100 lines' }],
+      }),
+    }));
+    try {
+      const fresh = await import('./fs-tool-descriptions.js');
+      expect(() =>
+        fresh.filesystemToolDescriptions([{ name: READ_CONTINUATION_MIDDLEWARE_NAME }]),
+      ).toThrow('找不到「then two spaces');
+    } finally {
+      vi.doUnmock('deepagents');
+      vi.resetModules();
+    }
   });
 
   it('真的交給 createFilesystemMiddleware，建出來的工具就是換過的描述（拿掉 customToolDescriptions 這條就紅）', () => {
@@ -67,7 +107,9 @@ describe('filesystemToolDescriptions', () => {
     });
     const read = descriptions?.read_file ?? '';
     expect(read).toContain('By default, it reads up to 500 lines');
-    expect(read.replace('up to 500 lines', 'up to 100 lines')).toBe(baseDescription('read_file'));
+    expect(withBaseLinePrefix(read).replace('up to 500 lines', 'up to 100 lines')).toBe(
+      baseDescription('read_file'),
+    );
   });
 });
 

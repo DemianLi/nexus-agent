@@ -84,6 +84,37 @@ describe('ModifiedOrderCompositeBackend', () => {
     expect((await capped.glob('*')).truncated).toBe(true);
   });
 
+  it('路由出錯：整筆回路由的錯誤，default 的命中不留（#2158）', async () => {
+    const backend = new ModifiedOrderCompositeBackend(
+      fake({ files: [entry('/a.ts', '2020-01-01T00:00:00.000Z')] }),
+      { '/routed/': fake({ error: 'SANDBOX_UNAVAILABLE' }) },
+    );
+    expect(await backend.glob('*.ts')).toEqual({ error: 'SANDBOX_UNAVAILABLE' });
+  });
+
+  it('起點碰不到的路由出錯：不影響結果（#2158）', async () => {
+    const backend = new ModifiedOrderCompositeBackend(
+      fake({ files: [entry('/src/a.ts', '2020-01-01T00:00:00.000Z')] }),
+      { '/routed/': fake({ error: 'SANDBOX_UNAVAILABLE' }) },
+    );
+    expect((await backend.glob('*.ts', '/src')).files?.map((each) => each.path)).toEqual([
+      '/src/a.ts',
+    ]);
+  });
+
+  it('路由的 truncated 與路徑前綴照基座帶回來', async () => {
+    const backend = new ModifiedOrderCompositeBackend(fake({ files: [] }), {
+      '/routed/': fake({
+        files: [entry('/x.ts', '2020-01-01T00:00:00.000Z')],
+        truncated: true,
+      }),
+    });
+    expect(await backend.glob('*.ts')).toMatchObject({
+      files: [{ path: '/routed/x.ts' }],
+      truncated: true,
+    });
+  });
+
   it('起點落在路由底下：結果也是時間序，路徑前綴照基座加回去', async () => {
     const backend = new ModifiedOrderCompositeBackend(fake({ files: [] }), {
       '/routed/': fake({

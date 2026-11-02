@@ -13,9 +13,11 @@ import { requestImageHandleText } from './attachment-projection.js';
 import { attachmentBlock, fileHandleText, fileModelPath, IMAGE_TOKENS } from './attachment-ref.js';
 import {
   estimateAnchoredTokens,
+  estimateRequestParts,
   estimateRequestTokens,
   estimateTextTokens,
   TokenAnchorBook,
+  warmMessageTokens,
 } from './token-estimate.js';
 
 const MODEL = { model: 'm-1' };
@@ -113,6 +115,26 @@ describe('E：o200k 的純估算', () => {
  */
 /** 沒有另一半的代理碼元。 */
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u;
+
+describe('合併快取（#2241）', () => {
+  afterEach(() => {
+    vi.doUnmock('gpt-tokenizer/encoding/o200k_base');
+    vi.resetModules();
+  });
+
+  it('載入時關掉，全行程只設一次', async () => {
+    const setMergeCacheSize = vi.fn();
+    vi.resetModules();
+    vi.doMock('gpt-tokenizer/encoding/o200k_base', () => ({
+      default: { ...o200k_base, setMergeCacheSize },
+    }));
+
+    await import('./token-estimate.js');
+    await import('./token-estimate.js');
+
+    expect(setMergeCacheSize.mock.calls).toEqual([[0]]);
+  });
+});
 
 describe('內容備忘與超長抽樣（#952）', () => {
   /** 數編碼器這段時間被餵了幾次、共多少字元。 */
@@ -695,5 +717,125 @@ describe('附件區塊（#732）', () => {
     const counted = estimateRequestTokens(request([withBlocks(block)])) - baseline;
     expect(counted).toBe(estimateTextTokens(fileHandleText(FILE_REF, fileModelPath(FILE_REF))));
     expect(counted).toBeGreaterThan(40);
+  });
+});
+
+describe('E 拆三格（#1571 N1193）', () => {
+  const DIGITS = '編號 20261024 與 3141592653 共 1234567 筆。'.repeat(20);
+
+  it('系統那一格 = 該段文字的 o200k 數 + 一則訊息的框架開銷，工具與訊息兩格是 0', () => {
+    const text = '你是測試用的助手。請簡短回答。';
+    const parts = estimateRequestParts({ systemMessage: new SystemMessage(text) });
+    expect(parts).toEqual({ system: estimateTextTokens(text) + 4, tools: 0, messages: 0 });
+  });
+
+  it('工具那一格 = 每個工具送上線那份 OpenAI JSON 的數，加總', () => {
+    const other = {
+      type: 'function',
+      function: { name: 'write_file', description: '寫檔', parameters: {} },
+    };
+    const parts = estimateRequestParts({ tools: [...TOOLS, other] });
+    expect(parts.system).toBe(0);
+    expect(parts.messages).toBe(0);
+    expect(parts.tools).toBe(
+      estimateTextTokens(JSON.stringify(TOOLS[0])) + estimateTextTokens(JSON.stringify(other)),
+    );
+  });
+
+  it('什麼都沒有：三格都是 0（不是缺席）', () => {
+    expect(estimateRequestParts({})).toEqual({ system: 0, tools: 0, messages: 0 });
+  });
+
+  it.each([false, true])(
+    '三格加起來 = estimateRequestTokens（singleDigits=%s），整數且非負',
+    (singleDigits) => {
+      const req = request([new HumanMessage(DIGITS), new AIMessage('收到 12345。')]);
+      const parts = estimateRequestParts(req, { singleDigits });
+      for (const value of Object.values(parts)) {
+        expect(Number.isInteger(value)).toBe(true);
+        expect(value).toBeGreaterThanOrEqual(0);
+      }
+      expect(parts.system + parts.tools + parts.messages).toBe(
+        estimateRequestTokens(req, { singleDigits }),
+      );
+    },
+  );
+
+  it('逐位切詞的多出量只算進含數字的那一格', () => {
+    const plain = estimateRequestParts(request([new HumanMessage(DIGITS)]));
+    const single = estimateRequestParts(request([new HumanMessage(DIGITS)]), {
+      singleDigits: true,
+    });
+    expect(single.messages).toBeGreaterThan(plain.messages);
+    expect(single.system).toBe(plain.system);
+    expect(single.tools).toBe(plain.tools);
+  });
+});
+
+describe('warmMessageTokens', () => {
+  const uncancelled = () => false;
+  const fresh = (count: number) =>
+    Array.from({ length: count }, () => new HumanMessage(`${crypto.randomUUID()} `.repeat(40)));
+  const expiredEveryCheck = () => {
+    let now = 0;
+    return vi.spyOn(performance, 'now').mockImplementation(() => (now += 1_000));
+  };
+
+  it('預熱過的同一批物件，同步估算不再編碼', async () => {
+    const messages = fresh(3);
+    await warmMessageTokens(messages, uncancelled);
+    const encode = vi.spyOn(o200k_base, 'encode');
+    const warmed = estimateRequestTokens({ messages });
+    expect(encode).not.toHaveBeenCalled();
+    encode.mockRestore();
+    expect(warmed).toBeGreaterThan(0);
+  });
+
+  it('數字與沒預熱時逐位相同', async () => {
+    const text = `中文 1234567 ${crypto.randomUUID()} `.repeat(40);
+    const warmed = new HumanMessage(text);
+    const expected = estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    await warmMessageTokens([warmed], uncancelled);
+    expect(estimateRequestTokens({ messages: [warmed] })).toBe(expected);
+  });
+
+  it('時間片用完就讓出事件迴圈', async () => {
+    const clock = expiredEveryCheck();
+    const encode = vi.spyOn(o200k_base, 'encode');
+    let encodedWhenYielded = -1;
+    setImmediate(() => (encodedWhenYielded = encode.mock.calls.length));
+    await warmMessageTokens(fresh(3), uncancelled);
+    const total = encode.mock.calls.length;
+    clock.mockRestore();
+    encode.mockRestore();
+    expect(encodedWhenYielded).toBeGreaterThanOrEqual(0);
+    expect(encodedWhenYielded).toBeLessThan(total);
+  });
+
+  it('時間片沒用完就不讓出', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+    let finished = false;
+    let finishedOnNextTask = false;
+    setImmediate(() => (finishedOnNextTask = finished));
+    await warmMessageTokens(fresh(3), uncancelled).then(() => (finished = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    clock.mockRestore();
+    expect(finishedOnNextTask).toBe(true);
+  });
+
+  it('取消在片段之間生效，已編的留著、剩下的不編', async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => (now += 8));
+    const messages = fresh(4);
+    const encode = vi.spyOn(o200k_base, 'encode');
+    const finished = await warmMessageTokens(messages, () => true);
+    const sent = encode.mock.calls.map(([text]) => text);
+    clock.mockRestore();
+    encode.mockRestore();
+    const first = messages[0]!.content as string;
+    const last = messages.at(-1)!.content as string;
+    expect(finished).toBe(false);
+    expect(sent.some((text) => first.includes(text.trim()))).toBe(true);
+    expect(sent.some((text) => last.includes(text.trim()))).toBe(false);
   });
 });

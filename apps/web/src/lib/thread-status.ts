@@ -284,17 +284,14 @@ export function rowStatus(state: ThreadStatusState, item: ThreadSummary): RowSta
   return undefined;
 }
 
-/**
- * 報讀器唸的那一句，以及取代時間的那幾個字（dsh 的 `label` 與 `trailingLabel`，文案照 dsh 的 zh 字典換成我們的用字）。
- * 只有等人回答的三種有短的那一句：dsh 也只替它們換掉時間。
- */
+/** 列上寫出來的狀態字。`waiting` 是等人回答的三種：這三種不帶時間、標題加粗。 */
 export const ROW_STATUS_TEXT: Record<
   Exclude<RowStatus, undefined>,
-  { readonly label: string; readonly compact?: string }
+  { readonly label: string; readonly waiting: boolean }
 > = {
-  approval: { label: '等待核准', compact: '待核准' },
-  'plan-review': { label: '計劃待審', compact: '計劃待審' },
-  question: { label: '等待回答', compact: '待回答' },
-  running: { label: '執行中' },
-  completed: { label: '已完成' },
+  approval: { label: '等待核准', waiting: true },
+  'plan-review': { label: '計劃待審', waiting: true },
+  question: { label: '等待回答', waiting: true },
+  running: { label: '執行中', waiting: false },
+  completed: { label: '已完成', waiting: false },
 };

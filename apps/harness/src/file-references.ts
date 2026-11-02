@@ -23,8 +23,7 @@
  * 走訪（索引）那一半靠 `Dirent`：`isDirectory()` 對符號連結回 `false`，所以指向任何地方的連結都不會被走進去；
  * `isFile()` 也回 `false`，所以連結本身也不列。
  *
- * **不用 backend 的 `ls`／`glob`**：`ContainedFilesystemBackend` 只圍寫、不圍讀（`contained-backend.ts`），基座的 `glob`
- * 沒有排除也沒有上限，會走進 `node_modules`。
+ * **不用 backend 的 `ls`／`glob`**：基座的 `glob` 沒有排除也沒有上限，會走進 `node_modules`。
  *
  * ## 偏離
  *

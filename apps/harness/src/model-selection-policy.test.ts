@@ -3,6 +3,7 @@
  * 新會話取樣設定、有歷史的只讀日誌、沒有事件就是關。
  */
 
+import { SessionSeq } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -14,7 +15,7 @@ import {
 const policyEvent = (seq: number, allowedModels: string[]): SessionEvent =>
   ({
     type: 'subagent/model-selection-policy',
-    seq,
+    seq: SessionSeq(seq),
     time: seq,
     data: { allowedModels },
   }) as SessionEvent;

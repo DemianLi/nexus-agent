@@ -6,6 +6,12 @@
  * （`AgentNode.ts:601-609`），所以 dsh 攤進 `write`／`edit` schema 的那兩個欄位在我們這側
  * 沒有地方掛。那條基座行為的絆索在 `escalation-carrier.test.ts`。
  *
+ * ## 升級的上限
+ *
+ * 升級最多到 `workspace-write`（[#1827](https://github.com/DemianLi/nexus-agent/issues/1827) D23）：目標詞彙
+ * {@link ESCALATION_TARGETS} 沒有 `danger-full-access`，所以已經在 `workspace-write` 的會話沒有升級可走——被擋的寫入就是拒絕，
+ * 拒絕後面也不接升級指引（{@link canEscalateFrom}）。要全開的部署方自己在權限表加回那一組（#1621），由人用 `/permission` 切。
+ *
  * ## 照 dsh 的六條
  *
  * 出處都是 `references/deepseek-harness/packages/sandbox/sandbox/src/escalation.ts`。
@@ -17,16 +23,16 @@
  *    一顆只認這個名字的核准閘門，排在它前面、回 `allow` 又不呼叫 `next()` 的閘門會把它
  *    整個短路掉，工具照樣回「核准了」。中斷照 `@nexus/plugin-ask-user` 的先例在本體裡 `interrupt()`，
  *    酬載與核准閘門同形（`@nexus/core` 的 `approval.ts`），web 那側一行都不用動。
- * 1. **嚴格加寬是執行期檢查，不是 schema 約束。** schema 的 enum 是封閉的目標詞彙
- *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「比現在寬」在本體裡對這一刻的模式判。
- *    理由照 dsh：schema 是全域的，當前模式是逐次呼叫的事實。收窄 enum 會讓一個被 `/sandbox`
- *    切窄的 session 連升級的槓桿都看不到。enum 外的值（含 `read-only`）在 schema 那一關就被擋，
+ * 1. **升不升得到是執行期檢查，不是 schema 約束。** schema 的 enum 是封閉的目標詞彙
+ *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「升得到」在本體裡對這一刻的模式判（{@link canEscalate}）。
+ *    理由照 dsh：schema 是全域的，當前模式是逐次呼叫的事實。收窄 enum 會讓一個被 `/permission`
+ *    切窄的 session 連升級的槓桿都看不到。enum 外的值（`read-only`、`danger-full-access`）在 schema 那一關就被擋，
  *    走不到本體，同 dsh 的 schema-pinned。
  * 2. **不加寬的請求不問人。** 本體在發中斷之前就回拒絕，核准卡一張都不掛。
  * 3. **欄位要齊、理由不能是空白。** dsh 的 `validateEscalationArgs`。
  * 4. **理由的消費者是人。** 它原樣進核准卡的那句話（dsh：`escalate sandbox to ${mode}: ${justification}`）。
- * 5. **被擋的當下就講得出能升級。** 指引騎在拒絕上（{@link SANDBOX_ESCALATION_HINT}，對應
- *    dsh 的 `escalationHintMarker`），不靠模型記得工具描述。
+ * 5. **被擋的當下就講得出能升級（這一刻還有格子升得到時）。** 指引騎在拒絕上（{@link SANDBOX_ESCALATION_HINT}，對應
+ *    dsh 的 `escalationHintMarker`），不靠模型記得工具描述；沒有格子可升就不接，見〈升級的上限〉。
  *
  * ## fail-closed 的出口，各有各的話
  *
@@ -36,6 +42,7 @@
  * | --- | --- | --- |
  * | 沒指名檔案、理由空白 | {@link MISSING_TARGET_REFUSAL}、{@link BLANK_JUSTIFICATION_REFUSAL} | 沒有 |
  * | 目標在唯讀共用區底下 | {@link sharedReadOnlyRefusal} | 沒有 |
+ * | 目標不論模式都寫不進去（舊 thread 的保留清單） | {@link reservedTargetRefusal} | 沒有 |
  * | 不加寬 | {@link nonWideningRefusal} | 沒有 |
  * | 子代理 | {@link unaskedRefusal}（`delegated`） | 沒有 |
  * | 這個 session 關掉了人工核准 | {@link unaskedRefusal}（`policy-never`） | 沒有 |
@@ -47,6 +54,10 @@
  * dsh 沒有唯讀共用區，所以沒有對照。serve 把 `--workspace` 掛成 `/shared`，固定唯讀、不接受任何 grant（#1675 Q8 (a)）；對那底下的路徑升級，
  * 核准卡問的是一個不可能成功的問題（核准了、重試仍被擋）。所以判在**加寬之前**——這個目標不論現在是哪一格、要升到哪一格都沒有答案。
  * 判準是前綴，不是被擋下的那一次：共用區的 backend 不接控制器、不記 denial，這裡讀不到「剛才被擋下的是哪個 backend」。
+ *
+ * **保留清單那一條是同一個理由**（[#2078](https://github.com/DemianLi/nexus-agent/issues/2078)）：舊 thread 的可寫根就是 `--workspace`，根目錄的指示檔與
+ * 技能來源不論模式、不認領 grant 都寫不進去（#1960，`apps/harness/src/shared-reserved-writes.ts`），核准了也不會成功，所以同樣判在加寬之前。
+ * 判斷問 fence 本身（{@link EscalationTargets.reservedReason}），跟擋變更的是同一份規則。
  *
  * 沒提供核准管道那一條是 dsh 的「no approval service is composed」：**讀不到就當作沒有人可問**，不像
  * `ask_user_question` 退到 `{ kind: 'human' }`。dsh 的 `cancelled` 在我們這側**沒有對應物**（`approval.ts`
@@ -72,7 +83,7 @@
  *
  * **subagent 拿不到 grant**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：子代理的升級在本體裡
  * 被當成 `delegated` 拒掉（上一節）；root 手上那顆也認領不到——控制器在委派裡 `grant` 不做事、`peekGrant`
- * 回空、`recordDenial` 不寫（見 `sandbox-mode.ts`）。本體判「加寬」讀 `controller.current`，在子代理裡就是
+ * 回空、`recordDenial` 不寫（見 `sandbox-mode.ts`）。本體判升不升得到讀 `controller.current`，在子代理裡就是
  * 委派那一刻拍下的那一格。
  *
  * @module
@@ -83,6 +94,7 @@ import { interrupt } from '@langchain/langgraph';
 import type { ApprovalChannel, ApprovalPolicySource, NexusPlugin } from '@nexus/core';
 import {
   APPROVAL_INTERRUPT_KIND,
+  APPROVAL_INVALID_REPLY,
   APPROVAL_POLICY_SERVICE,
   APPROVAL_REJECTED_BY_USER,
   approvalDenied,
@@ -100,34 +112,52 @@ import type { SandboxModeController } from './sandbox-mode.js';
 export const SANDBOX_ESCALATION_TOOL_NAME = 'request_sandbox_escalation';
 
 /**
- * 升級的封閉目標詞彙：任何一次呼叫**可能**升到的每一格。`read-only` 是地板，沒有人升到它。
- *
- * 照 dsh 的 `ESCALATION_TARGETS`：公告時不隨當前模式收窄，理由見模組註解第 1 條。
+ * 升級的封閉目標詞彙：任何一次呼叫**可能**升到的每一格。`read-only` 是地板，沒有人升到它；
+ * `danger-full-access` 不經升級給（模組註解〈升級的上限〉）。公告時不隨當前模式收窄，理由見模組註解第 1 條。
  */
-export const ESCALATION_TARGETS = ['workspace-write', 'danger-full-access'] as const;
+export const ESCALATION_TARGETS = ['workspace-write'] as const;
 
-/** 嚴格加寬表：鍵是這一刻的模式，值是它能升到的那幾格。照 dsh 的 `WIDER_MODES`。 */
-export const WIDER_MODES: Readonly<Record<SandboxMode, readonly SandboxMode[]>> = {
-  'read-only': ['workspace-write', 'danger-full-access'],
-  'workspace-write': ['danger-full-access'],
+/**
+ * 升級可達表：鍵是這一刻的模式，值是從它**經升級**升得到的那幾格。每一格都比鍵嚴格更寬，但比鍵寬的不一定在裡面——
+ * 寬窄本身看 {@link SANDBOX_MODE_WIDTH}。
+ */
+export const ESCALATABLE_MODES: Readonly<Record<SandboxMode, readonly SandboxMode[]>> = {
+  'read-only': ['workspace-write'],
+  'workspace-write': [],
   'danger-full-access': [],
 };
 
 /**
- * `requested` 是不是比 `current` 嚴格更寬。
+ * 沙箱模式的寬窄序，越大越寬。只表達寬窄，不表達升不升得到（那是 {@link ESCALATABLE_MODES}）。
+ * `@nexus/plugin-permission-presets` 自留一份同樣的序，harness 的 `permission-resume-narrow.test.ts` 逐格對照兩邊。
+ */
+export const SANDBOX_MODE_WIDTH: Readonly<Record<SandboxMode, number>> = {
+  'read-only': 0,
+  'workspace-write': 1,
+  'danger-full-access': 2,
+};
+
+/**
+ * `requested` 是不是這一刻能經升級升到的那一格。
  *
  * 收 `unknown` 是防守：本體拿到的參數已經過 schema 的 enum，但這個判準不靠它——一個認不得的
- * 字串在這裡就是「不加寬」。
+ * 字串、或 enum 外的 `danger-full-access`，在這裡都是「升不到」。
  *
  * @param current - 這一刻的模式。
  * @param requested - 模型要的那一格，未驗證。
- * @returns 嚴格更寬時為真。
+ * @returns 升得到時為真。
  */
-export function isStrictlyWider(
-  current: SandboxMode,
-  requested: unknown,
-): requested is SandboxMode {
-  return WIDER_MODES[current].some((mode) => mode === requested);
+export function canEscalate(current: SandboxMode, requested: unknown): requested is SandboxMode {
+  return ESCALATABLE_MODES[current].some((mode) => mode === requested);
+}
+
+/**
+ * 這一刻還有沒有任何一格升得到。沒有的話，被擋下時不接升級指引：叫模型去呼叫一顆必定回拒絕的工具，只是多繞一圈。
+ * @param current - 這一刻的模式。
+ * @returns 至少有一格升得到時為真。
+ */
+export function canEscalateFrom(current: SandboxMode): boolean {
+  return ESCALATABLE_MODES[current].length > 0;
 }
 
 /**
@@ -179,6 +209,15 @@ export function sharedReadOnlyRefusal(sharedPrefix: string): string {
 export function isUnderSharedPrefix(target: string, prefix: string): boolean {
   const virtual = virtualPathOf(target);
   return virtual === prefix || virtual.startsWith(`${prefix}/`);
+}
+
+/**
+ * 目標落在不論模式都寫不進去的地方的那句話。同 {@link sharedReadOnlyRefusal}，升到哪一格都是這一句。
+ * @param reason - fence 給的理由，原樣接上。
+ * @returns 給模型的拒絕。
+ */
+export function reservedTargetRefusal(reason: string): string {
+  return `這個目標不論升到哪一格都寫不進去，所以沒有去問人：${reason}。`;
 }
 
 /** 沒指名檔案的那句話。 */
@@ -284,18 +323,27 @@ interface EscalationVerdict {
   readonly decisions?: readonly { readonly type?: string; readonly message?: string }[];
 }
 
+/** 升級怎樣都不會成功、所以不問人的目標。 */
+export interface EscalationTargets {
+  /** 這條 thread 的唯讀共用區前綴（#1800）；目標落在它底下就不問人。沒有共用區（舊 thread、CLI）時省略。 */
+  readonly sharedPrefix?: string;
+  /** 目標不論模式都寫不進去時回理由（#2078），見 `SandboxPolicyService.reservedReason`。省略＝沒有這種目標。 */
+  readonly reservedReason?: (target: string) => Promise<string | undefined>;
+}
+
 /**
  * @param controller - 這次組裝那一格。
  * @param channel - 這次組裝有沒有人可以按核准；組裝點沒提供時是 `undefined`，當作沒有人可問。
  * @param approvalPolicy - 核准政策的來源（#437），**每次問人之前讀一次**；`never` 就不問。沒有提供時當作 `ask`。
- * @param sharedPrefix - 這條 thread 的唯讀共用區前綴（#1800）；目標落在它底下就不問人。沒有共用區（舊 thread、CLI）時省略。
+ * @param targets - 不問人的目標。
  */
 function createEscalationTool(
   controller: SandboxModeController,
   channel: ApprovalChannel | undefined,
   approvalPolicy: ApprovalPolicySource | undefined,
-  sharedPrefix?: string,
+  targets: EscalationTargets,
 ) {
+  const { sharedPrefix, reservedReason } = targets;
   return tool(
     async (args: z.infer<typeof escalationSchema>, runtime: ToolRuntimeLike) => {
       // 回拒絕，不拋：中斷之後才落定的那幾條出口，拋出去會在 resume 那一輪逸出成整場 run 死掉
@@ -314,10 +362,13 @@ function createEscalationTool(
       if (sharedPrefix !== undefined && isUnderSharedPrefix(target, sharedPrefix)) {
         return refuse(sharedReadOnlyRefusal(sharedPrefix));
       }
+      // 舊 thread 的保留清單（#2078）：也判在加寬之前，fence 不論模式都不讓寫，見模組註解。
+      const reserved = await reservedReason?.(target);
+      if (reserved !== undefined) return refuse(reservedTargetRefusal(reserved));
       // resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次：人看卡片的那段時間裡，
-      // `/sandbox` 可能已經換過格子。
+      // `/permission` 可能已經換過格子。
       const current = controller.current;
-      if (!isStrictlyWider(current, requested)) {
+      if (!canEscalate(current, requested)) {
         return refuse(nonWideningRefusal(requested, current));
       }
       // 子代理不問人升級（#324／#328），見模組註解「子代理怎麼拒」。
@@ -365,6 +416,7 @@ function createEscalationTool(
         return refuse(
           `核准回覆看不懂：${JSON.stringify(answer)}。` +
             '這一格只收 { decisions: [{ type: "approve" | "reject" }] }，所以沒有升級。',
+          approvalDenied(APPROVAL_INVALID_REPLY),
         );
       }
       // 綁的是**這一刻**最近被擋下的那一次。同一則訊息裡另有平行的變更也被擋的話，綁到的
@@ -394,19 +446,19 @@ function createEscalationTool(
  *
  * @param registry - plugin 拿到的註冊表。核准管道從 {@link CHANNEL_SERVICE} 讀（軟相依，讀不到就 fail-closed）。
  * @param controller - 這次組裝那一格，grant 發在它身上、fence 從它身上認領。
- * @param sharedPrefix - 唯讀共用區前綴（#1800），省略＝這條 thread 沒有共用區。
+ * @param targets - 不問人的目標：唯讀共用區前綴（#1800）、寫不進去的目標（#2078）。
  */
 export function registerSandboxEscalation(
   registry: Parameters<NexusPlugin['apply']>[0],
   controller: SandboxModeController,
-  sharedPrefix?: string,
+  targets: EscalationTargets = {},
 ): void {
   registry.tools.register(
     createEscalationTool(
       controller,
       registry.services.get(CHANNEL_SERVICE),
       registry.services.get(APPROVAL_POLICY_SERVICE)?.source,
-      sharedPrefix,
+      targets,
     ),
   );
   controller.enableEscalation(SANDBOX_ESCALATION_HINT);

@@ -49,7 +49,7 @@
 
 - **shadcn＋Tailwind 是基底**，外觀與設計 token 用 **[solid-glass](https://github.com/deeplethe/solid-glass)**（以下稱 SG）：原樣 vendor 在 `apps/web/src/vendor/solid-glass/`，修改寫在後載入、layer 外的覆寫檔，逐條登記在該目錄 README 的「本地修改」（[#1468 的拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q1、Q4、Q9）。**外觀類照 SG，機制類保留**（Q8）；碰到本份 §5、§7、§8 的無障礙門檻時以門檻為準（Q5）。元件目前仍是 registry 的 Radix 版，換成 Base UI 在地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497) 第 ③ 步。
 - **視覺、設計 token、動效的數值以 SG 為準**；**[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 只當元件多樣性與交互模式的參考**，用在 SG 沒有定義的元件或互動上（例如 #1497 第 ⑤ 步的設計稿）（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)；原本是「模仿對象：元件多樣性、交互體驗、動效呈現」）。最後長成我們自己的系統風格。
-- **dsh 在 UI/UX 上最多只參考元件多樣性**，不寫「偏離 dsh」的標註（[AGENTS.md「技術實現標準」](../AGENTS.md)）。先前以「照 dsh」寫下的 UI 行為（markdown 自建、工具依名分類、1024 收側欄、觸控 44px、核准獨立成卡）照舊，只是依據不再是 dsh。
+- **dsh 在 UI/UX 上最多只參考元件多樣性**，不寫對照 dsh 的紀錄（[AGENTS.md「技術實現標準」](../AGENTS.md)）。先前以「照 dsh」寫下的 UI 行為（markdown 自建、工具依名分類、1024 收側欄、觸控 44px、核准獨立成卡）照舊，只是依據不再是 dsh。
 - **動到執行語意的仍照 dsh**，唯一寫明的例外是提問面板的 ❌（§4.3）。
 - **完全內網**：字型、動效 CSS 等資源一律打包進本地，執行期不打外部 CDN。
 - Libraries.dev 讀的是 `b300ff8`（inventory 調研時 `44fef85`）；標題字 Saans 沒附授權，**不拿**。
@@ -79,7 +79,7 @@
 | 2 | 手機抽屜 | shadcn `sheet` | — |
 | 3 | 主題切換 | 自建（§6） | — |
 | 6 | 會話列表 | shadcn `SidebarMenu*` | `thread-list.tsx` 留邏輯、換外殼 |
-| 7 | 空白狀態 hero | 自建（shadcn 基礎件＋breathing orb） | — |
+| 7 | 空白狀態 hero | SG `Empty`（靜態圖示＋標題＋一句說明，#1695） | — |
 | 8 | 會話標頭 | 自建；標題規則在 `lib/thread-title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `App.tsx` |
 | 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
 | 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`lib/max-tokens-view.ts`，#608） | `transcript.tsx` 留（歸屬、狀態字面） |
@@ -143,7 +143,7 @@
   - **列**：會話寫標題，別的專案後面加目錄名；子代理寫「屬於 <母會話標題>」，不畫 id。候選內容（列全部、同工作區排前、最多 50、不搜內文）是伺服器的事，照 dsh。
   - **插入**：選定就是把 `@…` 那一段換成伺服器編好的 `@[標題](nexus-session:…)` 加一個空白，**原樣插、不自己改寫**（Q2：第一版不做標籤）；Tab 對會話也是選定，沒有往下鑽。草稿、送出、排隊、重新編輯看到的都是這段完整文字；選好的整段貼著游標時不算在打 `@`。
   - **還沒被領走的話仍是原文**（`inbox` 的 `items`、`nextStep`）：停靠列的預覽與待送插話泡泡把引用換成 `@標題` 再畫（`mentionDisplayText`），編輯框拿原文。
-  - **被領走之後**（Q3）：伺服器已把引用換成 `@標題` 並帶 `references`（即時走 `inbox` 的 `claimed`，歷史走人話 `message-start`），泡泡把那一段畫成一小塊 `@標題`，可見文字就是 `@標題`。**清單上有的會話（同專案的主會話）點了切過去**，別的專案與子代理只顯示：serve 綁在一個工作目錄上，今天切不過去。
+  - **被領走之後**（Q3）：伺服器已把引用換成 `@標題` 並帶 `references`（即時走 `inbox` 的 `claimed`，歷史走人話 `message-start`），泡泡把那一段畫成引用 `@標題`，可見文字就是 `@標題`：點得開的是一直帶 brand 色底線的連結，點不開的是粗一點的字（#1695 X6-C）。**清單上有的會話（同專案的主會話）點了切過去**，別的專案與子代理只顯示：serve 綁在一個工作目錄上，今天切不過去。
   - **被拒絕**（引用太多、引用自己、網址壞、沒接落盤）：伺服器回 `invalid_argument`，訊息開頭帶 `SESSION_REFERENCE_*`；送出時走原本的「這一句沒送出去」提示並把草稿放回去，改排隊裡的那一件走停靠列的錯誤提示。
 - **還沒做**：skill 來源；標籤（chip 進輸入框，Q2 留到之後檔案與會話一起做）。
 
@@ -153,20 +153,20 @@
 
 **顏色**
 - 全部 oklch，**語意 token 直接寫值**，不另建色板層；registry 帶進來的 `--sidebar-*` 由 `hsl()` 轉掉。
-- `--primary` **無彩**。`--brand`／`--brand-soft` **只**用在連結、info、核准與提問面板的邊框光；error 沿用 `--destructive`。
-- **帶色相的 token 分兩種來源**：
-  - **SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:302-304`）、`--success`（`:199`、`:308`）、`--destructive`、`--status-*`（`:198`、`:307` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。
-  - **nexus 另加、SG 沒有的**：`--brand-soft`（`--brand` 加 alpha）、`--warning`、`--info`。warning／info 的色相與彩度沿用上一版產生器解出來的值，明度對 SG 的底色重解（`apps/web/tokengen/generate.mjs`）。
-- 原型另加的名字（SG 也沒有）：`--stage`、`--chip`／`--chip-hover`／`--chip-pressed`、`--card-hairline`、`--material-shadow`／`--menu-shadow`／`--card-shadow`、`--beam-*`。
-- **nexus 獨有的顏色**（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，同 vendor README「另外新增」）與原型另加的陰影名字，在 #1497 第 ⑥ 步刪掉，自製元件改用 SG 有的 token（Q11）；「需要你處理」那一色改對到 SG 的 `--status-interrupted`（Q14）。刪之前它們的值照下面的目標解，亮暗都要過。
+- `--primary` **無彩**。`--brand` **只**用在連結、info、核准與提問面板的邊框光；error 沿用 `--destructive`。
+- **帶色相的 token 都是 SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:302-304`）、`--success`（`:199`、`:308`）、`--destructive`、`--status-*`（`:198`、`:307` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。用量環 70% 以下是 `--status-done`（vendor README 本地修改第 37 條）。
+- 原型另加的名字（SG 也沒有）：`--beam-*`。
+- **「需要你處理」那一色是 SG 的 `--status-interrupted`**（Q14）：產生器另外要求它疊在 stage 上也過 4.5。
+- **可點的小面用 SG 的面**（#1689）：平常 `--muted`；滑鼠移上去與按著同一階，照 SG ghost 是 `--hover`，字換成 foreground；選中是 SG 的 `.glass-chosen`。
+- **內層底 stage 是 SG 的 `--hover-faint`**（#1689）：加一圈 `--border` 的內框線（`inset 0 0 0 1px`），不用 `.glass-panel`。疊在卡片上的鑑別度不低於原型的 stage（1.05），亮暗差照表面的 ≤ 0.05。畫在上面的字（foreground、次要字、brand、link、destructive、success、status-interrupted）疊在每一疊頁面與每一疊卡片上都過 4.5：產生器對 brand、link、destructive、success、status-interrupted 套這條（解出的值見 `apps/web/tokengen/token-table.md`），foreground 與次要字由 `tokens-contrast.test.ts` 檢查。提問面板裡釘在捲動區底部的那一列要不透明，畫成 hover-faint 疊卡片、疊底色的同一疊。
 
 **對比度目標**（WCAG 2.x；產生器用 colorjs.io 逐對解，不再用 Leonardo）
 - **輸入是 SG 的值**（Q10）：色相、彩度、alpha 照 SG，彩度收進 sRGB，只解明度（步長 0.001）；SG 原值已達標的原樣留。唯一的例外是暗色 `--destructive`，照 SG 原值、不收進 sRGB。逐值的 SG 原值與產物在 `apps/web/tokengen/token-table.md`。
 - 文字 ≥ 4.5，非文字 ≥ 3（SC 1.4.11）；狀態色對**底色** **5.2**（產生器的解目標，讓暗色狀態色對卡片仍過 4.5；SG 的 `--status-*` 也套）；brand 在亮色底色上 ≥ 4.5（Q5）。
-- **表面的亮暗鑑別度**：卡片、細線、側欄、chip 這些面對底色的對比，亮色與暗色相差 ≤ 0.05；不到就只調亮色的明度（Q5）。表面只疊在底色上算；文字與狀態色的對比則疊在每一個底色與漸層停點上算，取最差的。
+- **表面的亮暗鑑別度**：卡片、細線、側欄、`--muted` 這些面對底色的對比，亮色與暗色相差 ≤ 0.05；不到就只調亮色的明度（Q5）。表面只疊在底色上算；文字與狀態色的對比則疊在每一個底色與漸層停點上算，取最差的。
 - **不透明的退路一樣要過**：`prefers-reduced-transparency: reduce` 與 `<html data-glass="opaque">` 下的面換成不透明，對比與表面差照同一組目標量（Q7）。
 - **亮暗鑑別度一樣**：兩主題共用一組目標，取兩主題較強者；起算點是原型 `eb800a1` 認可的對比度。
-- **不准比 develop 差**：換主題前已達標的對要維持達標。原本沒達標的 chip 三階那幾對（次要字與 `warning` 疊在 chip-hover／chip-pressed 上）2026-10-19 已補到 4.5，現在沒有例外。
+- **不准比 develop 差**：換主題前已達標的對要維持達標。可點的小面上的字（`--muted` 上的次要字、`--hover` 上的 foreground）與 `status-interrupted` 都過 4.5，沒有例外。
 - 不用 APCA（2023-07 已從 WCAG 3 草稿移除）。人工抽驗用 Vispero Colour Contrast Analyser，CI 用 colorjs.io 重算（§11）。
 
 **形狀**
@@ -213,7 +213,7 @@
 - 進出場照 SG 的機制（#1687）：`--animate-in`／`--animate-out` 讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。`@theme` **不用 `inline`**（inline 會讓 reduced-motion 換掉的變數沒人讀）；值逐元素宣告在 `styles/motion.css` 的 `*` 上，因為只宣告在 `:root` 的話 `var(--tw-duration)` 在 `:root` 就解掉了（vendor README 本地修改第 81 條，`guard/` 與 `check-built-css` 量）。
 - 進場 fill-mode `backwards`，退場 `both`。
 
-**token**：SG 沒有定義任何時長、曲線或 `--animate-*` 變數，它的時長寫死在自己的規則裡（transition 150ms ease-out `:982-987`；進場 `sg-float-in` 220ms、`sg-fade-in` 240ms `:1297-1301`；持續動畫 1.2s／2.4s／1.6s `:1259-1293`），元件則自己寫 `duration-*`。進出場與展開收合 #1687 已換成 SG 的機制；下面這組 nexus 的 token 還有消費者或待清，**留給 ⑥（#1689）一起收**（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。時長、曲線、位移、縮放、模糊、resize 整組原本照 Libraries.dev（時長 40／80／150／250／350／400／500，位移 4／6／8／12／30，縮放 .96–.99，模糊 2／3／8，resize 300），外加 `--duration-press` 120、`--duration-overlay` 200、`--auto-advance-delay` 200。
+**數值**：SG 沒有定義任何時長、曲線或 `--animate-*` 變數，它的時長寫死在自己的規則裡（transition 150ms ease-out `:982-987`；進場 `sg-float-in` 220ms、`sg-fade-in` 240ms `:1297-1301`；持續動畫 1.2s／2.4s／1.6s `:1259-1293`），元件則自己寫 `duration-*`。nexus 照這個寫法（#1827 D21）：元件只用 Tailwind 的 `duration-*` 級距，不寫任意值；`motion.css` 直接寫數字，不設動效 token。那裡的時長、位移、縮放、resize 取自 Libraries.dev（時長 40／150／250／350，位移 4／8，縮放 .96／.97／.99，resize 300），外加按壓 120，曲線是 `cubic-bezier(0.22, 1, 0.36, 1)`。
 
 **模式清單封閉**：浮層彈出、對話框、側滑抽屜、換內容、展開收合、進場、進度、按壓、持續狀態。清單外沒有動效，只留 100–150ms 顏色過渡。
 
@@ -240,7 +240,8 @@
 - **按壓 .96（120ms）只給實心主按鈕與送出鍵**。
 - **stagger 40ms 只給提問選項**（前 6 個）。
 - **不動的**：載入歷史與切換對話、串流逐字（只有游標閃）；sonner 用它自帶的動畫與 reduced-motion（全關，跟我們「留 150 淡入」不同，已知差異）。
-- **orb** 只剩空白 hero 的 breathing；狀態列的 working 隨 #1684 換成 SG 的 `StatusGlyph`（語意是「這一輪正在跑」，所以待命畫面不換）。`StatusGlyph` 在 reduced-motion 下停在每個圖形的起始姿勢，換圖形時 450ms 的 morph 也不跑。
+- **沒有 orb**：狀態列執行中是 SG 的 `StatusGlyph`（#1684，語意是「這一輪正在跑」）；空白 hero 是 SG 的 `Empty`，圖示不動（#1695）。`StatusGlyph` 在 reduced-motion 下停在每個圖形的起始姿勢，換圖形時 450ms 的 morph 也不跑。
+- **「還在等」是 SG 的 `DotLoader`**（三點依序閃）：輪尾的重試提示、往前翻的讀取中（#1695）。reduced-motion 下停在全亮。
 
 **reduced-motion**（不是全關；實作寫 `@media (prefers-reduced-motion: reduce)`，原型的 `data-reduce-motion` 屬性只是模擬）
 - 位移、縮放、模糊拿掉，留 ≤ 150 的透明度；尺寸瞬間到位；按壓不縮；循環停一格；**狀態不能只靠動效表達**。
@@ -285,7 +286,7 @@
 - 換題：進度條 `aria-live` 關掉，legend 前放 sr-only「第 2 題，共 3 題」。
 - AI 回覆：`role="log"` 設 `aria-live="off"`，串流不逐字唸，結束時把全文丟進 polite 區唸一次。
 - 往前翻讀完：另一格 polite 唸「載入了較早的 N 則。」（N＝人打的字與模型的回覆，同 wire 一頁的單位），**不唸接上來的內容**，也不跟上一條共用一格（2026-09-25，inventory 列 9）。
-- 工具卡狀態變化不唸。狀態列的 glyph（SG `StatusGlyph`）與空白 hero 的 orb 旁已有同義文字時 `aria-hidden`。glyph 是裝飾，非文字對比以裝飾性豁免（WCAG 1.4.11 只管辨識內容所需的圖形；這一刻在做什麼由狀態列的字與工具列的字講，不靠 glyph）。
+- 工具卡狀態變化不唸。狀態列的 glyph（SG `StatusGlyph`）旁已有同義文字時 `aria-hidden`；`DotLoader` 本身沒有名稱，旁邊要有同義的字，或者放在停用（`aria-disabled`）的鈕裡，由停用狀態表達讀取中（#2009，[PR #2134 審查 (c)](https://github.com/DemianLi/nexus-agent/pull/2134#issuecomment-6503528626)）。glyph 是裝飾，非文字對比以裝飾性豁免（WCAG 1.4.11 只管辨識內容所需的圖形；這一刻在做什麼由狀態列的字與工具列的字講，不靠 glyph）。
 - **工具卡與工具段**（#1682，SG 的 `StepRow`／`StepGroup`）：
   - 列是一顆帶 `aria-expanded` 的按鈕，名稱＝標題＋摘要＋列尾看得見的字（工具名、計數、歸屬、狀態字）。狀態一定有字（Badge），不靠顏色、圖示或動效。
   - 群組按鈕的名稱＝「N 個工具呼叫，讀取 ×3、寫入檔案」（段裡只收完成的工具）。摘要是純字串、會被報讀，用「，」「、」接，不用「·」。段裡有寫檔／改檔時名稱後面接整段的合計「新增 N 行，刪除 M 行」（#1685，看得見的「+N −M」`aria-hidden`）。

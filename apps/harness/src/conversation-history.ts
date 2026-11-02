@@ -95,6 +95,7 @@ import {
   UNFINISHED_TOOL_TEXT,
   WORKSPACE_CHANGES,
   mentionField,
+  turnFailureText,
 } from '@nexus/wire';
 import type {
   AttachmentRef,
@@ -107,6 +108,7 @@ import type {
   SubagentMentionRef,
   SubagentSettleReason,
   TokenUsageTotals,
+  TurnAbortCause,
   UnreplayableReason,
 } from '@nexus/core';
 import {
@@ -329,16 +331,25 @@ export function deliverablesData(
  * 歷史沒有送出佇列，所以另有這一顆，`id` 是 `history-<日誌 seq>`。
  * @param id - 那一格 entry 的 `id`。
  * @param reason - 怎麼收的（日誌上 `source`／`turn/start` 記的，#884）；舊日誌沒有就不給。
+ * @param cause - 被中止時為什麼停（同一處記的，#1847）；舊日誌沒有就不給。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `SettleNoticePayload`。
  */
 export function settleNoticeData(
   id: string,
   reason?: SubagentSettleReason,
+  cause?: TurnAbortCause,
 ): {
   readonly name: typeof SETTLE_NOTICE;
   readonly payload: SettleNoticePayload;
 } {
-  return { name: SETTLE_NOTICE, payload: { id, ...(reason === undefined ? {} : { reason }) } };
+  return {
+    name: SETTLE_NOTICE,
+    payload: {
+      id,
+      ...(reason === undefined ? {} : { reason }),
+      ...(cause === undefined ? {} : { cause }),
+    },
+  };
 }
 
 /**
@@ -417,6 +428,14 @@ export function contextMeasureData(measure: SessionEventMap['context/measure']):
       ...(measure.messagesCompactable !== undefined && {
         messagesCompactable: measure.messagesCompactable,
       }),
+      // 沒有就不出這一格（#1571 以前的日誌）：缺席＝沒量，不是 `0`。
+      ...(measure.breakdown !== undefined && {
+        breakdown: {
+          systemTokens: measure.breakdown.systemTokens,
+          toolsTokens: measure.breakdown.toolsTokens,
+          messageTokens: measure.breakdown.messageTokens,
+        },
+      }),
     },
   };
 }
@@ -487,8 +506,12 @@ export function inboxData(
       id,
       text: shown(text, source),
       source:
-        source.kind === 'subagent-settled' && source.reason !== undefined
-          ? { kind: source.kind, reason: source.reason }
+        source.kind === 'subagent-settled'
+          ? {
+              kind: source.kind,
+              ...(source.reason === undefined ? {} : { reason: source.reason }),
+              ...(source.cause === undefined ? {} : { cause: source.cause }),
+            }
           : { kind: source.kind },
       ...attachmentsField(attachments),
       ...mentionField(mention),
@@ -514,6 +537,7 @@ export function inboxData(
               source: {
                 kind: source.kind,
                 ...(source.reason === undefined ? {} : { reason: source.reason }),
+                ...(source.cause === undefined ? {} : { cause: source.cause }),
               },
             }),
     ...(references === undefined || references.length === 0
@@ -943,7 +967,10 @@ export function historyFrames(
         turnOpen = true;
         if (event.data.kind === 'subagent-settled') {
           frames.push(
-            customFrame(event.time, settleNoticeData(`history-${event.seq}`, event.data.reason)),
+            customFrame(
+              event.time,
+              settleNoticeData(`history-${event.seq}`, event.data.reason, event.data.cause),
+            ),
           );
         }
         // 子代理寫來的話叫醒的一輪（#863）：即時由 `claimed` 長「某某說」，歷史照即時。
@@ -984,7 +1011,11 @@ export function historyFrames(
           frames.push(
             customFrame(
               event.time,
-              settleNoticeData(`history-${event.seq}`, event.data.source.reason),
+              settleNoticeData(
+                `history-${event.seq}`,
+                event.data.source.reason,
+                event.data.source.cause,
+              ),
             ),
           );
         }
@@ -1152,7 +1183,11 @@ export function historyFrames(
         }
         break;
       case 'turn/failed':
-        close(event.time, { event: 'failed', error: event.data.message });
+        close(event.time, {
+          event: 'failed',
+          error: turnFailureText(event.data.message, event.data.error?.code),
+          ...(event.data.error !== undefined && { code: event.data.error.code }),
+        });
         break;
       case 'session/end-seed':
         // 舊檔（#721 之前）：上一個行程死在一輪中間，那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。

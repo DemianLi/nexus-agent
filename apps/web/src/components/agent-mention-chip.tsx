@@ -29,7 +29,7 @@ export function AgentMentionChip({
       <button
         type="button"
         aria-label={`取消委派給 ${agent.name}`}
-        className="text-muted-foreground hover:text-foreground flex size-5 shrink-0 items-center justify-center rounded-full [&_svg]:size-3"
+        className="text-muted-foreground hover:text-foreground flex size-5 shrink-0 items-center justify-center rounded-sm [&_svg]:size-3"
         onClick={onRemove}
       >
         <X aria-hidden />

@@ -163,7 +163,14 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
               'mcp__srv__cite_sources',
               ...BIG_TOOLS,
             ]
-          : ['mcp__srv__read_env', 'mcp__srv__fetch_url', 'mcp__srv__cite_sources', ...BIG_TOOLS],
+          : [
+              'mcp__srv__read_env',
+              'mcp__srv__fetch_url',
+              'mcp__srv__cite_sources',
+              'mcp__srv__only_image',
+              'mcp__srv__two_texts',
+              ...BIG_TOOLS,
+            ],
       );
     });
   });
@@ -202,8 +209,7 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         args: {},
       })) as ToolMessage;
       expect(message.content).toEqual([
-        { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
-        { type: 'text', text: '畫面之前' },
+        { type: 'text', text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n畫面之前` },
         { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
         { type: 'text', text: '畫面之後' },
       ]);
@@ -219,8 +225,7 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         args: {},
       })) as ToolMessage;
       expect(message.content).toEqual([
-        { type: 'text', text: EXTERNAL_MCP_CONTENT_NOTICE },
-        { type: 'text', text: CITE_TEXT },
+        { type: 'text', text: `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n${CITE_TEXT}` },
         ...CITE_LINKS.map((link) => ({
           type: 'text',
           text: `Resource link: ${link.name} (${link.uri})`,
@@ -364,7 +369,7 @@ describe.each(TARGETS.filter((target) => target.transport === 'http'))(
         expect(modelToolNames(registry)).toEqual([]);
         expect(registry.logger.warnings()).toHaveLength(1);
         expect(registry.logger.warnings()[0]?.message).toMatch(
-          /^MCP 伺服器 "srv" 連不上、列不出工具或工具註冊不上/u,
+          /^MCP 伺服器 "srv" 套不上沙箱、連不上、列不出工具或工具註冊不上/u,
         );
         // 它真的走到了 tools/list（而不是更早就連不上）：失敗是我們注入在這個方法上的。
         expect(http.requests.some((request) => request.rpcMethods.includes('tools/list'))).toBe(
@@ -433,7 +438,9 @@ describe('HTTP 連不上', () => {
     try {
       expect(modelToolNames(registry)).toEqual([]);
       expect(registry.logger.warnings()).toHaveLength(1);
-      expect(registry.logger.warnings()[0]?.message).toMatch(/^MCP 伺服器 "srv" 連不上/u);
+      expect(registry.logger.warnings()[0]?.message).toMatch(
+        /^MCP 伺服器 "srv" 套不上沙箱、連不上/u,
+      );
     } finally {
       await dispose();
     }

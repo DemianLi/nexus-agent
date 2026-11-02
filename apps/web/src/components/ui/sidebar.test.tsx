@@ -20,8 +20,8 @@ function State() {
 }
 
 /**
- * 第 51 條（`patches/0011-sidebar-chinese-strings.patch`）：Rail 的名稱與 title 是中文（§8）。產品沒有用 Rail，`App.test.tsx`
- * 量不到它；Trigger 的「開關側欄」、抽屜的「側欄」由 `App.test.tsx` 的手機抽屜那幾條量。
+ * 第 51 條（`patches/0011-sidebar-chinese-strings.patch`）：Rail 的名稱與 title 是中文（§8）。產品沒有用 Rail，`App*.test.tsx`
+ * 量不到它；Trigger 的「開關側欄」、抽屜的「側欄」由 `App.threads.test.tsx` 的手機抽屜那幾條量。
  */
 test('Rail 的報讀名稱與 title 是「開關側欄」', () => {
   render(

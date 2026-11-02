@@ -17,6 +17,7 @@ import {
   User,
   Wrench,
 } from 'lucide-react';
+import type { ToolEntry } from '@nexus/wire';
 import { memo } from 'react';
 
 import { CompactionRow } from '@/components/compaction-row';
@@ -33,9 +34,10 @@ import { EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/lib/plan-review';
 import { reasoningRunning } from '@/lib/reasoning-view';
 import { ENDING_LABEL, TRACE_TARGET_MISSING_TEXT, sameRow } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
+import { abortedToolLabel } from '@/lib/tool-aborted';
 import {
   SIGNAL_LABEL,
-  approvalCodeText,
+  toolCodeText,
   clockText,
   durationText,
   failureReasonText,
@@ -63,33 +65,46 @@ function ToolDetail({
   );
 }
 
+function interruptedOf(entry: ToolEntry): string | undefined {
+  return entry.status === 'failed' ? abortedToolLabel(entry.name, entry.errorCode) : undefined;
+}
+
 function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
   const { entry, outcome } = row;
-  const approvalCode =
-    entry.errorCode === undefined ? undefined : approvalCodeText(entry.errorCode);
+  const codeText = entry.errorCode === undefined ? undefined : toolCodeText(entry.errorCode);
+  const interrupted = interruptedOf(entry);
   return (
     <>
-      <span className={entry.status === 'failed' ? 'text-destructive' : undefined}>
-        {TOOL_STATUS_LABEL[entry.status]}
+      <span
+        className={
+          entry.status === 'failed' && interrupted === undefined ? 'text-destructive' : undefined
+        }
+      >
+        {interrupted ?? TOOL_STATUS_LABEL[entry.status]}
       </span>
-      {row.time !== undefined && (
-        <span data-testid="trace-time">
-          {clockText(row.time)}
-          {row.durationMs !== undefined && ` · ${durationText(row.durationMs)}`}
-        </span>
-      )}
       {entry.errorCode !== undefined && (
         <code className="font-mono" data-testid="trace-error-code">
           {entry.errorCode}
         </code>
       )}
-      {approvalCode !== undefined && <span data-testid="trace-approval-code">{approvalCode}</span>}
+      {codeText !== undefined && <span data-testid="trace-code-text">{codeText}</span>}
       {outcome !== undefined && (
-        <span className="bg-chip rounded-full px-2 py-0.5" data-testid="trace-plan-outcome">
+        <span className="bg-muted rounded-4xl px-2 py-0.5" data-testid="trace-plan-outcome">
           {PLAN_OUTCOME_LABEL[outcome]}
         </span>
       )}
     </>
+  );
+}
+
+/** 工具列的時刻與耗時：收進展開區（#1690 T3）。 */
+function toolTime(row: Extract<TraceRow, { kind: 'tool' }>) {
+  if (row.time === undefined) return undefined;
+  return (
+    <span data-testid="trace-time">
+      {clockText(row.time)}
+      {row.durationMs !== undefined && ` · ${durationText(row.durationMs)}`}
+    </span>
   );
 }
 
@@ -137,13 +152,19 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
             summary: row.summary,
             attribution: row.attribution,
             meta: toolMeta(row),
-            ...(row.entry.status === 'failed' ? { tone: 'danger' as const } : {}),
+            time: toolTime(row),
+            ...(row.entry.status === 'failed' && interruptedOf(row.entry) === undefined
+              ? { tone: 'danger' as const }
+              : {}),
           }}
         >
           <ToolDetail row={row} names={names} />
           {row.subagentRunId !== undefined && (
             <SnapshotBlock testId="trace-subagent-block" title={SUBAGENT_CALLS_TITLE}>
-              <SubagentCalls runId={row.subagentRunId} />
+              <SubagentCalls
+                runId={row.subagentRunId}
+                parentCutByClock={row.parentCutByClock === true}
+              />
             </SnapshotBlock>
           )}
         </ExpandableLine>
@@ -157,7 +178,7 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
           label={`重試 ${row.retry}/${row.maxRetries}`}
           summary={failureReasonText(row.code, row.status)}
           code={row.code}
-          meta={
+          time={
             <span data-testid="trace-time">
               {clockText(row.time)} · 等了 {durationText(row.waitedMs)}
             </span>
@@ -170,7 +191,7 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
           icon={row.signal === 'reminder' ? Repeat : Info}
           label={SIGNAL_LABEL[row.signal]}
           summary={row.summary}
-          meta={<span data-testid="trace-time">{clockText(row.time)}</span>}
+          time={<span data-testid="trace-time">{clockText(row.time)}</span>}
         />
       );
     case 'decision':
@@ -226,7 +247,7 @@ export const TraceRowView = memo(
               type="button"
               variant="ghost"
               size="icon"
-              className="text-muted-foreground size-11 shrink-0 rounded-full lg:size-9"
+              className="text-muted-foreground size-11 shrink-0 lg:size-9"
               aria-label={`${TRACE_LOCATE_LABEL}：${rowLabel(row)}`}
               title={TRACE_LOCATE_LABEL}
               data-testid="trace-locate"

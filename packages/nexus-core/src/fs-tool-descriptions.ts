@@ -1,7 +1,7 @@
 /**
- * 基座 `read_file` 的描述，換成講得出我們實際預設行數的那一份（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。
+ * 基座檔案工具的描述，換成講得出我們實際行為的那一份（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)、[#2286](https://github.com/DemianLi/nexus-agent/issues/2286)）。
  *
- * ## 只換 `read_file` 一顆
+ * ## 換哪幾顆：`read_file`，以及搜尋在場時的 `grep`、`glob`
  *
  * 基座 `read_file` 的描述寫死「By default, it reads up to 100 lines」（`READ_FILE_TOOL_DESCRIPTION`，`deepagents@1.13.1`，
  * `dist/langsmith-zm0ILQsV.js:1951-1963`），而我們的預設一頁是 {@link READ_LIMIT} 行（照 dsh，#602）；寫錯的描述會讓模型照 100 行規劃分頁。
@@ -10,6 +10,10 @@
  * （#1776 補正）：`createFilesystemMiddleware` 的 `customToolDescriptions` 認 `ls`、`read_file`、`write_file`、`edit_file`、`delete`、`glob`、
  * `grep`、`execute`，每個工具建立時把 `customDescription || 基座預設` 當 `description`（`dist/langsmith-zm0ILQsV.js:2363-2407`）。所以描述現在由這裡換。
  *
+ * **講行號的那一句也換**（[#2286](https://github.com/DemianLi/nexus-agent/issues/2286)）：基座寫行號後面是「two spaces」、實際是 tab（`formatContentWithLineNumbers`，
+ * `dist/langsmith-zm0ILQsV.js:155`），「Never include …」也只講 `when editing`，`write_file` 帶著前綴不會出錯，只會靜靜把檔案寫壞。
+ * 這只是描述更正：寫入時沒有檢查，模型照抄不保證逐字，根因追在 [#2289](https://github.com/DemianLi/nexus-agent/issues/2289)。
+ *
  * **`write_file`／`edit_file` 的描述不換。** 先讀後改的規則照 dsh 寫在系統提示詞的 section（`observation.ts` 的 {@link observationGuidance}），
  * 不是工具描述；dsh 的工具描述只有一句 UTF-8 文字檔的說明。
  *
@@ -17,11 +21,11 @@
  *
  * 描述講的是 middleware 的行為，middleware 沒掛，描述就是在說謊：`read_file` 的「預設 {@link READ_LIMIT} 行」只在
  * {@link READ_CONTINUATION_MIDDLEWARE_NAME} 在場時寫（預設的 `limit` 是它的 `wrapToolCall` 填的）。呼叫端傳這次組裝（或這個子代理）
- * 實際會掛的 middleware 清單進來，這裡看名字。
+ * 實際會掛的 middleware 清單進來，這裡看名字。行號那一句跟著同一個開關換：不開時整份描述維持基座原文，逐位元組相同。
  *
  * ## 從基座的原文改，不是整段重寫
  *
- * 描述由基座的原文換掉**一句**：升版後基座改了那一句，{@link swap} 找不到它就拋，不會悄悄變成兩套說法並存。
+ * 描述由基座的原文換掉指定的片段：升版後基座改了其中任何一段，{@link swap} 找不到就拋，不會悄悄變成兩套說法並存。
  * 原文從 `createFilesystemMiddleware` 建出來的工具取（不碰 backend，建工具時不會呼叫它），每個進程算一次。
  *
  * ## `read_file` 的 JSON schema 換不掉，留在 `read-continuation.ts`
@@ -52,6 +56,10 @@ export type FilesystemToolDescriptions = Readonly<
 const BASE_GREP_LITERAL_HEAD_END = '\n\nReturns matching files';
 const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across files (NOT regex).';
 
+/** `grep`、`glob` 都不跟連結（#2193），模型要知道搜不到不等於沒有。 */
+const SYMLINKS_NOT_SEARCHED =
+  'Directory searches skip symbolic links; `read_file` can still open a link that stays inside the workspace.';
+
 /**
  * 換進去的正規式說法：第一句**照 dsh 原句**（`grep.ts:286`），後面接一句 `/conversation_history/` 的例外。
  *
@@ -67,7 +75,8 @@ const BASE_GREP_LITERAL_HEAD_START = 'Search for a LITERAL text pattern across f
  */
 export const GREP_REGEXP_HEAD =
   'Search file contents with a ripgrep regular expression.\n\n' +
-  'Files under `/conversation_history/` are the exception: they are searched as literal text.';
+  'Files under `/conversation_history/` are the exception: they are searched as literal text.\n\n' +
+  SYMLINKS_NOT_SEARCHED;
 
 /** 基座 `glob` 描述的第一句（`GLOB_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js`）。後面講 `*`、`**`、`?` 的一段原樣留著。 */
 const BASE_GLOB_HEAD = 'Find files matching a glob pattern, returning absolute paths.';
@@ -79,10 +88,20 @@ const BASE_GLOB_HEAD = 'Find files matching a glob pattern, returning absolute p
  */
 export const GLOB_HEAD =
   'Find files, not directories, whose paths match a glob pattern, including hidden and ignored files. ' +
-  'Returns absolute paths in modification-time order, oldest first.';
+  'Returns absolute paths in modification-time order, oldest first. ' +
+  SYMLINKS_NOT_SEARCHED;
 
 /** 基座 `read_file` 描述裡講預設行數的那一句（`READ_FILE_TOOL_DESCRIPTION`，`dist/langsmith-zm0ILQsV.js:1951-1963`）。 */
 const BASE_READ_DEFAULT = 'By default, it reads up to 100 lines';
+
+/** 基座 `read_file` 描述裡講行號格式的那一段。 */
+const BASE_READ_LINE_PREFIX =
+  'then two spaces, then the source line. Never include these line-number prefixes when editing.';
+
+/** 換進去的說法：分隔符照實際輸出，禁止範圍涵蓋 `write_file` 的 `content` 與 `edit_file` 的兩個字串參數。 */
+const READ_LINE_PREFIX =
+  'then a tab, then the source line. The number and the tab are not file content: ' +
+  'never include them in `write_file` content or in `edit_file` old_string or new_string.';
 
 /** 基座檔案工具的原描述，每個進程算一次。 */
 let baseDescriptions: Readonly<Record<string, string>> | undefined;
@@ -97,15 +116,16 @@ function baseDescriptionsOf(): Readonly<Record<string, string>> {
   return baseDescriptions;
 }
 
-/** 在基座的原描述裡把 `from` 換成 `to`；找不到就拋，讓升版時的改動顯形。 */
-function swap(tool: string, from: string, to: string): string {
-  const description = baseDescriptionsOf()[tool];
-  if (description === undefined || !description.includes(from)) {
-    throw new Error(
-      `deepagents 的 ${tool} 工具描述不是預期的樣子，找不到「${from}」：升版後要對一次 fs-tool-descriptions.ts`,
-    );
-  }
-  return description.replace(from, to);
+/** 在基座的原描述裡逐一換掉 `[from, to]`；找不到就拋，讓升版時的改動顯形。 */
+function swap(tool: string, ...swaps: readonly (readonly [string, string])[]): string {
+  return swaps.reduce((description, [from, to]) => {
+    if (!description.includes(from)) {
+      throw new Error(
+        `deepagents 的 ${tool} 工具描述不是預期的樣子，找不到「${from}」：升版後要對一次 fs-tool-descriptions.ts`,
+      );
+    }
+    return description.replace(from, to);
+  }, baseDescriptionsOf()[tool] ?? '');
 }
 
 /** `grep` 的描述：把基座講字面的開頭換成講正規式的。找不到基座的開頭就拋，同 {@link swap}。 */
@@ -143,13 +163,13 @@ export function filesystemToolDescriptions(
     ...(readFile && {
       read_file: swap(
         'read_file',
-        BASE_READ_DEFAULT,
-        `By default, it reads up to ${options?.readLimit ?? READ_LIMIT} lines`,
+        [BASE_READ_DEFAULT, `By default, it reads up to ${options?.readLimit ?? READ_LIMIT} lines`],
+        [BASE_READ_LINE_PREFIX, READ_LINE_PREFIX],
       ),
     }),
     ...(search && {
       grep: grepRegexpDescription(),
-      glob: swap('glob', BASE_GLOB_HEAD, GLOB_HEAD),
+      glob: swap('glob', [BASE_GLOB_HEAD, GLOB_HEAD]),
     }),
   };
 }

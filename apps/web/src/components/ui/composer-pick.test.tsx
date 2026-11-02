@@ -7,7 +7,7 @@ import { ContextRing } from '@/components/ui/context-ring';
 
 /**
  * SG 的 `ComposerPick` 與 `ContextRing` 上的 nexus 欄位（README 本地修改第 33、34 條）。每個欄位一組，拿掉那一行 patch 就紅。
- * 產品怎麼用它們驗在 `permission-seat`、`model-seat`、`context-meter` 與 `App.test.tsx`。
+ * 產品怎麼用它們驗在 `permission-seat`、`model-seat`、`context-meter` 與 `App.seats.test.tsx`。
  */
 
 afterEach(cleanup);

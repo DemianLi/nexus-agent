@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { createAgentClient } from './agent.js';
+import { agentMuxUrl, createAgentClient } from './agent.js';
 
 /**
- * 瀏覽器這一端只驗兩件事：**解析得到**（`@nexus/wire` 在 Vite／DOM 那份 tsconfig 下
+ * 瀏覽器這一端只驗三件事：**解析得到**（`@nexus/wire` 在 Vite／DOM 那份 tsconfig 下
  * 編得過、載得進來），以及**預設同源**（沒設 `VITE_AGENT_BASE_URL` 時走相對路徑，
- * 不會硬編一個 localhost）。協定本身的行為在 `@nexus/wire` 自己的測試裡。
+ * 不會硬編一個 localhost），以及**升級網址**（`ws`／`wss` 跟著 agent 的來源）。協定本身的行為在 `@nexus/wire` 自己的測試裡。
  */
 describe('agent client', () => {
   it('預設走相對路徑，路徑就是協定規定的那條', async () => {
@@ -30,5 +30,16 @@ describe('agent client', () => {
     });
     await client.runStart('t1', '哈囉');
     expect(seen).toEqual(['http://localhost:8787/threads/t1/commands/run.start']);
+  });
+});
+
+describe('agentMuxUrl', () => {
+  it.each([
+    ['', 'http://127.0.0.1:8787/?x=1', 'ws://127.0.0.1:8787/threads/mux'],
+    ['', 'https://nexus.example/', 'wss://nexus.example/threads/mux'],
+    ['http://harness:8787/', 'http://page/', 'ws://harness:8787/threads/mux'],
+    ['https://harness', 'http://page/', 'wss://harness/threads/mux'],
+  ])('base %j、頁面 %s', (base, page, expected) => {
+    expect(agentMuxUrl(base, page)).toBe(expected);
   });
 });

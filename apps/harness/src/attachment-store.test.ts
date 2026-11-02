@@ -8,6 +8,7 @@ import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/
 import { join } from 'node:path';
 
 import type { SessionEvent } from '@nexus/core';
+import sharp from 'sharp';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { scopeOfEvents } from './attachment-route.js';
@@ -18,6 +19,12 @@ import {
   attachmentsRootOf,
   fileLeafName,
 } from './attachment-store.js';
+import {
+  DEFAULT_REQUEST_IMAGE_MAX_BYTES,
+  REQUEST_IMAGE_POLICY,
+  requestImagesRootOf,
+  requestImageVariantId,
+} from './request-image.js';
 
 let home: string;
 let store: AttachmentStore;
@@ -332,9 +339,10 @@ describe('存一張圖（#732）', () => {
     expect(Buffer.from(await store.readImage(ref))).toEqual(PNG);
   });
 
-  it('存的時候就不是圖（儲存不驗內容）：讀的時候拋 ATTACHMENT_CORRUPT', async () => {
+  it('物件根本不是圖（同一份內容以檔案存進來、參照被造成圖）：讀的時候拋 ATTACHMENT_CORRUPT', async () => {
     const text = Buffer.from('not an image at all');
-    const ref = await store.saveImage({ data: text, ...facts });
+    const file = await store.save({ data: text, name: 'x.txt' });
+    const ref = { attachmentId: file.attachmentId, bytes: file.bytes, ...facts };
     await expect(store.readImage(ref)).rejects.toMatchObject({
       code: 'ATTACHMENT_CORRUPT',
       message: expect.stringMatching(/檔頭對不上/) as unknown,
@@ -446,5 +454,251 @@ describe('檔案現在還在不在（#732）', () => {
     expect(await store.hasFile({ ...ref, attachmentId: 'nope' })).toBe(false);
     await rm(store.pathOf(ref));
     expect(await store.hasFile(ref)).toBe(false);
+  });
+});
+
+describe('存圖之前規範化（#2033）', () => {
+  const big = (background: string) =>
+    sharp({ create: { width: 3000, height: 2000, channels: 3, background } })
+      .png()
+      .toBuffer();
+
+  async function objectNames(): Promise<string[]> {
+    const objects = join(store.rootDir, 'file-objects');
+    const dirs = await readdir(objects).catch(() => [] as string[]);
+    return (await Promise.all(dirs.map((dir) => readdir(join(objects, dir))))).flat();
+  }
+
+  it('縮過的圖：參照記規範化那一份的寬高與雜湊，另記 originalDimensions；讀得回同一份，原圖不留', async () => {
+    const source = await big('#246');
+    const ref = await store.saveImage({ data: source, mediaType: 'image/png', name: 'b.png' });
+    expect(ref).toMatchObject({
+      mediaType: 'image/jpeg',
+      width: 2508,
+      height: 1672,
+      name: 'b.png',
+      originalDimensions: { width: 3000, height: 2000 },
+    });
+    const stored = await store.readImage(ref);
+    expect(ref.attachmentId).toBe(`sha256:${sha(stored)}`);
+    expect(ref.bytes).toBe(stored.byteLength);
+    expect(await objectNames()).toEqual([sha(stored)]);
+  });
+
+  it('一句話的圖整批先預備：有一張解不開，整批不寫', async () => {
+    const good = await big('#462');
+    const broken = good.subarray(0, 200);
+    await expect(
+      store.saveImages([
+        { bytes: good, mediaType: 'image/png', label: '第 1 張圖' },
+        { bytes: broken, mediaType: 'image/png', label: '第 2 張圖' },
+      ]),
+    ).rejects.toMatchObject({ name: 'ImageIntakeError', code: 'INVALID_IMAGE' });
+    expect(await objectNames()).toEqual([]);
+  });
+
+  it('轉碼限流：同時湧入超過上限的圖時排隊，同時在跑的不超過上限', async () => {
+    const limited = new AttachmentStore(attachmentsRootOf(home), {
+      imageCompressionConcurrency: 2,
+    });
+    const sources = await Promise.all(['#111', '#222', '#333', '#444', '#555', '#666'].map(big));
+    let peak = 0;
+    const sampler = setInterval(() => {
+      peak = Math.max(peak, limited.compression.active);
+    }, 1);
+    try {
+      await Promise.all(sources.map((data) => limited.saveImage({ data, mediaType: 'image/png' })));
+    } finally {
+      clearInterval(sampler);
+    }
+    expect(peak).toBe(2);
+    expect(limited.compression.active).toBe(0);
+  });
+
+  it('併發上限不在 1 到 8 的整數就建不起來', () => {
+    for (const bad of [0, 9, 1.5, Number.NaN]) {
+      expect(
+        () => new AttachmentStore(attachmentsRootOf(home), { imageCompressionConcurrency: bad }),
+        String(bad),
+      ).toThrow(/imageCompressionConcurrency/);
+    }
+    expect(
+      () => new AttachmentStore(attachmentsRootOf(home), { imageCompressionConcurrency: 8 }),
+    ).not.toThrow();
+  });
+
+  it('規範化之前落盤的原圖（帶 EXIF 6、參照記檔頭的軸）照樣讀得回', async () => {
+    const raw = await sharp({ create: { width: 40, height: 20, channels: 3, background: '#a26' } })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+    // 規範化之前落盤的圖就是位元組原樣進 `file-objects/`，寬高記檔頭的軸；同一份物件以檔案存進來即可。
+    const file = await store.save({ data: raw, name: 'old.jpg' });
+    const legacy = {
+      attachmentId: file.attachmentId,
+      mediaType: 'image/jpeg',
+      bytes: file.bytes,
+      width: 40,
+      height: 20,
+    } as const;
+    expect(Buffer.from(await store.readImage(legacy))).toEqual(raw);
+  });
+});
+
+describe('送模型的那一份（#2033）', () => {
+  /** 規範化之前落盤的圖：位元組原樣進 `file-objects/`，參照記檔頭的軸（同上面「照樣讀得回」那一條的造法）。 */
+  async function legacyImage(
+    raw: Buffer,
+    mediaType: 'image/jpeg' | 'image/png',
+    width: number,
+    height: number,
+  ) {
+    const file = await store.save({ data: raw, name: 'old' });
+    return {
+      attachmentId: file.attachmentId,
+      mediaType,
+      bytes: file.bytes,
+      width,
+      height,
+    } as const;
+  }
+  const turnedBig = () =>
+    sharp({ create: { width: 3000, height: 2000, channels: 3, background: '#a26' } })
+      .jpeg()
+      .withMetadata({ orientation: 6 })
+      .toBuffer();
+  const cachePath = (ref: { attachmentId: string }) => {
+    const id = requestImageVariantId(ref, REQUEST_IMAGE_POLICY);
+    return join(requestImagesRootOf(home), id.slice(0, 2), id);
+  };
+  /** 數限流器跑了幾件（只有轉碼走它）。 */
+  function countTransforms(target: AttachmentStore): () => number {
+    let runs = 0;
+    const limiter = target.compression;
+    const run = limiter.run.bind(limiter);
+    limiter.run = (task) => {
+      runs += 1;
+      return run(task);
+    };
+    return () => runs;
+  }
+
+  it('規範化之前落盤的大圖（EXIF 6）：轉正、縮到 2048² 以內；快取在 cache/attachments/request-images，0600', async () => {
+    const legacy = await legacyImage(await turnedBig(), 'image/jpeg', 3000, 2000);
+    const version = await store.readRequestImage(legacy);
+    expect(version).toMatchObject({ mediaType: 'image/jpeg', width: 1672, height: 2508 });
+    const meta = await sharp(version.data).metadata();
+    expect(meta).toMatchObject({ width: 1672, height: 2508, space: 'srgb' });
+    expect(meta.orientation).toBeUndefined();
+    expect(await readFile(cachePath(legacy))).toEqual(Buffer.from(version.data));
+    expect(await mode(cachePath(legacy))).toBe(0o600);
+    // 落盤那一份不動。
+    expect(Buffer.from(await store.readImage(legacy)).byteLength).toBe(legacy.bytes);
+  });
+
+  it('新收、規範化過但超過 1 MiB 的圖：落盤那一份不動，送模型的再壓到 1 MiB 以內', async () => {
+    const noisy = await sharp({
+      create: {
+        width: 2048,
+        height: 2048,
+        channels: 3,
+        background: '#888',
+        noise: { type: 'gaussian', mean: 128, sigma: 15 },
+      },
+    })
+      .png()
+      .toBuffer();
+    const ref = await store.saveImage({ data: noisy, mediaType: 'image/png' });
+    expect(ref.bytes).toBeGreaterThan(DEFAULT_REQUEST_IMAGE_MAX_BYTES);
+    const version = await store.readRequestImage(ref);
+    expect(version.data.byteLength).toBeLessThanOrEqual(DEFAULT_REQUEST_IMAGE_MAX_BYTES);
+    expect(version).toMatchObject({ mediaType: 'image/jpeg', width: 2048, height: 2048 });
+  });
+
+  it('第二次讀快取，不再轉碼；快取裡那一份就是送出的那一份', async () => {
+    const legacy = await legacyImage(await turnedBig(), 'image/jpeg', 3000, 2000);
+    const transforms = countTransforms(store);
+    await store.readRequestImage(legacy);
+    expect(transforms()).toBe(1);
+    const planted = await sharp({
+      create: { width: 10, height: 15, channels: 3, background: '#000' },
+    })
+      .jpeg()
+      .toBuffer();
+    await writeFile(cachePath(legacy), planted);
+    const again = await store.readRequestImage(legacy);
+    expect(transforms()).toBe(1);
+    expect(Buffer.from(again.data)).toEqual(planted);
+    expect(again).toMatchObject({ width: 10, height: 15 });
+  });
+
+  it('同一張圖同時要兩次：只轉一次，兩邊拿到同一份', async () => {
+    const legacy = await legacyImage(await turnedBig(), 'image/jpeg', 3000, 2000);
+    const transforms = countTransforms(store);
+    const [a, b] = await Promise.all([
+      store.readRequestImage(legacy),
+      store.readRequestImage(legacy),
+    ]);
+    expect(transforms()).toBe(1);
+    expect(a).toBe(b);
+  });
+
+  it('轉碼走限流：同時要好幾張不同的圖，同時在跑的不超過上限', async () => {
+    const limited = new AttachmentStore(attachmentsRootOf(home), {
+      imageCompressionConcurrency: 2,
+    });
+    const refs = await Promise.all(
+      ['#111', '#222', '#333', '#444', '#555'].map(async (background) => {
+        const raw = await sharp({ create: { width: 3000, height: 2000, channels: 3, background } })
+          .png()
+          .toBuffer();
+        const file = await limited.save({ data: raw, name: 'old.png' });
+        return {
+          attachmentId: file.attachmentId,
+          mediaType: 'image/png',
+          bytes: file.bytes,
+          width: 3000,
+          height: 2000,
+        } as const;
+      }),
+    );
+    let peak = 0;
+    const sampler = setInterval(() => {
+      peak = Math.max(peak, limited.compression.active);
+    }, 1);
+    try {
+      await Promise.all(refs.map((ref) => limited.readRequestImage(ref)));
+    } finally {
+      clearInterval(sampler);
+    }
+    expect(peak).toBe(2);
+  });
+
+  it('落盤那一份不見了：就算快取還在也拋（attachments/ 被清掉的舊訊息照舊換成佔位字）', async () => {
+    const legacy = await legacyImage(await turnedBig(), 'image/jpeg', 3000, 2000);
+    await store.readRequestImage(legacy);
+    const digest = legacy.attachmentId.slice('sha256:'.length);
+    await rm(join(store.rootDir, 'file-objects', digest.slice(0, 2), digest), { force: true });
+    await expect(store.readRequestImage(legacy)).rejects.toBeInstanceOf(AttachmentError);
+  });
+
+  it('快取寫不進去：這一次照樣回那一份，伺服器日誌講一次', async () => {
+    const warnings: string[] = [];
+    const warned = new AttachmentStore(attachmentsRootOf(home), {
+      warn: (line) => warnings.push(line),
+    });
+    const raw = await turnedBig();
+    const file = await warned.save({ data: raw, name: 'old.jpg' });
+    const legacy = {
+      attachmentId: file.attachmentId,
+      mediaType: 'image/jpeg',
+      bytes: file.bytes,
+      width: 3000,
+      height: 2000,
+    } as const;
+    await writeFile(join(home, 'cache'), 'not a directory');
+    const version = await warned.readRequestImage(legacy);
+    expect(version).toMatchObject({ width: 1672, height: 2508 });
+    expect(warnings).toEqual([expect.stringContaining('送模型的圖寫不進快取') as unknown]);
   });
 });

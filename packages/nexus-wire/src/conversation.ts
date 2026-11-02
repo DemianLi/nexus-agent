@@ -32,14 +32,18 @@
  */
 
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
-import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
+import type {
+  WireContextBreakdown,
+  WireContextMeasure,
+  WireContextPressure,
+} from './context-pressure.js';
 import type { CustomFrameName } from './custom-frame.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import { IMAGE_MEDIA_TYPES } from './attachments.js';
 import type { WireAttachmentRef } from './attachments.js';
 import { mentionField } from './subagent-list.js';
 import type { SubagentMention } from './subagent-list.js';
-import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason } from './inbox.js';
+import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason, isTurnStopCause } from './inbox.js';
 import type {
   WireQueuedInput,
   WireQueuedInputSource,
@@ -135,6 +139,8 @@ export interface NoticeEntry {
    * **沒有這一格＝不知道**（格式 26 以前的日誌）：畫面退成中性的說法，不假裝成「已完成」。
    */
   readonly reason?: WireSettleReason;
+  /** `reason` 是 `aborted` 時為什麼停（#1847），見 {@link TurnStopCause}。舊日誌沒有。 */
+  readonly stopCause?: TurnStopCause;
   /** 即時的那一種是送出佇列的哪一件（`inbox` 的 `claimed.id`），同一顆 `claimed` 再到一次靠它認出來。歷史的沒有。 */
   readonly inboxId?: string;
   /** 這則通知出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
@@ -185,7 +191,7 @@ export interface AiEntry {
   readonly attribution: Attribution;
   readonly error?: string;
   /**
-   * 講到一半被人按了停止（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**只標在那一刻
+   * 講到一半被中止（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**只標在那一刻
    * 還在吐字的那幾則上**：講完的那些不是被打斷的。伺服器那側把這半段存回對話，下一輪模型看得到
    * 它說到哪。
    */
@@ -214,7 +220,7 @@ export interface AiEntry {
    */
   readonly turnTail?: true;
   /**
-   * 這一輪是失敗收尾的（`failed`，不含人按停止）：跟 {@link AiEntry.turnTail} 一起標在收尾那則上
+   * 這一輪是失敗收尾的（`failed`，不含被中止）：跟 {@link AiEntry.turnTail} 一起標在收尾那則上
    * （[#1581](https://github.com/DemianLi/nexus-agent/issues/1581)）。web 的分支鈕對這種輪不給，同 server 的 `fork_unavailable`
    * 與 dsh `turn-tail.ts` 的 `branchUnavailable`。即時與歷史都在 {@link reduceConversation} 收尾那一步標。
    */
@@ -509,7 +515,7 @@ export function isQuestionPending(pending: PendingInput): pending is PendingQues
  * `awaiting-input` 是停在核准點——**不是結束**。基座在中斷時照樣發
  * `lifecycle completed / root`，所以那顆不能當「跑完了」用（決策 6 第 2 條）。
  *
- * `stopped` 是人按了停止、這一輪收了——**不是失敗**（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+ * `stopped` 是這一輪被中止、收了——**不是失敗**（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。原因見 {@link TurnStopCause}。
  * 它讀的是 root 那顆收尾 `lifecycle` 上的 `aborted`：那一格是 pump 補的分類，協定的 `AgentStatus`
  * 沒有「被中止」這一種（`interrupted` 是停下來等輸入），而被切斷的那一次基座發的是 `failed`。
  */
@@ -517,9 +523,9 @@ export type ConversationStatus = 'idle' | 'running' | 'awaiting-input' | 'failed
 
 /**
  * 一輪被中止的原因（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：pump 補在 root 那顆收尾 `lifecycle` 的
- * `aborted` 旁邊，歷史重放也帶。**與 `@nexus/core` 的 `TurnAbortCause` 同形**（這個套件不相依 core，所以各寫一份；
+ * `aborted` 旁邊，歷史重放也帶；背景子代理的結算通知（`NoticeEntry.stopCause`）與軌跡（`TrajectoryDigest.endCause`）帶同一個值（#1847）。**與 `@nexus/core` 的 `TurnAbortCause` 同形**（這個套件不相依 core，所以各寫一份；
  * `conversation.test.ts` 讀 core 的原始碼把兩份釘在一起）。`hook` 的 `reason` 是穩定的機器字串，今天只有時鐘到點的
- * `turn-timeout`；`parent` 只出現在背景子代理自己的日誌上，root 那顆收尾不會帶。
+ * `turn-timeout`；`parent` 是背景子代理那一輪的原因：記在子代理自己的日誌與結算通知上，root 那顆收尾不會帶。
  */
 export type TurnStopCause =
   | { readonly kind: 'user' }
@@ -731,6 +737,11 @@ export interface ConversationState {
    * **只在 {@link status} 是 `stopped` 時有意義**，下一輪開跑時清掉。舊 server 沒帶原因就沒有這一格，畫面照舊當人按了停止。
    */
   readonly stopCause?: TurnStopCause;
+  /**
+   * 這一輪失敗的錯誤碼（[#1844](https://github.com/DemianLi/nexus-agent/issues/1844)），給程式判斷；給人看的是 {@link error}，兩格一起清。
+   * 舊 server、舊日誌沒帶，或 `failed` 之後沒有拋錯（不知道原因）時沒有這一格。
+   */
+  readonly errorCode?: string;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -1169,11 +1180,12 @@ function reduceModelUsage(state: ConversationState, payload: object): Conversati
  * 話，環會量錯那一道，而且看起來正常。
  */
 function reduceContextMeasure(state: ConversationState, payload: object): ConversationState {
-  const { approxTokens, messageCount, thresholds, messagesCompactable } = payload as {
+  const { approxTokens, messageCount, thresholds, messagesCompactable, breakdown } = payload as {
     approxTokens?: unknown;
     messageCount?: unknown;
     thresholds?: unknown;
     messagesCompactable?: unknown;
+    breakdown?: unknown;
   };
   // 空陣列也不收：`measure` 在就保證至少一道門檻，web 不必處理「有量測、沒分母」。摘要的設定本來就不准空陣列。
   if (!isCount(approxTokens) || !isCount(messageCount) || !Array.isArray(thresholds)) return state;
@@ -1187,11 +1199,23 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
   }
   // 選填（#1443）：沒有就不出這一格（舊日誌），有就得是布林。
   if (messagesCompactable !== undefined && typeof messagesCompactable !== 'boolean') return state;
+  // 選填（#1571）：沒有就不出這一格（舊日誌、還沒量過），有就得是三個非負整數。壞的整顆不收，不收一半。
+  let parsedBreakdown: WireContextBreakdown | undefined;
+  if (breakdown !== undefined) {
+    const { systemTokens, toolsTokens, messageTokens } = (breakdown ?? {}) as {
+      systemTokens?: unknown;
+      toolsTokens?: unknown;
+      messageTokens?: unknown;
+    };
+    if (!isCount(systemTokens) || !isCount(toolsTokens) || !isCount(messageTokens)) return state;
+    parsedBreakdown = { systemTokens, toolsTokens, messageTokens };
+  }
   const measure: WireContextMeasure = {
     approxTokens,
     messageCount,
     thresholds: parsed,
     ...(messagesCompactable !== undefined && { messagesCompactable }),
+    ...(parsedBreakdown !== undefined && { breakdown: parsedBreakdown }),
   };
   return { ...state, contextPressure: { ...state.contextPressure, measure } };
 }
@@ -1542,10 +1566,11 @@ const QUEUED_SOURCE_PROJECTORS: {
   ) => Extract<WireQueuedInputSource, { kind: K }>;
 } = {
   user: () => ({ kind: 'user' }),
-  'subagent-settled': (source) =>
-    isSettleReason(source['reason'])
-      ? { kind: 'subagent-settled', reason: source['reason'] }
-      : { kind: 'subagent-settled' },
+  'subagent-settled': (source) => ({
+    kind: 'subagent-settled',
+    ...(isSettleReason(source['reason']) ? { reason: source['reason'] } : {}),
+    ...(isTurnStopCause(source['cause']) ? { cause: source['cause'] } : {}),
+  }),
   'agent-message': () => ({ kind: 'agent-message' }),
   goal: () => ({ kind: 'goal' }),
   // 線上直接送這個名字的話，原話不明，退回名字本身。
@@ -1694,12 +1719,13 @@ function reduceInbox(
     // 結算通知（#851）長一格「通知」，子代理寄來的話（#863）長一格「某某說」，位置都是人話會出現的地方。
     const sourceKind = (source as { kind?: unknown } | undefined)?.kind;
     if (sourceKind === 'subagent-settled') {
-      const reason = (source as { reason?: unknown }).reason;
+      const { reason, cause } = source as { reason?: unknown; cause?: unknown };
       humans.push({
         kind: 'notice',
         id: `inbox:${id}`,
         source: 'subagent-settled',
         ...(isSettleReason(reason) ? { reason } : {}),
+        ...(isTurnStopCause(cause) ? { stopCause: cause } : {}),
         inboxId: id,
         ...timeField('startedAt', time),
       });
@@ -1767,7 +1793,7 @@ function reduceSettleNotice(
   payload: object,
   time: number | undefined,
 ): ConversationState {
-  const { id, reason } = payload as { id?: unknown; reason?: unknown };
+  const { id, reason, cause } = payload as { id?: unknown; reason?: unknown; cause?: unknown };
   if (typeof id !== 'string' || id === '') return state;
   if (state.entries.some((entry) => entry.id === id)) return state;
   const entry: NoticeEntry = {
@@ -1775,6 +1801,7 @@ function reduceSettleNotice(
     id,
     source: 'subagent-settled',
     ...(isSettleReason(reason) ? { reason } : {}),
+    ...(isTurnStopCause(cause) ? { stopCause: cause } : {}),
     ...timeField('startedAt', time),
   };
   return { ...state, entries: [...state.entries, entry] };
@@ -2233,7 +2260,9 @@ interface LifecycleData {
   readonly event: string;
   readonly graph_name?: string;
   readonly error?: string;
-  /** 人按了停止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
+  /** `failed` 的錯誤碼（`turn/failed.error.code`），見 {@link ConversationState.errorCode}。 */
+  readonly code?: string;
+  /** 這一輪被中止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
   readonly aborted?: boolean;
   /** 為什麼停，跟 `aborted` 一起補（#1624），見 {@link TurnStopCause}。 */
   readonly cause?: TurnStopCause;
@@ -2334,7 +2363,7 @@ function reduceLifecycle(
     return state;
   }
   if (data.aborted === true) {
-    // **人按了停止**（#276）。先於 `failed`／`completed` 判：被切斷的那一次基座發的是 `failed`，
+    // **被中止**（#276）。先於 `failed`／`completed` 判：被切斷的那一次基座發的是 `failed`，
     // 那不是失敗。停在核准點時的收回也走這裡，所以掛著的卡片一起收掉——伺服器那側已經收回了。
     // 還在吐字的那幾則標成被打斷，還沒有結果的工具卡收成失敗。原因（#1624）照帶來的記下，沒帶就不寫。
     const cause = data.cause === undefined ? {} : { stopCause: data.cause };
@@ -2342,6 +2371,7 @@ function reduceLifecycle(
       ...state,
       status: 'stopped',
       error: undefined,
+      errorCode: undefined,
       pendings: [],
       stopCause: data.cause,
       entries: settleUnfinishedTools(state.entries, time).map((entry) =>
@@ -2363,13 +2393,21 @@ function reduceLifecycle(
     // 其中一顆之後那個新 run 發的，而沒被答到的中斷會在同一個 run 裡帶著原本那顆 id
     // 再度發一次 `input.requested`（實測），上面的覆寫因此是冪等的。留著不清的話，
     // 旁觀的那一端會抱著一張已經被別人答掉、永遠回答不了的卡片。
-    return { ...state, pendings: [], status: 'running', error: undefined, stopCause: undefined };
+    return {
+      ...state,
+      pendings: [],
+      status: 'running',
+      error: undefined,
+      errorCode: undefined,
+      stopCause: undefined,
+    };
   }
   if (data.event === 'failed') {
     return {
       ...state,
       status: 'failed',
       error: data.error ?? '未指名的錯誤',
+      errorCode: data.code,
       entries: settleUnfinishedTools(state.entries, time),
     };
   }

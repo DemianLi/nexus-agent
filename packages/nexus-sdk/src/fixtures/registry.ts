@@ -29,7 +29,10 @@ export interface ProviderOptions {
 }
 
 /** 造一個提供者；`items` 是它的活資源，測試直接讀。每次呼叫狀態都是新的。 */
-export function createRegistryProvider(options: ProviderOptions = {}) {
+export function createRegistryProvider(options: ProviderOptions = {}): {
+  Provider: new (ctx: Context) => ContractService<WidgetRegistry> & WidgetRegistry;
+  items: string[];
+} {
   const items: string[] = [];
   const token =
     options.version === undefined

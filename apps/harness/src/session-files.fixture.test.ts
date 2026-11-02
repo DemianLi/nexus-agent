@@ -11,9 +11,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
-import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
+import {
+  legacyTwoFilePathsIn,
+  openJsonlSessionStore,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
 import {
   closedSessionEvents,
+  LEGACY_TWO_FILE_FORMAT_VERSION,
   findSession,
   rewriteSessionHeader,
   sessionEvents,
@@ -39,6 +44,17 @@ function header(id: string): StoredSessionHeader {
 
 function event(seq: number): SessionEvent {
   return { type: 'model/usage', seq, time: 1, data: {} } as unknown as SessionEvent;
+}
+
+/** 世代檔的第一行（header 行）。 */
+async function firstLine(path: string): Promise<string> {
+  return (await readFile(path, 'utf8')).split('\n')[0] ?? '';
+}
+
+/** 世代檔第一行以後的部分（含第一個換行）。 */
+async function afterFirstLine(path: string): Promise<string> {
+  const text = await readFile(path, 'utf8');
+  return text.slice(text.indexOf('\n'));
 }
 
 /** 用真的後端在 `directory` 寫一份 `count` 筆的會話。 */
@@ -106,13 +122,23 @@ describe('事件', () => {
     await expect(sessionEventsOf(root, 'cli')).rejects.toThrow('最後一行只寫了一半');
   });
 
-  it('只有 header、日誌還不在：沒有事件，算完整', async () => {
+  it('舊兩檔只有 header、日誌還不在：沒有事件，算完整', async () => {
     await mkdir(join(root, 'p'));
     await writeFile(
-      sessionPathsIn(join(root, 'p'), 'fresh').header,
-      JSON.stringify(header('fresh')),
+      legacyTwoFilePathsIn(join(root, 'p'), 'fresh').header,
+      JSON.stringify({ ...header('fresh'), version: LEGACY_TWO_FILE_FORMAT_VERSION }),
     );
     expect(await sessionEvents(await sessionOf(root, 'fresh'))).toEqual({
+      events: [],
+      complete: true,
+    });
+  });
+
+  it('世代檔只有 header 行：沒有事件，算完整', async () => {
+    const stored = openJsonlSessionStore({ directory: root }).create(header('empty'));
+    await stored.flush();
+    await stored.close();
+    expect(await sessionEvents(await sessionOf(root, 'empty'))).toEqual({
       events: [],
       complete: true,
     });
@@ -121,10 +147,14 @@ describe('事件', () => {
 
 describe('header 的兩個版號', () => {
   it('磁碟上是上一版：storedFormatVersion 是上一版，header.version 已經蓋成這一版', async () => {
-    await written(root, 'cli');
-    const path = sessionPathsIn(root, 'cli').header;
-    const onDisk = JSON.parse(await readFile(path, 'utf8')) as Record<string, unknown>;
-    await writeFile(path, JSON.stringify({ ...onDisk, version: SESSION_LOG_FORMAT_VERSION - 1 }));
+    // 上一版是舊兩檔的最後一版：手寫一份（讀方認得、續接時遷移的那種）。
+    expect(LEGACY_TWO_FILE_FORMAT_VERSION).toBe(SESSION_LOG_FORMAT_VERSION - 1);
+    const paths = legacyTwoFilePathsIn(root, 'cli');
+    await writeFile(
+      paths.header,
+      JSON.stringify({ ...header('cli'), version: LEGACY_TWO_FILE_FORMAT_VERSION }),
+    );
+    await writeFile(paths.log, '');
 
     const { header: read, storedFormatVersion } = await sessionHeaderOf(root, 'cli');
     expect(storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION - 1);
@@ -144,31 +174,47 @@ describe('改 header', () => {
     });
   });
 
-  it('寫壞了：接縫讀不懂；restore 寫回原文', async () => {
+  it('寫壞了：接縫讀不懂；restore 寫回原文；事件那幾行不動', async () => {
     await written(root, 'cli');
-    const path = sessionPathsIn(root, 'cli').header;
+    const path = sessionPathsIn(root, 'cli').log;
     const original = await readFile(path, 'utf8');
+    const events = await afterFirstLine(path);
     const restore = await rewriteSessionHeader(root, 'cli', () => '{壞掉');
-    expect(await readFile(path, 'utf8')).toBe('{壞掉');
+    expect(await firstLine(path)).toBe('{壞掉');
+    expect(await afterFirstLine(path)).toBe(events);
     await expect(sessionOf(root, 'cli')).rejects.toThrow();
     await restore();
     expect(await readFile(path, 'utf8')).toBe(original);
   });
 
+  it('舊兩檔也改得到：改的是 <base>.header.json', async () => {
+    const paths = legacyTwoFilePathsIn(root, 'old');
+    await writeFile(
+      paths.header,
+      JSON.stringify({ ...header('old'), version: LEGACY_TWO_FILE_FORMAT_VERSION }),
+    );
+    await writeFile(paths.log, '');
+    const restore = await rewriteSessionHeader(root, 'old', () => 'null');
+    expect(await readFile(paths.header, 'utf8')).toBe('null');
+    await restore();
+    expect((await sessionHeaderOf(root, 'old')).header.id).toBe('old');
+  });
+
   it('回的字串不是 JSON 物件（null）：當成壞的 header 原樣寫入，restore 寫回原文', async () => {
     await written(root, 'cli');
-    const path = sessionPathsIn(root, 'cli').header;
+    const path = sessionPathsIn(root, 'cli').log;
     const original = await readFile(path, 'utf8');
     const restore = await rewriteSessionHeader(root, 'cli', () => 'null');
-    expect(await readFile(path, 'utf8')).toBe('null');
+    expect(await firstLine(path)).toBe('null');
     await restore();
     expect(await readFile(path, 'utf8')).toBe(original);
   });
 
   it('原文本身就壞了：拋，edit 不會被呼叫，檔不動', async () => {
     await written(root, 'cli');
-    const path = sessionPathsIn(root, 'cli').header;
-    await writeFile(path, '{壞掉');
+    const path = sessionPathsIn(root, 'cli').log;
+    await writeFile(path, `{壞掉${await afterFirstLine(path)}`);
+    const broken = await readFile(path, 'utf8');
     let called = false;
     await expect(
       rewriteSessionHeader(root, 'cli', (raw) => {
@@ -177,12 +223,12 @@ describe('改 header', () => {
       }),
     ).rejects.toThrow('原本就不是 JSON 物件');
     expect(called).toBe(false);
-    expect(await readFile(path, 'utf8')).toBe('{壞掉');
+    expect(await readFile(path, 'utf8')).toBe(broken);
   });
 
   it('動到 version 就拋，檔不動：回物件、回解得開的字串都一樣', async () => {
     await written(root, 'cli');
-    const path = sessionPathsIn(root, 'cli').header;
+    const path = sessionPathsIn(root, 'cli').log;
     const original = await readFile(path, 'utf8');
     const older = SESSION_LOG_FORMAT_VERSION - 1;
     await expect(

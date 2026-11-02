@@ -10,13 +10,18 @@
 
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { SessionLog } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, LIVE_API_KEY_ENV } from './live-model.js';
-import { foldModelSelection, modelSelectionView } from './model-selection-host.js';
+import {
+  createModelSelectionHost,
+  foldModelSelection,
+  modelSelectionView,
+} from './model-selection-host.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -368,4 +373,24 @@ describe('型錄與驗證（model.select 用）', () => {
       await endpoint.close();
     }
   }, 60_000);
+});
+
+describe('選的那顆不在型錄上', () => {
+  it('收不收圖看部署預設那顆', () => {
+    const entry = (id: string, input: ('text' | 'image')[]) => ({
+      ...structuredClone(DEFAULT_LIVE_MODEL_ENTRY),
+      id,
+      input,
+    });
+    const host = createModelSelectionHost({
+      liveModel: liveModelConfigSchema.parse({
+        modelId: 'text-only',
+        models: [entry('text-only', ['text'])],
+      }),
+      credentials: undefined,
+    });
+    host.controller.attach(new SessionLog('image-support'));
+    host.controller.select({ model: 'gone' });
+    expect(host.imageSupport()).toBe('rejects');
+  });
 });

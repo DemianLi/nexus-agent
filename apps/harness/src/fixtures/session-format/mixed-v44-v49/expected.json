@@ -1,18 +1,18 @@
 {
   "writer": {
-    "rev": "09398dd523471a1d03852e18c7bbae6ecc672414 → today",
-    "commit": "09398dd523471a1d03852e18c7bbae6ecc672414 → fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "rev": "09398dd523471a1d03852e18c7bbae6ecc672414 → 54d5a80dbe6f64d0ad49f2a51c9e1be95d901172",
+    "commit": "09398dd523471a1d03852e18c7bbae6ecc672414 → 54d5a80dbe6f64d0ad49f2a51c9e1be95d901172",
     "formatVersion": 44,
     "released": false
   },
   "computedByToday": {
-    "head": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "head": "8e30d0933771385b134a23de1530a192a83c27a2",
     "dirty": false
   },
   "sessions": {
     "cli": {
-      "headerVersion": 49,
-      "eventCount": 34,
+      "headerVersion": 52,
+      "eventCount": 35,
       "types": [
         "approval/policy",
         "turn/start",
@@ -37,6 +37,7 @@
         "user/message",
         "compaction/summary",
         "model/start",
+        "request/system",
         "assistant/message",
         "model/end",
         "context/measure",

@@ -437,7 +437,7 @@ interface FunctionParameters {
 }
 
 /**
- * 模型看到的 `read_file`：`limit` 換成 dsh 的定義、不再必填。**描述不在這裡換**（#1563）：預設行數 {@link READ_LIMIT} 由
+ * 模型看到的 `read_file`：`limit` 換成 dsh 的定義、不再必填。**描述不在這裡換**（#1563）：預設行數 {@link READ_LIMIT} 與行號格式由
  * `fs-tool-descriptions.ts` 經 `customToolDescriptions` 寫進工具自己的描述。
  *
  * **是 OpenAI 形狀的一份定義，不是工具**：`Runnable` 才算 client tool，langchain 對同名換了實例的

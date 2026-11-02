@@ -8,8 +8,7 @@
  * （驗證器，⓪b-2；這裡改成比指紋）。
  *
  * 最後兩格跑真的 repo：已提交的 `docs/persistence-schema.json` 沒過期，以及每一種事件都在、每個可達節點都有指紋。
- * 掃描的根字面寫在這個檔裡（含 `apps/web/src`），是因為 `.github/scripts/plan_ci.py` 靠測試檔的內容判斷「這支一律要跑」
- * （同 `known-event-types.test.ts`）；那串字面值是事件探索的根，跟抽取器 program 收哪些檔是兩回事（web 不進 program）。
+ * 事件探索的根（含 `apps/web/src`）跟抽取器 program 收哪些檔是兩回事（web 不進 program）。
  */
 
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
@@ -77,6 +76,11 @@ function fixture(payload: string, options: { event?: string } = {}): string {
   );
   mkdirSync(join(root, 'apps/harness/src'), { recursive: true });
   mkdirSync(join(root, 'apps/web/src'), { recursive: true });
+  put(
+    root,
+    'apps/harness/src/jsonl-session-store.ts',
+    "import type { StoredSessionHeader } from '@nexus/core';\nexport interface JsonlHeaderLine extends StoredSessionHeader { readonly type: 'session' }\n",
+  );
   put(root, PAYLOAD, payload);
   put(
     root,
@@ -122,18 +126,25 @@ function digestOf(inventory: PersistenceSchemaInventory, key: string): string | 
 }
 
 describe('從原始碼抽持久化型別', { timeout: EXTRACT_TIMEOUT }, () => {
-  it('根依序是 header、事件封裝、每一種事件；header 的版號是字面量', () => {
+  it('根依序是 header、header 行、事件封裝、每一種事件；header 的版號是字面量', () => {
     const inventory = extractPersistenceSchema(fixture('export interface Payload { id: string }'));
     expect(inventory.formatVersion).toBe(1);
     expect(inventory.roots.map((item) => item.key)).toEqual([
       'SessionHeader',
+      'JsonlHeaderLine',
       'SessionEventEnvelope',
       'event:test/record',
     ]);
-    // 事件根照 dsh 帶 surface；nexus 沒有那一軸，一律 false。header 與封裝沒有這一格。
-    expect(inventory.roots.map((item) => item.surface)).toEqual([undefined, undefined, false]);
+    // 事件根帶 surface 這一格；nexus 沒有這一軸，一律 false。header、header 行與封裝沒有這一格。
+    expect(inventory.roots.map((item) => item.surface)).toEqual([
+      undefined,
+      undefined,
+      undefined,
+      false,
+    ]);
     expect(Object.keys(inventory.roots[0]!)).not.toContain('surface');
     expect(Object.keys(inventory.roots[1]!)).not.toContain('surface');
+    expect(Object.keys(inventory.roots[2]!)).not.toContain('surface');
     const header = inventory.roots[0]!.schema;
     const object = header.nodes[0];
     if (object?.kind !== 'object') throw new Error('header is not an object');
@@ -724,7 +735,9 @@ describe('這個 repo 的持久化型別圖', { timeout: EXTRACT_TIMEOUT }, () =
         .events.map((item) => item.name)
         .sort(),
     );
-    expect(inventory.roots.filter((item) => item.kind === 'header')).toHaveLength(1);
+    expect(
+      inventory.roots.filter((item) => item.kind === 'header').map((item) => item.key),
+    ).toEqual(['SessionHeader', 'JsonlHeaderLine']);
     expect(inventory.roots.filter((item) => item.kind === 'envelope')).toHaveLength(1);
     for (const item of inventory.roots) {
       expect(item.surface, item.key).toBe(item.kind === 'event' ? false : undefined);

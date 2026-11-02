@@ -286,7 +286,7 @@ describe('startupSetting', () => {
       baseUrl: 'https://integrate.api.nvidia.com/v1',
       // #1604：金鑰的名字，出廠寫出來、值就是預設。
       apiKeyEnv: 'NVIDIA_API_KEY',
-      modelId: 'nvidia/nemotron-3-super-120b-a12b',
+      modelId: 'nvidia/nemotron-3.5-lightning-30b-a3b',
       timeoutMs: 180000,
       streamIdleTimeoutMs: 90000,
       // #1505：出廠不設 `maxConcurrentRequests`（不限），排隊上限 60 秒。
@@ -299,8 +299,8 @@ describe('startupSetting', () => {
       },
       models: [
         {
-          id: 'nvidia/nemotron-3-super-120b-a12b',
-          contextWindow: 700045,
+          id: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+          contextWindow: 784369,
           maxTokens: 16384,
           input: ['text'],
           reasoningEfforts: { off: null, default: 'default' },

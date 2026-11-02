@@ -1,5 +1,5 @@
 /**
- * 中止這一輪——**合作式的**：人按了停止之後，正在跑的工具等它落定，還沒開始的不開始，
+ * 中止這一輪——**合作式的**：訊號舉起之後，正在跑的工具等它落定，還沒開始的不開始，
  * 模型請求中途切斷，這一步之後圖就停。見 [#276](https://github.com/DemianLi/nexus-agent/issues/276)，
  * 決議在 [#265](https://github.com/DemianLi/nexus-agent/issues/265)。
  *
@@ -57,7 +57,11 @@
  *   「使用者看到了哪些字」的是轉發那些片段的 pump。所以這裡只拋 {@link TurnCancelledError}，半段由
  *   `apps/harness` 的 pump 事後寫回對話。
  *
- * **中止之後工具的副作用照樣發生**：等它落定就是讓它做完。dsh 也是這樣，不算偏離，但使用者會意外。
+ * **工具本體讀得到這一輪的訊號**：從它拿到的 config 用 {@link turnCancelSignalOf} 讀。讀了、把它交給自己的 I/O 的工具，按停止
+ * 就提早結束——今天是 `@nexus/plugin-mcp` 的工具呼叫與資源讀取，server 收到 `notifications/cancelled`（#1985）。**沒讀的工具
+ * 照舊跑到完，副作用照樣發生**，這裡只是等它落定。訊號只能這樣讀、不能放進交給工具的 config 的 `signal`：`@langchain/core`
+ * 物件 schema 的 `tool()` 拿那個 `signal` 跟本體競速，舉起來就當場 reject、把本體丟在背景，後果同上面「載體退到哪裡」。
+ * 工具自己往下交給 I/O 時可以放進 `signal`（例：`@nexus/plugin-mcp` 的 `withTurnSignal`）。
  *
  * ## 在攔截索引上佔哪一格
  *
@@ -119,7 +123,7 @@ export const TOOL_ABORTED_BEFORE_DISPATCH_TEXT =
 export const INTERRUPTED_REPLY_MARKER = 'nexus_interrupted_reply';
 
 /**
- * 這一輪被人中止了。
+ * 這一輪被中止了。
  *
  * **進入點要靠類別認它，不能比對訊息**：它決定這一輪收成 `turn/end`（帶 aborted）還是
  * `turn/failed`。比對措辭的話，哪天改一個字，每一次中止都會被記成失敗——更糟的是反過來。
@@ -183,7 +187,7 @@ function blockHere(request: unknown): AIMessage {
  *
  * 那則空訊息只活在子代理的狀態裡，子代理跑完它的狀態就丟了；它不是一則使用者看得到的回覆。
  */
-function stopHere(request: unknown, cause?: unknown): AIMessage {
+export function stopHere(request: unknown, cause?: unknown): AIMessage {
   if (inSubagent(request)) {
     return new AIMessage({ content: '', additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true } });
   }
@@ -340,7 +344,7 @@ export function createTurnCancelGuard(): AgentMiddleware {
       // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
       // 對話狀態一致（AI 帶 tool_calls、每一顆都配到結果）。
       if (signalOfRequest(request)?.aborted) return stopHere(request);
-      // 準入閘門（#633，封存的會話）：中止先判，蓋過閘門——人按了停止的那一輪是被中止，不是被擋下。
+      // 準入閘門（#633，封存的會話）：中止先判，蓋過閘門——那一輪是被中止，不是被擋下。
       if (archiveGateOf({ configurable: requestConfigurable(request) })?.() === true) {
         return blockHere(request);
       }

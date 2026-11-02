@@ -23,10 +23,12 @@ import { modelCallLimitMiddleware } from 'langchain';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import type { EventDispatcher } from './events.js';
 import { createApprovalGateMiddleware } from './approval.js';
+import { createApprovalPolicyPromptMiddleware } from './approval-policy-prompt.js';
 import type { ApprovalPolicySource } from './approval-policy.js';
+import { DEFAULT_APPROVAL_POLICY } from './approval-policy.js';
 import {
   createSubagentDelegationMiddleware,
-  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  foregroundDelegationContext,
 } from './subagent-delegation.js';
 import {
   assertToolFilter,
@@ -58,6 +60,7 @@ import { createSpillPolicyMiddleware } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
 import { capSearchResults, createSearchOverflowMiddleware } from './search-overflow.js';
 import type { SearchOverflowOptions } from './search-overflow.js';
+import { createSharedGrepMark, createSharedReadMarkMiddleware } from './shared-read-mark.js';
 import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -79,6 +82,7 @@ import {
   SESSION_CHECKPOINT_PLUGIN_NAME,
 } from './session-checkpoint-policy.js';
 import type { SessionLog } from './session-log.js';
+import { threadSkillSources } from './skill-catalog.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
 import {
   createModelSwapMiddleware,
@@ -101,6 +105,7 @@ import {
   createImageOffloadRecoveryMiddleware,
 } from './image-offload.js';
 import {
+  createRecordedProjectionShell,
   createSummarizer,
   resolveSummarizationSettings,
   SUMMARIZATION_MIDDLEWARE_NAME,
@@ -294,8 +299,8 @@ export interface FoldOptions {
    *
    * **`false` 是真的關掉**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）：
    * root、宣告的 subagent 與 fold 補的 `general-purpose` 各拿到一顆同名空殼，基座無條件
-   * 建的那顆被它原地取代，於是沒有摘要、沒有歷史 offload、也沒有
-   * {@link FoldOptions.toolResultPruning} 那把剪刀。這是 dsh minimal preset 的形狀
+   * 建的那顆被它原地取代，於是沒有摘要、沒有歷史 offload、也不剪新的工具結果（日誌上記過的剪法與參數截斷仍由這顆空殼
+   * 換上去，[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）。這是 dsh minimal preset 的形狀
    * （不掛 compaction）。**連帶沒有的**：上下文溢出時基座那條緊急摘要——dsh 沒掛
    * compaction 時一樣沒有溢出恢復。
    *
@@ -315,7 +320,8 @@ export interface FoldOptions {
   tokenAnchorBook?: TokenAnchorBook;
   /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到
-   * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不先剪。
+   * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不剪新的；日誌上記過的剪法照樣換上去
+   * （[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）。
    *
    * **省略時不一定是預設值**：那時改由部署設定層的 `@nexus/core/tool-result-pruner` 條目
    * 決定，四態的順序見 {@link toolResultPruningDisposition}
@@ -580,8 +586,16 @@ export function foldRegistry(
   // 政策與管道就是 root 當下的（`options.approvals.policy` 每次要問人之前問一次，#437）。沒有人的入口、沒有存檔點、政策 `never`
   // 時一樣確定性回絕，理由說的是真正的原因。**背景子代理不走這裡**：它們背後沒有人，圖由 {@link createBackgroundApprovalGate}
   // 那一顆（管道固定 `policy-never`，#324／#737 照 dsh `child-agent.ts:220-247`）在編圖時換掉。
-  const subagentDelegation = createSubagentDelegationMiddleware(
-    FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  // 核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）跟閘門用同一組事實：同一個管道、同一個政策來源，
+  // 所以前景子代理也共用這一顆；背景圖編圖時換成管道固定 `policy-never` 的那顆（{@link createBackgroundApprovalPolicyPrompt}）。
+  const approvalChannel = foldApprovalChannel(options);
+  const approvalPolicySource = options.approvals?.policy ?? (() => DEFAULT_APPROVAL_POLICY);
+  const approvalPolicyPrompt = createApprovalPolicyPromptMiddleware(
+    approvalChannel,
+    approvalPolicySource,
+  );
+  const subagentDelegation = createSubagentDelegationMiddleware(() =>
+    foregroundDelegationContext(approvalChannel, approvalPolicySource()),
   );
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
@@ -612,14 +626,18 @@ export function foldRegistry(
   // 所以結果跟「工具被叫時才讀」的相同；消費者之後只從這一格把手讀。
   const workspaceRootService = registry.services.get(WORKSPACE_ROOT_SERVICE);
   const sharedWorkspaceService = registry.services.get(SHARED_WORKSPACE_SERVICE);
-  settleFsService(registry.services.get(FS_SERVICE), backend, {
+  // 唯讀共用參考區的前綴（#1775）：只有這條 thread 有私有可寫根時組裝點才提供；不是字串就當沒有。
+  const sharedWorkspacePrefix =
+    typeof sharedWorkspaceService === 'string' ? sharedWorkspaceService : undefined;
+  const mountPrefixes = registry.backend.mounts().map(([prefix]) => prefix);
+  // 技能來源也在這裡交給把手（#1919）：把手用自己的共用區與全部路由前綴換一次，模型清單、`/名字`、`skill.list` 都讀它換好的那一份。
+  const settledFs = settleFsService(registry.services.get(FS_SERVICE), backend, {
+    skillSources: registry.skills.sources(),
     hasWorkspace: registry.capabilities.has(WORKSPACE_CAPABILITY),
-    mountPrefixes: registry.backend.mounts().map(([prefix]) => prefix),
+    mountPrefixes,
     // 這一條 thread 的可寫根（#1774）：組裝點提供的 host 服務 `workspaceRoot`，只在有圍堵時有；不是字串就當沒有。
     workspaceRoot: typeof workspaceRootService === 'string' ? workspaceRootService : undefined,
-    // 唯讀共用參考區的前綴（#1775）：只有這條 thread 有私有可寫根時組裝點才提供；不是字串就當沒有。
-    sharedWorkspacePrefix:
-      typeof sharedWorkspaceService === 'string' ? sharedWorkspaceService : undefined,
+    sharedWorkspacePrefix,
   });
   const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
@@ -644,6 +662,20 @@ export function foldRegistry(
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
+  // 有共用區的 thread 讀共用區裡的技能（#1928）：root 與 general-purpose 子代理拿把手上換好的那一份（#1919）。沒有填得進值的把手
+  // （組裝點沒提供 `fs`，或給的不是 `createFsService` 建的）就照保留前綴與 mount 自己換。
+  const skills =
+    settledFs?.skillSources() ??
+    threadSkillSources(registry.skills.sources(), {
+      sharedWorkspacePrefix: () => sharedWorkspacePrefix,
+      offWorkspacePrefixes: () => [...(options.reservedBackendPrefixes ?? []), ...mountPrefixes],
+    });
+
+  // 共用區讀出來的內容加前綴（#1676）：只在這條 thread 有共用區、也有 backend 時掛；上面那份技能來源底下不標。見 {@link ./shared-read-mark.ts}。
+  const sharedReadMark =
+    backend === undefined || sharedWorkspacePrefix === undefined
+      ? undefined
+      : createSharedReadMarkMiddleware(sharedWorkspacePrefix, skills);
   // 搜尋結果的筆數上限（#735）：middleware 與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
   // `permissions` 規則（同搜尋卡）就整對不掛。見 {@link ./search-overflow.ts}。
   const searchOverflow =
@@ -652,8 +684,18 @@ export function foldRegistry(
     searchMetaAllowed(registry, permissions)
       ? options.searchOverflow
       : undefined;
+  // 有共用區時，超過上限的 `grep` 由上限層用前綴層同一份判準判完整清單（#2065）。
   const searchOverflowMiddleware =
-    searchOverflow === undefined ? undefined : createSearchOverflowMiddleware(searchOverflow);
+    searchOverflow === undefined
+      ? undefined
+      : createSearchOverflowMiddleware(
+          sharedWorkspacePrefix === undefined
+            ? searchOverflow
+            : {
+                ...searchOverflow,
+                sharedMark: createSharedGrepMark(sharedWorkspacePrefix, skills),
+              },
+        );
   const subagentPlugins = subagentPluginMiddleware(plugins);
   // 工具過濾（#707）遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），
   // 不必扣自帶的。
@@ -784,6 +826,9 @@ export function foldRegistry(
     shared('sessionCheckpoint', sessionCheckpoint),
     // 其餘 plugin 的：排在子代理 `spec.middleware` 外層，plugin 打底、自帶的在內側，同 `tools` 那條「全域 → 自帶」的軸線。
     { name: 'plugins.rest', root: same(plugins.rest), subagent: same(subagentPlugins.rest) },
+    // 核准政策句排在其餘 plugin 內側：沙箱政策句由 `plugins.rest` 裡的那一顆附加，這一句附加在其餘 plugin 的文字之後。
+    // 在子代理自帶的與 `last` 的外側，它們附加的文字在這一句之後。
+    shared('approvalPolicyPrompt', approvalPolicyPrompt),
     // 子代理自己帶的 middleware：每個子代理不同，所以是「逐個取」而不是共用。
     subagentOnly(
       'spec.middleware',
@@ -794,6 +839,9 @@ export function foldRegistry(
     // `tools/post-execute`（#1248）在輸出校驗等貼著工具本體的那幾顆外側（dsh 在 post-execute 之前驗輸出）、在每一個 plugin
     // middleware 內側：plugin 與圍堵看到的是替換過的那則。
     shared('toolPostExecute', toolPostExecute),
+    // 共用區讀出來的內容加前綴：在輸出校驗與讀到哪的外側（它們看到沒標過的文字），在搜尋上限、外溢與圍堵的內側（`Found … matches`
+    // 排在前綴之前，日誌與外溢預覽都帶前綴）。子代理的檔案工具也經過它。見 {@link ./shared-read-mark.ts}。
+    shared('sharedReadMark', sharedReadMark),
     // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本（dsh 在
     // `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，這裡照規矩不驗。
     // 見 {@link ./output-schema.ts}。
@@ -840,7 +888,7 @@ export function foldRegistry(
       toolOrder,
       toolFilter: options.subagentToolFilter,
       baseToolNames: options.baseToolNames ?? [],
-      skills: registry.skills.sources(),
+      skills,
       permissions,
       slots,
     }),
@@ -865,8 +913,7 @@ export function foldRegistry(
     );
   }
 
-  const skills = registry.skills.sources();
-  if (skills.length > 0) params.skills = skills;
+  if (skills.length > 0) params.skills = [...skills];
   const memory = registry.memory.sources();
   if (memory.length > 0) params.memory = memory;
 
@@ -1109,18 +1156,22 @@ function foldPermissions(registry: PluginRegistry): FilesystemPermission[] {
  * `enabled` 與 checkpointer 這兩格答的是不同的問題，映射見 {@link ApprovalChannel}。
  */
 function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): AgentMiddleware {
-  const channel: ApprovalChannel = deriveApprovalChannel({
+  return createApprovalGateMiddleware(
+    registry.approvals.listeners(),
+    foldApprovalChannel(options),
+    registry.sessions,
+    options.approvals?.policy,
+  );
+}
+
+/** 這個組裝的核准管道，閘門與政策句共用：`enabled` 與 checkpointer 兩格的映射見 {@link ApprovalChannel}。 */
+function foldApprovalChannel(options: FoldOptions): ApprovalChannel {
+  return deriveApprovalChannel({
     ...(options.approvals?.enabled !== undefined && {
       approvalsEnabled: options.approvals.enabled,
     }),
     hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
-  return createApprovalGateMiddleware(
-    registry.approvals.listeners(),
-    channel,
-    registry.sessions,
-    options.approvals?.policy,
-  );
 }
 
 /**
@@ -1139,6 +1190,18 @@ export function createBackgroundApprovalGate(registry: PluginRegistry): AgentMid
     registry.approvals.listeners(),
     { kind: 'policy-never' },
     registry.sessions,
+  );
+}
+
+/**
+ * 背景子代理的核准政策句（[#1986](https://github.com/DemianLi/nexus-agent/issues/1986)）：管道固定 `policy-never`，跟
+ * {@link createBackgroundApprovalGate} 同一組事實，所以講的一定是「一律自動回絕」那句。同樣由
+ * {@link ./subagent-graph.ts | compileSubagentGraph} 的呼叫端在編背景圖時傳進去，換掉規格裡跟 root 同一顆的那個。
+ */
+export function createBackgroundApprovalPolicyPrompt(): AgentMiddleware {
+  return createApprovalPolicyPromptMiddleware(
+    { kind: 'policy-never' },
+    () => DEFAULT_APPROVAL_POLICY,
   );
 }
 
@@ -1453,9 +1516,10 @@ function repeatReminderDisposition(
  * [#142](https://github.com/DemianLi/nexus-agent/issues/142) 要消滅的狀態。同名取代是
  * 唯一能讓基座那顆消失的縫（見 {@link SUMMARIZATION_MIDDLEWARE_NAME}）；基座的
  * `excludedMiddleware` 掛在按模型名稱查的行程級 profile 上，做不成「這次組裝關掉」。
- * 空殼沒有任何鉤子、也沒有 `stateSchema`：基座的 `task` 照樣往子代理的 state 塞
+ * 空殼沒有 `stateSchema`，也沒有會變成圖節點的鉤子：基座的 `task` 照樣往子代理的 state 塞
  * `_summarizationSessionId`，實測委派不受影響（`summarization.test.ts`）。
- * [#446](https://github.com/DemianLi/nexus-agent/issues/446)。
+ * [#446](https://github.com/DemianLi/nexus-agent/issues/446)。有會話註冊表時它帶一個 `wrapModelCall`，把日誌上記過的剪法與
+ * 參數截斷換上去（{@link createRecordedProjectionShell}，[#1567](https://github.com/DemianLi/nexus-agent/issues/1567)）；沒有就只有名字。
  *
  * **沒有 default backend 又沒關掉是拋，不是靜默跳過。** 這一格的失敗方向有主人：
  * 靜默跳過等於讓基座那顆回來，而它會長得跟「一切正常」一模一樣。同型的前例是
@@ -1478,7 +1542,7 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
   const settings = summarizationDisposition(registry, options);
   // **空殼要在拋之前。** 不要摘要的組裝沒有歷史要寫，也就不必有 backend；而「不要」今天
   // 有兩個來源（明著傳的 `false`、條目的 `disabled: true`），兩個都走這條早退。
-  if (settings === false) return () => ({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+  if (settings === false) return () => createRecordedProjectionShell(registry.sessions);
   const backend = options.defaultBackend;
   if (backend === undefined)
     throw new Error(

@@ -9,7 +9,7 @@
  *
  * - **推理強度只認 `off` 與 `default`。** dsh 的等級由 adapter 驗證、線上怎麼帶也是 adapter 的事；我們的型錄雖然可以宣告任意名字，但只有
  *   `off` 量過線上寫法（`thinkingOffBody`）。與 {@link ./subagent-model-selection.ts} 同一條界線：宣告了別的名字也先不放進可選清單，
- *   `model.select` 帶了就拒。**`default` 一律可選**（只要模型宣告了任何等級）——它是「不加任何設定」，沒有它使用者選了 `off` 就回不去。
+ *   `model.select` 帶了就拒。**`default` 可選的條件是模型有可選等級**（今天就是宣告了 `off`）——它是「不加任何設定」，沒有它使用者選了 `off` 就回不去。
  * - **沒有 provider。** 見 `model-route.ts`。
  * - **選擇存在會話日誌，不存成使用者的個人預設。** PM 2026-10-08 決策：dsh 的背景存檔要有設定編輯器才存得住，我們沒有由程式代管的個人
  *   設定檔，照 dsh 沒掛設定編輯器時的已知限制（`agent-default-model/README.md:117`）處理。
@@ -63,7 +63,7 @@ export interface ModelSelectionHost {
   /** 型錄（`model.catalog` 用）。 */
   catalog(): ModelCatalog;
   /**
-   * 驗一個選擇（`model.select` 用）：型錄有那顆、強度是它可選的等級（`default` 一律可）。通過回正規化後的路由。
+   * 驗一個選擇（`model.select` 用）：型錄有那顆、強度是它可選的等級（有可選等級的模型也收 `default`）。通過回正規化後的路由。
    * 照 dsh `selectModel`：不在型錄、或模型沒有推理資訊卻帶強度、或帶了沒宣告的等級，都在打供應商之前拒（`model_unavailable`）。
    */
   validate(selection: ModelSelection): ModelRoute | ModelUnavailable;
@@ -80,9 +80,17 @@ export interface ModelSelectionHost {
   select(selection: ModelSelection): ModelSelectResult;
   /**
    * 這條 thread **下一個請求**用的那顆收不收圖（[#732](https://github.com/DemianLi/nexus-agent/issues/732) 的收圖檢查）：
-   * 使用者選的那顆，沒選過是預設。型錄沒有那一筆（續接的會話選過、後來被拿掉的）是 `'undeclared'`，不替它拒。
+   * 使用者選的那顆，沒選過或那顆已不在型錄是預設。
    */
   imageSupport(): ImageSupport;
+  /**
+   * 這條 thread **下一步會走的那顆**的窗口（token），引用別的會話的預算用（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862）。
+   *
+   * 路由用控制器的 `next()`：使用者最後選的 → 最近一次請求走的 → 部署預設，**純讀日誌、不留快照**。不能用 `assembleStep()`：它會寫
+   * `#assembled`，`takeStepRoute()` 下一次就吃那一份，`beforeModel` 被跳過的那一步會用上這裡留下的舊路由。**也不照 `imageSupport()` 只看
+   * 「選的」**：沒選過的會話走的是最近一次請求的那顆，不是部署預設。
+   */
+  nextContextWindow(): number | undefined;
 }
 
 /**
@@ -105,14 +113,14 @@ export function createModelSelectionHost(options: {
 
   const controller = new ModelSelectionController({
     defaultRoute,
+    inCatalog: (model) => findModelEntry(liveModel.models, model) !== undefined,
     instanceFor: (route) => {
       // 預設那顆在組裝時建好、貼好標籤了，不為它另建（沒選過的會話逐欄與今天一致）。
       if (sameRoute(route, defaultRoute)) return undefined;
       const key = `${route.model}\u0000${route.effort ?? ''}`;
       let instance = instances.get(key);
       if (instance === undefined) {
-        // 型錄沒有這個 id（例如續接的會話選過、後來被從型錄拿掉的）會在這裡拋，訊息指名它與型錄；
-        // 使用者改選一顆型錄上有的就恢復。
+        // 型錄沒有這個 id 會在這裡拋，訊息指名它與型錄。下一步的路由已經跳過這種 id，走得到這裡的只有讀最近一次請求的摘要器，它接住了。
         instance = createLiveModel({ ...liveModel, modelId: route.model }, undefined, credentials, {
           ...(route.effort === 'off' && { thinkingOff: true }),
           ...(attachments !== undefined && { attachments }),
@@ -155,8 +163,13 @@ export function createModelSelectionHost(options: {
     },
     imageSupport() {
       const { selected } = controller.state();
-      const entry = findModelEntry(liveModel.models, (selected ?? defaultRoute).model);
+      const entry =
+        findModelEntry(liveModel.models, selected?.model ?? defaultRoute.model) ??
+        findModelEntry(liveModel.models, defaultRoute.model);
       return entry === undefined ? 'undeclared' : acceptsImages(entry);
+    },
+    nextContextWindow() {
+      return findModelEntry(liveModel.models, controller.next().model)?.contextWindow;
     },
     validate(selection) {
       const entry = findModelEntry(liveModel.models, selection.modelId);

@@ -11,6 +11,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
+import { APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME } from './approval-policy-prompt.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
 import { EventBus } from './events.js';
 import { TOOL_BARRIER_MIDDLEWARE_NAME } from './tool-barrier.js';
@@ -69,6 +70,13 @@ import { createRegistry } from './registry.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { PluginEntry } from './plugin.js';
 import { toolErrorOf } from './tool-events.js';
+
+/**
+ * 摘要那格關掉時的空殼長相：同名、只有一個 `wrapModelCall`（照日誌換上記過的剪法與參數截斷，#1567），沒有 `stateSchema`、
+ * 也沒有會變成圖節點的鉤子。真的摘要器鍵比這多，所以拿鍵集合就分得出兩者。
+ */
+const RECORDED_SHELL_KEYS = ['name', 'wrapModelCall'];
+const keysOf = (middleware: unknown): string[] => Object.keys(middleware as object).sort();
 
 /**
  * 樁回的東西：模型看到的字、狀態與碼。**樁是錯誤、不帶碼**（#273）——dsh 沒有 root-only 旗標，
@@ -200,6 +208,7 @@ describe('middleware 註冊點', () => {
       'a',
       'b',
       'c',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -227,6 +236,7 @@ describe('middleware 註冊點', () => {
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       'c',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -254,6 +264,7 @@ describe('middleware 註冊點', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -281,6 +292,7 @@ describe('middleware 註冊點', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'b',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       // 兩顆 last 之間仍是註冊順序。
       'a',
       'd',
@@ -329,6 +341,7 @@ describe('middleware 註冊點', () => {
         MODEL_USAGE_MIDDLEWARE_NAME,
         SESSION_CHECKPOINT_MIDDLEWARE_NAME,
         'late',
+        APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
         // plugin 打底、子代理自帶的在內側。
         ...(subagent.name === 'releaser' ? ['subagent-own'] : []),
         OUTPUT_SCHEMA_MIDDLEWARE_NAME,
@@ -503,6 +516,7 @@ describe('「先讀後改」策略打底', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       // 有 backend 就有：檔案工具的失敗標成錯誤，貼著工具本體（#293）。
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
@@ -539,6 +553,7 @@ describe('「先讀後改」策略打底', () => {
       EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
@@ -771,6 +786,7 @@ describe('approvals 註冊點', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -802,6 +818,7 @@ describe('approvals 註冊點', () => {
       EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
@@ -829,6 +846,7 @@ describe('approvals 註冊點', () => {
       EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
       MAX_TOKENS_MIDDLEWARE_NAME,
@@ -1435,6 +1453,7 @@ describe('摘要器打底', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
@@ -1471,6 +1490,7 @@ describe('摘要器打底', () => {
       EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
@@ -1509,7 +1529,7 @@ describe('摘要器打底', () => {
   /**
    * **`false` 是真的關掉，射程涵蓋三種 agent**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
    *
-   * 不給的話基座會補回它自己那顆，所以要的是「每一處都有一顆同名、沒有任何鉤子的」。
+   * 不給的話基座會補回它自己那顆，所以要的是「每一處都有一顆同名、只有 `wrapModelCall` 的」。
    * 只看 root 的話，「空殼沒發給子代理」這個錯寫法照樣綠——行為上也量不出來，基座那顆的
    * 兜底門檻是 170k token，測試裡永遠碰不到。
    */
@@ -1524,8 +1544,7 @@ describe('摘要器打底', () => {
     expect(params.subagents.map((sub) => sub.name).sort()).toEqual(
       [GENERAL_PURPOSE_SUBAGENT.name, 'writer'].sort(),
     );
-    for (const stack of stacks)
-      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    for (const stack of stacks) expect(keysOf(pick(stack))).toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('關掉時不需要 default backend', async () => {
@@ -1615,6 +1634,7 @@ describe('提醒器打底', () => {
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
@@ -1652,6 +1672,7 @@ describe('提醒器打底', () => {
       EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
@@ -1920,6 +1941,7 @@ describe('fs 服務', () => {
       hasWorkspace: () => false,
       workspaceRoot: () => undefined,
       sharedWorkspacePrefix: () => undefined,
+      skillSources: () => [],
     };
     await fold([createHostServicesPlugin({ fs })], { defaultBackend: fakeBackend('default') });
     expect(marker(fs.backend())).toBe('own');
@@ -2330,7 +2352,7 @@ describe('摘要的設定從條目來', () => {
     const params = await foldBare([]);
     for (const stack of stacks(params)) {
       expect(pick(stack)).toBeDefined();
-      expect(pick(stack)).not.toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+      expect(keysOf(pick(stack))).not.toEqual(RECORDED_SHELL_KEYS);
     }
   });
 
@@ -2339,7 +2361,7 @@ describe('摘要的設定從條目來', () => {
       { plugin: summarizationPlugin, config: { trigger: [{ type: 'messages', value: 2 }] } },
     ]);
     for (const stack of stacks(params))
-      expect(pick(stack)).not.toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+      expect(keysOf(pick(stack))).not.toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('第 3 態：`disabled: true` 給三種 agent 各一顆同名空殼', async () => {
@@ -2349,8 +2371,7 @@ describe('摘要的設定從條目來', () => {
     expect(params.subagents.map((sub) => sub.name).sort()).toEqual(
       [GENERAL_PURPOSE_SUBAGENT.name, 'writer'].sort(),
     );
-    for (const stack of stacks(params))
-      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    for (const stack of stacks(params)) expect(keysOf(pick(stack))).toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('第 1 態：組裝點明著講的贏過條目——傳 false 就是空殼', async () => {
@@ -2358,8 +2379,7 @@ describe('摘要的設定從條目來', () => {
       [{ plugin: summarizationPlugin, config: { trigger: [{ type: 'messages', value: 2 }] } }],
       { summarization: false },
     );
-    for (const stack of stacks(params))
-      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    for (const stack of stacks(params)) expect(keysOf(pick(stack))).toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('被關掉時不需要 default backend——空殼沒有歷史要寫', async () => {
@@ -2367,7 +2387,7 @@ describe('摘要的設定從條目來', () => {
     const params = await foldBare([{ plugin: summarizationPlugin, disabled: true }], {
       defaultBackend: undefined,
     });
-    expect(pick(params.middleware)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    expect(keysOf(pick(params.middleware))).toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('條目不在清單上、又沒給 default backend 時照樣拋', async () => {

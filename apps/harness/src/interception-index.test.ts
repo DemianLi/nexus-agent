@@ -259,10 +259,11 @@ const INDEX: readonly InterceptionRow[] = [
       '工具名／call id／理由／結果），詞彙同 dsh 的 `ApprovalOutcome` 四值。**兩個生產者都在圖外的事實沒變**' +
       '（`apps/harness/src/thread-pump.ts`，`cli.ts` 傳 `HEADLESS_APPROVALS` 所以永遠不問人），' +
       '但事件的寫法因此分兩條：人那條由 pump 在記 `interrupt/raised` 的同一刻寫 asked、收到回覆或收回時寫 decided' +
-      '（閘門在圖內、`interrupt()` 回來後從頭重跑，在它前面寫會是兩筆）；不必問人就確定的（政策關掉 → `rejected`、' +
+      '（閘門在圖內、`interrupt()` 回來後從頭重跑，在它前面寫會是兩筆），回覆不是 approve 也不是 reject 時記 `unavailable`（#2027）；' +
+      '不必問人就確定的（政策關掉 → `rejected`、' +
       '沒有管道 → `unavailable`、子代理一律 `policy-never`）由閘門在圖內一次寫一對。listener 直接 `deny` 不寫，' +
       '同 dsh（只有 `ask` 才進核准服務）。**dsh 沒有而我們多的一格**：核准拒絕的 `tool/result` 帶碼' +
-      '（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／`TOOL_DENIED_BY_LISTENER`），' +
+      '（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／`APPROVAL_INVALID_REPLY`／`TOOL_DENIED_BY_LISTENER`），' +
       '依據是 #1018 Q2 拍板的「拒絕帶原因碼」（卡上說 dsh 也帶，是讀錯：dsh 的核准拒絕結果沒有 info），載體用 dsh 的 `deny.info` 那一格。' +
       '**還沒有的**：`cancelled` 只在停在核准點按停止時寫（pump 的 `#withdraw`）；' +
       "**政策事件**（#437）：`approval/policy` 記政策（`ask`／`never`）的起始值與每次切換，子代理日誌補一顆 `source: 'delegation'`；" +

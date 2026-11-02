@@ -32,6 +32,8 @@ import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import { threadCapacityPlugin } from './settings/thread-capacity.js';
+import { sessionLogBudgetFromSetting } from './session-log-budget.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { HARNESS_VERSION } from './harness-version.js';
@@ -47,6 +49,7 @@ import {
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   resumeClosingInterruptedTurn,
   SessionFormatUnsupportedError,
+  SessionLogOffset,
   turnReachedMaxTokens,
   type SessionLog,
 } from '@nexus/core';
@@ -60,7 +63,9 @@ import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round
 import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
+import { createCredentialService } from './credentials.js';
 import { processLaunchEnv } from './launch-env.js';
+import { resolveHarnessHome } from './harness-home.js';
 import { turnFailureOf, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import type { LiveLaunch } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
@@ -97,6 +102,7 @@ import {
   launchWorkspaceRootOf,
   resolveWorkspaceRoot,
   outsideWorkspace,
+  assertPatchesOutsideWorkspace,
   THREAD_ID,
   formatGoalDriverDisclosure,
   type NexusAgent,
@@ -861,6 +867,12 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     return;
   }
 
+  await assertPatchesOutsideWorkspace({
+    workspace: invocation.workspace,
+    cwd: options.cwd ?? process.cwd(),
+    patches: invocation.patches,
+  });
+
   // 同 `--dump-config` 的位置與理由。標準輸出只放那份 JSON（`printer.log` 是標準輸出），診斷走 `printer.error`；
   // 不完整時文件印完之後拋 `ConfigSchemaIncompleteError`，由 `main` 設退出碼 1。
   if (invocation.dumpConfigSchema) {
@@ -1028,6 +1040,10 @@ async function runLaunched(
   );
   const invariantTap =
     invariantLogPath === undefined ? undefined : createInvariantLog(invariantLogPath);
+  // 會話日誌額度（#2115）：同 serve，讀 `thread-capacity` 的 `sessionLogBudgetMiB`；那一列其餘的格是 serve 的，CLI 不用。
+  const logBudget = sessionLogBudgetFromSetting(
+    startupSetting(plugins, threadCapacityPlugin).sessionLogBudgetMiB,
+  );
   const sessionStore = !persistenceMounted
     ? undefined
     : resumeDir === undefined
@@ -1038,8 +1054,9 @@ async function runLaunched(
             options.env ?? process.env,
           ),
           warn: sessionLogWarn,
+          logBudget,
         })
-      : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn });
+      : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn, logBudget });
   // 落盤確認（#1606）讀回比對用的 store：樹上 `session-durability` 那一列在讀清單時依清單掛上，做法在被呼叫當下才讀它。
   if (sessionStore !== undefined) root.tree.bindDurableStore(sessionStore);
   // 過大工具結果的暫存（#734）：根與保留天數從清單解一次；**啟動時清一次**超過保留期的檔（別人改得動的根
@@ -1062,7 +1079,7 @@ async function runLaunched(
       ? undefined
       : // 當掉那一輪的收尾在這裡寫回檔上（#721），下面吃 `resumed.events` 的各處拿到的已含補結。
         await resumeClosingInterruptedTurn(sessionStore, THREAD_ID).catch((error: unknown) => {
-          // 這一版讀不懂的日誌：原始檔在哪裡印給本機使用者（#1559 N0646）。錯誤訊息本身不帶路徑（serve 會把它送到瀏覽器），
+          // 這一版讀不懂的日誌：原始檔在哪裡印給本機使用者（#1559 N0646）。錯誤訊息本身不帶路徑，
           // CLI 的終端機就是使用者自己的，所以在這裡補上。
           if (error instanceof SessionFormatUnsupportedError && error.location !== undefined) {
             printer.error(`原始日誌：${error.location.path}`);
@@ -1125,7 +1142,14 @@ async function runLaunched(
           ...effective,
           ...(threadWorkspaceRoot !== undefined && { workspaceRoot: threadWorkspaceRoot }),
           liveModel,
-          ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+          // 沒帶 `--live` 也給一份（#1989）：MCP 設定裡的憑證引用跟模型 key 同一條規則，這個入口不讀受管檔；沒有 `.env` 那兩層。
+          credentials:
+            liveLaunch?.credentials ??
+            createCredentialService({
+              home: resolveHarnessHome(options.env ?? process.env),
+              launchEnv: processLaunchEnv(),
+              store: false,
+            }),
           threadTitle,
           threadTitleLlm,
           optionalEntries: optionalEntriesOf(loaded, { live: invocation.live }),
@@ -1236,7 +1260,10 @@ async function runLaunched(
           ...(workspaceRoot !== undefined && { workspaceRoot }),
           // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
           ...(resumed !== undefined && {
-            resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+            resumedRoot: {
+              stored: resumed.stored,
+              storedCount: SessionLogOffset(resumed.events.length),
+            },
           }),
           // **背景寫入被拒只有這一行看得見**（協調器自己吞掉，響亮的那次歸 `flush`）。
           // 走 `printer.error` 而不是 `console.warn`，理由同不變量那條：前綴是唯一分得出

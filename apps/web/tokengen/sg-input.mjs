@@ -2,7 +2,7 @@
  * 產生器的 SG 輸入表（#1512，#1468 Q10）：`src/vendor/solid-glass/solid-glass.css` 裡產生器會讀到的值，照抄。
  * `src/styles/sg-input.test.ts` 用 `readCascade` 直接讀 vendor 檔逐值比對，SG 升版改了值、這裡沒跟上就紅。
  *
- * 只列產生器用得到的：底色與漸層停點（量對比要疊）、字色、面（量鑑別度、算 stage 與細線）、要約束的顏色。
+ * 只列產生器用得到的：底色與漸層停點（量對比要疊）、字色、面（量鑑別度、stage 的 hover-faint）、要約束的顏色。
  */
 
 /** `:root`／`.dark` 底下沒有條件的值。 */
@@ -14,6 +14,7 @@ export const SG = {
     card: 'oklch(0.98 0.004 265 / 60%)',
     border: 'oklch(0.3 0.02 265 / 13%)',
     sidebar: 'oklch(0.975 0.004 265 / 44%)',
+    'hover-faint': 'oklch(0.3 0.02 265 / 5.5%)',
     'light-1': 'oklch(0.68 0.13 165 / 7%)',
     'light-2': 'oklch(0.75 0.08 240 / 11%)',
     'light-3': 'oklch(0.68 0.13 165 / 4%)',
@@ -32,6 +33,7 @@ export const SG = {
     card: 'oklch(0.31 0 0 / 46%)',
     border: 'oklch(1 0 0 / 11%)',
     sidebar: 'oklch(0.11 0 0 / 50%)',
+    'hover-faint': 'oklch(1 0 0 / 4%)',
     'light-1': 'transparent',
     'light-2': 'transparent',
     'light-3': 'transparent',

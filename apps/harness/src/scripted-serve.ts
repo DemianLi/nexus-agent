@@ -18,6 +18,7 @@ import { join } from 'node:path';
 
 import type { MemoryGaugeDeps } from './memory-gauge.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import type { SessionLogBudget } from './session-log-budget.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -70,6 +71,10 @@ export async function startScriptedServe(
     readonly memoryGaugeDeps?: MemoryGaugeDeps;
     /** 測試接縫（`RunServeOptions.workspaceRootOf`）：把每條 thread 的可寫根固定成這個函式回的值（不配私有根）。 */
     readonly workspaceRootOf?: (threadId: string) => string | undefined;
+    /** 測試接縫（`RunServeOptions.sessionLogBudget`）：會話日誌的位元組額度換一本小的。 */
+    readonly sessionLogBudget?: SessionLogBudget;
+    /** 行程環境（`RunServeOptions.env`）；省略即空的。 */
+    readonly env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<ScriptedServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-scripted-serve-'));
@@ -85,9 +90,12 @@ export async function startScriptedServe(
       ...(options.argv ?? []),
     ],
     log: options.log ?? (() => undefined),
-    env: {},
+    env: options.env ?? {},
     ...(options.memoryGaugeDeps === undefined ? {} : { memoryGaugeDeps: options.memoryGaugeDeps }),
     ...(options.workspaceRootOf === undefined ? {} : { workspaceRootOf: options.workspaceRootOf }),
+    ...(options.sessionLogBudget === undefined
+      ? {}
+      : { sessionLogBudget: options.sessionLogBudget }),
   })) as RunningServe;
   return {
     running,

@@ -84,4 +84,51 @@ server.registerTool(
   () => ({ content: [] }),
 );
 
+/**
+ * 停止的驗收用（#1985）：一支慢查詢與一份讀很慢的資源，量的是 **server 這一側有沒有收到取消**。只在設了 `FIXTURE_SLOW_LOG`
+ * 時掛上（資源會讓這台多宣告 `resources` 能力）。被呼叫時往那個檔附加 `started`，請求的中止訊號舉起來（client 送了
+ * `notifications/cancelled`）時附加 `cancelled` 並回，否則睡滿 {@link SLOW_QUERY_MS} 才回。
+ */
+export const SLOW_QUERY = 'slow_query';
+export const SLOW_REPORT_URI = 'slow://report';
+export const SLOW_QUERY_MS = 15_000;
+const SLOW_LOG = process.env['FIXTURE_SLOW_LOG'];
+
+/** 等到被取消或睡滿；被取消時記一行。 */
+async function slowly(signal: AbortSignal, log: string): Promise<void> {
+  appendFileSync(log, 'started\n');
+  const cancelled = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), SLOW_QUERY_MS);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      { once: true },
+    );
+  });
+  if (cancelled) appendFileSync(log, 'cancelled\n');
+}
+
+if (SLOW_LOG !== undefined) {
+  server.registerTool(
+    SLOW_QUERY,
+    { description: '一支很慢的查詢。', inputSchema: { query: z.string().describe('查什麼') } },
+    async ({ query }, extra) => {
+      await slowly(extra.signal, SLOW_LOG);
+      return { content: [{ type: 'text', text: `${query}：查完了` }] };
+    },
+  );
+  server.registerResource(
+    'slow-report',
+    SLOW_REPORT_URI,
+    { mimeType: 'text/plain' },
+    async (uri, extra) => {
+      await slowly(extra.signal, SLOW_LOG);
+      return { contents: [{ uri: uri.href, text: '報表產好了' }] };
+    },
+  );
+}
+
 await server.connect(new StdioServerTransport());

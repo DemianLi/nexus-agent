@@ -12,14 +12,14 @@
  * - **對照（全開還在表裡）**：不收，逃逸寫得進去——沒有這一格，上面兩格的「沒寫進去」分不出是收窄還是別的原因。
  * - **R2（不多寫、不改寫）**：三格的子代理日誌，`sandbox/mode`／`permission/preset`／`approval/policy` 三種事件在叫醒前後逐顆相同。
  *
- * 另外：warn 一個子代理一個行程一行（送兩次話）；叫升級仍被拒（子代理拿不到 root 的 grant）。
+ * 另外：warn 一個子代理一個行程一行（送兩次話）；叫升級仍被拒（收回之後的那一格沒有格子升得到）。
  */
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
+import { nonWideningRefusal, SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
@@ -89,7 +89,7 @@ const WAKE_TURNS: readonly ScriptedTurn[] = [
         name: SANDBOX_ESCALATION_TOOL_NAME,
         args: {
           file_path: '/link/escalated.txt',
-          sandbox_permissions: 'danger-full-access',
+          sandbox_permissions: 'workspace-write',
           justification: '要寫這個檔',
         },
       },
@@ -258,7 +258,10 @@ describe('冷復活的背景子代理，委派快照比權限表裡每一組都�
         event.type === 'tool/result' && (event.data as { callId?: string }).callId === 'call_3_0',
     );
     expect(escalation?.data).toMatchObject({ isError: true });
-    expect(JSON.stringify(escalation?.data)).toContain('子代理拿不到升級的核准');
+    // 判加寬讀的是收回之後的那一格：還是全開的話，這句會說「並不比 danger-full-access 更寬」。
+    expect(
+      (escalation?.data as { message: { data: { content: string } } }).message.data.content,
+    ).toBe(`Error: ${nonWideningRefusal('workspace-write', 'workspace-write')}`);
     // 兩輪、warn 只有一行，講清楚從哪一格收到哪一格。
     const warnings = second.lines.filter((line) => DELEGATION_WARNING.test(line));
     expect(warnings).toHaveLength(1);

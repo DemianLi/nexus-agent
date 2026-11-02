@@ -1,8 +1,10 @@
 // @vitest-environment node
+import { EXTERNAL_MCP_CONTENT_NOTICE } from '../../../../packages/nexus-core/src/untrusted-content';
 import type { ToolEntry } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
+  MCP_NOTICE,
   OUTPUT_MAX_CHARS,
   clipMiddle,
   OUTPUT_MAX_LINES,
@@ -38,6 +40,57 @@ describe('showsInput', () => {
 
   it.each(['echo', 'run_javascript', 'task', 'mcp__x__y'])('%s 參數也畫', (name) => {
     expect(showsInput(name)).toBe(true);
+  });
+});
+
+describe('MCP 的外部內容前綴（#1930）', () => {
+  const NOTICE = `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n`;
+  const shown = (overrides: Partial<ToolEntry>) => toolOutput(entry(overrides))?.head;
+
+  it('字句跟 core 的常數一樣', () => {
+    expect(MCP_NOTICE).toBe(EXTERNAL_MCP_CONTENT_NOTICE);
+  });
+
+  it('工具結果：前綴不畫，本文完整', () => {
+    expect(shown({ name: 'mcp__srv__note', text: `${NOTICE}第一行\n第二行` })).toBe(
+      '第一行\n第二行',
+    );
+  });
+
+  it.each(['read_mcp_resource', 'list_mcp_resources', 'list_mcp_resource_templates'])(
+    '%s：出處行留著，前綴不畫',
+    (name) => {
+      expect(shown({ name, text: `MCP server: srv\n\n${NOTICE}{"a":1}` })).toBe(
+        'MCP server: srv\n\n{"a":1}',
+      );
+    },
+  );
+
+  it('只拿掉標記加上去的那一次：本文開頭或中間有同一句話都留著', () => {
+    expect(shown({ name: 'mcp__srv__note', text: `${NOTICE}${NOTICE}本文` })).toBe(`${NOTICE}本文`);
+    expect(shown({ name: 'mcp__srv__note', text: `本文\n\n${NOTICE}後面` })).toBe(
+      `本文\n\n${NOTICE}後面`,
+    );
+    expect(
+      shown({ name: 'read_mcp_resource', text: `MCP server: srv\n\n${NOTICE}${NOTICE}{}` }),
+    ).toBe(`MCP server: srv\n\n${NOTICE}{}`);
+  });
+
+  it('前綴不在標記的位置就不碰', () => {
+    expect(shown({ name: 'mcp__srv__note', text: `前面\n${NOTICE}本文` })).toBe(
+      `前面\n${NOTICE}本文`,
+    );
+    expect(shown({ name: 'read_mcp_resource', text: `${NOTICE}{}` })).toBe(`${NOTICE}{}`);
+  });
+
+  it.each(['read_file', 'echo', 'task', 'x_mcp__y'])('非 MCP 的 %s 照原樣', (name) => {
+    expect(shown({ name, text: `${NOTICE}本文` })).toBe(`${NOTICE}本文`);
+  });
+
+  it('失敗的結果沒有標過，照原樣', () => {
+    expect(shown({ name: 'mcp__srv__note', status: 'failed', text: `${NOTICE}本文` })).toBe(
+      `${NOTICE}本文`,
+    );
   });
 });
 

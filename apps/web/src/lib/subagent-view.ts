@@ -1,6 +1,10 @@
 import { DELEGATION_TOOL_NAMES, isBackgroundSubagentMeta } from '@nexus/wire';
 import type { Attribution, BackgroundSubagentMeta, ConversationEntry } from '@nexus/wire';
 
+import { serverClosingText } from '@/lib/server-closing';
+import { threadLogBudgetText } from '@/lib/thread-log-budget';
+import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
+import { threadWriterHeldText } from '@/lib/thread-writer-held';
 import { firstLine } from '@/lib/tool-view';
 
 /**
@@ -157,9 +161,18 @@ export function canStopSubagent(state: SubagentRunState): boolean {
  * `subagent.send` 被拒時講給人聽的一句（#869 Q1；冷叫醒的三句是 #1271 PM 定的文案）。不認得的碼退回伺服器的 `message`。
  *
  * - `subagent_not_found`：叫不醒（伺服器重開後舊格式、檔案不在或壞了），呼叫端接著把這張卡當收線。
- * - `unknown_error`：`subagent.send` 只有「叫醒本身失敗」會回它（租約被別的行程握著、日誌壞了），原因在 `message`，可以再送。
+ * - `unknown_error`：`subagent.send` 只有「叫醒本身失敗」會回它（子代理自己的租約被別的行程握著、日誌壞了），原因只進 serve 的日誌，可以再送。
+ * - `thread_log_too_large`、`thread_log_busy`：冷叫醒要先把主對話開起來，主對話的日誌放不進額度（#2203）。
+ * - `thread_writer_held`：同上，主對話被別的寫入者握著（#2214）。
+ * - `thread_root_mismatch`：同上，主對話開在別的 home 或工作區（#2222）。
  */
 export function subagentSendError(code: string, message: string): string {
+  const refused =
+    serverClosingText(code) ??
+    threadLogBudgetText(code) ??
+    threadWriterHeldText(code) ??
+    threadRootMismatchText(code);
+  if (refused !== undefined) return refused;
   switch (code) {
     case 'subagent_not_found':
       return '這個子代理無法再叫醒，只能查看它的對話。';

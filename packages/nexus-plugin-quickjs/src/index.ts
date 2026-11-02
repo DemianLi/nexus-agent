@@ -48,9 +48,11 @@
 import { tool } from '@langchain/core/tools';
 import { HarnessError } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
-import { getQuickJS, shouldInterruptAfterDeadline } from 'quickjs-emscripten';
-import type { QuickJSContext, QuickJSHandle } from 'quickjs-emscripten';
+import { shouldInterruptAfterDeadline } from 'quickjs-emscripten';
+import type { QuickJSContext, QuickJSHandle, QuickJSWASMModule } from 'quickjs-emscripten';
 import { z } from 'zod';
+
+import { currentModule, replaceModule } from './module.js';
 
 /**
  * 註冊出來的工具名。
@@ -65,12 +67,13 @@ export const RUN_JAVASCRIPT_TOOL_NAME = 'run_javascript';
  * 程式本身失敗時分成哪幾種，詞彙照 dsh 的 `PtcRunFailure.kind`
  * （`packages/ptc-runtime/ptc-runtime/src/types.ts:130-141` 的 `PtcRunFailure.kind`，`687f282e`）。這裡用得到其中三個：
  *
- * - `exception`：程式拋出來的，或它回傳的 promise 被 reject。記憶體、堆疊上限也走這一條——
- *   QuickJS 把它們報成 VM 裡的 `InternalError`／`RangeError`，跟程式自己拋的沒有兩樣。
- * - `timeout`：撞到 {@link QuickJsPluginOptions.timeoutMs} 被中斷；以及回傳一個永遠不會完成的
- *   promise（見 {@link runInVm}）。
+ * - `exception`：程式拋出來的，或它回傳的 promise 被 reject。求值時撞到記憶體、堆疊上限也走這一條（檢查完成值時撞到的算 `invalid-output`）——
+ *   QuickJS 把它們報成 VM 裡的 `InternalError`／`RangeError`，跟程式自己拋的沒有兩樣。host 的堆疊先用完
+ *   （見 {@link runInVm}）也是這一條。
+ * - `timeout`：interrupt handler 觸發過，也就是撞到 {@link QuickJsPluginOptions.timeoutMs} 被中斷；以及回傳一個
+ *   永遠不會完成的 promise（見 {@link formatResult}）。看的是 host 的狀態，不是 VM 丟出來的值。
  * - `invalid-output`：完成值不是無損的 JSON（`NaN`、`Infinity`、`-0`、`Map`、函式、`undefined` 欄位、
- *   稀疏陣列、循環……），見 {@link SNAPSHOT_SOURCE}。
+ *   稀疏陣列、循環……），或檢查它的時候拋了錯（見 {@link completion}）。
  */
 export type CodeRunFailureKind = 'exception' | 'timeout' | 'invalid-output';
 
@@ -108,8 +111,14 @@ export const DEFAULT_TIMEOUT_MS = 1_000;
 /** 一個 VM 的預設記憶體上限。 */
 export const DEFAULT_MEMORY_LIMIT_BYTES = 16 * 1024 * 1024;
 
-/** 一個 VM 的預設堆疊上限。 */
-export const DEFAULT_MAX_STACK_SIZE_BYTES = 512 * 1024;
+/**
+ * 一個 VM 的預設堆疊上限。
+ *
+ * QuickJS 在 WASM 裡遞迴，吃的是 host 的原生堆疊，所以這個上限要比 host 的堆疊先到，VM 才拿得到自己的
+ * `stack overflow`。Node 預設的堆疊下，VM 上限大約從 0.3 到 0.5 MiB 起就換成 host 先用完，實際門檻看呼叫當下已經用掉
+ * 多少（#1841 量測）。這個值下，一個參數的遞迴大約到 600 到 700 層。
+ */
+export const DEFAULT_MAX_STACK_SIZE_BYTES = 128 * 1024;
 
 /**
  * 這個 plugin 的設定：三條資源上限。
@@ -139,13 +148,16 @@ export type QuickJsPluginOptions = z.input<typeof quickJsConfigSchema>;
  *
  * `apply` 是 async 的，唯一的理由是**在載入期就把 WASM 模組拉起來**。載不起來就讓整份
  * plugin 清單載入失敗，而不是等模型第一次呼叫工具時才在對話中間變成一句錯誤字串——
- * 共同軸線的 fail-closed 在這個 plugin 上的樣子。模組本身是 `getQuickJS()` 快取住的
- * 行程級單例，重複掛載不會重複載入。
+ * 共同軸線的 fail-closed 在這個 plugin 上的樣子。
+ *
+ * **WASM 模組由這個插件自己持有**（{@link currentModule}），不用 `getQuickJS()` 的單例：host 的堆疊用完會讓模組停在一半，
+ * 那個模組要整個丟掉換新（見 {@link runInVm}），函式庫的單例換不掉。整個行程共用一個：每組一次 agent 就 `apply` 一次，
+ * 各自持有的話每條對話都多一個模組。
  *
  * **這裡刻意不接 `lifecycle.onDispose`。** 那條通道是給「有活的 handle 要收」的 plugin
- * 的（`@nexus/plugin-mcp` 的 stdio 子行程）。這裡沒有：WASM 模組是行程級快取，runtime 與
- * context 是**每次呼叫現建現拆**、在 `finally` 裡收掉。登記一個什麼都不做的 disposer
- * 只會讓關機清單看起來比實際上熱鬧。
+ * 的（`@nexus/plugin-mcp` 的 stdio 子行程）。這裡沒有：WASM 模組沒有要關的東西，丟掉就由 GC 收，runtime 與
+ * context 是**每次呼叫現建現拆**、在 `finally` 裡收掉（host 的堆疊用完時不收，整個模組換掉，見 {@link runInVm}）。
+ * 登記一個什麼都不做的 disposer 只會讓關機清單看起來比實際上熱鬧。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
  * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
@@ -156,11 +168,24 @@ export const quickJsPlugin: NexusPlugin<QuickJsConfig> = {
   Config: quickJsConfigSchema,
   async apply(registry: PluginRegistry, config: QuickJsConfig): Promise<void> {
     const { timeoutMs, memoryLimitBytes, maxStackSizeBytes } = config;
-    const quickjs = await getQuickJS();
+    const limits = { timeoutMs, memoryLimitBytes, maxStackSizeBytes };
+    await currentModule();
 
     registry.tools.register(
       tool(
-        ({ code }) => runInVm(quickjs, code, { timeoutMs, memoryLimitBytes, maxStackSizeBytes }),
+        async ({ code }) => {
+          const quickjs = await currentModule();
+          try {
+            return runInVm(quickjs, code, limits);
+          } catch (error) {
+            if (error instanceof CodeRunFailedError) throw error;
+            void replaceModule();
+            if (error instanceof RangeError) {
+              throw new CodeRunFailedError('exception', `${error.name}: ${error.message}`);
+            }
+            throw error;
+          }
+        },
         {
           name: RUN_JAVASCRIPT_TOOL_NAME,
           description:
@@ -203,20 +228,27 @@ interface VmLimits {
  * 上的東西下一次看得到，而且記憶體上限會變成跨呼叫累計的——第五次呼叫因為第一次配置的
  * 東西而失敗，那個錯誤訊息沒有人讀得懂。代價是每次都要建 runtime，換來的是每次呼叫的
  * 資源預算都是乾淨的。
+ *
+ * **拋出 {@link CodeRunFailedError} 以外的東西時，這次的 runtime 與 context 不收，模組的狀態不可信，呼叫端要換掉模組。**
+ * QuickJS 在 WASM 裡遞迴吃的是 host 的原生堆疊；host 的堆疊比 VM 的堆疊上限先用完時，host 從 VM 外面丟 `RangeError`，C 那一側停在一半。這時收 runtime 會讓整個
+ * WASM 模組 abort，蓋掉原本的錯，所以這裡什麼都不收、原樣拋出，由呼叫端把模組丟掉換新。
  */
-function runInVm(
-  quickjs: Awaited<ReturnType<typeof getQuickJS>>,
-  code: string,
-  limits: VmLimits,
-): string {
+function runInVm(quickjs: QuickJSWASMModule, code: string, limits: VmLimits): string {
   // deadline 在建 runtime 的時候才算，不是在建 plugin 的時候——`shouldInterruptAfterDeadline`
   // 收的是一個絕對時刻，提早算等於把載入到呼叫之間的時間也算進預算裡。
+  const run: Run = { timeoutMs: limits.timeoutMs, interrupted: false };
+  const pastDeadline = shouldInterruptAfterDeadline(Date.now() + limits.timeoutMs);
   const runtime = quickjs.newRuntime({
-    interruptHandler: shouldInterruptAfterDeadline(Date.now() + limits.timeoutMs),
+    interruptHandler: (vm) => {
+      if (!pastDeadline(vm)) return false;
+      run.interrupted = true;
+      return true;
+    },
     memoryLimitBytes: limits.memoryLimitBytes,
     maxStackSizeBytes: limits.maxStackSizeBytes,
   });
 
+  let intact = true;
   try {
     const context = runtime.newContext();
     let snapshot: QuickJSHandle | undefined;
@@ -224,26 +256,31 @@ function runInVm(
       // 快照函式要在使用者的程式**之前**進 VM：它把用到的內建函式先收進閉包，程式事後改 `Array.isArray` 之類改不到它。
       // 放在收 context 的這個 `try` 裡：求值失敗（例如堆疊上限小到連它都放不下）時 context 照樣收，不留活 handle 給 `runtime.dispose()`。
       const prepared = context.evalCode(SNAPSHOT_SOURCE);
-      if (prepared.error) return consume(context, prepared.error, (detail) => fail(detail, limits));
+      if (prepared.error) return consume(context, prepared.error, (detail) => fail(detail, run));
       snapshot = prepared.value;
 
       const result = context.evalCode(code);
-      if (result.error) return consume(context, result.error, (detail) => fail(detail, limits));
+      if (result.error) return consume(context, result.error, (detail) => fail(detail, run));
 
       // **求值完要把微任務佇列跑完**，否則 `async` 函式與 promise 鏈全部停在 pending，
       // 模型拿到的是「沒完成」而不是答案。QuickJS 裡沒有計時器也沒有 IO，所以佇列裡只會
       // 有純計算的 microtask——跑得完的一定跑得完，跑不完的（等外界的）本來就永遠等不到。
       // 這一步同樣受 interrupt handler 管，所以它不是逾時的漏洞。
       const pending = runtime.executePendingJobs();
-      if (pending.error) return consume(context, pending.error, (detail) => fail(detail, limits));
+      if (pending.error) return consume(context, pending.error, (detail) => fail(detail, run));
 
-      return formatResult(context, snapshot, result.value, limits);
+      return formatResult(context, snapshot, result.value, run);
+    } catch (error) {
+      if (!(error instanceof CodeRunFailedError)) intact = false;
+      throw error;
     } finally {
-      snapshot?.dispose();
-      context.dispose();
+      if (intact) {
+        snapshot?.dispose();
+        context.dispose();
+      }
     }
   } finally {
-    runtime.dispose();
+    if (intact) runtime.dispose();
   }
 }
 
@@ -263,12 +300,12 @@ function formatResult(
   context: QuickJSContext,
   snapshot: QuickJSHandle,
   handle: QuickJSHandle,
-  limits: VmLimits,
+  run: Run,
 ): string {
   const state = context.getPromiseState(handle);
 
   if (state.type === 'fulfilled' && state.notAPromise === true) {
-    return completion(context, snapshot, handle, limits);
+    return completion(context, snapshot, handle, run);
   }
 
   try {
@@ -284,9 +321,9 @@ function formatResult(
     }
     // 被 reject 的 promise 走跟 throw 同一條——對模型來說兩者是同一件事。
     if (state.type === 'rejected') {
-      return consume(context, state.error, (detail) => fail(detail, limits));
+      return consume(context, state.error, (detail) => fail(detail, run));
     }
-    return completion(context, snapshot, state.value, limits);
+    return completion(context, snapshot, state.value, run);
   } finally {
     if (handle.alive) handle.dispose();
   }
@@ -310,25 +347,33 @@ function consume(
   return format(detail);
 }
 
+/** 一次求值在 host 這一側的狀態。失敗種類從這裡判，不從 VM 丟出來的值判：程式丟什麼值都改不了它。 */
+interface Run {
+  readonly timeoutMs: number;
+  /** interrupt handler 觸發過：VM 是被逾時中斷的。 */
+  interrupted: boolean;
+}
+
+function timedOut(run: Run): CodeRunFailedError {
+  return new CodeRunFailedError('timeout', `執行超過 ${run.timeoutMs} 毫秒的上限，已中斷。`);
+}
+
 /**
  * 把 VM 丟出來的錯誤翻成 {@link CodeRunFailedError} 拋出去。
  *
- * 中斷是唯一被特別點名的一種：QuickJS 把它報成 `InternalError: interrupted`，而那句話
- * 沒告訴模型「是你的程式跑太久」還是「引擎壞了」，所以記成 `timeout` 並講出上限。其餘的
- * 原樣轉述——`ReferenceError: require is not defined` 這種訊息本身就是模型需要的答案。
+ * interrupt handler 觸發過就是 `timeout`，並講出上限：QuickJS 報的 `InternalError: interrupted` 沒告訴模型是程式跑太久。
+ * 沒觸發過的一律是 `exception`，原樣轉述——`ReferenceError: require is not defined` 這種訊息本身就是模型需要的答案；
+ * 程式自己丟一個 `InternalError: interrupted` 也只是一則訊息。
  *
  * **不帶 `錯誤：` 前綴**：圍堵會在前面接 `工具 run_javascript 執行失敗：`，再帶一層的話模型
  * 讀到的是兩層前綴。
  */
-function fail(detail: unknown, limits: VmLimits): never {
+function fail(detail: unknown, run: Run): never {
+  if (run.interrupted) throw timedOut(run);
   const asRecord =
     typeof detail === 'object' && detail !== null ? (detail as Record<string, unknown>) : {};
   const name = typeof asRecord.name === 'string' ? asRecord.name : '';
   const message = typeof asRecord.message === 'string' ? asRecord.message : String(detail);
-
-  if (name === 'InternalError' && message === 'interrupted') {
-    throw new CodeRunFailedError('timeout', `執行超過 ${limits.timeoutMs} 毫秒的上限，已中斷。`);
-  }
   throw new CodeRunFailedError('exception', name === '' ? message : `${name}: ${message}`);
 }
 
@@ -343,31 +388,22 @@ function fail(detail: unknown, limits: VmLimits): never {
  * 實測），host 拿到的時候 `NaN` 已經是 `null`、`Map` 已經是 `{}`、`undefined` 欄位已經不見——在 host 端檢查看不到。
  * 頂層的 `undefined` 照舊（「沒有回傳值」，同 dsh 的 `prepareCompletion` 對 `undefined` 回 `{}`）。
  *
- * 快照函式自己拋錯有兩種，要分流：
- * - VM 的資源上限（中斷、堆疊是 `InternalError`；記憶體用盡丟出來的東西 dump 是 `null`）照一般求值失敗的路走（`timeout`／`exception`），
- *   不能被當成「值不合格」——否則 getter 裡的無窮迴圈會變成 `invalid-output`，而且循環檢查壞了也會因為記憶體用盡而假綠；
- * - 其餘（例如 `Proxy` 的 trap 拋了）是「讀不出一份無損的值」，回 `invalid-output`，同 dsh 把快照的例外收成 `undefined`（`bootstrap.ts:171-175`）。
- *
- * 偏離（理由 1，基座表達不出來）：dsh 的快照跑在外層行程，資源上限由行程邊界另外處理，快照拋的例外一律是「值不合格」；這裡快照跟程式
- * 同一個 VM，interrupt 與資源上限在 VM 裡也是例外（`InternalError`），所以要先分流。這個分類靠例外的名字，程式可以偽造
- * 同名的例外（`fail()` 本來就有的問題，[#1846](https://github.com/DemianLi/nexus-agent/issues/1846)，不在這裡處理）。
+ * 快照函式拋錯時，interrupt handler 觸發過就是 `timeout`（getter 裡的無窮迴圈）；其餘一律是「讀不出一份無損的值」，回 `invalid-output`，
+ * 不看丟出來的值。getter 裡撞到記憶體或堆疊上限也算在這裡。
  */
 function completion(
   context: QuickJSContext,
   snapshot: QuickJSHandle,
   handle: QuickJSHandle,
-  limits: VmLimits,
+  run: Run,
 ): string {
   if (context.typeof(handle) === 'undefined') return consume(context, handle, formatValue);
 
   const verdict = context.callFunction(snapshot, context.undefined, handle);
   if (handle.alive) handle.dispose();
   if (verdict.error) {
-    const detail = context.dump(verdict.error);
     verdict.error.dispose();
-    const name = (detail as { name?: unknown } | null)?.name;
-    // 記憶體用盡時 QuickJS 丟的東西 dump 出來是 null、沒有名字也沒有訊息：那是資源上限，不是「值不合格」。
-    if (detail === null || name === 'InternalError') fail(detail, limits);
+    if (run.interrupted) throw timedOut(run);
     throw new CodeRunFailedError('invalid-output', LOSSLESS_JSON_MESSAGE);
   }
   const json =

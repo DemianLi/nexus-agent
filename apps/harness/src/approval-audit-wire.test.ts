@@ -23,6 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import {
+  APPROVAL_INVALID_REPLY,
   APPROVAL_POLICY_NEVER,
   APPROVAL_REJECTED_BY_USER,
   attachSessionPersistence,
@@ -409,6 +410,48 @@ describe('人那條路：asked 在中斷的那一刻、decided 在回答的那�
     const decided = rootEvents(session, ['approval/decided'])[0]!;
     const asked = rootEvents(session, ['approval/asked'])[0]!;
     expect(decided.data).toEqual({ id: (asked.data as { id: string }).id, outcome: 'cancelled' });
+  });
+
+  it('回覆看不懂（不是 approve 也不是 reject）→ 不放行，unavailable 落在回答它的那一輪裡，拒絕帶碼（#2027）', async () => {
+    const session = await open('a5', SCRIPT_TWO_TURNS);
+    await until(session, requested);
+    const pending = approvalAt(session.state.pendings);
+    // wire 只驗則數，不驗詞彙：這一則照樣送得進閘門。
+    await session.client.inputRespond('a5', {
+      namespace: [...pending.namespace],
+      interrupt_id: pending.interruptId,
+      response: { decisions: [{ type: 'maybe' }] },
+    });
+    await until(session, settled(2));
+
+    expect(ran).toEqual([]);
+    const order = rootEvents(session, [
+      'approval/asked',
+      'approval/decided',
+      'turn/start',
+      'turn/end',
+    ]).map((event) =>
+      event.type === 'turn/start'
+        ? `turn/start:${String((event.data as { kind?: string }).kind)}`
+        : event.type,
+    );
+    expect(order).toEqual([
+      'turn/start:message',
+      'approval/asked',
+      'turn/end',
+      'turn/start:resume',
+      'approval/decided',
+      'turn/end',
+    ]);
+    expect(rootEvents(session, ['approval/decided'])[0]?.data).toEqual({
+      id: pending.interruptId,
+      outcome: 'unavailable',
+    });
+    const result = rootEvents(session, ['tool/result'])
+      .map((event) => event.data as { callId: string; isError?: boolean; error?: unknown })
+      .find((each) => each.callId === 'call-alpha');
+    expect(result?.isError).toBe(true);
+    expect(result?.error).toEqual({ name: 'ApprovalDenied', code: APPROVAL_INVALID_REPLY });
   });
 
   it('一輪兩顆都要核准、分兩次答：兩對各自配對，軌跡兩列（沒答的那顆以同 id 再掛不長第二列）各帶自己的結局', async () => {

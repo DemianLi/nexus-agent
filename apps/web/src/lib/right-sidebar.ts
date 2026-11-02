@@ -25,6 +25,7 @@
  */
 
 import type { LocatedFile } from '@/lib/deliverables-view';
+import { REVIEW_PLAN_ID_PREFIX } from '@/lib/plan-review';
 
 /**
  * 單例面板的種類（#1031）：觀測與成本。要加一種就在這裡加一個名字，再到 `PANELS` 補那一列。
@@ -56,8 +57,21 @@ export type SidebarTab =
       readonly kind: 'plan';
       /** 交出這份計劃的那次工具呼叫 id（#654）；審核請求沒帶的話是 `review:<interruptId>`。 */
       readonly id: string;
+      /**
+       * 知道過的計劃標題（#2014）。標籤先讀計劃庫，沒有才用它，所以重新整理後沒選過、還沒掃的分頁也寫得出標題。工具呼叫的
+       * 參數不會變，記下來的不會過期。`review:` 的不記：
+       * 它不在日誌裡，中斷結束後就找不到了（{@link planTab}）。
+       */
+      readonly title?: string;
     }
   | PanelTab;
+
+/** 計劃分頁；`review:` 的不帶標題（見 `title`）。 */
+export function planTab(id: string, title: string | undefined): SidebarTab {
+  return title === undefined || id.startsWith(REVIEW_PLAN_ID_PREFIX)
+    ? { kind: 'plan', id }
+    : { kind: 'plan', id, title };
+}
 
 /** 是不是單例面板的分頁。 */
 export function isPanelTab(tab: SidebarTab): tab is PanelTab {
@@ -113,6 +127,23 @@ export function selectTab(layout: SidebarLayout, key: string): SidebarLayout {
 
 export function setOpen(layout: SidebarLayout, open: boolean): SidebarLayout {
   return layout.open === open ? layout : { ...layout, open };
+}
+
+/**
+ * 記下或清掉計劃分頁的標題（`undefined` 是清掉；`review:` 的不記，見 {@link planTab}）。分頁裡沒有它、標題沒變或是 `review:`
+ * 的時候回傳同一個參考，`setLayout` 才會略過重畫與落盤。
+ */
+export function setPlanTitle(
+  layout: SidebarLayout,
+  id: string,
+  title: string | undefined,
+): SidebarLayout {
+  const at = layout.tabs.findIndex((tab) => tab.kind === 'plan' && tab.id === id);
+  const current = layout.tabs[at];
+  if (current?.kind !== 'plan') return layout;
+  const next = planTab(id, title);
+  if (next.kind !== 'plan' || next.title === current.title) return layout;
+  return { ...layout, tabs: layout.tabs.map((tab, i) => (i === at ? next : tab)) };
 }
 
 /** 改動分頁換檔（選檔器）。 */
@@ -173,7 +204,9 @@ function parseTab(value: unknown): SidebarTab | undefined {
       : undefined;
   }
   if (tab.kind === 'plan') {
-    return typeof tab.id === 'string' && tab.id !== '' ? { kind: 'plan', id: tab.id } : undefined;
+    if (typeof tab.id !== 'string' || tab.id === '') return undefined;
+    if (tab.title !== undefined && typeof tab.title !== 'string') return undefined;
+    return planTab(tab.id, tab.title);
   }
   if (isPanelKind(tab.kind)) return { kind: tab.kind };
   if (tab.kind !== 'deliverable') return undefined;

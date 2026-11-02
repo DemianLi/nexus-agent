@@ -186,7 +186,8 @@ describe('thread 數上限（#1476）', () => {
     r.gates.get('t1')?.fail(new Error('模擬建構失敗'));
     const failed = await p1;
     expect(failed).toMatchObject({ type: 'error', error: 'unknown_error' });
-    expect(failed.message).toContain('模擬建構失敗');
+    expect(failed.message).not.toContain('模擬建構失敗');
+    expect(r.warnings.join('\n')).toContain('模擬建構失敗');
 
     expect((await touch(r, 't3')).type).toBe('success');
     // t2 仍在建構中、t3 已建好 → 又滿了。

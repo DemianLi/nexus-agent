@@ -26,7 +26,7 @@
  *
  * **不算外漏的情形**：B 自己上傳了位元組完全相同的檔，B 讀得到——內容定址的結果。檔名別名各自一條，B 引用的是 B 的那一條。
  *
- * ## 偏離（理由 2，登記在 `attachment-store.ts` 檔頭偏離 3）
+ * ## 偏離（理由 2，登記在 `attachment-store.ts` 檔頭偏離 2）
  *
  * dsh 是單人桌面，模型讀的是主機路徑，沒有路由；nexus 一台主機多人共用，0700 分不開人，所以路由多一道「日誌引用過」的判準，
  * 跟網頁讀圖同一條（照 dsh `session.attachment`）。
@@ -51,10 +51,14 @@ import type { SessionEvent } from '@nexus/core';
 
 import { referencedFilePaths } from './attachment-reference.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import type { GlobPathsResult, GrepPathsResult, SandboxModeSource } from './contained-backend.js';
 import type { RipgrepInternals } from './ripgrep-runner.js';
 
 /** 附件路由 grep 出錯時模型看到的那一句：固定字串、不帶任何路徑（#1822）。 */
 export const ATTACHMENT_SEARCH_FAILED_MESSAGE = 'grep failed while searching the attachments';
+
+/** 附件路由 glob 出錯時模型看到的那一句：同 {@link ATTACHMENT_SEARCH_FAILED_MESSAGE}（#1994）。 */
+export const ATTACHMENT_GLOB_FAILED_MESSAGE = 'glob failed while listing the attachments';
 
 /** 路由問「這條 thread 的 root 日誌現在長什麼樣」的口。 */
 export interface AttachmentScope {
@@ -136,6 +140,8 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     readonly scope: AttachmentScope;
     /** 測試接縫（數 rg 起了幾次）。 */
     readonly ripgrep?: RipgrepInternals;
+    /** 起 `rg` 用哪個模式，見 `ContainedFilesystemBackendOptions.toolMode`。 */
+    readonly toolMode?: SandboxModeSource;
     /** 伺服器日誌：搜尋出錯時 rg 的原始訊息只寫在這裡（#1822）。省略即標準錯誤。 */
     readonly warn?: (line: string) => void;
   }) {
@@ -146,6 +152,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
       // 連「有幾個」都不交給模型（#1822）。維持 dsh 的做法：整次失敗，原始訊息只進伺服器日誌。
       tolerateUnreadable: false,
       ...(options.ripgrep === undefined ? {} : { ripgrep: options.ripgrep }),
+      ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
     });
     this.#scope = options.scope;
     this.#warn = options.warn ?? ((line) => process.stderr.write(`${line}\n`));
@@ -175,7 +182,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     return normal !== undefined && visible.files.has(normal);
   }
 
-  /** 基座對「不存在的檔」讀檔時的錯誤（`stat` 的 ENOENT 原句），沒引用過的檔回這一句。 */
+  /** 基座的 `readRaw` 對「不存在的檔」拋的錯誤（`stat` 的 ENOENT 原句），沒引用過的檔拋這一句。呼叫端都接住，不到模型。 */
   #notFoundMessage(virtualPath: string): string {
     return `ENOENT: no such file or directory, stat '${this.resolveVirtual(virtualPath)}'`;
   }
@@ -187,7 +194,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     if (normal === undefined || visible.files.has(normal) || visible.dirs.has(normal)) {
       return super.read(filePath, offset, limit);
     }
-    return { error: `Error reading file '${filePath}': ${this.#notFoundMessage(filePath)}` };
+    return { error: `Error reading file '${filePath}': ENOENT: no such file or directory` };
   }
 
   override async readRaw(filePath: string): Promise<ReadRawResult> {
@@ -222,11 +229,50 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     return { ...listed, files: listed.files.filter((entry) => this.#listable(visible, entry)) };
   }
 
+  /**
+   * 只列引用過的檔所在的目錄，結果再濾到引用集，**全部目標一次 rg**（同 {@link grep}）。**不整個 `files` 目錄列再濾**：
+   * 這個路由不放行讀不到的路徑，別條 thread 的目錄只要一個讀不到，整次就失敗，錯誤原文還帶著那個目錄的內容雜湊（#1994）。
+   */
   override async glob(pattern: string, path?: string): Promise<GlobResult> {
     const visible = this.#visible();
-    const found = await super.glob(pattern, path);
-    if (found.files === undefined) return found;
-    return { ...found, files: found.files.filter((entry) => this.#listable(visible, entry)) };
+    const base = this.#normalize(path || '/');
+    if (base === undefined) return super.glob(pattern, path);
+    const targets = this.#targetDirs(visible, base);
+    if (targets.length === 0) return { files: [] };
+    const found = await this.globPaths(pattern, targets);
+    if (found.error !== undefined) return this.#hideRawError('glob', found);
+    return { files: (found.files ?? []).filter((entry) => this.#listable(visible, entry)) };
+  }
+
+  /** `base` 底下（含 `base` 本身）引用過的檔所在的 `/<前兩碼>/<hex>` 目錄。 */
+  #targetDirs(visible: Visible, base: string): string[] {
+    return [...visible.dirs].filter(
+      (dir) =>
+        dir.split('/').length === 3 && (base === '/' || dir === base || dir.startsWith(`${base}/`)),
+    );
+  }
+
+  /**
+   * **rg 的原始訊息在 `SEARCH_FAILED` 與 `SEARCH_INVALID_PATTERN` 換成固定的一句**（#1822、#1994）：這兩種把 rg 的 stderr 原樣接在
+   * 訊息後面。grep 讀到同一個附件目錄下這條 thread 沒引用過的別名檔，stderr 會帶出那個檔名（`…/SECRET.txt: Permission denied`）；
+   * glob 的 `--files` 不開檔，帶不出別名，但 stderr 的內容不由這裡決定，一併換掉。結果過濾只擋得到命中與列出的條目，擋不到錯誤字串。
+   * 模型拿固定的一句，原文寫進伺服器日誌給管理者（帶 thread id、工具名與錯誤碼）。
+   * `SEARCH_ABORTED`（使用者按停止）與 `SEARCH_RAW_OUTPUT_OVERFLOW`（「縮小 pattern 再試」的提示）原句交給模型：字句固定、不帶路徑；
+   * 換掉會讓 overflow 的提示不見，也會讓按停止寫出一行 warn（`serve.ts` 的 warn 是給要人處理的事）。
+   */
+  #hideRawError(
+    tool: 'grep' | 'glob',
+    found: GrepPathsResult | GlobPathsResult,
+  ): { readonly error: string } {
+    if (found.errorCode === SEARCH_FAILED || found.errorCode === SEARCH_INVALID_PATTERN) {
+      this.#warn(
+        `[附件路由] thread ${this.#scope.sessionId?.() ?? '（未綁定）'} ${tool} 出錯（${found.errorCode}），原始訊息不交給模型：${found.error ?? ''}`,
+      );
+      return {
+        error: tool === 'grep' ? ATTACHMENT_SEARCH_FAILED_MESSAGE : ATTACHMENT_GLOB_FAILED_MESSAGE,
+      };
+    }
+    return { error: found.error ?? '' };
   }
 
   /** `ls`／`glob` 的條目看不看得到：檔案要在引用集裡，目錄要是引用集裡某個檔的祖先。 */
@@ -251,33 +297,12 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     const base = this.#normalize(dirPath || '.');
     if (base === undefined) return super.grep(pattern, dirPath, glob, maxCount);
     // 搜尋起點本身是一個看得到的檔案：直接搜它。
-    const targets = visible.files.has(base)
-      ? [base]
-      : [...visible.dirs].filter(
-          (dir) =>
-            dir.split('/').length === 3 &&
-            (base === '/' || dir === base || dir.startsWith(`${base}/`)),
-        );
+    const targets = visible.files.has(base) ? [base] : this.#targetDirs(visible, base);
     if (targets.length === 0) return { matches: [] };
     // **一次 rg 搜全部目標**（`grepPaths`），不是一個目錄起一次：引用很多時（幾百個）每次 grep 起幾百個 rg 子行程。
     // `maxCount` 不傳下去（傳 `null`），濾完引用集之後才截斷，`truncated` 才對得上使用者看得到的筆數。
     const found = await this.grepPaths(pattern, targets, glob, null);
-    if (found.error !== undefined) {
-      // **rg 的原始訊息只在會帶出檔名的兩種錯誤換掉**（#1822）：`SEARCH_FAILED`（rg 非 0／1 結束，stderr 會帶出同一個附件目錄下、
-      // 這條 thread 沒引用過的別名檔名，`…/SECRET.txt: Permission denied`）與 `SEARCH_INVALID_PATTERN`（rg 的 stderr 同樣原樣接上）。
-      // 結果過濾只擋得到命中的那幾行、擋不到錯誤字串。模型拿固定的一句，原文寫進伺服器日誌給管理者（帶 thread id 與錯誤碼）。
-      // **其餘照舊**：`SEARCH_ABORTED`（使用者按停止）與 `SEARCH_RAW_OUTPUT_OVERFLOW`（「縮小 pattern 再試」的提示）的字句固定、不帶路徑，
-      // 換掉會讓 overflow 的提示不見，也會讓按停止寫出一行 warn（`serve.ts` 的 warn 是給要人處理的事）。
-      // dsh 沒有對應做法（單人桌面、沒有「這條 thread 引用過哪些檔」的引用集；`search-core.ts` 的 `classifyRunFailure` 把 stderr 原樣接在訊息後面），
-      // 這是偏離 3（#1773，理由 2）帶出來的需求。
-      if (found.errorCode === SEARCH_FAILED || found.errorCode === SEARCH_INVALID_PATTERN) {
-        this.#warn(
-          `[附件路由] thread ${this.#scope.sessionId?.() ?? '（未綁定）'} grep 出錯（${found.errorCode}），原始訊息不交給模型：${found.error}`,
-        );
-        return { error: ATTACHMENT_SEARCH_FAILED_MESSAGE };
-      }
-      return { error: found.error };
-    }
+    if (found.error !== undefined) return this.#hideRawError('grep', found);
     const matches = (found.matches ?? []).filter((match) => visible.files.has(match.path));
     return applyGrepMaxCount({ result: { matches }, maxCount: maxCount ?? null });
   }

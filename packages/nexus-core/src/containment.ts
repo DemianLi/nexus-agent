@@ -146,9 +146,8 @@ const TIMEOUT_ERROR_NAME = 'TimeoutError';
  *
  * **用 `name` 不用訊息比對**：訊息是 Node 的，會隨版本改；`name` 是 DOM 規範定的。
  *
- * **而且 `name` 是唯一分得開使用者取消的東西。** 同一個 `catch` 也接得到使用者按下取消
- * 的那顆——實測它是 `DOMException`、`name` 為 `AbortError`、訊息 `This operation was
- * aborted`。把「凡是 abort 都當超時」寫下去的話，使用者自己按的取消會被回報成工具太慢。
+ * **而且 `name` 是唯一分得開這一輪被中止的東西。** 同一個 `catch` 也接得到這一輪被中止
+ * 的那顆，`name` 為 `AbortError`（MCP 工具由 `asTurnAbort` 換成這個名字）。把「凡是 abort 都當超時」寫下去的話，這一輪的中止會被回報成這顆工具太慢。
  *
  * @param error - `catch` 到的東西。
  * @returns 是不是逾時。
@@ -237,7 +236,7 @@ export function resolveToolName(request: {
  * 一般拋錯不給碼是照抄，見 `tool-events.ts` 檔頭。認得出來的：
  *
  * - `TimeoutError` → `TOOL_TIMEOUT`（dsh `guard/timeout-policy` 的 `ToolTimeoutError`）；
- * - `AbortError` → `ABORTED`——使用者取消，**不是**超時，理由見 {@link isToolTimeout}；
+ * - `AbortError` → `ABORTED`——這一輪被中止，**不是**這顆工具超時，理由見 {@link isToolTimeout}；
  * - 參數不合工具的 schema → `INVALID_ARGS`。基座把 `ToolInputParsingException` 包成
  *   `ToolInvocationError` 從 handler 拋出來（`langchain@1.5.10` 的 `ToolNode.js:254`），
  *   而那顆錯的 `name` 就是 `"Error"`（實測），**只認得出品牌**。中途每經過一層 middleware

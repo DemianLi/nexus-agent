@@ -14,9 +14,10 @@
  * - **監督者一建立就擁有第一次連線**（照 dsh `connection.ts:346` 的 `settling = connectGeneration(true)`）：表裡同步放進那一份，
  *   同一份設定同時取用只連一次。
  * - **建立那一份的取用等第一次連線落定**（照 dsh 的 `await connection.ready`，`index.ts:199`）：寫了 `failOnStartupError: true`
- *   就拋、池裡不留；沒寫就照 dsh 在背景重試（`supervisor.ts`），連上之後開的 thread 拿得到工具。
- * - **其餘的取用最多等 {@link FIRST_CONNECT_WAIT_MS}**：握手卡住時要等 SDK 的請求逾時才收（#1820 重審用新協定、不回 initialize
- *   的夾具量到 60.3 秒），不讓同一把鍵上之後的每一次組裝都跟著卡住。到期就照「連不上」處理這一份組裝：警告、沒有工具
+ *   就拋、池裡不留；沒寫就照 dsh 在背景重試（`supervisor.ts`），連上之後開的 thread 拿得到工具。建池時給了
+ *   {@link McpConnectionPoolOptions.firstAcquireWaitMs}，沒寫 `failOnStartupError` 的列最多只等那麼久，到期照下一條處理。
+ * - **其餘的取用最多等 {@link FIRST_CONNECT_WAIT_MS}**：握手卡住時要等 SDK 的請求逾時才收（版本協商 `auto` 先試新協定、
+ *   再試舊協定，各等 60 秒；#2125 實測 120 秒），不讓同一把鍵上之後的每一次組裝都跟著卡住。到期就照「連不上」處理這一份組裝：警告、沒有工具
  *   （`failOnStartupError: true` 就拋），連線照樣在背景繼續。偏離見下。
  * - **斷線空窗裡組的 thread 照最近一代的工具清單登記**（照 dsh：`generationDown` 只清 client，工具登記到放棄才撤，
  *   `connection.ts:180-185`、`:226-232`）：委派讀的是目前這一代，空窗期呼叫回 `server is disconnected`，重連之後同一條 thread
@@ -35,7 +36,9 @@
  */
 
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
-import { clientOptions, connectGeneration } from './connection.js';
+import { attemptsOn, clientOptions } from './connection.js';
+import { credentialFingerprint } from './credentials.js';
+import type { ResolvedCredentials } from './credentials.js';
 import type { Generation, Listed } from './connection.js';
 import type { McpConfig } from './index.js';
 import { Supervisor } from './supervisor.js';
@@ -68,6 +71,11 @@ export interface McpConnectionPoolOptions {
   log(message: string): void;
   /** dsh 是 error 級的那幾句：關閉確認不到。省略即寫進 {@link log}。 */
   error?(message: string): void;
+  /**
+   * 建立那一份的取用最多等第一次連線多久（毫秒），只套在沒寫 `failOnStartupError` 的列：那種列連不上只警告、不算掉，
+   * 截短等待不改變它掉不掉，只少了這一份組裝的工具。省略即等到落定（serve）。寫入口試掛給 {@link FIRST_CONNECT_WAIT_MS}。
+   */
+  firstAcquireWaitMs?: number;
 }
 
 /**
@@ -76,10 +84,18 @@ export interface McpConnectionPoolOptions {
  * - **拿掉 `approval`**：它只決定每份註冊表的核准閘門，跟連線無關。放進鍵的話，只改核准宣告也會多起一個活到重啟的子行程。
  * - **elicitation 旗標是實際的那一個**（設定開著、而且這次組裝有人可以回答）：它是握手時宣告給 server 的 client 能力，旗標
  *   不同的組裝不能共用一條連線（Q3 (a)）。
+ * - **憑證引用放名字（在設定裡）加代入值的指紋**（[#1989](https://github.com/DemianLi/nexus-agent/issues/1989)）：值換了，下一次
+ *   取用連新的一份，舊的照上面「舊的一份留到 serve 結束」留著。指紋是行程內隨機金鑰的 HMAC，鍵裡沒有值。
  */
-export function poolKey(config: McpConfig, elicitation: boolean): string {
+export function poolKey(
+  config: McpConfig,
+  elicitation: boolean,
+  credentials: ResolvedCredentials = new Map(),
+): string {
   const { approval: _approval, ...connection } = config;
-  return `${stableStringify(connection)}\0elicitation=${String(elicitation)}`;
+  const key = `${stableStringify(connection)}\0elicitation=${String(elicitation)}`;
+  const fingerprint = credentialFingerprint(credentials);
+  return fingerprint === '' ? key : `${key}\0credentials=${fingerprint}`;
 }
 
 function stableStringify(value: unknown): string {
@@ -107,17 +123,26 @@ export class McpConnectionPool {
   }
 
   /**
-   * 取這份設定的那一份連線；沒有就建，已放棄重連就重開。建立那一份的取用等第一次連線落定，其餘最多等
-   * {@link FIRST_CONNECT_WAIT_MS}。**找表與建立之間沒有 `await`**，同時來的取用不會各建一份。
+   * 取這份設定的那一份連線；沒有就建，已放棄重連就重開。建立那一份的取用等第一次連線落定（建池給了
+   * `firstAcquireWaitMs`、又沒寫 `failOnStartupError` 時最多等那麼久），其餘最多等 {@link FIRST_CONNECT_WAIT_MS}。**找表與建立之間沒有 `await`**，同時來的取用不會各建一份。
    *
+   * @param credentials - 這一列已解析的憑證（名字 → 值）。值不同就是另一份連線；鍵裡只放名字與值的指紋。
    * @throws 第一次就連不上（或等到期限還沒連上）而且寫了 `failOnStartupError: true`；池已經關了。
    */
-  async acquire(config: McpConfig, elicitation: boolean): Promise<Acquired> {
+  async acquire(
+    config: McpConfig,
+    elicitation: boolean,
+    credentials: ResolvedCredentials = new Map(),
+  ): Promise<Acquired> {
     if (this.closing !== undefined) throw new Error('MCP 連線池已經關了');
-    const key = poolKey(config, elicitation);
+    const key = poolKey(config, elicitation, credentials);
     const existing = this.entries.get(key);
     if (existing === undefined || existing.supervisor.gaveUp) {
-      const shared = this.open(key, config, elicitation);
+      const shared = this.open(key, config, elicitation, credentials);
+      const wait = config.failOnStartupError ? undefined : this.options.firstAcquireWaitMs;
+      if (wait !== undefined && (await within(shared.supervisor.ready, wait)) === undefined) {
+        return { shared, error: stillConnecting(shared, wait) };
+      }
       const outcome = await shared.supervisor.ready;
       if (outcome.ok) return { shared, error: undefined };
       if (config.failOnStartupError) {
@@ -130,9 +155,7 @@ export class McpConnectionPool {
     const outcome = await within(existing.supervisor.ready, FIRST_CONNECT_WAIT_MS);
     const error =
       outcome === undefined
-        ? new Error(
-            `${existing.label}: still connecting after ${String(FIRST_CONNECT_WAIT_MS)}ms — this assembly goes without its tools; the connection keeps trying in the background`,
-          )
+        ? stillConnecting(existing, FIRST_CONNECT_WAIT_MS)
         : outcome.ok
           ? undefined
           : outcome.error;
@@ -152,25 +175,29 @@ export class McpConnectionPool {
   }
 
   /** 建一份並**同步**放進表裡；第一次連線交給監督者。 */
-  private open(key: string, config: McpConfig, elicitation: boolean): SharedConnection {
+  private open(
+    key: string,
+    config: McpConfig,
+    elicitation: boolean,
+    credentials: ResolvedCredentials,
+  ): SharedConnection {
     const { serverName } = config;
     const label = `mcp-client(${serverName})`;
-    const client = new MultiServerMCPClient(clientOptions(config, elicitation));
+    const client = new MultiServerMCPClient(clientOptions(config, elicitation, credentials));
     const { log } = this.options;
     const error = this.options.error ?? log;
     let last: Listed | undefined;
+    const attempts = attemptsOn(client, config);
     const supervisor = new Supervisor<Generation>(
       {
         label,
         policy: config.reconnect,
         // 同 plugin 自己連的那條：把整個 adapter client 收掉再重新列工具，新子行程、新的 SDK client。
-        async connect() {
-          await client.close();
-          return connectGeneration(client, config);
-        },
+        connect: () => attempts.connect(),
+        abandon: () => attempts.abandon(),
         close: () => client.close(),
         closed: (generation) => generation.closed,
-        // 失敗的嘗試可能把連線留在 adapter 裡；dispose 最後整個收掉，連一次都沒連上的也算。
+        // dispose 最後把整個 adapter 收掉：被期限丟下、還在握手的嘗試，或 abandon 沒收乾淨的殘留，連一次都沒連上的也算。
         release: () => client.close(),
         watch(generation, onDown) {
           // 每採用一代都會走到這裡：記下它的工具清單，斷線空窗裡組的 thread 照它登記（檔頭）。
@@ -180,7 +207,7 @@ export class McpConnectionPool {
         report: log,
         error,
       },
-      connectGeneration(client, config),
+      attempts.first(),
       // `failOnStartupError` 那一列第一次就連不上不在背景重試：建立那一份的取用拋出去、收掉這一份（同 dsh 讓那一列失敗）。
       { retryFirstFailure: !config.failOnStartupError },
     );
@@ -193,6 +220,13 @@ export class McpConnectionPool {
     this.opened.push(shared);
     return shared;
   }
+}
+
+/** 等到期限、第一次連線還沒落定時，這份組裝拿到的錯誤。 */
+function stillConnecting(shared: SharedConnection, ms: number): Error {
+  return new Error(
+    `${shared.label}: still connecting after ${String(ms)}ms — this assembly goes without its tools; the connection keeps trying in the background`,
+  );
 }
 
 /** `work` 在 `ms` 內落定就回它的值，逾時回 `undefined`。計時器 `unref`、落定就清掉。 */

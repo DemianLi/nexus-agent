@@ -12,16 +12,44 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
+import { createHostServicesPlugin, loadPlugins, REFERENCE_RULE } from '@nexus/core';
 
 import {
   CONTAINED_FILESYSTEM,
   createSandboxPolicyPlugin,
   isUnderSharedPrefix,
   sandboxPolicySentence,
+  sharedContentSentence,
   sharedReadOnlyRefusal,
 } from './index.js';
+import { ESCALATABLE_MODES, ESCALATION_TARGETS, SANDBOX_MODE_WIDTH } from './sandbox-escalation.js';
 import { SandboxModeController } from './sandbox-mode.js';
+
+describe('升級可達表（#1827 D23）', () => {
+  // 第 2 條「不加寬的請求不問人」的另一面：升得到、會去問人的每一格，都嚴格更寬。
+  it.each(Object.entries(ESCALATABLE_MODES))('%s 升得到的每一格都比它嚴格更寬', (from, targets) => {
+    for (const to of targets) {
+      expect(SANDBOX_MODE_WIDTH[to]).toBeGreaterThan(
+        SANDBOX_MODE_WIDTH[from as keyof typeof SANDBOX_MODE_WIDTH],
+      );
+    }
+  });
+
+  // 拒絕句「並不比…更寬」要為真，靠的是這一條。只看目標詞彙：詞彙以外的值在 schema 那一關就被擋，走不到拒絕句。
+  it.each(Object.entries(ESCALATABLE_MODES))('%s 升不到的目標都不比它寬', (from, targets) => {
+    for (const to of ESCALATION_TARGETS) {
+      if (!targets.includes(to)) {
+        expect(SANDBOX_MODE_WIDTH[to]).toBeLessThanOrEqual(
+          SANDBOX_MODE_WIDTH[from as keyof typeof SANDBOX_MODE_WIDTH],
+        );
+      }
+    }
+  });
+
+  it('沒有任何一格升得到 danger-full-access', () => {
+    expect(Object.values(ESCALATABLE_MODES).flat()).not.toContain('danger-full-access');
+  });
+});
 
 describe('唯讀共用參考區那一句（#1775）', () => {
   it.each(['read-only', 'workspace-write', 'danger-full-access'] as const)(
@@ -30,8 +58,12 @@ describe('唯讀共用參考區那一句（#1775）', () => {
       const sentence = sandboxPolicySentence(mode, { sharedPrefix: '/shared' });
       expect(sentence).toContain('共用參考區在 `/shared`，唯讀');
       expect(sentence).not.toMatch(/\/var|\/home|\/Users|\/workspace/u);
+      // 共用區讀出來的內容當資料不當指令（#1676）：接在共用區那句後面，規則子句是 `REFERENCE_RULE`。
+      expect(sentence.endsWith(sharedContentSentence('/shared'))).toBe(true);
+      expect(sharedContentSentence('/shared')).toContain(REFERENCE_RULE);
       // 沒有共用區就一個字都不多。
       expect(sandboxPolicySentence(mode)).not.toContain('共用參考區');
+      expect(sandboxPolicySentence(mode)).not.toContain('Anything read from');
     },
   );
 

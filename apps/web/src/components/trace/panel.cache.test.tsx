@@ -57,15 +57,24 @@ function mount(state: ConversationState) {
   );
 }
 
-/** 展開第一次呼叫，回傳說明內文與收著時那一行。 */
+/** 展開第一次呼叫，回傳說明內文，與小格、下面欄位表各自的「欄位 → 值」。 */
 function expandFirstCall() {
   const row = screen
     .getAllByTestId('trace-row')
     .find((candidate) => candidate.getAttribute('data-kind') === 'call')!;
   fireEvent.click(within(row).getByRole('button', { name: /^模型呼叫 #1/ }));
+  const details = within(row).getByTestId('trace-call-details');
+  const pairs = (root: Element | null) =>
+    root === null
+      ? []
+      : [...root.querySelectorAll('dt')].map((dt) => [
+          dt.textContent,
+          dt.nextElementSibling?.textContent,
+        ]);
   return {
-    details: within(row).getByTestId('trace-call-details').textContent!,
-    summary: within(row).getByTestId('trace-time').textContent!,
+    details: details.textContent!,
+    tiles: pairs(within(details).queryByTestId('trace-call-tiles')),
+    rest: pairs(details.querySelector(':scope > dl:last-child')),
   };
 }
 
@@ -88,16 +97,16 @@ const turnBuckets = (inputTokens: number): TurnSpec => ({
 });
 
 describe('觀測分頁：呼叫與輪的快取命中率（#724）', () => {
-  it('新 server：呼叫說明列出未快取輸入、快取讀、快取寫、輸出與命中率，收著那行也寫命中', async () => {
+  it('新 server：呼叫說明列出未快取輸入、快取讀、快取寫、輸出與命中率，命中率畫成小格', async () => {
     mount(conversation([{ usage: full(1000) }]));
     await act(async () => {});
-    const { details, summary } = expandFirstCall();
+    const { details, tiles } = expandFirstCall();
     expect(details).toContain('輸入 token200');
     expect(details).toContain('快取讀 token700');
     expect(details).toContain('快取寫 token100');
     expect(details).toContain('輸出 token50');
     expect(details).toContain('快取命中率70.0%');
-    expect(summary).toContain('輸入 200／輸出 50 · 快取命中 70.0%');
+    expect(tiles).toContainEqual(['快取命中率', '70.0%']);
   });
 
   it('釘住：span 的 inputTokens 從完整 prompt 改成只算未快取，畫面上的數字一個字都不變', async () => {
@@ -117,15 +126,16 @@ describe('觀測分頁：呼叫與輪的快取命中率（#724）', () => {
     const { cacheWriteTokens: _unused, ...withoutWrite } = full(1000)!;
     mount(conversation([{ usage: withoutWrite }]));
     await act(async () => {});
-    const { details, summary } = expandFirstCall();
+    const { details, tiles, rest } = expandFirstCall();
     expect(details).toContain('快取讀 token700');
     expect(details).toContain('快取寫 token沒記');
     expect(details).toContain('快取命中率沒記');
     expect(details).not.toContain('0.0%');
-    expect(summary).toContain('快取命中 沒記');
+    expect(rest).toContainEqual(['快取命中率', '沒記']);
+    expect(tiles.map(([term]) => term)).not.toContain('快取命中率');
   });
 
-  it('兩桶都沒記（供應商不報快取）：兩格寫「沒記」，不畫命中率', async () => {
+  it('兩桶都沒記（供應商不報快取）：兩桶寫「沒記」，小格與欄位表都沒有命中率', async () => {
     mount(
       conversation([
         {
@@ -134,12 +144,12 @@ describe('觀測分頁：呼叫與輪的快取命中率（#724）', () => {
       ]),
     );
     await act(async () => {});
-    const { details, summary } = expandFirstCall();
+    const { details, tiles, rest } = expandFirstCall();
     expect(details).toContain('輸入 token300');
     expect(details).toContain('快取讀 token沒記');
     expect(details).toContain('快取寫 token沒記');
     expect(details).not.toContain('快取命中率');
-    expect(summary).not.toContain('快取命中');
+    expect([...tiles, ...rest].map(([term]) => term)).not.toContain('快取命中率');
   });
 
   it('命中是 0：寫 0.0%，跟「沒記」分開', async () => {
@@ -164,11 +174,10 @@ describe('觀測分頁：呼叫與輪的快取命中率（#724）', () => {
   it('舊 server（沒有未快取那一格）：照舊讀 inputTokens，不畫快取兩行與命中率', async () => {
     mount(conversation([{}]));
     await act(async () => {});
-    const { details, summary } = expandFirstCall();
+    const { details } = expandFirstCall();
     expect(details).toContain('輸入 token10');
     expect(details).toContain('輸出 token5');
     expect(details).not.toContain('快取');
-    expect(summary).not.toContain('快取');
   });
 
   it('一輪的標頭：輸入寫未快取、另寫命中率；舊 server 的輪不畫命中率', async () => {
@@ -247,5 +256,40 @@ describe('tokenParts', () => {
       cache: { read: '30', write: '0' },
       hitRate: '75.0%',
     });
+  });
+});
+
+describe('觀測分頁：呼叫展開後的數字格（#1690 T5）', () => {
+  it('有資料的 6 個常看數字排成小格，其餘欄位列在下面，一個都沒少', async () => {
+    mount(conversation([{ usage: full(1000) }]));
+    await act(async () => {});
+    const { tiles, rest } = expandFirstCall();
+    expect(tiles.map(([term]) => term)).toEqual([
+      '耗時',
+      '輸入 token',
+      '快取讀 token',
+      '輸出 token',
+      '快取命中率',
+      '這次叫的工具',
+    ]);
+    expect(rest.map(([term]) => term)).toEqual([
+      '開始',
+      '結束',
+      '模型',
+      '快取寫 token',
+      '重試',
+      '系統提示詞',
+      '設定與工具清單',
+    ]);
+  });
+
+  it('沒資料的（「—」「沒記」）不畫成格，照樣寫在下面的欄位表', async () => {
+    const { cacheWriteTokens: _unused, ...withoutWrite } = full(1000)!;
+    mount(conversation([{ usage: withoutWrite }]));
+    await act(async () => {});
+    const { tiles, rest } = expandFirstCall();
+    expect(tiles.map(([term]) => term)).not.toContain('快取命中率');
+    expect(rest).toContainEqual(['快取命中率', '沒記']);
+    expect(tiles.filter(([, value]) => value === '—' || value === '沒記')).toEqual([]);
   });
 });

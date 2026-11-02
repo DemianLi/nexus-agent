@@ -2,13 +2,14 @@
  * serve 行程層的收尾：訊號與致命例外**共用同一份、記住自己的 dispose**
  * （[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 驗收 3）。
  *
- * 用假的 `proc` 與假的 `RunningServe`，只問兩件事：`close()` 跑了幾次、先到的是誰的退出碼。
+ * 用假的 `proc` 與假的 `RunningServe`，只問兩件事：`close()` 跑了幾次、各條路的退出碼（先到的訊號、`close()` 拒絕、逾時、第二次訊號）。
  * 真的行程接線（有沒有裝、收尾真的跑了、標籤那一行）在 `serve-shutdown.test.ts` 的子行程那一組。
  */
 
 import { describe, expect, it, vi } from 'vitest';
 
 import type { FailLoudEvent } from './fail-loud.js';
+import { PROCESS_SHUTDOWN_TIMEOUT_MS } from './process-shutdown.js';
 import { installServeProcessLifecycle } from './serve.js';
 import type { RunningServe, ServeProcess } from './serve.js';
 
@@ -130,6 +131,82 @@ describe('serve 行程層收尾共用一份 dispose', () => {
         expect(exits).toEqual([1]);
       });
       expect(error).toHaveBeenCalledWith('收尾失敗');
+    } finally {
+      error.mockRestore();
+    }
+  });
+
+  it.each([
+    ['SIGTERM', 'SIGTERM'],
+    ['SIGINT', 'SIGINT'],
+  ])(
+    '%s 之後 close() 拒絕：以 1 結束，監管程式看得出有東西沒收好（#2196）',
+    async (_label, signal) => {
+      const { proc, exits, fire } = fakeProc();
+      const { running, release } = fakeRunning({ fail: new Error('2 條 thread 收尾失敗') });
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        installServeProcessLifecycle(proc).attach(running);
+        fire(signal);
+        release();
+        await vi.waitFor(() => {
+          expect(exits).toEqual([1]);
+        });
+        expect(error).toHaveBeenCalledWith('2 條 thread 收尾失敗');
+      } finally {
+        error.mockRestore();
+      }
+    },
+  );
+
+  it('close() 成功：SIGTERM 是 0、SIGINT 是 130', async () => {
+    for (const [signal, code] of [
+      ['SIGTERM', 0],
+      ['SIGINT', 130],
+    ] as const) {
+      const { proc, exits, fire } = fakeProc();
+      const { running, release } = fakeRunning();
+      installServeProcessLifecycle(proc).attach(running);
+      fire(signal);
+      release();
+      await vi.waitFor(() => {
+        expect(exits).toEqual([code]);
+      });
+    }
+  });
+
+  it('5 秒逾時：以訊號的碼結束，之後 close() 才拒絕也不改碼', async () => {
+    vi.useFakeTimers();
+    const { proc, exits, fire } = fakeProc();
+    const { running, release } = fakeRunning({ fail: new Error('逾時之後才失敗') });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      installServeProcessLifecycle(proc).attach(running);
+      fire('SIGTERM');
+      await vi.advanceTimersByTimeAsync(PROCESS_SHUTDOWN_TIMEOUT_MS);
+      expect(exits).toEqual([0]);
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(exits).toEqual([0]);
+    } finally {
+      error.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('收尾中第二次訊號：當場以訊號的碼結束，不等 close() 的結果', async () => {
+    const { proc, exits, fire } = fakeProc();
+    const { running, release } = fakeRunning({ fail: new Error('之後才失敗') });
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      installServeProcessLifecycle(proc).attach(running);
+      fire('SIGTERM');
+      await Promise.resolve();
+      fire('SIGTERM');
+      expect(exits).toEqual([0]);
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(exits).toEqual([0]);
     } finally {
       error.mockRestore();
     }

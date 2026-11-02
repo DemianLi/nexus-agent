@@ -46,7 +46,7 @@ function UploadBar({ view, name }: { readonly view: UploadView; readonly name: s
       className="bg-muted mt-1 h-1 w-full overflow-hidden rounded-full"
     >
       <div
-        className={`bg-primary h-full rounded-full ${indeterminate ? 'w-full opacity-40' : 'transition-[width] duration-(--duration-quick)'}`}
+        className={`bg-primary h-full rounded-full ${indeterminate ? 'w-full opacity-40' : 'transition-[width] duration-150'}`}
         style={indeterminate ? undefined : { width: `${view.percent}%` }}
       />
     </div>

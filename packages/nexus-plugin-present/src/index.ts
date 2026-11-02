@@ -112,7 +112,7 @@ import { posix } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { Context } from '@nexus/cordis';
-import { fsToken, virtualPathOf } from '@nexus/fs';
+import { fsToken, isUnderAnyPrefix, virtualPathOf } from '@nexus/fs';
 import type { FsLookup } from '@nexus/fs';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { sessionLookupToken } from '@nexus/session';
@@ -230,22 +230,6 @@ export type PresentConfig = z.infer<typeof presentConfigSchema>;
 
 /** 工廠收的東西：schema 的輸入面。 */
 export type PresentPluginOptions = z.input<typeof presentConfigSchema>;
-
-/**
- * 虛擬路徑在不在某個路由前綴底下（前綴本身也算）。
- *
- * 前綴的結尾斜線正規化掉再比，並且比的是「整段路徑」：`/large_tool_results_x/a.md` **不**在
- * `/large_tool_results/` 底下，那是工作區根下一個名字剛好以它開頭的目錄。
- * @param target - 已過 `virtualPathOf` 的路徑。
- * @param prefixes - 路由前綴，有沒有結尾斜線都行。
- * @returns 在其中任何一個底下就是真。
- */
-function isUnderPrefix(target: string, prefixes: readonly string[]): boolean {
-  return prefixes.some((prefix) => {
-    const bare = prefix.replace(/\/+$/, '');
-    return target === bare || target.startsWith(`${bare}/`);
-  });
-}
 
 /** 一個路徑在 backend 上是什麼。 */
 type Inspection = 'file' | 'not-file' | 'missing';
@@ -372,7 +356,7 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
       const files: PresentedFile[] = [];
       for (const file of requested) {
         if (file.path.trim().length === 0) return refuse(PRESENT_EMPTY_PATH_MESSAGE);
-        if (isUnderPrefix(virtualPathOf(file.path), offWorkspace)) {
+        if (isUnderAnyPrefix(virtualPathOf(file.path), offWorkspace)) {
           return refuse(presentOffWorkspaceMessage(file.path));
         }
         const kind = await inspect(backend, file.path);
@@ -435,7 +419,7 @@ export const name = 'present';
 
 /**
  * 要的服務：`tools`（`^1.3.0`，要 `onResult`）、`sessionLookup`（`^1.0.0`）與 `fs`（`^2.0.0`，要 `hasWorkspace()` 與併了 mounts 的
- * `offWorkspacePrefixes()`）。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。
+ * `offWorkspacePrefixes()`）。範圍在這裡宣告，經 `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
  */
 export const inject = injectOf(
   need(toolsToken, '^1.3.0'),

@@ -10,7 +10,7 @@ import type { PermissionSeat as PermissionSeatData } from '@/hooks/use-permissio
 /**
  * 底列的 Pick 開著時被收起（#1591 PR 2）：輸入框被核准或提問面板換掉（`hidden`）、一輪開始跑（權限鎖住）時清單跟著關，
  * 回來或解鎖後不自己打開。清單 portal 在 body 上，不收的話會浮在面板上面；開著的 state 沒清掉，回來時會自己冒出來。
- * App 有沒有把 `hidden` 接上在 `App.test.tsx` 驗。
+ * App 有沒有把 `hidden` 接上在 `App.seats.test.tsx` 驗。
  */
 
 afterEach(cleanup);

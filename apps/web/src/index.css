@@ -40,10 +40,8 @@
  * **不用 inline**：inline 會讓 utility 直接展開數值、不再讀 `var(--animate-in)`，reduced-motion 在執行期換掉的變數就沒人讀，
  * 無聲失效（`check-built-css` 量產物）。可是非 inline 的值宣告在 `:root`，裡面的 `var(--tw-duration)` 會在 `:root` 先解掉，
  * 所以真正生效的值逐元素寫在 `styles/motion.css` 的「進出場」那段；這裡留同一份值，只為了讓 Tailwind 產出 `var(--animate-in)`。
- * `--ease-smooth-out` 還有別的消費者，留給 ⑥（#1689）。
  */
 @theme {
-  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
   --animate-in: enter var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
     var(--tw-animation-delay, 0s) 1 normal backwards;
   --animate-out: exit var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
@@ -72,21 +70,8 @@
   --text-micro: 11px;
   --text-micro--line-height: 14px;
 
-  --color-primary-hover: var(--primary-hover);
-  --color-primary-active: var(--primary-active);
   --color-brand: var(--brand);
-  --color-brand-soft: var(--brand-soft);
   --color-success: var(--success);
-  --color-warning: var(--warning);
-  --color-info: var(--info);
-  --color-stage: var(--stage);
-  --color-chip: var(--chip);
-  --color-chip-hover: var(--chip-hover);
-  --color-chip-pressed: var(--chip-pressed);
-  --shadow-material: var(--material-shadow);
-  --shadow-menu: var(--menu-shadow);
-  --shadow-card: var(--card-shadow);
-  --shadow-stage: var(--stage-ring);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

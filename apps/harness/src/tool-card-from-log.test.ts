@@ -450,7 +450,7 @@ describe('結果文字：即時與重播同一串（#439）', () => {
     return { type: 'event' as const, seq: 0, method, params: { namespace, timestamp: 0, data } };
   }
 
-  /** 兩塊文字：抽字的規則對它是「不給」，把幾塊接起來的規則對它是「給一串」。 */
+  /** 兩塊文字：「只取一塊」的規則對它是「不給」，抽字的規則對它是「給一串」。 */
   const TWO_BLOCKS = [
     { type: 'text', text: '第一塊' },
     { type: 'text', text: '第二塊' },
@@ -559,17 +559,16 @@ describe('結果文字：即時與重播同一串（#439）', () => {
   });
 
   /**
-   * **這一條才讓「共用同一個抽字函式」承重。** 上面那條的內容是單塊，「只取一塊」與「把幾塊
-   * 接起來」對它的答案一樣，所以兩邊各寫一份規則也會綠。多塊的內容兩種規則答案相反：
-   * 一邊不給，一邊給一串我們自己拼的字。
+   * **這一條才讓「共用同一個抽字函式」承重。** 上面那條的內容是單塊，「只取一塊」與「全部接起來」對它的答案一樣，
+   * 所以兩邊各寫一份規則也會綠。多塊的內容兩種規則答案相反。
    */
-  it('多塊的內容：兩條路都不給文字，不是一邊給一邊不給', async () => {
+  it('多塊的內容：兩條路是同一串接起來的文字', async () => {
     const { frames, events } = await play('late', TWO_BLOCKS);
     const live = toolEntries(frames)[0];
     const replayed = toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0];
     expect(live).toMatchObject({ status: 'done' });
-    expect(live?.text).toBeUndefined();
-    expect(replayed?.text).toBeUndefined();
+    expect(live?.text).toBe('第一塊\n\n第二塊');
+    expect(replayed?.text).toBe(live?.text);
   });
 });
 
@@ -589,10 +588,10 @@ describe('meta：即時與重播同一份（#617）', () => {
     lang: 'ts',
   };
 
-  /** 兩塊文字：抽字的規則對它不給文字，所以卡上的 `message` 兩邊都沒有、只差 `meta`。 */
-  const TWO_BLOCKS = [
+  /** 文字混了圖片：抽字的規則對它不給文字，所以卡上的 `message` 兩邊都沒有、只差 `meta`。 */
+  const MIXED_BLOCKS = [
     { type: 'text', text: '第一塊' },
-    { type: 'text', text: '第二塊' },
+    { type: 'image', source: {} },
   ];
 
   function frame(method: string, namespace: string[], data: unknown) {
@@ -643,7 +642,7 @@ describe('meta：即時與重播同一份（#617）', () => {
         yield frame('tools', ['tools:x'], {
           event: 'tool-finished',
           tool_call_id: 'c1',
-          output: { status: 'success', content: TWO_BLOCKS },
+          output: { status: 'success', content: MIXED_BLOCKS },
         });
       }
       record();
@@ -681,7 +680,7 @@ describe('meta：即時與重播同一份（#617）', () => {
   });
 
   it('**更正幀只差 meta 也要送**：基座那顆先轉發了，日誌那則抽不出文字，兩邊只差這一格', async () => {
-    const { frames, events } = await play('first', { content: TWO_BLOCKS });
+    const { frames, events } = await play('first', { content: MIXED_BLOCKS });
     const finishes = frames.filter(
       (next) =>
         next.method === 'tools' &&

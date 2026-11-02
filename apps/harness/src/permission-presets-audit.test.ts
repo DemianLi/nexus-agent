@@ -142,17 +142,19 @@ describe('apply 拋 → 稽核接住（三處入口）', () => {
     const dir = scratch('nexus-presets-audit-live-');
     const workspace = scratch('nexus-presets-audit-ws-');
     const env = { [HARNESS_HOME_ENV]: dir };
+    const lines: string[] = [];
     running = (await runServe({
       argv: ['--port', '0', '--workspace', workspace],
-      log: () => undefined,
+      log: (line) => lines.push(line),
       env,
     })) as RunningServe;
     expect(await say(running, 'warm')).toBeUndefined();
 
     const bad = await appendRaw(dir, BAD_CONFIG);
-    const refused = await say(running, 'a');
-    expect(refused).toContain('permission-presets');
-    expect(refused).toContain(EMPTY_TABLE_MESSAGE);
+    expect(await say(running, 'a')).toContain('原因記在 serve 的日誌');
+    const logged = lines.join('\n');
+    expect(logged).toContain('permission-presets');
+    expect(logged).toContain(EMPTY_TABLE_MESSAGE);
     expect(failedOf(dir)).toHaveLength(1);
     expect(failedOf(dir)[0]).toMatchObject({
       id: 'permission-presets',

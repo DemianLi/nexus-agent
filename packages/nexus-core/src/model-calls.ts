@@ -65,7 +65,7 @@
  *
  * **拋錯的呼叫不記**：那次沒有回覆可記（dsh 那一次記的是 `assistant/attempt`；我們只在串流中途失敗又整次重打時由 pump 補一顆，見
  * `session-log.ts`）。**但 `model/end` 帶 `outcome`**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：
- * 拋錯是 `error`、使用者按了停止是 `aborted`，讓「這次燒了多少不知道」讀得出來。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
+ * 拋錯是 `error`、被中止是 `aborted`（人按的、時鐘到點或父代理中斷，見 `TurnAbortCause`），讓「這次燒了多少不知道」讀得出來。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
  * 讓子代理的圖收尾的，不是模型的回覆；dsh 那側被中止、沒有看得見內容的那一步沒有 `assistant/message`。
  *
  * ## 起訖與回覆記不進去，這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
@@ -153,7 +153,7 @@ export function createModelCallRecorder(sessions: {
       const route = routeOfModel(request.model);
       const modelCall = log.append('model/start', route === undefined ? {} : { route }).seq;
       let response;
-      // 沒有正常回來的方式（#1022）：使用者按了停止。正常回來沒有。
+      // 沒有正常回來的方式（#1022）：被中止。正常回來沒有。
       let outcome: ModelCallOutcome | undefined;
       try {
         // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量的寫入點，往外填給摘要器的量測

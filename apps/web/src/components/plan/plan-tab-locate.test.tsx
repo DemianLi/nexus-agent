@@ -13,6 +13,7 @@ import {
   PLAN_TAB_STILL_MISSING_TEXT,
   RightSidebarToggle,
 } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { createConversationStore } from '@/lib/conversation-store';
 import type { WritableConversationStore } from '@/lib/conversation-store';
 import { planDocument } from '@/lib/plan-review';
@@ -23,7 +24,7 @@ import { Script } from '@/test/conversation-frames';
 import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 /**
- * 計劃分頁指到的那一份不在載入的對話裡（#1798）：照 dsh `planResourceProvider` 另外往前讀歷史找它（`findPlan`），找到先顯示
+ * 計劃分頁指到的那一份不在載入的對話裡（#1798）：另外往前讀歷史找它（`findPlan`），找到先顯示
  * 全文，按鈕 `loadThrough(那一頁的 firstSeq)` 再定位到對話裡那張計劃卡。這裡驗畫面，`findPlan` 用替身；掃描本身（一頁接一頁、
  * 固定切點、換代、中止、不動條目）驗在 `hooks/use-conversation-history-window.test.tsx`。
  */
@@ -53,6 +54,16 @@ function states() {
 
 type FindPlan = (callId: string, signal: AbortSignal) => Promise<PlanScanOutcome>;
 
+/** 計劃卡「查看全文」的替身：再打開同一個分頁。 */
+function OpenAgain() {
+  const sidebar = useRightSidebar();
+  return (
+    <button type="button" onClick={() => sidebar?.openPlan(CALL_ID)}>
+      再打開
+    </button>
+  );
+}
+
 /** 跟 `App` 一樣：計劃庫由對話狀態推出來（`usePlanLibrary`），不是手動換一個 Map。 */
 function Live({
   store,
@@ -77,15 +88,24 @@ function Live({
   return (
     <WithRightSidebar sources={sources}>
       <RightSidebarToggle />
+      <OpenAgain />
     </WithRightSidebar>
   );
 }
 
 function mount(
   initial: ConversationState,
-  options: { findPlan?: FindPlan; loadThrough?: (seq: number) => Promise<void>; id?: string } = {},
+  options: {
+    findPlan?: FindPlan;
+    loadThrough?: (seq: number) => Promise<void>;
+    id?: string;
+    layout?: SidebarLayout;
+  } = {},
 ) {
-  localStorage.setItem(LAYOUT_KEY_PREFIX + 't', JSON.stringify(layout(options.id)));
+  localStorage.setItem(
+    LAYOUT_KEY_PREFIX + 't',
+    JSON.stringify(options.layout ?? layout(options.id)),
+  );
   const store = createConversationStore(initial);
   const view = render(
     <Live
@@ -135,6 +155,18 @@ afterEach(() => {
 });
 
 describe('計劃分頁：計劃不在載入的對話裡（#1798）', () => {
+  it('分頁標籤：掃描找到之前寫「計劃」，找到之後寫計劃標題，不必等定位', async () => {
+    const scan = pending();
+    mount(states().before, { findPlan: () => scan.promise, loadThrough: vi.fn(async () => {}) });
+    await act(async () => {});
+    const tabNames = () => screen.queryAllByRole('tab').map((tab) => tab.textContent);
+    expect(tabNames()).toEqual(['計劃']);
+    await act(async () => scan.resolve(FOUND));
+    expect(tabNames()).toEqual(['改登入頁']);
+    // 計劃還不在對話裡：標題來自掃描，不是計劃庫。
+    expect(screen.getByTestId('plan-tab-scanned')).toBeTruthy();
+  });
+
   it('掃描找到：先顯示全文；按下去載到那一頁，計劃出現在對話裡之後捲到那張計劃卡，焦點交給全文', async () => {
     const { before, after } = states();
     let item: HTMLElement | undefined;
@@ -257,5 +289,80 @@ describe('計劃分頁：計劃不在載入的對話裡（#1798）', () => {
     await act(async () => {});
     expect(screen.getByTestId('plan-tab-missing').textContent).toBe(PLAN_TAB_MISSING_TEXT);
     expect(locateButton()).toBeNull();
+  });
+});
+
+describe('計劃分頁：記下的標題（#2014）', () => {
+  const tabNames = () => screen.queryAllByRole('tab').map((tab) => tab.textContent);
+  const saved = () =>
+    JSON.parse(localStorage.getItem(LAYOUT_KEY_PREFIX + 't') ?? 'null') as SidebarLayout;
+  const titled = (title: string): SidebarLayout => ({
+    open: true,
+    tabs: [{ kind: 'plan', id: CALL_ID, title }],
+    active: `plan:${CALL_ID}`,
+  });
+
+  it('還原的計劃分頁帶著標題：沒選過的標籤也寫計劃標題，不往前掃', async () => {
+    const findPlan = vi.fn<FindPlan>(async () => FOUND);
+    mount(states().before, {
+      findPlan,
+      layout: {
+        open: true,
+        tabs: [
+          { kind: 'plan', id: 'call_a', title: '改登入頁' },
+          { kind: 'plan', id: 'call_b', title: '補測試' },
+          { kind: 'changes', seq: 3, index: 0 },
+        ],
+        active: 'changes:3',
+      },
+    });
+    await act(async () => {});
+    expect(tabNames().slice(0, 2)).toEqual(['改登入頁', '補測試']);
+    expect(findPlan).not.toHaveBeenCalled();
+  });
+
+  it('沒記標題的舊版面：掛上時照樣掃，掃到補進版面；這一下不落盤，人動過右側欄才寫', async () => {
+    const before = JSON.stringify(layout());
+    mount(states().before, { findPlan: async () => FOUND, loadThrough: async () => {} });
+    await act(async () => {});
+    expect(tabNames()).toEqual(['改登入頁']);
+    expect(localStorage.getItem(LAYOUT_KEY_PREFIX + 't')).toBe(before);
+    fireEvent.click(screen.getByRole('tab', { name: '改登入頁' }));
+    await act(async () => {});
+    expect(saved().tabs).toEqual([{ kind: 'plan', id: CALL_ID, title: '改登入頁' }]);
+  });
+
+  it('掃完沒有：清掉記下的標題，標籤退回「計劃」，跟分頁裡那一句一致', async () => {
+    mount(states().before, {
+      findPlan: async () => ({ kind: 'not-found' }),
+      layout: titled('改登入頁'),
+    });
+    await act(async () => {});
+    expect(tabNames()).toEqual(['計劃']);
+    expect(screen.getByTestId('plan-tab-missing').textContent).toBe(PLAN_TAB_MISSING_TEXT);
+  });
+
+  it('再打開同一個分頁（計劃不在載入的對話裡）：記下的標題留著', async () => {
+    mount(states().before, {
+      findPlan: async () => ({ kind: 'failed', message: '斷線' }),
+      layout: titled('改登入頁'),
+    });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole('button', { name: '再打開' }));
+    await act(async () => {});
+    expect(tabNames()).toEqual(['改登入頁']);
+    expect(saved().tabs).toEqual([{ kind: 'plan', id: CALL_ID, title: '改登入頁' }]);
+  });
+
+  it('讀取失敗：留著記下的標題，讀不到不代表它不在了', async () => {
+    mount(states().before, {
+      findPlan: async () => ({ kind: 'failed', message: '斷線' }),
+      layout: titled('改登入頁'),
+    });
+    await act(async () => {});
+    expect(tabNames()).toEqual(['改登入頁']);
+    expect(screen.getByTestId('plan-tab-missing').textContent).toBe(
+      `${PLAN_TAB_READ_FAILED_LEAD}斷線`,
+    );
   });
 });

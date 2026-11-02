@@ -12,6 +12,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canRunSlash,
+  commandArm,
   commandToken,
   namesCommand,
   slashRunsWhileBusy,
@@ -34,6 +35,7 @@ import {
   queueHeading,
   queuePreview,
   SETTLED_NOTICE_TEXT,
+  SETTLED_NOTICE_TIMED_OUT_TEXT,
   SETTLED_NOTICE_UNKNOWN_TEXT,
 } from '@/lib/queue-view';
 
@@ -139,16 +141,23 @@ describe('canRunSlash', () => {
 });
 
 /** 照伺服器的寫法登記命令：同一份定義產生閘門查的 definition 與 `slash.list` 送的 descriptor。 */
-function command(name: string, runWhileBusy?: readonly string[]) {
+function command(name: string, runWhileBusy?: readonly string[], input = true) {
   const definition: CommandDefinition = {
     name,
     description: `${name} 的說明`,
+    ...(input ? { input: { hint: '<參數>' } } : {}),
     ...(runWhileBusy === undefined ? {} : { runWhileBusy }),
     handler: () => ({ kind: 'success' }),
   };
   return normalizeCommandDefinition(definition);
 }
-const REGISTERED = [command('goal', ['pause']), command('plan'), command('demo', ['a b', 'stop'])];
+// 出貨的命令都宣告了 `input`（`/goal`、`/plan` 收參數）；`compact` 是沒宣告的 bare 命令（#1971），只有第三方會登記這種。
+const REGISTERED = [
+  command('goal', ['pause']),
+  command('plan'),
+  command('demo', ['a b', 'stop']),
+  command('compact', undefined, false),
+];
 const COMMANDS: readonly SlashDescriptor[] = REGISTERED.map((r) => r.descriptor);
 const FIND = {
   find: (name: string) => REGISTERED.find((r) => r.definition.name === name)?.definition,
@@ -162,6 +171,8 @@ describe('commandToken 跟伺服器的 parseCommand 同一套（#1929）', () =>
     '/plan off',
     '/plan\toff',
     '/plan\noff',
+    '/plan\u3000off',
+    '/plan\u3000',
     '/planning',
     '/Plan',
     '/plan-b',
@@ -180,6 +191,7 @@ describe('commandToken 跟伺服器的 parseCommand 同一套（#1929）', () =>
 
   it('對照組裡兩種結果都有', () => {
     expect(commandToken('/plan off')).toBe('plan');
+    expect(commandToken('/plan\u3000off')).toBe('plan');
     expect(commandToken('/planning')).toBe('planning');
     expect(commandToken('/計劃')).toBeUndefined();
   });
@@ -202,6 +214,31 @@ describe('namesCommand：開頭的字在命令清單上才是命令（#1929，Q2
   it('清單是空的：什麼都不是命令', () => {
     expect(namesCommand([], '/plan')).toBe(false);
   });
+
+  it('沒宣告 input 的命令只有整行是 /名字 才是命令；帶了字就是一句話（#1971，dsh matchEnter `:361`）', () => {
+    expect(namesCommand(COMMANDS, ' /compact ')).toBe(true);
+    expect(namesCommand(COMMANDS, '/compact 留下最近三輪')).toBe(false);
+  });
+});
+
+describe('commandArm：命令走哪一路（#1971，dsh matchEnter）', () => {
+  it.each([
+    ['/plan', 'claim'],
+    ['/plan off', 'claim'],
+    ['/plan\u3000off', 'claim'],
+    [' /goal 把登入改好 ', 'claim'],
+    ['/goal pause', 'claim'],
+    ['/compact', 'detached'],
+    [' /compact\t', 'detached'],
+    ['/compact\u3000', 'detached'],
+    ['/compact 留下最近三輪', undefined],
+    ['/compact\n留下', undefined],
+    ['/deploy 今天', undefined],
+    ['/compacting', undefined],
+    ['說 /compact', undefined],
+  ] as const)('%j → %s', (line, arm) => {
+    expect(commandArm(COMMANDS, line)).toBe(arm);
+  });
 });
 
 describe('slashRunsWhileBusy 跟伺服器的閘門同一套（#1517）', () => {
@@ -212,6 +249,7 @@ describe('slashRunsWhileBusy 跟伺服器的閘門同一套（#1517）', () => {
     '/goal  pause',
     '/goal\tpause',
     '/goal\npause',
+    '/goal\u3000pause',
     '/goal PAUSE',
     '/goal Pause',
     '/goal pause 1',
@@ -287,11 +325,43 @@ describe('不是人排的那一類（#861）', () => {
   it('佇列列上各寫各的一句，人排的沒有', () => {
     // 沒有 reason＝舊日誌：中性的一句，不是「已完成」
     expect(queuedAgentText(of({ kind: 'subagent-settled' }))).toBe(SETTLED_NOTICE_UNKNOWN_TEXT);
+    expect(
+      queuedAgentText(
+        of({
+          kind: 'subagent-settled',
+          reason: 'aborted',
+          cause: { kind: 'hook', reason: 'turn-timeout' },
+        }),
+      ),
+    ).toBe(SETTLED_NOTICE_TIMED_OUT_TEXT);
     expect(queuedAgentText(of({ kind: 'subagent-settled', reason: 'aborted' }))).toBe(
       SETTLED_NOTICE_TEXT.aborted,
     );
     expect(queuedAgentText(of({ kind: 'agent-message' }))).toBe(AGENT_MESSAGE_QUEUED_TEXT);
     expect(queuedAgentText(of({ kind: 'user' }))).toBeUndefined();
+  });
+});
+
+describe('settledNoticeText 分開講時間到（#1847）', () => {
+  it('被停止而且時鐘到點：講超過時間上限', () => {
+    expect(settledNoticeText('aborted', { kind: 'hook', reason: 'turn-timeout' })).toBe(
+      SETTLED_NOTICE_TIMED_OUT_TEXT,
+    );
+  });
+
+  it.each([
+    [{ kind: 'user' }],
+    [{ kind: 'parent' }],
+    [{ kind: 'hook', reason: 'some-other-hook' }],
+    [undefined],
+  ] as const)('其餘的停法（%o）講被停止，不把原因字串印出來', (cause) => {
+    expect(settledNoticeText('aborted', cause)).toBe(SETTLED_NOTICE_TEXT.aborted);
+  });
+
+  it('原因只在 aborted 時算數', () => {
+    expect(settledNoticeText('completed', { kind: 'hook', reason: 'turn-timeout' })).toBe(
+      SETTLED_NOTICE_TEXT.completed,
+    );
   });
 });
 

@@ -22,6 +22,7 @@ import {
   parseSkillInvocation,
   renderSkillInvocation,
   scanSkills,
+  threadSkillSources,
 } from './skill-catalog.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 
@@ -514,5 +515,39 @@ describe('isHumanSpeech：/名字 叫用只掃人講的話（#1574）', () => {
     ['模型回覆', new AIMessage('hi /deploy'), false],
   ])('%s → %s', (_label, message, expected) => {
     expect(isHumanSpeech(message)).toBe(expected);
+  });
+});
+
+describe('threadSkillSources（#1928）', () => {
+  const placement = (shared: string | undefined, routes: readonly string[] = []) => ({
+    sharedWorkspacePrefix: () => shared,
+    offWorkspacePrefixes: () => routes,
+  });
+
+  it('沒有共用區（舊 thread、CLI）：原樣回', () => {
+    const sources = ['/skills/', '/late/'];
+    expect(threadSkillSources(sources, placement(undefined, ['/shared']))).toBe(sources);
+  });
+
+  it('有共用區：不在路由底下的接到共用區前綴底下，順序不變', () => {
+    expect(threadSkillSources(['/skills/', '/late/'], placement('/shared', ['/shared']))).toEqual([
+      '/shared/skills/',
+      '/shared/late/',
+    ]);
+  });
+
+  it('已經在路由底下的原樣留著；共用區前綴不在路由清單裡也算；換過之後重複的只留最後一次出現的那一格', () => {
+    expect(
+      threadSkillSources(
+        ['/shared/skills/', '/mounted/skills/', '/mounted', '/skills/'],
+        placement('/shared', ['/mounted/']),
+      ),
+    ).toEqual(['/mounted/skills/', '/mounted', '/shared/skills/']);
+  });
+
+  it('前綴只比整段：/sharedx/ 與 /mountedx 不算在路由底下', () => {
+    expect(
+      threadSkillSources(['/sharedx/', '/mountedx'], placement('/shared', ['/mounted'])),
+    ).toEqual(['/shared/sharedx/', '/shared/mountedx']);
   });
 });

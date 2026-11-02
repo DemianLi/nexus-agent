@@ -200,6 +200,8 @@ describe('同名取代是唯一的縫', () => {
         'nexusModelUsage',
         // 耐久檢查點（#599）：緊貼用量記錄器內側。
         'nexusSessionCheckpoint',
+        // 核准政策句（#1986）：其餘 plugin 的內側；這份清單沒有其餘 plugin，所以緊接檢查點。
+        'nexusApprovalPolicyPrompt',
         // `tools/post-execute` 的生產者（#1248）：在輸出校驗等貼著工具本體的那幾顆外側、plugin middleware 內側。
         'nexusToolPostExecute',
         // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。
@@ -1672,12 +1674,13 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   });
 
   /**
-   * **`summarization: false` 就沒有剪。**
+   * **`summarization: false` 就不剪新的。**
    *
    * 照 dsh，剪刀只在摘要開著時作用：那邊的 pruner 唯一的消費者是 compaction，
    * `ctx.get('toolResultPruner')` 選擇性地讀，摘要不掛就沒人叫它。剪刀有自己的開關
    * （`toolResultPruning`，#446），但那是「摘要照跑、只是不先剪」；反過來沒有「只剪不摘要」。
-   * 這條釘住那個方向，免得下一個人以為關掉摘要還會剩下剪刀。
+   * 這條釘住那個方向，免得下一個人以為關掉摘要還會剩下剪刀。日誌上記過的剪法照樣換上去（#1567），
+   * 那一半在 `recorded-projection-on-resume.test.ts`。
    */
   it('關掉摘要就一起沒有剪刀', async () => {
     const model = bulkTurns();

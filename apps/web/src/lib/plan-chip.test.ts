@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   PLAN_CHIP_AWAITING_HINT,
+  PLAN_CHIP_EXIT_TEXT,
   PLAN_CHIP_LABEL,
   PLAN_CHIP_OFFLINE_HINT,
   PLAN_CHIP_RUNNING_HINT,
@@ -43,5 +44,9 @@ describe('planChipView（#900）', () => {
       disabled: true,
       hint: PLAN_CHIP_OFFLINE_HINT,
     });
+  });
+
+  it('退出鈕的無障礙名稱以看得到的字開頭（WCAG 2.5.3）', () => {
+    expect(PLAN_CHIP_LABEL.startsWith(PLAN_CHIP_EXIT_TEXT)).toBe(true);
   });
 });

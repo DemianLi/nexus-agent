@@ -3,8 +3,11 @@
  * （`959e9af7`）上 `ContainedFilesystemBackend.read` 與真的 `read_file` 工具對每一種檔回的東西逐字記下來。之後把 `read`
  * 改成自己讀、串流、建視窗，這份要一直綠——字句與內容「逐字相同」不是靠讀基座原始碼抄，是靠這份對照。
  *
+ * `outward-symlink` 那一列不是那個 commit 的行為，是 [#1982](https://github.com/DemianLi/nexus-agent/issues/1982) 加的讀取面圍堵；
+ * `symlink` 那一列也不是，指向根內的連結讀得到是 [#2193](https://github.com/DemianLi/nexus-agent/issues/2193)。
+ *
  * 兩處**刻意**不在這裡：行長截斷（驗收 1）與副檔名不再決定（驗收 6），它們是這張要改的行為，各有自己的測試。
- * 錯誤訊息裡帶根目錄的絕對路徑（基座的 `stat '…'`、`open '…'`），比對前換成 `<ROOT>`。
+ * 錯誤訊息比對前把根換成 `<ROOT>`；errno 的主機路徑不交給模型（#2201），這裡逐字釘住。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
@@ -45,7 +48,9 @@ beforeAll(async () => {
   await writeFile(join(root, 'bad.txt'), Buffer.from([0x61, 0xff, 0xfe, 0x62]));
   await mkdir(join(root, 'dir'));
   await writeFile(join(outside, 'secret.txt'), 'secret\n');
-  await symlink(join(outside, 'secret.txt'), join(root, 'link.txt'));
+  // 指向根內的檔案連結是 `ELOOP`（基座的 `O_NOFOLLOW`）；指向根外的在開檔之前就被讀取面的圍堵拒掉（#1982）。
+  await symlink(join(root, 'two.txt'), join(root, 'link.txt'));
+  await symlink(join(outside, 'secret.txt'), join(root, 'out-link.txt'));
   await writeFile(join(root, 'crlf.txt'), 'one\r\ntwo\r\nthree\r\n');
   await writeFile(
     join(root, 'bom.txt'),
@@ -66,7 +71,7 @@ afterAll(async () => {
 const scrub = (text: string): string =>
   text.split(root).join('<ROOT>').split(outside).join('<OUT>');
 
-describe('ContainedFilesystemBackend.read：九種情況與切片，字句與內容逐字不變', () => {
+describe('ContainedFilesystemBackend.read：十種情況與切片，字句與內容逐字不變', () => {
   const cases: [string, string, number, number, unknown][] = [
     [
       'missing',
@@ -74,19 +79,19 @@ describe('ContainedFilesystemBackend.read：九種情況與切片，字句與內
       0,
       2000,
       {
-        error:
-          "Error reading file '/nope.txt': ENOENT: no such file or directory, stat '<ROOT>/nope.txt'",
+        error: "Error reading file '/nope.txt': ENOENT: no such file or directory",
       },
     ],
     ['directory', '/dir', 0, 2000, { error: "File '/dir' not found" }],
+    ['symlink', '/link.txt', 0, 2000, { content: 'a\nb\n', mimeType: 'text/plain' }],
     [
-      'symlink',
-      '/link.txt',
+      'outward-symlink',
+      '/out-link.txt',
       0,
       2000,
       {
         error:
-          "Error reading file '/link.txt': ELOOP: too many symbolic links encountered, open '<ROOT>/link.txt'",
+          '[containment] 拒絕 read "/out-link.txt"：經符號連結解析之後落在根之外（mode: workspace-write）',
       },
     ],
     [
@@ -140,7 +145,7 @@ describe('真的 read_file 工具：ToolMessage 逐字不變', () => {
     [
       '/nope.txt',
       'error',
-      "Error: Error reading file '/nope.txt': ENOENT: no such file or directory, stat '<ROOT>/nope.txt'",
+      "Error: Error reading file '/nope.txt': ENOENT: no such file or directory",
     ],
     ['/dir', 'error', "Error: File '/dir' not found"],
     ['/nul.txt', 'error', 'Error: cannot read "/nul.txt": binary file'],

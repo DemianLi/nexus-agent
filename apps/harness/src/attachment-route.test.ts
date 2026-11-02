@@ -31,12 +31,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import {
+  ATTACHMENT_GLOB_FAILED_MESSAGE,
   ATTACHMENT_SEARCH_FAILED_MESSAGE,
   createAttachmentScope,
   ThreadScopedAttachmentBackend,
 } from './attachment-route.js';
 import { AttachmentStore, attachmentsRootOf, ATTACHMENTS_PREFIX } from './attachment-store.js';
-import type { GrepPathsResult } from './contained-backend.js';
+import type { GlobPathsResult, GrepPathsResult } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -369,6 +370,161 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
       // 起點都在 `--` 後面。
       const dashes = spawns[0]!.indexOf('--');
       expect(spawns[0]!.slice(dashes + 1).every((arg) => arg.startsWith('./'))).toBe(true);
+    });
+  });
+
+  describe('glob 只列引用過的目錄（#1994）', () => {
+    /** 存一份檔，直到它的前兩碼目錄跟 `other` 不同（前兩碼相同的機率是 1/256）。 */
+    async function putElsewhere(other: string, name: string) {
+      for (let i = 0; ; i += 1) {
+        const saved = await put(`beta ${String(i)}\n`, name);
+        if (saved.path.split('/')[1] !== other.split('/')[1]) return saved;
+      }
+    }
+
+    it.skipIf(process.getuid?.() === 0)(
+      '別條 thread 的目錄讀不到（前兩碼、hex 各一次）：glob 仍回自己的檔，結果裡沒有那個目錄名',
+      async () => {
+        const a = await put('alpha\n', 'a.txt');
+        const b = await putElsewhere(a.path, 'b-secret.txt');
+        const warned: string[] = [];
+        const wired = new AttachmentStore(attachmentsRootOf(home), {
+          warn: (line) => warned.push(line),
+        });
+        const scope = createAttachmentScope();
+        scope.bind({ events: [turnStart(a.ref)], sessionId: 'thread-A' });
+        const route = await wired.readOnlyRoute(scope);
+        const [, top, hex] = b.path.split('/');
+        const hexDir = join(store.filesDir, top!, hex!);
+        const topDir = join(store.filesDir, top!);
+
+        for (const dir of [hexDir, topDir]) {
+          await chmod(dir, 0o000);
+          try {
+            for (const pattern of ['**/*', '*.txt']) {
+              const result = await route.glob(pattern);
+              expect(result.error).toBeUndefined();
+              expect(result.files?.map((f) => f.path)).toEqual([a.path]);
+              expect(JSON.stringify(result)).not.toContain(hex!);
+              expect(JSON.stringify(result)).not.toContain(`/${top!}`);
+            }
+          } finally {
+            await chmod(dir, 0o755);
+          }
+        }
+        expect(warned).toEqual([]);
+      },
+    );
+
+    it('path 參數：前兩碼目錄、hex 目錄、檔案本身、沒引用的目錄；帶 / 的 pattern 對路由根錨定', async () => {
+      const a = await put('alpha\n', 'a.txt');
+      const b = await putElsewhere(a.path, 'b.txt');
+      const { route } = await routeOver([turnStart(a.ref)]);
+      const [, top, hex] = a.path.split('/');
+      const paths = async (pattern: string, path?: string) =>
+        (await route.glob(pattern, path)).files?.map((f) => f.path);
+
+      expect(await paths('**/*', `/${top!}`)).toEqual([a.path]);
+      expect(await paths('**/*', `/${top!}/${hex!}`)).toEqual([a.path]);
+      expect(await paths('**/*', a.path)).toEqual([]);
+      expect(await paths('**/*', b.path.split('/').slice(0, 3).join('/'))).toEqual([]);
+      expect(await paths('**/*', '/not-there')).toEqual([]);
+      expect(await paths(`${top!}/**`)).toEqual([a.path]);
+      expect(await paths(`${b.path.split('/')[1]!}/**`)).toEqual([]);
+    });
+
+    it('呼叫當下才判：之後才引用的檔，之後的 glob 就列得到', async () => {
+      const a = await put('alpha\n', 'a.txt');
+      const events: SessionEvent[] = [];
+      const { route } = await routeOver(events);
+
+      expect((await route.glob('**/*')).files).toEqual([]);
+      events.push(turnStart(a.ref));
+      expect((await route.glob('**/*')).files?.map((f) => f.path)).toEqual([a.path]);
+    });
+
+    it('起點全是引用過的目錄、一次 rg；0 份引用時一次 rg 都不起', async () => {
+      const a = await put('alpha\n', 'a.txt');
+      const b = await putElsewhere(a.path, 'b.txt');
+      await put('hidden\n', 'hidden.txt');
+      const spawns: (readonly string[])[] = [];
+      const routeFor = (events: SessionEvent[]) => {
+        const scope = createAttachmentScope();
+        scope.bind({ events });
+        return new ThreadScopedAttachmentBackend({
+          rootDir: store.filesDir,
+          scope,
+          ripgrep: { onSpawn: (argv) => spawns.push(argv) },
+        });
+      };
+
+      const listed = await routeFor([turnStart(a.ref, b.ref)]).glob('**/*');
+      expect(listed.files?.map((f) => f.path).sort()).toEqual([a.path, b.path].sort());
+      expect(spawns).toHaveLength(1);
+      const roots = spawns[0]!.slice(spawns[0]!.indexOf('--') + 1);
+      const dirOf = (path: string) => `.${path.split('/').slice(0, 3).join('/')}`;
+      expect([...roots].sort()).toEqual([dirOf(a.path), dirOf(b.path)].sort());
+
+      spawns.length = 0;
+      expect(await routeFor([]).glob('**/*')).toEqual({ files: [] });
+      expect(spawns).toHaveLength(0);
+    });
+
+    describe('出錯：rg 的原始訊息不交給模型', () => {
+      const ALIAS = 'SECRET-ALIAS-NAME.txt';
+
+      async function routeWith(route: typeof ThreadScopedAttachmentBackend, executable?: string) {
+        const a = await put('alpha\n', 'a.txt');
+        const warned: string[] = [];
+        const scope = createAttachmentScope();
+        scope.bind({ events: [turnStart(a.ref)], sessionId: 'thread-1994' });
+        return {
+          route: new route({
+            rootDir: store.filesDir,
+            scope,
+            warn: (line) => warned.push(line),
+            ...(executable === undefined ? {} : { ripgrep: { executable } }),
+          }),
+          warned,
+        };
+      }
+
+      async function fakeRg(stderr: string): Promise<string> {
+        const fake = join(home, 'fake-rg');
+        await writeFile(fake, `#!/bin/sh\necho "${stderr}" >&2\nexit 2\n`);
+        await chmod(fake, 0o755);
+        return fake;
+      }
+
+      it.each([
+        ['SEARCH_FAILED', `rg: ./a/b/${ALIAS}: Permission denied (os error 13)`],
+        ['SEARCH_INVALID_PATTERN', `rg: ./a/b/${ALIAS}: error parsing glob: unclosed`],
+      ])('%s：模型只拿到固定的一句，原文進伺服器日誌', async (code, stderr) => {
+        const { route, warned } = await routeWith(
+          ThreadScopedAttachmentBackend,
+          await fakeRg(stderr),
+        );
+
+        const result = await route.glob('**/*');
+        expect(result).toEqual({ error: ATTACHMENT_GLOB_FAILED_MESSAGE });
+        expect(warned).toHaveLength(1);
+        expect(warned[0]).toContain(ALIAS);
+        expect(warned[0]).toContain('thread-1994');
+        expect(warned[0]).toContain('glob');
+        expect(warned[0]).toContain(code);
+      });
+
+      it('SEARCH_ABORTED 照舊：原句留給模型，不寫 warn', async () => {
+        class Aborted extends ThreadScopedAttachmentBackend {
+          protected override async globPaths(): Promise<GlobPathsResult> {
+            return { error: 'glob aborted', errorCode: SEARCH_ABORTED };
+          }
+        }
+        const { route, warned } = await routeWith(Aborted);
+
+        expect(await route.glob('**/*')).toEqual({ error: 'glob aborted' });
+        expect(warned).toEqual([]);
+      });
     });
   });
 

@@ -242,7 +242,7 @@ describe('slash.run 帶附件', () => {
       expect(blocks.map((b) => b.type)).toEqual(['text', 'text', 'image_url', 'text']);
       expect(blocks[0]!.text).toContain('File "說明.txt"');
       expect(blocks[1]!.text).toMatch(
-        /^Image "s\.png" \(sha256:[0-9a-f]{64}\); request preview 7x5px\.$/u,
+        /^Image "s\.png" \(sha256:[0-9a-f]{64}\); request preview 7x5px\. It may be resized or re-encoded; source dimensions, format, and byte size may differ\.$/u,
       );
       expect(blocks[3]!.text).toBe('請看附件');
       // 日誌順序：command/run → command/done → turn/start。

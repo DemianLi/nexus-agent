@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CHANNEL_SERVICE, createHostServicesPlugin, loadPlugins } from '@nexus/core';
 import type { PluginRegistry, PreToolDecision, PreToolListener } from '@nexus/core';
@@ -24,6 +24,7 @@ import {
 } from './index.js';
 import type { McpPluginOptions } from './index.js';
 import { poolKey } from './pool.js';
+import type { McpConnectionPoolOptions } from './pool.js';
 import { modelToolNames } from './tool-names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
@@ -70,12 +71,17 @@ async function waitFor(check: () => Promise<boolean> | boolean, ms = 10_000): Pr
 }
 
 /** 一份池，測試結束時關；`logged` 是池的日誌（serve 給伺服器日誌），`errors` 是 dsh 寫成 error 級的那幾句。 */
-function pool(): { pool: McpConnectionPool; logged: string[]; errors: string[] } {
+function pool(extra: Pick<McpConnectionPoolOptions, 'firstAcquireWaitMs'> = {}): {
+  pool: McpConnectionPool;
+  logged: string[];
+  errors: string[];
+} {
   const logged: string[] = [];
   const errors: string[] = [];
   const created = new McpConnectionPool({
     log: (message) => logged.push(message),
     error: (message) => errors.push(message),
+    ...extra,
   });
   cleanup.push(() => created.close());
   return { pool: created, logged, errors };
@@ -355,6 +361,46 @@ describe('第一次握手卡住（PM 審查擋 1）', () => {
   }, 40_000);
 });
 
+describe('建立那一份的取用的期限（#2125）', () => {
+  /** 組一份，過 `ms` 之後落定了沒。 */
+  async function settledAfter(shared: McpConnectionPool, options: McpPluginOptions, ms: number) {
+    let settled = false;
+    void assemble(shared, options).then(
+      () => (settled = true),
+      () => (settled = true),
+    );
+    await new Promise((resolve) => setTimeout(resolve, ms));
+    return settled;
+  }
+
+  it('沒帶 firstAcquireWaitMs（serve 的池）：建立那一份照舊等到第一次連線落定', async () => {
+    const { pool: shared } = pool();
+    const h = hangRow();
+    h.hang();
+    expect(await settledAfter(shared, h.options, 1500)).toBe(false);
+  }, 20_000);
+
+  it('帶了、沒寫 failOnStartupError：建立那一份到期就落定，沒有工具並警告', async () => {
+    const { pool: shared } = pool({ firstAcquireWaitMs: 300 });
+    const h = hangRow();
+    h.hang();
+    const started = Date.now();
+    const { registry } = await assemble(shared, h.options);
+    expect(Date.now() - started).toBeLessThan(300 + 2000);
+    expect(modelToolNames(registry)).toEqual([]);
+    expect(warned(registry).some((m) => m.includes('still connecting after 300ms'))).toBe(true);
+  }, 20_000);
+
+  it('帶了、寫了 failOnStartupError：照舊等到落定（連不上要算掉，判法同 serve）', async () => {
+    const { pool: shared } = pool({ firstAcquireWaitMs: 300 });
+    const h = hangRow();
+    h.hang();
+    expect(await settledAfter(shared, { ...h.options, failOnStartupError: true }, 1500)).toBe(
+      false,
+    );
+  }, 20_000);
+});
+
 describe('斷線空窗裡組的 thread（PM 審查擋 2）', () => {
   it('照最近一代登記工具；空窗期呼叫回 disconnected；重連之後同一條叫得動', async () => {
     const { pool: shared, logged } = pool();
@@ -418,6 +464,42 @@ describe('放棄重連之後（Q5 (b)）', () => {
     expect(x.shared).not.toBe(old);
     expect(y.shared).toBe(x.shared);
     expect(r.pids()).toHaveLength(1);
+  }, 30_000);
+
+  /**
+   * 嘗試在 `tools/list` 之後才失敗（重連拿到超過上限的指引，#1824）：那一次的子行程當場收掉
+   * （[#1835](https://github.com/DemianLi/nexus-agent/issues/1835)），放棄之後、關池之前一個都不剩。
+   */
+  it('嘗試在握手之後才失敗：放棄之後、關池之前沒有子行程', async () => {
+    const { pool: shared, logged } = pool();
+    const r = row({ reconnect: { initialDelayMs: 20, maxDelayMs: 40, maxAttempts: 2 } });
+    const file = join(mkdtempSync(join(tmpdir(), 'nexus-mcp-pool-instructions-')), 'instructions');
+    cleanup.push(() => {
+      rmSync(dirname(file), { recursive: true, force: true });
+    });
+    // 出處標頭 21 位元組 + 一個中文字 3 位元組 = 24，沒超過 40。
+    writeFileSync(file, '短');
+    const options: McpPluginOptions = {
+      ...r.options,
+      maxInstructionBytes: 40,
+      connection: {
+        ...(r.options.connection as { transport: 'stdio'; command: string; args: string[] }),
+        env: { FIXTURE_INSTRUCTIONS_FILE: file },
+      },
+    };
+    await shared.acquire(mcpConfigSchema.parse(options), false);
+    expect(r.pids()).toHaveLength(1);
+
+    // 21 + 30 = 51 位元組，超過 40。
+    writeFileSync(file, '字'.repeat(10));
+    killAll(r.pids());
+    await waitFor(() => logged.some((m) => m.includes('giving up after 2 consecutive')));
+    const attempts = logged.filter((m) => m.includes('connection attempt failed'));
+    expect(attempts).toHaveLength(2);
+    for (const message of attempts) {
+      expect(message).toContain('server instructions exceed maxInstructionBytes (40)');
+    }
+    expect(r.pids()).toEqual([]);
   }, 30_000);
 });
 

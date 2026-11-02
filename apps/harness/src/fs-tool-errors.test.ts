@@ -283,6 +283,28 @@ describe('檔案工具的失敗在日誌上記成錯誤', () => {
       20000,
     );
 
+    it('寫檔時空間用完 → FS_NO_SPACE（#2195）', async () => {
+      const backend = new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: 'workspace-write',
+        atomicInternals: {
+          afterWrite: () => {
+            throw Object.assign(new Error('ENOSPC: no space left on device, write'), {
+              code: 'ENOSPC',
+              errno: -28,
+              syscall: 'write',
+            });
+          },
+        },
+      });
+      const { results } = await run(
+        'workspace-write',
+        [{ name: 'write_file', args: { file_path: '/a.txt', content: 'x' } }],
+        { backend },
+      );
+      expect(results).toEqual([failure('FS_NO_SPACE')]);
+    }, 20000);
+
     it('反例：成功的讀與改不帶碼', async () => {
       await writeFile(join(root, 'a.txt'), 'foo\n', 'utf8');
       const { results } = await run('workspace-write', [

@@ -11,7 +11,17 @@
  * 讀檔次數與同時在跑的數目，用 `JsonlSessionStoreOptions.fs`（只給測試換）量。
  */
 
-import { appendFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,11 +35,17 @@ import {
   SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
   SessionHandleClosedError,
+  generationLogFilename,
 } from '@nexus/core';
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
-import { openJsonlSessionStore, sessionPathsIn } from './jsonl-session-store.js';
+import {
+  legacyTwoFilePathsIn,
+  openJsonlSessionStore,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
 import type { JsonlSessionStore, StableReadFileSystem } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION } from './session-files.fixture.js';
 
 const roots: string[] = [];
 
@@ -159,18 +175,20 @@ describe('N0622 建立驗證', () => {
     await late.close();
   });
 
-  it('H：header 不在、日誌在（孤兒日誌）也算建過，create 當場拋', async () => {
+  it('H：header 不在、日誌在（舊兩檔的孤兒日誌）也算建過，create 當場拋', async () => {
     const directory = await tmp();
-    await writeFile(sessionPathsIn(directory, 'h').log, '');
+    await writeFile(legacyTwoFilePathsIn(directory, 'h').log, '');
     const store = openJsonlSessionStore({ directory });
     expect(() => store.create(headerOf('h'))).toThrow(SessionAlreadyExistsError);
   });
 
-  it('I：create 之後才出現孤兒日誌（競態），日誌的 wx 撞上 EEXIST 也換成 SessionAlreadyExistsError', async () => {
+  it('I：create 之後才出現孤兒世代檔（競態），發佈世代檔的 link 撞上 EEXIST 也換成 SessionAlreadyExistsError', async () => {
     const directory = await tmp();
     const store = openJsonlSessionStore({ directory });
     const late = store.create(headerOf('i'));
-    await writeFile(sessionPathsIn(directory, 'i').log, '');
+    const paths = sessionPathsIn(directory, 'i');
+    await mkdir(paths.sessionDirectory);
+    await writeFile(paths.log, '');
     const failure = await late.append([turnStart(0)]).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(SessionAlreadyExistsError);
     expect(((failure as Error).cause as { code?: unknown }).code).toBe('EEXIST');
@@ -204,17 +222,25 @@ describe('N0644 關閉之後再用', () => {
 });
 
 describe('N0646 拒讀時帶位置', () => {
+  /** 寫方建一份，再把世代檔換成比這一版新的那一版：檔名與 header 行的版號一起改。 */
   async function newerHeader(): Promise<{ store: JsonlSessionStore; path: string }> {
     const directory = await tmp();
     const store = openJsonlSessionStore({ directory });
     await seed(store, 'newer');
     const paths = sessionPathsIn(directory, 'newer');
-    const header = JSON.parse(await readFile(paths.header, 'utf8')) as Record<string, unknown>;
-    await writeFile(
-      paths.header,
-      JSON.stringify({ ...header, version: SESSION_LOG_FORMAT_VERSION + 1 }),
+    const newer = join(
+      paths.sessionDirectory,
+      generationLogFilename(SESSION_LOG_FORMAT_VERSION + 1),
     );
-    return { store, path: paths.log };
+    await rename(paths.log, newer);
+    const text = await readFile(newer, 'utf8');
+    const newline = text.indexOf('\n');
+    const header = JSON.parse(text.slice(0, newline)) as Record<string, unknown>;
+    await writeFile(
+      newer,
+      `${JSON.stringify({ ...header, version: SESSION_LOG_FORMAT_VERSION + 1 })}${text.slice(newline)}`,
+    );
+    return { store, path: newer };
   }
 
   it('A／C：header 版本比這一版新，open(read) 與 resume 的錯誤帶日誌的絕對路徑，訊息不帶', async () => {
@@ -277,12 +303,13 @@ describe('N0625 冷讀解析快取', () => {
     const fs = countingFs();
     const store = openJsonlSessionStore({ directory, fs });
     await seed(store, 'cold', 3);
-    const { log, header } = sessionPathsIn(directory, 'cold');
+    const { log, tombstone } = sessionPathsIn(directory, 'cold');
     const inspected = await (await store.open('cold', 'read')).read();
-    const headerReads = fs.reads.get(header);
+    const headerReads = fs.reads.get(tombstone);
     const resumed = await store.resume('cold');
     expect(fs.reads.get(log)).toBe(1);
-    expect(fs.reads.get(header)).toBe(headerReads);
+    // 墓碑不是日誌：續接拿租約前後各定位一次，每次讀它分辨是墓碑還是舊兩檔的 header（幾百個位元組），本文不重讀。
+    expect(fs.reads.get(tombstone)).toBe((headerReads ?? 0) + 2);
     expect(resumed.events).toBe(inspected);
     await resumed.stored.close();
   });
@@ -350,7 +377,11 @@ describe('N0625 冷讀解析快取', () => {
     const resumed = await store.resume('torn');
     await resumed.stored.append([turnStart(2)]);
     await resumed.stored.close();
-    const lines = (await readFile(log, 'utf8')).split('\n').filter((line) => line.length > 0);
+    // 第一行是 header 行，事件從第二行起。
+    const lines = (await readFile(log, 'utf8'))
+      .split('\n')
+      .slice(1)
+      .filter((line) => line.length > 0);
     expect(lines.map((line) => (JSON.parse(line) as SessionEvent).seq)).toEqual([0, 1, 2]);
     expect(warnings.some((line) => line.includes('已截到'))).toBe(true);
   });
@@ -397,12 +428,15 @@ describe('N0625 冷讀解析快取', () => {
 });
 
 describe('N0627 列舉並行', () => {
-  /** 直接寫 header 檔（列舉只讀 header）。 */
+  /** 直接寫舊兩檔的 header 檔（列舉只讀 header），版本 {@link LEGACY_TWO_FILE_FORMAT_VERSION}。 */
   async function headers(directory: string, count: number): Promise<string[]> {
     const ids = Array.from({ length: count }, (_, index) => `s${String(index).padStart(3, '0')}`);
     await Promise.all(
       ids.map((id) =>
-        writeFile(sessionPathsIn(directory, id).header, JSON.stringify(headerOf(id))),
+        writeFile(
+          legacyTwoFilePathsIn(directory, id).header,
+          JSON.stringify({ ...headerOf(id), version: LEGACY_TWO_FILE_FORMAT_VERSION }),
+        ),
       ),
     );
     return ids;

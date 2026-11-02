@@ -12,7 +12,7 @@
  * ## 跟 dsh 不一樣的
  *
  * dsh 的邊是真的遷移（凍結的 codec 加轉換），我們到今天一條都沒有：每一版的檔頭都寫「舊檔直接讀」（`session-store.ts`），
- * 續接就地續寫、把 header 蓋成最新。所以這裡的邊只有兩種：
+ * 續接把舊檔的事件原樣搬進這一版的世代檔，只把 header 換成最新（#1594 ③）。所以這裡的邊只有兩種：
  *
  * - **`additive`**：比 `to` 舊的檔，今天的讀方直接讀得對。有些靠讀方裡為舊形狀留的分支，記在 `readerBranch`——
  *   那些分支哪天被當成死碼清掉，夾具測試（`apps/harness/src/session-format-fixtures.test.ts`）會紅。
@@ -20,8 +20,8 @@
  *   `older-without-migration`，`parseHeader` 拋 `SessionFormatUnsupportedError`），列表算進讀不懂。今天沒有任何一條，
  *   它是第一次出現非加性變更、而遷移還沒落地時唯一失敗即關閉的選項。真的遷移（`transform`）等 #1529 第四刀。
  *
- * 就地續寫只在加性區間成立：從存的版本走到目前版本，路上全是 `additive`，續寫進去的新詞彙舊讀方本來就讀得懂。
- * 路上有一條 `breaking`，`parseHeader` 就擋掉，走不到續寫。
+ * 事件原樣搬進新世代只在加性區間成立：從存的版本走到目前版本，路上全是 `additive`，舊事件這一版的讀方本來就讀得懂。
+ * 路上有一條 `breaking`，`parseHeader` 就擋掉，走不到續接。
  *
  * ## 升版時要做的
  *
@@ -154,7 +154,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 13,
     kind: 'additive',
     ref: '#504',
-    readerBranch: 'apps/harness/src/resume-guards.ts:162',
+    readerBranch: 'apps/harness/src/resume-guards.ts:164',
   },
   { from: 13, to: 14, kind: 'additive', ref: '#528' },
   { from: 14, to: 15, kind: 'additive', ref: '#433' },
@@ -180,7 +180,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 33,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'apps/harness/src/conversation-history.ts:1146',
+    readerBranch: 'apps/harness/src/conversation-history.ts:1177',
   },
   {
     from: 33,
@@ -211,7 +211,20 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
   { from: 47, to: 48, kind: 'additive', ref: '#1335' },
   { from: 48, to: 49, kind: 'additive', ref: '#1629' },
   { from: 49, to: 50, kind: 'additive', ref: '#1624' },
-  { from: 50, to: 51, kind: 'additive', ref: '#1579' },
+  {
+    from: 50,
+    to: 51,
+    kind: 'additive',
+    ref: '#1579',
+    readerBranch: 'packages/nexus-core/src/session-store.ts:785',
+  },
+  {
+    from: 51,
+    to: 52,
+    kind: 'additive',
+    ref: '#2132',
+    readerBranch: 'apps/harness/src/jsonl-session-store.ts:1912',
+  },
 ];
 
 /** 產品用的目錄。模組載入時就驗，不合就拋。 */
@@ -245,8 +258,9 @@ export function classifyStoredFormatVersion(
 
 /**
  * 隨 GitHub Release 出過貨的格式版本：每個 tag 的 `SESSION_LOG_FORMAT_VERSION`，去重（v0.4.0 到 v0.5.19；v0.1.0 到
- * v0.3.0 沒有會話日誌）。每一版在 `apps/harness/src/fixtures/session-format/v<N>/` 都有一份由那一版的寫入器寫出的夾具。
+ * v0.3.0 沒有會話日誌），加上發版前先凍好的新版本（52）。每一版在 `apps/harness/src/fixtures/session-format/v<N>/`
+ * 都有一份由那一版的寫入器寫出的夾具。
  */
 export const RELEASED_SESSION_FORMAT_VERSIONS: readonly number[] = Object.freeze([
-  2, 3, 4, 8, 9, 10, 12, 13, 14,
+  2, 3, 4, 8, 9, 10, 12, 13, 14, 52,
 ]);

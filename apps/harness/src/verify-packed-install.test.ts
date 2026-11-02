@@ -8,7 +8,7 @@
  * 環境清理、`ps` 缺席、`SIGTERM` 收尾見 `release-scripts.test.ts`。
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
   existsSync,
   mkdirSync,
@@ -26,17 +26,28 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   bundledRgProblems,
   cliRunProblems,
+  cliSessionLog,
   headerProblems,
   homepageProblems,
   installedGrepProblems,
-  nativeLockProblems,
   ripgrepDisclosureProblems,
   serveOutputProblems,
+  SHARP_PROBE,
+  SHARP_PROBE_LIMIT,
+  sharpProblems,
   shutdownProblems,
   smokeInstalledServe,
+  spawnerLockProbe,
+  spawnerLockProblems,
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
+import {
+  spawnerProbeProblems,
+  spawnerProbeSummary,
+} from '../../../scripts/release/spawner-probe.js';
+import { generationLogFilename, SESSION_LOCK_FILENAME, sessionDirectoryName } from '@nexus/core';
+
 import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const ok = { status: 0, stdout: '', stderr: '' };
@@ -58,13 +69,52 @@ describe('步驟 3：--version', () => {
   });
 });
 
-describe('步驟 4：flock 原生二進位', () => {
-  it('印 locked：不報；載不起來、印別的：報並帶 stderr 尾巴', () => {
-    expect(nativeLockProblems({ ...ok, stdout: 'locked\n' })).toEqual([]);
-    expect(nativeLockProblems({ status: 1, stdout: '', stderr: 'ERR_DLOPEN_FAILED' })).toEqual([
-      expect.stringContaining('ERR_DLOPEN_FAILED'),
+describe('步驟 4：spawner 的鎖', () => {
+  it('印 locked：不報；鎖不住、印別的：報並帶 stderr 尾巴', () => {
+    expect(spawnerLockProblems({ ...ok, stdout: 'locked\n' })).toEqual([]);
+    expect(spawnerLockProblems({ status: 1, stdout: '', stderr: '第二個沒被擋下' })).toEqual([
+      expect.stringContaining('第二個沒被擋下'),
     ]);
-    expect(nativeLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
+    expect(spawnerLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
+  });
+
+  it('探針直接跑出貨的執行檔，不 import 打包後不存在的內部模組', () => {
+    const probe = spawnerLockProbe('/x/spawner', '/x/probe.lock');
+    expect(probe).toContain('"/x/spawner"');
+    expect(probe).not.toContain('./lib/');
+  });
+});
+
+describe('步驟 4d：sharp 在產物裡縮得了圖', () => {
+  const good = { width: SHARP_PROBE_LIMIT, height: 1365, space: 'srgb', format: 'jpeg' };
+
+  it('長邊等於上限、sRGB、JPEG：不報', () => {
+    expect(sharpProblems({ ...ok, stdout: JSON.stringify(good) })).toEqual([]);
+  });
+
+  it('載不起來、沒縮、色彩空間或格式不對、印的不是 JSON：各自報', () => {
+    expect(
+      sharpProblems({ status: 1, stdout: '', stderr: 'Could not load the "sharp" module' }),
+    ).toEqual([expect.stringContaining('sharp')]);
+    expect(
+      sharpProblems({ ...ok, stdout: JSON.stringify({ ...good, width: 3000, height: 2000 }) }),
+    ).toHaveLength(1);
+    expect(
+      sharpProblems({ ...ok, stdout: JSON.stringify({ ...good, space: 'cmyk' }) }),
+    ).toHaveLength(1);
+    expect(
+      sharpProblems({ ...ok, stdout: JSON.stringify({ ...good, format: 'png' }) }),
+    ).toHaveLength(1);
+    expect(sharpProblems({ ...ok, stdout: 'not json' })).toHaveLength(1);
+  });
+
+  it('探針本身在 repo 裝好的 sharp 上跑得通：判斷函式收它的輸出不報', () => {
+    const run = spawnSync(process.execPath, ['--input-type=module', '--eval', SHARP_PROBE], {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    expect(sharpProblems(run)).toEqual([]);
   });
 });
 
@@ -76,6 +126,48 @@ describe('步驟 4b：內附 ripgrep 在 PATH 上沒有 rg 的環境裡跑得起
     ).toEqual([expect.stringContaining('@vscode/ripgrep')]);
     expect(bundledRgProblems({ ...ok, stdout: 'FAIL spawn ENOENT' })).toHaveLength(1);
     expect(bundledRgProblems({ status: null, stdout: '', stderr: '' })).toHaveLength(1);
+  });
+});
+
+describe('步驟 4e：產物裡的沙箱 spawner 起得來、經它起得了主機的 git', () => {
+  const ready = { type: 'ready', filterInsns: 77, landlockAbi: 6 } as const;
+  const started = { type: 'started', id: 1, pid: 16, partial: false } as const;
+  const exited = { type: 'exited', id: 1, code: 0, signal: 0 } as const;
+  const ok = { events: [ready, started, exited], stdout: 'git version 2.39.5\n', stderr: '' };
+
+  it('Ready、Started、Exited 0、印出版本：沒有 problem', () => {
+    expect(spawnerProbeProblems(ok)).toEqual([]);
+  });
+
+  it('主機沒有 Landlock：全權模式起的 git 照樣算數', () => {
+    const events = [{ ...ready, landlockAbi: 0 }, started, exited];
+    expect(spawnerProbeProblems({ ...ok, events })).toEqual([]);
+  });
+
+  it('印進 log 的那一行帶 ABI 與結局', () => {
+    const line = spawnerProbeSummary(ok);
+    expect(line).toContain('"landlockAbi":6');
+    expect(line).toContain('"code":0');
+    expect(line).toContain('git version 2.39.5');
+  });
+
+  it.each([
+    ['中途出錯', { ...ok, error: '等第一筆事件逾時' }],
+    ['spawner 起不來', { ...ok, events: [{ type: 'unavailable', errno: 22, detail: 'seccomp' }] }],
+    ['沒有任何事件', { ...ok, events: [] }],
+    [
+      'git 沒起成',
+      {
+        ...ok,
+        events: [ready, { type: 'failed', id: 1, kind: 'exec', errno: 13, detail: 'exec' }],
+      },
+    ],
+    ['git 沒正常結束', { ...ok, events: [ready, started, { ...exited, code: 128 }] }],
+    ['只有 Started', { ...ok, events: [ready, started] }],
+    ['結局是別的 id 的', { ...ok, events: [ready, { ...started, id: 2 }, { ...exited, id: 2 }] }],
+    ['stdout 不是版本', { ...ok, stdout: '' }],
+  ] as const)('%s：有一條 problem', (_, outcome) => {
+    expect(spawnerProbeProblems(outcome)).toHaveLength(1);
   });
 });
 
@@ -150,7 +242,24 @@ describe('步驟 5：假模型跑一輪與會話 header', () => {
   });
 
   it('沒有 header 檔：報', () => {
-    expect(headerProblems(undefined, stamp)).toEqual(['cli 跑完沒有 cli.header.json']);
+    expect(headerProblems(undefined, stamp)).toEqual(['cli 跑完沒有會話的世代檔']);
+  });
+
+  it('cli 的世代檔：挑會話目錄裡數字最大的；會話目錄不在、裡面沒有世代檔是 undefined', () => {
+    const run = mkdtempSync(join(tmpdir(), 'verify-cli-log-'));
+    try {
+      expect(cliSessionLog(run)).toBeUndefined();
+      const sessionDirectory = join(run, sessionDirectoryName('cli'));
+      mkdirSync(sessionDirectory);
+      writeFileSync(join(sessionDirectory, SESSION_LOCK_FILENAME), '');
+      expect(cliSessionLog(run)).toBeUndefined();
+      for (const version of [9, 52, 10]) {
+        writeFileSync(join(sessionDirectory, generationLogFilename(version)), '');
+      }
+      expect(cliSessionLog(run)).toBe(join(sessionDirectory, generationLogFilename(52)));
+    } finally {
+      rmSync(run, { recursive: true, force: true });
+    }
   });
 
   it('header 的 commit 是 null 或別的值：報（跟戳記比）', () => {

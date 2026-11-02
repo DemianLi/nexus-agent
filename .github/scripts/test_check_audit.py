@@ -18,8 +18,8 @@ import plan_ci
 from check_audit import EXCEPTIONS, NO_PATCH, ROOT, check, main, read_exceptions
 
 TODAY = date(2026, 10, 21)
-GHSA = 'GHSA-vfj7-8cjw-p6xm'
-PATH = 'apps__harness>deepagents>micromatch>braces'
+GHSA = 'GHSA-3333-4444-5555'
+PATH = 'apps__harness>parent-pkg>vuln-pkg'
 
 
 def advisory(
@@ -27,7 +27,7 @@ def advisory(
     severity: str = 'high',
     patched: str = NO_PATCH,
     paths: tuple[str, ...] = (PATH,),
-    module: str = 'braces',
+    module: str = 'vuln-pkg',
 ) -> dict:
     """`pnpm audit --json` 裡一筆 advisory 用得到的欄位。"""
     return {
@@ -160,7 +160,7 @@ class ListedAdvisory(unittest.TestCase):
         self.assertIn('有修補版了', problems[0])
 
     def test_unlisted_path_fails(self) -> None:
-        other = 'apps__harness>fast-glob>micromatch>braces'
+        other = 'apps__harness>other-parent>vuln-pkg'
         problems = run(audit(advisory(paths=(PATH, other))), listed(entry()))
         self.assertEqual(len(problems), 1)
         self.assertIn(other, problems[0])
@@ -217,9 +217,9 @@ class CommittedList(unittest.TestCase):
         self.assertEqual(problems, [])
 
     def test_editing_the_list_runs_this_test(self) -> None:
-        # 這條測試在 static 跑，static 只在全跑或有 TypeScript 異動時跑：只改清單的 PR 要被 plan 判成全跑。
+        # 這條測試在輕的模式的 plan 裡每一輪都跑；全跑那一層在 static 跑，static 只在 plan 判成要掃時跑：只改清單的 commit 也要掃。
         changed = EXCEPTIONS.relative_to(ROOT).as_posix()
-        self.assertTrue(any(rx.search(changed) for rx in plan_ci.FULL_RES), changed)
+        self.assertEqual(plan_ci.plan([changed], 'push', '')['ts'], 'true', changed)
 
 
 if __name__ == '__main__':

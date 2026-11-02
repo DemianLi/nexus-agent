@@ -6,7 +6,7 @@ import type { PendingApproval } from '@nexus/wire';
  * server、哪支工具，這一句補上。
  *
  * **只畫閘門給的理由**：core 的閘門在沒有理由時自己填一句預設字，再一律放進酬載的 `description`（`@nexus/core` 的 `approval.ts`），
- * 那句跟面板上「要執行 …」那一行重複，所以**等於預設字視同沒有**。預設字照 core 抄（web 不相依那個套件），`approval-reason.test.ts`
+ * 那句跟面板上「要執行 …」那一行重複，所以**等於預設字視同沒有**。預設字照 core 抄（web 的產品碼不從 core 取值），`approval-reason.test.ts`
  * 讀那邊的原始碼對。
  */
 

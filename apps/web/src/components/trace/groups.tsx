@@ -27,6 +27,10 @@ export const TRACE_MORE_DIGESTS_LABEL = '顯示更早的摘要';
 export const TRACE_MORE_ROWS_LABEL = '顯示更早的列';
 export const TRACE_LEGACY_GROUP_TEXT = '沒有結構資料的一輪：以人說的那一句切開';
 
+/** 主對話那一組：子代理的輪也是 `section[data-seq]`，而且 `seq` 是它自己日誌上的位置，會跟主對話撞號。 */
+export const mainTurnSelector = (seq: number) =>
+  `section[data-testid="trace-turn"][data-seq="${seq}"]`;
+
 export function TurnGroup({
   turn,
   structured,
@@ -37,6 +41,7 @@ export function TurnGroup({
   canLoadThrough = false,
   pullStatus,
   onPull,
+  onArm,
 }: {
   turn: TraceTurn;
   structured: boolean;
@@ -50,6 +55,8 @@ export function TurnGroup({
   /** 只有摘要的組才有：載入細節的進度（沒給就不畫載入鈕）。 */
   pullStatus?: PullStatus | undefined;
   onPull?: ((seq: number) => void) | undefined;
+  /** 載入鈕被聚焦（焦點交接，`hooks/use-focus-handoff.ts`）。 */
+  onArm?: ((seq: number, button: HTMLElement) => void) | undefined;
 }) {
   const title = turn.head === undefined ? '' : `第 ${turn.head.number} 輪`;
   const [shown, setShown] = useState(ROW_PAGE);
@@ -73,7 +80,11 @@ export function TurnGroup({
         turn.seq !== undefined &&
         pullStatus !== undefined &&
         onPull !== undefined && (
-          <PullControl status={pullStatus} onPull={() => onPull(turn.seq!)} />
+          <PullControl
+            status={pullStatus}
+            onPull={() => onPull(turn.seq!)}
+            onArm={(button) => onArm?.(turn.seq!, button)}
+          />
         )}
       {structured && turn.legacy && (
         <p className="text-muted-foreground px-2 pt-1 text-tip" data-testid="trace-legacy-group">
@@ -119,12 +130,15 @@ export function Digests({
   onRevealed,
   statusOf: pullStatusOf,
   onPull,
+  onArm,
 }: {
   digests: readonly TraceDigest[];
   omitted: number;
   /** 載入某一輪細節的進度與動作（沒給就不畫載入鈕）。 */
   statusOf?: ((seq: number) => PullStatus) | undefined;
   onPull?: ((seq: number) => void) | undefined;
+  /** 載入鈕被聚焦（焦點交接，`hooks/use-focus-handoff.ts`）。 */
+  onArm?: ((seq: number, button: HTMLElement) => void) | undefined;
   /** 要顯示的是這裡面的某一輪：展開區塊、展開到那一輪那一頁，再捲過去。 */
   reveal: { readonly seq: number; readonly nonce: number } | undefined;
   revealedSeq: number | undefined;
@@ -147,7 +161,9 @@ export function Digests({
   }, [reveal, digests]);
   useEffect(() => {
     if (reveal === undefined || ready !== reveal.nonce) return;
-    const target = list.current?.querySelector<HTMLElement>(`[data-seq="${reveal.seq}"]`);
+    const target = list.current?.querySelector<HTMLElement>(
+      `li[data-testid="trace-digest"][data-seq="${reveal.seq}"]`,
+    );
     if (target === null || target === undefined) return;
     target.scrollIntoView({ block: 'center' });
     target.focus({ preventScroll: true });
@@ -156,10 +172,10 @@ export function Digests({
   return (
     <Collapsible className="mb-4" data-testid="trace-digests" open={open} onOpenChange={setOpen}>
       <RowTrigger fit="bare" className="text-ui">
-        <span className="text-muted-foreground">
+        <span className="text-muted-foreground group-hover/row-trigger:text-foreground">
           更早的 {digests.length + omitted} 輪（只有摘要）
         </span>
-        <Chevron className="text-muted-foreground ml-auto" />
+        <Chevron className="text-muted-foreground group-hover/row-trigger:text-foreground ml-auto" />
       </RowTrigger>
       <CollapsibleContent className="overflow-hidden">
         {omitted > 0 && (
@@ -196,7 +212,11 @@ export function Digests({
                 <HeadFacts head={digest} />
               </p>
               {pullStatusOf !== undefined && onPull !== undefined && (
-                <PullControl status={pullStatusOf(digest.seq)} onPull={() => onPull(digest.seq)} />
+                <PullControl
+                  status={pullStatusOf(digest.seq)}
+                  onPull={() => onPull(digest.seq)}
+                  onArm={(button) => onArm?.(digest.seq, button)}
+                />
               )}
             </li>
           ))}

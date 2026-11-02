@@ -80,6 +80,7 @@ import {
   hasForkButton,
 } from '@/lib/thread-fork';
 import { RetryNotice } from '@/components/retry-notice';
+import { useFocusHandoff } from '@/hooks/use-focus-handoff';
 import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
 import { useStableNames } from '@/hooks/use-stable-names';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
@@ -277,7 +278,7 @@ function Marker({ children, testId }: { children: string; testId: string }) {
   return (
     <div className="flex justify-center">
       <p
-        className="text-muted-foreground bg-chip rounded-full px-3 py-1 text-tip"
+        className="text-muted-foreground bg-muted rounded-4xl px-3 py-1 text-tip"
         data-testid={testId}
       >
         {children}
@@ -344,7 +345,7 @@ export function Entry({
   if (entry.kind === 'notice') {
     // 折疊器長出來的「這一輪是被什麼叫醒的」（#851）：背景子代理結算的通知，不是人的話。id 跟排著時那一行同一個
     // （`inbox:<件 id>`），同一格換成正式的；歷史重播長出來的（`history-<seq>`）畫成同一個樣子。
-    return <SettledNotice caption={settledNoticeText(entry.reason)} />;
+    return <SettledNotice caption={settledNoticeText(entry.reason, entry.stopCause)} />;
   }
 
   if (entry.kind === 'agent-message') {
@@ -699,6 +700,12 @@ export function Transcript({
   const autoLoad = useEarlierAutoLoad(earlier);
   const viewport = useRef<HTMLDivElement>(null);
   useScrollButtonClearance(viewport);
+  // 按往前翻讀完（#2009）：最後一頁的鈕收掉、焦點掉了，就落在對話的 viewport（region「對話訊息」）；鈕還在就不動。
+  const handoff = useFocusHandoff<true>();
+  const loadingEarlier = earlier?.loading === true;
+  useEffect(() => {
+    if (!loadingEarlier && handoff.pending() !== undefined) handoff.land(viewport.current);
+  }, [loadingEarlier, handoff]);
 
   return (
     <MessageScrollerProvider autoScroll>
@@ -711,7 +718,9 @@ export function Transcript({
           {...autoLoad}
         >
           {/* 在 content 外面，prepend 保位才動得了手（見 `earlier-pager.tsx`）。 */}
-          {earlier?.hasMore === true && <EarlierPager earlier={earlier} />}
+          {earlier?.hasMore === true && (
+            <EarlierPager earlier={earlier} onArm={(button) => handoff.arm(true, button)} />
+          )}
           <MessageScrollerContent
             aria-live="off"
             className="mx-auto w-full max-w-2xl gap-4 px-6 pt-4 pb-10"
@@ -729,10 +738,7 @@ export function Transcript({
           </MessageScrollerContent>
         </MessageScrollerViewport>
         {/* 壓到對話裡的輸入區（子代理面板）就藏起來（#1295，`use-scroll-button-clearance.ts`）。 */}
-        <MessageScrollerButton
-          className="rounded-full data-[obscuring]:invisible"
-          behavior={scrollBehavior()}
-        >
+        <MessageScrollerButton className="data-[obscuring]:invisible" behavior={scrollBehavior()}>
           <ArrowDown />
           <span className="sr-only">捲到最新的訊息</span>
         </MessageScrollerButton>

@@ -535,14 +535,6 @@ export class PluginTree {
   }
 
   /**
-   * 技能來源登記處**當下**的路徑（#1446），依登記順序；快照。同 `skillSources` 服務的 `sources()`：`/名字` 叫用的 listener 讀服務，
-   * `skill.list`（#1574 N0929）由宿主讀這裡，兩邊是同一組（PM 裁決 (i)：讀登記處，不讀折進 thread 的那一份）。
-   */
-  skillSources(): readonly string[] {
-    return this.#skillSources.entries().map((entry) => entry.path);
-  }
-
-  /**
    * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources`、`commands`、
    * `approval-channel`、`session-lookup`、`fs`、`pre-step` 那八列。
    *
@@ -641,6 +633,11 @@ export class PluginTree {
 
   /**
    * 把清單推給 Include、等收斂、取每一列的結果。**呼叫端要在 {@link run} 裡。**
+   *
+   * **單列沒起來不拋**，不論是這一次才掉、還是之前就掉了：那一列判成 `dropped`，帶掉在哪一步與原因，其餘列照常（清單停用的
+   * 列、自我停用過且宣告沒變的列判成 `off`，見檔頭 #1424）。要不要因此拒絕什麼由呼叫端決定（必掛名單是 `startup-audit.ts`）。
+   * 宣告（模組名與設定）沒變的列，Loader 不重掛，所以掉在 `apply` 的列不會每次都重跑 `apply`，每次判出同一個原因；宣告一改就
+   * 重掛一次。掉在 `requires` 的列（等不到服務）在提供者出現時由 Cordis 自己起來。
    *
    * @param input - 這一份清單。
    * @returns 每一列的結果。
