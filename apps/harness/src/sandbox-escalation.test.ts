@@ -555,6 +555,42 @@ describe('升級', () => {
       }
     });
 
+    it('copy_file（#2289）：唯讀下被擋、接升級指引；核准後換來源對不上，原樣重試才過得去', async () => {
+      await writeFile(join(root, 'a.txt'), '一');
+      await writeFile(join(root, 'c.txt'), '別的');
+      const copy = (from: string): ScriptedTurn => ({
+        content: '',
+        toolCalls: [{ name: 'copy_file', args: { source_path: from, destination_path: '/b.txt' } }],
+      });
+      const { agent, dispose } = await assembleProduct('read-only', [
+        copy('/a.txt'),
+        escalate({
+          file_path: '/b.txt',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要這份副本',
+        }),
+        copy('/c.txt'),
+        copy('/a.txt'),
+        { content: '完成。' },
+      ]);
+      const config = { configurable: { thread_id: 'copy-file' } };
+      try {
+        const paused = await agent.invoke(toAgentInvocation('複製 a.txt。'), config);
+        const [denied] = toolTexts(paused);
+        expect(denied).toContain('[containment] 拒絕 copy');
+        expect(denied).toContain(SANDBOX_ESCALATION_HINT);
+        expect(pendingCard(paused)?.name).toBe(SANDBOX_ESCALATION_TOOL_NAME);
+
+        const [, granted, changed, exact] = toolTexts(await agent.invoke(APPROVE, config));
+        expect(granted).toContain('核准了');
+        expect(changed).toContain(GRANT_MISMATCH_NOTE);
+        expect(exact).toMatch(/^Copied \/a\.txt to \/b\.txt /u);
+        expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('一');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('workspace-write：經 symlink 寫到根外被擋，拒絕後面沒有升級指引；要升到全開在 schema 就被擋', async () => {
       await symlink(outside, join(root, 'out'));
       const { agent, dispose } = await assembleProduct('workspace-write', [
