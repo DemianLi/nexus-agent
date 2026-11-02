@@ -1,6 +1,6 @@
 /**
  * glob pattern 大括號上限的單元測試：量法（深度、組合、範圍、略過的字元、沒關的組，各附上限 ±1；長度上限；深度超過就停）、
- * 包 backend 的那一層（超過就不叫 backend），與子行程裡對真的 `fast-glob` 送強形狀（拿掉上限就 OOM）。經 `createNexusAgent` 的
+ * 包 backend 的那一層（超過就不叫 backend），與子行程裡對真的 `fast-glob` 送 `{1..900}{1..900}`（拿掉上限就 OOM）。經 `createNexusAgent` 的
  * 接線在 `apps/harness/src/glob-pattern-limit.test.ts`。
  */
 
@@ -231,6 +231,7 @@ function runChild(rootDir: string, pattern: string): Promise<ChildRun> {
         rootDir,
         pattern,
       ],
+      // `-e` 腳本裡的 `deepagents` 與 `--import tsx` 從 cwd 解析，所以 cwd 要在本套件。
       { cwd: new URL('..', import.meta.url), stdio: ['ignore', 'pipe', 'pipe'] },
     );
     let stdout = '';
