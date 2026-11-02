@@ -113,6 +113,7 @@ import {
   type InboxState,
   type ProjectionFold,
   type ProjectionSession,
+  type ProjectionValue,
   type ProjectionUnit,
   type QueuedInput,
   type QueuedInputSource,
@@ -157,6 +158,7 @@ import {
   type ClaimedInput,
   inboxData,
   type InboxClaim,
+  isLegacyLog,
   isTodosReset,
   modelUsageData,
   SessionTotals,
@@ -1360,6 +1362,8 @@ export class ThreadPump {
   readonly #projectionUnits: readonly ProjectionUnit[];
   readonly #projectionFold: ProjectionFold;
   #projections: ProjectionSession | undefined;
+  /** {@link ThreadPump.legacyLog} 上一次算的值，與當時 root 日誌的長度。日誌只會長，長度沒變值就沒變。 */
+  #legacy: { readonly length: number; readonly value: boolean } | undefined;
   /**
    * 子代理自己的投影（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）：只有宣告 `children` 的單元，一個子代理一份折疊
    * （`runId` → 折疊），形狀與理由見 `projection-children.ts`。`#childSeeds` 是上一個行程留下的子代理日誌（啟動時讀進來），
@@ -1627,6 +1631,24 @@ export class ThreadPump {
    */
   get projectionUnits(): readonly ProjectionUnit[] {
     return this.#projectionUnits;
+  }
+
+  /**
+   * root 日誌此刻的投影值，就是即時下行送出的那一份（`ProjectionSession.current()`）：每顆 root 事件都在 `append` 的
+   * 同一個同步段裡經 `#noteLogEvent` 推進。與從頭 `fold(sessionLog.events)` 只有一處不同：某個單元的 `view` 在中途
+   * 的狀態拋錯時，這裡從那顆起就停用。歷史路由拿它當最新一頁的值，不必每頁從頭折。收線之後不再推進，回 `undefined`。
+   */
+  get projectionValues(): readonly ProjectionValue[] | undefined {
+    return this.#closed ? undefined : this.#projections?.current();
+  }
+
+  /** 同 {@link isLegacyLog}`(sessionLog.events)`，root 日誌長度沒變就沿用上一次的值。 */
+  legacyLog(): boolean {
+    const root = this.#sessions.root;
+    if (this.#legacy?.length !== root.length) {
+      this.#legacy = { length: root.length, value: isLegacyLog(root.events) };
+    }
+    return this.#legacy.value;
   }
 
   /**
@@ -3759,6 +3781,9 @@ export class ThreadPump {
   #noteLogEvent(entry: SessionEntry, event: SessionEvent): void {
     // 會話累計（#574）：只收 root 的，同 dsh 的 `tokenUsage`／`sessionStats`；子代理是另一份日誌。值變了才送。
     if (entry.address.kind === 'root') {
+      // 投影先推進、照原位置送：前面哪一個拋了，即時折疊也不會漏掉這顆而從此跟日誌對不上——歷史的最新一頁讀的是它
+      // （{@link ThreadPump.projectionValues}）。
+      const projected = this.#projections?.push(event) ?? [];
       for (const data of this.#totals.apply(event)) this.#presentCustom(data);
       const goal = this.#goal.apply(event);
       if (goal !== undefined) this.#presentCustom(goal);
@@ -3768,7 +3793,7 @@ export class ThreadPump {
         if (event.data.operation === 'pause') this.#stopRunForHostPause();
       }
       // 插件投影：一個泛用呼叫，不是每種投影一個分支。變了的單元各送一顆 `projection` frame。
-      for (const value of this.#projections?.push(event) ?? []) {
+      for (const value of projected) {
         // 輪外（命令、接上時的 baseline）當場送；輪中才合併。
         this.#projectionOut.offer(value.key, projectionData(value), this.#current !== undefined);
       }
