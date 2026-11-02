@@ -62,6 +62,33 @@ export function effectiveSelection(
   return catalog.default;
 }
 
+/**
+ * 伺服器記著的選擇：同一串候選人裡第一個非空的，**不過濾型錄**；都沒有才是部署預設。座位判斷「選的跟現在一樣」拿這一份比：
+ * 選過的模型下架後 {@link effectiveSelection} 退到部署預設，伺服器記的還是那顆，拿顯示的比會把「選部署預設」當成沒變（#2288）。
+ */
+export function recordedSelection(
+  catalog: ModelCatalog,
+  candidates: readonly (ModelSelection | null | undefined)[],
+): ModelSelection {
+  return (
+    candidates.find((candidate) => candidate !== null && candidate !== undefined) ?? catalog.default
+  );
+}
+
+/**
+ * 選了 `next` 等於什麼都沒換：伺服器記的是同一顆，且照 {@link effortOf} 實際用的強度一樣（沒帶、或帶了模型沒宣告的，都算預設等級）。
+ * 型錄上沒有 `next` 那顆就算有換。
+ */
+export function pickChangesNothing(
+  catalog: ModelCatalog,
+  recorded: ModelSelection,
+  next: ModelSelection,
+): boolean {
+  if (recorded.modelId !== next.modelId) return false;
+  const model = findModel(catalog, next.modelId);
+  return model !== undefined && effortOf(model, recorded) === effortOf(model, next);
+}
+
 export function findModel(catalog: ModelCatalog, id: string): ModelCatalogModel | undefined {
   return catalog.models.find((model) => model.id === id);
 }

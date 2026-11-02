@@ -4,7 +4,13 @@ import { toast } from 'sonner';
 
 import { ComposerPick } from '@/components/ui/composer';
 import type { ModelSeat as ModelSeatData } from '@/hooks/use-model-seat';
-import { effortOf, findModel, reasoningOf, selectionForModel } from '@/lib/model-selection';
+import {
+  effortOf,
+  findModel,
+  pickChangesNothing,
+  reasoningOf,
+  selectionForModel,
+} from '@/lib/model-selection';
 
 /** 選擇失敗時 toast 的標題；原因放在說明裡。 */
 export const MODEL_SELECT_FAILED = '沒換成這顆模型';
@@ -51,7 +57,9 @@ export function ModelSeat({
   const efforts = current === undefined ? undefined : reasoningOf(current);
   const effortName = efforts?.efforts.find((item) => item.id === effort)?.name;
 
+  // 跟伺服器記的一樣才不送；顯示的那份可能是型錄換掉後退到的部署預設（#2288）。
   const select = (next: ModelSelection) => {
+    if (pickChangesNothing(catalog, seat.recorded, next)) return;
     void seat.select(next).then((failure) => {
       if (failure !== undefined) toast.error(MODEL_SELECT_FAILED, { description: failure });
     });
@@ -74,7 +82,7 @@ export function ModelSeat({
           onOpenChange={onOpenChange}
           onValueChange={(id) => {
             const model = findModel(catalog, id);
-            if (model === undefined || id === selection.modelId) return;
+            if (model === undefined) return;
             select(selectionForModel(model, selection));
           }}
         />
@@ -94,7 +102,6 @@ export function ModelSeat({
             open={effortOpen}
             onOpenChange={setEffortOpen}
             onValueChange={(id) => {
-              if (id === effort) return;
               select({ modelId: selection.modelId, reasoningEffort: id });
             }}
           />

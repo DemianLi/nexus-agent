@@ -265,6 +265,61 @@ describe('模型座（#723）', () => {
     expect(screen.queryByTestId('effort-seat')).toBeNull();
   });
 
+  describe('選了有沒有換，拿伺服器記著的那份比（#2288）', () => {
+    /** 伺服器記的是型錄上已經沒有的 `retired`（帶著強度），座位顯示部署預設。 */
+    function retired(defaultModel: string) {
+      const { value } = CATALOG as Extract<ModelCatalogResult, { ok: true }>;
+      const gone = { modelId: 'retired', reasoningEffort: 'high' };
+      return withModels(undefined, {
+        ok: true,
+        value: {
+          catalog: { ...value.catalog, default: { modelId: defaultModel } },
+          selection: { lastUsed: gone, next: gone },
+        },
+      });
+    }
+
+    it('在座位選部署預設那顆：送 model.select', async () => {
+      const { client, selected } = retired('model-a');
+      render(<App client={client} />);
+      await waitFor(() => expect(modelName()).toBe('模型：Alpha，從下一步生效，點開切換'));
+
+      fireEvent.click(await modelTrigger());
+      await pickMenu('Alpha');
+      await waitFor(() => expect(selected).toEqual([{ modelId: 'model-a' }]));
+    });
+
+    it('在推理強度選顯示的那個等級：送 model.select', async () => {
+      const { client, selected } = retired('model-b');
+      render(<App client={client} />);
+      await waitFor(() => expect(effortName()).toBe('推理強度：低，從下一步生效，點開切換'));
+
+      fireEvent.click(await effortTrigger());
+      await pickMenu('低');
+      await waitFor(() =>
+        expect(selected).toEqual([{ modelId: 'model-b', reasoningEffort: 'low' }]),
+      );
+    });
+
+    it('記的那顆還在型錄：選同一顆、同一個強度都不送', async () => {
+      const { value } = CATALOG as Extract<ModelCatalogResult, { ok: true }>;
+      const kept = { modelId: 'model-b', reasoningEffort: 'high' };
+      const { client, selected } = withModels(undefined, {
+        ok: true,
+        value: { ...value, selection: { lastUsed: kept, next: kept } },
+      });
+      render(<App client={client} />);
+      await waitFor(() => expect(effortName()).toBe('推理強度：高，從下一步生效，點開切換'));
+
+      fireEvent.click(await modelTrigger());
+      await pickMenu('Beta');
+      fireEvent.click(await effortTrigger());
+      await pickMenu('高');
+      await act(async () => {});
+      expect(selected).toEqual([]);
+    });
+  });
+
   describe('/model', () => {
     it('`/` 選單列出 /model；選它打開座位並清掉那一行', async () => {
       const { client } = withModels();
