@@ -6,6 +6,7 @@
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import { MemorySaver } from '@langchain/langgraph';
 import {
   replayConversation,
   SESSION_EVENT_MAX_DEPTH,
@@ -21,6 +22,7 @@ import {
   CHECKPOINT_DEPTH_EXCEEDED,
   CHECKPOINT_MAX_DEPTH,
   checkpointDepth,
+  DepthCheckedSerializer,
 } from './checkpoint-serde.js';
 import { restoreConversation, toolResultAsSeen } from './conversation-restore.js';
 import type { RestorableAgent } from './conversation-restore.js';
@@ -264,15 +266,40 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     }
   });
 
-  it('事件剛好 600 層、最深那格帶 `lc` 鍵：寫進存檔點多一層跳脫，照舊量、照舊拒，錯誤帶 seq', async () => {
+  it('事件剛好 600 層、最深那格帶 `lc` 鍵：寫進存檔點多一層跳脫，照樣灌得回去，之後再寫一筆、序列化再讀回都成功（#2315）', async () => {
     const agent = await realAgent();
     // `data` → `message` → `data` → `tool_calls` → `[0]` → `args` → `v` 是 7 層，跳脫的那顆在第 7 層。
+    const args = { v: { lc: 1, v: nested(SESSION_EVENT_MAX_DEPTH - 7) } };
+    const events = readBack(lines(oneTurn(args)));
+    const reply = events.find((event) => event.type === 'assistant/message')!;
+    // 前提：日誌那一關收得下（剛好在上限上），寫進存檔點剛好在上限上。
+    expect(storedEventDepth(reply)).toBe(SESSION_EVENT_MAX_DEPTH);
+
+    await restoreConversation(agent, THREAD, events);
+    const restored = firstReply(await stateMessages(agent), events).reply;
+    expect(checkpointDepth(restored) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH).toBe(CHECKPOINT_MAX_DEPTH);
+
+    // 之後再寫一筆：不拋，深的那則參數不變（它已凍結，`seal` 跳過、不再量）。
+    await agent.updateState(config, { messages: [new HumanMessage('再一句')] });
+    const after = await stateMessages(agent);
+    expect(after.at(-1)?.content).toBe('再一句');
+    expect(firstReply(after, events).reply.tool_calls?.[0]?.args).toEqual(args);
+
+    // `messages` 平常留在側表；中斷或出錯那一輪的 pending writes 才序列化，同一個上限、讀回時同一個數字給 `load`。
+    const serde = new DepthCheckedSerializer(new MemorySaver().serde);
+    const [type, bytes] = await serde.dumpsTyped([restored]);
+    const [readBackReply] = (await serde.loadsTyped(type, bytes)) as AIMessage[];
+    expect(readBackReply?.tool_calls?.[0]?.args).toEqual(args);
+  });
+
+  it('舊日誌的事件 601 層、最深那格帶 `lc` 鍵（上限再多 1 層）：照舊量、照舊拒，錯誤帶 seq', async () => {
+    const agent = await realAgent();
+    // 日誌那一關收不下 601 層；這是上限之前寫下的舊日誌，讀方不設限，讀得進來。
     const events = readBack(
-      lines(oneTurn({ v: { lc: 1, v: nested(SESSION_EVENT_MAX_DEPTH - 7) } })),
+      lines(oneTurn({ v: { lc: 1, v: nested(SESSION_EVENT_MAX_DEPTH + 1 - 7) } })),
     );
     const reply = events.find((event) => event.type === 'assistant/message')!;
-    // 前提：日誌那一關收得下（剛好在上限上）。
-    expect(storedEventDepth(reply)).toBe(SESSION_EVENT_MAX_DEPTH);
+    expect(storedEventDepth(reply)).toBe(SESSION_EVENT_MAX_DEPTH + 1);
 
     const error = await restoreConversation(agent, THREAD, events).then(
       () => undefined,
@@ -281,7 +308,7 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
 
     expect(error?.code).toBe(CHECKPOINT_DEPTH_EXCEEDED);
     expect(error?.seq).toBe(reply.seq);
-    expect(error?.depth).toBeGreaterThan(CHECKPOINT_MAX_DEPTH);
+    expect(error?.depth).toBe(CHECKPOINT_MAX_DEPTH + 1);
   });
 
   it('舊格式：只有 `additional_kwargs.tool_calls` 的參數字串，事件很淺，解析出來超過上限：照舊量、照舊拒', async () => {
