@@ -5,7 +5,7 @@
  *
  * - 跨路由：共用區與附件當來源，複製進工作區；共用區、附件、會話歷史當目的地都被拒。
  * - `permissions` 規則照產品的 fold 擋。
- * - 子代理的 `copy_file`：`meta` 只落在子代理自己的日誌，root 那一份沒有。
+ * - 子代理的 `copy_file`：`meta` 只落在子代理自己的日誌，root 那一份沒有（改動摘要照樣帶 `copiedFrom`，在 `workspace-changes.test.ts`）。
  *
  * 升級詢問在 `sandbox-escalation.test.ts`（產品的控制器建在組裝點裡，那一檔有現成的組法）。
  *

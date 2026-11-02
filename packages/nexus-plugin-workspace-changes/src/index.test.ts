@@ -109,6 +109,8 @@ interface Mounted {
   afterAgent(configurable?: unknown): Promise<void>;
   /** 收掉這次組裝：跑 lifecycle 的每一個收尾。 */
   dispose(): Promise<void>;
+  /** 開一份子代理的會話接上這次組裝，回它的日誌；`seed` 先寫進去的事件在接上時重播。 */
+  subagent(seed?: (log: SessionLog) => void): SessionLog;
   /** 這份日誌上的改動紀錄。 */
   changes(): SessionEvent[];
   /**
@@ -181,6 +183,17 @@ async function mount(
     async dispose() {
       for (const { value } of registry.lifecycle.disposers()) await value();
     },
+    subagent(seed) {
+      const sub = new SessionRegistry('wc-sub').root;
+      seed?.(sub);
+      createSessionRunner({
+        address: { kind: 'subagent', runId: 'task-1' },
+        log: sub,
+        rootLog: log,
+        installers: registry.sessions.installers(),
+      });
+      return sub;
+    },
     changes: () => log.events.filter((event) => event.type === 'workspace/changes'),
     async settle() {
       await middleware.wrapToolCall(
@@ -193,6 +206,15 @@ async function mount(
     },
   };
 }
+
+/** `/a.md`（`one\n`）複製到 `/b.md` 的 `tool/result` meta。sha256 是佔位值：`copyMetaOf` 只驗型別。 */
+const COPY_META = {
+  operation: 'copy',
+  source: '/a.md',
+  destination: '/b.md',
+  bytes: 4,
+  sha256: 'f0',
+};
 
 /** 一顆 `tool/result`：記錄器靠它知道這一輪跑過工具。 */
 function result(log: SessionLog, callId = 'c'): void {
@@ -425,6 +447,74 @@ describe('輪的邊界', () => {
     await m.afterAgent();
     const [event] = m.changes();
     expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
+  });
+
+  it('子代理的 copy_file（#2311）：從子代理的日誌讀 meta，root 這一輪列出目的地時帶上 copiedFrom', async () => {
+    const m = await mount({ 'a.md': 'one\n' });
+    m.log.append('turn/start', { kind: 'message', text: '委派。' });
+    const sub = m.subagent();
+    await m.tool(
+      'copy_file',
+      { source_path: '/a.md', destination_path: '/b.md' },
+      () => writeFile(join(m.root, 'b.md'), 'one\n'),
+      SUBAGENT_TOOL,
+    );
+    sub.append('tool/result', { callId: 'sub-1', isError: false, meta: COPY_META });
+    result(m.log, 'task');
+    await m.afterAgent();
+    m.log.append('turn/end', {});
+    await m.settle();
+
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)?.files).toEqual([
+      {
+        path: 'b.md',
+        display: 'b.md',
+        added: 1,
+        deleted: 0,
+        copiedFrom: { source: '/a.md', bytes: 4, sha256: 'f0' },
+      },
+    ]);
+    // 子代理的會話不寫事件。
+    expect(sub.events.some((e) => e.type === 'workspace/changes')).toBe(false);
+  });
+
+  it('子代理的會話接上時重播的舊 copy_file 不收：這一輪列出同一個目的地時不帶 copiedFrom', async () => {
+    const m = await mount({ 'a.md': 'one\n' });
+    m.log.append('turn/start', { kind: 'message', text: '委派。' });
+    m.subagent((log) => {
+      log.append('tool/result', { callId: 'old', isError: false, meta: COPY_META });
+    });
+    await m.tool(
+      'write_file',
+      { file_path: '/b.md', content: 'one\n' },
+      () => writeFile(join(m.root, 'b.md'), 'one\n'),
+      SUBAGENT_TOOL,
+    );
+    result(m.log, 'task');
+    await m.afterAgent();
+    await m.settle();
+
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)?.files).toEqual([
+      { path: 'b.md', display: 'b.md', added: 1, deleted: 0 },
+    ]);
+  });
+
+  it('子代理的 tool/result 不算 root 跑過工具：root 沒有結果就中止的一輪不記', async () => {
+    const m = await mount({ 'a.md': 'one\n' });
+    m.log.append('turn/start', { kind: 'message', text: '委派。' });
+    const sub = m.subagent();
+    await m.tool(
+      'copy_file',
+      { source_path: '/a.md', destination_path: '/b.md' },
+      () => writeFile(join(m.root, 'b.md'), 'one\n'),
+      SUBAGENT_TOOL,
+    );
+    sub.append('tool/result', { callId: 'sub-1', isError: false, meta: COPY_META });
+    m.log.append('turn/end', {});
+    await m.settle();
+    expect(m.changes()).toEqual([]);
   });
 
   it('續接：接上時已經在的舊輪重播過去，不會補記、也不建暫存目錄', async () => {
