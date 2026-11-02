@@ -1,7 +1,7 @@
 /**
- * 只讀推回對得上深拷的那一支（[#2117](https://github.com/DemianLi/nexus-agent/issues/2117)）：拿每一版出貨寫入器寫的夾具
- * （`fixtures/session-format/`），比 `replayConversation` 開不開 `readOnly`、`toolCallIds` 與直接深拷推回的工具呼叫 id。
- * store 交出的事件是凍過、共用的，所以這裡跑的就是續接時那份輸入。
+ * 只讀推回對得上深拷的那一支（[#2117](https://github.com/DemianLi/nexus-agent/issues/2117)）：拿 `fixtures/session-format/` 裡各版出貨寫入器寫的夾具，
+ * 比 `replayConversation` 開不開 `readOnly`、`toolCallIds` 與直接深拷推回的工具呼叫 id。store 交出的事件是凍過、共用的（`shareStoredEvents`），
+ * 跟讀方實際拿到的是同一種輸入。
  */
 
 import { cp, mkdtemp, rm } from 'node:fs/promises';
@@ -64,6 +64,7 @@ describe.each(names)('夾具 %s', (name) => {
     const directory = join(scratch, name);
     await cp(join(FIXTURES, name), directory, { recursive: true });
     const events = await (await openJsonlSessionStore({ directory }).open(id, 'read')).read();
+    expect(Object.isFrozen(events[0]?.data)).toBe(true);
     expect(summary(replayConversation(events, { readOnly: true }))).toEqual(
       summary(replayConversation(events)),
     );

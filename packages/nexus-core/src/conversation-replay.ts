@@ -180,8 +180,8 @@ export interface ReplayOptions {
    */
   readonly origin?: (message: BaseMessage, event: SessionEvent) => void;
   /**
-   * 只看推不推得回來（`kind`、`reason`），推出來的訊息讀完就丟：每則用 {@link readLoggedMessage} 推，巢狀的值與日誌共用，不深拷。
-   * 給判斷是不是舊日誌的讀者（`apps/harness` 的 `isLegacyLog`）。回傳串要留下來、交給 graph state 或模型的，不能開。
+   * 只看推不推得回來（`kind`、`reason`），推出來的訊息讀完就丟：日誌記的每一則改用 {@link readLoggedMessage} 推，巢狀的值與日誌共用，不深拷。
+   * 給判斷是不是舊日誌的讀者（`apps/harness` 的 `isLegacyLog`）。回傳串或 {@link origin} 交出的訊息要留下來、交給 graph state 或模型的，不能開。
    */
   readonly readOnly?: boolean;
 }

@@ -2,8 +2,9 @@
  * 只讀推回（[#2117](https://github.com/DemianLi/nexus-agent/issues/2117)）：`readLoggedMessage` 推出的訊息跟 `fromLoggedMessage` 一樣，
  * 巢狀的值與日誌共用、不拷；輸入是凍過的也推得回來，推完日誌那一份沒變。
  *
- * 語料挑的是建構子會動手的幾種：舊格式只有 `additional_kwargs.tool_calls`、v1 的內容陣列與 `contentBlocks` 陣列（建構子在上面補
- * `tool_call` 區塊）。少拷那兩個陣列，凍過的輸入就在建構子裡拋錯。
+ * 語料涵蓋建構子會動手的幾種：每則回覆都在 `data` 上補欄位（舊格式只有 `additional_kwargs.tool_calls` 的那則補 `tool_calls`）、
+ * v1 的內容陣列與 `contentBlocks` 陣列（建構子在上面補 `tool_call` 區塊）；工具結果與使用者訊息是對照。少拷那兩個陣列，
+ * 凍過的輸入就在建構子裡拋錯。
  */
 
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
@@ -77,7 +78,6 @@ describe('readLoggedMessage', () => {
         expect(copied.tool_calls?.length).toBeGreaterThan(0);
       }
       expect(JSON.stringify(logged)).toBe(before);
-      expect(Object.isFrozen(logged.data)).toBe(true);
     },
   );
 
