@@ -14,9 +14,11 @@ import {
   requestImageHandleText,
   textOnlyImageText,
   unavailableImageText,
+  unconvertibleImageText,
 } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
+import { AttachmentError } from './attachment-error.js';
 import { projectAttachments } from './attachment-projection.js';
 import type { AttachmentSource } from './attachment-projection.js';
 import { PNG_7X5 } from './image-fixtures.js';
@@ -148,6 +150,26 @@ describe('沒送圖的三種：只有一行佔位字，沒有把手', () => {
     });
     expect(await contentOf([attachmentBlock({ type: 'image', ...IMAGE })], unreadable)).toEqual([
       { type: 'text', text: unavailableImageText(IMAGE) },
+      { type: 'text', text: '請看' },
+    ]);
+  });
+
+  it.each([
+    ['物件不在', 'ATTACHMENT_STORE_FAILED', unavailableImageText(IMAGE)],
+    ['內容對不上', 'ATTACHMENT_CORRUPT', unavailableImageText(IMAGE)],
+    [
+      '做不出送模型的那一份（#2071）',
+      'ATTACHMENT_REQUEST_IMAGE_FAILED',
+      unconvertibleImageText(IMAGE),
+    ],
+  ] as const)('%s：換對應的那一句', async (_label, code, text) => {
+    const failing = source({
+      readRequestImage: async () => {
+        throw new AttachmentError('失敗', code);
+      },
+    });
+    expect(await contentOf([attachmentBlock({ type: 'image', ...IMAGE })], failing)).toEqual([
+      { type: 'text', text },
       { type: 'text', text: '請看' },
     ]);
   });
