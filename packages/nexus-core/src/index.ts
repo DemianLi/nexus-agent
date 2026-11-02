@@ -453,6 +453,9 @@ export { FILESYSTEM_TOOL_NAMES, filesystemToolWhitelist } from './fs-tools-optio
 export { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
 export { GLOB_HEAD, GREP_REGEXP_HEAD } from './fs-tool-descriptions.js';
 export { ModifiedOrderCompositeBackend } from './modified-order-composite.js';
+// 照位元組複製的兩半，穿過組好的 backend（#2289，`copy_file`）。
+export { COPY_INTO, COPY_SOURCE, copyFileOf } from './backend-copy.js';
+export type { CopyCapable, CopyIntoResult, CopyRequest, CopySource } from './backend-copy.js';
 export type {
   DiffResultMeta,
   FileDiff,
