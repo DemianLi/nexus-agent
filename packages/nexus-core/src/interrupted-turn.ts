@@ -42,7 +42,7 @@ import type { ToolMessage } from '@langchain/core/messages';
 import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
 import { closer, requestedCalls } from './conversation-replay.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
-import { SessionSeq } from './session-log.js';
+import { appendSharedEvents, SessionSeq } from './session-log.js';
 import type { SessionEvent, SessionEventMap } from './session-log.js';
 import type {
   ResumedStoredSession,
@@ -266,5 +266,5 @@ export async function resumeClosingInterruptedTurn(
     await resumed.stored.close().catch(() => undefined);
     throw error;
   }
-  return { ...resumed, events: [...resumed.events, ...closers] };
+  return { ...resumed, events: appendSharedEvents(resumed.events, closers) };
 }
