@@ -1312,6 +1312,8 @@ describe('歸屬表分塊', () => {
     events.reduce((state, event) => applyTrajectory(state, event), initialTrajectory());
   const entriesOf = (state: ReturnType<typeof initialTrajectory>) =>
     state.owners.chunks.flatMap((chunk) => Object.entries(chunk));
+  const realSizes = (state: ReturnType<typeof initialTrajectory>) =>
+    state.owners.chunks.map((chunk) => Object.keys(chunk).length);
 
   /** 整張表一份的參考算法：先刪再放、超過 2000 從最舊的丟。比對的對照組。 */
   function referenceOwners(events: readonly SessionEvent[]): [string, number | null][] {
@@ -1351,6 +1353,7 @@ describe('歸屬表分塊', () => {
     const expected = referenceOwners(log.events);
     expect(entriesOf(state)).toEqual(expected);
     expect(state.owners.size).toBe(expected.length);
+    expect(state.owners.sizes).toEqual(realSizes(state));
   });
 
   it('反覆重用 id 時塊會併回來，塊數不跟著重用次數長', () => {
@@ -1412,13 +1415,14 @@ describe('歸屬表分塊', () => {
     expect(entriesOf(right).some(([key]) => key === '#id_new')).toBe(false);
   });
 
-  it('已交出的塊一律不就地寫：舊狀態的每一塊都凍住，接著記各種批次也不拋、結果照整張表的算法', () => {
+  it('已交出的塊與筆數清單一律不就地寫：舊狀態的每一塊與 sizes 都凍住，接著記各種批次也不拋、結果與筆數都照整張表的算法', () => {
     // 2010 筆：已到上限，接下來每批都要從凍住的最舊那塊擠掉；2010 不是 32 的倍數，最後一塊沒滿，下一批的頭一筆會拷它、
     // 其餘寫進拷出來的那塊。
     const log = logOf(serial(2010));
     const base = stateOf(log.events);
     expect(Object.keys(base.owners.chunks.at(-1)!).length).toBeLessThan(32);
     for (const chunk of base.owners.chunks) Object.freeze(chunk);
+    Object.freeze(base.owners.sizes);
     const batches = [
       ['n_1', 'n_2', 'n_3'],
       ['n_4', 'n_4', 'id_2005', 'id_15'],
@@ -1433,8 +1437,10 @@ describe('歸屬表分塊', () => {
         log.append('assistant/message', reply(start.seq, '', ...batch)),
       );
       for (const chunk of state.owners.chunks) Object.freeze(chunk);
+      Object.freeze(state.owners.sizes);
     }
     expect(entriesOf(state)).toEqual(referenceOwners(log.events));
+    expect(state.owners.sizes).toEqual(realSizes(state));
   });
 
   it('`__proto__` 這種 id 照常歸屬', () => {
