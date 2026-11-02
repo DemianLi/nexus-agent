@@ -711,14 +711,32 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 原始內容（`submit_record`、工具結果的中繼資料，以及先讀後改拿不到 stat 版本時走這支）。先過讀取面的圍堵（{@link readDenial}），其餘照基座。
+   * 原始內容（`submit_record`、工具結果的中繼資料，以及先讀後改拿不到 stat 版本時走這支）。先過讀取面的圍堵（{@link readScope}），
+   * 比過根的實際位置換回虛擬路徑交給基座，所以根內的連結讀到本尊，跟 {@link read} 一致（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
+   * 沒有實際位置（解析交給下游）或換不回來（`danger-full-access` 下落在根外）時，照原路徑交給基座。
    *
    * @param filePath - 虛擬路徑。
    * @returns 基座的結果，或落在根外時的錯誤結果。
    */
   override async readRaw(filePath: string): Promise<ReadRawResult> {
-    const refused = await this.readDenial(filePath, 'readRaw');
-    return refused === undefined ? super.readRaw(filePath) : denied({ error: refused });
+    const scope = await this.readScope(filePath, 'readRaw');
+    if (scope.denial !== undefined) return denied({ error: scope.denial });
+    const inside =
+      scope.realTarget === undefined ? undefined : await this.virtualOf(scope.realTarget);
+    return super.readRaw(inside ?? filePath);
+  }
+
+  /**
+   * 實際位置換回這個 backend 的虛擬路徑。
+   *
+   * @param realTarget - canonicalize 過的主機路徑。
+   * @returns 虛擬路徑；不在根內時是 `undefined`。
+   */
+  private async virtualOf(realTarget: string): Promise<string | undefined> {
+    const realRoot = await realpath(this.cwd);
+    if (!isWithin(realRoot, realTarget)) return undefined;
+    const inside = relative(realRoot, realTarget);
+    return inside === '' ? '/' : `/${inside.split(sep).join('/')}`;
   }
 
   /**
@@ -754,12 +772,16 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * 寫與改前比對用的版本，只做 `lstat`、不讀內容（[#2030](https://github.com/DemianLi/nexus-agent/issues/2030)）。token 跟 {@link read}
-   * 回報的同一種（{@link statVersion}）。路徑是基座的 `resolvePath`，不解連結；不是一般檔（含最後一節是符號連結）回不存在。`lstat` 的錯原樣拋，observation 收成不存在，同它對 `readRaw` 拋錯的處理。
+   * 回報的同一種（{@link statVersion}）。位置跟 {@link read} 看的同一個：過讀取面的圍堵（{@link readScope}），根內的連結看本尊，所以經連結讀過的檔
+   * 改得到（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）；被圍堵拒的回不存在：`read` 也讀不到它。
+   * 不是一般檔回不存在。`lstat` 的錯原樣拋，observation 收成不存在，同它對 `readRaw` 拋錯的處理。
    *
    * @param filePath - 虛擬路徑。
    */
   async [FILE_VERSION](filePath: string): Promise<FileVersionLookup> {
-    const info = await lstat(this.resolveVirtual(filePath), { bigint: true });
+    const scope = await this.readScope(filePath, 'readRaw');
+    if (scope.denial !== undefined) return { kind: 'absent' };
+    const info = await lstat(scope.realTarget ?? this.resolveVirtual(filePath), { bigint: true });
     return info.isFile() ? { kind: 'present', version: statVersion(info) } : { kind: 'absent' };
   }
 
