@@ -9,7 +9,8 @@
 - 同時活躍的 job 峰值在上限之內（ci.yml 檔頭的算式）；
 - 輕的模式的 plan 永遠不被跳過、讀得到合併後那一輪存的快取；只改 PR 內文不重跑 gate（#2090）；
 - test-harness 的兩片讀同一份耗時、合併後那一輪各片存回自己那一份（#2093）；
-- sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）。
+- sandbox-spawner 只在動到它、動到 CI、合併後完整一輪時跑，不准自我跳過，出貨的建置不帶 test-hooks（#1946）；
+- web 的真瀏覽器 e2e 只在合併後完整一輪跑，接在 static 的 build 之後（#1602）。
 """
 
 from __future__ import annotations
@@ -535,6 +536,18 @@ class Mode(unittest.TestCase):
     def test_other_events_run_full(self) -> None:
         self.assertEqual(self.mode(['packages/nexus-core/src/a.ts'], base='main'), 'full')
         self.assertEqual(plan_ci.plan(['packages/nexus-core/src/a.ts'], 'push', '')['mode'], 'full')
+
+
+class WebE2e(unittest.TestCase):
+    """真瀏覽器 e2e（#1602）只在合併後完整一輪跑：沒有 `if` 就進了 PR 的全跑，排到 build 前面就開不到 dist。"""
+
+    def test_runs_only_post_merge_after_build(self) -> None:
+        steps = load(CI)['jobs']['static']['steps']
+        names = [step.get('name') for step in steps]
+        e2e = steps[names.index('真瀏覽器 e2e')]
+        self.assertEqual(e2e['if'], 'inputs.full')
+        self.assertEqual(e2e['run'], 'pnpm --filter @nexus/web run test:e2e')
+        self.assertLess(names.index('Format、Lint、Build'), names.index('真瀏覽器 e2e'))
 
 
 class TypecheckCache(unittest.TestCase):
