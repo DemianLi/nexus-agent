@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "test:guard": "vite build --config guard/vite.config.ts && vitest run --config vitest.guard.config.ts",
     "tokens:gen": "node tokengen/generate.mjs > /dev/null"
   },
