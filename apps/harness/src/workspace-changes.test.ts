@@ -425,6 +425,54 @@ describe('每一輪的改動紀錄在真的圖上', () => {
     }
   });
 
+  it('子代理的 copy_file（#2311）：root 那一輪的摘要裡目的地帶 copiedFrom，跟子代理日誌的 meta 一樣', async () => {
+    const outcome = await run(
+      [
+        {
+          content: '委派。',
+          toolCalls: [{ name: 'task', args: { description: '複製', subagent_type: 'worker' } }],
+        },
+        {
+          content: '子代理複製。',
+          toolCalls: [
+            { name: 'copy_file', args: { source_path: '/a.md', destination_path: '/b.md' } },
+          ],
+        },
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ],
+      { 'a.md': 'one\ntwo\n' },
+    );
+    try {
+      expect(await readFile(join(outcome.root, 'b.md'), 'utf8')).toBe('one\ntwo\n');
+      const metas = outcome.sessions
+        .list()
+        .filter((entry) => entry.address.kind === 'subagent')
+        .flatMap((entry) => entry.log.events)
+        .flatMap((event) => (event.type === 'tool/result' ? [event.data.meta] : []))
+        .filter((meta) => (meta as { operation?: unknown } | undefined)?.operation === 'copy');
+      expect(metas).toHaveLength(1);
+      const { source, bytes, sha256 } = metas[0] as {
+        source: string;
+        bytes: number;
+        sha256: string;
+      };
+      const [event] = outcome.sessions.root.events.filter(
+        (entry) => entry.type === 'workspace/changes',
+      );
+      expect(event).toBeDefined();
+      const summary = await outcome.get(`${changesSummaryPath(THREAD_ID)}?seq=${event!.seq}`);
+      expect(await summary.json()).toMatchObject({
+        files: [{ path: 'b.md', added: 2, deleted: 0, copiedFrom: { source, bytes, sha256 } }],
+        total: 1,
+      });
+      expect(source).toBe('/a.md');
+      expect(outcome.violations).toEqual([]);
+    } finally {
+      await outcome.close();
+    }
+  });
+
   it('沒呼叫工具的一輪：不記、不送', async () => {
     const outcome = await run([{ content: '只是聊天。' }], FILES);
     try {

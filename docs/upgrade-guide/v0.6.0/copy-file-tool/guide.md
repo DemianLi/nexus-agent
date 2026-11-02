@@ -20,9 +20,9 @@ v0.6.0 裡，模型要「照抄一份檔」只能先 `read_file`、再把內容�
   對來源比讀、對目的地比寫。
 - 發佈前核對：複製出來的內容與讀到的來源 sha256 不同、或來源在複製途中變了大小，就不建目的地，回錯誤。
 - 成功時會話日誌那一筆 `tool/result` 的 `meta` 記 `operation: "copy"`、`source`、`destination`、`bytes`、`sha256`。
-- 這一輪的改動摘要（`/threads/<id>/changes/summary` 回的那一份，留在 server、只活到會話結束）裡，主對話用 `copy_file` 建出來的檔
+- 這一輪的改動摘要（`/threads/<id>/changes/summary` 回的那一份，留在 server、只活到會話結束）裡，用 `copy_file` 建出來的檔（主對話與子代理叫的都算）
   多帶一格 `copiedFrom`（來源、位元組數、sha256）。web 目前不顯示這一格，畫面上它跟一般新建的檔一樣。
-- 子代理叫的 `copy_file`：檔照樣複製，`tool/result` 那一筆寫在子代理自己的日誌，主對話的日誌沒有；改動摘要裡那個檔不帶 `copiedFrom`。
+- 子代理叫的 `copy_file`：`tool/result` 那一筆寫在子代理自己的日誌，主對話的日誌沒有。
 
 沒有 `--workspace` 的部署不掛它（沒有磁碟上的檔可以照抄）。`tool-fs` 寫了 `write: false` 的部署也不掛，跟 `write_file`、`delete` 一起關。
 

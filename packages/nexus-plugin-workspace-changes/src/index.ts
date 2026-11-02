@@ -9,8 +9,8 @@
  * 只有這兩份。有改的話，root 日誌寫一顆 `workspace/changes`，摘要與逐檔比較留在記錄器裡，經
  * {@link WorkspaceChanges} 服務到會話結束。模型看不到任何東西：這一條只寫日誌，web 讀。
  *
- * `copy_file` 成功時，root 那一份 `tool/result` 的 `meta` 帶來源、位元組數與 sha256，列出目的地時一起帶上（`copiedFrom`，#2289）；
- * 子代理的 `copy_file` 只寫在子代理自己的日誌，目的地照樣列出、沒有 `copiedFrom`。
+ * `copy_file` 成功時，`tool/result` 的 `meta` 帶來源、位元組數與 sha256，列出目的地時一起帶上（`copiedFrom`，#2289）。
+ * 子代理的 `copy_file` 寫在子代理自己的日誌，從那裡讀，同樣帶上（#2311）。
  *
  * ## 掛法：出貨清單的 serve 專屬層，一列；不合格由工作區根缺席表達
  *
@@ -21,7 +21,7 @@
  *   組裝點只在有根的時候經 host 服務交 {@link WORKSPACE_ROOT_SERVICE}。**這一列在 `apply` 當下讀它，沒有就什麼都不註冊**
  *   （不提供 {@link WORKSPACE_CHANGES_SERVICE}、不掛 middleware、不接會話），消費者據此當作沒有改動紀錄。
  *   以前是組裝點「有根才把這個 plugin 放進清單」，現在分支搬進 plugin，這一列才進得了清單。
- * - dsh 跳過子代理的會話；我們在 `sessions.join` 只接 root 那一份（見偏離 5：子代理改的檔算進 root 這一輪）。
+ * - dsh 跳過子代理的會話；我們在 `sessions.join` 只替 root 那一份建記錄器，子代理那一份只讀它的 `copy_file`（見偏離 5：子代理改的檔算進 root 這一輪）。
  *
  * ## 與 dsh 的偏離
  *
@@ -258,8 +258,23 @@ function applyWorkspaceChanges(
   /** 已經開始收、還沒刪完暫存目錄的那些；組裝收掉時要等它們。 */
   const disposing = new Set<Promise<void>>();
   registry.sessions.join((subject) => {
-    // 照 dsh 的 `eligible`：子代理的會話不記。
-    if (subject.address.kind !== 'root') return;
+    // 子代理的會話不建記錄器、不寫事件。只把它成功的 `copy_file` 記到 root 這一輪（偏離 5），不推動 root 的輪：
+    // 它的 `seq` 屬於子代理自己的日誌。接上時重播的舊事件不收：子代理的日誌沒有 root 的輪界，重播出來的舊複製會被記進
+    // root 正在跑的這一輪。
+    if (subject.address.kind !== 'root') {
+      const joinedAt = subject.log.length;
+      subject.observe((event) => {
+        if (event.type !== 'tool/result' || event.seq < joinedAt) return;
+        const copy = copyMetaOf(event.data.meta);
+        if (copy === undefined) return;
+        current?.copied(copy.destination, {
+          source: copy.source,
+          bytes: copy.bytes,
+          sha256: copy.sha256,
+        });
+      });
+      return;
+    }
     const recorder = new TurnRecorder(subject.log, root, { ...env, git: git() });
     recorders.set(subject.log, recorder);
     current = recorder;
