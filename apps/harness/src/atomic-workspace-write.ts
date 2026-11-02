@@ -50,6 +50,8 @@ export interface AtomicWriteInternals {
   readonly afterEditRead?: (absolutePath: string) => void | Promise<void>;
   /** 複製的來源過完圍堵、開檔之前。測試用它在這段時間差把來源換掉。 */
   readonly beforeCopyOpen?: (absolutePath: string) => void | Promise<void>;
+  /** `read`、`edit` 用路徑判完一般檔、開檔之前（`edit` 在鎖之內）。測試用它在這段時間差把檔換掉。 */
+  readonly beforeReadOpen?: (absolutePath: string) => void | Promise<void>;
 }
 
 /** {@link writeFileAtomic} 的發佈方式。 */
