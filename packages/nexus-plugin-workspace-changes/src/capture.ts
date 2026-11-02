@@ -99,8 +99,9 @@ function text(value: unknown): string | undefined {
  * 一次檔案工具呼叫要改的那個路徑。
  *
  * dsh 認的是它自己的 `write`、`edit` 與會改檔的 `str_replace_editor`；我們的檔案工具是基座的
- * `write_file`、`edit_file` 與 `delete`（`deepagents@1.13.1`，`--workspace` 底下沒有 `execute`，見
- * [#443](https://github.com/DemianLi/nexus-agent/issues/443) 第二則決議）。參數的必填欄照各自的 schema：
+ * `write_file`、`edit_file`、`delete`（`deepagents@1.13.1`，`--workspace` 底下沒有 `execute`，見
+ * [#443](https://github.com/DemianLi/nexus-agent/issues/443) 第二則決議），加上 harness 的 `copy_file`（#2289，改的是目的地）。
+ * 參數的必填欄照各自的 schema：
  * 缺了的呼叫不會跑到本體，也就不擷取。基座在 schema 前把 `path` 正規化成 `file_path`
  * （`normalizeFilePathInput`），這裡讀的是正規化之前的原始參數，所以兩個名字都認。
  *
@@ -121,7 +122,33 @@ export function mutationPath(name: string, args: unknown): string | undefined {
         : undefined;
     case 'delete':
       return path;
+    case 'copy_file':
+      return typeof record.source_path === 'string' ? text(record.destination_path) : undefined;
     default:
       return undefined;
   }
+}
+
+/** 一次成功的 `copy_file` 寫進 `tool/result` 的 `meta`（harness 的 `copy-file-tool.ts` 產生）。 */
+export interface CopyMeta {
+  readonly source: string;
+  readonly destination: string;
+  readonly bytes: number;
+  readonly sha256: string;
+}
+
+/**
+ * 認 `copy_file` 的 `meta`（#2289）：`operation` 是 `'copy'`、四格型別都對才算，其餘一律當成不是。
+ *
+ * @param meta - `tool/result` 的 `meta`。
+ * @returns 那一筆複製，或 `undefined`。
+ */
+export function copyMetaOf(meta: unknown): CopyMeta | undefined {
+  if (typeof meta !== 'object' || meta === null) return undefined;
+  const record = meta as Record<string, unknown>;
+  const { source, destination, bytes, sha256 } = record;
+  if (record.operation !== 'copy') return undefined;
+  if (typeof source !== 'string' || typeof destination !== 'string') return undefined;
+  if (typeof bytes !== 'number' || typeof sha256 !== 'string') return undefined;
+  return { source, destination, bytes, sha256 };
 }

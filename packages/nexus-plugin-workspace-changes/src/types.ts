@@ -29,6 +29,19 @@ export interface WorkspaceChangedFile {
   readonly binary?: true;
   /** 有一側超過大小上限，列出來但沒有行數、也沒有比較。 */
   readonly oversized?: true;
+  /**
+   * 這一輪由 `copy_file` 建出來的（[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）：模型給的來源路徑，與複製當下的位元組數、sha256。
+   * 同一輪之後又改過時，行數與比較照這一輪結束時的內容，這三格仍是複製當下的。
+   */
+  readonly copiedFrom?: WorkspaceCopySource;
+}
+
+/** {@link WorkspaceChangedFile.copiedFrom}。 */
+export interface WorkspaceCopySource {
+  readonly source: string;
+  readonly bytes: number;
+  /** 小寫十六進位。 */
+  readonly sha256: string;
 }
 
 /** `changes/summary` 的結果：一輪改了哪些檔。 */

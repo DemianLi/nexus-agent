@@ -83,6 +83,7 @@ import { createHash } from 'node:crypto';
 import { dirname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import type { BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
@@ -100,6 +101,8 @@ import type {
 } from 'deepagents';
 
 import {
+  COPY_INTO,
+  COPY_SOURCE,
   currentReadWindow,
   currentToolCallSignal,
   EMPTY_CONTENT_WARNING,
@@ -121,7 +124,12 @@ import {
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
 } from '@nexus/core';
-import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
+import type { CopyIntoResult, CopyRequest, CopySource } from '@nexus/core';
+import {
+  DestinationExistsError,
+  writeFileAtomic,
+  withTargetLock,
+} from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { BINARY_SAMPLE_BYTES } from './binary-read.js';
 import { canonicalize, isWithin } from './canonical-path.js';
@@ -525,7 +533,24 @@ const READ_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /** 讀取面的圍堵擋的入口，出現在拒絕訊息裡。 */
-type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | RipgrepTool;
+type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | 'copy' | RipgrepTool;
+
+/** 寫入面的 fence 擋的入口，出現在拒絕訊息裡，也是升級摘要（{@link digestOf}）的一部分。 */
+type WriteOperation = 'write' | 'edit' | 'delete' | 'uploadFiles' | 'copy';
+
+/** 暫存檔跟讀到的來源對不上。 */
+class CopyMismatchError extends Error {}
+
+/** 檔案內容的 sha256 與位元組數，串流讀。 */
+async function digestFile(path: string): Promise<{ bytes: number; sha256: string }> {
+  const hash = createHash('sha256');
+  let bytes = 0;
+  for await (const chunk of createReadStream(path) as AsyncIterable<Buffer>) {
+    hash.update(chunk);
+    bytes += chunk.length;
+  }
+  return { bytes, sha256: hash.digest('hex') };
+}
 
 /** 讀取面的圍堵判完的結果：拒絕訊息，或比過根的實際位置。 */
 interface ReadScope {
@@ -612,6 +637,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 交給這個 backend 一份 `permissions` 規則（fold 出來的那份）。經符號連結解開之後的位置跟給的路徑不同時，讀取面
    * （{@link readScope}）與變更（{@link checkedPath}）拿它再比一次，命中就拒（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
+   * 複製的兩半另外拿它比模型給的原路徑（{@link [COPY_SOURCE]}、{@link [COPY_INTO]}）：`copy_file` 不是基座的工具，沒有人替它先比。
    * 規則要 fold 完才有，所以不在建構期給。不分模式：`danger-full-access` 也擋，同基座的 deny。
    *
    * @param rules - 規則表，形狀同基座的 `permissions`。
@@ -861,6 +887,122 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     } catch (error: unknown) {
       noteErrno(error, false);
       return { error: `Error writing file '${checked}': ${await this.reasonFor(error)}` };
+    }
+  }
+
+  /**
+   * 複製的來源那一半（`copy_file`，[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）：照 {@link read} 先過讀取面的圍堵（{@link readScope}），
+   * 開 {@link readScope} 解出的實際位置（解不開、交給下游時退回字面路徑），`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，用開好的把手判一般檔，不是就關掉、拒絕：過圍堵之後被換成 FIFO 的路徑
+   * 開檔不會卡住，判的也是實際讀的那一個。內容不解碼，二進位與非 UTF-8 的檔原樣交出。
+   *
+   * @param sourcePath - 這個 backend 座標系裡的來源路徑。
+   * @param request - 模型給的兩條原路徑：`permissions` 規則比 `from`（讀），錯誤句也用它。
+   * @returns 開好的來源，或錯誤結果。
+   */
+  async [COPY_SOURCE](
+    sourcePath: string,
+    request: CopyRequest,
+  ): Promise<CopySource | { error: string }> {
+    const ruled = permissionDenial(this.permissionRules, 'read', request.from);
+    if (ruled !== undefined) return { error: ruled };
+    try {
+      const scope = await this.readScope(sourcePath, 'copy');
+      if (scope.denial !== undefined) return denied({ error: scope.denial });
+      const target = scope.realTarget ?? this.resolveVirtual(sourcePath);
+      await this.atomicInternals?.beforeCopyOpen?.(target);
+      const handle = await open(
+        target,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      let size: number;
+      try {
+        const info = await handle.stat();
+        if (!info.isFile()) {
+          await handle.close();
+          noteFsError(FS_NOT_REGULAR_FILE);
+          return { error: `Error copying '${request.from}': not a regular file` };
+        }
+        size = info.size;
+      } catch (error: unknown) {
+        await handle.close().catch(() => undefined);
+        throw error;
+      }
+      return {
+        stream: handle.createReadStream({ start: 0, autoClose: false }),
+        size,
+        close: () => handle.close(),
+      };
+    } catch (error: unknown) {
+      noteErrno(error, true);
+      return { error: `Error copying '${request.from}': ${await this.reasonFor(error)}` };
+    }
+  }
+
+  /**
+   * 複製的目的地那一半：照 {@link write} 先過 fence（核准與升級跟 `write_file` 同一條路，摘要帶來源路徑），在逐目標鎖裡 `lstat`，
+   * 已經存在就拒，再把來源串流進暫存檔。發佈之前核對：讀到的位元組數要等於來源開檔時的大小，暫存檔重讀的 sha256 要等於讀進來的
+   * 那一份；對不上就不發佈、回錯誤，目的地從頭到尾沒出現過。通過才用 hard link 發佈（{@link writeFileAtomic} 的
+   * `createIfAbsent`），鎖外同時建出來的那一份也不會被蓋掉。
+   *
+   * @param destinationPath - 這個 backend 座標系裡的目的地路徑。
+   * @param source - {@link [COPY_SOURCE]} 開好的來源；這裡不關它。
+   * @param request - 模型給的兩條原路徑：`permissions` 規則比 `to`（寫），`from` 進核准摘要，錯誤句用它們。
+   * @returns 成功時是目的地的虛擬路徑、位元組數與 sha256；失敗時是錯誤結果，`exists` 表示目的地已經存在。
+   */
+  async [COPY_INTO](
+    destinationPath: string,
+    source: CopySource,
+    request: CopyRequest,
+  ): Promise<CopyIntoResult> {
+    const ruled = permissionDenial(this.permissionRules, 'write', request.to);
+    if (ruled !== undefined) return { error: ruled };
+    const checked = await this.checkedPath(destinationPath, 'copy', [request.from]);
+    if (typeof checked !== 'string') return denied(checked);
+    const exists = {
+      error: `Cannot copy to ${request.to} because it already exists`,
+      exists: true as const,
+    };
+    const hash = createHash('sha256');
+    let read = 0;
+    async function* counted(): AsyncIterable<Uint8Array> {
+      for await (const chunk of source.stream as AsyncIterable<Buffer>) {
+        hash.update(chunk);
+        read += chunk.length;
+        yield chunk;
+      }
+    }
+    let sha256 = '';
+    const verify = async (tempPath: string): Promise<void> => {
+      sha256 = hash.digest('hex');
+      const written = await digestFile(tempPath);
+      if (read !== source.size) {
+        throw new CopyMismatchError(
+          `source changed while copying (${source.size} bytes at open, ${read} read)`,
+        );
+      }
+      if (written.sha256 !== sha256) {
+        throw new CopyMismatchError(
+          `copy does not match the source (${read} bytes read, ${written.bytes} written)`,
+        );
+      }
+    };
+    try {
+      const resolved = this.resolveVirtual(checked);
+      return await withTargetLock(await canonicalize(resolved), async () => {
+        if ((await lstat(resolved).catch(() => undefined)) !== undefined) return exists;
+        await writeFileAtomic(resolved, counted(), undefined, this.atomicInternals, {
+          createIfAbsent: true,
+          verify,
+        });
+        return { path: checked, bytes: read, sha256 };
+      });
+    } catch (error: unknown) {
+      if (error instanceof DestinationExistsError) return exists;
+      if (error instanceof CopyMismatchError) {
+        return { error: `Error copying to '${request.to}': ${error.message}` };
+      }
+      noteErrno(error, false);
+      return { error: `Error copying to '${request.to}': ${await this.reasonFor(error)}` };
     }
   }
 
@@ -1393,7 +1535,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   private async checkedPath(
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
     payload: readonly unknown[],
   ): Promise<string | { error: string }> {
     // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
@@ -1450,7 +1592,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private async verdict(
     mode: SandboxMode,
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
   ): Promise<string | { error: string }> {
     if (mode === 'danger-full-access') return filePath;
     if (mode === 'read-only') {
@@ -1511,7 +1653,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   private async mutationRuleDenial(
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
   ): Promise<string | undefined> {
     if (this.permissionRules.length === 0) return undefined;
     const realTarget = await this.canonicalTarget(filePath);
@@ -1535,7 +1677,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private async reservedDenial(
     mode: SandboxMode,
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
   ): Promise<string | undefined> {
     const reason = await this.reservedReason(filePath);
     return reason === undefined ? undefined : this.denial(mode, operation, filePath, reason);

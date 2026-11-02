@@ -103,6 +103,7 @@ import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
+import { copyFileEntry } from './copy-file-tool.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxModeSource } from './contained-backend.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
@@ -824,6 +825,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
     createHostServicesPlugin({ fs: fsService }, 'fs'),
     ...options.plugins,
+    // `copy_file`（#2289）：只在 default 是工作區時掛；排在清單之後，`tool-fs` 的 `write: false` 讀得到。
+    ...(options.backend instanceof ContainedFilesystemBackend ? [copyFileEntry(fsService)] : []),
     ...(delegation === undefined ? [] : [delegation.entry()]),
   ];
   const optional = options.optionalEntries;
@@ -881,6 +884,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             routePrefix: SHARED_WORKSPACE_PREFIX,
             ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
           });
+    const attachmentsBackend =
+      options.attachments === undefined
+        ? undefined
+        : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode);
     const params = foldRegistry(registry, {
       // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
       events: registry.dispatch,
@@ -899,9 +906,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         withToolResultStash(
           options.backend ?? new TextOnlyStateBackend(),
           stashRoute,
-          options.attachments === undefined
-            ? undefined
-            : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode),
+          attachmentsBackend,
           sharedBackend,
         ),
       ),
@@ -945,7 +950,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(options.modelLimits !== undefined && { modelLimits: options.modelLimits }),
     });
     // `permissions` 規則也比經符號連結解開之後的位置（#2260）：規則 fold 完才有。子代理自己加的規則不在這份裡。
-    for (const contained of [options.backend, sharedBackend]) {
+    // 附件那一格也要（#2289）：`copy_file` 開來源時拿它比模型給的路徑，讀取經連結解開後的重比也一起生效。
+    for (const contained of [options.backend, sharedBackend, attachmentsBackend]) {
       if (contained instanceof ContainedFilesystemBackend) {
         contained.usePermissions(params.permissions ?? []);
       }

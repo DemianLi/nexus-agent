@@ -33,7 +33,12 @@ import { join, relative, resolve } from 'node:path';
 
 import { hostPathOf } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
-import type { WorkspaceChangedFile, WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
+import type {
+  WorkspaceChangedFile,
+  WorkspaceChangesSummary,
+  WorkspaceCopySource,
+  WorkspaceFileDiff,
+} from './types.js';
 
 import { captureFile, mutationPath, sameCapture } from './capture.js';
 import type { Capture } from './capture.js';
@@ -128,6 +133,8 @@ interface TurnState {
   baseline: Baseline | null | 'failed' | 'deferred';
   /** 這一輪第一次改每個路徑之前的內容，依標準絕對路徑。 */
   readonly captures: Map<string, Capture>;
+  /** 這一輪 `copy_file` 建出來的檔，依目的地的標準絕對路徑；同一個目的地後記的取代先記的。 */
+  readonly copies: Map<string, WorkspaceCopySource>;
   lastToolResultSeq: number;
   /** 最近一次記錄開始時的最後一顆 `tool/result`；`end()` 看它決定要不要補記。 */
   attemptedAfterSeq: number;
@@ -202,6 +209,21 @@ export class TurnRecorder {
       if (state.captures.has(absolute)) return;
       const capture = await captureFile(absolute, await this.#captures(), this.env.maxFileBytes);
       if (capture !== undefined) state.captures.set(absolute, capture);
+    });
+  }
+
+  /**
+   * 記下一次成功的 `copy_file`（#2289），列出那個目的地時帶上 {@link WorkspaceChangedFile.copiedFrom}。
+   * @param destination - 目的地的虛擬路徑。
+   * @param source - 來源與複製當下的位元組數、sha256。
+   */
+  copied(destination: string, source: WorkspaceCopySource): void {
+    const state = this.#state;
+    if (state === undefined) return;
+    void this.#enqueue(async () => {
+      const paths = this.#paths;
+      if (paths === undefined) return;
+      state.copies.set(await canonicalPath(hostPathOf(paths.cwd, destination)), source);
     });
   }
 
@@ -468,6 +490,11 @@ export class TurnRecorder {
       if (after === undefined || sameCapture(before, after)) continue;
       listed.set(absolute, await this.#compared(paths, root, absolute, before, after));
     }
+    for (const [absolute, entry] of listed) {
+      const copiedFrom = state.copies.get(absolute);
+      if (copiedFrom !== undefined)
+        listed.set(absolute, { ...entry, file: { ...entry.file, copiedFrom } });
+    }
     const sorted = [...listed.values()].sort((a, b) => compareDisplay(a.file, b.file));
     // 這一輪先前記過一份時，空的清單取代它。
     if (sorted.length === 0 && state.recordedAfterSeq < 0) return;
@@ -526,6 +553,7 @@ function freshState(): TurnState {
   return {
     baseline: null,
     captures: new Map(),
+    copies: new Map(),
     lastToolResultSeq: -1,
     attemptedAfterSeq: -1,
     recordedAfterSeq: -1,
