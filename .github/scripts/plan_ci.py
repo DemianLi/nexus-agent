@@ -55,6 +55,8 @@ SCAN_RES = [
         r'^\.github/audit-exceptions\.json$',
         # 已出貨格式的會話日誌夾具（#1529）：`session-format-fixtures.test.ts` 讀它們，副檔名不是 .ts。
         r'^apps/harness/src/fixtures/session-format/',
+        # 重放快照的場景（#1556）：`snapshot/snapshot.test.ts` 讀它們，副檔名是 .jsonl、.json、.yml。
+        r'^apps/harness/src/snapshot/',
     )
 ]
 
@@ -102,6 +104,17 @@ TEST_EXCLUDE_RE = re.compile(r'^apps/web/guard/')
 # `*.md` 全在 `.prettierignore`：只改文件的 PR 不必為了 format 安裝相依。
 FORMAT_SKIP_RE = re.compile(r'\.md$')
 
+# 重放快照（#1556）在真的 serve 上重放、比對落盤日誌，同名規則排不到它：改到這些時輕的模式也跑 `SNAPSHOT_TEST`。
+# 場景與夾具本身、重放模型、模型列、wire，以及會話日誌的寫法與格式。
+SNAPSHOT_TEST = 'apps/harness/src/snapshot/snapshot.test.ts'
+SNAPSHOT_TRIGGER_RE = re.compile(
+    r'^apps/harness/src/snapshot/'
+    r'|^apps/harness/src/(llm-replay|live-model|jsonl-session-store|session-log-[\w-]+)\.ts$'
+    r'|^apps/harness/src/settings/replay-model\.ts$'
+    r'|^packages/nexus-wire/src/(?!.*\.test\.ts$)'
+    r'|^packages/nexus-core/src/(session-log|session-store|session-format|session-persistence|logged-message)\.ts$'
+)
+
 
 def project_names(root: Path = ROOT) -> dict[str, str]:
     """`packages/*`、`apps/*` 的目錄 → 套件名。"""
@@ -143,6 +156,9 @@ def light(changed: list[str], names: dict[str, str], exists: Callable[[str], boo
         for c in candidates:
             if exists(c):
                 tests.setdefault(d, set()).add(c[len(d) + 1:])
+    if any(SNAPSHOT_TRIGGER_RE.search(p) for p in changed) and exists(SNAPSHOT_TEST):
+        d = 'apps/harness'
+        tests.setdefault(d, set()).add(SNAPSHOT_TEST[len(d) + 1:])
 
     return {
         'typecheck': typecheck,

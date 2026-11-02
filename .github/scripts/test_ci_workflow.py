@@ -269,6 +269,19 @@ class SessionFormatFixtures(unittest.TestCase):
         self.assertEqual(plan_ci.plan(['apps/harness/src/fixtures/session-format/v14/cli.jsonl'], 'push', '')['ts'], 'true')
 
 
+class SnapshotScenarios(unittest.TestCase):
+    """重放快照的場景（#1556）是 .jsonl、.json、.yml：只改它們的 commit 在全跑那一層要觸發掃描。"""
+
+    def test_scenario_only_change_scans(self) -> None:
+        for path in (
+            'apps/harness/src/snapshot/scenarios/plain-reply/snapshot/session.v52.jsonl',
+            'apps/harness/src/snapshot/scenarios/plain-reply/recorded.json',
+            'apps/harness/src/snapshot/scenarios/approval-resume/patch.yml',
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(plan_ci.plan([path], 'push', '')['ts'], 'true')
+
+
 class PersistenceSchema(unittest.TestCase):
     """持久化型別圖（#1856）是 .json：只手改它的 commit 要觸發掃描，拿掉 TS_RE 那一條，比對它的新鮮度測試就靜靜不跑。"""
 
@@ -684,6 +697,41 @@ class LightScope(unittest.TestCase):
         scope = self.scope(changed, {'packages/nexus-core/src/a.ts', 'README.md', '.github/workflows/ci.yml'})
         self.assertEqual(scope['format'], ['packages/nexus-core/src/a.ts', '.github/workflows/ci.yml'])
         self.assertEqual(scope['lint'], {'packages/nexus-core': ['src/a.ts']})
+
+    def test_snapshot_runs_for_its_inputs(self) -> None:
+        """重放快照（#1556）不是改到的檔的同名測試：場景、重放模型、模型列、wire、會話日誌的寫法改了都要排到它。"""
+        snapshot = {'apps/harness': ['src/snapshot/snapshot.test.ts']}
+        for path in (
+            'apps/harness/src/snapshot/scenarios/tool-round-trip/input.json',
+            'apps/harness/src/snapshot/scenarios/tool-round-trip/recorded.json',
+            'apps/harness/src/snapshot/scenarios/tool-round-trip/snapshot/session.v52.jsonl',
+            'apps/harness/src/snapshot/scenarios/approval-resume/patch.yml',
+            'apps/harness/src/snapshot/harness.ts',
+            'apps/harness/src/llm-replay.ts',
+            'apps/harness/src/live-model.ts',
+            'apps/harness/src/jsonl-session-store.ts',
+            'apps/harness/src/session-log-budget.ts',
+            'apps/harness/src/settings/replay-model.ts',
+            'packages/nexus-wire/src/index.ts',
+            'packages/nexus-core/src/session-log.ts',
+            'packages/nexus-core/src/session-store.ts',
+        ):
+            with self.subTest(path=path):
+                tests = self.scope([path], {path, plan_ci.SNAPSHOT_TEST})['tests']
+                self.assertIn('src/snapshot/snapshot.test.ts', tests.get('apps/harness', []))
+
+        # 只改這些路徑底下的測試檔、或無關的檔，不排快照。
+        for path in ('apps/harness/src/live-model.test.ts', 'packages/nexus-wire/src/a.test.ts', 'apps/harness/src/other.ts'):
+            with self.subTest(path=path):
+                tests = self.scope([path], {path, plan_ci.SNAPSHOT_TEST})['tests']
+                self.assertNotIn('src/snapshot/snapshot.test.ts', tests.get('apps/harness', []))
+
+        # 快照測試這一版不在了（例如搬走）就不排，跟同名規則一樣只排存在的檔。
+        self.assertEqual(self.scope(['apps/harness/src/llm-replay.ts'], {'apps/harness/src/llm-replay.ts'})['tests'], {})
+        self.assertEqual(
+            self.scope(['apps/harness/src/snapshot/scenarios/a/input.json'], {plan_ci.SNAPSHOT_TEST})['tests'],
+            snapshot,
+        )
 
     def test_docs_only_needs_no_install(self) -> None:
         self.assertFalse(plan_ci.needs_node(self.scope(['docs/a.md', 'AGENTS.md'])))
