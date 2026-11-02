@@ -815,6 +815,7 @@ export {
   SessionLog,
   SessionLogOffset,
   SessionSeq,
+  shareStoredEvents,
   snapshotJsonValue,
   validateSessionEventData,
 } from './session-log.js';

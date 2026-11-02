@@ -1621,13 +1621,15 @@ const SESSION_EVENT_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
  *
  * 兩個呼叫點（[#1549](https://github.com/DemianLi/nexus-agent/issues/1549)），兩層照 dsh 各驗各的：
  *
- * - {@link SessionLog} 的 seed（拷完之後），對到 dsh core 的這一支：`seq` 的形狀在這裡驗。
+ * - {@link SessionLog} 的 seed（沒標過的拷完之後；可共用的陣列不拷，見 {@link shareStoredEvents}），對到 dsh core 的這一支：
+ *   `seq` 的形狀在這裡驗。
  * - harness 讀盤的逐行判壞行（`jsonl-session-store.ts` 的 `parseJsonlSessionBody`），對到 dsh 讀檔器的 `decodeEvent`：
  *   傳 `checkSeq: false`，**不驗 `seq` 的形狀**，交給讀方的 `seq === 已接受的筆數`（dsh `codec.ts:104`；`-0` 會等於 `0`
  *   而放行，要到續接建 seed 時才拒，同 dsh）。
  *
  * `time` 拒 `-0` 照 dsh 讀檔器（`decodeEvent:143` 的 `sessionFormatSafeInteger`，`session-format/src/json.ts:37`）；dsh core
- * 這一支不檢，但 seed 一律先過 {@link snapshotJsonValue}，`-0` 在拷那一步就拒了，所以放在共用的這一支，seed 的行為不變。
+ * 這一支不檢，但沒標過的 seed 先過 {@link snapshotJsonValue}，`-0` 在拷那一步就拒了，所以放在共用的這一支，seed 的行為不變。
+ * 可共用的陣列不拷：`seq`、`time` 的 `-0` 照樣在這裡擋，`data` 裡的不擋。
  *
  * @param value - 要驗的那一筆。
  * @param subject - 錯誤訊息的開頭，指認是哪一筆（「seed 第 3 顆」「第 4 行」）。
@@ -2117,6 +2119,50 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
+/**
+ * {@link shareStoredEvents} 與 {@link appendSharedEvents} 交出去的陣列：只有那兩支加得進來，在這裡面就是整張圖深凍過
+ * （前提：交進來的是純 JSON）。
+ */
+const sharedStoredEvents = new WeakSet<readonly SessionEvent[]>();
+
+/**
+ * 把從磁碟解出來的一批事件原地深凍、標成可共用，回傳同一個陣列。當 {@link SessionLogOptions.seed} 時日誌直接收下這些物件：
+ * 不拷不凍；信封、資料規則與 `seq` 照驗。
+ *
+ * **只給從 JSON 解出來的事件用**：這裡只凍不拷，不檢查能不能無損表達成 JSON。
+ */
+export function shareStoredEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  freezeGraph(events);
+  sharedStoredEvents.add(events);
+  return events;
+}
+
+/**
+ * 在一份可共用的陣列（{@link shareStoredEvents}）後面接幾顆純 JSON 的事件，交出一份新的、同樣可共用的陣列：只原地凍新接的
+ * 那幾顆（連 `more` 陣列）。`shared` 沒標過的話交出普通的串接，不凍也不標，當 seed 時照常拷、驗。
+ */
+export function appendSharedEvents(
+  shared: readonly SessionEvent[],
+  more: readonly SessionEvent[],
+): readonly SessionEvent[] {
+  if (!sharedStoredEvents.has(shared)) return [...shared, ...more];
+  freezeGraph(more);
+  const joined = Object.freeze([...shared, ...more]);
+  sharedStoredEvents.add(joined);
+  return joined;
+}
+
+/** 原地深凍一張無環的純 JSON 物件圖；迭代走訪，深巢狀不撞呼叫堆疊。不去重：有環會轉不完，只給從 JSON 解出來的值。 */
+function freezeGraph(root: object): void {
+  const pending: object[] = [root];
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    Object.freeze(current);
+    for (const child of Object.values(current)) {
+      if (child !== null && typeof child === 'object') pending.push(child as object);
+    }
+  }
+}
+
 /** 日誌的觀察者。**同步呼叫，在事件已經進到日誌之後**。 */
 export type SessionLogListener = (event: SessionEvent) => void;
 
@@ -2142,6 +2188,9 @@ export interface SessionLogOptions {
    * 每一顆照 `append` 的規矩拷、凍：從磁碟讀回來的是純物件，不凍的話「改不動」只對這個
    * 行程寫的那些成立。`seq` 必須等於它在陣列裡的位置——缺號或重號的 seed 開出來的日誌
    * `length` 與 `seq` 對不上，下一筆 append 會跟已存的撞號。
+   *
+   * {@link shareStoredEvents}／{@link appendSharedEvents} 交出的陣列已整張深凍，不拷不凍；驗信封、資料規則與 `seq`，
+   * 不驗能不能無損表達成 JSON（由交出方保證）。
    */
   readonly seed?: readonly SessionEvent[];
 }
@@ -2290,15 +2339,16 @@ export class SessionLog implements SessionLogView {
 
   /**
    * 接上 seed：逐顆拷、驗信封與資料規則、驗連續、凍，最後補一顆 `session/end-seed`。順序照 dsh 的 seed
-   * （`packages/core/session/src/index.ts:644-664`，`687f282e`）：先拷成純 JSON，再驗拷出來的那一份。
+   * （`packages/core/session/src/index.ts:644-664`，`687f282e`）：先拷成純 JSON，再驗拷出來的那一份。可共用的陣列不拷不凍，
    * 見 {@link SessionLogOptions.seed}。
    *
-   * @throws 某一顆帶了 JSON 表達不出來的東西、信封或資料規則不對（`TypeError`，#1549），或 `seq` 不等於它的位置。
+   * @throws 某一顆信封或資料規則不對、沒標過的 seed 某一顆帶了 JSON 表達不出來的東西（`TypeError`，#1549），或 `seq` 不等於它的位置。
    */
   #adoptSeed(seed: readonly SessionEvent[]): void {
+    const shared = sharedStoredEvents.has(seed);
     for (const [index, event] of seed.entries()) {
       const subject = `seed 第 ${index} 顆`;
-      const snapshot = snapshotJsonValue(event, subject);
+      const snapshot = shared ? event : snapshotJsonValue(event, subject);
       assertSessionEventEnvelope(snapshot, subject);
       validateSessionEventData(snapshot, `${subject}（${snapshot.type}）`);
       if (snapshot.seq !== index) {
@@ -2306,7 +2356,7 @@ export class SessionLog implements SessionLogView {
           `會話 "${this.#sessionId}" 的 seed 不連續：第 ${index} 顆的 seq 是 ${snapshot.seq}。`,
         );
       }
-      this.#events.push(deepFreeze(snapshot));
+      this.#events.push(shared ? snapshot : deepFreeze(snapshot));
     }
     // 切點從已收下的 seed 推（同 dsh 讀盤）。剛分叉的 seed 以 inherited 標記結尾，下面就不再補；續接一份分叉來的
     // 日誌時標記留在原位，結尾補的是普通的那顆（dsh `index.ts:691-698` 的 restore 那一支）。
