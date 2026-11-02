@@ -321,7 +321,8 @@ const MAX_ROUTE_DEPTH = 8;
  * **與 dsh 的偏離（理由 1，基座表達不出來）：不取 realpath，用字面正規化。** dsh 的 `resolveLocalTarget`（`packages/fs/fs-local/src/fsio.ts:139-272`，
  * `687f282e`）檔案存在時用 realpath 當 `targetKey`，不存在時取最近一個存在的祖先的 realpath 接上缺的幾段。這裡 middleware 拿到的是 `BackendProtocol`，
  * 上面沒有 `resolve`／`realpath`，主機路徑只存在於 `ContainedFilesystemBackend` 內部。經過目錄符號連結的別名因此仍是兩個檔，但結果只會是誤擋
- * （`FS_NOT_OBSERVED`），不會放行：`staleness`／`look` 拿這次呼叫的**原路徑**問後端，比的是真正那個檔的版本，基座的讀取用 `O_NOFOLLOW`。
+ * （`FS_NOT_OBSERVED`），不會放行：`staleness`／`look` 拿這次呼叫的**原路徑**問後端，比的是這條路徑實際指到的那個檔的版本——
+ * `ContainedFilesystemBackend` 取版本與讀內容都跟著根內的連結走到本尊，往外指的連結被讀取面的圍堵擋下。
  *
  * @param backend - 工具實際讀寫的那個 backend。
  * @param raw - 模型給的 `file_path`。
