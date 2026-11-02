@@ -655,7 +655,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * （[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）。
    *
    * 其餘路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
-   * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔，其餘例外回 `Error reading file '…': …`。
+   * `File '…' not found`，其餘例外回 `Error reading file '…': …`。開檔用 `O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，開好之後再用同一個把手判一次一般檔：
+   * 路徑判完之後、開檔之前被換成 FIFO，開檔不會卡住，回的也是 `not found`（[#2312](https://github.com/DemianLi/nexus-agent/issues/2312)）。
    * 判二進位照 dsh（`fsio.ts` 的 `readWholeText`／`streamWholeText`）：前 {@link BINARY_SAMPLE_BYTES} 位元組有 NUL 是
    * `binary file`，fatal 解碼失敗是 `invalid UTF-8 text`；**看內容，不看副檔名**（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。
    *
@@ -688,7 +689,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         noteFsError(FS_NOT_REGULAR_FILE);
         return { error: `File '${filePath}' not found` };
       }
-      const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+      await this.atomicInternals?.beforeReadOpen?.(target);
+      const handle = await open(
+        target,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
       try {
         return await this.readOpened(handle, filePath, offset, limit, signal);
       } finally {
@@ -702,7 +707,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     }
   }
 
-  /** {@link read} 開好檔之後的那一半：判文字、掃描、組結果。 */
+  /** {@link read} 開好檔之後的那一半：用把手判一般檔、判文字、掃描、組結果。 */
   private async readOpened(
     handle: FileHandle,
     filePath: string,
@@ -711,6 +716,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     signal: AbortSignal | undefined,
   ): Promise<ReadResult> {
     const info = await handle.stat({ bigint: true });
+    if (!info.isFile()) {
+      noteFsError(FS_NOT_REGULAR_FILE);
+      return { error: `File '${filePath}' not found` };
+    }
     const window = currentReadWindow();
     // `read_file` 裡行尾的 `\r` 去掉（照 dsh，#1563 N0335）；其餘呼叫維持基座的切片語意。
     const params = window
@@ -1009,7 +1018,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 編輯檔案，先過 fence，**自己讀、自己替換、經暫存檔加 `rename` 寫回**（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）。
    *
-   * 讀照基座（`stat` 判一般檔、`O_NOFOLLOW` 開），再照 dsh 的 `readForEdit`：含 NUL 或不是合法 UTF-8 的拒絕（`FS_NOT_TEXT`），行尾偵測後正規化成 LF
+   * 讀：用路徑 `stat` 判一般檔，`O_RDONLY|O_NOFOLLOW|O_NONBLOCK` 開檔，開好再用把手判一次（#2312）；再照 dsh 的 `readForEdit`：含 NUL 或不是合法 UTF-8 的拒絕（`FS_NOT_TEXT`），行尾偵測後正規化成 LF
    * （[#1563](https://github.com/DemianLi/nexus-agent/issues/1563) N0335）。替換用 {@link applyLiteralEdit}（錯誤字句逐字照基座，`old_string`／
    * `new_string` 的 `\r\n` 也收成 `\n`），寫回前還原原檔的行尾；保留既有 mode。失敗的原因碼見 `fs-tool-errors.ts` 的 {@link noteFsError}。
    * **已知的界線（照 dsh）：** 混合行尾的檔以前 4096 個字元的多數為準，整份被統一成那一種。讀、替換、寫整段在逐目標的鎖裡，同一步的兩個平行 `edit` 不會丟修改。
@@ -1041,10 +1050,19 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         }
         let bytes: Uint8Array;
         let mode: number;
-        const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
+        await this.atomicInternals?.beforeReadOpen?.(resolved);
+        const handle = await open(
+          resolved,
+          constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+        );
         try {
+          const info = await handle.stat();
+          if (!info.isFile()) {
+            noteFsError(FS_NOT_REGULAR_FILE);
+            return { error: `${BASE_ERROR_WORD}: File '${checked}' not found` };
+          }
+          mode = info.mode & 0o777;
           bytes = await handle.readFile();
-          mode = (await handle.stat()).mode & 0o777;
         } finally {
           await handle.close();
         }
