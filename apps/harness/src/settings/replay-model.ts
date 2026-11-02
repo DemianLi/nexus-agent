@@ -29,6 +29,8 @@ const loggedMessageSchema = z.looseObject({
 /** 一格。腳本不能空：空腳本的第一次呼叫就耗盡。 */
 export const replayModelConfigSchema = z.strictObject({
   script: z.array(loggedMessageSchema).min(1),
+  /** 錄的型號，見 `ReplayChatModel` 的 `model`。 */
+  model: z.string().min(1).optional(),
 });
 
 export type ReplayModelConfig = z.infer<typeof replayModelConfigSchema>;
@@ -41,7 +43,10 @@ export const replayModelPlugin: ModelProviderPlugin<ReplayModelConfig> = {
     // 空的：組裝期沒有消費者，同 `scripted-model.ts`。
   },
   createModel: (config) =>
-    new ReplayChatModel({ script: config.script as unknown as readonly LoggedMessage[] }),
+    new ReplayChatModel({
+      script: config.script as unknown as readonly LoggedMessage[],
+      ...(config.model !== undefined && { model: config.model }),
+    }),
 };
 
 export default replayModelPlugin;

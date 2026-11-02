@@ -119,11 +119,12 @@ export const SNAPSHOT_COMMON_ROWS = `${TIME_CONTEXT_OFF_PATCH_ROWS}- id: thread-
 `;
 
 /**
- * 重放用的 patch：`insert` 重放提供者、把選擇列指過去，系統提示詞的型號寫死成錄的那一個。
+ * 重放用的 patch：`insert` 重放提供者、把選擇列指過去，提供者自報的型號與系統提示詞的型號都寫死成錄的那一個。
  *
  * **型號要寫死**：`{{model}}` 帶 `--live` 時是 `live-model` 的型號、沒帶是 `scripted`（`assembly-root.ts` 的
  * `systemPromptVariables`）。不寫死的話重放的提示詞跟錄的差一個字，`request/system` 與 `context/measure` 的量都對不上。
- * 這一列的 patch 整份取代 config，三格照出貨值寫出來（`cordis.yml` 的 `system-prompt`）。
+ * 這一列的 patch 整份取代 config，三格照出貨值寫出來（`cordis.yml` 的 `system-prompt`）。提供者也報錄的型號：估算照型錄認模型，
+ * 錄的那顆宣告數字逐位切詞的話，報別的名字 `context/measure` 的工具那一格就少算。
  *
  * @param script - 腳本（夾具的 `assistant/message`）。
  * @param modelId - 錄的型號。
@@ -137,7 +138,7 @@ export function replayPatchText(
   return `- insert:
     - id: replay
       name: '#settings/replay-model'
-      config: ${JSON.stringify({ script })}
+      config: ${JSON.stringify({ script, model: modelId })}
 - id: agent-default-model
   config:
     provider: replay
@@ -305,7 +306,8 @@ const REPLAY_ROW_NAME = '#settings/replay-model';
 /**
  * 正規化一份會話，比對用。
  *
- * - header：拿掉版本（版本邊全是加性，見模組說明）、建立時刻、建置資訊、設定雜湊（home 底下的金鑰簽的，每個 home 不同）；
+ * - header：拿掉版本（版本邊全是加性，見模組說明）、建立時刻、建置資訊、設定雜湊（home 底下的金鑰簽的，每個 home 不同）、
+ *   型錄 id（只有帶 `--live` 才寫）；
  *   外掛清單拿掉重放提供者那一列。
  * - 事件：時間歸零；送出佇列的 id、中斷 id 換成記號；路徑換成記號；只有真模型才有的路由與請求標頭拿掉。
  */
@@ -316,6 +318,7 @@ export function normalizeSnapshotLog(log: SnapshotLog): { header: unknown; event
     createdAt: _createdAt,
     build: _build,
     configHash: _configHash,
+    modelEntryId: _modelEntryId,
     ...header
   } = log.header as StoredSessionHeader & Record<string, unknown>;
   const plugins = (header['plugins'] as { name: string }[] | undefined)?.filter(

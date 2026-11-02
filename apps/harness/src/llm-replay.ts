@@ -58,6 +58,8 @@ interface LoggedReplyData {
 
 interface ReplayChatModelOptions extends BaseChatModelParams {
   readonly script: readonly LoggedMessage[];
+  /** 自報的型號（`model`）。給了就是錄的那一顆：估算照型錄認它（例如數字逐位切詞），借錨也對得上錄到的回覆。 */
+  readonly model?: string;
   readonly shared?: ReplayModelState;
 }
 
@@ -65,12 +67,14 @@ interface ReplayChatModelOptions extends BaseChatModelParams {
 export class ReplayChatModel extends BaseChatModel {
   private readonly script: readonly LoggedMessage[];
   private readonly shared: ReplayModelState;
+  readonly model: string | undefined;
 
   constructor(options: ReplayChatModelOptions) {
-    const { script, shared, ...rest } = options;
+    const { script, shared, model, ...rest } = options;
     super(rest);
     this.script = script;
     this.shared = shared ?? { next: 0 };
+    this.model = model;
   }
 
   /** 已經吐出幾次。 */
@@ -88,7 +92,11 @@ export class ReplayChatModel extends BaseChatModel {
   }
 
   override bindTools(_tools: readonly unknown[]): ReplayChatModel {
-    return new ReplayChatModel({ script: this.script, shared: this.shared });
+    return new ReplayChatModel({
+      script: this.script,
+      shared: this.shared,
+      ...(this.model !== undefined && { model: this.model }),
+    });
   }
 
   private nextLogged(): LoggedMessage {
