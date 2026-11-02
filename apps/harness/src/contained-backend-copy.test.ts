@@ -6,7 +6,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import { closeSync } from 'node:fs';
 import {
   appendFile,
   mkdir,
@@ -19,11 +18,12 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { COPY_INTO, COPY_SOURCE, copyFileOf } from '@nexus/core';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import type { CopyResult, SandboxMode } from './contained-backend.js';
+import type { SandboxMode } from './contained-backend.js';
 
 let base: string;
 let root: string;
@@ -41,26 +41,24 @@ afterEach(async () => {
   await rm(base, { recursive: true, force: true });
 });
 
-/** 同一個 backend 裡從 `from` 複製到 `to`：先開來源、再寫目的地，最後關來源（core 的 `copyFileOf` 在同一格時的走法）。 */
+/** 結果攤平成一個物件，斷言好寫。 */
+type Flat = { path?: string; bytes?: number; sha256?: string; error?: string; exists?: true };
+
+/** 同一個 backend 裡從 `from` 複製到 `to`，走產品那一支 `copyFileOf`；關不掉來源就讓測試失敗。 */
 async function copyWithin(
   backend: ContainedFilesystemBackend,
   from: string,
   to: string,
-): Promise<CopyResult> {
-  const request = { from, to };
-  const source = await backend.openCopySource(from, request);
-  if ('error' in source) return source;
-  try {
-    return await backend.copyInto(to, source, request);
-  } finally {
-    await source.close();
-  }
+): Promise<Flat> {
+  return copyFileOf(backend, from, to, (error) => {
+    throw error;
+  });
 }
 
 function contained(
   mode?: SandboxMode,
   atomicInternals?: AtomicWriteInternals,
-): { copy(from: string, to: string): Promise<CopyResult> } {
+): { copy(from: string, to: string): Promise<Flat> } {
   const backend = new ContainedFilesystemBackend({
     rootDir: root,
     ...(mode !== undefined && { mode }),
@@ -199,11 +197,11 @@ describe('ContainedFilesystemBackend.copy：發佈前核對', () => {
     await writeFile(join(root, 'a.txt'), '開檔時的內容');
     const backend = new ContainedFilesystemBackend({ rootDir: root });
     const request = { from: '/a.txt', to: '/b.txt' };
-    const source = await backend.openCopySource('/a.txt', request);
+    const source = await backend[COPY_SOURCE]('/a.txt', request);
     if ('error' in source) throw new Error(source.error);
     try {
       await appendFile(join(root, 'a.txt'), '之後才寫進來的');
-      const result = await backend.copyInto('/b.txt', source, request);
+      const result: Flat = await backend[COPY_INTO]('/b.txt', source, request);
       expect(result.error).toMatch(/^Error copying to '\/b\.txt': source changed while copying/u);
     } finally {
       await source.close();
@@ -253,25 +251,5 @@ describe('ContainedFilesystemBackend.copy：permissions 規則比模型給的路
     const result = await copyWithin(ruled(), '/a.txt', '/secret/new.txt');
     expect(result).toEqual({ error: 'permission denied for write on /secret/new.txt' });
     await expect(readFile(join(root, 'secret', 'new.txt'))).rejects.toThrow();
-  });
-});
-
-describe('ContainedFilesystemBackend.openCopySource：close', () => {
-  it('關不掉時不拋，只寫一行到標準錯誤', async () => {
-    await writeFile(join(root, 'a.txt'), 'x');
-    const backend = new ContainedFilesystemBackend({ rootDir: root });
-    const source = await backend.openCopySource('/a.txt', { from: '/a.txt', to: '/b.txt' });
-    if ('error' in source) throw new Error(source.error);
-    // 從底下把 fd 關掉，`FileHandle.close()` 就會拒絕（EBADF）。
-    closeSync((source.stream as unknown as { fd: number }).fd);
-    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    try {
-      await expect(source.close()).resolves.toBeUndefined();
-      expect(String(stderr.mock.calls[0]?.[0])).toMatch(
-        /^copy_file：來源關不掉（\/a\.txt）：.*EBADF/u,
-      );
-    } finally {
-      stderr.mockRestore();
-    }
   });
 });

@@ -7,8 +7,9 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createFsService, loadPlugins } from '@nexus/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { COPY_INTO, COPY_SOURCE, createFsService, loadPlugins } from '@nexus/core';
+import type { CopyRequest } from '@nexus/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { COPY_FILE_TOOL_NAME, copyFileEntry, createCopyFileTool } from './copy-file-tool.js';
@@ -54,6 +55,38 @@ describe('copy_file 的結果句', () => {
     const failure = copyTool().invoke({ source_path: '/nope.txt', destination_path: '/b.txt' });
     await expect(failure).rejects.toThrow(/^Error copying '\/nope\.txt': ENOENT/u);
     await expect(failure).rejects.not.toThrow(/Choose a new path/u);
+  });
+
+  it('來源關不掉：複製照樣成功，伺服器日誌記一行', async () => {
+    await writeFile(join(root, 'a.txt'), 'x');
+    const real = new ContainedFilesystemBackend({ rootDir: root });
+    const backend = {
+      async [COPY_SOURCE](path: string, request: CopyRequest) {
+        const opened = await real[COPY_SOURCE](path, request);
+        if ('error' in opened) return opened;
+        return {
+          ...opened,
+          close: async () => {
+            await opened.close();
+            throw new Error('EIO');
+          },
+        };
+      },
+      [COPY_INTO]: real[COPY_INTO].bind(real),
+    };
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await expect(
+        createCopyFileTool(() => backend as never).invoke({
+          source_path: '/a.txt',
+          destination_path: '/b.txt',
+        }),
+      ).resolves.toMatch(/^Copied \/a\.txt to \/b\.txt /u);
+      expect(stderr).toHaveBeenCalledWith('copy_file：來源關不掉（/a.txt）：EIO\n');
+    } finally {
+      stderr.mockRestore();
+    }
+    expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('x');
   });
 
   it('還沒有 backend：拋錯', async () => {

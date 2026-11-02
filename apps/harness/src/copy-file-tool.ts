@@ -15,13 +15,11 @@
  */
 
 import { tool } from '@langchain/core/tools';
-import { putToolResultMeta } from '@nexus/core';
+import { copyFileOf, putToolResultMeta } from '@nexus/core';
 import type { FsService, PluginEntry } from '@nexus/core';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
 
-import { ContainedFilesystemBackend } from './contained-backend.js';
-import type { CopyResult } from './contained-backend.js';
 import { TOOL_FS_SERVICE } from './settings/tool-fs.js';
 
 /** 工具名。 */
@@ -39,19 +37,17 @@ export interface CopyFileMeta {
   readonly sha256: string;
 }
 
-// STUB(#2289)：core 的 copyFileOf 合併前的暫代，只走同一個 ContainedFilesystemBackend。不能推。
-async function copyFileOf(backend: unknown, from: string, to: string): Promise<CopyResult> {
-  if (!(backend instanceof ContainedFilesystemBackend)) {
-    return { error: `Error copying '${from}': this location does not support copying files` };
-  }
-  const request = { from, to };
-  const source = await backend.openCopySource(from, request);
-  if ('error' in source) return source;
-  try {
-    return await backend.copyInto(to, source, request);
-  } finally {
-    await source.close();
-  }
+/** 關來源出的錯：不改這一次的結果，只留一行給伺服器日誌。core 同步叫它、不等它，所以它自己不能拋。 */
+function logCloseError(from: string): (error: unknown) => void {
+  return (error) => {
+    try {
+      process.stderr.write(
+        `copy_file：來源關不掉（${from}）：${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    } catch {
+      // 標準錯誤也寫不出去時沒有別的地方可以記；這次複製的結果照舊交給模型。
+    }
+  };
 }
 
 const schema = z.object({
@@ -69,8 +65,13 @@ export function createCopyFileTool(backendOf: () => AnyBackendProtocol | undefin
     async ({ source_path, destination_path }: z.infer<typeof schema>): Promise<string> => {
       const backend = backendOf();
       if (backend === undefined) throw new Error('copy_file requires a filesystem');
-      const result = await copyFileOf(backend, source_path, destination_path);
-      if (result.error !== undefined) {
+      const result = await copyFileOf(
+        backend,
+        source_path,
+        destination_path,
+        logCloseError(source_path),
+      );
+      if ('error' in result) {
         throw new Error(
           result.exists === true
             ? `${result.error}. Choose a new path, or use edit_file to change the existing file.`

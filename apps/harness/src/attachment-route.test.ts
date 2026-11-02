@@ -24,7 +24,7 @@ import { dirname, join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { SEARCH_ABORTED } from '@nexus/core';
+import { COPY_SOURCE, SEARCH_ABORTED } from '@nexus/core';
 import type { AttachmentRef, SessionEvent } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
@@ -741,7 +741,7 @@ describe('產品路徑：兩條 thread 共用一個儲存，前景子代理跟�
 describe('複製的來源（copy_file，#2289）', () => {
   /** 開來源：成功時讀出全部內容再關掉，失敗時回錯誤句。 */
   async function openAndRead(route: ThreadScopedAttachmentBackend, path: string) {
-    const opened = await route.openCopySource(path, {
+    const opened = await route[COPY_SOURCE](path, {
       from: `/attachments${path}`,
       to: '/out.txt',
     });

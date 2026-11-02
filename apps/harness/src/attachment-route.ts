@@ -46,18 +46,12 @@ import type {
   ReadResult,
 } from 'deepagents';
 
-import { SEARCH_FAILED, SEARCH_INVALID_PATTERN } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import { COPY_SOURCE, SEARCH_FAILED, SEARCH_INVALID_PATTERN } from '@nexus/core';
+import type { CopyRequest, CopySource, SessionEvent } from '@nexus/core';
 
 import { referencedFilePaths } from './attachment-reference.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import type {
-  CopyRequest,
-  CopySource,
-  GlobPathsResult,
-  GrepPathsResult,
-  SandboxModeSource,
-} from './contained-backend.js';
+import type { GlobPathsResult, GrepPathsResult, SandboxModeSource } from './contained-backend.js';
 import type { RipgrepInternals } from './ripgrep-runner.js';
 
 /** 附件路由 grep 出錯時模型看到的那一句：固定字串、不帶任何路徑（#1822）。 */
@@ -214,14 +208,14 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
   }
 
   /** 複製的來源那一半（`copy_file`，#2289）：沒引用過的檔跟不存在逐字一樣，判法同 {@link read}。 */
-  override async openCopySource(
+  override async [COPY_SOURCE](
     sourcePath: string,
     request: CopyRequest,
   ): Promise<CopySource | { error: string }> {
     const visible = this.#visible();
     const normal = this.#normalize(sourcePath);
     if (normal === undefined || visible.files.has(normal) || visible.dirs.has(normal)) {
-      return super.openCopySource(sourcePath, request);
+      return super[COPY_SOURCE](sourcePath, request);
     }
     return { error: `Error copying '${request.from}': ENOENT: no such file or directory` };
   }

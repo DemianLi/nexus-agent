@@ -84,7 +84,6 @@ import { dirname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
-import type { Readable } from 'node:stream';
 import type { BigIntStats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
@@ -102,6 +101,8 @@ import type {
 } from 'deepagents';
 
 import {
+  COPY_INTO,
+  COPY_SOURCE,
   currentReadWindow,
   currentToolCallSignal,
   EMPTY_CONTENT_WARNING,
@@ -123,6 +124,7 @@ import {
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
 } from '@nexus/core';
+import type { CopyIntoResult, CopyRequest, CopySource } from '@nexus/core';
 import {
   DestinationExistsError,
   writeFileAtomic,
@@ -536,36 +538,6 @@ type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | 'copy' | Ripg
 /** 寫入面的 fence 擋的入口，出現在拒絕訊息裡，也是升級摘要（{@link digestOf}）的一部分。 */
 type WriteOperation = 'write' | 'edit' | 'delete' | 'uploadFiles' | 'copy';
 
-/** 複製的來源那一半交出來的東西（{@link ContainedFilesystemBackend.openCopySource}）。 */
-export interface CopySource {
-  /** 來源的位元組，從頭讀到尾。 */
-  readonly stream: Readable;
-  /** 開檔當下的大小；讀到的位元組數跟它不一樣就是來源在複製途中變了。 */
-  readonly size: number;
-  /** 關掉來源；目的地沒讀它就被擋下時也要叫。不拋。 */
-  close(): Promise<void>;
-}
-
-/** 一次複製的兩條路徑，都是模型給的原字串（最外層座標）：拿來算核准摘要、寫錯誤句。 */
-export interface CopyRequest {
-  readonly from: string;
-  readonly to: string;
-}
-
-/** {@link ContainedFilesystemBackend.copyInto} 的結果。 */
-export interface CopyResult {
-  /** 成功時：目的地的虛擬路徑（canonicalize 之後再表達回去的）。 */
-  readonly path?: string;
-  /** 成功時：寫進去的位元組數。 */
-  readonly bytes?: number;
-  /** 成功時：內容的 sha256（小寫十六進位）。 */
-  readonly sha256?: string;
-  /** 失敗時交給模型的原因。 */
-  readonly error?: string;
-  /** `true`：失敗是因為目的地已經存在。 */
-  readonly exists?: boolean;
-}
-
 /** 暫存檔跟讀到的來源對不上。 */
 class CopyMismatchError extends Error {}
 
@@ -665,7 +637,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 交給這個 backend 一份 `permissions` 規則（fold 出來的那份）。經符號連結解開之後的位置跟給的路徑不同時，讀取面
    * （{@link readScope}）與變更（{@link checkedPath}）拿它再比一次，命中就拒（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
-   * 複製的兩半另外拿它比模型給的原路徑（{@link openCopySource}、{@link copyInto}）：`copy_file` 不是基座的工具，沒有人替它先比。
+   * 複製的兩半另外拿它比模型給的原路徑（{@link [COPY_SOURCE]}、{@link [COPY_INTO]}）：`copy_file` 不是基座的工具，沒有人替它先比。
    * 規則要 fold 完才有，所以不在建構期給。不分模式：`danger-full-access` 也擋，同基座的 deny。
    *
    * @param rules - 規則表，形狀同基座的 `permissions`。
@@ -926,7 +898,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * @param request - 模型給的兩條原路徑：`permissions` 規則比 `from`（讀），錯誤句也用它。
    * @returns 開好的來源，或錯誤結果。
    */
-  async openCopySource(
+  async [COPY_SOURCE](
     sourcePath: string,
     request: CopyRequest,
   ): Promise<CopySource | { error: string }> {
@@ -945,13 +917,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       return {
         stream: handle.createReadStream({ start: 0, autoClose: false }),
         size,
-        // 不拋：core 的 `copyFileOf` 在 `finally` 裡叫它，拋了會蓋掉目的地那一半的結果。唯讀的 handle 關不掉只留一行給伺服器日誌。
-        close: () =>
-          handle.close().catch((error: unknown) => {
-            process.stderr.write(
-              `copy_file：來源關不掉（${request.from}）：${error instanceof Error ? error.message : String(error)}\n`,
-            );
-          }),
+        close: () => handle.close(),
       };
     } catch (error: unknown) {
       noteErrno(error, true);
@@ -966,22 +932,22 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * `createIfAbsent`），鎖外同時建出來的那一份也不會被蓋掉。
    *
    * @param destinationPath - 這個 backend 座標系裡的目的地路徑。
-   * @param source - {@link openCopySource} 開好的來源；這裡不關它。
+   * @param source - {@link [COPY_SOURCE]} 開好的來源；這裡不關它。
    * @param request - 模型給的兩條原路徑：`permissions` 規則比 `to`（寫），`from` 進核准摘要，錯誤句用它們。
    * @returns 成功時是目的地的虛擬路徑、位元組數與 sha256；失敗時是錯誤結果，`exists` 表示目的地已經存在。
    */
-  async copyInto(
+  async [COPY_INTO](
     destinationPath: string,
     source: CopySource,
     request: CopyRequest,
-  ): Promise<CopyResult> {
+  ): Promise<CopyIntoResult> {
     const ruled = permissionDenial(this.permissionRules, 'write', request.to);
     if (ruled !== undefined) return { error: ruled };
     const checked = await this.checkedPath(destinationPath, 'copy', [request.from]);
     if (typeof checked !== 'string') return denied(checked);
     const exists = {
       error: `Cannot copy to ${request.to} because it already exists`,
-      exists: true,
+      exists: true as const,
     };
     const hash = createHash('sha256');
     let read = 0;
