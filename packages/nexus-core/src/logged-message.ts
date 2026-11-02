@@ -215,6 +215,29 @@ export function fromLoggedMessage(logged: LoggedMessage): BaseMessage {
 }
 
 /**
+ * 把日誌裡的一則訊息推回 `BaseMessage`，**只拷建構子會改的那幾層**：`data` 本身（建構子在上面補 `tool_calls`、
+ * `invalid_tool_calls`、`additional_kwargs` 這類欄位），與 `content`、`contentBlocks` 兩個陣列（`AIMessage` 的建構子在
+ * `contentBlocks` 上補缺的 `tool_call` 區塊，v1 的 `content` 陣列原樣當成 `contentBlocks`）。其餘巢狀的值（區塊、`tool_calls`
+ * 與參數、`additional_kwargs`／`response_metadata` 本身、`artifact`）跟日誌共用，日誌凍過就是凍的；也不檢查能不能無損表達成 JSON。
+ *
+ * **只給讀完就丟的讀方**：拿 `tool_calls`、判斷推不推得回來。結果會留下來、交給 graph state 或模型的，一律用 {@link fromLoggedMessage}：
+ * 下游就地改巢狀欄位時，凍過的值會拋錯，沒凍過的會改到日誌那一份。
+ *
+ * @param logged - 日誌裡記的那一則。
+ * @returns 同一則訊息，巢狀的值與 `logged` 共用。
+ */
+export function readLoggedMessage(logged: LoggedMessage): BaseMessage {
+  const fields: Record<string, unknown> = { ...logged.data };
+  if (Array.isArray(fields.content)) fields.content = [...(fields.content as unknown[])];
+  if (Array.isArray(fields.contentBlocks))
+    fields.contentBlocks = [...(fields.contentBlocks as unknown[])];
+  const [message] = mapStoredMessagesToChatMessages([
+    { type: logged.type, data: fields } as unknown as StoredMessage,
+  ]);
+  return message!;
+}
+
+/**
  * 把日誌訊息的內容轉成型別化的區塊陣列。
  *
  * 讀方透過它拿到寬度統一的區塊陣列，各自的讀法政策（取 text、取 reasoning、判斷有沒有內容）
