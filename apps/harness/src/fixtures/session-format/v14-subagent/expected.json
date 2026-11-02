@@ -1,0 +1,86 @@
+{
+  "writer": {
+    "rev": "v0.5.19",
+    "commit": "1e7fcd59a1e7b057d8738b1e4dd1d49e8edea934",
+    "formatVersion": 14,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "d43b4a466af30194f8e9306e997efd0f61a7c33d",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 14,
+      "eventCount": 18,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    },
+    "dispatched": {
+      "headerVersion": 14,
+      "eventCount": 2,
+      "types": [
+        "turn/start",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "unreplayable",
+        "reason": "reply-missing"
+      }
+    },
+    "dispatched/fixture-run": {
+      "headerVersion": 14,
+      "eventCount": 2,
+      "types": [
+        "model/start",
+        "model/end"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "unreplayable",
+        "reason": "reply-missing"
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 51,
+      "session": "dispatched/fixture-run",
+      "computedBy": "today",
+      "parentSession": "dispatched",
+      "originRecorded": false,
+      "subagent": true
+    }
+  ]
+}

@@ -29,6 +29,7 @@ import {
   createSessionFormatCatalog,
   currentMessageFeedback,
   interruptedTurnClosers,
+  isSubagentSessionHeader,
   recordedApprovalPolicy,
   replayConversation,
   resumeClosingInterruptedTurn,
@@ -90,6 +91,9 @@ interface Expected {
     readonly approvalPolicyRecorded?: boolean;
     readonly approvalPolicyOnResume?: string;
     readonly browserTimeZone?: unknown;
+    readonly parentSession?: string;
+    readonly originRecorded?: boolean;
+    readonly subagent?: boolean;
   }[];
 }
 
@@ -368,6 +372,11 @@ describe.each(names)('夾具 %s', (name) => {
         expect(recordedApprovalPolicy(events) !== undefined).toBe(trigger.approvalPolicyRecorded);
         expect(approvalPolicyOnResume(events)).toBe(trigger.approvalPolicyOnResume);
       }
+      if (trigger.subagent !== undefined) {
+        expect(opened.header.parentSession).toBe(trigger.parentSession);
+        expect(opened.header.origin !== undefined).toBe(trigger.originRecorded);
+        expect(isSubagentSessionHeader(opened.header)).toBe(trigger.subagent);
+      }
       if (trigger.browserTimeZone !== undefined) {
         expect(deriveBrowserTimeZoneContext(events)).toEqual(trigger.browserTimeZone);
       }
@@ -451,6 +460,7 @@ describe('規則（驗收 D）', () => {
       [33, "if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
       [34, "return recordedApprovalPolicy(events) ?? 'ask';"],
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
+      [51, "header.origin === 'subagent' || (header.parentSession !== undefined"],
       [52, "if (site.layout === 'two-file') {"],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
