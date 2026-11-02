@@ -64,6 +64,7 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
   echo: '回聲',
   // 刪檔不能復原（基座的工具說明寫明），標題不能是一句「工具」；參數只有 `file_path`，摘要退到第一個字串值就是它（#672）。
   delete: '刪除檔案',
+  copy_file: '複製檔案',
   task: '委派子代理',
   subagent: '委派子代理',
   list_agents: '列出子代理',
@@ -137,11 +138,18 @@ function isHighSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;
 }
 
-/** 收合時那一行的摘要。挑不到欄位就拿第一個字串值，再不行就是參數原文的第一行。 */
+/** 收合時那一行的摘要。`copy_file` 兩個路徑都有時寫成「來源 → 目的」；其餘照類別挑欄位，挑不到就拿第一個字串值，再不行就是參數原文的第一行。 */
 export function toolSummary(name: string, input: string): string {
   const parsed = parseArgs(input);
   if (typeof parsed !== 'object' || parsed === null) return firstLine(input);
   const args = parsed as Record<string, unknown>;
+  if (name === 'copy_file') {
+    const { source_path: from, destination_path: to } = args;
+    // 只挑一個路徑看不出從哪裡複製到哪裡（#2289）；缺一個就退到下面的通用挑法。
+    if (typeof from === 'string' && from !== '' && typeof to === 'string' && to !== '') {
+      return firstLine(`${from} → ${to}`);
+    }
+  }
   for (const key of SUMMARY_KEYS[classifyTool(name)]) {
     const value = args[key];
     if (typeof value === 'string' && value !== '') return firstLine(value);
