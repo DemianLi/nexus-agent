@@ -75,7 +75,10 @@ export function recordedSelection(
   );
 }
 
-/** 選了 `next` 等於什麼都沒換：伺服器記的是同一顆，實際用的強度也一樣（沒帶強度算模型的預設等級）。 */
+/**
+ * 選了 `next` 等於什麼都沒換：伺服器記的是同一顆，且照 {@link effortOf} 實際用的強度一樣（沒帶、或帶了模型沒宣告的，都算預設等級）。
+ * 型錄上沒有 `next` 那顆就算有換。
+ */
 export function pickChangesNothing(
   catalog: ModelCatalog,
   recorded: ModelSelection,

@@ -265,7 +265,7 @@ describe('模型座（#723）', () => {
     expect(screen.queryByTestId('effort-seat')).toBeNull();
   });
 
-  describe('記著的模型下架、座位退到部署預設（#2288）', () => {
+  describe('選了有沒有換，拿伺服器記著的那份比（#2288）', () => {
     /** 伺服器記的是型錄上已經沒有的 `retired`（帶著強度），座位顯示部署預設。 */
     function retired(defaultModel: string) {
       const { value } = CATALOG as Extract<ModelCatalogResult, { ok: true }>;
