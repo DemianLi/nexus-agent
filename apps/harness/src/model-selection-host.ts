@@ -79,16 +79,16 @@ export interface ModelSelectionHost {
    */
   select(selection: ModelSelection): ModelSelectResult;
   /**
-   * 這條 thread **下一個請求**用的那顆收不收圖（[#732](https://github.com/DemianLi/nexus-agent/issues/732) 的收圖檢查）：
-   * 使用者選的那顆，沒選過或那顆已不在型錄是預設。
+   * 這條 thread **下一步會走的那顆**收不收圖（[#732](https://github.com/DemianLi/nexus-agent/issues/732) 的收圖檢查）。
+   * 路由同 {@link nextContextWindow}：控制器的 `next()`，不在型錄上的跳過。那顆沒宣告 `input` 就是 `'undeclared'`（{@link acceptsImages}）。
    */
   imageSupport(): ImageSupport;
   /**
    * 這條 thread **下一步會走的那顆**的窗口（token），引用別的會話的預算用（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862）。
    *
-   * 路由用控制器的 `next()`：使用者最後選的 → 最近一次請求走的 → 部署預設，**純讀日誌、不留快照**。不能用 `assembleStep()`：它會寫
-   * `#assembled`，`takeStepRoute()` 下一次就吃那一份，`beforeModel` 被跳過的那一步會用上這裡留下的舊路由。**也不照 `imageSupport()` 只看
-   * 「選的」**：沒選過的會話走的是最近一次請求的那顆，不是部署預設。
+   * 路由用控制器的 `next()`：使用者最後選的 → 最近一次請求走的 → 部署預設，不在型錄上的跳過，**純讀日誌、不留快照**；沒選過的
+   * 續接會話走的是最近一次請求的那顆，不是部署預設。不能用 `assembleStep()`：它會寫 `#assembled`，`takeStepRoute()` 下一次就吃
+   * 那一份，`beforeModel` 被跳過的那一步會用上這裡留下的舊路由。
    */
   nextContextWindow(): number | undefined;
 }
@@ -162,10 +162,7 @@ export function createModelSelectionHost(options: {
       return { ok: true, value: { selected: selection } };
     },
     imageSupport() {
-      const { selected } = controller.state();
-      const entry =
-        findModelEntry(liveModel.models, selected?.model ?? defaultRoute.model) ??
-        findModelEntry(liveModel.models, defaultRoute.model);
+      const entry = findModelEntry(liveModel.models, controller.next().model);
       return entry === undefined ? 'undeclared' : acceptsImages(entry);
     },
     nextContextWindow() {
