@@ -26,7 +26,7 @@ export interface CopyRequest {
   readonly to: string;
 }
 
-/** 開好的來源。`close` 由 {@link copyFileOf} 在 `finally` 裡呼叫，目的地沒讀串流就失敗時 handle 也不會漏。 */
+/** 開好的來源。`close` 由 {@link copyFileOf} 在 `finally` 裡呼叫，目的地沒讀串流就失敗時 handle 也不會漏；它拋的錯不進結果。 */
 export interface CopySource {
   readonly stream: Readable;
   /** 開檔當下的位元組數，給目的地那一半核對寫下的量。 */
@@ -100,18 +100,22 @@ export async function copyIntoOf(
 }
 
 /**
- * 把 `from` 照位元組複製到 `to`。開了來源就一定會關：目的地回錯誤或拋錯也一樣。任一半拋的錯原樣往外拋；
- * `close` 自己拋錯時，往外的是 `close` 的錯，蓋掉目的地的結果或錯誤。
+ * 把 `from` 照位元組複製到 `to`。開了來源就一定會關：目的地回錯誤或拋錯也一樣。
+ *
+ * **模型看到的只由兩半決定**：目的地成功就回成功，回錯誤就回那個錯誤，拋錯就照拋那個錯；來源那一半拋錯也照拋。
+ * `close` 拋的錯不改變這個結果（目的地已經寫好卻回失敗，模型重試會撞上已存在），改交給 `onCloseError`。
  *
  * @param backend - 工具實際讀寫的那個 backend（組好的最外層）。
  * @param from - 模型給的來源路徑。
  * @param to - 模型給的目的地路徑。
+ * @param onCloseError - 關掉來源時拋的錯交給它記錄，必填：這個錯不進結果，也不能靜靜丟掉。它自己不該拋。
  * @returns 目的地那一半的結果，`path` 是最外層座標；來源那一半失敗時是它的錯誤。
  */
 export async function copyFileOf(
   backend: unknown,
   from: string,
   to: string,
+  onCloseError: (error: unknown) => void,
 ): Promise<CopyIntoResult> {
   const request: CopyRequest = { from, to };
   const source = await copySourceOf(backend, from, request);
@@ -119,6 +123,10 @@ export async function copyFileOf(
   try {
     return await copyIntoOf(backend, to, source, request);
   } finally {
-    await source.close();
+    try {
+      await source.close();
+    } catch (error: unknown) {
+      onCloseError(error);
+    }
   }
 }

@@ -44,6 +44,12 @@ function bytesBackend(files: Record<string, Buffer> = {}) {
 
 const digest = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
 
+/** 夾具的 close 不會拋；拋了就讓那一條紅。 */
+const copy = (backend: unknown, from: string, to: string) =>
+  copyFileOf(backend, from, to, (error) => {
+    throw error;
+  });
+
 /** 不是 UTF-8 的位元組：經 `readRaw` 解碼再寫回就會變成 U+FFFD（夾具路徑是 `.txt`，被判成文字）。 */
 const BYTES = Buffer.from([0xff, 0xfe, 0x00, 0x09, 0x20, 0x0a]);
 const COPIED = { bytes: BYTES.length, sha256: digest(BYTES) };
@@ -69,7 +75,7 @@ describe('copyFileOf 穿過組好的三層', () => {
   it('跨路由：/shared/in.txt → /out.txt，位元組原樣落在工作區，兩半收到剝過前綴的路徑與原路徑', async () => {
     const { outer, workspace, shared } = assembled();
 
-    const result = await copyFileOf(outer, '/shared/in.txt', '/out.txt');
+    const result = await copy(outer, '/shared/in.txt', '/out.txt');
 
     expect(result).toEqual({ path: '/out.txt', ...COPIED });
     expect(workspace.files['/out.txt']).toEqual(BYTES);
@@ -82,7 +88,7 @@ describe('copyFileOf 穿過組好的三層', () => {
   it('同一格內：工作區裡的 /a.txt → /b.txt', async () => {
     const { outer, workspace } = assembled();
 
-    expect(await copyFileOf(outer, '/a.txt', '/b.txt')).toEqual({
+    expect(await copy(outer, '/a.txt', '/b.txt')).toEqual({
       path: '/b.txt',
       ...COPIED,
     });
@@ -92,13 +98,13 @@ describe('copyFileOf 穿過組好的三層', () => {
   it('目的地在路由底下：回的路徑補回前綴，子 backend 回的其餘欄位原樣帶出（插件那一格在最外層）', async () => {
     const { outer, plugin, attachments } = assembled();
 
-    expect(await copyFileOf(outer, '/a.txt', '/plugin/sub/out.bin')).toEqual({
+    expect(await copy(outer, '/a.txt', '/plugin/sub/out.bin')).toEqual({
       path: '/plugin/sub/out.bin',
       ...COPIED,
     });
     expect(plugin.files['/sub/out.bin']).toEqual(BYTES);
     // 最內層的路由：前綴在最內層補回，要原樣穿過外面兩層，其餘欄位一起帶出。
-    expect(await copyFileOf(outer, '/a.txt', '/attachments/copy.bin')).toEqual({
+    expect(await copy(outer, '/a.txt', '/attachments/copy.bin')).toEqual({
       path: '/attachments/copy.bin',
       ...COPIED,
     });
@@ -108,7 +114,7 @@ describe('copyFileOf 穿過組好的三層', () => {
   it('路徑剛好等於前綴、不帶結尾斜線：照基座 getBackendAndKey 的規則落到那一格的 /，回的路徑跟模型給的一樣', async () => {
     const { outer, shared, plugin } = assembled();
 
-    expect(await copyFileOf(outer, '/shared', '/plugin')).toEqual({ path: '/plugin', ...COPIED });
+    expect(await copy(outer, '/shared', '/plugin')).toEqual({ path: '/plugin', ...COPIED });
 
     expect(shared.calls.map((call) => call.path)).toEqual(['/']);
     expect(plugin.calls.map((call) => call.path)).toEqual(['/']);
@@ -117,7 +123,7 @@ describe('copyFileOf 穿過組好的三層', () => {
   it('目的地是帶結尾斜線的前綴：同樣落到那一格的 /，回不帶結尾斜線的寫法', async () => {
     const { outer, plugin } = assembled();
 
-    expect(await copyFileOf(outer, '/a.txt', '/plugin/')).toEqual({ path: '/plugin', ...COPIED });
+    expect(await copy(outer, '/a.txt', '/plugin/')).toEqual({ path: '/plugin', ...COPIED });
     expect(plugin.calls.map((call) => call.path)).toEqual(['/']);
   });
 
@@ -126,7 +132,7 @@ describe('copyFileOf 穿過組好的三層', () => {
     async (to) => {
       const { outer, shared } = assembled();
 
-      expect(await copyFileOf(outer, '/shared/in.txt', to)).toEqual({
+      expect(await copy(outer, '/shared/in.txt', to)).toEqual({
         error: `Error copying to '${to}': this location does not accept copied files`,
       });
       expect(shared.opened[0]?.readableDidRead).toBe(false);
@@ -140,7 +146,7 @@ describe('copyFileOf 穿過組好的三層', () => {
       '/native/': new CompositeBackend(bytesBackend().backend as never, {}),
     });
 
-    expect(await copyFileOf(nested, '/shared/in.txt', '/native/x.bin')).toEqual({
+    expect(await copy(nested, '/shared/in.txt', '/native/x.bin')).toEqual({
       error: `Error copying to '/native/x.bin': this location does not accept copied files`,
     });
     expect(shared.closed).toHaveBeenCalledTimes(1);
@@ -149,7 +155,7 @@ describe('copyFileOf 穿過組好的三層', () => {
   it('來源在沒有來源那一半的格子：回固定錯誤，不叫目的地', async () => {
     const { outer, workspace } = assembled();
 
-    expect(await copyFileOf(outer, '/conversation_history/x.md', '/out.txt')).toEqual({
+    expect(await copy(outer, '/conversation_history/x.md', '/out.txt')).toEqual({
       error: `Error copying '/conversation_history/x.md': this location does not support copying files`,
     });
     expect(workspace.calls).toEqual([]);
@@ -159,7 +165,7 @@ describe('copyFileOf 穿過組好的三層', () => {
     const workspace = bytesBackend({ '/a.txt': BYTES });
     const base = new CompositeBackend(workspace.backend as never, {});
 
-    expect(await copyFileOf(base, '/a.txt', '/b.txt')).toEqual({
+    expect(await copy(base, '/a.txt', '/b.txt')).toEqual({
       error: `Error copying '/a.txt': this location does not support copying files`,
     });
     expect(workspace.calls).toEqual([]);
@@ -168,14 +174,14 @@ describe('copyFileOf 穿過組好的三層', () => {
   it('子 backend 的錯誤原樣往上：目的地已存在帶 exists，來源找不到就不叫目的地', async () => {
     const { outer, workspace, shared } = assembled();
 
-    expect(await copyFileOf(outer, '/shared/in.txt', '/a.txt')).toEqual({
+    expect(await copy(outer, '/shared/in.txt', '/a.txt')).toEqual({
       error: 'exists: /a.txt',
       exists: true,
     });
     expect(workspace.files['/a.txt']).toEqual(BYTES);
     expect(shared.closed).toHaveBeenCalledTimes(1);
 
-    expect(await copyFileOf(outer, '/shared/missing.txt', '/new.txt')).toEqual({
+    expect(await copy(outer, '/shared/missing.txt', '/new.txt')).toEqual({
       error: 'no such file: /shared/missing.txt',
     });
     expect(workspace.calls.filter((call) => call.path === '/new.txt')).toEqual([]);
@@ -190,7 +196,7 @@ describe('copyFileOf 穿過組好的三層', () => {
       '/shared/': shared.backend as never,
     });
 
-    await expect(copyFileOf(backend, '/shared/in.txt', '/out.txt')).rejects.toThrow('disk full');
+    await expect(copy(backend, '/shared/in.txt', '/out.txt')).rejects.toThrow('disk full');
     expect(shared.closed).toHaveBeenCalledTimes(1);
   });
 
@@ -201,11 +207,11 @@ describe('copyFileOf 穿過組好的三層', () => {
       '/shared/': broken as never,
     });
 
-    await expect(copyFileOf(backend, '/shared/in.txt', '/out.txt')).rejects.toThrow('EIO');
+    await expect(copy(backend, '/shared/in.txt', '/out.txt')).rejects.toThrow('EIO');
     expect(workspace.calls).toEqual([]);
   });
 
-  it('關掉來源時拋錯：往外的是 close 的錯，蓋掉目的地的結果與錯誤', async () => {
+  describe('關掉來源時拋錯：模型看到的照目的地那一半，close 的錯交給 onCloseError', () => {
     const failing = (into: CopyCapable[typeof COPY_INTO]) => ({
       async [COPY_SOURCE]() {
         return {
@@ -216,13 +222,41 @@ describe('copyFileOf 穿過組好的三層', () => {
       },
       [COPY_INTO]: into,
     });
+    const closeErrorsOf = (seen: unknown[]) => seen.map((error) => (error as Error).message);
 
-    const succeeded = failing(async (path, source) => {
-      await buffer(source.stream);
-      return { path };
+    it('目的地成功：回成功', async () => {
+      const seen: unknown[] = [];
+      const backend = failing(async (path, source) => {
+        await buffer(source.stream);
+        return { path, ...COPIED };
+      });
+
+      expect(await copyFileOf(backend, '/a.txt', '/b.txt', (error) => seen.push(error))).toEqual({
+        path: '/b.txt',
+        ...COPIED,
+      });
+      expect(closeErrorsOf(seen)).toEqual(['EBADF']);
     });
-    await expect(copyFileOf(succeeded, '/a.txt', '/b.txt')).rejects.toThrow('EBADF');
-    const failed = failing(() => Promise.reject(new Error('disk full')));
-    await expect(copyFileOf(failed, '/a.txt', '/b.txt')).rejects.toThrow('EBADF');
+
+    it('目的地回錯誤：回目的地的錯誤', async () => {
+      const seen: unknown[] = [];
+      const backend = failing(async () => ({ error: 'exists: /b.txt', exists: true }));
+
+      expect(await copyFileOf(backend, '/a.txt', '/b.txt', (error) => seen.push(error))).toEqual({
+        error: 'exists: /b.txt',
+        exists: true,
+      });
+      expect(closeErrorsOf(seen)).toEqual(['EBADF']);
+    });
+
+    it('目的地拋錯：拋的是目的地的錯', async () => {
+      const seen: unknown[] = [];
+      const backend = failing(() => Promise.reject(new Error('disk full')));
+
+      await expect(
+        copyFileOf(backend, '/a.txt', '/b.txt', (error) => seen.push(error)),
+      ).rejects.toThrow('disk full');
+      expect(closeErrorsOf(seen)).toEqual(['EBADF']);
+    });
   });
 });
