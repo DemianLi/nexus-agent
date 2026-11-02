@@ -379,7 +379,7 @@ describe('模型看到的 read_file', () => {
     const [read] = toolsSent([baseReadTool]) as [
       { function: { description: string; parameters: Record<string, unknown> } },
     ];
-    // 描述原樣帶過去：預設行數的那一句由組裝點的 `customToolDescriptions` 換，這顆只換 schema。
+    // 描述原樣帶過去：預設行數與行號格式由組裝點的 `customToolDescriptions` 換，這顆只換 schema。
     expect(read.function.description).toBe(baseReadTool.description);
     const parameters = read.function.parameters as {
       properties: Record<string, unknown>;
