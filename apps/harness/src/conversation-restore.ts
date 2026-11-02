@@ -33,12 +33,23 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { replayConversation } from '@nexus/core';
-import type { ConversationReplay, SessionEvent, UnreplayableReason } from '@nexus/core';
+import {
+  parsesLoggedToolCalls,
+  replayConversation,
+  SESSION_EVENT_MAX_DEPTH,
+  storedEventDepth,
+} from '@nexus/core';
+import type {
+  ConversationReplay,
+  LoggedMessage,
+  SessionEvent,
+  UnreplayableReason,
+} from '@nexus/core';
 import { context } from 'langchain';
 
 import { TOOL_RESULT_STASH_PREFIX } from './agent-factory.js';
 import { CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
+import { vouchCheckpointDepth } from './pruned-memory-saver.js';
 
 /** 灌得進去的 agent 那一面。 */
 export interface RestorableAgent {
@@ -197,6 +208,44 @@ export function toolResultAsSeen(message: ToolMessage): ToolMessage {
 /* -------------------------------------------------------------------------- */
 /* 灌回去                                                                        */
 /* -------------------------------------------------------------------------- */
+//
+// 推回的訊息巢狀的值與日誌共用（`shareStored`），不深拷：第一次存檔時 `seal` 本來就把整串深凍，拷出來的那份只在
+// 「推回 → 第一次存檔」這一段可寫，而這一段（都在 `updateState` 之內）沒有人就地改巢狀的值。日誌那份是凍的，有人改就當場拋。
+//
+// 層數同理不再量第二次：讀盤時記下了每顆事件的層數（`storedEventDepth`），夠淺的就登記給 `seal`（`vouchCheckpointDepth`）。
+
+/**
+ * 事件不超過這個層數，推出來的訊息寫進存檔點就一定在上限內，`seal` 不必再量。
+ *
+ * 推回的訊息裡，從日誌共用來的值在存檔點裡只比在事件裡深固定幾層：日誌訊息的欄位深 `CHECKPOINT_WRAPPER_DEPTH` 層
+ * （`checkpoint-serde.ts`；四種事件都把訊息放在 `data` 底下同一層），`turn/start` 的附件包進內容區塊也只多固定幾層；
+ * `toJSON` 的跳脫（帶 `lc` 鍵的物件包一層 `__lc_escaped__`，包了就不再往下）最多再多 1 層；建構子（`tool_call` 區塊、
+ * v1 的 `contentBlocks`）與 {@link toolResultAsSeen} 在外面只包固定幾層。
+ * 取上限的一半，留下的餘裕遠大於這幾層。建構子從字串解析出來的值不在此列（`parsesLoggedToolCalls`），照舊量；
+ * 比這深的事件（上限之前寫下的舊日誌）也照舊量。
+ */
+const VOUCHED_EVENT_DEPTH = SESSION_EVENT_MAX_DEPTH / 2;
+
+/** 推出這則訊息的那一則日誌訊息；`turn/start` 推出的訊息不是從日誌訊息建的，沒有。 */
+function loggedMessageOf(event: SessionEvent): LoggedMessage | undefined {
+  if (event.type === 'compaction/summary') return event.data.summary;
+  if (
+    event.type === 'assistant/message' ||
+    event.type === 'tool/result' ||
+    event.type === 'user/message'
+  ) {
+    return event.data.message;
+  }
+  return undefined;
+}
+
+/** 這顆事件推出的訊息，寫進存檔點的層數是不是一定在上限內，見 {@link VOUCHED_EVENT_DEPTH}。 */
+function depthBounded(event: SessionEvent): boolean {
+  const depth = storedEventDepth(event);
+  if (depth === undefined || depth > VOUCHED_EVENT_DEPTH) return false;
+  const logged = loggedMessageOf(event);
+  return logged === undefined || !parsesLoggedToolCalls(logged);
+}
 
 /**
  * 從日誌推出對話、灌回這條 thread 的 graph state。推不出來就不灌（#306 拍板 2），模型從空的開始。
@@ -217,7 +266,11 @@ export async function restoreConversation(
   const seqOf = new Map<BaseMessage, number>();
   const replay = replayConversation(events, {
     toolResultAsSeen,
-    origin: (message, event) => seqOf.set(message, event.seq),
+    shareStored: true,
+    origin: (message, event) => {
+      seqOf.set(message, event.seq);
+      if (depthBounded(event)) vouchCheckpointDepth(message);
+    },
   });
   if (replay.kind === 'replayed' && replay.messages.length > 0) {
     try {

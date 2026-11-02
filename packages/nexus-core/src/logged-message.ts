@@ -220,8 +220,8 @@ export function fromLoggedMessage(logged: LoggedMessage): BaseMessage {
  * `contentBlocks` 上補缺的 `tool_call` 區塊，v1 的 `content` 陣列原樣當成 `contentBlocks`）。其餘巢狀的值（區塊、`tool_calls`
  * 與參數、`additional_kwargs`／`response_metadata` 本身、`artifact`）跟日誌共用，日誌凍過就是凍的；也不檢查能不能無損表達成 JSON。
  *
- * **只給讀完就丟的讀方**：拿 `tool_calls`、判斷推不推得回來。結果會留下來、交給 graph state 或模型的，一律用 {@link fromLoggedMessage}：
- * 下游就地改巢狀欄位時，凍過的值會拋錯，沒凍過的會改到日誌那一份。
+ * **給讀完就丟的讀方**（拿 `tool_calls`、判斷推不推得回來），以及**確定 `logged` 整顆深凍過**的讀方：下游就地改巢狀欄位時，
+ * 凍過的值當場拋錯；沒凍過的會靜靜改到日誌那一份。其餘結果會留下來、交給 graph state 或模型的，一律用 {@link fromLoggedMessage}。
  *
  * @param logged - 日誌裡記的那一則。
  * @returns 同一則訊息，巢狀的值與 `logged` 共用。
@@ -235,6 +235,23 @@ export function readLoggedMessage(logged: LoggedMessage): BaseMessage {
     { type: logged.type, data: fields } as unknown as StoredMessage,
   ]);
   return message!;
+}
+
+/**
+ * 推回這一則時，建構子會不會從字串解析出日誌裡沒有的新值：`AIMessage` 在沒有 `tool_calls` 時解析
+ * `additional_kwargs.tool_calls` 的參數字串（舊格式），`AIMessageChunk` 收攏 `tool_call_chunks` 時也解析。解析出來的值
+ * 可能比整顆事件還深，從事件的層數推不出它的上限。
+ *
+ * @param logged - 日誌裡記的那一則。
+ */
+export function parsesLoggedToolCalls(logged: LoggedMessage): boolean {
+  const data = logged.data as Record<string, unknown>;
+  const kwargs = data.additional_kwargs as Record<string, unknown> | undefined;
+  const chunks = data.tool_call_chunks;
+  return (
+    (data.tool_calls === undefined && kwargs?.tool_calls != null) ||
+    (Array.isArray(chunks) && chunks.length > 0)
+  );
 }
 
 /**
