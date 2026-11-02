@@ -1354,7 +1354,8 @@ describe('歸屬表分塊', () => {
   });
 
   it('反覆重用 id 時塊會併回來，塊數不跟著重用次數長', () => {
-    // 每 128 則才一個新 id，其餘重用同一小撮：不併塊的話每塊會被掏到只剩那一個新 id，塊數跟著重用次數長。
+    // 每 128 則才一個新 id，其餘重用同一小撮：不併塊的話，含新 id 的塊會被掏到只剩那一個新 id，其餘的塊掏空拿掉，
+    // 塊數跟著重用次數長。
     const ids = Array.from({ length: 3000 }, (_, n) => [
       n % 128 === 0 ? `fresh_${n}` : `id_${n % 127}`,
     ]);
@@ -1412,7 +1413,8 @@ describe('歸屬表分塊', () => {
   });
 
   it('已交出的塊一律不就地寫：舊狀態的每一塊都凍住，接著記各種批次也不拋、結果照整張表的算法', () => {
-    // 2010 筆：擠掉最舊的之後最後一塊沒滿，下一批的頭一筆會拷它、其餘寫進拷出來的那塊。
+    // 2010 筆：已到上限，接下來每批都要從凍住的最舊那塊擠掉；2010 不是 32 的倍數，最後一塊沒滿，下一批的頭一筆會拷它、
+    // 其餘寫進拷出來的那塊。
     const log = logOf(serial(2010));
     const base = stateOf(log.events);
     expect(Object.keys(base.owners.chunks.at(-1)!).length).toBeLessThan(32);
@@ -1426,7 +1428,11 @@ describe('歸屬表分塊', () => {
     for (const batch of batches) {
       const start = log.append('model/start', {});
       state = applyTrajectory(state, start);
-      state = applyTrajectory(state, log.append('assistant/message', reply(start.seq, '', ...batch)));
+      state = applyTrajectory(
+        state,
+        log.append('assistant/message', reply(start.seq, '', ...batch)),
+      );
+      for (const chunk of state.owners.chunks) Object.freeze(chunk);
     }
     expect(entriesOf(state)).toEqual(referenceOwners(log.events));
   });

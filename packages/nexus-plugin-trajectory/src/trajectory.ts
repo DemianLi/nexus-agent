@@ -78,8 +78,8 @@ const OWNERS_CAP = 2000;
 
 /**
  * 歸屬表每塊最多幾筆。相鄰兩塊裝得下就併，所以任兩塊相鄰的筆數和都超過這個數，塊數不超過
- * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一批只複製一次塊清單與它碰到的塊（最後一塊一批只拷一次），
- * 成本跟著塊數與這個數走，不跟著整張表的筆數。
+ * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一批複製一次塊清單；刪到、併到的塊每次另拷；往最後一塊追加的寫進
+ * 這一批自己拷出來的那份，不每筆再拷。成本跟著塊數與這個數走，不跟著整張表的筆數。
  */
 const OWNERS_CHUNK = 32;
 
@@ -145,7 +145,7 @@ type TurnState = Omit<
 
 /**
  * callId → 呼叫的歸屬表，由舊到新分塊，每個 id 只在一塊裡，所以接起來就是一張照新舊排的表。
- * 塊一旦放進表就不再改：要動的那幾塊換成新的，其餘在前後兩份狀態之間共用。
+ * 塊一旦隨表交出就不再改：要動的那幾塊換成新的，其餘在前後兩份狀態之間共用。
  */
 interface OwnerTable {
   readonly chunks: readonly Readonly<Record<string, number | null>>[];
