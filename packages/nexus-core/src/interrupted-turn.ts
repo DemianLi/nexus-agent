@@ -42,7 +42,7 @@ import type { ToolMessage } from '@langchain/core/messages';
 import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
 import { closer, requestedCalls } from './conversation-replay.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
-import { SessionSeq } from './session-log.js';
+import { appendSharedEvents, SessionSeq } from './session-log.js';
 import type { SessionEvent, SessionEventMap } from './session-log.js';
 import type {
   ResumedStoredSession,
@@ -250,7 +250,8 @@ export async function readColdSession(
  *
  * @param store - 存放處。
  * @param id - 要續接的會話 id。
- * @returns 同 {@link SessionStore.resume}，`events` 多了補結。
+ * @returns 同 {@link SessionStore.resume}，`events` 多了補結。`resume` 交的是可共用的陣列（{@link shareStoredEvents}）時，
+ *   交回的也是，補結原地凍住。
  * @throws `store.resume` 拋的，或補結寫不進去。
  */
 export async function resumeClosingInterruptedTurn(
@@ -266,5 +267,5 @@ export async function resumeClosingInterruptedTurn(
     await resumed.stored.close().catch(() => undefined);
     throw error;
   }
-  return { ...resumed, events: [...resumed.events, ...closers] };
+  return { ...resumed, events: appendSharedEvents(resumed.events, closers) };
 }
