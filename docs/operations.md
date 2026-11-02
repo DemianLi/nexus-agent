@@ -2171,6 +2171,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **選擇記在會話日誌**（`model/selection`；`model/start` 帶 `route`＝這次請求實際走的模型）。續接時沿用：使用者最後選的 → 最近一次請求走的 → 部署預設。
   **不存成個人預設**（dsh 沒掛設定編輯器時也存不住，PM 2026-10-08 決策）：新開的 thread 一律從部署預設起。
 - **推理強度只有 `off` 與 `default`**，模型的型錄條目要宣告過 `off`；型錄沒有那顆、或帶了沒宣告的強度，`model.select` 回 `model_unavailable`，選擇不變。
+- **記著的模型不在型錄上時退回部署預設**，手動選過的也一樣，強度回到預設，模型收到一則換模型通知。不多記事件：選擇留在日誌，那顆回到型錄就走回它；實際走的看 `model/start.route`。
   沒有推理資訊的模型，型錄回應不帶強度，web 不畫強度列。
 - **跟著選擇走的**：摘要門檻（夾在當步那顆的窗口之內，`min(窗口×0.8, 窗口−輸出上限)`，配置的 `100_000` 仍是上限，所以預設那顆與 131k 級的門檻不變）、
   系統提示詞的 `{{model}}`、token 估算的錨（按模型名字認）、標題（沒有自己的 `modelId` 時沿用觸發它的那次主請求走的）。
@@ -2254,7 +2255,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **patch 是整份替換 `config`，不是深層合併**：在自己的 `cordis.patch.yml` 或 `--patch` 裡只寫 `candidateLimit` 或 `maxReferences` 的話，
   另外幾格由 schema 補，**`referenceContextFraction` 會靜靜回到 schema 的 0.2**，出廠調低的 0.1 就被拿掉了，起動時沒有任何警告。
   所以調任何一格都要把 `referenceContextFraction: 0.1`（或你量出來的值）一起寫進去。
-- **窗口一律查型錄**。型錄裡沒有的模型（續接的會話選過、後來被拿掉的那顆）這一輪在打供應商之前就失敗，所以這一格的預算沒有人看得到。
+- **窗口一律查型錄**。型錄裡沒有的模型（續接的會話選過、後來被拿掉的那顆）下一步退回部署預設，窗口也是部署預設那顆的。
 
 **`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)、[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）給 serve 行程裡的 thread 數設上限（第 2 級），
 並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（每條 thread 常駐約 1.2 MB heap，#1983 用短對話量的；只讀歷史也會組一份 agent、佔記憶體，#1464）。
