@@ -42,6 +42,7 @@ permissions:
 # 輕的模式，中間那一段整排 skipped，gate 照 plan 輸出的模式接受它們 skipped。
 #
 #   plan ─┬─ static ───────────┐   CI 腳本的測試、format、lint、web build、web 的瀏覽器護欄
+#         │                    │   （合併後完整一輪另跑真瀏覽器 e2e）
 #         ├─ typecheck ────────┤
 #         ├─ test-packages ────┤
 #         ├─ test-web ─────────┼─► gate
@@ -272,6 +273,11 @@ jobs:
       # ubuntu-latest 自帶 Chrome，playwright-core 用 channel 'chrome' 開它，不另外下載瀏覽器。
       - name: 瀏覽器護欄
         run: pnpm --filter @nexus/web run test:guard
+      # 真瀏覽器的對話 e2e（#1602）：子行程起真的 serve（模型是腳本，不帶 key、不打模型端點），供應上面 build 出來的 dist，Chrome 開它。
+      # 只在合併後完整一輪跑（#1602 的定案，依據 #2088 決議第 5 條把瀏覽器檢查搬出 gate）；PR 與 main 的 push 上這一步 skipped。產物已經在這裡，跟護欄一樣不另開 job。
+      - name: 真瀏覽器 e2e
+        if: inputs.full
+        run: pnpm --filter @nexus/web run test:e2e
 
   # 產物驗證（#1502）：每次全跑都跑 pack 與安裝驗證，不只在發版時。
   # `pnpm deploy --prod` 打成 tar.gz → 在 repo 外解開 → 純 node 驗 sha256、靜態檢查、`--version`、flock、會話 header 的戳記、
