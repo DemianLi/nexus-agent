@@ -48,6 +48,8 @@ export interface AtomicWriteInternals {
   readonly removeStagingDir?: (path: string) => Promise<void>;
   /** `edit` 讀完原檔、算好新內容、寫入之前（鎖之內）。測試用它停住第一個 `edit` 來排出平行的交錯。 */
   readonly afterEditRead?: (absolutePath: string) => void | Promise<void>;
+  /** 複製的來源過完圍堵、開檔之前。測試用它在這段時間差把來源換掉。 */
+  readonly beforeCopyOpen?: (absolutePath: string) => void | Promise<void>;
 }
 
 /** {@link writeFileAtomic} 的發佈方式。 */

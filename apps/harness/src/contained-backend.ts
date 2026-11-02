@@ -892,7 +892,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * 複製的來源那一半（`copy_file`，[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）：照 {@link read} 先過讀取面的圍堵（{@link readScope}），
-   * 開比過根的那個實際位置，`O_RDONLY|O_NOFOLLOW`，不是一般檔就拒。內容不解碼，二進位與非 UTF-8 的檔原樣交出。
+   * 開比過根的那個實際位置，`O_RDONLY|O_NOFOLLOW|O_NONBLOCK`，用開好的把手判一般檔，不是就關掉、拒絕：過圍堵之後被換成 FIFO 的路徑
+   * 開檔不會卡住，判的也是實際讀的那一個。內容不解碼，二進位與非 UTF-8 的檔原樣交出。
    *
    * @param sourcePath - 這個 backend 座標系裡的來源路徑。
    * @param request - 模型給的兩條原路徑：`permissions` 規則比 `from`（讀），錯誤句也用它。
@@ -908,12 +909,24 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       const scope = await this.readScope(sourcePath, 'copy');
       if (scope.denial !== undefined) return denied({ error: scope.denial });
       const target = scope.realTarget ?? this.resolveVirtual(sourcePath);
-      if (!(await stat(target)).isFile()) {
-        noteFsError(FS_NOT_REGULAR_FILE);
-        return { error: `Error copying '${request.from}': not a regular file` };
+      await this.atomicInternals?.beforeCopyOpen?.(target);
+      const handle = await open(
+        target,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+      let size: number;
+      try {
+        const info = await handle.stat();
+        if (!info.isFile()) {
+          await handle.close();
+          noteFsError(FS_NOT_REGULAR_FILE);
+          return { error: `Error copying '${request.from}': not a regular file` };
+        }
+        size = info.size;
+      } catch (error: unknown) {
+        await handle.close();
+        throw error;
       }
-      const handle = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
-      const size = (await handle.stat()).size;
       return {
         stream: handle.createReadStream({ start: 0, autoClose: false }),
         size,

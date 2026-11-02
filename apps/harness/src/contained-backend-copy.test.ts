@@ -5,6 +5,7 @@
  * 來源與目的地各自過讀取面與寫入面的圍堵。每一條都看磁碟，不只看回傳值。
  */
 
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   appendFile,
@@ -149,6 +150,18 @@ describe('ContainedFilesystemBackend 複製：來源', () => {
     expect(await contained().copy('/dir', '/b.txt')).toEqual({
       error: "Error copying '/dir': not a regular file",
     });
+  });
+
+  it('過了圍堵、開檔之前被換成 FIFO：開檔不卡住，用開好的把手判出不是一般檔，不建目的地', async () => {
+    await writeFile(join(root, 'a.txt'), 'x');
+    const result = await contained(undefined, {
+      beforeCopyOpen: async (path) => {
+        await rm(path);
+        execFileSync('mkfifo', [path]);
+      },
+    }).copy('/a.txt', '/b.txt');
+    expect(result).toEqual({ error: "Error copying '/a.txt': not a regular file" });
+    await expect(readFile(join(root, 'b.txt'))).rejects.toThrow();
   });
 
   it('經符號連結落在根外：讀取面的圍堵拒絕，不建目的地', async () => {
