@@ -4,7 +4,7 @@
  *
  * 工作區在 git repo 裡時，輪開始與收尾各拍一次工作樹快照，兩棵樹比出這一輪改了什麼——連檔案工具以外的改動
  * （使用者自己改的、`submit_record` 寫的、MCP 工具在外面改的）都在（[#461](https://github.com/DemianLi/nexus-agent/issues/461)）。
- * 檔案工具（`write_file`、`edit_file`、`delete`）改一個檔之前，另外把那個檔整份複製一份，每一輪每個路徑只複製
+ * 檔案工具（`write_file`、`edit_file`、`delete`、`copy_file`）改一個檔之前，另外把那個檔整份複製一份，每一輪每個路徑只複製
  * 第一次、收尾時再複製一次，快照蓋不到的路徑（被忽略的、repo 外的）用這兩份比；不在 repo 裡、或沒有 git 時，
  * 只有這兩份。有改的話，root 日誌寫一顆 `workspace/changes`，摘要與逐檔比較留在記錄器裡，經
  * {@link WorkspaceChanges} 服務到會話結束。模型看不到任何東西：這一條只寫日誌，web 讀。
@@ -24,7 +24,9 @@
  *
  * 1. **git 由組裝點注入的 {@link GIT_STARTER_SERVICE} 起**。環境淨化、逾時、輸出上限、找執行檔見 `git.ts` 檔頭。
  * 2. **事件不帶 `turn`**，時序因此另有要求；接上時重播的舊輪不拍快照。見 `recorder.ts` 檔頭。
- * 3. **擷取的工具換成我們基座的那三個**，見 `capture.ts` 的 `mutationPath`。`delete` 是 dsh 沒有的工具。
+ * 3. **擷取的工具換成我們基座的那三個，加上 `copy_file`**，見 `capture.ts` 的 `mutationPath`。`delete` 與 `copy_file` 是 dsh 沒有的工具；
+ *    `copy_file` 成功時 root 那一份 `tool/result` 的 `meta` 帶來源、位元組數與 sha256，列出目的地時一起帶上（`copiedFrom`，#2289）。
+ *    子代理的 `copy_file` 只寫在子代理自己的日誌，這裡收不到它的 `meta`：目的地照樣列出，沒有 `copiedFrom`。
  * 4. **掛點**：dsh 的 `tools/pre-execute`、`agent/turn-stopping` 與 `session/event`，在我們這裡是 middleware 的
  *    `wrapToolCall`、`afterAgent` 與 `sessions.join` 的 `observe`。`afterAgent` 是圖裡的一個節點，每一輪多走一步
  *    （root 與子代理都是，子代理那一步直接返回）；選它是因為它在輪內、在 pump 寫 `turn/end` 之前，而且只在
@@ -61,10 +63,12 @@ import { isLogicalTurnStart, WORKSPACE_ROOT_SERVICE } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLog } from '@nexus/core';
 import type { WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
+import { copyMetaOf } from './capture.js';
 import { GIT_STARTER_SERVICE, GitRunner, resolveGitExecutable } from './git.js';
 import { TurnRecorder } from './recorder.js';
 
-export { mutationPath } from './capture.js';
+export { copyMetaOf, mutationPath } from './capture.js';
+export type { CopyMeta } from './capture.js';
 export { directGitStarter, GIT_STARTER_SERVICE, GitRunner, resolveGitExecutable } from './git.js';
 export type { GitOutcome, GitProcess, GitStart, GitStarter, GitStartFailure } from './git.js';
 export { TurnRecorder } from './recorder.js';
@@ -272,9 +276,18 @@ function applyWorkspaceChanges(
         case 'interrupt/raised':
           recorder.pause();
           break;
-        case 'tool/result':
+        case 'tool/result': {
           recorder.observe(event.seq);
+          const copy = copyMetaOf(event.data.meta);
+          if (copy !== undefined) {
+            recorder.copied(copy.destination, {
+              source: copy.source,
+              bytes: copy.bytes,
+              sha256: copy.sha256,
+            });
+          }
           break;
+        }
         case 'turn/end':
         case 'turn/failed':
           recorder.end();

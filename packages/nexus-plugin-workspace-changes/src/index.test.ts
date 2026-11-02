@@ -266,6 +266,41 @@ describe('一輪', () => {
     expect(m.warnings).toEqual([]);
   });
 
+  it('copy_file（#2289）：目的地列成新增，帶上 tool/result meta 的來源、位元組數與 sha256；沒有 meta 的不帶', async () => {
+    const m = await mount({ 'a.md': 'one\n' });
+    m.log.append('turn/start', { kind: 'message', text: '複製。' });
+    await m.tool('copy_file', { source_path: '/a.md', destination_path: '/b.md' }, () =>
+      writeFile(join(m.root, 'b.md'), 'one\n'),
+    );
+    const meta = {
+      operation: 'copy',
+      source: '/a.md',
+      destination: '/b.md',
+      bytes: 4,
+      sha256: 'f0',
+    };
+    m.log.append('tool/result', { callId: 'c', isError: false, meta });
+    await m.tool('copy_file', { source_path: '/a.md', destination_path: '/c.md' }, () =>
+      writeFile(join(m.root, 'c.md'), 'one\n'),
+    );
+    result(m.log);
+    await m.afterAgent();
+    m.log.append('turn/end', {});
+    await m.settle();
+
+    const [event] = m.changes();
+    expect(m.service.summary(event!.seq)?.files).toEqual([
+      {
+        path: 'b.md',
+        display: 'b.md',
+        added: 1,
+        deleted: 0,
+        copiedFrom: { source: '/a.md', bytes: 4, sha256: 'f0' },
+      },
+      { path: 'c.md', display: 'c.md', added: 1, deleted: 0 },
+    ]);
+  });
+
   it('收尾之後的 `turn/end` 不再記一次', async () => {
     const m = await mount({ 'a.md': 'a\n' });
     m.log.append('turn/start', { kind: 'message', text: '改。' });

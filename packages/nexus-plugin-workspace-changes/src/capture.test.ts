@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { captureFile, mutationPath, sameCapture } from './capture.js';
+import { captureFile, copyMetaOf, mutationPath, sameCapture } from './capture.js';
 import { canonicalPath, displayPathOf, durablePathOf } from './paths.js';
 
 const cleanup: string[] = [];
@@ -27,6 +27,16 @@ describe('mutationPath：哪些呼叫要先擷取', () => {
     );
     expect(mutationPath('edit_file', { file_path: 'a.md', old_string: 'x' })).toBeUndefined();
     expect(mutationPath('delete', { file_path: '/gone.md' })).toBe('/gone.md');
+  });
+
+  it('copy_file（#2289）：擷取的是目的地，兩條路徑齊了才算', () => {
+    expect(mutationPath('copy_file', { source_path: '/a.md', destination_path: '/b.md' })).toBe(
+      '/b.md',
+    );
+    expect(mutationPath('copy_file', { destination_path: '/b.md' })).toBeUndefined();
+    expect(
+      mutationPath('copy_file', { source_path: '/a.md', destination_path: ' ' }),
+    ).toBeUndefined();
   });
 
   it('基座在 schema 前把 `path` 正規化成 `file_path`，所以原始參數兩個名字都認；兩個都給時照基座取 `file_path`', () => {
@@ -106,5 +116,34 @@ describe('路徑', () => {
     expect(displayPathOf('/r/lib/x.ts', cwd, repo, '/r')).toBe('../lib/x.ts');
     expect(durablePathOf('/r/README.md', cwd)).toBe('/r/README.md');
     expect(displayPathOf('/elsewhere/x.md', cwd, repo, '')).toBe('/elsewhere/x.md');
+  });
+});
+
+describe('copyMetaOf：認 copy_file 的 meta（#2289）', () => {
+  const meta = { operation: 'copy', source: '/a.md', destination: '/b.md', bytes: 3, sha256: 'ab' };
+
+  it('四格型別都對才算', () => {
+    expect(copyMetaOf(meta)).toEqual({
+      source: '/a.md',
+      destination: '/b.md',
+      bytes: 3,
+      sha256: 'ab',
+    });
+  });
+
+  it('別的操作、缺格、型別不對、不是物件：都不算', () => {
+    for (const value of [
+      { ...meta, operation: 'create' },
+      { ...meta, bytes: '3' },
+      { ...meta, sha256: undefined },
+      { ...meta, destination: 1 },
+      { ...meta, source: null },
+      { operation: 'create', diffs: [] },
+      undefined,
+      null,
+      'copy',
+    ]) {
+      expect(copyMetaOf(value)).toBeUndefined();
+    }
   });
 });
