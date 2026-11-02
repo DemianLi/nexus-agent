@@ -270,7 +270,7 @@ class SessionFormatFixtures(unittest.TestCase):
 
 
 class SnapshotScenarios(unittest.TestCase):
-    """重放快照的場景（#1556）是 .jsonl、.json、.yml：只改它們的 commit 在全跑那一層要觸發掃描。"""
+    """重放快照的場景（#1556）是 .jsonl、.json、.yml：只改它們的 commit 在全跑那一層要觸發掃描，拿掉 SCAN_RES 那一條，快照測試就靜靜不跑。"""
 
     def test_scenario_only_change_scans(self) -> None:
         for path in (
@@ -699,7 +699,7 @@ class LightScope(unittest.TestCase):
         self.assertEqual(scope['lint'], {'packages/nexus-core': ['src/a.ts']})
 
     def test_snapshot_runs_for_its_inputs(self) -> None:
-        """重放快照（#1556）不是改到的檔的同名測試：場景、重放模型、模型列、wire、會話日誌的寫法改了都要排到它。"""
+        """重放快照（#1556）不是改到的檔的同名測試：`snapshot/` 目錄、重放模型、真模型提供者與它的設定列、wire、會話日誌的寫法改了都要排到它。"""
         snapshot = {'apps/harness': ['src/snapshot/snapshot.test.ts']}
         for path in (
             'apps/harness/src/snapshot/scenarios/tool-round-trip/input.json',
@@ -712,6 +712,7 @@ class LightScope(unittest.TestCase):
             'apps/harness/src/jsonl-session-store.ts',
             'apps/harness/src/session-log-budget.ts',
             'apps/harness/src/settings/replay-model.ts',
+            'apps/harness/src/settings/live-model.ts',
             'packages/nexus-wire/src/index.ts',
             'packages/nexus-core/src/session-log.ts',
             'packages/nexus-core/src/session-store.ts',
@@ -720,7 +721,7 @@ class LightScope(unittest.TestCase):
                 tests = self.scope([path], {path, plan_ci.SNAPSHOT_TEST})['tests']
                 self.assertIn('src/snapshot/snapshot.test.ts', tests.get('apps/harness', []))
 
-        # 只改這些路徑底下的測試檔、或無關的檔，不排快照。
+        # `snapshot/` 以外，觸發路徑旁的測試檔或無關的檔不排快照。
         for path in ('apps/harness/src/live-model.test.ts', 'packages/nexus-wire/src/a.test.ts', 'apps/harness/src/other.ts'):
             with self.subTest(path=path):
                 tests = self.scope([path], {path, plan_ci.SNAPSHOT_TEST})['tests']

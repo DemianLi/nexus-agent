@@ -105,12 +105,13 @@ TEST_EXCLUDE_RE = re.compile(r'^apps/web/guard/')
 FORMAT_SKIP_RE = re.compile(r'\.md$')
 
 # 重放快照（#1556）在真的 serve 上重放、比對落盤日誌，同名規則排不到它：改到這些時輕的模式也跑 `SNAPSHOT_TEST`。
-# 場景與夾具本身、重放模型、模型列、wire，以及會話日誌的寫法與格式。
+# `snapshot/` 整個目錄（場景、夾具、重放 harness）、重放模型（`llm-replay.ts`、`settings/replay-model.ts`）、真模型提供者與
+# 它的設定列（`live-model.ts`、`settings/live-model.ts`，錄製走它們）、wire，以及會話日誌的寫法與格式。
 SNAPSHOT_TEST = 'apps/harness/src/snapshot/snapshot.test.ts'
 SNAPSHOT_TRIGGER_RE = re.compile(
     r'^apps/harness/src/snapshot/'
     r'|^apps/harness/src/(llm-replay|live-model|jsonl-session-store|session-log-[\w-]+)\.ts$'
-    r'|^apps/harness/src/settings/replay-model\.ts$'
+    r'|^apps/harness/src/settings/(replay-model|live-model)\.ts$'
     r'|^packages/nexus-wire/src/(?!.*\.test\.ts$)'
     r'|^packages/nexus-core/src/(session-log|session-store|session-format|session-persistence|logged-message)\.ts$'
 )
