@@ -125,6 +125,8 @@ import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { BINARY_SAMPLE_BYTES } from './binary-read.js';
 import { canonicalize, isWithin } from './canonical-path.js';
+import { deleteDenial, permissionDenial } from './path-permissions.js';
+import type { PermissionOperation, PermissionRules } from './path-permissions.js';
 import { resolveRgPath } from './rg-path.js';
 import { runRipgrep } from './ripgrep-runner.js';
 import type { RipgrepInternals, RipgrepTool } from './ripgrep-runner.js';
@@ -489,6 +491,11 @@ export interface ContainedFilesystemBackendOptions {
    * 呼叫端可以在建構之後才知道清單。省略就沒有。
    */
   readonly reservedWrites?: () => readonly ReservedWrite[];
+  /**
+   * 這個 backend 掛在 composite 的哪條路由底下（例如 `/shared`），`permissions` 規則比的是接回這個前綴的路徑
+   * （{@link ContainedFilesystemBackend.usePermissions}）。省略就是預設那一格，沒有前綴。
+   */
+  readonly routePrefix?: string;
 }
 
 /** {@link ContainedFilesystemBackendOptions.reservedWrites} 的一格。 */
@@ -569,6 +576,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private readonly streamMinSize: number;
   /** 不論模式都拒絕變更的地方；`undefined` 就是沒有。 */
   private readonly reservedWrites: (() => readonly ReservedWrite[]) | undefined;
+  /** 掛在 composite 上的路由前綴；預設那一格是空字串。 */
+  private readonly routePrefix: string;
+  /** fold 出來的 `permissions` 規則；沒給就是空的，不比。 */
+  private permissionRules: PermissionRules = [];
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
@@ -595,6 +606,18 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     this.atomicInternals = options.atomicInternals;
     this.streamMinSize = options.streamMinSize ?? READ_STREAM_MIN_SIZE;
     this.reservedWrites = options.reservedWrites;
+    this.routePrefix = options.routePrefix ?? '';
+  }
+
+  /**
+   * 交給這個 backend 一份 `permissions` 規則（fold 出來的那份）。經符號連結解開之後的位置跟給的路徑不同時，讀取面
+   * （{@link readScope}）與變更（{@link checkedPath}）拿它再比一次，命中就拒（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
+   * 規則要 fold 完才有，所以不在建構期給。不分模式：`danger-full-access` 也擋，同基座的 deny。
+   *
+   * @param rules - 規則表，形狀同基座的 `permissions`。
+   */
+  usePermissions(rules: PermissionRules): void {
+    this.permissionRules = rules;
   }
 
   /**
@@ -1379,6 +1402,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // 保留的地方排在模式之前：全開與核准來的 grant 都蓋不過它，所以不記拒絕、不接指引。
     const reserved = await this.reservedDenial(standing, filePath, operation);
     if (reserved !== undefined) return { error: reserved };
+    // `permissions` 規則同樣不看模式、不認領 grant：它是部署的規則，不是這條 thread 的沙箱。
+    const ruled = await this.mutationRuleDenial(filePath, operation);
+    if (ruled !== undefined) return { error: ruled };
     const first = await this.verdict(standing, filePath, operation);
     if (typeof first === 'string') return first;
 
@@ -1473,6 +1499,29 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // 基座那一次 lexical resolve 走的是實際位置。合法路徑走到這裡通常原封不動。
     const inside = relative(realRoot, realTarget);
     return inside === '' ? '/' : `/${inside.split(sep).join('/')}`;
+  }
+
+  /**
+   * 變更經符號連結解開之後落在 `permissions` 規則擋下的地方就拒（{@link ruleDenial}）。`~`、`..` 與解析失敗不在這裡判，
+   * 交給後面的 fence。
+   *
+   * @param filePath - 模型給的虛擬路徑。
+   * @param operation - 變更的操作名。
+   * @returns 拒絕句；沒被擋時 `undefined`。
+   */
+  private async mutationRuleDenial(
+    filePath: string,
+    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+  ): Promise<string | undefined> {
+    if (this.permissionRules.length === 0) return undefined;
+    const realTarget = await this.canonicalTarget(filePath);
+    if (realTarget === undefined) return undefined;
+    const virtualPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
+    return this.ruleDenial(
+      resolve(this.cwd, virtualPath.slice(1)),
+      realTarget,
+      operation === 'delete' ? 'delete' : 'write',
+    );
   }
 
   /**
@@ -1582,8 +1631,46 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         denial: this.denial(mode, operation, filePath, `路徑解析失敗（${code ?? '未知'}）`),
       };
     }
-    if (mode === 'danger-full-access' || isWithin(realRoot, realTarget)) return { realTarget };
+    if (mode === 'danger-full-access' || isWithin(realRoot, realTarget)) {
+      const ruled = await this.ruleDenial(resolved, realTarget, 'read');
+      return ruled === undefined ? { realTarget } : { denial: ruled };
+    }
     return { denial: this.denial(mode, operation, filePath, '經符號連結解析之後落在根之外') };
+  }
+
+  /**
+   * 解開連結之後的位置被 `permissions` 規則擋下時的拒絕句（{@link usePermissions}）。位置跟給的路徑相同時不比：
+   * 那條路徑基座的工具已經比過，harness 自己經 backend 讀的（技能掃描、記憶來源）也不受規則管。
+   * 規則比的是接回路由前綴的虛擬路徑；換不回虛擬路徑的（`danger-full-access` 下落在根外）沒有規則可比。
+   *
+   * @param lexical - 給的路徑字面解析出來的主機路徑。
+   * @param realTarget - canonicalize 過的主機路徑。
+   * @param operation - `read`，或變更的 `write`、`delete`。
+   * @returns 拒絕句；沒被擋時 `undefined`。
+   */
+  private async ruleDenial(
+    lexical: string,
+    realTarget: string,
+    operation: PermissionOperation | 'delete',
+  ): Promise<string | undefined> {
+    if (this.permissionRules.length === 0) return undefined;
+    const real = await this.virtualOf(realTarget);
+    if (real === undefined) return undefined;
+    const given = relative(this.cwd, lexical);
+    if (`/${given.split(sep).join('/')}` === real) return undefined;
+    const path =
+      this.routePrefix === ''
+        ? real
+        : real === '/'
+          ? this.routePrefix
+          : `${this.routePrefix}${real}`;
+    if (operation !== 'delete') return permissionDenial(this.permissionRules, operation, path);
+    // 同基座 `deleteTargetMayHaveDescendants` 的保守方向：確定是一般檔才照先命中者決定，其餘當成整棵子樹。
+    const leaf = await lstat(realTarget).then(
+      (info) => info.isFile(),
+      () => false,
+    );
+    return deleteDenial(this.permissionRules, path, !leaf);
   }
 
   /**
