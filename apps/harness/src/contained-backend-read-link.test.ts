@@ -1,5 +1,6 @@
 /**
- * 指向根內的符號連結（[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）：`read` 讀得到，`grep`／`glob` 不跟，寫入類落在本尊。
+ * 指向根內的符號連結（[#2193](https://github.com/DemianLi/nexus-agent/issues/2193)）：`read` 讀得到，`grep`／`glob` 不跟，寫入類落在本尊；
+ * `readRaw` 與寫前比對的版本看的也是本尊（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
  *
  * `canonicalize` 包一層，讓測試在「比完根之後、開檔之前」換掉目標，量得到開的是比過根的那個位置，也量得到 `O_NOFOLLOW` 還在。
  * 目錄都在真的檔案系統上。
@@ -8,6 +9,7 @@
 import { lstat, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { FILE_VERSION } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const hook = vi.hoisted(() => ({
@@ -137,5 +139,43 @@ describe('其他工具', () => {
     expect((await backend().edit('/inner.txt', 'PLAIN', 'CHANGED')).error).toBeUndefined();
     expect(await readFile(join(root, 'plain.txt'), 'utf8')).toBe('CHANGED-CONTENT\n');
     expect((await lstat(join(root, 'inner.txt'))).isSymbolicLink()).toBe(true);
+  });
+});
+
+describe('readRaw 與寫前比對的版本（#2260）', () => {
+  it.each(['read-only', 'workspace-write', 'danger-full-access'] as const)(
+    '%s：readRaw 讀到本尊的內容',
+    async (mode) => {
+      const result = await backend(mode).readRaw('/inner.txt');
+      expect(result.error).toBeUndefined();
+      expect(JSON.stringify(result.data?.content)).toContain('PLAIN-CONTENT');
+    },
+  );
+
+  it('子目錄裡的 ../ 連結：readRaw 讀到本尊', async () => {
+    await symlink('../plain.txt', join(root, 'sub', 'up.txt'));
+    expect(JSON.stringify((await backend().readRaw('/sub/up.txt')).data?.content)).toContain(
+      'PLAIN-CONTENT',
+    );
+  });
+
+  it('連結的版本就是本尊的版本', async () => {
+    const contained = backend();
+    const viaLink = await contained[FILE_VERSION]('/inner.txt');
+    expect(viaLink).toMatchObject({ kind: 'present' });
+    expect(viaLink).toEqual(await contained[FILE_VERSION]('/plain.txt'));
+  });
+
+  it('往外指的連結：readRaw 被拒，版本回不存在', async () => {
+    await symlink(join(outside, 'secret.txt'), join(root, 'away.txt'));
+    const result = await backend().readRaw('/away.txt');
+    expect(result.error).toContain('經符號連結解析之後落在根之外');
+    expect(JSON.stringify(result)).not.toContain(SECRET);
+    expect(await backend()[FILE_VERSION]('/away.txt')).toEqual({ kind: 'absent' });
+  });
+
+  it('連到根內目錄：版本回不存在', async () => {
+    await symlink('sub', join(root, 'dir-link'));
+    expect(await backend()[FILE_VERSION]('/dir-link')).toEqual({ kind: 'absent' });
   });
 });

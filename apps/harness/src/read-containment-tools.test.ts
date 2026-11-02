@@ -6,7 +6,16 @@
  * **走產品組裝**：`createCliAgent` ＋ 出貨清單，模型換成腳本提供者。**零憑證、零外部連線。**
  */
 
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
@@ -181,4 +190,88 @@ describe('經往外指的符號連結讀：工具回錯誤、內容不進日誌'
     expect(resultsOf(built.sessionLog.events)).toEqual([DENIED]);
     expect(JSON.stringify(built.sessionLog.events)).not.toContain('sk-根外的假金鑰');
   }, 30000);
+});
+
+describe('指向根內的連結：讀過之後改得到本尊（#2260）', () => {
+  let base: string;
+  let root: string;
+
+  beforeEach(async () => {
+    base = await mkdtemp(join(tmpdir(), 'nexus-inner-link-'));
+    root = join(base, 'workspace');
+    await mkdir(root);
+    await writeFile(join(root, 'plain.txt'), '第一版\n');
+    await symlink('plain.txt', join(root, 'inner.txt'));
+  });
+
+  afterEach(async () => {
+    await rm(base, { recursive: true, force: true });
+  });
+
+  /** 跑一串工具呼叫，回每一顆 `tool/result` 的判別格與模型看到的字。 */
+  async function run(calls: readonly { name: string; args: Record<string, unknown> }[]) {
+    const built = await createCliAgent(
+      { live: false, workspace: root, sandbox: 'workspace-write' },
+      withScriptedModel(shipped, [
+        ...calls.map((call) => ({ content: '', toolCalls: [call] })),
+        { content: '收工。' },
+      ]),
+      root,
+    );
+    const detach = built.attachSession(built.sessions);
+    let state: { messages: BaseMessage[] };
+    try {
+      state = (await built.agent.invoke(toAgentInvocation('改一下。'), {
+        configurable: { thread_id: 'inner-link' },
+      })) as { messages: BaseMessage[] };
+    } finally {
+      detach();
+      await built.dispose();
+    }
+    const seen = state.messages
+      .filter((message): message is ToolMessage => ToolMessage.isInstance(message))
+      .map((message) => textOf(message));
+    return { results: resultsOf(built.sessionLog.events), seen };
+  }
+
+  it('read_file 讀連結，edit_file 與 write_file 改連結：落在本尊，連結還在', async () => {
+    const { results, seen } = await run([
+      { name: 'read_file', args: { file_path: '/inner.txt' } },
+      {
+        name: 'edit_file',
+        args: { file_path: '/inner.txt', old_string: '第一版', new_string: '第二版' },
+      },
+      { name: 'read_file', args: { file_path: '/inner.txt' } },
+      { name: 'write_file', args: { file_path: '/inner.txt', content: '第三版\n' } },
+    ]);
+    expect(results.map((result) => (result as { isError: boolean }).isError)).toEqual([
+      false,
+      false,
+      false,
+      false,
+    ]);
+    expect(seen[2]).toContain('第二版');
+    expect(await readFile(join(root, 'plain.txt'), 'utf8')).toBe('第三版\n');
+    expect((await lstat(join(root, 'inner.txt'))).isSymbolicLink()).toBe(true);
+  }, 30000);
+
+  it.each([
+    ['edit_file', { file_path: '/inner.txt', old_string: '第一版', new_string: '第二版' }],
+    ['write_file', { file_path: '/inner.txt', content: '第二版\n' }],
+  ])(
+    '沒讀過就 %s 連結：要先讀，本尊不動',
+    async (name, args) => {
+      const { results } = await run([{ name, args }]);
+      expect(results).toEqual([
+        {
+          callId: expect.any(String),
+          isError: true,
+          error: { name: 'FsError', code: 'FS_NOT_OBSERVED' },
+        },
+      ]);
+      expect(await readFile(join(root, 'plain.txt'), 'utf8')).toBe('第一版\n');
+      expect((await lstat(join(root, 'inner.txt'))).isSymbolicLink()).toBe(true);
+    },
+    30000,
+  );
 });

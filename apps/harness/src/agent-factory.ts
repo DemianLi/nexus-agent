@@ -869,6 +869,18 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             ...options.toolResultStash,
             ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
           });
+    // 檔案政策固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
+    const sharedBackend =
+      options.sharedWorkspace === undefined
+        ? undefined
+        : new ContainedFilesystemBackend({
+            rootDir: options.sharedWorkspace.rootDir,
+            mode: 'read-only',
+            // 共用區就是部署方的 `--workspace`，別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗，理由同工作區那格（#1704、#2158）。
+            tolerateUnreadable: true,
+            routePrefix: SHARED_WORKSPACE_PREFIX,
+            ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
+          });
     const params = foldRegistry(registry, {
       // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
       events: registry.dispatch,
@@ -890,16 +902,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           options.attachments === undefined
             ? undefined
             : await options.attachments.readOnlyRoute(attachmentScope, options.toolMode),
-          options.sharedWorkspace === undefined
-            ? undefined
-            : // 檔案政策固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
-              new ContainedFilesystemBackend({
-                rootDir: options.sharedWorkspace.rootDir,
-                mode: 'read-only',
-                // 共用區就是部署方的 `--workspace`，別人的 0600 檔、0700 目錄讀不到不讓整次搜尋失敗，理由同工作區那格（#1704、#2158）。
-                tolerateUnreadable: true,
-                ...(options.toolMode !== undefined && { toolMode: options.toolMode }),
-              }),
+          sharedBackend,
         ),
       ),
       ...(options.spillPolicy !== undefined &&
@@ -941,6 +944,12 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(options.modelSelection !== undefined && { modelSelection: options.modelSelection }),
       ...(options.modelLimits !== undefined && { modelLimits: options.modelLimits }),
     });
+    // `permissions` 規則也比經符號連結解開之後的位置（#2260）：規則 fold 完才有。子代理自己加的規則不在這份裡。
+    for (const contained of [options.backend, sharedBackend]) {
+      if (contained instanceof ContainedFilesystemBackend) {
+        contained.usePermissions(params.permissions ?? []);
+      }
+    }
 
     // **推導出來的型別沒有塌**：`assembleAgent` 回 `createAgent` 的型別，`invoke()` 的 `messages` 仍然是
     // `BaseMessage[]` 而不是 `any`，所以 {@link NexusAgentHandle} 那個別名照樣成立——這件事驗過，
