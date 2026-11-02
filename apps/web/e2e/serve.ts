@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url';
  *
  * - **子行程，不 import harness**：`@nexus/harness` 依賴 `@nexus/web`，反過來就成環；同行程起 serve 也要搬 harness 那一整套
  *   測試設定（模組解析、工具子行程與檔案鎖的 mock）。
- * - **腳本走 `--patch`**：`insert` 一列 `#settings/scripted-model`，再把 `agent-default-model` 指過去，跟 harness
- *   `scripted-serve.ts` 的 `scriptedPatchText` 同一個約定（照上一條不 import 它）。腳本欄位見
+ * - **腳本走 `--patch`**：`insert` 一列 `#settings/scripted-model`，再把 `agent-default-model` 指過去，跟
+ *   `apps/harness/src/scripted-serve.ts` 的 `scriptedPatchText` 同一個約定（照上一條不 import 它）。腳本欄位見
  *   `apps/harness/src/settings/scripted-model.ts` 檔頭。
  * - **零憑證**：子行程的環境只有 `PATH` 與暫存的 `HOME`、`NEXUS_AGENT_HOME`，不繼承呼叫端的環境；cwd 與 home 都是暫存目錄，
  *   讀不到任何 `.env`，key 進不來。模型是行程內的腳本，不打模型端點。
@@ -30,7 +30,7 @@ const AUTHENTICATED_URL = /http:\/\/127\.0\.0\.1:\d+\/\?token=\S+/;
  * 起動日誌裡有這行就拋，紅在起服務這一步，不是後面等不到回覆的逾時。
  */
 const SKIPPED_PATCH = /patch：找不到[^\n]*/;
-/** 起動日誌裡說用哪顆模型的那一行。 */
+/** 起動日誌裡說用哪顆模型的那一行。沒帶 `--live` 時一律是假模型，所以它只擋得住誤帶 `--live`；patch 的 id 對不上由 `SKIPPED_PATCH` 擋。 */
 const MODEL_LINE = /模型：(\S+)/;
 const SCRIPTED_MODEL = '假模型（ScriptedChatModel）';
 
@@ -69,7 +69,7 @@ function exited(child: ChildProcess): Promise<void> {
  * 起一台 serve，模型是這份腳本。腳本每條 thread 從第一輪開始吃。
  *
  * @param turns - 腳本。
- * @returns 登入網址與收尾函式。起不來（逾時或先結束）就拋，錯誤訊息帶起動日誌。
+ * @returns 登入網址與收尾函式。起不來（逾時或先結束）、patch 有列沒套上、或模型不是腳本就拋，錯誤訊息帶起動日誌。
  */
 export async function startE2eServe(turns: readonly ScriptTurn[]): Promise<E2eServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-web-e2e-'));
