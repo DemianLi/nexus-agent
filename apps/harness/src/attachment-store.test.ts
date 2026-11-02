@@ -682,6 +682,94 @@ describe('送模型的那一份（#2033）', () => {
     await expect(store.readRequestImage(legacy)).rejects.toBeInstanceOf(AttachmentError);
   });
 
+  /**
+   * 檔頭完好、像素解不開的 PNG：雜湊與檔頭都對得上參照，`readImage` 照樣讀得回，只有做送模型那一份時才失敗。
+   * 簽章加 IHDR（33 位元組）之後接一段不是 IDAT 的垃圾。
+   */
+  async function undecodablePng() {
+    const whole = await sharp({
+      create: { width: 40, height: 30, channels: 3, background: '#a26' },
+    })
+      .png()
+      .toBuffer();
+    return legacyImage(
+      Buffer.concat([whole.subarray(0, 33), Buffer.from('not image data at all')]),
+      'image/png',
+      40,
+      30,
+    );
+  }
+
+  describe('做不出送模型的那一份（#2071）', () => {
+    it('拋 ATTACHMENT_REQUEST_IMAGE_FAILED，cause 帶原錯；落盤那一份照樣讀得回', async () => {
+      const broken = await undecodablePng();
+      await expect(store.readImage(broken)).resolves.toBeInstanceOf(Uint8Array);
+      const error: unknown = await store
+        .readRequestImage(broken)
+        .catch((thrown: unknown) => thrown);
+      expect(error).toBeInstanceOf(AttachmentError);
+      expect((error as AttachmentError).code).toBe('ATTACHMENT_REQUEST_IMAGE_FAILED');
+      expect((error as AttachmentError).cause).toMatchObject({
+        code: 'ATTACHMENT_STORE_FAILED',
+        message: expect.stringContaining('解不開') as unknown,
+      });
+    });
+
+    it('同一張連要三次：每次都重新轉碼、都拋，伺服器日誌只記第一次', async () => {
+      const warnings: string[] = [];
+      const warned = new AttachmentStore(attachmentsRootOf(home), {
+        warn: (line) => warnings.push(line),
+      });
+      const transforms = countTransforms(warned);
+      const broken = await undecodablePng();
+      for (let round = 0; round < 3; round += 1) {
+        await expect(warned.readRequestImage(broken)).rejects.toMatchObject({
+          code: 'ATTACHMENT_REQUEST_IMAGE_FAILED',
+        });
+      }
+      expect(transforms()).toBe(3);
+      expect(warnings).toEqual([
+        expect.stringContaining(`送模型的圖做不出來（${broken.attachmentId}）`) as unknown,
+      ]);
+    });
+
+    it('兩張不同的圖各記一行', async () => {
+      const warnings: string[] = [];
+      const warned = new AttachmentStore(attachmentsRootOf(home), {
+        warn: (line) => warnings.push(line),
+      });
+      const first = await undecodablePng();
+      const whole = await sharp({
+        create: { width: 20, height: 10, channels: 3, background: '#26a' },
+      })
+        .png()
+        .toBuffer();
+      const second = await legacyImage(
+        Buffer.concat([whole.subarray(0, 33), Buffer.from('also broken')]),
+        'image/png',
+        20,
+        10,
+      );
+      await warned.readRequestImage(first).catch(() => undefined);
+      await warned.readRequestImage(second).catch(() => undefined);
+      expect(warnings).toHaveLength(2);
+    });
+
+    it('落盤那一份不見了：不是這個碼，也不記警告', async () => {
+      const warnings: string[] = [];
+      const warned = new AttachmentStore(attachmentsRootOf(home), {
+        warn: (line) => warnings.push(line),
+      });
+      const broken = await undecodablePng();
+      const digest = broken.attachmentId.slice('sha256:'.length);
+      await rm(join(warned.rootDir, 'file-objects', digest.slice(0, 2), digest), { force: true });
+      await expect(warned.readRequestImage(broken)).rejects.toMatchObject({
+        code: 'ATTACHMENT_STORE_FAILED',
+      });
+      expect(warnings).toEqual([]);
+    });
+  });
+
   it('快取寫不進去：這一次照樣回那一份，伺服器日誌講一次', async () => {
     const warnings: string[] = [];
     const warned = new AttachmentStore(attachmentsRootOf(home), {
