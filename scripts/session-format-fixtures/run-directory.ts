@@ -1,7 +1,7 @@
 /**
  * 產生器讀 run 目錄的那幾支（[#1857](https://github.com/DemianLi/nexus-agent/issues/1857)）：哪幾份會話、凍哪幾個檔、
  * 事件與 header 怎麼讀。檔名照 `@nexus/core` 的 `session-filename.ts`，不自己拼（#1872）。兩種佈局都認：各 tag 與混版前半
- * （`MIXED_FIRST.rev`）的 CLI 寫的是**舊兩檔**；今天的工作樹寫的是**每會話目錄的世代檔**（#1594 ③），`mixed-v44-v49` 的後半
+ * （`MIXED_FIRST.rev`）的 CLI 寫的是**舊兩檔**；格式 52 起寫的是**每會話目錄的世代檔**（#1594 ③），`mixed-v44-v49` 的後半
  * （`--resume` 續寫）就是這一種：續接把舊兩檔遷成世代檔，舊路徑的 header 換成墓碑，舊日誌原樣留著。同一個 id 兩種都在時，
  * 讀世代檔（同後端的挑法，墓碑不算一份會話）。
  *
