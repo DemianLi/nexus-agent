@@ -306,6 +306,7 @@ export {
   summaryImageText,
   textOnlyImageText,
   unavailableImageText,
+  unconvertibleImageText,
 } from './attachment-projection.js';
 export type {
   AttachmentRef,

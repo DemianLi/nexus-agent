@@ -9,7 +9,7 @@
  *
  * **送出的每張圖前面有一行把手**（{@link requestImageHandleText}，[#1566](https://github.com/DemianLi/nexus-agent/issues/1566)）：照 dsh 的
  * pi-ai 轉接（`packages/llm/llm-pi-ai/src/context.ts:79-89`，`687f282e`），每個 `image` 區塊先推一段文字、再推圖，模型才叫得出
- * 「哪一張」。只有真的送圖的那一支有；三種佔位字本身就是文字，不另加。把手是整句，包括 `It may be resized or re-encoded…` 那半句。
+ * 「哪一張」。只有真的送圖的那一支有；佔位字本身就是文字，不另加。把手是整句，包括 `It may be resized or re-encoded…` 那半句。
  * 兩件事跟著儲存走：
  *
  * 1. **把手不帶路徑。** 圖不建檔名的硬連結、不在模型讀附件的路由底下（`apps/harness/src/attachment-store.ts` 的 `saveImages`），
@@ -105,6 +105,16 @@ export function unavailableImageText(ref: ImageAttachmentRef): string {
   const digest = ref.attachmentId.slice('sha256:'.length, 'sha256:'.length + 8);
   const name = ref.name === undefined ? '' : ` ${JSON.stringify(ref.name)}`;
   return `[image${name} (sha256:${digest}) is no longer available in attachment storage; ask the user to attach it again if needed. Do not claim to have seen it.]`;
+}
+
+/**
+ * 落盤那一份讀得到、做不出送模型那一份時（解不開，或轉不出合格的輸出）的佔位字（[#2071](https://github.com/DemianLi/nexus-agent/issues/2071)）：
+ * 請使用者換成常見格式重新附上，不要聲稱看過。跟 {@link unavailableImageText} 分開，模型才不會說成圖不見了。
+ */
+export function unconvertibleImageText(ref: ImageAttachmentRef): string {
+  const digest = ref.attachmentId.slice('sha256:'.length, 'sha256:'.length + 8);
+  const name = ref.name === undefined ? '' : ` ${JSON.stringify(ref.name)}`;
+  return `[image${name} (sha256:${digest}) is stored, but could not be converted into a format that can be sent to the model; ask the user to attach it again in a common format (PNG or JPEG) if needed. Do not claim to have seen it.]`;
 }
 
 /**
