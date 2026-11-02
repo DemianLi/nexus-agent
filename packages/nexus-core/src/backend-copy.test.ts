@@ -258,5 +258,42 @@ describe('copyFileOf 穿過組好的三層', () => {
       ).rejects.toThrow('disk full');
       expect(closeErrorsOf(seen)).toEqual(['EBADF']);
     });
+
+    it('onCloseError 自己同步拋錯：那個錯取代結果往外拋（文件寫明的例外）', async () => {
+      const backend = failing(async (path, source) => {
+        await buffer(source.stream);
+        return { path };
+      });
+
+      await expect(
+        copyFileOf(backend, '/a.txt', '/b.txt', () => {
+          throw new Error('log down');
+        }),
+      ).rejects.toThrow('log down');
+    });
+
+    it('close 同步拋錯（不回 Promise）：一樣交給 onCloseError，回目的地的結果', async () => {
+      const seen: unknown[] = [];
+      const backend = {
+        async [COPY_SOURCE]() {
+          return {
+            stream: Readable.from([BYTES]),
+            size: BYTES.length,
+            close: (): Promise<void> => {
+              throw new Error('EBADF');
+            },
+          };
+        },
+        async [COPY_INTO](path: string, source: CopySource) {
+          await buffer(source.stream);
+          return { path };
+        },
+      };
+
+      expect(await copyFileOf(backend, '/a.txt', '/b.txt', (error) => seen.push(error))).toEqual({
+        path: '/b.txt',
+      });
+      expect(closeErrorsOf(seen)).toEqual(['EBADF']);
+    });
   });
 });
