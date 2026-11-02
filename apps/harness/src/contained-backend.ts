@@ -542,7 +542,7 @@ export interface CopySource {
   readonly stream: Readable;
   /** 開檔當下的大小；讀到的位元組數跟它不一樣就是來源在複製途中變了。 */
   readonly size: number;
-  /** 關掉來源；目的地沒讀它就被擋下時也要叫。 */
+  /** 關掉來源；目的地沒讀它就被擋下時也要叫。不拋。 */
   close(): Promise<void>;
 }
 
@@ -945,7 +945,13 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       return {
         stream: handle.createReadStream({ start: 0, autoClose: false }),
         size,
-        close: () => handle.close(),
+        // 不拋：core 的 `copyFileOf` 在 `finally` 裡叫它，拋了會蓋掉目的地那一半的結果。唯讀的 handle 關不掉只留一行給伺服器日誌。
+        close: () =>
+          handle.close().catch((error: unknown) => {
+            process.stderr.write(
+              `copy_file：來源關不掉（${request.from}）：${error instanceof Error ? error.message : String(error)}\n`,
+            );
+          }),
       };
     } catch (error: unknown) {
       noteErrno(error, true);

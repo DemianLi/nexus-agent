@@ -6,6 +6,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { closeSync } from 'node:fs';
 import {
   appendFile,
   mkdir,
@@ -18,7 +19,7 @@ import {
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -252,5 +253,25 @@ describe('ContainedFilesystemBackend.copy：permissions 規則比模型給的路
     const result = await copyWithin(ruled(), '/a.txt', '/secret/new.txt');
     expect(result).toEqual({ error: 'permission denied for write on /secret/new.txt' });
     await expect(readFile(join(root, 'secret', 'new.txt'))).rejects.toThrow();
+  });
+});
+
+describe('ContainedFilesystemBackend.openCopySource：close', () => {
+  it('關不掉時不拋，只寫一行到標準錯誤', async () => {
+    await writeFile(join(root, 'a.txt'), 'x');
+    const backend = new ContainedFilesystemBackend({ rootDir: root });
+    const source = await backend.openCopySource('/a.txt', { from: '/a.txt', to: '/b.txt' });
+    if ('error' in source) throw new Error(source.error);
+    // 從底下把 fd 關掉，`FileHandle.close()` 就會拒絕（EBADF）。
+    closeSync((source.stream as unknown as { fd: number }).fd);
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    try {
+      await expect(source.close()).resolves.toBeUndefined();
+      expect(String(stderr.mock.calls[0]?.[0])).toMatch(
+        /^copy_file：來源關不掉（\/a\.txt）：.*EBADF/u,
+      );
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });
