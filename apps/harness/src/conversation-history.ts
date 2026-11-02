@@ -1337,7 +1337,7 @@ function settledEvents(events: readonly SessionEvent[]): readonly SessionEvent[]
  * @param events - 這條 thread 的 root 日誌，全部。
  */
 export function isLegacyLog(events: readonly SessionEvent[]): boolean {
-  const replay = replayConversation(settledEvents(events));
+  const replay = replayConversation(settledEvents(events), { readOnly: true });
   return replay.kind === 'unreplayable' && LEGACY_REASONS.has(replay.reason);
 }
 
