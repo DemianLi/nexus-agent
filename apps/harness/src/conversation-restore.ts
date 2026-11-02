@@ -256,8 +256,8 @@ function depthBounded(event: SessionEvent): boolean {
  * @returns 推的結果，給入口披露用。
  * @throws `updateState` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
  *   [#1658](https://github.com/DemianLi/nexus-agent/issues/1658)）時換成一顆帶 `seq` 的：最深的那一則出自日誌哪一顆事件。
- *   那一則不截斷、不改寫，要人看過再決定怎麼辦：上限之前寫下的舊日誌、剛好貼著上限又帶 `lc` 鍵（跳脫多一層）、
- *   或舊格式 `additional_kwargs.tool_calls` 解析出來太深的，都會走到這裡。
+ *   那一則不截斷、不改寫，要人看過再決定怎麼辦：上限之前寫下的舊日誌、舊格式 `additional_kwargs.tool_calls`
+ *   解析出來太深的、或 `turn/start` 附件參照帶了多出來的深鍵的，都會走到這裡。
  */
 export async function restoreConversation(
   agent: RestorableAgent,

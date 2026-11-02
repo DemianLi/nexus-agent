@@ -42,8 +42,9 @@
  * 整串序列化的話，大日誌送第一句就把行程撐死，而這顆 saver 不耐久，序列化換不到什麼。
  * 所以存檔點的 `messages` 不進 `MemorySaver`，換成記號，活物件留在側表（pending writes 裡的訊息照舊序列化）：
  *
- * - **活物件要防就地改**：新進的訊息量過層數就深凍結，已凍結的跳過，全串只多一次 `isFrozen` 掃描。層數上限與寫進存檔點時
- *   相同（{@link CHECKPOINT_MESSAGE_WRAPPER_DEPTH}），日誌收得下的照樣收得下。
+ * - **活物件要防就地改**：新進的訊息量過層數就深凍結，已凍結的跳過，全串只多一次 `isFrozen` 掃描。層數照寫進存檔點的形狀算
+ *   （加回 {@link CHECKPOINT_MESSAGE_WRAPPER_DEPTH} 層），上限是同一個 {@link CHECKPOINT_MAX_DEPTH}；哪些訊息保證收得下、哪些是例外，
+ *   見 `checkpoint-serde.ts`〈存檔點裡的 `messages` 不走這顆〉。
  * - **工具派工也帶整份 state**：`ReactAgent` 用 `Send` 派工具，`args` 是整份 state，進 `__pregel_tasks`，
  *   中斷或出錯時跟著存檔點落下來。不換的話工具步驟照樣序列化整串，大到超過 V8 字串上限。所以帶 `messages` 的
  *   `args` 也整份進側表。
