@@ -78,7 +78,7 @@ const OWNERS_CAP = 2000;
 
 /**
  * 歸屬表每塊最多幾筆。相鄰兩塊裝得下就併，所以任兩塊相鄰的筆數和都超過這個數，塊數不超過
- * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一批複製一次塊清單；刪到、併到的塊每次另拷；往最後一塊追加的寫進
+ * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一批複製一次塊清單與筆數清單；刪到、併到的塊每次另拷；往最後一塊追加的寫進
  * 這一批自己拷出來的那份，不每筆再拷。成本跟著塊數與這個數走，不跟著整張表的筆數。
  */
 const OWNERS_CHUNK = 32;
@@ -145,7 +145,7 @@ type TurnState = Omit<
 
 /**
  * callId → 呼叫的歸屬表，由舊到新分塊，每個 id 只在一塊裡，所以接起來就是一張照新舊排的表。
- * 塊一旦隨表交出就不再改：要動的那幾塊換成新的，其餘在前後兩份狀態之間共用。
+ * 塊與 `sizes` 一旦隨表交出就不再改：要動的那幾塊換成新的，其餘的塊在前後兩份狀態之間共用。
  */
 interface OwnerTable {
   readonly chunks: readonly Readonly<Record<string, number | null>>[];
@@ -466,7 +466,7 @@ function ownerChunk(
   return chunk;
 }
 
-/** 工具表：`key` 在哪一塊，新的塊先找；沒有回 -1。值只有數字與 `null`，所以 `undefined` 就是沒有這個鍵。 */
+/** 工具表：`key` 在哪一塊，新的塊先找；沒有回 -1。塊沒有原型（{@link ownerChunk}），值只有數字與 `null`，所以讀到 `undefined` 就是沒有這個鍵。 */
 function ownerChunkAt(chunks: OwnerTable['chunks'], key: string): number {
   for (let at = chunks.length - 1; at >= 0; at -= 1) {
     if (chunks[at]![key] !== undefined) return at;
@@ -498,7 +498,7 @@ function mergeOwnerChunks(draft: OwnerDraft, at: number): void {
   draft.sizes.splice(at, 2, merged);
 }
 
-/** 工具表：第 `at` 塊換成拿掉 `keys` 之後的副本，空了就連塊拿掉，再跟前後的塊併。 */
+/** 工具表：第 `at` 塊換成拿掉 `keys` 之後的副本，空了就連塊拿掉，再跟前後的塊併。`keys` 必須都在這一塊、不重複：筆數照 `keys.length` 扣。 */
 function dropOwnerKeys(draft: OwnerDraft, at: number, keys: readonly string[]): void {
   const next = ownerChunk(draft.chunks[at]!);
   for (const key of keys) delete next[key];

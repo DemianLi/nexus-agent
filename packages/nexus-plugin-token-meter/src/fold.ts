@@ -185,7 +185,7 @@ const ZERO_NUMBERS = Object.freeze(
 );
 const EMPTY: Sp = Object.freeze({ n: ZERO_NUMBERS, tools: [], models: [] });
 
-/** 段的數字各加上 `delta`。只走 `delta` 帶的鍵：多數呼叫只動兩三格，不必每次掃完 {@link NUMBERS}。 */
+/** 段的數字各加上 `delta`。只走 `delta` 帶的鍵，成本跟著 `delta` 的格數、不跟著 {@link NUMBERS} 的長度；不在 {@link NUMBERS} 裡的鍵略過。 */
 function bump(sp: Sp, delta: Partial<Record<NumberKey, number>>): Sp {
   const n: Record<NumberKey, number> = { ...sp.n };
   for (const key in delta) {
