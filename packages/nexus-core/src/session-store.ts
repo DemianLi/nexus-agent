@@ -952,7 +952,10 @@ export interface ResumedStoredSession {
   readonly header: StoredSessionHeader;
   /** 磁碟上那份 header 寫的格式版本，**是寫它的那一版，不是這一版**。同 {@link ReadonlyStoredSession.storedFormatVersion}。 */
   readonly storedFormatVersion: number;
-  /** 讀回來的事件，照 `seq` 排、從 0 連續。拿去當 `SessionLog` 的 seed。 */
+  /**
+   * 讀回來的事件，照 `seq` 排、從 0 連續。拿去當 `SessionLog` 的 seed；後端交 {@link shareStoredEvents} 過的陣列時，
+   * 日誌不逐顆拷。
+   */
   readonly events: readonly SessionEvent[];
   /** 接著寫的把手。它的 next-seq 就是 `events.length`。 */
   readonly stored: StoredSession;

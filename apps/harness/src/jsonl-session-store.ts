@@ -164,6 +164,7 @@ import {
   SessionHandleClosedError,
   SessionNotFoundError,
   sessionDirectoryName,
+  shareStoredEvents,
   snapshotJsonValue,
 } from '@nexus/core';
 import type {
@@ -349,7 +350,7 @@ interface ColdLog {
   readonly revision: string;
   readonly header: StoredSessionHeader;
   readonly storedFormatVersion: number;
-  /** 深凍結過、讀方共用的那一份（照 dsh `freezeStoredEvents`，`index.ts:153-180`）。 */
+  /** 深凍結過、讀方共用的那一份（{@link shareStoredEvents}）。 */
   readonly events: readonly SessionEvent[];
   /** 本文在檔裡從哪個位元組起算：舊兩檔是 0，單檔佈局是 header 行（含換行）的長度。 */
   readonly bodyOffset: number;
@@ -405,18 +406,6 @@ class ColdLogMemo {
   delete(id: string): void {
     this.#entries.delete(id);
   }
-}
-
-/** 深凍結一批解析出來的事件，照 dsh `freezeStoredEvent`（`index.ts:153-173`）：迭代、不遞迴（深物件不撞堆疊）。 */
-function freezeStoredEvents(events: SessionEvent[]): readonly SessionEvent[] {
-  const pending: object[] = [...events];
-  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    Object.freeze(current);
-    for (const child of Object.values(current)) {
-      if (child !== null && typeof child === 'object') pending.push(child as object);
-    }
-  }
-  return Object.freeze(events);
 }
 
 /** 拿租約；拿不到的平台講一聲、回 `undefined`。搶不到與其餘的錯照常拋。 */
@@ -2350,7 +2339,7 @@ async function openStoredSessionForRead(
         });
         if (options.salvage === true) return events;
         validateStoredLog(id, header, events);
-        const frozen = freezeStoredEvents(events);
+        const frozen = shareStoredEvents(events);
         coldLogs.set(id, {
           revision: composeRevision(site, headerRevision, identity),
           header,
@@ -2516,7 +2505,7 @@ async function resumeSite(
     return {
       header: migrated.header,
       storedFormatVersion: migrated.storedFormatVersion,
-      events: migrated.events,
+      events: shareStoredEvents(migrated.events),
       stored: new JsonlStoredSession(directory, migrated.header, context, {
         nextSeq: migrated.events.length,
         lease,
@@ -2546,7 +2535,7 @@ async function resumeSite(
     read = {
       header,
       storedFormatVersion,
-      events,
+      events: shareStoredEvents(events),
       bodyOffset,
       validBytes,
       bodyBytes: body.byteLength,

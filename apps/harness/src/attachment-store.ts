@@ -231,11 +231,13 @@ export class AttachmentStore {
   readonly #requestImagesRoot: string;
   /** 正在做的請求圖，以 {@link requestImageVariantId} 為鍵：同一份同時只轉一次。 */
   readonly #requestInflight = new Map<string, Promise<RequestImage>>();
+  /** 做不出送模型那一份、已經記過警告的 variantId。serve 一個行程一個 store，所以是每個行程記一次。 */
+  readonly #requestFailuresWarned = new Set<string>();
   #prepared: Promise<void> | undefined;
 
   /**
    * @param rootDir - 絕對路徑，通常是 {@link attachmentsRootOf}。
-   * @param options.warn - 伺服器日誌（home 以上的祖先開不了時講一次、送模型的圖寫不進快取時）；省略即標準錯誤。
+   * @param options.warn - 伺服器日誌（home 以上的祖先開不了時講一次、送模型的圖寫不進快取時、做不出送模型的那一份時（同一份每個 store 只講一次））；省略即標準錯誤。
    * @param options.imageCompressionConcurrency - 同時轉碼的圖數上限（收圖的規範化與送模型那一份共用），1 到 {@link MAX_IMAGE_COMPRESSION_CONCURRENCY}
    *   的整數；省略是 {@link DEFAULT_IMAGE_COMPRESSION_CONCURRENCY}。
    * @throws {Error} 併發上限不在範圍內。
@@ -494,8 +496,10 @@ export class AttachmentStore {
   /**
    * 送模型的那一份（`request-image.ts`）：先照 {@link readImage} 讀落盤那一份並驗過，再找快取；沒有就在限流內做出來、寫進快取。
    * 同一份同時只轉一次。快取每次寫不進去都在伺服器日誌記一行，這一輪照樣送；一直寫不進去就每一輪都重新轉碼。
+   * 做不出來時同一份只記一行警告，之後每一輪照樣重試轉碼、照樣拋。
    *
-   * @throws {AttachmentError} 落盤那一份讀不到或對不上（同 {@link readImage}），或做不出合格的那一份。
+   * @throws {AttachmentError} 落盤那一份讀不到或對不上（同 {@link readImage}）；做不出合格的那一份是
+   *   `ATTACHMENT_REQUEST_IMAGE_FAILED`，`cause` 帶原錯。
    */
   async readRequestImage(ref: ImageAttachmentRef): Promise<RequestImage> {
     const source = await this.readImage(ref);
@@ -510,6 +514,9 @@ export class AttachmentStore {
     if (pending === undefined) {
       pending = this.#compression
         .run(() => createRequestImage(source, REQUEST_IMAGE_POLICY))
+        .catch((error: unknown) => {
+          throw this.#requestImageFailed(ref, variantId, error);
+        })
         .then(async (image) => {
           try {
             await writeCachedRequestImage(this.#requestImagesRoot, variantId, image.data);
@@ -524,6 +531,29 @@ export class AttachmentStore {
       this.#requestInflight.set(variantId, pending);
     }
     return pending;
+  }
+
+  /**
+   * 做不出送模型那一份的錯包成 `ATTACHMENT_REQUEST_IMAGE_FAILED`；同一個 variantId 只在第一次記警告。
+   *
+   * @param ref - 那張圖。
+   * @param variantId - 送模型那一份的 id。
+   * @param error - 原錯。
+   * @returns 要拋的錯。
+   */
+  #requestImageFailed(ref: ImageAttachmentRef, variantId: string, error: unknown): AttachmentError {
+    const reason = error instanceof Error ? error.message : String(error);
+    if (!this.#requestFailuresWarned.has(variantId)) {
+      this.#requestFailuresWarned.add(variantId);
+      this.#warn(`送模型的圖做不出來（${ref.attachmentId}），這張圖換成佔位字：${reason}`);
+    }
+    return new AttachmentError(
+      `做不出送模型的那一份：${reason}`,
+      'ATTACHMENT_REQUEST_IMAGE_FAILED',
+      {
+        cause: error,
+      },
+    );
   }
 
   /** 這份檔案的存放路徑現在讀不讀得到（儲存被清掉、被搬走時是 `false`）。參照不合格式也是 `false`。 */

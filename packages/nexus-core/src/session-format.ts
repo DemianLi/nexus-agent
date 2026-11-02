@@ -180,7 +180,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 33,
     kind: 'additive',
     ref: '#721',
-    readerBranch: 'apps/harness/src/conversation-history.ts:1177',
+    readerBranch: 'apps/harness/src/conversation-history.ts:1178',
   },
   {
     from: 33,
@@ -223,7 +223,7 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     to: 52,
     kind: 'additive',
     ref: '#2132',
-    readerBranch: 'apps/harness/src/jsonl-session-store.ts:1912',
+    readerBranch: 'apps/harness/src/jsonl-session-store.ts:1901',
   },
 ];
 

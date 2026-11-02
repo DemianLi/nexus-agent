@@ -306,6 +306,7 @@ export {
   summaryImageText,
   textOnlyImageText,
   unavailableImageText,
+  unconvertibleImageText,
 } from './attachment-projection.js';
 export type {
   AttachmentRef,
@@ -815,6 +816,7 @@ export {
   SessionLog,
   SessionLogOffset,
   SessionSeq,
+  shareStoredEvents,
   snapshotJsonValue,
   validateSessionEventData,
 } from './session-log.js';
