@@ -8,7 +8,9 @@
 
 import { AIMessage } from '@langchain/core/messages';
 import { describe, expect, it, vi } from 'vitest';
+import { beginAttemptReport, runInModelCall } from './model-call-scope.js';
 import { createModelUsageRecorder, readModelUsage } from './model-usage.js';
+import { INTERRUPTED_REPLY_MARKER, TURN_CANCEL_CONFIG_KEY } from './turn-cancel.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
 
@@ -93,6 +95,109 @@ describe('readModelUsage', () => {
   });
 });
 
+/**
+ * 快取桶（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）：LangChain 的 `input_tokens` 是完整的 prompt，
+ * 快取讀寫在 `input_token_details`；我們記的 `inputTokens` 是扣掉兩桶之後的未快取那一格。
+ */
+describe('readModelUsage：快取桶', () => {
+  it('有快取讀：inputTokens 扣掉它，快取讀單獨記，總量照供應商報的', () => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: 1000,
+          output_tokens: 20,
+          total_tokens: 1020,
+          input_token_details: { cache_read: 900 },
+        }),
+      ),
+    ).toEqual({ inputTokens: 100, outputTokens: 20, totalTokens: 1020, cacheReadTokens: 900 });
+  });
+
+  it('兩桶都報：各自扣掉，加總要對上（total − output ＝ prompt）', () => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: 194,
+          output_tokens: 2,
+          total_tokens: 196,
+          input_token_details: { cache_read: 64, cache_creation: 100 },
+        }),
+      ),
+    ).toEqual({
+      inputTokens: 30,
+      outputTokens: 2,
+      totalTokens: 196,
+      cacheReadTokens: 64,
+      cacheWriteTokens: 100,
+    });
+  });
+
+  it('報了 0 就是 0，不是缺席', () => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: 10,
+          output_tokens: 1,
+          total_tokens: 11,
+          input_token_details: { cache_read: 0 },
+        }),
+      ),
+    ).toEqual({ inputTokens: 10, outputTokens: 1, totalTokens: 11, cacheReadTokens: 0 });
+  });
+
+  it.each([
+    ['沒有 input_token_details', undefined],
+    ['空的 input_token_details', {}],
+    ['LangChain 在 prompt_tokens_details 缺席時建出的 undefined', { cache_read: undefined }],
+    ['兩格都是 undefined', { cache_read: undefined, cache_creation: undefined }],
+    ['null', { cache_read: null }],
+  ])('%s：沒報就沒有 key，inputTokens 仍是整個 prompt', (_label, details) => {
+    const usage = readModelUsage(
+      reply({
+        input_tokens: 500,
+        output_tokens: 5,
+        total_tokens: 505,
+        ...(details === undefined ? {} : { input_token_details: details }),
+      }),
+    );
+    expect(usage).toEqual({ inputTokens: 500, outputTokens: 5, totalTokens: 505 });
+    expect(usage).not.toHaveProperty('cacheReadTokens');
+    expect(usage).not.toHaveProperty('cacheWriteTokens');
+  });
+
+  it.each([
+    ['快取讀比整個 prompt 大', { cache_read: 600 }, 500],
+    ['兩桶加起來比整個 prompt 大', { cache_read: 300, cache_creation: 300 }, 500],
+    ['快取讀是負數', { cache_read: -1 }, 500],
+    ['快取讀是小數', { cache_read: 1.5 }, 500],
+    ['快取讀是字串', { cache_read: '10' }, 500],
+  ])('%s：自相矛盾就整筆不要', (_label, details, input) => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: input,
+          output_tokens: 5,
+          total_tokens: input + 5,
+          input_token_details: details,
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('兩桶都報但總量對不上 prompt：整筆不要', () => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: 194,
+          output_tokens: 2,
+          total_tokens: 300,
+          input_token_details: { cache_read: 64, cache_creation: 100 },
+        }),
+      ),
+    ).toBeUndefined();
+  });
+});
+
 describe('這顆 middleware 記得進去的時候', () => {
   it('報了就記一筆，數字原樣', async () => {
     const log = new SessionLog('s');
@@ -129,13 +234,13 @@ describe('這顆 middleware 記得進去的時候', () => {
 });
 
 /**
- * **這顆 middleware 坐在 request path 上，所以它一條都不准拋。**
+ * 找不到日誌（非 `ok`）不記、不拋：把非 `ok` 改成拋，紅的就是這裡。它們在真流量上不是理論——`not-attached` 是**常態**
+ * （絕大多數組裝點沒有 `attachSession`），`ambiguous` 在 `serve.ts` 一次組裝配多條 thread 時是真的。
  *
- * 這一組是絆索：拿掉 `model-usage.ts` 裡那個 try/catch、或把非 `ok` 改成拋，紅的就是
- * 這裡。而它們在真流量上不是理論——`not-attached` 是**常態**（絕大多數組裝點沒有
- * `attachSession`），`ambiguous` 在 `serve.ts` 一次組裝配多條 thread 時是真的。
+ * 找到了日誌、`append` 卻拋：這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)，照 dsh
+ * `packages/core/agent-loop/src/agent.ts:537-546` 的 usage 寫入沒有 catch）。
  */
-describe('寫不進去的時候，它不准扳倒模型呼叫', () => {
+describe('寫不進去的時候', () => {
   it.each([
     ['沒接上會話註冊表', { kind: 'not-attached' } as const],
     ['認不出這次呼叫', { kind: 'unknown-caller' } as const],
@@ -146,10 +251,11 @@ describe('寫不進去的時候，它不准扳倒模型呼叫', () => {
     ).resolves.toBeInstanceOf(AIMessage);
   });
 
-  it('append 自己拋也吃掉——不然一次寫日誌失敗就是一次模型呼叫死掉', async () => {
+  it('append 自己拋：這次呼叫失敗，append 的錯原樣往外拋（#1702）', async () => {
     const log = new SessionLog('s');
+    const broken = new Error('日誌拒收');
     const append = vi.spyOn(log, 'append').mockImplementation(() => {
-      throw new Error('日誌拒收');
+      throw broken;
     });
     await expect(
       record(
@@ -160,11 +266,11 @@ describe('寫不進去的時候，它不准扳倒模型呼叫', () => {
           log,
         },
       ),
-    ).resolves.toBeInstanceOf(AIMessage);
+    ).rejects.toBe(broken);
     expect(append).toHaveBeenCalledOnce();
   });
 
-  it('模型自己拋的照樣往外拋——被吃掉的只有記錄這一步', async () => {
+  it('模型自己拋的照樣往外拋', async () => {
     const middleware = createModelUsageRecorder({
       forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log: new SessionLog('s') }),
     });
@@ -192,5 +298,155 @@ describe('身分從執行期的 configurable 推', () => {
     const middleware = createModelUsageRecorder({ forCall });
     await hookOf(middleware)({ runtime: { configurable: {} } }, () => reply());
     expect(forCall).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **沒有正常回來的呼叫也要進帳**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
+ *
+ * adapter 在請求開跑時拿回報函式、串流裡看到用量就回報；記錄器在呼叫拋錯（或子代理被中止回合成收尾）時讀它。
+ * 這一組量的是規則：什麼時候記、記成什麼、「不知道」跟 0 分不分得開。
+ */
+describe('失敗與中止的呼叫', () => {
+  const ok = (log: SessionLog): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log });
+
+  /** 在 `model/start` 為 `modelCall` 的範圍裡跑一次呼叫；`attempt` 是 adapter 這次請求的動作。 */
+  async function run(
+    log: SessionLog,
+    options: {
+      readonly attempt?: (report: ReturnType<typeof beginAttemptReport>) => void;
+      readonly outcome: 'throw' | 'synthetic-stop';
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<unknown> {
+    const middleware = createModelUsageRecorder({ forCall: () => ok(log) });
+    const request = {
+      runtime: {
+        configurable: {
+          checkpoint_ns: 'model_request:x',
+          ...(options.signal === undefined ? {} : { [TURN_CANCEL_CONFIG_KEY]: options.signal }),
+        },
+      },
+    };
+    const call = runInModelCall(log, 7, () =>
+      hookOf(middleware)(request, () => {
+        options.attempt?.(beginAttemptReport());
+        if (options.outcome === 'throw') throw new Error('串流中途斷了');
+        return new AIMessage({
+          content: '',
+          additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true },
+        });
+      }),
+    );
+    return call.catch((error: unknown) => error);
+  }
+
+  const reported = { inputTokens: 100, outputTokens: 40, totalTokens: 140 };
+
+  it('拋錯、已報用量：記一筆帶 outcome 的 model/usage，歸給那次呼叫，數字原樣', async () => {
+    const log = new SessionLog('s');
+    const error = await run(log, { outcome: 'throw', attempt: (report) => report?.(reported) });
+    expect(error).toBeInstanceOf(Error);
+    expect(log.events.map((event) => event.type)).toEqual(['model/usage']);
+    expect(log.events[0]?.data).toEqual({ ...reported, outcome: 'error', modelCall: 7 });
+  });
+
+  it('中止訊號舉起來了就是 aborted，不看錯誤長什麼樣', async () => {
+    const log = new SessionLog('s');
+    const controller = new AbortController();
+    controller.abort();
+    await run(log, {
+      outcome: 'throw',
+      signal: controller.signal,
+      attempt: (report) => report?.(reported),
+    });
+    expect(log.events[0]?.data).toMatchObject({ outcome: 'aborted' });
+  });
+
+  it('子代理被中止回的是合成的空收尾（不拋）：照樣記成 aborted', async () => {
+    const log = new SessionLog('s');
+    const controller = new AbortController();
+    controller.abort();
+    await run(log, {
+      outcome: 'synthetic-stop',
+      signal: controller.signal,
+      attempt: (report) => report?.(reported),
+    });
+    expect(log.events.map((event) => event.data)).toEqual([
+      { ...reported, outcome: 'aborted', modelCall: 7 },
+    ]);
+  });
+
+  it('供應商沒報用量：一筆都沒有——不是 0', async () => {
+    const log = new SessionLog('s');
+    await run(log, { outcome: 'throw', attempt: () => undefined });
+    expect(log.events).toEqual([]);
+  });
+
+  it('報得自相矛盾也整筆不要，同正常回來的那條', async () => {
+    const log = new SessionLog('s');
+    await run(log, {
+      outcome: 'throw',
+      attempt: (report) => report?.({ inputTokens: 50, outputTokens: 50, totalTokens: 80 }),
+    });
+    expect(log.events).toEqual([]);
+  });
+
+  it('重試的下一次請求換一格新的：上一次的用量不算到這一次頭上', async () => {
+    const log = new SessionLog('s');
+    await run(log, {
+      outcome: 'throw',
+      attempt: (first) => {
+        first?.(reported);
+        beginAttemptReport(); // 第二次請求開跑，什麼都沒報
+      },
+    });
+    expect(log.events).toEqual([]);
+  });
+
+  it('同一次請求報了好幾次：以最後一次為準（累計值在最後一則片段）', async () => {
+    const log = new SessionLog('s');
+    await run(log, {
+      outcome: 'throw',
+      attempt: (report) => {
+        report?.({ inputTokens: 100, outputTokens: 1, totalTokens: 101 });
+        report?.(reported);
+      },
+    });
+    expect(log.events[0]?.data).toMatchObject(reported);
+  });
+
+  it('不在呼叫範圍裡（沒有 model/start）就沒有回報函式，也不記', async () => {
+    expect(beginAttemptReport()).toBeUndefined();
+  });
+
+  it('記不進去不蓋掉模型原本的錯：AggregateError，原錯在前也是 cause（#1702）', async () => {
+    const log = new SessionLog('s');
+    const broken = new Error('日誌拒收');
+    vi.spyOn(log, 'append').mockImplementation(() => {
+      throw broken;
+    });
+    const error = await run(log, { outcome: 'throw', attempt: (report) => report?.(reported) });
+    expect(error).toBeInstanceOf(AggregateError);
+    const [original, appendError] = (error as AggregateError).errors as Error[];
+    expect(original?.message).toBe('串流中途斷了');
+    expect(appendError).toBe(broken);
+    expect((error as AggregateError).cause).toBe(original);
+  });
+
+  it('合成的空收尾（沒有原錯）記不進去：append 的錯原樣往外拋', async () => {
+    const log = new SessionLog('s');
+    const broken = new Error('日誌拒收');
+    vi.spyOn(log, 'append').mockImplementation(() => {
+      throw broken;
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const error = await run(log, {
+      outcome: 'synthetic-stop',
+      signal: controller.signal,
+      attempt: (report) => report?.(reported),
+    });
+    expect(error).toBe(broken);
   });
 });

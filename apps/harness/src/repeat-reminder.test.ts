@@ -17,7 +17,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { REPEAT_REMINDER_MARKER, repeatReminderPlugin } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { transcriptLine } from './cli.js';
@@ -216,7 +216,7 @@ describe('摘要與提醒一起跑', () => {
       // 「摘要發生過之後鏈還在不在」，不是預設門檻的數值。
       summarization: {
         trigger: [{ type: 'messages', value: 10 }],
-        keep: { type: 'messages', value: 4 },
+        retainTokens: 36,
       },
     });
     try {

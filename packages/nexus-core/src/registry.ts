@@ -6,16 +6,19 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加七條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加十條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「送出去之前怎麼洗」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
  * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」，
  * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」，
- * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，六者正交。
+ * {@link ProjectionRegistrationPoint} 回答「web 看得到哪些從日誌折出來的狀態」（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)），
+ * {@link EventRegistrationPoint} 回答「誰在匯流排的哪個事件上掛了監聽者」（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)），
+ * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)），
+ * {@link PluginLogger} 回答「掛上的時候有什麼要跟人講」（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，與上面那十條正交。
  *
- * **第七條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
+ * **第十條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
  * 回答「產生這個 registry 的那份清單說了什麼」，是唯讀視圖而不是註冊點
  * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。它進得了這份清單是因為
  * 它確實是 `PluginRegistry` 的一個欄位，而那個數字有絆索在數（`registry-channel-count.test.ts`）。
@@ -29,22 +32,36 @@ import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
-import type { PreToolListener } from './approval.js';
+import type { ApprovalChannel, ChannelForThread, PreToolListener } from './approval.js';
+import type { ApprovalPolicyController } from './approval-policy.js';
 import { normalizeCommandDefinition } from './commands.js';
+import { EventBus } from './events.js';
+import type {
+  EventDispatcher,
+  EventListenerInfo,
+  EventName,
+  EventOptions,
+  Events,
+} from './events.js';
 import type { CommandDefinition, CommandDescriptor } from './commands.js';
 import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import { duplicateCompanionError } from './invariants.js';
+import { normalizeProjectionUnit } from './projections.js';
+import type { ProjectionUnit } from './projections.js';
 import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
 import type { SessionInstaller } from './sessions.js';
-import { toolCallSessionAddress } from './session-address.js';
+import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
 import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
+import type { LoggedMessage } from './logged-message.js';
+import { appendSubagentCatalog, type SubagentCatalogData } from './subagent-catalog.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
+import type { FsService } from './fs-service.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import type { SummarizationSettings } from './summarization.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
@@ -164,25 +181,42 @@ export interface ToolRegistrationPoint {
   scopes(): string[];
 }
 
+/**
+ * 我們的 subagent 定義：deepagents 的 `SubAgent` 加兩格 dsh 沒有的（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）。
+ *
+ * - **`model` 是字串時是型錄 id**（不是 `initChatModel` 的 `provider:model`）：註冊時對型錄驗證，認不得當場拋錯；每次叫模型前
+ *   由 {@link ./model-selection.ts | createSubagentModelFollowMiddleware} 換成那條路由的實例。給實例（`LanguageModelLike`）則原樣交給基座，不驗證。
+ *   沒給＝沿用父代理**當下**的選擇（#723，照 dsh 子代理沿用父代理當下路由）。
+ * - **`reasoningEffort`**：這個子代理的推理強度（型錄宣告過的等級名）。只給它沒給 `model`＝父代理當下那顆模型，換這個強度。
+ *   dsh 的 `agentOptions` 有 reasoningEffort；**我們另外有** {@link maxTurns}，dsh 沒有。
+ * - **`maxTurns`**：這個子代理一次執行最多叫幾次模型，到了就收尾（`modelCallLimitMiddleware`，`exitBehavior: 'end'`）。dsh 沒有；
+ *   做它是因為 Claude Code 的子代理定義有 `maxTurns`，而沒有上限的子代理打轉時只能靠 root 的遞迴上限兜底。
+ */
+export type NexusSubAgent = SubAgent & {
+  readonly maxTurns?: number;
+  readonly reasoningEffort?: string;
+};
+
 /** `subagents` 註冊點：同名報錯。只有全域一層——deepagents 的 subagent 不巢狀。 */
 export interface SubAgentRegistrationPoint {
   /**
    * 註冊一個 subagent。
    * @param subagent - subagent 定義，名字取自它的 `name`。
    * @returns 只撤銷這一次註冊的冪等 undo。
+   * @throws 定義不合（`maxTurns` 不是正整數、`model` 認不得、`reasoningEffort` 不是那顆模型的等級）：照註冊點的規矩，錯誤指名註冊者。
    */
-  register(subagent: SubAgent): () => void;
+  register(subagent: NexusSubAgent): () => void;
   /**
    * 讀一個 subagent。
    * @param name - subagent 名。
    * @returns 該筆，或不存在時的 `undefined`。
    */
-  get(name: string): NamedEntry<SubAgent> | undefined;
+  get(name: string): NamedEntry<NexusSubAgent> | undefined;
   /**
    * 依註冊順序走訪。
    * @returns 名字與該筆。
    */
-  entries(): IterableIterator<[string, NamedEntry<SubAgent>]>;
+  entries(): IterableIterator<[string, NamedEntry<NexusSubAgent>]>;
 }
 
 /** `capabilities` 註冊點：宣告能力。重複提供冪等、不報錯。 */
@@ -265,9 +299,45 @@ export interface NexusServices {
    * {@link ./summarization.ts | SUMMARIZATION_SERVICE}。
    *
    * **沒人提供不等於「關掉」**——而且這一顆的「關掉」不是「沒有」，是一顆同名空殼
-   * （基座無條件建的那顆要靠同名取代才消得掉）。分野見 {@link DisabledEntryView}。
+   * （基座無條件建的那顆要靠同名取代才消得掉；空殼仍把日誌上記過的剪法換上去，#1567）。分野見 {@link DisabledEntryView}。
    */
   summarization: SummarizationSettings;
+  /**
+   * 這次組裝有沒有人可以回答。名字見 {@link ./approval.ts | CHANNEL_SERVICE}。
+   *
+   * **沒人提供時消費者退到 `{ kind: 'human' }`**（軟相依）：那是給測試與「我知道我在幹嘛」的
+   * 組裝點用的；產品路徑由組裝點明著算一次提供出來。
+   */
+  channel: ApprovalChannel;
+  /**
+   * `channel` 的逐條 thread 版（#1418）。名字見 {@link ./approval.ts | CHANNEL_FOR_THREAD_SERVICE}。**可選**：沒人提供就
+   * 退回 `channel`。消費者在**呼叫當下**問它，不在 `apply` 當下抓，一份 registry 才能服務好幾條 thread。
+   */
+  channelForThread: ChannelForThread;
+  /**
+   * 這個組裝的核准政策控制器（`ask`／`never`，[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。名字見
+   * {@link ./approval-policy.ts | APPROVAL_POLICY_SERVICE}。**組裝點提供**：核准政策的 session 開關歸組裝點，plugin 只能讀與切。
+   *
+   * **沒人提供時消費者當作 `ask`**（手搭的測試組裝）；產品路徑一律提供，閘門讀的是同一顆。
+   */
+  approvalPolicy: ApprovalPolicyController;
+  /**
+   * 工具實際讀寫的那一個 backend（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。名字見
+   * {@link ./fs-service.ts | FS_SERVICE}。值是一格 fold 之後才填的把手，**被叫時才讀**；理由見那個模組的偏離登記。
+   */
+  fs: FsService;
+  /**
+   * 工作區根（`--workspace` 解析過的絕對路徑）。名字見 {@link ./sandbox.ts | WORKSPACE_ROOT_SERVICE}。
+   *
+   * **沒有工作區就沒人提供**：`services.get()` 回 `undefined` 就是「這次組裝沒有工作區」，要用根的 plugin 據此不合格。
+   */
+  workspaceRoot: string;
+  /**
+   * 唯讀共用參考區在模型位址空間裡的前綴（#1775）。名字見 {@link ./sandbox.ts | SHARED_WORKSPACE_SERVICE}。
+   *
+   * **這條 thread 沒有共用區就沒人提供**：`--workspace` 沒給、或這條是舊 thread（可寫根本來就是共用區）。
+   */
+  sharedWorkspace: string;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */
@@ -296,12 +366,19 @@ export type KnownServiceName = keyof NexusServices & string;
  * cordis 的 `inject` 是反應式的——缺件時 fiber 停在 INACTIVE，等到有人提供才啟動
  * （`vendor/cordis/src/fiber.ts:611-622` 的 `_refresh`）。我們的載入是**一趟到底**的
  * 命令式折疊，deepagents / LangGraph 沒有 context 樹與 fiber 狀態機可以表達那件事，
- * 所以退到最接近的實作：**缺件當場失敗**。
+ * 所以退到最接近的實作：**不等**。這句話對兩個讀法的意思不一樣（[#687](https://github.com/DemianLi/nexus-agent/issues/687)）：
  *
- * 直接後果：**清單順序在「誰提供、誰消費」之間是承重的**。今天沒有人踩到——#459 的五個
- * 協作者全是「組裝點提供、plugin 消費」或反過來，一條 plugin → plugin 的服務相依都沒有
- * ——所以組裝點把自己那幾個放在清單最前面就夠了。**plugin → plugin 的服務相依不在
- * #459 的射程內**；真要的那天，順序才會變成承重的，那時再決定是拓撲排序還是照 dsh 做成惰性。
+ * - **`use` 缺件當場拋**，排錯序也一樣（提供者排在後面，讀的那一刻它還不在）。
+ * - **`get` 缺件回 `undefined`**，排錯序也一樣——它分不出「沒人提供」與「提供者還沒載到」。所以軟讀的人
+ *   要照 dsh 自己在「需要卻缺」時拋：tool-bash 在 apply 當下 `ctx.get('sandboxPolicy')`，有圍堵卻拿不到
+ *   就拋（`references/deepseek-harness/packages/shell/tool-bash/src/index.ts:215-217`，SHA `477b4f4`）。
+ *   要等到被叫時才需要的東西，就在被叫時才讀（例如 `fs` 服務，見 {@link ./fs-service.ts}）。
+ *
+ * 直接後果：**清單順序在「誰提供、誰消費」之間是承重的**。今天沒有人踩到——在 `apply` 當下讀服務的
+ * 全是「組裝點提供、plugin 消費」，一條 plugin → plugin 的服務相依都沒有，所以組裝點把自己那幾個放在
+ * 清單最前面就夠了。守這個「沒有」的絆索是 `apps/harness/src/shipped-service-reads.test.ts`。**plugin →
+ * plugin 的服務相依不在 #459 的射程內**；真要的那天，順序才會變成承重的，那時再決定是拓撲排序還是照 dsh
+ * 做成惰性。
  */
 export interface ServiceRegistrationPoint {
   /**
@@ -323,7 +400,8 @@ export interface ServiceRegistrationPoint {
   use<T = unknown>(name: string): T;
   /**
    * 取一個**可以不在**的服務。軟相依，對應 dsh 的 `ctx.get('sandboxPolicy')`
-   * （`references/deepseek-harness/packages/shell/tool-bash/src/index.ts:193`）。
+   * （`references/deepseek-harness/packages/shell/tool-bash/src/index.ts:215-217`，SHA `477b4f4`）。
+   * 缺件與排錯序都回 `undefined`；「需要卻缺」要由呼叫的人自己拋，同上面那段偏離登記。
    * @param name - 服務名。
    * @returns 服務物件，或沒人提供時的 `undefined`。
    */
@@ -350,6 +428,10 @@ export interface BackendRegistrationPoint {
    *   `CompositeBackend.getBackendAndKey()` 直接對前綴做 `startsWith` 與
    *   `slice(0, -1)`，少了尾斜線它會切錯路徑。同時也讓「同一個掛載點」只有一種
    *   寫法，重複偵測才是可靠的。
+   *   **不得與組裝點自己的路由重疊**（#1775）：`/shared`（唯讀共用區）、`/attachments`、`/conversation_history`、
+   *   `/large_tool_results`——相同、更深、更上層（含根 `/`）的前綴，fold 當場拋（`FoldOptions.reservedBackendPrefixes`，
+   *   訊息點名外掛與前綴）。外掛的路由包在組裝點預設路由的外面，重疊會遮住那一條（例如讓唯讀共用區變可寫）。
+   *   CLI 與 serve 一樣生效；沒給 `reservedBackendPrefixes` 的呼叫端（單元測試）不受限。
    * @param backend - backend 實例。
    * @returns 只撤銷這一次掛載的冪等 undo。
    */
@@ -373,20 +455,40 @@ export type MiddlewareRegistration =
       readonly build?: undefined;
       /** 是否插到其他 plugin 的 middleware 之前。 */
       readonly prepend: boolean;
+      /** 是否排到其他 plugin 的 middleware 之後，含子代理自己帶的。 */
+      readonly last: boolean;
     }
   | {
       readonly middleware?: undefined;
       readonly build: (backend: AnyBackendProtocol) => AgentMiddleware;
       /** 是否插到其他 plugin 的 middleware 之前。 */
       readonly prepend: boolean;
+      /** 是否排到其他 plugin 的 middleware 之後，含子代理自己帶的。 */
+      readonly last: boolean;
     };
 
-/** `middleware` 註冊點：清單順序，`prepend` 為唯一例外閥。 */
+/** 一次註冊的位置選項。`prepend` 與 `last` 不能同時給。 */
+export interface MiddlewarePlacement {
+  /** 把它排到其他 plugin 的 middleware 之前。 */
+  readonly prepend?: boolean;
+  /**
+   * 把它排到其他 plugin 的 middleware 之後，**含子代理自己帶的那些**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）。
+   *
+   * 給「要最後一個往 system prompt 附加文字」的 middleware 用：洋蔥的外層先附加、內層後附加，所以想排在最後一段，
+   * 就要在所有會附加文字的 middleware 的內側。dsh 用名字加序號排提示詞的段落（`deployment:persona-suffix` 永遠最後，
+   * `packages/core/system-prompt/README.md:137`），我們的提示詞是 middleware 一層層接出來的，沒有段落序號，所以退到
+   * 最接近的表達：一個位置旗標。射程一樣只到 plugin 與子代理自帶的 middleware——基座的檔案系統、輸出校驗那些貼著
+   * 工具本體的內建層在它更內側，它們不附加文字。
+   */
+  readonly last?: boolean;
+}
+
+/** `middleware` 註冊點：清單順序，`prepend` 與 `last` 為兩個例外閥。 */
 export interface MiddlewareRegistrationPoint {
   /**
    * 追加一個 middleware。
    * @param middleware - middleware 實例。
-   * @param options - `prepend: true` 把它排到其他 plugin 的 middleware 之前。
+   * @param options - `prepend: true` 把它排到其他 plugin 的 middleware 之前；`last: true` 排到之後。
    *   注意射程只到 plugin 之間——基座的標準 middleware stack 永遠在前面，
    *   `createDeepAgent` 的 `middleware` 參數整組接在它後面。
    *
@@ -398,7 +500,7 @@ export interface MiddlewareRegistrationPoint {
    * 它只到 root，子代理照舊用 fold 逐個建的那份（`fold.ts` 的 `subagentPluginMiddleware`）。
    * @returns 只撤銷這一次註冊的冪等 undo。
    */
-  use(middleware: AgentMiddleware, options?: { prepend?: boolean }): () => void;
+  use(middleware: AgentMiddleware, options?: MiddlewarePlacement): () => void;
   /**
    * 追加一個**要 backend 才建得出來**的 middleware（[#388](https://github.com/DemianLi/nexus-agent/issues/388)）。
    *
@@ -420,7 +522,7 @@ export interface MiddlewareRegistrationPoint {
    */
   useWithBackend(
     build: (backend: AnyBackendProtocol) => AgentMiddleware,
-    options?: { prepend?: boolean },
+    options?: MiddlewarePlacement,
   ): () => void;
   /**
    * 目前註冊的 middleware。
@@ -568,6 +670,75 @@ export interface LifecycleRegistrationPoint {
   takeDisposers(): NamedEntry<Disposer>[];
 }
 
+/** 外掛交出的一則警告，連同是誰交的。 */
+export interface PluginWarning {
+  readonly origin: PluginOrigin;
+  readonly message: string;
+}
+
+/** {@link PluginLogger.exporter} 登記的接收端，形狀照 dsh 的 `Exporter`（`export(message)`）。 */
+export interface PluginWarningExporter {
+  /**
+   * 收一則警告。
+   * @param warning - 是誰交的與說了什麼。
+   */
+  export(warning: PluginWarning): void;
+}
+
+/** {@link PluginLogger.bind} 交出的 logger：origin 已經綁好，執行期也能叫。 */
+export interface BoundPluginLogger {
+  /**
+   * 交出一則警告。
+   * @param message - 給人看的一句話，不必自己寫是誰。
+   */
+  warn(message: string): void;
+}
+
+/**
+ * `logger` 通道：外掛在 `apply` 裡**交出一句給人看的話**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），
+ * 照 dsh 的 `ctx.logger`。例子是 MCP 連不上：那一列照樣掛上、那台伺服器沒有工具，要讓人知道。
+ *
+ * **誰說的在 `apply` 那一刻定下來**，同其他註冊點：沒有 origin 就講不出是誰說的，所以 {@link PluginLogger.warn} 只收
+ * `apply` 裡的呼叫。要在執行期講話（例如 MCP 掉線重連，[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）
+ * 就在 `apply` 裡呼叫 {@link PluginLogger.bind} 拿一支**綁好 origin 的 logger**，之後隨時可以叫。話不由外掛自己寫到
+ * 標準錯誤，而是交給呼叫端：組裝完讀 {@link PluginLogger.warnings}（掛上那一刻的），再用 {@link PluginLogger.exporter}
+ * 接後面的（執行期的）；印在哪由 CLI 與 serve 決定。
+ *
+ * **對 dsh `ctx.logger` 的偏離（一處）**：dsh 每個 plugin 各有一份 `ctx`，`ctx.logger.warn()` 的「是誰」跟著 ctx 走，執行期也叫得動；
+ * 接收端是 `ctx.logger.exporter({ export })`，另有 1000 則的緩衝——這三樣這裡一字照辦（`exporter`、`export`、1000）。我們只有
+ * 一份共用的 registry，「是誰」只在 `apply` 的註冊視窗裡有（`current`），執行期無從得知，所以表達不出 `ctx.logger.warn()` 在執行期
+ * 直接叫；退到最接近的 {@link PluginLogger.bind}：在 `apply` 裡把 origin 綁進一支 logger，之後拿它叫。
+ *
+ * **它與九個註冊點不同軸**，理由同 lifecycle：產物不進 `createDeepAgent` 的參數。也不跟著回滾：一列 `apply` 失敗
+ * 撤掉的是它註冊的東西，它講過的話照樣交出去——那可能正是它為什麼失敗。
+ */
+export interface PluginLogger {
+  /**
+   * 交出一則警告。
+   * @param message - 給人看的一句話，不必自己寫是誰（讀的一方從 origin 補）。
+   */
+  warn(message: string): void;
+  /**
+   * 拿一支**綁好 origin 的 logger**，只能在 `apply` 裡呼叫（同 {@link PluginLogger.warn}）。回傳的 `warn` 之後在任何時候
+   * 都能叫，講出來的話記的是綁定的那位外掛——執行期的話靠它。
+   * @returns 綁好 origin 的 logger。
+   */
+  bind(): BoundPluginLogger;
+  /**
+   * 登記一個**接收端**，收**從現在起**交出的警告（`apply` 裡的與綁定 logger 執行期的都算），照 dsh 的
+   * `ctx.logger.exporter()`；之前的用 {@link PluginLogger.warnings} 讀。接收端拋的錯被吞掉，不影響講話的那一方。
+   * 印在哪由登記的一方（CLI 與 serve）決定。
+   * @param exporter - 每則警告呼叫一次 `export`。
+   * @returns 取消登記。
+   */
+  exporter(exporter: PluginWarningExporter): () => void;
+  /**
+   * 目前交出的警告，依順序。
+   * @returns 每一則連同是誰交的。
+   */
+  warnings(): readonly PluginWarning[];
+}
+
 /**
  * `telemetry` 通道：**送出去之前**的脫敏規則。
  *
@@ -589,6 +760,11 @@ export interface LifecycleRegistrationPoint {
  * LangGraph JS 三者都不提供可掛任意具名事件的 waterfall。退到最接近的：`redact` 用依序
  * 折疊取代 waterfall。折疊丟掉的是「不呼叫 `next()` 就截斷底下所有規則」那個能力，**刻意
  * 丟的**——理由見 {@link ./session-telemetry.ts | SessionTelemetryRedactRule}。
+ *
+ * **2026-10-09 起，「我們沒有事件匯流排」這個前提不成立了**（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)，
+ * [#190](https://github.com/DemianLi/nexus-agent/issues/190) 的推翻）：匯流排存在（事件表上有工具四事件，#1248，但沒有遙測的），這個偏離照舊以折疊
+ * 實作。要不要把它搬成 `session-telemetry/record` 的 waterfall 事件是後續的事，而且搬了也不該把「截斷底下的規則」找回來——
+ * 那一條刻意丟的理由跟匯流排有沒有無關。
  *
  * （後端那一半原本也在這裡，配一張只收一個的具名表，登記的理由是「我們沒有 service
  * 註冊」。[#459](https://github.com/DemianLi/nexus-agent/issues/459) 落地之後那個前提沒了，
@@ -699,6 +875,29 @@ export interface CommandRegistrationPoint {
 }
 
 /**
+ * `projections` 通道：**插件宣告的會話投影**——從 root 日誌折出一份有名字的狀態，由 pump 以 `projection` frame 送到 web
+ * （[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)，設計見 `.docs/session-projections-design.md`）。
+ *
+ * 與另外那些不折進 `createDeepAgent` 的通道同軸：產物不進圖，pump 與歷史路由讀這裡。照 dsh 的 `sessionProjections`
+ * （`5badb15`）；**差異**：dsh 的 `register` 同 key 重複註冊共用一個單元並計數（為了 HMR），我們一次組裝一張註冊表、不熱換，
+ * 所以 key 重複就是拋。
+ */
+export interface ProjectionRegistrationPoint {
+  /**
+   * 註冊一個投影單元。中繼資料在這裡就驗（見 {@link normalizeProjectionUnit}）。
+   * @param unit - key、stateVersion、init／apply／view。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   * @throws key 重複，或中繼資料不合格。
+   */
+  register<S, V>(unit: ProjectionUnit<S, V>): () => void;
+  /**
+   * 目前註冊的單元，**依註冊順序**。pump 與歷史路由讀它。
+   * @returns 凍過的單元。
+   */
+  list(): readonly ProjectionUnit[];
+}
+
+/**
  * `sessions` 通道：**誰拿得到這個會話的日誌**。
  *
  * 與另外十三個不同軸的理由同 lifecycle 與 telemetry：產物不進 `createDeepAgent` 的參數。
@@ -756,6 +955,21 @@ export interface SessionRegistrationPoint {
    */
   flush(log: SessionLog): Promise<void>;
   /**
+   * **登記「這次呼叫可能派出子代理」**（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）：登記期間，綁上來的
+   * 註冊表若開出 `runId` 正是這一格的子會話日誌，就在 `link.parent` 記一顆 `subagent/catalog`（見 {@link ./subagent-catalog.ts}）。
+   *
+   * 寫的時刻是**子日誌出生**那一刻，不是登記那一刻：只發布成功的事實，同 dsh 的目錄。從頭到尾沒寫過日誌的子代理（派不出去的）
+   * 就沒有目錄，指不到不存在的東西。鑰匙是 `runId`：父圖那次呼叫的 `checkpoint_ns`，跟子代理那一側算出來的是同一個值
+   * （`session-address.ts` 的 `spawnedSubagentRunId`），兩邊不必互相通知就對得上。
+   *
+   * 生產者是圍堵：它記下 `tool/call` 之後登記、呼叫落定（含拋錯與中斷）之後退。
+   *
+   * @param runId - 這次呼叫派出的子代理會帶著的 `runId`。
+   * @param link - 寫在哪一份（`forCall` 交給這次呼叫的那一份）、配哪一顆 `tool/call`。
+   * @returns 退掉這次登記。冪等。
+   */
+  expectSpawn(runId: string, link: SpawnLink): () => void;
+  /**
    * 把一張會話註冊表綁上來。**組裝點的一步，不是 plugin 的**。
    *
    * **綁第二張不拋。** 「剛好一份」是一個假設而不是一條保證——`attachSession` 是組裝點
@@ -768,6 +982,23 @@ export interface SessionRegistrationPoint {
    * @returns 只解綁這一次的冪等函式。
    */
   bind(sessions: SessionRegistry): () => void;
+}
+
+/** {@link SessionRegistrationPoint.expectSpawn} 登記的那一格。 */
+export interface SpawnLink {
+  /** 派它的那一份日誌，目錄寫在這裡。 */
+  readonly parent: SessionLog;
+  /** 派它的那一顆 `tool/call` 的 `callId`。 */
+  readonly callId: string;
+  /**
+   * 子代理收到的那一句話（`task` 的 `description`，圍堵已經包成日誌的訊息形狀）。子日誌**出生**的那一次查找、`open` 回來之後
+   * 寫成一顆 `user/message`（#1665，見 `pendingSpawnInputs`），排在參與者於 `open` 裡寫的委派政策之後，來源 `user`，同 dsh 的
+   * `child.followup(createUserMessage({content: prompt, source: {kind: 'user'}}))`。
+   * 缺席（呼叫沒帶字串型的 `description`）就不寫，日誌跟以前一樣沒有輸入。
+   *
+   * **這裡收現成的訊息而不是字串**：這個檔對領域套件只能 `import type`（`kernel-boundary.test.ts`），建 `HumanMessage` 是圍堵的事。
+   */
+  readonly input?: LoggedMessage;
 }
 
 /**
@@ -783,11 +1014,13 @@ export type SessionLookup =
   /** 認不出這次呼叫屬於誰（沒有 `checkpoint_ns`）。**不猜成 root**，理由見 session-address。 */
   | { readonly kind: 'unknown-caller' }
   /**
-   * 這次組裝綁著不只一張註冊表，挑不出來。
+   * 這次組裝綁著不只一張註冊表，而且挑不出是哪一張。
    *
-   * 一次組裝配多條 thread 時會走到（每條 thread 一張）。`checkpoint_ns` 分得出 root 與
-   * 每一次 spawn，**但分不出 thread**——`thread_id` 才分得出，而那要另一條路。挑一張猜
-   * 的話，一條 thread 的工具會寫進另一條 thread 的日誌，那是這條路上最貴的那種靜默錯。
+   * 一次組裝配多條 thread 時會走到（每條 thread 一張）。`checkpoint_ns` 分得出 root 與每一次 spawn，
+   * **但分不出 thread**——分 thread 的是呼叫設定的 `thread_id`（#1418）：它對得上**恰好一張**
+   * （那一張的某份日誌 id 就是這個 `thread_id`）就解到那一張。這個格子只剩「真挑不出」的三種：呼叫沒帶
+   * `thread_id`、沒有任何一張認得它、不只一張認得它。挑一張猜的話，一條 thread 的工具會寫進另一條
+   * thread 的日誌，那是這條路上最貴的那種靜默錯，所以寧可明說。
    */
   | { readonly kind: 'ambiguous'; readonly count: number };
 
@@ -808,7 +1041,12 @@ export type SessionLookup =
  */
 export interface DisabledEntryView {
   /**
-   * 這個 plugin 名有沒有出現在某個明著被關掉的條目上。
+   * 這個 plugin 名有沒有出現在某個**這一次沒掛上**的條目上：明著被關掉的，加上掉了的
+   * （[#751](https://github.com/DemianLi/nexus-agent/issues/751)：設定驗不過、`apply` 拋錯、`requires` 缺件）。
+   * 掉了的列照 dsh 算沒掛，結局跟 `disabled: true` 一樣；掉了的原因另外從載入結果讀。
+   *
+   * **「關掉」是逐條目的**（#678，照 dsh：停用只讓那一列不 init，不影響別列）：有被關的同名列，**而且沒有開著
+   * （`apply` 成功）的同名列**才算。所以同一個模組掛兩列、一開一關，結果是開著；只有被關的那一列才是真的沒有。
    *
    * **比對的是 {@link ../plugin.ts | NexusPlugin.name} 而不是條目的 id**：id 是使用者的
    * patch 改得動的字串，拿它當行為開關等於讓改名變成關功能。
@@ -816,8 +1054,47 @@ export interface DisabledEntryView {
    * @param pluginName - 那顆 plugin 的 `name`。
    */
   has(pluginName: string): boolean;
-  /** 全部，依清單順序；同一顆掛載多次又都被關掉時會出現重複。 */
+  /**
+   * **這一次沒掛上的每一列**，依清單順序；同一顆掛載多次又都被關掉時會出現重複。
+   *
+   * 診斷用，**不等於 {@link has} 為真的那些名字**：同名還有開著的列時，被關的那一列仍在這裡，但 `has` 是 `false`。
+   */
   names(): readonly string[];
+}
+
+/**
+ * `events` 註冊點：掛事件匯流排上的監聽者（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)，事件契約草稿的 S0）。
+ *
+ * **插件只能掛，不能派發。** 派發面（`emit`／`serial`／`waterfall`）在 {@link InternalPluginRegistry.dispatch}，由宿主的
+ * 組裝點持有：dsh 的每個事件有一個固定的生產者（迴圈、工具管線…），讓任何插件都能派發別人的事件，終結性就取決於誰先派。
+ *
+ * **事件表是 `events.ts` 的 `Events` interface，各處用 declaration merging 擴充**：S0 是空的，S1a（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）落了工具四事件（`tool-pipeline.ts`）；每個事件跟它的第一個生產者同一張 PR 落地。
+ * 撤銷走 `effect`：插件 `apply` 之後拋錯，載入器的回滾會把它掛的監聽者一起撤掉；`dispose()` 之後整張表清空。
+ */
+export interface EventRegistrationPoint {
+  /**
+   * 掛一位監聽者。依掛上的順序跑；`prepend` 排到同一事件現有監聽者的前面。
+   *
+   * @param name - 事件名，必須是事件表裡的成員。
+   * @param listener - 監聽者，簽名由事件表決定。
+   * @param options - `prepend`。
+   * @returns 只撤這一筆的冪等 undo。
+   */
+  on<K extends EventName>(name: K, listener: Events[K], options?: EventOptions): () => void;
+  /**
+   * 掛一位只響一次的監聽者：第一次被呼叫時先撤掉自己。
+   *
+   * @param name - 事件名。
+   * @param listener - 監聽者。
+   * @param options - `prepend`。
+   * @returns 只撤這一筆的冪等 undo。
+   */
+  once<K extends EventName>(name: K, listener: Events[K], options?: EventOptions): () => void;
+  /**
+   * 現在掛著的每一位監聽者，給診斷與測試看。
+   * @returns 依事件名、再依執行順序。
+   */
+  listeners(): readonly EventListenerInfo[];
 }
 
 export interface PluginRegistry {
@@ -836,7 +1113,11 @@ export interface PluginRegistry {
   readonly invariants: InvariantRegistrationPoint;
   readonly commands: CommandRegistrationPoint;
   readonly sessions: SessionRegistrationPoint;
-  /** 清單上明著被關掉的條目，見 {@link DisabledEntryView}。**不算註冊點。** */
+  readonly projections: ProjectionRegistrationPoint;
+  readonly events: EventRegistrationPoint;
+  /** 外掛在 `apply` 裡交出的警告，見 {@link PluginLogger}。 */
+  readonly logger: PluginLogger;
+  /** 這一次沒掛上的條目（明著被關掉的，加上掉了的），見 {@link DisabledEntryView}。**不算註冊點。** */
   readonly disabledEntries: DisabledEntryView;
 }
 
@@ -848,11 +1129,44 @@ export interface PluginRegistry {
  */
 export interface InternalPluginRegistry extends PluginRegistry {
   /**
+   * 事件匯流排的派發面（`emit`／`serial`／`waterfall`）。**只有宿主的組裝點拿得到**，plugin 的 `apply` 拿到的是窄的
+   * {@link PluginRegistry}，只能經 {@link PluginRegistry.events} 掛監聽者。生產者在 `tool-pipeline.ts`（S1a）與圍堵，由 `agent-factory.ts` 把這一份交給 `foldRegistry`。
+   */
+  readonly dispatch: EventDispatcher;
+  /**
    * 把游標指向某個 plugin，回傳把它放掉的函式。
    * @param origin - 接下來的註冊要記在誰頭上。
    * @returns 清掉游標的函式。
    */
   enter(origin: PluginOrigin): () => void;
+  /**
+   * 逆序撤掉某一位註冊者經註冊點拿到的每一個 undo，跑過就清空（冪等）。
+   *
+   * **撤銷由註冊點自己記下**，載入器不替它們鏡像（#677）：每個回傳 undo 的註冊方法都走
+   * 內部的 `effect`，undo 在那裡推進該註冊者的堆疊，所以新增註冊方法不必回頭改
+   * {@link ./load.ts | loadPlugins}。這是 dsh `ctx.effect` 的對應物——撤銷歸屬掛在註冊者
+   * 身上，只是載體由「context 一收掉就回收」換成「註冊者自己的堆疊、出錯時逆序排掉」
+   * （基座沒有 context 樹，載入器偏離登記見 `load.ts` 檔頭）。
+   *
+   * 以 `origin` 的**身分**為鍵，不看 {@link enter} 之後有沒有放掉游標：逐列掉模式下，
+   * 因 `requires` 連鎖掉的那一列 `apply` 早已跑完，仍要撤它的註冊。
+   *
+   * @param origin - 要撤誰的；傳給 {@link enter} 的同一個物件。
+   */
+  rollback(origin: PluginOrigin): void;
+  /**
+   * 記下一個**開著、而且 `apply` 成功了**的條目，跟 {@link markDisabled} 同一層、plugin 碰不到。
+   *
+   * 為什麼要記開著的那一半（#678）：停用視圖的鍵是 `NexusPlugin.name`，而 name 不唯一。只記被關的那一半，
+   * 一列被關掉的同名條目就能讓**開著的那一列**失效。照 dsh 的逐條目語意，「關掉」是「樹上沒有開著的那一列」。
+   *
+   * **只能在 {@link enter} 之內呼叫、`apply` 成功之後才記**：撤銷跟著註冊者的堆疊走（{@link rollback}），
+   * 所以 `apply` 拋錯、或逐列掉模式下因 `requires` 連鎖掉的那一列，這一筆都會一併撤掉——自帶 registry
+   * 的呼叫者不會把已回滾的 plugin 判成還開著（回滾見 #677）。
+   *
+   * @param pluginName - 那顆 plugin 的 `name`。
+   */
+  markEnabled(pluginName: string): void;
   /**
    * 記下清單上明著被關掉的一個條目。
    *
@@ -875,14 +1189,215 @@ function duplicateToolError(scope: ScopeKey | undefined) {
   };
 }
 
+/** 把位置選項攤成兩個旗標。兩個都給是矛盾，當場拋——靜靜挑一個的話，另一個的意圖就消失了。 */
+function placementOf(
+  options: MiddlewarePlacement | undefined,
+  where: string,
+): { prepend: boolean; last: boolean } {
+  const prepend = options?.prepend === true;
+  const last = options?.last === true;
+  if (prepend && last) {
+    throw new Error(
+      `${where}：\`prepend\` 與 \`last\` 不能同時給，一顆 middleware 不可能既在最前又在最後。`,
+    );
+  }
+  return { prepend, last };
+}
+
+/** `maxTurns` 要是正整數；不合當場拋（不看型錄，所以不靠 {@link CreateRegistryOptions.validateSubagent}）。 */
+function assertMaxTurns(subagent: NexusSubAgent): void {
+  const { maxTurns } = subagent;
+  if (maxTurns !== undefined && (!Number.isSafeInteger(maxTurns) || maxTurns < 1)) {
+    throw new Error(`maxTurns 要是正整數，拿到 ${String(maxTurns)}`);
+  }
+}
+
+/** {@link createRegistry} 的選項。 */
+export interface CreateRegistryOptions {
+  /**
+   * 註冊 subagent 的當下驗它的定義（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：認不得的 `model` 與 `reasoningEffort`
+   * 在 `register()` 裡就拋，而不是等到委派才炸。registry 自己沒有型錄，所以由組裝點傳進來。拋出的錯誤照註冊點的規矩指名註冊者。
+   */
+  readonly validateSubagent?: (subagent: NexusSubAgent) => void;
+}
+
+/**
+ * 這張註冊表是不是擁有這條 `thread_id`：root 的日誌 id 就是 thread id，背景子代理的日誌 id 是 `<root>/<runId>`，
+ * 同步子代理沿用 root 的 thread id（見 {@link callThreadId}）。所以「有哪一份日誌的 id 等於它」就是擁有。
+ *
+ * **前提：背景子代理的日誌在送出時就已經開好**（`apps/harness/src/background-subagents.ts` 的 `start()`，
+ * `sessions.open` 在 `submit` 拉起背景圖之前）。日後如果有人把它改成延後到第一次 `forCall` 才開，多張綁定下
+ * 背景那一輪的第一筆會因為還沒有任何一張認得 `<root>/<runId>` 而回 `ambiguous`——這是前提被改掉的徵兆，
+ * 不是這支函式的錯。
+ */
+function ownsThread(sessions: SessionRegistry, thread: string): boolean {
+  return sessions.list().some((entry) => entry.log.sessionId === thread);
+}
+
+/** {@link pickBoundForCall} 挑中時回的東西：挑中的那一筆，與這次呼叫在那一條 thread 裡的位址。 */
+export type BoundPick<T> =
+  | { readonly kind: 'ok'; readonly bound: T; readonly address: SessionAddress }
+  | { readonly kind: 'not-attached' }
+  | { readonly kind: 'unknown-caller' }
+  | { readonly kind: 'ambiguous'; readonly count: number };
+
+/** {@link pickBoundForCall} 的選項。 */
+export interface PickBoundOptions {
+  /**
+   * 只剩一筆登記時也核對 `thread_id`：呼叫帶了 `thread_id`、而那一筆不擁有它，回 `ambiguous`（`count` 是登記的筆數，這裡是 1）；
+   * 沒帶 `thread_id` 的呼叫不受影響。預設 `false`——相容層與手搭的測試呼叫沿用「一筆就挑它」。
+   */
+  readonly verifySingle?: boolean;
+}
+
+/**
+ * **「這次工具呼叫屬於哪一條活著的 thread」的挑法，全樹只有這一份**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)
+ * Q1 (a)，Part of #1385；演算法是 #1418 定下的那一條，原樣搬出來。[#1466](https://github.com/DemianLi/nexus-agent/issues/1466)
+ * 起拆成「先挑出那一筆」與「各取所需」兩步：會話日誌要 `open` 位址，fs 要的是同一筆登記帶著的把手，**兩邊的挑法是同一支**）。
+ *
+ * 三個呼叫者，而且只能呼叫它（或它上面包的 {@link pickSessionForCall}）：相容層的 `registry.sessions.forCall`（一次組裝綁著的那幾張
+ * 註冊表）、宿主在樹上提供的「會話查找」服務與「fs 查找」服務（行程裡每一條活著的 thread 的那一筆登記）。「多條 thread 同時活著時
+ * 依 `thread_id` 認出主人」的語意只在這裡寫一次——不准在別處再寫一份（驗收的「永遠回第一張」突變就改在這裡）。
+ *
+ * - 一筆都沒有：`not-attached`。
+ * - 只有一筆：**預設不看 `thread_id`**，與逐條 thread 之前逐位元組相同（手搭的測試呼叫沒有它，相容層的 `registry.sessions.forCall` 也是這個預設）。
+ *   行程級的查找（宿主的 `ThreadSessions`）傳 {@link PickBoundOptions.verifySingle}：這時**帶了 `thread_id` 而那一筆不擁有它**就回 `ambiguous`
+ *   （[#1482](https://github.com/DemianLi/nexus-agent/issues/1482)）——行程裡別條 thread 剛好只剩這一筆，不代表這次呼叫屬於它（一條 thread
+ *   收尾途中還在跑的工具、`thread_id` 認得出主人的呼叫都會碰到）。**沒帶 `thread_id` 的呼叫照舊挑那一筆**：它認不出主人，也就沒有東西可核對。
+ * - 多筆：依 {@link callThreadId} 挑「有一份日誌的 id 等於它」的恰好一筆；沒帶 `thread_id`、沒有任何一筆認得、不只一筆認得，
+ *   一律 `ambiguous`——寧可明說也不猜（猜錯是一條 thread 的工具寫進另一條 thread 的日誌，靜默的）。
+ * - 挑到之後算不出位址：`unknown-caller`。
+ *
+ * **這一步不碰日誌**：不 `open`，不會讓 subagent 的日誌出生。要日誌的呼叫者自己在 `ok` 之後 `open(address)`。
+ *
+ * @param bound - 這一次查找看得見的登記。**只迭代一次**，所以 `Set`、`Map.values()` 都可以。
+ * @param sessionsOf - 這一筆登記帶的那條 thread 的會話註冊表。
+ * @param config - 工具 handler 的第二個參數。
+ * @param options - 只剩一筆時要不要核對 `thread_id`，見 {@link PickBoundOptions}。
+ * @returns 判別得出來的四種結果之一。
+ */
+export function pickBoundForCall<T>(
+  bound: Iterable<T>,
+  sessionsOf: (item: T) => SessionRegistry,
+  config: unknown,
+  options: PickBoundOptions = {},
+): BoundPick<T> {
+  const all = [...bound];
+  if (all.length === 0) return { kind: 'not-attached' };
+  let picked: T;
+  if (all.length === 1) {
+    [picked] = all as [T];
+    if (options.verifySingle === true) {
+      const thread = callThreadId(config);
+      if (thread !== undefined && !ownsThread(sessionsOf(picked), thread)) {
+        return { kind: 'ambiguous', count: 1 };
+      }
+    }
+  } else {
+    const thread = callThreadId(config);
+    const owners =
+      thread === undefined ? [] : all.filter((item) => ownsThread(sessionsOf(item), thread));
+    if (owners.length !== 1) return { kind: 'ambiguous', count: all.length };
+    [picked] = owners as [T];
+  }
+  const address = toolCallSessionAddress(config);
+  if (address === undefined) return { kind: 'unknown-caller' };
+  return { kind: 'ok', bound: picked, address };
+}
+
+/**
+ * **「這次工具呼叫該寫進哪一份會話日誌」**：{@link pickBoundForCall} 挑出那一張註冊表之後 `open(address)`。
+ *
+ * 相容層的 `registry.sessions.forCall` 與樹上的會話查找服務呼叫它。
+ *
+ * - 成功：`open(address)`——subagent 的日誌在第一次有人要寫的時候才出生（`SessionRegistry` 的偏離第 1 條）。
+ *
+ * @param bound - 這一次查找看得見的註冊表。**只迭代一次**，所以 `Set`、`Map.values()` 都可以。
+ * @param config - 工具 handler 的第二個參數。
+ * @param options - 見 {@link PickBoundOptions}；傳給 {@link pickBoundForCall}。
+ * @returns 判別得出來的四種結果之一。
+ */
+export function pickSessionForCall(
+  bound: Iterable<SessionRegistry>,
+  config: unknown,
+  options?: PickBoundOptions,
+): SessionLookup {
+  const picked = pickBoundForCall(bound, (sessions) => sessions, config, options);
+  if (picked.kind !== 'ok') return picked;
+  // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
+  // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
+  const log = picked.bound.open(picked.address);
+  // 父那一份的目錄與子代理收到的那句話在這裡寫：每一位訂閱者（持久化在內）都接好了。寫不進去從這裡拋（#1665、#1702）。
+  writePendingCatalog(log);
+  writePendingSpawnInput(log);
+  return { kind: 'ok', address: picked.address, log };
+}
+
+/**
+ * 前景子代理出生時等著寫的那句話（[#1159](https://github.com/DemianLi/nexus-agent/issues/1159)），子日誌 → 訊息。
+ * `bind` 的訂閱者在子日誌出生那一刻登記，{@link pickSessionForCall} 在 `open` 回來之後寫。
+ *
+ * **不在訂閱者裡寫**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）：這一句進模型歷史，寫不進去要拋。而訂閱者跑在
+ * `SessionRegistry.open` 的通知迴圈裡，拋錯會跳過排在後面的訂閱者——持久化接在 `bind` 之後（serve 的 `wire-handler.ts`、CLI 同序），
+ * 跳過它，這份子日誌之後寫的每一顆都靜靜不落盤，而同一個位址再 `open` 也不會重新通知。挪到 `open` 回來之後，同 dsh：子代理的第一句
+ * 由它自己的迴圈在第一步寫（`packages/core/agent-loop/src/agent.ts:426-436`，`687f282e`），排在所有 `session/created` 監聽者之後；
+ * 寫不進去是子代理那一步失敗，經 `task` 回到父代理成一次失敗的委派。
+ *
+ * **所以順序是委派政策在前、這一句在後**，同 dsh：子會話的 setup 先寫 `subagent/descriptor` 與委派那一刻的政策
+ * （`packages/subagent/subagent/src/manager.ts:880-891` 的 `appendDelegatedPolicyOverrides`），第一句等迴圈的第一步。我們的參與者
+ * （沙箱政策的 `sandbox/mode {source:'delegation'}`、權限組合的 `permission/preset`）在 `open` 裡寫，這一句在 `open` 回來之後寫。
+ * 用真的參與者釘在 `apps/harness/src/subagent-sandbox.test.ts`。
+ *
+ * **寫成功才清掉**：吞掉查找錯誤的那幾個呼叫端（用量記錄這類）先碰到的話，下一個查找照樣再寫一次、再拋，直到不吞的那一個讓這一步失敗。
+ * 以子日誌為鍵、弱引用：子日誌不在了，登記跟著消失。
+ */
+const pendingSpawnInputs = new WeakMap<SessionLog, LoggedMessage>();
+
+/**
+ * 前景子代理出生時等著寫進**父那一份**的 `subagent/catalog`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)），子日誌 → 那一顆。
+ * `bind` 的訂閱者在子日誌出生那一刻登記，{@link pickSessionForCall} 在 `open` 回來之後寫。
+ *
+ * **寫不進去就讓派出失敗**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），照 dsh：目錄是直接子代理的持久權威，
+ * 寫不進去拋（`packages/subagent/subagent/src/catalog.ts:144`）。**時序同 dsh**：dsh 在 `submitMaterialized` 的 `commit` 回呼寫
+ * （`manager.ts:467`），排在第一句准入之後（`:1401-1402`）；這裡是 `open` 回來之後、子代理第一句之前。
+ *
+ * **偏離 dsh，理由 1（基座表達不出來）——失敗浮出的位置。** dsh 寫不進去就在派出那一刻 `dispose(activation)` 再重拋
+ * （`manager.ts:1405-1413`），派出的工具呼叫失敗。我們的子日誌是惰性出生的（`SessionRegistry` 偏離第 1 條），deepagents 的 `task`
+ * 在派出前沒有掛點；在出生通知的訂閱者裡拋，又會跳過排在後面的訂閱者（持久化在內，理由同 {@link pendingSpawnInputs}）。所以從
+ * 子代理第一次查找拋出去，經 `task` 回到父代理成一次失敗的委派（工具錯誤，`packages/core/tools/src/index.ts:1594-1595`）。
+ * **回頭點**：底座換成 Cordis、子日誌改成在派出那一刻出生之後（#1385），改回在派出點寫，寫不進去撤掉 activation。
+ *
+ * **寫成功才清掉**，理由同 {@link pendingSpawnInputs}。以子日誌為鍵、弱引用。
+ */
+const pendingCatalogs = new WeakMap<
+  SessionLog,
+  { parent: SessionLog; data: SubagentCatalogData }
+>();
+
+/** 寫 {@link pendingCatalogs} 裡等著的那一顆；沒有就什麼都不做。寫不進去原錯往外拋，登記留著。 */
+function writePendingCatalog(log: SessionLog): void {
+  const pending = pendingCatalogs.get(log);
+  if (pending === undefined) return;
+  appendSubagentCatalog(pending.parent, pending.data);
+  pendingCatalogs.delete(log);
+}
+
+/** 寫 {@link pendingSpawnInputs} 裡等著的那一句；沒有就什麼都不做。寫不進去原錯往外拋，登記留著。 */
+function writePendingSpawnInput(log: SessionLog): void {
+  const input = pendingSpawnInputs.get(log);
+  if (input === undefined) return;
+  log.append('user/message', { message: input, source: { kind: 'user' } });
+  pendingSpawnInputs.delete(log);
+}
+
 /**
  * 建一個空的 registry。
  * @returns 尚未進入任何 plugin 的 registry。
  */
-export function createRegistry(): InternalPluginRegistry {
+export function createRegistry(options: CreateRegistryOptions = {}): InternalPluginRegistry {
   const globalLayer: Layer = { tools: new NamedEntries(duplicateToolError(undefined)) };
   const scopedLayers = new Map<ScopeKey, Layer>();
-  const subagents = new NamedEntries<SubAgent>(
+  const subagents = new NamedEntries<NexusSubAgent>(
     (name, existing, incoming) =>
       new Error(
         `已經有名為 "${name}" 的 subagent：${formatOrigin(existing)} 註冊過，` +
@@ -920,6 +1435,14 @@ export function createRegistry(): InternalPluginRegistry {
   const disposers = new AnonymousEntries<Disposer>();
   const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
   const companions = new NamedEntries<InvariantInstaller>(duplicateCompanionError);
+  const projectionEntries = new NamedEntries<ProjectionUnit>(
+    (key, existing, incoming) =>
+      new Error(
+        `投影 "${key}" 已經註冊過了：${formatOrigin(existing)} 註冊過，` +
+          `${formatOrigin(incoming)} 又註冊一次。一個 key 只能有一個單元——web 端的 \`projections[${key}]\` ` +
+          `只有一格，讓後來的靜靜蓋掉前面的，畫面上的值會隨載入順序改變。`,
+      ),
+  );
   const commandEntries = new NamedEntries<{
     definition: CommandDefinition;
     descriptor: CommandDescriptor;
@@ -933,11 +1456,37 @@ export function createRegistry(): InternalPluginRegistry {
   );
 
   let current: PluginOrigin | undefined;
+  /** 現在這位註冊者的 undo 堆疊；跟 `current` 同進同出。 */
+  let currentUndos: (() => void)[] | undefined;
+  /** 以註冊者的身分為鍵：`enter` 放掉游標之後，{@link InternalPluginRegistry.rollback} 仍找得到。 */
+  const undoStacks = new Map<PluginOrigin, (() => void)[]>();
   function requireOrigin(what: string): PluginOrigin {
     if (current === undefined) {
       throw new Error(`${what}只能在 plugin 的 apply 裡呼叫——registry 之外沒有註冊者可以指名。`);
     }
     return current;
+  }
+
+  /**
+   * **每個回傳 undo 的註冊方法都經這裡**（dsh `ctx.effect` 的對應物）：取註冊者、跑一次
+   * mutation、把它回傳的 undo 推進註冊者的堆疊，再原樣交回。
+   *
+   * 少了這一步的方法不會有任何現有測試發現，只會在回滾時默默留下一筆孤兒；集中在這一個函式裡，
+   * 新增註冊方法就沒有第二個地方要記得改。**mutation 先跑、成功了才推堆疊**：驗證拋錯的註冊
+   * 什麼都沒留下，也就沒有 undo 可推。
+   *
+   * 不經這裡的有兩個：`logger.warn`／`bind`／`exporter` 不回傳 undo；`sessions.bind` 是組裝點的一步，在
+   * `enter` 之外呼叫（見 {@link SessionRegistrationPoint.bind}），不屬於任何 plugin 的註冊。
+   *
+   * @param what - 方法名，註冊者不在時拋的訊息用。
+   * @param mutate - 做一次註冊並回傳它的 undo；拿到註冊者的 origin。
+   * @returns 同一個 undo。
+   */
+  function effect(what: string, mutate: (origin: PluginOrigin) => () => void): () => void {
+    const origin = requireOrigin(what);
+    const undo = mutate(origin);
+    currentUndos!.push(undo);
+    return undo;
   }
 
   function layerFor(scope: ScopeKey | undefined): Layer {
@@ -959,36 +1508,37 @@ export function createRegistry(): InternalPluginRegistry {
 
   const tools: ToolRegistrationPoint = {
     register(tool, options) {
-      const origin = requireOrigin('tools.register()');
-      const scope = options?.scope;
-      // 物件形式也是 root-only：三處判斷都讀這一格，不各自比 `=== true`。
-      const rootOnly = options?.rootOnly === true || typeof options?.rootOnly === 'object';
-      if (rootOnly && scope !== undefined) {
-        throw new Error(
-          `${formatOrigin(origin)} 把 "${tool.name}" 註冊到 subagent "${scope}" 的同時要求 rootOnly。` +
-            `這兩個是矛盾的：rootOnly 的意思就是 subagent 不給用，往 subagent 層掛它沒有意義。` +
-            `要嘛拿掉 scope，要嘛拿掉 rootOnly。`,
-        );
-      }
-      const layer = layerFor(scope);
-      const undo = layer.tools.insert(tool.name, tool, origin);
-      if (rootOnly) {
-        rootOnlyTools.set(
-          tool,
-          typeof options?.rootOnly === 'object' ? options.rootOnly : undefined,
-        );
-      }
-      if (options?.outputSchema !== undefined) outputSchemas.set(tool, options.outputSchema);
-      return () => {
-        undo();
-        rootOnlyTools.delete(tool);
-        outputSchemas.delete(tool);
-        // 空層不留下來：層是註冊行為的產物，`scopes()` 是 fold 的輸入，回滾過的
-        // plugin 不該讓 fold 看到一個它其實沒碰過的 subagent 名。
-        if (scope !== undefined && layer.tools.size === 0 && scopedLayers.get(scope) === layer) {
-          scopedLayers.delete(scope);
+      return effect('tools.register()', (origin) => {
+        const scope = options?.scope;
+        // 物件形式也是 root-only：三處判斷都讀這一格，不各自比 `=== true`。
+        const rootOnly = options?.rootOnly === true || typeof options?.rootOnly === 'object';
+        if (rootOnly && scope !== undefined) {
+          throw new Error(
+            `${formatOrigin(origin)} 把 "${tool.name}" 註冊到 subagent "${scope}" 的同時要求 rootOnly。` +
+              `這兩個是矛盾的：rootOnly 的意思就是 subagent 不給用，往 subagent 層掛它沒有意義。` +
+              `要嘛拿掉 scope，要嘛拿掉 rootOnly。`,
+          );
         }
-      };
+        const layer = layerFor(scope);
+        const undo = layer.tools.insert(tool.name, tool, origin);
+        if (rootOnly) {
+          rootOnlyTools.set(
+            tool,
+            typeof options?.rootOnly === 'object' ? options.rootOnly : undefined,
+          );
+        }
+        if (options?.outputSchema !== undefined) outputSchemas.set(tool, options.outputSchema);
+        return () => {
+          undo();
+          rootOnlyTools.delete(tool);
+          outputSchemas.delete(tool);
+          // 空層不留下來：層是註冊行為的產物，`scopes()` 是 fold 的輸入，回滾過的
+          // plugin 不該讓 fold 看到一個它其實沒碰過的 subagent 名。
+          if (scope !== undefined && layer.tools.size === 0 && scopedLayers.get(scope) === layer) {
+            scopedLayers.delete(scope);
+          }
+        };
+      });
     },
     resolve(name, scope) {
       if (scope !== undefined) {
@@ -1028,29 +1578,34 @@ export function createRegistry(): InternalPluginRegistry {
   };
 
   const subagentPoint: SubAgentRegistrationPoint = {
-    register(subagent) {
-      const origin = requireOrigin('subagents.register()');
-      return subagents.insert(subagent.name, subagent, origin);
-    },
+    register: (subagent) =>
+      effect('subagents.register()', (origin) => {
+        try {
+          assertMaxTurns(subagent);
+          options.validateSubagent?.(subagent);
+        } catch (error) {
+          throw new Error(
+            `${formatOrigin(origin)} 註冊的 subagent "${subagent.name}" 不合：${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
+        return subagents.insert(subagent.name, subagent, origin);
+      }),
     get: (name) => subagents.get(name),
     entries: () => subagents.entries(),
   };
 
   const capabilityPoint: CapabilityRegistrationPoint = {
-    provide(name) {
-      const origin = requireOrigin('capabilities.provide()');
-      return capabilities.provide(name, origin);
-    },
+    provide: (name) =>
+      effect('capabilities.provide()', (origin) => capabilities.provide(name, origin)),
     has: (name) => capabilities.has(name),
     providers: (name) => capabilities.providers(name),
     names: () => capabilities.names(),
   };
 
   const servicePoint: ServiceRegistrationPoint = {
-    provide(name: string, value: unknown) {
-      const origin = requireOrigin('services.provide()');
-      return serviceEntries.insert(name, value, origin);
-    },
+    provide: (name: string, value: unknown) =>
+      effect('services.provide()', (origin) => serviceEntries.insert(name, value, origin)),
     use(name: string) {
       const entry = serviceEntries.get(name);
       if (entry === undefined) throw missingServiceError(name);
@@ -1084,83 +1639,82 @@ export function createRegistry(): InternalPluginRegistry {
 
   const backendPoint: BackendRegistrationPoint = {
     mount(routePrefix, backend) {
-      const origin = requireOrigin('backend.mount()');
-      if (!routePrefix.startsWith('/') || !routePrefix.endsWith('/')) {
-        throw new Error(
-          `${formatOrigin(origin)} 掛的 routePrefix "${routePrefix}" 不合法：` +
-            `必須以 "/" 開頭且以 "/" 結尾（例如 "/memories/"）。` +
-            `基座的 CompositeBackend 直接對前綴做字串切割，少了尾斜線會切錯路徑。`,
-        );
-      }
-      return backends.insert(routePrefix, backend, origin);
+      return effect('backend.mount()', (origin) => {
+        if (!routePrefix.startsWith('/') || !routePrefix.endsWith('/')) {
+          throw new Error(
+            `${formatOrigin(origin)} 掛的 routePrefix "${routePrefix}" 不合法：` +
+              `必須以 "/" 開頭且以 "/" 結尾（例如 "/memories/"）。` +
+              `基座的 CompositeBackend 直接對前綴做字串切割，少了尾斜線會切錯路徑。`,
+          );
+        }
+        return backends.insert(routePrefix, backend, origin);
+      });
     },
     mounts: () => [...backends.entries()],
   };
 
   const middlewarePoint: MiddlewareRegistrationPoint = {
-    use(middleware, options) {
-      const origin = requireOrigin('middleware.use()');
-      return middlewares.append({ middleware, prepend: options?.prepend === true }, origin);
-    },
-    useWithBackend(build, options) {
-      const origin = requireOrigin('middleware.useWithBackend()');
-      return middlewares.append({ build, prepend: options?.prepend === true }, origin);
-    },
+    use: (middleware, options) =>
+      effect('middleware.use()', (origin) =>
+        middlewares.append({ middleware, ...placementOf(options, 'middleware.use()') }, origin),
+      ),
+    useWithBackend: (build, options) =>
+      effect('middleware.useWithBackend()', (origin) =>
+        middlewares.append(
+          { build, ...placementOf(options, 'middleware.useWithBackend()') },
+          origin,
+        ),
+      ),
     list: () => [...middlewares.entries()],
   };
 
   const permissionPoint: PermissionRegistrationPoint = {
-    deny(paths, options) {
-      const origin = requireOrigin('permissions.deny()');
-      return denyRules.append({ paths: [...paths], except: [...(options?.except ?? [])] }, origin);
-    },
+    deny: (paths, options) =>
+      effect('permissions.deny()', (origin) =>
+        denyRules.append({ paths: [...paths], except: [...(options?.except ?? [])] }, origin),
+      ),
     rules: () => [...denyRules.entries()],
   };
 
   const approvalPoint: ApprovalRegistrationPoint = {
-    gate(listener) {
-      const origin = requireOrigin('approvals.gate()');
-      return approvalListeners.append(listener, origin);
-    },
+    gate: (listener) =>
+      effect('approvals.gate()', (origin) => approvalListeners.append(listener, origin)),
     listeners: () => [...approvalListeners.entries()],
   };
 
   const skillPoint: SkillSourceRegistrationPoint = {
-    addSource(path) {
-      const origin = requireOrigin('skills.addSource()');
-      // key 用正規化後的，value 留原文——`/skills/` 與 `/skills` 是同一個目錄，
-      // 但交給基座的要是 plugin 真正寫下的那一串。
-      const normalized = assertLoadableSkillsPath(path, origin);
-      return skillSources.insert(normalized, path, origin);
-    },
+    addSource: (path) =>
+      effect('skills.addSource()', (origin) => {
+        // key 用正規化後的，value 留原文——`/skills/` 與 `/skills` 是同一個目錄，
+        // 但交給基座的要是 plugin 真正寫下的那一串。
+        const normalized = assertLoadableSkillsPath(path, origin);
+        return skillSources.insert(normalized, path, origin);
+      }),
     sources: () => [...skillSources.entries()].map(([, entry]) => entry.value),
   };
 
   const memoryPoint: MemorySourceRegistrationPoint = {
-    addSource(path) {
-      const origin = requireOrigin('memory.addSource()');
-      assertLoadableMemoryPath(path, origin);
-      return memorySources.append(path, origin);
-    },
+    addSource: (path) =>
+      effect('memory.addSource()', (origin) => {
+        assertLoadableMemoryPath(path, origin);
+        return memorySources.append(path, origin);
+      }),
     sources: () => [...memorySources.entries()].map((entry) => entry.value),
   };
 
   const telemetryPoint: TelemetryRegistrationPoint = {
-    redact(rule) {
-      const origin = requireOrigin('telemetry.redact()');
-      return redactRules.append(rule, origin);
-    },
+    redact: (rule) => effect('telemetry.redact()', (origin) => redactRules.append(rule, origin)),
     rules: () => [...redactRules.entries()],
   };
 
   const invariantPoint: InvariantRegistrationPoint = {
-    register(packageName, installer) {
-      const origin = requireOrigin('invariants.register()');
-      if (packageName.length === 0 || packageName.trim() !== packageName) {
-        throw new Error(`${formatOrigin(origin)} 註冊的不變量包名不能是空的、也不能帶前後空白。`);
-      }
-      return companions.insert(packageName, installer, origin);
-    },
+    register: (packageName, installer) =>
+      effect('invariants.register()', (origin) => {
+        if (packageName.length === 0 || packageName.trim() !== packageName) {
+          throw new Error(`${formatOrigin(origin)} 註冊的不變量包名不能是空的、也不能帶前後空白。`);
+        }
+        return companions.insert(packageName, installer, origin);
+      }),
     companions: () =>
       [...companions.entries()].map(([packageName, entry]) => ({
         packageName,
@@ -1170,11 +1724,11 @@ export function createRegistry(): InternalPluginRegistry {
   };
 
   const commandPoint: CommandRegistrationPoint = {
-    register(definition) {
-      const origin = requireOrigin('commands.register()');
-      const normalized = normalizeCommandDefinition(definition);
-      return commandEntries.insert(normalized.definition.name, normalized, origin);
-    },
+    register: (definition) =>
+      effect('commands.register()', (origin) => {
+        const normalized = normalizeCommandDefinition(definition);
+        return commandEntries.insert(normalized.definition.name, normalized, origin);
+      }),
     list: () =>
       Object.freeze(
         [...commandEntries.entries()]
@@ -1187,47 +1741,128 @@ export function createRegistry(): InternalPluginRegistry {
 
   // 插入序，而且**允許多於一張**——理由見 `SessionRegistrationPoint.bind`。
   const boundSessions = new Set<SessionRegistry>();
+  /** 登記著「可能派出子代理」的呼叫，`runId` → 那一格。見 `expectSpawn`。 */
+  const expectedSpawns = new Map<string, SpawnLink>();
   const sessionPoint: SessionRegistrationPoint = {
-    join(installer) {
-      const origin = requireOrigin('sessions.join()');
-      return sessionInstallers.append(installer, origin);
-    },
+    join: (installer) =>
+      effect('sessions.join()', (origin) => sessionInstallers.append(installer, origin)),
     installers: () => [...sessionInstallers.entries()],
-    forCall(config) {
-      if (boundSessions.size === 0) return { kind: 'not-attached' };
-      if (boundSessions.size > 1) return { kind: 'ambiguous', count: boundSessions.size };
-      const address = toolCallSessionAddress(config);
-      if (address === undefined) return { kind: 'unknown-caller' };
-      const [sessions] = boundSessions;
-      // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
-      // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
-      return { kind: 'ok', address, log: sessions!.open(address) };
-    },
+    // 挑法住在 `pickSessionForCall`，與樹上的會話查找服務是同一支實作（#1463）。
+    forCall: (config) => pickSessionForCall(boundSessions, config),
     async flush(log) {
       await Promise.all([...boundSessions].map((sessions) => sessions.flush(log)));
     },
+    expectSpawn(runId, link) {
+      expectedSpawns.set(runId, link);
+      return () => {
+        // 只退自己那一格：同一個 `runId` 被核准中斷之後 resume 會再登記一次（見 `session-log.ts` 的 `tool/call`）。
+        if (expectedSpawns.get(runId) === link) expectedSpawns.delete(runId);
+      };
+    },
     bind(sessions) {
       boundSessions.add(sessions);
+      // 子日誌出生的那一刻寫目錄（#1023）。`observe` 先掃一遍已經在的：root 與這次綁上來之前就開的，都不在登記表上。
+      const unobserve = sessions.observe(({ address, log }) => {
+        if (address.kind !== 'subagent') return;
+        const link = expectedSpawns.get(address.runId);
+        // 寫的那一份要是這張註冊表的：別張註冊表（另一條 thread）的同名 `runId` 不寫過去。
+        if (link === undefined || !sessions.list().some((entry) => entry.log === link.parent)) {
+          return;
+        }
+        expectedSpawns.delete(address.runId);
+        // 前景子代理的輸入：基座的 `task` 把 `description` 原樣當子圖的第一則 `HumanMessage`，日誌上卻沒有任何一顆事件
+        // 記它，從日誌推這個子代理的歷史就缺了開頭那一句（#1159）。**這裡只登記，不寫**：寫在 `open` 回來之後
+        // （{@link pickSessionForCall}），理由見 {@link pendingSpawnInputs}。
+        if (link.input !== undefined) pendingSpawnInputs.set(log, link.input);
+        // 目錄同樣只登記、在 `open` 回來之後寫（#1702，見 {@link pendingCatalogs}）。
+        pendingCatalogs.set(log, {
+          parent: link.parent,
+          data: { childId: log.sessionId, callId: link.callId, mode: 'one-shot' },
+        });
+      });
       let active = true;
       return () => {
         if (!active) return;
         active = false;
+        unobserve();
         boundSessions.delete(sessions);
       };
     },
   };
 
+  const projectionPoint: ProjectionRegistrationPoint = {
+    register: (unit) =>
+      effect('projections.register()', (origin) => {
+        const normalized = normalizeProjectionUnit(unit) as ProjectionUnit;
+        return projectionEntries.insert(normalized.key, normalized, origin);
+      }),
+    list: () => Object.freeze([...projectionEntries.entries()].map(([, entry]) => entry.value)),
+  };
+
   const lifecyclePoint: LifecycleRegistrationPoint = {
-    onDispose(dispose) {
-      const origin = requireOrigin('lifecycle.onDispose()');
-      return disposers.append(dispose, origin);
-    },
+    onDispose: (dispose) =>
+      effect('lifecycle.onDispose()', (origin) => disposers.append(dispose, origin)),
     disposers: () => [...disposers.entries()],
     takeDisposers: () => disposers.drain(),
   };
 
+  const eventBus = new EventBus();
+  const eventsPoint: EventRegistrationPoint = {
+    on: (name, listener, options) =>
+      effect('events.on()', (origin) => {
+        const undo = eventBus.on(name, listener, options, origin);
+        return () => void undo();
+      }),
+    once: (name, listener, options) =>
+      effect('events.once()', (origin) => {
+        const undo = eventBus.once(name, listener, options, origin);
+        return () => void undo();
+      }),
+    listeners: () => eventBus.listeners(),
+  };
+
+  /** `warnings()` 留的筆數上限，同 dsh `LoggerService.bufferSize`。 */
+  const WARNING_BUFFER_SIZE = 1000;
+  const warnings: PluginWarning[] = [];
+  const exporters = new Set<PluginWarningExporter>();
+  const say = (origin: PluginOrigin, message: string): void => {
+    const warning: PluginWarning = { origin, message };
+    warnings.push(warning);
+    // 只留最近 1000 則，同 dsh `LoggerService.bufferSize`：執行期的話不設上限會隨掉線次數一直長。
+    if (warnings.length > WARNING_BUFFER_SIZE)
+      warnings.splice(0, warnings.length - WARNING_BUFFER_SIZE);
+    for (const exporter of [...exporters]) {
+      try {
+        exporter.export(warning);
+      } catch {
+        // dsh 的 `exporter.export` 不攔；這裡攔是因為 plugin-mcp 的重連監督者在**排計時器之前**就呼叫 logger（`Supervisor.schedule`
+        // 的 `report`），接收端的例外會從 SDK 的 `onclose` 回呼一路傳出，重連再也排不上（`reconnect.test.ts`「宿主的接收端拋錯」）。
+      }
+    }
+  };
+  const loggerPoint: PluginLogger = {
+    warn: (message) => {
+      say(requireOrigin('logger.warn()'), message);
+    },
+    bind() {
+      const origin = requireOrigin('logger.bind()');
+      return {
+        warn: (message) => {
+          say(origin, message);
+        },
+      };
+    },
+    exporter(exporter) {
+      exporters.add(exporter);
+      return () => void exporters.delete(exporter);
+    },
+    warnings: () => [...warnings],
+  };
+
   /** 明著被關掉的條目留下的唯一痕跡，見 {@link DisabledEntryView}。 */
   const disabledNames: string[] = [];
+  /** 開著、`apply` 成功了的條目的 `name`，記次數：同名可以掛好幾列，撤銷一列只減一。 */
+  const enabledNames = new Map<string, number>();
 
   return {
     tools,
@@ -1245,9 +1880,27 @@ export function createRegistry(): InternalPluginRegistry {
     invariants: invariantPoint,
     commands: commandPoint,
     sessions: sessionPoint,
+    projections: projectionPoint,
+    events: eventsPoint,
+    dispatch: eventBus,
+    logger: loggerPoint,
     disabledEntries: {
-      has: (pluginName) => disabledNames.includes(pluginName),
+      has: (pluginName) =>
+        disabledNames.includes(pluginName) && (enabledNames.get(pluginName) ?? 0) === 0,
       names: () => [...disabledNames],
+    },
+    markEnabled(pluginName) {
+      effect('markEnabled()', () => {
+        enabledNames.set(pluginName, (enabledNames.get(pluginName) ?? 0) + 1);
+        let active = true;
+        return () => {
+          if (!active) return;
+          active = false;
+          const left = (enabledNames.get(pluginName) ?? 1) - 1;
+          if (left === 0) enabledNames.delete(pluginName);
+          else enabledNames.set(pluginName, left);
+        };
+      });
     },
     markDisabled(pluginName) {
       disabledNames.push(pluginName);
@@ -1259,9 +1912,22 @@ export function createRegistry(): InternalPluginRegistry {
         );
       }
       current = origin;
+      let stack = undoStacks.get(origin);
+      if (stack === undefined) {
+        stack = [];
+        undoStacks.set(origin, stack);
+      }
+      currentUndos = stack;
       return () => {
         current = undefined;
+        currentUndos = undefined;
       };
+    },
+    rollback(origin) {
+      const stack = undoStacks.get(origin);
+      if (stack === undefined) return;
+      undoStacks.delete(origin);
+      for (const undo of stack.reverse()) undo();
     },
   };
 }
@@ -1351,7 +2017,7 @@ function assertLoadableMemoryPath(path: string, origin: PluginOrigin): void {
  *   目錄，載兩次只會讓同名 skill 自己覆蓋自己，那正是重複檢查要擋的事。
  * @throws 路徑以 `~` 開頭、含 `\\`、不是絕對路徑、或含 `.` / `..` / 空的中間路段。
  */
-function assertLoadableSkillsPath(path: string, origin: PluginOrigin): string {
+export function assertLoadableSkillsPath(path: string, origin: PluginOrigin): string {
   const reject = (why: string): never => {
     throw new Error(
       `${formatOrigin(origin)} 註冊的 skill 來源 "${path}" ${why}。` +

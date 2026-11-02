@@ -1,0 +1,169 @@
+/**
+ * **出貨清單上的每一列，在自己的 `apply` 當下讀的服務都由組裝點提供**——守 `apps/harness/cordis.yml`
+ * 「順序不承載語意」的服務那一半（[#687](https://github.com/DemianLi/nexus-agent/issues/687) 第 2 步）。
+ *
+ * 載入是一趟到底的（`@nexus/core` 的 `ServiceRegistrationPoint` 偏離登記）：`apply` 當下讀一個由**另一列
+ * plugin** 提供的服務，順序就變成承重的——排在提供者前面，`use` 當場拋、`get` 靜靜回 `undefined`。今天
+ * 沒有這種相依，因為組裝點的 host-services 一律排在清單最前面；這一條把「今天沒有」釘住。真的出現的
+ * 那天，偏離登記留著要決定的是拓撲排序還是照 dsh 做成惰性——**不是**把這裡的允許名單加一筆。
+ *
+ * 只加測試，不加執行期機制。量法：走產品組裝（`createCliAgent`，帶 `--workspace`，host-services 提供的
+ * 服務最多的那一條），把出貨清單每一列的 `apply` 包一層，記下它在 `apply` 當下經 `services.get`／
+ * `services.use` 讀的名字，以及**那一刻**是誰提供的。
+ *
+ * **包在原物件上，不換物件**：`createCliAgent` 靠 plugin 物件的身分從清單裡找設定列（`startupSetting`），
+ * 換成新物件的話那幾列會找不到。
+ *
+ * 核准閘門那一半（順序由載入順序決定）不在這裡，守它的是 `approval-gate-order.test.ts`。
+ *
+ * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區是暫存目錄。
+ */
+
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { createCliAgent } from './assembly-root.js';
+import { shippedServePlugins } from './fixtures.js';
+import { GOALS_SERVICE } from '@nexus/goal';
+
+// serve 的出貨清單（出貨層加專屬層）是 CLI 那份的超集：量這份兩個入口的列都涵蓋到（#669 第 4 步起 `workspace-changes` 在專屬層）。
+const shipped = await shippedServePlugins();
+
+/**
+ * 組裝點交協作者的那幾個條目的 plugin 名：`assembly-root.ts` 的 `host-services`，`agent-factory.ts` 的
+ * `system-prompt-variables` 與 `fs`。改了名字這一條會紅（讀到的服務找不到認得的提供者）——那是安全的方向。
+ * `system-prompt-variables` 在 #1477 之後不提供服務了（它只把 `model`／`cwd` 記在這次組裝上，`system-prompt-middleware.ts`），
+ * 名單留著它：條目還在、名字沒變，萬一哪天有人讓它又提供服務，這一條照樣認得它是組裝點的。
+ */
+const HOST_ENTRY_NAMES = new Set(['host-services', 'system-prompt-variables', 'fs']);
+
+/** 一次 `apply` 當下的讀取：誰讀、讀哪個名字、那一刻誰提供。 */
+interface ServiceRead {
+  readonly reader: string;
+  readonly service: string;
+  readonly provider: string | undefined;
+}
+
+let root: string;
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), 'nexus-shipped-service-reads-'));
+});
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await rm(root, { recursive: true, force: true });
+});
+
+/**
+ * 把一列的 `apply` 包一層：`apply` 跑的那段時間裡經 `services` 讀的名字記進 `reads`。`apply` 之後
+ * （工具被叫時）的讀取不算，那時載入已經結束，順序管不到它。
+ */
+function watch(plugin: NexusPlugin<unknown>, reads: ServiceRead[]): void {
+  // 清單上的 plugin 各有各的設定型別，這裡只轉手，所以退到 `unknown`。
+  const target = plugin as unknown as {
+    apply(registry: PluginRegistry, config: unknown): void | Promise<void>;
+  };
+  const original = target.apply.bind(target);
+  vi.spyOn(target, 'apply').mockImplementation((registry: PluginRegistry, config: unknown) => {
+    let applying = true;
+    const record = (service: string) => {
+      if (!applying) return;
+      reads.push({
+        reader: plugin.name,
+        service,
+        provider: registry.services.provider(service)?.name,
+      });
+    };
+    const services: PluginRegistry['services'] = {
+      ...registry.services,
+      get: ((name: string) => {
+        record(name);
+        return registry.services.get(name);
+      }) as PluginRegistry['services']['get'],
+      use: ((name: string) => {
+        record(name);
+        return registry.services.use(name);
+      }) as PluginRegistry['services']['use'],
+    };
+    const spied = new Proxy(registry, {
+      get: (target, key) => (key === 'services' ? services : Reflect.get(target, key, target)),
+    });
+    try {
+      return original(spied, config);
+    } finally {
+      applying = false;
+    }
+  });
+}
+
+/** 讀到的服務不是由組裝點的 host-services 提供的那幾筆（含沒人提供的）。 */
+function straysOf(reads: readonly ServiceRead[]): ServiceRead[] {
+  return reads.filter(
+    (read) => read.provider === undefined || !HOST_ENTRY_NAMES.has(read.provider),
+  );
+}
+
+/** 走一次產品組裝，回出貨清單每一列在 `apply` 當下的讀取。 */
+async function readsOf(plugins: readonly PluginEntry[]): Promise<ServiceRead[]> {
+  const reads: ServiceRead[] = [];
+  for (const plugin of new Set(plugins.map((entry) => entry.plugin))) watch(plugin, reads);
+  // 帶 `sharedWorkspaceRoot`：量 serve 新 thread 的形狀（#1775），host-services 才會提供 `sharedWorkspace`——`sandbox-policy` 在 `apply` 當下讀它。
+  // 沒有共用區時（CLI、舊 thread）那一格缺席，讀到的是 `undefined`，次序一樣不承重（host-services 排最前面）。
+  const built = await createCliAgent(
+    { live: false, workspace: root, workspaceRoot: root, sharedWorkspaceRoot: root },
+    plugins,
+    root,
+  );
+  await built.dispose();
+  return reads;
+}
+
+describe('出貨清單在 apply 當下讀的服務', () => {
+  it('每一個都由組裝點的 host-services 提供，沒有 plugin → plugin 的服務相依', async () => {
+    const reads = await readsOf(shipped);
+    // 前提：真的量到了讀取。空陣列也「全部合格」。#1477 之前這裡斷言 `system-prompt` 那一列讀 `systemPromptVariables`（#720）；
+    // 那一列現在是樹上的函式插件、不讀任何服務，前提改成另一列確實讀到的東西（下面也斷言 `workspaceRoot`）。
+    expect(reads.map((read) => read.service)).toContain('workspaceRoot');
+    expect(reads.map((read) => read.service)).not.toContain('systemPromptVariables');
+    expect(straysOf(reads)).toEqual([]);
+    // serve 專屬層那一列讀的是組裝點交的工作區根（#669）：在 `apply` 當下讀，提供者是 host-services。
+    expect(reads).toContainEqual({
+      reader: 'workspace-changes',
+      service: 'workspaceRoot',
+      provider: 'host-services',
+    });
+  }, 20000);
+
+  /**
+   * 對照：一列在 `apply` 當下讀另一列 plugin 提供的服務（`goals` 由清單上的 goal 那一列提供），
+   * 這一條要紅——排在 goal 前面讀到的是 `undefined`，排在後面讀到的提供者是 goal 自己，兩種都不是 host-services。
+   */
+  it.each([
+    ['排在提供者前面', 'first'],
+    ['排在提供者後面', 'last'],
+  ] as const)(
+    '對照：讀別列提供的服務（%s）會被抓出來',
+    async (_label, where) => {
+      const probe: NexusPlugin = {
+        name: 'goals-reader',
+        apply(registry) {
+          registry.services.get(GOALS_SERVICE);
+        },
+      };
+      const entry: PluginEntry = { plugin: probe };
+      const reads = await readsOf(where === 'first' ? [entry, ...shipped] : [...shipped, entry]);
+      expect(straysOf(reads)).toEqual([
+        {
+          reader: 'goals-reader',
+          service: GOALS_SERVICE,
+          provider: where === 'first' ? undefined : 'goal',
+        },
+      ]);
+    },
+    20000,
+  );
+});

@@ -37,6 +37,8 @@
    **這直接決定了 `feat/sandbox-plugin` 的形狀**：QuickJS 做成 sandbox backend 會讓 `permissions` 擴充點與它互斥，現有的權限行為驗收會在組裝期炸掉。所以走 custom tool（基座明文「custom tools from the agent or other middleware are left untouched」），完全不經過那條路。絆索測試在 `apps/harness/src/sandbox-backend-conflict.test.ts`，形狀照 `contained-backend.test.ts` 那組升版絆索——它紅了代表基座改了主意，那正是該回頭看這個決定的時刻。
 
    `isSandboxBackend()` 是純 duck-type（`execute` 是函式 ＋ 非空的 `id` 字串），所以「這個 backend 算不算會執行指令」不看繼承關係，看形狀。
+   **2026-10-10 重核後維持本決策，shell sandbox 繼續延後，且不再預設「有明確隔離方案就做」。**（[#949](https://github.com/DemianLi/nexus-agent/issues/949)）逐條對過 dsh 的程序沙箱（Seatbelt／bwrap，只管檔案寫入、讀取與網路全開）與我們的檔案 fence 之後，三條路——(a) 補一層 dsh 式程序沙箱、(b) 容器、(c) 零風險小步——**都不做**。理由是產品定位，不是技術做不到：這個專案和 dsh 最大的差別是，它是聊天機器人，幫忙查資料、接入企業內部系統，不是處理個人電腦上的程式與寫作需求（demian）。dsh 的沙箱是為「模型在使用者自己電腦上跑任意指令」設計的；我們沒有註冊 `execute`，那個威脅面今天不存在。留下來的缺口照實寫在 `docs/operations.md`「這道 fence 管不到的」（讀取面、stdio MCP 子行程、政策圍欄不是安全邊界，[#1291](https://github.com/DemianLi/nexus-agent/issues/1291)）。**哪天要註冊 `execute`，或要把 agent 開放給不信任的使用者，這條決策要重開**——本段不是「永遠不做」，是「今天的產品形狀不需要」。執行期文字（提示詞、`/permission`）不因此改動。
+
 4. **狀態儲存決策點是三個軸，不是一個**（Phase 3 收斂）：原文把它寫成「`MemorySaver` → 評估 `checkpoint-postgres`」，那只覆蓋 `checkpointer`（thread 內的對話狀態）。實測基座之後拆開：`store`（`BaseStore`，`StoreBackend` 明文「persist across all threads」）才是跨 thread 記憶的載體；`backend` 才是 AGENTS.md、skills 與 `/conversation_history` 實際落在哪。**三軸各自可選、失敗方式不同**——checkpointer 缺席是接不回 interrupt（fold 已經在擋，見 `foldRegistry` 對核准政策的前置檢查），store 缺席是換個 thread 就失憶，backend 選錯是記憶根本寫不回去（memory middleware 唯讀，寫回去只有模型的 `write_file` 一條路）。Phase 3 的三個 PR 要分別對上，不能用一個「狀態儲存選好了」收掉。
 
    `@langchain/langgraph-checkpoint-postgres@1.0.5` 前兩軸同一個套件收（`.` 出 checkpointer、`./store` 出 `PostgresStore`），peer 是 `@langchain/core ^1.1.44` ＋ `@langchain/langgraph-checkpoint ^1.1.4`，與我們現有範圍相容——但那是**兩個決定**，只是剛好同一個相依。

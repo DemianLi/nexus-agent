@@ -1,0 +1,4 @@
+# 把 `serve-session-wiring.fixture.ts` 那顆探針插到出貨清單上，見它的檔頭。
+- insert:
+    - id: wiring-probe
+      name: './serve-session-wiring.fixture.ts'

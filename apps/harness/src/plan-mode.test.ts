@@ -1,5 +1,15 @@
 /**
- * 計劃模式的**行為**驗收（[#116](https://github.com/DemianLi/nexus-agent/issues/116)）。
+ * **產品組裝（#670）**：這一檔的案例都經 `createCliAgent` 跑，清單是 `cordis.yml` 出貨的那一份——`plan-mode` 那一列用
+ * config 換 `startActive`／`guidance`、`summarization` 那一列換低門檻、模型用 `withScriptedModel` 換成腳本。以前是手搭的
+ * `createNexusAgent` 單獨掛上 `plan-mode`，量到的是「一個 plugin 掛在空清單上」；現在量的是它在出貨清單裡、跟其餘
+ * 條目一起 fold 之後的樣子（指引疊在記憶與別的 prompt 貢獻者上、`exit_plan_mode` 走產品算出來的提問通道）。
+ *
+ * **留在手搭組裝的一處**：「工具目錄不隨模式變動」那條（`createNexusAgent` ＋ `toolOrder`）。產品組裝沒有 `toolOrder`
+ * 這個選項（`createCliAgent` 不傳，`assembly-root.ts` 零處提到它），而這條要證明的是「模式關著時 `exit_plan_mode` 仍是
+ * 一個排得進呈現順序的已註冊工具」——`agent-factory.test.ts` 守的是用 echo／note 兩顆的泛用排序，不涵蓋這一點。
+ * 產品組裝那側另外加了「模式關著時 `exit_plan_mode` 仍綁在模型上」，不替代它。
+ *
+ *  * 計劃模式的**行為**驗收（[#116](https://github.com/DemianLi/nexus-agent/issues/116)）。
  *
  * `packages/nexus-plugin-plan-mode` 那邊的薄測試看的是 registry 的內容；這裡看的是
  * **模型收到的 prompt** 與**跑完之後的日誌**——一個 middleware 有沒有作用，只有在
@@ -10,43 +20,130 @@
  * 四組，各自釘一件不同的事：
  *
  * 1. **指引**：開著才夾、關著一個字都不多、而且不會踩掉別人的 prompt。
- * 2. **`exit_plan_mode` 的三條路**：有人核准、沒人可問、不在模式裡——三種結局要分得開。
+ * 2. **`exit_plan_mode` 的結局**：同意、繼續規劃、關掉這一題、沒人可問、不在模式裡——走提問通道
+ *    （[#652](https://github.com/DemianLi/nexus-agent/issues/652)），結局要分得開。
  * 3. **模式狀態活得過什麼**：同一條 thread 的下一輪、以及一次真的壓縮。跨重啟那一條在
  *    `session-resume.test.ts`。
- * 4. **`prepend` 的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭。
+ * 4. **拒絕在核准之前的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭（第 2 組最後一條）。
+ *    現在翻面了（#1276）：拒絕只在 `exit_plan_mode` 的工具本體裡，同 dsh，所以掛全攔核准閘門時模型先看到核准的措辭。
+ *    曾經有一層排在閘門之前的拒絕（#1272 搬上事件匯流排、#1276 拿掉）；兩段行為的差分在
+ *    `plan-mode-refusal-differential.test.ts`。
  * 5. **`/plan` 這條路**：人打的那一行到底有沒有讓下一輪的 prompt 變得不一樣
  *    （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
  */
 
 import { PassThrough } from 'node:stream';
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { BaseMessage } from '@langchain/core/messages';
-import { Command, MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
-import type { PluginEntry, SessionEvent } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import { createMemoryPlugin } from '@nexus/plugin-memory';
+import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
+import { Command } from '@langchain/langgraph';
+import { convertMessagesToCompletionsMessageParams } from '@langchain/openai';
+import { HumanMessage } from '@langchain/core/messages';
+import { APPROVAL_POLICY_NEVER, SessionRegistry, STEP_INBOX_CONFIG_KEY } from '@nexus/core';
+import type {
+  PluginEntry,
+  QuestionInterruptItem,
+  QuestionReply,
+  SessionEvent,
+  StepInbox,
+} from '@nexus/core';
+import { CANCELLED_MESSAGE } from '@nexus/plugin-ask-user';
 import {
-  createPlanModePlugin,
-  DEFAULT_PLAN_GUIDANCE,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
+  PLAN_ALREADY_INACTIVE_MESSAGE,
+  PLAN_APPROVE_LABEL,
   PLAN_APPROVED_MESSAGE,
-  PLAN_ARGS_ERROR_MESSAGE,
   PLAN_ENTERED_MESSAGE,
+  PLAN_KEEP_PLANNING_LABEL,
   PLAN_LEFT_MESSAGE,
+  PLAN_NO_REVIEWER_MESSAGE,
+  PLAN_REVIEW_DISMISSED_MESSAGE,
+  PLAN_REVIEW_HEADER,
+  PLAN_REVIEW_QUESTION,
+  PLAN_REVIEW_QUESTION_ID,
+  planFeedbackMessage,
   recordedPlanMode,
 } from '@nexus/plugin-plan-mode';
-import { createSummarizationMiddleware } from 'deepagents';
-import { describe, expect, it } from 'vitest';
-import { createNexusAgent } from './agent-factory.js';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
+import { createMemoryPlugin } from '@nexus/plugin-memory';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
+import { createCliAgent } from './assembly-root.js';
+import { restoreConversation } from './conversation-restore.js';
 import { runRepl } from './cli.js';
-import { HEADLESS_APPROVALS } from './agent-factory.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
+import {
+  shippedPlugins,
+  testPlanModePlugin,
+  withoutTimeContext,
+  withScriptedModel,
+} from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import type { ScriptedTurn } from './scripted-model.js';
+
+const shipped = withoutTimeContext(await shippedPlugins());
+
+/**
+ * 出貨清單 `plan-mode` 那一列的 `guidance`，讀 `cordis.yml`。**套件沒有預設值了**（#1607，照 dsh：部署必給），所以出貨那一句
+ * 住在 yml 裡；這一檔「指引進不進 system prompt」的案例量的就是它，不是測試自己寫的一句。
+ */
+const SHIPPED_GUIDANCE = (
+  shipped.find((entry) => entry.id === 'plan-mode')?.config as { guidance?: string } | undefined
+)?.guidance as string;
+
+/** 出貨清單上 `plan-mode` 那一列換 config，其餘不動。不給就是出貨的樣子（`startActive` 關）。 */
+function withPlanMode(config?: { startActive?: boolean; guidance?: string }): PluginEntry[] {
+  return shipped.map((entry) =>
+    entry.id === 'plan-mode' && config
+      ? { ...entry, config: { guidance: SHIPPED_GUIDANCE, ...config } }
+      : entry,
+  );
+}
+
+/** 暫存的 workspace，測完收掉。 */
+const roots: string[] = [];
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+async function tmpRoot(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  roots.push(dir);
+  return dir;
+}
+
+interface AssembleOptions {
+  /** `plan-mode` 那一列的 config。省略就是出貨的樣子。 */
+  readonly plan?: { startActive?: boolean; guidance?: string };
+  /** 放在清單**最前面**的條目：註冊順序在計劃模式之前，所以更外層。 */
+  readonly before?: readonly PluginEntry[];
+  /** 對整份清單再做一次改動（例如換 `summarization` 那一列）。 */
+  readonly patch?: (plugins: PluginEntry[]) => PluginEntry[];
+  readonly workspace?: string;
+  readonly headless?: boolean;
+  /** 掛插話的載體（serve 才開，#710）；要配 `configurable` 裡的 `STEP_INBOX_CONFIG_KEY` handle 才有東西可領。 */
+  readonly stepInbox?: boolean;
+}
+
+/** 在產品組裝上跑：出貨清單＋這一檔要的改動＋腳本模型。 */
+async function assemble(turns: readonly ScriptedTurn[], options: AssembleOptions = {}) {
+  const base = [...(options.before ?? []), ...withPlanMode(options.plan)];
+  const plugins = withScriptedModel(options.patch ? options.patch(base) : base, turns);
+  const built = await createCliAgent(
+    {
+      live: false,
+      ...(options.workspace === undefined ? {} : { workspace: options.workspace }),
+      ...(options.stepInbox === true && { stepInbox: true }),
+    },
+    plugins,
+    options.workspace,
+    options.headless === true ? { approvals: HEADLESS_APPROVALS } : {},
+  );
+  return { ...built, model: built.model as ScriptedChatModel };
+}
+
+const quiet = (text = '好。'): ScriptedTurn[] => [{ content: text }];
 
 /** 一輪 prompt 裡的 system 訊息。指引併進的是 system prompt，不是對話。 */
 function systemPrompt(messages: readonly BaseMessage[]): string {
@@ -72,73 +169,65 @@ function lastToolMessage(messages: readonly BaseMessage[]): BaseMessage | undefi
 }
 
 /** 一份會呼叫 `exit_plan_mode` 再收工的腳本。 */
-function planScript(): ScriptedChatModel {
-  return new ScriptedChatModel({
-    turns: [
-      {
-        content: '我先規劃。',
-        toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: '# 計劃\n\n先看再改。' } }],
-      },
-      { content: '開始動手。' },
-    ],
-  });
-}
+const PLAN_SCRIPT: readonly ScriptedTurn[] = [
+  {
+    content: '我先規劃。',
+    toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: '# 計劃\n\n先看再改。' } }],
+  },
+  { content: '開始動手。' },
+];
 
 describe('計劃指引進不進 system prompt', () => {
   it('startActive 開著就夾進去', async () => {
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      plugins: [createPlanModePlugin({ startActive: true })],
-    });
+    const { agent, model, dispose } = await assemble(quiet(), { plan: { startActive: true } });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'guidance-on' } });
     } finally {
       await dispose();
     }
 
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
   });
 
   /**
    * **這一條是「未激活不增加 token」那句話的執行版**（dsh
    * `packages/plan/plan-mode/README.zh.md` 的 Token 影響）。middleware 掛著、工具註冊著、
    * 但 prompt 裡一個字都沒有多——不然「掛了這個 plugin」就變成一筆每輪都在付的稅。
+   *
+   * 這一條走**出貨的 `plan-mode` 那一列、不加任何 config**：出貨預設是關的才算數。
    */
-  it('預設是關的，prompt 裡一個字都不多', async () => {
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      plugins: [createPlanModePlugin()],
-    });
+  it('出貨預設是關的，prompt 裡一個字都不多', async () => {
+    const { agent, model, dispose } = await assemble(quiet());
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), {
+        configurable: { thread_id: 'guidance-off' },
+      });
     } finally {
       await dispose();
     }
 
-    expect(systemPrompt(model.lastPrompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).not.toContain(SHIPPED_GUIDANCE);
   });
 
   it('部署換掉的指引就是原樣那一段', async () => {
     const guidance = '<部署自己寫的那一段>';
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      plugins: [createPlanModePlugin({ startActive: true, guidance })],
+    const { agent, model, dispose } = await assemble(quiet(), {
+      plan: { startActive: true, guidance },
     });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), {
+        configurable: { thread_id: 'guidance-own' },
+      });
     } finally {
       await dispose();
     }
 
     const prompt = systemPrompt(model.lastPrompt);
     expect(prompt).toContain(guidance);
-    expect(prompt).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(prompt).not.toContain(SHIPPED_GUIDANCE);
   });
 
   /**
@@ -150,27 +239,28 @@ describe('計劃指引進不進 system prompt', () => {
    * `prepend` 的，站在記憶**外面**，所以就算它把 `systemMessage` 整個換掉，記憶也是
    * 之後才接上去的——實測把 `concat` 改成 `new SystemMessage(guidance)`，這一條照樣綠。
    * 真正釘住 `concat` 的是下面那條「更外層的 prompt 不會被吃掉」。
+   *
+   * 記憶 plugin 是**選配、不在出貨清單上**（出貨的 `agent-instructions` 把 `AGENTS.md` 當使用者訊息送，不進 system prompt），
+   * 所以這一條在出貨清單前面加一顆 `createMemoryPlugin()`，仍然跑在產品組裝上。
    */
   it('記憶與指引在同一份 prompt 裡同時存在', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nexus-plan-'));
+    const root = await tmpRoot('nexus-plan-');
     await writeFile(join(root, 'AGENTS.md'), '使用者的代號是胡桃。');
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      backend: new ContainedFilesystemBackend({ rootDir: root }),
-      plugins: [createMemoryPlugin(), createPlanModePlugin({ startActive: true })],
+    const { agent, model, dispose } = await assemble(quiet(), {
+      plan: { startActive: true },
+      before: [createMemoryPlugin()],
+      workspace: root,
     });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'memory' } });
     } finally {
       await dispose();
     }
 
     const prompt = systemPrompt(model.lastPrompt);
     expect(prompt).toContain('胡桃');
-    expect(prompt).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(prompt).toContain(SHIPPED_GUIDANCE);
   });
   /**
    * **這一條才是 `concat` 的絆索。**
@@ -180,6 +270,8 @@ describe('計劃指引進不進 system prompt', () => {
    * 先註冊的 `marker` 更外層：它先在 system prompt 上留記號，計劃模式後跑。
    * 把 `concat` 換成取代，這個記號會靜靜消失——那正是
    * `dynamicSystemPromptMiddleware` 那條路的下場，也是刻意不用它的原因。
+   *
+   * 這裡 `outer` 放在**整份出貨清單的最前面**，所以它在計劃模式之前註冊。
    */
   it('更外層的 prompt 不會被吃掉', async () => {
     const marker = '<更外層的那一段>';
@@ -205,120 +297,374 @@ describe('計劃指引進不進 system prompt', () => {
       },
     };
 
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      // 順序有意義：`outer` 先註冊，所以它排在計劃模式**外面**。
-      plugins: [outer, createPlanModePlugin({ startActive: true })],
+    const { agent, model, dispose } = await assemble(quiet(), {
+      plan: { startActive: true },
+      before: [outer],
     });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'outer' } });
     } finally {
       await dispose();
     }
 
     const prompt = systemPrompt(model.lastPrompt);
     expect(prompt).toContain(marker);
-    expect(prompt).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(prompt).toContain(SHIPPED_GUIDANCE);
   });
 });
 
-/** 一顆核准中斷在問的那幾件事。 */
-function actionRequests(interrupts: unknown): { name?: string; args?: { plan?: string } }[] {
-  const first = (interrupts as { value?: { actionRequests?: unknown } }[] | undefined)?.[0];
-  const requests = first?.value?.actionRequests;
-  return Array.isArray(requests) ? (requests as { name?: string; args?: { plan?: string } }[]) : [];
+/** 一顆中斷的酬載，照 `__interrupt__` 的形狀讀。 */
+interface RaisedInterrupt {
+  readonly value?: {
+    readonly kind?: string;
+    readonly actionRequests?: unknown;
+    readonly questions?: readonly QuestionInterruptItem[];
+  };
 }
 
-describe('exit_plan_mode 的三條路', () => {
+/** 一份會呼叫 `exit_plan_mode`、給了回覆再收工的一輪：先停在提問上，再用 `reply` 接回去。 */
+async function reviewPlan(
+  threadId: string,
+  reply: QuestionReply,
+  inbox?: StepInbox,
+  script: readonly ScriptedTurn[] = PLAN_SCRIPT,
+): Promise<{
+  readonly raised: readonly RaisedInterrupt[];
+  readonly after: { readonly messages: readonly BaseMessage[]; readonly __interrupt__?: unknown };
+  readonly events: readonly SessionEvent[];
+  readonly model: ScriptedChatModel;
+}> {
+  const { agent, model, sessions, attachSession, dispose } = await assemble(script, {
+    plan: { startActive: true },
+    ...(inbox !== undefined && { stepInbox: true }),
+  });
+  const config = {
+    configurable: {
+      thread_id: threadId,
+      ...(inbox !== undefined && { [STEP_INBOX_CONFIG_KEY]: inbox }),
+    },
+  };
+  const detach = attachSession(sessions);
+  try {
+    const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), config);
+    const raised = (paused.__interrupt__ ?? []) as readonly RaisedInterrupt[];
+    const after = (await agent.invoke(new Command({ resume: reply }) as never, config)) as {
+      messages: BaseMessage[];
+      __interrupt__?: unknown;
+    };
+    return { raised, after, events: sessions.root.events, model };
+  } finally {
+    detach();
+    await dispose();
+  }
+}
+
+/** 日誌上 `exit_plan_mode` 那顆 `tool/result` 的判定，不含訊息本文。 */
+function exitVerdicts(events: readonly SessionEvent[]): unknown[] {
+  const exitCalls = new Set(
+    events.flatMap((event) =>
+      event.type === 'tool/call' && event.data.name === EXIT_PLAN_MODE_TOOL_NAME
+        ? [event.data.callId]
+        : [],
+    ),
+  );
+  return events.flatMap((event) => {
+    if (event.type !== 'tool/result' || !exitCalls.has(event.data.callId)) return [];
+    const { message: _message, ...verdict } = event.data;
+    return [verdict];
+  });
+}
+
+/**
+ * `exit_plan_mode` 走提問通道（[#652](https://github.com/DemianLi/nexus-agent/issues/652)），照 dsh
+ * `packages/plan/plan-mode/src/index.ts:278-350`。
+ *
+ * **以前這一組叫「三條路」**，走的是核准：plan-mode 掛一位閘門對 `exit_plan_mode` 回 `ask`，計劃變成
+ * 核准卡上的工具參數。dsh 明文否決那條路（核准的詞彙封閉，拒絕帶不回意見）。現在的結局有五種：
+ * 同意、繼續規劃（帶意見）、關掉這一題、沒有人可以回答、不在模式裡。停止這一輪那條在
+ * `plan-review-wire.test.ts`，要真的 pump。
+ */
+describe('exit_plan_mode 的結局', () => {
   /**
-   * **這一條撐著整個設計的那句話**：「人批准計劃」與「人批准這次工具呼叫」是同一件事，
-   * 所以不另建評審通道。少了它那句話是空的——一個把 `plan` 丟掉的實作，
-   * 「獲准之後模式關掉」照樣會綠，而按下批准的人根本沒看到要批准什麼。
+   * **翻過來的絆索**：以前這裡斷言「停在一顆核准中斷上、`actionRequests` 帶著計劃」。現在剛好一顆中斷、
+   * 是提問、沒有 `actionRequests`——鏈底要是對它回了 `ask`，這裡會看到兩顆，或看到一顆核准。
    *
-   * 計劃全文走的是核准請求的 `args`，`@nexus/wire` 的 `pending.actions` 原樣帶著它
-   * （`conversation.ts` 的 `actions: { name, args, description }`），所以瀏覽器那端
-   * 讀得到。閘門給的理由落在 `description`。
+   * 計劃全文在 `detail`；`intent.callId` 是日誌上那顆 `tool/call` 的 id，歷史重播時計劃卡從它的參數畫。
    */
-  it('要批准的人看得到計劃全文', async () => {
-    const model = planScript();
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      plugins: [createPlanModePlugin({ startActive: true })],
-    });
+  it('停在一顆提問上：計劃全文在 detail，intent 指得到那顆呼叫，沒有核准', async () => {
+    const { raised, events } = await reviewPlan('review-shape', { cancelled: true });
 
-    try {
-      const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), {
-        configurable: { thread_id: 'sees-plan' },
-      });
-      const requests = actionRequests(paused.__interrupt__);
-
-      expect(requests.map((request) => request.name)).toEqual([EXIT_PLAN_MODE_TOOL_NAME]);
-      expect(requests[0]?.args?.plan).toBe('# 計劃\n\n先看再改。');
-    } finally {
-      await dispose();
-    }
+    expect(raised).toHaveLength(1);
+    expect(raised[0]?.value?.kind).toBe('question');
+    expect(raised[0]?.value?.actionRequests).toBeUndefined();
+    const callIds = events.flatMap((event) =>
+      event.type === 'tool/call' && event.data.name === EXIT_PLAN_MODE_TOOL_NAME
+        ? [event.data.callId]
+        : [],
+    );
+    // resume 時本體從頭再跑一次，所以同一個 id 的 `tool/call` 會記兩顆；要的是它們指同一顆呼叫。
+    expect(new Set(callIds).size).toBe(1);
+    expect(raised[0]?.value?.questions).toEqual([
+      {
+        id: PLAN_REVIEW_QUESTION_ID,
+        header: PLAN_REVIEW_HEADER,
+        question: PLAN_REVIEW_QUESTION,
+        detail: '# 計劃\n\n先看再改。',
+        options: [
+          { label: PLAN_APPROVE_LABEL, description: expect.any(String) },
+          { label: PLAN_KEEP_PLANNING_LABEL, description: expect.any(String) },
+        ],
+        intent: { kind: 'plan-review', approve: PLAN_APPROVE_LABEL, callId: callIds[0] },
+      },
+    ]);
   });
 
   /**
-   * **有人在的時候：計劃交出去 → 停下來等 → 獲准 → 模式關掉。**
+   * **同意 → 工具成功，模式在下一個模型步驟之前才關**（照 dsh 的 `pendingIntents`）。
    *
-   * 「人批准計劃」與「人批准這次工具呼叫」是同一件事，所以這裡走的就是
-   * [#113](https://github.com/DemianLi/nexus-agent/issues/113) 已經有的那條核准迴圈，
-   * 沒有第二套評審通道。
+   * 日誌上的順序就是證據：那顆 `plan/mode { active: false }` 落在 `exit_plan_mode` 的 `tool/result`
+   * **之後**、下一次模型呼叫的 `model/end` 之前。當場寫的實作會把它排在 `tool/result` 前面。
    */
-  it('獲准 → 模式關掉，下一輪的 prompt 沒有指引了', async () => {
-    const model = planScript();
-    const { agent, attachSession, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      plugins: [createPlanModePlugin({ startActive: true })],
+  it('同意 → 工具成功；plan/mode 落在工具結果之後、下一步回覆之前；下一步沒有指引', async () => {
+    const { after, events, model } = await reviewPlan('review-approve', {
+      answers: [{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }],
     });
-    const config = { configurable: { thread_id: 'approve' } };
-    const sessions = new SessionRegistry('approve');
-    const detach = attachSession(sessions);
 
-    try {
-      const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), config);
-      // 停在核准點——工具還沒跑，所以模式一定還開著。
-      expect(paused.__interrupt__).toBeDefined();
-
-      const after = await agent.invoke(
-        new Command({ resume: { decisions: [{ type: 'approve' }] } }) as never,
-        config,
-      );
-
-      // 模式關了，而且關在日誌上——那是續接讀得回來的那一份。
-      expect(planModeOf(sessions, true)).toBe(false);
-      expect(lastToolMessage(after.messages as BaseMessage[])?.text).toContain(
-        PLAN_APPROVED_MESSAGE,
-      );
-      // 模式關了，所以獲准之後那一輪的 prompt 裡不該再有指引。
-      expect(systemPrompt(model.lastPrompt)).not.toContain(DEFAULT_PLAN_GUIDANCE);
-    } finally {
-      detach();
-      await dispose();
-    }
+    expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: false }]);
+    const tool = lastToolMessage(after.messages);
+    expect(tool?.text).toBe(PLAN_APPROVED_MESSAGE);
+    expect(recordedPlanMode(events)).toBe(false);
+    const order = events
+      .map((event) => event.type)
+      .filter((type) => type === 'tool/result' || type === 'plan/mode' || type === 'model/end');
+    // 第一次模型呼叫 → 工具結果 → 待關交出去 → 第二次模型呼叫。
+    expect(order).toEqual(['model/end', 'tool/result', 'plan/mode', 'model/end']);
+    expect(model.prompts).toHaveLength(2);
+    expect(systemPrompt(model.lastPrompt)).not.toContain(SHIPPED_GUIDANCE);
   });
 
   /**
-   * **沒有人可問的時候：確定性拒絕，而且模式還開著。**
-   *
-   * 這正是 `startActive` 的 JSDoc 警告的那個結局——在收不了核准決定的入口打開計劃模式，
-   * 等於把那一輪鎖死：計劃被拒、模式沒關、而今天沒有第二條路出去。**寫成測試是因為
-   * 它是設計的後果，不是缺陷**：改掉它要先有開啟／關閉的命令，那是另一張卡。
+   * **繼續規劃 → 意見帶回給模型，模式留著。** 同 dsh：只要不是「剛好選了同意、沒有自由作答」都算繼續規劃，
+   * 所以選了同意又寫了字的那一種也是。
    */
-  it('headless → 確定性拒絕，而且模式還開著', async () => {
-    const model = planScript();
-    const { agent, attachSession, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      approvals: HEADLESS_APPROVALS,
-      plugins: [createPlanModePlugin({ startActive: true })],
+  it.each([
+    ['選繼續規劃、寫了意見', [PLAN_KEEP_PLANNING_LABEL], '先補測試', '先補測試'],
+    ['選繼續規劃、沒寫意見', [PLAN_KEEP_PLANNING_LABEL], undefined, ''],
+    ['選了同意但也寫了字', [PLAN_APPROVE_LABEL], '改成兩步', '改成兩步'],
+    ['同意與繼續規劃都選了', [PLAN_APPROVE_LABEL, PLAN_KEEP_PLANNING_LABEL], undefined, ''],
+  ] as const)('%s → 拒絕、模式留著', async (_label, selected, custom, feedback) => {
+    const { after, events, model } = await reviewPlan(`review-keep-${String(selected)}`, {
+      answers: [
+        { id: PLAN_REVIEW_QUESTION_ID, selected, ...(custom === undefined ? {} : { custom }) },
+      ],
     });
-    const sessions = new SessionRegistry('headless');
+
+    expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: true }]);
+    expect(lastToolMessage(after.messages)?.text).toBe(`Error: ${planFeedbackMessage(feedback)}`);
+    // 驗收 6：繼續規劃照舊再叫一次模型（擋「審核一結束就跳」）。
+    expect(model.prompts).toHaveLength(2);
+    expect(events.some((event) => event.type === 'plan/mode')).toBe(false);
+    expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
+  });
+
+  /**
+   * **關掉這一題 → 成功結果，這一輪在這一批工具之後收**（#1607，照 dsh `:331-341` 的 `concludeTurn()`）。
+   *
+   * 不是 `ask_user_question` 的 {@link CANCELLED_MESSAGE}（它叫模型別重問同一組），也不是失敗：工具卡 `done`、字不帶
+   * `Error:`。**只有一次模型呼叫**——以前這裡還有第二次，模型讀到「停在這裡」才停。
+   */
+  it('關掉這一題 → 成功結果、只有一次模型呼叫，模式留著，這一輪沒有被中止', async () => {
+    const { after, events, model } = await reviewPlan('review-dismiss', { cancelled: true });
+
+    const tool = lastToolMessage(after.messages) as ToolMessage;
+    expect(tool.text).toBe(PLAN_REVIEW_DISMISSED_MESSAGE);
+    expect(tool.status).not.toBe('error');
+    expect(tool.text).not.toContain(CANCELLED_MESSAGE);
+    expect(exitVerdicts(events)).toEqual([{ callId: expect.any(String), isError: false }]);
+    expect(events.some((event) => event.type === 'plan/mode')).toBe(false);
+    expect(after.__interrupt__).toBeUndefined();
+    // 驗收 4：這一輪只叫了一次模型，沒有「停在這裡」之後的第二次。
+    expect(model.prompts).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'model/end')).toHaveLength(1);
+    // 收尾是圖自己收的，不是中止；`turn/end` 不帶理由在線上那一檔量（`plan-review-wire.test.ts`）。
+    expect(events.some((event) => event.type === 'turn/end')).toBe(false);
+    // 模式還開著：模型下一輪讀到的指引還在。
+    expect(recordedPlanMode(events)).toBeUndefined();
+  });
+
+  /**
+   * **取消後、下一步之前 `next-step` 有一件輸入：這一輪繼續**（驗收 5，dsh `agent.ts:361-365`：整批工具跑完才判，
+   * `nextStep` 還有插話就不收）。這是唯一分得出「無條件直達 END」與 dsh 的一條。
+   *
+   * 人送的話走不到這裡（停在提問上時進送出佇列，`wire-handler.ts`），所以直接操作 `StepInbox` 的 handle：`finish()` 領走一件，
+   * 同機器輸入在跑著的一輪裡進 `next-step`。第二次模型呼叫要讀到那件輸入。
+   */
+  it('關掉這一題、但 next-step 還有一件輸入 → 這一輪繼續，第二次呼叫讀到那件輸入', async () => {
+    let pending: HumanMessage[] = [new HumanMessage('補一句：先不要動 lib/。')];
+    const finishCalls: number[] = [];
+    const inbox: StepInbox = {
+      claim: () => Promise.resolve([]),
+      finish: () => {
+        finishCalls.push(pending.length);
+        const taken = pending;
+        pending = [];
+        return Promise.resolve(taken);
+      },
+    };
+    const { after, events, model } = await reviewPlan(
+      'review-dismiss-inbox',
+      { cancelled: true },
+      inbox,
+    );
+
+    // 第一次收尾領走那一件、跳回模型；第二次收尾（模型說完）窗是空的。
+    expect(finishCalls).toEqual([1, 0]);
+    expect(model.prompts).toHaveLength(2);
+    const humans = (model.prompts[1] ?? [])
+      .filter((message) => message.getType() === 'human')
+      .map((message) => message.text);
+    expect(humans).toContain('補一句：先不要動 lib/。');
+    // 工具結果還是成功那一句；第二次呼叫把腳本的下一句說完了。
+    expect((lastToolMessage(after.messages) as ToolMessage).text).toBe(
+      PLAN_REVIEW_DISMISSED_MESSAGE,
+    );
+    expect(events.filter((event) => event.type === 'model/end')).toHaveLength(2);
+  });
+
+  /** 沒有插話就關窗：`finish()` 被叫一次（取代 step-inbox 被跳過的 `afterAgent`），這一輪收。 */
+  it('關掉這一題、next-step 是空的 → 收，並且關了窗（finish 叫一次）', async () => {
+    const finishCalls: number[] = [];
+    const inbox: StepInbox = {
+      claim: () => Promise.resolve([]),
+      finish: () => {
+        finishCalls.push(0);
+        return Promise.resolve([]);
+      },
+    };
+    const { model } = await reviewPlan('review-dismiss-closed', { cancelled: true }, inbox);
+
+    expect(finishCalls).toEqual([0]);
+    expect(model.prompts).toHaveLength(1);
+  });
+
+  /**
+   * **熱續（同一個 state）與冷續接（從日誌重建）之後，送給模型的 `exit_plan_mode` 結果跟改動前逐位元組相同**（#1607）。
+   * 同意、繼續規劃沒標記收尾，core 把交給基座的那則的 `name` 拿掉（路由才不收，`turn-conclusion.ts`），所以 **state 裡的訊息不帶
+   * `name`；日誌上的 `tool/result` 是拿掉之前那一則，仍帶 `name`**（跟改動前相同）。
+   * 熱：同一輪的第二次請求，`wrapModelCall` 把 `name` 補回。冷：從日誌重建的本來就帶 `name`。期望值寫死成供應商那一側的形狀
+   * （Chat Completions 的 `tool` 訊息帶 `name`）。
+   */
+  it.each([
+    [
+      '同意',
+      { answers: [{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }] },
+      PLAN_APPROVED_MESSAGE,
+    ],
+    [
+      '繼續規劃',
+      {
+        answers: [
+          { id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_KEEP_PLANNING_LABEL], custom: '先補測試' },
+        ],
+      },
+      `Error: ${planFeedbackMessage('先補測試')}`,
+    ],
+  ] as const)(
+    '熱續與冷續接（%s）→ 進模型請求時帶 name，供應商側位元組不變',
+    async (label, reply, text) => {
+      const { events, model: warm, after } = await reviewPlan(`review-cold-${label}`, reply);
+      const expected = {
+        role: 'tool',
+        content: text,
+        name: EXIT_PLAN_MODE_TOOL_NAME,
+        tool_call_id: expect.any(String),
+      };
+      // state 裡的訊息不帶 name（路由因此不收）；日誌那一則仍帶（跟改動前相同）。
+      expect((lastToolMessage(after.messages) as ToolMessage).name).toBeUndefined();
+      const logged = events.filter((event) => event.type === 'tool/result');
+      const loggedData = (logged[0]?.data as { message?: { data?: { name?: unknown } } }).message
+        ?.data;
+      expect(loggedData?.name).toBe(EXIT_PLAN_MODE_TOOL_NAME);
+      // 熱：同一輪第二次請求。
+      const sent = convertMessagesToCompletionsMessageParams({
+        messages: [...warm.prompts[1]!],
+        model: 'x',
+      }) as { role: string }[];
+      expect(sent.find((message) => message.role === 'tool')).toEqual(expected);
+
+      const fresh = await assemble(quiet('續接後的回覆。'), { plan: { startActive: true } });
+      try {
+        await restoreConversation(fresh.agent as never, 'cold-thread', events);
+        await fresh.agent.invoke(toAgentInvocation('接著說。'), {
+          configurable: { thread_id: 'cold-thread' },
+        });
+      } finally {
+        await fresh.dispose();
+      }
+      const provider = convertMessagesToCompletionsMessageParams({
+        messages: [...fresh.model.lastPrompt],
+        model: 'x',
+      }) as { role: string; content: unknown; name?: string; tool_call_id?: string }[];
+      expect(provider.find((message) => message.role === 'tool')).toEqual(expected);
+    },
+  );
+
+  /**
+   * **同一批還有別的工具呼叫時，關掉這一題不收這一輪**（#1607 登記的偏離，理由 1）：dsh 是批內任何一個 `concludeTurn()` 就收，
+   * 基座的路由每個呼叫各判，混批會讓 exitNode 與 beforeModel 在同一個 super-step 都寫 `jumpTo` 而整輪擲 `InvalidUpdateError`
+   * （`returndirect-route.test.ts` 釘住基座形狀）。這裡用真工具＋step-inbox（產品組裝永遠有 `beforeModel`）驗：不擲、照常繼續、
+   * 兩種批內順序都一樣、模式還開著、結果仍是成功那一句。
+   */
+  it.each([
+    ['exit_plan_mode 在前', 0],
+    ['exit_plan_mode 在後', 1],
+  ] as const)('關掉這一題、同一批還有別的工具（%s）→ 不擲、這一輪照常繼續', async (_label, at) => {
+    const calls: { name: string; args: Record<string, unknown> }[] = [
+      { name: 'write_todos', args: { todos: [] } },
+    ];
+    calls.splice(at, 0, { name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: '# 計劃\n\n先看再改。' } });
+    const finishCalls: number[] = [];
+    const inbox: StepInbox = {
+      claim: () => Promise.resolve([]),
+      finish: () => {
+        finishCalls.push(0);
+        return Promise.resolve([]);
+      },
+    };
+    const { after, events, model } = await reviewPlan(
+      'review-dismiss-batch',
+      { cancelled: true },
+      inbox,
+      [{ content: '並行。', toolCalls: calls }, { content: '再說一句。' }],
+    );
+
+    expect(model.prompts).toHaveLength(2);
+    expect(finishCalls).toEqual([0]);
+    const exit = (after.messages as BaseMessage[]).find(
+      (message) => message.getType() === 'tool' && message.text === PLAN_REVIEW_DISMISSED_MESSAGE,
+    ) as ToolMessage;
+    expect(exit.status).not.toBe('error');
+    // 送給模型的請求跟以前一樣帶 `name`（middleware 補回去）。
+    const seenByModel = (model.prompts[1] ?? []).find(
+      (message) => message.getType() === 'tool' && message.text === PLAN_REVIEW_DISMISSED_MESSAGE,
+    ) as ToolMessage;
+    expect(seenByModel.name).toBe(EXIT_PLAN_MODE_TOOL_NAME);
+    expect(events.some((event) => event.type === 'plan/mode')).toBe(false);
+  });
+
+  /**
+   * **沒有人可以回答 → 確定性拒絕，請使用者自己切模式，而且模式還開著。**
+   *
+   * 照 dsh「沒有提問通道就拋錯」。`channel` 由產品組裝點自己算（`createCliAgent` 收 `approvals: HEADLESS_APPROVALS`，同
+   * `cli.ts`）；少了這一格的話 plugin 退到「有人在」，這一輪會停下來問一個不會來的答案。以前這裡手交一顆
+   * `createHostServicesPlugin({ channel })`，現在是產品算出來的那一顆。
+   */
+  it('headless → 請使用者自己切模式，沒有中斷，模式還開著', async () => {
+    const { agent, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
+      plan: { startActive: true },
+      headless: true,
+    });
     const detach = attachSession(sessions);
 
     let result;
@@ -331,32 +677,36 @@ describe('exit_plan_mode 的三條路', () => {
       await dispose();
     }
 
-    // 沒有停下來等——這是 #113 的整個重點。
     expect(result.__interrupt__).toBeUndefined();
-    const denial = lastToolMessage(result.messages as BaseMessage[]);
-    expect(denial?.text).toContain('是沒有人被問到');
-    expect(denial?.text).not.toContain(PLAN_APPROVED_MESSAGE);
-    // **模式沒關**：工具沒跑，那顆 `plan/mode` 就沒有寫。
+    expect(lastToolMessage(result.messages as BaseMessage[])?.text).toBe(
+      `Error: ${PLAN_NO_REVIEWER_MESSAGE}`,
+    );
     expect(planModeOf(sessions, true)).toBe(true);
     expect(sessions.root.events.some((event) => event.type === 'plan/mode')).toBe(false);
   });
 
   /**
-   * **不在模式裡的時候：說的是模式，不是核准。**
+   * **不在模式裡、又掛著全攔的核准閘門：模型先看到核准的措辭**（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276) 翻面）。
    *
-   * 這一條是 `prepend: true` 的證據。少了它，`fold` 會把計劃模式的 middleware 排到
-   * 核准閘門**之後**，於是這次呼叫會先撞上閘門、拿到一句關於核准的話——而真正的原因
-   * 是「你不在計劃模式」。兩句話都「不是成功」，但只有一句說得出為什麼。
+   * 以前這一條釘的是相反的事：「說的是不在計劃模式，不是核准的措辭」，靠一層排在核准閘門之前的拒絕（先是 middleware 的
+   * `prepend`，#1272 之後是 `tools/pre-execute` 的監聽者）。dsh 沒有那一層——它只在 `exit_plan_mode` 的工具本體裡檢查，
+   * 而核准 listener 先於本體——demian 2026-10-09 決定照 dsh 拿掉。所以這裡掛一位**什麼工具都要核准**的探針
+   * （`approval.patch.yml` 那一類組裝會長這樣），headless 底下呼叫先撞上探針，拿到「沒有人被問到」；本體的
+   * 「不在計劃模式」要等核准放行才會走到。**絆索翻面不是刪**：以後有人再把拒絕排回閘門之前，這一條會紅。
    */
-  it('模式外呼叫 → 說的是「不在計劃模式」，不是核准的措辭', async () => {
-    const model = planScript();
-    const { agent, attachSession, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      approvals: HEADLESS_APPROVALS,
-      plugins: [createPlanModePlugin()],
+  it('模式外呼叫 + 全攔核准閘門 → 先看到核准的措辭，不是「不在計劃模式」', async () => {
+    const askEverything: PluginEntry = {
+      plugin: {
+        name: 'probe-ask-everything',
+        apply(registry) {
+          registry.approvals.gate(() => ({ kind: 'ask', reason: '探針：每個工具都要人看過' }));
+        },
+      },
+    };
+    const { agent, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
+      before: [askEverything],
+      headless: true,
     });
-    const sessions = new SessionRegistry('not-in-mode');
     const detach = attachSession(sessions);
 
     let result;
@@ -370,30 +720,25 @@ describe('exit_plan_mode 的三條路', () => {
     }
 
     const refusal = lastToolMessage(result.messages as BaseMessage[]);
-    expect(refusal?.text).toContain(NOT_IN_PLAN_MODE_MESSAGE);
-    expect(refusal?.text).not.toContain('是沒有人被問到');
-    // **日誌上記的是錯誤、不帶碼**（#273）：模式外 dsh 拋的是一般 `Error`。這是 middleware
-    // 自己回結果、不往下叫的那條路，所以圍堵讀的是 middleware 那則訊息。
-    expect(
-      sessions.root.events.flatMap((event) => {
-        if (event.type !== 'tool/result') return [];
-        const { message: _message, ...verdict } = event.data;
-        return [verdict];
-      }),
-    ).toEqual([{ callId: expect.any(String), isError: true }]);
+    expect(refusal?.text).toContain('是沒有人被問到');
+    expect(refusal?.text).not.toContain(NOT_IN_PLAN_MODE_MESSAGE);
+    // 日誌上記的是錯誤：核准閘門的拒絕帶碼（`APPROVAL_POLICY_NEVER`），不是模式外那種不帶碼的一般 `Error`。
+    expect(exitVerdicts(sessions.root.events)).toEqual([
+      {
+        callId: expect.any(String),
+        isError: true,
+        error: expect.objectContaining({ code: APPROVAL_POLICY_NEVER }),
+      },
+    ]);
   });
 });
 
 describe('模式狀態活得過什麼', () => {
   it('同一條 thread 的下一輪還在', async () => {
-    const model = new ScriptedChatModel({
-      turns: [{ content: '第一輪。' }, { content: '第二輪。' }],
-    });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      plugins: [createPlanModePlugin({ startActive: true })],
-    });
+    const { agent, model, dispose } = await assemble(
+      [{ content: '第一輪。' }, { content: '第二輪。' }],
+      { plan: { startActive: true } },
+    );
     const config = { configurable: { thread_id: 'across-turns' } };
 
     try {
@@ -404,7 +749,7 @@ describe('模式狀態活得過什麼', () => {
     }
 
     // 狀態還在，所以第二輪的 prompt 也還夾著指引。
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
   });
 
   /**
@@ -413,53 +758,52 @@ describe('模式狀態活得過什麼', () => {
    * 模式住在 graph state 裡的時候，這一條擋的是「摘要器只改 `messages`」這個沒人承諾過的
    * 實作細節。模式搬進日誌之後它**在構造上就成立了**——摘要器碰不到日誌——但照樣留著：
    * 它釘的是一句宣稱，不是一個機制，哪天模式又搬回 state，這一條就回到有牙齒的樣子。
-   * 低門檻的摘要器是照 `summarization.test.ts` 的做法換掉內建那個。
+   * 低門檻是把出貨清單上 `summarization` 那一列的 config 換掉（整份替換，所以其餘格照抄），
+   * 不再另掛一顆摘要器。
    */
   it('一次真的壓縮之後還在', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nexus-plan-sum-'));
-    const backend = new ContainedFilesystemBackend({ rootDir: root });
-    const model = new ScriptedChatModel({
-      turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
-    });
-
-    const tuned: PluginEntry = {
-      plugin: {
-        name: 'tuned-summarization',
-        apply: (registry) =>
-          void registry.middleware.use(
-            createSummarizationMiddleware({
-              backend,
-              trigger: { type: 'messages', value: 3 },
-              keep: { type: 'messages', value: 1 },
-            }) as never,
-          ),
-      },
-    };
-
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      backend,
-      checkpointer: new MemorySaver(),
-      plugins: [createPlanModePlugin({ startActive: true }), tuned],
-    });
+    const root = await tmpRoot('nexus-plan-sum-');
+    const omitRetainRatio = ({ retainRatio: _ratio, ...rest }: Record<string, unknown>) => rest;
+    const lowThreshold = (plugins: PluginEntry[]): PluginEntry[] =>
+      plugins.map((entry) =>
+        entry.id === 'summarization'
+          ? {
+              ...entry,
+              config: {
+                // 兩個保留量互斥：出貨檔寫的是 `retainRatio`，換成 `retainTokens` 就要把它拿掉。
+                ...omitRetainRatio(entry.config as Record<string, unknown>),
+                trigger: [{ type: 'messages', value: 3 }],
+                retainTokens: 1,
+              },
+            }
+          : entry,
+      );
+    const { agent, model, sessions, attachSession, dispose } = await assemble(
+      Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
+      { plan: { startActive: true }, workspace: root, patch: lowThreshold },
+    );
     const config = { configurable: { thread_id: 'summarize' } };
+    const detach = attachSession(sessions);
 
     let last;
     try {
+      // 使用者句墊長：框好的摘要要比被取代那段小才會提交（#1396）。回話不墊——腳本的回話也會被摘要呼叫領走，
+      // 墊長了摘要就比被取代的大。
       for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
-        last = await agent.invoke(toAgentInvocation(line), config);
+        last = await agent.invoke(toAgentInvocation(`${line}${'內容'.repeat(200)}`), config);
       }
     } finally {
+      detach();
       await dispose();
     }
 
     // **先證明壓縮真的發生了。** 少了這一句，一個根本沒觸發摘要的組裝也會讓下面兩條
-    // 通過——那時綠的是「什麼都沒發生」，不是「熬過了壓縮」。摘要器把歷史 offload 到
-    // `/conversation_history`，那個目錄非空就是它跑過的外顯（照 `summarization.test.ts`）。
-    expect(await readdir(join(root, 'conversation_history'))).not.toHaveLength(0);
+    // 通過——那時綠的是「什麼都沒發生」，不是「熬過了壓縮」。外顯是會話日誌上的 `compaction/summary`
+    // （#143；產品的摘要列把歷史放在 graph state、不寫工作區，所以不再看 `conversation_history` 目錄）。
+    expect(sessions.root.events.some((event) => event.type === 'compaction/summary')).toBe(true);
 
     expect(last).toBeDefined();
-    expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.lastPrompt)).toContain(SHIPPED_GUIDANCE);
   });
 });
 
@@ -467,14 +811,30 @@ describe('工具目錄不隨模式變動', () => {
   /**
    * 照 dsh：模式沒啟用時 `exit_plan_mode` 仍然留在面向模型的 schema 裡，
    * 「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。
-   * 代價是 `startActive: false` 的組裝裡它是活的 schema、死的執行路徑——上面那條
+   * 代價是模式關著的組裝裡它是活的 schema、死的執行路徑——上面那條
    * 「模式外呼叫」測的就是那條死路徑說了什麼。
    */
-  it('模式關著的時候工具也在，而且排得進 toolOrder', async () => {
+  it('產品組裝：模式關著的時候 exit_plan_mode 也綁在模型上', async () => {
+    const { agent, model, dispose } = await assemble(quiet());
+
+    try {
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'catalog' } });
+    } finally {
+      await dispose();
+    }
+
+    expect(model.boundToolNames).toContain(EXIT_PLAN_MODE_TOOL_NAME);
+  });
+
+  /**
+   * **這一條留在手搭組裝**（理由見檔頭）：產品組裝不傳 `toolOrder`，而這一條要證明的是模式關著時
+   * `exit_plan_mode` 仍是「排得進呈現順序的已註冊工具」——名字要是沒註冊，`toolOrder` 會指向不存在的工具。
+   */
+  it('手搭組裝：模式關著的時候工具也在，而且排得進 toolOrder', async () => {
     const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
     const { agent, dispose } = await createNexusAgent({
       model,
-      plugins: [createEchoPlugin(), createPlanModePlugin()],
+      plugins: [createEchoPlugin(), testPlanModePlugin()],
       toolOrder: [EXIT_PLAN_MODE_TOOL_NAME, ECHO_TOOL_NAME, '<unlisted-tools>'],
     });
 
@@ -504,7 +864,6 @@ describe('工具目錄不隨模式變動', () => {
 describe('/plan 這條路', () => {
   /** 餵幾行進 REPL，把印出來的東西與日誌一起收回來。 */
   async function repl(
-    plugins: readonly PluginEntry[],
     lines: string,
     turns: number,
   ): Promise<{
@@ -513,17 +872,10 @@ describe('/plan 這條路', () => {
     stderr: string;
     events: readonly SessionEvent[];
   }> {
-    const model = new ScriptedChatModel({
-      turns: Array.from({ length: turns }, () => ({ content: '好。' })),
-    });
-    const { agent, commands, attachSession, dispose } = await createNexusAgent({
-      model,
-      plugins,
-      checkpointer: new MemorySaver(),
-    });
-    const sessions = new SessionRegistry('plan-repl');
+    const { agent, model, commands, sessions, sessionLog, attachSession, dispose } = await assemble(
+      Array.from({ length: turns }, () => ({ content: '好。' })),
+    );
     const detach = attachSession(sessions);
-    const sessionLog = sessions.root;
     const events: SessionEvent[] = [];
     sessionLog.subscribe((event) => events.push(event));
 
@@ -554,15 +906,11 @@ describe('/plan 這條路', () => {
    * 的話，一個從來不夾的實作也綠。兩輪一起比才擋得住。
    */
   it('/plan 之後那一輪夾指引，/plan off 之後那一輪不夾', async () => {
-    const { model, stdout } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan\n先想想\n/plan off\n動手吧\n/exit\n',
-      2,
-    );
+    const { model, stdout } = await repl('/plan\n先想想\n/plan off\n動手吧\n/exit\n', 2);
 
     expect(model.prompts).toHaveLength(2);
-    expect(systemPrompt(model.prompts[0] ?? [])).toContain(DEFAULT_PLAN_GUIDANCE);
-    expect(systemPrompt(model.prompts[1] ?? [])).not.toContain(DEFAULT_PLAN_GUIDANCE);
+    expect(systemPrompt(model.prompts[0] ?? [])).toContain(SHIPPED_GUIDANCE);
+    expect(systemPrompt(model.prompts[1] ?? [])).not.toContain(SHIPPED_GUIDANCE);
     // 兩句話都印給人看了——命令的結果不進模型，只進終端機。
     expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
     expect(stdout).toContain(PLAN_LEFT_MESSAGE);
@@ -573,11 +921,7 @@ describe('/plan 這條路', () => {
    * 不掉回模型」在計劃模式上的驗收：模型只該看到兩句人話，日誌裡則是兩對命令事件。
    */
   it('命令走命令的路，模型只收到那兩句人話', async () => {
-    const { events } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan\n先想想\n/plan off\n動手吧\n/exit\n',
-      2,
-    );
+    const { events } = await repl('/plan\n先想想\n/plan off\n動手吧\n/exit\n', 2);
 
     expect(events.filter((event) => event.type === 'command/run')).toHaveLength(2);
     expect(events.filter((event) => event.type === 'command/done')).toHaveLength(2);
@@ -603,11 +947,7 @@ describe('/plan 這條路', () => {
    * 照舊留著：那個形狀歸基座，下一個回非空更新的節點照樣會帶著它。
    */
   it('進了計劃模式之後，使用者那句話不會在畫面上出現兩次', async () => {
-    const { stdout } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan\n先想想\n/exit\n',
-      1,
-    );
+    const { stdout } = await repl('/plan\n先想想\n/exit\n', 1);
 
     expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
     expect(stdout).not.toContain('先想想');
@@ -615,22 +955,49 @@ describe('/plan 這條路', () => {
   });
 
   /**
-   * **收不下的參數走 `printer.error`，而且不驚動模型。**
+   * **`/plan <message>` 的產品路徑**（[#776](https://github.com/DemianLi/nexus-agent/issues/776)）：
+   * 日誌順序是命令那一對先收完、才有那一輪；第一次模型請求同時帶計劃指引與那句話。
    *
-   * `/plan of` 是打錯的 `/plan off`，而它在語法上是一個合法的命令行——`parseCommand`
-   * 收得下、註冊表也找得到，所以它**會**進 handler。分辨對錯的是 handler 自己的文法，
-   * 而它回 `error`。掉回模型的話，模型會收到一行沒頭沒尾的 `/plan of`。
+   * 只斷言「有一輪」的話，一個把話在 `command/done` 之前就送出去的實作照樣綠——順序才是這張卡的承諾。
    */
-  it('/plan of 回報錯誤，模式沒動，模型沒被驚動', async () => {
-    const { model, stderr, stdout } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan of\n說點什麼\n/exit\n',
-      1,
-    );
+  it('/plan 幫我規劃：命令落定之後才開那一輪，第一個請求有指引也有那句話', async () => {
+    const { model, events, stdout } = await repl('/plan 幫我規劃\n/exit\n', 1);
 
-    expect(stderr).toContain(PLAN_ARGS_ERROR_MESSAGE);
+    expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
+    expect(
+      events
+        .map((event) => event.type)
+        .filter((type) =>
+          ['command/run', 'plan/mode', 'command/done', 'turn/start'].includes(type),
+        ),
+    ).toEqual(['command/run', 'plan/mode', 'command/done', 'turn/start']);
+    expect(events.find((event) => event.type === 'turn/start')?.data).toMatchObject({
+      text: '幫我規劃',
+    });
     expect(model.prompts).toHaveLength(1);
-    expect(systemPrompt(model.prompts[0] ?? [])).not.toContain(DEFAULT_PLAN_GUIDANCE);
-    expect(stdout).not.toContain(PLAN_ENTERED_MESSAGE);
+    const first = model.prompts[0] ?? [];
+    expect(systemPrompt(first)).toContain(SHIPPED_GUIDANCE);
+    expect(first.filter((message) => message.getType() === 'human').map((m) => m.text)).toEqual([
+      '幫我規劃',
+    ]);
+  });
+
+  /**
+   * **`off` 以外都是訊息，同 dsh。** `/plan of` 是打錯的 `/plan off`，現在進計劃模式並把 `of` 送給模型
+   * ——以前它回 error。翻面登記在 `index.ts` 的偏離說明，這條是它的絆索。
+   */
+  it('/plan of 是進入並把 of 送給模型，不是離開也不是錯誤', async () => {
+    const { model, stderr } = await repl('/plan of\n/exit\n', 1);
+
+    expect(stderr).toBe('');
+    expect(model.prompts).toHaveLength(1);
+    expect(systemPrompt(model.prompts[0] ?? [])).toContain(SHIPPED_GUIDANCE);
+  });
+
+  it('/plan off 之後不開輪', async () => {
+    const { model, stdout } = await repl('/plan off\n/exit\n', 1);
+
+    expect(stdout).toContain(PLAN_ALREADY_INACTIVE_MESSAGE);
+    expect(model.prompts).toHaveLength(0);
   });
 });

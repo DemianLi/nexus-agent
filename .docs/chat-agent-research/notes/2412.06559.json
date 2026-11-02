@@ -1,0 +1,144 @@
+{
+  "id": "2412.06559",
+  "title": "ProcessBench: Identifying Process Errors in Mathematical Reasoning",
+  "topic": "T4",
+  "subarea": "軌跡分析、失敗分類與歸因",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "建立 3,400 筆由博士級數學專家標註「最早出錯步驟」的數學解題軌跡基準，用同一套「最早錯誤步索引或 -1」協定比較 PRM 與提示詞驅動的 critic 模型，發現以 MC 估計標籤訓練的 PRM 在難題上泛化最差，推理型模型當 critic 最強。",
+  "problem": "語言模型在難題上常犯錯，規模化監督需要自動找出推理過程中是哪一步錯。既有基準要不題目太簡單（MathCheck-GSM 在 GSM8K 上合成錯誤、PRM800K 基於 MATH 且測試集完整解只有 90 筆），要不只標最終答案、不標錯誤步驟（CriticBench）。PRM 過去多用「幫另一個生成模型做 Best-of-N 能提升多少」間接評估，看不到逐步判斷能力，而且結果受生成模型左右。因此需要一個題目夠難、生成器多樣、人工標步驟、規模夠大，而且協定簡單到能同時套用在 PRM 與 critic 模型上的基準。",
+  "core_idea": "把「過程評估」化約成單一整數輸出：給題目與分段解法，輸出最早錯誤步驟的索引，或輸出 -1 表示全對。只問最早的錯誤，是因為錯誤之後的步驟即使推導本身合理，也建立在錯的前提上，正確性難以界定。評分分別計算錯誤樣本（索引完全命中）與正確樣本（答 -1）的準確率，再取調和平均當 F1，同時懲罰過度挑剔與抓不到錯。資料面用 12 個開源生成器產生自然解（不是人工植入的合成錯誤），按最終答案對錯平衡抽樣，再由專家以多數決標註。",
+  "method": {
+    "任務形式": "輸入：數學題 P 與分段解法 S={s_0,…,s_{n-1}}。輸出：i∈{-1,0,…,n-1}，-1 表示全部正確，i≥0 表示最早錯誤在 s_i。錯誤類型舉例（只是指引，不要求標註者標類型）：數學錯誤（計算、代數操作、公式套用）、邏輯錯誤（無效推論、無據假設）、概念錯誤（誤解或誤用概念）、完整性錯誤（漏掉會影響解法有效性的關鍵條件、限制或必要論證）；此外由標註者依專業自行判斷。",
+    "題目來源": "GSM8K、MATH、OlympiadBench、Omni-MATH 四個資料集的測試集；除 GSM8K 外都是競賽或奧賽級題目。",
+    "解法生成": "12 個生成器：Meta-Llama-3-8B/70B-Instruct、Llama-3.1-8B/70B-Instruct、Qwen2-1.5B/7B/72B-Instruct、Qwen2.5-1.5B/7B/72B-Instruct、Qwen2.5-Math-7B/72B-Instruct；取樣 top_p=0.9、temperature=0.7（App D）。OlympiadBench 與 Omni-MATH 排除準確率低的模型（Llama-3-8B/70B、Qwen2-1.5B、Qwen2.5-1.5B 在這兩個子集為 0 筆）；MATH 子集因程式錯誤缺 Llama-3.1-70B-Instruct 與 Qwen2.5-72B-Instruct 的解（Table 4）。",
+    "步驟重切": "不同模型用 \\n\\n 分段的習慣差很多，步驟粒度不一致會妨礙標註標準化。做法：先把解法裡所有換行換成空白，再請 Qwen2.5-72B-Instruct 只插入 \\n\\n 重新分段、不改內容。repo 的 reformat_template.txt 規則：每段是一個能推進解題的完整推理步驟；案例討論、化簡、推導各自成段；開頭若有分析就當第一段；公式不要單獨成段、要併入前一段文字；條列清單改寫成 First/Second/Third（唯一允許的內容修改）；段落不要太長；不管解法對錯。重切後最終答案有變的（<0.5%）整筆丟掉。",
+    "平衡抽樣": "先用 Qwen2.5-72B-Instruct 對照參考解判斷模型解的最終答案是否正確（repo 的 judge_template.txt：只比最終答案是否一致、不要求步驟相同，回 Yes/No），再依答案對錯各抽一半：GSM8K 各 200、其他子集各 500，並避免過度集中在最弱或最強的生成器。",
+    "專家標註": "標註者具博士級數學背景，須考過能力測驗並完成標註教學；任務與模型相同（找最早錯誤）。因奧賽題連數學博士都會猶豫，另提供原資料集的參考解與答案，但明確要求逐步檢查模型的解。每筆先給 3 位專家；不一致就加人，直到有 3 人同意；5 人內達不到（例如 2-2-1、2-1-1-1）就丟掉，整體丟棄率約 30%。最終答案錯、專家卻判全對的也丟掉（<1%，集中在奧賽題）。",
+    "資料格式": "Hugging Face Qwen/ProcessBench，四個 split：gsm8k 400、math 1,000、olympiadbench 1,000、omnimath 1,000。欄位：id、generator、problem、steps（字串陣列）、final_answer_correct、label（-1 或從 0 起算的步驟索引）。錯誤／正確樣本數：GSM8K 207/193、MATH 594/406、OlympiadBench 661/339、Omni-MATH 759/241；平均步數 5.1–8.9。",
+    "指標": "每個子集分開算：acc_err＝錯誤樣本中預測索引與 label 完全相等的比例；acc_cor＝正確樣本中預測 -1 的比例；F1＝2·acc_err·acc_cor/(acc_err+acc_cor)。報四個子集 F1 與其平均。沒有部分分數，差一步就算錯；無法解析的輸出也算錯（repo run_eval.py）。",
+    "PRM_評估": "對每一步判對錯，取第一個判錯的步驟索引，全對則回 -1。Math-Shepherd-PRM-7B、兩個 RLHFlow PRM 與自訓 PRM 直接用二元預測；Skywork-PRM-1.5B/7B 輸出連續分數，用門檻值二值化，門檻取在 GSM8K 子集上 F1 最高的值（Table 6/8 另報各子集各自最佳門檻，當成上界）。repo 的 RLHFlow 範例：逐步把 step 當 user 訊息送入，讓模型生成 1 個 token（temperature 0），開頭不是 '+' 就回傳該步索引，否則把 '+' 當 assistant 回覆接上、再送下一步。",
+    "自訓_PRM": "Qwen2.5-Math-7B-PRM800K：以 Qwen2.5-Math-7B-Instruct 為底，把 LM head 換成輸出二元分類 logits 的 reward head；在每個 \\n\\n 的第二個換行位置計算分類損失；PRM800K 原標籤 1 與 0 當正例、-1 當負例；移除與 ProcessBench 同題的 PRM800K 訓練樣本以避免測試污染；8 張 A100 80GB。學習率、epoch、batch size 等超參數未揭露。",
+    "Critic_評估": "提示詞（repo critique_template.txt，即 Figure 7）：說明以下是一道數學題與分段解法（每段以 <paragraph_i> 標籤包住、從 0 編號），要求逐段審查與批評；一旦發現某段有錯就回傳最早錯誤段落的索引，否則回傳 -1（表示沒找到），最終答案放在 \\boxed{} 裡。解析方式是取最後一個 \\boxed{} 的內容轉成整數。開源模型主表報 8 次取樣多數決（maj@8；repo 預設 temperature=1、top_p=0.9，Qwen2.5-Math 系列改用 temperature=0.7、top_p=0.8、top_k=20 才能正常生成），另在 Table 9 報 greedy；最大生成長度 repo 設 8192 token，QwQ 為 32768。GPT-4o-0806 用 greedy；o1-mini 的 API 不能調解碼參數，只取樣一次。推論用 vLLM，8 張 A100 80GB。"
+  },
+  "assumptions": [
+    "每條錯誤解法都有唯一、能被專家一致認定的「最早錯誤步」，之後的步驟不需要評。",
+    "由 Qwen2.5-72B-Instruct 以 \\n\\n 重切出的段落能對應到邏輯上完整的推理步驟，而且重切不改內容（只用「最終答案不變」檢查）。",
+    "3 位專家達成一致即視為正確標籤；提供參考解給標註者不會讓標籤偏向參考解的解題路線。",
+    "用 Qwen2.5-72B-Instruct 判斷最終答案對錯足夠準確，可用來做平衡抽樣。",
+    "以索引完全命中當成功，接近的預測不給部分分數。",
+    "單次前向判分的 PRM 與 maj@8 生成長推理的 critic 可以用同一個 F1 直接比較，不必對齊推論計算量。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ProcessBench-GSM8K（400）",
+      "ProcessBench-MATH（1,000）",
+      "ProcessBench-OlympiadBench（1,000）",
+      "ProcessBench-Omni-MATH（1,000）"
+    ],
+    "metrics": [
+      "錯誤樣本準確率（最早錯誤索引完全命中）",
+      "正確樣本準確率（預測 -1）",
+      "F1（上述兩者的調和平均）",
+      "四子集平均 F1"
+    ],
+    "baselines": [
+      "PRM：Math-Shepherd-PRM-7B、RLHFlow-PRM-Mistral-8B、RLHFlow-PRM-Deepseek-8B、Skywork-PRM-1.5B、Skywork-PRM-7B、Qwen2.5-Math-7B-PRM800K（自訓）",
+      "開源 critic：Meta-Llama-3-8B/70B-Instruct、Llama-3.1-8B/70B-Instruct、Llama-3.3-70B-Instruct、Qwen2.5-Math-7B/72B-Instruct、Qwen2.5-Coder-7B/14B/32B-Instruct、Qwen2-7B/72B-Instruct、Qwen2.5-7B/14B/32B/72B-Instruct、QwQ-32B-Preview",
+      "專有 critic：GPT-4o-0806、o1-mini"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "題目越難，最終答案正確的解法中含過程錯誤的比例越高；每個生成器都呈現同樣趨勢。作者稱這是首度提出的證據，並據此指出只按最終答案給獎勵的 rule-based RL 有侷限",
+      "numbers": "最終答案正確者中被專家判為有錯：GSM8K 3.5%、MATH 18.8%、OlympiadBench 32.2%、Omni-MATH 51.8%",
+      "section": "§3.3、Table 2、Figure 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "人工標註本身很難：錯誤樣本比正確樣本需要更多標註者才能湊到 3 人一致，題目越難越明顯；約 30% 樣本因 5 人內無共識被丟掉",
+      "numbers": "3/3 一次到位比例：錯誤樣本 GSM8K 66.7% → Omni-MATH 47.8%；正確樣本 95.9% → 80.1%。Omni-MATH 錯誤樣本有 26.6% 要到第 5 位標註者才一致",
+      "section": "§3.2、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "現有開源 PRM 在簡單子集就輸給頂尖 critic，換到奧賽級子集退步更多；即使給 Skywork PRM 每個子集各自最佳門檻，難題上仍很低",
+      "numbers": "Skywork-PRM-7B：GSM8K 70.8 → Omni-MATH 21.0（平均 42.1）；RLHFlow-PRM-Mistral-8B：50.4 → 15.8（平均 28.4）；Math-Shepherd-PRM-7B 平均 31.5。對照 critic Qwen2.5-72B-Instruct：76.2 → 52.2（平均 61.2）。Skywork-PRM-7B 各子集最佳門檻上界：OlympiadBench 27.1、Omni-MATH 23.1",
+      "section": "§4.2、Table 3、Table 6、Table 8",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "只在人工標註的 PRM800K 上直接微調的 PRM 是所有 PRM 中最強的，難題上的泛化明顯好於用 MC 估計標籤訓練的 PRM",
+      "numbers": "Qwen2.5-Math-7B-PRM800K：GSM8K 68.2、MATH 62.6、OlympiadBench 50.7、Omni-MATH 44.3，平均 56.5；其他 PRM 平均 26.6–42.1",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "推理型模型當 critic 最強：QwQ-32B-Preview 是最佳開源模型，與 GPT-4o 相當，錯誤／正確準確率也較平衡，但仍明顯落後 o1-mini；同一家族大致隨規模變好",
+      "numbers": "平均 F1：QwQ-32B-Preview 71.5（maj@8）、GPT-4o-0806 61.9（greedy）、o1-mini 87.9（單次取樣）。QwQ 在 MATH 的錯誤／正確準確率 78.1/79.3。Qwen2.5-Instruct 7B/14B/32B/72B 平均 32.6/52.2/49.3/61.2",
+      "section": "§4.2、Table 3、Table 5、Table 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "兩類準確率拆開計算揭露了 critic 的系統性偏向：許多中小模型幾乎一律判全對、抓不到錯；少數模型反過來過度挑剔",
+      "numbers": "Qwen2.5-Math-7B-Instruct GSM8K 錯誤 15.5／正確 100.0 → F1 26.8；Qwen2.5-Coder-7B-Instruct OlympiadBench 2.1／99.1 → 4.1；反向的 Llama-3.1-8B-Instruct GSM8K 44.4／6.2 → 10.9",
+      "section": "§4.1、Table 5、Table 7",
+      "anchor_idx": 3
+    }
+  ],
+  "limitations_stated": [
+    "即使建構流程再嚴謹，錯誤位置標籤仍可能有誤，尤其是奧賽級題目。",
+    "標註時被丟掉的樣本（約 30%）可能正是特別難的題目，會讓題目分佈偏移；作者補充這些樣本可能已超出標註者能力。",
+    "奧賽級題目連數學博士都會猶豫，影響標註速度與品質，所以才提供參考解與答案（§3.2）。",
+    "不要求標註錯誤類型，因為刻意分類難以處理（§3.1）。",
+    "MATH 子集因程式錯誤缺少 Llama-3.1-70B-Instruct 與 Qwen2.5-72B-Instruct 的解（Table 4 註）。"
+  ],
+  "limitations_observed": [
+    "「QwQ-32B-Preview 與 GPT-4o 相當」建立在不對等的解碼設定上：QwQ 用 maj@8，GPT-4o 用 greedy。Table 9 的 QwQ greedy 四子集為 70.9/56.3/34.6/34.6，平均約 49.1，低於 GPT-4o greedy 的 61.9，OlympiadBench 從 57.8 掉到 34.6。同樣只解碼一次時結論會反過來，但摘要與結論都沒有加這個但書。",
+    "PRM 與 critic 的比較沒有對齊推論計算：PRM 每條解法一次前向判分；critic 取樣 8 次、每次最多 8192 token（QwQ 32768），o1-mini 還有隱藏推理。論文把「critic 能多想」當成優勢的解釋，其實等於在比不同預算，無法推論「同成本下 critic 比 PRM 好」。",
+    "「MC 估計標籤（on-policy、答案對但過程錯）是 PRM 泛化差的原因」只是推論，沒有控制實驗：自訓 PRM 與 Math-Shepherd、RLHFlow、Skywork 的底模（Qwen2.5-Math-7B-Instruct 對 Mistral／Llama／DeepSeek 等）、訓練資料量、步驟切法都不同，差距無法歸因到標籤來源；自訓 PRM 的學習率、epoch 也沒揭露。",
+    "步驟由 Qwen2.5-72B-Instruct 重切成 \\n\\n 段落，而各家 PRM 訓練時的分步慣例不同；自訓 PRM 正好在 \\n\\n 位置計算損失，和測試格式一致。粒度分佈偏移可能讓其他 PRM 吃虧，論文沒有量化這個效應。",
+    "Skywork PRM 的二值化門檻是在 GSM8K 測試子集上挑 F1 最高者，等於用測試資料調參，GSM8K 的 70.8 有樂觀偏誤；其他 PRM 用固定二元判斷，調參待遇不一致。",
+    "「難度提高時所有模型一致退步」與表中數字不完全吻合：Qwen2-7B-Instruct GSM8K 8.4 < MATH 19.0；Meta-Llama-3-8B-Instruct Omni-MATH 12.6 > OlympiadBench 4.8；QwQ-32B-Preview 與 GPT-4o 的 Omni-MATH 都高於 OlympiadBench（61.3 對 57.8、53.5 對 51.4）。「同家族隨規模變好」也有例外：Qwen2.5-32B-Instruct 49.3 低於 14B 的 52.2。",
+    "部分小模型的低分反映的是格式失敗而不是判斷能力：Qwen2.5-Coder-7B-Instruct 在 greedy 下 GSM8K 錯誤 0.0／正確 20.2，連全對的樣本都答不出 -1，較可能是 \\boxed{} 解析失敗；同一模型 maj@8 的正確樣本準確率卻是 100.0。論文沒有報無法解析的比例，排行榜因此混入了指令遵循能力。",
+    "生成器與受評 critic 重疊：Qwen2.5-72B-Instruct、Qwen2.5-Math-72B-Instruct、Llama-3.1-70B-Instruct 等既產生解法又當 critic，Qwen2.5-72B-Instruct 還負責重切與最終答案判定。可能有自評偏誤或對格式熟悉的優勢，論文沒有做「排除自己生成的樣本」的分析。",
+    "標註者手上有參考解，受評模型沒有；「最早錯誤」可能偏向偏離參考解路線之處。定義也不區分之後被自己修正的錯誤與致命錯誤：生成器都是非長思考的 instruct 模型，這種情況在資料裡少見；但拿去評有反思的長鏈推理或 agent 軌跡時，「最早錯誤」與「決定性錯誤」會分岔，後續 agent 失敗歸因工作必須重新定義。",
+    "外推到 T4 的限制：單輪、純文字的數學解題，沒有工具呼叫、環境觀測、多 agent 或使用者回合；平均只有 5–9 步，而且錯誤位置集中在前幾步（Figure 3）。在長 agent 軌跡上偵測器表現如何，無法從這裡推得。"
+  ],
+  "framework_role": "在 T4 是「步驟層級錯誤定位／過程評估」的基準參照：它把對一條軌跡的判斷化約為「最早錯誤步驟索引或 -1」，搭配兩類平衡的 F1，並提供專家標註的真值。對本框架的用途有三：(1) 當成軌跡異常偵測器（PRM 或 LLM critic）的評估協定樣板，移植到 agent 軌跡時把「步」換成一次 action 或一回合，並另外處理可被修復的錯誤；(2) 它的發現直接影響 T4→T5 偵測器選型：現成的 MC 標籤 PRM 泛化差，推理型模型當 critic 較可靠，但要注意解碼預算；(3) 「答案對但過程錯」的比例隨難度升高，提醒 T8 任務完成分數只看結果會高估品質。它本身不是 agent 軌跡資料，屬於從數學推理借來的方法論。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "論文量的正是 E3 的上游：在一條推理軌跡中偵測第一個異常步驟。PRM 逐步給對錯，critic 逐段審查、輸出最早錯誤索引並附說明（Figure 5 的 QwQ critique）。但論文只做到偵測，沒有把偵測結果拿去觸發修正，也沒有量偵測後修正的成效；要接上 E3，得自己把「最早錯誤索引＋critic 說明」當成回饋送進 T5。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Alibaba Qwen 在 Hugging Face 發布的 Qwen2.5-Math-PRM-7B 與 Qwen2.5-Math-PRM-72B 官方 model card，以 ProcessBench 作為錯誤辨識能力的評估依據（https://huggingface.co/Qwen/Qwen2.5-Math-PRM-7B 、https://huggingface.co/Qwen/Qwen2.5-Math-PRM-72B ，已打開確認）。這是作者同一團隊的自家模型。"
+    ],
+    "assessment": "僅見作者所屬組織（Alibaba Qwen）在自家釋出的 PRM 模型卡上用它當官方評估，屬同組織內的採用；沒有找到第三方公司在產品、官方文件或 model card 中採用的證據。搜尋結果也列出一些研究型 PRM 的 model card 報 ProcessBench 分數，但未逐一打開確認，而且都是論文配套的研究模型，不列為採納。它已成為 PRM 研究常用的標準基準，這屬於學術影響力，不等於商用採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/QwenLM/ProcessBench",
+    "data": "公開。Hugging Face Qwen/ProcessBench（Apache-2.0、未設存取限制），四個 split 共 3,400 筆。repo 含 critic 評估腳本 run_eval.py、RLHFlow PRM 評估範例，以及 critique／reformat／judge 三份提示詞模板（GitHub repo 本身未標授權）。自訓 Qwen2.5-Math-7B-PRM800K 的訓練超參數未揭露，論文也沒說權重是否釋出；被丟掉的約 30% 無共識樣本與逐位標註者的原始標註沒有公開。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它定義了「最早錯誤步索引＋兩類平衡 F1」的步驟層級錯誤定位協定並提供專家真值，已是 process reward 評估的標準基準，發現也直接左右 T4 異常偵測器選型；雖然是數學而非 agent 軌跡，仍是 T4 步驟層級評估的必讀。",
+  "related": [
+    "2305.20050",
+    "2312.08935",
+    "2402.14809",
+    "2407.08733",
+    "2406.06592",
+    "2407.00215",
+    "2206.05802",
+    "2310.01798",
+    "2410.07985",
+    "2402.14008"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -9,20 +9,21 @@
  *   ⑨ 的當前題），沒有就落在面板本身（`tabIndex=-1`，核准面板不落在按鈕上）；面板收掉時到下一張或回輸入框。
  * - **動效是「換內容」**（§7）：舊的 150 淡出，換過去之後新的 250 長出（`motion-swap`，在 `styles/motion.css`）。
  *   第一次畫出來不動：載入歷史、切換對話不走動效。
- * - **提問面板可以收起，核准面板不行**（§4.3）：收起是 collapsible 的 250／150，內容**保持掛載**（答到一半的不丟），
- *   關完才 `hidden`。Esc＝收起（不是停止），焦點落到展開鈕上（§8）。核准面板 Esc 不做事。
+ * - **提問面板可以收起，核准面板與計劃審核面板不行**（§4.3，#654 二-Q5）：收起是立即的（照 SG，collapsible 沒有高度動效，#1687），內容**保持掛載**
+ *   （答到一半的不丟），收起的同一輪就 `hidden`。Esc＝收起（不是停止），焦點落到展開鈕上（§8）。核准面板 Esc 不做事。
  */
 
-import { ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import type { PendingInput } from '@nexus/wire';
 
+import { Chevron } from '@/components/chevron';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { pendingLabel } from '@/lib/pending-label';
+import { isPlanReview } from '@/lib/plan-review';
 
-/** 舊的那一邊淡出多久（`--duration-quick`）；淡完才換成新的。收起的關也是這麼久（§7）。 */
+/** 舊的那一邊淡出多久，要等於 `motion.css` 的 `.motion-swap[data-phase='out']`；淡完才換成新的（§7）。 */
 const SWAP_OUT_MS = 150;
 
 const COMPOSER = 'composer';
@@ -33,6 +34,7 @@ export function PendingSwap({
   composerRef,
   renderPanel,
   renderActions,
+  askerOf,
 }: {
   readonly pendings: readonly PendingInput[];
   /** 輸入框：沒有待決時畫它，有待決時藏起來。 */
@@ -43,6 +45,8 @@ export function PendingSwap({
   readonly renderPanel: (pending: PendingInput) => ReactNode;
   /** 名稱那一列最右邊的按鈕（提問面板的 ❌）。 */
   readonly renderActions?: (pending: PendingInput) => ReactNode;
+  /** 這顆中斷是哪個前景子代理在問（#328）；名稱列與狀態列都要講，兩個子代理平行時才分得開。 */
+  readonly askerOf?: (pending: PendingInput) => string | undefined;
 }) {
   const pending = pendings[0];
   const target = pending?.interruptId ?? COMPOSER;
@@ -59,10 +63,14 @@ export function PendingSwap({
   const label =
     panel === undefined
       ? undefined
-      : pendingLabel(panel, {
-          index: Math.max(0, index),
-          total: Math.max(1, pendings.length),
-        });
+      : pendingLabel(
+          panel,
+          {
+            index: Math.max(0, index),
+            total: Math.max(1, pendings.length),
+          },
+          askerOf?.(panel),
+        );
 
   useEffect(() => {
     if (!leaving) return;
@@ -103,7 +111,7 @@ export function PendingSwap({
           <PendingPanel
             key={panel.interruptId}
             label={label}
-            collapsible={panel.kind === 'question'}
+            collapsible={panel.kind === 'question' && !isPlanReview(panel.questions)}
             actions={renderActions?.(panel)}
           >
             {renderPanel(panel)}
@@ -127,30 +135,19 @@ function PendingPanel({
   readonly children: ReactNode;
 }) {
   const [open, setOpen] = useState(true);
-  // 關的動效跑完才 `hidden`：內容一直掛著，答到一半的不丟。
-  const [closed, setClosed] = useState(false);
-  useEffect(() => {
-    if (open) return;
-    const timer = setTimeout(() => setClosed(true), SWAP_OUT_MS);
-    return () => clearTimeout(timer);
-  }, [open]);
   const trigger = useRef<HTMLButtonElement>(null);
 
   const head = (
-    <div className="text-muted-foreground flex min-h-11 items-center gap-2 px-3 py-1 text-xs lg:min-h-9">
+    <div className="text-muted-foreground flex min-h-11 items-center gap-2 px-3 py-1 text-ui lg:min-h-9">
       <span className="size-1.5 shrink-0 rounded-full bg-(--brand)" aria-hidden />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {collapsible && (
         <CollapsibleTrigger
           ref={trigger}
-          className="hover:bg-chip-hover active:bg-chip-pressed flex size-11 shrink-0 items-center justify-center rounded-full transition-colors duration-(--duration-quick) lg:size-8"
+          className="hover:bg-muted hover:text-foreground flex size-11 shrink-0 items-center justify-center rounded-md transition-colors duration-150 lg:size-8"
           aria-label={open ? '收起這些問題' : '展開這些問題'}
         >
-          <ChevronDown
-            aria-hidden
-            data-motion-rotate
-            className={`size-4 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) ${open ? 'rotate-180' : ''}`}
-          />
+          <Chevron open={open} />
         </CollapsibleTrigger>
       )}
       {actions}
@@ -176,20 +173,10 @@ function PendingPanel({
       }}
     >
       {collapsible ? (
-        <Collapsible
-          open={open}
-          onOpenChange={(next) => {
-            setOpen(next);
-            if (next) setClosed(false);
-          }}
-        >
+        <Collapsible open={open} onOpenChange={setOpen}>
           {head}
-          <CollapsibleContent
-            forceMount
-            hidden={closed}
-            inert={!open}
-            className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
-          >
+          {/* 內容一直掛著，答到一半的不丟；收起就 `hidden`，不等 Base UI 自己設（#1687 驗收 B3）。 */}
+          <CollapsibleContent keepMounted hidden={!open} inert={!open} className="overflow-hidden">
             {children}
           </CollapsibleContent>
         </Collapsible>

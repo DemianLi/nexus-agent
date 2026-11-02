@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * nexus-agent 的命令列入口——**後續 phase 的手動驗證工具**。
  *
@@ -8,9 +9,9 @@
  * 它與 [`spike/cli.ts`](./spike/cli.ts) 的分工：spike 那支綁死 Phase 0 的驗證腳本，
  * 這支收任意一句話、任意一份 plugin 清單。兩支都走 `createNexusAgent`——組裝點只有一個。
  *
- * **三件事刻意留給錯誤自己說話**：plugin 清單載不起來（重名、`requires` 缺件、`apply`
- * 拋錯）、fold 的前置條件不成立、基座擋下這份組裝，全都發生在 agent 跑起來之前，
- * 而這裡不吞：訊息原樣進 stderr，行程以非零狀態退出。**那條傳播路徑只有一條**，
+ * **三件事刻意留給錯誤自己說話**：plugin 清單起不來（必掛的列、組裝點自己加的外掛掉了；清單上可少掛的列
+ * 重名、`requires` 缺件、`apply` 拋錯只讓那一列掉、印一段警告，#751）、fold 的前置條件不成立、基座擋下這份組裝，
+ * 全都發生在 agent 跑起來之前，而這裡不吞：訊息原樣進 stderr，行程以非零狀態退出。**那條傳播路徑只有一條**，
  * 它的端到端測試也因此只有一條（見 [`cli.test.ts`](./cli.test.ts)）。
  *
  * **非零狀態有兩個值**：一次性模式撞到 agent 自己的迴圈上限是 `2`，其餘失敗是 `1`
@@ -18,191 +19,99 @@
  * 走的是同一條傳播路徑，只在最後一步分岔，所以端到端那組多一條是為了釘住那個分岔，
  * 不是第二條路徑。
  */
-
 import { parseArgs } from 'node:util';
+import { clearLine, cursorTo } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
-import { resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { resolve } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
-import { MemorySaver } from '@langchain/langgraph';
-import type {
-  ApprovalPolicy,
-  CommandDescriptor,
-  CommandRegistrationPoint,
-  FeedbackService,
-  InvariantError,
-  PluginEntry,
-  SessionEvent,
-  SessionTelemetrySharingStatus,
-} from '@nexus/core';
+import type { CommandDescriptor, CommandRegistrationPoint, SessionEventMap } from '@nexus/core';
+import { approvalPolicyOnResume } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
-import { createAskUserPlugin } from '@nexus/plugin-ask-user';
-import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
-import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { liveModelPlugin } from './settings/live-model.js';
-import type { LiveModelConfig } from './settings/live-model.js';
-import { startupSetting } from './settings/startup.js';
+import { startupEntryMounted, startupSetting } from './settings/startup.js';
+import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
+import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import { threadCapacityPlugin } from './settings/thread-capacity.js';
+import { sessionLogBudgetFromSetting } from './session-log-budget.js';
+import { spillPolicyPlugin } from './settings/spill-policy.js';
+import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
+import { HARNESS_VERSION } from './harness-version.js';
+import { launchToolResultStashSweep } from './tool-result-stash-sweep.js';
+import { ensureFallbackTitle } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
 import {
   attachSessionPersistence,
-  createHostServicesPlugin,
   sessionPersistencePlugin,
-  type SessionPersistenceConfig,
+  humanMessageForTurnStart,
+  MAX_TOKENS_TURN_END,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
-  SessionRegistry,
-  deriveApprovalChannel,
+  resumeClosingInterruptedTurn,
+  SessionFormatUnsupportedError,
+  SessionLogOffset,
+  turnReachedMaxTokens,
   type SessionLog,
 } from '@nexus/core';
 import { createJsonlSessionStore, openJsonlSessionStore } from './jsonl-session-store.js';
 import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
-import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
-import type { GoalServices } from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
-import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
-import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
-
-import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
+import { AssemblyDropError, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
-import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
-import type { NexusAgentHandle } from './agent-factory.js';
-import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
-import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
-import {
-  recordedSandboxMode,
-  SANDBOX_COMMAND_NAME,
-  SandboxModeController,
-} from '@nexus/plugin-sandbox-policy';
-import type { SandboxMode } from './contained-backend.js';
-import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import type { GoalDriverPort, GoalRoundCap, GoalRoundRequest } from './goal-driver.js';
+import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round-cap.js';
+import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
+import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
+import { installLaunchProxy } from './http-proxy-boot.js';
+import { createCredentialService } from './credentials.js';
+import { processLaunchEnv } from './launch-env.js';
+import { resolveHarnessHome } from './harness-home.js';
+import { turnFailureOf, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import type { LiveLaunch } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
-import { loadDefaultPlugins, renderDefaultConfigDump } from './plugin-config.js';
+import { runDumpConfigSchema } from './config-schema-dump.js';
+import { resolveSessionHeaderMetadata } from './session-header-metadata.js';
+import {
+  composeDefaultEntries,
+  describePrepareJournal,
+  loadDefaultPlugins,
+  prepareJournal,
+  renderLayeredConfigDump,
+  renderShippedConfigDump,
+} from './plugin-config.js';
+import {
+  assemblyDropsOf,
+  auditStartupEntries,
+  dropReasonsOf,
+  optionalEntriesOf,
+  startupErrorFrom,
+  startupWarning,
+  describeWarnings,
+} from './startup-audit.js';
+import { createInvariantLog } from './invariant-log.js';
 import { toAgentInvocation } from './messages.js';
-import { ScriptedChatModel } from './scripted-model.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
-import type { ScriptedTurn } from './scripted-model.js';
-
-/** 一次呼叫解析出來的東西。`prompt` 缺席即 REPL。 */
-export interface CliInvocation {
-  /** 一次性模式要問的那句話。省略即進 REPL。 */
-  readonly prompt?: string;
-  /** 用真實供應商而不是假模型。 */
-  readonly live: boolean;
-  /**
-   * 真實磁碟上的可寫根。給了就換成有路徑圍堵的 Disk backend，省略即跑在 state 裡的
-   * 虛擬 FS（`StateBackend`，不碰磁碟）。
-   */
-  readonly workspace?: string;
-  /**
-   * 這一次呼叫的圍堵強度。省略即 `workspace-write`——**設防的那一個是預設**。
-   *
-   * **只有給了 `--workspace` 才有意義**：沒給的時候根本沒有 `ContainedFilesystemBackend`，
-   * 檔案落在基座的 `StateBackend` 裡，這一格一個位元組都影響不到。所以兩者不成對是
-   * **錯誤**，不是無害的多餘（同 `--max-goal-rounds` 那條規矩）——收下來會變成一個
-   * 看起來設過、實際上什麼都沒圍到的模式。
-   *
-   * 預設值本身是 [#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 0 項的定案：
-   * 照 dsh 的出廠 preset（`workspace-write`），而**可寫根之內的寫入在這一格底下是放行的**。
-   * 要它不放行就切到 `read-only`。
-   */
-  readonly sandbox?: SandboxMode;
-  /**
-   * 會話日誌落盤的根目錄。給了就把這一次的每一份日誌寫進它底下的一個 run 目錄，
-   * 省略即**不落盤**（同 `fold.ts` 的 checkpointer：「缺席」就是關掉）。
-   *
-   * **沒有預設值是刻意的。** 日誌裡有使用者打的每一句話，預設往家目錄寫是一個
-   * 應該由人做的決定，不是一個順手的預設（[#172](https://github.com/DemianLi/nexus-agent/issues/172)）。
-   */
-  readonly sessionLog?: string;
-  /**
-   * 續接一個既有的 run 目錄——上一次 `--session-log` 寫出來的那一個
-   * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
-   *
-   * **回來的是日誌上推得出來的**：沙箱模式、目標（授權打回 `disarmed`，要人 `/goal resume`）、
-   * 計劃模式，以及對話——從日誌推回模型（[#306](https://github.com/DemianLi/nexus-agent/issues/306)，
-   * 見 `conversation-restore.ts`），不是把 checkpointer 落盤（門 B 照舊不開）。**todo 沒有自己回來的
-   * 狀態**：模型那一側沒有人讀 `todo/write` 重建它，模型是從推回來的對話裡那幾次 `todo_write` 記得它的。
-   * （web 的清單面板讀它，#575，但那是畫面，不進模型。）
-   * 虛擬檔案系統、工具結果暫存與摘要器的會話歷史檔（#348）回不來——它們只在 graph state 裡。
-   *
-   * **不配 `--sandbox`**：模式從日誌來，兩個來源不管誰贏，另一個都是靜靜被丟掉——一個打了
-   * `--sandbox read-only` 的人可能落在 `workspace-write` 裡。要換就接起來之後 `/sandbox`，
-   * 那一次會記進日誌。**不配 `--session-log`**：續接就寫回那個目錄，給兩個等於兩個寫入
-   * 目的地。
-   */
-  readonly resume?: string;
-  /**
-   * 一個 active 的目標沒達成時自己再開一輪（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。
-   *
-   * **預設關，而且那是一個決定不是保守。** dsh 的續行驅動器是「需要你刻意掛載的可選消費
-   * 方」（`packages/goal/README.zh.md`），而我們的入口點擁有輪迴圈——**掛載的等價物就是
-   * 這個旗標**。
-   *
-   * （2026-09-19 註：引文是 dsh 當時 README 的原話，但 dsh 的 base 其實出廠就掛著續行驅動器——
-   * 「可選」指套件可以不掛，不是出廠關著。這個決定不動，前提待重核，見
-   * `.docs/plugin-architecture-gap-survey.md` §三第 18 列。）
-   *
-   * 開著的時候，唯一的硬上限是那個目標自己的 `max_goal_rounds`；額外那條停損刻意沒做，
-   * 理由在 `goal-driver.ts` 檔頭。
-   */
-  readonly goalDriver: boolean;
-  /**
-   * 這一次呼叫最多讓續行排幾輪。省略即不設，只剩目標自己那一條。
-   *
-   * **它存在的理由是目標自己那條上限不歸操作的人管**：`service.ts:269` 是
-   * `request.maxGoalRounds ?? this.#defaultMaxGoalRounds`——`??` 不是 `Math.min`，所以
-   * 模型在 `create_goal` 裡填的數字贏過組裝點給的預設。這一格是**模型改不動的那一個**，
-   * 完整理由在 `goal-driver.ts` 檔頭。
-   *
-   * **沒開 `--goal-driver` 就給它是錯誤，不是無害的多餘**：它唯一的消費者是那支迴圈，
-   * 收下來會變成一個看起來設過、實際上一輪都限制不到的上限。
-   */
-  readonly maxGoalRounds?: number;
-  /**
-   * 這一次呼叫的 agent 迴圈上限，單位是 LangGraph 的 super-step。
-   *
-   * **省略不等於內建預設**（[#362](https://github.com/DemianLi/nexus-agent/issues/362)／
-   * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）：省略之後由組裝點的三態決定
-   * ——plugin 清單上 `recursion-limit` 那一列講了就用它的，連那一列都沒有才是
-   * `DEFAULT_RECURSION_LIMIT`。**這個旗標在場時永遠贏過那一列**，跟 #456 那三列同一條規則。
-   *
-   * **產品預設不動，這一格是給呼叫端明著傳的。** 100 是「跑掉了」的界線，對一般任務是對的
-   * 校準；需要更長的呼叫端（Proteus 的 adapter）自己傳一個大的，那時那個數字出現在呼叫端
-   * 的指令裡而不是沒有人設過。照 dsh 的房規：會隨部署變的選擇要改得動，一個 `DEFAULT_*`
-   * 常數不算 configurability（`tool-ralph` 的 `maxRounds` 就是 Config）——**那條房規現在由
-   * `recursion-limit` 那一列滿足**，這個旗標是疊在它上面的一層。
-   *
-   * **它換算成幾個模型輪取決於組裝**：`模型輪數 = floor((recursionLimit − 1) / 每輪格數)`，
-   * 每多一個帶 `beforeModel` 的 middleware 每輪就多一格。預設組裝是三格，所以 `500` ≈ 166 輪；
-   * 多掛一個就變四格、≈ 124 輪。**一個固定的數字不是一個固定的輪數。**
-   *
-   * **不必配別的旗標**：它永遠有消費者（每一種組裝都有迴圈），不像 `--max-goal-rounds`。
-   *
-   * **配 `--resume` 是對的，而且每一次都要重給。** 它跟 `--sandbox` 相反：上限不記進日誌、
-   * 也推不回來，只作用在這一次行程——所以續接時沒有「兩個來源誰贏」的問題，不給就是回到
-   * 預設。別把它加進 `--resume` 的衝突檢查：Proteus 的 adapter 每個 phase 都是一次
-   * `--resume` 呼叫，靠的就是每次重給。
-   */
-  readonly recursionLimit?: number;
-  /**
-   * `--patch` 疊在出貨 `cordis.yml` 上的那幾層，照命令列順序（後面的蓋前面的）。
-   *
-   * **換掉整份清單這件事沒有旗標可以做**（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
-   * 拿掉了 `--plugins`）。要一棵完全不一樣的樹是 profile 的工作，dsh 的產品 CLI 也是這樣分的；
-   * 低層嵌入方與測試走程式路徑（`createCliAgent`），不走旗標。
-   */
-  readonly patches?: readonly string[];
-  /**
-   * 把疊完的設定印出來就退出，一個 plugin 都不載。
-   *
-   * 照 dsh 的 `--dump-config`：它印的是**啟動真的會掛的那一份**，而印它不需要把每一顆
-   * plugin 都載起來（`renderConfigDump` 是純函式那條路）。
-   */
-  readonly dumpConfig: boolean;
-  /** 只印用法就退出。 */
-  readonly help: boolean;
-}
+import {
+  type CliInvocation,
+  parseSandboxMode,
+  resolveInvariantLogPath,
+  resolveSessionLogDir,
+  SESSION_LOG_OFF_DISCLOSURE,
+  assertPersistenceFlags,
+  launchWorkspaceRootOf,
+  resolveWorkspaceRoot,
+  outsideWorkspace,
+  assertPatchesOutsideWorkspace,
+  THREAD_ID,
+  formatGoalDriverDisclosure,
+  type NexusAgent,
+  goalDriverPort,
+  describeDelegationNarrowing,
+  describePermissionNarrowing,
+} from './assembly-root.js';
+import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
+import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 
 export const USAGE = `用法：cli [選項] [要說的話...]
 
@@ -211,29 +120,41 @@ export const USAGE = `用法：cli [選項] [要說的話...]
 選項：
   --live               換成真實供應商（預設 ${DEFAULT_LIVE_MODEL_ID}），需要 API key
   --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
-                       另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
+                       另一層是變更紀錄 $NEXUS_AGENT_HOME/plugin-journal.jsonl（用 plugin 寫入口改），它排在 --patch 之前
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
                        （省略即虛擬檔案系統，完全不碰磁碟）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
-  --session-log <dir>  把會話日誌寫進這個目錄底下（省略即不落盤）
+                       danger-full-access 出廠的權限表沒有，要先在表裡加回那一組，否則起不來
+  --session-log <dir>  把會話日誌改寫到這個目錄底下
+                       （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區
-  --resume <run 目錄>  接著上一次 --session-log 寫出來的那個 run 目錄跑下去：
+                       要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
+  --resume <run 目錄>  接著上一次寫出來的那個 run 目錄跑下去：
                        沙箱模式、目標、計劃模式與對話照日誌回來
-                       （虛擬檔案系統、工具結果暫存與會話歷史檔不回來）
+                       （虛擬檔案系統與會話歷史檔不回來；工具結果暫存存在主機上，讀得回）
                        要在上一次的同一個目錄底下接（日誌記著它屬於哪個目錄）
                        不能配 --sandbox（模式從日誌來）或 --session-log（就寫回那個目錄）
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
   --max-goal-rounds <n>
-                       這一次呼叫最多讓它排幾輪（要配 --goal-driver）
+                       每次建立或恢復目標之後最多續行幾輪（要配 --goal-driver）
+                       蓋過清單上 goal-round-cap 那一列（出廠 20）
                        目標自己的 max_goal_rounds 是模型填的，這一條它改不動
   --recursion-limit <n>
                        agent 迴圈上限（LangGraph super-step，預設 100 ≈ 33 個模型輪）
                        一次性模式撞到時退出碼是 2，其他失敗是 1
   --dump-config        把三層疊完的 plugin 設定印出來就退出（一個 plugin 都不載）
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
-                       不能配 --resume（印設定不跑任何一輪）
+                       不能配 --resume 或要說的話（印設定不跑任何一輪）
+  --dump-default-config
+                       只印出貨那一層的設定就退出：不讀 $NEXUS_AGENT_HOME 的變更紀錄，也不收 --patch
+                       覆寫檔壞了（權限不對、YAML 寫壞）連 --dump-config 都印不出來時，用它拿一份對照
+                       不能配 --dump-config、--dump-config-schema、--patch、--resume 或要說的話
+  --dump-config-schema 把疊完的 plugin 設定欄位規格表（JSON Schema 2020-12）印出來就退出
+                       標準輸出只有那份 JSON，診斷走標準錯誤；有任何一列轉不完整（或載不起來）退出碼是 1
+                       停用的列也收。不能配 --dump-config、--resume 或要說的話
   --help               印這段話
+  --version            印這個 harness 的版本就退出
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
 
@@ -263,7 +184,10 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         'max-goal-rounds': { type: 'string' },
         'recursion-limit': { type: 'string' },
         'dump-config': { type: 'boolean', default: false },
+        'dump-config-schema': { type: 'boolean', default: false },
+        'dump-default-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
+        version: { type: 'boolean', default: false },
       },
       allowPositionals: true,
     });
@@ -290,7 +214,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     if (values.sandbox !== undefined) {
       throw new Error(
         `--resume 不能配 --sandbox：續接的模式從日誌來，兩個一起給的話不管誰贏，另一個都是` +
-          `靜靜被丟掉。要換模式，接起來之後用 /${SANDBOX_COMMAND_NAME} 切——那一次會記進日誌。` +
+          `靜靜被丟掉。要換模式，接起來之後用 /${PERMISSION_COMMAND_NAME} 切——那一次會記進日誌。` +
           `\n\n${USAGE}`,
       );
     }
@@ -318,6 +242,49 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     if (resume !== undefined) {
       throw new Error(`--dump-config 不能配 --resume：印設定不跑任何一輪。\n\n${USAGE}`);
     }
+    // 要說的話同理（照 dsh）：印完就退出，那句話永遠不會被說出去。以前這裡靜靜收下（#740 補上）。
+    if (positionals.join(' ').trim().length > 0) {
+      throw new Error(`--dump-config 不能配要說的話：印設定不跑任何一輪。\n\n${USAGE}`);
+    }
+  }
+
+  const dumpConfigSchema = values['dump-config-schema'] === true;
+  if (dumpConfigSchema) {
+    // 同 `--dump-config`：規格表不跑任何一輪，靜靜收下這些旗標的下場是那個人以為自己驗證的是別的東西。
+    if (dumpConfig) {
+      throw new Error(`--dump-config-schema 不能配 --dump-config：一次只印一種。\n\n${USAGE}`);
+    }
+    if (resume !== undefined) {
+      throw new Error(`--dump-config-schema 不能配 --resume：印規格表不跑任何一輪。\n\n${USAGE}`);
+    }
+    if (positionals.join(' ').trim().length > 0) {
+      throw new Error(`--dump-config-schema 不能配要說的話：印規格表不跑任何一輪。\n\n${USAGE}`);
+    }
+  }
+
+  // **只印出貨那一層**（#740）：照 dsh，三種印法互斥；不讀 home 覆寫檔，所以帶 `--patch` 沒有意思——
+  // 靜靜收下的下場是那個人以為自己看的是疊過他那個 patch 的樣子。
+  const dumpDefaultConfig = values['dump-default-config'] === true;
+  if (dumpDefaultConfig) {
+    if (dumpConfig) {
+      throw new Error(`--dump-default-config 不能配 --dump-config：一次只印一種。\n\n${USAGE}`);
+    }
+    if (dumpConfigSchema) {
+      throw new Error(
+        `--dump-default-config 不能配 --dump-config-schema：一次只印一種。\n\n${USAGE}`,
+      );
+    }
+    if (patches !== undefined) {
+      throw new Error(
+        `--dump-default-config 不能配 --patch：它只印出貨那一層，不讀任何覆寫檔。\n\n${USAGE}`,
+      );
+    }
+    if (resume !== undefined) {
+      throw new Error(`--dump-default-config 不能配 --resume：印設定不跑任何一輪。\n\n${USAGE}`);
+    }
+    if (positionals.join(' ').trim().length > 0) {
+      throw new Error(`--dump-default-config 不能配要說的話：印設定不跑任何一輪。\n\n${USAGE}`);
+    }
   }
 
   const prompt = positionals.join(' ').trim();
@@ -333,53 +300,18 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     ...(maxGoalRounds !== undefined && { maxGoalRounds }),
     ...(recursionLimit !== undefined && { recursionLimit }),
     dumpConfig,
+    dumpConfigSchema,
+    dumpDefaultConfig,
     help: values.help === true,
+    version: values.version === true,
   };
 }
 
-/**
- * `--sandbox` 那一格。
- *
- * **沒給 `--workspace` 就拋。** 那個組合底下沒有 `ContainedFilesystemBackend`——檔案落在
- * 基座的 `StateBackend` 裡，這道 fence 整個不在路徑上。靜靜收下的話，畫面上是「我設了
- * read-only」，實際上模型照樣想寫什麼寫什麼，而**一條測試都不會紅**（同 `--max-goal-rounds`
- * 那條規矩）。
- *
- * **認不得的模式名也拋。** 型別擋不住命令列上來的字串，落到 backend 那邊會變成「不是
- * `danger-full-access` 也不是 `read-only`」——於是靜靜地當成 `workspace-write`，那是誤放行。
- *
- * **兩個入口共用這一份**（`cli` 與 `serve`），所以用法那段話是傳進來的——同
- * `--session-log 不能在 --workspace 底下」那條檢查。兩份各寫一次的下場是有一天只有一邊擋。
- *
- * @param raw - 命令列上那串字，沒給就是 `undefined`。
- * @param workspace - `--workspace` 那一格，用來檢查兩者成對。
- * @param usage - 接在錯誤訊息後面的用法那段話（呼叫的入口各有一份）。
- * @returns 那個模式，或沒給時的 `undefined`（＝由 backend 用它的預設）。
- * @throws 沒配 `--workspace`，或模式名認不得——訊息接上用法。
- */
-export function parseSandboxMode(
-  raw: string | undefined,
-  workspace: string | undefined,
-  usage: string,
-): SandboxMode | undefined {
-  if (raw === undefined) return undefined;
-  if (workspace === undefined) {
-    throw new Error(
-      `--sandbox 要配 --workspace：沒有 --workspace 的時候檔案跑在虛擬檔案系統裡，` +
-        `圍堵那道 fence 根本不在路徑上，這個模式一個位元組都影響不到。\n\n${usage}`,
-    );
-  }
-  const mode = raw.trim();
-  if (!isSandboxMode(mode)) {
-    throw new Error(
-      `--sandbox 認不得 "${raw}"。認得的是 ${SANDBOX_MODES.join('、')}。\n\n${usage}`,
-    );
-  }
-  return mode;
-}
+/** `--max-goal-rounds` 給的上限寫進 blocker 訊息與啟動那一行時的來源。 */
+export const MAX_GOAL_ROUNDS_SOURCE = '命令列 --max-goal-rounds 旗標';
 
 /**
- * `--max-goal-rounds` 那一格。
+ * `--max-goal-rounds` 那一格。**只管旗標**：`goal-round-cap` 那一列沒有這條規矩，續行沒開時它安靜地不起作用（#1623）。
  *
  * **沒開旗標就拋，不是靜靜收下。** 一個收下來卻沒有消費者的上限，跟沒設一模一樣——而
  * 差別在於畫面上看起來設過了。這條路上唯一會發生的事就是有人以為自己壓住了輪數。
@@ -418,29 +350,6 @@ function parsePositiveInteger(flag: string, raw: string | undefined): number | u
 }
 
 /**
- * 把 `--session-log` 解析成絕對路徑，順便擋掉它落在 `--workspace` 底下的情形。
- *
- * **這道檢查就是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) 那條線的第二次應用**：
- * `fold.ts:252` 寫著「歷史是基礎建設，不是 agent 的工作區」。日誌寫進可寫根底下的話，
- * 模型自己一個 `read_file` 就讀得到整份對話史，而且會把自己的日誌當成工作檔改掉。
- *
- * **純字串前綴比對，不 canonicalize**——同 `ContainedFilesystemBackend` 的取捨與同一個
- * 已知缺口（symlink 繞得過）。這裡擋的是順手指到工作區裡，不是惡意。
- *
- * @param invocation - 解析出來的呼叫。
- * @param cwd - 相對路徑的解析基準。
- * @returns 絕對路徑，或沒給 `--session-log` 時的 `undefined`。
- * @throws 它落在 `--workspace` 底下。
- */
-export function resolveSessionLogDir(
-  invocation: Pick<CliInvocation, 'sessionLog' | 'workspace'>,
-  cwd: string,
-): string | undefined {
-  if (invocation.sessionLog === undefined) return undefined;
-  return outsideWorkspace(invocation.sessionLog, invocation.workspace, cwd, '--session-log');
-}
-
-/**
  * 把 `--resume` 解析成絕對路徑。擋掉的東西與 {@link resolveSessionLogDir} 同一條：續接之後
  * 新事件寫回那個目錄，所以它落在可寫根底下的後果跟 `--session-log` 一模一樣。
  *
@@ -456,80 +365,6 @@ export function resolveResumeDir(
   if (invocation.resume === undefined) return undefined;
   return outsideWorkspace(invocation.resume, invocation.workspace, cwd, '--resume');
 }
-
-/**
- * `--workspace` 那一格解析出來的絕對根，沒給就是 `undefined`。
- *
- * **一份**：這棵樹上曾經有兩處各寫一次 `resolve(cwd, workspace)`（這裡與
- * {@link createCliAgent}），而 {@link outsideWorkspace} 的檔頭對同型情況已經寫過下場
- * ——「有一天只有一邊擋」。[#504](https://github.com/DemianLi/nexus-agent/issues/504)
- * 要把這個值寫進會話 header，那是第三個消費者，所以這裡先抽出來。
- *
- * @param workspace - `--workspace` 命令列上那串字，沒給就是 `undefined`。
- * @param cwd - 解析的起點。
- * @returns 絕對根，或沒給時的 `undefined`。
- */
-export function resolveWorkspaceRoot(
-  workspace: string | undefined,
-  cwd: string,
-): string | undefined {
-  return workspace === undefined ? undefined : resolve(cwd, workspace);
-}
-
-/** 兩個日誌目錄旗標共用的那道檢查。**一份**，理由同 {@link resolveSessionLogDir} 的呼叫端。 */
-function outsideWorkspace(
-  path: string,
-  workspacePath: string | undefined,
-  cwd: string,
-  flag: string,
-): string {
-  const directory = resolve(cwd, path);
-  const workspace = resolveWorkspaceRoot(workspacePath, cwd);
-  if (workspace === undefined) return directory;
-  if (directory === workspace || directory.startsWith(`${workspace}${sep}`)) {
-    throw new Error(
-      `${flag} 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
-        `會話日誌是基礎建設，不是 agent 的工作區——寫在可寫根裡，模型讀得到也改得動整份對話史。`,
-    );
-  }
-  return directory;
-}
-
-/**
- * 假模型的腳本：呼叫一次 echo 再回一句話。
- *
- * **它是對著出貨清單（`apps/harness/cordis.yml`）寫的。** 拿 patch 把 `echo` 那一列關掉或換掉
- * 就該一起換 `--live`——腳本裡的工具名那時多半不存在，假模型只會製造一個看不懂的失敗。
- * 腳本三輪，而第一句話就用掉兩輪（呼叫工具、拿到結果再回覆），所以假模型下的 REPL
- * 問到第三句就會用完（`ScriptedChatModel` 選擇當場失敗而不是靜默重播）；REPL 的正經
- * 用法是 `--live`。
- */
-/** 假模型腳本寫出去的那個檔。測試靠它確認檔案真的落在 `--workspace` 指的目錄底下。 */
-export const CLI_PROBE_FILE = '/cli.md';
-
-const CLI_SCRIPT: readonly ScriptedTurn[] = [
-  {
-    content: '先回聲一次，確認工具接得上。',
-    toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: 'CLI 接線測試' } }],
-  },
-  {
-    // 再寫一個檔。**這一輪是給 `--workspace` 用的**：預設的虛擬 FS 底下它只是讓
-    // 「虛擬檔案系統：…」那行有東西可印，換成真實磁碟時它就是「檔案真的落在那個
-    // 目錄底下」的證據。少了它，`--workspace` 給了跟沒給在畫面上分不出來。
-    content: '再寫一個檔，確認檔案系統接得上。',
-    toolCalls: [{ name: 'write_file', args: { file_path: CLI_PROBE_FILE, content: 'CLI 寫的' } }],
-  },
-  { content: '工具回來了，這條線是通的。' },
-  { content: '假模型只會照腳本說話——要真的對話請用 --live。' },
-];
-
-const SYSTEM_PROMPT = [
-  '你是 nexus-agent 的命令列助手。',
-  '需要動用工具時就真的呼叫，不要只在文字裡描述你打算做什麼。',
-].join('\n');
-
-/** REPL 與一次性模式共用同一條對話——checkpointer 認的是這個 id。 */
-const THREAD_ID = 'cli';
 
 /**
  * banner 上關於核准的那一行。
@@ -548,35 +383,6 @@ const THREAD_ID = 'cli';
  */
 export const APPROVAL_DISCLOSURE =
   '核准：關閉（這個入口收不了核准決定，需要核准的工具會被拒絕，不會停下來等）';
-
-/**
- * 續行那一行披露。**它是算出來的，不是常數**——因為它背後真的有一個旗標。
- *
- * {@link APPROVAL_DISCLOSURE} 的檔頭寫著「哪天這裡真的多了一個旗標，這個常數要跟著變成
- * 一個函式——不然畫面會開始說謊」。`--goal-driver` 就是那樣的旗標，只是它**不動核准政策**
- * （`runCli` 照樣只傳 {@link HEADLESS_APPROVALS}），所以那一行沒有變成謊話；這一行是同一
- * 條規矩底下的第二行，而它從第一天就是函式。
- *
- * **開著的時候要把上限講出來**，因為那是唯一擋得住這支迴圈的東西。不講的話，「模型自己
- * 又跑了三十輪」與「人問了三十次」在帳單上一模一樣而在畫面上沒有差別。
- *
- * **而上限有兩條，所以兩條都要講。** 目標自己那個 `max_goal_rounds` 是**模型填的**
- * （`service.ts:269` 的 `??`），`--max-goal-rounds` 才是操作的人設得動的那一條。只印其中
- * 一條的話，這一行就會變成上面那句自己警告過的謊話——只印目標那條會讓人以為有一個他控制
- * 得了的數字，只印命令列那條會讓人看不見模型可以在它底下自己挑一個更小的。沒給命令列那
- * 條時要**明著說沒給**，理由同上。
- *
- * @param on - 旗標開著沒有。
- * @param roundCap - `--max-goal-rounds` 那個數字；省略即這一次呼叫沒給。
- * @returns 那一行。
- */
-export function formatGoalDriverDisclosure(on: boolean, roundCap?: number): string {
-  if (!on) return '續行：關閉（一輪結束就結束，要人再推；--goal-driver 可以打開）';
-  const own = `目標自己的 max_goal_rounds（模型在 create_goal 填的，沒填就是 ${DEFAULT_MAX_GOAL_ROUNDS}）`;
-  return roundCap === undefined
-    ? `續行：開啟（目標沒達成時自己再開一輪；上限只有一條——${own}；這一次呼叫沒有給 --max-goal-rounds）`
-    : `續行：開啟（目標沒達成時自己再開一輪；上限兩條，先到的那一條管——--max-goal-rounds ${roundCap}，與${own}）`;
-}
 
 /**
  * 續接回來的計劃模式開著時，啟動畫面多講的那一行。
@@ -619,232 +425,21 @@ export function transcriptLine(node: string, message: BaseMessage): string | und
   return `[${label}] ${message.text.trim() || '(呼叫工具)'}`;
 }
 
-/**
- * 依這次呼叫建 model。
- *
- * @param live - 是否用真實供應商。
- * @param liveModel - 真實供應商的五個連線值，清單上 `live-model` 那一列（#545）。
- * @returns 可以交給組裝點的 model。
- * @throws `--live` 但環境變數裡沒有 key——訊息指名缺哪一個，不 fallback。
- */
-function createCliModel(live: boolean, liveModel: LiveModelConfig): BaseChatModel {
-  if (!live) return new ScriptedChatModel({ turns: CLI_SCRIPT });
-  loadLiveEnvIfNeeded();
-  return createLiveModel(liveModel);
-}
-
-type NexusAgent = NexusAgentHandle['agent'];
-
-/**
- * 組出這次呼叫要用的 agent。
- *
- * **checkpointer 是 REPL 有沒有記性的全部**：一條 REPL 是一條連續對話，而對話狀態
- * 存在 checkpointer 裡、用 {@link THREAD_ID} 認領。自己在外面累積一個 messages 陣列
- * 也能讓 demo 跑起來，但那是把基座已經有的東西再實作一次，而且下一個 phase 要換成
- * 真的持久化時整段都得丟掉。
- *
- * 回傳 model 是為了讓測試看得到送進去的 prompt——照 `spike/spike-agent.ts` 的先例。
- *
- * `dispose` 一路傳到 {@link runCli}——清單裡的 plugin 可能開了活資源（MCP 的 stdio 子行程是
- * 第一個），沒人收的話這支程式印完答案不會退出。
- *
- * **default backend 是組裝點的事，不是 plugin 的事**（[#28](https://github.com/DemianLi/nexus-agent/issues/28)
- * 決議 3）。`--workspace` 換掉的就是它：給了就跑在真實磁碟上、變更被圍堵在那個目錄之下；
- * 省略即 `StateBackend`——虛擬 FS 跑在 state 裡，完全不碰磁碟。**預設不碰磁碟是刻意的**：
- * 一個手動驗證工具不該因為忘了加旗標就動到誰的檔案。
- *
- * @param invocation - 這次呼叫解析出來的東西。
- * @param plugins - 已經載好的 plugin 清單。
- * @param cwd - `--workspace` 的解析基準，省略即行程的工作目錄。
- * @param onInvariantViolation - 不變量違規往哪裡講。**省略是有意義的**：這個工廠兩條路
- *   都在用，而 [`serve.ts`](./serve.ts) 刻意不傳——伺服器那條路徑的違規進的是伺服器
- *   日誌，維持 runner 的預設（[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
- * @param approvals - 核准政策的 session 開關。**省略是有意義的**，同上一個參數：
- *   [`serve.ts`](./serve.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
- *   CLI 這條傳 {@link HEADLESS_APPROVALS}，因為它收不了核准決定
- *   （[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
- * @param rootSeed - root 日誌的 seed：續接時上一個行程留下的事件（`--resume`，
- *   [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。省略即一份新日誌。
- *   serve 不傳：它的註冊表不是這裡建的（一條 thread 一份，在 `ThreadPump`），seed 經
- *   `ThreadAgent.rootSeed` 交給 pump。
- * @returns 組好的 agent、收掉它的方法，與它用的 model。
- * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
- */
-export async function createCliAgent(
-  invocation: Pick<CliInvocation, 'live' | 'workspace' | 'sandbox' | 'recursionLimit'> & {
-    /**
-     * 記每一輪改了哪些檔（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。**只有 serve 開**：dsh 由
-     * web-app bundle 掛，CLI 沒有人讀摘要。沒給 `--workspace` 時開了也不掛——那正是 dsh 的「不合格」。
-     */
-    readonly workspaceChanges?: boolean;
-    /**
-     * 真實供應商的五個連線值（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）。
-     * 兩條產品路徑都傳：CLI 與 serve 在起動期從同一份清單解一次（serve 的這個函式一條 thread
-     * 跑一次，只解在這裡的話設定寫壞要等到第一條 thread 才炸；起動期那一次也是啟動時印模型名
-     * 的來源）。省略時從 `plugins` 解，給手上只有清單的呼叫端（測試、嵌入方）。
-     *
-     * **傳與不傳拿到的值一樣**——同一份清單、同一支 `startupSetting`。所以這一格的作用是
-     * **不解第二次**，不是改變值；突變量過（2026-09-23）：拿掉 serve 傳下來的那一格，全樹照樣綠。
-     * 「寫壞的設定在起動期就炸」由 serve 起動期那一次解析負責，那一條有測試
-     * （`settings/live-model.test.ts`）。
-     */
-    readonly liveModel?: LiveModelConfig;
-  },
-  plugins: readonly PluginEntry[],
-  cwd: string = process.cwd(),
-  onInvariantViolation?: (error: InvariantError) => void,
-  approvals?: ApprovalPolicy,
-  rootSeed?: readonly SessionEvent[],
-): Promise<{
-  agent: NexusAgent;
-  dispose: () => Promise<void>;
-  model: BaseChatModel;
-  /** 這條 REPL 的會話註冊表。root 那一份就是 {@link sessionLog}。 */
-  sessions: SessionRegistry;
-  sessionLog: SessionLog;
-  commands: CommandRegistrationPoint;
-  attachTelemetry: (sessions: SessionRegistry) => (() => Promise<void>) | undefined;
-  attachInvariants: (sessions: SessionRegistry) => (() => void) | undefined;
-  attachSession: (sessions: SessionRegistry) => () => void;
-  telemetrySharing: SessionTelemetrySharingStatus | undefined;
-  /** 評分與評語的規則。serve 那條交給 wire-handler；CLI 那條只用得到 `/feedback`（走命令面）。 */
-  feedback: FeedbackService | undefined;
-  /** 每一輪的改動摘要，serve 交給 wire-handler 的兩條路由。沒開或沒有工作區時是 `undefined`。 */
-  workspaceChanges: WorkspaceChanges | undefined;
-  /**
-   * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
-   * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
-   * 拿掉 `--plugins` 之後，這是剩下的那條路）。兩條進入點都拿它去組 {@link goalDriverPort}。
-   */
-  goals: GoalServices | undefined;
-  /**
-   * `--workspace` 解析出來的絕對根，**沒給就是 `undefined`**
-   * （[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
-   *
-   * 回傳它是因為算它的地方（這個函式裡）與要用它的地方是兩個 scope：serve 把它交給
-   * wire-handler 的讀檔路由當錨。**呼叫端不要再寫一次 `resolve(cwd, ...)`**，見
-   * {@link resolveWorkspaceRoot}。
-   */
-  workspaceRoot: string | undefined;
-}> {
-  const model = createCliModel(
-    invocation.live,
-    invocation.liveModel ?? startupSetting(plugins, liveModelPlugin),
-  );
-  // **channel 在這裡算一次，兩個消費者共用。** 核准閘門由 `foldRegistry` 自己算
-  // （同一個 `deriveApprovalChannel`），`ask_user_question` 拿的是這一份——兩邊分岔的
-  // 樣子是「核准擋得下來、問答還掛在那裡」，而那不會有任何測試紅。
-  //
-  // **它掛在這裡而不是出貨清單裡**：那份清單是一個設定檔，看不到這一次
-  // 呼叫的 checkpointer 與 `approvals`。
-  // **綁在真的那個值上，不是寫死 `true`。** 今天這條路一律給 `MemorySaver`，但把它寫成
-  // 字面量的那一刻，這個推導就不再跟著組裝走了——有人讓 checkpointer 變成有條件的那天，
-  // 核准閘門會正確地回報 `no-channel`，而 `ask_user_question` 還宣稱有人在，然後撞上
-  // `interrupt()` 的 `No checkpointer set`。那正是抽出這個推導要防的分岔。
-  const checkpointer = new MemorySaver();
-  const channel = deriveApprovalChannel({
-    ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
-    hasCheckpointer: checkpointer !== undefined,
-  });
-  // **backend 也是建一次、兩個消費者共用**，理由與上面的 channel 同一條：`submit_record`
-  // 拿的是這一份，`write_file` 拿的是同一份經 `foldRegistry` 之後的那一個。這裡寫成
-  // 內聯的 `new ContainedFilesystemBackend(...)` 再給 plugin 建第二個的話，兩個工具會
-  // 寫到兩個地方——**而且兩邊都會寫成功**，一條測試都不會紅。
-  //
-  // `undefined` 是「沒給 `--workspace`」，兩個消費者都會退到基座那個 `StateBackend` 預設
-  // （plugin 那側的預設字面照抄基座，見 `@nexus/plugin-submit-record` 的模組註解）。
-  //
-  // **模式是傳一個來源進去，不是一個字面值**：fence 逐次呼叫問一次，所以 `/sandbox` 換掉
-  // 控制器那一格之後，下一次檔案變更就照新那格判（理由見 `SandboxModeSource`）。
-  //
-  // **控制器建在這裡而不是模組層**，這決定了它的壽命：`serve.ts` 一條 thread 呼叫一次
-  // `createCliAgent`，所以一條 thread 一格。建在模組層或工廠閉包裡的話兩條 thread 會共用
-  // 同一格——一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上，
-  // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
-  const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
-  const sandboxMode = new SandboxModeController(invocation.sandbox ?? 'workspace-write');
-  const backend =
-    workspaceRoot === undefined
-      ? undefined
-      : // **grant 也從同一顆控制器認領**：升級工具把 grant 發在它身上（`sandbox-escalation.ts`），
-        // fence 在被擋下時來這裡認領。給 fence 另一個 ledger 的話，核准了也認領不到。
-        new ContainedFilesystemBackend({
-          rootDir: workspaceRoot,
-          mode: sandboxMode.source,
-          grants: sandboxMode,
-        });
-  // **一條 thread 一份**：服務答的是這一次組裝的 root，所以條目建在這裡，同上面的控制器。
-  const workspaceChanges =
-    invocation.workspaceChanges === true && workspaceRoot !== undefined
-      ? createWorkspaceChanges({ root: workspaceRoot })
-      : undefined;
-  const {
-    agent,
-    commands,
-    dispose,
-    attachTelemetry,
-    attachInvariants,
-    attachSession,
-    telemetrySharing,
-    feedback,
-    services,
-  } = await createNexusAgent({
-    model,
-    plugins: [
-      // **組裝點的協作者排最前面**（#459）：submit-record 與 sandbox-policy 在自己的
-      // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
-      createHostServicesPlugin({
-        channel,
-        backend,
-        ...(workspaceRoot === undefined
-          ? {}
-          : { sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot } }),
-      }),
-      ...plugins,
-      createAskUserPlugin(),
-      createSubmitRecordPlugin(),
-      // **有圍堵才講**。沒有 `--workspace` 的組裝一格圍堵都沒有，那時候講「目前的檔案
-      // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
-      // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
-      ...(workspaceRoot === undefined ? [] : [createSandboxPolicyPlugin()]),
-      ...(workspaceChanges === undefined ? [] : [workspaceChanges]),
-    ],
-    ...(backend !== undefined && { backend }),
-    ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
-    systemPrompt: SYSTEM_PROMPT,
-    checkpointer,
-    ...(onInvariantViolation !== undefined && { onInvariantViolation }),
-    ...(approvals !== undefined && { approvals }),
-  });
-  // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
-  // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
-  const sessions = new SessionRegistry(THREAD_ID, rootSeed === undefined ? {} : { rootSeed });
-  const sessionLog = sessions.root;
-  // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
-  // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
-  // serve 接上一份永遠不會有事件的日誌，只送得出一筆 `shutdown`。接線交給呼叫端。
-  return {
-    agent,
-    dispose,
-    model,
-    sessions,
-    sessionLog,
-    commands,
-    attachTelemetry,
-    attachInvariants,
-    attachSession,
-    telemetrySharing,
-    feedback,
-    workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
-    goals: services.get(GOALS_SERVICE),
-    workspaceRoot,
-  };
-}
-
 /** 把一輪 stream 出來的東西印給人看。 */
 interface Printer {
   readonly log: (line: string) => void;
   readonly error: (line: string) => void;
+}
+
+/**
+ * REPL 的輸入行與非同步輸出之間的協調點（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）。
+ *
+ * 組裝之後外掛執行期交出的話（例如 MCP 掉線重連）隨時會來，包括使用者正在提示字元後面打字的時候。直接寫標準錯誤，
+ * 那一行會被插進去、打到一半的字看起來斷成兩截。`runRepl` 在等輸入時把 `redraw` 設成「清掉這一行、印訊息、把提示字元
+ * 與已經打的字重畫回來」；沒在等輸入（跑一輪中）或不是 TTY 時，就照原樣直接印。
+ */
+export interface ReplLine {
+  redraw?: (print: () => void) => void;
 }
 
 const consolePrinter: Printer = {
@@ -919,20 +514,22 @@ function printInterrupt(update: unknown, printer: Printer): void {
  * @param input - 使用者說的那句話，或**排程器排的一輪續行**。
  * @param printer - 輸出去處。
  * @param sessionLog - 這條 REPL 的事件日誌。
+ * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），由 `main`
+ *   在起動期從清單解出來。**省略即 schema 的預設**，理由同 `ThreadPump` 的 `toolText`：測試呼叫點量的不是它。
  */
 export async function runTurn(
   agent: NexusAgent,
   input: string | GoalRoundRequest,
   printer: Printer,
   sessionLog: SessionLog,
+  titleLimits: ThreadTitleLimits = threadTitleConfigSchema.parse({}),
 ): Promise<void> {
   let files: Record<string, unknown> = {};
 
   // **一個 `text`，兩個消費者。** 分開算的話，一顆日誌上逐字正確的 `turn/start` 可以配
   // 上餵給模型的任意字串，而不變量伴生只看得到日誌那一份——它結構上驗不到那種偏差。
   const text = typeof input === 'string' ? input : input.text;
-  sessionLog.append(
-    'turn/start',
+  const turnStart: SessionEventMap['turn/start'] =
     typeof input === 'string'
       ? { kind: 'message', text }
       : {
@@ -941,13 +538,28 @@ export async function runTurn(
           goalId: input.goalId,
           revision: input.revision,
           round: input.round,
-        },
-  );
+        };
+  sessionLog.append('turn/start', turnStart);
   try {
-    for await (const [mode, payload] of await agent.stream(toAgentInvocation(text), {
-      streamMode: ['updates', 'values'],
-      configurable: { thread_id: THREAD_ID },
-    })) {
+    // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫，寫不進去只講一聲、這一輪照跑。CLI 的日誌
+    // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），寫它是照 dsh：退回標題在 `base` bundle 裡，每一種組裝都有。
+    if (typeof input === 'string') {
+      try {
+        ensureFallbackTitle(sessionLog, titleLimits);
+      } catch (error: unknown) {
+        printer.error(`[標題] 退回標題寫不進去：${String(error)}`);
+      }
+    }
+    for await (const [mode, payload] of await agent.stream(
+      // 人打的字是素的字串；續行輪次的頭帶 `goal` 來源（#662），重複提醒才知道它不是人講話。
+      toAgentInvocation(typeof input === 'string' ? text : humanMessageForTurnStart(turnStart)),
+      {
+        streamMode: ['updates', 'values'],
+        // 存檔點只在這一輪結束時存一份（#1106），理由見 `pruned-memory-saver.ts`。
+        durability: RUN_DURABILITY,
+        configurable: { thread_id: THREAD_ID },
+      },
+    )) {
       if (mode === 'values') {
         files = (payload as { files?: Record<string, unknown> }).files ?? {};
         continue;
@@ -969,51 +581,19 @@ export async function runTurn(
       }
     }
   } catch (error) {
-    sessionLog.append('turn/failed', {
-      message: error instanceof Error ? error.message : String(error),
-    });
+    sessionLog.append('turn/failed', turnFailureOf(error));
     throw error;
   }
-  sessionLog.append('turn/end', {});
+  // 撞到輸出上限的那一輪帶原因收尾（#433），判準讀的是這一輪記下的回覆，見 `@nexus/core` 的 `max-tokens.ts`。
+  sessionLog.append(
+    'turn/end',
+    turnReachedMaxTokens(sessionLog.events) ? { reason: MAX_TOKENS_TURN_END } : {},
+  );
 
   const paths = Object.keys(files);
   if (paths.length > 0) {
     printer.log(`虛擬檔案系統：${paths.join('、')}`);
   }
-}
-
-/**
- * 組出排程器要問域的那四件事。**兩條進入點共用這一個**。
- *
- * `log` 是 getter 不是值，因為 serve 那條路上日誌由 `ThreadPump` 建，而 port 要在 pump
- * 之前組好（pump 的建構參數就是它）。
- *
- * **`goals` 是這一次組裝的那一份**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
- * 以前它是模組層級的一顆 plugin 物件上的查表，所以同一個 process 裡兩次組裝共用一份
- * ——症狀是一條 thread 的目標被另一條 thread 的排程器讀到。現在它由
- * `registry.services` 交出來，一次組裝一份。
- *
- * @param goals - 這一次組裝的 goal 域；**沒掛就是 `undefined`**。
- * @param log - 讀那一份日誌；服務綁在它上面。
- * @param flush - 耐久檢查點。沒落盤時給一個 no-op。
- * @param warn - 排程器出事時說話的去處。
- * @returns 排程器要問域的四件事。
- */
-export function goalDriverPort(
-  goals: GoalServices | undefined,
-  log: () => SessionLog,
-  flush: () => Promise<void>,
-  warn: (message: string) => void,
-): GoalDriverPort {
-  return {
-    // **查不到就是 `undefined`**：patch 把 goal 那一列關掉時這條路就沒有 goal 域，
-    // 那時排程器安靜地什麼都不做。
-    goal: () => goals?.serviceFor(log())?.get(),
-    block: (ref, reason) => void goals?.serviceFor(log())?.block(ref, reason),
-    disarm: () => void goals?.serviceFor(log())?.disarm(),
-    flush,
-    warn: (message) => warn(`[續行] ${message}`),
-  };
 }
 
 /**
@@ -1024,7 +604,7 @@ export function goalDriverPort(
  * @param printer - 輸出去處。
  * @param sessionLog - 這條 REPL 的事件日誌。
  * @param driver - 排程器那一側。
- * @param roundCap - `--max-goal-rounds`；省略即只有目標自己那一條上限。**它到頭時走的
+ * @param roundCap - 操作者那條上限（`--max-goal-rounds`，沒給就是 `goal-round-cap` 那一列）；省略即只有目標自己那一條上限。**它到頭時走的
  *   是跟目標那條同一條路**（記一顆 blocker 然後停），不是在這裡 `break`——安靜停下來的
  *   迴圈會留下一個還 active 的目標，而那在日誌上跟「模型收工了」分不開。
  */
@@ -1033,7 +613,7 @@ export async function driveGoalRounds(
   printer: Printer,
   sessionLog: SessionLog,
   driver: GoalDriverPort,
-  roundCap?: number,
+  roundCap?: GoalRoundCap,
 ): Promise<void> {
   for (;;) {
     const round = await driveGoalRound(() => sessionLog.events, driver, roundCap);
@@ -1149,6 +729,8 @@ function assertNoReplNameCollision(commands: Pick<CommandRegistrationPoint, 'fin
  * @param commands - plugin 註冊的命令。`find` 給執行器派發，`list` 給 `/help` 列清單。
  *   **執行器在這裡建，一個 REPL 一個**——
  *   `@nexus/plugin-commands` 的配套入口就是靠「一次一個」這件事在檢查配對的。
+ * @param titleLimits - 見 {@link runTurn}。
+ * @param line - 非同步輸出與輸入行的協調點，見 {@link ReplLine}；REPL 活著的期間它的 `redraw` 才有值。
  */
 export async function runRepl(
   agent: NexusAgent,
@@ -1157,7 +739,9 @@ export async function runRepl(
   sessionLog: SessionLog,
   commands: Pick<CommandRegistrationPoint, 'find' | 'list'>,
   driver?: GoalDriverPort,
-  roundCap?: number,
+  roundCap?: GoalRoundCap,
+  titleLimits?: ThreadTitleLimits,
+  line?: ReplLine,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
   const executor = createCommandExecutor({ commands, sessionLog });
@@ -1165,14 +749,35 @@ export async function runRepl(
   // `Interface` 的型別沒有 `closed`（執行期有），所以自己記一份。
   let closed = false;
   rl.once('close', () => void (closed = true));
-  rl.prompt();
+  // 是否正停在提示字元等人打字：只有這時候插進來的輸出會弄亂輸入行。
+  let waiting = false;
+  rl.on('line', () => void (waiting = false));
+  const prompt = (): void => {
+    waiting = true;
+    rl.prompt();
+  };
+  if (line !== undefined) {
+    const output = io.output as NodeJS.WritableStream & { isTTY?: boolean };
+    line.redraw = (print) => {
+      if (!waiting || closed || output.isTTY !== true) {
+        print();
+        return;
+      }
+      clearLine(output, 0);
+      cursorTo(output, 0);
+      print();
+      // `preserveCursor`：把已經打的字與游標位置原樣畫回提示字元後面。
+      rl.prompt(true);
+    };
+  }
+  prompt();
 
   for await (const line of rl) {
     const text = line.trim();
     if (text === '/exit') break;
     if (HELP_LINE_PATTERN.test(text)) {
       for (const line of formatCommandHelp(commands.list())) printer.log(line);
-      if (!closed) rl.prompt();
+      if (!closed) prompt();
       continue;
     }
     if (text.length > 0) {
@@ -1182,10 +787,17 @@ export async function runRepl(
         const execution = await executor.execute(text, new AbortController().signal);
         if (execution === undefined) {
           // 語法不符或名字不認得——**照原樣送給模型**，跟這行改動之前一模一樣。
-          await runTurn(agent, text, printer, sessionLog);
-        } else if (execution.result.text !== undefined) {
-          const write = execution.result.kind === 'error' ? printer.error : printer.log;
-          write(execution.result.text);
+          await runTurn(agent, text, printer, sessionLog, titleLimits);
+        } else {
+          if (execution.result.text !== undefined) {
+            const write = execution.result.kind === 'error' ? printer.error : printer.log;
+            write(execution.result.text);
+          }
+          // **命令請宿主接著送的話**（`/plan <message>`）：`command/done` 已經寫完，這裡才開這一輪，
+          // 跟人接著打了那一句一樣。REPL 一行一輪，所以逐句 await。
+          for (const { text: message } of execution.steers) {
+            await runTurn(agent, message, printer, sessionLog, titleLimits);
+          }
         }
         // **命令也算一次機會**：`/goal resume` 就是重新授權，而重新授權之後該接著跑。
         if (driver !== undefined)
@@ -1194,13 +806,23 @@ export async function runRepl(
         // 撞到迴圈上限也落在這裡：印一行、等下一句，**不退出**——所以 `exitCodeFor` 的
         // 退出碼 2 只在一次性路徑上存在。
         printer.error(errorMessage(error));
+        // **跑壞的那一輪要收回續行授權**（#660，同 dsh 收到 `agent/error` 就 disarm）。`driveGoalRounds`
+        // 在輪次拋錯時不會再問一次排程器，不在這裡問的話，人再講一句話、那一輪正常收工，續行就接回來了。
+        // 結果丟掉：這一問只為了收回；日誌最後一輪不是跑壞的就什麼都不做。
+        if (driver !== undefined) {
+          await driveGoalRound(() => sessionLog.events, driver, roundCap).catch(
+            (askError: unknown) =>
+              driver.warn(`跑壞之後收回續行授權失敗：${errorMessage(askError)}`),
+          );
+        }
       }
     }
     // stdin 收在最後一行之後（管線餵進來時就是這樣）——那一刻 readline 已經關了，
     // 再問一次提示是 ERR_USE_AFTER_CLOSE。
-    if (!closed) rl.prompt();
+    if (!closed) prompt();
   }
 
+  if (line !== undefined) line.redraw = undefined;
   rl.close();
 }
 
@@ -1240,12 +862,43 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     printer.log(USAGE);
     return;
   }
+  if (invocation.version) {
+    printer.log(HARNESS_VERSION);
+    return;
+  }
+
+  await assertPatchesOutsideWorkspace({
+    workspace: invocation.workspace,
+    cwd: options.cwd ?? process.cwd(),
+    patches: invocation.patches,
+  });
+
+  // 同 `--dump-config` 的位置與理由。標準輸出只放那份 JSON（`printer.log` 是標準輸出），診斷走 `printer.error`；
+  // 不完整時文件印完之後拋 `ConfigSchemaIncompleteError`，由 `main` 設退出碼 1。
+  if (invocation.dumpConfigSchema) {
+    await runDumpConfigSchema(
+      () =>
+        composeDefaultEntries({
+          env: options.env ?? process.env,
+          ...(invocation.patches !== undefined && { patches: invocation.patches }),
+          warn: (message) => printer.error(message),
+        }),
+      { out: (text) => printer.log(text.trimEnd()), err: (text) => printer.error(text.trimEnd()) },
+    );
+    return;
+  }
+
+  // **只印出貨那一層**（#740）：不讀 home 覆寫檔、不解析 home 路徑，所以覆寫檔壞了它照樣印得出來。
+  if (invocation.dumpDefaultConfig) {
+    printer.log(renderShippedConfigDump().trimEnd());
+    return;
+  }
 
   // **在 `--session-log` 那些解析之前**：`--dump-config` 印的是設定，而設定跟日誌落在哪裡
   // 無關——先擋在後面的話，一個指錯地方的 `--session-log` 會讓你連設定都看不到。
   if (invocation.dumpConfig) {
     printer.log(
-      renderDefaultConfigDump({
+      renderLayeredConfigDump({
         env: options.env ?? process.env,
         ...(invocation.patches !== undefined && { patches: invocation.patches }),
         warn: (message) => printer.error(message),
@@ -1254,38 +907,205 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     return;
   }
 
-  // **在載 plugin、建 agent 之前解析**：一個指錯地方的 `--session-log` 該在什麼都還沒
-  // 起來的時候就講，而不是等到第一筆事件寫不進去。
-  const sessionLogDir = resolveSessionLogDir(invocation, options.cwd ?? process.cwd());
+  // **真模型路徑的啟動環境：兩層 `.env`**（#730）。排在一切之前，壞的 `.env`（設了只有啟動環境能設的名字）
+  // 與舊位置搬家訊息在什麼都還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`，同以前。
+  const liveLaunch = invocation.live
+    ? loadLiveLaunchEnv({
+        store: false,
+        ...(options.cwd !== undefined && { cwd: options.cwd }),
+        ...(options.env !== undefined && { env: options.env }),
+      })
+    : undefined;
+
+  // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
+  // 用只有行程環境的那一層。收尾一定還原，不然同一個行程裡後面的呼叫會繼承這一次的派送器與環境。
+  const disposeProxy = await installLaunchProxy(
+    liveLaunch?.launchEnv ?? processLaunchEnv(),
+    (message) => printer.error(message),
+  );
+  // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`runLaunched` 載完清單才建它，但起不來、跑壞了、
+  // 跑完了都在這裡卸載。跑壞了的那一條先保住原本的錯誤，同下面 `runLaunched` 收尾的規則。
+  // 預設答題管道由入口給（#1458 Q1 (c)）：這個入口沒有人在，與下面組裝時傳的 `HEADLESS_APPROVALS` 是同一個決定。
+  // 「有沒有圍堵」也由入口給（#1491 Q4 (a)、#1774）：照 `resolveWorkspaceRoot` 算，跟組裝點與 `--resume` 的同工作區檢查（下面 `assertSameWorkspaceRoot`）
+  // 是同一支函式、同一個 cwd（`options.cwd ?? process.cwd()`）。沒有 `--workspace` 就不給：`permission-presets` 據此不註冊 `/permission`。
+  // 可寫根不在這裡：逐條 thread，CLI 的這條 thread 在組裝前取（下面 `workspaceRootOf`）。
+  const contained =
+    resolveWorkspaceRoot(invocation.workspace, options.cwd ?? process.cwd()) !== undefined;
+  const root = createCordisRoot({
+    channel: entryApprovalChannel(HEADLESS_APPROVALS),
+    ...(contained && { contained }),
+  });
+  try {
+    try {
+      await runLaunched(options, invocation, printer, liveLaunch, root);
+    } catch (error) {
+      await root.dispose().catch(() => {});
+      throw error;
+    }
+    await root.dispose();
+  } finally {
+    await disposeProxy();
+  }
+}
+
+/** {@link runCli} 在啟動環境與代理都就位之後的其餘部分：載清單、組裝、跑。 */
+async function runLaunched(
+  options: RunCliOptions,
+  invocation: CliInvocation,
+  printer: Printer,
+  liveLaunch: LiveLaunch | undefined,
+  root: CordisRoot,
+): Promise<void> {
+  // REPL 的輸入行與非同步輸出的協調點（見 {@link ReplLine}）：外掛執行期的警告與 REPL 都在這一次呼叫裡。
+  const replLine: ReplLine = {};
+  // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455）。**它排在日誌
+  // 之前，那是承重的**（#612）：落盤掛不掛由清單上 `session-persistence` 那一列講，而下面讀續接、
+  // 解析日誌根都要先知道答案——關掉的時候一件都不該做。清單在這裡載也讓設定寫壞的那一類錯
+  // 早於續接拿租約，拋了沒有東西要放。
+  //
+  // **清單的第二層是變更紀錄，不是 `cordis.patch.yml`**（#1412）：讀之前先確保紀錄在、必要時把舊的 patch 檔遷進去，
+  // 與 serve 同一個函式（`plugin-config.ts` 的 `prepareJournal`），兩個入口誰先起都只遷一次。
+  //
+  // **CLI 不建空紀錄檔**（`createWhenAbsent: false`）：落盤關掉、預設根被拒絕的那幾次承諾 home 連目錄都不建；
+  // 沒有舊檔要遷的時候一次性 CLI 什麼都不寫，紀錄檔由 serve 或寫入口第一次建。
+  const prepared = await prepareJournal({
+    env: options.env ?? process.env,
+    warn: (message) => printer.error(message),
+    createWhenAbsent: false,
+  });
+  const preparedLine = describePrepareJournal(prepared);
+  if (preparedLine !== undefined) printer.error(preparedLine);
+  // **函式插件的工具從 Cordis 樹來**（#1416）：`root.tree` 在這一刻才建根，讀清單與推給樹是同一段臨界區。
+  const loaded = await loadDefaultPlugins(
+    {
+      env: options.env ?? process.env,
+      ...(invocation.patches !== undefined && { patches: invocation.patches }),
+    },
+    { tree: root.tree },
+  );
+  // **掉了哪幾列在這裡判第一次**（#751）：模組載不進來、設定驗不過的列已經標成沒掛；必掛的掉了就在這裡起不來，
+  // 早於下面任何一個 `startupSetting`，也早於建模型（`--live` 時 `live-model` 那一列掉了不退回預設值）。
+  // 可少掛的掉了先不印，等組裝那一次（下面 `createCliAgent`）補完再合成一段。
+  auditStartupEntries(loaded, { live: invocation.live });
+  const { plugins } = loaded;
+  const persistenceMounted = startupEntryMounted(plugins, sessionPersistencePlugin);
+  assertPersistenceFlags(
+    invocation,
+    persistenceMounted,
+    dropReasonsOf(loaded, sessionPersistencePlugin),
+  );
+  // **起動期解一次**。值不合法跟清單上其他列的毛病落在同一個時刻——跑起來之前。
+  const persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
+  // 真實供應商的連線值（#545）。
+  const liveModel = startupSetting(plugins, liveModelPlugin);
+  // 這一把 key 來自哪一層（#1540）：CLI 不讀受管檔，那一行會寫明；只有名字與來源、不含值。名字是 `live-model` 那一列的 `apiKeyEnv`（#1604），
+  // 所以讀完設定才印：仍在任何模型建構與請求之前，輸出裡出現的順序比以前往後挪。
+  // 舊位置搬家檢查也在這裡、用同一個名字（#1604）：設定要的那把找不到、而舊位置的 `.env` 還在才失敗。
+  liveLaunch?.assertKeyLocated(liveModel.apiKeyEnv);
+  const keySource = liveLaunch?.keySourceOf(liveModel.apiKeyEnv);
+  if (keySource !== undefined) printer.error(keySource);
+  // 退回標題的兩個上限（#647）。`startupSetting` 照 schema 驗過，寫壞的話在跑起來之前就拋。
+  const threadTitle = startupSetting(plugins, threadTitlePlugin);
+  // LLM 標題那一列（#650），同上：沒帶 `--live` 也解，寫壞的設定不因為這一次用不到就放過。
+  const threadTitleLlm = startupSetting(plugins, threadTitleLlmPlugin);
+  // 目標續行的操作者上限（#1623）：`--max-goal-rounds` 贏過 `goal-round-cap` 那一列，那一列贏過「不設」。續行沒開時不起作用：
+  // 旗標沒配 `--goal-driver` 已經在解析時報錯，那一列則安靜地不用（出廠就有值，CLI 預設不開續行，見 `settings/goal-round-cap.ts`）。
+  // 掛沒掛先問，理由同 serve：`startupSetting` 對關掉的列回 schema 預設。
+  const goalRoundCap: GoalRoundCap | undefined =
+    invocation.maxGoalRounds !== undefined
+      ? { limit: invocation.maxGoalRounds, source: MAX_GOAL_ROUNDS_SOURCE }
+      : startupEntryMounted(plugins, goalRoundCapPlugin)
+        ? {
+            limit: startupSetting(plugins, goalRoundCapPlugin).limit,
+            source: GOAL_ROUND_CAP_SOURCE,
+          }
+        : undefined;
+
   // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
   // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
   const resumeDir = resolveResumeDir(invocation, options.cwd ?? process.cwd());
   // 後端講話（例如這個平台拿不到寫租約）走 `Printer`，前綴同協調器那條 `[會話日誌]`。
   const sessionLogWarn = (message: string): void => printer.error(`[會話日誌] ${message}`);
-  const resumeStore =
-    resumeDir === undefined
+  // **一次呼叫只有一個寫入目的地**：續接就寫回那個 run 目錄；否則在日誌根底下開一個新的
+  // （#444：沒給 `--session-log` 就是 harness home 底下的 `sessions`）。**根在建 agent 之前
+  // 解析**：一個指錯地方的根該在什麼都還沒起來的時候就講，而不是等到第一筆事件寫不進去。
+  // 續接那條不解析根——那時根本不寫那裡，拿它擋人（例如 `--workspace ~`）是誤擋。落盤關掉
+  // （#612）就一個 store 都不建，根也不解析：只在記憶體裡的一次啟動被那道檢查擋下同樣是誤擋。
+  // 兩個工廠都是惰性的：第一次寫入之前不碰磁碟。
+  const invariantLogPath = resolveInvariantLogPath(
+    invocation.workspace,
+    persistenceMounted,
+    options.cwd ?? process.cwd(),
+    options.env ?? process.env,
+  );
+  const invariantTap =
+    invariantLogPath === undefined ? undefined : createInvariantLog(invariantLogPath);
+  // 會話日誌額度（#2115）：同 serve，讀 `thread-capacity` 的 `sessionLogBudgetMiB`；那一列其餘的格是 serve 的，CLI 不用。
+  const logBudget = sessionLogBudgetFromSetting(
+    startupSetting(plugins, threadCapacityPlugin).sessionLogBudgetMiB,
+  );
+  const sessionStore = !persistenceMounted
+    ? undefined
+    : resumeDir === undefined
+      ? createJsonlSessionStore({
+          rootDir: resolveSessionLogDir(
+            invocation,
+            options.cwd ?? process.cwd(),
+            options.env ?? process.env,
+          ),
+          warn: sessionLogWarn,
+          logBudget,
+        })
+      : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn, logBudget });
+  // 落盤確認（#1606）讀回比對用的 store：樹上 `session-durability` 那一列在讀清單時依清單掛上，做法在被呼叫當下才讀它。
+  if (sessionStore !== undefined) root.tree.bindDurableStore(sessionStore);
+  // 過大工具結果的暫存（#734）：根與保留天數從清單解一次；**啟動時清一次**超過保留期的檔（別人改得動的根
+  // 不清）。清理失敗只講一聲，不擋啟動。**清掃在背景跑**（#1553 N0952，照 dsh `spill-local/src/index.ts:90-101`）：
+  // 歸根所有，這一輪不等它；`runCli` 卸載根（跑完或跑壞）時等它收斂。
+  const stashConfig = startupSetting(plugins, toolResultStashPlugin);
+  const stashRoot = resolveToolResultStashRoot(stashConfig, options.env ?? process.env);
+  const stashWarn = (message: string): void => printer.error(message);
+  // 外溢層的預算（#719）：省略就是不掛。
+  const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
+  launchToolResultStashSweep(
+    await root.tree.context(),
+    stashRoot,
+    stashConfig.cleanupPeriodDays,
+    stashWarn,
+  );
+  // 關掉時 `--resume` 已經被 `assertPersistenceFlags` 擋下，所以有 `resumeDir` 就一定有 store。
+  const resumed =
+    resumeDir === undefined || sessionStore === undefined
       ? undefined
-      : openJsonlSessionStore({ directory: resumeDir, warn: sessionLogWarn });
-  const resumed = resumeStore === undefined ? undefined : await resumeStore.resume(THREAD_ID);
+      : // 當掉那一輪的收尾在這裡寫回檔上（#721），下面吃 `resumed.events` 的各處拿到的已含補結。
+        await resumeClosingInterruptedTurn(sessionStore, THREAD_ID).catch((error: unknown) => {
+          // 這一版讀不懂的日誌：原始檔在哪裡印給本機使用者（#1559 N0646）。錯誤訊息本身不帶路徑，
+          // CLI 的終端機就是使用者自己的，所以在這裡補上。
+          if (error instanceof SessionFormatUnsupportedError && error.location !== undefined) {
+            printer.error(`原始日誌：${error.location.path}`);
+          }
+          throw error;
+        });
   // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
   // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
   const resumedSandbox = resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
   // 日誌記著模式，就表示上一次有 fence（沒給 `--workspace` 一顆都不寫）。這一次不給的話
   // 檔案跑在虛擬 FS、fence 不在路徑上，接回來的 `read-only` 會**靜靜蒸發**——與
   // `--sandbox 要配 --workspace` 同一個理由，所以也同樣在什麼都還沒起來之前擋下。
-  const effective =
-    resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
+  // 核准政策同樣從日誌來，續接就給滿（日誌沒記的照 `ask`，見 `approvalPolicyOnResume`）。
+  const resumedApprovalPolicy =
+    resumed === undefined ? undefined : approvalPolicyOnResume(resumed.events);
+  const effective = {
+    ...invocation,
+    ...(resumedSandbox !== undefined && { sandbox: resumedSandbox }),
+    ...(resumedApprovalPolicy !== undefined && { approvalPolicy: resumedApprovalPolicy }),
+  };
 
   // **續接那個把手在讀之前就拿了寫租約**，要到日誌掛上之後才有人收（`persistence.dispose`）。
   // 這中間任何一步拋錯都要先放掉它（try 一路包到掛上日誌之前，連同三個 attach）：CLI 行程會退出、kernel 會放，但同一個行程裡的呼叫端
   // （測試、將來 serve 的續接）會撞上自己沒放的鎖。
-  let built: Awaited<ReturnType<typeof createCliAgent>>;
+  let built: Awaited<ReturnType<NexusAssembly['create']>>;
   let restored: Awaited<ReturnType<typeof restoreConversation>> | undefined;
-  // **落盤的批次窗口，同樣從清單解**（#529）。宣告在 try 外面是因為消費點在 try 外面
-  // （落盤接在三個 attach 之後），而清單本身只在 try 裡面——同 `built` 的理由與寫法。
-  let persistenceWindow: SessionPersistenceConfig;
-  // 真實供應商的連線值（#545），宣告在外面的理由同上：印模型名那一行在 try 外面。
-  let liveModel: LiveModelConfig;
   try {
     // **先認它屬於哪個目錄**（見 `resume-guards.ts`）。排在沙箱那道檢查前面：
     // 目錄不對的話，日誌裡記的是哪一格都不該拿來判。讀回來還沒寫過任何一筆，檔案原封不動；
@@ -1296,13 +1116,10 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     // 目錄不對的話這一格也不該拿來判。**這裡自己算一次根**，因為 `createCliAgent` 還沒跑
     // ——而一道要在「什麼都還沒起來之前」響的檢查等不到它。算的是同一個 `resolveWorkspaceRoot`
     // 與同一個 cwd，所以跟組裝拿到的是同一個值，不是第二份 `resolve(cwd, ...)`。
+    // **這條 thread 的可寫根在這裡取一次**（#1774）：同一個值交給守衛與組裝點。
+    const threadWorkspaceRoot = launchWorkspaceRootOf(invocation.workspace, resumeCwd)(THREAD_ID);
     if (resumed !== undefined) {
-      assertSameWorkspaceRoot(
-        '--resume',
-        THREAD_ID,
-        resumed.header,
-        resolveWorkspaceRoot(invocation.workspace, resumeCwd),
-      );
+      assertSameWorkspaceRoot('--resume', THREAD_ID, resumed.header, threadWorkspaceRoot);
     }
     if (resumedSandbox !== undefined && invocation.workspace === undefined) {
       throw new Error(
@@ -1311,47 +1128,99 @@ export async function runCli(options: RunCliOptions): Promise<void> {
           `接回來的模式一個位元組都影響不到。\n\n${USAGE}`,
       );
     }
-    // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455）。
-    const plugins = await loadDefaultPlugins({
-      env: options.env ?? process.env,
-      ...(invocation.patches !== undefined && { patches: invocation.patches }),
-    });
-    // **起動期解一次**：落盤那一行在 try 外面，而這份清單只活在 try 裡面。解在這裡也讓
-    // 「那一列的值不合法」跟清單上其他列的毛病落在同一個時刻——跑起來之前。
-    persistenceWindow = startupSetting(plugins, sessionPersistencePlugin);
-    liveModel = startupSetting(plugins, liveModelPlugin);
-
-    // 這一步會擋下重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件——全在跑起來之前。
-    built = await createCliAgent(
-      { ...effective, liveModel },
+    // 重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件都在這一步發生——全在跑起來之前。**掉了哪幾列在這裡判
+    // 第二次**（#751）：清單上可少掛的列自己的失敗只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種
+    // `StartupError`，兩次掉的一起列；fold 的前置條件照舊原樣拋。
+    // **組 agent 經 Cordis 樹上的相容層**（#1401）：根在這一刻才建，前面每一個錯誤的時刻與字都不變。
+    const assembly = await root.boot('cli', {
       plugins,
-      options.cwd,
-      (error) =>
-        // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
-        // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
-        // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
-        printer.error(`[不變量] ${error.message}`),
-      // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
-      // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
-      // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
-      HEADLESS_APPROVALS,
-      resumed?.events,
-    );
+      ...(options.cwd !== undefined && { cwd: options.cwd }),
+    });
+    built = await assembly
+      .create(
+        {
+          ...effective,
+          ...(threadWorkspaceRoot !== undefined && { workspaceRoot: threadWorkspaceRoot }),
+          liveModel,
+          // 沒帶 `--live` 也給一份（#1989）：MCP 設定裡的憑證引用跟模型 key 同一條規則，這個入口不讀受管檔；沒有 `.env` 那兩層。
+          credentials:
+            liveLaunch?.credentials ??
+            createCredentialService({
+              home: resolveHarnessHome(options.env ?? process.env),
+              launchEnv: processLaunchEnv(),
+              store: false,
+            }),
+          threadTitle,
+          threadTitleLlm,
+          optionalEntries: optionalEntriesOf(loaded, { live: invocation.live }),
+          // 會話鑰匙是這一次的 run 目錄（續接時就是被接回的那個），沒有會話日誌就沒有「回到同一個會話」的身分。
+          ...(sessionStore !== undefined && {
+            toolResultStash: {
+              rootDir: stashRoot,
+              session: sessionStore.directory,
+              warn: stashWarn,
+            },
+            ...(spillPolicy.maxInlineTokens !== undefined && {
+              spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
+            }),
+          }),
+        },
+        {
+          session: {
+            // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
+            // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
+            // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
+            onInvariantViolation: (error) => printer.error(`[不變量] ${error.message}`),
+            // 量測記錄（#976）：違規照上面那行印出來，另外留一份可數的紀錄，並記下這一輪實際裝上了哪幾個檢查。
+            // 落盤關掉或 home 在工作區底下時沒有 tap，理由見 `resolveInvariantLogPath`。
+            ...(invariantTap !== undefined && { invariantTap }),
+            // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
+            // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
+            // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+            approvals: HEADLESS_APPROVALS,
+            rootSeed: resumed?.events,
+          },
+        },
+      )
+      .catch((error: unknown) => {
+        throw error instanceof AssemblyDropError
+          ? startupErrorFrom(loaded, error, { live: invocation.live })
+          : error;
+      });
+    // 兩次合起來印一段到標準錯誤，只印這一次（卡上第 5 項）。
+    for (const line of startupWarning(
+      loaded,
+      assemblyDropsOf(loaded, built.dropped),
+      built.warnings,
+    )) {
+      printer.error(line);
+    }
+    // 續接時日誌記的檔案政策比權限表裡每一組都寬，接上日誌時會被收回預設組（#1621）：標準錯誤留一行。
+    if (built.permissionNarrowed !== undefined) {
+      printer.error(`[權限] ${describePermissionNarrowing(built.permissionNarrowed)}`);
+    }
+    // 冷復活的背景子代理叫醒時，委派快照比權限表裡每一組都寬就收回預設組（#1739）：叫醒發生在組裝之後，所以是訂閱；每個子代理一個行程只印一行。
+    built.onDelegationNarrowed((event) => {
+      const print = (): void => printer.error(`[權限] ${describeDelegationNarrowing(event)}`);
+      if (replLine.redraw === undefined) print();
+      else replLine.redraw(print);
+    });
+    // 組裝之後外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）接著印到標準錯誤。
+    built.onWarning((warning) => {
+      for (const text of describeWarnings(loaded, [warning])) {
+        const print = (): void => printer.error(`[外掛] ${text}`);
+        if (replLine.redraw === undefined) print();
+        else replLine.redraw(print);
+      }
+    });
     // **對話從日誌推回模型**（#306），在第一輪之前。放在 try 裡：灌不進去要放掉續接那把租約。
     restored =
       resumed === undefined
         ? undefined
         : await restoreConversation(built.agent, THREAD_ID, resumed.events);
     // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
-    // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
-    built.attachTelemetry(built.sessions);
-    // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
-    built.attachInvariants(built.sessions);
-    // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
-    // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
-    // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
-    // 這三行接上去的順序。
-    built.attachSession(built.sessions);
+    // 回傳的把手不留：`dispose()` 會把還接著的協調器一起收掉，不變量的 runner 只是一個訂閱，行程走了它就沒了。
+    built.attachSessions(built.sessions);
   } catch (error) {
     await resumed?.stored.close().catch(() => {});
     throw error;
@@ -1361,24 +1230,40 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // **接在最後，而且是四個裡唯一一個出口。** 前三個是觀察者，落盤不改變任何人看得到
   // 什麼，所以順序在功能上沒有差別；排在最後是為了讓讀的人看到的因果跟實際一致——
   // 先被檢查、被參與者看過，才寫下去。
-  const sessionStore =
-    resumeStore ??
-    (sessionLogDir === undefined
+  //
+  // 落盤關掉（#612）就不接：一個 store 都沒建，日誌只在註冊表的記憶體裡。
+  //
+  // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）。清單是上面 `loadDefaultPlugins` 疊好的那一份，
+  // 跟 `--dump-config` 印的同源，不再疊一次；落盤關掉就不算（連設定雜湊的鍵檔都不建）。
+  const buildMetadata =
+    sessionStore === undefined
       ? undefined
-      : createJsonlSessionStore({ rootDir: sessionLogDir, warn: sessionLogWarn }));
+      : await resolveSessionHeaderMetadata({
+          entries: loaded.entries,
+          env: options.env ?? process.env,
+          ...(invocation.workspace !== undefined && { workspace: invocation.workspace }),
+          cwd: options.cwd ?? process.cwd(),
+          warn: (message) => printer.error(`[會話日誌] ${message}`),
+        });
   const persistence =
     sessionStore === undefined
       ? undefined
       : attachSessionPersistence(sessions, sessionStore, {
           cwd: options.cwd ?? process.cwd(),
-          // 批次窗口：上面在 try 裡從清單解出來的那一份。
+          ...(buildMetadata !== undefined && { buildMetadata }),
+          // 模型型錄 id 只進 root（#1025）；假模型不是型錄裡的一筆，不寫。
+          ...(invocation.live && { rootModelEntryId: liveModel.modelId }),
+          // 批次窗口：上面從清單解出來的那一份。
           windowMs: persistenceWindow.windowMs,
           // **錨（#504）取的是組裝真的用的那一個**，不是在這裡再算一次：`createCliAgent`
           // 回著它正是為了這個。沒給 `--workspace` 就不寫那一格。
           ...(workspaceRoot !== undefined && { workspaceRoot }),
           // 續接：root 那一份往原檔續寫，只寫還沒存的後綴（第一筆就是 `session/end-seed`）。
           ...(resumed !== undefined && {
-            resumedRoot: { stored: resumed.stored, storedCount: resumed.events.length },
+            resumedRoot: {
+              stored: resumed.stored,
+              storedCount: SessionLogOffset(resumed.events.length),
+            },
           }),
           // **背景寫入被拒只有這一行看得見**（協調器自己吞掉，響亮的那次歸 `flush`）。
           // 走 `printer.error` 而不是 `console.warn`，理由同不變量那條：前綴是唯一分得出
@@ -1387,6 +1272,11 @@ export async function runCli(options: RunCliOptions): Promise<void> {
             printer.error(`[會話日誌] ${message}`);
           },
         });
+  // **LLM 標題（#650）接在落盤之後**，所以它寫的兩顆照常落地。它自己不在任何一輪裡，失敗只講一聲。收尾時先拆它
+  // 再收落盤：拆掉會中止還在跑的那一次（一次性路徑上行程多半比標題先結束），之後回來的寫不進去，同 dsh 的拆卸。
+  const detachTitle = built.attachTitle?.(sessionLog, (message) => {
+    printer.error(`[標題] ${message}`);
+  });
 
   // 一輪跑壞了也要收——資源的所有權跟這一次呼叫綁在一起，不跟它成不成功綁在一起。
   //
@@ -1404,7 +1294,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}` +
             `（變更圍堵在它之下，起始 mode: ${effective.sandbox ?? 'workspace-write'}` +
             `${resumedSandbox === undefined ? '' : '（從續接的日誌來）'}，` +
-            `/${SANDBOX_COMMAND_NAME} 切得動）`,
+            `/${PERMISSION_COMMAND_NAME} 切得動）`,
     );
     printer.log(APPROVAL_DISCLOSURE);
     // 第四行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
@@ -1423,15 +1313,17 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     // 本機磁碟上。三個分開講，因為三個各自開關——而且日誌裡有使用者打的每一句話，
     // 「有沒有在寫、寫去哪」不該要讀文件才知道。
     printer.log(
+      // **關掉的那一支也要講**（#612）：#444 之後「只在記憶體裡」只剩設定關掉這一條路，而它跟
+      // 「正在寫」在畫面上本來一模一樣。講出是哪一列關的，想恢復的人才知道去改哪裡。
       sessionStore === undefined
-        ? '會話日誌：只在記憶體裡（行程結束就沒了；--session-log <dir> 可以落盤）'
+        ? SESSION_LOG_OFF_DISCLOSURE
         : restored === undefined
           ? `會話日誌：${sessionStore.directory}`
           : // **照實講回來的是什麼**（#251 的最後一段）：對話回不回得來看推的結果（#306），
             // 推不出來時講原因。回不來的也講——不講的話，一個讀暫存路徑讀到 ENOENT 的模型看起來像壞了。
             `會話日誌：${sessionStore.directory}（續接：沙箱模式、計劃模式與目標照日誌回來；` +
             `${formatConversationRestore(restored)}；` +
-            `${invocation.workspace === undefined ? '虛擬檔案系統、' : ''}工具結果暫存與會話歷史檔沒有回來）`,
+            `${invocation.workspace === undefined ? '虛擬檔案系統與' : ''}會話歷史檔沒有回來）`,
     );
     // 接回來的計劃模式開著——見 `RESUMED_PLAN_MODE_NOTICE`。**只在這次組裝真的掛了 `/plan`
     // 時講**：一份 patch 可以把計劃模式那一列關掉，那時日誌上那顆 `plan/mode` 沒有人讀，
@@ -1445,7 +1337,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     }
     // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
     // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。
-    printer.log(formatGoalDriverDisclosure(invocation.goalDriver, invocation.maxGoalRounds));
+    printer.log(formatGoalDriverDisclosure(invocation.goalDriver, goalRoundCap));
 
     const driver = invocation.goalDriver
       ? goalDriverPort(
@@ -1458,9 +1350,9 @@ export async function runCli(options: RunCliOptions): Promise<void> {
 
     if (invocation.prompt !== undefined) {
       printer.log(`> ${invocation.prompt}\n`);
-      await runTurn(agent, invocation.prompt, printer, sessionLog);
+      await runTurn(agent, invocation.prompt, printer, sessionLog, threadTitle);
       if (driver !== undefined)
-        await driveGoalRounds(agent, printer, sessionLog, driver, invocation.maxGoalRounds);
+        await driveGoalRounds(agent, printer, sessionLog, driver, goalRoundCap);
     } else {
       printer.log('輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。\n');
       await runRepl(
@@ -1470,12 +1362,15 @@ export async function runCli(options: RunCliOptions): Promise<void> {
         sessionLog,
         commands,
         driver,
-        invocation.maxGoalRounds,
+        goalRoundCap,
+        threadTitle,
+        replLine,
       );
     }
   } catch (error) {
     // 跑壞了也要盡量把已經記下來的事件寫下去——**但不能讓它蓋掉原本的錯誤**，
     // 同下面那條「先保住原本的錯誤」的規則。
+    await detachTitle?.().catch(() => {});
     await persistence?.dispose().catch(() => {});
     await dispose().catch(() => {});
     throw error;
@@ -1489,6 +1384,7 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // （也實測過）。留著這個順序的理由是 plugin 的 disposer 一跑，後端就可能被它的擁有者
   // 收掉，而那時還在飛的寫入就沒有人接了——今天的後端是我們自己 `new` 的，所以碰不到；
   // 哪天後端由 plugin 提供，順序就會開始有意義。**別把它讀成一條驗過的因果。**
+  await detachTitle?.();
   await persistence?.dispose();
   await dispose();
 }
@@ -1542,6 +1438,6 @@ async function main(): Promise<void> {
 }
 
 // 被 import 時（測試）不執行，被當作腳本跑時才執行。
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   await main();
 }

@@ -1,15 +1,18 @@
 {
   "name": "@nexus/plugin-todo",
-  "version": "0.0.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./src/index.ts",
-    "./invariant": "./src/invariant.ts",
+    ".": "./lib/index.js",
+    "./invariant": "./lib/invariant.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
+  "files": [
+    "lib"
+  ],
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "eslint .",
@@ -18,6 +21,13 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/cordis": "workspace:*",
+    "@nexus/cordis-plugin-loader": "workspace:*",
+    "@nexus/core": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
@@ -25,7 +35,14 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
+    "zod": "^4.6.7"
+  },
+  "peerDependencies": {
+    "@nexus/cordis": "workspace:*",
     "@nexus/core": "workspace:*",
-    "zod": "^4.3.6"
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*"
   }
 }

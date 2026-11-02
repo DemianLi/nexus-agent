@@ -6,51 +6,107 @@ import {
   cappedRows,
   contentLines,
   diffHunks,
-  diffRows,
   diffTotals,
   MAX_DIFF_EDIT_LENGTH,
-  toolDiff,
+  patchPath,
+  toolDiffs,
+  toolDiffView,
+  toolPatch,
 } from '@/lib/tool-diff';
+import type { DiffFragment, FileDiff } from '@/lib/tool-diff';
+// 直接拿 vendor 那支，不經 nexus 層：要證的是 SG 自己怎麼讀這份 patch（#1685 B.1）。
+import { patchStats } from '@/vendor/solid-glass/components/ui/diff-view';
 
-/** #601：寫檔、改檔什麼時候畫 diff，以及 diff 怎麼算、怎麼切。 */
+/** #601、#625：寫檔、改檔什麼時候畫 diff、畫哪一份，以及 diff 怎麼算、怎麼切。 */
 
-type Call = Pick<ToolEntry, 'name' | 'status' | 'input'>;
-const write = (args: unknown, status: ToolEntry['status'] = 'done'): Call => ({
+type Call = Pick<ToolEntry, 'name' | 'status' | 'input' | 'meta'>;
+const write = (args: unknown, status: ToolEntry['status'] = 'done', meta?: unknown): Call => ({
   name: 'write_file',
   status,
   input: JSON.stringify(args),
+  meta,
 });
-const edit = (args: unknown, status: ToolEntry['status'] = 'running'): Call => ({
+const edit = (args: unknown, status: ToolEntry['status'] = 'running', meta?: unknown): Call => ({
   name: 'edit_file',
   status,
   input: JSON.stringify(args),
+  meta,
 });
 const lines = (count: number, prefix = 'l') =>
   Array.from({ length: count }, (_, index) => `${prefix}${index + 1}`);
 
-describe('toolDiff', () => {
-  it('write_file 執行中與完成都是整檔新增', () => {
+describe('toolDiffs', () => {
+  const editArgs = { file_path: '/a.ts', old_string: 'a', new_string: 'b' };
+  /** harness 的 `DiffResultMeta`：實際套用的那幾段，比參數那一段多出上下文，`replace_all` 會有好幾段。 */
+  const applied = {
+    diffs: [
+      { path: '/a.ts', oldText: 'x\na\ny\n', newText: 'x\nb\ny\n' },
+      { path: '/a.ts', oldText: 'p\na\nq\n', newText: 'p\nb\nq\n' },
+    ],
+  };
+
+  it('write_file 執行中，以及完成而沒有 meta（格式 16 以前的日誌）：參數算的整檔新增', () => {
     for (const status of ['running', 'done'] as const) {
-      expect(toolDiff(write({ file_path: '/a.md', content: 'x\n' }, status))).toEqual({
-        path: '/a.md',
-        oldText: null,
-        newText: 'x\n',
-      });
+      expect(toolDiffs(write({ file_path: '/a.md', content: 'x\n' }, status))).toEqual([
+        { path: '/a.md', oldText: null, newText: 'x\n' },
+      ]);
     }
   });
 
-  it('edit_file 只在執行中畫；結束之後沒有 metadata，退回通用卡', () => {
-    const args = { file_path: '/a.ts', old_string: 'a', new_string: 'b' };
-    expect(toolDiff(edit(args))).toEqual({ path: '/a.ts', oldText: 'a', newText: 'b' });
-    expect(toolDiff(edit(args, 'done'))).toBeUndefined();
-    expect(toolDiff(edit({ ...args, old_string: '' }))?.oldText).toBeNull();
+  it('write_file 覆寫舊檔：畫 meta 裡跟舊檔比的 diff，不是整檔新增', () => {
+    const meta = {
+      operation: 'update',
+      diffs: [{ path: '/a.md', oldText: 'old\n', newText: 'new\n' }],
+    };
+    expect(toolDiffs(write({ file_path: '/a.md', content: 'new\n' }, 'done', meta))).toEqual(
+      meta.diffs,
+    );
+  });
+
+  it('write_file 新建（meta 的 diffs 是空的）：退回參數算的整檔新增', () => {
+    const meta = { operation: 'create', diffs: [] };
+    expect(toolDiffs(write({ file_path: '/a.md', content: 'x\n' }, 'done', meta))).toEqual([
+      { path: '/a.md', oldText: null, newText: 'x\n' },
+    ]);
+  });
+
+  it('edit_file 執行中從參數算；old_string 是空字串時算新增', () => {
+    expect(toolDiffs(edit(editArgs))).toEqual([{ path: '/a.ts', oldText: 'a', newText: 'b' }]);
+    expect(toolDiffs(edit({ ...editArgs, old_string: '' }))?.[0]?.oldText).toBeNull();
+  });
+
+  it('edit_file 完成而有 meta：畫實際套用的每一段', () => {
+    expect(toolDiffs(edit(editArgs, 'done', applied))).toEqual(applied.diffs);
+  });
+
+  it('edit_file 完成而沒有 meta，或 diffs 是空的：退回通用卡', () => {
+    expect(toolDiffs(edit(editArgs, 'done'))).toBeUndefined();
+    expect(toolDiffs(edit(editArgs, 'done', { diffs: [] }))).toBeUndefined();
+  });
+
+  it.each([
+    ['diffs 不是陣列', { diffs: 'x' }],
+    ['一段沒有 path', { diffs: [{ oldText: 'a', newText: 'b' }] }],
+    ['oldText 是數字', { diffs: [{ path: '/a.ts', oldText: 1, newText: 'b' }] }],
+    ['newText 是 null', { diffs: [{ path: '/a.ts', oldText: 'a', newText: null }] }],
+    ['meta 是陣列', [{ path: '/a.ts', oldText: 'a', newText: 'b' }]],
+  ])('meta 形狀不對（%s）：edit 走通用卡、write 退回參數，不畫半套', (_, meta) => {
+    expect(toolDiffs(edit(editArgs, 'done', meta))).toBeUndefined();
+    expect(toolDiffs(write({ file_path: '/a.md', content: 'x' }, 'done', meta))).toEqual([
+      { path: '/a.md', oldText: null, newText: 'x' },
+    ]);
+  });
+
+  it('合計的 +N −M 算的是實際套用的那幾段', () => {
+    expect(toolDiffView(edit(editArgs, 'done', applied))?.totals).toEqual({
+      added: 2,
+      removed: 2,
+    });
   });
 
   it('失敗一律退回通用卡', () => {
-    expect(toolDiff(write({ file_path: '/a.md', content: 'x' }, 'failed'))).toBeUndefined();
-    expect(
-      toolDiff(edit({ file_path: '/a.ts', old_string: 'a', new_string: 'b' }, 'failed')),
-    ).toBeUndefined();
+    expect(toolDiffs(write({ file_path: '/a.md', content: 'x' }, 'failed'))).toBeUndefined();
+    expect(toolDiffs(edit(editArgs, 'failed', applied))).toBeUndefined();
   });
 
   it.each([
@@ -66,12 +122,12 @@ describe('toolDiff', () => {
       edit({ file_path: '/a.ts', old_string: 'a', new_string: 'b', replace_all: 'yes' }),
     ],
   ])('%s：不畫半套', (_, call) => {
-    expect(toolDiff(call)).toBeUndefined();
+    expect(toolDiffs(call)).toBeUndefined();
   });
 
   it('別的工具沒有 diff', () => {
     expect(
-      toolDiff({ name: 'read_file', status: 'done', input: '{"file_path":"/a"}' }),
+      toolDiffs({ name: 'read_file', status: 'done', input: '{"file_path":"/a"}' }),
     ).toBeUndefined();
   });
 });
@@ -106,20 +162,116 @@ describe('diff 的算法', () => {
   it('257 行的新檔也走整段替換，+N 仍是行數', () => {
     const hunks = diffHunks({ path: '/a', oldText: null, newText: lines(257).join('\n') });
     expect(diffTotals(hunks)).toEqual({ added: 257, removed: 0 });
-    expect(diffRows('/a', hunks)).toHaveLength(258);
+    // 檔頭一列、@@ 一列、257 行
+    expect(toolPatch([{ path: '/a', hunks }]).split('\n')).toHaveLength(259);
   });
 
-  it('同一段裡相隔太遠的兩處改動分成兩個 hunk，中間一列 ⋯', () => {
+  it('同一段裡相隔太遠的兩處改動分成兩個 hunk，各自一列 @@', () => {
     const before = lines(10);
     const after = [...before];
     after[0] = 'L1';
     after[9] = 'L10';
     const hunks = diffHunks({ path: '/a', oldText: before.join('\n'), newText: after.join('\n') });
     expect(hunks).toHaveLength(2);
-    const rows = diffRows('/a', hunks);
-    expect(rows[0]).toEqual({ kind: 'path', text: '/a' });
-    expect(rows.filter((row) => row.kind === 'gap')).toHaveLength(1);
-    expect(rows.find((row) => row.kind === 'del')).toEqual({ kind: 'del', text: 'l1' });
+    const patch = toolPatch([{ path: '/a', hunks }]).split('\n');
+    expect(patch[0]).toBe('diff --git a/a b/a');
+    expect(patch.filter((line) => line === '@@')).toHaveLength(2);
+    expect(patch).toContain('-l1');
+  });
+});
+
+const fragment = (diff: FileDiff): DiffFragment => ({ path: diff.path, hunks: diffHunks(diff) });
+
+describe('toolPatch：交給 SG 的 unified patch（#1685 B）', () => {
+  it('換檔時先一列 diff --git；同一檔的下一段只多一列 @@，不重複檔頭', () => {
+    const patch = toolPatch([
+      fragment({ path: '/a', oldText: 'x\n', newText: 'y\n' }),
+      fragment({ path: '/a', oldText: 'p\n', newText: 'q\n' }),
+      fragment({ path: '/b', oldText: 'm\n', newText: 'n\n' }),
+    ]);
+    expect(patch.split('\n')).toEqual([
+      'diff --git a/a b/a',
+      '@@',
+      '-x',
+      '+y',
+      '@@',
+      '-p',
+      '+q',
+      'diff --git a/b b/b',
+      '@@',
+      '-m',
+      '+n',
+    ]);
+  });
+
+  it('@@ 一律不帶數字：從 1 起算的行號跟檔案對不上，不給 SG 畫（B.2）', () => {
+    const before = lines(40);
+    const after = before.map((line, index) => (index % 12 === 0 ? line.toUpperCase() : line));
+    const patch = toolPatch([
+      fragment({ path: '/a', oldText: before.join('\n'), newText: after.join('\n') }),
+    ]);
+    expect(patch.split('\n').filter((line) => line.startsWith('@@')).length).toBeGreaterThan(1);
+    expect(patch).not.toMatch(/@@ -\d/);
+  });
+
+  /**
+   * 性質（B.1）：SG 的 `patchStats` 讀這份 patch 算出來的增刪數，等於我們從 hunks 算的合計。內容故意長得像檔頭：
+   * `++ x`／`-- y` 加上前綴正好是 `+++ x`／`--- y`，hunk 外會被 SG 當成檔頭丟掉（拿掉 `@@` 這幾組會紅）；另有 `diff --git`、
+   * `@@ -1 +1 @@`、空行、沒有結尾換行、同一檔兩段、兩個檔、整段替換。
+   */
+  const tricky: (readonly FileDiff[])[] = [
+    [{ path: '/a', oldText: null, newText: '++ x\n+++ x\n--- y\n' }],
+    [{ path: '/a', oldText: '-- y\nkeep\n', newText: 'keep\n++ x\n' }],
+    [{ path: '/a', oldText: '--- y\n+++ x\nz\n', newText: '+++ x\n--- y\nz\n' }],
+    [{ path: '/a', oldText: 'a\n', newText: '+diff --git z\n@@ -1 +1 @@\n\n\nb' }],
+    [{ path: '/a', oldText: 'diff --git a/q b/q\nkeep\n', newText: 'keep\n' }],
+    [{ path: '/a', oldText: '\n\n', newText: '' }],
+    [
+      { path: '/a', oldText: 'x\n+++ a\n', newText: 'y\n--- b\n' },
+      { path: '/a', oldText: '@@\n', newText: '@@ -9 +9 @@\n' },
+    ],
+    [
+      { path: '/a', oldText: 'old\n', newText: '--- a/b\n+++ b/b\n' },
+      { path: '/b c/中文.md', oldText: null, newText: '--- x\n' },
+    ],
+    [{ path: '/a', oldText: lines(300, 'old').join('\n'), newText: lines(300, '+++ ').join('\n') }],
+  ];
+  it.each(tricky.map((diffs, index) => [index, diffs] as const))(
+    '第 %i 組：SG 的 patchStats 等於 diffTotals',
+    (_, diffs) => {
+      const fragments = diffs.map(fragment);
+      expect(patchStats(toolPatch(fragments))).toEqual(
+        diffTotals(fragments.flatMap((each) => each.hunks)),
+      );
+    },
+  );
+
+  it('路徑裡的換行與控制字元轉義成看得見的寫法，不會多出一列被當成內容', () => {
+    const patch = toolPatch([
+      fragment({ path: '/evil\n+x\n-y\t\u001b\u007f', oldText: null, newText: 'a\n' }),
+    ]);
+    const shown = 'evil\\n+x\\n-y\\t\\x1b\\x7f';
+    expect(patch.split('\n')[0]).toBe(`diff --git a/${shown} b/${shown}`);
+    expect(patchStats(patch)).toEqual({ added: 1, removed: 0 });
+  });
+
+  it('路徑：開頭的 / 拿掉一個；空白與中文原樣', () => {
+    expect(patchPath('/docs/a b/中文.md')).toBe('docs/a b/中文.md');
+    expect(patchPath('rel/x.ts')).toBe('rel/x.ts');
+    expect(patchPath('//x')).toBe('/x');
+  });
+
+  it('同一則呼叫拿到同一個實例；新的一則（reducer 換掉那一格）重算', () => {
+    const call = edit({ file_path: '/a.ts', old_string: 'a', new_string: 'b' });
+    const first = toolDiffView(call);
+    expect(first).toBeDefined();
+    expect(toolDiffView(call)).toBe(first);
+    const next = { ...call };
+    expect(toolDiffView(next)).not.toBe(first);
+    expect(toolDiffView(next)).toEqual(first);
+    const none = { ...call, status: 'failed' as const };
+    expect(toolDiffView(none)).toBeUndefined();
+    expect(toolDiffView(none)).toBeUndefined();
   });
 });
 

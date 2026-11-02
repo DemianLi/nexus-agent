@@ -1,0 +1,148 @@
+{
+  "id": "2309.13233",
+  "title": "User Simulation with Large Language Models for Evaluating Task-Oriented Dialogue",
+  "topic": "T6",
+  "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "不微調、只用 few-shot in-context learning 讓 GPT-NeoX-20B 依 MultiWOZ 目標扮演使用者，與 PPTOD／Soloist 逐輪互動做互動式評估，並收集同系統上的人類對話（Human2Bot）當逼真度基準，主張模擬器的 GSR 應貼近人類而非越高越好。",
+  "problem": "任務型對話（TOD）系統的評估多靠固定資料集：使用者語句固定，系統給出合理但與標註不同的回應時會被誤罰（policy mismatch），而且資料集的 schema 綁死少數領域，新領域無從測起。互動式評估需要使用者模擬器，但既有模擬器（MetaSim、Cheng et al. 的 T5 模擬器、GenTUS）都要在標註好的領域資料上微調，新領域拿不到這種資料；它們又以最大化 GSR 為目標，結果是對話方式過度有效率、不像真人，拿來測系統會高估系統在真實使用者面前的表現。",
+  "core_idea": "用 LLM 的 in-context learning 取代微調：提示詞裡只放兩篇範例對話（各附其目標）加上新的目標，讓 LLM 逐輪生成使用者語句，因此新領域只需要少量範例與一組可由 schema 自動產生的目標。評估模擬器時改以「與人類在同一個 TOD 系統上的表現是否相近」為準（GSR 對齊人類、詞彙與句法多樣性接近人類），而不是追求最高 GSR；為此另外收集人類與同一批 TOD 系統的對話作為基準。",
+  "method": {
+    "互動迴圈（§5、Figure 2）": "context accumulator 把［範例 1 的目標＋對話、範例 2 的目標＋對話、新目標、目前對話歷史］組成提示詞 → LLM 生成一句使用者語句 → 語句連同歷史送進受測 TOD 系統 → TOD 系統產生回應 → 使用者語句與系統回應都附加回 accumulator → 重複，直到模擬器生成結束 token（Appendix A 的範例可見 <end_dialog>）。",
+    "few-shot 範例": "每次從 MultiWOZ 訓練集隨機抽兩篇對話當 in-context 範例；作者說更多範例可能更好，但受 LLM 輸入長度上限所限只放兩篇。Figure 1 的完整提示詞是圖片，快取全文沒有文字版，提示詞的確切措辭論文未以文字給出。",
+    "目標表示（§6、Table 2、Appendix B）": "比較三種：原始 logical form（巢狀 dict：domain → info／reqt／book／fail_book → slot → value）、自然語言描述、parsed logical form。最後採用 parsed logical form：把 logical form 攤平成每行一條「- domain section slot value.」（例如 hotel info parking yes.），可直接由 schema 自動產生、不需人寫自然語言目標。Table 2 沒有交代是對哪個 TOD 系統跑的。Appendix B 的自然語言形式範例在快取全文中被截斷。",
+    "模型與生成超參數（§5、§6）": "主力是 GPT-NeoX-20B（Hugging Face Transformers 的 generate），temperature 0.5、max length 2048（模型上限），其餘參數用預設值；temperature 是在一段範圍內試出來、兼顧多樣性與目標貼合，但論文沒有報告各溫度的結果。另試過 GPT-J-6B、AlexaTM-20B（Table 1），GPT-3 davinci 與 BLOOM 只有文字提及、沒有數字。",
+    "受測 TOD 系統": "PPTOD 與 Soloist，均照原論文參數實作；架構也支援 ConvLab-2 的 pipeline 系統。依 Appendix A 的範例，系統回應是 delexicalized 的模板（[value_name]、[value_reference] 等佔位符），沒有填入資料庫實值。",
+    "gold 設定（§5、§7）": "不和 TOD 系統互動：給 MultiWOZ 的 gold 對話歷史，只讓模擬器生成下一句使用者語句，用來單獨檢查生成能力、排除 TOD 端錯誤與模擬器自身的累積錯誤。",
+    "基線（§6）": "ConvLab-2 的 TUS 模擬器：自寫 wrapper 讓 PPTOD／Soloist 接上 ConvLab-2 框架，依官方 repo 方法執行（論文未說明 TUS 搭配哪種 NLG）。MetaSim：GSR 直接取自 Sun et al. (2022) 的論文，多樣性指標則用 MetaSim 作者提供的輸出重算；因技術問題沒有跑 PPTOD。",
+    "Human2Bot 資料（§4）": "8 位以英語為母語、平常為贊助方做資料收集的人員，透過文字介面與 PPTOD、Soloist 對話；給的是 MultiWOZ 目標，並要求刻意加入複雜化行為（同一 slot 給兩個值、對話中途改 slot 值等）。共 1165 篇（Soloist 410、PPTOD 755），用來算人類的 GSR 與多樣性。",
+    "指標（§3、§6）": "GSR：每篇對話 0／1，看最終對話狀態是否滿足原目標的所有 slot 要求，用 MultiWOZ 官方評估腳本計算；另報 Inform、Success、BLEU 與 Combo（＝(Inform＋Success)／2＋BLEU）。多樣性：MTLD（對長度正規化的 TTR 變體，取代 Distinct-n）、平均依存距離、依存距離標準差（句法多樣性／複雜度）；論文沒有說明使用哪個依存剖析器。",
+    "人工評估（§8）": "標註者判斷每句模擬器生成的使用者語句在給定對話歷史下是否「合理」；論文沒有給樣本數、標註者人數與一致性。"
+  },
+  "assumptions": [
+    "與人類在同一 TOD 系統上的 GSR 相近，就代表模擬器以接近人類的效率傳遞資訊；也就是 GSR 對齊可以當逼真度的代理指標。",
+    "Human2Bot 的受試者（贊助方的資料收集人員，被要求刻意加入複雜化行為）能代表「真實環境」的使用者。",
+    "MTLD 與依存距離的高低能反映語句是否「像人」，而且多樣性不是來自胡亂生成（作者用人工評估的 73.0% 合理率支撐這點）。",
+    "新領域的目標可以由 schema 自動產生、範例對話只需少量，因此方法可以遷移到沒有標註資料的領域。",
+    "兩篇隨機範例對話加上目標，就足以讓 20B 級的基底模型（非指令微調）穩定扮演使用者並在適當時機結束。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.2 測試集目標（互動式模擬，共 1000 篇目標）",
+      "MultiWOZ gold 對話歷史（單輪 gold 設定）",
+      "Human2Bot：1165 篇人類與 PPTOD／Soloist 的對話（本文收集）"
+    ],
+    "metrics": [
+      "GSR（Goal Success Rate，MultiWOZ 評估腳本）",
+      "Inform、Success、BLEU、Combo Score",
+      "MTLD（詞彙多樣性）",
+      "平均依存距離、依存距離標準差（句法多樣性／複雜度）",
+      "人工評估：語句「合理」比例"
+    ],
+    "baselines": [
+      "人類（Human2Bot）",
+      "MetaSim（Sun et al. 2022，arXiv:2204.00763）",
+      "ConvLab-2 TUS",
+      "LLM 骨幹比較：GPT-J-6B、AlexaTM-20B、GPT-NeoX-20B",
+      "目標表示比較：logical、自然語言、parsed logical"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在不微調的前提下，GPT-NeoX-20B 是三個骨幹中 GSR 最高的，因此後續實驗都用它。",
+      "numbers": "GSR：GPT-NeoX-20B 25.0、AlexaTM-20B 21.2、GPT-J-6B 11.0（MultiWOZ）",
+      "section": "§6、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "可由 schema 自動產生的 parsed logical form 目標，效果與人寫的自然語言目標幾乎相同，優於原始 logical form。",
+      "numbers": "Inform／Success／BLEU／Combo：Parsed logical 55.0／25.0／7.36／47.36；NL 55.0／25.0／8.07／48.07；Logical 54.1／24.0／7.02／46.52",
+      "section": "§6、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "與人類、MetaSim、ConvLab-2 TUS 相比，本模擬器的 GSR 遠低於人類，但 MTLD 與依存距離接近人類，明顯高於 TUS。",
+      "numbers": "GSR（PPTOD／Soloist）：人類 56.9／71.9、本法 25.0／23.4、MetaSim －／80.3、TUS 63.7／60.4。MTLD：人類 51.25／50.26、本法 50.3／48.9、MetaSim －／49.24、TUS 39.2／37.3。平均依存距離：人類 1.98／1.96、本法 1.8／1.8、MetaSim －／1.7、TUS 1.4／1.3",
+      "section": "§7、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "目標的意圖數越多，Success 急遽下降，Inform 則相對持平，顯示模擬器常只完成部分意圖就結束對話；多樣性指標則不太受意圖數影響。",
+      "numbers": "PPTOD 上，Success：1 意圖 47.77（224 篇）、2 意圖 21.79、3 意圖 13.33、4 意圖 7.87、5 意圖 3.45（29 篇）；Inform：76.79、41.67、49.87、47.22、41.38；全部 1000 篇、7371 輪：Inform 53.8、Success 20.9、Combo 45.55、MTLD 50.27",
+      "section": "§7、§8、Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在 gold 設定下（給 gold 歷史、只生成下一句），GSR 大幅上升，作者據此認為 TOD 端的錯誤是互動設定下 GSR 偏低的主因。",
+      "numbers": "gold 設定 GSR 77.1%，互動設定約 25%",
+      "section": "§7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "人工評估顯示多數生成的使用者語句在上下文中合理，作者據此主張多樣性不是胡亂生成換來的。",
+      "numbers": "73.0% 的語句被判為合理",
+      "section": "§8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "目標越複雜（多意圖）效能越差；方法主要適用於單意圖目標（§1、§9、Table 4）。",
+    "三種失敗模式：在所有意圖完成前就生成結束 token；模擬器與 TOD 系統陷入互相重複的迴圈，而且因為歷史會回灌進提示詞而自我強化；幻覺出目標以外的意圖（§8）。",
+    "受 LLM 輸入長度上限所限，只能放兩篇範例（§5）。",
+    "使用者必須先為目標領域建立目標集，這很耗時，削弱了方法的 few-shot 性質（§12）。",
+    "只測了少數 LLM；換模型時提示方法可能需要大幅修改，依模型的訓練方式而定（§12）。",
+    "提示詞設計的空間無限，in-context learning 用於 TOD 使用者模擬仍是開放問題；待試方向包括重複子目標、chain-of-thought、在提示詞中加入 belief state（§10）。",
+    "LLM 可能生成偏頗、錯誤或有害的內容（§13）。"
+  ],
+  "limitations_observed": [
+    "用作者自己的準則，本法反而最不像人類。§3.1 主張模擬器的 GSR 應貼近人類，但 Table 3 的差距是：PPTOD 上本法 25.0 對人類 56.9（差 31.9），TUS 63.7（差 6.8）；Soloist 上本法 23.4 對人類 71.9（差 48.5），MetaSim 80.3（差 8.4），TUS 60.4（差 11.5）。§9 把基線的高 GSR 解讀成「不像人」，但人類自己的 GSR 就落在 57–72，距離基線比距離本法近得多。",
+    "系統排名被顛倒。人類在 Soloist 上的 GSR（71.9）比 PPTOD（56.9）高 15 點，本法卻給 PPTOD 25.0 高於 Soloist 23.4，TUS 也是 63.7 高於 60.4。用模擬器評估的核心用途是比較系統，排名與人類相反是比 GSR 絕對值更嚴重的逼真度問題，論文沒有討論。",
+    "「比依賴微調的既有模擬器更多樣」只對 TUS 成立。Soloist 上本法的 MTLD 48.9 低於 MetaSim 的 49.24；依存距離 1.8 對 1.7 只差 0.1。沒有報告變異數、種子數或顯著性檢定，這些差距無法判斷是否有意義。",
+    "表格之間的數字互相矛盾。Table 3 的 caption 說 MetaSim 與 ConvLab-2 的數字是用本文的互動方式重現的，但 §6 說 MetaSim 的 GSR 取自 Sun et al. (2022)，而且沒有跑 PPTOD。Table 4 的 PPTOD 全體 Success 是 20.9，但 Table 3 的 PPTOD GSR 是 25.0；兩表的 MTLD（50.27 對 50.3）與依存距離（1.84 對 1.8）吻合，看起來是同一次實驗，成功率卻對不上，也沒有說明。Table 2 Logical 列用 (Inform＋Success)／2＋BLEU 驗算是 46.07，表上寫 46.52（其他列都對得上）。",
+    "人類基線不是同條件比較。Human2Bot 受試者被要求刻意加入複雜化行為（同一 slot 給兩個值、中途改值），模擬器用的是一般的 MultiWOZ 2.2 測試集目標；而且只有 8 位受試者，都是贊助方的資料收集人員。人類 GSR 本身因此偏向某種特定難度，拿它當「真實環境」的校準點並不可靠。",
+    "§9 說單意圖目標上表現接近人類，但論文沒有報告人類按意圖數拆開的 GSR，這個比較無從驗證。拿本法 1 意圖的 Success 47.77 對人類全體的 56.9，也不是同一個分母。",
+    "gold 設定的 77.1% 分不出責任歸屬。§7 自己說這個設定同時消除了 TOD 端錯誤與模擬器的累積錯誤，所以 25%→77% 的落差不能主要歸給 TOD 系統；要分得開，應該讓 TOD 系統接人類的歷史、或讓模擬器接固定的完美系統，兩邊各拿掉一個變數。更根本的是，論文沒有定義只生成一輪時對話層級的 0／1 GSR 怎麼算（其餘輪次沿用 gold，還是只看生成的那一輪），77.1% 的判定方式與分母都不清楚，未必能和互動設定的 25% 相比。",
+    "挑模型的方式與主張相反。§3.1 說不該最大化 GSR，但 Table 1 用最高 GSR 挑骨幹，temperature 也以「目標貼合」為準之一來選。",
+    "最主要的賣點（不需要領域資料、可遷移到新領域）完全沒有測。所有實驗都在 MultiWOZ：few-shot 範例來自 MultiWOZ 訓練集，受測的 PPTOD／Soloist 也在 MultiWOZ 上訓練過；SGD 只在文中提及。同樣地，GPT-NeoX-20B 的預訓練語料是否含 MultiWOZ 也沒有討論。",
+    "受測系統輸出的是 delexicalized 模板（Appendix A 滿是 [value_name]、[value_reference]），模擬器看不到真實的實體值，無法對具體實體做出反應，這個互動環境與真實部署差很遠。論文沒有說明 MultiWOZ 評估腳本在互動設定下怎麼處理佔位符，所以 Success 實際量到什麼並不清楚；也沒有說明 Human2Bot 的受試者看到的是不是同樣帶佔位符的回應，而這直接決定人機對照是否同條件。",
+    "人工評估只給一個 73.0% 的數字：沒有樣本數、標註者人數與一致性，也沒有拿人類語句或基線模擬器的語句用同樣標準評分，無法判斷 73% 是高是低。",
+    "失敗模式只有質性描述與三個範例，沒有給頻率；提早結束、迴圈、幻覺各佔失敗多少比例不明，後續要做針對性修正時缺乏依據。",
+    "用的是非指令微調的基底模型（GPT-NeoX-20B、GPT-J-6B），與 2023 年之後以指令模型為主的 LLM 使用者模擬器差距很大，結論（例如迴圈與提早結束的嚴重程度）很可能不能外推到現代模型。"
+  ],
+  "framework_role": "T6「LLM 使用者模擬器」的早期代表：以 in-context learning 讓 LLM 依目標扮演使用者、逐輪驅動受測 agent，產出互動紀錄交給評估。它對框架真正有用的是兩個觀念，而不是它的成績：一是模擬器的逼真度要拿「真人在同一個系統上的互動」校準，不能以 GSR 越高越好為準（它自己的 Table 3 恰好示範了只看 GSR 絕對值還不夠，還要看系統排名是否與人類一致）；二是一份可以直接轉成 T6 監測項的失敗模式清單（提早結束、雙方迴圈、目標外幻覺）。這篇不涉及從真實使用者回饋學習，也不涉及用模擬器訓練 agent。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "模擬器依 parsed logical form 目標生成的使用者語句，是受測 TOD 系統（PPTOD／Soloist）唯一的外部輸入，系統據此做狀態追蹤並回應；論文只把 TOD 系統當受測物，不研究它的意圖偵測本身。"
+    },
+    {
+      "edge": "E6",
+      "how": "模擬出的整篇對話全數送進 MultiWOZ 評估腳本算 Inform／Success／BLEU／Combo 與 GSR，另算 MTLD、依存距離，並與人類在同一批系統上的 Human2Bot 互動紀錄用相同指標對照；gold 設定與按意圖數拆解（Table 4）也都是從互動紀錄回推評估結論。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有宣稱任何部署或產品採用；作者任職 AWS AI Labs，但文中沒有產品整合的描述，這不構成採納證據。本次查證時 WebSearch 額度已用盡，只用 gh 搜尋 GitHub 上 amazon-science 組織與相關關鍵字，未找到對應的程式碼或產品頁。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "§6 說評估腳本與模擬器程式碼會公開，但文中沒有給連結，以 gh 搜尋 amazon-science 組織也未找到；Human2Bot 資料集未見公開。MultiWOZ 2.2、PPTOD、Soloist、ConvLab-2 是公開的；MetaSim 的輸出是原作者私下提供的。Figure 1 的提示詞只有圖片、而且是縮略版，確切提示詞無法從文字還原。"
+  },
+  "value_verdict": "low",
+  "verdict_reason": "確實屬於 T6，但核心主張（GSR 應貼近人類）被自己的 Table 3 否定：本法的 GSR 比基線離人類更遠，對兩個系統的排名也與人類相反；加上表格數字互相矛盾、跨領域賣點未測、程式碼與資料未見公開、influential citation 為 0，可取的只剩一個評估觀念與一份沒有頻率的質性失敗清單。",
+  "related": [
+    "2204.00763",
+    "2210.14529",
+    "2110.06905",
+    "2109.14739",
+    "2005.05298",
+    "2002.04793",
+    "2108.01369"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

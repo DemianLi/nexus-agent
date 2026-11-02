@@ -1,12 +1,16 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+/* shadcn 的 custom variant、工具類與 keyframes（SG `src/index.css:3` 載入的那一份，#1523）：照 SG 的順序排在 solid-glass.css 前面。 */
+@import './vendor/solid-glass/shadcn/tailwind.css';
 
-/* 字型全部打包進本地（完全內網）：介面 Google Sans Flex、等寬 Google Sans Code，中文都退 Noto Sans TC。 */
-@import '@fontsource-variable/google-sans-flex';
-@import '@fontsource-variable/google-sans-code';
+/* 字型全部打包進本地（完全內網）：介面 Geist、等寬 Geist Mono（只打包 latin，`styles/fonts.css`），中文都退 Noto Sans TC（#1468 Q6）。 */
+@import './styles/fonts.css';
 @import '@fontsource-variable/noto-sans-tc';
 
+/* 外觀是 solid-glass（#1468、#1512）：vendor 原檔 → 產生器解過門檻的顏色 → 本地修改（機制類，layer 外）→ nexus 獨有的非顏色 token。 */
+@import './vendor/solid-glass/solid-glass.css';
 @import './styles/tokens.generated.css';
+@import './styles/solid-glass.overrides.css';
 @import './styles/theme.css';
 @import './styles/motion.css';
 @import './styles/markdown.css';
@@ -16,51 +20,41 @@
 /* 建置工具的註解會寫到 class 名（例如 `.animate-spin`），不讓 Tailwind 把它們當成要產出的 utility。 */
 @source not '../scripts';
 @source not '../tokengen';
+/* 測試裡的範例字串與說明文件提到的類別名也不要編成規則（裸的 `.container`、`.shadow` 會套到不相干的元素；`scripts/check-built-css.mjs` 量產物確認）。 */
+@source not './**/*.test.{ts,tsx}';
+@source not '../*.md';
+/* 只給測試用的量具：`css-cascade.ts`（#1498）處理 `@container` 的字樣會被當成裸的 `.container`，`color-math.ts`（#1512）的 `blur` 會變成 `.blur`。 */
+@source not './styles/css-cascade.ts';
+@source not './styles/color-math.ts';
+/* vendor 的上游 CSS、授權與說明、同步腳本、清單：要的是 import 進來的規則，不是把裡面的字掃成 utility。`.tsx` 不排除（#1497 第 ③ 步起要掃）。 */
+@source not './vendor/**/*.{css,md,mjs,json}';
+@source not './vendor/**/LICENSE';
+/* 瀏覽器護欄的測試頁（#1512）量的是出貨的 CSS，不能讓它自己的字樣反過來改到出貨的 CSS；它也不准寫 class（`src/guard-page.test.ts`）。 */
+@source not '../guard';
 
 /*
  * 現行規則見 `.docs/web-ui-spec.md` §5–§7；兩段 `@theme` 從原型 tag `proto-375-design-language` 搬來（#401）。
  *
  * 動效：registry 元件寫的 animate-in／animate-out 靠 tw-animate-css 才有 CSS（沒裝時一筆都不產出、也不報錯）。
- * 進出場改成「開快關更快」：開 250、關 150、曲線 smooth-out。刻意不讀 --tw-duration，
- * registry 各自寫的 duration-200 就蓋不掉；真要單獨改（例如抽屜）用 animation-duration-*。
- * 不用 inline：reduced-motion 要在執行期把這幾個變數換成只有透明度的版本（`styles/motion.css`）。
- * collapsible 那兩條引用 `styles/motion.css` 的 motion-fade-in／out，少了那兩個 keyframes 會無聲失效。
+ * 時長與曲線照 SG 的機制（#1687）：讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。
+ * **不用 inline**：inline 會讓 utility 直接展開數值、不再讀 `var(--animate-in)`，reduced-motion 在執行期換掉的變數就沒人讀，
+ * 無聲失效（`check-built-css` 量產物）。可是非 inline 的值宣告在 `:root`，裡面的 `var(--tw-duration)` 會在 `:root` 先解掉，
+ * 所以真正生效的值逐元素寫在 `styles/motion.css` 的「進出場」那段；這裡留同一份值，只為了讓 Tailwind 產出 `var(--animate-in)`。
  */
 @theme {
-  --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --animate-in: enter var(--tw-animation-duration, 250ms) var(--ease-smooth-out)
+  --animate-in: enter var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
     var(--tw-animation-delay, 0s) 1 normal backwards;
-  --animate-out: exit var(--tw-animation-duration, 150ms) var(--ease-smooth-out)
+  --animate-out: exit var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
     var(--tw-animation-delay, 0s) 1 normal both;
-  --animate-collapsible-down:
-    collapsible-down var(--tw-animation-duration, 250ms) var(--ease-smooth-out),
-    motion-fade-in var(--tw-animation-duration, 250ms) var(--ease-smooth-out);
-  --animate-collapsible-up:
-    collapsible-up var(--tw-animation-duration, 150ms) var(--ease-smooth-out),
-    motion-fade-out var(--tw-animation-duration, 150ms) var(--ease-smooth-out);
 }
-
-/* 自己與子孫都算：`<html class="dark">` 上的元素本身也要吃到 dark variant。 */
-@custom-variant dark (&:is(.dark, .dark *));
 
 @theme inline {
   /*
-   * 圓角階梯重綁成 Libraries.dev 實際用的值，registry 的 class 不用改。
-   * md 8＝選單項目、lg 12＝選單與輸入、xl 14＝卡片內層 stage、2xl 16＝程式碼區塊、3xl 24＝卡片與 dialog；按鈕 rounded-full。
+   * 圓角階梯照 SG（#1468 Q8，#1512）：`--radius-sm`…`--radius-4xl` 都是 `solid-glass.css` 的 `calc(var(--radius) * n)`，這裡不重綁。
+   * 嵌在卡片（`rounded-3xl p-1`）裡的列：SG 的 3xl 減內距 4，同心。給 `RowTrigger` 與排隊清單的列用，不要寫 `rounded-[…]`。
+   * 照抄 SG 3xl 的算式（`design-system.test.ts` 比對兩者），SG 改了倍數這裡要跟著改。
    */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 14px;
-  --radius-2xl: 16px;
-  --radius-3xl: 24px;
-
-  --font-sans:
-    'Google Sans Flex Variable', 'Noto Sans TC Variable', -apple-system, BlinkMacSystemFont,
-    'PingFang TC', sans-serif;
-  --font-mono:
-    'Google Sans Code Variable', 'Noto Sans TC Variable', ui-monospace, SFMono-Regular, Menlo,
-    monospace;
+  --radius-row: calc(var(--radius) * 2.2 - 4px);
 
   /* 字重只用 400／500，semibold 以上一律落在 500 */
   --font-weight-semibold: 500;
@@ -76,21 +70,8 @@
   --text-micro: 11px;
   --text-micro--line-height: 14px;
 
-  --color-primary-hover: var(--primary-hover);
-  --color-primary-active: var(--primary-active);
   --color-brand: var(--brand);
-  --color-brand-soft: var(--brand-soft);
   --color-success: var(--success);
-  --color-warning: var(--warning);
-  --color-info: var(--info);
-  --color-stage: var(--stage);
-  --color-chip: var(--chip);
-  --color-chip-hover: var(--chip-hover);
-  --color-chip-pressed: var(--chip-pressed);
-  --shadow-material: var(--material-shadow);
-  --shadow-menu: var(--menu-shadow);
-  --shadow-card: var(--card-shadow);
-  --shadow-stage: var(--stage-ring);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);

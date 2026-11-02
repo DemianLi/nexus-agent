@@ -1,26 +1,36 @@
 import type { ConversationState, DeliverablesPresentedPayload, Event } from '@nexus/wire';
 import {
-  appendHumanTurn,
   DELIVERABLES_PRESENTED,
   emptyConversation,
+  INBOX,
+  SETTLE_NOTICE,
   reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import { act, cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
 import { createChangesStores } from '@/lib/changes-diff';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import { transcriptItems } from '@/lib/deliverables-view';
+import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
 
 /**
  * 交付卡片歸到它那一輪的尾端（#441 第二刀）。狀態從真的 frame 用 `reduceAll` 折出來，折疊器怎麼放那一格在
  * `@nexus/wire` 的 `deliverables.test.ts`；這裡驗 web 怎麼切輪、畫在哪。
  */
 
-afterEach(cleanup);
+beforeEach(() => {
+  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 review.test.tsx）。
+  vi.stubGlobal('localStorage', memoryStorage());
+});
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const ROOT = ['model_request:1'];
 
@@ -79,11 +89,38 @@ function delivered(payload: Omit<DeliverablesPresentedPayload, 'seq'>, seq = 0):
   return frame('custom', [], { name: DELIVERABLES_PRESENTED, payload: { ...payload, seq } });
 }
 
+let claims = 0;
+
+/** 人的那一句：伺服器領走開跑時推的 `inbox`（`claimed`），接著才是 `running`。 */
+function asked(text: string): Event {
+  claims += 1;
+  return frame('custom', [], {
+    name: INBOX,
+    payload: { items: [], claimed: { id: `q-${claims}`, text } },
+  });
+}
+
 /** 一輪：frame 照線上的順序取 seq，所以本體要在 `running` 之後才建（先建的 seq 比較小，會被當成重複丟掉）。 */
 function turn(text: string, events: () => Event[], from = emptyConversation()): ConversationState {
+  const claim = asked(text);
   const start = running();
   const body = events();
-  return reduceAll(appendHumanTurn(from, text), [start, ...body, completed()]);
+  return reduceAll(from, [claim, start, ...body, completed()]);
+}
+
+/** 閒著時被背景子代理的結算通知叫醒開的一輪：領走的是通知，不是人的話。 */
+function woken(from: ConversationState, events: () => Event[]): ConversationState {
+  claims += 1;
+  const claim = frame('custom', [], {
+    name: INBOX,
+    payload: {
+      items: [],
+      claimed: { id: `n-${claims}`, text: 'notice', source: { kind: 'subagent-settled' } },
+    },
+  });
+  const start = running();
+  const body = events();
+  return reduceAll(from, [claim, start, ...body, completed()]);
 }
 
 /** 每一格的種類；交付卡寫成 `卡:路徑,路徑`，改動卡寫成 `改:seq`。 */
@@ -153,6 +190,69 @@ describe('交付卡片歸到輪尾', () => {
     expect(layout(second)).toEqual(['human', 'tool', '卡:a.md', 'human', 'ai']);
   });
 
+  it('通知叫醒的那一輪自己收卡：交付卡與改動卡不併進上一輪（#859）', () => {
+    const first = turn('先做。', () => [
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
+      ...reply('r1', '好了。'),
+    ]);
+    const second = woken(first, () => [
+      ...present('c2', ['b.md']),
+      delivered({ callId: 'c2', files: [{ path: 'b.md' }] }),
+      frame('custom', [], { name: WORKSPACE_CHANGES, payload: { seq: 77 } }),
+      ...reply('r2', '收到通知，補好了。'),
+    ]);
+    expect(layout(second)).toEqual([
+      'human',
+      'tool',
+      'ai',
+      '卡:a.md',
+      'notice',
+      'tool',
+      'ai',
+      '改:77',
+      '卡:b.md',
+    ]);
+  });
+
+  it('歷史重播長出的通知切在同一個位置，重新整理前後切出來的輪一樣（#859）', () => {
+    const history = reduceAll(emptyConversation(), [
+      frame('custom', [], { name: SETTLE_NOTICE, payload: { id: 'history-7' } }),
+      running(),
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
+      ...reply('r1', '好了。'),
+      completed(),
+    ]);
+    expect(layout(history)).toEqual(['notice', 'tool', 'ai', '卡:a.md']);
+  });
+
+  it('子代理寄來的話也是一輪的開頭（#859）', () => {
+    claims += 1;
+    const first = turn('先做。', () => [
+      ...present('c1', ['a.md']),
+      delivered({ callId: 'c1', files: [{ path: 'a.md' }] }),
+      ...reply('r1', '好了。'),
+    ]);
+    const second = reduceAll(first, [
+      frame('custom', [], {
+        name: INBOX,
+        payload: {
+          items: [],
+          claimed: {
+            id: `m-${claims}`,
+            text: '子代理說的話',
+            source: { kind: 'agent-message', senderSessionId: 'bg-1', runId: 'run-1' },
+          },
+        },
+      }),
+      running(),
+      ...reply('r2', '嗯。'),
+      completed(),
+    ]);
+    expect(layout(second)).toEqual(['human', 'tool', 'ai', '卡:a.md', 'agent-message', 'ai']);
+  });
+
   it('失敗的 present 沒有交付事件，就沒有卡', () => {
     const state = turn('交付。', () => [...present('c1', ['a.md']), ...reply('r1', '好了。')]);
     expect(layout(state)).toEqual(['human', 'tool', 'ai']);
@@ -187,13 +287,16 @@ describe('交付卡片歸到輪尾', () => {
       throw new Error('這條測試不該發請求');
     }) as unknown as typeof globalThis.fetch;
     const wiring = { threadId: 't1', baseUrl: '', fetch: doFetch };
+    const download = createDeliverableDownloader(wiring);
     render(
-      <Transcript
-        state={state}
-        isFresh={() => false}
-        deliverableFiles={createDeliverableFileStore(wiring)}
-        deliverableDownload={createDeliverableDownloader(wiring)}
-      />,
+      <WithRightSidebar
+        sources={{
+          deliverableFiles: createDeliverableFileStore(wiring),
+          deliverableDownload: download,
+        }}
+      >
+        <Transcript state={state} isFresh={() => false} deliverableDownload={download} />
+      </WithRightSidebar>,
     );
     const card = screen.getByRole('region', { name: '這一輪交付的檔案，共 1 個' });
     expect(within(card).getByRole('button', { name: '預覽：out/report.pdf' })).toBeTruthy();

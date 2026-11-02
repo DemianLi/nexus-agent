@@ -1,0 +1,161 @@
+{
+  "id": "2408.00203",
+  "title": "OmniParser for Pure Vision Based GUI Agent",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Microsoft Research 的技術報告：在 GPT-4V 前面接一個純視覺的螢幕解析器 OmniParser。解析器由三部分組成：以網頁 DOM 自動標註、微調過的 YOLOv8 可互動區域偵測器，一個 OCR 模組，以及用 GPT-4o 標註資料微調的 BLIP-2 圖示功能描述模型。它把截圖轉成「疊上編號框的 Set-of-Mark 圖」加上「每個編號的文字或功能描述清單」，讓 GPT-4V 只需回答框的編號。這個做法在 ScreenSpot、Mind2Web、AITW 上都勝過只給截圖、或另給 HTML／圖示偵測結果的 GPT-4V 基線。",
+  "problem": "GPT-4V 這類多模態模型看得懂介面，卻無法可靠地輸出要點擊的 x-y 座標。Set-of-Mark（SoM）提示把帶編號的框疊在截圖上，讓模型改答框的編號，這能大幅提高 grounding 的穩健性。但既有 SoM 做法的框來自 HTML／DOM（網頁）、Android view hierarchy，或 AITW 附帶的標註，所以只能用在拿得到這些結構化資訊的平台。在 Windows／macOS 桌面應用、iOS 或任意第三方軟體上，這些資訊常常不存在。作者認為，過去純視覺的螢幕解析品質不夠好，導致 GPT-4V 在 GUI 任務上的能力被嚴重低估。此外，只給疊框截圖時，GPT-4V 要在同一次呼叫裡同時認出每個圖示的語意、又決定下一步動作，常常把編號對錯。要做跨平台、跨應用的通用 GUI agent，需要一個只吃截圖、就能產出結構化且可定位觀測的解析器。",
+  "core_idea": "把感知從決策模型身上拆下來，交給專門的解析器：先用專用模型把螢幕解析成「可互動元素清單」，每個元素有唯一編號、位置框，以及一段文字語意（OCR 文字或圖示的功能描述），再把疊框截圖和這份清單一起交給 GPT-4V。GPT-4V 只負責理解任務並挑出元素編號，實際點擊位置取該框中心。核心主張有兩個：(1) 可互動區域偵測的品質決定了 SoM 能不能用；(2) 預先生成的局部功能語意（local semantics）能大幅減少 GPT-4V 把編號對錯的幻覺。等於把觀測從「原始像素」重寫成「帶 ID 的類 DOM 結構＋視覺提示」。",
+  "method": {
+    "整體輸入輸出（§3、Figure 1）": "輸入是使用者任務與一張 UI 截圖。OmniParser 輸出兩樣東西：(1) 疊上邊界框與數字編號的截圖；(2) local semantics 清單，文字框給偵測到的文字，圖示框給一句功能描述。這兩樣和任務（以及多步任務的動作歷史）一起送進 GPT-4V。GPT-4V 回答要操作的框編號，系統取該框中心點當點擊座標。",
+    "元件一：可互動區域偵測模型（§3.1、附錄 7.2）": {
+      "資料": "從 ClueWeb22 的熱門公開 URL 均勻抽 10 萬個，對每個網址擷取 DOM tree 中可互動元素的邊界框，當作截圖上的 ground truth。擷取管線改寫自 AutoGen multimodal websurfer 抽取可互動元素的程式碼（見致謝）。最後得到 66,990 張截圖（正文寫約 67k），切成 95% 訓練（63,641）、5% 驗證（3,349）。",
+      "模型與訓練": "YOLOv8，訓練 20 epochs，batch size 256，學習率 1e-3，Adam，4 張 GPU。論文只給訓練曲線（Figure 5），沒有報偵測的 precision／recall／mAP。",
+      "對照": "消融用原生 Grounding DINO（GD）當替代的偵測器，與微調後的偵測器（ID）比較。"
+    },
+    "元件二：OCR 與框的合併（§3.1）": "另跑一個 OCR 模組取得文字框（論文沒說用哪個 OCR 引擎）。把 OCR 框與圖示偵測框合併，重疊超過 90% 的框刪掉重複的一個（沒說重疊是用 IoU 還是包含比例算，也沒說保留哪一個）。每個框旁邊放一個唯一數字編號，擺放位置用一個「盡量不壓到其他框」的簡單演算法決定（論文沒給演算法細節）。",
+    "元件三：圖示功能描述模型（§3.2、附錄 7.1）": {
+      "資料": "用元件一的偵測器在 ScreenSpot 的截圖上跑，把偵測到的每個框切下來交給 GPT-4o。GPT-4o 先判斷它是不是 app 圖示：是的話寫一句潛在功能描述；不是的話輸出「這不是圖示」，這類樣本也保留在資料裡。最後得到 7,185 組圖示與描述的配對。",
+      "模型與訓練": "BLIP-2 微調 1 epoch，固定學習率 1e-5，無 weight decay，Adam。原始 BLIP-2 傾向描述形狀與顏色，微調後能說出常見 app 圖示的功能（Figure 4，只有定性例子，沒有量化評估）。",
+      "推論": "每個偵測到的圖示框單獨裁切後送進描述模型，模型看不到整張畫面的上下文（這也是 §5 的失敗來源之一）。"
+    },
+    "提示詞（附錄 7.3，SeeAssign 用）": "無局部語意版：告訴模型「這是一張疊了編號框的 UI 截圖，你的任務是 {task}，應該操作哪個框」，要求先簡短分析，再用固定格式輸出框編號。有局部語意版：在同一個模板中插入 {parsed_local_semantics}，也就是每個框的文字或圖示描述清單，其餘相同。Mind2Web、ScreenSpot 用的提示詞論文沒有給全文。",
+    "評估設定": {
+      "SeeAssign（§4.1）": "作者手工做的 112 題，截圖取自 ScreenSpot 並用 OmniParser 疊框，涵蓋 Mobile、Desktop、Web 三個平台。每題有一句手寫任務描述（例如點設定、點最小化按鈕），而且保證目標一定在偵測到的框裡。依框數分難度：easy 少於 10 個框、medium 10–40 個、hard 超過 40 個。指標是 GPT-4V 選對框編號的比例。",
+      "ScreenSpot（§4.2）": "600 多張行動、桌面、網頁截圖，每條指令對應一個可操作元素。點擊點（所選框的中心）落在 GT 框內就算對。基線數字取自 SeeClick 論文。",
+      "Mind2Web（§4.3、附錄 7.4）": "使用由第三方（Dillon DuPont）從 raw HTML dump 處理出的清理版測試集，刪掉少數邊界框不正確的樣本，剩下 Cross-Domain 867、Cross-Website 167、Cross-Task 242 個任務。把解析結果與動作歷史以文字給 GPT-4V，再附上 SoM 截圖，提示方式仿照 MM-Navigator 與 SeeAct。做離線評估，報 Ele.Acc、Op.F1、Step SR（對任務取平均）。基線數字全部引自 Mind2Web、SeeAct、SeeClick 論文。",
+      "AITW（§4.4）": "採 SeeClick 依指令切分的資料，只用測試集（方法不需要微調）。提示格式與 MM-Navigator（GPT-4V in Wonderland）最佳設定『GPT-4V ZS+history』完全相同，只把 IconNet（96 類圖示）的偵測結果換成 ID 模型的輸出，並加上 LS。指標是 AITW 的 screen-wise action matching score。"
+    },
+    "論文沒有揭露、重做時要自己補的": "OCR 引擎；偵測信心門檻；90% 重疊的計算方式；編號擺放演算法；BLIP-2 的模型大小；GPT-4V 的版本與溫度；ScreenSpot 與 Mind2Web 的完整提示詞；Mind2Web 長頁面截圖怎麼處理（裁切或捲動）；打字、滑動、選擇等非點擊動作的輸出格式；每步的延遲與提示長度。"
+  },
+  "assumptions": [
+    "截圖本身就含有做決策所需的資訊，不需要 DOM、accessibility tree、view hierarchy",
+    "從熱門網頁 DOM 自動抽出的「可互動元素」標註，能遷移到行動與桌面介面（作者以 AITW、ScreenSpot 的結果佐證）",
+    "每個 UI 元素的語意可以從裁下來的局部影像推得，不需要整頁上下文（§5 自己的失敗案例動搖了這一點）",
+    "點擊所選框的中心就能點中目標，也就是偵測框的粒度與可點擊區域大致一致",
+    "GPT-4o 產生的圖示功能描述足以當作訓練標籤",
+    "規劃模型（GPT-4V）夠強，瓶頸在感知與 grounding，不在推理；把感知外包就能釋放它的能力",
+    "單步觀測（目前截圖＋文字動作歷史）足以決定下一步動作"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SeeAssign（本文自建，112 題，截圖取自 ScreenSpot，分 easy／medium／hard）",
+      "ScreenSpot（行動、桌面、網頁；Text 與 Icon/Widget 兩類）",
+      "Mind2Web（清理版測試集：Cross-Domain 867、Cross-Website 167、Cross-Task 242 任務，離線評估）",
+      "AITW（SeeClick 依指令切分的測試集；General、Install、GoogleApps、Single、WebShopping）"
+    ],
+    "metrics": [
+      "SeeAssign：選對框編號的比例",
+      "ScreenSpot：click accuracy（所選框的中心點落在 GT 框內的比例），各分項取不加權平均",
+      "Mind2Web：Ele.Acc、Op.F1、Step SR（對任務取巨觀平均）",
+      "AITW：screen-wise action matching score"
+    ],
+    "baselines": [
+      "SeeAssign：GPT-4V 不加 local semantics",
+      "ScreenSpot：Fuyu、CogAgent、SeeClick、MiniGPT-v2、Qwen-VL、GPT-4V（數字引自 SeeClick）；自家消融：無 LS＋GD、LS＋GD、LS＋ID",
+      "Mind2Web：CogAgent、Qwen-VL、SeeClick、MindAct (gen)、MindAct、GPT-3.5-Turbo、GPT-4、GPT-4V+SoM、GPT-4V+textual choice（SeeAct），全部是引用的數字；自家 LS＋GD 與 LS＋ID",
+      "AITW：ChatGPT-CoT、PaLM2-CoT、GPT-4V image-only、GPT-4V + history（引自 MM-Navigator，GPT-4V 版用 IconNet＋SoM）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "OmniParser 讓 GPT-4V 在 ScreenSpot 的平均正確率大幅提升，也超過專門用 GUI 資料微調的 SeeClick、CogAgent、Fuyu",
+      "numbers": "平均：OmniParser（LS＋ID）73.0%、GPT-4V 16.2%、SeeClick 53.4%、CogAgent 47.4%、Fuyu 19.5%。OmniParser 分項：Mobile Text 93.9%／Icon 57.0%、Desktop Text 91.3%／Icon 63.6%、Web Text 81.3%／Icon 51.0%",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在 SeeAssign 上，在提示中加入 local semantics（框內文字與圖示描述）後，GPT-4V 選對框編號的比例大幅提高，框越多提升越大",
+      "numbers": "整體 0.705→0.938；easy 0.913→1.00、medium 0.692→0.949、hard（超過 40 個框）0.620→0.900",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在 ScreenSpot 上，local semantics 是 OmniParser 自家元件中貢獻最大的一項，桌面平台受益最多",
+      "numbers": "都用 Grounding DINO 時，平均 58.38%→68.7%；Desktop Text 64.9→89.3、Desktop Icon 26.3→44.9、Web Icon 39.7→45.1；Mobile Text 只從 92.7 升到 94.8",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "把原生 Grounding DINO 換成用網頁 DOM 資料微調的可互動區域偵測器，ScreenSpot 平均再提升 4.3 個百分點，增益集中在桌面圖示",
+      "numbers": "LS＋GD 68.7% → LS＋ID 73.0%。Desktop Icon 44.9→63.6（+18.7）、Web Icon 45.1→51.0、Mobile Icon 53.7→57.0；Mobile Text 94.8→93.9、Web Text 83.0→81.3 反而略降",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 Mind2Web 上，只看截圖的 OmniParser 在 Cross-Website 與 Cross-Domain 勝過用 HTML 候選元素的 GPT-4V+textual choice，在 Cross-Task 略輸；也勝過用 HTML 的 GPT-4 與純截圖的 SeeClick",
+      "numbers": "Step SR（Cross-Website／Cross-Domain／Cross-Task）：OmniParser LS＋ID 36.5／42.0／39.4；GPT-4V+textual choice 32.4／36.8／40.2（差 +4.1／+5.2／−0.8）；GPT-4（HTML）30.1／26.4／36.2；SeeClick 16.4／20.8／25.5；LS＋GD 36.1／36.8／38.7。Op.F1 OmniParser 84.8／85.7／87.6，高於 textual choice 的 67.8／69.3／73.4",
+      "section": "§4.3、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在 AITW 上，只在網頁上訓練的偵測器能遷移到手機畫面：以 ID＋LS 取代 IconNet 後，整體分數高於最佳 GPT-4V 基線",
+      "numbers": "Overall：OmniParser 57.7、GPT-4V + history 53.0（+4.7）、GPT-4V image-only 50.5、PaLM2-CoT 39.6、ChatGPT-CoT 7.7。Install 57.8 對 46.1、General 48.3 對 43.0、WebShopping 52.9 對 48.2、GoogleApps 51.6 對 49.2；Single 77.4 略低於 78.3",
+      "section": "§4.4、Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "失敗分析指出三類錯誤：重複的圖示或文字分不清；OCR 框太粗，點框中心會點出目標區；描述模型只看裁切圖示、看不到上下文而誤判（例如三個點被說成載入指示）",
+      "numbers": "只有定性案例（Figure 7、Figure 8），沒有各類錯誤的比例",
+      "section": "§5、Figure 7、Figure 8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "畫面上有多個重複的圖示或文字時（例如 7 個長得一樣的鬧鐘開關），GPT-4V 常選錯；作者建議為重複元素加上更細的描述（§5）",
+    "OCR 模組不知道哪些文字是可點擊的超連結，框的粒度可能太粗，點框中心會落在 GT 區域外；作者計畫把 OCR 與可互動區域偵測訓練成同一個模型（§5）",
+    "圖示描述模型只看得到裁下來的圖示，看不到整張畫面，外觀相似但語意依情境而異的圖示會被誤解；作者建議訓練能看全畫面上下文的描述模型（§5）",
+    "在 Mind2Web Cross-Task 上略輸 GPT-4V+textual choice（−0.8）（§4.3）",
+    "只輸入疊框截圖、不給局部語意時，GPT-4V 同時做語意辨識與動作預測的能力有限，容易幻覺出錯誤的編號（§3.2、§4.1）"
+  ],
+  "limitations_observed": [
+    "local semantics 的增益有資料洩漏疑慮，作者沒有提。附錄 7.1 說，圖示描述模型的 7,185 組訓練資料，是拿偵測器在 ScreenSpot 截圖上跑出來的框、再由 GPT-4o 寫描述而成。可是 §4.2 正是在 ScreenSpot 上評估，§4.1 SeeAssign 的截圖也取自 ScreenSpot。所以 ScreenSpot 上 LS 帶來的 58.38%→68.7%、SeeAssign 上的 0.705→0.938，都是在描述模型的訓練影像上量到的：模型可能記住了這些裁切圖示的描述。影響範圍僅限描述模型與 LS 增益；偵測器是用 ClueWeb22 網頁訓練的，不受影響。另外，描述標籤由 GPT-4o 產生，等於把更強模型的知識蒸餾進來，「GPT-4V 能力被低估」這個結論因此也要打折。",
+    "Mind2Web Table 3 有抄錄錯誤，會誤導讀者。對照 SeeClick Table 4 與 Mind2Web 原文，MindAct (gen)、MindAct、GPT-3.5-Turbo、Qwen-VL 四列的 Cross-Task 欄，都是把 Cross-Domain 的數字重複抄了一次。正確值是：MindAct 55.1／75.7／52.0、MindAct (gen) 20.2／52.0／17.5、GPT-3.5-Turbo 20.3／56.6／17.4、Qwen-VL 15.9／86.7／13.3（Ele.Acc／Op.F1／Step SR）。論文文字沒有宣稱勝過 MindAct，但抄錯的欄位掩蓋了一件事：以 HTML 為輸入、微調過的 MindAct（Flan-T5-XL）在 Cross-Task（Step SR 52.0 對 39.4）與 Cross-Website（38.9 對 36.5）仍然領先 OmniParser，OmniParser 只在 Cross-Domain（42.0 對 39.6）勝出。另外，GPT-4V+som 的 Cross-Website 32.7，其實是 SeeAct Table 3 中 Choice 方法的值；Annotation（SoM）方法應為 13.9，而且那是 30 題子集的結果。",
+    "Mind2Web 的核心比較（對 GPT-4V+textual choice 的 +4.1／+5.2／−0.8）其實跨了不同的測試集。OmniParser 用第三方清理版，Cross-Domain／Cross-Website／Cross-Task 為 867／167／242 題（原始 Mind2Web 是 912／177／252）。SeeAct 的 GPT-4V 數字量在它自己的 Multimodal-Mind2Web 清理版上，三個切分是 694／142／177 題。GPT-4 的數字則來自 Mind2Web 論文，只在每個切分 50 題、top-10 候選的子集上測。沒有任何一個基線是在同一批題目上重跑的。「每個子類別都大幅勝過用 HTML 的 GPT-4」這句話也建立在這種跨測試集的比較上。論文也沒交代：純視覺的點擊如何判定 Ele.Acc，以及長頁面截圖怎麼處理。",
+    "ScreenSpot 的增益主要來自「把輸出介面改成挑選 SoM 編號」，而不是微調的兩個模型。GPT-4V 直接輸出座標只有 16.2%；換成原生 Grounding DINO 加 OCR 疊框、不加任何微調模型，就已經到 58.38%。LS 再加約 10 個百分點，微調偵測器再加 4.3 個百分點。Table 2 少了「無 LS＋ID」與「只用 OCR」兩格，所以微調偵測器的效果只靠單一一組比較支撐，也無法分開偵測器與 LS 的交互作用。這與 SeeAct 的發現一致：GPT-4V 的瓶頸在把描述對應到位置，換成文字選項後就大幅改善。LS 本質上就是把 SoM 改造成「文字選項＋圖」。",
+    "AITW 用的是 SeeClick 的依指令切分，但 Table 4 沒列 SeeClick 在同一切分上的 59.3（高於 OmniParser 的 57.7）。兩者條件不同：SeeClick 在這個切分的訓練集上微調過，OmniParser 是零樣本。所以這不代表 OmniParser 比較差，但讀者看不到同一切分上已知的最佳數字。GPT-4V 兩個基線（50.5、53.0）是從 MM-Navigator 論文引用的，論文沒說有在這個依指令切分上重跑，因此「+4.7」可能也是跨資料集的比較。Single 子集 77.4 還略低於基線 78.3，全部結果都沒有報變異或重跑次數。",
+    "SeeAssign 的設計會高估 LS 的價值。這 112 題由作者手寫，目標保證落在 OmniParser 自己偵測到的框裡，所以只量「偵測完美時選對編號」的能力；拆成三個難度後，每格只有幾十題。論文自己舉的例子（點 settings）就和畫面上的 OCR 文字相同；這類文字型任務加了 LS 後，問題幾乎變成清單上的字串比對。論文沒有做「只給文字清單、不給截圖」的對照，無法判斷截圖在有 LS 時還貢獻多少。",
+    "偵測器從沒被單獨評估過：沒有在保留集上報 precision／recall／mAP，也沒有在行動或桌面畫面上量偵測品質，只有 Figure 5 的訓練曲線。DOM 導出的「可互動」標籤本身有雜訊（隱藏元素、被遮蔽元素、巢狀的可點擊容器），論文也沒有分析。「ID 能遷移到手機」只是從下游 AITW 分數間接推得。",
+    "觀測的成本沒有量。每一步都要跑 YOLO、OCR，對每個圖示各跑一次 BLIP-2，再把可能超過 40 個元素的描述清單塞進 GPT-4V 的提示。論文沒報每張截圖的解析延遲、提示 token 數，也沒討論元素很多時清單要不要截斷或篩選（Mind2Web 基線用的是排序器挑出的 top-50 候選，OmniParser 則沒有篩選步驟）。對 T3 關心的「長觀測壓縮」來說，這是明顯的空白。",
+    "Table 2 有一列的平均和分項對不上。其他列的平均都等於六個分項的不加權平均（例如 58.38 與 73.0 都對得上），但「LS＋GD」六格的不加權平均是 68.47，和表上的 68.7 不同；分不出是平均算錯，還是某一格打錯字。若六格無誤，ID 對 GD 的差距約為 4.55 個百分點，而不是 4.3。差距不大，但和 Table 3 的抄錯合起來看，這份技術報告的表格核對不夠嚴謹。",
+    "規劃端只試了 GPT-4V 一種模型；打字、滑動、選擇等非點擊動作怎麼從框編號轉成實際操作，論文沒說明。ScreenSpot 與 SeeAssign 只量點擊。論文的「通用、跨平台」主張，實際證據只有三個以點擊為主的離線基準，沒有任何線上、端到端的任務成功率。"
+  ],
+  "framework_role": "這篇是 T3(a) 感知／觀測空間中「觀測前處理器」的代表作：在環境（原始截圖）與決策 LLM 之間插一層解析器，把非結構化的回饋改寫成「帶唯一 ID 的元素清單＋每個元素的簡短語意＋對應的視覺標記」。動作空間也隨之從連續座標改成離散的元素 ID。這直接回答了 T3 關心的「觀測怎麼表徵，會改變 agent 能做到多好」：同一個 GPT-4V，在 ScreenSpot 上只因觀測表徵不同，就從 16.2% 變成 58.38%，再到 73.0%。可以轉用到對話型 agent 的原則有四條：(1) 回傳給模型的觀測要切成可引用的單位，讓模型用 ID 指涉，而不是自己重建位置或內容；(2) 為每個單位預先附上功能語意，把「辨識」與「決策」分到不同階段；(3) 局部摘要要看得到全域上下文，否則會像把三個點誤判成載入指示那樣失真；(4) 重複、相似的單位要主動加上區辨資訊。它沒有處理 T3(b) 的執行期監控或異常偵測；§5 的失敗分析是人工讀 GPT-4V 回應紀錄，不是系統化的監控機制。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Microsoft 在 Azure AI Foundry 模型目錄上架 microsoft-omniparser-v2-0，發布者是 Microsoft，標示為 Generally available (GA)，描述為把 UI 截圖轉成結構化格式、用來強化以 LLM 為基礎的 UI agent 的螢幕解析工具。注意這是後續的 V2：描述模型改用 Florence-2，訓練資料也更多，不是論文中的 BLIP-2 版本。來源：https://ai.azure.com/catalog/models/microsoft-omniparser-v2-0",
+      "Microsoft 官方 Hugging Face model card microsoft/OmniParser-v2.0 公開權重，並逐元件標示授權：icon_detect 為 AGPL-3.0，icon_detect_v3 與 icon_caption 為 MIT。訓練資料的描述與論文一致（從熱門網頁自動標註的可互動圖示偵測資料＋圖示功能描述資料）。來源：https://huggingface.co/microsoft/OmniParser-v2.0",
+      "Microsoft Research 官方文章〈OmniParser V2: Turning Any LLM into a Computer Use Agent〉（2025-02-12）發表 V2 與 OmniTool。OmniTool 是 docker 化的 Windows 11 VM，可搭配 OpenAI、DeepSeek R1、Qwen 2.5VL、Anthropic 等模型當規劃端；文章也說明了風險緩解措施（沙箱容器、人員在迴路中等）。來源：https://www.microsoft.com/en-us/research/articles/omniparser-v2-turning-any-llm-into-a-computer-use-agent/",
+      "官方 GitHub repo microsoft/OmniParser（程式碼 MIT），發布時序：V1 於 2024-10、V1.5 於 2024-11、V2 與 OmniTool 於 2025-02。來源：https://github.com/microsoft/OmniParser"
+    ],
+    "assessment": "有可查證的採納：Microsoft 把這條方法線（V2 版）以模型產品形式上架到自家雲端平台 Azure AI Foundry 並標為 GA，另外以開放權重與 OmniTool 形式公開，可接各家 LLM。這屬於平台層級的供應，不是研究展示。但未見它被嵌入特定終端產品（例如某個 Copilot 功能）的公開證據。上架的是 V2，與論文所述版本的描述模型和訓練資料都不同，論文中的具體數字不能直接套用到產品版。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/microsoft/OmniParser",
+    "data": "推論所需的模型權重公開（Hugging Face：microsoft/OmniParser、microsoft/OmniParser-v2.0，逐元件授權不同）。論文中 67k 張的可互動區域偵測資料集、7,185 組圖示描述資料集、112 題 SeeAssign，以及第三方處理的 Mind2Web 清理版，論文都沒有說會公開；repo 頁面也沒有說明訓練資料是否釋出（依 GitHub README 的內容，沒有逐檔核對）。ScreenSpot 與 Mind2Web 的完整提示詞、OCR 引擎等細節論文沒有給，要看 repo 程式碼；repo 目前的版本已演進到 V2，與論文 v1 不同。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是「在 LLM 前面接螢幕解析器、把像素觀測改寫成帶 ID 與功能語意的結構化觀測」這條路線的代表作，而且 Microsoft 已把 V2 以 GA 模型上架 Azure AI Foundry，是 T3 感知子領域必讀；但實驗有 ScreenSpot 描述資料洩漏、Mind2Web 表格抄錯與跨測試集比較等問題，具體數字要打折看，方法新意主要在工程組合。",
+  "related": [
+    "2310.11441",
+    "2401.01614",
+    "2401.10935",
+    "2311.07562",
+    "2306.06070",
+    "2307.10088",
+    "2312.08914",
+    "2404.05719",
+    "2404.07972",
+    "2401.13649",
+    "2301.12597",
+    "2210.02663"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

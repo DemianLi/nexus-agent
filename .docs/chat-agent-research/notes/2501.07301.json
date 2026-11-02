@@ -1,0 +1,162 @@
+{
+  "id": "2501.07301",
+  "title": "The Lessons of Developing Process Reward Models in Mathematical Reasoning",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Qwen 團隊整理自己訓練數學推理 PRM 的教訓：用 MC 估計造出來的步驟標籤雜訊很大，只看 Best-of-N 又會高估 PRM；於是改用「MC 估計與 LLM-as-a-judge 對第一個錯誤步的位置要一致」的共識過濾來造資料，評估則同時看 BoN 與 ProcessBench，最後釋出 Qwen2.5-Math-PRM-7B/72B。",
+  "problem": "PRM 要對推理軌跡的每一步打分，但步驟層級標註很貴：人工標註（PRM800K）成本太高，業界常用 Math-Shepherd 式的 MC 估計（從某一步往後續寫多次，看能不能答對）自動造標籤。評估上，多數工作只看 BoN，也就是用 PRM 從 N 個候選裡挑出最終答案對的那個。作者自己照這套慣例訓練時發現兩個問題：MC 造的 PRM 在逐步錯誤定位上遠輸人工標註，BoN 分數卻看不出差別，甚至排名顛倒。這代表領域在造資料和量成效的方法上都可能系統性失準。對任何想拿步驟層級回饋評估或訓練 agent 軌跡的人，這都直接決定標籤能不能信、評估器是不是在評過程。",
+  "core_idea": "（1）MC 估計量的其實是「從這一步出發，未來還能不能到達正確答案」，是 value，不是「這一步本身對不對」的 reward。它受續寫模型能力影響：錯的步驟可能被續寫救回來，對的步驟也可能被續寫寫壞，所以雜訊大。（2）解法是讓 MC 估計與 LLM-as-a-judge 互相把關：兩者對第一個錯誤步的位置判斷一致，才保留那筆資料；標籤用 hard label，門檻設 0。（3）評估時不能只看 response 層級的 BoN。policy 常產出「答案對、過程錯」的回應，而 PRM 若容忍這類回應，BoN 分數就會虛高，PRM 還會退化成只看最後答案的 ORM。所以要加上步驟層級的錯誤定位評估（ProcessBench）。",
+  "method": {
+    "data_expansion_MC": "題目需附標準答案。前導實驗約 50 萬題，對照實驗用 86 萬筆，標籤消融用 300 萬筆，題目來源論文沒有說明。每題用 Qwen2-Math-Instruct 與 Qwen2.5-Math-Instruct（7B、72B 混用）產生 6–8 個回應，以 `\\n\\n` 切成步驟。對每一步用同尺寸的 Qwen2.5-Math-Instruct 從該步往後續寫 8 次，用答對比例估計這一步的品質。hard label 的門檻為 0：8 次續寫中只要有 1 次答對，這一步就算正例；全錯才算負例。消融掃過 1/8 到 7/8，門檻越高越差。soft label 則直接用答對比例（0–1）。第一個負例之後的所有步驟都從訓練資料中刪除。",
+    "llm_as_a_judge": "判官是 Qwen2.5-72B-Instruct，提示詞見附錄 C。要點如下：題目以 [Math Problem] 標出，解答每段包成 <paragraph_i>；要求逐段在 <analysis_i> 裡驗算、重算或反思，判斷該段在邏輯與數學上是否成立；一旦某段有錯，就說明錯誤性質、成因與改正方式，並停止分析後續段落（後面可能依賴這個錯），最後在 <conclusion> 輸出 Correct 或 Incorrect。判官標出的第一個錯誤段就是該筆資料的錯誤位置。",
+    "consensus_filtering": "對同一批題目與回應，分別用 MC 估計與判官標出第一個錯誤步的位置，兩者一致才保留；兩者都判全對也算一致。在 86 萬筆上約保留 40%，在 300 萬筆上保留約 150 萬筆（約 50%）。釋出模型的最終訓練資料量論文沒有給。",
+    "model_and_objective": "以 Qwen2.5-Math-7B-Instruct 或 72B-Instruct 初始化。§2.1 的做法是把語言模型頭換成由兩層線性層組成的純量頭；只在每一步最後一個 token 上計算 loss，hard label 用二元 cross-entropy，soft label 用 MSE。最終模型用 hard label 加 CE。依 HF model card，推論時在每一步後插入 `<extra_0>` 記號，取該位置二分類 softmax 的正類機率當步驟分數（0–1）。注意兩者對輸出頭的描述不一致：論文 §2.1 說是純量頭，釋出權重的推論方式卻是二分類 softmax。要重做時以 model card 為準（兩類 logits，CE 目標）。學習率、epoch、batch size 等超參數論文都沒有給。",
+    "bon_evaluation": "policy 是 Qwen2.5-Math-7B-Instruct（附錄另有 72B），每題抽 8 個回應。PRM 把各步分數相乘當作回應分數（沿用 Lightman et al.），附錄另比較取最小值與取最後一步。指標是 prm@8，以 maj@8 為基準線、pass@8 為上限；ORM 則以 orm@8 比較。附錄 B.4 另做 Best-of-64。",
+    "processbench_evaluation": "給一條已切好步驟的解答，要求找出第一個錯誤步，或判定全對。對 PRM 的做法是由步驟分數推出第一個錯誤步，判定門檻論文沒有給。指標是錯誤樣本上的準確率、正確樣本上的準確率，以及兩者的調和平均 F1，最後對四個子集（GSM8K、MATH、OlympiadBench、Omni-MATH）的 F1 取平均。",
+    "diagnostics": "（a）從 ProcessBench 抽出「答案對、過程錯」的子集，量 PRM 抓出錯誤步的準確率（Table 5）；（b）統計 BoN 候選中「最低步驟分數落在最後一步」的比例，用來診斷 PRM 是否退化成只看結果（Figure 8）；（c）人工標註 policy 答案正確的回應中，有多少其實帶有過程錯誤（Figure 6）。",
+    "prm_guided_search_appendixA": "greedy search 的做法：每一步由 Qwen2.5-7B-Instruct 以 temperature=1.0、top_p=1.0 產生 8 個候選步，交給 PRM 打分，選最高分的一步往下展開；結果與 ORM 的 Best-of-8 比較。"
+  },
+  "assumptions": [
+    "最終答案可以對照標準答案自動驗證：MC 估計與 BoN 評分都靠這一點。",
+    "推理可以用 `\\n\\n` 段落切成離散步驟，而且步驟的對錯可以脫離後續內容、獨立判定。",
+    "第一個錯誤之後的步驟不再重要，可以直接截掉，不用學。",
+    "MC 估計與 LLM 判官的錯誤不高度相關，所以兩者一致時，標籤接近真值。",
+    "ProcessBench 的第一錯誤步標註能代表「過程品質」，可以當步驟層級評估的真值。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "BoN：GSM8K、MATH、Minerva Math、GaoKao 2023 En、OlympiadBench、College Math、MMLU STEM",
+      "BoN（中文，附錄 B.3）：CMATH、CN Middle School 24、GaoKao",
+      "Best-of-64（附錄 B.4）：MATH500、AIME24、AMC23、Minerva Math、GaoKao 2023 En、OlympiadBench",
+      "ProcessBench（GSM8K、MATH、OlympiadBench、Omni-MATH 四個子集）",
+      "ProcessBench 中「答案對、過程錯」的子集（Table 5，四個子集分別有 7／94／161／259 題）"
+    ],
+    "metrics": [
+      "prm@N／orm@N 準確率，maj@N 為基準線，pass@N 為上限",
+      "ProcessBench 的 error-acc、correct-acc 與 F1（兩者的調和平均），以及四子集平均 F1",
+      "「答案對、過程錯」樣本上的錯誤步偵測準確率",
+      "BoN 候選中最低步驟分數落在最後一步的比例",
+      "PRM-guided greedy search@8 準確率（附錄 A）"
+    ],
+    "baselines": [
+      "PRM：Math-Shepherd-PRM-7B、RLHFlow-PRM-Mistral-8B、RLHFlow-PRM-Deepseek-8B、Skywork-PRM-1.5B／7B、EurusPRM-Stage1／Stage2（implicit PRM）",
+      "同底座自訓的對照：Qwen2.5-Math-7B-Math-Shepherd、Qwen2.5-Math-7B-PRM800K",
+      "ORM：Qwen2.5-Math-RM-72B",
+      "LLM-as-a-judge：GPT-4o-0806、o1-mini、Llama-3.3-70B-Instruct、Qwen2.5-Math-72B-Instruct、Qwen2.5-72B-Instruct、QwQ-32B-Preview（附錄 B.5 另有逐點與成對兩種 BoN 判官）",
+      "maj@8／maj@64 多數決"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "比較三種標註法：MC 估計與 LLM-as-a-judge 共用同一批 86 萬筆題目與回應，人工標註則用 PRM800K（264k）。ProcessBench 平均 F1 的排序是：人工標註（資料最少）> LLM-as-a-judge > MC 估計。BoN 的排序大致相反：自建 MC 資料最高；只看這三組時人工最低，但把 Math-Shepherd（440k）也算進來，它比人工還低。",
+      "numbers": "ProcessBench 平均 F1：PRM800K（264k）56.5、LLM-as-a-judge（860k）46.5、MC 自建（860k）40.1、Math-Shepherd（440k）28.9。Best-of-8 平均：MC 自建 65.9、LLM-as-a-judge 65.3、PRM800K 64.9、Math-Shepherd 64.3。",
+      "section": "§3.1.2、Table 3、Table 4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "共識過濾後只剩約 40% 的資料，但在 ProcessBench 上與全量 LLM-as-a-judge 資料相當，並明顯勝過 MC 估計；三者在 BoN 上的差異很小。",
+      "numbers": "保留約 40%（86 萬筆基底）。各模型的確切分數只畫在 Figure 2，內文沒有給數字。",
+      "section": "§3.1.3、Figure 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "MC 標籤的門檻設 0（任一次續寫答對即為正例）最好，門檻從 1/8 提高到 7/8 時，BoN 與 ProcessBench 都單調變差；經共識過濾後，hard label 明顯勝過 soft label，過濾前兩者差不多。",
+      "numbers": "300 萬筆經過濾後剩 150 萬筆；門檻掃 1/8 到 7/8，每格 1/8。確切分數只見於 Figure 3–5。",
+      "section": "§3.1.4、Figure 3–5",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在「答案對、過程錯」的樣本上，除了作者的兩個模型，其他開源 PRM 抓出錯誤步的準確率都低於 50%，也就是會放過表面上答對的回應，這正是 BoN 虛高的來源。",
+      "numbers": "平均準確率：Qwen2.5-Math-PRM-72B 58.1、Qwen2.5-Math-PRM-7B 53.9、Qwen2.5-Math-7B-PRM800K 38.2、Skywork-PRM-7B 27.8、EurusPRM-Stage2 27.4、Math-Shepherd-PRM-7B 13.9、RLHFlow-PRM-Deepseek-8B 9.7、Qwen2.5-Math-7B-Math-Shepherd 3.8。",
+      "section": "§3.2.2、Table 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "多個開源 PRM 在 BoN 中的最低步驟分數有超過四成落在最後一步（通常就是寫答案的那一步）。作者據此認為，以 BoN 為目標最佳化的 PRM 已經從評過程漂移成評結果，實際上更像 ORM。",
+      "numbers": "EurusPRM-Stage1／Stage2、Math-Shepherd-PRM-7B、Skywork-PRM-7B 的比例都超過 40%；Qwen2.5-Math-PRM-7B／72B 明顯較低，確切值只見於 Figure 8。",
+      "section": "§3.2.3、Figure 8",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "作者自己用 MC 資料訓練的 PRM，在 BoN 中取最後一步分數優於連乘或取最小值；用人工或判官資料訓練的 PRM 則相反，連乘或取最小值較好。",
+      "numbers": "Table 13（7B policy）平均：Qwen2.5-Math-7B-Math-Shepherd 取最後一步 65.4、連乘 64.3、最小值 64.9；Qwen2.5-Math-7B-PRM800K 取最後一步 64.7、連乘 64.9、最小值 65.6；Qwen2.5-Math-PRM-7B 取最後一步 66.1、連乘 67.6、最小值 67.1。",
+      "section": "§3.2.4、Figure 9、Table 13",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Best-of-8（7B policy）：Qwen2.5-Math-PRM-7B 在 7 個任務上全部勝過 maj@8，平均多 1.4 分；Qwen2.5-Math-PRM-72B 略勝同尺寸的 ORM。",
+      "numbers": "平均：PRM-7B 67.6、maj@8 66.2、PRM-72B 69.3、Qwen2.5-Math-RM-72B 68.9、pass@8 上限 74.7；其他 7B 級 PRM 在 61.6–64.9 之間。",
+      "section": "§4.3、Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "ProcessBench：Qwen2.5-Math-PRM-7B 勝過所有開源 LLM 判官與 GPT-4o-0806，但仍輸 o1-mini；兩個釋出模型都大幅領先其他 PRM。ORM 也有一定的錯誤步偵測能力。",
+      "numbers": "平均 F1：PRM-72B 78.3、PRM-7B 73.5、QwQ-32B-Preview 71.5、GPT-4o-0806 61.9、o1-mini 87.9；次佳的開源 PRM 是 Qwen2.5-Math-7B-PRM800K 56.5，Skywork-PRM-7B 42.1、Math-Shepherd-PRM-7B 31.5；ORM Qwen2.5-Math-RM-72B 38.9。",
+      "section": "§4.3、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "釋出的 PRM 與 BoN 上限（pass@8）之間仍有明顯差距，還有很大的最佳化空間。",
+    "PRM 在強化學習中的最佳用法尚未探討。",
+    "共識過濾結合了判官與 MC，但如何有效利用既有的高品質人工標註（例如用弱監督逐步擴增）仍待研究。",
+    "每步只做 8 次續寫，估計的變異大、也很粗糙；增加續寫次數可以提高準確度，但成本可能超過收益（§3.1.4）。",
+    "以 72B policy 做 BoN 時，7B PRM 輸給 maj@8，顯示用小 PRM 監督大 policy 有困難（附錄 B.1）。",
+    "PRM-guided greedy search 每步只挑局部最高分，但最高分的一步不一定正確，需要能回溯的 DFS 或帶分數約束的搜尋；也可以考慮把 reward 與 value 結合起來用（附錄 A）。",
+    "步驟層級的 BoN（PRM 或 value model 配合搜尋）能評得更細，但計算成本較高（§3.2.3）。"
+  ],
+  "limitations_observed": [
+    "N 放大之後，BoN 的優勢就消失了：Table 10（Best-of-64，7B policy）中，Qwen2.5-Math-PRM-7B 平均 56.1，低於 maj@64 的 56.3；PRM-72B 平均 59.2，低於 ORM 的 60.5，AIME24 上更是 23.3 對 36.7。附錄 B.4 的內文只說「勝過其他 PRM」，還把這個實驗誤寫成 Best-of-8。",
+    "BoN 的差距都在 0.4–1.4 分之間，卻沒有報告任何 seed 或變異數：Table 6 中 PRM-7B 比 maj@8 多 1.4 分，PRM-72B 比 ORM 多 0.4 分；Table 9（72B policy）中 PRM-72B 70.7 與 ORM 70.8 等於打平。這樣分不出是訊號還是抽樣雜訊，所以 BoN 部分的結論只能當方向性參考。",
+    "評估與訓練格式高度對齊：ProcessBench 由同一個 Qwen 團隊發表（作者多有重疊），附錄 C 的判官提示詞「找到第一個錯誤就停」與 ProcessBench「找第一個錯誤步」的協定同形，而最終資料只留下與判官一致的樣本。ProcessBench 上的大幅領先（73.5／78.3 對 56.5）有一部分可能來自標註格式對齊，而不純粹是過程判斷力。論文也沒有在第三方的步驟層級基準上驗證。",
+    "資料污染沒有交代：只有 PRM800K 說明做過測試集去重，自建的 50 萬／86 萬／300 萬筆題目既沒寫來源，也沒有去重或污染檢查。但 BoN 與 ProcessBench 都包含 GSM8K、MATH 這類常見題庫。",
+    "可重現性缺口：§4.1 沒有寫釋出模型最終用了多少訓練資料；共識過濾的保留率前後不一（§3.1.3 約 40%，§3.1.4 是 300 萬筆剩 150 萬筆，約 50%）；學習率、epoch、batch size 都沒給；最關鍵的消融（過濾前後、hard／soft、門檻掃描）只畫成圖，沒有表格數字。",
+    "共識過濾有選樣偏差：只保留兩種方法意見一致的樣本，被丟掉的 50–60% 很可能正是難例，例如 MC 判錯但判官判對、錯誤位置落在細微之處的樣本。論文沒有分析被丟棄資料的分佈，也沒有檢查這會不會讓 PRM 在難題上失明。另外，過濾本身在 ProcessBench 上只是「與全量判官資料相當」，收益在資料效率；Qwen2.5-Math-PRM 的高分同時混入了資料規模與 72B 底座的效應，沒有拆開。",
+    "「BoN 導致 process→outcome 漂移」只有相關證據，沒有因果證據：Figure 8 只統計最低分出現在最後一步的比例。但 MC 標註本身就會讓最後一步承擔最多的負訊號（答案錯時，從最後一步續寫必然全錯），所以這個現象也可能來自 MC 標籤，而不是「以 BoN 為目標最佳化」。論文也沒有提供 BoN 候選中真實第一錯誤步位置的分佈當對照，無從判斷 40% 算不算異常。",
+    "「MC 訓練的 PRM 取最後一步分數較好」這個主張，被外部的 MC 系 PRM 反駁：Table 13（7B policy）中，Math-Shepherd-PRM-7B 取最後一步 64.1、連乘 64.2；RLHFlow-PRM-Mistral-8B 63.9 對 64.2；RLHFlow-PRM-Deepseek-8B 63.1 對 64.9。Table 14（72B policy）也一樣，RLHFlow-Mistral 取最後一步 66.6、連乘 69.4。同表中的 Skywork-PRM-1.5B（取最後一步 65.0 對連乘 64.2）與 Skywork-PRM-7B（65.6 對 64.8）符合這個模式，但論文沒有說明它們怎麼訓練。所以這個結論只在作者自訓的模型與 Skywork 系上成立，§3.2.4 說「across multiple PRMs」過頭了。",
+    "Table 5 的樣本數太小，平均方式也有問題：GSM8K 子集只有 7 題，每題佔 14.3 分，所以才會出現 PRM-72B（28.6）低於 PRM-7B（42.9）的反常結果；而平均是四個子集直接取算術平均，這 7 題與 Omni-MATH 的 259 題權重相同。",
+    "通用推理模型當成對判官就能追上專用 PRM，論文卻沒有討論：附錄 Table 11 中，QwQ-32B-Preview 以成對淘汰賽做 BoN 得到 67.6，與 Qwen2.5-Math-PRM-7B 的 67.6 相同；Table 12（72B policy）中 QwQ 是 70.3，高於 PRM-7B 的 69.9，與 PRM-72B 的 70.7 相近。",
+    "外推到 agent 軌跡有限：所有實驗都是有標準答案的數學題，步驟以段落切分，沒有工具呼叫、環境觀測或多輪對話。在 agent 情境裡，MC 所需的「可自動驗證的最終答案」與「可重放的續寫環境」往往不存在，步驟邊界也不是段落。因此 MC 對判官的教訓在 agent 軌跡上能否成立，要另外驗證。",
+    "§3.1.2 說 Best-of-8 上「人工標註表現最差」，但同一張 Table 3 裡 Math-Shepherd（440k，MC 估計）的平均 64.3 比 PRM800K 的 64.9 還低。這句只在作者自建的三組之間成立，論文的說法過頭了；而且四組的差距都在 1.6 分以內，本來就不足以支撐排序。",
+    "文字與表格有若干不一致：同一個 PRM800K 模型的 Omni-MATH correct 準確率，在 Table 2／7 是 86.1、Table 4 卻是 86.3；Table 7 把 GPT-4o 寫成「GPT-4-0806」；§3 開頭說有三個面向，實際只列了兩個；v2 HTML 的圖號引用多處錯位。這些不影響主結論，但會增加核對成本。"
+  ],
+  "framework_role": "屬於 T4 的步驟層級評估與 process reward。這篇提供兩樣東西：一是可直接拿來用的步驟層級評分器 Qwen2.5-Math-PRM，能在一條推理軌跡上逐步打分並定位第一個錯誤步，這正是 T4「哪一步出錯」的歸因能力；二是兩條方法論教訓：（1）拿「從這一步往後 rollout 會不會成功」當步驟標籤（MC、value 式標註），會把未來成敗混進當下對錯，最好與 LLM 判官做共識過濾；（2）評估步驟評估器時，不能只看以結果為準的 response 層級選擇（BoN），要搭配第一錯誤步定位這類步驟層級基準，否則評估器會退化成結果判斷器。它也可以當作 E3 的異常偵測器，但論文沒有把偵測結果接到任何修正流程。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "作者團隊（Alibaba Qwen）在 Hugging Face 以官方 model card 釋出 Qwen2.5-Math-PRM-7B 權重，附推論範例（每一步後插入 `<extra_0>` 記號，取正類機率為步驟分數）：https://huggingface.co/Qwen/Qwen2.5-Math-PRM-7B",
+      "vLLM 官方文件（v0.9.2）Supported Models 的 Reward Modeling 表列出 Qwen2ForProcessRewardModel 架構，範例模型為 Qwen/Qwen2.5-Math-PRM-7B：https://docs.vllm.ai/en/v0.9.2/models/supported_models.html",
+      "同一團隊在 Hugging Face 以官方 model card 釋出 Qwen2.5-Math-PRM-72B，卡上介紹 PRM，引用區塊引用本論文 arXiv:2501.07301：https://huggingface.co/Qwen/Qwen2.5-Math-PRM-72B"
+    ],
+    "assessment": "有原廠官方釋出的開源權重，也有主流推論引擎 vLLM 的正式架構支援，屬於生態系層級的可用性；未見任何商用產品或服務在正式環境使用這個 PRM（或共識過濾流程）的公開證據。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "自建的 MC 估計、LLM 判官與共識過濾資料都沒有公開，論文也沒有附訓練程式碼（HF 只有推論範例）；PRM800K 與 Math-Shepherd 兩個對照資料集是公開的；Qwen2.5-Math-PRM-7B／72B 權重以 Qwen license 公開。超參數與最終資料量都沒有給，只能重現推論，重現不了訓練。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "在 T4 的 process reward 子領域，這篇是「步驟標籤怎麼造、步驟評估器怎麼評」的關鍵方法論參照（MC rollout 標籤的系統性偏誤、只看結果的 BoN 會掩蓋過程錯誤），而 agent PRM 普遍沿用 MC rollout 標註，所以直接相關；但實驗只做數學推理，沒有工具呼叫或環境動作，搬到 agent 軌跡上需要自行驗證。",
+  "related": [
+    "2305.20050",
+    "2312.08935",
+    "2412.06559",
+    "2406.06592",
+    "2412.01981",
+    "2502.01456",
+    "2211.14275",
+    "2405.03553",
+    "2408.15240",
+    "2406.14024",
+    "2409.12122",
+    "2110.14168",
+    "2404.05692",
+    "2306.05685"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -14,8 +14,13 @@
  *
  * ## 疊加順序
  *
- * 出貨預設 → `$NEXUS_AGENT_HOME/cordis.patch.yml` → 任意個 `--patch`，照命令列順序。
- * **不從目前目錄讀**——那一份會跟著 clone 一起到來，而它能停用核准。
+ * 出貨預設 → **變更紀錄折出來的那一層**（`$NEXUS_AGENT_HOME/plugin-journal.jsonl`，#1412，見 {@link readJournalLayer}）→ 任意個
+ * `--patch`，照命令列順序。**不從目前目錄讀**——那一份會跟著 clone 一起到來，而它能停用核准。
+ *
+ * **home 的 `cordis.patch.yml` 不再是一層**（#1412，demian 2026-10-13 Q2）：第一次啟動時遷進變更紀錄（{@link prepareJournal}），
+ * 之後出現這個檔只警告、不讀。`--patch` 是部署端在命令列給的，照 dsh 的覆蓋層留著。照 dsh 的層序
+ * （`packages/boot/app-boot/src/profile-context.ts:63-75`：各層 → profile 的 patch → home 的 patch → overlays）：
+ * 後台只寫 profile 那一層，我們把它與 home 那層併成一份稽核過的紀錄。
  *
  * ## 權限檢查只管使用者那兩層
  *
@@ -44,20 +49,80 @@
  * @module
  */
 
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdir, rename } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import type { PluginEntry } from '@nexus/core';
+import type { StructuredTool, StructuredToolInterface } from '@langchain/core/tools';
+import type { PreStepEntry } from '@nexus/agent-loop/provider';
+import {
+  CHANNEL_SERVICE,
+  NEXUS_CORE_VERSION,
+  resolveEntriesPerEntry,
+  SESSION_PERSISTENCE_PLUGIN_NAME,
+} from '@nexus/core';
+import type {
+  CommandDefinition,
+  NexusPlugin,
+  PluginEntry,
+  ProjectionUnit,
+  RegisterOptions,
+  SessionInstaller,
+} from '@nexus/core';
+import { ManifestError, validateManifest } from '@nexus/sdk';
+import type { SystemPromptAssembly } from '@nexus/system-prompt';
+import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
+import { createPreStepMiddleware } from './pre-step-middleware.js';
+import {
+  createSystemPromptMiddleware,
+  systemPromptDefaultsOf,
+} from './system-prompt-middleware.js';
+import { registryFsForThread, registryFsLookup } from './registry-fs-lookup.js';
+import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
+import {
+  createJournalFile,
+  foldJournal,
+  isAcceptedRecord,
+  PLUGIN_JOURNAL_FILE_NAME,
+  PLUGIN_JOURNAL_VERSION,
+  PluginJournalError,
+  readJournal,
+  withFileLock,
+} from './plugin-journal.js';
+import type { JournalActor, JournalBody, JournalRecord } from './plugin-journal.js';
+import { findJsExpr, isFunctionPluginModule, mountDetached } from './plugin-tree.js';
+import type {
+  FunctionPluginModule,
+  HostService,
+  PluginTree,
+  TreeInput,
+  TreeRowInput,
+  TreeSnapshot,
+} from './plugin-tree.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 
 /** 出貨的預設清單，放在 `apps/harness/` 底下。 */
 export const SHIPPED_CONFIG_FILENAME = 'cordis.yml';
 
-/** 使用者那一層的檔名，放在 harness home 底下。 */
+/**
+ * serve 專屬的出貨層（[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 4 步）。疊在 {@link SHIPPED_CONFIG_FILENAME}
+ * 之後、使用者的 patch 之前，**只有 serve 載**（`DefaultConfigOptions.serve`）；CLI 不載，`--dump-config` 也跟著入口走。
+ *
+ * 照 dsh：web-app bundle 疊在 base 上（`packages/bundle/web-app/cordis.patch.yml`，`477b4f4`）。**登記：我們沒有 profile／組合包
+ * （#46 Out of scope），所以退到最接近的一個檔**——出貨層有兩個檔而不是 dsh 的 preset 機制；層與層之間不能互相覆寫或刪列，
+ * 只能追加列（patch 才能改列），所以它不是 profile 層，不會長成 #46 排除的東西。
+ */
+export const SERVE_SHIPPED_CONFIG_FILENAME = 'cordis.serve.yml';
+
+/**
+ * 舊的使用者那一層的檔名，放在 harness home 底下。**#1412 之後它不再是一層**：第一次啟動時遷進變更紀錄
+ * （{@link prepareJournal}），之後有這個檔只警告、不讀。
+ */
 export const USER_PATCH_FILENAME = 'cordis.patch.yml';
 
 /** 這個模組所有的失敗都是這個型別。訊息一律指得出是哪個檔、哪一列。 */
@@ -65,6 +130,21 @@ export class PluginConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PluginConfigError';
+  }
+}
+
+/**
+ * 指到檔案的那一列，它的模組檔別人動得了（或檢查不了）。
+ *
+ * **分成子類別是為了讓 {@link loadPluginConfig} 分得出兩種「那一列載不起來」**
+ * （[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：模組真的載不進來，那一列掉了、其餘照樣起來；
+ * 權限被拒照舊整個起不來——理由跟 patch 檔那條是同一則偏離登記（見 {@link assertPrivateFile}），別人寫得動那個檔，
+ * 就是別人替你決定跑什麼程式碼，不能降成「少掛一列」。{@link resolveEntryModule} 本身兩種都照舊拋。
+ */
+export class PluginModuleAccessError extends PluginConfigError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PluginModuleAccessError';
   }
 }
 
@@ -112,9 +192,14 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
  * 這個問題要擋。
  *
- * **名單上另外七列是只講設定的條目**——六列 `#settings/*` 加上 `@nexus/core/session-persistence`
+ * **名單上其餘的列是只講設定的條目**——`#settings/*` 那幾列，這裡不寫顆數
  * （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。理由跟核准閘門同形但不同源：
  * 它們**不裝任何東西**，所以「關掉」對它們沒有意義。名單擋的正是那個誤會。
+ *
+ * **`@nexus/core/session-persistence` 曾經在名單上，現在不在，這是刻意的**
+ * （[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。它從前只講批次窗口，關掉只會
+ * 回到預設；#444 讓落盤預設開著之後，它改成**代表落盤本身**，照 dsh 的
+ * `session-persistence-jsonl` 那一列：關掉就是兩個入口都只在記憶體裡，一個位元組都不寫。
  *
  * **理由跟名字綁在同一張表上，不共用一段文字。** 從前這裡是一個 `Set`、訊息只有一段，而那段
  * 逐字在講核准閘門——名單長出第二種列之後，關掉 `#settings/thread-title` 的人會拿到一整段關於核准
@@ -147,16 +232,53 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '三個值於是回到 schema 的預設，行為一個位元組都不變，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
-    '@nexus/core/session-persistence',
-    '這一列不裝任何東西，只講會話日誌落盤的批次窗口（毫秒）。關掉它不會讓落盤不再批次' +
-      '——`startupSetting` 把關掉的那一列當成沒有那一列，窗口於是回到 schema 的預設，' +
-      '節奏一毫秒都不變，只會讓這份設定讀起來像關掉了什麼。',
-  ],
-  [
     '#settings/tool-text',
-    '這一列不裝任何東西，只講一段工具結果文字放上線的位元組上限。關掉它不會讓工具結果不再被截' +
+    '這一列不裝任何東西，只講工具結果 meta 與壓縮摘要放上線的位元組上限。關掉它不會讓它們不再被截' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，上限於是回到 schema 的預設，' +
       '送出去的位元組一個都不變，只會讓這份設定讀起來像關掉了什麼。',
+  ],
+  [
+    '#settings/projection-flush',
+    '這一列不裝任何東西，只講插件投影 frame 的合併視窗毫秒數。關掉它不會讓合併停下來' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，視窗於是回到 schema 的預設 100，' +
+      '合併照樣在，只會讓這份設定讀起來像把合併關了。',
+  ],
+  [
+    '#settings/downlink',
+    '這一列不裝任何東西，只講下行串流的心跳間隔與每條線的位元組上限。關掉它不會讓保護消失' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（2000 毫秒、2 MiB），' +
+      '卡住的線照樣連兩拍沒排出去就被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
+  ],
+  [
+    '#settings/session-reference',
+    '這一列不裝任何東西，只講用 `@` 引用別的會話時的四個上限（引用條數、候選筆數、每條來源的位元組、占模型窗口的比例）。關掉它不會讓引用停下來' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，四個值於是回到 schema 的預設，其中比例是 dsh 的 0.2，' +
+      '對中文三條來源逼近摘要門檻，等於靜靜拿掉出廠調低的 0.1，只會讓這份設定讀起來像關掉了引用。要放寬，把數值調大。',
+  ],
+  [
+    '#settings/thread-capacity',
+    '這一列不裝任何東西，只講 serve 行程裡的 thread 數上限與閒置逐出的時間。關掉它不會讓上限或逐出消失' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（500 條、閒置 2 小時撤出），' +
+      '到了上限照樣拒收新 thread、閒置的照樣被撤，只會讓這份設定讀起來像把保險絲拆了。' +
+      '要放寬，把數值調大；要關掉閒置逐出，把 `idleEvictAfterMs` 設成 0。',
+  ],
+  [
+    '#settings/attachment-images',
+    '這一列不裝任何東西，只講同時規範化幾張圖。關掉它不會讓轉碼不再限流' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設 2，' +
+      '超過的照樣排隊，只會讓這份設定讀起來像把限流拆了。要放寬，把數值調大（上限 8）。',
+  ],
+  [
+    '#settings/logger-console',
+    '這一列不裝任何東西，只講伺服器日誌的等級門檻與格式。關掉它不會讓日誌停下來' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設（info、文字格式），' +
+      '日誌照樣印，只會讓這份設定讀起來像把日誌關了。要少印，把 `levels.default` 調高。',
+  ],
+  [
+    '#settings/tool-result-stash',
+    '這一列不裝任何東西，只講過大工具結果暫存的根目錄與保留天數。關掉它不會讓工具結果不再暫存' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設，' +
+      '暫存照樣寫在同一個位置，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
     '#settings/live-model',
@@ -165,10 +287,29 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '五個值於是回到 schema 的預設，連的還是同一個端點、同一顆模型，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
+    '#settings/default-model',
+    '這一列不裝任何東西，只講沒帶 `--live` 時用哪個模型提供者。關掉它不會讓模型沒有來源' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，`provider` 於是回到預設的 `cli-script`（出貨清單上的腳本提供者），' +
+      '要用的提供者換不過去，只會讓這份設定讀起來像關掉了什麼。要換提供者是改它的 `provider`。',
+  ],
+  [
     '#settings/recursion-limit',
     '這一列不裝任何東西，只講 agent 迴圈的 super-step 上限。關掉它確實會讓那個服務消失，' +
       '但組裝點接著就落回內建的 100——**護欄還在**，關掉的只是「這台機器上它是多少」這句話。' +
       '讀起來卻像把迴圈上限解除了，而基座自己那層是一萬。',
+  ],
+  [
+    '#settings/agent-loop',
+    '這一列不裝任何東西，只講每步同時在跑的工具呼叫上限。關掉它確實會讓那個服務消失，' +
+      '但組裝點接著就落回內建的 10——**上限還在**，關掉的只是「這台機器上它是多少」這句話。' +
+      '讀起來卻像把平行上限解除了，而基座自己那層是不限。',
+  ],
+  [
+    '#settings/tool-fs',
+    '這一列不裝任何東西，只講檔案工具的組態：`write`／`edit` 開關與讀檔的四個上限。關掉它確實會讓那個服務消失，' +
+      '但組裝點接著就落回「所有檔案工具全開、上限用內建常數」——原本寫了 `write: false` 的部署，關掉這一列反而把寫檔放回來，' +
+      '讀起來像把檔案工具關了，實際相反。要只讀，寫 `write: false`／`edit: false`。' +
+      '（dsh 關掉 `tool-fs` 是連讀寫檔工具都不註冊，方向相反；基座要求 `read_file` 一定在工具清單，表達不出來，偏離理由 1。）',
   ],
 ]);
 
@@ -380,6 +521,21 @@ export function applyEntryPatches(
   return data;
 }
 
+/** {@link validateEntries} 的選項。 */
+export interface ValidateEntriesOptions {
+  /**
+   * 疊完之後停用、而那個 `disabled: true` 來自變更紀錄的列：列 id → 紀錄檔的標籤（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）。
+   * 關不掉的列落在這裡時，訊息指名是紀錄關的、修法是 `plugin enable <id>`，不叫人去改出貨檔或 patch。見 {@link journalDisabledIds}。
+   */
+  readonly disabledByJournal?: ReadonlyMap<string, string>;
+  /**
+   * 不檢查保護名單（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）。**只給寫入口找列用**：紀錄裡留著舊的 `disable`
+   * （這一列以前關得掉）時，找列這一步也拋的話，連 `plugin enable` 都寫不進去，就沒有任何指令救得回來。寫入之後的整份清單
+   * 照樣經完整的檢查（`plugin-change.ts` 的第 3 步）。
+   */
+  readonly allowDisabledProtected?: boolean;
+}
+
 /**
  * 疊完之後逐列驗形狀。
  *
@@ -391,6 +547,7 @@ export function applyEntryPatches(
 export function validateEntries(
   rows: readonly Record<string, unknown>[],
   label: string,
+  options: ValidateEntriesOptions = {},
 ): ConfigEntry[] {
   const entries = rows.map((row, position) => {
     const result = entrySchema.safeParse(row);
@@ -402,7 +559,9 @@ export function validateEntries(
     }
     // **在這裡問，不是在迴圈後面。** 一份檔案同時寫壞了兩件事的時候，維運者要先看到的是
     // 關於核准的那一句，不是 id 撞號那一句。
-    assertNotProtected(result.data, label, position);
+    if (options.allowDisabledProtected !== true) {
+      assertNotProtected(result.data, label, position, options.disabledByJournal);
+    }
     return result.data;
   });
 
@@ -442,12 +601,28 @@ export function validateEntries(
  * @param entry - 驗過形狀的那一列。
  * @param label - 錯誤訊息裡怎麼稱呼這份清單。
  * @param position - 它在疊完的清單裡的索引（從 0 數）。
+ * @param disabledByJournal - 見 {@link ValidateEntriesOptions.disabledByJournal}。
  * @throws {PluginConfigError} 這一列在 {@link PROTECTED_ENTRY_NAMES} 上而且被關掉了。
  */
-function assertNotProtected(entry: ConfigEntry, label: string, position: number): void {
+function assertNotProtected(
+  entry: ConfigEntry,
+  label: string,
+  position: number,
+  disabledByJournal?: ReadonlyMap<string, string>,
+): void {
   if (entry.disabled !== true) return;
   const reason = PROTECTED_ENTRY_REASONS.get(entry.name);
   if (reason === undefined) return;
+  const journal = entry.id === undefined ? undefined : disabledByJournal?.get(entry.id);
+  if (journal !== undefined && entry.id !== undefined) {
+    // 紀錄裡的 `disable` 只可能是這一列還關得掉的時候寫進去的（之後寫入口會拒），所以是升級撞上的：講出處與那一句修法。
+    throw new PluginConfigError(
+      `變更紀錄 ${journal} 裡有一筆把 ${JSON.stringify(entry.name)}（id ${JSON.stringify(entry.id)}）停用了，` +
+        '而這一列從這一版起關不掉。' +
+        reason +
+        `修法：跑 \`plugin enable ${entry.id}\`（寫進變更紀錄，不必改出貨檔或 patch）。`,
+    );
+  }
   throw new PluginConfigError(
     `${label} 疊完之後第 ${String(position + 1)} 列把 ${JSON.stringify(entry.name)} ` +
       '標成了 `disabled: true`，而這一列關不掉。' +
@@ -470,6 +645,12 @@ export interface PrivateFileRole {
 export const PATCH_FILE_ROLE: PrivateFileRole = {
   subject: 'patch 檔',
   why: '這個檔案改得動 plugin 清單，包括把核准關掉。',
+};
+
+/** 變更紀錄（#1412）：它折出來的 patch 決定載入哪些模組，跟舊的 patch 檔同一條理由。 */
+export const JOURNAL_FILE_ROLE: PrivateFileRole = {
+  subject: '變更紀錄',
+  why: '它折出來的 patch 改得動 plugin 清單，包括 insert 新模組進來。',
 };
 
 /** `insert` 進來、指到檔案的模組（[#542](https://github.com/DemianLi/nexus-agent/issues/542)）。 */
@@ -612,14 +793,19 @@ export function shippedConfigPath(): string {
   return fileURLToPath(new URL(`../${SHIPPED_CONFIG_FILENAME}`, import.meta.url));
 }
 
+/** serve 專屬出貨層的絕對路徑，見 {@link SERVE_SHIPPED_CONFIG_FILENAME}。 */
+export function serveShippedConfigPath(): string {
+  return fileURLToPath(new URL(`../${SERVE_SHIPPED_CONFIG_FILENAME}`, import.meta.url));
+}
+
 /**
  * 把一列條目變成一個可以載入的 `PluginEntry`。
  *
  * **`module.default ?? module` 照 dsh 的 `unwrapExports`**（`vendor/loader/src/index.ts:189`）：
  * 先看 default，沒有才退回 namespace。dsh 的配套入口把 `name`／`apply` 散在頂層，namespace
  * 自己就是 plugin；我們的是巢狀常數，所以實際上走的是 default 那一條
- * （[#493](https://github.com/DemianLi/nexus-agent/pull/493) 讓二十個配套入口都有了 default
- * export）。兩種形狀都接得住，是因為退路本來就是標準的一部分。
+ * （[#493](https://github.com/DemianLi/nexus-agent/pull/493) 讓當時的二十個配套入口都有了 default
+ * export；#974 之後剩八個）。兩種形狀都接得住，是因為退路本來就是標準的一部分。
  *
  * **指到檔案的條目，import 之前先過 {@link assertPrivateFile}**（[#542](https://github.com/DemianLi/nexus-agent/issues/542)）。
  * 判別式是 `file:` 開頭：出貨清單的 `name` 全是裸 specifier，patch 裡只有 `insert` 生得出新 `name`，而
@@ -636,7 +822,16 @@ export function shippedConfigPath(): string {
  * @throws {PluginConfigError} 模組檔別人動得了、模組載不起來，或它匯出的東西不是一顆 plugin。
  */
 export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntry> {
-  if (entry.name.startsWith('file:')) assertPrivateModule(entry);
+  if (entry.name.startsWith('file:')) {
+    assertPrivateModule(entry);
+    // **import 之前**判：不相容的模組主體一行都沒跑（#1137）。掉的只有這一列，訊息指名 `套件@版本`、範圍與執行中的版本。
+    try {
+      assertPluginCompatible(fileURLToPath(entry.name), NEXUS_CORE_VERSION);
+    } catch (error) {
+      if (!(error instanceof PluginCompatibilityError)) throw error;
+      throw new PluginConfigError(`條目 ${describeEntry(entry)} 不相容：${error.message}`);
+    }
+  }
   let module: Record<string, unknown>;
   try {
     module = (await import(entry.name)) as Record<string, unknown>;
@@ -645,6 +840,9 @@ export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntr
       `條目 ${describeEntry(entry)} 載不起來：${String((error as Error).message)}`,
     );
   }
+  // **判別式只有一個**（`plugin-tree.ts` 的 `isFunctionPluginModule`）：有 `manifest` 具名匯出就是樹上的函式插件，
+  // 不是 `NexusPlugin`，不看 default。Include 的允許名單從走這條路的列算出來，兩邊用同一支所以不會漂移。
+  if (isFunctionPluginModule(module)) return bridgeEntry(entry, module);
   const exported = (module['default'] ?? module) as unknown;
   if (!isPluginShaped(exported)) {
     throw new PluginConfigError(
@@ -660,6 +858,215 @@ export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntr
   };
 }
 
+/** 橋接外殼上掛的記號：這顆 `NexusPlugin` 是樹上某顆函式插件在相容層的代表。 */
+const BRIDGE = Symbol.for('nexus.plugin-bridge');
+
+interface BridgeMeta {
+  /** 函式插件的命名空間。 */
+  readonly module: FunctionPluginModule;
+  /** manifest 宣告提供的服務名（`provides[].token`）：宿主據此知道哪一列應該提供 `systemPrompt`（#1477）。 */
+  readonly provides: readonly string[];
+}
+
+type BridgePlugin = NexusPlugin<unknown> & { readonly [BRIDGE]: BridgeMeta };
+
+function bridgeOf(plugin: PluginEntry['plugin']): BridgeMeta | undefined {
+  return (plugin as Partial<BridgePlugin>)[BRIDGE];
+}
+
+/**
+ * 這一列是不是樹上的函式插件在相容層的橋接列（#1416 PR 2）。
+ *
+ * 橋接列跟 `NexusPlugin` 長一樣、佔同一個 id 與位置，`Config` 是 manifest 的 `config`，所以**設定驗證、停用、id 補號、
+ * 快照、會話 header 都照舊走相容層那條路**。它的 `apply` 自己不掛任何東西——真正的 `apply` 在樹上跑了一次；這裡只把
+ * **登記者就是這一列**的工具折進這一條 thread 的 registry，排在它在清單上的位置（工具順序不變）。
+ *
+ * **過渡性質**：卡上寫「拿掉」，這裡留著，是因為清單上其餘的列還是 `NexusPlugin`，它們跟 echo 要排在同一份清單、同一個
+ * 順序裡（PM 決議 Q-A）。最後一顆搬出相容層時橋接連同整個相容層一起拿掉。
+ */
+export function isBridgeEntry(entry: PluginEntry): boolean {
+  return bridgeOf(entry.plugin) !== undefined;
+}
+
+function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEntry {
+  const row = describeEntry(entry);
+  let manifest;
+  try {
+    manifest = validateManifest(module.manifest, entry.id ?? entry.name);
+  } catch (error) {
+    if (!(error instanceof ManifestError)) throw error;
+    throw new PluginConfigError(`條目 ${row} 的 manifest 不合格：${error.message}`);
+  }
+  if (typeof module.apply !== 'function') {
+    throw new PluginConfigError(`條目 ${row} 是函式插件（有 manifest）卻沒有具名匯出 apply`);
+  }
+  const plugin: BridgePlugin = {
+    name: typeof module.name === 'string' && module.name !== '' ? module.name : manifest.id,
+    Config: manifest.config,
+    apply() {
+      throw new Error(
+        `橋接列 ${row} 還沒綁定到樹：只有 loadPluginConfig 交出來的清單上的條目能組裝`,
+      );
+    },
+    [BRIDGE]: { module, provides: manifest.provides.map((provide) => provide.token) },
+  };
+  return {
+    plugin,
+    ...(entry.id === undefined ? {} : { id: entry.id }),
+    ...(entry.disabled === undefined ? {} : { disabled: entry.disabled }),
+    ...(entry.config === undefined ? {} : { config: entry.config }),
+  };
+}
+
+/**
+ * 一列在樹上登記的東西，**每一種接縫一格**（#1421）。加一個新接縫要在這裡多一格，然後在 {@link registerFolded} 折進
+ * 這條 thread 的 registry；`plugin-tree.ts` 的 `RowVerdict.active` 與 `mountDetached` 是兩個產生它的地方。
+ */
+interface FoldedContributions {
+  readonly tools: readonly StructuredToolInterface[];
+  /** 帶了註冊選項的工具與選項（#1458 Q3）：`rootOnly`、`outputSchema`，折進 thread 時原樣交給註冊點。 */
+  readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
+  /** 核准閘門監聽（#1466），照那一列登記的順序；折進 thread 時一條一條交給 `registry.approvals.gate`。 */
+  readonly gates: readonly ToolGateListener[];
+  /** `tools/result` 觀察者（#1469），照那一列登記的順序；折進 thread 時一條一條交給 `registry.events.on('tools/result', …)`。 */
+  readonly resultListeners: readonly ToolResultListener[];
+  /** `agent/pre-step` listener（#1474），照那一列登記的順序；折進 thread 時一位建一顆 middleware（`registry.middleware.use`，不帶位置旗標）。 */
+  readonly preSteps: readonly Pick<PreStepEntry, 'name' | 'listener'>[];
+  /**
+   * 會話參與者（#1491），照那一列登記的順序；折進 thread 時一位一位交給 `registry.sessions.join`。位置就是這一列在清單上的位置
+   * （`registerFolded` 在橋接列的 `apply` 裡被叫，所以落在相容層七位參與者之間的正確位置）。
+   */
+  readonly participants: readonly SessionInstaller[];
+  readonly projections: readonly ProjectionUnit[];
+  /** 技能來源路徑（#1446），照那一列登記的順序。 */
+  readonly skillSources: readonly string[];
+  /** 命令定義（#1456），照那一列登記的順序。 */
+  readonly commands: readonly CommandDefinition[];
+  /** 這一列提供、宿主取到的服務（#1456）。 */
+  readonly services: readonly HostService[];
+  /**
+   * 這一列提供的 `systemPrompt` 服務的快照（#1477）：**資料**，不是服務。活的服務不折進 `registry.services`（`services` 那一格自動
+   * `provide`，相容層的插件拿到行程級的活服務就能呼叫 `section()`，段會跨 thread 越疊越多）。折進 thread 的是一顆
+   * `nexusSystemPrompt` middleware（`{ last: true }`），用快照渲染。`undefined` 代表這一列不是 `systemPrompt` 的提供者。
+   */
+  readonly systemPrompt: SystemPromptAssembly | undefined;
+}
+
+/**
+ * 把樹上登記的東西折進這條 thread 的 registry。
+ *
+ * - 登記進相容層 registry 的工具是 `StructuredTool` 類別；契約上的 `StructuredToolInterface` 在執行期就是它（`tool()` 的
+ *   回傳）。
+ * - 投影單元走 `registry.projections.register`：這一層每個 key 只收一份、重複拒絕照舊（`NamedEntries`）。共用的 key 由
+ *   `plugin-tree.ts` 只交給其中一列，所以這裡不會撞自己。
+ */
+function registerFolded(
+  registry: Parameters<NexusPlugin<unknown>['apply']>[0],
+  contributions: FoldedContributions,
+): void {
+  // 工具連同它登記時帶的選項（`rootOnly`、`outputSchema`，#1458 Q3）一起折：宿主不認得選項的語意，原樣轉交註冊點，由它
+  // 與 fold 照舊處理（子代理那份換成拒絕樁、成功輸出過校驗器）。`outputSchema` 在定義套件裡是「有 `safeParse` 的東西」，
+  // 註冊點要的是 zod 型別——執行期是同一個物件。
+  for (const tool of contributions.tools) {
+    const options = contributions.toolOptions.get(tool);
+    registry.tools.register(
+      tool as StructuredTool,
+      options === undefined ? undefined : (options as RegisterOptions),
+    );
+  }
+  // 核准閘門（#1466）：**走 `registry.approvals.gate`，來源就是這一列的橋接插件**——`approval-gate-order.test.ts` 的層一仍是
+  // `submit-record (submit-record)`。監聽的形狀是結構型別（`@nexus/tools` 不 import core），與 core 的 `PreToolListener` 同形。
+  // 排在工具之後、投影之前：與相容層那一列「`apply` 裡先 `tools.register` 再 `approvals.gate`」同一個順序。
+  for (const listener of contributions.gates) registry.approvals.gate(listener);
+  // `tools/result` 觀察者（#1469）：走 `registry.events.on`，**和工具一起折進同一條 thread**——工具與觀察者共用同一個閉包（present 的
+  // 交付表），兩者必須在同一條 thread 上成對存在，之後列被卸載也不拆開。事件的簽名由核心的事件表定（`Readonly<PipelineExecution>`、
+  // `Readonly<PipelineResult>`）；`@nexus/tools` 的 `ToolResultListener` 是它的窄視圖（只讀 `isError`），結構上相容。
+  for (const listener of contributions.resultListeners) {
+    registry.events.on('tools/result', listener as (...args: never[]) => void);
+  }
+  // `agent/pre-step` listener（#1474）：**一位一顆 middleware**，名字用登記時給的名字、掛在 `beforeAgent`，走 `registry.middleware.use`
+  // 且**不帶 `prepend`／`last`**——它在鏈上的位置就是這一列在出貨清單上的位置，與遷移之前 `useWithBackend` 的落點相同；一份實例走遍
+  // root 與每個子代理（`fold.ts` 的 `pluginMiddleware`）。日誌用**這條 thread 自己的** `registry.sessions`（不走行程級的
+  // `session-lookup`：那條多 thread 時可能 `ambiguous`）。細節見 `pre-step-middleware.ts`。
+  for (const { name, listener } of contributions.preSteps) {
+    registry.middleware.use(createPreStepMiddleware(name, listener, registry.sessions));
+  }
+  // 系統提示詞（#1477）：用快照建一顆 `nexusSystemPrompt` middleware，**帶 `last: true`**——排在每一顆會附加文字的 middleware 之後，後綴才是
+  // 最後一段（前綴是前置，位置不影響）。origin 是這一列（`registry.enter` 設的），所以直接呼叫 `loadPlugins` 的測試也量得到它。
+  // 預設的 model／cwd 走宿主內部的路（`system-prompt-middleware.ts` 的 `WeakMap`），不是 `NexusServices`；組裝點沒交就是這一列起不來
+  // （同今天的 `requires: ['systemPromptVariables']`：不退到猜的值）。代入之後頭尾都是空的就不掛——條件不是「有沒有服務」。
+  if (contributions.systemPrompt !== undefined) {
+    const defaults = systemPromptDefaultsOf(registry);
+    if (defaults === undefined) {
+      throw new Error(
+        'system-prompt 需要組裝點交 model 與 cwd 的預設值（systemPromptDefaultsEntry），這次組裝沒有交：不退到猜的值',
+      );
+    }
+    const middleware = createSystemPromptMiddleware(contributions.systemPrompt, defaults);
+    if (middleware !== undefined) registry.middleware.use(middleware, { last: true });
+  }
+  for (const unit of contributions.projections) registry.projections.register(unit);
+  // 會話參與者（#1491）：**走 `registry.sessions.join`，位置就是這一列在清單上的位置**——日誌上 `approval/policy` → `sandbox/mode` →
+  // `permission/preset` 的相對順序靠它（今天靠各列的 `apply` 依清單順序登記 join，遷移之後仍是同一個順序）。參與者安裝失敗只記 warn、
+  // 已寫的收不回，是相容層參與者本來的語意（偏離 dsh，見 `@nexus/session` 的 `join`）。
+  for (const participant of contributions.participants) registry.sessions.join(participant);
+  // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
+  // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
+  for (const path of contributions.skillSources) registry.skills.addSource(path);
+  // 命令走 `registry.commands.register`（照登記順序；名字格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 是
+  // 第二道，相容層的列也走它——樹上的命令跟相容層的命令撞名要到這裡才掉，#1456 已知的縫）。
+  for (const definition of contributions.commands) registry.commands.register(definition);
+  // 服務走 `registry.services.provide`：同名只收一份，重名當場拋（相容層也提供同名服務時在這裡掉）。
+  for (const { name, value } of contributions.services) registry.services.provide(name, value);
+}
+
+/** 樹上這一列起來了：折進它登記的工具與投影單元。 */
+function bindToTree(entry: PluginEntry, contributions: FoldedContributions): PluginEntry {
+  const plugin: BridgePlugin = {
+    ...(entry.plugin as BridgePlugin),
+    apply(registry) {
+      registerFolded(registry, contributions);
+    },
+  };
+  return { ...entry, plugin };
+}
+
+/** 沒有樹的呼叫端（手搭清單的測試、基準任務）：組裝時單獨掛一次、取工具、立刻卸載。 */
+function bindDetached(entry: PluginEntry, id: string): PluginEntry {
+  const meta = bridgeOf(entry.plugin);
+  if (meta === undefined) return entry;
+  const plugin: BridgePlugin = {
+    ...(entry.plugin as BridgePlugin),
+    async apply(registry) {
+      // 答題管道：從組裝的 registry 讀 `channel` 服務（組裝根提供，#1458 Q1 (c) 的第三個進入點）。讀不到就是「沒有指定」，
+      // 照今天的語意不提供。**每次單獨掛上各讀各的**：同一個行程裡兩份無樹組裝（一份 headless、一份有人在）各有各的值。
+      const channel = registry.services.get(CHANNEL_SERVICE);
+      // 有沒有圍堵（#1491 Q4 (a)、#1774）：同樣從這一次組裝的 host 服務 `workspaceRoot` 有沒有值推（組裝點只在有 `--workspace` 時提供）。
+      // 根本身是逐條 thread 的，不在這裡取：函式插件在呼叫當下經 `fs` 把手讀 `workspaceRoot()`。
+      const contained = registry.services.get('workspaceRoot') !== undefined;
+      registerFolded(
+        registry,
+        await mountDetached({
+          id,
+          module: meta.module,
+          provides: meta.provides,
+          config: entry.config,
+          ...(channel === undefined ? {} : { channel }),
+          ...(contained && { contained }),
+          // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
+          // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
+          sessionLookup: (config) => registry.sessions.forCall(config),
+          // fs 查找（#1466）：**這一次組裝自己的 host-services `fs` 服務**——就是這次組裝 fold 填值的那一格，不是另建的 backend。
+          // 在呼叫當下才讀；無樹的組裝一份註冊表就一個 backend，所以不必依 thread 挑（見 `registry-fs-lookup.ts`）。
+          fsLookup: registryFsLookup(registry),
+          fsForThread: registryFsForThread(registry),
+        }),
+      );
+    },
+  };
+  return { ...entry, plugin };
+}
+
 /**
  * 指到檔案的那一列，它的模組檔只有自己動得了。
  *
@@ -669,7 +1076,7 @@ export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntr
  */
 function assertPrivateModule(entry: ConfigEntry): void {
   const reject = (reason: string): never => {
-    throw new PluginConfigError(`條目 ${describeEntry(entry)}：${reason}`);
+    throw new PluginModuleAccessError(`條目 ${describeEntry(entry)}：${reason}`);
   };
   let path: string;
   try {
@@ -688,12 +1095,32 @@ function assertPrivateModule(entry: ConfigEntry): void {
   }
 }
 
+/** 變更紀錄那一層的來源（#1412）。 */
+export interface JournalSource {
+  /** 紀錄檔的絕對路徑。 */
+  readonly path: string;
+  /**
+   * 舊的 `cordis.patch.yml`。紀錄檔還不在時，它是**待遷移**的來源（照舊疊進清單，行為跟遷移前一樣）；紀錄檔在了，
+   * 它在就只警告、不讀。
+   */
+  readonly legacyPatch?: string;
+  /** 還沒寫進紀錄的內容，接在已有的後面折：寫入前驗證「這一筆寫下去之後清單長什麼樣」用。 */
+  readonly pending?: readonly JournalBody[];
+}
+
 /** 組裝一次要讀的東西。 */
 export interface PluginConfigSources {
   /** 出貨那一份的路徑，省略即 {@link shippedConfigPath}。 */
   readonly shipped?: string;
-  /** harness home 底下那一份的路徑，省略即不讀這一層。 */
+  /**
+   * 追加在出貨那一份**後面**、仍算出貨的檔（serve 專屬層，見 {@link SERVE_SHIPPED_CONFIG_FILENAME}），照給的順序。
+   * 它們的列接在出貨列後面，dump 的來源註解標各自的檔；使用者的 patch 照樣疊在全部出貨列之上。
+   */
+  readonly shippedLayers?: readonly string[];
+  /** 一份 patch 檔當一層（測試與函式庫層級用）；產品路徑不再走它，走 {@link journal}。 */
   readonly userPatch?: string;
+  /** 變更紀錄折出來的那一層，疊在出貨層之後、`--patch` 之前（#1412）。 */
+  readonly journal?: JournalSource;
   /** `--patch` 指定的檔，照命令列順序。 */
   readonly overlays?: readonly string[];
   /** 跳過某條 patch 時往哪裡講，省略即 stderr。 */
@@ -714,10 +1141,84 @@ export interface PluginConfigSources {
  * @returns 疊完並驗過的條目清單。
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
-export function composeEntries(sources: PluginConfigSources = {}): ConfigEntry[] {
-  const { shipped, rows, layers } = readLayers(sources);
+export function composeEntries(
+  sources: PluginConfigSources = {},
+  options: Pick<ValidateEntriesOptions, 'allowDisabledProtected'> = {},
+): ConfigEntry[] {
+  return composeEntriesWithReport(sources, options).entries;
+}
+
+/**
+ * {@link composeEntries}，多交出各層的報告（#1412）：變更紀錄有幾筆、有沒有舊的 patch 檔被略過、`--patch` 蓋到哪幾列。
+ *
+ * @param sources - 各層的來源。
+ * @param options - `allowDisabledProtected` 只給寫入口找列用，見 {@link ValidateEntriesOptions}。
+ * @returns 疊完並驗過的條目清單，與各層的報告。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
+ */
+export function composeEntriesWithReport(
+  sources: PluginConfigSources = {},
+  options: Pick<ValidateEntriesOptions, 'allowDisabledProtected'> = {},
+): {
+  readonly entries: ConfigEntry[];
+  readonly report: LayerReport;
+  /** 疊之前的出貨列與全部層攤平後的 patch：樹上的插件從這裡讀（#1416），不另外再讀一次檔。 */
+  readonly source: ComposeSource;
+  /** 紀錄裡最後一筆被接受的改動的序號（#1426），跟這一份條目是同一次讀的。 */
+  readonly acceptedSeq: number | null;
+} {
+  const { shipped, rows, rowOrigins, layers, report, acceptedSeq } = readLayers(sources);
   const patches = layers.flatMap((layer) => layer.patches);
-  return validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped);
+  return {
+    entries: validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped, {
+      ...options,
+      disabledByJournal: journalDisabledIds(layers),
+    }),
+    report,
+    source: { shipped, rows, rowOrigins, patches },
+    acceptedSeq,
+  };
+}
+
+/** {@link composeEntriesWithReport} 疊之前的原料。 */
+export interface ComposeSource {
+  /** 出貨 `cordis.yml` 的路徑。 */
+  readonly shipped: string;
+  /** 出貨列（出貨檔加 serve 專屬層），照順序。 */
+  readonly rows: readonly Record<string, unknown>[];
+  /** 每一列出貨列來自哪個檔，與 `rows` 同長同序。 */
+  readonly rowOrigins: readonly string[];
+  /** 各層攤平成一串、照套用順序的 patch。 */
+  readonly patches: readonly ConfigPatch[];
+}
+
+/**
+ * 各層的報告（#1412）。**不帶設定值**：快照與日誌都從這裡取材。
+ */
+export interface LayerReport {
+  /** 變更紀錄那一層；沒有給 `journal` 來源（測試、`--dump-default-config`）就沒有。 */
+  readonly journal?: {
+    readonly path: string;
+    /** 紀錄檔在不在。 */
+    readonly exists: boolean;
+    /** 紀錄幾筆（不含還沒寫的）。 */
+    readonly records: number;
+    /** 最後一筆的序號。 */
+    readonly lastSeq: number | null;
+    /** 紀錄檔還不在、舊 patch 檔在：這一次當待遷移讀，下一次啟動才遷。 */
+    readonly pendingMigration: boolean;
+    /** 紀錄檔在了、舊 patch 檔也在：看到了、沒讀（也不會自動再遷）。 */
+    readonly ignoredLegacyPatch?: string;
+  };
+  /**
+   * 未稽核的覆蓋層：`--patch` 給的檔，與它們指到（改或插入）的列 id。這一層不經過變更紀錄，所以寫入口看不到它，
+   * 稽核也看不到——這份報告就是讓它不要靜靜地在。
+   */
+  readonly overlays: readonly {
+    readonly file: string;
+    /** 這個檔的 patch 指到的列 id，依出現順序、不重複。 */
+    readonly rows: readonly string[];
+  }[];
 }
 
 /** 一層 patch 加上它在 dump 的來源註解裡叫什麼。 */
@@ -725,6 +1226,34 @@ export interface ConfigLayer {
   /** 來源標籤，dump 的 `# ==` 註解印的就是這個。 */
   readonly label: string;
   readonly patches: readonly ConfigPatch[];
+  /**
+   * 只有變更紀錄那一層有：紀錄裡**已寫下的**筆（不含這次要寫的 `pending`）折完之後停用的列 id（#1619）。
+   * 分開算是因為 `pending` 跟紀錄折在同一層，而這次新寫的 `disable` 不是「紀錄關的」。
+   */
+  readonly recordedDisabled?: ReadonlySet<string>;
+}
+
+/**
+ * 疊完之後哪幾列的 `disabled: true` 來自變更紀錄（#1619）：列 id → 紀錄那一層的標籤。
+ *
+ * 照疊的順序走一遍，每一列取**最後一條**寫了 `disabled` 的 patch：它在紀錄那一層、而且是紀錄已寫下的筆關的，才算。
+ * 之後的 `--patch` 又寫了 `disabled` 就以它為準。只看帶 `id` 的 patch，`insert` 進來的列不算。
+ *
+ * @param layers - 各層，照疊的順序。
+ * @returns 列 id → 紀錄的標籤。
+ */
+function journalDisabledIds(layers: readonly ConfigLayer[]): Map<string, string> {
+  const last = new Map<string, string | undefined>();
+  for (const layer of layers) {
+    for (const patch of layer.patches) {
+      if (patch.id === undefined || patch.disabled === undefined) continue;
+      const fromJournal = patch.disabled && layer.recordedDisabled?.has(patch.id) === true;
+      last.set(patch.id, fromJournal ? layer.label : undefined);
+    }
+  }
+  const result = new Map<string, string>();
+  for (const [id, label] of last) if (label !== undefined) result.set(id, label);
+  return result;
 }
 
 /**
@@ -742,26 +1271,167 @@ export interface ConfigLayer {
 function readLayers(sources: PluginConfigSources): {
   shipped: string;
   rows: Record<string, unknown>[];
+  /** 每一列出貨列來自哪個檔，與 `rows` 同長同序。 */
+  rowOrigins: string[];
   layers: ConfigLayer[];
+  report: LayerReport;
+  /** 紀錄裡最後一筆被接受的改動的序號；沒有紀錄、或紀錄裡一筆都沒被接受就是 `null`。 */
+  acceptedSeq: number | null;
 } {
   const shipped = sources.shipped ?? shippedConfigPath();
-  let source: string;
-  try {
-    source = readFileSync(shipped, 'utf8');
-  } catch (error) {
-    throw new PluginConfigError(`讀不到出貨的 ${shipped}：${String(error)}`);
+  const rows: Record<string, unknown>[] = [];
+  const rowOrigins: string[] = [];
+  for (const path of [shipped, ...(sources.shippedLayers ?? [])]) {
+    let source: string;
+    try {
+      source = readFileSync(path, 'utf8');
+    } catch (error) {
+      throw new PluginConfigError(`讀不到出貨的 ${path}：${String(error)}`);
+    }
+    for (const row of parseEntryList(source, path)) {
+      rows.push(row);
+      rowOrigins.push(path);
+    }
   }
-  const rows = parseEntryList(source, shipped);
 
   const layers: ConfigLayer[] = [];
   if (sources.userPatch !== undefined) {
     const patches = loadOptionalPatches(sources.userPatch);
     if (patches !== undefined) layers.push({ label: sources.userPatch, patches });
   }
-  for (const overlay of sources.overlays ?? []) {
-    layers.push({ label: overlay, patches: loadOverlayPatches(overlay) });
+  let journalReport: LayerReport['journal'];
+  let acceptedSeq: number | null = null;
+  if (sources.journal !== undefined) {
+    const read = readJournalLayer(sources.journal, sources.warn ?? warnToStderr);
+    if (read.patches.length > 0) {
+      layers.push({
+        label: read.label,
+        patches: read.patches,
+        recordedDisabled: read.recordedDisabled,
+      });
+    }
+    journalReport = read.report;
+    acceptedSeq = read.acceptedSeq;
   }
-  return { shipped, rows, layers };
+  const overlays: { file: string; rows: string[] }[] = [];
+  for (const overlay of sources.overlays ?? []) {
+    const patches = loadOverlayPatches(overlay);
+    layers.push({ label: overlay, patches });
+    overlays.push({ file: overlay, rows: rowsTouchedBy(patches) });
+  }
+  return {
+    shipped,
+    rows,
+    rowOrigins,
+    layers,
+    report: { ...(journalReport !== undefined && { journal: journalReport }), overlays },
+    acceptedSeq,
+  };
+}
+
+/** 一批 patch 指到的列 id：`insert` 進來的用它的 id（沒寫就用 name），其餘用 patch 的 id。 */
+function rowsTouchedBy(patches: readonly ConfigPatch[]): string[] {
+  const ids = new Set<string>();
+  for (const patch of patches) {
+    if (patch.insert !== undefined) {
+      for (const row of patch.insert) {
+        const id = row['id'] ?? row['name'];
+        if (typeof id === 'string') ids.add(id);
+      }
+    } else if (patch.id !== undefined) {
+      ids.add(patch.id);
+    }
+  }
+  return [...ids];
+}
+
+/** 紀錄檔在了、舊 patch 檔又出現：看到、沒讀。訊息只在這一處組，日誌那一側用同一句去重。 */
+export function legacyPatchIgnoredMessage(legacy: string, journal: string): string {
+  return (
+    `看到 ${legacy}，但沒讀：變更紀錄 ${journal} 已經建立，這個檔不會生效，也不會再自動遷移` +
+    `（誰都能放個檔進來，自動遷移會讓「誰改的」全變成「遷移」）。` +
+    '要保留裡面的改動，請用 plugin 寫入口重做，或改放進 --patch。'
+  );
+}
+
+/**
+ * 讀變更紀錄那一層，折成 patch（#1412）。
+ *
+ * | 紀錄檔 | 舊 `cordis.patch.yml` | 這一次 |
+ * |---|---|---|
+ * | 在 | 不在 | 折紀錄 |
+ * | 在 | 在 | 折紀錄；**舊檔不讀**，警告一次（加 3：誰都能放個檔進來，自動再遷等於繞過稽核） |
+ * | 不在 | 在 | **待遷移**：照遷移前的行為把舊檔當這一層讀，下一次啟動（{@link prepareJournal}）才遷 |
+ * | 不在 | 不在 | 沒有這一層 |
+ *
+ * 紀錄檔**讀端不取鎖**：最後一行還沒寫完就略過（`plugin-journal.ts`）。權限檢查與舊 patch 檔同一條
+ * （{@link assertPrivateFile}）：它決定這個行程載入哪些模組，別人寫得動就是別人替你決定跑什麼。
+ */
+function readJournalLayer(
+  source: JournalSource,
+  warn: PluginConfigWarn,
+): {
+  patches: ConfigPatch[];
+  label: string;
+  /** 已寫下的筆（不含 `pending`）折完之後停用的列 id，見 {@link ConfigLayer.recordedDisabled}。 */
+  recordedDisabled: Set<string>;
+  report: NonNullable<LayerReport['journal']>;
+  acceptedSeq: number | null;
+} {
+  let contents;
+  try {
+    contents = readJournal(source.path, {
+      check: (path) => assertPrivateFile(path, JOURNAL_FILE_ROLE),
+    });
+  } catch (error) {
+    if (error instanceof PluginJournalError) throw new PluginConfigError(error.message);
+    throw error;
+  }
+  const legacyExists = source.legacyPatch !== undefined && existsSync(source.legacyPatch);
+  const bodies: JournalBody[] = [...(contents?.records ?? [])];
+  let label = source.path;
+  let pendingMigration = false;
+  let ignoredLegacyPatch: string | undefined;
+  if (contents === undefined && legacyExists && source.legacyPatch !== undefined) {
+    pendingMigration = true;
+    label = source.legacyPatch;
+    for (const patch of loadOptionalPatches(source.legacyPatch) ?? []) {
+      bodies.push({ op: 'patch', patch });
+    }
+  } else if (contents !== undefined && legacyExists && source.legacyPatch !== undefined) {
+    ignoredLegacyPatch = source.legacyPatch;
+    warn(legacyPatchIgnoredMessage(source.legacyPatch, source.path));
+  }
+  const recordedDisabled = new Set<string>();
+  for (const row of foldJournal(bodies)) {
+    if (row['disabled'] === true && typeof row['id'] === 'string') recordedDisabled.add(row['id']);
+  }
+  bodies.push(...(source.pending ?? []));
+  const patches = foldJournal(bodies).map((row, index) => {
+    const result = patchSchema.safeParse(row);
+    if (!result.success) {
+      throw new PluginConfigError(
+        `${label} 折出來的第 ${String(index + 1)} 條 patch 不合法 — ${formatIssues(result.error)}`,
+      );
+    }
+    return result.data;
+  });
+  const records = contents?.records ?? [];
+  return {
+    patches,
+    label,
+    recordedDisabled,
+    // 最後一筆**被接受的**改動的序號（#1426）：`failed`、`rejected` 是只記不折的筆，不算。
+    acceptedSeq: records.findLast((record) => isAcceptedRecord(record))?.seq ?? null,
+    report: {
+      path: source.path,
+      exists: contents !== undefined,
+      records: records.length,
+      lastSeq: records.at(-1)?.seq ?? null,
+      pendingMigration,
+      ...(ignoredLegacyPatch !== undefined && { ignoredLegacyPatch }),
+    },
+  };
 }
 
 /**
@@ -789,7 +1459,7 @@ function readLayers(sources: PluginConfigSources): {
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
 export function renderConfigDump(sources: PluginConfigSources = {}): string {
-  const { shipped, rows, layers } = readLayers(sources);
+  const { shipped, rows, rowOrigins, layers } = readLayers(sources);
   const warn = sources.warn ?? warnToStderr;
 
   // **每份快照都自己 clone 一份 patch**：`applyEntryPatches` 會把 `insert` 的列放進結果，
@@ -801,7 +1471,7 @@ export function renderConfigDump(sources: PluginConfigSources = {}): string {
       (message) => warnings.push(message),
     );
 
-  const origins = rows.map(() => ({ origin: shipped, patchedBy: [] as string[] }));
+  const origins = rowOrigins.map((origin) => ({ origin, patchedBy: [] as string[] }));
   let previous: Record<string, unknown>[] = rows;
   let previousWarnings: string[] = [];
   let composed: Record<string, unknown>[] = rows;
@@ -822,7 +1492,7 @@ export function renderConfigDump(sources: PluginConfigSources = {}): string {
   }
 
   // 疊完先驗過才印：印一棵啟動不起來的樹，讀的人會以為問題在別的地方。
-  validateEntries(composed, shipped);
+  validateEntries(composed, shipped, { disabledByJournal: journalDisabledIds(layers) });
   return groupedDump(composed, origins);
 }
 
@@ -858,17 +1528,313 @@ function groupedDump(
 }
 
 /**
- * 組裝：疊完、驗完，再把每一列的模組 import 進來。
+ * 啟動時掉了的一列（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。讀清單那一次交出 `module`／`config`
+ * 兩步，組裝那一次（`startup-audit.ts` 的 `assemblyDropsOf`）補上 `apply`／`requires` 兩步。
+ */
+export interface StartupDrop {
+  /** 條目 id。沒寫 id 的列（只有 `insert` 進來的會這樣）：設定那一步是補過號的 id，模組那一步是模組 specifier。 */
+  readonly id: string;
+  /** 模組 specifier，即那一列的 `name`。組裝點自己加的外掛不是清單上的列，沒有這個名字，見 `startup-audit.ts`。 */
+  readonly module: string;
+  /**
+   * 掉在哪一步：模組載不進來（或匯出的不是一顆 plugin）、設定驗不過，或組裝時 `apply` 失敗（含撞到基座保留的
+   * 工具名）、`requires` 缺件。
+   */
+  readonly stage: 'module' | 'config' | 'apply' | 'requires';
+  /** 指名那一列的原因，跟今天整個拋的那一句同一句。 */
+  readonly message: string;
+  /**
+   * 帶堆疊與 `cause` 鏈的全文（`formatActivationError`），多行。**只有 Cordis 樹的稽核（`auditTreeEntries`）填**，且只進起不來那則
+   * 訊息（`startupDiagnostic`）；`message` 維持一行，回到網頁的路徑與警告一律只用 `message`（#1560 N0053）。
+   */
+  readonly detail?: string;
+  /**
+   * 清單上那一列：設定那一步的已標成 `disabled: true`，組裝那兩步的是交給組裝的那一顆。模組那一步掉的沒有：它不在
+   * 清單上，見 {@link loadPluginConfig}。
+   */
+  readonly entry?: PluginEntry;
+}
+
+/** 照樣掛上、但要警告的一列：這顆 plugin 沒有設定格式，那一列卻寫了 `config`。 */
+export interface IgnoredConfig {
+  readonly id: string;
+  readonly module: string;
+}
+
+/** {@link loadPluginConfig} 的結果。 */
+export interface LoadedPluginConfig {
+  /**
+   * 可以交給 `loadPlugins` 的清單。**設定驗不過的那一列還在，改成 `disabled: true`**：掉了的列照 dsh 算沒掛，
+   * 標成停用，載入器才會記進 `disabledEntries`，折疊那側與 `startupSetting`／`startupEntryMounted` 都把它當沒掛。
+   */
+  readonly plugins: readonly PluginEntry[];
+  /** 掉了哪幾列：模組那一步的在前、設定那一步的在後，各自依清單順序。哪幾列掉了要整個起不來由呼叫端判（`startup-audit.ts`）。 */
+  readonly dropped: readonly StartupDrop[];
+  /** 照樣掛上、但寫的 `config` 沒有作用的列。 */
+  readonly ignoredConfig: readonly IgnoredConfig[];
+  /**
+   * {@link plugins} 裡每一顆條目的 id 與模組名，以條目物件為鍵。組裝時掉了的列只帶著條目物件回來，警告要寫 id 與
+   * 模組名、必掛名單要比 id，從這裡查（`startup-audit.ts`）。
+   */
+  readonly rows: ReadonlyMap<PluginEntry, { readonly id: string; readonly module: string }>;
+  /**
+   * 疊完、驗過、**還沒 import 任何模組**的那份清單（{@link composeEntries} 的回傳值，原樣）——`--dump-config` 印的就是
+   * 這一份（同一組層、同一次 {@link applyEntryPatches}、同一次 {@link validateEntries}）。會話日誌 header 的插件清單與
+   * 設定雜湊從這裡投影（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)，`session-header-metadata.ts`），
+   * **不另外再疊一次**：兩次讀檔之間 patch 被改的話，header 會描述一棵沒有掛過的樹。
+   *
+   * 啟動時才掉的列（{@link dropped}）在這裡照宣告的樣子留著，同 `--dump-config`。
+   */
+  readonly entries: readonly ConfigEntry[];
+  /**
+   * {@link entries} 每一列解析後的 id，一格對一格（[#1406](https://github.com/DemianLi/nexus-agent/issues/1406)）。
+   * 寫了 `id` 的列就是那個 id；沒寫的（只有 `insert` 進來的會這樣）是載入器補的那個號，跟 {@link rows}、
+   * {@link StartupDrop.id} 同一套。模組載不進來的列載入器沒補過號，用 `id ?? name`，同 {@link StartupDrop.id} 的規則。
+   * 「磁碟上有哪幾列」要從這裡走，不能從 {@link rows} 或 {@link plugins} 走：模組那一步掉了的列、與停用而且模組載
+   * 不起來的列不在那兩份裡。
+   */
+  readonly ids: readonly string[];
+  /**
+   * 各層的報告（#1412）：變更紀錄幾筆、舊 patch 檔有沒有被略過、`--patch` 蓋到哪幾列。**不帶設定值。**
+   * 快照（`plugin-snapshot.ts`）與伺服器日誌從這裡取材。
+   */
+  readonly layers: LayerReport;
+  /**
+   * 變更紀錄裡**最後一筆被接受的**改動的序號（{@link isAcceptedRecord}），沒有就是 `null`（#1426）。跟 {@link entries}
+   * 是同一次讀的。放在這裡而不是 {@link layers}：`layers` 整份進快照檔，這個數字只給「試組掉在 `requires` 的列什麼時候
+   * 重試」用（`thread-plugin-list.ts`），不屬於對外報的那份。
+   */
+  readonly acceptedSeq: number | null;
+}
+
+/**
+ * 組裝：疊完、驗完，再把每一列的模組 import 進來，逐列驗一次設定。
+ *
+ * **一列自己的失敗只讓那一列掉**，照 dsh 的失敗表（`packages/boot/app-boot/README.zh.md:97-99`，`477b4f4`），
+ * 掉了哪幾列交出去，哪幾列掉了要整個失敗由呼叫端拿必掛名單判
+ * （[#751](https://github.com/DemianLi/nexus-agent/issues/751)，`startup-audit.ts`）：
+ *
+ * - **模組載不進來、或匯出的不是一顆 plugin**：那一列不在回傳的清單上——手上沒有那顆 plugin，連名字都取不到，
+ *   所以載入器標不到它，折疊那側會把它讀成「清單上沒有」而不是「關掉」。射程：出貨的列是 `@nexus/*`／`#settings/*`
+ *   的裸 specifier，patch 又改不動既有列的 `name`（{@link applyEntryPatches} 的解構），所以只有 `insert` 進來的列
+ *   或安裝壞掉才走得到這一格。停用的列模組載不起來時不算掉：dsh 對停用的列根本不載入（`Entry.refresh` 開頭就
+ *   `if (this.disabled) return`），失敗表那一列是「忽略」（`README.zh.md:106`）。
+ * - **設定驗不過**：那一列留在清單上、改成 `disabled: true`（見 {@link LoadedPluginConfig.plugins}）。
+ * - **沒有設定格式卻寫了 `config`**：不算掉，照 dsh 原樣交下去（`vendor/cordis/src/fiber.ts:51`），記進
+ *   {@link LoadedPluginConfig.ignoredConfig} 讓呼叫端印警告。
+ *
+ * 整份的錯照舊整個拋，對到 dsh 失敗表第一列（`README.zh.md:96`）：讀檔、疊層、條目形狀、重複 id、關不掉的列被關掉；
+ * 權限被拒也照舊整個拋（{@link PluginModuleAccessError}）。
  *
  * @param sources - 三層的來源。
- * @returns 可以交給 `loadPlugins` 的清單。
- * @throws {PluginConfigError} 任何一步失敗。
+ * @returns 清單、掉了的列、寫了沒作用的 `config` 的列。
+ * @throws {PluginConfigError} 整份的錯，或權限被拒。
  */
-export async function loadPluginConfig(sources: PluginConfigSources = {}): Promise<PluginEntry[]> {
-  const entries = composeEntries(sources);
-  const loaded: PluginEntry[] = [];
-  for (const entry of entries) loaded.push(await resolveEntryModule(entry));
-  return loaded;
+export async function loadPluginConfig(
+  sources: PluginConfigSources = {},
+  options: LoadPluginConfigOptions = {},
+): Promise<LoadedPluginConfig> {
+  const { tree } = options;
+  // 有樹的話，「讀清單 → 推給樹 → 等收斂 → 取工具快照」是一段臨界區（`plugin-tree.ts`）：兩條 thread 同時組裝時，
+  // 各自拿到的工具跟自己讀到的清單相符。
+  if (tree !== undefined) return tree.run(() => loadPluginConfigOnce(sources, tree));
+  return loadPluginConfigOnce(sources, undefined);
+}
+
+/** {@link loadPluginConfig} 的選項。 */
+export interface LoadPluginConfigOptions {
+  /**
+   * 產品路徑的樹（`cordis-root.ts` 的 `root.tree`）：函式插件的工具從這棵長壽的樹來。省略就是**沒有樹的呼叫端**
+   * （手搭清單的測試、基準任務、驗證寫入用的疊檔）：函式插件的列在組裝時單獨掛一次，驗證寫入的疊檔路徑根本不組裝。
+   */
+  readonly tree?: PluginTree;
+}
+
+async function loadPluginConfigOnce(
+  sources: PluginConfigSources,
+  tree: PluginTree | undefined,
+): Promise<LoadedPluginConfig> {
+  const { entries, report, source, acceptedSeq } = composeEntriesWithReport(sources);
+  const loaded: { readonly row: ConfigEntry; readonly entry: PluginEntry }[] = [];
+  const dropped: StartupDrop[] = [];
+  // `entries` 每一列解析後的 id：先放「宣告的 id 或模組名」，載進來的那幾列等載入器補完號再換成補過的那個。
+  const ids = entries.map((row) => row.id ?? row.name);
+  const loadedAt: number[] = [];
+  for (const [position, row] of entries.entries()) {
+    try {
+      loaded.push({ row, entry: await resolveEntryModule(row) });
+      loadedAt.push(position);
+    } catch (error) {
+      if (error instanceof PluginModuleAccessError || !(error instanceof PluginConfigError)) {
+        throw error;
+      }
+      if (row.disabled === true) continue;
+      dropped.push({
+        id: row.id ?? row.name,
+        module: row.name,
+        stage: 'module',
+        message: error.message,
+      });
+    }
+  }
+  // 身分照載入器同一支算（補號、重複 id），訊息裡的 id 才跟組裝時對得上。
+  const resolutions = resolveEntriesPerEntry(loaded.map(({ entry }) => entry));
+  // 樹上的函式插件（橋接列）：先把 id 補完、位置記下，才知道要推什麼給樹。
+  const bridged: TreeRowInput[] = [];
+  loaded.forEach(({ row, entry }, index) => {
+    const resolution = resolutions[index];
+    const position = loadedAt[index];
+    if (resolution === undefined) return;
+    if (position !== undefined) ids[position] = resolution.origin.id;
+    if (!isBridgeEntry(entry)) return;
+    // 樹上的設定會過 Loader 的 `interpolate`，`__jsExpr` 在那裡是 `eval`：進樹之前整份拒絕，寫入前驗證也走這一條。
+    const jsExpr = findJsExpr(entry.config, `${resolution.origin.id} 的 config`);
+    if (jsExpr !== undefined) {
+      throw new PluginConfigError(
+        `${jsExpr} 帶了 \`__jsExpr\`：樹上的設定不接受表達式（Loader 會把它 eval 掉，` +
+          '這裡刻意不接，同 cordis.yml 檔頭對 `disabled` 的偏離標註 #104）。',
+      );
+    }
+    bridged.push({
+      id: resolution.origin.id,
+      module: row.name,
+      // 設定驗不過的列相容層標成停用，樹上也不該去掛它。
+      disabled: resolution.disabled || resolution.configError !== undefined,
+      config: entry.config,
+      provides: bridgeOf(entry.plugin)?.provides ?? [],
+    });
+  });
+  // 這一份清單掛不掛落盤（#1606）：樹在推給 Include 之前據它掛上或拿掉 `session-durability`。判準同 `settings/startup.ts` 的
+  // `startupEntryMounted`（名字對、沒停用），另加設定驗不過的也算沒掛（相容層會把它標成停用）。
+  const durable = loaded.some(
+    ({ entry }, index) =>
+      entry.plugin.name === SESSION_PERSISTENCE_PLUGIN_NAME &&
+      resolutions[index]?.disabled === false &&
+      resolutions[index]?.configError === undefined,
+  );
+  const snapshot: TreeSnapshot | undefined =
+    tree === undefined
+      ? undefined
+      : await tree.sync({ ...treeInputOf(source, ids, bridged), durable });
+  const ignoredConfig: IgnoredConfig[] = [];
+  const rows = new Map<PluginEntry, { readonly id: string; readonly module: string }>();
+  const plugins = loaded.map(({ row, entry }, index): PluginEntry => {
+    const resolution = resolutions[index];
+    if (resolution === undefined) return entry;
+    const { origin, configError } = resolution;
+    rows.set(entry, { id: origin.id, module: row.name });
+    if (resolution.disabled) return entry;
+    if (configError !== undefined) {
+      const off: PluginEntry = { ...entry, disabled: true };
+      rows.set(off, { id: origin.id, module: row.name });
+      dropped.push({
+        id: origin.id,
+        module: row.name,
+        stage: 'config',
+        message: configError.message,
+        entry: off,
+      });
+      return off;
+    }
+    if (entry.plugin.Config === undefined && entry.config !== undefined) {
+      ignoredConfig.push({ id: origin.id, module: row.name });
+    }
+    if (!isBridgeEntry(entry)) return entry;
+    // 橋接列：樹上起來了就折它登記的工具；沒起來就跟設定驗不過同一個待遇——標成停用、記進 `dropped`，
+    // 哪一步掉的取樹上的（FAILED／缺席是 `apply`，缺服務與契約不相容是 `requires`）。
+    if (snapshot === undefined) {
+      const bound = bindDetached(entry, origin.id);
+      rows.set(bound, { id: origin.id, module: row.name });
+      return bound;
+    }
+    const verdict = snapshot.verdict(origin.id);
+    if (verdict.kind === 'dropped') {
+      const off: PluginEntry = { ...entry, disabled: true };
+      rows.set(off, { id: origin.id, module: row.name });
+      dropped.push({
+        id: origin.id,
+        module: row.name,
+        stage: verdict.stage,
+        message: verdict.message,
+        entry: off,
+      });
+      return off;
+    }
+    if (verdict.kind === 'off') {
+      // 樹上這一列自我停用過、宣告沒變（#1424）：不是掉了，是它自己停的，行程裡一直停著。標成停用，不進 `dropped`，
+      // 所以不會在紀錄裡多一筆 `failed`、也不會讓必掛名單把它當成掛不上。
+      const off: PluginEntry = { ...entry, disabled: true };
+      rows.set(off, { id: origin.id, module: row.name });
+      return off;
+    }
+    const bound = bindToTree(entry, {
+      tools: verdict.tools,
+      toolOptions: verdict.toolOptions,
+      gates: verdict.gates,
+      resultListeners: verdict.resultListeners,
+      preSteps: verdict.preSteps,
+      participants: verdict.participants,
+      projections: verdict.projections,
+      skillSources: verdict.skillSources,
+      commands: verdict.commands,
+      services: verdict.services,
+      systemPrompt: verdict.systemPrompt,
+    });
+    rows.set(bound, { id: origin.id, module: row.name });
+    return bound;
+  });
+  return { plugins, dropped, ignoredConfig, rows, entries, ids, layers: report, acceptedSeq };
+}
+
+/**
+ * 這一份清單推給樹的是什麼。
+ *
+ * - **只推走橋接的那幾列的 patch**：指到其他列的 patch 對樹沒有意義，也不該讓它們的內容（例如一顆舊插件的 `config`）
+ *   過樹的 `__jsExpr` 掃描。目標 id 取自出貨檔那一層與 `insert` 進來的橋接列。
+ * - **插進來的列補上相容層解析後的 id**：Include 對沒有 id 的 `insert` 會補隨機 id，樹上那一列對不回相容層的列。
+ *   `applyEntryPatches` 把 `insert` 的列接在尾巴、照 patch 順序，所以第 k 個插進來的列就是 `entries[出貨列數 + k]`。
+ * - **出貨列沒寫 `config` 的補 `{}`**：Loader 對沒有 `config` 的列交 `undefined`，`strictObject` 收不下；相容層對沒寫的
+ *   視同 `{}`（`resolveEntries`），樹這一側也要一致。
+ * - **相容層標成停用的列，結尾補一條 `disabled: true`**：設定驗不過的列不該在樹上掛著。
+ */
+function treeInputOf(
+  source: ComposeSource,
+  ids: readonly string[],
+  bridged: readonly TreeRowInput[],
+): TreeInput {
+  const modules = new Set(bridged.map((row) => row.module));
+  const treeIds = new Set<string>();
+  const patches: Record<string, unknown>[] = [];
+  source.rows.forEach((row, index) => {
+    if (source.rowOrigins[index] !== source.shipped) return;
+    const id = row['id'];
+    const name = row['name'];
+    if (typeof id !== 'string' || typeof name !== 'string' || !modules.has(name)) return;
+    treeIds.add(id);
+    if (row['config'] === undefined) patches.push({ id, config: {} });
+  });
+  let inserted = 0;
+  for (const patch of source.patches) {
+    if (patch.insert !== undefined) {
+      const kept: Record<string, unknown>[] = [];
+      for (const row of patch.insert) {
+        const position = source.rows.length + inserted;
+        inserted += 1;
+        const name = row['name'];
+        const id = ids[position];
+        if (typeof name !== 'string' || !modules.has(name) || id === undefined) continue;
+        treeIds.add(id);
+        kept.push({ ...structuredClone(row), id, config: row['config'] ?? {} });
+      }
+      if (kept.length > 0) patches.push({ insert: kept });
+      continue;
+    }
+    if (patch.id !== undefined && treeIds.has(patch.id)) patches.push(structuredClone(patch));
+  }
+  for (const row of bridged) {
+    if (row.disabled && treeIds.has(row.id)) patches.push({ id: row.id, disabled: true });
+  }
+  return { shipped: source.shipped, patches, rows: bridged };
 }
 
 /**
@@ -880,27 +1846,35 @@ export async function loadPluginConfig(sources: PluginConfigSources = {}): Promi
  *
  * @param options - `env` 決定 harness home 落在哪（省略即 `process.env`）；`patches` 是
  *   `--patch` 給的那幾個檔，照命令列順序；`warn` 省略即 stderr。
- * @returns 可以交給 `createNexusAgent` 的清單。
- * @throws {PluginConfigError} 任何一層讀不了、形狀不合、別人動得了，或模組載不起來。
+ * @returns 同 {@link loadPluginConfig}：清單、掉了的列、寫了沒作用的 `config` 的列。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合、別人動得了。
  */
 export async function loadDefaultPlugins(
   options: DefaultConfigOptions = {},
-): Promise<PluginEntry[]> {
-  return loadPluginConfig(defaultSources(options));
+  load: LoadPluginConfigOptions = {},
+): Promise<LoadedPluginConfig> {
+  return loadPluginConfig(defaultSources(options), load);
 }
 
-/** {@link loadDefaultPlugins} 與 {@link renderDefaultConfigDump} 共用的那幾格。 */
+/** {@link loadDefaultPlugins} 與 {@link renderLayeredConfigDump} 共用的那幾格。 */
 export interface DefaultConfigOptions {
+  /**
+   * 這是 serve 入口：多疊一層 serve 專屬的出貨清單（{@link SERVE_SHIPPED_CONFIG_FILENAME}）。省略／`false` 是 CLI。
+   * **啟動與 `--dump-config`／`--dump-config-schema`／`--dump-default-config` 傳同一個值**，否則 dump 印的不是啟動會掛的樹。
+   */
+  readonly serve?: boolean;
   /** 決定 harness home 落在哪，省略即 `process.env`。 */
   readonly env?: NodeJS.ProcessEnv;
   /** `--patch` 給的那幾個檔，照命令列順序。 */
   readonly patches?: readonly string[];
   /** 跳過某條 patch 時往哪裡講，省略即 stderr。 */
   readonly warn?: PluginConfigWarn;
+  /** 還沒寫進變更紀錄的內容（寫入前驗證用），見 {@link JournalSource.pending}。 */
+  readonly pending?: readonly JournalBody[];
 }
 
 /**
- * 產品路徑上那三層的來源。
+ * 產品路徑上那幾層的來源。
  *
  * **`--dump-config` 與啟動共用這一個**，所以 dump 印的層與啟動疊的層是同一組。各自算一次
  * 的下場是有一天 dump 說「你的 home patch 沒生效」而它其實生效了——那比沒有 dump 更糟。
@@ -908,13 +1882,30 @@ export interface DefaultConfigOptions {
  * @param options - env、`--patch`、警告出口。
  * @returns 三層的來源。
  */
-function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
+export function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
   const home = resolveHarnessHome(options.env ?? process.env);
   return {
-    userPatch: join(home, USER_PATCH_FILENAME),
+    ...(options.serve === true && { shippedLayers: [serveShippedConfigPath()] }),
+    journal: {
+      path: join(home, PLUGIN_JOURNAL_FILE_NAME),
+      legacyPatch: join(home, USER_PATCH_FILENAME),
+      ...(options.pending !== undefined && { pending: options.pending }),
+    },
     ...(options.patches !== undefined && { overlays: options.patches }),
     ...(options.warn !== undefined && { warn: options.warn }),
   };
+}
+
+/**
+ * 產品路徑上那三層疊完的條目，**還沒 import 任何模組**——`--dump-config-schema`（#741）收集規格表的起點。
+ * 疊的層與 {@link renderLayeredConfigDump}、啟動是同一組（共用 `defaultSources`）。
+ *
+ * @param options - 與 {@link loadDefaultPlugins} 同一組。
+ * @returns 疊完並驗過形狀的條目清單。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
+ */
+export function composeDefaultEntries(options: DefaultConfigOptions = {}): ConfigEntry[] {
+  return composeEntries(defaultSources(options));
 }
 
 /**
@@ -924,8 +1915,177 @@ function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
  * @returns 一份帶來源註解的 YAML 文件。
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
-export function renderDefaultConfigDump(options: DefaultConfigOptions = {}): string {
+export function renderLayeredConfigDump(options: DefaultConfigOptions = {}): string {
   return renderConfigDump(defaultSources(options));
+}
+
+/**
+ * 只印出貨那一層的設定（[#740](https://github.com/DemianLi/nexus-agent/issues/740)）——`--dump-default-config`。
+ *
+ * 照 dsh 的 `--dump-default-config`（`apps/cli/src/dump-config.ts:47`）：**真的不讀**home 覆寫檔與 `--patch`，不是讀了再丟。
+ * 它就是設計來救「`cordis.patch.yml` 壞掉」的：壞掉的檔（權限錯、YAML 寫壞）不會被解析，所以 {@link renderLayeredConfigDump}
+ * 印不出來的時候，這一份還印得出來，拿來跟壞掉的那份對照。
+ *
+ * **刻意不經過 `defaultSources`**：那條路一定帶 `userPatch`，也要解析 home 路徑；這裡直接給一份空來源，
+ * 讀的只有 `shippedConfigPath()`。我們沒有 profile 也沒有組合包（#46 Out of scope），dsh 的「出貨」在這裡就是一個檔。
+ *
+ * @param options - `serve`：serve 入口，出貨層多一個 serve 專屬檔（同 {@link DefaultConfigOptions.serve}）。
+ * @returns 一份帶來源註解的 YAML 文件。
+ * @throws {PluginConfigError} 出貨檔讀不了、形狀不合，或有壞掉的列。
+ */
+export function renderShippedConfigDump(options: { readonly serve?: boolean } = {}): string {
+  return renderConfigDump(
+    options.serve === true ? { shippedLayers: [serveShippedConfigPath()] } : {},
+  );
+}
+
+/** {@link prepareJournal} 的選項。 */
+export interface PrepareJournalOptions {
+  /** 決定 harness home 落在哪，省略即 `process.env`。 */
+  readonly env?: NodeJS.ProcessEnv;
+  /** 做不成時往哪裡講，省略即 stderr。 */
+  readonly warn?: PluginConfigWarn;
+  /** 算遷移那幾筆的 `at`，測試給固定的。 */
+  readonly now?: () => Date;
+  /**
+   * 測試用：紀錄檔已經 rename 進位、舊 patch 檔還沒改名的那一刻。在這裡拋，等於「兩步之間當掉」。
+   */
+  readonly afterJournalWritten?: () => void | Promise<void>;
+  /**
+   * 紀錄檔和舊 patch 檔都不在的時候要不要建一個空的，省略即 `true`。
+   *
+   * serve 與寫入口要建（那是「第一次啟動」的界線，見 {@link prepareJournal}）；**一次性的 CLI 傳 `false`**：
+   * 落盤關掉的那一次、預設根被拒絕的那一次，承諾的是「home 連目錄都不建」（`session-log-durability.test.ts`、
+   * `invariant-log.test.ts`），建一個空紀錄檔就破了它。沒有舊檔要遷的時候 CLI 什麼都不寫，讀端本來就把「沒有紀錄檔」
+   * 當成沒有這一層（驗收 H）。
+   */
+  readonly createWhenAbsent?: boolean;
+}
+
+/** {@link prepareJournal} 做了什麼。 */
+export type PrepareJournalResult =
+  | { readonly status: 'present'; readonly path: string }
+  | { readonly status: 'absent'; readonly path: string }
+  | { readonly status: 'created'; readonly path: string }
+  | {
+      readonly status: 'migrated';
+      readonly path: string;
+      /** 遷了幾條 patch。 */
+      readonly migrated: number;
+      /** 舊檔改名成了什麼（0600）。 */
+      readonly renamedTo: string;
+    }
+  | { readonly status: 'unavailable'; readonly path: string; readonly reason: string };
+
+/**
+ * 啟動步驟：確保變更紀錄存在，必要時把舊的 `cordis.patch.yml` 遷進去（#1412 Q2）。
+ *
+ * **serve 與 CLI 啟動、寫入口寫之前都先呼叫它**；`--dump-config` 不呼叫（它只讀，遷移還沒發生時照舊把舊檔當待遷移那一層
+ * 讀，見 {@link readJournalLayer}）。
+ *
+ * - **界線是紀錄檔存在**：第一次啟動時沒有紀錄檔，就建一個（沒有舊檔就建空的）。之後只要紀錄檔在，舊檔再出現一律
+ *   警告、不讀、不遷（加 3）。沒有這個界線，「從來沒有 patch 的新 home」之後被人丟進一個檔就會被當成第一次遷移吃進去。
+ * - **整件事在 `plugin-journal.jsonl.lock` 裡做，拿到鎖後再查一次紀錄檔在不在**：serve 與 CLI 同時第一次啟動，只有一個
+ *   遷，另一個看到的是 `present`。
+ * - **順序**：帶遷移內容的紀錄先寫暫存檔、fsync、rename 成正式檔，**最後**才把舊檔改名成 `cordis.patch.yml.migrated-<時間>`
+ *   （並設 0600：舊檔裡同樣有秘密，原本的權限不一定是 0600）。兩步之間當掉：下次啟動紀錄檔已在、舊檔還在，走
+ *   「警告、不讀」，既不重複遷也不漏——改動已經在紀錄裡。
+ * - **每條 patch 一筆，actor 記「遷移」**（來源路徑與全文的 SHA-256）。`insert` 的模組路徑在解析時已經換成絕對的
+ *   file URL（{@link anchorInsertedNames}），不然檔案改名之後相對路徑就沒有基準了（加 1）。
+ *
+ * **舊檔壞了（YAML、形狀、權限）照舊整個拋**，跟遷移前啟動讀它的下場一樣；建不出紀錄檔（唯讀的 home、等不到鎖）不拋，
+ * 回 `unavailable`：紀錄檔還不在，讀端照樣把舊檔當待遷移那一層讀，不漏任何改動。紀錄檔已經 rename 進位、只有目錄
+ * fsync 失敗時（#1527）同樣回 `unavailable`，但警告說的是「已建好、沒能確認落盤、這一次照紀錄讀」：讀端每次讀時才看
+ * 紀錄檔在不在，回傳值不影響讀哪一份。
+ *
+ * @param options - env、警告出口、測試鉤子。
+ * @returns 做了什麼。
+ * @throws {PluginConfigError} 舊的 patch 檔讀不了、形狀不合，或別人動得了。
+ */
+export async function prepareJournal(
+  options: PrepareJournalOptions = {},
+): Promise<PrepareJournalResult> {
+  const home = resolveHarnessHome(options.env ?? process.env);
+  const path = join(home, PLUGIN_JOURNAL_FILE_NAME);
+  const legacy = join(home, USER_PATCH_FILENAME);
+  if (existsSync(path)) return { status: 'present', path };
+  if (options.createWhenAbsent === false && !existsSync(legacy)) return { status: 'absent', path };
+  const warn = options.warn ?? warnToStderr;
+  const now = options.now ?? (() => new Date());
+  let journalWritten = false;
+  try {
+    await mkdir(home, { recursive: true, mode: 0o700 });
+    return await withFileLock(path, async (): Promise<PrepareJournalResult> => {
+      if (existsSync(path)) return { status: 'present', path };
+      if (!existsSync(legacy)) {
+        if (options.createWhenAbsent === false) return { status: 'absent', path };
+        await createJournalFile(path, []);
+        return { status: 'created', path };
+      }
+      const text = readFileSync(legacy, 'utf8');
+      assertPrivateFile(legacy);
+      const patches = parsePatchList(text, legacy);
+      const actor: JournalActor = {
+        kind: 'migration',
+        source: resolve(legacy),
+        sha256: createHash('sha256').update(text).digest('hex'),
+      };
+      const at = now().toISOString();
+      const records: JournalRecord[] = patches.map((patch, index) => ({
+        v: PLUGIN_JOURNAL_VERSION,
+        seq: index + 1,
+        at,
+        actor,
+        op: 'patch',
+        patch: structuredClone(patch) as Record<string, unknown>,
+      }));
+      await createJournalFile(path, records);
+      journalWritten = true;
+      await options.afterJournalWritten?.();
+      const stamp = now().toISOString().replace(/[:.]/gu, '-');
+      const renamedTo = `${legacy}.migrated-${stamp}`;
+      chmodSync(legacy, 0o600);
+      await rename(legacy, renamedTo);
+      return { status: 'migrated', path, migrated: records.length, renamedTo };
+    });
+  } catch (error) {
+    if (error instanceof PluginConfigError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    if (journalWritten) {
+      warn(
+        `${legacy} 的內容已經遷進 ${path}，但舊檔沒能改名（${reason}）。它會被當成「遷移後又出現的檔」警告、不讀；` +
+          '確認紀錄之後可以自己把它改名或刪掉。',
+      );
+    } else if (existsSync(path)) {
+      // 紀錄檔已經 rename 進位、只是目錄 fsync 失敗（`createJournalFile` 不吞這個錯，#1527）。讀端每次讀時才看紀錄檔
+      // 在不在（`readJournalLayer`），所以這一次照紀錄讀，不是照舊讀舊檔；建空檔那條沒有舊檔，不提它。
+      warn(
+        `變更紀錄 ${path} 已經建好，但沒能確認它落盤（${reason}）；這一次照紀錄讀。` +
+          (existsSync(legacy)
+            ? `${legacy} 的內容已經在紀錄裡，但舊檔沒有改名：下一次啟動會當成「遷移後又出現的檔」警告、不讀。`
+            : ''),
+      );
+    } else {
+      warn(
+        `建不出變更紀錄 ${path}（${reason}）。紀錄檔還不在，${legacy} 照舊當這一層讀，改動不會漏；下一次啟動再試。`,
+      );
+    }
+    return { status: 'unavailable', path, reason };
+  }
+}
+
+/**
+ * {@link prepareJournal} 的結果寫成一行給人看的話；沒什麼好講的（紀錄在、或剛建空檔）回 `undefined`。
+ *
+ * @param result - {@link prepareJournal} 的回傳。
+ * @returns 一行，或 `undefined`。
+ */
+export function describePrepareJournal(result: PrepareJournalResult): string | undefined {
+  if (result.status !== 'migrated') return undefined;
+  return (
+    `[清單] 已把舊的 cordis.patch.yml 的 ${String(result.migrated)} 條 patch 遷進變更紀錄 ${result.path}；` +
+    `原檔改名為 ${result.renamedTo}（不再讀取，0600）。之後改插件請用 plugin 寫入口。`
+  );
 }
 
 function isPluginShaped(value: unknown): value is PluginEntry['plugin'] {

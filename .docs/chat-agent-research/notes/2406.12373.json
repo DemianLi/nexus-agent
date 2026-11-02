@@ -1,0 +1,204 @@
+{
+  "id": "2406.12373",
+  "title": "WebCanvas: Benchmarking Web Agents in Online Environments",
+  "topic": "T8",
+  "subarea": "部分分數與過程度量",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在真實線上網站上，用人工標註的「key node」（任何成功路徑都必經的中間狀態）逐點給分，把 web agent 的任務完成度拆成步分數（Completion Rate）、全部 key node 達成才算的任務成功率、效率分數與完成訊號對齊分數，並釋出 542 題的 Mind2Web-Live 與維護流程。",
+  "problem": "web agent 評估有兩種主流做法，放到真實線上網站都會出問題。第一種是對照參考動作序列逐步比對（Mind2Web 的 Step SR），會把另一條同樣有效的路徑判錯。第二種只看終態（WebArena、GAIA），但它需要可完全重現的獨立環境；線上網站的內容與 UI 會變，終態不一定可比。此外，靜態快照資料集會過期：Mind2Web 一年後有 96／780（12%）題在線上已完全失效；離線表現好的模型，線上也不一定好。缺少一個既能容忍多條路徑、又能給出過程中部分分數、還能隨網站變動維護的線上評估方法。",
+  "core_idea": "把評估對象從「動作」換成「必經狀態」。每題標出若干 key node，也就是不論走哪條路都一定要經過的中間狀態，例如進入某個頁面、套用某個篩選、填好某個表單欄位。每個 key node 配一個評估函式，由「評估目標」（URL、元素路徑、元素值）乘上「比對函式」（精確、包含、語意）組成。agent 執行時收集它實際到過的 URL、互動過的元素與輸入值，每命中一個 key node 得一步分；全部命中才算任務成功。能用 URL 表達的 key node 一律用 URL，讓評估不受版面改動影響。資料集另外靠定期重播錄製的流程，偵測 key node 是否失效並交人工修正。",
+  "method": {
+    "任務形式化": "環境為 (S, A, T, O)，T 視為決定性轉移。agent 在時間 t 拿到任務指令 i、觀測 o_t 與動作歷史 a_1^{t-1}，輸出動作 a_t。完成度不看動作序列，而是用 key node 與評估函式判定。",
+    "key node 定義規則（附錄 C）": [
+      "對頁面上的每個輸入或點擊操作，先問它是不是完成任務的必要條件；不是就不標。",
+      "是必要條件的話，再問它的結果能不能從 URL 變化看出來。能的話，把操作後的狀態當 key node，評估函式選 URL exact／include／semantic match。",
+      "不能從 URL 看出來時，才退回以元素為準：輸入操作用 element path exact match 或 element value exact／include／semantic match；點擊操作每一次都要標成 key node，用 element path exact match 或 element value match。",
+      "原則是優先用 URL 狀態當識別，因為 selector 路徑會隨 UI 改版失效。"
+    ],
+    "評估函式（Table 1）": {
+      "組成": "評估目標 × 比對函式，每個 key node 綁一個。",
+      "可用組合": "URL：Exact／Include／Semantic 三種都可；Element Path：只能 Exact；Element Value：Exact／Include／Semantic 三種都可。",
+      "Exact Match": "精確比對，例如 URL 參數或表單欄位值。",
+      "Include Match": "輸出是否包含參考字串，適合關鍵字檢測。例：Yelp 任務的 URL include match，參數 attrs、值 WiFi.free（Table 8）。",
+      "Semantic Match": "用 LLM 判斷。提示詞給一條判斷規則與一個待判值：完全相同回 1、無關回 0、相關但不完全相同回兩位小數（範例：規則為「是不是紅色衣服」時，bright red clothing 給 0.85、green clothes 給 0.5）。文中沒寫判官用哪個模型，也沒寫分數多少以上算命中。",
+      "Element Path 範例": "Steam 任務用 XPath //*[@id=\"dlc_purchase_action\"]/div[2]/a/span 做 exact match。"
+    },
+    "分數定義（§2.3、附錄 D）": {
+      "Step Score": "agent 到達某個 key node，且該 key node 的評估函式判定成立，就得 1 分。文中沒有說明是否要求 key node 依序達成。",
+      "Completion Rate": "以 step score 的比例呈現，也就是得到的 key node 數除以該題 key node 總數。文中沒有寫明是逐題算比例再平均，還是全體 key node 加總。",
+      "Task Finish Score／Task Success Rate": "該題全部 key node 都達成才得分（二元），報成功率。",
+      "Task SR(k)": "只出現在 Table 4 的離線／線上對照：容許 k 個 key node（或步）出錯仍算成功，報 k=0 與 k=1。",
+      "Efficiency Score": "ES = L / P，L 是軌跡長度（步數），P 是任務結束時拿到的總步分數，即平均每得一分花幾步，越低越好。P=0 時如何處理沒有說明。",
+      "Human Alignment Score（HAS）": "衡量 agent 發出「完成」訊號的時機是否與人類標註一致：任務完成且有發完成訊號得 1；任務完成但沒發訊號（延遲）得 0.95；任務未完成卻發了完成訊號得 P/P_max；任務未完成、因步數上限被強制終止得 0.8 × P/P_max。只用在有 reward 模組的實驗（Table 6）。"
+    },
+    "資料集 Mind2Web-Live（§3）": {
+      "來源": "從 Mind2Web 訓練集隨機抽 601 題，加上測試集 cross-task 子集全部 179 題，共 780 題；先排除含具體日期、時間等時效性描述的任務。",
+      "篩選": "96 題因網站變動已失效而移除，142 題因任務定義模糊、難以定出 key node 而捨棄，另外改寫 51 題的指令。",
+      "規模": "542 題（訓練 438、測試 104），2439 個 key node／評估函式，4550 個標註步驟，平均每題 8.39 步、4.5 個評估函式。",
+      "標註流程（附錄 A）": "用 iMean Builder 瀏覽器外掛錄製人類操作（操作類型、參數、selector 路徑、元素內容、座標、每步截圖），之後標 key node 與評估函式。每題由 1 人獨立標註、另外 2 人各自複核；標註者是幾位作者與 5 位資工系大學部學生，按件計酬並有品質獎金。沒有報告標註一致性。"
+    },
+    "資料維護（§3.2、附錄 H）": "錄製時存下每一步的動作類型、selector 路徑、元素值與座標，定期用 iMean replaySDK 以元素比對策略重播整條流程，自動回報流程或評估函式失效並產生測試報告，再由人工確認修正。三個月內有 7 題失效、11 題錄製軌跡改變，修正每題所需人力約為初次標註的一半。",
+    "agent 框架（§4、附錄 E、附錄 L）": {
+      "Planning": "ReAct 式，輸入歷史 h_1^t、觀測 o_t、指令 i，輸出 thought z_t 與 action a_t。提示詞要求輸出 JSON：thought、action、action_input、element_id、description；第一步或沒有 accessibility tree 時只能用 google_search 或 goto；不可與上一步動作相同。",
+      "動作空間（Table 10）": "Goto、Google Search、Click、Hover、Fill Form、Fill Search、Select、Switch Tab、Go Back。",
+      "Observation": "過濾過的 accessibility tree，只留可互動元素（依 tag、可見性、可用性、文字或圖片內容篩選），每個元素標上 ID、tag、內容，例如 [1] input 'search'；多模態設定另加 1080×720 截圖。非互動元素的資訊會往父元素遞迴映射，找不到可互動元素或超過遞迴上限就丟棄。",
+      "Memory": "h_1^t = (z_1^t, a_1^t, r_1^t)，保存 thought、action 與 reward 訊號的歷史。",
+      "Reward（自我反思）": "輸入歷史、指令與動作後的觀測，輸出 JSON：status（doing／finished／loop；最後兩步動作相同就判 loop）、score（只能從 1、3、7、9、10 選：1＝卡在迴圈，3＝前面軌跡沒幫助、要換方向或重來，7＝有幫助，9＝非常關鍵的中間步，10＝任務完美完成）、reason、description。這個訊號寫回 memory 供下一步 planning 使用。",
+      "Golden reference（§6.3）": "從標註資料取出每步操作後的 URL、動作類型、CSS selector 路徑與 key node 評估函式當 metadata，用 GPT-4 與附錄 L 的提示詞生成結構化指引，內含任務總目標與完成條件，並列出全部 key node。這份 Reference Guide 連同其中的 Completion Verification 段落放進 reward 提示詞，要求所有 key condition 都滿足才可判 finished。表格中以「(+)」標示。",
+      "停止條件": "有 reward 模組時由它判定是否完成；沒有時步數上限設為該題標註步數的 1.5 倍。"
+    },
+    "超參數與環境（附錄 E.3、F.2）": "所有基礎模型 max tokens 500、temperature 0.7；主表跑 3 次報標準差；AWS EC2，MindAct 用兩張 T4；Mixtral-8x22B 走 Together.ai。預設環境是美國 IP、Windows、Chrome。主實驗用測試集 104 題以避免資料汙染；reward 實驗從全資料集抽 130 題。"
+  },
+  "assumptions": [
+    "每個任務都存在一組「任何成功路徑都必經」的中間狀態，而且人類標註者能把它們找齊；找不齊的任務（142 題）被直接排除。",
+    "多數必要狀態可以用 URL 表達；網站把篩選、搜尋等狀態寫進 URL 參數，URL 比對才能穩定。",
+    "達成全部 key node 就等於任務完成；最後回答或取出的資訊內容不另外檢查。",
+    "Semantic Match 的 LLM 判官夠準，而且判定穩定。",
+    "環境轉移視為決定性的；網路、IP、地區造成的差異可以靠固定實驗環境控制。",
+    "網站在評估期間變化夠慢，定期重播與人工修正就能讓 key node 保持有效。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Mind2Web-Live 測試集（104 題，主實驗）",
+      "Mind2Web-Live 訓練集（438 題，Table 11）",
+      "從全資料集隨機抽 130 題（reward 模組實驗，Table 6）",
+      "從測試集隨機抽 40 題，同時跑 Mind2Web 離線與線上設定（Table 4）"
+    ],
+    "metrics": [
+      "Completion Rate（key node 步分數比例）",
+      "Task Success Rate（全部 key node 達成）",
+      "Task SR(0)／Task SR(1)（容許 0 或 1 個 key node 出錯）",
+      "Efficiency Score（步數／步分數，越低越好）",
+      "Human Alignment Score（完成訊號與人類標註的一致程度）",
+      "離線對照：Mind2Web 的 Step SR 與 Task SR",
+      "主表標準差（3 次執行）"
+    ],
+    "baselines": [
+      "18 個基礎模型當 planning 模型：GPT-4-0125-preview、GPT-4o、GPT-4-turbo、GPT-3.5-turbo、Claude-3 Opus／Sonnet／Haiku、表中標為 Claude-3-Sonnet-20240620 的模型、Gemini-Pro、Gemini-1.5-Pro、DeepSeek-V2、Mixtral-8x22B、Mistral-7B、Qwen1.5 7B／14B／72B／110B、Qwen2-72B",
+      "MindAct（Mind2Web 原作者在離線資料上訓練的模型）",
+      "reward 模組變體：無 reward、自評 reward（GPT-3.5／GPT-4／GPT-4V）、加 human-labeled golden reference 的 reward（GPT-4(+)、GPT-4V(+)）",
+      "消融：拿掉 memory、拿掉 ReAct（Table 12）",
+      "環境變因：IP 地區（美、英、新加坡）、作業系統（Windows／Linux）、瀏覽器（Chrome／Firefox）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "最佳設定（GPT-4 加 memory 與 ReAct、不用 reward 模組）在測試集上仍有一半以上的 key node 沒拿到、四分之三以上的任務沒完成。主表對 6 個模型跑 3 次並報標準差，其他模型只有單次數字。",
+      "numbers": "GPT-4：Completion Rate 48.8±3.04、Task SR 23.1±1.11、ES 2.47±0.28；GPT-3.5：40.2±0.38／16.5±2.00／3.03；Claude-3-Opus：40.3／14.4／3.52；Gemini-Pro：35.3／13.4／4.69。Table 5 的前五名 Task SR 在 21.1–23.1 之間，最差的 Qwen1.5-14B 為 CR 22.7、SR 10.6、ES 8.09。",
+      "section": "§5、Table 3、Table 5",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "二元的任務成功率與部分分數的落差很大：所有模型的 Task SR 都只有 Completion Rate 的大約 36%–50%，只看成功率會把「走了一半」與「完全沒動」混在一起，key node 步分數讓這段進度看得見。",
+      "numbers": "GPT-4 為 48.8% 對 23.1%；Gemini-1.5-Pro 為 44.6% 對 22.3%；Qwen2-72B 為 40.9% 對 15.4%；Mistral-7B 為 25.6% 對 11.7%（Table 5）。",
+      "section": "§2.3、Table 5",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "只看最後狀態不夠：作者另外標註測試集中「最後一個 key node 是否已足以代表任務完成」，結果只有不到一半成立，所以在不可完全重現的線上環境，終態／結果導向評估會高估完成。",
+      "numbers": "104 題中只有 46 題（約 44%）的最後一個 key node 是任務完成的充分條件。",
+      "section": "§6.2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "離線與線上的排名相反：在 Mind2Web 離線資料上訓練的 MindAct 離線領先 GPT-3.5 與 GPT-4，一年後放到線上反而墊底。作者也指出兩邊的量尺本來就不同：離線量單步動作預測，線上量中間狀態。",
+      "numbers": "40 題：離線 Step SR 為 MindAct 44.3、GPT-4 28.4、GPT-3.5 15.5；線上 Completion Rate 為 MindAct 25.5、GPT-4 41.1、GPT-3.5 35.4；線上 Task SR(0) 為 7.50／10.0／10.0，Task SR(1) 為 12.5／25.0／17.5。",
+      "section": "§4.1、§5、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "沒有參考答案的自評 reward 模組不但沒幫助，反而拉低表現，作者歸因於完成判斷過度自信、低品質 reward 累積在 memory。把人工標註的 key node 做成 golden reference 放進 reward 提示詞後，Completion Rate 與 HAS 上升；但 Task SR 並沒有跟著上升。",
+      "numbers": "130 題：GPT-4 無 reward 為 CR 46.9／SR 16.9／ES 3.77；GPT-4 自評 reward 為 42.1／13.8／3.07（HAS 0.430）；GPT-4＋GPT-4V 自評為 42.4／8.5；GPT-4＋GPT-4(+) 為 52.3／12.3／3.27（HAS 0.506）；GPT-4＋GPT-4V(+) 為 51.3／12.3／2.71（HAS 0.502）；GPT-3.5 無 reward 為 34.6／13.8，GPT-3.5＋GPT-4(+) 為 43.6／13.8（HAS 0.452）。",
+      "section": "§6.3、Table 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Human Alignment Score 用 agent 自己發出的完成訊號對照人類標註來打分，量的是「何時該停」的判斷。有 golden reference 的 reward 模組 HAS 最高；最低的是 GPT-3.5 當 planning 模型、搭配 GPT-4 自評 reward 的組合。",
+      "numbers": "HAS 分段：完成且有訊號 1、完成但延遲 0.95、未完成卻宣稱完成 P/P_max、未完成被步數上限終止 0.8×P/P_max。Table 6 的 HAS 從 0.385（GPT-3.5＋GPT-4 自評）到 0.506（GPT-4＋GPT-4(+)）。",
+      "section": "附錄 D、式 (1)、Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "線上分數對實驗環境很敏感：同一個 GPT-3.5 agent，換 IP 地區、作業系統或瀏覽器，分數的差距比很多模型之間的差距還大；作者因此建議固定在 Windows、Chrome 或 Firefox、美國或新加坡的伺服器上跑。",
+      "numbers": "GPT-3.5（Table 13）：美國／Windows／Chrome 為 CR 40.2%、SR 16.5%、ES 3.03；美國／Windows／Firefox 為 42.1%、20.2%、2.79；美國／Linux／Chrome 為 36.5%、15.4%、3.33；英國／Windows／Chrome 為 23.6%、8.65%、7.78；新加坡／Windows／Chrome 為 42.3%、21.2%、2.95。",
+      "section": "§6.1、附錄 F.2、Table 13",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "靠重播加人工複核維護線上資料集的成本可以接受：三個月內只有少數題目需要處理，每題的修正人力約為初次標註的一半。",
+      "numbers": "三個月內 7 題失效（刪除）、11 題錄製軌跡改變（重新標註），合計 18 題，約占 542 題的 3.3%。",
+      "section": "§3.2、附錄 H",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "網路不穩定：CAPTCHA、斷線、不同 IP 的差異會讓線上即時評估結果與封閉環境不一致；作者認為詳細的執行日誌可以把這些狀況記錄下來。",
+    "任務路徑複雜：標註者可能沒找齊所有可行路徑，key node 與真正必要的步驟錯位時，會誤罰正確的流程；改用模型評估可以緩解，但會讓評估結果依賴模型能力、變得不穩定。",
+    "評估函式是靜態的：無法依時間、地點、天氣等環境變數調整成功判準，未來需要以邏輯或程式碼表達的 reward。",
+    "觀測只處理父子元素的資訊映射，遞迴找不到可互動元素就丟棄，會遺失資訊（附錄 G.3）。",
+    "agent 常見錯誤：陷入局部最優、無法回到先前狀態，以及過早判定完成（附錄 G.1、G.2）。",
+    "沒有參考答案的自評 reward 在線上 web 任務沒有效果，原因是過度自信與低品質 reward 累積在 memory（§6.3）。",
+    "線上網站持續變動，資料需要定期維護才能保持有效。"
+  ],
+  "limitations_observed": [
+    "整篇沒有驗證分數本身的效度：沒有任何實驗把 Task Finish Score 或 Completion Rate 拿去對照人工判定的「任務真的完成了沒」，因此算不出假陽性與假陰性率。Semantic Match 的判官用哪個模型、回傳的 0–1 分數多少以上算命中，文中都沒有寫。key node 由 1 人標、2 人複核，但沒有報告任何標註者一致性數字（例如 kappa）。對一個以新評估指標為主要貢獻的論文，這是最大的缺口。",
+    "任務成功定義成「全部 key node 都到過」（§2.3），而 Table 10 的動作空間沒有任何「回報答案」或「結束並給出答案」的動作。因此資訊檢索類任務（例如查某遊戲的評分與評論）在這個框架裡根本沒有答案可檢查，只能以「到過相關頁面、操作過相關元素」代替「取得並交付資訊」，這一點對所有題目都成立。文中也沒有說明 key node 是否要依序達成。§6.2 用 46／104 證明「只看最後一個 key node 不夠」，但沒有反過來證明「全部 key node 都到過就足夠」。",
+    "排名大多落在誤差範圍內：主表只有 6 個模型跑 3 次（temperature 0.7），GPT-4 的 Completion Rate 標準差就有 ±3.04。Table 5 的前五名 Task SR 擠在 21.1–23.1 之間，而且沒有誤差棒。測試集只有 104 題，一題約等於 0.96 個百分點，這些排名在統計上無法區分，文中也沒做任何顯著性檢定。",
+    "環境變因大過模型差距，卻只用單一模型、單次執行量：Table 13 中同一個 GPT-3.5，英國 IP 的 CR 是 23.6%、美國是 40.2%，差 16.6 個百分點，比 GPT-4 與 GPT-3.5 之間的 8.6 個百分點還大；只換 Chrome 與 Firefox，Task SR 就從 16.5% 變成 20.2%。這表示不同實驗室回報的 WebCanvas 分數除非附上環境指紋，否則不能直接比較；但論文沒有要求回報環境，也沒有量同一環境下重複執行的變異。",
+    "「離線與線上排名相反」的證據很薄：Table 4 只有 40 題，Task SR 每題 2.5 個百分點。線上 Task SR(0) 中 MindAct 7.5、GPT-4 10.0，只差一題。更根本的是兩邊用的量尺不同（離線用 Step SR、線上用 Completion Rate），所謂反轉有一部分來自換了指標，不完全是模型能力的差異。",
+    "human-labeled reward 的結論是選擇性報告：作者寫「表現因此改善」，但 Table 6 中 GPT-4＋GPT-4(+) 的 Task SR 是 12.3，低於不用 reward 的 16.9；GPT-3.5＋GPT-4(+) 的 SR 13.8 則與不用 reward 持平。改善只出現在 Completion Rate 與 HAS。Table 6 還是 130 題的單次執行、沒有誤差棒，CR 提升 5.4 個百分點，還不到主表 GPT-4 標準差（3.04）的兩倍。",
+    "Table 6 的基準列與 Table 11 高度重疊：Table 6 標明是從全資料集隨機抽 130 題，但 GPT-3.5 無 reward 那一列（34.6／13.8／5.25）與 Table 11 的訓練集 438 題結果一字不差；GPT-4 無 reward 那一列的 CR 46.9 與 ES 3.77 也相同，只有 SR 不同（16.9 對 20.1）。基準列的實際來源可疑，連帶讓 reward 模組的比較失去可信度。",
+    "HAS 的誘因方向和它要量的東西相反：未完成卻宣稱完成（正是附錄 G.2 描述的過早終止與過度自信）得 P/P_max，反而比老實跑到步數上限的 0.8×P/P_max 高。等於懲罰「不放棄」、放過「假完成」。一個號稱量「完成判斷與人類一致」的指標，對錯誤的完成宣告應該扣得更重，而不是更輕。",
+    "Efficiency Score = L/P 的定義不完整：P=0（一個 key node 都沒拿到）時沒有定義，文中沒說這些題是排除還是另計，也沒說 ES 是對所有任務平均還是只算成功任務。沒有 reward 模組時，步數上限是標註長度的 1.5 倍，L 會被這個上限截斷；有 reward 模組時則由它決定提早停止。Table 6 中有 reward 的 ES 普遍較低，有一部分只是停得早，不代表更有效率。",
+    "聚合方式沒有交代：Completion Rate 是逐題算比例再平均，還是把全體 key node 加總，文中沒寫。每題 key node 數不同（平均 4.5 個），兩種算法會給出不同的數字與排名。",
+    "主表排名受 agent 框架的預設左右：Table 12 中 GPT-3.5 拿掉 ReAct 後 Task SR 升到 22.1%，幾乎追平完整版 GPT-4 的 23.1%。可見主表比的不只是模型能力，也包含這套提示詞與框架對不同模型的適配程度，但主表一律用同一套設定。",
+    "維護成本的觀察期太短：三個月內 18／542（3.3%）需要修正，但原始 Mind2Web 一年後是 12% 失效。只看三個月，外推不出長期的維護負擔；而且被排除的 142 題「定不出 key node」的任務，本身就代表這套方法的適用範圍有限，會讓資料集偏向路徑明確、URL 可表達的任務。",
+    "模型名稱前後不一致：引言說最佳結果來自 GPT-4-turbo 加 memory 與 ReAct，但 Table 3 與 Table 5 的 23.1% 標的是 gpt-4-0125-preview，而 Table 5 裡的 GPT-4-turbo-2024-04-09 只有 21.1%。Table 5 的「Claude-3-Sonnet-20240620」日期也與 Claude-3-Sonnet 不符，較像 Claude-3.5-Sonnet。引用主結果時要以表格為準。"
+  ],
+  "framework_role": "主要落在 T8 的「部分分數與過程度量」：它提供一套在不可重現環境下仍能運作的里程碑式部分給分，具體包括 key node 步分數（Completion Rate）、全部 key node 才算成功的二元成功率、效率分數，以及量「何時該宣告完成」的 HAS。對對話完成框架可以直接借用的是設計樣式：把一段對話任務的必經狀態（例如某個槽位被確認、某支 API 以正確參數被呼叫、某項資訊被告知使用者）標成 key node，每個配上 exact／include／semantic 的比對函式，再分別彙總成部分分數與全有全無的成功分數。它也順帶提供了反面教材：沒有驗證分數與人工判定的一致性、語意判官門檻不明、HAS 的誘因方向相反、環境變異沒有量化。這些都是我們自己設計 T8 分數時必須補上的。次要角色落在 T7（線上評估流程與資料維護）與 T5（有無參考答案的自評 reward 對比）。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "reward 模組讀取歷史軌跡，最後兩步動作相同就判為 loop 並給 1 分；判定前面的軌跡沒幫助時給 3 分，要求改變方向或從頭來。這是從軌跡中偵測異常、再觸發自我修正的具體實作。"
+    },
+    {
+      "edge": "E2",
+      "how": "reward 模組輸出的 verbal reflection、狀態與分數，會以 r_1^t 寫回 agent 的 memory h_1^t=(z,a,r)，下一步 planning 直接讀取。§6.3 指出低品質的反思訊號累積在 memory 裡會長期拖累表現，是「反思結果回寫狀態」有害面的實證。"
+    },
+    {
+      "edge": "E5",
+      "how": "HAS 拿 reward 模組發出的完成判斷（finished 訊號），對照人類標註的 key node 完成情況來打分。這是把自我評估與修正模組的輸出送回評估層、單獨量化其品質的做法（Table 6）。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文自述：Mind2Web-Live 的錄製與標註在作者公司 iMean AI 的產品 iMean Builder 平台與瀏覽器外掛上完成（https://builder.imean.ai/），資料維護用的是該公司開放使用的 replaySDK（https://stellarrover.gitbook.io/replaysdk）。出處：論文 §3.1、§3.2、附錄 A。",
+      "作者 GitHub repo（https://github.com/iMeanAI/WebCanvas，MIT 授權）的 README 第 28–30 行寫明 2024-12-26 發布 v0.0.4，新增與雲端瀏覽器服務 Browserbase（https://www.browserbase.com/）的整合，讓評估更穩定；我用 gh api 讀取 README 原文確認過。這是作者方寫的整合，我沒有找到 Browserbase 官方文件的對應說明可以交叉確認。"
+    ],
+    "assessment": "未見第三方商用採納 key node 評分方法的證據。上面兩條都是作者自家的工具鏈與作者方的整合：前者是作者公司用自家產品建資料集，後者尚未經第三方官方來源確認，都不代表有產品把 WebCanvas 的分數拿來當上線或驗收指標。本次 WebSearch 額度已用盡，沒能再搜尋模型卡或官方技術報告是否回報 Mind2Web-Live 分數。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/iMeanAI/WebCanvas",
+    "data": "公開：Mind2Web-Live 放在 https://huggingface.co/datasets/iMeanAI/Mind2Web-Live，含 key node 與評估函式；平台入口為 https://www.imean.ai/web-canvas。不過評估跑在會變動的真實網站上，數字本質上無法逐位重現，還受 IP 地區、作業系統、瀏覽器影響（Table 13）；Semantic Match 用的判官模型與門檻也沒寫在論文裡。 另外，README 記載 v0.0.4（2024-12-26）改成以 JavaScript 事件監聽為基礎的評估系統，讓評估與動作空間脫鉤；所以用現行 repo 跑出的分數，未必與論文當時的評估實作一致。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "key node 里程碑式的部分給分是 T8 可以直接借用的設計樣式，但論文從未驗證分數與人工判定是否一致，語意判官門檻不明、HAS 誘因方向相反、Table 6 基準列來源可疑，多數排名又落在誤差內，所以只適合當設計參考與反面檢核清單。",
+  "related": [
+    "2306.06070",
+    "2307.13854",
+    "2401.13649",
+    "2311.12983",
+    "2303.11366",
+    "2404.06474",
+    "2210.03629",
+    "2401.01614",
+    "2402.05930",
+    "2401.13919"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

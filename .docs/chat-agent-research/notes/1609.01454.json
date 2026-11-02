@@ -1,0 +1,126 @@
+{
+  "id": "1609.01454",
+  "title": "Attention-Based Recurrent Neural Network Models for Joint Intent Detection and Slot Filling",
+  "topic": "T1",
+  "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Liu & Lane（Interspeech 2016）提出兩種以共用雙向 LSTM 編碼器同時做意圖分類與 slot 標註的聯合模型（帶對齊輸入的 attention encoder-decoder，以及加上 attention 的 BiRNN），在 ATIS 上把意圖錯誤率降到 1.57%／1.79%、slot F1 拉到 95.87／95.98，成為後來聯合 intent/slot 研究最常被拿來比較的基線之一。",
+  "problem": "口語理解（SLU）要從一句使用者查詢同時判斷意圖（整句分類）並抽出語意成分（逐字 slot 標註）。過去兩件事多半分開做（SVM／DNN 做意圖，CRF／RNN 做 slot），要訓練、調校、部署兩個模型；已有的聯合模型（recursive NN、CNN triangular CRF）表現不如當時最好的單任務模型。同時期 attention encoder-decoder 在機器翻譯與語音辨識很成功，但 slot filling 的輸入與輸出等長、對齊是明確的，作者想知道：明確的對齊資訊該怎麼放進 encoder-decoder、反過來 attention 能不能補強本來就吃對齊的 RNN 序列標註，以及兩個任務能不能在這些架構下聯合訓練並互相幫助。",
+  "core_idea": "讓意圖分類與 slot 標註共用同一個雙向 LSTM 編碼器、各自接一個輸出頭，兩個任務的損失一起反向傳播到編碼器（多任務共享表示）。slot 那一頭一定要吃「與當前字對齊的編碼器隱藏狀態」，attention 只當額外的上下文補充；意圖那一頭用整句表示（最後狀態或對隱藏狀態做加權平均）做分類。作者給兩種實作：encoder-decoder 版（解碼器每步吃對齊的 h_i 加 attention 內容向量）與較省計算的 BiRNN 版（直接在每個 h_i 上加 attention 內容向量後預測標籤）。",
+  "method": {
+    "task_formulation": "輸入一句已斷詞的查詢 x=(x_1..x_T)；輸出 (1) 等長的 slot 標籤序列 y=(y_1..y_T)（IOB 形式，ATIS 主設定有 127 種標籤）與 (2) 一個意圖類別（主設定 18 類）。訓練目標為最大化 Π_t P(y_t | y_<t, x)（Eq.1），推論取 argmax_y P(y|x)（Eq.2）；聯合模型再加上意圖的分類損失，兩者的梯度都回傳到共用編碼器（論文沒寫兩個損失的權重，看起來是直接相加）。",
+    "model_A_encoder_decoder_with_aligned_inputs": "編碼器：單層雙向 LSTM，h_i=[fh_i, bh_i]（前向與後向隱藏狀態串接）。解碼器：單向 LSTM，初始狀態 s_0 由後向編碼器的最後狀態算出（沿用 Bahdanau 等人的做法）。第 i 步解碼狀態 s_i = f(s_{i-1}, y_{i-1}, h_i, c_i)（Eq.4），也就是同時吃前一步輸出的標籤、與第 i 個字對齊的編碼器狀態 h_i、以及 attention 內容向量 c_i。c_i = Σ_j α_{i,j} h_j，α 為 softmax(e_{i,k})，e_{i,k} = g(s_{i-1}, h_k)，g 是一個前饋網路（Eq.5–6）。意圖部分：另加一個意圖解碼器，與 slot 解碼器共用編碼器與初始狀態 s_0，只輸出一次意圖分布，其狀態由 s_0 與意圖專用的 attention 內容向量 c_intent 決定（論文沒寫這個解碼器的層數與組合方式細節）。論文另外比較兩個變體：(a) 不給對齊輸入、純靠 attention 學對齊；(b) 給對齊輸入但不加 attention。",
+    "model_B_attention_BiRNN": "單層雙向 LSTM 讀一次整句；slot 標籤之間的相依關係在前向 RNN 中建模（論文只這樣描述，推測是把前一步預測的標籤餵回前向 LSTM）。第 i 步把對齊的 h_i 與 attention 內容向量 c_i（對所有 h 的加權平均）結合後預測 slot 標籤分布；論文沒寫 attention 的查詢向量用什麼、h_i 與 c_i 怎麼組合（官方程式碼可查）。意圖：不開 attention 時對 h 做時間維度的 mean-pooling 再接 logistic regression（多類別 softmax）；開 attention 時改成對 h 的 attention 加權平均。作者強調此版訓練時只讀一遍輸入（encoder-decoder 版要讀兩遍），計算比較省，但沒有提供實際耗時數字。",
+    "hyperparameters": "LSTM 單層、128 個單元、forget gate bias 初始為 1；詞嵌入 128 維、隨機初始化並在訓練中微調（沒有用預訓練詞向量）；mini-batch 16；非循環連線上 dropout 0.5（Zaremba 等人的做法）；梯度裁剪最大範數 5；Adam，使用原論文建議的預設參數。論文未交代：訓練 epoch 數、early stopping 與驗證集、跑了幾次取最佳、兩任務損失權重、slot 推論用 greedy 還是 beam、attention 前饋網路 g 的維度、未登錄詞處理。",
+    "data_and_protocol": "主設定：ATIS，沿用 Mesnil 等人／Tur 等人的切分，訓練 4,978 句（ATIS-2、ATIS-3）、測試 893 句（ATIS-3 NOV93 與 DEC94），127 種 slot 標籤、18 種意圖；沒有提到驗證集。第二組：Xu & Sarikaya 與 Jeong & Lee 使用的另一份 ATIS 文字語料，5,138 句、110 種 slot 標籤、21 種意圖，用相同的 10-fold 交叉驗證。",
+    "metrics": "slot filling 用 F1（論文未明說是否為 CoNLL 式 chunk-level F1，但比較對象沿用同一評分）；意圖用分類錯誤率（%）。Table 1 同時報「最佳一次」與「平均±標準差」，Table 2–5 只報單一數字（Table 2 的數字與 Table 1 的最佳值相同）。",
+    "reimplementation_notes": "要照做：(1) BiLSTM 編碼器 128 維；(2) slot 頭每步輸入 [h_i ; c_i]（BiRNN 版）或 LSTM 解碼器吃 [y_{i-1}, h_i, c_i]（encoder-decoder 版）；(3) 意圖頭對 h 做 attention 加權平均後接 softmax；(4) loss = slot 逐字交叉熵總和 + 意圖交叉熵，共同更新編碼器；(5) 用上述超參數訓練。論文省略的細節（上述未交代項目）需參考作者的 TensorFlow 實作。"
+  },
+  "assumptions": [
+    "slot 標籤與輸入字一對一對齊（同長度序列標註）；attention 只是補充，不能取代對齊輸入。",
+    "每句恰好屬於一個預先定義好的封閉意圖集合（18 或 21 類），用 softmax 單選，沒有拒答或 out-of-scope 類別。",
+    "意圖與 slot 共享的語意表示對兩個任務都有幫助，因此共用編碼器、損失相加即可獲益。",
+    "單句、單回合的輸入就足以判斷意圖與 slot，不需要對話歷史或系統上一句話。",
+    "輸入是乾淨、斷好詞的文字（論文沒有處理 ASR 錯誤）；句子短（ATIS 平均約 11 字），BiLSTM 隱藏狀態就能涵蓋大部分所需資訊。",
+    "有數千句人工標註的同領域資料可供監督式訓練。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ATIS（4,978 訓練／893 測試，127 slot 標籤、18 意圖）",
+      "另一份 ATIS 文字語料（5,138 句、110 slot 標籤、21 意圖，10-fold 交叉驗證）"
+    ],
+    "metrics": ["slot filling F1", "intent classification error rate (%)"],
+    "baselines": [
+      "slot filling（Table 2）：CNN-CRF（Xu & Sarikaya 2013）、RNN with Label Sampling（Liu & Lane 2015）、Hybrid RNN（Mesnil et al. 2015）、Deep LSTM（Yao et al. 2014）、RNN-EM（Peng & Yao 2015）、Encoder-labeler Deep LSTM（Kurata et al. 2016）",
+      "意圖（Table 3）：Recursive NN（Guo et al. 2014）、Boosting（Tur et al. 2010）、Boosting + Simplified sentences（Tur et al. 2011）",
+      "聯合模型（Table 4）：RecNN、RecNN+Viterbi（Guo et al. 2014）",
+      "第二份 ATIS（Table 5）：TriCRF（Jeong & Lee 2008）、CNN TriCRF（Xu & Sarikaya 2013）",
+      "內部消融（Table 1）：encoder-decoder 不給對齊輸入／給對齊輸入／對齊輸入加 attention；BiRNN 有無 attention"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "不給對齊輸入、純靠 attention 學對齊的 encoder-decoder 做 slot filling 表現很差；把與當前字對齊的編碼器狀態餵給解碼器後才追上 BiRNN 等級。作者結論是讓模型從資料自己學對齊不適合 slot filling。",
+      "numbers": "slot F1 最佳／平均：無對齊輸入 81.64／79.66±1.59；有對齊輸入 95.72／95.38±0.18；有對齊輸入加 attention 95.78／95.47±0.22",
+      "section": "§4.3, Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在 encoder-decoder 上加 attention 只帶來很小的 F1 提升；檢查學到的注意力權重，多半接近平均分散在整句上，只有少數例子（例如預測 noon 的標籤時看向其他字）看得出有意義的對齊。",
+      "numbers": "最佳 F1 95.72 → 95.78（+0.06）；平均 95.38 → 95.47（+0.09），小於標準差 0.18–0.22",
+      "section": "§4.3, Table 1, Figure 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "BiRNN 加 attention 對 slot filling 的貢獻也不明顯；作者歸因於 ATIS 句子短（平均約 11 字），雙向 LSTM 在每個位置的隱藏狀態已經涵蓋大部分所需資訊。",
+      "numbers": "BiRNN 最佳 F1 95.71 → 95.75；平均 95.37±0.19 → 95.42±0.18",
+      "section": "§4.3, Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "單任務訓練的 slot filling 模型（兩種架構）都超過先前在 ATIS 上報告的最佳 F1。",
+      "numbers": "Attention Encoder-Decoder（對齊輸入）95.78、Attention BiRNN 95.75，對照 Encoder-labeler Deep LSTM 95.66、RNN-EM 95.25、Deep LSTM 95.08、Hybrid RNN 95.06、CNN-CRF 94.35",
+      "section": "§4.3, Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "單任務訓練的意圖模型錯誤率大幅低於先前方法；encoder-decoder 版比 BiRNN 版好，作者推測是解碼器多了一層非線性與整句層級資訊。",
+      "numbers": "意圖錯誤率：Attention Encoder-Decoder 2.02%、Attention BiRNN 2.35%，對照 Boosting + Simplified sentences 3.02%、Boosting 4.38%、Recursive NN 4.60%",
+      "section": "§4.4, Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "encoder-decoder 架構改成聯合訓練後，意圖錯誤率與 slot F1 都比單任務版本好，也超過先前最佳的聯合模型 RecNN。",
+      "numbers": "slot F1 95.78 → 95.87（+0.09）；意圖錯誤率 2.02% → 1.57%（-0.45，相對 22.2%）；RecNN+Viterbi 為 93.96／4.60%",
+      "section": "§4.5, Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Attention BiRNN 從聯合訓練獲益更多，得到全文最佳的 slot F1。",
+      "numbers": "slot F1 95.75 → 95.98（+0.23）；意圖錯誤率 2.35% → 1.79%（-0.56，相對 23.8%）",
+      "section": "§4.5, Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "在另一份 ATIS 語料的 10-fold 交叉驗證上，兩個聯合模型仍略勝先前的三角 CRF 系列。",
+      "numbers": "slot F1／意圖錯誤率：Attention BiRNN 95.78／5.60%、Attention Encoder-Decoder 95.62／5.86%、CNN TriCRF 95.42／5.91%、TriCRF 94.42／6.93%",
+      "section": "§4.5, Table 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只用單層 LSTM，更深的堆疊模型留待未來工作。",
+    "encoder-decoder 學到的注意力權重多半接近平均分散，只有少數案例看得出有意義的注意力。",
+    "BiRNN 上 attention 內容向量對 slot filling 的貢獻不明顯，作者認為與 ATIS 句子短有關。",
+    "不給對齊資訊、純靠 attention 的 encoder-decoder 不適合 slot filling（F1 只有 81.64）。"
+  ],
+  "limitations_observed": [
+    "「超越先前最佳」的 slot F1 建立在挑最佳一次的數字上：Table 2 列的 95.78／95.75 是 Table 1 的最佳值，而同一模型的平均 95.47±0.22、95.42±0.18 都低於 Table 2 裡 Kurata 等人的 95.66。論文沒說跑了幾次，也沒說先前方法的數字是否同為最佳值，SOTA 主張在平均意義下不成立。",
+    "聯合訓練的增益換算成測試句數非常小：測試集 893 句，意圖錯誤率降 0.45 與 0.56 個百分點約等於少錯 4 句與 5 句（2.02%≈18 句 → 1.57%≈14 句；2.35%≈21 句 → 1.79%≈16 句）。slot F1 的 +0.09／+0.23 也落在 Table 1 自己量到的 0.18–0.22 標準差之內。聯合模型只報單一數字、沒有平均與標準差、沒有顯著性檢定，「23.8% 相對降低」的說法放大了一個 5 句的差距。",
+    "標題與摘要強調 attention，但實驗顯示 attention 幾乎沒有作用：slot F1 的 attention 增益（最佳 +0.04～+0.06、平均 +0.05～+0.09）都小於標準差，作者自己也觀察到權重接近均勻。意圖部分更糟：Table 3 只列有 attention 的兩個版本，沒有報 §3.2 自己定義的 mean-pooling 無 attention 意圖模型，所以無法判斷意圖錯誤率的大幅下降來自 attention 還是只是「雙向 LSTM 句子分類器」本身。",
+    "意圖的比較基線（Table 3）都是 2010–2014 年的 Boosting 與 recursive NN，沒有任何同期的 LSTM／CNN 句子分類基線；「大幅領先」較可能反映的是神經序列模型相對舊方法的整體進步，而不是本文提出的對齊或 attention 設計。",
+    "沒有描述驗證集與模型選擇：ATIS 這個切分只有訓練與測試，論文沒交代 epoch 數、early stopping、怎麼從多次執行中選出「最佳」。若最佳值是依測試集挑的，Table 2–4 的所有領先幅度（多在 0.1–0.3 F1）都可能被選擇偏誤吃掉。",
+    "封閉集合、單標籤 softmax：模型對每句都一定輸出 18 類中的一類，沒有拒答、信心校準或 out-of-scope 偵測；論文也沒說明 ATIS 中帶多個意圖的語句怎麼處理。對本框架 T1 關心的「使用者要的東西不在清單上」或「該先澄清」情境，這個方法本身提供不了訊號。",
+    "外推性受限：只在單一領域（航班查詢）、單回合、平均 11 字的短句、乾淨的文字轉錄上驗證（論文雖稱 spoken language understanding，但沒有用 ASR 輸出測）。作者自己推測長句時 attention 才可能有用，卻沒有任何長句或跨領域實驗。後續 Béchet & Raymond（Interspeech 2018）也指出 ATIS 對 SLU 模型而言太淺、已接近飽和，本文 0.1–0.3 F1 級的差距在這種資料集上難以區分方法優劣。",
+    "可重現性細節不足：encoder-decoder 版的意圖解碼器怎麼由 s_0 與 c_intent 組成、BiRNN 版 attention 的查詢向量、前向 RNN 如何建模標籤相依（訓練時用真實標籤還是預測標籤、推論用 greedy 或 beam）、兩任務損失權重都沒寫，只能靠作者的程式碼補。"
+  ],
+  "framework_role": "屬於 T1 的「傳統單句 NLU」基線：把一句使用者輸入轉成一個粗粒度目標（intent）加上一組參數（slots），是任務型對話系統中目標對齊最早的工程形式，也是後來 slot-gated、BERT 聯合模型等工作最常比較的對象。對框架的價值主要在兩點：(1)「共用編碼器、意圖與 slot 兩個輸出頭、損失相加」這個聯合訓練樣式，至今仍是 LLM 之前意圖路由模組的標準做法；(2) 它的輸出（intent + slot 值）正是逐回合 DST（T2）的輸入，但本文只處理單句，不含對話歷史。它完全沒有碰 T1 其他重點：OOD／out-of-scope 意圖、few-shot／zero-shot、LLM 的意圖理解與路由、澄清提問、使用者真實目標推斷。因此在 T1 裡定位是歷史基線與設計樣式來源，而不是 agent 時代的方法。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品；作者在 GitHub 上的官方實作（https://github.com/HadoopIt/rnn-nlu，TensorFlow r1.2，README 描述為以 attention LSTM 做序列分類與序列標註）只是程式碼，README 未提及任何生產環境使用。本篇作為聯合 intent/slot 基線被大量後續論文引用與比較，屬學術影響力，不算商用採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/HadoopIt/rnn-nlu",
+    "data": "論文沒有釋出資料。ATIS 原始語料屬 LDC 授權，論文使用的切分是由 Gokhan Tur 與 Puyang Xu 私下提供（論文註腳）；第二份 ATIS 語料（5,138 句）也未公開。社群後來流通的 ATIS 處理版可以用，但與本文切分是否完全一致需自行核對。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是聯合 intent/slot 最常被引用的經典基線，「共用編碼器＋雙輸出頭」樣式值得知道，但實質增益只有 ATIS 測試集上約 4–5 句、attention 幾乎無作用，且完全不涉及 OOD、澄清或 LLM 時代的意圖理解，對本節點不是必讀。",
+  "related": ["1409.0473", "1601.01530", "1506.00195", "1406.1078"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -32,9 +32,8 @@
  * `deny(['/conversation_history*', ...])`，經 `write_file` 換來 `permission denied`、磁碟零檔案；
  * 經 offload 則照樣落檔。
  *
- * 這是 [`contained-backend.test.ts`](./contained-backend.test.ts) 那句「讀不經過 fence——讀的
- * 策略歸 permissions，兩層正交」的另一面：**寫不經過 permissions，寫的圍堵歸 fence**。兩層
- * 各守一半，而 offload 落在 permissions 守不到的那半。
+ * 讀的策略歸 permissions（fence 對讀只擋經符號連結落到根外的路徑，#1982），寫則相反：
+ * **寫不經過 permissions，寫的圍堵歸 fence**。兩層各守一半，而 offload 落在 permissions 守不到的那半。
  *
  * 對使用者的意思很直接：**想把某個路徑擋在寫入之外，deny 規則只擋得住模型主動去寫的那條路**。
  * 基座自己在背景寫的東西要用 fence（`ContainedFilesystemBackend` 的 mode），或把那個寫入者的

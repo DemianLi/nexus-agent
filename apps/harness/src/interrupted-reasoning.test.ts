@@ -87,7 +87,13 @@ async function slowOpenAi(scripts: readonly (readonly Record<string, unknown>[])
     baseURL: `http://127.0.0.1:${port}/v1`,
     assistants,
     sent,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    // 先斷掉所有連線再關：按停止時串流還開到一半，只 `close()` 會等那條連線自己收，量到 2.9 秒
+    // （同檔其他三個測試整個才 0.2 秒），那一個測試因此只剩 1.5 倍的餘裕就撞 5 秒的預設逾時。
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
   };
 }
 
@@ -217,7 +223,13 @@ describe('按了停止的那則，推理在重新整理之後還在（#561）', 
       // 日誌那顆真的帶著推理——少了這一句，兩邊都沒有推理也會相等。
       expect(run.interrupted).toHaveLength(1);
       expect(blocksOf(run.interrupted[0]!)).toEqual([{ type: 'reasoning', reasoning: shown }]);
-      expect(loggedMessageId(run.interrupted[0]!.message)).toBeUndefined();
+      // **沿用即時那則的 id**（#1044）：停止與重新整理撞在一起時，補送與歷史靠它對上、不會畫成兩則。
+      const liveId = run.frames
+        .filter((frame) => frame.method === 'messages' && frame.params.namespace.length <= 1)
+        .map((frame) => frame.params.data as { event?: string; id?: string })
+        .find((data) => data.event === 'message-start')?.id;
+      expect(liveId).toEqual(expect.any(String));
+      expect(loggedMessageId(run.interrupted[0]!.message)).toBe(liveId);
 
       // 不是 `turnTail`：那格判的是「正文非空的最後一則」（`@nexus/wire`），兩條路判得一樣。
       const live = aiView(run.frames);

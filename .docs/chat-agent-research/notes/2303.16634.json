@@ -1,0 +1,169 @@
+{
+  "id": "2303.16634",
+  "title": "G-Eval: NLG Evaluation using GPT-4 with Better Human Alignment",
+  "topic": "T7",
+  "subarea": "LLM/agent-as-judge 與評估可靠性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 G-Eval：用「任務說明＋評估準則＋LLM 自動生成的評估步驟（auto-CoT）」組成表單式提示詞，讓 GPT-4 逐維度打分，再以分數 token 的機率加權求期望值得到連續分數；在 SummEval、Topical-Chat、QAGS 上與人評的相關性超過既有評估器，並初步指出 LLM 評審偏好 LLM 生成文本的風險。",
+  "problem": "BLEU／ROUGE 等參考式指標與人評相關性低，且需要人工參考答案，新任務難以取得；既有以 LLM 生成機率當分數的無參考評估器（如 GPTScore）與人評的一致性仍不如中型神經評估器（如 UniEval），而 LLM 當評審的有效性與可靠性缺乏系統研究。需要一個不需參考答案、可泛化到新任務、又與人評高度一致的自動評估框架。",
+  "core_idea": "不把評估寫成「目標文本的條件生成機率」，而是讓 LLM 直接做評分任務（form-filling）：提示詞先給任務說明與某一維度的評估準則，再讓 LLM 自己把準則展開成具體的評估步驟（auto-CoT），最後要求只輸出分數；為了克服 LLM 分數集中在單一整數、大量平手的問題，把每個候選分數的機率乘上分數值加總，得到細粒度的連續分數。",
+  "method": {
+    "inputs_outputs": "輸入：(1) 任務說明（例如「你會拿到一篇新聞的摘要，請就一個指標評分」）；(2) 單一維度的評估準則與量表（例如 Coherence 1–5，附 DUC 的結構與連貫性定義；Engagingness 1–3，逐級描述）；(3) 評估步驟（auto-CoT）；(4) 來源脈絡（新聞全文，或對話歷史＋對應知識事實）；(5) 待評文本（摘要或下一輪回應）。輸出：該維度的一個分數；經機率加權後為連續實數。每個維度各呼叫一次模型，維度間彼此獨立。",
+    "step1_prompt": "為每個「任務 × 維度」寫一份提示詞：任務說明＋「請仔細閱讀並隨時參照這份說明」的叮嚀＋Evaluation Criteria（維度名、量表範圍、定義）。SummEval 用 coherence、consistency、fluency、relevance 四維；Topical-Chat 用 naturalness、coherence、engagingness、groundedness 四維（沿用 Zhong et al. 2022 的設定）。附錄範例中 coherence 為 1–5、engagingness 為 1–3，量表不一致，需逐維度照原 benchmark 的人評量表設定。",
+    "step2_auto_cot": "在提示詞尾端加一行「Evaluation Steps:」，讓 LLM 自行續寫出 3 步左右的評估步驟（例如：先讀原文找主題與要點 → 讀摘要並對照原文檢查涵蓋度與順序 → 依準則給 1–5 分）。附錄的完整提示詞把這些步驟直接嵌在提示詞中，推測是每個維度生成一次後固定重用；但論文未說明由哪個模型生成、是否逐樣本重生、是否經人工修改。",
+    "step3_scoring_prompt": "把「提示詞＋評估步驟＋來源文本＋待評文本」串接，結尾是「Evaluation Form (scores ONLY):」與「- Coherence:」這類待填欄位，讓模型只填分數。模板變數為 {{Document}}、{{Summary}}，對話任務另有 {{Fact}}、{{Response}}。",
+    "step4_probability_weighting": "給定提示詞中預先定義的分數集合 S={s_1..s_n}，最終分數 = Σ p(s_i)·s_i。動機：直接取整數分數會 (a) 某個數字（如 1–5 量表的 3）壟斷分布、變異太小；(b) 即使要求小數也只輸出整數，造成大量平手。",
+    "backbone_and_hyperparameters": "GPT-3.5（text-davinci-003）：decoding temperature=0，用 API 回傳的 token 機率。GPT-4：當時 API 不提供 token 機率，改設 n=20、temperature=1、top_p=1 取樣 20 次，以各分數出現頻率估計 p(s_i)（解析度 0.05，成本為單次呼叫的 20 倍）。",
+    "hallucination_variant": "QAGS 實驗用的提示詞（附錄 Evaluate Hallucinations）與上面不同：只有「Factual Consistency」定義、原文、摘要，最後問「摘要是否含事實不一致？Answer:」，沒有 Evaluation Steps，也沒有數值量表；論文未說明這個是非回答如何轉成相關係數所需的分數。",
+    "meta_evaluation": "SummEval：依 Zhong et al. (2022) 算 summary-level Spearman ρ 與 Kendall τ（論文未展開公式）。Topical-Chat：turn-level Pearson r 與 Spearman ρ。QAGS：在 QAGS-CNN 與 QAGS-XSum 上算 r／ρ／τ 並取平均。偏差分析：用 Zhang et al. (2023) 的人寫摘要 vs. GPT-3.5 摘要資料，依人評偏好分三組，比較 G-Eval-4 給兩類摘要的平均分。",
+    "ablations": "−Probs（不做機率加權，直接用輸出分數；GPT-4 此變體如何取單一輸出論文未說明）、−CoT（拿掉評估步驟，只做 GPT-4）、GPT-3.5 vs GPT-4。",
+    "unspecified_details": "論文未說明：分數機率是否在 S 上重新正規化；S 以外的 token（或多 token 分數）如何處理；text-davinci-003 只回傳 top-k logprobs 時缺漏分數的處理方式；GPT-4 使用的快照版本；Kendall τ 採 τ-a／τ-b 哪一種。"
+  },
+  "assumptions": [
+    "分數 token 的機率（或 20 次取樣頻率）反映評審對品質的不確定性，其期望值比單一整數更能區分細微品質差異。",
+    "評估準則能用自然語言寫清楚，且 LLM 自行展開的評估步驟不會偏離人評使用的定義。",
+    "SummEval、Topical-Chat、QAGS 的人評是可靠真值，與人評的相關係數是評估器品質的正確代理。",
+    "20 次 temperature=1 的取樣足以近似 GPT-4 的分數分布。",
+    "各維度可以獨立評分，分維度呼叫不會漏掉維度間的交互。",
+    "benchmark 的待評文本與人評分數沒有出現在 GPT-4 的訓練資料中（論文未討論）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SummEval（CNN/DailyMail 摘要，coherence／consistency／fluency／relevance 四維人評）",
+      "Topical-Chat（Mehri & Eskenazi 2020 的知識型對話回應人評，naturalness／coherence／engagingness／groundedness）",
+      "QAGS（摘要事實一致性，QAGS-CNN 與 QAGS-XSum 兩個子集）",
+      "Zhang et al. (2023) 人寫摘要 vs. GPT-3.5 摘要的人評比較資料（偏差分析）"
+    ],
+    "metrics": [
+      "Spearman ρ",
+      "Kendall τ",
+      "Pearson r",
+      "SummEval 用 summary-level、Topical-Chat 用 turn-level 相關",
+      "偏差分析：依人評偏好分組後的平均 G-Eval-4 分數"
+    ],
+    "baselines": [
+      "ROUGE-1／ROUGE-2／ROUGE-L",
+      "BLEU-4",
+      "METEOR",
+      "BERTScore",
+      "MoverScore",
+      "BARTScore",
+      "FactCC",
+      "QAGS（評估器）",
+      "CTC",
+      "USR",
+      "UniEval",
+      "GPTScore",
+      "自身消融：−Probs、−CoT、G-Eval-3.5"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "SummEval 上 G-Eval-4 的平均相關性超過所有基線，包括 UniEval 與 GPTScore。",
+      "numbers": "平均 ρ 0.514／τ 0.418；UniEval 0.474／0.377；GPTScore ρ 0.417；BARTScore 0.385／0.305。分維度 ρ：coherence 0.582（UniEval 0.575）、consistency 0.507（0.446）、fluency 0.455（0.449）、relevance 0.547（0.426）。",
+      "section": "§3.4, Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "SummEval 上換成 GPT-4 當骨幹明顯優於 GPT-3.5；G-Eval-3.5 反而低於 UniEval。",
+      "numbers": "平均 ρ：G-Eval-4 0.514 vs G-Eval-3.5 0.401；τ：0.418 vs 0.320（UniEval ρ 0.474）。",
+      "section": "§3.4, Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Topical-Chat 上 G-Eval 的平均相關超過 UniEval 與 USR（分維度並非全勝），且 GPT-3.5 與 GPT-4 表現相近，作者認為此 benchmark 相對簡單。",
+      "numbers": "平均 r／ρ：G-Eval-4 0.575／0.588，G-Eval-3.5 0.574／0.585，UniEval 0.552／0.417，USR 0.358／0.403；差距主要在 ρ，平均 r 只差 0.023。coherence r UniEval 0.602 高於 G-Eval-4 0.594；groundedness r UniEval 0.577 高於 G-Eval-4 0.531。engagingness 與 groundedness 上 G-Eval-3.5 高於 G-Eval-4（例如 engagingness ρ 0.691 vs 0.631）。",
+      "section": "§3.5, Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "QAGS 上 G-Eval-4 的平均相關最高，主要贏在抽象式的 XSum 子集；G-Eval-3.5 在此表現差，作者歸因於一致性維度對模型能力敏感。",
+      "numbers": "平均 r／ρ／τ：G-Eval-4 0.599／0.611／0.525，UniEval 0.571／0.575／0.465，G-Eval-3.5 0.344／0.461／0.377；QAGS-XSum r：G-Eval-4 0.558 vs UniEval 0.461；QAGS-CNN r：G-Eval-4 0.631，低於 BARTScore 0.735 與 UniEval 0.682。",
+      "section": "§3.6, Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "機率加權提升 Spearman，但 Kendall τ 反而下降；作者解釋為不加權時大量平手不計入一致或不一致對，灌高了 τ。",
+      "numbers": "G-Eval-4 平均 ρ 0.514 vs −Probs 0.502；τ 0.418 vs −Probs 0.446。G-Eval-3.5 平均 ρ 0.401 vs −Probs 0.346。",
+      "section": "§2 Scoring Function, §4, Table 1",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "加入自動生成的評估步驟（CoT）在 SummEval 四個維度都提升 G-Eval-4 的相關性，fluency 提升最多。",
+      "numbers": "平均 ρ 0.514 vs −CoT 0.500；fluency ρ 0.455 vs 0.403；coherence 0.582 vs 0.564。",
+      "section": "§4, Table 1",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "G-Eval-4 一律給 GPT-3.5 摘要比人寫摘要更高的分數，即使人評偏好人寫摘要；作者視為 LLM 評審偏好 LLM 文本的初步證據，並警告拿它當 reward 會造成自我強化。",
+      "numbers": "原資料的人評者間一致性 Krippendorff's α=0.07；Figure 2 的各組平均分未以文字報告。",
+      "section": "§4, Figure 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "分數機率加權的定義：以提示詞中預設分數集合上的機率對分數加權求和，得到連續分數。",
+      "numbers": "score = Σ p(s_i)·s_i；GPT-4 以 n=20、temperature=1、top_p=1 取樣估計 p(s_i)，GPT-3.5 用 temperature=0 與 token 機率。",
+      "section": "§2 式 (1), §3.1",
+      "anchor_idx": 0
+    }
+  ],
+  "limitations_stated": [
+    "LLM 評審可能偏好 LLM 生成的文本；此分析只是初步研究，若把分數當 reward 會導致 LLM 過度擬合自己的評估標準。",
+    "高品質系統的輸出本身難評，原資料的人評者間一致性只有 Krippendorff's α=0.07。",
+    "LLM 評估器對指令與提示詞敏感。",
+    "不做機率加權時大量平手會灌高 Kendall τ，因此表中無機率版本的 τ 不應視為公平比較。",
+    "一致性（幻覺）維度對模型能力敏感，GPT-3.5 在 QAGS 上表現不佳。",
+    "GPT-4 不提供 token 機率，只能靠取樣估計。"
+  ],
+  "limitations_observed": [
+    "QAGS 實驗用的其實不是 G-Eval 本體：附錄的 hallucination 提示詞沒有 Evaluation Steps、沒有數值量表，只是一個是非問句，也沒交代回答如何轉成分數。因此 Table 3 的勝出（平均 r 0.599）不能拿來佐證「表單式＋auto-CoT＋機率加權」有效。",
+    "「大幅領先」的說法在分維度上站不住：SummEval coherence ρ 0.582 vs UniEval 0.575、fluency 0.455 vs 0.449 幾乎持平；Topical-Chat 平均 r 只領先 UniEval 0.023（0.575 vs 0.552），coherence r（UniEval 0.602 vs 0.594）與 groundedness r（0.577 vs 0.531）還輸給 UniEval，大差距只出現在 ρ（0.588 vs 0.417），因為 UniEval 自己的 ρ 偏低；QAGS-CNN 上 G-Eval-4 的 Pearson r（0.631）輸給 BARTScore（0.735）與 UniEval（0.682），只在 ρ（0.685 vs 0.680／0.662）與 τ（0.591 vs 0.557／0.532）上小勝，平均勝出主要靠 XSum 子集。",
+    "增益看起來大多來自骨幹模型而非框架（這是推論，論文沒有同時拿掉 CoT 與機率加權的變體可直接驗證）：G-Eval-3.5 在 SummEval（平均 ρ 0.401）與 QAGS（平均 r 0.344）都輸給 UniEval（0.474、0.571）；而 GPT-4 單獨拿掉 CoT 仍有 0.500、單獨拿掉機率加權仍有 0.502，都已超過 UniEval。在 GPT-4 上，CoT 與機率加權各只貢獻約 0.012–0.014 的 ρ；機率加權在 GPT-3.5 上的貢獻較大（0.401 vs 0.346，差 0.055），可能是因為 temperature=0 的單一輸出平手更嚴重，但 GPT-3.5 沒有 −CoT 消融。",
+    "消融與比較都是單次執行，沒有顯著性檢定、信賴區間或重複取樣變異；GPT-4 的機率本身來自 temperature=1 的 20 次取樣，這個取樣雜訊從未被量化，0.01 量級的差距無法判斷是否真實。",
+    "平手解釋無法驗證：論文未說明 Kendall τ 用的是 τ-a 還是 τ-b，兩者對平手的處理不同；作者用「平手灌高 τ」解釋 −Probs 的 τ 較高（0.446 vs 0.418），卻沒有報告平手比例或改用對平手校正的統計量。",
+    "§3.4 把 BARTScore 與 UniEval 歸為「從人評學習」的神經指標，與 §3.3 自己對 BARTScore 的描述（預訓練 BART 的平均 likelihood）矛盾；這個錯誤分類會讓讀者高估 G-Eval「零訓練勝過受監督指標」的意義。",
+    "報告錯誤：Table 2 標題寫 Spearman／Kendall-Tau，欄位卻是 r／ρ，§3.5 內文也說是 Pearson／Spearman；§4「模型大小」開頭說比較的是 SummEval 與 QAGS，列出的例外卻是 Topical-Chat 的兩個維度。",
+    "偏差實驗其實是跨模型比較：由 GPT-4 評 GPT-3.5 的摘要，並不是嚴格的自我偏好；又沒有對照組（例如非 OpenAI 模型的輸出，或換一個評審），也沒報告樣本數與信賴區間。加上人評 α=0.07，「人評偏好人寫摘要」這個分組本身就接近隨機，結論在兩個方向上都很弱。",
+    "engagingness 提示詞自相矛盾：評估步驟第 3 步要求「簡短解釋評分」，表單卻寫「scores ONLY」。若模型先輸出解釋，逐 token 分數機率的讀法就會失效，論文未說明實際如何解析。",
+    "可重現性差：text-davinci-003 已依 OpenAI 棄用頁於 2024-01-04 下架（https://developers.openai.com/api/docs/deprecations）；GPT-4 快照版本未指明；auto-CoT 由哪個模型生成、是否固定未說明。DeepEval 的 G-Eval 文件也指出，提供固定 evaluation_steps 可讓分數在多次執行間更穩定（https://deepeval.com/docs/metrics-llm-evals），間接說明 auto-CoT 會帶來論文沒量到的跑間變異。公開 repo 只含 SummEval 的提示詞與結果，Topical-Chat 與 QAGS 無法照公開材料重現。",
+    "未討論資料污染：SummEval、Topical-Chat／USR 人評、QAGS 都在 GPT-4 訓練前就已公開，人評分數或待評文本可能已在預訓練語料中，會讓相關性偏高。",
+    "論文完全沒報告成本與延遲：GPT-4 版本每個樣本、每個維度要 20 次呼叫，SummEval 四維等於每則摘要 80 次；用在 agent 大規模回歸評估時，這個成本是實質限制。",
+    "對 T7 的外推有限：評估對象是單一 NLG 輸出（一則摘要或單輪回應）搭配靜態脈絡，不涉及多輪軌跡、工具呼叫、環境狀態或任務是否完成；Topical-Chat 也只有 turn-level 評分，沒有對話層級的評估。"
+  ],
+  "framework_role": "T7 中 LLM-as-judge 的奠基範式與最常被沿用的實作樣板：「評估準則＋LLM 展開的評估步驟＋只填分數的表單＋分數機率加權」。在框架裡，它可以當作逐輪回應品質的評分器，用自然語言準則評分 T6 產生的對話紀錄；機率加權的連續分數也可作為 T8 任務完成分數的一個品質子分數來源。§4 的偏差分析則提醒：T7 的 LLM 評分若回饋給自我修正或訓練，可能形成自我強化迴路。它不處理 agent 軌跡、工具使用與任務成敗判定，這些要靠其他 T7 工作補上。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "只實作了 E6 的消費端格式：Topical-Chat 實驗把「對話歷史＋知識事實＋候選下一輪回應」填入表單式提示詞，逐維度輸出 turn-level 分數，並以人評相關性驗證。資料是離線、靜態的人類對話語料，沒有使用者模擬器，也沒有互動迴路，論文完全沒觸及 T6 這一端的生產者。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "DeepEval（Confident AI 的開源／商用 LLM 評估框架）內建 GEval 指標，文件明確引用 arXiv:2303.16634，並實作「由 criteria 自動生成 evaluation steps」與「以輸出 token 機率加權求和」兩個核心步驟：https://deepeval.com/docs/metrics-llm-evals",
+      "OpenAI Cookbook 的〈How to evaluate a summarization task〉以 gpt-4 實作一個受 G-Eval 啟發的無參考評估器，評 relevance／coherence／consistency／fluency 四維：https://developers.openai.com/cookbook/examples/evaluation/how_to_eval_abstractive_summarization",
+      "Microsoft promptflow 官方 repo 的 eval-summarization 範例流程，文件說明實作基於 G-Eval 論文，並改寫提示詞使其不綁特定領域、加上解析多次試驗輸出的 parser：https://github.com/microsoft/promptflow/tree/main/examples/flows/evaluation/eval-summarization"
+    ],
+    "assessment": "在評估工具與官方範例層級有明確、可查證的採納：DeepEval 把它做成內建指標，OpenAI 與 Microsoft 的官方範例也以它為樣板（promptflow 範例與作者同屬 Microsoft）。但未見正式產品部署、線上使用量或實際業務決策依賴它的量化證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/nlpyang/geval",
+    "data": "三個 benchmark（SummEval、Topical-Chat、QAGS）皆為公開資料集。repo（MIT）只附 SummEval 的資料、提示詞、GPT-4 評分結果與 meta-eval 腳本，沒有 Topical-Chat 與 QAGS 的提示詞或結果；骨幹 text-davinci-003 已下架，GPT-4 快照版本未指明，無法逐位元重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 LLM-as-judge 表單式評分與機率加權的原型，已被 DeepEval、OpenAI Cookbook、promptflow 採用為標準做法，T7 必讀；但它評的是單一 NLG 輸出而不是 agent 軌跡，實驗在統計嚴謹度與可重現性上有明顯缺口，引用時要搭配後續的偏差與可靠性研究。",
+  "related": [
+    "2302.04166",
+    "2303.04048",
+    "2302.14520",
+    "2210.07197",
+    "2005.00456",
+    "1904.09675",
+    "2201.11903"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

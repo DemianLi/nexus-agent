@@ -1,0 +1,151 @@
+{
+  "id": "2410.12361",
+  "title": "Proactive Agent: Shifting LLM Agents from Reactive Responses to Active Assistance",
+  "topic": "T1",
+  "subarea": "使用者目標推斷與偏好引出",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "讓 agent 不再等使用者下指令，而是看著使用者的電腦活動，在每個事件時點決定要主動提議一個任務，還是保持沉默。作者先用 ActivityWatch 蒐集真實活動，再以 GPT-4o 驅動的 gym 合成 6,790 筆事件（ProactiveBench）；接著用 1,760 筆人工接受／拒絕標註訓練 LLaMA-3.1-8B reward model 來模擬使用者判斷，以此為評審微調 LLaMA-3.1-8B 與 Qwen2-7B。F1 從 55.06%／60.74% 升到 66.25%／66.47%。",
+  "problem": "現有的 LLM agent 幾乎都是被動式的：使用者不下指令，它就不動。使用者還沒說出口的潛在需求因此沒人處理，例如收到約開會的郵件，卻還沒開口請 agent 排程。相關的「主動」研究有兩類。Ask-before-Plan、Tell Me More、text-to-SQL 求助這類工作，仍然要使用者先給一個初始查詢，只是在查詢模糊時多問幾句；主動對話系統的研究則多半在讓回覆更有幫助。本文要處理的情境是完全沒有查詢時，從環境事件與使用者行為推斷需求，再決定要不要開口。難點有兩個。一是何時提：提太多會打擾使用者、降低信任。二是提什麼：抽象空泛的建議會被拒絕。此外，當時也缺少能自動評估「主動性」的基準與評審。",
+  "core_idea": "把主動協助形式化成逐事件的預測 P_t = f_θ(E_t, A_t, S_t)，P_t 可以是一個任務，也可以是 null。目標是最大化使用者的接受率，而「預測 null、使用者也確實不需要協助」同樣算接受，所以「不打擾」本身就是可以拿分的正確行為。真實使用者的判斷很昂貴，作者因此分三步做：先蒐集人工接受／拒絕標註，訓練一個 reward model 當使用者判斷的替身；再用 GPT-4o 驅動的環境 gym（負責生成事件、維護狀態）搭配使用者模擬器，大量合成事件序列與提議，當成微調開源模型的訓練資料；最後用同一個 reward model 當自動評審。",
+  "method": {
+    "問題形式化（§3.1）": "每個時點 t 的輸入有三項：使用者活動 A_t（鍵盤輸入、與 agent 的對話等）、環境事件 E_t（收到新郵件、關閉應用程式等）、環境狀態 S_t（檔案系統、開啟中的網頁內容等）。輸出 P_t 是一個候選任務或 null。使用者判斷寫成 R_t = g(P_t, A_t, S_t) ∈ {0,1}，並引入輔助變數 N_t 表示使用者是否需要協助：P_t 非空且被接受，或 P_t 為空且 N_t=0，記 R_t=1；其餘情況記 0。目標是 max_θ E[R_t]。",
+    "真實活動蒐集（§3.3 Event Collection、附錄 D.1）": "以 ActivityWatch 為基礎開發監控軟體，記錄鍵盤與滑鼠操作、造訪的網頁、使用的開發工具等。每筆原始紀錄包含 timestamp、duration、user_input、afk 狀態與 app 名稱。先把原始紀錄合併成邏輯連貫的片段，再用 LLM 轉成自然語言事件描述，例如「使用者切到 Code.exe 但沒有任何操作」。蒐集範圍分成 coding、writing、daily life 三類。",
+    "環境 Gym（§3.3、附錄 C.1–C.2）": [
+      "場景生成：先用人工標註者提供的 seed jobs 提示 GPT-4o，產生某類別下使用者可能在做的工作；再產生任務可能涉及的所有實體，包括瀏覽器、軟體，以及 agent 可以使用的工具；接著補上實體狀態、日期時間等細節；最後把蒐集到的真實事件交給模型，為每個場景生成範例事件，用來控制後續事件的粒度並維持多樣性。",
+      "事件生成：在每個場景裡，使用者模擬器先描述它在時點 t 為了完成工作所做的活動 A_t。gym 從該場景隨機抽幾筆範例事件當參考，依歷史事件與目前狀態逐一生成邏輯連貫的事件 E_{t+1}。每生成一個事件就更新一次實體狀態，直到這段活動再也生不出新事件為止。提示詞的規則包括：只描述客觀變化、與歷史事件保持一致、偶爾加入失敗或意外事件以增加真實感、遇到不合理的實體操作要報錯並說明原因。",
+      "狀態維護：蒐集相關實體過去的狀態變化，提示 GPT-4o 依據新事件產生新狀態 S_{t+1}，並依事件粒度推進模擬時間。下一個事件就以最新狀態為基礎生成。"
+    ],
+    "Proactive Agent（§3.4、Figure 3、附錄 B）": "每收到一個新事件 E_t，就先更新記憶，再綜合歷史事件、與使用者的對話以及使用者特徵，提出候選任務。偵測到需求時，把任務當成一個新事件送出，等使用者模擬器判斷；沒有需求就輸出 null、保持沉默。也可以先出一版草稿，取得使用者模擬器的回饋後再修正。提示詞要求輸出含四個欄位的 JSON：Purpose（使用者上一個動作的目的）、Thoughts、Proactive Task（任務描述或 null）、Response（要告訴使用者的話）。規則包括：任務要與事件相關、要考慮事件的時序、只在必要時提供協助、完全理解使用者的動作之後才提議、使用者不需要協助時設為 null。",
+    "任務執行（§3.4 Task Execution）": "使用者接受之後，agent 用場景生成時產生的工具（例如電腦的檔案系統工具、智慧燈開關）在 gym 裡多輪互動執行任務。agent 每做一個動作，gym 就生成一個新事件，再由 gym 與使用者模擬器更新環境狀態。使用者中斷或 agent 完成任務時結束。",
+    "使用者模擬器與人工標註（§3.5、附錄 C.3）": "由 GPT-4o 依使用者設定產生活動與動作。提示詞要求它表現得像真人、不要太好預測，並且批判性地看待收到的資訊。接受或拒絕的判斷則交給 reward model 模擬。標註資料的做法如下：每個事件先用 9 個不同的 LLM 產生預測，從中挑出「總餘弦距離最小」的 5 個當標註對象。每個預測由 3 位標註者各自選擇 accept、reject 或 reject all；reject all 表示這些事件根本不隱含任何任務，也就是 N_t=0；只要有任一預測被接受，該事件就記為 N_t=1。最後以多數決定案。共得 1,760 筆，每筆包含事件軌跡、預測與三人的判斷。另外請 GPT-4o 為每個判斷補寫較詳細的理由。",
+    "Reward model（§4.1、附錄 A）": "基底是 LLaMA-3.1-8B-Instruct。1,760 筆隨機切成訓練 1,640 筆、測試 120 筆。batch size 32、learning rate 1e-5、Adam、warm-up ratio 0.01，訓練 3 個 epoch，8 張 A100 約 1.5 小時。輸入是依時間排序的觀察事件，加上被提議的任務（可以是 null）。提示詞規則有四條：先分析當前觀察；任務為 null 時，不需要任務就接受、需要任務就拒絕；為了減少打擾，只接受有價值的任務；依觀察做出判斷。輸出 JSON {thought, judgment: accepted|rejected}，推理以第一人稱撰寫。",
+    "Agent 微調（§4.2、附錄 B）": "基底是 LLaMA-3.1-8B-Instruct 與 Qwen2-7B-Instruct（附錄 B 誤寫成 Llama-3-Instruct 8B）。訓練資料是 ProactiveBench 訓練集的 6,790 個事件，來自 136 個場景：coding 46 個場景／2,275 事件、writing 46／2,354、daily life 44／2,161。超參數與 reward model 相同（batch 32、lr 1e-5、Adam、warm-up 0.01、3 epochs），8 張 A100 約 2 小時。測試時 temperature 設為 0，所有模型使用同一份提示詞。",
+    "評估協定（§4.2、附錄 C.5）": "測試集共 233 個事件、12 個場景。由 reward model 模擬使用者，對每個預測判斷接受與否。TP：提了任務且被接受；FP：提了任務但被拒；TN：沒提，使用者也不需要；FN：沒提，但使用者需要。Recall=TP/(TP+FN)，Precision=TP/(TP+FP)，Accuracy=(TP+TN)/全部，F1 是 P 與 R 的調和平均，另外再報 False-Alarm。",
+    "分析變體（§4.3）": "pred@3：一次最多提 3 個候選任務，上限定為 3 是為了控制使用者的認知負擔。reward model 逐一判斷，只要有一個被接受就算接受，全部被拒才算拒絕。w/ RM：模型先出一版草稿預測，取得以 reward model 為核心的使用者模擬器回饋，再修正成最終預測。w/ RM 可以與 pred@3 合併使用。",
+    "補充細節（出自 repo，論文未載）": [
+      "訓練資料建構（dataset/build_agent_trainset.py）：對每個事件，以名為 activeagent 的模型在 temperature 0.8 下產生預測；論文沒有說明 activeagent 是哪一個模型。預測交給名為 activerm 的 reward model 判斷。被拒時，會把前一個預測、Rejected 狀態與 RM 的 thought 當成回饋附上，要求改提不同的預測，最多嘗試 15 次；只有被 RM 接受的預測才會寫進訓練資料。換句話說，微調目標就是「reward model 會接受的預測」。gym 內部的使用者判斷則由環境變數 USE_ACTIVERM 切換：設為 True 用 RM，否則用 LLM 使用者模擬器，預設是後者。",
+      "指標計算（eval/calculate_agent_performance.py）：TN 與 FN 只在預測為 null 時才會產生，而且由 RM 對 null 的判斷決定：RM 接受 null 算 TN，拒絕 null 算 FN。它們不是測試集自帶的需求標註。只要提了任務而被拒，一律算 FP，不區分「根本不需要協助」與「需要協助但任務給錯」。False-Alarm 的實作是 FP/(TP+FP)，也就是 1−Precision；另一個 Accept Rate 同樣等於 Precision。",
+      "測試集：dataset/test_data 只有 code_11–16 與 writing_11–16 共 12 個檔，對應論文說的 12 個場景，其中沒有 daily life。eval/README 寫目前共 227 個事件（論文寫 233）；eval/results/*.csv 中 real_coding 107 個、real_writing 120 個。dataset/README 說 test_data 同時含人工蒐集與 gym 生成的資料，並已去除個資。",
+      "Reward model 資料（dataset/reward_data）：公開的 train_data.jsonl 有 1,629 筆（論文寫 1,640），其中 False-Alarm 類占 913 筆。test_data.jsonl 的 120 筆是 Missed-Need、Correct-Rejection、Correct-Detection、False-Alarm 各 30 筆的分層樣本。",
+      "人工一致率（dataset/calculate_human_agreement.py）：算法是「每位標註者的判斷與多數決標籤相符的比例」。多數決本身就是由這三個人決定的，所以這不是 kappa 那一類的標註者間一致率。",
+      "Agent 訓練資料不在 repo 裡，dataset/agent_data/README.md 只附一個 Google Drive 連結。repo 的授權是 Apache 2.0；README 公告 Proactive Agent 與 reward model 的權重放在 Hugging Face（YancyLee/ProactiveAgent），但 eval/README 的 RM 下載連結仍標示 Coming soon。"
+    ]
+  },
+  "assumptions": [
+    "一個 8B 的 reward model，從約 1,640 筆標註（來自三位標註者、約 350 個事件）學到的接受判斷，可以代表真實使用者在不同人、不同情境下的接受偏好；而且同一個 RM 同時拿來篩訓練資料與當評審，不會造成偏差。",
+    "原始的鍵盤、滑鼠、網頁紀錄轉成自然語言事件描述之後，推斷需求所需的資訊仍然保留下來。",
+    "GPT-4o 驅動的 gym 與使用者模擬器合成的事件，分佈夠接近真實使用者的活動，在合成資料上學到的行為能遷移到真實測試事件。",
+    "使用者需求可以在單一事件時點用二元的接受／拒絕刻畫；打擾的頻率成本、提太晚的代價、重複提議造成的疲勞都可以忽略。",
+    "每個時點提一個（或最多三個）自由文字的候選任務，就足以表達協助的內容；任務粒度由模型自己決定。",
+    "使用者願意讓 agent 持續監控鍵盤輸入、剪貼簿與瀏覽紀錄。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ProactiveBench 測試集：233 個事件、12 個場景。論文說是在真實世界蒐集，repo 則說含 gym 生成的資料；公開版有 227 個事件，只有 coding 與 writing 兩類",
+      "Reward model 測試集：120 筆人工標註，Missed-Need、Non-Response、Correct-Detection、False-Detection 四種情境各 30 筆"
+    ],
+    "metrics": [
+      "Reward model：以人工多數決為準的 Recall、Precision、Accuracy、F1，以及四種情境（Missed-Need、Non-Response、Correct-Detection、False-Detection）各自的一致率",
+      "Agent：以 reward model 的判斷計算 Recall、Precision、Accuracy、False-Alarm、F1（附錄 C.5）",
+      "設定比較：pred@1、pred@3、w/ RM、pred@3 w/ RM"
+    ],
+    "baselines": [
+      "Reward model 的對照：直接提示 GPT-4o、GPT-4o-mini、LLaMA-3.1-8B、LLaMA-3.1-70B 當評審",
+      "Agent 的對照：Claude-3-Sonnet、Claude-3.5-Sonnet、GPT-4o-mini、GPT-4o，以及未微調的 LLaMA-3.1-8B-Instruct、Qwen2-7B-Instruct，全部使用同一份提示詞"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以人工標註微調的 LLaMA-3.1-8B reward model，對人工多數決的一致程度遠高於直接拿現成 LLM 當評審，而且在「使用者不需要協助、agent 卻提議」的情境上一致率是 100%。",
+      "numbers": "F1 91.80%、Accuracy 91.67%、Precision 90.32%、Recall 93.33%；四種情境一致率：MN 80.00%、NR 86.67%、CD 100%、FD 100%。對照組 F1：GPT-4o 67.04%、GPT-4o-mini 63.24%、LLaMA-3.1-8B 58.46%、LLaMA-3.1-70B 67.48%",
+      "section": "§4.1、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "現成 LLM 當評審時幾乎什麼提議都接受，無法判斷使用者到底需不需要協助。這是作者訓練專用 reward model 的直接理由。",
+      "numbers": "False-Detection 情境的一致率：GPT-4o 0.00%、LLaMA-3.1-70B 6.67%、LLaMA-3.1-8B 13.33%、GPT-4o-mini 33.33%；CD 情境則多在 86.67–100%。GPT-4o 的 Recall 100%、Precision 只有 50.42%",
+      "section": "§4.1 Results、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "閉源模型普遍過度主動：使用者需要時多半會幫，但使用者不需要時不會保持沉默，false alarm 偏高。Claude-3-Sonnet 則相反，常常沒偵測到需求。",
+      "numbers": "GPT-4o：Recall 98.11%、Precision 48.15%、False-Alarm 51.85%、F1 64.60%；GPT-4o-mini：Recall 100%、False-Alarm 64.73%、F1 52.15%；Claude-3.5-Sonnet：F1 62.00%；Claude-3-Sonnet：Recall 27.47%、F1 31.65%",
+      "section": "§4.2 Result、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在 ProactiveBench 合成資料上微調之後，兩個開源 8B／7B 模型的 F1 都提升，false alarm 降到與 GPT-4o 相當；微調後的 Qwen2-7B 拿到最高 F1。",
+      "numbers": "LLaMA-3.1-8B：F1 55.06%→66.25%、False-Alarm 61.84%→50.24%；Qwen2-7B：F1 60.74%→66.47%、False-Alarm 56.00%→50.22%；GPT-4o 為 64.60%／51.85%（§4.2 內文另寫 LLaMA 44.78%→61.74%、最高 66.07%，與表不一致）",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "一次提最多 3 個候選任務（任一被接受就算接受）時，所有模型的各項指標都明顯變好，false alarm 大幅下降。不同模型的受益程度不同，LLaMA-3.1-8B 在需求不明時仍會給出不相干的協助，這一點無法靠多給候選改善。",
+      "numbers": "GPT-4o：F1 64.60%→77.72%、False-Alarm 51.85%→36.44%；GPT-4o-mini：F1 52.15%→78.80%；LLaMA-3.1-8B：F1 55.06%→69.10%（pred@3 時與 GPT-4o-mini 差約 9 個百分點）",
+      "section": "§4.3 Predict Multiple Tasks、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "推論時先出草稿、再拿 reward model 的回饋修正，模型的 false alarm 下降、accuracy 上升，但會傾向保持沉默，recall 大幅下降；GPT-4o 的 F1 甚至下降。和 pred@3 合併使用則全面改善。",
+      "numbers": "w/ RM 的 Recall：GPT-4o 98.11%→56.76%（F1 64.60%→56.00%）、GPT-4o-mini 100%→55.45%（F1 52.15%→59.22%）、LLaMA-3.1-8B 98.86%→77.08%（F1 54.81%）。pred@3 w/ RM 的 F1：GPT-4o-mini 79.05%、GPT-4o 77.53%、LLaMA-3.1-8B 74.76%",
+      "section": "§4.3 Feedback From the Reward Model、Table 4",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "Reward model 的訓練資料是三人標註、多數決定案的接受／拒絕判斷，作者宣稱標註一致率很高。",
+      "numbers": "1,760 筆（訓練 1,640、測試 120）；每個事件由 9 個 LLM 產生預測、選 5 個標註；測試集的標註一致率 91.67%",
+      "section": "§3.5、§4.1 Setting",
+      "anchor_idx": 1
+    }
+  ],
+  "limitations_stated": [
+    "探索的環境設定有限，只有 coding、writing、daily life 三類；要確立泛用性與穩健性，還需要更廣的應用領域。",
+    "模型的 false alarm 比例仍然偏高，還無法完美預測任務。這可能打擾使用者、引發不必要或錯誤的動作，進而降低信任與系統效率。",
+    "應更深入研究如何依情境動態調整 agent 的主動程度。",
+    "需要以使用者為中心的大規模評估，了解真實使用者如何與主動 agent 互動。",
+    "agent 需要環境資訊才能預測，必須處理倫理與隱私問題，確保使用者資料被負責任地處理、agent 運作透明。",
+    "結論承認：減少不恰當的提議、確保任務預測符合情境，仍是尚未解決的挑戰。",
+    "§4.3 承認：加入 RM 回饋之後，模型收到回饋就傾向保持沉默，recall 大幅下降，而什麼都不做不一定是最佳解；GPT-4o 的 F1 因此反而下降。"
+  ],
+  "limitations_observed": [
+    "評估是循環的。repo 的 build_agent_trainset.py 只把 RM 接受的預測寫進訓練資料，被拒時還把 RM 的理由回饋給預測模型重試，最多 15 次；接著又用同一個 RM 當評審（eval/judge_agent_prediction.py）。所以微調模型的 66.25%／66.47% 衡量的是「與這個 RM 的偏好有多一致」，不是人類接受率。§4.3 的 w/ RM 設定更是在推論時直接拿評審的回饋修正答案。全文沒有任何一個 agent 的輸出經過人工評估。",
+    "指標設計讓 Recall 與 False-Alarm 都失去鑑別力。依官方腳本，FN 只在預測為 null 且 RM 拒絕 null 時才出現，而多數模型幾乎從不輸出 null，所以 Table 3 除了 Claude-3-Sonnet 之外，Recall 都在 97.89–100%。一個永遠提議的策略也能拿到 Recall=1，此時 F1=2P/(1+P)，表上 F1 的排名其實就是 Precision 的排名。False-Alarm 的實作是 FP/(TP+FP)=1−Precision，Table 3 每一列都對得上（GPT-4o 48.15%＋51.85%、Qwen2-7B-Proactive 49.78%＋50.22%）。§4.2 把 False-Alarm 描述成「使用者不需要協助卻提議」，但「需要協助、任務卻給錯」同樣被算成 FP，所以這個描述並不準確。「false alarm 降到與 GPT-4o 相當」和「precision 與 GPT-4o 相當」說的是同一件事。",
+    "絕對水準其實很低。最好的微調模型 Precision 49.78%、Accuracy 50.66%，也就是每兩次主動打擾就有一次會被 RM 拒絕。「勝過所有開源與閉源模型」靠的是對 GPT-4o 多出 1.87 個百分點，而測試集只有約 230 個事件，Precision 在 50% 附近的二項標準誤約 3.3 個百分點；論文沒有報信賴區間，也沒有多個 seed，這個差距落在雜訊範圍內。",
+    "論文的數字彼此對不上，也和 repo 公開的結果對不上。§4.2 內文寫 LLaMA-3.1-8B 從 44.78% 升到 61.74%、最高 F1 為 66.07%，Table 3 卻是 55.06%→66.25%、最高 66.47%。repo 的 eval/results/*.csv（227 個事件）中，activellama 的 F1 是 61.74%（與內文相符、與表不符），gpt-4o 是 66.27%（表上是 64.60%），claude-3-sonnet 是 55.83%（表上是 31.65%），llama3.1-8b 是 52.46%（表上是 55.06%）。照公開結果，GPT-4o 只比 Qwen2-7B-Proactive（66.47%）低 0.2 個百分點，還高於 LLaMA-3.1-8B-Proactive。無法判斷 Table 3 來自哪一次執行。",
+    "測試集「來自真實世界」的說法站不住。§1 說 233 個測試事件是 LLM gym 依據蒐集到的真實脈絡生成的；§4.2 卻說是在真實世界蒐集；dataset/README 又說同時含人工蒐集與 gym 生成的資料，而且沒有給比例。公開的測試檔只有 6 個 coding 場景與 6 個 writing 場景，沒有 daily life；訓練集卻約有三分之一（2,161／6,790）是 daily life，這一類完全沒有對應的測試。",
+    "Reward model 的 91.80% 很可能偏樂觀。比對 repo 的 reward_data 可以看到三件事。第一，測試集 120 筆裡有 96 個不同的事件軌跡，而這 96 個軌跡全部也出現在訓練集中，只是搭配不同的預測。RM 等於在已經看過標籤的脈絡上受測，而判斷 null 對不對（MN、NR 兩類）正取決於「這個事件需不需要協助」，這個標籤很可能已在訓練時學到。第二，測試集是四類各 30 筆的分層樣本，不是 §4.1 說的隨機切分；訓練集則以 False-Alarm 類為大宗（913／1,629）。各類一致率的刻度是 1/30＝3.33%，所以「FD 一致率 100%」就是 30 筆全對，樣本量很小。第三，FA 類的 30 筆中有 9 筆標記為 help_needed=True，也就是使用者其實需要協助、只是任務給錯了。§4.1 把 False-Detection 定義為 N_t=0，這 9 筆與論文自己的定義不符；這也表示在 RM 評審這一側，「不需要卻提議」與「需要但提錯」同樣混在一起。",
+    "「91.67% 的標註一致率」被高估了。repo 的算法是每位標註者與多數決相符的比例，而多數決就是由這三人決定的。公開的測試檔裡，三人意見完全一致的只有 90／120 筆（75%）；剩下 30 筆是 2 比 1，換算正好是 (90×3+30×2)/360＝91.67%。這個數字無法說明人類對「要不要主動協助」的判斷有多一致。",
+    "標註樣本的挑選方式與它宣稱的目的相反。§3.5 說用 9 個模型產生「多樣」的預測，卻從中挑出總餘弦距離「最小」的 5 個，也就是彼此最相似的 5 個；論文沒有解釋理由。這會讓 RM 看到的提議分佈偏向彼此相近的預測，對新穎或非典型的提議判斷能力不明。",
+    "「時機」其實沒有被評估。論文聲稱要判斷提議是否合時，但每個事件都是獨立、二元地判斷。提太晚、同一需求反覆提議、打擾的頻率都沒有成本；pred@3 只要任一候選被接受就算對，也不計入使用者讀三個候選的負擔。因此 pred@3 的大幅提升（例如 GPT-4o-mini 52.15%→78.80%）與 pred@1 不能直接比較。",
+    "只看論文本身無法重現。附錄 C.4 標題是 Prompt for Status Updating，內容卻是 reward model 的判斷提示詞（與附錄 A 重複）；真正的狀態更新與事件生成提示詞都沒有給。C.2 標為 Seed Jobs Data，內容其實是場景生成提示詞。附錄 B 把基底寫成 Llama-3-Instruct 8B。資料生成流程要靠 repo 的 gym 與設定檔才能還原，而且生成依賴 GPT-4o，agent 訓練資料也只放在 Google Drive。",
+    "放到 T1 來看，外推有限。輸入是桌面活動日誌，不是對話，而「意圖」是模型自由生成的一句任務描述，沒有意圖類別、槽位或 OOD 的概念。它也沒有澄清提問，只有「提議、接受或拒絕」這種一步式的確認。對話 agent 要借用它，必須自行把對話歷史當成事件流，也要重新驗證 RM 的判斷在對話情境下是否成立。"
+  ],
+  "framework_role": "這篇是 T1 子領域「使用者目標推斷與偏好引出」中，處理「沒有明確查詢時，推斷潛在需求並決定要不要介入」的代表作（ICLR 2025）。它把 T1 從「使用者說了什麼」延伸到「使用者沒說、但可能需要什麼」，並把「保持沉默（null）」明確放進輸出空間。這與澄清提問中「何時該問」的決策是同一種結構：都要在打擾成本與漏掉需求之間取捨。框架可以借用三個設計。一是用 N_t 輔助變數，讓「不介入」也成為可以評分的正確行為。二是用人工接受／拒絕標註訓練 reward model，模擬使用者對提議的判斷；它同時揭露了現成 LLM 當評審幾乎什麼都接受（GPT-4o 在 False-Detection 的一致率是 0%），這對 T6、T7 是重要警訊。三是「草稿→使用者模擬器回饋→修正」的推論期迴路；它的副作用是模型會變得過度沉默，也值得借鏡。它不處理意圖分類、OOD、槽位，也不處理多輪對話中的目標推斷；評估又完全由同一個 RM 判定，所以數字只能當方向性的參考。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "使用者模擬器（GPT-4o，依使用者設定產生活動 A_t）的輸出，經 gym 轉成事件流之後，就是 proactive agent 推斷需求（T1）的唯一輸入。§4.3 的 w/ RM 設定中，以 reward model 為核心的使用者模擬器還會對草稿預測給回饋，這份回饋再進入 agent，用來修正最終預測。repo 建構訓練資料時，RM 的拒絕理由同樣會回饋給預測模型重試。"
+    },
+    {
+      "edge": "E6",
+      "how": "每個測試事件的互動紀錄（事件軌跡加上 agent 的預測）交給用人工標註訓練的 reward model（模擬使用者）判斷接受與否，再彙總成 Recall、Precision、False-Alarm、F1。reward model 本身也用人工標註的互動紀錄評估一致率（Table 2）。依 repo，同一個模擬使用者的判斷也被拿來篩選訓練資料，所以評估與訓練共用同一個判斷來源，形成閉環。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有提到任何部署或產品。作者群中有 Huawei Noah’s Ark Lab 的成員，但論文與 repo 都沒有說明在華為產品中使用。repo（https://github.com/thunlp/ProactiveAgent，Apache 2.0）附有一個示範 agent，會用桌面 toast 通知提議任務、讓使用者接受或拒絕，另外在 Hugging Face 釋出權重；這些屬於研究釋出，不算採納。WebSearch 只查到 repo 本身、內容農場式的介紹文，以及後續學術工作（例如 ProAgentBench、Proactive Agent Research Environment）的引用與延伸。這些屬於學術影響力，不計入採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/thunlp/ProactiveAgent",
+    "data": "大部分公開。repo（Apache 2.0）收有：ProactiveBench 測試資料（dataset/test_data，12 個檔、227 個事件，只有 coding 與 writing）；reward model 標註資料（dataset/reward_data，含 LLaMA-Factory 格式的訓練檔）；場景設定（scenes.yaml、seedtask.yaml）；gym、標註工具與評估腳本，以及官方評估結果 CSV。agent 訓練資料只放在 Google Drive 連結（dataset/agent_data/README.md）。README 公告權重在 Hugging Face（YancyLee/ProactiveAgent），但 eval/README 的 RM 下載仍標示 Coming soon。落差：公開的 RM 訓練集是 1,629 筆（論文 1,640），測試事件是 227 個（論文 233），官方結果 CSV 也和論文 Table 3 對不上。資料生成依賴 GPT-4o，事件蒐集需要在真人電腦上安裝 ActivityWatch 監控。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是「預測使用者未說出口的需求、並學會保持沉默」的奠基作（ICLR 2025；S2 顯示 102 次引用、16 次 influential），把 null 納入輸出、以 RM 模擬接受判斷的設計值得借用；但輸入是桌面行為日誌而不是對話，評估又完全由同一個 RM 判定（訓練資料也由它篩選），Recall 飽和、Precision 約 50%，數字與 repo 結果還互相矛盾，所以對 T1 算有價值但非必讀。",
+  "related": ["2406.12639", "2402.09205", "2407.14767", "2305.02750", "2401.05459"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

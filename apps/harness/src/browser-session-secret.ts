@@ -17,26 +17,33 @@
  *     `browser-auth.ts` 的 `storedSecret`／`canonicalSecret`；
  *   - 認不得的記錄明確失敗，**不覆寫**——同一個出處；
  *   - 讀之前先確認只有擁有者讀得到，group 或 other 有任何一個權限位元就拒絕啟動——
- *     `credentials-local` 的 `assertOwnerOnly`；Windows 沒有 POSIX mode 可看，跳過而不假裝；
+ *     `credentials-local` 的 `assertOwnerOnly`（抽成 `owner-only.ts`，受管憑證檔共用，#730）；Windows 沒有 POSIX mode 可看，跳過而不假裝；
  *   - 目錄 `0700`、檔案 `0600`——`credentials-local` 的 `writeFileAtomic(…, { mode: 0o600, dirMode: 0o700 })`；
  *   - 兩個行程同時第一次啟動不能互相蓋掉：dsh 在跨行程寫入鎖裡跑 `modifyRecord`；這裡只有一筆記錄，
  *     改用「先寫暫存檔、再 `link` 到正式路徑」——`link` 在目標已存在時失敗，所以先寫的贏，後到的讀
- *     先寫的那一把，而且讀的一方永遠讀不到寫一半的檔；
+ *     先寫的那一把，而且讀的一方永遠讀不到寫一半的檔（`atomic-file.ts` 的 `publishNewFile`，照 dsh 會話物化
+ *     `session-persistence-jsonl/src/index.ts:1296-1321`）；
  *   - 每次啟動只讀一次，之後在記憶體裡同步驗證；刪掉這個檔再重啟就撤銷全部既有的會話。
+ * - **多做了 fsync（理由 2，#1527 Q1 (a)，demian 2026-10-17 拍板）。** dsh 受管憑證走 `util/atomic-write` 的
+ *   `writeFileAtomic`，**不做 fsync**（`src/index.ts:75`「Crash durability (fsync) is out of scope」），只留了 TODO
+ *   要補檔案與父目錄的 fsync（`:85-86`）。這裡照那條 TODO 的方向補上：暫存檔 fsync 之後才 `link`，`link` 之後
+ *   fsync 目錄。不補的話，第一次啟動後斷電可能在正式路徑留下 0 位元組或半份的檔，上面「認不得就不覆寫」會讓
+ *   serve 從此起不來，只能刪檔、所有瀏覽器會話一起失效。代價是第一次建立多兩次 fsync，之後每次啟動只讀不寫。
  */
 
 import { randomBytes } from 'node:crypto';
-import { link, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+
+import { publishNewFile } from './atomic-file.js';
+import { assertOwnerOnlyMode, PRIVATE_DIR_MODE } from './owner-only.js';
 
 /** 密鑰檔在 harness home 底下的名字。 */
 export const BROWSER_SESSION_SECRET_FILE = 'browser-session.json';
 
 const SECRET_BYTES = 32;
 const RECORD_VERSION = 1;
-const GROUP_OTHER_BITS = 0o077;
-const DIR_MODE = 0o700;
-const FILE_MODE = 0o600;
+const DIR_MODE = PRIVATE_DIR_MODE;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/;
 
 function encodeBase64Url(value: Uint8Array): string {
@@ -60,11 +67,33 @@ function isMissing(error: unknown): boolean {
 }
 
 /**
+ * 一把住在 harness home 底下的密鑰：檔名，與錯誤訊息裡怎麼稱呼它、怎麼重設。
+ *
+ * 會話日誌 header 的設定雜湊（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)，`session-header-metadata.ts`）
+ * 也要一把落盤的密鑰，規矩跟這一把一模一樣（版本、canonical、owner-only、先寫的贏），所以共用這一份讀寫；
+ * **不共用同一把**：刪掉瀏覽器那一把是「撤銷全部瀏覽器會話」的開關，不該順便讓每一份日誌的設定雜湊換掉。
+ */
+export interface HomeSecretRole {
+  /** 在 harness home 底下的檔名。 */
+  readonly file: string;
+  /** 錯誤訊息裡的稱呼，例如「瀏覽器會話密鑰檔」。 */
+  readonly label: string;
+  /** 錯誤訊息最後那一句：怎麼重設、重設的代價。 */
+  readonly resetHint: string;
+}
+
+const BROWSER_SESSION_SECRET_ROLE: HomeSecretRole = {
+  file: BROWSER_SESSION_SECRET_FILE,
+  label: '瀏覽器會話密鑰檔',
+  resetHint: '要重設就刪掉它再重啟 serve——所有瀏覽器會話都會失效。',
+};
+
+/**
  * 讀一份已存在的密鑰檔；不存在回 `undefined`。
  *
  * @throws 權限過寬、內容認不得、密鑰不合格——三種都不覆寫，由人決定怎麼處理。
  */
-async function readSecretFile(file: string): Promise<Buffer | undefined> {
+async function readSecretFile(file: string, role: HomeSecretRole): Promise<Buffer | undefined> {
   let mode: number;
   try {
     mode = (await stat(file)).mode;
@@ -72,12 +101,7 @@ async function readSecretFile(file: string): Promise<Buffer | undefined> {
     if (isMissing(error)) return undefined;
     throw error;
   }
-  if (process.platform !== 'win32' && (mode & GROUP_OTHER_BITS) !== 0) {
-    throw new Error(
-      `瀏覽器會話密鑰檔 ${file} 其他使用者讀得到（mode ${(mode & 0o777).toString(8)}）；` +
-        `先跑 chmod 600 ${file} 再啟動。`,
-    );
-  }
+  assertOwnerOnlyMode(role.label, file, mode);
   const text = await readFile(file, 'utf8');
   let parsed: unknown;
   try {
@@ -88,18 +112,45 @@ async function readSecretFile(file: string): Promise<Buffer | undefined> {
   }
   if (!isRecord(parsed) || parsed.version !== RECORD_VERSION) {
     throw new Error(
-      `瀏覽器會話密鑰檔 ${file} 的格式認不得（要 { "version": 1, "secret": … }）；` +
-        `確認它不是別的東西寫的。要重設就刪掉它再重啟 serve——所有瀏覽器會話都會失效。`,
+      `${role.label} ${file} 的格式認不得（要 { "version": 1, "secret": … }）；` +
+        `確認它不是別的東西寫的。${role.resetHint}`,
     );
   }
   const secret = canonicalSecret(parsed.secret);
   if (secret === undefined) {
     throw new Error(
-      `瀏覽器會話密鑰檔 ${file} 的密鑰不合格（要 32 bytes 的 base64url）；` +
-        `要重設就刪掉它再重啟 serve——所有瀏覽器會話都會失效。`,
+      `${role.label} ${file} 的密鑰不合格（要 32 bytes 的 base64url）；${role.resetHint}`,
     );
   }
   return secret;
+}
+
+/**
+ * 讀 home 底下的一把密鑰，沒有就建一把。
+ *
+ * @param home - harness home（`harness-home.ts` 解析出來的絕對路徑）。不存在就以 `0700` 建。
+ * @param role - 哪一把：檔名與錯誤訊息的稱呼。
+ * @returns 32 bytes 的密鑰。兩個呼叫同時第一次建立時，拿到的是同一把。
+ * @throws 檔案權限過寬、內容認不得、或建立失敗。
+ */
+export async function loadOrCreateHomeSecret(home: string, role: HomeSecretRole): Promise<Buffer> {
+  const file = join(home, role.file);
+  const existing = await readSecretFile(file, role);
+  if (existing !== undefined) return existing;
+
+  await mkdir(home, { recursive: true, mode: DIR_MODE });
+  const text = `${JSON.stringify({ version: RECORD_VERSION, secret: encodeBase64Url(randomBytes(SECRET_BYTES)) })}\n`;
+  try {
+    await publishNewFile(file, text);
+  } catch (error) {
+    // 別的行程先建好了：讀它那一把。其他失敗照拋。
+    if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
+  }
+  const created = await readSecretFile(file, role);
+  if (created === undefined) {
+    throw new Error(`${role.label} ${file} 建立之後讀不到。`);
+  }
+  return created;
 }
 
 /**
@@ -109,29 +160,6 @@ async function readSecretFile(file: string): Promise<Buffer | undefined> {
  * @returns 32 bytes 的密鑰。兩個呼叫同時第一次建立時，拿到的是同一把。
  * @throws 檔案權限過寬、內容認不得、或建立失敗。
  */
-export async function loadOrCreateBrowserSessionSecret(home: string): Promise<Buffer> {
-  const file = join(home, BROWSER_SESSION_SECRET_FILE);
-  const existing = await readSecretFile(file);
-  if (existing !== undefined) return existing;
-
-  await mkdir(home, { recursive: true, mode: DIR_MODE });
-  const text = `${JSON.stringify({ version: RECORD_VERSION, secret: encodeBase64Url(randomBytes(SECRET_BYTES)) })}\n`;
-  const staging = join(
-    home,
-    `.${BROWSER_SESSION_SECRET_FILE}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`,
-  );
-  await writeFile(staging, text, { mode: FILE_MODE, flag: 'wx' });
-  try {
-    await link(staging, file);
-  } catch (error) {
-    // 別的行程先建好了：讀它那一把。其他失敗照拋。
-    if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
-  } finally {
-    await rm(staging, { force: true });
-  }
-  const created = await readSecretFile(file);
-  if (created === undefined) {
-    throw new Error(`瀏覽器會話密鑰檔 ${file} 建立之後讀不到。`);
-  }
-  return created;
+export function loadOrCreateBrowserSessionSecret(home: string): Promise<Buffer> {
+  return loadOrCreateHomeSecret(home, BROWSER_SESSION_SECRET_ROLE);
 }

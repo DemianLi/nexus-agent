@@ -21,8 +21,10 @@
  *
  * 提醒器從 `state.messages` 推鏈；日誌上沒有訊息，只有事件。逐條對：
  *
- * - **人講話清零 → `turn/start` 的 `message` 與 `goal` 清零。** 續行輪次的頭在提醒器那側也是一則
- *   素的 `HumanMessage`，它清零（`repeat-reminder.ts` 的 `GOAL_WRAPUP_MARKER` 那段說這是對的）。
+ * - **人講話清零 → 只有 `turn/start` 的 `message` 清零**（#662）。續行輪次的頭在提醒器那側帶 `goal` 來源、
+ *   結算通知帶 `subagent-settled`、背景子代理的訊息帶 `agent-message`，都不是人講話，不清零。判準直接問
+ *   `turnStartSource`（圖上那則訊息的來源就是它造的），兩邊不會各自漂。輪中插的話（`user/message` 的 `user` 來源）
+ *   是人講話，清零。
  * - **`resume` 不清零。** 回覆核准沒有新的人話，會話統計也把它併回前一輪。
  * - **`session/end-seed` 之後，鏈斷在下一顆頭上。** 行程重開之後，第一顆推得動鏈的 `tool/call` 前面一定有
  *   一顆 `message` 或 `goal` 的 `turn/start`：`resume` 要回答一顆掛著的中斷，而中斷只活在 pump 的記憶體裡
@@ -32,7 +34,7 @@
  *   （[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的 `conversation-restore.ts`），兩邊都在這裡斷。
  *   所以 end-seed 這一格照舊清零，而它只在寫不出來的形狀上有作用（接縫之後沒有頭就有呼叫）；留著是防兩個行程的
  *   日誌拼出一條實際上沒有人看過的長串。
- * - **subagent 那份沒有 `turn/start`**，一份就是一次委派，鏈跨整份。
+ * - **前景 subagent 那份沒有 `turn/start`**，一份就是一次委派，鏈跨整份（背景的每一輪各有 `turn/start`，見 `background-subagents.ts`）。
  * - **同一個 `callId` 第二次出現不推進鏈。** 被核准閘門中斷的那次，resume 之後以同一個 `callId`
  *   再記一顆 `tool/call`（`session-log.ts` 的 `tool/call` 那段）。提醒器數的是 `tool_calls`，那次
  *   呼叫在訊息裡只有一則——這裡不去重的話，每一次核准都會讓鏈多一格。
@@ -55,30 +57,63 @@
  * 寫入與基座檔案工具的失敗記成成功（基座回裸字串，見 `@nexus/core` 的 `fs-tool-errors.ts`）。那一段的錯誤數偏低，
  * 逐份分不出來，所以是報表底下每次都印的一句，不是某一份的標記。
  *
+ * #1039（PR #1039，2026-10-04 合進 develop，`4b6faef`）之前同樣有一段：`subagent` 工具的合法拒絕（前景指定
+ * `reasoning_effort`、沒開選模型、參數不合 schema……）都被記成 `ToolNotFoundError`／`UNKNOWN_TOOL`，修後是無碼，
+ * 參數不合是 `INVALID_ARGS`。格式版本沒升。**header 的 `build.commit`（30 起，#1040）也分不出來**，所以照樣只印
+ * 一句，不逐份標：
+ *
+ * - 有 `build` 那一格不代表修好之後寫的。#1040 自己的分支上 `ee07d29c1` 已經會寫 `build`，卻是在 #1039 合併
+ *   之前提交、還沒併進 develop 的那一版——那個 commit 跑出來的日誌帶 commit、而拒絕照舊記成 `UNKNOWN_TOOL`。
+ * - 拿 commit 去問「`4b6faef` 是不是它的祖先」也不準：feature 分支的 commit 被 squash 掉、遠端分支合併後刪除，
+ *   別的 clone 上可能查不到那個 commit；`dirty` 為真時跑的不是那個 commit 的程式碼；`commit` 可能是 `null`。
+ *   而且掃描得在讀檔時去叫 git，這支腳本就不再只是讀檔的純函式。
+ *
  * **另一件版本也帶不出來**：續接過的檔，header 在第一次續寫時被蓋成當時的版本，而續接之前那一段
  * 是舊版寫的。那一段的缺欄會被讀成 0。
+ *
+ * header 上的建置版本、插件清單、設定雜湊與模型型錄 id（30 起，#1025）因此**不照版本判**，照那一格在不在：沒有就印「—」。
+ * 規則在 `session-header-metadata.ts`。
  *
  * @module
  */
 
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir } from 'node:fs/promises';
 import { isAbsolute, join, relative } from 'node:path';
 import {
+  classifyStoredFormatVersion,
   currentMessageFeedback,
   deriveSessionStats,
+  inheritedEventCount,
+  isKnownSessionEventType,
+  isSubagentSessionHeader,
+  legacyTwoFileSessionFilenames,
+  parseLegacyTwoFileHeaderFilename,
+  subagentLinks,
   repeatCallKey,
   repeatReminderTracks,
   resolveRepeatReminderSettings,
   SESSION_LOG_FORMAT_VERSION,
+  SessionCorruptionError,
+  SessionNotFoundError,
+  turnStartSource,
 } from '@nexus/core';
 import type {
   LegacyTurnFeedbackItem,
   MessageFeedbackItem,
   RepeatReminderSettings,
   SessionEvent,
-  SessionEventType,
+  SubagentLink,
 } from '@nexus/core';
-import { parseJsonlSessionBody } from '../jsonl-session-store.js';
+// 讀的事件種類（`feedback/*`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
+// `todo/write` 不在這裡：它的事件擴充住在 core 的 `session-log.ts`（#1463 Q2 (a)）。
+import type {} from '@nexus/plugin-feedback';
+import { bodyFirstLine, parseJsonlSessionBody, readSessionEntry } from '../jsonl-session-store.js';
+import type { SessionEntry } from '../jsonl-session-store.js';
+import {
+  formatSessionHeaderMetadata,
+  readSessionHeaderMetadata,
+  type SessionHeaderMetadataView,
+} from '../session-header-metadata.js';
 
 /** 沒帶碼的錯誤結果落在這一格。dsh 只替帶碼的錯誤填 `error`，一般拋錯與核准被拒都在這裡。 */
 export const UNCODED_ERROR = '無碼';
@@ -91,46 +126,25 @@ const MODEL_CALLS_SINCE = 6;
 export const CANCEL_SINCE = 7;
 /** 評分與 `/feedback` 從這一版開始記。見 `session-store.ts` 的版本 8。 */
 export const FEEDBACK_SINCE = 8;
-
+/** 子代理目錄（`subagent/catalog`）從這一版開始記。見 `session-store.ts` 的版本 31（#1023）。 */
+export const SUBAGENT_CATALOG_SINCE = 31;
 /**
- * 這一版認得的事件種類。
- *
- * **型別逼它完整**：詞彙加了一種而這裡沒跟上，typecheck 就紅。不這樣的話，新種類會被當成
- * 「認不得」，而一份完全正常的日誌會報出一串疑似壞檔。
+ * 新增純資訊性種類不再升格式版本的起點。見 `session-store.ts` 的版本 32（#507）：從這一版起，版本號相同的日誌裡也可能
+ * 出現這一版不認得的種類（更新的版本寫的、標了 `ignorable`）。
  */
-const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
-  'turn/start': true,
-  'turn/end': true,
-  'turn/failed': true,
-  'interrupt/raised': true,
-  'command/run': true,
-  'command/done': true,
-  'goal/change': true,
-  'todo/write': true,
-  'model/usage': true,
-  'model/start': true,
-  'model/end': true,
-  'assistant/message': true,
-  'user/message': true,
-  'compaction/summary': true,
-  'context/measure': true,
-  'sandbox/mode': true,
-  'plan/mode': true,
-  'tool/call': true,
-  'tool/result': true,
-  'feedback/message-put': true,
-  'feedback/message-delete': true,
-  'feedback/record': true,
-  'deliverables/presented': true,
-  'workspace/changes': true,
-  'session/end-seed': true,
-};
+const IGNORABLE_VOCABULARY_SINCE = 32;
 
 /** 一份日誌的身分：從 header 讀出來的那幾格。 */
 export interface SessionLogHeader {
   readonly id: string;
+  /** 磁碟上那份 header 寫的格式版本（`parseHeader` 的 `storedFormatVersion`），各個 `…_SINCE` 門檻比的是它。 */
   readonly version: number;
   readonly parentSession?: string;
+  /** header 的那兩格（#1579），判「是不是子代理」用（core 的 `isSubagentSessionHeader`）。 */
+  readonly origin?: 'subagent';
+  readonly isSeeded?: true;
+  /** 建置版本、插件清單、設定雜湊、模型型錄 id（#1025），只留形狀對得上的那幾格；沒有就是沒記。 */
+  readonly metadata?: SessionHeaderMetadataView;
 }
 
 /** 讀進來、還沒掃的一份。 */
@@ -154,6 +168,8 @@ export interface SessionScan {
   readonly file: string;
   readonly sessionId: string;
   readonly parentSession?: string;
+  /** 子代理的（core 的 `isSubagentSessionHeader`，#1579）。帶 `parentSession` 卻不是子代理的是分叉。 */
+  readonly subagent?: true;
   readonly version: number;
   /** 模型呼叫次數（`deriveSessionStats` 的 `steps`）。 */
   readonly steps: number | null;
@@ -177,8 +193,21 @@ export interface SessionScan {
   readonly negativeTurns: number | null;
   /** `/feedback` 記下的評語則數。v8 之前是 `null`。 */
   readonly feedbackRecords: number | null;
+  /**
+   * 這一份派出的子會話，一顆 `subagent/catalog` 一筆（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）。
+   * v31 之前是 `null`：那時候不記，**不是沒派過**。子會話那一頭找回派它的呼叫，靠的是它 header 的 `parentSession`
+   * 指到的那一份的這一格（{@link formatScanReport}）。
+   */
+  readonly subagents: readonly SubagentLink[] | null;
   /** 認不得而略過的事件顆數。 */
   readonly unknownEvents: number;
+  /** {@link unknownEvents} 之中標了 `ignorable` 的顆數（#507）：寫方自己說略過它不影響重建。 */
+  readonly unknownIgnorableEvents: number;
+  /**
+   * header 上的建置中繼資料（#1025）。**判準是那一格在不在，不是 {@link version}**：續接會把舊檔的版本蓋成新的而不回填。
+   * 沒有就是一格都沒記，報表印「—」。
+   */
+  readonly headerMetadata?: SessionHeaderMetadataView;
 }
 
 /** 讀得到但讀不懂的那一份。 */
@@ -219,6 +248,8 @@ export function parseArguments(serialized: string): unknown {
  * **一輪有好幾則回覆被評時點踩優先**，其次取後評的：按鈕只放在每一輪最後一則，但線上指得到任何一則
  * 回覆，而這裡要回答的是「這一輪有沒有被點踩」。
  *
+ * 分叉繼承來的前綴裡的評分不算（#1579），同產品的評分插件：那是父會話的，掃父那一份時才算。
+ *
  * @param events - root 那一份日誌的全部事件。
  * @returns 輪（起頭那顆 `turn/start` 的 `seq`）→ 那一筆。
  */
@@ -226,7 +257,7 @@ export function ratingsByTurn(
   events: readonly SessionEvent[],
 ): ReadonlyMap<number, MessageFeedbackItem | LegacyTurnFeedbackItem> {
   const byTurn = new Map<number, MessageFeedbackItem | LegacyTurnFeedbackItem>();
-  for (const { item, turn } of currentMessageFeedback(events)) {
+  for (const { item, turn } of currentMessageFeedback(events, inheritedEventCount(events))) {
     const held = byTurn.get(turn);
     const negative = item.rating === 'negative';
     const outranks =
@@ -253,7 +284,7 @@ export function scanSessionLog(
   const threshold = loopingThreshold(settings);
   const tracks = repeatReminderTracks(settings);
 
-  const known = log.events.filter((event) => Object.hasOwn(KNOWN_EVENT_TYPES, event.type));
+  const known = log.events.filter((event) => isKnownSessionEventType(event.type));
   const seenCalls = new Set<string>();
   // 鍵是從檔上讀來的碼，不能有原型：`constructor` 這種碼會讀到繼承來的函式，數字變成字串。
   // 同 `session-stats.ts` 對 `callId` 的 `Object.hasOwn`。
@@ -261,13 +292,22 @@ export function scanSessionLog(
   let toolCalls = 0;
   let aborted = 0;
   let feedbackRecords = 0;
+  // 分叉繼承來的前綴（#1579）：評語同評分，是來源 thread 的，不算這一份的。
+  const inherited = inheritedEventCount(log.events);
   let chain: (RepeatRun & { readonly key: string }) | undefined;
   let longest: RepeatRun | null = null;
 
   for (const event of known) {
     switch (event.type) {
       case 'turn/start':
-        if (event.data.kind !== 'resume') chain = undefined;
+        // `resume` 沒有訊息；機器造的頭（續行、結算、子代理的話）帶來源，不清零。
+        if (event.data.kind !== 'resume' && turnStartSource(event.data) === undefined) {
+          chain = undefined;
+        }
+        break;
+      case 'user/message':
+        // 輪中插的話：圖上是一則沒有來源的 `HumanMessage`，清零。外掛與引用快照不是人講話。
+        if (event.data.source.kind === 'user') chain = undefined;
         break;
       case 'session/end-seed':
         chain = undefined;
@@ -297,7 +337,7 @@ export function scanSessionLog(
         break;
       }
       case 'feedback/record':
-        feedbackRecords += 1;
+        if (event.seq >= inherited) feedbackRecords += 1;
         break;
       default:
         break;
@@ -311,6 +351,7 @@ export function scanSessionLog(
     file: log.file,
     sessionId: log.header.id,
     ...(log.header.parentSession !== undefined && { parentSession: log.header.parentSession }),
+    ...(isSubagentSessionHeader(log.header) && { subagent: true as const }),
     version,
     steps: version >= MODEL_CALLS_SINCE ? deriveSessionStats(known).steps : null,
     toolCalls: hasToolEvents ? toolCalls : null,
@@ -323,44 +364,49 @@ export function scanSessionLog(
         ? [...ratingsByTurn(known).values()].filter((item) => item.rating === 'negative').length
         : null,
     feedbackRecords: version >= FEEDBACK_SINCE ? feedbackRecords : null,
+    // 分叉繼承來的目錄是父會話派的（#1579），同產品的子代理目錄。
+    subagents:
+      version >= SUBAGENT_CATALOG_SINCE
+        ? subagentLinks(known, inheritedEventCount(log.events))
+        : null,
     unknownEvents: log.events.length - known.length,
+    unknownIgnorableEvents: log.events.filter(
+      (event) => !isKnownSessionEventType(event.type) && event.ignorable === true,
+    ).length,
+    ...(log.header.metadata !== undefined && { headerMetadata: log.header.metadata }),
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/** 讀 header 裡掃描要的那幾格。**版本比這一版新不拒絕**，見檔頭「照格式版本表態」。 */
-function parseHeader(text: string): SessionLogHeader | string {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return 'header 不是 JSON';
-  }
-  if (!isRecord(value)) return 'header 不是一個物件';
-  const { id, version, parentSession } = value;
-  if (typeof id !== 'string') return 'header 沒有 id';
-  if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
-    return `header 的 version 是 ${JSON.stringify(version)}`;
-  }
+/**
+ * 取 header 裡掃描要的那幾格。header 由後端的讀法讀過（{@link readSessionEntry}，開 `acceptNewer`：**版本比這一版新
+ * 不拒絕**，見檔頭「照格式版本表態」）。
+ */
+function headerOf({ header, storedFormatVersion }: SessionEntry): SessionLogHeader {
+  const metadata = readSessionHeaderMetadata(header);
   return {
-    id,
-    version,
-    ...(typeof parentSession === 'string' && { parentSession }),
+    id: header.id,
+    // 版本門檻看磁碟上那份寫的版號；`header.version` 已轉譯成這一版（#1856）。
+    version: storedFormatVersion,
+    ...(header.parentSession !== undefined && { parentSession: header.parentSession }),
+    ...(header.origin !== undefined && { origin: header.origin }),
+    ...(header.isSeeded !== undefined && { isSeeded: header.isSeeded }),
+    // 一格都沒記（30 以前的日誌）就整個不帶，報表照樣印「—」。
+    ...(Object.keys(metadata).length > 0 && { metadata }),
   };
 }
-
-const HEADER_SUFFIX = '.header.json';
-const LOG_SUFFIX = '.jsonl';
 
 /**
  * 從幾個根目錄往下找每一份日誌讀進來。**唯讀**：不拿租約、不截尾巴、不改 header。
  *
- * 認的是 JSONL 後端的檔名（`<base>.header.json` 配 `<base>.jsonl`，`jsonl-session-store.ts`），
- * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。
- * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件。
+ * 認檔名、讀 header 與日誌本文都走 JSONL 後端那一支（`jsonl-session-store.ts` 的 `readSessionEntry`，本文是穩定快照讀），
+ * 所以 CLI 的 run 目錄與 serve 的 `<根>/<projectKey>/` 都掃得到，給會話根就一次全掃。兩種佈局都認（#1594 ②）：舊兩檔的
+ * header 檔，與裡面有正規世代檔的會話目錄（挑最高世代；同一層有對應 `<base>.header.json` 的 `session.jsonl`、
+ * `session.v<N>.jsonl` 是舊兩檔的日誌，不算世代檔）；讀不出一份會話的目錄（沒有世代檔，或最高世代是空檔、第一行還沒
+ * 換行）才往下走。不走 `SessionStore.list`：
+ * 它不讀比這一版新的，也不說讀不懂的原因（[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。
+ * 舊路徑的墓碑（#1594 ③）由它的會話目錄代表，跳過；會話目錄不見了的墓碑算讀不懂。
+ * 只有 header 沒有日誌的是「還沒寫第一筆就當了」，讀成零顆事件；header 在讀目錄與讀檔之間不見了的，與單檔佈局挑定的世代檔
+ * 在讀本文之前不見了的，跳過。
  *
  * @param roots - 會話根、run 目錄或 projectKey 那一格，都行。
  * @returns 讀得懂的，與讀得到但讀不懂的（壞行、缺號、header 壞了）。後者不擋其餘的。
@@ -377,25 +423,57 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
       const path = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(path);
+      let base: string | undefined;
+      if (entry.isFile()) {
+        base = parseLegacyTwoFileHeaderFilename(entry.name);
+        if (base === undefined) continue;
+      } else if (!entry.isDirectory()) {
         continue;
       }
-      if (!entry.isFile() || !entry.name.endsWith(HEADER_SUFFIX)) continue;
-      const file = `${path.slice(0, -HEADER_SUFFIX.length)}${LOG_SUFFIX}`;
-      const header = parseHeader(await readFile(path, 'utf8'));
-      if (typeof header === 'string') {
-        unreadable.push({ file, reason: header });
-        continue;
-      }
-      let body = '';
+      let session: SessionEntry | undefined;
       try {
-        body = await readFile(file, 'utf8');
+        session = await readSessionEntry(directory, entry, { acceptNewer: true });
       } catch (error: unknown) {
-        if ((error as { code?: unknown } | null)?.code !== 'ENOENT') throw error;
+        if (error instanceof SessionCorruptionError) {
+          unreadable.push({
+            // 單檔佈局報挑中的那個世代檔、墓碑報墓碑：這兩種的錯都帶 `location`。
+            file:
+              error.location?.path ??
+              (base === undefined
+                ? path
+                : join(directory, legacyTwoFileSessionFilenames(base).log)),
+            reason: error.message,
+          });
+          continue;
+        }
+        throw error;
+      }
+      if (session === undefined) {
+        if (entry.isDirectory()) await visit(path);
+        continue;
+      }
+      const file = session.logPath;
+      const header = headerOf(session);
+      let body: Buffer;
+      try {
+        body = await session.readBody();
+      } catch (error: unknown) {
+        if (error instanceof SessionNotFoundError) continue;
+        throw error;
       }
       try {
-        logs.push({ file, header, events: parseJsonlSessionBody(header.id, body).events });
+        logs.push({
+          file,
+          header,
+          // 掃描照格式版本表態、認不得的略過並報數，不守「不認得的必需種類就拒讀」（#507）：那是產品路徑的讀方才要守的。
+          // 信封照 header 的版本分流（#1549）：不是 newer 的照驗、壞的記成讀不了，同 header 那一側；newer 的不驗。
+          events: parseJsonlSessionBody(header.id, body, {
+            acceptUnknownEvents: true,
+            newerFormat: classifyStoredFormatVersion(header.version) === 'newer',
+            recovery: 'strict',
+            firstLine: bodyFirstLine(session.layout),
+          }).events,
+        });
       } catch (error: unknown) {
         unreadable.push({ file, reason: error instanceof Error ? error.message : String(error) });
       }
@@ -430,6 +508,27 @@ export function displayPath(file: string, base?: string): string {
   return inside.startsWith('..') || isAbsolute(inside) ? file : inside;
 }
 
+/** 一顆連結的父端位置：呼叫與那一輪。往回找不到的那一格印「—」。 */
+function describeDispatch(link: SubagentLink): string {
+  return (
+    `呼叫 ${link.callId}（tool/call #${link.callSeq ?? '—'}）` +
+    `｜那一輪 turn/start #${link.turnSeq ?? '—'}`
+  );
+}
+
+/**
+ * 子會話那一頭：拿 header 的 `parentSession` 找到父那一份，在它的目錄裡找自己。找不到一律印「—」並說是哪一種沒有——
+ * **不推論成「沒有人派它」**。
+ */
+function dispatchedBy(child: SessionScan, parent: SessionScan | undefined): string {
+  if (parent === undefined) return `—（上層 ${child.parentSession} 不在這次掃描裡）`;
+  if (parent.subagents === null) {
+    return `—（上層是格式版本 ${parent.version}：第 ${SUBAGENT_CATALOG_SINCE} 版才記子代理目錄）`;
+  }
+  const link = parent.subagents.find((each) => each.childId === child.sessionId);
+  return link === undefined ? '—（上層的子代理目錄沒有這一份）' : describeDispatch(link);
+}
+
 /**
  * 印成給人看的報表。疑似打轉的排前面，其餘照路徑。
  *
@@ -449,6 +548,7 @@ export function formatScanReport(
       Number(b.looping === true) - Number(a.looping === true) || a.file.localeCompare(b.file),
   );
   const flagged = scans.filter((scan) => scan.looping === true).length;
+  const byId = new Map(scans.map((scan) => [scan.sessionId, scan]));
 
   const lines: string[] = [
     `會話掃描：${scans.length} 份日誌，疑似打轉 ${flagged} 份` +
@@ -456,7 +556,12 @@ export function formatScanReport(
   ];
   for (const scan of ordered) {
     const tag = scan.looping === true ? '[疑似打轉] ' : '';
-    const parent = scan.parentSession === undefined ? '' : `（上層 ${scan.parentSession}）`;
+    const parent =
+      scan.parentSession === undefined
+        ? ''
+        : scan.subagent === true
+          ? `（上層 ${scan.parentSession}）`
+          : `（分叉自 ${scan.parentSession}）`;
     lines.push('', `${tag}${scan.sessionId}${parent}  ${shown(scan.file)}`);
     const run =
       scan.longestRun === null
@@ -466,7 +571,14 @@ export function formatScanReport(
       `  步數 ${scan.steps ?? '—'} ｜工具呼叫 ${scan.toolCalls ?? '—'} ｜最長重複 ${run}`,
       `  工具錯誤 ${scan.errors === null ? '—' : formatErrors(scan.errors)}`,
       `  中止 ${scan.aborted ?? '—'} 輪 ｜點踩 ${scan.negativeTurns ?? '—'} 輪 ｜回饋 ${scan.feedbackRecords ?? '—'} 則`,
+      `  ${formatSessionHeaderMetadata(scan.headerMetadata ?? {})}`,
     );
+    if (scan.parentSession !== undefined && scan.subagent === true) {
+      lines.push(`  派它的 ${dispatchedBy(scan, byId.get(scan.parentSession))}`);
+    }
+    for (const link of scan.subagents ?? []) {
+      lines.push(`  派出 ${link.childId}（${link.mode}）← ${describeDispatch(link)}`);
+    }
     if (scan.version < FEEDBACK_SINCE) {
       const missing = [
         ...(scan.version < TOOL_EVENTS_SINCE ? [`第 ${TOOL_EVENTS_SINCE} 版才記工具事件`] : []),
@@ -477,11 +589,18 @@ export function formatScanReport(
       lines.push(`  格式版本 ${scan.version}：${missing.join('、')}，「—」是沒記，不是 0。`);
     }
     if (scan.unknownEvents > 0) {
+      const ignorable =
+        scan.unknownIgnorableEvents > 0
+          ? `（其中 ${scan.unknownIgnorableEvents} 顆標了可忽略，寫方說略過它不影響重建）`
+          : '';
       lines.push(
         scan.version > SESSION_LOG_FORMAT_VERSION
           ? `  格式版本 ${scan.version} 比這一版（${SESSION_LOG_FORMAT_VERSION}）新：` +
-              `${scan.unknownEvents} 顆認不得的事件略過了，上面的數字可能不全。`
-          : `  ${scan.unknownEvents} 顆認不得的事件略過了——格式版本 ${scan.version} 的詞彙` +
+              `${scan.unknownEvents} 顆認不得的事件略過了${ignorable}，上面的數字可能不全。`
+          : scan.version >= IGNORABLE_VOCABULARY_SINCE
+            ? `  ${scan.unknownEvents} 顆認不得的事件略過了${ignorable}——格式版本 ${scan.version} 起新增純資訊性的種類` +
+              '不升版，多半是比這一版更新的程式寫的；上面的數字可能不全。'
+            : `  ${scan.unknownEvents} 顆認不得的事件略過了——格式版本 ${scan.version} 的詞彙` +
               '這一版都認得，檔案可能被別的東西寫過。',
       );
     }
@@ -496,6 +615,9 @@ export function formatScanReport(
     '注意：#273（2026-09-12）之前寫的日誌把 goal、todo、計劃模式、root-only 樁的拒絕記成成功，' +
       '#293（2026-09-13）之前把 fence 擋下的寫入與檔案工具的失敗記成成功，' +
       '格式版本沒升、逐份分不出來——那一段的工具錯誤數偏低。',
+    '注意：#1039（2026-10-04）之前寫的日誌把 subagent 工具的合法拒絕（例如前景指定 reasoning_effort、參數不合）' +
+      '記成 UNKNOWN_TOOL，格式版本沒升、逐份分不出來——那一段的 UNKNOWN_TOOL 偏高、無碼與 INVALID_ARGS 偏低，' +
+      '不全是叫了不存在的工具。',
   );
   return lines;
 }

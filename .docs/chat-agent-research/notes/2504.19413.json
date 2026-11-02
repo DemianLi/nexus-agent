@@ -1,0 +1,181 @@
+{
+  "id": "2504.19413",
+  "title": "Mem0: Building Production-Ready AI Agents with Scalable Long-Term Memory",
+  "topic": "T2",
+  "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 Mem0：每收到一組新訊息就用 LLM 抽出候選事實，再讓 LLM 以工具呼叫在 ADD/UPDATE/DELETE/NOOP 四種操作中擇一，維護跨 session 的使用者記憶庫（另有以實體關係圖儲存的 Mem0g）；在 LOCOMO 上只用全文脈絡約 7% 的檢索 token、p95 總延遲降低約 92%，LLM-judge 分數略低於全文脈絡（66.88／68.44 對 72.90）。",
+  "problem": "LLM 的脈絡視窗固定，多 session 的長期對話遲早會超出；就算視窗夠長，使用者的偏好或事實（例如吃素、不吃乳製品）也會被幾千 token 的無關討論淹沒，注意力對遠距 token 的利用也會退化，結果是 agent 忘記偏好、重複發問、與先前確立的事實矛盾。作者認為延長脈絡只是延後問題，需要一個能選擇性儲存、整併（含處理矛盾）、按需檢索的持久記憶層，而且要滿足生產環境的延遲與 token 成本限制。對 T2 而言，這就是「LLM agent 在長多輪、跨 session 互動中怎麼維護對話狀態」的問題。",
+  "core_idea": "把長期記憶當成一個逐輪增量維護的事實庫，而不是原文片段或整段歷史：(1) 抽取階段只從最新一組訊息抽取值得記住的事實，但用全域摘要與最近 m 則訊息當背景；(2) 更新階段把每個候選事實跟向量檢索出的最相似舊記憶並列，交給 LLM 以 function calling 直接決定新增、補充、刪除或不動，不另訓練分類器；(3) 作答時只檢索精簡事實，而不是大段原文。圖版 Mem0g 則把記憶存成有向標記圖（實體為節點、關係為邊），衝突時把舊關係標為失效而非刪除，以支援時間推理。",
+  "method": {
+    "輸入單位與觸發（§2.1）": "每當新的訊息對 (m_{t-1}, m_t) 進來（通常是一則使用者訊息加一則助理回覆；LOCOMO 裡是兩位講者各一則）就觸發一次處理，屬增量式、可在對話進行中運作的管線。",
+    "抽取階段（§2.1）": [
+      "背景來源一：資料庫中的對話摘要 S，涵蓋整段歷史的語意內容；由一個非同步摘要模組定期更新，獨立於主管線，不增加處理延遲（刷新頻率與摘要提示詞論文未給）。",
+      "背景來源二：最近 m 則訊息 {m_{t-m}, …, m_{t-2}}，補足尚未被摘要吸收的細節；實驗中 m = 10。",
+      "提示詞 P = (S, 最近 m 則訊息, m_{t-1}, m_t) 送進抽取函式 φ（一個 LLM），輸出候選事實集合 Ω = {ω_1, …, ω_n}，只抽『這一組新訊息』的事實，但參考整段對話的背景。",
+      "抽取與更新的提示詞全文論文沒有附；公開程式庫中對應的是 mem0/configs/prompts.py 的 FACT_RETRIEVAL_PROMPT 與 DEFAULT_UPDATE_MEMORY_PROMPT（後者用 ADD/UPDATE/DELETE/NONE 四種 event 並附多組 JSON 範例）。"
+    ],
+    "更新階段（§2.1、Appendix B Algorithm 1）": [
+      "對每個候選事實 ω_i，用向量嵌入從資料庫取回語意最相似的前 s 筆舊記憶；實驗中 s = 10。",
+      "把候選事實與這 s 筆舊記憶一起以 function calling（論文稱 tool call）交給 LLM，由 LLM 直接選操作：ADD（沒有語意等價的舊記憶時新增，配新 ID）、UPDATE（用互補資訊擴充既有記憶；Algorithm 1 只在新事實資訊量大於舊記憶時才以新內容取代，沿用舊 ID）、DELETE（新資訊與舊記憶矛盾時移除舊記憶）、NOOP（已存在或無關，不動）。",
+      "Algorithm 1 的判斷順序：不相似→ADD；矛盾→DELETE；補充→UPDATE；其餘→NOOP。『資訊量』如何衡量沒有定義，實際上由 LLM 在同一次呼叫中隱含判斷。",
+      "基本版 Mem0 的 DELETE 是真的從記憶庫移除，不保留歷史版本。"
+    ],
+    "Mem0 的元件與超參數（§2.1）": "所有 LLM 操作用 GPT-4o-mini；向量資料庫用 dense embedding 做相似度搜尋（Mem0 用的嵌入模型論文沒寫明；LangMem 與 RAG baseline 用 OpenAI text-embedding-3-small）。m = 10、s = 10。",
+    "Mem0g 圖記憶（§2.2）": [
+      "表示：有向標記圖 G = (V, E, L)。節點是實體（例如 Alice、San_Francisco），每個節點含實體型別（Person、Location、Event…）、嵌入向量 e_v、建立時間戳 t_v；邊是關係，存成三元組 (v_s, r, v_d)，r 為關係標籤（例如 lives_in、prefers、owns、happened_on）。",
+      "抽取是兩段 LLM 管線：先由實體抽取器找出實體與型別，再由關係產生器對實體兩兩判斷是否有有意義的關係並給標籤，產生三元組。",
+      "寫入：對每個新三元組，分別嵌入來源與目的實體，搜尋相似度高於門檻 t 的既有節點（t 的數值沒給），依節點是否存在決定建兩個、一個或不建新節點，再建立帶 metadata 的邊。",
+      "衝突處理：衝突偵測找出可能與新資訊衝突的既有關係，由 LLM 更新解析器判斷是否過時；過時的關係標為失效而非實體刪除，以保留時間推理所需的歷史。",
+      "檢索雙路：(a) 實體中心——先找出查詢中的關鍵實體，以語意相似度定位對應節點，再展開其進出邊組成子圖；(b) 語意三元組——把整個查詢嵌入成向量，與每個三元組的文字編碼比對，只回傳超過可設定門檻的三元組並依相似度排序。",
+      "實作：圖資料庫用 Neo4j；抽取器與更新模組用 GPT-4o-mini 搭配 function calling。"
+    ],
+    "作答（Appendix A）": [
+      "Mem0 作答提示詞：分別列出兩位講者的記憶（帶時間戳）；指示逐步思考、特別注意時間戳、記憶互相矛盾時以最新的為準、把『去年』『兩個月前』這類相對時間依記憶時間戳換算成具體日期、不要混淆記憶中提到的人名與記憶擁有者、答案少於 5–6 個字。",
+      "Mem0g 作答提示詞相同，另外附上兩位講者各自的關係三元組，並多一步『分析知識圖關係以理解使用者的知識背景』。"
+    ],
+    "評估時的實際設定（依作者公開的評估程式，最早公開版本為 commit 393a4fd、2025-04-29，比 v1 晚一天；論文本文沒有寫出以下各點）": [
+      "Mem0／Mem0g 透過 Mem0 雲端平台的 MemoryClient 執行（add 時 version=\"v2\"，Mem0g 另加 enable_graph=True），不是單純在本機跑論文描述的演算法。",
+      "每段 LOCOMO 對話存兩份：每位講者各一個 user_id，並把角色翻轉，讓該講者的發言是 user、對方是 assistant；每次 add 送 2 則訊息，metadata 帶該 session 的時間戳。",
+      "在平台專案層級設定一段 LOCOMO 專用的 custom_instructions，指定要抽取的主題（身分認同與自我接納、家庭規劃與育兒、創作嗜好、心理健康、職涯與教育、人生重大事件等）、要求以人名撰寫、附具體日期，且只從 user 訊息抽取。",
+      "作答時每位講者檢索 top_k = 30 筆記憶（Makefile 設定）；作答模型與 judge 都是 gpt-4o-mini、temperature 0。",
+      "RAG 與全文脈絡（chunk_size = -1）用另一個短得多的系統提示詞（簡短作答、盡量用原文字詞、時間題參考對話日期），不是附錄 A 那份逐步推理提示詞；LangMem、Zep、OpenAI 則用與 Mem0 相同（或單一記憶庫版）的逐步推理提示詞。Zep 檢索是 edges 與 nodes 各取 20 筆（分別用 cross_encoder 與 rrf reranker）。",
+      "評分腳本略過 category 5（adversarial）。"
+    ],
+    "評估指標（§3.2）": "F1、BLEU-1；LLM-as-a-Judge（J）：judge 讀問題、標準答案與生成答案，輸出 CORRECT/WRONG 的 JSON 標籤，提示詞要求『寬鬆評分』——只要涉及同一主題、或時間題指向同一日期期間就算對；論文說每個方法對整個資料集獨立跑 10 次，報平均 ±1 標準差。部署指標：token 用量（tiktoken cl100k_base，只計作答時檢索進脈絡的記憶或 chunk 的 token）、搜尋延遲與總延遲的 p50／p95、記憶庫建構的 token 足跡與建構時間。",
+    "Baseline 設定（§3.3、Appendix C）": "LoCoMo、ReadAgent、MemoryBank、MemGPT、A-Mem 的 F1／B1 直接引用既有論文中以 gpt-4o-mini 評估的數字；A-Mem* 為作者以 temperature 0 重跑以補 J。LangMem（hot path，gpt-4o-mini＋text-embedding-3-small）。RAG：把整段對話切成 128–8192 token 的固定長度 chunk，檢索 top-k（k ∈ {1, 2}），不用 k > 2 以免涵蓋整段對話。全文脈絡：整段對話（平均約 26K token）直接放進脈絡。OpenAI：在 ChatGPT 介面用 gpt-4o-mini，把整段對話連同時間戳與講者名以提示詞餵進單一聊天 session 讓它產生記憶，再把全部記憶當脈絡作答。Zep：用其平台版本，保留時間戳。"
+  },
+  "assumptions": [
+    "寫入時就能判斷哪些資訊值得記住：抽取與查詢無關，未來會被問到的細節若當下沒被抽出，之後就無法補救。",
+    "矛盾與重複都是局部的：只要跟向量最相似的前 s = 10 筆舊記憶比對，就能抓到需要 UPDATE 或 DELETE 的對象。",
+    "LLM 能可靠地判斷語意等價、補充與矛盾，並在單次 function call 中選對操作；錯誤的 DELETE 或 UPDATE 不會累積成嚴重的狀態漂移。",
+    "基本版 Mem0 假設『最新資訊覆蓋舊資訊』即可，不需要保留狀態的歷史版本；需要時間推理的情境交給 Mem0g 的軟性失效。",
+    "記憶以使用者（user_id）為單位切分；對話是兩方之間的交換。",
+    "以 LOCOMO 問答的 J 分數作為記憶品質的代理指標，並假設寬鬆評分的 LLM judge 與人類判斷一致。",
+    "寫入端的 LLM 呼叫（每組訊息一次抽取、每個事實一次更新判斷、非同步摘要）成本可以接受，或可在背景非同步處理。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "LOCOMO（Maharana et al., 2024）：10 段多 session 長對話，每段約 600 則對話、平均約 26K token，每段平均約 200 題；題型 single-hop、multi-hop、temporal、open-domain，排除 adversarial 題型"
+    ],
+    "metrics": [
+      "F1",
+      "BLEU-1",
+      "LLM-as-a-Judge（J，二元 CORRECT/WRONG，10 次平均 ±1 標準差）",
+      "token 用量（cl100k_base，作答時檢索進脈絡的 token）",
+      "搜尋延遲 p50／p95",
+      "總延遲（檢索＋作答生成）p50／p95",
+      "記憶庫建構的 token 足跡與建構時間"
+    ],
+    "baselines": [
+      "LoCoMo、ReadAgent、MemoryBank、MemGPT、A-Mem（引用既有數字）",
+      "A-Mem*（作者重跑）",
+      "LangMem（hot path）",
+      "RAG（chunk 128／256／512／1024／2048／4096／8192 × k ∈ {1, 2}）",
+      "全文脈絡",
+      "OpenAI ChatGPT memory（gpt-4o-mini）",
+      "Zep（平台版本）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "整體 J 分數：Mem0 與 Mem0g 勝過所有 RAG 設定與其他記憶系統，但只小幅領先 Zep；對 OpenAI 記憶的 26% 相對提升即由此而來。",
+      "numbers": "Overall J：Mem0g 68.44、Mem0 66.88、Zep 65.99、最佳 RAG 60.97（k = 2、chunk 256）、LangMem 58.10、OpenAI 52.90、A-Mem 48.38；Mem0 對最佳 RAG 相對提升約 10%，Mem0g 約 12%；Mem0 對 OpenAI 為 66.88／52.90 ≈ +26%。",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "全文脈絡仍是最準的方法；記憶系統的賣點是延遲與 token，而不是準確率。",
+      "numbers": "全文脈絡 J 72.90、總延遲 p50 9.870 s／p95 17.117 s、每題約 26,031 token；Mem0 每題檢索 1,764 token、p95 1.440 s（降低約 92%）；Mem0g 3,616 token、p95 2.590 s（降低約 85%）。",
+      "section": "§4.3、Table 2、Figure 4(b)",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Mem0 的搜尋延遲在所有方法中最低，總延遲中位數也最低；LangMem 的搜尋延遲高到不適合互動應用。",
+      "numbers": "搜尋延遲 p50／p95：Mem0 0.148／0.200 s、Mem0g 0.476／0.657 s、Zep 0.513／0.778 s、A-Mem 0.668／1.485 s、LangMem 17.99／59.82 s；Mem0 總延遲 p50 0.708 s；OpenAI 總延遲 p50 0.466 s 最低，但不含事先抽取記憶的時間。",
+      "section": "§4.4、Table 2、Figure 4(a)",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "記憶庫的建構足跡：Mem0 遠比 Zep 精簡；作者另稱 Zep 新加入的記憶要等數小時才查得準，Mem0 圖建構最壞不到一分鐘（此點沒有量化分布）。",
+      "numbers": "每段對話平均：Mem0 約 7k token、Mem0g 約 14k token、Zep 超過 600k token；原始對話約 26k token。",
+      "section": "§4.5",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "Multi-hop 題型 Mem0 最佳，加上圖記憶反而變差；single-hop 同樣是 Mem0 最佳、Mem0g 略低。",
+      "numbers": "Multi-hop：Mem0 F1 28.64、J 51.15；Mem0g J 47.19；LangMem J 47.92；Zep J 41.35。Single-hop：Mem0 J 67.13、Mem0g 65.71、OpenAI 63.79、LangMem 62.23、Zep 61.70。",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "Open-domain 題型由 Zep 拿下最高分，本文兩個方法都沒贏；這與摘要『四個題型都勝過所有既有記憶系統』的說法矛盾。",
+      "numbers": "Open-domain J：Zep 76.60、Mem0g 75.71、Mem0 72.93、LangMem 71.12；F1：Zep 49.56、Mem0g 49.27、Mem0 47.65。",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Temporal 題型 Mem0g 最佳；OpenAI 記憶因多數生成的記憶缺少時間戳而大幅落後。",
+      "numbers": "Temporal：Mem0g F1 51.55、J 58.13；Mem0 J 55.51；A-Mem* J 49.91；Zep J 49.31；OpenAI F1 14.04、B1 11.25、J 21.71；LangMem J 23.43。結論所稱 temporal 相對提升 11%，對應的是 Mem0 55.51 對 A-Mem* 49.91。",
+      "section": "§4.1、Table 1、§5",
+      "anchor_idx": 3
+    }
+  ],
+  "limitations_stated": [
+    "全文脈絡的 J（約 73%）仍高於 Mem0 與 Mem0g，記憶系統是以些微準確率換取延遲與 token 成本（§4.3）。",
+    "圖記憶在 single-hop 與 multi-hop 沒有幫助，甚至略降，作者推測圖結構在多步推理時有額外開銷或冗餘（§4.1、§4.2）。",
+    "Mem0g 的圖操作帶來額外延遲，列為未來要最佳化的方向（§4.4、§5）。",
+    "LOCOMO 的 adversarial 題型因缺標準答案而排除（§3.1）。",
+    "F1 與 BLEU-1 這類詞彙重疊指標會誤判事實正確性；J 有隨機性，所以跑 10 次取平均（§3.2）。",
+    "OpenAI baseline 的延遲不含事先抽取記憶的時間（§4.4）。",
+    "未來方向：階層式記憶、更精緻的整併機制、延伸到程序性推理與多模態等非對話情境（§5）。"
+  ],
+  "limitations_observed": [
+    "動機沒有被實驗檢驗：LOCOMO 平均只有約 26K token，完全放得進 gpt-4o-mini 的 128K 視窗，所以『歷史超出脈絡』這個核心前提從未出現，結果全文脈絡仍以 72.90 勝過 Mem0g 68.44 與 Mem0 66.88。§4.3 說記憶系統『不論對話多長都維持一致表現』、全文脈絡的成本『指數成長』，但全文沒有任何對話長度的掃描實驗；Table 2 中延遲隨 chunk 大小的變化也不是指數型。",
+    "T2 最關鍵的狀態更新本身從來沒被量過：沒有抽取的精確率／召回率、沒有 UPDATE／DELETE 判斷的正確率、沒有長時間下的狀態漂移或錯刪統計，也沒有消融（例如只 ADD 不做其他操作、拿掉摘要 S、改變 m 或 s）。所有結論都來自下游 QA 的 J 分數，無法知道增益來自更新機制、抽取提示詞還是作答提示詞。",
+    "作答提示詞是干擾變因：Mem0／Mem0g、LangMem、Zep、OpenAI 在公開評估程式（commit 393a4fd）中都用附錄 A 那份逐步推理、依時間戳換算相對時間、矛盾時取最新的提示詞（Zep 與 OpenAI 是單一記憶庫版），但 RAG 與全文脈絡用的是只有幾句話的簡短系統提示詞。因此『Mem0 勝過全部 RAG 設定』以及它與全文脈絡的差距，都混入了提示詞差異，特別是 temporal 題型；沒有同提示詞的對照組可以分辨。",
+    "抽取端有未揭露、只給 Mem0 的資料集專用調校：同一份公開評估程式在 Mem0 平台專案上設定了 LOCOMO 專用的 custom_instructions，點名要抽取身分認同與自我接納、家庭規劃、心理健康等正好是 LOCOMO 人設對話的主題，並要求寫上人名與具體日期；論文沒有提到這一步。Zep 的寫入腳本沒有任何對應設定，LangMem 也沒有；作答端則如上一條，記憶類 baseline 用的是同一份提示詞。",
+    "被量的系統是 Mem0 的雲端服務（MemoryClient、version v2），§4.4 也把低延遲部分歸功於『infra 改進』；因此延遲比較是『生產最佳化過的自家服務』對『別人的預設設定』，而且結果綁在不公開、會隨時間變動的服務版本上，無法從論文描述的演算法重現。",
+    "Judge 的描述與程式不一致：§3.2 說 judge 是『另一個更強的 LLM』，但公開程式的 judge 是 gpt-4o-mini（與作答模型相同）、temperature 0；judge 提示詞要求『寬鬆評分』，只要涉及同一主題就算對，會抬高 J。公開的 evals.py、generate_scores.py 與 Makefile 都只跑一次 judge，沒有 10 次重跑的流程；報告的 ±0.1–0.7 標準差最多只反映 judge 的變異，沒有反映記憶建構的隨機性或 10 段對話之間的差異，也沒有與人工標註的一致性檢查。",
+    "Baseline 可比性有問題：Table 1 前五列直接引用 A-Mem 論文的 F1／B1，設定不同；作者自己重跑的 A-Mem* 在 temporal F1 由 45.85 掉到 35.40，已顯示設定差異之大。OpenAI baseline 是在 ChatGPT 介面手動操作，無法重現。Zep 官方部落格（2025-05-06 發表、之後更新，https://blog.getzep.com/lies-damn-lies-statistics-is-mem0-really-sota-in-agent-memory/）指控本文設定錯誤：兩位參與者都被設成 user、時間戳附在訊息內文而非 created_at 欄位、搜尋以循序而非平行執行而墊高延遲，並報告更正後 Zep 的 J 為 75.14 ± 0.17。其中前兩點與公開的 Zep 寫入腳本（commit 393a4fd 的 evaluation/src/zep/add.py）相符：每則訊息都以 role_type=\"user\" 寫入、時間戳以字串前綴放進 content；該腳本還只處理 idx == 0 的第一段對話（可能是除錯殘留，但照原樣無法重現 10 段對話的 Zep 數字）。雙方都是商業競爭者，各有利益衝突，目前未見第三方裁定；§4.5 所說 Zep 要等『數小時』才查得準也只是軼事觀察，沒有量測。",
+    "摘要與結論的說法超出數字能撐住的範圍：摘要稱四個題型都勝過所有既有記憶系統，但 open-domain 是 Zep 最高（76.60）；結論稱圖版在 temporal 與 open-domain 帶來『顯著』增益，實際上 J 只比 Mem0 多 2.62 與 2.78，同時在 single-hop 少 1.42、multi-hop 少 3.96，整體只多 1.56，卻要付出約兩倍的記憶 token（14k 對 7k）與約 1.8 倍的 p95 總延遲（2.590 對 1.440 s）。",
+    "『省下九成以上 token 成本』只算讀取端：Table 2 的 token 只計作答時檢索進脈絡的量（1,764 對 26,031），寫入端的成本——每組訊息一次抽取、每個候選事實一次附帶 10 筆舊記憶的更新呼叫、非同步摘要，而且評估時每段對話按講者存兩份——完全沒有計入。對一段約 600 則訊息的對話，寫入端的 LLM 呼叫次數可能遠多於讀取端。",
+    "排除 adversarial 題型等於拿掉了『該不該回答』的測試：這一類最能暴露錯誤抽取或錯誤合併的事實會不會被當成有把握的答案，對以抽取取代原文的記憶系統尤其關鍵。",
+    "基本版 Mem0 的 DELETE 是實體刪除，與作答提示詞『記憶矛盾時取最新』的指示互相矛盾（照演算法，矛盾的舊記憶本來就不該留著），也讓『某人以前住哪』這類需要狀態歷史的問題無從回答；Mem0g 雖然保留失效的邊，論文卻沒說明檢索時會不會用到失效關係。",
+    "外推範圍有限：LOCOMO 只有 10 段由 LLM 生成的兩人閒聊，沒有任務目標、工具呼叫或 slot 型約束；對任務型 agent 的對話狀態（目標、約束、已完成步驟）或指令在多輪中的保持，本文沒有提供證據。"
+  ],
+  "framework_role": "在 T2 中，Mem0 代表 LLM agent 時代的『開放 schema、跨 session 的對話狀態儲存』：狀態不再是預先定義的 slot-value，而是一組以自然語言寫成的事實（或實體關係三元組），每一輪由 LLM 做增量更新。它的 ADD/UPDATE/DELETE/NOOP 可以對應到傳統 DST 的新增 slot、覆寫值、清除值與沿用（carryover），可直接當成框架裡 T2 狀態更新運算子的設計範本；抽取時『全域摘要＋最近 m 則』的雙背景，以及 Mem0g 以軟性失效保留歷史，也都是狀態表示的具體選項。但本文只用下游 QA 評估，沒有任何類似 joint goal accuracy 的狀態正確率指標；框架若要在 T7／T8 衡量 T2，得自己補上抽取與更新操作層級的評估。它也是目前被主流 agent 框架官方整合的記憶層，可作為工程上的延遲與 token 成本參考點。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "論文本身：作者皆為 Mem0 公司（research@mem0.ai）；作者公開的評估程式直接呼叫 Mem0 雲端平台 API（MemoryClient），也就是說被量的系統就是其商用服務本身。來源：https://github.com/mem0ai/mem0/blob/393a4fd5a6cfeb754857a2229726f567a9fadf36/evaluation/src/memzero/add.py",
+      "作者的開源函式庫 mem0ai/mem0（Apache-2.0），同時提供自架版與雲端平台。來源：https://github.com/mem0ai/mem0",
+      "Microsoft AutoGen 官方文件在 autogen_ext.memory.mem0 提供 Mem0Memory 類別，支援雲端與本機後端，作為 agent 的記憶實作。來源：https://microsoft.github.io/autogen/stable//user-guide/agentchat-user-guide/memory.html",
+      "Strands Agents 官方工具庫 strands-agents/tools 內建 mem0_memory 工具（README 描述為跨 agent 執行儲存使用者與 agent 記憶以提供個人化），該工具於 2025-05-16 加入（commit b8ce6b1）。來源：https://github.com/strands-agents/tools",
+      "AWS Database Blog（2025-11-26）示範以 Mem0 開源版搭配 Amazon ElastiCache for Valkey 與 Amazon Neptune Analytics 建構 agent 持久記憶；共同作者包含 Mem0 CTO 與 AWS 產品經理，內容是整合示範與參考架構，沒有宣稱 AWS 或客戶在生產環境使用。來源：https://aws.amazon.com/blogs/database/build-persistent-memory-for-agentic-ai-applications-with-mem0-open-source-amazon-elasticache-for-valkey-and-amazon-neptune-analytics/"
+    ],
+    "assessment": "有可查證的商用產品（Mem0 雲端平台）與主流 agent 框架的官方整合（AutoGen、Strands Agents），以及與 AWS 共同發表的參考架構，屬於產品層級的採納。但要分清楚：這些整合採納的是 Mem0 這個產品，不能歸因於本文的實驗結果；AWS 部落格有 Mem0 CTO 共同署名，偏向合作宣傳。未見第三方以官方文件說明在生產環境採用本文所述演算法並量到效果。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/mem0ai/mem0（論文當時的評估程式在 evaluation/ 目錄，最早版本為 commit 393a4fd5a6cfeb754857a2229726f567a9fadf36，含 Mem0、Zep、LangMem、OpenAI、RAG 的腳本；2026-06-13 起改為子模組 https://github.com/mem0ai/memory-benchmarks，其現行 README 只支援 Mem0 Cloud／OSS，不再含 baseline）",
+    "data": "LOCOMO 公開（arXiv 2402.17753，snap-research）；評估 README 另附 Google Drive 的 locomo10.json 副本。但 Mem0 的結果需要 Mem0 平台 API 金鑰、Zep 需要 Zep API，OpenAI baseline 靠 ChatGPT 介面手動操作，三者都依賴會變動的商業服務，實際上難以精確重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它的『逐輪抽取＋LLM 選 ADD/UPDATE/DELETE/NOOP 維護開放 schema 事實庫』已被 AutoGen、Strands Agents 等主流 agent 框架官方整合，是 T2 在 LLM agent 狀態維護上必須知道的設計；但狀態更新本身的正確率從未被量過，評估又有提示詞、調校與 baseline 設定的干擾，應當作設計參考來讀，數字不宜直接引用。",
+  "related": [
+    "2402.17753",
+    "2310.08560",
+    "2502.12110",
+    "2501.13956",
+    "2305.10250",
+    "2402.09727",
+    "2404.13501",
+    "2311.08719"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,155 @@
+{
+  "id": "2410.08146",
+  "title": "Rewarding Progress: Scaling Automated Process Verifiers for LLM Reasoning",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "主張步驟層級的 process reward 應衡量「進展」——在一個與基礎策略互補的 prover 策略下，走這一步前後答對機率的變化（advantage），並訓練 process advantage verifier（PAV）預測它；在 MATH 上讓 beam search 與線上 RL 相對 ORM 更準、更省計算與樣本。",
+  "problem": "ORM 只在軌跡最後給一個稀疏的對錯訊號，難學也難拿來搜尋；人工逐步標註的 PRM（PRM800K）無法擴展；自動標註的 PRM（Math-Shepherd、OmegaPRM 以基礎策略的 Q 值 Q^π 當步驟分數）拿去做 RL 時只比 ORM 好 1–2%（DeepSeekMath），讓人懷疑 dense reward 到底有沒有用。論文要回答兩件事：(i) 每一步的 process reward 應該量什麼；(ii) 該用什麼自動資料收集法訓練出能預測它的驗證器。對 agent 軌跡而言，這等同於「哪一步讓任務更接近或更遠離成功」的步驟級評分與歸因問題。",
+  "core_idea": "(1) 步驟獎勵應是 advantage，A(s_h,a_h)=Q(s_h,a_h)−Q(s_{h−1},a_{h−1})，量「這一步讓未來成功機率變了多少」，而不是 Q 值本身：Q 把前一狀態的潛力與這一步的好壞混在一起，在 beam 容量有限時會留下負進展的步、踢掉正進展的狀態（§3.1 的 −0.05 與 +0.20 例）。(2) advantage 要在 prover 策略 μ 下計算，而不是基礎策略 π：μ=π 時的 policy gradient 與只用 outcome reward 完全相同；π 很弱時 A^π≈0；μ 太強（從任何前綴都能解出）或太弱時 A^μ 也≈0，分不出好步與壞步（例如只是重述題目的步）。(3) 好的 prover 是「互補」的：在 π 產生的動作上 A^μ 變異數大（可區分性），且與 A^π 不過度反向（對齊）；Theorem 3.1 給出每次更新的改進下界約為這兩項之和，因此比 π 弱的 prover 也可能有效，BoK(π)（K>1 但不過大）是好的起點。(4) 有效獎勵 Q^π+α·A^μ 同時用在測試期 beam search 的選步與線上 RL 的逐步獎勵。",
+  "method": {
+    "問題設定": "輸入數學題 x，基礎策略 π 產生回應 y=(a_1,…,a_H)，以換行為步驟分隔；前綴 (x,a_1,…,a_{h−1}) 視為狀態 s_h、下一步 a_h 為動作，動態是確定性的。最終對錯由 Rex（對最終答案做正規表示式比對，輸出 0/1）判定。Q^π(s_h,a_h)=從該前綴繼續用 π 取樣到底的期望 Rex；V^π(s_h)=E_{a~π}Q^π(s_h,a)；由於確定性動態，A^π(s_h,a_h)=Q^π(s_h,a_h)−Q^π(s_{h−1},a_{h−1})。",
+    "Q 值標註資料收集": "對每道訓練題先從策略（ORM 用基礎策略、PAV 用 prover）取樣 n_cov 條 seed rollout 以求前綴覆蓋，再對 seed rollout 的每個前綴另取樣 n_mc 條續寫，以蒙地卡羅平均估 Q_mc。配比規則（§4.2、Fig. 6b，beam 128、9B 基礎策略、Bo4 prover）：資料預算小時偏向覆蓋（n_cov>n_mc），預算大時偏向降低標籤雜訊（n_mc>n_cov）。實際採用 first-pit 策略（App D）：先花部分預算找出 Q^π 高於門檻的高價值狀態，對從這些狀態出發但最終錯誤的樣本，再花更多預算定位第一個 Q^π=0 的步（first pit），把直到 first pit 的所有前綴與估計 Q 值加入訓練資料；最終 n_mc=20，每個基礎策略收集超過 30 萬個（前綴, Q̂）配對。",
+    "驗證器訓練": "所有 PAV 都從 Gemma 9B 預訓練檢查點微調；以交叉熵對 Q̂（軟標籤）訓練；因 Q̂ 分佈偏斜，依 Q̂<0.5 與 Q̂≥0.5 分成兩桶做類別平衡取樣；20,000 次迭代、batch 32、Adam、最大學習率 5e-7、前 2,000 步線性暖身後 cosine 衰減。指定前綴末端的一個 token 為「scoring token」，用它的 logits 輸出預測值。",
+    "prover 的 Q 與 advantage": "對 BoK(π) prover，不另外用 BoK rollout 訓練，而是用 Q^π 模型的輸出解析換算：Q^{BoK(π)}(s,a)=1−(1−Q^π(s,a))^K（把 Rex 視為 Bernoulli，等於 K 次中至少一次答對）。prover 候選包括三個 SFT 策略本身（2B/9B/27B，各自需要一個 Q 模型）與 K∈{2,4,8,16,32} 的 BoK。A^μ(s_h,a_h)=Q^μ(s_h,a_h)−Q^μ(s_{h−1},a_{h−1})。",
+    "有效獎勵": "r_eff(s_h,a_h)=Q^π(s_h,a_h)+α·A^μ(s_h,a_h)。對應目標 ℓ_PAV-RL=ℓ_ORM-RL+α·Σ_h E_{s_h~d^{π'}}E_{a_h~π}[A^μ]，其 policy gradient 為 Σ_h ∇log π(a_h|s_h)·(Q^π+α·A^μ)（Eq. 4–5）。",
+    "測試期 beam search": "beam 寬 B，從只含題目的狀態開始；每一步對 beam 中每個狀態取樣 C=3 個下一步，用 r_eff（Q^π PRM＋PAV）替所有新狀態打分，保留前 B 個；最後一個候選改用 Q^π 模型當 ORM 挑選。α 在驗證集上以 beam 16、μ=π 做網格搜尋（0 到 1、間隔 0.1）：2B 與 9B 取 0.5、27B 取 0.2，α∈[0.2,0.6] 都比只用 Q^π 好；同一基礎策略的 α 沿用到所有 prover。預設 prover 為 Bo4(π)。計算效率定義為：要達到 ORM best-of-128 的準確率，PAV beam search 所需總計算的比值。",
+    "基礎策略": "Gemma 2B、9B、27B 在 MATH 上 SFT：5,000 次迭代、batch 32、Adam、最大學習率 5e-6（2B、9B）與 5e-7（27B）、前 500 步線性暖身後 cosine；取驗證集準確率最佳的檢查點。",
+    "線上 RL": "起點是 RFT 檢查點（SFT 模型再以收集 PAV seed rollout 時得到的正確軌跡微調，用來擴大初期覆蓋）。演算法為 REINFORCE，每步獎勵為 r_eff；另有一個 token 級價值函數當 baseline（以基礎策略初始化、平方損失，預測 E_a[Q^π+αA^μ]）。2B 訓練 10,000 次、9B 訓練 5,000 次迭代；Adam、學習率 1e-7、batch 32、最大回應長度 512、前 10% 線性暖身後 cosine；對 RL 初始檢查點加 KL 正則化，係數 0.001。α 在驗證集上選：2B 取 5.0、9B 取 3.0，0.5–6.0 都優於 ORM-RL。prover 試過 2B SFT 與 9B SFT 兩種，PAV 在訓練中固定不更新。對照組 ORM-RL 等於 α=0、只用 Rex。",
+    "教學範例（§3.3、App B）": "合成任務：長度 10、15 個 token 的序列，只要回應中出現未知的 planted sub-sequence y* 就得 1 分；π 是 3 層、128 隱藏單元的 MADE 網路，先以 γ=5 的弱策略產生的 3,200 筆樣本 SFT 50 次迭代；prover μ 在前綴末端已對上 y* 前 k 個 token 時，以正比於 γ 的機率輸出第 k+1 個、其餘均勻；以 >100 次 rollout 近似 oracle Q 與 A；RL 10,000 次迭代、batch 64、Adam 1e-3、α=1。結果：γ=10 的 prover 下 350 次迭代達 100%，約比只用 outcome reward 樣本效率高 10×；只有 γ∈[8,15] 的 prover 有幫助；訓練 100 次迭代的策略 Pass@N 隨 N 成長快 5×。",
+    "理論（§3.4、App F）": "表格設定、softmax 參數化、自然策略梯度更新 π_{t+1}∝π_t·exp(γ(Q^π+αA^μ))，假設能看到 oracle 的 Q^π 與 A^μ。Theorem 3.1（非正式）：一步更新的期望改進 ≳ γ·E_ρ Var_{a~π_t}[A^μ]（可區分性）加上 γ·E_ρ E[A^μ·A^{π_t}]（對齊）。Remark 3.1：當 Q^π=O(1/K) 時，以 BoK(π) 為 prover 讓可區分性提升 Ω(K²)、對齊最多變差 O(K)。Proposition F.1：若 μ 與 π_t 的價值差 η 且兩者在 π_t 動作上的 Q 差為 Θ(η)，改進量 ≳ η²，與 μ 比 π 強或弱無關。"
+  },
+  "assumptions": [
+    "訓練集上有可自動判定的最終結果（Rex：最終答案正規表示式比對），process reward 全由它加上取樣推導，不需要逐步人工標註。",
+    "環境是確定性的、狀態就是文字前綴，因此可以從任意前綴重新取樣續寫來估 Q（蒙地卡羅 rollout）。",
+    "步驟以換行切分，且一個「步」的粒度足以讓 advantage 有區分度。",
+    "存在與基礎策略互補的 prover：在 π 的動作上 A^μ 有足夠變異數，且不與 A^π 嚴重反向；BoK 的 K 要適中。",
+    "BoK prover 的 Q 值可由 1−(1−Q^π)^K 換算，也就是把 K 次續寫的成敗視為獨立 Bernoulli，且 BoK 以 oracle（Rex）挑答案。",
+    "學到的 PAV 擬合誤差夠小；理論部分另假設 oracle 的 Q／A、表格設定與足夠小的學習率。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MATH（Hendrycks et al., 2021）：SFT、PAV 訓練資料與測試都用它；論文未交代測試用的是完整 test split 還是子集",
+      "教學用合成任務：planted sub-sequence（長度 10、15 個 token）"
+    ],
+    "metrics": [
+      "準確率（Rex 最終答案比對）",
+      "計算效率：達到 ORM best-of-128 準確率所需計算的比值",
+      "RL 樣本效率：達到同等測試準確率所需的訓練迭代數比",
+      "Pass@N（以 Rex 為 oracle 的 best-of-N，代表任何重排器的上限）",
+      "逐步結果預測錯誤率：以每一步的獎勵值設閾值預測最終成敗（App C, Fig. 10）",
+      "SFT best-of-256 解不出的難題中被解出的題數（Fig. 8b）"
+    ],
+    "baselines": [
+      "best-of-N＋訓練過的 ORM",
+      "只用 Q^π 的 PRM beam search（Snell et al., 2024 的做法）",
+      "PAV-as-ORM：以 PAV 為重排器的 best-of-N",
+      "Pass@N（oracle 上限）",
+      "SFT、RFT（rejection finetuning）",
+      "ORM-RL：只用 Rex 的 REINFORCE",
+      "以 Q^π+αQ^μ 為獎勵的 RL（App G，只有質性例子）",
+      "不同 prover 的消融：BoK(π)，K=1 到 32；Gemma 2B/9B/27B SFT 互為 prover"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以 Bo4(π) 為 prover 的 PAV beam search，在 Gemma 2B/9B/27B SFT 基礎策略上都比 ORM best-of-N 更準、更省計算；相對只用 Q^π 的 beam search 也明顯更省計算。",
+      "numbers": "§4.1 內文：達到 ORM best-of-128 準確率所需計算，2B、9B 省 10×、27B 省 5×（已計入每個 beam 元素取樣 C=3 步）；摘要與 Takeaway 寫準確率 >8%、計算效率 1.5–5×，Fig. 4 圖說寫 8–10%；相對 Q^π beam search 計算效率 8×；PAV-as-ORM 在 N=128、9B 上比 ORM 高約 4%",
+      "section": "§4.1、Fig. 4、Fig. 5(a)",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "prover 太弱或太強都不好：對 2B 基礎策略，Bo4 在所有 N 下都優於 Bo2 與 Bo32；以三個 SFT 策略互為 prover 時，27B 基礎策略反而配較弱的 9B prover 最好。",
+      "numbers": "Fig. 5(b)：Bo4 在所有 beam 大小下皆最佳；Fig. 5(c)（beam 16）：2B 基礎配 9B prover、9B 基礎配 27B prover、27B 基礎配 9B prover 最佳；K 很大時 Q^μ=1−(1−Q^π)^K→1，A^μ≈0",
+      "section": "§4.1 Result 2、Fig. 5(b)(c)",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "PAV 訓練資料的配比有規律：資料預算小時多取 seed rollout 求覆蓋較好，預算大時多做前綴續寫降低 Q 標籤雜訊較好；first-pit 取樣比隨機取樣更好，seed 少時差距最大。",
+      "numbers": "Fig. 6(b)：9B 基礎、Bo4 prover、beam 128，比較不同 n_mc/n_cov；最終設定 n_mc=20、每個基礎策略 >30 萬筆（前綴, Q̂）；Fig. 11 只給曲線、內文無具體數字",
+      "section": "§4.2、App D、Fig. 6(b)、Fig. 11",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "每一步的有效獎勵比 Q^π 更能在軌跡早期預測最終成敗，這是有限 beam 下 PAV 表現較好的一個解釋。",
+      "numbers": "9B SFT 基礎策略、Bo4 prover；以驗證集逐步、逐獎勵設定閾值；兩者錯誤率都隨步數下降，但有效獎勵在所有步都較低、早期差距最大；文中只有圖、無具體數字",
+      "section": "App C、Fig. 10",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "以 PAV 的有效獎勵做 dense-reward 線上 RL，測試準確率高於 ORM-RL，且更快達到同等準確率。",
+      "numbers": "PAV-RL 比 RFT 起點高 11%（2B）、15%（9B），比 ORM-RL 高 >7%；2B 達同準確率快 6×、9B 類似；摘要與結論改寫成樣本效率 5–6×、準確率 >6%",
+      "section": "§5 Result 1、Fig. 7",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "較弱的 prover 也能改進較強的基礎策略：RL 中以 2B SFT 為 prover 對 2B 與 9B 基礎策略都是最佳選擇，即使 prover 在幾步更新後就比基礎策略弱。",
+      "numbers": "試過 2B SFT 與 9B SFT 兩種固定 prover；2B SFT prover 對兩種基礎策略都最佳（Fig. 7 未分開列數字）",
+      "section": "§5 Result 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "PAV-RL 的策略有更高的 Pass@N 上限與更好的多樣性；ORM-RL 在 N 大時甚至不如 SFT，研判是下一步分佈熵降低、候選缺乏多樣性。",
+      "numbers": "Gemma 2B：N≤128 時 PAV-RL 的 Pass@N 比 ORM-RL 高 >7%，且隨 N 成長更快；N≥64 時 ORM-RL 低於 SFT；PAV-RL 策略配 beam search 在 N=16、32 就能解出 SFT best-of-256 解不出的難題（Fig. 8b，文中未給題數）；引言另寫 Pass@N 好 8×",
+      "section": "§5 Result 2–3、Fig. 8",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "把 prover 的 Q 值（而非 advantage）當獎勵做 RL 會退化：策略學會在每題第一步輸出「REPHRASE THE PROBLEM」這種無進展的步來騙分，卡在局部最佳。",
+      "numbers": "以 Q^π+αQ^μ 為獎勵，多次訓練都出現；附四個範例，無量化",
+      "section": "§3.2、App G",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "不知道如何為一連串基礎策略迭代自動設計出最佳（或夠好）的 prover；同時最佳化 prover 與基礎策略（兩人賽局）仍是開放問題。",
+    "學 PAV 一定有擬合誤差，會限制方法表現的上限；若在 search／RL 中直接從 prover rollout 估 advantage 可避開，但本文沒做。",
+    "沒能做 RL 中動態更新 prover 的實驗；固定的 2B／9B SFT prover 在幾步更新後就比基礎策略弱。",
+    "理論假設看得到每個狀態的所有動作，在這個理想化更新下 Q 值與 advantage 沒有差別；分析只用來說明 prover 的選擇。",
+    "Q^π 的缺點只在 beam 容量有限、取樣受限時才明顯，容量無限時不是問題。"
+  ],
+  "limitations_observed": [
+    "BoK prover 其實不是另一個策略：App D 說 Q^{BoK(π)} 是用同一個 Q^π 模型以 1−(1−Q^π)^K 換算出來的，所以測試期主結果（Fig. 4、5a、5b、6，全用 Bo4 prover）裡的 A^μ 只是同一個 PRM 輸出經非線性重塑再做差分，沒有引入任何新策略的資訊。「advantage 要在不同於 π 的 prover 下算」的論點，在這組實驗裡其實化約成對單一 PRM 的 reward shaping；真正用到獨立 prover 的只有 Fig. 5(c) 與 RL 的 2B／9B SFT prover。此外該公式對應以 oracle（Rex）挑答案的 pass@K，是測試期無法實際執行的策略。",
+    "α 只在 μ=π、beam 16 的設定下調過（App C），再原封不動沿用到所有 prover；但 K 變大時 A^μ 的幅度會變，Fig. 5(b) 中 Bo32 表現差，可能有一部分是 α 沒重調，不能全部歸因於論文主張的「可區分性下降」。",
+    "計算效率只計入取樣（每個 beam 元素 C=3 步），沒交代 Gemma 9B PAV 逐步打分的推論成本是否算進去；更沒有攤提訓練資料成本：每個基礎策略超過 30 萬個前綴、每個 n_mc=20 次續寫，約 600 萬次部分 rollout，另加 seed 與 first-pit 探索預算。拿來比的 best-of-N 只取樣 128 次，總成本對比不對等。",
+    "數字前後不一致：計算效率在摘要與 Takeaway 是 1.5–5×、Fig. 1 是 5×、§4.1 內文是 10×（2B、9B）與 5×（27B）、小節標題是 5–10×，而 1.5× 在內文找不到出處；RL 樣本效率有 5–6× 與 6× 兩種寫法，準確率增益有 >6%、>7%、7% 三種；引言說 Pass@N 好 8×，§5 只說高 >7%。讀者無法判斷哪一個是實測值。",
+    "理論推導自相矛盾：主文 Eq. 6 的對齊項是加號，附錄 Eq. 27 也是加號，到 Eq. 28–29 卻變成減 E[A^μ·A^t]；Eq. 14 的 Z^t 少了 exp；§3.4 還把有效獎勵誤寫成 Q^μ+αA^π。再加上理論在「看得到所有動作」下 Q 與 A 等價，這套理論只支撐 prover 的選擇，並不支撐本文最核心的「用 advantage 而非 Q」——後者只靠 §3.1 的構造例、App C 的預測錯誤率圖與 App G 的質性例子。",
+    "實驗廣度窄：只有 MATH 一個資料集、只有 Gemma 2 系列、步驟一律以換行切，沒有 GSM8K、AIME 等分佈外測試，也沒有程式或 agent 任務；RL 只和 ORM-RL 比，沒有實證比較 Q^π-PRM 的 RL（DeepSeekMath 那種 1–2% 的設定）或 μ=π 的 advantage RL（同期的 VinePPO），「μ=π 等同 ORM-RL」只是理論論證，忽略了學到的價值估計在實務上能降低變異數。RL 曲線未報告種子數或誤差棒，6× 是從單一曲線讀出來的。",
+    "搬到 agent 軌跡的前提沒被處理：方法需要可自動驗證的最終結果，也需要能從任意前綴重新 rollout 的確定性環境；多輪對話的「狀態」還包含使用者與工具呼叫的外部副作用，前綴重放要靠使用者模擬器與環境快照，而且這會把 T6 模擬器的偏差直接灌進步驟分數。論文的「一步」是一行推理句，不是一次工具呼叫或一輪對話，粒度改變後 advantage 是否仍有區分度沒有證據。",
+    "教學範例的設定前後不一（§3.3 說詞彙是 {1,…,15}，App B 說 15 個 token 的 {1,…,14}），且序列長度只有 10，prover 是手工設計、只有一個參數 γ 的策略；拿它支撐「γ∈[8,15] 才有效」這類結論，外推到真實 LLM 的 prover 選擇有限。"
+  ],
+  "framework_role": "T4 的步驟層級評估與 process reward 子領域的設計原則來源：它回答「軌跡中每一步的分數該量什麼」——應量在一個互補 prover 下的成功機率變化（進展），而不是該步所在狀態的絕對價值；並給出一條不需人工標註的自動步驟標註管線（seed rollout＋前綴蒙地卡羅續寫、n_mc/n_cov 配比、first-pit 取樣）。對本框架可以轉用在三件事：(a) 把 agent 軌跡的每一輪或每次工具呼叫當成一步，用前綴重放估計進展分數，作為步驟級評分器；(b) first-pit（成功機率首次掉到 0 的那一步）是一種以 rollout 為基礎的步驟級失敗歸因，對應 T4 的「哪一步出錯」；(c) App C 顯示步驟分數能在軌跡早期預測最終成敗，可以當作 T4→T5 異常偵測的訊號來源，也能當 T8 任務完成分數之外的 dense 補充訊號。但論文本身只在單輪數學推理上驗證，沒有工具、多輪或使用者，這些接法都要自行設計與驗證。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "論文本身沒有宣稱任何部署或產品採用；作者群屬 Google Research、Google DeepMind 與 CMU。",
+      "ICLR 2025 poster 頁面只連到 OpenReview，未列程式碼或專案頁；這是發表紀錄，不是採納。來源：https://iclr.cc/virtual/2025/poster/30649",
+      "以 WebSearch 查 process advantage verifier 搭配 Gemini／DeepMind，未找到任何官方文件、model card 或官方部落格提到使用 PAV。"
+    ],
+    "assessment": "未見證據。雖然作者來自 Google，但沒有可查證的官方文件說明 Gemini 或其他產品採用 PAV；後續論文的引用與延伸屬學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "MATH 與 Gemma 2 權重公開；PAV 訓練資料（每個基礎策略 >30 萬筆前綴與蒙地卡羅 Q 標籤）、訓練好的 PAV／ORM 與 RL 檢查點都沒有公開。附錄 C–E 給了大部分超參數（學習率、迭代數、α、n_mc、KL 係數），但 ORM 的訓練細節、first-pit 的價值門檻、測試集切分與種子數沒有交代。GitHub 上可搜到第三方自稱的重現嘗試（https://github.com/sanowl/Implementation-Rewarding-Progress-Scaling-Automated-Process-Verifiers-for-LLM-Reasoning），非官方，本筆記未核實其完整度。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是把步驟獎勵定義為「prover 下的 advantage（進展）而非 Q 值」並系統化論證 prover 選擇的代表作（ICLR 2025），附可照做的自動步驟標註管線與 first-pit 失敗定位，正是 T4 步驟級評估與歸因要回答的問題；扣分在只驗證單輪數學、無官方程式碼、BoK prover 其實是同一 PRM 的換算、數字前後不一。",
+  "related": [
+    "2305.20050",
+    "2312.08935",
+    "2406.06592",
+    "2408.03314",
+    "2402.03300",
+    "2211.14275",
+    "2410.01679",
+    "2406.14532",
+    "2404.10346",
+    "2110.14168"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

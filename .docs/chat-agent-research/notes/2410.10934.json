@@ -1,0 +1,157 @@
+{
+  "id": "2410.10934",
+  "title": "Agent-as-a-Judge: Evaluate Agents with Agents",
+  "topic": "T7",
+  "subarea": "LLM/agent-as-judge 與評估可靠性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把評審做成 agent：它會建專案結構圖、依需求定位檔案、讀多模態檔案、從開發軌跡擷取環境回饋，再對 AI 開發任務的每一條階層式需求判定達成與否。作者同時釋出 DevAI（55 題、365 條帶相依的需求），並以三位專家辯論後的共識當標準答案，量出它與人評的一致率約 84–92%，高於 LLM-as-a-Judge 的 60–84%，成本約為人評的 2.4%。",
+  "problem": "現有 agent 評估多半只看最終結果（SWE-Bench 的 resolve rate、pass@1），看不出多步驟任務在哪一步出錯，給的訊號也很稀疏，無法當作自我改進的中間回饋。改由人類逐步審查則昂貴：本文三位專家合計 86.5 小時，而且彼此不一致，兩兩不一致率約 10–30%。LLM-as-a-Judge 只看得到被塞進提示詞的內容，面對整個工作區與長軌跡時抓不到關鍵證據，在類別不平衡時還會靠多判「未達成」拿到虛高的一致率。程式碼 benchmark（HumanEval、MBPP、SWE-Bench）又只涵蓋開發流程的一小段，且有針對題目過度擬合的疑慮。因此需要一種便宜、可擴充、能對中間里程碑給出判定的評審，並且要有辦法量測這個評審本身可不可靠。",
+  "core_idea": "LLM-as-a-Judge 的自然延伸：評審本身也是 agentic system，模仿人類審查者的流程，先主動蒐集證據再下判斷。具體是對工作區建圖、定位與需求相關的檔案、讀取內容、從軌跡找出相關步驟的錯誤訊息，最後才問 LLM 這條需求有沒有達成。評估對象從單一最終分數改成一張需求 DAG 上逐條的二元判定，所以能給出中間回饋。評審的可靠性則以「對齊人類共識的比例」與「彙總分數偏移」來量。",
+  "method": {
+    "受測任務與資料（DevAI）": "55 題由專家手寫的 AI 開發任務（監督式學習、RL、CV、NLP、生成模型等），每題包含三部分。(1) 一段自然語言 query，會明寫要把程式與產物存到哪些路徑，例如 src/model.py、results/figures/。(2) 需求清單，全資料集共 365 條，每條是明確、二元、容易判定的敘述，附 prerequisites（前置需求 ID），整體構成 DAG；相依關係參考 KDD／CRISP-DM 整理出七步 AI 開發流程（資料處理→特徵→模型→調參→指標→報告→互動應用）。(3) 偏好清單，共 125 條，是較主觀、屬軟性要求的條目。另有 is_kaggle_api_needed、is_training_needed、is_web_navigation_needed 等旗標，需求也分成資料集、前後處理、方法、指標、HCI、視覺化等類別。資料集由不同參與者做過兩輪人工複核。",
+    "受測 agent 的執行設定": "MetaGPT（Data Interpreter）、GPT-Pilot 0.2.13、OpenHands（CodeAct v1.9），後端一律 gpt-4o-2024-05-13。每題時限 1800 秒，超時強制中止。query 後面接上 constraint prompt，內容是：要寫、執行並保存程式碼；時限 30 分鐘且含執行時間；以工作資料夾留下的東西評分；硬體未知、不保證有 GPU。需要訓練時另加一句「設超參數時考慮時限」；需要 Kaggle 時事先放好 kaggle.json。另寫 instrumentation 記錄軌跡，格式見 Appendix J.1：每步含 step、user_message、agent{thought, action, agent_name}、environment（shell／直譯器的回應）、step_usage（tokens、model、cost、推論與執行時間）、accumulated_usage。",
+    "評審輸入輸出": "輸入是一條需求的 criteria、受測 agent 留下的工作區，以及可選的開發軌跡。不給軌跡稱為 black-box，給軌跡稱為 gray-box。輸出是逐條需求的 <SATISFIED>／<UNSATISFIED> 標記，附一段引用程式碼、資料或輸出結果的簡短理由。偏好（preferences）在實驗中沒有被評。",
+    "評審模組（原設計 8 個，最終採用 5 個）": "(1) graph：掃描工作區，建出檔案、模組、相依的結構圖，並把程式碼切成片段。(2) locate：把工作區樹狀結構與需求 criteria 交給 LLM，要求它只回與 criteria 相符的檔案路徑，最多 5 個、以 $ 包住，提示詞附一個範例。(3) read：讀取 33 種格式（程式碼、圖片、影片、文件等）的內容。(5) retrieve：只在 gray-box 使用，由 LLM 從軌跡找出與該需求檔案相關的「最近」幾步，整理這些檔案在執行、載入、保存時的錯誤、警告等環境回饋；要求它不描述檔案內容或是否存在，因為那部分已由 read 提供，並以 <RELEVANT STEPS> 段落輸出。(6) ask：系統提示把 LLM 設定為公正的程式產出評審，只根據提供的證據逐條判定，判定時要引用具體的程式碼或輸出，最後把 locate、read、retrieve 蒐集到的 evidence 與 criteria 組成提示詞，要求它回標記加理由。沒被採用的三個：(4) search 以 BM25 取 top-3 程式碼片段；(7) memory 保存先前的判定；(8) planning 規劃下一步行動。",
+    "模組選擇流程": "在 OpenHands 的評估上，由左到右逐一加入模組；某個模組加入後一致率明顯下降就移除，接著測下一個（Table 5）。依序為 ask→graph→read→locate→search（移除）→retrieve→planning→memory。另外把 search 的引擎換成 Sentence-BERT 或 Levenshtein 模糊搜尋做比較（Table 6）。",
+    "軌跡截斷策略（retrieve 用）": "軌跡太長時，整條軌跡保留尾段、截掉開頭，因為尾段記錄最終開發狀態、資訊最密。單一步驟太長時截掉中段，因為錯誤訊息通常在開頭，檔案路徑與出錯位置在結尾（Table 7，GPT-Pilot）。",
+    "LLM-as-a-Judge 基線": "同樣分 black-box／gray-box，差別在沒有主動選取上下文的模組。論文沒有給這個基線的提示詞與輸入組裝方式。",
+    "人評協定（Human-as-a-Judge）": "三位作者群中的 AI 專家（231a、38bb、cn9o），可看工作區、軌跡與受測框架原始碼（white-box）。第一輪只給每題的 markdown 描述與計分表，刻意給很少指示以保留個人偏差，三人各花 16.5、19.5、22 小時。事後各自回報判定規則，規則彼此不同：例如是否無視相依、假資料算不算、要不要實際執行程式。第二輪三人一起辯論到每條需求都有共識，共 9.5 小時（28.5 人時）。共識作為標準答案，另計多數決作對照。",
+    "評分指標": "受測 agent 的分數有三種。Requirements Met (I)：每條需求獨立判定、不管前置。Requirements Met (D)：考慮相依，論文沒給公式，讀起來是前置未達成時不計。Task Solve Rate：一題的需求全部達成才算解題。人評另外記錄 Self-Termination，即 agent 自行結束的比例。評審本身的指標也有三種。Alignment Rate：在 365 條需求上與人類共識判定相同的比例。Judge Shift：評審算出的彙總分數與人類共識彙總分數的絕對差。PR 曲線：用來因應類別不平衡。",
+    "評審底層模型": "論文沒有寫評審（Agent-as-a-Judge 與 LLM-as-a-Judge）用哪個 LLM，只有受測 agent 明寫 gpt-4o-2024-05-13。官方 repo 透過 LiteLLM，可自行設定模型。"
+  },
+  "assumptions": [
+    "三位專家辯論後的共識足以當標準答案；作者也承認共識仍可能有誤。",
+    "需求可以寫成明確、二元、互相獨立可判定的敘述，而且多半指名要產出的檔案路徑。locate 模組的大幅增益建立在這一點上。",
+    "只看工作區的靜態內容，加上可選的軌跡，就足以判斷需求是否達成；評審本身不執行程式碼。",
+    "受測 agent 留下的工作區夠小（數百行程式碼），可以整份交給 LLM 讀；search 模組無用的結論也建立在這一點上。",
+    "gray-box 需要在受測框架裡另寫 instrumentation 錄下結構化軌跡；作者自己說這在實務上幾乎拿不到。",
+    "評審 LLM 對「證據裡有無錯誤」的判讀是可靠的；論文沒有檢驗位置、冗長或自我偏好等已知的 LLM 評審偏差。"
+  ],
+  "evaluation": {
+    "benchmarks": ["DevAI（55 個 AI 開發任務、365 條階層式需求、125 條偏好；本文自建）"],
+    "metrics": [
+      "Alignment Rate（與人類共識逐條判定相同的比例）",
+      "Judge Shift（彙總分數與人類共識的絕對差）",
+      "PR 曲線",
+      "Requirements Met (I)／(D)",
+      "Task Solve Rate",
+      "Self-Termination（僅人評）",
+      "評估成本（USD）與時間"
+    ],
+    "baselines": [
+      "LLM-as-a-Judge（black-box 與 gray-box）",
+      "Human-as-a-Judge 個別評審（231a、38bb、cn9o）、個人平均、個人最佳",
+      "三人多數決",
+      "受測 agent：MetaGPT（Data Interpreter）、GPT-Pilot 0.2.13、OpenHands（CodeAct v1.9），皆用 gpt-4o-2024-05-13"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Agent-as-a-Judge 與人類共識的一致率在三個受測 agent 上都高於 LLM-as-a-Judge；差距在 GPT-Pilot 與 OpenHands 上最大；這與類別不平衡的影響一致，MetaGPT 達成的需求少，連 LLM-as-a-Judge 也能靠判負拿到高一致率。",
+      "numbers": "一致率依 MetaGPT／GPT-Pilot／OpenHands 列出。Agent-as-a-Judge black-box 88.52／83.88／90.44%，gray-box 92.07／86.61／90.16%。LLM-as-a-Judge black-box 84.15／65.30／60.38%，gray-box 68.86／71.85／70.76%。",
+      "section": "§4.2、Table 3。純文字快取裡 Table 3 的 black／gray 圖示已遺失，分組是依 §4.2 內文，加上 Table 4（OpenHands 不含 retrieve 為 90.44%）與 Table 7（GPT-Pilot 不含 retrieve 為 83.88%、含 retrieve 為 86.61%）對照後判定。",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在彙總分數上，Agent-as-a-Judge 的偏移遠小於 LLM-as-a-Judge；但它在 GPT-Pilot 上系統性地判得太寬。",
+      "numbers": "OpenHands 的 Requirements Met (I)：人評 42.89%，Agent-as-a-Judge black-box 42.62%（偏移 0.27），LLM-as-a-Judge black-box 11.47%（偏移 31.42，內文誤寫為 31.24）。GPT-Pilot：Agent-as-a-Judge black-box 判 53.00%，人評 44.80%，偏移 8.20；解題率判 5.45%，人評 1.81%。",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "DevAI 對當時的開源 coding agent 很難：最好的兩個框架約滿足 29% 的需求（考慮相依），55 題中只完整解出 1 題。",
+      "numbers": "Requirements Met (I) 依 MetaGPT／GPT-Pilot／OpenHands 為 22.13／44.80／42.89%，(D) 為 6.55／28.96／28.68%，Task Solve Rate 為 0／1.81／1.81%，Self-Termination 為 41.81／5.45／54.54%。平均每題成本 $1.19／$3.92／$6.38；跑完一輪 DevAI 約 $210.65、14 小時。",
+      "section": "§2.3、§3.1、Table 1、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "單一人類評審並不可靠：兩兩之間明顯不一致，多數決可以修正大部分錯誤，但三人規模的多數決仍有殘差。",
+      "numbers": "兩兩不一致率約 10–30%。cn9o 評 GPT-Pilot 時與共識不符的比例達 23.77%；三人多數決把整體錯誤降到 6.01%，小團體多數決相對共識仍有約 5% 的誤差。個人與共識的一致率介於 76.23% 到 92.63%，多數決為 93.98–95.08%。",
+      "section": "§3.2、Figure 4、Figure 5、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "判定需求是類別不平衡的任務（未達成遠多於達成），所以一致率會被高估。MetaGPT 達成的需求少，LLM-as-a-Judge 大多判未達成，就拿到很高的一致率；作者因此另外用 PR 曲線比較。",
+      "numbers": "LLM-as-a-Judge black-box 在 MetaGPT 的一致率為 84.15%；它判 MetaGPT 的 Requirements Met (D) 只有 1.63%，人評為 6.55%。",
+      "section": "§4.2、Figure 7",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "模組消融顯示增益主要來自 graph、read、locate；search、planning、memory 反而扣分。換更好的檢索引擎也救不回 search，作者歸因於工作區太小。",
+      "numbers": "以 OpenHands 為受測對象逐步加入模組：ask 65.03% → +graph 75.95 → +read 82.24 → +locate 90.44 → +search 86.06（移除）→ +retrieve 90.16 → +planning 88.52 → +memory 87.97。search 換引擎：BM25 86.06、Sentence-BERT 87.70、模糊搜尋 85.52，都低於不加 search 的 90.44。",
+      "section": "§4.3、Table 4、Appendix K.1–K.2、Table 5–6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "memory 模組有害：前面的判定錯了會一路連鎖；而且前一條需求被判達成後，會讓後面有相依的需求也傾向被判達成。",
+      "numbers": "加入 memory 後一致率從 88.52% 降到 87.97%（OpenHands）；論文沒有另做錯誤分析的數字。",
+      "section": "§4.1、Appendix K.1",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "retrieve（讀軌跡）對 GPT-Pilot 有用；截斷方式會影響效果，保留軌跡尾段、單步保留頭尾最好。",
+      "numbers": "GPT-Pilot 不含 retrieve 為 83.88%，含 retrieve 為 86.61%。整條軌跡截頭 86.61%、截中 85.52%、截尾 82.51%；單步截頭 86.34%、截中 86.61%、截尾 83.88%。",
+      "section": "Appendix K.3、Table 7",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "Agent-as-a-Judge 的成本與時間約只有三人人評的 2–3%；LLM-as-a-Judge 更快，但 API 成本相近。",
+      "numbers": "Agent-as-a-Judge 花 $30.58、118.43 分鐘。人評 86.5 小時，以每小時 $15 估算約 $1297.50。LLM-as-a-Judge 花 $29.63、10.99 分鐘。引言寫省下 97.72% 時間、97.64% 成本；§4.4 寫成「成本 2.29%、時間 2.36%」，實算是成本 2.36%、時間 2.28%，§4.4 的標籤對調了。",
+      "section": "§1、§4.4",
+      "anchor_idx": 1
+    }
+  ],
+  "limitations_stated": [
+    "這是 proof-of-concept，目標不是做出完美的評審；自動提示詞最佳化、workflow 設計等 agentic 最佳化方法留待未來。",
+    "人類共識不等於絕對的標準答案，辯論之後仍可能殘留錯誤；三人規模的多數決相對共識仍有約 5% 誤差，擴大評審團則成本太高。",
+    "planning 模組不穩定，蒐集到的證據前後不一致；memory 會讓先前的錯誤連鎖，並帶來正向偏差；search 在小型工作區派不上用場，作者推測工作區變大後才會有價值。",
+    "gray-box 用的軌跡是細心手工收集的，實務上幾乎拿不到。",
+    "要在軌跡裡準確找到相關資訊很困難；retrieve 在 OpenHands 上沒有帶來增益。",
+    "DevAI 任務規模小，也容易在任務指標上過度擬合，所以不拿模型效能當開發成績；需求與偏好的分類帶有主觀性，可能重疊或漏掉細節。",
+    "類別不平衡會讓 Judge Shift 與 Alignment Rate 產生誤導。"
+  ],
+  "limitations_observed": [
+    "Alignment Rate 沒有做機率校正，也沒有報 Cohen's kappa 或 F1。假設一致率以 (I) 標籤計算，把所有需求都判未達成的瑣碎基線在 MetaGPT／GPT-Pilot／OpenHands 就有 77.87／55.20／57.11%。LLM-as-a-Judge black-box 在 MetaGPT 的 84.15% 只比這個基線高約 6 個百分點；Agent-as-a-Judge 在 MetaGPT 的 88.52% 也只高約 11 點。PR 曲線只有 Figure 7 一張圖，內文沒有給 AUC 之類的數字。",
+    "模組是用測試標籤挑的。Table 5 在 OpenHands 上逐步加減模組，比對的就是最後回報結果用的同一份人類共識；最後回報的 OpenHands black-box 90.44% 正是挑出來的那組設定，沒有 held-out 驗證。消融也只在 OpenHands 與 GPT-Pilot 上做，MetaGPT 完全沒做。",
+    "「勝過單一人評」的說法證據很薄。OpenHands black-box 90.44% 對最佳個人 89.89%，差約 2 條需求（共 365 條），而且只跑一次、沒有信賴區間或多次取樣的變異。black-box 評審在 MetaGPT（88.52 < 個人平均 89.34）與 GPT-Pilot（83.88 < 84.88）上都低於人評的個人平均；gray-box 在 GPT-Pilot 上也輸給最佳個人（86.61 < 90.98）。",
+    "Judge Shift 是彙總層級的指標，偽陽與偽陰會互相抵消。OpenHands black-box 的偏移只有 0.27，但同一設定的一致率是 90.44%，代表約 35 條需求逐條判錯；拿 Judge Shift 當「穩定性」的證據並不恰當。",
+    "評審不執行程式碼，只讀靜態檔案與軌跡，容易判得太寬。black-box 評審在 GPT-Pilot 判出 Requirements Met (I) 53.00%，比人評 44.80% 高 8.20 點；解題率判 5.45%，人評 1.81%，多判了約 2 題。人評 cn9o 自述 GPT-Pilot 大量使用假資料路徑，231a 與 cn9o 也把用合成或假資料的程式碼判為未達成；這類問題靠讀檔很難分辨。",
+    "locate 帶來最大的單步增益（82.24→90.44），但這依賴 DevAI 的 query 與需求都寫明檔案路徑（Appendix E.1 刻意規定了檔案結構）。搬到需求不指名產物位置的任務，例如一般的對話 agent 評估，這段增益很可能消失，90% 的一致率不能直接外推。",
+    "人類標準答案本身有問題。三位評審都來自作者群；第一輪各自的判定規則互相衝突：231a 無視相依、訓練在假資料上完成也算執行成功；38bb 實際執行程式，並假設前置需求已有最小實作；cn9o 不執行任何東西、只用眼睛看。因此共識標籤高度取決於辯論過程。此外人評是 white-box（還看得到受測框架原始碼），而 black-box 評審拿到的資訊比標準答案的產生者少，兩者並不在同一條件下比較。",
+    "評審的底層 LLM 沒有交代，所以評審與受測 agent 之間可能的自我偏好無從判斷；也沒有測位置偏差、冗長偏差、對抗性輸入等 LLM 評審已知的弱點。125 條偏好完全沒有評，所以方法對主觀、模糊的條件判得準不準仍然未知。",
+    "內文與表格有多處數字對不上，需要自行交叉核對。§4.2 的 31.24 在 Table 3 是 31.42。§4.2 說 OpenHands gray-box 的一致率為 92.07%，但 Table 3 中 OpenHands gray-box 是 90.16%，92.07% 其實是 MetaGPT 的。LLM-as-a-Judge gray-box 在 GPT-Pilot 的 (I) 偏移標為 4.10，依表中數值 |38.79−44.80| 應為 6.01，疑似誤植了 (D) 列的數字。§4.4 的成本與時間比例標籤也對調了。",
+    "成本比較以每小時 $15 的最低工資估算 AI 專家的時薪並不實際。受測對象只有 3 個框架、而且共用同一個 backbone，任務也只有 55 題、限於 AI 開發這一個領域，對評審泛化能力的支撐有限。"
+  ],
+  "framework_role": "主要屬於 T7：提出 agent-as-a-judge 這種評估方法，並給出一套量評審可靠性的協定。這套協定包括三人獨立評分後辯論出共識、以多數決對照、用 Alignment Rate／Judge Shift／PR 曲線衡量評審，另外揭露了類別不平衡與人評之間的不一致。次要屬於 T8：DevAI 把任務完成拆成帶相依的需求 DAG，給出 (I)／(D) 兩種部分給分，加上全部達成才算的 Task Solve Rate，是一種「階層式里程碑完成分數」的設計。附帶涉及 T4：Appendix J.1 定義了評審要讀的結構化軌跡格式，K.3 給出評審讀長軌跡時的截斷策略。評審讀的是 agent 與執行環境之間的開發軌跡，使用者只在第 0 步給一次 query、沒有多輪使用者互動，所以資料流比較接近 T4→T7，而這條不在框架的六條邊裡。自我改進的中間回饋（E5 方向）只在 Outlook 裡以願景提及，沒有實作。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有描述任何產品或部署。它引用的 Cognition 部落格（evaluating-coding-agents）比本文早約三週發表，只是想法相近，不構成對本文的採納。官方 repo（https://github.com/metauto-ai/agent-as-a-judge，MIT）與 ICML 2025 接收屬於開源與學術影響力，不算商用採納。查核範圍：本次 WebSearch 額度已用完，只用 WebFetch 查過官方 repo 與 Hugging Face 資料集頁面，所以這是查核不完整，不是已確認沒有採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/metauto-ai/agent-as-a-judge",
+    "data": "DevAI 公開在 Hugging Face（DEVAI-benchmark/DEVAI），MIT 授權、不需申請，內含 55 題、365 條需求、偏好，以及三個受測框架的人工判定標籤。受測 agent 的工作區與軌跡檔是否完整公開，資料集頁面沒有講清楚。論文沒有寫評審使用哪個 LLM；repo 透過 LiteLLM 讓使用者自行設定，所以無法保證重現相同數字。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "這篇定義了 agent-as-a-judge 的概念，給出逐需求判定對照多人辯論共識的評審可靠性量測協定，程式碼與資料都公開，是 T7「LLM/agent-as-judge 與評估可靠性」子領域的起點論文，列為必讀。但可靠性證據其實偏薄（3 個受測框架、365 條需求、單次執行、沒有機率校正、模組是用測試標籤挑的），數字要打折看。",
+  "related": [
+    "2308.07201",
+    "2405.20267",
+    "2302.04166",
+    "2402.04788",
+    "2402.10669",
+    "2406.12624",
+    "2408.02666",
+    "2305.20050",
+    "2310.06770",
+    "2407.16741",
+    "2407.01489",
+    "2304.14317"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 4,
+    "total": 8
+  }
+}

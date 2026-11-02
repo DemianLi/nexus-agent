@@ -5,11 +5,15 @@
  * prompt**，加上工具真的回了什麼。skills 這個擴充點的產物只有兩樣——prompt 裡多出來的
  * 那段清單，與模型照著清單去 `read_file` 時拿到的東西。斷言 registry 裡有幾筆來源證明
  * 不了任何事，那是 `@nexus/plugin-skills` 那邊薄測試的工作。
+ * 這一檔的手搭清單用 `skills.fixture.ts` 的舊外殼（#1446）；經樹進來的那一條在 `skills-on-tree.test.ts`。
  *
- * 六條裡有四條是**斷言缺陷**的（`看得到讀不到`、`空清單每輪重掃`、`custom subagent 沒有`、
- * `不合規範的名字照樣進清單`）。跟 [`contained-backend.test.ts`](./contained-backend.test.ts)
- * 那組升版絆索同樣的用意：這些是 `deepagents@1.13.1` 的實際形狀，寫成可執行的證據比寫在
- * 註解裡強，基座哪天改了它們會紅。
+ * 有幾條是**斷言缺陷**的（`看得到讀不到`、`custom subagent 沒有`、`不合規範的名字照樣進清單`）。
+ * 跟 [`contained-backend.test.ts`](./contained-backend.test.ts) 那組升版絆索同樣的用意：這些是
+ * `deepagents@1.13.1` 的實際形狀，寫成可執行的證據比寫在註解裡強，基座哪天改了它們會紅。
+ *
+ * **「空清單」那一組不是缺陷了**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：基座對空清單照樣
+ * 接約 2000 字、又每輪重掃，組裝點包了一層（`packages/nexus-core/src/skills-middleware.ts`）讓它整個隱形，
+ * 最後一組 `沒有 skill 就一個字都不加` 走產品組裝（`createCliAgent` ＋ 出貨清單）量這件事。
  */
 
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
@@ -17,12 +21,16 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PluginEntry } from '@nexus/core';
-import { createSkillsPlugin } from '@nexus/plugin-skills';
-import { describe, expect, it } from 'vitest';
+
+import { describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { createCliAgent } from './assembly-root.js';
+import { runTurn } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { createSkillsPlugin } from './skills.fixture.js';
 
 /** 一輪 prompt 裡的 system 訊息。基座把 skill 清單併進 system prompt，不是併進對話。 */
 function systemPrompt(messages: readonly BaseMessage[]): string {
@@ -76,8 +84,8 @@ describe('skills 進到 system prompt', () => {
    * 管不到 backend 方法），但**後果不同**：記憶那邊是整份內容照樣進 context，這邊只有
    * 名字與描述進去，正文擋住了。
    *
-   * 順帶：我們的 `ContainedFilesystemBackend` 那道 fence 在這裡**完全不參與**——它只包
-   * 寫入路徑，讀一律通過。擋人的自始至終只有 `permissions` 一層。
+   * 順帶：我們的 `ContainedFilesystemBackend` 那道 fence 在這裡**不擋**——它對讀只擋
+   * canonicalize 之後落在根外的路徑（#1982），skill 在根內。擋人的自始至終只有 `permissions` 一層。
    */
   it('deny 蓋到 skill 路徑：清單照樣列出來，正文讀不到', async () => {
     const root = await workspace({ skills: { 'web-research': '上網查資料。' } });
@@ -158,19 +166,21 @@ describe('skills 進到 system prompt', () => {
 });
 
 /**
- * **skills 的快取比記憶更硬，但只在載到東西的時候。**
+ * **skills 的快取：載到東西就凍住，載到空的也一樣。**
  *
  * `loadedSkills` 是 middleware 工廠的閉包變數，不是 state：
  * `if (loadedSkills.length > 0) return ...` 之後就永不重載，跨 thread 也一樣。
  *
- * **而空的不算。** 載入結果為空時 `loadedSkills.length > 0` 是 false，於是**每一次
- * `beforeAgent` 都重掃整個來源**——一個沒有 skill 的工作區是最貴的那種。這一條計劃沒寫。
+ * **基座的空結果不算**：載入結果為空時 `loadedSkills.length > 0` 是 false，於是每一次
+ * `beforeAgent` 都重掃整個來源。**這條絆索翻面了**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
+ * 原本斷言「沒 skill」是兩次掃描，現在是一次——照 dsh，掃描結果連空的也進快取
+ * （`packages/skill/skill/src/index.ts:540-541`）。改的是組裝點包的那一層，不是基座。
  */
 describe('skills 的快取邊界', () => {
-  it('載到 skill 就凍住，載到空的每輪重掃', async () => {
+  it('載到 skill 就凍住，載到空的也凍住', async () => {
     for (const [label, source, expected] of [
       ['有 skill', '/skills/', 1],
-      ['沒 skill', '/empty/', 2],
+      ['沒 skill', '/empty/', 1],
     ] as const) {
       const root = await workspace({ skills: { 'web-research': '上網查資料。' } });
       await mkdir(join(root, 'empty'), { recursive: true });
@@ -293,12 +303,11 @@ describe('subagent 的 skills 邊界', () => {
  *
  * `validateSkillName` 檢查 kebab-case、長度、以及「`name` 必須等於目錄名」，任何一條
  * 不過都只是 `console.warn(...)`，**metadata 照樣被收進清單**。這跟 `@nexus/core` 那側
- * 「路徑格式在註冊期就擋」的做法是相反的哲學，也跟 dsh 相反——dsh 的
- * `skill-filesystem` 對調用策略欄位是 fail-closed（拼寫錯或非布林值就把整個 skill 從
- * 發現結果排除，理由是「忽略無效資料可能在已停用的介面上暴露 skill」）。
+ * 「路徑格式在註冊期就擋」的做法是相反的哲學。
  *
- * 我們在 plugin 這側**表達不出來**：frontmatter 的解析整個關在
- * `parseSkillMetadataFromContent` 裡，碰不到。所以這裡只釘住事實。
+ * 調用策略的兩個旗標已經照 dsh fail-closed（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)，
+ * 見下面〈只給人叫的技能不列給模型〉）：nexus 自己解析、用 backend 視圖讓基座看不到。名字這一條沒有跟著擋，
+ * 不在 #1574 的範圍，這裡照舊只釘住事實。
  */
 describe('基座驗證了但不擋的那些', () => {
   it('名字不合規範、又跟目錄名對不上的 skill，照樣進清單', async () => {
@@ -326,5 +335,176 @@ describe('基座驗證了但不擋的那些', () => {
     const prompt = systemPrompt(model.lastPrompt);
     expect(prompt).toContain('WebResearch');
     expect(prompt).not.toContain('No skills available');
+  });
+});
+
+/** 出貨清單，`skills` 那一列照 `enabled` 啟用或停用（patch 寫 `disabled: true` 的效果）。 */
+async function rows(enabled: boolean): Promise<readonly PluginEntry[]> {
+  const shipped = await shippedPlugins();
+  expect(shipped.some((entry) => entry.id === 'skills')).toBe(true);
+  return shipped.map((entry) =>
+    entry.id === 'skills' && !enabled ? { ...entry, disabled: true as const } : entry,
+  );
+}
+
+/** 產品組裝跑一輪，回傳每一次模型呼叫的完整訊息串。 */
+async function requestsOf(
+  enabled: boolean,
+  workspaceRoot: string | undefined,
+  turns: Parameters<typeof withScriptedModel>[1],
+): Promise<BaseMessage[][]> {
+  const built = await createCliAgent(
+    workspaceRoot === undefined ? { live: false } : { live: false, workspace: workspaceRoot },
+    withScriptedModel([...(await rows(enabled))], turns),
+    workspaceRoot,
+  );
+  try {
+    await runTurn(
+      built.agent,
+      '嗨。',
+      { log: () => undefined, error: () => undefined },
+      built.sessionLog,
+    );
+  } finally {
+    await built.dispose();
+  }
+  return (built.model as unknown as { prompts: BaseMessage[][] }).prompts;
+}
+
+/** 產品組裝跑一輪，回傳每一次模型呼叫的 system prompt。 */
+async function promptsOf(
+  enabled: boolean,
+  workspaceRoot: string | undefined,
+  turns: Parameters<typeof withScriptedModel>[1],
+): Promise<string[]> {
+  return (await requestsOf(enabled, workspaceRoot, turns)).map(systemPrompt);
+}
+
+/**
+ * **沒有 skill 就一個字都不加**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）——走產品組裝：
+ * `createCliAgent` ＋ 出貨清單（`cordis.yml` 的 `skills` 那一列），不是 `createNexusAgent` 手掛 plugin。
+ *
+ * 基座的 skills middleware 對空清單照樣把約 2000 字的說明接到 system prompt 後面；組裝點包了一層讓它隱形。
+ * **驗收是位元組相同**：同一份出貨清單，把 `skills` 那一列停用（＝沒掛 skills）對照啟用，送給模型的 system prompt
+ * 逐字相同——包含「沒給 `--workspace`」「工作區沒有 `skills/`」「有 `skills/` 目錄但裡面是空的」三種空。
+ */
+describe('沒有 skill 就一個字都不加', () => {
+  it('沒給 --workspace、工作區沒有 skills/、skills/ 是空的：system prompt 與沒掛 skills 逐字相同', async () => {
+    const cases: [string, string | undefined][] = [
+      ['沒給 --workspace', undefined],
+      ['工作區沒有 skills/', await workspace({})],
+      ['skills/ 是空的', await workspace({ skills: {} })],
+    ];
+    for (const [label, root] of cases) {
+      const without = await promptsOf(false, root, [{ content: '好。' }]);
+      const withSkills = await promptsOf(true, root, [{ content: '好。' }]);
+      expect(without.length, label).toBeGreaterThan(0);
+      expect(withSkills, label).toEqual(without);
+      expect(withSkills.join('\n'), label).not.toContain('Skills System');
+      expect(withSkills.join('\n'), label).not.toContain('No skills available');
+    }
+  });
+
+  it('有 skills/<name>/SKILL.md：模型看得到名字、描述與路徑（零設定的產品組裝找得到 skills）', async () => {
+    const root = await workspace({ skills: { 'web-research': '上網查資料。' } });
+    const [prompt] = await promptsOf(true, root, [{ content: '好。' }]);
+    expect(prompt).toContain('## Skills System');
+    expect(prompt).toContain('web-research');
+    expect(prompt).toContain('上網查資料。');
+    expect(prompt).toContain('/skills/web-research/SKILL.md');
+    // 對照：停用那一列，清單就消失——證明上面看到的是這一列掛的，不是別處帶的。
+    const [off] = await promptsOf(false, root, [{ content: '好。' }]);
+    expect(off).not.toContain('web-research');
+  });
+
+  it('general-purpose 子代理在沒有 skill 的工作區也不多一個字', async () => {
+    const root = await workspace({});
+    const turns = [
+      {
+        content: '',
+        toolCalls: [
+          { name: 'task', args: { description: '去做事', subagent_type: 'general-purpose' } },
+        ],
+      },
+      { content: 'subagent 做完了。' },
+      { content: '收工。' },
+    ];
+    const without = await promptsOf(false, root, turns);
+    const withSkills = await promptsOf(true, root, turns);
+    expect(withSkills).toHaveLength(3);
+    expect(withSkills).toEqual(without);
+  });
+});
+
+/**
+ * **只給人叫的技能不列給模型**（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) 刀 1）——走產品組裝，
+ * root 與 general-purpose 子代理兩條路都量。
+ *
+ * 基座不讀 `disable-model-invocation`／`user-invocable`，今天掃到的全部印進 prompt；組裝點交給基座的 backend 換成
+ * `skill-catalog.ts` 的視圖，照 dsh 讓模型那一側看不到只給人叫的、旗標不合規的（fail-closed）。`skill.list` 那一半在刀 3。
+ */
+describe('只給人叫的技能不列給模型', () => {
+  /** `{ '<名字>': '<frontmatter 多出來的幾行>' }`，放在 `skills/<名字>/SKILL.md`。 */
+  async function flagged(layout: Record<string, string>): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-skills-'));
+    for (const [name, extra] of Object.entries(layout)) {
+      await mkdir(join(root, 'skills', name), { recursive: true });
+      await writeFile(
+        join(root, 'skills', name, 'SKILL.md'),
+        `---\nname: ${name}\ndescription: ${name} 的說明。\n${extra}---\n\n正文：${name}。\n`,
+      );
+    }
+    return root;
+  }
+
+  const delegate = [
+    {
+      content: '',
+      toolCalls: [
+        { name: 'task', args: { description: '去做事', subagent_type: 'general-purpose' } },
+      ],
+    },
+    { content: 'subagent 做完了。' },
+    { content: '收工。' },
+  ];
+
+  it('disable-model-invocation: true 的不在 root 與 general-purpose 子代理的 prompt 裡', async () => {
+    const root = await flagged({ deploy: 'disable-model-invocation: true\n', normal: '' });
+    const requests = await requestsOf(true, root, delegate);
+    const prompts = requests.map(systemPrompt);
+    expect(prompts).toHaveLength(3);
+    // 第 1 次（從 0 數）是子代理那一次：它收到的第一則人話是委派描述，不是使用者那一句（後面還有 time-context 注入的那則）。
+    const firstHuman = (messages: readonly BaseMessage[]): string | undefined =>
+      messages.find((message) => message.getType() === 'human')?.text;
+    expect(firstHuman(requests[0]!)).toBe('嗨。');
+    expect(firstHuman(requests[1]!)).toBe('去做事');
+    for (const [index, prompt] of prompts.entries()) {
+      expect(prompt, `第 ${index} 次`).toContain('**normal**');
+      expect(prompt, `第 ${index} 次`).not.toContain('**deploy**');
+      expect(prompt, `第 ${index} 次`).not.toContain('/skills/deploy/SKILL.md');
+    }
+  });
+
+  it('旗標不合規的（值不在值表上、null、舊鍵）整份不收，各記一行帶路徑的 warn', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const root = await flagged({
+        maybe: 'disable-model-invocation: maybe\n',
+        empty: 'user-invocable: null\n',
+        legacy: 'disableModelInvocation: true\n',
+        normal: '',
+      });
+      const [prompt] = await promptsOf(true, root, [{ content: '好。' }]);
+      expect(prompt).toContain('**normal**');
+      for (const name of ['maybe', 'empty', 'legacy']) {
+        expect(prompt).not.toContain(`**${name}**`);
+        const lines = warn.mock.calls
+          .map((call: unknown[]) => String(call[0]))
+          .filter((line: string) => line.includes(`/skills/${name}/SKILL.md`));
+        expect(lines, name).toHaveLength(1);
+      }
+    } finally {
+      warn.mockRestore();
+    }
   });
 });

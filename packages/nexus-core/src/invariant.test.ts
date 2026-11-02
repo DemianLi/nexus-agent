@@ -13,7 +13,6 @@ import { describe, expect, it } from 'vitest';
 import { createInvariantRunner } from './invariants.js';
 import type { InvariantCompanion, InvariantError } from './invariants.js';
 import { createRegistry } from './registry.js';
-import { goalId } from './goal.js';
 import { SessionLog } from './session-log.js';
 import { coreInvariantPlugin, CORE_INVARIANT_PACKAGE } from './invariant.js';
 import { sessionInvariant } from './invariant.js';
@@ -38,35 +37,16 @@ function watch(log: SessionLog): InvariantError[] {
 }
 
 describe('合法序列不吵', () => {
-  it('goal/change 不參與 turn 配對——輪內輪外都不吵', () => {
+  it('走 default 分支的種類不參與 turn 配對——輪內輪外都不吵', () => {
     // 這一條釘的是 `sessionInvariant` 的 `default` 分支：**後來加的事件種類歸它們自己的
-    // 擁有者**。goal 的耐久串由 `@nexus/plugin-goal` 的配套入口檢，這裡多管一句就會在
-    // 真流量上誤報。
-    const log = new SessionLog('goal-不干擾');
+    // 擁有者**（goal 的耐久串由 `@nexus/plugin-goal` 的配套入口檢），這裡多管一句就會在
+    // 真流量上誤報。核心不能 import plugin，所以用核心自己的種類 `model/usage` 站同一個位置。
+    const log = new SessionLog('default-不干擾');
     const violations = watch(log);
-    const change = {
-      kind: 'goal/change',
-      version: 1,
-      operation: 'create',
-      goal: {
-        id: goalId('goal-1'),
-        revision: 1,
-        objective: '把它做完',
-        phase: 'active',
-        maxGoalRounds: 8,
-      },
-      roundsStarted: 0,
-      createdAt: 1,
-      updatedAt: 1,
-    } as const;
-    log.append('goal/change', change);
+    const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 } as const;
+    log.append('model/usage', usage);
     log.append('turn/start', { kind: 'message', text: '走吧' });
-    log.append('goal/change', {
-      ...change,
-      operation: 'pause',
-      goal: { ...change.goal, revision: 2, phase: 'paused' },
-      updatedAt: 2,
-    });
+    log.append('model/usage', usage);
     log.append('turn/end', {});
     expect(violations).toEqual([]);
   });
@@ -279,6 +259,33 @@ describe('model/start ↔ model/end', () => {
     ]);
   });
 
+  /** [#1021](https://github.com/DemianLi/nexus-agent/issues/1021)：`modelCall` 要指到前面真的有的 `model/start`。 */
+  it('指向前面的 model/start 不吵：包括呼叫結束之後才寫的量測與被切斷的半段', () => {
+    const log = new SessionLog('models');
+    const violations = watch(log);
+    log.append('model/start', {}); // 0
+    log.append('model/end', { modelCall: 0 });
+    log.append('context/measure', {
+      approxTokens: 1,
+      messageCount: 1,
+      thresholds: [],
+      modelCall: 0,
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it('指向不存在或不是 model/start 的 seq → 報', () => {
+    const log = new SessionLog('models');
+    const violations = watch(log);
+    log.append('model/start', {}); // 0
+    log.append('model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2, modelCall: 7 });
+    log.append('model/end', { modelCall: 1 }); // seq 1 是上面那顆 usage，不是開頭
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('model/usage（seq 1）的 modelCall 7'),
+      expect.stringContaining('model/end（seq 2）的 modelCall 1'),
+    ]);
+  });
+
   it('**end-seed 之前沒結尾的開頭，不替之後的結尾背書**', () => {
     const earlier = new SessionLog('models');
     earlier.append('model/start', {});
@@ -334,5 +341,155 @@ describe('在 `session/end-seed` 重設', () => {
     resumed.append('turn/start', { kind: 'message', text: '一' });
     resumed.append('turn/start', { kind: 'message', text: '二' });
     expect(violations).toHaveLength(1);
+  });
+});
+
+describe('送出佇列（#637）', () => {
+  const item = (id: string) => ({ id, text: id, source: { kind: 'user' as const } });
+
+  it('合規的插、領、改、刪不吵；停在核准點時插進來的也不吵', () => {
+    const log = new SessionLog('s');
+    const violations = watch(log);
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [item('a')] });
+    log.append('turn/start', { kind: 'message', text: 'a' });
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
+    log.append('interrupt/raised', { interruptId: 'i1' });
+    log.append('turn/end', {});
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [item('b')] });
+    log.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      removedCount: 1,
+      inserted: [item('b')],
+      outcome: 'canceled',
+    });
+    log.append('turn/start', { kind: 'resume' });
+    log.append('turn/end', {});
+    log.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      removedCount: 1,
+      inserted: [],
+      outcome: 'canceled',
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it('領一件不存在的、插一件同 id 的：各抓一次', () => {
+    const log = new SessionLog('s');
+    const violations = watch(log);
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
+    log.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [item('a')] });
+    log.append('inbox/spliced', { target: 'next-turn', start: 1, inserted: [item('a')] });
+    expect(violations.map((violation) => violation.message)).toEqual([
+      expect.stringContaining('inbox/spliced（seq 0）不合規'),
+      expect.stringContaining('inbox/spliced（seq 2）不合規'),
+    ]);
+  });
+
+  it('跨 session/end-seed 不重設：重啟之後領上一個行程排的那件不是違規', () => {
+    const first = new SessionLog('s');
+    first.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [item('a')] });
+    const resumed = new SessionLog('s', { seed: first.events });
+    const violations = watch(resumed);
+    resumed.append('turn/start', { kind: 'message', text: 'a' });
+    resumed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      removedCount: 1,
+      inserted: [],
+    });
+    resumed.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+});
+
+describe('核准稽核落在開著的輪內（#2026）', () => {
+  const asked = (log: SessionLog, id: string) =>
+    log.append('approval/asked', { id, toolName: 'danger', callId: `call-${id}` });
+  const decided = (log: SessionLog, id: string, outcome: 'allowed-once' | 'cancelled') =>
+    log.append('approval/decided', { id, outcome });
+
+  it('輪外的 approval/asked 報違規', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('turn/end', {});
+    asked(log, 'a-1');
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('approval/asked（seq 2）落在任何開著的輪之外'),
+    ]);
+  });
+
+  it('輪外的 approval/decided 報違規', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('turn/end', {});
+    decided(log, 'a-1', 'allowed-once');
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('approval/decided（seq 2）落在任何開著的輪之外'),
+    ]);
+  });
+
+  it('政策路徑：同一輪裡一對 asked／decided 夾在 tool/call 與 tool/result 之間', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('tool/call', { callId: 'call-a-1', name: 'danger', arguments: '{}' });
+    asked(log, 'a-1');
+    log.append('approval/decided', { id: 'a-1', outcome: 'rejected' });
+    log.append('tool/result', { callId: 'call-a-1', isError: true });
+    log.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
+  it('沒有輪的日誌（前景子代理的形狀）：不判', () => {
+    // 前景子代理的日誌沒有 `turn/*`；政策路徑把稽核寫進子代理自己那份日誌（呼叫者就是子代理）。
+    const log = new SessionLog('web/tools:1');
+    const violations = watch(log);
+    log.append('tool/call', { callId: 'call-a-1', name: 'danger', arguments: '{}' });
+    asked(log, 'a-1');
+    log.append('approval/decided', { id: 'a-1', outcome: 'rejected' });
+    log.append('tool/result', { callId: 'call-a-1', isError: true });
+    expect(violations).toEqual([]);
+  });
+
+  it('人那條跨兩輪：提問那一輪記 asked，續接那一輪的 turn/start 之後記 decided', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('interrupt/raised', { interruptId: 'i-1' });
+    asked(log, 'i-1');
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'resume' });
+    decided(log, 'i-1', 'allowed-once');
+    log.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
+  it('人那條被收回：收回那一輪的 turn/start 之後記 decided（cancelled）', () => {
+    const log = new SessionLog('web');
+    const violations = watch(log);
+    log.append('turn/start', { kind: 'message', text: '刪檔' });
+    log.append('interrupt/raised', { interruptId: 'i-1' });
+    asked(log, 'i-1');
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'resume' });
+    decided(log, 'i-1', 'cancelled');
+    log.append('turn/end', {});
+    expect(violations).toEqual([]);
+  });
+
+  it('跨 session/end-seed 不重設：續接之後輪外的稽核照樣報', () => {
+    const earlier = new SessionLog('web');
+    earlier.append('turn/start', { kind: 'message', text: '刪檔' });
+    earlier.append('turn/end', {});
+    const resumed = new SessionLog('web', { seed: earlier.events });
+    const violations = watch(resumed);
+    asked(resumed, 'a-1');
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('approval/asked'),
+    ]);
   });
 });

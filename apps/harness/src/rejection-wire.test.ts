@@ -22,7 +22,6 @@ import type { PluginEntry } from '@nexus/core';
 import type { ConversationState, Event, ToolEntry, WireClient } from '@nexus/wire';
 import {
   appendDecision,
-  appendHumanTurn,
   createWireClient,
   emptyConversation,
   reduceConversation,
@@ -35,6 +34,7 @@ import { approvalAt, emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } fro
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const BASE_URL = 'http://rejection.test';
 const GATED = 'alpha';
@@ -107,7 +107,7 @@ async function open(threadId: string): Promise<Session> {
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
       // 同 serve：圍堵照這條記 `tool/call`／`tool/result`，卡從那裡來。
-      attachSession: built.attachSession,
+      attachSessions: composeAttachSessions(built),
       dispose: built.dispose,
     }),
   });
@@ -121,7 +121,7 @@ async function open(threadId: string): Promise<Session> {
     client,
     events,
     frames: [],
-    state: appendHumanTurn(emptyConversation(), '動手'),
+    state: emptyConversation(),
     close: () => handler.close(),
   };
 }

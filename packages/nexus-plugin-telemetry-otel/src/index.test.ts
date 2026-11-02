@@ -13,6 +13,7 @@ import type { IncomingHttpHeaders, Server } from 'node:http';
 import { once } from 'node:events';
 
 import {
+  SESSION_EVENT_MAX_DEPTH,
   SESSION_TELEMETRY_SERVICE,
   SessionLog,
   SessionTelemetryCoordinator,
@@ -26,8 +27,10 @@ import {
   DEFAULT_TELEMETRY_MODE,
   OpenTelemetrySessionService,
   createTelemetryOtelPlugin,
+  telemetryOtelConfigSchema,
   telemetryOtelPlugin,
 } from './index.js';
+import type { TelemetryOtelOptions } from './index.js';
 
 /** OTLP/JSON 裡這些斷言碰得到的那幾格。 */
 interface OtlpLogsRequest {
@@ -123,13 +126,28 @@ describe('設定驗證', () => {
     expect(new OpenTelemetrySessionService().sharing).toBe('disabled');
   });
 
-  it('full 少了 exporter.url 當場拋，訊息指名欄位', () => {
-    expect(() => new OpenTelemetrySessionService({ mode: 'full' })).toThrow('exporter.url 是必填');
+  it('feedback-only 少了 exporter.url 當場拋，訊息指名欄位', () => {
+    expect(() => new OpenTelemetrySessionService({ mode: 'feedback-only' })).toThrow(
+      'exporter.url 是必填',
+    );
+  });
+
+  // `full` 照 dsh 出廠拒絕、不當別名（#750）：設定檢查、直接建構、載入清單三條路各擋一次。
+  it('設定檢查不收 full', () => {
+    expect(telemetryOtelConfigSchema.safeParse({ mode: 'full' }).success).toBe(false);
+  });
+
+  it('直接建構時傳 full 或亂寫的值都當場拋，訊息指名不支援的模式', () => {
+    const construct = (mode: string) =>
+      new OpenTelemetrySessionService({ mode } as unknown as TelemetryOtelOptions);
+    expect(() => construct('full')).toThrow('不支援的模式 "full"');
+    expect(() => construct('FEEDBACK_ONLY')).toThrow('不支援的模式 "FEEDBACK_ONLY"');
   });
 
   it('exporter.url 不是合法 URL 就拋', () => {
     expect(
-      () => new OpenTelemetrySessionService({ mode: 'full', exporter: { url: '不是網址' } }),
+      () =>
+        new OpenTelemetrySessionService({ mode: 'feedback-only', exporter: { url: '不是網址' } }),
     ).toThrow('不是合法的 URL');
   });
 
@@ -137,7 +155,7 @@ describe('設定驗證', () => {
     expect(
       () =>
         new OpenTelemetrySessionService({
-          mode: 'full',
+          mode: 'feedback-only',
           exporter: { url: 'ftp://collector.example.com/v1/logs' },
         }),
     ).toThrow('必須是 http(s)');
@@ -148,7 +166,7 @@ describe('設定驗證', () => {
     expect(
       () =>
         new OpenTelemetrySessionService({
-          mode: 'full',
+          mode: 'feedback-only',
           exporter: { url },
           processor: { maxExportBatchSize: 0 },
         }),
@@ -161,18 +179,12 @@ describe('設定驗證', () => {
       expect(
         () =>
           new OpenTelemetrySessionService({
-            mode: 'full',
+            mode: 'feedback-only',
             exporter: { url },
             shutdownTimeoutMillis: millis,
           }),
       ).toThrow('shutdownTimeoutMillis');
     }
-  });
-
-  it('feedback-only 跟 full 走同一套驗證：少了 exporter.url 當場拋', () => {
-    expect(() => new OpenTelemetrySessionService({ mode: 'feedback-only' })).toThrow(
-      'exporter.url 是必填',
-    );
   });
 
   it('feedback-only 說出去的策略就是 feedback-only——組裝點靠它挑 on-demand', async () => {
@@ -202,7 +214,7 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
   it('日誌事件變成 OTLP 記錄，識別、severity、body 都對得上', async () => {
     const { url, captures } = await mockCollector();
     const service = new OpenTelemetrySessionService({
-      mode: 'full',
+      mode: 'feedback-only',
       exporter: { url, headers: { authorization: 'Bearer test-token' } },
       serviceName: 'nexus-agent-test',
       serviceVersion: '9.9.9',
@@ -238,7 +250,7 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
 
   it('ledger 與 ops 落在兩個不同的 scope，收端因此分得開', async () => {
     const { url, captures } = await mockCollector();
-    const service = new OpenTelemetrySessionService({ mode: 'full', exporter: { url } });
+    const service = new OpenTelemetrySessionService({ mode: 'feedback-only', exporter: { url } });
     const log = new SessionLog('thread-otel');
     const coordinator = new SessionTelemetryCoordinator({ log, sink: service });
 
@@ -260,7 +272,7 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
   it('exporter 的選項原樣轉交：headers 真的出現在請求上', async () => {
     const { url, captures } = await mockCollector();
     const service = new OpenTelemetrySessionService({
-      mode: 'full',
+      mode: 'feedback-only',
       exporter: { url, headers: { authorization: 'Bearer test-token' } },
     });
     const log = new SessionLog('thread-otel');
@@ -274,7 +286,7 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
   it('Resource 帶 service.name / service.version，而且沒有 user.id', async () => {
     const { url, captures } = await mockCollector();
     const service = new OpenTelemetrySessionService({
-      mode: 'full',
+      mode: 'feedback-only',
       exporter: { url },
       serviceName: 'nexus-agent-test',
       serviceVersion: '9.9.9',
@@ -293,7 +305,7 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
 
   it('脫敏規則的產物才是送出去的東西', async () => {
     const { url, captures } = await mockCollector();
-    const service = new OpenTelemetrySessionService({ mode: 'full', exporter: { url } });
+    const service = new OpenTelemetrySessionService({ mode: 'feedback-only', exporter: { url } });
     const log = new SessionLog('thread-otel');
     const coordinator = new SessionTelemetryCoordinator({
       log,
@@ -317,7 +329,7 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
   it('collector 不回應時，關機在自己的期限上 reject 而不是永遠等', async () => {
     const { url } = await mockCollector(true);
     const service = new OpenTelemetrySessionService({
-      mode: 'full',
+      mode: 'feedback-only',
       exporter: { url },
       shutdownTimeoutMillis: 120,
     });
@@ -338,23 +350,82 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
   }, 10_000);
 });
 
+describe('日誌收得下的最深的一則，OTLP 也送得出去（#1661）', () => {
+  /** OTLP 的 AnyValue 包了幾層物件或陣列，最裡面是什麼。 */
+  function anyValueDepth(value: unknown): { depth: number; leaf: unknown } {
+    let node = value as Record<string, unknown> | undefined;
+    let depth = 0;
+    for (;;) {
+      const kv = node?.['kvlistValue'] as { values: { key: string; value: unknown }[] } | undefined;
+      const array = node?.['arrayValue'] as { values: unknown[] } | undefined;
+      // 物件一路往 `next` 走（最外層的 `data` 還有 callId、isError）。
+      if (kv !== undefined)
+        node = kv.values.find((entry) => entry.key === 'next')?.value as Record<string, unknown>;
+      else if (array !== undefined) node = array.values[0] as Record<string, unknown>;
+      else return { depth, leaf: node?.['stringValue'] };
+      depth++;
+    }
+  }
+
+  it(`剛好 ${SESSION_EVENT_MAX_DEPTH} 層的物件與交錯巢狀：寫得進日誌，送到 collector 的 body 也剛好那麼多層`, async () => {
+    // 上限算的根跟遙測的 body 是同一個（`data`），所以 collector 收到的層數就是上限本身。物件與交錯是 OTLP 最淺的兩種
+    // （CI 上 1023／1169 層就送不出去）。
+    const { url, captures } = await mockCollector();
+    const service = new OpenTelemetrySessionService({ mode: 'feedback-only', exporter: { url } });
+    const log = new SessionLog('thread-deep');
+    const coordinator = new SessionTelemetryCoordinator({ log, sink: service });
+
+    for (const shape of ['object', 'mixed'] as const) {
+      // `data` 本身算第 1 層，所以剩下的包在 `next` 底下。
+      let next: unknown = 'leaf';
+      for (let level = 0; level < SESSION_EVENT_MAX_DEPTH - 1; level++) {
+        next = shape === 'object' || level % 2 === 1 ? { next } : [next];
+      }
+      log.append('tool/result', { callId: shape, isError: false, next } as never);
+    }
+    await coordinator.dispose();
+
+    const deep = allRecords(captures).filter(
+      (entry) => attributeOf(entry.record, 'event.type') === 'tool/result',
+    );
+    expect(deep.map((entry) => anyValueDepth(entry.record.body))).toEqual([
+      { depth: SESSION_EVENT_MAX_DEPTH, leaf: 'leaf' },
+      { depth: SESSION_EVENT_MAX_DEPTH, leaf: 'leaf' },
+    ]);
+  });
+});
+
 describe('plugin 這一層', () => {
   it('apply 把服務掛上註冊點，披露讀得到它的策略', async () => {
     const { url } = await mockCollector();
     const registry = createRegistry();
-    await loadPlugins([createTelemetryOtelPlugin({ mode: 'full', exporter: { url } })], registry);
+    await loadPlugins(
+      [createTelemetryOtelPlugin({ mode: 'feedback-only', exporter: { url } })],
+      registry,
+    );
 
-    expect(registry.services.get(SESSION_TELEMETRY_SERVICE)?.sharing).toBe('full');
+    expect(registry.services.get(SESSION_TELEMETRY_SERVICE)?.sharing).toBe('feedback-only');
     expect(registry.services.provider(SESSION_TELEMETRY_SERVICE)?.name).toBe('telemetry-otel');
     await registry.services.use(SESSION_TELEMETRY_SERVICE).shutdown();
   });
 
   // **翻面過的絆索**（#453）：原本是工廠當場拋，現在驗在載入的時候——工廠只是薄薄一層，
   // 錯誤訊息因此指得出是清單裡哪一個條目，那是從 YAML 載入時唯一指得到的東西。
+  it('清單上寫 mode: full 的整份載入失敗', async () => {
+    await expect(
+      loadPlugins([
+        {
+          plugin: telemetryOtelPlugin,
+          config: { mode: 'full', exporter: { url: 'http://x/v1/logs' } },
+        },
+      ]),
+    ).rejects.toThrow(/mode/);
+  });
+
   it('設定錯誤在載入時就爆，不會拖到跑起來', async () => {
-    await expect(loadPlugins([createTelemetryOtelPlugin({ mode: 'full' })])).rejects.toThrow(
-      'exporter.url 是必填',
-    );
+    await expect(
+      loadPlugins([createTelemetryOtelPlugin({ mode: 'feedback-only' })]),
+    ).rejects.toThrow('exporter.url 是必填');
   });
 
   it('exporter 的未知欄位讓載入失敗——**這一格是登記過的 API 收窄**', async () => {
@@ -363,7 +434,10 @@ describe('plugin 這一層', () => {
     const bad = [
       {
         plugin: telemetryOtelPlugin,
-        config: { mode: 'full', exporter: { url: 'http://x/v1/logs', httpAgentOptions: {} } },
+        config: {
+          mode: 'feedback-only',
+          exporter: { url: 'http://x/v1/logs', httpAgentOptions: {} },
+        },
       },
     ];
     await expect(loadPlugins(bad)).rejects.toThrow('telemetry-otel#0 (telemetry-otel)');
@@ -374,7 +448,7 @@ describe('plugin 這一層', () => {
     // 這一格帶著一個 OTel `LoggerProvider`，而協調器關機時會轉發它的 `shutdown()`。共用一份
     // 的話，`serve.ts` 裡第一條關掉的 thread 會把其他 thread 的遙測一起關掉。
     const { url } = await mockCollector();
-    const entry = createTelemetryOtelPlugin({ mode: 'full', exporter: { url } });
+    const entry = createTelemetryOtelPlugin({ mode: 'feedback-only', exporter: { url } });
     const a = await loadPlugins([entry]);
     const b = await loadPlugins([entry]);
     const first = a.registry.services.use(SESSION_TELEMETRY_SERVICE);

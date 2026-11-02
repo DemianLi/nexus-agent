@@ -1,0 +1,560 @@
+/**
+ * 啟動時的必掛名單（#751）：哪幾列掉了要整個起不來，其餘印一段警告、照樣起來。
+ *
+ * 兩個入口各起一次，量的是產品路徑（`runCli`、`runServe`），不是只量 {@link auditStartupEntries}：
+ * 漏接一邊不會有型別錯誤。
+ */
+
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+
+import { loadPlugins } from '@nexus/core';
+import type { PluginEntry } from '@nexus/core';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import { AssemblyDropError } from './agent-factory.js';
+import type { AssemblyDrop } from './agent-factory.js';
+import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
+import { runCli } from './cli.js';
+import { bodyLog, foldTurn, levelsOf, serveClient, withSystemPromptVariables } from './fixtures.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
+import { createCordisRoot } from './cordis-root.js';
+import type { CordisRoot } from './cordis-root.js';
+import { loadDefaultPlugins, loadPluginConfig } from './plugin-config.js';
+import { seedHomePatch } from './plugin-journal.fixture.js';
+import { runServe } from './serve.js';
+import type { RunningServe } from './serve.js';
+import {
+  auditStartupEntries,
+  formatActivationError,
+  optionalEntriesOf,
+  REQUIRED_ENTRY_IDS,
+  startupErrorFrom,
+  StartupError,
+  startupWarning,
+} from './startup-audit.js';
+
+const temporary: string[] = [];
+let running: RunningServe | undefined;
+
+const roots: CordisRoot[] = [];
+
+afterEach(async () => {
+  await running?.close();
+  running = undefined;
+  for (const root of roots.splice(0)) await root.dispose().catch(() => {});
+  for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+/** 一個私有的 harness home，覆寫檔寫進去。 */
+function homeWith(patch: string): NodeJS.ProcessEnv {
+  const home = mkdtempSync(join(tmpdir(), 'nexus-startup-audit-'));
+  temporary.push(home);
+  chmodSync(home, 0o700);
+  if (patch !== '') seedHomePatch(home, patch);
+  return { [HARNESS_HOME_ENV]: home };
+}
+
+/** CLI 起一次：回它拋的錯，或它印到標準錯誤的每一行。 */
+async function cli(env: NodeJS.ProcessEnv): Promise<{ error?: unknown; errors: string[] }> {
+  const errors: string[] = [];
+  try {
+    await runCli({
+      argv: ['說點什麼'],
+      env,
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: (line) => errors.push(line) },
+    });
+    return { errors };
+  } catch (error) {
+    return { error, errors };
+  }
+}
+
+const BAD_BROWSER_SESSION = '- id: browser-session\n  config:\n    maxAgeDays: 0\n';
+const BAD_TODO = "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n";
+
+describe('必掛的列掉了：兩個入口都起不來', () => {
+  it('名單上是 browser-session、system-prompt、background-subagents、permission-presets、goal-round-cap、turn-timeout 與 session-reference，而且比的是條目 id', () => {
+    expect([...REQUIRED_ENTRY_IDS]).toEqual([
+      'browser-session',
+      'system-prompt',
+      'background-subagents',
+      'permission-presets',
+      'goal-round-cap',
+      'turn-timeout',
+      'session-reference',
+    ]);
+  });
+
+  /**
+   * 卡上的驗收：`browser-session` 寫壞，兩個入口都起不來、訊息指名它；同時再弄壞 `todo`，訊息把 `todo` 也一起列
+   * （照 dsh 的 `StartupError`）。serve 那一次還沒建瀏覽器會話密鑰。
+   */
+  it('browser-session 寫壞、todo 也壞：CLI 與 serve 都拋同一則，兩列都列、必掛的標出來，密鑰檔沒建', async () => {
+    const env = homeWith(BAD_BROWSER_SESSION + BAD_TODO);
+
+    const fromCli = await cli(env);
+    expect(fromCli.error).toBeInstanceOf(StartupError);
+    const message = (fromCli.error as Error).message;
+    expect(message).toMatch(/^起不來：1 列必掛的沒有掛上。/u);
+    expect(message).toMatch(
+      /^ {2}browser-session（#settings\/browser-session）〔必掛〕設定驗不過：/mu,
+    );
+    expect(message).toMatch(/^ {2}todo（@nexus\/plugin-todo）設定驗不過：/mu);
+    // 起不來的那一次不另外印警告：全部都在拋出去的那一則裡。
+    expect(fromCli.errors).toEqual([]);
+
+    await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+      message,
+    );
+    expect(existsSync(join(env[HARNESS_HOME_ENV] ?? '', BROWSER_SESSION_SECRET_FILE))).toBe(false);
+  });
+
+  it('對照：只有 todo 壞，兩個入口都起得來', async () => {
+    const env = homeWith(BAD_TODO);
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
+  });
+});
+
+/**
+ * 目標續行的操作者上限寫壞（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623) 驗收 8）：照 #751 寫壞的列會掉，掉了上限就沒了（fail-open），
+ * 所以這一列在必掛名單上，同 `background-subagents`。**關掉不一樣**：`disabled: true` 是部署方明講只留目標自己那條，照常起來（驗收 7）。
+ */
+describe('goal-round-cap 寫壞：兩個入口都起不來；關掉照常起來', () => {
+  it.each([['0'], ['-1'], ['2.5'], ["'二十'"]])(
+    'limit 寫成 %s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）',
+    async (raw) => {
+      const env = homeWith(`- id: goal-round-cap\n  config:\n    limit: ${raw}\n`);
+
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(
+        /^ {2}goal-round-cap（#settings\/goal-round-cap）〔必掛〕設定驗不過：/mu,
+      );
+
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it('對照：disabled: true，兩個入口都起得來', async () => {
+    const env = homeWith('- id: goal-round-cap\n  disabled: true\n');
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
+  });
+});
+
+/**
+ * 一輪的時鐘寫壞（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：寫壞的列會掉，掉了就沒有時鐘（fail-open），所以同 `goal-round-cap`
+ * 在必掛名單上。**關掉不一樣**：`disabled: true` 是部署方明講不限，照常起來。上限是計時器的上限（超過 2³¹−1 會被 Node 當成 1）。
+ */
+describe('turn-timeout 寫壞：兩個入口都起不來；關掉照常起來', () => {
+  it.each([['0'], ['-1'], ['2.5'], ['2147483648'], ["'半小時'"]])(
+    'timeoutMs 寫成 %s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）',
+    async (raw) => {
+      const env = homeWith(`- id: turn-timeout\n  config:\n    timeoutMs: ${raw}\n`);
+
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(/^ {2}turn-timeout（#settings\/turn-timeout）〔必掛〕設定驗不過：/mu);
+
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it('對照：disabled: true，兩個入口都起得來', async () => {
+    const env = homeWith('- id: turn-timeout\n  disabled: true\n');
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
+  });
+});
+
+/**
+ * system-prompt 的前後綴寫壞（[#1477](https://github.com/DemianLi/nexus-agent/issues/1477) 驗收 D）：遷移之前這一列在 `apply` 裡走一遍前後綴，
+ * 寫壞的變數名當場拋、那一列掉、必掛、起不來；遷移之後驗證搬到掛載當下（這一列自己登記 `model`、`cwd`，掛載時用空值走一遍），
+ * **同一類錯、同一列、同一格、同一個變數名**。量三個時刻：CLI 起動、serve 起動、serve 之後某條 thread 組裝（後者在
+ * `serve-plugin-failed-record.test.ts`）。
+ */
+describe('system-prompt 的前後綴寫壞：兩個入口都在起動時起不來', () => {
+  const cases: readonly (readonly [string, string, string])[] = [
+    [
+      '不存在的變數名',
+      '{{modle}}',
+      'system-prompt 的 personaPrefix 引用了不存在的變數 "{{modle}}"；可用的變數：model、cwd',
+    ],
+    ['名字裡有空白', '{{a b}}', 'system-prompt 的 personaPrefix 有寫壞的變數引用 "{{a b}}"'],
+  ];
+
+  it.each(cases)(
+    '%s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）與原文',
+    async (_label, text, original) => {
+      const env = homeWith(`- id: system-prompt\n  config:\n    personaPrefix: '${text}'\n`);
+
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(/^起不來：1 列必掛的沒有掛上。/u);
+      expect(message).toMatch(/^ {2}system-prompt（@nexus\/plugin-system-prompt）〔必掛〕/mu);
+      expect(message).toContain(original);
+      expect(fromCli.errors).toEqual([]);
+
+      // serve：同一則，而且是在起動時（還沒綁 port、沒建任何 thread）。
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it('對照：前後綴引用的是登記過的 {{model}}、{{cwd}}，兩個入口都起得來', async () => {
+    const env = homeWith(
+      "- id: system-prompt\n  config:\n    personaPrefix: '你是 {{model}}，在 {{cwd}}。'\n",
+    );
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
+  });
+});
+
+/**
+ * **已知缺口（#1477 Q3）：必掛的列自我停用，這份名單接不住**。樹上自我停用的判定是 `off`，`off` 的列不進 `dropped`（#1424：停著不算掛不上，
+ * 也不重掛、不閃動），而必掛名單比的是 `dropped`。`system-prompt` 沒有自我停用的呼叫，所以這張卡不修；這條測試把**現況**釘住，
+ * 補上必掛列自我停用的語意（行程內停著還是起不來）的那天它會紅，是補完的訊號，不是壞了。
+ */
+describe('已知缺口：必掛的列自我停用不進 dropped，啟動稽核接不住', () => {
+  it('以 system-prompt 的 id 載一顆自我停用的函式插件：dropped 是空的、列標成停用、稽核不拋', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-startup-audit-gap-'));
+    temporary.push(dir);
+    chmodSync(dir, 0o700);
+    const module = join(dir, 'quitter.mjs');
+    writeFileSync(
+      module,
+      `import { z } from 'zod';
+export const name = 'system-prompt';
+export const inject = { tools: { range: '^1.0.0' } };
+export const Config = z.strictObject({});
+export const manifest = {
+  id: 'system-prompt', version: '1.0.0', owner: 't',
+  provides: [], consumes: [{ token: 'tools', range: '^1.0.0' }],
+  config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
+};
+export function apply(ctx) { ctx.fiber.dispose(); }
+`,
+      { mode: 0o600 },
+    );
+    chmodSync(module, 0o600);
+    const shipped = join(dir, 'cordis.yml');
+    writeFileSync(shipped, `- id: system-prompt\n  name: 'file://${module}'\n`, { mode: 0o600 });
+    const root = createCordisRoot();
+    roots.push(root);
+    const loaded = await loadPluginConfig({ shipped, warn: () => undefined }, { tree: root.tree });
+
+    expect(REQUIRED_ENTRY_IDS.has('system-prompt')).toBe(true);
+    // 判成 off、標成停用，不是 dropped：必掛的名單接不住它。
+    expect(loaded.dropped).toEqual([]);
+    expect(loaded.plugins.map((plugin) => plugin.disabled)).toEqual([true]);
+    expect(() => auditStartupEntries(loaded, { live: false })).not.toThrow();
+  }, 60000);
+});
+
+/**
+ * **組裝之前就拋的錯自己帶上掉了的原因**：啟動時那段警告要等組裝完才印（兩次合成一段），落盤那一列設定寫壞又給了
+ * `--session-log` 的話，拋的那一刻警告還沒印——錯誤只說「那一列沒掛上」，使用者看不到為什麼。
+ */
+describe('組裝之前就拋的錯', () => {
+  it('session-persistence 設定寫壞又給 --session-log：兩個入口都拋，訊息帶著那一列掉的原因', async () => {
+    const env = homeWith('- id: session-persistence\n  config:\n    windowMs: 2147483648\n');
+    const logRoot = mkdtempSync(join(tmpdir(), 'nexus-startup-audit-log-'));
+    temporary.push(logRoot);
+    const reason =
+      /^--session-log 跟設定矛盾：清單上 `session-persistence` 那一列掉了（session-persistence（@nexus\/core\/session-persistence）設定驗不過：.*windowMs/su;
+
+    const errors: string[] = [];
+    const fromCli = await runCli({
+      argv: ['--session-log', logRoot, '說點什麼'],
+      env,
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: (line) => errors.push(line) },
+    }).catch((error: unknown) => error);
+    expect((fromCli as Error).message).toMatch(reason);
+    // 拋的這一刻，那段警告確實還沒印：原因只在錯誤裡。
+    expect(errors).toEqual([]);
+
+    await expect(
+      runServe({ argv: ['--port', '0', '--session-log', logRoot], log: () => undefined, env }),
+    ).rejects.toThrow(reason);
+  });
+});
+
+describe('掉了的列算沒掛', () => {
+  /**
+   * 卡上的驗收：`summarization` 設定寫壞，組出來的跟寫 `disabled: true` 的那份一樣。量的是載入器記下的「沒掛上」
+   * ——折疊那側六處讀的就是它（`disabledEntries`），摘要因此是同名空殼、不是回到內建預設。
+   */
+  it('summarization 設定寫壞：跟寫 disabled: true 的那份一樣記成沒掛', async () => {
+    const mountedOff = async (patch: string): Promise<readonly string[]> => {
+      const { plugins } = await loadDefaultPlugins({ env: homeWith(patch) });
+      const { registry, dispose } = await loadPlugins(withSystemPromptVariables(plugins));
+      await dispose();
+      return registry.disabledEntries.names();
+    };
+    const broken = await mountedOff('- id: summarization\n  config:\n    tokens: -1\n');
+    expect(broken).toContain('summarization');
+    expect(broken).toEqual(await mountedOff('- id: summarization\n  disabled: true\n'));
+  });
+});
+
+describe('沒有設定格式卻寫了 config：照樣掛，警告講那份設定沒有作用', () => {
+  const EXTRA = '- id: observation-policy\n  config:\n    anything: 1\n';
+  const LINE = '  observation-policy（@nexus/core/observation-policy）';
+
+  it('CLI 與 serve 都起得來，同一段警告指名它；那一列照樣掛著（先讀後改照樣在）', async () => {
+    const env = homeWith(EXTRA);
+    const fromCli = await cli(env);
+    expect(fromCli.error).toBeUndefined();
+    expect(fromCli.errors).toEqual([
+      '警告：1 列寫的 config 沒有作用——那顆 plugin 沒有設定格式，那一列照樣掛：',
+      LINE,
+    ]);
+
+    const logged: string[] = [];
+    running = await runServe({ argv: ['--port', '0'], log: bodyLog(logged), env });
+    expect(logged).toContain(LINE);
+
+    const { plugins } = await loadDefaultPlugins({ env });
+    const { registry, dispose } = await loadPlugins(withSystemPromptVariables(plugins));
+    await dispose();
+    expect(registry.disabledEntries.has('observation-policy')).toBe(false);
+  });
+});
+
+describe('判定的幾支函式', () => {
+  const drop = (id: string) =>
+    ({ id, module: `#settings/${id}`, stage: 'config', message: `${id} 壞了` }) as const;
+  const entry = (name: string): PluginEntry => ({ plugin: { name, apply: () => undefined } });
+
+  it('沒有要講的：空陣列', () => {
+    expect(startupWarning({ dropped: [], ignoredConfig: [], rows: new Map() }, [])).toEqual([]);
+  });
+
+  it('live-model 掉了：沒帶 --live 只是警告，帶了就起不來', () => {
+    const loaded = { dropped: [drop('live-model')], ignoredConfig: [], rows: new Map() };
+    expect(() => auditStartupEntries(loaded, { live: false })).not.toThrow();
+    expect(startupWarning(loaded, [])[0]).toBe('警告：1 列沒有掛上，其餘照樣起來：');
+    expect(() => auditStartupEntries(loaded, { live: true })).toThrow(StartupError);
+  });
+
+  /** 只有清單交出來的列照名單判：必掛的不在，組裝點的外掛本來就不在 `rows` 裡。 */
+  it('可少掛的條目：清單上不在必掛名單的列；帶 --live 時 live-model 也不在', () => {
+    const [todo, browser, live] = [entry('todo'), entry('browser-session'), entry('live-model')];
+    const rows = new Map([
+      [todo, { id: 'todo', module: '@nexus/plugin-todo' }],
+      [browser, { id: 'browser-session', module: '#settings/browser-session' }],
+      [live, { id: 'live-model', module: '#settings/live-model' }],
+    ]);
+    expect([...optionalEntriesOf({ rows }, { live: false })]).toEqual([todo, live]);
+    expect([...optionalEntriesOf({ rows }, { live: true })]).toEqual([todo]);
+  });
+
+  /** 組裝時不能少掛的掉了：兩次掉的一起列，不能少掛的標出來，組裝點的外掛沒有模組名、寫「組裝點」。 */
+  it('組裝的錯換成 StartupError：兩次掉的一起列，組裝點的外掛標必掛', () => {
+    const [todo, host] = [entry('todo'), entry('host-services')];
+    const dropped: AssemblyDrop[] = [
+      {
+        entry: host,
+        drop: {
+          origin: { id: 'host-services', name: 'host-services' },
+          stage: 'apply',
+          message: 'host 壞了',
+          cause: undefined,
+        },
+      },
+      {
+        entry: todo,
+        drop: {
+          origin: { id: 'todo', name: 'todo' },
+          stage: 'requires',
+          message: 'todo 缺件',
+          cause: undefined,
+        },
+      },
+    ];
+    const error = startupErrorFrom(
+      {
+        dropped: [drop('summarization')],
+        rows: new Map([[todo, { id: 'todo', module: '@nexus/plugin-todo' }]]),
+      },
+      new AssemblyDropError(dropped, new Set([host])),
+      { live: false },
+    );
+    expect(error.message.split('\n')).toEqual([
+      '起不來：1 列必掛的沒有掛上。這一次掉了的全部：',
+      '  summarization（#settings/summarization）設定驗不過：summarization 壞了',
+      '  host-services（組裝點）〔必掛〕掛上時失敗：host 壞了',
+      '  todo（@nexus/plugin-todo）要用的服務沒人提供：todo 缺件',
+    ]);
+    expect(error.dropped).toHaveLength(3);
+  });
+});
+
+/**
+ * **serve 試組時掉了的列帶進每條對話**（卡上第 6 項）：啟動時判一次，之後每條對話組裝時那幾列直接算沒掛——不再重試、
+ * 不再每條各印一次。量的是那一列的 `apply` 真的跑了幾次：模組每跑一次 `apply` 就往見證檔寫一行。
+ */
+describe('serve：組裝時掉了的列', () => {
+  /** home 裡一顆 `insert` 進來的模組：每次 `apply` 記一行，第 `failFrom` 次起拋錯。 */
+  function homeWithCountingModule(failFrom: number): { env: NodeJS.ProcessEnv; witness: string } {
+    const env = homeWith('');
+    const home = env[HARNESS_HOME_ENV] ?? '';
+    const witness = join(home, 'applied');
+    const module = join(home, 'counted.ts');
+    writeFileSync(
+      module,
+      [
+        "import { appendFileSync, existsSync, readFileSync } from 'node:fs';",
+        `const witness = ${JSON.stringify(witness)};`,
+        'export default {',
+        "  name: 'counted',",
+        '  apply() {',
+        "    const seen = existsSync(witness) ? readFileSync(witness, 'utf8').length : 0;",
+        "    appendFileSync(witness, 'x');",
+        `    if (seen + 1 >= ${String(failFrom)}) throw new Error('故意在 apply 裡壞掉');`,
+        '  },',
+        '};',
+        '',
+      ].join('\n'),
+    );
+    chmodSync(module, 0o600);
+    seedHomePatch(home, "- insert:\n    - id: counted\n      name: './counted.ts'\n");
+    return { env, witness };
+  }
+
+  /** 起一台 serve、開兩條對話各跑一輪，回伺服器日誌。 */
+  async function serveTwoThreads(env: NodeJS.ProcessEnv, raw?: string[]): Promise<string[]> {
+    const lines: string[] = [];
+    const server = (await runServe({
+      argv: ['--port', '0'],
+      log: bodyLog(lines, raw),
+      env,
+    })) as RunningServe;
+    running = server;
+    const client = await serveClient(server);
+    for (const thread of ['a', 'b']) {
+      const events = await client.openEvents(thread);
+      await client.runStart(thread, '說點什麼');
+      await foldTurn(events);
+      await events.return?.(undefined);
+    }
+    return lines;
+  }
+
+  const COUNTED = /^ {2}counted（file:[^）]+\/counted\.ts）掛上時失敗：.*故意在 apply 裡壞掉/u;
+
+  it('試組時 `apply` 拋錯：起得來、警告只印一次，之後兩條對話都不再跑它的 `apply`', async () => {
+    const { env, witness } = homeWithCountingModule(1);
+    const lines = await serveTwoThreads(env);
+    expect(lines.filter((line) => COUNTED.test(line))).toHaveLength(1);
+    expect(lines).toContain('警告：1 列沒有掛上，其餘照樣起來：');
+    expect(lines.filter((line) => line.startsWith('[組裝]'))).toEqual([]);
+    expect(readFileSync(witness, 'utf8')).toBe('x');
+    const listed = lines.find((line) => line.startsWith('plugin：'));
+    expect(listed).not.toMatch(/[：、]counted(、|$)/u);
+  });
+
+  /**
+   * **啟動時沒掉、某一條對話組裝時才掉的列**：同一套規則只作用在那一條——那條對話照樣建得起來、伺服器日誌記一筆。
+   * 對照組是上一條：試組就掉的列，對話組裝時一筆都不記。
+   */
+  it('試組時沒掉、對話組裝時才掉：那一條照樣建得起來，伺服器日誌逐條記一筆', async () => {
+    const { env, witness } = homeWithCountingModule(2);
+    const raw: string[] = [];
+    const lines = await serveTwoThreads(env, raw);
+    expect(lines.filter((line) => line.startsWith('警告：'))).toEqual([]);
+    // 等級：部署方把門檻調到 warn 時，這一行不能掉（#1534 驗收 1）。
+    expect(levelsOf(raw, '[組裝] thread')).toEqual(['W', 'W']);
+    const perThread = lines.filter((line) => line.startsWith('[組裝]'));
+    expect(perThread).toHaveLength(2);
+    expect(perThread[0]).toMatch(
+      /^\[組裝\] thread "a" 這一條沒掛上：counted（file:[^）]+\/counted\.ts）掛上時失敗：/u,
+    );
+    expect(readFileSync(witness, 'utf8')).toBe('xxx');
+  });
+});
+
+describe('formatActivationError（#1560 N0053）', () => {
+  it('cause 鏈每一顆都在；環狀的 cause 不卡死，各出現一次', () => {
+    const a = new Error('AAA');
+    const b = new Error('BBB');
+    a.cause = b;
+    b.cause = a;
+    const text = formatActivationError(a);
+    expect(text.split('AAA')).toHaveLength(2);
+    expect(text.split('BBB')).toHaveLength(2);
+  });
+
+  it('AggregateError 的成員都寫出來，非 Error 的值轉成字串', () => {
+    const text = formatActivationError(
+      new AggregateError([new Error('成員一'), 'plain-string'], '聚合'),
+    );
+    expect(text).toContain('成員一');
+    expect(text).toContain('plain-string');
+  });
+});
+
+/**
+ * 跨會話引用的四個上限寫壞（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862 驗收 D）：dsh 在建構子裡越界就拋
+ * `SESSION_REFERENCE_INVALID_CONFIG`（`session-reference/src/index.ts:100-128`）。寫壞的列會掉，掉了之後值回到 schema 的預設，
+ * 其中比例是 dsh 的 0.2，靜靜拿掉出廠調低的 0.1（fail-open），所以這一列在必掛名單上，同 `goal-round-cap`、`turn-timeout`。
+ * **這一列也關不掉**（`PROTECTED_ENTRY_NAMES`）：`disabled: true` 只會回到同一個預設。
+ */
+describe('session-reference 寫壞：兩個入口都起不來；關不掉', () => {
+  it.each([
+    ['maxReferences', '4'],
+    ['referenceContextFraction', '1.5'],
+    ['candidateLimit', '0'],
+    ['maxReferenceBytes', '0'],
+    ['maxReferences', '0'],
+  ])(
+    '%s 寫成 %s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）與欄位',
+    async (field, raw) => {
+      const env = homeWith(`- id: session-reference\n  config:\n    ${field}: ${raw}\n`);
+
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(
+        /^ {2}session-reference（#settings\/session-reference）〔必掛〕設定驗不過：/mu,
+      );
+      expect(message).toContain(field);
+
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it('disabled: true：起動當場拋，指名這一列（關掉只會回到 dsh 的 0.2，讀起來卻像關掉引用）', async () => {
+    const env = homeWith('- id: session-reference\n  disabled: true\n');
+    const fromCli = await cli(env);
+    expect(fromCli.error).toBeInstanceOf(Error);
+    expect((fromCli.error as Error).message).toContain('#settings/session-reference');
+    expect((fromCli.error as Error).message).toContain('關不掉');
+  });
+
+  it('對照：改成合法的值，兩個入口都起得來', async () => {
+    const env = homeWith(
+      '- id: session-reference\n  config:\n    maxReferences: 2\n    candidateLimit: 5\n    referenceContextFraction: 0.3\n',
+    );
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
+  });
+});

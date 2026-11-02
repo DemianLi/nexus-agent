@@ -5,7 +5,7 @@
  * `feat/nexus-plugin-contract` 當時只有三個註冊點，回滾那條用 tool ＋ subagent（兩次
  * 具名插入）；middleware 是 symbol-keyed 的匿名追加，撤銷路徑與具名插入不同，那一條
  * 隨 `AnonymousEntries` 落在本 PR 的「九個註冊點的回滾」。那組測試同時是 `load.ts`
- * 的 `trackUndo` 漏包某個註冊點時唯一會紅的地方。
+ * 的註冊點漏記撤銷（沒走 registry 的 `effect`）時唯一會紅的地方。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -21,7 +21,8 @@ import {
   fakeSubAgent,
   fakeTool,
 } from './fixtures.js';
-import type { PluginEntry } from './plugin.js';
+import type { NexusPlugin, PluginEntry, PluginOrigin } from './plugin.js';
+import type { PluginRegistry } from './registry.js';
 import { MESSAGE_FEEDBACK_SERVICE } from './feedback.js';
 import { SESSION_TELEMETRY_SERVICE } from './session-telemetry.js';
 
@@ -301,13 +302,28 @@ describe('requires', () => {
   });
 });
 
+declare module './events.js' {
+  interface Events {
+    /**
+     * 回滾測試用。
+     * @mode emit
+     */
+    'test/load-rollback'(): void;
+  }
+}
+
 describe('每個註冊點的回滾', () => {
   /**
-   * 每個點各放一樣東西，然後 throw。少包一個 undo 追蹤，這裡就會留下孤兒。
+   * 每個點各放一樣東西，然後 throw。**任何一個註冊方法沒把 undo 記進註冊者的堆疊，這裡就會留下孤兒。**
    *
-   * **`telemetry` 兩個方法都在裡面。** `use` 漏追的下場最陰：回滾過的 plugin 會佔著
-   * 那個唯一的後端位子，後面的 plugin 掛不上去，而錯誤訊息指的是一個已經不存在的註冊者。
-   * `feedback.use` 是同一型的唯一位子，所以也在裡面。
+   * 撤銷由 registry 的註冊點自己記下（`effect`），載入器不鏡像，所以這條測試守的是 registry
+   * 那一側：新增註冊方法時沒走 `effect`，只有「每個方法各註冊一樣再 throw」才抓得到。
+   * **同一個點的第二個方法也要放**（`middleware.useWithBackend` 曾經漏過一次，#677）：
+   * 以點為單位列只會抓到整個點漏掉，抓不到點內少一個方法。
+   *
+   * **唯一位子型的服務也在裡面**（`SESSION_TELEMETRY_SERVICE`、`MESSAGE_FEEDBACK_SERVICE`）：
+   * 漏撤的下場最陰——回滾過的 plugin 會佔著那個唯一位子，後面的 plugin 掛不上去，而錯誤訊息指的是
+   * 一個已經不存在的註冊者。
    */
   const greedy = fakePlugin('greedy', (registry) => {
     registry.tools.register(fakeTool('search'));
@@ -315,6 +331,7 @@ describe('每個註冊點的回滾', () => {
     registry.capabilities.provide('filesystem');
     registry.backend.mount('/memories/', fakeBackend('store'));
     registry.middleware.use(fakeMiddleware('audit'));
+    registry.middleware.useWithBackend(() => fakeMiddleware('needs-backend'));
     registry.permissions.deny(['/.env*']);
     registry.approvals.gate(() => ({ kind: 'allow' }));
     registry.skills.addSource('/skills/user/');
@@ -331,6 +348,8 @@ describe('每個註冊點的回滾', () => {
       handler: () => ({ kind: 'success', text: '好' }),
     });
     registry.sessions.join(() => undefined);
+    registry.events.on('test/load-rollback', () => undefined);
+    registry.events.once('test/load-rollback', () => undefined, { prepend: true });
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');
   });
@@ -357,6 +376,7 @@ describe('每個註冊點的回滾', () => {
     expect(registry.invariants.companions()).toEqual([]);
     expect(registry.commands.list()).toEqual([]);
     expect(registry.sessions.installers()).toEqual([]);
+    expect(registry.events.listeners()).toEqual([]);
   });
 
   it('服務位子回滾之後是真的空出來，別的 plugin 掛得上去', async () => {
@@ -528,5 +548,333 @@ describe('設定驗證排在所有 apply 之前（#453）', () => {
     };
     await loadPlugins([entry]);
     expect(seen).toEqual([undefined]);
+  });
+
+  it('沒有 Config 的 plugin 給了 config：照 dsh 不驗、原樣交給 apply（#751）', async () => {
+    // dsh `vendor/cordis/src/fiber.ts:51`（`477b4f4`）：`if (!runtime.Config) return config`。
+    const seen: unknown[] = [];
+    const entry = {
+      plugin: { name: 'plain', apply: (_r: unknown, c: unknown) => void seen.push(c) },
+      config: { anything: 1 },
+    };
+    await loadPlugins([entry]);
+    expect(seen).toEqual([{ anything: 1 }]);
+  });
+});
+
+/**
+ * 逐列掉（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），照 dsh 的載入器：一列自己的失敗只讓那一列掉。
+ * 預設模式一個字都沒改，上面那些測試照舊成立。
+ */
+describe('loadPlugins 的逐列掉模式', () => {
+  const withSchema = (name: string, apply: (registry: PluginRegistry) => void): PluginEntry => ({
+    plugin: {
+      name,
+      Config: z.strictObject({ n: z.number().default(1) }),
+      apply,
+    } as NexusPlugin<unknown>,
+    config: { n: '不是數字' },
+  });
+
+  it('第二列設定驗不過、第三列 apply 拋錯：這兩列掉了、原因各自寫明，第一、四列照樣掛上', async () => {
+    const plugins = [
+      fakePlugin('a', (registry) => void registry.tools.register(fakeTool('a_tool'))),
+      withSchema('b', (registry) => void registry.tools.register(fakeTool('b_tool'))),
+      fakePlugin('c', (registry) => {
+        registry.tools.register(fakeTool('c_tool'));
+        throw new Error('c 壞了');
+      }),
+      fakePlugin('d', (registry) => void registry.tools.register(fakeTool('d_tool'))),
+    ];
+    const { registry, dropped } = await loadPlugins(plugins, undefined, { perEntry: true });
+
+    expect(registry.tools.resolve('a_tool')).toBeDefined();
+    expect(registry.tools.resolve('d_tool')).toBeDefined();
+    expect(registry.tools.resolve('b_tool')).toBeUndefined();
+    // c 註冊過又撤掉了。
+    expect(registry.tools.resolve('c_tool')).toBeUndefined();
+    expect(dropped.map(({ origin, stage }) => [origin.id, stage])).toEqual([
+      ['b#0', 'config'],
+      ['c#0', 'apply'],
+    ]);
+    expect(dropped[0]?.message).toMatch(/b#0 \(b\) 的 config 不合法 — n:/u);
+    expect(dropped[1]?.message).toBe('c#0 (c) 的 apply 失敗，它註冊的東西已全數撤銷 — c 壞了');
+    // 掉了的列算沒掛，跟 `disabled: true` 同一個標記。
+    expect(registry.disabledEntries.names()).toEqual(['b', 'c']);
+
+    // 對照：同一份清單在預設模式下整個失敗，第一列的 apply 一次都不跑。
+    let applied = false;
+    await expect(
+      loadPlugins([fakePlugin('a', () => void (applied = true)), ...plugins.slice(1)]),
+    ).rejects.toThrow(/b#0 \(b\) 的 config 不合法/u);
+    expect(applied).toBe(false);
+  });
+
+  it('一列 apply 拋錯不收其他列的資源；收是呼叫端 dispose 的事', async () => {
+    let closed = 0;
+    const { dropped, dispose } = await loadPlugins(
+      [
+        fakePlugin(
+          'keeper',
+          (registry) => void registry.lifecycle.onDispose(() => void (closed += 1)),
+        ),
+        fakePlugin('broken', () => {
+          throw new Error('壞');
+        }),
+      ],
+      undefined,
+      { perEntry: true },
+    );
+    expect(dropped).toHaveLength(1);
+    expect(closed).toBe(0);
+    await dispose();
+    expect(closed).toBe(1);
+  });
+
+  it('requires 連鎖：A 掉了，要用它服務的 B 跟著掉，再要用 B 的 C 也掉；B 自己開的資源先收掉再撤', async () => {
+    let bClosed = 0;
+    const { registry, dropped, dispose } = await loadPlugins(
+      [
+        fakePlugin('a', (registry) => {
+          registry.services.provide('a-service', {});
+          throw new Error('A 起不來');
+        }),
+        // C 排在 B 前面：第一趟看 C 時 B 還在，要再掃一趟才看得到它缺件。
+        fakePlugin('c', () => undefined, ['b-capability']),
+        fakePlugin(
+          'b',
+          (registry) => {
+            registry.capabilities.provide('b-capability');
+            registry.lifecycle.onDispose(() => void (bClosed += 1));
+          },
+          ['a-service'],
+        ),
+        fakePlugin('d', (registry) => void registry.tools.register(fakeTool('d_tool'))),
+      ],
+      undefined,
+      { perEntry: true },
+    );
+    expect(dropped.map(({ origin, stage }) => [origin.id, stage])).toEqual([
+      ['a#0', 'apply'],
+      ['b#0', 'requires'],
+      ['c#0', 'requires'],
+    ]);
+    // 原因寫明缺的是哪一個，以及這一次掉了誰。
+    expect(dropped[1]?.message).toContain('b#0 (b) 需要能力 "a-service"，沒有人提供');
+    expect(dropped[1]?.message).toContain('這一次掉了的條目：a#0 (a)');
+    expect(dropped[2]?.message).toContain('需要能力 "b-capability"');
+    expect(registry.capabilities.has('b-capability')).toBe(false);
+    expect(registry.tools.resolve('d_tool')).toBeDefined();
+    expect(bClosed).toBe(1);
+    // 撤掉的是登記，所以呼叫端再收一次不會重跑 B 的清理。
+    await dispose();
+    expect(bClosed).toBe(1);
+  });
+
+  it('因 requires 連鎖掉的那一列，「開著」的痕跡一併撤掉：它算沒掛（#678）', async () => {
+    // `apply` 跑完、已經記過一次「開著」，之後才發現缺件。痕跡不撤的話，停用視圖會把它當成還開著。
+    const { registry, dropped } = await loadPlugins(
+      [
+        fakePlugin('needy', () => undefined, ['nobody-provides']),
+        fakePlugin('fine', (registry) => void registry.tools.register(fakeTool('fine_tool'))),
+      ],
+      undefined,
+      { perEntry: true },
+    );
+    expect(dropped.map(({ origin, stage }) => [origin.name, stage])).toEqual([
+      ['needy', 'requires'],
+    ]);
+    expect(registry.disabledEntries.has('needy')).toBe(true);
+    expect(registry.disabledEntries.has('fine')).toBe(false);
+  });
+
+  it('afterApply 拋錯算那一列 apply 失敗，只撤它自己；預設模式下照舊整個拋', async () => {
+    const plugins = [
+      fakePlugin('ok', (registry) => void registry.tools.register(fakeTool('ok_tool'))),
+      fakePlugin('taker', (registry) => void registry.tools.register(fakeTool('ls'))),
+    ];
+    const afterApply = (registry: PluginRegistry, origin: PluginOrigin): void => {
+      if (origin.name === 'taker' && registry.tools.resolve('ls') !== undefined) {
+        throw new Error('"ls" 是保留的名字');
+      }
+    };
+    const { registry, dropped } = await loadPlugins(plugins, undefined, {
+      perEntry: true,
+      afterApply,
+    });
+    expect(dropped.map(({ origin, message }) => [origin.id, message])).toEqual([
+      ['taker#0', 'taker#0 (taker) 的 apply 失敗，它註冊的東西已全數撤銷 — "ls" 是保留的名字'],
+    ]);
+    expect(registry.tools.resolve('ls')).toBeUndefined();
+    expect(registry.tools.resolve('ok_tool')).toBeDefined();
+
+    await expect(loadPlugins(plugins, undefined, { afterApply })).rejects.toThrow(
+      '"ls" 是保留的名字',
+    );
+  });
+
+  it('設定的 schema 自己拋的錯也只讓那一列掉', async () => {
+    const throwing: PluginEntry = {
+      plugin: {
+        name: 'odd',
+        Config: z.object({}).transform(() => {
+          throw new RangeError('transform 爆了');
+        }),
+        apply: () => undefined,
+      } as NexusPlugin<unknown>,
+    };
+    const { dropped } = await loadPlugins(
+      [throwing, fakePlugin('fine', () => undefined)],
+      undefined,
+      {
+        perEntry: true,
+      },
+    );
+    expect(dropped.map(({ origin, stage }) => [origin.id, stage])).toEqual([['odd#0', 'config']]);
+    expect(dropped[0]?.message).toContain('transform 爆了');
+  });
+
+  it('整份清單的性質照舊整個拋：重複 id、條目形狀不合法', async () => {
+    const same = (id: string): PluginEntry => ({ ...fakePlugin('x', () => undefined), id });
+    await expect(
+      loadPlugins([same('dup'), same('dup')], undefined, { perEntry: true }),
+    ).rejects.toThrow(/寫了同一個 id/u);
+    await expect(
+      loadPlugins([{ plugin: { name: 'x' } } as unknown as PluginEntry], undefined, {
+        perEntry: true,
+      }),
+    ).rejects.toThrow(/沒有 apply 方法/u);
+  });
+
+  it('停用的列照舊不驗設定、不算掉', async () => {
+    const { dropped, registry } = await loadPlugins(
+      [{ ...withSchema('off', () => undefined), disabled: true }],
+      undefined,
+      { perEntry: true },
+    );
+    expect(dropped).toEqual([]);
+    expect(registry.disabledEntries.names()).toEqual(['off']);
+  });
+
+  it('預設模式的回傳帶著空的 dropped', async () => {
+    const { dropped } = await loadPlugins([fakePlugin('a', () => undefined)]);
+    expect(dropped).toEqual([]);
+  });
+});
+
+/**
+ * **外掛交出警告的出口**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），照 dsh 的 `ctx.logger`：
+ * `apply` 裡交出的話記下是誰說的，組裝完由呼叫端讀出來跟掉了的列印在同一段。
+ */
+describe('registry.logger', () => {
+  it('`apply` 裡交出的警告記下是誰交的，依順序', async () => {
+    const { registry, dispose } = await loadPlugins([
+      fakePlugin('quiet', () => undefined),
+      fakePlugin('chatty', (r) => {
+        r.logger.warn('第一句');
+        r.logger.warn('第二句');
+      }),
+    ]);
+    await dispose();
+    expect(registry.logger.warnings()).toEqual([
+      { origin: { id: 'chatty#0', name: 'chatty' }, message: '第一句' },
+      { origin: { id: 'chatty#0', name: 'chatty' }, message: '第二句' },
+    ]);
+  });
+
+  it('`apply` 之外講不出是誰：拋', () => {
+    expect(() => createRegistry().logger.warn('沒有人')).toThrow(/logger\.warn\(\)/u);
+  });
+
+  /** 執行期的話（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）：`apply` 裡綁好 origin，之後隨時叫得動。 */
+  it('`bind()` 在 `apply` 裡綁好 origin，`apply` 結束之後還能講，記得是誰說的', async () => {
+    let later: (() => void) | undefined;
+    const { registry, dispose } = await loadPlugins([
+      fakePlugin('other', () => undefined),
+      fakePlugin('runtime', (r) => {
+        const log = r.logger.bind();
+        later = () => {
+          log.warn('跑起來之後才說的');
+        };
+      }),
+    ]);
+    later?.();
+    await dispose();
+    expect(registry.logger.warnings()).toEqual([
+      { origin: { id: 'runtime#0', name: 'runtime' }, message: '跑起來之後才說的' },
+    ]);
+  });
+
+  it('`bind()` 與 `warn()` 一樣，`apply` 之外拋', () => {
+    expect(() => createRegistry().logger.bind()).toThrow(/logger\.bind\(\)/u);
+  });
+
+  it('`exporter` 只收登記之後的話（`apply` 裡的與執行期的都算），可以取消，接收端拋錯不影響講話的一方', async () => {
+    const heard: string[] = [];
+    let say: (() => void) | undefined;
+    const { registry, dispose } = await loadPlugins([
+      fakePlugin('talker', (r) => {
+        r.logger.warn('掛上那一刻');
+        const log = r.logger.bind();
+        say = () => {
+          log.warn('執行期');
+        };
+      }),
+    ]);
+    await dispose();
+    const stop = registry.logger.exporter({
+      export: (w) => {
+        heard.push(w.message);
+      },
+    });
+    registry.logger.exporter({
+      export: () => {
+        throw new Error('我是壞掉的接收端');
+      },
+    });
+    say?.();
+    stop();
+    say?.();
+    expect(heard).toEqual(['執行期']);
+    expect(registry.logger.warnings().map(({ message }) => message)).toEqual([
+      '掛上那一刻',
+      '執行期',
+      '執行期',
+    ]);
+  });
+
+  it('`warnings()` 只留最近 1000 則（照 dsh `LoggerService.bufferSize`）', async () => {
+    let say: ((message: string) => void) | undefined;
+    const { registry, dispose } = await loadPlugins([
+      fakePlugin('noisy', (r) => {
+        const log = r.logger.bind();
+        say = (message) => {
+          log.warn(message);
+        };
+      }),
+    ]);
+    await dispose();
+    for (let i = 0; i < 1005; i += 1) say?.(`m${String(i)}`);
+    const kept = registry.logger.warnings();
+    expect(kept).toHaveLength(1000);
+    expect(kept[0]?.message).toBe('m5');
+    expect(kept.at(-1)?.message).toBe('m1004');
+  });
+
+  /** 一列 `apply` 失敗撤掉的是它註冊的東西，講過的話照樣交出去——那可能正是它為什麼失敗。 */
+  it('逐列掉模式下 `apply` 拋錯的那一列，講過的話還在', async () => {
+    const { registry, dispose, dropped } = await loadPlugins(
+      [
+        fakePlugin('failing', (r) => {
+          r.logger.warn('我快要失敗了');
+          throw new Error('果然');
+        }),
+      ],
+      undefined,
+      { perEntry: true },
+    );
+    await dispose();
+    expect(dropped).toHaveLength(1);
+    expect(registry.logger.warnings().map(({ message }) => message)).toEqual(['我快要失敗了']);
   });
 });

@@ -80,9 +80,8 @@
 
 import { MemorySaver } from '@langchain/langgraph';
 import type { BaseMessage } from '@langchain/core/messages';
-import { GOAL_WRAPUP_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
-import { createGoalPlugin, GOALS_SERVICE } from '@nexus/plugin-goal';
+import { GOAL_WRAPUP_MARKER } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { describe, expect, it } from 'vitest';
 
@@ -92,6 +91,8 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE } from '@nexus/goal';
 
 /**
  * 腳本：人講一句 → 模型建目標 → **續行那一輪把 `update_goal(complete)` 與 `ls` 叫在同一批**
@@ -222,18 +223,19 @@ describe('自主收尾與另一顆工具同批時，收尾指示插在兩顆結�
     });
     // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
     const late: { log?: SessionLog } = {};
-    const goals = services.use(GOALS_SERVICE);
+    const goals = goalCoreOf(services.use(GOALS_SERVICE));
     const port: GoalDriverPort = {
       goal: () => goals.serviceFor(late.log as SessionLog)?.get(),
       block: (ref, reason) => void goals.serviceFor(late.log as SessionLog)?.block(ref, reason),
       disarm: () => void goals.serviceFor(late.log as SessionLog)?.disarm(),
+      pause: (ref) => void goals.serviceFor(late.log as SessionLog)?.pause(ref),
       flush: () => Promise.resolve(),
       warn: () => {},
     };
     const pump = new ThreadPump(agent as unknown as PumpAgent, 'wrapup-batch', port);
     late.log = pump.sessionLog;
-    // **伴生接在參與者之前**，同 `wire-handler.ts` 那條線的順序：參與者一裝上去就可能記
-    // 東西，而那些東西該被已經在看的檢查看到。
+    // 先接伴生、再接參與者，同 `composeAttachSessions` 的順序。順序不承重（不變量 runner 接上時會重播日誌），
+    // 這裡跟著產品的順序只是為了讓形狀一致。
     const detachInvariants = attachInvariants(pump.sessions);
     const detachSession = attachSession(pump.sessions);
     try {

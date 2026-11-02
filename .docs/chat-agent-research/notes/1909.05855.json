@@ -1,0 +1,167 @@
+{
+  "id": "1909.05855",
+  "title": "Towards Scalable Multi-domain Conversational Agents: The Schema-Guided Dialogue Dataset",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Google 用「schema＋對話模擬器＋群眾改寫」的流程做出 Schema-Guided Dialogue（SGD）資料集。train 有 16,142 段多領域對話、16 個領域、26 個服務，評估集另含未見過的服務與領域。論文同時提出 schema-guided 範式：每個服務以自然語言描述提供自己的 intent 與 slot，由單一模型在執行期針對這份動態 schema 做 DST。論文另附一個以 BERT 為基礎、能零樣本套用到新 API 的 DST 原型。",
+  "problem": "Google Assistant、Alexa 這類虛擬助理要接的服務與 API 數量持續增加，同一領域常有多個功能重疊、介面卻不同的服務，而且很多長尾服務幾乎沒有訓練資料。當時的公開任務型對話資料集（DSTC2、WOZ2.0、FRAMES、M2M、MultiWOZ）有三個問題：領域少；每個領域只有一個固定的 ontology；允許以任意 slot 組合呼叫服務，和真實 API 的必填參數限制不符。當時主流的 DST 做法是對所有可能的 slot 值給出分佈，或逐一替 slot-value 組合評分，模型綁死在訓練時的 schema 上。這種做法在值空間龐大、會變動的真實服務上無法部署；新增 intent、slot 甚至 slot 值都要重新標註、重新訓練。",
+  "core_idea": "不去定一份涵蓋所有服務的大一統 schema。改由每個服務提供自己的 schema：服務、intent、slot 的自然語言描述，以及 categorical slot 的可能值。對話狀態在「這個服務的 schema」底下定義。模型本身不含任何領域或服務專屬參數，先把 schema 元素的描述編碼成向量，再以這些向量為條件，對一組數量不固定的 intent 與 slot 做預測。語意相近、名稱不同的概念因此能跨服務共享知識，未見過的服務只要附上 schema 就能零樣本使用。資料面則用模擬器產生帶完整標註的對話大綱，再讓群眾工作者改寫成自然語言，標註全程自動保留，不需要事後人工標註。",
+  "method": {
+    "state_definition": "對話狀態逐服務定義，每個服務一個 frame，每個使用者 turn 都要預測，內容有三項：(1) active intent：使用者目前要求、系統正在處理的 intent；沒有進行中的 intent 時為 NONE。(2) requested slots：使用者在這一句要求系統提供值的 slot 集合。(3) user goal：到目前這句為止，使用者對 slot 設下的約束，也就是 slot→value 指派，允許特殊值 dontcare。",
+    "schema_format": "每個服務的 schema 含服務描述，以及一組 intent 與 slot（例見 Figure 1 的數位錢包服務）。每個 intent 列出必填 slot（沒填齊不准呼叫）與帶預設值、使用者可覆寫的選填 slot。slot 分兩種：categorical 列舉全部可能值，但不同服務的值可以不一致，例如性別可能是 male/female、M/F 或 he/she；non-categorical 用於日期、時間、電影名等無窮多或持續新增的值，不提供值清單。",
+    "data_generation": {
+      "services": "橫跨 20 個領域，一共 45 個合成服務，每個都以 SQL engine 實作。實體從 Freebase 取樣，保留真實屬性之間的相關性，例如餐廳名與菜系；活動日期、時間、剩餘票數這類 Freebase 沒有的欄位用合成方式產生。",
+      "simulator": "user agent 與 system agent 在一個機率自動機上交換 dialogue act，act 的參數可以是 slot，也可以是 slot-value 配對，種類見 Figure 4b。user agent 一開始會拿到一個 scenario，也就是要依序完成的 intent 序列：train 有 200 多個 scenario，每個最多 5 個 intent。多領域對話另外定義跨 intent 可沿用的 slot，例如餐廳的 address 可轉給隨後叫車的 destination。user agent 可以讀 schema 與 SQL 後端來取得 slot 值。system agent 的服務存取受限：必須提供某個服務呼叫的全部必填 slot，才能查詢該服務，因此產生的流程都合法。一個 intent 完成後，user 依 scenario 進入下一個 intent，system 也可能主動推薦相關 intent（例如搜尋完餐廳後推薦訂位）。同一 turn 允許多個 intent 同時 active。自動機內沒有任何領域專屬限制，全部編碼在 schema 與 scenario 裡。",
+      "paraphrasing": "第一步，把大綱裡的 canonical slot 值隨機換成變體（例如 los angeles 換成 LA 或 LAX），同一段對話的 user turn 維持一致。第二步，用每種 action 的模板（如 REQUEST(location)、INFORM(location=$x)、OFFER(restaurant=$x)）轉成句子，同一 turn 的句子串接起來。第三步，整段對話交給同一位群眾工作者改寫，確保通順連貫。工作者被要求逐字保留 slot 值，介面上 non-categorical 值會高亮，沒有全部出現就不能送出（附錄 Figure A.5）。這樣 slot span 可以用字串搜尋自動取得，模擬器產生的對話狀態等所有標註也原樣保留。為了讓相對日期（明天、下週一）多出現，假設當天是 2019-03-01。",
+      "splits": "train 含 16 個領域、26 個服務。依 Table 2 的上標，Alarm 只在 dev 與 test，Messaging、Payment、Train 只在 test，用來測試對新領域的泛化；評估集也刻意保留相當比例的未見 slot 值。公開標註包括每個使用者語句的 active intent 與對話狀態，以及每個系統語句的 system actions。user actions 在論文當時保留未釋出；依官方 README，2020-07-05 已補釋出。"
+    },
+    "model": {
+      "schema_embedding": "把每個 schema 元素做成 BERT 的句對輸入，取輸出的 [CLS] 向量（Table 3）。intent 用（服務描述, intent 描述），slot 用（服務描述, slot 描述），categorical 值用（slot 描述, 值）。得到 intent 向量 i_j（1≤j≤I）、slot 向量 s_j（1≤j≤S，其中 N 個 non-categorical 另記為 s^n_j），以及第 k 個 categorical slot 的值向量 v^k_j。",
+      "utterance_encoding": "把前一句系統語句與當前使用者語句做成句對，餵給 BERT，得到句對向量 u（[CLS]）與每個 token 的向量 t_1…t_M。模型只看這兩句，不看更早的對話歷史。",
+      "projection": "每個子任務 K 各有一組 F_K(x, y, p)：h1 = gelu(W1·x + b1)；h2 = gelu(W2·(y ⊕ h1) + b2)；l = W3·h2 + b3 ∈ R^p（式 1–3，⊕ 為串接）。",
+      "active_intent": "對 j=0…I 算 F_int(u, i_j, 1)，其中 i_0 是可訓練的 NONE 向量；softmax 之後取 argmax。",
+      "requested_slots": "對每個 slot 算 F_req(u, s_j, 1)，經 sigmoid 後分數大於 0.5 的判為 requested。",
+      "user_goal": "不重新預測整個 goal，只預測本輪相對上一個使用者 turn 的差分，推論時逐輪累加，分兩階段。第一階段對每個 slot 用 F_status(u, s_j, 3) 做三類 softmax：none（沿用舊值）、dontcare（指派 dontcare）、active（進入第二階段）。第二階段：categorical slot 對每個候選值算 F_value(u, v^k_j, 1)，softmax 後取最大者；non-categorical slot 以 F_start(t_k, s^n_j, 1) 與 F_end(t_k, s^n_j, 1) 在全部 token 上各做一次 softmax，取 p≤q 且 start[p]+end[q] 最大的 span。",
+      "implementation_details_from_code": "以下取自官方 repo 現行 master 的 schema_guided_dst/baseline，論文本身沒有交代，程式碼也可能在論文之後改過：BERT-Base Cased；schema 向量在訓練前用凍結的 BERT 預先算一次存檔，不隨訓練更新，utterance 編碼器的 BERT 則會微調；max_seq_length 80、train batch 32、learning rate 1e-4、80 個 epoch、warmup 比例 0.1、dropout 0.1；總損失是 7 項交叉熵的平均（intent、requested slot、categorical status、categorical value、non-categorical status、span start、span end）。dataset config 的上限是：每個服務最多 6 個 categorical slot、12 個 non-categorical slot、每個 categorical slot 最多 12 個值、4 個 intent；MultiWOZ 2.1 的設定是 9／4／47／1。"
+    },
+    "evaluation_protocol": "四個指標：Active Intent Accuracy、Requested Slot F1（macro；真值與預測都沒有 requested slot 的 turn 略過）、Average Goal Accuracy（只計真值中有非空指派的 slot）、Joint Goal Accuracy（整個 turn 的所有 slot 指派全對才算對）。在 SGD 上，non-categorical slot 用 fuzzy matching 給部分分數；在 WOZ2.0、MultiWOZ 2.1 上改用 exact match，以便與既有工作比較。報告時分 SGD-S（只用單領域對話訓練）與 SGD-All（用整個 train 訓練），另外做 seen／unseen 服務的比較（Figure 7）與逐領域分析（Table 5）。",
+    "multiwoz_variant": "在 MultiWOZ 2.1 上另外訓練一個版本，對 non-categorical slot 加上 pointer-generator 式的複製機制。作者說明這不是本文重點，細節省略。"
+  },
+  "assumptions": [
+    "每個服務都能提供品質足夠的自然語言 schema 描述，而且描述的語意足以讓模型把不同服務裡名稱不同、功能相同的 slot 與 intent 對齊。",
+    "對話狀態可以完整表示成「每個服務一個 frame：active intent＋requested slots＋slot-value 指派」，使用者目標就是 slot 約束的累積。",
+    "模擬器的 dialogue act 自動機加上單人改寫，產生的對話在流程與語言分佈上夠接近真實使用者與助理的互動。作者只以參照 MultiWOZ 2.0、WOZ2.0 的對話流程來支撐這一點。",
+    "non-categorical slot 的值會以字面形式出現在當前兩句語句中，可以直接抽 span。",
+    "只看前一句系統語句與當前使用者語句，再累加差分，就足以追蹤整段對話的狀態。",
+    "預訓練 BERT 的表示足以涵蓋未見服務的 schema 描述與 slot 值，零樣本泛化主要受 slot 值 OOV 影響。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SGD（本文釋出；SGD-S 為單領域子集，SGD-All 為完整 train）",
+      "WOZ2.0",
+      "MultiWOZ 2.1"
+    ],
+    "metrics": [
+      "Active Intent Accuracy",
+      "Requested Slot F1（macro）",
+      "Average Goal Accuracy（SGD 上對 non-categorical slot 用 fuzzy matching）",
+      "Joint Goal Accuracy（SGD 上對 non-categorical slot 用 fuzzy matching；WOZ2.0／MultiWOZ 用 exact match）",
+      "資料集統計比較：領域數、對話數、turn 數、slot 數、slot 值數（Table 1）"
+    ],
+    "baselines": [
+      "Table 4 沒有列任何 baseline 模型的分數；文中只提到 MultiWOZ 2.1 當時已知最佳的 joint goal accuracy 是 0.456（引自 MultiWOZ 2.1 資料集論文）",
+      "資料集層面與 DSTC2、WOZ2.0、FRAMES、M2M、MultiWOZ 比較規模（Table 1）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "SGD 是當時最大的公開任務型對話標註語料。光 train 就在對話數、turn 數、slot 數與 slot 值數上都超過既有資料集，而且同一領域有多個服務。",
+      "numbers": "train：16,142 段對話、329,964 turn、平均每段 20.44 turn、16 個領域、26 個服務、214 個 slot、14,139 個 slot 值。MultiWOZ 的 train 是 8,438 段、113,556 turn、7 個領域、24 個 slot、4,510 個值。三個切分合計 20 個領域、45 個服務。單領域對話平均 15.3 turn，多領域平均 23 turn。",
+      "section": "§1, Table 1, §3, §3.4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "資料集刻意把值無窮多或持續新增的 slot（日期、時間、電影名、歌名）標為 non-categorical，不提供值清單；評估集也保留相當比例的未見 slot 值，逼模型在執行期面對新值。",
+      "numbers": "論文沒有給出評估集未見值的比例。",
+      "section": "§3.1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "模擬器限制 system agent 只能在填齊某個服務呼叫的全部必填 slot 之後才能查詢該服務，所以產生的對話流程都是真實 API 支援得了的；所有標註（含對話狀態）由模擬器自動產生、在改寫階段保留，不需要事後標註。",
+      "numbers": "train 有 200 多個 scenario，每個最多 5 個 intent。",
+      "section": "§3.2, §3.3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "user goal 採差分更新：每輪只預測相對上一個使用者 turn 的變化（none／dontcare／active 三類狀態，active 再選值或抽 span），推論時逐輪累加成完整狀態。",
+      "numbers": "slot 狀態三類；requested slot 門檻 0.5；non-categorical 取 p≤q 且 start[p]+end[q] 最大的 span。",
+      "section": "§5.1 User Goal",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 SGD 上，active intent 與 requested slot 的表現都不錯，但 joint goal accuracy 很低；用完整 train（含多領域對話）訓練的 SGD-All，JGA 明顯低於只用單領域訓練的 SGD-S。",
+      "numbers": "SGD-S：Active Int Acc 0.885、Req Slot F1 0.956、Avg GA 0.684、Joint GA 0.356。SGD-All：0.906、0.965、0.560、0.254。",
+      "section": "§5.2, Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "joint 與 average goal accuracy 在已見服務上都高於未見服務，作者把主因歸於未見服務的 slot 值 OOV 率高出很多；active intent 與 requested slot 則在兩者上都表現良好。",
+      "numbers": "只以 Figure 7 的長條圖呈現，全文沒有 seen／unseen 的具體數值，也沒有給 OOV 率。",
+      "section": "§5.2 Performance on SGD, Figure 7",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在既有資料集上，模型表現被描述為 competitive；另外加上 pointer-generator 式複製機制的變體，在 MultiWOZ 2.1 超過當時已知最佳結果。但主模型本身在 MultiWOZ 2.1 低於該最佳結果。",
+      "numbers": "WOZ2.0：Req Slot F1 0.970、Avg GA 0.920、Joint GA 0.810。MultiWOZ 2.1：Avg GA 0.875、Joint GA 0.434（主模型）；複製變體 Joint GA 0.489，對照已知最佳 0.456。這些數字都用 exact match。",
+      "section": "§5.2 Performance on other datasets, Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "逐領域看，服務在訓練時是否見過仍是主要影響因素。未見服務中，RentalCars 與 Buses 的 OOV 率很高，所以最差；已見的 RideSharing 也很差，作者歸因於它的可能值最多；值很相近的 categorical 類別（Psychologist 與 Psychiatrist）難以區分。",
+      "numbers": "Joint GA／Avg GA：RentalCars* 0.086／0.480、Buses* 0.097／0.509、Messaging* 0.102／0.200、Payment* 0.115／0.348、RideSharing 0.170／0.502、Movies** 0.378／0.686、Services** 0.409／0.721、Travel 0.415／0.572、Alarm* 0.577／0.018、Weather 0.620／0.764（* 為測試服務未在 train 出現，** 為一個已見、一個未見）。",
+      "section": "§5.2 Performance on different domains, Table 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "模擬式蒐集常被批評不夠自然、覆蓋不足。作者只以 MultiWOZ 2.0 與 WOZ2.0 的對話流程作為設計模擬器的參照，也承認因為領域是新的，無法和既有資料集做並排比較，留待未來。",
+    "模型只是「簡單原型」，重點不在拿到最佳分數。",
+    "未見服務的 goal accuracy 明顯較差，主因是 slot 值 OOV 率高；RentalCars、Buses 的 OOV 特別高，不同 slot 之間的表現可能嚴重不均。",
+    "RideSharing 的可能值最多，表現差；值很相近的 categorical 類別，模型只拿得到很弱的區辨訊號。",
+    "MultiWOZ 2.1 上的 pointer-generator 版本細節省略，模擬器也有許多實作細節為了篇幅略過。",
+    "部分註記（user actions 等）在論文當時保留、未公開。"
+  ],
+  "limitations_observed": [
+    "Table 5 的 Alarm 出現 Joint GA 0.577 高於 Avg GA 0.018 的反常組合，也是全表唯一 Joint 高於 Avg 的領域。依 §5.2 的定義，Avg GA 只計真值中非空的 slot，而 Joint GA 以整個 turn 計分；可以合理推論（論文沒有解釋），狀態為空的 turn 預測成空就在 Joint GA 算全對。換句話說，JGA 會被空狀態的 turn 灌高，在 intent 簡單、slot 少的領域特別明顯。直接拿逐領域的 JGA 排序比較會失真。",
+    "Table 4 把兩種比對方式混在同一張表：SGD 各列對 non-categorical slot 用 fuzzy matching，WOZ2.0／MultiWOZ 2.1 用 exact match，跨列不能直接比。SGD-S 的測試集範圍也沒寫明（推測只含單領域對話），所以 SGD-S 與 SGD-All 的差距混合了訓練資料與測試集兩個變因，不能直接解讀成「多領域訓練有害」。",
+    "SGD 上沒有任何 baseline、沒有多個 seed 的變異數，也沒有消融實驗：沒有比較描述對上名稱、差分更新對上整狀態預測、schema 向量凍結對上微調。所以論文的核心主張「零樣本泛化來自以自然語言描述為條件」，在文中沒有被因果驗證。seen／unseen 的差距也只有 Figure 7 一張圖，沒有數值、沒有 OOV 率。",
+    "摘要說在一般設定下仍有競爭力，但主模型在 MultiWOZ 2.1 是 0.434，低於文中自己引用的最佳結果 0.456；超過最佳的 0.489 來自一個細節沒有揭露的複製變體，照論文內容無法重現。WOZ2.0 的 0.810 也沒有並列任何比較對象，讀者無從在文中判斷算不算 competitive。",
+    "模型輸入只有「前一句系統語句＋當前使用者語句」，狀態靠逐輪累加差分。有兩個結構性缺口。一是錯誤會累積：某輪判錯的值，除非之後被覆寫，否則一路帶下去。二是模擬器刻意產生的跨 intent slot 轉移（例如 address 轉成 destination），值出現在更早的 turn 或另一個服務的 frame 裡，這個模型沒有複製舊狀態的機制，只能從當前兩句抽 span。SGD-All 的 JGA（0.254）遠低於 SGD-S（0.356），和這個缺口一致，但論文沒有拆解原因，這只是我的推測。",
+    "改寫階段強制群眾工作者逐字保留 slot 值，介面上沒保留就不能送出。結果是 SGD 的 non-categorical 值幾乎一定以字面出現在語句裡：沒有拼錯、ASR 雜訊或使用者自己的改述（只有作者預先定義的值變體，例如 LA）。這對 span 抽取模型特別有利，再加上 fuzzy matching，SGD 的分數外推到真實流量時要打折扣。",
+    "零樣本主張依賴 schema 描述。train 與 test 的描述是同一個團隊、用同一種風格寫的，真實第三方開發者寫的描述在措辭與粒度上會差很多，本文沒有測試這一點。官方 repo 在 2021-10-19 另外釋出 SGD-X schema，目的正是量測模型對 schema 措辭變化的穩健性，可見這個前提在本文是未驗證的。",
+    "資料規模的數字有多種口徑。論文摘要寫 16k、16 個領域（只算 train）；Google 官方部落格寫 18,000 多段、17 個領域（對照 Table 2 上標，推測是 train+dev，因為 Alarm 只在 dev/test，而當時 test 標註尚未釋出）；官方 README 寫 20k 多段、20 個領域（含 test）。論文本身沒有給 dev／test 的對話數，引用時要註明是哪個切分。",
+    "放到 LLM agent 的脈絡：這裡的狀態只有 slot-value 與 intent，不涵蓋自由形式的記憶、使用者偏好或多輪中的指令保持。SGD 平均約 20 turn，每段對話都由封閉的 act 自動機產生，對「長多輪互動中的狀態維護與退化」這一類問題只能提供受限的代理指標。"
+  ],
+  "framework_role": "T2 的基準與表示法來源。第一，它提供 SGD 這個多領域、多服務、含未見服務的 DST 標準資料集，以及後續工作沿用的四個指標定義（Active Intent Accuracy、Requested Slot F1、Average Goal Accuracy、Joint Goal Accuracy）。第二，schema-guided 範式把「對話狀態」定義成「在執行期提供的 API schema 底下的 slot 指派」。這和 LLM agent 在 context 裡拿到工具／函式 schema、跨多輪逐步填齊呼叫參數的形狀相同（這個類比是我的詮釋，論文沒有談 LLM），可以直接拿來當框架裡狀態表示的參考形狀：逐服務 frame、必填／選填參數、差分更新、dontcare。論文也順帶碰到其他節點：active intent 是狀態的一部分，屬 T1 的範圍；以 scenario 驅動的 user／system 模擬器用來產生資料，屬 T6；指標定義屬 T7。這些都只是附帶，主體仍是 T2。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "只以離線方式涉及。模擬器的 user agent 帶著 scenario（要依序完成的 intent 序列）產生使用者的 dialogue act，經群眾改寫成語句後，成為 DST 模型的輸入，模型在每個使用者 turn 預測 active intent 與狀態。模擬使用者的輸入確實進入意圖判定，但這是資料生成加上靜態評估，模型與模擬器之間沒有線上互動迴路。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "NVIDIA NeMo 官方文件（Framework User Guide 24.07，Dialogue tasks，https://docs.nvidia.com/nemo-framework/user-guide/24.07/nemotoolkit/nlp/dialogue.html）把「Schema Guided Dialogue (SGD)」列為支援的任務，提供 SGDQA（以 BERT 為基礎的 schema-guided DST 模型）等模型，並指示從本文的官方 repo clone SGD 資料。頁面標示為已封存、不再維護。這是廠商開源工具包的整合，不是產品部署。"
+    ],
+    "assessment": "未見產品部署證據。作者所屬的 Google 在官方部落格（2019-10-28，https://research.google/blog/introducing-the-schema-guided-dialogue-dataset-for-conversational-assistants/）宣布釋出資料集與基線程式碼，並在 DSTC8 開了 schema-guided DST 賽道（25 隊參賽），但文中只把 Google Assistant 當成問題的背景，沒有宣稱 schema-guided 模型已用在任何產品上。唯一能查證的業界採用是 NVIDIA NeMo 工具包內建 SGD 資料處理與 SGD-QA 模型；這屬於工具包層級的支援，而且文件已封存。DSTC8 賽道與 SGD-QA 等後續論文屬學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/google-research/google-research/tree/master/schema_guided_dst",
+    "data": "公開，CC BY-SA 4.0：https://github.com/google-research-datasets/dstc8-schema-guided-dialogue。train／dev 於 2019-07-23 隨 DSTC8 釋出；test 標註、user actions 與 service calls 於 2020-07-05 補釋出；2021-10-19 另外釋出 SGD-X schema。官方基線 README 報告的是 dev 的數字（SGD-Single JGA 0.486、SGD-All 0.383），與論文 Table 4 的 test 數字不同，而且作者註明幾乎沒有調超參數、只作參考。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "SGD 與 MultiWOZ 並列為多領域 DST 的主要基準，JGA／Avg GA 等指標的定義與 schema-guided 狀態表示都出自這裡，而且這種表示和 LLM agent 依工具 schema 跨輪填參數的形狀同構。附帶的模型很陽春、實驗也缺 baseline 與消融，但作為 T2 的資料集與表示法源頭仍是必讀。",
+  "related": [
+    "1810.00278",
+    "1907.01669",
+    "1905.08743",
+    "1801.04871",
+    "1907.03040",
+    "1907.00883",
+    "1712.10224",
+    "1810.09587",
+    "1805.09655",
+    "1606.03777",
+    "1704.00057",
+    "1810.04805",
+    "1707.02363",
+    "1906.06870"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

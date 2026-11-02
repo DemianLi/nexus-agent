@@ -1,63 +1,54 @@
 // @vitest-environment node
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
-import { classifyTool, isKnownTool, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
+import { catalogToolNames } from '@/test/tool-catalog';
+
+import { pendingLabel } from '@/lib/pending-label';
+import { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL } from '@/lib/sandbox-escalation';
+
+import {
+  INPUT_MAX_CHARS,
+  SUMMARY_MAX_CHARS,
+  classifyTool,
+  firstLine,
+  isKnownTool,
+  toolInputBody,
+  toolSummary,
+  toolTitle,
+} from '@/lib/tool-view';
 
 /**
- * `classifyTool` 涵蓋 nexus 每一個實際工具名（#406 驗收）。plugin 的工具名**從原始碼讀**（各 plugin 匯出的
- * `*_TOOL_NAME` 常數，外加 `apps/harness/src` 自己掛的，例如沙箱升級）：新增一個工具而沒在 `lib/tool-view.ts` 分類，這裡紅。基座的工具名是 deepagents 定的，
- * 手列（1.13.1；升版時對一次 `deepagents/dist` 的工具定義）。
+ * `classifyTool` 涵蓋 nexus 每一個實際工具名（#406 驗收）。工具名**從 `docs/tool-catalog.md` 讀**（模型實際收到的那一份，
+ * 含基座與 plugin；由 harness 產生、CI 驗新鮮度，#442／#666）：新增一個出廠的工具而沒在 `lib/tool-view.ts` 分類，這裡紅。
+ *
+ * 目錄涵蓋 CLI 與 serve 兩條出廠組裝（含 serve 出廠的背景續行子代理四顆，以及選配的 `list_subagent_models`，#1133），
+ * 只有 `execute` 不在裡面，所以手列：今天產品路徑上沒有 shell，基座不綁它；web 先分類好，絆索在 harness 的
+ * `execute-not-bound.test.ts`。
  */
 
-const PACKAGES = new URL('../../../../packages/', import.meta.url);
-const HARNESS = new URL('../../../harness/src/', import.meta.url);
+const catalogNames = catalogToolNames();
 
-function sources(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) return name === 'node_modules' ? [] : sources(path);
-    // 測試與 fixture 裡的是假工具（`fixtures.ts` 的 `take_note`、`*.fixture.ts`），不是產品會掛的。
-    return /\.ts$/.test(name) && !/\.(test|fixture)\.ts$|^fixtures\.ts$/.test(name) ? [path] : [];
-  });
-}
-
-const pluginToolNames = [
-  ...readdirSync(PACKAGES)
-    .filter((name) => name.startsWith('nexus-plugin-'))
-    .flatMap((name) => sources(join(PACKAGES.pathname, name, 'src'))),
-  ...sources(HARNESS.pathname),
-].flatMap((file) =>
-  [...readFileSync(file, 'utf8').matchAll(/export const \w*TOOL_NAME\w* = '([a-z_]+)'/g)].map(
-    (match) => match[1] ?? '',
-  ),
-);
-
-const BASE_TOOL_NAMES = [
-  'ls',
-  'read_file',
-  'write_file',
-  'edit_file',
-  'glob',
-  'grep',
-  'execute',
-  'task',
-];
+const NOT_IN_CATALOG_TOOL_NAMES = ['execute'];
 
 describe('classifyTool', () => {
-  it('從 plugin 原始碼讀得到工具名（量具本身沒壞）', () => {
-    expect(pluginToolNames).toEqual(
+  it('讀得到目錄裡的工具名（量具本身沒壞）', () => {
+    expect(catalogNames).toEqual(
       expect.arrayContaining([
+        'ls',
+        'task',
         'echo',
         'ask_user_question',
         'run_javascript',
         'request_sandbox_escalation',
+        'subagent',
+        'list_subagent_models',
       ]),
     );
+    expect(new Set(catalogNames).size).toBe(catalogNames.length);
   });
 
-  it.each([...BASE_TOOL_NAMES, ...new Set(pluginToolNames)])('%s 在表上有明寫', (name) => {
+  it.each([...catalogNames, ...NOT_IN_CATALOG_TOOL_NAMES])('%s 在表上有明寫', (name) => {
     expect(isKnownTool(name)).toBe(true);
     expect(toolTitle(name)).not.toBe('工具');
   });
@@ -71,10 +62,47 @@ describe('classifyTool', () => {
     ['edit_file', 'edit'],
     ['execute', 'bash'],
     ['run_javascript', 'code'],
+    ['delete', 'others'],
     ['task', 'others'],
+    ['subagent', 'others'],
+    ['list_agents', 'others'],
+    ['interrupt_agent', 'others'],
+    ['send_message', 'others'],
+    ['list_subagent_models', 'others'],
     ['todo_write', 'others'],
   ] as const)('%s → %s', (name, variant) => {
     expect(classifyTool(name)).toBe(variant);
+  });
+
+  it('`subagent` 跟 `task` 同標題（都是委派子代理）', () => {
+    expect(toolTitle('subagent')).toBe('委派子代理');
+    expect(toolTitle('subagent')).toBe(toolTitle('task'));
+  });
+
+  it.each([
+    ['list_agents', '列出子代理'],
+    ['interrupt_agent', '停止子代理'],
+    ['send_message', '傳訊給子代理'],
+    ['list_subagent_models', '列出可選的子代理模型'],
+  ])('背景子代理的管理工具 %s 有自己的標題', (name, title) => {
+    expect(isKnownTool(name)).toBe(true);
+    expect(toolTitle(name)).toBe(title);
+  });
+
+  it('沙箱升級的工具卡與核准面板同一種說法，共用 `ESCALATION_TITLE`（#1292）', () => {
+    expect(toolTitle(SANDBOX_ESCALATION_TOOL)).toBe(ESCALATION_TITLE);
+    const pending = {
+      kind: 'approval',
+      interruptId: 'a',
+      namespace: [],
+      actions: [{ name: SANDBOX_ESCALATION_TOOL, args: {} }],
+      allowedDecisions: ['approve', 'reject'],
+    } as unknown as Parameters<typeof pendingLabel>[0];
+    expect(pendingLabel(pending, { index: 0, total: 1 })).toBe(`等待核准：${ESCALATION_TITLE}`);
+    // 釘的是「共用」不是「字一樣」：表上引用常數，不再自己寫一份字面。
+    const source = readFileSync(new URL('./tool-view.ts', import.meta.url), 'utf8');
+    expect(source).toContain('[SANDBOX_ESCALATION_TOOL]: ESCALATION_TITLE');
+    expect(source).not.toContain(`'${ESCALATION_TITLE}'`);
   });
 
   it('不認得的工具（例如 MCP 的）走通用卡', () => {
@@ -90,6 +118,11 @@ describe('摘要與展開內容', () => {
     expect(toolSummary('execute', '{"command":"pnpm test\\npnpm build"}')).toBe('pnpm test');
     expect(toolSummary('grep', '{"pattern":"TODO","path":"src"}')).toBe('TODO');
     expect(toolSummary('mcp__x__y', '{"n":1,"q":"找這個"}')).toBe('找這個');
+  });
+
+  it('刪檔有自己的標題，摘要是那個路徑（#672）', () => {
+    expect(toolTitle('delete')).toBe('刪除檔案');
+    expect(toolSummary('delete', '{"file_path":"/a.md"}')).toBe('/a.md');
   });
 
   it('壞 JSON 退回原字串', () => {
@@ -117,33 +150,35 @@ describe('摘要與展開內容', () => {
   });
 });
 
-/**
- * **`execute` 的絆索**（#601）：基座只在 backend 帶 shell 時才註冊 `execute`（deepagents 1.13.1 的 `isSandboxBackend`：
- * 有 `execute` 方法而且 `id` 非空）。今天 harness 只建這三種 backend，沒有一種帶 shell——`CompositeBackend` 的 `id`
- * 只在預設 backend 是 sandbox 時才轉出來，`ContainedFilesystemBackend` 繼承的是沒有 shell 的 `FilesystemBackend`。
- * 這裡紅了表示有新的 backend 進來：確認它會不會讓 `execute` 上線，會的話先補終端卡（dsh `terminal-card-model.ts`）。
- */
-describe('execute 還沒上線', () => {
-  const harnessSources = sources(HARNESS.pathname);
-
-  it('harness 只建沒有 shell 的 backend', () => {
-    const constructed = new Set(
-      harnessSources.flatMap((file) =>
-        [...readFileSync(file, 'utf8').matchAll(/new (\w*Backend)\(/g)].map((match) => match[1]),
-      ),
-    );
-    expect([...constructed].sort()).toEqual([
-      'CompositeBackend',
-      'ContainedFilesystemBackend',
-      'StateBackend',
-    ]);
+/** #958：收合那一行摘要有字元上限，展開後參數的上限常數另有人用。 */
+describe('摘要的字元上限', () => {
+  it('第一行沒超過（含剛好）上限時原樣', () => {
+    const line = 'x'.repeat(SUMMARY_MAX_CHARS);
+    expect(firstLine(`${line}\n第二行`)).toBe(line);
+    expect(toolSummary('echo', JSON.stringify({ message: line }))).toBe(line);
   });
 
-  it('ContainedFilesystemBackend 沒有自己長出 execute', () => {
-    const file = harnessSources.find((path) => path.endsWith('contained-backend.ts'));
-    expect(file).toBeDefined();
-    const source = readFileSync(file ?? '', 'utf8');
-    expect(source).toContain('class ContainedFilesystemBackend extends FilesystemBackend');
-    expect(source).not.toMatch(/\bexecute\s*\(/);
+  it('超過就截在上限、尾巴換成「…」；只看第一行，換行以後的不算', () => {
+    const line = 'x'.repeat(SUMMARY_MAX_CHARS + 1);
+    expect(firstLine(line)).toBe(`${'x'.repeat(SUMMARY_MAX_CHARS)}…`);
+    expect(firstLine(`短\n${line}`)).toBe('短');
+    expect(toolSummary('echo', JSON.stringify({ message: 'y'.repeat(527_000) }))).toBe(
+      `${'y'.repeat(SUMMARY_MAX_CHARS)}…`,
+    );
+  });
+
+  it('參數不是 JSON 時（原文的第一行）也受上限管', () => {
+    expect(toolSummary('echo', 'z'.repeat(10_000))).toBe(`${'z'.repeat(SUMMARY_MAX_CHARS)}…`);
+  });
+
+  it('不把代理對剖開', () => {
+    const summary = firstLine(`${'a'.repeat(SUMMARY_MAX_CHARS - 1)}😀😀`);
+    expect(summary).toBe(`${'a'.repeat(SUMMARY_MAX_CHARS - 1)}…`);
+  });
+
+  it('展開後參數的上限是個正整數', () => {
+    expect(Number.isInteger(INPUT_MAX_CHARS) && INPUT_MAX_CHARS > 0).toBe(true);
+    // 摘要那一行永遠比展開的上限短，兩者不會顛倒。
+    expect(SUMMARY_MAX_CHARS).toBeLessThan(INPUT_MAX_CHARS);
   });
 });

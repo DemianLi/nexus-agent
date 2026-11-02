@@ -1,0 +1,5 @@
+# 把會話日誌落盤關掉（#612）。**這一份的驗收是它會成功**：這一列代表落盤本身，照 dsh 不掛
+# `session-persistence-jsonl` 那一列，關掉就是兩個入口都只在記憶體裡、一個位元組都不寫。
+# 讀它的是 `session-log-durability.test.ts`（CLI）與 `serve-session-log.test.ts`（serve）。
+- id: session-persistence
+  disabled: true

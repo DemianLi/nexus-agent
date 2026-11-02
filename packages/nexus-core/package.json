@@ -1,23 +1,26 @@
 {
   "name": "@nexus/core",
-  "version": "0.0.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./src/index.ts",
-    "./approval-gate": "./src/approval.ts",
-    "./invariant": "./src/invariant.ts",
-    "./model-usage": "./src/model-usage.ts",
-    "./observation-policy": "./src/observation.ts",
-    "./repeat-reminder": "./src/repeat-reminder.ts",
-    "./session-checkpoint-policy": "./src/session-checkpoint-policy.ts",
-    "./session-persistence": "./src/session-persistence.ts",
-    "./summarization": "./src/summarization.ts",
-    "./tool-result-pruner": "./src/tool-result-pruner.ts",
+    ".": "./lib/index.js",
+    "./approval-gate": "./lib/approval.js",
+    "./invariant": "./lib/invariant.js",
+    "./model-usage": "./lib/model-usage.js",
+    "./observation-policy": "./lib/observation.js",
+    "./repeat-reminder": "./lib/repeat-reminder.js",
+    "./session-checkpoint-policy": "./lib/session-checkpoint-policy.js",
+    "./session-persistence": "./lib/session-persistence.js",
+    "./summarization": "./lib/summarization.js",
+    "./tool-result-pruner": "./lib/tool-result-pruner.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
+  "files": [
+    "lib"
+  ],
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "eslint .",
@@ -28,15 +31,22 @@
   "devDependencies": {
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
+    "js-tiktoken": "^1.0.21",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   },
   "dependencies": {
+    "@eslint-community/regexpp": "^4.12.2",
     "@langchain/core": "^1.2.9",
-    "@langchain/langgraph": "^1.4.10",
+    "@langchain/langgraph": "^1.4.13",
+    "@nexus/brand": "workspace:*",
+    "@nexus/timeout": "workspace:*",
     "deepagents": "~1.13.1",
-    "js-tiktoken": "^1.0.21",
+    "diff": "^9.0.0",
+    "gpt-tokenizer": "^4.0.0",
     "langchain": "^1.5.10",
-    "zod": "^4.3.6"
+    "undici": "^8.12.3",
+    "yaml": "^2.9.1",
+    "zod": "^4.6.7"
   }
 }

@@ -9,7 +9,7 @@
  * 對不對。
  */
 
-import { appendFile, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -18,7 +18,6 @@ import { fileURLToPath } from 'node:url';
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import {
   fromLoggedMessage,
   SessionLog,
@@ -27,20 +26,21 @@ import {
   TOOL_OUTCOME_UNKNOWN_TEXT,
 } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
-import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import { runCli } from './cli.js';
 import { seenRequests } from './conversation-restore.fixture.js';
 import { restoreConversation, toolResultAsSeen } from './conversation-restore.js';
 import { toAgentInvocation } from './messages.js';
+import { sessionPathsIn } from './jsonl-session-store.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import { serveClient } from './fixtures.js';
+import { foldTurn, serveClient } from './fixtures.js';
+import { sessionEventsOf } from './session-files.fixture.js';
 
 const FIXTURE = fileURLToPath(new URL('./conversation-restore.patch.yml', import.meta.url));
 
@@ -65,23 +65,19 @@ const REMEMBERED = [
   'ai:工具回來了，這條線是通的。',
 ];
 
-async function readLog(path: string): Promise<SessionEvent[]> {
-  return (await readFile(path, 'utf8'))
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
-}
+/** run 目錄裡 root（`cli`）那一份的事件。 */
+const readLog = (runDir: string): Promise<SessionEvent[]> => sessionEventsOf(runDir, 'cli');
 
-/** 接在日誌尾巴上幾顆事件，`seq` 接著排——上一個行程停在那裡的樣子。 */
+/** 在 root 那一份的日誌尾巴接幾顆事件，`seq` 接著排——上一個行程停在那裡的樣子。 */
 async function appendTail(
-  logPath: string,
+  runDir: string,
   events: readonly Pick<SessionEvent, 'type' | 'data'>[],
 ): Promise<void> {
-  const next = (await readLog(logPath)).length;
+  const next = (await readLog(runDir)).length;
   const lines = events.map((event, index) =>
     JSON.stringify({ ...event, seq: next + index, time: 1 }),
   );
-  await appendFile(logPath, `${lines.join('\n')}\n`);
+  await appendFile(sessionPathsIn(runDir, 'cli').log, `${lines.join('\n')}\n`);
 }
 
 describe('CLI 的 --resume', () => {
@@ -125,7 +121,7 @@ describe('CLI 的 --resume', () => {
 
     expect(shape(seenRequests[0] ?? [])).toEqual([...REMEMBERED, 'human:暗號是什麼']);
     expect(stdout).toContain('對話照日誌推回模型（6 則）');
-    expect(stdout).toContain('虛擬檔案系統、工具結果暫存與會話歷史檔沒有回來');
+    expect(stdout).toContain('虛擬檔案系統與會話歷史檔沒有回來');
     expect(stdout).not.toContain('[不變量]');
   });
 
@@ -144,12 +140,54 @@ describe('CLI 的 --resume', () => {
   });
 
   /**
+   * 續接時另記這一次實際載入的清單（#1138）：header 沿用最初那一份，這一顆才說得出現在跑的是哪些。
+   * 連續兩次空轉的續接只留一顆（內容相同不疊），而且第二次沒有多疊 `session/end-seed`。
+   */
+  it('續接寫一顆 session/resumed，帶這一次的插件清單；空轉的續接不疊', async () => {
+    const runDir = await firstRun();
+    const count = async (type: string) =>
+      (await readLog(runDir)).filter((event) => event.type === type).length;
+
+    // 兩次什麼都沒說的續接：第一次記一顆，第二次內容相同不疊，也沒有多疊一顆 `session/end-seed`。
+    await cli(['--resume', runDir], '/exit\n');
+    await cli(['--resume', runDir], '/exit\n');
+    expect([await count('session/resumed'), await count('session/end-seed')]).toEqual([1, 1]);
+    const resumed = (await readLog(runDir)).filter((event) => event.type === 'session/resumed');
+    expect(resumed[0]?.ignorable).toBe(true);
+    const data = resumed[0]?.data as { plugins: readonly { id?: string }[] };
+    expect(data.plugins.map((row) => row.id)).toContain('request-recorder');
+
+    // 第三次說了話（清單沒變，緊接在上一顆後面，不另記）；再下一次續接前面隔了一輪，才是新的一段：再記一顆。
+    await cli(['--resume', runDir], '暗號是什麼\n/exit\n');
+    await cli(['--resume', runDir], '/exit\n');
+    expect([await count('session/resumed'), await count('session/end-seed')]).toEqual([2, 2]);
+  });
+
+  /**
+   * 核准政策跟著日誌走（#437）：上一次切成 `never`，`--resume` 之後仍是 `never`，空轉的續接不重釘一顆。
+   * 沒讀日誌的話，控制器照預設 `ask` 起算、日誌尾巴多一顆 `ask`——這條會紅。
+   */
+  it('核准政策跟著日誌走：記著 never 的日誌，續接之後不被預設的 ask 蓋回去', async () => {
+    const runDir = await firstRun();
+    const policies = async () =>
+      (await readLog(runDir))
+        .filter((event) => event.type === 'approval/policy')
+        .map((event) => event.data);
+    expect(await policies()).toEqual([{ policy: 'ask' }]);
+    await appendTail(runDir, [{ type: 'approval/policy', data: { policy: 'never' } }]);
+
+    await cli(['--resume', runDir], '/exit\n');
+    await cli(['--resume', runDir], '/exit\n');
+    expect(await policies()).toEqual([{ policy: 'ask' }, { policy: 'never' }]);
+  });
+
+  /**
    * **斷言的是那一則的字**：拿掉補結果這一步，基座的 `patchToolCallsMiddleware` 照樣補一則（實測），那一輪照樣
    * 不會被供應商拒收——只看「沒被拒收」的話這條驗收有沒有這個功能都綠。
    */
   it('上一次停在工具跑到一半：補的是 dsh 那句「結果不明」，不是基座那句', async () => {
     const runDir = await firstRun();
-    await appendTail(join(runDir, 'cli.jsonl'), [
+    await appendTail(runDir, [
       { type: 'turn/start', data: { kind: 'message', text: '再回聲一次' } },
       { type: 'model/start', data: {} },
       {
@@ -181,9 +219,41 @@ describe('CLI 的 --resume', () => {
     expect(stdout).not.toContain('[不變量]');
   });
 
+  /**
+   * **#1190**：第一次模型呼叫就沒正常回來（按了停止、或供應商拋錯），整份日誌一則回覆都沒有。這不是舊格式漏記，
+   * 線上的圖狀態也留著使用者那句話，所以續接之後的第一次請求要帶它。修之前整份拒推，模型只看到續接後的新話。
+   */
+  it.each([
+    [
+      '按了停止',
+      'aborted' as const,
+      { kind: 'aborted' as const, cause: { kind: 'user' as const } },
+    ],
+    ['供應商拋錯', 'error' as const, undefined],
+  ])('第一次呼叫就沒正常回來（%s）：使用者那句話回來了', async (_, outcome, reason) => {
+    // 只有 header 的空日誌，再補上沒回覆的那一輪。
+    await cli(['--session-log', logs], '/exit\n');
+    const [entry] = await readdir(logs);
+    const runDir = join(logs, entry!);
+    await appendTail(runDir, [
+      { type: 'turn/start', data: { kind: 'message', text: '第一句，沒得到回覆' } },
+      { type: 'model/start', data: {} },
+      { type: 'model/end', data: { outcome, modelCall: 1 } },
+      reason === undefined
+        ? { type: 'turn/failed', data: { message: '供應商掛了' } }
+        : { type: 'turn/end', data: { reason } },
+    ]);
+    seenRequests.length = 0;
+
+    const stdout = await cli(['--resume', runDir], '還在嗎\n/exit\n');
+
+    expect(shape(seenRequests[0] ?? [])).toEqual(['human:第一句，沒得到回覆', 'human:還在嗎']);
+    expect(stdout).toContain('對話照日誌推回模型（1 則）');
+  });
+
   it('舊格式（一輪叫過模型卻沒有回覆）：不灌半截，模型從空的開始，講原因', async () => {
     const runDir = await firstRun();
-    await appendTail(join(runDir, 'cli.jsonl'), [
+    await appendTail(runDir, [
       { type: 'turn/start', data: { kind: 'message', text: '舊的一輪' } },
       { type: 'model/start', data: {} },
       { type: 'model/end', data: {} },
@@ -193,7 +263,7 @@ describe('CLI 的 --resume', () => {
     const stdout = await cli(['--resume', runDir], '還在嗎\n/exit\n');
 
     expect(shape(seenRequests[0] ?? [])).toEqual(['human:還在嗎']);
-    expect(stdout).toContain('對話從空的開始：日誌裡少了模型的回覆');
+    expect(stdout).toContain('對話從空的開始：日誌裡有模型正常回來的呼叫，卻沒有記到回覆');
   });
 });
 
@@ -228,12 +298,7 @@ describe('serve 重開之後', () => {
     const client = await serveClient(server);
     const events = await client.openEvents(threadId);
     await client.runStart(threadId, prompt);
-    let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
-    while (state.status === 'running') {
-      const next = await events.next();
-      if (next.done === true) break;
-      state = reduceConversation(state, next.value);
-    }
+    await foldTurn(events);
     await events.return?.(undefined);
   }
 
@@ -283,7 +348,7 @@ describe('過大的工具結果', () => {
       model: new ScriptedChatModel({
         turns: [{ content: '拿', toolCalls: [{ name: 'big', args: {} }] }, { content: '好' }],
       }),
-      checkpointer: new MemorySaver(),
+      checkpointer: new PrunedMemorySaver(),
       plugins: [big],
     });
     const sessions = new SessionRegistry('big');

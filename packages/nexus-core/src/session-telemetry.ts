@@ -12,7 +12,7 @@
  * @see [#89](https://github.com/DemianLi/nexus-agent/issues/89)
  */
 
-import type { SessionEvent, SessionEventType } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
 
 /**
  * 告警等級，**捕獲當下就映好**，讓收端零設定也能告警。
@@ -41,11 +41,14 @@ export interface SessionTelemetryRecord {
   /** 捕獲時就映好的告警等級，見 {@link SessionTelemetrySeverity}。 */
   readonly severity: SessionTelemetrySeverity;
   /**
-   * 識別屬性，**刻意最小**。ledger 帶 `session.id` / `event.type` / `event.seq`；
+   * 識別屬性，**刻意最小**。ledger 帶 `session.id` / `event.type` / `event.seq`，分叉來的會話再帶
+   * `session.seed_length`（繼承的前綴有幾顆，[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）；
    * ops 帶 `telemetry.op` 與 `session.id`。**body 裡撈得到的東西一律不在這裡重複一份。**
    *
-   * dsh 另有 `session.cwd` / `session.parent_id` / `session.seed_length`，**nexus 沒有
-   * 來源**（沒有 session header、沒有 fork），所以那三個不會出現——是缺，不是省略。
+   * dsh 另有 `session.format_version` / `session.cwd` / `session.parent_id`，取自 session header。
+   * 這三個今天不會出現——是缺，不是省略：nexus 有 header，但協調器只拿得到日誌（`SessionLog`），
+   * header 沒有接進來。所以收端今天只認得出「開頭幾顆是繼承來的」，認不出是從哪一份來的
+   * （[#1958](https://github.com/DemianLi/nexus-agent/issues/1958)）。
    */
   readonly attributes: Readonly<Record<string, string | number>>;
   /**
@@ -73,6 +76,9 @@ export interface SessionTelemetryRecord {
  * deepagents / LangChain JS / LangGraph JS 也都沒有可掛任意具名事件的 waterfall
  * （`CallbackManager` 是固定的一組生命週期回呼，而且是 async 的），**waterfall 這個
  * 形狀表達不出來**。退到最接近的：registry 上的註冊點加**依註冊順序的折疊**。
+ *
+ * **（2026-10-09 補）** 「`apply` 沒有事件匯流排」這一句已經過期：[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)
+ * 之後有了（事件表上目前只有工具四事件，沒有遙測的）。偏離的另一半不變——折疊丟掉截斷能力是刻意的，見下一段。
  *
  * 折疊丟掉的正是那個截斷能力，**而且是刻意丟的**：對脫敏來說，「一條規則能悄悄關掉
  * 另一條部署掛的清洗」不是擴充性，是洩漏。
@@ -129,55 +135,57 @@ export interface SessionTelemetrySink {
 export type SessionTelemetrySharingStatus = 'full' | 'feedback-only' | 'disabled';
 
 /**
- * 每一種事件**准不准 `feedback-only` 把日誌補送出去**。只有人明白送出的回饋准：三顆 `feedback/*`。
- * 照 dsh 的 `isFeedback`（`packages/session/session-telemetry-otel/src/index.ts:58-64`，`c291e79`）。
- *
- * **逐種列舉、不給預設值**：多一種事件而沒在這裡表態就編不過。漏放行與誤放行是相反的兩種病——
- * 漏了，人按了送出卻什麼都沒送；多了，人沒同意就整份送出去。
- */
-const RELEASES_FEEDBACK_ONLY_CAPTURE = {
-  'turn/start': false,
-  'turn/end': false,
-  'turn/failed': false,
-  'interrupt/raised': false,
-  'command/run': false,
-  'command/done': false,
-  'goal/change': false,
-  'todo/write': false,
-  'model/usage': false,
-  'model/start': false,
-  'model/end': false,
-  'assistant/message': false,
-  'user/message': false,
-  'compaction/summary': false,
-  'context/measure': false,
-  'sandbox/mode': false,
-  'plan/mode': false,
-  'tool/call': false,
-  'tool/result': false,
-  'feedback/message-put': true,
-  'feedback/message-delete': true,
-  'feedback/record': true,
-  'deliverables/presented': false,
-  'workspace/changes': false,
-  'session/end-seed': false,
-} as const satisfies Record<SessionEventType, boolean>;
-
-/**
  * 這一顆是不是人送出的回饋——`feedback-only` 靠它決定什麼時候補送。
  *
  * dsh 的另外兩道守衛在我們這裡不需要，理由各一：
  *
- * - **分叉繼承來的回饋不算**（`event.seq < session.inheritedEventCount`）：我們不分叉。續接帶進來的
- *   seed 裡就算有回饋也碰不到這裡——seed 不發給任何觀察者（`SessionLogOptions.seed`），接線那側
- *   用的是不重播的 `log.subscribe`。
+ * - **分叉繼承來的回饋不算**（`event.seq < session.inheritedEventCount`）：繼承來的前綴只會經 seed 進來
+ *   （`buildForkSeed`，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），續接帶進來的也一樣——seed 不發給任何觀察者
+ *   （`SessionLogOptions.seed`），接線那側用的是不重播的 `log.subscribe`，所以前綴裡的回饋碰不到這裡。
  * - **`message-put`／`message-delete` 比 `sessionId`**：我們的事件沒有那一格（`feedback.ts` 的偏離）。
+ *
+ * **只有人明白送出的回饋准：三顆 `feedback/*`，其餘一律不准，不認得的種類也不准。**
+ * 照 dsh 的 `isFeedback`（`packages/session/session-telemetry-otel/src/index.ts:58-64`）：
+ * `switch` 加 `default: return false`，core 不逐種列舉每一種事件——逐種列舉會逼每個擁有者
+ * 套件加事件種類時回頭改 core（#679）。代價是多一種回饋事件而沒在這裡補，編譯器不會叫；漏放行
+ * 與誤放行是相反的兩種病（漏了，人按了送出卻什麼都沒送；多了，人沒同意就整份送出去），預設
+ * 選前者：沒表態的種類不外送。
  *
  * @param event - 剛進日誌的那一顆。
  * @returns 是回饋就 `true`。
  */
 export function isFeedbackEvent(event: SessionEvent): boolean {
-  return RELEASES_FEEDBACK_ONLY_CAPTURE[event.type];
+  switch (event.type) {
+    case 'feedback/message-put':
+    case 'feedback/message-delete':
+    case 'feedback/record':
+      return true;
+    default:
+      return false;
+  }
+}
+
+/**
+ * 這一顆要不要鏡像到遙測的 ledger——**不放行的種類，`full` 與 `feedback-only` 兩種模式都不送**。
+ *
+ * 預設放行（ledger 是日誌的一對一鏡像），**明著列出來的才擋**：`request/header`、`request/system`
+ * （[#1020](https://github.com/DemianLi/nexus-agent/issues/1020)）是模型被叫那一刻實際收到的設定與系統提示詞，
+ * 系統提示詞可能含工作區內容（AGENTS.md、記憶檔）。要放行得是一個明著的決定，不是新種類加進來就順便出去了。
+ * 與 {@link isFeedbackEvent} 的預設相反——那邊沒表態就不送，這邊沒表態就送，因為 `full` 的契約本來就是整份。
+ *
+ * @param event - 剛進日誌的那一顆。
+ */
+export function isMirroredEvent(event: SessionEvent): boolean {
+  switch (event.type) {
+    case 'request/header':
+    case 'request/system':
+      return false;
+    // 續接時實際載入的插件清單（#1138）：本機的模組路徑與只能同機比的設定雜湊，不出這台機器。
+    case 'session/resumed':
+      return false;
+    default:
+      return true;
+  }
 }
 
 /**

@@ -5,11 +5,19 @@
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { describe, expect, it } from 'vitest';
+import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
+import { Tiktoken } from 'js-tiktoken/lite';
+import o200kRanks from 'js-tiktoken/ranks/o200k_base';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { requestImageHandleText } from './attachment-projection.js';
+import { attachmentBlock, fileHandleText, fileModelPath, IMAGE_TOKENS } from './attachment-ref.js';
 import {
   estimateAnchoredTokens,
+  estimateRequestParts,
   estimateRequestTokens,
+  estimateTextTokens,
   TokenAnchorBook,
+  warmMessageTokens,
 } from './token-estimate.js';
 
 const MODEL = { model: 'm-1' };
@@ -98,6 +106,117 @@ describe('E：o200k 的純估算', () => {
     const tokens = estimateRequestTokens({ messages: [new HumanMessage('X'.repeat(40_000))] });
     expect(tokens).toBeGreaterThan(1_000);
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});
+
+/**
+ * [#952](https://github.com/DemianLi/nexus-agent/issues/952)：存檔點每次讀回來都是新的訊息物件，以物件為鍵的快取跨輪
+ * 全部落空，長中文歷史每輪重編一遍。這裡量的是**編碼器被叫了幾次、編了幾個字元**，不是牆鐘時間——牆鐘在 CI 上不穩。
+ */
+/** 沒有另一半的代理碼元。 */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u;
+
+describe('合併快取（#2241）', () => {
+  afterEach(() => {
+    vi.doUnmock('gpt-tokenizer/encoding/o200k_base');
+    vi.resetModules();
+  });
+
+  it('載入時關掉，全行程只設一次', async () => {
+    const setMergeCacheSize = vi.fn();
+    vi.resetModules();
+    vi.doMock('gpt-tokenizer/encoding/o200k_base', () => ({
+      default: { ...o200k_base, setMergeCacheSize },
+    }));
+
+    await import('./token-estimate.js');
+    await import('./token-estimate.js');
+
+    expect(setMergeCacheSize.mock.calls).toEqual([[0]]);
+  });
+});
+
+describe('內容備忘與超長抽樣（#952）', () => {
+  /** 數編碼器這段時間被餵了幾次、共多少字元。 */
+  function countEncoding() {
+    const spy = vi.spyOn(o200k_base, 'encode');
+    return {
+      calls: () => spy.mock.calls.length,
+      chars: () => spy.mock.calls.reduce((sum, [text]) => sum + text.length, 0),
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // 不同的字串避免撞到別的測試已經備忘過的內容。
+  const longChinese = (seed: string, chars: number) =>
+    `${seed}｜中文工具結果，沒有空白。`.repeat(Math.ceil(chars / 14)).slice(0, chars);
+
+  it('同樣的內容換一個訊息物件再估：不再編碼，數字不變', () => {
+    const text = longChinese('備忘', 20_000);
+    const first = estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    const encoding = countEncoding();
+    // 模擬存檔點讀回來：內容一樣、物件是新的。
+    const second = estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    expect(second).toBe(first);
+    expect(encoding.calls()).toBe(0);
+  });
+
+  it('內容不同就要重編', () => {
+    const encoding = countEncoding();
+    estimateRequestTokens({ messages: [new HumanMessage(longChinese('甲', 2_000))] });
+    estimateRequestTokens({ messages: [new HumanMessage(longChinese('乙', 2_000))] });
+    expect(encoding.calls()).toBeGreaterThanOrEqual(2);
+  });
+
+  it('工具定義與 system 同樣以內容備忘', () => {
+    const tool = {
+      type: 'function',
+      function: { name: 'big', description: longChinese('工具', 3_000), parameters: {} },
+    };
+    const system = () => new SystemMessage(longChinese('系統', 3_000));
+    const first = estimateRequestTokens({ systemMessage: system(), tools: [{ ...tool }] });
+    const encoding = countEncoding();
+    const second = estimateRequestTokens({ systemMessage: system(), tools: [{ ...tool }] });
+    expect(second).toBe(first);
+    expect(encoding.calls()).toBe(0);
+  });
+
+  it('超長的一段只編幾個窗口：編進去的字元數有上限，估的數離全量不遠', () => {
+    const text = longChinese('抽樣', 400_000);
+    const encoding = countEncoding();
+    const sampled = estimateRequestTokens({ messages: [new HumanMessage(text)] }) - 4;
+    expect(encoding.chars()).toBeLessThanOrEqual(40_000);
+    vi.restoreAllMocks();
+    const exact = estimateTextTokens(text);
+    expect(Math.abs(sampled / exact - 1)).toBeLessThan(0.05);
+  });
+
+  it('抽樣是確定的：同一段永遠推出同一個數', () => {
+    const text = longChinese('確定', 150_000);
+    const a = estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    const b = estimateRequestTokens({ messages: [new HumanMessage(`${text}`)] });
+    expect(b).toBe(a);
+  });
+
+  it('單段文字的入口不抽樣：外溢層靠它做預算的硬保證', () => {
+    const text = longChinese('全量', 120_000);
+    const encoding = countEncoding();
+    estimateTextTokens(text);
+    expect(encoding.chars()).toBeGreaterThanOrEqual(text.length);
+  });
+
+  it('抽樣的窗口不會把代理對切成兩半', () => {
+    // 每個字元都是兩個 UTF-16 碼元：任何一刀落在中間都會餵進孤立的代理。
+    const text = longChinese('😀', 200_000).replaceAll(/[^😀]/gu, '😀');
+    const encoding = countEncoding();
+    estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    for (const [piece] of vi.mocked(o200k_base.encode).mock.calls) {
+      expect(LONE_SURROGATE.test(piece)).toBe(false);
+    }
+    expect(encoding.calls()).toBeGreaterThan(0);
   });
 });
 
@@ -329,6 +448,21 @@ describe('第一次：借別條 thread 的第一次', () => {
     ).toBe('estimate');
   });
 
+  it('算出來落在 [-0.5, 0) 時記 0，不記 -0（#1526：會話日誌拒收 -0，這個數寫進 context/measure）', () => {
+    const book = new TokenAnchorBook();
+    const thread = request([new HumanMessage('短')]);
+    const other = request([new HumanMessage(CHINESE)]);
+    // 借來的第一次 E 比這次大 20_001，學到的比例 0.3：6_000 + (-20_001) × 0.3 ≈ -0.3。
+    const firstE = estimateRequestTokens(other) + 20_001;
+    book.record(answered('t1', 6_000), thread, firstE, 'estimate');
+    book.record(answered('t2', 6_300), thread, firstE + 1_000, 'borrowed');
+    const result = estimateAnchoredTokens(other, book);
+    expect(result.basis).toBe('borrowed');
+    // 前提：值本身是零（`-0 === 0`），差別只在正負號。
+    expect(result.tokens === 0).toBe(true);
+    expect(Object.is(result.tokens, 0)).toBe(true);
+  });
+
   it('回來的不是帶實數的 AI 訊息就不記', () => {
     const book = new TokenAnchorBook();
     const thread = request([new HumanMessage('短')]);
@@ -336,5 +470,372 @@ describe('第一次：借別條 thread 的第一次', () => {
     book.record(new AIMessage('沒有用量。'), thread, 100, 'estimate');
     book.record(answered('t1', 6_000, 'm-other'), thread, 100, 'estimate');
     expect(book.firstCall(thread)).toBeUndefined();
+  });
+});
+
+/**
+ * [#1107](https://github.com/DemianLi/nexus-agent/issues/1107)：編碼器從 js-tiktoken 換成 gpt-tokenizer。換的前提是
+ * **每一個輸入的 token 數逐位相同**——否則 spill-policy 的外溢預算（`estimateTextTokens`，精確數）會悄悄移位。
+ * js-tiktoken 留在 devDependencies 當對照組：這裡用它照舊的做法（128 字元切塊、特殊 token 當一般文字）重算一遍。
+ */
+describe('編碼器對照（#1107）', () => {
+  const oracle = new Tiktoken(o200kRanks);
+  /** 前一個編碼器的算法，原樣：長的無空白／連續空白片段切 128 字元，其餘整段編。 */
+  function oracleTokens(text: string): number {
+    const encode = (piece: string) =>
+      piece.length === 0 ? 0 : oracle.encode(piece, [], []).length;
+    let total = 0;
+    let last = 0;
+    for (const match of text.matchAll(/\S{129,}|\s{129,}/g)) {
+      total += encode(text.slice(last, match.index));
+      for (let start = 0; start < match[0].length; start += 128)
+        total += encode(match[0].slice(start, start + 128));
+      last = match.index + match[0].length;
+    }
+    return total + encode(text.slice(last));
+  }
+
+  let seed = 20261006;
+  const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = (low: number, high: number) =>
+    String.fromCodePoint(low + Math.floor(random() * (high - low)));
+  const many = (count: number, make: () => string) => Array.from({ length: count }, make).join('');
+
+  const MATERIALS: Record<string, string> = {
+    中文: '這是一段要送進模型的中文內容，會有標點、數字 123 與英文 words。'.repeat(400),
+    英文程式碼: 'export function f(a: number, b: string) { return `${a}-${b}`; }\n'.repeat(300),
+    隨機漢字: many(3_000, () => pick(0x4e00, 0x4e00 + 20_000)),
+    隨機數字: many(3_000, () => pick(48, 58)),
+    表情與組合字元: '👨‍👩‍👧‍👦🏳️‍🌈é́ 😀'.repeat(200),
+    全字元範圍: many(3_000, () => {
+      const code = Math.floor(random() * 0xffff);
+      return code >= 0xd800 && code < 0xe000 ? 'x' : String.fromCharCode(code);
+    }),
+    特殊token字串: 'a<|endoftext|>b<|im_start|>c<|fim_prefix|> <|endofprompt|>x'.repeat(40),
+    孤立代理碼元: 'ab\ud800cd\udc00ef'.repeat(100),
+    長連續空白: ' \n\t'.repeat(2_000),
+    長無空白英數: 'a1B2'.repeat(2_000),
+    空字元: 'a\u0000b\u0000'.repeat(100),
+  };
+
+  it.each(Object.entries(MATERIALS))('%s：token 數與前一個編碼器逐位相同', (_name, text) => {
+    expect(estimateTextTokens(text)).toBe(oracleTokens(text));
+  });
+
+  it('超過 128 字元的無空白片段切塊與否，由切塊後的數決定，與前一個編碼器相同', () => {
+    for (const run of [127, 128, 129, 130, 300, 1_000]) {
+      const text = `前 ${'漢'.repeat(run)} 後`;
+      expect(estimateTextTokens(text)).toBe(oracleTokens(text));
+    }
+  });
+
+  /**
+   * 切塊是防崩潰的承重件：gpt-tokenizer 對十五萬個沒有空白的隨機漢字，不切的話四十三秒後拋
+   * `RangeError: Maximum call stack size exceeded`（量過）；十八萬字元的空白與換行要編十一秒。`estimateTextTokens` 在外溢層
+   * 的工具呼叫路徑上，拋出來就是那一次工具呼叫整個失敗。
+   * 突變（量過）：把 `MAX_RUN` 改成極大值，這一條紅（拋 RangeError）。
+   */
+  it('極長的無空白片段不拋，估算與請求估算兩條路都是', () => {
+    const hanzi = many(150_000, () => pick(0x4e00, 0x4e00 + 20_000));
+    const base64 = many(
+      150_000,
+      () =>
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'[
+          Math.floor(random() * 64)
+        ]!,
+    );
+    for (const text of [hanzi, base64]) {
+      expect(() => estimateTextTokens(text)).not.toThrow();
+      expect(() => estimateRequestTokens({ messages: [new HumanMessage(text)] })).not.toThrow();
+    }
+    expect(estimateTextTokens(hanzi)).toBeGreaterThan(100_000);
+  }, 60_000);
+});
+
+describe('逐位切詞的數字（#1102）', () => {
+  const SINGLE = { singleDigits: true };
+  /** 一串 ASCII 數字夾在文字裡：o200k 三位一組，逐位切詞是一位一個。 */
+  const digits = (n: number) => '7'.repeat(n);
+
+  it('數字連續 L 位，逐位算比 o200k 多 L − ceil(L/3)', () => {
+    const base = estimateRequestTokens({ messages: [new HumanMessage('值：')] });
+    const grouped = (n: number) =>
+      estimateRequestTokens({ messages: [new HumanMessage(`值：${digits(n)}`)] }) - base;
+    for (const n of [2, 3, 6, 10, 31]) {
+      const single =
+        estimateRequestTokens({ messages: [new HumanMessage(`值：${digits(n)}`)] }, SINGLE) - base;
+      expect(single - grouped(n)).toBe(n - Math.ceil(n / 3));
+    }
+  });
+
+  it('沒開旗標就跟舊的一模一樣', () => {
+    const body = { messages: [new HumanMessage('編號 20260927 共 1234567 筆')] };
+    expect(estimateRequestTokens(body, { singleDigits: false })).toBe(estimateRequestTokens(body));
+    expect(estimateRequestTokens(body, SINGLE)).toBeGreaterThan(estimateRequestTokens(body));
+  });
+
+  it('單位數字與全形數字不加：o200k 本來就一個一位', () => {
+    const body = { messages: [new HumanMessage('第 3 項，０１２３４５')] };
+    expect(estimateRequestTokens(body, SINGLE)).toBe(estimateRequestTokens(body));
+  });
+
+  it('同一則訊息先開旗標再不開，各算各的（快取不跨模型外洩）', () => {
+    const message = new HumanMessage(`id=${digits(30)}`);
+    const off = estimateRequestTokens({ messages: [message] });
+    const on = estimateRequestTokens({ messages: [message] }, SINGLE);
+    expect(on - off).toBe(30 - 10);
+    expect(estimateRequestTokens({ messages: [message] })).toBe(off);
+    expect(estimateRequestTokens({ messages: [message] }, SINGLE)).toBe(on);
+  });
+
+  it('超過備忘門檻的長文也一樣算（內容備忘不吃掉旗標）', () => {
+    const text = `${'列 '.repeat(200)}${digits(300)}`;
+    const body = { messages: [new HumanMessage(text)] };
+    expect(estimateRequestTokens(body, SINGLE) - estimateRequestTokens(body)).toBe(300 - 100);
+  });
+
+  it('工具呼叫參數與工具結果裡的數字也算', () => {
+    const calling = new AIMessage({
+      content: '',
+      tool_calls: [{ id: 'c', name: 'read_file', args: { n: digits(30) } }],
+    });
+    const result = new ToolMessage({ content: digits(30), tool_call_id: 'c' });
+    for (const message of [calling, result]) {
+      const gap =
+        estimateRequestTokens({ messages: [message] }, SINGLE) -
+        estimateRequestTokens({ messages: [message] });
+      expect(gap).toBeGreaterThanOrEqual(30 - 10);
+    }
+  });
+
+  it('精確的 estimateTextTokens 不受影響', () => {
+    expect(estimateTextTokens(digits(30))).toBe(estimateTextTokens(digits(30)));
+    const exact = estimateTextTokens(digits(30));
+    estimateRequestTokens({ messages: [new HumanMessage(digits(30))] }, SINGLE);
+    expect(estimateTextTokens(digits(30))).toBe(exact);
+  });
+
+  it('TokenAnchorBook 只對宣告過的模型回 true', () => {
+    const book = new TokenAnchorBook({ singleDigitModels: ['m-digits'] });
+    expect(book.singleDigits('m-digits')).toBe(true);
+    expect(book.singleDigits('m-1')).toBe(false);
+    expect(book.singleDigits(undefined)).toBe(false);
+    expect(new TokenAnchorBook().singleDigits('m-digits')).toBe(false);
+  });
+
+  it('錨定估算：宣告過的模型第一次估得高、沒宣告的不動', () => {
+    const csv = Array.from(
+      { length: 200 },
+      (_, i) => `${1000000 + i},${20260927 + i},3.14159`,
+    ).join('\n');
+    const thread = (model: string) => request([new HumanMessage(csv)], { model });
+    const plain = estimateAnchoredTokens(thread('m-1'), new TokenAnchorBook());
+    const declared = estimateAnchoredTokens(
+      thread('m-digits'),
+      new TokenAnchorBook({ singleDigitModels: ['m-digits'] }),
+    );
+    expect(declared.basis).toBe('estimate');
+    expect(declared.tokens).toBeGreaterThan(plain.tokens * 1.3);
+    // 沒宣告的模型不因為帳上有別的模型宣告而改變。
+    expect(
+      estimateAnchoredTokens(
+        thread('m-1'),
+        new TokenAnchorBook({ singleDigitModels: ['m-digits'] }),
+      ).tokens,
+    ).toBe(plain.tokens);
+  });
+
+  it('錨之後的增量也按位數計', () => {
+    const book = new TokenAnchorBook({ singleDigitModels: ['m-digits'] });
+    const model = { model: 'm-digits' };
+    const answer = answered('a1', 5_000, 'm-digits');
+    const before = [new HumanMessage('開始'), answer];
+    const after = [...before, new HumanMessage(digits(300))];
+    book.record(answer, request(before.slice(0, 1), model), 100, 'estimate');
+    const without = estimateAnchoredTokens(request(before, model), book).tokens;
+    const grown = estimateAnchoredTokens(request(after, model), book).tokens;
+    // 300 位數字逐位算至少 300 個 token，不是 o200k 的 100。
+    expect(grown - without).toBeGreaterThanOrEqual(300);
+  });
+});
+
+describe('附件區塊（#732）', () => {
+  const FILE_REF = { attachmentId: `sha256:${'ab'.repeat(32)}`, name: 'notes.txt', bytes: 2048 };
+  const IMAGE_REF = {
+    attachmentId: `sha256:${'cd'.repeat(32)}`,
+    mediaType: 'image/png' as const,
+    bytes: 9_000_000,
+    width: 4000,
+    height: 3000,
+  };
+  const withBlocks = (...blocks: readonly object[]) =>
+    new HumanMessage({ content: [{ type: 'text', text: '看這個' }, ...blocks] as never });
+  const baseline = estimateRequestTokens(request([withBlocks()]));
+
+  /** 同一則訊息、圖換成送出時它前面那一行把手（#1566）：「有圖」該等於這個加上像素那一截。 */
+  const asText = (...handles: readonly string[]) =>
+    estimateRequestTokens(request([new HumanMessage(['看這個', ...handles].join(''))]));
+
+  it('一張圖算固定的 IMAGE_TOKENS 加它前面那一行把手，像素那一截跟位元組數與像素數無關', () => {
+    const one = estimateRequestTokens(
+      request([withBlocks(attachmentBlock({ type: 'image', ...IMAGE_REF }))]),
+    );
+    const smallRef = { ...IMAGE_REF, bytes: 10, width: 8, height: 8 };
+    const small = estimateRequestTokens(
+      request([withBlocks(attachmentBlock({ type: 'image', ...smallRef }))]),
+    );
+    expect(one).toBe(asText(requestImageHandleText(IMAGE_REF)) + IMAGE_TOKENS);
+    expect(small).toBe(asText(requestImageHandleText(smallRef)) + IMAGE_TOKENS);
+    expect(asText(requestImageHandleText(IMAGE_REF))).toBeGreaterThan(baseline);
+    const two = estimateRequestTokens(
+      request([
+        withBlocks(
+          attachmentBlock({ type: 'image', ...IMAGE_REF }),
+          attachmentBlock({ type: 'image', ...IMAGE_REF }),
+        ),
+      ]),
+    );
+    const handle = requestImageHandleText(IMAGE_REF);
+    expect(two).toBe(asText(handle, handle) + 2 * IMAGE_TOKENS);
+  });
+
+  it('被省略的圖：沒有像素那一截，也沒有把手（組請求時是一行佔位字，不計）', () => {
+    const block = attachmentBlock({ type: 'image', ...IMAGE_REF });
+    const offloaded = estimateRequestTokens(request([withBlocks({ ...block, offloaded: true })]));
+    expect(offloaded).toBe(baseline);
+  });
+
+  it('不再把圖的區塊整塊 JSON.stringify：參照的 JSON 不進文字，進的只有把手那一行', () => {
+    const block = attachmentBlock({ type: 'image', ...IMAGE_REF });
+    const counted = estimateRequestTokens(request([withBlocks(block)])) - IMAGE_TOKENS;
+    expect(counted).toBe(asText(requestImageHandleText(IMAGE_REF)));
+    expect(counted - baseline).toBeLessThan(estimateTextTokens(JSON.stringify(block)));
+  });
+
+  it('檔案算投影之後那一行字，不是參照的 JSON', () => {
+    const block = attachmentBlock({ type: 'file', ...FILE_REF });
+    const counted = estimateRequestTokens(request([withBlocks(block)])) - baseline;
+    expect(counted).toBe(estimateTextTokens(fileHandleText(FILE_REF, fileModelPath(FILE_REF))));
+    expect(counted).toBeGreaterThan(40);
+  });
+});
+
+describe('E 拆三格（#1571 N1193）', () => {
+  const DIGITS = '編號 20261024 與 3141592653 共 1234567 筆。'.repeat(20);
+
+  it('系統那一格 = 該段文字的 o200k 數 + 一則訊息的框架開銷，工具與訊息兩格是 0', () => {
+    const text = '你是測試用的助手。請簡短回答。';
+    const parts = estimateRequestParts({ systemMessage: new SystemMessage(text) });
+    expect(parts).toEqual({ system: estimateTextTokens(text) + 4, tools: 0, messages: 0 });
+  });
+
+  it('工具那一格 = 每個工具送上線那份 OpenAI JSON 的數，加總', () => {
+    const other = {
+      type: 'function',
+      function: { name: 'write_file', description: '寫檔', parameters: {} },
+    };
+    const parts = estimateRequestParts({ tools: [...TOOLS, other] });
+    expect(parts.system).toBe(0);
+    expect(parts.messages).toBe(0);
+    expect(parts.tools).toBe(
+      estimateTextTokens(JSON.stringify(TOOLS[0])) + estimateTextTokens(JSON.stringify(other)),
+    );
+  });
+
+  it('什麼都沒有：三格都是 0（不是缺席）', () => {
+    expect(estimateRequestParts({})).toEqual({ system: 0, tools: 0, messages: 0 });
+  });
+
+  it.each([false, true])(
+    '三格加起來 = estimateRequestTokens（singleDigits=%s），整數且非負',
+    (singleDigits) => {
+      const req = request([new HumanMessage(DIGITS), new AIMessage('收到 12345。')]);
+      const parts = estimateRequestParts(req, { singleDigits });
+      for (const value of Object.values(parts)) {
+        expect(Number.isInteger(value)).toBe(true);
+        expect(value).toBeGreaterThanOrEqual(0);
+      }
+      expect(parts.system + parts.tools + parts.messages).toBe(
+        estimateRequestTokens(req, { singleDigits }),
+      );
+    },
+  );
+
+  it('逐位切詞的多出量只算進含數字的那一格', () => {
+    const plain = estimateRequestParts(request([new HumanMessage(DIGITS)]));
+    const single = estimateRequestParts(request([new HumanMessage(DIGITS)]), {
+      singleDigits: true,
+    });
+    expect(single.messages).toBeGreaterThan(plain.messages);
+    expect(single.system).toBe(plain.system);
+    expect(single.tools).toBe(plain.tools);
+  });
+});
+
+describe('warmMessageTokens', () => {
+  const uncancelled = () => false;
+  const fresh = (count: number) =>
+    Array.from({ length: count }, () => new HumanMessage(`${crypto.randomUUID()} `.repeat(40)));
+  const expiredEveryCheck = () => {
+    let now = 0;
+    return vi.spyOn(performance, 'now').mockImplementation(() => (now += 1_000));
+  };
+
+  it('預熱過的同一批物件，同步估算不再編碼', async () => {
+    const messages = fresh(3);
+    await warmMessageTokens(messages, uncancelled);
+    const encode = vi.spyOn(o200k_base, 'encode');
+    const warmed = estimateRequestTokens({ messages });
+    expect(encode).not.toHaveBeenCalled();
+    encode.mockRestore();
+    expect(warmed).toBeGreaterThan(0);
+  });
+
+  it('數字與沒預熱時逐位相同', async () => {
+    const text = `中文 1234567 ${crypto.randomUUID()} `.repeat(40);
+    const warmed = new HumanMessage(text);
+    const expected = estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    await warmMessageTokens([warmed], uncancelled);
+    expect(estimateRequestTokens({ messages: [warmed] })).toBe(expected);
+  });
+
+  it('時間片用完就讓出事件迴圈', async () => {
+    const clock = expiredEveryCheck();
+    const encode = vi.spyOn(o200k_base, 'encode');
+    let encodedWhenYielded = -1;
+    setImmediate(() => (encodedWhenYielded = encode.mock.calls.length));
+    await warmMessageTokens(fresh(3), uncancelled);
+    const total = encode.mock.calls.length;
+    clock.mockRestore();
+    encode.mockRestore();
+    expect(encodedWhenYielded).toBeGreaterThanOrEqual(0);
+    expect(encodedWhenYielded).toBeLessThan(total);
+  });
+
+  it('時間片沒用完就不讓出', async () => {
+    const clock = vi.spyOn(performance, 'now').mockReturnValue(0);
+    let finished = false;
+    let finishedOnNextTask = false;
+    setImmediate(() => (finishedOnNextTask = finished));
+    await warmMessageTokens(fresh(3), uncancelled).then(() => (finished = true));
+    await new Promise((resolve) => setImmediate(resolve));
+    clock.mockRestore();
+    expect(finishedOnNextTask).toBe(true);
+  });
+
+  it('取消在片段之間生效，已編的留著、剩下的不編', async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => (now += 8));
+    const messages = fresh(4);
+    const encode = vi.spyOn(o200k_base, 'encode');
+    const finished = await warmMessageTokens(messages, () => true);
+    const sent = encode.mock.calls.map(([text]) => text);
+    clock.mockRestore();
+    encode.mockRestore();
+    const first = messages[0]!.content as string;
+    const last = messages.at(-1)!.content as string;
+    expect(finished).toBe(false);
+    expect(sent.some((text) => first.includes(text.trim()))).toBe(true);
+    expect(sent.some((text) => last.includes(text.trim()))).toBe(false);
   });
 });

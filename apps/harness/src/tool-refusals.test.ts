@@ -21,19 +21,20 @@ import { MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import {
-  createGoalPlugin,
   GOAL_CREATE_TOOL_NAME,
   GOAL_GET_TOOL_NAME,
   GOAL_UPDATE_TOOL_NAME,
 } from '@nexus/plugin-goal';
-import { createTodoPlugin, TODO_TOOL_NAME, todoAmbiguousMessage } from '@nexus/plugin-todo';
+import { TODO_TOOL_NAME, todoAmbiguousMessage } from '@nexus/plugin-todo';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { createTodoPlugin } from './todo.fixture.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { createGoalPlugin } from './goal.fixture.js';
 
 /** 一份日誌上每一顆 `tool/result` 的內容，依序。 */
 function resultsOf(events: readonly SessionEvent[]): unknown[] {
@@ -145,8 +146,9 @@ describe('拒絕在日誌上記成錯誤', () => {
   }, 20000);
 
   /**
-   * **組裝沒接好的那一類：錯誤只看得到在訊息上，日誌一顆事件都沒有。** 綁兩份會話是真的
-   * 組裝裡造得出「挑不出哪一份」的唯一辦法；圍堵同樣挑不出來，所以兩份都是空的。
+   * **組裝沒接好的那一類：錯誤只看得到在訊息上，日誌一顆事件都沒有。** 綁兩份會話、而且這次呼叫的
+   * `thread_id` 哪一份都不認（#1418 之後認得就解到那一份，見 `session-lookup-by-thread.test.ts`）
+   * 是真的組裝裡造得出「挑不出哪一份」的辦法；圍堵同樣挑不出來，所以兩份都是空的。
    */
   it('挑不出哪一份：回給模型的是錯誤，兩份日誌上什麼都沒有', async () => {
     const { agent, attachSession, dispose } = await createNexusAgent({
@@ -172,7 +174,7 @@ describe('拒絕在日誌上記成錯誤', () => {
     let result;
     try {
       result = await agent.invoke(toAgentInvocation('跑。'), {
-        configurable: { thread_id: 'refusals-a' },
+        configurable: { thread_id: 'refusals-neither' },
       });
     } finally {
       detachSecond();

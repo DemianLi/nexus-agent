@@ -14,7 +14,7 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { attachSessionPersistence, SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from '../echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from '../agent-factory.js';
@@ -73,7 +73,7 @@ function put(turn: number, rating: 'positive' | 'negative', note?: string): Entr
 
 function log(
   entries: readonly Entry[],
-  options: { id?: string; version?: number; parentSession?: string } = {},
+  options: { id?: string; version?: number; parentSession?: string; isSeeded?: true } = {},
 ): LoadedSessionLog {
   const id = options.id ?? 's';
   return {
@@ -82,6 +82,7 @@ function log(
       id,
       version: options.version ?? SESSION_LOG_FORMAT_VERSION,
       ...(options.parentSession !== undefined && { parentSession: options.parentSession }),
+      ...(options.isSeeded !== undefined && { isSeeded: options.isSeeded }),
     },
     events: events(entries),
   };
@@ -89,7 +90,7 @@ function log(
 
 const draft = (
   entries: readonly Entry[],
-  options: { id?: string; version?: number; parentSession?: string } = {},
+  options: { id?: string; version?: number; parentSession?: string; isSeeded?: true } = {},
 ): SessionDrafts => draftSessionLog(log(entries, options));
 
 const candidates = (drafts: SessionDrafts): DraftTurn[] =>
@@ -326,6 +327,131 @@ describe('草稿', () => {
     const root = draft([say('委派'), end], { id: 'root' });
     const sub = draft(same(6), { id: 'root/sub-1', parentSession: 'root' });
     expect(report([root, sub])).toContain('// 起草：2 份日誌（子代理 1 份不起草），候選 0 輪。');
+  });
+
+  it('分叉帶 parentSession 卻不是子代理，照起草（#1579）', () => {
+    const forked = draft([say('分叉之後'), failed('x')], {
+      id: 'forked',
+      parentSession: 'root',
+      isSeeded: true,
+    });
+    expect(forked.subagent).toBeUndefined();
+    expect(report([forked])).toContain('// 起草：1 份日誌（子代理 0 份不起草），候選 1 輪。');
+  });
+
+  it('分叉繼承來的 /feedback 評語不收：是來源 thread 的（#1579）', () => {
+    const forked = draft(
+      [
+        say('前'),
+        end,
+        ['feedback/record', { text: '父會話的評語' }],
+        ['session/end-seed', { inherited: true }],
+        say('後'),
+        failed('x'),
+        ['feedback/record', { text: '自己的評語' }],
+      ],
+      { id: 'forked', parentSession: 'root', isSeeded: true },
+    );
+    expect(forked.feedbackRecords).toEqual([{ text: '自己的評語' }]);
+  });
+
+  it('分叉繼承來的輪不起草，第幾輪照整份數（#1580）', () => {
+    const forked = draft(
+      [
+        say('來源中止的那輪'),
+        aborted,
+        say('來源失敗又打轉的那輪'),
+        failed('x'),
+        ...same(6),
+        end,
+        ['session/end-seed', { inherited: true }],
+        say('子會話自己的'),
+        failed('y'),
+      ],
+      { id: 'forked', parentSession: 'root', isSeeded: true },
+    );
+    expect(forked.turns).toHaveLength(1);
+    expect(forked.turns[0]).toMatchObject({
+      ordinal: 3,
+      text: '子會話自己的',
+      signals: ['failed'],
+    });
+    expect(report([forked])).toContain('// 起草：1 份日誌（子代理 0 份不起草），候選 1 輪。');
+  });
+
+  it('子 thread 對前綴裡的回覆點踩：那一輪留下，只算點踩，第幾輪照整份數（#1580）', () => {
+    const reply: Entry = [
+      'assistant/message',
+      { message: { type: 'ai', data: { content: '來源的回答', id: 'm1' } } },
+    ];
+    const forked = draft(
+      [
+        say('來源第一輪'),
+        end,
+        say('來源失敗又打轉、被點踩的那輪'),
+        reply,
+        failed('x'),
+        ...same(6),
+        aborted,
+        ['session/end-seed', { inherited: true }],
+        [
+          'feedback/message-put',
+          {
+            item: {
+              messageId: 'm1',
+              rating: 'negative',
+              note: '子會話點的',
+              version: 'v-child',
+              createdAt: 0,
+              updatedAt: 0,
+            },
+          },
+        ],
+      ],
+      { id: 'forked', parentSession: 'root', isSeeded: true },
+    );
+    expect(forked.turns).toHaveLength(1);
+    expect(forked.turns[0]).toMatchObject({
+      seq: 2,
+      ordinal: 2,
+      text: '來源失敗又打轉、被點踩的那輪',
+      signals: ['negative'],
+      failures: [],
+      longestRun: null,
+      rating: { rating: 'negative', note: '子會話點的' },
+    });
+    const text = report([forked]);
+    expect(text).toContain('// [點踩] 第 2 輪（seq 2）');
+    expect(text).not.toContain('// 失敗：');
+  });
+
+  it('前綴裡來源自己的點踩不讓那一輪留下：那是來源那一份的（#1580）', () => {
+    const reply: Entry = [
+      'assistant/message',
+      { message: { type: 'ai', data: { content: '來源的回答', id: 'm1' } } },
+    ];
+    const forked = draft(
+      [
+        say('來源那輪'),
+        reply,
+        [
+          'feedback/message-put',
+          {
+            item: {
+              messageId: 'm1',
+              rating: 'negative',
+              version: 'v-src',
+              createdAt: 0,
+              updatedAt: 0,
+            },
+          },
+        ],
+        end,
+        ['session/end-seed', { inherited: true }],
+      ],
+      { id: 'forked', parentSession: 'root', isSeeded: true },
+    );
+    expect(forked.turns).toEqual([]);
   });
 
   it('goal 續行輪次標出來：prompt 是機器排的', () => {

@@ -4,7 +4,8 @@
  *   pnpm --filter @nexus/harness run cli --patch src/cli-collision.patch.yml "說點什麼"
  *
  * 獨立成一個模組是因為那條測試要跑**真的入口**——衝突必須從 argv 進來（`--patch`），才驗得到
- * 「錯誤從 registry 一路傳到行程退出碼」這條路徑。測試裡直接呼叫 `loadPlugins` 驗得到衝突規則，
+ * 「錯誤從 registry 一路傳到行程的 stderr」這條路徑。這一列是 `insert` 進來的可少掛列，撞了只讓它自己掉、
+ * 行程照樣跑完，錯誤印在啟動時那段警告裡（#751）。測試裡直接呼叫 `loadPlugins` 驗得到衝突規則，
  * 但驗不到傳播。
  *
  * **兩個 plugin 都在這一個模組裡** 會違反 patch 語義（一個模組對一個 plugin），所以只留一顆。

@@ -1,0 +1,172 @@
+{
+  "id": "2302.10342",
+  "title": "Fantastic Rewards and How to Tame Them: A Case Study on Reward Learning for Task-oriented Dialogue Systems",
+  "topic": "T8",
+  "subarea": "部分分數與過程度量",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Feng、Yang 等人（Salesforce Research／UT Austin，ICLR 2023）把「依自動分數排好序的多條對話軌跡」當成監督，借 learning-to-rank 的 ListNet 與 ListMLE 提出 RewardNet、RewardMLE 兩個 listwise 目標，學出一個逐輪打分、加總後能重現軌跡排序的獎勵模型，再用以獎勵加權的行為複製加上 Gumbel-softmax 策略梯度訓練 MinTL（另試 GALAXY）端到端任務型對話模型。MultiWOZ 2.0 的 Combined Score 從 CASPI 重跑的 104.78 提高到 106.83。",
+  "problem": "以 offline RL 訓練端到端任務型對話（ToD）模型時，獎勵函式怎麼設計一直沒被好好研究。任務型對話只有在對話結束時才拿得到評估結果，既有工作多半手寫一個稀疏獎勵：該輪達成目標給正常數或 0，沒達成給負常數（§2）。回饋延遲讓 RL 難學，實務表現也差。既有的學習式獎勵各有缺點：IRL 假設資料是專家示範，而 GAIL 類方法要在獎勵學習與策略訓練之間反覆交替，對生成模型太貴；pairwise 偏好學習（Christiano 等人、CASPI）每次更新只看兩條軌跡，資訊用得少。另一個障礙在策略端：端到端生成的 action space 是詞彙表（超過 30,000）的笛卡兒積，REINFORCE 的梯度變異數太大，容易發散。對 T8 的意義是：怎麼把只在對話結束才有的任務完成分數，轉成逐輪可用的稠密訊號，也就是部分分數或過程分數的問題。",
+  "core_idea": "把每條對話軌跡的自動評估分數（Combined Score）當成 N 條軌跡之間的排序標籤，訓練一個參數化的逐輪獎勵 R_θ(belief state, 系統回覆, goal)，讓逐輪獎勵加總後的 J(τ) 重現這個排序。RewardNet 用分數的大小（正規化後的分數分佈與 Φ(J) 分佈之間的交叉熵）；RewardMLE 只用名次（Plackett-Luce 似然），對分數雜訊較穩健。pairwise 的 Bradley-Terry 與 CASPI 都是 N=2 時的特例。學好的獎勵模型固定後當成可微分的評分器：Gumbel-softmax 鬆弛讓獎勵模型的梯度直接回傳到生成器，另以學到的獎勵加權資料中的真實回覆做行為複製，讓策略貼近資料（offline RL 的悲觀原則）。折扣因子設成 0，所以不需要 value network。",
+  "method": {
+    "資料與前處理": "MultiWOZ 2.0（train 8,438 則、validation 與 test 各 1,000 則，7 個領域，每則 1–3 個領域）。資料庫查詢結果編成 one-hot 向量（Budzianowski 等人 2018）；採 domain-adaptive delexicalization（Wen 等人 2016）；回覆以 placeholder 生成，例如 [value_name]，沿用 DAMD（Zhang 等人 2020）的做法。",
+    "獎勵模型": "R_θ(o_t, a_t, g)：BART-base 的 encoder 接一個兩層 MLP，輸出經 sigmoid 壓到 [0,1]。輸入是每一輪的 belief state、系統回覆與對話目標 g 串接起來（belief state 屬於觀測 o_t；為了簡化，把對話歷史 h_t 從輸入拿掉，見註 1）。action space 是系統回覆本身而不是 dialogue act，這點與 CASPI 不同，目的是讓梯度能從獎勵模型回傳到生成模型（附錄 G）。逐輪輸出加總成軌跡的累積獎勵 J(τ;θ) = Σ_t R_θ(o_t, a_t, g)，再送進下列 loss。以 HuggingFace 實作。",
+    "軌跡與分數": "每次更新取 N≥2 條同長度的軌跡，每條帶一個自動評估分數 S(τ)，即該軌跡的 Combined Score，再依 S 由高到低排序（論文假設嚴格排序）。只比同長度軌跡的理由是：長度相近約略代表任務複雜度相近，偏好比較才有意義；這是沿用 CASPI 的做法（附錄 G）。訓練時不改變資料中軌跡的長度。",
+    "RewardNet（改編自 ListNet，Eq. 2）": "loss = −Σ_i P_S(τ_i)·log P_J(τ_i)，其中 P_S(τ_i) = S(τ_i)/Σ_k S(τ_k)，直接用分數大小正規化，所以分數必須為正；P_J(τ_i) = Φ(J(τ_i))/Σ_k Φ(J(τ_k))。N=2 且 Φ 為恆等函式時，就是 CASPI 用的 soft pairwise loss；把軟標籤換成硬標籤，就回到 Bradley-Terry 的 pairwise loss（Eq. 1）。",
+    "RewardMLE（改編自 ListMLE，Eq. 3）": "只用排序 y = rank(S)，不用分數大小。loss = −log Π_{i=1..N} [Φ(J(τ_i)) / Σ_{k=i..N} Φ(J(τ_k))]，即 Plackett-Luce 選擇模型下真實排序的負對數似然（軌跡已依 S 排序）。作者認為分數不準時，只用名次會比較穩健。",
+    "Φ（機率轉換）": "Φ 是定義在正實數上的單調正函式，負責把 J 轉成 N 維機率單純形。考慮兩種：softmax（Φ = exp）與 escort transform（Φ = (·)^p，p ∈ {1,2,3,4}）。主結果中，RewardNet 用 N=3、Φ=(·)^1；RewardMLE 用 N=5、Φ=exp。獎勵模型輸出經 sigmoid 落在 [0,1]，所以 escort 的輸入保證為正。",
+    "策略訓練（Eq. 4–6）": "基底是 MinTL（BART，同時輸出 belief state 與回覆，不輸出 dialogue act）。保留 MinTL 的 DST loss ℓ_DST，把回覆生成的 loss 換成 ℓ_GEN = −α·J_GS + ℓ_W，總 loss ℓ = ℓ_GEN + ℓ_DST。(1) ℓ_W = −E_{(h_t,a_t,g)~D}[log π_φ(a_t|h_t)·R_θ(o_t,a_t,g)]：以學到的逐輪獎勵為權重，對資料中的真實回覆做行為複製；與 critic regularized regression 類似，但權重直接用當輪獎勵而不是 value function。(2) J_GS = E_{ε~Gumbel(0,1)}[R_θ(o_t, f_φ(h_t,ε), g)]，f_φ 是在策略 logits 上加 Gumbel 雜訊、以溫度 λ=1 做 softmax 得到的鬆弛 token 分佈，讓獎勵梯度直接回傳到生成器，用來取代變異數高的 REINFORCE。(3) 折扣因子 γ=0，因此回報 G 就是當輪獎勵 R_θ(o_t, ã_t, g)，不必另學 action-value function（作者觀察到學 Q 會帶來不穩定與額外計算）。Table 1 用 α=0.1。",
+    "兩階段流程（附錄 B，Algorithm 1）": "第一階段跑 M1 次：從資料集取 N 條軌跡，以 RewardNet 或 RewardMLE 更新 R_θ。之後固定 R_θ。第二階段跑 M2 次：從資料集取一批 (g, o_t, a_t) 轉移，以 Eq. 6 更新 π_φ。生成模型在訓練集上微調 BART，以驗證集早停。",
+    "超參數（附錄 G，Table 9／10）": "獎勵模型：BART-base；lr 3e-5；梯度裁切 1.0；梯度累積 16；batch 4；context window 2；ReduceLROnPlateau（衰減 0.8、patience 3）；早停計數 7。生成模型：BART-large-cnn（附錄 B 正文寫 BART-large，兩處不一致）；lr 3e-5；梯度裁切 1.0；梯度累積 8；batch 8；context window 2；LambdaLR（衰減 0.8）；早停計數 7；種子 {111, 333, 555, 777, 999}。兩個 BART 都用預設 token 長度 142。其餘超參數與訓練流程沿用 MinTL 與 CASPI 的官方程式碼。",
+    "評估協定": "語料式的端到端回覆生成：Inform rate（系統提供合適實體的對話比例）、Success rate（系統回答了所有被要求資訊的對話比例）、BLEU，以及 Combined Score = (Inform + Success) × 0.5 + BLEU（Mehri 等人 2019）。每組報 5 個種子的平均；附錄 D–F 另列逐種子分數與中位數。另做 DST 品質（Joint Goal Accuracy、Slot Accuracy）與人工評估：隨機抽 50 個 test turn，給 10 位評審看到該輪為止的歷史與各方法匿名的回覆，以 5 點 Likert 評 appropriateness 與 fluency。",
+    "與既有方法的特例關係": "α=0 且 R_θ ≡ 1 時退化為原本的 MinTL；α=0、RewardNet 取 N=2、Φ 為恆等函式時退化為 CASPI。",
+    "論文沒講清楚、重做時要讀程式碼的地方": "(1) N 條軌跡從哪裡來：Algorithm 1 寫「從資料集取樣」，附錄 B 又寫「sampled dialogue rollout」，沒交代同一個 goal 底下是否有多條品質不同的候選（CASPI 的做法是用 K-fold 訓練出的模型生成替代回覆，本文說實作基於 CASPI 程式碼，但正文沒寫）。(2) 單條軌跡的 Combined Score 怎麼算：Inform／Success 在單一對話上是 0 或 1，BLEU 用句級或語料級沒有說明；同分時怎麼排也沒說。(3) Gumbel-softmax 的鬆弛 token 分佈怎麼餵進 BART-base 獎勵模型：我推測是以 soft one-hot 乘上 embedding 矩陣，兩個 BART 共用同一套 BPE 詞彙，但論文沒寫。(4) M1、M2 的數值沒給。"
+  },
+  "assumptions": [
+    "單條軌跡的自動分數（Combined Score，含 BLEU）是有意義的偏好訊號；RewardNet 還要求分數為正，而且分數之間的比例有意義。",
+    "長度相同的軌跡，任務複雜度大致相同，彼此的分數高低可以直接比較。",
+    "獎勵只依當輪的 belief state、系統回覆與使用者 goal 就能判斷，可以丟掉完整對話歷史 h_t。",
+    "離線資料中有標註好的使用者 goal g，可以當作獎勵模型的輸入。",
+    "只約束軌跡總和的排序，學出的逐輪分配就足以引導逐輪最佳化（γ=0 時策略只看當輪獎勵）。",
+    "以獎勵加權的行為複製足以讓策略待在資料分佈附近，避免 offline RL 的分佈偏移。",
+    "語料式評估（使用者語句固定取自真實對話，模型回覆不影響後續輪次）的 Inform／Success 能反映任務完成能力。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.0 端到端回覆生成（train 8,438、val 1,000、test 1,000）",
+      "MultiWOZ 2.1（附錄 F）",
+      "低資源設定：只用 5%、10%、20% 訓練資料（依 Lin 等人 2020 的協定）",
+      "GALAXY 骨幹上的移植實驗（附錄 E）",
+      "玩具實驗：D=30 維類別分佈的獎勵最大化（REINFORCE 與 Gumbel-softmax 的比較）",
+      "人工評估：50 個 test turn、10 位評審"
+    ],
+    "metrics": [
+      "Inform rate",
+      "Success rate",
+      "BLEU",
+      "Combined Score = (Inform + Success) × 0.5 + BLEU",
+      "5 個種子的平均；附錄另列逐種子分數、中位數，Fig. 4 列標準差誤差棒",
+      "DST：Joint Goal Accuracy、Slot Accuracy",
+      "人工：Appropriateness、Fluency（5 點 Likert）",
+      "玩具實驗：目標函數值、梯度估計值、以 500 個樣本估計的梯度變異數"
+    ],
+    "baselines": [
+      "SFN + RL（Mehri 等人 2019）",
+      "DAMD",
+      "SimpleTOD",
+      "MinTL",
+      "SOLOIST",
+      "UBAR（數字取自 Jang 等人 2022 的重現）",
+      "GPT-Critic",
+      "CASPI（本文用官方程式碼重跑，報平均）",
+      "GALAXY（本文以相同 5 個種子重跑）",
+      "pairwise 偏好 loss（N=2 的消融）",
+      "REINFORCE 與真實梯度（玩具實驗）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "MultiWOZ 2.0 上，兩種 listwise 獎勵加上 Gumbel-softmax 的組合分數都高於所有比較對象，而且在 5 個種子上逐一勝過 CASPI。",
+      "numbers": "Table 1（5 種子平均）：RewardNet+GS（N=3, Φ=(·)^1）Inform 92.63／Success 84.32／BLEU 18.35／Combined 106.83；RewardMLE+GS（N=5, Φ=exp）93.09／83.90／18.04／106.54；不加 GS 時 RewardNet 106.27、RewardMLE 106.40（BLEU 18.97 為全表最高）。對照：CASPI 重跑 104.78、GPT-Critic 101.13、UBAR 98.56、MinTL 97.78。Table 5 逐種子：CASPI 103.42–105.81，RewardNet+GS 105.01–109.04，RewardMLE+GS 105.72–107.61；中位數分別為 105.03、106.40、106.51。",
+      "section": "§5.1 Table 1；附錄 D Table 5",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "低資源設定下，只用部分訓練資料的獎勵學習模型明顯勝過 MinTL 與 DAMD；用 20% 資料就追上或超過全資料訓練的 MinTL。",
+      "numbers": "Table 2 的 Combined：5% 時 RewardMLE 90.51、RewardNet 87.11，MinTL 82.20、DAMD 51.15；10% 時 RewardNet 99.05、RewardMLE 98.38，MinTL 87.94；20% 時 RewardMLE 100.24、RewardNet 99.75，MinTL 88.53。全資料的 MinTL 為 97.78（Table 1）。此組不含 GS；基線數字取自 Lin 等人（2020）。",
+      "section": "§5.1 Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "用多條軌跡（N>2）建 listwise loss 可以勝過 pairwise（N=2）；RewardMLE 對 Φ 的選擇較不敏感。",
+      "numbers": "Fig. 2：RewardMLE 在所有試過的 Φ（softmax 與 p=1–4 的 escort）下 Combined 都至少 104；RewardMLE 把 softmax 換成 p=2 的 escort 可到 106.77。各 N 的確切數值只畫在圖上，正文沒給；作者說最佳 N 可能取決於分數品質。",
+      "section": "§5.2 (a)(b)，Fig. 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "策略梯度項的係數 α 在一個範圍內都穩定，任務完成與流暢度對 α 都不太敏感。",
+      "numbers": "Fig. 3：RewardNet+GS 在五個 α 值下 Combined 都至少 105，高於最佳基線 CASPI 的 104.78；把 Table 1 用的 α=0.1 改成 0.5 可到約 107.2。",
+      "section": "§5.2 (c)，Fig. 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "加入 Gumbel-softmax 策略梯度不只提高分數，也降低種子之間的變異，RewardMLE 尤其明顯。",
+      "numbers": "Table 1：RewardNet 106.27 → 106.83、RewardMLE 106.40 → 106.54。Fig. 4 以 5 種子的平均與一個標準差呈現，正文沒給不含 GS 版本的標準差數值（我由 Table 5 算出含 GS 版本的標準差：RewardNet+GS 約 1.83、RewardMLE+GS 約 0.77）。",
+      "section": "§5.2 (d)，Fig. 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "玩具實驗中，REINFORCE 卡在局部最佳、梯度不穩又消失，Gumbel-softmax 則與真實梯度一樣到達全域最佳。",
+      "numbers": "D=R=30，最佳期望獎勵約 0.533；ψ 初始化為 0、每步一個樣本、學習率 1.0。以 500 個樣本估計的梯度變異數：REINFORCE 起初約 1e-2、收斂到約 1e-4；GS 全程約 1e-6。",
+      "section": "§5.2 (d)，Fig. 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "把同一套獎勵學習與利用方法移植到 GALAXY 骨幹，平均與中位數的組合分數都提高。",
+      "numbers": "Table 6（作者以相同 5 個種子重跑 GALAXY）：平均 Combined 從 104.46 提高到 106.57（RewardNet+GS，+2.11）與 107.73（RewardMLE+GS，+3.27）；中位數從 104.96 提高到 107.14 與 107.19。但原版 GALAXY 種子間從 100.07 到 109.47，種子 111 上原版 109.47 高於兩個變體。",
+      "section": "附錄 E，Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "MultiWOZ 2.1 上的平均組合分數也高於 CASPI、UBAR 與 SimpleTOD，但不是每個種子都贏。",
+      "numbers": "Table 7：RewardMLE+GS 107.11、RewardNet+GS 106.62，CASPI 重跑 105.40、UBAR 105.25、SimpleTOD 92.98（UBAR 的 Inform 95.70 高於本文兩個變體的 92.79／92.87）。Table 8：五個種子中有四個至少一個變體勝過 CASPI；種子 999 上 CASPI 107.44 同時勝過兩者。",
+      "section": "附錄 F，Table 7／8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "最佳的軌跡數 N 可能取決於自動分數的品質（§5.2 (a)）。",
+    "學額外的 action-value function 會帶來不穩定與額外計算，所以直接把折扣因子設為 0，等於放棄多輪回報（§3.2）。",
+    "為了簡化獎勵學習，把對話歷史 h_t 從獎勵函式的輸入拿掉（註 1）。",
+    "REINFORCE 估計量雖然不偏，但在大 action space 下變異數高、訓練可能發散，這是改用 Gumbel-softmax 的理由（§3.2）。",
+    "CASPI 原論文報種子中位數；Combined Score 的「中位數」有兩種計算方式（每個種子先算組合分數再取中位數，或分別取 Inform、Success、BLEU 的中位數再組合），定義含糊，所以本文改報平均（附錄 D）。",
+    "GALAXY 原論文沒揭露用了哪些、幾個種子，官方程式碼把種子固定為 10，所以本文無法重現其報告分數（附錄 E）。",
+    "模型會繼承 MultiWOZ 的社經與實體偏誤；BART 帶來的偏誤不在分析範圍內（Ethical Statement）。"
+  ],
+  "limitations_observed": [
+    "學到的逐輪獎勵從沒被當成「分數」驗證過。loss 只約束每條軌跡總和 J(τ) 的排序，逐輪怎麼分配完全不可識別：在同一條軌跡內把獎勵在各輪之間任意挪動，loss 不變。可是策略訓練設 γ=0，策略只最大化當輪獎勵，正好依賴這個沒被約束的分配。論文沒有任何逐輪層級的檢驗：沒有逐輪人工標註比對、沒有與人工判斷的相關、沒有校準，也沒展示獎勵在對話中哪一輪升降。對 T8 而言，這篇只證明「拿它當訓練訊號，最後的語料分數會變高」，不能證明它是可信的過程分數。",
+    "獎勵的監督目標就是測試指標本身。S(τ) 用的是 Combined Score（含 BLEU），測試也用同一個 Combined Score，所以 Table 1 的進步有多少是「對齊評測指標」、有多少是「更會完成任務」分不開。唯一的獨立檢驗是人工評估，但只抽 50 個 turn、10 位評審，只在 turn 層級評 appropriateness 與 fluency，沒評任務是否完成，也沒報評審間一致性與顯著性。",
+    "語料式評估，不是互動式評估。每一輪的使用者語句與歷史都取自真實對話，模型的回覆不會影響下一輪，因此 Success 衡量的是逐輪回覆與 goal、資料庫的比對，而不是真的把任務做完。附錄 A Table 4（SNG1012）裡 GPT-Critic 的回覆已經和真實對話分岔，後面幾輪的評分卻照樣沿用真實歷史，正好露出這個缺口。全文沒有使用者模擬器或真人互動實驗。",
+    "跨論文數字直接並列。Table 1 中 MinTL、SOLOIST、GPT-Critic 等取自原論文，UBAR 取自 Jang 等人的重現，只有 CASPI 是自己重跑。MultiWOZ 的 Inform／Success 在不同評分實作之間差異很大（後來的 arXiv:2106.05555 用統一腳本重算，指出各論文回報值不可直接比較），本文沒交代用的是哪一版評分腳本。低資源 Table 2 的 MinTL、DAMD 也是照抄 Lin 等人（2020）的數字，沒以同一組種子重跑 MinTL 骨幹，所以在 MultiWOZ 上「相對骨幹進步多少」其實沒有受控對照，只有 GALAXY 有。",
+    "超參數看起來是在測試集上挑的。Fig. 2、Fig. 3 的消融都以測試集的 Combined Score 呈現，正文還直接指出 α=0.5 可到約 107.2、RewardMLE 改用 p=2 可到 106.77，卻沒說主結果的 N、Φ、α 是怎麼以驗證集選定的；兩種 loss 還各自用了不同的 N（3 與 5）與 Φ。",
+    "變體之間的差距落在種子雜訊之內，但對 CASPI 的領先站得住。我用附錄 D Table 5 的逐種子數字算：RewardNet+GS 五個種子分布在 105.01–109.04（標準差約 1.83），而 Table 1 四個變體只在 106.27–106.83 之間，「把 RewardNet 換成 RewardMLE 再小幅提升」這類說法撐不住。相對地，以同種子配對比較 CASPI：RewardNet+GS 平均 +2.05（配對 t 約 3.6，df=4），RewardMLE+GS 平均 +1.76（t 約 4.2），都超過 0.05 的門檻 2.78。",
+    "推廣實驗比作者的說法弱。GALAXY（Table 6）：原版本身種子間從 100.07 到 109.47（標準差約 3.5），同種子配對差在種子 111 上是負的（RewardNet+GS −3.29、RewardMLE+GS −2.28），其餘四個種子為正；我算的配對差平均 +2.11 與 +3.27，t 只有約 1.5 與 2.3，沒達到 df=4 的 0.05 門檻。MultiWOZ 2.1（Table 8）：配對 t 約 1.1 與 1.7，種子 999 上 CASPI 同時勝過兩個變體。全文沒有任何顯著性檢定，只用「relatively significant」之類的形容詞。",
+    "低資源結果不單調，而且只報平均。RewardNet 在 10% 資料時 Inform 92.39，到 20% 反而降到 89.83；5% 時 BLEU 12.82 還低於 MinTL 的 13.98。這表示這組數字的變異不小，但 Table 2 沒有離散度。",
+    "「同長度軌跡才可比」等於把不同 goal 的對話放在一起排序（作者用長度近似複雜度）。可是 Combined Score 受 goal 難度與領域數影響很大；如果真是跨 goal 比較，獎勵模型可能學到「哪類 goal 容易拿分」，而不是「哪個回覆比較好」。論文沒區分這兩種訊號來源，也沒做控制 goal 的實驗。",
+    "獎勵模型的輸入需要標註好的使用者 goal g，部署時拿不到。要把它當線上評分器，得先有 T1 的目標推斷，推斷誤差會一路傳進分數；論文沒討論這一點。",
+    "DST 變好的歸因沒有受控。Fig. 7 拿自家模型與 UBAR、GPT-Critic（數字取自 Jang 等人）比 JGA，沒和同設定、同種子的 MinTL 比；DST loss 本身沒變，「更好的獎勵也幫了 DST」只是推測，正文也沒給數值。",
+    "文字與圖號、設定不一致（arXiv v1）。人工評估在 Figure 6，正文卻寫 Fig. 7；種子誤差棒的長條圖是 Figure 4，正文寫 Fig. 5；附錄 B 說生成模型是 BART-large，Table 10 寫 BART-large-cnn。重做時要以程式碼為準。"
+  ],
+  "framework_role": "在 T8「部分分數與過程度量」中，這篇提供一個具體配方：拿軌跡層級的結果分數（由 Inform、Success、BLEU 組成的 Combined Score）當排序監督，學出逐輪的獎勵模型，等於把結果分數「拆」成過程分數。listwise 目標（RewardNet 用分數大小、RewardMLE 只用名次）是 pairwise 偏好學習的推廣，可以直接借用：只要手上有一批跑完、分數可比的軌跡（例如同一題的多次試驗），就能用同樣的 loss 訓練逐步打分器；分數雜訊大時選只用名次的 RewardMLE。它同時是反面教材：(1) 只約束總和的排序，逐步分配不可識別，若要當過程分數使用必須另外驗證（後來的 process reward model 研究改用逐步人工標註，這篇沒有）；(2) 監督目標就是測試指標，有「對齊指標而非提升能力」的風險；(3) 需要已知 goal，線上評分前要先有 T1 的目標推斷。另一個對 T8 直接有用的是多次試驗的聚合：附錄 D 指出 CASPI 報中位數、本文報平均，而組合分數的中位數有兩種計算方式、結果不同；附錄 D–F 的逐種子表也顯示種子間差距（GALAXY 原版跨 9 分）常與方法差距同量級，可當作「多次試驗的分數該報什麼、怎麼報」的實例。主要貢獻屬於訓練（offline RL 的獎勵設計），不是評估方法本身。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "獎勵學習的原料是 MultiWOZ 的人對人對話紀錄（每則附 goal 與逐輪 belief state），先用自動評估指標（Inform、Success、BLEU 組成的 Combined Score）替每條軌跡打分，再把這些分數的排序蒸餾成一個逐輪的學習式評分器；測試時也是拿同一批語料的 test 部分計分。這是靜態語料回流評估，沒有使用者模擬器，模型的回覆也不會回到使用者端，不構成閉環；學到的評分器最後被拿去訓練策略，而不是回報給評估。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。作者來自 Salesforce Research 與 UT Austin，但論文沒有描述任何部署或產品；公開程式碼與 checkpoint 屬於可重現性，不算採納。以標題搜尋只找到 arXiv、OpenReview、NeurIPS 2022 workshop 頁面與摘要整理站，沒有官方產品文件、model card 或官方部落格提到採用。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/Shentao-YANG/Fantastic_Reward_ICLR2023（論文自述公開程式碼與 checkpoint；實作基於 MinTL 與 CASPI 的官方程式碼）",
+    "data": "公開。MultiWOZ 2.0：https://github.com/budzianowski/multiwoz；MultiWOZ 2.1：https://github.com/thu-coai/ConvLab-2/tree/master/data/multiwoz。人工評估的評分資料沒有公開。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "提供「把結果分數拆成逐輪獎勵」的 listwise 配方，以及多種子聚合（平均或中位數）的實例，對 T8 的過程度量有參考價值；但學到的逐輪獎勵從沒被當成分數驗證，監督目標就是測試指標，主要貢獻在訓練而不在評分，所以不是必讀。",
+  "related": [
+    "2103.06370",
+    "2009.12005",
+    "1706.03741",
+    "1907.10016",
+    "1810.00278",
+    "1908.10719",
+    "2111.14592",
+    "2012.03539"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

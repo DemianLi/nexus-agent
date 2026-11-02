@@ -1,0 +1,197 @@
+{
+  "id": "2308.03188",
+  "title": "Automatically Correcting Large Language Models: Surveying the landscape of diverse self-correction strategies",
+  "topic": "T5",
+  "subarea": "外部回饋／工具輔助的修正",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以「語言模型／critic／refine 模型」三角色為骨架，沿錯誤類型、回饋來源、回饋格式、修正時機、修正策略五個軸，把 79 篇以自動回饋修正 LLM 的工作分成訓練期、生成期、事後修正三大類，並整理應用領域與研究缺口的綜述。",
+  "problem": "LLM 會幻覺、推理不忠實、產生有害內容、寫出錯誤程式。以人類回饋修正（RLHF 等）成本高，也沒辦法即時提供回饋；以自動回饋（模型自評、外部模型、工具、知識來源、指標）修正的工作在 2022–2023 年大量出現，但術語與分類各說各話，缺少一張能比較「回饋從哪來、長什麼樣、什麼時候用、怎麼用」的地圖。沒有這張地圖，實作者很難判斷自己的情境該選 reranking、逐步引導解碼、事後改寫，還是直接訓練。",
+  "core_idea": "把所有自動修正方法看成同一條管線：語言模型 M 產生輸出（病人），critic C 對完整或部分輸出給回饋（醫生診斷），refine R 依回饋修輸出或修模型本身（治療）。各方法的差異可以用五個軸完整描述：修什麼錯（幻覺、不忠實推理、有害內容、錯誤程式）、回饋來源（自我回饋 vs 外部：訓練模型、工具、知識、指標）、回饋格式（純量 vs 自然語言）、修正時機（訓練期、生成期、事後）、修正策略與學習方式（self-training、generate-then-rank、feedback-guided decoding、self-refine、外部回饋改寫、多代理辯論；ICL／SL／RL）。作者的核心論點是：外部回饋能補上 LLM 自我回饋看不到的錯（無法取得最新資訊、不會精確計算、不能執行動作），而時機的選擇取決於能不能對中間步驟給出可量化的回饋。",
+  "method": {
+    "性質與版本": "文獻綜述，無新實驗、無程式碼。本筆記依據 arXiv v2（2023-08-30）。正式版刊於 TACL 2024 第 12 卷頁 484–506，標題改為「…Surveying the Landscape of Diverse Automated Correction Strategies」（ACL Anthology 2024.tacl-1.27 已核對）；正式版內容是否增補未核對。",
+    "形式化（§2.1）": {
+      "Language Model": "M: X → Y，輸入 x 對應輸出 ŷ（摘要、答案、程式等）。",
+      "Critic Model": "C: X × Y → F，對輸出或部分輸出產生回饋 c；最簡單是二元好／壞 {0,1}，也可以是實數分數或自然語言。",
+      "Refine Model": "R: X × Y × F → Y，依回饋產生 y_new；也可以不修輸出，改以 fine-tuning 或 RL 直接修 M。"
+    },
+    "收錄準則（§2.7）": [
+      "有明確的回饋評估輸出品質；以自動回饋（外部模型、指標、知識等）為主，人類回饋只收代表作。",
+      "回饋必須被用來改進 LLM：更新參數，或在生成中／生成後改動輸出。",
+      "每篇在 Table 1、Table 2 標註 Source、Format、Strategy、Learning、Iter.（是否迭代）、Application。"
+    ],
+    "收錄分佈（Table 1／2，本筆記逐列計數）": "共 79 篇：訓練期 20（Fine-tuning 8、Self-Training 7、RLHF 5）；生成期 24（Feedback-guided 17、Re-Ranking 7）；事後 35（External Feedback 22、Self-Refine 9、Model Debate 4）。事後修正的 22 篇外部回饋中，來源是 Trained Model 7、External Knowledge 4、Program Executor 4、External Tools 2，Symbolic Solver、LLMs + Human、Oracle Verifier、BMC Tool、External Metrics 各 1；格式 NL 17、Scalar 4、兩者兼有 1。事後 35 篇的學習方式有 25 篇是純 ICL。",
+    "訓練期修正（§3）": [
+      "直接用人類回饋：只拿正評或人改過的輸出做 fine-tune（Sparrow、ILF、ILF-Code），或正負例都帶上回饋一起訓練（Chain-of-Hindsight）；Gao et al. 把人類回饋當 contextual bandit 的 reward。",
+      "RLHF：人標輸出偏好 → 訓練 reward model 模擬人類偏好 → 以 PPO 等 RL 演算法最佳化 LLM。",
+      "外部指標：minimum risk training 把指標分數併入最大概似 loss；SimCLS 以指標分數做對比式 reranking 訓練；BERTTune 以 Gumbel softmax 從 BERTScore 建分佈式語意 reward。作者提醒模型會學到指標本身的弱點（例如 BLEURT 的穩健性缺陷）。",
+      "自我訓練：STaR 讓 LLM 產生 rationale，只留下導向正確答案的那些再 fine-tune，可以迭代；Self-Improve 以 self-consistency 多數決選推理路徑再 fine-tune；RLAIF（Constitutional AI）走 critique → revision → 監督學習，依人訂原則批評並改寫有害回應；AlpacaFarm 用 LLM 提示模擬人類回饋來做 RL；ReST 交替 Grow（從現行策略取樣建資料集）與 Improve（offline RL 最佳化策略）。"
+    ],
+    "生成期修正：Generate-then-Rank（§4.1）": [
+      "取樣 N 個候選 y_i = [z_i, a_i]（推理路徑＋答案），critic 為每條路徑打可信度 s_i，再以排序或投票選出最佳。",
+      "critic 實例：DIVERSE 以 DeBERTa 訓練二元 verifier，答對的路徑當正例，最後對 verifier 判為正確的候選做多數決；Self-Verification 以前向與反向推理結果的一致性評分，不需訓練；RR 從知識庫檢索佐證資訊判斷每條路徑的忠實度；LEVER 以程式本身＋執行結果訓練 verifier 預測 SQL 程式是否正確；CodeT 讓 LLM 同時生成程式與測試，以 dual execution agreement 選程式。"
+    ],
+    "生成期修正：Feedback-Guided Decoding（§4.2）": [
+      "動機：整體層級回饋無法指出錯誤位置、長輸出難評、無法在生成途中介入。",
+      "做法：把輸出拆成步驟 o_1…o_n，每一步由 critic 評 C(x, o_{1:t-1}, o_t)，再用搜尋演算法展開：Tree-of-Thought 用 BFS／DFS；GRACE 與 Xie et al. 用 beam search（每步保留分數 top-k 候選，直到產生最終答案）；CoRe 與 RAP 用 MCTS 平衡探索與利用。",
+      "步驟級 critic 的來源：(1) 人類步驟標註訓練 reward model（Uesato et al. 在 GSM8K 逐步標對錯；Lightman et al. 擴到 80 萬筆步驟級標註）；(2) 合成資料訓練 verifier（正例取自 gold 推理路徑，負例用對齊演算法或文字擾動產生）；(3) 外部指標（MBR decoding、PPLM 以屬性分類器梯度更新、FUDGE 逐 token 重新加權、DiffusionLM 在潛在表示上做梯度更新）；(4) 外部知識（Varshney et al. 每句檢索 Wikipedia 驗證，修正後的句子接回輸入繼續生成下一句；MemPrompt 維護使用者回饋池，依當前查詢的意圖檢索相符回饋並串接進輸入）；(5) 自我評估（ToT 讓 LLM 給 1–10 分或 sure／likely／impossible；Xie et al. 用「這一步推理是 (A) 正確 (B) 錯誤」的選擇題提示）。作者文中寫「四類」卻列出五類。"
+    ],
+    "事後修正（§5）": {
+      "共同迴圈": "先產生完整輸出 → critic 給回饋 → refine 改寫；通常迭代到品質可接受或達到預設的迭代上限。",
+      "Self-Correction（§5.1）": "同一個 LLM 以不同提示擔任生成、回饋、改寫三角色（Self-Refine）；Clinical Self-Verification 以回饋找抽取結果中遺漏或缺乏佐證的項目並刪除缺乏佐證者；Reflexion 加入存放過往回饋與輸出的長期記憶，避免重犯；SelFee 以 ChatGPT 產生回饋與改寫資料，訓練小模型以自迴歸方式一次輸出「答案→回饋→修正版」。",
+      "外部工具與模型（§5.2）": [
+        "程式直譯器：Self-Edit、Self-Evolve 在範例測資上執行初版程式並把結果回灌給 LLM；Self-Debug 比較程式解釋、單元測試、直譯器三種回饋；ALGO 先以窮舉搜尋產生 oracle 參考程式，再比對 LLM 程式與 oracle 在測試輸入上的輸出；Charalambous et al. 以 Bounded Model Checking 定位軟體漏洞，再交給 LLM 修。",
+        "邏輯推理器：Logic-LM 先讓 LLM 把問題轉成邏輯式交給 symbolic solver，再以 solver 回傳的錯誤訊息修正邏輯式；Baldur 以 proof assistant 當回饋來源。",
+        "外部知識：RARR、REFEED 讓 LLM 針對輸出的各面向提問，由檢索器找證據，再依輸出與證據的不一致處改寫；LLM-Augmenter 另外依證據生成指出錯誤位置與修改建議的自然語言回饋；FacTool 把同一套做法擴到程式、數學、文獻回顧。",
+        "訓練過的 critic：CodeRL 把程式合成當 RL，critic 的輸出當作訊號最佳化主模型；REFINER 的 critic 對中間表示逐步給回饋，可轉用在 ChatGPT 等更大的任務模型上；RL4F 固定下游任務模型，先以監督學習訓練 critic 產生回饋，再以改寫後正確率（或與標準答案的比較）當 reward 做策略最佳化；FLIRT 以影像分類器的訊號引導 LLM 產生紅隊提示。",
+        "多工具整合：CRITIC 在同一框架內用程式直譯器、搜尋引擎與外部知識、計算機，以及 LLM 的自然語言回饋，各管不同面向。"
+      ],
+      "Multi-Agent Debate（§5.3）": "多個 LLM 副本各自產生答案與理由；把全部回應彙整成脈絡交給每個代理改寫；多輪後收斂到共同答案（Du et al.）。PRD 以所有答案對的 pairwise 偏好產生 peer rank；LM vs LM 讓 examiner LLM 以多輪交叉詰問找出 generator 的事實錯誤。"
+    },
+    "作者的選型邏輯": [
+      "訓練期：最根本，但受三個條件限制：封閉原始碼大模型無法 fine-tune、訓練時可能拿不到回饋、回饋必須可最佳化（例如數值分數）。",
+      "生成期：前提是 critic 能對中間步驟給準確、可量化的回饋；推理與證明類任務適合。",
+      "事後：不需權重、最有彈性，也最能利用詳細的自然語言回饋（可解釋性高）；摘要這類只能整體評估的任務只能走這條。",
+      "§7.3 建議組合：用事後修正蒐集最常犯的錯誤與其修正，當作資料定期做訓練期修正，把反覆出現的問題永久修掉。"
+    ],
+    "照做要點（本筆記整理，給 T5 實作者）": [
+      "每個修正器都記下五個軸的取值（修什麼、回饋來源、格式、時機、策略）；這份綜述的表格欄位可直接當 T5 修正器登錄表的 schema。",
+      "另外加一欄綜述沒有的「訊號可靠度」：oracle 標籤、確定性執行（編譯器、solver）、LLM 自產測資的執行、檢索證據、LLM 自評，各自可靠度差很多，而綜述的 Source 欄把它們混在一起（見 limitations_observed）。",
+      "要逐步介入就必須先有步驟級 critic；沒有的話只能退到事後修正或 generate-then-rank。",
+      "小模型當 refine 模型時，即使回饋正確也可能改不好（§5.1），因此 critic 與 refine 可以分開選模型。"
+    ]
+  },
+  "assumptions": [
+    "LLM（至少是大模型）具備依回饋改寫輸出的能力；作者自己承認小型開源模型常常做不到。",
+    "自動回饋的品質足以替代人類回饋；綜述大多引用各篇自報的增益，沒有檢驗回饋本身的準確率。",
+    "五個分類軸彼此獨立，且足以區分各方法；實際上 Source 欄混合了「誰產生回饋」與「回饋以什麼為依據」兩件事。",
+    "錯誤可以在單一輸出（或單一推理鏈）範圍內被偵測與修正；多輪互動、跨回合狀態的修正基本上不在分類框架內。",
+    "各篇報告的增益可以直接並列比較；綜述沒有統一基準、成本或評估設定的正規化。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "無：綜述本身不跑實驗",
+      "文中提及各方法的評估情境：GSM8K（步驟級 reward model、generate-then-rank、feedback-guided decoding）、知識密集 QA（RARR、LLM-Augmenter）、程式生成（Self-Debug、Self-Edit、Olausson et al.）、機器翻譯後編輯、摘要事實性、毒性"
+    ],
+    "metrics": ["無自訂指標；§7.2 明說目前缺少衡量自我修正能力的統一量化指標"],
+    "baselines": ["不適用；範圍上與 Fernandes et al. 2023 的人類回饋綜述做切分（本篇只管自動回饋）"]
+  },
+  "key_results": [
+    {
+      "claim": "所有自動修正方法都能套進「語言模型產生輸出、critic 診斷給回饋、refine 修輸出或修模型」的三角色管線，並以五個軸分類。",
+      "numbers": "3 個角色、5 個分類軸、4 類錯誤、2 類回饋來源（外部再分 4 種）、2 種格式、3 種時機",
+      "section": "§2.1–§2.6、Figure 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "訓練期修正雖最根本，但實務上受三個條件限制；因此大多數新方法落在不需權重的生成期與事後修正。",
+      "numbers": "三個限制：無法 fine-tune 封閉原始碼大模型、訓練時拿不到回饋、回饋必須可最佳化；收錄 79 篇中訓練期 20、生成期 24、事後 35",
+      "section": "§2.5、Table 1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "Generate-then-rank 只給整體層級回饋，無法定位錯誤、長輸出難評、無法在生成中介入；因此出現以步驟級 critic 搭配搜尋（BFS／DFS、beam、MCTS）的 feedback-guided decoding。",
+      "numbers": "3 項限制；生成期 24 篇中 feedback-guided 17 篇、re-ranking 7 篇；步驟級人類標註資料最大到 80 萬筆（Lightman et al.）",
+      "section": "§4.2、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "同一模型自我修正需要強大的 LLM；較小的開源模型即使拿到正確回饋也常常改不好，因此出現專門訓練自我修正能力的做法（SelFee）。",
+      "numbers": "無具體數字（引 Madaan et al. 2023 的觀察）；事後修正中 Self-Refine 類 9 篇",
+      "section": "§5.1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "自我回饋的品質受限於 LLM 本身的限制（無法取得最新資訊、不能執行動作、不會精確計算），這是轉向程式直譯器、邏輯推理器、檢索、訓練 critic 等外部回饋的理由；外部回饋是事後修正的主流。",
+      "numbers": "事後 35 篇中外部回饋 22 篇：Trained Model 7、External Knowledge 4、Program Executor 4、External Tools 2、其他 5 種各 1；格式 NL 17、Scalar 4",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "程式自我修復的瓶頸在回饋階段而不在改寫：只有回饋來自專業人類程式設計師或 GPT-4 時才看到顯著提升。",
+      "numbers": "無具體數字（引 Olausson et al. 2023 的結論）",
+      "section": "§6.3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "自我修正研究嚴重偏向算術推理與程式碼，作者歸因於中間步驟與程式容易驗證；歸納、溯因推理幾乎沒人做。",
+      "numbers": "生成期 24 篇中 7 篇應用是算術推理；事後 35 篇中 6 篇專做程式生成、1 篇軟體驗證；與對話相關的只有 4 篇（Sparrow、RLAIF、SelFee、REFEED）",
+      "section": "§6.2、Table 1、Table 2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "目前缺少衡量自我修正能力的穩健量化指標與統一比較，也沒有診斷用基準；作者建議評估要考慮任務複雜度、初始錯誤程度、修正後的品質提升。",
+      "numbers": "無數字（研究缺口）",
+      "section": "§7.2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "自我修正能力缺乏理論解釋；與模型的後設認知（知道自己知道什麼）與校準有關，但 RLHF 後的模型需要調溫度才校準（§7.1）。",
+    "缺少衡量自我修正能力的量化指標、統一比較與診斷基準；各策略的有效性、適用範圍、複雜度與上限都沒有在同一情境下比過（§7.2）。",
+    "自我訓練多半只做一次修正、只看單一面向；持續自我改進下的穩定性未知，可能有災難性遺忘，或修一個行為時改壞先前修好的行為（§7.3）。",
+    "模型編輯可做細粒度修正，但泛化不穩健且有非預期副作用（§7.4）。",
+    "幾乎所有工作只在文字模態；多模態自我修正剛起步（§7.5）。",
+    "同一模型自我修正需要強大 LLM，小型開源模型即使拿到正確回饋也改不好（§5.1）；自我回饋受 LLM 本身限制（§5.2）。",
+    "生成期修正依賴 critic 能對中間輸出給準確的量化回饋，摘要這類只能整體評估的任務做不到（§5 開頭）。",
+    "以 NLI 等監督式工具當外部回饋時，工具本身的品質有疑慮（§6.2）。",
+    "訓練期修正受三個條件限制：封閉原始碼模型不能 fine-tune、訓練時拿不到回饋、回饋必須可最佳化（§2.5）。"
+  ],
+  "limitations_observed": [
+    "對「內在自我修正」幾乎沒有批判，而且分類本身會掩蓋 oracle 洩漏：Table 2 把 Reflexion、RCI 放在 Self-Refine 類、回饋來源標為 Language Model，但 Huang et al.（2310.01798，第 97、240 行）指出這兩篇都拿正確答案標籤決定何時停止自我修正迴圈；Reflexion 在 HotpotQA 的訊號是跟標準答案做 EM 比對、在程式任務是執行測試，本質上是外部回饋。同一張表還把 Reflexion 的學習方式標成 RL，但它不更新權重。照這張表選型的人會高估「只靠模型自評」的效果。",
+    "Source 欄混用了「誰產生回饋」與「回饋以什麼為依據」：CodeT 標為 Program Executor，但它的測試案例是 LLM 自己生成的；ALGO 的 Oracle Verifier 其實是 LLM 以窮舉搜尋寫出的參考程式；Reflexion 的程式任務同樣用自產測試。確定性執行、LLM 自產測資、ground-truth 標籤三者的可靠度差很多，Olausson et al.（綜述自己在 §6.3 引用）正好說明瓶頸就在回饋品質，但分類框架沒有「訊號可靠度」這一維，這對 T5 的觸發設計是最關鍵的缺口。",
+    "多代理辯論「優於自我修正」的說法（§5.3，引 Du et al.）照單全收，沒有比對相同推論成本的基準；Huang et al. 後來發現在相同回應數下，辯論只比 self-consistency 略好（第 437–438 行）。綜述全文也沒有討論任何方法的呼叫次數、延遲或 token 成本，但對即時對話代理來說，「事後修正最有彈性」的結論恰恰忽略了多輪呼叫的延遲。",
+    "沒有任何量化彙整：79 篇只做定性分類，沒有列出各方法的增益幅度、基準或模型，讀者無法從這篇判斷哪個策略在哪個情境下實際有效；§7.2 把這件事列為未來方向，但這本來就是綜述可以做的。",
+    "框架以單次輸出為單位，幾乎不涵蓋多輪對話與代理軌跡：79 篇中只有 RCI（電腦任務）、Reflexion、ICL-AIF（議價遊戲）涉及多步互動，與對話相關的只有 4 篇；「修正結果如何回寫對話狀態」「軌跡中哪個訊號觸發修正」都沒有被當成分類軸。拿它來對應本框架的 T2、T4 只能類比。",
+    "內部小錯：§4.2 說步驟級 critic 分四類，實際列了五類（人類回饋 reward model、合成資料 verifier、外部指標、外部知識、自我評估）；§2.5 有錯字「gaint」。本快取版本中 Table 2 的 Iter. 欄全部空白（勾選符號在轉換時遺失），無法確認哪些方法被標為迭代。",
+    "時間點限制：v2 定稿於 2023-08，早於 Huang et al. 2023（2310.01798）與 Kamoi et al. 2024（2406.01297）這類「公平設定下內在自我修正無效」的批判研究；後者在範圍上以推論期為主、承認訓練策略的廣度不如本篇，但在「什麼證據才算自我修正有效」上比本篇嚴格得多。TACL 正式版是否補上這些討論未核對。"
+  ],
+  "framework_role": "T5 節點的全景地圖與分類詞彙，不是可直接部署的方法。它提供三件可用的東西：(1) critic／refine 分離的抽象，對應 T5 內部「偵測」與「修正」兩個元件可以各自選模型；(2) 時機軸（訓練期／生成期／事後）與回饋來源軸，可直接當 T5 修正器登錄表的欄位；(3) §5.2 列舉的外部回饋種類（程式直譯器、solver、檢索、訓練 critic、多工具整合）正好是本子領域「外部回饋／工具輔助的修正」的候選清單。它的弱點（未區分訊號可靠度、未處理多輪狀態）需要以 2310.01798、2406.01297 補上。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "綜述的 critic 定義明確涵蓋「部分輸出」，生成期的 feedback-guided decoding 就是在推理軌跡上逐步評分 C(x, o_{1:t-1}, o_t)，分數低的步驟被剪掉或回溯，再以 beam search、BFS／DFS、MCTS 改走別的分支；這是「軌跡中偵測到異常而觸發修正」的直接形式。§4.2 還整理了步驟級異常偵測器的五種來源（人類標註 reward model、合成資料 verifier、外部指標、外部知識、LLM 自評）。"
+    },
+    {
+      "edge": "E2",
+      "how": "綜述整理的幾種做法會把修正結果寫回後續生成的狀態：Varshney et al. 把修正後的句子接回輸入，連同先前生成的內容一起繼續生成下一句；Reflexion 把過往回饋與輸出存進長期記憶供下次嘗試使用；MemPrompt 維護使用者回饋池、依意圖檢索後串接進輸入。綜述只以一兩句話描述，沒有討論回寫的格式或衝突處理。"
+    },
+    {
+      "edge": "E5",
+      "how": "只停留在研究缺口的提議，沒有實作：§7.2 主張評估自我修正要記錄任務複雜度、初始錯誤程度、修正後的品質提升，這需要逐次的修正紀錄；§7.3 建議把事後修正蒐集到的常犯錯誤與修正當作資料，定期回饋訓練期修正。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。本篇是綜述，沒有方法、產品或部署；作者維護的 GitHub 閱讀清單與刊登於 TACL 2024 都屬學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "不適用：綜述沒有實驗資料。作者在結論中提供持續更新的閱讀清單 https://github.com/teacherpeterpan/self-correction-llm-papers（論文自述，本筆記未開啟確認），性質是文獻列表而非程式碼。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "給了 T5 可直接沿用的分類詞彙與外部回饋工具清單，但沒有新證據、沒有量化彙整，把用了 oracle 標籤的方法歸在自我回饋類而未加批判，定稿又早於關鍵的批判研究；T5 的設計判斷應以 2310.01798、2406.01297 為準，本篇當地圖參考即可。",
+  "related": [
+    "2303.17651",
+    "2303.11366",
+    "2305.11738",
+    "2304.05128",
+    "2306.09896",
+    "2305.20050",
+    "2305.10601",
+    "2305.14325",
+    "2302.12813",
+    "2210.08726",
+    "2307.13528",
+    "2305.12295",
+    "2304.01904",
+    "2303.17491",
+    "2211.00053",
+    "2212.08073"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

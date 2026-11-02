@@ -1,8 +1,9 @@
 /**
  * 測試用的假 plugin 與假擴充內容。只給本套件的測試用，不從 `index.ts` 對外匯出。
  *
- * 衝突單測用的一次性假 plugin 全部留在這裡——真的 workspace plugin（證明契約沒有
- * 偷偷要求你伸手進 harness 內部的那一個）是 `packages/nexus-plugin-echo` 的事。
+ * 衝突單測用的一次性假 plugin 全部留在這裡——真的 workspace plugin 是各個 `packages/nexus-plugin-*` 的事。
+ * `packages/nexus-plugin-echo` 已經不是 `NexusPlugin`（#1416 PR 2 起它是樹上的函式插件，證明的是 SDK 契約
+ * 沒有要求你伸手進 harness 內部），所以這裡不再拿它當 `NexusPlugin` 的真實例子。
  */
 
 import type { FeedbackService } from './feedback.js';
@@ -10,6 +11,8 @@ import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import { z } from 'zod';
+import { SESSION_EVENT_MAX_DEPTH, SessionLog } from './session-log.js';
+import type { SessionEvent, SessionEventType } from './session-log.js';
 import type {
   AgentMiddleware,
   NexusPlugin,
@@ -45,7 +48,7 @@ export function fakeSubAgent(name: string): SubAgent {
 /**
  * 包一個 plugin，回傳掛著它的**條目**——清單收的是條目，所以測試直接把它放進 `plugins` 即可。
  *
- * 不收 `config`：假 plugin 沒有 `Config`，給了 config 是錯誤（見 `plugin.ts` 的 `parseEntryConfig`）。
+ * 不收 `config`：假 plugin 沒有 `Config`，給了也不驗、原樣交給 `apply`（見 `plugin.ts` 的 `parseEntryConfig`）。
  * 要驗設定那條路的測試自己寫條目。
  *
  * @param name - plugin 名，不必唯一。
@@ -134,9 +137,43 @@ export function fakeSink(
 /** 一份什麼都不寫的回饋規則：拿它的測試只看它佔不佔得住那個位子。 */
 export function fakeFeedback(): FeedbackService {
   return {
-    put: () => ({ ok: false, error: { code: 'target-not-found', messageId: 'm' } }),
-    delete: () => ({ ok: true, value: { absent: true } }),
-    list: () => ({ ok: true, value: { items: [] } }),
-    record: () => ({ ok: true, value: { recorded: true } }),
+    put: () => Promise.resolve({ ok: false, error: { code: 'target-not-found', messageId: 'm' } }),
+    delete: () => Promise.resolve({ ok: true, value: { absent: true } }),
+    list: () => Promise.resolve({ ok: true, value: { items: [] } }),
+    record: () => Promise.resolve({ ok: true, value: { recorded: true } }),
   };
+}
+
+/**
+ * 從 seed 接上一份「舊日誌」：事件不經 `append`，所以不受寫入那一關的深度上限（`SESSION_EVENT_MAX_DEPTH`）。
+ *
+ * 上限出現之前寫下的日誌可能有更深的事件，續接之後讀方要照樣吃得下（#1661）。深巢狀的讀方測試用這個造資料，
+ * 不然 `append` 先拒了，讀方那一刀拿掉也紅不起來。
+ *
+ * @param sessionId - 會話 id。
+ * @param entries - 依序的事件種類與 data；`seq` 照位置、`time` 照 seq。
+ * @returns 接上 seed 的日誌（末尾多一顆 `session/end-seed`）。
+ */
+export function resumedLog(
+  sessionId: string,
+  entries: readonly (readonly [type: SessionEventType, data: unknown])[],
+): SessionLog {
+  const seed = entries.map(
+    ([type, data], seq) => ({ type, seq, time: seq, data }) as unknown as SessionEvent,
+  );
+  return new SessionLog(sessionId, { seed });
+}
+
+/**
+ * 日誌那一關一定拒收的值：物件與陣列交錯巢狀 {@link SESSION_EVENT_MAX_DEPTH} 層（#1665）。它自己就在上限上，放進任何
+ * 一顆事件的 `data` 裡都至少再多一層，`append` 當場拋 `TypeError`（#1661）。用真的拒收、不 mock `append`，同 dsh 拿真的否決測。
+ *
+ * @returns 那個值。
+ */
+export function pastLogDepthCap(): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < SESSION_EVENT_MAX_DEPTH; level++) {
+    value = level % 2 ? { next: value } : [value];
+  }
+  return value;
 }

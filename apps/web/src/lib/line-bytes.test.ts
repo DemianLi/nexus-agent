@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { bytesOfBase64, createLineDecoder, startsWithBom, utf8Length } from '@/lib/line-bytes';
+import { createLineDecoder, startsWithBom, utf8Length } from '@/lib/line-bytes';
 import type { LineChunk } from '@/lib/line-bytes';
 
 /**
@@ -32,15 +32,6 @@ describe('utf8Length', () => {
       expect(utf8Length(text)).toBe(encode(text).length);
     },
   );
-});
-
-describe('bytesOfBase64', () => {
-  it('解回原本的位元組，含 0x00 與 0xff', () => {
-    const bytes = new Uint8Array([0, 1, 0x0a, 0xff, 0xef, 0xbb, 0xbf]);
-    const base64 = btoa(String.fromCharCode(...bytes));
-    expect([...bytesOfBase64(base64)]).toEqual([...bytes]);
-    expect(bytesOfBase64('').length).toBe(0);
-  });
 });
 
 describe('createLineDecoder', () => {

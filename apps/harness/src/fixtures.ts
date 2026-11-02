@@ -2,21 +2,44 @@
  * 組裝點測試用的假 plugin。只給本套件的測試用，不從 `index.ts` 對外匯出。
  *
  * 正面路徑要兩個 plugin：一個是 `packages/nexus-plugin-echo`（真的 workspace package，
- * 零 harness import——那是「契約沒有偷偷要求你伸手進組裝點內部」的證據），另一個就是
+ * 零 harness import、零 `@nexus/core` import——那是「契約沒有偷偷要求你伸手進組裝點內部」的證據；
+ * #1416 PR 2 起它是樹上的函式插件，經 `echo.fixture.ts` 的外殼或橋接列進清單），另一個就是
  * 這裡的 fixture。兩邊都要呼叫得到，才算證明了「一份清單 fold 出來的 agent 真的把各
  * plugin 的工具都接上了」。
  */
 
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { CommandRegistrationPoint, PluginEntry } from '@nexus/core';
-import type { PendingApproval, PendingInput, WireClient } from '@nexus/wire';
-import { createWireClient, isApprovalPending } from '@nexus/wire';
-import { createRegistry } from '@nexus/core';
+import type {
+  ConversationState,
+  Event,
+  PendingApproval,
+  PendingInput,
+  WireClient,
+} from '@nexus/wire';
+import {
+  createWireClient,
+  emptyConversation,
+  isApprovalPending,
+  reduceConversation,
+} from '@nexus/wire';
+import { createHostServicesPlugin, createRegistry } from '@nexus/core';
+import { createPlanModePlugin } from '@nexus/plugin-plan-mode';
 import { StateBackend } from 'deepagents';
+import type { FileData } from 'deepagents';
 import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
-import { loadPluginConfig } from './plugin-config.js';
+import { loadPluginConfig, serveShippedConfigPath } from './plugin-config.js';
+import type { ScriptedTurn } from './scripted-model.js';
+import { serverLogBody, serverLogLevel } from './server-log-line.js';
+import { scriptedModelPlugin } from './settings/scripted-model.js';
+import type { AttachSessions } from './session-attach.js';
+import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
 
 /**
  * 出貨那份清單，載一次就快取。
@@ -33,12 +56,198 @@ import { loadPluginConfig } from './plugin-config.js';
  * 都是模組層級的常數（設定是條目上的資料，不在閉包裡），所以兩次組裝共用同一顆 plugin 物件
  * 跟以前共用 `DEFAULT_PLUGINS` 那份模組常數（#454 之前）是同一回事。
  *
+ * **出貨清單一列都不該掉**（#751 之後載入是逐列掉的）：掉了一列的話，測試會安靜地拿到一份少了東西的清單，
+ * 所以這裡照樣拋，而不是交出殘缺的那一份。
+ *
  * @returns 出貨清單，跟產品路徑上零設定時組出來的那一份相同。
  */
 let shipped: Promise<readonly PluginEntry[]> | undefined;
 export function shippedPlugins(): Promise<readonly PluginEntry[]> {
-  shipped ??= loadPluginConfig();
+  shipped ??= loadPluginConfig().then(({ plugins, dropped, ignoredConfig }) => {
+    const problems = [
+      ...dropped.map((drop) => drop.message),
+      ...ignoredConfig.map((row) => `${row.id} 寫了沒有作用的 config`),
+    ];
+    if (problems.length > 0) throw new Error(`出貨清單有列沒掛上：${problems.join('；')}`);
+    return plugins;
+  });
   return shipped;
+}
+
+/**
+ * 出貨清單拿掉 `time-context` 那一列（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）。
+ *
+ * 那一列每次 agent 呼叫開頭追加一則帶**牆鐘時間**的使用者訊息，所以：數訊息／數事件／數輪數的測試多一格，
+ * 「兩次跑出來逐位元組相同」的測試（重啟對照、相容層對照）因為兩次取樣的秒數不同而不再相同。這些測試問的是別的事，
+ * 時間讀數本身的驗收（文字、節流、續接、前綴快取、接線紅燈）在 `time-context-on-tree.test.ts`，用固定時鐘跑。
+ *
+ * 用法：不相干的測試把 `await shippedPlugins()` 包一層；**要驗時間讀數的測試不要包**。走 `--patch` 的測試改在 patch 裡寫
+ * `- id: time-context` ＋ `disabled: true`（{@link TIME_CONTEXT_OFF_PATCH_ROWS}）。
+ *
+ * @param plugins - 出貨清單（任何一份）。
+ * @returns 少了 `time-context` 的同一份清單，其餘順序不變。
+ */
+export function withoutTimeContext(plugins: readonly PluginEntry[]): readonly PluginEntry[] {
+  return plugins.filter((entry) => entry.id !== 'time-context');
+}
+
+/** {@link withoutTimeContext} 的 patch 版：接在任何一份 patch 文字後面，把那一列關掉。 */
+export const TIME_CONTEXT_OFF_PATCH_ROWS = '- id: time-context\n  disabled: true\n';
+
+/**
+ * **serve 的**出貨清單：出貨那一層加上 serve 專屬層（`cordis.serve.yml`，#669 第 4 步），跟 `serve` 零設定時組出來的那一份相同。
+ * 要測「serve 才有的列」（每一輪的改動紀錄）用這一份；CLI 的測試用 {@link shippedPlugins}。同樣只讀出貨層、不疊 patch，同樣一列都不能掉。
+ *
+ * @returns serve 的出貨清單。
+ */
+let shippedServe: Promise<readonly PluginEntry[]> | undefined;
+export function shippedServePlugins(): Promise<readonly PluginEntry[]> {
+  shippedServe ??= loadPluginConfig({ shippedLayers: [serveShippedConfigPath()] }).then(
+    ({ plugins, dropped, ignoredConfig }) => {
+      const problems = [
+        ...dropped.map((drop) => drop.message),
+        ...ignoredConfig.map((row) => `${row.id} 寫了沒有作用的 config`),
+      ];
+      if (problems.length > 0) throw new Error(`serve 出貨清單有列沒掛上：${problems.join('；')}`);
+      return plugins;
+    },
+  );
+  return shippedServe;
+}
+
+/**
+ * 部署方把全開那一組加回權限表的 patch（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）：出廠表只有
+ * `read-only` 與 `workspace-write`，要量「加回之後跟今天一樣」的測試疊這一份。serve 的測試直接 `--patch` 它。
+ */
+export const FULL_ACCESS_PATCH = fileURLToPath(
+  new URL('./presets-full-access.patch.yml', import.meta.url),
+);
+
+/**
+ * 出貨清單疊上 {@link FULL_ACCESS_PATCH}：跟部署方用 `--patch` 加回全開之後組出來的那一份相同。
+ * 走真的 patch 載入路徑，不在這裡手改條目——patch 檔寫壞了，這裡就拋。同樣一列都不能掉。
+ *
+ * @param options.serve - 底下是 serve 的出貨清單（{@link shippedServePlugins}）；省略是 CLI 的（{@link shippedPlugins}）。
+ * @returns 權限表含 `danger-full-access` 的出貨清單。
+ */
+const shippedFullAccess = new Map<boolean, Promise<readonly PluginEntry[]>>();
+export function shippedPluginsWithFullAccess(
+  options: { readonly serve?: boolean } = {},
+): Promise<readonly PluginEntry[]> {
+  const serve = options.serve ?? false;
+  let loaded = shippedFullAccess.get(serve);
+  if (loaded === undefined) {
+    loaded = loadPluginConfig({
+      ...(serve && { shippedLayers: [serveShippedConfigPath()] }),
+      overlays: [FULL_ACCESS_PATCH],
+    }).then(({ plugins, dropped, ignoredConfig }) => {
+      const problems = [
+        ...dropped.map((drop) => drop.message),
+        ...ignoredConfig.map((row) => `${row.id} 寫了沒有作用的 config`),
+      ];
+      if (problems.length > 0) throw new Error(`加回全開的清單有列沒掛上：${problems.join('；')}`);
+      return plugins;
+    });
+    shippedFullAccess.set(serve, loaded);
+  }
+  return loaded;
+}
+
+/**
+ * 出貨清單上某一列的設定換成 `config`（整份替換）：跟部署方用 `--patch` 改那一列之後組出來的相同。
+ *
+ * **走真的 patch 載入路徑，不手改條目**（#1491）：樹上的函式插件那一列是橋接列，直接 `{ ...entry, config }` 蓋掉條目的設定
+ * 不會生效（樹上那一列的設定來自載入器，不是條目物件），所以要換設定一律走 patch。patch 檔寫在暫存目錄，載完就刪。
+ *
+ * @param rowId - 要換設定的列 id。
+ * @param config - 那一列新的設定。
+ * @returns 其餘照出貨清單的清單。
+ */
+export async function shippedPluginsWithConfig(
+  rowId: string,
+  config: object,
+): Promise<readonly PluginEntry[]> {
+  const dir = await mkdtemp(join(tmpdir(), 'nexus-patch-config-'));
+  try {
+    const patch = join(dir, 'row.patch.yml');
+    // JSON 是合法的 YAML：不必在這裡再寫一份序列化。
+    await writeFile(patch, JSON.stringify([{ id: rowId, config }]));
+    const { plugins, dropped } = await loadPluginConfig({ overlays: [patch] });
+    if (dropped.length > 0) {
+      throw new Error(`換設定的清單有列沒掛上：${dropped.map((drop) => drop.message).join('；')}`);
+    }
+    return plugins;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * 出貨清單上那一列假模型（id `cli-script`，腳本是它的 config，#670）。
+ *
+ * **給自己寫清單的測試**：直接餵 `createCliAgent` 一份手寫的條目（不是出貨清單）時，清單上沒有任何模型來源，
+ * `agent-default-model` 的預設值指的那一列不存在，組裝當場拋——以前這裡會悄悄退回程式碼裡的腳本，現在沒有那條退路。
+ * 要假模型就把這一列放進自己的清單，拿到的就是產品出貨的那份腳本。
+ *
+ * @returns 出貨的 `cli-script` 條目。
+ * @throws {Error} 出貨清單上找不到那一列——改了名，這裡要跟著改。
+ */
+export async function shippedModelRow(): Promise<PluginEntry> {
+  const row = (await shippedPlugins()).find((entry) => entry.id === 'cli-script');
+  if (row === undefined) throw new Error('出貨清單上沒有 cli-script 那一列');
+  return row;
+}
+
+/**
+ * 在出貨清單上**換一顆腳本模型**：插一列腳本提供者（`#settings/scripted-model`，腳本當 config）、把
+ * `agent-default-model` 指過去——同 dsh 的 headless e2e（`source-tool.built.e2e.ts:36-42`）與
+ * `serve-scripted-provider.test.ts` 那份 patch 的形狀，只是這裡直接改條目、不經檔案。
+ *
+ * **給「要在產品組裝（`createCliAgent`）上跑一條自訂工具回合」的測試**（[#670](https://github.com/DemianLi/nexus-agent/issues/670)）：
+ * 組裝是真的，只換模型。要讀模型實例（`boundToolNames`、`prompts`）就用 `createCliAgent` 回傳的 `model`。
+ * 腳本是資料（`ScriptedTurn` 的 `content`／`toolCalls`／`usage`／`error`）；要共用 `shared` 狀態的案例留在手搭的組裝上。
+ *
+ * @param plugins - 底下那份清單，通常是 {@link shippedPlugins}。
+ * @param turns - 腳本。
+ * @returns 換好模型的清單，原清單不動。
+ * @throws {Error} 清單上找不到選擇列——出貨清單改了名，這裡要跟著改，不要靜靜退回出貨的腳本。
+ */
+export function withScriptedModel(
+  plugins: readonly PluginEntry[],
+  turns: readonly ScriptedTurn[],
+): PluginEntry[] {
+  const providerId = 'test-script';
+  let selected = false;
+  const rows = plugins.map((entry) => {
+    if (entry.id !== 'agent-default-model') return entry;
+    selected = true;
+    return { ...entry, config: { provider: providerId } };
+  });
+  if (!selected) throw new Error('清單上沒有 agent-default-model 那一列，換不了模型');
+  return [...rows, { id: providerId, plugin: scriptedModelPlugin, config: { turns } }];
+}
+
+/**
+ * 「有人在答」的答題管道，給掛了 `ask-user` 的測試用（[#669](https://github.com/DemianLi/nexus-agent/issues/669)）。
+ * 工具沒有人提供 `channel` 時在呼叫當下拒絕，所以要實際問問題的測試得明著交一份，放在 `ask-user` 前面（它載入時就讀）。
+ * 經 `createCliAgent` 的測試不需要：那條路徑自己算一份交出去。
+ */
+export const humanChannelPlugin = (): PluginEntry =>
+  createHostServicesPlugin({ channel: { kind: 'human' } }, 'test-human-channel');
+
+/**
+ * 給**直接呼叫 `loadPlugins`** 的測試：出貨清單的 `system-prompt` 那一列折進 thread 時要讀這次組裝的 `model`／`cwd`（#720、#1477），
+ * 產品路徑上由 `createNexusAgent` 交；直接載清單的測試沒有經過它，自己補一份，放最前面，跟產品路徑同一個位置。
+ * 經 `createNexusAgent` 或 `createCliAgent` 的測試不需要這個——那兩個入口自己交，再交一份後者蓋掉前者。
+ *
+ * @param plugins - 要載的清單，通常是出貨的那一份。
+ * @returns 前面多一顆交預設值的條目。
+ */
+export function withSystemPromptVariables(plugins: readonly PluginEntry[]): PluginEntry[] {
+  return [
+    systemPromptDefaultsEntry({ model: 'test-model', cwd: '/' }, 'test-system-prompt-variables'),
+    ...plugins,
+  ];
 }
 
 /**
@@ -50,6 +259,13 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
  *
  * @returns 一個空的註冊點，只露出這條線用得到的兩支。
  */
+/**
+ * 「這條 thread 什麼都不接」：手搭 `ThreadAgent` 的測試用，它的 agent 是腳本或替身，與會話消費者無關。
+ * **要量遙測、不變量或參與者的測試不該用它**，用 `createCliAgent` 回傳的 `attachSessions`
+ * （[#668](https://github.com/DemianLi/nexus-agent/issues/668)：`ThreadAgent` 上這一格必填，漏接不再是靜默的）。
+ */
+export const noSessions: AttachSessions = () => ({ detach: async () => {} });
+
 export function emptyCommandPoint(): Pick<CommandRegistrationPoint, 'find' | 'list'> {
   return createRegistry().commands;
 }
@@ -92,6 +308,13 @@ export function testSessionCookie(authority = 'localhost'): string {
  * `new Request(url)` 不會替你帶 `Host`——真的 HTTP/1.1 請求一定有，所以圍欄缺 Host 就拒、不退回去讀 URL。
  * 測試的 base URL（`http://wire.test` 之類）跟 Host 無關，保留原樣。呼叫端自己帶了 `cookie` 就不蓋。
  *
+ * **帶了 `signal` 的話，這個請求要活到那個 signal 中止為止**：`new Request(url, { signal })` 的 `request.signal` 是
+ * 一個「跟隨」原 signal 的衍生 signal，而 Node 只用弱參考把它掛在原 signal 上——沒人抓著那個 Request 的時候，一次完整
+ * GC 會把它回收，之後原 signal 中止，衍生的那個永遠不會跟著中止（同 [#990](https://github.com/DemianLi/nexus-agent/issues/990)
+ * 在 handler 那一側修的那一條）。測試把 `AbortController` 交給 client、而 client 的 `fetch` 是 `handler.handle(loopbackRequest(…))`
+ * 時，handler 那頭等 `request.signal` 中止來收線，收不到就卡到測試逾時（`token-meter-wire.test.ts` 的 `await draining` 量過：
+ * 修之前四次跑掉三次，每次卡 30 秒；留住請求之後連跑都過）。真的 HTTP 請求不會遇到，Node 的伺服器自己抓著它。
+ *
  * @param input - 請求 URL。
  * @param init - 其餘照 `fetch` 傳進來的原樣。
  * @returns 帶著 `host: localhost` 與 {@link TEST_BROWSER_AUTH} 認得的 cookie 的請求。
@@ -100,7 +323,10 @@ export function loopbackRequest(input: string, init?: RequestInit): Request {
   const headers = new Headers(init?.headers);
   headers.set('host', 'localhost');
   if (!headers.has('cookie')) headers.set('cookie', testSessionCookie('localhost'));
-  return new Request(input, { ...init, headers });
+  const request = new Request(input, { ...init, headers });
+  // 監聽器的閉包抓著 request：原 signal 活著它就活著，中止之後（`once`）自然放掉。
+  init?.signal?.addEventListener('abort', () => void request, { once: true });
+  return request;
 }
 
 /**
@@ -147,6 +373,38 @@ export async function serveClient(running: {
 }): Promise<WireClient> {
   const cookie = await exchangeServeToken(running.authenticatedUrl);
   return createWireClient({ baseUrl: running.url, fetch: fetchWithCookie(cookie) });
+}
+
+/**
+ * 從下行折一輪，折到 root 那顆收尾的 `lifecycle`（`completed` 或 `failed`，含）為止。
+ *
+ * **判準是那顆 frame，不是 `status`**：人的話由 `inbox` 的 `claimed` 在開跑前畫，那一刻 `status` 還是 `idle`，
+ * 看 `status` 的話這一輪還沒開跑就收手了。停在核准點時 root 照樣發 `completed`，所以停在那裡也會回來；人按停止時
+ * 發的是 `failed`（帶 `aborted`）。下行在收尾之前斷掉就拋，不默默回半份。
+ *
+ * @param events - `openEvents` 開的那條下行，要在 `runStart` 之前開好。
+ * @param from - 從哪一份狀態折起。同一條下行上說第二句時，把上一句折完的傳進來。
+ * @returns 折到收尾那顆為止的狀態。
+ */
+export async function foldTurn(
+  events: AsyncIterator<Event>,
+  from: ConversationState = emptyConversation(),
+): Promise<ConversationState> {
+  let state = from;
+  for (;;) {
+    const next = await events.next();
+    if (next.done === true) throw new Error('下行在 root 收尾之前就斷了');
+    state = reduceConversation(state, next.value);
+    const data = next.value.params.data as { event?: unknown; graph_name?: unknown } | null;
+    if (
+      next.value.method === 'lifecycle' &&
+      next.value.params.namespace.length === 0 &&
+      data?.graph_name === 'root' &&
+      (data.event === 'completed' || data.event === 'failed')
+    ) {
+      return state;
+    }
+  }
 }
 
 /** fixture plugin 註冊的工具名。 */
@@ -254,4 +512,51 @@ export function approvalToolNames(pendings: readonly PendingInput[]): string[] {
   return pendings.flatMap((pending) =>
     isApprovalPending(pending) ? pending.actions.map((action) => action.name) : [],
   );
+}
+
+/**
+ * 讀一次 `invoke` 結果裡的虛擬檔案系統（`StateBackend` 寫進圖狀態的 `files`）。
+ *
+ * 以前 agent 的型別帶著基座的狀態形狀，`result.files` 直接讀得到；自有組裝點之後 middleware 疊是動態的
+ * 陣列，型別推不出 `files` 這一欄，所以測試經這個函式讀——**執行期行為沒變**，只是不靠型別推導。
+ *
+ * @param result - `agent.invoke()` 的結果。
+ * @returns 路徑對檔案資料；沒有就是空物件。
+ */
+export function virtualFilesOf(result: object): Record<string, FileData | undefined> {
+  return (result as { files?: Record<string, FileData | undefined> }).files ?? {};
+}
+
+export { serverLogBody, serverLogLevel };
+
+/**
+ * 把 `runServe` 的 `log` 收進一個陣列、只留訊息本文。要驗**等級**的測試另給 `raw`：原樣的一行也收進去，
+ * 再用 {@link serverLogLevel} 讀等級字母（本文那一份看不到等級）。
+ */
+export function bodyLog(sink: string[], raw?: string[]): (line: string) => void {
+  return (line) => {
+    raw?.push(line);
+    sink.push(serverLogBody(line));
+  };
+}
+
+/** 原樣的伺服器日誌行裡，本文以 `prefix` 開頭的那幾行的等級字母。 */
+export function levelsOf(raw: readonly string[], prefix: string): (string | undefined)[] {
+  return raw
+    .filter((line) => serverLogBody(line).startsWith(prefix))
+    .map((line) => serverLogLevel(line));
+}
+
+/**
+ * 測試用的計劃指引。**plan-mode 套件沒有預設值**（#1607，照 dsh：部署必給），出貨的那一句寫在 `cordis.yml` 的 `plan-mode` 那一列；
+ * 手搭組裝的測試不依賴那一句，只要有一句可以認得。要驗出貨那一句的測試改讀出貨清單（`plan-mode.test.ts` 的 `SHIPPED_GUIDANCE`）。
+ */
+export const TEST_PLAN_GUIDANCE =
+  '【測試用計劃指引】現在在計劃模式，先探索與設計，不要動手改東西。';
+
+/** 補上 {@link TEST_PLAN_GUIDANCE} 的 `createPlanModePlugin`：手搭組裝的測試大多不關心指引寫什麼。 */
+export function testPlanModePlugin(
+  options: { startActive?: boolean; guidance?: string } = {},
+): PluginEntry {
+  return createPlanModePlugin({ guidance: TEST_PLAN_GUIDANCE, ...options });
 }

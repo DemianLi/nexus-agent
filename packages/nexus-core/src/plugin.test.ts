@@ -213,10 +213,12 @@ describe('設定是資料（#453）', () => {
     expect(() => resolveEntries(typo)).toThrow(/nested(\.|:)/);
   });
 
-  it('沒有 Config 的 plugin 給了 config 就報錯——設了卻沒有作用是這張卡要消滅的病', () => {
+  it('沒有 Config 的 plugin 給了 config：照 dsh 不驗、不拋，原樣交下去（#751 拍板）', () => {
+    // 手搭清單也不拋：dsh 對任何呼叫端都不擋這一格（`vendor/cordis/src/fiber.ts:51`，`477b4f4`）。
+    // 設了卻沒有作用的那句警告只在產品路徑上印（`apps/harness` 的 `loadDefaultPlugins`）。
     const entry = { ...fakePlugin('plain', noop), config: { anything: 1 } };
-    expect(() => resolveEntries([entry])).toThrow('plain#0 (plain)');
-    expect(() => resolveEntries([entry])).toThrow('不收 config');
+    const [resolved] = resolveEntries([entry]);
+    expect(resolved?.config).toEqual({ anything: 1 });
   });
 
   it('沒有 Config 又沒給 config 的，解析出來的 config 是 undefined', () => {

@@ -1,0 +1,9 @@
+# 把出貨清單上 `todo` 的配套入口關掉，再插一顆一律吭聲的配套入口（`cli-invariant-violation.fixture.ts`）。
+#
+# **它存在是為了證明 `invariant-log.jsonl` 的分母是量出來的**（#976）：關掉的那一列不該出現在
+# `installed` 那一行裡，而不是出貨清單長什麼樣就寫什麼樣。
+- id: todo-invariant
+  disabled: true
+- insert:
+    - id: noisy-invariant
+      name: './cli-invariant-violation.fixture.ts'

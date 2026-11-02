@@ -1,0 +1,12 @@
+# 混版夾具的前半（0c9e389c^，格式 44）：把摘要門檻壓到 3 則，假模型那一輪的第二次呼叫之前就摘要一次（舊順序）。
+# config 是整份替換，四格照那一版的出貨值寫，只改 trigger 的則數與 keep。
+- id: summarization
+  config:
+    trigger:
+      - { type: tokens, value: 100000 }
+      - { type: messages, value: 3 }
+    keep: { type: messages, value: 2 }
+    truncateArgs:
+      trigger: { type: messages, value: 20 }
+      keep: { type: messages, value: 20 }
+    historyPathPrefix: /conversation_history

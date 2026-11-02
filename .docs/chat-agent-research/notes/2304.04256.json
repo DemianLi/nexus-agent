@@ -1,0 +1,141 @@
+{
+  "id": "2304.04256",
+  "title": "A Preliminary Evaluation of ChatGPT for Zero-shot Dialogue Understanding",
+  "topic": "T1",
+  "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用提示詞讓 2023 年 1 月版 ChatGPT 做 zero-shot 的 SLU（意圖偵測加槽位填充，ATIS/SNIPS）與 DST（MultiWOZ 2.1/2.4），並提出「多輪互動式提示」讓 DST 在同一個對話 session 裡逐輪更新狀態。這是一篇初步評估短文。",
+  "problem": "ChatGPT 在推理、摘要、翻譯、資訊擷取等 zero-shot 任務上表現不錯，但在對話理解（辨識使用者意圖、抽槽位、追蹤多輪對話狀態）上的能力還沒有系統性的量測。對話系統若能不靠標註資料就辨識意圖、追蹤需求，冷啟動新領域的成本會大幅降低，所以值得先摸清 ChatGPT 在標準 benchmark 上的位置與失敗型態。",
+  "core_idea": "把 SLU 與 DST 都改寫成「給 schema 加輸出規則，再讓 ChatGPT 產出固定格式字串」的提示任務，用樣板比對把輸出解析回結構化標籤。SLU 是單句單輪：提示給意圖清單與槽位清單（附範例值或描述）。DST 的做法是作者主要的方法貢獻：不把整段歷史一次塞進單一提示，而是第一輪先交代資料庫 schema，之後每一輪對話都在同一個 ChatGPT session 裡送一次，讓模型以前面自己預測的狀態為基礎輸出本輪的更新，藉此利用 ChatGPT 本身的多輪對話能力。",
+  "method": {
+    "models": "受測模型是 ChatGPT（2023-01-30 版，透過 chat.openai.com 網頁介面，不是 API）。LLM baseline 為 GPT-3.5（text-davinci-003，OpenAI API）與 Codex。論文沒有交代這兩個 baseline 用的提示詞與執行方式。另外列出各資料集的微調 SoTA 作為參考上限，數字引自既有論文。",
+    "slu_prompt": {
+      "structure": "三段式提示：(1) Schema，包含 intent constraints（該資料集全部可能意圖的清單，要求先從中選一個）與 slot constraints（全部槽位名稱，並依設定附上每個槽位的範例值或自然語言描述）；(2) Regulations，即輸出格式與禁止事項；(3) Sentence input，一次一句待測語句。",
+      "output_format": "先輸出「The intent is <intent>」，再把每個槽位值對寫成「The <value> is an <slot> entity;」的形式。規則要求不得輸出任何其他內容，並且不得漏掉任何可能的槽位值對。",
+      "parsing": "用樣板比對把回應轉成 intent=X、slot=\"value\" 的結構化標籤（Table 1 的 Parsed answer）。解析器沒有公開，格式不合的回應怎麼計分也沒有說明。",
+      "prompt_variants": "Table 5 比較四種槽位資訊：Name only（只給槽位名稱）、w/ Description（加描述）、w/ Example（加範例值）、w/ Des+Exp（兩者都加）。Table 3 主結果裡 ChatGPT 的 SNIPS 數字與 Table 5 的 w/ Example 列完全相同，可以推定主結果採用附範例值的設定。",
+      "intent_handling": "意圖偵測是封閉集合選擇：清單列在提示裡，要求模型從中挑一個。沒有 out-of-scope 或拒答選項，也沒有多意圖（ATIS 有 atis_flight#atis_airfare 這類組合標籤）的特別處理說明。"
+    },
+    "dst_multi_turn_interactive_prompt": {
+      "turn_0_setup": "第一個提示給資料庫描述。每個 domain（如 Hotel、Taxi）用一張關聯式表格範例呈現：欄位即槽位，附幾列範例值；再用自然語言補上值域約束（例如 parking 只能是 free、yes、no 其中之一）。作者刻意不用 IC-DST 那種 SQL 表示法，改用表格加自然語言，理由是較直觀。",
+      "regulations": "依 Table 2 列出的規則字面（原表有「…」截斷，並非完整規格）：每輪都輸出「User informed N columns: <table>-<column>=<value>; …」；只能輸出表格中存在的有效屬性；不得輸出先前任何一輪清單中已出現過的屬性；只有當使用者明確說不在意某屬性時，才輸出 dontcare。",
+      "turn_k": "之後在同一個 ChatGPT session 內，逐輪送入「第 k 輪」加上該輪的 System 發話與 User 發話，要求模型根據先前自己預測的狀態，輸出本輪新告知的槽位值。",
+      "state_accumulation": "由於規則要求只輸出新出現的屬性，模型輸出的是增量而非完整狀態。重做時必須自己把每輪增量逐輪合併成累積的 dialogue state，再與 gold state 比 JGA。論文沒有明寫合併與覆寫邏輯。",
+      "single_turn_control": "Table 4 的單輪對照組：每一輪都開一個新的 ChatGPT session，單獨預測該輪的 dialogue state。論文沒有說明單輪提示是否附帶完整歷史。"
+    },
+    "evaluation_protocol": "SLU 用 ATIS 與 SNIPS 的 test set，指標為 Intent accuracy、Slot F1，以及只在 Table 5 出現的 Overall（句級全對率）。DST 用 MultiWOZ 2.1 與 2.4 的 test set，指標為 Joint Goal Accuracy（JGA）與 Slot Accuracy。",
+    "unreported_hyperparameters": "temperature 等解碼參數（網頁介面本來就無法控制）、實際跑了多少測試樣本（是否全量）、重跑次數與變異、失敗輸出（冗長回覆、格式違規）怎麼計分、超過 context 長度時的處理方式，全部沒有報告。"
+  },
+  "assumptions": [
+    "目標意圖集合與槽位集合事先已知且封閉，能完整列進提示；意圖偵測被當成從清單選一個的分類問題。",
+    "槽位的範例值或描述可以事先取得。主結果採用附範例值的設定，所以這裡的「zero-shot」是指沒有標註語句，而不是沒有任何領域知識。",
+    "LLM 的自由文字輸出可以用樣板穩定地解析回結構化標籤。",
+    "DST 的多輪互動提示假設整段對話加上第一輪 schema 說明能放進 ChatGPT 的 context；作者自己觀察到超過約 10 輪時這個假設會破功。",
+    "2023 年 1 月的 ChatGPT 網頁版行為足以代表「ChatGPT」；作者也承認模型持續更新，結論可能變動。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ATIS（SLU，test set）",
+      "SNIPS（SLU，test set）",
+      "MultiWOZ 2.1（DST，test set）",
+      "MultiWOZ 2.4（DST，test set）"
+    ],
+    "metrics": [
+      "Intent Accuracy",
+      "Slot F1",
+      "Overall accuracy（句級，僅 Table 5）",
+      "Joint Goal Accuracy (JGA)",
+      "Slot Accuracy"
+    ],
+    "baselines": [
+      "GPT-3.5（text-davinci-003）",
+      "Codex",
+      "微調 SoTA 參考值：SLU 取 Qin et al. 2021a 的 Co-Interactive Transformer；MultiWOZ 2.1 取 Guo et al. 2022；MultiWOZ 2.4 取 Zhao et al. 2022（D3ST）",
+      "消融：多輪互動提示 vs. 單輪提示（Table 4）；Name only／w/ Description／w/ Example／w/ Des+Exp（Table 5）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Zero-shot 意圖偵測在 SNIPS 上幾乎與其他 LLM 和微調 SoTA 打平，但在 ATIS 上明顯落後。§3.3 第 (3) 點原文寫成 ChatGPT 輸給「ChatGPT 與 Codex」，是筆誤，依 Table 3 應為 GPT-3.5 與 Codex。",
+      "numbers": "Intent Acc：SNIPS 上 ChatGPT 97.71，GPT-3.5 98.00、Codex 98.42、微調 SoTA 98.80；ATIS 上 ChatGPT 75.22，GPT-3.5 90.03、Codex 89.92、微調 SoTA 98.00。",
+      "section": "§3.3、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "ChatGPT 的 zero-shot 槽位填充很弱，而且比 GPT-3.5 與 Codex 更差。",
+      "numbers": "Slot F1：SNIPS 上 ChatGPT 58.24，GPT-3.5 與 Codex 都是 68.90，微調 SoTA 97.10；ATIS 上 ChatGPT 15.71，GPT-3.5 55.72、Codex 57.29，微調 SoTA 96.10。",
+      "section": "§3.3、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "使用多輪互動提示的 ChatGPT 在 DST 上大幅超過 GPT-3.5 與 Codex。在 MultiWOZ 2.1 接近微調 SoTA，在 2.4 仍有差距。",
+      "numbers": "MultiWOZ 2.1 的 JGA／Slot Acc：ChatGPT 60.28/97.83，GPT-3.5 32.25/94.79，Codex 34.38/95.12，微調 SoTA 61.02/98.05。MultiWOZ 2.4：ChatGPT 64.23/98.12，GPT-3.5 34.55/95.21，Codex 37.50/95.68，微調 SoTA 75.90（未報 Slot Acc）。",
+      "section": "§3.3、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "同一個 ChatGPT 在 MultiWOZ 2.1 上，多輪互動提示略優於每輪另開 session 的單輪提示。",
+      "numbers": "JGA 60.02 vs. 58.05（+1.97）；Slot Acc 97.80 vs. 97.74。未報樣本數、變異與顯著性。",
+      "section": "§3.4.1、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在 SNIPS 上，槽位資訊的給法大幅左右 slot F1 與句級正確率，意圖準確率則幾乎不受影響。加範例值的效果遠大於加描述。",
+      "numbers": "Intent：96.43／96.00／97.71／96.00。Slot F1：Name only 25.78、w/ Des 33.88、w/ Exp 58.24、w/ Des+Exp 59.08。Overall：9.29、12.57、28.86、26.29。",
+      "section": "§3.4.2、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "ChatGPT 在對話理解上有三類會讓解析失敗的非預期行為：輸出 unknown、request 之類未定義的槽位值；違反值的格式（例如把介係詞留在時間值裡）；答不出時改用自然語言長篇回覆，不給格式化的槽位值對。",
+      "numbers": "只有 Figure 1 的質性舉例，沒有量化各類的發生比例。",
+      "section": "§3.4.3、Figure 1",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "多輪互動提示在長對話裡會出現遺忘：超過約 10 輪後，ChatGPT 可能忘記第一輪給的 schema 與規則，作者歸因於 context 長度限制。",
+      "numbers": "門檻約為 10 輪，未量化發生比例，也沒有量化對 JGA 的影響。",
+      "section": "§3.4.3（Prompt Length Limitation）",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只比較了少數 LLM baseline，未來要納入更多 LLM。",
+    "沒有涵蓋 zero-shot 跨領域與 zero-shot 跨語言的 SLU/DST 情境。",
+    "ChatGPT 持續更新，結論需要隨新實驗結果修正。",
+    "長對話（超過約 10 輪）會因長度限制遺忘第一輪的提示。",
+    "ChatGPT 的輸出會出現未定義的槽位值、格式違規與冗長回覆，影響解析。"
+  ],
+  "limitations_observed": [
+    "同一個條件的數字在兩張表不一致：ChatGPT 在 MultiWOZ 2.1 上用多輪互動提示，Table 3 報 JGA 60.28、Slot Acc 97.83，Table 4 報 60.02、97.80。論文沒有解釋是兩次不同的執行還是誤植。0.26 的差距本身不大，但它說明數字不是來自同一次確定的執行；作者又沒有報變異或重跑，無從判斷 Table 4 的消融差距（+1.97）是否穩定。",
+    "內文結論與表格矛盾：§3.4.2 說同時給槽位名稱與描述時 overall 最好，但 Table 5 的 overall 最高是 w/ Example（28.86），只加描述只有 12.57，Des+Exp 是 26.29。真正撐起 slot F1 的是範例值，不是描述。讀者若只看內文會得到相反的結論。",
+    "「zero-shot」的定義偏寬：Table 3 的 ChatGPT SNIPS 數字（97.71/58.24）與 Table 5 的 w/ Example 列完全相同，表示主結果給了槽位範例值（Table 1 就示範了 album 槽位的具體歌名）。DST 的第一輪提示也附了含範例值的表格。這比純 schema 名稱多了不少領域資訊，與不給範例值的 zero-shot 工作不能直接比較。",
+    "DST 勝過 GPT-3.5 與 Codex 的歸因混淆了兩個變數：§3.3 第 (2) 點把 ChatGPT 的 JGA 大勝（60.28 vs. 32.25/34.38）歸功於多輪互動提示，但 GPT-3.5 與 Codex 用的是什麼提示完全沒交代，模型差異和提示形式差異混在一起。唯一同模型的對照是 Table 4，只差 1.97 JGA，遠不足以解釋約 26 分的差距。所以大部分差距更可能來自模型本身或 baseline 提示較弱，不是多輪提示。",
+    "Baseline 的來源與強度不明：caption 只說微調 SoTA 引自既有論文，GPT-3.5 與 Codex 的數字是作者自己跑的還是引用的、用了哪種提示，都沒說。論文引用 IC-DST（2203.08568）卻沒拿它當 LLM baseline，所以 GPT-3.5/Codex 約 32–37 的 JGA 可能只是弱提示下的下限，不代表這些模型的能力。另一個旁證是 Table 3 裡 GPT-3.5 與 Codex 在 SNIPS 的 slot F1 都是 68.90，兩個不同模型得到一模一樣的數字，來源更顯可疑。",
+    "依 Table 2 列出的規則字面，模型被禁止輸出任何先前已出現過的屬性。若照字面執行，使用者改變心意（例如 area 從 north 改成 east）或糾正先前說法時，模型無法覆寫已出現過的槽位。這正是 DST 最難的情況之一，論文沒有討論，也沒有把這類情況的錯誤分開統計。",
+    "對 T1 最有資訊量的數字沒有被分析：ATIS 的意圖準確率 75.22，比 GPT-3.5 低約 15 分、比微調 SoTA 低約 23 分，作者只一句帶過，完全沒有意圖錯誤分析，例如是否栽在 ATIS 的多意圖組合標籤、長尾意圖或意圖名稱語意不清。SNIPS 只有 7 個語意分明的意圖，97.71 接近飽和，分不出方法好壞。",
+    "意圖偵測只測封閉集合選擇：沒有 out-of-scope/OOD 意圖、沒有拒答或「以上皆非」選項、沒有校準或信心分數，也沒有模糊語句下的澄清。這些正是 LLM 時代意圖路由在實務上最需要的能力，所以這篇對 T1 的意圖路由設計幾乎沒有可直接取用的結論。",
+    "Slot Accuracy 幾乎沒有鑑別力：所有模型在 MultiWOZ 上都介於 94.79 到 98.12 之間，Table 4 的差距只有 0.06，因為大多數槽位在多數輪次都是空值。真正能比較的只有 JGA。",
+    "可重現性差：實驗透過 chat.openai.com 網頁介面的 2023-01-30 版本執行，這個版本已無法取得，temperature 不可控。測試樣本數、重跑次數、解析器、失敗輸出的計分方式全部沒報，提示全文也沒有釋出（Table 1、2 都有「…」省略）。",
+    "沒有討論資料污染：ATIS（1990）與 SNIPS（2018）早已公開；MultiWOZ 的對話內容自 2018 年（2.0 版）起公開，2.1（2019）與 2.4（2021）是之後修正標註的版本。這些都早於受測的 2023-01 版 ChatGPT，無法排除它們出現在訓練資料中的可能。MultiWOZ 2.1 上 zero-shot JGA 60.28 幾乎追平微調 SoTA 61.02，這個結果需要先排除污染才能解讀成 zero-shot 能力。",
+    "長對話遺忘（超過約 10 輪）只做了質性描述，沒有依對話長度分組報 JGA，所以無法判斷多輪互動提示在實務長度對話上的淨效益。三類非預期行為也沒有量化各自的比例，無法判斷解析失敗對 slot F1 偏低的貢獻有多大。"
+  ],
+  "framework_role": "它對 T1 的貢獻很有限：只示範了 LLM 時代最基本的 zero-shot 意圖偵測做法，也就是把封閉意圖清單列進提示、要求固定格式輸出再解析。它提供了一個早期基準點：SNIPS 97.71，ATIS 75.22，而且在 ATIS 上 ChatGPT 反而不如 text-davinci-003。另外它記下了 LLM 輸出偏離格式的失敗型態（冗長回覆、格式違規、未定義值），可以作為意圖路由前需要輸出驗證與解析層的佐證。這篇的方法重心（多輪互動式提示、逐輪送入、以先前預測的狀態為基礎更新）其實屬於 T2 多輪狀態追蹤，它在 T2 的角色是 ChatGPT zero-shot DST 最早期的探路報告之一；後續另有專門研究 ChatGPT zero-shot DST 的工作（2306.01386）。它沒有觸及 OOS 意圖、依意圖路由、澄清提問或使用者目標推斷。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有提到任何部署或產品，也沒有釋出程式碼。以 WebSearch 查詢只找到論文本身，以及收錄它的學術論文清單（THU-KEG/EvaluationPapers4ChatGPT），那屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "四個 benchmark（ATIS、SNIPS、MultiWOZ 2.1/2.4）都是公開資料集。但提示全文（Table 1、2 有省略）、解析器與模型輸出都沒有釋出，受測的 ChatGPT 2023-01-30 網頁版本也已無法取得，實質上無法重現。"
+  },
+  "value_verdict": "low",
+  "verdict_reason": "主要方法貢獻（多輪互動式 DST 提示）屬於 T2，不屬於 T1。T1 相關部分只有一個封閉清單的 zero-shot 意圖準確率，沒有 OOS、路由、澄清或意圖錯誤分析。論文本身又有表格數字不一致、內文與表格矛盾、baseline 提示未交代等嚴謹度問題，只適合當 2023 年初的歷史基準點。",
+  "related": ["2203.08568", "2201.08904", "2302.06476", "2302.04023", "2302.10205", "1907.01669"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

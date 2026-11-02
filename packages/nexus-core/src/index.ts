@@ -5,6 +5,8 @@
  * `apps/harness`，而且只有那一個地方。
  */
 
+export { NEXUS_CORE_VERSION } from './version.js';
+
 export type {
   EntryManifest,
   NexusPlugin,
@@ -12,6 +14,7 @@ export type {
   PluginManifest,
   PluginOrigin,
   ResolvedPluginEntry,
+  EntryResolution,
 } from './plugin.js';
 export {
   entryManifestSchema,
@@ -19,8 +22,18 @@ export {
   parseEntry,
   parseEntryConfig,
   resolveEntries,
+  resolveEntriesPerEntry,
   formatOrigin,
 } from './plugin.js';
+
+export type {
+  ConfigSchemaLoss,
+  ConfigSchemaLossKind,
+  ConfigSchemaResult,
+  ConfigSchemaStatus,
+  JsonSchemaDocument,
+} from './config-schema.js';
+export { configToJsonSchema } from './config-schema.js';
 
 export type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 
@@ -29,13 +42,42 @@ export type {
   PreToolDecision,
   PreToolListener,
   ApprovalChannel,
+  ChannelForThread,
+  PlanReviewIntent,
+  QuestionAnswerItem,
+  QuestionInterruptItem,
+  QuestionInterruptPayload,
+  QuestionReply,
 } from './approval.js';
+export {
+  APPROVAL_POLICIES,
+  APPROVAL_POLICY_SERVICE,
+  ApprovalPolicyController,
+  approvalPolicyOnResume,
+  DEFAULT_APPROVAL_POLICY,
+  isApprovalPolicy,
+  recordedApprovalPolicy,
+} from './approval-policy.js';
+export {
+  APPROVAL_POLICY_ASK_SENTENCE,
+  APPROVAL_POLICY_NEVER_SENTENCE,
+  APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
+  approvalPolicySentence,
+  createApprovalPolicyPromptMiddleware,
+} from './approval-policy-prompt.js';
+export type {
+  ApprovalPolicySource,
+  ApprovalPolicySwitchOutcome,
+  ApprovalPolicyValue,
+} from './approval-policy.js';
 export {
   APPROVAL_GATE_MIDDLEWARE_NAME,
   APPROVAL_GATE_PLUGIN_NAME,
   approvalGatePlugin,
   APPROVAL_INTERRUPT_KIND,
   QUESTION_INTERRUPT_KIND,
+  CHANNEL_FOR_THREAD_SERVICE,
+  CHANNEL_SERVICE,
   createApprovalGateMiddleware,
   deriveApprovalChannel,
   runApprovalGate,
@@ -66,6 +108,16 @@ export { GOAL_CHANGE_VERSION, goalId } from './goal.js';
 export type { TodoItem, TodoStatus } from './todo.js';
 export type { PresentedFile } from './deliverables.js';
 export { TODO_STATUSES } from './todo.js';
+export type {
+  InboxSplice,
+  InboxState,
+  InboxTarget,
+  PromptRequestMatch,
+  QueuedInput,
+  QueuedInputSource,
+  SubagentSettleReason,
+} from './inbox.js';
+export { EMPTY_INBOX, findPromptRequest, foldInbox, spliceInbox } from './inbox.js';
 
 export type {
   SandboxDenial,
@@ -74,7 +126,16 @@ export type {
   SandboxMode,
   SandboxModeSource,
 } from './sandbox.js';
-export { isSandboxMode, SANDBOX_MODES, WORKSPACE_CAPABILITY } from './sandbox.js';
+export {
+  hostPathOf,
+  isSandboxMode,
+  isUnderAnyPrefix,
+  SANDBOX_MODES,
+  SHARED_WORKSPACE_SERVICE,
+  virtualPathOf,
+  WORKSPACE_CAPABILITY,
+  WORKSPACE_ROOT_SERVICE,
+} from './sandbox.js';
 
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';
 export { AnonymousEntries, NamedEntries, CapabilitySet } from './entries.js';
@@ -85,11 +146,14 @@ export type {
   DisabledEntryView,
   ToolRegistrationPoint,
   SubAgentRegistrationPoint,
+  NexusSubAgent,
+  CreateRegistryOptions,
   CapabilityRegistrationPoint,
   ServiceRegistrationPoint,
   NexusServices,
   KnownServiceName,
   BackendRegistrationPoint,
+  MiddlewarePlacement,
   MiddlewareRegistrationPoint,
   MiddlewareRegistration,
   PermissionRegistrationPoint,
@@ -98,21 +162,84 @@ export type {
   SkillSourceRegistrationPoint,
   MemorySourceRegistrationPoint,
   LifecycleRegistrationPoint,
+  BoundPluginLogger,
+  PluginLogger,
+  PluginWarningExporter,
+  PluginWarning,
   InvariantRegistrationPoint,
   TelemetryRegistrationPoint,
   CommandRegistrationPoint,
   SessionRegistrationPoint,
+  ProjectionRegistrationPoint,
+  EventRegistrationPoint,
   SessionLookup,
+  BoundPick,
+  PickBoundOptions,
+  SpawnLink,
   Disposer,
   RegisterOptions,
   RootOnlyRefusal,
   ScopeKey,
 } from './registry.js';
-export { createRegistry } from './registry.js';
+export {
+  assertLoadableSkillsPath,
+  createRegistry,
+  pickBoundForCall,
+  pickSessionForCall,
+} from './registry.js';
+export type {
+  SkillCatalogEntry,
+  SkillCatalogScan,
+  SkillInvocationPolicy,
+  SkillSourcesPlacement,
+} from './skill-catalog.js';
+export {
+  isHumanSpeech,
+  renderSkillInvocation,
+  scanSkills,
+  threadSkillSources,
+} from './skill-catalog.js';
+export type {
+  DispatchMode,
+  EventDispatcher,
+  EventListenerInfo,
+  EventName,
+  EventOptions,
+  EventSubscriber,
+  Events,
+} from './events.js';
+export { EventBus, isBailed } from './events.js';
+export type {
+  PipelineExecution,
+  PipelinePostDecision,
+  PipelinePreDecision,
+  PipelineResult,
+} from './tool-pipeline.js';
+export {
+  createToolExecuteMiddleware,
+  createToolPostExecuteMiddleware,
+  createToolPreExecuteMiddleware,
+} from './tool-pipeline.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
+export type { FsFacts, FsService, FsServiceOptions } from './fs-service.js';
+export { createFsService, FS_SERVICE } from './fs-service.js';
+export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
+export {
+  EXTERNAL_MCP_CONTENT_NOTICE,
+  REFERENCE_RULE,
+  REFERENCE_WARNING,
+  SHARED_WORKSPACE_CONTENT_NOTICE,
+} from './untrusted-content.js';
+export {
+  createSharedReadMarkMiddleware,
+  SHARED_READ_MARK_MIDDLEWARE_NAME,
+} from './shared-read-mark.js';
+export type { HostExitChild } from './host-exit-children.js';
+export { trackHostExitChild } from './host-exit-children.js';
+export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
 
-export type { LoadResult } from './load.js';
+export type { DropStage, DroppedEntry, LoadOptions, LoadResult } from './load.js';
 export { loadPlugins } from './load.js';
 
 export type { ToolEventSessions } from './containment.js';
@@ -127,6 +254,14 @@ export {
   resolveToolName,
 } from './containment.js';
 
+export {
+  CONCURRENCY_SAFE_METADATA_KEY,
+  createToolBarrierMiddleware,
+  DEFAULT_PARALLEL_SAFE_TOOLS,
+  isConcurrencySafe,
+  TOOL_BARRIER_MIDDLEWARE_NAME,
+} from './tool-barrier.js';
+
 export type { OutputSchemaLookup } from './output-schema.js';
 export {
   createOutputSchemaMiddleware,
@@ -135,8 +270,67 @@ export {
   OUTPUT_SCHEMA_MIDDLEWARE_NAME,
 } from './output-schema.js';
 
+export type {
+  ImageBudget,
+  ImageOccurrence,
+  ImageOffloadDeps,
+  ImageOffloadTarget,
+} from './image-offload.js';
+export {
+  applyImageOffload,
+  assertImageBudget,
+  base64Length,
+  createImageOffloadMiddleware,
+  createImageOffloadRecoveryMiddleware,
+  hasImageBlock,
+  IMAGE_OFFLOAD_MIDDLEWARE_NAME,
+  IMAGE_OFFLOAD_RECOVERY_MIDDLEWARE_NAME,
+  IMAGE_OFFLOAD_REQUIRED_CODE,
+  ImageOffloadRequiredError,
+  imageOffloadRequiredOf,
+  IMAGE_ORIGIN_KEY,
+  imageOccurrences,
+  imageOriginOf,
+  offloadedImagesOf,
+  requiredImageOffload,
+  selectImagesToOffload,
+  stampImageOrigin,
+} from './image-offload.js';
+export type { ProjectedBlock } from './attachment-projection.js';
+export {
+  assumedFileLine,
+  hasAttachmentBlocks,
+  offloadedImageText,
+  requestImageHandleText,
+  rewriteAttachmentBlocks,
+  summaryImageText,
+  textOnlyImageText,
+  unavailableImageText,
+} from './attachment-projection.js';
+export type {
+  AttachmentRef,
+  FileAttachmentRef,
+  FileBlock,
+  ImageAttachmentRef,
+  ImageBlock,
+  ImageMediaType,
+} from './attachment-ref.js';
+export {
+  ATTACHMENTS_MODEL_PREFIX,
+  attachmentBlock,
+  attachmentRefOfBlock,
+  fileHandleText,
+  fileModelPath,
+  IMAGE_TOKENS,
+  isAttachmentRef,
+  isFileBlock,
+  isFileRef,
+  isImageBlock,
+  isImageRef,
+} from './attachment-ref.js';
+
 export type { LoggedMessage } from './logged-message.js';
-export { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
+export { fromLoggedMessage, toLoggedMessage, loggedContentBlocks } from './logged-message.js';
 
 export type {
   ConversationReplay,
@@ -144,6 +338,7 @@ export type {
   UnreplayableReason,
 } from './conversation-replay.js';
 export {
+  isEmptyAssistant,
   replayConversation,
   TOOL_NOT_STARTED_TEXT,
   TOOL_OUTCOME_UNKNOWN_TEXT,
@@ -151,12 +346,19 @@ export {
 
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {
+  APPROVAL_INVALID_REPLY,
+  APPROVAL_NO_CHANNEL,
+  APPROVAL_POLICY_NEVER,
+  APPROVAL_REJECTED_BY_USER,
+  approvalDenied,
+  HarnessError,
   INVALID_ARGS,
   INVALID_TOOL_OUTPUT,
   markToolError,
   readToolOutcome,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_DENIED_BY_LISTENER,
   TOOL_ERROR_PREFIX,
   TOOL_NOT_STARTED,
   TOOL_OUTCOME_UNKNOWN,
@@ -170,48 +372,203 @@ export {
 
 export {
   createObservationPolicy,
+  FILE_VERSION,
+  noteReadVersion,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
-  OBSERVATION_POLICY_NOTICE,
   OBSERVATION_POLICY_PLUGIN_NAME,
   observationPolicyPlugin,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
+export type { FileVersionLookup, FileVersionSource } from './observation.js';
 
+// 檔案錯誤與讀到哪各是一對：middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
+// 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。
 export {
-  createFsToolErrorsMiddleware,
+  currentToolCallSignal,
+  FS_AMBIGUOUS_EDIT,
+  FS_EDIT_NOT_FOUND,
+  FS_NOT_FOUND,
+  FS_NOT_REGULAR_FILE,
+  FS_NOT_TEXT,
+  FS_NO_SPACE,
+  FS_PERMISSION_DENIED,
   FS_SANDBOX_DENIED,
   FS_TOOL_ERRORS_MIDDLEWARE_NAME,
   FS_TOOL_PRIMARY_METHOD,
+  noteFsError,
   noteSandboxDenial,
-  recordBackendOutcomes,
+  noteSearchError,
+  noteSearchSkipped,
+  SEARCH_ABORTED,
+  SEARCH_FAILED,
+  SEARCH_INVALID_PATTERN,
+  SEARCH_RAW_OUTPUT_OVERFLOW,
 } from './fs-tool-errors.js';
+export type { FsErrorCode, SearchErrorCode } from './fs-tool-errors.js';
+
+// glob pattern 的大括號上限：包 backend 的那一層只由 `foldRegistry` 掛，主入口只公開上限與錯誤字句。
+export {
+  GLOB_PATTERN_MAX_DEPTH,
+  GLOB_PATTERN_MAX_EXPANSIONS,
+  GLOB_PATTERN_MAX_LENGTH,
+  GLOB_PATTERN_TOO_COMPLEX,
+} from './glob-pattern-limit.js';
+
+export type { SpillPolicyOptions, SpillRef, SpillSaveRequest, SpillStore } from './spill-policy.js';
+export {
+  createSpillPolicyMiddleware,
+  formatSpillNotice,
+  SPILL_POLICY_MIDDLEWARE_NAME,
+  SPILL_RETRIEVAL_HINT,
+} from './spill-policy.js';
+
+// 搜尋結果的筆數上限（#735）也是一對（middleware 開槽、backend 包裝截前段），只由 `foldRegistry` 組起來，主入口只公開
+// 設定與名字。
+export type { SearchOverflowOptions, SearchResultLimits } from './search-overflow.js';
+export {
+  GLOB_MAX_RESULTS,
+  GREP_MAX_LINE_BYTES,
+  GREP_MAX_MATCHES,
+  SEARCH_OVERFLOW_MIDDLEWARE_NAME,
+} from './search-overflow.js';
 
 export {
   continuationFooter,
-  createReadContinuationMiddleware,
+  currentReadWindow,
+  EMPTY_CONTENT_WARNING,
+  noteReadWindow,
   READ_CONTINUATION_MIDDLEWARE_NAME,
-  recordReadExtent,
+  READ_LIMIT,
+  READ_MAX_BYTES,
+  READ_MAX_LINE_LENGTH,
+  readLineTruncationSuffix,
 } from './read-continuation.js';
-
-export type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
+export type { ReadExtent, ReadLimits, ReadWindowRequest } from './read-continuation.js';
+// 檔案工具的組態（#1605，`tool-fs` 設定列）：形狀與開關換算；功能本體在 fold／agent-assembly。
+export type { FileToolsOptions } from './fs-tools-options.js';
+export { FILESYSTEM_TOOL_NAMES, filesystemToolWhitelist } from './fs-tools-options.js';
+export { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
+export { GLOB_HEAD, GREP_REGEXP_HEAD } from './fs-tool-descriptions.js';
+export { ModifiedOrderCompositeBackend } from './modified-order-composite.js';
+export type {
+  DiffResultMeta,
+  FileDiff,
+  ReadResultMeta,
+  SearchResultMeta,
+} from './tool-result-meta.js';
+export { concludeTurn, putToolResultMeta } from './tool-result-meta.js';
+export type { MaxTokensCarrier } from './max-tokens.js';
 export {
-  createInvalidArgumentsCarrier,
+  createMaxTokensCarrier,
+  createMaxTokensMiddleware,
+  dropToolCalls,
+  isMaxTokensFinish,
+  MAX_TOKENS_MIDDLEWARE_NAME,
+  MAX_TOKENS_TURN_END,
+  SUBAGENT_MAX_TOKENS_REASON,
+  subagentMaxTokensResult,
+  turnReachedMaxTokens,
+} from './max-tokens.js';
+
+export {
   createInvalidToolArgsMiddleware,
+  INVALID_ARGUMENTS_KEY,
   INVALID_ARGUMENTS_REFUSAL,
   INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+  rawArgumentsOf,
   repairInvalidToolCalls,
 } from './invalid-tool-args.js';
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
-export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+export {
+  createBackgroundApprovalGate,
+  createBackgroundApprovalPolicyPrompt,
+  foldRegistry,
+  ROOT_ONLY_NOTICE,
+  rootOnlyRefusal,
+  TOOL_ORDER_REST,
+} from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export { beginAttemptReport, lastModelCall, withModelCall } from './model-call-scope.js';
+export type { AttemptUsage } from './model-call-scope.js';
+export {
+  createRequestSnapshotRecorder,
+  extractRequest,
+  REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
+} from './request-snapshot.js';
+export type {
+  ExtractedRequest,
+  RequestConfig,
+  RequestHeader,
+  RequestSnapshotReason,
+  RequestToolSchema,
+} from './request-snapshot.js';
+export { createModelCallIndexer, indexModelCalls, toolCallIds } from './model-call-index.js';
+export type { ModelCallIndex, ModelCallIndexer, ModelCallRecord } from './model-call-index.js';
+export { isModelCallFailure, markModelCallFailure } from './model-call-failure.js';
+export {
+  createEmptyResponseMiddleware,
+  EMPTY_RESPONSE_CODE,
+  EMPTY_RESPONSE_MIDDLEWARE_NAME,
+  EmptyResponseError,
+  isEmptyStopReply,
+} from './empty-response.js';
+export {
+  createStreamRetryMiddleware,
+  retryModelCall,
+  noteStreamFailure,
+  streamRetryDelayMs,
+  DEFAULT_STREAM_RETRY_JITTER_RATIO,
+  DEFAULT_STREAM_RETRYABLE_CODES,
+  DEFAULT_STREAM_RETRY_MAX_DELAY_MS,
+  streamFailureReporter,
+  streamRetrySignalOf,
+  STREAM_RETRY_MIDDLEWARE_NAME,
+  STREAM_RETRY_SIGNAL,
+} from './stream-retry.js';
+export type {
+  RetryRunContext,
+  StreamFailure,
+  StreamRetryOptions,
+  StreamRetrySignal,
+} from './stream-retry.js';
+export {
+  interruptedTurnClosers,
+  readColdSession,
+  resumeClosingInterruptedTurn,
+  unansweredCallResults,
+} from './interrupted-turn.js';
+export type { ColdStoredSession, UnansweredCallResult } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
 } from './subagent-delegation.js';
+export type { ToolFilter } from './subagent-tool-filter.js';
+export {
+  assertToolFilter,
+  createSubagentToolFilterMiddleware,
+  filteredToolRefusal,
+  SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
+  toolKept,
+} from './subagent-tool-filter.js';
+export type { ArchiveGate } from './archive-gate.js';
+export {
+  ARCHIVE_GATE_CONFIG_KEY,
+  archiveGateOf,
+  isTurnBlocked,
+  TurnBlockedError,
+} from './archive-gate.js';
+export type { StepInbox } from './step-inbox.js';
+export {
+  createStepInboxMiddleware,
+  STEP_INBOX_CONFIG_KEY,
+  STEP_INBOX_MIDDLEWARE_NAME,
+  stepInboxOf,
+} from './step-inbox.js';
 export {
   createTurnCancelGuard,
   createTurnCancelModelSignal,
@@ -229,14 +586,60 @@ export {
 } from './turn-cancel.js';
 export type { SessionStats, SessionStatsState } from './session-stats.js';
 export { deriveSessionStats, sessionStatsUnit } from './session-stats.js';
+export type {
+  ProjectionFold,
+  ProjectionFoldOptions,
+  ProjectionSession,
+  ProjectionUnit,
+  ProjectionValue,
+} from './projections.js';
+export {
+  childProjectionUnits,
+  createProjectionFold,
+  normalizeProjectionUnit,
+  ProjectionDetailError,
+  PROJECTION_KEY_PATTERN,
+} from './projections.js';
+export type { SubagentModelPin } from './model-selection.js';
 export type { TokenUsageTotals } from './token-usage.js';
 export { deriveTokenUsage, tokenUsageUnit } from './token-usage.js';
+export {
+  MODEL_SELECTION_MIDDLEWARE_NAME,
+  MODEL_SELECTION_NOTICE_KIND,
+  ModelSelectionController,
+  createModelSwapMiddleware,
+  createSubagentModelFollowMiddleware,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+  modelSwitchNoticeText,
+  pendingNotice,
+  recordedRoute,
+  recordedSelection,
+  routedFromOf,
+  summaryModelOf,
+} from './model-selection.js';
+export type { ModelSelectionOptions } from './model-selection.js';
+export {
+  modelNameOf,
+  normalizeEffort,
+  normalizeRoute,
+  routeOfModel,
+  sameModel,
+  sameRoute,
+  tagModelRoute,
+  taggedRouteOf,
+} from './model-route.js';
+export type { ModelRoute } from './model-route.js';
+export { STEP_NOTICE_MIDDLEWARE_NAME, createStepNoticeMiddleware } from './repeat-reminder.js';
+export type { StepNoticeSource } from './repeat-reminder.js';
+export { WINDOW_THRESHOLD_RATIO, effectiveTrigger, windowThreshold } from './summarization.js';
+export type { ModelContextLimits } from './summarization.js';
 export type { ModelUsage } from './model-usage.js';
 export {
   createModelUsageRecorder,
   MODEL_USAGE_MIDDLEWARE_NAME,
   MODEL_USAGE_PLUGIN_NAME,
   modelUsagePlugin,
+  promptTokensOf,
   readModelUsage,
 } from './model-usage.js';
 export type { CheckpointSessions } from './session-checkpoint-policy.js';
@@ -246,6 +649,23 @@ export {
   SESSION_CHECKPOINT_PLUGIN_NAME,
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
+export type { MessageSource } from './message-source.js';
+export type { SubagentMentionRef } from './subagent-mention.js';
+export {
+  isMentionHintBlock,
+  mentionHintBlock,
+  mentionHintText,
+  mentionOfHintBlock,
+} from './subagent-mention.js';
+export {
+  humanMessageForTurnStart,
+  userContent,
+  isMachineMessage,
+  MESSAGE_SOURCE_KWARG,
+  messageSourceOf,
+  sourceKwargs,
+  turnStartSource,
+} from './message-source.js';
 export type {
   RepeatReminderConfig,
   RepeatReminderMark,
@@ -254,7 +674,6 @@ export type {
 export {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
-  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -278,17 +697,26 @@ export {
   isUnderCompactionPressure,
   readSummarizationEvent,
   resolveSummarizationSettings,
+  RETAIN_FALLBACK_MESSAGES,
+  RETAIN_RATIO,
+  RETAIN_THRESHOLD_CAP_RATIO,
+  retainedMessageCount,
+  retainedTailCount,
+  retainTokensFor,
   SUMMARIZATION_MIDDLEWARE_NAME,
   SUMMARIZATION_PLUGIN_NAME,
   SUMMARIZATION_SERVICE,
+  SUMMARY_PROMPT,
   summarizationConfigSchema,
   summarizationPlugin,
 } from './summarization.js';
-export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
+export type { EstimatedRequest, RequestParts, TokenEstimate } from './token-estimate.js';
 export {
-  defaultTokenAnchorBook,
   estimateAnchoredTokens,
+  estimateMessageTokens,
+  estimateRequestParts,
   estimateRequestTokens,
+  estimateTextTokens,
   TokenAnchorBook,
 } from './token-estimate.js';
 export type {
@@ -337,20 +765,59 @@ export type {
 export {
   currentMessageFeedback,
   FEEDBACK_CATEGORIES,
-  loggedMessageId,
+  FeedbackDurabilityUnavailableError,
+  FeedbackLogCorruptionError,
   MESSAGE_FEEDBACK_SERVICE,
 } from './feedback.js';
+export { loggedMessageId } from './logged-message.js';
 
 export type {
+  LlmFailure,
+  ModelCallOutcome,
+  LogicalTurnStartEvent,
+  ModelVisibleEventType,
   SessionEvent,
   SessionEventMap,
   SessionEventType,
+  SessionAppendOptions,
   SessionLogListener,
   SessionLogOptions,
   SessionLogView,
+  SessionTitleLlmMessage,
+  SessionTitleModelIdentity,
+  SessionTitleSource,
+  TurnAbortCause,
   TurnEndReason,
+  ApprovalOutcome,
+  SessionReferenceSourceEntry,
+  UserMessageSource,
 } from './session-log.js';
-export { currentTurnStart, hasUnansweredInterrupt, SessionLog } from './session-log.js';
+export { forkBoundaryOf } from './fork-boundary.js';
+export {
+  currentTurnStart,
+  openTurnStart,
+  hasUnansweredInterrupt,
+  assertSessionEventEnvelope,
+  boundContextSummary,
+  buildForkSeed,
+  CONTEXT_SUMMARY_MAX_CHARS,
+  inheritedEventCount,
+  isKnownSessionEventType,
+  isLogicalTurnStart,
+  isModelVisibleEvent,
+  isUnreadableSessionEvent,
+  materializeAppendBatch,
+  MESSAGE_PROJECTION_EVENT_TYPES,
+  MODEL_VISIBLE_EVENT_TYPES,
+  SESSION_EVENT_DEPTH_EXCEEDED,
+  SESSION_EVENT_MAX_DEPTH,
+  SessionEventDepthError,
+  SessionLog,
+  SessionLogOffset,
+  SessionSeq,
+  snapshotJsonValue,
+  validateSessionEventData,
+} from './session-log.js';
 
 export type {
   SessionTelemetryRecord,
@@ -360,7 +827,11 @@ export type {
   SessionTelemetrySharingStatus,
   SessionTelemetrySink,
 } from './session-telemetry.js';
-export { isFeedbackEvent, SESSION_TELEMETRY_SERVICE } from './session-telemetry.js';
+export {
+  isFeedbackEvent,
+  isMirroredEvent,
+  SESSION_TELEMETRY_SERVICE,
+} from './session-telemetry.js';
 
 export type {
   SessionTelemetryCapture,
@@ -369,23 +840,65 @@ export type {
 export { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
 
 export type {
+  ReadonlyStoredSession,
   ResumedStoredSession,
   SessionStore,
+  SessionHeaderBuildMetadata,
+  SessionLocation,
   StoredSession,
+  StoredSessionBuild,
   StoredSessionHeader,
+  StoredSessionPluginRow,
+  StoredSessionListing,
+  StoredSessionListOptions,
+  StoredSessionReadOptions,
+  StoredSessionSnapshot,
 } from './session-store.js';
 export {
+  isSubagentSessionHeader,
   SESSION_LOG_FORMAT_VERSION,
+  SessionAlreadyExistsError,
   SessionAlreadyOwnedError,
+  SessionHandleClosedError,
   SessionNotFoundError,
   SessionCorruptionError,
+  SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
 } from './session-store.js';
+export type {
+  SessionFormatCatalog,
+  SessionFormatEdge,
+  SessionFormatEdgeKind,
+  StoredFormatVersionClass,
+} from './session-format.js';
+export {
+  RELEASED_SESSION_FORMAT_VERSIONS,
+  SESSION_FORMAT_CATALOG,
+  SESSION_FORMAT_EDGES,
+  classifyStoredFormatVersion,
+  createSessionFormatCatalog,
+} from './session-format.js';
+export type { LegacyTwoFileSessionFilenames } from './session-filename.js';
+export {
+  FIRST_GENERATION_FORMAT_VERSION,
+  SESSION_LOCK_FILENAME,
+  generationLogFilename,
+  legacyTwoFileSessionFilenames,
+  parseGenerationLogFilename,
+  parseLegacyTwoFileHeaderFilename,
+  sessionDirectoryName,
+} from './session-filename.js';
+
+export { errorChain } from './error-chain.js';
+export { LLM_FAILURE_FALLBACK_MESSAGE, llmFailure, thrownMessage } from './llm-failure.js';
+export type { LlmFailureFields } from './llm-failure.js';
 
 export type {
   SessionPersistenceConfig,
   SessionPersistenceCoordinatorOptions,
 } from './session-persistence.js';
+export { checkpointSession } from './session-durability.js';
 export {
   attachSessionPersistence,
   DEFAULT_PERSISTENCE_WINDOW_MS,
@@ -402,14 +915,36 @@ export type {
   InvariantRunnerOptions,
   InvariantSelection,
   InvariantSubject,
+  InvariantTap,
 } from './invariants.js';
 export type { InvariantFailure } from './invariants.js';
 export { assertInvariantSelection, createInvariantRunner, InvariantError } from './invariants.js';
 
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
+export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
+export type { AssembleAgentParams } from './agent-assembly.js';
+export {
+  assembleAgent,
+  mergeMiddlewareStack,
+  subagentDefaultMiddleware,
+} from './agent-assembly.js';
+export {
+  createPatchToolCallsMiddleware,
+  PATCH_TOOL_CALLS_MIDDLEWARE_NAME,
+  patchDanglingToolCalls,
+} from './patch-tool-calls.js';
+export type { SubagentGraph, SubagentGraphOptions, SubagentGraphParams } from './subagent-graph.js';
 export type { SessionAddress } from './session-address.js';
-export { sessionAddressKey, toolCallSessionAddress } from './session-address.js';
+export {
+  BACKGROUND_RUN_PREFIX,
+  BACKGROUND_SESSION_CONFIG_KEY,
+  callThreadId,
+  isBackgroundAddress,
+  sessionAddressKey,
+  spawnedSubagentRunId,
+  toolCallSessionAddress,
+} from './session-address.js';
 export type {
   SessionEntry,
   SessionFlusher,
@@ -417,6 +952,19 @@ export type {
   SessionRegistryOptions,
 } from './session-registry.js';
 export { SessionRegistry } from './session-registry.js';
+export type { SessionResume } from './session-registry.js';
+export type {
+  SubagentDescriptorData,
+  SubagentDescriptorFold,
+  SubagentDescriptorInput,
+} from './subagent-descriptor.js';
+export {
+  appendSubagentDescriptor,
+  foldSubagentDescriptor,
+  SUBAGENT_DESCRIPTOR_VERSION,
+} from './subagent-descriptor.js';
+export type { SubagentCatalogData, SubagentCatalogMode, SubagentLink } from './subagent-catalog.js';
+export { appendSubagentCatalog, subagentLinkOf, subagentLinks } from './subagent-catalog.js';
 
 // 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的
 // 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。

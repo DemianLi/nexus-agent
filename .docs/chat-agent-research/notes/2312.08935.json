@@ -1,0 +1,165 @@
+{
+  "id": "2312.08935",
+  "title": "Math-Shepherd: Verify and Reinforce LLMs Step-by-step without Human Annotations",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "固定解題前綴到某一步後讓補完模型往下解 N 次、以答到標準答案的比例自動產生逐步標籤，據此訓練出不需人工標註的數學 process reward model（Math-Shepherd），在 best-of-N 重排與逐步 PPO 兩種用途上都勝過 ORM 與 self-consistency。",
+  "problem": "PRM 能指出錯在哪一步，比只看最終答案的 ORM 提供更細的訊號，對驗證（重排候選解）與強化學習都更有用。但既有 PRM（Uesato 2022、Lightman 2023 的 PRM800K）依賴具數學專業的人工逐步標註，昂貴、難以擴量；而且人工標註的對象是 GPT-4 輸出，和要監督的開源模型輸出分布不同。要解決的是：只有題目與標準答案時，如何自動取得步驟層級的監督訊號。",
+  "core_idea": "把一個推理步驟的品質定義為「它推得出正確答案的潛力」，類似 MCTS 對節點價值的估計。做法是：固定前綴到第 i 步，讓一個 completer 模型往下補完 N 條解，依補完解的最終答案是否等於標準答案來給該步標籤。HE（hard estimation）是任一條答對就標 1；SE（soft estimation）是取答對比例。用這些自動標籤以逐步二元交叉熵訓練 PRM，再把 PRM 用在兩處：best-of-N 以各步最低分當整解分數；逐步 PPO 則在每一步結尾給 reward。",
+  "method": {
+    "1_生成器與completer的SFT": "所有生成器與 completer 先在 MetaMATH 上訓練 3 epoch。模型家族：LLaMA2-7B/13B/70B、LLemma-7B/34B、Mistral-7B、DeepSeek-67B。學習率：Mistral-7B 5e-6，其他 7B/13B 2e-5、34B 1e-5、67B/70B 6e-6。訓練用 hfai 的 3D 平行，最大序列長度 512。",
+    "2_PRM訓練資料的原始解": "另外把 7B 與 13B 模型在 GSM8K、MATH 訓練集上各訓練 1 epoch，論文沒寫是哪一家的 7B／13B。每題從每個模型取樣 15 個解，去重後逐步標註，得到約 170k（GSM8K）＋ 270k（MATH）個解。公開的 HF 資料集 peiyi9979/Math-Shepherd 經 datasets-server 查得 444,655 列，與這個量級一致。取樣溫度未揭露。",
+    "3_步驟切分與格式": "論文正文沒有描述切步規則。從公開資料集看：每一步是一行「Step k: …」，行尾放特殊標記 ки，當作預測該步分數的位置；label 欄把 ки 換成 +（有潛力）或 -（沒潛力）；task 欄標 GSM8K 或 MATH。",
+    "4_自動逐步標註": {
+      "completion": "對解 s 的第 i 步 s_i，把題目加上 s_1…s_i 當前綴，由 completer 往下解碼 N 條後續推理，直到得出答案 a_j。實際設定：completer 為 LLemma-7B（已在 MetaMATH 上 SFT），N=8。",
+      "estimation": "HE：只要有任一 a_j 等於標準答案 a*，y_i=1，否則 0（式 3）。SE：y_i 取答對數除以 N（式 4）。實際訓練只用 HE，理由是可以沿用標準語言模型管線。",
+      "未揭露": "最後一步的標籤怎麼給（直接看該解的最終答案，或同樣做補完）；答案比對的正規化方式；補完時的取樣溫度。"
+    },
+    "5_PRM訓練目標與實作": "訓練目標是逐步二元交叉熵，對 K 個步驟加總（式 2）。作者說二元分類和 PRM800K 的三類（good/neutral/bad）差別不大，所以用二元。實作上不加 value head，而是挑兩個特殊 token 代表「有潛力」與「沒潛力」，只在 ки 位置算損失。推論時對這兩個 token 的 logits 做 softmax，取「+」的機率當該步分數；公開 PRM 的 model card 範例用 '+' 與 '-' 兩個 token，只在 ки 位置讀分數。PRM 訓練 1 epoch、學習率 1e-6。底模：驗證用的 PRM 在 GSM8K 用 LLaMA2-70B、在 MATH 用 LLemma-34B；RL 用的 PRM 用 Mistral-7B。論文沒說 PRM 底模是否先經 MetaMATH SFT。",
+    "6_ORM基線": "用同一批解，只依最終答案對錯給整解一個標籤，以式 1 的交叉熵訓練。RL 用的 ORM 同樣以 Mistral-7B 為底。",
+    "7_驗證_best_of_N": "每題從生成器取樣 256 個候選解（溫度未揭露），報 3 組取樣結果的平均準確率。PRM 的整解分數取各步分數的最小值，沿用 Lightman 的做法。SC+RM 的做法：依最終答案把候選分組，組內 RM 分數加總，取總分最高的答案（式 5）。基線有三個：self-consistency（多數決）、ORM、SC+ORM。",
+    "8_逐步PPO": {
+      "設定": "ORM-PPO 只在回應結尾給一次 reward；逐步 PPO 則在每個推理步驟結尾都給一次 PRM 分數作為 reward。訓練題目取自 MetaMATH 的問題。學習率：LLaMA2-7B 4e-7、Mistral-7B 1e-7。KL 係數 0.04，cosine scheduler，最小學習率 1e-8。",
+      "基線": "RFT：MetaMATH 每題取樣 8 個回應，做拒絕取樣微調。另一個基線是 ORM-PPO。所有 RL 模型都以 greedy decoding 評估。",
+      "未揭露": "PPO 的 batch 與 rollout 數、PPO epoch、clip 範圍、GAE 的 γ/λ、value model 的初始化、步分數是原始機率還是經過正規化、是否另加結果獎勵、總訓練步數。HF 資料集卡說明逐步 PPO 用的是內部程式碼，無法開源。"
+    },
+    "9_評估資料": "GSM8K 全測試集，驗證與 RL 都用。MATH 在驗證情境用 MATH500（與 Lightman 相同的 500 題子集；作者稱子集結果與全集相近），RL 情境用 MATH 全測試集。OOD 評估用匈牙利全國高中數學期末考：33 題、總分 100，由 LLemma-34B（MetaMATH SFT）每題產生 256 個候選。",
+    "10_如何量測標註品質": "從 GSM8K 訓練集抽 160 個步驟做人工標註，量兩件事：不同 completer（不同大小；不同訓練資料 Normal／Weak／Augmented）與不同 N 下 HE 的準確率，以及 SE、HE 與人工標註分布之間的交叉熵損失。另外與 DIVERSE（Li et al. 2023b）的 NLI 法與規則法比較（Table 4）。標註者身分、標註準則與一致性都沒有交代。"
+  },
+  "assumptions": [
+    "每題都有可自動比對的標準最終答案，而且可以拿「推得出正確答案」當步驟品質的代理。",
+    "completer 的能力夠，且與被標註解的分布相近。§5.2 顯示 completer 最好事先見過這些題目：Weak 集排除評估題後損失明顯變大。換句話說，標籤品質依賴 completer 對訓練題的熟悉度。",
+    "能從任一中間步驟分岔、重複補完，而且沒有副作用。純文字推理的狀態就是前綴本身。",
+    "解法可以切成離散步驟，每一步都有能放標記的邊界。",
+    "錯誤步驟之後的補完很少碰巧答對；否則 HE 會出現偽陽性。作者自己觀察到 N 越大偽陽性越多。",
+    "用各步最低分代表整解品質是合理的彙總方式。",
+    "用來驗證或監督的 RM 不比被監督的生成器弱（§5.3 的結論）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "GSM8K（全測試集）",
+      "MATH500（驗證情境）",
+      "MATH 全測試集（RL 情境）",
+      "匈牙利全國高中數學期末考（33 題，OOD）",
+      "自建 160 步人工標註集（取自 GSM8K 訓練集，用來量標註品質）"
+    ],
+    "metrics": [
+      "best-of-N 準確率（N=256，3 組取樣平均；§5.1 另掃 N=1–256）",
+      "greedy decoding 準確率（RL 情境）",
+      "OOD 考試得分（滿分 100）",
+      "自動標註相對人工標註的準確率",
+      "自動標註分布相對人工分布的交叉熵損失"
+    ],
+    "baselines": [
+      "Self-Consistency（多數決）",
+      "ORM（同一批解、整解標籤）",
+      "Self-Consistency + ORM",
+      "RFT（拒絕取樣微調）",
+      "ORM-PPO",
+      "以 PRM800K 人工標註訓練的 PRM（Figure 3）",
+      "DIVERSE-NLI（DeBERTa、LLaMA2-13B）與 DIVERSE-Rule 自動標註法"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "當 best-of-256 驗證器時，Math-Shepherd 在三個生成器、兩個資料集上都勝過 SC 與 ORM；PRM 相對 ORM 的優勢在較難的 MATH 上比較大。",
+      "numbers": "LLaMA2-70B：GSM8K 93.2（ORM 91.8、SC 88.0），MATH500 44.5（ORM 40.4、SC 39.4）。LLemma-34B：GSM8K 90.9 對 ORM 90.0，MATH500 46.0 對 43.7。DeepSeek-67B：GSM8K 93.3 對 ORM 92.6；MATH500 上 SC+Math-Shepherd 48.1，對 SC+ORM 47.0、SC 45.4。GSM8K 上加 SC 反而下降（LLaMA2-70B 93.2→92.4），MATH 上則會升（44.5→45.2）。",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "以 Math-Shepherd 做逐步 PPO，勝過 RFT 與只在結尾給 reward 的 ORM-PPO。",
+      "numbers": "Mistral-7B：GSM8K 77.9→84.1、MATH 28.6→33.0；ORM-PPO 81.8／31.3；RFT 79.0／29.9。LLaMA2-7B：66.6→73.2、19.2→21.6；ORM-PPO 70.8／20.8；RFT 68.5／19.9。",
+      "section": "§4.1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "RL 與驗證可以互補；但 PPO 之後，原本的 PRM 單獨當驗證器在 MATH 上輸給 SC，作者解讀為初始 RM 監督不了變強後的策略。",
+      "numbers": "Mistral-7B，GSM8K／MATH500。PPO 前：SC 83.9／35.1、Math-Shepherd 87.1／37.3、SC+Math-Shepherd 86.3／38.3。PPO 後：SC 87.4／42.3、Math-Shepherd 88.4／41.1、SC+Math-Shepherd 89.1／43.5。MATH 上以 SC 當驗證器時，PPO 帶來 7.2 分（35.1→42.3），大於 greedy 的 4.4 分。",
+      "section": "§4.1、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 MATH 上，用自動標註資料訓練的 PRM 勝過用 PRM800K 人工標註訓練的 PRM，而且 PRM 的優勢隨候選數 N 增大而擴大。作者把勝出歸因於分布落差（PRM800K 標的是 GPT-4 輸出）與資料量。",
+      "numbers": "正文只給圖（Figure 3，LLaMA2-70B 生成器、N=1–256），沒有列出數值；自動資料量約為 PRM800K 的 4 倍。",
+      "section": "§5.1、Figure 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "自動標註的品質：以 LLaMA2-70B（MetaMATH SFT）為 completer、N=4 時，HE 對人工標註步驟的準確率達 86%；N 再增大準確率反而下降（偽陽性）。SE 隨 N 增大更貼近人工分布，但用 SE 或 HE 訓練出的驗證器沒有明顯差別。這個方法也勝過既有的 NLI 與規則式自動標註。",
+      "numbers": "HE 準確率 86%（LLaMA2-70B、N=4，160 步）。Table 4：Math-Shepherd（LLaMA2-13B、N=4）85.0%／loss 2.05；DIVERSE-NLI（DeBERTa）61.3%／5.43；DIVERSE-NLI（LLaMA2-13B）75.6%／3.27；DIVERSE-Rule 75.0%／3.43。",
+      "section": "§5.2、Figure 4、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "RM 的大小要跟上生成器。同尺寸配對時，PRM 在 7B／13B／70B 都勝過 SC 與 ORM，但 7B RM 的準確率會隨候選數增加而下降。用大 RM 驗小生成器提升很多；用小 RM 驗大生成器，結果反而比 SC 差。",
+      "numbers": "正文只給圖（Figure 5），沒有數值。",
+      "section": "§5.3、Figure 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "PRM 的資料效率比 ORM 高，天花板看起來也較高。",
+      "numbers": "訓練資料 10k 筆時，PRM 比 ORM 高約 4 分準確率；其餘只給圖（Figure 6a）。",
+      "section": "§5.4、Figure 6(a)",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "在分布外的匈牙利考試上，ORM 與 PRM 都比原始 LLemma-34B 好，PRM 又比 ORM 好。個案中，PRM 對 ORM 選出的錯誤解在出錯的步驟給了低分。",
+      "numbers": "PRM 比 ORM 高 9 分（滿分 100、33 題）；絕對分數只給圖（Figure 6b）。Table 5 個案：ORM 選中的錯誤解，錯誤步驟被 Math-Shepherd 打 0.53、0.38，ORM 卻給這個錯誤解 0.84、給正確解 0.73。",
+      "section": "§5.5、Figure 6(b)、Table 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "補完過程很耗算力：每一步都要解碼 N 條後續推理，N 越大標註越好也越貴。作者認為仍遠低於人工成本，並寄望 speculative decoding、vLLM 等推論加速技術。",
+    "自動標註含雜訊，對 PRM 效能的影響尚未確定。與 PRM800K 的比較受分布落差干擾，人工與自動標註的完整比較留待未來；作者主張結合兩種標註。",
+    "PPO 之後，初始 RM 不足以監督變強的模型；迭代式 RL 留待未來（§4.1）。",
+    "N 過大會讓 HE 產生偽陽性（§5.2）。"
+  ],
+  "limitations_observed": [
+    "實際產生訓練資料的設定是 LLemma-7B completer、N=8，正文沒有報告這組設定的標註準確率。正文給的數字是另外兩組：§5.2 的 86% 來自 LLaMA2-70B、N=4；Table 4 的 85.0% 來自 LLaMA2-13B、N=4。Figure 4 可能含其他 completer 的曲線，但我只讀到文字、沒看到圖。作者自己又指出 completer 越小品質越差、N 越大偽陽性越多，所以 Math-Shepherd 真正吃進去的資料品質，在正文裡只能從相鄰設定推測。",
+    "人工驗證集只有 GSM8K 訓練集的 160 步，沒有 MATH，標註者、準則與一致性也都沒交代。160 個樣本上 86% 的 95% 信賴區間約 ±5 分，只能分辨約 10 分以上的差距；Table 4 裡 85.0 對 75.6 勉強分得開，更細的差距就無法從這個樣本量判斷。",
+    "標註品質依賴 completer 事先學過那些題目：§5.2 的 Weak 集排除評估題後，損失明顯變大。對論文自身的主張而言，這不算洩漏，因為它的訓練資料本來就是在訓練題上標註，量測情境與使用情境一致。但這是一條移轉限制：換到新任務、新題目時，得先讓 completer 學過那批題目，標籤品質才可能維持。在 agent 情境，這等於補完策略要先在同一批任務上訓練過。",
+    "標籤的語意是「在特定 completer 策略下還救得回來的機率」（價值估計），而不是「這一步本身對不對」。一個錯了但容易被後續修正的步驟，或最終答案容易猜中的步驟，都會被 HE 標成正例。論文對錯誤定位的唯一證據是 Table 5 的一則個案。後續第三方基準 ProcessBench（2412.06559，見本 repo 筆記）量到 Math-Shepherd-PRM-7B 找最早錯誤步驟的平均 F1 只有 31.5，表示 best-of-N 準確率的提升不等於能可靠地定位錯步。對想拿 PRM 做軌跡歸因（哪一步出錯）的 T4 用途，這一點最關鍵。",
+    "§5.3 的結論「小 RM 驗大生成器會比 SC 差」只來自 7B 對 70B 的配對，和主表並不一致。Table 1 在 MATH 上用 LLemma-34B 的 RM 驗證 DeepSeek-67B 生成器，仍從 SC 45.4 提升到 Math-Shepherd 47.0、SC+Math-Shepherd 48.1。可見這條規則取決於尺寸差距與 RM 是否有領域預訓練（LLemma 是數學預訓練模型），不宜當成通則。",
+    "主要比較都沒有報變異數。best-of-256 只報 3 組取樣的平均、不報標準差，RL 結果也只有單一種子。GSM8K 上 Math-Shepherd 對 ORM 只差 0.7–1.4 分（Table 1），MATH500 上 1 分只等於 5 題；多數 GSM8K 差距無法排除是取樣雜訊。",
+    "「自動標註勝過人工 PRM800K」這個主張混了兩個變數：分布（GPT-4 輸出對 MetaMATH 微調的 LLaMA 輸出）與資料量（4 倍）。論文沒有做同分布或同數量的對照，而且只給圖、沒給數值，不能據此推論自動標籤的品質不輸人工。",
+    "逐步 PPO 的關鍵設計幾乎都未揭露：reward 的數值形式、是否另加結果獎勵、value model、rollout／batch、訓練步數。訓練程式碼也不開源（HF 資料集卡），ORM-PPO 基線是否用相同超參數同樣沒說。Table 2 的 PPO 優勢無法獨立重現，也無法確定是「逐步給 reward」本身帶來的。",
+    "最大序列長度 512（§4 Parameter Setting）可能截斷 MATH 的長解法，讓 PRM 只看得到前段步驟，但作者沒有報告截斷比例。取最小值彙總時，步數越多最小值越可能偏低，對長解法可能有系統性懲罰，作者也沒有分析。",
+    "Table 3 顯示 PPO 後，在 MATH 上 PRM 與 ORM 單獨驗證都輸給 SC（41.1、41.3 對 42.3），幅度幾乎相同。如果是策略專門迎合 PRM（reward hacking），PRM 應該掉得比 ORM 明顯，所以這組數字比較支持「兩種 RM 都跟不上策略分布的移動」，reward hacking 只能說無法排除。不論是哪一種，論文都沒有檢查 PRM 分數與真實正確率之間的校準，也沒有交代固定的 RM 在 PPO 之後要多久重訓一次。",
+    "成本沒有量化。訓練資料約 44 萬個解，每一步都要補完 8 條；以每解數步計，是千萬次級的補完解碼（我的估算；論文沒報 GPU 小時或 token 數）。",
+    "移轉到 agent 軌跡的三個前提，在數學題上天然成立，在對話 agent 上都不成立：一是要能從軌跡中途分岔並重播，但工具呼叫有副作用，環境與使用者狀態都要能快照；二是要有可自動驗證的最終結果，多數對話任務沒有 golden answer；三是要有和策略同分布的 completer，而多輪互動下每次補完還得連同使用者模擬器一起跑，成本再乘上輪數。論文完全沒有觸及這些。"
+  ],
+  "framework_role": "T4「步驟層級評估與 process reward」的奠基工作之一，貢獻有三。一是資料合成法：不靠人工，就能把「有可驗證終點的軌跡」轉成逐步標籤——從第 i 步分岔 rollout，拿終點成功率當該步的價值。把工具呼叫或對話輪當成「步」時，可以直接套用這個標籤定義。二是逐步評分器：產出的 PRM 會替每一步打分，取最低分就能指出一條軌跡中最可疑的步驟，可以當 T4 的步驟層級評估，也可以當 T7 的 best-of-N 重排器。三是把逐步分數當成 RL 的 dense reward。放到本框架時，「步」可換成 agent 的一輪或一次工具呼叫，「和 golden answer 比對」可換成 T8 的任務完成分數，「completer」則要換成 agent 策略加上 T6 的使用者模擬器，前提是環境能從中途重放。論文本身不處理多輪、工具、使用者或軌跡格式。它的驗證只做挑選，RL 只在訓練期更新策略，沒有任何實驗把低分步驟送去修正，所以沒有落在框架的任何一條邊上。若要接上 E3，得自己把「最低分步驟＋分數」當作異常訊號送進 T5。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Hugging Face TRL v0.14.0 的官方文件 docs/source/prm_trainer.md，以 trl-lib/math_shepherd 作為 PRMTrainer 的訓練範例。這份資料由 repo 內的 examples/datasets/math_shepherd.py 從 peiyi9979/Math-Shepherd 載入、轉成 stepwise supervision 格式後上傳（https://github.com/huggingface/trl/blob/v0.14.0/docs/source/prm_trainer.md 、https://github.com/huggingface/trl/blob/v0.14.0/examples/datasets/math_shepherd.py ，兩份都以 gh api 讀取原文確認）。",
+      "TRL 於 2026-09-17 合併 PR #7133，移除整個實驗性的 PRMTrainer 以及 math_shepherd.py／prm800k.py 資料腳本。PR 內文給的理由是採用率低：近兩個月只有 9 次真實訓練，2026 年只有 2 個同時標註 prm 與 trl 的公開模型（https://github.com/huggingface/trl/pull/7133 ，以 gh 讀取 PR 狀態與內文確認）。"
+    ],
+    "assessment": "未見商用產品採納的證據。能查證的只有開源工具鏈範例層級的支援：TRL 曾把它的資料當 PRM 訓練的標準範例，但已在 2026-09 因使用量極低而整組移除，這反而說明經由 TRL 的實際使用很少。作者所屬 DeepSeek 的官方 DeepSeek-Math README 沒有提到 Math-Shepherd、process 或 reward（以 gh api 讀取全文 grep 確認），所以不列為 DeepSeek 產品採用。後續 PRM 研究沿用它的補完式標籤法、或把 Math-Shepherd PRM 當受測模型（例如 ProcessBench），這屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "資料與權重公開，程式碼沒有。HF 資料集 peiyi9979/Math-Shepherd：444,655 列、單一 train split、欄位為 input／label／task，未標授權、未設存取限制。模型權重 peiyi9979/mistral-7b-sft、peiyi9979/math-shepherd-mistral-7b-prm、peiyi9979/math-shepherd-mistral-7b-rl 都公開（資料集卡列出）；PRM 的 model card 附推論範例：步驟標記 ки，對 '+'／'-' 兩個 token 做 softmax，取 '+' 的機率當步分數。論文與 HF 卡都沒有連到任何程式碼倉庫，只連到 Notion 專案頁。資料集卡明言逐步 PPO 用的是內部程式碼、無法開源；自動標註（補完＋估計）的腳本、驗證用的 70B／34B RM 權重，以及 160 步人工標註集都沒看到公開。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它定義了補完式的自動步驟標籤（步驟價值＝從這一步分岔後達成正確結果的比例），在 160 步人工集上明顯勝過既有的 NLI 與規則式自動標註，是 T4 process reward 子領域的基本構件，所以必讀；它的 PRM 也被第三方基準 ProcessBench 當成受測模型。但它只在單輪數學驗證過，移轉到 agent 軌跡還需要三個論文沒處理的前提：可以從中途分岔重放的環境、可以自動驗證的終點，以及同分布的補完策略。",
+  "related": [
+    "2305.20050",
+    "2211.14275",
+    "2110.14168",
+    "2309.12284",
+    "2310.10080",
+    "2311.05821",
+    "2308.01825",
+    "2311.09724"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

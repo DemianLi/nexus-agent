@@ -10,9 +10,13 @@
  * - **重連時的重讀也排在修改後面**（{@link RatingsController.resync}）：不排的話，一份在修改之前發出、
  *   之後才回來的清單會把剛寫進去的版本蓋回舊的。
  *
- * **`resync` 今天沒有人叫**：這個 web 還沒有重連——下行只在掛上時開一次，斷了只報錯
- * （`use-conversation.ts`）。dsh 在重連時叫它（`ui-message-feedback/src/client/index.ts:72`）；重連落地時
- * 接在「下行重新開好」之後，條件同 dsh：讀過的（不是 `cold`）才重讀。
+ * **伺服器不收評分（`not_supported`，[#1849](https://github.com/DemianLi/nexus-agent/issues/1849)）是 `unsupported`，不是 `failed`**：
+ * 落盤關掉的組裝（#1606）三個 method 都回這個碼。判的是 `rejected` 的 `code`，不比訊息。`failed` 下一次滑過或按下去會再試，
+ * `unsupported` 不再試（試了也一樣），畫面據它把讚踩停用、講原因，按下去不開對話框。**重連的 {@link RatingsController.resync} 照樣重讀**：
+ * 伺服器重開、改成落盤開著之後，讀成功就回到 `ready`。
+ *
+ * **`resync` 由 `use-conversation.ts` 在每次下行接好之後叫**（[#772](https://github.com/DemianLi/nexus-agent/issues/772)），
+ * 同 dsh 在 `connection/reset` 時叫它（`ui-message-feedback/src/client/index.ts:72`）：讀過的（不是 `cold`）才重讀。
  */
 
 import type {
@@ -30,7 +34,7 @@ import type {
 import { FEEDBACK_COPY, failureCopy } from '@/lib/feedback';
 
 /** `list` 那一次讀的狀態。 */
-export type RatingsStatus = 'cold' | 'loading' | 'ready' | 'failed';
+export type RatingsStatus = 'cold' | 'loading' | 'ready' | 'failed' | 'unsupported';
 
 export interface RatingsView {
   readonly status: RatingsStatus;
@@ -54,6 +58,16 @@ const OK: RatingsResult = { ok: true };
 function failed(failure: string): RatingsResult {
   return { ok: false, failure };
 }
+
+/** 伺服器不收評分時回的碼，同 `@nexus/wire` 的 `CommandOutcome` 說的那一個。 */
+const NOT_SUPPORTED = 'not_supported';
+
+/** 這條線收不了的那一種是不是「伺服器不收評分」：看碼，不看訊息（#1849）。 */
+function isUnsupported(outcome: { readonly kind: string; readonly code?: string }): boolean {
+  return outcome.kind === 'rejected' && outcome.code === NOT_SUPPORTED;
+}
+
+const UNSUPPORTED: RatingsResult = { ok: false, failure: FEEDBACK_COPY.unsupported };
 
 /** 線收不下（`rejected`）或根本沒送到（拋了）：講通用那句，後面接原因。 */
 function carrierFailure(reason: unknown): RatingsResult {
@@ -80,9 +94,10 @@ export class RatingsController {
     return this.#view;
   }
 
-  /** 讀過了就不再讀；讀失敗的下次再試。 */
+  /** 讀過了就不再讀；讀失敗的下次再試；伺服器不收評分的不再試（重連的 {@link resync} 才重讀）。 */
   ensure(): Promise<RatingsResult> {
     if (this.#view.status === 'ready') return Promise.resolve(OK);
+    if (this.#view.status === 'unsupported') return Promise.resolve(UNSUPPORTED);
     return this.refresh();
   }
 
@@ -118,6 +133,7 @@ export class RatingsController {
         ...entry,
         ifVersion: this.#view.items.get(messageId)?.version ?? null,
       });
+      if (isUnsupported(outcome)) return this.#unsupported();
       if (outcome.kind === 'rejected') return carrierFailure(outcome.message);
       if (outcome.result.ok) {
         this.#commit(messageId, outcome.result.value);
@@ -138,6 +154,7 @@ export class RatingsController {
       const observed = this.#view.items.get(messageId);
       if (observed?.rating !== rating) return OK;
       const outcome = await this.remote.delete({ messageId, ifVersion: observed.version });
+      if (isUnsupported(outcome)) return this.#unsupported();
       if (outcome.kind === 'rejected') return carrierFailure(outcome.message);
       if (outcome.result.ok) {
         this.#commit(messageId, null);
@@ -157,6 +174,7 @@ export class RatingsController {
       this.#publish({ status: 'failed', items: this.#view.items });
       return carrierFailure(error);
     }
+    if (isUnsupported(outcome)) return this.#unsupported();
     if (outcome.kind === 'rejected') {
       this.#publish({ status: 'failed', items: this.#view.items });
       return carrierFailure(outcome.message);
@@ -182,6 +200,12 @@ export class RatingsController {
     const result = this.#tail.then(guarded, guarded);
     this.#tail = result;
     return result;
+  }
+
+  /** 伺服器不收評分：讀過的那些也不再算數（存不住），清空。 */
+  #unsupported(): RatingsResult {
+    this.#publish({ status: 'unsupported', items: new Map() });
+    return UNSUPPORTED;
   }
 
   #commit(messageId: string, item: WireFeedbackItem | null): void {

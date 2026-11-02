@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { captureFile, mutationPath, sameCapture } from './capture.js';
-import { canonicalPath, displayPathOf, durablePathOf, hostPathOf } from './paths.js';
+import { canonicalPath, displayPathOf, durablePathOf } from './paths.js';
 
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -87,12 +87,6 @@ describe('captureFile', () => {
 });
 
 describe('路徑', () => {
-  it('虛擬路徑對到工作區底下：開頭有沒有 `/` 一樣，`..` 夾回根之內', () => {
-    expect(hostPathOf('/w', '/a/b.md')).toBe('/w/a/b.md');
-    expect(hostPathOf('/w', 'a/b.md')).toBe('/w/a/b.md');
-    expect(hostPathOf('/w', '/../../etc/passwd')).toBe('/w/etc/passwd');
-  });
-
   it('工作區內是相對路徑；經由符號連結指到外面的，顯示成家目錄或絕對路徑', async () => {
     const root = await directory();
     const outside = await directory();

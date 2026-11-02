@@ -1,0 +1,567 @@
+/**
+ * `@` 引用別的會話的候選（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。
+ *
+ * 檔案手寫、不經 serve：這一檔問的是「列出來對不對、排得對不對、快取有沒有失效」；產品路徑上的路由與「不建 thread」在
+ * `serve-session-references.test.ts`。
+ */
+
+import { mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  generationLogFilename,
+  SESSION_LOG_FORMAT_VERSION,
+  sessionDirectoryName,
+} from '@nexus/core';
+import type { SessionStore } from '@nexus/core';
+import { decodeSessionReferenceUri, parseSessionReferenceText } from '@nexus/wire';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  createJsonlSessionStore,
+  openJsonlSessionStore,
+  projectKey,
+  sessionPathsIn,
+} from './jsonl-session-store.js';
+import { sessionOf } from './session-files.fixture.js';
+import { SessionReferenceCandidates } from './session-reference-candidates.js';
+import { projectSessionConversation } from './session-reference.js';
+
+const CWD = '/專案/甲';
+const OTHER = '/專案/乙';
+const LIMITS = { maxWords: 5, maxBytes: 40 };
+
+let root: string;
+
+beforeEach(async () => {
+  root = await mkdtemp(join(tmpdir(), 'nexus-session-refs-'));
+});
+
+afterEach(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+interface Draft {
+  readonly type: string;
+  readonly time: number;
+  readonly data: unknown;
+}
+
+const said = (text: string, time: number): Draft => ({
+  type: 'turn/start',
+  time,
+  data: { kind: 'message', text },
+});
+
+const ended = (time: number): Draft => ({ type: 'turn/end', time, data: {} });
+
+const titled = (title: string, time: number): Draft => ({
+  type: 'session/title',
+  time,
+  data: { title, messageSeqs: [0], source: { kind: 'fallback' } },
+});
+
+/**
+ * 經 JSONL 後端寫一份到 `<root>/<projectKey(projectCwd)>/`（檔名由後端算，含 `/` 或大寫的 id 也對得上）。
+ * 讀不懂的與版本太新的另用 {@link putRaw}。
+ */
+async function put(
+  projectCwd: string,
+  id: string,
+  options: {
+    readonly cwd?: string | null;
+    readonly createdAt?: number;
+    readonly parentSession?: string;
+    readonly isSeeded?: true;
+    readonly events?: readonly Draft[];
+    readonly tail?: string;
+  } = {},
+): Promise<string> {
+  const directory = join(root, projectKey(projectCwd));
+  const stored = openJsonlSessionStore({ directory }).create({
+    version: SESSION_LOG_FORMAT_VERSION,
+    id,
+    createdAt: options.createdAt ?? 1_000,
+    ...(options.cwd === null ? {} : { cwd: options.cwd ?? projectCwd }),
+    ...(options.parentSession === undefined ? {} : { parentSession: options.parentSession }),
+    ...(options.isSeeded === undefined ? {} : { isSeeded: options.isSeeded }),
+  });
+  // 一筆都沒寫的會話在檔案系統上沒有足跡、後端不列（#665），所以空的給一筆與標題無關的事件墊底。
+  const events = options.events?.length
+    ? options.events
+    : [{ type: 'model/usage', time: 1, data: {} }];
+  try {
+    await stored.append(
+      events.map(
+        (event, seq) => ({ type: event.type, seq, time: event.time, data: event.data }) as never,
+      ),
+    );
+  } finally {
+    // 寫失敗也要放掉租約與日誌的 handle：沒關的 handle 被 GC 回收時 Node 會丟 `ERR_INVALID_STATE`（unhandled error，#1814）。
+    await stored.close();
+  }
+  if (options.tail !== undefined) {
+    const log = (await sessionOf(directory, id)).logPath;
+    await writeFile(log, `${await readFile(log, 'utf8')}${options.tail}`);
+  }
+  return directory;
+}
+
+/** 手寫一份 header（檔名 = id，id 只給簡單小寫的）：後端寫不出來的壞檔與新版本。 */
+async function putRaw(projectCwd: string, id: string, header: unknown): Promise<string> {
+  const directory = join(root, projectKey(projectCwd));
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, `${id}.header.json`),
+    typeof header === 'string' ? header : JSON.stringify(header),
+  );
+  return directory;
+}
+
+/**
+ * 一次放 `count` 份會話（id 是 `s00`、`s01`…，`createdAt` 是 1000 起每份加一）：**只有第一份經後端寫**，其餘照它的檔案複製
+ * （世代檔與舊路徑的墓碑），改 header 行與墓碑的 id 與 createdAt（#1814）。
+ *
+ * 每份經後端寫要 `fsync` 好幾次（日誌批次、header 暫存檔、目錄），單份約 25 ms；55 份在忙的機器上超過 5 秒期限，逾時後這個
+ * 迴圈還在跑，下一條測試的 `root` 已經換了，殘留的寫入跑進去（`s44`、`s45` 出現在別條測試的清單裡）。這裡要的只是「目錄裡有 N 份
+ * 列得出來的會話」，不是 N 次寫入，所以複製。格式由第一份的真檔案決定，格式版本升了不必改這裡。
+ */
+async function putMany(projectCwd: string, count: number): Promise<void> {
+  const directory = await put(projectCwd, 's00', { createdAt: 1_000, events: [] });
+  const first = sessionPathsIn(directory, 's00');
+  const log = await readFile(first.log, 'utf8');
+  const newline = log.indexOf('\n');
+  const header = JSON.parse(log.slice(0, newline)) as Record<string, unknown>;
+  const tombstone = JSON.parse(await readFile(first.tombstone, 'utf8')) as Record<string, unknown>;
+  for (let i = 1; i < count; i += 1) {
+    const id = `s${String(i).padStart(2, '0')}`;
+    const paths = sessionPathsIn(directory, id);
+    await mkdir(paths.sessionDirectory, { recursive: true });
+    await writeFile(
+      paths.log,
+      `${JSON.stringify({ ...header, id, createdAt: 1_000 + i })}${log.slice(newline)}`,
+    );
+    await writeFile(
+      paths.tombstone,
+      `${JSON.stringify({ ...tombstone, id, createdAt: 1_000 + i })}\n`,
+    );
+  }
+}
+
+function service(
+  extra: Partial<ConstructorParameters<typeof SessionReferenceCandidates>[0]> = {},
+): SessionReferenceCandidates {
+  return new SessionReferenceCandidates({ rootDir: root, cwd: CWD, title: LIMITS, ...extra });
+}
+
+const ids = (candidates: readonly { readonly sessionId: string }[]) =>
+  candidates.map(({ sessionId }) => sessionId);
+
+/** 目錄裡每個檔的名字與內容（含子目錄）：唯讀的列前後要一模一樣。 */
+async function snapshot(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  const walk = async (directory: string): Promise<void> => {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const path = join(directory, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else out[path] = await readFile(path, 'utf8');
+    }
+  };
+  await walk(root);
+  return out;
+}
+
+describe('SessionReferenceCandidates.list', () => {
+  it('列全部專案的會話含子代理，排除自己；同工作區在前、沒記目錄次之、其餘在後，同等級內新的在前', async () => {
+    await put(CWD, 'mine', { events: [said('我自己', 5_000)] });
+    await put(CWD, 'same-old', { events: [said('甲舊', 2_000)] });
+    await put(CWD, 'same-new', { events: [said('甲新', 4_000)] });
+    await put(CWD, 'nocwd', { cwd: null, events: [said('無目錄', 9_000)] });
+    await put(OTHER, 'other', { events: [said('乙的', 8_000)] });
+
+    const candidates = await service().list('mine', '');
+    expect(ids(candidates)).toEqual(['same-new', 'same-old', 'nocwd', 'other']);
+    expect(candidates.map(({ sameWorkspace }) => sameWorkspace)).toEqual([
+      true,
+      true,
+      false,
+      false,
+    ]);
+    expect(candidates[0]).toMatchObject({
+      label: '甲新',
+      cwd: CWD,
+      createdAt: 1_000,
+      updatedAt: 4_000,
+    });
+    expect(candidates[2]).not.toHaveProperty('cwd');
+  });
+
+  it('mention 是伺服器編好的：解得回 id 與標題，標題裡的 ] 與 \\ 有跳脫', async () => {
+    await put(CWD, 'x/子代理-1', { events: [titled('查 [a]\\b', 2_000)] });
+    const [candidate] = await service().list('me', '');
+    expect(candidate?.label).toBe('查 [a]\\b');
+    const parsed = parseSessionReferenceText(candidate?.mention ?? '');
+    expect(parsed.references).toEqual([{ sessionId: 'x/子代理-1', label: '查 [a]\\b' }]);
+    expect(
+      decodeSessionReferenceUri(/\((nexus-session:[^)]*)\)/u.exec(candidate?.mention ?? '')![1]!),
+    ).toBe('x/子代理-1');
+  });
+
+  it('沒有標題就用 id 當標題', async () => {
+    await put(CWD, 'bare', { events: [] });
+    expect((await service().list('me', ''))[0]).toMatchObject({ sessionId: 'bare', label: 'bare' });
+  });
+
+  it('子代理帶它屬於哪條會話：父的標題，父在別格或沒有標題時退回 id；自己的子代理也列', async () => {
+    await put(CWD, 'me', { events: [titled('主會話', 1_500)] });
+    await put(CWD, 'me/sub', { parentSession: 'me', events: [said('子任務', 2_000)] });
+    await put(CWD, 'me/orphan', { parentSession: 'gone', events: [said('孤兒', 1_900)] });
+    const candidates = await service().list('me', '');
+    expect(candidates.find(({ sessionId }) => sessionId === 'me/sub')).toMatchObject({
+      parentSessionId: 'me',
+      parentLabel: '主會話',
+    });
+    expect(candidates.find(({ sessionId }) => sessionId === 'me/orphan')).toMatchObject({
+      parentSessionId: 'gone',
+      parentLabel: 'gone',
+    });
+    expect(candidates.find(({ sessionId }) => sessionId === 'me')).toBeUndefined();
+  });
+
+  it('分叉帶 parentSession 卻是自己的一條會話：不帶 parentSessionId／parentLabel（#1579 驗收 2）', async () => {
+    await put(CWD, 'source', { events: [titled('來源', 1_500)] });
+    await put(CWD, 'forked', {
+      parentSession: 'source',
+      isSeeded: true,
+      events: [
+        said('來源那一句', 1_000),
+        { type: 'session/end-seed', time: 1_000, data: { inherited: true } },
+        said('分叉之後', 2_000),
+      ],
+    });
+    const forked = (await service().list('me', '')).find(({ sessionId }) => sessionId === 'forked');
+    expect(forked).toBeDefined();
+    expect(forked).not.toHaveProperty('parentSessionId');
+    expect(forked).not.toHaveProperty('parentLabel');
+  });
+
+  it('比對 id、目錄、標題，不分大小寫；不搜內文', async () => {
+    await put(CWD, 'Alpha-1', { events: [said('修 Bug', 2_000)] });
+    await put(OTHER, 'beta', { events: [said('別的事', 2_000), said('內文裡有 秘密', 3_000)] });
+    const s = service();
+    expect(ids(await s.list('me', 'alpha'))).toEqual(['Alpha-1']);
+    expect(ids(await s.list('me', 'BUG'))).toEqual(['Alpha-1']);
+    expect(ids(await s.list('me', '乙'))).toEqual(['beta']);
+    expect(ids(await s.list('me', '秘密'))).toEqual([]);
+  });
+
+  it('最多回 limit 筆，預設 50', async () => {
+    await putMany(CWD, 55);
+    // 夾具是真的：放得下的 limit 列得出全部 55 份（複製出來的檔不是被靜靜略過）。
+    expect(await service({ limit: 100 }).list('me', '')).toHaveLength(55);
+    expect(await service().list('me', '')).toHaveLength(50);
+    expect(await service({ limit: 3 }).list('me', '')).toHaveLength(3);
+  });
+
+  it('CLI 的 run 目錄不列（root id 一律是 cli，指不到唯一的一份）', async () => {
+    const cli = createJsonlSessionStore({ rootDir: root });
+    const stored = cli.create({
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'cli',
+      createdAt: 1,
+      cwd: CWD,
+    });
+    await stored.append([{ type: 'model/usage', seq: 0, time: 1, data: {} } as never]);
+    await stored.close();
+    await put(CWD, 'real', { events: [] });
+    expect(ids(await service().list('me', ''))).toEqual(['real']);
+  });
+
+  it('同一個 id 出現在兩格：專案自己的那一格優先', async () => {
+    await put(OTHER, 'dup', { events: [said('乙格的', 2_000)] });
+    await put(CWD, 'dup', { events: [said('甲格的', 2_000)] });
+    const candidates = await service().list('me', '');
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ label: '甲格的', sameWorkspace: true });
+  });
+
+  it('header 讀不懂、版本太新的不列；日誌中段壞掉的照列（撿回讀得懂的）', async () => {
+    await put(CWD, 'good', { events: [said('好的', 2_000)] });
+    await putRaw(CWD, 'broken', '{壞的');
+    // 比這一版新的寫方寫的是世代檔：舊路徑上版本 52 起的 header 是墓碑，驗不到「版本太新」。
+    const future = join(root, projectKey(CWD), sessionDirectoryName('future'));
+    await mkdir(future, { recursive: true });
+    await writeFile(
+      join(future, generationLogFilename(SESSION_LOG_FORMAT_VERSION + 1)),
+      `${JSON.stringify({ type: 'session', version: SESSION_LOG_FORMAT_VERSION + 1, id: 'future', createdAt: 1, cwd: CWD })}\n`,
+    );
+    await put(CWD, 'torn', { events: [said('壞在中間', 2_000)], tail: '{壞掉\n' });
+    expect(ids(await service().list('me', '')).sort()).toEqual(['good', 'torn']);
+  });
+
+  it('會話根還不存在：空的', async () => {
+    expect(await service({ rootDir: join(root, '還沒有') }).list('me', '')).toEqual([]);
+  });
+
+  it('中止了就拋它的 reason', async () => {
+    await put(CWD, 'a', { events: [] });
+    const controller = new AbortController();
+    controller.abort(new Error('不要了'));
+    await expect(service().list('me', '', controller.signal)).rejects.toThrow('不要了');
+  });
+
+  it('唯讀：列一次不改任何一個位元組，別的把手握著寫租約照樣列得出來', async () => {
+    await put(CWD, 'held', { events: [said('被握著', 2_000)] });
+    const holder = await openJsonlSessionStore({
+      directory: join(root, projectKey(CWD)),
+    }).resume('held');
+    try {
+      const before = await snapshot();
+      expect(ids(await service().list('me', ''))).toEqual(['held']);
+      expect(await snapshot()).toEqual(before);
+    } finally {
+      await holder.stored.close();
+    }
+  });
+});
+
+describe('標題快取', () => {
+  /** 數 `open(id, 'read')` 被叫了幾次。 */
+  function counting() {
+    const opened: string[] = [];
+    const openStore = (directory: string): SessionStore => {
+      const inner = openJsonlSessionStore({ directory });
+      return {
+        ...inner,
+        list: inner.list.bind(inner),
+        open: (async (id: string, access: 'read') => {
+          opened.push(id);
+          return inner.open(id, access);
+        }) as SessionStore['open'],
+      } as SessionStore;
+    };
+    return { opened, openStore };
+  }
+
+  it('revision 沒變就不重讀；本文多了一筆就只重讀那一份', async () => {
+    const directory = await put(CWD, 'a', { events: [said('甲', 2_000)] });
+    await put(CWD, 'b', { events: [said('乙', 2_000)] });
+    const { opened, openStore } = counting();
+    const s = service({ openStore });
+    await s.list('me', '');
+    expect(opened.sort()).toEqual(['a', 'b']);
+    opened.length = 0;
+    await s.list('me', '甲');
+    await s.list('me', '');
+    expect(opened).toEqual([]);
+
+    const line = `${JSON.stringify({ type: 'session/title', seq: 1, time: 3_000, data: { title: '改名了', messageSeqs: [0], source: { kind: 'fallback' } } })}\n`;
+    const path = (await sessionOf(directory, 'a')).logPath;
+    await writeFile(path, `${await readFile(path, 'utf8')}${line}`);
+    const candidates = await s.list('me', '改名');
+    expect(opened).toEqual(['a']);
+    expect(ids(candidates)).toEqual(['a']);
+  });
+
+  it('被取消的一趟讀過的不作廢：下一趟接著讀，每一份總共只開一次', async () => {
+    for (let i = 0; i < 20; i += 1) {
+      await put(CWD, `s${String(i).padStart(2, '0')}`, { events: [said(`第${i}句`, 2_000 + i)] });
+    }
+    const { opened, openStore } = counting();
+    const controller = new AbortController();
+    const counted = (directory: string): SessionStore => {
+      const store = openStore(directory);
+      return {
+        ...store,
+        list: store.list.bind(store),
+        open: (async (id: string, access: 'read') => {
+          // 第一份開始讀就取消：一趟只讀到一半。
+          if (opened.length === 0) controller.abort(new Error('打了下一個字'));
+          return store.open(id, access);
+        }) as SessionStore['open'],
+      } as SessionStore;
+    };
+    const s = service({ openStore: counted });
+    await expect(s.list('me', '', controller.signal)).rejects.toThrow('打了下一個字');
+    expect(opened.length).toBeGreaterThan(0);
+    expect(opened.length).toBeLessThan(20);
+    const candidates = await s.list('me', '');
+    expect(candidates).toHaveLength(20);
+    expect(opened.sort()).toEqual([...new Set(opened)].sort());
+    expect(opened).toHaveLength(20);
+  });
+
+  it('上一趟還在讀的那幾份，下一趟接著等，不重開', async () => {
+    for (let i = 0; i < 12; i += 1) {
+      await put(CWD, `s${String(i).padStart(2, '0')}`, { events: [said(`第${i}句`, 2_000 + i)] });
+    }
+    const opened: string[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const openStore = (directory: string): SessionStore => {
+      const inner = openJsonlSessionStore({ directory });
+      return {
+        ...inner,
+        list: inner.list.bind(inner),
+        open: (async (id: string, access: 'read') => {
+          opened.push(id);
+          await gate;
+          return inner.open(id, access);
+        }) as SessionStore['open'],
+      } as SessionStore;
+    };
+    const s = service({ openStore });
+    const first = new AbortController();
+    const one = s.list('me', '', first.signal).catch((error: unknown) => error);
+    while (opened.length < 8) await new Promise((resolve) => setTimeout(resolve, 1));
+    first.abort(new Error('打了下一個字'));
+    const two = s.list('me', '');
+    // 第二趟起跑、把同樣的幾份也排進去之後才放行。
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    release();
+    expect(await one).toBeInstanceOf(Error);
+    expect(await two).toHaveLength(12);
+    expect(opened.sort()).toEqual([...new Set(opened)].sort());
+    expect(opened).toHaveLength(12);
+  });
+
+  it('日誌壞到撿回來是空的，也照 revision 記下、沒變就不再讀', async () => {
+    const directory = await put(CWD, 'torn', { events: [said('好', 2_000)] });
+    // 事件全換成一行壞的；世代檔第一行的 header 行留著。
+    const path = (await sessionOf(directory, 'torn')).logPath;
+    const text = await readFile(path, 'utf8');
+    await writeFile(path, `${text.slice(0, text.indexOf('\n') + 1)}{壞掉\n`);
+    const { opened, openStore } = counting();
+    const s = service({ openStore });
+    await s.list('me', '');
+    await s.list('me', '');
+    expect(opened).toEqual(['torn']);
+  });
+
+  it('刪掉的會話從快取與清單裡消失', async () => {
+    const directory = await put(CWD, 'gone', { events: [said('要被刪', 2_000)] });
+    const s = service();
+    expect(ids(await s.list('me', ''))).toEqual(['gone']);
+    await rm(sessionPathsIn(directory, 'gone').tombstone);
+    await rm(sessionPathsIn(directory, 'gone').sessionDirectory, { recursive: true });
+    expect(await s.list('me', '')).toEqual([]);
+  });
+});
+
+describe('read：精確讀一條被引用的會話（準備那一半用）', () => {
+  it('收好尾的整份日誌與 header 原樣交回；專案自己的那一格優先，同 id 在兩格時取自己的', async () => {
+    await put(OTHER, 'dup', { events: [said('別格的', 2_000), ended(2_100)] });
+    await put(CWD, 'dup', { events: [said('自己格的', 2_000), ended(2_100)] });
+    const { header, events } = await service().read('dup');
+    expect(header.id).toBe('dup');
+    expect(header.cwd).toBe(CWD);
+    expect(events.map((event) => [event.type, (event.data as { text?: string }).text])).toEqual([
+      ['turn/start', '自己格的'],
+      ['turn/end', undefined],
+    ]);
+  });
+
+  it('別的專案的也讀得到；子代理那種含 / 的 id 也行', async () => {
+    await put(OTHER, 'elsewhere', { events: [said('別處', 2_000), ended(2_100)] });
+    await put(CWD, 'delegated/tools:abc', { parentSession: 'me' });
+    const s = service();
+    expect((await s.read('elsewhere')).events).toHaveLength(2);
+    expect((await s.read('delegated/tools:abc')).header.parentSession).toBe('me');
+  });
+
+  it('活著的讀記憶體：不補結；header 與版號讀磁碟', async () => {
+    await put(CWD, 'running', { events: [said('盤上的', 2_000)] });
+    const live = [said('記憶體的', 2_000)].map((draft, seq) => ({ ...draft, seq })) as never[];
+    const { header, storedFormatVersion, events } = await service({
+      liveEvents: (id) => (id === 'running' ? live : undefined),
+    }).read('running');
+    expect(header.id).toBe('running');
+    expect(storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(events).toEqual(live);
+  });
+
+  it('不活著：冷讀並補結', async () => {
+    await put(CWD, 'crashed', { events: [said('講到一半', 2_000)] });
+    const { events } = await service({ liveEvents: () => undefined }).read('crashed');
+    expect(events.at(0)?.type).toBe('turn/start');
+    expect(events.at(-1)?.type).toBe('turn/end');
+  });
+
+  it('活著但自己那格沒有檔、別格有同 id：讀別格，事件不混', async () => {
+    await put(OTHER, 'dup', { events: [said('別格的', 2_000), ended(2_100)] });
+    const { header, events } = await service({ liveEvents: () => [] }).read('dup');
+    expect(header.cwd).toBe(OTHER);
+    expect(events).toHaveLength(2);
+  });
+
+  it('活著但盤上還沒有檔：找不到', async () => {
+    await expect(service({ liveEvents: () => [] }).read('nobody')).rejects.toMatchObject({
+      name: 'SessionNotFoundError',
+    });
+  });
+
+  it('沒有這一份：SessionNotFoundError；CLI 的 run 目錄不算', async () => {
+    const stored = createJsonlSessionStore({ rootDir: root }).create({
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'cli',
+      createdAt: 1,
+      cwd: CWD,
+    });
+    await stored.append([{ type: 'model/usage', seq: 0, time: 1, data: {} } as never]);
+    await stored.close();
+    const s = service();
+    await expect(s.read('nobody')).rejects.toMatchObject({ name: 'SessionNotFoundError' });
+    await expect(s.read('cli')).rejects.toMatchObject({ name: 'SessionNotFoundError' });
+  });
+
+  it('壞的日誌不撿回：拋 SessionCorruptionError（撿回來的殘缺版本不能當成那條會話的樣子）', async () => {
+    const directory = await put(CWD, 'torn', { events: [said('好', 2_000), said('二', 3_000)] });
+    const path = (await sessionOf(directory, 'torn')).logPath;
+    const lines = (await readFile(path, 'utf8')).split('\n');
+    // 壞行插在第一顆事件之後（第一行是 header 行）。壞行之後要有收尾才是壞檔；沒有收尾的壞行是當機的尾巴，預設讀取會丟掉它（#1508）。
+    const closer = JSON.stringify({ type: 'turn/end', seq: 99, time: 1, data: {} });
+    await writeFile(
+      path,
+      `${[lines[0], lines[1], '{壞掉', ...lines.slice(2)].join('\n')}${closer}\n`,
+    );
+    await expect(service().read('torn')).rejects.toMatchObject({ name: 'SessionCorruptionError' });
+  });
+
+  it('唯讀：不改任何位元組；已經中止就不開始讀', async () => {
+    await put(CWD, 'held', { events: [said('好', 2_000)] });
+    const before = await snapshot();
+    const controller = new AbortController();
+    await service().read('held');
+    controller.abort(new Error('不要了'));
+    await expect(service().read('held', controller.signal)).rejects.toThrow('不要了');
+    expect(await snapshot()).toEqual(before);
+  });
+
+  it('死在第一次模型呼叫的那一份（#1598）：冷讀在記憶體補平，投影得出那句人打的字；檔的位元組與 mtime 都不變', async () => {
+    const directory = await put(CWD, 'crashed', {
+      events: [said('那句人打的字', 2_000), { type: 'model/start', time: 2_001, data: {} }],
+    });
+    // 專案目錄底下（含會話目錄）的每個檔都比：世代檔、舊路徑的墓碑。
+    const snapshot = async () =>
+      Promise.all(
+        (await readdir(directory, { recursive: true, withFileTypes: true }))
+          .filter((entry) => entry.isFile())
+          .map((entry) => join(entry.parentPath, entry.name))
+          .sort()
+          .map(
+            async (path) =>
+              [path, await readFile(path, 'utf8'), (await stat(path)).mtimeMs] as const,
+          ),
+      );
+    const before = await snapshot();
+
+    const { events } = await service().read('crashed');
+    expect(projectSessionConversation(events)).toMatchObject([
+      { role: 'user', text: '那句人打的字' },
+    ]);
+    // 補結只在記憶體：開著的呼叫收成失敗、那一輪收成中斷。
+    expect(events.slice(2).map((event) => event.type)).toEqual(['model/end', 'turn/end']);
+    expect(await snapshot()).toEqual(before);
+  });
+});

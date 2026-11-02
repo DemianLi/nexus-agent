@@ -1,0 +1,181 @@
+{
+  "id": "2305.07157",
+  "title": "Exploring Zero and Few-shot Techniques for Intent Classification",
+  "topic": "T1",
+  "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "ServiceNow 在「數千個客戶各自一個意圖模型、冷啟動沒語料、儲存受限」的情境下，比較領域適應句向量、LLM 資料增補、以意圖描述提示 LLM 的 zero-shot 分類、以及 Flan-T5＋IA3（T-Few）參數高效微調四條路線，結論是 PEFT 每意圖 1 例就最好、描述式 zero-shot 也很有競爭力。",
+  "problem": "企業對話 NLU 供應商要替成千上萬個客戶各訓一個意圖分類器；新客戶沒有標註語句（冷啟動），人工撰寫每個意圖的訓練語句很費工；法規上不能把不同客戶的資料混在一起預訓練，每個客戶只能放很輕量的模型，總儲存空間也受限。意圖分類是虛擬助理最主要的 NLU 任務，冷啟動做不好，整個對話入口就接錯人。",
+  "core_idea": "把『少樣本／零樣本意圖分類』拆成四種可在工業約束下落地的手段並在同一組資料上並排比較：(1) 用公司自有的意圖分類體系與句對資料把 LaBSE 繼續訓練成領域句向量 ELMSE，每客戶只訓一層分類頭；(2) 用 GPT-3／Parrot T5 從 5 句種子擴增到 20 句；(3) 不給任何例句，只把意圖名稱＋自然語言描述（外加一個 none 選項）寫進 prompt 讓 LLM 直接選標籤，意圖太多時先用句向量檢索 top-5 候選再交給 LLM；(4) 在指令微調過的 Flan-T5 上沿用 (3) 的 prompt，用 T-Few 配方只訓 IA3 adapter。核心主張是指令微調模型＋意圖描述這個介面，讓極少樣本（甚至零樣本）就能勝過傳統句向量分類器。",
+  "method": {
+    "任務設定": "單輪、單一標籤的封閉集合意圖分類；輸入是一句使用者語句，輸出是意圖名稱之一，部分資料集的測試集含 out-of-scope（OOS，不屬任何意圖）語句。few-shot 以每意圖隨機抽 K 句模擬。",
+    "資料": "MASSIVE 英文訓練／測試集（60 意圖、11514／2974 句、無 OOS）；內部 OOTB-dataset（27 意圖、1363／3099 句，也是 ELMSE 的預訓練資料，故不參與 §4.1、§4.2 的 few-shot 評估）；內部 Benchmark01／02／03（9／13／31 意圖；測試 300／420／960 句；含 OOS），涵蓋 ITSM、HR、CSM 三個企業領域（Table 1）。",
+    "4.1 領域適應（ELMSE）": [
+      "從 LaBSE checkpoint 出發，把意圖分類、改寫等任務改寫成句子相似度任務，在公司領域資料（意圖分類體系、OOTB 意圖的人工合成語句）加上公開資料集上繼續訓練，得到 ELMSE；損失函數與訓練超參數論文未列。",
+      "每個客戶：凍結 ELMSE，取句向量當特徵，只訓一層可訓練的非線性 dense 分類層。",
+      "對照組：LaBSE、MUSE（多語 Universal Sentence Encoder）、GTR-3B（約 ELMSE 的 30 倍大），同樣凍結後接分類層。",
+      "K ∈ {3,5,8,10,15,20, 全量}；每個 K 做 5 次不同的隨機抽樣，報平均 in-scope accuracy 與標準差（Table 2 列 K=3、5，其餘在 Figure 1）。"
+    ],
+    "4.2 資料增補": [
+      "起點：每意圖 5 句種子集。每種方法都為每個意圖生成 20 句，再用 §4.1 的 ELMSE＋分類層訓練、評估；除非特別註明，訓練集不含種子集本身。",
+      "GPT-3 改寫：沿用 Sahu et al. 2022，prompt 結構為『任務說明（請改寫以下語句以產生多樣的語句）→ 列出同一意圖的 5 句種子 → 要求產生 20 句』；temperature 與 top_p 設高以增加多樣性（確切值未列）。",
+      "GPT-3 依意圖描述生成：prompt 先說明『一個虛擬助理服務多個意圖』，列出『全部』意圖的『名稱: 描述』，最後要求為指定意圖產生 20 句；作者發現列出所有意圖（而不是只列目標意圖）能抑制幻覺。此法不看種子語句，另測一組『種子集＋此法生成』。",
+      "Parrot T5：以 T5 為基底的 Parrot 改寫器，從種子集產生 20 句多樣改寫；另測『種子集＋Parrot』。",
+      "評估：與 ELMSE K=5 基線比較，報 3 個隨機種子的平均 in-scope accuracy 與標準差（Table 4）。"
+    ],
+    "4.3 描述式 zero-shot 提示與意圖過濾": [
+      "prompt 結構（轉述自 §4.3 範例）：開頭一句指示『這句話要對應到下列恰好一個意圖』→ 每行一個『意圖名稱: 一句自然語言描述』（描述由作者為 4 個資料集手寫）→ 最後加一個 none_of_the_above 選項，描述為『使用者語句與上列意圖都無關時選它』→ 『Sentence: <測試語句>』→ 『Intent:』讓模型補完標籤。prompt 內不放任何訓練例句。",
+      "輸出解析：不要求完全比對；在補完文字中搜尋所有意圖名稱，取第一個出現的當預測（用以容忍幻覺與多餘文字）；補完中找不到任何意圖名稱就判為 out-of-scope。",
+      "模型：GPT-3（175B，版本未列）temperature=0、max tokens=20；Flan-T5-XXL（11B）用預設生成設定、不限長度。",
+      "意圖過濾（兩段式路由）：意圖多時 prompt 變長、延遲與按 token 計費成本上升，所以先用句子相似度（每意圖 5 句例句）檢索 top-5 候選意圖，只把這 5 個意圖的描述放進 prompt；例句只用於檢索、不放進 LLM prompt。作者報每意圖 5 例時 top-5 召回率超過 0.85。有過濾的結果平均 3 次（不同的 5 例抽樣）。",
+      "因為過濾步驟需要例句，Table 5 中『5 intents』那幾列嚴格說是 few-shot；『全部意圖』那幾列才是真 zero-shot。"
+    ],
+    "4.4 參數高效微調（T-Few on Flan-T5）": [
+      "在 Flan-T5 中從零加入 IA3 adapter 並只訓 adapter；每意圖 K=1、3、5 句。",
+      "輸入沿用 §4.3 的同一個描述式 prompt，目標字串是意圖名稱。",
+      "損失：T-Few 的三項（語言模型損失、unlikelihood 損失、長度正規化損失），超參數照 T-Few 原文（本文未重列）。",
+      "MASSIVE 與 OOTB 訓練時 prompt 內只放 15 個意圖以免 OOM（怎麼挑這 15 個未說明），推論時放全部意圖。",
+      "結果只以 Figure 2 呈現（Flan-T5 不同尺寸對 K 的曲線，虛線為前述方法在各資料集的最佳值），全文未列數值。"
+    ],
+    "指標": "in-scope accuracy：只算屬於已知意圖的測試樣本的正確率；out-of-scope recall：OOS 測試樣本被判為不屬任何意圖的比例（只在 §4.3 報）。"
+  },
+  "assumptions": [
+    "每個意圖都能寫出一段夠好、能和近鄰意圖區分的自然語言描述，而且撰寫描述比撰寫例句便宜。",
+    "單輪、單一意圖：每句話恰好對應一個意圖或 none，不處理多意圖、多輪上下文或需要澄清的模糊語句。",
+    "推論時意圖集合是已知的封閉集合，可以全部（或檢索後的子集）列進 prompt。",
+    "LLM 的補完可以用字串搜尋意圖名稱的方式可靠地解析成標籤。",
+    "做意圖過濾時，句向量 top-5 檢索的召回率夠高，不會成為整體準確率的上限瓶頸。",
+    "公司內部意圖分類體系與 OOTB 合成語句的分布，和各客戶的真實意圖夠接近，領域預訓練才有用。",
+    "資料增補的前提是種子集品質良好。",
+    "法規上不能跨客戶混用資料，所以每客戶只能部署輕量模型或 adapter。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MASSIVE（英文，60 意圖，公開）",
+      "OOTB-dataset（內部，27 意圖）",
+      "Benchmark01（內部，9 意圖，含 OOS）",
+      "Benchmark02（內部，13 意圖，含 OOS）",
+      "Benchmark03（內部，31 意圖，含 OOS）"
+    ],
+    "metrics": [
+      "in-scope accuracy",
+      "out-of-scope recall（僅 zero-shot 實驗）",
+      "top-5 intent retrieval recall（意圖過濾步驟）"
+    ],
+    "baselines": [
+      "LaBSE、MUSE、GTR-3B 句向量＋dense 分類層（K=3、5 等）",
+      "ELMSE K=5 few-shot 分類器（資料增補的基線）",
+      "GPT-3（175B）與 Flan-T5-XXL（11B）描述式 zero-shot 提示（全意圖與 top-5 過濾兩種）",
+      "Flan-T5-Large／XL 等不同尺寸的 IA3 PEFT（與前述各方法最佳值比較）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "領域適應後的 ELMSE 在 few-shot 下明顯勝過同尺寸的 LaBSE、MUSE，與大 30 倍的 GTR-3B 相差不多。",
+      "numbers": "K=5 in-scope accuracy（MASSIVE／B01／B02／B03）：ELMSE 63／80／67／79；LaBSE 58／65／59／67；MUSE 61／70／66／70；GTR-3B 66／78／73／84。K=3：ELMSE 57／77／63／74；GTR-3B 59／76／70／78。",
+      "section": "§4.1.1、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "ELMSE 相對其起點 LaBSE 的優勢在樣本越少時越大，隨 K 增加而收斂。",
+      "numbers": "ELMSE 減 LaBSE（MASSIVE／B01／B02／B03）：K=3 為 +11／+18／+11／+16；K=5 為 +5／+15／+8／+12；K≥8 的曲線只在 Figure 1。",
+      "section": "§4.1.1、Table 2、Figure 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "用 GPT-3 或 Parrot T5 改寫種子語句產生的資料，即使不加回種子集，訓出的分類器也優於 ELMSE K=5 基線；只靠意圖描述生成的 GPT-3 資料單用較差，要配種子集才有益。",
+      "numbers": "MASSIVE／B01／B02／B03：基線 63／80／67／79；GPT-3 改寫 63／84／71／81；Parrot T5 58／81／73／81；GPT-3 依描述生成 51／76／69／76；種子集＋GPT-3 依描述 63／84／71／78；種子集＋Parrot T5 63／79／68／76。",
+      "section": "§4.2.1、Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "作者總結：以改寫做資料增補在多數情況下再加 2–4 個百分點。",
+      "numbers": "GPT-3 改寫相對基線：MASSIVE +0、B01 +4、B02 +4、B03 +2。",
+      "section": "§5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "只用意圖描述提示 LLM 的 zero-shot 分類，整體優於用分類器的 few-shot 做法，且因為只需描述，可直接擴展到新意圖；Flan-T5-XXL 雖小 16 倍，in-scope accuracy 與 GPT-3 相當，意圖少時常更好。",
+      "numbers": "全意圖 zero-shot（Flan-T5-XXL／GPT-3）：MASSIVE 73.3／73.9；OOTB 86.3／84.9；B01 86.5／89.3；B02 69／61.3。top-5 過濾：MASSIVE 68.6／69.2；OOTB 83.7／83.4；B01 86.5／84.6；B02 69.7／60.6。對照 few-shot 最佳：MASSIVE 66（GTR-3B K=5）、B01 84（GPT-3 改寫增補）、B02 73（GTR-3B K=5 與 Parrot T5 增補）。",
+      "section": "§4.3 Results、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "GPT-3 偵測無關語句（OOS）的能力明顯優於 Flan-T5-XXL（作者主張；B02 全意圖設定為例外）。",
+      "numbers": "OOS recall（Flan-T5-XXL／GPT-3）：B01 top-5 0.43／0.97、全意圖 0.48／0.67；B02 top-5 0.65／0.87、全意圖 0.7／0.67。",
+      "section": "§4.3 Results、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "以句子相似度先檢索 top-5 候選意圖再交給 LLM，每意圖只需 5 例就有不錯的候選召回，能把 prompt 縮短以降低延遲與成本。",
+      "numbers": "top-5 召回率 > 0.85（每意圖 5 例）；過濾後的結果為 3 個隨機種子平均。",
+      "section": "§4.3 Filtering Intents for LLMs",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "以 T-Few 配方在 Flan-T5 上訓 IA3 adapter 效果最好：Flan-T5-XL（3B）每意圖 1 例就穩定勝過所有其他方法；Flan-T5-Large（770M）多給幾例後也勝過其他方法，只有 OOTB 上不及 Flan-T5-XXL。",
+      "numbers": "僅見 Figure 2 曲線，全文未列數值；K=1、3、5。",
+      "section": "§4.4、Figure 2、§5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "領域適應模型雖小，仍需每意圖 5–10 句才能超過 70% 準確率；擴展到新領域需要句對資料來訓句向量，可能要數天人工標註。",
+    "描述式 zero-shot 需要為每個意圖寫出好的描述。",
+    "大模型營運成本高：Flan-T5-XXL 推論需要 A100 GPU；GPT-3 不開源、按用量計價，擴展到數千客戶會很貴。",
+    "意圖多時 prompt 變長，延遲與成本上升，需要先做意圖過濾；過濾用的 top-5 檢索召回並不完美。",
+    "prompt 裡放更多意圖只在一定範圍內有幫助（結果未列出）。",
+    "只靠意圖描述生成的 GPT-3 增補資料效果不佳，必須搭配種子集；LLM 生成資料的品質高度依賴 prompt。",
+    "PEFT 在意圖多的資料集上訓練時會 OOM，只能限制訓練 prompt 裡的意圖數為 15。"
+  ],
+  "limitations_observed": [
+    "『zero-shot 優於 few-shot 分類器』並不全面：Benchmark02 上全意圖 zero-shot 的 GPT-3 只有 61.3、Flan-T5-XXL 69，都低於 GTR-3B K=5 與 Parrot T5 增補的 73，GPT-3 甚至低於 ELMSE K=5 的 67。",
+    "各表用的資料集集合不一致：Table 2／4 用 MASSIVE 與 B01–B03（OOTB 因用於 ELMSE 預訓練被排除），Table 5 用 MASSIVE、OOTB、B01、B02，沒有 B03；§4.3 內文說描述是替 3 個內部 benchmarking 資料集加 MASSIVE 寫的，實際放進 Table 5 的卻是 OOTB 而不是 B03。跨表可比的只有 MASSIVE、B01、B02，§5『zero-shot 勝過領域適應＋增補』的結論實際上只建立在 2–3 個資料集上。",
+    "意圖過濾在 in-scope accuracy 上多半是降分而非持平：MASSIVE 73.3→68.6（Flan）、73.9→69.2（GPT-3）；OOTB 86.3→83.7、84.9→83.4；B01 的 GPT-3 89.3→84.6。過濾的正當性其實只有成本，而且『5 intents』列要每意圖 5 例做檢索，已不是 zero-shot。",
+    "『過濾能提升 OOS recall』只對 GPT-3 成立（B01 0.67→0.97、B02 0.67→0.87），Flan-T5-XXL 反而下降（0.48→0.43、0.7→0.65）；『GPT-3 明顯較好』在 B02 全意圖設定下也不成立（Flan 0.7 > GPT-3 0.67）。",
+    "OOS 判定把『補完裡找不到任何意圖名』一律算 OOS，幻覺、格式跑掉與真正選 none 混在一起；只報 OOS recall、不報 OOS precision 或 in-scope 被判成 none 的比例。過濾後候選清單對 OOS 語句全是錯的意圖，模型更傾向回 none，0.97 可能部分反映拒答偏移而不是辨識能力。",
+    "OOS 只在 zero-shot 實驗評：B01–B03 測試集明明含 OOS 樣本，Table 2、Table 4 的分類器與 §4.4 的 PEFT 卻只報 in-scope accuracy；論文也未說明 PEFT 的訓練資料是否含 OOS 或 none 例子，none 選項學不學得到完全未知；§5『PEFT 全面最佳』缺了無關語句偵測這一維。",
+    "PEFT 只有圖、沒有數值，且缺少 GPT-3 in-context few-shot（把 K 個例句放進 prompt）這個自然對照；T-Few 原文的主要對照正是 ICL，本文刻意不把例句放進 LLM prompt，『3B 小模型勝過 GPT-3』比的是零樣本的 GPT-3 對 K 樣本微調的 Flan-T5，並不對等。",
+    "內文主張與 Table 2 不符：§4.1.1 說 ELMSE 只比 GTR-3B 差 2–3%，但 K=5 的 B02 是 67 對 73、B03 是 79 對 84，K=3 的 B02 是 63 對 70，差 5–7 點；『相較同尺寸模型多數提升超過 5%』對 MUSE 只有一半成立（K=5 的 MASSIVE +2、B02 +1；K=3 的 MASSIVE +4、B02 +1）。",
+    "資料增補有未解釋的反常：把真實種子集加回 Parrot T5 的生成資料後反而下降（B01 81→79、B02 73→68、B03 81→76），種子集＋GPT-3 依描述在 B03 也低於基線（78 對 79）。Table 4 標準差只有 0.2–0.9（B02 的種子集＋Parrot 為 2.2），基線卻直接沿用 Table 2 以 5 次抽樣得到的 K=5 數字，兩表的變異來源不同，差 1–2 點的比較不太站得住。",
+    "意圖描述由作者自己撰寫，沒有開發集，也沒有描述品質或寫法的消融；『不需要語句』其實是把人工轉移到描述撰寫上，而描述是否對測試集調過無從檢查。",
+    "可重現性低：5 個資料集中 4 個私有，ELMSE、意圖描述、增補資料都沒釋出，GPT-3 只寫 175B 沒寫模型版本；內部測試集很小（B01 300 句、B02 420 句），in-scope accuracy 的分母只算 in-scope 樣本，1 個百分點不到 3–4 句。",
+    "以『數千客戶的儲存空間』為動機，卻沒報 IA3 adapter 大小、每客戶儲存量或推論延遲；PEFT 仍需要常駐 3B 的 Flan-T5-XL 骨幹，成本論證停在定性。",
+    "PEFT 在 MASSIVE／OOTB 訓練時 prompt 只放 15 個意圖、推論時放全部 60／27 個，訓練與推論的 prompt 分布不一致，挑選方式與影響都沒分析。",
+    "問題定義停在單輪、封閉集合、單一意圖的分類；沒有多意圖、多輪上下文、意圖模糊時的澄清或拒答策略，對 LLM agent 的意圖路由只覆蓋最窄的一段。"
+  ],
+  "framework_role": "T1 的『意圖偵測元件選型』參考：在冷啟動、多租戶與成本約束下，給出四種意圖分類手段的精度／成本權衡，並提供兩個可直接套用的樣板——(a) 以『意圖名稱＋描述＋none_of_the_above』為介面的描述式 zero-shot 分類，順便把 OOS 偵測併進同一個 prompt；(b) 先用句向量檢索 top-k 候選意圖、再交 LLM 判定的兩段式意圖路由。另外指出以 PEFT 小模型取代大 LLM 的部署方向。它不處理澄清提問、多輪目標推斷或偏好引出，屬於 T1 中『LLM 時代的意圖理解、zero-shot 意圖與意圖路由』子領域的工業實務比較，而非方法突破。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "§4.2 用 GPT-3（改寫種子語句，或依全部意圖描述為指定意圖生成）與 Parrot T5 離線合成每意圖 20 句使用者語句，當成訓練 T1 意圖分類器的輸入來源，可視為最陽春的 T6 側輸入：單輪、離線一次性生成、不接收分類結果回饋、沒有閉環；論文只以下游 in-scope accuracy（Table 4）間接衡量合成語句的好壞，沒檢查其分布是否像真實使用者。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "ServiceNow 官方文件『LLM topic discovery in Virtual Agent』（Washington DC 版，https://www.servicenow.com/docs/bundle/washingtondc-servicenow-platform/page/administer/virtual-agent/concept/va-llm.html）說明 Virtual Agent 的 LLM 依主題（topic）的自然語言描述找出最符合使用者語句的主題，無需維護 NLU 模型與意圖，多個候選時讓使用者從清單挑選。內容經 WebFetch 讀取頁面後的摘要確認，並非逐字引用。"
+    ],
+    "assessment": "未見本文被採納的直接證據。論文本身未宣稱部署：四位作者都在 ServiceNow，ELMSE 與 OOTB-dataset 是公司內部資產，但全文只在結論表示希望對實務部署有幫助（§6）；發表於 ACL 2023 Industry Track（https://aclanthology.org/2023.acl-industry.71/）是發表場所，不是採納。作者所屬公司的產品文件（Washington DC 版，晚於 2023-05）描述了與本文 §4.3 同形的『以描述做 LLM 意圖／主題匹配』功能，但沒有引用本文，也沒揭露底層模型、是否有檢索過濾或是否用了 PEFT，只能說明這條路線在 ServiceNow 產品上被採用，不能證明是本文的方法被採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "只有 MASSIVE（英文部分）公開；OOTB-dataset 與 Benchmark01–03 為 ServiceNow 內部私有資料；ELMSE 模型、作者撰寫的意圖描述與增補語句都未釋出。prompt 結構在 Table 3 與 §4.3 有範例，PEFT 沿用 T-Few 公開配方。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "描述式 zero-shot＋none 選項、檢索過濾的兩段式路由、PEFT 小模型三條路線的並排比較對 T1 選型有實用價值，但它是 8 頁工業短文，4/5 資料集私有、PEFT 無數值、OOS 只在單一實驗評且口徑混入幻覺，多項文字主張與表格不符，稱不上該節點必讀。",
+  "related": [
+    "2205.05638",
+    "2210.11416",
+    "2204.01959",
+    "2204.08582",
+    "2104.05763",
+    "2109.06349",
+    "2206.05790"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

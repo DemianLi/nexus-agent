@@ -1,0 +1,28 @@
+{
+  "writer": {
+    "rev": "v0.4.8",
+    "commit": "9406c700c3edb2fb62e26307fb2a303ad4f46537",
+    "formatVersion": 4,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 4,
+      "eventCount": 2,
+      "types": [
+        "turn/start",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "today",
+        "kind": "unreplayable",
+        "reason": "reply-missing"
+      }
+    }
+  },
+  "triggers": []
+}

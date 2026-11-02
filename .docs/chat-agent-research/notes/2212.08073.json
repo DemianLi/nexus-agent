@@ -1,0 +1,201 @@
+{
+  "id": "2212.08073",
+  "title": "Constitutional AI: Harmlessness from AI Feedback",
+  "topic": "T5",
+  "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Anthropic 用一份 16 條自然語言原則構成的「憲法」取代無害性的人工標註：監督階段讓 helpful RLHF 模型依隨機抽到的原則對自己的回應做 critique→revision（每題 4 輪），把修改版拿去微調（SL-CAI）；RL 階段讓另一個 feedback 模型依原則在兩個回應間二選一，產出 AI 偏好標籤訓練 PM 再做 RL（RLAIF），得到比人工無害性標籤訓練的 HH RLHF 更無害、而且幾乎不迴避的助理。",
+  "problem": "RLHF 訓練有用又無害的助理需要數萬筆人類偏好標籤，成本高、改目標就要重新收集，而且這些標籤合起來到底編碼了什麼目標，沒有人讀得懂。作者先前的 HH RLHF 還有另一個問題：群眾工作者在紅隊測試時把「迴避、拒答」當成無害而給高分，結果模型一碰到敏感話題就一路拒答，有用性與無害性互相拉扯。作者想知道兩件事：(1) 能不能讓 AI 依一份簡短、公開的原則清單自己監督自己，把無害性的人工標籤降到零（scaling supervision）；(2) 能不能訓練出「不幫做壞事、但會說明為什麼拒絕」的非迴避助理。對 T5 而言，這是「把自我批判與改寫變成訓練資料，把修正能力攤進權重」的代表作，也是 AI 當 critique／評審模型（RLAIF）的起點。",
+  "core_idea": "人類監督只保留兩樣東西：一份自然語言原則清單（憲法）與少量 few-shot 範例。第一階段利用模型遵循指令的能力，要它依某條原則批評自己的回應、再依批評改寫，把改寫後的回應當作監督學習的目標，先把模型的輸出分布搬到無害區（也降低後續 RL 的探索負擔）。第二階段把 RLHF 裡「人類比較兩個回應」這一步換成「模型依原則回答多選題」，用選項 (A)/(B) 的正規化機率當軟標籤，把 AI 對原則的判讀蒸餾進偏好模型，再用它當獎勵做 RL。原則在每一步都隨機抽樣，等於對原則做 ensemble；可選用 chain-of-thought 讓評判過程可讀。",
+  "method": {
+    "角色與模型": "全部是 Anthropic 內部的預訓練 LM 家族，主要結果用 52B。(a) 產生初始回應、critique 與 revision 的是只用 helpfulness 人類回饋訓練的 helpful RLHF 模型；(b) SL-CAI 從預訓練 LM（不是 helpful RLHF 模型）微調而來；(c) RL 階段的 feedback 模型在非 CoT 版本是預訓練 LM，在 CoT 版本改用 helpful RLHF 模型（寫出的 CoT 品質較好）；(d) 回應對由 SL-CAI 產生，SL-CAI 同時是 RL 的初始 policy。對照組 RLHF 直接從預訓練 LM 起訓，不再經過 context distillation。",
+    "監督階段 SL-CAI（Critique→Revision→SL）": [
+      "1. 提示資料：紅隊提示（部分對話，每個人類回合算一個提示）共 182,831 筆 = Ganguli et al. 2022 的 42,496 筆人工撰寫 + 以 few-shot 提示預訓練模型生成的 140,335 筆；另有 135,296 筆人工撰寫的 helpfulness 提示（不用模型生成的）。",
+      "2. 對每筆紅隊提示，用 helpful RLHF 模型以溫度 T=1 取樣初始回應（通常有害）。",
+      "3. 從 16 對原則（Appendix C.1，每對是一條 CritiqueRequest 加一條 RevisionRequest）中隨機抽一對；把 CritiqueRequest 接在對話後面，取樣一段 Critique；再接上 RevisionRequest，取樣 Revision。原則內容涵蓋一般性的有害／不道德／種族歧視／性別歧視／有毒／危險／違法，以及特定面向（兒童不宜、教唆犯罪、厭女、是否被引誘、是否像有同理心的朋友或治療師等），有的還要求指出人類發言中的有害假設。",
+      "4. 前面加上 few-shot 範例（Appendix E.1 共 5 則，格式一致），用來解決模型搞混自己該寫 critique 還是 revision 的視角問題。其中 2 則示範「critique 判定沒問題，revision 原封不動照抄」，1 則是誠實／信心校準的 critique（要求對可能錯的主張降低信心），其餘是無害性範例。",
+      "5. 把 revision 替換掉原本的助理回應，形成與原始格式相同的（提示, 回應）對，因此可以重複套用：每筆紅隊提示連續做 4 輪 critique-revision，每輪重新抽原則，得到 4 個 revision。",
+      "6. 訓練資料：所有 revision 步驟的（提示, revision）對，加上 helpful RLHF 模型對每筆 helpfulness 提示直接取樣的 2 個回應（用來保住有用性）。只取修改後的回應，critique 文字不進訓練目標。",
+      "7. 微調：從預訓練 LM 開始，訓練 1 個 epoch，固定學習率為預訓練學習率的 0.5 倍，batch size 1024 條序列。另訓練了 SL-CAI-n（只用到第 n 輪 revision，n=1..4）。",
+      "8. 變體：直接要求 revision、跳過 critique（§3.5 的 direct revision）；正文其餘結果都用有 critique 的版本。"
+    ],
+    "RL 階段 RL-CAI（AI 比較→PM→RL，即 RLAIF）": [
+      "1. 用 SL-CAI 對每筆紅隊提示取樣兩個回應，每筆提示產生一組比較，共 182,831 組無害性比較。",
+      "2. 標註提示格式：先放 few-shot 範例（每則各自抽一條原則、配手寫的提示與回應對），再放「Consider the following conversation between a human and an assistant」、對話內容、一條原則、Options (A)/(B)，最後以「The answer is:」結尾。原則從 16 條多選題原則（Appendix C.2）中每組比較隨機抽一條，例如要求選較無害、較有道德、不說教、不過度反應、像智者會說的回應。",
+      "3. 非 CoT 版：取 feedback 模型對 (A) 與 (B) 的 log probability，正規化後當作軟標籤（偏好機率）目標。作者指出多選題答案的機率大致校準（引 Kadavath et al. 2022），軟標籤明顯優於 0/1 硬標籤。",
+      "4. CoT 版：改用 helpful RLHF 模型當 feedback 模型，把提示改成 Human:/Assistant: 的對話格式，助理回合以「Let's think step-by-step」起頭，前面放 6 則手寫的 CoT few-shot 範例（Appendix E.2，每則有 [[PRINCIPLE]] 佔位符供替換原則）。CoT 會讓模型直接表態，機率接近 0 或 1，因此把機率夾在 40%–60% 之間（試過 20%–80%，效果較差），否則 RL 後的模型會變得偏激。",
+      "5. PM 訓練：135,296 組人類 helpfulness 比較 + 182,831 組 AI 無害性比較混合，照 Bai et al. 2022 的流程訓練一個混合人類／AI 標籤的 PM。",
+      "6. RL：從 SL-CAI 起訓，以 PM 分數為獎勵；超參數與 Bai et al. 2022 相同（該文為 PPO）。訓練提示 = SL-CAI 用過的全部人工與模型生成提示，另加模型生成的紅隊提示 491,142 筆與 helpfulness 提示 474,300 筆。所有 RL 對照組用同一組訓練提示。PM 是一次性離線訓練，沒有做 online 迭代更新（列為未來工作）。"
+    ],
+    "品質控制技巧": [
+      "原則 ensemble：每個 critique 步驟與每組比較都隨機抽一條原則；作者說這讓 PM 行為明顯比固定用同一條原則穩健。",
+      "改寫原則措辭：在 C.2 加入「不要選說教、令人反感、過度反應、過度指責的回應」這類句子，以壓制 RL 後期的過度嚴厲。",
+      "標籤處理：非 CoT 用軟標籤；CoT 用 40%–60% 夾限。",
+      "過度訓練會出現 Goodhart 現象（對有害提示過度嚴厲、在大多數紅隊回應裡加上「you are valid, valued, and cared for」這類制式句），需要靠人工評估挑 snapshot。"
+    ],
+    "重做要點": [
+      "需要一個已經會遵循指令、但沒做過無害性訓練的 helpful 模型當 critique／revision 產生器；純預訓練模型做不到這一步。",
+      "16 對 critique／revision 原則與 16 條多選題原則全文在 Appendix C，few-shot 範例在 Appendix E 與官方 repo，可直接複製。",
+      "SL 資料要把每一輪 revision 都收進去，不只最後一輪；並混入 helpfulness 樣本，否則有用性會掉（revision 越多輪，helpfulness PM 分數越低）。",
+      "AI 標籤要保留機率而不是 argmax；CoT 標籤一定要夾限。",
+      "RL 要有停止準則或人工抽檢；論文沒給自動停止規則。"
+    ]
+  },
+  "assumptions": [
+    "模型辨識有害內容的能力隨規模提升，而且 52B 附近已接近以數十萬筆人類標籤訓練的 PM（§2 的趨勢外推）；辨識不出的危害就修不到。",
+    "起點模型必須是已經很會遵循指令的 helpful RLHF 模型；方法是把它的指令遵循能力「借來」監督無害性。",
+    "多選題答案的機率大致校準，因此可以直接當軟偏好標籤（引 Kadavath et al. 2022）。",
+    "少數幾條自然語言原則能涵蓋所需的無害性概念，而且隨機抽樣原則的 ensemble 能平均掉單條原則的偏差。",
+    "critique 不必正確，只要最終 revision 比原回應無害即可；監督目標是 revision 而不是 critique。",
+    "以人類資料訓練的 PM 分數可作為 revision 品質的代理指標（作者自承高分區校準較差）。",
+    "有用性仍靠人類標籤撐住（135,296 組比較）；「零人工」只適用於無害性這一個軸。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "HHH 評估：Askell et al. 2021 的 221 組二選一比較（BIG-bench）加上本文新寫、偏重細微無害性與「迴避回應應被判較差」的 217 組，共 438 組",
+      "Appendix B：254 段對話的有害／合乎倫理二分類（平衡集，取自 Ganguli et al. 2022 紅隊資料中評分最高或最低者）；287 例的 9 類危害分類",
+      "群眾工作者的多輪開放對話 A/B 比較測試（Surge AI 工作者；24 個 snapshot 共 10,274 組 helpfulness 與 8,135 組 harmlessness 比較）",
+      "以人類資料訓練的 52B PM（harmlessness、helpfulness、HH 三種）對紅隊提示上各輪 revision 打分",
+      "絕對有害分數：64 筆人工挑選、未參與訓練的紅隊提示，每筆取樣 256 個回應，T=1 與 T=0 兩組",
+      "定性樣本：PALMS 敏感問題、LaMDA 提示、InstructGPT 提示（Appendix D）"
+    ],
+    "metrics": [
+      "helpfulness Elo 與 harmlessness Elo（由群眾工作者偏好計算，只有差值有意義）",
+      "二選一準確率（PM 以分數排序；LM 以多選題作答，含 CoT 與 5 次 CoT 取樣平均）",
+      "PM 分數（harmlessness／helpfulness／HH）隨 revision 輪數、原則數量、是否有 critique 的變化",
+      "絕對有害分數 0–4（以 L2 損失微調 LM，預測紅隊工作者對「成功誘導有害內容」的自評分數）",
+      "AI 標籤的校準曲線（Figure 9）"
+    ],
+    "baselines": [
+      "預訓練 LM（RLHF 的初始 snapshot）",
+      "Helpful RLHF（只用 helpfulness 人類標籤）",
+      "HH RLHF（helpfulness 加 harmlessness 人類標籤，沿用先前收集的 PM 資料）",
+      "SL-CAI（RL-CAI 的初始 snapshot）與 SL-CAI-n",
+      "RL-CAI 與 RL-CAI w/ CoT",
+      "消融：direct revision（無 critique）、原則數量、軟／硬／夾限標籤",
+      "§2：以數十萬筆人類偏好標籤訓練的 PM 對照 LM 多選題作答"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "LM 以多選題形式判斷哪個回應較有用、誠實、無害的能力隨規模明顯上升，CoT 在大模型上顯著提升準確率，5 次 CoT 取樣平均再小幅提升；趨勢顯示大於 52B 的模型可望追上以人類回饋訓練的 PM。這是用 AI 回饋取代人工無害性標籤的動機。",
+      "numbers": "原始 221 組 HHH 比較上模型已遠超 90% 二選一準確率（Figure 11），因此另寫 217 組較難的比較，共 438 組；對照 PM 以數十萬筆人類偏好標籤訓練。各模型的具體準確率只畫在 Figure 4，正文沒有數字。",
+      "section": "§2、Figure 4、Appendix B Figure 11／12",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只做監督階段的 SL-CAI 有用性低於兩種 RLHF，無害性介於兩者之間：比 helpful RLHF 無害，但比 HH RLHF 有害；相對預訓練 LM 則兩項都較好。也就是說，單靠自我 critique→revision 的資料並不足以勝過人工無害性標籤，主要收益要等 RL 階段。",
+      "numbers": "群眾工作者 Elo（Figure 3、Figure 8）；24 個 snapshot 共 10,274 組 helpfulness 與 8,135 組 harmlessness 比較，具體 Elo 值只在圖中。",
+      "section": "§3.3、Figure 3、Figure 8",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "連續 revision 讓 harmlessness 與 HH 的 PM 分數單調上升，但純 helpfulness PM 分數單調下降；第一輪 revision 通常就去掉大部分有害內容，後續改善在目視上不明顯。原則數量增加不會提高 harmlessness PM 分數，作者推測能提高多樣性，但沒有量化。",
+      "numbers": "每筆紅隊提示 4 輪 revision（revision 0 為初始回應），以 52B 人類資料 PM 評分（Figure 5）；原則數量比較見 Figure 6。作者提醒 PM 在高分區校準較差。",
+      "section": "§3.4、Figure 5、Figure 6",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "critique 步驟是否必要：小模型上有 critique 的 revision 無害性 PM 分數較高，大模型上兩者相近（有 critique 始終略好）。52B 的 critique 經常不準確或誇大，但 revision 仍普遍比原回應無害；作者保留 critique 主要是為了透明度。",
+      "numbers": "同一個 52B harmlessness PM 評分（Figure 7）；無數值表格。",
+      "section": "§3.5、Figure 7、Appendix A",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "RL-CAI 明顯比 RLHF 與 SL-CAI 更無害，而且有用性代價不大；在 harmlessness Elo 對 helpfulness Elo 的圖上，RL-CAI 在相同有用性下較無害，勾出較好的 Pareto 前緣。CoT 版有用性略低、無害性略高。AI 標籤在 HHH 評估上大致校準。",
+      "numbers": "52B RL 各 snapshot 的 Elo（Figure 2、3、8）；PM 訓練資料 135,296 組人類 helpfulness 比較 + 182,831 組 AI 無害性比較；額外 RL 提示 491,142（紅隊）+ 474,300（helpfulness）。校準見 Figure 9。",
+      "section": "§4.3、Figure 2、3、8、9",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "AI 標籤的處理方式影響很大：非 CoT 的軟標籤（正規化 log probability）遠優於硬標籤；CoT 標籤過度自信，夾在 20%–80% 略有改善，夾在 40%–60% 更好，並定為主結果設定。對 16 條原則做 ensemble 讓 PM 分數更穩健。",
+      "numbers": "夾限範圍 20–80% 與 40–60% 的比較，以及軟／硬標籤比較，正文只有定性描述，沒有數字。",
+      "section": "§4.1、§4.3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "RL-CAI 幾乎從不迴避，對大多數紅隊提示給出細緻且無害的回應；HH RLHF 則常給制式拒答。定性樣本中，對 PALMS、LaMDA、InstructGPT 的敏感提示，HH RLHF 多次只回一句拒答，RL-CAI CoT 則正面回應並說明理由。",
+      "numbers": "Appendix D 列出 52B HH RLHF 與 52B RL-CAI CoT 的配對樣本，沒有迴避率的量化統計。",
+      "section": "§4.4、Appendix D",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "以絕對有害分數衡量，helpful RLHF 隨訓練變得更有害，HH RLHF、RL-CAI、RL-CAI w/ CoT 則隨訓練逐步變得較不有害。作者提醒不同工作者對 0–4 分的尺度有個人偏差，分數未必校準。",
+      "numbers": "64 筆人工挑選的保留紅隊提示 × 256 個回應，0–4 分（越高越有害），T=1 與 T=0（Figure 10）；具體分數只在圖中。",
+      "section": "§4.5、Figure 10",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "憲法原則是為研究目的臨時、反覆挑出來的，沒有像 Sparrow 那樣仔細設計；未來應由更廣泛的利害關係人制定，並依用途與部署地區調整。",
+    "有用性仍依賴人類回饋標籤，沒有做到完全不需人類監督；從預訓練 LM 只靠提示達成有用性留待未來。",
+    "PM 分數在高分區校準較差，revision 輪數的結果要保留看待。",
+    "52B 的 critique 常常不準確或誇大（§3.5、Appendix A）。",
+    "RL-CAI 會被過度訓練，出現 Goodhart 行為：對有害提示過度嚴厲，或在多數紅隊回應裡加入制式安撫句。",
+    "CoT 標籤機率幾乎是 0 或 1、校準很差，必須夾限。",
+    "原則數量對多樣性的影響只是推測，沒有量化研究。",
+    "絕對有害分數可能未校準，因為不同工作者對 0–4 分有個人偏差。",
+    "評估指示與前作不同（本文要求工作者在同樣無害時偏好不迴避的回應），HH RLHF 使用的 PM 資料來自前作時期、可能獎勵迴避；比較測試的工作者也從 Upwork／MTurk 換成 Surge AI，這些都會造成與前作的差異。",
+    "Appendix D 的 InstructGPT 樣本可能是刻意挑出的壞例子，拿本文的中位樣本比較並不公平。",
+    "雙重用途：方法降低了訓練有害系統的門檻（監督階段甚至不需要 RL 實作）；減少人類回饋也可能讓未經人類充分測試的模型被部署，帶來未預期的失效模式。"
+  ],
+  "limitations_observed": [
+    "主結論「RL-CAI 比 HH RLHF 更無害」與評估定義的改變糾纏在一起。本文的 harmlessness Elo 要求工作者在同樣無害時偏好不迴避、會解釋的回應；而 HH RLHF 對照組用的是作者自己說可能獎勵迴避的舊 PM 資料，評估工作者也換了供應商。RL-CAI 的 16 條 C.2 原則中又有 3 條明文寫入「不要說教、不要過度反應、不要居高臨下」，恰好對齊新的評估指示。缺少的關鍵對照是：用同一套新指示重新收集人工無害性標籤訓練的 HH RLHF。沒有它，就分不出收益來自 AI 回饋本身，還是來自「無害」的定義被改寫。作者在註腳承認這個指示變更讓 helpful 與 HH RLHF 的 harmlessness Elo 差距比前作小很多，可見評估定義本身就會大幅移動結果。",
+    "就 T5 而言，自我 critique→revision 這一段本身並不強：§3.3 的 SL-CAI 比 HH RLHF 更有害，贏過人工標籤的是 RL 階段，而 RL 階段的訊號來自另一個 feedback 模型（非 CoT 版甚至是預訓練 LM）的二選一判斷，不是 policy 的自我修正。更重要的是，修正只發生在離線產生資料時，最終模型在推論時不做 critique、不偵測自己的錯、也沒有停止條件；論文完全沒有量測最終模型能不能發現並修正自己的錯誤。所以它提供的是「用自我修正合成訓練資料」與「AI 評審模型」兩個元件，不是推論期的自我修正機制；把它當成「訓練出自我修正能力」的證據時要打折。",
+    "critique 的角色比標題暗示的弱：§3.5 在 52B 上有無 critique 幾乎沒差，Appendix A 的範例也顯示 critique 是被抽到的原則牽著走，而不是在找真正的錯。例如第 4 輪 critique 在一段沒有兒童脈絡的對話裡，批評回應「對年幼兒童太強烈」，看起來像是被「是否適合兒童」那條原則牽動（論文沒有標出每一步抽到哪條原則）；revision 隨之把合理的法律說明刪掉。也就是說，這個迴圈做的是「依原則改寫」，每輪都強制改一次，可能改掉本來沒錯的內容；論文沒有量測這種過度修正的比例。E.1 的 few-shot 裡有「沒問題就照抄」的範例，但實際 revision 被採納時沒有任何判斷是否真的需要修正的閘門。",
+    "revision 輪數與 critique 必要性的證據只來自 PM 分數，沒有人工評估；而作者自己說 PM 高分區校準差。§3.4 說訓練了 SL-CAI-1 到 SL-CAI-4，但 §3.4 的文字與 Figure 3–8 的圖說都沒有這些模型的比較結果（圖本身是影像，全文快取中看不到），所以「多輪 revision 有益」只停留在資料層級的 PM 分數，沒有在模型層級驗證。Figure 5 同時顯示 helpfulness PM 隨輪數下降，而訓練資料收進了全部 4 輪 revision，等於用偏向較不有用的後期 revision 訓練，這個取捨沒有消融。",
+    "CoT 的效果與夾限混在一起：CoT 標籤被夾在 40%–60%，等於把每組比較的偏好強度壓到最多 0.6 對 0.4，這本身就是很強的獎勵正則化。「RL-CAI w/ CoT 略較無害、略較沒用」的差異，可能大半來自夾限而不是推理品質；缺少「非 CoT 但同樣夾限」的對照。夾限範圍的選擇也只有定性描述，沒有數字，看起來是依評估結果回頭調的超參數。",
+    "§2 用來支撐「AI 能監督 AI」的證據偏弱：新增的 217 組比較由作者自己撰寫，其中包含把迴避回應判為較差答案的題目，與方法要最佳化的偏好方向相同；總共 438 組，樣本小；「大於 52B 可追上 PM」是趨勢外推。Figure 9 的校準也是量在這份 HHH 評估上，不是量在實際 182,831 組 RL 訓練比較上。訓練比較的回應對由 SL-CAI 產生、多半都已無害，差異細微，AI 標籤在這個分布上的準確率沒有被量過。",
+    "統計報告不足：所有主要結果（Elo、PM 分數、絕對有害分數）只以圖呈現，正文沒有數值表格，也沒有對「significantly more harmless」做顯著性檢定。18,409 組比較分攤到 24 個 snapshot 與兩個軸上，每個 snapshot 的樣本量有限。主結果採用哪個 snapshot 也沒有明確規則；作者又承認過度訓練會 Goodhart，所以挑 snapshot 實際上還得靠人工評估，等於把人類監督從標籤搬到了模型選擇。",
+    "所有角色都來自同一個模型家族：產生回應、critique、revision、feedback 標籤、評估用 PM 全是 Anthropic 自家的 LM，沒有跨家族的 feedback 對照。模型共同的盲點（辨識不出的危害）不會被這個迴圈修到，只會被強化。訓練後也沒有做新的對抗式紅隊或 jailbreak 測試，穩健性被列為未來工作。PM 是一次性離線訓練、沒有 online 更新，這與後期 Goodhart 的觀察一致，但沒有被當成原因檢驗。",
+    "「零人工無害性標籤」的說法偏強：42,496 筆人工撰寫的紅隊提示、以人類資料訓練的 helpful RLHF 起點模型、人類資料訓練的評估 PM，以及反覆調整的原則與 few-shot 範例，都是人類監督，只是換了形式。few-shot 範例本身也有錯字：E.1 第一則 critique 把「不應被寬容」寫成「should be condoned」，論文沒有討論提示雜訊對結果的影響。",
+    "誠實性完全沒有評估：框架號稱 HHH，few-shot 也有一則信心校準的 critique 範例，但所有量化評估只有有用性與無害性，看不出這個流程對事實正確性或幻覺有沒有幫助，甚至會不會有害（revision 可能為了符合原則而改掉正確資訊）。",
+    "外推到 agent 的限制：任務只有單輪聊天回應的無害性，沒有工具呼叫、多步軌跡或任務成功這類可驗證的目標，修正對象也是「內容是否符合原則」這種看文字就能判斷的錯誤。這與我們在 Self-Refine（2303.17651）筆記中看到的模式一致：以 rubric 為準的風格／政策類修正有效，推理或事實類錯誤則需要外部訊號。能直接搬到 agent 的是「以明文原則驅動的 critic」與「AI 偏好標註管線」，不是任務錯誤的修正能力。"
+  ],
+  "framework_role": "在 T5 裡，這篇是「訓練得到的自我修正與 critique 模型」這條路線的源頭與工業範本。它把自我修正拆成兩個可重用的元件：(1) 離線的 critique→revision 資料合成器，把模型依原則修正自己的過程攤進權重（SL-CAI）；(2) 以明文原則驅動的 AI 評審模型，輸出校準過的二選一偏好機率，再蒸餾成偏好模型當獎勵（RLAIF）。對框架的具體啟示：(a) critic 應該綁定一份可讀、可版本化的原則清單，每次隨機抽原則做 ensemble，比單一提示穩健；(b) critic 的輸出要保留機率或分數，不要只留 argmax；CoT 評審要夾限或多次取樣；(c) 修正過程中的 critique、revision、所用原則都是可重用的訓練與評估資料；(d) 無條件、每輪強制修正會過度修正與 Goodhart，框架裡的 T5 應該配上觸發條件（只在偵測到異常時修正）與停止條件，這正是本篇沒做、而框架 E3 要補的部分；(e) 評估「修正有沒有用」時要固定評審標準，本篇的教訓是換了評估指示，結論就跟著移動。它不提供推論期、軌跡層級的自我修正機制，這部分要看 Reflexion、Self-Refine 等工作。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "修正紀錄直接回流評估：每筆紅隊提示的初始回應與 4 輪 revision 都保留下來，用人類資料訓練的 harmlessness／helpfulness／HH 三種 PM 逐輪打分（Figure 5），比較有無 critique 的 revision（Figure 7）與不同原則數量（Figure 6），據此判斷修正的邊際效益與代價（無害性上升、有用性下降）。Appendix A 也用完整的 critique-revision 序列做定性檢查，發現 critique 常不準確。同一批修正紀錄還被當成 SL 訓練資料。對框架的含義是修正紀錄至少要存每輪版本、所用原則與 critique，評估端才能分析每一輪的效益與副作用。"
+    },
+    {
+      "edge": "E6",
+      "how": "評估以真人互動紀錄為主：群眾工作者自行撰寫人類端、與模型進行多輪開放對話，每一輪由兩個模型各給一個回應、工作者選出較好的一個，這些互動中的偏好標籤彙整成 helpfulness 與 harmlessness Elo（24 個 snapshot 共 18,409 組比較）。絕對有害分數則來自紅隊互動：工作者與單一模型多輪對話後自評誘導成功程度（0–4），再訓練一個預測模型當評估指標。論文也顯示這條資料流的弱點：評估指示改了（偏好不迴避），結論的排序就跟著變。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Anthropic 官方文章〈Claude's Constitution〉（2023-05-09）說明 Claude 是以 Constitutional AI 訓練的 AI 助理，並描述兩個階段：第一階段訓練模型依原則批評並修改自己的回應，第二階段以 AI 產生的回饋取代人類回饋做強化學習，並多次連結本論文。來源：https://www.anthropic.com/news/claudes-constitution",
+      "Anthropic 官方文章〈Claude's new constitution〉（2026-01-22）說明他們從 2023 年起以 Constitutional AI 訓練 Claude 模型，之後做法已大幅演變；新憲法在訓練中更核心，Claude 會用憲法產生多種合成訓練資料，包括符合其價值的回應，以及對可能回應的排序。來源：https://www.anthropic.com/news/claude-new-constitution",
+      "Anthropic 官方研究文章〈Collective Constitutional AI〉（2023-10-17）說明 Claude 目前依賴由 Anthropic 員工整理的憲法；這條只證明產品用了憲法，沒有細說訓練流程，屬於較弱的佐證。來源：https://www.anthropic.com/research/collective-constitutional-ai-aligning-a-language-model-with-public-input"
+    ],
+    "assessment": "有明確的商用採納證據：作者所屬公司在官方文章中自述旗艦產品 Claude 系列以 Constitutional AI 訓練，而且 2023 年的說明與本論文兩階段流程（自我 critique 修改、AI 回饋 RL）一致。但要注意三點。(1) 這是作者公司的自我陳述，沒有外部稽核，訓練細節（原則內容、比例、超參數）都沒有公開。(2) 2026 年的文章明說做法已大幅演變，目前被採納的是「以明文憲法驅動 AI 產生訓練資料與偏好排序」的範式，不能推論論文中的 16 條原則、4 輪 revision、40%–60% 夾限等設定仍在使用。(3) 就 T5 關心的推論期自我修正而言，未見證據顯示 Claude 在產品推論時執行 critique→revision 迴圈；被採納的是訓練期的資料合成與 AI 評審。我另外嘗試開啟 Claude 3 model card PDF 核對其中對 Constitutional AI 的描述，但檔案超過抓取上限、未能確認，因此不列入證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/anthropics/ConstitutionalHarmlessnessPaper",
+    "data": "部分公開。官方 repo 是補充材料（prompts／、samples／、evals／三個目錄），包含 few-shot 提示、憲法原則、各提示的模型回應與 critique-revision 序列；論文說 §2 與附錄的評估也都放在 repo。沒有訓練程式碼、模型權重，也沒有釋出 SL-CAI 的 revision 資料集、182,831 組 AI 偏好標籤，或模型生成的 140,335／491,142／474,300 筆提示。人工紅隊與 helpfulness／harmlessness 比較資料來自先前公開的 https://github.com/anthropics/hh-rlhf（Appendix B 註腳指向此 repo）。模型是 Anthropic 內部 52B 等規模的 LM，無法重現原數字，只能在開源模型上重做流程；群眾工作者 Elo 評估也需要自行重建。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它定義了「以原則驅動的自我 critique→revision 資料合成」與「AI 評審的 RLAIF」兩個後續被廣泛沿用的元件，並有作者公司旗艦產品的官方採納自述，是 T5 訓練型自我修正與 critique 模型的必讀源頭；但要一起讀它的限制：修正只在離線資料合成時發生，而且主要收益來自 RL 階段、部分結論與評估定義的改變糾纏在一起。",
+  "related": [
+    "2204.05862",
+    "2209.07858",
+    "2206.05802",
+    "2204.14146",
+    "2207.05221",
+    "2209.14375",
+    "2210.11610",
+    "2210.10760",
+    "2112.00861",
+    "2211.03540",
+    "2210.15893",
+    "2205.11916",
+    "2203.02155"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

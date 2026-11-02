@@ -4,7 +4,7 @@
  *
  * **只讀呼叫參數**，照 dsh 的 `TodoRow`（`packages/client/ui-tool/src/client/tool/toolviews/todo-row.tsx`，`46a7f68`）：
  * 參數是整份清單，`{ todos: [{ content, status }] }`，所以一顆呼叫的參數就是那一刻的快照。**不做跟前一次的差異**
- * （dsh 有；#575 grilling Q3 決定先不做）。「現在的清單」是另一件事，那是輸入框上方的面板（`todo-panel.tsx`），
+ * （dsh 有；#575 grilling Q3 決定先不做）。「現在的清單」是另一件事，那是輸入框上方的面板（`panel.tsx`），
  * 資料走 harness 的投影（`ConversationState.todos`）；兩邊共用這裡的摘要。
  *
  * @module
@@ -13,10 +13,15 @@
 /** 模型看到的工具名（`@nexus/plugin-todo` 的 `TODO_TOOL_NAME`，照 dsh `tool-todo`）。 */
 export const TODO_WRITE = 'todo_write';
 
-/** 一項的狀態，同 `@nexus/core` 的 `TODO_STATUSES`。 */
-export type TodoStatus = 'pending' | 'in_progress' | 'completed';
-
-const STATUSES: readonly string[] = ['pending', 'in_progress', 'completed'] satisfies TodoStatus[];
+/**
+ * 一項的狀態，型別取自領域主人 core（照 dsh：UI 對宣告過的領域套件做 type-only 相依，不自己再寫一份，#666）。
+ * 只走 `src/todo.ts` 這一支純型別的檔，不經 `@nexus/core` 主入口，所以 web 的 `tsc` 不會把 core 的整張型別圖
+ * （langchain、deepagents）拖進來；`import type` 在建置時整行消失，打包結果裡沒有 core。
+ * 與 wire 的 `WireTodoItem['status']` 相等由 `todo-view.test.ts` 在型別層釘住；wire 與 core 兩邊則由 harness 的
+ * `todo-status-wire.test.ts` 釘住。
+ */
+import type { TodoStatus } from '@nexus/core/src/todo.ts';
+export type { TodoStatus };
 
 /** 清單裡的一項，照模型給的原樣。 */
 export interface TodoItem {
@@ -88,3 +93,6 @@ export const TODO_STATUS_LABEL = {
   in_progress: '進行中',
   completed: '已完成',
 } as const satisfies Record<TodoStatus, string>;
+
+/** 認得的狀態：從上面那張標籤表導出，不另外手列第三份。 */
+const STATUSES: readonly string[] = Object.keys(TODO_STATUS_LABEL);

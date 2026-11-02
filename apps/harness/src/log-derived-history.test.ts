@@ -1,0 +1,624 @@
+/**
+ * 「從日誌推回的歷史」對「實際送給模型的請求」的比對（#1299，承 #1159 的探針；量法與判定見
+ * `log-derived-history.fixture.ts` 檔頭）。
+ *
+ * **這份測試的用途是 S2 的驗收工具，不是守現狀。** 今天兩邊有幾類差異（地圖 [#1298](https://github.com/DemianLi/nexus-agent/issues/1298)
+ * 的 #1300–#1303）。它們列在各場景傳給 `expectDerivedHistory` 的已知差異清單裡，每一類對應一張卡（{@link CARD_OF}）；斷言是**觀察到的差異集合與那份清單
+ * 完全相等**，兩個方向都會紅：
+ *
+ * - 某張卡修好了 → 那一格不再有差異 → 紅，訊息會點名要刪哪一條、是哪張卡。
+ * - 冒出新的差異，或同一格換了一種 → 紅，附上第一個不同的位置與兩邊的樣子。
+ *
+ * 比對器本身被這些突變守住（#1299 實測，改壞夾具後各自會紅哪些）：
+ *
+ * - 分類一律回「沒有差異」：#1302、#1303 修好之後，所有場景的已知清單都是空的，這個突變只剩比對器本身的單元測試會紅。
+ * - 分類一律回「有差異」：兩個對照場景與全部已知差異場景。
+ * - 不偵測摘要事件的順序（#1301 之前）：S6、S8、SH3、SH4、SV6。#1301 把摘要事件改排在用到它的呼叫之前之後，這個突變改成「把摘要事件搬回回覆之後」，紅的是 S6。
+ * - 重放時把系統訊息改一個字：所有場景（系統訊息相符的斷言）。
+ * - SR2 比的是「重啟 vs 不重啟」，不經過比對器，上面四個突變碰不到它；它另有自己的前提斷言與突變（讓重啟那邊拿錯一次呼叫去比）。
+ *
+ * **SR2 有循環性**（同 `.docs/log-derived-history-vs-wire-2026-10-08.md` §二 對 SR1、SR3 的說明）：續接是從日誌推出歷史再灌回
+ * LangGraph 狀態，之後每次請求剪刀與截斷照舊在請求端再套一次，所以它證明的是「今天重啟不改變請求」，不是「歷史可由日誌單獨推出」。
+ * 不要把它當成推導的證據。
+ */
+
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+import { createEchoPlugin } from './echo.fixture.js';
+import type { SessionEvent } from '@nexus/core';
+
+import {
+  assistantNameLeaks,
+  classify,
+  compareToLog,
+  liveModelPatch,
+  LOW_SUMMARIZATION,
+  mainOnly,
+  PRUNE_MARKER,
+  runAssembly,
+  runServePhases,
+  runShippedCli,
+  systemText,
+  TRUNCATE_MARKER,
+} from './log-derived-history.fixture.js';
+import { composeEntries } from './plugin-config.js';
+import type {
+  Body,
+  DifferenceKind,
+  Reply,
+  Run,
+  Script,
+  Verdict,
+} from './log-derived-history.fixture.js';
+
+/** 每一類差異由哪張卡負責。`other` 沒有卡：出現就是新問題。 */
+const CARD_OF: Readonly<Record<DifferenceKind, string>> = {
+  prune: '#1302（已修；再出現是退步）',
+  truncate: '#1303（已修；再出現是退步）',
+  'empty-assistant': '#1300（已修；再出現是退步）',
+  other: '（沒有對應的卡——新問題）',
+};
+
+/** 一格已知差異。 */
+interface Known {
+  readonly call: number;
+  readonly kinds?: readonly DifferenceKind[];
+}
+
+/** 觀察到的、不是「逐位元組相同」的那些格，形狀同 {@link Known}。 */
+const observedOf = (verdicts: readonly Verdict[]): Known[] =>
+  verdicts.filter((v) => v.kinds.length > 0).map((v) => ({ call: v.call, kinds: v.kinds }));
+
+const explain = (verdicts: readonly Verdict[]): string => {
+  const lines = verdicts
+    .filter((v) => v.kinds.length > 0 || !v.systemMatches)
+    .map(
+      (v) =>
+        `呼叫 ${String(v.call)}：種類=[${v.kinds.join(',')}] 系統訊息${v.systemMatches ? '相符' : '不符'}` +
+        (v.detail === undefined ? '' : `\n  ${v.detail}`),
+    );
+  const cards = new Set<string>();
+  for (const v of verdicts) {
+    for (const kind of v.kinds) cards.add(CARD_OF[kind]);
+  }
+  return `\n${lines.join('\n')}\n對應的卡：${[...cards].join('；') || '無'}`;
+};
+
+/**
+ * 斷言一個場景：每一次主呼叫的系統訊息都相符，而且差異集合恰等於 `known`。
+ *
+ * @param name - 場景名，給訊息用。
+ * @param run - 跑完的結果。
+ * @param known - 已知差異；沒有就是預期逐位元組相同。
+ * @returns 全部判定，讓呼叫端再做場景特有的檢查。
+ */
+async function expectDerivedHistory(
+  name: string,
+  run: Run,
+  known: readonly Known[],
+  minCalls: number,
+): Promise<Verdict[]> {
+  const verdicts = await compareToLog(run.events, run.mainBodies);
+  // 比的呼叫數太少代表場景沒跑成預期的樣子（例如工具根本沒被叫），不是「沒有差異」。
+  expect(verdicts.length, `${name}：主呼叫數`).toBeGreaterThanOrEqual(minCalls);
+  expect(
+    verdicts.filter((v) => !v.systemMatches).map((v) => v.call),
+    `${name}：系統訊息與日誌 request/system 不符的呼叫${explain(verdicts)}`,
+  ).toEqual([]);
+  expect(observedOf(verdicts), `${name}：已知差異清單與觀察不一致${explain(verdicts)}`).toEqual(
+    known,
+  );
+  return verdicts;
+}
+
+const big = (char: string, n: number) => char.repeat(n);
+/**
+ * 一句話後面的墊料。剪刀剪過之後，被取代的那段在有效視角裡可能只剩幾句短話；框好的摘要要比它小才會提交
+ * （#1396），所以要壓縮的那幾格把每句墊到比摘要框架大。框架約 60–70 token（歷史檔路徑裡的隨機 session id
+ * 讓它每次差幾個），墊料要留足餘裕，不然這幾格會隨機被擋、而且被擋了只留一行 warn、測試照綠。
+ */
+const PAD = '內容'.repeat(100);
+const echoCall = (id: string, message: string): Reply => ({
+  tools: [{ id, name: 'echo', args: { message } }],
+});
+const writeCall = (id: string): Reply => ({
+  tools: [{ id, name: 'write_file', args: { file_path: '/a.txt', content: big('abc', 2_000) } }],
+});
+
+beforeAll(() => {
+  // runCli／runServe 的 `--live` 要有金鑰才肯組模型；端點是本機假的，這顆不會送到任何地方。
+  vi.stubEnv('NVIDIA_API_KEY', 'nvapi-fake-for-log-derived-history');
+});
+afterAll(() => {
+  vi.unstubAllEnvs();
+});
+
+describe('比對器本身', () => {
+  const msg = (role: string, content: unknown, extra: object = {}) => ({ role, content, ...extra });
+
+  it('逐位元組相同 → 沒有種類', () => {
+    const wire = [msg('user', '嗨'), msg('assistant', '好。')];
+    expect(classify(wire, wire)).toEqual({ kinds: [] });
+  });
+
+  it('線上的工具結果帶剪除標記、推導是全文 → prune，並附上不同的位置', () => {
+    const actual = [msg('user', '嗨'), msg('tool', `頭${PRUNE_MARKER}尾`, { tool_call_id: 'c1' })];
+    const derived = [msg('user', '嗨'), msg('tool', '頭中段尾', { tool_call_id: 'c1' })];
+    const verdict = classify(actual, derived);
+    expect(verdict.kinds).toEqual(['prune']);
+    expect(verdict.detail).toContain('第 1 則');
+  });
+
+  it('線上的助手訊息帶截斷標記 → truncate', () => {
+    const call = (args: string) => ({
+      tool_calls: [
+        { id: 'c1', type: 'function', function: { name: 'write_file', arguments: args } },
+      ],
+    });
+    const actual = [msg('assistant', null, call(`{"content":"a...(${TRUNCATE_MARKER})"}`))];
+    const derived = [msg('assistant', null, call('{"content":"abcabc"}'))];
+    expect(classify(actual, derived).kinds).toEqual(['truncate']);
+  });
+
+  it('推導多出一則空的助手訊息 → empty-assistant，且不把後面每一格都算成別的差異', () => {
+    const actual = [msg('user', '嗨'), msg('user', '再來')];
+    const derived = [msg('user', '嗨'), msg('assistant', ''), msg('user', '再來')];
+    expect(classify(actual, derived)).toEqual({ kinds: ['empty-assistant'] });
+  });
+
+  it('其他任何不同 → other（沒有卡的新問題）', () => {
+    expect(classify([msg('user', '甲')], [msg('user', '乙')]).kinds).toEqual(['other']);
+  });
+
+  it('線上助手訊息帶 name → 點名位置；其他角色的 name 不算（#1392）', () => {
+    expect(
+      assistantNameLeaks([
+        msg('user', '嗨'),
+        msg('assistant', '好。', { name: 'model' }),
+        msg('assistant', '再好。'),
+        msg('tool', '結果', { name: 'echo', tool_call_id: 'c1' }),
+        msg('assistant', '另一個。', { name: 'other' }),
+      ]),
+    ).toEqual([1, 4]);
+    expect(assistantNameLeaks([msg('user', '嗨'), msg('assistant', '好。')])).toEqual([]);
+  });
+
+  it('系統訊息只比區塊文字串起來（契約：日誌 request/system 只記文字）', () => {
+    expect(systemText([{ text: '甲' }, { text: '乙' }])).toBe('甲乙');
+    expect(systemText('甲乙')).toBe('甲乙');
+  });
+
+  it('線上助手訊息帶 name 不能被比對器吃掉：compareToLog 判 other 並點名（#1392）', async () => {
+    const script: Script = (i) => (i === 0 ? echoCall('call_a', '嗨') : {});
+    const run = await runAssembly('叫工具\n再說\n/exit\n', script, [createEchoPlugin()]);
+    // 真跑出來的請求在產品的 fetch 層之後沒有 name；先確認這個前提，再人為把它放回去。
+    const clean = await compareToLog(run.events, run.mainBodies);
+    expect(clean.every((v) => v.kinds.length === 0)).toBe(true);
+    const leaked = run.mainBodies.map((body) => ({
+      ...body,
+      messages: body.messages.map((m) => (m.role === 'assistant' ? { ...m, name: 'model' } : m)),
+    }));
+    const verdicts = await compareToLog(run.events, leaked);
+    const flagged = verdicts.filter((v) => v.kinds.includes('other'));
+    // 第一次呼叫還沒有助手訊息；之後每次呼叫都帶著前面的助手訊息，必須被點名。
+    expect(flagged.length).toBeGreaterThanOrEqual(1);
+    for (const v of flagged) expect(v.detail).toContain('助手訊息帶 name');
+  }, 60_000);
+
+  it('主呼叫數對不上 model/start 數 → 拋，不默默少比', async () => {
+    const start = { seq: 1, type: 'model/start', data: {} } as unknown as SessionEvent;
+    await expect(compareToLog([start], [])).rejects.toThrow('對不上');
+  });
+});
+
+describe('對照場景：預期逐位元組相同', () => {
+  it('組裝點，單一工具呼叫（非串流）', async () => {
+    const script: Script = (i) => (i === 0 ? echoCall('call_a', '嗨') : {});
+    const run = await runAssembly('叫工具\n再說\n/exit\n', script, [createEchoPlugin()]);
+    await expectDerivedHistory('C1', run, [], 2);
+    // 剪刀沒動的會話，日誌不多寫事件（#1302）。
+    expect(run.events.some((e) => e.type === 'compaction/prune')).toBe(false);
+    expect(run.events.some((e) => e.type === 'compaction/truncate-args')).toBe(false);
+  }, 60_000);
+
+  it('serve，同一輪併發兩個工具呼叫（串流）', async () => {
+    const run = await runServePhases(
+      [['併發', '再問']],
+      mainOnly((k) =>
+        k === 0
+          ? {
+              tools: [
+                { id: 'call_a', name: 'echo', args: { message: 'A' } },
+                { id: 'call_b', name: 'echo', args: { message: 'B' } },
+              ],
+            }
+          : {},
+      ),
+    );
+    await expectDerivedHistory('C2', run, [], 3);
+    expect(run.events.some((e) => e.type === 'compaction/prune')).toBe(false);
+    expect(run.events.some((e) => e.type === 'compaction/truncate-args')).toBe(false);
+  }, 90_000);
+
+  it('SV5 serve：輸出撞上限帶工具呼叫 → 空的助手訊息推導時丟掉（#1300 已修）', async () => {
+    const run = await runServePhases(
+      [['被截斷', '再來']],
+      mainOnly((k) =>
+        k === 0
+          ? {
+              tools: [{ id: 'call_cut', name: 'echo', args: { message: '被切' } }],
+              finish: 'length',
+            }
+          : {},
+      ),
+    );
+    await expectDerivedHistory('SV5', run, [], 2);
+  }, 90_000);
+});
+
+describe('已知差異：每一類對應一張卡', () => {
+  it('S6 壓縮摘要（#1301）', async () => {
+    const script: Script = (i, body) => {
+      if ((body.tools?.length ?? 0) === 0) return { content: '【摘要】之前聊了很多。' };
+      return i === 1 ? echoCall('call_mid', big('中', 20_000)) : {};
+    };
+    const run = await runAssembly(
+      '一\n二\n三\n四\n五\n六\n七\n/exit\n',
+      script,
+      [createEchoPlugin()],
+      {
+        trigger: [{ type: 'messages', value: 8 }],
+        retainTokens: 12,
+      },
+    );
+    expect(run.events.filter((e) => e.type === 'compaction/summary').length).toBeGreaterThan(0);
+    await expectDerivedHistory('S6', run, [], 7);
+  }, 90_000);
+
+  it('S8 工具結果剪刀（#1302 已修：剪法進日誌，推導與線上逐位元組相同）', async () => {
+    const script: Script = (i, body) => {
+      if ((body.tools?.length ?? 0) === 0) return { content: '【不該有摘要】' };
+      return i === 0 ? echoCall('call_mid', big('中', 20_000)) : {};
+    };
+    const run = await runAssembly(
+      `大一點的結果${PAD}\n再說一輪${PAD}\n再一輪${PAD}\n/exit\n`,
+      script,
+      [createEchoPlugin()],
+      {
+        trigger: [{ type: 'tokens', value: 12_000 }],
+        retainTokens: 12,
+      },
+    );
+    expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(PRUNE_MARKER))).toBe(
+      true,
+    );
+    await expectDerivedHistory('S8', run, [], 4);
+    // 位置（#1302）：剪法記在用到它的那次 `model/start` 之前，且只記一次——之後的請求沿用。
+    const prunes = run.events.filter((e) => e.type === 'compaction/prune');
+    expect(prunes).toHaveLength(1);
+    const after = run.events.filter((e) => e.seq > prunes[0]!.seq);
+    expect(
+      after.find((e) => e.type === 'model/start' || e.type === 'assistant/message')?.type,
+    ).toBe('model/start');
+  }, 90_000);
+
+  it('S9 舊工具參數截斷（#1303 已修：縮短進日誌，推導與線上逐位元組相同）', async () => {
+    const script: Script = (i) => (i === 0 ? writeCall('call_w') : {});
+    const run = await runAssembly('寫檔\n二\n三\n四\n/exit\n', script, [], {
+      trigger: [{ type: 'messages', value: 1000 }],
+      retainTokens: 12,
+      truncateArgs: {
+        trigger: { type: 'messages', value: 4 },
+        keep: { type: 'messages', value: 2 },
+        maxLength: 100,
+      },
+    });
+    expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(TRUNCATE_MARKER))).toBe(
+      true,
+    );
+    await expectDerivedHistory('S9', run, [], 5);
+    // 位置與只記一次（#1303）：縮短記在用到它的那次 `model/start` 之前，之後的請求沿用——四次呼叫只有一筆、一個參數。
+    const truncations = run.events.filter((e) => e.type === 'compaction/truncate-args');
+    expect(truncations).toHaveLength(1);
+    const { calls } = (truncations[0] as SessionEvent<'compaction/truncate-args'>).data;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.callId).toBe('call_w');
+    expect(Object.keys(calls[0]!.args)).toEqual(['content']);
+    expect(calls[0]!.args.content!.originalChars).toBe(6_000);
+    expect(calls[0]!.args.content!.value).toContain(TRUNCATE_MARKER);
+    const after = run.events.filter((e) => e.seq > truncations[0]!.seq);
+    expect(
+      after.find((e) => e.type === 'model/start' || e.type === 'assistant/message')?.type,
+    ).toBe('model/start');
+  }, 90_000);
+
+  it('SH3 出貨 CLI：剪刀（門檻調低）', async () => {
+    const script = mainOnly((k) => (k === 0 ? echoCall('call_mid', big('中', 10_000)) : {}));
+    const run = await runShippedCli('中等結果\n二\n三\n四\n/exit\n', script, LOW_SUMMARIZATION);
+    expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(PRUNE_MARKER))).toBe(
+      true,
+    );
+    await expectDerivedHistory('SH3', run, [], 5);
+  }, 90_000);
+
+  it('SH4 出貨 CLI：舊工具參數截斷（門檻調低）', async () => {
+    const script = mainOnly((k) => (k === 0 ? writeCall('call_w') : {}));
+    const run = await runShippedCli('寫檔\n二\n三\n四\n/exit\n', script, LOW_SUMMARIZATION);
+    expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(TRUNCATE_MARKER))).toBe(
+      true,
+    );
+    await expectDerivedHistory('SH4', run, [], 5);
+  }, 90_000);
+
+  it('SV6 serve：大結果與長參數，剪刀與截斷同時在場', async () => {
+    const run = await runServePhases(
+      [['大結果', '二', '三', '四'].map((t) => `${t}${PAD}`)],
+      mainOnly((k) =>
+        k === 0
+          ? {
+              tools: [
+                { id: 'call_mid', name: 'echo', args: { message: big('中', 10_000) } },
+                {
+                  id: 'call_w',
+                  name: 'write_file',
+                  args: { file_path: '/a.txt', content: big('abc', 2_000) },
+                },
+              ],
+            }
+          : {},
+      ),
+      LOW_SUMMARIZATION,
+    );
+    await expectDerivedHistory('SV6', run, [], 5);
+  }, 90_000);
+});
+
+describe('截斷視窗裡有鄰居（#1303）', () => {
+  /**
+   * 基座的 `truncateArgs` 用一個迴圈外的 `modified` 旗標：只要某次呼叫有參數**新被截斷**，切點之前、排在它後面的**每一則**助手訊息
+   * （連沒有長參數的、連沒有工具呼叫的）都被整則重建，丟掉 `response_metadata`。預設的門檻（每次只跨過兩則）下，新被截斷的幾乎就是
+   * 切點前最後一則助手訊息，旗標波及不到別人；所以這一格把截斷的訊息數門檻拉到 10，讓一次呼叫同時跨過一大串：長參數那則被截斷、
+   * 它後面的幾則帶文字的回覆被整則重建（探針量過：那幾則 `response_metadata` 是空的）。推導端從不重建鄰居，線上的 wire 還是要逐位元組相同。
+   * serve 走串流（v1 訊息），是兩條轉換路徑差得最多的那一條。
+   */
+  const BATCH_TRUNCATION = [
+    '- id: summarization',
+    '  config:',
+    '    trigger:',
+    '      - { type: tokens, value: 50000 }',
+    '    retainTokens: 12',
+    '    truncateArgs:',
+    '      trigger: { type: messages, value: 10 }',
+    '      keep: { type: messages, value: 2 }',
+    '    historyPathPrefix: /conversation_history',
+  ].join('\n');
+
+  it('SV7 serve：一次跨過一串訊息，長參數後面的帶文字回覆被基座整則重建，推導與線上仍逐位元組相同', async () => {
+    const writeTo = (id: string, path: string, chars: string): Reply => ({
+      content: `寫 ${path}。`,
+      tools: [{ id, name: 'write_file', args: { file_path: path, content: big(chars, 2_000) } }],
+    });
+    const run = await runServePhases(
+      [['寫檔', '二', '三', '四', '五', '再寫一個', '七', '八', '九']],
+      mainOnly((k) => {
+        if (k === 0) return writeTo('call_w1', '/a.txt', 'abc');
+        // 「再寫一個」是第 6 句：k 從 0 起，前面 5 句各一次主呼叫，第一句多一次（工具結果之後）。
+        if (k === 6) return writeTo('call_w2', '/b.txt', 'xyz');
+        return { content: `回覆 ${String(k)}。` };
+      }),
+      BATCH_TRUNCATION,
+    );
+    const truncations = run.events.filter((e) => e.type === 'compaction/truncate-args');
+    const keys = truncations.flatMap((e) =>
+      (e as SessionEvent<'compaction/truncate-args'>).data.calls.flatMap((c) =>
+        Object.keys(c.args).map((arg) => `${c.callId}/${arg}`),
+      ),
+    );
+    // 前提：兩個參數都被截斷過、各記一次，而且是先後兩次（第二次的那一刻第一個已經是預先換上去的）。
+    expect(keys.sort()).toEqual(['call_w1/content', 'call_w2/content']);
+    expect(truncations).toHaveLength(2);
+    expect(JSON.stringify(run.mainBodies.at(-1)!.messages)).toContain(TRUNCATE_MARKER);
+    await expectDerivedHistory('SV7', run, [], 10);
+  }, 90_000);
+});
+
+describe('手挑組裝的邊界（#1300）', () => {
+  /**
+   * 空的助手訊息推導時丟掉，是跟 `live-model.ts` 的 `withEmptyAssistantContent`（`fetch` 層）對齊。**手挑組裝（`createNexusAgent`
+   * 自己給模型）以前沒有這層**，線上仍送空的助手訊息、推導不送，這一格曾登記成已知差異（`other`）。[#1398](https://github.com/DemianLi/nexus-agent/issues/1398)
+   * 之後夾具的 `model()` 與 `createLiveModel` 共用 `withShippedRequestBody`，手挑組裝量到的就是出貨時線上的形狀：這一格相同。
+   *
+   * 突變（#1398 實測）：夾具 `model()` 不掛 `withEmptyAssistantContent` → 這一條紅（線上又多一則空的助手訊息）。
+   */
+  it('S12 輸出撞上限（空的助手訊息）：手挑組裝與出貨同一組 fetch 改寫，推導與線上逐位元組相同', async () => {
+    const script: Script = (i) =>
+      i === 0
+        ? { tools: [{ id: 'call_cut', name: 'echo', args: { message: '被切' } }], finish: 'length' }
+        : {};
+    const run = await runAssembly('被截斷\n再來\n/exit\n', script, [createEchoPlugin()]);
+    // 前提：撞上限那一步真的發生過、後面還有請求（不然「相同」什麼都沒量到）。
+    expect(run.events.some((e) => e.type === 'model/start')).toBe(true);
+    expect(run.mainBodies.length).toBeGreaterThan(1);
+    const verdicts = await compareToLog(run.events, run.mainBodies);
+    expect(observedOf(verdicts), explain(verdicts)).toEqual([]);
+    // 線上沒有空的助手訊息（`content` 空且沒有 `tool_calls`），也沒有 `name`。
+    for (const body of run.mainBodies) {
+      expect(JSON.stringify(body.messages)).not.toContain('"role":"assistant","content":""');
+      expect(assistantNameLeaks(body.messages)).toEqual([]);
+    }
+  }, 60_000);
+});
+
+describe('重啟後續接', () => {
+  it('SR2 壓縮與剪刀、截斷發生之後重啟，下一次請求跟沒重啟的逐位元組相同', async () => {
+    const script = () => mainOnly((k) => (k === 0 ? bigThenSmall() : {}));
+    const texts = ['大結果', '二', '三', '四', '五', '重啟點之後的一句'].map((t) => `${t}${PAD}`);
+    const control = await runServePhases([texts], script(), LOW_SUMMARIZATION);
+    const restart = await runServePhases(
+      [texts.slice(0, 5), texts.slice(5)],
+      script(),
+      LOW_SUMMARIZATION,
+    );
+    const last = (run: Run): Body => run.mainBodies.at(-1)!;
+    // 重啟之前壓縮與截斷確實發生過，不然「相同」什麼都沒證明。
+    const firstSummary = restart.events.find((e) => e.type === 'compaction/summary');
+    const lastTurn = restart.events.findLast((e) => e.type === 'turn/start');
+    expect(firstSummary, '重啟前就該壓縮過').toBeDefined();
+    expect(firstSummary!.seq).toBeLessThan(lastTurn!.seq);
+    expect(JSON.stringify(last(restart).messages)).toContain(TRUNCATE_MARKER);
+    // 會話 id 每次不同，其他逐位元組比。
+    const norm = (body: Body) =>
+      body.messages
+        .slice(1)
+        .map((m) => JSON.stringify(m).replace(/session_[0-9a-f]{8}/g, 'session_X'));
+    expect(norm(last(restart))).toEqual(norm(last(control)));
+  }, 180_000);
+
+  /**
+   * #1302：剪法在重啟之前記下，重啟之後仍沿用——不重剪、不重記，日誌推得出每一次請求（包括重啟後的第一次）。
+   * 灌回 graph state 的是原文（`applyPrunes` 省略），下一次請求由剪刀照日誌換上去。
+   */
+  it('SR4 剪法記下之後重啟：沿用不重記，重啟後的請求也推得出來', async () => {
+    const script = () => mainOnly((k) => (k === 0 ? bigThenSmall() : {}));
+    const texts = ['大結果', '二', '三', '重啟點之後的一句', '再一句'].map((t) => `${t}${PAD}`);
+    const restart = await runServePhases(
+      [texts.slice(0, 3), texts.slice(3)],
+      script(),
+      LOW_SUMMARIZATION,
+    );
+    const resumedAt = restart.events.find((e) => e.type === 'session/end-seed');
+    expect(resumedAt, '應該有一次續接').toBeDefined();
+    const prunes = restart.events.filter((e) => e.type === 'compaction/prune');
+    expect(prunes.length, '重啟前就該剪過').toBeGreaterThan(0);
+    expect(prunes[0]!.seq).toBeLessThan(resumedAt!.seq);
+    // 每顆結果只記一次：重啟沒有讓它再記一遍。
+    const callIds = prunes.flatMap((e) =>
+      (e as SessionEvent<'compaction/prune'>).data.results.map((r) => r.callId),
+    );
+    expect(new Set(callIds).size).toBe(callIds.length);
+    // 重啟後送出去的請求仍帶剪除標記，而且每一次請求都推得出來。
+    expect(JSON.stringify(restart.mainBodies.at(-1)!.messages)).toContain(PRUNE_MARKER);
+    const verdicts = await compareToLog(restart.events, restart.mainBodies);
+    expect(
+      verdicts.filter((v) => v.kinds.includes('other') || v.kinds.includes('prune')),
+      `剪法推不出來${explain(verdicts)}`,
+    ).toEqual([]);
+  }, 180_000);
+
+  /**
+   * #1303：縮短在重啟之前記下，重啟之後仍沿用——不重記，日誌推得出每一次請求（包括重啟後的第一次）。
+   * 灌回 graph state 的是原文（`applyArgTruncations` 省略），下一次請求由 `withArgTruncationLog` 照日誌換上去。
+   */
+  it('SR5 縮短記下之後重啟：沿用不重記，重啟後的請求也推得出來', async () => {
+    const script = () => mainOnly((k) => (k === 0 ? writeCall('call_w') : {}));
+    const texts = ['寫檔', '二', '三', '重啟點之後的一句', '再一句'];
+    const restart = await runServePhases(
+      [texts.slice(0, 3), texts.slice(3)],
+      script(),
+      LOW_SUMMARIZATION,
+    );
+    const resumedAt = restart.events.find((e) => e.type === 'session/end-seed');
+    expect(resumedAt, '應該有一次續接').toBeDefined();
+    const truncations = restart.events.filter((e) => e.type === 'compaction/truncate-args');
+    expect(truncations.length, '重啟前就該縮短過').toBeGreaterThan(0);
+    expect(truncations[0]!.seq).toBeLessThan(resumedAt!.seq);
+    // 每個參數只記一次：重啟沒有讓它再記一遍。
+    const keys = truncations.flatMap((e) =>
+      (e as SessionEvent<'compaction/truncate-args'>).data.calls.flatMap((c) =>
+        Object.keys(c.args).map((arg) => `${c.callId}/${arg}`),
+      ),
+    );
+    expect(new Set(keys).size).toBe(keys.length);
+    // 重啟後送出去的請求仍帶截斷標記，而且每一次請求都推得出來。
+    expect(JSON.stringify(restart.mainBodies.at(-1)!.messages)).toContain(TRUNCATE_MARKER);
+    const verdicts = await compareToLog(restart.events, restart.mainBodies);
+    expect(observedOf(verdicts), `縮短推不出來${explain(verdicts)}`).toEqual([]);
+  }, 180_000);
+
+  /**
+   * #1300：重啟前有一則空的助手訊息（撞輸出上限），重啟後才壓縮。灌回去的串沒有那則空訊息，之後壓縮記的座標
+   * 就以灌回去的串為準；推導端穿過 end-seed 時要跟著濾，不然整串會判成 `compaction-misaligned`、模型從空的開始。
+   */
+  it('SR3 空的助手訊息之後重啟、重啟後才壓縮：日誌仍推得出來，請求與沒重啟的相同', async () => {
+    const script = () =>
+      mainOnly((k) => {
+        if (k === 0) {
+          return {
+            tools: [{ id: 'call_cut', name: 'echo', args: { message: '被切' } }],
+            finish: 'length',
+          };
+        }
+        return k === 2 ? bigThenSmall() : {};
+      });
+    const texts = ['被截斷', '再來', '大結果', '三', '四', '五'].map((t) => `${t}${PAD}`);
+    const control = await runServePhases([texts], script(), LOW_SUMMARIZATION);
+    const restart = await runServePhases(
+      [texts.slice(0, 2), texts.slice(2)],
+      script(),
+      LOW_SUMMARIZATION,
+    );
+    const summary = restart.events.find((e) => e.type === 'compaction/summary');
+    const resumedAt = restart.events.find((e) => e.type === 'session/end-seed');
+    expect(resumedAt, '應該有一次續接').toBeDefined();
+    expect(summary?.seq ?? -1, '壓縮要發生在重啟之後').toBeGreaterThan(resumedAt!.seq);
+    const verdicts = await compareToLog(restart.events, restart.mainBodies);
+    expect(
+      verdicts.filter((v) => v.kinds.includes('other') || v.kinds.includes('empty-assistant')),
+      `日誌推不出來、或空的助手訊息又出現${explain(verdicts)}`,
+    ).toEqual([]);
+    const norm = (body: Body) =>
+      body.messages
+        .slice(1)
+        .map((m) => JSON.stringify(m).replace(/session_[0-9a-f]{8}/g, 'session_X'));
+    expect(norm(restart.mainBodies.at(-1)!)).toEqual(norm(control.mainBodies.at(-1)!));
+  }, 180_000);
+});
+
+const bigThenSmall = (): Reply => ({
+  tools: [
+    { id: 'call_mid', name: 'echo', args: { message: big('中', 10_000) } },
+    { id: 'call_w', name: 'write_file', args: { file_path: '/a.txt', content: big('abc', 2_000) } },
+  ],
+});
+
+describe('夾具的 live-model 是出貨那一列（#1372）', () => {
+  /**
+   * patch 對既有列是整份替換 `config`。#1372 之前夾具只寫 `baseUrl`、`modelId`、重試次數與一顆模型，SH、SV
+   * 系列的 `live-model` 少了出貨型錄、相容設定與逾時，卻名義上量「出貨設定」。這條直接用產品的疊層函式
+   * （`composeEntries`）把夾具的 patch 疊到出貨清單上，比疊完的整份 `config`。
+   *
+   * 突變（#1372 實測）：把 `liveModelPatch` 改回只寫那幾格 → 這條紅（缺 `timeoutMs`、`models` 只剩一顆等）。
+   */
+  it('疊完之後，除了 baseUrl 與重試次數，整份 config 等於出貨那一列', () => {
+    const configOf = (overlay?: string): Record<string, unknown> => {
+      const row = composeEntries(overlay === undefined ? {} : { overlays: [overlay] }).find(
+        (entry) => entry.id === 'live-model',
+      );
+      if (row?.config === undefined) throw new Error('清單上沒有 live-model 那一列');
+      return row.config as Record<string, unknown>;
+    };
+
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-lh-patch-'));
+    try {
+      const file = join(dir, 'patch.yml');
+      writeFileSync(file, liveModelPatch('http://127.0.0.1:1/v1', ''));
+
+      const shipped = configOf();
+      // 前提：出貨那一列真的有「整份替換會弄丟」的東西，這條才不是空斷言。
+      expect(shipped['timeoutMs']).toBeDefined();
+      expect((shipped['models'] as unknown[]).length).toBeGreaterThan(1);
+
+      expect(configOf(file)).toEqual({
+        ...shipped,
+        baseUrl: 'http://127.0.0.1:1/v1',
+        retryPolicy: { ...(shipped['retryPolicy'] as object), maxRetries: 0 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

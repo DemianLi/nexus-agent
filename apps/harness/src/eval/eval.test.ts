@@ -46,7 +46,11 @@ import { runBenchmarkCase } from './runner.js';
 import { scoreCase } from './scorers.js';
 
 /**
- * 每條任務的假模型腳本。
+ * 每條任務的假模型腳本 —— **也就是每題的標準解**（[#1001](https://github.com/DemianLi/nexus-agent/issues/1001)）。
+ *
+ * 下面的 `ls.test` 逐題用它跑一遍，評分器必須判「這題成功」：擋的是「該過的沒過」那個方向
+ * （判準收得太緊，連照著期望做的標準解都過不了）。另一個方向 —— 平凡 agent 不准過 —— 在
+ * `floor.test.ts`。
  *
  * **這是這個檔案裡唯一「假」的東西**，所以刻意跟資料集分開放：資料集是供應商中立的，
  * 這裡是 CI 專用的替身。`usage` 明著給，成本那個指標才有對照組可判
@@ -291,6 +295,7 @@ async function evaluateCase(
   }
   ls.logFeedback({ key: 'extra_tool_calls', score: score.extraToolCalls });
   if (score.mentions !== undefined) ls.logFeedback({ key: 'mentions', score: score.mentions });
+  ls.logFeedback({ key: 'case_success', score: score.success ? 1 : 0 });
   // 成本不是分數（見 `scorers.ts`），但它是供應商比較要的那一欄，所以照樣記下來。
   if (score.cost !== undefined) {
     ls.logFeedback({ key: 'total_tokens', score: score.cost.totalTokens });
@@ -325,6 +330,9 @@ ls.describe('基準任務（假模型）', () => {
         }
         expect(score.extraToolCalls).toBe(0);
         if (testCase.expected.mentions !== undefined) expect(score.mentions).toBe(1);
+        // **標準解必過**：上面逐欄斷言的合取，加上多叫沒超過容許值。逐欄的斷言留著，是為了
+        // 它紅的時候指得出是哪一欄。
+        expect(score.success, `${testCase.id} 的標準解沒被判成功`).toBe(true);
         // 成本一定量得到——假模型每一輪都給了 `usage`，基座把它原封帶到最終狀態。
         expect(score.cost?.totalTokens).toBeGreaterThan(0);
       },
@@ -347,6 +355,7 @@ ls.describe('基準任務（假模型）', () => {
       expect(score.toolCallSuccess).toBe(0.5);
       expect(score.argumentCorrectness).toBe(0);
       expect(score.extraToolCalls).toBe(0);
+      expect(score.success).toBe(false);
     },
   );
 
@@ -368,6 +377,8 @@ ls.describe('基準任務（假模型）', () => {
       expect(score.argumentCorrectness).toBeUndefined();
       // 答案還是講對了，所以品質那一欄照樣滿分 —— 克制與答對是兩件事。
       expect(score.mentions).toBe(1);
+      // **而這題的成功只因為多叫那一項而不成立**：唯一判得到的那一欄（回覆提到）是滿分。
+      expect(score.success).toBe(false);
     },
   );
 });

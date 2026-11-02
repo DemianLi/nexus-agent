@@ -1,0 +1,5 @@
+# 把委派工具關回一次性（#841 的驗收：「設定關掉：task，一次性，與今天逐字相同」）。
+# 讀它的是 `serve-background-setting.test.ts`。
+- id: background-subagents
+  config:
+    backgroundMode: one-shot

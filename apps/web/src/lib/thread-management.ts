@@ -1,0 +1,123 @@
+/**
+ * 側欄的會話管理：釘選、封存、改名（[#633](https://github.com/DemianLi/nexus-agent/issues/633) 的 web 那一半）。
+ *
+ * **有沒有這個功能看 server**：列表（`GET /threads`）帶了釘選與封存兩個集合（{@link readSets}）才算支援，沒帶（還沒實作的
+ * server、列表還在讀或讀失敗）整個功能不出現——列的選單、「已釘選」「已封存」兩區、改名輸入都沒有，畫面與以前逐像素相同。
+ * 附件寫死開關是因為沒有可以先問的東西，這裡列表本身就是答案。實作在 `hooks/use-thread-management.ts`。
+ *
+ * **畫面一律以 server 回的完整集合為準，本機不自己推**（例如「封存同時取消釘選」是 server 的規則，不在這裡重算）：
+ * 動作成功就拿回應裡的整份集合取代，封存與改名之後再重抓一次列表。規則照 dsh（`workspace-controller/src/commands.ts:155-230`）：
+ * 封存的會話不能釘、取消是冪等的、釘選的順序是最近釘的在前。
+ *
+ * @module
+ */
+
+import type { ThreadActivityKind, ThreadListResult, ThreadSummary } from '@nexus/wire';
+
+/** 列表帶的兩個集合；兩格都有才算 server 支援釘選與封存，缺一格就當沒有。 */
+export function readSets(
+  result: ThreadListResult | undefined,
+): { readonly pinned: readonly string[]; readonly archived: readonly string[] } | undefined {
+  if (result?.pinnedThreadIds === undefined || result.archivedThreadIds === undefined) {
+    return undefined;
+  }
+  return { pinned: result.pinnedThreadIds, archived: result.archivedThreadIds };
+}
+
+/** server 回的業務失敗換成給人看的話。 */
+export function explainThreadFailure(error: {
+  readonly code: string;
+  readonly message?: string;
+}): string {
+  switch (error.code) {
+    case 'thread_not_found':
+      return '找不到這條會話（可能已經被刪掉）。';
+    case 'thread_archived':
+      return '封存的會話不能釘選。';
+    case 'thread_active':
+      return '這條會話還在跑，先停掉它再封存。';
+    case 'title_invalid':
+      return error.message ?? '這個標題不合法。';
+    case 'fork_unavailable':
+      // 分叉指名的那一則分不出去（#1580）：不是收尾的輪、還沒收，或失敗收尾。web 的分支鈕先擋了大半，這是 server 那一道。
+      return '這一輪還不能分支。';
+    default:
+      return '這個動作沒成功。';
+  }
+}
+
+/** 五個動作都回失敗的原因（講給人聽的話）；成功回 `undefined`。 */
+export type ThreadActionResult = Promise<string | undefined>;
+
+/**
+ * 封存還在跑的會話，server 要人先說「要停掉」（`thread_active`）：這不是錯誤，是要多問一句。`activity` 是它在跑的是什麼；
+ * 舊的 server 沒帶就是空的。確認之後再送一次 `stopActivity: true`（server 先寫封存、再停跑著的工作）。
+ */
+export interface ArchiveNeedsStop {
+  readonly needsStop: readonly ThreadActivityKind[];
+}
+
+/** 封存的結果：失敗的原因、要多問一句、或成功（`undefined`）。 */
+export type ArchiveAnswer = Promise<string | ArchiveNeedsStop | undefined>;
+
+/** 確認框的內文：講出它在跑什麼，以及停掉的後果。 */
+export function explainArchiveStop(label: string, activity: readonly ThreadActivityKind[]): string {
+  const what =
+    activity.includes('turn') && activity.includes('subagent')
+      ? '正在回答，背景子代理也還在跑'
+      : activity.includes('subagent')
+        ? '還有背景子代理在跑'
+        : activity.includes('turn')
+          ? '正在回答'
+          : '正在執行';
+  return `「${label}」${what}。要停掉再封存嗎？`;
+}
+
+export interface ThreadManagement {
+  /** 釘選的會話 id，最近釘的在前。 */
+  readonly pinnedIds: readonly string[];
+  readonly archivedIds: ReadonlySet<string>;
+  /** server 受理的標題，按 id；蓋過清單上的標題，直到列表自己追上（列上的標題等於它）為止。 */
+  readonly titles: ReadonlyMap<string, string>;
+  readonly onPin: (threadId: string) => ThreadActionResult;
+  readonly onUnpin: (threadId: string) => ThreadActionResult;
+  readonly onArchive: (
+    threadId: string,
+    options?: { readonly stopActivity?: boolean },
+  ) => ArchiveAnswer;
+  readonly onUnarchive: (threadId: string) => ThreadActionResult;
+  readonly onRename: (threadId: string, title: string) => ThreadActionResult;
+}
+
+export interface ThreadSections {
+  /** 釘選的，照 `pinnedIds` 的順序（最近釘的在前）；封存的不在這裡。 */
+  readonly pinned: readonly ThreadSummary[];
+  /** 其餘沒封存的，保持清單原本的順序（由新到舊）。 */
+  readonly rest: readonly ThreadSummary[];
+  readonly archived: readonly ThreadSummary[];
+}
+
+/** 把清單切成釘選、其餘、封存三份。封存的優先：同時在兩邊的算封存（封存的不能釘）。 */
+export function splitThreads(
+  items: readonly ThreadSummary[],
+  pinnedIds: readonly string[],
+  archivedIds: ReadonlySet<string>,
+): ThreadSections {
+  const byId = new Map(items.map((item) => [item.threadId, item]));
+  const pinned = pinnedIds.flatMap((id) => {
+    const item = byId.get(id);
+    return item === undefined || archivedIds.has(id) ? [] : [item];
+  });
+  const pinnedSet = new Set(pinned.map((item) => item.threadId));
+  return {
+    pinned,
+    rest: items.filter((item) => !archivedIds.has(item.threadId) && !pinnedSet.has(item.threadId)),
+    archived: items.filter((item) => archivedIds.has(item.threadId)),
+  };
+}
+
+/** 使用者打的標題：前後空白拿掉、連續空白併成一個；空的回 `undefined`。 */
+export function normalizeTitle(raw: string): string | undefined {
+  const title = raw.replace(/\s+/g, ' ').trim();
+  return title === '' ? undefined : title;
+}

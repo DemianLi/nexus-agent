@@ -24,9 +24,11 @@
  * ## 我們怎麼做：一顆 middleware、兩個鉤子
  *
  * - **`wrapModelCall`** 把那一顆改寫成正常的 `tool_calls`、參數 `{}`，清掉
- *   `additional_kwargs.tool_calls` 與 content block，原字串交給{@link InvalidArgumentsCarrier | 載體}。
- *   從此 ToolNode 照常派發，下一輪回送的是 `{}`，後面跟著那則 tool 訊息。
- * - **`wrapToolCall`** 認出載體裡有這個 callId 的那次，照常叫 `handler`，但工具換成一顆同名的樁：
+ *   `additional_kwargs.tool_calls` 與 content block，原字串以 callId 為鍵記在**同一則訊息**的
+ *   `additional_kwargs`（{@link INVALID_ARGUMENTS_KEY}）上。從此 ToolNode 照常派發，下一輪回送的是
+ *   `{}`，後面跟著那則 tool 訊息。
+ * - **`wrapToolCall`** 從 `request.state.messages` 裡找到帶這個 callId 的那則 AI 訊息
+ *   （{@link rawArgumentsOf}），記號在就照常叫 `handler`，但工具換成一顆同名的樁：
  *   樁不碰工具本體，回 {@link INVALID_ARGUMENTS_REFUSAL}、碼 `INVALID_ARGS`。
  *
  * **`INVALID_ARGS` 從這裡起有兩個生產者**：這一顆（JSON 都不合格）與圍堵認出的 schema 不合
@@ -43,38 +45,82 @@
  * 原字串從同一條串流上模型那一段學來。不在這裡換，理由寫在 `wrapToolCall` 那一行。從日誌開的那一顆
  * 本來就是原字串（圍堵記的就是它）。
  *
- * ### 位置：每一層的最內側
+ * ### 位置：幾乎是每一層的最內側
  *
  * 排在 `turnCancelModelSignal` 之前（那一顆只有 `wrapModelCall`，而且只綁訊號）。核准閘門與 plugin
- * 的 middleware 都在它外面，對到 dsh「先 `tools/pre-execute`，執行時才驗參數」；而改寫排在所有
- * `wrapModelCall` 的最內側，外面每一顆看到的都是改寫過的那則。外面那些看到的參數是 `{}`——
+ * 的 middleware 都在它外面，對到 dsh「先 `tools/pre-execute`，執行時才驗參數」；而改寫排在其餘
+ * `wrapModelCall` 的內側，外面每一顆看到的都是改寫過的那則。**比它更內側的只有 {@link ./max-tokens.ts}**
+ * （[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：撞到輸出上限的那則先被清掉所有呼叫，
+ * 被切斷的那一顆到不了這裡，不會被當成參數不合格。外面那些看到的參數是 `{}`——
  * dsh 那側它們看到的是原字串，兩者都沒有任何欄位，觀測政策這類按路徑判斷的因此原樣放行。
  * 時刻是 `tools/execute`，佔用者的索引見 `apps/harness/src/interception-index.test.ts`。
+ *
+ * ## 未知工具在這一層認（[#1024](https://github.com/DemianLi/nexus-agent/issues/1024)）
+ *
+ * 交到這一層時 `request.tool` 還是 `undefined` 的呼叫，基座按名字也查不到（`ToolNode.js:209-221`），
+ * 它回的錯誤結果在這裡標上 `UNKNOWN_TOOL`，碼經 `tool-events.ts` 的載體走到圍堵記進日誌。dsh 那側
+ * `ToolNotFoundError` 是在派發那一步、查註冊表落空時拋的（`packages/core/tools/src/index.ts:1578-1579`，
+ * `5badb15`），註解明寫未知工具走派發階段（`:1400-1406`）。所以外層 policy 自己回的拒絕不可能是 `UNKNOWN_TOOL`。
+ *
+ * **之前是圍堵在第 0 格看 `request.tool === undefined` 猜的，猜錯過**：`subagent` 是
+ * `apps/harness/src/background-delegation.ts` 在 `wrapModelCall` 加給模型的，ToolNode 的工具表裡沒有它，
+ * 第 0 格看到的 `request.tool` 永遠是 `undefined`；它在外層回的每一則沒碼的拒絕（例如前景不能指定
+ * `reasoning_effort`）都被記成 `UNKNOWN_TOOL`，離線掃描因此說模型叫了不存在的工具。這一層在每一顆
+ * 會自己回拒絕的 middleware 內側，到得了這裡、`request.tool` 又還是空的，才是真的要交給基座查名字的那次。
+ *
+ * **判準成立的前提**：比這一層更內側的沒有人設 `request.tool`（只有 {@link ./max-tokens.ts}，它只看 `task`、
+ * 原樣交回結果）；外層改 `toolCall.name` 的只有 `background-delegation.ts` 的前景改派，而它同時設了
+ * `request.tool`。哪天有一層只改名不設工具，基座會按新名字找到工具，這裡卻還以為沒有。
  *
  * ## 登記的偏離
  *
  * 1. **回送用 `{}`**，照 dsh 多供應商的 pi-ai 轉接器（`packages/llm/llm-pi-ai/src/replay.ts:43-54`），
  *    不照 DeepSeek 轉接器原樣回送（`packages/llm/llm-deepseek/src/serialize.ts:214`）：我們的供應商
- *    收到原字串回 400（#269 實測）。原字串只留在日誌的 `tool/call.arguments`。
+ *    收到原字串回 400（#269 實測）。原字串記在同一則 AI 訊息的 `additional_kwargs` 上（見下一節），
+ *    日誌的 `tool/call.arguments` 也有一份。
  * 2. **核准卡的原字串放在中斷酬載的 `args` 裡**；dsh 的核准請求只帶 `callId`，連到已顯示的工具卡
  *    （`packages/interaction/user-approval/src/index.ts:101-102`）。我們的酬載照抄基座 HITL 的形狀，
  *    本來就帶 `args`，而核准卡顯示時工具卡還不存在。
  *
- * ## 載體只活在這個行程
+ * ## 原字串跟著那則訊息走，不住在行程裡
  *
- * 模型節點不會因為 resume 重跑，所以改寫只發生一次；停在核准點再續接時，拒不拒只能靠載體裡上次
- * 留下的那一筆。行程重啟就沒了，而那時歷史裡的參數已經是 `{}`，跟一個合法的空參數呼叫分不出來，
- * 工具會真的被執行。**今天走不到**：兩條產品路徑的 checkpointer 都是 `MemorySaver`
- * （`apps/harness/src/cli.ts` 的 `createCliAgent`，serve 每條 thread 也走它），行程一死 thread 跟著死。
- * 哪天有會落盤的 checkpointer，這一格要換成活得過 checkpoint 的記號。
+ * 模型節點不會因為 resume 重跑，所以改寫只發生一次；停在核准點再續接時，拒不拒要靠上次留下的記號。
+ * 記號放在**那則 AI 訊息自己身上**，所以它活得跟那則訊息一樣久：進 checkpointer、進會話日誌
+ * （`assistant/message`，`fromLoggedMessage` 推回來還在），不需要另一份以 callId 為鍵、只活在
+ * 行程裡的表。三個讀者（圍堵、核准閘門、這一顆）都從 `request.state.messages` 倒著找帶這個 callId
+ * 的那則（{@link rawArgumentsOf}）。**落定不用刪鍵**：鍵住在那則訊息上，供應商重用 callId 時，
+ * 新的呼叫在另一則訊息上，找到的就是另一個答案。
+ *
+ * 照 dsh 的方向（`tool-calls.ts:104-111`：解不開就把原字串留在呼叫資料本身，行程內沒有另存一份）。
+ * 差只有一點：我們的 `ToolCall.args` 必須是物件（字串送出去供應商回 400，偏離 1），所以記號放在
+ * 同一則訊息的 `additional_kwargs` 而不是呼叫的 `args`——這是偏離 1 的直接後果，不是另一條偏離。
+ * 實測（[#701](https://github.com/DemianLi/nexus-agent/issues/701)，`langchain@1.5.10` /
+ * `@langchain/openai@1.5.10`）：
+ *
+ * - ChatOpenAI 送回供應商時不帶這個鍵（CLI 非串流與 web v3 串流各一次；轉換器只讀 `function_call`、
+ *   `tool_calls`、`audio`）；
+ * - 不碰 `tool-started` 的 `input`，因為記號不在 `args` 裡；
+ * - 進日誌（沒有新的事件種類），`fromLoggedMessage` 推回來還在；MemorySaver 的 serde 往返之後也在，
+ *   落盤的 checkpointer 帶得過去；
+ * - `request.state.messages` 在 root、子代理與核准 resume 之後都拿得到那則訊息。
+ *
+ * 代價：原字串在日誌裡有兩份（`tool/call.arguments` 與這則 AI 訊息）。
  */
 
-import { AIMessage } from '@langchain/core/messages';
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { ToolCall } from '@langchain/core/messages/tool';
 import { tool as makeTool } from '@langchain/core/tools';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { INVALID_ARGS, TOOL_ERROR_PREFIX, toolCallIdOf, toolRefusal } from './tool-events.js';
+import {
+  INVALID_ARGS,
+  markToolError,
+  TOOL_ERROR_PREFIX,
+  toolCallIdOf,
+  toolErrorOf,
+  toolRefusal,
+  UNKNOWN_TOOL,
+} from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /** 這顆 middleware 的名字。排序斷言用得到。 */
@@ -95,40 +141,63 @@ export const INVALID_ARGUMENTS_REFUSAL = TOOL_ERROR_PREFIX + INVALID_ARGUMENTS_R
 /** 碼照 dsh 的 `ToolArgsError`，同圍堵認出 schema 不合時給的那一組。 */
 const INVALID_ARGS_ERROR: ToolErrorInfo = { name: 'ToolArgsError', code: INVALID_ARGS };
 
+/** 基座自己回的「沒有這顆工具」。碼照 dsh 的 `ToolNotFoundError`。 */
+const UNKNOWN_TOOL_ERROR: ToolErrorInfo = { name: 'ToolNotFoundError', code: UNKNOWN_TOOL };
+
 /**
- * 原字串從改寫那一刻帶到下游的載體：以 callId 為鍵。
+ * 交到基座手上時還沒有工具的那次呼叫，回來的錯誤結果標上 `UNKNOWN_TOOL`（[#1024](https://github.com/DemianLi/nexus-agent/issues/1024)）。
  *
- * 讀它的有三處——圍堵（`tool/call.arguments` 記原字串）、核准閘門（中斷酬載的 `args`）、
- * 這一顆的 `wrapToolCall`（拒不拒）。**落定時由圍堵刪鍵**：它是最外層，看得到每一條出口，
- * 而中斷不是落定（續接時同一個 callId 會再進來一次，那時還要讀得到）。
+ * 那則是基座自己回的「沒有這顆工具」（`langchain@1.5.10` `ToolNode.js:209-221`：`request.tool` 與按名字查都落空）。
+ * **只標沒碼的錯誤**：成功的、已經有碼的原樣不動；`Command` 也不動——基座這條路只回 ToolMessage。
  *
- * **一份組裝一份，root 與每個子代理共用**——跟 `factory-products-carry-closure-state` 那條慣例相反，
- * 而那是對的：三個讀者分在不同層，得看到同一份；鍵是供應商發的 callId，同一條 thread 上一顆還沒
- * 落定之前不會再發同一個。**不做成模組層級**：假模型的 callId 是 `call_1_0` 這種固定值，同一個
- * 行程裡兩場組裝共用的話，前一場的壞呼叫會讓後一場的好呼叫被拒。
+ * @param result - `handler(request)` 回來的值。
+ * @returns 同一個值。
  */
-export interface InvalidArgumentsCarrier {
-  remember(callId: string, raw: string): void;
-  rawOf(callId: string): string | undefined;
-  forget(callId: string): void;
+function markUnknownTool<T>(result: T): T {
+  if (
+    ToolMessage.isInstance(result) &&
+    result.status === 'error' &&
+    toolErrorOf(result) === undefined
+  ) {
+    markToolError(result, UNKNOWN_TOOL_ERROR);
+  }
+  return result;
 }
 
 /**
- * 建一份載體。
+ * 記號放在 AI 訊息 `additional_kwargs` 的哪一格：`{ [callId]: 原字串 }`。
  *
- * @returns 空的載體。
+ * 名字不在 ChatOpenAI 的轉換器會讀的那幾格裡（`function_call`、`tool_calls`、`audio`），所以不會
+ * 被送回供應商。
  */
-export function createInvalidArgumentsCarrier(): InvalidArgumentsCarrier {
-  const raws = new Map<string, string>();
-  return {
-    remember: (callId, raw) => {
-      raws.set(callId, raw);
-    },
-    rawOf: (callId) => raws.get(callId),
-    forget: (callId) => {
-      raws.delete(callId);
-    },
-  };
+export const INVALID_ARGUMENTS_KEY = 'nexusInvalidArguments';
+
+/**
+ * 這一次呼叫的原字串：解不開的那顆有，其餘（含沒有 `state`、找不到那則訊息）是 `undefined`。
+ *
+ * **倒著找、認 callId**：ToolNode 執行時那則訊息就在尾巴附近，供應商重用 callId 時最近的那則才是
+ * 這一次。記號查不到時是 `undefined`，**不是**「合法」的證明——呼叫端（`wrapToolCall`）照常放行。
+ *
+ * @param request - `wrapToolCall` 收到的請求，只讀 `toolCall.id` 與 `state.messages`。
+ * @returns 模型吐的原字串，或 `undefined`。
+ */
+export function rawArgumentsOf(request: {
+  readonly toolCall: { readonly id?: string };
+  readonly state?: unknown;
+}): string | undefined {
+  const callId = request.toolCall.id;
+  if (callId === undefined || callId === '') return undefined;
+  const messages = (request.state as { messages?: unknown } | undefined)?.messages;
+  if (!Array.isArray(messages)) return undefined;
+  for (let at = messages.length - 1; at >= 0; at -= 1) {
+    const message = messages[at] as Partial<AIMessage> | undefined;
+    if (!(message?.tool_calls ?? []).some((call) => call.id === callId)) continue;
+    const marks = message?.additional_kwargs?.[INVALID_ARGUMENTS_KEY] as
+      Record<string, unknown> | undefined;
+    const raw = marks?.[callId];
+    return typeof raw === 'string' ? raw : undefined;
+  }
+  return undefined;
 }
 
 /** 一顆解不開的呼叫。 */
@@ -168,7 +237,8 @@ function invalidCallsOf(message: AIMessage): InvalidCall[] {
 }
 
 /**
- * 把解不開的呼叫改寫成正常的 `tool_calls`、參數 `{}`，原字串交給載體。沒有解不開的就原樣回傳。
+ * 把解不開的呼叫改寫成正常的 `tool_calls`、參數 `{}`，原字串記在同一則訊息的 `additional_kwargs` 上
+ * （{@link INVALID_ARGUMENTS_KEY}）。沒有解不開的就原樣回傳。
  *
  * 清掉三樣：`invalid_tool_calls`、`additional_kwargs.tool_calls`（CLI 那條的原字串就在這裡，轉換器在
  * `tool_calls` 空的時候會拿它回送）、`invalid_tool_call` content block。v3 那條的訊息帶
@@ -176,16 +246,11 @@ function invalidCallsOf(message: AIMessage): InvalidCall[] {
  * （`@langchain/core@1.2.9` `dist/messages/ai.js:64-72`）。
  *
  * @param message - 模型這一輪的回覆。
- * @param carrier - 原字串要交給的載體。
  * @returns 改寫過的那則，或原樣的同一則。
  */
-export function repairInvalidToolCalls(
-  message: AIMessage,
-  carrier: InvalidArgumentsCarrier,
-): AIMessage {
+export function repairInvalidToolCalls(message: AIMessage): AIMessage {
   const invalid = invalidCallsOf(message);
   if (invalid.length === 0) return message;
-  for (const call of invalid) carrier.remember(call.id, call.raw);
   const { tool_calls: _replayedVerbatim, ...kwargs } = message.additional_kwargs;
   const repaired: ToolCall[] = invalid.map((call) => ({
     id: call.id,
@@ -199,7 +264,10 @@ export function repairInvalidToolCalls(
     content: Array.isArray(message.content)
       ? message.content.filter((block) => !isInvalidToolCallBlock(block))
       : message.content,
-    additional_kwargs: kwargs,
+    additional_kwargs: {
+      ...kwargs,
+      [INVALID_ARGUMENTS_KEY]: Object.fromEntries(invalid.map((call) => [call.id, call.raw])),
+    },
     response_metadata: message.response_metadata,
     ...(message.usage_metadata === undefined ? {} : { usage_metadata: message.usage_metadata }),
     tool_calls: [...(message.tool_calls ?? []), ...repaired],
@@ -228,22 +296,21 @@ function refusingStub(name: string): unknown {
 /**
  * 造這顆 middleware。
  *
- * @param carrier - 這份組裝的載體，同一份也交給圍堵與核准閘門。
- * @returns 要排在每一層最內側的 middleware。
+ * @returns 要排在每一層內側（`nexusMaxTokens` 之外）的 middleware。
  */
-export function createInvalidToolArgsMiddleware(carrier: InvalidArgumentsCarrier): AgentMiddleware {
+export function createInvalidToolArgsMiddleware(): AgentMiddleware {
   return createMiddleware({
     name: INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
     wrapModelCall: async (request, handler) => {
       const response = await handler(request);
-      return AIMessage.isInstance(response) ? repairInvalidToolCalls(response, carrier) : response;
+      return AIMessage.isInstance(response) ? repairInvalidToolCalls(response) : response;
     },
-    wrapToolCall: (request, handler) => {
-      const callId = request.toolCall.id;
-      const raw = callId === undefined ? undefined : carrier.rawOf(callId);
-      // **未知工具不換樁**：基座自己回「沒有這顆工具」，圍堵記成 `UNKNOWN_TOOL`——同 dsh 先認工具、
-      // 再驗參數（`packages/core/tools/src/index.ts:1365`）。
-      if (raw === undefined || request.tool === undefined) return handler(request);
+    wrapToolCall: async (request, handler) => {
+      // **未知工具不換樁，碼在這裡標**：基座自己回「沒有這顆工具」，這一層把它標成 `UNKNOWN_TOOL`——同 dsh
+      // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
+      if (request.tool === undefined) return markUnknownTool(await handler(request));
+      const raw = rawArgumentsOf(request);
+      if (raw === undefined) return handler(request);
       // **參數不換，照歷史裡的 `{}` 交下去**：換成原字串的話，langchain 的 v3 串流轉換器對
       // `tool-started` 的 `input` 做 `JSON.parse`（`langchain@1.5.10`
       // `dist/agents/transformers/tool-call.js:93`），整條串流當場拋掉（實測）。

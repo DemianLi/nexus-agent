@@ -5,19 +5,34 @@
  * 它不保留原文**，只留一句「存不進去」。`ContainedFilesystemBackend` 的 `read-only` mode
  * 對每一次 write 回 `{ error }`，所以那個組裝底下每一則超過 80,000 字元的結果都會中。
  *
- * 修法是在組裝點把 `/large_tool_results` 路由到獨立的 `StateBackend`
+ * 修法是在組裝點把 `/large_tool_results` 路由到獨立的暫存 backend
  * （{@link ./agent-factory.ts} 的 `withToolResultStash`），於是那次 write 不會失敗。
+ * [#734](https://github.com/DemianLi/nexus-agent/issues/734) 起優先存主機私有目錄、存不進去才退回 graph state；
+ * 沒給 `toolResultStash` 的組裝（eval、spike）走記憶體，前半的測試守那一條，後半的 describe 守主機那一條。
  *
  * **這裡的判準一律是「暗號讀不讀得回來」，不是「訊息長什麼樣」。** 只看訊息會把
  * 「搬走了而且取得回來」跟「搬走了但取不回來」讀成同一件事 —— 前者第二輪 `read_file`
  * 拿到原文，後者拿到 `ENOENT`，而第一輪的訊息文字差不多。
  */
 
-import { mkdtemp, readdir } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  lutimes,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
-import type { PluginEntry } from '@nexus/core';
+import type { PluginEntry, SpillSaveRequest } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
 import type { AnyBackendProtocol } from 'deepagents';
 import { tool } from 'langchain';
@@ -28,6 +43,12 @@ import { createMountPlugin } from './fixtures.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import {
+  cleanupToolResultStash,
+  createToolResultStash,
+  stashSessionDirName,
+} from './tool-result-stash.js';
+import type { ToolResultStashOptions } from './tool-result-stash.js';
 
 /** 暗號放在**最前面**：截斷與「只拿到預覽」都會讓它消失，`includes` 才分得出來。 */
 const MARK = 'MURASAKI-7391';
@@ -73,6 +94,7 @@ async function fetchThenRead(
   payload: string,
   backend?: AnyBackendProtocol,
   extra: readonly PluginEntry[] = [],
+  stash?: ToolResultStashOptions,
 ): Promise<{ first: string; readBack: string }> {
   const model = new ScriptedChatModel({
     turns: [
@@ -85,6 +107,7 @@ async function fetchThenRead(
     model,
     plugins: [bulkPlugin(payload), ...extra],
     ...(backend === undefined ? {} : { backend }),
+    ...(stash === undefined ? {} : { toolResultStash: stash }),
   });
   try {
     await agent.invoke(toAgentInvocation('去拿一坨，然後讀回來。'));
@@ -218,7 +241,7 @@ describe.each([
   });
 });
 
-describe('暫存放在 graph state 裡，而且是逐 thread 的', () => {
+describe('沒給主機目錄時，暫存放在 graph state 裡，而且是逐 thread 的', () => {
   /**
    * **這條驗的是路由目標沒有自己的記憶體，所以也沒有跨對話的洩漏。**
    *
@@ -294,5 +317,526 @@ describe('路由開的是暫存那一格，不是把 fence 打開', () => {
       await dispose();
     }
     expect(resultText(model.prompts[1])).toContain('這個 backend 是唯讀的');
+  });
+});
+
+/**
+ * **主機上的私有目錄**（[#734](https://github.com/DemianLi/nexus-agent/issues/734)）：給了 `toolResultStash`，暫存改存
+ * 主機、按會話分目錄，所以重開之後照預覽路徑 `read_file` 讀得回。上面的測試沒給它，走的是 eval／spike 那條記憶體暫存。
+ *
+ * 判準仍是「暗號讀不讀得回來」；**組裝是真的 `createNexusAgent`＋真的檔案系統**，不用會失敗的替身。
+ */
+// 每條都真的組裝一到三個 agent 並寫檔；CI 的分片機器忙的時候「兩個會話」那條量到 5.4 秒，預設的 5 秒不夠。
+describe('暫存在主機上的私有目錄', { timeout: 30_000 }, () => {
+  const isRoot = process.getuid?.() === 0;
+
+  async function stashRoot(): Promise<string> {
+    return mkdtemp(join(tmpdir(), 'stash-host-'));
+  }
+
+  /** 一個會話目錄底下的檔，與它的權限。 */
+  async function stashedFiles(root: string, session: string) {
+    const dir = join(root, stashSessionDirName(session));
+    const names = await readdir(dir);
+    return {
+      dir,
+      names,
+      dirMode: (await stat(dir)).mode & 0o777,
+      rootMode: (await stat(root)).mode & 0o777,
+      fileModes: await Promise.all(
+        names.map(async (name) => (await stat(join(dir, name))).mode & 0o777),
+      ),
+    };
+  }
+
+  it.each([
+    ['read-only（#170 那條）', () => containedRoot('read-only').then(({ backend }) => backend)],
+    ['workspace-write', () => containedRoot('workspace-write').then(({ backend }) => backend)],
+    ['預設（StateBackend）', () => Promise.resolve(undefined)],
+  ] as const)('%s：讀得回，檔在主機上，目錄 0700、檔案 0600', async (_, makeBackend) => {
+    const root = await stashRoot();
+    const { first, readBack } = await fetchThenRead(OVERSIZED, await makeBackend(), [], {
+      rootDir: root,
+      session: 's1',
+    });
+    expect(first).not.toContain('could not be saved');
+    expect(readBack).toContain(MARK);
+
+    const files = await stashedFiles(root, 's1');
+    expect(files.names).toEqual(['call_1_0.txt']);
+    expect(files.fileModes).toEqual([0o600]);
+    expect(files.dirMode).toBe(0o700);
+    expect(files.rootMode).toBe(0o700);
+  });
+
+  it('暫存不在對話狀態裡：進不了 checkpoint，也不在模型看得到的根目錄', async () => {
+    const root = await stashRoot();
+    const model = new ScriptedChatModel({
+      turns: [{ content: '', toolCalls: [{ name: 'bulk', args: {} }] }, { content: '好。' }],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [bulkPlugin(OVERSIZED)],
+      checkpointer: new MemorySaver(),
+      toolResultStash: { rootDir: root, session: 's1' },
+    });
+    try {
+      await agent.invoke(toAgentInvocation('去拿一坨超大的。'), {
+        configurable: { thread_id: 'stash' },
+      });
+      const state = await (
+        agent as unknown as {
+          getState: (config: unknown) => Promise<{ values: Record<string, unknown> }>;
+        }
+      ).getState({ configurable: { thread_id: 'stash' } });
+      const keys = Object.keys((state.values.files ?? {}) as Record<string, unknown>);
+      expect(keys.filter((key) => key.endsWith('call_1_0.txt'))).toEqual([]);
+    } finally {
+      await dispose();
+    }
+    expect((await stashedFiles(root, 's1')).names).toEqual(['call_1_0.txt']);
+  });
+
+  it('兩個會話各自一個目錄，互相看不到對方的檔', async () => {
+    const root = await stashRoot();
+    // 兩個會話的工具呼叫編號一樣（`call_1_0`）：同一個檔名，落在不同的目錄。
+    await fetchThenRead(`A-${OVERSIZED}`, undefined, [], { rootDir: root, session: 'a' });
+    await fetchThenRead(`B-${OVERSIZED}`, undefined, [], { rootDir: root, session: 'b' });
+    const dirs = (await readdir(root)).sort();
+    expect(dirs).toEqual([stashSessionDirName('a'), stashSessionDirName('b')].sort());
+    expect(stashSessionDirName('a')).not.toBe(stashSessionDirName('b'));
+    for (const session of ['a', 'b']) {
+      expect((await stashedFiles(root, session)).names).toEqual(['call_1_0.txt']);
+    }
+
+    // 換成 b 的鑰匙重開，讀到的是 b 自己的檔，不是 a 的。
+    const model = new ScriptedChatModel({
+      turns: [
+        { content: '', toolCalls: [{ name: 'read_file', args: { file_path: STASHED, limit: 1 } }] },
+        { content: '好。' },
+      ],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [],
+      toolResultStash: { rootDir: root, session: 'b' },
+    });
+    try {
+      await agent.invoke(toAgentInvocation('讀回來。'));
+    } finally {
+      await dispose();
+    }
+    expect(resultText(model.prompts[1])).toContain(`B-${MARK}`);
+  });
+
+  /**
+   * **這是 #734 的驗收：重開之後照預覽路徑 `read_file` 唸得回暗號。**
+   * 第一個 agent 收掉（`dispose`）之後另組一個全新的、沒有任何共用記憶體的 agent，只憑同一個根與同一把會話鑰匙。
+   * 突變（把路由換回記憶體）這條紅：第二個 agent 找不到那個檔。
+   */
+  it('重開：全新組裝的 agent 照預覽路徑讀得回上一個行程外溢的原文', async () => {
+    const root = await stashRoot();
+    const stash = { rootDir: root, session: 'resume-me' };
+    const { first } = await fetchThenRead(OVERSIZED, undefined, [], stash);
+    const advertised = /at this path: (\S+)/.exec(first)?.[1];
+    expect(advertised).toBe(STASHED);
+
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [{ name: 'read_file', args: { file_path: advertised, limit: 2 } }],
+        },
+        { content: '好。' },
+      ],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [],
+      toolResultStash: stash,
+    });
+    try {
+      await agent.invoke(toAgentInvocation('接著上次讀。'));
+    } finally {
+      await dispose();
+    }
+    expect(resultText(model.prompts[1])).toContain(MARK);
+  });
+
+  it.skipIf(isRoot)(
+    '根目錄不可寫（真的不可寫的目錄）：模型拿到預覽加路徑，行程內照路徑讀得回，不是「存不進去」',
+    async () => {
+      const root = await stashRoot();
+      await chmod(root, 0o500);
+      const warnings: string[] = [];
+      try {
+        const { first, readBack } = await fetchThenRead(OVERSIZED, undefined, [], {
+          rootDir: root,
+          session: 'ro',
+          warn: (message) => warnings.push(message),
+        });
+        expect(first).not.toContain('could not be saved');
+        expect(first).toContain(STASHED);
+        expect(readBack).toContain(MARK);
+        // 主機上一個檔都沒有；只講一聲，不刷屏。
+        expect(await readdir(root)).toEqual([]);
+        expect(warnings).toHaveLength(1);
+        expect(warnings[0]).toContain('退回記憶體');
+      } finally {
+        await chmod(root, 0o700);
+      }
+    },
+  );
+
+  it('根目錄的祖先別人改得動：不寫主機，退回記憶體，暗號照樣讀得回', async () => {
+    const shared = await stashRoot();
+    await chmod(shared, 0o777);
+    const warnings: string[] = [];
+    const { first, readBack } = await fetchThenRead(OVERSIZED, undefined, [], {
+      rootDir: join(shared, 'stash'),
+      session: 's',
+      warn: (message) => warnings.push(message),
+    });
+    expect(readBack).toContain(MARK);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('群組或其他人可寫');
+    // 帶主機路徑的那句只進管理者的警告，模型拿到的是退回記憶體之後的結果（#2201）。
+    expect(warnings[0]).toContain(shared);
+    expect(first).not.toContain(shared);
+    // 檔案沒有寫進那個別人改得動的目錄底下。
+    expect(await readdir(join(shared, 'stash')).catch(() => [])).toEqual([
+      expect.stringMatching(/^session-/),
+    ]);
+    expect(await readdir(join(shared, 'stash', stashSessionDirName('s')))).toEqual([]);
+  });
+
+  it('已存在的根不會被改權限——只有自己建的那一層才收緊', async () => {
+    const root = await stashRoot();
+    await chmod(root, 0o750);
+    await fetchThenRead(OVERSIZED, undefined, [], { rootDir: root, session: 's' });
+    expect((await stat(root)).mode & 0o777).toBe(0o750);
+    expect((await stashedFiles(root, 's')).dirMode).toBe(0o700);
+  });
+
+  it('read-only 底下模型自己 write_file 到暫存前綴：只落在自己會話的目錄，不在工作區', async () => {
+    const root = await stashRoot();
+    const { root: workspace, backend } = await containedRoot('read-only');
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            {
+              name: 'write_file',
+              args: { file_path: `${TOOL_RESULT_STASH_PREFIX}/notes.txt`, content: '嗨' },
+            },
+          ],
+        },
+        { content: '好。' },
+      ],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [],
+      backend,
+      toolResultStash: { rootDir: root, session: 's' },
+    });
+    try {
+      await agent.invoke(toAgentInvocation('寫個檔。'));
+    } finally {
+      await dispose();
+    }
+    expect((await stashedFiles(root, 's')).names).toEqual(['notes.txt']);
+    expect(await readdir(workspace)).toEqual([]);
+  });
+
+  it('二進位仍被拒讀（#642）：寫進暫存前綴的含 NUL 內容，讀回來是 binary file', async () => {
+    const root = await stashRoot();
+    const model = new ScriptedChatModel({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            {
+              name: 'write_file',
+              args: { file_path: `${TOOL_RESULT_STASH_PREFIX}/blob.txt`, content: 'a\u0000b' },
+            },
+          ],
+        },
+        {
+          content: '',
+          toolCalls: [
+            { name: 'read_file', args: { file_path: `${TOOL_RESULT_STASH_PREFIX}/blob.txt` } },
+          ],
+        },
+        { content: '好。' },
+      ],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [],
+      toolResultStash: { rootDir: root, session: 's' },
+    });
+    try {
+      await agent.invoke(toAgentInvocation('寫一個二進位的。'));
+    } finally {
+      await dispose();
+    }
+    expect(resultText(model.prompts[2])).toContain('binary file');
+  });
+});
+
+describe('啟動時清掉超過保留期的暫存', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  /** 造一個會話目錄，裡面一個檔，時間設成 `ageDays` 天前。 */
+  async function session(root: string, name: string, ageDays: number): Promise<string> {
+    const dir = join(root, name);
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    const file = join(dir, 'call_1_0.txt');
+    await writeFile(file, 'x');
+    const then = new Date(Date.now() - ageDays * DAY);
+    await utimes(file, then, then);
+    await utimes(dir, then, then);
+    return dir;
+  }
+
+  async function root(): Promise<string> {
+    const dir = await mkdtemp(join(tmpdir(), 'stash-clean-'));
+    await chmod(dir, 0o700);
+    return dir;
+  }
+
+  /** 真的會話目錄名，由出貨的 {@link stashSessionDirName} 產生。 */
+  const OLD = stashSessionDirName('old');
+  const NEW = stashSessionDirName('new');
+
+  it('過了保留期的清掉，沒過的留著；只碰會話目錄', async () => {
+    const dir = await root();
+    await session(dir, OLD, 40);
+    await session(dir, NEW, 5);
+    await session(dir, 'notes', 400);
+    expect(await cleanupToolResultStash(dir, 30)).toBe(1);
+    expect((await readdir(dir)).sort()).toEqual(['notes', NEW].sort());
+  });
+
+  it('名字不是 session-<十六位雜湊> 的一律不碰，即使以 session- 開頭', async () => {
+    const dir = await root();
+    const hex = OLD.slice('session-'.length);
+    const foreign = [
+      'session-notes',
+      `session-${hex.slice(0, 12)}`,
+      'session-ABCDEF0123456789',
+      `${OLD}-backup`,
+      `x${OLD}`,
+    ];
+    for (const name of foreign) await session(dir, name, 400);
+    await session(dir, OLD, 400);
+    expect(await cleanupToolResultStash(dir, 30)).toBe(1);
+    expect((await readdir(dir)).sort()).toEqual([...foreign].sort());
+  });
+
+  it('名字對的符號連結不跟：連結與它指向的目錄都原封不動，而且講一聲', async () => {
+    const dir = await root();
+    const target = await session(await root(), 'elsewhere', 400);
+    const link = join(dir, OLD);
+    await symlink(target, link);
+    const then = new Date(Date.now() - 400 * DAY);
+    await lutimes(link, then, then);
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(0);
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readdir(target)).toEqual(['call_1_0.txt']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('略過');
+  });
+
+  it('cleanupPeriodDays 為 0 表示不清', async () => {
+    const dir = await root();
+    await session(dir, OLD, 4000);
+    expect(await cleanupToolResultStash(dir, 0)).toBe(0);
+    expect(await readdir(dir)).toEqual([OLD]);
+  });
+
+  /** 把一串路徑的時間都設成 `ageDays` 天前；目錄的時間要在裡面的東西建完之後才設，建檔會把它推回現在。 */
+  async function age(ageDays: number, ...paths: string[]): Promise<void> {
+    const then = new Date(Date.now() - ageDays * DAY);
+    for (const path of paths) await utimes(path, then, then);
+  }
+
+  /**
+   * **保留以單一檔為準**（#1553 N0951，dsh `index.ts:40-42`）：續接後又寫了新檔的會話，舊檔照樣過期，新檔與目錄留著。
+   * 以前以「會話裡最新的檔」為準，這條會整個不清（回 0、`call_1_0.txt` 還在）。
+   */
+  it('以單一檔為準：續接後又寫了新檔的會話，舊檔照樣過期，新檔與目錄留著', async () => {
+    const dir = await root();
+    const old = await session(dir, OLD, 90);
+    await writeFile(join(old, 'call_9_0.txt'), 'fresh');
+    expect(await cleanupToolResultStash(dir, 30)).toBe(1);
+    expect(await readdir(dir)).toEqual([OLD]);
+    expect(await readdir(old)).toEqual(['call_9_0.txt']);
+  });
+
+  /**
+   * 只刪會話目錄的直接子項裡過期的一般檔，不往子目錄走、不整個 `rm -r`（#1553 N0951 驗收 1）。
+   * 第二個會話目錄的第一層與目錄本身都是 40 天前，深層 `a/b/new.txt` 是今天寫的：以前只看第一層的年齡，整個遞迴刪掉。
+   */
+  it('不往子目錄走：子目錄裡的過期檔、深層剛寫的檔都留著，名字不對的目錄不碰', async () => {
+    const dir = await root();
+    const first = await session(dir, OLD, 40);
+    await mkdir(join(first, 'keep'));
+    await writeFile(join(first, 'keep', 'old.txt'), 'x');
+    await age(40, join(first, 'keep', 'old.txt'), join(first, 'keep'), first);
+    const notes = await session(dir, 'session-notes', 400);
+
+    const second = await session(dir, NEW, 40);
+    await mkdir(join(second, 'a', 'b'), { recursive: true });
+    await writeFile(join(second, 'a', 'b', 'new.txt'), 'today');
+    await age(40, join(second, 'a'), second);
+
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(2);
+    expect(warnings).toEqual([]);
+    expect(await readdir(first)).toEqual(['keep']);
+    expect(await readdir(join(first, 'keep'))).toEqual(['old.txt']);
+    expect(await readdir(notes)).toEqual(['call_1_0.txt']);
+    expect(await readdir(second)).toEqual(['a']);
+    expect(await readFile(join(second, 'a', 'b', 'new.txt'), 'utf8')).toBe('today');
+  });
+
+  /** 同一個會話目錄裡過期檔、新檔、壞掉的符號連結並存（#1553 N0951 驗收 2）：以前新檔讓整目錄不清、壞連結讓整目錄跳過。 */
+  it('過期檔刪掉，新檔與壞掉的符號連結都留著', async () => {
+    const dir = await root();
+    const old = await session(dir, OLD, 60);
+    await writeFile(join(old, 'call_2_0.txt'), 'fresh');
+    await symlink(join(dir, '不存在'), join(old, 'dangling'));
+    // 連結本身也是 60 天前：留下它的理由只能是「不是一般檔」，不是「還新」。
+    const then = new Date(Date.now() - 60 * DAY);
+    await lutimes(join(old, 'dangling'), then, then);
+    await age(60, old);
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(1);
+    expect((await readdir(old)).sort()).toEqual(['call_2_0.txt', 'dangling']);
+    expect((await lstat(join(old, 'dangling'))).isSymbolicLink()).toBe(true);
+    expect(warnings).toEqual([]);
+  });
+
+  /** 掃空的會話目錄收掉（#1553 N0951 驗收 3，dsh `cleanup.ts:327-341`）。 */
+  it('只有過期檔的會話目錄，掃完整個目錄消失', async () => {
+    const dir = await root();
+    await session(dir, OLD, 60);
+    expect(await cleanupToolResultStash(dir, 30)).toBe(1);
+    expect(await readdir(dir)).toEqual([]);
+  });
+
+  /** 別人改得動的會話目錄不進去，而且講一聲（dsh `cleanup.ts:322-326`）。以前只驗根，這種目錄照清。 */
+  it('群組可寫的會話目錄：裡面的過期檔不碰，講一聲', async () => {
+    const dir = await root();
+    const shared = await session(dir, OLD, 60);
+    await chmod(shared, 0o770);
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(0);
+    expect(await readdir(shared)).toEqual(['call_1_0.txt']);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(shared);
+  });
+
+  it('根別人改得動就一個檔都不碰，而且講一聲', async () => {
+    const dir = await root();
+    await session(dir, OLD, 400);
+    await chmod(dir, 0o777);
+    const warnings: string[] = [];
+    expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(0);
+    expect(await readdir(dir)).toEqual([OLD]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('群組或其他人可寫');
+  });
+
+  it('根還不存在：沒東西可清，不拋', async () => {
+    const dir = await root();
+    expect(await cleanupToolResultStash(join(dir, '還沒有'), 30)).toBe(0);
+  });
+
+  it('清得掉的照清、清不掉的記一筆不擋其餘', async () => {
+    if (process.getuid?.() === 0) return;
+    const dir = await root();
+    const locked = await session(dir, stashSessionDirName('locked'), 60);
+    await session(dir, OLD, 60);
+    // 目錄本身唯讀：裡面的檔刪不掉。
+    await chmod(locked, 0o500);
+    const warnings: string[] = [];
+    try {
+      const removed = await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) });
+      expect(removed).toBe(1);
+      expect(warnings).toHaveLength(1);
+      expect(await readdir(dir)).toEqual([stashSessionDirName('locked')]);
+    } finally {
+      await chmod(locked, 0o700);
+    }
+  });
+});
+
+/** 一則工具結果的外溢請求，形狀照 dsh `spill-policy` 填的那樣。 */
+function toolSpill(callId: string, content: string): SpillSaveRequest {
+  return {
+    source: { kind: 'tool', toolName: 'bulk', callId, label: 'result' },
+    suggestedName: 'bulk.txt',
+    content,
+  };
+}
+
+/** 外溢層存檔服務的回傳（#1553 N0949，照 dsh `spill/src/types.ts` 的 `SpillRef` 與 `store.ts:110-130`）。 */
+describe('外溢存檔：回傳位元組數，檔名照建議檔名', () => {
+  it('bytes 是內容的 UTF-8 位元組數，不是字元數', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stash-bytes-'));
+    const store = createToolResultStash({ rootDir: root, session: 's' }).spillStore(
+      TOOL_RESULT_STASH_PREFIX,
+    );
+    const content = '紫色的暗號 MURASAKI';
+    const ref = await store.saveText(toolSpill('c1', content));
+    expect(ref.bytes).toBe(Buffer.byteLength(content, 'utf8'));
+    expect(ref.bytes).not.toBe(content.length);
+  });
+
+  it('跨會話引用的建議檔名進了定位；工具結果照舊是 <工具名>.txt', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stash-name-'));
+    const route = createToolResultStash({ rootDir: root, session: 's' });
+    const store = route.spillStore(TOOL_RESULT_STASH_PREFIX);
+    const reference = await store.saveText({
+      source: { kind: 'session-reference', sessionId: 'other', label: '另一段' },
+      suggestedName: 'session-reference-1.txt',
+      content: '全文',
+    });
+    expect(reference.locator).toMatch(
+      new RegExp(`^${TOOL_RESULT_STASH_PREFIX}/[0-9a-f]{12}-session-reference-1\\.txt$`),
+    );
+    const tool = await store.saveText(toolSpill('c1', '結果'));
+    expect(tool.locator).toMatch(
+      new RegExp(`^${TOOL_RESULT_STASH_PREFIX}/[0-9a-f]{12}-bulk\\.txt$`),
+    );
+    const name = reference.locator.slice(`${TOOL_RESULT_STASH_PREFIX}/`.length);
+    expect(await readFile(join(route.sessionDir, name), 'utf8')).toBe('全文');
+  });
+});
+
+/**
+ * 清掃會把掃空的會話目錄 `rmdir` 掉，而它跟續接中的寫入可能同時發生（#1553 N0952 的前提）。寫入撞上目錄已經不在，
+ * 要重建目錄再寫，照 dsh `store.ts:112-124`。
+ *
+ * 走外溢層的存檔服務，**不走路由的 `write`**：路由寫不進主機會退回記憶體、回報成功，拿掉重試也照樣綠。
+ */
+describe('會話目錄被清掃收掉之後，下一次存檔重建目錄再寫', () => {
+  it('第一次存檔建好目錄；整個目錄被刪掉之後再存，照樣存進主機、目錄回到 0700', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'stash-recreate-'));
+    const route = createToolResultStash({ rootDir: root, session: 's' });
+    const store = route.spillStore(TOOL_RESULT_STASH_PREFIX);
+    await store.saveText(toolSpill('c1', '第一次'));
+    await rm(route.sessionDir, { recursive: true });
+
+    const ref = await store.saveText(toolSpill('c2', '第二次'));
+    const name = ref.locator.slice(`${TOOL_RESULT_STASH_PREFIX}/`.length);
+    expect(await readFile(join(route.sessionDir, name), 'utf8')).toBe('第二次');
+    expect((await stat(route.sessionDir)).mode & 0o777).toBe(0o700);
+    expect((await stat(join(route.sessionDir, name))).mode & 0o777).toBe(0o600);
   });
 });

@@ -82,7 +82,11 @@ function requestAuthority(headers: Headers): string | undefined {
   }
 }
 
-function tokenMatches(actual: string, expected: string): boolean {
+/**
+ * 常數時間比兩個 token（長度不同直接 false）。`ops-endpoints.ts` 的指標 bearer 比對共用這一支（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)），
+ * 兩個出口不各寫一份。
+ */
+export function tokenMatches(actual: string, expected: string): boolean {
   const actualBytes = Buffer.from(actual, 'utf8');
   const expectedBytes = Buffer.from(expected, 'utf8');
   return (

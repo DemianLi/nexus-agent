@@ -1,0 +1,177 @@
+{
+  "id": "2503.13657",
+  "title": "Why Do Multi-Agent LLM Systems Fail?",
+  "topic": "T4",
+  "subarea": "軌跡分析、失敗分類與歸因",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "先用紮根理論分析 150 多條多 agent 執行軌跡，歸納出 14 個失敗模式、分成 3 類的 MAST 分類法（人工一致度 κ=0.88）；再用 o1 few-shot LLM judge 自動標註 7 個 MAS 框架的 1642 條軌跡，公開成資料集 MAST-Data。",
+  "problem": "多 agent 系統（MAS）在熱門 benchmark 上的表現，常常只比單 agent 或 best-of-N 等簡單基準好一點；作者實測 7 個開源 MAS，失敗率落在 41%–86.7%，但業界對「為什麼失敗」沒有共識。既有 benchmark 都是由上而下地只給總體成功率，開發者看不出系統壞在哪裡。MAS 的失敗又牽涉多個 agent 的互動與模型行為的疊加，根因很難驗證，加上沒有標準化的失敗定義，跨系統的標註與比較因此不一致。要先有一套共同的失敗詞彙，以及能擴展規模的標註方法，才能用大量軌跡做系統性診斷，進而指引 MAS 設計。",
+  "core_idea": "把 agent 的執行軌跡當成質性研究的資料：先用紮根理論（Grounded Theory），讓失敗模式從軌跡中自然浮現；再透過多輪標註者一致度（IAA）研究，把定義修到不同人都能一致套用，定出分類法 MAST。接著把分類法定義和人工標註的範例放進 LLM judge 的提示詞，讓它能用接近人工的一致度大規模標註軌跡。最後用標好的資料集比較不同模型、不同架構、介入前後的失敗分佈，主張多數失敗來自系統設計與 agent 之間的協調，而不只是模型能力不足。",
+  "method": {
+    "定義": "agent＝提示詞規格（初始狀態）＋對話軌跡（狀態）＋與環境互動的能力，例如用工具（動作）。MAS＝一群透過編排互動的 agent。failure＝MAS 沒有達成預期的任務目標。一條軌跡（trace）是一次執行的完整文字紀錄，含 agent 間對話與工具呼叫的輸出；GT 階段的軌跡平均超過 15,000 行。",
+    "步驟1_紮根理論收集失敗行為": "用理論抽樣挑 5 個 MAS（HyperAgent、AppWorld、AG2、ChatDev、MetaGPT）和兩類任務（寫程式、解數學題），收集 150 多條軌跡，由 6 位專家分析。分析依序為：open coding（替軌跡片段標上觀察到的失敗行為）→ constant comparative analysis（跨系統比對同類行為是否反覆出現）→ memoing（記錄洞見）→ theorizing（整理成初版失敗模式與定義），反覆進行到理論飽和，也就是再分析新資料也不再冒出新模式為止。每位專家約花 20 小時以上。",
+    "步驟2_IAA迭代定稿": "從 GT 得到的初版分類法出發。每一輪由 3 位標註者各自用 MAST 獨立標註隨機抽出的 5 條軌跡，再開會解決分歧，並依討論調整、新增、刪除或合併失敗模式。共做 3 輪（15 條軌跡），光是解決分歧就花約 10 小時。一致度用 Cohen's κ 衡量，最後幾輪平均 0.88。定稿後把每個模式對應到 Pre-Execution／Execution／Post-Execution 三個執行階段（Figure 1，這是分類法層級的「通常發生於」，不是逐條軌跡的標記）。",
+    "分類表_14個失敗模式": {
+      "FC1 系統設計問題": "FM-1.1 違反任務規格；FM-1.2 違反角色規格（agent 做了別的角色的事）；FM-1.3 步驟重複；FM-1.4 對話歷史遺失（非預期截斷、退回較早的狀態）；FM-1.5 不知道終止條件（該停不停）",
+      "FC2 agent 間失準": "FM-2.1 對話重置；FM-2.2 沒有要求澄清（帶著錯誤假設繼續）；FM-2.3 任務偏離；FM-2.4 資訊隱匿（持有關鍵資訊卻不告訴其他 agent）；FM-2.5 忽略其他 agent 的輸入；FM-2.6 推理與行動不符",
+      "FC3 任務驗證": "FM-3.1 過早終止；FM-3.2 沒有驗證或驗證不完整；FM-3.3 驗證錯誤"
+    },
+    "步驟3_LLM_judge": "輸入是一條完整的執行軌跡、MAST 各模式的定義，以及取自人工標註資料的 few-shot 範例；模型用 OpenAI o1。輸出是 14 個模式各自是否出現（多標籤二元分類），外加理由。作者用 IAA 研究中的 held-out 集對照人工標註驗證（Table 2）：zero-shot 的 accuracy 0.89、κ 0.58；few-shot 的 accuracy 0.94、recall 0.77、precision 0.833、F1 0.80、κ 0.77。judge 的完整提示詞沒有附在論文裡（§3.3 說細節在 Appendix N，但 N 只放失敗案例），held-out 集的大小也沒寫。",
+    "步驟4_OOD驗證": "另外找兩個沒參與分類法建構的 MAS（OpenManus、Magentic-One）和兩個新 benchmark（MMLU、GAIA），用定稿的 MAST 再做一輪人工 IAA，κ 0.79。注意這是人對人的一致度，不是 judge 對人。",
+    "步驟5_建立MAST-Data": "用 judge 標註 1642 條軌跡（Table 1）。其中 7 組各 30 條（ChatDev、MetaGPT、OpenManus 跑 ProgramDev；HyperAgent 跑 SWE-Bench Lite；AppWorld 跑 Test-C；AG2 跑 GSM-Plus；Magentic-One 跑 GAIA），這幾組同時有人工判定任務成敗、人工標註與 LLM 標註。另有 7 組各 100 條的 ProgramDev-v2，只有 LLM 標註：ChatDev × GPT-4o、MetaGPT × GPT-4o、MetaGPT × Claude-3.7-Sonnet、ChatDev × Qwen2.5-Coder-32B-Instruct、MetaGPT × Qwen2.5-Coder-32B-Instruct、ChatDev × CodeLlama-7b-Instruct、MetaGPT × CodeLlama-7b-Instruct（沒有 ChatDev × Claude 這一組）。其餘是 AG2 的 OlympiadBench 206 條、GSMPlus（Claude）193 條、MMLU（GPT-4o-mini）168 條，以及 Magentic-One 的 GAIA 165 條。",
+    "資料格式": "Hugging Face 上的每筆紀錄有 mas_name、llm_name、benchmark_name、trace_id、trace（原始軌跡文字）、mast_annotation（14 個模式各為 1／0／null）。人工標註子集附上各模式的文字理由。",
+    "工具介面": "pip 套件 agentdash：annotator(openai_api_key) 建立標註器，produce_taxonomy(trace 字串) 回傳 failure_modes（模式編號 → 是否偵測到）、summary、task_completion、total_failures；get_failure_mode_info(id) 可查模式名稱。",
+    "成本": "o1 標註每條軌跡平均 1.8 美元，隨軌跡長度變動：AppWorld 0.37、HyperAgent 0.97、AG2 1.17、Magentic-One 1.31、ChatDev 2.13、MetaGPT 2.45、OpenManus 4.14（App K）。",
+    "介入實驗_AG2": "以 MathChat（Student＋能執行 Python 的 Assistant）為 baseline，從 GSM-Plus 隨機抽 200 題。比較三種組態：baseline；結構化提示詞，加上處理缺值的規則與 VERIFICATION 段落；新拓撲，拆成三個角色：Problem Solver 只用 CoT、Coder 寫並執行 Python、Verifier 要收齊兩方的解才能下結論，只有 Verifier 能以 SOLUTION_FOUND 結束對話。GPT-4 與 GPT-4o 各重複 6 次，用 Wilcoxon 檢定。提示詞全文在 App L。",
+    "介入實驗_ChatDev": "(a) 改角色提示詞：強化階層，只有上級 agent 能結束對話，CEO 有最終決定權；同時要求 Test Engineer 檢查 edge case（App M.2）。(b) 改拓撲：把 DAG 改成有迴圈的圖，要 CTO 確認所有 review 都滿足才終止，並設最大迭代次數上限。評估用 ProgramDev-v0（32 題）與 HumanEval，介入前後都用 MAST judge 計算失敗模式分佈（Figure 10、11）。"
+  },
+  "assumptions": [
+    "失敗能從純文字的完整執行軌跡中觀察並歸類，前提是拿得到完整 trace；閉源的 Manus 就因此被排除",
+    "失敗模式以軌跡為單位、可多標籤，而且彼此大致可區分（類別間相關 0.17–0.32）",
+    "o1 few-shot judge 在少量人工樣本上的一致度，可以外推到 1642 條長短不一、來自不同系統的軌跡",
+    "5 個 MAS、程式與數學兩類任務、150 條軌跡所達到的理論飽和，足以涵蓋 MAS 的主要失敗空間（作者自己也說不窮盡）",
+    "任務成敗可由人工或 benchmark 判定，作為失敗的外部定義",
+    "多數失敗源自系統設計與協調，而非模型本身；作者以同模型下的介入實驗支持這個立場"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ProgramDev（30 題）",
+      "ProgramDev-v2（100 題）",
+      "ProgramDev-v0（32 題，只用於 ChatDev 介入）",
+      "SWE-Bench Lite",
+      "AppWorld Test-C",
+      "GSM-Plus",
+      "OlympiadBench",
+      "MMLU",
+      "GAIA",
+      "HumanEval"
+    ],
+    "metrics": [
+      "Cohen's κ（人對人 IAA；judge 對人工）",
+      "judge 的 accuracy／recall／precision／F1",
+      "各失敗模式在所有失敗出現次數中的比重",
+      "每條軌跡平均的失敗類別數（Table 8）",
+      "任務成功率（介入實驗）",
+      "Wilcoxon 檢定 p 值",
+      "失敗模式／類別之間的相關係數",
+      "每條軌跡的標註成本"
+    ],
+    "baselines": [
+      "o1 zero-shot judge（對照 few-shot）",
+      "未經介入的 AG2 MathChat 與 ChatDev",
+      "模型比較：GPT-4o、Claude-3.7-Sonnet、Qwen2.5-Coder-32B-Instruct、CodeLlama-7b-Instruct",
+      "架構比較：MetaGPT vs ChatDev",
+      "沒有和其他失敗分類法或其他自動標註方法比較"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以紮根理論加 3 輪 IAA 得到 14 個失敗模式、分成 3 類的分類法，最後幾輪人工一致度很高",
+      "numbers": "3 位標註者、共 15 條軌跡、Cohen's κ=0.88；GT 階段 150 多條軌跡、6 位專家",
+      "section": "§1、§3.1、§3.2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "o1 加上 few-shot 範例的 LLM judge 與人工標註高度一致，few-shot 比 zero-shot 明顯好",
+      "numbers": "few-shot：accuracy 0.94、recall 0.77、precision 0.833、F1 0.80、κ 0.77；zero-shot：accuracy 0.89、F1 0.64、κ 0.58",
+      "section": "§3.3、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "定稿的 MAST 不必修改就能套用到沒參與建構的系統與任務；這裡量的是人工標註者之間的一致度，不是 judge",
+      "numbers": "OpenManus、Magentic-One × MMLU、GAIA，人工 IAA 的 κ=0.79",
+      "section": "§3.4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 1642 條軌跡的所有失敗出現次數中，系統設計類占最大宗，最常見的單一模式是步驟重複、推理與行動不符、不知道終止條件",
+      "numbers": "FM-1.3 15.7%、FM-2.6 13.2%、FM-1.5 12.4%、FM-1.1 11.8%、FM-3.3 9.1%、FM-3.2 8.2%、FM-2.3 7.4%、FM-2.2 6.8%、FM-3.1 6.2%；各類別小計（筆者由 §4 各模式加總）約為 FC1 44.2%、FC2 32.4%、FC3 23.5%",
+      "section": "§4、Figure 1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "ChatDev 的兩種介入都提高了任務成功率，拓撲改動的增幅較大；但絕對成功率仍低",
+      "numbers": "ProgramDev-v0（32 題）：25.0 → 34.4（改提示詞）→ 40.6（改拓撲，+15.6 個百分點）；HumanEval：89.6 → 90.3 → 91.5",
+      "section": "§4、App H.2、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "失敗的分佈取決於架構與模型：MetaGPT 的設計與協調類失敗比 ChatDev 少，驗證類失敗反而較多；在 MetaGPT 內，GPT-4o 的 FC1 失敗比 Claude-3.7-Sonnet 少",
+      "numbers": "ProgramDev-v2、GPT-4o：MetaGPT 的 FC1／FC2 失敗比 ChatDev 少 60–68%，FC3 失敗是 ChatDev 的 1.56 倍；MetaGPT 內 GPT-4o 的 FC1 比 Claude 少 39%",
+      "section": "§5.1、App F、Figure 8、9",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "AG2 的介入效果隨底層 LLM 而不同：在 GPT-4 上只有改提示詞有效，新拓撲的增益不顯著；在 GPT-4o 上兩者都顯著",
+      "numbers": "GSM-Plus 200 題、重複 6 次。GPT-4：84.75±1.94 → 89.75±1.44（提示詞）／85.50±1.18（拓撲，Wilcoxon p=0.4）；GPT-4o：84.25±1.86 → 89.00±1.38／88.83±1.51（p=0.03）",
+      "section": "App H.1、Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "成功的軌跡也有失敗模式：驗證類模式在成功 run 中照樣常見；FM-1.5 與 FM-2.4 在這組資料裡只出現在失敗 run",
+      "numbers": "Table 7（judge 不知道成敗）：FM-3.3 在 ChatDev 成功 20.0% vs 失敗 25.0%，MetaGPT 成功 16.7% vs 失敗 27.8%；FM-1.5 在兩系統的成功 run 都是 0，失敗 run 為 10.0% 與 11.1%；FM-2.4 成功 0，失敗 5.0% 與 5.6%",
+      "section": "App J.1、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "MAST 不宣稱窮盡所有失敗模式，只是統一理解 MAS 失敗的第一步（§1、§4）",
+    "有些失敗根源在 LLM 本身（幻覺、指令遵循），MAST 刻意聚焦在能靠系統設計、協調與驗證改善的部分（§4）",
+    "症狀相近的失敗模式之間有中度相關（最高 0.63），可能讓自動評估器混淆不同的根因（App E）",
+    "閉源 MAS（例如 Manus）不公開底層模型、也不給完整軌跡，無法納入細粒度標註（App B.3）",
+    "各 MAS 用的任務與 benchmark 不同，Figure 4／5 的分佈只能呈現各系統的特徵，不能當作跨系統的效能比較（§5.1、Figure 5）",
+    "戰術性介入（改提示詞、改拓撲）效果不一致、會隨 LLM 改變，改善後任務完成率仍低，需要結構性的重新設計（App G、H）",
+    "ProgramDev 刻意選網路上解法很多、相對簡單的題目，以便隔離失敗動態（App D）"
+  ],
+  "limitations_observed": [
+    "judge 的驗證樣本太小且可能洩漏：人工 IAA 總共只有 15 條（加上 OOD 一輪），few-shot 範例又取自同一批人工標註，held-out 集最多只有十幾條，論文連大小都沒寫。14 個稀疏的二元標籤下，accuracy 0.94 大半來自「沒出現」的負例；recall 0.77 代表大約四分之一的人工標籤 judge 沒抓到。拿 κ 0.77 外推到 1642 條軌跡，信賴區間可能很寬。",
+    "OOD 的 κ 0.79 是人對人，不是 judge 對人。引言把這個數字接在 judge 的敘述後面，讀起來像 judge 在新系統上驗證過，但 judge 在 OpenManus／Magentic-One 上的一致度其實沒有報告。",
+    "judge 的完整提示詞沒有公開（§3.3 指向 App N，N 卻只有失敗案例）。軌跡平均超過 15,000 行，judge 怎麼處理超出 context 的軌跡（截斷？分塊？）也沒交代；OpenManus 平均成本 4.14 美元、是 AppWorld 的 11 倍，長軌跡的標註品質可能跟短軌跡不同，但沒有分組驗證。",
+    "產出只到軌跡層級的多標籤，沒有指出是第幾步、哪個 agent 出錯。Figure 1 的階段對應只是分類法層級的「通常發生於」，所以 MAST 無法直接回答 T4 的「哪一步、哪個 agent」，這部分要另外搭配 Who&When（2505.00212）一類的歸因方法。",
+    "介入實驗的統計檢定力很弱：ChatDev 的 ProgramDev-v0 只有 32 題，沒有報告重複次數、變異數或檢定。25.0／34.4／40.6 正好是 32 題中的 8／11／13 題，看起來是單次執行，+9.4 與 +15.6 個百分點其實只是多對 3 題與 5 題。§4 還把 +15.6% 寫成「在 ProgramDev 上」，實際上用的是題目不同的 ProgramDev-v0。",
+    "+9.4% 被歸功於「只改角色規格」，但 App M.2 的改動同時加了 Test Engineer 的 edge-case 檢查指示與 CEO 終止權，兩個變因混在一起，無法把增益歸給角色規格。",
+    "MAST 當代理指標的效度沒有被驗證，而且有矛盾的跡象：H.3 依 judge 計數，說拓撲改動對兩個系統都比改提示詞有效，但 Figure 10 沒有標明 AG2 用的是哪個 LLM。Table 5 的正確率在 AG2 上不支持這個排序：GPT-4 的結果反過來（拓撲 85.50 低於提示詞 89.75，相對 baseline 也不顯著，p=0.4），GPT-4o 則幾乎持平（88.83 vs 89.00）。此外，介入前後的失敗計數都出自同一個 judge，沒有人工複核。",
+    "Table 7 的樣本極小：從百分比的粒度推算，ChatDev 成功約 10 條、失敗約 20 條，MetaGPT 成功約 12 條、失敗約 18 條。「幾乎只出現在失敗 run」的 FM-1.5 與 FM-2.4 各只出現 1–2 次。MetaGPT 的 FM-1.1 在成功 run（33.3%）反而比失敗 run（16.7%）高，單一模式對成敗的鑑別力很弱，不宜直接當作執行期的失敗警報。",
+    "標籤語意前後不一致：論文把 failure 定義為沒達成任務目標，卻也在成功軌跡上標失敗模式，所以 MAST 標籤實際上是「過程缺陷」，不等於「失敗原因」；拿來做失敗歸因時要分開看待。",
+    "整體比重的組成有偏：§4 的百分比是全部 1642 條的失敗出現次數占比，但其中 700 條是 ProgramDev-v2 程式任務，400 條是開源模型（CodeLlama-7b 在兩個框架上，FM-1.3 各出現 97 與 99 次／100 條）。整體比重偏向程式任務與弱模型，不能當作一般 MAS 的失敗盛行率。",
+    "judge 用 OpenAI 的 o1，模型比較又得出「GPT-4o 的失敗比 Claude-3.7-Sonnet 少」，同家族偏好沒有排除；這個比較也只在 MetaGPT／ProgramDev-v2 這一組設定上。",
+    "文件內部不一致：§3.4 說 MAST-Data 含 Manus，App B.3 卻說 Manus 因為沒有完整軌跡被排除；引言說 Figure 5 涵蓋 7 個 MAS，Figure 5 標題寫 six；§1 說 MAST-Data-human 有 21 條，Hugging Face 資料卡上的人工標註檔只有 19 條（https://huggingface.co/datasets/mcemri/MAST-Data）。"
+  ],
+  "framework_role": "T4「軌跡分析、失敗分類」子領域的基準分類法兼資料集。它提供一套 14 碼的失敗詞彙表、1642 條帶標籤的 MAS 執行軌跡，以及能直接套用的軌跡層級 LLM judge（agentdash），可以把一次執行轉成 14 維的缺陷向量。在框架中，它適合當 T4 異常偵測的標籤空間：偵測結果可以交給 T5 決定修什麼，也可以交給 T7 比較介入前後的失敗分佈。但它只做到軌跡層級，而且是離線、事後標註；步驟與 agent 層級的定位要搭配 Who&When 一類的方法，要在執行期觸發則得自己改成線上版本。FC1／FC3 的多數模式（步驟重複、不知終止、驗證不足、推理與行動不符）在單 agent 對話系統也同樣適用。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "論文用 MAST judge 偵測軌跡中的失敗模式（異常），再據此設計修正（ChatDev 的角色階層與有迴圈的拓撲、AG2 的 VERIFICATION 段落與 Verifier 角色），最後用同一個 judge 比較修正前後的失敗分佈（App H.3）。但偵測是離線批次處理，修正是開發者手動重新設計系統，不是 agent 在執行期自我修正；要接上 E3，得自己把 judge 改成線上觸發。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。用 WebSearch 查過 MAST 搭配 Arize、Galileo、Langfuse、Patronus、Datadog、AG2、Microsoft 等組合，都沒有找到廠商官方文件或產品頁把 MAST 整合進產品。找得到的只有作者自己釋出的東西：GitHub repo、PyPI 套件 agentdash（維護者為第一作者，0.1.0 版於 2025-08-12 發布）、Hugging Face 資料集，以及第三方解說文章（Augment Code 指南、Medium、Substack）。前者屬於可重現性，後者不算採納。篩選階段留下的線索指向的是作者自己的 repo，不是採納證據。Semantic Scholar 顯示 618 次引用（influential 99），屬於學術影響力。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/multi-agent-systems-failure-taxonomy/MAST",
+    "data": "公開。Hugging Face mcemri/MAST-Data（CC-BY-4.0、未設存取限制）含 MAD_full_dataset.json 1642 條與 MAD_human_labelled_dataset.json 19 條；標註器另以 PyPI 套件 agentdash（MIT）發布。不過 judge 的完整提示詞不在論文裡，重跑 o1 標註平均每條 1.8 美元，而且 o1 的版本會變動，結果不一定能逐字重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是多 agent 軌跡失敗分類的基準分類法，附有公開的 1642 條標註軌跡和可直接用的軌跡層級 judge，是 T4 失敗分類子領域必讀的起點；但它只到軌跡層級、judge 的驗證樣本小，要和步驟／agent 歸因的工作一起讀。",
+  "related": [
+    "2505.00212",
+    "2503.02068",
+    "2405.02178",
+    "2306.05685",
+    "2307.07924",
+    "2308.00352",
+    "2409.16299",
+    "2407.18901",
+    "2411.04468",
+    "2308.08155",
+    "2412.05299",
+    "2407.01502"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 4,
+    "total": 8
+  }
+}

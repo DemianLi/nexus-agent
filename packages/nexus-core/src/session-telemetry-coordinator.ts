@@ -7,6 +7,11 @@
  * 兩條捕獲路徑（live 跟著日誌走、on-demand 只在被要求時讀）、一個交付游標、
  * 每一步各自圍堵。
  *
+ * **與 dsh 的差異：即時送刻意不轉送 agent 失敗。** dsh 的協調器在即時送模式下，除了跟著會話紀錄走，還多聽一個
+ * agent 失敗事件並轉成一筆維運告警（`coordinator.ts:116-120`、`:218-237`）；這裡只跟著會話紀錄走，沒有那個監聽。
+ * 理由：dsh 唯一出廠的遙測後端只用「回饋時才補送」，任何出廠組合都不送這一筆。重開條件見
+ * [#435](https://github.com/DemianLi/nexus-agent/issues/435)。
+ *
  * **每一步都圍堵，是因為捕獲跑在 agent loop 的熱路徑上。** 遙測是盡力而為的旁路，
  * 後端壞掉、脫敏規則拋錯，都只能換來一行 warn——**不能有能力扳倒 loop**。
  *
@@ -14,7 +19,9 @@
  */
 
 import { formatOrigin } from './plugin.js';
+import { snapshotJsonValue } from './session-log.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
+import { isMirroredEvent } from './session-telemetry.js';
 import type {
   SessionTelemetryRecord,
   SessionTelemetryRedactRule,
@@ -43,13 +50,20 @@ export interface SessionTelemetryCoordinatorOptions {
   readonly warn?: (message: string) => void;
   /** 省略即 `live`。 */
   readonly capture?: SessionTelemetryCapture;
+  /**
+   * 從頭（`seq` 0）捕獲，連分叉繼承來的前綴一起。省略即從這一份自己的第一顆起：分叉來的從繼承標記那一顆起，
+   * 其餘從頭。照 dsh 的 `includeHistory`（`packages/session/session-telemetry/src/coordinator.ts:150-155`，`687f282e`）；
+   * dsh 出廠的 OTel 後端在 `feedback-only` 給 `true`（`session-telemetry-otel/src/index.ts:219-222`），我們的組裝點同樣。
+   */
+  readonly includeHistory?: boolean;
 }
 
 /**
  * 一份日誌一個。
  *
  * `live` 會在建構當下**補送日誌裡已經有的東西**再訂閱後續——協調器晚於日誌成立是常態
- * （日誌在 pump / CLI 起來時就建了），少補這一段就等於開頭那幾筆永遠不會出去。
+ * （日誌在 pump / CLI 起來時就建了），少補這一段就等於開頭那幾筆永遠不會出去。分叉來的日誌只補送
+ * 繼承標記之後的（{@link SessionTelemetryCoordinatorOptions.includeHistory}）。
  */
 export class SessionTelemetryCoordinator {
   readonly #log: SessionLog;
@@ -58,12 +72,12 @@ export class SessionTelemetryCoordinator {
   readonly #warn: (message: string) => void;
   readonly #capture: SessionTelemetryCapture;
   /**
-   * 交付游標：**交出去過的最高 `seq`**，還沒交過任何一筆時是 `-1`。
+   * 交付游標：**交出去過的最高 `seq`**。起點見建構子：從頭捕獲時是 `-1`，分叉來的是繼承標記的前一顆。
    *
    * 「交出去過」不是「送達了」——`emit()` 回來就算數，送達是後端 SDK 的事。被扣住的
    * 記錄（脫敏拋錯、後端拋錯）**不推進游標**，所以下一次 {@link captureNow} 會再試一遍。
    */
-  #cursor = -1;
+  #cursor: number;
   #unsubscribe: (() => void) | undefined;
   #disposed = false;
 
@@ -77,6 +91,12 @@ export class SessionTelemetryCoordinator {
         console.warn(message);
       });
     this.#capture = options.capture ?? 'live';
+    // 起點照 dsh `captureSession`（`coordinator.ts:150-155`）：分叉來的從繼承標記那一顆起——前綴是來源會話的，
+    // 標記是子會話自己的。dsh 對續接回來的會話另外從讀回的前綴之後起（`firstLiveSeq`）；這裡續接照舊從頭重送，
+    // 收端靠 `(session.id, event.seq)` 去重，所以續接一份分叉來的日誌是從標記起重送它自己的那一段。這是既有差異，
+    // 沒有登記過（[#1958](https://github.com/DemianLi/nexus-agent/issues/1958)）。
+    const start = this.#log.inheritedEventCount;
+    this.#cursor = options.includeHistory === true || start === 0 ? -1 : start - 1;
     if (this.#capture === 'live') {
       this.captureNow();
       this.#unsubscribe = this.#log.subscribe((event) => {
@@ -133,6 +153,11 @@ export class SessionTelemetryCoordinator {
 
   /** 投影一筆事件、脫敏、交出去，然後推進游標。 */
   #captureEvent(event: SessionEvent): void {
+    // 不放行的種類（`isMirroredEvent`）：游標照推，不然下一次補送會一直回頭撈它。
+    if (!isMirroredEvent(event)) {
+      this.#cursor = event.seq;
+      return;
+    }
     const record = this.#redact({
       channel: 'ledger',
       time: event.time,
@@ -141,17 +166,25 @@ export class SessionTelemetryCoordinator {
         'session.id': this.#log.sessionId,
         'event.type': event.type,
         'event.seq': event.seq,
+        // 分叉的切點：收端據此認出開頭那幾顆是繼承來的（dsh `identityOf`，`coordinator.ts:303`）。dsh 看 header 的
+        // `isSeeded`；這裡看切點大於 0，兩者等價——切點是一顆 `turn/end` 之後的標記，至少是 1，落盤也核過帶標記的
+        // 日誌必須標 `isSeeded`（`session-persistence.ts` 的 rootLineage）。
+        ...(this.#log.inheritedEventCount > 0 && {
+          'session.seed_length': this.#log.inheritedEventCount,
+        }),
       },
       // **拷一份，不借用。** 借的話送出去的 body 就是正典日誌裡那個物件，脫敏規則或
       // 後端就地一改等於改寫歷史。今天那還會被 `deepFreeze` 擋成一個看不懂的失敗
       // （sloppy 模式無聲失效、strict 模式拋錯然後被記成「規則扣住了記錄」），明天多
-      // 一種沒凍過的 body 就是真的共享可變交接。append 當下驗過純 JSON，所以這裡拷得動。
-      body: structuredClone(event.data),
+      // 一種沒凍過的 body 就是真的共享可變交接。append 當下驗過純 JSON，所以這裡拷得動——
+      // 拷法用日誌自己那支迭代快照，不用 `structuredClone`：後者是遞迴的，日誌收得下的深巢狀它兩千層上下就
+      // `RangeError`，那一筆就被扣住（#1526）。
+      body: snapshotJsonValue(event.data, `遙測 ${event.type} 的 data`),
     });
     this.#deliver(record);
     this.#cursor = event.seq;
     // turn 的終結事件兼任 dsh 的 `session/flush`：語意一樣（turn 邊界），來源不同
-    // （日誌事件本身，因為我們沒有事件匯流排可以另發一條）。
+    // （日誌事件本身，因為當時我們沒有事件匯流排可以另發一條；#1217 之後匯流排在了，事件表上也有了工具四事件（#1248），但沒有 turn 邊界的事件——那是 S3——這裡照舊）。
     //
     // **自己一格圍堵**：這一筆已經交出去、游標也推進了，flush 只是提示。跟捕獲共用同
     // 一格的話，一個會拋的 `flush()` 會讓 warn 說「捕獲步驟失敗」——而那筆其實成功了，

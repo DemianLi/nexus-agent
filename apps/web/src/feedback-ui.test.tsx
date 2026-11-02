@@ -9,11 +9,14 @@ import type {
   WireClient,
   WireFeedbackItem,
 } from '@nexus/wire';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '@/App';
+import { TRACE_REPLY_UNPLACED_TEXT } from '@/components/trace/panel';
 import { FEEDBACK_COPY } from '@/lib/feedback';
+import { stubCmdkLayout } from '@/test/cmdk';
+import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
 /**
  * 評分與 `/feedback` 的畫面（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
@@ -95,8 +98,8 @@ function fakeClient(
   options: {
     readonly put?: (params: FeedbackPutCommand['params']) => FeedbackPutResult;
     readonly del?: (params: FeedbackDeleteCommand['params']) => FeedbackDeleteResult;
-    /** 省略就是一筆都沒有；`'rejected'` 是線收不下。 */
-    readonly list?: FeedbackListResult | 'rejected';
+    /** 省略就是一筆都沒有；`'rejected'` 是線收不下；`'unsupported'` 是伺服器不收評分（`not_supported`，#1849）。 */
+    readonly list?: FeedbackListResult | 'rejected' | 'unsupported';
   } = {},
 ) {
   const lists: number[] = [];
@@ -105,6 +108,15 @@ function fakeClient(
   const records: FeedbackRecordCommand['params'][] = [];
   const slashed: string[] = [];
   const client: WireClient = {
+    ...UNWIRED_WIRE_CONTRACT,
+    // 列檔（#651）沒有接。
+    fileReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列檔' }),
+    // 列會話候選（#713）沒有接。
+    sessionReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列會話' }),
+    // 全部會話共用的下行（#632）沒有接：開不起來也不失敗。
+    openThreadFeed: () => new Promise<never>(() => undefined),
+    // 按內容搜尋（#631）也沒有接：開不起來也不失敗。
+    searchThreads: () => new Promise<never>(() => undefined),
     openEvents: async () =>
       (async function* stream() {
         for (const event of ONE_RUN) yield event;
@@ -113,7 +125,20 @@ function fakeClient(
     runStart: async () => ({ type: 'success', id: 1, result: {} }),
     inputRespond: async () => ({ type: 'success', id: 2, result: {} }),
     runCancel: async () => ({ type: 'success', id: 3, result: { accepted: true } }),
-    slashList: async () => ({ kind: 'ok', commands: [] }),
+    queueUpdate: async () => ({ type: 'success', id: 4, result: { accepted: true } }),
+    subagentSend: async () => ({ type: 'success', id: 5, result: { accepted: true } }),
+    subagentInterrupt: async () => ({ type: 'success', id: 6, result: { accepted: true } }),
+    subagentHistory: async () => ({ kind: 'rejected', message: '這一檔沒有接背景子代理' }),
+    trajectoryTurn: async () => ({
+      kind: 'rejected',
+      code: 'not_supported',
+      message: '這一檔沒有接軌跡細節',
+    }),
+    // 真的伺服器上 `/feedback` 是回饋插件登記的命令，宣告了 `input`；開頭的字在清單上才走 `slash.run`（#1929）。
+    slashList: async () => ({
+      kind: 'ok',
+      commands: [{ name: 'feedback', description: '回饋', input: { hint: '<內容>' } }],
+    }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);
       return { kind: 'unknown' };
@@ -139,6 +164,13 @@ function fakeClient(
     feedbackList: async () => {
       lists.push(lists.length);
       if (options.list === 'rejected') return { kind: 'rejected', message: '讀不到' };
+      if (options.list === 'unsupported') {
+        return {
+          kind: 'rejected',
+          code: 'not_supported',
+          message: '這個組裝沒有掛落盤，評分存不住',
+        };
+      }
       return { kind: 'ok', result: options.list ?? { ok: true, value: { items: [] } } };
     },
     feedbackRecord: async (_threadId, params) => {
@@ -176,6 +208,22 @@ describe('評分按鈕', () => {
       within(entryOf('收工了。')).getByRole('button', { name: FEEDBACK_COPY.dislike }),
     ).toBeTruthy();
     expect(within(entryOf('先說一句。')).queryByTestId('rating-buttons')).toBeNull();
+  });
+
+  it('讚踩列旁的「這一輪的過程」打開右側欄的觀測分頁（#1031）：分頁讀得到這條對話（#1033）；沒有軌跡投影時定位不了那一輪，分頁講明白（#1034）', async () => {
+    seq = 0;
+    render(<App client={fakeClient().client} />);
+    await ready();
+    expect(screen.queryByRole('tab', { name: '觀測' })).toBeNull();
+    fireEvent.click(within(screen.getByTestId('rating-buttons')).getByTestId('turn-trace'));
+    const tab = await screen.findByRole('tab', { name: '觀測' });
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+    // 資料走 `useConversation` 的 store 一路接到分頁：畫出來的是這條對話裡的回覆，不是空狀態。
+    const panel = screen.getByTestId('right-sidebar-panel-trace');
+    expect(panel.textContent).toContain('先說一句。');
+    expect(panel.textContent).toContain('收工了。');
+    expect(within(panel).getAllByTestId('trace-row').length).toBeGreaterThanOrEqual(2);
+    expect(panel.querySelector('[role=status]')?.textContent).toBe(TRACE_REPLY_UNPLACED_TEXT);
   });
 
   it('點踩：先開對話框，選分類、寫備註、送出才記；再點一次是收回', async () => {
@@ -332,6 +380,13 @@ describe('讀回評分（list，#382）', () => {
     await waitFor(() =>
       expect(within(entryOf('收工了。')).getByText(FEEDBACK_COPY.load)).toBeTruthy(),
     );
+    // 不是 live region（#1290）：掛在兩顆鈕的描述上，焦點到鈕上時唸。
+    const failed = within(entryOf('收工了。')).getByText(FEEDBACK_COPY.load);
+    expect(failed.closest('[role=status]')).toBeNull();
+    for (const name of [FEEDBACK_COPY.like, FEEDBACK_COPY.dislike]) {
+      const button = within(entryOf('收工了。')).getByRole('button', { name });
+      expect(document.getElementById(button.getAttribute('aria-describedby') ?? '')).toBe(failed);
+    }
     fireEvent.click(
       within(entryOf('收工了。')).getByRole('button', { name: FEEDBACK_COPY.dislike }),
     );
@@ -339,7 +394,86 @@ describe('讀回評分（list，#382）', () => {
   });
 });
 
+describe('伺服器不收評分（not_supported，#1849）', () => {
+  // `/feedback` 列在命令清單上，打它會開選單（#1929）。
+  beforeEach(stubCmdkLayout);
+  const buttons = () =>
+    [FEEDBACK_COPY.like, FEEDBACK_COPY.dislike].map((name) =>
+      within(entryOf('收工了。')).getByRole('button', { name }),
+    );
+  /** 停用是 `aria-disabled`、不是原生 `disabled`：原生停用會把停在鈕上的焦點丟回 body（§8）。 */
+  const stopped = (button: HTMLElement) =>
+    button.getAttribute('aria-disabled') === 'true' && !(button as HTMLButtonElement).disabled;
+
+  it('滑過之後：讚踩停用、旁邊講原因（掛在描述上，不是 live region）；「這一輪的過程」照常', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'unsupported' });
+    render(<App client={fake.client} />);
+    await ready();
+    fireEvent.pointerEnter(buttons()[1]!);
+    await waitFor(() =>
+      expect(within(entryOf('收工了。')).getByText(FEEDBACK_COPY.unsupported)).toBeTruthy(),
+    );
+    const note = within(entryOf('收工了。')).getByText(FEEDBACK_COPY.unsupported);
+    expect(note.closest('[role=status]')).toBeNull();
+    for (const button of buttons()) {
+      expect(stopped(button)).toBe(true);
+      expect(document.getElementById(button.getAttribute('aria-describedby') ?? '')).toBe(note);
+    }
+    expect(within(entryOf('收工了。')).queryByText(FEEDBACK_COPY.load)).toBeNull();
+    expect(
+      (within(entryOf('收工了。')).getByTestId('turn-trace') as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  it('聚焦到讚（鍵盤）：讀回講不收之後焦點還在那顆鈕上，描述唸得到那一句；點下去不開對話框', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'unsupported' });
+    render(<App client={fake.client} />);
+    await ready();
+    const like = buttons()[0]!;
+    act(() => like.focus());
+    await waitFor(() => expect(stopped(buttons()[0]!)).toBe(true));
+    expect(document.activeElement).toBe(buttons()[0]);
+    expect(
+      document.getElementById(buttons()[0]!.getAttribute('aria-describedby') ?? '')?.textContent,
+    ).toBe(FEEDBACK_COPY.unsupported);
+    fireEvent.click(buttons()[0]!);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(fake.puts).toEqual([]);
+    expect(document.activeElement).toBe(buttons()[0]);
+  });
+
+  it('沒滑過就直接點（觸控）：等讀回，不收評分就不開對話框、不送 put', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'unsupported' });
+    render(<App client={fake.client} />);
+    await ready();
+    fireEvent.click(buttons()[1]!);
+    await waitFor(() => expect(stopped(buttons()[1]!)).toBe(true));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(fake.puts).toEqual([]);
+    expect(fake.lists).toHaveLength(1);
+  });
+
+  it('/feedback 照常：評語不受影響', async () => {
+    seq = 0;
+    const fake = fakeClient({ list: 'unsupported' });
+    render(<App client={fake.client} />);
+    await ready();
+    fireEvent.pointerEnter(buttons()[0]!);
+    await waitFor(() => expect(stopped(buttons()[0]!)).toBe(true));
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/feedback' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    const dialog = await screen.findByRole('dialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: FEEDBACK_COPY.submit }));
+    await waitFor(() => expect(fake.records).toEqual([{}]));
+  });
+});
+
 describe('/feedback', () => {
+  // 同上：`/feedback` 列在命令清單上（#1929）。
+  beforeEach(stubCmdkLayout);
   it('只打 /feedback 開同一個框、不走 slash.run；空著送也記一則', async () => {
     seq = 0;
     const fake = fakeClient();

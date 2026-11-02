@@ -1,0 +1,157 @@
+{
+  "formatVersion": 1,
+  "roots": [
+    {
+      "key": "event:context/measure",
+      "kind": "event",
+      "event": "context/measure",
+      "surface": false,
+      "digest": "beb7e7ac726b7a277b7fdf60854b59f5aee9576634229b0e68ed9dccfa4777ff",
+      "schema": {
+        "root": 0,
+        "nodes": [
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "data",
+                "type": 1,
+                "optional": false
+              },
+              {
+                "name": "ignorable",
+                "type": 10,
+                "optional": true
+              },
+              {
+                "name": "seq",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "time",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "type",
+                "type": 11,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "approxTokens",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "breakdown",
+                "type": 3,
+                "optional": true
+              },
+              {
+                "name": "messageCount",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "messagesCompactable",
+                "type": 4,
+                "optional": true
+              },
+              {
+                "name": "modelCall",
+                "type": 2,
+                "optional": true
+              },
+              {
+                "name": "thresholds",
+                "type": 5,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "number"
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "messageTokens",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "systemTokens",
+                "type": 2,
+                "optional": false
+              },
+              {
+                "name": "toolsTokens",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "primitive",
+            "type": "boolean"
+          },
+          {
+            "kind": "array",
+            "element": 6
+          },
+          {
+            "kind": "object",
+            "properties": [
+              {
+                "name": "type",
+                "type": 7,
+                "optional": false
+              },
+              {
+                "name": "value",
+                "type": 2,
+                "optional": false
+              }
+            ],
+            "indices": []
+          },
+          {
+            "kind": "union",
+            "types": [
+              8,
+              9
+            ]
+          },
+          {
+            "kind": "literal",
+            "value": "messages"
+          },
+          {
+            "kind": "literal",
+            "value": "tokens"
+          },
+          {
+            "kind": "literal",
+            "value": true
+          },
+          {
+            "kind": "literal",
+            "value": "context/measure"
+          }
+        ]
+      }
+    }
+  ],
+  "types": []
+}

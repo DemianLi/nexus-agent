@@ -1,0 +1,140 @@
+{
+  "id": "2406.06592",
+  "title": "Improve Mathematical Reasoning in Language Models by Automated Process Supervision",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Google DeepMind 提出 OmegaPRM：從答錯的解答出發，以每次 k=8 個 rollout 的 Monte Carlo 估計加二分搜尋定位第一個錯誤步，並把途中所有 rollout 存成一棵 state-action tree、用類 AlphaGo 的 PUCT 反覆挑「狀態看似該對、rollout 卻答錯」的樣本再搜尋，全自動蒐集 1.5M 筆步驟標籤訓練 PRM；在 MATH500／GSM8K 的 PRM 加權多數決上略勝 PRM800K 與 Math-Shepherd，但比單純多數決只多 0.9–3.5 個百分點。",
+  "problem": "Process Reward Model（PRM）能對推理軌跡的每一步給分，比只看最終答案的 ORM 更能指出錯在哪裡，但訓練 PRM 需要逐步的對錯標籤。人工逐步標註（PRM800K）昂貴難以擴充；Math-Shepherd 與 MiPS 的自動化做法是對解答的每一步都從前綴 rollout k 次、以答對比例當該步分數，policy 呼叫數是 O(kM)（M 為步數），而且 rollout 用完就丟。本文要在完全不靠人工的前提下，用更少的 policy 呼叫蒐集大量、正負樣本平衡、且集中在「難以察覺的錯誤」上的步驟標籤。放到 T4 的語境，這等於把「一條軌跡從哪一步開始出錯」變成可以自動、大規模標記的資料。",
+  "core_idea": "五個想法疊在一起：(1) 沿用 Lightman et al. 的結論，只需監督到第一個錯誤步；(2) 以 Monte Carlo 估計判斷前綴：從前綴 rollout 出至少一個正確最終答案就視為前綴正確、一個都沒有就視為含錯，在無雜訊的假設下前綴正確性呈單調（某一步之前都對、之後都錯），因此可以用二分搜尋在 O(k log M) 次 policy 呼叫內找到第一個錯誤步；(3) 二分搜尋途中產生的 rollout 不丟，存成以「題目＋前綴」為狀態的樹，之後可以從樹上任何一條 rollout 再做二分搜尋，得到共享前綴、錯誤位置不同的多筆樣本；(4) 選下一條要搜尋的 rollout 時，用一個偏好「MC 值接近 1 的狀態底下卻答錯的 rollout」並懲罰長 rollout 的價值函數，再加 PUCT 探索項，對應 Lightman 挑 convincing wrong-answer 給標註者的做法；(5) 步驟不按換行切，任何連續 token 區段都可當一步，由二分搜尋自然切出。",
+  "method": {
+    "輸入與輸出": "輸入：題目 q 與其標準答案（golden answer）、一個能從任意前綴續寫到最終答案的 policy（completer）。輸出：大量 (題目, 前綴解答, 下一步, 正確性標籤) 樣本，以及用它訓練的 PRM；推論時 PRM 對每一步輸出正確機率 p_t = PRM([q, x_{1:t-1}], x_t)。",
+    "題目篩選（Appendix A）": "對 MATH 12K 訓練題每題先 rollout 32 次：32 次全錯的題目（太難，容易把正確前綴誤判為錯，即 false negative）與 32 次全對的題目（太簡單，含錯的前綴也能被續寫成正確答案，即 false positive）都剔除。",
+    "Monte Carlo 估計（Eq. 1）": "c_t = 從前綴 x_{1:t} 取樣 k 個 rollout 後最終答案正確的比例，k=8（溫度取樣，溫度值論文未給）。c_t>0 視為前綴 x_{1:t} 正確，c_t=0 視為前綴含錯。最終答案怎麼與 golden answer 比對（字串比對或數學等價判定）論文未寫。",
+    "二分搜尋定位第一個錯誤（§3.2）": "給一條最終答案錯誤的解答，在中點 m 切開、從 x_{1:m} 做 k 次 rollout：c_m>0 表示前半正確、錯誤在後半；c_m=0 表示錯誤很可能在前半。對含錯的那一半重複，直到片段短到可以視為單一步。§4.2 的終止條件：想把一份解答切成約 16 段（因為 PRM800K 與 Math-Shepherd 的解答大多少於 20 步），所以「預期步長」＝平均解答長度 ÷ 16，片段短於此值就停。",
+    "樹結構（§3.3）": "節點 s = (q, 前綴 x_{1:t}) 加上從 s 出發的所有 rollout；根節點是只有題目的狀態；動作 a 是下一步（一段 token），轉移就是把動作接在前綴後面。邊可以是單步或多步連續步驟。每個節點存 N(s)（訪問次數）、MC(s)（Eq. 1 的估計）與每條 rollout 的 Q(s,r)。",
+    "rollout 價值與選擇（Eq. 2、Eq. 3）": "Q(s,r) = α^(1−MC(s)) · β^(len(r)/L)，len(r) 以 token 計；第一項在 MC(s) 接近 1 時較大，第二項懲罰過長的 rollout。探索項 U(s) = c_puct · sqrt(Σ_i N(s_i)) / (1 + N(s))。候選池只收 MC(s) 介於 0 與 1 之間（開區間）的狀態底下的 rollout；每回合從池中取出 argmax[Q(s,r)+U(s)] 的那一條（取出後移除）。超參數：α=0.5、β=0.9、L=500、c_puct=0.125。注意 Q 公式本身沒有「是否答錯」的項，但文字說要優先挑答錯的 rollout，且只有答錯的 rollout 才有錯誤可找，所以實作上候選應只放答錯的 rollout（這是我的推論，論文未明寫）。",
+    "Binary Search 階段": "對選中的 rollout（接在狀態 s 的前綴後面）做上述二分搜尋。過程中新產生、MC 介於 0 與 1 之間的 rollout 加入候選池；第一個錯誤之前的所有切點都成為樹的新狀態。論文的例子：q → x_{1:4} → x_{1:6} → x_{1:7}，前兩條邊的 MC 值為 0.25 與 0.5（標為正確），最後一條 MC 值為 0（標為錯誤）。",
+    "Maintain 階段": "被選中的 (s,r) 使 N(s) 加 1；對二分搜尋新取樣的 rollout 更新 MC 與 Q。不像 AlphaGo 需要從葉到根遞迴 backup。",
+    "終止與產量": "每題搜尋次數達上限 100，或候選池沒有 rollout 時停止。§4.4：同樣算力下 OmegaPRM 產生 15M 筆資料，再隨機降採樣成 1.5M 筆用於 PRM 訓練。",
+    "PRM 訓練目標（§3.4、Appendix B）": "樹上每條單步邊 (s,a) 是一筆訓練樣本，用交叉熵的 pointwise 分類損失（Eq. 4）。三種標籤：pointwise soft label（MiPS 做法，標籤＝MC 值，主結果用這個）、pointwise hard label（Math-Shepherd 做法，標籤＝1[MC>0]）、pairwise（對同一前綴下的兩個動作，把兩者的 MC 值 p、q 當 Bernoulli 參數，平手各算一半，得 P(X 優於 Y) = (1+p−q)/2，再用 Bradley-Terry 的交叉熵訓練）。依 §3.3 例子，邊的標籤取的是該步之後那個狀態的 MC 值；但 Figure 2 caption 寫成看「前一個狀態」的 MC，兩處寫法不一致。PRM 從 pretrained checkpoint 起訓，但用哪個模型、多大、學習率與 epoch 數論文都沒給。",
+    "policy 模型": "Gemini Pro：先在數學指令資料上微調，在 MATH test 上約 51%，再用它取樣解答（也用它做 rollout）。Gemma2 27B：直接用 pretrained checkpoint 加 Gemini 技術報告的 4-shot prompt。Gemma 實驗所用的 OmegaPRM 資料是由哪個 policy 產生的，論文沒寫清楚。",
+    "推論與評估": "每題由 policy 取樣共 128 個解答；每個解答的分數是所有步驟 PRM 分數的乘積（沿用 Lightman，文中說乘積與最小值差異不大）；再做 PRM 加權多數決（加權公式未給，常見做法是把同一最終答案的解答分數加總）。Table 1 報 k=64 的結果，Figure 3 畫不同樣本數下、對 128 個解答反覆子抽樣的曲線。推論時測試解答要怎麼切步驟（訓練時的步是二分搜尋切出的 token 區段）論文沒寫。",
+    "要照著重做的關鍵元件": "一個能從任意前綴續寫到最終答案的 policy 與答案比對器；題目篩選（32 次 rollout）；k=8 的 MC 估計；以「平均長度 ÷ 16」為停止條件的二分搜尋；存 N、MC、Q 的樹與只收 0<MC<1 的候選池；Q＋PUCT 選擇（α=0.5、β=0.9、L=500、c_puct=0.125）；每題 100 次搜尋上限；soft label 交叉熵訓練 PRM；步驟分數連乘加上加權多數決。無官方程式碼，1.5M 標註未公開，推論期步驟切分、加權公式與 PRM 訓練超參數都要自行補齊。"
+  },
+  "assumptions": [
+    "題目有可自動比對的標準答案；policy 的 rollout 結果能直接判對錯（作者自己也承認這把方法限制在有 golden answer 的任務）。",
+    "前綴正確性在一條解答上是單調的：一旦出錯，後面的 rollout 就答不對；只要有一個 rollout 答對就視前綴正確，忽略猜中答案或錯誤被後續步驟抵銷造成的 false positive。這是二分搜尋成立的前提。",
+    "k=8 個 rollout 足以區分 c=0 與 c>0；太難題目造成的 false negative 可以靠題目層級的篩選壓低。",
+    "MC 值衡量的是「這個 policy 從此前綴還能不能答對」，被當作步驟邏輯正確性的代理；policy 越弱，兩者差距越大。",
+    "任意連續 token 區段都可以當一步，步驟不必語意完整（作者以步長分佈與規則切分相似作為佐證）。",
+    "第一個錯誤之後的步驟不需要監督。",
+    "LM policy 可以廉價地從任意前綴 rollout 到終點，而且從同一前綴重新開始不會有外部副作用。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MATH500（Lightman et al. 的 500 題測試子集；PRM 資料來自 MATH 12K 訓練切分）",
+      "GSM8K test",
+      "以 MATH test 題目自建的小型步驟層級測試集（Table 2，規模與標註方式未說明）"
+    ],
+    "metrics": [
+      "PRM 加權多數決的解題率（Table 1 取 k=64，此處 k 指每題解答數，與 MC 估計的 k=8 個 rollout 不同；Figure 3 為 1–128 個樣本的曲線，變異來自對 128 個解答子抽樣）",
+      "步驟正確性分類 accuracy（Table 2，用來比較三種訓練目標）",
+      "同等算力下產生的資料筆數（§4.4）",
+      "每份解答的步數分佈與每步 token 長度分佈（Figure 4、5）"
+    ],
+    "baselines": [
+      "MajorityVote@64（self-consistency）",
+      "以公開 Math-Shepherd 資料訓練的 PRM",
+      "Math-Shepherd (our impl)：用 Gemini policy 以逐步暴力 MC 估計自行產生的資料",
+      "以 PRM800K 人工標註訓練的 PRM",
+      "訓練目標比較：pointwise soft label、pointwise hard label、pairwise",
+      "資料蒐集效率：逐步暴力 MC 估計（Math-Shepherd／MiPS 做法）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "OmegaPRM 資料訓練的 PRM 在四個 policy × 資料集組合中都拿到最高的加權多數決解題率，但領先幅度很小，而且大部分提升其實來自多數決本身。",
+      "numbers": "k=64：Gemini Pro／MATH500 為 69.4（多數決 67.2、PRM800K 67.6、Math-Shepherd 67.2、our impl 67.2）；Gemma2 27B／MATH500 為 58.2（多數決 54.7、PRM800K 57.2、Math-Shepherd 57.4、our impl 55.2）；Gemini Pro／GSM8K 為 93.6（多數決 92.7、PRM800K 92.9、Math-Shepherd 92.7、our impl 91.8）；Gemma2 27B／GSM8K 為 92.2（多數決 90.6、PRM800K 91.7、Math-Shepherd 90.5、our impl 91.4）。比多數決多 2.2／3.5／0.9／1.6 點，比 PRM800K 多 1.8／1.0／0.7／0.5 點。",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "樣本數少時幾乎所有 PRM 都勝過多數決；樣本數增加後其他資料集訓練的 PRM 會收斂回多數決的水準，OmegaPRM 仍維持差距。",
+      "numbers": "只見於 Figure 3 的曲線（1–128 個樣本），正文未列具體數值。",
+      "section": "§4.1、Figure 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "三種 PRM 訓練目標中，以 MC 值當標籤的 pointwise soft label 在步驟正確性分類上最好。",
+      "numbers": "PRM accuracy：soft label 70.1%、hard label 63.3%、pairwise 64.2%。",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在相同算力下，二分搜尋加 rollout 重用的樹比逐步暴力 MC 估計多產生約 75 倍的資料點。",
+      "numbers": "暴力法 200K 筆 vs OmegaPRM 15M 筆（約 75 倍）；訓練時隨機降採樣成 1.5M 筆。",
+      "section": "§4.4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "把解答目標切成約 16 段、任意 token 區段都可當一步的彈性切分，得到的步長分佈與換行式規則切分相近。",
+      "numbers": "PRM800K 與 Math-Shepherd 的解答大多少於 20 步；預期步長＝平均解答長度 ÷ 16；分佈只見於 Figure 4、5。",
+      "section": "§4.2、Figure 4、Figure 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "摘要的頭條（Gemini Pro 在 MATH500 從 51% 提升到 69.4%，結論稱絕對提升 18.4 點、相對 36%）把基準模型本身的解題率（解碼方式未說明）拿來和 64 個樣本的加權多數決相比，其中大部分來自多數決。",
+      "numbers": "Gemini Pro／MATH500：51 → 67.2（多數決，+16.2）→ 69.4（OmegaPRM，+2.2）；Gemma2 27B／MATH500：42.3 → 54.7（+12.4）→ 58.2（+3.5）；Gemini Pro／GSM8K：86.4 → 92.7（+6.3）→ 93.6（+0.9）；Gemma2 27B／GSM8K：74.0 → 90.6（+16.6）→ 92.2（+1.6）。另外 51% 是在 MATH test 上量的，不是 MATH500（作者說兩者表現相近）。",
+      "section": "摘要、§4 Models、Table 1、§6",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "自動過程標註有 false positive 與 false negative 的雜訊，雜訊對 PRM 表現的確切影響尚不清楚；未來應全面比較人工與自動標註，或把兩者結合。",
+    "仍需要人工提供的題目與標準答案配對：題目用來啟動 MCTS，標準答案用來判斷 rollout 對錯，因此方法只適用於有這種配對的任務，還要進一步調整才能用在開放式任務。",
+    "題目篩選只能降低、無法完全排除太難或太簡單的題目帶來的雜訊（Appendix A）。"
+  ],
+  "limitations_observed": [
+    "頭條數字大部分不是 PRM 的貢獻：Gemini Pro／MATH500 的 51 → 69.4 中，多數決本身已到 67.2，OmegaPRM 在它上面只多 2.2 點、比 PRM800K 只多 1.8 點；Gemma2 27B／GSM8K 的 74.0 → 92.2 中，16.6 點來自多數決、1.6 點來自 PRM。而且 51% 是在完整 MATH test 上量的、解碼方式（greedy 或單次取樣）沒寫，頭條其實是拿兩個不同集合、兩種解碼設定的數字相減。",
+    "Table 1 沒有重複 seed、沒有信賴區間；Figure 3 的變異只來自對 128 個解答的子抽樣，完全不含重訓 PRM 的變異。粗估未配對的二項標準誤：MATH500 在約 68% 時約 ±2.1 點、約 57% 時約 ±2.2 點，GSM8K（1319 題）在約 93% 時約 ±0.7 點。OmegaPRM 對 PRM800K 的 0.5–1.8 點差距全部落在一個標準誤內，只憑這張表撐不起「consistently outperforms」與「最高品質資料集」的說法（這是粗略上限，不是配對檢定）。",
+    "Table 2 很可能是循環論證：步驟層級測試集的規模與標註方式都沒寫，若同樣用 MC 估計標註，以 MC 值當訓練標籤的 soft label 模型天然最貼近測試標籤。soft label 輸出怎麼換算成 accuracy（門檻）也沒寫，而且三種目標沒有像 Table 1 那樣做下游加權多數決比較，只有這一個代理指標。",
+    "75 倍效率算的是資料筆數：同一棵樹的樣本共享前綴、彼此高度相關，筆數會高估有效資訊量；最後又隨機降採樣回 1.5M，並沒有做「同算力、同筆數下誰訓出的 PRM 比較好」的比較。",
+    "資料量與方法混在一起：Math-Shepherd (our impl) 的訓練資料量沒寫；若就是同算力下的約 200K 筆對上 OmegaPRM 的 1.5M 筆，Table 1 那一欄比的是「方法加 7.5 倍資料量」而不是純方法。",
+    "「自動勝過人工」的比較不乾淨：PRM800K 是 GPT-4 系列 generator 的解答、公開版 Math-Shepherd 是其他開源模型的解答，對 Gemini／Gemma policy 來說都是 off-policy；OmegaPRM 資料則至少在 Gemini 實驗上是 on-policy。Gemma 實驗的 OmegaPRM 資料由哪個 policy 產生也沒寫，無法判斷 Gemma 欄的優勢是否來自分佈對齊。",
+    "作者宣稱這是同類「規模最大、品質最高」的資料集，但沒有對任何一筆自動標籤做人工稽核；手上明明有 PRM800K 這種帶人工第一錯誤位置的資料，卻沒有拿 OmegaPRM 在同一批解答上定位第一錯誤步、量測定位準確率。對 T4 關心的「哪一步出錯」歸因來說，這是最缺的一個數字。",
+    "二分搜尋的單調假設在 k=8 下很脆弱：一個正確但困難的前綴，只要 policy 從該處的單次答對率約 25%，8 個 rollout 全錯的機率就約 10%，此時二分搜尋會把第一錯誤位置往前推並把正確步標成錯；題目層級的 32 次篩選擋不到題目內部某個難步驟的情況，論文也沒有量測這種誤判率。",
+    "重做缺件多：推論時測試解答怎麼切步驟（訓練時是二分搜尋切出的 token 區段，推論時沒有 golden answer 可以二分）、PRM 加權多數決的公式、PRM 的模型與尺寸、學習率、epoch、答案比對方式、取樣溫度都沒給，也沒有官方程式碼。",
+    "規格有兩處模糊：邊的標籤取哪個狀態的 MC 值，§3.3 的例子（終點狀態）與 Figure 2 caption（前一個狀態）矛盾；Q(s,r) 公式沒有「答錯」項，只挑答錯 rollout 是隱含前提，照公式直接實作會把答對的 rollout 也拿去二分搜尋。",
+    "外推到 agent 軌跡的距離很大：只做單輪數學 CoT，沒有工具呼叫、沒有環境狀態、沒有多輪對話；二分搜尋與樹重用都依賴「可以廉價地從任意前綴重新 rollout 且沒有副作用」，對會改動外部狀態的工具軌跡需要可重置的環境快照，成本與可行性論文完全沒討論。"
+  ],
+  "framework_role": "屬於 T4 的「步驟層級評估與 process reward」：它提供一個不靠人工、從軌跡前綴重新 rollout 取得步驟價值估計，再用二分搜尋定位第一個錯誤步的自動標註法，本質上是一個針對單一 CoT 軌跡的自動化「哪一步先出錯」歸因器，並附帶一種軌跡資料格式（以題目＋前綴為狀態、節點帶 N／MC／Q 統計的 state-action tree）與一種步驟標籤（soft MC 值）。訓練出的 PRM 可以當軌跡的逐步評分器。論文裡 PRM 只用在推論期對候選解答重排與加權投票，比較接近 T7／T8 的評分與選擇用途；它沒有把偵測到的錯誤步送去修正，所以並未實作 E3（Anomalies Detected，T4→T5）——若要當 E3 的觸發器，得自行接上門檻與修正策略。移植到多輪 agent 的前提是有可自動判定的終局結果（可由 T8 的任務完成分數充當）以及能從中間狀態重放環境。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文只在 Gemini Pro 與 Gemma2 27B 上做研究實驗，沒有宣稱部署到任何產品。搜尋到的實作都不是採納：https://github.com/sanowl/OmegaPRM 是第三方實作，README 自稱是實驗性、供教育與測試用途、非正式產品等級；https://github.com/openreasoner/openr 是學術開源框架，README 列出以 OmegaPRM 生成過程監督資料並發布 MATH-APS 資料集，屬學術影響而非商用採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "論文的 1.5M 筆步驟標註與 15M 原始資料都未公開，Gemini Pro 的數學指令微調版與 PRM checkpoint 也未公開。可取得的只有第三方重實作：sanowl/OmegaPRM（https://github.com/sanowl/OmegaPRM，自稱教育用途）與 OpenR（https://github.com/openreasoner/openr）的 OmegaPRM 資料生成程式；OpenR 發布的 MATH-APS（https://huggingface.co/datasets/mengfang/MATH-APS）是用重實作另外產生的資料，不是本文資料。評估用的 MATH500、GSM8K、PRM800K 與公開版 Math-Shepherd 都是公開資料。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "「從前綴 rollout 估步驟價值、再用二分搜尋定位第一個錯誤步、把 rollout 存成樹重複利用」這套機制是可以直接借用到軌跡失敗歸因的自動步驟標註法，值得 T4 參考；但它只處理有標準答案的單輪數學 CoT、依賴可無副作用地從任意前綴重放，而且 Table 1 對 PRM800K 的 0.5–1.8 點領先落在單次實驗的抽樣誤差內、沒有官方程式碼，因此有價值但非必讀。",
+  "related": [
+    "2305.20050",
+    "2312.08935",
+    "2402.02658",
+    "2211.14275",
+    "2110.14168",
+    "2206.02336",
+    "2406.03816",
+    "2309.17179",
+    "2311.09724"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -24,10 +24,11 @@
  * @module
  */
 
-import type { CommandResult, GoalPhase, GoalRef } from '@nexus/core';
+import type { AttachmentRef, CommandResult } from '@nexus/commands';
+import type { GoalPhase, GoalRef, GoalView } from '@nexus/goal';
 
 import { GoalError } from './service.js';
-import type { GoalService, GoalView } from './service.js';
+import type { GoalService } from './service.js';
 
 /** 命令名，不帶斜線。**寫死的**——命令名是這個套件的介面，不是部署的設定。 */
 export const GOAL_COMMAND_NAME = 'goal';
@@ -38,12 +39,29 @@ export const GOAL_COMMAND_DESCRIPTION = '設定或查看長期任務的目標';
 /**
  * 使用者還沒打字時的佔位字串。
  *
- * **dsh 的 `input` 還有一格 `images: true`，我們沒有。** 差的不是這個字串，是整條
- * 附件水管：`CommandInvocation` 沒有 `attachments`，那一格的「是缺，不是省略」已經寫在
- * {@link @nexus/core!CommandInvocation} 的檔頭上。提示字串要跟真的收得下的東西一致，
- * 所以這裡不寫圖片。
+ * **`/goal` 收附件**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，照 dsh `command-goal` 的 `input: { hint, attachments: true }`）：
+ * 宣告在 descriptor 的 `input.attachments`，字串本身跟 dsh 一樣不變。附件**只隨目標**：`create` 與 `edit` 成功時，命令請宿主送一句帶著這些
+ * 附件的話（{@link GOAL_ATTACHMENTS_TEXT}），後面幾輪的目標輪次從一般對話歷史讀到它們，goal 域不存附件狀態；其餘子命令（含被拒絕的
+ * `create`／`edit`）收到附件一律在動任何域之前回 `error`（{@link GOAL_ATTACHMENTS_ONLY_MESSAGE}），輸入框的草稿與附件留著。
  */
 export const GOAL_COMMAND_HINT = '[<目標>|clear|edit <目標>|pause|resume]';
+
+/**
+ * `/goal` 在一輪跑著、或停在核准點時也放行的呼叫（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）：**只有 `pause`**，
+ * 字面逐字（`/goal PAUSE` 文法上也是暫停，但不在這個清單裡，跑著時照舊被擋——清單是宿主閘門與 `slash.list` 共用的字面值，
+ * 不是文法）。
+ *
+ * 為什麼只有它：人下的暫停會當場中止飛行中的那一輪（`ThreadPump`），這是 dsh 目標列的暫停鈕就有的行為
+ * （`goal-round-driver/src/index.ts:302-312`）。其餘子命令沒有理由跟飛行中的輪賽跑，`create`／`edit` 帶附件時還會 `steer`、起一輪
+ * （宿主在忙的時候讓 `steer` 直接拋錯）。`command.test.ts` 釘住：清單裡每一格都解析成 `pause`，而且 `pause` 的處理不 `steer`。
+ */
+export const GOAL_RUN_WHILE_BUSY: readonly string[] = Object.freeze(['pause']);
+
+/** 帶附件送出的 `create`／`edit` 成功後，請宿主送進對話的那一句。**固定字串，照 dsh**（`Reference attachments for the goal objective.`）。 */
+export const GOAL_ATTACHMENTS_TEXT = 'Reference attachments for the goal objective.';
+
+/** 附件帶到不收附件的子命令上。**在動任何域之前**回，所以什麼都沒改。 */
+export const GOAL_ATTACHMENTS_ONLY_MESSAGE = '附件只隨目標：/goal <目標> 或 /goal edit <目標>。';
 
 /** 打錯時附在後面的那一行。**指名收得下什麼**，不然人只知道自己錯了。 */
 export const GOAL_USAGE = `用法：/${GOAL_COMMAND_NAME} [<目標>|clear|edit <目標>|pause|resume]`;
@@ -209,33 +227,6 @@ export function goalAlreadyMessage(phase: GoalPhase): string {
 export const GOAL_REJECTED_MESSAGE = `這個 goal 命令在目前的狀態下不成立。打 /${GOAL_COMMAND_NAME} 看現在能做什麼。`;
 
 /**
- * 這一份組裝一份日誌都沒接上。
- *
- * **這條走得到的路是真的**：`attachSession` 是組裝點自己要呼叫的一步，漏掉它的入口
- * 拿到的是一個註冊了命令卻沒有狀態的 plugin。回一句說得出原因的話，比讓
- * `services[0]` 是 `undefined` 然後在某處炸掉好。
- */
-export const GOAL_NOT_ATTACHED_MESSAGE = `goal 域還沒接上這個會話的日誌，/${GOAL_COMMAND_NAME} 沒有可以動的目標。`;
-
-/**
- * 這一份組裝接了不只一份日誌。
- *
- * **這一句釘住的是一個假設，不是一個功能。** `/goal` 靠「一次 `apply` 對應一份日誌」
- * 找得到它要動的服務——CLI 一份、`serve.ts` 每個 thread 各自 `createCliAgent` 因此
- * 各自一份 registry，兩條路都成立。假設破掉時要**當場說**，不能讓後接上的那一份
- * 靜靜贏走：那樣一次 `/goal pause` 會暫停另一個 thread 的目標而沒有任何徵兆。
- *
- * 它不寫成安裝期的 throw，是因為 `createSessionRunner` 把參與者安裝失敗**圍堵成一行
- * warn**——在那裡拋，換來的是一個沒有 goal 服務、而且沒有人看得到原因的 agent。
- */
-export function goalAmbiguousMessage(count: number): string {
-  return (
-    `這一份組裝接了 ${String(count)} 份會話日誌，/${GOAL_COMMAND_NAME} 分不出要動哪一份。` +
-    `一份組裝只接一份日誌。`
-  );
-}
-
-/**
  * 跑一次已經解析好的命令，**變更一律經過擁有耐久性的域**。
  *
  * 錯誤分兩類，而分法照抄 dsh：
@@ -247,21 +238,31 @@ export function goalAmbiguousMessage(count: number): string {
  *   `/goal` 都會拋**。兩條進入點都接得住——REPL 印到 stderr，wire 回一顆
  *   `kind: 'error'` 的封包，而執行器在往外拋之前已經把 `command/done` 寫進日誌了。
  *
- * @param services - 這一次 `apply` 接上的服務，**期望剛好一個**。
+ * @param service - 執行器交來的那份 root 日誌上的服務（`goals.serviceFor(sessionLog)`，lazy 建立，一定有）。
  * @param rawInput - 命令名之後的原文。
+ * @param attachments - 這次呼叫收下的附件參照；沒有就省略。
+ * @param steer - 請宿主送一句帶附件的話（`CommandInvocation.steer`）。**在動域之前呼叫**：被宿主拒收就什麼都沒改；之後域拒絕的話
+ *   （回 `error`），執行器會把這句作廢。
+ * @param openTurn - 請宿主收下「這個命令會讓它自己開一輪」（`CommandInvocation.openTurn`，#1787）。**在寫 `goal/change` 之前呼叫**，
+ *   宿主不收就拋、什麼都沒寫。會讓排程器接著起一輪的只有三種：建立（含 `edit` 換掉已完成的目標）、`resume`、`edit` 進行中的目標；
+ *   `pause`／`clear`／`edit` 停著的目標與唯讀的都不呼叫。
  * @returns 直接呈現給人的結果。
  * @throws 域的非預期失敗，包含折疊壞掉之後的每一次讀。
  */
 export function executeGoalCommand(
-  services: readonly GoalService[],
+  service: GoalService,
   rawInput: string,
+  attachments: readonly AttachmentRef[] = [],
+  steer?: (text: string, attachments?: readonly AttachmentRef[]) => void,
+  openTurn?: () => void,
 ): CommandResult {
-  if (services.length === 0) return { kind: 'error', text: GOAL_NOT_ATTACHED_MESSAGE };
-  if (services.length > 1) {
-    return { kind: 'error', text: goalAmbiguousMessage(services.length) };
-  }
-  const goals = services[0] as GoalService;
+  const goals = service;
   const command = parseGoalCommand(rawInput);
+  // 附件只隨目標；其餘一律在動任何域之前擋掉（dsh 同）。
+  if (attachments.length > 0 && command.kind !== 'create' && command.kind !== 'edit') {
+    return { kind: 'error', text: GOAL_ATTACHMENTS_ONLY_MESSAGE };
+  }
+  const sendAttachments = (): void => steer?.(GOAL_ATTACHMENTS_TEXT, attachments);
   try {
     const current = goals.get();
     switch (command.kind) {
@@ -277,12 +278,17 @@ export function executeGoalCommand(
         if (current !== undefined && current.phase !== 'complete') {
           return { kind: 'error', text: goalAlreadyMessage(current.phase) };
         }
+        openTurn?.();
+        if (attachments.length > 0) sendAttachments();
         return renderGoal('目標建好了', goals.create({ objective: command.objective }));
       }
       case 'edit': {
         if (current === undefined) return { kind: 'error', text: goalMissingMessage('edit') };
         // **完成掉的目標用 edit 換一個新的**，而且回的是「建好了」不是「改好了」——
         // 換掉的是身分不只是敘述，說成「改好了」會讓人以為歷史還接在同一條上。
+        // 會開一輪的是「換新目標」與「改進行中的目標」（變更後排程器照樣問）；停著（暫停／被擋住）的目標改了仍是停著。
+        if (current.phase === 'complete' || current.phase === 'active') openTurn?.();
+        if (attachments.length > 0) sendAttachments();
         if (current.phase === 'complete') {
           return renderGoal('目標建好了', goals.create({ objective: command.objective }));
         }
@@ -296,6 +302,7 @@ export function executeGoalCommand(
         return renderGoal('目標暫停了', goals.pause(goalRef(current)));
       case 'resume':
         if (current === undefined) return { kind: 'error', text: goalMissingMessage('resume') };
+        openTurn?.();
         return renderGoal('目標續上了', goals.resume(goalRef(current)));
       case 'clear':
         if (current === undefined) return { kind: 'success', text: GOAL_NOTHING_TO_CLEAR_MESSAGE };

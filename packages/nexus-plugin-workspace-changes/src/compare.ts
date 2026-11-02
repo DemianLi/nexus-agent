@@ -6,7 +6,7 @@
  */
 
 import { structuredPatch } from 'diff';
-import type { WorkspaceDiffHunk } from '@nexus/wire';
+import type { WorkspaceDiffHunk } from './types.js';
 
 /** 每處改動前後的上下文行數，unified diff 的預設。 */
 const CONTEXT_LINES = 3;

@@ -1,0 +1,149 @@
+{
+  "id": "2109.04655",
+  "title": "Zero-Shot Dialogue State Tracking via Cross-Task Transfer",
+  "topic": "T2",
+  "subarea": "LLM 時代的 zero/few-shot DST",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "TransferQA 把 DST 改寫成閱讀理解問答：用 T5-large 在 6 個抽取式與 2 個多選 QA 資料集上訓練一個統一的生成式 QA 模型，並以「負問句取樣」與「脈絡截斷」人工造出無法回答的樣本來學會回答 none，完全不用 DST 標註資料就在 MultiWOZ 2.1 做到 zero-shot per-domain 平均 JGA 35.77（前人最佳 28.18），few-shot 也大致勝過同為 QA 轉移的 STARC。",
+  "problem": "虛擬助理要頻繁新增服務領域，但每個領域都蒐集標註對話很貴：Wizard-of-Oz 要人工逐句標狀態，M2M 模擬要寫大量規則。既有的 zero-shot 做法有兩條路，各有缺口。(1) 跨領域轉移（TRADE、MA-DST、SGD baseline 等）先在幾個領域訓練再轉到新領域，仍需大量 DST 資料，而且來源領域的 slot 種類很少（MultiWOZ 有 8,438 段對話卻只有 5 個領域 30 個 slot），遇到新類型的 slot 難以泛化。(2) 跨任務轉移（STARC，Gao et al. 2020）借用 QA 資料，但用兩個獨立模型分別處理非類別 slot（span 抽取）與類別 slot（分類），兩類 QA 資料的知識無法共享；QA 訓練也沒有無法回答的題目，所以 zero-shot 時處理不了「none」——而多領域對話中大多數 slot 在多數回合都是 none（MultiWOZ 為 55.25%，taxi 領域高達 71.85%），none 判斷錯就直接拉低 JGA。",
+  "core_idea": "把每個 slot 當成一個自然語言問題、把對話歷史當成要閱讀的文章、把 slot 值當成答案。QA 資料約有 50 萬種不同的問題，每個問題都等於一種「slot」，比 DST 資料那 30 個 slot 多樣得多，因此預期泛化更好。做法是用 text-to-text 格式讓單一 seq2seq 模型同時學抽取式 QA 與多選 QA（以前綴區分題型），推論時分別對應非類別 slot 與類別 slot。再把 DST 裡兩種 none 對應到 QA 裡兩種人造的無答案題：跨領域的不相關 slot 對應「從別篇文章抽來、與本文無關的問題」（負問句取樣，NQS）；領域內尚未提到的 slot 對應「答案所在句及其後都被截掉的文章」（脈絡截斷，CT），兩者的標準答案都是 none。",
+  "method": {
+    "任務對應": "QA 樣本為（文章 C、問題 q_i、候選答案集合 A、答案 a_i）；抽取式 QA 的 A 為空集合。DST 推論時，C 是到本回合為止的對話歷史 {U_1, S_1, …, S_{t-1}, U_t}，q_i 是某個 slot 的問句，A 是類別 slot 的候選值（非類別 slot 為空），a_i 是 slot 值；無法回答時 a_i = none。",
+    "輸入格式": "依公式 (1) 把 [q_i, A, C] 串成單一序列送進 seq2seq 模型，逐 token 生成答案。多選題的問句前加前綴「Multi-Choice Question:」，候選答案前加「Choices:」，候選之間以特殊 token「[sep]」分隔；抽取式題的問句前加「Extractive Question:」。DST 推論時對話中的使用者與系統話語分別加上「user:」「system:」前綴。文中文字沒有交代文章本身有沒有前綴，要看圖或程式碼。",
+    "訓練目標": "最小化答案的負對數似然 L = −log p(a_i | q_i, A, C)，標準 teacher forcing。模型以 T5 初始化（encoder-decoder、相對位置編碼、在 750GB 英文文字上以 span masking 預訓練）。",
+    "負問句取樣（NQS）": "模擬跨領域的 none（使用者在找旅館時，restaurant-price 之類的 slot 與當前對話無關）。QA 訓練時，對某篇文章隨機配上一個從其他文章的問題池抽來的問題，標準答案設為 none。概念上沿用 word2vec 的負樣本取樣。",
+    "脈絡截斷（CT）": "模擬領域內尚未提及的 slot（使用者問了市中心的旅館，但還沒說星級）。依答案 span 的標註，從第一個含答案 span 的句子開始把後面的文章全部截掉，再把原問題與截斷後的文章配成一個標準答案為 none 的樣本。",
+    "無答案樣本比例": "每個訓練樣本以機率 α = 0.3 被改成無法回答樣本，其中 NQS 與 CT 的比例為 0.95 : 0.05。Figure 4 掃過 α，α = 0.3 與 0.6 的 JGA 最高：α 太低抓不到未提及的 slot，太高則過度預測 none。",
+    "QA 訓練資料": "抽取式：MRQA-2019 的 NewsQA、TriviaQA、SearchQA、HotpotQA、Natural Questions，加上 SQuAD2.0（原 MRQA 用 SQuAD 1.1，作者換成 2.0 以帶入原生的無法回答題）；多選：RACE、DREAM。Table 1 的訓練集大小為 SQuAD2.0 130,319、NewsQA 74,160、TriviaQA 61,688、SearchQA 117,384、HotpotQA 72,928、NaturalQA 104,071、RACE 87,866、DREAM 6,116，合計約 65 萬筆。",
+    "slot 問句": "每個 slot 人工寫成一個自然語言問句，大致套用「what is the <slot> of the <domain> that user wants?」的格式，但實際問句會依 slot 調整（Table 6 可見預約類 slot 問「day for the restaurant reservation」、hotel 價位問句寫成「hotel or guesthouse」）。完整問句清單論文沒有列出。",
+    "zero-shot 推論（兩段式）": "每一回合對每個 slot 各跑一次解碼：(1) 先把所有 slot 都當成非類別 slot，用「Extractive Question:」格式生成值；輸出不是 none 的 slot 視為「active」。(2) 對 active 且屬於類別 slot 的那些，再用「Multi-Choice Question:」格式加上本體的候選值重新生成一次，取代第一段的值。解碼一律用 greedy。狀態不另外保存：每回合都從完整對話歷史重新回答全部 slot，回答集合就是該回合的對話狀態。",
+    "資料集設定": "MultiWOZ 沿用 TRADE（Wu et al. 2019）的前處理與評估，只用 restaurant、train、attraction、hotel、taxi 五個領域；類別／非類別的切分沿用 MultiWOZ 2.2，但所有數字型 slot 都當非類別處理；並套用 STARC 的值正規化（canonicalization）。SGD 沿用資料集本身的類別／非類別切分，以官方腳本評估；測試集 18 個領域，其中 5 個不在訓練集裡。",
+    "few-shot": "以 QA 訓練好的模型為起點，用目標領域 1%、5%、10% 的 MultiWOZ 2.0 資料微調 20 個 epoch，其他超參數與 QA 訓練相同。",
+    "超參數與元件": "主模型 T5-large（消融另用 T5-base）；AdamW，初始學習率 5e-5；QA 訓練 batch size 1024、5 個 epoch；8 張 Tesla V100。官方程式碼的訓練指令為 T5.py，few-shot 以 --mode finetune --fewshot {0.01, 0.05, 0.1} --only_domain 指定。",
+    "評估協定": "JGA：一個回合的所有 slot 預測都與標準答案完全相符才算對；AGA：每回合 active slot 的平均準確率；SGA（消融用）：slot gate（可答／不可答）的判斷準確率。MultiWOZ zero-shot 依 TRADE 的做法逐領域計算 JGA 再平均，作者明言這個平均與多領域 full-shot JGA 不可比。另做 oracle 研究：給定標準的 slot gate，只讓模型生成值。",
+    "文中未載明、需看程式碼": "最大輸入長度與對話歷史過長時怎麼截斷；dontcare 值怎麼處理（全文沒有提到 dontcare）；NQS／CT 是否也套用在多選資料集上、CT 在多選題上怎麼做；完整 slot 問句清單；α 掃描用的是 MultiWOZ 哪個 split；few-shot 的 batch size；各實驗的 seed 數（表中全無標準差）。"
+  },
+  "assumptions": [
+    "目標領域的 slot 集合、每個 slot 的自然語言問句、類別／非類別的切分，以及類別 slot 的候選值清單（本體）都事先已知；「不用 DST 資料」不等於「不用目標領域知識」。",
+    "slot 值要嘛是對話中的原字串（可抽取），要嘛能從候選值中選出；需要推論或改寫的值只能靠事後的 canonicalization 補救。",
+    "QA 的「文章—問題—答案」分佈與「對話歷史—slot 問句—slot 值」夠接近，而且 NQS 與 CT 造出來的無答案題，能代表 DST 裡跨領域與領域內未提及這兩種 none 的真實分佈。",
+    "每回合重讀完整對話歷史、獨立回答每個 slot，就等於維護了累積的對話狀態；歷史必須放得進 T5 的輸入長度。",
+    "「系統提過但使用者沒確認的值不算數」這類對話語意，模型能從一般 QA 資料自己學到；錯誤分析顯示這個前提並不成立。",
+    "slot 之間互相獨立，可以逐一提問，不需要考慮 slot 間的一致性或共指。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.1（zero-shot，5 個領域逐領域評估）",
+      "MultiWOZ 2.0（few-shot，目標領域 1%／5%／10% 資料）",
+      "Schema-Guided Dialogue（SGD）測試集（18 個領域，其中 5 個不在訓練集）"
+    ],
+    "metrics": [
+      "Joint Goal Accuracy（JGA；MultiWOZ zero-shot 為逐領域 JGA 的平均）",
+      "Average Goal Accuracy（AGA，active slot 的平均準確率，SGD 用）",
+      "Slot Gate Accuracy（SGA，可答／不可答判斷的準確率，消融用）"
+    ],
+    "baselines": [
+      "TRADE（跨領域 zero-shot 與 few-shot）",
+      "MA-DST（跨領域 zero-shot）",
+      "SUMBT（跨領域 zero-shot，數字取自 Campagna et al. 2020）",
+      "SGD-baseline（以整個 SGD 訓練集訓練的 BERT schema-guided 模型，數字取自原論文）",
+      "DSTQA（few-shot）",
+      "STARC（few-shot，同為 QA 跨任務轉移，RoBERTa-large 兩個獨立模型）",
+      "自家消融：拿掉 CT、拿掉 CT 與 NQS、T5-base 對 T5-large、α 掃描、oracle slot gate"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "完全不用 DST 資料，在 MultiWOZ 2.1 的 zero-shot 逐領域 JGA 平均比既有跨領域 zero-shot 方法高 7.59 點；五個領域全部領先。",
+      "numbers": "TransferQA 平均 35.77（Attraction 31.25、Hotel 22.72、Restaurant 26.28、Taxi 61.87、Train 36.72）；SUMBT 28.18、MA-DST 26.87、TRADE 25.69",
+      "section": "§4.1, Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "SGD 上與用整個訓練集訓練的 SGD-baseline 比，5 個 unseen 領域的 JGA 與 AGA 全部較高；但全體領域 JGA 較低，作者稱 seen 領域為「competitive」。",
+      "numbers": "unseen JGA：Buses 15.9 對 9.7、Messaging 13.3 對 10.2、Payment 24.7 對 11.5、Trains 17.4 對 13.6、Alarm 58.3 對 57.7；All Domain JGA 20.7 對 25.4，AGA 62.2 對 56.0",
+      "section": "§4.1, Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "few-shot（MultiWOZ 2.0）時，兩種跨任務轉移法（STARC、TransferQA）在 5 個領域中有 4 個勝過跨領域轉移法；只用 1% 資料時 TransferQA 在多數領域大幅領先 STARC，hotel 例外。作者把這歸功於人造的無答案樣本。",
+      "numbers": "1% 資料：Attraction 52.3 對 STARC 40.3（文中記為 +11.95）、Train 70.1 對 65.6（+4.49）、Taxi 75.4 對 72.5、Hotel 43.4 對 45.9；10% 資料：Taxi 80.3、Train 79.0",
+      "section": "§4.2, Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "拿掉兩種無答案題的構造策略後 JGA 在所有領域大跌，none 比例越高的領域跌越多；只拿掉 CT 的影響小，主要落在 train 領域。",
+      "numbers": "T5-large 平均 JGA：完整 35.77、−CT 35.60、−CT−NQS 23.70；T5-base：32.89、31.51、19.44；Taxi（none 比例 71.85%）large 61.87 → 31.54；MultiWOZ 整體 none 比例 55.25%",
+      "section": "§5.1, Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "zero-shot 的錯誤大多來自 slot gate（該不該回答），真正答錯值的只佔約兩成；兩類典型錯誤是把系統提議但使用者尚未確認的值填進狀態，以及使用者沒明說領域時漏抓（例如以「a place to stay」指旅館）。",
+      "numbers": "79.79% 的錯誤來自 slot gate，其中 false positive 37.54%、false negative 42.25%；值預測錯誤 20.21%",
+      "section": "§5.2, Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "給定標準的 slot gate 後 JGA 大幅上升，顯示改善 none 判斷是 zero-shot DST 最大的提升空間。",
+      "numbers": "SGD All Domain JGA 20.7 → 48.0（AGA 62.2 → 76.6）；MultiWOZ 2.1 平均 JGA 35.77 → 56.06",
+      "section": "§5.3, Tables 2–3",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "大部分錯誤來自判斷 slot 可不可答，none 判斷不準是目前的主要瓶頸；oracle 研究顯示這裡還有很大的提升空間，留待未來工作。",
+    "問句與脈絡不匹配造成兩類典型錯誤：把系統提議而使用者尚未確認的值填入狀態，以及使用者沒明說領域時漏抓值；作者認為可能要靠設計更好或學出來的 slot 問句（如 prefix-tuning）解決，同樣留待未來工作。",
+    "無答案樣本比例 α 需要調：太低抓不到未提及的 slot，太高則過度預測 none。",
+    "MultiWOZ zero-shot 回報的逐領域平均 JGA 不能與 full-shot 的多領域 JGA 相比。",
+    "few-shot 時 hotel 領域比 STARC 低約 1 點。"
+  ],
+  "limitations_observed": [
+    "漏了最該比的基線：同一批作者、同一個 GitHub repo、發表更早的 T5DST（2105.04222，本文參考文獻中的 Lin et al. 2021a，引言也有引用）沒有放進 Table 2，但同樣是跨領域 zero-shot 的 TRADE、MA-DST、SUMBT 都放了。T5DST 論文自己的 Table 2 報告加 slot type 描述的版本在 MultiWOZ 2.0 上逐領域平均 35.20（T5-small，60M 參數），本文 TransferQA 在 MultiWOZ 2.1 為 35.77（T5-large，約 770M 參數）。資料版本不同不能直接相減，但量級幾乎一樣，「比既有 zero-shot 高 7.59 點」的說法因此偏樂觀，而且模型規模的差異也沒有被控制：Table 5 的 T5-base 版本只有 32.89。",
+    "few-shot 的文字說法被自己的 Table 4 推翻：§4.2 說除了 hotel 以外都「consistently higher」than STARC，但 restaurant 10% 是 62.9 對 64.6、attraction 5% 是 63.5 對 65.3，兩格都輸。STARC 在 1% attraction 只有 40.3、到 5% 就跳到 65.3，11.95 點的領先有一部分反映的是 STARC 在 1% 的不穩；attraction 的 5%／10% 也輸給 DSTQA（70.4、71.6）。另外 few-shot 用 MultiWOZ 2.0、zero-shot 用 2.1，前後不一致；全部都是單次實驗，沒有標準差。",
+    "「兩種策略都有效」只有 NQS 站得住：T5-large 拿掉 CT 後平均 JGA 只差 0.17（35.77 對 35.60），attraction、restaurant、taxi 三個領域反而上升，SGA 整體也從 79.95 升到 81.48；CT 只佔無答案樣本的 5%，實質貢獻集中在 train 一個領域，而且沒有變異數可判斷差異是否顯著。",
+    "−CT−NQS 不是乾淨的「沒有 none 能力」對照組：§3.1 的註腳說 QA 訓練加入了 SQuAD2.0 原生的無法回答題，所以拿掉兩種策略後模型仍學過回答 none。消融量到的是「人造無答案題的增量」，不是「會不會回答 none」本身。",
+    "SGA 與 JGA 不同步，指標定義模糊：T5-large −CT−NQS 在 attraction 的 SGA 是 69.34，比完整模型的 60.62 還高，JGA 卻低 6.56 點；base 版本也有同樣現象。SGA 究竟在哪個粒度、對哪些 slot 計算，文中只有一句說明，讀者無法據此判斷 gate 與 JGA 的關係。",
+    "SGD 的「更好的泛化」有條件：13 個 seen 領域中有 9 個 JGA 低於 SGD-baseline（Flights 3.59 對 23.9、Travel 14.0 對 41.5、Weather 40.3 對 62.0），All Domain JGA 也是 20.7 對 25.4；unseen 的優勢中 Alarm 只差 0.6。比較對象只有 2019 年的官方 BERT 基線，沒有和 DSTC8 期間已經出現的更強 SGD 系統比。",
+    "「不用 DST 資料」其實帶著大量目標端知識：每個 slot 的問句由人撰寫而且看得出逐一調過（Table 6 的 hotel 價位問句特別寫成「hotel or guesthouse」），類別 slot 的候選值來自本體，另外用了 MultiWOZ 2.2 的類別切分與 STARC 的 canonicalization；α 是看 MultiWOZ 的 JGA 挑出來的（Figure 4），文中沒說用哪個 split。後來的 IC-DST（2203.08568）也點出每個 slot 都得改寫成問句。這些人工成本在評估中都沒有量化，也沒有做「換一組問句」的敏感度分析。",
+    "MultiWOZ 只報逐領域過濾後的 JGA，沒有 30 個 slot 一起算的多領域 JGA。NQS 的動機是處理「跨領域的不相關 slot」，但在 MultiWOZ 上從沒在真正的多領域狀態下量過這個效果；SGD 的 All Domain 數字（20.7）才是比較接近多領域的評估，而它低於全監督基線。",
+    "錯誤分析沒說計算單位：79.79% 的錯誤來自 gate，沒說是 slot 級還是回合級；給了 oracle gate，MultiWOZ JGA 也只到 56.06，代表仍有約 44% 的回合錯在值本身。「瓶頸幾乎都在 gate」這個結論的量級因此不清楚。",
+    "dontcare 完全沒有交代：MultiWOZ 有大量 dontcare 值，抽取式 QA 答不出這種值，但全文沒提怎麼處理、也沒報這類 slot 的表現。最大輸入長度與長對話的截斷方式也沒寫。",
+    "以 T2 的狀態維護角度看，方法是「每回合從完整歷史重算全部 slot」：每回合要跑「slot 數＋active 類別 slot 數」次 T5-large 解碼，沒有狀態的延續、覆寫或刪除機制，長對話的成本與長度上限都沒處理；Table 6 的「系統提議即被填入」錯誤正是缺少「誰說的、有沒有被確認」這層狀態語意的後果。",
+    "小處：Table 1 的訓練題數加總約 65 萬，§4.1 說「around 500,000」個問題，沒有說明差距是否來自去重。"
+  ],
+  "framework_role": "T2 裡 zero/few-shot DST 的 LLM 前時代代表作（2021 年，T5-large 微調），任務給的子領域標籤「LLM 時代」並不貼切，較適合當成 LLM 時代做法的前驅來讀。它對 T2 留下三個有用的東西：(1)「對每個狀態欄位問一個問題」的介面，後來以 prompt 或 function calling 做 DST 的方法本質上沿用了這個形狀；(2) 明確的診斷——zero-shot 狀態追蹤的主要錯誤在「這個欄位現在到底有沒有值」（none 判斷約佔錯誤八成，oracle gate 可把 JGA 從 35.77 拉到 56.06），而不是值抽得準不準；(3) 一個至今仍適用於 LLM agent 的失敗樣態：把 agent 自己提議、使用者尚未確認的值寫進狀態。作為對照，後來的 IC-DST（2203.08568，Codex in-context learning）在同樣的逐領域 zero-shot 設定下平均約 56.9，大致等於本文 oracle gate 的上限，可解讀為 LLM 帶來的進步有很大一部分落在 none 判斷上（這是筆者的推論，兩者設定並不完全相同）。論文只做單回合的狀態抽取，沒有反思修正、使用者模擬或評估回流，所以只落在 T2 節點內。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有提到任何部署或產品，網路搜尋也沒有找到官方產品頁、官方部落格或模型卡提到採用。官方程式碼 https://github.com/facebookresearch/Zero-Shot-DST 由 facebookresearch 發布，但主體採 CC-BY-NC-SA-4.0（非商用）授權，2023-10-31 已封存為唯讀，README 也沒有提供訓練好的 checkpoint；這屬於研究程式碼釋出，不算採納。Semantic Scholar 顯示 77 次引用、20 次 influential，屬中等學術影響力。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/facebookresearch/Zero-Shot-DST（TransferQA 目錄；主體授權 CC-BY-NC-SA-4.0；2023-10-31 封存；README 未提供訓練好的權重，也沒寫學習率與 α 等超參數，需看程式碼）",
+    "data": "公開：QA 訓練資料（MRQA-2019 的五個資料集、SQuAD2.0、RACE、DREAM）與評估資料（MultiWOZ 2.0／2.1、SGD）都是公開資料集。每個 slot 的完整問句清單論文沒有列出，只在 Table 6 露出一部分，需從程式碼取得。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "「DST 即逐欄位問答」的介面與「none 判斷才是 zero-shot 狀態追蹤主要瓶頸」的診斷對 T2 有參考價值，但這是 T5-large 微調時代的方法，數字已被 LLM in-context 方法大幅超越，又漏比同作者更早的 T5DST、few-shot 說法與表格不符，核心觀念讀摘要與 §5 即可吸收，非本節點必讀。",
+  "related": [
+    "2004.05827",
+    "2105.04222",
+    "1905.08743",
+    "1909.05855",
+    "2005.00891",
+    "2002.08898",
+    "1907.07421",
+    "1911.06192",
+    "2005.00700",
+    "1910.10683",
+    "1806.03822",
+    "1910.09753",
+    "1810.00278",
+    "1907.01669",
+    "2007.12720"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

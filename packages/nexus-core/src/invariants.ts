@@ -10,8 +10,13 @@
  *
  * **只檢查真的關係，不為了覆蓋而編造斷言。** dsh 那份 README 明說：確認方法存在、
  * 插件名字、注入、純函式的固定結果，全都是型別、載入或單元測試的事，**不是運行時
- * 不變量**。沒有可觀察的事件或可變資料關係時，配套入口就是一個空 installer 加一句
- * `No runtime invariant:` 說明。
+ * 不變量**。沒有可觀察的事件或可變資料關係時，**就不要發布配套入口**：這裡原本的做法是
+ * 一個空 installer 加一句 `No runtime invariant:` 說明，#974 拿掉了那十二個空殼，空
+ * installer 現在會被 `apps/harness/src/package-invariants.ts` 擋下來。
+ *
+ * **dsh 已於 `f028f25667d`（2026-09-30）把整套運行時不變量移除**；剩下的八個配套入口是
+ * **暫時保留、觀察中**，不是「基礎建設表達不出來」的偏離，第二刀還沒決定。事實、選項與
+ * 重審條件見 `.docs/invariant-companions-decision-2026-10-03.md`。
  *
  * @see [#101](https://github.com/DemianLi/nexus-agent/issues/101)
  * @module
@@ -115,6 +120,35 @@ export interface InvariantSelection {
   readonly packageBlocklist?: readonly string[];
 }
 
+/**
+ * 只記錄的旁路：**每一份日誌裝上了哪幾個 package 的檢查**，以及**報了哪一條違規**。
+ *
+ * **它存在的理由是讓「零違規」有分母**（[#976](https://github.com/DemianLi/nexus-agent/issues/976)）。
+ * 沒有 {@link InvariantTap.installed}，「這個 package 一次違規都沒報過」與「它的檢查根本沒掛上」
+ * 長得一模一樣——那正是 [#668](https://github.com/DemianLi/nexus-agent/issues/668) 那一類缺陷。
+ *
+ * **它不是回報去處。** 違規照舊走 `onViolation`（省略即 `console.error`），tap 在那之後另外收一份；
+ * tap 自己拋了**一律吞掉**，不會變成違規、也不會變成「檢查壞了」的 warn，更不會回流到
+ * `SessionLog.#publish`。dsh 沒有這個旁路（它已把整套運行時不變量移除），這是為了第二刀的決策
+ * 加的；第二刀若選擇全部拿掉，這個旁路跟著拿掉。
+ */
+export interface InvariantTap {
+  /**
+   * 這一份日誌的 runner 裝完了。**每個 runner 恰好一次**，過濾成空集合時也叫（`packages` 為空）。
+   * `packages` 是真的掛上了至少一個觀察者的 package 名，安裝失敗或被過濾掉的不在裡面。
+   */
+  readonly installed?: (info: {
+    readonly sessionId: string;
+    readonly packages: readonly string[];
+  }) => void;
+  /** 一條違規。`message` 是 `InvariantError` 的完整訊息（已帶 package 名）。 */
+  readonly violation?: (info: {
+    readonly sessionId: string;
+    readonly packageName: string;
+    readonly message: string;
+  }) => void;
+}
+
 export interface InvariantRunnerOptions {
   /** 要觀察的日誌。 */
   readonly log: SessionLog;
@@ -126,6 +160,8 @@ export interface InvariantRunnerOptions {
   readonly onViolation?: (error: InvariantError) => void;
   /** 檢查**自己壞掉**往哪裡講。省略即 `console.warn`。 */
   readonly warn?: (message: string) => void;
+  /** 只記錄的旁路，見 {@link InvariantTap}。省略即沒有。 */
+  readonly tap?: InvariantTap;
 }
 
 /**
@@ -256,6 +292,18 @@ export function createInvariantRunner(options: InvariantRunnerOptions): () => vo
     }
   }
 
+  // 旁路的拋錯一律吞掉：它是記錄，不是檢查，壞了不能讓任何一側受影響。
+  const tap = options.tap;
+  const sessionId = options.log.sessionId;
+  try {
+    tap?.installed?.({
+      sessionId,
+      packages: [...new Set(observers.map((observer) => observer.packageName))],
+    });
+  } catch {
+    // 見上。
+  }
+
   if (observers.length === 0) {
     return () => {
       // 沒有人要看，沒有東西要退。
@@ -269,6 +317,15 @@ export function createInvariantRunner(options: InvariantRunnerOptions): () => vo
       } catch (error: unknown) {
         if (error instanceof InvariantError) {
           onViolation(error);
+          try {
+            tap?.violation?.({
+              sessionId,
+              packageName: error.packageName,
+              message: error.message,
+            });
+          } catch {
+            // 旁路壞了不影響違規本身已經報出去這件事。
+          }
           continue;
         }
         // 檢查自己拋了不是違規，是那條檢查壞了。兩件事分開講——講混了就等於

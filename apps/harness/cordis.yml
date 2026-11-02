@@ -1,6 +1,8 @@
 # 出貨的預設 plugin 清單。
 #
-# 這份檔案是「零設定的 nexus 由什麼組成」的唯一來源（#454）。使用者要改的話不是編輯它，
+# 這份檔案是「零設定的 nexus 由什麼組成」的來源（#454）；例外只剩組裝點在程式碼裡掛的一顆：
+# host-services（它交的是協作者，不是功能），它不在清單上。**serve 另有一個專屬的出貨層** `cordis.serve.yml`（#669），疊在這份之後、
+# 只有 serve 載，放 serve 才有的列（今天只有 workspace-changes）；CLI 的 `--dump-config` 印不到它。使用者要改的話不是編輯它，
 # 而是在 `$NEXUS_AGENT_HOME/cordis.patch.yml`（預設 `~/.nexus-agent/`）或 `--patch <檔>`
 # 裡按 `id` 覆寫、停用、插入——patch 是整份替換 `config`，不是深層合併，所以覆寫的時候要
 # 把想保留的欄位一起重述。
@@ -9,16 +11,28 @@
 #
 #   id        這一次掛載的識別。外面的 patch 靠它指到這一列，所以名字是承重的。
 #   name      模組 specifier，用動態 import 載進來再取 default export。
-#   config    交給那顆 plugin 的設定，由它自己的 `Config` schema 驗。沒有 `Config` 的
-#             plugin（下面二十個配套入口全部是）不得寫這個欄位。
+#   config    交給那顆 plugin 的設定，由它自己的 `Config` schema 驗。驗不過（或 `apply` 裡才驗的
+#             值不合法）的那一列掉了、啟動時印一段警告，其餘照樣起來；只有 `browser-session`
+#             （必掛）掉了會整個起不來（#751，照 dsh 分必掛與可少掛）。沒有 `Config` 的 plugin
+#             （下面八個配套入口全部是）沒有設定：寫了也沒有作用，照樣掛，啟動時印警告。
 #   disabled  這一次掛載不跑。只收字面布林——dsh 那邊可以寫 `!!js` 運算式，我們刻意不接
 #             （#104 的偏離標註）。
 #
 # 疊完之後這台機器上實際長什麼樣，用 `--dump-config` 看（cli 與 serve 都收）：它印出啟動
-# 真的會掛的那一份，每一段前面標明那幾列來自哪個檔、被哪幾層改過；指到不存在 id 的 patch
+# 會掛的那份清單（上面由程式碼掛的那一顆不在內；serve 的包含 `cordis.serve.yml` 那一層），每一段前面標明那幾列來自哪個檔、被哪幾層改過；指到不存在 id 的 patch
 # 會連同它那一層的標籤報到 stderr。用法見 docs/operations.md 的「plugin 清單」一節。
 #
-# 順序不承載語意，分組是給人看的。
+# 要事先知道某一列收哪些欄位（寫覆寫檔用），用 `--dump-config-schema`：印出一份 JSON Schema，
+# 用法見 docs/operations.md 的「寫覆寫檔之前先看欄位規格表」。
+#
+# 順序不承載語意，分組是給人看的。兩件事今天靠組裝的現況成立、沒有機制擋，各有絆索：
+#
+#   服務相依  清單上的列在 `apply` 當下讀的服務都由組裝點的 host-services 提供（它排在整份清單
+#             前面），沒有一列讀另一列提供的服務。守它的是 `src/shipped-service-reads.test.ts`。
+#   核准閘門  waterfall 的順序就是載入順序，今天清單裡**剛好一位** gate：submit-record 的
+#             `submit_record` 閘門（#1466 起經樹上 `tools` 服務的 `gate()` 登記、折進每條 thread
+#             的 `registry.approvals`，來源仍是 `submit-record (submit-record)`）。守它的是
+#             `src/approval-gate-order.test.ts`；清單上多一位 gate，那條測試要先重算。
 
 # ── 功能 ──────────────────────────────────────────────────────────────────────
 #
@@ -30,11 +44,54 @@
 - id: echo
   name: '@nexus/plugin-echo'
 
-# 工作區指令（#388）：產品路徑上的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend
-# 才會真的建 middleware，所以沒給 `--workspace` 時它什麼都不加——與 dsh「沒有檔案系統
-# 提供方就載不到」同形。
+# 工作區指令（#388）：產品路徑上的 CLI 與 serve 也看得到 `AGENTS.md`。這一列經
+# `agent/pre-step` 接縫（`@nexus/agent-loop`，#1474）在每次 agent 呼叫開頭登記一位 listener，
+# 宿主為它建 middleware；listener 在**呼叫當下**問 `fs` 服務拿這條 thread 的 backend，沒給
+# `--workspace`（或工作區沒有 AGENTS.md）時什麼都不加——與 dsh「沒有檔案系統提供方就載不到」同形。
 - id: agent-instructions
   name: '@nexus/plugin-agent-instructions'
+
+# 人寫 `/名字` 叫用技能（#1574）：root 的人話裡有 `/deploy` 這類手勢、而那份技能人叫得到（`user-invocable` 不是 false），
+# 就在同一個 `agent/pre-step` 接縫上把 SKILL.md 的正文當成一則使用者訊息交給這一輪；只給人叫的技能
+# （`disable-model-invocation: true`）只有這個入口。話裡沒有手勢就不掃。來源讀 `skills` 列登記的那幾個目錄。
+#
+# **單獨一列**：`skills` 列可以有好幾列（每列登記自己的來源），叫用是整個行程一份，同 dsh 由一顆 `tool-skill` 負責。
+# **位置在 `agent-instructions` 與 `time-context` 之間**：技能說明排在 AGENTS.md 基線之後、時間讀數之前，同 dsh
+# （time-context 以 `prepend` 登記，最後才 append）。偏離與理由登記在 `@nexus/plugin-skills/invocation` 檔頭。
+- id: skill-invocation
+  name: '@nexus/plugin-skills/invocation'
+
+# 時間讀數（#1625）：每次 agent 呼叫開頭、**同一個 `agent/pre-step` 接縫**上，追加一則持久的使用者訊息，
+# 寫著取樣時間、瀏覽器時區（`run.start` 帶 `client_time_zone` 才有，#1629；沒帶是 unavailable）與距上一則模型看得到的訊息過了多久。
+# 同一條 thread 10 分鐘內不重複（`refreshIntervalMs`，`0` 是每次都注入）；從不進系統提示詞，所以前綴快取不受影響。
+#
+# 位置在 `agent-instructions` 與 `skill-invocation` 之下：同一次 invoke 裡人話在前、AGENTS.md 基線與 `/名字` 叫用的技能說明居中、讀數在最後
+# （照 dsh：time-context 以 `prepend` 登記，是 `agent/pre-step` waterfall 的最外層、最後才 append，`time-context/src/index.ts:225`）。
+# **CLI 也掛這一列**（偏離 dsh，理由 1，登記在套件檔頭第 5 條）：dsh 只有 web-app 的 preset 掛它，照 dsh 該只掛 serve；
+# 但 serve 專屬層（`cordis.serve.yml`）的函式插件上不了樹（`plugin-tree.ts:51-52`），這一列只能寫在這份出貨清單，CLI 與 serve 一起掛。
+# 撤除條件：serve 層經 Include 上樹之後，把這一列搬到 `cordis.serve.yml`。
+# 讀數是**只增不減**的日誌事件，恢復一條舊 thread 不會改寫舊讀數。
+#
+# 顯示時區預設取行程的 `TZ`，載入時解析一次；容器裡常常是 UTC，要固定就啟動時設 `TZ`，或用
+# `plugin config set time-context --file <檔>`（檔裡寫 `timeZone: Asia/Taipei`，IANA 名；`plugin` 是 `plugin-cli.ts` 的寫入口），
+# 或在 `--patch` 裡給這一列的 `config`。設定寫錯（不是 IANA 名、間隔不是非負整數、多餘欄位）這一列掉下來並在啟動時警告。
+- id: time-context
+  name: '@nexus/plugin-time-context'
+
+# 技能（#440）：工作區的 `skills/<name>/SKILL.md` 讓模型看得到、需要時自己去讀。來源預設
+# 是 backend 命名空間下的 `/skills/`，要加別的目錄在 `sources` 列出（依序即優先序）。
+#
+# **沒有 skill 就一個字都不加**（照 dsh：目錄訊息清單為空且從沒發佈過就不出現，
+# `packages/skill/tool-skill/src/index.ts:239`）：沒給 `--workspace`、或工作區沒有 `skills/`，
+# 送給模型的 system prompt 與沒掛這一列逐位元組相同，空結果也只掃一次。基座的 skills
+# middleware 做不到這一點（對空清單照樣接約 2000 字、又每一輪重掃），所以組裝點包了一層，
+# 偏離登記在 `packages/nexus-core/src/skills-middleware.ts` 檔頭。
+#
+# **這一列走 Cordis 樹**（#1446）：`sources` 經技能來源接縫（`@nexus/skills`）登記，路徑格式與重名在讀清單那一步就驗
+# （寫錯的路徑那一列掉在 `apply`，不等到組 thread）；折回每條 thread 的 `registry.skills.addSource` 之後，基座的中介層與
+# 模型看到的 prompt 位元組都沒變。
+- id: skills
+  name: '@nexus/plugin-skills'
 
 # **例外一：計劃模式**（#120）。它註冊的是一個**人打得到的命令**，而命令沒進出貨清單就
 # 等於不存在——`/plan` 會被 `parseCommand` 判成「名字不認得」，照原樣掉回模型，變成一行
@@ -49,17 +106,27 @@
 # - **serve 也吃這份清單**，而那條路上有命令介面（#123）：web 那端自己打 `/plan` 就進得
 #   去，而且核准是開著的，所以「規劃 → 交計劃 → 有人按批准 → 開始動手」整條走得完——那
 #   是 CLI 這條路走不完的。
+#
+# **`guidance` 是部署必給的**（#1607，照 dsh `resolveConfig`）：套件沒有預設值，缺席或空白在載入時失敗。下面這一句就是原本寫在套件裡的
+# 預設值，逐字不變（所以出貨的 system prompt 位元組沒變）。**patch 的 `config` 是整份替換、不是深層合併**（`plugin-config.ts` 的 patch
+# 語意），要在 patch 裡改這一列的 `config`（例如 `startActive`）就得連 `guidance` 一起帶，不然這一列起不來。
 - id: plan-mode
   name: '@nexus/plugin-plan-mode'
+  config:
+    guidance: '你現在在計劃模式。先探索與設計，不要動手改東西；計劃完成後用 exit_plan_mode 把完整的計劃交出去等人批准。'
 
 # **例外二：goal**（#126）。同一條理由：命令沒進清單，`/goal 把測試修綠` 會掉回模型變成
-# 一句閒聊。代價兩筆：每一次執行多接一位會話參與者，以及模型側多三顆工具
-# （`create_goal`／`get_goal`／`update_goal`，#177 之後才有的東西，一律 `rootOnly`，所以
-# subagent 那幾份看到的是拒絕樁）。它不改 prompt、不碰 backend，沒有目標時連一顆事件都
-# 不寫；但工具清單與那幾顆的 token 確實變了。
+# 一句閒聊。代價一筆：模型側多三顆工具（`create_goal`／`get_goal`／`update_goal`，#177 之後
+# 才有的東西，一律 `rootOnly`，所以 subagent 那幾份看到的是拒絕樁）。它不改 prompt、不碰
+# backend，沒有目標時連一顆事件都不寫；但工具清單與那幾顆的 token 確實變了。
 #
 # **域與命令是同一個 plugin**，不像 dsh 拆成兩個套件——理由寫在 `@nexus/plugin-goal` 的
 # 檔頭上。
+#
+# **這一列走 Cordis 樹**（#1486）：`apply` 提供 `goals` 服務（定義在 `@nexus/goal`，第二個「插件提供、宿主消費」的服務，
+# 前例是 `messageFeedback`），並經工具／命令／會話查找三個接縫登記三顆工具與 `/goal`。**每份 root 日誌上的 goal 域是查找時才建的**
+# （`WeakMap<SessionLog, GoalService>`，建的當下同步重播 `log.events`、再 `log.subscribe`），所以不再有「每一次執行多接一位會話參與者」
+# 那一筆代價，`/goal` 也不再有「一份都沒接」「接了不只一份」兩句；宿主組 thread 時把 `goals` 折進該條 thread 的 `registry.services`。
 - id: goal
   name: '@nexus/plugin-goal'
 
@@ -83,6 +150,10 @@
 # `maxNoteBytes` 是一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
 # （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
 # 所以這一行是整棵樹上唯一講這個數字的地方。
+#
+# **這一列走 Cordis 樹**（#1456）：它在 `apply` 裡提供 `messageFeedback` 服務（第一個「插件提供、宿主消費」的服務），並經命令接縫
+# （`@nexus/commands`）登記 `/feedback`。宿主組 thread 時從樹上取服務、折進 `registry.services`，命令折進 `registry.commands`，
+# wire 與 web 看到的 `slash.list`、`feedback.*` 都沒變。`maxNoteBytes` 寫壞（不是正整數）那一列掉在讀清單那一步。
 - id: feedback
   name: '@nexus/plugin-feedback'
   config:
@@ -91,14 +162,98 @@
 # **例外四：交付宣告**（#441）。dsh 的 standard preset 掛 `tool-present`，而 web 的交付
 # 卡片讀的事件只有它寫得出來。代價同 todo，多一顆面向模型的工具（`present`）；沒有工作區
 # 時工具照樣在、叫了被拒，同 dsh。
+#
+# **`present` 是樹上的函式插件**（#1469）：Include 把它掛在 `include:present`，經 `tools` 服務登記 `present`，並用 `tools.onResult()`
+# （`@nexus/tools` 1.3.0）登記等 `tools/result` 的觀察者；檔案系統與「有沒有工作區」都問樹上 `fs` 那一列（`@nexus/fs` 1.1.0 的
+# `hasWorkspace()`、`offWorkspacePrefixes()`）。關掉它（`disabled: true`）時工具與觀察者一起不在，同 submit-record 的閘門。
 - id: present
   name: '@nexus/plugin-present'
 
+# **例外五：提問與提交紀錄**（#669）。這兩顆以前由 `createCliAgent` 在程式碼裡掛，patch 指不到、`--dump-config` 印不出來；
+# 部署方想在多人共用的主機上關掉 `ask_user_question`，寫 `- id: ask-user` ＋ `disabled: true` 只會得到一行「找不到 id」。
+# 搬進清單之後它們跟其他列一樣：看得見、關得掉。dsh 的 ask-user 也只是 preset 裡的一列。
+#
+# 兩顆都沒有資料設定，協作者走服務注入（#459）。`ask_user_question` 讀樹上 `approval-channel` 那一列給的預設答題管道（**沒有就
+# 在呼叫時拒絕**，不退成「有人在」，照 dsh 的 `NO_PROVIDER`；值由入口在建樹時給，#1458），`submit_record` 在被叫時問樹上 `fs` 那一列
+# （`@nexus/fs`，#1466）：依這次呼叫的 `thread_id` 拿到那條 thread 自己的 `fs` 把手，再讀折出來的 backend（#694）。host-services 仍由組裝點在最前面掛。我們的 CLI 是有人在的互動入口，dsh 沒有對應物，所以兩個入口照舊都有這兩顆。
+#
+# **`ask-user` 是樹上的函式插件**（#1458）：模組有 `manifest` 匯出，Include 把它掛在 `include:ask-user`，經 `tools` 服務登記
+# `ask_user_question`（帶 `rootOnly`＋`outputSchema` 選項）；清單上的位置、名字與 `disabled` 的寫法都沒變。
+#
+# **`submit-record` 也是樹上的函式插件**（#1466）：Include 把它掛在 `include:submit-record`，經 `tools` 服務登記 `submit_record`，並用
+# `tools.gate()`（`@nexus/tools` 1.2.0）登記一道核准閘門（一律停下來讓人看過），所以它在 `approval-gate-order.test.ts` 的射程內。
+# 關掉它（`disabled: true`）時工具與閘門一起不在：閘門是這一列的性質，不是另一個可以單獨留下的東西。
+- id: ask-user
+  name: '@nexus/plugin-ask-user'
+
+- id: submit-record
+  name: '@nexus/plugin-submit-record'
+
+# **例外六：軌跡投影**（#1027，地圖 #1015）。把 root 日誌一輪一組折成「每次模型呼叫發生了什麼」——起訖、用量、重試、回覆、工具、決策點——
+# 與每次呼叫實際送出的系統提示詞和請求設定，經 #1026 的投影通道送到 web 的觀測分頁。
+#
+# 代價：**不多工具、不改 prompt、不碰 backend、不寫日誌**，模型那一側零差別。要付的是兩筆：每顆事件多一次純函式折疊（量到
+# 每顆約 1 微秒），以及投影有變時多送一顆 `projection` frame。**frame 是整份取代、每顆讓投影改變的事件都重送**，所以下行量 ≈
+# 事件數 × view 大小。view 有上限（最近 8 輪完整、更早只留摘要列；一輪最多留 32 次呼叫、一次呼叫最多 16 個工具），量到的大小：
+# 典型的 8 輪（每輪 3 次呼叫、2 個工具）一顆約 15 KB、整段下行約 1.6 MB；預設迴圈上限下 8 個滿載輪（33 次呼叫 × 10 個工具）一顆最大約
+# 377 KB、整段下行約 1.2 GB；理論最壞一顆約 0.6 MB；長會話另加最多 200 列摘要（約 50 KB）。請求快照那顆只在快照真的變了才重送。沒有設定可調。
+#
+# 關掉它（`disabled: true`）的結果：web 的觀測分頁讀不到這兩份投影，其餘一切照舊。沒有它，通道仍然在，只是沒有單元。
+#
+# 這一列是**樹上的函式插件**（#1435）：模組有 `manifest` 匯出，Include 把它掛在 `include:trajectory`、經 `projections` 服務登記
+# 兩個單元；清單上的位置、名字與 `disabled` 的寫法都沒變，相容層那一側只留一列橋接列。
+- id: trajectory
+  name: '@nexus/plugin-trajectory'
+
+# **例外七：用量投影**（#1028，地圖 #1015）。把會話日誌折成逐輪、逐會話的用量——步數、工具次數（依名）、輸入／輸出 token
+# （成功＋失敗，生摘要那一次另列）、三段時間（模型扣掉重試退避、工具、停在核准點的等待）、每一輪怎麼結束——root 與每個子代理
+# （前景、背景都算）各折一份，經 #1026 的投影通道送到 web 的觀測分頁。**不另造總帳**：root 的 `tokenUsage`、`sessionStats` 照舊，
+# 這個投影在它們之上補逐輪與子代理，由測試釘住兩邊對得上。
+#
+# 代價：**不多工具、不改 prompt、不碰 backend、不寫日誌**，模型那一側零差別。要付的是：每顆事件多一次純函式折疊，與投影有變時
+# 多送一顆 `projection` frame（**整份取代、每顆讓投影改變的事件都重送**，所以下行量 ≈ 事件數 × view 大小）。view 有上限
+# （最近 20 輪帶逐輪的列、更早併成一列；依工具名 12 個、依模型 6 個、子代理連結 64 筆，超過的併進 other）。**宣告了
+# `children: true`**，所以每個子代理多一份折疊、多一條 frame 流，歷史最新一頁每個子代理多一顆 frame。
+# 量到的大小（合成日誌，2026-10-05）：root 窗口滿（30 輪，每輪 3 次呼叫、4 個工具）一顆約 18 KB，30 輪 × 8 呼叫 × 10 工具約 23 KB；
+# 一個子代理（6 次呼叫、4 個工具）約 2.1 KB；30 輪的整段下行約 7.3 MB（601 顆 frame）。100 個子代理讓歷史最新一頁多約 221 KB
+# （頁面位元組上限 8 MB 是軟的、不含投影 frame）。沒有設定可調。
+#
+# 關掉它（`disabled: true`）的結果：web 的觀測分頁讀不到用量投影，其餘一切照舊。
+- id: token-meter
+  name: '@nexus/plugin-token-meter'
+
+# 系統提示詞的身分與 persona（#720、#1477）。照 dsh 的 `system-prompt`（`packages/core/system-prompt/src/index.ts:407-442`）
+# 三格設定；出貨的前綴對應 dsh 各入口 profile 覆寫的前綴（`packages/bundle/web-app/cordis.patch.yml:17-20`，另有 `headless` :11、
+# `acp-app` :5、`sdk-minimal` :118），英文，開頭句不自稱寫程式。**dsh 只覆寫前綴**：後綴的 `{{cwd}}` 句是我們的，而且 dsh 沒有
+# `cwd` 變數（`packages/core/system-prompt/README.md:78`，loop 只登記 `provider` 與 `model`），見 `@nexus/plugin-system-prompt` 的檔頭。
+# 順序是身分句 → 前綴 → 其餘（含組裝點傳的那句指引）→ 後綴，**後綴永遠是最後一段**。
+#
+# 這一列是樹上的函式插件，**提供 `systemPrompt` 服務**（`@nexus/system-prompt` 1.0.0）：三格設定是服務自己的設定，建好之後自己登記三段。
+# 宿主在組 thread 時取一次快照，之後每次模型呼叫只代入變數（`apps/harness/src/system-prompt-middleware.ts`）。
+#
+# - `includeHarnessIdentity`：最前面一句 "You are an AI agent powered by nexus-agent."。
+# - `personaPrefix`／`personaSuffix`：`{{model}}`（這一次組裝的模型 id）與 `{{cwd}}` 可以引用。**嚴格插值**：
+#   未知的變數、沒有值的變數、寫壞的 `{{…}}` 都讓啟動失敗（**掛載當下驗語法與名字**，值每次模型呼叫才取），訊息指名是哪一格與哪個變數。
+#   **`{{cwd}}` 是檔案工具的位址空間裡的根（`/`），不是主機路徑**：工具收不下主機路徑（登記在
+#   `@nexus/plugin-system-prompt` 的檔頭）。
+#
+# **patch 是整份取代 `config`**：只寫 `includeHarnessIdentity: false` 的話，前後綴也回到空。所以這一列三格全部寫出來。
+# 這一列掉了（設定寫壞）整個起不來（`startup-audit.ts` 的必掛名單）：靜靜少了身分與 persona，比大聲失敗更糟。
+# 子代理也帶部署 persona（它們的請求走同一顆 middleware）。
+- id: system-prompt
+  name: '@nexus/plugin-system-prompt'
+  config:
+    includeHarnessIdentity: true
+    personaPrefix: 'You are a helpful assistant powered by the {{model}} model.'
+    personaSuffix: 'Your working directory is {{cwd}}.'
+
 # ── core 的設定 ──────────────────────────────────────────────────────────────
 #
-# 這幾列**不裝功能，只講設定**。**它們內部分兩層，分界同 harness 那一段——消費點跑的時刻**：
+# 這幾列**不裝功能，只講設定**（最後一列 `session-persistence` 例外：它代表落盤本身，#612）。
+# **它們內部分兩層，分界同 harness 那一段——消費點跑的時刻**：
 # 前七列（到 `approval-gate` 為止）是**組裝期**（#456），消費者是 `foldRegistry`，註冊表就在
-# 手上；最後一列 `session-persistence` 是**起動期**（#529），理由寫在它自己那一段上。
+# 手上；最後一列 `session-persistence` 是**起動期**（#529），而且它代表落盤本身、關得掉（#612），
+# 理由寫在它自己那一段上。
 #
 # 組裝期那七列：middleware 本身由 `foldRegistry` 建與排位——位置
 # 是承重的（有四條測試釘著）、而且有一顆必須逐個 agent 各建一份，這兩件事
@@ -151,17 +306,23 @@
     trigger:
       - { type: tokens, value: 100000 }
       - { type: messages, value: 60 }
-    keep: { type: messages, value: 20 }
+    # 摘要之後逐字留下的量：占這顆模型訊息預算（窗口 − 輸出上限）的比例，dsh `compaction-basic` 的 `retainRatio` 預設。
+    # 與 `retainTokens`（固定 token 數）**擇一**，兩個一起寫載入就報錯；patch 整份替換 `config`，要改用固定 token 數就
+    # 把這一行換成 `retainTokens: <數字>`。舊的 `keep`（固定則數）已拿掉，寫了載入同樣報錯並說明改成哪兩個（#1374）。
+    retainRatio: 0.16
     truncateArgs:
       trigger: { type: messages, value: 20 }
       keep: { type: messages, value: 20 }
     historyPathPrefix: /conversation_history
+    # 摘要之後重新量測，仍超過 token 門檻就換最小的保留量再摘一次（#2028）。
+    # 只收 0 或 1；0 是不重試，摘要後仍超過就記一條 warn、照那份送。
+    compactionRetries: 1
 
 # 先讀後改：沒讀過的檔不准改（#273）。照 dsh base 的 `fs-observation-policy`
 # （`packages/bundle/base/cordis.patch.yml:264`，`ddefc45`）預設就載著。
 #
-# **這一列刻意沒有 `config:`**，而且不可以加：這一顆沒有設定，plugin 也就沒有 Config
-# schema，而載入器對「沒有 schema 卻給了 config」是**當場拋**，不是默默吞掉。它跟上面兩列
+# **這一列刻意沒有 `config:`**：這一顆沒有設定，plugin 也就沒有 Config schema，寫了也沒有
+# 作用——照 dsh 原樣交下去、不驗，那一列照樣掛（先讀後改照樣在），啟動時印警告（#751）。它跟上面兩列
 # 因此差一格——上面兩列是四態（明著傳的 > 條目的設定 > 被關掉 > 內建預設），這一列只有
 # 三態，因為「條目在場」與「沒有經過設定檔」的答案都是「開著」。
 #
@@ -170,8 +331,8 @@
   name: '@nexus/core/observation-policy'
 
 # 每一次模型呼叫的 token 帳目記進會話日誌（#264）。**這一列刻意沒有 `config:`**，理由同上
-# 一列：這一顆沒有任何數字可以調，plugin 也就沒有 Config schema，而載入器對「沒有 schema
-# 卻給了 config」是當場拋。所以它跟上面那一列一樣是三態。
+# 一列：這一顆沒有任何數字可以調，plugin 也就沒有 Config schema，寫了也沒有作用、啟動時印警告。
+# 所以它跟上面那一列一樣是三態。
 #
 # **關掉它之後不見的是落盤日誌裡那本逐次呼叫的 token 帳**（`model/usage`），連帶 web 用量表
 # 的「目前大小」那一行（#528，它讀 root 最新那一筆；環與比例讀的是摘要器的量測，照舊在）。
@@ -179,13 +340,13 @@
 - id: model-usage
   name: '@nexus/core/model-usage'
 
-# 一輪之中的耐久檢查點（#599）：模型請求之前、頂層工具動手之前，先把那次呼叫所屬的會話日誌
+# 一輪之中的耐久檢查點（#599）：模型請求之前、工具動手之前（root 與子代理都是），先把那次呼叫所屬的會話日誌
 # 排空到耐久。照 dsh base 的 `session-checkpoint-policy`（`packages/bundle/base/cordis.patch.yml:412`，
 # `477b4f4`）。**這一列同樣沒有 `config:`**，理由同上兩列。
 #
 # **關掉它之後**，日誌只在批次窗口到期與收尾時落地：正常收尾照樣完整，但收尾被打斷（收尾中
-# 再按一次 Ctrl-C、`kill -9`、當機）時丟的可能是整輪，而不只是最後一步的尾巴。沒開
-# `--session-log` 時它什麼都不做。
+# 再按一次 Ctrl-C、`kill -9`、當機）時丟的可能是整輪，而不只是最後一步的尾巴。沒接落盤的
+# 組裝上它什麼都不做（CLI 與 serve 從 #444 起一律落盤，只剩手搭的組裝沒接）。
 - id: session-checkpoint-policy
   name: '@nexus/core/session-checkpoint-policy'
 
@@ -201,24 +362,27 @@
 # 第二個理由跟擋人無關：**這一列讓核准在 `--dump-config` 裡看得見**。沒有它的時候，那份
 # dump 從頭到尾沒有任何一列跟核准有關，想確認「這台機器上核准是開的嗎」的人分不出來。
 #
-# `config:` 同上，不可以加。
+# `config:` 同上：沒有設定，寫了也沒有作用，啟動時印警告。
 - id: approval-gate
   name: '@nexus/core/approval-gate'
 
-# 會話日誌落盤的批次窗口，毫秒（#457／#529）。**這一列跟上面七列不同層**：上面七列的消費者
-# 是 `foldRegistry`（組裝期，註冊表在手上），這一列的消費者是 `cli.ts` 與 `serve.ts` 裡呼叫
-# `attachSessionPersistence` 的那兩行——跑在 `createCliAgent` 回來之後，而那個函式一格註冊表
-# 都沒有回傳。更硬的理由是壽命：窗口講的是那一顆 `SessionStore` 的寫入節奏，而 store 在 serve
-# 上是**整台伺服器一份**、註冊表是**一條 thread 一份**。所以這一列的 `apply` 是空的，值由
-# `startupSetting` 在起動期解一次往下傳，同上面 harness 那三列的機制。
+# **會話日誌落盤本身**，以及它的批次窗口（毫秒，#457／#529）。**這一列代表落盤**（#612），照 dsh
+# base 的 `session-persistence-jsonl`（`packages/bundle/base/cordis.patch.yml:130-133`，`477b4f4`）：
+# 掛著就寫（CLI 與 serve 都寫，預設在 `$NEXUS_AGENT_HOME/sessions`，#444），**`disabled: true` 就是
+# 一個位元組都不寫**——兩個入口只在記憶體裡、啟動時照實講，serve 的 thread 列表回「列不出來」，
+# 而 `--resume` 與 `--session-log` 跟它矛盾，給了就當場拋（照 dsh：headless 的 `--session-id`
+# 沒有持久化服務就拋）。寫去哪裡不歸這一列管，歸 `--session-log`／`NEXUS_AGENT_HOME`。
 #
-# **dsh 對這個值沒有意見**：它的 `session-persistence-jsonl` 只收 `root` 與 `compression`
+# **這一列跟上面七列不同層**：上面七列的消費者是 `foldRegistry`（組裝期，註冊表在手上），這一列的
+# 消費者是 `cli.ts` 與 `serve.ts` 起動期的那幾行——跑在 `createCliAgent` 之前（開不開、寫去哪都要在
+# 建 agent 之前定），而那個函式一格註冊表都沒有回傳。更硬的理由是壽命：窗口講的是那一顆
+# `SessionStore` 的寫入節奏，而 store 在 serve 上是**整台伺服器一份**、註冊表是**一條 thread 一份**。
+# 所以這一列的 `apply` 是空的，值由 `startupSetting` 在起動期解一次往下傳、開關由
+# `startupEntryMounted` 問，同下面 harness 那幾列的機制。
+#
+# **窗口是 dsh 沒有的旋鈕**：它的 `session-persistence-jsonl` 只收 `root` 與 `compression`
 # （`packages/session/session-persistence-jsonl/src/index.ts:236-239`，`ddefc45`），因為 dsh 的
-# 批次是呼叫端傳一整批，不是計時器攢批。所以這一列的形狀抄的是上面那七列，不是抄 dsh 的某一
-# 列——這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
-#
-# **這一列關不掉**（理由同起動期那三列）：`startupSetting` 把關掉的那一列當成沒有那一列，於是
-# 回到 schema 的預設值——落盤照樣批次、照樣 10 毫秒，只有讀設定的人以為自己關掉了什麼。
+# 批次是呼叫端傳一整批，不是計時器攢批。這不是「表達不出來」的偏離，是標準沒有這個旋鈕。
 #
 # **0 是合法值**，意思是不批次、每一顆事件各寫一次；上限是 `setTimeout` 收得住的
 # 2 147 483 647，超過它的值會讓計時器**立刻**觸發（等於窗口消失），所以擋在 schema 上。
@@ -234,27 +398,31 @@
 #
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
-# - **起動期**（`thread-title`、`browser-session`、`deliverable-files`、`tool-text`、`live-model`）：消費者是
-#   `serve.ts` 的冷讀清單、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的兩條交付路由，以及交給
-#   組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。所以這幾列的 `apply` 是空的，值由
+# - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`memory-gauge`、`ops-endpoints`、`browser-session`、`deliverable-files`、`tool-text`、`projection-flush`、`downlink`、
+#   `tool-result-stash`、`spill-policy`、`background-subagents`、`subagent-model-selection`、`live-model`、`goal-round-cap`、`turn-timeout`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
+#   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
+#   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
+#   讀（#650）。所以這幾列的 `apply` 是空的，值由
 #   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
 #   「值從一個地方來」，機制上不是服務，那條退讓登記在 #529 上。
-# - **組裝期**（`recursion-limit`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
+# - **組裝期**（`recursion-limit`、`agent-loop`、`tool-fs-search`、`tool-fs`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
 #   **註冊表就在手上**。所以這一列跟上面 core 那三列完全同形——`apply` 把驗過的值提供成一個
 #   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
 #
-# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，六列共用：dsh 的每個可調值
+# **`name` 是 `#settings/…` 而不是一個套件名**，那是一條登記過的偏離，所有 `#settings/…` 列共用：dsh 的每個可調值
 # 都由一個套件擁有，而 `apps/harness` **解不到自己**（條目走 `import(entry.name)`，`@nexus/harness`
 # 沒有連進自己的 `node_modules`，實測是 `Cannot find package`）。退到 Node 的 `imports` 欄位，映射
 # 寫在 `apps/harness/package.json` 裡看得見。逐條理由在 `src/settings/thread-title.ts` 的檔頭。
 #
-# **這六列關不掉**（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`），但理由分兩種。起動期那五列是
+# **哪幾列關不掉，以 `plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES` 為準**（`thread-title-llm`、`thread-search` 不在上面），這裡不寫顆數；理由分兩種。
+# 起動期那幾列是
 # 「關掉沒有意義」：它們不裝任何東西，關掉不會讓標題不再被裁切、cookie 不再過期、交付檔不再有
 # 上限——`startupSetting` 把關掉的那一列當成沒有那一列，於是回到 schema 的預設值。
 # `recursion-limit` 硬一級——關掉它在機制上確實會讓服務消失、於是落回內建的 100，**看起來像關掉了
-# 護欄，實際上護欄還在**。兩種都只會讓人以為自己關掉了什麼。
+# 護欄，實際上護欄還在**。兩種都只會讓人以為自己關掉了什麼。`thread-title-llm` 與 `thread-search` 相反：關掉
+# 它們就真的沒有模型產生的標題、沒有內容搜尋，理由寫在各自那一段上。
 
-# 執行緒列表上標題的兩個上限（#302）。值照 dsh base 的 `session-title`
+# 會話標題的兩個上限（#302、#647）：列表、畫面標頭與日誌裡的退回標題都照它截。值照 dsh base 的 `session-title`
 # （`packages/bundle/base/cordis.patch.yml:55-60`，`ddefc45`：`fallbackMaxWords: 5`、
 # `fallbackMaxBytes: 40`），**數字一模一樣**。
 #
@@ -266,9 +434,117 @@
   config:
     maxWords: 5
     maxBytes: 40
+    maxTitleBytes: 80
+
+# 模型產生的會話標題（#650），只在 `--live` 時才跑：第一則人話開跑、主回覆的第一次模型呼叫送出之後，另外打一次
+# 標題模型，回來的標題蓋過上面那一列截出來的退回標題。照 dsh base 的 `session-title-llm`（掛的是
+# `@deepseek-ai/dsh-session-title-first-prompt-llm`，`packages/bundle/base/cordis.patch.yml:62-69`，`477b4f4`），
+# **五個數字一模一樣**。上面那一列的 `maxTitleBytes` 是任何來源的標題上限，模型產生的照它正規化。
+#
+# **這一列關得掉**，跟上面那一列相反：`disabled: true` 就是只剩退回標題，同 dsh 的 acp-app 與 sdk-app。
+# 標題走 `live-model` 那一列的連線；模型預設沿用它的預設模型，選配的 `modelId`（#657）可以改挑那一列 `models` 型錄裡的
+# 另一筆，關推理的寫法跟著那一筆走（dsh 那一對成對的 `provider`／`model` 我們只有 `modelId`，理由見
+# `src/settings/thread-title-llm.ts` 的檔頭）。**不寫就是沿用**，不要寫成預設模型的 id——那樣換了預設模型標題不會跟著換。
+- id: thread-title-llm
+  name: '#settings/thread-title-llm'
+  config:
+    targetWords: 5
+    targetCjkCharacters: 10
+    maxInputBytes: 4096
+    maxOutputTokens: 64
+    timeoutMs: 60000
+
+# 按內容搜尋以前的會話（#631），側欄的搜尋框用它。**出廠不開**（`openAt: never`），同 dsh `base` 與 `web-app` 兩個
+# bundle 的 `session-query-sqlite` 那一列（`packages/bundle/base/cordis.patch.yml:141-153`、
+# `packages/bundle/web-app/cordis.patch.yml:22-30`，`477b4f4`）：要不要多背一份索引是部署自己的選擇。不開的時候側欄
+# 只比標題，同今天。要用的人在自己的 `~/.nexus-agent/cordis.patch.yml` 把這一列改成 `openAt: first-search`（第一次搜才
+# 載入）或 `startup`（serve 起動就載入），寫法見 docs/operations.md。
+#
+# **這一列關得掉，而且關掉跟 `never` 不一樣**：`disabled: true` 是沒掛，搜尋一律回失敗；`never` 是掛了不開，沒有
+# 會話可搜時照樣回空。**schema 的預設是 `startup`**（同 dsh），所以把 `config:` 整段拿掉的 patch 會把它打開。
+# 索引只放在記憶體、斷詞與 dsh 不同（中文），理由見 `src/settings/thread-search.ts` 與 `src/thread-search.ts` 的檔頭。
+- id: thread-search
+  name: '#settings/thread-search'
+  config:
+    openAt: never
+
+# 用 `@` 引用別的會話時的四個上限（#1573 N0862）：一則訊息最多引用幾條（`maxReferences`，不能超過 3）、候選最多回幾筆
+# （`candidateLimit`）、每條來源序列化後最多幾個位元組（`maxReferenceBytes`，**省略即照模型窗口算**，給了就原樣蓋過）、
+# 自動預算占模型窗口的幾成（`referenceContextFraction`）。**欄位名與 schema 的預設（3、50、0.2）都是 dsh 的**
+# （`packages/context/session-reference/src/index.ts:90-95`，`1517a4db`／`687f282e`／`22ddee37`）。自動預算是
+# `max(65536, floor(窗口 × 4 × 比例))` 位元組，窗口跟著**這條 thread 下一步會走的模型**，換了模型下一次引用就用新那顆的窗口。
+#
+# **出廠的比例是 0.1，不是 dsh 的 0.2。偏離登記：理由 2（產品需求超出 dsh 的射程），demian 2026-10-17 拍板 Q4 (b)。**
+# dsh 的 web-app 出貨這一列不給 config、吃 0.2；那個「每 token 4 位元組」是照英文調的。本產品以中文為主：用 nexus 自己的估算器
+# （o200k，`token-estimate.ts`）量中文是約 0.31 token／位元組（2026-10-24 量 `AGENTS.md`、`docs/operations.md`、`docs/standards.md`、
+# `.docs/development-plan.md`：混排 0.3100、只留中日韓字元 0.3114）。出廠模型窗口 784,369：比例 0.2 時每條 627,495 位元組，
+# 三條約 587k–598k token，是摘要門檻 627,495 的 94%–95%，乘上實測的真實÷o200k（中文 1.10，`token-estimate.ts:41`）就超過；
+# 比例 0.1 時每條 313,747 位元組，三條約 294k–301k token，占門檻 47%–48%（乘 1.10 約 51%–53%），留下一半給 system prompt、
+# 工具定義與歷史。測試 `session-reference-budget.test.ts` 的 H 釘住這一點。
+# 部署方可以調：要更多給 `referenceContextFraction`（上限 1），要固定位元組給 `maxReferenceBytes`。patch 是整份替換 `config`，
+# 只寫一格的話另外三格由 schema 補，**包括比例回到 0.2**，所以調別的格時要把比例一起寫。
+# **寫壞整個起不來**（`startup-audit.ts` 的 `REQUIRED_ENTRY_IDS`），**也關不掉**（`PROTECTED_ENTRY_NAMES`）：兩者的理由都是掉了或關了
+# 之後值回到 schema 的 0.2，靜靜把出廠調低的比例拿掉；逐點見 `src/settings/session-reference.ts` 檔頭。起動期讀一次、改了要重啟。
+- id: session-reference
+  name: '#settings/session-reference'
+  config:
+    maxReferences: 3
+    candidateLimit: 50
+    referenceContextFraction: 0.1
+
+# serve 行程裡最多同時有幾條 thread（#1476，「底座保險絲」第 2 級；每條 thread 常駐約 1.2 MB heap（#1983），不逐出就一直留著），
+# 以及閒置的 thread 多久之後撤出記憶體（#1484，第 1 級）。**兩格出廠都開著**（#1619，demian 2026-10-18 拍板）：上限 500 條、閒置 2 小時撤出。
+# 值的家在 schema（`src/settings/thread-capacity.ts`），這裡照抄同一組讓人看得到；patch 是整份替換 `config`，只寫一格的話另一格由 schema 補。
+# 到了上限，新 thread（含讀歷史、續聊磁碟上的舊 thread）回 `thread_at_capacity`，已在行程裡的照常；閒置條件全成立滿 2 小時的 thread
+# 會被撤出記憶體、還名額（只有開了落盤才生效）。**要放寬，在自己的 `~/.nexus-agent/cordis.patch.yml` 把數值調大**；
+# 要關逐出（例如要在整段對話裡釘住組裝它的那一版），設 `idleEvictAfterMs: 0`。寫法、推法與代價見 docs/operations.md。起動期讀一次、改了要重啟。
+# **偏離登記：thread 數上限與閒置逐出都是「產品需求超出 dsh」**，500 這個數字也是（dsh 沒有可照抄的值）；2 小時與「0＝不逐出」照 dsh 終端的
+# `unattendedTimeoutMs`。逐點見 `src/settings/thread-capacity.ts` 的檔頭。
+# **這一列關不掉**：兩格都有 schema 預設，關掉只會回到同一組值，讀起來卻像拆了保險絲，所以在 `PROTECTED_ENTRY_NAMES` 上（同 `downlink`）。
+- id: thread-capacity
+  name: '#settings/thread-capacity'
+  config:
+    maxThreads: 500
+    idleEvictAfterMs: 7200000
+
+# serve 的記憶體量具（#1490）。**預設關閉**：`reportIntervalMs: 0` 就不啟動，除了清單多一列，serve 的行為與日誌和沒有這一列時一樣。
+# 開了（1000 到 2147483647 毫秒，後者是計時器上限，超過 Node 會把間隔改成 1 ms）：serve 起來時立刻往日誌寫一行，之後每隔這麼久一行，讀三個來源——行程自己（RSS、heap）、容器上限
+# （Linux 的 cgroup：先解 `/proc/self/cgroup` 讀行程自己所在的那個，v2 與 v1）、主機（`/proc/meminfo` 的 `MemAvailable`，沒有才退到 `os.freemem()` 並標出來）；
+# **讀不到的來源明說讀不到與原因，不回 0**。**只讀、只講**，不拒收、不逐出、不下架。要看就在自己的 `~/.nexus-agent/cordis.patch.yml`
+# 把 `reportIntervalMs` 設成例如 60000。起動期讀一次、改了要重啟。
+# **用量警告（#1493，保險絲第 0 級）**：取樣開了之後，每次讀數都和 `warnAtPercent`（1 到 99 的整數，預設 75）比——有 cgroup 上限用 `memory.current ÷ memory.max`
+# （上限在祖先 cgroup 時用行程受限的值），沒有就用主機的 `(總量 − 可用) ÷ 總量`（可用只認 `MemAvailable`，退到 `os.freemem` 就當讀不到，所以 macOS 上整個不警告）；`memory.current` 含 page cache 會略高估；嚴格超過就在日誌寫一行 `[記憶體] 警告：…`（講用的是哪個來源、百分比、現在幾條 thread、下一步），
+# 降到「門檻 − 5」以下才寫一行 `已恢復`，之間不重複。來源讀不到就不判斷，從可讀變成讀不到時講一次。**只警告，不做任何動作**。取樣關著（預設）就整段不建。
+# **偏離登記：產品需求超出 dsh**（dsh `687f282e` 沒有執行期記憶體監看；讀 cgroup 的方法照 dsh bench），逐點見 `src/memory-gauge.ts` 的檔頭。這一列關得掉（預設就是關）。
+- id: memory-gauge
+  name: '#settings/memory-gauge'
+  config:
+    reportIntervalMs: 0
+    warnAtPercent: 75
+
+# serve 的探針與指標端點（#1535）。三個路徑都**先過信任圍欄**（Host 不是 loopback 一律 403）、只收 GET／HEAD，只在本機 loopback 上、只被動抓取，serve 不往任何地方送。
+# - 探針（預設開）：`GET /livez`（活著，回得了就是 200 ok）、`GET /readyz`（200 ok＝在聽、收尾還沒開始；503 closing＝收尾已開始）。免登入，本文只有狀態字。
+#   thread 數到上限**不算**沒就緒（已開著的照樣服務；到上限看指標）。`probes.enabled: false` 時兩個路徑回 404。
+#   **收尾時間窗**（#1777）：`probes.drainMs`（毫秒，0 到 2000，預設 500）。serve 收尾立旗後 listener 再照常在聽這一段時間，`/readyz` 回 503 closing，
+#   然後才關 listener；沒有人抓過 `/readyz` 就不等。0 關掉時間窗（立旗後馬上關 listener，監控看到的是連不上）。
+# - 指標（**預設關閉**）：`metrics.enabled: true` 才有 `GET /metrics`（Prometheus 文字格式 0.0.4，手寫）。要 `Authorization: Bearer <token>`，缺或錯回 401；
+#   token 在 `tokenFile`（缺席是 `<home>/metrics-token`，`0600`，沒有就建；權限過寬就拒絕啟動）。瀏覽器的會話 cookie 換不到指標。名單固定、標籤不含 thread id 或路徑。
+# 起動期讀一次、改了要重啟。要打開指標，在自己的 `~/.nexus-agent/cordis.patch.yml` 把 `metrics.enabled` 設成 true。
+# **偏離登記：產品需求超出 dsh**（dsh `687f282e` 沒有探針端點與指標出口），逐點見 `src/ops-endpoints.ts` 的檔頭。這一列關得掉（`disabled: true` 等於沒有這一列，探針開、指標關）。
+- id: ops-endpoints
+  name: '#settings/ops-endpoints'
+  config:
+    probes:
+      enabled: true
+      drainMs: 500
+    metrics:
+      enabled: false
 
 # 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
 # ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。
+#
+# **這一列是必掛的**（#751，`src/startup-audit.ts`）：設定寫壞了不是少掛一列，是整個起不來——CLI 也一樣，
+# 兩個入口共用這一份清單。對到 dsh 必掛名單上的 `connection`。
 - id: browser-session
   name: '#settings/browser-session'
   config:
@@ -289,50 +565,285 @@
     maxFileBytes: 33554432
     maxLines: 5000
 
-# 一段工具結果文字放上線的位元組上限（#538／#457）。**「可設定」這件事本身沒有偏離，寫死才有**：
-# dsh 那側它本來就是條目的一格（`spill-policy` 的 `maxInlineBytes: 50000`，
-# `packages/bundle/base/cordis.patch.yml:393-396`，`ddefc45`，**數字一模一樣**），所以這一刀是把一條
-# 既存的偏離收掉。**截在哪一層**那條偏離仍然登記在 `src/tool-result-text.ts` 的檔頭上——dsh 截在
-# 模型面、超標存成 spill 檔、通知裡帶得出檔案位址；我們沒有 spill 能力，只能截在放上線那一刻。
+# 工具結果的 `meta` 與壓縮摘要全文放上線的位元組上限（#538／#457）。搜尋與改檔的 `meta` 上限就是 `maxBytes`，讀檔是它的
+# 兩倍；壓縮標記的摘要全文（#896）超過時取頭尾、中間一句說明。
 #
-# 欄位名沒照 dsh 的 `maxInlineBytes`：那個名字描述的是 dsh 的二分（inline 還是進 spill 檔），而我們
-# 超過就是截斷，沒有「另一半去哪裡」這回事。
+# **工具結果文字不歸這一列管**（#736）：外溢層（#719，下面 `spill-policy` 那一列）落地後日誌記的就是換過的預覽，
+# 照 dsh 不再在傳輸上截第二次——文字的上限在模型面，由 `spill-policy` 與讀檔自己的上限決定。名字沒跟著改：
+# 改名會讓已經寫了 `tool-text` 的 patch 載入失敗。50000 當初抄的是 dsh 舊版 `spill-policy` 的 `maxInlineBytes`，
+# dsh 在 `477b4f4` 已改成 `maxInlineTokens: 12500`，對應的是我們 `spill-policy` 那一列。逐條理由見
+# `src/settings/tool-text.ts` 的檔頭。
 #
 # **改這一格會讓一條跨套件的比例失效，而且沒有任何東西會紅。** `@nexus/wire` 的
-# `HISTORY_PAGE_MAX_BYTES = 4_000_000` 是 `80 × 50000`，那個關係一直由 `apps/harness` 的一條測試釘著；
-# 這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡明著選的第三條（2026-09-23 拍板），
-# 逐條理由見 `src/settings/tool-text.ts` 的檔頭。
+# `HISTORY_PAGE_MAX_BYTES = 8_000_000` 是照每張卡「文字加 `meta`」的最壞值算的，`meta` 的那一半跟著這一格走，
+# 那個關係由 `apps/harness` 的一條測試釘著；這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡
+# 明著選的第三條（2026-09-23 拍板）。
 - id: tool-text
   name: '#settings/tool-text'
   config:
     maxBytes: 50000
 
-# 真實供應商的五個連線值（#545／#457），只在 `--live` 時才用。**五格都是 dsh 的設定欄位**：
-# `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`maxTokens`、`streamIdleTimeoutMs`、
-# `retryPolicy`（`packages/llm/llm-deepseek/src/config.ts:83-100`，`ddefc45`），所以可設定本身沒有偏離，
-# 寫死才是。值全是原本寫死的那幾個，測量與理由留在 `src/live-model.ts` 各常數的檔頭。
+# 插件投影 frame 的合併視窗（#1071；2026-10-05 的 #1015 決議做成設定項）：輪中連續變更的投影值，一個單元一個視窗，
+# 視窗到了送那一刻最新的整份值。**視窗本身在 dsh 的投影通道上沒有對應物**（`control.ts:22-31` 每次變動就廣播），形狀借自
+# job-controller 的 `observeFlushMs`（`z.natural().min(1).default(100)`），所以視窗是偏離、旋鈕抄 dsh：自然數、最小 1、預設 100。
+# 只在輪中有效，輪結束與收線一定先送掉待送的，所以調大只讓輪中更新變慢、不影響最終值。對所有插件投影單元共用。
+# 起動期讀一次、改值要重啟。**這一列關不掉**，理由同 `tool-text`：關掉會回到預設 100，讀起來卻像把合併關了。
+- id: projection-flush
+  name: '#settings/projection-flush'
+  config:
+    flushMs: 100
+
+# 下行串流的心跳間隔與每條線的位元組上限（#1504）。一個分頁卡住（筆電闔上、`ssh -L` 斷在半路）不再讓 serve 的記憶體跟著那條 thread 的事件長，
+# 也不再讓那條 thread 因為一條死掉的下行永遠撤不掉、一直佔著 thread 名額。健康的分頁沒有感覺：閒著的線只多收到看不見的心跳註解行。
+# **數值全照 dsh、預設開**：`heartbeatIntervalMs` 2000（dsh `websocketHeartbeatIntervalMs`，範圍 1 到 2,147,483,647）、
+# `maxQueuedBytes` 2 MiB（dsh `TerminalFollower` 的 `maxBufferedBytes`）；「連兩拍沒排出去就斷」是協定常數，不開成設定。
+# **偏離登記**：偏離 A（心跳退成 SSE 註解行，理由 1）見 `src/wire-server.ts` 檔頭；偏離 B（事件下行加位元組上限，理由 2）、偏離 C（只斷線、
+# 不送終止 frame，理由 1）見 `src/bounded-event-queue.ts` 檔頭。起動期讀一次、改了要重啟。
+# **這一列關不掉**：它預設是開著，關掉（`disabled: true`）只會讓值回到預設、保護照舊在，卻讀起來像拆了保險絲，所以啟動當場拋錯
+# （`plugin-config.ts` 的 `PROTECTED_ENTRY_REASONS`）。**要放寬，把數值調大。**
+- id: downlink
+  name: '#settings/downlink'
+  config:
+    heartbeatIntervalMs: 2000
+    maxQueuedBytes: 2097152
+
+# 過大的工具結果暫存到主機上的哪裡、留多久（#734）。**兩格名字都是 dsh `spill-local` 的**（`root`、`cleanupPeriodDays`，
+# `packages/spill/spill-local/src/index.ts:66-69`，`477b4f4`）。`root` 不寫就是 harness home 底下的 `tool-results`
+# （偏離 dsh 的「每行程一個暫存目錄」：基座的路徑是虛擬的，續接時要讀回同一個檔，所以根要固定，理由與登記見
+# `src/tool-result-stash.ts`）；`cleanupPeriodDays: 0` 表示不清，啟動時清一次，別人改得動的根不清。
+- id: tool-result-stash
+  name: '#settings/tool-result-stash'
+  config:
+    cleanupPeriodDays: 30
+
+# 一則工具結果最多佔多少估算 token（#719）。超過就把全文存進上面那個暫存目錄，模型只收到頭尾預覽加路徑，
+# 用 `read_file` 去讀全文。**欄位名與 12500 都是 dsh 的**（`packages/spill/spill-policy/src/index.ts:34`、
+# `packages/bundle/base/cordis.patch.yml:409`，`477b4f4`）。**省略 `maxInlineTokens`（或把這一列標成 `disabled: true`）
+# 就停用**，照 dsh；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。`read_file` 不外溢。
+# 找不到暫存目錄可寫（沒有會話日誌的組裝、目錄不可寫）時保留原結果，不外溢。
+- id: spill-policy
+  name: '#settings/spill-policy'
+  config:
+    maxInlineTokens: 12500
+
+# 搜尋結果的筆數上限（#735）：`grep` 命中超過 `grepMaxMatches`、`glob`／`ls` 超過 `globMaxResults` 時，模型只收到前段
+# 加一句定位，完整結果存進上面那個暫存目錄，用 `read_file` 照定位讀。**id、三格的名字與 250／100／2000 都是 dsh 的**
+# （`packages/fs/tool-fs-search/src/index.ts:73-100`、`grep.ts:29`、`:35`、`glob.ts:25`）；`ls` 沿用 `globMaxResults`
+# （dsh 沒有這顆工具）。`grep` 只管 `content` 模式。暫存目錄寫不進、或沒有會話日誌時，照樣只留前段，結尾註明沒存到。
+# `grepMaxLineBytes`（#1605）：`grep` 每一行命中文字最多留幾個位元組，切在 UTF-8 字元邊界、切了加 ` (line truncated)`；
+# 一行壓縮過的 JS 或 JSON 命中時不會整行塞進結果，整行還在檔案裡可以 `read_file`。
+# **把這一列標成 `disabled: true`（或刪掉）就回到基座原樣**：沒有筆數上限、不切行，超過 80,000 字元由工具本體自己截掉，原文不留。
+- id: tool-fs-search
+  name: '#settings/tool-fs-search'
+  config:
+    grepMaxMatches: 250
+    globMaxResults: 100
+    grepMaxLineBytes: 2000
+
+# 檔案工具的組態（#1605）：個別關掉寫檔、改檔，以及讀檔的上限。**id 與欄位名都是 dsh 的**（`tool-fs`，
+# `packages/fs/tool-fs/src/index.ts:20-98`），預設值就是出廠的常數（讀一頁 2000 行、一行 2000 字元、一頁 50 KiB、
+# 檔案達 10 MiB 改串流讀）。數值都要是正整數，否則載入時就拋。
+# `write: false`：模型看不到 `write_file` 與 `delete`（基座多一顆會改檔的 `delete`，dsh 沒有，歸到寫入面）；
+# `edit: false`：模型看不到 `edit_file`。關掉的工具根本不在送給模型的清單裡，「先讀後改」那句提示也跟著不出現。
+# 這跟 `read-only` 圍堵是兩件事：圍堵是模型叫了再被擋，這裡是模型看不到。部署「只讀的知識助理」兩個一起關。
+# `read` 這一格收了但只認 `true`（基座要求 `read_file` 一定在），寫 `false` 載入失敗。
+# **這一列關不掉**：寫 `disabled: true` 啟動失敗（`plugin-config.ts` 的 `PROTECTED_ENTRY_NAMES`）。關掉它會讓所有檔案工具全開、上限回到常數，
+# 原本寫了 `write: false` 的部署反而把寫檔放回來；要關寫檔寫 `write: false`。
+- id: tool-fs
+  name: '#settings/tool-fs'
+  config:
+    read: true
+    write: true
+    edit: true
+    readLimit: 2000
+    readMaxLineLength: 2000
+    readMaxBytes: 51200
+    readStreamMinSize: 10485760
+
+# 委派工具是一次性的還是背景續行的（#841），以及每個主對話同時存活的背景子代理上限。**兩格名字與值域都是 dsh 的**
+# （`backgroundMode` 是 `tool-subagent` 的 Config、`maxActiveSubagents` 預設 8，`packages/subagent/tool-subagent/src/index.ts:111`，
+# `477b4f4`），**出貨值 `continuable` 也是 dsh base bundle 打開的**（`packages/bundle/base/cordis.patch.yml:369-374`）。
+# `continuable`：模型看到 `subagent`，派出去預設在背景跑、當場回編號；做完會叫醒主對話多跑一輪。`one-shot`：模型看到基座的 `task`，
+# 一次性、等結果。**改成 `one-shot`（或把這一列標成 `disabled: true`）就回到一次性。**
+# 上限是**每個主對話各自的**，不是整台主機的：同時在跑的背景子代理到「會話數 × 上限」這個量級。
+# **`backgroundMode`、`maxActiveSubagents` 只有 `serve` 讀**：REPL 一行一輪、一次性模式答完就退出，都沒有可以被叫醒的一輪，背景子代理的結果送不回來。
+# `toolFilter`（#707，**出廠不填**，同 dsh）：`{ allow?, deny? }` 套在**每個**子代理上（前景的 `task`、背景的 `subagent`、`general-purpose`），root 不受影響；
+# `allow` 只留列到的（`allow: []` 是一個都不留）、`deny` 拿掉列到的。只遮繼承來的全域工具與基座檔案工具，子代理自己那層註冊的不遮。
+# 兩個入口都讀，與 `backgroundMode` 無關。名字寫錯、或設了卻沒有 allow／deny，**起不來**（這一列是必掛的，寫壞不能退成「沒有過濾」）。
+- id: background-subagents
+  name: '#settings/background-subagents'
+  config:
+    backgroundMode: continuable
+    maxActiveSubagents: 8
+
+# 子代理逐次選模型（#875，卡 #709）：模型委派時可以從授權清單挑子代理跑哪一顆。**出廠關著**，同 dsh
+# （`enabled` 預設 `false`、`allowedModels` 預設空，`packages/subagent/tool-subagent/src/model-selection-settings.ts:38-39`，`477b4f4`）。
+# `allowedModels` 是 `live-model` 型錄裡的 id（我們只有一個端點，dsh 的 `{provider, model}` 路由在這裡就是型錄 id）。
+# **新會話建立時取樣一次寫進日誌**，之後只讀日誌那份：打開設定只影響以後新開的會話。只有 `serve` 讀這一列。
+- id: subagent-model-selection
+  name: '#settings/subagent-model-selection'
+  config:
+    enabled: false
+    allowedModels: []
+
+# 真實供應商的連線值與模型型錄（#545／#457／#729），只在 `--live` 時才用。**連線那幾格都是 dsh 的設定欄位**：
+# `@deepseek-ai/dsh-llm-deepseek` 的 `Config` 有 `baseURL`、`streamIdleTimeoutMs`、`retryPolicy`
+# （`packages/llm/llm-deepseek/src/config.ts:83-100`，`ddefc45`），所以可設定本身沒有偏離，寫死才是。
+# 值全是原本寫死的那幾個，測量與理由留在 `src/live-model.ts` 各常數的檔頭。
 #
-# 照抄不了的三處登記在 `src/settings/live-model.ts` 的檔頭：dsh 逐次請求解析端點，`ChatOpenAI` 表達
-# 不出來，退到起動期解一次；重試只有次數（`AsyncCaller` 不收退避參數），而且因為退避沒有上限，次數
-# 有上限；逾時是整個請求的逾時，不是 dsh 的串流閒置逾時。
+# 照抄不了的兩處登記在 `src/settings/live-model.ts` 的檔頭：dsh 逐次請求解析端點，`ChatOpenAI` 表達
+# 不出來，退到起動期解一次；重試掛在 `wrapModelCall`，不是 dsh 的 `agent/request-error`（LangChain 沒有步級掛點）。
 #
-# **`modelId` 與 `maxOutputTokens` 是綁著的**：預設那顆模型是拿「吃不吃得下 16384」當淘汰門檻選出來的。
-# 換其中一個之前拿另一個重新確認——吃不下的模型會每一次呼叫都失敗。
+# **`models` 是型錄**（#729），照 `llm-pi-ai` 一條路由的 `models` 清單（`packages/llm/llm-pi-ai/README.md:40-103`）：
+# 每筆帶窗口、輸出上限（`maxTokens`，設了就是這顆每次請求送出去的 `max_tokens`）、`input`（收哪些種類，這是對端點
+# 的宣告，不是檢查）、`reasoningEfforts`（`off:` 是不推理）與 `compat`（關推理的 chat template 參數）。
+# **`modelId` 必須在裡面**，不在就是載入期失敗；**patch 寫 `models` 是整份取代**，不是逐筆合併。預設那顆模型
+# 量過吃得下 16384——換一筆之前先確認它的 `maxTokens` 吃得下，吃不下的模型會每一次呼叫都失敗。
+#
+# **關推理的寫法（原本的 `thinkingOffBody`，#650）在預設那一筆的 `off` 等級與 `compat`**：標題呼叫（上面
+# `thread-title-llm` 那一列）加進請求 body 的那幾格，用來關掉推理——預設那顆模型不關推理的話，64 個輸出 token 全被推理
+# 吃光、一個標題都回不出來（實測不帶 0/1，帶 2/2）。`$var: thinking.enabled` 在 `off` 那一級解成 `false`；主請求不帶。
+# 換一顆不認得這幾格的模型，不要寫 `compat`。登記在 `src/settings/live-model.ts` 的檔頭「偏離四」。
+#
+# **設定寫壞時**（#751）：帶 `--live` 就整個起不來，**不退回 schema 的預設值**——那份預設的網址是對外的公開端點，
+# 退回去就連同金鑰一起送出去；沒帶 `--live` 時那份值沒人用，只印警告。
 - id: live-model
   name: '#settings/live-model'
   config:
     baseUrl: 'https://integrate.api.nvidia.com/v1'
-    modelId: 'nvidia/nemotron-3-super-120b-a12b'
-    maxOutputTokens: 16384
-    timeoutMs: 90000
-    maxRetries: 6
+    # 金鑰的名字（#1604，同 dsh 的 `apiKeyEnv`）：**名字**在這裡，**值**不在——值每次請求前由憑證服務按這個名字解析
+    # （受管憑證檔 `refs:`、啟動環境、`.env`，見 docs/operations.md〈金鑰放哪裡〉）。把 `baseUrl` 指到公司內部閘道時改成 `GATEWAY_KEY` 之類，
+    # 受管檔與環境裡就用那個名字；環境變數形狀。出廠就是 NVIDIA 端點的名字，不改行為。
+    apiKeyEnv: 'NVIDIA_API_KEY'
+    modelId: 'nvidia/nemotron-3.5-lightning-30b-a3b'
+    # 逾時拆兩格（#1251，同 dsh 的 `timeoutMs`／`streamIdleTimeoutMs`）：`timeoutMs` 管連線到第一則事件（視覺模型先吃圖，
+    # 90b 實測首事件 133 秒，所以 180 秒）；`streamIdleTimeoutMs` 管第一則事件之後兩段位元組之間（90 秒，demian 拍板；
+    # dsh 預設 300 秒）。登記在 `src/settings/live-model.ts` 的檔頭「偏離三」。
+    timeoutMs: 180000
+    streamIdleTimeoutMs: 90000
+    # 模型請求失敗的重試（#1427，取代舊的頂層 `maxRetries` 與 `streamRetry` 兩套預算）：**首事件之前與之後共用這一份**，
+    # SDK 層不重試。形狀與欄位照 dsh 的 `retryPolicy`（`retry-policy.ts:14-17`）：倍增、單次封頂、抖動；`maxRetries: 0` 關掉。
+    # **次數取 6（dsh 預設 5）**：不計抖動的累計等待約 25.5 秒，蓋得過 2026-08-28 量到的 16 秒限流窗口——那次量的是
+    # `openai/gpt-oss-120b`，出貨的 nemotron 沒量過。代價：串流中段失敗最壞重付 6 次回覆。供應商給的 `retry-after`
+    # 不超過 `maxDelayMs` 就照它等，超過就放棄。登記在 `src/settings/live-model.ts` 的檔頭「偏離二」。
+    # `retryableCodes` 是 dsh 的預設五個碼：429（含沒帶 header 的）`RATE_LIMIT`、5xx `SERVER`、逾時 `TIMEOUT`、斷線 `TRANSPORT`、
+    # 空回覆 `EMPTY_RESPONSE`（stop 但沒有任何文字、推理或工具呼叫，#1437）。**重打只看這個碼**：不在清單裡的（401／403、
+    # 400、404、408、410、422 等）不重打。`mode` 只收 `normal`（`always` 是登記在案
+    # 的偏離，見「偏離二」）；整個不寫 `retryPolicy` 就是下面這組值，寫了就要寫 `mode`。
+    retryPolicy:
+      mode: normal
+      maxRetries: 6
+      retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+      backoff:
+        initialDelayMs: 500
+        maxDelayMs: 10000
+        jitterRatio: 0.1
+    # 整台 serve 同時最多幾個模型請求在跑（#1505）。**不寫就不限**（不建閘，行為與沒有這兩格一樣，同 `thread-capacity` 的
+    # `maxThreads`）：多人共用一把供應商 key 時，一條失控的 thread（同一步的 task／subagent 可重疊、背景子代理每個主對話最多 8 個）
+    # 吃不光額度；名額滿了新的請求**排隊**（FIFO、按了停止就離開、退避那段時間不佔名額），不再一起撞供應商的 429、再一起重試。
+    # 供應商的配額因端點而異，所以沒有出廠數字；要設就打開下面這一行，數字照你那把 key 的配額與同時在線的人數定。
+    # `maxWaitMs`（預設 60 秒，沒有量測依據）：排隊等超過它，這一輪以 `LOCAL_CAPACITY` 失敗、**不重試**，serve 日誌寫一行去哪裡調；
+    # 只在設了 `maxConcurrentRequests` 時有意義。只有 serve 建閘，一次性 CLI、REPL、eval 不建；改了要重啟 serve。
+    # dsh 沒有這一道（它是一個人用自己的 key），登記在 `src/settings/live-model.ts` 的檔頭「偏離六」。
+    # maxConcurrentRequests: 8
+    maxWaitMs: 60000
+    models:
+      - id: 'nvidia/nemotron-3.5-lightning-30b-a3b'
+        contextWindow: 784369
+        maxTokens: 16384
+        input: [text]
+        reasoningEfforts:
+          off:
+          default: default
+        tokenizer:
+          digits: single
+        compat:
+          chatTemplateKwargs:
+            enable_thinking:
+              $var: thinking.enabled
+      # `meta/llama-3.2-11b-vision-instruct`：**宣告純文字，不收圖**（#732 真模型實跑，2026-10-09；PM 拍板 (a)）。#731 判它「穩定收得了使用者
+      # 訊息裡的圖」，那次量的請求**沒帶 `tools`**。產品每一輪都帶 `tools`，而這顆在請求帶 `tools` 時，**圖在整段對話的第一則使用者訊息**
+      # 就 400：`The number of image tokens (0) must be the same as the number of images (1)`（`https://integrate.api.nvidia.com/v1`，NVIDIA）。
+      # 直接請求隔離過（`temperature: 0`）：單輪帶圖 400（圖 1×1 到 256×256、純色或有圖樣、圖在文字前或後、有無 system、`tool_choice: none`
+      # 都一樣）；**前面已經有一輪往返（純文字，或工具往返）再帶圖就 200**（回 "Red."）；不帶 `tools` 單輪也 200。產品路徑同樣：全新 thread 第一句帶圖
+      # 失敗，先說一句再帶圖、或先用別顆模型跑一輪再切過來帶圖都正常。
+      # 型錄只能宣告收不收圖，表達不出「第一則不收」，而宣告收圖的話最常見的路（新對話拖一張圖送出）會跑到一半才吃 400；宣告純文字則收件時就回
+      # `model_does_not_support_images`。代價：已有歷史時它其實看得到圖，卻被擋掉——接受。要用看圖請選下面的 90b。
+      # 窗口與輸出上限在真端點量過一次（2026-10-09，`say hi`，非串流）：`max_tokens` 4096、8192、16384 都回 200；131072 回 400，
+      # 訊息寫 "maximum context length is 131072 tokens"。`maxTokens` 取 4096 是**選擇不是上限**。
+      - id: 'meta/llama-3.2-11b-vision-instruct'
+        contextWindow: 131072
+        maxTokens: 4096
+        input: [text]
+      # 看圖模型（#732 實跑判定，2026-10-09）：**帶 `tools` 也收得了使用者訊息裡的圖**——產品路徑（`runServe --live`＋`run.start` 帶內嵌圖）
+      # 回出「紅色實心圓、藍底」的描述；直接請求帶 `tools`＋圖也回 200。
+      # **慢，而且首事件延遲波動極大**（NVIDIA 串流，帶 `tools`＋256×256 圖）：**逐一**送出 5 次，首事件 34.6、**133.0**、51.0、8.6、1.3 秒
+      # （另有純文字帶 `tools` 逐一一次 54.9 秒）；**兩段資料之間的最長閒置間隔最大 5.2 秒**，多數 <3 秒。
+      # 另一批同時送 6 個請求時首事件 27→156 秒階梯式上升（像端點排隊），並行的數字不算。這顆原本會被撞到（單一 `timeoutMs` 90 秒管到第一則
+      # 事件，逐一的 6 次裡有 1 次 133 秒會逾時）；#1251 把逾時拆開之後，首事件的 `timeoutMs` 是 180 秒，133 秒過得了；
+      # 閒置那格 `streamIdleTimeoutMs` 90 秒對上「兩段資料之間最長 5.2 秒」綽綽有餘，不必為這顆單獨放寬。
+      # **窗口只有 32,768**（真端點量過：`max_tokens` 131072 回 400，訊息寫 "maximum context length is 32768 tokens"；16384 收），
+      # 比 11b 小得多。`maxTokens` 取 4096 同樣是選擇不是上限。一張圖約 1600 token（256×256 的圖：帶圖 1844、同請求無圖 242）；
+      # 這個數字隨圖的大小分塊，不是常數，見 `attachment-ref.ts` 的 `IMAGE_TOKENS`（那是 11b 在 640×220 圖上量的）。
+      # **一次請求最多一張圖**（#1270 真端點實測，2026-10-09，`/v1/chat/completions` 直打、純色 256×256 PNG、`max_tokens: 32`、`temperature: 0`）：
+      # 1 張回 200（`prompt_tokens` 1682，答「紅色。」）；2、4、6、8、10 張**都回 400**，訊息是 "At most 1 image(s) may be provided in one
+      # request. You can set `--limit-mm-per-prompt` to increase this limit if the model supports it."——這是端點伺服器自己宣告的上限（vLLM 的
+      # `--limit-mm-per-prompt`），不是窗口塞不下：2 張才約 3,400 token，離 32,768 很遠。所以**這個數字不用留空間給文字與輸出**，
+      # 上限就是 1。沒有「第 N 張描述開始不準」這回事——第 2 張起整個請求就被拒。超過額度的舊圖由 `image/offload` 換成佔位字（對話裡
+      # 有過第二張圖就會用到，不再是回 400 然後整個對話卡死）。
+      - id: 'meta/llama-3.2-90b-vision-instruct'
+        contextWindow: 32768
+        maxTokens: 4096
+        input: [text, image]
+        imageBudget:
+          maxImages: 1
+
+# 沒帶 `--live` 時用哪個模型提供者（#670）。照 dsh `agent-default-model`（`packages/bundle/base/cordis.patch.yml:82-86`）：
+# 選擇是一列，提供者各是一列。**出貨值 `cli-script` 就是下面那一列腳本提供者的 `id`**；要換就在 patch 裡
+# `insert` 一列別的提供者（例如另一份 `#settings/scripted-model`，腳本當 config）、再把這一列的 `provider` 指到它的 `id`，
+# 形狀照 dsh 的 headless e2e（`apps/cli/tests/profiles/headless/tests/source-tool.built.e2e.ts:36-42`）。
+#
+# **帶了 `--live` 時這一列不看**：`--live` 是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。
+# 這一列同 `live-model`，是起動期讀的、只講設定的列，`apply` 是空的；偏離與理由登記在 `src/model-provider.ts` 的檔頭。
+- id: agent-default-model
+  name: '#settings/default-model'
+  config:
+    provider: cli-script
+
+# 出貨的假模型：沒帶 `--live` 時的預設提供者（#670）。**腳本就是這一列的 config**，所以 `--dump-config` 看得到它，
+# 組裝用的和印出來的是同一份資料，不再有一份只存在程式碼裡的腳本。
+#
+# 它是對著這份清單寫的：拿 patch 把 `echo` 那一列關掉或換掉，就該一起換 `--live` 或換掉這一列的 `turns`——
+# 腳本裡的工具名那時多半不存在，假模型只會製造一個看不懂的失敗。腳本四輪，而第一句話就用掉三輪
+# （呼叫 echo、呼叫 write_file、拿到結果再回覆），第二句拿到最後一輪，所以假模型下的 REPL 問到第三句就會用完
+# （`ScriptedChatModel` 當場失敗而不是靜默重播）；REPL 的正經用法是 `--live`。第二輪寫的檔（`/cli.md`）是給 `--workspace` 用的：預設的虛擬 FS 底下它只是讓
+# 「虛擬檔案系統：…」那行有東西可印，換成真實磁碟時它就是「檔案真的落在那個目錄底下」的證據（`CLI_PROBE_FILE`）。
+- id: cli-script
+  name: '#settings/scripted-model'
+  config:
+    turns:
+      - content: 先回聲一次，確認工具接得上。
+        toolCalls:
+          - name: echo
+            args:
+              message: CLI 接線測試
+      - content: 再寫一個檔，確認檔案系統接得上。
+        toolCalls:
+          - name: write_file
+            args:
+              file_path: /cli.md
+              content: CLI 寫的
+      - content: 工具回來了，這條線是通的。
+      - content: 假模型只會照腳本說話——要真的對話請用 --live。
 
 # agent 迴圈的 super-step 上限（#457／#529）。**dsh 對這個值沒有意見**——它不跑 LangGraph，
 # `recursionLimit` 在 `bundle/*` 的 patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列
 # 的形狀抄的是上面 core 那三列，不是抄 dsh 的某一列。
 #
-# **100 不是模型輪數**：換算是 `模型輪數 = floor((limit − 1) / 每輪格數)`，而每輪幾格取決於這一次
-# 掛了哪些 middleware（預設組裝三格＝33 輪，再給 `--workspace` 是 32 輪）。那正是這個值歸 harness
+# **100 不是模型輪數**：裸組裝的換算是 `模型輪數 = floor((limit − 1) / 每輪格數)`，每輪幾格取決於這一次
+# 掛了哪些 middleware（預設組裝三格＝33 輪）；每次 invoke 多走一次的 `beforeAgent` 節點各從分子再扣一格。
+# 出貨清單多基座 skills 中介層一顆、pre-step 三顆，是 `floor((limit − 2 − 3) / 3)` ＝ 31 輪；
+# serve 另掛插話的載體（#710），每輪四格，出貨清單上是 23 輪。那正是這個值歸 harness
 # 而不是歸 `@nexus/core` 的理由：core 不知道組裝長什麼樣。逐段實測見
 # `src/settings/recursion-limit.ts` 的檔頭。
 #
@@ -343,28 +854,110 @@
   config:
     limit: 100
 
+# 一輪的時鐘上限（#1624）：一輪從開始算起超過這麼多毫秒，serve 就照停止鍵的路把它停下來——還沒開始的工具不開始、正在跑的等它
+# 落定、模型請求當場切斷，這一輪收成 `aborted`，日誌的原因是 `{kind: hook, reason: turn-timeout}`（不是人按停止）；排著的輸入停住、
+# 目標收回續行授權，要人再送、再授權。背景子代理的每一輪用同一個值。等人核准的時間不算（批准是新的一輪、重新計時）。**出廠 30 分鐘
+# 是暫定值**：比單次請求的最壞重試（約 21 分鐘）長，沒有量過健康長輪要多久。值的家在 schema（`src/settings/turn-timeout.ts`），這裡照抄
+# 同一個值讓人看得到。只有 serve 讀，CLI 一次性路徑不套。起動期讀一次、改了要重啟。**這一列關得掉**：`disabled: true` 就是不限；
+# **但寫壞了整個起不來**（`startup-audit.ts` 的必掛名單）：寫壞就掉，掉了就沒有時鐘，是 fail-open。
+# **偏離登記：產品需求超出 dsh**（dsh 沒有一輪的時鐘），逐點見 `src/settings/turn-timeout.ts` 的檔頭。
+- id: turn-timeout
+  name: '#settings/turn-timeout'
+  config:
+    timeoutMs: 1800000
+
+# 目標續行的操作者上限（#1623）：人每授權一次（建立或恢復目標），續行最多再排幾輪；到了就把目標記成 `round-cap` 擋住，
+# 人恢復目標之後重新起算。目標自己的 `max_goal_rounds` 是模型填的、還能自己調高，這一列是模型改不動的那一條。**出廠 20**：
+# 一輪續行最多約 24 次模型呼叫（上面那一列的推算），20 輪約 480 次；沒有量過健康的目標要跑幾輪，這是保守的起點。
+# 值的家在 schema（`src/settings/goal-round-cap.ts`），這裡照抄同一個值讓人看得到。serve 與 CLI 都讀；CLI 的 `--max-goal-rounds`
+# 贏過這一列。續行關著時（serve 帶 `--no-goal-driver`、CLI 沒帶 `--goal-driver`）這一列不起作用，也不報錯。起動期讀一次、改了要重啟。
+# **這一列關得掉**：`disabled: true` 就是只剩目標自己那條上限（不在 `PROTECTED_ENTRY_NAMES` 上）。**但寫壞了整個起不來**
+# （在 `startup-audit.ts` 的必掛名單上，同 `background-subagents`）：寫壞就掉，掉了上限就沒了，是 fail-open。
+# **偏離登記：產品需求超出 dsh**（dsh 的續行只有目標自己那條），逐點見 `src/goal-driver.ts` 與 `src/settings/goal-round-cap.ts` 的檔頭。
+- id: goal-round-cap
+  name: '#settings/goal-round-cap'
+  config:
+    limit: 20
+
+# 每步平行工具呼叫上限（#711 第 1 步）：模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆。**id、欄位名與 10
+# 都是 dsh 的**（`packages/core/agent-loop/src/index.ts:297`、`constants.ts:6`，`477b4f4`），dsh 沒有任何出廠組合覆寫它。
+# **最小是 1，`1` 就是串行（同 dsh）**，但不是靠 LangGraph 的 `maxConcurrency: 1`——它跑完第一顆就靜靜收掉那一步，其餘工具呼叫
+# 沒跑、也不報錯（基座的缺陷）。上限 1 時 `maxConcurrency` 仍帶 2，串行由獨佔屏障做（理由與絆索在 `src/settings/agent-loop.ts` 檔頭）。
+# 組裝期讀一次、帶進 LangGraph 的 `maxConcurrency`，一次性與背景子代理吃同一個值；改值要重啟（dsh 是熱重載，#46 不接）。
+# 這個值只管「可以重疊的那一類」最多幾顆；哪些工具可以重疊由工具自己宣告（`metadata.concurrencySafe`，#711 第 2 步）。
+# **這一列關不掉**，理由同 `recursion-limit`：關掉會落回內建的 10，讀起來卻像解除了上限。
+- id: agent-loop
+  name: '#settings/agent-loop'
+  config:
+    maxParallelToolCalls: 10
+
+# ── 檔案政策（#669）──────────────────────────────────────────────────────────
+#
+# **檔案政策那一句，永遠由這一列講。** 對應 dsh 的 `sandbox-policy`：不論有沒有 `--workspace` 都掛，
+# 差別只在**講什麼、帶不帶控制器**——
+#
+# - **有 `--workspace`（檔案系統有圍堵）**：註冊升級流程、記 `sandbox/mode` 事件，並講目前的檔案政策。**沒有 `/sandbox`**：
+#   切換入口是下一列 `permission-presets` 的 `/permission`（#437）。
+#   組裝點會一起交出 `fsContainment` 與 `sandboxPolicy` 兩個服務；缺 `sandboxPolicy` 這一列載入當場拋。
+# - **沒有 `--workspace`**：只貢獻一句不宣稱圍堵的政策，不註冊命令、不寫事件。以前這裡是整顆不掛，
+#   那是「沒有圍堵就什麼都不講」，模型只能從工具行為猜自己能不能改檔。
+#
+# **有圍堵時這一列關不掉**：組裝點起動時檢查，有 `--workspace` 而這一列不在（或被停用）就起不來——fence 還在擋，
+# 模型卻不知道、也請不到升級，看起來像關了護欄其實沒有。沒有圍堵時關掉它是合法的（只是少了那一句）。
+# 沒有 `Config`：沒有可設的欄位，模式由 `--sandbox` 決定。
+- id: sandbox-policy
+  name: '@nexus/plugin-sandbox-policy'
+
+# ── 權限組合（#437）──────────────────────────────────────────────────────────
+#
+# **把「檔案政策」與「核准政策」兩顆旋鈕捆成具名組合，並且是切換它們的唯一入口 `/permission`。** 對應 dsh 的
+# `permission-presets`（`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）：出廠兩組 `read-only`／`workspace-write`，
+# 名字與值照 dsh 的前兩組。**dsh 出廠還有第三組 `danger-full-access`，我們出廠不給**（#1621，理由 2：多人共用一台主機，
+# 同一把 token 底下的每個人都切得到；CLI 也跟著少這一組，屬理由 1：出貨層只有一份表）。部署方要全開，用 patch 把整張表
+# 重寫一份、加回這一組，值照 dsh（沙箱 `danger-full-access`、核准 `never`）。範例見 `docs/operations.md`「設定」那條。
+#
+# 沒加回就給 `--sandbox danger-full-access`，起始值對不上表裡任何一組，起動當場失敗。
+#
+# - **`presets` 是整份替換、不是深層合併**（patch 的規矩）：要刪掉某一組，把整張表重寫一份只留要的。每一組必填 `sandbox` 與
+#   `approval`，選填 `name`／`description`。`custom` 是保留字（對不上任何一組時的顯示值），不能當組名。
+# - **`defaultPreset` 選填**：新會話的起始組。省略就由 `--sandbox` 推出的起始值對表（全開＋不問、其他＋問）。與明確給的
+#   `--sandbox` 矛盾時啟動報錯，不悄悄讓其中一個蓋掉另一個。
+# - **沒有圍堵（沒給 `--workspace`）時這一列什麼都不註冊**（沒有東西可以捆）；有圍堵時這一列關不掉，理由同上一列。
+#   這一列 `apply` 拋（表壞了）整個起不來——它的 id 在 `startup-audit.ts` 的必掛名單上；預設組跟 `--sandbox` 矛盾、起始值對不上表裡任何一組，
+#   則在組裝每條 thread 時由 `start` 拋，宿主包成同一個必掛條目的 `AssemblyDropError`。
+# - **這一列是樹上的一列**（#1491）：註冊 `/permission`、`permissions` 投影與一位會話參與者，並提供 `permissionPresets` 服務；
+#   兩顆旋鈕以日誌為準（切換就是往 root 日誌追加）。「有沒有圍堵」由入口建樹時交進來（`@nexus/fs` 2.0.0 的 `hasContainment()`）；可寫根是逐條 thread 的（`FsService.workspaceRoot()`，#1774）。
+- id: permission-presets
+  name: '@nexus/plugin-permission-presets'
+
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
-# 二十個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
+# 只掛**有檢查的**配套入口，一共八個，不是只有 `@nexus/core`（#107 拍板）。#107 當時是二十個
+# 全進；其中十二個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬，所以 #974 拿掉了
+# （dsh 早就判定「沒有獨立觀察就不要發布配套入口」，並於 `f028f25667d` 把整套運行時不變量
+# 移除，見 `.docs/invariant-companions-decision-2026-10-03.md`）。**剩下這八個是暫時保留、
+# 觀察中**，第二刀還沒決定。理由兩條：
 #
 # - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，所以
 #   「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
 # - **關得掉。** 條目層有 `disabled`（#104），組裝點有 `invariants` 選擇，所以進來不是
 #   單向門。這是它們進得來的前提，而現在連 `disabled` 都寫得進使用者自己的 patch 檔。
-# - **二十個全進。** 十三個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
-#   在檢查的是七個——`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
-#   配對，#118）、`@nexus/plugin-plan-mode`（`/plan` 的參數契約，#120）、
-#   `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
-#   與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
-#   `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
-#   本身不在這份清單裡，只由 serve 掛）。
 #
-# **代價是每一次執行多二十個條目、二十次 `apply`**，換到的是這份清單與
+# 八個各自在檢查的東西：`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
+# 配對，#118）、`@nexus/plugin-plan-mode`（`/plan` 的參數契約，#120）、
+# `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
+# 與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
+# `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
+# 本身不在這份清單裡，在 serve 專屬的 `cordis.serve.yml`）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
+# 帶的都是認得的模式，#699）。
+#
+# **代價是每一次執行多八個條目、八次 `apply`**，換到的是這份清單與
 # `registry.invariants.companions()` 對得起來。違規往哪裡印，見 `runCli` 接線的那一行。
 #
 # 這份清單要跟 `packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有
 # 可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。對帳由
-# `invariant-companions.test.ts` 與 `package-invariants.test.ts` 守著（#489）。
+# `invariant-companions.test.ts` 與 `package-invariants.test.ts` 守著（#489）。新增一個沒有
+# 檢查的配套入口會被 `package-invariants` 擋下來——沒有可檢的關係就不要發布。
 #
 # **順序不是字母序，它是從舊的 `DEFAULT_PLUGINS` 照抄過來的**（#454 的搬家）。順序不承載
 # 語意——啟用與否由服務相依決定，不由列的先後決定。要整理的話自己開一張卡，那不是這份
@@ -372,41 +965,17 @@
 
 - id: core-invariant
   name: '@nexus/core/invariant'
-- id: agent-instructions-invariant
-  name: '@nexus/plugin-agent-instructions/invariant'
 - id: commands-invariant
   name: '@nexus/plugin-commands/invariant'
-- id: ask-user-invariant
-  name: '@nexus/plugin-ask-user/invariant'
-- id: echo-invariant
-  name: '@nexus/plugin-echo/invariant'
-- id: feedback-invariant
-  name: '@nexus/plugin-feedback/invariant'
 - id: goal-invariant
   name: '@nexus/plugin-goal/invariant'
-- id: mcp-invariant
-  name: '@nexus/plugin-mcp/invariant'
-- id: memory-invariant
-  name: '@nexus/plugin-memory/invariant'
 - id: plan-mode-invariant
   name: '@nexus/plugin-plan-mode/invariant'
 - id: present-invariant
   name: '@nexus/plugin-present/invariant'
-- id: quickjs-invariant
-  name: '@nexus/plugin-quickjs/invariant'
 - id: workspace-changes-invariant
   name: '@nexus/plugin-workspace-changes/invariant'
 - id: sandbox-policy-invariant
   name: '@nexus/plugin-sandbox-policy/invariant'
-- id: skills-invariant
-  name: '@nexus/plugin-skills/invariant'
-- id: submit-record-invariant
-  name: '@nexus/plugin-submit-record/invariant'
-- id: telemetry-otel-invariant
-  name: '@nexus/plugin-telemetry-otel/invariant'
 - id: todo-invariant
   name: '@nexus/plugin-todo/invariant'
-- id: validation-invariant
-  name: '@nexus/plugin-validation/invariant'
-- id: wire-invariant
-  name: '@nexus/wire/invariant'

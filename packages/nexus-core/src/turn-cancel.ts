@@ -1,5 +1,5 @@
 /**
- * 中止這一輪——**合作式的**：人按了停止之後，正在跑的工具等它落定，還沒開始的不開始，
+ * 中止這一輪——**合作式的**：訊號舉起之後，正在跑的工具等它落定，還沒開始的不開始，
  * 模型請求中途切斷，這一步之後圖就停。見 [#276](https://github.com/DemianLi/nexus-agent/issues/276)，
  * 決議在 [#265](https://github.com/DemianLi/nexus-agent/issues/265)。
  *
@@ -33,6 +33,8 @@
  * 2. **{@link createTurnCancelModelSignal}（我們交出去那串的最內層）**：把訊號綁到模型上。綁法是把
  *    `request.model` 包成核心的 `RunnableBinding`，而一顆排在它外面的 middleware 若讀模型本身的屬性
  *    就會讀到那層包裝——放在最內層，外面每一顆看到的都是原本的模型。
+ *    **綁定只能有一層**：緊貼它外面的 `requestSnapshot` 也要往模型上掛 callback，兩顆都經 `model-binding.ts` 併成同一層
+ *    （基座之後綁工具只認一層，疊兩層整輪失敗）。
  *
  * ## 綁模型為什麼不用 `withConfig` 或 `modelSettings`
  *
@@ -55,7 +57,11 @@
  *   「使用者看到了哪些字」的是轉發那些片段的 pump。所以這裡只拋 {@link TurnCancelledError}，半段由
  *   `apps/harness` 的 pump 事後寫回對話。
  *
- * **中止之後工具的副作用照樣發生**：等它落定就是讓它做完。dsh 也是這樣，不算偏離，但使用者會意外。
+ * **工具本體讀得到這一輪的訊號**：從它拿到的 config 用 {@link turnCancelSignalOf} 讀。讀了、把它交給自己的 I/O 的工具，按停止
+ * 就提早結束——今天是 `@nexus/plugin-mcp` 的工具呼叫與資源讀取，server 收到 `notifications/cancelled`（#1985）。**沒讀的工具
+ * 照舊跑到完，副作用照樣發生**，這裡只是等它落定。訊號只能這樣讀、不能放進交給工具的 config 的 `signal`：`@langchain/core`
+ * 物件 schema 的 `tool()` 拿那個 `signal` 跟本體競速，舉起來就當場 reject、把本體丟在背景，後果同上面「載體退到哪裡」。
+ * 工具自己往下交給 I/O 時可以放進 `signal`（例：`@nexus/plugin-mcp` 的 `withTurnSignal`）。
  *
  * ## 在攔截索引上佔哪一格
  *
@@ -69,8 +75,12 @@
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
+import { bindModelConfig } from './model-binding.js';
+import { markModelCallFailure } from './model-call-failure.js';
 import { Command, isCommand } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError } from 'langchain';
+
+import { archiveGateOf, TurnBlockedError } from './archive-gate.js';
 import type { AgentMiddleware } from './base-types.js';
 import { toolCallSessionAddress } from './session-address.js';
 import {
@@ -113,7 +123,7 @@ export const TOOL_ABORTED_BEFORE_DISPATCH_TEXT =
 export const INTERRUPTED_REPLY_MARKER = 'nexus_interrupted_reply';
 
 /**
- * 這一輪被人中止了。
+ * 這一輪被中止了。
  *
  * **進入點要靠類別認它，不能比對訊息**：它決定這一輪收成 `turn/end`（帶 aborted）還是
  * `turn/failed`。比對措辭的話，哪天改一個字，每一次中止都會被記成失敗——更糟的是反過來。
@@ -150,6 +160,22 @@ function inSubagent(request: unknown): boolean {
   return toolCallSessionAddress({ configurable })?.kind === 'subagent';
 }
 
+/** middleware 拿到的 request 上讀 `configurable`。 */
+function requestConfigurable(request: unknown): unknown {
+  return (request as { runtime?: { configurable?: unknown } }).runtime?.configurable;
+}
+
+/**
+ * 被準入閘門擋在這裡。**root 拋 {@link TurnBlockedError}，子代理回空訊息**，理由與 {@link stopHere} 相同。
+ * 子代理那則空訊息帶的記號也一樣（只活在子代理的狀態裡，讀的人已經認得）；誰被擋下由放閘門的人記。
+ */
+function blockHere(request: unknown): AIMessage {
+  if (inSubagent(request)) {
+    return new AIMessage({ content: '', additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true } });
+  }
+  throw new TurnBlockedError();
+}
+
 /**
  * 在這裡停下。**root 拋，子代理不拋**——子代理那一層回一則空的 AI 訊息，讓它的圖自然收尾。
  *
@@ -161,7 +187,7 @@ function inSubagent(request: unknown): boolean {
  *
  * 那則空訊息只活在子代理的狀態裡，子代理跑完它的狀態就丟了；它不是一則使用者看得到的回覆。
  */
-function stopHere(request: unknown, cause?: unknown): AIMessage {
+export function stopHere(request: unknown, cause?: unknown): AIMessage {
   if (inSubagent(request)) {
     return new AIMessage({ content: '', additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true } });
   }
@@ -230,6 +256,34 @@ export function toolCallAborted(request: unknown): boolean {
 }
 
 /**
+ * 這次模型呼叫所屬的那一輪，中止訊號是不是已經舉起來了——給起訖與用量的紀錄器判斷「沒有正常回來」是被切斷還是拋錯
+ * （[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
+ *
+ * 判準是訊號，不是錯誤長什麼樣：被切斷的那次拋什麼要看供應商與抽法（見 {@link createTurnCancelModelSignal}）。
+ *
+ * @param request - `wrapModelCall` 拿到的 request。
+ * @returns 已中止就是 `true`；這一輪沒有人放訊號也是 `false`（CLI 與 eval）。
+ */
+export function modelCallAborted(request: unknown): boolean {
+  return signalOfRequest(request)?.aborted === true;
+}
+
+/**
+ * 子代理被中止時 {@link stopHere} 回的那則空訊息：帶中斷記號、沒有字、沒有呼叫。它不是模型的回覆，是合成來讓子代理的圖
+ * 收尾的——起訖與用量的紀錄器都要認得它，把那次呼叫記成被中止，而不是正常回覆。
+ *
+ * @param message - 模型呼叫回來的東西。
+ * @returns 是不是那則合成的收尾。
+ */
+export function isSyntheticStopReply(message: AIMessage): boolean {
+  return (
+    message.additional_kwargs[INTERRUPTED_REPLY_MARKER] === true &&
+    message.text === '' &&
+    (message.tool_calls ?? []).length === 0
+  );
+}
+
+/**
  * 還沒動手就被中止的那次工具呼叫的結果（dsh 的 `TOOL_ABORTED_BEFORE_DISPATCH`）。
  *
  * 外層的 guard 用它；耐久檢查點排空之後再問一次中止時也用它
@@ -290,6 +344,10 @@ export function createTurnCancelGuard(): AgentMiddleware {
       // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
       // 對話狀態一致（AI 帶 tool_calls、每一顆都配到結果）。
       if (signalOfRequest(request)?.aborted) return stopHere(request);
+      // 準入閘門（#633，封存的會話）：中止先判，蓋過閘門——那一輪是被中止，不是被擋下。
+      if (archiveGateOf({ configurable: requestConfigurable(request) })?.() === true) {
+        return blockHere(request);
+      }
       return handler(request);
     },
   }) as unknown as AgentMiddleware;
@@ -300,12 +358,25 @@ export function createTurnCancelGuard(): AgentMiddleware {
  *
  * **無狀態，一份走遍**，同 {@link createTurnCancelGuard}。
  *
+ * **順帶把模型呼叫拋的錯記成「模型呼叫的失敗」**（#1778，見 {@link ./model-call-failure.ts}）——這個職責**依賴最內層這個位置**。
+ *
  * @returns 可以放進 middleware 陣列的實例，**要排在最內層**。
  */
 export function createTurnCancelModelSignal(): AgentMiddleware {
   return createMiddleware({
     name: TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
+    wrapModelCall: async (request, nextHandler) => {
+      // **第二個職責（#1778）：handler 拋出來的錯一定是模型呼叫的錯，在這裡記下來**，失敗分類器才敢套「只看結構」的連線規則。
+      // 這一顆是我們交出去那串的最內層，所有 plugin 的 `wrapModelCall` 都在它外面，插件自己拋的錯（MCP 連不上…）經過不了這一行、不會被標。
+      // 標在 handler 一拋出來的當下，下面「被切斷」的判斷與兩條早退都看得到同一顆已標過的錯。見 {@link ./model-call-failure.ts}。
+      const handler: typeof nextHandler = async (next) => {
+        try {
+          return await nextHandler(next);
+        } catch (error: unknown) {
+          markModelCallFailure(error);
+          throw error;
+        }
+      };
       const signal = signalOfRequest(request);
       // 動態模型（函式）包不了，照舊交出去——那條路上中止等到下一步才生效。
       if (signal === undefined || !RunnableBinding.isRunnable(request.model)) {
@@ -314,11 +385,7 @@ export function createTurnCancelModelSignal(): AgentMiddleware {
       try {
         return await handler({
           ...request,
-          model: new RunnableBinding({
-            bound: request.model,
-            config: { signal },
-            kwargs: {},
-          }) as unknown as typeof request.model,
+          model: bindModelConfig(request.model, (current) => ({ ...current, signal })),
         });
       } catch (error) {
         // 被切斷的那次拋什麼要看供應商與抽法（實測有 `Error("AbortError")`，也有

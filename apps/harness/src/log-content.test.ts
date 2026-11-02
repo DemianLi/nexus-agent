@@ -28,7 +28,7 @@ import {
   SessionRegistry,
 } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 

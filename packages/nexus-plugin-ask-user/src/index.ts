@@ -9,7 +9,9 @@
  * - **模型面五個欄位**：`id`、`question`、`header?`、`options?: {label, description?}[]`、
  *   `multi_select?`。dsh 的 `AskUserQuestionItem` **型別上還有 `detail?` 與 `intent?`**，
  *   但它的**工具 schema 沒有這兩個**——那條路只給 `ctx.userQuestions.ask()` 的內部呼叫者
- *   （plan-review）用。模型看得到的那一面就是這五格，所以我們照這五格。
+ *   （plan-review）用。模型看得到的那一面就是這五格，所以我們照這五格。我們的 plan-review 是
+ *   `@nexus/plugin-plan-mode` 的 `exit_plan_mode`，#652 起由它填這兩格；一題的形狀因此搬進
+ *   `@nexus/core` 的 `QuestionInterruptItem`，兩個生產者讀同一份。
  * - **`multi_select` 是蛇形，內部是 `multiSelect`**。dsh 兩邊也是這樣分的，不是筆誤。
  * - **回程 `{ answers: [{ id, selected: string[], custom? }] }`**，欄位名與巢狀都一樣。
  * - **不加型別、不加必填、不加格式**（[#231](https://github.com/DemianLi/nexus-agent/issues/231)
@@ -40,14 +42,48 @@
  * 照 dsh，子代理叫這個工具一律被拒，碼是 `DELEGATED_CALLER`（{@link DELEGATED_CALLER_ERROR}）。載體是
  * `rootOnly`：fold 把每個子代理那一份換成拒絕樁，句與碼由這裡帶。所以上面那個判準只管 root。
  *
+ * ## 遷上 Cordis 樹（[#1458](https://github.com/DemianLi/nexus-agent/issues/1458)，Part of #1385）
+ *
+ * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**；`src` 不 import `@nexus/core`
+ * （套 #1420 的 lint 設定）。要的兩個服務都由宿主在樹上提供：
+ *
+ * - `tools`（`@nexus/tools`，契約 `^1.1.0`）：登記工具，**帶 `rootOnly` 與 `outputSchema` 兩個選項**。範圍寫 `^1.1.0`
+ *   而不是 `^1.0.0`：1.0.x 的提供者不認得選項，會把它們靜靜丟掉。
+ * - `approvalChannel`（`@nexus/approval-channel`，契約 `^1.0.0`）：行程級的預設答題管道。**在 `apply` 當下抓進閉包**，
+ *   呼叫當下才問它的 `current()`：列卸載之後經 `ctx` 取服務會拋（`cannot get required service … in inactive context`），
+ *   抓住的那份則仍可呼叫，所以「這一列停用之後，開著的 thread 照樣問得到」。
+ *
+ * **不再查 `channelForThread`**（#1458 Q1 (c)）：管道今天在一個行程裡是常數（入口有沒有人在、有沒有 checkpointer），
+ * 逐條 thread 的查詢一定落空。拿掉它不改行為；等出現真的逐條不同的答題者時，提供者與查詢一起加回來
+ * （`docs/plugin-contract.md` 的偏離表）。它也沒有放進 `inject`：選配的依賴放進 `inject` 會讓一致性套件的 `export-form` 紅。
+ *
+ * **舊的 `NexusPlugin` 外殼搬走了**（`apps/harness/src/ask-user.fixture.ts`，同 echo、skills、feedback 的前例）：還在相容層
+ * 組裝的測試經它掛這顆工具，它與樹上這一列共用 {@link createAskUserTool}，所以兩邊的工具本體是同一份程式碼。
+ *
  * @module
  */
 
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import { interrupt } from '@langchain/langgraph';
-import type { ApprovalChannel, NexusPlugin, PluginEntry, ToolErrorInfo } from '@nexus/core';
-import { markToolError, QUESTION_INTERRUPT_KIND, toolCallIdOf, toolRefusal } from '@nexus/core';
+import {
+  approvalChannelToken,
+  CHANNEL_SERVICE,
+  QUESTION_INTERRUPT_KIND,
+} from '@nexus/approval-channel';
+import type {
+  ApprovalChannel,
+  QuestionAnswerItem,
+  QuestionInterruptPayload,
+  QuestionReply,
+} from '@nexus/approval-channel';
+import type { Context } from '@nexus/cordis';
+import { defineManifest, injectOf, need, service } from '@nexus/sdk';
+import { markToolError, toolCallIdOf, toolRefusal } from '@nexus/tool-result';
+import type { ToolErrorInfo } from '@nexus/tool-result';
+import { toolsToken } from '@nexus/tools';
+import type { ToolRegisterOptions } from '@nexus/tools';
 import { z } from 'zod';
 
 /** 模型看到的工具名。與 dsh 同名。 */
@@ -94,18 +130,11 @@ export const ASK_USER_OUTPUT_SCHEMA = z.object({
   ),
 });
 
-/** 一題問答的答案。空的 `selected` 且沒有 `custom` ＝ 那一題被跳過。 */
-export interface AskUserAnswerItem {
-  readonly id: string;
-  readonly selected: readonly string[];
-  readonly custom?: string;
-}
+/** 一題問答的答案。形狀住在 `@nexus/core`，因為提問的生產者不只這一個（見 `QuestionInterruptItem`）。 */
+export type AskUserAnswerItem = QuestionAnswerItem;
 
 /** 人回來的東西。`cancelled` 那一格是「放棄整組」，不是一份答案。 */
-export interface AskUserAnswer {
-  readonly answers?: readonly AskUserAnswerItem[];
-  readonly cancelled?: boolean;
-}
+export type AskUserAnswer = QuestionReply;
 
 /**
  * 人放棄整組問題時回給模型的話。
@@ -142,23 +171,16 @@ export const DELEGATED_CALLER_MESSAGE =
   '把沒解決的問題或待定的決定寫進子代理的最終結果。';
 
 /**
- * 「這次組裝有沒有人可以回答」這個服務的名字。
- *
- * 由**組裝點**提供（`apps/harness` 的 `createHostServicesPlugin`）：產品路徑一律呼叫
- * `deriveApprovalChannel()` 明著算一次再提供出來，理由是兩個消費者（核准閘門與這個
- * 工具）必須讀到同一個值。
+ * 「這次組裝有沒有人可以回答」這個服務的名字。**搬到 `@nexus/core` 了**（#652：`exit_plan_mode`
+ * 也要讀它），這裡轉出舊名，匯入它的人不必改。
  */
-export const CHANNEL_SERVICE = 'channel';
-
-declare module '@nexus/core' {
-  interface NexusServices {
-    /** 這次組裝有沒有人可以回答。見 {@link CHANNEL_SERVICE}。 */
-    channel: ApprovalChannel;
-  }
-}
+export { CHANNEL_SERVICE };
 
 /** 空的問題清單。dsh 在 `ask()` 當場拋 `EMPTY_QUESTIONS`，我們照做。 */
 export const EMPTY_QUESTIONS_MESSAGE = `${ASK_USER_QUESTION_TOOL_NAME} 至少要有一題，收到的是空清單，所以沒有問任何人。`;
+
+/** 這次組裝沒有人提供答題管道（{@link CHANNEL_SERVICE} 沒人 provide）時的拒絕。對應 dsh 的 `NO_PROVIDER`。 */
+export const NO_CHANNEL_MESSAGE = `這次組裝沒有指定問答管道，${ASK_USER_QUESTION_TOOL_NAME} 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。`;
 
 export function noAnswererMessage(channel: ApprovalChannel): string {
   return channel.kind === 'policy-never'
@@ -169,97 +191,139 @@ export function noAnswererMessage(channel: ApprovalChannel): string {
 }
 
 /**
- * `ask_user_question` 的 plugin。
+ * 組出 `ask_user_question` 這顆工具。
  *
- * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。它沒有任何資料設定——唯一要的東西是協作者，走
- * {@link CHANNEL_SERVICE} 注入（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
+ * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`apps/harness/src/ask-user.fixture.ts`）都從這裡
+ * 取。它們之間唯一不同的是「這次呼叫的答題者怎麼來」，所以那一格是參數。
  *
- * **軟相依，不是硬的**（`services.get` 不是 `services.use`）：沒人提供時退到
- * `{ kind: 'human' }`，與這一刀之前 `options.channel` 省略時完全一樣。這個預設只給
- * 測試與「我知道我在幹嘛」的組裝點用，理由見 {@link CHANNEL_SERVICE}。
+ * **fail-closed 排在最前面**（#669）：沒有人在的時候連中斷都不該發出去，因為 `no-channel` 底下 `interrupt()` 是當場拋，
+ * 而那個錯訊說不出原因。
+ *
+ * @param channelOf - 這次呼叫的答題者；`undefined` 是沒有人提供（回 {@link NO_CHANNEL_MESSAGE}，**不退成「有人在」**）。
+ *   **在呼叫當下才呼叫它**，不在建工具的時候。參數是這次呼叫的 config（取得 thread 身分用；樹上的列不用它）。
+ * @returns 可以登記的工具。
  */
-export const askUserPlugin: NexusPlugin = {
-  name: 'ask-user',
-  apply(registry) {
-    const channel: ApprovalChannel = registry.services.get(CHANNEL_SERVICE) ?? { kind: 'human' };
-    registry.tools.register(
-      tool(
-        async (args, config) => {
-          const { questions } = args as z.infer<typeof askSchema>;
-          // **回一則 `status: 'error'` 的 ToolMessage，不是 `throw`。** 兩者在模型那頭
-          // 看起來一樣，在執行期不一樣：這個工具的四條錯誤出口有一條發生在 **resume
-          // 之後**（人放棄整組），而那一輪的例外會從 LangGraph 的 stream mux 逸出成
-          // unhandled rejection——實測整場 run 死掉，而不是模型收到一則錯誤。
-          // 核准閘門的 `denial()` 早就是這個形狀，這裡照它；前綴也同它，由 `toolRefusal` 加（#318）。
-          const failed = (message: string): ToolMessage =>
-            toolRefusal(message, {
-              callId: toolCallIdOf(config) ?? '',
-              name: ASK_USER_QUESTION_TOOL_NAME,
-            });
-          // **fail-closed 排在最前面**：沒有人在的時候連中斷都不該發出去，
-          // 因為 `no-channel` 底下 `interrupt()` 是當場拋，而那個錯訊說不出原因。
-          if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
-          if (questions.length === 0) return failed(EMPTY_QUESTIONS_MESSAGE);
-
-          // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
-          // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
-          const answer = (await interrupt({
-            kind: QUESTION_INTERRUPT_KIND,
-            questions: questions.map((question) => ({
-              id: question.id,
-              question: question.question,
-              ...(question.header !== undefined && { header: question.header }),
-              ...(question.options !== undefined && { options: question.options }),
-              ...(question.multi_select !== undefined && {
-                multiSelect: question.multi_select,
-              }),
-            })),
-          })) as AskUserAnswer | undefined;
-
-          if (answer?.cancelled === true) {
-            return markToolError(failed(CANCELLED_MESSAGE), CANCELLED_ERROR);
-          }
-          const answers = answer?.answers;
-          if (!Array.isArray(answers)) {
-            return failed(
-              `問答回覆看不懂：${JSON.stringify(answer)}。` +
-                `這一格只收 { answers: [{ id, selected: string[], custom?: string }] }。`,
-            );
-          }
-          return JSON.stringify({
-            answers: answers.map((item) => ({
-              id: item.id,
-              selected: [...item.selected],
-              ...(item.custom !== undefined && { custom: item.custom }),
-            })),
-          });
-        },
-        {
+export function createAskUserTool(
+  channelOf: (config: unknown) => ApprovalChannel | undefined,
+): StructuredToolInterface {
+  return tool(
+    async (args, config) => {
+      const { questions } = args as z.infer<typeof askSchema>;
+      // **回一則 `status: 'error'` 的 ToolMessage，不是 `throw`。** 兩者在模型那頭
+      // 看起來一樣，在執行期不一樣：這個工具的四條錯誤出口有一條發生在 **resume
+      // 之後**（人放棄整組），而那一輪的例外會從 LangGraph 的 stream mux 逸出成
+      // unhandled rejection——實測整場 run 死掉，而不是模型收到一則錯誤。
+      // 核准閘門的 `denial()` 早就是這個形狀，這裡照它；前綴也同它，由 `toolRefusal` 加（#318）。
+      const failed = (message: string): ToolMessage =>
+        toolRefusal(message, {
+          callId: toolCallIdOf(config) ?? '',
           name: ASK_USER_QUESTION_TOOL_NAME,
-          description: ASK_USER_QUESTION_DESCRIPTION,
-          schema: askSchema,
-        },
-      ),
-      {
-        outputSchema: ASK_USER_OUTPUT_SCHEMA,
-        // **子代理不停下來問人**（#324，照 dsh 的 `DELEGATED_CALLER`）：fold 把每個子代理那一份換成
-        // 拒絕樁。dsh 是在 `ask()` 裡查呼叫方；我們照 goal 那三顆的對應退到 `rootOnly`（理由見
-        // `@nexus/core` 的 `fold.ts` 的 `ROOT_ONLY_NOTICE`），句與碼照 dsh 帶。
-        rootOnly: { message: DELEGATED_CALLER_MESSAGE, error: DELEGATED_CALLER_ERROR },
-      },
-    );
-  },
-};
+        });
+      // **沒人提供就是沒有答題者，不是「有人在」**（#669）：以前缺席時退成 `{ kind: 'human' }`，一份不掛 host-services 的
+      // 組裝會拿到一顆以為有人在答的工具，問了就停在一個沒人接的中斷上。照 dsh：`tool-ask-user` 硬注入 `userQuestions`，
+      // 沒有任何答題者接下請求時以 `NO_PROVIDER` 拋錯（`packages/interaction/user-questions/src/index.ts:132`）。
+      const channel = channelOf(config);
+      if (channel === undefined) return failed(NO_CHANNEL_MESSAGE);
+      if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
+      if (questions.length === 0) return failed(EMPTY_QUESTIONS_MESSAGE);
 
-export default askUserPlugin;
+      // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
+      // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+      const payload: QuestionInterruptPayload = {
+        kind: QUESTION_INTERRUPT_KIND,
+        questions: questions.map((question) => ({
+          id: question.id,
+          question: question.question,
+          ...(question.header !== undefined && { header: question.header }),
+          ...(question.options !== undefined && { options: question.options }),
+          ...(question.multi_select !== undefined && {
+            multiSelect: question.multi_select,
+          }),
+        })),
+      };
+      const answer = (await interrupt(payload)) as AskUserAnswer | undefined;
+
+      if (answer?.cancelled === true) {
+        return markToolError(failed(CANCELLED_MESSAGE), CANCELLED_ERROR);
+      }
+      const answers = answer?.answers;
+      if (!Array.isArray(answers)) {
+        return failed(
+          `問答回覆看不懂：${JSON.stringify(answer)}。` +
+            `這一格只收 { answers: [{ id, selected: string[], custom?: string }] }。`,
+        );
+      }
+      return JSON.stringify({
+        answers: answers.map((item) => ({
+          id: item.id,
+          selected: [...item.selected],
+          ...(item.custom !== undefined && { custom: item.custom }),
+        })),
+      });
+    },
+    {
+      name: ASK_USER_QUESTION_TOOL_NAME,
+      description: ASK_USER_QUESTION_DESCRIPTION,
+      schema: askSchema,
+    },
+  );
+}
 
 /**
- * 建一個條目。**薄薄一層**：這個 plugin 沒有任何資料設定，協作者走服務注入
- * （[#459](https://github.com/DemianLi/nexus-agent/issues/459)），所以它真的只是包一層。
+ * 登記時帶的選項（#1458 Q3 (a)）：樹上的列與相容層外殼用同一份。
  *
- * @returns 可以放進組裝點清單的條目。
+ * - `outputSchema`：成功那一條的輸出形狀（#252）。
+ * - `rootOnly`：**子代理不停下來問人**（#324，照 dsh 的 `DELEGATED_CALLER`）：fold 把每個子代理那一份換成拒絕樁。dsh 是在
+ *   `ask()` 裡查呼叫方；我們照 goal 那三顆的對應退到 `rootOnly`（理由見 `@nexus/core` 的 `fold.ts` 的 `ROOT_ONLY_NOTICE`），
+ *   句與碼照 dsh 帶。
  */
-export function createAskUserPlugin(): PluginEntry {
-  return { plugin: askUserPlugin };
+export const ASK_USER_REGISTER_OPTIONS: ToolRegisterOptions = {
+  outputSchema: ASK_USER_OUTPUT_SCHEMA,
+  rootOnly: { message: DELEGATED_CALLER_MESSAGE, error: DELEGATED_CALLER_ERROR },
+};
+
+/** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`，錯誤訊息、log 與相容層清單用）。 */
+export const name = 'ask-user';
+
+/**
+ * 要的服務：`tools`（`^1.1.0`，要帶選項）與 `approvalChannel`（`^1.0.0`）。範圍在這裡宣告，經
+ * `Service.resolveIntercept` 合併，提供者的 `check` 讀得到。
+ */
+export const inject = injectOf(need(toolsToken, '^1.1.0'), need(approvalChannelToken, '^1.0.0'));
+
+/**
+ * 這個插件的設定：沒有。`strictObject` 不是隨手選的：manifest 的 `config` 必須是 `strictObject`，未知欄位讓載入失敗是
+ * 登記過的偏離，理由見 `@nexus/core` 的 `plugin.ts` 檔頭。
+ */
+export const Config = z.strictObject({});
+
+export const manifest = defineManifest({
+  id: 'ask-user',
+  version: '0.1.0',
+  owner: '平台團隊',
+  provides: [],
+  consumes: [
+    { token: toolsToken.name, range: '^1.1.0' },
+    { token: approvalChannelToken.name, range: '^1.0.0' },
+  ],
+  config: Config,
+  // 換程式碼要重啟行程；沒有設定可改，所以 config 那一格只是照規範填（#1405、決議 §3-2 第 6 條）。
+  reload: { code: 'restart', config: 'next-thread' },
+  capabilities: [],
+});
+
+/**
+ * 掛上：把 `ask_user_question` 登記進行程級的工具登記處，帶 `rootOnly` 與 `outputSchema`。
+ *
+ * **答題管道在這裡抓進閉包**：列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫（見檔頭）。呼叫當下才問
+ * `current()`——它是宿主交給這個行程的值，今天是常數。
+ *
+ * @param ctx - 這一列的 Cordis context。
+ */
+export function apply(ctx: Context): void {
+  const channel = service(ctx, approvalChannelToken);
+  service(ctx, toolsToken).register(
+    createAskUserTool(() => channel.current()),
+    ASK_USER_REGISTER_OPTIONS,
+  );
 }

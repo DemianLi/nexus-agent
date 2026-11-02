@@ -6,36 +6,38 @@
  * 這件事，在每一條路上都要各自成立一次。
  */
 
+import { HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
+import { LLM_FAILURE_FALLBACK_MESSAGE, REPEAT_REMINDER_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
-import {
-  createGoalPlugin,
-  GOAL_COMMAND_NAME,
-  goalPlugin,
-  GOALS_SERVICE,
-  renderGoalRoundPrompt,
-} from '@nexus/plugin-goal';
-import type { GoalServices } from '@nexus/plugin-goal';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
+import { GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
+import { driveGoalRounds, MAX_GOAL_ROUNDS_SOURCE, runCli, runRepl, runTurn } from './cli.js';
 import {
   createCliAgent,
-  driveGoalRounds,
   formatGoalDriverDisclosure,
   goalDriverPort,
-  runCli,
-  runTurn,
-} from './cli.js';
+  serveGoalDriver,
+} from './assembly-root.js';
 import { parseCliArgs } from './cli.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { ROUND_CAP_BLOCK_CODE } from './goal-driver.js';
+import { DEFAULT_GOAL_ROUND_CAP, GOAL_ROUND_CAP_SOURCE } from './settings/goal-round-cap.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { shippedPlugins } from './fixtures.js';
 import { goalId, SessionRegistry } from '@nexus/core';
+import { createGoalPlugin, goalCoreOf, goalPlugin } from './goal.fixture.js';
+import { GOALS_SERVICE, renderGoalRoundPrompt } from '@nexus/goal';
+import type { GoalServices } from '@nexus/goal';
+
+/** 出貨清單上 `goal-round-cap` 那一列的上限：`runCli` 走出貨清單，披露那一行帶的就是它。 */
+const SHIPPED_ROUND_CAP = { limit: DEFAULT_GOAL_ROUND_CAP, source: GOAL_ROUND_CAP_SOURCE };
 
 const shipped = await shippedPlugins();
 
@@ -63,19 +65,20 @@ async function build(turns: readonly ScriptedTurn[]): Promise<{
   const state: ScriptedModelState = { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
   const { agent, dispose, attachSession, services } = await createNexusAgent({
     model: new ScriptedChatModel({ turns, shared: state }) as never,
-    plugins: [plugin],
+    plugins: [plugin, createEchoPlugin()],
     checkpointer: new MemorySaver(),
   });
   const sessions = new SessionRegistry('cli-driver');
   const detach = attachSession(sessions);
   // **這一次組裝的那一份**（#459）：以前是問模組層級的 plugin 物件。
-  const goals = services.use(GOALS_SERVICE);
+  const goals = goalCoreOf(services.use(GOALS_SERVICE));
   const warnings: string[] = [];
   const port: GoalDriverPort & { readonly warnings: string[] } = {
     warnings,
     goal: () => goals.serviceFor(sessions.root)?.get(),
     block: (ref, reason) => void goals.serviceFor(sessions.root)?.block(ref, reason),
     disarm: () => void goals.serviceFor(sessions.root)?.disarm(),
+    pause: (ref) => void goals.serviceFor(sessions.root)?.pause(ref),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
   };
@@ -100,6 +103,9 @@ const CREATE_TURNS: readonly ScriptedTurn[] = [
   },
   { content: '建好了。' },
 ];
+
+/** REPL 要的命令註冊點：一個都沒有，每一行都當一句話送給模型。 */
+const NO_COMMANDS = { find: () => undefined, list: () => [] };
 
 function startKinds(log: SessionLog): string[] {
   return log.events
@@ -173,11 +179,146 @@ describe('REPL 那條路自己排下一輪', () => {
 
     await expect(driveGoalRounds(agent, printer, log, port)).rejects.toThrow(/腳本只有/u);
     expect(log.events.map((event) => event.type)).toContain('turn/failed');
+    // #1557：`message` 與 `error.message` 是同一句。
+    const failed = log.events.find((event) => event.type === 'turn/failed')!.data as {
+      message: string;
+      error: { message: string };
+    };
+    expect(failed.error.message).toBe(failed.message);
 
     // **再問一次**：日誌上那顆 `turn/failed` 讓它回 `turn-failed`，不補排。
     const before = log.length;
     await driveGoalRounds(agent, printer, log, port);
     expect(log.length).toBe(before);
+    await stop();
+  });
+
+  it('一輪拋出 toString 會拋錯的值：turn/failed 照樣寫成（固定字、兩處同一句），原本的值原樣往外拋（#1557）', async () => {
+    const { agent, log, stop } = await build(CREATE_TURNS);
+    const { printer } = recorder();
+    const value = {
+      toString(): string {
+        throw new Error('toString 拋錯');
+      },
+    };
+    const broken = Object.create(agent, {
+      stream: { value: () => Promise.reject(value) },
+    }) as typeof agent;
+
+    await expect(runTurn(broken, '嗨', printer, log)).rejects.toBe(value);
+    const failed = log.events
+      .filter((event) => event.type === 'turn/failed')
+      .map((event) => event.data as { message: string; error: { code: string; message: string } });
+    expect(failed).toHaveLength(1);
+    expect(failed[0]!.message).toBe(LLM_FAILURE_FALLBACK_MESSAGE);
+    expect(failed[0]!.error).toMatchObject({
+      code: 'UNKNOWN',
+      message: LLM_FAILURE_FALLBACK_MESSAGE,
+    });
+    await stop();
+  });
+
+  /**
+   * **續行輪次拋錯之後，人再講一句話，續行不會接回來**（#660）。
+   *
+   * 上一條只驗到「拋錯之後緊接著再問一次，不排」——那時停得住，是因為日誌的最後一輪還是 `turn/failed`。
+   * 人再講一句、那一輪正常收工之後，最後一輪就不是了，要靠拋錯那一刻收回的授權擋住。走真的 REPL 迴圈，
+   * 因為收回的那一問在 `runRepl` 的 catch 裡。
+   */
+  it('REPL：續行輪次拋錯、人再說一句，續行不會接回；目標的耐久狀態不動', async () => {
+    const { agent, log, goals, port, stop } = await build([
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
+      },
+      { content: '建好了。' },
+      { content: '', error: '供應商過載' },
+      { content: '好的，我等你。' },
+      { content: '不該被讀到。' },
+    ]);
+    const { printer, out } = recorder();
+    const input = new PassThrough();
+    input.end('把 CI 修綠\n等一下，我先看看\n/exit\n');
+    await runRepl(agent, { input, output: new PassThrough() }, printer, log, NO_COMMANDS, port);
+
+    // 續行那一輪跑壞了；人說的那一句正常收工；之後沒有第二個續行輪。
+    expect(out.join('\n')).toContain('供應商過載');
+    expect(startKinds(log)).toEqual(['message', 'goal', 'message']);
+    // 授權收回，耐久的相位與修訂號不動（Q8：目標狀態不動）。
+    const view = goals.serviceFor(log)?.get();
+    expect(view).toMatchObject({ activation: 'disarmed', phase: 'active', roundsStarted: 1 });
+    expect(view?.revision).toBe(1);
+    await stop();
+  });
+
+  /**
+   * **新開的 REPL 第一行就打 `/goal`，之後自己開始續行**（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）。
+   * 真的 `runCli`、真的斜線命令、出貨清單：這個行程裡一輪都還沒跑過，以前「命令也算一次機會」在這裡答的是
+   * `no-turn`，畫面回了「目標建好了」就沒下文。
+   */
+  it('REPL 第一行就打 /goal：不說話，第 1 輪續行自己開始', async () => {
+    const { printer, out } = recorder();
+    const input = new PassThrough();
+    input.end(`/${GOAL_COMMAND_NAME} 把 CI 修綠\n/exit\n`);
+    await runCli({
+      argv: ['--goal-driver', '--max-goal-rounds', '1'],
+      input,
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+    const said = out.join('\n');
+    expect(said).toContain('目標建好了');
+    expect(said).toContain('[續行] 第 1 輪');
+  });
+
+  it('REPL 沒開 --goal-driver：打 /goal 之後一輪都不排', async () => {
+    const { printer, out } = recorder();
+    const input = new PassThrough();
+    input.end(`/${GOAL_COMMAND_NAME} 把 CI 修綠\n/exit\n`);
+    await runCli({
+      argv: [],
+      input,
+      output: new PassThrough(),
+      printer,
+      env: {},
+    });
+    const said = out.join('\n');
+    expect(said).toContain('目標建好了');
+    expect(said).not.toContain('[續行]');
+  });
+
+  /**
+   * **CLI 那條路上，續行輪次的頭也不清零重複工具提醒的計數**（[#662](https://github.com/DemianLi/nexus-agent/issues/662)）。
+   * 與 `goal-driver-pump.test.ts` 同一個劇本：這條路自己造那則 `HumanMessage`（`runTurn`），所以要各驗一次。
+   */
+  it('續行輪次的頭不清零：第 2 輪的第 1 次呼叫是總第 3 次，模型拿到提醒', async () => {
+    const echo = { name: ECHO_TOOL_NAME, args: { message: 'x' } };
+    const { agent, log, port, state, stop } = await build([
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } }],
+      },
+      { content: '建好了。' },
+      { content: '', toolCalls: [echo] },
+      { content: '', toolCalls: [echo] },
+      { content: '第一輪結束。' },
+      { content: '', toolCalls: [echo] },
+      { content: '第二輪結束。' },
+    ]);
+    const { printer } = recorder();
+    await runTurn(agent, '把 CI 修綠', printer, log);
+    await driveGoalRounds(agent, printer, log, port);
+    expect(startKinds(log)).toEqual(['message', 'goal', 'goal']);
+    const reminders = state.prompts.map(
+      (prompt) =>
+        prompt.filter(
+          (message) =>
+            HumanMessage.isInstance(message) &&
+            message.additional_kwargs[REPEAT_REMINDER_MARKER] != null,
+        ).length,
+    );
+    expect(reminders).toEqual([0, 0, 0, 0, 0, 0, 1]);
     await stop();
   });
 
@@ -283,7 +424,7 @@ describe('伴生在預設組裝上是武裝的，旗標關著也一樣', () => {
 });
 
 /**
- * 命令列那條上限。**它存在的理由是目標自己那條不歸操作的人管**：`service.ts:269` 是
+ * 命令列那條上限。**它存在的理由是目標自己那條不歸操作的人管**：`service.ts:254` 是
  * `request.maxGoalRounds ?? this.#defaultMaxGoalRounds`，`??` 不是 `Math.min`，所以模型在
  * `create_goal` 裡填的數字贏過組裝點給的預設。這一份釘的是「模型填了一個大數字，人設的
  * 那條照樣夾得住」。
@@ -302,13 +443,45 @@ describe('--max-goal-rounds', () => {
     const { printer } = recorder();
 
     await runTurn(agent, '把 CI 修綠', printer, log);
-    await driveGoalRounds(agent, printer, log, port, 1);
+    await driveGoalRounds(agent, printer, log, port, { limit: 1, source: MAX_GOAL_ROUNDS_SOURCE });
 
     expect(startKinds(log)).toEqual(['message', 'goal']);
     const goal = goals.serviceFor(log)?.get();
     expect(goal?.maxGoalRounds).toBe(5);
     expect(goal?.phase).toBe('blocked');
     expect(goal?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
+    await stop();
+  });
+
+  /**
+   * **人恢復之後重新起算**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，#1614 Q-A2 (a)）：上限 1，跑 1 輪就擋；
+   * 人恢復目標之後再跑 1 輪才又擋。以前比的是累計，恢復成功了，排程器下一次決定卻馬上又記 `round-cap`，一輪都續不了。
+   */
+  it('round-cap 之後人恢復，重新起算再跑滿上限', async () => {
+    const { agent, log, goals, port, stop } = await build([
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
+      },
+      { content: '建好了。' },
+      { content: '第 1 輪。' },
+      { content: '第 2 輪。' },
+      { content: '不該跑到這一輪。' },
+    ]);
+    const { printer } = recorder();
+    const cap = { limit: 1, source: MAX_GOAL_ROUNDS_SOURCE };
+
+    await runTurn(agent, '把 CI 修綠', printer, log);
+    await driveGoalRounds(agent, printer, log, port, cap);
+    const service = goalCoreOf(goals).serviceFor(log);
+    const blocked = service.get();
+    expect(blocked?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
+    service.resume({ id: blocked!.id, revision: blocked!.revision });
+    await driveGoalRounds(agent, printer, log, port, cap);
+
+    expect(startKinds(log)).toEqual(['message', 'goal', 'goal']);
+    expect(service.get()?.roundsStarted).toBe(2);
+    expect(service.get()?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
     await stop();
   });
 
@@ -366,6 +539,20 @@ describe('披露', () => {
   });
 
   /**
+   * **兩個入口的預設相反（#445），所以「怎麼換邊」那半句也要跟著入口講。** serve 關著時叫人去加
+   * `--goal-driver` 等於叫人加一個本來就是預設的旗標；serve 也沒有 `--max-goal-rounds`，不能提它。
+   */
+  it('serve 的披露：開著說得出怎麼關，關著說得出是誰關的，而且都不提 CLI 的旗標', () => {
+    const on = formatGoalDriverDisclosure(true, undefined, 'serve');
+    expect(on).toContain('--no-goal-driver');
+    expect(on).toContain('max_goal_rounds');
+    expect(on).not.toContain('--max-goal-rounds');
+    const off = formatGoalDriverDisclosure(false, undefined, 'serve');
+    expect(off).toContain('--no-goal-driver');
+    expect(off).not.toContain('可以打開');
+  });
+
+  /**
    * **兩條上限都要出現在畫面上，而且沒給的時候要明著說沒給。**
    *
    * 這一行自己的檔頭寫著「說謊的披露比沒有披露更糟」。只印目標那條會讓人以為有一個他控制
@@ -373,9 +560,11 @@ describe('披露', () => {
    * 一個更小的。
    */
   it('給了上限就印出來，沒給就明著說沒給', () => {
-    expect(formatGoalDriverDisclosure(true, 3)).toContain('--max-goal-rounds 3');
-    expect(formatGoalDriverDisclosure(true, 3)).toContain('max_goal_rounds');
-    expect(formatGoalDriverDisclosure(true)).toContain('沒有給 --max-goal-rounds');
+    const flag = { limit: 3, source: MAX_GOAL_ROUNDS_SOURCE };
+    expect(formatGoalDriverDisclosure(true, flag)).toContain('--max-goal-rounds 旗標給的 3 輪');
+    expect(formatGoalDriverDisclosure(true, flag)).toContain('每次建立或恢復目標重新起算');
+    expect(formatGoalDriverDisclosure(true, flag)).toContain('max_goal_rounds');
+    expect(formatGoalDriverDisclosure(true)).toContain('也沒有給 --max-goal-rounds');
   });
 
   it('runCli 印的那一行帶著真的生效值', async () => {
@@ -387,7 +576,9 @@ describe('披露', () => {
       printer,
       env: {},
     });
-    expect(out.join('\n')).toContain(formatGoalDriverDisclosure(true, 2));
+    expect(out.join('\n')).toContain(
+      formatGoalDriverDisclosure(true, { limit: 2, source: MAX_GOAL_ROUNDS_SOURCE }),
+    );
   });
 
   /**
@@ -413,7 +604,7 @@ describe('披露', () => {
     });
     const said = out.join('\n');
     // 披露照樣說「開啟」——旗標真的開著，說謊的披露比沒有披露更糟。
-    expect(said).toContain(formatGoalDriverDisclosure(true));
+    expect(said).toContain(formatGoalDriverDisclosure(true, SHIPPED_ROUND_CAP));
     // 但一輪都沒排，也沒有任何抱怨。
     expect(said).not.toContain('[續行] 第');
     expect(said).not.toContain('[續行] 排下一輪時出事');
@@ -454,7 +645,7 @@ describe('披露', () => {
         printer,
         env: {},
       });
-      expect(out.join('\n')).toContain(formatGoalDriverDisclosure(on));
+      expect(out.join('\n')).toContain(formatGoalDriverDisclosure(on, SHIPPED_ROUND_CAP));
     }
   });
 });
@@ -466,8 +657,19 @@ describe('披露', () => {
  * 在手搭的 registry 上驗隔離證明不了這條——**清單裡掛的是哪一顆物件**才是以前串台的來源。
  */
 describe('goals 服務綁的是這一次組裝', () => {
-  it('預設清單掛的就是模組層級那一顆 goal plugin', () => {
-    expect(shipped.filter((entry) => entry.plugin === goalPlugin)).toHaveLength(1);
+  it('出貨清單上有 goal 那一列，而且它掛的不是測試外殼——組出來的 agent 拿得到 goals 服務', async () => {
+    // 遷上樹之前這裡守的是「清單上掛的是模組層級那一顆 plugin 物件」；現在 goal 是 `cordis.yml` 的一列（`@nexus/plugin-goal`，
+    // 樹上的函式插件），守的是交付物：清單上恰好一列 goal、它的 plugin 不是 `goal.fixture.ts` 那顆相容層外殼，
+    // 而這一份出貨清單組出來的 agent 手上有 `goals` 服務。
+    const rows = shipped.filter((entry) => entry.id === 'goal');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.plugin).not.toBe(goalPlugin);
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      expect(built.goals).toBeDefined();
+    } finally {
+      await built.dispose();
+    }
   });
 
   /**
@@ -481,8 +683,8 @@ describe('goals 服務綁的是這一次組裝', () => {
     const built = await createCliAgent({ live: false }, shipped);
     try {
       built.attachSession(built.sessions);
-      const service = built.goals?.serviceFor(built.sessionLog);
-      if (service === undefined) throw new Error('接了線就該找得到服務');
+      if (built.goals === undefined) throw new Error('接了線就該找得到服務');
+      const service = goalCoreOf(built.goals).serviceFor(built.sessionLog);
       const created = service.create({ objective: '量這一條' });
 
       const port = goalDriverPort(
@@ -507,26 +709,82 @@ describe('goals 服務綁的是這一次組裝', () => {
     }
   });
 
+  /**
+   * **`goalDriverPort` 把等子代理的口原樣交出去**（#1575）：排程器的測試都自己搭 port，這個函式的第五格沒人驅動過。
+   * 拿掉那一行展開，整套排程器測試照樣綠——這一條是它的紅燈。沒給就缺席（CLI、沒有背景 host）。
+   */
+  it('goalDriverPort 的 waitForChildren：給了原樣交出，沒給就缺席', async () => {
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      const wait = (): Promise<boolean> => Promise.resolve(true);
+      const given = goalDriverPort(
+        built.goals,
+        () => built.sessionLog,
+        () => Promise.resolve(),
+        () => undefined,
+        wait,
+      );
+      expect(given.waitForChildren).toBe(wait);
+      const absent = goalDriverPort(
+        built.goals,
+        () => built.sessionLog,
+        () => Promise.resolve(),
+        () => undefined,
+      );
+      expect('waitForChildren' in absent).toBe(false);
+    } finally {
+      await built.dispose();
+    }
+  });
+
+  /**
+   * **serve 交給 wire handler 的 `goalDriver` 工廠**（#1575 W4）：N0372 在產品路徑上的效果完全靠它把 `waitForChildren` 轉進
+   * `goalDriverPort`。以前它是 `serve.ts` 裡的行內閉包，拿掉那一格所有測試照樣綠；現在是具名的 `serveGoalDriver`，`serve.ts` 只用它。
+   */
+  it('serveGoalDriver：waitForChildren 原樣轉進 port，flush／warn／roundCap 也各到各的位置', async () => {
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      const warned: string[] = [];
+      const wait = (): Promise<boolean> => Promise.resolve(true);
+      const flush = (): Promise<void> => Promise.resolve();
+      const cap = { limit: 3, source: 'test' } as const;
+      const make = serveGoalDriver(built.goals, (message) => warned.push(message), cap);
+
+      const port = make(() => built.sessionLog, flush, wait);
+      expect(port.waitForChildren).toBe(wait);
+      expect(port.flush).toBe(flush);
+      expect(port.roundCap).toEqual(cap);
+      port.warn('量一下');
+      expect(warned).toEqual(['[續行] 量一下']);
+
+      // 沒給 waitForChildren（沒有背景 host）就缺席；沒設上限就不帶 roundCap。
+      const bare = serveGoalDriver(built.goals, () => undefined)(() => built.sessionLog, flush);
+      expect('waitForChildren' in bare).toBe(false);
+      expect('roundCap' in bare).toBe(false);
+    } finally {
+      await built.dispose();
+    }
+  });
+
   it('兩次 createCliAgent 各拿各的——serve 每條 thread 組裝一次', async () => {
     const first = await createCliAgent({ live: false }, shipped);
     const second = await createCliAgent({ live: false }, shipped);
     try {
-      const firstGoals = first.goals;
-      const secondGoals = second.goals;
-      if (firstGoals === undefined || secondGoals === undefined) {
+      if (first.goals === undefined || second.goals === undefined) {
         throw new Error('預設清單掛了 goal，兩次組裝都該拿得到服務');
       }
+      const firstGoals = goalCoreOf(first.goals);
+      const secondGoals = goalCoreOf(second.goals);
       // **不是同一個把手**：以前兩次組裝共用模組層級那一格。
       expect(firstGoals).not.toBe(secondGoals);
 
       first.attachSession(first.sessions);
-      firstGoals.serviceFor(first.sessionLog)?.create({ objective: '第一次組裝的目標' });
+      firstGoals.serviceFor(first.sessionLog).create({ objective: '第一次組裝的目標' });
 
-      expect(firstGoals.attached()).toHaveLength(1);
-      expect(firstGoals.serviceFor(first.sessionLog)?.get()?.objective).toBe('第一次組裝的目標');
-      // **第二次組裝一份都看不到**——連第一次那份日誌都查不到。
-      expect(secondGoals.attached()).toEqual([]);
-      expect(secondGoals.serviceFor(first.sessionLog)).toBeUndefined();
+      expect(firstGoals.existingFor(first.sessionLog)).toBeDefined();
+      expect(firstGoals.serviceFor(first.sessionLog).get()?.objective).toBe('第一次組裝的目標');
+      // **第二次組裝沒有人問過那份日誌**——它自己的 `WeakMap` 是空的，`existingFor` 不建。
+      expect(secondGoals.existingFor(first.sessionLog)).toBeUndefined();
     } finally {
       await first.dispose();
       await second.dispose();

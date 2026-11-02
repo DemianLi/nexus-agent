@@ -1,0 +1,194 @@
+{
+  "id": "2303.11366",
+  "title": "Reflexion: Language Agents with Verbal Reinforcement Learning",
+  "topic": "T5",
+  "subarea": "內在自我修正與口語反思（含批判性研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 Reflexion：不更新權重，而是讓 LLM 在每次嘗試失敗後把稀疏的成功／失敗訊號寫成第一人稱的口語反思、存進有上限的情節記憶，下一次嘗試同一題時以這些反思為條件，在 ALFWorld、HotpotQA、HumanEval／MBPP／LeetcodeHard 上都比同骨架的基準高，HumanEval Python pass@1 達 91%。",
+  "problem": "LLM agent 在環境中（遊戲、編譯器、API）做事時，很難像傳統強化學習那樣從試錯中學習：RL 需要大量樣本與昂貴的微調，而大型模型又只能靠 in-context 範例教。純量或二元 reward 還有 credit assignment 難題：長軌跡失敗時，模型不知道是哪一步錯。作者要找一種輕量、不需微調、可解讀的方式，讓 agent 在少數幾次嘗試內從自己的錯誤學到東西。",
+  "core_idea": "把 reward 「放大」成語言：由另一個 LLM 呼叫（Self-Reflection）讀取失敗軌跡與評估訊號，寫出一段指出錯在哪一步、下次該怎麼做的反思文字（作者稱為 semantic gradient），存入長期記憶 mem；策略被重新參數化為 θ = {Actor LLM, mem}，「學習」只發生在 mem 的內容上。評估訊號的來源可以是環境二元訊號、手寫啟發式、EM 對標準答案，或 LLM 自己產生並執行的單元測試。",
+  "method": {
+    "三個元件": {
+      "Actor M_a": "以提示驅動的 LLM，依狀態觀測產生文字與動作；實驗用過 CoT 與 ReAct 兩種 Actor；另外以 mem（反思文字）當額外 context。",
+      "Evaluator M_e": "讀整條軌跡、輸出純量或二元 reward。三種實作：HotpotQA 用 exact match 對標準答案；ALFWorld 用手寫啟發式或另一個 LLM 做二元分類；程式任務用 LLM 自產單元測試的執行結果。",
+      "Self-Reflection M_sr": "LLM；輸入＝本次軌跡 τ_t、reward r_t、既有 mem，輸出一段第一人稱的口語反思 sr_t，內容是「哪個動作 a_i 導致後續錯誤、下次改做 a_i'」或「下一次的具體計劃」。"
+    },
+    "記憶": "短期記憶＝本次嘗試的軌跡；長期記憶＝反思文字串列 mem。mem 是滑動視窗，上限 Ω 則（論文說通常 1–3），超過就丟最舊的，以免超出 context 長度。",
+    "主迴圈（Algorithm 1）": [
+      "1. Actor 與環境互動產生第一條軌跡 τ_0 = [a_0, o_0, …, a_i, o_i]。",
+      "2. Evaluator 對 τ_0 打分得到 r_0（多半是二元成功／失敗）。",
+      "3. Self-Reflection 讀 {τ_0, r_0} 產生 sr_0，mem ← [sr_0]。",
+      "4. 重置環境，讓 Actor 以「原任務提示＋few-shot＋mem 內所有反思」為條件再嘗試同一個任務實例，得到 τ_t；Evaluator 評分；若失敗再產生 sr_t 並附加到 mem（套用 Ω 截斷）。",
+      "5. 重複直到 Evaluator 判定成功或用完最大嘗試數。注意：論文虛擬碼把停止條件印成「未過關 or t < 上限」，依文意應是 and，照抄會無限迴圈或過關後還繼續。"
+    ],
+    "ALFWorld（序列決策）": {
+      "資料": "134 個 TextWorld 文字環境、6 類家務任務（找物品、搬物品、用物品處理物品等），沿用 ReAct 的設定。",
+      "Actor": "ReAct，2 則領域 few-shot 軌跡（與 ReAct 論文相同），LLM 為 GPT-3（論文只寫 GPT-3，未寫確切版本）。",
+      "Evaluator": "環境只會在任務完成時給訊號，所以失敗要自己判斷。兩種做法：(a) LLM 做二元分類；(b) 啟發式：同一動作得到同一回應連續超過 3 次（視為幻覺或卡住），或單一環境內動作數超過 30（視為規劃無效率），就判失敗並觸發反思。",
+      "記憶與嘗試數": "Ω = 3（保留最近 3 則反思）；跑 12 次嘗試。",
+      "基準的處理": "ReAct-only 在觸發時同樣重置環境重試，但跳過反思步驟（等於只重抽）。"
+    },
+    "HotpotQA（推理）": {
+      "資料": "100 題（論文未說明抽題方式）。",
+      "三種 Actor": "CoT（問題→答案，6-shot）；CoT(GT)（問題＋資料集提供的正確 context→答案，6-shot，用來隔離純推理能力）；ReAct（可呼叫 Wikipedia API 搜尋，2-shot）。反思提示 2-shot。",
+      "Evaluator": "以 exact match 對標準答案給二元成功訊號。",
+      "記憶與停止": "Ω = 3；每題重試直到連續 3 次失敗為止；基準以 temperature 0.7 重試。",
+      "EPM 消融": "以 CoT(GT) 為底：EPM 版只把上一次完整軌跡放進 context；Reflexion 版在此之上再加一段第一人稱反思，比較兩者的學習曲線。"
+    },
+    "程式生成": {
+      "資料": "HumanEval、MBPP（Python，以及用 MultiPL-E 轉成 Rust；HumanEval Rust 只取最難 50 題）；新提出的 LeetcodeHardGym：40 題 2022-10-08（GPT-4 預訓練截止日）之後發佈的 Leetcode hard 題。",
+      "Actor": "GPT-4，zero-shot 產生函式本體。",
+      "內部測試產生": "(1) 以 CoT 提示讓 LLM 產生多樣、附自然語言說明的單元測試；(2) 嘗試把每條測試解析成 AST，丟掉語法不合法者；(3) 從中抽至多 n = 6 條組成內部測試集 T。",
+      "迴圈": "產生實作 → 跑 T；全部過關就提交並提早結束；否則把「實作＋測試回饋」交給 Self-Reflection 寫反思，Actor 再依「上一版實作＋單元測試回饋＋反思」重寫整個函式本體。Ω = 1。最大迭代數論文未寫，要看 repo。",
+      "pass@1 的主張": "提交前只用自產測試、從不接觸隱藏測試，最後只提交一份，所以作者認為可報 pass@1。",
+      "提示詞要點（附錄 C）": "Actor 指令要求只回函式本體、不含簽名、第一行縮排 4 格以接上使用者提供的簽名；生成順序為 指令→上一版實作→單元測試回饋→反思→下一版指令。附錄 C.3 的「反思指令」其實是 Actor 指令的重複（排版錯誤），真正的反思提示要到 repo 看。"
+    },
+    "反思的形式（附錄 B、D 範例）": "第一人稱、先說原本計劃，再指出錯在哪（例如順序錯、搜尋了錯的標題、只答了單一戰役而非整個戰役系列），最後寫下一次要做的具體步驟（例如「下次先去 desk 1 找檯燈」）。內容與特定任務實例綁定，不是通則。",
+    "關鍵超參數": "Ω（1–3）；最大嘗試數（ALFWorld 12；HotpotQA 至連續 3 次失敗；程式未寫明）；內部測試數 n ≤ 6；ALFWorld 啟發式門檻（重複 3 次、30 步）；few-shot 數（CoT 6、ReAct 2、反思 2）；基準溫度 0.7。",
+    "重做需要的元件": "可重置、可對同一實例重試的環境；一個成功／失敗判定器；三段提示模板（Actor、Evaluator、Self-Reflection）；有上限的反思串列；程式任務另需沙箱執行器與 AST 過濾器。官方程式碼與實驗 log：github.com/noahshinn/reflexion。"
+  },
+  "assumptions": [
+    "環境可以重置，且允許對同一個任務實例重試多次；反思是拿來改進「同一題的下一次嘗試」。",
+    "存在夠可靠的成功／失敗訊號（環境完成訊號、對標準答案的 EM、或偽陽性低的自產測試）；反思品質受 Evaluator 準確度上限約束。",
+    "基礎模型夠強，能從稀疏的二元訊號自行做 credit assignment 並寫出可執行的修正建議（附錄 A 顯示 starchat-beta 做不到）。",
+    "1–3 則反思文字就足以承載從失敗學到的東西，且放得進 context window。",
+    "任務的可行動作或搜尋空間不太需要創意式探索（ALFWorld 的可行動作寫在觀測裡；WebShop 需要大量多樣探索就失敗）。",
+    "反思內容是正確的；方法本身沒有機制檢查反思是否寫錯。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ALFWorld（134 個環境、6 類任務）",
+      "HotpotQA（100 題；CoT、CoT(GT)、ReAct 三種設定）",
+      "HumanEval（Python 全集；Rust 為最難 50 題）",
+      "MBPP（Python、Rust）",
+      "LeetcodeHardGym（40 題，本文新提出，只報了 Python）",
+      "WebShop（100 個環境，附錄 B.1，負面結果）"
+    ],
+    "metrics": [
+      "逐次嘗試的累積解題比例（ALFWorld、HotpotQA 學習曲線）",
+      "exact match 準確率（HotpotQA）",
+      "pass@1（程式）",
+      "內部測試判定與隱藏測試結果的條件比例 TP／FN／FP／TN（Table 2）",
+      "ALFWorld 失敗原因分類比例（hallucination、inefficient planning）"
+    ],
+    "baselines": [
+      "ReAct-only（同樣重置重試但不反思）",
+      "CoT-only、CoT(GT)-only（temperature 0.7 重試）",
+      "EPM：只加上一次完整軌跡的情節記憶",
+      "GPT-4 單次生成（Table 1 的 GPT-4 欄來源未說明，看來是作者自測，與 Table 2 基準 0.80 一致）",
+      "CodeT＋GPT-3.5／CodeT＋Codex（先前 SOTA）",
+      "消融：拿掉測試生成、拿掉反思（HumanEval Rust 50 題）",
+      "starchat-beta 與 text-davinci-003／gpt-3.5-turbo／gpt-4 的跨模型比較（附錄 A）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "HumanEval Python 上 Reflexion（GPT-4）pass@1 超過 GPT-4 單次生成與先前 SOTA；Rust 與 LeetcodeHard 也較高。",
+      "numbers": "HumanEval PY 91.0 vs GPT-4 80.1 vs CodeT＋GPT-3.5 65.8；HumanEval RS 68.0 vs 60.0；MBPP RS 75.4 vs 70.9；LeetcodeHard PY 15.0 vs 7.5。",
+      "section": "Abstract、§4.3、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "MBPP Python 是唯一輸給 GPT-4 基準的程式任務；作者歸因於自產測試的偽陽性率高，導致錯解被提早提交。",
+      "numbers": "MBPP PY 77.1 vs GPT-4 80.1；內部測試偽陽性率 MBPP PY 16.3% vs HumanEval PY 1.4%；Table 2 條件比例 MBPP PY TP 0.84／FN 0.59／FP 0.16／TN 0.41，HumanEval PY TP 0.99／FN 0.40／FP 0.01／TN 0.60。",
+      "section": "§4.3 Analysis、Table 1、Table 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "ALFWorld 上 ReAct＋Reflexion 以簡單啟發式當失敗偵測器，12 次嘗試內幾乎全解；ReAct-only 在第 6–7 次嘗試後停止進步，且卡在高幻覺率。",
+      "numbers": "130／134 題（約 97%）；相對 ReAct-only 絕對提升 22%；ReAct-only 幻覺失敗率收斂在 22%。",
+      "section": "§4.1、Figure 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "HotpotQA 上 Reflexion 在三種 Actor 下都持續進步，而基準在第一次失敗的題目之後重試完全沒有解出新題；跨三個 OpenAI 模型都有提升。",
+      "numbers": "整體約 +20%；CoT(GT) 基準仍錯 39% 題目，Reflexion 提升 14%；Table 5：CoT(GT) davinci 0.60→0.77、gpt-3.5-turbo 0.57→0.71、gpt-4 0.68→0.80；ReAct davinci 0.30→0.55、gpt-3.5-turbo 0.26→0.38、gpt-4 0.39→0.51。",
+      "section": "§4.2、Figure 4、Appendix A Table 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "把上一次軌跡放進 context（EPM）已有幫助，但再加一段第一人稱反思還能多出一截，作者據此主張「只精煉」不如「反思引導的精煉」。",
+      "numbers": "反思相對 EPM 的絕對增益 8%（CoT(GT)、100 題，只從圖讀出）。",
+      "section": "§4.2 Analysis、Figure 4(c)",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "消融顯示測試生成與反思缺一不可：只反思不跑測試會把對的改壞、比基準還差；只跑測試不反思則毫無提升。",
+      "numbers": "HumanEval Rust 最難 50 題、GPT-4：基準 0.60；拿掉測試生成 0.52；拿掉反思 0.60；完整 Reflexion 0.68。",
+      "section": "§4.3 Ablation、Table 3",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "能寫出有用的自我修正是較強大模型才有的湧現特性：小型開源程式模型用 Reflexion 沒有任何提升。",
+      "numbers": "starchat-beta HumanEval PY（8 次平均）：基準 0.26（std 0.00481）vs Reflexion 0.26（std 0.00305）。",
+      "section": "Appendix A、Table 4",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "本質上是用自然語言做 policy optimization，仍可能陷入非最佳的局部解；WebShop 上跑 4 次嘗試就因毫無進步而中止，反思內容也沒有幫助，作者結論是需要大量多樣探索的任務解不了（附錄 B.1）。",
+    "長期記憶只用有容量上限的滑動視窗，建議未來改用向量資料庫或 SQL 等結構。",
+    "程式任務受限於測試驅動開發能否精準描述輸入輸出：非決定性函式、會打 API 的不純函式、依硬體而異的輸出、並行行為都很難寫測試。",
+    "自產測試品質決定上限：偽陽性會讓錯解被提早提交，偽陰性會讓反思建立在錯的前提上；MBPP Python 因此輸給 GPT-4 基準。",
+    "依賴 LLM 自我評估（或啟發式）的能力，沒有成功的形式保證；自我修正能力是強模型的湧現特性。",
+    "生成的程式碼在執行前不經驗證，建議在隔離環境執行；提高自動化也同時放大誤用風險。"
+  ],
+  "limitations_observed": [
+    "HotpotQA 的 Evaluator 是拿 EM 對標準答案，ALFWorld 的成功訊號來自環境本身：兩者都是 oracle 級的正確性訊號，而 Reflexion 在「答對即停」下重試到連續 3 次失敗，本質上接近「有 oracle 判定的 pass@k」。§4.2 說 CoT(GT) 在不看標準答案下提升 14%，但二元訊號本身就在洩漏答案正確與否（何時停、何時改）。後續 2310.01798 沿用 Reflexion 的 HotpotQA 題目與提示、在閉卷設定下拿掉標籤重跑，自我修正不升反降（GPT-3.5 26.0→25.0；GPT-4 第一輪持平、第二輪 49.0→43.0），所以 HotpotQA 的增益不能當成「內在」自我修正的證據。",
+    "基準的比較不公平也不透明：HotpotQA 說基準以 temperature 0.7 重試後「沒有任何一題」被解出，這對隨機取樣重試來說很不尋常，論文沒交代基準重試的取樣細節；全文也沒有任何呼叫次數、token 或成本記帳，Reflexion 每次失敗多一次反思呼叫，ALFWorld 每題最多 12 次嘗試、HotpotQA 重試到連續 3 次失敗，卻與單次生成的 GPT-4 或 CoT 比較。",
+    "樣本小且幾乎沒有變異數：HotpotQA 只有 100 題（EPM 消融的 8% 就是 8 題）、Rust 消融只有 50 題，除了附錄 Table 4 外都是單次執行、無信賴區間；8% 或 0.60→0.68 這類差距在這個樣本量下可能落在雜訊內。",
+    "數字對不上：§4.3 文字說 HumanEval 與 MBPP Python 的基準 pass@1 分別是 82% 與 80%，但 Table 2 兩者都是 0.80；Table 1 的 GPT-4 欄在 HumanEval PY 與 MBPP PY 都寫 80.1，兩個不同 benchmark 剛好同分，而且沒說明測法與提示（OpenAI 技術報告公布的 GPT-4 HumanEval 是 67% 0-shot），「超越 GPT-4 的 80%」這個標題數字的基準本身無法查核。",
+    "程式任務的增益主要來自「執行自產測試」這個外部接地訊號而非反思本身：Table 3 只反思不跑測試 0.52 < 基準 0.60。這表示 Reflexion 在程式上屬於「借執行結果的修正」，把它歸到「內在自我修正」會誤導；框架引用時要把 Evaluator 的訊號來源分開標註。",
+    "反思與特定任務實例綁定（例如「下次先去 desk 1」），整篇都是在同一題上重置重試，沒有測試跨任務遷移；論文說法像是「學會任務」，實際上更像帶記憶的重試。對多輪對話而言，真實使用者對話無法重置重來，這個前提直接不成立。",
+    "可重現性靠 repo 而非論文：Algorithm 1 迴圈條件印成 or（應為 and）；附錄 C.3 的反思指令是 Actor 指令的複製貼上，C.4／C.5 兩個消融的格式也與完整版一字不差（「無反思」版還列著 Self-reflection 欄位）；程式任務的最大迭代數、ALFWorld 用的 GPT-3 確切版本都沒寫。",
+    "ALFWorld 的失敗偵測啟發式（重複 3 次、30 步）是為該環境手調的門檻；LLM 二元分類版 Evaluator 的數字只在圖中出現、文字未量化，無法判斷在沒有手調規則時效果剩多少。",
+    "LeetcodeHardGym 號稱 19 種語言，實驗只報 Python 40 題，15.0 vs 7.5 等於 6 題對 3 題，差距小到很難下結論。"
+  ],
+  "framework_role": "T5 的奠基與原型論文：定義了 Actor／Evaluator／Self-Reflection 三元件，以及「軌跡 → 評估 → 口語反思 → 寫回記憶 → 再試」的閉環，後續多數 reflection 類 agent（包含 LangGraph、AWS Strands 的官方範例）都以它為母型。放進框架時要注意兩點：(1) 子領域上它是「口語反思」的代表，但修正訊號在各實驗中其實是外部的（環境完成訊號、EM 對標準答案、執行自產測試），是 2310.01798 批判「內在自我修正」時點名的對象，框架應把它標成「外部訊號觸發、以口語反思承載修正」；(2) 它預設可重置的 episode，在對話完成框架裡只能用於 T6 使用者模擬器的離線重演，或跨 session 保存反思，不能直接套在與真實使用者的單次對話上。它對 E3（以啟發式或評估器在軌跡上偵測異常觸發修正）與 E2（修正結果寫回 agent 狀態）提供了最直接的可實作範本。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "Evaluator 讀整條軌跡判定失敗後觸發反思：ALFWorld 用軌跡層級的異常啟發式（同一動作得到同一回應連續超過 3 次視為幻覺、動作數超過 30 視為規劃無效率）或 LLM 二元分類；程式任務以內部單元測試失敗為觸發；HotpotQA 以 EM 失敗為觸發。"
+    },
+    {
+      "edge": "E2",
+      "how": "每則反思 sr_t 附加到長期記憶 mem（滑動視窗 Ω = 1–3），成為策略參數 θ = {M_a, mem} 的一部分，下一次嘗試 Actor 以它為條件行動。注意這是跨嘗試（重置環境後）的狀態寫回，而非同一段對話內的對話狀態追蹤。"
+    },
+    {
+      "edge": "E5",
+      "how": "論文用修正過程的紀錄做評估：逐次嘗試的累積解題曲線（Figure 3、4）、以失敗軌跡分類 hallucination 與 inefficient planning 的比例（Figure 3b），以及把內部測試判定與隱藏測試結果交叉成 TP／FN／FP／TN（Table 2）來量修正觸發器本身的可靠度。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "LangGraph（LangChain 公司）官方文件曾收錄 Reflexion 教學，開頭即引用 arXiv 2303.11366，實作 draft → 執行搜尋工具 → revise 的迴圈（MAX_ITERATIONS = 5），並明說只實作 Actor、未實作外部 Evaluator 與情節記憶；該文件於 2026-01-09 的文件重整（commit b4630d8452）中被刪，舊網址現轉址到總覽頁。來源：https://github.com/langchain-ai/langgraph/blob/23961cff61a42b52525f3b20b4094d8d2fba1744/docs/docs/tutorials/reflexion/reflexion.ipynb",
+      "AWS Machine Learning Blog（2025-12-15，Customize agent workflows with advanced orchestration techniques using Strands Agents）引用本論文，並在 Strands Agents 上以 GraphBuilder 實作 draft → critique → revision（最多 3 輪）的範例；屬官方部落格的範例程式，非產品部署。來源：https://aws.amazon.com/blogs/machine-learning/customize-agent-workflows-with-advanced-orchestration-techniques-using-strands-agents/"
+    ],
+    "assessment": "有框架與雲端廠商的官方教學或範例把 Reflexion 當作標準 agent 設計模式實作，屬於「被納入工具鏈教材」層級；未見任何產品在正式環境部署 Reflexion 的可查證證據。另外，這兩個官方範例都只做單回合內的 critique → revise，沒有論文核心的「重置環境、跨嘗試累積反思記憶」，所以被採納的是「反思迴圈」這個概念，不是論文的完整方法。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/noahshinn/reflexion",
+    "data": "公開：repo（MIT 授權）含 ALFWorld、HotpotQA、程式、WebShop 的程式碼與論文實驗 log；benchmark 都是公開資料集，LeetcodeHardGym 隨 repo 釋出。README 自承 GPT-4 取得受限且 API 費用高，個人重跑不一定可行；論文附錄的反思提示有排版錯誤，重做要以 repo 為準。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "T5 口語反思路線的原型與最常被引用的基準點，三元件閉環可直接轉成框架的 E3／E2 實作；但讀的時候要配 2310.01798 一起看，分清楚增益有多少來自外部正確性訊號。",
+  "related": [
+    "2210.03629",
+    "2303.17651",
+    "2304.05128",
+    "2207.10397",
+    "2303.17491",
+    "2201.11903",
+    "2210.03821",
+    "2305.00633",
+    "2304.01904",
+    "2107.03374",
+    "2108.07732"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

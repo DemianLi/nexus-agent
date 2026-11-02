@@ -13,7 +13,11 @@
  * 6. 組裝點只在 serve、有 `--workspace` 時掛。
  * 7. 工作區是 git repo 時，檔案工具以外的改動也在摘要裡（[#461](https://github.com/DemianLi/nexus-agent/issues/461)）。
  *
- * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區與暫存根都是暫存目錄，測試不碰真的 `~/.nexus-agent`。
+ * **走產品組裝**（#670）：agent 是 `createCliAgent`（`workspaceChanges: true`、`--workspace`、`--sandbox`）組的，改動紀錄那顆 plugin、
+ * backend、沙箱控制器都是組裝點建的，模型換成清單上的腳本提供者。暫存根產品組裝不給（預設 `os.tmpdir()`），
+ * 所以這裡把 `TMPDIR` 指到測試自己的目錄，量「暫存目錄是 0700、收掉時刪掉」。
+ *
+ * **零憑證、零外部連線**：模型是腳本，工作區與暫存根都是暫存目錄，測試不碰真的 `~/.nexus-agent`。
  */
 
 import { execFileSync } from 'node:child_process';
@@ -31,40 +35,48 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import type { InvariantError, PluginEntry, SandboxMode, SessionRegistry } from '@nexus/core';
-import { createHostServicesPlugin } from '@nexus/core';
-import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { Event } from '@nexus/wire';
 import {
   changesDiffPath,
+  changesDiffUrl,
   changesSummaryPath,
+  changesSummaryUrl,
   createWireClient,
   emptyConversation,
+  isChangesDiff,
+  isChangesSummary,
   reduceAll,
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
-import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
-import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
-import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
+import { createCliAgent } from './assembly-root.js';
+import {
+  TEST_BROWSER_AUTH,
+  loopbackRequest,
+  shippedPlugins,
+  shippedPluginsWithFullAccess,
+  shippedServePlugins,
+  withScriptedModel,
+} from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
-const shipped = await shippedPlugins();
+// 「每一輪改了哪些檔」那一列在 serve 專屬層（`cordis.serve.yml`，#669 第 4 步）：這支測試的產品組裝是 serve 的那一份，
+// CLI 的（`shippedPlugins`）只在「組裝點」那幾條拿來對照。
+const shipped = await shippedServePlugins();
+const cliShipped = await shippedPlugins();
 
 const BASE_URL = 'http://changes.test';
 const THREAD_ID = 'changes';
 
 const roots: string[] = [];
 afterEach(async () => {
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
@@ -113,34 +125,29 @@ async function run(
     mode?: SandboxMode;
     setup?: (root: string) => Promise<void>;
     plugins?: readonly PluginEntry[];
+    /** 換掉底下那份出貨清單（例如把 `workspace-changes` 那一列停用）；省略是 serve 的出貨清單。 */
+    rows?: readonly PluginEntry[];
+    /** `false` ＝ 不給 `--workspace`（檔案落在虛擬檔案系統）；省略是給。 */
+    workspace?: boolean;
   } = {},
 ): Promise<Outcome> {
   const root = await directory('nexus-changes-e2e-');
   const tempRoot = await directory('nexus-changes-temp-');
   for (const [name, content] of Object.entries(files)) await writeFile(join(root, name), content);
   await options.setup?.(root);
-  const sandboxMode = new SandboxModeController(options.mode ?? 'workspace-write');
-  const model = new ScriptedChatModel({ turns });
+  // 產品組裝的暫存根是 `os.tmpdir()`（出貨那一列沒給 `tempRoot`），指到這一份的 `TMPDIR`
+  // 才量得到它的內容；`afterEach` 還原。
+  vi.stubEnv('TMPDIR', tempRoot);
   const violations: string[] = [];
-  const changes = createWorkspaceChanges({ root, tempRoot });
-  const built = await createNexusAgent({
-    model,
-    checkpointer: new MemorySaver(),
-    plugins: [
-      createHostServicesPlugin({ sandboxPolicy: { controller: sandboxMode, rootDir: root } }),
-      ...shipped,
-      WORKER,
-      createSandboxPolicyPlugin(),
-      ...(options.plugins ?? []),
-      changes,
-    ],
-    backend: new ContainedFilesystemBackend({
-      rootDir: root,
-      mode: sandboxMode.source,
-      grants: sandboxMode,
-    }),
-    onInvariantViolation: (error: InvariantError) => void violations.push(error.message),
-  });
+  const built = await createCliAgent(
+    options.workspace === false
+      ? { live: false }
+      : { live: false, workspace: root, sandbox: options.mode ?? 'workspace-write' },
+    withScriptedModel([...(options.rows ?? shipped), WORKER, ...(options.plugins ?? [])], turns),
+    root,
+    { onInvariantViolation: (error: InvariantError) => void violations.push(error.message) },
+  );
+  const model = built.model as ScriptedChatModel;
   let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -148,11 +155,10 @@ async function run(
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
       dispose: built.dispose,
-      workspaceChanges: built.services.use(WORKSPACE_CHANGES_SERVICE),
-      attachInvariants: built.attachInvariants,
-      attachSession: (registry) => {
+      workspaceChanges: built.workspaceChanges,
+      attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry);
+        return built.attachSessions(registry, backgroundPort);
       },
     }),
   });
@@ -268,13 +274,29 @@ describe('每一輪的改動紀錄在真的圖上', () => {
         expect(state.turnStart).toBe(bare.turnStart + 1);
         return state.entries.filter((entry) => entry.kind === 'workspace-changes');
       });
-      const entry = { kind: 'workspace-changes', id: `workspace-changes:${seq}`, seq };
+      // 時刻兩條路的時鐘不同（#1030）：即時是 pump 合成那一刻、歷史是日誌那一筆，這裡只比內容。
+      const entry = {
+        kind: 'workspace-changes',
+        id: `workspace-changes:${seq}`,
+        seq,
+        startedAt: expect.any(Number),
+      };
       expect(folded).toEqual([[entry], [entry]]);
 
+      // **builder 的輸出先對手寫的字串，再把同一段手寫的查詢送進真的 handler**（照 dsh 的 host spec，
+      // `changes-open.host.spec.ts`）：wire 把參數改名而 handler 沒跟上，這一行先紅；反過來 handler 改名而
+      // builder 沒跟上，下面的請求 400。兩邊都拼自己的字串時，兩邊一起改，全綠，web 照舊送舊名。
+      expect(changesSummaryUrl(THREAD_ID, seq)).toBe(`${changesSummaryPath(THREAD_ID)}?seq=${seq}`);
+      expect(changesDiffUrl(THREAD_ID, seq, 2)).toBe(
+        `${changesDiffPath(THREAD_ID)}?seq=${seq}&index=2`,
+      );
       const summary = await outcome.get(`${changesSummaryPath(THREAD_ID)}?seq=${seq}`);
       expect(summary.status).toBe(200);
       expect(summary.headers.get('cache-control')).toBe('no-store');
-      expect(await summary.json()).toEqual({
+      const summaryBody: unknown = await summary.json();
+      // 回應過 wire 的 validator：server 改了形狀而 validator 沒跟上，web 會把卡當成讀壞（dsh 沒有這一條）。
+      expect(isChangesSummary(summaryBody)).toBe(true);
+      expect(summaryBody).toEqual({
         files: [
           { path: 'a.md', display: 'a.md', added: 1, deleted: 1 },
           { path: 'gone.md', display: 'gone.md', added: 0, deleted: 1 },
@@ -286,7 +308,9 @@ describe('每一輪的改動紀錄在真的圖上', () => {
       });
       const diff = await outcome.get(`${changesDiffPath(THREAD_ID)}?seq=${seq}&index=0`);
       expect(diff.status).toBe(200);
-      expect(await diff.json()).toEqual({
+      const diffBody: unknown = await diff.json();
+      expect(isChangesDiff(diffBody)).toBe(true);
+      expect(diffBody).toEqual({
         kind: 'text',
         path: 'a.md',
         display: 'a.md',
@@ -304,7 +328,9 @@ describe('每一輪的改動紀錄在真的圖上', () => {
         ],
       });
       const created = await outcome.get(`${changesDiffPath(THREAD_ID)}?seq=${seq}&index=2`);
-      expect(await created.json()).toMatchObject({ path: 'new.md', before: false, after: true });
+      const createdBody: unknown = await created.json();
+      expect(isChangesDiff(createdBody)).toBe(true);
+      expect(createdBody).toMatchObject({ path: 'new.md', before: false, after: true });
     } finally {
       await outcome.close();
     }
@@ -451,18 +477,64 @@ describe('每一輪的改動紀錄在真的圖上', () => {
   });
 });
 
+/** serve 出貨清單上把 `workspace-changes` 那一列停用（patch 寫 `disabled: true` 的效果）。 */
+function withoutChangesRow(rows: readonly PluginEntry[]): readonly PluginEntry[] {
+  expect(rows.some((entry) => entry.id === 'workspace-changes')).toBe(true);
+  return rows.map((entry) =>
+    entry.id === 'workspace-changes' ? { ...entry, disabled: true as const } : entry,
+  );
+}
+
+describe('關掉那一列（#669）', () => {
+  it('改動卡的兩條路由與沒給 --workspace 時反應相同：不寫 workspace/changes、路由 404', async () => {
+    const disabled = await run(EDIT_THREE, FILES, { rows: withoutChangesRow(shipped) });
+    const absent = await run(EDIT_THREE, FILES, { workspace: false });
+    try {
+      for (const outcome of [disabled, absent]) {
+        expect(outcome.sessions.root.events.some((e) => e.type === 'workspace/changes')).toBe(
+          false,
+        );
+        expect(changesIn(outcome.live)).toEqual([]);
+        expect(changesIn(outcome.history)).toEqual([]);
+      }
+      const probes = [
+        `${changesSummaryPath(THREAD_ID)}?seq=1`,
+        `${changesDiffPath(THREAD_ID)}?seq=1&index=0`,
+      ];
+      for (const path of probes) {
+        const [a, b] = await Promise.all([disabled.get(path), absent.get(path)]);
+        expect(a.status, path).toBe(404);
+        expect(b.status, path).toBe(404);
+        expect(await a.text(), path).toBe(await b.text());
+      }
+    } finally {
+      await disabled.close();
+      await absent.close();
+    }
+  });
+});
+
 describe('組裝點', () => {
-  it('只有 serve 開、而且要有 --workspace 才掛', async () => {
+  it('serve 的出貨清單有這一列、CLI 的沒有；要有 --workspace、而且那一列沒被停用才掛', async () => {
+    expect(shipped.some((entry) => entry.id === 'workspace-changes')).toBe(true);
+    expect(cliShipped.some((entry) => entry.id === 'workspace-changes')).toBe(false);
     const workspace = await directory('nexus-changes-cli-');
-    const cases = [
-      [{ live: false, workspace, workspaceChanges: true }, true],
-      [{ live: false, workspaceChanges: true }, false],
-      [{ live: false, workspace }, false],
-    ] as const;
-    for (const [invocation, mounted] of cases) {
-      const built = await createCliAgent(invocation, shipped);
+    const cases: [string, Parameters<typeof createCliAgent>[0], readonly PluginEntry[], boolean][] =
+      [
+        ['serve＋工作區', { live: false, workspace }, shipped, true],
+        ['serve 沒有工作區', { live: false }, shipped, false],
+        ['CLI＋工作區', { live: false, workspace }, cliShipped, false],
+        [
+          'serve＋工作區，那一列停用',
+          { live: false, workspace },
+          withoutChangesRow(shipped),
+          false,
+        ],
+      ];
+    for (const [label, invocation, rows, mounted] of cases) {
+      const built = await createCliAgent(invocation, rows);
       try {
-        expect(built.workspaceChanges !== undefined, JSON.stringify(invocation)).toBe(mounted);
+        expect(built.workspaceChanges !== undefined, label).toBe(mounted);
       } finally {
         await built.dispose();
       }
@@ -479,7 +551,7 @@ describe('組裝點', () => {
    */
   it('兩次 createCliAgent 各拿各的一份', async () => {
     const workspace = await directory('nexus-changes-cli-');
-    const invocation = { live: false, workspace, workspaceChanges: true } as const;
+    const invocation = { live: false, workspace } as const;
     const first = await createCliAgent(invocation, shipped);
     const second = await createCliAgent(invocation, shipped);
     try {
@@ -540,6 +612,8 @@ describe('工作區外', () => {
     const outside = await outsideDirectory();
     const outcome = await run(THROUGH_LINK, FILES, {
       mode: 'danger-full-access',
+      // 出廠表沒有全開（#1621）：部署方加回那一組之後才起得來。
+      rows: await shippedPluginsWithFullAccess({ serve: true }),
       setup: (root) => symlink(outside, join(root, 'out')),
     });
     try {

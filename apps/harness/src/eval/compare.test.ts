@@ -10,7 +10,14 @@ import type { AgentModel } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { LoopingChatModel } from '../looping-model.js';
 import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
-import { compareTiers, restrictTo, runTier, summarize } from './compare.js';
+import {
+  EVAL_RECURSION_LIMIT,
+  compareTiers,
+  evalModelRounds,
+  restrictTo,
+  runTier,
+  summarize,
+} from './compare.js';
 import {
   BENCHMARK,
   BENCHMARK_FILE,
@@ -385,6 +392,35 @@ describe('summarize：失敗不會被平均成零分', () => {
     expect(summary.mentions).toMatchObject({ mean: 1, count: 1 });
   });
 
+  it('「這題成功」只算評到分的執行：成功的算一題、只講話的算零、失敗的不進分母', async () => {
+    const good = await runTier(TIER, { createModel: scripted(PERFECT), cases: [ECHO_CASE] });
+    const talky = await runTier(TIER, { createModel: scripted(ALL_TALK), cases: [ECHO_CASE] });
+    const dead = await runTier(TIER, {
+      createModel: throwing(Object.assign(new Error('x'), { status: 400 })),
+      cases: [ECHO_CASE],
+    });
+    const summary = summarize({
+      tier: TIER,
+      outcomes: [...good.outcomes, ...talky.outcomes, ...dead.outcomes],
+    });
+
+    expect(summary.scored).toBe(2);
+    expect(summary.successes).toBe(1);
+    expect(summary.failures).toEqual({ rejected: 1 });
+  });
+
+  it('createModel 收得到這次要跑的題目（隨機地板靠它定種子）', async () => {
+    const seen: string[] = [];
+    await runTier(TIER, {
+      createModel: (_modelId, testCase) => {
+        seen.push(testCase.id);
+        return new ScriptedChatModel({ turns: PERFECT });
+      },
+      cases: [ECHO_CASE, BENCHMARK[1] as BenchmarkCase],
+    });
+    expect(seen).toEqual([ECHO_CASE.id, (BENCHMARK[1] as BenchmarkCase).id]);
+  });
+
   it('全距報得出來 —— 單次取樣的一個數字不該讀成定論', async () => {
     let call = 0;
     const report = await runTier(TIER, {
@@ -441,6 +477,63 @@ describe('compareTiers', () => {
     expect(outcome?.kind === 'scored' && outcome.score.caseId).toBe(ECHO_CASE.id);
     // 題目本身真的用了共用的檔名常數 —— 資料集若被改成別的路徑，這條會紅。
     expect(BENCHMARK_FILE).toBe('/benchmark.md');
+  });
+});
+
+describe('evalModelRounds：印給人看的輪數要等於實際跑到的輪數', () => {
+  /** 讓 `LoopingChatModel` 在基準任務的組裝上跑到打滿迴圈上限，回報它被問了幾輪。 */
+  async function roundsAt(recursionLimit: number): Promise<number> {
+    const made: LoopingChatModel[] = [];
+    await runTier(TIER, {
+      createModel: () => {
+        const model = new LoopingChatModel();
+        made.push(model);
+        return model as unknown as AgentModel;
+      },
+      cases: [ECHO_CASE],
+      recursionLimit,
+      deadlineMs: 0,
+    });
+    return made[0]?.calls ?? -1;
+  }
+
+  // 換算在 4 到 87 之間是精確的（2026-10-04 逐一掃過每個值）。這裡只留代表值：頭一段每個值（輪數
+  // 逐格往上跳的地方）、出貨的 40 附近、精確範圍的最後幾個。全掃要 84 次完整 agent 迴圈，
+  // 在 CI 上跑了 5.8 秒、超過預設逾時。
+  const EXACT_LIMITS = [
+    ...Array.from({ length: 13 }, (_, at) => 4 + at), // 4..16
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43, // 出貨的上限附近
+    60,
+    85,
+    86,
+    87, // 精確範圍的尾端；88 起實測多一輪
+  ];
+
+  it('代表性的上限：換算都等於實測（預設組裝每輪三格）', async () => {
+    const mismatches: string[] = [];
+    for (const limit of EXACT_LIMITS) {
+      const actual = await roundsAt(limit);
+      if (actual !== evalModelRounds(limit)) {
+        mismatches.push(`${limit}：實測 ${actual}、換算 ${evalModelRounds(limit)}`);
+      }
+    }
+    expect(mismatches).toEqual([]);
+  }, 30_000);
+
+  it('出貨的上限實測就是 13 輪', async () => {
+    expect(await roundsAt(EVAL_RECURSION_LIMIT)).toBe(13);
+  });
+
+  it('出貨的上限是 13 輪，不是舊算法印出來的 19', () => {
+    expect(evalModelRounds(EVAL_RECURSION_LIMIT)).toBe(13);
+    // 舊的 `(上限 - 2) / 2` 是裸組裝每輪兩格的算法，對這個組裝多算了六輪。
+    expect((EVAL_RECURSION_LIMIT - 2) / 2).toBe(19);
   });
 });
 

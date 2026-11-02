@@ -1,0 +1,166 @@
+{
+  "id": "2502.10325",
+  "title": "Process Reward Models for LLM Agents: Practical Framework and Directions",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 AgentPRM：同一任務重複 roll out，把經過同一個（狀態，動作）的多條軌跡結果平均成逐步 Q 值軟標籤來訓練 agent 的 process reward model，再把它接進現成 RLHF（online DPO）迭代更新策略；另提出 InversePRM，只靠專家示範就能學出 PRM。在 ALFWorld 上，Llama-3.2-3B 的成功率由 SFT 的 64.9% 提升到 88.1%，搭配 Best-of-N 可達 91.0%。",
+  "problem": "LLM agent 多半靠提示或 SFT：提示需要大量人工，也無法自主改進；SFT 受限於示範品質，偏離示範後救不回來。用 RL 從互動中改進又有兩個難處：一是長視野，每一步都是混合推理與動作的多 token 輸出；二是結果獎勵只在終點給，credit assignment 困難。DeepSeek-R1 那類大規模 RL 在 agent 情境樣本成本太高。PRM 在數學推理已有研究，但那裡的轉移是確定且已知的，可以做 beam search；agent 的動作會改變外部環境，轉移未知且隨機，無法事先列舉未來狀態。對 T4 來說，這篇要回答的是：沒有人工逐步標註時，怎麼把一條 agent 軌跡拆成逐步的價值分數，並用它來訓練與在推論時挑選動作。",
+  "core_idea": "把 PRM 定義為回合層級 MDP 上的 Q 函數 Q^π(s,a)，做 policy iteration（actor-critic）。每一輪先用上一輪策略大量 roll out，把經過同一 (s,a) 的軌跡折扣報酬平均，當成軟標籤訓練 PRM；再把 PRM 當 reward model 丟進標準 RLHF 更新策略，KL 錨在上一輪策略。整個流程只比 RLHF 多出第一步的自動標註。InversePRM 用 telescoping 恆等式 r(s,a) = Q(s,a) − γE[Q(s',a')]，把 IRL 的判別器直接參數化成 Q：專家轉移當正例、歷輪學習者轉移當負例，用二元分類訓練，省掉 IRL 的外層 RL 迴圈。",
+  "method": {
+    "形式化": "回合層級 MDP：狀態 s_t 是到目前為止的觀測與動作歷史 {o_0,a_0,…,o_{t-1}}。動作 a_t 是一段 token 序列，同時含推理與環境動作。獎勵 r(s,a)∈[0,1]，通常只在終點給（結果獎勵）。PRM 定義為 Q^π(s_t,a_t)，即從 t 起的折扣報酬期望。作者把問題拆成兩層：回合層級 MDP（跨回合）與 token 層級 MDP（回合內每個 token 是一個動作）。一般 RLHF 框架是單回合的，只處理 token 層級；本文要把它抬升到回合層級。",
+    "軌跡與 PRM 的輸入輸出（依 repo）": "每條 rollout 存成一個 JSON：task，加上逐步的 observation、candidate_actions（ALFWorld 給的可執行動作清單）、reason、action，以及最終的 score。PRM 的輸入是狀態加 reason 與 action：狀態包含 task、完整歷史、當前觀測與候選動作清單，依與策略相同的提示範本拼成文字。輸出是 [0,1] 的純量。PRM 是 Llama-3.2-3B 的純量 reward model，全參數微調（repo 設定 use_peft False）。策略的輸出格式固定為「REASON: … ACTION: …」，而且 action 必須逐字從 candidate_actions 挑一個。",
+    "Stage 1：rollout 與目標計算": "第 i 輪用 π_{i-1} 平行開多個環境、批次推論（SGLang／vLLM），同一任務 roll out 多次，讓狀態重複被造訪。把每個 (s,a) 雜湊後建成字典 G(s,a)，對應經過它的所有軌跡。repo 的做法是對 {state, action} 取 sha256，reason 不在鍵內，所以理由不同、動作相同的步會被合併。目標值 Q̂(s,a) 是這些軌跡從 t 起的折扣報酬平均，再正規化到 [0,1]，得到資料集 D={(s,a,Q̂)}。收集是非同步的；作者明說這比 MCTS 簡單，因為 MCTS 需要同步探索、難以擴展。repo 的實作：結果分數先轉成 ±1，γ=0.95，平均後以 0.5(q+1) 映回 [0,1]，再隨機切 85%／15% 為訓練／測試集。",
+    "Stage 2：訓練 PRM": "用 soft binary cross-entropy，把 Q̂ 當軟標籤：L = −E[Q̂·log Qφ(s,a) + (1−Q̂)·log(1−Qφ(s,a))]。作者對照 RLHF 裡 reward model 的 Bradley-Terry 損失（見下方的相對損失消融）。repo 腳本 train-rm-llama3.2-3B.sh：學習率 5e-5、1 epoch、最大 token 長度 2048、每裝置 batch 4、梯度累積 16、DeepSpeed ZeRO-3。",
+    "Stage 3：策略 RL": "π_i = argmax_θ E_{s∼D, a∼πθ}[Qφ(s,a)] − β·KL(πθ‖π_{i-1})。KL 錨在上一輪策略 π_{i-1}，不是 SFT 初始策略：PRM 只在 π_{i-1} 的分布上準，這對應 conservative policy iteration。求解器可用 PPO、Online DPO 或 Rejection Sampling，本文用 Online DPO：每個 prompt（即 Stage 1 收集到的狀態）取樣 2 個回應，由 PRM 排序成偏好對。repo 腳本 online-dpo-llama3.2-3B.sh：學習率 8e-7、β=0.03、temperature 0.7、num_generation_per_prompt 2、response_length 64、total_episodes 50000、每 50 步存 checkpoint。Fig. 2 說每輪跑 400 步，但 §4.1 又說第一輪要 500 步以上才起飛，兩處矛盾。演算法最後回傳驗證集上最好的 π。",
+    "推論：Best-of-N": "BoN(π,Q)：每回合從 π 抽 N 個候選，執行 PRM 分數最高的那個。主表用 N=16，Fig. 2b 掃 N=1…32。這是逐步 reranking，不是整條軌跡的 reranking。",
+    "主實驗設定": "ALFWorld：6 類任務、3257 局訓練，評估用 out-of-distribution 局；內文寫 134 局，表註寫 136。各類成功率反推的分母是 24/31/23/21/18/17，合計 134。每局上限 30 步，指標是 %suc 與 #act。PRM 與策略都用 Llama-3.2-3B。π0 以 SFT 初始化，repo 說 SFT 資料取自作者前作 LEAP。跑 3 輪，內文說每輪收 10k 條 rollout，但部分分析改用 70k。作者自己的 ReAct 基線用和微調 agent 完全相同的提示，換成 gpt-4o、claude-3.5-sonnet 等模型。",
+    "相對損失消融": "Stage 1 改建 G(s)：每個狀態對應它取樣過的動作及各自的 Q。若 Q(s,a1)−Q(s,a2) ≥ δ，就組成偏好對 (s, a1 ≥ a2)。Stage 2 改用 Bradley-Terry 損失 −E[log σ(Qφ(s,a1)−Qφ(s,a2))]。只被造訪一次的狀態組不成偏好對，會被丟掉。論文沒有給 δ 的值。",
+    "InversePRM": "輸入是專家示範 D+={(s*,a*,s'*)}：取自 LEAP 專家（以 gpt-4o 特權回饋訓練的 Llama-3-8B），抽 10k 條。每一輪：(1) 用 π_{i-1} roll out 得 D_i={(s,a,s',a')}，併入負例集 D−；負例跨輪累積，作者讓累積量維持 10k 條軌跡。(2) 對 D+ 與 D− 的下一步動作一律用 π_{i-1}(s') 重新取樣 a'，因為 Q 估的是 π_{i-1} 的價值。(3) 以 Q(s,a)−γQ(s',a') 的差值當 logit 做二元分類，專家轉移標 1、學習者轉移標 0。(4) Stage 3 與 AgentPRM 相同。只跑 2 輪；π0 與 AgentPRM 相同。repo 另有 iqlearn.py 與 train-inverse-prm 腳本。",
+    "探索策略（§4.1）": "Reset-50-50：Stage 3 的 prompt（狀態）一半取自 π0 造訪過的狀態、一半取自專家造訪過的狀態，起始策略與 PRM 都不變。Steered Exploration：Stage 3 取樣時在 agent 提示裡注入一段指示，要求在 REASON 中先提出解題策略或物品位置的假說、並嘗試探索（Listing 1；repo 的 alfworld_exploration_template.j2）；訓練時則拿掉這段、用原提示。也就是取樣分布與訓練條件刻意分開，作者以 posterior sampling 解釋這個做法。",
+    "Process reward shaping（§4.2）": "給定參考策略 μ（成功率 65.0%），先用 μ 的軌跡擬合 V^μ(s)（repo 有 train-value-model 腳本）。Stage 1 的目標改為 Q ← (1−α)·Q^π(s,a) + α·A^μ(s,a)，其中 A^μ(s,a) = r + γV^μ(s') − V^μ(s)。α=0 就是原本的 PRM，α=1 等同 AGGREVATE 模仿學習。實驗用 α=0.5；rollout 預算限 10k，但 V^μ 是用 70k 條參考 rollout 擬合的。",
+    "只有構想、沒有實驗的部分": "§4.1 的 PosteriorExplorer：把能看到特權資訊的事後合理化器當探索策略，產生多樣的 reason-action，再由 PRM 篩選。§4.3 的 model-predictive reasoning：學一個世界模型預測下一個狀態，先產出完整計劃、執行第一步後再重新規劃。兩者都只有文字描述。"
+  },
+  "assumptions": [
+    "環境可重置、可大量平行 roll out（每輪 10k–70k 條），同一任務可以重跑很多次。",
+    "AgentPRM 需要終點的結果獎勵；InversePRM 需要高品質的專家示範（本文的專家成功率 91.0%），兩者至少要有一個。",
+    "Q̂ 的平均要靠同一 (s,a) 被多次造訪。雜湊鍵是完整歷史，所以只有初始狀態固定、動作空間小的環境（ALFWorld 有候選動作清單）才會有足夠的重訪。",
+    "動作空間由環境列舉，策略只要從清單挑一個並附理由，回應長度上限 64 token。",
+    "策略更新不能離 π_{i-1} 太遠，否則 PRM 會在分布外失準；因此 KL 錨在上一輪策略。",
+    "PRM 與策略可以用同一個 3B 基座，而且 3B 的容量足以表達 ALFWorld 的價值函數。",
+    "結果成功率是唯一的真實標準：PRM 的好壞只以它推動策略後的成功率來判斷。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ALFWorld：out-of-distribution 評估集（內文寫 134 局、表註寫 136 局，各類反推為 134），6 類任務，每局上限 30 步。"
+    ],
+    "metrics": [
+      "任務成功率 %suc（整體與 6 個任務類別）",
+      "平均動作數 #act",
+      "訓練步數對成功率的曲線",
+      "驗證集上的 process reward（用來觀察 reward hacking）",
+      "Best-of-N 在 N=1…32 下的成功率"
+    ],
+    "baselines": [
+      "BUTLER",
+      "ReAct few-shot（原論文數字）",
+      "AutoGen gpt-3.5",
+      "ExpeL gpt-3.5",
+      "Reflexion gpt-3（測試時可多次嘗試）",
+      "AdaPlanner gpt-3（測試時可多次嘗試）",
+      "作者自己提示的 ReAct：gpt-4o、gpt-4o-mini、claude-3.5-sonnet、claude-3.5-haiku、gemini-1.5-flash",
+      "SFT（用與 InversePRM 同一批專家示範）",
+      "LEAP 專家策略（Llama-3-8B）",
+      "AgentPRM（作為 InversePRM 的對照）",
+      "SFT 初始化後直接 RL（作為 reward shaping 的對照）",
+      "無探索策略的 OnlineDPO(π0,Q0)（作為 Reset-50-50 與 Steered Exploration 的對照）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "AgentPRM 迭代三輪後，Llama-3.2-3B 的成功率逐輪上升，從第二輪起超過作者用同一提示跑的最強 ReAct 基線（claude-3.5-sonnet），動作數也較少。但起點 π0 是純 SFT，就已和 ReAct gpt-4o 持平；PRM 的實際貢獻是相對 SFT 提升約 23 個百分點。",
+      "numbers": "π0 64.9 → π1 73.9 → π2 85.8 → π3 88.1；BoN(π3,Q2) 91.0。ReAct claude-3.5-sonnet 76.1、gpt-4o 65.7。#act：π2 12.6，sonnet 19.0。",
+      "section": "§2.3、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "每回合用 PRM 做 Best-of-N 挑選總能再加分，但對後期策略效益遞減。作者歸因於剩下的提升空間有限，以及 reward over-optimization。",
+      "numbers": "N=16：π1 73.9→84.3（BoN(π1,Q0)），π2 85.8→88.8，π3 88.1→91.0（最後這段只差 4 題／134）。",
+      "section": "§2.3 Test-time Scaling、Fig. 2b、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "PRM 只用 10k 條 rollout 訓練時出現明顯的 reward hacking：驗證集上的 process reward 一路上升，真實成功率卻先升後降。用資料分割訓練多個 RM 做 ensemble 也偵測不到，因為每個 RM 的分數都跟著上升。",
+      "numbers": "約 400 步後，成功率由 82% 掉到 70%。",
+      "section": "§2.3、Fig. 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "PRM 用絕對目標（soft BCE 預測 Q）或相對目標（Bradley-Terry 偏好對）訓練，下游表現相近。作者的解釋是：相對損失只能用被多次造訪的狀態，資料量少很多。",
+      "numbers": "70k 條 rollout 下兩條訓練曲線相近；論文沒有給確切數字。",
+      "section": "§2.3、Fig. 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "InversePRM 只靠專家示範、不用結果獎勵：第一輪就高於 AgentPRM 的第一輪，兩輪後接近專家；用同一批示範做 SFT 則差很多。",
+      "numbers": "InversePRM π1 82.8、π2 86.6（逐類反推為 87.3）；AgentPRM π1 73.9；專家 91.0；SFT 63.4。BoN(π1,Q0) 88.0。",
+      "section": "§3.3、Table 2、Fig. 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Reset-50-50 只把 Stage 3 的 prompt 換成一半來自專家造訪過的狀態，其他都不變，就學得更快、峰值更高。",
+      "numbers": "峰值 82%，對照組 73.9%。",
+      "section": "§4.1、Fig. 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "Steered Exploration 只在取樣時注入要求提出策略與假說的提示，產生的候選比單純調高溫度更多樣、品質也更好，學得更快、峰值更高。",
+      "numbers": "峰值 84%，對照組 73.9%。",
+      "section": "§4.1、Fig. 6、Listing 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "Rollout 只有 10k 條時，用參考策略的 advantage 做 process reward shaping（α=0.5），訓練曲線穩定上升，最後超越參考策略。對照組是 SFT 初始化後直接 RL，曲線劇烈震盪。",
+      "numbers": "Shaping：穩定上升到 700 步，最終 82.0%，參考策略 65.0%。對照組：由 64% 掉到 32% 再爬回。",
+      "section": "§4.2、Fig. 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "每一輪的訓練都會因 over-optimization 而 plateau：策略會利用 PRM 在訓練分布外的誤差。第三輪起飽和，作者推測是模型容量上限。",
+    "不跑成功率評估就難以偵測 reward hacking；用資料分割訓練多個 RM 做 ensemble 無效，仍是開放問題。",
+    "AgentPRM 需要結果獎勵，現實中不一定有；人工設計獎勵既費力又容易設錯。",
+    "探索困難：AgentPRM 第一輪要 500 步以上才起飛；ε-greedy、entropy bonus、調溫度這類傳統方法不適合長視野、重推理的任務。",
+    "低樣本下，SFT 初始化後直接 RL 並不穩定，PRM 的雜訊會讓策略忘掉原本的好行為。",
+    "LEAP 式的事後合理化不一定都好；特權修正可能是 agent 實際做不到的。",
+    "agent 情境每次互動都要查詢環境，大規模 RL 很慢；model-predictive reasoning 目前只是方向。",
+    "只在 ALFWorld 上驗證；擴展到更豐富的 agent 環境列為未來工作。",
+    "和 AdaPlanner、Reflexion 的比較不公平，因為它們在測試時可以多次嘗試。"
+  ],
+  "limitations_observed": [
+    "PRM 從未被直接當成步驟評估器來驗證：沒有逐步的 ground truth，也沒有量「PRM 判低分的步是否真的是錯誤步」的準確度或排序相關，只看它推動下游策略後的成功率。對 T4 的步驟層級評估與失敗歸因來說，這篇只證明 PRM 能當訓練訊號，沒有證明它能當診斷工具。",
+    "式 (1) 的多軌跡平均多半沒有發生。雜湊鍵是完整歷史加上候選動作清單，作者在相對損失那段也承認多次造訪的狀態很少。因此大部分 Q̂ 其實只是單條軌跡的折扣結果，本質上是乘了折扣的 0/1 標籤，變異數大。ALFWorld 初始狀態固定、候選清單有限，前幾步才會重訪；多輪對話的歷史幾乎不可能逐字相撞，搬到 chat agent 會直接退化成單樣本蒙地卡羅。",
+    "repo 的目標計算與式 (1) 對不上。scripts/dataproc/compute_prm_target.py 照字面是用 γ^t 乘結果分數，t 是從軌跡開頭算起的步序；但終點才給獎勵時，式 (1) 應該是 γ^{T−1−t}。照程式碼，成功軌跡中越後面的步分數越低，和「越接近成功、價值越高」相反。repo 最後推送於 2025-02-19，與論文同期；重做前要先確認實際用的是哪一版。",
+    "InversePRM 的損失式中，D− 那項的符號寫反了（§3.2 與 Algorithm 2 都是加號）。照字面最小化 +E_{D−}[log(1−σ(·))]，會把負例的 σ 推向 1；標準二元交叉熵應該是減號。",
+    "數字前後不一致。(a) 評估題數：§2.3 寫 134，Table 1/2 表註寫 136；各類成功率反推的分母是 24/31/23/21/18/17=134，每一列都對得上 134。(b) Table 2 的 InversePRM π2 逐類反推是 117/134=87.3%，表上卻寫 86.6%（=116/134）。(c) setup 說每輪 10k 條 rollout，§3.3 與 Table 2 卻把同一組 AgentPRM 數字（π1 73.9）稱為「用 70k rollout 訓練」，repo 的 online DPO 腳本也指向 iter0-70k 資料夾，Table 1 到底用多少 rollout 不清楚。(d) 內文說 π2 的動作數是 12.0，表上 π2 是 12.6（12.0 是 BoN(π2,Q1) 的值）。",
+    "統計力不足：單一基準、單次執行，沒有種子、沒有信賴區間。134 題下 1 題約 0.75 個百分點：π3 到 BoN 的 +2.9 只有 4 題，InversePRM π2 與專家只差 5–6 題；Pick 2 類只有 17 題，1 題約 5.9 點。探索與 shaping 的比較（82／84 對 73.9）取的是單條訓練曲線的峰值，而挑峰值本身就是在挑雜訊。",
+    "「3B 小模型勝過 GPT-4o」的歸因要拆開看。π0 純 SFT 已經 64.9，和 ReAct gpt-4o 的 65.7 持平；SFT 資料來自 LEAP，也就是以 gpt-4o 特權回饋訓練出來的專家。對手則是沒有在 ALFWorld 微調過的通用模型，只套一份指令提示。PRM 的真正貢獻是相對 SFT 的 +23 點，不是小模型贏大模型。BUTLER、ReAct few-shot、AutoGen、ExpeL 的數字也是直接取自設定不同的原論文。",
+    "資料預算沒有算清楚。InversePRM 號稱「樣本效率較高」，比的是 10k 專家示範加 10k 負例，對上 AgentPRM 只用結果獎勵的 rollout，兩邊資料種類不同。「不需結果獎勵」也只是名義上成立，因為專家本身是用 gpt-4o 特權回饋訓練出來的。§4.2 shaping 號稱只有 10k rollout，V^μ 卻用了 70k 條參考 rollout；§4.1 Reset-50-50 有一半起始狀態來自專家。",
+    "模型選擇沒有說明。Algorithm 1/2 說回傳驗證集上最好的 π，Fig. 2 卻說每輪取最後一個 checkpoint。驗證集是哪一份沒有交代，139 題的 in-distribution 集也沒有出現在任何表中；若是在 OOD 測試集上挑 checkpoint，會有選擇偏差。",
+    "沒有報 Best-of-N 的成本：N=16 代表每回合要 16 次策略取樣加 16 次 PRM 前向，論文只報 #act，沒有報 token 或推論成本，所以看不出 BoN 的加分是否划算。",
+    "環境比論文宣稱的友善。ALFWorld 提供候選動作清單，回應只有 64 token，轉移大致是確定的；這和作者強調的「未知、隨機轉移」有落差。實驗裡也沒有使用者、沒有多個 agent，對多輪對話 agent 的外推有限。",
+    "列為貢獻的「challenges and opportunities」中，PosteriorExplorer 與 §4.3 的 model-predictive reasoning 完全沒有實驗，只是構想。",
+    "檢索時要注意撞名：arXiv:2511.08325（2025 年 11 月）是另一篇也叫 AgentPRM 的論文（step-wise promise and progress），和本文無關。比較文獻時要用 arXiv ID 區分，這不是本文的缺陷。"
+  ],
+  "framework_role": "屬於 T4「軌跡／步驟層級評估與 process reward」的方法論文。它的角色是把軌跡變成步驟層級的訓練訊號，而不是診斷工具。它提供四樣東西：(1) 軌跡資料物件的具體格式（task、逐步的 observation／candidate_actions／reason／action、最終 score），以及用雜湊歷史聚合多條 rollout 來標註 Q 值的方法；(2) 不需人工逐步標註就能產生步驟分數的兩條路：只靠結果獎勵（AgentPRM），或只靠專家示範（InversePRM）；(3) 推論時用 PRM 逐步 reranking（BoN）；(4) 一份 reward hacking 實測：驗證集上的 process reward 上升、真實成功率卻下降，提醒步驟分數不能直接拿來當評估指標。若本框架要做步驟層級評分或異常偵測（E3 的上游），可以借用蒙地卡羅標註、以及 KL 錨定上一輪策略的設計，但有兩個搬用條件：多輪對話的歷史很難重訪，Q̂ 會退化成單樣本；本文也沒有驗證 PRM 判斷「哪一步錯」準不準，拿來做失敗歸因前要另外校準。它和 T8 的關係是：PRM 的訓練與驗收都以任務成功率為唯一標準。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到部署或產品。作者的 repo（https://github.com/sanjibanc/agent_prm，MIT 授權，約 60 stars）是研究用程式碼，README 只談訓練與評估流程，沒有部署或產品使用的紀錄；這屬於可重現性，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/sanjibanc/agent_prm",
+    "data": "ALFWorld 是公開基準。repo 提供 rollout、PRM 目標計算、RM／online DPO／InversePRM／shaping 的訓練腳本、提示範本（含 steered exploration 範本），以及 Llama-3.2-3B SFT iter0 檢查點的 Hugging Face 名稱（rl-llm-agent/…）。SFT 資料說明取自 LEAP 的 repo。論文本身沒有列超參數，要從 repo 腳本讀；rollout 資料與 10k 條專家示範是否公開下載，沒有確認。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "這是把蒙地卡羅步驟標註接上 RLHF、訓練 agent PRM 的清楚配方，還有 InversePRM 與 reward hacking 的實測，對 T4 有參考價值；但 PRM 只以單一基準的下游成功率驗證，從未直接量它在步驟層級判得準不準，而且數字前後有多處不一致，算不上必讀。",
+  "related": [
+    "2305.20050",
+    "2211.14275",
+    "2410.08146",
+    "2406.06592",
+    "2408.03314",
+    "2402.19446",
+    "2410.05434",
+    "2402.04792",
+    "2010.03768",
+    "2210.03629",
+    "2501.12948"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

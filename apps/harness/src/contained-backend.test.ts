@@ -73,6 +73,14 @@ describe('基座的 virtualMode 是純字串比對（升版絆索）', () => {
     expect(await backend.delete(terrain.escapePath)).toMatchObject({ error: expect.any(String) });
   });
 
+  it('read 經目錄 symlink 讀得出根外', async () => {
+    const backend = new FilesystemBackend({ rootDir: terrain.root, virtualMode: true });
+
+    expect(await backend.read(terrain.escapePath)).toMatchObject({
+      content: expect.stringContaining(SECRET),
+    });
+  });
+
   it('".." 擋得住——字面上的穿越基座本來就查', async () => {
     const backend = new FilesystemBackend({ rootDir: terrain.root, virtualMode: true });
     expect(await backend.write('/../outside/via-dots.txt', 'x')).toMatchObject({
@@ -134,13 +142,148 @@ describe('ContainedFilesystemBackend 的 fence', () => {
     expect((await backend.write('/捷徑/b.md', '經捷徑寫的')).error).toBeUndefined();
     expect(await readFile(join(terrain.root, '實際位置/b.md'), 'utf8')).toBe('經捷徑寫的');
   });
+});
 
-  it('讀不經過 fence——讀的策略歸 permissions，兩層正交', async () => {
+/** 讀取面圍堵的拒絕字句：跟寫入同一個 `[containment]` 形狀，不印出根外的實際位置。 */
+const readDenied = (
+  operation: string,
+  path: string,
+  mode: SandboxMode = 'workspace-write',
+): string =>
+  `[containment] 拒絕 ${operation} "${path}"：經符號連結解析之後落在根之外（mode: ${mode}）`;
+
+/**
+ * 讀取面的圍堵（[#1982](https://github.com/DemianLi/nexus-agent/issues/1982)）：經往外指的符號連結讀到根外的一律拒。
+ *
+ * 讀得到內容的入口有六個：`read`、`readRaw`、`ls`、`grep`、`glob`、`downloadFiles`。每一個入口至少有一條
+ * 只靠它自己那道檢查的斷言。
+ */
+describe('讀取面的圍堵', () => {
+  it('read：經往外指的目錄連結被拒', async () => {
+    const result = await contained(terrain.root).read(terrain.escapePath);
+
+    expect(result).toEqual({ error: readDenied('read', terrain.escapePath) });
+  });
+
+  it('readRaw：經往外指的目錄連結被拒', async () => {
+    const result = await contained(terrain.root).readRaw(terrain.escapePath);
+
+    expect(result).toEqual({ error: readDenied('readRaw', terrain.escapePath) });
+  });
+
+  it('ls：往外指的目錄連結本身列不出來', async () => {
+    const result = await contained(terrain.root).ls('/escape');
+
+    expect(result).toEqual({ error: readDenied('ls', '/escape') });
+  });
+
+  it('grep：起點經往外指的目錄連結被拒', async () => {
+    const result = await contained(terrain.root).grep('根外', '/escape');
+
+    expect(result).toEqual({ error: readDenied('grep', '/escape') });
+  });
+
+  it('glob：起點經往外指的目錄連結被拒', async () => {
+    const result = await contained(terrain.root).glob('*.txt', '/escape');
+
+    expect(result).toEqual({ error: readDenied('glob', '/escape') });
+  });
+
+  it('downloadFiles：根外那一筆 permission_denied，根內那一筆照常', async () => {
+    await writeFile(join(terrain.root, 'inside.txt'), '根內');
+    const result = await contained(terrain.root).downloadFiles([terrain.escapePath, '/inside.txt']);
+
+    expect(result[0]).toEqual({
+      path: terrain.escapePath,
+      content: null,
+      error: 'permission_denied',
+    });
+    expect(Buffer.from(result[1]?.content ?? []).toString('utf8')).toBe('根內');
+  });
+
+  it('從根搜尋不會經連結走到根外（rg 不跟樹內的連結）', async () => {
     const backend = contained(terrain.root);
-    const result = await backend.read(terrain.escapePath);
 
-    // 這是明文的分工，不是漏洞：#34 定案「讀一律通過」。
-    expect(result).toMatchObject({ content: SECRET });
+    expect(await backend.grep('根外', '/')).toEqual({ matches: [] });
+    expect(await backend.glob('**/*.txt', '/')).toEqual({ files: [] });
+  });
+
+  it('連結底下還不存在的路徑也是拒，不是 ENOENT', async () => {
+    const result = await contained(terrain.root).read('/escape/nope.txt');
+
+    expect(result).toEqual({ error: readDenied('read', '/escape/nope.txt') });
+  });
+
+  it('最後一段是往外指的檔案連結：拒', async () => {
+    await symlink(terrain.secretFile, join(terrain.root, 'filelink.txt'));
+    const result = await contained(terrain.root).read('/filelink.txt');
+
+    expect(result).toEqual({ error: readDenied('read', '/filelink.txt') });
+  });
+
+  it('指向 harness home 的 .env：目錄連結與檔案連結都拒', async () => {
+    const home = join(terrain.outside, 'home');
+    await mkdir(home);
+    await writeFile(join(home, '.env'), 'NEXUS_API_KEY=sk-假的');
+    await symlink(home, join(terrain.root, 'homelink'));
+    await symlink(join(home, '.env'), join(terrain.root, 'envlink'));
+    const backend = contained(terrain.root);
+
+    for (const path of ['/homelink/.env', '/envlink']) {
+      const read = await backend.read(path);
+      expect(read).toEqual({ error: readDenied('read', path) });
+      expect(JSON.stringify(await backend.readRaw(path))).not.toContain('sk-假的');
+    }
+  });
+
+  it('指向根內的目錄連結與檔案連結都照常讀', async () => {
+    await mkdir(join(terrain.root, '實際位置'));
+    await writeFile(join(terrain.root, '實際位置/a.md'), '根內的內容');
+    await symlink(join(terrain.root, '實際位置'), join(terrain.root, '捷徑'));
+    await symlink(join(terrain.root, '實際位置/a.md'), join(terrain.root, 'a-link.md'));
+    const backend = contained(terrain.root);
+
+    expect(await backend.read('/捷徑/a.md')).toMatchObject({ content: '根內的內容' });
+    expect((await backend.ls('/捷徑')).files?.map((f) => f.path)).toEqual(['/捷徑/a.md']);
+    expect(await backend.read('/a-link.md')).toMatchObject({ content: '根內的內容' });
+  });
+
+  it('根本身經連結進來的照常讀：比的是兩邊的實際位置', async () => {
+    const alias = join(terrain.outside, 'root-alias');
+    await symlink(terrain.root, alias);
+    await writeFile(join(terrain.root, 'here.txt'), '在根裡');
+
+    expect(await contained(alias).read('/here.txt')).toMatchObject({ content: '在根裡' });
+  });
+
+  it('read-only 也拒：那一格擋的是變更，不是讀', async () => {
+    const result = await contained(terrain.root, 'read-only').read(terrain.escapePath);
+
+    expect(result).toEqual({ error: readDenied('read', terrain.escapePath, 'read-only') });
+  });
+
+  it('danger-full-access 放行，跟寫入一致', async () => {
+    const backend = contained(terrain.root, 'danger-full-access');
+
+    expect(await backend.read(terrain.escapePath)).toMatchObject({ content: SECRET });
+  });
+
+  it('".."：基座回「Path traversal not allowed」，連根外的檔案都沒去碰', async () => {
+    const backend = contained(terrain.root);
+
+    for (const path of ['/../outside/secret.txt', '/escape/../../outside/secret.txt']) {
+      const result = await backend.read(path);
+      expect(result.error).toContain('Path traversal not allowed');
+      expect(result.content).toBeUndefined();
+    }
+  });
+
+  it('主機絕對路徑：被當成根底下的子路徑，ENOENT——讀不到真的那個檔', async () => {
+    // `secretFile` 是主機上的真實絕對路徑。虛擬模式把它接在根底下，不是當成主機位置。
+    const result = await contained(terrain.root).read(terrain.secretFile);
+
+    expect(result.error).toContain('ENOENT');
+    expect(result.content).toBeUndefined();
   });
 });
 
@@ -226,5 +369,39 @@ describe('fence 的協議與覆蓋面', () => {
 
     expect(result?.error).toBeFalsy();
     expect(await readFile(join(terrain.root, '上傳.md'), 'utf8')).toBe('上傳的內容');
+  });
+});
+
+// `--workspace /` 時可寫根是 `/`：包含判斷若用 `realRoot + sep` 前綴，`/` 加分隔符是 `//`，什麼都比不中，
+// 根底下的每一筆寫入都會被誤判成「落在可寫根之外」（#1647）。
+describe('可寫根是檔案系統根 `/`', () => {
+  it('寫、改、刪根底下的檔都放行', async () => {
+    const backend = contained('/');
+    const virtual = join(terrain.root, 'x.txt');
+
+    expect((await backend.write(virtual, '第一版')).error).toBeUndefined();
+    expect(await readFile(virtual, 'utf8')).toBe('第一版');
+
+    expect((await backend.edit(virtual, '第一版', '第二版')).error).toBeUndefined();
+    expect(await readFile(virtual, 'utf8')).toBe('第二版');
+
+    expect((await backend.delete(virtual)).error).toBeUndefined();
+    await expect(stat(virtual)).rejects.toThrow();
+  });
+
+  it('uploadFiles 也放行', async () => {
+    const [result] = await contained('/').uploadFiles([
+      [join(terrain.root, '上傳.md'), new TextEncoder().encode('上傳的內容')],
+    ]);
+
+    expect(result?.error).toBeFalsy();
+    expect(await readFile(join(terrain.root, '上傳.md'), 'utf8')).toBe('上傳的內容');
+  });
+
+  it('根就是 `/` 時，經 symlink 指到哪裡都還在根裡面：不是 fence 擋的範圍', async () => {
+    const virtual = join(terrain.root, 'escape', 'again.txt');
+
+    expect((await contained('/').write(virtual, '寫進去')).error).toBeUndefined();
+    expect(await readFile(join(terrain.outside, 'again.txt'), 'utf8')).toBe('寫進去');
   });
 });

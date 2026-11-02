@@ -1,0 +1,74 @@
+===================================================================
+--- a/components/ui/tool-steps.tsx
++++ b/components/ui/tool-steps.tsx
+@@ -54,8 +54,24 @@
+ }
+ 
+ /** One call on one line; opened, the call itself — or its diff, when it changed a file. */
+-function StepRow({ step, labels }: { step: Step; labels?: Partial<StepLabels> }) {
+-  const [open, setOpen] = React.useState(false)
++function StepRow({
++  step,
++  labels,
++  open: openProp,
++  onOpenChange,
++}: {
++  step: Step
++  labels?: Partial<StepLabels>
++  /** Controlled open state; left out, the row keeps its own. */
++  open?: boolean
++  onOpenChange?: (open: boolean) => void
++}) {
++  const [openState, setOpenState] = React.useState(false)
++  const open = openProp ?? openState
++  const setOpen = (value: boolean) => {
++    setOpenState(value)
++    onOpenChange?.(value)
++  }
+   const words = { ...defaultLabels, ...labels }
+   const canOpen = Boolean(step.patch || step.detail || step.output || step.error)
+ 
+@@ -65,7 +81,7 @@
+         type="button"
+         aria-expanded={canOpen ? open : undefined}
+         disabled={!canOpen}
+-        onClick={() => setOpen((value) => !value)}
++        onClick={() => setOpen(!open)}
+         className={cn(lineClass, step.status === "running" && "animate-pulse")}
+       >
+         <span className="truncate text-[12.5px]">{step.label}</span>
+@@ -125,22 +141,32 @@
+   summary,
+   labels,
+   defaultOpen = false,
++  open: openProp,
++  onOpenChange,
+ }: {
+   steps: Step[]
+   /** The folded line. Defaults to a count of the calls. */
+   summary?: string
+   labels?: Partial<StepLabels>
+   defaultOpen?: boolean
++  /** Controlled open state; left out, the group keeps its own. */
++  open?: boolean
++  onOpenChange?: (open: boolean) => void
+ }) {
+   const running = steps.some((step) => step.status === "running")
+-  const [open, setOpen] = React.useState(defaultOpen)
++  const [openState, setOpenState] = React.useState(defaultOpen)
++  const open = openProp ?? openState
++  const setOpen = (value: boolean) => {
++    setOpenState(value)
++    onOpenChange?.(value)
++  }
+   const stats = totalStats(steps)
+ 
+   if (steps.length === 1 && !running) return <StepRow step={steps[0]!} labels={labels} />
+ 
+   return (
+     <div data-slot="step-group" className="flex flex-col gap-1.5">
+-      <button type="button" aria-expanded={open} onClick={() => setOpen((value) => !value)} className={lineClass}>
++      <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={lineClass}>
+         <span className="truncate text-[12.5px]">
+           {summary ?? (running ? `Running ${steps.length} steps` : `Ran ${steps.length} steps`)}
+         </span>

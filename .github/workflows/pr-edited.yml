@@ -1,0 +1,57 @@
+name: PR 編輯後重驗
+
+# ci.yml 不收 `edited`：只改 PR 內文時 CI 不重跑，也不取消正在跑的那一輪。這支只處理 gate 會看的那幾種編輯，
+# 對這個 head 最新的那一輪 CI 做 rerun。rerun 沿用觸發時的事件，所以 ci.yml 的標題、內文、base 從 API 讀當下的值。
+#   - 改標題：gate 驗標題。
+#   - 改 base：gate 驗 base 跟這一輪決定範圍時的一樣，不一樣就紅，要推一個 commit 或關閉再打開 PR 重新觸發。
+#   - develop → main 的 PR 改內文：gate 驗內文的段落。
+#
+# job 不能叫 gate：只改功能 PR 內文時它被跳過，跳過的 required check 算成通過。
+on:
+  pull_request:
+    branches: [develop, main]
+    types: [edited]
+
+permissions:
+  contents: read
+
+# 不設 concurrency：同一組裡後來的只改內文會取消或頂掉前面改標題的那一輪，標題就沒人驗。
+# 兩輪同時處理標題時，晚到的那輪 rerun 會撞上已經在跑的一輪，見最後一步。
+
+jobs:
+  rerun:
+    name: 重跑 CI
+    if: github.event.changes.title || github.event.changes.base || (github.event.changes.body && github.base_ref == 'main')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: write
+    steps:
+      - name: rerun 這個 head 最新的一輪
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          runs="repos/$REPO/actions/workflows/ci.yml/runs?event=pull_request&head_sha=$HEAD_SHA&per_page=1"
+          run_id=$(gh api "$runs" --jq '.workflow_runs[0].id // empty')
+          if [ -z "$run_id" ]; then
+            echo "這個 head 還沒有 CI 的一輪；建立時會讀當下的標題，不用重跑。"
+            exit 0
+          fi
+          # 還在跑的那一輪可能已經用舊標題驗過，取消後重跑。
+          if [ "$(gh api "repos/$REPO/actions/runs/$run_id" --jq .status)" != "completed" ]; then
+            gh api -X POST "repos/$REPO/actions/runs/$run_id/cancel" > /dev/null
+            for _ in $(seq 120); do
+              [ "$(gh api "repos/$REPO/actions/runs/$run_id" --jq .status)" = "completed" ] && break
+              sleep 5
+            done
+          fi
+          if ! gh api -X POST "repos/$REPO/actions/runs/$run_id/rerun" > /dev/null; then
+            # 另一輪編輯已經先重跑了它；那一輪同樣讀當下的值。
+            [ "$(gh api "repos/$REPO/actions/runs/$run_id" --jq .status)" != "completed" ] || exit 1
+            echo "run $run_id 已經在重跑"
+            exit 0
+          fi
+          echo "已重跑 run $run_id"

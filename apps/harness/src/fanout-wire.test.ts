@@ -27,11 +27,11 @@
  */
 
 import { tool } from '@langchain/core/tools';
+import { CONCURRENCY_SAFE_METADATA_KEY } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
-  appendHumanTurn,
   createWireClient,
   emptyConversation,
   reduceConversation,
@@ -45,6 +45,7 @@ import {
   approvalToolNames,
   emptyCommandPoint,
   loopbackRequest,
+  noSessions,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -72,7 +73,13 @@ function spyPlugin(names: readonly string[]): PluginEntry {
                 ran.push(name);
                 return `${name} 跑過了`;
               },
-              { name, description: `間諜工具 ${name}`, schema: z.object({}) },
+              {
+                name,
+                description: `間諜工具 ${name}`,
+                schema: z.object({}),
+                // 宣告可重疊（#711 第 2 步）：這份測試要的是同一輪兩顆中斷同時掛出來；沒宣告的工具是獨佔，一次只問一顆。
+                metadata: { [CONCURRENCY_SAFE_METADATA_KEY]: true },
+              },
             ),
           );
         }
@@ -125,6 +132,7 @@ async function open(threadId: string, tools: readonly string[]): Promise<Session
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
+      attachSessions: noSessions,
       commands: emptyCommandPoint(),
       dispose: built.dispose,
     }),
@@ -139,7 +147,7 @@ async function open(threadId: string, tools: readonly string[]): Promise<Session
     client,
     events,
     frames: [],
-    state: appendHumanTurn(emptyConversation(), '動手'),
+    state: emptyConversation(),
     close: () => handler.close(),
   };
 }

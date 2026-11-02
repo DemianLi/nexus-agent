@@ -16,7 +16,7 @@
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
-import { createTodoPlugin, TODO_TOOL_NAME } from '@nexus/plugin-todo';
+import { TODO_TOOL_NAME } from '@nexus/plugin-todo';
 import type { Event, WireTodoItem } from '@nexus/wire';
 import { emptyConversation, reduceAll, TODOS } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
@@ -25,6 +25,7 @@ import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import { historyFrames, historyPage } from './conversation-history.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { createTodoPlugin } from './todo.fixture.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';

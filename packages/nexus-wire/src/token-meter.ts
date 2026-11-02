@@ -1,0 +1,290 @@
+/**
+ * 用量投影（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)，地圖 [#1015](https://github.com/DemianLi/nexus-agent/issues/1015)）
+ * 在線上的形狀：`@nexus/plugin-token-meter` 從會話日誌折出來、由 {@link ./projection.ts | `projection` frame} 整份送到 web 的值。
+ *
+ * 型別住在這裡的理由同 `trajectory.ts`：讀它的是 `apps/web`，web 只依賴 `@nexus/wire`。
+ *
+ * ## 一份日誌一份 view
+ *
+ * 單元宣告了 `children: true`（#1073），所以**同一個單元對 root 與每個子代理各折一份**：
+ *
+ * - root 的值在 `ConversationState.projections['token-meter']`，
+ * - 每個子代理的值在 `ConversationState.subagentProjections[runId]['token-meter']`。
+ *
+ * 兩邊**同一個形狀**。前景子代理的日誌沒有 `turn/start`，所以它的 `turns` 是空的、數字全在 `outside`；背景的每一輪（派出去與每次 `subagent.send`）各有 `turn/start`，照一般的輪折。
+ * 哪個 `runId` 是哪一顆呼叫派的、前景還是背景，讀 root 那份的 {@link TokenMeterView.links}。
+ *
+ * ## 數字的口徑（讀的人必須看得到，否則會把下限當成總數）
+ *
+ * 口徑寫在 {@link TOKEN_METER_CALIBER}，**每個欄位一句**，不隨 frame 重送。要點：
+ *
+ * - **token 是供應商報的**：成功與失敗的呼叫都算（失敗那幾筆另列），**沒報的呼叫不是 0**——數在 {@link TokenMeterSpan.unknownSteps}。
+ * - **生摘要那一次的用量另列**（`summary*`），**不含在** `inputTokens`／`outputTokens` 裡，也不進 root 的 `tokenUsage` 總帳。
+ * - **時間三段加一格殘差**：模型（扣掉重試退避）、工具（平行的取聯集）、等待（重試退避 `retryWaitMs` ＋ 停在核准點的 `waitMs`），其餘是 `unaccountedMs`。
+ * - **token 跨會話可以相加，時間不行**：前景子代理跑的時間已經在 root 那顆工具呼叫的耗時裡。
+ * - **不畫金額、不畫完成率**（#1019）。快取讀寫分桶見 {@link TokenMeterSpan.cacheReadTokens}（#724）；推理 token 細項還沒有。
+ *
+ * ## 窗口
+ *
+ * frame 是整份取代、每顆讓值改變的事件都重送，所以 view 不能隨會話無限長：最近 {@link TOKEN_METER_TURNS_KEEP} 輪帶逐輪的列，
+ * 更早的輪併成一列 {@link TokenMeterView.earlier}。依工具名、依模型的分佈各有上限，超過的併進 `other`（總數仍是準的）。
+ *
+ * @module
+ */
+
+/** 用量投影的 key（`projection` frame 的 `key`）。 */
+export const TOKEN_METER_PROJECTION = 'token-meter';
+
+/** `token-meter` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
+// 2：所有 `*InputTokens`（段、依模型的列、失敗、生摘要）改成未快取的那一桶（#724），原本是含快取讀寫的完整 prompt。
+// 1 的快取三格是選填，沒升版（#1021／#1022 加選填欄位的先例）；這次是同名欄位換了意思，所以升。
+export const TOKEN_METER_VERSION = 2;
+
+/** 帶逐輪列的最近幾輪；更早的併進 `earlier`。 */
+export const TOKEN_METER_TURNS_KEEP = 20;
+/** 一個 {@link TokenMeterSpan} 的依工具名分佈最多幾個名字；超過的併進 `toolsOther`。 */
+export const TOKEN_METER_TOOL_NAMES_CAP = 12;
+/** 一個 {@link TokenMeterSpan} 的依模型分佈最多幾個模型；超過的併進 `modelsOther`。 */
+export const TOKEN_METER_MODELS_CAP = 6;
+/** root 的 `links` 最多留幾筆（最新的）；更早的記進 `linksOmitted`。 */
+export const TOKEN_METER_LINKS_CAP = 64;
+
+/** 依工具名的一列。 */
+export interface TokenMeterToolRow {
+  readonly name: string;
+  /** 落定了的呼叫（有 `tool/result`）。 */
+  readonly calls: number;
+  /** 其中 `isError` 的。 */
+  readonly errors: number;
+}
+
+/** 依模型的一列。 */
+export interface TokenMeterModelRow {
+  /** 模型 id，讀自 `request/header`（#1020）；日誌上沒有快照（舊日誌）就是 `null`，不猜。 */
+  readonly model: string | null;
+  /** 結束了的呼叫（完成、失敗、中止都算）。 */
+  readonly steps: number;
+  /** 未快取的輸入（#724）；完整的 prompt 是它加下面兩格。 */
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  /** 快取讀、快取寫（#724）：這個模型的每一次用量都報了才有，**缺席＝沒記**，不是 0（規則同 {@link TokenMeterSpan.cacheReadTokens}）。 */
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+}
+
+/** 依工具名超過名額、被併起來的那幾種工具。 */
+export interface TokenMeterToolsOther {
+  readonly calls: number;
+  readonly errors: number;
+}
+
+/** 依模型超過名額、被併起來的那幾個模型。 */
+export interface TokenMeterModelsOther {
+  readonly steps: number;
+  /** 未快取的輸入，口徑同 {@link TokenMeterModelRow.inputTokens}。 */
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  /** 併進來的所有用量都報了才有，缺席＝沒記。 */
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+}
+
+/**
+ * 一段事件的數字。**同一個形狀用在三處**：整份日誌（`session`）、輪外（`outside`）、一輪（{@link TokenMeterTurn}）。
+ * 每一格在第一個有貢獻的事件之前都是 0。口徑見 {@link TOKEN_METER_CALIBER}。
+ */
+export interface TokenMeterSpan {
+  /** 結束了的模型呼叫（`model/end`），完成、失敗、中止都算。 */
+  readonly steps: number;
+  /** 其中帶 `outcome` 的（沒有正常回來）。 */
+  readonly failedSteps: number;
+  /** 其中沒有任何 `model/usage` 的——燒了多少不知道，**不是 0**。 */
+  readonly unknownSteps: number;
+  /**
+   * 供應商報的**未快取**輸入 token 加總，成功＋失敗，不含生摘要那一次（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，
+   * 照 dsh 四桶互不重疊）。**v1 這一格是含快取讀寫的完整 prompt**，版本升到 2；完整的 prompt 要加快取讀、快取寫。
+   * 下面的 `failedInputTokens`、`summaryInputTokens` 與依模型的列同口徑。
+   */
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  /**
+   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，照 dsh 的投影名
+   * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊。
+   *
+   * `uncachedInputTokens`：**永遠等於 {@link inputTokens}**，server 每次都送。留著它是因為 web 靠「有沒有這一格」分辨
+   * 新舊 server（舊 server 的 `inputTokens` 含快取）；同總帳的 `uncachedInputTokens`。
+   */
+  readonly uncachedInputTokens?: number;
+  /**
+   * 快取讀、快取寫的 token 加總。**缺席是「沒記」，不是 0**：這一段裡只要有一次呼叫沒報（舊日誌、供應商沒給細節），
+   * 整格就不放——只有一部分呼叫報的數字當成總數，命中率的分母會是錯的。
+   */
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
+  /** {@link inputTokens} 裡，失敗或中止的呼叫報的那一份（未快取）。 */
+  readonly failedInputTokens: number;
+  readonly failedOutputTokens: number;
+  /**
+   * 失敗或中止的呼叫報的快取讀、快取寫（[#724](https://github.com/DemianLi/nexus-agent/issues/724)），已含在 {@link cacheReadTokens}、
+   * {@link cacheWriteTokens} 裡。**缺席＝沒記，不是 0**：規則同它們——失敗的呼叫裡只要有一次報了用量卻沒報這一格就整格缺席，
+   * 沒有失敗的呼叫（沒有東西可加）也缺席。
+   */
+  readonly failedCacheReadTokens?: number;
+  readonly failedCacheWriteTokens?: number;
+  /** 生摘要的次數（`compaction/summary`）。 */
+  readonly summaries: number;
+  /** 其中沒報用量的。 */
+  readonly summariesUnknown: number;
+  /** 生摘要那一次報的未快取輸入加總，**另列**，不在 {@link inputTokens} 裡。 */
+  readonly summaryInputTokens: number;
+  readonly summaryOutputTokens: number;
+  /**
+   * 生摘要那一次報的快取讀、快取寫（#724），**另列**，不在 {@link cacheReadTokens} 裡。**缺席＝沒記，不是 0**：報了用量的摘要裡
+   * 只要有一次沒報這一格就整格缺席，沒有報用量的摘要也缺席。摘要會重播整段前綴，大半走快取，所以只看
+   * {@link summaryInputTokens}（未快取）會比實際小很多。
+   */
+  readonly summaryCacheReadTokens?: number;
+  readonly summaryCacheWriteTokens?: number;
+  /** 重試的次數（`llm/retry-started`）與實際等了多久的加總。 */
+  readonly retries: number;
+  readonly retryWaitMs: number;
+  /** 模型呼叫的牆鐘，**扣掉重試退避**。 */
+  readonly modelMs: number;
+  /** 落定的工具呼叫數與其中 `isError` 的。 */
+  readonly toolCalls: number;
+  readonly toolErrors: number;
+  /** 每個工具各自的牆鐘加總（平行的重疊會重複算），同 `sessionStats.toolMs`。 */
+  readonly toolSumMs: number;
+  /** 至少有一個工具在跑的牆鐘（區間聯集）。三段時間用這個。 */
+  readonly toolMs: number;
+  /** 停在核准點的時間：一輪的 `turn/end` 到接著它的 `resume` 的 `turn/start`。 */
+  readonly waitMs: number;
+  /** 依工具名。一輪裡照第一次出現的順序；會話總計是併起來的，列序不保證。 */
+  readonly tools: readonly TokenMeterToolRow[];
+  readonly toolsOther?: TokenMeterToolsOther;
+  /** 依模型。列序同上。 */
+  readonly models: readonly TokenMeterModelRow[];
+  readonly modelsOther?: TokenMeterModelsOther;
+}
+
+/** 一輪是怎麼結束的；還沒結束就沒有這一格。`paused` ＝ 停在核准點、還沒等到 resume。 */
+export type TokenMeterEnd =
+  'completed' | 'aborted' | 'max-tokens' | 'interrupted' | 'blocked' | 'failed' | 'paused';
+
+/** 一個邏輯輪（`resume` 併回前一輪）。 */
+export interface TokenMeterTurn extends TokenMeterSpan {
+  /** 第幾個邏輯輪（0 起，整份日誌連續）。 */
+  readonly index: number;
+  /** 開這一輪的 `turn/start` 的 `seq` 與時刻。 */
+  readonly seq: number;
+  readonly time: number;
+  readonly kind: string;
+  readonly end?: TokenMeterEnd;
+  /**
+   * 這一輪的 token 數字證不證得出是準的（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1201，Q1 (a)）。
+   * `true` 是準數；`false` 是下限——**數字照舊交**，只是別當成總數。**缺席＝這一輪還沒收尾**（沒有 `turn/end`），還沒定案。
+   *
+   * 條件照 dsh `deriveTurnTokenUsage`（`packages/llm/token-meter/src/turn-usage.ts:178-274`，`1517a4db`）：這一輪收尾了、
+   * 至少有一次嘗試（零次是 `false`，dsh `aggregateAttempts:127`）、每一次嘗試都報了有效用量（{@link TokenMeterSpan.unknownSteps} 是 0）、收尾時沒有開著的呼叫、加總沒有超過安全整數。
+   * **快取桶缺席不讓它變 `false`**（dsh `:133-138` 缺桶只讓那一格省略）：看 {@link TokenMeterSpan.cacheReadTokens} 在不在。
+   *
+   * **偏離 dsh（理由 2：產品需求超出 dsh）**：dsh 證不出的那一輪整輪不交數字；管理者估成本要下限，空白沒有用，所以我們數字照舊交。
+   * 會話總計（`session`）跟 dsh 的 `usage-projection.ts` 一樣是部分和，那一半不是偏離。
+   */
+  readonly tokensProven?: boolean;
+  /** 最後一顆 `turn/end`／`turn/failed` 的時刻。 */
+  readonly endTime?: number;
+  /** `endTime − time`：含停在核准點等的那段。 */
+  readonly wallMs?: number;
+  /**
+   * `wallMs − modelMs − toolMs − retryWaitMs − waitMs`：幾段都沒覆蓋到的時間（圖的啟動、生摘要那一次、事件之間的空隙）。
+   * **不夾 0**：負的代表「三段互不重疊」這個前提被破壞了，那是要追的 bug，不是要藏的。
+   */
+  readonly unaccountedMs?: number;
+}
+
+/** root 的 `subagent/catalog` 解出來的連結：哪個 `runId` 是哪一顆呼叫派的。 */
+export interface TokenMeterLink {
+  /** 子代理的 `runId`，也是 `subagentProjections` 的鍵。 */
+  readonly runId: string;
+  /** 派它的那顆 `tool/call` 的 `callId`。 */
+  readonly callId: string;
+  /** `one-shot` ＝ 前景跑完就結束，`continuable` ＝ 背景收得到後續的話。 */
+  readonly mode: 'one-shot' | 'continuable';
+  /** 派它的時候在哪個邏輯輪（{@link TokenMeterTurn.index}）；不在任何輪裡就沒有。 */
+  readonly turn?: number;
+}
+
+/** 窗口之外、併成一列的輪。 */
+export interface TokenMeterEarlier extends TokenMeterSpan {
+  /** 併了幾個邏輯輪。 */
+  readonly turns: number;
+}
+
+/** `token-meter` 投影的 view。 */
+export interface TokenMeterView {
+  /** 這份日誌全部的數字：`outside` ＋ `earlier` ＋ `turns` 每一列。 */
+  readonly session: TokenMeterSpan;
+  /** 不在任何輪裡的事件（前景子代理那份全在這裡）。 */
+  readonly outside: TokenMeterSpan;
+  /** 最近的邏輯輪，由舊到新。 */
+  readonly turns: readonly TokenMeterTurn[];
+  /** 更早的邏輯輪併成一列；沒有就缺席。 */
+  readonly earlier?: TokenMeterEarlier;
+  /** 到目前為止開過幾個邏輯輪。 */
+  readonly totalTurns: number;
+  /** 派過的子代理，由舊到新（只有 root 那份有）。 */
+  readonly links: readonly TokenMeterLink[];
+  readonly linksOmitted: number;
+}
+
+/**
+ * 每個 {@link TokenMeterSpan} 欄位的口徑，一句話。**給畫面當說明用**，不隨 frame 重送。
+ * 「每個數字附口徑」的承諾落在這張表：讀的人看得到哪些沒算進去。
+ */
+export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
+  steps:
+    '結束了的模型呼叫，完成、失敗、中止都算；每一次嘗試各算一次，含被重試掉的那幾次（它們同時算進失敗的呼叫）；行程在呼叫中途結束的那一次也算一次；不含產生會話標題的那一次呼叫（標題不記用量，#1022）。',
+  failedSteps:
+    '沒有正常回來的呼叫（拋錯或被中止，含被重試掉的那幾次），或行程在呼叫中途結束的那一次。',
+  unknownSteps:
+    '有結束但供應商沒報用量的呼叫（含行程在呼叫中途結束的那一次）：燒了多少不知道，不是 0，所以 token 是下限。',
+  tokensProven:
+    '這一輪的 token 數字是不是準的：這一輪收尾了、至少有一次嘗試、每一次嘗試都報了有效用量、收尾時沒有開著的呼叫。不是準的（下限）數字照舊在；快取桶缺席不影響它。缺席表示這一輪還沒收尾。',
+  inputTokens:
+    '供應商報的輸入 token，只算沒走快取的那一桶（快取讀、快取寫另列，完整的 prompt 要三桶相加）；成功與失敗的呼叫都算；不含生摘要那一次、不含產生會話標題的那一次；沒報的呼叫不在裡面。',
+  outputTokens:
+    '供應商報的輸出 token；成功與失敗的呼叫都算；不含生摘要那一次、不含產生會話標題的那一次；沒報的呼叫不在裡面。',
+  uncachedInputTokens:
+    '等於上面的輸入 token（沒走快取的那一桶；供應商沒給快取細節的呼叫，整個 prompt 都算在這裡）。留這一格是讓畫面分辨新舊 server。',
+  cacheReadTokens:
+    '從快取讀到的輸入 token，與上面的輸入 token 互不重疊；這一段只要有一次呼叫沒報快取細節就整格缺席（不是 0）。',
+  cacheWriteTokens: '寫進快取的輸入 token，與上面的輸入 token 互不重疊；缺席的規則同快取讀。',
+  failedInputTokens:
+    '上面輸入 token（沒走快取的那一桶）裡，失敗或中止的呼叫報的那一份（已含在上面）。',
+  failedOutputTokens: '上面輸出 token 裡，失敗或中止的呼叫報的那一份（已含在上面）。',
+  failedCacheReadTokens:
+    '上面快取讀裡，失敗或中止的呼叫報的那一份（已含在上面）；失敗的呼叫只要有一次沒報快取細節就整格缺席（不是 0）。',
+  failedCacheWriteTokens:
+    '上面快取寫裡，失敗或中止的呼叫報的那一份（已含在上面）；缺席的規則同失敗的快取讀。',
+  summaries: '壓縮上下文時生摘要的次數。',
+  summariesUnknown: '生摘要時供應商沒報用量的次數。',
+  summaryInputTokens:
+    '生摘要那一次報的輸入 token（同樣只算沒走快取的那一桶），另列，不在輸入 token 裡、也不進 root 的 token 總帳。',
+  summaryOutputTokens: '生摘要那一次報的輸出 token，另列，同上。',
+  summaryCacheReadTokens:
+    '生摘要那一次從快取讀到的輸入 token，另列，不在上面的快取讀裡；摘要會重播整段前綴，大半走快取，所以這一格才是摘要輸入的主體。報了用量的摘要只要有一次沒報就整格缺席（不是 0）。',
+  summaryCacheWriteTokens: '生摘要那一次寫進快取的輸入 token，另列；缺席的規則同摘要的快取讀。',
+  retries: '模型呼叫的重試次數。',
+  retryWaitMs:
+    '重試實際等的退避時間。新日誌（#1427 之後）退避落在兩次嘗試之間，不在模型呼叫的起訖之內，不用從模型時間扣；更早的日誌退避包在該次呼叫的起訖之內，已從模型時間扣掉。畫面把它和核准等待合成「等待」時要相加。',
+  modelMs:
+    '模型呼叫的牆鐘（含失敗與中止的）；不含產生會話標題的那一次。新日誌（#1427 之後）退避在兩次嘗試之間，逐輪加總等於會話總計的 llmMs；更早的日誌退避包在起訖之內、已從這裡扣掉，逐輪加總會小於 llmMs，差的正是退避。',
+  toolCalls: '落定的工具呼叫（有結果的）；核准被拒的也有結果；停在核准點、沒跑的那一次不算。',
+  toolErrors: '落定的工具呼叫裡 isError 的。',
+  toolSumMs: '每個工具各自的牆鐘加總，平行的重疊會重複算（同會話統計的工具耗時）。',
+  toolMs: '至少有一個工具在跑的牆鐘（區間聯集）。前景子代理跑的時間已經在派它的那顆工具裡。',
+  waitMs: '停在核准點的時間：一輪的收尾到接著它的 resume 開始；人離開、行程重啟的時間也在裡面。',
+  unaccountedMs:
+    '一輪牆鐘扣掉模型、工具、重試退避、核准等待之後剩的：圖的啟動、生摘要那一次、事件之間的空隙。',
+};

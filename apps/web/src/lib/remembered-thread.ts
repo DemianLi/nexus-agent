@@ -9,13 +9,15 @@
  * 換來一個白畫面。
  *
  * **和 dsh 不同的一處**：dsh 的 id 由伺服器發、選取對著伺服器的清單驗。我們從
- * [#302](https://github.com/DemianLi/nexus-agent/issues/302) 起有清單（`GET /threads`），但只在開了
- * `--session-log` 的 server 上有，所以**記住的這一條不拿它驗**：id 是這一端自己生的，伺服器碰到一個以前寫過的
+ * [#302](https://github.com/DemianLi/nexus-agent/issues/302) 起有清單（`GET /threads`），但只在會話日誌落盤的 server 上有
+ * （預設落盤，#607；部署設定可以關掉，#613），所以**記住的這一條不拿它驗**：id 是這一端自己生的，伺服器碰到一個以前寫過的
  * id 就接回來、沒見過就新開，而這一端**分不出**是哪一種——`recalled` 只說「這個 id 是從上一次讀回來的」，
  * 畫面上的話要照這個分寸講。從清單點的那一條分得出來，所以它是另一種（`listed`）。
  *
  * @module
  */
+
+import { randomUuid } from '@/lib/uuid';
 
 /** 存在哪個鍵。 */
 export const REMEMBERED_THREAD_KEY = 'nexus.threads.current';
@@ -26,10 +28,11 @@ export const REMEMBERED_THREAD_KEY = 'nexus.threads.current';
  * - `fresh`：這一次才生的 id，或按「新對話」重用的一條空白會話（#313）。兩種都是空的，畫面上不用講話。
  * - `recalled`：從上一次讀回來的。伺服器是接回來還是新開的，這一端分不出來。
  * - `listed`：從 `GET /threads` 的清單點的。那份清單只列落了盤、切得過去的 thread，所以這一條一定是接回來的。
+ * - `forked`：剛從一則回覆分出來的（#1581）。server 分好才回，所以它一定在，內容是到分叉那一輪為止的來源。
  */
 export interface ThreadChoice {
   readonly threadId: string;
-  readonly origin: 'fresh' | 'recalled' | 'listed';
+  readonly origin: 'fresh' | 'recalled' | 'listed' | 'forked';
 }
 
 /**
@@ -70,7 +73,7 @@ function recalled(): string | undefined {
 export function recallThread(): ThreadChoice {
   const threadId = recalled();
   return threadId === undefined
-    ? { threadId: crypto.randomUUID(), origin: 'fresh' }
+    ? { threadId: randomUuid(), origin: 'fresh' }
     : { threadId, origin: 'recalled' };
 }
 

@@ -11,23 +11,22 @@
 
 import { PassThrough } from 'node:stream';
 
-import { createEchoPlugin } from '@nexus/plugin-echo';
-import {
-  createGoalPlugin,
-  GOAL_CLEARED_MESSAGE,
-  GOAL_COMMAND_NAME,
-  GOALS_SERVICE,
-} from '@nexus/plugin-goal';
+import { createEchoPlugin } from './echo.fixture.js';
+import { GOAL_CLEARED_MESSAGE, GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
 import { SessionRegistry } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent, runCli } from './cli.js';
-import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { runCli } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
+import { loopbackRequest, shippedModelRow, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE } from '@nexus/goal';
 
 const MODEL = (): ScriptedChatModel => new ScriptedChatModel({ turns: [{ content: '好的。' }] });
 
@@ -88,16 +87,19 @@ describe('組裝點', () => {
       plugins: [createEchoPlugin(), createGoalPlugin()],
     });
     try {
-      const goals = services.use(GOALS_SERVICE);
+      const goals = goalCoreOf(services.use(GOALS_SERVICE));
       const sessions = new SessionRegistry('one');
       const log = sessions.root;
       const detach = attachSession(sessions);
       expect(detach).toBeDefined();
-      expect(goals.attached()).toHaveLength(1);
-      goals.serviceFor(log)?.create({ objective: '接上了' });
+      // **lazy**：接上日誌的那一刻不建服務，第一次被問到才建（#1486）。
+      expect(goals.existingFor(log)).toBeUndefined();
+      const service = goals.serviceFor(log);
+      service.create({ objective: '接上了' });
       expect(log.events.map((event) => event.type)).toEqual(['goal/change']);
       detach();
-      expect(goals.attached()).toEqual([]);
+      // 服務跟著日誌而不是跟著 `attachSession`：撤掉參與者之後同一份日誌問到的還是同一個。
+      expect(goals.existingFor(log)).toBe(service);
     } finally {
       await dispose();
     }
@@ -105,12 +107,13 @@ describe('組裝點', () => {
 });
 
 describe('CLI 那條', () => {
-  it('`runCli` 真的接了——安裝當下寫的那一筆被已經在看的檢查看到', async () => {
+  it('`runCli` 真的接了——安裝當下寫的那一筆被檢查看到', async () => {
     // 觀測點是 fixture 裡那個一看到 `goal/change` 就吭聲的配套入口，理由見它的檔頭。
     // 這一行印得出來，同時證了四件事：參與者裝上了、它寫得動日誌、它在安裝當下就讀得
     // 回自己寫的東西（`GoalService.create()` append 完會立刻讀自己的折疊——`observe()`
-    // 要是等這一輪裝完才生效，那一行會拋，參與者整個不算，這裡就是空的），以及接線順序
-    // 是「不變量先、參與者後」——反過來的話，安裝期寫的那一筆沒有人在看。
+    // 要是等這一輪裝完才生效，那一行會拋，參與者整個不算，這裡就是空的），以及參與者寫的那一筆
+    // 被檢查看到了。**這一條證的是「有接上」，不是順序**：不變量 runner 接上時會重播日誌，所以
+    // 順序反過來也印得出同一行（`session-attach.ts`）。
     const { printer, stderr } = recorder();
     await runCli({
       argv: ['--patch', 'src/cli-session-participant.patch.yml', '說點什麼'],
@@ -155,16 +158,24 @@ describe('web 那條', () => {
   });
 
   it('每個 thread 的日誌各接一次——`wire-handler` 沒有把它丟掉', async () => {
-    const built = await createCliAgent({ live: false }, [createEchoPlugin(), createGoalPlugin()]);
-    const goals = built.goals;
-    if (goals === undefined) throw new Error('掛了 goal 就該拿得到服務');
+    const built = await createCliAgent({ live: false }, [
+      createEchoPlugin(),
+      createGoalPlugin(),
+      await shippedModelRow(),
+    ]);
+    if (built.goals === undefined) throw new Error('掛了 goal 就該拿得到服務');
+    const goals = goalCoreOf(built.goals);
+    const registries: SessionRegistry[] = [];
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachSession: built.attachSession,
+        attachSessions: (registry, backgroundPort) => {
+          registries.push(registry);
+          return composeAttachSessions(built)(registry, backgroundPort);
+        },
       }),
     });
     close = () => handler.close();
@@ -173,12 +184,19 @@ describe('web 那條', () => {
       fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
 
-    expect(goals.attached()).toEqual([]);
+    expect(registries).toEqual([]);
     await client.openEvents('t1');
-    expect(goals.attached()).toHaveLength(1);
+    expect(registries).toHaveLength(1);
     await client.openEvents('t2');
-    // **一個 thread 一份日誌，所以是兩個服務不是一個**——這正是服務綁日誌而不是綁
-    // registry 的理由。
-    expect(goals.attached()).toHaveLength(2);
+    expect(registries).toHaveLength(2);
+    // **一個 thread 一份日誌，所以是兩個服務不是一個**——這正是服務綁日誌而不是綁 registry 的理由。
+    // lazy 之後「接上」不再建服務，所以這裡各問一次，看問出來的是兩個互不相干的實例。
+    const [rootOne, rootTwo] = registries.map((registry) => registry.root);
+    expect(goals.existingFor(rootOne!)).toBeUndefined();
+    const one = goals.serviceFor(rootOne!);
+    const two = goals.serviceFor(rootTwo!);
+    expect(one).not.toBe(two);
+    one.create({ objective: '第一條 thread 的目標' });
+    expect(two.get()).toBeUndefined();
   });
 });

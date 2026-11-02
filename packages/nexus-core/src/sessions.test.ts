@@ -5,8 +5,10 @@
  * 而型別上兩者長得一樣，不寫這一條就沒有東西擋住有人哪天把它換成唯讀視圖。
  */
 
+import { HumanMessage } from '@langchain/core/messages';
 import { describe, expect, it, vi } from 'vitest';
 
+import { toLoggedMessage } from './logged-message.js';
 import { createRegistry } from './registry.js';
 import { SessionLog } from './session-log.js';
 import { SessionRegistry } from './session-registry.js';
@@ -72,6 +74,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     expect(log.length).toBe(1);
@@ -95,6 +98,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     expect(seenDuringInstall).toBe(1);
@@ -114,6 +118,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     expect(seen).toEqual(['turn/start']);
@@ -129,6 +134,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     expect(seen).toEqual(['turn/start']);
@@ -152,6 +158,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
       warn,
     });
@@ -173,6 +180,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
       warn,
     });
@@ -200,6 +208,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
       warn,
     });
@@ -222,6 +231,7 @@ describe('接線', () => {
     const detach = createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     detach();
@@ -236,6 +246,7 @@ describe('接線', () => {
     const detach = createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: [],
     });
     expect(() => detach()).not.toThrow();
@@ -308,6 +319,205 @@ describe('forCall', () => {
     undo();
     undo();
     expect(registry.sessions.forCall(atRoot)).toEqual({ kind: 'not-attached' });
+  });
+});
+
+/**
+ * 前景子代理的目錄（#1023）：圍堵在派出那顆呼叫上登記 `runId`，子日誌出生的那一刻在派它的那一份寫一顆 `subagent/catalog`。
+ * 產品路徑上的那一條在 harness 的 `subagent-session-link.test.ts`；這裡釘登記表自己的規矩。
+ */
+describe('sessions.expectSpawn', () => {
+  const inChild = { configurable: { checkpoint_ns: 'tools:spawn|tools:inner' } };
+  const catalogs = (log: SessionLog) =>
+    log.events.filter((event) => event.type === 'subagent/catalog').map((event) => event.data);
+
+  it('登記過的 runId：子日誌出生時在派它的那一份寫一顆，之後再開不重寫', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+    const found = registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toEqual([
+      { childId: found.kind === 'ok' ? found.log.sessionId : '?', callId: 'c1', mode: 'one-shot' },
+    ]);
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toHaveLength(1);
+  });
+
+  it('子日誌出生前就退掉登記（那顆呼叫沒派出子代理）：一顆都不寫', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    const release = registry.sessions.expectSpawn('tools:spawn', {
+      parent: sessions.root,
+      callId: 'c1',
+    });
+    release();
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toEqual([]);
+  });
+
+  it('沒登記的 runId 開出來的子日誌不寫', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    registry.sessions.expectSpawn('tools:other', { parent: sessions.root, callId: 'c1' });
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toEqual([]);
+  });
+
+  it('同一個 runId 再登記一次（核准中斷後 resume）：舊的那一格退掉不會帶走新的', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    const releaseOld = registry.sessions.expectSpawn('tools:spawn', {
+      parent: sessions.root,
+      callId: 'c1',
+    });
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+    releaseOld();
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toHaveLength(1);
+  });
+
+  it('派它的那一份不在開出子日誌的這張註冊表上（另一條 thread 的同名 runId）：不寫過去', () => {
+    const registry = createRegistry();
+    const mine = new SessionRegistry('t1');
+    const other = new SessionRegistry('t2');
+    registry.sessions.bind(mine);
+    registry.sessions.bind(other);
+    registry.sessions.expectSpawn('tools:spawn', { parent: mine.root, callId: 'c1' });
+    other.open({ kind: 'subagent', runId: 'tools:spawn' });
+    expect(catalogs(mine.root)).toEqual([]);
+    expect(catalogs(other.root)).toEqual([]);
+  });
+
+  /**
+   * #1702：目錄寫不進去就讓這次派出失敗，照 dsh（`catalog.ts:144` 直接拋）。寫在 `open` 回來之後，所以排在後面的訂閱者
+   * （持久化）照樣接上；從查找拋出去，是子代理第一次查找那一步失敗。登記留著，下一次查找再試；子代理那句話排在目錄之後，目錄沒寫成就不寫。
+   */
+  it('目錄寫不進去：原錯從查找拋出去，訂閱者照樣接上，子日誌一顆都沒寫，下一次查找再試', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    const input = toLoggedMessage(new HumanMessage('去查一下'));
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1', input });
+    const seen: SessionLog[] = [];
+    sessions.observe(({ address, log }) => {
+      if (address.kind === 'subagent') seen.push(log);
+    });
+    const boom = new Error('寫不進去');
+    let rejecting = true;
+    const real = sessions.root.append.bind(sessions.root);
+    vi.spyOn(sessions.root, 'append').mockImplementation(((
+      type: never,
+      data: never,
+      options: never,
+    ) => {
+      if (rejecting && type === 'subagent/catalog') throw boom;
+      return real(type, data, options);
+    }) as typeof sessions.root.append);
+
+    expect(() => registry.sessions.forCall(inChild)).toThrow(boom);
+    expect(seen).toHaveLength(1);
+    const child = seen[0]!;
+    expect(catalogs(sessions.root)).toEqual([]);
+    expect(child.events).toEqual([]);
+    // 登記留著：下一次查找再拋，不會靜靜跳過。
+    expect(() => registry.sessions.forCall(inChild)).toThrow(boom);
+    rejecting = false;
+    const found = registry.sessions.forCall(inChild);
+    expect(found.kind === 'ok' && found.log).toBe(child);
+    expect(catalogs(sessions.root)).toEqual([
+      { childId: child.sessionId, callId: 'c1', mode: 'one-shot' },
+    ]);
+    expect(child.events.map((event) => event.type)).toEqual(['user/message']);
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toHaveLength(1);
+  });
+
+  it('解綁之後開出來的子日誌不寫', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    const unbind = registry.sessions.bind(sessions);
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+    unbind();
+    sessions.open({ kind: 'subagent', runId: 'tools:spawn' });
+    expect(catalogs(sessions.root)).toEqual([]);
+  });
+
+  /**
+   * 子代理收到的那句話（#1159）：寫在 `open` 回來之後，每一位訂閱者都已接好（#1665）。排在 `bind` 後面的訂閱者代表持久化
+   * （serve 與 CLI 都把它接在最後）：它被通知的時候還沒有那句話。
+   *
+   * 這裡沒有掛會寫事件的參與者，所以那句話是子日誌唯一的一顆。它跟委派政策事件的先後（政策在前，同 dsh）要真的參與者才量得到，
+   * 釘在 `apps/harness/src/subagent-sandbox.test.ts`：這個套件不能依賴插件套件。
+   */
+  describe('子代理收到的那句話', () => {
+    const input = toLoggedMessage(new HumanMessage('去查一下'));
+
+    /** 綁好、登記好，再接一位排在後面的訂閱者，回傳它看到的每一份子日誌。 */
+    function wired() {
+      const registry = createRegistry();
+      const sessions = new SessionRegistry('t');
+      registry.sessions.bind(sessions);
+      registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1', input });
+      const seen: { log: SessionLog; eventsWhenNotified: number }[] = [];
+      sessions.observe(({ address, log }) => {
+        if (address.kind === 'subagent') seen.push({ log, eventsWhenNotified: log.events.length });
+      });
+      return { registry, sessions, seen };
+    }
+
+    it('寫在每一位訂閱者之後，之後再查不重寫', () => {
+      const { registry, seen } = wired();
+      const found = registry.sessions.forCall(inChild);
+      if (found.kind !== 'ok') throw new Error(`查不到：${found.kind}`);
+      expect(seen).toEqual([{ log: found.log, eventsWhenNotified: 0 }]);
+      expect(found.log.events.map((event) => [event.type, event.data])).toEqual([
+        ['user/message', { message: input, source: { kind: 'user' } }],
+      ]);
+      registry.sessions.forCall(inChild);
+      expect(found.log.events).toHaveLength(1);
+    });
+
+    /**
+     * 這一句今天沒有真的拒收路徑（圍堵從字串造的訊息，過得了日誌那一關），所以用 spy 造。要釘的是兩件事：拋出去（這一步失敗），
+     * 以及排在後面的訂閱者照樣被通知（以前寫在訂閱者裡，一拋就把它跳過，子日誌從此不落盤）。
+     */
+    it('寫不進去：原錯從查找拋出去，排在後面的訂閱者照樣接上，下一次查找再試', () => {
+      const { registry, sessions, seen } = wired();
+      const boom = new Error('寫不進去');
+      // 排在最後的訂閱者把子日誌的 `user/message` 弄成寫不進去：它跑完才輪到寫那一句。
+      let rejecting = true;
+      sessions.observe(({ address, log }) => {
+        if (address.kind !== 'subagent') return;
+        const real = log.append.bind(log);
+        vi.spyOn(log, 'append').mockImplementation(((type: never, data: never, options: never) => {
+          if (rejecting && type === 'user/message') throw boom;
+          return real(type, data, options);
+        }) as typeof log.append);
+      });
+      expect(() => registry.sessions.forCall(inChild)).toThrow(boom);
+      expect(seen).toHaveLength(1);
+      const child = seen[0]!.log;
+      expect(child.events).toEqual([]);
+      // 登記留著：吞掉查找錯誤的呼叫端先碰到的話，下一個照樣再拋。
+      expect(() => registry.sessions.forCall(inChild)).toThrow(boom);
+      rejecting = false;
+      const found = registry.sessions.forCall(inChild);
+      expect(found.kind === 'ok' && found.log).toBe(child);
+      expect(child.events.map((event) => event.type)).toEqual(['user/message']);
+    });
+
+    it('沒帶輸入就不寫', () => {
+      const registry = createRegistry();
+      const sessions = new SessionRegistry('t');
+      registry.sessions.bind(sessions);
+      registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+      const found = registry.sessions.forCall(inChild);
+      expect(found.kind === 'ok' && found.log.events).toEqual([]);
+    });
   });
 });
 

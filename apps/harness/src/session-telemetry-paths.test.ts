@@ -17,7 +17,7 @@ import { createServer } from 'node:http';
 
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
-import { SessionLog, SessionRegistry } from '@nexus/core';
+import { buildForkSeed, SessionLog, SessionRegistry } from '@nexus/core';
 import { SESSION_TELEMETRY_SERVICE } from '@nexus/core';
 import type {
   LoggedMessage,
@@ -31,12 +31,27 @@ import { createTelemetryOtelPlugin } from '@nexus/plugin-telemetry-otel';
 import { describe, expect, it, vi } from 'vitest';
 
 import { DISABLED_FEEDBACK_WARNING } from './agent-factory.js';
-import { createCliAgent, runTurn } from './cli.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
+import { runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
+import {
+  TEST_BROWSER_AUTH,
+  loopbackRequest,
+  shippedPlugins,
+  withoutTimeContext,
+} from './fixtures.js';
+import { createFeedbackPlugin } from './feedback.fixture.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
-const shipped = await shippedPlugins();
+const shipped = withoutTimeContext(await shippedPlugins());
+/**
+ * 出貨清單，但 feedback 換成不碰磁碟的外殼（#1606）：這幾條沒有樹也沒有落盤，出貨那一列的評分會回「存不住」；這裡驗的是遙測怎麼送，
+ * 不是落盤，所以評分的落盤確認直接放行。
+ */
+const shippedWithMemoryFeedback = [
+  ...shipped.filter((entry) => entry.plugin.name !== 'feedback'),
+  createFeedbackPlugin({ maxNoteBytes: 8192 }),
+];
 
 const BASE_URL = 'http://telemetry.test';
 const silent = { log: () => undefined, error: () => undefined };
@@ -126,11 +141,13 @@ describe('遙測接線：CLI 那條路', () => {
       await dispose();
     }
 
+    // 第一句跑完多一顆退回標題（#647），跟別的事件一樣鏡像出去。
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
       'turn/start',
+      'session/title',
       'turn/end',
     ]);
-    expect(ledgerOf(sink).map((record) => record.attributes['event.seq'])).toEqual([0, 1]);
+    expect(ledgerOf(sink).map((record) => record.attributes['event.seq'])).toEqual([0, 1, 2]);
     expect(ledgerOf(sink).every((record) => record.attributes['session.id'] === 'cli')).toBe(true);
   });
 
@@ -221,10 +238,44 @@ describe('遙測接線：CLI 那條路', () => {
     }
 
     // agent loop 毫髮無傷，日誌照樣完整；出口那側一筆都沒有（fail-closed）。
-    expect(sessionLog.events.map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
+    expect(sessionLog.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'session/title',
+      'turn/end',
+    ]);
     expect(sink.records).toHaveLength(0);
   });
 });
+
+/** 一輪的開頭：人送出的話先進送出佇列（#637），領走之後第一句寫退回標題（#647）。 */
+// 最前面一顆是接上日誌時釘進去的核准政策起始值（#437）。
+const TURN_HEAD = [
+  'approval/policy',
+  'inbox/spliced',
+  'turn/start',
+  'inbox/spliced',
+  'session/title',
+];
+/** 出貨腳本的三輪模型呼叫，其中兩輪帶一顆工具呼叫。 */
+const MODEL_AND_TOOL_ROUNDS = [
+  ...[
+    'model/start',
+    'assistant/message',
+    'model/end',
+    'context/measure',
+    'tool/call',
+    'tool/result',
+  ],
+  ...[
+    'model/start',
+    'assistant/message',
+    'model/end',
+    'context/measure',
+    'tool/call',
+    'tool/result',
+  ],
+  ...['model/start', 'assistant/message', 'model/end', 'context/measure'],
+];
 
 describe('遙測接線：web 那條路', () => {
   it('接的是 pump 自己那份日誌——session.id 是 threadId', async () => {
@@ -236,7 +287,7 @@ describe('遙測接線：web 那條路', () => {
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachTelemetry: built.attachTelemetry,
+        attachSessions: built.attachSessions,
       }),
     });
     const fetchImpl: typeof globalThis.fetch = async (input, init) =>
@@ -251,38 +302,17 @@ describe('遙測接線：web 那條路', () => {
     await handler.close();
 
     // **這一條就是 (A) 出局的證據還在成立**：號跟著 thread 走，不是跟著行程走。
-    expect(ledgerOf(sink).map((record) => record.attributes['session.id'])).toEqual([
-      'web-telemetry',
-      'web-telemetry',
-    ]);
+    const ids = ledgerOf(sink).map((record) => record.attributes['session.id']);
+    expect(ids).toHaveLength(TURN_HEAD.length + MODEL_AND_TOOL_ROUNDS.length + 1);
+    expect(new Set(ids)).toEqual(new Set(['web-telemetry']));
+    // 人送出的話先進送出佇列（#637）：一輪前面送進來一顆、`turn/start` 之後領走一顆。第一句領走之後寫退回標題（#647）。
+    // 中間是模型與工具那幾輪：**參與者接上了才有**，serve 一律接（#668），所以這條路上的帳本是完整的那一份。
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
-      'turn/start',
+      ...TURN_HEAD,
+      ...MODEL_AND_TOOL_ROUNDS,
       'turn/end',
     ]);
     expect(sink.shutdowns.count).toBe(1);
-  });
-
-  it('createAgent 沒給 attachTelemetry 時什麼都不會發生', async () => {
-    const sink = collectingSink();
-    const built = await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
-    const handler = createWireHandler({
-      auth: TEST_BROWSER_AUTH,
-      createAgent: async () => ({
-        agent: built.agent as unknown as PumpAgent,
-        commands: built.commands,
-        dispose: built.dispose,
-      }),
-    });
-    const fetchImpl: typeof globalThis.fetch = async (input, init) =>
-      handler.handle(loopbackRequest(input as string, init));
-    const client = createWireClient({ baseUrl: BASE_URL, fetch: fetchImpl });
-
-    const events = await client.openEvents('web-none');
-    await client.runStart('web-none', '嗨');
-    await drainUntilRootCompleted(events);
-    await handler.close();
-
-    expect(sink.records).toHaveLength(0);
   });
 });
 
@@ -311,11 +341,65 @@ async function mockCollector(): Promise<{ url: string; bodies: string[]; close: 
   };
 }
 
+/**
+ * 一條剛分叉的 thread：來源一輪（0–2，前綴裡有一顆回饋），標記在 3。
+ *
+ * @returns 根日誌就是這份分叉來的日誌的登記處。
+ */
+function forkedSessions(): SessionRegistry {
+  const source = new SessionLog('source');
+  source.append('turn/start', { kind: 'message', text: '來源那一輪' });
+  source.append('feedback/record', { text: '來源的回饋' });
+  source.append('turn/end', {});
+  return new SessionRegistry('child', { rootSeed: buildForkSeed(source.events, 2) });
+}
+
+describe('遙測接線：分叉來的 thread（#1580）', () => {
+  it('full：從繼承標記起送，來源的前綴不重送；每筆帶切點', async () => {
+    const sessions = forkedSessions();
+    const sink = collectingSink('full');
+    const { dispose, attachTelemetry } = await createCliAgent({ live: false }, [
+      ...shipped,
+      telemetryPlugin(sink),
+    ]);
+    try {
+      attachTelemetry(sessions);
+      expect(ledgerOf(sink).map((record) => record.attributes['event.seq'])).toEqual([3]);
+      expect(ledgerOf(sink)[0]!.attributes['session.seed_length']).toBe(3);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('feedback-only：人送出回饋時補送整份，連繼承來的前綴（照 dsh 出廠的 includeHistory）', async () => {
+    const sessions = forkedSessions();
+    const sink = collectingSink('feedback-only');
+    const { dispose, attachTelemetry } = await createCliAgent({ live: false }, [
+      ...shipped,
+      telemetryPlugin(sink),
+    ]);
+    try {
+      attachTelemetry(sessions);
+      expect(sink.records).toHaveLength(0);
+      sessions.root.append('feedback/record', { text: '子會話的回饋' });
+      expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
+        'turn/start',
+        'feedback/record',
+        'turn/end',
+        'session/end-seed',
+        'feedback/record',
+      ]);
+    } finally {
+      await dispose();
+    }
+  });
+});
+
 describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）', () => {
   it('回饋之前一筆都不送；第一顆回饋送整份前綴，之後只送新的那段', async () => {
     const sink = collectingSink('feedback-only');
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
+      await createCliAgent({ live: false }, [...shippedWithMemoryFeedback, telemetryPlugin(sink)]);
     attachTelemetry(sessions);
     const seqs = () => ledgerOf(sink).map((record) => record.attributes['event.seq']);
 
@@ -323,24 +407,25 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
       await runTurn(agent, '嗨', silent, sessionLog);
       expect(sink.records).toHaveLength(0);
 
-      feedback!.record(sessionLog, { text: '回答錯了' });
+      await feedback!.record(sessionLog, { text: '回答錯了' });
       expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
         'turn/start',
+        'session/title',
         'turn/end',
         'feedback/record',
       ]);
 
       await runTurn(agent, '再一次', silent, sessionLog);
-      expect(seqs()).toEqual([0, 1, 2]);
+      expect(seqs()).toEqual([0, 1, 2, 3]);
 
-      // 第二顆只送上次交到之後的那段——上界不對的話，這裡會重送 0–2。3–5 是第二輪與補上的那則回覆。
-      const put = feedback!.put(sessionLog, {
+      // 第二顆只送上次交到之後的那段——上界不對的話，這裡會重送 0–3。4–6 是第二輪與補上的那則回覆。
+      const put = await feedback!.put(sessionLog, {
         messageId: ratableReply(sessionLog),
         rating: 'negative',
         ifVersion: null,
       });
       expect(put.ok).toBe(true);
-      expect(seqs()).toEqual([0, 1, 2, 3, 4, 5, 6]);
+      expect(seqs()).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     } finally {
       await dispose();
     }
@@ -385,13 +470,13 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const sink = collectingSink('disabled');
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
-      await createCliAgent({ live: false }, [...shipped, telemetryPlugin(sink)]);
+      await createCliAgent({ live: false }, [...shippedWithMemoryFeedback, telemetryPlugin(sink)]);
     attachTelemetry(sessions);
 
     try {
       await runTurn(agent, '嗨', silent, sessionLog);
       expect(warn).not.toHaveBeenCalled();
-      feedback!.record(sessionLog, { text: '回答錯了' });
+      await feedback!.record(sessionLog, { text: '回答錯了' });
       expect(warn.mock.calls).toEqual([[DISABLED_FEEDBACK_WARNING]]);
     } finally {
       await dispose();
@@ -408,7 +493,7 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachTelemetry: built.attachTelemetry,
+        attachSessions: built.attachSessions,
         ...(built.feedback !== undefined && { feedback: built.feedback }),
       }),
     });
@@ -425,7 +510,8 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     await handler.close();
 
     expect(ledgerOf(sink).map((record) => record.attributes['event.type'])).toEqual([
-      'turn/start',
+      ...TURN_HEAD,
+      ...MODEL_AND_TOOL_ROUNDS,
       'turn/end',
       'feedback/record',
     ]);
@@ -436,15 +522,15 @@ describe('遙測接線：feedback-only 只在人送出回饋時補送（#279）'
     const collector = await mockCollector();
     const { agent, dispose, sessions, sessionLog, attachTelemetry, feedback } =
       await createCliAgent({ live: false }, [
-        ...shipped,
+        ...shippedWithMemoryFeedback,
         createTelemetryOtelPlugin({ mode: 'feedback-only', exporter: { url: collector.url } }),
       ]);
     attachTelemetry(sessions);
 
     try {
       await runTurn(agent, '嗨', silent, sessionLog);
-      feedback!.record(sessionLog, { text: '會話評語原文' });
-      const put = feedback!.put(sessionLog, {
+      await feedback!.record(sessionLog, { text: '會話評語原文' });
+      const put = await feedback!.put(sessionLog, {
         messageId: ratableReply(sessionLog),
         rating: 'negative',
         note: '評分備註原文',

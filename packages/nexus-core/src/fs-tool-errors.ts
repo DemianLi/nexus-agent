@@ -20,7 +20,8 @@
  * dsh 的 `write`／`edit` 在工具本體裡拋 `FsError`（`packages/fs/tool-fs/src/write.ts:116-123`，
  * SHA `c291e79`），註冊表渲染成 `isError`；sandbox 拒絕的碼是 `FS_SANDBOX_DENIED`
  * （`tool-fs/src/sandbox.ts:124-130`），其餘檔案失敗照樣是 `isError`。**範圍照抄**：每一種 backend
- * 錯誤都是錯誤，只有 fence 拒絕帶碼——其餘要分出 `FS_NOT_FOUND` 之類得解析基座的措辭。**文字只補
+ * 錯誤都是錯誤；fence 拒絕帶 `FS_SANDBOX_DENIED`，自己實作的 `read`／`edit`／`write` 失敗帶 `FS_NOT_FOUND` 等七個原因碼
+ * （{@link noteFsError}，#1563）。其餘（基座的 `ls`／`glob`／`delete`）仍沒有碼，要分得解析基座的措辭。**文字只補
  * `Error: `**：原本是一字不變（[#271](https://github.com/DemianLi/nexus-agent/issues/271)），
  * [#318](https://github.com/DemianLi/nexus-agent/issues/318) 照 dsh 的 `toolErrorResult` 補上前綴，
  * 基座自己已經寫成錯誤的那幾句不補（見 middleware）。
@@ -74,6 +75,58 @@ export const FS_TOOL_ERRORS_MIDDLEWARE_NAME = 'nexusFsToolErrors';
 export const FS_SANDBOX_DENIED = 'FS_SANDBOX_DENIED';
 
 /**
+ * 檔案工具失敗的原因碼（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。除 `FS_NO_SPACE` 外字面照 dsh `FsErrorCode`
+ * （`packages/fs/fs/src/types.ts:176-188`，`687f282e`）。載體跟 {@link FS_SANDBOX_DENIED} 一樣：backend 在這一次呼叫的記錄上寫碼
+ * （{@link noteFsError}），`wrapToolCall` 標錯時帶出去，最後落進會話日誌那顆 `tool/result` 的 `error`，web 的 trace 列照實顯示。
+ *
+ * - `FS_NOT_FOUND`：路徑不存在（`read`／`edit`）。
+ * - `FS_NOT_REGULAR_FILE`：路徑存在但不是一般檔（目錄等）。
+ * - `FS_NOT_TEXT`：二進位檔，或不是合法 UTF-8。
+ * - `FS_EDIT_NOT_FOUND`：`old_string` 是空的，或在檔案裡找不到。
+ * - `FS_AMBIGUOUS_EDIT`：`old_string` 命中好幾處、又沒有 `replace_all`。
+ * - `FS_PERMISSION_DENIED`：作業系統回 `EACCES`／`EPERM`。
+ * - `FS_NO_SPACE`：作業系統回 `ENOSPC`／`EDQUOT`（[#2195](https://github.com/DemianLi/nexus-agent/issues/2195)）。
+ *
+ * **不做 `FS_TOO_LARGE`：** nexus 的 `read` 沒有整檔大小上限（#1530 刻意不加，dsh 的 read 工具也沒有；dsh 的 `FS_TOO_LARGE` 只出在
+ * `readWholeBytes` 的 `maxBytes`，給附件與媒體用），沒有產生它的地方。**`FS_ABORTED` 不做：** 基座的 backend 方法拿不到取消訊號。
+ */
+export const FS_NOT_FOUND = 'FS_NOT_FOUND';
+export const FS_NOT_REGULAR_FILE = 'FS_NOT_REGULAR_FILE';
+export const FS_NOT_TEXT = 'FS_NOT_TEXT';
+export const FS_EDIT_NOT_FOUND = 'FS_EDIT_NOT_FOUND';
+export const FS_AMBIGUOUS_EDIT = 'FS_AMBIGUOUS_EDIT';
+export const FS_PERMISSION_DENIED = 'FS_PERMISSION_DENIED';
+export const FS_NO_SPACE = 'FS_NO_SPACE';
+
+/** 檔案工具失敗的七個原因碼（不含 fence 的 {@link FS_SANDBOX_DENIED}，它有自己的旁路）。 */
+export type FsErrorCode =
+  | typeof FS_NOT_FOUND
+  | typeof FS_NOT_REGULAR_FILE
+  | typeof FS_NOT_TEXT
+  | typeof FS_EDIT_NOT_FOUND
+  | typeof FS_AMBIGUOUS_EDIT
+  | typeof FS_PERMISSION_DENIED
+  | typeof FS_NO_SPACE;
+
+/**
+ * 搜尋失敗的碼（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。dsh `SearchErrorCode` 的四個成員
+ * （`packages/fs/tool-fs-search/src/search-core.ts:78-82`，`687f282e`），字面照抄。載體跟 {@link FS_SANDBOX_DENIED}
+ * 一樣：backend 在這一次呼叫的記錄上寫碼（{@link noteSearchError}），`wrapToolCall` 標錯時帶出去，最後落進會話日誌
+ * 那顆 `tool/result` 的 `error`。nexus 沒有 dsh 的 `HarnessError` 註冊表，這是 #293 已經用過的載體，不另立新的。
+ */
+export const SEARCH_INVALID_PATTERN = 'SEARCH_INVALID_PATTERN';
+export const SEARCH_FAILED = 'SEARCH_FAILED';
+export const SEARCH_RAW_OUTPUT_OVERFLOW = 'SEARCH_RAW_OUTPUT_OVERFLOW';
+export const SEARCH_ABORTED = 'SEARCH_ABORTED';
+
+/** 搜尋失敗的四個碼。 */
+export type SearchErrorCode =
+  | typeof SEARCH_INVALID_PATTERN
+  | typeof SEARCH_FAILED
+  | typeof SEARCH_RAW_OUTPUT_OVERFLOW
+  | typeof SEARCH_ABORTED;
+
+/**
  * 基座自己寫成錯誤的那幾句的開頭：`read_file` 的 `Error: …`、`ls`／`glob` 的 `Error listing files: …`
  * 與 `Error finding files: …`（`deepagents@1.13.1`，見檔頭）。這幾句不補前綴，理由見 middleware。
  */
@@ -121,6 +174,14 @@ interface CallRecord {
   readonly failed: Map<string, boolean>;
   /** 這一次有沒有被 fence 擋下。 */
   sandboxDenied: boolean;
+  /** 這一次工具呼叫的取消訊號（使用者停止、工具逾時），langchain 放在 `request.runtime.signal`；沒有就是 `undefined`。 */
+  readonly signal: AbortSignal | undefined;
+  /** backend 的搜尋失敗了，是哪一種（{@link noteSearchError}）。 */
+  searchError: SearchErrorCode | undefined;
+  /** backend 的讀寫改失敗了，是哪一種（{@link noteFsError}）。 */
+  fsError: FsErrorCode | undefined;
+  /** 搜尋成功、但這次呼叫累計有幾條路徑讀不到而被略過（{@link noteSearchSkipped}）。 */
+  searchSkipped: number;
 }
 
 /**
@@ -147,6 +208,55 @@ function note(method: string, result: unknown): void {
 export function noteSandboxDenial(): void {
   const record = currentCall.getStore();
   if (record !== undefined) record.sandboxDenied = true;
+}
+
+/**
+ * 搜尋失敗了：backend 在回 `{ error }` 之前叫它，記下是哪一個碼（{@link SearchErrorCode}）。不在任何一次工具呼叫裡時什麼都不做。
+ *
+ * @param code - 四個碼之一。
+ */
+export function noteSearchError(code: SearchErrorCode): void {
+  const record = currentCall.getStore();
+  if (record !== undefined) record.searchError = code;
+}
+
+/**
+ * 搜尋成功了，但有路徑讀不到、被略過（[#1704](https://github.com/DemianLi/nexus-agent/issues/1704)）：backend 在回結果之前
+ * 叫它，`wrapToolCall` 在 `grep`／`glob` 成功的結果後面接上一句「N 條路徑讀不到、已略過」。基座的 `GrepResult`／`GlobResult`
+ * 沒有地方放這種話（`truncated` 會讓基座接上「hit the maximum match count」，說的是別的事），所以走跟 {@link noteSearchError}
+ * 同一條載體。
+ *
+ * **記的是數字，句子在 middleware 組**：基座的 `CompositeBackend.grep('/')` 一次工具呼叫會依序搜預設 backend 與每一條 route，
+ * 每一個都可能略過一些；數字累加，各自記一句的話後面的會蓋掉前面的、N 少算。也讓 core 不必帶任意文字。
+ * 不在任何一次工具呼叫裡、或 `count` 不是正整數時什麼都不做。
+ *
+ * @param count - 這一次 backend 呼叫略過幾條路徑。
+ */
+export function noteSearchSkipped(count: number): void {
+  const record = currentCall.getStore();
+  if (record !== undefined && Number.isInteger(count) && count > 0) record.searchSkipped += count;
+}
+
+/**
+ * 檔案工具失敗了：backend 在回 `{ error }` 之前叫它，記下是哪一個碼（{@link FsErrorCode}）。錯誤文字不變，碼只進 `tool/result`。
+ * 不在任何一次工具呼叫裡時什麼都不做。**fence 的拒絕不走這裡**，叫 {@link noteSandboxDenial}；兩者同時出現時 fence 的碼優先。
+ *
+ * @param code - {@link FsErrorCode} 之一。
+ */
+export function noteFsError(code: FsErrorCode): void {
+  const record = currentCall.getStore();
+  if (record !== undefined) record.fsError = code;
+}
+
+/**
+ * 正在跑的這一次工具呼叫的取消訊號（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。
+ * langchain 的 `ToolNode.runTool` 把 `lgConfig.signal` 放進 `request.runtime.signal`，`wrapToolCall` 開記錄時帶上。
+ * 使用者按停止、工具逾時都經這個訊號；backend 自己起子行程時據此收掉它。
+ *
+ * @returns 不在工具呼叫裡、或這一次沒有訊號時是 `undefined`。
+ */
+export function currentToolCallSignal(): AbortSignal | undefined {
+  return currentCall.getStore()?.signal;
 }
 
 /**
@@ -196,6 +306,42 @@ function withSandboxCode<T>(result: T, record: CallRecord): T {
   return markToolError(result, { name: 'FsError', code: FS_SANDBOX_DENIED });
 }
 
+/** 略過的路徑數 → 接在結果後面的那一句。只講數量，路徑是主機上別人的檔名。 */
+function skippedNotice(count: number): string {
+  const noun = count === 1 ? 'path was' : 'paths were';
+  return `${String(count)} ${noun} unreadable (permission denied) and skipped; results cover only the readable files`;
+}
+
+/**
+ * 搜尋成功而 backend 記了略過幾條路徑（{@link noteSearchSkipped}）：把那句接在基座排好的結果後面，其餘每一格原樣帶過去。
+ * 只管 `grep`／`glob`；錯誤的結果、不是文字的內容（文字區塊以外的形狀）原樣交出，不猜。
+ */
+function withSkippedNotice<T>(result: T, toolName: string, record: CallRecord): T {
+  if (record.searchSkipped === 0 || (toolName !== 'grep' && toolName !== 'glob')) return result;
+  if (!ToolMessage.isInstance(result) || result.status === 'error') return result;
+  const suffix = `\n\n(${skippedNotice(record.searchSkipped)})`;
+  let content: ToolMessage['content'];
+  if (typeof result.content === 'string') {
+    content = `${result.content}${suffix}`;
+  } else if (
+    result.content.every((block) => (block as { readonly type?: unknown }).type === 'text')
+  ) {
+    content = [...result.content, { type: 'text', text: suffix }];
+  } else {
+    return result;
+  }
+  return new ToolMessage({
+    content,
+    tool_call_id: result.tool_call_id,
+    name: result.name ?? toolName,
+    id: result.id,
+    status: result.status,
+    artifact: result.artifact,
+    additional_kwargs: result.additional_kwargs,
+    response_metadata: result.response_metadata,
+  }) as unknown as T;
+}
+
 /**
  * 造一顆把檔案工具的失敗標成錯誤的 middleware。**無狀態**：記錄每次呼叫各一份，root 與每個
  * subagent 共用同一顆。
@@ -208,12 +354,28 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
     wrapToolCall: async (request, handler) => {
       // **每一顆工具呼叫都開一份記錄**，不只基座的檔案工具：fence 擋下的若是別的工具
       // （`submit_record`，#316），它的回報也要有地方落。
-      const record: CallRecord = { failed: new Map(), sandboxDenied: false };
+      const record: CallRecord = {
+        failed: new Map(),
+        sandboxDenied: false,
+        signal: (request.runtime as { readonly signal?: AbortSignal } | undefined)?.signal,
+        searchError: undefined,
+        fsError: undefined,
+        searchSkipped: 0,
+      };
       const result = await currentCall.run(record, () => handler(request));
-      const method = FS_TOOL_PRIMARY_METHOD[resolveToolName(request)];
+      const toolName = resolveToolName(request);
+      const method = FS_TOOL_PRIMARY_METHOD[toolName];
       if (method === undefined) return withSandboxCode(result, record);
-      if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) return result;
-      const error = record.sandboxDenied ? { name: 'FsError', code: FS_SANDBOX_DENIED } : undefined;
+      if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) {
+        return withSkippedNotice(result, toolName, record);
+      }
+      const error = record.sandboxDenied
+        ? { name: 'FsError', code: FS_SANDBOX_DENIED }
+        : record.searchError !== undefined
+          ? { name: 'SearchError', code: record.searchError }
+          : record.fsError === undefined
+            ? undefined
+            : { name: 'FsError', code: record.fsError };
       // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
       if (result.status === 'error' && error === undefined) return result;
       const options = {

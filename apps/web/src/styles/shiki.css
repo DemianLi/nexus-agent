@@ -10,7 +10,7 @@
   --shiki-background: transparent;
   --shiki-token-keyword: var(--destructive);
   --shiki-token-function: var(--brand);
-  --shiki-token-constant: var(--warning);
+  --shiki-token-constant: var(--status-interrupted);
   --shiki-token-string: var(--success);
   --shiki-token-string-expression: var(--success);
   --shiki-token-parameter: var(--foreground);

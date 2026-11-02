@@ -1,0 +1,159 @@
+{
+  "id": "2402.09205",
+  "title": "Tell Me More! Towards Implicit User Intention Understanding of Language Model Driven Agents",
+  "topic": "T1",
+  "subarea": "使用者目標推斷與偏好引出",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "建立 IN3 基準（1,261 題訓練、108 題測試的單句 agent 任務，逐題標註是否模糊、缺漏細節、三級重要性與候選選項），用兩個 GPT-4 分別扮演使用者與助理合成澄清對話，把 Mistral-7B 全參數微調成 Mistral-Interact：先判斷任務模糊與否、模糊就每輪只問一題並附選項、最後把使用者偏好整理成約束清單與一句明確目標 t_user，再交給 XAgent 執行。",
+  "problem": "LLM agent 框架（AutoGPT、XAgent 等）預設使用者的初始指令已經清楚，但實際上指令多半簡短模糊，而且不同使用者對同一句話有不同的隱含意圖。agent 直接照模糊指令執行，會出現作者所謂的「假成功」：看似完成目標，實際偏離使用者真正要的東西，還浪費工具呼叫。當時的 agent 基準也不評估意圖理解，所以缺一個能量化「agent 會不會判斷模糊、問不問得到關鍵缺漏、能不能完整整理使用者意圖」的基準，也缺一個能插進現有框架的做法。",
+  "core_idea": "把意圖理解做成 agent 執行前的一個獨立上游模組（作者稱為 buffer）：若任務 t 已清楚就原樣放行；若模糊，就和使用者多輪對話，把 t 轉成涵蓋所有隱含意圖的 t_user，再交給下游執行 f(t_user)。這個模組不靠提示工程，而是用一個 7B 的專用模型：訓練資料由基準的人工標註（模糊判斷、缺漏細節、選項）直接組成「初始想法」，再由 GPT-4 模擬使用者與助理展開對話，教模型四件事：顯式的初始判斷、每輪一問附選項、承受不同使用者語氣、顯式逐條整理約束後輸出總結。",
+  "method": {
+    "問題形式化（§3.3、§4）": "輸入是一句使用者任務 t，其缺漏細節集合為 D={d1,…,dn}。模組的輸出是 t_user（涵蓋使用者對每個缺漏細節的意圖）。若 t 清楚，t_user=t；若 t 模糊，透過多輪問答取得資訊後輸出 t_user。下游 agent 的執行記為 f(·)，目標是讓 f(t_user) 比 f(t) 更貼近使用者意圖、更有效率。",
+    "IN3 任務生成（§3.1、Appendix A.1）": [
+      "以人工撰寫的種子任務起步，用 GPT-4 以 self-instruct 方式迭代生成：每輪從現有資料集抽樣當示範，再生成新任務並加回資料集。",
+      "生成用的 system prompt 設定 agent 可用資源：網路搜尋、檔案系統讀寫、Python notebook、具 root 權限的 shell；要求任務以第一人稱撰寫、貼近真實生活、刻意保持模糊、只用一句話、難度多樣，並以 tool call 列出。",
+      "去重：每個類別內以 text-embedding-ada-002 計算嵌入，過濾到任兩題 cosine 相似度都小於 0.8。",
+      "規模：訓練集 1,261 題（模糊 1,012、清楚 249、250 個類別）；測試集 108 題（模糊 95、清楚 13、50 個類別）。訓練集缺漏細節共 3,615 個（每題平均 3.57，Lv1／Lv2／Lv3 占 15.44%／67.75%／16.81%），選項 11,523 個；測試集缺漏細節 350 個（平均 3.68，占 9.14%／72.29%／18.57%），選項 1,042 個（Table 1）。論文沒說訓練與測試的類別是否互斥。"
+    ],
+    "IN3 標註（§3.1、Appendix A.2）": [
+      "先由 GPT-4 以 function calling 呼叫 judge_vagueness 工具給出建議：欄位為 thought（為何模糊或清楚）、judgment（vague／clear 二選一）、missings 陣列（每項含 description、importance 字串 3／2／1、inquiry 一句向使用者的提問、options 2–3 個簡短選項）。",
+      "模糊的定義：任務太籠統、缺少理解意圖所必需的細節，或缺少有助達成目標的偏好細節；清楚則是目標與偏好都已足夠。",
+      "重要性三級：Lv3 沒有它任務無法完整執行；Lv2 知道了能更好地完成但非必要；Lv1 太瑣碎或太籠統，不知道也能順利完成。",
+      "多位不同背景的標註者各負責若干題，以 GPT-4 的建議為參考做篩選與修改，使標註反映自己的偏好；清楚題不標缺漏細節、重要性與選項。"
+    ],
+    "訓練對話建構（§4.1、Appendix C）": {
+      "初始想法（Initial Thought）": "不由模型生成，而是依標註人工拼接：模糊判斷＋理由＋缺漏細節清單＋每個細節的選項。這等於把 IN3 的標註答案直接寫進訓練目標。",
+      "Assistant-GPT 的規則": "拿到類別、任務、初始想法與缺漏細節參考清單；每輪先寫 thought 說明為何這樣問，再只問一題並附選項或建議，第一人稱、友善語氣；可以問參考清單上的新問題，也可以依使用者上一句追問；總輪數控制在 5 輪以下；資訊足夠就停，不必問遍每個細節。",
+      "User-GPT 的規則": "扮演使用者的朋友，每次用一句話回答；分兩個語氣版本：passionate（熱情、會主動多給資訊）與 succinct（懶、多用短語）；被問到個人偏好、資訊或地址時要自行編造具體、逼真的內容。",
+      "總結": "summary thought 由人工拼接：原始想法＋逐條列出的使用者約束（清楚題省略約束）。最終總結由 Assistant-GPT 以 function calling 呼叫 complete_summary 工具產生：thought（為何資訊已足夠）、constraints（約束清單，條數要等於對話輪數，清楚題留空）、summary（兩句內涵蓋目標與所有約束，不得加入未提及的資訊）。",
+      "清楚題": "跳過對話模擬，只產生初始想法（判為清楚）與總結想法，t_user=t。",
+      "規模": "每題以兩種使用者語氣各模擬一次，對話紀錄約為訓練任務數的兩倍（作者未給確切數字）。訓練對話已公開於 HuggingFace 資料集 hbx/IN3-interaction。"
+    },
+    "訓練格式（§4.2、Appendix D）": [
+      "system prompt 分三步：Step 1 產生 [INITIAL THOUGHT] 判斷模糊與否及原因，模糊時列出重要缺漏細節與選項；Step 2 模糊時依清單詢問，每次先寫 [INQUIRY THOUGHT] 再寫 [INQUIRY]（附選項、語氣友善），可重複但少於 5 次，清楚就跳過；Step 3 資訊足夠時在 [SUMMARY THOUGHT] 逐條列出使用者偏好與約束（條數等於對話輪數），再在 [SUMMARY] 用一兩句給出最終總結。",
+      "模糊題模板：第一輪輸出 [INITIAL THOUGHT]＋缺漏細節與選項＋[INQUIRY THOUGHT]＋[INQUIRY]；中間輪輸出 [INQUIRY THOUGHT]＋[INQUIRY]；最後一輪輸出 [SUMMARY THOUGHT]＋[SUMMARY]。清楚題模板只有 [INITIAL THOUGHT] 與 [SUMMARY THOUGHT]＋[SUMMARY]。",
+      "樣本採 Mistral 原生對話格式（<s> User: … Agent: …</s>），User-GPT 的回應原樣放入 User 輪。",
+      "逐輪累加切分成多筆訓練樣本：模糊題第 1 筆學初始想法＋模糊判斷＋第一問，第 i 筆學第 i 問，最後一筆學總結；清楚題只有 1 筆。論文沒寫 loss 是否只算最後一個 assistant 輪。"
+    ],
+    "超參數（§4.2、Appendix D.4 Table 5）": "基底 Mistral-7B-v0.1（base，不是 Instruct）；以 OpenBMB 的 ModelCenter 做全參數微調，2 張 80GB A800；max length 2048、3 epochs、batch size 16、learning rate 1e-6、cosine scheduler、AdamOffload 最佳化器、訓練 4.5 小時；依訓練 loss 動態調整 loss scale 以防 underflow。",
+    "推論與模糊判斷的解析（§5.1、Appendix E.3）": "所有模型（含基線）都以同一套指令要求：先判斷模糊、問缺漏細節、最後總結。模型的模糊判斷不另外讀一個欄位，而是由行為推定：第一輪直接給總結就算判為清楚，有提問就算判為模糊。主實驗的解碼參數未說明（temperature 0.7、top_p 0.9 只屬於 §3.2 初步測試）。",
+    "意圖理解評估流程（§5.1、Appendix E）": [
+      "108 題測試任務，招募 8 位不同專長的大學部使用者，每人負責若干題，想像自己要做這個任務並自由回答模型的提問。",
+      "使用者邊對話邊標註：每輪模型問了幾個細節、給了幾個選項、選項是否合理；對話結束時標註自己總共提供了幾項資訊、其中幾項被總結明確涵蓋。",
+      "以 GPT-4 把模型問到的每個細節與 IN3 的標準缺漏細節逐一配對；使用者標註與 GPT-4 配對各抽樣約 5% 人工檢查，作者稱全部合格。",
+      "指標公式：J_acc 為模糊判斷與標準一致的比例（分母為全部題目 T）；RR^i 為第 i 級重要性的缺漏細節被問到的比例；CR 為使用者提供的意圖被總結涵蓋的比例；另有 OP_p（附選項的提問比例）、OP_r（合理選項比例）、OP_avg、D_avg、R_avg、DPR_avg（每輪問幾個細節）。除 J_acc 與 R_avg 外，分母都是模型自己判為模糊的題目集合 T_v，只報告 macro-average。"
+    ],
+    "初步測試設定（§3.2、Appendix B）": "從 IN3 抽 10 題（6 題模糊、4 題清楚，共 24 個人工標註的必要缺漏細節），測 LLaMA-2-7B-Chat、Mistral-7B-Instruct-v0.2、GPT-4-1106；temperature 0.7、top_p 0.9、max length 2048，每題只跑一次。失敗樣式分三階段（判斷、詢問、總結），某模型在超過 3 題出現該樣式記為 Severe、1–3 題為 Light，至少三位標註者取共識。",
+    "指令執行評估（§5.2、Appendix F）": "從測試集隨機抽 10 題，條件是標準答案與 Mistral-Interact 都判為模糊、且在 XAgent 能力範圍內；分別把原始模糊任務與 Mistral-Interact 對話後的總結送進 XAgent（啟用 plan 與 execution engine，GPT-4 同時當規劃與執行模型，環境有網路搜尋、程式執行、命令列、檔案系統）。由與 Mistral-Interact 對話的同一位使用者逐一標註每個子任務與里程碑是否不必要、是否過於籠統，另計每個子任務／里程碑的平均工具呼叫次數。",
+    "給框架工程師的重做要點": "若只想複製這個 T1 閘門而不訓練模型：用 judge_vagueness 的 schema 讓強模型對輸入任務產生「模糊判斷＋缺漏細節（含重要性與 2–3 個選項）」，存成結構化狀態；接著每輪只從清單挑一項（優先 Lv3）附選項提問、允許依回答追問、上限 5 輪；結束時用 complete_summary 的 schema 輸出約束清單與兩句內的 t_user，下游只吃 t_user。若要做成小模型專家，照 Appendix C 的兩種使用者語氣合成對話、依 Appendix D 的標記格式逐輪切分樣本，以 LR 1e-6 全參數微調 3 epochs。"
+  },
+  "assumptions": [
+    "使用者的意圖在執行開始前就固定，可以拆成有限個缺漏細節並逐一問出；執行中目標改變或新資訊不在這個模組處理範圍內。",
+    "標註者（以 GPT-4 建議為起點修改）列出的缺漏細節與重要性等級，能代表「該問什麼」的標準答案，而且重要性對不同使用者大致通用。",
+    "GPT-4 扮演的使用者（兩種語氣、會編造偏好）足以代表真實使用者的回應分布，拿它合成的對話訓練出來的行為能遷移到真人。",
+    "使用者願意也有能力回答約 4 輪提問；提問本身的成本（時間、打擾）低於執行錯誤目標的成本。",
+    "兩句話的 t_user 足以承載所有約束，而且下游 agent 會忠實依照 t_user 規劃，不會再自行補上臆測的細節。",
+    "任務是單句、第一人稱、以網路搜尋／程式／shell／檔案系統可完成的日常 agent 任務；測試集與訓練集同一生成流程，屬於同分布。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "IN3 測試集（108 題：95 模糊、13 清楚、50 個類別、350 個標準缺漏細節）",
+      "IN3 抽樣 10 題的初步測試（§3.2）",
+      "IN3 測試集抽樣 10 題接上 XAgent 的指令執行評估（§5.2）"
+    ],
+    "metrics": [
+      "Vagueness Judgement Accuracy",
+      "Missing Details Recover Rate（分 Lv3／Lv2／Lv1）",
+      "Summary Intention Coverage Rate",
+      "Options Presenting Rate、Options Reasonable Rate、Average Provided Options",
+      "Average Inquired Missing Details、Average Conversation Rounds、Average Inquired Missing Details Per Round",
+      "執行面：Unnecessary Subtasks／Milestones（%）、General Subtasks／Milestones（%）、Tool Invocations Per Subtask／Milestone",
+      "初步測試：模糊判斷正確題數、必要提問占全部提問的比例、失敗樣式的 Severe／Light 質性評分"
+    ],
+    "baselines": [
+      "LLaMA-2-7B-Chat（同一套提示詞）",
+      "Mistral-7B-Instruct-v0.2（同一套提示詞）",
+      "GPT-4（初步測試為 GPT-4-1106；§5.1.1 說主實驗與 §3.2 用同一批模型，故推定也是 GPT-4-1106）",
+      "執行評估的對照組只有「直接把原始模糊任務交給 XAgent」，沒有以 GPT-4 當上游澄清者、也沒有以標準答案構成的 oracle 目標作對照"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "只靠提示詞時，三個模型都有明顯的意圖理解缺陷，作者據此主張需要專門訓練一個互動專家模型，並以 Mistral 缺陷最少為由選它當基底。",
+      "numbers": "10 題初步測試的模糊判斷：LLaMA-2 6/10、Mistral 8/10、GPT-4 9/10；必要提問占全部提問：7/23、7/8、16/24。LLaMA-2 在「問個不停」「問不必要細節」「直接解題不總結」三項為 Severe，Mistral 在「問太少、急著總結」為 Severe。",
+      "section": "§3.2、Table 2、Appendix B",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "Mistral-Interact 的模糊判斷在四個模型中最準，重要缺漏細節的召回接近 GPT-4。",
+      "numbers": "Vagueness Judgement Accuracy：Mistral-7B 49.07、LLaMA-2-7B 79.63、GPT-4 82.41、Mistral-Interact 85.19（%）。Recover Rate Lv3：68.42／60.98／75.22／72.28；Lv2：56.94／38.76／63.14／67.08；Lv1：23.08／28.92／37.50／27.94（Lv1 在表中沒有標示越高越好）。",
+      "section": "§5.1.3、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "Mistral-Interact 對話輪數最多，但總結仍能涵蓋絕大部分使用者提供的意圖，只略低於 GPT-4。",
+      "numbers": "Summary Intention Coverage Rate：Mistral-7B 91.43、LLaMA-2-7B 61.87、GPT-4 100.0、Mistral-Interact 96.37（%）；Average Conversation Rounds：1.62／3.02／2.69／4.15（內文寫成約 4.5，與表不一致）。",
+      "section": "§5.1.3、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Mistral-Interact 的提問方式最接近「一次一問、附選項」的設計目標，選項也被使用者認為合理。",
+      "numbers": "每輪問的細節數：Mistral-7B 2.80、LLaMA-2-7B 2.49、GPT-4 2.31、Mistral-Interact 1.26；Options Presenting Rate：42.46／47.64／40.31／84.08（%）；Average Provided Options：1.46／1.35／1.21／2.72；Options Reasonable Rate：100.0／81.79／100.0／98.70（%）。",
+      "section": "§5.1.3、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "把 Mistral-Interact 對話後的明確目標交給 XAgent，不必要與過於籠統的子任務／里程碑大幅減少，每個子任務的工具呼叫略減。",
+      "numbers": "模糊任務→明確任務：Unnecessary ST／MS 22.22／21.48 → 1.85／7.81（%）；General ST／MS 22.22／12.08 → 0.00／0.78（%）；Tool Invocations per ST／MS 5.22／2.21 → 4.79／2.02（約各降 8% 與 9%）。僅 10 題。",
+      "section": "§5.2.3、Table 4、Appendix F",
+      "anchor_idx": 4
+    }
+  ],
+  "limitations_stated": [
+    "只在執行前做意圖理解；理想的 agent 應能在執行中遇到多個選項、指令不清或關鍵工具錯誤時即時詢問，並讓使用者可以隨時中斷、對高風險動作授權，這需要整個 agent 系統的協調，不是單一模型專家能解決的（§6）。",
+    "評估只聚焦在任務模糊這一面；執行中的使用者輸入可能是補充資訊、中斷、詢問進度或換話題，意圖分類應涵蓋更多維度（§6）。",
+    "指標把主觀的人類評價量化成數字，沒有直接量使用者滿意度、對話連貫性的即時感受或對最終產出的看法；加入這些能更完整，但可能引入個人偏誤（§6）。",
+    "方法不使用真實使用者的偏好資料；若能取得個人的歷史對話，才能更貼近特定使用者的偏好（§6）。",
+    "指令執行評估是 proof-of-concept，只抽 10 題並搭配案例研究（§5.2）。"
+  ],
+  "limitations_observed": [
+    "模糊判斷準確率低於「一律判模糊」的多數類基線：測試集 108 題中 95 題模糊，一律判模糊就有 87.96%，Mistral-Interact 的 85.19%（92/108）與 GPT-4 的 82.41%（89/108）都在它之下。論文沒有報告逐類別（清楚題放行幾題、模糊題抓到幾題）的結果，無從判斷模型是否真的學會「何時不該問」。訓練集模糊題占 1,012/1,261（約 80%），模型可能主要學到類別先驗。這個指標在這個測試集上幾乎沒有鑑別力，但論文把它列為勝過 GPT-4 的主要證據之一。",
+    "「媲美甚至超越 GPT-4」的主張站不穩：Mistral-Interact 勝出的項目，一個被多數類主導（模糊判斷），另外幾個是訓練格式直接帶來的（Options Presenting 84.08 vs 40.31、每輪 1.26 題，因為訓練資料就是強制一次一問附選項）；而最能代表意圖理解品質的兩項反而是 GPT-4 較高：Lv3 召回 75.22 vs 72.28、總結涵蓋率 100.0 vs 96.37。論文沒有多次取樣、變異數或顯著性檢定，108 題上 3 個百分點的差距是否穩定未知。",
+    "增益無法歸因到 IN3 訓練：Mistral-Interact 是從 Mistral-7B-v0.1 base 微調（§4.2 註腳），對照組卻是 Mistral-7B-Instruct-v0.2（§5.1.1 說與 §3.2 同模型）。沒有「同一基底、只換掉 IN3 資料」或「v0.2 Instruct＋IN3」的對照，Mistral-7B 的 49.07% 與 Mistral-Interact 的 85.19% 之間夾著 checkpoint 差異。選基底的依據也只是 10 題初步測試：那 10 題有 4 題清楚，而 Mistral 的主要缺陷是「問太少、急著總結」，這種行為在清楚題占四成的小樣本上拿到 8/10，在模糊題占近九成的測試集上掉到 49.07%，正說明用這 10 題選基底並不可靠。",
+    "Recover Rate 與 Coverage Rate 的分母是各模型自己判為模糊的 T_v，所以四個模型的 RR 其實是在不同的題目子集上算的：Mistral-7B 只判對 49% 的題，它的 RR 只統計它願意提問的那些題，被它誤判為清楚、一題都沒問的模糊題不進分母。跨欄比較 RR 不是同一批題目。另外，被誤判為模糊的清楚題沒有標準缺漏細節，照 Eq.2 的分母為零，論文沒交代如何處理。",
+    "評估鏈高度依賴 GPT-4，有自我參照的偏誤風險：任務由 GPT-4 生成、缺漏細節由標註者以 GPT-4 建議為起點修改（錨定效應）、訓練對話由兩個 GPT-4 合成、提問與標準答案的配對也由 GPT-4 判定（只抽 5% 人工檢查）。GPT-4 與以 GPT-4 對話蒸餾出來的 Mistral-Interact 在 RR 上天然占優，這可能是兩者相近的一部分原因，而不是意圖理解能力相近。",
+    "意圖理解評估的人工設計偏薄：8 位大學部使用者各負責若干題，論文沒說同一題的四個模型是否由同一位使用者評、使用者是否知道正在測哪個模型、有沒有評分者間一致性。Options Reasonable Rate 與 Coverage Rate 都由參與對話的使用者自行標註，屬於不盲測的主觀判斷。",
+    "執行評估的設計結構上偏向有澄清的那組：只有 10 題，而且預先篩掉標準答案與 Mistral-Interact 判斷不一致、以及超出 XAgent 能力的題；「不必要」與「過於籠統」是對照澄清後的明確目標來判定，而模糊組從未拿到這些資訊，等於用 A 組才有的答案卷去改 B 組；標註者正是與 Mistral-Interact 對話的同一位使用者，知道哪份是哪組。沒有量任務成功率或最終產出品質，也沒有以 GPT-4 當上游澄清者、或以 IN3 標準答案構成 oracle 目標的對照。工具呼叫每個子任務只從 5.22 降到 4.79（約 −8%），§5.2.4 卻寫成顯著下降，而且沒報告子任務總數，總工具呼叫量是否下降無從得知。",
+    "XAgent 本身在 2023-10-16 的第一版 README 就已有 AskForHumanHelp 工具，並以「推薦餐廳但沒給細節、agent 主動問地點與預算」的模糊任務當示範案例（見 https://github.com/OpenBMB/XAgent 最早的 README commit 93ac50f）。論文沒說執行評估時這個工具是否啟用，也沒把「執行中才詢問」與「執行前先澄清」做比較，所以 Table 4 的對照組可能不是 XAgent 能做到的最佳無上游版本。",
+    "訓練資料把標註答案直接寫進初始想法，而測試集與訓練集出自同一個 GPT-4 self-instruct 生成與同一套標註流程，又沒說類別是否互斥，因此 108 題測試衡量的是同分布泛化；對真實產品中的長指令、多意圖、上下文相依或帶檔案的請求能否遷移，沒有證據。User-GPT 被要求自行編造偏好，合成對話中的使用者永遠有明確答案且配合度高，與實際上「使用者自己也不確定」的情境不同（案例 B 的不合作使用者只有單一示例）。",
+    "交接介面過窄：t_user 被限制在兩句話內，所有約束都要壓進這一句自然語言，Lv1／Lv2 偏好與新增資訊在總結時被捨棄的風險，正是 Coverage Rate 量的東西（96.37% 代表約每 27 項就漏一項），但下游沒有結構化的約束清單可以核對。"
+  ],
+  "framework_role": "直接落在 T1「使用者目標推斷與偏好引出」與「模糊指令下的澄清提問」兩個子題：它給出一個可以照抄的 T1 前置閘門樣式 —— 先輸出模糊／清楚判斷（清楚就原樣放行，等於一個二元路由）、模糊時帶著結構化的缺漏細節清單（含重要性等級與候選選項）每輪只問一題、最後逐條列出使用者約束並產出一句明確目標 t_user 交給下游。IN3 的標註 schema（judge_vagueness 與 complete_summary 兩個 function schema）可以直接當 T1 的狀態結構與交接格式；三個主指標（模糊判斷準確率、分重要性的缺漏召回、總結涵蓋率）可以當 T7 評估澄清品質的起點，但要改用平衡的清楚／模糊比例並報告逐類別結果。附帶貢獻落在 T6：以 GPT-4 扮演兩種語氣、會自行編造偏好的使用者來合成訓練對話，是早期 LLM 使用者模擬器的做法之一。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "訓練時由 User-GPT（GPT-4 扮演的使用者，分 passionate 與 succinct 兩種語氣，被問到偏好時自行編造具體答案）回答 Assistant-GPT 的每一輪提問，這些模擬使用者的回應構成 Mistral-Interact 學習意圖理解的輸入；測試時則換成 8 位真人使用者自由回答，驗證模組面對真人輸入的判斷、提問與總結。"
+    },
+    {
+      "edge": "E6",
+      "how": "每段人機對話完整記錄下來，使用者在對話中逐輪標註提問數、選項數與選項是否合理、結束時標註自己提供了幾項資訊與幾項被總結；再以 GPT-4 把紀錄中的提問與 IN3 標準缺漏細節配對，算出 Recover Rate、Coverage Rate 等九個指標。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文只把 Mistral-Interact 接進 XAgent 做研究用的 proof-of-concept（10 題），不是部署。作者的 GitHub 倉庫（https://github.com/HBX-hbx/Mistral-Interact）與 HuggingFace 權重（https://huggingface.co/hbx/Mistral-Interact）是研究釋出物；XAgent 官方倉庫（https://github.com/OpenBMB/XAgent）現行 README 以 gh api 取回全文搜尋 Interact／IN3／Tell Me More／intention，沒有提到 Mistral-Interact、IN3 或上游澄清模組（2026-09-26）。以名稱搜尋只找到論文頁、ACL Anthology 與論文索引站，沒有官方產品文件或官方部落格採用此方法。Semantic Scholar 顯示 103 次引用、13 次 influential citation（ACL 2024），屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/HBX-hbx/Mistral-Interact",
+    "data": "公開。倉庫（Apache-2.0）內含 IN3（data/IN3，含測試集）與模擬對話紀錄（data/interactions），訓練對話另放在 HuggingFace 資料集 hbx/IN3-interaction，模型權重在 hbx/Mistral-Interact（2026-09-26 查看倉庫 README）。資料生成、標註、訓練、總結用的提示詞與 function schema 完整列在 Appendix A、C、D。未確認是否公開：108 題真人評估的對話紀錄與逐輪標註、XAgent 執行的完整軌跡。重跑時注意：主實驗的解碼參數沒有寫明；資料建構階段（任務生成、標註建議、User／Assistant-GPT、缺漏細節配對）與 XAgent 執行所用的 GPT-4 都沒寫版本；真人評估無法原樣重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是把「先判斷模糊、每輪一問附選項、最後逐條整理約束成明確目標再交給 agent」做成上游模組並配上標註基準（IN3）的代表作，設計樣式與 schema 可直接搬進 T1，是這個子領域後續工作的共同起點；但它的數字不可信到可以直接引用的程度 —— 模糊判斷低於多數類基線、增益混著 checkpoint 差異、執行評估只有 10 題且偏向實驗組 —— 讀的時候要拿它的樣式，不要拿它的勝負。",
+  "related": ["2210.05901", "2212.10560", "2310.06825", "2307.09288"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

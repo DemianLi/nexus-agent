@@ -61,7 +61,7 @@
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { SessionAddress } from './session-address.js';
-import type { SessionEvent, SessionLog } from './session-log.js';
+import type { SessionEvent, SessionLog, SessionLogView } from './session-log.js';
 
 /**
  * 一個參與者拿到的東西。
@@ -83,6 +83,17 @@ export interface SessionSubject {
   readonly address: SessionAddress;
   /** 這一次要參與的日誌。**寫得動**。 */
   readonly log: SessionLog;
+  /**
+   * 這條 thread 的 root 日誌，**唯讀**（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q2-1）。
+   *
+   * 子代理的參與者有時要看父代理當下的狀態（例如 `@nexus/plugin-permission-presets` 要知道父代理的核准政策才推得出組合名）；
+   * 子代理自己的 `address` 只帶 `runId`，查不到 root 日誌。**所有參與者都不能經由它寫 root**：型別是 {@link SessionLogView}
+   * （不變量那條路交的同一個型別，見 `invariants.ts`）。「誰寫 root 日誌，誰就移得動 fence 與閘門」（#1494）這句話靠它成立——
+   * 交出一份可寫的 root 日誌，等於每一位相容層參與者都能移動兩顆控制器。
+   *
+   * 參與者本身就是 root 時，它就是 {@link log} 的唯讀視圖。**必填**：生產碼只有一處建構點（`agent-factory.ts`）。
+   */
+  readonly rootLog: SessionLogView;
   /**
    * 觀察事件。**訂閱歸接線那一層擁有**，參與者不要自己 `log.subscribe()`——那樣拋出來
    * 的東西會掉進日誌自己的圍堵，變成一行看不出是誰的 warn。
@@ -114,6 +125,8 @@ export interface SessionRunnerOptions {
   readonly address: SessionAddress;
   /** 要參與的日誌。 */
   readonly log: SessionLog;
+  /** 這條 thread 的 root 日誌（唯讀），原樣交給每一位參與者，見 {@link SessionSubject.rootLog}。 */
+  readonly rootLog: SessionLogView;
   /** 目前註冊著的參與者，**安裝當下讀一次**。 */
   readonly installers: readonly {
     readonly value: SessionInstaller;
@@ -183,6 +196,7 @@ export function createSessionRunner(options: SessionRunnerOptions): () => void {
     const subject: SessionSubject = {
       address: options.address,
       log: options.log,
+      rootLog: options.rootLog,
       observe(listener) {
         const observer: Observer = { origin: installer.origin, listener };
         // **先補歷史再收後續。** 兩件事的順序決定了「接得晚」與「一路看著它長大」折出

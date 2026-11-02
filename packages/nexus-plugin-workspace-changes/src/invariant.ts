@@ -2,11 +2,12 @@
  * `@nexus/plugin-workspace-changes` 的配套入口：**每一顆 `workspace/changes` 都落在一輪裡，而且那一輪跑過工具**。
  *
  * dsh 這個包不發佈配套入口（README：「不发布伴生入口」——記錄器同時擁有摘要與副本，沒有獨立的觀察會與它
- * 分歧）。我們的 gate 要求每個 `packages/*` 都有一個（`apps/harness/src/package-invariants.ts`），而這顆事件
- * 在日誌上有三條機械判得出來的關係，所以寫實的：
+ * 分歧）。我們只有擁有可檢關係的 package 才發布一個（空 installer 會被 `apps/harness/src/package-invariants.ts`
+ * 擋下來，#974），而這顆事件在日誌上有三條機械判得出來的關係，所以寫實的：
  *
- * 1. **落在一輪裡**：同一份日誌前面有一顆 `turn/start`。子代理的日誌沒有 `turn/start`，所以這一條同時擋住
- *    「寫進子代理那一份」——記錄器只接 root。
+ * 1. **落在一輪裡**：同一份日誌前面有一顆 `turn/start`。**這一條不擋「寫進子代理那一份」**：前景子代理的日誌沒有
+ *    `turn/start`（會被擋），但背景子代理的每一輪（派出去與每次 `subagent.send`）都有（`background-subagents.ts`，
+ *    2026-10-05 實測）。「只寫 root」靠的是接上記錄器那一處（`index.ts` 的 `subject.address.kind !== 'root'` 直接略過），不是這條不變量。
  * 2. **那一輪跑過工具**：從最近一顆不是 resume 的 `turn/start` 算起，至少有一顆 `tool/result`。記錄器在一輪
  *    沒有任何結果時不記（同 dsh 的 `lastToolResultSeq < 0`）。**web 認輪靠的就是事件在串流裡的位置**
  *    （`@nexus/wire` 的 `WorkspaceChangesEntry`），一顆落在錯的輪裡的事件會先在這裡露出來。
@@ -18,6 +19,7 @@
  * @module
  */
 
+import { isLogicalTurnStart } from '@nexus/core';
 import type { InvariantInstaller, NexusPlugin, PluginEntry, SessionEvent } from '@nexus/core';
 
 /** 這個配套入口認領的 package 名。 */
@@ -26,14 +28,14 @@ export const WORKSPACE_CHANGES_INVARIANT_PACKAGE = '@nexus/plugin-workspace-chan
 /** 事件落在一輪裡、那一輪跑過工具、資料是空的。trace 放在 closure 裡：一份日誌一次安裝。 */
 export const workspaceChangesInvariant: InvariantInstaller = (subject, fail) => {
   let started = false;
-  /** 從最近一顆不是 resume 的 `turn/start` 起，有沒有過 `tool/result`。 */
+  /** 從最近一顆開邏輯輪的 `turn/start`（`isLogicalTurnStart`）起，有沒有過 `tool/result`。 */
   let toolResultInTurn = false;
 
   subject.observe((event: SessionEvent) => {
     switch (event.type) {
       case 'turn/start':
         started = true;
-        if (event.data.kind !== 'resume') toolResultInTurn = false;
+        if (isLogicalTurnStart(event)) toolResultInTurn = false;
         break;
       case 'tool/result':
         toolResultInTurn = true;

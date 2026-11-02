@@ -1,0 +1,181 @@
+{
+  "id": "2310.08560",
+  "title": "MemGPT: Towards LLMs as Operating Systems",
+  "topic": "T2",
+  "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 LLM 的 context window 當成作業系統的主記憶體，設計「main context＋外部儲存」的分層記憶，由 LLM 自己透過函式呼叫把資訊換入換出，讓固定長度的模型撐得起長期多 session 對話與超長文件分析。",
+  "problem": "固定長度的 context window 讓 LLM 在長對話中只看得到最近幾十則訊息。依 Table 1 以每則約 50 token 的估算，Llama 2／GPT-3.5 Turbo 初版的 4k 只容得下約 60 則。跨 session 之後，使用者的事實與偏好會遺失，persona 也跟著不一致。直接延長 context 有二次方的計算與記憶體成本，而且長 context 模型未必用得好中段資訊（引 Lost in the Middle）。對長期陪伴型或個人化助理類的對話代理而言，這兩個標準因此都守不住：一致性，新提到的事實要與先前陳述相符；參與度，要主動引用長期累積的使用者知識。文件分析也有同樣的問題，例如 10-K 年報可能超過百萬 token。",
+  "core_idea": "借用 OS 虛擬記憶體的分頁概念，做「虛擬 context 管理」（virtual context management）。prompt token 被當成有限的實體記憶體（main context），對話紀錄與任意文字放在外部資料庫（external context）。何時寫入、搜尋、換入或清出，由 LLM 自己以函式呼叫決定。系統只負責兩件事：容量將滿時插入記憶壓力警告，溢位時清出訊息並做遞迴摘要。再搭配事件驅動的控制流，以及 request_heartbeat 函式串接，agent 可以在把控制權交還使用者之前，連續做多步記憶操作，例如分頁搜尋或多跳查找。",
+  "method": {
+    "整體資料流": "輸入是事件（event），有四種：使用者訊息、系統訊息（如容量警告）、使用者互動提示（如「使用者剛登入」「文件上傳完成」），以及排程觸發的定時事件（讓 agent 能在沒有使用者輸入時自行執行）。事件先經 parser 轉成純文字訊息，附加到 main context 後送進 LLM。LLM 的輸出（completion tokens）由 function executor 解析成函式呼叫並執行。",
+    "main_context（prompt tokens，三段連續區塊）": [
+      "system instructions：唯讀，內容有 MemGPT 控制流的說明、各記憶層的用途，以及所有記憶函式的 schema 與自然語言描述（例如怎麼取回 out-of-context 資料）。",
+      "working context：固定大小、可讀寫的無結構文字區塊，只能透過 MemGPT 函式呼叫寫入。對話情境下用來存使用者的關鍵事實、偏好與重要資訊，以及 agent 扮演的 persona。附錄提示詞稱它為 core memory。",
+      "FIFO queue：滾動的訊息歷史，包含使用者與 agent 的訊息、系統訊息（如記憶警告），以及函式呼叫的輸入與輸出。索引 0 固定放一則系統訊息，內容是所有已被清出訊息的遞迴摘要（recursive summary）。"
+    ],
+    "external_context（不在 prompt 內，必須用函式明確搬進 main context 才看得到）": [
+      "recall storage：訊息資料庫。queue manager 會把每則輸入訊息與 LLM 輸出都寫進去，永久保存，可用函式搜尋（附錄 DMR 提示詞提到的函式名為 conversation_search）。取回的訊息附加到 queue 尾端。",
+      "archival storage：可讀寫、存任意長度文字物件的資料庫。實驗預設用 PostgreSQL＋pgvector 做向量搜尋，建 HNSW 索引，嵌入模型為 text-embedding-ada-002，相似度用 cosine。",
+      "所有取回函式都有分頁（pagination），避免一次取回就撐爆 context。"
+    ],
+    "queue_manager（溢位政策）": [
+      "新訊息到達：附加到 FIFO queue，串接 prompt 後觸發 LLM 推論；輸入與輸出都寫入 recall storage。",
+      "warning token count（論文舉例為 context window 的 70%）：prompt token 超過時，在 queue 插入一則「memory pressure」系統訊息，提醒 LLM 趁清出前用函式把重要內容存進 working context 或 archival storage。",
+      "flush token count（論文舉例為 100%）：超過時清出一定數量的訊息（論文舉例為 context window 的 50%），並用「舊的遞迴摘要＋被清出的訊息」產生新的遞迴摘要。被清出的訊息不再在 context 內，但仍留在 recall storage，可以用函式查回。",
+      "注意：70%／100%／50% 在原文都寫成「e.g.」，是例子，不是明確的實驗設定。"
+    ],
+    "function_executor": [
+      "每個推論週期：main context 串成單一字串輸入，LLM 輸出一個字串。MemGPT 解析並驗證函式參數，驗證成立才執行。",
+      "執行結果連同 runtime error（例如 working context 已滿時還要寫入）一起回饋給 LLM，讓它下一步調整。",
+      "記憶的編輯與取回完全由 LLM 自主決定。做法是在 system instructions 裡寫兩件事：記憶階層與各層用途的詳細說明，以及附自然語言描述的函式 schema。不需要任何訓練。"
+    ],
+    "控制流與函式串接": [
+      "函式呼叫可以帶特殊參數 request_heartbeat=true。帶了的話，函式執行完會把輸出加進 main context，並立刻再跑一次 LLM，用來做多頁搜尋、多跳查找等連續動作。",
+      "沒帶就是 yield：暫停 LLM，等下一個外部事件（使用者訊息或排程中斷）才再推論。",
+      "論文提到 LLM 可以在執行函式時「plan out loud」（類似 ReAct 的內在思考），但沒有給格式。"
+    ],
+    "提示詞要點（附錄 6.1，作者註明是精簡版）": [
+      "DMR 的 MemGPT persona：完全沉浸於角色、不可說自己是 AI；被問問題時，用 core memory 與 conversation_search 給出最佳猜測。",
+      "Doc QA 的 MemGPT persona：答案一定在 archival memory 裡，找不到就繼續搜；回覆格式為 ANSWER＋DOCUMENT（出處文字）。",
+      "Nested KV 的 MemGPT persona：在確認值不是另一個 key 之前不准停止搜尋，要一直做巢狀查找。",
+      "DMR 題目生成（self-instruct）：給定兩位使用者的 persona 與一段舊對話，讓 LLM 寫一題 A 問 B 的「記憶挑戰」題。題目必須只能從舊對話回答，嚴禁寫出能從 persona 推出答案的題目。"
+    ],
+    "實驗設定": [
+      "模型：GPT-4 Turbo＝gpt-4-1106-preview（128k）、GPT-4＝gpt-4-0613（8,192）、GPT-3.5 Turbo＝gpt-3.5-turbo-1106（16,385）。每個模型都分別跑「有 MemGPT」與「沒有 MemGPT」。",
+      "DMR：以 MSC 為底（每段多 session 對話有 5 個 session、每個約十幾則訊息），另建 session 6，內含一組問答。MemGPT 可以用分頁搜尋存取完整歷史；baseline 只拿到前五個 session 的有損摘要，並被指示資訊不足時回 'NO ANSWER'。評分用 LLM judge（CORRECT/WRONG，被要求從寬判定）與 ROUGE-L recall。",
+      "Conversation opener：比較 agent 生成的開場白與 gold persona 的相似度（SIM-1、SIM-3），以及與人寫開場白（下一個 session 的第一句）的相似度（SIM-H）。",
+      "Doc QA：NaturalQuestions-Open，2018 年底的 Wikipedia dump，抽 50 題。MemGPT 把整份嵌入文件集載入 archival storage，自己決定查詢與翻頁。baseline 則由同一個 retriever 取 top-K 文件塞進 context，超出長度時截斷文件。LLM judge 要求答案與出處文件文字兩者都有，才算對。",
+      "Nested KV：140 組 128-bit UUID 的 key-value（約 8k token，等於 GPT-4 baseline 的 context 長度），巢狀層數 0–4，並抽 30 種排列（起始 key 與巢狀 key 的位置）。"
+    ],
+    "論文未給、重現需查 repo 的部分": "working context 的大小上限、分頁大小、遞迴摘要的提示詞與使用的模型、完整的函式清單與簽名（正文只點名 request_heartbeat，附錄只點名 conversation_search 與 core memory）、DMR 題數、SIM 指標所用的嵌入模型與計算方式。"
+  },
+  "assumptions": [
+    "底層 LLM 的函式呼叫夠可靠。論文自己的 GPT-3.5 結果就是反例：函式呼叫能力弱時，MemGPT 明顯退化。",
+    "LLM 光靠系統指令與函式描述，不必訓練，就能學會何時該存、存什麼、何時該搜。",
+    "被清出的資訊之後查得回來：使用者的提問方式要足以讓搜尋命中當初那則訊息或那份文件。",
+    "遞迴摘要加上無結構文字的 working context，足以保住後續會用到的關鍵狀態，不需要 slot-value 之類的結構化 schema。",
+    "每一輪多次 LLM 推論（heartbeat 串接、分頁搜尋）帶來的延遲與成本可以接受（論文沒有量）。",
+    "評估面假設：寬鬆 LLM judge 與 ROUGE-L recall 能反映一致性，與 persona 的嵌入相似度能反映參與度。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Deep Memory Retrieval（DMR）：自建，以 Multi-Session Chat（MSC, Xu et al. 2021）延伸出 session 6 的問答",
+      "Conversation opener：自建，建在 MSC 上",
+      "NaturalQuestions-Open 的 retriever-reader 多文件 QA：沿用 Liu et al. 2023a 設定，抽 50 題，用 2018 Wikipedia",
+      "Nested KV retrieval：自建，延伸 Liu et al. 2023a 的 KV retrieval"
+    ],
+    "metrics": [
+      "DMR：LLM judge accuracy（CORRECT/WRONG）",
+      "DMR：ROUGE-L recall",
+      "Opener：SIM-1、SIM-3（與 gold persona 的相似度）、SIM-H（與人寫 opener 的相似度），文中統稱 CSIM",
+      "Doc QA：LLM judge accuracy（須同時給出答案與出處文件文字），隨取回文件數 K 變化",
+      "Nested KV：accuracy 隨巢狀層數 0–4 的變化"
+    ],
+    "baselines": [
+      "不接 MemGPT 的 GPT-3.5 Turbo（gpt-3.5-turbo-1106）、GPT-4（gpt-4-0613）、GPT-4 Turbo（gpt-4-1106-preview）",
+      "DMR baseline：只拿到前五個 session 的有損摘要，模擬遞迴摘要",
+      "Doc QA baseline：同一個 retriever 取 top-K 文件直接放進 context，超長時截斷文件",
+      "Opener：人寫 opener（Human）。沒有「不接記憶」的 LLM baseline"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "DMR 上，MemGPT 讓三個底層模型的跨 session 事實回想都大幅提升",
+      "numbers": "Accuracy：GPT-3.5 Turbo 38.7%→66.9%、GPT-4 32.1%→92.5%、GPT-4 Turbo 35.3%→93.4%；ROUGE-L(R)：0.394→0.629、0.296→0.814、0.359→0.827（取自 v2，2024-02-12）",
+      "section": "§3.1.1、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "DMR 的增益是對「有損摘要」baseline 量到的：baseline 只看得到前五個 session 的摘要，MemGPT 則能用分頁搜尋存取完整歷史",
+      "numbers": "baseline 輸入＝5 個 session 的摘要；MemGPT＝完整歷史＋分頁搜尋；沒有報告「完整歷史直接放進 context」的 baseline",
+      "section": "§3.1.1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "MemGPT 生成的 conversation opener 與 persona 的相似度和人寫 opener 相當，有時更高",
+      "numbers": "SIM-1／SIM-3／SIM-H：GPT-3.5 Turbo 0.830／0.812／0.817、GPT-4 0.868／0.843／0.773、GPT-4 Turbo 0.857／0.828／0.767；Human 0.800／0.800／1.000（取自 v2）",
+      "section": "§3.1.2、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Doc QA 中，MemGPT 的準確率不隨取回文件數增加而下降；fixed-context baseline 的上限就是 retriever 的上限，截斷文件時還會退化。不過 MemGPT 常常在翻完 retriever 結果之前就停止分頁",
+      "numbers": "50 題；結果只以 Figure 5 圖示，正文沒有給具體數值",
+      "section": "§3.2.1、Figure 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "MemGPT 的效果高度依賴底層模型的函式呼叫能力：用 GPT-3.5 時明顯退化，用 GPT-4 最好",
+      "numbers": "DMR：MemGPT+GPT-3.5 為 66.9%，MemGPT+GPT-4 為 92.5%；Doc QA 只有圖示",
+      "section": "§3.2.1、Table 2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "Nested KV 中，只有 MemGPT+GPT-4 能在各巢狀層數下都穩定完成多跳查找",
+      "numbers": "140 組 UUID（約 8k token）、巢狀 0–4 層、30 種排列；GPT-3.5 baseline 在 1 層就降到 0%；GPT-4 與 GPT-4 Turbo baseline 到 3 層降到 0%；MemGPT+GPT-4 不受層數影響；MemGPT+GPT-4 Turbo 與 MemGPT+GPT-3.5 從 2 層開始下降；其餘只有 Figure 7 圖示",
+      "section": "§3.2.2、Figure 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "Doc QA 中 MemGPT 常在翻完 retriever 結果之前就停止分頁，理論上找得到的 gold 文件因此沒找到（§3.2.1）。",
+    "底層用 GPT-3.5 時，因為函式呼叫能力有限，表現明顯退化（§3.2.1）。",
+    "Nested KV 中，MemGPT+GPT-4 Turbo 與 MemGPT+GPT-3.5 因為查找次數不夠，從 2 層就開始掉；MemGPT+GPT-4 Turbo 甚至比 MemGPT+GPT-4 差（§3.2.2、Figure 7）。",
+    "Doc QA 受嵌入相似度搜尋本身的限制：NaturalQuestions-Open 標註的 gold 文件常排在前十幾名之外（§3.2.1）。",
+    "生成的回覆普遍比 gold 答案冗長，所以改用 ROUGE-L recall（§3.1.1）。",
+    "附錄提示詞是精簡版，完整提示詞要到 research.memgpt.ai 查（§6.1）。",
+    "把控制流與記憶管理政策的改進列為未來工作（§5）。"
+  ],
+  "limitations_observed": [
+    "DMR 的 baseline 被削弱：拿論文 Table 1 的估算（每則約 50 token）與 MSC 的規模（5 個 session、每個約十幾則）推算，完整歷史大約只有數千 token。這個量塞得進 GPT-4 的 8k，更塞得進 GPT-4 Turbo 的 128k（此為估算）。但 baseline 只拿到有損摘要，論文也沒有報告「完整歷史直接放進 context」的 baseline。所以 Table 2 比的是「搜尋完整歷史」對「有損摘要」，不能讀成「分層記憶勝過長 context」。",
+    "DMR 兩邊的提示詞不對稱：MemGPT 被要求「用 core memory 與 conversation_search 給出最佳猜測」，baseline 則被要求資訊不足時回 'NO ANSWER'，而 judge 範例把「不記得」判成 WRONG。baseline 的排序和模型能力相反（GPT-4 32.1%，低於 GPT-3.5 的 38.7%），與「越守指令、越常回 NO ANSWER、越被扣分」的解釋吻合。這只是假說，論文沒有拆出 NO ANSWER 的比例。",
+    "DMR 的判準寬鬆，又和冗長偏差疊在一起：judge 被要求 generous，只要碰到同一話題就算對；ROUGE-L 也改用 recall。兩者都偏好冗長回答，而作者自己觀察到回答普遍冗長。judge 用哪個模型沒有明說，只引 GPT-4 與人類一致性高作為依據。DMR 的題數、LLM 生成的題目有沒有經過人工核對，也都沒有報告。",
+    "沒有變異數，也沒有重複執行：每張表都是單一數字；Doc QA 只有 50 題，結果只以圖呈現、正文沒有數值，看不出差距是否顯著。",
+    "Conversation opener 沒有對照組：Table 3 只有 MemGPT 的三個變體與人寫 opener，沒有無記憶或摘要式的 baseline。「把資訊存在 working context 是產生吸引人 opener 的關鍵」這句話因此沒有消融支撐。SIM 指標用的嵌入模型與算法都沒交代。而且與 gold persona 的相似度會獎勵把 persona 事實塞滿（人寫 opener 的 SIM-1 也只有 0.800），作者自己也說 MemGPT 的 opener 比較長、涵蓋的 persona 面向比較多，這不等於 engagingness。",
+    "Doc QA 的提示詞也不對稱：MemGPT 被告知答案一定在 archival memory 裡、找不到就繼續搜；baseline 可以回 INSUFFICIENT INFORMATION，但 judge 把這個回答一律判錯。baseline 謹慎拒答會被系統性懲罰。",
+    "Nested KV 其實沒有在測長 context：140 組 UUID 約 8k token，完全塞得進 GPT-4 Turbo 的 128k。這個實驗比的是「能反覆查詢的 agent」對「一次作答的模型」，少了 ReAct 或 CoT 式逐步查找的 baseline；MemGPT 還額外拿到任務專用的 persona（確認值不是 key 之前不准停）。正文說 MemGPT 是用函式反覆查詢「存在 main context 的」KV，但 main context 本身就是 prompt，本來就看得到、不需要查詢。Figure 8 只寫到查最終值只回一筆結果就停，KV 資料到底放在 main context 還是 archival storage，論文沒交代清楚。另外，MemGPT+GPT-4 Turbo 比 MemGPT+GPT-4 差，這和 §4 說的「MemGPT 建立在 context 延長之上、會隨主記憶體變大而受益」互相矛盾。",
+    "對 T2 最關鍵的缺口是：狀態「更新」的正確性完全沒被量化。事實改變時覆寫 working context，只有 Figure 4 一則質性範例。論文沒有量記憶寫入錯誤、該覆寫卻沒覆寫、矛盾事實並存、working context 滿了之後的行為，也沒有任何 DST 類基準或多輪退化曲線。DMR 只測「單一舊事實找不找得回來」，不測狀態是否一直保持正確。",
+    "成本與延遲沒有報告：每輪可能多次 LLM 推論（heartbeat 串接、分頁搜尋、清出時的遞迴摘要），但沒有呼叫次數、token 用量或延遲的數字。Table 1 列了好幾個開源模型，實驗卻只有 OpenAI 模型，對需要可靠函式呼叫的小模型能不能用沒有證據。",
+    "關鍵超參數都只以「e.g.」出現：warning 70%、flush 100%、清出 50% 都是舉例；working context 大小、分頁大小、遞迴摘要的提示詞也都沒給。要重現只能靠 repo，而 repo 已經演化成 Letta，實作與論文版不一定一致。"
+  ],
+  "framework_role": "在 T2 裡，它是「LLM agent 長期多輪狀態維護」的參考架構。它把對話狀態拆成四層：in-context 的 working context（無 schema 的自由文字，存使用者事實、偏好與 agent persona）、滾動的 FIFO 訊息佇列加遞迴摘要，以及 out-of-context 的 recall（完整訊息紀錄）與 archival（任意文字）儲存。狀態怎麼讀寫，由 agent 以工具呼叫自己決定，系統只提供記憶壓力警告與溢位清出。它和傳統 DST 不同：沒有 slot-value 結構，也沒有 JGA 之類的指標。它的評估只量跨 session 的事實回想（DMR）與 persona 引用（opener），不量狀態更新是否正確，也不量多輪退化。對本框架的價值，在於一套可以照做的設計：狀態怎麼分層、誰有權寫狀態、容量壓力怎麼告訴 agent。它並不提供可以直接引用的量化證據。",
+  "edges": [
+    {
+      "edge": "E2",
+      "how": "MemGPT 修正狀態的方式，是 agent 自己改寫 working context。對話中出現與已存事實不符的新資訊時，LLM 用函式呼叫更新 working context（Figure 4 的範例）；函式執行的 runtime error 也會回饋給 LLM，讓它調整下一步（§2.3）。這對應「修正結果回寫對話狀態」，但論文沒有獨立的反思模組，修正是同一個 LLM 在回覆流程中順手做的，也沒有實驗量這條路徑的正確率。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文作者成立 Letta 公司，接手 MemGPT 開源專案，並說明商業化方向是部署、效能改進，以及 agent 除錯與監控工具（Letta 官方部落格，2024-09-23：https://www.letta.com/blog/memgpt-and-letta/）",
+      "Letta 推出託管服務 Letta Cloud（管理 agent 狀態與執行，可接 OpenAI、Anthropic、vLLM 等推論供應商）與 Agent Development Environment（Letta 官方部落格，2024-09-23：https://www.letta.com/blog/announcing-letta/）",
+      "官方 repo 的 README 標明 Letta 前身為 MemGPT，Apache-2.0 授權，並提到 Letta Cloud（https://github.com/letta-ai/letta）",
+      "弱證據：LangChain 官方 org 發布過參考實作 lang-memgpt，README 說受 MemGPT 等論文啟發。它是範例不是產品，已於 2026-02-25 封存（https://github.com/langchain-ai/lang-memgpt）"
+    ],
+    "assessment": "有可查證的商用採納，但採納者是作者自己的衍生公司 Letta，產品是託管服務 Letta Cloud；第三方企業在產品中部署這套架構，未見官方證據。另外，Letta 現行文件顯示 V1 SDK（memory blocks）正在棄用，改推 git 追蹤的 MemFS 記憶系統（https://docs.letta.com/concepts/memgpt/）。今天的產品已經不是照論文原本的分層設計在跑，論文架構本身的直接商用壽命要打折扣。"
+  },
+  "reproducibility": {
+    "code": "https://research.memgpt.ai（論文所附；專案現為 https://github.com/letta-ai/letta）",
+    "data": "論文宣稱公開：擴充版 MSC（含 DMR 問答）、nested KV 資料集、Doc QA 抽樣題目，以及 2018 Wikipedia（約 2,000 萬篇）的嵌入。本次沒有逐一下載驗證是否仍可取得。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 LLM agent 對話記憶管理的原型設計（分層記憶、agent 自主讀寫狀態、記憶壓力警告、遞迴摘要），T2 的「長期多輪狀態維護」子題繞不開它；但實驗 baseline 被削弱、提示詞不對稱，該拿的是設計而不是數字。",
+  "related": [
+    "2307.03172",
+    "2107.07567",
+    "2304.03442",
+    "2210.03629",
+    "2305.06983",
+    "2112.09332",
+    "2306.05685",
+    "2302.04761",
+    "2308.03688",
+    "2212.10509"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

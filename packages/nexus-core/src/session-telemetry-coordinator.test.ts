@@ -8,11 +8,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { fakeSink } from './fixtures.js';
+import { fakeSink, resumedLog } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
-import { SessionLog } from './session-log.js';
+import { buildForkSeed, SessionLog } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
 import { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
-import { isFeedbackEvent } from './session-telemetry.js';
+import { isFeedbackEvent, isMirroredEvent } from './session-telemetry.js';
 import type { SessionTelemetryRedactRule } from './session-telemetry.js';
 import type { NamedEntry } from './entries.js';
 
@@ -43,6 +44,12 @@ describe('哪幾顆准 feedback-only 補送', () => {
       'feedback/message-delete',
     ]);
   });
+
+  it('不認得的種類不准（core 不逐種列舉，沒表態的一律不外送；#679）', () => {
+    // 其他套件之後用宣告合併補進來的種類，core 看不到它的名字；用型別斷言造一顆當代表。
+    const unknown = { type: 'plugin-x/custom', seq: 0, payload: {} } as unknown as SessionEvent;
+    expect(isFeedbackEvent(unknown)).toBe(false);
+  });
 });
 
 describe('ledger 投影', () => {
@@ -65,7 +72,7 @@ describe('ledger 投影', () => {
     expect(record.body).toEqual({ kind: 'message', text: '你好' });
   });
 
-  it('沒有來源的 dsh 欄位就是不在：cwd / parent_id / seed_length 一個都不出現', () => {
+  it('沒有來源的 dsh 欄位就是不在：cwd / parent_id 不出現，不是分叉來的也不帶 seed_length', () => {
     const log = new SessionLog('thread-a');
     const sink = fakeSink();
     new SessionTelemetryCoordinator({ log, sink });
@@ -122,6 +129,103 @@ describe('ledger 投影', () => {
     log.append('turn/end', {});
     coordinator.captureNow();
     expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([0, 1]);
+  });
+});
+
+/**
+ * 一份剛分叉的子日誌：來源兩輪（seq 0–3），切在第二輪的 `turn/end`（3），標記在 4。
+ * 前綴裡放一顆 `feedback/record`，on-demand 補送整份時看得出前綴有沒有被送。
+ */
+function forkedLog(): SessionLog {
+  const source = new SessionLog('source');
+  source.append('turn/start', { kind: 'message', text: '第一輪' });
+  source.append('turn/end', {});
+  source.append('turn/start', { kind: 'message', text: '第二輪' });
+  source.append('feedback/record', { text: '來源的回饋' });
+  source.append('turn/end', {});
+  return new SessionLog('child', { seed: buildForkSeed(source.events, 4) });
+}
+
+describe('分叉來的日誌（#1580）', () => {
+  it('live：從繼承標記那一顆起送，前綴不重送；每筆都帶切點', () => {
+    const log = forkedLog();
+    expect(log.inheritedEventCount).toBe(5);
+    const sink = fakeSink();
+    new SessionTelemetryCoordinator({ log, sink });
+    log.append('turn/start', { kind: 'message', text: '子會話自己的' });
+
+    expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([5, 6]);
+    expect(sink.records[0]!.attributes['event.type']).toBe('session/end-seed');
+    for (const record of sink.records) {
+      expect(record.attributes['session.seed_length']).toBe(5);
+    }
+  });
+
+  it('includeHistory：從頭送，連前綴一起，前綴那幾筆也帶切點', () => {
+    const log = forkedLog();
+    const sink = fakeSink();
+    new SessionTelemetryCoordinator({ log, sink, includeHistory: true });
+
+    expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([
+      0, 1, 2, 3, 4, 5,
+    ]);
+    for (const record of sink.records) {
+      expect(record.attributes['session.seed_length']).toBe(5);
+    }
+  });
+
+  it('on-demand 不給 includeHistory 也從標記起：前綴裡的回饋不補送', () => {
+    const log = forkedLog();
+    const sink = fakeSink();
+    const coordinator = new SessionTelemetryCoordinator({ log, sink, capture: 'on-demand' });
+    coordinator.captureNow();
+
+    expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([5]);
+  });
+
+  it('on-demand＋includeHistory（feedback-only 的組法）：補送整份，前綴裡的回饋也在', () => {
+    const log = forkedLog();
+    const sink = fakeSink();
+    const coordinator = new SessionTelemetryCoordinator({
+      log,
+      sink,
+      capture: 'on-demand',
+      includeHistory: true,
+    });
+    coordinator.captureNow();
+
+    expect(sink.records.map((record) => record.attributes['event.type'])).toContain(
+      'feedback/record',
+    );
+    expect(sink.records[0]!.attributes['event.seq']).toBe(0);
+  });
+
+  it('續接一份分叉來的日誌：從標記起重送自己那一段，前綴照樣不送', () => {
+    const first = forkedLog();
+    first.append('turn/start', { kind: 'message', text: '子會話自己的' });
+    first.append('turn/end', {});
+    const log = new SessionLog('child', { seed: first.events });
+    expect(log.inheritedEventCount).toBe(5);
+
+    const sink = fakeSink();
+    new SessionTelemetryCoordinator({ log, sink });
+
+    expect(sink.records.map((record) => record.attributes['event.seq'])).toEqual([5, 6, 7, 8]);
+    for (const record of sink.records) {
+      expect(record.attributes['session.seed_length']).toBe(5);
+    }
+  });
+
+  it('ops 的 shutdown 不帶切點', async () => {
+    const log = forkedLog();
+    const sink = fakeSink();
+    const coordinator = new SessionTelemetryCoordinator({ log, sink });
+    await coordinator.dispose();
+
+    expect(sink.records.at(-1)!.attributes).toEqual({
+      'telemetry.op': 'shutdown',
+      'session.id': 'child',
+    });
   });
 });
 
@@ -393,5 +497,119 @@ describe('flush 的圍堵自成一格', () => {
     expect(sink.records).toHaveLength(1);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('flush 壞了');
+  });
+});
+
+describe('請求快照不進遙測（#1020）', () => {
+  /** 系統提示詞可能含工作區內容；用一個認得出來的字串追它有沒有出現在任何一筆記錄裡。 */
+  const SECRET = '工作區機密-AGENTS-內容';
+
+  function logWithSnapshots(): SessionLog {
+    const log = new SessionLog('thread-a');
+    log.append('turn/start', { kind: 'message', text: '你好' });
+    log.append(
+      'request/system',
+      { system: `你是助手。${SECRET}`, reason: 'initial' },
+      { ignorable: true },
+    );
+    log.append(
+      'request/header',
+      {
+        header: { config: { model: 'm' }, tools: [{ name: 't', description: SECRET }] },
+        reason: 'initial',
+      },
+      { ignorable: true },
+    );
+    log.append('turn/end', {});
+    return log;
+  }
+
+  it('live（full）：兩種快照都不送，其餘照送，游標照推', () => {
+    const log = logWithSnapshots();
+    const sink = fakeSink();
+    new SessionTelemetryCoordinator({ log, sink });
+    log.append(
+      'request/system',
+      { system: `改了。${SECRET}`, reason: 'change' },
+      { ignorable: true },
+    );
+
+    expect(sink.records.map((record) => record.attributes['event.type'])).toEqual([
+      'turn/start',
+      'turn/end',
+    ]);
+    expect(JSON.stringify(sink.records)).not.toContain(SECRET);
+  });
+
+  it('on-demand（feedback-only 補送整份前綴）：前綴裡的快照一樣不送，補送不回頭撈', () => {
+    const log = logWithSnapshots();
+    const sink = fakeSink({ sharing: 'feedback-only' });
+    const coordinator = new SessionTelemetryCoordinator({ log, sink, capture: 'on-demand' });
+    log.append('feedback/record', { text: '回答錯了' });
+    coordinator.captureNow();
+
+    expect(sink.records.map((record) => record.attributes['event.type'])).toEqual([
+      'turn/start',
+      'turn/end',
+      'feedback/record',
+    ]);
+    expect(JSON.stringify(sink.records)).not.toContain(SECRET);
+    // 游標越過了被跳過的那兩顆：再補送一次不重送、也不掃回它們。
+    coordinator.captureNow();
+    expect(sink.records).toHaveLength(3);
+  });
+
+  it('isMirroredEvent 預設放行：只有明列的兩種被擋', () => {
+    const log = logWithSnapshots();
+    expect(
+      log.events.filter((event) => !isMirroredEvent(event)).map((event) => event.type),
+    ).toEqual(['request/system', 'request/header']);
+  });
+
+  /** #1138：續接時實際載入的插件清單帶本機的模組路徑與只能同機比的設定雜湊，不鏡像。 */
+  it('session/resumed 不鏡像', () => {
+    const log = new SessionLog('thread-a');
+    log.append('session/resumed', { build: { commit: null, dirty: null }, plugins: [] });
+    expect(log.events.map((event) => isMirroredEvent(event))).toEqual([false]);
+  });
+
+  /**
+   * #1029：核准的問與答是審計事件，**沒被擋**——`reason` 跟 `tool/call` 的參數同級，都在鏡像的射程內。
+   * 這條釘住現況；哪天要擋，改 `isMirroredEvent` 並翻這條，不要只改 `approval/asked` 的說明。
+   */
+  it('approval/* 照鏡像（和 tool/call 同級，不在被擋的兩種裡）', () => {
+    const log = new SessionLog('thread-a');
+    log.append('approval/asked', { id: 'a1', toolName: 'take_note', reason: '看一下' });
+    log.append('approval/decided', { id: 'a1', outcome: 'allowed-once' });
+    expect(log.events.map((event) => isMirroredEvent(event))).toEqual([true, true]);
+  });
+});
+
+/**
+ * 物件與陣列交錯的巢狀（#1526）。深度取 3000：`structuredClone` 在 CI（Node 22.23.3 Linux x64）約 1500–2100 層就
+ * `RangeError`；Node 22 的原生 `JSON.stringify` 連沒凍過的也是遞迴的，CI 上約 4100 層就拋，再深連改寫後也過不了。
+ */
+function deepMixed(depth: number): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < depth; level++) value = level % 2 ? { next: value } : [value];
+  return value;
+}
+
+describe('深巢狀的事件照樣交得出去（#1526）', () => {
+  it('tool/result 的 meta 是 3000 層交錯巢狀：那一筆記錄交出去、body 原樣，沒有被扣住', () => {
+    // 寫入那一關有深度上限（#1661），3000 層只會出現在上限之前寫下、續接回來的舊日誌裡；live 建構當下會補送它。
+    const meta = deepMixed(3_000);
+    const log = resumedLog('thread-a', [['tool/result', { callId: 'c1', isError: false, meta }]]);
+    const sink = fakeSink();
+    const warnings: string[] = [];
+    new SessionTelemetryCoordinator({ log, sink, warn: (message) => warnings.push(message) });
+
+    expect(warnings).toEqual([]);
+    const records = sink.records.filter(
+      (record) => record.attributes['event.type'] === 'tool/result',
+    );
+    expect(records).toHaveLength(1);
+    expect(records[0]!.attributes['event.seq']).toBe(0);
+    expect(JSON.stringify((records[0]!.body as { meta: unknown }).meta)).toBe(JSON.stringify(meta));
   });
 });

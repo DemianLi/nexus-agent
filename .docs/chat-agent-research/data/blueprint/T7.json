@@ -1,0 +1,714 @@
+{
+  "node": "T7",
+  "decisions": [
+    {
+      "id": "T7-01",
+      "type": "measure",
+      "decision": "自動判定器（檢查腳本、隱藏測試、LLM 評審）拿來算成功率之前，要先量什麼，才不會把判定器的漏洞當成 agent 的能力？",
+      "recommendation": "每個判定器上線前做兩件事。第一，跑三個不需要模型的 agent：什麼都不做、第一步就放棄（回 FAIL 或 N/A）、把拿得到的資料全部吐出來；逐類別報它們的分數當地板，受測 agent 只有高過同類別地板的部分才算能力。OSWorld 一律回 FAIL 就有 30/369 = 8.13%，26 組模型×設定只有 5 組高過 [arXiv:2404.07972]；τ-bench airline 的 do-nothing agent 拿到 38% [arXiv:2507.02825]。第二，從「判成功」與「判失敗」兩批各抽樣交人工重判，分開報偽陽性率與偽陰性率，只重判其中一批不算稽核：以專家標註為準，網頁基準官方的規則式判定 precision 83.8、recall 55.9 [arXiv:2504.08942]。",
+      "defaults": "地板 agent 用 ABC 實測過的三種：do-nothing、spamming（吐出全部資料）與一律放棄 [arXiv:2507.02825][arXiv:2404.07972]；人工重判成功與失敗兩邊都判，以專家標註為準 [arXiv:2504.08942]。",
+      "switch_when": "地板要逐類別算，不能只算整體：OSWorld 的 Professional 類一律回 FAIL 是 (5+10)/(23+26) = 30.61%，高過該欄所有設定，Office 類只有 (1+0+1)/(47+47+23) = 1.71% [arXiv:2404.07972]。題目依賴即時網站或外部資料時，地板與 oracle 解要定期重跑：OSWorld 的 chrome 區塊 46 題有 13 題因網站改版失效，UI-TARS 因此被低估 28% [arXiv:2507.02825]。換成 LLM 評審不能取代人工重判：同一份專家標註下，GPT-4o 評審在三個基準裡也有兩個把 agent 排名弄反 [arXiv:2504.08942]。",
+      "evidence": [
+        {
+          "id": "2404.07972",
+          "finding": "OSWorld 的 30 題 infeasible 題只要輸出 FAIL 就得分，第一步就回 FAIL 可拿 30/369 = 8.13%；Table 5 的 26 組模型×設定只有 5 組高過，純截圖設定最高 5.80% 全部在地板下 [arXiv:2404.07972]。論文沒報這條地板，數字由論文自己的題數與 reward 定義算出，精讀時發現、程式驗證證實 [arXiv:2404.07972]。",
+          "where": "ch07 §陷阱二 L385",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這是『不對地板會看錯』的證據，依 T1、T3 的前例，論文數字加精讀補算、程式驗證證實（L385），在 finding 寫明。F1：這一筆本身就是平凡基準。F2、F3 不成立：判分是逐例撰寫的執行式評估函式，受測模型不參與。F4 不成立：執行式評估函式不是模擬器或 LLM 評審（L296）。F5：temperature 1.0、每題一次（L438；筆記 limitations_observed[2]）。題目與腳本全部公開（limitations_observed[9]）可能抬高各設定的分數，不影響地板的算法。"
+        },
+        {
+          "id": "2507.02825",
+          "finding": "τ-bench 把「環境沒變」當成不可能題的成功條件，do-nothing agent 在 airline 拿 38%、retail 6.0%；把資料庫內容全部吐出來的 spamming agent 拿 40%、9.6% [arXiv:2507.02825]。trivial agent 是決定性的，pass^k 與 pass@k 對任何 k 都一樣，重複試驗擋不住判準本身的偏差 [arXiv:2507.02825]。",
+          "where": "ch07 §E6 互動紀錄（T6→T7） L803；notes/2507.02825.json key_results[0]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F1：這一筆本身就是平凡基準。F2、F3 不成立：do-nothing 與 spamming agent 不看任何標籤，判分用 τ-bench 的資料庫狀態與子字串檢查。F4 不成立：終態比對是確定性檢查。F5：airline 原本只有 50 題（README L157），小於約 100 題。精讀時指出 ABC 把平凡 agent 的地板與真實 agent 的偏差量都叫『高估』（筆記 limitations_observed[0]），本條只引地板，不引偏差量。"
+        },
+        {
+          "id": "2507.02825",
+          "finding": "ABC 也量到偽陰性這個方向：OSWorld 的 chrome 區塊 46 題有 13 題因網站改版、HTML selector 失效，UI-TARS 因此被低估 28%（絕對值）[arXiv:2507.02825]。",
+          "where": "ch07 §陷阱一 L373；notes/2507.02825.json key_results[7]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "撐的是『要兩個方向都稽核』這一半：同一篇的 τ-bench 地板是偽陽性方向，這一筆是偽陰性方向。精讀時指出 28% 是真實 agent 的偏差量，與 τ-bench 的地板性質不同（筆記 limitations_observed[0]）。F1 不適用（描述判定器誤差）。F2、F3 不成立：稽核者不是受測 agent 的作者。F4 不成立：OSWorld 的判分是逐例撰寫的執行式評估函式（L296），偏差來自 selector 失效。F5：重跑隨機的 LLM agent 卻只報單點（limitations_observed[5]）。同一篇的 WebArena 高估 1.4–5.2% 沒有引用，因為全文只寫它違反哪幾條檢核、沒交代怎麼量出來的。"
+        },
+        {
+          "id": "2504.08942",
+          "finding": "以 6 位專家對網頁 agent 軌跡的標註為準，各基準官方的規則式判定 precision 83.8、recall 55.9；GPT-4o agent 在 WebArena 的成功率專家判 42.3%、規則式只判 25.6%，規則式還在 WebArena 與 WorkArena++ 把 Qwen2.5-VL 排到 GPT-4o 之上 [arXiv:2504.08942]。",
+          "where": "ch07 §未解問題 L838；notes/2504.08942.json key_results[3]、[5]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "以專家標註為準，依規格補充人工判定不算 F4，被量的是規則式判定。F1 不適用：這是判定器誤差的描述性量測，不是介入。F2、F3 不成立：專家不是受測 agent 的作者，規則式判定不參與產生軌跡。F5：每個 agent 的測試軌跡少，WebArena 約 78 條，沒有區間（筆記 limitations_observed[4]）。標註者是作者團隊、政策偏寬、只報原始一致率（limitations_observed[7]），會讓專家端偏向判成功，所以『規則式低估』的幅度有一部分可能來自這裡，方向不受影響。"
+        },
+        {
+          "id": "2601.11868",
+          "kind": "design",
+          "finding": "Terminal-Bench 建題時要求 oracle 解必須通過、no-op 必須失敗，並用作弊代理人找出 monkey-patch 測試環境、猜答案、列舉所有可能答案等捷徑；但沒有量化這些瑕疵對分數的影響 [arXiv:2601.11868]。",
+          "where": "ch07 §跨子領域：程式化判定器被怎麼驗證 L298；ch07 §陷阱一 L373",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "設計事實，依規格不算乾淨來源，只說明『oracle 必過、no-op 必敗』這個做法存在。它用 ABC 的清單自評（筆記 limitations_observed[6]），與 ABC 不宜當成彼此獨立的兩個來源。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "對自己的判定器跑三個平凡 agent，逐類別報分數；從判成功與判失敗各抽一批交人工重判，分開估偽陽性率與偽陰性率。沒效（這兩步可以省）的判準：三個平凡 agent 在每個類別都是 0，而且兩批重判的誤判率在抽樣區間內都與 0 無異。次要項：另做 oracle 解必過、no-op 必敗的健全性檢查，只有 Terminal-Bench 的設計證據（L298），較弱。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "A 成立，兩半各自看：地板那一半有 OSWorld 與 ABC 的 τ-bench 兩個獨立來源；雙向稽核那一半有 AgentRewardBench（同一份專家標註下 precision 與 recall 兩向都不足）與 ABC（τ-bench 的高估加 OSWorld 的低估）兩個獨立來源。OSWorld、ABC、AgentRewardBench 三組作者不同，沒有共用軌跡或判定器；ABC 量 OSWorld 用的是公開基準，依規格補充不破壞獨立。各筆的 flaws 與 unverified 都只有 F5，都有量化結果，方向一致：不對地板、只單向稽核，都會把判定器的漏洞或漏判算進 agent 的分數。反證段沒有反例：爭議一（L530–534）談的是參照軌跡與結果導向哪個較好，不否定先量地板。OSWorld 那一筆的地板是精讀補算，依 T1、T3 前例當證據並在 finding 寫明。次要項（oracle 與 no-op 檢查）只有設計證據，較弱。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T7-02",
+      "type": "measure",
+      "decision": "宣稱 LLM 或 agent 評審「接近人類」之前，它對人的一致率要怎麼量、跟什麼比？",
+      "recommendation": "評審對人的一致率至少同時報：類別分布與一律判同一類的多數類基準、機會校正後的值（κ 一類）、樣本量與區間、人類參照的定義（平手怎麼算、有沒有剔除前後不一致的票）以及人類彼此的一致率；只報原始一致率不算數。Agent-as-a-Judge 的資料上，LLM-as-a-Judge 在 MetaGPT 的 84.15% 只比一律判未達成的 77.87% 高 84.15 − 77.87 = 6.28 點 [arXiv:2410.10934]；FairEval 的 GPT-4 Vanilla 52.7% 只略高於全猜多數類的 51.25% [arXiv:2305.17926]。人類參照的口徑要在看結果之前定好：MT-Bench 的 GPT-4 只在剔除平手與不一致票的 S2 下高過人彼此（85% 對 81%），計入平手的 S1 第二輪是 66% 對 67% [arXiv:2306.05685]。",
+      "defaults": "多數類基準與機會校正兩者都報；人類參照同時給「人對人」與「人對多數決」兩種，後者在 MT-Bench 的 S2 第一輪是 90% [arXiv:2306.05685]。",
+      "switch_when": "要比的兩個系統實力相近時，一致率要在相近配對上另外報，不能用全池平均：MT-Bench 的 GPT-4 對人一致率隨配對勝率差距從約 70% 升到接近 100% [arXiv:2306.05685]，FairEval 的 GPT-4 衝突率在相近配對是 46.3%、在差距大的配對是 5.0% [arXiv:2305.17926]。",
+      "evidence": [
+        {
+          "id": "2410.10934",
+          "finding": "Agent-as-a-Judge 只報原始一致率，作者自承需求判定類別不平衡；以人評的 Requirements Met (I) 反推，一律判未達成在 MetaGPT／GPT-Pilot／OpenHands 就有 77.87／55.20／57.11%，LLM-as-a-Judge black-box 在 MetaGPT 的 84.15% 只高 6.28 點（論文數字加精讀補算）[arXiv:2410.10934]。",
+          "where": "ch07 §陷阱四 L406",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "以人類共識為準，評審是被量的對象，依規格補充不是 F4。F1：這一筆本身就是補上的平凡基準。F2：模組是用同一份人類共識挑的（筆記 limitations_observed[1]），會抬高 Agent-as-a-Judge 自己的一致率，但本條比的是沒經過挑選的 LLM-as-a-Judge 對平凡基準，不受影響。F3：評審的底層 LLM 沒交代（limitations_observed[7]）；依 T4 前例，被評對象可能的自我偏好不改變以人類共識為準的量測，不記。F5：55 題、單次執行（limitations_observed[2]）。人類共識取決於辯論過程（limitations_observed[6]），屬標籤品質，不在 F1–F4。"
+        },
+        {
+          "id": "2305.17926",
+          "finding": "FairEval 報 κ（GPT-4 由 0.24 升到 0.37）卻沒報多數類基準；依 repo 公開的標籤，80 題中 ChatGPT 勝 41 題，全猜 ChatGPT 勝就有 41/80 = 51.25%，GPT-4 Vanilla 的 52.7% 幾乎沒超過，最佳全自動方法 62.5% 只多對約 9 題（精讀時依 repo 算出）[arXiv:2305.17926]。",
+          "where": "ch07 §陷阱四 L405；ch07 §LLM/agent-as-judge 與評估可靠性 FairEval 段 L201",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "評審是被量的對象，對照三位作者的多數決；人工判定不算 F4，但三位標註者都是作者、只公開多數決、沒報互評一致度（筆記 limitations_observed[7]），依規格補充寫在這裡。F1：本身就是補上的平凡基準。F2 不成立：比的是 Vanilla 與多數類，沒有在標籤上挑設定。F3：ChatGPT 是被比的一方（limitations_observed[9]），但本條引的是 GPT-4 評審，GPT-4 不在被比的兩方，不記。F5：n=80，準確率約 0.6 時 95% 區間約 ±10.7 點（limitations_observed[1]）。"
+        },
+        {
+          "id": "2306.05685",
+          "finding": "MT-Bench 的「GPT-4 比人彼此更一致」只在 S2 成立：S2 只計非平手票，G4-Pair 對人由 S1 的 1343 票降到 859 票，(1343 − 859)/1343 ≈ 36% 不計；S2 第一輪 GPT-4 對專家 85%、專家彼此 81%，S1 第二輪是 66% 對 67%；改以 human-majority 為參照，S2 第一輪上限是 90%，GPT-4 差 5 點 [arXiv:2306.05685]。",
+          "where": "ch07 §LLM/agent-as-judge 與評估可靠性 MT-Bench 段 L206–209；ch07 §陷阱五 L416",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "評審是被量的對象，對照專家票，不是 F4。F1：有隨機基準 S1 33%、S2 50%（L206）。F2 不成立。F3：GPT-4 也是被評的六個模型之一。自我偏好造成的判定會和人類意見相左，S2 只留雙方都表態的票，若因此留下更多這類票，只會壓低 S2 的一致率，所以 S2 下 GPT-4 勝過人彼此是保守的；S1 第二輪 GPT-4 低於人彼此的結果也不會因自偏而變好看，換口徑就反轉這個方向不受威脅，不記。標註介面在人與 GPT-4 意見不同時會顯示 GPT-4 的判語，34% 的人表示願意改票（筆記 limitations_observed[6]），這會同時抬高 S1 與 S2 的人對 GPT-4 一致率，屬標籤品質、不在 F1–F4，但讓 85% 這個絕對值偏樂觀。F5：80 題、單一裁判快照、沒有區間。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "把評審判定與人類參照對齊後，算原始一致率、多數類基準、κ 與區間，並依兩種平手規則各報一次。沒效的判準：評審一致率與多數類基準的差距落在區間內，或結論在換口徑（含不含平手、對人對人或對多數決）後反轉。次要項一：聚合方式在看結果前定好；2201.04723 在同一份資料上事後挑逐輪聚合，勝率可由 80% 升到 93%（L488），只有這一篇，較弱。次要項二：不要讓評審自己決定哪些題送人工，否則人評無法再無偏地估評審的整體一致率（L236，精讀時指出，沒有量化證據）。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "A 成立：Agent-as-a-Judge、FairEval、MT-Bench 三組作者不同，沒有共用標註或評審輸出；FairEval 用的 Vicuna 題集是公開題庫，依規格補充不破壞獨立。三筆的 flaws 與 unverified 都只有 F5，都有量化結果，方向一致：不對多數類基準或換一個人類參照口徑，『接近人類』的結論就站不住。Chatbot Arena 的機會校正粗估（L400，κ 約 −0.07 到 0.42）與 MT-Bench 同屬 LMSYS、分母又不確定，沒有列入。反證段爭議三（L545–552）的正面數字（MINT、MT-Bench-101、LongMemEval）都沒報平凡基準，不構成反例。依『一條建議綁多個子主張』：主建議是『報多數類基準與機會校正』，有 Agent-as-a-Judge 與 FairEval 兩個獨立乾淨來源；『人類參照口徑換了結論就反轉』這個子主張只有 MT-Bench 直接示範，單一來源、較弱。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T7-03",
+      "type": "measure",
+      "decision": "用成對比較的評審時，要不要逐題交換兩個候選的位置各判一次？",
+      "recommendation": "成對比較一律逐題用兩種順序各判一次，報前後不一致的比例；合併規則在看結果前定好（前後不一致記平手，或兩種順序的分數平均）。換評審模型或換提示模板就重量一次，因為偏差的方向會跟著變。GPT-4 對相近配對只交換順序就有 46.3% 的題目結論相反 [arXiv:2305.17926]；在兩個幾乎相同的回答上，GPT-4 交換後前後一致只有 65.0% [arXiv:2306.05685]；GPT-4o 在程式碼任務上對調後的一致率 13.33，低於隨機的 33.33 [arXiv:2502.06193]。",
+      "defaults": "合併規則用文獻用過的兩種之一：前後不一致記平手（MT-Bench），或兩種順序的分數平均（FairEval 的 BPC）[arXiv:2306.05685][arXiv:2305.17926]。",
+      "switch_when": "偏差方向隨模板與模型改變：同是 GPT-3.5，MT-Bench 直接輸出判決的模板偏好第一位（50.0% 對 1.2%），FairEval 先打分再比的模板偏好第二位 [arXiv:2306.05685][arXiv:2305.17926]；兩種合併規則都假設偏差大致對稱，方向一變就要重量。配對實力差距大時位置偏差幾乎消失，GPT-4 的位置一致性對 LLaMA-13B 是 98.8%、對 Claude-v1 是 67.5% [arXiv:2306.05685]，所以只有在自己的配對上量過差距夠大，才可以省掉交換。改用逐一打分能不能整個避開這件事，文獻建議相反、沒有裁決（見 unresolved）。",
+      "evidence": [
+        {
+          "id": "2305.17926",
+          "finding": "GPT-4 當評審時只交換順序，Vicuna-13B 對 ChatGPT 有 37/80 = 46.3% 的題目結論相反，對品質差距大的 Alpaca-13B 只有 4/80 = 5.0%；Vicuna-13B 放第一位的勝率 51.3%、放第二位 23.8% [arXiv:2305.17926]。",
+          "where": "ch07 §LLM/agent-as-judge 與評估可靠性 FairEval 段 L200；ch07 §爭議四 L557",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "量的是評審自己兩種順序的判定是否一致，不需要人類標籤，F1 不適用（描述性量測），F4 不適用（被量的是評審本身）。F2 不成立。F3：GPT-4 不在被比的兩方，不記；ChatGPT 評審那一組自己也是候選（筆記 limitations_observed[9]），自我偏好會讓它兩種順序都選自己、壓低衝突率，所以它的 82.5% 只會被低估，本條不拿它當主證據。F5：80 題（limitations_observed[1]）。Conflict Rate 把勝與平手的互換也算衝突（limitations_observed[11]），接近平手的題目會顯得更不穩。"
+        },
+        {
+          "id": "2306.05685",
+          "finding": "MT-Bench 用兩個幾乎相同的回答測交換位置後的一致性：GPT-4 65.0%、GPT-3.5 46.2%、Claude-v1 23.8%；分類別看，GPT-4 在 humanities 只有 36.0%、writing 42.0%，math 與 coding 各 86.0% [arXiv:2306.05685]。",
+          "where": "ch07 §LLM/agent-as-judge 與評估可靠性 MT-Bench 段 L207；notes/2306.05685.json key_results[2]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "評審對自己的前後一致，F1 不適用、F4 不適用。F2 不成立。F3：回答取自被評模型，GPT-4 可能評到自己的回答，但自我偏好會讓兩種順序都選同一方，只會提高一致性，造不出本條量到的不一致，不記。F5：80 題、單一裁判快照、沒有區間（筆記 limitations_observed[4]）。用的是兩個幾乎相同的回答，屬困難情境（key_results[2]）。"
+        },
+        {
+          "id": "2502.06193",
+          "finding": "SE 研究的成對比較中，GPT-4o 對調兩個回應的位置後，在程式碼翻譯、生成、摘要的一致率只有 13.33／13.33／16.00，低於勝、負、平各三分之一的隨機 33.33；最一致的 Llama2 一致率 78.67，準確率卻只有 36.00 [arXiv:2502.06193]。",
+          "where": "ch07 §LLM/agent-as-judge 與評估可靠性 SE 實證段 L242；ch07 §爭議五 L564",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "一致率比的是評審自己兩種順序的判定，不用標籤；平手門檻在標籤上調過（筆記 limitations_observed[8]）只影響準確率，不影響這個數字，不記 F2。F3：DeepSeek-Coder-V2-Lite 同時是受評模型與評審（limitations_observed[10]），但本條引的是 GPT-4o，它不是受評模型；它參與生成任務的資料建構（同一條），與位置一致性沒有方向上的關係，不記。F4 不適用。F1：有隨機基準 33.33。F5：每任務 150 筆來自 50 題、單次（limitations_observed[3]）。論文沒套用『兩種順序各判一次再合併』（limitations_observed[9]），所以這是未校正的偏差量。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "在自己的評審、模板與配對上，逐題兩種順序各判一次。沒效（可以省掉交換）的判準：前後不一致的比例在區間內與 0 無異，而且換一個模板重量後仍無異。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "A 成立：FairEval、MT-Bench（LMSYS）、SE 研究三組作者不同，沒有共用評審輸出或標註；三筆的 flaws 與 unverified 都只有 F5，都有量化結果，方向一致：只交換位置就會翻轉相當比例的判定。反證段的爭議四（L554–559）不是反例，是偏差方向隨模板改變，已寫進 switch_when；爭議五（L561–566）爭的是成對與逐一打分該選哪個，不否定『用成對就要交換』，列入 unresolved。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T7-04",
+      "type": "measure",
+      "decision": "LLM 評審的分數，要不要先量它對冗長與重複的敏感度？",
+      "recommendation": "評審上線前，拿同一批回答做兩種擾動再判一次：一是只重複、不加資訊的改寫（例如把清單換句話重複一次），二是用提示讓回答變長或變短；報評審偏好改寫版的比例，與分數隨長度擺動的幅度。重複攻擊在 Claude-v1 與 GPT-3.5 評審上的失敗率都是 91.3% [arXiv:2306.05685]；只改 verbosity 提示，同一個 baseline 的原始 win rate 就在 22.9%–64.3% 之間擺動 [arXiv:2404.04475]。排行榜可以並列一個長度控制後的分數當敏感度檢查，但不取代原始分數；這是次要項，證據較弱。",
+      "defaults": "長度控制若要做，用文獻用過的 LC 形式：成對偏好擬合成模型項、經 tanh 的標準化長度差與題目難度項，預測時把長度項歸零 [arXiv:2404.04475]。",
+      "switch_when": "重複攻擊與變長提示量的是兩件事，不能互相代替：GPT-4 對重複攻擊的失敗率只有 8.7% [arXiv:2306.05685]，GPT-4 turbo 評審下 verbosity 提示仍讓 win rate 擺動 22.9%–64.3% [arXiv:2404.04475]。變長提示的擺動混了合理的長度偏好：人類也有 62% 偏好較長的回答 [arXiv:2305.14387]，LC 把長度效應整個歸零也會扣掉合理的部分，所以長度控制分數不能當真值。拿人評當參照時，並排呈現會放大長度差異：只差長度的配對，成對協定勝率 73%–85%、單模型協定 52%–65% [arXiv:2201.04723]，但兩者不是同一個統計量。",
+      "evidence": [
+        {
+          "id": "2306.05685",
+          "finding": "MT-Bench 的 repetitive list 攻擊只把清單換句話重複一次、不加資訊，23 個回答上 Claude-v1 與 GPT-3.5 評審的失敗率都是 91.3%，GPT-4 是 8.7%；所有評審對兩個完全相同的回答都判平手 [arXiv:2306.05685]。",
+          "where": "ch07 §LLM/agent-as-judge 與評估可靠性 MT-Bench 段 L207；ch07 §爭議六 L571",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "評審是被量的對象，F4 不適用。F1：有天然對照，兩個完全相同的回答都判平手（筆記 key_results[3]）。F2 不成立。F3：改寫前後出自同一個回答，同源偏好對兩邊相同，造不出偏向改寫版的結果，不記。F5：只有 23 個回答、沒有區間（limitations_observed[4]）。"
+        },
+        {
+          "id": "2404.04475",
+          "finding": "AlpacaEval 上只改 verbosity 提示，baseline gpt4_1106_preview 自己的原始 win rate 在 22.9%–64.3% 之間擺動 [arXiv:2404.04475]。",
+          "where": "ch07 §LLM/agent-as-judge 與評估可靠性 LC AlpacaEval 段 L221；ch07 §陷阱七 L431",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "本筆只引長度控制之前的原始擺動，與 LC 方法在 Arena 相關上挑選（筆記 limitations_observed[1]）無關，不記 F2。F3：評審與 baseline 同為 GPT-4 turbo 系列；同源偏好若偏向自己的預設風格，會讓變長與變短兩個版本都輸，造不出隨長度單調的擺動，不記。F4 不適用：被量的是評審。F1 不適用（描述性量測）。F5：只有兩種 verbosity 提示、沒有區間（limitations_observed[7]）。"
+        },
+        {
+          "id": "2404.04475",
+          "finding": "長度控制後擺動縮到 41.9%–51.6%，normalized std 由 25% 降到 10%；但長度控制本身可被攻擊，截斷 GPT-4 輸出後，原始 win rate 3.7、無正則化的 LC 25.9、有正則化的 LC 12.2；與 Arena 的 Spearman 由 0.94 升到 0.98，bootstrap p 值 0.07 與 0.06 [arXiv:2404.04475]。",
+          "where": "ch07 §LLM/agent-as-judge 與評估可靠性 LC AlpacaEval 段 L223–224；ch07 §爭議十六 L641",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：LC、LN、LB 的取捨都用同一個 38 模型的 Arena 相關來比，沒有保留外部驗證（筆記 limitations_observed[1]）；驗證目標 Arena 當時沒做風格控制，有循環論證的風險（limitations_observed[5]）。F5：只測一種截斷攻擊、沒有區間（limitations_observed[6]）。本筆只撐次要項（並列長度控制分數）。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2305.14387",
+          "finding": "AlpacaFarm 把「模擬標註者也偏好長回答」當成保真的證據：偏好較長回答的比例人類 62%、模擬 64% [arXiv:2305.14387]。",
+          "where": "ch07 §爭議六 L570",
+          "flaws": ["F5"]
+        },
+        {
+          "id": "2201.04723",
+          "finding": "只差最小生成長度的配對，成對人評協定的勝率 73%–85%，單模型協定只有 52%–65%；人類對長度差異的反應隨呈現方式改變 [arXiv:2201.04723]。",
+          "where": "ch07 §爭議六 L573",
+          "flaws": ["F2", "F5"]
+        }
+      ],
+      "verification": "對自己的評審各做一批重複改寫與一批變長變短。沒效的判準：重複改寫版被偏好的比例在區間內與 50% 無異，而且變長與變短版本的勝率擺動落在同一批題重跑的雜訊內。反證的兩筆只限制『長度效應全是偏差』這個讀法，已寫進 switch_when；2201.04723 的 F2 是第 2–6 輪 WTA 這類聚合事後挑選（L488），而且成對勝率與單模型等效勝率不是同一個統計量（L381）。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "主建議（量重複與變長兩種敏感度）A 成立：MT-Bench（LMSYS）的重複攻擊與 LC（史丹佛）的原始擺動兩筆，作者不同；LC 拿 Arena 當驗證目標，但本條引的原始擺動沒用到 Arena，與 MT-Bench 不共用資料。兩筆的 flaws 與 unverified 都只有 F5，方向一致：只看原始分數會被不加資訊的重複或提示改長移動。反證段的『人類也偏好長回答』（爭議六 L570）有解釋，而且碰不到『不量會不會看錯』這一問：重複攻擊不加任何資訊，已把偏差與合理的長度偏好分開，人類偏好長回答只限制『長度效應全是偏差』這個讀法，已用條件寫進 switch_when，所以維持 A；這和 T7-05 不同，那裡的反例直接回答了『不量會不會看錯』。AlpacaFarm 與 LC 同屬史丹佛同一組，不另算獨立來源。次要項（並列長度控制分數）只有帶 F2 的 LC 撐，較弱。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T7-05",
+      "type": "measure",
+      "decision": "評審、資料生成器或模擬使用者與受測模型同一家族時，要怎麼確認分數沒被同源偏好墊高？",
+      "recommendation": "只要評審、資料生成器或模擬使用者與任何受測模型同家族，就至少換一個不同家族的評審重判同一批輸出，報兩個評審的排名一致度與分數區間；有人類判定的子集時，逐系統報「評審分數減人類分數」，看同家族的系統是否一致偏高。AlpacaFarm 的模擬評估池含 GPT-4 與 ChatGPT 標註者，GPT-4 的模擬 win rate 比真人高 9.2 個百分點、ChatGPT 高 8.5，本文訓練的 LLaMA 系模型則比真人低 5.7–8.3 [arXiv:2305.14387]；MT-Bench 觀察到 GPT-4 給自己的勝率比人類給的高約 10%、Claude-v1 高約 25% [arXiv:2306.05685]。",
+      "defaults": null,
+      "switch_when": "受測模型彼此差距大時，同源偏好不一定改變排名：LC AlpacaEval 的 3 個評審給 5 個模型排出相同名次，作者判定自偏小於模型間差距 [arXiv:2404.04475]。但只比排名不夠：MT-Bench-101 換 Qwen-72B 重評前 5 名時排名一致，分數區間卻從 8.86 − 7.38 = 1.48 壓到 8.75 − 8.32 = 0.43 [arXiv:2402.14762]，所以排名之外也要報區間。",
+      "evidence": [
+        {
+          "id": "2305.14387",
+          "finding": "AlpacaFarm 拿同一批系統比模擬與真人評估：GPT-4 模擬 79.0% 對真人 69.8%、ChatGPT 61.4% 對 52.9%，而本文訓練的 SFT 10k、PPO、best-of-1024 在模擬下比真人低 7.6、8.3、5.7 個百分點；評估池 13 個標註者裡有 5 個 GPT-4、4 個 ChatGPT [arXiv:2305.14387]。",
+          "where": "ch07 §陷阱六 L424；notes/2305.14387.json limitations_observed[1]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "以真人評估為準，模擬評估池是被量的對象，不是 F4；F3 是被量的現象本身。F1 不適用（觀察式比較）。F2 不成立。F5：每格約 ±1.7 個百分點，較像標準誤（L446）。這是觀察式比較，沒有固定回答品質：模擬標註者偏好長回答 64%、人類 62%（筆記 key_results[7]），GPT-4 的偏高有一部分可能是風格偏好而非同源，這個混淆不在 F1–F4。"
+        },
+        {
+          "id": "2306.05685",
+          "finding": "MT-Bench 觀察到 GPT-4 當裁判時給自己的勝率比人類給的高約 10%，Claude-v1 高約 25%；作者判定無法定論，理由是沒辦法在不改變品質的前提下把回答改寫成另一個模型的風格 [arXiv:2306.05685]。",
+          "where": "ch07 §爭議七 L579、L582",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "以人類票為準，不是 F4；F3 是被量的現象。F1 不適用。F2 不成立。F5：沒有區間，作者自稱無法定論（筆記 limitations_observed[9]）。同樣是觀察式比較，沒有控制回答品質。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2404.04475",
+          "finding": "3 個評審 × 5 個模型的初步實驗：自偏存在，但通常小於模型間差距，3 個評審給出相同排名；mistral-large 評審把所有模型往 50 壓，它給自己 45.5 分不清是自偏還是整體寬鬆 [arXiv:2404.04475]。",
+          "where": "ch07 §爭議七 L580",
+          "flaws": ["F5"]
+        },
+        {
+          "id": "2402.14762",
+          "finding": "MT-Bench-101 的 GPT-4 同時是資料生成器、評審與第一名，改用 Qwen-72B 重評前 5 名時排名一致，作者當成自偏不大的佐證；但 Qwen-72B 也在評同家族的 Qwen-14B [arXiv:2402.14762]。",
+          "where": "ch07 §陷阱六 L423",
+          "flaws": ["F3", "F5"]
+        }
+      ],
+      "verification": "對同一批輸出用兩個不同家族的評審各判一次，並在一個人類判定子集上逐系統算差值。沒效（同源不必另外處理）的判準：兩個評審的排名與分數區間都一致，而且同家族系統的『評審減人類』差值與其他系統沒有差別。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "regrade 可能因 AlpacaFarm 與 MT-Bench 兩筆都只有 F5 而給 A，這裡降為 B：一，兩筆都是觀察式比較，章明說八篇評審研究沒有一篇固定回答品質做受控實驗（爭議七 L582），偏高可能混了長度與風格偏好；二，MT-Bench 作者自己判定無法定論；三，反證段有 LC 的『自偏小於模型間差距、3 個評審排名相同』，它直接回答了『不另外量會不會看錯』這一問（差距大時排名不變，不會看錯），只能用『受測模型差距大小』這個條件切開，符合 B 的『反例可用條件切開』；這和 T7-04 不同，那裡的反例碰不到這一問。主建議是量法，B 反映的是『不這樣量會看錯』的證據強度。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": ["E6"]
+    },
+    {
+      "id": "T7-06",
+      "type": "measure",
+      "decision": "agent 分數要跑幾次、區間怎麼算，相鄰名次的差距才算數？",
+      "recommendation": "每個受測設定都重跑數次（換種子或取樣），報一題換算成多少個百分點、重跑之間的標準差，以及以任務為單位重抽的區間；差距小於重跑標準差或落在區間內，就不下「誰比較好」的結論。WebShop 的 IL 與 IL+RL 只差 29.1% 對 28.7%，而 IL 三個種子的 SR 標準差是 2.42 [arXiv:2207.01206]；GAIA 的 GPT4 在 Level 1 跑 3 次，標準差就有 ±2.5 [arXiv:2311.12983]；OSWorld 拿 11.77% 對 12.17% 下結論，只差 0.40 個百分點、約 1.5 題，每題只跑一次 [arXiv:2404.07972]。區間不要把每次試跑當獨立樣本，這是次要項，證據較弱。",
+      "defaults": null,
+      "switch_when": "判定與受測 agent 都是確定性的時候，重跑沒有變異：τ-bench 的 do-nothing agent 對任何 k 的 pass^k 與 pass@k 都一樣 [arXiv:2507.02825]，這時區間只剩任務抽樣一項。排行榜取每個組合最好的一次、以 min–max 當誤差棒時，跑得多的組合佔便宜 [arXiv:2510.11977]，不能拿來和只跑一次的結果比。",
+      "evidence": [
+        {
+          "id": "2207.01206",
+          "finding": "WebShop 從 IL 到 IL+RL，Score 由 59.9 升到 62.4，SR 由 29.1% 降到 28.7%；全文 Table 9 中 IL 三個種子的 SR 標準差是 2.42，0.4 個百分點的差距撐不起「RL 稍微傷害 SR」（論文數字，精讀時指出）[arXiv:2207.01206]。",
+          "where": "ch07 §陷阱二 L380",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "判分是程式化 reward，不是 F4。F1 不適用：這一筆描述重跑變異。F2：expert 是用同一套 reward 篩出來的（筆記 limitations_observed[6]），與 IL 的種子變異無關。F3 不成立。F5：只有三個種子。自動 reward 的偏差在不同族群不是固定平移（limitations_observed[3]），不影響種子標準差的方向。"
+        },
+        {
+          "id": "2311.12983",
+          "finding": "GAIA 只對有 API 的模型每題跑 3 次取平均，GPT4 在 Level 1 的標準差是 ±2.5；Level 1 有 146 題，一題約 100 ÷ 146 ≈ 0.68 個百分點 [arXiv:2311.12983]。",
+          "where": "ch07 §陷阱八 L440；notes/2311.12983.json key_results[7]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "判分是依型別正規化的 quasi exact match，不是 F4。F1 不適用。F2：頭條 15% 的手選插件設定有人替 agent 選工具（筆記 limitations_observed[2]），本條只引重跑標準差，不受影響。F3 不成立。F5：只跑 3 次、只對有 API 的模型。"
+        },
+        {
+          "id": "2404.07972",
+          "finding": "OSWorld 主表 temperature 1.0、每題只跑一次；整體一題約 100/369 = 0.27 個百分點，OS 類一題 100/24 = 4.17 個百分點；論文以 11.77% 對 12.17% 主張 SoM 讓 GPT-4V 下降，只差 0.40 個百分點、約 1.5 題 [arXiv:2404.07972]。",
+          "where": "ch07 §陷阱八 L438",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這是『不估重跑雜訊會看錯』的示範，與 T3-05 的用法相同。執行式評估函式，不是 F4；F1 不適用；F2、F3 不成立。F5：每題一次（筆記 limitations_observed[2]）。"
+        },
+        {
+          "id": "2601.11868",
+          "finding": "Terminal-Bench 報 95% 信賴區間卻沒寫算法；若 ± 是把每次試跑當獨立樣本的 Wald 95% 區間，Table 2 的 55 列共需 55,438 次試跑，超過全文報告的 32,155 次，所以不可能全表都是；相鄰名次 57.8% 對 56.9%、42.8% 對 42.5% 分不出高下（本章重算，程式驗證證實）[arXiv:2601.11868]。",
+          "where": "ch07 §陷阱八 L441",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "論文數字加本章重算，依前例寫明。判分是檢查最終容器狀態的測試，不是 F4；F1 不適用；F2：任務入選前先用前沿模型實跑（筆記 limitations_observed[8]），影響的是分數高低，不影響區間算法這件事；F3：GPT-5 判官只用在失敗分析。F5：89 題（Table 說明又寫 74 題）。另一個與報告相容的解讀是 ± 其實是 1 個標準誤（L443），兩者只靠表格分不開。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "同一設定重跑至少三次，報標準差與以任務重抽的區間。沒效（單次就夠）的判準：重跑標準差小於一題換算的百分點，而且要比較的差距遠大於區間半寬。次要項（以任務為單位重抽而非逐次試跑）只有 Terminal-Bench 的重算撐，較弱。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "A 成立：WebShop、GAIA、OSWorld、Terminal-Bench 四個來源作者不同、沒有共用資料，flaws 與 unverified 都只有 F5，都有量化結果，方向一致：論文下結論的差距小於或分不開重跑變異。WebShop 是唯一在同一篇裡同時有差距與種子標準差、可以直接對照的；OSWorld 與 Terminal-Bench 那兩筆是論文數字加精讀或程式重算，依 T1、T3 前例寫明。反證段沒有反例。次要項（區間算法）只有一篇，較弱。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T7-07",
+      "type": "avoid",
+      "decision": "不同 scaffold、預算、步數上限、提示格式或基準版本下量到的分數，可以直接放在一起排名嗎？",
+      "recommendation": "不要跨設定比分數或排名。比較時固定並記錄 scaffold、成本上限、輪數或步數上限、提示格式、評審模型版本與基準版本，任何一項不同就分開列，同時報成本。同一個 Claude Sonnet 4 在 SWE-Bench Pro 的 Table 1 是 42.7%，加上 50 輪與 $2 上限的 Table 5 只有 17.6% [arXiv:2509.16941]；同一個 Gemini 2.5 Pro 在 Terminal-Bench 的四種 scaffold 之間從 15.7% 到 32.6% [arXiv:2601.11868]；WebArena 只差提示裡的 UA hint 一句話，GPT-4 的 SR 就在 11.70% 與 14.41% 之間擺動 [arXiv:2307.13854]。",
+      "defaults": null,
+      "switch_when": "要比的正是 scaffold 或預算本身時，改在同一套 harness 上畫成本對準確率的前緣：HAL 在 Online Mind2Web 上量到 SeeAct＋GPT-5 Medium 花 $171 得 42.3%、Browser-Use＋Claude Sonnet 4 花 $1,577 得 40.0%，成本差 1,577 ÷ 171 ≈ 9.2 倍 [arXiv:2510.11977]；AI Agents That Matter 在 HumanEval 上量到 Warming(GPT-4) 93.2%、$2.45，LATS(GPT-4) 88.0%、$134.50 [arXiv:2407.01502]。這兩篇同屬一組作者，不是兩個獨立來源。",
+      "evidence": [
+        {
+          "id": "2509.16941",
+          "finding": "SWE-Bench Pro 的 Claude Sonnet 4 在 Table 1 是 42.7%，在 50 輪加 $2 上限的 Table 5 只有 17.6%，同一模型相差 42.7 − 17.6 = 25.1 個百分點；論文沒討論這對排名的影響，作者自營的排行榜又多半改成 250 輪、不設成本上限 [arXiv:2509.16941]。",
+          "where": "ch07 §陷阱七 L428",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "就破壞本身判：判分是 fail2pass 與 pass2pass 測試，不是 F4。F1 不適用（描述設定造成的差距）。F2：抗污染只有論證（筆記 limitations_observed[1]），影響絕對分數的意義，不影響同一模型兩種預算之間的差距。F3：GPT-5 judge 只用在失敗分析（limitations_observed[3]），不參與判分。F5：每個模型只跑一次 Pass@1、沒有區間（limitations_observed[5]）。"
+        },
+        {
+          "id": "2601.11868",
+          "finding": "Terminal-Bench 中同一個 Gemini 2.5 Pro 在四種 scaffold 之間從 15.7% 到 32.6%；Claude Opus 4.5 在自家的 Claude Code 是 52.1%，低於中立的 Terminus 2 的 57.8% [arXiv:2601.11868]。",
+          "where": "ch07 §陷阱七 L429；ch07 §爭議八 L587",
+          "flaws": ["F5"],
+          "unverified": ["F2"],
+          "flaw_basis": "判分是只檢查最終容器狀態的測試，不是 F4；F1 不適用；F3：GPT-5 判官只用在失敗分析。F2 未確認：任務入選前會先用前沿模型實跑，論文沒說解出率是否影響入選（筆記 limitations_observed[8]）；入選時若只用某一種 scaffold 篩，scaffold 之間的差距可能被篩選放大，所以放 unverified。F5：89 題，Table 說明又寫 74 題（L677）。"
+        },
+        {
+          "id": "2307.13854",
+          "finding": "WebArena 只差 UA hint 一句話，GPT-4 的 SR 就在 11.70% 與 14.41% 之間擺動；給了 hint 的 GPT-4 把 54.9% 的可達任務判為不可能 [arXiv:2307.13854]。",
+          "where": "ch07 §陷阱七 L431；ch07 §陷阱二 L387",
+          "flaws": ["F5"],
+          "unverified": ["F3", "F4"],
+          "flaw_basis": "F3、F4 未確認：fuzzy_match 的判分用 gpt-4-0613，它也是最強的受測者（L422；筆記 limitations_observed[0]），兩種提示下由 LLM 判分的那一部分偏不偏、偏多少，論文沒拆。F1 不適用；F2 不成立。F5：溫度 1.0、每組跑一次（L439）。"
+        },
+        {
+          "id": "2311.12983",
+          "finding": "GAIA 的 Level 1 上，人工逐題選插件的 GPT4 + plugins 是 30.3%，自動選工具的 AutoGPT 是 14.4%；依題數加權，可重現的 AutoGPT 整體約 4.7%，手選插件那一列約 14.6% [arXiv:2311.12983]。",
+          "where": "ch07 §陷阱七 L429；ch07 §爭議十四 L626",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：手選插件等於有人看過題目替 agent 選工具（筆記 limitations_observed[2]），兩列的差距混了人在迴圈裡的貢獻。判分是 quasi exact match，不是 F4。F5：3 次重跑、只對有 API 的模型。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "把要比較的結果逐項對照設定欄位（scaffold、預算、輪數或步數、提示、評審版本、基準版本）。這條 avoid 不成立的判準：同一模型在自己的任務上換這些設定，分數變動落在重跑雜訊內（量法見 T7-06）。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "A 不成立：在破壞本身的量測上沒有 F1–F4 的只有 SWE-Bench Pro 一筆；Terminal-Bench 的 F2 未確認、WebArena 的 F3 與 F4 未確認、GAIA 有 F2。依 B 的『恰好 1 個乾淨來源』給 B。四篇方向一致（同一模型換設定，分數大幅移動），反證段沒有反例，等級只受限於乾淨來源的數量。HAL 與 AI Agents That Matter 同屬一組作者，只放在 switch_when。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T7-08",
+      "type": "measure",
+      "decision": "判定器只檢查最終狀態或最終答案時，要另外量什麼，才知道它漏掉了多少回歸、副作用與過程錯誤？",
+      "recommendation": "對判成功的樣本另做兩種檢查，報「終態通過、但違反」的比例：一是回歸檢查，跑任務目標以外、原本就該通過的測試；二是過程與禁止事件檢查，讀完整軌跡，對照事先寫好的不准發生的事件與政策限制。SWE-bench 的 oracle 設定下，讓目標測試全過的 patch 裡，Claude 2 有 26/(110+26) = 19.1%、GPT-4 有 3/(10+3) = 23.1% 弄壞了 P2P 測試 [arXiv:2310.06770]；ProcessBench 在 Omni-MATH 上，最終答案正確的解法有 51.8% 被專家判為過程有錯 [arXiv:2412.06559]；τ-bench 的拒絕類任務只看狀態沒變，do-nothing agent 在 airline 拿到 38% [arXiv:2507.02825]。比例不可忽略時，成功改成終態與這兩種檢查同時通過才算；這是次要項，沒有一篇量過改用後的效度。",
+      "defaults": null,
+      "switch_when": "回歸檢查只涵蓋寫得出來的測試：SWE-bench 的 P2P 只涵蓋 test_patch 涉及的測試檔，repo 其他地方的破壞偵測不到 [arXiv:2310.06770]，所以量到的比例是下限。過程檢查不能寫成「對照一條參照軌跡」，Mind2Web 自己承認多條可行路徑會造成偽陰性 [arXiv:2306.06070]；ToolSandbox 的 milestone DAG 容許替代路徑，但 28 個資訊不足情境裡有 26 個沒有 milestone、評分程式把它記成滿分，什麼都不做也拿滿分 [arXiv:2408.04682]，寫過程規格時「沒有必要事件」不能預設成滿分。過程檢查若要靠 LLM 評審讀軌跡，評審本身要先量過對人的一致率，2602.16666 的 gpt-4o 評審沒有人工驗證 [arXiv:2602.16666]。ProcessBench 只量了單輪數學、平均 5–9 步，搬到長 agent 軌跡上比例會怎麼變沒有量過 [arXiv:2412.06559]。",
+      "evidence": [
+        {
+          "id": "2310.06770",
+          "finding": "SWE-bench 以 F2P 與 P2P 隱藏測試判定；依 Table 23 重算 oracle 設定，Claude 2 有 26 個 patch 讓 F2P 全過卻弄壞 P2P，占 F2P 全過者的 26/(110+26) = 19.1%，GPT-4 是 3/(10+3) = 23.1%（論文數字，本章重算）[arXiv:2310.06770]。",
+          "where": "ch07 §陷阱三 L394",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F2：oracle 設定把 gold patch 改到的檔案交給模型當脈絡，gold 資訊進的是產生 patch 的那一端；本條量的是判定器（只看 F2P 會放過多少回歸），gold 沒進判定器，所以 19.1% 與 23.1% 只代表 oracle 設定下的 patch，大小不能外推，方向不受影響，不記。F1 不適用（描述判定器的覆蓋）。F3 不成立。F4 不成立：可執行測試。F5：greedy 單一樣本，GPT-4 只跑 25% 子集、分母只有 13（筆記 limitations_observed[9]）。P2P 只涵蓋 test_patch 的檔案（limitations_observed[6]），所以這是下限。"
+        },
+        {
+          "id": "2412.06559",
+          "finding": "ProcessBench 由數學專家標出解法最早出錯的步驟；最終答案正確的解法中被判為過程有錯的比例，GSM8K 3.5%、MATH 18.8%、OlympiadBench 32.2%、Omni-MATH 51.8%，題目越難越高 [arXiv:2412.06559]。",
+          "where": "README L161；notes/2412.06559.json key_results[0]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "人工專家標註，不是 F4；標註一致度有報（3/3 一次到位的比例，筆記 key_results[1]）。F1 不適用（描述性量測）。F2：標註者手上有參考解（limitations_observed[8]），這是標註的條件，不是把答案送進受測者，不記。F3 不成立：產生解法的模型不是標註者。F5：每條解法單次生成、沒有區間。約 30% 樣本因五人內無共識被丟掉（limitations_stated[1]），可能偏掉最難的題；只有單輪數學（limitations_observed[9]）。"
+        },
+        {
+          "id": "2507.02825",
+          "finding": "τ-bench 的拒絕類任務只要求環境沒變，完全不看對話裡有沒有查規則、給理由；do-nothing agent 在 airline 拿 38%、retail 6.0% [arXiv:2507.02825]。",
+          "where": "ch07 §E6 互動紀錄（T6→T7） L803",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "同 T7-01 的同一筆：F1 是平凡基準本身；F2、F3 不成立；F4 不成立（確定性的終態檢查）；F5：airline 原本只有 50 題（README L157）。"
+        },
+        {
+          "id": "2408.04682",
+          "kind": "design",
+          "finding": "ToolSandbox 把必須發生的關鍵事件寫成 milestone，彼此相依構成 DAG，在所有符合拓樸順序的對應中取最佳匹配；另把不准發生的事件寫成 minefield，任一命中整條軌跡歸零 [arXiv:2408.04682]。",
+          "where": "ch07 §爭議一 L534",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "設計事實，不算乾淨來源，只說明過程規格的一種寫法存在。milestone 沒有驗證（筆記 limitations_observed[8]），而且 28 個資訊不足情境有 26 個沒有 milestone（L596）。"
+        },
+        {
+          "id": "2404.07972",
+          "kind": "design",
+          "finding": "OSWorld 附錄 D.3 的兩條軌跡：指令要求用 GIMP 剪影片，agent 改用 ffmpeg；使用者明說不想失去其他開著的工作，agent 卻下了 killall soffice.bin，兩條都標成 Done；作者自承評估函式不看不必要的破壞性動作 [arXiv:2404.07972]。",
+          "where": "ch07 §陷阱三 L393",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "質性個案、沒有比例，當設計證據，不算乾淨來源。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "從判成功的樣本抽一批，跑回歸測試並逐條讀軌跡對照禁止事件清單。沒效（只看終態就夠）的判準：『終態通過、但違反』的比例在區間內與 0 無異。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "A 成立：SWE-bench（普林斯頓）、ProcessBench（Qwen 團隊）、ABC 三個來源作者不同、沒有共用資料或判定器，flaws 與 unverified 都只有 F5，都有量化結果，方向一致：只看終態或最終答案會放過相當比例的回歸、過程錯誤或不作為。ProcessBench 來自 README L161 引的 T4 論文，射程是單輪數學，已寫進 switch_when。ToolSandbox 與 OSWorld 的兩筆是設計或質性證據，不計入。反證段沒有否定這個量法的反例；爭議一（L530–534）指出參照軌跡會誤罰替代路徑，那是過程檢查怎麼寫的限制，已寫進 switch_when。次要項（改用聯合判定）沒有一篇量過效度，較弱。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": ["E6"]
+    },
+    {
+      "id": "T7-09",
+      "type": "measure",
+      "decision": "評估流程本身（few-shot 示範、提示、模擬使用者）有沒有把答案洩漏給受測者，要怎麼查？",
+      "recommendation": "每次評估做一次流程稽核：檢查 few-shot 示範檔、系統提示與 scaffold 有沒有測試集內容；用字串比對掃模擬使用者的發話與對話歷史有沒有說出目標答案；把受洩漏影響的成功標出來，排除後重算分數與排名，兩個版本並列。資料污染方面，canary 字串、授權條款、手寫題目、時間切分這類設計主張不能當成沒有污染的證據。排除洩漏後，ReDial 上 KBRD 的 Recall@50 掉 21.6%，Recall@10 原本 KBRD 勝 BARCOR（0.229 對 0.190），排除後變成 0.143 對 0.187 [arXiv:2403.16416]；GAIA 的出題守則要求答案不以明文出現在網路上，人工搜尋引擎基線在 Level 1 仍有 7.4%，約 146 × 0.074 ≈ 11 題 [arXiv:2311.12983]。",
+      "defaults": null,
+      "switch_when": "模擬使用者需要目標才能扮演時，只給屬性、不給標題可以消掉大部分由模擬器回覆造成的洩漏：SimpleUserSim 在 ReDial 的 -response 跌幅降到 0%–0.3%；但模擬器仍可能用自身的世界知識說出標題，ChatGPT 在 OpenDialKG 的 -response Recall@1 仍下降 8.9% [arXiv:2403.16416]。要檢驗受測模型讀過測試集時，黑盒排列檢定只對可交換的任務清單、以標準順序逐字出現約 4 次以上的污染有效 [arXiv:2310.17623]，對解答 patch、參考軌跡與環境程式碼這類污染沒有現成量法。",
+      "evidence": [
+        {
+          "id": "2403.16416",
+          "finding": "2403.16416 稽核對話推薦的 LLM 模擬使用者評估，發現目標標題會經由對話歷史與模擬器回覆洩漏；排除受洩漏影響的成功對話後，ReDial 上 KBRD 的 Recall@50 掉 21.6%，Recall@10 由 KBRD 0.229 勝 BARCOR 0.190 變成 0.143 對 0.187 [arXiv:2403.16416]。",
+          "where": "ch07 §陷阱十 L481；notes/2403.16416.json key_results[1]、[2]",
+          "flaws": ["F4", "F5"],
+          "unverified": [],
+          "flaw_basis": "F4：整套評估只用一個 LLM 模擬器（筆記 limitations_observed[6]）。F5：單次執行、沒有區間。排除規則有矛盾，Table 1 有幾格排除後 recall 反而上升（limitations_observed[2]），『KBRD 墊底』也不是每個指標都成立（limitations_observed[3]），所以跌幅大小要打折，方向（含洩漏時分數被灌高）不受影響。F1 不適用（描述性稽核）；F2、F3 不成立。"
+        },
+        {
+          "id": "2311.12983",
+          "finding": "GAIA 的出題守則要求答案不以明文存在於網路上；人工搜尋引擎基線在 Level 1 仍有 7.4%，以 146 題推算約 146 × 0.074 ≈ 11 題可從第一頁搜尋結果推得答案 [arXiv:2311.12983]。",
+          "where": "ch07 §陷阱十 L471",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "判分是 quasi exact match，不是 F4。F1：這一筆本身就是平凡基準。F2、F3 不成立。F5：單一搜尋基線、單次。"
+        },
+        {
+          "id": "2310.06770",
+          "finding": "SWE-bench 以解題率與 issue 年份沒有一致相關，主張模型不是靠記憶作答；但 GPT-4 子集裡 2023 年的題目只有 61 題，以它 oracle 整體的 1.74% 算，期望解出 61 × 1.74% ≈ 1.06 題，年份沒有影響時一題都沒解出的機率約 0.34，所以這個 0.00 說明不了任何方向（論文數字，本章計算）[arXiv:2310.06770]。",
+          "where": "ch07 §陷阱十 L470",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這是『設計主張不能當證據』的示範，論文數字加本章計算，依前例寫明。F1 不適用。F2：oracle 設定把 gold patch 的檔案交給模型，影響解題率高低，不影響『檢定力不足』這個方向，不記。F3 不成立；F4 不成立（可執行測試）。F5：61 題、greedy 單一樣本（筆記 limitations_observed[1]）。"
+        },
+        {
+          "id": "2510.11977",
+          "kind": "design",
+          "finding": "HAL 從軌跡分析發現，TAU-bench 官方 repo 裡 few-shot scaffold 的示範檔直接含有測試集範例，整組結果作廢；發現時已花掉約 $1,000 的評估成本，只看最終正確率的評估不會發現這件事 [arXiv:2510.11977]。",
+          "where": "ch07 §陷阱十 L480；notes/2510.11977.json key_results[6]",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "單一發現，沒有量化洩漏對分數的影響，當質性證據，不算乾淨來源。HAL 用來分析軌跡的 Docent 只在 n=36 上驗過精確度（L804）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "對一次已完成的評估做稽核並排除後重算。沒效（這次可以不稽核）的判準：示範檔與提示裡沒有測試集內容，字串比對找不到任何洩漏的成功，排除前後的分數與排名相同。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "regrade 會因 GAIA 與 SWE-bench 兩筆乾淨而給 A，這裡降為 B。依規格『一條建議綁多個子主張時，看建議本體』：本體是『稽核評估流程的洩漏並排除後重算』，直接量過的只有 2403.16416，而它有 F4（單一 LLM 模擬器）；HAL 的 TAU-bench 洩漏是質性發現，沒有量化影響。GAIA 與 SWE-bench 撐的是附帶子主張『設計主張不能當沒有污染的證據』，那一項單獨可到 A。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": ["E6"]
+    },
+    {
+      "id": "T7-10",
+      "type": "measure",
+      "decision": "評估端要能持續讀取的軌跡、修正與互動紀錄，最少要包含什麼？用什麼方式驗收？",
+      "recommendation": "用一個可執行的驗收來定紀錄格式：只拿紀錄、不重跑 agent，評估端要能做到五件事，一是重算報告裡的每個分數，二是重建每一輪的環境或世界狀態，三是指出每個判定出自哪個評審、哪個版本與提示，四是重跑洩漏稽核與平凡基準，五是讀到設定欄位（scaffold、預算、步數上限、基準版本、種子）。任一件做不到就算格式不及格。這是推論：章裡的例子都是缺了其中一件，就沒辦法事後檢查 [arXiv:2408.04682][arXiv:2510.11977][arXiv:2403.04132][arXiv:2509.16941][arXiv:2506.07982]。",
+      "defaults": null,
+      "switch_when": "同一份紀錄若也流向訓練（例如修正紀錄被轉成訓練訊號、互動紀錄被轉成偽標籤），紀錄要標出哪些樣本進過訓練，評估端不能拿這些樣本算成效 [arXiv:2409.12917][arXiv:2303.06135]。",
+      "evidence": [
+        {
+          "id": "2408.04682",
+          "kind": "design",
+          "finding": "ToolSandbox 把使用者模擬器、agent 與環境的完整訊息，加上每輪的世界狀態快照留下來，事後才交給 milestone 與 minefield 比對 [arXiv:2408.04682]。",
+          "where": "ch07 §E6 互動紀錄（T6→T7） L791",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "設計事實，說明『每輪狀態快照』讓事後判分做得到。"
+        },
+        {
+          "id": "2510.11977",
+          "kind": "design",
+          "finding": "HAL 是從 transcript 事後找到 TAU-bench 的 few-shot 洩漏，也用 Docent 從軌跡回收修正片段，與任務成功做條件機率比較（RR 1.47–2.97）[arXiv:2510.11977]。",
+          "where": "ch07 §E5 修正紀錄（T5→T7） L766；ch07 §陷阱十 L480",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "設計與質性證據，說明『逐字 transcript』讓洩漏稽核與事後分析做得到；HAL 的 judge 本身也是受測模型（README L125）。"
+        },
+        {
+          "id": "2403.04132",
+          "kind": "design",
+          "finding": "Chatbot Arena 論文 §7 用的 213,576 票重播資料沒有公開，已公開的 33K 與 100K 資料集都不是分析期間的同一批，§6–§7 的數字無法原樣重算 [arXiv:2403.04132]。",
+          "where": "ch07 §陷阱九 L463",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "設計事實，說明缺原始紀錄就無法重算分數。"
+        },
+        {
+          "id": "2509.16941",
+          "kind": "design",
+          "finding": "SWE-Bench Pro 的 Table 4 失敗計數，除 GPT-5 外對不上任何一張已報告的表，可能出自論文沒報告的另一批軌跡（本章重算，程式驗證證實）[arXiv:2509.16941]。",
+          "where": "ch07 §爭議十八 L676",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "設計事實（報告與紀錄對不上），說明分數要能從紀錄重算。"
+        },
+        {
+          "id": "2506.07982",
+          "kind": "design",
+          "finding": "τ²-bench 請兩位標註者逐回合稽核使用者模擬器的錯誤，airline 100 段中有 13 段 critical、telecom 50 段中有 3 段 [arXiv:2506.07982]。",
+          "where": "ch07 §E6 互動紀錄（T6→T7） L791；notes/2506.07982.json key_results[4]",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "數字是量到的，但本條只用它說明逐回合紀錄讓模擬器稽核做得到，當設計證據。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "拿一次已完成的評估，只給評估端紀錄，逐項試做五件事。及格判準：五件都做得到，而且重算的分數與報告一致到報告的最後一位小數。",
+      "what_to_measure": null,
+      "grade": "C",
+      "grade_reason": "這是推論。章與 README 都說評估端缺一份能持續讀取的紀錄格式（README L545–549；E5〈缺的那一半〉L770），沒有一篇量過『有這份紀錄比沒有好多少』。推論依據是五個例子各缺一件就無法事後檢查：每輪狀態（ToolSandbox）、逐字 transcript（HAL 的洩漏）、原始票（Arena）、對得上表格的軌跡（SWE-Bench Pro）、逐回合紀錄（τ²-bench 的模擬器稽核）。五筆都是設計或質性證據，所以是 C 而不是 open：證據撐得起一個有道理的驗收方式，撐不起特定欄位格式。",
+      "depends_on": ["T7-01", "T7-09"],
+      "edges": ["E5", "E6"]
+    },
+    {
+      "id": "T7-11",
+      "type": "open",
+      "decision": "多輪互動的評估要用金上下文重播，還是閉環（受測者自己的錯誤留在歷史裡）？開放式任務沒有終態時，gold 從哪裡來？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2402.14762",
+          "finding": "MT-Bench-101 自己的對照顯示，金上下文會讓後續輪的分數虛高，改用模型自己的上下文時分數隨輪數下降；但只用 ChatGLM3-6B 在 SI 與 IC 兩個任務上做，只有曲線、沒有數值 [arXiv:2402.14762]。",
+          "where": "ch07 §爭議二 L538",
+          "flaws": ["F4", "F5"],
+          "unverified": ["F3"],
+          "flaw_basis": "F4：只用 GPT-4 一個評審打分。F5：單一模型、兩個任務、沒有數值。F3 未確認：金上下文由 GPT-4 生成、又由 GPT-4 評分（筆記 limitations_observed[7]），對受測的 ChatGLM3-6B 影響方向不明。"
+        },
+        {
+          "id": "2506.07982",
+          "finding": "τ²-bench 在同一批任務上比 No-User（一張寫好問題與成功條件的 ticket）與預設的對話模式，pass^1 由 No-User 改成對話後 gpt-4.1 下滑 18%、o4-mini 下滑 25% [arXiv:2506.07982]。",
+          "where": "ch07 §爭議二 L543；notes/2506.07982.json key_results[2]",
+          "flaws": ["F4", "F5"],
+          "unverified": [],
+          "flaw_basis": "F4：使用者由單一 LLM 模擬器扮演。F5：每領域題數小。精讀時指出這段落差混了資訊取得難度與雙控制的溝通成本（筆記 limitations_observed[5]），不是金上下文對閉環的直接對照。"
+        },
+        {
+          "id": "2601.17087",
+          "finding": "固定 GPT-4o 當 agent、只換使用者 LLM，retail 的成功率在 67.0%–75.9% 之間；失敗歸因上，模擬對話有 40.0% 歸給使用者，真人對話是 62.2% [arXiv:2601.17087]。",
+          "where": "ch07 §E6 互動紀錄（T6→T7） L831；notes/2601.17087.json key_results[0]、[6]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "失敗歸因是人工標註，不是 F4；以真人互動為參照。F5：歸因各只有 45 段。只有 GPT-4o 一個 agent，比不出排名。難度分箱與模擬成功率用同一組量測，ECE 有回歸均值的墊高（筆記 limitations_observed[0]），本條不引 ECE。"
+        },
+        {
+          "id": "2309.10691",
+          "finding": "MINT 以 GPT-4 模擬使用者在閉環中寫回饋，提出解答時由 ground truth 判對錯；模擬回饋的效度只在 113 條軌跡上驗，附錄範例中不看 ground truth 的 GPT-4 對錯誤的中間結果回了 This is GOOD，而 Δ_feedback 只報淨值 [arXiv:2309.10691]。",
+          "where": "ch07 §爭議三 L548；ch07 §未解問題 L842",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：這裡的『使用者』握有 ground truth，提出解答時由它判對錯（筆記 limitations_observed[7]），gold 進了迴圈。F5：113 條軌跡、每個設定只跑一次（limitations_observed[3]、[5]；L445）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": null,
+      "what_to_measure": "同一批任務、同一組受測系統，跑三種形狀：金上下文重播、以模擬使用者閉環、以真人閉環的小樣本。每種形狀都報各系統的分數與排名；兩種閉環之間另報失敗歸因的分布（歸給 agent、使用者或兩者）。閉環再換一個不同家族的模擬使用者重跑一次。決定方式：重播與閉環的排名在區間內一致時，可用重播當便宜的日常量測、定期以閉環校正；排名不一致時以閉環為準，並用真人閉環那一批檢查模擬閉環的排名與失敗分布有沒有被扭曲。沒有終態的開放式任務，先記錄要哪些人工判定才給得出 gold，量人工判定之間的一致度，再決定能不能自動化。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。降成 open 的原因：金上下文重播與閉環在同一批題目上的對照，章內只有 MT-Bench-101 一條沒有數值的曲線（L538、L543）；別節點的 τ²-bench 比的是 ticket 對對話，混了資訊取得與溝通兩個因素。閉環又靠模擬使用者，換模擬器會移動分數、扭曲失敗歸因（2601.17087），模擬器相對真人的排名效度正反證據都有（E6〈共同的缺口〉L828–830）。開放式任務沒有終態時的 gold，章與 README 都列為未解（未解問題 5 L842；README L522–528）。證據撐不起一個有道理的形狀選擇，所以寫 open 而不是 C。",
+      "depends_on": [],
+      "edges": ["E6"]
+    },
+    {
+      "id": "T7-12",
+      "type": "open",
+      "decision": "判定器或評審的偽陽性率與偽陰性率，要怎麼傳進任務層級的誤差棒？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2507.02825",
+          "finding": "ABC 附錄 F 以 BIRD 示範把標準答案錯誤率放進信賴區間：抽樣 500 題有 11.65% 的標準 SQL 是錯的，區間一加上去，榜首 74.9% 的可能排名是 1–13 [arXiv:2507.02825]。",
+          "where": "notes/2507.02825.json key_results[5]；README L532",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "精讀時指出它的式子方向用反了：μ＝e＋(1−2e)·p0 是正向式，要從觀測值推回真實成功率應反解成 (p0−e)/(1−2e)；e 只是 500 題估出來的，它的不確定性沒傳進去；對稱翻轉的假設也不合 BIRD 的情況（筆記 limitations_observed[4]）。附錄 F 自稱是示範性的改寫報告。"
+        },
+        {
+          "id": "2504.08942",
+          "finding": "AgentRewardBench 以專家標註為準，量了軌跡判定兩個方向的錯：規則式 precision 83.8、recall 55.9，GPT-4o 評審整體 precision 69.8；但沒有把這些誤差傳進任務層級的誤差棒 [arXiv:2504.08942]。",
+          "where": "README L530；ch07 §未解問題 L838",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "以專家標註為準，不是 F4。F5：每個 agent 的軌跡少、沒有區間（筆記 limitations_observed[4]）；只報原始一致率（limitations_observed[7]）。"
+        },
+        {
+          "id": "2207.01206",
+          "finding": "WebShop 以 200 條人類軌跡人工重評自動 reward，自動與人工在一般工作者組是 74.9 對 76.3、expert 組 81.5 對 89.9；人工協定只額外承認同義詞，設計上只抓得到漏給分 [arXiv:2207.01206]。",
+          "where": "ch07 §陷阱一 L371",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "精讀時發現釋出程式碼用 fuzzy 比對，可能過度給分，這個方向沒稽核（筆記 limitations_observed[1]）；稽核只用人類軌跡，沒有 agent 軌跡（limitations_observed[2]）。F5：200 條、單次。"
+        },
+        {
+          "id": "2410.10934",
+          "finding": "Agent-as-a-Judge 的 Judge Shift 會讓正反誤判互相抵消：black-box 在 OpenHands 的偏移只有 0.27、一致率 90.44%，約 (1 − 0.9044) × 365 ≈ 34.9 條需求判錯 [arXiv:2410.10934]。",
+          "where": "ch07 §陷阱四 L406",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "以人類共識為準，不是 F4。F5：55 題、單次。表格的分母可能是 365 + 1 = 366（L687），不改變誤判條數的估計。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": null,
+      "what_to_measure": "在同一份評估上做雙向稽核：從判成功與判失敗兩批各隨機抽樣交人工重判，估出偽陽性率與偽陰性率及各自的抽樣區間，兩邊分開、不假設對稱。把觀測成功率換算成真實成功率時用反解的式子，並把兩個誤判率的不確定性、重跑變異與任務抽樣一起以自助法傳進區間。比較三種報法的區間寬度與名次可分辨性：只含重跑變異、加入任務抽樣、再加入判定器誤差。決定方式：加入判定器誤差後相鄰名次的區間重疊，名次就不報；同時記下雙向稽核要重判的樣本數，當作這件事的成本。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。章的未解問題 1（L838）與 README 框架未解問題 5（L530–533）都說沒有一篇把判定器的雙向誤差傳進任務層級的誤差棒；唯一試過的 ABC 附錄 F，精讀時指出式子方向錯、誤判率的不確定性沒傳、對稱翻轉的假設不合（筆記 limitations_observed[4]）。雙向稽核比單向稽核多花多少人工，讀過的論文沒有人量過（L838）。證據撐不起一個可以照做的傳遞方法，只能寫要量什麼。",
+      "depends_on": ["T7-01", "T7-06"],
+      "edges": ["E5"]
+    }
+  ],
+  "trivial_baselines": [
+    {
+      "metric": "OSWorld 成功率",
+      "baseline": "第一步就回 FAIL",
+      "value": "整體 30/369 = 8.13%，26 組模型×設定只有 5 組高過；Professional 類 (5+10)/(23+26) = 30.61%、GIMP 10/26 = 38.46%，Office 類 1.71% [arXiv:2404.07972]",
+      "id": "2404.07972"
+    },
+    {
+      "metric": "WebArena 成功率",
+      "baseline": "一律回 N/A",
+      "value": "不可達題以反推的 36 題計，36/812 = 4.43%，接近 text-bison-001 的 5.05%；題數是反推的（程式驗證只有 36 題相容）[arXiv:2307.13854]",
+      "id": "2307.13854"
+    },
+    {
+      "metric": "τ-bench 成功率",
+      "baseline": "do-nothing agent／spamming agent",
+      "value": "airline 38%／40%，retail 6.0%／9.6% [arXiv:2507.02825]",
+      "id": "2507.02825"
+    },
+    {
+      "metric": "成對評審對人工多數決的準確率",
+      "baseline": "全猜多數類（ChatGPT 勝）",
+      "value": "41/80 = 51.25%，GPT-4 Vanilla 52.7%、最佳全自動 62.5% [arXiv:2305.17926]",
+      "id": "2305.17926"
+    },
+    {
+      "metric": "需求達成判定對人類共識的一致率",
+      "baseline": "一律判未達成",
+      "value": "MetaGPT／GPT-Pilot／OpenHands 77.87／55.20／57.11%，LLM-as-a-Judge black-box 84.15／65.30／60.38% [arXiv:2410.10934]",
+      "id": "2410.10934"
+    },
+    {
+      "metric": "評審對人的一致率",
+      "baseline": "隨機",
+      "value": "S1（含平手）33%、S2（只計非平手）50% [arXiv:2306.05685]",
+      "id": "2306.05685"
+    },
+    {
+      "metric": "成對評審交換位置後的一致率",
+      "baseline": "隨機（勝、負、平各三分之一）",
+      "value": "33.33，GPT-4o 13.33／13.33／16.00 [arXiv:2502.06193]",
+      "id": "2502.06193"
+    },
+    {
+      "metric": "ToolEval pass 判定對人的一致率",
+      "baseline": "機會一致率（以 pass rate 約 65% 粗估）",
+      "value": "約 65%×65% + 35%×35% ≈ 55%，原始一致率 87.1% 換算 κ 約 0.71（精讀時粗估）[arXiv:2307.16789]",
+      "id": "2307.16789"
+    },
+    {
+      "metric": "軌跡成敗評估器的準確率",
+      "baseline": "一律判失敗",
+      "value": "若軌跡成功率落在 14.4%–15.6%，一律判失敗是 84.4%–85.6%，高於評估器的 74.4%–82.1%（條件式推算）[arXiv:2404.06474]",
+      "id": "2404.06474"
+    },
+    {
+      "metric": "副作用判定的 precision",
+      "baseline": "基率（全判有副作用）",
+      "value": "約 72/1106 ≈ 6.51%，GPT-4o mini 7.2、最佳 14.1 [arXiv:2504.08942]",
+      "id": "2504.08942"
+    },
+    {
+      "metric": "GAIA Level 1 正確率",
+      "baseline": "人工搜尋引擎第一頁",
+      "value": "7.4%，約 11 題 [arXiv:2311.12983]",
+      "id": "2311.12983"
+    },
+    {
+      "metric": "HumanEval 準確率與成本",
+      "baseline": "簡單的 Warming(GPT-4)",
+      "value": "93.2%、$2.45，對 LATS(GPT-4) 88.0%、$134.50 [arXiv:2407.01502]",
+      "id": "2407.01502"
+    }
+  ],
+  "edge_interfaces": [
+    {
+      "edge": "E5",
+      "role": "consumes",
+      "payload": "每一次修正嘗試的原始紀錄，含沒觸發的：修正前後的輸出、觸發判定與偵測分數、送出的回饋、呼叫次數與輸入輸出 token。評估端用這些自己算對→錯、錯→對的轉移，並拿觸發判定對照外部真值算觸發器的偽陽性率與偽陰性率。依本章歸納，標了這條邊的 27 篇裡只有 8 篇把觸發器或 critic 的判定對照過外部答案 [arXiv:2303.11366][arXiv:2404.17140][arXiv:2402.08115]。GPT-4 當自己的驗證器時，圖著色的偽陰性率是 95.8% [arXiv:2402.08115]。",
+      "must_not_pass": "迴圈內驗證器或評審自己的『修好了』判定，不能當評估標籤，轉移標籤由評估端另外算 [arXiv:2402.08115]；同一份紀錄若也被轉成訓練訊號，要標出來，評估端不能拿進過訓練的樣本算成效 [arXiv:2409.12917][arXiv:2212.08073]。",
+      "id": ["2402.08115", "2310.01798"]
+    },
+    {
+      "edge": "E6",
+      "role": "consumes",
+      "payload": "完整互動軌跡：使用者（真人或模擬器）、agent 與環境的每一則訊息，加上每輪的環境或世界狀態快照 [arXiv:2408.04682]；模擬使用者的身分、版本、提示與拿到的目標，讓評估端能掃描洩漏、換模擬器重跑比較 [arXiv:2403.16416][arXiv:2601.17087]；真人與模擬兩種來源分開標記，因為兩者帶出的失敗歸因不同，模擬對話的失敗有 40.0% 歸給使用者、真人對話是 62.2% [arXiv:2601.17087]。",
+      "must_not_pass": "只有終態、沒有過程的紀錄：τ-bench 拒絕類任務只看終態時，do-nothing agent 在 airline 拿 38% [arXiv:2507.02825]。模擬器自己判的成敗不能直接當評估標籤；目標經由對話歷史或模擬器回覆洩漏的成功對話要先標記，不能混進成功率 [arXiv:2403.16416]。",
+      "id": ["2408.04682", "2507.02825", "2403.16416", "2601.17087"]
+    }
+  ],
+  "unresolved": [
+    "成對比較與逐一打分該用哪一種：MT-Bench 指出逐一打分分不出細微差異、換裁判時絕對分數不穩，SE 研究則因成對比較對調後一致率只有 13.33 而建議逐一打分；SE 研究沒套用兩種順序合併，也沒把逐一打分轉成同尺度的成對標籤比較（爭議五 L561–566）[arXiv:2306.05685][arXiv:2502.06193]。",
+    "自我偏好的受控幅度：八篇評審研究沒有一篇固定回答品質做受控實驗，MT-Bench 在 2023 年說做不到；專門研究的後續論文本調研沒讀（爭議七 L582）[arXiv:2306.05685]。",
+    "能在規模上同時接受替代路徑、又檢查過程限制與副作用的判定器規格語言；ToolSandbox 的 milestone 與 minefield 要逐情境人寫，2602.16666 的評審沒有人工驗證（未解問題 3 L840）[arXiv:2408.04682][arXiv:2602.16666]。",
+    "跨基準版本、跨評審版本的分數換算或錨定方法；每發一版新基準或換一個裁判，舊分數就不可比（未解問題 4 L841）[arXiv:2307.13854][arXiv:2306.05685]。",
+    "agent 基準常見污染（解答 patch、參考軌跡、環境程式碼被讀過）的量測協定；黑盒排列檢定只適用可交換的任務清單（未解問題 6 L843）[arXiv:2310.17623]。",
+    "去偏差該控制哪些特徵：LC 只控制長度、也扣掉合理的長度效應，多輪 agent 軌跡的候選特徵（輪數、工具呼叫數、token 數）彼此共線（未解問題 8 L845）[arXiv:2404.04475]。",
+    "多次試驗的變異來源（agent 取樣、模擬器取樣、API 非確定性、環境漂移）還沒被分開量，pass^k 在『任務 × 每任務 k 次』兩層結構下的區間沒有定論（README L535）[arXiv:2406.12045][arXiv:2602.16666]。",
+    "兩個實力相近的系統，現有評估分不開；交換位置、多次取樣處理的是偏差，不是變異（未解問題 2 L839）[arXiv:2306.05685]。",
+    "人類基準的施測協定不對等：同一批 WebArena 題，WebArena 自報 78.24%、OSWorld 以自己的協定重測 88%，人評協定在任務型或 agent 評估上哪種較敏感，沒有人比過（陷阱五 L413、L418）[arXiv:2307.13854][arXiv:2404.07972][arXiv:2201.04723]。",
+    "評審搬到 agent 軌跡上的效度：人工標註的 agent 軌跡只有 DevAI 55 題、Terminal-Bench 120 條等少數幾批，AgentRewardBench 量到沒有一個 LLM 評審的整體 precision 超過 70%（未解問題 8 L845）[arXiv:2410.10934][arXiv:2504.08942]。"
+  ]
+}

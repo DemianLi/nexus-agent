@@ -1,5 +1,7 @@
 # E·T·C·L／O·V·G 七層盤點（重做，2026-09-19）
 
+> 後續版本：[`seven-layer-inventory-2026-10-18.md`](seven-layer-inventory-2026-10-18.md)（生產級刷新，判準與兩把尺見 [#1614](https://github.com/DemianLi/nexus-agent/issues/1614)）。本檔保留原樣不再更新。
+
 - dsh 基準：`ddefc45`（上游 master，2026-09-17，ls-remote 確認沒有新 commit）
 - 我們：develop `c1857a8`
 - 判準：dsh **出廠**有（base 列 **或** 任一出廠 preset 列 **或** 模式 bundle 列）、我們沒有、也沒判過不做 → 缺口。

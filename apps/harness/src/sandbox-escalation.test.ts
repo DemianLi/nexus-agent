@@ -1,11 +1,20 @@
 /**
- * 升級那一刀的驗收：[#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 2 項的四條，
+ * **手搭組裝（#670）**：這一檔大半的案例走產品組裝（`assembleProduct`：`createCliAgent` ＋ 出貨清單 ＋ 清單上的腳本提供者），
+ * 留在手搭那一份（`assemble`）的有四類，產品組裝組不出來：
+ *
+ * 1. `checkpointer: false`——`createCliAgent` 一律給 `MemorySaver`。
+ * 2. `plugin: false`（fence 有 ledger、但沒掛沙箱 plugin）——有 `--workspace` 時產品一定掛沙箱 plugin。
+ * 3. `channel: false`（組裝點沒提供答題管道那個服務）——產品組裝一定算一份交出去。
+ * 4. 要讀控制器內部（`peekGrant()`／`current`／`lastDenial`）或直接對 backend 驗 fence 的案例——產品的控制器建在
+ *    組裝點裡，測試拿不到。
+ *
+ * 升級的驗收：[#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 2 項的四條，
  * 外加卡上釘在最前面的那個前提。
  *
  * ## 前提先釘死
  *
- * 第 0 項定案是 `workspace-write` ＋ 有人可問，**根內寫入直接放行**——所以升級這條路只有兩種跑
- * 會走到：切到 `read-only`，或目標在可寫根外。每一條會發 grant 的驗收都**先斷言那次呼叫真的被
+ * 第 0 項定案是 `workspace-write` ＋ 有人可問，**根內寫入直接放行**；升級最多到 `workspace-write`（#1827 D23），
+ * 所以升級這條路只有切到 `read-only` 才走得到——`workspace-write` 之下寫到可寫根外是直接拒絕。每一條會發 grant 的驗收都**先斷言那次呼叫真的被
  * fence 擋下來**（拒絕訊息，不是「有跑」），再驗升級。少了這一步，一份測試可以從頭到尾沒碰到
  * 升級而全綠。
  *
@@ -28,27 +37,35 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
 
-import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
-
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend, GRANT_MISMATCH_NOTE } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import {
   BLANK_JUSTIFICATION_REFUSAL,
+  CONTAINED_FILESYSTEM,
   createSandboxPolicyPlugin,
   escalationReason,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
+  rejectedRefusal,
   SANDBOX_ESCALATION_HINT,
   SANDBOX_ESCALATION_TOOL_NAME,
   SandboxModeController,
+  unaskedRefusal,
 } from '@nexus/plugin-sandbox-policy';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
-import { createHostServicesPlugin } from '@nexus/core';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
+import {
+  APPROVAL_INVALID_REPLY,
+  ApprovalPolicyController,
+  createHostServicesPlugin,
+  deriveApprovalChannel,
+  toolErrorOf,
+} from '@nexus/core';
+import type { ApprovalPolicyValue, PluginEntry } from '@nexus/core';
 
 const shipped = await shippedPlugins();
 
@@ -98,8 +115,24 @@ const escalate = (args: ScriptedToolCall['args']): ScriptedTurn => ({
   toolCalls: [{ name: SANDBOX_ESCALATION_TOOL_NAME, args }],
 });
 
+/**
+ * 一顆回 `{ kind: 'allow' }` 而**不呼叫 `next()`** 的閘門，同 `approval-gate-order.test.ts` 那顆。
+ * 寫成 factory：plugin 物件會被載入路徑登記身分，每次組裝各建一份。
+ */
+function permissiveGate(): PluginEntry {
+  return {
+    plugin: {
+      name: 'probe-permissive',
+      apply(registry) {
+        registry.approvals.gate(() => ({ kind: 'allow' }));
+      },
+    },
+  };
+}
+
 const APPROVE = new Command({ resume: { decisions: [{ type: 'approve' }] } }) as never;
 const REJECT = new Command({ resume: { decisions: [{ type: 'reject' }] } }) as never;
+const UNREADABLE = new Command({ resume: { decisions: [{ type: 'maybe' }] } }) as never;
 
 describe('升級', () => {
   let root: string;
@@ -121,8 +154,10 @@ describe('升級', () => {
    * @param mode - 起始那一格。
    * @param turns - 腳本。
    * @param options - `plugin: false` 組一個 fence 有 ledger、但沒掛升級的組裝；
-   *   `checkpointer: false` 是沒有核准管道；`approvals` 原樣轉給組裝點；`submitRecord` 照
-   *   `cli.ts` 掛上 `submit_record`，拿同一份 backend。
+   *   `checkpointer: false` 是沒有核准管道；`approvals` 原樣轉給組裝點。`channel: false` 是組裝點沒提供
+   *   核准管道那個服務；省略就照 `assembly-root.ts` 從同一組選項算一次再提供。
+   *   `permissive: true` 在升級之前疊一顆回 `allow`、不呼叫 `next()` 的閘門——照
+   *   `assembly-root.ts` 的順序，出貨清單與 patch 的 plugin 都排在 sandbox-policy 前面。
    */
   async function assemble(
     mode: SandboxMode,
@@ -131,10 +166,17 @@ describe('升級', () => {
       plugin?: boolean;
       checkpointer?: boolean;
       approvalsEnabled?: boolean;
-      submitRecord?: boolean;
+      channel?: false;
+      permissive?: boolean;
+      /** 核准政策控制器的起始值（#437）；省略就不提供這個服務（手搭的組裝，當作 `ask`）。 */
+      approvalPolicy?: ApprovalPolicyValue;
     } = {},
   ) {
     const controller = new SandboxModeController(mode);
+    const approvalPolicy =
+      options.approvalPolicy === undefined
+        ? undefined
+        : new ApprovalPolicyController(options.approvalPolicy);
     const model = new ScriptedChatModel({ turns });
     const backend = new ContainedFilesystemBackend({
       rootDir: root,
@@ -147,17 +189,45 @@ describe('升級', () => {
       plugins: [
         createHostServicesPlugin({
           backend,
-          ...(options.plugin === false ? {} : { sandboxPolicy: { controller, rootDir: root } }),
+          ...(approvalPolicy !== undefined && { approvalPolicy }),
+          ...(options.channel !== false && {
+            channel: deriveApprovalChannel({
+              ...(options.approvalsEnabled !== undefined && {
+                approvalsEnabled: options.approvalsEnabled,
+              }),
+              hasCheckpointer: options.checkpointer !== false,
+            }),
+          }),
+          ...(options.plugin === false
+            ? {}
+            : {
+                fsContainment: CONTAINED_FILESYSTEM,
+                sandboxPolicy: { controller, rootDir: root },
+              }),
         }),
+        ...(options.permissive === true ? [permissiveGate()] : []),
         ...(options.plugin === false ? [] : [createSandboxPolicyPlugin()]),
-        ...(options.submitRecord === true ? [createSubmitRecordPlugin()] : []),
       ],
       ...(options.checkpointer !== false && { checkpointer: new MemorySaver() }),
       ...(options.approvalsEnabled !== undefined && {
         approvals: { enabled: options.approvalsEnabled },
       }),
     });
-    return { agent, dispose, controller };
+    return { agent, dispose, controller, approvalPolicy };
+  }
+
+  /**
+   * **產品組裝**（#670）：`createCliAgent` ＋ 出貨清單，`--workspace`、`--sandbox` 給模式，模型換成清單上的腳本提供者。
+   * 給**只經過 agent、不碰控制器內部**的案例：產品的控制器建在組裝點裡，測試拿不到，要讀 `peekGrant()`／`current`／
+   * `lastDenial` 的案例留在上面手搭的那一份（見檔頭）。
+   */
+  async function assembleProduct(mode: SandboxMode, turns: readonly ScriptedTurn[]) {
+    const built = await createCliAgent(
+      { live: false, workspace: root, sandbox: mode },
+      withScriptedModel(shipped, turns),
+      root,
+    );
+    return { agent: built.agent, dispose: built.dispose };
   }
 
   async function exists(path: string): Promise<boolean> {
@@ -171,7 +241,7 @@ describe('升級', () => {
 
   describe('前提：升級只在 fence 真的擋下來時走得到', () => {
     it('read-only 之下 write_file 真的被擋，而且拒絕後面接著升級指引', async () => {
-      const { agent, dispose } = await assemble('read-only', [
+      const { agent, dispose } = await assembleProduct('read-only', [
         write('/a.txt', '一'),
         { content: '停。' },
       ]);
@@ -208,7 +278,7 @@ describe('升級', () => {
     });
 
     it('反例：workspace-write 之下根內寫入直接放行，升級這條路根本走不到', async () => {
-      const { agent, dispose } = await assemble('workspace-write', [
+      const { agent, dispose } = await assembleProduct('workspace-write', [
         write('/a.txt', '一'),
         { content: '好了。' },
       ]);
@@ -224,11 +294,28 @@ describe('升級', () => {
         await dispose();
       }
     });
+    it('升級指引跟著這一刻的模式：read-only 有、切到 workspace-write 就沒有、切回來又有', async () => {
+      await symlink(outside, join(root, 'out'));
+      const controller = new SandboxModeController('read-only');
+      controller.enableEscalation(SANDBOX_ESCALATION_HINT);
+      const backend = new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: controller.source,
+        grants: controller,
+      });
+
+      expect((await backend.write('/a.txt', '一')).error).toContain(SANDBOX_ESCALATION_HINT);
+      controller.switchTo('workspace-write');
+      const outsideDenied = (await backend.write('/out/x.txt', '一')).error;
+      expect(outsideDenied).toContain('落在可寫根之外');
+      expect(outsideDenied).not.toContain(SANDBOX_ESCALATION_TOOL_NAME);
+      controller.switchTo('read-only');
+      expect((await backend.write('/b.txt', '二')).error).toContain(SANDBOX_ESCALATION_HINT);
+    });
   });
 
   describe('不加寬的請求不問人', () => {
     it.each([
-      ['read-only', 'read-only'],
       ['danger-full-access', 'workspace-write'],
       ['workspace-write', 'workspace-write'],
     ] as const)('%s 之下要 %s：當場擋掉，核准卡一張都不掛', async (current, requested) => {
@@ -247,6 +334,41 @@ describe('升級', () => {
         await dispose();
       }
     });
+
+    /**
+     * **enum 外的值走不到本體**（#700）：`read-only`、`danger-full-access` 都不在 schema 的封閉詞彙裡，在 schema 那一關就被擋。
+     * 斷言的是結局，不抄基座的措辭。
+     */
+    it.each([
+      ['read-only', 'read-only'],
+      // 升級最多到 workspace-write（#1827 D23）：全開不在詞彙裡，哪一格要都一樣。
+      ['read-only', 'danger-full-access'],
+      ['workspace-write', 'danger-full-access'],
+    ] as const)(
+      '%s 之下要 enum 外的 %s：在 schema 那一關就被擋，核准卡一張都不掛、grant 沒發',
+      async (current, requested) => {
+        const { agent, dispose, controller } = await assemble(current, [
+          escalate({
+            file_path: '/a.txt',
+            sandbox_permissions: requested,
+            justification: '要寫檔',
+          }),
+          { content: '好。' },
+        ]);
+        try {
+          const result = await agent.invoke(toAgentInvocation('升級。'), {
+            configurable: { thread_id: `no-widen-schema-${current}-${requested}` },
+          });
+          expect(pendingCard(result)).toBeUndefined();
+          const [refused] = toolTexts(result);
+          expect(refused).toMatch(/^Error: /);
+          expect(refused).toContain('sandbox_permissions');
+          expect(controller.peekGrant()).toBeUndefined();
+        } finally {
+          await dispose();
+        }
+      },
+    );
 
     it('反例：真的加寬的請求會掛出核准卡，人看得到是哪一個檔與理由', async () => {
       const { agent, dispose, controller } = await assemble('read-only', [
@@ -275,19 +397,66 @@ describe('升級', () => {
       [
         { file_path: '/a.txt', sandbox_permissions: 'workspace-write', justification: '  ' },
         BLANK_JUSTIFICATION_REFUSAL,
+        'read-only',
       ],
       [
         { file_path: '', sandbox_permissions: 'workspace-write', justification: '要寫檔' },
         MISSING_TARGET_REFUSAL,
+        'read-only',
       ],
-    ])('欄位不齊（%o）也不問人', async (args, refusal) => {
-      const { agent, dispose } = await assemble('read-only', [escalate(args), { content: '好。' }]);
+      // **欄位先判，加寬後判**（照 dsh 的 `validateEscalationArgs` 在 `approveEscalation` 之前）：
+      // 既不加寬、理由又空白的這一筆，拿到的是欄位那句。少了它，兩條判斷對調也全綠。
+      [
+        { file_path: '/a.txt', sandbox_permissions: 'workspace-write', justification: '' },
+        BLANK_JUSTIFICATION_REFUSAL,
+        'workspace-write',
+      ],
+    ] as const)('欄位不齊（%o）也不問人', async (args, refusal, mode) => {
+      const { agent, dispose } = await assembleProduct(mode, [escalate(args), { content: '好。' }]);
       try {
         const result = await agent.invoke(toAgentInvocation('升級。'), {
           configurable: { thread_id: 'malformed' },
         });
         expect(pendingCard(result)).toBeUndefined();
         expect(toolTexts(result)).toEqual([`Error: ${refusal}`]);
+      } finally {
+        await dispose();
+      }
+    });
+  });
+
+  /**
+   * [#700](https://github.com/DemianLi/nexus-agent/issues/700)：**問人放在工具本體裡**，照 dsh 的
+   * `approveEscalation`。以前「有人看過」只靠一顆只認這個名字的閘門，排在它前面的一顆寬鬆閘門
+   * 不呼叫 `next()` 就把它整個短路掉——工具回「核准了」，畫面上一張卡都沒有。
+   */
+  describe('核准在工具本體裡，閘門怎麼排都跳不過', () => {
+    it('寬鬆閘門排在前面：照樣停在升級的核准上，grant 還沒發', async () => {
+      const { agent, dispose, controller } = await assemble(
+        'read-only',
+        [
+          write('/a.txt', '一'),
+          escalate({
+            file_path: '/a.txt',
+            sandbox_permissions: 'workspace-write',
+            justification: '使用者要這個檔',
+          }),
+          { content: '好。' },
+        ],
+        { permissive: true },
+      );
+      try {
+        const result = await agent.invoke(toAgentInvocation('寫 a.txt。'), {
+          configurable: { thread_id: 'permissive-first' },
+        });
+        // 前提：第一顆真的被 fence 擋下來了——寬鬆閘門放行的是工具，不是 fence。
+        expect(toolTexts(result)[0]).toContain('這個 backend 是唯讀的');
+        expect(toolTexts(result).slice(1)).toEqual([]);
+        expect(pendingCard(result)?.name).toBe(SANDBOX_ESCALATION_TOOL_NAME);
+        expect(pendingCard(result)?.description).toBe(
+          escalationReason('/a.txt', 'workspace-write', '使用者要這個檔'),
+        );
+        expect(controller.peekGrant()).toBeUndefined();
       } finally {
         await dispose();
       }
@@ -332,8 +501,33 @@ describe('升級', () => {
       }
     });
 
+    it('升級的 file_path 不帶前置斜線也對得上：比對的是 canonical 位置，不是字串', async () => {
+      const { agent, dispose } = await assembleProduct('read-only', [
+        write('/a.txt', '一'),
+        escalate({
+          file_path: 'a.txt',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要這個檔',
+        }),
+        write('/a.txt', '一'),
+        { content: '完成。' },
+      ]);
+      const config = { configurable: { thread_id: 'no-leading-slash' } };
+      try {
+        const paused = await agent.invoke(toAgentInvocation('寫 a.txt。'), config);
+        expect(toolTexts(paused)[0]).toContain('這個 backend 是唯讀的');
+
+        const [, granted, retried] = toolTexts(await agent.invoke(APPROVE, config));
+        expect(granted).toContain('核准了');
+        expect(retried).not.toContain('[containment]');
+        expect(await readFile(join(root, 'a.txt'), 'utf8')).toBe('一');
+      } finally {
+        await dispose();
+      }
+    });
+
     it('grant 只蓋指名的那個檔：別的檔照樣被擋，而且沒把 grant 吃掉', async () => {
-      const { agent, dispose } = await assemble('read-only', [
+      const { agent, dispose } = await assembleProduct('read-only', [
         write('/a.txt', '一'),
         escalate({
           file_path: '/a.txt',
@@ -361,31 +555,29 @@ describe('升級', () => {
       }
     });
 
-    it('workspace-write：經 symlink 寫到根外 → 升到 danger-full-access 一次；寫法不同也對得上', async () => {
+    it('workspace-write：經 symlink 寫到根外被擋，拒絕後面沒有升級指引；要升到全開在 schema 就被擋', async () => {
       await symlink(outside, join(root, 'out'));
-      const { agent, dispose } = await assemble('workspace-write', [
+      const { agent, dispose } = await assembleProduct('workspace-write', [
         write('/out/x.txt', '一'),
-        // 故意不帶前置斜線：比對的是 canonical 位置，不是字串。
         escalate({
-          file_path: 'out/x.txt',
+          file_path: '/out/x.txt',
           sandbox_permissions: 'danger-full-access',
           justification: '要寫到工作區外面',
         }),
-        write('/out/x.txt', '一'),
-        write('/out/x.txt', '一'),
-        { content: '完成。' },
+        { content: '停。' },
       ]);
-      const config = { configurable: { thread_id: 'outside' } };
       try {
-        const paused = await agent.invoke(toAgentInvocation('寫到外面。'), config);
-        const [denied] = toolTexts(paused);
+        const result = await agent.invoke(toAgentInvocation('寫到外面。'), {
+          configurable: { thread_id: 'outside' },
+        });
+        const [denied, refused] = toolTexts(result);
         expect(denied).toContain('落在可寫根之外');
-        expect(denied).toContain(SANDBOX_ESCALATION_HINT);
-
-        const [, , retried, again] = toolTexts(await agent.invoke(APPROVE, config));
-        expect(retried).not.toContain('[containment]');
-        expect(again).toContain('落在可寫根之外');
-        expect(await readFile(join(outside, 'x.txt'), 'utf8')).toBe('一');
+        // 沒有格子升得到（#1827 D23）：不叫模型去呼叫一顆必定回拒絕的工具。
+        expect(denied).not.toContain(SANDBOX_ESCALATION_TOOL_NAME);
+        expect(refused).toMatch(/^Error: /);
+        expect(refused).toContain('sandbox_permissions');
+        expect(pendingCard(result)).toBeUndefined();
+        expect(await exists(join(outside, 'x.txt'))).toBe(false);
       } finally {
         await dispose();
       }
@@ -437,7 +629,7 @@ describe('升級', () => {
           },
         ],
       });
-      const { agent, dispose } = await assemble('read-only', [
+      const { agent, dispose } = await assembleProduct('read-only', [
         // 先讀：`edit_file` 有「沒讀過不准改」的護欄，不讀的話擋下它的是那一條、不是 fence。
         { content: '', toolCalls: [{ name: 'read_file', args: { file_path: '/a.txt' } }] },
         edit('新的'),
@@ -530,21 +722,17 @@ describe('升級', () => {
           },
         ],
       });
-      const { agent, dispose } = await assemble(
-        'read-only',
-        [
-          submit('遠見科技'),
-          escalate({
-            file_path: '/a.csv',
-            sandbox_permissions: 'workspace-write',
-            justification: '使用者要送出這一筆',
-          }),
-          submit('對不起，無法寫入遠見科技'),
-          submit('遠見科技'),
-          { content: '完成。' },
-        ],
-        { submitRecord: true },
-      );
+      const { agent, dispose } = await assembleProduct('read-only', [
+        submit('遠見科技'),
+        escalate({
+          file_path: '/a.csv',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要送出這一筆',
+        }),
+        submit('對不起，無法寫入遠見科技'),
+        submit('遠見科技'),
+        { content: '完成。' },
+      ]);
       const config = { configurable: { thread_id: 'content-submit' } };
       try {
         // 四張卡依序是：送出、升級、改過的送出、原樣的送出。探針照樣全按核准——
@@ -602,13 +790,62 @@ describe('升級', () => {
       }
     });
 
-    it('四條出口的話兩兩不同：不加寬／被拒／關掉了人工核准／沒有 checkpointer', async () => {
+    it('回覆看不懂（不是 approve 也不是 reject）：不發 grant，拒絕帶 APPROVAL_INVALID_REPLY（#2027）', async () => {
+      const { agent, dispose, controller } = await assemble('read-only', [
+        request,
+        { content: '好。' },
+      ]);
+      const config = { configurable: { thread_id: 'unreadable' } };
+      try {
+        await agent.invoke(toAgentInvocation('升級。'), config);
+        const result = await agent.invoke(UNREADABLE, config);
+        const refused = (result.messages as BaseMessage[])
+          .filter((message) => message.getType() === 'tool')
+          .at(-1);
+        expect(refused === undefined ? '' : flatten(refused.content)).toContain('核准回覆看不懂');
+        expect(toolErrorOf(refused)).toEqual({
+          name: 'ApprovalDenied',
+          code: APPROVAL_INVALID_REPLY,
+        });
+        expect(controller.peekGrant()).toBeUndefined();
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('核准政策 never（有人在）：不發核准卡、不發 grant，說的是「政策是不問」；切回 ask 之後同一個請求就問人', async () => {
+      const { agent, dispose, controller, approvalPolicy } = await assemble(
+        'read-only',
+        [write('/a.txt', '一'), request, { content: '好。' }, request, { content: '好。' }],
+        { approvalPolicy: 'never' },
+      );
+      const config = { configurable: { thread_id: 'approval-never' } };
+      try {
+        const result = await agent.invoke(toAgentInvocation('寫 a.txt。'), config);
+        expect(pendingCard(result)).toBeUndefined();
+        expect(controller.peekGrant()).toBeUndefined();
+        const texts = toolTexts(result);
+        expect(texts[1]).toBe(`Error: ${unaskedRefusal('approval-never', 'workspace-write')}`);
+        expect(texts[1]).toContain('核准政策是不問');
+        // 跟「入口沒有人在」是兩句話。
+        expect(texts[1]).not.toBe(`Error: ${unaskedRefusal('policy-never', 'workspace-write')}`);
+
+        // 每次呼叫讀一次：切回 ask，同一個請求這次問人（掛出一張核准卡）。
+        approvalPolicy?.switchTo('ask');
+        const again = await agent.invoke(toAgentInvocation('再升級一次。'), config);
+        expect(pendingCard(again)).toBeDefined();
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('五條出口的話兩兩不同：不加寬／被拒／關掉了人工核准／沒有 checkpointer／沒提供核准管道', async () => {
       const texts: string[] = [];
 
-      const narrow = await assemble('read-only', [
+      const narrow = await assemble('workspace-write', [
         escalate({
           file_path: '/a.txt',
-          sandbox_permissions: 'read-only',
+          sandbox_permissions: 'workspace-write',
           justification: '要寫檔',
         }),
         { content: '好。' },
@@ -659,13 +896,33 @@ describe('升級', () => {
         await noChannel.dispose();
       }
 
-      expect(texts).toHaveLength(4);
-      expect(texts[0]).toBe(`Error: ${nonWideningRefusal('read-only', 'read-only')}`);
+      // **組裝點沒提供核准管道**：fail-closed，不退到「有人在」（#700）。退到「有人在」的話，這裡會
+      // 掛出一張核准卡——下面那兩條斷言就是在擋它。
+      const noService = await assemble('read-only', [request, { content: '好。' }], {
+        channel: false,
+      });
+      try {
+        const result = await noService.agent.invoke(toAgentInvocation('升級。'), {
+          configurable: { thread_id: 'exit-no-service' },
+        });
+        expect(pendingCard(result)).toBeUndefined();
+        expect(noService.controller.peekGrant()).toBeUndefined();
+        texts.push(...toolTexts(result));
+      } finally {
+        await noService.dispose();
+      }
+
+      expect(texts).toHaveLength(5);
+      expect(texts[0]).toBe(`Error: ${nonWideningRefusal('workspace-write', 'workspace-write')}`);
+      expect(texts[1]).toBe(`Error: ${rejectedRefusal('/a.txt', 'workspace-write')}`);
+      expect(texts[2]).toBe(`Error: ${unaskedRefusal('policy-never', 'workspace-write')}`);
+      expect(texts[3]).toBe(`Error: ${unaskedRefusal('no-channel', 'workspace-write')}`);
+      expect(texts[4]).toBe(`Error: ${unaskedRefusal('no-service', 'workspace-write')}`);
+      // 分得出「沒有人被問到」與「有人拒絕了」的那一段，各自在場。
       expect(texts[1]).toContain('拒絕了');
-      // 後兩條是 `@nexus/core` 核准閘門的話，只釘分得出來的那一段，不抄全文。
       expect(texts[2]).toContain('關掉了人工核准');
       expect(texts[3]).toContain('沒有 checkpointer');
-      expect(new Set(texts).size).toBe(4);
+      expect(new Set(texts).size).toBe(5);
     });
   });
 

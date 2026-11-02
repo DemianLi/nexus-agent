@@ -1,0 +1,134 @@
+{
+  "id": "1606.03777",
+  "title": "Neural Belief Tracker: Data-Driven Dialogue State Tracking",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Mrkšić 等人（ACL 2017）提出 Neural Belief Tracker（NBT-DNN／NBT-CNN）：用固定不動的語意特化詞向量（Paragram-SL999）組出使用者語句與候選 slot-value 的表示，逐一判斷每個 slot-value 是否在本回合被表達，再以一條規則式插值把回合層級的判斷累加成信念狀態；不靠人工語意字典就在 DSTC2（joint goal 73.4）與本文擴充釋出的 WOZ 2.0（84.4）上追平加了字典的 delexicalisation 基線。",
+  "problem": "任務型對話的 DST 要在每一回合根據使用者輸入（語音辨識結果）與對話上下文，估計使用者目前的搜尋條件（informable slots）與提出的查詢（requests）。當時兩條路線都難以擴展：(1) 分離式 SLU＋DST 需要大量領域專屬的逐字或逐值標註；(2) 在 DSTC2 表現最好的 SLU／DST 聯合模型靠 delexicalisation，把語句中出現的 slot 名稱與值換成通用標籤，而辨識「哪些字是某個值的改寫」（例如 affordable、budget 對應 price=cheap）得靠人工建的語意字典。字典在小領域還做得出來，換到較大、較複雜的領域、較自由的使用者用語，或形態變化豐富的語言（義大利文、德文）就不可行。作者要的是一個不需人工詞典、能從資料學到語言變異、又能在值之間共用參數的 DST 模型。",
+  "core_idea": "把「這句話有沒有表達 slot=value」變成一個二元分類，並讓所有判斷都建立在預先訓練好、訓練時固定不動的詞向量空間上：語句表示與候選 slot-value 表示在同一個向量空間裡做逐元素相乘，讓模型學一個「語句是否表達這個值」的相似度，因此沒見過的同義詞（inexpensive）也能因為在向量空間中靠近 cheap 而被認出，參數也能在同一 slot 的所有值之間共用。上下文只看上一輪系統行為（request 問了哪個 slot、confirm 問了哪個 slot-value），用點積當閘門把語句表示放行給下游，以處理「any」「yes」這類只有搭配系統上一句話才有意義的回答。跨回合的狀態維護則不學，只用一條固定係數的插值規則把回合層級機率累加起來。",
+  "method": {
+    "task_formulation": "每一個判斷的輸入是三樣東西：(a) 使用者語句 u（訓練時用人工轉錄，DSTC2 測試時用 ASR 假設）；(b) 上一輪系統行為中 request 的 slot 參數 t_q，以及 confirm 的 slot 與值 (t_s, t_v)（沒有就用零向量）；(c) 一個候選 slot-value 對 (c_s, c_v)。輸出是「使用者在這一回合（考慮系統上一句話）表達了這個 slot-value」的二元機率。追蹤時對 ontology 列舉的所有 slot-value 對逐一跑一次。requests 當成一個名為 request 的 slot，其值是各個可查詢的欄位（phone、address 等）。",
+    "word_vectors": "全部元件都吃 300 維的 Paragram-SL999 詞向量（由 PPDB 的語意相似度限制注入 GloVe 而得），訓練全程固定不更新，目的是讓測試時沒見過、但在向量空間裡接近已知值的字能被正確辨識。多字的 slot 名稱或值把各字向量相加。",
+    "utterance_encoder_NBT_DNN": "令 v_i^n 為從第 i 個字開始的 n 個字向量的串接（n=1,2,3）。累積 n-gram 向量 r_n = 對所有位置 i 加總 v_i^n（也就是不加權地把所有 n-gram 加起來）。每個 r_n 過一層 sigmoid 全連接 r_n' = σ(W_n^s r_n + b_n^s)，映射到相同維度（論文只說「同一維度」，要能三者相加並與候選表示 c 逐元素相乘，推測為 300）；語句表示 r = r_1' + r_2' + r_3'。參數按 slot 各一套（上標 s）。",
+    "utterance_encoder_NBT_CNN": "對 n=1,2,3 各用 L=300 個卷積濾波器 F_n^s ∈ R^{L×nD}（D=300），在所有 n-gram 串接向量組成的矩陣 m_n 上做卷積 R_n = F_n^s m_n；加上偏差後過 ReLU，再沿時間軸做 max-pooling，每個濾波器得到一個值，r_n' 為 L 維；r = r_1' + r_2' + r_3'。作者主張 CNN 版直接與子序列互動，較適合長句。",
+    "semantic_decoding": "候選表示 c = σ(W_c^s (c_s + c_v) + b_c^s)，與 r 同維；d = r ⊙ c（逐元素相乘）。作者刻意不用點積（會把特徵壓成一個純量）；也試過把 r 與 c 串接後交給下游網路，但在這麼小的資料上學不到兩者的交互，表現很差（註腳 2）。",
+    "context_modelling": "只看上一輪系統行為（Markov 假設）。m_r = (c_s · t_q) r：系統若剛問了候選 slot，點積大，語句表示才被放行（處理「系統問價位、使用者答 any」）。m_c = (c_s · t_s)(c_v · t_v) r：只有系統要求確認的 slot-value 正好就是候選對時才放行，讓模型據此讀使用者「yes／no」的極性。",
+    "binary_decision": "y = φ_2(φ_100(d) + φ_100(m_r) + φ_100(m_c))，其中 φ_dim(x) = σ(Wx + b) 把輸入映射到 dim 維；三個 100 維隱藏層的輸出相加後過 2 維層，再接二元 softmax。",
+    "belief_state_update": "規則式，不學。(1) 第 t 回合有 N 個 ASR 假設 h_i^t 與後驗機率 p_i^t：回合層級機率 = Σ_i p_i^t · P(s,v | h_i^t, 系統上一輪輸出)。(2) 累積信念 = λ · 回合層級機率 + (1−λ) · 前一回合累積信念，λ=0.55（在 DSTC2 開發集上調出）。(3) 對每個 slot 取累積機率 ≥ 0.5 的值集合 V_s^t；informable slot 若集合非空，取機率最高者為目前目標；requests 取所有 ≥ 0.5 的欄位，且只看當回合、不做跨回合追蹤。論文沒說明集合為空時是否沿用前一個目標（見 limitations_observed）；N-best 合併式左側寫 sys^{t−1}、右側寫 sys^t，應為筆誤。",
+    "training_data_construction": "對訓練集的每一句使用者語句，為 ontology 中每一個 slot-value 對各產生一筆樣本（語句轉錄、上一輪系統行為清單、候選對），標籤是這句話加上下文是否表達了這個候選對。例如「想吃愛爾蘭菜」對 food=Irish 為正例，對其他所有 slot-value 為負例。正例極少，因此每個 mini-batch 固定放入一定比例的正例。",
+    "hyperparameters": "Adam，初始學習率 0.001，交叉熵損失；梯度回傳到所有 NBT 子元件但詞向量固定；每個 slot 分開訓練一個模型；batch size 256（作者說不影響結果）；每個 mini-batch 中正例占 1/8；梯度裁剪到 [-2.0, 2.0]；所有中間表示 dropout 50%；TensorFlow 實作。超參數在各自的驗證集上調。論文沒交代：訓練 epoch 數與停止條件、W_n^s 的輸出維度、requests 模型的細節、N-best 取幾個、dontcare 等特殊值怎麼處理、V_s^t 為空時的處理。",
+    "datasets_and_protocol": "DSTC2：用官方轉錄、ASR 假設與回合層級語意標註；作者手動修正了轉錄中的拼字錯誤並釋出乾淨版；訓練 2207 通、測試 1117 通；在轉錄上訓練，在原始挑戰賽提供的測試集 ASR 假設上報告。WOZ 2.0：以 Wen 等人（1604.04562）的 Wizard-of-Oz 流程（Amazon Mechanical Turk 上兩人分別扮演系統與使用者、打字輸入）擴充到 1200 通，切成 600 訓練／200 驗證／400 測試。兩者共用同一個劍橋餐廳搜尋 ontology：3 個 informable slot（food、area、price），最多 8 個 requestable slot。",
+    "metrics": "Goals（joint goal accuracy）：所有搜尋條件都判對的回合比例；Requests：使用者查詢都判對的回合比例（皆沿用 DSTC2 的定義）。顯著性以 paired t-test、p<0.05 判定。",
+    "reimplementation_checklist": "(1) 載入 Paragram-SL999 並凍結；(2) 對每個 slot 建一個模型：語句編碼器（DNN 或 CNN）、候選表示層、逐元素相乘、兩個由系統行為點積控制的閘門、三個 100 維 sigmoid 層相加後接二元 softmax；(3) 用「每句 × 每個 slot-value」產生二元樣本，mini-batch 內固定 1/8 正例，Adam 1e-3、dropout 0.5、梯度裁剪 ±2；(4) 推論時以 ASR N-best 後驗加權合併回合層級機率，再以 λ=0.55 插值累加、門檻 0.5 取值；(5) 自行決定並記錄 V_s^t 為空時的保留規則。"
+  },
+  "assumptions": [
+    "有一個封閉、可列舉的領域 ontology：每個 slot 的值都事先列好，模型才能逐一對每個 slot-value 做二元判斷；名稱、時間這類開放值不在射程內。",
+    "預先訓練的詞向量空間已經把同義改寫放在一起、把反義詞推開（語意特化），因此固定不動的向量就能泛化到沒見過的說法。",
+    "要理解使用者這一句，只需要系統上一輪的 request 與 confirm 行為；更早的回合只透過累積信念間接影響（Markov 假設）。",
+    "跨回合的信念更新可以用一個固定係數的線性插值表達，不需要學；且同一個 λ 在不同資料集上都適用。",
+    "每一回合、每個 slot-value 是否被表達可以獨立判斷，slot 之間與值之間的相依可以忽略。",
+    "有回合層級的語意標註（每句表達了哪些 slot-value）可供監督式訓練；DSTC2 上以乾淨轉錄訓練的模型能直接套用到 ASR 假設上。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "DSTC2（本文手動修正拼字後的乾淨版；訓練 2207 通、測試 1117 通；測試用官方 ASR 假設）",
+      "WOZ 2.0（本文擴充自 Wen et al. 2017 的 Wizard-of-Oz 資料，1200 通，600/200/400 切分，文字輸入、無 ASR 雜訊）"
+    ],
+    "metrics": [
+      "joint goal accuracy（Goals）",
+      "turn-level request accuracy（Requests）",
+      "paired t-test（p<0.05）顯著性"
+    ],
+    "baselines": [
+      "DSTC2：Henderson et al. 2014c/d 的 delexicalisation 式 n-gram 神經網路追蹤器（回合間有遞迴連結）",
+      "WOZ 2.0：Wen et al. 2017（1604.04562）的追蹤器（RNN 做信念更新、CNN 在 delexicalised 特徵上抽回合特徵）",
+      "上述兩個基線各自再加上基線作者提供的語意字典（DSTC2 只有 3 條改寫、WOZ 有 38 條）",
+      "詞向量消融（Table 2，只報 NBT-CNN）：xavier 隨機初始化、GloVe、Paragram-SL999"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "兩種 NBT 在兩個資料集的 joint goal 上都顯著優於沒有字典的 delexicalisation 基線；requests 在 WOZ 2.0 上也顯著提升，但在 DSTC2 上的提升沒有標顯著。",
+      "numbers": "DSTC2 Goals：基線 69.1 → NBT-DNN 72.6*、NBT-CNN 73.4*；DSTC2 Requests：95.7 → 96.4、96.5（無星號）。WOZ 2.0 Goals：70.8 → 84.4*、84.2*；WOZ 2.0 Requests：87.1 → 91.2*、91.6*",
+      "section": "§6.1, Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在 joint goal 上，NBT 與加上人工語意字典的基線之間沒有統計顯著差異，作者據此主張 NBT 能自行處理原本要寫進字典的語意關係（也就是「追平」而非「超越」字典版）。這句話緊接在談 goals 顯著性的句子之後，論文沒明說是否也涵蓋 requests。",
+      "numbers": "DSTC2 Goals：字典版 72.9 對 NBT-DNN 72.6、NBT-CNN 73.4；WOZ 2.0 Goals：字典版 83.7 對 84.4、84.2（requests 另見下：WOZ 2.0 上 NBT 91.2／91.6 比字典版 87.6 高約 4 點，星號只標相對基線的顯著性）",
+      "section": "§6.1, Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "NBT 相對基線的增益在 WOZ 2.0 上遠大於 DSTC2，作者解讀為學習語言變異的能力對長句、詞彙豐富、無 ASR 錯誤的資料最關鍵。",
+      "numbers": "Goals 增益（對無字典基線）：WOZ 2.0 +13.4～+13.6 點；DSTC2 +3.5～+4.3 點",
+      "section": "§6.1, Table 1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "DSTC2 的主要瓶頸是 ASR 錯誤而非語言理解：改用測試集的人工轉錄時，NBT 的 goal accuracy 大幅上升，作者因此建議後續工作聚焦 ASR 補償。",
+      "numbers": "ASR 假設上 NBT-CNN Goals 73.4；轉錄上 0.96（論文只在內文給這個數字，沒說是哪一個 NBT 變體，也沒給表）",
+      "section": "§6.1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "詞向量的語意品質直接影響追蹤表現：語意特化的 Paragram-SL999 在兩個資料集的 goal 追蹤上都勝過 GloVe 與隨機初始化；在有 ASR 雜訊的 DSTC2 上，兩種預訓練向量都明顯勝過隨機。",
+      "numbers": "NBT-CNN，DSTC2 Goals：xavier 64.2 / GloVe 69.0* / Paragram 73.4*；DSTC2 Requests：81.2 / 96.4* / 96.5*；WOZ 2.0 Goals：81.2 / 80.1 / 84.2*；WOZ 2.0 Requests：90.7 / 91.4 / 91.6（星號為相對 xavier 顯著）",
+      "section": "§6.2, Table 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在乾淨的 WOZ 2.0 上，分布式的 GloVe 向量甚至不如隨機初始化；作者歸因於分布式向量會把相關但反義的詞（north／south、expensive／inexpensive）放得很近，抵銷了有用的語意資訊。",
+      "numbers": "WOZ 2.0 Goals：GloVe 80.1 對 xavier 81.2",
+      "section": "§6.2, Table 2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "語意字典對 delexicalisation 基線的影響很大，即使字典非常小：作者以此說明 DSTC2 使用者的用語受限於系統理解能力，而 WOZ 的自由用語需要更大的字典。",
+      "numbers": "DSTC2 字典只有 3 條改寫，Goals 69.1 → 72.9；WOZ 字典 38 條改寫，Goals 70.8 → 83.7",
+      "section": "§5.2, Table 1",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "DSTC2 上的主要障礙是 ASR 錯誤補償；若要部署在聲學條件差的環境，後續要做更好的 ASR 補償（§6.1）。",
+    "只在英文、單一領域（餐廳搜尋）上驗證；多領域對話系統與形態變化豐富的語言留待未來工作（§7）。",
+    "上下文建模刻意採 Markov 假設，只考慮最後一組系統行為（§3.3）。",
+    "requestable slot 只建模單回合的查詢，不做跨回合追蹤（§4）。",
+    "把 r 與 c 串接交給下游網路的設計在小資料上學不到交互、表現很弱（註腳 2）。",
+    "WOZ 2.0 夠大、夠乾淨時，詞向量帶來的增益變弱；分布式 GloVe 向量因反義詞相鄰而幫不上忙（§6.2）。"
+  ],
+  "limitations_observed": [
+    "跨回合的信念更新規格不足，照字面解讀會遺忘：累積信念 = 0.55 × 回合機率 + 0.45 × 前一回合，門檻 0.5。一個已確定（機率 1.0）的目標只要下一回合沒被再提到，就掉到 0.45 而被移出 V_s^t；從零開始時，回合機率要達約 0.91（0.5/0.55）才立得起來。論文只寫「V_s^t 非空時取最高者」，沒說空集合時是否沿用前一個目標；而 DSTC2 大多數回合並不重提所有條件，73% 的 joint goal 暗示實作裡很可能有某種保留規則。重做時必須自行補上並記錄；若照字面實作，預期會明顯低於論文數字。",
+    "官方釋出的程式碼不是本文的版本：github.com/nmrksic/neural-belief-tracker 第一次提交是 2017-10-20，README 明說實作的是用學習式信念更新取代原論文規則式機制的版本（對應 1805.11350）；程式碼中找不到 λ、0.55，`update_belief_state` 的呼叫也已被註解掉。因此本文 Table 1 的規則式設定無法直接用官方程式碼重現。",
+    "「學到的 DST」其實只有回合層級的 SLU：模型的訓練標籤是「這一句加上系統上一句話是否表達了某個 slot-value」，跨回合的狀態維護完全交給固定係數的插值規則。以 T2 的角度看，本文解決的是語言變異，不是狀態的表示與更新；λ 只在 DSTC2 開發集上調過，論文沒說 WOZ 2.0 是否沿用同一個值。",
+    "主張的強度要打折：相對加了字典的基線只是「沒有顯著差異」，NBT-DNN 在 DSTC2 Goals 其實低於字典版（72.6 對 72.9）；「顯著優於」只對沒有字典的基線成立。DSTC2 Requests 的提升（95.7 → 96.4／96.5）沒有星號。paired t-test 沒說配對單位是回合還是對話，每個設定只報單次結果，沒有不同隨機種子的變異。",
+    "「不需要人工資源」的說法把人工知識搬到別處而不是消除：模型仍需要人工定義並列舉所有值的 ontology，且效能高度依賴 Paragram-SL999，而它本身就是把 PPDB 這個大型改寫資源注入詞向量的產物。反過來，基線所謂「無法擴展」的字典在 DSTC2 只有 3 條、WOZ 只有 38 條，就拿到大部分增益（69.1 → 72.9、70.8 → 83.7）；字典在大領域建不起來是外推論證，不是在這兩個資料集上量到的。",
+    "訓練與測試的輸入不一致：DSTC2 在人工轉錄上訓練、在 ASR 假設上測試，而轉錄上的 goal accuracy 0.96 對上 ASR 的 73.4，落差遠大於模型之間的差距。作者把原因歸給 ASR，卻沒有試過用 ASR 假設或 N-best 來訓練，無法區分「ASR 錯誤本身」與「訓練／測試分布不一致」各占多少。0.96 這個數字也只出現在內文，沒說是哪個變體。",
+    "詞向量消融有與結論不一致的格子：WOZ 2.0 Goals 上 GloVe（80.1）低於隨機（81.2），WOZ 2.0 Requests 上 Paragram 對隨機（91.6 對 90.7）不顯著。另外 DSTC2 Requests 在隨機向量下只有 81.2、換成 GloVe 就跳到 96.4，差距比 goal 還大，論文沒解釋為什麼單回合的 requests 對詞向量這麼敏感。",
+    "兩個變體的設計論證沒得到實驗結果佐證：作者主張 CNN 版較適合長句，但在句子較長的 WOZ 2.0 上，NBT-DNN 的 Goals（84.4）反而略高於 NBT-CNN（84.2），兩者在所有格子上差距都在 1 點以內。",
+    "參數共用與擴展性的主張沒有實際驗證：§3.1 說參數可以跨值甚至跨 slot 共用，但式子都帶 slot 上標 s、每個 slot 分開訓練，實際只做到跨值共用。每回合要對每個 slot-value 各跑一次前向計算，成本隨值的數量線性成長；實驗只有一個領域、3 個 informable slot，論文標榜的「擴展到更大、更複雜的領域」完全沒有被量到。",
+    "比較範圍窄：兩個基線都出自同一實驗室（Henderson 等人、Wen 等人），沒有和 DSTC2 挑戰賽中同時使用 ASR 與多個 SLU 輸出的最佳系統比較，而作者自己在註腳 1 承認那些系統表現最好。「state-of-the-art」的說法只相對於所選基線成立。",
+    "Markov 假設限制了多輪能力：模型只看系統上一輪的 request／confirm，無法處理跨多回合的指涉（例如回到三句前系統提過的選項），也無法建模使用者改變主意或否定先前條件的明確訊號；這些只能靠插值規則被動衰減。"
+  ],
+  "framework_role": "T2「傳統任務型對話 DST 與資料集」的奠基性工作，貢獻分兩塊。(1) 方法：第一個以預訓練詞向量取代 delexicalisation 與人工語意字典的神經 DST，確立了「對每個 slot-value 做回合層級二元判斷＋把系統上一輪行為當閘門＋跨回合累積」這個分解方式，是 LLM 之前 DST 模型的共同祖先與標準比較對象。(2) 資料：本文把 Wen 等人的 Wizard-of-Oz 資料擴充為 WOZ 2.0（1200 通、600/200/400 切分）並釋出 DSTC2 乾淨轉錄版；WOZ 2.0 後來成為 MultiWOZ 之前最常用的單領域 DST 基準，joint goal accuracy 也在此延續為主要指標。對 LLM agent 時代的框架，它提供的是狀態表示與維護的概念基線：狀態是封閉 ontology 上的 slot-value 機率分布；「本回合抽取」與「跨回合維護」是兩個可以分開設計的步驟；理解簡短回答（any、yes）需要系統上一步的行為；而維護規則寫得不清楚時，會出現未被提到的條件被遺忘的問題，正是長多輪互動中狀態保持的原型困難。它與 T1 在回合層級的語意解碼上重疊（語句 → inform(slot=value)），但不涉及自我修正、軌跡、使用者模擬或評估回流。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文只說這個框架「更適合」擴展到真實系統的部署，沒有描述任何實際部署；論文標示兩位共同作者當時任職 Apple，但這不是 NBT 被採用的證據。查過 PolyAI 官方技術頁（https://poly.ai/technology），沒有提到 NBT、belief tracking 或 dialogue state tracking；搜尋結果中「影響了 PolyAI 平台與 Siri」的說法是搜尋摘要自行推論，沒有官方出處。官方 GitHub repo（Apache-2.0）只是研究程式碼，README 未提任何生產使用。被後續 DST 論文大量比較屬學術影響力，不計入採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/nmrksic/neural-belief-tracker（Apache-2.0；第一次提交 2017-10-20，晚於本文。README 明說實作的是學習式信念更新版本，對應後續論文 1805.11350，而非本文的規則式 λ=0.55 更新；程式碼中找不到 λ 或 update_belief_state 的定義。本文規則式版本未見公開程式碼）",
+    "data": "論文聲稱可從作者頁面下載：DSTC2 乾淨版（mi.eng.cam.ac.uk/~nm480/dstc2-clean.zip）、WOZ 2.0（mi.eng.cam.ac.uk/~nm480/woz_2.0.zip）與基線用的語意字典（mi.eng.cam.ac.uk/~nm480/sem-dict.zip）；這些網址目前是否仍有效未驗證。官方 GitHub repo 內附 WOZ 的英、德、義文 train/validate/test JSON 與 DSTC2 ontology（英、德、義），可取得英文 WOZ 資料（未逐筆比對是否與本文 600/200/400 切分一致）。DSTC2 原始資料由挑戰賽公開釋出。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "第一個不靠人工語意字典的神經 DST，也是 WOZ 2.0 基準的出處，其「回合層級 slot-value 判斷＋規則式累積」的分解與 joint goal 數字是後續 DST 論文的標準比較基線，屬本子領域必讀。",
+  "related": ["1604.04562", "1603.00892", "1506.07190", "1506.03487"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -26,13 +26,14 @@
  * 單次取樣的一個數字讀起來像判決，但它不是。
  */
 
-import type { AgentModel } from '@nexus/core';
+import type { AgentModel, StreamRetryOptions } from '@nexus/core';
 import { BENCHMARK_SYSTEM_PROMPT, benchmarkPlugins } from './assembly.js';
 import { isRetryableRateLimit } from '../live-model.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
-import { runBenchmarkCase } from './runner.js';
+import { runBenchmarkCase, type BenchmarkRun, type TokenUsage } from './runner.js';
 import { scoreCase, type CaseScore } from './scorers.js';
 import type { ModelUnderTest } from './model-under-test.js';
+import { caseStats, type CaseStats, type ColumnEntry } from './stats.js';
 
 /** 一次執行失敗的分類。**分開列，因為要做的事不同。** */
 export type FailureReason =
@@ -72,11 +73,40 @@ export type FailureReason =
 /**
  * 基準任務的迴圈上限，比組裝點的預設緊。
  *
- * 換算是 `2 × 模型輪數 + 2`，所以 40 約等於 19 輪模型呼叫。取這個值的理由是實測：
+ * 換算是 `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`。基準任務的組裝（`benchmarkPlugins()`
+ * 經 `createNexusAgent`，提醒器打底）每輪三格，所以 40 是 13 輪模型呼叫（2026-10-02 用
+ * `LoopingChatModel` 走 `runTier` 實測）。取這個值的理由是實測：
  * 正常的執行裡最多的一次是 `oss-20b` 在 `edit-after-read` 上多叫 8 次（共 11 次工具呼叫
  * ≈ 24 個 super-step），而跑掉的那次是 25 次多叫（共 28 次 ≈ 58 個）——40 落在兩者中間。
+ * **這兩個 super-step 數字是每輪兩格算的**；換成每輪三格約 36 與 87（推算，沒有重跑），
+ * 40 仍落在兩者中間。
  */
 export const EVAL_RECURSION_LIMIT = 40;
+
+/**
+ * 基準任務的組裝每一輪模型呼叫佔幾個 super-step。
+ *
+ * 預設組裝打底提醒器，而 `beforeModel` 在 LangGraph 裡是圖裡的一個節點，所以每輪是
+ * 模型、工具、提醒器三格，不是裸組裝的兩格（換算與逐格實測見
+ * [`looping-model.ts`](../looping-model.ts) 檔頭的表）。`compare.test.ts` 用
+ * `benchmarkPlugins()` 配 `LoopingChatModel` 實跑打滿上限，釘死這個值與下面那個換算。
+ */
+export const EVAL_SUPERSTEPS_PER_ROUND = 3;
+
+/**
+ * 一個迴圈上限約等於幾輪模型呼叫：`floor((recursionLimit - 1) / 每輪格數)`。
+ *
+ * **CLI 印給人看的輪數與結果檔記下的輪數都從這裡來。** 之前 `compare-cli.ts` 自己寫
+ * `(上限 - 2) / 2`，那是裸組裝每輪兩格的舊算法，對基準任務的組裝印出 19 輪，實際是 13 輪。
+ *
+ * **只在上限 4 到 87 之間精確**（2026-10-04 用 `LoopingChatModel` 逐一實測，`compare.test.ts`
+ * 有掃描）。從 88 起實測比這個換算多一輪（88 → 30 輪，換算 29；100 → 34，換算 33），
+ * 原因沒有追。出貨的上限 {@link EVAL_RECURSION_LIMIT} 是 40，在精確的範圍內；CLI 沒有改上限的
+ * 旗標，所以今天不會落到範圍外。
+ */
+export function evalModelRounds(recursionLimit: number): number {
+  return Math.floor((recursionLimit - 1) / EVAL_SUPERSTEPS_PER_ROUND);
+}
 
 /**
  * 一次執行的時間預算。
@@ -90,7 +120,18 @@ export const EVAL_DEADLINE_MS = 300_000;
 
 /** 一次執行的結果。 */
 export type TierOutcome =
-  | { readonly kind: 'scored'; readonly score: CaseScore; readonly seconds: number }
+  | {
+      readonly kind: 'scored';
+      readonly score: CaseScore;
+      readonly seconds: number;
+      /**
+       * 評分器當時看到的原始觀測（工具呼叫序列、最終回覆、用量）。
+       *
+       * 分數是觀測的函式；只留分數的話，評分程式或題庫一改，舊結果就沒辦法用新的判準重新
+       * 評分（結果檔因此也存它，見 [`result-file.ts`](./result-file.ts)）。
+       */
+      readonly run: BenchmarkRun;
+    }
   | {
       readonly kind: 'failed';
       readonly caseId: string;
@@ -99,6 +140,14 @@ export type TierOutcome =
       readonly status?: number;
       readonly message: string;
       readonly seconds: number;
+      /**
+       * 這次執行失敗之前已經花掉的 token（每次模型呼叫結束時記的帳）。
+       *
+       * **沒記到就是 `undefined`，不是零**：沒有任何一次呼叫回報用量（或根本沒呼叫到）
+       * 與「確實花了 0」是兩件事。是**下限**：被中止或被拒的那一次呼叫沒有結束事件，量不到。
+       * 舊的結果檔沒有這一欄，讀回來也是 `undefined`。
+       */
+      readonly usage?: TokenUsage;
     };
 
 /**
@@ -114,8 +163,14 @@ export interface TierReport<T extends ModelUnderTest = ModelUnderTest> {
 }
 
 export interface CompareOptions<T extends ModelUnderTest = ModelUnderTest> {
-  /** 拿 model id 換一個 model。真的比較時是 `createLiveModel`，測試時是假模型。 */
-  readonly createModel: (modelId: string) => AgentModel;
+  /**
+   * 拿 model id 換一個 model。真的比較時是 `createLiveModel`，測試時是假模型。
+   *
+   * 第二個參數是這次要跑的題目：真模型不看它（一個 id 就是一個模型），平凡地板那幾個
+   * agent 看它 —— 隨機合法動作要靠題目 id 定種子，才每題各自確定又彼此不同
+   * （見 [`floor.ts`](./floor.ts)）。
+   */
+  readonly createModel: (modelId: string, testCase: BenchmarkCase) => AgentModel;
   /** 每題重複幾次。預設 1。 */
   readonly samples?: number;
   /** 每跑完一次就回報一次，讓呼叫端邊跑邊印 —— 一輪比較是分鐘級的。 */
@@ -126,6 +181,10 @@ export interface CompareOptions<T extends ModelUnderTest = ModelUnderTest> {
   readonly recursionLimit?: number;
   /** 一次執行的時間預算，毫秒。預設 {@link EVAL_DEADLINE_MS}；給 `0` 表示不設。 */
   readonly deadlineMs?: number;
+  /**
+   * 模型呼叫失敗的重試政策（#1427），原樣交給 {@link runBenchmarkCase}。真模型的比較要給（SDK 層不重試了），假模型省略即只打一次。
+   */
+  readonly streamRetry?: StreamRetryOptions;
 }
 
 /**
@@ -195,16 +254,28 @@ async function runOnce(
   // 中止丟出來的是 `DOMException` 且 `name` 是 `TimeoutError` —— 那個名字會被下面的逾時
   // 掃描認成「端點不回話」，跟我們自己切掉的完全混在一起。問訊號是確定的，猜名字不是。
   const deadline = deadlineMs > 0 ? AbortSignal.timeout(deadlineMs) : undefined;
+  // 失敗的執行沒有最終訊息串可以加總，所以每次模型呼叫結束時就記一筆（見 runner.ts 的
+  // UsageTally）。成功的執行不用這份：它的用量仍然是從最終訊息串算的，評分不變。
+  let spent: TokenUsage | undefined;
+  const onUsage = (usage: TokenUsage): void => {
+    spent = {
+      inputTokens: (spent?.inputTokens ?? 0) + usage.inputTokens,
+      outputTokens: (spent?.outputTokens ?? 0) + usage.outputTokens,
+      totalTokens: (spent?.totalTokens ?? 0) + usage.totalTokens,
+    };
+  };
 
   try {
     const run = await runBenchmarkCase(testCase, {
-      model: options.createModel(tier.modelId),
+      model: options.createModel(tier.modelId, testCase),
       plugins: benchmarkPlugins(),
       systemPrompt: BENCHMARK_SYSTEM_PROMPT,
       recursionLimit: options.recursionLimit ?? EVAL_RECURSION_LIMIT,
+      onUsage,
       ...(deadline === undefined ? {} : { signal: deadline }),
+      ...(options.streamRetry === undefined ? {} : { streamRetry: options.streamRetry }),
     });
-    return { kind: 'scored', score: scoreCase(testCase, run), seconds: elapsed(started) };
+    return { kind: 'scored', score: scoreCase(testCase, run), seconds: elapsed(started), run };
   } catch (error) {
     if (deadline?.aborted === true) {
       return {
@@ -213,6 +284,7 @@ async function runOnce(
         reason: 'budget',
         message: `超過單次執行的時間預算 ${deadlineMs / 1000} 秒`,
         seconds: elapsed(started),
+        ...(spent === undefined ? {} : { usage: spent }),
       };
     }
     const { reason, status } = classify(error);
@@ -223,6 +295,7 @@ async function runOnce(
       ...(status === undefined ? {} : { status }),
       message: error instanceof Error ? error.message : String(error),
       seconds: elapsed(started),
+      ...(spent === undefined ? {} : { usage: spent }),
     };
   }
 }
@@ -303,6 +376,13 @@ export interface TierSummary<T extends ModelUnderTest = ModelUnderTest> {
   readonly tier: T;
   /** 真的評到分的次數。 */
   readonly scored: number;
+  /**
+   * 判成「這題成功」的次數（見 {@link CaseScore.success}），分母是 {@link scored}。
+   *
+   * **失敗的執行不算成功也不算不成功** —— 沒有資料，跟其他欄的規矩一樣。它與前幾欄的
+   * 差別是它沒有平均與全距：它是個計數，要看的是「幾題做成功了」。
+   */
+  readonly successes: number;
   /** 各類失敗的次數。沒有的類別不會出現。 */
   readonly failures: Readonly<Partial<Record<FailureReason, number>>>;
   /**
@@ -343,9 +423,46 @@ export interface TierSummary<T extends ModelUnderTest = ModelUnderTest> {
   readonly seconds?: Spread;
   /** 有回報 `usage` 的執行次數。跟 {@link scored} 不一定相等。 */
   readonly costed: number;
+  /**
+   * **全部執行**的 token 合計，評到分的與失敗的分開列（#1002）。
+   *
+   * {@link totalTokens} 是「評到分的那些，每次平均多少」；那個數字之外，一輪真正花了多少
+   * 要看這裡 —— 失敗的執行（被上限切掉、被端點拒絕）照樣花掉了 token，不進帳的話一個
+   * 老是跑掉的模型看起來比實際便宜。`undefined` 表示一次都沒回報過（不是零）。
+   */
+  readonly tokenTotals?: TokenTotals;
+  /**
+   * 以題目為單位的統計：區間與「一題等於幾個百分點」。見 [`stats.ts`](./stats.ts)。
+   *
+   * 每一欄只算**判得動**的執行，理由同其他欄。`success` 的分母是所有評到分的執行。
+   */
+  readonly caseStats: {
+    readonly success?: CaseStats;
+    readonly toolCallSuccess?: CaseStats;
+    readonly argumentCorrectness?: CaseStats;
+    readonly mentions?: CaseStats;
+  };
 }
 
-/** 一組數字的平均與全距。 */
+/** 全部執行的 token 合計。 */
+export interface TokenTotals {
+  /** 評到分的執行花掉的（只算有回報的那些）。 */
+  readonly scored: number;
+  /** 失敗的執行花掉的（只算有記到的那些，是下限）。 */
+  readonly failed: number;
+  /** `scored + failed`。 */
+  readonly all: number;
+  /** 失敗的執行共幾次，其中有記到 token 的幾次。 */
+  readonly failedRuns: number;
+  readonly failedReported: number;
+}
+
+/**
+ * 一組數字的平均與範圍（最小到最大）。
+ *
+ * **範圍不是誤差棒**：它把不同題目與同題重跑兩種變異混在一起算。要誤差棒看
+ * {@link TierSummary.caseStats}（以題目為單位重抽的區間）。
+ */
 export interface Spread {
   readonly mean: number;
   readonly min: number;
@@ -398,6 +515,7 @@ export function summarize<T extends ModelUnderTest>(report: TierReport<T>): Tier
   return {
     tier: report.tier,
     scored: scored.length,
+    successes: scored.filter((outcome) => outcome.score.success).length,
     failures,
     ...spreadOf('toolCallSuccess', present(scored.map((o) => o.score.toolCallSuccess))),
     ...spreadOf('argumentCorrectness', present(scored.map((o) => o.score.argumentCorrectness))),
@@ -412,6 +530,25 @@ export function summarize<T extends ModelUnderTest>(report: TierReport<T>): Tier
       scored.map((o) => o.seconds),
     ),
     costed: costs.length,
+    ...tokenTotalsOf(report.outcomes, costs),
+    caseStats: {
+      ...optionalStats(
+        'success',
+        scored.map((o) => ({ caseId: o.score.caseId, value: o.score.success ? 1 : 0 })),
+      ),
+      ...optionalStats(
+        'toolCallSuccess',
+        columnOf(scored, (o) => o.score.toolCallSuccess),
+      ),
+      ...optionalStats(
+        'argumentCorrectness',
+        columnOf(scored, (o) => o.score.argumentCorrectness),
+      ),
+      ...optionalStats(
+        'mentions',
+        columnOf(scored, (o) => o.score.mentions),
+      ),
+    },
   };
 }
 
@@ -431,4 +568,46 @@ function spreadOf<K extends string>(key: K, values: readonly number[]): Partial<
       count: values.length,
     },
   } as Partial<Record<K, Spread>>;
+}
+
+function columnOf(
+  scored: readonly Extract<TierOutcome, { kind: 'scored' }>[],
+  pick: (outcome: Extract<TierOutcome, { kind: 'scored' }>) => number | undefined,
+): readonly ColumnEntry[] {
+  const entries: ColumnEntry[] = [];
+  for (const outcome of scored) {
+    const value = pick(outcome);
+    if (value !== undefined) entries.push({ caseId: outcome.score.caseId, value });
+  }
+  return entries;
+}
+
+function optionalStats<K extends string>(
+  key: K,
+  entries: readonly ColumnEntry[],
+): Partial<Record<K, CaseStats>> {
+  const stats = caseStats(entries);
+  return stats === undefined ? {} : ({ [key]: stats } as Record<K, CaseStats>);
+}
+
+function tokenTotalsOf(
+  outcomes: readonly TierOutcome[],
+  scoredCosts: readonly number[],
+): { tokenTotals?: TokenTotals } {
+  const failed = outcomes.filter(
+    (outcome): outcome is Extract<TierOutcome, { kind: 'failed' }> => outcome.kind === 'failed',
+  );
+  const reported = failed.filter((outcome) => outcome.usage !== undefined);
+  if (scoredCosts.length === 0 && reported.length === 0) return {};
+  const scoredTotal = scoredCosts.reduce((sum, value) => sum + value, 0);
+  const failedTotal = reported.reduce((sum, outcome) => sum + (outcome.usage?.totalTokens ?? 0), 0);
+  return {
+    tokenTotals: {
+      scored: scoredTotal,
+      failed: failedTotal,
+      all: scoredTotal + failedTotal,
+      failedRuns: failed.length,
+      failedReported: reported.length,
+    },
+  };
 }

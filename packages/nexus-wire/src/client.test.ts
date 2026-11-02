@@ -1,8 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createWireClient } from './client.js';
+import type { UplinkResult } from './client.js';
 import { WIRE_CHANNELS, errorResponse, successResponse } from './protocol.js';
+import { WireProtocolError } from './protocol-error.js';
+import { WireRejectedError } from './rejected-error.js';
 import { encodeSseFrame } from './sse.js';
-import type { Event } from './protocol.js';
+import { UplinkTransportError } from './uplink-error.js';
+import type { Event, WireErrorCode, WireErrorResponse } from './protocol.js';
+import type {
+  ThreadForkError,
+  ThreadForkResult,
+  ThreadRenameError,
+  ThreadRenameResult,
+} from './thread-management.js';
 
 /**
  * 瀏覽器那一端。
@@ -52,6 +62,111 @@ const FRAME = {
   params: { namespace: [], timestamp: 0, data: { event: 'running', graph_name: 'root' } },
 } as Event;
 
+describe('GET /threads 的釘選與封存集合（#633）', () => {
+  const row = { threadId: 'a', updatedAt: 1, running: false, blank: false };
+  const listWith = async (extra: Record<string, unknown>) => {
+    // GET 沒有 body，`stub` 的 JSON.parse 吃不下，直接給 fetch 替身。
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async () =>
+        Response.json({ type: 'success', result: { items: [row], unreadable: 0, ...extra } }),
+    });
+    const outcome = await client.listThreads();
+    if (outcome.kind !== 'ok') throw new Error('應該是 ok');
+    return outcome.result;
+  };
+
+  it('兩格都是字串陣列就原樣帶出來，順序不動', async () => {
+    const result = await listWith({ pinnedThreadIds: ['b', 'a'], archivedThreadIds: ['c'] });
+    expect(result.pinnedThreadIds).toEqual(['b', 'a']);
+    expect(result.archivedThreadIds).toEqual(['c']);
+  });
+
+  it('空陣列也帶：空集合不是缺席', async () => {
+    const result = await listWith({ pinnedThreadIds: [], archivedThreadIds: [] });
+    expect(result.pinnedThreadIds).toEqual([]);
+    expect(result.archivedThreadIds).toEqual([]);
+  });
+
+  it('沒送、或不是字串陣列的那一格就省略（不帶 key），另一格不受影響', async () => {
+    const absent = await listWith({});
+    expect(absent).not.toHaveProperty('pinnedThreadIds');
+    expect(absent).not.toHaveProperty('archivedThreadIds');
+    for (const bad of [null, 'a', 3, { 0: 'a' }, ['a', 1], [null]]) {
+      const result = await listWith({ pinnedThreadIds: bad, archivedThreadIds: ['c'] });
+      expect(result).not.toHaveProperty('pinnedThreadIds');
+      expect(result.archivedThreadIds).toEqual(['c']);
+    }
+  });
+});
+
+describe('GET /threads 每一列的分叉來源（#1580）', () => {
+  const listRow = async (extra: Record<string, unknown>) => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async () =>
+        Response.json({
+          type: 'success',
+          result: {
+            items: [{ threadId: 'a', updatedAt: 1, running: false, blank: false, ...extra }],
+            unreadable: 0,
+          },
+        }),
+    });
+    return client.listThreads();
+  };
+
+  it('server 帶了 parentThreadId，列裡就有；沒帶就沒有這個鍵', async () => {
+    const forked = await listRow({ parentThreadId: 'p' });
+    if (forked.kind !== 'ok') throw new Error('應該是 ok');
+    expect(forked.result.items[0]?.parentThreadId).toBe('p');
+    const plain = await listRow({});
+    if (plain.kind !== 'ok') throw new Error('應該是 ok');
+    expect(plain.result.items[0]).not.toHaveProperty('parentThreadId');
+  });
+
+  it('parentThreadId 不是字串就是不認得的一列', async () => {
+    await expect(listRow({ parentThreadId: 3 })).rejects.toThrow('不認得的一列');
+  });
+});
+
+describe('上行回了非 2xx（#1355）', () => {
+  const failWith = (status: number, body: string) =>
+    stub(() => new Response(body, { status, headers: { 'content-type': 'text/html' } })).client;
+
+  it('拋 UplinkTransportError，帶 status 與 body，message 維持舊格式', async () => {
+    const error = await failWith(502, '<h1>Bad Gateway</h1>')
+      .runStart('t 1', '哈囉')
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(UplinkTransportError);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      name: 'UplinkTransportError',
+      status: 502,
+      body: '<h1>Bad Gateway</h1>',
+      message: '上行被載體層擋下：502 <h1>Bad Gateway</h1>',
+    });
+  });
+
+  it('各種狀態碼各帶各的 status；本文是空字串也照給', async () => {
+    for (const status of [400, 401, 413, 500, 503, 504]) {
+      const error = await failWith(status, '')
+        .runCancel('t 1')
+        .catch((caught: unknown) => caught);
+      expect(error, String(status)).toBeInstanceOf(UplinkTransportError);
+      expect((error as UplinkTransportError).status).toBe(status);
+      expect((error as UplinkTransportError).body).toBe('');
+    }
+  });
+
+  it('2xx 但命令被拒（`rejected`）不是這個錯誤：照舊走結果', async () => {
+    const { client } = stub(() =>
+      Response.json(errorResponse(1, 'invalid_argument', '不認得這個命令')),
+    );
+    await expect(client.runStart('t 1', '哈囉')).resolves.toMatchObject({ type: 'error' });
+  });
+});
+
 describe('瀏覽器端的 client', () => {
   it('上行走路徑指名的 method，而且封包裡也帶同一個', async () => {
     const { calls, client } = stub(() => Response.json(successResponse(1, { run_id: 'r1' })));
@@ -74,6 +189,148 @@ describe('瀏覽器端的 client', () => {
     expect(result).toMatchObject({ type: 'success', result: { accepted: true } });
   });
 
+  it('改刪送出佇列走同一條 RPC family：路徑與封包各講一次 queue.update，params 原樣帶上', async () => {
+    const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
+    const result = await client.queueUpdate('t 1', {
+      item_id: 'r1',
+      action: { kind: 'edit', text: '改過' },
+    });
+    await client.queueUpdate('t 1', { item_id: 'r2', action: { kind: 'remove' } });
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t%201/commands/queue.update');
+    expect(calls[0]?.body).toEqual({
+      id: 1,
+      method: 'queue.update',
+      params: { item_id: 'r1', action: { kind: 'edit', text: '改過' } },
+    });
+    expect(calls[1]?.body).toEqual({
+      id: 2,
+      method: 'queue.update',
+      params: { item_id: 'r2', action: { kind: 'remove' } },
+    });
+    expect(result).toMatchObject({ type: 'success', result: { accepted: true } });
+  });
+
+  it('subagentSend 帶 clientTimeZone 才多一格 client_time_zone（#1734）', async () => {
+    const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
+    await client.subagentSend('t', 'bg-1', '嗨', { clientTimeZone: 'Asia/Taipei' });
+    await client.subagentSend('t', 'bg-1', '嗨', {});
+    expect(calls[0]?.body).toMatchObject({
+      params: { run_id: 'bg-1', text: '嗨', client_time_zone: 'Asia/Taipei' },
+    });
+    expect((calls[1]?.body as { params: object }).params).toEqual({ run_id: 'bg-1', text: '嗨' });
+  });
+
+  it('對單一背景子代理傳話與單獨停同一條 RPC family：路徑與封包各講一次 method，run_id 與 text 原樣帶上', async () => {
+    const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
+    const sent = await client.subagentSend('t 1', 'bg-1', '  改看 b.ts\n');
+    const stopped = await client.subagentInterrupt('t 1', 'bg-1');
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t%201/commands/subagent.send');
+    expect(calls[0]?.body).toEqual({
+      id: 1,
+      method: 'subagent.send',
+      params: { run_id: 'bg-1', text: '  改看 b.ts\n' },
+    });
+    expect(calls[1]?.url).toBe('http://agent.test/threads/t%201/commands/subagent.interrupt');
+    expect(calls[1]?.body).toEqual({
+      id: 2,
+      method: 'subagent.interrupt',
+      params: { run_id: 'bg-1' },
+    });
+    expect(sent).toMatchObject({ type: 'success', result: { accepted: true } });
+    expect(stopped).toMatchObject({ type: 'success', result: { accepted: true } });
+  });
+
+  it('背景子代理的歷史走自己的路徑與同一套查詢；回來的一頁同 threadHistory，找不到是 rejected', async () => {
+    const urls: string[] = [];
+    const page = { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false };
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async (input) => {
+        urls.push(String(input));
+        return String(input).includes('bg-gone')
+          ? Response.json(errorResponse(null, 'subagent_not_found', '沒有這個子代理'))
+          : Response.json({ type: 'success', result: page });
+      },
+    });
+    const ok = await client.subagentHistory('t 1', 'bg-0123456789ab', { maxMessages: 5 });
+    const missing = await client.subagentHistory('t 1', 'bg-gone');
+    expect(urls[0]).toBe(
+      'http://agent.test/threads/t%201/subagents/bg-0123456789ab/history?maxMessages=5',
+    );
+    expect(urls[1]).toBe('http://agent.test/threads/t%201/subagents/bg-gone/history');
+    expect(ok).toEqual({ kind: 'ok', result: page });
+    expect(missing).toEqual({
+      kind: 'rejected',
+      code: 'subagent_not_found',
+      message: '沒有這個子代理',
+    });
+  });
+
+  // 歷史裡的壞事件每次重連都抓到同一份：不驗的話它流進折疊器，那條 thread 永遠打不開（#1555）。
+  it('歷史頁裡有形狀不對的事件：threadHistory 與 subagentHistory 都拋 WireProtocolError，field 指到哪一筆', async () => {
+    const good = { type: 'event', method: 'lifecycle', params: { namespace: [], data: {} } };
+    const page = (events: unknown[]) => ({
+      events,
+      firstSeq: 0,
+      throughSeq: 0,
+      hasMore: false,
+      legacy: false,
+    });
+    const serve = (events: unknown[]) =>
+      createWireClient({
+        baseUrl: 'http://agent.test/',
+        fetch: async () => Response.json({ type: 'success', result: page(events) }),
+      });
+    const missingMethod = { type: 'event', params: { namespace: [], data: {} } };
+    const error = await serve([good, missingMethod])
+      .threadHistory('t')
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+    expect(error).toBeInstanceOf(WireProtocolError);
+    expect((error as WireProtocolError).field).toBe('events[1].method');
+    const sub = await serve([{ ...good, params: undefined }])
+      .subagentHistory('t', 'bg-0123456789ab')
+      .then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+    expect((sub as WireProtocolError).field).toBe('events[0].params');
+    // 歷史不帶 seq；合格的整頁照常回來。
+    expect(await serve([good, good]).threadHistory('t')).toMatchObject({ kind: 'ok' });
+  });
+
+  // 頁信封壞掉與事件壞掉是同一件事：歷史裡的壞資料每次重連都抓到同一份，呼叫端要能用同一個型別認出「重連沒有用」（#1555，PM 審查）。
+  it.each([
+    ['events', { events: 'nope', firstSeq: 0, throughSeq: 0, hasMore: false, legacy: false }],
+    ['firstSeq', { events: [], firstSeq: '0', throughSeq: 0, hasMore: false, legacy: false }],
+    ['throughSeq', { events: [], firstSeq: 0, hasMore: false, legacy: false }],
+    ['hasMore', { events: [], firstSeq: 0, throughSeq: 0, hasMore: 'no', legacy: false }],
+    ['legacy', { events: [], firstSeq: 0, throughSeq: 0, hasMore: false, legacy: null }],
+    ['result', null],
+    ['result', 'oops'],
+  ])(
+    '歷史頁的 %s 欄位不對：threadHistory 與 subagentHistory 都拋 WireProtocolError，field 指名那一格',
+    async (field, result) => {
+      const client = createWireClient({
+        baseUrl: 'http://agent.test/',
+        fetch: async () => Response.json({ type: 'success', result }),
+      });
+      for (const call of [
+        () => client.threadHistory('t'),
+        () => client.subagentHistory('t', 'bg-0123456789ab'),
+      ]) {
+        const error = await call().then(
+          () => undefined,
+          (reason: unknown) => reason,
+        );
+        expect(error).toBeInstanceOf(WireProtocolError);
+        expect((error as WireProtocolError).field).toBe(field);
+      }
+    },
+  );
+
   it('下行預設訂全部放行的 channel，回來的是解好的封包', async () => {
     const { calls, client } = stub(() => sseResponse([FRAME]));
     const events = await client.openEvents('t2');
@@ -91,6 +348,55 @@ describe('瀏覽器端的 client', () => {
       Response.json(errorResponse(null, 'not_supported', '不支援 since')),
     );
     await expect(client.openEvents('t3')).rejects.toThrow('不支援 since');
+  });
+
+  it('協定層的拒絕丟 WireRejectedError，碼與原文各有欄位，message 逐字不變（#1481）', async () => {
+    const packet = errorResponse(null, 'thread_at_capacity', '這台 server 的 thread 數已到上限');
+    const { client } = stub(() => Response.json(packet));
+    const error: unknown = await client.openEvents('t3').then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(WireRejectedError);
+    expect(error).toBeInstanceOf(Error);
+    const rejected = error as WireRejectedError;
+    expect(rejected.name).toBe('WireRejectedError');
+    expect(rejected.code).toBe('thread_at_capacity');
+    expect(rejected.serverMessage).toBe('這台 server 的 thread 數已到上限');
+    expect(rejected.message).toBe(`下行被拒：${JSON.stringify(packet)}`);
+  });
+
+  it('error 封包沒給 message：serverMessage 是固定說明；碼不是字串就不算 error 封包', async () => {
+    const noMessage = stub(() => Response.json({ type: 'error', error: 'unknown_error' }));
+    await expect(noMessage.client.openEvents('t3')).rejects.toMatchObject({
+      code: 'unknown_error',
+      serverMessage: '對方拒絕了，但沒有說明原因',
+    });
+    for (const body of [{ type: 'error', error: 7 }, { type: 'error' }, { type: 'success' }]) {
+      const { client } = stub(() => Response.json(body));
+      const error: unknown = await client.openEvents('t3').then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WireRejectedError);
+      expect((error as Error).message).toBe(`下行被拒：${JSON.stringify(body)}`);
+    }
+  });
+
+  it('body 解析不出 error 封包（純文字、null、壞 JSON）：照舊丟一般的 Error，message 是原文', async () => {
+    for (const text of ['sorry', 'null', '[1]', '{"type":"error"']) {
+      const { client } = stub(
+        () => new Response(text, { headers: { 'content-type': 'text/plain' } }),
+      );
+      const error: unknown = await client.openEvents('t3').then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WireRejectedError);
+      expect((error as Error).message).toBe(`下行被拒：${text}`);
+    }
   });
 
   it('載體層的錯照 status 報出來', async () => {
@@ -128,12 +434,93 @@ describe('瀏覽器端的 client', () => {
     expect(calls[1]?.body).toEqual({ id: 2, method: 'slash.run', params: { line: '/plan' } });
   });
 
+  it('descriptor 的 runWhileBusy（#1516）：字串照實讀回、凍過；沒有或不是字串陣列就整格不放', async () => {
+    const { client } = stub(() =>
+      Response.json(
+        successResponse(1, {
+          commands: [
+            { name: 'goal', description: '目標', runWhileBusy: ['pause'] },
+            { name: 'plan', description: '計劃' },
+            { name: 'a', description: 'a', runWhileBusy: [] },
+            { name: 'b', description: 'b', runWhileBusy: 'pause' },
+            { name: 'c', description: 'c', runWhileBusy: ['pause', 1, null] },
+          ],
+        }),
+      ),
+    );
+    const listed = await client.slashList('t5');
+    if (listed.kind !== 'ok') throw new Error('slash.list 應該成功');
+    expect(listed.commands).toEqual([
+      { name: 'goal', description: '目標', runWhileBusy: ['pause'] },
+      { name: 'plan', description: '計劃' },
+      { name: 'a', description: 'a' },
+      { name: 'b', description: 'b' },
+      { name: 'c', description: 'c', runWhileBusy: ['pause'] },
+    ]);
+    expect(Object.isFrozen(listed.commands[0]?.runWhileBusy)).toBe(true);
+  });
+
+  it('goal.pause（#1516）：走同一條 RPC family，業務失敗在成功回應裡原樣交出', async () => {
+    const stale = {
+      ok: false,
+      error: { code: 'goal-stale', current: { id: 'g1', revision: 3, phase: 'active' } },
+    };
+    const { calls, client } = stub(() => Response.json(successResponse(1, stale)));
+    const outcome = await client.goalPause('t6', { goalId: 'g1', revision: 2 });
+    expect(outcome).toEqual({ kind: 'ok', result: stale });
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t6/commands/goal.pause');
+    expect(calls[0]?.body).toEqual({
+      id: 1,
+      method: 'goal.pause',
+      params: { goalId: 'g1', revision: 2 },
+    });
+  });
+
+  it('斜線命令帶附件（#732）：descriptor 的 input.attachments 照實讀回；slashRun 的 attachments 非空才送', async () => {
+    const { calls, client } = stub((seen) =>
+      Response.json(
+        String(seen.url).endsWith('slash.list')
+          ? successResponse(1, {
+              commands: [
+                {
+                  name: 'goal',
+                  description: '目標',
+                  input: { hint: '[<目標>]', attachments: true },
+                },
+                { name: 'plan', description: '計劃', input: { hint: '[off]', attachments: false } },
+                { name: 'x', description: 'x', input: { hint: 'h', attachments: 'yes' } },
+              ],
+            })
+          : successResponse(2, { kind: 'success', command_id: 'cmd-1' }),
+      ),
+    );
+    const listed = await client.slashList('t5');
+    expect(listed).toEqual({
+      kind: 'ok',
+      commands: [
+        { name: 'goal', description: '目標', input: { hint: '[<目標>]', attachments: true } },
+        { name: 'plan', description: '計劃', input: { hint: '[off]' } },
+        { name: 'x', description: 'x', input: { hint: 'h' } },
+      ],
+    });
+    const file = { type: 'file', receiptId: 'r1' } as const;
+    await client.slashRun('t5', '/goal 目標', [file]);
+    await client.slashRun('t5', '/goal 目標', []);
+    expect(calls[1]?.body).toEqual({
+      id: 2,
+      method: 'slash.run',
+      params: { line: '/goal 目標', attachments: [file] },
+    });
+    expect(calls[2]?.body).toEqual({ id: 3, method: 'slash.run', params: { line: '/goal 目標' } });
+  });
+
   it('這條線拒絕發派與命令自己失敗，回來的是兩種形狀', async () => {
     const refused = stub(() =>
       Response.json(errorResponse(1, 'invalid_argument', '這條 thread 正在跑')),
     );
     expect(await refused.client.slashRun('t6', '/plan')).toEqual({
       kind: 'rejected',
+      code: 'invalid_argument',
       message: '這條 thread 正在跑',
     });
 
@@ -165,5 +552,311 @@ describe('瀏覽器端的 client', () => {
     await expect(noList.client.slashList('t8')).rejects.toThrow('沒有 commands 陣列');
     const badDescriptor = stub(() => Response.json(successResponse(1, { commands: [{}] })));
     await expect(badDescriptor.client.slashList('t8')).rejects.toThrow('不認得的 descriptor');
+  });
+
+  it('技能清單（#1574 N0929）：路徑與封包講 skill.list；每列逐格重建，多的格子（正文）不帶過去、凍過', async () => {
+    const { calls, client } = stub(() =>
+      Response.json(
+        successResponse(1, {
+          skills: [
+            {
+              name: 'deploy',
+              description: '部署',
+              path: '/skills/deploy/SKILL.md',
+              modelInvocable: false,
+              content: '正文',
+            },
+            {
+              name: 'normal',
+              description: '一般',
+              whenToUse: '平常',
+              modelInvocable: true,
+              body: '正文',
+            },
+          ],
+        }),
+      ),
+    );
+    const listed = await client.skillList('t9');
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t9/commands/skill.list');
+    expect(calls[0]?.body).toEqual({ id: 1, method: 'skill.list' });
+    if (listed.kind !== 'ok') throw new Error('skill.list 應該成功');
+    // `toStrictEqual` 連「多一格」都分得出：伺服器多送的 `content`／`body` 不在 client 交出的物件上。
+    expect(listed.skills).toStrictEqual([
+      {
+        name: 'deploy',
+        description: '部署',
+        path: '/skills/deploy/SKILL.md',
+        modelInvocable: false,
+      },
+      { name: 'normal', description: '一般', whenToUse: '平常', modelInvocable: true },
+    ]);
+    expect(Object.isFrozen(listed.skills[0])).toBe(true);
+  });
+
+  it.each([
+    ['沒有 skills 陣列', {}, '沒有 skills 陣列'],
+    ['少 modelInvocable', { skills: [{ name: 'a', description: 'a' }] }, '不認得的一列'],
+    [
+      'modelInvocable 不是布林',
+      { skills: [{ name: 'a', description: 'a', modelInvocable: 'yes' }] },
+      '不認得的一列',
+    ],
+    ['少 description', { skills: [{ name: 'a', modelInvocable: true }] }, '不認得的一列'],
+    [
+      'whenToUse 不是字串',
+      { skills: [{ name: 'a', description: 'a', modelInvocable: true, whenToUse: 1 }] },
+      '不認得的一列',
+    ],
+    [
+      'path 不是字串',
+      { skills: [{ name: 'a', description: 'a', modelInvocable: true, path: null }] },
+      '不認得的一列',
+    ],
+    ['一列是 null', { skills: [null] }, '不認得的一列'],
+  ] as const)('skill.list 的格子不對（%s）就拋錯，不默默收下', async (_name, result, message) => {
+    const { client } = stub(() => Response.json(successResponse(1, result)));
+    await expect(client.skillList('t9')).rejects.toThrow(message);
+  });
+});
+
+describe('列檔（#651）', () => {
+  it('GET 路徑掛在 thread 底下，query 原文帶上，帶 JSON header 與呼叫者的 signal', async () => {
+    const seen: { url: string; method?: string; type: string | null; signal?: AbortSignal }[] = [];
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async (input, init) => {
+        seen.push({
+          url: String(input),
+          method: init?.method,
+          type: new Headers(init?.headers).get('content-type'),
+          signal: init?.signal ?? undefined,
+        });
+        return Response.json(
+          successResponse(0, {
+            available: true,
+            candidates: [{ path: '/a b/c.ts', kind: 'file' }],
+          }),
+        );
+      },
+    });
+    const controller = new AbortController();
+    const outcome = await client.fileReferences('t 1', '/a b/c', controller.signal);
+    expect(seen).toEqual([
+      {
+        url: 'http://agent.test/threads/t%201/file-references?query=%2Fa+b%2Fc',
+        method: 'GET',
+        type: 'application/json',
+        signal: controller.signal,
+      },
+    ]);
+    expect(outcome).toEqual({
+      kind: 'ok',
+      result: { available: true, candidates: [{ path: '/a b/c.ts', kind: 'file' }] },
+    });
+  });
+
+  it('「不提供」與協定層的拒絕是兩種形狀', async () => {
+    const reply = (body: unknown) =>
+      createWireClient({ baseUrl: 'http://agent.test', fetch: async () => Response.json(body) });
+    expect(await reply(successResponse(0, { available: false })).fileReferences('t', '')).toEqual({
+      kind: 'ok',
+      result: { available: false },
+    });
+    expect(
+      await reply(errorResponse(null, 'unknown_error', '建不起來')).fileReferences('t', ''),
+    ).toEqual({ kind: 'rejected', code: 'unknown_error', message: '建不起來' });
+  });
+});
+
+describe('列會話候選（#713）', () => {
+  const candidate = {
+    sessionId: 's/1',
+    label: '標題',
+    cwd: '/專案',
+    sameWorkspace: true,
+    createdAt: 1,
+    updatedAt: 2,
+    parentSessionId: 'p',
+    parentLabel: '父',
+    mention: '@[標題](nexus-session:x)',
+  };
+
+  it('GET 路徑掛在 thread 底下，query 原文帶上，帶 JSON header 與呼叫者的 signal', async () => {
+    const seen: { url: string; method?: string; type: string | null; signal?: AbortSignal }[] = [];
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async (input, init) => {
+        seen.push({
+          url: String(input),
+          method: init?.method,
+          type: new Headers(init?.headers).get('content-type'),
+          signal: init?.signal ?? undefined,
+        });
+        return Response.json(
+          successResponse(0, {
+            available: true,
+            candidates: [
+              candidate,
+              {
+                ...candidate,
+                sessionId: 'n',
+                cwd: undefined,
+                parentSessionId: undefined,
+                parentLabel: undefined,
+              },
+            ],
+          }),
+        );
+      },
+    });
+    const controller = new AbortController();
+    const outcome = await client.sessionReferences('t 1', '標 題', controller.signal);
+    expect(seen).toEqual([
+      {
+        url: 'http://agent.test/threads/t%201/session-references?query=%E6%A8%99+%E9%A1%8C',
+        method: 'GET',
+        type: 'application/json',
+        signal: controller.signal,
+      },
+    ]);
+    expect(outcome.kind).toBe('ok');
+    if (outcome.kind !== 'ok' || !outcome.result.available) throw new Error('不該走到這裡');
+    expect(outcome.result.candidates[0]).toEqual(candidate);
+    // 選填的欄位沒有就是沒有這個鍵，不是 undefined。
+    expect(Object.keys(outcome.result.candidates[1] ?? {})).not.toContain('cwd');
+    expect(Object.keys(outcome.result.candidates[1] ?? {})).not.toContain('parentSessionId');
+  });
+
+  it('「不提供」與協定層的拒絕是兩種形狀', async () => {
+    const reply = (body: unknown) =>
+      createWireClient({ baseUrl: 'http://agent.test', fetch: async () => Response.json(body) });
+    expect(
+      await reply(successResponse(0, { available: false })).sessionReferences('t', ''),
+    ).toEqual({
+      kind: 'ok',
+      result: { available: false },
+    });
+    expect(
+      await reply(errorResponse(null, 'unknown_error', '讀不了')).sessionReferences('t', ''),
+    ).toEqual({ kind: 'rejected', code: 'unknown_error', message: '讀不了' });
+  });
+
+  it.each([
+    { ...candidate, sessionId: 1 },
+    { ...candidate, sameWorkspace: 'yes' },
+    { ...candidate, cwd: 3 },
+    { ...candidate, mention: undefined },
+    null,
+  ])('形狀不對的候選整個拒絕：%j', async (bad) => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json(successResponse(0, { available: true, candidates: [bad] })),
+    });
+    await expect(client.sessionReferences('t', '')).rejects.toThrow('不認得的候選');
+  });
+});
+
+describe('被拒時把 server 的錯誤碼交給呼叫端（#764）', () => {
+  // 每個會回 `rejected` 的方法一列：server 回什麼碼，呼叫端就拿到什麼碼，原樣、不改寫。
+  // 回的碼刻意用每個方法不會自己合成的那一個，這樣「碼從哪來」只有一個答案。
+  const rejectedCalls: readonly (readonly [
+    string,
+    (client: ReturnType<typeof createWireClient>) => Promise<unknown>,
+  ])[] = [
+    ['slashList', (c) => c.slashList('t')],
+    ['skillList', (c) => c.skillList('t')],
+    ['slashRun', (c) => c.slashRun('t', '/plan')],
+    ['goalPause', (c) => c.goalPause('t', { goalId: 'g', revision: 1 })],
+    ['feedbackPut', (c) => c.feedbackPut('t', {} as never)],
+    ['feedbackDelete', (c) => c.feedbackDelete('t', {} as never)],
+    ['feedbackList', (c) => c.feedbackList('t')],
+    ['feedbackRecord', (c) => c.feedbackRecord('t', {} as never)],
+    ['listThreads', (c) => c.listThreads()],
+    ['searchThreads', (c) => c.searchThreads('q')],
+    ['threadHistory', (c) => c.threadHistory('t')],
+    ['subagentHistory', (c) => c.subagentHistory('t', 'bg-0123456789ab')],
+    ['trajectoryTurn', (c) => c.trajectoryTurn('t', {} as never)],
+    ['fileReferences', (c) => c.fileReferences('t', '')],
+    ['sessionReferences', (c) => c.sessionReferences('t', '')],
+  ];
+
+  it.each(rejectedCalls)('%s 被拒時帶 server 的碼與原因', async (_name, call) => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json(errorResponse(1, 'not_supported', '這個部署沒開')),
+    });
+    expect(await call(client)).toEqual({
+      kind: 'rejected',
+      code: 'not_supported',
+      message: '這個部署沒開',
+    });
+  });
+
+  it('server 的錯誤缺 `error` 欄位時沒有碼，不拿字串頂；上行與 GET 兩條路都一樣', async () => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json({ type: 'error', id: 1, message: '沒說碼' }),
+    });
+    for (const outcome of [await client.slashList('t'), await client.listThreads()]) {
+      expect(outcome).toEqual({ kind: 'rejected', message: '沒說碼' });
+      expect(outcome).not.toHaveProperty('code');
+    }
+  });
+
+  it('client 自己合成的拒絕（回饋的回應看不懂）沒有碼，不假造一個', async () => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json(successResponse(1, { nope: true })),
+    });
+    const outcome = await client.feedbackList('t');
+    expect(outcome.kind).toBe('rejected');
+    expect(outcome).not.toHaveProperty('code');
+  });
+});
+
+/**
+ * 型別層的釘子（[#1166](https://github.com/DemianLi/nexus-agent/issues/1166)）：`WireErrorResponse` 曾經對帶索引簽名的交集做
+ * `Omit`，具名鍵全掉了，`UplinkResult` 在 `type === 'error'` 之後不收窄、`message` 讀出 `any`。
+ * 這一組由 `pnpm -r run typecheck` 檢；跑起來只是無害的空操作。
+ */
+describe('WireErrorResponse 的型別', () => {
+  it('具名鍵還在：message 是 string、error 是 WireErrorCode、type 是字面量 error', () => {
+    expectTypeOf<WireErrorResponse['message']>().toEqualTypeOf<string>();
+    expectTypeOf<WireErrorResponse['error']>().toEqualTypeOf<WireErrorCode>();
+    expectTypeOf<WireErrorResponse['type']>().toEqualTypeOf<'error'>();
+  });
+
+  it('UplinkResult 在 type === error 之後收窄，message 是 string 不是 any', () => {
+    const narrow = (result: UplinkResult) => {
+      if (result.type === 'error') {
+        expectTypeOf(result.message).toEqualTypeOf<string>();
+      }
+    };
+    expect(typeof narrow).toBe('function');
+    expect(errorResponse(1, 'invalid_argument', '壞了').message).toBe('壞了');
+  });
+});
+
+/**
+ * 型別層的釘子（#1580 審查 N1）：client 把結果原樣轉交、web 收的錯誤碼是 `string`，所以碼拼錯或成功值的鍵改名，
+ * 執行期測試與下游 tsc 都還是綠的。這一組由 `pnpm -r run typecheck` 檢；跑起來只是無害的空操作。
+ */
+describe('thread.rename／thread.fork 結果的型別', () => {
+  it('分叉：錯誤碼恰好兩個，成功值只有 threadId', () => {
+    expectTypeOf<ThreadForkError['code']>().toEqualTypeOf<
+      'thread_not_found' | 'fork_unavailable'
+    >();
+    expectTypeOf<Extract<ThreadForkResult, { ok: true }>['value']>().toEqualTypeOf<{
+      readonly threadId: string;
+    }>();
+  });
+
+  it('改名：錯誤碼恰好兩個，成功值是 title 與 seq', () => {
+    expectTypeOf<ThreadRenameError['code']>().toEqualTypeOf<'thread_not_found' | 'title_invalid'>();
+    expectTypeOf<Extract<ThreadRenameResult, { ok: true }>['value']>().toEqualTypeOf<{
+      readonly title: string;
+      readonly seq: number;
+    }>();
   });
 });

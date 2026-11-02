@@ -220,15 +220,14 @@ describe('換手層上的提問面板', () => {
     expect(within(approvalPanel).queryByRole('button', { name: /收起/ })).toBeNull();
   });
 
-  it('收起再展開，答到一半的還在（內容保持掛載）；關完才 hidden', async () => {
+  it('收起再展開，答到一半的還在（內容保持掛載）；收起的同一輪就 hidden（#1687：沒有高度動效）', () => {
     render(<Harness pendings={[QUESTIONS]} />);
     fireEvent.click(radio('週二'));
     fireEvent.click(within(panel()).getByRole('button', { name: '收起這些問題' }));
     const content = panel().querySelector('[data-slot="collapsible-content"]')!;
-    // 關的動效那 150ms 裡還看得到、但已經進不去。
-    expect(content.hasAttribute('hidden')).toBe(false);
+    // 不等計時器、不等下一輪：點下去這一輪就藏起來，也進不去。
+    expect(content.hasAttribute('hidden')).toBe(true);
     expect(content.hasAttribute('inert')).toBe(true);
-    await waitFor(() => expect(content.hasAttribute('hidden')).toBe(true));
 
     fireEvent.click(within(panel()).getByRole('button', { name: '展開這些問題' }));
     expect(content.hasAttribute('hidden')).toBe(false);
@@ -256,5 +255,239 @@ describe('換手層上的提問面板', () => {
   it('axe：提問面板（亮色；§11 絆索 6 的「1280 亮」）', async () => {
     render(<Harness pendings={[question([FOOD, NAME])]} />);
     expect(await axeViolations(document.body)).toEqual([]);
+  });
+});
+
+/** 照 #652 的生產者（`exit_plan_mode`）問的那一題。 */
+const PLAN_REVIEW: QuestionItem = {
+  id: 'plan-review',
+  header: '計劃審核',
+  question: '同意這份計劃並離開計劃模式？',
+  detail: '# 改登入頁\n\n先做**錯誤訊息**：\n\n- 改成中文\n- 補測試',
+  options: [{ label: '同意' }, { label: '繼續規劃' }],
+  intent: { kind: 'plan-review', approve: '同意', callId: 'call-1' },
+};
+
+const detailOf = () => document.querySelector('[data-slot="question-detail"]');
+
+describe('題目帶 detail（認不出來的計劃審核也走這裡，#652；認得的換成 #654 的面板）', () => {
+  it('計劃全文畫成 markdown，放在題目那一組裡、選項前面', () => {
+    renderPanel(question([PLAN_REVIEW]));
+    const group = screen.getByRole('group', { name: /同意這份計劃並離開計劃模式？/ });
+    const detail = detailOf();
+    expect(detail).not.toBeNull();
+    expect(group.contains(detail)).toBe(true);
+    expect(within(group).getByRole('heading', { name: '改登入頁' })).toBeTruthy();
+    expect(
+      within(group)
+        .getAllByRole('listitem')
+        .map((li) => li.textContent),
+    ).toEqual(['改成中文', '補測試']);
+    expect(detail!.querySelector('strong')?.textContent).toBe('錯誤訊息');
+    expect(detail!.textContent).not.toContain('**');
+    // 在選項前面：先讀計劃，再選。
+    const firstChoice = radio('同意');
+    expect(detail!.compareDocumentPosition(firstChoice) & Node.DOCUMENT_POSITION_FOLLOWING).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it('答法跟一般提問一樣：送回選項標籤，不看 intent', () => {
+    const answers = renderPanel(question([PLAN_REVIEW]));
+    fireEvent.click(radio('同意'));
+    fireEvent.click(screen.getByRole('button', { name: '送出答案' }));
+    expect(answers).toEqual([[{ id: 'plan-review', selected: ['同意'] }]]);
+  });
+
+  it('沒有 detail、或只有空白的，不畫那一塊', () => {
+    renderPanel(question([DAY, { ...NAME, detail: '  \n ' }]));
+    expect(detailOf()).toBeNull();
+    fireEvent.click(radio('週一'));
+    fireEvent.click(screen.getByRole('button', { name: '下一題' }));
+    expect(currentTitle()).toContain('訪客姓名？');
+    expect(detailOf()).toBeNull();
+  });
+
+  it('axe：帶計劃全文的提問面板（亮、暗）', async () => {
+    const view = render(<Harness pendings={[question([PLAN_REVIEW])]} />);
+    expect(await axeViolations(document.body)).toEqual([]);
+    view.unmount();
+    document.documentElement.classList.add('dark');
+    render(<Harness pendings={[question([PLAN_REVIEW])]} />);
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
+});
+
+/** MCP server 反問（#1098）：來源、拒絕、取消。 */
+describe('MCP 反問（#1098）', () => {
+  const ORIGIN = {
+    kind: 'mcp-elicitation' as const,
+    server: 'files',
+    tool: 'delete_dir',
+    arguments: { path: '/tmp/x', recursive: true },
+  };
+  const asked = (): PendingQuestion => ({ ...question([DAY]), origin: ORIGIN });
+
+  function renderAsked(
+    props: {
+      onDecline?: () => void;
+      onDismiss?: () => void;
+      busy?: boolean;
+      pending?: PendingQuestion;
+    } = {},
+  ) {
+    // `main` 是地標：axe 的 region 規則要求內容在地標裡（真的畫面裡由換手層的 region 擔任）。
+    render(
+      <main>
+        <QuestionPanel
+          pending={props.pending ?? asked()}
+          busy={props.busy ?? false}
+          onAnswer={() => {}}
+          {...(props.onDecline === undefined ? {} : { onDecline: props.onDecline })}
+          {...(props.onDismiss === undefined ? {} : { onDismiss: props.onDismiss })}
+        />
+      </main>,
+    );
+  }
+
+  it('最上面講是哪台 server 的哪支工具在問，參數原文照畫（排版過的 JSON）', () => {
+    renderAsked();
+    const block = screen.getByTestId('question-origin');
+    expect(block.textContent).toContain('MCP 伺服器「files」的工具「delete_dir」在問你');
+    expect(screen.getByTestId('question-origin-arguments').textContent).toBe(
+      JSON.stringify(ORIGIN.arguments, null, 2),
+    );
+    // 在題目之前。
+    expect(
+      block.compareDocumentPosition(document.querySelector('fieldset')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('拒絕與取消各叫各的，都不是作答；答案那條路照舊', () => {
+    const onDecline = vi.fn();
+    const onDismiss = vi.fn();
+    const answers: QuestionAnswer[][] = [];
+    render(
+      <QuestionPanel
+        pending={asked()}
+        busy={false}
+        onAnswer={(a) => answers.push(a)}
+        onDecline={onDecline}
+        onDismiss={onDismiss}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '拒絕' }));
+    expect(onDecline).toHaveBeenCalledTimes(1);
+    expect(onDismiss).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(answers).toEqual([]);
+    fireEvent.click(radio('週一'));
+    fireEvent.click(screen.getByRole('button', { name: '送出答案' }));
+    expect(answers).toEqual([[{ id: 'day', selected: ['週一'] }]]);
+  });
+
+  it('連線斷了（busy）：拒絕與取消都停用', () => {
+    renderAsked({ onDecline: () => {}, onDismiss: () => {}, busy: true });
+    expect(screen.getByRole('button', { name: '拒絕' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: '取消' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('模型自己問的（沒有 origin）：沒有來源區塊，就算給了處理函式也沒有拒絕與取消；操作列照舊釘在底部', () => {
+    renderAsked({ pending: question([DAY]), onDecline: () => {}, onDismiss: () => {} });
+    expect(screen.queryByTestId('question-origin')).toBeNull();
+    expect(screen.queryByRole('button', { name: '拒絕' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '取消' })).toBeNull();
+    expect(document.querySelector('[data-slot="questionnaire-actions"]')?.className).toContain(
+      'sticky',
+    );
+  });
+
+  it('有 origin 但沒給處理函式：只有來源區塊，沒有那兩顆（舊接法不會多出按不動的鈕）', () => {
+    renderAsked();
+    expect(screen.getByTestId('question-origin')).toBeTruthy();
+    expect(screen.queryByTestId('origin-actions')).toBeNull();
+  });
+
+  it('參數轉不成 JSON（循環）也不炸，退回字串', () => {
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    renderAsked({ pending: { ...asked(), origin: { ...ORIGIN, arguments: loop } } });
+    expect(screen.getByTestId('question-origin-arguments').textContent).toBe('[object Object]');
+  });
+
+  it('axe：有來源與拒絕、取消的面板（亮、暗）', async () => {
+    renderAsked({ onDecline: () => {}, onDismiss: () => {} });
+    expect(await axeViolations(document.body)).toEqual([]);
+    cleanup();
+    document.documentElement.classList.add('dark');
+    renderAsked({ onDecline: () => {}, onDismiss: () => {} });
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
+});
+
+describe('「（推薦）」小標與換題高度（#1306）', () => {
+  const PICK: QuestionItem = {
+    id: 'pick',
+    question: '用哪個方案？',
+    options: [
+      { label: '方案甲（推薦）', description: '最快' },
+      { label: '方案乙(推薦)' },
+      { label: '方案丙' },
+    ],
+  };
+
+  it('字尾畫成小標，畫面上的標籤不再帶字尾；沒有字尾的不畫', () => {
+    renderPanel(question([PICK]));
+    const badges = screen.getAllByTestId('recommended-badge');
+    expect(badges.map((badge) => badge.textContent)).toEqual(['推薦', '推薦']);
+    const [first] = document.querySelectorAll('[data-slot="questionnaire-choice-label"]');
+    expect(first?.firstElementChild?.firstElementChild?.textContent).toBe('方案甲');
+    expect(
+      radio('方案丙')
+        .closest('[data-slot="questionnaire-choice"]')
+        ?.querySelector('[data-testid="recommended-badge"]'),
+    ).toBeNull();
+  });
+
+  it('輔助技術仍唸原字尾：選項名稱跟以前一樣', () => {
+    renderPanel(question([PICK]));
+    expect(screen.getByRole('radio', { name: /^方案甲（推薦）/ })).not.toBeNull();
+    expect(screen.getByRole('radio', { name: '方案乙（推薦）' })).not.toBeNull();
+  });
+
+  it('送出的答案仍是整個標籤，一字不差（全形、半形都是）', () => {
+    const answers = renderPanel(question([PICK, { ...PICK, id: 'again' }]));
+    fireEvent.click(screen.getByRole('radio', { name: /^方案甲/ }));
+    fireEvent.click(screen.getByRole('button', { name: '下一題' }));
+    // 其他題的 fieldset 是 `hidden`，`getAllByRole` 只抓得到當前這一題的。
+    fireEvent.click(screen.getByRole('radio', { name: /^方案乙/ }));
+    fireEvent.submit(screen.getByRole('progressbar').closest('form')!);
+    expect(answers).toEqual([
+      [
+        { id: 'pick', selected: ['方案甲（推薦）'] },
+        { id: 'again', selected: ['方案乙(推薦)'] },
+      ],
+    ]);
+  });
+
+  it('外框掛 motion-resize；換題時高度不同就過渡（jsdom 沒有版面：舊高量 100、新高量 240）', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(100);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      height: 240,
+    } as DOMRect);
+    try {
+      renderPanel(question([DAY, NAME]));
+      const surface = screen.getByRole('progressbar').closest('.motion-resize') as HTMLElement;
+      expect(surface).not.toBeNull();
+      expect(surface.hasAttribute('data-resizing')).toBe(false);
+      fireEvent.click(radio('週一'));
+      fireEvent.click(screen.getByRole('button', { name: '下一題' }));
+      expect(surface.hasAttribute('data-resizing')).toBe(true);
+      expect(surface.style.height).toBe('240px');
+    } finally {
+      vi.restoreAllMocks();
+    }
   });
 });

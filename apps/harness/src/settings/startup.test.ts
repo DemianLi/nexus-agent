@@ -17,18 +17,17 @@
  * **零憑證、零外部連線**：模型是出貨清單裡的假模型，session log 落在暫存目錄。
  */
 
-import { mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { appendHumanTurn, emptyConversation, reduceConversation } from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { serveClient } from '../fixtures.js';
+import { foldTurn, serveClient } from '../fixtures.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
+import { closedSessionEvents, sessionsUnder } from '../session-files.fixture.js';
 import { sessionPersistencePlugin } from '@nexus/core';
 
 import { browserSessionPlugin, DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS } from './browser-session.js';
@@ -39,14 +38,19 @@ import {
   DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
 } from './deliverable-files.js';
 import { liveModelPlugin } from './live-model.js';
-import { startupSetting } from './startup.js';
+import { startupEntryMounted, startupSetting } from './startup.js';
+import { projectionFlushPlugin } from './projection-flush.js';
 import { toolTextPlugin } from './tool-text.js';
 import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-title.js';
+import { threadSearchPlugin } from './thread-search.js';
+import { threadTitleLlmPlugin } from './thread-title-llm.js';
 
 const OVERRIDE_PATCH = 'src/settings/settings-override.patch.yml';
 const DISABLED_PATCH = 'src/settings/settings-disabled.patch.yml';
 /** 關掉耐久檢查點（#599），只給「落盤窗口」那條用，理由在夾具檔頭。 */
 const CHECKPOINT_OFF_PATCH = 'src/settings/checkpoint-off.patch.yml';
+/** 關掉落盤本身（#612）。 */
+const PERSISTENCE_OFF_PATCH = 'src/settings/persistence-off.patch.yml';
 /** 夠長，裁到 6 個位元組一定看得出來。 */
 const PROMPT = 'abcdefghij 這一句話當標題。';
 
@@ -84,34 +88,20 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
   const client = await serveClient(server);
   const events = await client.openEvents(threadId);
   await client.runStart(threadId, PROMPT);
-  let state: ConversationState = appendHumanTurn(emptyConversation(), PROMPT);
-  while (state.status === 'running') {
-    const next = await events.next();
-    if (next.done === true) break;
-    state = reduceConversation(state, next.value);
-  }
+  await foldTurn(events);
   await events.return?.(undefined);
 }
 
 /**
- * 那個 `--session-log` 根底下所有 `.jsonl` 的事件行數合計。
+ * 那個 `--session-log` 根底下每一份會話落了盤的事件數合計（經 `session-files.fixture.ts`，#1868）。
  *
- * **只數 `.jsonl`**：`.lock`（租約）與 `.header.json`（表頭）在第一顆事件之前就存在了，
- * 數進去的話兩臂都非零，這條測試會永遠綠。實測過：窗口還沒到期時目錄裡只有 `.lock`。
+ * **只數事件**：租約與表頭在第一顆事件之前就存在了，數檔的話兩臂都非零，這條測試會永遠綠。
+ * 實測過：窗口還沒到期時目錄裡只有租約。
  */
 async function countPersistedEvents(root: string): Promise<number> {
   let total = 0;
-  async function walk(dir: string): Promise<void> {
-    for (const entry of await readdir(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else if (entry.name.endsWith('.jsonl')) {
-        const text = await readFile(path, 'utf8');
-        total += text.split('\n').filter((line) => line !== '').length;
-      }
-    }
-  }
-  await walk(root);
+  for (const session of await sessionsUnder(root))
+    total += (await closedSessionEvents(session)).length;
   return total;
 }
 
@@ -129,32 +119,39 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
     expect(await rawSetCookie(patched)).toContain('Max-Age=86400');
   });
 
-  it('標題上限：帶 patch 的那台裁到 6 個位元組，不帶的是完整的第一句話', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nexus-settings-'));
-
+  it('標題上限：帶 patch 的那台寫進日誌的標題裁到 6 個位元組，不帶的是完整的第一句話', async () => {
     // **寫的那一台先收掉再列。** 落盤是排空的（`DEFAULT_PERSISTENCE_WINDOW_MS`），同一台 server
     // 上跑完一輪就馬上列，機器忙的時候讀到的是還沒寫進去的空標題——量過：單跑綠、整包紅。
     // 關掉那一台才是「那一輪真的落地了」的判準，同 `serve-session-list.test.ts`。
-    const writer = await start(['--session-log', root]);
-    await driveTurn(writer, 'alpha');
-    await stop(writer);
+    async function write(root: string, args: readonly string[]): Promise<void> {
+      const writer = await start(['--session-log', root, ...args]);
+      await driveTurn(writer, 'alpha');
+      await stop(writer);
+    }
+    async function listedTitle(root: string, args: readonly string[]): Promise<string> {
+      const reader = await start(['--session-log', root, ...args]);
+      const list = await (await serveClient(reader)).listThreads();
+      await stop(reader);
+      if (list.kind !== 'ok') throw new Error('列不出來');
+      return list.result.items[0]?.title ?? '';
+    }
 
-    const bare = await start(['--session-log', root]);
-    const bareList = await (await serveClient(bare)).listThreads();
-    await stop(bare);
-    if (bareList.kind !== 'ok') throw new Error('列不出來');
-    const bareTitle = bareList.result.items[0]?.title ?? '';
+    // 標題在第一句開跑時就寫進日誌（#647），截的是**寫的那一台**的上限：兩臂各寫各的，只差那份 patch。
+    const bareRoot = await mkdtemp(join(tmpdir(), 'nexus-settings-bare-'));
+    await write(bareRoot, []);
+    const bareTitle = await listedTitle(bareRoot, []);
     // 前提：預設上限（40 位元組）底下這句話是**完整**的。不然兩臂的差別證不了是 patch 造成的。
     expect(bareTitle).toBe(PROMPT);
 
-    const patched = await start(['--session-log', root, '--patch', OVERRIDE_PATCH]);
-    const patchedList = await (await serveClient(patched)).listThreads();
-    if (patchedList.kind !== 'ok') throw new Error('列不出來');
-    const patchedTitle = patchedList.result.items[0]?.title ?? '';
-    // **同一份日誌**（同一個 `--session-log` 根、同一條 thread，第二台一個位元組都沒寫），
-    // 所以兩臂的差別只可能來自那份 patch。
+    const patchedRoot = await mkdtemp(join(tmpdir(), 'nexus-settings-patched-'));
+    await write(patchedRoot, ['--patch', OVERRIDE_PATCH]);
+    const patchedTitle = await listedTitle(patchedRoot, ['--patch', OVERRIDE_PATCH]);
     expect(Buffer.byteLength(patchedTitle, 'utf8')).toBeLessThanOrEqual(6);
     expect(patchedTitle).not.toBe(bareTitle);
+
+    // **記下的標題不會被讀的那一台重截**：latest-wins，同 dsh 的 `title` 投影。帶 patch 的那台列不帶 patch
+    // 寫的日誌，拿到的仍是完整的那句。上限只管還沒有標題的舊日誌（當場推的那一支，見 `session-title.ts`）。
+    expect(await listedTitle(bareRoot, ['--patch', OVERRIDE_PATCH])).toBe(PROMPT);
   });
 
   it('落盤窗口：帶 patch 的那台等 300 毫秒還沒寫，不帶的早就寫完了', async () => {
@@ -199,6 +196,43 @@ describe('設定覆寫在真的 serve 上生效（#529）', () => {
   });
 });
 
+/**
+ * 落盤那一列掛了沒（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。**它跟
+ * `startupSetting` 對「關掉」的答案刻意相反**：那一支把關掉當成沒講、回預設值，這一支把關掉當成
+ * 沒掛。拿錯一支，關掉就讀成「開著」。
+ */
+describe('startupEntryMounted', () => {
+  it('掛著：true；關掉：false；沒有那一列：照 dsh 算沒掛', () => {
+    const entry = { plugin: sessionPersistencePlugin, id: 'session-persistence' };
+    expect(startupEntryMounted([entry], sessionPersistencePlugin)).toBe(true);
+    expect(startupEntryMounted([{ ...entry, disabled: false }], sessionPersistencePlugin)).toBe(
+      true,
+    );
+    expect(startupEntryMounted([{ ...entry, disabled: true }], sessionPersistencePlugin)).toBe(
+      false,
+    );
+    expect(startupEntryMounted([], sessionPersistencePlugin)).toBe(false);
+    // 對照：同一份關掉的清單，`startupSetting` 照樣回得出窗口——所以它判不了開關。
+    expect(startupSetting([{ ...entry, disabled: true }], sessionPersistencePlugin).windowMs).toBe(
+      10,
+    );
+  });
+
+  it('出貨清單上掛著；疊上關掉的夾具就沒掛', async () => {
+    expect(
+      startupEntryMounted(
+        (await loadDefaultPlugins({ env: {} })).plugins,
+        sessionPersistencePlugin,
+      ),
+    ).toBe(true);
+    const { plugins: off } = await loadDefaultPlugins({
+      env: {},
+      patches: [PERSISTENCE_OFF_PATCH],
+    });
+    expect(startupEntryMounted(off, sessionPersistencePlugin)).toBe(false);
+  });
+});
+
 describe('startupSetting', () => {
   it('清單上沒有那一列：回 schema 的預設值', () => {
     expect(startupSetting([], threadTitlePlugin).maxWords).toBe(DEFAULT_THREAD_TITLE_MAX_WORDS);
@@ -221,9 +255,22 @@ describe('startupSetting', () => {
     ).toThrow(/thread-title/u);
   });
 
-  it('出貨清單上真的讀得到那五列——不是只有手搭的清單走得通', async () => {
-    const plugins = await loadDefaultPlugins({ env: {} });
+  it('出貨清單上真的讀得到那七列——不是只有手搭的清單走得通', async () => {
+    const { plugins } = await loadDefaultPlugins({ env: {} });
     expect(startupSetting(plugins, threadTitlePlugin).maxBytes).toBe(40);
+    expect(startupSetting(plugins, threadTitlePlugin).maxTitleBytes).toBe(80);
+    // 字面值，理由同下一段：照 dsh base 的 `session-title-llm`（#650）。
+    expect(startupSetting(plugins, threadTitleLlmPlugin)).toEqual({
+      targetWords: 5,
+      targetCjkCharacters: 10,
+      maxInputBytes: 4096,
+      maxOutputTokens: 64,
+      timeoutMs: 60000,
+    });
+    expect(startupEntryMounted(plugins, threadTitleLlmPlugin)).toBe(true);
+    // 內容搜尋（#631）：掛著、但出廠不開。兩件事分開問，同上面那一列。
+    expect(startupSetting(plugins, threadSearchPlugin)).toEqual({ openAt: 'never' });
+    expect(startupEntryMounted(plugins, threadSearchPlugin)).toBe(true);
     expect(startupSetting(plugins, browserSessionPlugin).maxAgeDays).toBe(30);
     // **字面值，不是那三個常數**：出貨那一列與 schema 的預設今天是同一個數字，兩邊都讀常數的話
     // 改掉常數兩邊一起動，這一條就再也分不出「那一列在講話」與「那一列不見了」。
@@ -237,10 +284,45 @@ describe('startupSetting', () => {
     // 字面值，理由同上：出貨那一列、schema 預設、`live-model.ts` 的常數是同一組數字（#545）。
     expect(startupSetting(plugins, liveModelPlugin)).toEqual({
       baseUrl: 'https://integrate.api.nvidia.com/v1',
-      modelId: 'nvidia/nemotron-3-super-120b-a12b',
-      maxOutputTokens: 16384,
-      timeoutMs: 90000,
-      maxRetries: 6,
+      // #1604：金鑰的名字，出廠寫出來、值就是預設。
+      apiKeyEnv: 'NVIDIA_API_KEY',
+      modelId: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+      timeoutMs: 180000,
+      streamIdleTimeoutMs: 90000,
+      // #1505：出廠不設 `maxConcurrentRequests`（不限），排隊上限 60 秒。
+      maxWaitMs: 60000,
+      retryPolicy: {
+        mode: 'normal',
+        maxRetries: 6,
+        retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+        backoff: { initialDelayMs: 500, maxDelayMs: 10000, jitterRatio: 0.1 },
+      },
+      models: [
+        {
+          id: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+          contextWindow: 784369,
+          maxTokens: 16384,
+          input: ['text'],
+          reasoningEfforts: { off: null, default: 'default' },
+          tokenizer: { digits: 'single' },
+          compat: { chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' } } },
+        },
+        // 11b 宣告純文字（帶 tools 就拒圖）、90b 才收圖（#732 實跑）。`maxTokens` 與窗口的出處見 `cordis.yml` 的註解（2026-10-09 真端點量過）。
+        {
+          id: 'meta/llama-3.2-11b-vision-instruct',
+          contextWindow: 131072,
+          maxTokens: 4096,
+          input: ['text'],
+        },
+        {
+          id: 'meta/llama-3.2-90b-vision-instruct',
+          contextWindow: 32768,
+          maxTokens: 4096,
+          input: ['text', 'image'],
+          // 端點每次請求最多一張圖（#1270 實測，見 `cordis.yml`）。
+          imageBudget: { maxImages: 1 },
+        },
+      ],
     });
   });
 
@@ -266,8 +348,8 @@ describe('startupSetting', () => {
 
   it('serve 起動期解出工具文字那一列，而且真的傳給 handler——結構性的', async () => {
     // **同 `deliverable-files` 那一條的處境**（#536）：`serve.ts → createWireHandler` 這一跳
-    // 沒有行為觀察點——產品路徑上的假模型只會 echo 一句十幾個位元組的話，造不出一段會被
-    // 300 位元組上限截到的工具結果。實測過：把 `serve.ts` 那一行拿掉，全套 1243 條全綠。
+    // 沒有行為觀察點——產品路徑上的假模型只會 echo 一句十幾個位元組的話，造不出一份會被
+    // 300 位元組上限截到的 meta 或摘要（結果文字自 #736 起不截）。實測過：把 `serve.ts` 那一行拿掉，全套 1243 條全綠。
     //
     // 所以這裡釘原始碼。**handler 往下那兩跳有真的行為測試**（`serve-history.test.ts` 走 route、
     // `tool-card-from-log.test.ts` 走即時），紅的分工因此是：那兩條管轉發，這一條管接線。
@@ -277,13 +359,43 @@ describe('startupSetting', () => {
     expect(call.slice(0, call.indexOf('createAgent'))).toContain('toolTextLimits,');
   });
 
+  it('serve 起動期解出投影合併視窗，而且真的傳給 handler——結構性的', async () => {
+    // 同 `tool-text` 那一條的處境：`serve.ts → createWireHandler` 這一跳沒有行為觀察點（產品路徑上沒有 patch 能在這個測試
+    // 裡換掉出貨的 cordis.yml 再起一台 serve）。handler 往下那一跳有行為測試（`projection-coalesce-wire.test.ts` 的「視窗是設定」），
+    // 紅的分工因此是：那條管轉發，這一條管接線。
+    const source = await readFile(new URL('../serve.ts', import.meta.url), 'utf8');
+    expect(source).toContain('projectionFlush = startupSetting(plugins, projectionFlushPlugin)');
+    const call = source.slice(source.indexOf('createWireHandler({'));
+    expect(call.slice(0, call.indexOf('createAgent'))).toContain(
+      'projectionFlushMs: projectionFlush.flushMs',
+    );
+  });
+
+  it('投影合併視窗低於 1 毫秒或不是整數：載入期就失敗', () => {
+    // 釘的是 schema 的 `int().min(1)`（形狀抄 dsh 的 `observeFlushMs`）。`0` 在合併器建構子是「不合併」，留給測試，設定層不收。
+    for (const flushMs of [0, -5, 1.5]) {
+      expect(() =>
+        startupSetting(
+          [{ plugin: projectionFlushPlugin, id: 'projection-flush', config: { flushMs } }],
+          projectionFlushPlugin,
+        ),
+      ).toThrow(/projection-flush/u);
+    }
+    expect(
+      startupSetting(
+        [{ plugin: projectionFlushPlugin, id: 'projection-flush', config: { flushMs: 250 } }],
+        projectionFlushPlugin,
+      ),
+    ).toEqual({ flushMs: 250 });
+  });
+
   it('handler 把工具文字那一格轉給即時那條——結構性的', async () => {
     // **重播那一跳有行為測試**（`serve-history.test.ts` 走真的 route），**即時這一跳沒有**：
-    // handler 的即時路徑要經過 SSE，而這棵樹上走那條路的假 agent 都不產生夠長的工具結果。
+    // handler 的即時路徑要經過 SSE，而這棵樹上走那條路的假 agent 都不產生夠大的 meta 或摘要。
     // 實測過：把 `new ThreadPump(...)` 的那一格拿掉，全套 1246 條全綠。
     //
-    // **`ThreadPump` 用得到那個值本身有行為證據**（`tool-card-from-log.test.ts` 那條驗即時與
-    // 重播截在同一個位置），所以這裡缺的只有「handler 真的傳」這一格，釘原始碼剛好補它。
+    // **`ThreadPump` 用得到那個值本身有行為證據**（`compaction-wire.test.ts` 驗即時與重播的摘要照它截），
+    // 所以這裡缺的只有「handler 真的傳」這一格，釘原始碼剛好補它。
     const source = await readFile(new URL('../wire-handler.ts', import.meta.url), 'utf8');
     // **錨點要指到真的呼叫，不是講到它的散文。** 第一版用 `new ThreadPump(`，命中的是那個
     // 選項自己的檔頭裡「即時那條走 `new ThreadPump(...)`」那句，往後掃到的第一個 `);` 中間

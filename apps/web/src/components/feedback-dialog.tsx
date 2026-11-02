@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
 import { CATEGORIES, CATEGORY_LABEL, FEEDBACK_COPY } from '@/lib/feedback';
 
 export interface FeedbackDraft {
@@ -57,11 +58,9 @@ export function FeedbackDialog({
         showCloseButton={false}
         // 沒有另外的說明文字：標題與欄位的名字已經講完了。
         aria-describedby={undefined}
-        className="max-w-md"
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          detailRef.current?.focus();
-        }}
+        // 寬度照 develop 實際畫出來的：窄螢幕 28rem、640 以上 32rem。前綴跟 SG 的 `sm:max-w-sm` 同一組，cn 才蓋得掉（#1583）。
+        className="max-w-md sm:max-w-lg"
+        initialFocus={detailRef}
       >
         <DialogHeader>
           <DialogTitle>{FEEDBACK_COPY.title}</DialogTitle>
@@ -81,9 +80,9 @@ export function FeedbackDialog({
             </Button>
           ))}
         </div>
-        <textarea
+        <Textarea
           ref={detailRef}
-          className="border-input bg-background min-h-24 rounded-md border px-3 py-2 text-sm"
+          className="max-h-64 min-h-24"
           aria-label={FEEDBACK_COPY.detail}
           placeholder={FEEDBACK_COPY.hint}
           value={text}
@@ -91,7 +90,7 @@ export function FeedbackDialog({
           onChange={(event) => setText(event.target.value)}
         />
         {failure !== undefined && (
-          <p className="text-destructive text-sm" role="alert">
+          <p className="text-destructive text-body" role="alert">
             {failure}
           </p>
         )}

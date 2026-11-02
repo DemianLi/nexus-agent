@@ -1,9 +1,11 @@
-import { fileURLToPath, URL } from 'node:url';
-
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
+import tsconfigPaths from 'vite-tsconfig-paths';
+
+import { fontLicenses } from './font-licenses';
+import { RESOLVE_ALIAS } from './resolve-alias';
 
 /**
  * **網頁從來不由 Vite 服務**（[#426](https://github.com/DemianLi/nexus-agent/issues/426)，照 dsh
@@ -32,10 +34,13 @@ function rejectStandaloneServe(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [rejectStandaloneServe(), react(), tailwindcss()],
-  resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url)),
-    },
-  },
+  // `@nexus/*` 經根 `tsconfig.base.json` 的 paths 解析到 `src`，為什麼讀根 base 見 `vitest.config.ts` 同一行（#1633）。
+  plugins: [
+    rejectStandaloneServe(),
+    react(),
+    tailwindcss(),
+    tsconfigPaths({ projects: ['../../tsconfig.base.json'] }),
+    fontLicenses(),
+  ],
+  resolve: { alias: RESOLVE_ALIAS },
 });

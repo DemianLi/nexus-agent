@@ -7,7 +7,7 @@
  * 那兩條路換了拿鎖的那一下——macOS 與 CI 的 Linux 上都走不到它們，不換就是沒驗過就出貨。
  */
 
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -20,6 +20,7 @@ import {
 import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 
 import { openJsonlSessionStore } from './jsonl-session-store.js';
+import { rewriteSessionHeader } from './session-files.fixture.js';
 import { acquireSessionLease } from './session-lease.js';
 import type { TryLock } from './session-lease.js';
 
@@ -90,14 +91,12 @@ describe('兩個把手搶同一份', () => {
 
   it('讀壞了的續接不佔著租約', async () => {
     await written();
-    const headerPath = join(dir, 'cli.header.json');
-    const good = await readFile(headerPath, 'utf8');
-    await writeFile(headerPath, '{壞的');
+    const restore = await rewriteSessionHeader(dir, 'cli', () => '{壞的');
     await expect(openJsonlSessionStore({ directory: dir }).resume('cli')).rejects.toThrow(
       SessionCorruptionError,
     );
 
-    await writeFile(headerPath, good);
+    await restore();
     const resumed = await openJsonlSessionStore({ directory: dir }).resume('cli');
     await resumed.stored.close();
   });
@@ -131,8 +130,11 @@ describe('一份會話一把', () => {
     await root.append([event(0)]);
     await sub.append([event(0)]);
 
-    const locks = (await readdir(dir)).filter((name) => name.endsWith('.lock')).sort();
-    expect(locks).toEqual(['cli%2frun-1.lock', 'cli.lock']);
+    // 鎖檔在各自的會話目錄裡（`sessionDirectoryName`：`/` 編成 `~002F`）。
+    const locks = (await readdir(dir, { recursive: true }))
+      .filter((name) => name.endsWith('.lock'))
+      .sort();
+    expect(locks).toEqual([join('cli', 'session.lock'), join('cli~002Frun-1', 'session.lock')]);
     await root.close();
     await sub.close();
   });
@@ -151,13 +153,9 @@ describe('打錯的 --resume', () => {
   });
 });
 
-describe('失敗分四種，只有「這個平台沒有」退到不鎖', () => {
-  it.each([
-    'ERR_FLOCK_UNSUPPORTED_PLATFORM',
-    'MODULE_NOT_FOUND',
-    'ERR_MODULE_NOT_FOUND',
-    'ERR_DLOPEN_FAILED',
-  ])('%s：退到不鎖，帶著原本那句話', async (code) => {
+describe('失敗分三種，只有「這個平台沒有」退到不鎖', () => {
+  it('ERR_FLOCK_UNAVAILABLE：退到不鎖，帶著原本那句話', async () => {
+    const code = 'ERR_FLOCK_UNAVAILABLE';
     const outcome = await acquireSessionLease(join(dir, 'x.lock'), 'x', failing(code));
     expect(outcome).toEqual({ unavailable: `boom ${code}` });
   });
@@ -182,7 +180,7 @@ describe('這個平台拿不到鎖', () => {
     const store = openJsonlSessionStore({
       directory: dir,
       warn: (message) => void warnings.push(message),
-      lock: failing('ERR_FLOCK_UNSUPPORTED_PLATFORM'),
+      lock: failing('ERR_FLOCK_UNAVAILABLE'),
     });
     const root = store.create(header('cli'));
     const sub = store.create(header('cli/run-1'));

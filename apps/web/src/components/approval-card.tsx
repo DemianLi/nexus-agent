@@ -25,14 +25,24 @@
  * 按鈕只有 `pending.allowedDecisions` 裡的那些，而那份清單是**逐筆交集**（見
  * `@nexus/wire` 的 `intersectDecisions`）：基座對不在某一筆清單裡的決定是當場拋，
  * 一顆多出來的按鈕按下去是整場 run 死。
+ *
+ * **沙箱升級**（`request_sandbox_escalation`，#1292）畫 harness 送的那句描述（模式、理由、只蓋這一次），不畫工具名與參數 JSON。
+ * 沒有描述就照一般的畫（`lib/sandbox-escalation.ts`）。
+ *
+ * **其他工具畫閘門給的理由**（#1628）：「要執行 …」下面一行，例如 MCP 閘門寫明哪台 server、哪支工具（名字被補了指紋時人看不出來）。
+ * core 沒有理由時填的預設字不畫，那句跟「要執行 …」重複（`lib/approval-reason.ts`）。是一般的文字，報讀照樣唸得到，不靠 tooltip。
  */
-
-import { ChevronDown } from 'lucide-react';
 
 import type { PendingApproval } from '@nexus/wire';
 
+import { Chevron } from '@/components/chevron';
+import { Surface } from '@/components/surface';
+import type { PendingAsker } from '@/lib/approval-asker';
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { RowTrigger } from '@/components/row-trigger';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
+import { approvalReasonOf } from '@/lib/approval-reason';
+import { escalationReason } from '@/lib/sandbox-escalation';
 
 /** 封閉詞彙的中文字面。認不得的原樣顯示——寧可露出來，不要吞掉。 */
 const LABELS: Record<string, string> = { approve: '全部核准', reject: '全部拒絕' };
@@ -41,27 +51,57 @@ const LABELS: Record<string, string> = { approve: '全部核准', reject: '全�
 export const NO_DECISION_REASON =
   '這顆中斷沒有共同可用的決定：送出不在清單上的決定會讓這一輪整個失敗，所以這裡不放允許與不允許。';
 
-function Actions({ pending }: { pending: PendingApproval }) {
+function Actions({ pending, asker }: { pending: PendingApproval; asker?: PendingAsker }) {
   return (
     // 可捲動，所以要能用鍵盤捲：進 Tab 順序並給名稱（§8）。
-    <div
+    <Surface
+      tone="stage"
       role="group"
       tabIndex={0}
       aria-label="要執行的內容"
-      className="bg-stage shadow-stage flex max-h-[40svh] flex-col gap-3 overflow-auto rounded-xl p-3"
+      className="flex max-h-[40svh] flex-col gap-3 overflow-auto p-3"
     >
-      {pending.actions.map((action, index) => (
-        <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
-          <p className="text-sm">
-            要執行 <code className="font-mono font-medium">{action.name}</code>
-          </p>
-          <pre className="text-muted-foreground font-mono text-xs whitespace-pre-wrap">
-            {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
-            {typeof action.args === 'string' ? action.args : JSON.stringify(action.args, null, 2)}
-          </pre>
-        </div>
-      ))}
-    </div>
+      {/* 前景子代理要核准（#328）：誰在問、它在做什麼（委派卡上寫的 `description`）；root 自己問的沒有這一行。 */}
+      {asker !== undefined && (
+        <p className="text-muted-foreground text-tip" data-testid="approval-asker">
+          <span className="text-foreground font-medium">{asker.label}</span>要執行這個操作
+          {asker.description !== undefined && <>，它在做：{asker.description}</>}
+        </p>
+      )}
+      {pending.actions.map((action, index) => {
+        const escalation = escalationReason(action);
+        if (escalation !== undefined) {
+          return (
+            // 描述裡有檔案路徑：長路徑沒有空格，不斷行會撐破窄螢幕。
+            <p
+              key={`${action.name}-${index}`}
+              className="text-body wrap-anywhere"
+              data-testid="approval-escalation"
+            >
+              {escalation}
+            </p>
+          );
+        }
+        const reason = approvalReasonOf(action);
+        return (
+          <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
+            <p className="text-body">
+              要執行 <code className="font-mono font-medium">{action.name}</code>
+            </p>
+            {reason !== undefined && (
+              // 理由裡有 server 給的工具名：長名字沒有空格，不斷行會撐破窄螢幕。
+              <p className="text-body wrap-anywhere" data-testid="approval-reason">
+                {reason}
+              </p>
+            )}
+            <pre className="text-muted-foreground font-mono text-tip whitespace-pre-wrap">
+              {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
+              {typeof action.args === 'string' ? action.args : JSON.stringify(action.args, null, 2)}
+            </pre>
+          </div>
+        );
+      })}
+    </Surface>
   );
 }
 
@@ -70,8 +110,11 @@ export function ApprovalCard({
   busy,
   onDecide,
   onStop,
+  asker,
 }: {
   pending: PendingApproval;
+  /** 前景子代理在問時給（`pendingAsker`）；沒給就是 root 自己問的。 */
+  asker?: PendingAsker;
   busy: boolean;
   onDecide: (decision: string) => void;
   /** 停止這一輪：**只在**交集為空時出現（#376 第 12 條），那時這是唯一的出口。 */
@@ -80,24 +123,21 @@ export function ApprovalCard({
   if (pending.allowedDecisions.length === 0) {
     return (
       <div className="flex flex-col gap-2" data-testid="approval-card">
-        <p className="text-destructive px-3 text-sm">{NO_DECISION_REASON}</p>
+        <p className="text-destructive px-3 text-body">{NO_DECISION_REASON}</p>
         <Collapsible>
-          <CollapsibleTrigger className="group hover:bg-chip-hover active:bg-chip-pressed text-muted-foreground flex min-h-11 w-full items-center gap-2 rounded-[20px] px-3 text-left text-xs transition-colors duration-(--duration-quick) lg:min-h-9">
-            <ChevronDown
-              className="size-4 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-              aria-hidden
-            />
+          <RowTrigger className="text-muted-foreground gap-2 text-ui lg:min-h-9">
+            <Chevron />
             原始中斷內容
-          </CollapsibleTrigger>
-          <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
-            <Actions pending={pending} />
+          </RowTrigger>
+          <CollapsibleContent className="overflow-hidden">
+            <Actions pending={pending} {...(asker === undefined ? {} : { asker })} />
           </CollapsibleContent>
         </Collapsible>
         <div className="flex justify-end p-2">
           <Button
             type="button"
             variant="destructive"
-            className="h-11 rounded-full px-5 lg:h-9"
+            className="h-11 px-5 lg:h-9"
             disabled={busy}
             onClick={onStop}
           >
@@ -109,7 +149,7 @@ export function ApprovalCard({
   }
   return (
     <div className="flex flex-col" data-testid="approval-card">
-      <Actions pending={pending} />
+      <Actions pending={pending} {...(asker === undefined ? {} : { asker })} />
       <div className="flex justify-end gap-2 p-2">
         {/* 不允許在左、允許在右。 */}
         {[...pending.allowedDecisions].reverse().map((decision) => (
@@ -117,7 +157,7 @@ export function ApprovalCard({
             key={decision}
             type="button"
             variant={decision === 'approve' ? 'default' : 'outline'}
-            className="h-11 rounded-full px-5 lg:h-9"
+            className="h-11 px-5 lg:h-9"
             disabled={busy}
             onClick={() => onDecide(decision)}
           >

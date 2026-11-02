@@ -1,0 +1,158 @@
+{
+  "id": "2106.04564",
+  "title": "Are Pretrained Transformers Robust in Intent Classification? A Missing Ingredient in Evaluation of Out-of-Scope Intent Detection",
+  "topic": "T1",
+  "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Salesforce 等作者指出 CLINC 的 OOS 樣本幾乎都與目標領域無關、太容易拒識，於是從 CLINC（Banking、Credit cards 兩領域）與 BANKING77 保留一批意圖當作「同領域但不支援」的 ID-OOS，建出 CLINC-Single-Domain-OOS 與 BANKING77-OOS 兩個資料集，再以 max-softmax 信心門檻評估五個預訓練 Transformer 的 5／10-shot 意圖偵測，顯示它們對 ID-OOS 明顯比對領域外 OOS 脆弱，在 50 類細粒度的 BANKING77-OOS 上尤其差。",
+  "problem": "意圖偵測系統只支援固定的 K 個意圖，使用者卻會提出系統沒預期或不支援的請求（OOS），系統要在維持 in-scope 準確率的同時認出 OOS，而且新意圖常只有少量樣本（few-shot）。先前實驗顯示，Hendrycks & Gimpel（2017）與 Hendrycks et al.（2020）的信心門檻法搭配預訓練 BERT 就能改善 OOS 偵測，作者自己的 DNNC 等 few-shot 方法也在處理同一問題，但幾乎只在 CLINC 上評估；CLINC 的 OOS 是刻意收集成「不屬於任何已知意圖」的樣本，主題上多半與各領域無關、分布差很遠，容易分辨。真實系統更常遇到的是「同一個領域、語意貼近已支援功能，但系統其實不做」的請求（例如向銀行系統要求一項它不提供的銀行服務），這類 OOS 在既有基準裡幾乎沒有，BANKING77 則完全沒有 OOS 樣本。因此現有評估會高估預訓練模型拒識的穩健度。",
+  "core_idea": "把 OOS 拆成兩類分開量：OOD-OOS（主題上與系統領域幾乎不重疊，即 CLINC 原本的 OOS）與 ID-OOS（同領域、語意貼近 in-scope，但不在支援清單內）。ID-OOS 的做法是從現有意圖資料集中保留一部分意圖當作「未支援」：訓練只給其餘的 in-scope 意圖，測試時把被保留意圖的語句當成應該拒識的 OOS。這樣不必另外收集資料就能得到與 in-scope 語意相近、真正困難的拒識測試，並在同一模型、同一門檻流程下與 OOD-OOS 對照。",
+  "method": {
+    "任務與輸出": "給定使用者語句 u 與 K 個 in-scope 意圖，輸出 K 類之一，或判為 OOS。",
+    "推論（信心門檻，沿用 Hendrycks et al. 2020）": "Encoder(u) 得到 768 維隱藏向量 h（論文沒寫取 [CLS] 還是池化），p(y|u)=softmax(Wh+b)∈R^K；取機率最大的類別 c，若 p(c|u)>δ 輸出 c，否則輸出 OOS。δ∈[0,1]，在 dev 集上選能讓「A_in＋R_oos 在多次執行的平均」最大的值；δ 的掃描步距未說明。",
+    "訓練": "只用 in-scope 意圖的訓練樣本，完全不用 OOS 樣本；全參數微調。論文沒寫損失函數，依 softmax 分類頭推定為標準 cross-entropy。AdamW，非 bias 參數 weight decay 0.01；gradient clipping 1.0；linear warmup 比例 0.1（相對最大 epoch 數）。超參數格點：learning rate ∈ {1e-4, 2e-5, 5e-5}、epochs ∈ {8, 15, 25, 35}（共 12 組）；batch size 在 CLINC-Single-Domain-OOS 為 10、BANKING77-OOS 為 50。每組超參數訓練 10 次，用 dev 選 δ，再挑最佳超參數組及其 δ 套到 test。表中 ± 推測是這 10 次的標準差（論文未明說）；最大序列長度未說明。單張 V100 32GB。實作沿用 DNNC（Zhang et al. 2020）的公開程式碼與 HuggingFace Transformers。",
+    "模型": "roberta-base、bert-base-uncased、albert-base-v2、electra-base-discriminator、tod-bert-jnt-v1（ToD-BERT：在多個任務導向對話語料上繼續預訓練的 BERT）；全部 base 尺寸。",
+    "few-shot 設定": "主要實驗為 5-shot 與 10-shot（每個 in-scope 意圖 5 或 10 筆訓練樣本），full-shot 只在圖中給部分結果；dev 與 test 不縮減。資料集 README 指向 DNNC 的 train_classifier.py 做隨機抽樣；10 次執行是否各自重抽樣本，論文未說明。",
+    "資料集：CLINC-Single-Domain-OOS": "從 CLINC150 的 10 個領域取 Banking 與 Credit cards（文中說隨機選），各 15 個意圖。每個領域人工挑 5 個與其餘 10 個語意相近的意圖當 ID-OOS（Banking：balance、bill_due、min_payment、freeze_account、transfer；Credit cards：report_lost_card、improve_credit_score、rewards_balance、application_status、replacement_card_duration），其餘 10 個為 in-scope（Table 1）。重切：每個 in-scope 意圖保留原 train 的 50 筆當新 train，原 train 另取 30 筆併入 dev、20 筆併入 test（加上原 dev 20、原 test 30，dev／test 各為每意圖 50 筆）；每個 ID-OOS 意圖原 train 的 100 筆中 60 筆進 dev、40 筆進 test。OOD-OOS 用 CLINC 原 OOS：原 train 的 100 筆移入 dev（共 200），test 1,000 筆不變。每個領域為 in-scope 500／500／500、ID-OOS dev 400／test 350、OOD-OOS dev 200／test 1,000（Table 3；與 GitHub 檔案行數相符）。",
+    "資料集：BANKING77-OOS": "從 BANKING77 的 77 個意圖中取 27 個當 ID-OOS（Table 2 標題寫隨機選），其餘 50 個為 in-scope；被選意圖原本的 train／val／test 樣本分別成為 ID-OOS 的 train／val／test。in-scope 為 5,905／1,506／2,000，ID-OOS dev 530／test 1,080；GitHub 另有 Table 3 沒列的 ID-OOS train 2,062 筆，六份合計 13,083 筆＝BANKING77 全量。OOD-OOS 直接複製 CLINC 的 OOS（dev 200／test 1,000）。BANKING77 原本沒有 validation split，1,506 筆 dev 怎麼切出來，論文未說明。",
+    "OOD-OOS 合理性檢查": "從 CLINC dev 的 OOS 取 100 筆，人工判斷是否與目標領域相關；並確認 CLINC 的 OOS 與 BANKING77 原資料無重疊。",
+    "評估方式": "兩種情境分開評、各選各的 δ：test 的 in-scope 樣本＋ID-OOS，或 in-scope 樣本＋OOD-OOS。指標：A_in＝C_in/N_in（in-scope 被判成 OOS 也算錯）；R_oos＝C_oos/N_oos；P_oos＝C_oos/N'_oos，N' 為被判成 OOS 的總筆數。",
+    "錯誤分析": "(1) dev 上各模型信心分數分布（Banking 5-shot 為 Fig 1，Credit cards 在附錄 Fig 4），以及 Banking dev 上 5-shot 的結果圖（Fig 2；依 Table 4 註解推測是隨 δ 變化的指標曲線）；(2) full-shot RoBERTa 在 Banking dev 的混淆矩陣（Fig 3，縱軸 ID-OOS、橫軸 in-scope），附錄 Fig 5 為 Credit cards；(3) 關鍵字重疊：對混淆矩陣中最深的三組意圖對，去停用詞後計算 unigram 重疊，把 dev 中相應語句的前 5 個重疊 unigram 換成 RoBERTa 的 mask token 再評估（不做前 10、前 15，因為 5 個已遮掉語句一大半）；(4) 附錄 Fig 6 的 tSNE；(5) 另試 Liu et al. 2021（Mirror-BERT）與 Zhang et al. 2021（CPFT）兩種對比學習方法，未報數字。",
+    "重做要點": "資料取 GitHub jianguoz/Few-Shot-Intent-Detection 的 Datasets/CLINC-Single-Domain-OOS（banking、credit_cards 子目錄）與 Datasets/BANKING77-OOS，各有 train／valid／test 與 id-oos、ood-oos 子目錄的 seq.in／label。用 DNNC 的抽樣程式取 5／10-shot；五個 checkpoint 各跑 12 組 lr×epoch、每組 10 次；在 dev（in-scope＋某一類 OOS）上掃 δ，取 10 次平均 A_in＋R_oos 最大者；在 test 上報三個指標，ID-OOS 與 OOD-OOS 兩情境各自選 δ。"
+  },
+  "assumptions": [
+    "從現有意圖資料集保留一部分意圖當「不支援」，可以代表真實系統遇到的同領域未支援請求。",
+    "人工挑選的語意相近意圖（CLINC）與隨機抽出的意圖（BANKING77）都足以構成困難的 ID-OOS。",
+    "訓練時拿不到任何 OOS 樣本（OOS 空間太大、難以收集），只能靠 in-scope 分類器的信心拒識。",
+    "可以拿一份含 OOS（包括與 test 同一批 ID-OOS 意圖）的 dev 集挑門檻與超參數。",
+    "最大 softmax 機率足以代表預訓練 Transformer 的拒識能力；換成其他評分方式不會改變「ID-OOS 比 OOD-OOS 難」的結論。",
+    "單輪、無對話脈絡的語句就足以判斷是否在範圍內。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "CLINC-Single-Domain-OOS（本文新建；Banking、Credit cards 兩領域，各 10 個 in-scope 意圖＋5 個 ID-OOS 意圖＋CLINC 原 OOS）",
+      "BANKING77-OOS（本文新建；50 個 in-scope 意圖＋27 個 ID-OOS 意圖＋CLINC 原 OOS）"
+    ],
+    "metrics": [
+      "In-scope accuracy A_in（in-scope 被判 OOS 算錯）",
+      "OOS recall R_oos",
+      "OOS precision P_oos",
+      "分析用：dev 上的信心分數分布、混淆矩陣、遮罩關鍵字後的預測信心"
+    ],
+    "baselines": [
+      "BERT（bert-base-uncased）＋MSP 門檻",
+      "RoBERTa（roberta-base）＋MSP 門檻",
+      "ALBERT（albert-base-v2）＋MSP 門檻",
+      "ELECTRA（electra-base-discriminator）＋MSP 門檻",
+      "ToD-BERT（tod-bert-jnt-v1）＋MSP 門檻",
+      "另試但未報數字：Mirror-BERT 式自監督對比句向量、CPFT"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "預訓練模型對 ID-OOS 的拒識明顯比對 OOD-OOS 差：同一模型在 ID-OOS 情境下的 OOS recall 與 precision 幾乎全面較低。",
+      "numbers": "5-shot RoBERTa：Banking 的 ID-OOS recall 78.4／precision 78.6，對 OOD-OOS 97.0／92.9；BANKING77-OOS 的 ID-OOS 83.1／46.3，對 OOD-OOS 93.9／68.7。Table 4 共 30 組（5 模型×3 資料×2 shot）中 ID-OOS recall 有 28 組較低，例外是 5-shot Banking 的 ALBERT（86.3 對 85.3）與 ELECTRA（89.4 對 87.3），但這兩組 ID-OOS 情境的 in-scope 準確率分別只有 54.1 與 64.8（OOD-OOS 情境 63.1 與 75.5）。",
+      "section": "§1, §4.2, Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 ID-OOS 情境下選出的門檻會讓 in-scope 準確率下降或持平，沒有一組上升。",
+      "numbers": "30 組 in-scope 準確率中 19 組在 ID-OOS 情境較低、11 組平均與標準差完全相同（例如 5-shot RoBERTa Banking 兩情境都是 83.8±1.7）、0 組較高；5-shot 差距最大的三組依序為 RoBERTa BANKING77-OOS 43.0 對 62.1、ToD-BERT BANKING77-OOS 35.5 對 52.9、RoBERTa Credit cards 64.5 對 81.2。",
+      "section": "§4.2, Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "細粒度、類別多的 BANKING77-OOS 遠比單領域 CLINC 難，in-scope 準確率與 OOS precision 特別低，加到 10-shot 仍然偏低。",
+      "numbers": "5-shot ID-OOS 的 in-scope 準確率：ALBERT 20.3、BERT 25.4、ELECTRA 30.9、ToD-BERT 35.5、RoBERTa 43.0；precision 39.8–46.3。10-shot 最佳 RoBERTa 為 in-scope 59.7／precision 55.8；同為 10-shot，RoBERTa 在 CLINC 的 ID-OOS in-scope 為 Banking 76.6、Credit cards 81.0（五個模型在 CLINC 兩領域的範圍為 66.7–81.0）。",
+      "section": "§4.2, Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "CLINC 原有的 OOS 幾乎都與目標領域無關，只用它評估量不到同領域的拒識能力。",
+      "numbers": "從 dev 取 100 筆 OOS 人工檢查：4 筆與 Banking 相關、0 筆與 Credit cards 相關；與 BANKING77 原資料沒有重疊。",
+      "section": "§3（OOD-OOS）",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "ID-OOS 的建法：CLINC 每個領域刻意挑 5 個與其餘 10 個語意相近的意圖保留起來；BANKING77 保留 27 個；得到兩個新資料集。",
+      "numbers": "CLINC-Single-Domain-OOS 每領域：in-scope 500／500／500、ID-OOS dev 400／test 350、OOD-OOS dev 200／test 1,000；BANKING77-OOS：in-scope 5,905／1,506／2,000、ID-OOS dev 530／test 1,080、OOD-OOS dev 200／test 1,000。",
+      "section": "§3, Table 1–3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在任務導向對話語料上繼續預訓練的 ToD-BERT 沒有帶來拒識優勢：在 BANKING77-OOS 上落後通用的 RoBERTa，與 BERT 互有勝負。",
+      "numbers": "5-shot BANKING77-OOS ID-OOS：ToD-BERT in-scope 35.5／precision 43.8，RoBERTa 43.0／46.3，BERT 25.4／41.3。10-shot ID-OOS recall 在 Credit cards（70.2）與 BANKING77-OOS（76.9）都是五個模型中最低；但 10-shot Banking 的 ID-OOS in-scope 準確率 80.7 是五者最高。",
+      "section": "§4.2, Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "信心分數分析：ID-OOS 的信心分數與 in-scope 混在一起、且高於 OOD-OOS；RoBERTa 整體最好、ALBERT 最差；RoBERTa 從 5-shot 到 full-shot，ID-OOS 的信心反而升高，作者解讀為對語意相近意圖過度自信。",
+      "numbers": "只有圖（Fig 1、2、4），正文無數值。",
+      "section": "§4.3, Fig 1–2, 附錄 Fig 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "錯誤集中在特定的 ID-OOS／in-scope 意圖對；把兩意圖共有的關鍵字遮掉後，模型仍以高信心把 ID-OOS 語句判成某個 in-scope 意圖。",
+      "numbers": "bill_due／bill_balance 的重疊 unigram 以 bill（60 次）居首；improve_credit_score／credit_score 以 credit（99）、score（76）居首。遮掉前 5 個重疊詞後，兩個 ID-OOS 例句分別以 0.84、0.86 的信心被判為 bill_balance 與 credit_limit_change。只有兩個定性例子。",
+      "section": "§4.3, Fig 3, Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "改用對比學習的 few-shot 文本分類與意圖偵測方法，也沒有改善 ID-OOS 或 OOD-OOS 偵測。",
+      "numbers": "未提供數字。",
+      "section": "§4.3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "兩種 OOS 偵測在細粒度 few-shot 意圖偵測下都還沒解決，需要更多研究。",
+    "試過對比學習的 SOTA 方法沒有明顯改善，留待未來。",
+    "不用 OOS 訓練資料，是因為 OOS 的空間與分布太大、難以收集足量資料。",
+    "遮罩實驗只做前 5 個重疊詞，因為再多語句就大半被遮掉。",
+    "混淆集中在特定意圖對，作者承認這部分源自他們刻意設計的 ID-OOS 切法。"
+  ],
+  "limitations_observed": [
+    "門檻與超參數洩漏：dev 集含有與 test 同一批被保留意圖的 ID-OOS 語句（CLINC 每領域 400 筆、BANKING77-OOS 530 筆），δ 與超參數就在上面最佳化，等於事先知道「哪些不支援的請求會出現」，真實部署拿不到這種資料；dev 的 in-scope 樣本在 CLINC 每意圖 50 筆（5-shot 訓練量的 10 倍）、BANKING77-OOS 每意圖約 30 筆（約 6 倍），也與 few-shot 前提矛盾。所以 Table 4 應視為 MSP 門檻法的樂觀估計，換成沒見過的不支援意圖，數字多半更差。",
+    "OOS precision 受測試集比例影響：CLINC 的 ID-OOS 情境 test 為 500 in-scope＋350 OOS（OOS 佔 41.2%），OOD-OOS 情境為 500＋1,000（66.7%）。隨機拒識的 precision 就等於這個比例，因此 Banking／Credit cards 上 ID 與 OOD 的 precision 差距有一部分是機械性的，不能全歸因於 ID-OOS 較難。以 5-shot RoBERTa Banking 量化：兩情境回推都約有 15% 的 in-scope 被拒（同一操作點），若 ID-OOS recall 也達到 OOD 的 97.0，precision 只會是約 82.0；也就是 92.9→78.6 這 14.3 點差距中，約 11 點來自 OOS 比例不同，只有約 3.4 點來自 recall 下降。BANKING77-OOS 兩情境的比例相近（35.1% 對 33.3%），才是乾淨的比較。",
+    "由 Table 4 的 recall、precision 與樣本數回推（被判 OOS 的筆數＝R×N_oos／P，扣掉真 OOS 即為被拒的 in-scope；表中是 10 次執行的平均，用平均值回推只是近似）：BANKING77-OOS 5-shot ID-OOS 情境下，ALBERT 約 73%、BERT 約 70%、RoBERTa 約 52% 的合法 in-scope 請求被判成 OOS；同一個 RoBERTa 在 OOD-OOS 情境約 21%。交叉驗算：5-shot RoBERTa Banking 兩情境回推都約 15%，與兩者 in-scope 準確率同為 83.8 一致。precision 39.8–46.3 也只比 35.1% 的隨機基準高 4.7–11.2 點。換句話說，「最大化 A_in＋R_oos」在 50 類 5-shot 下選出的是大量拒識的退化操作點；論文只說 in-scope 準確率與 precision「偏低」，沒點出這件事。",
+    "in-scope 準確率的差異只來自門檻：兩情境用同一份 in-scope test，差別只在各自選的 δ（30 組裡有 11 組數字完全相同，就是選到同一個操作點）。所以「ID-OOS 情境的 in-scope 準確率較低」是操作點取捨，不是模型在 in-scope 上變差。跨 shot 比較也被操作點混淆：BERT 在 BANKING77-OOS 從 5-shot 到 10-shot，ID-OOS recall 從 90.9 掉到 77.3、in-scope 從 25.4 升到 52.5；RoBERTa Banking 10-shot 的 ID-OOS in-scope（76.6）反而低於 5-shot（83.8）。全文沒有 AUROC、FPR@95 之類不依門檻的指標或權衡曲線，無法判斷模型的可分性本身有沒有變好。",
+    "只測一種評分方式：全部用 MSP 門檻，所以結論其實是「MSP 門檻對 ID-OOS 不穩健」，不能直接推到「預訓練 Transformer 不穩健」。早於本文 v1 的 arXiv:2101.03778 已顯示同一個 RoBERTa 改用 Mahalanobis 距離，在 CLINC150 上明顯勝過 MSP（AUROC 98.4 對 97.1、FPR@95 6.8 對 11.6），本文沒有比較。不過那個增益是在 CLINC150 的領域外 OOS 上量的，正是本文說不夠的那種，而 2101.03778 自己的錯誤分析也指出主要錯誤來自語意相近的 ID／OOD，所以它只說明 MSP 不是最好的評分方式，並不證明換評分就能解決 ID-OOS；問題在於本文的結論與「選了 MSP」糾纏在一起，分不開。作者自己的最近鄰式 DNNC（arXiv:2010.13009）也沒放進來；對比學習方法「沒有改善」則完全沒附數字。",
+    "混淆變數：BANKING77-OOS 與 CLINC 之間同時差了類別數（50 對 10）、細粒度、ID-OOS 挑法（隨機對人工挑相近）與 batch size（50 對 10），論文把表現變差歸因於「細粒度」，但沒有控制類別數的對照實驗（例如從 BANKING77 只取 10 個 in-scope 意圖）。",
+    "ID-OOS 挑法前後說法不一：論文 Table 2 標題說 BANKING77 的 27 個意圖是隨機選的，資料集 README 卻寫成 27 個「語意相近」的保留意圖；README 的統計表另外列出 Table 3 沒有的 ID-OOS train 2,062 筆。重用資料時要以檔案為準。",
+    "遮罩實驗證據薄：只有兩個定性例子，沒有遮罩前後的信心分布或錯誤率統計。大量 mask token 的輸入本身就是異常輸入，模型仍給 0.84–0.86 的信心，更像 MSP 的一般性過度自信，不足以推論模型依賴「關鍵字以外的語意」。第二個例子被判成 credit_limit_change，而不是配對的 credit_score，也和「特定意圖對互相混淆」的敘事不完全吻合。",
+    "規模小、變異大：CLINC 只取 10 個領域中的 2 個，每個領域的 ID-OOS 只有 5 個意圖、test 350 筆，ID-OOS 的難度高度依賴人工挑的這 5 個意圖，換一組結論幅度可能不同；標準差也很大（例如 5-shot ALBERT Credit cards ID-OOS recall 75.9±11.2、10-shot ALBERT Banking 77.6±13.0），不少模型間的名次差距落在雜訊內。",
+    "外推限制：只評估 2021 年的 base 尺寸編碼器加分類頭，沒有 LLM、檢索式或以意圖描述做 zero-shot 的路由方式；輸入是單輪、無脈絡的語句。對 LLM agent 的能力範圍閘門，ID-OOS 這個評估概念可以直接沿用，但數字不能外推。"
+  ],
+  "framework_role": "T1 的評估方法論：它說明拒識測試集若只放領域外語句，會高估系統判斷「請求在不在能力範圍內」的能力，並給出一個不必另外收集資料的建法——從已支援的意圖（換到 agent 上就是工具或技能）中保留一批語意相近的，當作「同領域但不支援」的測試輸入，與領域外輸入分開報 recall、precision 與 in-scope 準確率。對 harness 的意義：依意圖路由或能力範圍閘門的評估集，要涵蓋「看起來像我們會做、其實不做」的近鄰請求（例如隱藏幾個工具，看路由器是拒絕、澄清，還是硬套最接近的工具），兩類 OOS 分開計分，並同時看被誤拒的 in-scope 比例。方法本身（MSP 門檻）只是弱基線，價值在評估設計。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。多位作者來自 Salesforce Research，引言也引用 Salesforce 的 Converse 系統（arXiv:2203.12187）說明意圖偵測的重要性，但論文沒有說任何產品使用了這兩個資料集或這套評估協定；GitHub 上的資料釋出（https://github.com/jianguoz/Few-Shot-Intent-Detection）屬於研究資料散佈，不是產品部署。學術影響有限：Semantic Scholar 約 40 次引用、6 次 influential citation（2026-10-02 查詢），發表於 ACL 2022 NLP4ConvAI workshop。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "公開：https://github.com/jianguoz/Few-Shot-Intent-Detection 的 Datasets/CLINC-Single-Domain-OOS 與 Datasets/BANKING77-OOS，檔案行數與 Table 3 一致（BANKING77-OOS 另多一份 ID-OOS train）。GitHub API 顯示該儲存庫沒有授權聲明（license 為 null）；上游 CLINC150 為 CC BY 3.0。儲存庫只有資料與 README，沒有本文的訓練或評估程式碼，README 指向 DNNC 的程式（https://github.com/salesforce/DNNC-few-shot-intent）做 few-shot 抽樣，論文也說實作沿用該程式碼；δ 的掃描步距與實際選中的門檻未公開。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "「同領域但不支援」（ID-OOS）的評估概念與 BANKING77-OOS 切分，對 harness 能力範圍閘門的評估設計有直接參考價值；但這是短篇 workshop 論文，只測 MSP 門檻一種方法，門檻又用含同批 ID-OOS 的 dev 調出來，數字是樂觀上界，所以有價值但非必讀。",
+  "related": [
+    "1909.02027",
+    "2003.04807",
+    "2010.13009",
+    "2004.06100",
+    "1610.02136",
+    "2004.06871",
+    "2106.08616",
+    "2106.00948",
+    "2109.06349",
+    "2104.08027",
+    "1709.08716",
+    "1909.03862"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

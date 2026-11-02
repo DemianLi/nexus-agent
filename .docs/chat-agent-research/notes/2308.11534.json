@@ -1,0 +1,171 @@
+{
+  "id": "2308.11534",
+  "title": "PlatoLM: Teaching LLMs in Multi-Round Dialogue via a User Simulator",
+  "topic": "T6",
+  "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 SFT 的學習目標從助理回答翻轉成真實使用者提問，用 ShareGPT 訓練出可訓練的使用者模擬器 Socratic，讓它與 GPT-3.5-turbo 多輪對話合成 SocraticChat 資料集，再拿來 SFT 回應模型 PlatoLM；主張比 Baize／UltraChat 那種「叫 ChatGPT 扮演使用者」的靜態模擬更能教會多輪對話。",
+  "problem": "開源對話模型要學多輪互動，最好的資料是真實人機對話（Vicuna 用 ShareGPT 效果最好），但真實使用者資料昂貴、有隱私問題，ShareGPT 後來也限制下載。替代做法是讓 ChatGPT 角色扮演使用者（Baize Self-Chat、UltraChat），但作者指出三個問題：每筆都需要種子才能開場；ChatGPT 生來被訓練成助理，學不到真人提問模式（主題轉移、追問、重複追問），主題結構貧乏；角色反轉後指令遵循能力變差，會出現互相道謝、照抄回答、反問助理要問什麼等失控行為，需要大量人工後處理。這直接決定了「用模擬使用者訓練 agent」這條路的資料品質上限。",
+  "core_idea": "使用者模擬器不靠提示詞，而是用同一份真實人機對話、把 loss 只算在人類那一側來微調一個 LLM（與訓練助理完全對稱、只是遮罩反過來），讓模擬器直接學到真人的提問分布；再讓這個模擬器與強助理（GPT-3.5/GPT-4）自由多輪對話，以使用者側的硬性長度上限結束對話，產生大量、主題結構接近真人的多輪資料來 SFT 新助理。模擬器與助理用不同 backbone 效果更好（類比蘇格拉底以提問引導柏拉圖）。",
+  "method": {
+    "pipeline": "三步：(1) 在 ShareGPT 上微調使用者模擬器 Socratic；(2) Socratic 與中間模型（線上 gpt-3.5-turbo，亦試 GPT-4）反覆一問一答，合成多輪資料集 SocraticChat；(3) 依 Vicuna 的訓練方式只學助理輸出，在 SocraticChat 上 SFT 出 PlatoLM。",
+    "simulator_data_preprocessing": "來源是 Vicuna 用的 ShareGPT（人類與 ChatGPT 的真實多輪對話）。步驟：HTML 轉 Markdown 保留富文字；仿 Vicuna/Koala 按比例剔除多語雜訊；刪除那些「不是翻譯任務、卻同時出現翻譯前後兩種語言」的樣本，避免模擬器學到突然切換語言；只刪除完全重複的整段對話（原始語料中有完全重複的 session 約佔 51.46%），但刻意保留同一 session 內重複或部分重複的提問（作者視為真人行為與資料擴增，消融時全刪反而變差）。最後約 20K 段對話作為模擬器訓練集（附錄 J 稱完整訓練集為 19,332 sessions）。",
+    "conversation_segmentation": "超過 2048 token 的對話切段；每段都以 GPT 的回答結尾；後續段落開頭補上前一段最後一則 GPT 回答作為脈絡。效果：未切段、以人類開場的樣本教模擬器「沒有脈絡時如何開新話題」，以 GPT 回答開場的後續段落教它「承接上文追問」，同時避免首輪問題出現指涉不明的代名詞。",
+    "simulator_training_objective": "標準因果語言模型 SFT，但遮罩反轉：只對真實使用者的提問 token 計 loss，助理回答只當脈絡。提示模板與訓練助理的模板大致對稱：系統描述為「好奇的人類與 AI 助理的對話，人類可以依前文追問，也可以不帶脈絡直接問全新問題」（附錄 A，此處為轉述）。主實驗 backbone 為 LLaMA-7B。論文只說超參數與其他 LLaMA-7B 微調模型／Vicuna 一致；官方 repo 的 model/sft_socratic/scripts/sft_7b.sh 顯示：lr 2e-5、3 epochs、每卡 batch 4 × 4 卡 × 梯度累積 8（有效 batch 128）、cosine 排程、warmup 0.03、model_max_length 2048、bf16、FSDP（以上來自 repo，非論文正文）。",
+    "dialogue_generation_loop": "Socratic 以 FastAPI 服務提供生成（repo：temperature 0.7、max_new_tokens 512、context 2048）。每回合：Socratic 依目前歷史產生下一個使用者提問 → 呼叫 gpt-3.5-turbo（repo 中系統角色只設成一般 AI 助理）取得回答 → 把回答接回 Socratic 的歷史 → 再生下一問。兩種模式：free mode 從空歷史開始，由模擬器自己丟出第一個問題，不需種子；seed mode 把外部資料集的第一輪問答（Evol-Instruct、Dolly、ShareGPT）當脈絡，從第二輪起由模擬器追問；也可在模板裡插入「他們在談 {某領域} 相關話題」這句來指定領域而不用種子。",
+    "termination": "使用者側「硬控制」：模擬器的歷史超過 2048 token 就清空歷史、開新 session（repo 實作是後端在放不下時回傳空值、前端迴圈因此結束）。刻意不採 Baize 的「軟控制」（在最後一輪人類話語加 <END> 特殊 token 或在提示詞裡叫它結束），因為 ShareGPT 的 session 長度分布偏短，學了 <END> 的模擬器會在 1–2 輪就收掉對話；主題轉移也讓「停止發問」難以判定是結束還是暫停。",
+    "response_model_training": "PlatoLM 依 Vicuna 方式 SFT，只學助理輸出；釋出版本以 LLaMA-2-7B 為回應模型、50,728 筆 SocraticChat。repo 的 model/sft_platolm/scripts/sft_7b.sh 超參數同上（lr 2e-5、3 epochs、有效 batch 128、max length 2048）。",
+    "static_baseline_construction": "為公平比較，作者自己做了靜態模擬基準：兩個 ChatGPT 互相對話，一個用附錄 A 的角色扮演提示詞扮演好奇使用者（要求只發問、不得把主導權交給助理、不得重複、沒問題時輸出 <END>）。因角色會跑掉，起初每輪都在使用者暫存歷史前加系統提示，但太耗 context，最後改成下一次呼叫時丟掉系統提示；並結合 <END> 軟控制與 context 長度硬控制（否則兩邊會無止盡互相道謝）。附錄 M.4 整理出靜態模擬六種失控型態：無法控制的澄清與無止盡道謝、照抄助理回答、反問助理想問什麼、續寫助理的內容、拒絕繼續發問、一路附和。",
+    "ablations_and_variants": "種子來源（free／Evol-Instruct／Dolly／ShareGPT，10K）；樣本規模曲線；模擬器與回應模型的 backbone 配對（LLaMA、LLaMA-2、Mistral 交叉，28.5K 訓練樣本）；中間模型換成 GPT-4（10,192 與 24,043 筆）；all-in-one（同一模型同時當提問者與回答者）；以 hh 資料 harmless 子集做 DPO 後在 eagle 上量倫理分數。",
+    "evaluation_protocol": "基準比較時所有模型統一 10K 樣本、同一 LLaMA backbone、同樣 SFT 超參數與提示模板，只換資料來源（Baize、UltraLM 依領域分層抽樣，且不使用 Baize 額外加的 Alpaca 單輪指令）。GPT-4 當評審，每個基準評 5 次取平均與標準差（AlpacaEval 太貴只評 1 次，其誤差為 win rate 的標準誤）；做 point-wise 與 pairwise；另有 4 位大學部標註者做匿名、隨機換位的 pairwise 人工評估。資料分析指標：提問嵌入的 cosine 相似度當主題多樣性（越低越好）、MTLD 詞彙多樣性、ChatGPT 偵測器算 human-like ratio、ChatGPT 以 1–10 分評提問的 complexity／relevancy／logicality（JSON 輸出）、GPT-3.5-turbo-16K 做主題切分算每輪平均主題區塊數；再算這些資料特徵與回應模型分數的 Pearson 相關。"
+  },
+  "assumptions": [
+    "ShareGPT 的使用者提問足以代表「真實使用者」：它來自願意分享對話的 ChatGPT 早期使用者，以英文、程式與寫作需求為主，且含大量重複與轉傳指令。",
+    "只要模擬器提問更像真人（主題轉移、追問、重複追問），合成資料就能更好地教回應模型處理多輪互動；回應品質主要由中間模型（ChatGPT/GPT-4）的回答提供。",
+    "以 GPT-4 評審的 MT-Bench／Vicuna-Bench／AlpacaEval 分數能反映多輪對話能力。",
+    "開放領域沒有任務目標，因此以 context 長度上限作為對話結束條件是可接受的，不需要模擬使用者的滿意、放棄或目標達成。",
+    "ChatGPT 偵測器判為「非 ChatGPT 產生」可以當作「像人類」的代理指標。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MT-Bench（80 題、2 輪，真人撰寫，GPT-4 評審）",
+      "Vicuna-Bench（80 題、單輪，GPT-4 評審）",
+      "AlpacaEval（805 題、單輪，對 text-davinci-003 的 win rate）",
+      "eagle 英文子集（倫理，LLS 指標）",
+      "人工 pairwise 評估（Vicuna-Bench 與 MT-Bench，4 位標註者）",
+      "SocraticChat 與基準資料集的語料／提問層級統計（Table 7）與主題切分（Table 10）"
+    ],
+    "metrics": [
+      "GPT-4 point-wise 分數（1–10，5 次平均±標準差）",
+      "GPT-4 pairwise 勝／平／負次數",
+      "AlpacaEval win rate",
+      "人工 pairwise 勝負數",
+      "主題多樣性（提問嵌入 cosine 相似度，越低越好）",
+      "詞彙多樣性 MTLD",
+      "human-like ratio（ChatGPT 偵測器）",
+      "ChatGPT 評分的 Complexity／Relevancy／Logicality",
+      "每輪平均主題區塊數",
+      "資料特徵與回應分數的 Pearson 相關",
+      "eagle LLS"
+    ],
+    "baselines": [
+      "Baize（Self-Chat，ChatGPT 靜態自我對話）",
+      "UltraLM（UltraChat，ChatGPT 靜態模擬使用者）",
+      "Vicuna（ShareGPT，真實使用者資料）",
+      "ChatGPT 靜態模擬器＋ShareGPT 種子（作者自建）",
+      "官方數字：LLaMA-2-7b-chat、Vicuna-7b-v1.3／v1.5、Baize-v2-13B、UltraLM-13B-v1.0、GPT-3.5"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "最終版 PlatoLM-7B 以較少樣本在 MT-Bench 達到 LLaMA 系 7B 模型最佳，並在 AlpacaEval 小勝 GPT-3.5。",
+      "numbers": "50.73K 樣本、context 2048：MT-Bench 6.29±0.04（LLaMA-2-7b-chat 6.27、Vicuna-7b-v1.5 6.17）；AlpacaEval 81.94%（GPT-3.5 81.71%、Vicuna-7b-v1.3 76.84%、LLaMA-2-7b-chat 71.37%、UltraLM-13B 80.64%）。",
+      "section": "§1 Table 1；附錄 G Table 9",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "若仿 Baize 用 <END> token 讓模擬器自己結束對話，因 ShareGPT 的短對話比例很高，模擬器會在 1–2 輪就結束，所以改用使用者側的 context 長度硬控制。",
+      "numbers": "去除 HTML 後，1–10 輪的 session 佔 81.73%，其中 1–2 輪又佔 53.91%。",
+      "section": "§3.2.2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "同為 10K 樣本、同樣 SFT 設定下，free mode 的 PlatoLM 在單輪基準全面勝過 Baize、UltraLM 與 Vicuna；MT-Bench 上 pairwise 勝過 Vicuna，但 point-wise 仍輸 Vicuna。",
+      "numbers": "AlpacaEval 71.89%（Vicuna 70.02%、UltraLM 47.57%、Baize 9.30%）；Vicuna-Bench 8.43（Vicuna 8.18）；MT-Bench point-wise 5.33（Vicuna 5.91、UltraLM 4.72、Baize 3.95）；GPT-4 pairwise 對 Vicuna：Vicuna-Bench 36 勝 23 負、MT-Bench 54 勝 37 負；人工評估 MT-Bench 對 Vicuna 52 比 52 平手、對 Baize 99 比 47、對 UltraLM 51 比 27。作者把 point-wise 落後歸因於 math、extraction 類別特別差。",
+      "section": "§4.1.2 Table 2、Figure 3；附錄 E",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "用同一份 ShareGPT 種子比較，可訓練的 Socratic 與靜態 ChatGPT 模擬器教出的回應模型在單輪基準差不多，在多輪的 MT-Bench 上前者明顯較好；但在 Vicuna-Bench 上靜態模擬反而略高。",
+      "numbers": "MT-Bench 5.65±0.06 對 5.32±0.06；Vicuna-Bench 8.10 對 8.24；AlpacaEval 67.89% 對 66.79%。其他種子：Dolly 5.57／8.49／74.13%，Evol-Instruct 5.01／8.05／58.42%，free 5.33／8.43／71.89%。",
+      "section": "§4.2.1 Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "模擬器與回應模型用不同 backbone 時比同 backbone 好（對角線劣化），且任一側換更強的 backbone 分數都會上升。",
+      "numbers": "MT-Bench、28.5K 訓練樣本：同 backbone 配對 LA-LA 5.75、LA2-LA2 5.99、MIST-MIST 6.33；最佳為 LA2 模擬器配 MIST 回應模型 6.68，其次 LA 配 MIST 6.42。表的行列哪一側是模擬器論文沒有寫明，依 repo 中 sft_socratic 用 LLaMA-7B、sft_platolm 用 LLaMA-2-7B 推斷列為模擬器、欄為回應模型。",
+      "section": "§4.2.3 Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "用同一個模型同時負責提問與回答（all-in-one）會削弱回答能力，作者據此主張提問與回答應拆成兩個模型。",
+      "numbers": "從 Socratic checkpoint 起始再學回答（SQ-A）5.70 對直接訓練回答（SA）5.72；把 Vicuna-7b-v1.5 以反轉目標再訓練（VA-Q）4.80 對原本（VA）6.17。",
+      "section": "§4.2.5 Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Socratic 產生的提問在 human-like ratio 上遠高於 ChatGPT 靜態模擬，用 ShareGPT 種子時接近 ShareGPT 本身；SocraticChat 的平均輪數也比其他資料集多。",
+      "numbers": "human-like ratio：SocraticChat 0.6727、Self-Chat 0.1758、UltraChat 0.1157、ShareGPT 0.8358；ShareGPT 種子下可訓練 0.7846 對靜態 0.2725。平均輪數：SocraticChat 5.39、Self-Chat 3.79、UltraChat 3.85、ShareGPT 3.07。主題切分每輪主題區塊數：SocraticChat 1.87、ShareGPT 2.18、UltraChat 1.77、Self-Chat 0.82。",
+      "section": "§5.2 Table 7；附錄 L Table 10",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "資料中提問的主題多樣性與 human-likeness 和回應模型在 MT-Bench 第二輪的分數高度相關，且 human-likeness 對第二輪的相關高於第一輪。",
+      "numbers": "MT-Bench Turn-2：主題多樣性 0.89、human-likeness 0.85；Turn-1 的 human-likeness 0.75、AlpacaEval 0.66；human-likeness 與主題多樣性彼此相關 0.78；語料詞彙量與單輪分數相關 0.84／0.88。",
+      "section": "§5.3 Figure 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "WizardLM、UltraLM 所用的 ChatGPT 評分指標（complexity、relevancy、logicality）與回應模型表現沒有強相關，作者推測是統計用的樣本數太少。",
+    "受設備限制只在 7B 規模實驗（沒有 13B 以上）。",
+    "資料集品質不一定高：為避免被懷疑對基準作弊，沒有控制主題分布；為保留真人提問模式，沒有刪除同一 session 內的重複提問；作者認為真人提問本身品質只屬中等。",
+    "seed mode 無法擴大規模：Dolly 只有約 15K，ShareGPT 已限制下載，從 OpenChat 只能拿到 27,431 筆。",
+    "MT-Bench point-wise 在 math、extraction、coding 領域特別差，導致 point-wise 輸給 Vicuna。",
+    "以開源 backbone 微調，仍不能完全免於倫理問題。",
+    "未來要做特定領域的使用者模擬器（目前只做開放領域）。"
+  ],
+  "limitations_observed": [
+    "逼真度證據有混淆：human-like ratio 來自偵測「是否為 ChatGPT 產生」的偵測器（引用的是作者群自己的 polish ratio 工作）。Socratic 的提問由 LLaMA 生成，只要不像 ChatGPT 就會被判成「像人」，這並不等於分布上接近真實使用者。Table 7 裡 0.7846 對 0.2725 這個主要差距，很可能部分只是「生成者不是 ChatGPT」的效果。",
+    "同一張 Table 7 的其他欄位並不一致地支撐可訓練模擬器：ShareGPT 種子下，靜態模擬的詞彙多樣性（48.15 對 36.75）與 ChatGPT 評的 complexity／relevancy／logicality（8.56／9.62／9.82 對 8.46／9.55／9.80）都高於可訓練模擬，平均輪數也較多（5.82 對 5.45）；只有偵測器式的 human-like ratio 大幅偏向可訓練模擬。",
+    "誤差棒只量到評審變異：±是同一個已訓練模型被 GPT-4 評 5 次的標準差，沒有涵蓋資料生成隨機性與訓練隨機性（每個設定只產生一份資料、只訓練一次）。因此 Table 3 中 MT-Bench 5.65 對 5.32、Table 4 各格之間 0.1–0.3 的差距，都無法判斷是否超出訓練雜訊。",
+    "「SoTA」宣稱落在雜訊內：PlatoLM 6.29±0.04 對 LLaMA-2-7b-chat 6.27 只差 0.02，且一邊是作者自評 5 次、一邊是官方單一數字；AlpacaEval 81.94% 對 GPT-3.5 81.71% 也只差 0.23 個百分點，而作者自己在 §5.3 承認 GPT-4 評審偏好長回答、SocraticChat 的平均語句長度又偏長。",
+    "多輪能力只量到第二輪：MT-Bench 每題只有 2 輪，但 SocraticChat 平均 5.39 輪、論文賣點是多輪主題轉移與追問；第 3 輪之後的行為（主題漂移、重複追問下的一致性）完全沒有被評估。",
+    "相關分析很脆弱：Pearson 相關看起來只建立在 Table 7 的約 8 個資料集上；主題多樣性欄位標為越低越好（cosine 相似度，數值都擠在 0.70–0.72 之間），卻報告與回應品質「正相關 0.89」，正負號到底指相似度還是多樣性沒有說清楚。",
+    "數字前後不一致且設定未交代：Table 5 用 GPT-3.5、10,192 筆時 MT-Bench 是 5.93，但 Table 2 同為 10K 的 PlatoLM 只有 5.33，Table 5 用的 backbone 配對沒有寫；Table 4 的行列哪側是模擬器也沒寫，只能從 repo 推斷。",
+    "種子與 free mode 的結論隨規模翻轉：10K 時 ShareGPT 種子在 MT-Bench 勝過 free（5.65 對 5.33，Table 3），附錄 H 說在「同一規模」下（未寫明筆數，推測接近可取得的 27,431 筆 ShareGPT 種子）free 反而勝過 ShareGPT 種子（MT-Bench 5.605 對 5.49、Vicuna-Bench 8.27 對 7.93，Table 8，表中還殘留舊名 Free ReaLM），作者沒有解釋這個翻轉。",
+    "all-in-one 實驗推不出「拆開比較適合模擬人機互動」：SA 5.72 對 SQ-A 5.70 只差 0.02（SQ-A 的 Turn-2 反而較高）；VA-Q 從 6.17 掉到 4.80 只是把助理改訓成提問者後的遺忘，兩組都只量回答能力，從未量測合併模型當模擬器時提問品質如何。",
+    "靜態基準可能被作者的工程選擇削弱：作者為省 context 在後續呼叫丟掉系統提示，角色跑掉的情況因此仍會發生；論文說靜態資料需大量後處理，卻沒有交代訓練前是否做了同等程度的清理。",
+    "對 T6 評估用途的外推有限：模擬器沒有目標、persona 或滿意度狀態，對話一律以 context 長度截斷，模擬使用者永遠不會主動結束或放棄；論文也從未拿模擬器輸出直接對照真實使用者的行為分布（例如輪數、結束時機、重複率）。它是「訓練資料生成器」，不能直接當作評估 agent 的逼真使用者。",
+    "回應品質主要來自中間模型：Table 5 顯示只把中間模型從 GPT-3.5 換成 GPT-4，在 10K 時就從 5.93 升到 6.07，幅度與可訓練對靜態模擬的差距（0.33）同一量級；整條管線本質仍是蒸餾 ChatGPT/GPT-4 的回答，模擬器只決定「問什麼」。",
+    "倫理結論過度詮釋：DPO 版 LLS -11.0629 對 SFT 版 -11.0502，差 0.013 且沒有變異數，就宣稱 DPO 版較合乎倫理。",
+    "重現性缺口：README 註明 Socratic 模擬器權重尚未釋出（只釋出其訓練資料）；公開的合成腳本依賴實驗室內網專用的 GPT 封裝，且每回合只把最新一問 q 傳給該封裝——該封裝是否另外保存對話歷史無法從公開程式碼驗證，若沒有，助理側其實看不到前文。"
+  ],
+  "framework_role": "T6 中「用 LLM 使用者模擬器訓練 agent」那一半的代表作：提出可訓練（而非提示詞驅動）的使用者模擬器配方——同一份真實人機對話、把 loss 遮罩反轉到使用者側，再加上切段補前文（教追問）、free／seed／指定領域三種開場、使用者側硬性長度上限結束對話。它的產出是合成多輪訓練資料，而不是評估分數或回饋訊號；對框架的可重用價值在於：(1) 證明提示詞扮演的模擬使用者有系統性失真，並列出六種可直接拿來當模擬器異常檢查清單的失控型態；(2) 模擬器與被訓練 agent 應該解耦、最好用不同 backbone；(3) 結束條件是模擬器設計的一級問題（<END> 會被短對話分布拖垮）。但它沒有目標、滿意度或回饋迴路，對 T6 的「使用者回饋迴路」與「評估用逼真度」兩塊幫助有限。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "Socratic 產生的提問就是送進助理（合成時是 GPT-3.5/GPT-4，最終學習者是 PlatoLM）的外部輸入；論文的核心實驗就是比較這份輸入「像不像真人」（主題轉移、追問、重複追問）如何影響助理學到的多輪能力。但論文完全沒有意圖偵測或目標對齊的建模，T1 端只是一般回應模型。"
+    },
+    {
+      "edge": "E6",
+      "how": "§5 把模擬器與助理的互動紀錄（SocraticChat 與各基準資料集）拿來量主題多樣性、MTLD、human-like ratio、ChatGPT 評分的提問品質與主題區塊數，並與回應模型在 MT-Bench／AlpacaEval 的分數做 Pearson 相關，屬於互動紀錄回流評估。注意：論文的主資料流是「互動紀錄 → SFT 訓練資料」，這條不屬於框架六條邊中的任何一條。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。GitHub repo（Apache-2.0）、Hugging Face 上的模型與資料集、ACL 2024 收錄、AlpacaEval／MT-Bench 排行榜登錄都只是發表與釋出，不構成產品或商用採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/FreedomIntelligence/PlatoLM",
+    "data": "公開：SocraticChat 資料集（https://huggingface.co/datasets/FreedomIntelligence/SocraticChat，釋出版 50,728 筆）、Socratic 模擬器訓練資料（https://huggingface.co/datasets/FreedomIntelligence/Socratic）、PlatoLM-7b 權重（https://huggingface.co/FreedomIntelligence/PlatoLM-7b）、實驗資料放在 Google Drive（README 2024-09-08 公告）、資料前處理與題目品質評估腳本、MT-Bench 回答與評審紀錄。未公開：Socratic 模擬器權重（README 明說尚未釋出）；合成腳本依賴實驗室內網的 GPT 封裝，需自行替換。訓練超參數在 repo 的 sft_7b.sh 中，論文正文未列。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "「反轉 loss 遮罩訓練使用者模擬器」的配方簡單可重用、靜態角色扮演的六種失控型態與結束條件設計對 T6 很有參考價值，但逼真度證據主要靠 ChatGPT 偵測器而有混淆、增益多在雜訊範圍內、且只用於生成訓練資料而非評估或回饋迴路，屬有價值但非必讀。",
+  "related": [
+    "2304.01196",
+    "2305.14233",
+    "2306.05685",
+    "1607.00070",
+    "1805.06966",
+    "2105.14454",
+    "2304.12244",
+    "2309.11235"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

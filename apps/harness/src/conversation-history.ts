@@ -12,37 +12,63 @@
  * | 日誌事件 | 畫面 |
  * | --- | --- |
  * | `turn/start`（`message`） | 人打的字（`message-start` `role: "human"`） |
+ * | `user/message`（`source.kind: "user"`） | 輪中插的話（#710），同上 |
+ * | `turn/start`（`subagent-settled`）／`user/message`（`source.kind: "subagent-settled"`） | 「這裡有一則背景子代理結算通知」（#851）：`custom` frame，`data` 同即時（{@link settleNoticeData}）；位置就是人話會出現的地方（那一輪的開頭、或輪中插進來的那一刻） |
+ * | `turn/start`（`agent-message`）／`user/message`（`source.kind: "agent-message"`） | 「背景子代理寫來一則話」（#863）：`custom` frame，`data` 同 {@link agentMessageNoticeData}，`text` 已拿掉給模型看的英文前綴；位置同上 |
  * | `turn/start`（任何一種） | `lifecycle running` |
  * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
- * | `session/end-seed` | 上一個行程停在一輪中間的話，那一輪在這裡收掉 |
+ * | `turn/end`（`reason.kind: "interrupted"`） | 續接時補寫的收尾（#721）：上一個行程死在這一輪中間，畫面與完成同（`completed`），不論那一輪死前有沒有 `interrupt/raised`；補的 `tool/result`（`TOOL_OUTCOME_UNKNOWN`）的卡仍畫成 `UNFINISHED_TOOL_TEXT`，與補寫之前一字不差；補的「還沒開始」（`TOOL_NOT_STARTED`，沒有 `tool/call`）沒有卡可收，不畫；舊檔形狀（補結在 end-seed 後面）的補結與收尾也不畫第二次 |
+ * | `session/end-seed` | 舊檔（#721 之前）上一個行程停在一輪中間的話，那一輪在這裡收掉；新檔那一輪已由上一列收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
+ * | `subagent/catalog` | 委派呼叫派出的子會話（#1023）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（配對的 `tool/call` 之後、同一輪）；`data` 同即時（{@link subagentCatalogData}）；31 以前的日誌沒有這一顆 |
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
+ *
+ * | `compaction/summary` | 壓縮過這件事（#896）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（格式 45 起在用到它的那次呼叫的回覆之前；44 以前的舊日誌在回覆之後）；`data` 同即時（{@link compactionData}） |
+ *
+ * | `plan/mode` | 計劃模式（#895）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的值**，日誌上一顆都沒有就不送；`data` 同即時（{@link planModeData}） |
+ *
+ * | `goal/change` ／ `turn/start{kind:'goal'}` | 目標（#897）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的值**，一顆 `goal/change` 都沒有就不送，清掉了送 `{ goal: null }`；折壞了就不送；`data` 同即時（{@link goalData}） |
  *
  * | `todo/write` ／ `turn/start` | 待辦清單（#575）：**一頁一顆，是這一頁結尾時的清單**，是 `null` 就不送；`data` 同即時（{@link todosData}） |
  *
  * | `model/usage` ／ 輪、模型、工具的起訖 | token 總帳與會話統計（#574）：**一頁各一顆，是從日誌開頭折到這一頁結尾的值**，還是初值就不送；`data` 同即時（{@link SessionTotals}） |
  *
+ * | `inbox/spliced` | 送出佇列（#637、#710）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的兩條清單**（空的也送），窗口裡一顆變動都沒有就不送；`data` 同即時（{@link inboxData}），不帶 `claimed`／`claimedNextStep` |
+ *
+ * | `session/title` | 標題（#647）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的標題**；18 以前的日誌沒有這一顆，照同一條規則當場推，推不出來就不送；`data` 同即時（{@link titleData}） |
+ *
  * 用量表那兩種不是逐顆轉：web 只留最新那一筆，逐顆轉只會多出一串馬上被蓋掉的 frame。「到這一頁結尾為止」包括這一頁
  * 開頭之前的——最後一輪在第一次模型呼叫之前就失敗的話，這一頁自己沒有那兩種事件，而即時的畫面上用量表還在。見
  * {@link historyPage}。
  *
- * 其餘的（壓縮、外掛注入的 `user/message`、模型起訖、命令、模式、目標、回饋）即時的畫面也不畫，這裡也不畫。
- * **壓縮不畫是偏離**：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段換成摘要；我們沒有
- * surface 那一軸，即時的畫面從來沒換過，歷史跟著即時。
+ * 其餘的（外掛注入的 `user/message`（`source.kind: "plugin"`）、模型起訖、命令、目標、回饋）即時的畫面也不畫，這裡也不畫。
+ * **壓縮畫成一格標記，不取代被蓋掉的列**（#896）：dsh 的畫面由那顆 `user/message {surfaceOp: replace}` 把被壓掉的那一段
+ * 換成摘要；我們沒有 surface 那一軸，標記以外即時的畫面從來沒換過，歷史跟著即時。
  *
  * ## 目標排的輪次不畫那一串字
  *
- * 即時的畫面只畫人送出去的那句（`appendHumanTurn`），目標排的那一輪的指示沒有人打過，畫面上沒有它。歷史照即時。
+ * 即時的畫面只畫人送出去的那句（開跑那一刻 `inbox` 帶的 `claimed`，只有送出佇列裡被領走的那一件才帶），目標排的
+ * 那一輪的指示沒有人打過、不進送出佇列，畫面上沒有它。歷史照即時。
  */
 
 import type {
+  WireAttachmentRef,
+  AgentMessagePayload,
+  CompactionPayload,
+  CustomFrameData,
   DeliverablesPresentedPayload,
   Event,
+  InboxPayload,
   ModelUsagePayload,
+  PlanModePayload,
+  SettleNoticePayload,
+  SubagentCatalogPayload,
+  TitlePayload,
   TodosPayload,
+  WireSessionReference,
   WireSessionStats,
   WireTokenUsage,
   ThreadHistoryQuery,
@@ -51,29 +77,77 @@ import type {
   WorkspaceChangesPayload,
 } from '@nexus/wire';
 import {
+  AGENT_MESSAGE,
+  COMPACTION,
   CONTEXT_MEASURE,
   DELIVERABLES_PRESENTED,
   HISTORY_PAGE_MAX_BYTES,
   HISTORY_PAGE_MESSAGES,
+  INBOX,
   MODEL_USAGE,
+  PLAN_MODE,
+  SETTLE_NOTICE,
   SESSION_STATS,
+  SUBAGENT_CATALOG,
+  TITLE,
   TODOS,
   TOKEN_USAGE,
+  UNFINISHED_TOOL_TEXT,
   WORKSPACE_CHANGES,
+  mentionField,
+  turnFailureText,
 } from '@nexus/wire';
 import type {
+  AttachmentRef,
   LoggedMessage,
+  InboxState,
+  QueuedInput,
   SessionEvent,
   SessionEventMap,
   SessionStatsState,
+  SubagentMentionRef,
+  SubagentSettleReason,
   TokenUsageTotals,
+  TurnAbortCause,
   UnreplayableReason,
 } from '@nexus/core';
-import { loggedMessageId, replayConversation, sessionStatsUnit, tokenUsageUnit } from '@nexus/core';
+import {
+  attachmentRefOfBlock,
+  createProjectionFold,
+  foldInbox,
+  inheritedEventCount,
+  isLogicalTurnStart,
+  isMaxTokensFinish,
+  isMentionHintBlock,
+  loggedContentBlocks,
+  mentionOfHintBlock,
+  loggedMessageId,
+  offloadedImagesOf,
+  openTurnStart,
+  promptTokensOf,
+  replayConversation,
+  sessionStatsUnit,
+  TOOL_NOT_STARTED,
+  TOOL_OUTCOME_UNKNOWN,
+  tokenUsageUnit,
+  type ProjectionUnit,
+} from '@nexus/core';
 
-import { toolResultText } from './tool-result-text.js';
+import { agentMessageBody, runIdOfSession } from './background-run-id.js';
+import { goalData, RootGoal } from './goal-wire.js';
+import { omittedPositionsOf } from './image-offload-wire.js';
+import { childProjectionData } from './projection-children.js';
+import type { ProjectionChildren } from './projection-children.js';
+import { projectionData } from './projection-wire.js';
+import { threadTitleOf } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
+import { threadTitleConfigSchema } from './settings/thread-title.js';
+import { capToolResultMeta, capToolText, toolResultText } from './tool-result-text.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
+// 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
+import type {} from '@nexus/plugin-plan-mode';
+import type {} from '@nexus/plugin-workspace-changes';
 
 /** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link historyPage}。 */
 const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
@@ -85,21 +159,47 @@ const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
 /** 參數不合規時拋的錯。wire 那側據它回 `invalid_argument`，不是 `unknown_error`。 */
 export class HistoryQueryError extends Error {}
 
-/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊（推理另走 {@link reasoningOf}）。 */
+/** 一則人的訊息帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：內容裡 `nexus-file`／`nexus-image` 區塊的參照，照順序。 */
+function attachmentsOf(message: LoggedMessage | undefined): readonly AttachmentRef[] {
+  if (!message) return [];
+  return loggedContentBlocks(message.data.content).flatMap((block: unknown) => {
+    const ref = attachmentRefOfBlock(block);
+    return ref === undefined ? [] : [ref];
+  });
+}
+
+/**
+ * 一則人的訊息點名的子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：內容裡那個固定的提示區塊讀回來。
+ * 輪中插話沒有 `turn/start`，點名只留在訊息裡。
+ */
+function mentionOf(message: LoggedMessage | undefined): ReturnType<typeof mentionOfHintBlock> {
+  if (!message) return undefined;
+  for (const block of loggedContentBlocks(message.data.content)) {
+    const found = mentionOfHintBlock(block);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
+ * 一則訊息的文字：區塊中的 text 接起來（推理另走 {@link reasoningOf}）。
+ * **點名的提示區塊不算**（#328 第 2 項）：那是給模型看的，不是使用者打的字，泡泡上不畫。
+ */
 function textOf(message: LoggedMessage | undefined): string {
-  const content: unknown = message?.data.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content
+  if (!message) return '';
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks
     .map((block: unknown) => {
       const typed = block as { type?: unknown; text?: unknown } | null;
-      return typed?.type === 'text' && typeof typed.text === 'string' ? typed.text : '';
+      return typed?.type === 'text' && typeof typed.text === 'string' && !isMentionHintBlock(block)
+        ? typed.text
+        : '';
     })
     .join('');
 }
 
 /**
- * 一則訊息的推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)）：content 陣列裡 `reasoning`
+ * 一則訊息的推理（[#527](https://github.com/DemianLi/nexus-agent/issues/527)）：content 區塊裡 `reasoning`
  * 那幾塊，照順序接起來。
  *
  * **只讀 content 區塊，不讀 `additional_kwargs.reasoning_content`**：即時那條看得到的是串流翻出來的
@@ -109,9 +209,9 @@ function textOf(message: LoggedMessage | undefined): string {
  * `additional_kwargs` 那一格翻成區塊（實測），所以兩條路本來就分得開。
  */
 function reasoningOf(message: LoggedMessage | undefined): string {
-  const content: unknown = message?.data.content;
-  if (!Array.isArray(content)) return '';
-  return content
+  if (!message) return '';
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks
     .map((block: unknown) => {
       const typed = block as { type?: unknown; reasoning?: unknown } | null;
       return typed?.type === 'reasoning' && typeof typed.reasoning === 'string'
@@ -121,12 +221,55 @@ function reasoningOf(message: LoggedMessage | undefined): string {
     .join('');
 }
 
-/** 畫面上算一則的：人打的字、模型的回覆。分頁以它計數，同 dsh 以 `user/message`／`assistant/message` 計。 */
+/**
+ * 畫面上算一則的：人打的字（一輪開頭的、輪中插的）、模型的回覆。分頁以它計數，同 dsh 以 `user/message`／`assistant/message` 計。
+ */
 function isMessage(event: SessionEvent): boolean {
   return (
     (event.type === 'turn/start' && event.data.kind === 'message') ||
+    isSteer(event) ||
     event.type === 'assistant/message'
   );
+}
+
+/** 人在一輪跑著時插的話（#710）：`user/message` 帶 user 來源。外掛塞的那一種畫面不畫。 */
+function isSteer(event: SessionEvent): event is SessionEvent<'user/message'> & {
+  readonly data: { readonly source: { readonly kind: 'user' } };
+} {
+  return event.type === 'user/message' && event.data.source.kind === 'user';
+}
+
+/**
+ * 這一句人話 `@` 的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：往後找緊跟著它的那則快照
+ * （`user/message`，`source.kind` 是 `session-reference`）。
+ *
+ * **快照是另一則訊息，不是這一句的一部分**：日誌上人話與快照各自一則，畫面只畫人話、快照不畫，引用的標記掛在人話上。
+ * 找到下一句人話、下一輪的開頭、或模型開始回覆就停——那之後的快照屬於別的話。一輪開頭那一句的快照是模型第一次被叫之前領的，
+ * 所以中間只會隔著送出佇列的領走、標題這類不是對話的事件。
+ */
+function referencesAfter(
+  events: readonly SessionEvent[],
+  from: number,
+): readonly WireSessionReference[] | undefined {
+  for (let at = from + 1; at < events.length; at += 1) {
+    const event = events[at]!;
+    if (event.type === 'user/message') {
+      const { source } = event.data;
+      if (source.kind === 'session-reference') {
+        return source.references.map(({ sessionId, label }) => ({ sessionId, label }));
+      }
+      if (source.kind === 'user') return undefined;
+      continue;
+    }
+    if (
+      event.type === 'turn/start' ||
+      event.type === 'model/start' ||
+      event.type === 'assistant/message'
+    ) {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 /**
@@ -134,7 +277,7 @@ function isMessage(event: SessionEvent): boolean {
  * （同一個 `callId` 再記一次 `tool/call`），從它切的話同一張卡會一半在這頁、一半在前一頁，接起來畫面上長兩張。
  */
 function isPageStart(event: SessionEvent): boolean {
-  return event.type === 'turn/start' && event.data.kind !== 'resume';
+  return isLogicalTurnStart(event);
 }
 
 /**
@@ -143,6 +286,14 @@ function isPageStart(event: SessionEvent): boolean {
  */
 function frame(method: string, time: number, data: Record<string, unknown>): Event {
   return { type: 'event', method, params: { namespace: [], timestamp: time, data } } as Event;
+}
+
+/**
+ * 一顆 `custom` frame。**歷史這一側的 `custom` frame 一律從這裡長**：`data` 只收 `@nexus/wire` 那張名字→酬載表上的
+ * 一格（[#685](https://github.com/DemianLi/nexus-agent/issues/685)），名字不在表上、或酬載形狀不對，當場編不過。
+ */
+function customFrame(time: number, data: CustomFrameData): Event {
+  return frame('custom', time, data);
 }
 
 /**
@@ -175,6 +326,58 @@ export function deliverablesData(
 }
 
 /**
+ * 「這裡有一則背景子代理結算通知」在線上的 `custom` 事件 `data`（[#851](https://github.com/DemianLi/nexus-agent/issues/851)）。
+ * **只有歷史用**：即時的畫面由送出佇列的 `claimed`／`claimedNextStep` 長同一種 entry（`id` 是 `inbox:<件的 id>`），
+ * 歷史沒有送出佇列，所以另有這一顆，`id` 是 `history-<日誌 seq>`。
+ * @param id - 那一格 entry 的 `id`。
+ * @param reason - 怎麼收的（日誌上 `source`／`turn/start` 記的，#884）；舊日誌沒有就不給。
+ * @param cause - 被中止時為什麼停（同一處記的，#1847）；舊日誌沒有就不給。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `SettleNoticePayload`。
+ */
+export function settleNoticeData(
+  id: string,
+  reason?: SubagentSettleReason,
+  cause?: TurnAbortCause,
+): {
+  readonly name: typeof SETTLE_NOTICE;
+  readonly payload: SettleNoticePayload;
+} {
+  return {
+    name: SETTLE_NOTICE,
+    payload: {
+      id,
+      ...(reason === undefined ? {} : { reason }),
+      ...(cause === undefined ? {} : { cause }),
+    },
+  };
+}
+
+/**
+ * 「背景子代理寫來一則話」在線上的 `custom` 事件 `data`（[#863](https://github.com/DemianLi/nexus-agent/issues/863)）。
+ * **只有歷史用**，理由與 {@link settleNoticeData} 相同：即時由送出佇列的 `claimed`／`claimedNextStep` 長同一種 entry。
+ *
+ * @param id - 那一格 entry 的 `id`。
+ * @param senderSessionId - 寄件的背景子代理的會話 id。
+ * @param text - 日誌上送進模型的整段字（含前綴）；這裡拿掉前綴。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `AgentMessagePayload`。
+ */
+export function agentMessageNoticeData(
+  id: string,
+  senderSessionId: string,
+  text: string,
+): { readonly name: typeof AGENT_MESSAGE; readonly payload: AgentMessagePayload } {
+  return {
+    name: AGENT_MESSAGE,
+    payload: {
+      id,
+      senderSessionId,
+      runId: runIdOfSession(senderSessionId),
+      text: agentMessageBody(senderSessionId, text),
+    },
+  };
+}
+
+/**
  * 一輪的改動紀錄在線上的 `custom` 事件 `data`（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。
  * 即時與這裡共用這一個，同 {@link deliverablesData}。**`seq` 是那顆事件在 root 日誌裡的位置**，web 拿它去
  * `changes/summary` 要摘要；從日誌重播出來的那幾顆，摘要多半已經不在了（只活到會話結束），路由回 404。
@@ -193,6 +396,9 @@ export function workspaceChangesData(seq: number): {
  * 即時與這裡共用，同 {@link deliverablesData}。**只送 `inputTokens`**：用量表只顯示「目前多大」；
  * 累計燒了多少另外走 {@link tokenUsageData}（#574）。
  *
+ * **送的是完整的 prompt**（未快取、快取讀、快取寫三桶相加，#724）：日誌上的 `inputTokens` 從格式 36 起只是未快取那一桶，直接送會讓
+ * 「目前多大」在命中快取時縮水。舊日誌沒有快取兩格，三桶相加就是它本來的 `inputTokens`，所以畫面的數字不因升版而變。
+ *
  * @param usage - 日誌裡那一顆 `model/usage` 的酬載。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `ModelUsagePayload`。
  */
@@ -200,7 +406,7 @@ export function modelUsageData(usage: SessionEventMap['model/usage']): {
   readonly name: typeof MODEL_USAGE;
   readonly payload: ModelUsagePayload;
 } {
-  return { name: MODEL_USAGE, payload: { inputTokens: usage.inputTokens } };
+  return { name: MODEL_USAGE, payload: { inputTokens: promptTokensOf(usage) } };
 }
 
 /**
@@ -219,6 +425,17 @@ export function contextMeasureData(measure: SessionEventMap['context/measure']):
       approxTokens: measure.approxTokens,
       messageCount: measure.messageCount,
       thresholds: measure.thresholds.map(({ type, value }) => ({ type, value })),
+      ...(measure.messagesCompactable !== undefined && {
+        messagesCompactable: measure.messagesCompactable,
+      }),
+      // 沒有就不出這一格（#1571 以前的日誌）：缺席＝沒量，不是 `0`。
+      ...(measure.breakdown !== undefined && {
+        breakdown: {
+          systemTokens: measure.breakdown.systemTokens,
+          toolsTokens: measure.breakdown.toolsTokens,
+          messageTokens: measure.breakdown.messageTokens,
+        },
+      }),
     },
   };
 }
@@ -243,6 +460,205 @@ export function todosData(todos: SessionEventMap['todo/write']['todos'] | null):
 }
 
 /**
+ * 被領走的一件。**`text` 是畫面要畫的那份**：`@` 了別的會話的話，引用網址已經換成 `@標題`（[#713](https://github.com/DemianLi/nexus-agent/issues/713)），
+ * 跟寫進日誌、餵給模型的是同一份；排在佇列裡的那件（{@link QueuedInput}）仍是使用者打的原文。
+ */
+export interface ClaimedInput extends QueuedInput {
+  /** 這一句 `@` 的會話，照出現先後。省略即沒有。 */
+  readonly references?: readonly WireSessionReference[];
+}
+
+/** 一次變動是因為領走而送的：開跑的那一件（`turn`），或送進模型的整條插話（`steps`，#710）。 */
+export interface InboxClaim {
+  readonly turn?: ClaimedInput;
+  readonly steps?: readonly ClaimedInput[];
+}
+
+/**
+ * 附件參照在線上的欄位（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：沒有就整個不給這一格，有就逐件拷成
+ * 乾淨的物件（日誌折出來的值是凍過的，不把它們的參照直接送上線）。
+ */
+export function attachmentsField(attachments: readonly AttachmentRef[] | undefined): {
+  readonly attachments?: readonly WireAttachmentRef[];
+} {
+  if (attachments === undefined || attachments.length === 0) return {};
+  return { attachments: attachments.map((ref) => ({ ...ref })) };
+}
+
+/**
+ * 送出佇列在線上的 `custom` 事件 `data`（[#637](https://github.com/DemianLi/nexus-agent/issues/637)、
+ * [#710](https://github.com/DemianLi/nexus-agent/issues/710)）：兩條整份清單，領走那一次多帶 `claimed` 或 `claimedNextStep`。
+ * 即時與這裡共用，規則見 `@nexus/wire` 的 `inbox.ts`。
+ *
+ * @param inbox - 兩條整份清單。
+ * @param claimed - 這一次是因為領走而送的。歷史不帶。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `InboxPayload`。
+ */
+export function inboxData(
+  inbox: InboxState,
+  claimed?: InboxClaim,
+): { readonly name: typeof INBOX; readonly payload: InboxPayload } {
+  // 子代理寄來的話（#863）：給模型看的英文前綴不上線，畫面拿到的是話本身。
+  const shown = (text: string, source: QueuedInput['source']) =>
+    source.kind === 'agent-message' ? agentMessageBody(source.senderSessionId, text) : text;
+  const wire = (items: readonly QueuedInput[]) =>
+    items.map(({ id, text, source, attachments, mention }) => ({
+      id,
+      text: shown(text, source),
+      source:
+        source.kind === 'subagent-settled'
+          ? {
+              kind: source.kind,
+              ...(source.reason === undefined ? {} : { reason: source.reason }),
+              ...(source.cause === undefined ? {} : { cause: source.cause }),
+            }
+          : { kind: source.kind },
+      ...attachmentsField(attachments),
+      ...mentionField(mention),
+    }));
+  const claim = ({ id, text, references, source, attachments, mention }: ClaimedInput) => ({
+    id,
+    text: shown(text, source),
+    ...attachmentsField(attachments),
+    ...mentionField(mention),
+    ...(source.kind === 'user'
+      ? {}
+      : source.kind === 'goal'
+        ? { source: { kind: source.kind } }
+        : source.kind === 'agent-message'
+          ? {
+              source: {
+                kind: source.kind,
+                senderSessionId: source.senderSessionId,
+                runId: runIdOfSession(source.senderSessionId),
+              },
+            }
+          : {
+              source: {
+                kind: source.kind,
+                ...(source.reason === undefined ? {} : { reason: source.reason }),
+                ...(source.cause === undefined ? {} : { cause: source.cause }),
+              },
+            }),
+    ...(references === undefined || references.length === 0
+      ? {}
+      : { references: references.map(({ sessionId, label }) => ({ sessionId, label })) }),
+  });
+  return {
+    name: INBOX,
+    payload: {
+      items: wire(inbox['next-turn']),
+      nextStep: wire(inbox['next-step']),
+      ...(claimed?.turn === undefined ? {} : { claimed: claim(claimed.turn) }),
+      ...(claimed?.steps === undefined ? {} : { claimedNextStep: claimed.steps.map(claim) }),
+    },
+  };
+}
+
+/**
+ * 會話標題在線上的 `custom` 事件 `data`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。即時與這裡共用，
+ * 規則見 `@nexus/wire` 的 `title.ts`。
+ *
+ * @param title - 標題，不是空字串。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `TitlePayload`。
+ */
+export function titleData(title: string): {
+  readonly name: typeof TITLE;
+  readonly payload: TitlePayload;
+} {
+  return { name: TITLE, payload: { title } };
+}
+
+/**
+ * 子代理目錄在線上的 `custom` 事件 `data`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）。即時與這裡共用，
+ * 規則見 `@nexus/wire` 的 `subagent-catalog.ts`。
+ *
+ * @param catalog - root 日誌上那一顆的載荷。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `SubagentCatalogPayload`。
+ */
+export function subagentCatalogData(catalog: SessionEventMap['subagent/catalog']): {
+  readonly name: typeof SUBAGENT_CATALOG;
+  readonly payload: SubagentCatalogPayload;
+} {
+  return {
+    name: SUBAGENT_CATALOG,
+    payload: { childId: catalog.childId, callId: catalog.callId, mode: catalog.mode },
+  };
+}
+
+/** 摘要器給模型的那則話裡，包著正文的標記。外框（前面的「You are in the middle…」）是寫給模型看的。 */
+const SUMMARY_OPEN = '<summary>';
+const SUMMARY_CLOSE = '</summary>';
+
+/**
+ * 摘要全文，拿掉面向模型的外框：只取 `<summary>` 到最後一個 `</summary>` 之間。
+ *
+ * **找不到標記就整段原樣給**，不丟東西：外框長什麼樣是基座（deepagents）的事，哪天換了，畫面上多一段英文，總好過
+ * 摘要整段消失。真的基座跑出來的形狀由 `compaction-wire.test.ts` 釘著，換了那條會紅。取最後一個結尾標記，是因為
+ * 摘要正文自己可能也提到 `</summary>`。
+ */
+function summaryBody(text: string): string {
+  const open = text.indexOf(SUMMARY_OPEN);
+  const close = text.lastIndexOf(SUMMARY_CLOSE);
+  if (open < 0 || close < open) return text;
+  return text.slice(open + SUMMARY_OPEN.length, close).trim();
+}
+
+/**
+ * root 壓縮過一次在線上的 `custom` 事件 `data`（[#896](https://github.com/DemianLi/nexus-agent/issues/896)）。即時與這裡
+ * 共用，規則見 `@nexus/wire` 的 `compaction.ts`。
+ *
+ * @param event - 那顆 `compaction/summary` 連同它在日誌裡的 `seq`。
+ * @param maxBytes - 摘要全文的位元組上限，就是 `tool-text` 那一列（`toolText.maxBytes`），見 {@link capToolText}。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `CompactionPayload`。
+ */
+export function compactionData(
+  event: { readonly seq: number; readonly data: SessionEventMap['compaction/summary'] },
+  maxBytes: number,
+): {
+  readonly name: typeof COMPACTION;
+  readonly payload: CompactionPayload;
+} {
+  const { cutoffIndex, filePath, summary } = event.data;
+  const text = summary === undefined ? '' : summaryBody(textOf(summary));
+  return {
+    name: COMPACTION,
+    payload: {
+      seq: event.seq,
+      cutoff: cutoffIndex,
+      saved: filePath !== null,
+      ...(text === '' ? {} : { summary: capToolText(text, maxBytes) }),
+    },
+  };
+}
+
+/**
+ * root 的計劃模式在線上的 `custom` 事件 `data`（[#895](https://github.com/DemianLi/nexus-agent/issues/895)）：投影的
+ * 整個值。即時與這裡共用，規則見 `@nexus/wire` 的 `plan-mode.ts`。
+ *
+ * @param active - 日誌上那顆 `plan/mode` 的 `active`。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `PlanModePayload`。
+ */
+export function planModeData(active: boolean): {
+  readonly name: typeof PLAN_MODE;
+  readonly payload: PlanModePayload;
+} {
+  return { name: PLAN_MODE, payload: { active } };
+}
+
+/**
+ * 這一段日誌結尾時的計劃模式：最後一顆 `plan/mode` 的值，一顆都沒有就是 `undefined`（不送，折疊器的初值 `null`
+ * 就是這個意思）。**往回找，不是整段折**：整份值，後寫的蓋掉先寫的。
+ */
+function planModeOf(events: readonly SessionEvent[]): boolean | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === 'plan/mode') return event.data.active;
+  }
+  return undefined;
+}
+
+/**
  * 這一顆會不會把待辦清單清成 `null`：開新的一輪，也就是不是 `resume` 的 `turn/start`（照 dsh 的 `todos` 投影）。
  * 「一輪開始」為什麼不含 `resume` 見 `@nexus/wire` 的 `todos.ts`。即時（pump）與這裡共用這一條。
  *
@@ -250,11 +666,8 @@ export function todosData(todos: SessionEventMap['todo/write']['todos'] | null):
  * @returns 會清空就是 `true`。
  */
 export function isTodosReset(event: SessionEvent): boolean {
-  return event.type === 'turn/start' && event.data.kind !== 'resume';
+  return isLogicalTurnStart(event);
 }
-
-/** 一顆 `custom` frame 的 `data`。 */
-type CustomData = { readonly name: string; readonly payload: unknown };
 
 /**
  * 會話累計的兩個投影（[#574](https://github.com/DemianLi/nexus-agent/issues/574)）：token 總帳與會話統計，從 root
@@ -275,7 +688,7 @@ export class SessionTotals {
    *
    * @param event - root 日誌的下一顆。
    */
-  apply(event: SessionEvent): CustomData[] {
+  apply(event: SessionEvent): CustomFrameData[] {
     this.seed([event]);
     return this.flush();
   }
@@ -294,12 +707,15 @@ export class SessionTotals {
   }
 
   /** 跟上一次交出去的不一樣的那幾個值，交出去之後記下來。 */
-  flush(): CustomData[] {
-    const out: CustomData[] = [];
+  flush(): CustomFrameData[] {
+    const out: CustomFrameData[] = [];
     const usage = tokenUsageUnit.view(this.#usage);
+    const sent = this.#sentUsage;
     if (
-      usage.inputTokens !== this.#sentUsage.inputTokens ||
-      usage.outputTokens !== this.#sentUsage.outputTokens
+      usage.inputTokens !== sent.inputTokens ||
+      usage.outputTokens !== sent.outputTokens ||
+      usage.cacheReadTokens !== sent.cacheReadTokens ||
+      usage.cacheWriteTokens !== sent.cacheWriteTokens
     ) {
       this.#sentUsage = usage;
       out.push(tokenUsageData(usage));
@@ -330,7 +746,15 @@ export function tokenUsageData(usage: TokenUsageTotals): {
 } {
   return {
     name: TOKEN_USAGE,
-    payload: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+    payload: {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      // 永遠等於 `inputTokens`，每次都送：web 靠這一格分辨新舊 server（只看有沒有，不看大小）。見 `WireTokenUsage`。
+      uncachedInputTokens: usage.inputTokens,
+      // 缺席＝日誌上沒有任何一顆報過，不放 key（不是 0）。
+      ...(usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: usage.cacheReadTokens }),
+      ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
+    },
   };
 }
 
@@ -366,6 +790,8 @@ function latestPressureEvents(events: readonly SessionEvent[]): PressureEvent[] 
     at -= 1
   ) {
     const event = events[at]!;
+    // 沒有正常回來的呼叫（#1022）也是一筆樣本（dsh 的 `contextPressure` 連 `assistant/attempt` 的用量也取樣），
+    // 與即時那一側（thread-pump 的 `model/usage` 分支）同一條。
     if (event.type === 'model/usage') usage ??= event;
     else if (event.type === 'context/measure') measure ??= event;
   }
@@ -375,8 +801,7 @@ function latestPressureEvents(events: readonly SessionEvent[]): PressureEvent[] 
 }
 
 function pressureFrame(event: PressureEvent): Event {
-  return frame(
-    'custom',
+  return customFrame(
     event.time,
     event.type === 'model/usage' ? modelUsageData(event.data) : contextMeasureData(event.data),
   );
@@ -404,14 +829,25 @@ function message(
   open = false,
   messageId?: string,
   reasoning = '',
+  references?: readonly WireSessionReference[],
+  attachments?: readonly AttachmentRef[],
+  startTime = time,
+  mention?: SubagentMentionRef,
+  omittedAttachments?: readonly number[],
 ): Event[] {
   const ids = role === 'ai' ? { run_id: key } : { id: key };
   return [
-    frame('messages', time, {
+    frame('messages', startTime, {
       event: 'message-start',
       role,
       ...ids,
       ...(messageId !== undefined && { id: messageId }),
+      ...(references !== undefined && references.length > 0 && { references }),
+      ...attachmentsField(attachments),
+      // 被圖片額度省略的附件位置（#1270），整份日誌到 `throughSeq` 的最終狀態。
+      ...(omittedAttachments !== undefined &&
+        omittedAttachments.length > 0 && { omittedAttachments }),
+      ...mentionField(mention),
     }),
     ...(reasoning === ''
       ? []
@@ -437,7 +873,7 @@ function message(
  * 這條 thread 現在還掛著中斷——同一個行程裡切回來。只有 pump 知道，見 `ThreadPump.pendings`。
  */
 export interface AwaitingInput {
-  /** 停在核准閘門上的工具名，所有掛著的中斷合起來。見 {@link historyFrames}。 */
+  /** 停在核准上的工具名（核准中斷酬載的 `actionRequests[].name`），所有掛著的中斷合起來。見 {@link historyFrames}。 */
   readonly gatedTools: ReadonlySet<string>;
 }
 
@@ -446,26 +882,38 @@ export interface AwaitingInput {
  *
  * ## 停下來等人的那一輪：兩種等法畫法不同，同即時
  *
- * 即時那條只把**本體拋了中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）：問答。子代理照 dsh
- * 不停下來等人（#324），所以 `task` 不會停在這裡。停在核准閘門上的那顆本體沒被呼叫到，卡從日誌 `tool/call` 開，
- * 一直是「執行中」——照 dsh：它的工具卡沒有「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。
+ * 即時那條只把**本體拋了問答中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）。前景子代理的核准
+ * 冒到人面前（#328 第 1 項）時 `task` 也停在這裡，同樣維持「執行中」。停在核准上的那顆一直是「執行中」——照 dsh：它的工具卡沒有
+ * 「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。核准有兩種來處，即時那條都不改卡：停在核准閘門上的
+ * 那顆本體沒被呼叫到，卡從日誌 `tool/call` 開；`request_sandbox_escalation` 在本體裡問人
+ * （[#700](https://github.com/DemianLi/nexus-agent/issues/700)），基座發的那顆帶核准中斷的 `tool-error` 由 pump 丟掉
+ * （`thread-pump.ts` 的 `isApprovalSuspension`）。
  *
- * 日誌分不出這兩種：都只留一顆沒落定的 `tool/call` 與一顆只帶 id 的 `interrupt/raised`。分得出來的是 pump 手上
+ * 日誌分不出問答與核准：都只留一顆沒落定的 `tool/call` 與一顆只帶 id 的 `interrupt/raised`。分得出來的是 pump 手上
  * 掛著的酬載，所以由它交進來 {@link AwaitingInput.gatedTools}：名字在裡面的維持執行中，其餘的畫成「等你回答」。
- * **認的是名字不是 callId**（閘門的酬載沒有 callId）：同一輪一顆同名的工具停在閘門、另一顆由本體拋了中斷，
- * 後者會被畫成執行中。今天的產品路徑走不到——本體會拋中斷的只有問答，它不過閘門。
+ * **認的是名字不是 callId**（核准的酬載沒有 callId）：同一輪一顆同名的工具停在核准、另一顆由本體拋了問答中斷，
+ * 後者會被畫成執行中。今天的產品路徑走不到——拋問答中斷的只有 `ask_user_question` 與 `exit_plan_mode`，兩顆都不問核准。
  *
  * @param events - 從一輪的開頭切下來的一段（見 {@link isPageStart}）。
  * @param awaitingInput - 有給就是這一段的最後一輪停下來等人，**而且這條 thread 現在還掛著那幾顆中斷**。那幾張卡
- *   照上面分兩種畫，都不收掉；卡本身（核准的按鈕）補不回來——中斷的酬載只在發出去的那一顆 frame 上。行程重開過的話
+ *   照上面分兩種畫，都不收掉。面板（核准的按鈕、提問）不從這裡來——中斷的酬載只在發出去的那一顆 frame 上，由 pump
+ *   在下行接上時補送（`ThreadPump.subscribe`，[#728](https://github.com/DemianLi/nexus-agent/issues/728)）。行程重開過的話
  *   中斷已經不在了（它在 checkpointer 裡），那幾張照即時那條規則收成失敗。
+ * @param inherited - 分叉繼承來的前綴有幾顆（`inheritedEventCount`，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），
+ *   由呼叫端用整份日誌算好交進來：一頁不一定含標記。前綴裡的 `subagent/catalog` 不轉 frame，同 dsh 的
+ *   `subagentCatalog` 投影（`packages/subagent/subagent/src/catalog.ts:124-126`，`687f282e`）——這顆 frame 就是拿來取代
+ *   那個投影的（`@nexus/wire` 的 `subagent-catalog.ts`）。前綴裡的子代理是來源 thread 的，`<這條>/<run>` 開不到。省略即 0。
  */
 export function historyFrames(
   events: readonly SessionEvent[],
   toolTextMaxBytes: number,
   awaitingInput?: AwaitingInput,
+  offloadedImages?: ReadonlyMap<number, ReadonlySet<number>>,
+  inherited = 0,
 ): Event[] {
   const frames: Event[] = [];
+  /** 被圖片額度省略的圖（#1270）：`seq` → 圖序號。一頁從輪首切，比這一頁新的 `image/offload` 由呼叫端用整份日誌算好交進來。 */
+  const offloaded = offloadedImages ?? offloadedImagesOf(events);
   let turnOpen = false;
   let interrupted = false;
   /**
@@ -476,6 +924,15 @@ export function historyFrames(
   /** 這一輪記了 `tool/call`、還沒有 `tool/result` 的：callId → 工具名。 */
   const unsettled = new Map<string, string>();
   const last = events.at(-1);
+  /**
+   * 每一次模型呼叫開始的時刻：`model/start` 的 `seq` → `time`。一則回覆的 `startedAt` 取自它所屬那一次的開始（#1048），
+   * 見 `AiEntry.startedAt`。一頁從輪首切，一輪裡的每顆 `model/start` 都在同一頁；找不到（#1021 之前的日誌沒有
+   * `modelCall`、或呼叫的開始不在這一段）就退回回覆落盤的時刻。
+   */
+  const modelStartedAt = new Map<number, number>();
+  for (const event of events) {
+    if (event.type === 'model/start') modelStartedAt.set(event.seq, event.time);
+  }
   /**
    * 這一段結尾時的待辦清單（#575）。**從 `null` 起算不用往前補**：一頁一定從 seq 0 或一顆不是 `resume` 的
    * `turn/start` 開始（`historyPage` 在輪邊界上切），而那一顆本來就會把它清成 `null`。
@@ -493,7 +950,7 @@ export function historyFrames(
     unsettled.clear();
   };
 
-  for (const event of events) {
+  for (const [index, event] of events.entries()) {
     if (isTodosReset(event)) todos = null;
     else if (event.type === 'todo/write') todos = { time: event.time, list: event.data.todos };
     switch (event.type) {
@@ -508,16 +965,106 @@ export function historyFrames(
         if (turnOpen || suspended) close(event.time, { event: 'completed' });
         frames.push(lifecycle(event.time, { event: 'running' }));
         turnOpen = true;
+        if (event.data.kind === 'subagent-settled') {
+          frames.push(
+            customFrame(
+              event.time,
+              settleNoticeData(`history-${event.seq}`, event.data.reason, event.data.cause),
+            ),
+          );
+        }
+        // 子代理寫來的話叫醒的一輪（#863）：即時由 `claimed` 長「某某說」，歷史照即時。
+        if (event.data.kind === 'agent-message') {
+          frames.push(
+            customFrame(
+              event.time,
+              agentMessageNoticeData(
+                `history-${event.seq}`,
+                event.data.senderSessionId,
+                event.data.text,
+              ),
+            ),
+          );
+        }
         if (event.data.kind === 'message') {
-          frames.push(...message(event.time, 'human', `history-${event.seq}`, event.data.text));
+          frames.push(
+            ...message(
+              event.time,
+              'human',
+              `history-${event.seq}`,
+              event.data.text,
+              false,
+              undefined,
+              '',
+              referencesAfter(events, index),
+              event.data.attachments,
+              event.time,
+              event.data.mention,
+              omittedPositionsOf(event.data.attachments ?? [], offloaded.get(event.seq)),
+            ),
+          );
         }
         break;
+      case 'user/message': {
+        // 輪中插進來的結算通知（#851）：即時由 `claimedNextStep` 長「通知」，歷史照即時。
+        if (event.data.source.kind === 'subagent-settled') {
+          frames.push(
+            customFrame(
+              event.time,
+              settleNoticeData(
+                `history-${event.seq}`,
+                event.data.source.reason,
+                event.data.source.cause,
+              ),
+            ),
+          );
+        }
+        // 輪中插進來的子代理的話（#863）：即時由 `claimedNextStep` 長「某某說」，歷史照即時。
+        if (event.data.source.kind === 'agent-message') {
+          frames.push(
+            customFrame(
+              event.time,
+              agentMessageNoticeData(
+                `history-${event.seq}`,
+                event.data.source.senderSessionId,
+                textOf(event.data.message),
+              ),
+            ),
+          );
+        }
+        // 輪中插的話（#710）：即時的畫面由 `inbox` 的 `claimedNextStep` 畫一則人的話，歷史照即時。外掛塞的不畫。
+        if (isSteer(event)) {
+          frames.push(
+            ...message(
+              event.time,
+              'human',
+              `history-${event.seq}`,
+              textOf(event.data.message),
+              false,
+              undefined,
+              '',
+              referencesAfter(events, index),
+              attachmentsOf(event.data.message),
+              event.time,
+              mentionOf(event.data.message),
+              omittedPositionsOf(attachmentsOf(event.data.message), offloaded.get(event.seq)),
+            ),
+          );
+        }
+        break;
+      }
       case 'assistant/message': {
         const text = textOf(event.data.message);
         const reasoning = reasoningOf(event.data.message);
         // 只帶工具呼叫的那一次沒有字可畫。即時的畫面那時會長一則空的，歷史不跟著長。**只有推理的那一次
-        // 有東西可畫**（#527）：模型只想、只呼叫工具的那幾步，即時那則帶著推理，歷史也要有。
-        if (text !== '' || reasoning !== '') {
+        // 有東西可畫**（#527）：模型只想、只呼叫工具的那幾步，即時那則帶著推理，歷史也要有。**撞到輸出上限
+        // 的那一次也長**（#433），空的也長：這一輪的截斷標在最後一則 root 回覆上，即時那則就是它，歷史略過
+        // 的話標記會落到前一步有字的那則上、或無處可標。
+        if (
+          text !== '' ||
+          reasoning !== '' ||
+          isMaxTokensFinish(event.data.message.data.response_metadata)
+        ) {
           frames.push(
             ...message(
               event.time,
@@ -527,6 +1074,10 @@ export function historyFrames(
               event.data.interrupted,
               loggedMessageId(event.data.message),
               reasoning,
+              undefined,
+              undefined,
+              // 開始＝這一次模型呼叫開始（dsh 的 `stepStartTime`），不是落盤；不會晚於落盤，防時鐘倒退。
+              Math.min(event.time, modelStartedAt.get(event.data.modelCall ?? -1) ?? event.time),
             ),
           );
         }
@@ -544,36 +1095,86 @@ export function historyFrames(
         );
         break;
       case 'tool/result': {
+        // 續接補寫的合成結果（#721）對不到一張開著的卡就不畫：
+        // - 「還沒開始」：回覆裡要了、行程在記 `tool/call` 之前死掉的呼叫，前面沒有 `tool-started`，沒有卡可收；
+        // - 舊檔形狀（開著的輪＋end-seed，補結接在 end-seed 後面）：那一輪與它的卡已在 end-seed 收掉，補結來得太晚。
+        // 補一顆 `tool-finished` 只會對一張不存在或已收的卡說話。
+        if (
+          (event.data.error?.code === TOOL_NOT_STARTED ||
+            event.data.error?.code === TOOL_OUTCOME_UNKNOWN) &&
+          !unsettled.has(event.data.callId)
+        ) {
+          break;
+        }
         unsettled.delete(event.data.callId);
         // **成功也帶文字**（#439）：抽字的規則與即時那條共用（`tool-result-text.ts`），
         // 兩邊各寫一份的話，同一張卡會「即時一個樣、重新整理另一個樣」。
-        const text = toolResultText(event.data.message, toolTextMaxBytes);
+        const text = toolResultText(event.data.message);
         // 格式 9 以前沒有 `message`：失敗的那張只剩錯誤碼可講，碼也沒有就交給折疊器說「未指名的錯誤」。
-        const reason = text ?? (event.data.isError ? event.data.error?.code : undefined);
+        // **續接補寫的「結果不明」（#721）畫成同一句「這次呼叫沒有結果」**：補寫之前，當掉那一輪的卡在 end-seed 被
+        // 收成失敗、帶的就是這一句，web 有兩處拿它做完全相等比對（提問卡是否「被停止」、計劃卡的 outcome）。
+        // 補寫改的是日誌，不該順手改畫面——要不要讓畫面講「結果不明」是另一個決定。
+        const reason =
+          event.data.error?.code === TOOL_OUTCOME_UNKNOWN
+            ? UNFINISHED_TOOL_TEXT
+            : (text ?? (event.data.isError ? event.data.error?.code : undefined));
+        // meta 同即時那條（`ThreadPump.#noteVerdict`）：失敗的不帶，上限照 `capToolResultMeta`。格式 16 以前沒有這一格。
+        const meta = event.data.isError
+          ? undefined
+          : capToolResultMeta(event.data.meta, toolTextMaxBytes);
         frames.push(
           frame('tools', event.time, {
             event: 'tool-finished',
             tool_call_id: event.data.callId,
             failed: event.data.isError,
             ...(reason !== undefined ? { message: reason } : {}),
+            ...(meta !== undefined ? { meta } : {}),
+            // 碼同即時那條（`ThreadPump` 的 `applyVerdict`，#667）：只有失敗的帶。上面紅字的退路照舊，
+            // 判斷改讀這一格。
+            ...(event.data.isError && event.data.error?.code !== undefined
+              ? { code: event.data.error.code }
+              : {}),
           }),
         );
         break;
       }
       case 'deliverables/presented':
         // 這裡讀的本來就只有 root 那一份，子代理的交付不在裡面——同即時那條規則。
-        frames.push(frame('custom', event.time, deliverablesData(event.data, event.seq)));
+        frames.push(customFrame(event.time, deliverablesData(event.data, event.seq)));
+        break;
+      case 'subagent/catalog':
+        // 子代理目錄（#1023）：逐顆轉，位置就是日誌上的位置——配對的 `tool/call` 在它前面、同一輪，卡已經開了。
+        // 分叉繼承來的不轉（#1579），見 `inherited`。
+        if (event.seq < inherited) break;
+        frames.push(customFrame(event.time, subagentCatalogData(event.data)));
         break;
       case 'workspace/changes':
         // 同上：只讀 root 那一份，而記錄器本來就只寫在 root。
-        frames.push(frame('custom', event.time, workspaceChangesData(event.seq)));
+        frames.push(customFrame(event.time, workspaceChangesData(event.seq)));
+        break;
+      case 'compaction/summary':
+        // 壓縮過這件事（#896）：位置就是日誌上的位置，在觸發它的那次呼叫的回覆之後（見 `@nexus/wire` 的 `compaction.ts`）。
+        // 只讀 root 那一份，子代理壓縮是它自己那份日誌的事。
+        frames.push(customFrame(event.time, compactionData(event, toolTextMaxBytes)));
         break;
       case 'interrupt/raised':
         interrupted = true;
         break;
       case 'turn/end':
         if (event.data.reason?.kind === 'aborted') {
-          close(event.time, { event: 'failed', aborted: true });
+          // 原因同即時那條（#1624）：人按停止、時鐘到點分得出來。
+          close(event.time, { event: 'failed', aborted: true, cause: event.data.reason.cause });
+        } else if (event.data.reason?.kind === 'max-tokens') {
+          // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
+          close(event.time, { event: 'completed', maxTokens: true });
+        } else if (event.data.reason?.kind === 'blocked') {
+          // 被準入閘門擋下（#633，封存的會話）：一個請求都沒發，也不是失敗。同即時那條，收尾 frame 補 `blocked`。
+          close(event.time, { event: 'completed', blocked: true });
+        } else if (event.data.reason?.kind === 'interrupted') {
+          // 續接補寫的收尾（#721）：那一輪死了，不是停在核准點等人——死前就算記過 `interrupt/raised`
+          // 也不能畫成「等人回覆」。畫面與舊檔在 end-seed 收掉的那一條一致。
+          // 舊檔形狀（補結接在 end-seed 後面）那一輪已在 end-seed 收掉，這顆不再收第二次。
+          if (turnOpen || suspended) close(event.time, { event: 'completed' });
         } else if (interrupted) {
           turnOpen = false;
           suspended = true;
@@ -582,10 +1183,15 @@ export function historyFrames(
         }
         break;
       case 'turn/failed':
-        close(event.time, { event: 'failed', error: event.data.message });
+        close(event.time, {
+          event: 'failed',
+          error: turnFailureText(event.data.message, event.data.error?.code),
+          ...(event.data.error !== undefined && { code: event.data.error.code }),
+        });
         break;
       case 'session/end-seed':
-        // 上一個行程死在一輪中間：那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 舊檔（#721 之前）：上一個行程死在一輪中間，那一輪沒有收尾，在這裡收，同 dsh 冷讀時補的合成收尾。
+        // 新檔由續接補寫的 `turn/end {interrupted}` 收，走不到這裡。
         if (turnOpen || suspended) close(event.time, { event: 'completed' });
         break;
       default:
@@ -598,7 +1204,7 @@ export function historyFrames(
       close(last.time, { event: 'completed' });
     } else {
       for (const [callId, name] of unsettled) {
-        // 停在閘門上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
+        // 停在核准上的那顆不發：`tool-started` 開的卡本來就是執行中，同即時。
         if (awaitingInput.gatedTools.has(name)) continue;
         frames.push(frame('tools', last.time, { event: 'tool-suspended', tool_call_id: callId }));
       }
@@ -607,7 +1213,7 @@ export function historyFrames(
   }
   // 用量表：這一段裡各自最新的那一顆，放在最後——web 只留最新那一筆，放哪裡都一樣，放最後讀起來就是「到結尾為止」。
   frames.push(...latestPressureEvents(events).map(pressureFrame));
-  if (todos !== null) frames.push(frame('custom', todos.time, todosData(todos.list)));
+  if (todos !== null) frames.push(customFrame(todos.time, todosData(todos.list)));
   return frames;
 }
 
@@ -698,6 +1304,27 @@ function fitBytes(
 }
 
 /**
+ * 判舊格式時要看的那一段日誌：**還開著的那一輪不算**（[#953](https://github.com/DemianLi/nexus-agent/issues/953)）。
+ *
+ * 舊格式的判準是「叫過模型、卻沒有任何一則回覆」（`replayConversation` 的 `reply-missing`）。**正在跑的那一輪正好符合**：
+ * `model/start` 已經寫了，回覆要等這次呼叫結束才落盤。新會話第一句的回覆串流中重新整理，整份日誌就只有這一輪，
+ * 於是被誤報成「回覆沒有保存」，而且那句話在回覆落盤之後還留在畫面上（歷史是一次拿的）。
+ *
+ * 開著的那一輪由日誌自己認（{@link openTurnStart}），不另問 pump：畫面的 `lifecycle running` 也是從同一份日誌的
+ * `turn/start` 折出來的，兩邊不會各說各話。真的舊格式照舊：開著的那一輪前面的每一輪都還在被檢查，只有尾巴不算——
+ * 往前退到那一輪的**邏輯**開頭，續接核准的 `resume` 不另開一輪。
+ *
+ * @param events - 這條 thread 的 root 日誌，全部。
+ * @returns 沒有開著的輪就是原樣；有的話是那一輪開頭之前的那一段。
+ */
+function settledEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  let from = openTurnStart(events);
+  if (from < 0) return events;
+  while (from > 0 && !isLogicalTurnStart(events[from]!)) from -= 1;
+  return events.slice(0, from);
+}
+
+/**
  * 一頁歷史。
  *
  * @param events - 這條 thread 的 root 日誌，全部。
@@ -713,11 +1340,15 @@ export function historyPage(
   awaitingInput?: AwaitingInput,
   onOversize?: (bytes: number) => void,
   toolText?: ToolTextConfig,
+  titleLimits?: ThreadTitleLimits,
+  projections: readonly ProjectionUnit[] = [],
+  projectionChildren?: ProjectionChildren,
 ): ThreadHistoryResult {
   // **這是這條路上唯一的退路**：呼叫端沒講就用 schema 的預設，同 `createWireHandler` 對
   // `deliverableLimits` 的做法（#536）。底下每一層都是必填轉發，所以「忘了傳」不會變成
   // 一個安靜的預設值。
   const toolTextMaxBytes = (toolText ?? toolTextConfigSchema.parse({})).maxBytes;
+  const titleLimitsOrDefault = titleLimits ?? threadTitleConfigSchema.parse({});
   const maxMessages = query.maxMessages ?? HISTORY_PAGE_MESSAGES;
   checkIndex('maxMessages', maxMessages, 1);
   checkIndex('beforeSeq', query.beforeSeq, 0);
@@ -737,6 +1368,12 @@ export function historyPage(
     if (counted < maxMessages) continue;
     cut = at;
     // 退到那一輪的開頭，一輪不拆兩頁。
+    // **偏離 dsh（理由 1，#1555 N1372）：不收 `maxMessages: 500` 的硬上限。** dsh 的 `paginate` 湊到 `minTurns: 2` 且 ≥ 50 則才算夠，
+    // 在那之前只要先數滿 500 則就切在 groupStart——所以一輪超過 500 則、或最後兩輪合計超過 500 則，都會在輪中間硬切
+    // （`session.ts:54` 的 `HISTORY_PAGE_OPTIONS`，`history.ts:392-427` 的 `paginate`，`687f282e`）。
+    // 我們的較早頁是「自己從空的折、再接在前面」（`use-conversation.ts` 的 `prependEntries`），這是已登記偏離「歷史送線上 `Event`、不送
+    // 日誌事件」的後果（`@nexus/wire` `protocol.ts` 的「偏離：送的是線上的 `Event`」段）：從半輪開始的頁折不出來，所以頁不能切在一輪中間。
+    // 退到位元組上限 {@link HISTORY_PAGE_MAX_BYTES}（軟的，`fitBytes`，單獨一輪超標時 `onOversize` 叫一次）。
     while (cut > 0 && !isPageStart(window[cut]!)) cut -= 1;
     break;
   }
@@ -754,15 +1391,62 @@ export function historyPage(
   const totals = new SessionTotals();
   totals.seed(window.slice(0, end));
   const lastTime = window[end - 1]?.time ?? 0;
-  const totalsFrames = totals.flush().map((data) => frame('custom', lastTime, data));
+  const totalsFrames = totals.flush().map((data) => customFrame(lastTime, data));
+  // 送出佇列（#637）：**只在最新一頁**，而且是到 `throughSeq` 為止**目前的**清單，不是這一頁結尾的——佇列不會在一輪
+  // 開頭清空，前幾頁插進來、還沒領走的只看本頁會漏掉。較舊的頁不帶：畫面往上捲時才抓它們，那時即時的推送早就換過
+  // 清單，帶的話會把新的蓋回舊的。空的也送（即時清空時推的就是空的），一顆變動都沒有就不送。
+  const inboxFrames =
+    end === window.length && window.some((event) => event.type === 'inbox/spliced')
+      ? [customFrame(lastTime, inboxData(foldInbox(window)))]
+      : [];
+  // 標題（#647）：同送出佇列，**只在最新一頁**、是目前的那一個。它不在一輪開頭清空，較舊的頁帶的話會把新的蓋回舊的。
+  const title = end === window.length ? threadTitleOf(window, titleLimitsOrDefault) : undefined;
+  const titleFrames = title === undefined ? [] : [customFrame(lastTime, titleData(title))];
+  // 計劃模式（#895）：同標題，**只在最新一頁**、是目前的值。它跨輪也跨頁，不像待辦清單在一輪開頭清空，
+  // 較舊的頁帶的話會把新的蓋回舊的。日誌上一顆都沒有就不送。
+  const planActive = end === window.length ? planModeOf(window) : undefined;
+  const planFrames =
+    planActive === undefined ? [] : [customFrame(lastTime, planModeData(planActive))];
+  // 目標（#897）：同標題與計劃模式，**只在最新一頁**、是目前的值。清掉了送 `{ goal: null }`，一顆 `goal/change` 都沒有就
+  // 不送；折壞了（接不上的變更）也不送——寫壞的日誌不該讓畫面畫出編出來的目標。
+  const goal = new RootGoal();
+  if (end === window.length) goal.seed(window);
+  const goalFrames =
+    end === window.length && goal.touched && !goal.broken
+      ? [customFrame(lastTime, goalData(goal.value))]
+      : [];
+  // 插件投影（#1026）：同標題與計劃模式，**只在最新一頁**、是目前的值，而且**每個註冊的單元都送**（包括沒折到任何事件的、
+  // 空日誌的、折壞了的）——這一頁就是 baseline，web 的 `projections` 有哪些 key 由它定；即時那一側只送之後的變化。
+  // 折疊器與 pump 的即時折疊是同一個（`createProjectionFold`），frame 長相只寫在 `projection-wire.ts`。
+  // 子代理自己的投影（#1028）同一頁、同一個折疊器：宣告 `children` 的單元對 `projectionChildren` 裡每個子代理各折一份，
+  // 集合與即時那一側讀的是同一份（`ThreadPump.projectionChildren`）。
+  const projectionFrames =
+    end === window.length
+      ? [
+          ...createProjectionFold(projections)
+            .fold(window)
+            .map((value) => customFrame(lastTime, projectionData(value))),
+          ...childProjectionData(projections, projectionChildren ?? new Map()).map((data) =>
+            customFrame(lastTime, data),
+          ),
+        ]
+      : [];
+  const tailFrames = [
+    ...totalsFrames,
+    ...inboxFrames,
+    ...titleFrames,
+    ...planFrames,
+    ...goalFrames,
+    ...projectionFrames,
+  ];
   const bytes =
     fitted.bytes +
     (carried.length === 0 ? 0 : weigh(carried, toolTextMaxBytes)) +
-    (totalsFrames.length === 0 ? 0 : Buffer.byteLength(JSON.stringify(totalsFrames), 'utf8'));
+    (tailFrames.length === 0 ? 0 : Buffer.byteLength(JSON.stringify(tailFrames), 'utf8'));
   // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
   if (bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(bytes);
 
-  const replay = replayConversation(events);
+  const replay = replayConversation(settledEvents(events));
   return {
     // **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前
     // 寫的那一段；哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，
@@ -772,8 +1456,11 @@ export function historyPage(
         [...carried, ...window.slice(cut, end)],
         toolTextMaxBytes,
         end === events.length ? awaitingInput : undefined,
+        offloadedImagesOf(window),
+        // 秤重（`fitBytes`）不帶它：前綴的目錄多秤進去是高估，方向安全。
+        inheritedEventCount(events),
       ),
-      ...totalsFrames,
+      ...tailFrames,
     ],
     firstSeq: cut,
     throughSeq,

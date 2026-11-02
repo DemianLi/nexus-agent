@@ -1,0 +1,178 @@
+{
+  "id": "2510.11977",
+  "title": "Holistic Agent Leaderboard: The Missing Infrastructure for AI Agent Evaluation",
+  "topic": "T8",
+  "subarea": "成本、效率與使用者滿意度等多目標分數",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "建一套標準化的 agent 評估 harness 與公開排行榜（HAL），在 9 個 benchmark × 9 個模型 × 多種 scaffold 上跑 21,730 次 rollout，用「正確率對美元成本／token 用量」的 Pareto 凸包取代單一正確率排名，再用 LLM 輔助的軌跡分析（Docent）抓出捷徑、危險動作與 scaffold 本身的缺陷。",
+  "problem": "agent 評估有三類毛病：（1）基礎建設不標準、慢、容易出錯，一個 benchmark 序列跑要好幾週，排行榜跟不上新模型；（2）agent 的成本差距可達兩個數量級，但評估幾乎只報正確率，也很少在同一 scaffold 下跨模型比較（作者查到 9 個 benchmark 中只有 2 個曾在同一 scaffold 下比過 4 個以上模型）；（3）agent 會走捷徑灌分、會做出在部署中後果嚴重的動作，而只看最終分數的評估偵測不到。對 T8 來說，核心問題是「單一正確率無法支撐部署決策」：一個貴一個數量級、只多幾個百分點的 agent 不一定比較好，同樣 0 分的『放棄作答』與『洩漏信用卡』代價也完全不同。",
+  "core_idea": "把 agent 評估拆成可重用的三件事：（1）一個與 scaffold 和 benchmark 都解耦的 harness，所有 LLM 呼叫自動記錄 token 與成本；（2）以「模型 × scaffold × benchmark」三軸做大規模評估，每個 benchmark 以正確率對成本（美元與 token 兩種）的 Pareto 凸包呈現，讓使用者依預算挑 agent；（3）把軌跡分析當成評估的必要環節，用 rubric 化的 LLM judge 在上千條 transcript 上標出指令違反、工具失敗、自我修正、驗證、環境障礙、作弊，並回頭拿來校驗 scaffold 與 benchmark 本身。",
+  "method": {
+    "harness_contract": "agent 端只需暴露 run(input, **kwargs) → dict，把 task ID 對應到提交結果；benchmark 端以合約提供任務資料、必要檔案／執行限制與計分程序。harness 負責打包輸入、在選定後端執行 agent、蒐集原始輸出與結構化 log（含 token 用量），最後彙整正確率、成本、延遲並輸出成排行榜可直接吃的結構化結果。HAL 的 setup 環境與 agent 執行環境分開，以處理 benchmark 凍結相依套件的版本衝突。",
+    "logging": "整合 W&B Weave：harness 在每次 run 開始時以唯一 run ID 初始化 Weave client，並在下游呼叫設定 weave_task_id 屬性，讓 LLM 呼叫與工具呼叫可依 benchmark 任務分組；Weave 自動擷取模型 API 呼叫、工具呼叫、API 參數與用量，不需改 agent 邏輯。",
+    "model_access": "所有 scaffold 改為透過 LiteLLM 呼叫模型以跨供應商；Anthropic 的 high reasoning 用 LiteLLM 預設的 4,096 reasoning tokens，OpenAI 的 low/medium/high 預算不公開。",
+    "execution_backends": "三種後端共用同一介面：本機（無沙箱，開發用）、Docker（輕量隔離）、Azure VM（數百台平行，含 GPU VM）。以 semaphore 控制並行、每個任務一個獨立容器或 VM；自動佈建、設定與拆除資源，強制逾時，把產物與 log 複製回 harness 目錄，保證清理以控制成本，並記錄三種後端的例外。",
+    "cost_accounting": "成本＝各模型 token 用量 × 單價，單價固定用 2025-09-24 的公開牌價（Table A11，例如 Claude Opus 4.1 輸入／輸出每百萬 token $15/$75、Gemini 2.0 Flash $0.1/$0.4；DeepSeek R1 用 Together.ai 價格）。目前不扣快取命中（SWE-Agent 有用快取，但以全價計）。token 維度另外畫一條 frontier（附錄 A10.1 說 token 圖呈現的是 completion tokens）。",
+    "score_definition": "正確率沿用各 benchmark 自己的計分：CORE-Bench、TAU-bench 是二元成功；AssistantBench 每題是浮點分數；SciCode 以主題目（main problem）計正確率，另追蹤子題。排行榜表格對每個 scaffold–model 組合報「最好那一次 run」的正確率與對應成本，並標出是否 Pareto optimal；Pareto 圖上的誤差棒是多次 run 的 min–max。",
+    "pareto_frontier": "在（成本, 正確率）平面上取凸包而不是階梯狀 frontier，理由是可以隨機混用兩個 agent（例如 A 用 30%、B 用 70%）得到中間點；並把原點 (0,0) 納入，因為『不部署』永遠是零成本零正確率的選項。美元成本與 token 用量各畫一條 frontier，因為模型價格會大幅變動（o3 上市後降價 80%）。",
+    "experimental_grid": "9 個 benchmark 分四個領域：網頁（Online Mind2Web 300 題、AssistantBench 取 33 題子集、GAIA 公開驗證集 165 題）、程式（SWE-bench Verified Mini 50 題、USACO 307 題）、科學（CORE-Bench Hard 公開測試集 45 篇、ScienceAgentBench 102 題、SciCode 65 個主題目）、客服（TAU-bench Airline 公開集 50 題）。主分析 9 個模型（o3、GPT-4.1、GPT-5 Medium、Claude 3.7 Sonnet／Opus 4.1 各有無 high reasoning、o4-mini low/high、DeepSeek V3／R1、Gemini 2.0 Flash），附錄排行榜另含 Sonnet 4、Opus 4、Gemini 2.5 Pro、DeepSeek V3.1、GPT-OSS-120B。scaffold 以各 benchmark 原作者的專用 scaffold 為主（CORE-Agent、SWE-Agent、SAB Self-Debug、Browser-Use、SeeAct、HF Open Deep Research、USACO Episodic+Semantic、SciCode Zero Shot／Tool Calling），再加上自建的 HAL Generalist 於 CORE-Bench、SWE-bench Mini、TAU-bench（以及部分 GAIA、ScienceAgentBench、USACO）。共 186 次 run，其中 142 個 model–scaffold–benchmark 組合進主分析；TAU-bench Few Shot scaffold 因資料洩漏整組剔除。",
+    "generalist_agent": "HAL Generalist 建在 smolagents CodeAgent＋LiteLLMModel 上，plan–act 迴圈，每 4 步重新規劃一次，單一任務最多 200 步；工具有 Google 搜尋（serpapi）、網頁瀏覽、Python 直譯器、bash、文字檢視器、檔案編輯與掃描器、視覺語言模型查詢器；每個 benchmark 只加最少量的答案格式說明或環境初始化程式碼。",
+    "log_analysis": {
+      "pipeline": "把 HAL 軌跡去掉 Weave 自身的冗餘呼叫，用 Docent Python SDK 上傳成 transcript 並附上該 benchmark 的指標作為 metadata；每個 benchmark 先針對六類問題各寫一個簡單而具體的問題，再用 Docent 的 rubric 工具反覆修改，通常改寫成一整棵自然語言決策樹；judge 一律用 GPT-5 Medium；最後用 SDK 下載標記結果做統計。樣本：AssistantBench、TAU-bench、CORE-Bench、SciCode 的專用 scaffold 共 48 組、2,184 條 transcript；剔除 TAU-bench 後的可靠度／失敗分析是 36 組、1,634 條。",
+      "rubric_categories": "指令違反、工具使用失敗、自我修正、驗證、環境障礙、作弊／灌分。範例定義：AssistantBench 的工具失敗＝同一導覽動作連續失敗兩次以上且未調整；自我修正＝失敗的導覽在第 2 或第 3 次嘗試成功；環境障礙＝沒有最終 done、且不是因為重複失敗或撞到 20 步上限（視為瀏覽器／scaffold 當掉）。SciCode 的驗證＝自己寫並跑過至少一個單元測試；CORE-Bench 的指令違反＝report.json 的鍵或型別不符規格。TAU-bench 的驗證＝提出能讓使用者補上關鍵資訊的澄清問題；環境障礙＝模擬使用者偏離或講錯既定指示。",
+      "statistics": "失敗類（指令違反、工具失敗、環境障礙）比 P(flag|失敗) 與 P(flag|成功)，報差值與比值；可靠度類（自我修正、驗證）比 P(成功|flag) 與 P(成功|無 flag)，報差值與相對風險 RR，理由是後者較不受基準成功率影響。成功的二元化：CORE-Bench、TAU-bench 直接用二元結果；AssistantBench 以分數 ≥ 0.75 算成功，可靠度與指令遵循問題先濾掉放棄作答，另兩類失敗問題改用『分數非零』；SciCode 因任務層級正確率一律低於 10%，改用『至少一個子題正確』。",
+      "validation": "每個 benchmark 挑一個 rubric，人工檢查至少 30 條被標記的 run，只報 precision（偽陰性在長 transcript 裡太難驗）；另在一個 AssistantBench rubric 上算 GPT-5 Medium 與 Claude Sonnet 4 Medium 兩個 judge 之間的 Cohen's κ。"
+    }
+  },
+  "assumptions": [
+    "各 benchmark 原生的計分程序是正確的，而且 scaffold 的失敗會被正確地回報成失敗而不是靜默吞掉（作者自己在 A3 就舉了限流造成的假陰性反例）。",
+    "以固定日期的公開牌價換算成本足以代表部署成本；忽略快取折扣、批次折扣與自架成本。",
+    "可以用隨機混用兩個 agent 來內插 Pareto 凸包上的點，也就是使用者只在意期望正確率，不在意單題結果的變異。",
+    "每個組合跑一次（或取最好的一次）就足以排出 frontier 上的相對位置，成本高到無法負擔多次試驗。",
+    "LLM judge（GPT-5 Medium）依 rubric 標出的行為旗標足夠準確，且 precision 高就能代表標記可用。",
+    "供應商端點背後的模型權重與量化在評估期間保持不變（作者在 A3 記錄了多次違反的實例）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Online Mind2Web（300 題）",
+      "AssistantBench（33 題子集）",
+      "GAIA（公開驗證集 165 題）",
+      "SWE-bench Verified Mini（50 題）",
+      "USACO（307 題）",
+      "CORE-Bench Hard（公開測試集 45 篇）",
+      "ScienceAgentBench（102 題）",
+      "SciCode（65 個主題目／338 子題）",
+      "TAU-bench Airline（公開集 50 題）"
+    ],
+    "metrics": [
+      "各 benchmark 原生正確率（取最好一次 run，誤差棒為 min–max）",
+      "美元成本（token × 2025-09-24 牌價）",
+      "token 用量（completion tokens）",
+      "正確率–成本、正確率–token 的 Pareto 凸包與各模型進入 frontier 的次數",
+      "Docent 旗標的條件機率：P(flag|失敗)、P(flag|成功)、比值；P(成功|flag)、P(成功|無 flag)、RR",
+      "judge 標記的人工驗證 precision 與 judge 間 Cohen's κ"
+    ],
+    "baselines": [
+      "各 benchmark 原作者的專用 scaffold 對上 HAL Generalist（CORE-Bench Hard、SWE-bench Verified Mini、TAU-bench Airline 等）",
+      "同一模型的推理強度對照：Claude 3.7 Sonnet、Sonnet 4、Opus 4.1 的無／high reasoning，o4-mini 的 low／high",
+      "Online Mind2Web 上 SeeAct 對 Browser-Use 兩種 scaffold",
+      "與既有排行榜與框架的功能對照（AgentBench、AgentBoard、AgentGym、BrowserGym、Galileo、AISI Inspect；Table A1）以及先前文獻已評過的模型–benchmark 組合（Table 1、附錄 A9）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以單一 harness 在數百台 VM 上平行完成跨 4 個領域的大規模 agent 評估，並公開全部軌跡。",
+      "numbers": "21,730 次 rollout、9 個模型 × 9 個 benchmark、總成本約 $40,000；公開約 2.5B tokens 的 LLM 呼叫紀錄。",
+      "section": "Abstract、§1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "正確率對成本的 Pareto frontier 通常很陡而且稀疏：最貴的模型幾乎從不上 frontier，便宜模型反而最常出現。",
+      "numbers": "只有 1/9 個 benchmark 的最貴模型在 frontier 上；平均不到三分之一的受測模型在 frontier 上；Gemini 2.0 Flash 7/9、GPT-5 4/9、o4-mini Low 4/9 最常上 frontier，DeepSeek R1 0/9、Claude 3.7 Sonnet High 1/9、Opus 4.1 與 Opus 4.1 High 各 1/8。",
+      "section": "§4.1 第 1–2 點、Figure 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "用 token 用量與用美元成本畫出來的 Pareto frontier 差很多，價格變動會讓以美元為準的結論失效。",
+      "numbers": "Claude Opus 4.1 在 3/8 個 benchmark 位於正確率–token frontier，但在正確率–成本 frontier 上只出現 1 次（CORE-Bench Hard）；o3 上市後降價 80%。另外，6/9 個 benchmark 的 token 用量與正確率正相關（§4.1 第 3 點）。",
+      "section": "§4.1 第 3–4 點、Figures 2 與 A2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "提高推理強度不一定提高正確率。",
+      "numbers": "在 36 個模型–agent–benchmark 組合中，有 21 個的正確率持平或下降（比較 Opus 4.1、Sonnet 4、Claude 3.7 Sonnet 的無／high reasoning 與 o4-mini 的 low／high）。例如 CORE-Bench 上 CORE-Agent＋Opus 4.1 是 51.1%，加上 high reasoning 反而只有 42.2%（Table A14）。",
+      "section": "§4.1 第 5 點、Figure 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "scaffold 選擇會讓成本差一個數量級，而正確率幾乎不變。",
+      "numbers": "Online Mind2Web 上 SeeAct＋GPT-5 Medium 花 $171、正確率 42.3%，Browser-Use＋Claude Sonnet 4 花 $1,577、正確率 40.0%，成本差 9 倍、正確率只差 2 個百分點；Claude 系列配 Browser-Use 較好，OpenAI 系列配 SeeAct 較好。專用 scaffold 在 CORE-Bench Hard 12 組中贏 9 組、SWE-bench Mini 12 組中贏 11 組；通用 scaffold 在 24 組比較中有 20 組較便宜。benchmark 的平均評估成本從 ScienceAgentBench 約 $13 到 Online Mind2Web 超過 $450。",
+      "section": "§4.1 第 6–8 點、Figures 3(a)–(c)、A4、Table A16",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "軌跡中出現『主動驗證』行為的 run 成功率較高（相關性，非因果）。",
+      "numbers": "驗證的 RR 在三個 benchmark 間是 1.13–1.87（成功機率高 13%–87%）；失敗任務中違反 benchmark 指令的比例 AssistantBench 0.670、CORE-Bench 0.628；環境障礙在失敗任務中的比例 AssistantBench 0.564、SciCode 0.438、CORE-Bench 0.403（Tables A3、A4）。",
+      "section": "§4.2 第 5–7 點、Figure 4、Tables A3–A4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "軌跡分析抓到 TAU-bench 官方 repo 裡 few-shot scaffold 的資料洩漏：示範檔直接含有測試集範例，整組結果因此作廢；只看最終正確率的評估不會發現這件事。",
+      "numbers": "發現時已花掉約 $1,000 的評估成本；該 scaffold 從所有分析中剔除。",
+      "section": "§4.2 第 9 點、附錄 A5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "Docent 的 rubric 標記經人工抽查 precision 偏高，兩個不同 judge 間的一致性也不錯。",
+      "numbers": "precision：AssistantBench 指令遵循 0.87（n=49）、CORE-Bench 驗證 1.00（n=31）、TAU-bench 指令遵循 0.94（n=36）；AssistantBench 那個 rubric 上 GPT-5 Medium 與 Claude Sonnet 4 Medium 的 Cohen's κ=0.82。",
+      "section": "附錄 A7.2、Table A2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "單次評估就可能花掉上千美元，因此多數評估只跑一次，沒有信賴區間或其他統計驗證（A3 第 1 點）。",
+    "平行評估會讓延遲測量混入 VM 佈建、網路、限流造成的變異，因此不報延遲；要可信需要序列執行，會讓時間從幾小時拉到幾週（§5、A4.2）。",
+    "成本沒有計入快取命中，SWE-Agent 的成本以全價高估（A4.1）。",
+    "GAIA 與 AssistantBench 用的是公開測試集而非官方私有集；SWE-bench 只用 50 題的 Mini；TAU-bench 用舊版而非修正過規格與指標的 τ²-bench（A4.1）。",
+    "評估矩陣不完整：186 次 run 中只有 142 個組合進主分析；Opus 4.1 沒跑 Online Mind2Web，因為預估要約 $20,000（A4.1、Figure 2）。",
+    "OpenAI 模型用 completions API 而非較新的 responses API（A4.1）。",
+    "各供應商的 low/medium/high 推理強度定義不同，OpenAI 不公開預算，跨供應商無法保證算力相等（A3 第 8 點、A4.2）。",
+    "生態系不穩：供應商在同一端點偷換權重（Together AI 的 DeepSeek R1 在發布當天換成 R1 0528）、OpenRouter 預設可能在不同呼叫間提供 FP4／FP8 不同量化、API 參數被移除、LiteLLM 以正規表示式寫死哪些模型支援推理強度、Weave 的 bug 拖了幾個月（A3）。",
+    "agent 撞到限流又沒有重試時會靜默失敗，框架會把基礎設施失敗記成答錯（A3 第 5 點）。",
+    "軌跡分析只能指出失敗點，無法判斷修掉那個錯誤後任務會不會成功；要建立因果需要在每個失敗點存檔並重放，超出預算（A4.2）。",
+    "Docent 仍是 public alpha；人工驗證只報 precision，不報 recall（A7.2）。",
+    "領域未涵蓋資安、零售等（§3）。"
+  ],
+  "limitations_observed": [
+    "§4.2 第 2 點與 Challenge #8 用來說明『災難性動作』的例子（刷錯信用卡、超出 $1000 預算扣款 $2010、退款金額超過授權等），Table A6 的標題寫明全部出自 TAU-bench Few Shot agent，而這正是因資料洩漏被整組剔除的 scaffold。也就是說，這個論點的證據來自一個已判定無效的設定。而且即使在有效的設定上，HAL 的分數本身也沒有把動作的嚴重度納入：作者指出放棄作答與洩漏信用卡同樣得 0 分是問題，卻沒有提出按嚴重度加權的分數。",
+    "報告方式有向上偏誤：A10.1 說排行榜取每個組合『最好那一次 run』，並以 min–max 當誤差棒；A3 又說多數評估只跑一次。兩者並存時，有多次 run 的組合因為取最大值而占便宜，而且論文沒有說明每個組合各跑了幾次。對 T8 而言，這不是 pass@k 也不是 pass^k，而是未定義次數下的 max，無法與其他排行榜比。",
+    "樣本太小，撐不起 frontier 上的細微排序：AssistantBench 只有 33 題、CORE-Bench Hard 45 題、SWE-bench Mini 與 TAU-bench 各 50 題。SciCode 最高只有 9.2%，也就是 65 題中的 6 題，1.5 個百分點就是 1 題。SWE-bench Mini 上有 4 個模型同為 54.0%（27/50）。Pareto 成員資格常取決於一兩題的差距，全文沒有任何顯著性檢定。『21/36 推理更多反而持平或更差』把平手也算進去；摘要卻寫成推理強度『降低』正確率，比內文說得更強。",
+    "對 T8 的可靠度度量是缺口：TAU-bench 原生就有 pass^k，HAL 卻只報單次正確率；用的也是舊版 TAU-bench。凸包內插用『隨機混用 agent』得到期望正確率，完全不反映單題層級的變異。對需要每次都穩定的部署（pass^k 所在意的）來說，混合策略的一致性其實更差，所以凸包上的點不能當成可部署的保證。",
+    "排行榜上留有看起來像基礎設施失敗的數字，而且沒有標註：SWE-bench Mini 上 HAL Generalist＋o3 Medium 花 $585.71 拿 0.0%，o4-mini High 與 GPT-4.1 都只有 2.0%（Table A19）。這正是作者在 A3 第 5 點警告的靜默假陰性。Table A3 也顯示 AssistantBench 失敗任務中有 56.4% 帶環境障礙旗標，代表這些 benchmark 的正確率混入了相當比例的基礎設施失敗；然而 Pareto 分析沒有扣除或分層處理這一塊。",
+    "數字與敘述有內部不一致：（1）Table A4 中 SciCode 自我修正的 Δ 寫 0.37，但 0.483−0.314≈0.17；（2）§4.2 說自我修正讓成功機率高 1.5–4 倍，Table A4 的 RR 卻只有 1.47–2.97，找不到 4 倍；（3）A7.2 內文說人工驗證了 AssistantBench、CORE-Bench、SciCode，Table A2 列的卻是 TAU-bench 而非 SciCode；（4）§1 說軌跡分析涵蓋 4 個 benchmark（含 TAU-bench），§4.2 的 Figure 4 只用 3 個。",
+    "軌跡分析的 judge 是 GPT-5 Medium，而 GPT-5 本身也是受測模型，可能有自我偏好。驗證只報 precision、沒有 recall；κ 只在一個 rubric 上算過。自我修正與驗證的 RR 是觀察性相關，會被模型強弱與任務難度混淆（強模型本來就較會驗證、也較會成功），論文沒有依模型或題目分層。",
+    "成本定義對結論很敏感，但沒有做敏感度分析：用單一日期的牌價、不扣快取、DeepSeek R1 用第三方 Together.ai 的價格。作者承認價格波動（o3 降價 80%），也因此加畫 token frontier；但 A10.1 說 token 圖用的是 completion tokens。如果 token frontier 也只計 completion，就忽略了長上下文 agent 中占大宗的輸入 token，稱不上中性的成本替代指標。",
+    "主分析宣稱 9 個模型，但推理強度那 36 個組合含 Sonnet 4，這個模型只在 Online Mind2Web 與 CORE-Bench 出現；附錄排行榜還混入 Opus 4、Gemini 2.5 Pro、DeepSeek V3.1、GPT-OSS-120B。frontier 次數的分母（例如 1/8、7/9）到底用了哪些模型，文中沒有交代清楚。",
+    "就 T8 子領域而言，多目標只有『正確率 × 成本（或 token）』兩軸：延遲不報，使用者滿意度完全沒有，安全與嚴重度只停在質性案例。TAU-bench 的模擬使用者偏離只被當成 Docent 的『環境障礙』旗標，沒有進入分數。至於成本–正確率 Pareto 這個想法本身，出自同一群作者先前的《AI Agents That Matter》（Kapoor et al., 2025），HAL 的新意在規模化、凸包加原點的定義，以及美元與 token 兩條 frontier 的對照。"
+  ],
+  "framework_role": "主要是 T8 的『多目標分數與聚合』參考實作：示範怎麼把成本（美元與 token）變成一級評分軸，怎麼用含原點的凸包 Pareto frontier 取代單一排名，以及 frontier 會隨定價方式而改變。它同時也是 T7 的評估基礎建設（harness 解耦、平行執行、benchmark 合約），並把 T4 的軌跡紀錄（Weave，依 task 分組）變成評估的原料：用 rubric 化 LLM judge 從軌跡抽出行為旗標，用來校驗 benchmark 與 scaffold 的有效性。它提醒 T8 的設計者：分數之前要先確認軌跡裡沒有洩漏、捷徑或基礎設施失敗；而在可靠度度量（pass^k、誤差棒）上，它反而是反面教材。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "修正行為不是在執行期觸發，而是事後從軌跡回收：Docent 的『自我修正』rubric 在 transcript 中標出 agent 修正失敗工具呼叫或指令錯誤的片段（例如 AssistantBench 失敗的導覽在第 2、3 次成功；TAU-bench 在最後一次工具呼叫前發現並更正錯誤），再與任務成功做條件機率比較（RR 1.47–2.97，Table A4），讓修正紀錄成為評估的一個維度。"
+    },
+    {
+      "edge": "E6",
+      "how": "TAU-bench Airline 的 agent 與模擬使用者的互動全程由 Weave 記錄，再進 Docent 分析：rubric 裡把『模擬使用者偏離或講錯既定指示』列為環境障礙，把『提出能讓使用者補資訊的澄清問題』列為驗證，並對 TAU-bench 的指令遵循 rubric 做了人工 precision 驗證（0.94，n=36）。不過 TAU-bench 因 few-shot scaffold 洩漏，被排除在主要的可靠度與失敗分析之外。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文 Table 1 自述 HAL 是 CORE-Bench Hard 與 ScienceAgentBench 的官方 benchmark 排行榜（來源：arXiv:2510.11977 Table 1）。這屬於學術託管，兩個 benchmark 的作者本身就在共同作者之列，不是商用採納。"
+    ],
+    "assessment": "未見商用採納證據。能查證的只有論文自述的學術託管角色（兩個 benchmark 的官方排行榜）。本次 WebSearch 額度已用完，沒能廣泛檢索廠商的 model card 或 system card 是否引用 HAL 結果；因此這是『沒查到』，不是『確認沒有』。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/princeton-pli/hal-harness",
+    "data": "公開：所有 agent 軌跡（約 2.5B tokens 的 LLM 呼叫）放在 https://huggingface.co/datasets/agent-evals/hal_traces，完整結果在 https://hal.cs.princeton.edu。但 GAIA、AssistantBench 用的是公開測試集；重跑需要各家 API 金鑰與相當預算（全套約 $40,000），而且供應商會換權重、改 API，完全重現有實際困難。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是少數把成本當一級評分軸、並給出可照做的聚合定義（含原點、以隨機混用內插的凸包 Pareto，美元與 token 兩條 frontier 對照、固定日期牌價）的 agent 排行榜，還用大規模資料顯示美元與 token 的 frontier 會分岔、最貴模型幾乎不上 frontier；這正是 T8『成本／效率多目標分數』必讀的實作參考。不過它的可靠度度量（單次或取最好一次、沒有 pass^k）要當反面教材讀。",
+  "related": [
+    "2401.13178",
+    "2108.13264",
+    "2406.12045",
+    "2506.07982",
+    "2211.09110",
+    "2412.05467",
+    "2409.11363",
+    "2504.01382",
+    "2405.14782"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 5,
+    "total": 8
+  }
+}

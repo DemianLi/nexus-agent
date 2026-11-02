@@ -4,6 +4,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
+import { isVendorUpstream } from '@/test/vendor-upstream';
+
 /**
  * `.docs/web-ui-spec.md` §11 第 1 條：邊緣畫在陰影裡，同一個元素不同時用 `border` 與陰影（§5）。
  *
@@ -18,6 +20,8 @@ function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
     if (statSync(path).isDirectory()) return sourceFiles(path);
+    // vendor 上游原樣的檔放行（外觀照 SG，Q8；#1523）：名單在 `test/vendor-upstream.ts`。
+    if (isVendorUpstream(path)) return [];
     return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
   });
 }
@@ -65,12 +69,12 @@ describe('邊緣畫在陰影裡', () => {
 
   test('判準認得邊線與陰影、不把顏色與拿掉算進去', () => {
     expect(borderAndShadow('rounded-lg border p-4 shadow-lg')).toBe('border ＋ shadow-lg');
-    expect(borderAndShadow('border-b-2 shadow-material')).toBe('border-b-2 ＋ shadow-material');
+    expect(borderAndShadow('border-b-2 shadow-[inset_0_0_0_1px_var(--border)]')).toBe(
+      'border-b-2 ＋ shadow-[inset_0_0_0_1px_var(--border)]',
+    );
     expect(borderAndShadow('dark:border hover:shadow-xs')).toBe('border ＋ shadow-xs');
-    expect(
-      borderAndShadow('border-input focus-visible:border-ring shadow-material'),
-    ).toBeUndefined();
-    expect(borderAndShadow('border-0 shadow-material')).toBeUndefined();
+    expect(borderAndShadow('border-input focus-visible:border-ring shadow-xs')).toBeUndefined();
+    expect(borderAndShadow('border-0 shadow-xs')).toBeUndefined();
     expect(borderAndShadow('border shadow-none')).toBeUndefined();
     expect(borderAndShadow('[&_svg]:border-l bg-card')).toBeUndefined();
   });

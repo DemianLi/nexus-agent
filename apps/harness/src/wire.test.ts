@@ -2,7 +2,7 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { Event } from '@nexus/wire';
-import { commandPath, createWireClient, streamPath, TODOS } from '@nexus/wire';
+import { commandPath, createWireClient, INBOX, streamPath, TITLE, TODOS } from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -14,6 +14,7 @@ import { ThreadPump } from './thread-pump.js';
 import {
   emptyCommandPoint,
   loopbackRequest,
+  noSessions,
   TEST_BROWSER_AUTH,
   testSessionCookie,
 } from './fixtures.js';
@@ -74,6 +75,7 @@ function connect(agent: PumpAgent) {
     auth: TEST_BROWSER_AUTH,
     createAgent: async () => ({
       agent,
+      attachSessions: noSessions,
       commands: emptyCommandPoint(),
       dispose: async () => undefined,
     }),
@@ -222,7 +224,7 @@ describe('線的兩端對得起來', () => {
     const { agent } = buildAgent(ONE_CALL);
     const { client } = connect(agent);
     const events = await client.openEvents('t2');
-    await client.runStart('t2', '記一筆。');
+    const started = await client.runStart('t2', '記一筆。');
     const frames = await collectUntil(events, (collected) =>
       collected.some(
         (frame) =>
@@ -233,11 +235,32 @@ describe('線的兩端對得起來', () => {
     );
     const methods = new Set(frames.map((frame) => frame.method));
     expect([...methods].sort()).toEqual(['custom', 'lifecycle', 'messages', 'tools']);
-    // `custom` 在白名單裡，這一段上來的只有 pump 從日誌合成的那一種：開新一輪時清空待辦清單（#575）。圖自己往
-    // `custom` 寫的不上線，見 `present-tool.test.ts` 的「圖自己發的 custom frame 不上線」。
+    // `custom` 在白名單裡，這一段上來的只有 pump 從日誌合成的那三種：送出佇列（送進來一顆、開跑時領走一顆，#637）、
+    // 開新一輪時清空待辦清單（#575）與第一句的標題（#647）。清空待辦由 `turn/start` 當場觸發，所以排在領走前面。
+    // 圖自己往 `custom` 寫的不上線，見 `present-tool.test.ts` 的「圖自己發的 custom frame 不上線」。
+    const runId = (started as { result: { run_id: string } }).result.run_id;
+    const sentence = { id: runId, text: '記一筆。', source: { kind: 'user' } };
     expect(
       frames.filter((frame) => isMethod(frame, 'custom')).map((frame) => frame.params.data),
-    ).toEqual([{ name: TODOS, payload: { todos: null } }]);
+    ).toEqual([
+      { name: INBOX, payload: { items: [sentence], nextStep: [] } },
+      { name: TODOS, payload: { todos: null } },
+      {
+        name: INBOX,
+        payload: { items: [], nextStep: [], claimed: { id: runId, text: '記一筆。' } },
+      },
+      // 第一句開跑：領走之後寫退回標題、當場推一顆（#647），也比這一輪模型與工具的 frame 早。
+      { name: TITLE, payload: { title: '記一筆。' } },
+    ]);
+    // 領走那一顆比這一輪模型與工具的任何 frame 都早：畫面據它畫人的泡泡，泡泡要在回覆之前。
+    const claimedAt = frames.findIndex(
+      (frame) =>
+        isMethod(frame, 'custom') &&
+        (frame.params.data as { payload?: { claimed?: unknown } }).payload?.claimed !== undefined,
+    );
+    const firstRunFrame = frames.findIndex((frame) => !isMethod(frame, 'custom'));
+    expect(claimedAt).toBeGreaterThanOrEqual(0);
+    expect(claimedAt).toBeLessThan(firstRunFrame);
 
     // **對照組**：沒有這一段的話，「白名單有效」與「基座根本沒發過那些」長得一樣。
     const control = buildAgent(ONE_CALL);
@@ -449,6 +472,7 @@ describe('失敗與拒絕', () => {
         created += 1;
         return {
           agent: buildAgent(ONE_CALL).agent,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => undefined,
         };
@@ -517,6 +541,7 @@ describe('失敗與拒絕', () => {
         created += 1;
         return {
           agent: buildAgent(ONE_CALL).agent,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => undefined,
         };
@@ -602,6 +627,7 @@ describe('一條 thread 一個 agent', () => {
         await Promise.resolve();
         return {
           agent,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => void (disposed += 1),
         };
@@ -670,6 +696,7 @@ describe('線的兩端與真實組裝點對得上', () => {
         auth: TEST_BROWSER_AUTH,
         createAgent: async () => ({
           agent: assignable,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: async () => undefined,
         }),
@@ -693,11 +720,10 @@ describe('線的兩端與真實組裝點對得上', () => {
 });
 
 /**
- * **建不起這條 thread 時，兩條路都要回一個協定層的錯，不能讓 client 卡住。**
+ * **建不起這條 thread 時，兩條路都要回一個協定層的錯，不能掉成空的 400。**
  *
- * `handle()` 本身不接錯，`wire-server.ts` 也不接——`createAgent` 一拋，那個請求就一個位元組
- * 都不回，而那顆 rejection 沒有人處理。以前走得到它的只有「plugin 載不起來」這類；serve 的
- * 續接之後，壞掉的日誌、別的行程握著、目錄對不上都走得到。照這一層的分層（載體層用 HTTP
+ * `handle()` 本身不接錯，讓 `createAgent` 的錯往上冒的話，`wire-server.ts` 只能回空的 400。壞掉的日誌、
+ * 別的行程握著、目錄對不上都走得到。照這一層的分層（載體層用 HTTP
  * status，協定層用 200 加 error 封包），它屬於後者：請求本身沒有錯，是這條 thread 起不來。
  */
 describe('建不起這條 thread', () => {
@@ -712,13 +738,15 @@ describe('建不起這條 thread', () => {
       );
   }
 
-  it('createAgent 拋了：下行與上行都回 error 封包，帶著原因；下一次請求重試', async () => {
+  it('createAgent 拋了：下行與上行都回 error 封包，固定訊息，原因只進日誌；下一次請求重試', async () => {
     let attempts = 0;
+    const warnings: string[] = [];
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
+      warn: (message) => warnings.push(message),
       createAgent: async () => {
         attempts += 1;
-        throw new Error('這條 thread 的日誌壞了');
+        throw new Error('這條 thread 的日誌壞了：/srv/secret/session.jsonl');
       },
     });
     const post = postTo(handler);
@@ -733,7 +761,11 @@ describe('建不起這條 thread', () => {
     });
     const packet = (await command.json()) as { type: string; id: number; message: string };
     expect(packet).toMatchObject({ type: 'error', id: 4 });
-    expect(packet.message).toContain('這條 thread 的日誌壞了');
+    expect(packet.message).toBe('這條 thread 建不起來，原因記在 serve 的日誌。');
+    expect(warnings).toEqual([
+      '[thread] "broken" 建不起來：這條 thread 的日誌壞了：/srv/secret/session.jsonl',
+      '[thread] "broken" 建不起來：這條 thread 的日誌壞了：/srv/secret/session.jsonl',
+    ]);
 
     expect(attempts).toBe(2);
     await handler.close();
@@ -755,8 +787,8 @@ describe('建不起這條 thread', () => {
           agent,
           commands: emptyCommandPoint(),
           dispose: async () => void (disposed += 1),
-          attachTelemetry: () => {
-            throw new Error('遙測接不上');
+          attachSessions: () => {
+            throw new Error('接線接不上');
           },
         };
       },

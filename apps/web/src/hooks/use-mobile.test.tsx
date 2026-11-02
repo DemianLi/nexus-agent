@@ -42,10 +42,15 @@ describe('手機與桌面的分界在 1024', () => {
     expect(renderHook(() => useIsMobile()).result.current).toBe(false);
   });
 
+  // #1680 起 sidebar 是 vendor 版，斷點那半是本地修改第 52 條（`patches/0012-sidebar-lg-breakpoint.patch`）。
   test('sidebar.tsx 不用 md:（768）：斷點改了，CSS 那半要一起換成 lg:', () => {
-    const source = readFileSync(resolve(process.cwd(), 'src/components/ui/sidebar.tsx'), 'utf8')
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/vendor/solid-glass/components/ui/sidebar.tsx'),
+      'utf8',
+    )
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\/\/.*$/gm, '');
     expect(source.match(/(?<![\w-])md:/g) ?? []).toEqual([]);
+    expect(source).toContain('lg:block');
   });
 });

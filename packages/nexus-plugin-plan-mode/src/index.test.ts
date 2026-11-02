@@ -1,5 +1,6 @@
 import { ToolMessage } from '@langchain/core/messages';
 import {
+  createHostServicesPlugin,
   createSessionRunner,
   loadPlugins,
   SessionLog,
@@ -7,47 +8,82 @@ import {
   toolErrorOf,
 } from '@nexus/core';
 import type {
+  AttachmentRef,
   CommandRegistrationPoint,
   CommandResult,
   PluginRegistry,
   SessionEvent,
-  ToolExecution,
 } from '@nexus/core';
-import { describe, expect, it } from 'vitest';
+import { interrupt } from '@langchain/langgraph';
+import { describe, expect, it, vi } from 'vitest';
 import {
   createPlanModePlugin,
-  DEFAULT_PLAN_GUIDANCE,
   planModeConfigSchema,
   planModePlugin,
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
   PLAN_ALREADY_ACTIVE_MESSAGE,
+  PLAN_APPROVE_LABEL,
+  PLAN_APPROVED_MESSAGE,
+  PLAN_REVIEW_QUESTION_ID,
   PLAN_ALREADY_INACTIVE_MESSAGE,
-  PLAN_ARGS_ERROR_MESSAGE,
   PLAN_COMMAND_HINT,
   PLAN_COMMAND_NAME,
   PLAN_ENTERED_MESSAGE,
+  PLAN_HEADING_REQUIRED_MESSAGE,
   PLAN_LEFT_MESSAGE,
-  PLAN_MODE_CAPABILITY,
   PLAN_MODE_MIDDLEWARE_NAME,
+  PLAN_NO_REVIEWER_MESSAGE,
   PLAN_NOT_ATTACHED_MESSAGE,
   PLAN_NOT_ATTACHED_TOOL_MESSAGE,
+  PLAN_OFF_ATTACHMENTS_MESSAGE,
   planAmbiguousMessage,
   recordedPlanMode,
 } from './index.js';
 import type { PlanModePluginOptions } from './index.js';
 
+/**
+ * 測試用的計劃指引。**套件沒有預設值**（#1607，照 dsh：部署必給），出貨的那一句寫在 `apps/harness/cordis.yml`；
+ * 這個套件的測試不依賴那一句，只要有一句可以認得。
+ */
+const GUIDANCE = '你現在在計劃模式。先探索與設計，不要動手改東西。';
+
+/** 補上指引的 `createPlanModePlugin`：這個檔的案例大多不關心指引寫什麼。 */
+function planPlugin(
+  options: Partial<PlanModePluginOptions> = {},
+): ReturnType<typeof createPlanModePlugin> {
+  return createPlanModePlugin({ guidance: GUIDANCE, ...options });
+}
+
+// `exit_plan_mode` 在本體裡呼叫 `interrupt()`，圖外呼叫會拋。這個檔只有「待關」那一組會走到它，
+// 用替身直接回人的答案；真的中斷與 resume 在 `apps/harness` 的 `plan-mode.test.ts` 與 `plan-review-wire.test.ts`。
+vi.mock('@langchain/langgraph', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@langchain/langgraph')>()),
+  interrupt: vi.fn(),
+}));
+
+/**
+ * 每個註冊表接上的第一份 root 日誌。命令的 `sessionLog` 由執行器交給 handler（#688），
+ * 這裡用它當「執行器手上那一份」；一份都沒接的註冊表交一份沒人接的。
+ */
+const firstLogOf = new WeakMap<object, SessionLog>();
+
 /** 直接跑 `/plan` 的 handler。REPL 那一層歸 `apps/harness` 的測試。 */
 async function runPlan(
   commands: Pick<CommandRegistrationPoint, 'find'>,
   rawInput: string,
+  steer: (text: string, attachments?: readonly AttachmentRef[]) => void = () => undefined,
+  attachments: readonly AttachmentRef[] = [],
 ): Promise<CommandResult> {
   const definition = commands.find(PLAN_COMMAND_NAME);
   if (definition === undefined) throw new Error('沒有註冊 /plan');
   return definition.handler({
     commandId: 'cmd-test',
     rawInput,
+    attachments,
     signal: new AbortController().signal,
+    sessionLog: firstLogOf.get(commands) ?? new SessionLog('unattached'),
+    steer,
   });
 }
 
@@ -58,9 +94,11 @@ async function runPlan(
  * 折疊拋出來的實作在這裡會是綠的。
  */
 function attach(registry: PluginRegistry, log: SessionLog): () => void {
+  if (!firstLogOf.has(registry.commands)) firstLogOf.set(registry.commands, log);
   return createSessionRunner({
     address: { kind: 'root' },
     log,
+    rootLog: log,
     installers: registry.sessions.installers(),
     warn: (message) => {
       throw new Error(`不該有 warn：${message}`);
@@ -70,10 +108,10 @@ function attach(registry: PluginRegistry, log: SessionLog): () => void {
 
 /** 建一個掛好、接上一份 root 日誌的計劃模式。`seed` 給了就是一份續接回來的日誌。 */
 async function assemble(
-  options?: PlanModePluginOptions,
+  options?: Partial<PlanModePluginOptions>,
   seed?: readonly SessionEvent[],
 ): Promise<{ registry: PluginRegistry; log: SessionLog }> {
-  const { registry } = await loadPlugins([createPlanModePlugin(options)]);
+  const { registry } = await loadPlugins([planPlugin(options)]);
   const log = new SessionLog('plan', seed === undefined ? {} : { seed });
   attach(registry, log);
   return { registry, log };
@@ -94,8 +132,9 @@ function earlierEvents(active: boolean): readonly SessionEvent[] {
 /**
  * **`exit_plan_mode` 工具本體那兩條沒生效的出口**（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。
  *
- * root 上模式外的那條由 middleware 擋，驗收在 `apps/harness/src/plan-mode.test.ts`。這兩條
- * 在真的組裝裡到不了：沒接日誌就沒有日誌可記，subagent 那一份又會先撞上核准閘門。
+ * root 上模式外的那條也是本體擋的（#1276 以前有一層排在核准閘門之前的拒絕，拿掉了），驗收在
+ * `apps/harness/src/plan-mode.test.ts`。頭兩條在真的組裝裡不容易單獨量到，所以這裡直接叫本體。
+ * 後兩條（#652）在問人之前就擋，所以不用真的圖也量得到。
  */
 describe('exit_plan_mode 沒有生效時', () => {
   const CALL = {
@@ -105,19 +144,8 @@ describe('exit_plan_mode 沒有生效時', () => {
     type: 'tool_call',
   };
 
-  /** 模型看到的字、狀態、碼與 id。 */
-  function verdictOf(result: unknown): Record<string, unknown> {
-    if (!ToolMessage.isInstance(result)) throw new Error(`回的不是一則工具訊息：${String(result)}`);
-    return {
-      text: String(result.content),
-      status: result.status,
-      error: toolErrorOf(result),
-      id: result.tool_call_id,
-    };
-  }
-
   it('沒接日誌、在 subagent 裡：都是錯誤、不帶碼、文字是 `Error: ` 加原句', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const { registry } = await loadPlugins([planPlugin()]);
     const exit = registry.tools.effective().get(EXIT_PLAN_MODE_TOOL_NAME)?.value;
     const notAttached = await exit?.invoke(
       CALL as never,
@@ -142,6 +170,39 @@ describe('exit_plan_mode 沒有生效時', () => {
       id: 'call-1',
     });
   });
+
+  /** 照 dsh 的先後：先看計劃是不是以 `#` 標題開頭，再看有沒有人可以回答。兩條都不寫日誌。 */
+  it('計劃不是以 # 標題開頭、或沒有人可以回答：都在問人之前擋，模式不動', async () => {
+    const { registry } = await loadPlugins([
+      createHostServicesPlugin({ channel: { kind: 'policy-never' } }),
+      planPlugin({ startActive: true }),
+    ]);
+    const sessions = new SessionRegistry('plan');
+    registry.sessions.bind(sessions);
+    attach(registry, sessions.root);
+    const exit = registry.tools.effective().get(EXIT_PLAN_MODE_TOOL_NAME)?.value;
+    const root = { configurable: { checkpoint_ns: 'tools:call-1' } } as never;
+
+    for (const plan of ['計劃', '  ', '#計劃', '# ']) {
+      const refused = await exit?.invoke({ ...CALL, args: { plan } } as never, root);
+      expect(verdictOf(refused)).toMatchObject({
+        text: `Error: ${PLAN_HEADING_REQUIRED_MESSAGE}`,
+        error: undefined,
+      });
+    }
+    // 開頭的空白照 dsh 先修掉再判。
+    const noReviewer = await exit?.invoke(
+      { ...CALL, args: { plan: '\n  # 計劃\n\n先看再改。' } } as never,
+      root,
+    );
+    expect(verdictOf(noReviewer)).toEqual({
+      text: `Error: ${PLAN_NO_REVIEWER_MESSAGE}`,
+      status: 'error',
+      error: undefined,
+      id: 'call-1',
+    });
+    expect(sessions.root.events.filter((event) => event.type === 'plan/mode')).toEqual([]);
+  });
 });
 
 /**
@@ -151,10 +212,9 @@ describe('exit_plan_mode 沒有生效時', () => {
  * ——那裡看的是模型收到的 prompt 與跑完之後的日誌，這裡看的是 registry 的內容與 `/plan`。
  */
 describe('createPlanModePlugin', () => {
-  it('六個註冊點都放了東西', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+  it('四個註冊點都放了東西，核准閘門一位都沒有', async () => {
+    const { registry } = await loadPlugins([planPlugin()]);
 
-    expect(registry.capabilities.has(PLAN_MODE_CAPABILITY)).toBe(true);
     expect(registry.sessions.installers()).toHaveLength(1);
     expect([...registry.tools.effective().keys()]).toContain(EXIT_PLAN_MODE_TOOL_NAME);
     // `middleware` 可能是 `undefined`——那是 `useWithBackend()` 註冊的那一種（#388）。
@@ -162,7 +222,9 @@ describe('createPlanModePlugin', () => {
     expect(registry.middleware.list().map((entry) => entry.value.middleware?.name)).toEqual([
       PLAN_MODE_MIDDLEWARE_NAME,
     ]);
-    expect(registry.approvals.listeners()).toHaveLength(1);
+    // **翻過來的絆索**（#652）：以前這裡是 1，`exit_plan_mode` 走核准。它改走提問通道之後，
+    // 這個 plugin 不該再有任何一位閘門——有的話，計劃又會變成一張核准卡。
+    expect(registry.approvals.listeners()).toEqual([]);
     expect(registry.commands.list().map((entry) => entry.name)).toEqual([PLAN_COMMAND_NAME]);
   });
 
@@ -171,7 +233,7 @@ describe('createPlanModePlugin', () => {
    * checkpointer 那一份與日誌那一份，而續接只帶得回其中一份。
    */
   it('middleware 沒有 stateSchema，也沒有邊界 hook', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const { registry } = await loadPlugins([planPlugin()]);
     const middleware = registry.middleware.list()[0]?.value.middleware as unknown as Record<
       string,
       unknown
@@ -182,44 +244,130 @@ describe('createPlanModePlugin', () => {
     expect(middleware.afterAgent).toBeUndefined();
   });
 
-  /**
-   * **提示字串要跟真的收得下的東西一致。** dsh 是 `[off|message]`，那個 `message` 靠
-   * `agent.steer()`，我們沒有——寫了收不下的東西等於在騙打字的人。
-   */
-  it('提示是 [off]，不是 dsh 的 [off|message]', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+  /** 收得下自由訊息之後，提示字串跟 dsh 一樣（#776）。 */
+  it('提示是 [off|message]，同 dsh', async () => {
+    const { registry } = await loadPlugins([planPlugin()]);
 
     expect(registry.commands.list()[0]?.input?.hint).toBe(PLAN_COMMAND_HINT);
-    expect(PLAN_COMMAND_HINT).toBe('[off]');
+    expect(PLAN_COMMAND_HINT).toBe('[off|message]');
   });
 
   /**
-   * **`prepend` 不是偏好。** 沒有它，`fold` 會把這個 middleware 排到核准閘門**之後**，
-   * 於是一次模式外的 `exit_plan_mode` 會先撞上閘門——headless 入口回的是「沒有人被
-   * 問到」，而真正的原因是「你不在計劃模式」。順序決定模型看到哪一句。
+   * **`prepend` 剩下的用處**：指引站在記憶 plugin 外面（`concat` 之後記憶才接上去）。以前它還是模式外拒絕擋在核准閘門
+   * 前面的手段；那一層拿掉了（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)），模式外拒絕只在工具本體裡。
    */
   it('middleware 是 prepend 的', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const { registry } = await loadPlugins([planPlugin()]);
 
     expect(registry.middleware.list()[0]?.value.prepend).toBe(true);
   });
 
-  /** 閘門只認自己那一個工具名，其餘一律往下傳——不呼叫 `next()` 就會把別人短路掉。 */
-  it('閘門只對 exit_plan_mode 要核准，別的工具原樣往下傳', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
-    const listener = registry.approvals.listeners()[0]?.value;
-    if (listener === undefined) throw new Error('沒有掛上 listener');
+  /** 照 dsh：模式外拒絕只在工具本體裡。middleware 只剩模型呼叫那一件（含補回 `name`），事件匯流排上也沒有 plan-mode 的監聽者。 */
+  it('middleware 沒有 wrapToolCall，也沒有掛任何事件監聽者', async () => {
+    const { registry } = await loadPlugins([planPlugin()]);
+    const middleware = registry.middleware.list()[0]?.value.middleware as unknown as Record<
+      string,
+      unknown
+    >;
 
-    const exec = (name: string): ToolExecution => ({ name, args: {}, callId: 'c1' });
-    const fellThrough = { kind: 'allow' } as const;
+    expect(middleware.wrapToolCall).toBeUndefined();
+    expect(typeof middleware.wrapModelCall).toBe('function');
+    expect(registry.events.listeners()).toEqual([]);
+  });
+});
 
-    // listener 對自己那個工具是**同步**回答的（沒有 `next()` 要等），所以兩邊都先
-    // `Promise.resolve` 包一層——`.resolves` 收不了裸物件。
-    const decide = async (name: string): Promise<unknown> =>
-      Promise.resolve(listener(exec(name), () => Promise.resolve(fellThrough)));
+/** 模型看到的字、狀態、碼與 id。 */
+function verdictOf(result: unknown): Record<string, unknown> {
+  if (!ToolMessage.isInstance(result)) throw new Error(`回的不是一則工具訊息：${String(result)}`);
+  return {
+    text: String(result.content),
+    status: result.status,
+    error: toolErrorOf(result),
+    id: result.tool_call_id,
+  };
+}
 
-    expect(await decide(EXIT_PLAN_MODE_TOOL_NAME)).toMatchObject({ kind: 'ask' });
-    expect(await decide('echo')).toEqual(fellThrough);
+/**
+ * **同意之後模式在下一個模型步驟之前才關**（#652，照 dsh 的 `pendingIntents`）。
+ *
+ * 真的圖上「工具結果之後、下一次回覆之前」那條順序在 `apps/harness` 的 `plan-mode.test.ts` 量；這裡量真的圖
+ * 很難排出來的兩格：子代理的模型呼叫交不出 root 的待關，以及同意之後、下一步之前人打的 `/plan` 把待關丟掉
+ * （產品路徑上是「同意之後那一輪被停掉」）。
+ */
+describe('同意之後的待關', () => {
+  const CALL = {
+    name: EXIT_PLAN_MODE_TOOL_NAME,
+    args: { plan: '# 計劃' },
+    id: 'call-1',
+    type: 'tool_call',
+  };
+
+  /** 掛好、接上、停在計劃模式裡，替身讓 `exit_plan_mode` 拿到「同意」。 */
+  async function approved(): Promise<{
+    registry: PluginRegistry;
+    log: SessionLog;
+    modelStep: (checkpointNs: string) => Promise<string>;
+  }> {
+    vi.mocked(interrupt).mockReturnValue({
+      answers: [{ id: PLAN_REVIEW_QUESTION_ID, selected: [PLAN_APPROVE_LABEL] }],
+    });
+    const { registry } = await loadPlugins([planPlugin({ startActive: true })]);
+    const sessions = new SessionRegistry('plan');
+    registry.sessions.bind(sessions);
+    attach(registry, sessions.root);
+    const exit = registry.tools.effective().get(EXIT_PLAN_MODE_TOOL_NAME)?.value;
+    const result = await exit?.invoke(
+      CALL as never,
+      { configurable: { checkpoint_ns: 'tools:call-1' } } as never,
+    );
+    expect(verdictOf(result)).toMatchObject({ text: PLAN_APPROVED_MESSAGE, status: 'success' });
+    const middleware = registry.middleware.list()[0]?.value.middleware as unknown as {
+      wrapModelCall: (request: unknown, handler: (request: unknown) => unknown) => unknown;
+    };
+    // 一次模型呼叫：回傳這一步的 system prompt（指引在不在）。
+    const modelStep = async (checkpointNs: string): Promise<string> => {
+      const seen = (await middleware.wrapModelCall(
+        { runtime: { configurable: { checkpoint_ns: checkpointNs } }, systemPrompt: '' },
+        (request) => request,
+      )) as { systemPrompt?: string };
+      return seen.systemPrompt ?? '';
+    };
+    return { registry, log: sessions.root, modelStep };
+  }
+
+  it('工具回成功時模式還開著；子代理的步驟交不出它；root 的下一步交出去，只交一次', async () => {
+    const { log, modelStep } = await approved();
+    expect(modes(log)).toEqual([]);
+
+    expect(await modelStep('tools:spawn-1|model_request:a')).toBe('');
+    expect(modes(log)).toEqual([]);
+
+    expect(await modelStep('model_request:b')).not.toContain(GUIDANCE);
+    expect(modes(log)).toEqual([false]);
+    await modelStep('model_request:c');
+    expect(modes(log)).toEqual([false]);
+  });
+
+  it('同意之後、下一步之前打 /plan：待關被丟掉，模式留著，下一步照樣有指引', async () => {
+    const { registry, log, modelStep } = await approved();
+
+    expect(await runPlan(registry.commands, '')).toEqual({
+      kind: 'success',
+      text: PLAN_ALREADY_ACTIVE_MESSAGE,
+    });
+    expect(await modelStep('model_request:b')).toContain(GUIDANCE);
+    expect(modes(log)).toEqual([]);
+  });
+
+  it('同意之後、下一步之前打 /plan off：照常關，下一步不會再寫第二顆', async () => {
+    const { registry, log, modelStep } = await approved();
+
+    expect(await runPlan(registry.commands, 'off')).toEqual({
+      kind: 'success',
+      text: PLAN_LEFT_MESSAGE,
+    });
+    await modelStep('model_request:b');
+    expect(modes(log)).toEqual([false]);
   });
 });
 
@@ -273,18 +421,74 @@ describe('/plan 的結果', () => {
     });
     expect(modes(log)).toEqual([]);
   });
+});
+
+/**
+ * `/plan <message>`（[#776](https://github.com/DemianLi/nexus-agent/issues/776)）：`off` 以外都是進入，
+ * 非空的部分交給宿主的 `steer`，同 dsh。
+ */
+describe('/plan <message>', () => {
+  it('進入並 steer 那句話（去掉頭尾空白），回的還是「開了」', async () => {
+    const { registry, log } = await assemble();
+    const steered: string[] = [];
+
+    expect(
+      await runPlan(registry.commands, '  幫我規劃遷移  ', (text) => steered.push(text)),
+    ).toEqual({ kind: 'success', text: PLAN_ENTERED_MESSAGE });
+    expect(steered).toEqual(['幫我規劃遷移']);
+    expect(modes(log)).toEqual([true]);
+  });
+
+  it('本來就在計劃模式：話照送，回「已經在裡面」，不多寫一顆 plan/mode', async () => {
+    const { registry, log } = await assemble();
+    await runPlan(registry.commands, '');
+    const steered: string[] = [];
+
+    expect(await runPlan(registry.commands, '換個方向', (text) => steered.push(text))).toEqual({
+      kind: 'success',
+      text: PLAN_ALREADY_ACTIVE_MESSAGE,
+    });
+    expect(steered).toEqual(['換個方向']);
+    expect(modes(log)).toEqual([true]);
+  });
+
+  it('不帶話、`off` 都不 steer', async () => {
+    const { registry } = await assemble();
+    const steered: string[] = [];
+    const steer = (text: string): void => void steered.push(text);
+
+    await runPlan(registry.commands, '', steer);
+    await runPlan(registry.commands, '   ', steer);
+    await runPlan(registry.commands, ' off ', steer);
+    expect(steered).toEqual([]);
+  });
 
   /**
-   * **不認得的參數回 error，不是「當成進入」。** 安靜吞掉打錯的參數，會讓 `/plan of`
-   * 看起來成功了而其實做了相反的事。這條關係也是這個套件配套入口檢的那一條。
+   * **`off` 以外都是訊息，同 dsh。** `/plan of`（打錯的 `off`）與 `/plan off 再說`
+   * 都是進計劃模式並把整句送出去——以前 `of` 回 error，那條翻過面了。
    */
-  it('收不下的參數回 error，而且沒有改到模式', async () => {
+  it('`of`、`off 再說` 是訊息，不是離開', async () => {
     const { registry, log } = await assemble();
+    const steered: string[] = [];
+    const steer = (text: string): void => void steered.push(text);
 
-    expect(await runPlan(registry.commands, ' of')).toEqual({
-      kind: 'error',
-      text: PLAN_ARGS_ERROR_MESSAGE,
-    });
+    await runPlan(registry.commands, ' of', steer);
+    await runPlan(registry.commands, 'off 再說', steer);
+    expect(steered).toEqual(['of', 'off 再說']);
+    expect(modes(log)).toEqual([true]);
+  });
+
+  /**
+   * **宿主拒收就什麼都不改。** steer 排在動任何東西之前，所以被拒收的命令沒有寫 `plan/mode`，
+   * 也沒有丟掉 `exit_plan_mode` 排著的待關（那是命令成功才做的事）。
+   */
+  it('宿主拒收那句話：例外冒出去，模式沒動', async () => {
+    const { registry, log } = await assemble();
+    const refuse = (): void => {
+      throw new Error('這句話不收');
+    };
+
+    await expect(runPlan(registry.commands, '幫我', refuse)).rejects.toThrow('這句話不收');
     expect(modes(log)).toEqual([]);
     // 沒改到模式：下一次 `/plan` 仍然是「開了」而不是「已經在裡面」。
     expect(await runPlan(registry.commands, '')).toEqual({
@@ -295,12 +499,94 @@ describe('/plan 的結果', () => {
 });
 
 /**
+ * `/plan` 收附件（[#1607](https://github.com/DemianLi/nexus-agent/issues/1607)，照 dsh `plan-mode/src/index.ts:228-275`）。
+ * 沒宣告 `input.attachments` 的命令，執行器在 handler 之前就落定成 `error`（`@nexus/plugin-commands` 的測試）；
+ * 所以「宣告了」本身就是一條要釘的合約。
+ */
+describe('/plan 附件', () => {
+  const image: AttachmentRef = {
+    type: 'image',
+    attachmentId: `sha256:${'a'.repeat(64)}`,
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 1,
+    height: 1,
+  };
+  const sent: { text: string; attachments?: readonly AttachmentRef[] }[] = [];
+  const steer = (text: string, attachments?: readonly AttachmentRef[]): void => {
+    sent.push({ text, ...(attachments === undefined ? {} : { attachments }) });
+  };
+
+  it('命令宣告收附件', async () => {
+    const { registry } = await assemble();
+    expect(registry.commands.find(PLAN_COMMAND_NAME)?.input?.attachments).toBe(true);
+  });
+
+  it('`/plan <字>`＋附件：進入，字與附件一起 steer', async () => {
+    sent.length = 0;
+    const { registry, log } = await assemble();
+
+    expect(await runPlan(registry.commands, '看這張圖', steer, [image])).toEqual({
+      kind: 'success',
+      text: PLAN_ENTERED_MESSAGE,
+    });
+    expect(sent).toEqual([{ text: '看這張圖', attachments: [image] }]);
+    expect(modes(log)).toEqual([true]);
+  });
+
+  it('**只有附件、沒有字的 `/plan`** 照樣進入並 steer（字是空字串）', async () => {
+    sent.length = 0;
+    const { registry, log } = await assemble();
+
+    expect(await runPlan(registry.commands, '', steer, [image])).toEqual({
+      kind: 'success',
+      text: PLAN_ENTERED_MESSAGE,
+    });
+    expect(sent).toEqual([{ text: '', attachments: [image] }]);
+    expect(modes(log)).toEqual([true]);
+  });
+
+  it('`/plan off`＋附件：error，不 steer、不動模式、不丟排著的待關', async () => {
+    sent.length = 0;
+    const { registry, log } = await assemble({ startActive: true });
+
+    expect(await runPlan(registry.commands, 'off', steer, [image])).toEqual({
+      kind: 'error',
+      text: PLAN_OFF_ATTACHMENTS_MESSAGE,
+    });
+    expect(sent).toEqual([]);
+    expect(modes(log)).toEqual([]);
+  });
+
+  it('`/plan off` 沒帶附件照舊關得掉', async () => {
+    sent.length = 0;
+    const { registry, log } = await assemble();
+    await runPlan(registry.commands, '');
+    expect(await runPlan(registry.commands, 'off', steer, [])).toEqual({
+      kind: 'success',
+      text: PLAN_LEFT_MESSAGE,
+    });
+    expect(modes(log)).toEqual([true, false]);
+  });
+
+  it('沒接會話日誌：帶附件的 /plan 也不 steer', async () => {
+    sent.length = 0;
+    const { registry } = await loadPlugins([planPlugin()]);
+    expect(await runPlan(registry.commands, '', steer, [image])).toEqual({
+      kind: 'error',
+      text: PLAN_NOT_ATTACHED_MESSAGE,
+    });
+    expect(sent).toEqual([]);
+  });
+});
+
+/**
  * **沒有日誌的組裝寫不動模式，而它要說出來。** 命令在接線之前就註冊好了，所以這條路
  * 走得到——回「開了」而什麼都沒發生，比回一句錯更糟。
  */
 describe('沒接、或接了不只一份', () => {
   it('沒接會話日誌：/plan 說得出原因', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const { registry } = await loadPlugins([planPlugin()]);
 
     expect(await runPlan(registry.commands, '')).toEqual({
       kind: 'error',
@@ -308,18 +594,20 @@ describe('沒接、或接了不只一份', () => {
     });
   });
 
-  /** 參數先判：打錯的參數不管有沒有接上，都落定成 `error`，配套入口那條才站得住。 */
-  it('沒接會話日誌時，打錯的參數仍然回參數的錯', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+  /** 沒接上的命令不能開輪：話留在原地，沒有東西被送出去。 */
+  it('沒接會話日誌時，帶話的 /plan 不 steer', async () => {
+    const { registry } = await loadPlugins([planPlugin()]);
+    const steered: string[] = [];
 
-    expect(await runPlan(registry.commands, 'of')).toEqual({
+    expect(await runPlan(registry.commands, '幫我', (text) => steered.push(text))).toEqual({
       kind: 'error',
-      text: PLAN_ARGS_ERROR_MESSAGE,
+      text: PLAN_NOT_ATTACHED_MESSAGE,
     });
+    expect(steered).toEqual([]);
   });
 
   it('接了兩份：挑不出來，兩份都不動', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const { registry } = await loadPlugins([planPlugin()]);
     const first = new SessionLog('plan-a');
     const second = new SessionLog('plan-b');
     attach(registry, first);
@@ -334,7 +622,7 @@ describe('沒接、或接了不只一份', () => {
   });
 
   it('收掉接線之後回到沒接的樣子', async () => {
-    const { registry } = await loadPlugins([createPlanModePlugin()]);
+    const { registry } = await loadPlugins([planPlugin()]);
     const detach = attach(registry, new SessionLog('plan'));
     detach();
 
@@ -404,7 +692,7 @@ describe('recordedPlanMode', () => {
  */
 describe('模式的作用範圍', () => {
   it('同一個 plugin 物件組兩次，兩邊的模式互不相干', async () => {
-    const plugin = createPlanModePlugin();
+    const plugin = planPlugin();
     const first = await loadPlugins([plugin]);
     const second = await loadPlugins([plugin]);
     const firstLog = new SessionLog('plan-a');
@@ -427,11 +715,22 @@ describe('模式的作用範圍', () => {
 });
 
 describe('設定（#453）', () => {
-  it('省略時由 schema 補上預設值——指引是套件的那一份，模式從關的開始', () => {
-    expect(planModeConfigSchema.parse({})).toEqual({
-      guidance: DEFAULT_PLAN_GUIDANCE,
+  it('只有模式的初值有預設（關的）；指引沒有——部署必給', () => {
+    expect(planModeConfigSchema.parse({ guidance: GUIDANCE })).toEqual({
+      guidance: GUIDANCE,
       startActive: false,
     });
+  });
+
+  /** #1607（驗收 8），照 dsh `resolveConfig`：缺席與空白都在載入時失敗，訊息指得到欄位。 */
+  it.each([
+    ['缺席', {}],
+    ['空字串', { guidance: '' }],
+    ['只有空白', { guidance: '   \n\t ' }],
+  ] as const)('指引%s：載入失敗，訊息帶 `<id> (<name>)` 與 guidance', async (_label, config) => {
+    const bad = [{ plugin: planModePlugin, config }];
+    await expect(loadPlugins(bad)).rejects.toThrow('plan-mode#0 (plan-mode)');
+    await expect(loadPlugins(bad)).rejects.toThrow('guidance');
   });
 
   it('合法的覆寫會生效——夾進 prompt 的是部署給的那份原樣文本', async () => {
@@ -453,7 +752,7 @@ describe('設定（#453）', () => {
     });
 
     expect(seen).toBe(guidance);
-    expect(seen).not.toBe(DEFAULT_PLAN_GUIDANCE);
+    expect(seen).not.toBe(GUIDANCE);
   });
 
   it('型別錯就讓載入失敗，訊息帶 `<id> (<name>)` 與欄位路徑', async () => {

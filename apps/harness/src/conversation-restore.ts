@@ -21,11 +21,14 @@
  *
  * ## 回不來的
  *
- * 虛擬檔案系統（沒給 `--workspace` 時的檔案）、工具結果暫存（[#170](https://github.com/DemianLi/nexus-agent/issues/170)）、
+ * 虛擬檔案系統（沒給 `--workspace` 時的檔案）、
  * 摘要器的會話歷史檔（[#348](https://github.com/DemianLi/nexus-agent/issues/348)：灌回去的摘要仍寫著
  * 「完整歷史存在某某路徑」，那時讀不到）與停在核准點還沒答的那張卡都在 graph state 裡，而那一軸（`stateSchema`＋checkpointer）是我們偏離 dsh 的產物
  * （[#155](https://github.com/DemianLi/nexus-agent/issues/155)），日誌上沒有它們。沒答的那張卡推回來是一則補上的
  * 錯誤結果（dsh 的 `repair.ts`），見 `conversation-replay.ts`。
+ *
+ * **工具結果暫存回得來**（[#734](https://github.com/DemianLi/nexus-agent/issues/734)）：它存在主機的私有目錄、
+ * 按會話分目錄（`tool-result-stash.ts`），不在 graph state 裡，所以這一條路灌回去的預覽指的路徑讀得到。
  */
 
 import { ToolMessage } from '@langchain/core/messages';
@@ -35,6 +38,7 @@ import type { ConversationReplay, SessionEvent, UnreplayableReason } from '@nexu
 import { context } from 'langchain';
 
 import { TOOL_RESULT_STASH_PREFIX } from './agent-factory.js';
+import { CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
 
 /** 灌得進去的 agent 那一面。 */
 export interface RestorableAgent {
@@ -55,9 +59,8 @@ export interface RestorableAgent {
 // `TOO_LARGE_TOOL_MSG`），基座沒有匯出它們。`conversation-restore.test.ts` 拿真的基座換出來的那則逐字比對，
 // 升級基座時字變了就紅在那裡。
 //
-// 預覽裡指的路徑**續接之後讀不到**：暫存在 graph state 裡（`agent-factory.ts` 的 `withToolResultStash`），
-// 沒有跟著回來。重算的仍然是模型當時看到的字——續接前後模型看到同一則，讀不到那個檔是暫存回不來的後果，
-// 另外披露。
+// 預覽裡指的路徑**續接之後讀得到**（#734）：暫存在主機的私有目錄、按會話分目錄
+// （`tool-result-stash.ts`），續接用同一個 run 目錄當鑰匙，找得到原來那個檔。重算的仍然是模型當時看到的字。
 
 /** 基座的 `toolTokenLimitBeforeEvict` 預設 `2e4`，乘 4 是字元數。組裝點沒改它。 */
 const EVICTION_THRESHOLD_CHARS = 2e4 * 4;
@@ -151,18 +154,31 @@ function createContentPreview(contentStr: string, headLines = 5, tailLines = 5):
 }
 
 /**
+ * 基座會把這則工具結果搬到哪個檔：沒過門檻或基座不搬的回 undefined。
+ *
+ * 重播（{@link toolResultAsSeen}）與分叉讀繼承檔的路由（`fork-stash.ts`）共用這一份規則。
+ *
+ * @param message - 日誌裡記的那則（工具的輸出）。
+ * @returns 搬去的虛擬路徑（`/large_tool_results/<呼叫編號>.txt`）；不搬就是 undefined。
+ */
+export function toolResultEvictionPath(message: ToolMessage): string | undefined {
+  if (message.name !== undefined && TOOLS_EXCLUDED_FROM_EVICTION.includes(message.name)) {
+    return undefined;
+  }
+  if (stringifyToolContent(message.content).length <= EVICTION_THRESHOLD_CHARS) return undefined;
+  return `${TOOL_RESULT_STASH_PREFIX}/${sanitizeToolCallId(message.tool_call_id)}.txt`;
+}
+
+/**
  * 一則工具結果在模型那一格長什麼樣：照基座的規則，過大的換成預覽。
  *
  * @param message - 日誌裡記的那則（工具的輸出）。
  * @returns 沒過門檻或基座不搬的原樣；過了的換成基座那則。
  */
 export function toolResultAsSeen(message: ToolMessage): ToolMessage {
-  if (message.name !== undefined && TOOLS_EXCLUDED_FROM_EVICTION.includes(message.name)) {
-    return message;
-  }
+  const filePath = toolResultEvictionPath(message);
+  if (filePath === undefined) return message;
   const text = stringifyToolContent(message.content);
-  if (text.length <= EVICTION_THRESHOLD_CHARS) return message;
-  const filePath = `${TOOL_RESULT_STASH_PREFIX}/${sanitizeToolCallId(message.tool_call_id)}.txt`;
   return new ToolMessage({
     content: TOO_LARGE_TOOL_MSG.replace('{tool_call_id}', message.tool_call_id)
       .replace('{file_path}', filePath)
@@ -189,25 +205,42 @@ export function toolResultAsSeen(message: ToolMessage): ToolMessage {
  * @param threadId - checkpointer 認的那個 id。
  * @param events - 續接讀回來的 root 日誌。
  * @returns 推的結果，給入口披露用。
- * @throws `updateState` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。
+ * @throws `updateState` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
+ *   [#1658](https://github.com/DemianLi/nexus-agent/issues/1658)）時換成一顆帶 `seq` 的：最深的那一則出自日誌哪一顆事件。
+ *   那一則不截斷、不改寫——上限出現之前寫下的舊日誌才會有，要人看過再決定怎麼辦。
  */
 export async function restoreConversation(
   agent: RestorableAgent,
   threadId: string,
   events: readonly SessionEvent[],
 ): Promise<ConversationReplay> {
-  const replay = replayConversation(events, { toolResultAsSeen });
+  const seqOf = new Map<BaseMessage, number>();
+  const replay = replayConversation(events, {
+    toolResultAsSeen,
+    origin: (message, event) => seqOf.set(message, event.seq),
+  });
   if (replay.kind === 'replayed' && replay.messages.length > 0) {
-    await agent.updateState(
-      { configurable: { thread_id: threadId } },
-      { messages: [...replay.messages] as BaseMessage[] },
-    );
+    try {
+      await agent.updateState(
+        { configurable: { thread_id: threadId } },
+        { messages: [...replay.messages] as BaseMessage[] },
+      );
+    } catch (error) {
+      if (!(error instanceof CheckpointDepthError) || error.seq !== undefined) throw error;
+      let deepest: BaseMessage | undefined;
+      let most = -1;
+      for (const message of replay.messages) {
+        const depth = checkpointDepth(message);
+        if (depth > most) [deepest, most] = [message, depth];
+      }
+      throw new CheckpointDepthError(error.depth, error.limit, deepest && seqOf.get(deepest));
+    }
   }
   return replay;
 }
 
 const UNREPLAYABLE_TEXT: Readonly<Record<UnreplayableReason, string>> = {
-  'reply-missing': '日誌裡少了模型的回覆（格式 9 以前寫的日誌不記回覆）',
+  'reply-missing': '日誌裡有模型正常回來的呼叫，卻沒有記到回覆（多半是格式 9 以前寫的日誌）',
   'result-missing': '日誌裡少了工具結果的內容（格式 9 以前寫的日誌不記內容）',
   'summary-missing': '日誌裡少了壓縮的摘要（格式 9 以前寫的日誌不記摘要）',
   'compaction-misaligned': '壓縮的切點對不上推出來的對話，灌回去會切錯地方',

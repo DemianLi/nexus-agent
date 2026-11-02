@@ -19,6 +19,8 @@
  */
 
 import type { Event } from './protocol.js';
+import { assertWireEvent } from './protocol.js';
+import { WireProtocolError } from './protocol-error.js';
 
 const FRAME_SEPARATOR = '\n\n';
 
@@ -35,7 +37,20 @@ export function encodeSseFrame(event: Event): string {
   return `${lines.join('\n')}${FRAME_SEPARATOR}`;
 }
 
-/** SSE 的註解行（`:` 開頭）。目前只在解碼端認得，我們自己不發心跳。 */
+/**
+ * 一顆全域下行的 frame 編成一段 SSE frame（#632）。沒有 `id:`：那條線不重播，也沒有號。
+ *
+ * @param event - `event:` 欄位，給 SSE 那一層與除錯看的重複資訊，同 {@link encodeSseFrame}。
+ * @param data - 整顆 frame，JSON 編進 `data:`。
+ */
+export function encodeSseData(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}${FRAME_SEPARATOR}`;
+}
+
+/**
+ * SSE 的註解行（`:` 開頭）。解碼端跳過它；伺服器端的心跳（`: ping`，#1504，寫在 `apps/harness/src/wire-server.ts`）
+ * 與開線的 `: connected` 都是這種行，所以這個檔不產生心跳，只負責認得它不是封包。
+ */
 function isComment(line: string): boolean {
   return line.startsWith(':');
 }
@@ -55,18 +70,37 @@ function isComment(line: string): boolean {
  * 開下行之後先拿歷史、再送上行，正好是那段空檔；負載一大 GC 就落進去（serve-history 的測試在整套跑時穩定紅，
  * 強制 GC 可以每次重現）。瀏覽器沒有這條回收規則，但早鎖對它無害。
  *
+ * **每一顆都先驗信封**（{@link assertWireEvent}，[#1555](https://github.com/DemianLi/nexus-agent/issues/1555)）：解不開的 JSON、缺欄位、
+ * `seq` 不是安全非負整數，都拋 {@link WireProtocolError}（`field` 指名哪個欄位），而且**這時就把底層的 reader 取消**，連線不掛著。
+ * 以前直接 `as Event`，壞的進了折疊器才炸成 `TypeError`，`"seq": "7"` 這種則是靜靜壞掉去重。
+ *
  * @param body - 下行回應的 body。
  * @returns 一顆一顆的 `Event`。
+ * @throws {WireProtocolError} 某一顆的形狀不對。
  */
 export function decodeSseStream(
   body: ReadableStream<Uint8Array>,
 ): AsyncGenerator<Event, void, undefined> {
-  return decodeFrames(body.getReader());
+  return decodeFrames(body.getReader(), parseEvent) as AsyncGenerator<Event, void, undefined>;
+}
+
+/**
+ * 同 {@link decodeSseStream}，但 `data` 只解成 JSON、不假設是 `Event`——給全域下行用（#632），那條線的 frame 由
+ * 呼叫端驗。**body 一樣在呼叫的當下就鎖住**，理由同上。
+ *
+ * @param body - 下行回應的 body。
+ * @returns 一顆一顆 `data` 解出來的值。
+ */
+export function decodeSseData(
+  body: ReadableStream<Uint8Array>,
+): AsyncGenerator<unknown, void, undefined> {
+  return decodeFrames(body.getReader(), parseJson);
 }
 
 async function* decodeFrames(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-): AsyncGenerator<Event, void, undefined> {
+  parse: (frame: string) => unknown,
+): AsyncGenerator<unknown, void, undefined> {
   const decoder = new TextDecoder();
   let buffer = '';
 
@@ -82,7 +116,14 @@ async function* decodeFrames(
       while (index !== -1) {
         const frame = buffer.slice(0, index);
         buffer = buffer.slice(index + FRAME_SEPARATOR.length);
-        const event = parseFrame(frame);
+        let event: unknown;
+        try {
+          event = parse(frame);
+        } catch (error) {
+          // 協定錯誤是終止類：不會有人再來讀這條 body，取消它，連線才不會掛著。
+          if (error instanceof WireProtocolError) await reader.cancel(error).catch(() => undefined);
+          throw error;
+        }
         if (event !== undefined) {
           yield event;
         }
@@ -95,14 +136,32 @@ async function* decodeFrames(
   }
 }
 
-function parseFrame(frame: string): Event | undefined {
+/** 一段 SSE frame 的 `data:` 行接起來；沒有 `data`（心跳、註解）回 `undefined`。 */
+function dataOf(frame: string): string | undefined {
   const data = frame
     .split('\n')
     .filter((line) => !isComment(line) && line.startsWith('data:'))
     .map((line) => line.slice('data:'.length).trimStart())
     .join('');
-  if (data === '') {
-    return undefined;
+  return data === '' ? undefined : data;
+}
+
+/** 全域下行：只解 JSON，frame 由呼叫端驗。 */
+function parseJson(frame: string): unknown {
+  const data = dataOf(frame);
+  return data === undefined ? undefined : (JSON.parse(data) as unknown);
+}
+
+/** thread 下行：解 JSON 再驗信封，兩種不對都是 {@link WireProtocolError}。 */
+function parseEvent(frame: string): unknown {
+  const data = dataOf(frame);
+  if (data === undefined) return undefined;
+  let value: unknown;
+  try {
+    value = JSON.parse(data);
+  } catch (cause) {
+    throw new WireProtocolError('data', '下行事件的 data 不是合法的 JSON', { cause });
   }
-  return JSON.parse(data) as Event;
+  assertWireEvent(value);
+  return value;
 }

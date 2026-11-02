@@ -1,0 +1,156 @@
+{
+  "id": "1911.03906",
+  "title": "Efficient Dialogue State Tracking by Selectively Overwriting Memory",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 SOM-DST：把對話狀態當成固定大小、可選擇性覆寫的記憶，每回合以「上一輪狀態＋最近兩回合語句」為輸入，先對 30 個槽位各分類一個操作（carryover／delete／dontcare／update），只對判為 update 的槽位生成新值；在開放詞彙設定下 MultiWOZ 2.0／2.1 的 joint goal accuracy 達 51.72／53.01，每回合平均只生成 1.14 個槽位值、延遲 27 ms，並量出用預測狀態當輸入會讓錯誤放大 2.47 倍。",
+  "problem": "預先定義本體（ontology）的 DST 要對每個候選值打分：本體常拿不到、無法處理沒見過的值，而且成本隨候選數成長（MultiWOZ 2.1 有 4,510 個槽位值候選，DSTC2 只有 212）。開放詞彙 DST（如 TRADE）改成從對話脈絡生成或擷取值，解決了擴展性，但多數做法每回合都從頭重新預測整份狀態：TRADE 每回合對 30 個槽位全部做自迴歸解碼，又得從長歷史中重新找回早先提過的值。這樣浪費計算，也讓解碼器同時承擔「哪些槽位要變」與「變成什麼」兩件事。多領域對話中使用者會多次切換話題，前面提過的值要一路維持到最後，狀態的維護方式因此成為關鍵。",
+  "core_idea": "把對話狀態 B_{t-1} 當成一份顯式、可直接讀取的鍵值記憶放進編碼器輸入，用它取代長對話歷史（馬可夫假設：歷史只取上一回合語句）。DST 拆成兩個離散子任務：編碼器（BERT）對每個槽位做四分類，決定沿用、清空、設為不在意或改寫；解碼器（GRU＋複製機制）只對要改寫的槽位生成值。狀態更新因此變成「差量覆寫」：大部分槽位直接沿用舊值，生成量從每回合 J 個降到 J'_t 個（平均 1.14）。操作的離散化受 DST Reader 的 slot carryover 模組啟發，但多拆出 delete 與 dontcare。",
+  "method": {
+    "task_formulation": "狀態 B_t = {(S^j, V^j_t) | 1 ≤ j ≤ J}，鍵是槽位（domain 名＋slot 名，例如 hotel-pricerange），J=30。兩個特殊值：NULL 表示到目前為止沒有資訊（B_0 全為 NULL），DONTCARE 表示使用者不在意。每回合輸入 D_{t-1}、D_t、B_{t-1}，輸出 B_t。",
+    "state_operations": "操作集 O = {carryover, delete, dontcare, update}，每個槽位每回合恰好一個：carryover → V^j_t = V^j_{t-1}；delete → NULL；dontcare → DONTCARE；update → 生成新值 v，且 v 不屬於 {V^j_{t-1}, NULL, DONTCARE}。delete／dontcare 只在舊值不是對應特殊值時才會被選。",
+    "input_representation": "D_t = A_t ⊕ ; ⊕ U_t ⊕ [SEP]（系統回應、分隔符號「;」、使用者語句、回合結束記號）。每個槽位序列化為 [SLOT] ⊕ 槽位名 ⊕ - ⊕ 值，B_{t-1} 是 30 段的串接；所有槽位共用同一個 [SLOT] 特殊記號，功能類似 BERT 的 [CLS]，用來匯集該槽位的資訊。輸入 X_t = [CLS] ⊕ D_{t-1} ⊕ D_t ⊕ B_{t-1}，對話歷史只取上一回合（history size=1）。值為 NULL 時輸入特殊記號 [NULL]；值為 DONTCARE 時，論文說輸入字串「dont care」以利用 BERT 已學到的語意（官方程式碼實際送的是正規化後的單一字串 dontcare，見 reproduction_gaps）。segment id：D_{t-1} 為 0，D_t 與 B_{t-1} 為 1；位置嵌入用 BERT 標準設定。推論時與未打亂時槽位依字母序排列。",
+    "state_operation_predictor": "BERT-base-uncased 編碼 X_t 得 H_t ∈ R^{|X_t|×768}。整段表示 h^X_t = tanh(W_pool · h^[CLS]_t)。對每個槽位 j，以其 [SLOT] 位置的輸出做四分類：P^j_opr = softmax(W_opr · h^[SLOT]j_t)，W_opr ∈ R^{4×d}；r^j_t = argmax。U_t = {j | r^j_t = update}，J'_t = |U_t|。另有輔助的 domain 分類 P_dom = softmax(W_dom · h^X_t)，d_dom=5，只用於訓練。",
+    "slot_value_generator": "對每個 j ∈ U_t 各自用一個 GRU 解碼（hidden 與編碼器同為 768）：初始隱藏狀態 g^{j,0} = h^X_t，第一步輸入 e^{j,0} = h^[SLOT]j_t；之後每步吃上一個字的詞嵌入，直到產生 [EOS]。詞彙分布 P_vcb = softmax(E · g)，E 是與編碼器共用的詞嵌入矩陣；脈絡分布 P_ctx = softmax(H_t · g)；context 向量 c = P_ctx · H_t；soft-gated 複製（See et al. 2017，同 TRADE）：α = sigmoid(W_1 [g; e; c])，W_1 ∈ R^{1×3d}，P_val = α·P_vcb + (1−α)·P_ctx。可複製的範圍是整個 X_t，包含 B_{t-1} 裡的舊值。推論用 greedy 解碼。",
+    "training_objective": "L_joint = L_opr + L_dom + L_svg，三項等權相加。L_opr：J 個槽位操作分類的負對數概似取平均；L_dom：該回合 domain 的交叉熵；L_svg：只對 U_t 的槽位計算，先對每個槽位的 K^j_t 個目標 token 取平均，再對槽位取平均。",
+    "training_procedure": "訓練時一律用 ground truth 的上一輪狀態 B_{t-1} 與 ground truth 操作（決定哪些槽位進解碼器），不是用模型自己的預測。解碼器 teacher forcing 比例 50%。槽位順序以 0.5 機率隨機打亂，迫使模型看槽位名稱的語意而非位置。word dropout：以 0.1 機率把輸入 token 換成 [UNK]（官方程式碼只對語句部分做，不動狀態部分）。",
+    "hyperparameters": "BertAdam；編碼器峰值學習率 4e-5、解碼器 1e-4，warmup 比例皆 0.1；批次 32；dropout 0.1；最大序列長度 256；聯合訓練 30 epochs，取驗證集最佳；報告值為十次執行的平均。BERT-large 版本另報。",
+    "inference_loop": "1) B_0 全部設為 NULL。2) 第 t 回合組 X_t = [CLS] D_{t-1} D_t B_{t-1}（B_{t-1} 是模型上一回合自己的輸出）。3) BERT 編碼，對 30 個槽位各取 argmax 操作。4) 只對 update 槽位做 greedy 解碼。5) 套用操作得到 B_t，作為下一回合輸入。domain 分類頭推論時不用。",
+    "ground_truth_operation_derivation": "論文只定義操作語意，沒寫 ground truth 操作怎麼取得。官方程式碼（utils/data_utils.py 的 make_turn_label）的做法：比較相鄰兩回合的金標狀態，值改變且新值是 dontcare → dontcare；值改變為其他值 → update（生成目標為新值的 wordpiece 加 [EOS]）；上一回合有值、這一回合沒有 → delete；其餘 → carryover。",
+    "truncation_rule_from_code": "論文沒寫超過 256 時怎麼辦。官方程式碼的作法：狀態部分永不截斷；可用長度 = 256 − 狀態長度 − 3，先扣掉 D_t，剩下不夠放 D_{t-1} 時從 D_{t-1} 前端截掉；D_{t-1} 為空而 D_t 仍過長時，從 D_t 前端截掉。",
+    "data": "MultiWOZ 2.0 與 2.1，只用 restaurant、train、hotel、taxi、attraction 五個領域（hospital、police 量少且不在測試集），30 個槽位；前處理沿用 TRADE 的腳本（github.com/jasonwu0731/trade-dst），每回合的 domain 標籤也來自該前處理。",
+    "reproduction_gaps": "論文沒交代、要靠官方程式碼補的：ground truth 操作的導出規則、輸入截斷規則、每回合 domain 標籤的來源、最大解碼長度、學習率排程的形狀；十次執行的標準差也沒報。update 生成出與舊值相同的字串時怎麼處理，論文定義上排除這種情況，但推論時沒有約束。論文與官方程式碼有一處不一致：論文說 DONTCARE 以「dont care」輸入，但程式碼的前處理（create_data.py）把各種寫法正規化成 dontcare，make_instance 原樣 tokenize，沒有轉成兩個字；附帶的 vocab.txt 裡沒有 dontcare 這個 token，會被拆成子詞。"
+  },
+  "assumptions": [
+    "槽位 schema 固定且事先定義（J=30）；「開放詞彙」只對值成立，不對槽位清單成立。",
+    "馬可夫假設：上一輪狀態加上最近兩回合語句就足以預測本回合狀態；沒被寫進狀態的資訊（例如系統先前提出的候選實體、使用者的軟性偏好）超過一回合就看不到。",
+    "上一輪狀態可信：訓練時餵的是金標 B_{t-1}，推論時才換成預測值，方法隱含假設兩者分布接近。",
+    "多數槽位每回合不變（J'_t ≪ J），效率優勢才會出現。",
+    "訓練資料每回合都有 domain 標籤，供輔助任務使用。",
+    "目標值能從 X_t（含舊狀態）複製，或由 BERT 詞彙生成；槽位名稱本身帶有可被 BERT 利用的語意。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.0（五領域、30 槽位）",
+      "MultiWOZ 2.1（五領域、30 槽位；修正約 32% 狀態標註的版本）"
+    ],
+    "metrics": [
+      "joint goal accuracy（每回合全部槽位值都與金標完全一致才算對）",
+      "domain-specific joint／slot accuracy（只看該領域的槽位子集）",
+      "各操作類別的 F1",
+      "每回合生成值的槽位數（最小／平均／最大）",
+      "每回合推論延遲（Tesla V100、批次 1）",
+      "Inference Time Complexity（ITC，沿用 COMER 的定義，另分最佳與最壞情況）",
+      "相對錯誤率（以金標替換 SOP／SVG 後剩下的錯誤占比）"
+    ],
+    "baselines": [
+      "預定義本體：HJST、FJST、SUMBT、HyST（混合式）、DS-DST（混合式）、DST-picklist",
+      "開放詞彙：DST Reader、TRADE、COMER、NADST、ML-BST",
+      "消融：二類（carryover／non-carryover）、三類（去 delete 或去 dontcare）、六類（加 yes／no）操作集",
+      "oracle 分析：金標 B_{t-1}、金標操作、金標值的各種組合"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "開放詞彙設定下 joint goal accuracy 最高；但這個「最高」只限開放詞彙範圍，預定義本體的 DST-picklist（與 DS-DST 架構相近）在 2.1 仍略高於 SOM-DST base。",
+      "numbers": "SOM-DST base：2.0 為 51.72、2.1 為 53.01；BERT-large 版：52.32／53.68。開放詞彙基線：NADST 50.52／49.04、COMER 48.79／–、TRADE 48.60／45.60、ML-BST –／50.91、DST Reader 39.41／36.40。預定義本體：DST-picklist –／53.30、DS-DST –／51.21。",
+      "section": "Abstract, §5.1, Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "與先前模型相反，SOM-DST 在 2.1 的分數高於 2.0；作者推測是因為模型直接把狀態標籤當輸入，因此更受益於 2.1 對狀態標註的修正（屬推測，未驗證）。",
+      "numbers": "2.0 為 51.72，2.1 為 53.01（+1.29）；TRADE 則從 48.60 降到 45.60。2.1 修正了約 32% 的 2.0 狀態標註。",
+      "section": "§5.1, Table 1, footnote 9",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "整體優勢主要來自 taxi 與 train 兩個領域；這兩個領域的值較多樣、多次切換領域的對話常在 taxi 結束。作者推測原因是顯式的上一輪狀態能保住對話早期提到的值並直接複製（作者自稱 conjecture，無消融）。",
+      "numbers": "2.1 domain-specific joint：taxi 為 59.96（NADST 33.80、ML-BST 23.05），train 為 70.36（NADST 62.36、ML-BST 65.12）；attraction 69.83（ML-BST 70.78）、hotel 49.53（ML-BST 49.52）、restaurant 65.72（ML-BST 66.50）。測試集中 175 段對話的領域切換超過一次，其中 140 段結束在 taxi。",
+      "section": "§5.2, Table 2, Table 10",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "四類操作的 joint goal accuracy 最好；改成二類（沿用／不沿用，即 DST Reader 的做法）掉最多，作者解釋 delete、dontcare 的值多半隱含、update 的值多半明說，因此應該分開建模。",
+      "numbers": "2.1 joint：四類 53.01、二類 52.06、三類（去 delete）52.63、三類（去 dontcare）52.64、六類（加 yes／no）52.97。",
+      "section": "§6.1, Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "用模型上一回合的預測狀態當輸入會造成錯誤傳遞；改餵金標上一輪狀態，joint 從 53.01 升到 81.00，錯誤放大倍數為 2.47。",
+      "numbers": "預測 B_{t-1}：53.01；金標 B_{t-1}：81.00；(100−53.01)/(100−81.00) = 2.47。",
+      "section": "§6.2, Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "不論有無錯誤傳遞，多數錯誤來自操作預測（SOP）而非值生成（SVG）。注意 Table 4 欄序是 GT SOP、GT SVG：只給金標值時 joint 只到 56.37，只給金標操作時就到 89.85。",
+      "numbers": "預測 B_{t-1} 下：只給金標 SVG 為 56.37、只給金標 SOP 為 89.85、兩者都給為 100；推得 SOP 占錯誤 78.4%–92.85%、SVG 占 7.15%–21.6%。金標 B_{t-1} 下：基準 81.00、只給金標 SVG 為 82.80、只給金標 SOP 為 96.27；SOP 占 80.37%–90.53%。",
+      "section": "§6.2, Table 4, footnote 11",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "操作類別嚴重不平衡，罕見操作幾乎預測不出來；作者建議處理類別不平衡以提升 SOP，進而大幅提升 DST。",
+      "numbers": "2.1 訓練集操作數：carryover 1,584,757、update 61,628、dontcare 1,911、delete 1,224；測試 F1：carryover 98.66、update 80.10、dontcare 32.51、delete 2.86（測試集僅 109 筆 delete）。",
+      "section": "§6.2, Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "選擇性覆寫大幅減少生成量與延遲：每回合平均只生成 1.14 個槽位值，延遲約為 TRADE 的 1/12.5，與非自迴歸的 NADST 相當但準確率更高。",
+      "numbers": "每回合生成槽位數（最小／平均／最大）：SOM-DST 0／1.14／9、COMER 0／5.72／18、TRADE 與 ML-BST 皆 30／30／30。V100、批次 1 的平均延遲：TRADE 340 ms（joint 45.60）、NADST 26 ms（49.04）、SOM-DST 27 ms（53.01）、BERT-large 版 40 ms（53.68）。ITC：最佳 Ω(1)、最壞 O(J)。",
+      "section": "§6.3, Table 6, Table 7, Appendix B Table 11",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "用前一回合的預測狀態當輸入會造成錯誤傳遞，錯誤放大 2.47 倍。",
+    "多數錯誤來自操作預測，類別不平衡（delete、dontcare 極少）是待改善之處；作者把它定位成未來方向而非已解決的問題。",
+    "attraction、hotel、restaurant 三個領域的表現與同期模型相近或略低，整體優勢主要來自 taxi 與 train。",
+    "MultiWOZ 2.0 有大量標註錯誤（2.1 修正約 32% 的狀態標註），會影響把狀態標籤當輸入的模型。",
+    "只用五個領域，排除 hospital 與 police。"
+  ],
+  "limitations_observed": [
+    "這篇入選的核心設計從沒被消融：沒有「拿掉 B_{t-1}、改用完整歷史」的對照，也沒有 history size 大於 1 的實驗。taxi 59.96 對 NADST 33.80 的落差被歸因於顯式狀態記憶，但作者自己標為 conjecture；同一張 Table 2 裡另外三個領域持平或較低，無法排除差距來自 BERT 編碼器、輔助 domain 損失或前處理差異。",
+    "訓練與推論不一致是設計內建的：訓練一律餵金標 B_{t-1} 與金標操作，推論才換成自己的預測，Table 4 的 81.00 → 53.01 就是代價。論文只量了這個落差，沒試 scheduled sampling 或用預測狀態訓練；也沒報 joint accuracy 隨回合序號或對話長度的變化，錯誤在長對話中怎麼累積完全看不出來，而這正是 T2「多輪表現退化」最需要的資料。",
+    "錯值一旦寫進狀態，幾乎不會被清掉：carryover 是壓倒性多數（訓練集約 158 萬筆，F1 98.66），delete 的 F1 只有 2.86。論文沒分析 delete 標籤的組成（測試集僅 109 筆，可能多半是 MultiWOZ 標註前後不一致而非使用者真的撤回），所以分不出是模型學不會，還是標籤本身是雜訊；但不論哪種解釋，「記憶式狀態」在實務上等於只能新增、改寫，很難撤銷。",
+    "Table 3 的證據太弱，撐不起「把 delete、dontcare 分開建模有幫助」：各組差距只有 0.04 到 0.95 點，報的是十次平均卻沒有標準差。四類與去掉 delete 的三類只差 0.38 點，而 delete 自己的 F1 近乎零，這個差距很可能落在種子變異內。",
+    "Table 4 的歸因方式會高估 SOP 的份額：給金標操作時，delete 與 dontcare 的值直接由操作決定，等於連答案一起給了；對 update 也洩漏了「哪幾格要改」。因此 89.85 不只是「操作分類正確」的效果，78.4%–92.85% 的區間應視為上限偏高的估計。",
+    "效率分析只算解碼器：ITC 的 Ω(1) 與 Table 6 的 1.14 個槽位都沒計入 BERT 每回合要重新編碼全部 30 個槽位的序列化狀態，而這部分成本隨 J 線性成長。Table 7 只報平均延遲，最壞情況（一回合 9 個 update）的延遲沒報；延遲比較也只納入有官方實作的模型，COMER 不在其中。",
+    "輸入長度上限與狀態序列化互相排擠：依官方程式碼的序列化方式估算，30 個槽位即使全為 NULL 也約佔 160 個 wordpiece（[SLOT]、domain、slot 名、「-」、[NULL]），256 的上限只剩約 90 個給 D_{t-1} 與 D_t，值填多了更少；程式碼的處理是從 D_{t-1} 前端截斷。論文沒報截斷比例。換到 SGD 這類槽位數多一個量級的 schema，整份狀態連 BERT 的 512 都放不下，方法得改成按服務或領域切分。",
+    "比較口徑不一：基線數字借自原論文或 Eric et al.，都沒附變異資訊；SOM-DST 則報十次平均，同樣沒附標準差。backbone 也不同（BERT-base 對 TRADE 的 GRU、NADST 的 Transformer），延遲的 12.5 倍主要反映 TRADE 每回合要自迴歸解 30 個槽位，與 SOM-DST 的方法貢獻混在一起。",
+    "Table 2 的基線數字有疑似誤植：ML-BST 在 train 領域 joint 65.12，slot accuracy 卻只有 90.22，其他所有格的 slot accuracy 都在 96–99 之間；論文直接引用、未說明。",
+    "MultiWOZ 2.1 優於 2.0 的解釋（「直接用狀態標籤當輸入，所以更受益於標註修正」）未經驗證：可以用「訓練與測試都用金標 B_{t-1}」的設定在兩個版本上對照來檢驗，論文沒做。",
+    "錯誤分析全是量化的（oracle 替換、各操作 F1），沒有任何失敗案例的定性分析；附錄 C 只放兩段成功輸出的範例（MUL2499、PMUL3748），讀者看不到 delete 失敗或錯值被 carryover 保留的實際樣貌。",
+    "評估只在 MultiWOZ 的固定 30 槽位上，沒有任何未見過領域或槽位的實驗（TRADE 至少做了留一領域零樣本），也沒有 SGD；槽位順序打亂、輔助 domain 損失、word dropout 都沒有單獨消融。"
+  ],
+  "framework_role": "T2 中「狀態當顯式記憶、每回合差量更新」範式的代表作，正對應入選理由：上一輪狀態 B_{t-1} 直接當輸入，取代冗長的對話歷史，模型只輸出每個槽位的操作（沿用／清空／不在意／改寫）與少數改寫值。對 LLM agent 的長多輪狀態維護，這等於「把結構化狀態放進 prompt、讓模型輸出 patch 而不是整份重寫」的前身，並提供兩個可直接借用的量化教訓：一是用自己的預測狀態當下一輪輸入，錯誤會放大 2.47 倍；二是「清空」這類罕見操作幾乎學不會（delete F1 2.86），錯值寫進狀態後會被 carryover 一路保留。這兩點說明框架為什麼需要 E2（T5 反思修正的結果回寫狀態）：carryover／delete／dontcare／update 這組操作本身就是很自然的回寫介面，但論文本身沒有任何修正迴路，所以不把它列為 E2 的實作。joint goal accuracy 與 Table 4 的 oracle 替換分析，也可作為 T7 量測狀態錯誤來源的參考做法。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文作者全來自 NAVER Clova AI，但論文沒有提到任何部署或產品；官方程式碼 https://github.com/clovaai/som-dst（MIT 授權）的 README 只有研究用的訓練與評估說明，沒有提到用於 NAVER／Clova 產品。搜尋結果中「適合即時、生產等級對話系統」的說法來自聚合摘要，不是官方來源，不採計。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/clovaai/som-dst",
+    "data": "公開：MultiWOZ 2.0（Budzianowski et al. 2018）與 MultiWOZ 2.1（Eric et al. 2019）皆為公開資料集；前處理沿用 TRADE 公開的腳本，官方程式碼支援兩個版本。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "「上一輪狀態當顯式輸入＋操作式差量覆寫」這個 T2 設計範式的代表作（Semantic Scholar 208 次引用、52 次 influential），而且用 oracle 替換量出了這種設計的代價（錯誤放大 2.47 倍、delete 幾乎學不會），對設計 LLM agent 的狀態維護與回寫機制是必讀；SOTA 數字本身已被後續工作超越，不是讀它的理由。",
+  "related": [
+    "1905.08743",
+    "1908.01946",
+    "1909.00754",
+    "2002.08024",
+    "1910.03544",
+    "1907.07421",
+    "1907.01669",
+    "1810.00278",
+    "1907.00883",
+    "1704.04368",
+    "1810.04805"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

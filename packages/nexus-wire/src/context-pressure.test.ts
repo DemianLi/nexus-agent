@@ -61,6 +61,52 @@ describe('contextPressure', () => {
     });
   });
 
+  /**
+   * `messagesCompactable`（#1443）是選填的：有就原樣帶著，沒有就不出這個 key。這一格出現以前的日誌重放出來的就是後者，
+   * web 要能分出「沒記」與 `false`。
+   */
+  it('messagesCompactable：有就帶著，沒有就不出這一格', () => {
+    for (const messagesCompactable of [true, false]) {
+      expect(fold(custom(CONTEXT_MEASURE, { ...measure, messagesCompactable }))).toEqual({
+        measure: { ...measure, messagesCompactable },
+      });
+    }
+    const old = fold(custom(CONTEXT_MEASURE, measure));
+    expect(old).toEqual({ measure });
+    expect('messagesCompactable' in old!.measure!).toBe(false);
+  });
+
+  /**
+   * `breakdown`（#1571 N1193）是選填的：有就原樣帶著三格，沒有就不出這個 key（這一格出現以前的日誌重放出來的就是後者）。
+   * 帶了但形狀不對，整顆不收——不能只留一半讓畫面把缺的格當成 0。
+   */
+  it('breakdown：有就帶著三格，沒有就不出這個 key，認得的欄位以外不帶', () => {
+    const breakdown = { systemTokens: 3, toolsTokens: 0, messageTokens: 7 };
+    expect(fold(custom(CONTEXT_MEASURE, { ...measure, breakdown }))).toEqual({
+      measure: { ...measure, breakdown },
+    });
+    expect(
+      fold(custom(CONTEXT_MEASURE, { ...measure, breakdown: { ...breakdown, extra: 1 } })),
+    ).toEqual({ measure: { ...measure, breakdown } });
+    const old = fold(custom(CONTEXT_MEASURE, measure));
+    expect('breakdown' in old!.measure!).toBe(false);
+  });
+
+  it('breakdown 形狀不對整顆不收', () => {
+    const breakdown = { systemTokens: 3, toolsTokens: 0, messageTokens: 7 };
+    const bad: unknown[] = [
+      { ...breakdown, systemTokens: -1 },
+      { ...breakdown, toolsTokens: 1.5 },
+      { ...breakdown, messageTokens: '7' },
+      { systemTokens: 3, toolsTokens: 0 },
+      null,
+      'x',
+    ];
+    for (const each of bad) {
+      expect(fold(custom(CONTEXT_MEASURE, { ...measure, breakdown: each }))).toBeNull();
+    }
+  });
+
   it('形狀不對整顆不收，不收一半', () => {
     const bad: unknown[] = [
       { ...measure, approxTokens: -1 },
@@ -73,6 +119,9 @@ describe('contextPressure', () => {
       { ...measure, thresholds: [{ type: 'tokens', value: Number.POSITIVE_INFINITY }] },
       { ...measure, thresholds: [{ type: 'tokens', value: 5 }, { type: 'messages' }] },
       { ...measure, thresholds: [null] },
+      { ...measure, messagesCompactable: 'false' },
+      { ...measure, messagesCompactable: 0 },
+      { ...measure, messagesCompactable: null },
       null,
     ];
     for (const payload of bad) expect(fold(custom(CONTEXT_MEASURE, payload))).toBeNull();

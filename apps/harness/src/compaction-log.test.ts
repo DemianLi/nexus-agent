@@ -50,6 +50,10 @@ function compactionsOf(events: readonly SessionEvent[]): CompactionSummary[] {
 
 interface RunResult {
   readonly root: CompactionSummary[];
+  /** root 那份日誌的全部事件，給「壓縮記在哪裡」這類看順序的斷言用。 */
+  readonly rootEvents: readonly SessionEvent[];
+  /** 有的 `invoke` 拋了（模型那一輪故意失敗）：丟出來的錯誤訊息，照呼叫順序。 */
+  readonly failures: readonly string[];
   readonly subagents: CompactionSummary[][];
   /** backend 的根，用來核對 `filePath` 指到的檔真的在。 */
   readonly backendRoot: string;
@@ -73,6 +77,8 @@ async function run(
     summarization?: Parameters<typeof createNexusAgent>[0]['summarization'];
     plugins?: readonly PluginEntry[];
     invocations?: number;
+    /** 為真時 `invoke` 拋錯不中斷，記進 {@link RunResult.failures} 繼續下一句。 */
+    tolerateFailures?: boolean;
   } = {},
 ): Promise<RunResult> {
   const backendRoot = await mkdtemp(join(tmpdir(), 'nexus-compaction-'));
@@ -88,28 +94,44 @@ async function run(
   });
   const sessions = new SessionRegistry(ROOT_ID);
   const detach = attachSession(sessions);
+  const failures: string[] = [];
   try {
     for (let index = 0; index < (options.invocations ?? 1); index += 1) {
-      await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。`), {
-        configurable: { thread_id: ROOT_ID },
-      });
+      try {
+        await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。${USER_PAD}`), {
+          configurable: { thread_id: ROOT_ID },
+        });
+      } catch (error) {
+        if (options.tolerateFailures !== true) throw error;
+        failures.push(error instanceof Error ? error.message : String(error));
+      }
     }
   } finally {
     detach();
     await dispose();
   }
   const entries = sessions.list();
+  const rootEvents = entries.find((entry) => entry.address.kind === 'root')?.log.events ?? [];
   return {
+    rootEvents,
+    failures,
     backendRoot,
     prompts: model.prompts,
     backend,
     saver,
-    root: compactionsOf(entries.find((entry) => entry.address.kind === 'root')?.log.events ?? []),
+    root: compactionsOf(rootEvents),
     subagents: entries
       .filter((entry) => entry.address.kind === 'subagent')
       .map((entry) => compactionsOf(entry.log.events)),
   };
 }
+
+/**
+ * 使用者每一句後面的墊料（#1396）：框好的摘要要比被取代那段小才會提交。腳本裡摘要與回話用的是同一個 `BODY`，
+ * 第一次摘要被取代的只有「一句短話＋一則 BODY」，框好的摘要（BODY ＋ 框架）會比它大、被擋下；墊長使用者句之後
+ * 第一次摘要就提交，「至少一次」才是在量日誌，不是量第二次以後。
+ */
+const USER_PAD = '內容'.repeat(100);
 
 /** 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。 */
 const BODY = '這是一段普通長度的回話。'.repeat(32);
@@ -124,7 +146,7 @@ function chatter(count = 40): ScriptedTurn[] {
 
 describe('壓縮發生時，日誌裡留得下來', () => {
   /**
-   * **卡上的驗收句。** 設定是等比縮小的：`tokens: 3_000` 配預設的 `keep: 20 則`，結構上
+   * **卡上的驗收句。** 設定是等比縮小的：`tokens: 3_000` 配預設的保留量（`retainRatio` 0.16，夾在門檻的 0.2 倍以內），結構上
    * 等同預設的 `tokens: 100_000` 配一般大小的訊息（同 `summarization.test.ts` 的鋸齒那條）。
    *
    * 這裡不斷言筆數，因為摘要跑幾次取決於腳本被吃掉幾輪——**「至少一次」才是這條測得準的
@@ -146,13 +168,13 @@ describe('壓縮發生時，日誌裡留得下來', () => {
    * messagesBefore` 在第二次摘要之後成立——圖的狀態只會長不會縮，有效串卻短得多。
    */
   it('切點落在長度之內，讀得出「換掉了多前面的多少」', async () => {
-    // **`keep` 要小**，這一格才分得出來：`keep` 留在預設的 20 則時切點只有 1 或 3，
+    // **保留量要小**，這一格才分得出來：保留量大時切點落得很前面（#1374 之前預設留 20 則，實測切點只有 1 或 3），
     // 而切點是 1 的時候有效串跟原始串**一樣長**（`[摘要, ...slice(1)]`），量錯了也看不出來。
-    // 實測過：預設 `keep` 下量成有效串的突變是全綠的。
+    // 實測過：保留量大時，量成有效串的突變是全綠的。
     const { root } = await run(chatter(120), {
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
       invocations: 20,
     });
@@ -235,7 +257,7 @@ describe('壓縮發生時，日誌裡留得下來', () => {
    *
    * 釘的仍然是**欄位集合**：多一格、少一格都紅。
    */
-  it('酬載是四個欄位，summary 就是換上去的那則摘要訊息', async () => {
+  it('酬載是五個欄位（含 beforeCall），summary 就是換上去的那則摘要訊息', async () => {
     const { root } = await run(chatter(), {
       summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
       invocations: 12,
@@ -244,6 +266,7 @@ describe('壓縮發生時，日誌裡留得下來', () => {
     expect(root.length).toBeGreaterThan(0);
     for (const record of root) {
       expect(Object.keys(record).sort()).toEqual([
+        'beforeCall',
         'cutoffIndex',
         'filePath',
         'messagesBefore',
@@ -298,7 +321,7 @@ describe('subagent 那側', () => {
           trigger: [{ type: 'tokens', value: 3_000 }],
           // 要小於當時的訊息數，否則 `determineCutoffIndex` 算出 `<= 0`，基座直接放行、
           // 什麼都不會發生——那會讓這條測試永遠綠得沒有意義。
-          keep: { type: 'messages', value: 2 },
+          retainTokens: 12,
         },
         plugins: [withWorker],
       },
@@ -315,40 +338,169 @@ describe('subagent 那側', () => {
 });
 
 /**
- * **記不進去不能反過來把摘要器殺掉。**
+ * **摘要記不進去，這次摘要不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：照 dsh 自動壓縮的 pressure 路徑
+ * （`compaction-basic/src/index.ts:163-173`），記 warn、這一輪照原樣繼續。真的跑一整場：只讓 `compaction/summary` 寫不進去，
+ * 其餘照真的寫——門檻每次都到、每次都摘不成，整場照樣跑完，模型一次都沒收到摘要，歷史檔一次都沒寫出路徑。
  *
- * 這一層比 `model/usage` 那顆更嚴：它是**同名取代**，從這裡漏出去的錯不只是掉一行日誌，
- * 是把摘要器本身連根拔掉——那一輪的訊息串不會被壓，長對話直接撞窗口。
- *
- * 拿掉 `withCompactionLog` 裡那個 try/catch，這條當場紅。
+ * 以前這一格釘的是相反的事（記不進去吞掉、摘要照樣生效），那就是日誌與模型看到的分家。
  */
 describe('日誌寫不進去的時候', () => {
-  it('append 拋了，那一輪照樣跑完、歷史照樣寫出來', async () => {
-    // ⚠️ **這個 spy 打在 prototype 上，所以每一個寫日誌的人都在拋**——`model/usage` 那顆
-    // 也在裡面，而它同樣吃掉自己的錯。所以這條綠**不足以**單獨證明 `withCompactionLog`
-    // 有 try/catch；能證明的是「拿掉它會紅」，那個突變跑過了。
-    const append = vi.spyOn(SessionLog.prototype, 'append').mockImplementation(() => {
-      throw new Error('日誌壞了');
-    });
+  it('compaction/summary 拋了：那一輪照樣跑完，模型沒收到摘要，日誌也沒有', async () => {
+    const real = SessionLog.prototype.append;
+    let attempts = 0;
+    const append = vi.spyOn(SessionLog.prototype, 'append').mockImplementation(function (
+      this: SessionLog,
+      ...args: Parameters<SessionLog['append']>
+    ) {
+      if (args[0] === 'compaction/summary') {
+        attempts += 1;
+        throw new Error('日誌壞了');
+      }
+      return real.apply(this, args);
+    } as SessionLog['append']);
     try {
-      const { root, prompts } = await run(chatter(), {
+      const { root, prompts, rootEvents } = await run(chatter(), {
         summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
         invocations: 12,
       });
 
-      // 日誌當然是空的——它整個壞了。要看的是**跑完了**，而且摘要真的發生過、歷史真的寫出來：
-      // 摘要訊息只有在 offload 寫成功時才寫出路徑（基座 `buildSummaryMessage` 看 `filePath`）。
-      // #348 之前這裡讀的是工作區裡的 `conversation_history/`，現在那一格在 graph state 裡。
+      // 門檻真的到過：試記過摘要（不然這一格什麼都沒證明）。
+      expect(attempts).toBeGreaterThan(0);
       expect(root).toEqual([]);
+      expect(rootEvents.some((event) => event.type === 'compaction/summary')).toBe(false);
+      // 模型一次都沒收到摘要：摘要訊息只有在 offload 寫成功時才寫出路徑（基座 `buildSummaryMessage` 看 `filePath`），
+      // 而歷史檔在暫存層等「有沒有生出摘要」才提交（#1389）。
       expect(
         prompts.some((prompt) =>
           prompt.some((message) =>
             message.text.includes('has been saved to /conversation_history/'),
           ),
         ),
-      ).toBe(true);
+      ).toBe(false);
+      // 整場跑完：每一次呼叫都有起訖。
+      const starts = rootEvents.filter((event) => event.type === 'model/start').length;
+      expect(starts).toBeGreaterThan(0);
+      expect(rootEvents.filter((event) => event.type === 'model/end')).toHaveLength(starts);
     } finally {
       append.mockRestore();
     }
+  });
+});
+
+/**
+ * **摘要事件排在用到它的 `model/start` 之前**（#1301，format 45，照 dsh 的 `compaction-basic`：壓縮在
+ * `agent/pre-step`，事件在請求之前就是耐久的）。基座的摘要器只在模型呼叫**回來之後**才交出事件，所以這裡是在呼叫之前
+ * 從它交給下一層的請求推出來的——下面兩條拿真的摘要器核對，推出來的和它事後交出的是同一份。
+ */
+describe('摘要事件的位置與內容（#1301）', () => {
+  it('每一筆 compaction/summary 之後的第一個模型事件是 model/start，而且前面沒有那次呼叫的回覆', async () => {
+    const { rootEvents } = await run(chatter(120), {
+      summarization: {
+        trigger: [{ type: 'tokens', value: 3_000 }],
+        retainTokens: 12,
+      },
+      invocations: 20,
+    });
+
+    const positions = rootEvents.flatMap((event, index) =>
+      event.type === 'compaction/summary' ? [index] : [],
+    );
+    expect(positions.length).toBeGreaterThan(1);
+    for (const index of positions) {
+      const next = rootEvents
+        .slice(index + 1)
+        .find((event) => event.type === 'model/start' || event.type === 'assistant/message');
+      expect(next?.type).toBe('model/start');
+      // 摘要事件的前一個模型事件不是尚未收尾的 model/start：它不在某次呼叫的中間。
+      const previous = rootEvents
+        .slice(0, index)
+        .filter((event) => event.type === 'model/start' || event.type === 'model/end')
+        .at(-1);
+      expect(previous === undefined || previous.type === 'model/end').toBe(true);
+      expect((rootEvents[index]!.data as CompactionSummary).beforeCall).toBe(true);
+    }
+  });
+
+  /**
+   * **差分：記下的最後一筆 ＝ 基座事後寫進 graph state 的 `_summarizationEvent`。**
+   * 切點、檔案路徑、摘要文字三格逐一相等；`messagesBefore` 是我們自己的座標，不在基座事件裡，另由
+   * `conversation-replay` 的 `compaction-misaligned` 檢查。
+   */
+  it('最後一筆記下的切點、檔案路徑、摘要，與基座寫進 graph state 的一致', async () => {
+    const { root, saver } = await run(chatter(120), {
+      summarization: {
+        trigger: [{ type: 'tokens', value: 3_000 }],
+        retainTokens: 12,
+      },
+      invocations: 20,
+    });
+    expect(root.length).toBeGreaterThan(1);
+
+    const tuple = await saver.getTuple({ configurable: { thread_id: ROOT_ID } });
+    const event = (
+      tuple?.checkpoint.channel_values as
+        | {
+            _summarizationEvent?: {
+              cutoffIndex: number;
+              filePath: string | null;
+              summaryMessage: BaseMessage;
+            };
+          }
+        | undefined
+    )?._summarizationEvent;
+    expect(event).toBeDefined();
+
+    const last = root.at(-1)!;
+    expect(last.cutoffIndex).toBe(event!.cutoffIndex);
+    expect(last.filePath).toBe(event!.filePath);
+    expect(fromLoggedMessage(last.summary!).text).toBe(event!.summaryMessage.text);
+  });
+
+  /**
+   * **摘要之後模型那一輪失敗：事件已經記下，下一次呼叫從那一筆接著，不從原始的串重摘**（[#1390](https://github.com/DemianLi/nexus-agent/issues/1390)）。
+   *
+   * 失敗那輪 graph state 沒存到 `_summarizationEvent`（基座只在呼叫回來後才交出）。修之前下一次呼叫從沒摘要過的串再摘一次，
+   * 日誌因此緊接著第二筆、歷史檔疊一份重複的區段；現在摘要器外面那一層在下一步請求前把日誌上那筆補回 state，
+   * 下一次呼叫直接拿那份摘要送出去，沒有第二次摘要。後面照常門檻到了再摘（切點接著第一筆往後走，由「單調」那條管）。
+   * 重放那一頭在 `packages/nexus-core/src/conversation-replay.test.ts`——這裡的裸 agent 沒有回合驅動層記的 `turn/start`，推不出歷史。
+   */
+  it('摘要之後的模型呼叫失敗：事件仍在日誌裡，下一次呼叫接著它走，不重摘', async () => {
+    const summarization = {
+      trigger: [{ type: 'tokens' as const, value: 3_000 }],
+      retainTokens: 12,
+    };
+    // 先照全部成功的腳本跑一遍，找出第一次摘要用掉的是第幾輪（摘要提示詞是一則含對話全文的 human 訊息）。
+    const probe = await run(chatter(120), { summarization, invocations: 20 });
+    const summaryTurn = probe.prompts.findIndex(
+      (prompt) => prompt.length === 1 && prompt[0]!.getType() === 'human',
+    );
+    expect(summaryTurn).toBeGreaterThan(0);
+
+    const turns = chatter(120);
+    turns[summaryTurn + 1] = { content: '', error: '供應商過載' };
+    const { rootEvents, failures, prompts } = await run(turns, {
+      summarization,
+      invocations: 20,
+      tolerateFailures: true,
+    });
+
+    expect(failures.some((message) => message.includes('供應商過載'))).toBe(true);
+    const summaries = rootEvents.filter((event) => event.type === 'compaction/summary');
+    expect(summaries.length).toBeGreaterThan(0);
+    // 失敗那次呼叫的摘要事件之後，緊接著是它失敗的 model/start，沒有 assistant/message。
+    const first = rootEvents.indexOf(summaries[0]!);
+    const afterFirst = rootEvents.slice(first + 1).map((event) => event.type);
+    expect(afterFirst[0]).toBe('model/start');
+    const nextAssistant = afterFirst.indexOf('assistant/message');
+    const nextSummary = afterFirst.indexOf('compaction/summary');
+    expect(nextAssistant).toBeGreaterThan(-1);
+    // 下一筆摘要（如果有）排在失敗之後至少一次成功回覆的後面：失敗的下一次呼叫沒有立刻重摘。
+    if (nextSummary !== -1) expect(nextAssistant).toBeLessThan(nextSummary);
+
+    // 失敗之後的下一次呼叫：不是摘要請求（單一 human），而是主請求，第一則 human 就是日誌上那份摘要。
+    const next = prompts[summaryTurn + 2]!;
+    expect(next.length).toBeGreaterThan(1);
+    const humans = next.filter((message) => message.getType() === 'human');
+    expect(humans[0]!.text).toBe(fromLoggedMessage(summaries[0]!.data.summary!).text);
   });
 });

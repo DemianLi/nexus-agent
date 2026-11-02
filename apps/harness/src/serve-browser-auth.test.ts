@@ -19,6 +19,7 @@ import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { bodyLog } from './fixtures.js';
 
 const POSIX = process.platform !== 'win32';
 const INDEX = '<!doctype html><title>nexus web</title>';
@@ -56,7 +57,7 @@ async function start(
 ): Promise<RunningServe> {
   running = await runServe({
     argv: ['--port', String(options.port ?? 0)],
-    log: (line) => void lines.push(line),
+    log: bodyLog(lines),
     env: options.home === undefined ? {} : { [HARNESS_HOME_ENV]: options.home },
     ...(options.webDist === undefined ? {} : { webDist: options.webDist }),
   });
@@ -238,7 +239,10 @@ describe('serve 的瀏覽器會話', () => {
       `GET /%E0%A4%A HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`,
     );
     expect(status(badEscape)).toBe('HTTP/1.1 400 Bad Request');
-    expect(lines.some((line) => line.startsWith('[請求] 處理失敗，回 400'))).toBe(true);
+    // 畸形的百分比編碼照樣印得出方法與路徑（#1536：用切的、不解析）。
+    expect(lines.some((line) => line.startsWith('[請求] GET /%E0%A4%A 處理失敗，回 400'))).toBe(
+      true,
+    );
 
     // 沒帶 content-type、不存在的路徑：401 排在 415、404 前面。
     expect(

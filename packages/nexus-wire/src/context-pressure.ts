@@ -54,8 +54,40 @@ export interface WireContextMeasure {
   readonly approxTokens: number;
   /** 訊息則數。摘要之後會掉下來。 */
   readonly messageCount: number;
-  /** 那次呼叫生效的門檻，並聯，任一成立就摘要，**至少一道**。部署改過就是改過的值——**不要在 web 寫死**。 */
+  /**
+   * 那次呼叫生效的門檻，並聯，**至少一道**。部署改過就是改過的值——**不要在 web 寫死**。
+   *
+   * `tokens` 那道到了就摘要。`messages` 那道**到了不一定摘要**：保留量是 token 算的（#1374），訊息本身還沒超過保留量時
+   * 尾巴蓋住整串、切不出東西，原樣送出。所以只看則數的比例會在不會摘要時顯示到頂（2026-10-14 發版模擬：70／60 則、約 33k token）。
+   * 那道到了摘不摘得到，看 {@link messagesCompactable}。
+   */
   readonly thresholds: readonly WireSummaryThreshold[];
+  /**
+   * `messages` 那道門檻到了的話，摘不摘得到東西（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：就是摘要器那一步
+   * 實際的保留決定。**不看則數到了沒**——還沒到門檻時也可能是 `true`，`false` 只代表「到了也摘不到」。量的串跟
+   * {@link messageCount} 不一定相同：摘要了的那一步量摘要前的串（所以是 `true`），則數是摘要後的；比例照則數算，不受影響。
+   *
+   * 沒有 `messages` 門檻時沒有這一格。**這一格出現以前的會話日誌也沒有**：重放舊日誌拿到的 `measure` 不帶它，
+   * 讀的人照沒有這一格以前的算法，不當成 `false`。
+   */
+  readonly messagesCompactable?: boolean;
+  /**
+   * 這份請求的組成（[#1571](https://github.com/DemianLi/nexus-agent/issues/1571) N1193）：系統提示、工具定義、對話訊息各約多少 token，
+   * 三格都是非負整數（沒有系統提示或工具時是 `0`）。`systemTokens`、`toolsTokens` 是送出那份請求的純估算；`messageTokens` 是
+   * `max(0, approxTokens − systemTokens − toolsTokens)`，所以三格相加等於 {@link approxTokens}——除非前兩格加起來就比
+   * `approxTokens` 大，那時 `messageTokens` 是 `0`、三格相加會比 `approxTokens` 大。
+   *
+   * **缺席＝沒量**：這一格出現以前的會話日誌沒有它，重放舊日誌拿到的 `measure` 不帶它，畫面不畫那三行，不當成 `0`。
+   * 偏離 dsh 的理由見 `@nexus/core` 的 `estimateRequestParts`。
+   */
+  readonly breakdown?: WireContextBreakdown;
+}
+
+/** {@link WireContextMeasure.breakdown} 的三格。 */
+export interface WireContextBreakdown {
+  readonly systemTokens: number;
+  readonly toolsTokens: number;
+  readonly messageTokens: number;
 }
 
 /**
@@ -66,4 +98,12 @@ export interface WireContextPressure {
   readonly inputTokens?: number;
   /** 最新一次 root 呼叫摘要器量到的。沒有它就不畫。 */
   readonly measure?: WireContextMeasure;
+}
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [MODEL_USAGE]: ModelUsagePayload;
+    [CONTEXT_MEASURE]: WireContextMeasure;
+  }
 }

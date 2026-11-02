@@ -5,14 +5,12 @@
  * （`references/deepseek-harness/packages/goal/goal/src/types.ts` 與 `domain.ts`，對讀
  * 日期 2026-09-01，版本 `0a53fb55bea101816fa226bb964ae2bed71c343b`）。
  *
- * **為什麼詞彙在這裡而域在 plugin：同 `commands.ts` 那一條。** 命令的詞彙
- * （{@link ./commands.ts | CommandDefinition}）住在 `@nexus/core`，執行那一半住在
- * `@nexus/plugin-commands`；goal 一樣——{@link ./session-log.ts | SessionEventMap} 是
- * 一個**封閉**的映射，`goal/change` 的酬載型別要寫得出來就得住在這裡，而折疊、服務、
- * 錯誤與活的視圖住在 `@nexus/plugin-goal`。dsh 那邊靠宣告合併（`declare module
- * '@deepseek-ai/dsh-session/types'`）把事件種類從 goal 套件那側加進來，**我們沒有那個
- * 機制**，理由與代價見 `session-log.ts` 檔頭與
- * [#101](https://github.com/DemianLi/nexus-agent/issues/101)。
+ * **詞彙今天在這裡而域在 plugin：** 命令的詞彙（{@link ./commands.ts | CommandDefinition}）
+ * 住在 `@nexus/core`，執行那一半住在 `@nexus/plugin-commands`；goal 一樣——`goal/change`
+ * 這個事件種類由 `@nexus/plugin-goal` 用宣告合併補進 {@link ./session-log.ts | SessionEventMap}（照 dsh 的
+ * `declare module '@deepseek-ai/dsh-session/types'`，[#679](https://github.com/DemianLi/nexus-agent/issues/679)
+ * 第 4 步），折疊、服務、錯誤與活的視圖也住在那裡；酬載型別 {@link GoalChangeMeta} 留在這裡。`GoalId` 例外會留在 core：
+ * `turn/start` 的 `kind: 'goal'` 拿它當授權判別。
  *
  * **這裡只有耐久的那一半。** `GoalView` 帶的 `activation`（armed／disarmed）刻意不持久，
  * 它是 process 內的東西，所以它跟服務一起住在 plugin 那側——寫進這個檔案就等於暗示
@@ -22,20 +20,19 @@
  * @module
  */
 
+import { brandString } from '@nexus/brand';
+import type { Branded } from '@nexus/brand';
+
 /** `goal/change` 酬載的版本。**認不得的版本讓重放失敗**，不是被跳過。 */
 export const GOAL_CHANGE_VERSION = 1;
-
-declare const goalIdBrand: unique symbol;
 
 /**
  * 一個 goal 跨修訂號的身分。
  *
- * **是 branded string，不是裸 string。** dsh 用共用的 `@deepseek-ai/dsh-brand`
- * （`Branded<'GoalId'>`），我們沒有那個工具，所以就地做一個最小的——買到的是同一件事：
- * 會話 id、修訂號字串、使用者打的目標文字都塞不進這一格。要造一顆只有
- * {@link goalId} 一條路。
+ * **是 branded string，不是裸 string。** 同 dsh 的 `Branded<'GoalId'>`（共用工具 `@nexus/brand`，#1569）：
+ * 會話 id、修訂號字串、使用者打的目標文字都塞不進這一格。要造一顆只有 {@link goalId} 一條路。
  */
-export type GoalId = string & { readonly [goalIdBrand]: 'GoalId' };
+export type GoalId = Branded<'GoalId'>;
 
 /**
  * 把一串字掛上 goal id 的標記。
@@ -47,7 +44,7 @@ export type GoalId = string & { readonly [goalIdBrand]: 'GoalId' };
  * @returns 同一串字，帶著編譯期的標記。
  */
 export function goalId(raw: string): GoalId {
-  return raw as GoalId;
+  return brandString<GoalId>(raw);
 }
 
 /** 指名**剛好那一個修訂號**的 CAS 身分。 */

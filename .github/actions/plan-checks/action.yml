@@ -1,0 +1,97 @@
+name: 異動與格式檢查
+description: >-
+  算出這一輪的異動檔（寫進 changed.txt），再跑不用安裝相依的檢查：main 的 PR 來源、PR 標題與內文、升級指南、
+  Markdown 相對連結、大檔。兩種模式的 plan 都跑。checkout 要帶 `fetch-depth: 0`（比分歧點、升級指南要 tags）。
+
+outputs:
+  count:
+    description: 異動檔案數
+    value: ${{ steps.changes.outputs.count }}
+
+runs:
+  using: composite
+  steps:
+    - name: 計算異動檔案
+      id: changes
+      shell: bash
+      env:
+        BASE_REF: ${{ github.base_ref }}
+        BEFORE_SHA: ${{ github.event.before }}
+        EVENT_NAME: ${{ github.event_name }}
+        SHA: ${{ github.sha }}
+      run: |
+        set -euo pipefail
+        if [ "$EVENT_NAME" = "pull_request" ]; then
+          git fetch --no-tags origin "+refs/heads/$BASE_REF:refs/remotes/origin/$BASE_REF"
+          # three-dot：只看本分支相對於分歧點的異動，不含 base 上的新 commit
+          git diff --name-only "origin/$BASE_REF...HEAD" > changed.txt
+        elif [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ] \
+             && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then
+          git diff --name-only "$BEFORE_SHA" "$SHA" > changed.txt
+        else
+          git show --pretty="" --name-only "$SHA" > changed.txt
+        fi
+        echo "--- 異動檔案 ---"
+        cat changed.txt
+        echo "count=$(wc -l < changed.txt | tr -d ' ')" >> "$GITHUB_OUTPUT"
+
+    - name: 檢查 main 的 PR 來源
+      if: github.event_name == 'pull_request' && github.base_ref == 'main'
+      shell: bash
+      env:
+        HEAD_REF: ${{ github.head_ref }}
+      run: |
+        if [ "$HEAD_REF" != "develop" ]; then
+          echo "::error::main 只接受來自 develop 的 PR，目前來源為 '$HEAD_REF'。"
+          echo "請先把變更合併進 develop，再開 develop → main 的 PR。"
+          exit 1
+        fi
+        echo "PR 來源為 develop，通過。"
+
+    # 規則與可用 type 見 AGENTS.md，實作見 .github/scripts/check_pr.py。
+    # 標題、內文、base 從 API 讀當下的值：rerun 沿用觸發時的事件，改標題後由 pr-edited.yml 重跑這一輪，事件裡的還是舊標題。
+    # 標題與內文是外部輸入，只經環境變數交給腳本，不經 shell 展開。
+    - name: 檢查 PR 標題與內文
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        PR_URL: ${{ github.event.pull_request.url }}
+        BASE: ${{ github.base_ref }}
+        ACTOR: ${{ github.event.pull_request.user.login }}
+      run: |
+        set -euo pipefail
+        gh api "$PR_URL" > "$RUNNER_TEMP/pr.json"
+        live_base=$(jq -r .base.ref "$RUNNER_TEMP/pr.json")
+        if [ "$live_base" != "$BASE" ]; then
+          echo "::error::PR 的 base 已從 $BASE 改成 $live_base，這一輪是照 $BASE 決定範圍的。推一個 commit，或關閉再打開 PR，重新觸發。"
+          exit 1
+        fi
+        TITLE=$(jq -r .title "$RUNNER_TEMP/pr.json") BODY=$(jq -r '.body // ""' "$RUNNER_TEMP/pr.json") \
+          python3 .github/scripts/check_pr.py
+
+    # 升級指南的格式（#1537，規則見 AGENTS.md「發版」）。版本目錄要對到已存在的 tag，靠 checkout 的 `fetch-depth: 0` 連 tags 一起拉下來。
+    - name: 檢查升級指南
+      shell: bash
+      run: python3 .github/scripts/check_upgrade_guides.py
+
+    # 自寫 Markdown 的相對連結（#1537）。
+    - name: 檢查 Markdown 相對連結
+      shell: bash
+      run: python3 .github/scripts/check_md_links.py
+
+    - name: 攔截大檔案
+      shell: bash
+      run: |
+        set -euo pipefail
+        limit=$((5 * 1024 * 1024))
+        failed=0
+        while IFS= read -r f; do
+          [ -f "$f" ] || continue
+          size=$(wc -c < "$f" | tr -d ' ')
+          if [ "$size" -gt "$limit" ]; then
+            echo "::error file=$f::檔案 $size bytes 超過 5MB 上限。"
+            failed=1
+          fi
+        done < changed.txt
+        exit $failed

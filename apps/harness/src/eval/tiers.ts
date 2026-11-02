@@ -144,13 +144,13 @@ export const MEASURED_MODELS: readonly MeasuredModel[] = [
     label: 'super',
     modelId: 'nvidia/nemotron-3-super-120b-a12b',
     measuredOn: '2026-09-04',
-    note: '難題參數 0.98、多叫 0.29、10661 token、8.0 秒，21/21。現在的 DEFAULT_LIVE_MODEL_ID。',
+    note: '難題參數 0.98、多叫 0.29、10661 token、8.0 秒，21/21。',
   },
   {
     label: 'lightning-30b',
     modelId: 'nvidia/nemotron-3.5-lightning-30b-a3b',
     measuredOn: '2026-09-04',
-    note: '難題參數 0.93、多叫 1.33、13530 token、38.4 秒，21/21。',
+    note: '難題參數 0.93、多叫 1.33、13530 token、38.4 秒，21/21。現在的 DEFAULT_LIVE_MODEL_ID。',
   },
   {
     label: 'oss-20b',

@@ -1,0 +1,4 @@
+# 掛上 #1503 的探針：收尾時回報 home 鎖還握不握著（環境變數沒給就什麼都不做）。
+- insert:
+    - id: home-lock-probe
+      name: './home-lock-probe.fixture.ts'

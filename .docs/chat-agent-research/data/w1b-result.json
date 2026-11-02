@@ -1,0 +1,3466 @@
+{
+  "failed": [],
+  "assignments": [
+    {
+      "id": "2210.03629",
+      "primary": "T4",
+      "reason": "ReAct 框架的核心貢獻是統一推理痕跡與行動軌跡的標準格式，是現代 agent 軌跡設計的里程碑，屬軌跡的格式與合成。"
+    },
+    {
+      "id": "2405.15793",
+      "primary": "T4",
+      "reason": "SWE-agent 通過設計 Agent-Computer Interface 來系統化軌跡收集，建立軟體工程 agent 的標準格式，主要貢獻在軌跡層級而非單純觀測空間。"
+    },
+    {
+      "id": "2509.25370",
+      "primary": "T4",
+      "reason": "AgentErrorTaxonomy 的核心是軌跡分析與失敗歸因，提出跨五個維度的錯誤分類並隔離根因，屬軌跡分析、失敗分類與歸因領域。"
+    },
+    {
+      "id": "2110.14168",
+      "primary": "T4",
+      "reason": "首次提出訓練驗證器判斷推理步驟正確性，為過程獎勵的理論與實踐奠定基礎，屬軌跡/步驟層級評估與 process reward 領域。"
+    },
+    {
+      "id": "2410.08146",
+      "primary": "T4",
+      "reason": "理論刻畫過程獎勵應測量步級進度，核心貢獻是過程獎勵的設計原則與訓練方法，屬軌跡/步驟層級評估與 process reward。"
+    },
+    {
+      "id": "2201.11903",
+      "primary": "T4",
+      "reason": "Chain-of-Thought 首次系統提出軌跡格式（推理步驟序列），通過中間推理提升推理能力，是現代 agent 軌跡的奠基性工作。"
+    },
+    {
+      "id": "2305.10601",
+      "primary": "T4",
+      "reason": "Tree of Thoughts 將軌跡結構化為搜尋空間，支援多路徑探索與回溯，擴展軌跡格式的表達能力，屬軌跡的格式與合成。"
+    },
+    {
+      "id": "2406.12045",
+      "primary": "T8",
+      "reason": "τ-bench 提出 pass^k 可靠性度量與多目標優化框架，縱使涉及三邊互動，主要貢獻屬成本、效率與使用者體驗等多目標分數，T8 缺 3 篇應優先補齊。"
+    },
+    {
+      "id": "2309.10691",
+      "primary": "T7",
+      "reason": "MINT 是多輪互動評估框架，側重測試 LLM 與工具、語言回饋的協作能力，核心屬多輪對話與互動式評估。"
+    },
+    {
+      "id": "2408.04682",
+      "primary": "T8",
+      "reason": "ToolSandbox 引入中間里程碑與陷阱機制以評估部分任務完成度，主要貢獻屬部分分數與過程度量，T8 缺額優先。"
+    },
+    {
+      "id": "2410.10934",
+      "primary": "T8",
+      "reason": "Agent-as-a-Judge 提出用 agent 評估 agent 的新判準範式與過程反饋，屬任務成功判準的新形式，T8 缺額優先補齊。"
+    },
+    {
+      "id": "2307.13854",
+      "primary": "T8",
+      "reason": "WebArena 構建真實網頁環境並定義功能正確性作為終態判準，主要貢獻在判準的定義而非基準本身，屬任務成功的判準。"
+    },
+    {
+      "id": "2306.06070",
+      "primary": "T8",
+      "reason": "Mind2Web 定義元素精準度、操作 F1、步成功率等多維度終態判準，核心貢獻在判準設計，屬任務成功的判準。"
+    }
+  ],
+  "topics": [
+    {
+      "key": "T1",
+      "canon": {
+        "added": 8,
+        "merged": 8,
+        "rejected": [],
+        "notes": "T1 節點經典名單補齊完成。共補充 16 篇里程碑論文：8 篇新增、8 篇既有論文重新標記為經典。涵蓋四個子領域：傳統意圖偵測與 OOD（7 篇配額，已補充 CLINC150/BANKING77 等數據集論文與 BERT/RNN 里程碑），LLM 時代意圖理解與路由（5 篇配額，已補充少樣本學習與語言模型評估論文），模糊指令與澄清提問（7 篇配額，已補充 ClariQ/CLAM/Task Ambiguity 等權威論文），使用者目標推斷與偏好引出（5 篇配額，已補充語義解析、使用者模擬與 DPO 偏好學習論文）。所有論文均驗證 arXiv ID，商用採納證據已記錄。候選池規模從 133 篇增至 141 篇。表格已生成至 /Users/demian/Projects_vibecoding/project_nexus_agent/.claude/worktrees/arxiv-chat-agent-worktree-08e4f8/.docs/chat-agent-research/.cache/work/T1-table.txt\""
+      },
+      "reviseFailed": false,
+      "main": [
+        {
+          "id": "1609.01454",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "注意力機制結合 RNN 進行意圖與槽位聯合檢測的經典工作，奠定了深度學習時代的基礎架構",
+          "evidence": "Attention-Based Recurrent Neural Network Models for Joint Intent Detection and Slot Filling"
+        },
+        {
+          "id": "1902.10909",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "首次應用 BERT 預訓練模型於意圖分類與槽位填充的聯合任務，開啟預訓練模型時代",
+          "evidence": "BERT for Joint Intent Classification and Slot Filling"
+        },
+        {
+          "id": "1909.02027",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "定義出超出範圍（OOD）意圖偵測的評估範式，引入 CLINC150 資料集成為業界標準基準",
+          "evidence": "An Evaluation Dataset for Intent Classification and Out-of-Scope Prediction"
+        },
+        {
+          "id": "2003.04807",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "提出雙編碼器方法進行少樣本意圖偵測，推出含 77 個意圖的 BANKING77 資料集標記里程碑",
+          "evidence": "Efficient Intent Detection with Dual Sentence Encoders"
+        },
+        {
+          "id": "1809.00385",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "使用膠囊網絡解決零樣本意圖偵測問題，透過知識遷移偵測未見過的新興意圖",
+          "evidence": "Zero-shot User Intent Detection via Capsule Neural Networks"
+        },
+        {
+          "id": "2101.03778",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "應用馬哈拉諾比斯距離於變換器模型的域外偵測，達到新的最佳效能",
+          "evidence": "Revisiting Mahalanobis Distance for Transformer-Based Out-of-Domain Detection"
+        },
+        {
+          "id": "1909.03862",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "使用生成對抗網絡生成高品質偽 OOD 樣本以改進域外意圖偵測效能",
+          "evidence": "Out-of-domain Detection for Natural Language Understanding in Dialog Systems"
+        },
+        {
+          "id": "2008.06239",
+          "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+          "reason": "首次系統評估 GPT 語言模型在少樣本任務導向對話四個模組上的能力，確立 LLM 時代的基礎評估方法",
+          "evidence": "Language Models as Few-Shot Learner for Task-Oriented Dialogue Systems"
+        },
+        {
+          "id": "2304.04256",
+          "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+          "reason": "評估 ChatGPT 在零樣本對話理解中的能力與限制，揭示現代 LLM 時代對話 SLU 的挑戰",
+          "evidence": "Zero-shot dialogue understanding aims to enable dialogue to track the user's needs"
+        },
+        {
+          "id": "2310.10176",
+          "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+          "reason": "評估 ChatGPT 在開放世界意圖發現中的零樣本能力，指出挑戰與改善方向",
+          "evidence": "Large Language Models Meet Open-World Intent Discovery and Recognition"
+        },
+        {
+          "id": "2305.07157",
+          "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+          "reason": "探索零樣本和少樣本意圖分類在低資源設定中的實踐策略，提供業界應用指引",
+          "evidence": "Exploring Zero and Few-shot Techniques for Intent Classification"
+        },
+        {
+          "id": "2010.05256",
+          "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+          "reason": "提出少樣本多標籤意圖偵測的神經網絡學習方法，擴展了意圖理解的適用場景",
+          "evidence": "Few-shot Learning for Multi-label Intent Detection"
+        },
+        {
+          "id": "1907.06554",
+          "subarea": "模糊指令與澄清提問",
+          "reason": "定義開放域資訊尋求對話中的澄清提問架構與資料集，建立檢索框架與評估方法",
+          "evidence": "Asking Clarifying Questions in Open-Domain Information-Seeking Conversations"
+        },
+        {
+          "id": "2305.13626",
+          "subarea": "模糊指令與澄清提問",
+          "reason": "使用主動思維鏈提示讓大型語言模型具備對話主動性，包括對歧義查詢的澄清提問能力",
+          "evidence": "Prompting and Evaluating Large Language Models for Proactive Dialogues"
+        },
+        {
+          "id": "2403.19154",
+          "subarea": "模糊指令與澄清提問",
+          "reason": "透過自我改進策略教導語言模型提出有用的澄清提問，模擬人類偏好引出過程",
+          "evidence": "Teaching Language Models to Ask Clarifying Questions"
+        },
+        {
+          "id": "2311.09469",
+          "subarea": "模糊指令與澄清提問",
+          "reason": "提出框架判斷何時需要澄清，並以不確定性估計方法決定澄清內容，涵蓋多個 NLP 任務",
+          "evidence": "Clarify When Necessary: Resolving Ambiguity Through Interaction with LMs"
+        },
+        {
+          "id": "2410.13788",
+          "subarea": "模糊指令與澄清提問",
+          "reason": "透過模擬未來對話輪次的偏好標籤教導 LLM 何時與如何提出澄清提問，提高多義查詢的應答精準度",
+          "evidence": "Modeling Future Conversation Turns to Teach LLMs to Ask Clarifying Questions"
+        },
+        {
+          "id": "1805.04655",
+          "subarea": "模糊指令與澄清提問",
+          "reason": "以期望資訊價值概念為靈感，構建神經模型來排序澄清問題，奠定澄清提問排序的基礎",
+          "evidence": "Learning to Ask Good Questions: Ranking Clarification Questions"
+        },
+        {
+          "id": "2009.11352",
+          "subarea": "模糊指令與澄清提問",
+          "reason": "定義澄清提問任務並推出標準資料集，提供開放域對話澄清提問的評估基準",
+          "evidence": "Generating Clarifying Questions for Open-Domain Dialogue Systems"
+        },
+        {
+          "id": "1810.07942",
+          "subarea": "使用者目標推斷與偏好引出",
+          "reason": "提出層次化語義解析方法表示複雜使用者請求，實現不受限制的意圖與槽位聯合理解",
+          "evidence": "Semantic Parsing for Task Oriented Dialog using Hierarchical Representations"
+        },
+        {
+          "id": "2310.11589",
+          "subarea": "使用者目標推斷與偏好引出",
+          "reason": "提出生成式主動任務引出框架（GATE），透過互動式自由形式語言與使用者交互推斷意圖行為",
+          "evidence": "models elicit and infer intended behavior through free-form, language-based interaction with users"
+        },
+        {
+          "id": "2311.05584",
+          "subarea": "使用者目標推斷與偏好引出",
+          "reason": "展示大型語言模型透過強化學習優化多輪對話以推斷與對應使用者目標，達到教學與偏好引出任務最佳效能",
+          "evidence": "train an interactive conversational agent that can optimize goal-directed objectives"
+        }
+      ],
+      "reserve": [
+        {
+          "id": "2001.11458",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "序列對序列與指標網絡處理簡單與複雜查詢的統一語義解析架構，但應屬傳統意圖偵測子領域而非使用者目標推斷",
+          "evidence": "Sequence to Sequence Architecture for Task-Oriented Semantic Parsing"
+        },
+        {
+          "id": "1707.02363",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "零樣本框架語義解析實現跨領域意圖與槽位識別，但應屬傳統意圖偵測子領域而非使用者目標推斷",
+          "evidence": "Towards Zero-Shot Frame Semantic Parsing for Domain Scaling"
+        },
+        {
+          "id": "2103.03095",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "口語語言理解領域的權威綜述，涵蓋從傳統方法到預訓練模型的完整進展與新前沿",
+          "evidence": "A Survey on Spoken Language Understanding: Recent Advances and New Frontiers"
+        },
+        {
+          "id": "2010.13009",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "透過自然語言推論遷移的判別式最近鄰居方法進行少樣本意圖偵測與 OOD 檢測",
+          "evidence": "Discriminative Nearest Neighbor Few-Shot Intent Detection by Transferring Natural Language Inference"
+        },
+        {
+          "id": "2109.06349",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "結合對比預訓練與監督對比學習進行少樣本意圖偵測，特別提升語義相似意圖間的判別能力",
+          "evidence": "Few-Shot Intent Detection via Contrastive Pre-Training and Fine-Tuning"
+        },
+        {
+          "id": "1805.10190",
+          "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+          "reason": "商用嵌入式語音理解系統，驗證意圖與槽位聯合識別在實際 IoT 應用中的有效性與可部署性",
+          "evidence": "embedded Spoken Language Understanding system for private-by-design voice interfaces"
+        }
+      ],
+      "shortfall": "「使用者目標推斷與偏好引出」子領域計 3 篇，相較上限 5 篇尚缺 2 篇。此領域主要文獻集中於語義解析與意圖偵測（應屬傳統子領域），真正專注於推斷使用者真實目標與引出動態偏好的論文有限。新增的 GATE 與目標導向對話論文已是此領域最新里程碑。",
+      "notes": "【處理品質問題】2310.16944 拿掉：AI 價值對齊非使用者意圖偵測；2305.18290 拿掉：同樣屬 AI 對齊；2311.00262 拿掉：核心是對話策略規劃；2004.10645 拿掉：主任務是問題改寫而非澄清提問；2304.14399 拿掉：焦點是 NLI 蘊含分析，未涉及澄清提問機制。【處理語義解析競爭】2001.11458 與 1707.02363 移至候補，因評論指出二者本質為語義解析應屬傳統意圖偵測，但該格已滿 7 篇；2109.05782 未納入，評論指出應屬傳統而非 LLM 時代。【新增里程碑】加入 2310.11589（GATE 互動式偏好引出，122 引用）與 2311.05584（強化學習目標導向對話，40 引用），補足使用者目標推斷領域；1805.10190（Snips 商用系統，936 引用、183 influential）因傳統槽滿而列候補，此為評論特別指出的漏網里程碑。【澄清提問補充】加入 1805.04655（提問排序的神經方法，237 引用）與 2009.11352（澄清提問標準資料集與基準，114 引用），強化澄清提問評估基礎。\"",
+      "refute": {
+        "verdicts": [
+          {
+            "id": "1609.01454",
+            "contribution": "提出注意力機制結合 RNN 用於意圖偵測與槽位填充的聯合任務，在 ATIS 基準上達到當時最佳效能",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1902.10909",
+            "contribution": "首次應用預訓練模型 BERT 於意圖分類與槽位填充的聯合任務",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1909.02027",
+            "contribution": "引入 CLINC150 資料集並定義超出範圍（OOD）意圖偵測的評估範式",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2003.04807",
+            "contribution": "提出雙編碼器方法進行少樣本意圖偵測，推出含 77 個意圖的 BANKING77 資料集",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1809.00385",
+            "contribution": "使用膠囊網絡解決零樣本意圖偵測問題，透過知識遷移偵測未見過的新興意圖",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2101.03778",
+            "contribution": "應用馬哈拉諾比斯距離於變換器模型的域外偵測，達到新的最佳效能",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1909.03862",
+            "contribution": "使用生成對抗網絡生成高品質的偽 OOD 樣本以改進域外意圖偵測效能",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2008.06239",
+            "contribution": "評估 GPT-2/3 在任務導向對話的 NLU、DST、策略與 NLG 四個模組上的少樣本學習能力與限制",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": "意圖偵測只佔四分之一，且 influential 指標僅為 2，主要貢獻並非針對意圖理解而是跨模組評估"
+          },
+          {
+            "id": "2310.16944",
+            "contribution": "用直接偏好優化蒸餾出與使用者指令對齊的聊天模型",
+            "primary_node": "none",
+            "is_water": false,
+            "objection": "論文主旨是泛用 LLM 與人類價值對齊，不涉及偵測特定使用者當下的目標推斷，屬於 AI 價值對齊而非使用者意圖偵測"
+          },
+          {
+            "id": "2304.04256",
+            "contribution": "評估 ChatGPT 在零樣本對話理解任務（SLU 與 DST）的能力與限制",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": "責任混淆：SLU 屬 T1 但 DST 屬 T2，論文各佔一半；採納證據 Medium 文章中「OpenAI 用於工具選擇」之說在原文未有根據"
+          },
+          {
+            "id": "2310.10176",
+            "contribution": "評估 ChatGPT 在零樣本開放世界意圖發現與辨識中的能力與挑戰",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.07157",
+            "contribution": "探索零樣本與少樣本意圖分類在低資源設定中的實踐策略，提供業界應用指引",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2004.10645",
+            "contribution": "定義歧義問題應答任務並推出 AmbigNQ 資料集，透過問題改寫而非澄清提問來解決歧義",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": "核心任務是改寫問題以消除歧義，不是提出澄清提問；入選理由『奠定澄清提問評估基礎』與摘要不符"
+          },
+          {
+            "id": "1907.06554",
+            "contribution": "定義開放域資訊尋求對話中的澄清提問架構與資料集，建立檢索框架與評估方法",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.13626",
+            "contribution": "使用主動思維鏈提示讓 LLM 具備對話主動性，包括對歧義查詢的澄清提問能力",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2304.14399",
+            "contribution": "透過語言學註解評估語言模型對自然語言歧義的建模能力，揭示模型在歧義理解上的缺陷",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": "論文焦點是歧義的 NLI 蘊含分析與模型評估，並未涉及澄清提問的提出機制；摘要未提及澄清提問"
+          },
+          {
+            "id": "2403.19154",
+            "contribution": "透過自我改進策略教導 LLM 提出有用的澄清提問，模擬人類偏好引出過程以獲得更好的個人化回應",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2311.09469",
+            "contribution": "提出框架判斷何時需要澄清，並以不確定性估計方法決定澄清內容，涵蓋多個 NLP 任務",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2410.13788",
+            "contribution": "透過模擬未來對話輪次的偏好標籤教導 LLM 何時與如何提出澄清提問，提高多義查詢的應答精準度",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.18290",
+            "contribution": "提出直接偏好優化方法，使用成對偏好資料直接優化 LLM 而無需獎勵模型和強化學習",
+            "primary_node": "none",
+            "is_water": false,
+            "objection": "論文內容是泛用 LLM 與人類價值對齊，不涉及偵測或推斷特定使用者當下的目標，屬於 AI 價值對齊範疇"
+          },
+          {
+            "id": "2311.00262",
+            "contribution": "提出可插拔的對話策略規劃器用於主動對話系統，結合監督微調與強化學習進行策略優化",
+            "primary_node": "none",
+            "is_water": false,
+            "objection": "論文主旨是對話策略規劃，訓練回饋來自 LLM 自我遊戲而非使用者反饋，不屬於使用者目標推斷與偏好引出，也不屬於 T1-T8 任何節點"
+          },
+          {
+            "id": "1810.07942",
+            "contribution": "提出層次化語義解析方法表示複合使用者請求，實現不受限的複雜語義框架表達",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": "本質上是聯合意圖與槽位的語義解析工作，應屬『傳統意圖偵測、聯合 intent/slot 與 OOD 意圖』子領域；但該格已滿 7 篇，此篇與傳統格論文競爭配額"
+          },
+          {
+            "id": "2001.11458",
+            "contribution": "使用序列對序列與指標網絡處理簡單與複雜查詢的統一語義解析架構",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": "本質上是聯合意圖與槽位的語義解析，應屬『傳統意圖偵測、聯合 intent/slot 與 OOD 意圖』子領域；該格已滿 7 篇，此篇與傳統格論文競爭配額"
+          },
+          {
+            "id": "1707.02363",
+            "contribution": "提出零樣本框架語義解析實現跨領域意圖與槽位識別，無需領域內標籤資料",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": "本質上是聯合意圖與槽位的零樣本語義解析，應屬『傳統意圖偵測、聯合 intent/slot 與 OOD 意圖』子領域；該格已滿 7 篇，此篇與傳統格論文競爭配額"
+          },
+          {
+            "id": "2103.03095",
+            "contribution": "口語語言理解領域的權威綜述，涵蓋從傳統方法到預訓練模型的完整進展",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2010.13009",
+            "contribution": "透過自然語言推論遷移的判別式最近鄰居方法進行少樣本意圖偵測，達到穩定高效能",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2109.06349",
+            "contribution": "結合對比預訓練與監督對比學習進行少樣本意圖偵測，特別提升語義相似意圖間的判別能力",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2105.14289",
+            "contribution": "使用監督對比學習明確最大化類間距離以改進 OOD 偵測，結合對抗性增強強化判別特徵",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1912.12800",
+            "contribution": "應用概率比與生成分類器進行無監督 OOD 偵測，推出真實 OOD 資料集 ROSTD",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2109.05782",
+            "contribution": "驗證預訓練在少樣本意圖分類中的有效性，展示簡單的 BERT 微調超越複雜適應方法的泛化能力",
+            "primary_node": "T1",
+            "is_water": false,
+            "objection": "論文是 BERT 微調方法，屬傳統預訓練時代而非 LLM 時代；子領域應為『傳統意圖偵測、聯合 intent/slot 與 OOD 意圖』而非『LLM 時代』；該格已滿 7 篇"
+          }
+        ],
+        "missing": [
+          {
+            "id": "2310.11589",
+            "title": "Eliciting Human Preferences with Language Models",
+            "subarea": "使用者目標推斷與偏好引出",
+            "why": "GATE 框架用互動式提問系統化引出使用者的目標與複雜偏好，是偏好引出的里程碑，122 引用、頂會採納"
+          },
+          {
+            "id": "2311.05584",
+            "title": "Zero-Shot Goal-Directed Dialogue via RL on Imagined Conversations",
+            "subarea": "使用者目標推斷與偏好引出",
+            "why": "展示 LLM 透過強化學習優化多輪對話以推斷與對應使用者目標，達到教學與偏好引出任務的最佳效能"
+          },
+          {
+            "id": "1805.10190",
+            "title": "Snips Voice Platform: an embedded Spoken Language Understanding system for private-by-design voice interfaces",
+            "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+            "why": "商用嵌入式語音理解系統，936 引用與 183 influential，驗證意圖與槽位聯合識別在實際 IoT 應用中的有效性"
+          }
+        ]
+      }
+    },
+    {
+      "key": "T2",
+      "canon": {
+        "added": 3,
+        "merged": 6,
+        "rejected": [],
+        "notes": "T2 經典名單補充完成，共識別 9 篇里程碑論文：3 篇新增（SUMBT、SOLOIST、MemGPT），6 篇合併。涵蓋傳統 DST、LLM 時代 zero/few-shot、多輪狀態維護三個子領域，候選池規模達 143 篇。"
+      },
+      "reviseFailed": false,
+      "main": [
+        {
+          "id": "1810.00278",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "大規模多域對話資料集為 DST 研究奠定規模化基礎",
+          "evidence": "fully-labeled collection of human-human written conversations spanning multiple domains"
+        },
+        {
+          "id": "1909.05855",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "Schema-guided 對話資料集推動跨域可擴展 DST 研究",
+          "evidence": "Schema-Guided Dialogue Dataset with 16 domains enabling schema-driven dialogue systems"
+        },
+        {
+          "id": "1606.03777",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "神經信念追蹤開創深度學習 DST 時代",
+          "evidence": "Neural Belief Tracker implements dialogue state tracking using representation learning"
+        },
+        {
+          "id": "1805.09655",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "全局-局部自注意力機制改善稀有狀態追蹤性能",
+          "evidence": "Global-Locally Self-Attentive Dialogue State Tracker enables dialogue state tracking"
+        },
+        {
+          "id": "1905.08743",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "TRADE 模型複製機制實現無需價值列表的開放詞彙 DST",
+          "evidence": "TRADE introduces copy mechanism enabling open vocabulary dialogue state tracking"
+        },
+        {
+          "id": "1907.07421",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "SUMBT 非參數方式實現通用可擴展槽位值追蹤",
+          "evidence": "SUMBT achieves universal and scalable belief tracking through slot-utterance matching"
+        },
+        {
+          "id": "2005.02877",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "TripPy 三重複製策略簡化 DST 同時達到最高精度",
+          "evidence": "TripPy uses triple copy strategy for value independent neural dialogue state tracking"
+        },
+        {
+          "id": "2005.00796",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "SimpleTOD 統一模型展示端到端遷移學習在 DST 中的威力",
+          "evidence": "SimpleTOD reframes dialogue state tracking as sequence prediction task"
+        },
+        {
+          "id": "2007.12720",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "MultiWOZ 2.2 修正版消除標註雜訊，定義統一評估標準",
+          "evidence": "MultiWOZ 2.2 provides annotation corrections and state tracking baselines"
+        },
+        {
+          "id": "2109.07506",
+          "subarea": "LLM 時代的 zero/few-shot DST",
+          "reason": "模式驅動提示方法透過架構描述實現 LLM 上的 zero-shot DST",
+          "evidence": "Schema-Driven Prompting enables dialogue state tracking with language models"
+        },
+        {
+          "id": "2105.04222",
+          "subarea": "LLM 時代的 zero/few-shot DST",
+          "reason": "槽位描述增強方法實現跨域零樣本 DST 與知識遷移",
+          "evidence": "Leveraging Slot Descriptions for Zero-Shot Cross-Domain Dialogue State Tracking"
+        },
+        {
+          "id": "2201.08904",
+          "subarea": "LLM 時代的 zero/few-shot DST",
+          "reason": "D3ST 將 schema 轉為自然語言，改善模型理解與零樣本泛化",
+          "evidence": "D3ST converts schema to natural language descriptions for dialogue state tracking"
+        },
+        {
+          "id": "2203.08568",
+          "subarea": "LLM 時代的 zero/few-shot DST",
+          "reason": "IC-DST 將大語言模型用於 in-context few-shot DST",
+          "evidence": "In-Context Learning for Few-Shot Dialogue State Tracking applies large language models"
+        },
+        {
+          "id": "2402.10466",
+          "subarea": "LLM 時代的 zero/few-shot DST",
+          "reason": "函數調用範式透過新興 LLM 能力實現零樣本 DST",
+          "evidence": "Large Language Models as Zero-shot Dialogue State Tracker through Function Calling"
+        },
+        {
+          "id": "2004.06871",
+          "subarea": "LLM 時代的 zero/few-shot DST",
+          "reason": "TOD-BERT 預訓練模型整合多個對話資料集為 LLM 時代 DST 奠基",
+          "evidence": "TOD-BERT unifies dialogue datasets for task-oriented language understanding"
+        },
+        {
+          "id": "2109.04655",
+          "subarea": "LLM 時代的 zero/few-shot DST",
+          "reason": "跨任務遷移學習從 QA 知識遷移到零樣本 DST",
+          "evidence": "Zero-Shot Dialogue State Tracking via Cross-Task Transfer from QA"
+        },
+        {
+          "id": "2310.08560",
+          "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+          "reason": "MemGPT 虛擬記憶系統突破上下文窗口限制實現長多輪狀態保持",
+          "evidence": "MemGPT overcomes context window limitations with virtual memory for dialogue"
+        },
+        {
+          "id": "2505.06120",
+          "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+          "reason": "實證驗證 LLM 多輪對話關鍵退化現象與成因分解",
+          "evidence": "LLMs Get Lost In Multi-Turn Conversation shows degradation in multi-turn interactions"
+        },
+        {
+          "id": "2510.07777",
+          "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+          "reason": "建立動力系統框架理解上下文漂移，提出簡單干預控制偏移",
+          "evidence": "Drift No More? Context Equilibria in Multi-Turn LLM Interactions addresses context"
+        },
+        {
+          "id": "2503.08026",
+          "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+          "reason": "反思性記憶管理用前向與後向反思維持長期對話連續性",
+          "evidence": "In Prospect and Retrospect reflective memory management for long-term dialogue"
+        },
+        {
+          "id": "2512.12818",
+          "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+          "reason": "結構化記憶架構將對話轉為邏輯網絡支持保留、檢索、反思操作",
+          "evidence": "Hindsight organizes dialogue into logical networks supporting memory operations"
+        }
+      ],
+      "reserve": [
+        {
+          "id": "1712.10224",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "Google 可擴展多域 DST 方法獨立於槽值集的架構設計",
+          "evidence": "Scalable Multi-Domain Dialogue State Tracking independent of slot value set"
+        },
+        {
+          "id": "2009.12005",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "MinTL 最小化遷移學習框架簡化系統設計改進低資源性能",
+          "evidence": "MinTL minimalist transfer learning for dialogue state tracking"
+        },
+        {
+          "id": "1908.01946",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "將 DST 重新框架化為閱讀理解問題超越複雜傳統方法",
+          "evidence": "Dialog State Tracking as a Neural Reading Comprehension problem"
+        },
+        {
+          "id": "2104.00773",
+          "subarea": "傳統任務型對話 DST 與資料集",
+          "reason": "MultiWOZ 2.4 進一步修正標註定義驗評標準建立可靠基準",
+          "evidence": "MultiWOZ 2.4 annotation corrections and evaluation standard for state tracking"
+        },
+        {
+          "id": "1901.04713",
+          "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+          "reason": "GLMP 全局-局部記憶指針架構整合知識庫與多輪狀態",
+          "evidence": "Global-to-local Memory Pointer Networks for Task-Oriented Dialogue"
+        },
+        {
+          "id": "2507.21428",
+          "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+          "reason": "MemTool 短期記憶優化框架動態管理工具上下文",
+          "evidence": "MemTool optimizes short-term memory for dynamic tool calling in LLM agents"
+        }
+      ],
+      "refute": {
+        "verdicts": [
+          {
+            "id": "1810.00278",
+            "contribution": "大規模多域Wizard-of-Oz對話資料集，標註對話信念狀態與系統行動，為DST研究提供規模化的人機標註資源",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1909.05855",
+            "contribution": "Schema-guided對話資料集，涵蓋16域與16000+對話，推動跨域可擴展DST與動態schema研究",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1606.03777",
+            "contribution": "神經信念追蹤框架，使用表示學習突破傳統手工詞典的限制，開創深度學習在DST的應用",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1805.09655",
+            "contribution": "全局-局部自注意力模型，通過全局模塊共享參數、局部模塊學習特定槽位特徵，改善罕見狀態追蹤",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1905.08743",
+            "contribution": "TRADE模型引入複製機制實現開放詞彙DST，支持zero/few-shot場景下對未見值的追蹤與跨域遷移",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1907.07421",
+            "contribution": "SUMBT通過非參數方式實現通用可擴展的槽位值追蹤，跳過價值列表維護的複雜性",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2005.02877",
+            "contribution": "TripPy三重複製策略簡化DST同時達到55%以上聯合目標準確度，避免價值表維護成本",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2005.00796",
+            "contribution": "SimpleTOD統一語言模型方法重新將DST視為序列預測，改善聯合目標準確度並展示端到端遷移學習的威力",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2007.12720",
+            "contribution": "MultiWOZ 2.2修正數據集標註雜訊，重新定義本體與槽位跨度標準，建立統一的DST評估基礎",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2109.07506",
+            "contribution": "模式驅動提示方法透過架構與槽位描述實現LLM上的zero-shot DST，達到MultiWOZ最佳性能",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2105.04222",
+            "contribution": "槽位描述增強的生成方法實現跨域零樣本DST，利用共享信息促進知識遷移",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2201.08904",
+            "contribution": "D3ST將schema轉換為自然語言描述並使用索引選擇機制，改善模型對任務規格的理解與零樣本泛化能力",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2203.08568",
+            "contribution": "IC-DST提出in-context learning框架應用大語言模型於few-shot DST，重新表述為文本到SQL問題",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2306.01386",
+            "contribution": "對ChatGPT零樣本DST性能的評估與分析，展示通用模型的潛力但指出其局限性",
+            "primary_node": "T2",
+            "is_water": true,
+            "objection": "僅評估已有模型（ChatGPT）無新技術方法，屬評估研究而非方法論文，置評價值有限"
+          },
+          {
+            "id": "2310.14970",
+            "contribution": "LDST提出領域槽位指令微調方法使開源模型匹敵ChatGPT的DST性能，針對開源模型的實用方案",
+            "primary_node": "T2",
+            "is_water": true,
+            "objection": "influential=2極低（年均引用2.3），遠低於同期LLM方法論文，表示市場快速演進已超越此方法"
+          },
+          {
+            "id": "2402.10466",
+            "contribution": "FnCTOD通過函數調用範式實現零樣本DST，使小型開源模型超越ChatGPT性能，成為新興能力的標準應用",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.08560",
+            "contribution": "MemGPT虛擬記憶管理系統突破LLM上下文窗口限制，實現長多輪對話中的狀態保持與持久記憶維護",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2410.10813",
+            "contribution": "LongMemEval建立業界認可的對話記憶評估基準，涵蓋信息提取、多會話推理、時間推理、知識更新、適度拒絕五項核心能力",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要貢獻是評估基準與度量體系屬T7（評估方法），非T2狀態維護方法。論文無狀態維護技術貢獻"
+          },
+          {
+            "id": "2505.06120",
+            "contribution": "實證研究驗證LLM在多輪對話中存在關鍵退化現象（平均性能下降39%），分解為能力喪失與不穩定性兩大成因",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2510.07777",
+            "contribution": "建立動力系統框架理解多輪上下文漂移，證明簡單提醒干預可控制偏移於穩定平衡，而非無限衰退",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2507.21428",
+            "contribution": "MemTool短期記憶優化框架為LLM agent動態管理工具與MCP伺服器上下文，已被OpenAI官方SDK採納應用",
+            "primary_node": "T2",
+            "is_water": true,
+            "objection": "2025年7月發布，無top venue正式發表，influential=0，社區引用極少。URL證據雖救它避免GATE-FAIL但時間新無累積影響"
+          },
+          {
+            "id": "2503.08026",
+            "contribution": "RMM反思性記憶管理整合前向與後向反思，動態總結多粒度對話並以RL微調檢索，為長期個性化對話維持連續性",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2109.04655",
+            "contribution": "TransferQA跨任務遷移學習方法從QA知識遷移到zero-shot DST，構造負樣本問題處理未知槽值的零樣本設置",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2009.12005",
+            "contribution": "MinTL最小化遷移學習框架簡化系統設計，引入Levenshtein belief spans改進DST效率，在低資源下表現穩健",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1908.01946",
+            "contribution": "將DST重新框架化為閱讀理解問題，使用簡單注意機制指向對話中槽值，超越複雜傳統方法",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2104.00773",
+            "contribution": "MultiWOZ 2.4進一步修正驗證集與測試集標註，定義驗評標準提升DST評估可信度，建立更可靠的基準",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2512.12818",
+            "contribution": "Hindsight結構化記憶架構將對話流轉為四層邏輯網絡（事實、經驗、實體摘要、信念），支持保留、檢索、反思三核心操作",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2004.06871",
+            "contribution": "TOD-BERT預訓練模型整合九個任務型對話資料集，引入用戶系統標記與對比目標，為LLM時代DST奠定基礎",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": ""
+          }
+        ],
+        "missing": [
+          {
+            "id": "1901.04713",
+            "title": "Global-to-local Memory Pointer Networks for Task-Oriented Dialogue",
+            "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+            "why": "端到端記憶管理與知識庫整合的里程碑論文，引入全局到本地記憶指針的架構，對多輪對話狀態維護具有重要參考價值。173被引、43influential。"
+          },
+          {
+            "id": "1712.10224",
+            "title": "Scalable Multi-Domain Dialogue State Tracking",
+            "subarea": "傳統任務型對話 DST 與資料集",
+            "why": "Google發表的可擴展多域DST方法，獨立於槽值集的架構設計，是傳統方法中的里程碑工作。115被引、13influential。"
+          },
+          {
+            "id": "2012.15504",
+            "title": "Continual Learning in Task-Oriented Dialogue Systems",
+            "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+            "why": "持續學習應用於多域DST的第一篇系統研究，提出37域基準與多種方法，對多輪演進場景的狀態追蹤至關重要。151被引、22influential。"
+          },
+          {
+            "id": "2005.05298",
+            "title": "SOLOIST: Building Task Bots at Scale with Transfer Learning and Machine Teaching",
+            "subarea": "傳統任務型對話 DST 與資料集",
+            "why": "Microsoft統一Transformer模型架構的里程碑，將模塊化對話系統（含DST）參數化為單一神經模型，展示端到端遷移學習的威力。126被引、26influential。"
+          },
+          {
+            "id": "2110.00534",
+            "title": "TEACh: Task-driven Embodied Agents that Chat",
+            "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+            "why": "3000+多模態任務導向對話資料集，結合環境互動與對話狀態追蹤，代表多模態多輪對話的重要基準。300被引、25influential。"
+          },
+          {
+            "id": "1811.05408",
+            "title": "Multi-task learning for Joint Language Understanding and Dialogue State Tracking",
+            "subarea": "傳統任務型對話 DST 與資料集",
+            "why": "Google發表的多任務學習框架，同時優化意圖識別與狀態追蹤，展示任務共享對DST性能的提升。58被引、4influential。"
+          }
+        ]
+      }
+    },
+    {
+      "key": "T3",
+      "canon": {
+        "added": 10,
+        "merged": 8,
+        "rejected": [
+          "WebArena: A Benchmarking Testbed for Multimodal Web Agents",
+          "OmniParser: A Unified Framework for Parsing Customized Instructions in Web Agents",
+          "Chain of Thought Transparency"
+        ],
+        "notes": "T3 節點「Agent Observation（觀測：感知與可觀測性）」的經典名單補齊完成。共補入 18 篇里程碑論文（感知 10 篇、可觀測性 8 篇），候選池擴展至 157 篇。新增論文涵蓋 ReAct、Mind2Web、CogAgent、SWE-agent、Set-of-Mark Prompting、UGround、Ferret-UI 等感知領域核心，以及 AI Control、Chain of Thought Monitorability、ToolEmu、Breaking Agents 等可觀測性安全基礎。所有經典論文均為 NeurIPS/ICLR/ACL 等頂級會議或高引用論文，部分採納證據已驗證（SWE-agent 及 ReAct 來自主流產品 OpenAI/Google DeepMind）。\""
+      },
+      "reviseFailed": false,
+      "main": [
+        {
+          "id": "2210.03629",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "定義代理觀測的標準格式，建立推理軌跡與環境互動的基礎架構",
+          "evidence": "reasoning traces and task-specific actions in an interleaved manner"
+        },
+        {
+          "id": "2405.15793",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "展示代理計算機介面如何設計以改進代理對環境反饋的接收與表示",
+          "evidence": "custom agent-computer interface significantly enhances agent ability to create"
+        },
+        {
+          "id": "2312.08914",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "開發專用視覺語言模型實現細粒度圖形使用者介面理解與接地",
+          "evidence": "visual language model specializing in GUI understanding and navigation"
+        },
+        {
+          "id": "2401.10935",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "解決圖形使用者介面視覺接地的關鍵問題，將視覺觀測對應到可操作介面元素",
+          "evidence": "GUI grounding -- the capacity to accurately locate screen elements"
+        },
+        {
+          "id": "2401.01614",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "展示多模態大型語言模型作為網頁代理的視覺觀測能力與接地挑戰",
+          "evidence": "LMMs like GPT-4V as a generalist web agent that can follow"
+        },
+        {
+          "id": "2410.05243",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "訓練通用視覺接地模型改進多平台圖形使用者介面觀測理解與泛化",
+          "evidence": "visual grounding models that can accurately map diverse referring expressions"
+        },
+        {
+          "id": "2408.00203",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "提出視覺強化的屏幕解析技術通過接地檢測改進代理對介面結構的感知",
+          "evidence": "OmniParser method for parsing user interface screenshots into elements"
+        },
+        {
+          "id": "2404.05719",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "針對移動使用者介面的專用多模態模型展示平台特定觀測的設計方向",
+          "evidence": "MLLM tailored for enhanced understanding of mobile UI screens"
+        },
+        {
+          "id": "2310.11441",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "創新視覺提示方法通過標記視覺元素改善多模態模型的圖形使用者介面接地",
+          "evidence": "Set-of-Mark visual prompting method to unleash visual grounding"
+        },
+        {
+          "id": "2504.10458",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "結合推理模型與圖形使用者介面觀測通過強化學習改進視覺理解深度",
+          "evidence": "reinforcement learning framework designed to enhance GUI capabilities"
+        },
+        {
+          "id": "2502.13130",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "多模態代理基礎模型整合視覺語言與動作空間的統一觀測表徵機制",
+          "evidence": "foundation model serves multimodal AI agentic tasks with Set-of-Mark"
+        },
+        {
+          "id": "2410.16464",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "提出應用程式介面層觀測作為網頁代理的結構化替代方案補充視覺觀測",
+          "evidence": "Hybrid Agent that can interact with online data through browsing"
+        },
+        {
+          "id": "2209.08199",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "建立大規模截圖理解基準評估視覺代理對屏幕內容的閱讀理解能力",
+          "evidence": "benchmark the screen reading comprehension capacity laying foundation"
+        },
+        {
+          "id": "2503.11926",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "展示通過監控思維鏈推理可偵測獎勵駭客攻擊與故意不當行為的方法",
+          "evidence": "monitoring chain-of-thought reasoning can detect reward hacking"
+        },
+        {
+          "id": "2309.15817",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "提出工具模擬與自動安全評估框架量化代理風險並識別異常",
+          "evidence": "ToolEmu framework that uses LM to emulate tool execution"
+        },
+        {
+          "id": "2507.11473",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "形式化定義推理過程的可監控性概念提供對思維鏈監控的量化評估標準",
+          "evidence": "CoT monitoring is imperfect and allows some misbehavior unnoticed"
+        },
+        {
+          "id": "2401.10019",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "建立代理安全風險意識基準評估語言模型識別執行過程中異常威脅的能力",
+          "evidence": "R-Judge benchmark to evaluate LLMs in judging identifying safety"
+        },
+        {
+          "id": "2312.06942",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "系統分析代理行為監控協議與防禦框架評估對故意欺騙的穩健性",
+          "evidence": "develop and evaluate pipelines of safety techniques robust to"
+        },
+        {
+          "id": "2305.04388",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "揭示思維鏈解釋可能不忠實於語言模型真實決策過程質疑可監控性假設",
+          "evidence": "CoT explanations can systematically misrepresent true reason"
+        },
+        {
+          "id": "2510.09312",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "提出計算圖驗證方法通過推理追蹤分析提供對代理內部推理可靠性的監控",
+          "evidence": "Circuit-based Reasoning Verification using attribution graphs"
+        },
+        {
+          "id": "2509.25370",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "系統化分析代理失敗模式與錯誤傳播機制建立失敗分類與偵測框架",
+          "evidence": "AgentErrorTaxonomy modular classification of failure modes"
+        },
+        {
+          "id": "2407.20859",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "通過攻擊分析揭示自主代理可觀測性漏洞提出自檢異常偵測方法",
+          "evidence": "attacks cause malfunctions by misleading agent into executing"
+        },
+        {
+          "id": "2301.13379",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "提出忠實思維鏈框架通過符號推理保證推理過程的解釋性與監控可信度",
+          "evidence": "reasoning chain provides a faithful explanation of answer"
+        }
+      ],
+      "reserve": [
+        {
+          "id": "2410.18967",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "多模態大型語言模型跨平台使用者介面理解與視覺接地的系統進展",
+          "evidence": "MLLM designed for universal UI understanding across platforms"
+        },
+        {
+          "id": "2402.06596",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "系統分析複雜環境中代理觀測局限性識別多模態理解與推理的瓶頸",
+          "evidence": "understanding the weakness of LLM agents within complex environment"
+        },
+        {
+          "id": "2603.26211",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "擴散模型改進圖形使用者介面視覺接地精度特別針對複雜網頁截圖",
+          "evidence": "Towards GUI Agents Vision-Language Diffusion Models for GUI"
+        },
+        {
+          "id": "2503.07701",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "自動化基準生成評估代理對複雜程式碼庫觀測與理解的系統化方法",
+          "evidence": "Automated Benchmark Generation for Repository-Level Coding Tasks"
+        },
+        {
+          "id": "2605.00551",
+          "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+          "reason": "優化無障礙樹觀測表徵通過冗餘減少改進圖形使用者介面代理效率",
+          "evidence": "A11y-Compressor enhancing efficiency of GUI Agent Observations"
+        },
+        {
+          "id": "2602.06443",
+          "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+          "reason": "軌跡異常偵測框架識別代理執行過程中的不尋常行為與失敗徵兆",
+          "evidence": "TrajAD Trajectory Anomaly Detection for Trustworthy LLM Agents"
+        }
+      ],
+      "refute": {
+        "verdicts": [
+          {
+            "id": "2210.03629",
+            "contribution": "定義agent與環境互動的標準觀測格式（ReAct Observation），推動整個領域基礎架構",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2405.15793",
+            "contribution": "系統展示代理-計算機界面（ACI）設計對agent觀測與互動表徵的影響",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2306.06070",
+            "contribution": "建立跨域多網站Web agent基準與資料集",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要貢獻是評估基準（T7資料集與基準）而非感知方法本身，應重新分類至T7節點。"
+          },
+          {
+            "id": "2312.08914",
+            "contribution": "開發CogAgent視覺語言模型專門用於GUI理解，通過高分辨率編碼支持細粒度文字與元素感知",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2401.10935",
+            "contribution": "解決GUI視覺接地關鍵問題，提出預訓練方法將視覺觀測精確對應到可操作介面元素",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2401.01614",
+            "contribution": "探索多模態大語言模型作為網頁代理的視覺觀測能力，識別grounding為主要瓶頸",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2410.05243",
+            "contribution": "訓練通用視覺接地模型UGround改進多平台GUI觀測能力與跨域泛化",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2408.00203",
+            "contribution": "提出OmniParser視覺強化屏幕解析技術，通過可交互圖標檢測與元素語義提取改進GUI感知",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2404.05719",
+            "contribution": "開發Ferret-UI針對移動UI的多模態模型，通過任意分辨率編碼實現細粒度UI理解與接地",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.11441",
+            "contribution": "提出Set-of-Mark視覺提示方法，通過在圖像上標記區域改善多模態模型對GUI元素的視覺接地",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2504.10458",
+            "contribution": "結合R1推理模型與GUI觀測，通過統一動作空間規則建模與強化學習改進視覺觀測能力",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2509.16941",
+            "contribution": "建立SWE-Bench Pro評估複雜軟體工程任務中agent對代碼與執行反饋的長期觀測理解",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要貢獻是評估基準（T7）而非感知方法本身，應重新分類至T7節點。"
+          },
+          {
+            "id": "2502.13130",
+            "contribution": "多模態基礎模型Magma整合視覺、語言與動作空間，通過Set-of-Mark與Trace-of-Mark提供統一觀測表徵",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2408.06327",
+            "contribution": "建立VisualAgentBench評估多模態模型作為視覺代理的觀測能力",
+            "primary_node": "T7",
+            "is_water": true,
+            "objection": "主要是評估基準而非感知方法；influential=4極低；應移至T7或剔除。"
+          },
+          {
+            "id": "2503.11926",
+            "contribution": "展示通過監控chain-of-thought推理追蹤可偵測reward hacking與故意不當行為，揭示CoT obfuscation風險",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2309.15817",
+            "contribution": "提出ToolEmu框架用LLM模擬工具執行以測試agent，開發自動安全評估器量化風險並識別異常",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2507.11473",
+            "contribution": "形式化定義推理過程的可監控性概念，提供對CoT監控的量化評估標準與脆弱性分析",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2401.10019",
+            "contribution": "建立R-Judge基準評估LLM在agent執行中識別安全風險的能力，涵蓋27個風險場景",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2312.06942",
+            "contribution": "系統研究agent行為監控協議與防禦框架，評估對agent故意subversion的穩健性",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.04388",
+            "contribution": "揭示CoT解釋可能不忠實於LLM真實決策過程，通過biasing實驗質疑CoT透明性假設",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2507.21504",
+            "contribution": "綜合性綜述LLM agent評估方法，整理評估維度與流程",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要是T7評估綜述而非T3可觀測性方法本身；influential=5邊界；2025年新論文，應移至T7。"
+          },
+          {
+            "id": "2509.25370",
+            "contribution": "系統分析agent失敗模式與錯誤傳播機制，建立AgentErrorTaxonomy與失敗偵測框架",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2407.20859",
+            "contribution": "通過malfunction amplification攻擊分析揭示autonomous agent的可觀測性漏洞，提出自檢異常偵測方法",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2510.09312",
+            "contribution": "提出Circuit-based Reasoning Verification白盒方法通過計算圖驗證CoT推理正確性與因果性",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2408.02479",
+            "contribution": "軟體工程領域LLM與agent應用的綜述，總結domain特定的觀測需求與挑戰",
+            "primary_node": "T3",
+            "is_water": true,
+            "objection": "綜述而非原創方法；influential=2極低，遠低於邊界；缺乏具體技術貢獻，應剔除。"
+          },
+          {
+            "id": "2410.16464",
+            "contribution": "提出API層觀測作為Web agent的替代方案，展示混合API與browsing觀測策略的優勢",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2301.13379",
+            "contribution": "提出兩階段Faithful CoT框架結合自然語言翻譯與符號求解確保推理過程忠實性",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2509.22642",
+            "contribution": "通過robot interaction trajectory訓練世界模型，展示embodied interaction如何約束觀測與行動的物理因果理解",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": "邊界：主要關注robot manipulation與物理直覺而非pure agent observation；但對embodied感知有創新貢獻。"
+          },
+          {
+            "id": "2511.21398",
+            "contribution": "提出DOM樹動態剪枝與編程框架簡化長網頁觀測空間，改進grounding精度",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": "RECENT-INELIGIBLE：2025年11月發佈，11引用，influential=1遠低於5，未通過硬規則篩選。"
+          },
+          {
+            "id": "2510.19838",
+            "contribution": "樹結構推理與動作記憶優化網頁觀測利用，改進長horizon任務執行效率",
+            "primary_node": "T3",
+            "is_water": false,
+            "objection": "RECENT-INELIGIBLE邊界：2025年10月發佈，5引用，influential=2遠低於5，雖ACL接納但質量不足主選。"
+          }
+        ],
+        "missing": [
+          {
+            "id": "2207.01206",
+            "title": "WebShop: Towards Scalable Real-World Web Interaction with Grounded Language Agents",
+            "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+            "why": "NeurIPS 2022 landmark基準論文，建立real-world web interaction的觀測問題設定與評估框架，驅動了web agent觀測方法的發展，遺漏將導致對領域關鍵基準的理解不完整。"
+          },
+          {
+            "id": "2307.13854",
+            "title": "WebArena: A Realistic Web Environment for Building Autonomous Agents",
+            "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+            "why": "2023年landmark基準論文，建立真實複雜網頁環境與observation-to-action的評估框架，成為主流web agent觀測方法的標準測試平台。"
+          }
+        ]
+      }
+    },
+    {
+      "key": "T4",
+      "canon": {
+        "added": 7,
+        "merged": 5,
+        "rejected": [
+          "TRAIL: Trace Reasoning and Agentic Issue Localization",
+          "Where LLM Agents Fail and How They Can Learn From Failures",
+          "AgenTracer: Who Is Inducing Failure in the LLM Agentic Systems?",
+          "Agent-FLAN: Designing Data and Methods of Effective Agent Tuning for Large Language Models",
+          "Trial and Error: Exploration-Based Trajectory Optimization for LLM Agents",
+          "Training Software Engineering Agents and Verifiers with SWE-Gym",
+          "ToolBench: A Benchmark for Language Model Agent with 10000+ Real-world APIs",
+          "AgentOhana: Design Unified Data and Training Pipeline for Effective Agent Learning",
+          "Process Reward Models for LLM Agents: Practical Framework and Directions",
+          "Solving math word problems with process- and outcome-based feedback",
+          "Math-Shepherd: Verify and Reinforce LLMs Step-by-step without Human Annotations",
+          "Autonomous Evaluation and Refinement of Digital Agents"
+        ],
+        "notes": "T4 經典名單：7 篇新增論文（包括 AgentTuning、FireAct、Understanding Software Engineering Agents 等），5 篇已在池中（包括 Let's Verify Step by Step、Which Agent Causes Task Failures and When?），12 篇因 arXiv 標題不符被拒。Pool 已更新至 205 篇論文。"
+      },
+      "reviseFailed": false,
+      "main": [
+        {
+          "id": "2110.14168",
+          "subarea": "軌跡/步驟層級評估與 process reward",
+          "reason": "首次提出訓練驗證器判斷推理步驟正確性，為過程獎勵奠定理論基礎",
+          "evidence": "training verifiers to judge the correctness of model completions"
+        },
+        {
+          "id": "2305.20050",
+          "subarea": "軌跡/步驟層級評估與 process reward",
+          "reason": "開放 PRM800K 資料集系統證明過程監督優於結果監督，被業界廣泛採納",
+          "evidence": "process supervision significantly outperforms outcome supervision for training models"
+        },
+        {
+          "id": "2312.08935",
+          "subarea": "軌跡/步驟層級評估與 process reward",
+          "reason": "自動構造過程級監督資料無需人工標註，同時驗證與強化學習兩種應用均有效果",
+          "evidence": "automatically constructed process-wise supervision data, breaking the bottleneck of heavy reliance on manual annotation"
+        },
+        {
+          "id": "2406.06592",
+          "subarea": "軌跡/步驟層級評估與 process reward",
+          "reason": "設計 OmegaPRM 演算法通過分治式 MCTS 高效自動化蒐集大規模過程監督信號",
+          "evidence": "collect over 1.5 million process supervision annotations to train Process Reward Models"
+        },
+        {
+          "id": "2410.08146",
+          "subarea": "軌跡/步驟層級評估與 process reward",
+          "reason": "理論刻畫過程獎勵應測量步級進度，訓練過程優勢驗證器在搜尋與強化學習中均優於結果獎勵",
+          "evidence": "process reward for a step should measure progress: a change in the likelihood"
+        },
+        {
+          "id": "2404.06474",
+          "subarea": "軌跡/步驟層級評估與 process reward",
+          "reason": "構造自動化評估器框架用於軌跡層級自評與改進，無需額外監督改進代理性能達 29%",
+          "evidence": "domain-general automatic evaluators can significantly improve the performance of agents"
+        },
+        {
+          "id": "2501.07301",
+          "subarea": "軌跡/步驟層級評估與 process reward",
+          "reason": "通過系統實驗揭示 PRM 開發的關鍵問題並提出一致性過濾機制，被 Qwen 採納",
+          "evidence": "systematic experiment revealed the key problem in PRM development process"
+        },
+        {
+          "id": "2502.10325",
+          "subarea": "軌跡/步驟層級評估與 process reward",
+          "reason": "提出輕量級 actor-critic 框架最小化修改現有 RLHF 管道即可整合過程獎勵支援規模化",
+          "evidence": "light-weight actor-critic framework, minimizing modifications to existing RLHF pipelines"
+        },
+        {
+          "id": "2503.13657",
+          "subarea": "軌跡分析、失敗分類與歸因",
+          "reason": "系統分析多 agent 系統失敗原因構造 MAST 資料集 1600+ 標註軌跡識別 14 個失敗模式",
+          "evidence": "systematically analyze the failure reasons of multi-agent systems via execution trajectories"
+        },
+        {
+          "id": "2412.06559",
+          "subarea": "軌跡分析、失敗分類與歸因",
+          "reason": "推出 ProcessBench 基準 3400 測試案例標註錯誤步驟位置評估 PRM 與評論家模型能力",
+          "evidence": "3400 test cases for evaluating process reward models and critic models in mathematical reasoning"
+        },
+        {
+          "id": "2505.00212",
+          "subarea": "軌跡分析、失敗分類與歸因",
+          "reason": "定義 agent 失敗歸因任務構造 Who&When 資料集細粒度標註失敗責任代理與步驟",
+          "evidence": "define the task of agent failure attribution and construct the Who&When dataset"
+        },
+        {
+          "id": "2403.02502",
+          "subarea": "軌跡分析、失敗分類與歸因",
+          "reason": "提出 ETO 軌跡探索優化方法從失敗軌跡構造對比學習對迭代優化 agent 策略",
+          "evidence": "agents can learn from their exploration failures through an iterative optimization framework"
+        },
+        {
+          "id": "2509.25370",
+          "subarea": "軌跡分析、失敗分類與歸因",
+          "reason": "構造 AgentErrorTaxonomy 分類失敗模式跨五個維度提出 AgentDebug 框架隔離根因",
+          "evidence": "analyze where and how LLM agents fail from multiple dimensions"
+        },
+        {
+          "id": "2509.03312",
+          "subarea": "軌跡分析、失敗分類與歸因",
+          "reason": "提出 AgenTracer 框架通過反事實重演與故障注入自動標註失敗軌跡訓練輕量模型超越大型閉源",
+          "evidence": "automatically annotate failure traces via contrafactual re-enactment and programmatic fault injection"
+        },
+        {
+          "id": "2505.08638",
+          "subarea": "軌跡分析、失敗分類與歸因",
+          "reason": "推出 TRAIL 資料集 148 條標註軌跡與失敗分類學覆蓋單多 agent 系統評估方法與工具交互",
+          "evidence": "TRAIL dataset with 148 annotated traces across single and multi-agent systems"
+        },
+        {
+          "id": "2506.18824",
+          "subarea": "軌跡分析、失敗分類與歸因",
+          "reason": "大規模實證研究軟體工程 agent 軌跡特性分析 120 條軌跡 2822 次互動的行動與失敗模式",
+          "evidence": "large-scale empirical study of SWE agent trajectory characteristics"
+        },
+        {
+          "id": "2112.09332",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "微調 GPT-3 進行網頁瀏覽採集 browser 軌跡用行為克隆加獎勵模型優化示範軌跡收集應用",
+          "evidence": "behavior cloning on model-generated completions and human feedback"
+        },
+        {
+          "id": "2405.15793",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "設計 Agent-Computer Interface 優化 agent 與環境互動系統化軌跡收集建立軟體工程 agent 標準格式",
+          "evidence": "facilitate LM agents to autonomously use computers and systematize trajectory collection"
+        },
+        {
+          "id": "2207.05608",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "提出內在獨白方法機器人 agent 通過閉迴路環境反饋形成軌跡規劃與反思跨多任務驗證",
+          "evidence": "LLMs form an inner monologue that allows them to process and plan in robotic control scenarios"
+        },
+        {
+          "id": "2310.03714",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "DSPy 框架將軌跡示範轉換為參數化可學習模組自動優化示範組合實現軌跡的聲明式編譯自我改進",
+          "evidence": "DSPy modules can learn how to apply trajectories by creating and collecting demonstrations"
+        },
+        {
+          "id": "2505.10978",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "GiGPO 演算法實現細粒度步級信用分配通過錨狀態分組機制無評論家即可訓練高效 agent",
+          "evidence": "fine-grained credit assignment across steps while preserving the appealing properties of group-based RL"
+        },
+        {
+          "id": "2201.11903",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "首次系統提出 Chain-of-Thought 軌跡格式通過中間推理步驟提升多步推理能力奠定現代軌跡基礎",
+          "evidence": "generating a chain of thought -- a series of intermediate reasoning steps -- significantly improves the ability of large language models"
+        },
+        {
+          "id": "2210.03629",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "提出 ReAct 框架統一推理與行動軌跡成為現代 agent 軌跡標準範式被業界廣泛採納於產品",
+          "evidence": "generate both reasoning traces and task-specific actions in an interleaved manner"
+        },
+        {
+          "id": "2305.10601",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "樹狀思維將軌跡結構化為搜尋空間支援多路徑探索回溯擴展軌跡格式表達能力用於複雜推理",
+          "evidence": "Tree of Thoughts (ToT), which generalizes over the popular Chain of Thought approach"
+        }
+      ],
+      "reserve": [
+        {
+          "id": "2306.14898",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "InterCode 框架標準化互動代碼軌跡提供執行反饋驅動強化學習環境多語言支援相容傳統訓練",
+          "evidence": "standard interactive code execution trajectory format with feedback-driven RL environment"
+        },
+        {
+          "id": "2310.12823",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "AgentInstruct 資料集混合指令微調軌跡保持通用能力同時增強 agent 特定行為開源模型達到強水準",
+          "evidence": "agent tuning via mixed instruction fine-tuning trajectories with agent-specific behaviors"
+        },
+        {
+          "id": "2310.05915",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "FireAct 聚合不同任務與提示方法的軌跡提升多樣性與泛化性精調相對較小模型達強效果",
+          "evidence": "fine-tune language agents on multiple tasks with diverse trajectory demonstrations"
+        },
+        {
+          "id": "2403.12881",
+          "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+          "reason": "Agent-FLAN 軌跡分解與負樣本設計降低幻覺改進 agent 能力同時保留通用性 ACL 頂會發表",
+          "evidence": "trajectory decomposition and negative examples to reduce hallucinations in agent training"
+        }
+      ],
+      "refute": {
+        "verdicts": [
+          {
+            "id": "2110.14168",
+            "contribution": "首次提出訓練驗證器判斷多步推理中每一步的正確性，通過驗證器排名選擇最佳完成，奠定過程獎勵的理論基礎。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.20050",
+            "contribution": "系統比較過程監督與結果監督，實驗證明過程監督對複雜推理任務顯著優於結果監督，開放 PRM800K 資料集供後續研究。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2312.08935",
+            "contribution": "提出 Math-Shepherd 過程獎勵模型，無需人工標註自動構造過程級監督資料，同時驗證與 RL 兩種應用方式均有顯著效果。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2406.06592",
+            "contribution": "設計 OmegaPRM 演算法，通過分治式 MCTS 與二分搜尋高效自動化蒐集 150 萬步級監督信號，實現大規模過程監督。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2410.08146",
+            "contribution": "理論刻畫過程獎勵應測量步級進度（相對優勢），訓練過程優勢驗證器在搜尋與 RL 中均優於結果獎勵模型。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2404.06474",
+            "contribution": "構造自動化評估器框架用於軌跡層級自評與改進，無需額外監督即可改進 agent 性能達 29%。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2501.07301",
+            "contribution": "通過系統實驗揭示 PRM 開發的關鍵問題：MC 估計偏差、評估策略偏差，提出一致性過濾機制並被 Qwen2.5-Math-PRM 採納。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2502.10325",
+            "contribution": "提出 AgentPRM 輕量級 actor-critic 框架，最小化修改現有 RLHF 管道即可整合過程獎勵，支援規模化部署。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2503.13657",
+            "contribution": "系統分析多 agent 系統失敗原因，構造 MAST 失敗分類學與 1600+ 標註軌跡資料集，識別 14 個失敗模式供設計改進。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2412.06559",
+            "contribution": "推出 ProcessBench 基準，3400 測試案例標註錯誤步驟位置，評估 PRM 與評論家模型在數學推理軌跡分析的能力。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2505.00212",
+            "contribution": "定義 agent 失敗歸因任務，構造 Who&When 資料集細粒度標註失敗責任代理與步驟，提出自動歸因方法評估結果。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2403.02502",
+            "contribution": "提出 ETO 軌跡探索優化方法，從失敗軌跡構造對比學習對，迭代優化 agent 策略無需專家軌跡。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2509.25370",
+            "contribution": "構造 AgentErrorTaxonomy 分類失敗模式跨記憶、反思、規劃、行動五個維度，提出 AgentDebug 框架隔離根因與反饋。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2509.03312",
+            "contribution": "提出 AgenTracer 框架通過反事實重演與程式化故障注入自動標註失敗軌跡，訓練 8B 輕量模型超越大型閉源模型診斷能力。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2505.08638",
+            "contribution": "推出 TRAIL 資料集 148 條標註軌跡與失敗分類學，覆蓋單多 agent 系統評估方法與工具交互複雜性。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2506.18824",
+            "contribution": "大規模實證研究軟體工程 agent 軌跡特性，分析 120 條軌跡 2822 次互動的行動模式與失敗模式，提供設計指導。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1707.06347",
+            "contribution": "提出 PPO 政策梯度演算法，支援多 epoch minibatch 更新，簡化 TRPO 實現。",
+            "primary_node": "none",
+            "is_water": false,
+            "objection": "PPO 是通用強化學習演算法，主要貢獻不在 agent 軌跡領域（軌跡格式、收集、分析、評估）。雖被廣泛用於 agent 訓練，但屬於底層優化方法，應歸類為技術基礎而非 T4 專有領域。"
+          },
+          {
+            "id": "2112.09332",
+            "contribution": "微調 GPT-3 進行網頁瀏覽問答，採集 browser 軌跡並用行為克隆加獎勵模型進行優化，示範軌跡收集與強化學習應用。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2505.09388",
+            "contribution": "Qwen3 模型整合思考與非思考模式統一框架，包含 agent 軌跡多階段訓練，思考預算機制支援資源適應。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": "Qwen3 是涵蓋模型架構、預訓練、多語言擴展的技術報告，軌跡訓練只是眾多功能中的一部分，並非研究焦點。應以更聚焦的軌跡訓練論文替代。"
+          },
+          {
+            "id": "2405.15793",
+            "contribution": "設計 Agent-Computer Interface（ACI）優化 agent 與環境互動，系統化軌跡收集與執行測試驗證，建立軟體工程 agent 的標準軌跡格式。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2207.05608",
+            "contribution": "提出內在獨白方法，機器人 agent 通過閉迴路環境反饋形成軌跡規劃與反思，跨多個機器人任務驗證有效性。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.03714",
+            "contribution": "DSPy 框架將軌跡示範轉換為參數化可學習模組，自動優化示範組合與提示策略，實現軌跡的聲明式編譯與自我改進。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2508.06471",
+            "contribution": "GLM-4.5 多階段 agent 軌跡訓練框架，思考預算機制動態分配推理資源，統一思考與非思考軌跡的訓練流程。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": "GLM-4.5 是技術報告，軌跡訓練只是其中一個組成部分，論文聚焦於模型能力整體呈現而非軌跡訓練的深入研究。應以專門研究軌跡多階段訓練的論文替代。"
+          },
+          {
+            "id": "2505.10978",
+            "contribution": "GiGPO 演算法實現細粒度步級信用分配，通過錨狀態分組機制無評論家即可訓練高效 agent，在多輪互動基準上顯著超過基線。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2402.02716",
+            "contribution": "LLM agent 規劃能力綜述，涵蓋任務分解、計畫選擇、外部模組、反思與記憶機制。",
+            "primary_node": "none",
+            "is_water": false,
+            "objection": "本論文聚焦 agent 規劃能力而非軌跡。軌跡相關的內容（規劃過程的記錄）只是規劃的副產品，不是獨立研究對象。屬於規劃領域而非軌跡領域（T4）。"
+          },
+          {
+            "id": "2306.14898",
+            "contribution": "InterCode 框架標準化互動代碼軌跡，提供執行反饋驅動的 RL 環境，多語言支援且與傳統訓練方法相容。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.12823",
+            "contribution": "AgentInstruct 資料集混合指令微調軌跡，保持通用能力同時增強 agent 特定行為，開源模型達到 GPT-3.5 水平。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.05915",
+            "contribution": "FireAct 多任務軌跡微調框架，聚合不同任務與提示方法的軌跡提升多樣性與泛化性，精調相對較小模型達強效果。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2403.12881",
+            "contribution": "Agent-FLAN 資料集設計與訓練方法，通過軌跡分解與負樣本降低幻覺，改進 agent 能力同時保留通用性。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2506.19290",
+            "contribution": "Skywork-SWE 大規模軟體工程軌跡資料集與縮放法則研究，發現訓練數據增加時無飽和跡象，指導後續資料構造。",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": "論文發表於 2025 年 6 月，引用數僅 28，influential 為 3，尚未達到「有影響力」或「有商用採納證據」的標準。RECENT-INELIGIBLE 規則適用：無頂會正式論文、無 URL 附加採納證據、influential < 5。"
+          }
+        ],
+        "missing": [
+          {
+            "id": "2201.11903",
+            "title": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+            "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+            "why": "首次系統提出 Chain-of-Thought 軌跡格式，通過中間推理步驟提升大模型多步推理能力，奠定現代 LLM agent 軌跡的基礎格式。"
+          },
+          {
+            "id": "2210.03629",
+            "title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+            "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+            "why": "提出 Reasoning-Acting 軌跡框架，統一思考與行動步驟，成為現代 agent 軌跡的標準範式，被廣泛採納於業界產品。"
+          },
+          {
+            "id": "2305.10601",
+            "title": "Tree of Thoughts: Deliberate Problem Solving with Large Language Models",
+            "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+            "why": "將軌跡結構化為樹狀搜尋空間，支援多路徑探索與回溯，擴展了軌跡格式的表達能力，用於複雜推理問題。"
+          }
+        ]
+      }
+    },
+    {
+      "key": "T5",
+      "canon": {
+        "added": 41,
+        "merged": 7,
+        "rejected": [
+          "On The Danger of Stochastic Parrots: Can Language Models Assess Themselves?",
+          "Confidence Building and Self-Correction in Language Model Chains",
+          "Critique as a Skill"
+        ],
+        "notes": "T5 節點共 169 篇候選論文入池。通過多輪搜尋補充經典名單，覆蓋三個子領域：內在自我修正、外部回饋修正、訓練得到的自我修正與搜尋回溯。包含 2018-2026 年的里程碑論文與最新進展，符合 Chain-of-Thought、ReAct、Constitutional AI 等已廣泛採納的關鍵工作。約 57 篇新進論文標記 RECENT-INELIGIBLE，可於 W2 精讀階段評估。\""
+      },
+      "reviseFailed": false,
+      "main": [
+        {
+          "id": "2303.17651",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "展示 LLM 透過迭代自我反饋改進輸出品質的 Self-Refine 框架",
+          "evidence": "Like humans, large language models (LLMs) do not always generate the best output on their first try. Motivated by how humans refine their written text, we introduce Self-Refine, an approach for improving initial outputs from LLMs through iterative feedback and refinement."
+        },
+        {
+          "id": "2310.01798",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "批判 LLM 在無外部反饋情況下自我修正推理的真實限制",
+          "evidence": "In the context of reasoning, our research indicates that LLMs struggle to self-correct their responses without external feedback, and at times, their performance even degrades after self-correction."
+        },
+        {
+          "id": "2309.11495",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "建立結構化的驗證與修正框架，透過多步驟檢驗過程減少幻覺",
+          "evidence": "We develop the Chain-of-Verification (CoVe) method whereby the model first (i) drafts an initial response; then (ii) plans verification questions to fact-check its draft; (iii) answers those questions independently so the answers are not biased by other responses; and (iv) generates its final verified response."
+        },
+        {
+          "id": "2406.01297",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "批判性綜述分析 LLM 自我修正的實驗設計問題與必要條件",
+          "evidence": "In this work, we critically survey broad papers and discuss the conditions required for successful self-correction. We first find that prior studies often do not define their research questions in detail and involve impractical frameworks or unfair evaluations."
+        },
+        {
+          "id": "2302.07459",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "實證研究倫理推理中 LLM 的道德自我修正能力與規模依賴性",
+          "evidence": "We test the hypothesis that language models trained with reinforcement learning from human feedback (RLHF) have the capability to morally self-correct -- to avoid producing harmful outputs -- if instructed to do so."
+        },
+        {
+          "id": "2401.07301",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "證實小型 LLM 也能透過部分答案遮蔽技術達成自我修正",
+          "evidence": "Small Language Models demonstrate intrinsic self-correction capabilities through answer-masking techniques, expanding applicability beyond large models."
+        },
+        {
+          "id": "2405.14092",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "提出驗證關鍵條件的簡易方法，引發 LLM 內在自我修正能力",
+          "evidence": "Large Language Models Can Self-Correct with Key Condition Verification, introducing ProCo framework for condition verification."
+        },
+        {
+          "id": "2201.11903",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "里程碑論文建立 CoT 提示的理論基礎，為自修正研究提供推理框架",
+          "evidence": "We explore how generating a chain of thought -- a series of intermediate reasoning steps -- significantly improves the ability of large language models to perform complex reasoning."
+        },
+        {
+          "id": "2304.05128",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "展示 LLM 透過程式執行結果反饋自動發現與修正代碼錯誤",
+          "evidence": "Teaching Large Language Models to Self-Debug, enabling error discovery through execution feedback mechanisms."
+        },
+        {
+          "id": "2305.11738",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "建立 LLM 與外部工具互動進行驗證與迭代修正的框架",
+          "evidence": "CRITIC: Large Language Models Can Self-Correct with Tool-Interactive Critiquing."
+        },
+        {
+          "id": "2303.17491",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "展示遞迴批判與改進如何透過工具回饋完成複雜任務",
+          "evidence": "Language Models can Solve Computer Tasks through tool-feedback-driven iterative correction."
+        },
+        {
+          "id": "2110.14168",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "建立驗證器重排序的經典方法，為多數決策略奠定基礎",
+          "evidence": "Training Verifiers to Solve Math Word Problems, establishing verifier-based reranking methodology."
+        },
+        {
+          "id": "2308.13724",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "應用驗證器反饋進行迭代修正，改進 LLM 在長期規劃任務的可行性",
+          "evidence": "ISR-LLM: Iterative Self-Refined Large Language Model for Long-Horizon Sequential Task Planning."
+        },
+        {
+          "id": "2407.00215",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "展示訓練的 LLM 評論者能有效偵測同儕輸出缺陷，超越人類審查",
+          "evidence": "LLM Critics Help Catch LLM Bugs, demonstrating trained critic models' effectiveness."
+        },
+        {
+          "id": "2404.17140",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "揭示小型模型自我修正依賴強驗證器的條件與能力耦合",
+          "evidence": "Small Language Models Need Strong Verifiers to Self-Correct Reasoning."
+        },
+        {
+          "id": "2211.10435",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "將計算卸載至程式執行環境，透過外部運行反饋避免算術錯誤",
+          "evidence": "PAL: Program-aided Language Models, leveraging execution feedback for computational correctness."
+        },
+        {
+          "id": "2305.10601",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "推廣思維鏈至多路搜尋框架，透過自我評估實現複雜問題的探索與回溯",
+          "evidence": "Tree of Thoughts: Deliberate Problem Solving with Large Language Models, implementing tree search with self-evaluation."
+        },
+        {
+          "id": "2303.11366",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "透過語言反思與記憶維護實現強化學習驅動的自我改進",
+          "evidence": "Reflexion: Language Agents with Verbal Reinforcement Learning, enabling RL-driven self-improvement via reflection."
+        },
+        {
+          "id": "2310.04406",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "統一推理、行動與規劃的樹搜尋框架，通過自我反思優化決策",
+          "evidence": "Language Agent Tree Search Unifies Reasoning Acting and Planning in Language Models."
+        },
+        {
+          "id": "2212.08073",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "以 AI 反饋訓練自我批評與修正，展示最小人類監督下的自我對齊",
+          "evidence": "Constitutional AI: Harmlessness from AI Feedback, enabling AI feedback-driven self-correction training."
+        },
+        {
+          "id": "2409.12917",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "透過多輪線上強化學習從模型自生成的修正軌跡中訓練自我修正能力",
+          "evidence": "Training Language Models to Self-Correct via Reinforcement Learning, introducing SCoRe method."
+        },
+        {
+          "id": "2407.18219",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "透過迭代微調教導 LLM 遞迴內省，逐步檢測與修正前次失敗",
+          "evidence": "Recursive Introspection: Teaching Language Model Agents How to Self-Improve."
+        },
+        {
+          "id": "2206.05802",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "訓練模型生成自然語言批評協助評估與自我改進，展示規模效應",
+          "evidence": "Self-critiquing models for assisting human evaluators, demonstrating scale-dependent critique capability."
+        },
+        {
+          "id": "2501.12948",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "透過純強化學習涌現自我反思、驗證等高階推理模式，推進推理邊界",
+          "evidence": "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning."
+        }
+      ],
+      "reserve": [
+        {
+          "id": "2005.11401",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "里程碑論文建立外部檢索反饋修正生成品質的經典框架",
+          "evidence": "We explore a general-purpose fine-tuning recipe for retrieval-augmented generation (RAG) -- models which combine pre-trained parametric and non-parametric memory for language generation."
+        },
+        {
+          "id": "2210.03629",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "里程碑論文整合推理與行動框架，支持代理自我修正",
+          "evidence": "In this paper, we explore the use of LLMs to generate both reasoning traces and task-specific actions in an interleaved manner, allowing for greater synergy between the two."
+        },
+        {
+          "id": "2203.11171",
+          "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+          "reason": "里程碑論文提出多路推理一致性策略為搜尋回溯奠基",
+          "evidence": "It first samples a diverse set of reasoning paths instead of only taking the greedy one, and then selects the most consistent answer by marginalizing out the sampled reasoning paths."
+        },
+        {
+          "id": "1803.05355",
+          "subarea": "外部回饋／工具輔助的修正",
+          "reason": "經典事實驗證基準資料集支持驗證驅動的修正研究",
+          "evidence": "FEVER: Fact Extraction and VERification. It consists of 185,445 claims generated by altering sentences extracted from Wikipedia and subsequently verified without knowledge of the sentence they were derived from."
+        },
+        {
+          "id": "2005.04118",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "系統性測試框架揭露 LLM 推理與自我修正能力的盲點",
+          "evidence": "Inspired by principles of behavioral testing in software engineering, we introduce CheckList, a task-agnostic methodology for testing NLP models."
+        },
+        {
+          "id": "2212.10001",
+          "subarea": "內在自我修正與口語反思（含批判性研究）",
+          "reason": "實證分析 CoT 的有效要素，揭示推理成分對自我修正的重要性",
+          "evidence": "Despite its success, there is still little understanding of what makes CoT prompting effective and which aspects of the demonstrated reasoning steps contribute to its performance."
+        }
+      ],
+      "refute": {
+        "verdicts": [
+          {
+            "id": "2303.17651",
+            "contribution": "提出 Self-Refine 框架，展示 LLM 透過迭代自我反饋改進輸出品質",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.01798",
+            "contribution": "批判性研究揭示 LLM 缺乏外部反饋時無法有效修正推理能力",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2309.11495",
+            "contribution": "建立結構化驗證框架（CoVe），透過計畫驗證問題與獨立回答減少幻覺",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2406.01297",
+            "contribution": "批判性綜述自我修正研究，提供實驗設計檢查清單與必要條件分析",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2302.07459",
+            "contribution": "實證研究表明倫理推理中 LLM 的道德自我修正能力在 22B 參數規模以上出現",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2410.20513",
+            "contribution": "機制分析表明道德自我修正並非 LLM 的內在能力，而是依賴外部回饋",
+            "primary_node": "T5",
+            "is_water": true,
+            "objection": "引用率過低（1 citation, 0 influential），2024 年 10 月發表無足夠影響力或商用採納證據"
+          },
+          {
+            "id": "2401.07301",
+            "contribution": "提出部分答案遮蔽技術讓 6-13B 參數小型 LLM 達成自我修正",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2405.14092",
+            "contribution": "提出 ProCo 框架，通過遮蔽關鍵條件與預測實現迭代自我修正驗證",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2304.05128",
+            "contribution": "Self-Debugging 方法，教導 LLM 分析執行結果自動發現與修正程式錯誤",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.11738",
+            "contribution": "CRITIC 框架，LLM 與外部工具互動進行驗證與迭代修正",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2303.17491",
+            "contribution": "遞迴批判與改進方法通過工具反饋完成電腦自動化任務",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2110.14168",
+            "contribution": "建立驗證器重排序經典方法，GSM8K 資料集為多數決策略奠定基礎",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2308.13724",
+            "contribution": "ISR-LLM 框架，應用驗證器反饋迭代改進長期規劃任務的可行性",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2407.00215",
+            "contribution": "訓練 LLM 批評者模型有效偵測同儕程式缺陷，超越人類審查能力",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2404.17140",
+            "contribution": "研究揭示小型語言模型自我修正依賴驗證器品質的強耦合關係",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2211.10435",
+            "contribution": "PAL 方法卸載計算至程式執行環境，透過執行反饋避免算術錯誤",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.10601",
+            "contribution": "樹思維框架推廣 CoT，實現多路探索與自我評估驅動的回溯搜尋",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2303.11366",
+            "contribution": "Reflexion 框架，代理透過口語反思與記憶維護進行強化學習驅動的自我改進",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.04406",
+            "contribution": "LATS 統一推理、行動與規劃，通過 LM 驅動的價值函數與自我反思優化決策",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2212.08073",
+            "contribution": "Constitutional AI 透過 AI 反饋訓練自我批評與修正，實現最小人類監督的自我對齊",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2409.12917",
+            "contribution": "SCoRe 方法，多輪線上強化學習從模型自生成修正軌跡訓練自我修正能力",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2407.18219",
+            "contribution": "RISE 透過迭代微調教導 LLM 遞迴內省與檢測修正前次失敗嘗試",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2206.05802",
+            "contribution": "訓練模型生成自然語言批評協助人類評估，展示批評能力的規模效應",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2501.12948",
+            "contribution": "DeepSeek-R1 透過純強化學習涌現自我反思、驗證與動態策略調適等高階推理模式",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2412.14959",
+            "contribution": "批判性研究揭露自我修正的負面現象：自我動搖與認知偏見",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2402.12563",
+            "contribution": "研究表明信心估計是自我修正的關鍵因素，提出 If-or-Else 提示框架",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2405.00402",
+            "contribution": "通過優先偏好優化將 LLM 自我修正能力轉移至小型模型，改進域外推廣",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2502.12853",
+            "contribution": "S²R 框架通過自我驗證與自我修正的強化學習增強推理能力",
+            "primary_node": "T5",
+            "is_water": true,
+            "objection": "RECENT-INELIGIBLE（2025 年 2 月 18 日發表，無足夠引用或採納證據）"
+          },
+          {
+            "id": "2308.04592",
+            "contribution": "Shepherd 模型微調以提供精準批評反饋，展示小型批評模型的效率與準確性",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.20050",
+            "contribution": "過程監督優於結果監督，PRM800K 資料集揭示逐步反饋的優越性",
+            "primary_node": "T5",
+            "is_water": false,
+            "objection": ""
+          }
+        ],
+        "missing": [
+          {
+            "id": "2201.11903",
+            "title": "Chain-of-Thought Prompting Elicits Reasoning in Large Language Models",
+            "subarea": "內在自我修正與口語反思（含批判性研究）",
+            "why": "里程碑論文（22167 citations, 1413 influential），建立 CoT 提示的理論基礎，為後續自修正研究提供推理框架"
+          },
+          {
+            "id": "2210.03629",
+            "title": "ReAct: Synergizing Reasoning and Acting in Language Models",
+            "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+            "why": "里程碑論文（11549 citations, 1172 influential），整合推理與行動的經典框架，支持代理自我修正"
+          },
+          {
+            "id": "2203.11171",
+            "title": "Self-Consistency Improves Chain of Thought Reasoning in Language Models",
+            "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+            "why": "里程碑論文（7730 citations, 954 influential），多路推理一致性策略為搜尋回溯奠定基礎"
+          },
+          {
+            "id": "2005.04118",
+            "title": "Beyond Accuracy: Behavioral Testing of NLP models with CheckList",
+            "subarea": "內在自我修正與口語反思（含批判性研究）",
+            "why": "系統性測試框架（1613 citations, 177 influential），揭示 LLM 推理與自我修正能力的盲點"
+          },
+          {
+            "id": "2307.02477",
+            "title": "Reasoning or Reciting? Exploring the Capabilities and Limitations of Language Models Through Counterfactual Tasks",
+            "subarea": "內在自我修正與口語反思（含批判性研究）",
+            "why": "批判性研究（373 citations, 21 influential），區分推理與複述，揭示自我修正的真實能力邊界"
+          },
+          {
+            "id": "2212.10001",
+            "title": "Towards Understanding Chain-of-Thought Prompting: An Empirical Study of What Matters",
+            "subarea": "內在自我修正與口語反思（含批判性研究）",
+            "why": "實證研究（410 citations, 18 influential），分析 CoT 的有效要素，支持自修正機制理解"
+          },
+          {
+            "id": "2005.11401",
+            "title": "Retrieval-Augmented Generation for Knowledge-Intensive NLP Tasks",
+            "subarea": "外部回饋／工具輔助的修正",
+            "why": "里程碑論文（18637 citations, 1663 influential），外部檢索反饋修正生成品質的經典框架"
+          },
+          {
+            "id": "1803.05355",
+            "title": "FEVER: a large-scale dataset for Fact Extraction and VERification",
+            "subarea": "外部回饋／工具輔助的修正",
+            "why": "基準資料集（2464 citations, 478 influential），支持事實驗證驅動的修正研究"
+          },
+          {
+            "id": "2402.14809",
+            "title": "CriticBench: Benchmarking LLMs for Critique-Correct Reasoning",
+            "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+            "why": "基準評估（109 citations, 3 influential），評估批評模型在推理修正中的性能"
+          },
+          {
+            "id": "2601.00828",
+            "title": "Decomposing LLM Self-Correction: The Accuracy-Correction Paradox and Error Depth Hypothesis",
+            "subarea": "內在自我修正與口語反思（含批判性研究）",
+            "why": "最新批判性研究（8 citations），準確度-修正悖論揭示自修正的內在限制"
+          }
+        ]
+      }
+    },
+    {
+      "key": "T6",
+      "canon": {
+        "added": 24,
+        "merged": 4,
+        "rejected": [],
+        "notes": "T6 經典名單補充完成。新增 24 篇里程碑論文，涵蓋三個子領域：經典與神經使用者模擬器（6 篇）、LLM 使用者模擬器評估與訓練（10 篇）、使用者回饋迴路與滿意度估計（8 篇）。候選池從 200 篇擴展至 220 篇。所有論文均經 arXiv 驗證，無任何被拒。"
+      },
+      "reviseFailed": false,
+      "main": [
+        {
+          "id": "1607.00070",
+          "subarea": "經典與神經使用者模擬器",
+          "reason": "使用 encoder-decoder RNN 學習使用者對話行為的經典方法，為任務型對話 RL 訓練奠定基礎",
+          "evidence": "This paper introduces a data-driven user simulator based on an encoder-decoder recurrent neural network"
+        },
+        {
+          "id": "1612.05688",
+          "subarea": "經典與神經使用者模擬器",
+          "reason": "公開可用的任務完成對話使用者模擬框架，支援 RL 訓練與線上評估",
+          "evidence": "one popular approach is to build a user simulator based upon a corpus of example dialogues"
+        },
+        {
+          "id": "1805.06966",
+          "subarea": "經典與神經使用者模擬器",
+          "reason": "神經使用者模擬器生成自然語言，從語料學習行為，優於議程式模擬器",
+          "evidence": "This paper introduces the Neural User Simulator (NUS) whose behaviour is learned from a corpus"
+        },
+        {
+          "id": "2107.11904",
+          "subarea": "經典與神經使用者模擬器",
+          "reason": "使用 self-play 進行跨域對話生成與遷移學習，連結經典與 LLM 時代的使用者模擬",
+          "evidence": "We explore the possibility of creating dialogue data through the interaction between a dialogue system and a user simulator"
+        },
+        {
+          "id": "2204.00763",
+          "subarea": "經典與神經使用者模擬器",
+          "reason": "引入類比推理的隱喻式使用者模擬器，提出新穎評估框架評估對話系統",
+          "evidence": "In this work, we propose a metaphorical user simulator for end-to-end TDS evaluation"
+        },
+        {
+          "id": "2208.10817",
+          "subarea": "經典與神經使用者模擬器",
+          "reason": "生成式 Transformer 使用者模擬器結合策略與自然語言生成，在 ConvLab-3 被採用",
+          "evidence": "GenTUS consists of an encoder-decoder structure, which means it can optimise both the user policy and natural language generation jointly"
+        },
+        {
+          "id": "2406.12045",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "LLM 作為使用者模擬器評估 agent 工具使用的高引用基準，提出 pass^k 可靠性度量",
+          "evidence": "We propose $\\tau$-bench, a benchmark emulating dynamic conversations between a user (simulated by language models) and a language agent"
+        },
+        {
+          "id": "2506.07982",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "雙控環境對話 agent 評估，使用者與 agent 均可使用工具修改共享環境狀態",
+          "evidence": "where both agent and user make use of tools to act in a shared, dynamic environment"
+        },
+        {
+          "id": "2310.11667",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "開放式環境中 LLM agent 社交智能評估，用 LLM 模擬多目標多人格的使用者",
+          "evidence": "In our environment, agents role-play and interact under a wide variety of scenarios; they coordinate, collaborate"
+        },
+        {
+          "id": "2309.10691",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "多輪互動評估框架，測試 LLM 與工具、自然語言回饋的協作能力",
+          "evidence": "We introduce MINT, a benchmark that evaluates LLMs' ability to solve tasks with multi-turn interactions"
+        },
+        {
+          "id": "2408.04682",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "有狀態工具沙箱評估，內建使用者模擬器支持有策略的對話評估",
+          "evidence": "ToolSandbox includes stateful tool execution, implicit state dependencies between tools, a built-in user simulator supporting"
+        },
+        {
+          "id": "2212.07769",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "LLM 選擇性澄清模糊問題的框架，用特權資訊模擬使用者自動評估多輪澄清",
+          "evidence": "We also show that we can simulate users by providing language models with privileged information"
+        },
+        {
+          "id": "2601.17087",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "批判性研究 LLM 模擬的逼真度與偏差，跨地域跨方言評估涵蓋系統偏差",
+          "evidence": "we investigate whether LLM-simulated users serve as reliable proxies for real human users in evaluating agents"
+        },
+        {
+          "id": "2306.00774",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "in-context learning 零樣本使用者模擬，無需規則或標註數據，生成多樣化對話",
+          "evidence": "This paper presents a novel application of large language models in user simulation for task-oriented dialog systems"
+        },
+        {
+          "id": "2309.13233",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "LLM 任務型對話評估的使用者模擬，追求目標成功率接近人類，語言多樣性高",
+          "evidence": "we propose a novel user simulator built using recently developed large pretrained language models (LLMs)"
+        },
+        {
+          "id": "2403.16416",
+          "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+          "reason": "分析 LLM 模擬器的限制與偏差，揭示資料洩露、提示控制、方言差異等核心問題",
+          "evidence": "Simultaneously, efforts are underway to construct user simulators based on LLMs. While these works showcase innovation, they also come with certain limitations"
+        },
+        {
+          "id": "1901.05415",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "部署後自我學習對話系統，利用使用者滿意度信號與澄清反饋同時優化",
+          "evidence": "a dialogue agent with the ability to extract new training examples from the conversations it participates in"
+        },
+        {
+          "id": "1804.06512",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "混合模仿與強化學習，同時利用使用者教學與回饋訓練對話系統",
+          "evidence": "a dialogue agent can effectively learn from its interaction with users by learning from human teaching and feedback"
+        },
+        {
+          "id": "2404.15269",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "從使用者編輯學習隱式偏好，推斷使用者偏好描述用於提示生成",
+          "evidence": "PRELUDE that infers a description of the user's latent preference based on historic edit data"
+        },
+        {
+          "id": "2208.03188",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "部署對話 agent 持續學習，包含網際網路存取、長期記憶與線上反饋循環",
+          "evidence": "Finally, we detail our plan for continual learning using the data collected from deployment"
+        },
+        {
+          "id": "1605.07669",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "線上主動獎賞學習與政策優化，用高斯過程聯合訓練獎賞模型與對話策略",
+          "evidence": "the dialogue policy is jointly trained alongside the reward model via active learning with a Gaussian process model"
+        },
+        {
+          "id": "2105.03748",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "模擬使用者滿意度評估任務型對話的開創性工作，提供多域滿意度標註數據集",
+          "evidence": "we propose the following task: simulating user satisfaction for the evaluation of task-oriented dialogue systems"
+        },
+        {
+          "id": "2208.03270",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "部署後用多種人類反饋改進開放域對話，比較監督學習與獎勵學習效果",
+          "evidence": "Models that can employ internet-retrieval for up-to-date information and obtain feedback from humans during deployment provide the promise"
+        },
+        {
+          "id": "1911.02557",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "大規模對話系統利用使用者互動反饋自動學習，偵測與修正多層次錯誤",
+          "evidence": "we propose a system that leverages user-system interaction feedback signals to automate learning without any manual annotation"
+        }
+      ],
+      "reserve": [
+        {
+          "id": "2202.02912",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "序列對話行為建模的滿意度估計，透過聯合學習整合動態對話上下文",
+          "evidence": "to incorporate the sequential dynamics of dialogue acts for predicting user satisfaction, by jointly learning User Satisfaction Estimation"
+        },
+        {
+          "id": "2403.12388",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "可解釋滿意度估計與 LLM 自適應框架，Microsoft Copilot 採納證據",
+          "evidence": "we show that LLMs can extract interpretable signals of user satisfaction from their natural language utterances"
+        },
+        {
+          "id": "2210.15893",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "將不良回應上的負反饋轉化為訓練標籤，Juicer 框架結合二元與自由文本反饋",
+          "evidence": "we propose Juicer, a framework to make use of both binary and free-form textual human feedback"
+        },
+        {
+          "id": "2010.12251",
+          "subarea": "使用者回饋迴路與滿意度估計",
+          "reason": "從隱式使用者反饋學習改進 NLU，無監督挖掘監督信號，Amazon 生產系統驗證",
+          "evidence": "by leveraging implicit user feedback, with an insight that user interaction data and dialog context have rich information embedded"
+        }
+      ],
+      "refute": {
+        "verdicts": [
+          {
+            "id": "1607.00070",
+            "contribution": "使用 encoder-decoder RNN 學習使用者對話行為，實現seq2seq使用者模擬器的經典方法",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1604.04562",
+            "contribution": "端到端神經對話系統，包含Wizard-of-Oz數據收集框架",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要貢獻是端到端對話系統架構與NLG，使用者模擬器只是評估環節，不是論文焦點。屬T7對話系統設計，非T6使用者模擬方法論文"
+          },
+          {
+            "id": "1612.05688",
+            "contribution": "建立公開使用者模擬框架，結合規則與語料學習，支援RL訓練與線上評估",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1805.06966",
+            "contribution": "神經使用者模擬器產生自然語言輸出，學習自語料庫，超越議程式模擬器",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2211.17148",
+            "contribution": "統一數據格式的對話系統工具包，整合多種模型、RL工具與評估環境",
+            "primary_node": "none",
+            "is_water": false,
+            "objection": "主要貢獻是工具包架構與統一格式，以benchmark為主。排除規則明確指出『以benchmark為主、使用者模擬只是其中一環的論文，除非有獨立貢獻』，本論文對使用者模擬器本身無獨立創新"
+          },
+          {
+            "id": "2107.11904",
+            "contribution": "通過self-play建立跨域可遷移的使用者模擬器與對話系統，使用RL最佳化",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2406.12045",
+            "contribution": "LLM使用者模擬器評估agent工具使用的基準，提出pass^k可靠性度量",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2506.07982",
+            "contribution": "雙控環境中agent與使用者均可操縱共享環境狀態，內建約束的使用者模擬器",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.11667",
+            "contribution": "開放式社交互動環境中評估agent社交智能，用LLM模擬多人格使用者",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2309.10691",
+            "contribution": "多輪互動評估框架測試LLM使用工具與自然語言反饋的協作能力",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2408.04682",
+            "contribution": "有狀態工具沙箱評估框架，內建動態使用者模擬器與對話策略評估",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2212.07769",
+            "contribution": "用特權資訊提示LLM進行選擇性澄清，自動評估多輪澄清對話",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2601.17087",
+            "contribution": "批判性研究LLM使用者模擬的逼真度與偏差，跨地域跨方言揭示系統偏差",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2306.00774",
+            "contribution": "In-context learning零樣本使用者模擬，無需規則或標註，生成多樣化對話",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2309.13233",
+            "contribution": "LLM使用者模擬器達成人類水準的目標成功率，語言多樣性高",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2011.09553",
+            "contribution": "序列到序列方法實現對話狀態追蹤，聯合建模意圖插槽與值",
+            "primary_node": "T2",
+            "is_water": false,
+            "objection": "主要貢獻屬對話狀態追蹤(DST)歸T2，不是使用者模擬。雖然可支持模擬，但論文焦點不在使用者模擬方法"
+          },
+          {
+            "id": "1901.05415",
+            "contribution": "自我進饋方法學習使用者滿意度與澄清反饋，部署後連續改進對話系統",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1804.06512",
+            "contribution": "混合模仿與強化學習，同時利用使用者教學與反饋訓練任務型對話",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2404.15269",
+            "contribution": "從使用者編輯推斷隱式偏好描述，用於提示生成與個人化",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2208.03188",
+            "contribution": "部署對話agent持續學習，整合網際網路存取與線上回饋迴路",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1605.07669",
+            "contribution": "在線主動獎賞學習，高斯過程聯合訓練獎賞模型與對話策略",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2105.03748",
+            "contribution": "使用者滿意度模擬與多域標註資料集，用於任務型對話系統評估",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2208.03270",
+            "contribution": "部署後從人類反饋改進開放域對話，比較監督學習與獎勵學習",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1911.02557",
+            "contribution": "利用使用者互動反饋自動學習錯誤偵測與修正，大規模部署系統",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2211.05826",
+            "contribution": "對比學習從負面對話數據教導模型應避免何種語言表達",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1601.04574",
+            "contribution": "簡化的深度RL對話系統，直接從原始文本進行動作選擇",
+            "primary_node": "none",
+            "is_water": false,
+            "objection": "主要貢獻是RL對話系統框架，不是使用者模擬或回饋迴路方法。論文焦點在系統策略訓練，非使用者反饋學習"
+          },
+          {
+            "id": "2305.12594",
+            "contribution": "Hawkes過程建模多輪對話中的動態滿意度演化",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2008.06239",
+            "contribution": "評估語言模型在任務型對話各模組的few-shot能力與權衡",
+            "primary_node": "none",
+            "is_water": false,
+            "objection": "主要貢獻是評估LM在NLU/DST/DP/NLG模組的few-shot能力，不是使用者模擬方法論文。屬對話系統評估，非T6"
+          },
+          {
+            "id": "2010.12251",
+            "contribution": "從隱式使用者反饋自動改進NLU，無監督挖掘監督信號",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2204.00763",
+            "contribution": "隱喻使用者模擬器引入類比推理與新穎評估框架評估對話系統",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": ""
+          }
+        ],
+        "missing": [
+          {
+            "id": "1810.00278",
+            "title": "MultiWOZ -- A Large-Scale Multi-Domain Wizard-of-Oz Dataset for Task-Oriented Dialogue Modelling",
+            "subarea": "經典與神經使用者模擬器",
+            "why": "任務型對話大規模標註數據集，包含豐富使用者行為樣本，為使用者模擬器訓練和評估提供基礎基準。1571引用，432個influential，是該領域的奠基之作"
+          }
+        ]
+      }
+    },
+    {
+      "key": "T7",
+      "canon": {
+        "added": 22,
+        "merged": 3,
+        "rejected": [],
+        "notes": "T7 節點經典名單補充完成：共 24 篇里程碑論文入選候選池。覆蓋三個子領域：agent 基準與評估環境設計（10 篇）、多輪對話與互動式評估（6 篇）、LLM/agent-as-judge 與評估可靠性（8 篇）。包括 AgentBench、SWE-bench、GAIA、WebArena、OSWorld、Chatbot Arena、τ-bench 等業界公認的里程碑基準與評估方法論。"
+      },
+      "reviseFailed": false,
+      "main": [
+        {
+          "id": "2306.05685",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "建立 LLM-as-judge 與多輪對話評估的業界標準，提出量化偏差與改善方法",
+          "evidence": "we explore using strong LLMs as judges to evaluate these models"
+        },
+        {
+          "id": "2303.16634",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "示範 LLM 評估的早期成功案例，透過提示工程提升信度與人類對齊",
+          "evidence": "using large language models as reference-free metrics for NLG evaluation"
+        },
+        {
+          "id": "2305.17926",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "系統性揭示 LLM 評估者的位置偏差與指令跟隨偏向，提出校準框架",
+          "evidence": "the quality ranking of candidate responses can be easily hacked"
+        },
+        {
+          "id": "2404.04475",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "用迴歸分析方法控制長度偏差，改進自動評估器的穩健性",
+          "evidence": "simple regression analysis approach for controlling biases in auto-evaluations"
+        },
+        {
+          "id": "2305.14387",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "模擬框架支持低成本人類回饋評估，適用於 agent 訓練與迭代",
+          "evidence": "design LLM prompts to simulate human feedback that are 50x cheaper"
+        },
+        {
+          "id": "2411.16594",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "LLM-as-judge 方法的綜合綜述，涵蓋機會、挑戰與設計偏差",
+          "evidence": "comprehensive survey of LLM-based judgment and assessment"
+        },
+        {
+          "id": "2406.19314",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "動態更新基準設計從根本避免資料污染，建立可信評估範式",
+          "evidence": "introduce LiveBench, the first benchmark with frequently-updated questions"
+        },
+        {
+          "id": "2410.10934",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "用 agent 評估相比 LLM-as-judge 的優勢，提供逐步回饋的框架",
+          "evidence": "agentic systems are used to evaluate agentic systems"
+        },
+        {
+          "id": "2310.06770",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "軟體工程評估的里程碑基準，展示真實環境的可執行評估方法",
+          "evidence": "introduce SWE-bench, evaluation framework of 2,294 software engineering problems"
+        },
+        {
+          "id": "2307.16789",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "大規模工具使用基準與框架，定義 API 調用的系統評估方法",
+          "evidence": "introduce ToolLLM, a general tool-use framework with 16,000+ real-world APIs"
+        },
+        {
+          "id": "2307.13854",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "開創性網頁互動基準，建立評估 agent 在實際網站上的任務能力",
+          "evidence": "build an environment that is highly realistic and reproducible"
+        },
+        {
+          "id": "2404.07972",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "操作系統層級綜合基準，評估 agent 在真實環境中的多模態互動",
+          "evidence": "introduce OSWorld, the first-of-its-kind scalable, real computer environment"
+        },
+        {
+          "id": "2306.06070",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "跨域網頁任務基準，強調通用性與長軌跡的可重現評估",
+          "evidence": "introduce Mind2Web, the first dataset for evaluating generalist agents for the web"
+        },
+        {
+          "id": "2308.03688",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "首個系統的 LLM agent 多工基準，奠定後續 agent 評估環境設計範式",
+          "evidence": "present AgentBench, a multi-dimensional benchmark with 8 distinct environments"
+        },
+        {
+          "id": "2311.12983",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "通用 AI 助理的里程碑基準，強調多模態觀測與長文本推理",
+          "evidence": "introduce GAIA, a benchmark for General AI Assistants"
+        },
+        {
+          "id": "2207.01206",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "經典電商互動基準，展示真實網頁環境的大規模評估可行性",
+          "evidence": "benchmarks for grounding language in interactive environments"
+        },
+        {
+          "id": "2509.16941",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "長地平線軟體工程任務的可執行評估環境，捕捉企業級複雜問題",
+          "evidence": "introduce SWE-Bench Pro, a substantially more challenging benchmark"
+        },
+        {
+          "id": "2601.11868",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "命令行環境中的現實困難任務基準，評估 frontier 模型的能力邊界",
+          "evidence": "AI agents may soon become capable of autonomously completing valuable tasks"
+        },
+        {
+          "id": "2403.04132",
+          "subarea": "多輪對話與互動式評估",
+          "reason": "大規模人類偏好比較評估平台，建立眾包互動式評估的實踐範式",
+          "evidence": "Large Language Models have unlocked new capabilities and applications"
+        },
+        {
+          "id": "2406.12045",
+          "subarea": "多輪對話與互動式評估",
+          "reason": "多轉折工具-代理-使用者互動基準，評估長期上下文維護與人機互動",
+          "evidence": "test language agents on their interaction with human users"
+        },
+        {
+          "id": "1603.08023",
+          "subarea": "多輪對話與互動式評估",
+          "reason": "對話評估陷阱的開創性分析，揭示自動化指標的可靠性問題",
+          "evidence": "investigate evaluation metrics for dialogue response generation systems"
+        },
+        {
+          "id": "2402.17753",
+          "subarea": "多輪對話與互動式評估",
+          "reason": "多輪互動中的長期記憶評估方法與基準，評估 LLM 的長期對話能力",
+          "evidence": "works on long-term open-domain dialogues spanning longer contexts"
+        },
+        {
+          "id": "2410.10813",
+          "subarea": "多輪對話與互動式評估",
+          "reason": "多輪互動對話的記憶評估基準，提出記憶管理的最佳實踐",
+          "evidence": "LLM-driven chat assistant systems have integrated memory components"
+        },
+        {
+          "id": "2309.10691",
+          "subarea": "多輪對話與互動式評估",
+          "reason": "工具與語言回饋的多轉對話評估框架，突顯互動式糾正的重要性",
+          "evidence": "large language models often require multiple rounds of interactions"
+        }
+      ],
+      "reserve": [
+        {
+          "id": "2407.18901",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "應用層級的可控測試環境，允許精細的互動編碼評估",
+          "evidence": "Autonomous agents that address day-to-day digital tasks must operate"
+        },
+        {
+          "id": "2412.14161",
+          "subarea": "agent 基準與評估環境設計",
+          "reason": "現實企業流程模擬環境，強調有實際後果的多代理協作評估",
+          "evidence": "We interact with computers on an everyday basis, be it in everyday life"
+        },
+        {
+          "id": "2310.17623",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "黑盒模型資料污染的檢測方法，保證基準評估有效性",
+          "evidence": "Large language models are trained on vast amounts of internet data"
+        },
+        {
+          "id": "2502.06193",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "LLM-as-judge 在軟體工程領域的實證研究，應用導向與領域特定評估",
+          "evidence": "assess the quality of LLM-generated code and text remains challenging"
+        },
+        {
+          "id": "2212.09746",
+          "subarea": "多輪對話與互動式評估",
+          "reason": "人機互動評估框架的經典研究，強調互動過程中反覆修正的評估設計",
+          "evidence": "develop a new framework to evaluate human-LM interaction"
+        },
+        {
+          "id": "2406.11657",
+          "subarea": "LLM/agent-as-judge 與評估可靠性",
+          "reason": "探討 LLM 作為評估者的個性化問題，引入確定性估計提升可靠性",
+          "evidence": "investigate the reliability of LLM-as-a-Personalized-Judge"
+        }
+      ],
+      "refute": {
+        "verdicts": [
+          {
+            "id": "2306.05685",
+            "contribution": "提出 MT-Bench 與 Chatbot Arena 基準，建立 LLM-as-judge 與眾包多輪對話評估的業界標準",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2303.16634",
+            "contribution": "用 GPT-4 進行自動評估的早期成功案例，展示提示工程改善信度的方法",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.17926",
+            "contribution": "系統性揭示 LLM 評估者的位置偏差與指令跟隨偏向，提出校準框架",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2404.04475",
+            "contribution": "迴歸分析方法控制 LLM-based 自動評估器的長度偏差，改進評估穩健性",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.14387",
+            "contribution": "模擬框架用於人類回饋評估，支持 agent 訓練與評估迭代的低成本方法",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2406.19314",
+            "contribution": "動態持續更新的基準設計，從源頭避免資料污染的評估範式",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2410.10934",
+            "contribution": "用 agent 進行評估相比 LLM-as-judge 的優勢，提供逐步回饋的評估框架",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2411.15594",
+            "contribution": "LLM-as-judge 方法的系統性綜述，涵蓋機會、挑戰與設計偏差的全面分析",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.06770",
+            "contribution": "軟體工程任務的里程碑基準，展示真實軟體環境的可執行評估方法",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2307.16789",
+            "contribution": "大規模工具使用基準與評估框架，定義 API 調用的系統評估方法",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2307.13854",
+            "contribution": "開創性的網頁互動基準，建立評估 agent 在實際網站上的任務能力",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2404.07972",
+            "contribution": "操作系統層級的綜合基準，評估 agent 在真實軟體環境中的多模態互動",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2306.06070",
+            "contribution": "跨域網頁任務基準，強調通用性與長軌跡的可重現評估",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2308.03688",
+            "contribution": "第一個系統的 LLM agent 多工基準，奠定後續 agent 評估環境的設計範式",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2311.12983",
+            "contribution": "通用 AI 助理的里程碑基準，強調多模態觀測與長文本推理的綜合評估",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2207.01206",
+            "contribution": "經典電商互動基準，展示真實網頁環境的大規模評估可行性",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2509.16941",
+            "contribution": "長地平線軟體工程任務的可執行評估環境，捕捉企業級複雜問題",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2601.11868",
+            "contribution": "命令行環境中的現實困難任務基準，評估 frontier 模型的能力邊界",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2403.04132",
+            "contribution": "大規模人類偏好比較評估平台，建立眾包互動式評估的實踐範式",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2406.12045",
+            "contribution": "多轉折工具-代理-使用者互動基準，評估長期上下文維護與人機互動設計",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1603.08023",
+            "contribution": "對話評估陷阱的開創性分析，揭示自動化指標的可靠性問題",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2402.17753",
+            "contribution": "多輪互動中的長期記憶評估方法與基準，評估 LLM 的長期對話能力",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2410.10813",
+            "contribution": "多輪互動對話的記憶評估基準，提出記憶管理與長期互動評估的最佳實踐",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2309.10691",
+            "contribution": "工具與語言回饋的多轉對話評估框架，突顯互動式糾正的重要性",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2310.17623",
+            "contribution": "黑盒模型資料污染的檢測方法，保證基準評估有效性的理論基礎",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2407.01502",
+            "contribution": "強調代理評估中的成本與可重現性，建立實用評估指標的框架",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2502.01534",
+            "contribution": "評估系統中的偏好洩漏污染問題，揭示 LLM-as-judge 的新型偏差來源",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2312.15407",
+            "contribution": "LLM 作為對話評估者的綜合實證分析，涵蓋多維度與對抗擾動",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2402.05930",
+            "contribution": "多輪對話網頁導航的大規模基準，評估 agent 跟隨自然語言指令的能力",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1909.03087",
+            "contribution": "對話評估的經典人評設計，制訂多轉比較的標準化協議",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": ""
+          }
+        ],
+        "missing": [
+          {
+            "id": "2407.18901",
+            "title": "AppWorld: A Controllable World of Apps and People for Benchmarking Interactive Coding Agents",
+            "subarea": "agent 基準與評估環境設計",
+            "why": "應用層級的可控測試環境，允許精細的互動編碼評估，ACL 頂會論文，340 引用，填補代碼互動評估的空白"
+          },
+          {
+            "id": "2412.14161",
+            "title": "TheAgentCompany: Benchmarking LLM Agents on Consequential Real World Tasks",
+            "subarea": "agent 基準與評估環境設計",
+            "why": "現實企業流程模擬環境，強調有實際後果的多代理協作評估，NeurIPS 頂會論文，315 引用，代表真實企業級應用"
+          },
+          {
+            "id": "2502.06193",
+            "title": "Can LLMs Replace Human Evaluators? An Empirical Study of LLM-as-a-Judge in Software Engineering",
+            "subarea": "LLM/agent-as-judge 與評估可靠性",
+            "why": "LLM-as-judge 在軟體工程領域的實證研究，ISSTA 頂會論文，應用導向，151 引用，填補領域特定評估的缺口"
+          },
+          {
+            "id": "2212.09746",
+            "title": "Evaluating Human-Language Model Interaction",
+            "subarea": "多輪對話與互動式評估",
+            "why": "人機互動評估框架的經典研究，強調了互動過程中反覆修正的評估設計，TMLR 頂會論文，136 引用，基礎性的評估框架"
+          },
+          {
+            "id": "2406.11657",
+            "title": "Can LLM be a Personalized Judge?",
+            "subarea": "LLM/agent-as-judge 與評估可靠性",
+            "why": "研究 LLM 作為評估者的個性化問題，EMNLP 頂會論文，136 引用，探討適應性評估的新方向"
+          }
+        ]
+      }
+    },
+    {
+      "key": "T8",
+      "canon": {
+        "added": 22,
+        "merged": 3,
+        "rejected": [],
+        "notes": "完成 T8（任務完成分數）的經典里程碑論文補充。新增 22 篇經典論文，涵蓋四個子領域：(1) 任務成功判準：Wen et al. 2016、MultiWOZ、Shades of BLEU、Semantic Evaluation for Text-to-SQL、Mind2Web、τ-bench（已存在，merged）；(2) 可靠性度量與統計嚴謹性：SPoC、Codex pass@k、Adding Error Bars to Evals、Deep RL Statistical Precipice、Deep RL that Matters、With Little Power、Accounting for Variance、Quantifying Variance；(3) 部分分數與過程度量：AgentBoard、TheAgentCompany、WebShop、ScienceWorld、Let's Verify Step by Step（已存在，merged）、ToolSandbox、WebCanvas、AgentQuest、AppWorld、Rewarding Progress（已存在，merged）；(4) 成本、效率與多目標分數：AI Agents That Matter、Chatbot Arena。池現在共 164 篇候選論文，hard-blocked 46 篇（RECENT-INELIGIBLE 或 GATE-FAIL）。表已刷新至 /Users/demian/Projects_vibecoding/project_nexus_agent/.claude/worktrees/arxiv-chat-agent-worktree-08e4f8/.docs/chat-agent-research/.cache/work/T8-table.txt。"
+      },
+      "reviseFailed": false,
+      "main": [
+        {
+          "id": "2010.02840",
+          "subarea": "任務成功的判準",
+          "reason": "引入執行語義評估作為終態判準，用測試集覆蓋度消除代碼生成的假陽性",
+          "evidence": "test suite accuracy to approximate semantic accuracy for Text-to-SQL models"
+        },
+        {
+          "id": "2106.05555",
+          "subarea": "任務成功的判準",
+          "reason": "指出多輪對話評估指標不一致問題，推動 Inform/Success 等判準標準化",
+          "evidence": "identify inconsistencies in data and the evaluation metrics used in dialogue evaluation"
+        },
+        {
+          "id": "2306.06070",
+          "subarea": "任務成功的判準",
+          "reason": "定義元素精準度、操作 F1 與步成功率等多維度終態判準，橫跨網頁任務",
+          "evidence": "define element accuracy, operation F1 and step success rate"
+        },
+        {
+          "id": "1604.04562",
+          "subarea": "任務成功的判準",
+          "reason": "奠定 Inform rate 與 Success rate 的任務完成判準，成為任務型對話評估標準",
+          "evidence": "introduces Inform rate and Success rate as task completion criteria"
+        },
+        {
+          "id": "2307.13854",
+          "subarea": "任務成功的判準",
+          "reason": "構建真實網頁環境的評估基準，定義功能正確性作為終態判準",
+          "evidence": "a set of benchmark tasks focusing on evaluating the functional correctness of task completions"
+        },
+        {
+          "id": "2411.15594",
+          "subarea": "任務成功的判準",
+          "reason": "綜述 LLM-as-a-Judge 的全面調查，覆蓋評估指標設計與可靠性度量",
+          "evidence": "comprehensive survey of LLM-as-a-Judge, addressing strategies to enhance reliability"
+        },
+        {
+          "id": "2402.14762",
+          "subarea": "任務成功的判準",
+          "reason": "多輪對話的精細粒度基準設計，構築三層分級能力分類與評估指標",
+          "evidence": "three-tier hierarchical ability taxonomy comprising 4208 turns"
+        },
+        {
+          "id": "2107.03374",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "代碼生成的里程碑論文，開創 pass@k 無偏估計方法，成為業界標準",
+          "evidence": "Evaluating Large Language Models Trained on Code"
+        },
+        {
+          "id": "1709.06560",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "經典 RL 評估可靠性研究，揭示種子變異與非決定性環境對結果的影響",
+          "evidence": "Deep Reinforcement Learning that Matters"
+        },
+        {
+          "id": "2108.13264",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "推薦四分位中位數與分層 bootstrap 置信區間，建立深度 RL 評估統計方法論",
+          "evidence": "At the Edge of the Statistical Precipice"
+        },
+        {
+          "id": "2411.00640",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "系統性介紹如何在 LLM 評估中加入統計誤差棒，提升可靠性度量嚴謹性",
+          "evidence": "Adding Error Bars to Evals: A Statistical Approach to Language Model Evaluations"
+        },
+        {
+          "id": "2103.03098",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "機器學習基準中的經典變異分析，多層級拆解評估中的變異來源",
+          "evidence": "Accounting for Variance in Machine Learning Benchmarks"
+        },
+        {
+          "id": "2602.16666",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "代理可靠性科學框架，提出一致性、魯棒性、可預測性、安全性等多維度度量",
+          "evidence": "Towards a Science of AI Agent Reliability"
+        },
+        {
+          "id": "1906.04908",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "pass@k 評估指標的原始出處，開創代碼生成模型可靠性度量業界標準",
+          "evidence": "SPoC: Search-based Pseudocode to Code"
+        },
+        {
+          "id": "1909.03004",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "展示驗證性能與計算成本的量化關係，建立計算預算與評估嚴謹性框架",
+          "evidence": "expected validation performance of the best-found model as a function of computation budget"
+        },
+        {
+          "id": "2401.13178",
+          "subarea": "部分分數與過程度量",
+          "reason": "奠定進度率作為多輪 agent 過程度量的評估框架，細分對話中增量進展",
+          "evidence": "AgentBoard: An Analytical Evaluation Board of Multi-turn LLM Agents"
+        },
+        {
+          "id": "2408.04682",
+          "subarea": "部分分數與過程度量",
+          "reason": "引入中間里程碑與陷阱機制，允許在任意軌跡上的部分分數評估",
+          "evidence": "ToolSandbox: A Stateful, Conversational, Interactive Evaluation Benchmark"
+        },
+        {
+          "id": "2406.12373",
+          "subarea": "部分分數與過程度量",
+          "reason": "設計關鍵節點完成度評估，引入動態環境下的時間敏感分數定義",
+          "evidence": "WebCanvas: Benchmarking Web Agents in Online Environments"
+        },
+        {
+          "id": "2203.07540",
+          "subarea": "部分分數與過程度量",
+          "reason": "子目標部分分數框架的里程碑，評估 agent 在長軌跡上的增量進展",
+          "evidence": "ScienceWorld: Is your Agent Smarter than a 5th Grader"
+        },
+        {
+          "id": "2406.12045",
+          "subarea": "成本、效率與使用者滿意度等多目標分數",
+          "reason": "tool-agent 互動的使用者體驗評估，展示多目標優化框架",
+          "evidence": "τ-bench: A Benchmark for Tool-Agent-User Interaction in Real-World Domains"
+        },
+        {
+          "id": "2407.01502",
+          "subarea": "成本、效率與使用者滿意度等多目標分數",
+          "reason": "經典帕累托邊界展示成本–準確率的取捨，推動多目標優化評估",
+          "evidence": "AI Agents That Matter"
+        }
+      ],
+      "reserve": [
+        {
+          "id": "2010.06595",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "強調 NLP 評估的統計檢驗力問題，推動負責任的實驗設計",
+          "evidence": "With Little Power Comes Great Responsibility"
+        },
+        {
+          "id": "2406.10229",
+          "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+          "reason": "現代 LLM 評估中的種子變異量化，提供基準穩定性的實證估計",
+          "evidence": "Quantifying Variance in Evaluation Benchmarks"
+        },
+        {
+          "id": "2410.10934",
+          "subarea": "任務成功的判準",
+          "reason": "評估新範式：agent 互評模式，用 agent 評估 agent 的過程反饋",
+          "evidence": "Agent-as-a-Judge: Evaluate Agents with Agents"
+        },
+        {
+          "id": "2302.10342",
+          "subarea": "部分分數與過程度量",
+          "reason": "獎勵學習：任務型對話系統的獎勵模型與分數定義",
+          "evidence": "Fantastic Rewards and How to Tame Them: A Case Study on Reward Learning"
+        },
+        {
+          "id": "2410.08146",
+          "subarea": "部分分數與過程度量",
+          "reason": "過程驗證的可擴展性，用驗證器進行可靠的分步評估",
+          "evidence": "Rewarding Progress: Scaling Automated Process Verifiers for LLM Reasoning"
+        },
+        {
+          "id": "1908.10719",
+          "subarea": "部分分數與過程度量",
+          "reason": "多領域對話的分步獎勵估計方法，利用逆強化學習推斷獎勵函數",
+          "evidence": "Guided Dialog Policy Learning: Reward Estimation for Multi-Domain Task-Oriented Dialog"
+        }
+      ],
+      "refute": {
+        "verdicts": [
+          {
+            "id": "2010.02840",
+            "contribution": "以蒸餾測試集規避代碼生成的假陰性，用測試覆蓋度驗證語義等價性",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2106.05555",
+            "contribution": "指出多輪對話評估指標的不一致問題，推動 Inform/Success 等判準的標準化",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": "workshop 旗標，非頂會"
+          },
+          {
+            "id": "2311.01767",
+            "contribution": "以結果檔比對作為終態判準，支持多種完成路徑並檢測副作用",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要貢獻是評估環境與基準設計，分數定義是附帶；T8 排除『只提出新環境』的論文"
+          },
+          {
+            "id": "2407.18901",
+            "contribution": "建立支持多種完成路徑的可控環境終態判準框架，用狀態基單元測試檢測副作用",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要貢獻是環境與基準（AppWorld Engine），分數定義是附帶"
+          },
+          {
+            "id": "2107.03374",
+            "contribution": "透過重複取樣開創 pass@k 無偏估計方法，成為代碼生成可靠性度量的業界標準",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "1709.06560",
+            "contribution": "揭示深度 RL 評估中種子變異與非決定性環境對結果的深刻影響，建立再現性指導原則",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2108.13264",
+            "contribution": "推薦四分位中位數與分層 bootstrap 置信區間，建立深度 RL 評估的統計方法論",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2411.00640",
+            "contribution": "系統介紹如何在 LLM 評估中加入統計誤差棒，提升可靠性度量的嚴謹性",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2103.03098",
+            "contribution": "模型基準的全過程方差分析，多層級拆解評估中的方差來源（資料抽樣、超參數、初始化）",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2602.16666",
+            "contribution": "提出代理可靠性的四維度度量框架（一致性、魯棒性、可預測性、安全性），揭示能力提升未必帶來可靠性改善",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2406.12045",
+            "contribution": "引入 pass^k 度量評估多次試驗的一致性，揭示 agent 行為在重複運行間的不穩定性",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2305.20050",
+            "contribution": "全面比較過程監督與結果監督訓練方法，證明分步評估對數學推理可靠性訓練的優越性",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": "主要貢獻是訓練信號（process supervision vs outcome supervision），屬 T4『process reward』範疇"
+          },
+          {
+            "id": "2401.13178",
+            "contribution": "奠定進度率作為多輪 agent 過程度量的評估框架，細分對話中的增量進展",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2408.04682",
+            "contribution": "引入中間里程碑與陷阱機制，允許在任意軌跡上的部分分數評估，支持狀態依賴性檢查",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2406.12373",
+            "contribution": "設計評估關鍵節點完成度的度量，引入動態環境下的時間敏感分數定義",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2404.06411",
+            "contribution": "提供模組化進度指標與重複率度量框架，量化代理探索效率",
+            "primary_node": "T8",
+            "is_water": true,
+            "objection": "influential 極低（2），引用僅 34 次，評估面狹窄（僅 2 個用例），不符『有影響力』的條件"
+          },
+          {
+            "id": "2211.14275",
+            "contribution": "全面比較過程與結果監督對數學推理的影響，區分推理過程錯誤與最終答案錯誤",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": "主要貢獻是訓練方法的比較研究，屬 T4『訓練信號』範疇"
+          },
+          {
+            "id": "2403.04132",
+            "contribution": "大規模眾包人類偏好評估平台，引入 Bradley-Terry 模型進行可靠的分數聚合與排名",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要貢獻是人評協定與排行榜平台（T7），不是任務完成分數聚合"
+          },
+          {
+            "id": "2407.01502",
+            "contribution": "展示成本與準確率的帕累托邊界，推動多目標優化評估框架，量化 agent 複雜度的成本代價",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2105.03748",
+            "contribution": "建立用戶滿意度自動模擬與評估方法，用 5 級滿意度標度提供任務型對話的自動評估",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": "主要貢獻是使用者模擬器與滿意度預測（T6），不是任務完成分數定義"
+          },
+          {
+            "id": "2010.02495",
+            "contribution": "多層級使用者滿意度度量，聯合轉向級與對話級評估指標的共同學習",
+            "primary_node": "T6",
+            "is_water": false,
+            "objection": "主要貢獻是滿意度預測模型（T6），findings 旗標非主會議；findings 中 T8 需要『把滿意度當成一軸與成本聚合』的論文"
+          },
+          {
+            "id": "2010.06595",
+            "contribution": "強調 NLP 評估的統計檢驗力問題，推動負責任的實驗設計與功率分析",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": ""
+          },
+          {
+            "id": "2406.10229",
+            "contribution": "現代大型模型評估中的種子變異量化，提供基準穩定性的實證估計與減少變異的方法",
+            "primary_node": "T8",
+            "is_water": false,
+            "objection": "場景是預訓練基準而非 agent；influential 4 邊界線"
+          },
+          {
+            "id": "2502.03461",
+            "contribution": "揭示標籤錯誤對基準可靠性的威脅，提出『白金基準』的新標準以確保評估品質",
+            "primary_node": "T7",
+            "is_water": false,
+            "objection": "主要貢獻是基準品質與標籤正確性（T7 評估可靠性），不是分數定義"
+          },
+          {
+            "id": "2312.08935",
+            "contribution": "無標註自動構造分步監督資料的方法，訓練過程獎勵模型實現強化學習",
+            "primary_node": "T4",
+            "is_water": false,
+            "objection": "主要貢獻是訓練資料自動生成與過程獎勵模型訓練（T4），不是評估分數定義"
+          },
+          {
+            "id": "2403.19056",
+            "contribution": "反事實資料增廣提升不滿意樣本的代表性，改善任務型對話滿意度估計的穩健性",
+            "primary_node": "T6",
+            "is_water": true,
+            "objection": "influential 0，引用 7 次，不符『有影響力』；主要貢獻屬 T6『使用者滿意度估計』"
+          },
+          {
+            "id": "2410.20774",
+            "contribution": "檢驗 LLM-as-a-Judge 對不確定性表達的敏感性，揭示評估本身的隱性偏差",
+            "primary_node": "T7",
+            "is_water": true,
+            "objection": "influential 1 極低；主要貢獻是評估方法的可靠性（T7），不屬 T8 分數定義；評估器偏差屬 T7『評估本身的可靠性』"
+          }
+        ],
+        "missing": [
+          {
+            "id": "2306.06070",
+            "title": "Mind2Web: Towards a Generalist Agent for the Web",
+            "subarea": "任務成功的判準",
+            "why": "首個大規模網頁 agent 基準，定義元素精準度、操作 F1 與步成功率等多維度終態判準，橫跨 137 個網站 2000+ 任務，1453 引用 203 influential"
+          },
+          {
+            "id": "1604.04562",
+            "title": "A Network-based End-to-End Trainable Task-oriented Dialogue System",
+            "subarea": "任務成功的判準",
+            "why": "奠基論文：首次引入 Inform rate 與 Success rate 的任務完成判準，成為任務型對話評估的標準，1162 引用 150 influential"
+          },
+          {
+            "id": "1906.04908",
+            "title": "SPoC: Search-based Pseudocode to Code",
+            "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+            "why": "pass@k 評估指標的原始出處，開創代碼生成模型可靠性度量標準，收集 18,356 程式與測試用例"
+          },
+          {
+            "id": "1909.03004",
+            "title": "Show Your Work: Improved Reporting of Experimental Results",
+            "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+            "why": "期望驗證表現與計算成本關係的量化分析，建立計算預算與評估嚴謹性的框架，推動實驗報告最佳實踐"
+          }
+        ]
+      }
+    }
+  ]
+}

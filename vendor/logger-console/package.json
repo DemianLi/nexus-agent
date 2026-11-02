@@ -1,0 +1,35 @@
+{
+  "name": "@nexus/cordis-plugin-logger-console",
+  "description": "Console logger exporter for cordis",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "types": "lib/types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./lib/types/index.d.ts",
+      "default": "./lib/index.js"
+    },
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "src"
+  ],
+  "scripts": {
+    "prepare": "tsc -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "@nexus/cordis": "workspace:*",
+    "cosmokit": "^1.8.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
+  }
+}

@@ -15,7 +15,7 @@ import {
   GOAL_INVARIANT_PACKAGE,
   goalStreamInvariant,
 } from './invariant.js';
-import { renderGoalRoundPrompt } from './prompt.js';
+import { renderGoalRoundPrompt } from '@nexus/goal';
 
 /** 接上配套入口，回收到的違規。 */
 function watch(log: SessionLog): InvariantError[] {

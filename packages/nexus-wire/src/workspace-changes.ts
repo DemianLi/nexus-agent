@@ -31,6 +31,24 @@
  * @module
  */
 
+import type {
+  WorkspaceChangedFile,
+  WorkspaceChangesSummary,
+  WorkspaceDiffHunk,
+  WorkspaceFileDiff,
+} from '@nexus/plugin-workspace-changes/types';
+
+/**
+ * 四個資料格式住在生產它們的外掛（[#689](https://github.com/DemianLi/nexus-agent/issues/689)，照 dsh），這裡只轉出，
+ * web 的引用不改。**只有型別**：wire 對外掛的相依是 devDependencies，執行期沒有這條邊。
+ */
+export type {
+  WorkspaceChangedFile,
+  WorkspaceChangesSummary,
+  WorkspaceDiffHunk,
+  WorkspaceFileDiff,
+} from '@nexus/plugin-workspace-changes/types';
+
 /** `custom` 事件的 `data.name`：一輪的改動摘要好了。 */
 export const WORKSPACE_CHANGES = 'workspace/changes';
 
@@ -39,68 +57,6 @@ export interface WorkspaceChangesPayload {
   /** 那顆 `workspace/changes` 在 root 日誌裡的 `seq`，兩條路由拿它定位摘要。 */
   readonly seq: number;
 }
-
-/** 這一輪改過的一個檔案。 */
-export interface WorkspaceChangedFile {
-  /** 相對工作區根的路徑；在工作區外時是 server 上的絕對路徑。 */
-  readonly path: string;
-  /**
-   * 排序與標籤：工作區內是相對路徑，repo 裡、工作區之上的是 `../` 開頭，家目錄底下是 `~` 開頭，其餘是絕對路徑。
-   * 一律用斜線。
-   */
-  readonly display: string;
-  /** 新增的行數；二進位或過大的檔是 0。 */
-  readonly added: number;
-  /** 刪掉的行數；二進位或過大的檔是 0。 */
-  readonly deleted: number;
-  /** git 判成二進位，或有一側含 NUL 位元組。 */
-  readonly binary?: true;
-  /** 有一側超過大小上限，列出來但沒有行數、也沒有比較。 */
-  readonly oversized?: true;
-}
-
-/** `changes/summary` 的結果：一輪改了哪些檔。 */
-export interface WorkspaceChangesSummary {
-  /** 照 `display` 排序，最多上限那麼多個。 */
-  readonly files: readonly WorkspaceChangedFile[];
-  /** 完整的檔數，含被上限切掉的。 */
-  readonly total: number;
-  /** 全部檔案新增的行數，含被上限切掉的。 */
-  readonly added: number;
-  /** 全部檔案刪掉的行數，含被上限切掉的。 */
-  readonly deleted: number;
-}
-
-/** 一個 unified diff 的 hunk，上下文三行；每一行保留 `+`、`-` 或空白前綴。 */
-export interface WorkspaceDiffHunk {
-  /** 在這一輪開始時的內容裡從第幾行起，1 起算；那一側沒有行時是 1、行數 0。 */
-  readonly oldStart: number;
-  readonly oldLines: number;
-  /** 在這一輪結束時的內容裡從第幾行起。 */
-  readonly newStart: number;
-  readonly newLines: number;
-  readonly lines: readonly string[];
-}
-
-/** `changes/diff` 的結果：一個列出的檔在這一輪開始與結束時的比較。 */
-export type WorkspaceFileDiff =
-  | {
-      readonly kind: 'text';
-      readonly path: string;
-      readonly display: string;
-      /** 這一輪開始時檔案在不在。 */
-      readonly before: boolean;
-      /** 這一輪結束時檔案在不在。 */
-      readonly after: boolean;
-      /** 照檔案順序；兩側逐行相同時是空的。 */
-      readonly hunks: readonly WorkspaceDiffHunk[];
-      /** 逐行比較逾時，退成整檔替換。 */
-      readonly coarse: boolean;
-    }
-  /** git 判成二進位，或有一側含 NUL 位元組，不送內容。 */
-  | { readonly kind: 'binary'; readonly path: string; readonly display: string }
-  /** 有一側超過大小上限，不送內容。 */
-  | { readonly kind: 'oversized'; readonly path: string; readonly display: string };
 
 /**
  * 一輪改動摘要的路徑，`GET`，帶 `?seq=`。
@@ -118,4 +74,97 @@ export function changesSummaryPath(threadId: string): string {
  */
 export function changesDiffPath(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}/changes/diff`;
+}
+
+/**
+ * 一輪改動摘要的網址（路徑加查詢），`GET`。
+ *
+ * **查詢怎麼拼歸 wire**（[#684](https://github.com/DemianLi/nexus-agent/issues/684)），照 dsh
+ * `packages/client/ui-deliverables/src/changes.ts` 的 URL builder：用 `URLSearchParams` 拼，參數名住在這一處，
+ * web 與 harness 的測試都從這裡拿。參數名兩邊各拼一份的時候，harness 把它改名、連自己的測試一起改，
+ * web 照舊送舊名，server 回 400，兩邊的測試照樣綠。
+ *
+ * @param threadId - thread id，就是 root 會話的 id。
+ * @param seq - 那顆 `workspace/changes` 在 root 日誌裡的 `seq`。
+ * @returns 相對的網址，不含 base。
+ */
+export function changesSummaryUrl(threadId: string, seq: number): string {
+  return `${changesSummaryPath(threadId)}?${new URLSearchParams({ seq: String(seq) })}`;
+}
+
+/**
+ * 一個列出的檔的比較的網址（路徑加查詢），`GET`。理由同 {@link changesSummaryUrl}。
+ *
+ * @param threadId - thread id，就是 root 會話的 id。
+ * @param seq - 同 {@link changesSummaryUrl}。
+ * @param index - 那個檔在摘要 `files` 裡的位置。
+ * @returns 相對的網址，不含 base。
+ */
+export function changesDiffUrl(threadId: string, seq: number, index: number): string {
+  return `${changesDiffPath(threadId)}?${new URLSearchParams({
+    seq: String(seq),
+    index: String(index),
+  })}`;
+}
+
+function isChangedFile(value: unknown): value is WorkspaceChangedFile {
+  const file = value as Partial<WorkspaceChangedFile> | null;
+  return (
+    typeof file?.path === 'string' &&
+    typeof file.display === 'string' &&
+    typeof file.added === 'number' &&
+    typeof file.deleted === 'number'
+  );
+}
+
+/**
+ * `changes/summary` 回應的形狀檢查，同 dsh `isChangesSummary`：對不上就當成沒有，不讓半截的東西進畫面。
+ * 從 web 原樣搬來（#684），不順手收緊。
+ */
+export function isChangesSummary(value: unknown): value is WorkspaceChangesSummary {
+  const summary = value as Partial<WorkspaceChangesSummary> | null;
+  return (
+    Array.isArray(summary?.files) &&
+    summary.files.every(isChangedFile) &&
+    typeof summary.total === 'number' &&
+    typeof summary.added === 'number' &&
+    typeof summary.deleted === 'number'
+  );
+}
+
+function isHunk(value: unknown): value is WorkspaceDiffHunk {
+  const hunk = value as Partial<WorkspaceDiffHunk> | null;
+  return (
+    [hunk?.oldStart, hunk?.oldLines, hunk?.newStart, hunk?.newLines].every(
+      (field) => Number.isSafeInteger(field) && (field as number) >= 0,
+    ) &&
+    Array.isArray(hunk?.lines) &&
+    hunk.lines.every((line) => typeof line === 'string' && /^[+ -]/.test(line))
+  );
+}
+
+/**
+ * `changes/diff` 回應的形狀檢查，同 dsh `isChangesDiff`：對不上就當成讀壞了。
+ * 從 web 的 `isFileDiff` 原樣搬來（#684），名字照 dsh。
+ */
+export function isChangesDiff(value: unknown): value is WorkspaceFileDiff {
+  const diff = value as Record<string, unknown> | null;
+  if (typeof diff?.path !== 'string' || diff.path === '') return false;
+  if (typeof diff.display !== 'string' || diff.display === '') return false;
+  if (diff.kind === 'binary' || diff.kind === 'oversized') return true;
+  return (
+    diff.kind === 'text' &&
+    typeof diff.before === 'boolean' &&
+    typeof diff.after === 'boolean' &&
+    typeof diff.coarse === 'boolean' &&
+    Array.isArray(diff.hunks) &&
+    diff.hunks.every(isHunk)
+  );
+}
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [WORKSPACE_CHANGES]: WorkspaceChangesPayload;
+  }
 }

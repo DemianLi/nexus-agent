@@ -1,0 +1,83 @@
+===================================================================
+--- a/components/ui/status-glyph.tsx
++++ b/components/ui/status-glyph.tsx
+@@ -20,10 +20,10 @@
+ const lerp = (a: number, b: number, k: number) => a + (b - a) * k
+ const mix = (a: Dot[], b: Dot[], k: number): Dot[] =>
+   a.map((dot, i) => ({
+-    x: lerp(dot.x, b[i].x, k),
+-    y: lerp(dot.y, b[i].y, k),
+-    o: lerp(dot.o, b[i].o, k),
+-    s: lerp(dot.s, b[i].s, k),
++    x: lerp(dot.x, b[i]!.x, k),
++    y: lerp(dot.y, b[i]!.y, k),
++    o: lerp(dot.o, b[i]!.o, k),
++    s: lerp(dot.s, b[i]!.s, k),
+   }))
+ 
+ /** The corners the three points rest on when they make the mark's triangle. */
+@@ -104,9 +104,9 @@
+     const p = cycle(t - i * 0.26, 2.6) * 4
+     const side = Math.floor(p) % 4
+     const along = easeInOut(p - Math.floor(p))
+-    const from = SQUARE[side]
+-    const to = SQUARE[(side + 1) % 4]
+-    return { x: lerp(from.x, to.x, along), y: lerp(from.y, to.y, along), o: [1, 0.6, 0.3][i], s: 1 }
++    const from = SQUARE[side]!
++    const to = SQUARE[(side + 1) % 4]!
++    return { x: lerp(from.x, to.x, along), y: lerp(from.y, to.y, along), o: [1, 0.6, 0.3][i]!, s: 1 }
+   })
+ 
+ /** The square circuit laid down flat and seen from above its near edge. */
+@@ -115,10 +115,10 @@
+     const p = cycle(t - i * 0.26, 2.6) * 4
+     const side = Math.floor(p) % 4
+     const along = easeInOut(p - Math.floor(p))
+-    const from = SQUARE[side]
+-    const to = SQUARE[(side + 1) % 4]
++    const from = SQUARE[side]!
++    const to = SQUARE[(side + 1) % 4]!
+     const dot = seen(...tilted(lerp(from.x, to.x, along) - 8, lerp(from.y, to.y, along) - 8, 0, 1.05, 0.3))
+-    return { ...dot, o: dot.o * [1, 0.7, 0.45][i] }
++    return { ...dot, o: dot.o * [1, 0.7, 0.45][i]! }
+   })
+ 
+ /**
+@@ -130,8 +130,8 @@
+     const at = cycle(t, hold * figures.length) * figures.length
+     const index = Math.floor(at) % figures.length
+     const into = (at - Math.floor(at)) * hold - (hold - change)
+-    const now = figures[index](t)
+-    return into <= 0 ? now : mix(now, figures[(index + 1) % figures.length](t), easeInOut(into / change))
++    const now = figures[index]!(t)
++    return into <= 0 ? now : mix(now, figures[(index + 1) % figures.length]!(t), easeInOut(into / change))
+   }
+   whole.parts = figures
+   return whole
+@@ -158,7 +158,7 @@
+   [0, 1, 2].map((i) => {
+     const p = cycle(t - i * 0.66, 2)
+     const out = easeOut(p)
+-    const far = { x: 8 + (CORNERS[i].x - 8) * 1.25, y: 8 + (CORNERS[i].y - 8) * 1.25 }
++    const far = { x: 8 + (CORNERS[i]!.x - 8) * 1.25, y: 8 + (CORNERS[i]!.y - 8) * 1.25 }
+     return {
+       x: lerp(8, far.x, out),
+       y: lerp(8, far.y, out),
+@@ -211,7 +211,7 @@
+     ["compacting", ["gather"]],
+   ] as const
+ ).flatMap(([activity, names]) =>
+-  (FIGURES[activity].parts ?? [FIGURES[activity]]).map((figure, i) => ({ activity, name: names[i], figure }))
++  (FIGURES[activity].parts ?? [FIGURES[activity]]).map((figure, i) => ({ activity, name: names[i]!, figure }))
+ )
+ 
+ /** How long one figure takes to become another. */
+@@ -310,7 +310,7 @@
+ 
+     // Offscreen glyphs keep their clock, but do not schedule frames.
+     const observer = new IntersectionObserver((entries) => {
+-      visible = entries[entries.length - 1].isIntersecting
++      visible = entries[entries.length - 1]!.isIntersecting
+       refresh()
+     })
+     observer.observe(element)

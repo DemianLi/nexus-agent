@@ -17,10 +17,11 @@
 
 | 問題 | 結論 | 在 |
 | --- | --- | --- |
-| 清單怎麼排 | 照 nexus 的 UI 概念分 8 區、36 項；每項標 wire 上有沒有資料（沒資料的元件先做只是空殼） | §2 |
+| 清單怎麼排 | 照 nexus 的 UI 概念分 8 區、37 項（第 37 項是 2026-09-25 從第 9 項拆出來的）；每項標 wire 上有沒有資料（沒資料的元件先做只是空殼） | §2 |
 | 現在就能做的 | 純前端：殼層、手機抽屜、主題、toast；wire 已有資料：會話列表、訊息流（human／ai／tool）、核准、提問、狀態、停止、回饋、slash 命令 | §2 的 P0 |
 | wire 還沒有的 | reasoning、連線狀態、todo、goal、plan mode、context 用量、佇列、子代理對話檢視、交付檔案 | §2 的 P1 |
 | ↑ 這一列 2026-09-22 已複查 | 交付檔案那一項已經做完；「子代理血緣」是這一列的筆誤（血緣＝第 15 列，本來就是 P0，P1 的是第 16 列的唯讀檢視）；其餘七項逐項的現況見 §2.0 | §2.0 |
+| 2026-09-25 現況 | 做完 18、做了一部分 4、缺的那塊是刻意不做 3、沒做 12（含同一天 #640 做掉的右側欄；2026-09-26 #645 做掉 29 送出佇列，成為做完 19、沒做 11；同日 #655 做掉 8 標頭的標題，工作目錄與背景工作還沒，移到做了一部分：做了一部分 5、沒做 10；2026-10-01 複查：16 子代理檢視改拍板為刻意不做，做了的部分見第 16 列，成為做完 20、做了一部分 5、缺的那塊是刻意不做 5、沒做 8，共 38 項，第 38 項是 2026-09-28 從 24 拆出來的）；盤點時寫「沒有一件是 web 自己就能做的」錯了一項：右側欄的內容早就有了，只是放在 Sheet。其餘沒做的都要 harness 先投影、先開一條路，或是整塊新功能 | §2.0.1 |
 | **最大的一個設計分歧** | dsh 的核准與提問都是 **composer takeover**（取代輸入框），不是插在對話裡的卡；nexus 現在是卡片列在畫面上（`App.tsx:319–333`） | §2.4 |
 | Libraries.dev 能拿什麼 | **動效 token 整組可以拿**（時長、曲線、位移、縮放、模糊）；**效果套件** `thinking-orbs`、`border-beam` 是 MIT npm 套件、peer 只要 React、有 reduced-motion 與 light/dark 自動偵測，可以直接裝 | §3 |
 | Libraries.dev 不能照搬的 | **只有暗色**（`html[data-theme="dark"]` 寫死）、色票是 hex 不是 shadcn 的 oklch token、標題字 **Saans** 沒附授權、疑為商用字型 | §3.4 |
@@ -65,7 +66,7 @@
 | goal | **有**：`goal/change`，`plugin-goal/service.ts:565`，出廠有裝 | 零 | 無（命令面走 slash 通） |
 | plan mode | **有**：`plan/mode`，`plugin-plan-mode/index.ts:295`／`:405`，出廠有裝 | 零 | 無（`/plan` 走 slash 通） |
 | context 用量 | **有**：`model/usage`，`core/model-usage.ts:161`，出廠有裝 | 零 | 無 |
-| 佇列 | — | — | 無（`composer.tsx` 裡沒有） |
+| 佇列 | **2026-09-26 有**：伺服器端的送出佇列（#637），落盤 | `ConversationState.inbox`（`custom` 的 `inbox`） | **有**：`queue-dock.tsx`（#645） |
 | 子代理對話檢視 | 有（血緣已是 P0） | 血緣已有 `Attribution` | 血緣已畫，唯讀檢視沒有 |
 | 附件 | 下行交付**已做完**；上行（人傳檔給模型）源頭全無 | 下行有 | 下行有四張卡 |
 
@@ -84,50 +85,69 @@
 
 §4 的 research 一列（「wire 要補哪些 P1 資料」）問的就是這件事；那一列當時沒有被開成卡，這一節就是它的答案。
 
+### 2.0.1 現況盤點（2026-09-25，develop `9ef473b`）
+
+底子是同一天早上在 develop `2525fa8` 做的逐項盤點：每項拆成 web 畫不畫、wire 有沒有送、日誌有沒有這筆三層讀程式碼，「沒有」都附過 grep。之後合進來的 #597、#600、#605、#611、#618、#626、#628 逐張對過再改狀態。盤點本身沒有實跑 serve；實跑過的是各張卡自己的驗收。
+
+| 狀態 | 項 |
+| --- | --- |
+| 做完了（20） | 24 計劃審核（#654，2026-09-28：面板、計劃卡、全文分頁）、29 送出佇列（#645，2026-09-26）、1 App 殼（#640 補上右側欄）、2 手機抽屜、3 主題、4 連線狀態（#593）、9 歷史分頁（#618）、10 使用者訊息、11 助理訊息、12 推理（#527）、13 工具卡四態、19 交付檔、26 輸入框、27 slash 選單、31 狀態列、32 todo（#575）、34 用量表（#528）、35 讚踩與回饋、36 toast、5 右側欄（#640） |
+| 做了一部分（5） | 28 `@` 引用（#653，2026-09-28：檔案與資料夾；#713，2026-09-29：會話與子代理；skill、chip 還沒）、 8 會話標頭（#655 做了標題；工作目錄、背景工作還沒）、6 會話列表（按內容搜尋 #760、即時狀態 #632 已接上；釘選、封存、改名要 harness：#633）、14 按工具換呈現（終端、網頁沒有生產者；讀圖會讓那一輪 400，harness 修在 #642）、15 子代理標示（重新整理後歷史只讀 root 那份） |
+| 做了、缺的那塊是刻意不做（5） | 16 子代理對話檢視（2026-10-01 demian 拍板子代理留在主對話，不做 dsh 那種進入子代理的獨立檢視；做了的是委派卡上的背景子代理：跑著、閒著、收線的狀態 #870、寄來的話與 `send_message` 傳給誰 #864／#868、展開讀它自己的對話 #872／#874、對它傳話與單獨停止 #873）、7 空白 hero 的建議按鈕（原型那排是假資料）、21 核准的拒絕理由（照 dsh：核准的結果詞彙刻意封閉在允許／拒絕，要帶意見的走提問通道；#654 Q2，2026-09-28 移過來）、22 決定紀錄只存在本地（#220）、23 提問的「放棄整組」（❌ 就是停止這一輪，§2.4） |
+| 沒做（8） | 17 逐輪用量、18 壓縮列、20 附件、25 權限模式、30 模型選擇、33 目標列、37 輪次側軌、38 計劃模式的指示與切換（2026-09-28 從 24 拆出來） |
+
+沒做的按誰先動分三類：
+
+- **等 harness 先投影**（日誌有、線上沒有）：38（原 24 的另一半，要 `plan/mode`）、18、33 已請 dev-harness 排，順序計劃模式 → 壓縮列 → 目標列（2026-10-01 發現當時沒有對應的 issue，是漏接，同日由 demian 拍板照這個順序開卡：[#895](https://github.com/DemianLi/nexus-agent/issues/895) 計劃模式、[#896](https://github.com/DemianLi/nexus-agent/issues/896) 壓縮列、[#897](https://github.com/DemianLi/nexus-agent/issues/897) 目標列，三張都只做 harness 與 wire 的投影，三張的 harness 半邊都已在 2026-10-02 合進 develop，web 那半各開了一張：[#900](https://github.com/DemianLi/nexus-agent/issues/900) 計劃標籤、[#944](https://github.com/DemianLi/nexus-agent/issues/944) 壓縮標記、[#945](https://github.com/DemianLi/nexus-agent/issues/945) 目標列，現在等的是 web）；17 要逐次的輸入與輸出；25 是 `sandbox/mode`；37 要整條對話的輪次索引。
+- **要先開一條路**：8 標頭的標題只在開了會話日誌時隨列表送，要每種情況都有得另開一條拿當前標題的路。harness 那一條由 [#647](https://github.com/DemianLi/nexus-agent/issues/647) 開：即時與歷史都送 `custom` 的 `title`，沒開落盤也有，折疊器的 `title` 讀得到。web 那一刀是 #655（2026-09-26）：標頭、瀏覽器分頁標題、側欄目前這一列都讀它。
+- **整塊新功能**（三層都沒有，先 grilling）：20、30。16 原本也在這裡，2026-10-01 拍板不做獨立檢視，移到「缺的那塊是刻意不做」。28 原本也在這裡，檔案與資料夾那一塊由 #653 做掉（2026-09-28）。5 右側欄原本也歸在這裡，是錯的：dsh 右側欄的兩種主要內容（改動比對 #443、交付預覽 #452）早就做了、放在 Sheet，前端自己就做得了，同一天由 #640 做掉。
+
 ### 2.1 殼層與版面
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | App 殼（三欄：會話列表／對話／右側欄） | —（純前端） | `ui-layout`（`AppFrame`、`SIDEBAR_AUTO_COLLAPSE = 1024`） | sc `sidebar`（手機 Sheet） | 卡片縮放 `--resize-dur 300ms` | RWD 主載體 |
-| 2 | 手機抽屜與頂部列 | —（純前端） | `ui-layout` 的 `narrowExpanded` | sc `sheet`、`drawer` | 下拉 open 250ms／close 150ms、scale 0.97 | 1024 以下 |
+| 1 | App 殼（三欄：會話列表／對話／右側欄） | —（純前端） | `ui-layout`（`AppFrame`、`SIDEBAR_AUTO_COLLAPSE = 1024`） | sc `sidebar`（手機 Sheet） | 卡片縮放 300ms | RWD 主載體；2026-09-25 #640 補上右側欄（1024 以上停靠、以下全螢幕覆蓋），殼層三欄齊了 |
+| 2 | 手機抽屜與頂部列 | —（純前端） | `ui-layout` 的 `narrowExpanded` | sc `sheet`、`drawer` | 抽屜照 SG 的 sheet：transition 200ms、位移 2.5rem 加淡入淡出；下拉選單沒有動畫（規格 §7） | 1024 以下 |
 | 3 | 主題切換（light／dark／system） | —（純前端） | `ui-theme`（`--dsw-*` token、`ThemeRuntime`） | shadcn `.dark` | — | 見 §3.4 分歧 |
-| 4 | 連線狀態指示 | P1（`nexus-wire` 的 `client.ts`／`sse.ts` 沒有連線狀態；`WireChannel` 只是頻道名）**——2026-09-22 複查：這句仍然成立，但畫面上已有前端自推的簡版（`use-conversation.ts:187` 的 `connected`／`connectionError`，`StatusLine` 收）** | `ui-primitives/ConnectionIndicator` | — | `thinking-orbs` `connecting` | |
-| 5 | 右側欄（檔案、預覽、終端） | P1 | `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-documentpreview`、`ui-sidebar-terminal` | AIE `file-tree`、`terminal` | 側欄滑入 | 目前 nexus 沒有這一面 |
+| 4 | 連線狀態指示 | P1（`nexus-wire` 的 `client.ts`／`sse.ts` 沒有連線狀態；`WireChannel` 只是頻道名）**——2026-09-22 複查：這句仍然成立，但畫面上已有前端自推的簡版（`use-conversation.ts:187` 的 `connected`／`connectionError`，`StatusLine` 收）** | `ui-primitives/ConnectionIndicator` | — | `thinking-orbs` `connecting` | 2026-09-25 #593（PR #597）：察覺斷線、照 dsh 退避自動重連，接回時整份重建 |
+| 5 | 右側欄（檔案、預覽、終端） | P1 | `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-documentpreview`、`ui-sidebar-terminal` | AIE `file-tree`、`terminal` | 側欄滑入 | 2026-09-25 #640 做了：一格停靠＋分頁，住著改動比對（#443）與交付預覽（#452），兩者之前放在 Sheet；分格、浮窗、拖放、引導頁不做，檔案樹、終端要 harness 先有列檔等路 |
 
 ### 2.2 會話
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 6 | 會話列表（分組、搜尋、狀態點） | P0（`ThreadSummary`、`ThreadListResult`） | `ui-sidebar`（multi-level tree、search、grouping、state dots）、`ui-primitives/StateDot` | — | 列表 stagger 40ms | 現有 `thread-list.tsx` |
+| 6 | 會話列表（分組、搜尋、狀態） | P0（`ThreadSummary`、`ThreadListResult`） | `ui-sidebar`（multi-level tree、search、grouping、state dots）、`ui-primitives/StateDot` | — | 列表 stagger 40ms | `thread-list.tsx`；2026-09-25 #611 補分組（今天、昨天、過去 7 天、更早）、標題搜尋、執行中的點。按內容搜尋、即時狀態、釘選封存改名要 harness，已開 #631、#632、#633；2026-09-26 #631 拍板照 dsh 出廠預設關，關著時側欄仍只比標題；2026-09-28 #632 接上即時狀態（在跑、等核准／提問／計劃審核、跑完沒看，走全域下行），清單本身仍是打開側欄與全域下行接上時各抓一次的快照（會話增減還不推）；2026-09-28 #760 接上按內容搜尋：打完停 250ms 問伺服器，內容命中合進原本的分組、附上片段並標亮；伺服器拒絕（出廠沒開就是）或失敗時，那一次只比標題，跟 #610 一樣；2026-10-25 #1696 狀態改成左側色條＋第二行的狀態字（S1-C） |
 | 7 | 新對話／空白狀態 hero | P0 | `ui-conversation/.../EmptyHero`、`HeroShell` | AIE `suggestion` | `thinking-orbs` `breathing` | |
-| 8 | 會話標頭（標題、工作目錄、背景工作） | P1 | `ui-jobs`、`ui-open-in-app`、`ui-schedule` | — | — | |
-| 9 | 歷史分頁載入（往回捲） | P0（`ThreadHistoryQuery`） | `ui-chat/TurnNavigator` | sc `message-scroller` | skeleton | #306 已做讀取 |
+| 8 | 會話標頭（標題、工作目錄、背景工作） | P1 | `ui-jobs`、`ui-open-in-app`、`ui-schedule` | — | — | 2026-09-26 #655 做了標題：有標題寫標題，空白寫「新會話」，有輪次沒人打過字的跟列表同一句；瀏覽器分頁標題照 dsh「標題 — nexus-agent」；側欄目前這一列跟著即時標題換字。工作目錄與背景工作還沒 |
+| 9 | 歷史分頁載入（往回捲） | P0（`ThreadHistoryQuery`） | `ui-chat/ChatView`（`loadOlderAnchored`：一顆按鈕、自己記錨點） | sc `message-scroller` | —（**不做骨架**：跟真的內容不一樣高，換掉那一下又要補位置；規格 §7 也把載入歷史列在不動的那一類） | #306 做了讀取與按鈕；2026-09-25 補完（`earlier-pager.tsx`）：捲到頂端附近而且有往上的意圖才自動換一頁，按鈕留著；讀取中「讀取中…」；失敗畫在按鈕旁、改「再試一次」、不自動重試；讀完報讀接上幾則。輪次側軌拆成第 37 項 |
+| 37 | 輪次導覽側軌（每輪一格，點到還沒載入的輪先翻到那裡） | P1（wire 沒有整條對話的輪次索引） | `ui-chat/TurnNavigator` | — | — | 2026-09-25 從第 9 項拆出來；要 harness 先補索引，有需要再開卡 |
 
 ### 2.3 訊息流
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 10 | 使用者訊息 | P0（`HumanEntry`） | `ui-chat/MessageItem`、`ui-primitives/user-text` | sc `message`、`bubble`；AIE `message` | 送出時 slide-up 8px＋fade | |
-| 11 | 助理訊息（markdown、串流中、被停止） | P0（`AiEntry`，含 `stopped`） | `ui-chat/AssistantMarkdown`、`AssistantNodeView` | AIE `message`（streamdown） | 字元 shimmer（`Solving....` 那種） | |
-| 12 | 推理區塊 | P1（`AiEntry` 沒有 reasoning 欄位，只有 `text`／`streaming`／`attribution`／`error`／`stopped`；`conversation.ts:679` 註解 reasoning 的 delta「這一版不呈現」（2026-09-22 複查：原記 `:496`，行號已漂）） | `ui-chat/ReasoningRow` | AIE `reasoning`、`chain-of-thought` | `thinking-orbs` `composing`（20px） | |
+| 11 | 助理訊息（markdown、串流中、被停止） | P0（`AiEntry`，含 `stopped`） | `ui-chat/AssistantMarkdown`、`AssistantNodeView` | AIE `message`（streamdown） | 字元 shimmer（`Solving....` 那種） | #608 已做完：撞到輸出上限（`AiEntry.maxTokens`）的那一輪，最後一則回覆底下一行灰字「（已達輸出上限，這一輪沒寫完）」，沒字的那則也畫；不給續寫、重試鈕（同 dsh 延後）。子代理撞到上限時 `task` 卡那句英文換成中文 |
+| 12 | 推理區塊 | P1（`AiEntry` 沒有 reasoning 欄位，只有 `text`／`streaming`／`attribution`／`error`／`stopped`；`conversation.ts:679` 註解 reasoning 的 delta「這一版不呈現」（2026-09-22 複查：原記 `:496`，行號已漂）） | `ui-chat/ReasoningRow` | AIE `reasoning`、`chain-of-thought` | `thinking-orbs` `composing`（20px） | #527 已做完：推理段落送上線並畫成摺疊區塊 |
 | 13 | 工具呼叫卡（四種狀態） | P0（`ToolEntry.status`） | `ui-tool/ToolCallTree`、`toolviews/` | AIE `tool` | 執行中 `thinking-orbs` `working` | 狀態映射見選型筆記 §3.1 |
-| 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`text`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 `--resize-dur` | dsh 是「按工具名換呈現」的 slot |
+| 14 | 工具專屬呈現（讀檔、搜尋、終端、網頁、diff、JSON） | P0（`ToolEntry.input`／`text`／`meta`） | `ui-primitives/ReadBlock`、`SearchBlock`、`TerminalBlock`、`WebBlock`、`DiffBlock`、`JsonTree` | AIE `code-block`、`terminal`、`schema-display`、`stack-trace` | 展開 300ms | dsh 是「按工具名換呈現」的 slot。#601 做了 diff（執行中從參數算）與通用卡的結果文字；2026-09-25 #625 讀結果的 `meta`（harness #619）：讀檔卡（行號＋整段高亮）、搜尋卡（分檔的命中、路徑清單，截斷時「顯示 X／共 N」）、改檔完成後畫實際套用的 diff。終端（產品路徑上沒有 `execute`）、網頁、JSON 樹還沒有；出廠沒有抓網頁的工具（MCP 接進來的工具名不固定，走通用卡），網頁卡目前沒有生產者；`run_javascript` 走通用卡的 `code` 類（參數處高亮那段程式、下面接結果），dsh 的 `run_code` 也是走通用列的 `code` 變體、沒有專屬卡（`tool-call-model.ts:64`、`:222`，`ToolRow.tsx:294`，clone `6b1808f`），兩邊一樣；dsh 的 `JsonTree` 只用在 trajectory 檢視器，不在工具卡；讀圖（2026-09-25 查過，dev-harness 用真端點驗）：deepagents 的 `read_file` 讀圖片回一顆 `{type:'image',…}`，`@langchain/openai` 原樣塞進 `role: tool`，NVIDIA 端點回 400（tool 訊息只收文字，換成 `image_url` 塊也是同一個 400，MCP 工具回圖同樣會中），那則訊息又已進了歷史，之後每一輪都失敗（實測：讀到圖的那一輪與下一輪都是 `turn/failed`；沒給 `--workspace` 時模型先 `write_file` 一張 base64 圖再讀，也會讓 thread 之後都失敗；已經壞掉的舊 thread 重新載入會把圖原樣重放，救不回來）；dsh 的一般 `read` 碰到二進位直接拒絕、圖片另走要附件儲存的 `read_image`，所以 harness 照 dsh 在三個地方擋（#642：寫到磁碟的 backend 和沒給 `--workspace` 時用的虛擬 FS 都讓 `read_file` 拒絕二進位檔，回 `Error: cannot read "<path>": binary file`，`isError` 為 true；MCP 回的圖換成一段文字說明），web 走現有的錯誤卡就好，不用另做讀圖卡。#602（PR #628）之後讀檔一頁可到 2000 行，meta 超過上限就整格不給、退回通用卡（第一次讀約 4%）；#630 把讀檔 meta 的上限放寬到 100,000 位元組，語料（nexus 587 檔、dsh 5567 檔）上一個都不再掉，跳脫字元多的內容（tab 縮排、大量引號）仍可能掉 |
 | 15 | 子代理歸屬標示 | P0（`Attribution`）**——2026-09-22 已實作：`tool-card.tsx:52` 的 `AttributionBadge` ＋ transcript 縮排** | `ui-subagent/SubagentHeaderLineage` | AIE `agent` | — | nexus「未歸屬」要照樣顯示 |
-| 16 | 子代理對話檢視（唯讀 composer） | P1 | `ui-subagent/SubagentReadOnlyComposer` | — | — | |
-| 17 | 回合分隔與用量 | P1 | `ui-chat/TurnUsagePanel`、`StatsPills`、`TurnTailNodeView` | AIE `context` | 數字滾動 | |
-| 18 | 壓縮／系統注入列 | P1 | `ui-chat/CompactionItem`、`ContextInjectionRow`、`SystemPromptRow` | AIE `checkpoint` | — | |
+| 16 | 子代理對話檢視（唯讀 composer） | P1 | `ui-subagent/SubagentReadOnlyComposer` | — | — | 2026-10-01 拍板：子代理留在主對話裡，不做獨立檢視（折疊器本來就把子代理的卡併在主對話）。換成委派卡上的背景子代理：狀態（#870）、寄來的話與傳給誰（#864、#868）、展開讀它自己的對話（#872、#874）、傳話與單獨停止（#873），都是 web 自己做的 |
+| 17 | 回合分隔與用量 | P1 | `ui-chat/TurnUsagePanel`、`StatsPills`、`TurnTailNodeView` | AIE `context` | 數字滾動 | #574（PR #600）在頂列畫整條對話累計的 token 與時間，那是總帳；逐輪的用量還沒有，要線上逐次帶輸入與輸出，跟總帳是兩份投影 |
+| 18 | 壓縮／系統注入列 | P1 | `ui-chat/CompactionItem`、`ContextInjectionRow`、`SystemPromptRow` | AIE `checkpoint` | — | 2026-09-25 請 dev-harness 排投影，順序：計劃模式 → 壓縮列 → 目標列；2026-10-01 開了 [#896](https://github.com/DemianLi/nexus-agent/issues/896)，只管壓縮那一列（系統注入列與系統提示列不在內），「被壓掉多少」先只有訊息則數、沒有 token 數（要 token 數得改日誌格式，未定）；2026-10-02 harness 半邊已合（PR #901：`compaction` 項目帶 `cutoff`「前 N 則」、`saved`、摘要全文）；web 那半是 [#944](https://github.com/DemianLi/nexus-agent/issues/944) |
 | 19 | 交付檔案列 | ~~P1~~ **P0（2026-09-22 已做完）** | `ui-deliverables`（`ProducedFiles`，有 `@container` 斷點） | AIE `artifact`、`attachments` | — | |
-| 20 | 附件（輸入與訊息中的圖） | P1 | `ui-attachment` | sc `attachment`；AIE `attachments` | — | |
+| 20 | 附件（輸入與訊息中的圖） | P1 | `ui-attachment` | sc `attachment`；AIE `attachments` | — | 2026-09-26 #715 拍板照 dsh 做：harness 那一刀 #732、web 那一刀 #733。**2026-10-09 已做完**（#731 已關：11b 帶 `tools` 且圖在第一則使用者訊息會 400，#1223 改宣告為純文字、另收圖模型用 `meta/llama-3.2-90b-vision-instruct`）：輸入框選檔／貼上／拖放、草稿附件列（可移除、上傳進度與取消）、送出帶收據（PR #1222 打開閘門）、被拒時錯誤畫出來且草稿與附件留著（模型不收圖）、人的泡泡與排隊列上的附件（web PR #1224，harness #1225；排著的插話也畫，PR #1230）、已送出的圖畫縮圖並可點開看原圖（PR #1228，讀圖路由 harness #1226；讀不到退回名字＋大小的標籤）、一般檔案畫成檔名與大小（讀圖路由只給圖，檔案不回讀）。**工具結果裡的圖今天沒有生產者，沒做也不用做卡**：產品路徑上沒有 `read_image`（只在 `binary-read.ts` 與 `model-catalog.ts` 的註解裡提到），#642 讓 `read_file` 拒絕二進位檔，MCP 回的圖在 `packages/nexus-plugin-mcp/src/project-content.ts` 換成 `[image unavailable: …]` 文字（NVIDIA 對 `role: tool` 裡的圖回 400）；有了生產者再開卡。斜線命令也帶附件（PR #1232：`slash.run` 帶 `attachments`，命令有宣告 `input.attachments` 才收，目前只有 `/goal` 的建立與改目標；其餘命令回「不收附件」，草稿文字與附件卡留著，光打 `/feedback` 不帶）。插話（#710）排著時附件標籤也畫（PR #1230）。**實跑（2026-10-09）**：nemotron 打 `/goal` 附 `note.txt`，開出的那一輪畫出附件標籤與固定那句英文，模型讀檔答出暗號；`/permission` 帶附件被拒，草稿與附件都還在。 |
 
 ### 2.4 人在迴圈裡
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 21 | 核准（整批 `actions`、允許／拒絕＋理由） | P0（`PendingApproval`、`DecisionEntry`） | `ui-approval/ApprovalPanel`：**"Composer takeover for one pending approval waterfall"**（`ApprovalPanel.tsx:1`）；`ui-primitives/RiskConfirmation` | AIE `confirmation`（逐顆、卡內，不合 #317） | 輸入框換成核准面板時 `border-beam` `pulse-inner` | 現有 `approval-card.tsx` |
+| 21 | 核准（整批 `actions`、允許／拒絕＋理由） | P0（`PendingApproval`、`DecisionEntry`） | `ui-approval/ApprovalPanel`：**"Composer takeover for one pending approval waterfall"**（`ApprovalPanel.tsx:1`）；`ui-primitives/RiskConfirmation` | AIE `confirmation`（逐顆、卡內，不合 #317） | 輸入框換成核准面板時 `border-beam` `pulse-inner` | 現有 `approval-card.tsx`。**拒絕理由刻意不做**（#654 Q2，2026-09-26 拍板）：照 dsh，核准的結果詞彙刻意封閉在允許／拒絕（`.agents/notes/archived/feature/2026-07-07-plan-mode.md` 的 Alternatives），要帶意見的走提問通道——計劃審核就是這樣改過去的 |
 | 22 | 決定紀錄（人按了什麼） | P0（`DecisionEntry`） | `ui-chat/ApprovalCommand` | — | — | 與失敗工具卡並存 |
 | 23 | 提問（單選／多選／自由文字／跳過／放棄整組） | P0（`PendingQuestion`、`QuestionItem`、`AnswerEntry`） | `ui-user-questions/QuestionComposer`：**"ask_user_question composer takeover"** | sc `questionnaire`；AIE `question` | 題目切換 slide＋blur 2px | 現有 `question-card.tsx` |
-| 24 | 計劃審核 | P1 | `ui-user-questions/PlanReviewPanel` | AIE `plan` | — | nexus 有 plan-mode plugin，wire 沒送 |
-| 25 | 權限模式切換 | P1 | `ui-permission-presets` | — | 滑動 tab pill | |
+| 24 | 計劃審核 | ~~P1~~ **P0（2026-09-28 已做完）**（`QuestionItem.detail`＋`intent`，#652） | `ui-user-questions/PlanReviewPanel`、`ui-plan`（`PlanCard`、`PlanPreview`） | AIE `plan` | — | #654（2026-09-28）：認得 `plan-review` 意圖的提問換成審核面板（「計劃待審」、標題＋兩行摘要＋「查看全文」、要求修改／同意執行）；「要求修改」關掉這一題、這一輪不停；全文開在右側欄的「計劃」分頁，1024 以上待審時自動停靠一次；對話裡的計劃卡帶結果 chip，重新整理照樣在，舊會話（走核准的那種）也讀得出結果。規則在規格 §4.3。模式的指示與切換拆成第 38 項 |
+| 38 | 計劃模式的指示與切換 | P1 | `ui-plan/PlanModeControl`（輸入框的 plan chip） | — | — | 2026-09-28 從第 24 項拆出來；等 harness 把 `plan/mode` 送上線（2026-09-25 已請 dev-harness 排，排在壓縮列、目標列之前；2026-10-01 開了 [#895](https://github.com/DemianLi/nexus-agent/issues/895)，預計只送 `{ active }`：待切換那一欄讀碼結論是永遠為 false，未實跑；2026-10-02 harness 半邊已合（PR #899）；web 那半是 [#900](https://github.com/DemianLi/nexus-agent/issues/900)，三個題目待拍板） |
+| 25 | 權限模式切換 | P1 | `ui-permission-presets` | — | 滑動 tab pill | 2026-09-26 #437 拍板照 dsh 做、排後面：三組（唯讀＋要問、可寫工作區＋要問、全開＋不問），`/permission` 取代 `/sandbox`；harness 那一半先做，web 選單接在後面 |
 
 **分歧**：dsh 的 21、23 都是「輸入框被接管」，nexus 目前是 `App.tsx:319–333` 把 `pendings` 渲染成 `QuestionCard`／`ApprovalCard`。手機上 takeover 比較省空間，因為鍵盤起來時畫面上只剩輸入區那一塊。這要拍板，見 §4 的 fog。
 
@@ -136,26 +156,26 @@
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 26 | 輸入框（多行、送出、停止） | P0（`RunCancelCommand`） | `ui-conversation/.../InputBar` | AIE `prompt-input` | 執行中 `border-beam`（`md`，或手機上 `line`） | Libraries.dev 首頁卡就是這個組合 |
-| 27 | slash 命令選單 | P0（`SlashDescriptor`、`SlashListCommand`） | `ui-commands`、`ui-input-trigger`（`/`、`@` 偵測） | sc `command` | 選單 open 250ms／close 150ms | |
-| 28 | `@` 引用（檔案、會話、子代理、skill） | P1 | `ui-reference`、`ui-subagent` 的 `@` source、`ui-skill` | AIE `inline-citation` | — | |
-| 29 | 送出佇列 | P1 | `ui-conversation/.../QueueDock` | AIE `queue` | 項目 stagger 40ms | |
-| 30 | 模型選擇 | P1 | `ui-model-selection` | AIE `model-selector` | — | |
+| 27 | slash 命令選單 | P0（`SlashDescriptor`、`SlashListCommand`） | `ui-commands`、`ui-input-trigger`（`/`、`@` 偵測） | sc `command` | 住在 popover 裡，開關都是 100ms、`ease`（規格 §7，#1687） | |
+| 28 | `@` 引用（檔案、會話、子代理、skill） | P1 | `ui-reference`、`ui-subagent` 的 `@` source、`ui-skill` | AIE `inline-citation` | — | 2026-09-28 #653 做了檔案與資料夾：打 `@` 開選單、選了插純文字 `@/path`，規則在規格 §4.4；沒有 `--workspace` 就沒有選單。2026-09-29 #713 補了會話與子代理（同一個選單分三段；送出後泡泡畫成一小塊，同專案的點了切過去），skill 與 chip（標籤）沒做 |
+| 29 | 送出佇列 | P1 | `ui-conversation/.../QueueDock` | AIE `queue` | 只淡入淡出，不 stagger（#645 Q8） | 2026-09-26 做了（#645）：放在待辦面板下、換手區外；跑著時純文字送得出去、排進佇列，斜線命令照擋；人的話等開跑才畫。2026-09-25 拍板：照 dsh 放伺服器（列得出、可改可刪、落盤），harness 先做、web 等落地再畫；停止後排著的停住不跑（翻掉 #265 Q6「停完接著跑」）；插話另開（#710：2026-09-29 web 第一步，跑著時 Cmd/Ctrl+Enter 送插話、排著的畫在對話尾端；佇列列上的插話鈕與草稿空白時 Cmd/Ctrl+Enter 全部改成插話是第二步，同日做完）。harness 先修 #629（排著的訊息吞掉核准） |
+| 30 | 模型選擇 | P1 | `ui-model-selection` | AIE `model-selector` | — | 2026-09-26 #723 拍板：先做底下的型錄（#729，只動 harness、畫面不變），每會話選擇與這一項晚點，恢復條件寫在 #723 |
 
 ### 2.6 agent 狀態面板
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 31 | 狀態列（`idle`／`running`／`awaiting-input`／`failed`／`stopped`） | P0（`ConversationStatus`，`conversation.ts:175`） | `ui-primitives/StateDot` | AIE `shimmer` | `thinking-orbs` 依狀態換 state | 現有 `status-line.tsx` |
-| 32 | todo 清單 | P1 | `ui-conversation/.../TodoPanel` | AIE `task`、`queue` | 勾選 bounce（`--ease-bounce`） | nexus 有 todo plugin，wire 沒送 |
-| 33 | 目標列 | P1 | `ui-goal/GoalBar`（"docked above the composer"） | — | — | nexus 有 goal plugin |
-| 34 | context 用量表 | P1 | `ui-conversation/.../ContextMeter` | AIE `context` | 進度條 `--ease-smooth-out` | |
+| 32 | todo 清單 | P1 | `ui-conversation/.../TodoPanel` | AIE `task`、`queue` | 勾選 bounce（`--ease-bounce`） | nexus 有 todo plugin，wire 沒送；#575 已做完：待辦清單送上線並畫出來（上一句「wire 沒送」已過期） |
+| 33 | 目標列 | P1 | `ui-goal/GoalBar`（"docked above the composer"） | — | — | nexus 有 goal plugin；2026-09-25 請 dev-harness 排投影，排在計劃模式、壓縮列之後；2026-10-01 開了 [#897](https://github.com/DemianLi/nexus-agent/issues/897)，先只送持久的目標快照（階段、輪數），「會不會自己續行」要等 #638、#660、#661 落地後另開一張；2026-10-02 harness 半邊已合（PR #903）；web 那半是 [#945](https://github.com/DemianLi/nexus-agent/issues/945)，建議先只讀、動作鈕等 activation 落地 |
+| 34 | context 用量表 | P1 | `ui-conversation/.../ContextMeter` | AIE `context` | 進度條 `cubic-bezier(0.22, 1, 0.36, 1)` | #528 已做完：輸入框底列畫用掉多少（沒有分母，見 §2.0） |
 
 ### 2.7 回饋與通知
 
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 35 | 逐則讚／踩＋回饋對話框 | P0（`FeedbackCommand` 系列） | `ui-message-feedback`、`ui-chat/MessageIconActions` | AIE `message` 的 actions | 按下 scale 0.97＋bounce | 現有 `feedback-dialog.tsx` |
-| 36 | Toast | —（純前端） | `ui-primitives/Toast` | sc `sonner` | open 250ms／close 150ms | |
+| 36 | Toast | —（純前端） | `ui-primitives/Toast` | sc `sonner` | sonner 自帶的動畫（規格 §7） | |
 
 ### 2.8 不列入
 
@@ -204,7 +224,7 @@
 
 **字型**：內文 `"Inter"`、等寬 `"Roboto Mono"`，都是免費字型；**標題 display 字 "Saans"**（`@font-face` 從 `assets/fonts/Saans-Medium.woff2` 載入）。repo 沒有附這個字型的授權檔，名稱與 Displaay 字型廠的商用字型相同（**未核實**），**不要拿**。
 
-### 3.3 動效 token（整組可以拿）
+### 3.3 動效 token（原本整組拿；進出場 #1687 起改照 SG）
 
 同一個檔案的 `:root`，與主題無關：
 
@@ -230,7 +250,7 @@
 
 註解標明這些值來自 transitions.dev。
 
-**「開快關更快、先縮一點再長出來」是這套動效的核心規則**：open 250ms 配 close 150ms、scale 0.96–0.99、`--ease-smooth-out`。要模仿的是這條規則，不是某一個特效。
+**「開快關更快、先縮一點再長出來」是 Libraries.dev 這套動效的核心規則**：open 250ms 配 close 150ms、scale 0.96–0.99、`--ease-smooth-out`。nexus 原本模仿的是這條規則；#1687 起進出場改照 SG，對話框、確認框、popover 開關都是 100ms，tooltip 150ms，曲線 `ease`，「開快關更快」不再適用，現行數值以規格 §7 為準。上面這組 token 在 nexus 已全部刪掉（#1689），還在用的數值直接寫在 `motion.css`。
 
 **agent 狀態 → 動效（提案，未 prototype）**：
 

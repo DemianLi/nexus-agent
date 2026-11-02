@@ -6,29 +6,40 @@
  * 分得開的唯一地方。不變量伴生**結構上驗不到**這件事：它只看得到日誌那一份。
  */
 
+import { HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import {
-  createGoalPlugin,
   GOAL_TOOL_AUTHORITY_MESSAGE,
-  GOALS_SERVICE,
-  renderGoalRoundPrompt,
+  GOAL_WRAPUP_MARKER,
   renderWrapupContext,
 } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
-import type { GoalServices } from '@nexus/plugin-goal';
-import { fromLoggedMessage, GOAL_WRAPUP_MARKER } from '@nexus/core';
-import type { SessionEventMap, SessionLog } from '@nexus/core';
+import {
+  CONCURRENCY_SAFE_METADATA_KEY,
+  fromLoggedMessage,
+  REPEAT_REMINDER_MARKER,
+  TURN_CANCEL_CONFIG_KEY,
+} from '@nexus/core';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
+import { SessionLog as SessionLogClass } from '@nexus/core';
+import type { InboxSplice, SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
+import { BackgroundSubagentHost } from './background-subagents.js';
+import type { BackgroundAgent } from './background-subagents.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE, renderGoalRoundPrompt } from '@nexus/goal';
+import type { GoalServices } from '@nexus/goal';
+import type { GoalCore } from '@nexus/plugin-goal';
 
 /** 一份 port，記下它被要求做過什麼。 */
 function portFor(
@@ -47,6 +58,7 @@ function portFor(
       goals.serviceFor(log())?.block(ref, reason);
     },
     disarm: () => void goals.serviceFor(log())?.disarm(),
+    pause: (ref) => void goals.serviceFor(log())?.pause(ref),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
     ...overrides,
@@ -64,6 +76,8 @@ function noteTool() {
     name: 'take_note',
     description: '把一段文字記下來。',
     schema: z.object({ text: z.string().describe('要記下的內容') }),
+    // 宣告可重疊（#711 第 2 步）：「同一輪兩顆中斷」那條要兩顆同時掛出來；沒宣告的工具是獨佔，一次只問一顆。
+    metadata: { [CONCURRENCY_SAFE_METADATA_KEY]: true },
   });
 }
 
@@ -85,9 +99,16 @@ async function build(options: {
   readonly threadId: string;
   readonly withDriver: boolean;
   readonly gated?: boolean;
+  /** 多掛的條目（例如一顆會被重複提醒追蹤的工具）。 */
+  readonly extraPlugins?: readonly PluginEntry[];
   readonly portOverrides?: Partial<GoalDriverPort>;
+  /** 上一個行程留下的 root 日誌（重啟折回佇列用）。 */
+  readonly rootSeed?: readonly SessionEvent[];
+  /** 封存的閘門（#633）；省略＝從不封存。 */
+  readonly isArchived?: () => boolean;
 }): Promise<{
   pump: ThreadPump;
+  goals: GoalCore;
   port: ReturnType<typeof portFor>;
   state: ScriptedModelState;
   violations: string[];
@@ -103,29 +124,38 @@ async function build(options: {
       plugin,
       createGoalInvariantPlugin(),
       ...(options.gated === true ? [GATED_FIXTURE] : []),
+      ...(options.extraPlugins ?? []),
     ],
     checkpointer: new MemorySaver(),
     onInvariantViolation: (error) => void violations.push(error.message),
   });
   // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
   const late: { log?: SessionLog } = {};
-  const port = portFor(
-    services.use(GOALS_SERVICE),
-    () => late.log as SessionLog,
-    options.portOverrides ?? {},
-  );
+  const goals = goalCoreOf(services.use(GOALS_SERVICE));
+  const port = portFor(goals, () => late.log as SessionLog, options.portOverrides ?? {});
   const pump = new ThreadPump(
     agent as unknown as PumpAgent,
     options.threadId,
     options.withDriver ? port : undefined,
+    options.rootSeed,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    [],
+    undefined,
+    undefined,
+    options.isArchived,
   );
   late.log = pump.sessionLog;
-  // **伴生接在參與者之前**，同 `wire-handler.ts` 那條線的順序：參與者一裝上去就可能記
-  // 東西，而那些東西該被已經在看的檢查看到。
+  // 先接伴生、再接參與者，同 `composeAttachSessions` 的順序。順序不承重（不變量 runner 接上時會重播日誌，
+  // 參與者裝上去寫的東西不論誰先接都被檢查看到），這裡跟著產品的順序只是為了讓讀的人看到一致的形狀。
   const detachInvariants = attachInvariants(pump.sessions);
   const detachSession = attachSession(pump.sessions);
   return {
     pump,
+    goals,
     port,
     state,
     violations,
@@ -305,6 +335,47 @@ describe('掛了旗標', () => {
     await stop();
   });
 
+  /**
+   * **模型調高自己的上限，操作者那條照樣夾住**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623) 驗收 4）。上限放在 port 上，
+   * 由 pump 交給決定函式；拿掉 `thread-pump.ts` 交它的那一個參數，這一條會跑滿 1000 輪的腳本、記不到 `round-cap`。
+   *
+   * 調高放在人說話的那一輪裡：`edit` 要有人直接打的那一輪才授權（`@nexus/plugin-goal` 的 `authorityFor`），續行輪裡模型改不動，
+   * 所以這是模型唯一調得高的時機。
+   */
+  it('模型把自己的上限調到 1000，操作者給的 2 照樣在 2 輪夾住、記 round-cap', async () => {
+    const turns: readonly ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } }],
+      },
+      {
+        content: '',
+        toolCalls: [
+          {
+            name: 'update_goal',
+            args: { goal_id: 'goal-1', revision: 1, action: 'edit', max_goal_rounds: 1000 },
+          },
+        ],
+      },
+      { content: '建好了，上限也調高了。' },
+      QUIET,
+      QUIET,
+      QUIET,
+    ];
+    const { pump, port, stop } = await build({
+      turns,
+      threadId: 'driver-cap-raised',
+      withDriver: true,
+      portOverrides: { roundCap: { limit: 2, source: '測試的上限' } },
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'goal']);
+    expect(port.blocks).toEqual(['round-cap']);
+    expect(port.goal()).toMatchObject({ phase: 'blocked', roundsStarted: 2, maxGoalRounds: 1000 });
+    await stop();
+  });
+
   /** 耐久檢查點過不去就停用續行，**不是重試**——見 `goal-driver.ts` 檔頭。 */
   it('flush 失敗就 disarm，一輪都不排', async () => {
     const { pump, port, stop } = await build({
@@ -318,6 +389,240 @@ describe('掛了旗標', () => {
     expect(startKinds(pump.sessionLog)).toEqual(['message']);
     expect(port.warnings.join('\n')).toMatch(/磁碟滿了/u);
     expect(port.goal()).toMatchObject({ activation: 'disarmed', phase: 'active' });
+    await stop();
+  });
+
+  /**
+   * **續行輪次拋錯或被人按停之後，人再講一句話，續行不會接回來**（#660，違反 #265 Q8 的字面）。
+   *
+   * 兩條各自走到 `ThreadPump` 的收尾：跑壞的那一輪也會問排程器，看到日誌上的 `turn/failed` 或
+   * `turn/end` 帶 aborted 就收回授權；人接著講的那一句正常收工，那時最後一輪已經不是跑壞的了，
+   * 只剩授權在擋。
+   */
+  it('續行輪次拋錯、人再說一句，續行不會接回', async () => {
+    const { pump, port, state, stop } = await build({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } },
+          ],
+        },
+        { content: '建好了。' },
+        { content: '', error: '供應商過載' },
+        { content: '好的，我等你。' },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'driver-failed',
+      withDriver: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(port.goal()).toMatchObject({
+      activation: 'disarmed',
+      phase: 'active',
+      roundsStarted: 1,
+    });
+
+    await pump.submit({ kind: 'message', text: '等一下，我先看看' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'message']);
+    expect(state.prompts).toHaveLength(4);
+    expect(port.goal()).toMatchObject({ activation: 'disarmed', phase: 'active', revision: 1 });
+    await stop();
+  });
+
+  it('續行輪次被人按停、人再說一句，續行不會接回', async () => {
+    const { pump, port, stop } = await build({
+      turns: [
+        ...CREATE_TURNS.map((turn, index) =>
+          index === 0
+            ? {
+                ...turn,
+                toolCalls: [
+                  { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } },
+                ],
+              }
+            : turn,
+        ),
+        { content: '', toolCalls: [{ name: 'take_note', args: { text: '先記一下' } }] },
+        { content: '好的，我等你。' },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'driver-aborted',
+      withDriver: true,
+      gated: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    // 續行那一輪停在核准點；按停止就是收回，寫成一輪帶 aborted 的收尾。
+    for (let tries = 0; tries < 50 && !pump.awaitingInput; tries += 1) await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(pump.cancel()).toBe('withdrawn');
+    await settle(pump);
+    expect(port.goal()).toMatchObject({ activation: 'disarmed', phase: 'active' });
+
+    await pump.submit({ kind: 'message', text: '等一下，我先看看' });
+    await settle(pump);
+    // 收回寫的是一輪 `resume`（帶 aborted 收尾），之後只有人說的那一句，沒有第二個續行輪。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'resume', 'message']);
+    await stop();
+  });
+
+  /**
+   * **`/goal` 建立或 resume 之後立刻排第 1 輪，不必等人再講一句話**（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）。
+   *
+   * 斜線命令走 `wire-handler` 的執行器、不經過 pump，所以這裡直接呼叫命令背後的那個服務（`/goal` 就是它）：
+   * 一輪人話都沒有，pump 靠 root 日誌上的 `goal/change` 知道目標變了。以前這條只有「一件工作收尾」一個觸發點，
+   * 這一條會停在 `['…']` 空的那裡。
+   */
+  it('建立目標之後不送任何話，第 1 輪續行自己開始', async () => {
+    const { pump, goals, state, stop } = await build({
+      turns: [QUIET],
+      threadId: 'driver-command-create',
+      withDriver: true,
+    });
+    goals.serviceFor(pump.sessionLog)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['goal']);
+    expect(state.prompts).toHaveLength(1);
+    await stop();
+  });
+
+  it('建立後立刻暫停：一輪都不排；resume 之後第 1 輪自己開始', async () => {
+    const { pump, goals, port, stop } = await build({
+      turns: [QUIET],
+      threadId: 'driver-command-resume',
+      withDriver: true,
+    });
+    const service = goals.serviceFor(pump.sessionLog);
+    const ref = () => {
+      const view = port.goal();
+      if (view === undefined) throw new Error('目標不在');
+      return { id: view.id, revision: view.revision };
+    };
+    // 同一個 tick 裡建立又暫停：延後的那一問看到的已經是暫停，不排。
+    service?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    service?.pause(ref());
+    await settle(pump);
+    // 對照：暫停不是排輪的理由，也沒有授權。
+    expect(startKinds(pump.sessionLog)).toEqual([]);
+
+    service?.resume(ref());
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['goal']);
+    await stop();
+  });
+
+  /**
+   * **兩次目標變更挨在一起、`flush()` 又慢，也只排一輪。** 兩個「問排程器」可能同時在 `flush()` 的 await 裡，各自
+   * 看到「該排第 1 輪」；擋住第二次的是排出去之後的那道 `this.running` 檢查。
+   *
+   * ⚠️ 這一條**沒有一個專門的守衛可以突變**（拿掉 `#driveGoalRound` 上多加的「同時只一個在問」旗標，它照綠），
+   * 它釘的是結果：連續兩顆 `goal/change` 不會排出兩輪。
+   */
+  it('目標連改兩次、flush 很慢：只排一輪', async () => {
+    const { pump, goals, port, stop } = await build({
+      turns: [QUIET, QUIET],
+      threadId: 'driver-command-burst',
+      withDriver: true,
+      portOverrides: { flush: () => new Promise((resolve) => setTimeout(resolve, 30)) },
+    });
+    const service = goals.serviceFor(pump.sessionLog);
+    service?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    // 等第一個問在 flush 裡，再改一次目標（又一顆 `goal/change`）。
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const view = port.goal();
+    if (view === undefined) throw new Error('目標不在');
+    service?.edit({ id: view.id, revision: view.revision }, { objective: '把 CI 修得更綠' });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['goal']);
+    await stop();
+  });
+
+  /**
+   * **排程在 `flush()` 裡飛的那一段，`running` 是假的**，但這條 thread 不閒（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，
+   * 閒置逐出的判準）：撤掉它的話，排程器醒來會往一個已收線的 pump 預約。`goalRoundInFlight` 就是為這一段單獨給的讀數。
+   */
+  it('排程在 flush 裡飛的時候：running 為假、goalRoundInFlight 為真，排完回到假', async () => {
+    let release: () => void = () => undefined;
+    const flushing = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { pump, goals, stop } = await build({
+      turns: [QUIET],
+      threadId: 'driver-in-flight',
+      withDriver: true,
+      portOverrides: { flush: () => flushing },
+    });
+    expect(pump.goalRoundInFlight).toBe(false);
+    goals.serviceFor(pump.sessionLog)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    for (let waited = 0; !pump.goalRoundInFlight && waited < 200; waited += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(pump.goalRoundInFlight).toBe(true);
+    expect(pump.running).toBe(false);
+    release();
+    await settle(pump);
+    expect(pump.goalRoundInFlight).toBe(false);
+    await stop();
+  });
+
+  it('沒掛旗標：建立目標也不自己排', async () => {
+    const { pump, goals, stop } = await build({
+      turns: [QUIET],
+      threadId: 'driver-command-no-flag',
+      withDriver: false,
+    });
+    goals.serviceFor(pump.sessionLog)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual([]);
+    await stop();
+  });
+
+  /**
+   * **續行輪次的頭不清零重複工具提醒的計數**（[#662](https://github.com/DemianLi/nexus-agent/issues/662)）。
+   *
+   * 兩個續行輪裡模型各把同一個呼叫重複兩次（共四次，中間隔著一個續行輪的頭）：第三次起計數一路累積，所以
+   * 第 2 輪的第 1 次呼叫是總第 3 次，下一次模型呼叫的 prompt 要帶提醒。頭被當成人講話而清零的話，這裡只有
+   * 第 1 次，一則提醒都沒有，而且沒有任何東西報錯。
+   */
+  it('續行輪次的頭不清零：第 2 輪的第 1 次呼叫是總第 3 次，模型拿到提醒', async () => {
+    const echo = { name: ECHO_TOOL_NAME, args: { message: 'x' } };
+    const { pump, state, stop } = await build({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } },
+          ],
+        },
+        { content: '建好了。' },
+        { content: '', toolCalls: [echo] },
+        { content: '', toolCalls: [echo] },
+        { content: '第一輪結束。' },
+        { content: '', toolCalls: [echo] },
+        { content: '第二輪結束。' },
+      ],
+      threadId: 'driver-reminder',
+      withDriver: true,
+      extraPlugins: [createEchoPlugin()],
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'goal']);
+    const reminders = state.prompts.map(
+      (prompt) =>
+        prompt.filter(
+          (message) =>
+            HumanMessage.isInstance(message) &&
+            message.additional_kwargs[REPEAT_REMINDER_MARKER] != null,
+        ).length,
+    );
+    // 最後一次模型呼叫（第 2 輪的收尾）之前的 prompt 有一則提醒，之前的每一次都沒有。
+    expect(state.prompts).toHaveLength(7);
+    expect(reminders).toEqual([0, 0, 0, 0, 0, 0, 1]);
     await stop();
   });
 
@@ -525,6 +830,711 @@ describe('掛了旗標', () => {
     await settle(pump);
     expect(startKinds(pump.sessionLog)).toEqual(['message']);
     expect(port.warnings).toEqual([]);
+    await stop();
+  });
+});
+
+/** 日誌上每一次佇列變動。 */
+function splicesOf(log: SessionLog): InboxSplice[] {
+  return log.events.flatMap((event) => (event.type === 'inbox/spliced' ? [event.data] : []));
+}
+
+/**
+ * 續行預約一排進佇列就在下一個 microtask 動手。
+ *
+ * 預約的排入、排程的 job 與 kick 都在同一段同步程式裡：監聽回呼裡排的 microtask 比 kick 的早，所以動手時 job 已在
+ * 排程裡、但那一件還沒被領走驗證——這是唯一不靠計時就能插進「預約之後、領走之前」的辦法。
+ */
+function atReservation(
+  pump: ThreadPump,
+  act: (item: { readonly id: string }) => void,
+): { readonly fired: () => boolean } {
+  let fired = false;
+  pump.watch(() => {
+    const item = pump.inbox.find((queued) => queued.source.kind === 'goal');
+    if (item === undefined || fired) return;
+    fired = true;
+    queueMicrotask(() => act(item));
+  });
+  return { fired: () => fired };
+}
+
+describe('續行走送出佇列（#638）', () => {
+  it('預約是 next-turn 尾巴一件 goal 來源，領走時不帶 canceled，一輪照開', async () => {
+    const { pump, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-path',
+      withDriver: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    const all = splicesOf(pump.sessionLog);
+    const reserveAt = all.findIndex((splice) =>
+      splice.inserted.some((item) => item.source.kind === 'goal'),
+    );
+    expect(reserveAt).toBeGreaterThanOrEqual(0);
+    const reserve = all[reserveAt]!;
+    expect(reserve.target).toBe('next-turn');
+    expect(reserve.inserted[0]?.source).toMatchObject({ kind: 'goal', round: 1, revision: 1 });
+    // 預約之後的下一次變動就是領走它：拿掉一件、不帶 canceled。
+    const claim = all[reserveAt + 1]!;
+    expect(claim).toMatchObject({ target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
+    expect(claim.outcome).toBeUndefined();
+    expect(all.some((splice) => splice.outcome === 'canceled')).toBe(false);
+    expect(pump.inbox).toEqual([]);
+    await stop();
+  });
+
+  it('預約排著時刪掉它：這一輪不開，目標暫停（不然排程器馬上再排一份）', async () => {
+    const { pump, port, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-delete',
+      withDriver: true,
+    });
+    let result: string | undefined;
+    const hook = atReservation(pump, (item) => {
+      result = pump.updateQueue(item.id, { kind: 'remove' });
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(hook.fired()).toBe(true);
+    expect(result).toBe('updated');
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(port.goal()).toMatchObject({ phase: 'paused' });
+    expect(
+      splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled'),
+    ).toHaveLength(1);
+    expect(pump.inbox).toEqual([]);
+    await stop();
+  });
+
+  it('預約排著時改它的字：等同刪掉（取消那一輪、暫停目標），不轉成別的輸入', async () => {
+    const { pump, port, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-edit',
+      withDriver: true,
+    });
+    let result: string | undefined;
+    atReservation(pump, (item) => {
+      result = pump.updateQueue(item.id, { kind: 'edit', text: '我自己改的續行' });
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(result).toBe('updated');
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(port.goal()).toMatchObject({ phase: 'paused' });
+    // 沒有任何一件以改過的字重新插回去。
+    expect(
+      splicesOf(pump.sessionLog).some((splice) =>
+        splice.inserted.some((item) => item.text === '我自己改的續行'),
+      ),
+    ).toBe(false);
+    await stop();
+  });
+
+  it('預約不能改成插話：steer-unavailable，預約照常開跑', async () => {
+    const { pump, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-steer',
+      withDriver: true,
+    });
+    let result: string | undefined;
+    atReservation(pump, (item) => {
+      result = pump.updateQueue(item.id, { kind: 'steer' });
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(result).toBe('steer-unavailable');
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(pump.nextStep).toEqual([]);
+    await stop();
+  });
+
+  it('人排在預約後面：領走時預約失效被丟掉，人的那句先跑，之後重新預約再續行', async () => {
+    const { pump, port, stop } = await build({
+      turns: [...CREATE_TURNS, { content: '收到插隊。' }, QUIET],
+      threadId: 'queue-compete',
+      withDriver: true,
+    });
+    atReservation(pump, () => {
+      void pump.submit({ kind: 'message', text: '先看這個' }).catch(() => undefined);
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'message', 'goal']);
+    const dropped = splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled');
+    expect(dropped).toHaveLength(1);
+    expect(port.warnings).toEqual([]);
+    expect(pump.inbox).toEqual([]);
+    await stop();
+  });
+
+  it('預約排著時授權被收回：領走時失效，不開那一輪、也不再排', async () => {
+    const { pump, port, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-disarmed',
+      withDriver: true,
+    });
+    atReservation(pump, () => port.disarm());
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(
+      splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled'),
+    ).toHaveLength(1);
+    expect(pump.inbox).toEqual([]);
+    await stop();
+  });
+
+  it('重啟折回來的預約：授權不持久，領走時一定失效，不開那一輪', async () => {
+    const seed = new SessionLogClass('seed-root');
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [
+        {
+          id: 'stale-goal',
+          text: '續行第 1 輪',
+          source: { kind: 'goal', goalId: 'goal-9' as never, revision: 1, round: 1 },
+        },
+      ],
+    });
+    const { pump, stop } = await build({
+      turns: [{ content: '好。' }],
+      threadId: 'queue-restart',
+      withDriver: true,
+      rootSeed: seed.events,
+    });
+    // 折回來列得出、停住不自己跑。
+    expect(pump.inbox.map((item) => item.id)).toEqual(['stale-goal']);
+    expect(pump.running).toBe(false);
+
+    await pump.submit({ kind: 'message', text: '你好' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(pump.inbox).toEqual([]);
+    expect(
+      splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled'),
+    ).toHaveLength(1);
+    await stop();
+  });
+});
+
+describe('續行預約去重（#reserveGoalRound，#1575 紅燈 6 的單獨一刀）', () => {
+  /**
+   * 佇列上已經有一件 `goal` 預約、而 `running` 為假——只有「重啟折回來、停住不自己跑」的預約是這個形狀（排進去的預約一進佇列
+   * `running` 就為真，排在它後面的問會被 `this.running` 先擋掉）。這時再來一次「該排第 1 輪」不能多排一份。
+   * 上面 N0372 的紅燈 6 釘的是「兩道一起」；這一條釘去重那一道**單獨**。
+   */
+  it('佇列上已有停住的 goal 預約：目標一建立，排程器不再多預約一份', async () => {
+    const seed = new SessionLogClass('seed-root');
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [
+        {
+          id: 'stale-goal',
+          text: '續行第 1 輪',
+          source: { kind: 'goal', goalId: 'goal-9' as never, revision: 1, round: 1 },
+        },
+      ],
+    });
+    const { pump, goals, stop } = await build({
+      turns: [QUIET],
+      threadId: 'queue-dedupe-parked',
+      withDriver: true,
+      rootSeed: seed.events,
+    });
+    expect(pump.inbox.map((item) => item.id)).toEqual(['stale-goal']);
+    expect(pump.running).toBe(false);
+
+    goals.serviceFor(pump.sessionLog)?.create({ objective: '把 CI 修綠', maxGoalRounds: 3 });
+    // 排程器是被 goal/change 叫起來的：等它問完（飛行中為真→回到假）。
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(pump.goalRoundInFlight).toBe(false);
+
+    expect(pump.inbox.map((item) => item.id)).toEqual(['stale-goal']);
+    expect(startKinds(pump.sessionLog)).toEqual([]);
+    await stop();
+  });
+});
+
+describe('封存的會話（#633）', () => {
+  /** 日誌上每一顆 `turn/end` 的收尾原因種類（沒帶 reason ＝ 正常收）。 */
+  function endKinds(log: SessionLog): string[] {
+    return log.events
+      .filter((event) => event.type === 'turn/end')
+      .map((event) => (event.data as { reason?: { kind: string } }).reason?.kind ?? 'done');
+  }
+
+  it('人送的話：開一輪、以 blocked 收，模型一次都不被叫，沒有 turn/failed', async () => {
+    const { pump, state, stop } = await build({
+      turns: [{ content: '不該被叫到。' }],
+      threadId: 'archived-human',
+      withDriver: false,
+      isArchived: () => true,
+    });
+    await pump.submit({ kind: 'message', text: '你好' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(0);
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(endKinds(pump.sessionLog)).toEqual(['blocked']);
+    expect(pump.sessionLog.events.some((event) => event.type === 'turn/failed')).toBe(false);
+    expect(pump.running).toBe(false);
+    await stop();
+  });
+
+  it('線上：被擋下的輪收尾 frame 是 completed 帶 blocked——輪頭擋與輪中擋兩條路都一樣，不是 failed', async () => {
+    // 輪頭擋（圖沒跑）與輪中擋（圖拋錯、基座發 failed 被換掉）各一次。
+    for (const mode of ['head', 'mid'] as const) {
+      let calls: () => number = () => 0;
+      const { pump, state, stop } = await build({
+        turns:
+          mode === 'head'
+            ? [{ content: '不該被叫到。' }]
+            : [
+                { content: '', toolCalls: [{ name: 'take_note', args: { text: 'x' } }] },
+                { content: '不該被讀到。' },
+              ],
+        threadId: `archived-live-${mode}`,
+        withDriver: false,
+        extraPlugins: [
+          {
+            plugin: {
+              name: 'note-fixture',
+              apply(registration) {
+                registration.tools.register(noteTool());
+              },
+            },
+          },
+        ],
+        isArchived: () => (mode === 'head' ? true : calls() >= 1),
+      });
+      calls = () => state.prompts.length;
+      const controller = new AbortController();
+      const terminals: unknown[] = [];
+      const reading = (async () => {
+        for await (const frame of pump.subscribe(['lifecycle'], controller.signal)) {
+          const data = (frame as { params: { data: { graph_name?: string; event?: string } } })
+            .params.data;
+          if (data.graph_name === 'root' && (data.event === 'completed' || data.event === 'failed'))
+            terminals.push(data);
+        }
+      })();
+      await pump.submit({ kind: 'message', text: '你好' });
+      await settle(pump);
+      controller.abort();
+      await reading.catch(() => undefined);
+      expect(terminals).toEqual([{ event: 'completed', graph_name: 'root', blocked: true }]);
+      await stop();
+    }
+  });
+
+  it('被擋下的那句話不在模型的對話裡：取消封存後下一輪，模型只看到新的那句', async () => {
+    let archived = true;
+    const { pump, state, stop } = await build({
+      turns: [{ content: '收到。' }],
+      threadId: 'archived-then-lifted',
+      withDriver: false,
+      isArchived: () => archived,
+    });
+    await pump.submit({ kind: 'message', text: '被擋下的話' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(0);
+
+    archived = false;
+    await pump.submit({ kind: 'message', text: '新的一句' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(1);
+    const seen = JSON.stringify(state.prompts[0]);
+    expect(seen).toContain('新的一句');
+    expect(seen).not.toContain('被擋下的話');
+    expect(endKinds(pump.sessionLog)).toEqual(['blocked', 'done']);
+    await stop();
+  });
+
+  it('每一次模型呼叫之前都問，不只輪頭：跑到一半封存，下一步不叫模型、這一輪以 blocked 收', async () => {
+    // 模型叫過一次之後才封存：第二步（工具結果回來之後）被擋下。輪頭那一問與第一步都在模型被叫之前，放行。
+    let calls: () => number = () => 0;
+    const { pump, state, stop } = await build({
+      turns: [
+        { content: '', toolCalls: [{ name: 'take_note', args: { text: '先記一下' } }] },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'archived-midturn',
+      withDriver: false,
+      extraPlugins: [
+        {
+          plugin: {
+            name: 'note-fixture',
+            apply(registration) {
+              registration.tools.register(noteTool());
+            },
+          },
+        },
+      ],
+      isArchived: () => calls() >= 1,
+    });
+    calls = () => state.prompts.length;
+    await pump.submit({ kind: 'message', text: '記一筆' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(1);
+    expect(endKinds(pump.sessionLog)).toEqual(['blocked']);
+    expect(pump.running).toBe(false);
+    await stop();
+  });
+
+  it('目標續行：這一輪被擋下，目標轉 blocked（prompt-rejected），取消封存也不自己續行', async () => {
+    // 第一輪（人的）放行並建好目標；之後封存：續行輪被擋下。
+    let archived = false;
+    // 預算給大：被擋下的輪一次就跑完（不叫模型），目標若沒被擋下轉成 blocked，就會在預算內一直開空輪。
+    const { pump, port, state, violations, stop } = await build({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 50 } },
+          ],
+        },
+        { content: '建好了。' },
+        QUIET,
+      ],
+      threadId: 'archived-goal',
+      withDriver: true,
+      isArchived: () => archived,
+      portOverrides: {},
+    });
+    // 人的那一輪結束時就封存：續行輪一開始就被擋。
+    const originalSubmit = pump.submit.bind(pump);
+    await originalSubmit({ kind: 'message', text: '把 CI 修綠' });
+    // 建好目標後、續行輪領走之前封存。
+    archived = true;
+    await settle(pump);
+    // 剛好一顆續行輪被擋下，沒有空轉。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(endKinds(pump.sessionLog)).toEqual(['done', 'blocked']);
+    expect(port.goal()).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'prompt-rejected' },
+    });
+    const promptsWhileArchived = state.prompts.length;
+
+    // 取消封存不會自己續行：目標停在 blocked，要使用者 `/goal resume`。
+    archived = false;
+    await settle(pump);
+    expect(state.prompts).toHaveLength(promptsWhileArchived);
+    expect(port.goal()).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'prompt-rejected' },
+    });
+    expect(violations).toEqual([]);
+    await stop();
+  });
+
+  it('停在核准點的那一輪收到答覆時已經封存：核准過的工具照跑（dsh 的閘門在步前），下一次叫模型才被擋，這一輪以 blocked 收', async () => {
+    let archived = false;
+    const { pump, state, stop } = await build({
+      turns: [
+        { content: '', toolCalls: [{ name: 'take_note', args: { text: '先記一下' } }] },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'archived-resume',
+      withDriver: false,
+      gated: true,
+      isArchived: () => archived,
+    });
+    await pump.submit({ kind: 'message', text: '記一筆' });
+    await settle(pump);
+    const pending = pump.pendings[0];
+    expect(pending).toBeDefined();
+    expect(state.prompts).toHaveLength(1);
+
+    archived = true;
+    await pump.submit({
+      kind: 'resume',
+      interruptId: pending?.interruptId ?? '',
+      response: [{ type: 'approve', args: { text: '一筆' } }],
+    });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(1);
+    expect(pump.pendings).toHaveLength(0);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'resume']);
+    expect(endKinds(pump.sessionLog).at(-1)).toBe('blocked');
+    // 核准是在叫模型之前就給的：dsh 的一步是「叫模型→跑工具」，`ArchivedSessionGate` 掛在步前，所以掛著的核准照樣落地。
+    const results = pump.sessionLog.events.filter((event) => event.type === 'tool/result');
+    expect(results).toHaveLength(1);
+    await stop();
+  });
+});
+
+/**
+ * 目標續行要等背景子代理（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372）：**真 pump、真背景 host、腳本模型**。
+ *
+ * 不等的話：某一輪派出背景子代理就結束，下一個續行輪馬上排上，模型看一眼就收工，`roundsStarted` 一路加到 `round-limit`。
+ * 派出背景子代理用一顆夾具工具（`spawn_bg`）做，它呼叫 host 的 `start`，跟產品裡 `subagent` 工具的落點是同一個。
+ */
+describe('續行等背景子代理（N0372）', () => {
+  /** 背景子代理的假 agent：等 `hold` 才收；`abortable` 時被中止就收。 */
+  function holdingAgent(hold: Promise<void>): BackgroundAgent {
+    return {
+      async streamEvents(_input: unknown, config: { configurable: Record<string, unknown> }) {
+        const signal = config.configurable[TURN_CANCEL_CONFIG_KEY] as AbortSignal | undefined;
+        await Promise.race([
+          hold,
+          new Promise<void>((resolve) => signal?.addEventListener('abort', () => resolve())),
+        ]);
+        return (async function* () {})() as never;
+      },
+    } as never;
+  }
+
+  function spawnPlugin(spawn: () => void): PluginEntry {
+    return {
+      plugin: {
+        name: 'spawn-fixture',
+        apply(registration) {
+          registration.tools.register(
+            tool(
+              () => {
+                spawn();
+                return '已派出去';
+              },
+              { name: 'spawn_bg', description: '派一個背景子代理', schema: z.object({}) },
+            ),
+          );
+        },
+      },
+    };
+  }
+
+  /** 第 1 輪（人那一輪建目標，上限 `limit`）→ 續行第 1 輪派出子代理。 */
+  const turnsFor = (limit: number): readonly ScriptedTurn[] => [
+    {
+      content: '',
+      toolCalls: [
+        { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: limit } },
+      ],
+    },
+    { content: '建好了。' },
+    { content: '', toolCalls: [{ name: 'spawn_bg', args: {} }] },
+    { content: '派出去了。' },
+    { content: '收到結算。' },
+    QUIET,
+    QUIET,
+  ];
+
+  async function rig(options: {
+    readonly limit: number;
+    readonly turns?: readonly ScriptedTurn[];
+    /** 結算要不要叫醒主對話開一輪（預設要）。關掉就只剩「等的人被放行」這一條路，沒有結算輪插進來。 */
+    readonly notifySettled?: boolean;
+  }) {
+    const hold = gateOf();
+    const ref: { host?: BackgroundSubagentHost } = {};
+    const built = await build({
+      turns: options.turns ?? turnsFor(options.limit),
+      threadId: 'wait-children',
+      withDriver: true,
+      extraPlugins: [spawnPlugin(() => void ref.host?.start({ subagent: 'worker', text: '查' }))],
+      portOverrides: {
+        waitForChildren: (signal) =>
+          ref.host?.whenChildrenSettled(signal) ?? Promise.resolve(false),
+      },
+    });
+    ref.host = new BackgroundSubagentHost({
+      sessions: built.pump.sessions,
+      compile: () => holdingAgent(hold.opened),
+      onSettled: (settlement) => {
+        if (options.notifySettled === false) return;
+        built.pump.notifySettled({
+          text: settlement.text,
+          summary: settlement.summary,
+          reason: settlement.reason,
+          senderSessionId: settlement.sessionId,
+        });
+      },
+    });
+    return { ...built, host: ref.host, hold };
+  }
+
+  function gateOf() {
+    let open!: () => void;
+    const opened = new Promise<void>((resolve) => (open = resolve));
+    return { open, opened };
+  }
+
+  /** 等到 `predicate` 成立（逾時就拋，讓「該發生而沒發生」明確紅）。 */
+  async function until(predicate: () => boolean, ms = 3000): Promise<void> {
+    const start = Date.now();
+    while (!predicate()) {
+      if (Date.now() - start > ms) throw new Error('等太久了');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  const goalRounds = (log: SessionLog): number[] =>
+    log.events
+      .filter(
+        (event) => event.type === 'turn/start' && (event.data as { kind: string }).kind === 'goal',
+      )
+      .map((event) => (event.data as { round: number }).round);
+
+  it('紅燈 1：子代理跑著時不排第 2 個續行輪；放行後順序是 subagent-settled → goal 第 2 輪', async () => {
+    const { pump, host, hold, state, stop } = await rig({ limit: 5 });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 放行之前：日誌上只有人那一輪與續行第 1 輪，沒有第 2 個 goal；模型只被叫了 4 次。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(state.turn).toBe(4);
+    expect(host.hasRunning()).toBe(true);
+    hold.open();
+    await until(() => goalRounds(pump.sessionLog).length >= 2);
+    await settle(pump);
+    expect(startKinds(pump.sessionLog).slice(0, 4)).toEqual([
+      'message',
+      'goal',
+      'subagent-settled',
+      'goal',
+    ]);
+    await host.close();
+    await stop();
+  });
+
+  it('紅燈 2：只有被 interrupt 暫停的子代理（排著輪次）——續行照常排第 2 輪，不被 idle() 式的等法卡住', async () => {
+    const turns: ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } }],
+      },
+      { content: '建好了。' },
+      QUIET,
+      QUIET,
+    ];
+    const { pump, host, stop } = await rig({ limit: 2, turns });
+    const first = host.start({ subagent: 'worker', text: 'A1' });
+    // 等這一輪真的開跑（有控制器可以舉），中斷才算數。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const second = host.submit({ runId: first.runId, subagent: 'worker', text: 'A2' });
+    expect(host.interrupt(first.runId)).toBe(true);
+    await first.outcome;
+    expect(host.hasRunning()).toBe(false);
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => goalRounds(pump.sessionLog).length >= 2);
+    await settle(pump);
+    expect(goalRounds(pump.sessionLog)).toEqual([1, 2]);
+    await host.close();
+    await second;
+    await stop();
+  });
+
+  it('紅燈 3：等子代理時按停止——授權收成 disarmed，放行後不排續行輪', async () => {
+    const { pump, host, hold, goals, state, stop } = await rig({ limit: 5 });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await until(() => pump.goalRoundInFlight);
+    expect(pump.cancel()).toBe('drive');
+    expect(goals.serviceFor(pump.sessionLog).get()?.activation).toBe('disarmed');
+    hold.open();
+    await until(() => !host.hasRunning());
+    await settle(pump);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(goalRounds(pump.sessionLog)).toEqual([1]);
+    expect(startKinds(pump.sessionLog).filter((kind) => kind === 'goal')).toHaveLength(1);
+    await host.close();
+    await stop();
+  });
+
+  it('紅燈 4：等待期間 close()——排程器在有限時間內回來、不預約，goalRoundInFlight 回到假', async () => {
+    const { pump, host, hold, state, stop } = await rig({ limit: 5 });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await until(() => pump.goalRoundInFlight);
+    pump.close();
+    await until(() => !pump.goalRoundInFlight);
+    hold.open();
+    await host.close();
+    expect(goalRounds(pump.sessionLog)).toEqual([1]);
+    await stop();
+  });
+
+  it('紅燈 6：兩次排程同時在等，放行後只預約一份 goal（#reserveGoalRound 去重）', async () => {
+    // **結算不叫醒主對話**（`notifySettled: false`）：不然放行的同一刻會開一輪結算輪，把兩個排程都擋成「日誌上有輪在跑」，去重那一行碰不到。
+    // 第 1 輪派出子代理 → 排程 A 在等；等的時候人又講了一句，那一輪收完 → 排程 B 也進來等。兩個都看得到「該排第 2 輪」。
+    const turns: ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
+      },
+      { content: '建好了。' },
+      { content: '', toolCalls: [{ name: 'spawn_bg', args: {} }] },
+      { content: '派出去了。' },
+      { content: '人的第二句，我回了。' },
+      { content: '收到結算。' },
+      QUIET,
+      QUIET,
+    ];
+    const { pump, host, hold, state, stop } = await rig({ limit: 5, turns, notifySettled: false });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await until(() => pump.goalRoundInFlight);
+    // 排程 A 在等的時候，人插進一句；那一輪收完會再問一次排程器（排程 B）。
+    await pump.submit({ kind: 'message', text: '另外還有一件事' });
+    await until(() => state.turn >= 5);
+    await settle(pump);
+    // 正向錨點：兩個排程確實都還在等——第 1 輪預約過了，第 2 輪還沒有任何一份。
+    expect(host.hasRunning()).toBe(true);
+    const goalSplices = (): number[] =>
+      splicesOf(pump.sessionLog).flatMap((splice) =>
+        splice.inserted.flatMap((item) => (item.source.kind === 'goal' ? [item.source.round] : [])),
+      );
+    expect(goalSplices()).toEqual([1]);
+    hold.open();
+    await until(() => goalRounds(pump.sessionLog).length >= 2);
+    await settle(pump);
+    // 第 2 輪只被預約過一次；沒去重的話，A 與 B 各預約一份（第二份領走時驗不過被丟，但佇列上確實排過兩份）。
+    expect(goalSplices().filter((round) => round === 2)).toHaveLength(1);
+    expect(goalRounds(pump.sessionLog)).toContain(2);
+    await host.close();
+    await stop();
+  });
+
+  it('紅燈 5：輪數已到頂、子代理還在跑——round-limit 的 blocker 落在 subagent-settled 那一輪之後', async () => {
+    const { pump, host, hold, state, stop } = await rig({ limit: 1 });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await until(() => state.turn >= 4);
+    await settle(pump);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    // 放行之前不記 blocker：輪數雖然到頂了，先等子代理（dsh：先等、再判上限）。
+    const blocked = () =>
+      pump.sessionLog.events.some(
+        (event) =>
+          event.type === 'goal/change' && JSON.stringify(event.data).includes('round-limit'),
+      );
+    expect(blocked()).toBe(false);
+    hold.open();
+    await until(blocked);
+    const settledAt = pump.sessionLog.events.findIndex(
+      (event) =>
+        event.type === 'turn/start' && (event.data as { kind: string }).kind === 'subagent-settled',
+    );
+    const blockedAt = pump.sessionLog.events.findIndex(
+      (event) => event.type === 'goal/change' && JSON.stringify(event.data).includes('round-limit'),
+    );
+    expect(settledAt).toBeGreaterThan(-1);
+    expect(blockedAt).toBeGreaterThan(settledAt);
+    await host.close();
     await stop();
   });
 });

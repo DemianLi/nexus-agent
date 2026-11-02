@@ -4,7 +4,7 @@
  *
  * 折疊器把交付事件放在它在串流裡的位置（`DeliverablesEntry`），通常夾在 `present` 工具卡與模型最後那段話之間。
  * dsh 把交付畫在收尾那一輪的尾端（`conversation.chat.turnTail`），所以這裡把同一輪的交付收攏成一張卡，放在這一輪
- * 最後一格之後。**切輪看 human 那一格，不看 `turnTail`**：只有工具、沒有文字的輪沒有輪尾，照樣要有地方掛卡。
+ * 最後一格之後。**切輪看一輪的開頭那一格（{@link startsTurn}），不看 `turnTail`**：只有工具、沒有文字的輪沒有輪尾，照樣要有地方掛卡。
  *
  * 改動紀錄（`WorkspaceChangesEntry`，[#443](https://github.com/DemianLi/nexus-agent/issues/443)）也歸到輪尾，**排在交付卡前面**
  * （#443 決議 4，同 dsh `Deliverables` 先畫 `ChangedFiles`）。它只帶 `seq`，摘要由卡片自己去讀；通常一輪一顆，萬一有兩顆
@@ -19,6 +19,8 @@
  */
 
 import type { ConversationEntry, WirePresentedFile } from '@nexus/wire';
+
+import { startsTurn } from '@/lib/turn-start';
 
 /**
  * 一個宣告交付的檔案，連同它在讀檔路由上的座標（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
@@ -79,7 +81,7 @@ export function transcriptItems(entries: readonly ConversationEntry[]): Transcri
       files.push(...entry.files.map((file, index) => ({ ...file, seq: entry.seq, index })));
       continue;
     }
-    if (entry.kind === 'human') flush();
+    if (startsTurn(entry)) flush();
     items.push({ kind: 'entry', id: entry.id, entry });
   }
   flush();

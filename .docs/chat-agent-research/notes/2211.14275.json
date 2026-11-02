@@ -1,0 +1,156 @@
+{
+  "id": "2211.14275",
+  "title": "Solving math word problems with process- and outcome-based feedback",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在 GSM8K 上首度系統比較「只監督最終答案（outcome）」與「逐步監督推理過程（process）」兩類回饋，橫跨 SFT、reward model 重排序與 expert iteration RL，並提出以人工標註「第一個重大錯誤步驟」訓練的 process-supervised reward model（PRM）與 trace error 指標。",
+  "problem": "讓語言模型先寫出逐步推理再給答案之後，要怎麼監督它：只看最終答案對不對，還是檢查每一步？只看最終答案可能養出「答案對、過程錯」的模型，而這類錯誤正好躲得過最便宜的代理指標（最終答案比對）。在教育、需要人類看得懂的解釋、或擔心模型為了好結果而操弄回饋（tampering）的情境，過程錯誤的代價很高。此前在自然語言任務上沒有直接、全面比較兩種監督的實證。",
+  "core_idea": "把一次解題視為由換行分隔的步驟序列（軌跡），在兩種粒度提供監督：outcome 只給整條軌跡一個對錯；process 給每一步一個「到此為止是否仍正確」的標籤。評估也拆成兩個指標：final-answer error（可程式化比對）與 trace error（在最終答案正確的樣本中，至少一步被人判錯的比例）。主要發現：兩種監督的最終答案錯誤率相近，但要壓低 trace error 必須用 process 監督，或用一個會模仿 process 回饋的 reward model；而只用 outcome 標籤訓練的 ORM 在數學題上恰好就會這樣做，所以拿 ORM 當 RL 獎勵也能大幅降低 trace error。",
+  "method": {
+    "task_and_data": "GSM8K 小學數學應用題。從原訓練集切出 256 題當驗證集，剩 7118 題訓練、1319 題測試。輸出格式是換行分隔的步驟，最後一步含最終答案（一律是整數）；沿用 Cobbe et al. 2021 的 <<算式=結果>> 計算機語法，讓模型自己決定何時呼叫計算機。",
+    "base_model": "單一 70B 預訓練 LM（Hoffmann et al. 2022 的 Chinchilla 系列），未公開。policy 把「題目＋目前為止的步驟」映射到下一步；RL 形式下每一步是一個 action，觀測是到目前為止的全部 token。",
+    "sft": "process 型基線：以 GSM8K 參考推理軌跡為目標 token、題目為輸入做最大概似。AdamW，learning rate 2e-6，batch size 256，驗證集 LM loss 開始上升就停（約 70 步，略多於 2 個 epoch）。",
+    "orm": "reward model 本身也是 LM，在每一步之後預測一個 'correct' 或 'incorrect' token。ORM 的每一步標籤都等於「這條完整樣本的最終答案是否與參考答案相符」（Cobbe et al. 2021 的做法）。訓練資料是該方法自己的 policy 樣本，每題 K=96、溫度 1.0；dropout 0.1，其他超參數同 SFT；SFT 系從 SFT 權重初始化，few-shot 系從基底 LM 初始化。附錄 E：ORM 的訓練步數約為 SFT 的 20 倍（每步只有一個監督 token）。",
+    "prm": "與 ORM 同樣的逐步二元 token 預測，但標籤是「到此步為止的前綴是否全部正確」，來自人工標註。從 SFT policy 每題抽 3 個樣本，只挑 SFT 多數決答錯的題目以節省標註預算。因資料小（1560 份完整解），PRM 從 ORM 參數初始化、learning rate 降到 1e-7；RM 的 loss 曲線有波動，取 2000 步內驗證 loss 最佳的檢查點。",
+    "annotation_protocol": "給標註者題目、GSM8K 參考解與模型解，請其指出「第一個有重大錯誤的步驟」（重大錯誤定義為：該步表達的資訊錯誤，或不撤銷該步就無法再到達正解）。首錯之前的步驟標 correct，首錯及其後全部標 incorrect，得到前綴二元標籤。品質控管：資格測驗用三位作者一致認定首錯位置的解，4 題至少答對 3 題才合格，91 位候選取 21 位；20% 訓練題重複標註，與他人一致率低於 75% 的標註者資料整批剔除（4/21 位，約 21% 資料，題數 675→530），另剔除被標為題意不清的題目。清理後：1560 份樣本、530 題、9856 個步驟標籤；驗證集 162 份樣本、913 步，重複標註並由作者裁決分歧。評估時每個模型取 200 題最終答案正確的樣本、重複標註來估 trace error。附錄 E：曾要求標註者寫出修正後的步驟，但難以精確溝通、也無法計算一致率，最後放棄。",
+    "decoding": "測試時每題抽 K=96 條完整解，溫度 1.0。沒有 RM 時用多數決（self-consistency）：取最常見的最終答案，再從該答案的樣本中隨機挑一條。有 RM 時用 RM-weighted decoding：先選 f* = argmax_f Σ_{final_ans(y_i)=f} rm_prob(y_i)，再在最終答案為 f* 的樣本中挑 RM 分數最高者；這比直接挑 RM 最高分的單一樣本好約 1 個百分點。逐步 reranking（每步從 K 個候選取 argmax）反而較差，所以全文都用整條解層級的 reranking。",
+    "rl_expert_iteration": "交替兩步：policy improvement（base policy 加上搜尋，產生 expert 樣本）與 distillation（對 expert 樣本做監督學習，超參數同 SFT，用 expert policy 在驗證題上的樣本做早停）。跑 5 個 epoch，依測試集 final-answer error（有 RM 用 RM-weighted、否則用多數決）取最佳者。三種 policy improvement，K 一律 96：(a) Final-Answer RL（即 STaR）：每題抽 K 條完整解，依最終答案對錯過濾；few-shot 版保留全部正確解，SFT 版每題只隨機留一條。(b) ORM-RL：每題抽 K 條完整解，留 ORM 分數最高的那條。(c) PRM-RL：每一步當成一個 episode，每步抽 K 個候選步驟、留 PRM 分數最高者後接著生成，直到輸出最終答案標記或滿 15 步。起點有兩種：5-shot prompt 的基底 LM（few-shot 系：除 5 個示範外從不使用 GSM8K 推理軌跡或人工標註；每輪重訓 RM；distillation 每輪從基底模型初始化；不累積早期樣本，避免模仿早期的推理錯誤），或 SFT 模型（SFT 系：RM 固定不重訓；distillation 每輪從 SFT 權重初始化；照 Polu & Sutskever 2020 累積各輪 expert 樣本）。",
+    "selective_prediction": "以被選中樣本的 RM 分數設門檻，允許對 r% 的題目棄答，只在沒棄答的題目上計算最終答案錯誤率。",
+    "ood_eval": "zero-shot 評估 MATH 的 pre-algebra 子集：去掉含 Asymptote 圖的題目（871→633），用一組 regex 把常見 LaTeX 指令轉成純文字（附錄 D 表 9），再從 boxed 指令的引數抽出最終答案。"
+  },
+  "assumptions": [
+    "推理可以切成離散步驟（以換行分隔），而且每一步的對錯可以由具備領域知識的人判定。",
+    "每條錯誤的解都有一個可被一致指認的「第一個重大錯誤」，且首錯之後的步驟一律可視為錯（前綴標籤）。",
+    "最終答案能用精確字串比對驗證（GSM8K 答案皆為整數）；多數決與 RM-weighted decoding 都依賴這點。",
+    "在數學題中，錯誤的推理步驟很少會導向正確的最終答案（spurious solution 少），這是 ORM 能近似 PRM 的關鍵前提。",
+    "資料足夠時微調優於純 prompting（§3.1 在本設定下有驗證：few-shot 多數決 41.5% 錯誤率遠高於微調後的模型）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "GSM8K 測試集（1319 題）",
+      "MATH pre-algebra（去除含圖題目後 633/871 題，OOD zero-shot）"
+    ],
+    "metrics": [
+      "final-answer error rate（最終答案精確比對）",
+      "trace error rate（最終答案正確的樣本中，至少一步被人工判錯的比例；每模型 200 題、雙人標註，報平均與 min–max 區間）",
+      "selective final-answer error rate（依 RM 分數棄答 r% 後的錯誤率）",
+      "OOD final-answer error rate",
+      "RM 預測與 ORM／PRM 標籤的一致率矩陣（所有步驟與僅最後一步兩版）"
+    ],
+    "baselines": [
+      "Few-shot PaLM-540B（Wang et al. 2022；Wei et al. 2022）：trace 14.0%、final 25.6%",
+      "Few-shot Minerva-540B（Lewkowycz et al. 2022）",
+      "Few-shot + Final-Answer RL / STaR，GPT-J-6B（Zelikman et al. 2022）",
+      "Few-shot + ORM reranking，Codex-175B（Li et al. 2022）：final 16.8%，先前 SOTA",
+      "Zero-shot InstructGPT-175B（Kojima et al. 2022）",
+      "SFT + ORM reranking，GPT-175B（Cobbe et al. 2021）",
+      "Li et al. 2022 的 step-level voting verifier（以中間數值啟發式產生步驟標籤）",
+      "內部消融：Few-shot、Few-shot+Final-Answer RL、SFT、SFT+Final-Answer RL，各配多數決／ORM／PRM reranking，以及 Greedy／Majority／RM-weighted 三種解碼"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "只監督最終答案的方法與模仿人寫推理的 SFT，最終答案錯誤率相近；前者每題只用 1–4 個 token 的標籤，SFT 要數百個。",
+      "numbers": "Few-shot+Final-Answer RL vs SFT：無 RM 多數決 23.5% vs 22.3%；ORM reranking 16.6% vs 14.8%",
+      "section": "§1、§3、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只要少量的人工首錯標註就能訓出可用的 PRM；SFT 配 PRM reranking 的 trace error 與最終答案錯誤率都在最佳之列。",
+      "numbers": "1560 份樣本、530 題、9856 個步驟標籤；SFT+PRM reranking trace 3.5%（0.5–6.5）、final 14.1%",
+      "section": "§2.7、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "只用最終答案標籤訓練的 ORM，其逐步預測與 PRM 標籤的一致率反而高於與自己訓練標籤的一致率；只看最後一步也一樣（附錄 C）。RM reranking 即使在最終答案都對的子集上，也把 SFT 的 trace error 大幅壓低，顯示 RM 在檢查步驟而不只是答案。",
+      "numbers": "ORM 預測對 PRM 標籤 85% vs 對 ORM 標籤 77%（PRM 驗證集全部步驟平均）；SFT trace error 11.4% → ORM reranking 4.4%",
+      "section": "§3、Fig. 4、Appendix C",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "直接對最終答案做 RL 會留下高 trace error；改用 ORM 當 RL 獎勵可補回大部分差距，說明低 trace error 需要 process 回饋或能模仿它的 RM。",
+      "numbers": "無 RM：Few-shot+Final-Answer RL 19.8% vs SFT 11.4%；ORM reranking 下 Few-shot+Final-Answer RL 12.4% vs SFT 4.4%（ORM）／3.5%（PRM）；Few-shot+ORM-RL 降到 5.5%",
+      "section": "§3、Table 1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "以 RM 為獎勵的 RL 刷新 GSM8K 紀錄；ORM-RL 與 PRM-RL 在三種解碼下都勝過 Final-Answer RL，但在 SFT 之上且已用 RM 重排序時，RL 的額外增益很小（greedy 解碼下增益較大）。",
+      "numbers": "SFT+ORM-RL final 12.7%／trace 3.4%；SFT+PRM-RL 12.9%／3.8%；先前最佳 final 16.8%（Li et al. 2022）、trace 14.0%（PaLM few-shot）；同用 ORM 重排序時 SFT 14.8% → SFT+ORM-RL 12.7%；greedy 解碼 SFT 41.1% → SFT+ORM-RL 31.2%",
+      "section": "§3、§3.3、Table 1、Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "人工步驟標籤優於以中間數值做字串比對的啟發式步驟標籤。",
+      "numbers": "Li et al. 2022 step-level voting verifier 15.9% vs SFT+PRM reranking 14.1% 最終答案錯誤率",
+      "section": "§3.2、§2.4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "依 RM 分數棄答可大幅降低錯誤率，且 SFT 系（trace error 較低）比 Final-Answer RL 系更吃得到這個好處。",
+      "numbers": "SFT+PRM reranking：棄答 30% 時 14.1% → 2.7%，棄答 50% 時 1.5%；r=30% 時 SFT 系約 5 倍錯誤率下降，Few-shot+Final-Answer RL 約 3 倍",
+      "section": "§3.4、Fig. 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "測試時逐步 reranking 比整條解 reranking 差；作者人工檢視後歸因於 policy 熵不足，K 個延續常犯同一個錯。",
+      "numbers": "最終答案錯誤率增加約 1%（PRM）與 3%（ORM）；§2.5 另寫 1–2%",
+      "section": "Appendix E、§2.5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只用單一資料集 GSM8K，因為招募並訓練能判斷推理步驟的標註者成本很高；部分結論可能只適用於數學應用題。",
+    "ORM 能近似 PRM 可能是領域特有：數學題的錯誤步驟通常不利於得到正確答案；其他領域中不良行為（例如操弄使用者以提高滿意度）可能反而有助於拿到好結果（§3、§4.2）。",
+    "trace error 雜訊很大（Table 1 註）；評估集的標註者一致率較低（87%，Cohen's κ 0.34），因為在答案正確的解中，某一步算不算錯往往較微妙（附錄 B）。訓練集的 κ 0.915 也因為用同一批資料篩選標註者而略為高估。",
+    "SFT 加上 Final-Answer RL 後 trace error 從 11.4% 升到 12.1%，差異不顯著。",
+    "多數決與 RM-weighted decoding 依賴最終答案的精確字串比對，通用性較低。",
+    "附錄 E 的觀察檢查得較不仔細，可能只適用於其訓練設定。",
+    "選擇性預測對低 trace error 模型較有效的原因仍需進一步研究。",
+    "口語化的推理軌跡不一定反映模型內部真正的推理過程（§4.3）。",
+    "OOD（MATH pre-algebra）錯誤率 60%–70%，遠遜於 Minerva 的 29%，而且各種監督方式之間看不出趨勢。",
+    "process 回饋需要人類理解任務；在人類難以評估的領域（例如晶片佈局）要具競爭力，必須先提升人類的理解能力（§4.1.2）。"
+  ],
+  "limitations_observed": [
+    "測試集選模：§2.6 的 expert iteration 在 5 個 epoch 中依「測試集」final-answer error 挑最佳模型，這套挑法適用於所有含 RL 的列（Final-Answer RL、ORM-RL、PRM-RL，few-shot 與 SFT 兩系皆然），Table 1 與 Table 3 的這些結果都帶樂觀偏誤。影響有兩層：(1) RL 在 SFT＋RM 之上的增益本來就只有約 2 個百分點（SFT+ORM reranking 14.8% → SFT+ORM-RL 12.7%），偏誤可能與增益同量級，「RL 刷新紀錄」的主張因此打折；(2) 頭條結論「outcome 與 process 的最終答案錯誤率相近」（23.5% vs 22.3%、16.6% vs 14.8%）比的是依測試集挑出的 Few-shot+Final-Answer RL 與依驗證集 loss 早停的 SFT，選模方式不對等，偏誤可能讓 outcome 那方看起來比實際更好。",
+    "trace error 的統計力撐不起細部排序：每個模型只評 200 題，評估集 κ 只有 0.34，Table 1 的區間大幅重疊，例如 SFT+ORM-RL 3.4%（0.0–6.8）、SFT+PRM reranking 3.5%（0.5–6.5）、SFT+Final-Answer RL+ORM 3.7%、SFT+PRM-RL 3.8%、SFT+ORM reranking 4.4%（0.6–8.3）。能確認的只有「Final-Answer RL 明顯偏高」這種大差距；PRM 與 ORM、PRM-RL 與 ORM-RL 的高下無法判定，但摘要仍把 3.4% 當成 SOTA 數字報告。",
+    "trace error 的分母是各模型自己「最終答案正確」的樣本，子集因模型而異。最終答案錯誤率較高的模型，答對的多半是較簡單的題目，trace error 也就容易偏低；跨模型比較帶有選擇效應，論文沒有在共同題目子集上做對照。",
+    "PRM 與 ORM 不是乾淨的對照：PRM 從 ORM 權重初始化、learning rate 1e-7、只用 1560 份樣本微調，而且只取 SFT 多數決答錯的困難題（與測試分布不同）。兩者表現接近（final 14.1% vs 14.8%、trace 3.5% vs 4.4%），可能大半反映共同的 ORM 底子，不能據此推論 process 標籤本身的價值有限。",
+    "「ORM 較符合 PRM 標籤（85% vs 77%）」是原始一致率，沒有做機率校正（沒報 κ 之類的指標），而且是在同樣偏向困難題的 PRM 驗證集上算的。前段步驟的 PRM 標籤多半是 correct，ORM 標籤卻取決於整題最終答案，光是類別基準率就可能撐起一部分差距；這個論文最「驚人」的發現在證據上比摘要描述的弱。",
+    "摘要、結論與表格數字互相矛盾：結論說 outcome 類比的 trace error 是 12.7%，並寫「12.7% → 5.5%」，但 Table 1 是 12.4%；摘要的 trace 3.4% 屬於混合型的 SFT+ORM-RL，結論卻說是純 process 的 SFT+PRM reranking（表上 3.5%）；key results 把 2.7% 的選擇性錯誤率接在最佳模型之後，但它其實來自 SFT+PRM reranking（基準 14.1%），不是 12.7% 的模型；逐步 reranking 的代價在 §2.5 寫 1–2%、附錄 E 寫 PRM 1%／ORM 3%；Table 3 與 Table 1 的 few-shot 多數決也差 0.1–0.3 個百分點（41.4 vs 41.5、23.8 vs 23.5）。引用時應以表格為準。",
+    "所謂 process 對 outcome 的比較不是單變數實驗：最 process 的 SFT 與最 outcome 的 Few-shot+Final-Answer RL，同時在資料來源（人寫參考解 vs 模型自產）、初始化（SFT vs 5-shot prompt）、樣本重用與 RM 是否重訓上都不同，差異無法全部歸給監督粒度。",
+    "外推到 agent 軌跡要保守：本文「只用 outcome 標籤也能長出步驟層級偵測器」成立的前提，是錯的步驟幾乎走不到對的答案。agent 軌跡裡重試、繞路、中途出錯仍完成任務都很常見，正是 ORM 最不會近似 PRM 的情況；而且本文只有單輪、無工具、無環境回饋的推理，首錯標註協定在分支或可回復的軌跡上也需要重新定義「無法再到達正解」。",
+    "PRM 相對 ORM 的價值可能被本文設定低估：本文「最終答案錯誤率相近」比的是 policy 的監督方式（Few-shot+Final-Answer RL vs SFT），而對應 reward model 當 verifier 的比較是 SFT 配 PRM reranking vs ORM reranking（14.1% vs 14.8%），方向是 PRM 較好、只是差距落在雜訊內。後續的 Lightman et al. 2023（arXiv:2305.20050，比本文晚）在較難的 MATH、以大規模人工步驟標註（PRM800K）且 PRM 獨立訓練的條件下，把 PRM 勝 ORM 的差距放大到明顯。本文的 PRM 從 ORM 初始化、只有 1560 份樣本，可能正是差距出不來的原因，所以不應把本文讀成「process 標籤對最終答案沒有幫助」。",
+    "只有單一未公開的 70B 基底模型、每個設定只跑一次、沒有報告種子變異，模型規模對 process／outcome 差距的影響無從得知。"
+  ],
+  "framework_role": "T4 裡「軌跡／步驟層級評估與 process reward」的起點。它把一次多步驟推理當成可逐步標註的軌跡物件，定義兩種監督與評估粒度（outcome vs process）和兩個指標（final-answer error vs trace error），並提出一套可移植的人工失敗歸因協定：只標「第一個重大錯誤步驟」，再展開成前綴二元標籤。這就是回答「哪一步出錯」的最小標註格式，也是後來逐步監督資料格式（例如 TRL 的 prompt／completions／labels）的原型。對框架的可借用之處：(1) PRM 的逐步分數可以當成軌跡上的逐步異常分數，理論上能做 E3 的上游偵測器，但本文沒有接任何修正或反思機制；(2) 以 RM 分數門檻決定棄答，可作為 T8 任務完成分數的可信度訊號；(3) 提醒 T7／T8：只量結果會漏掉「結果對、過程錯」的軌跡。限制是設定為單輪數學推理，沒有工具呼叫、環境回饋或多輪對話。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Hugging Face TRL 的 PRMTrainer 官方文件明言 Process-supervised Reward Models 源自本文，並提供逐步監督資料格式（prompt、completions、labels，每步一個布林或浮點標籤）的訓練器。該頁標示為 experimental API，只出現在 main 版文件，v1.14.0 穩定版文件沒有這一頁；範例資料是 Math-Shepherd 的自動步驟標籤，不是本文的人工首錯協定。來源：https://huggingface.co/docs/trl/main/en/prm_trainer（2026-09-26 查閱）"
+    ],
+    "assessment": "有開源工具鏈層級的採納（PRM 概念與逐步標籤格式被 TRL 以實驗性 API 收錄），但未見可查證的商用產品直接部署本文方法的證據。PRM 在業界的普及多半經由後續工作（例如 PRM800K）間接擴散，屬學術影響力，不計入採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "GSM8K 與 MATH 公開；本文的人工步驟標註（1560 份訓練樣本、162 份驗證樣本、評估用 trace 標註）論文未提及釋出，未見公開；70B 基底模型亦未公開，無法完整重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "首度在自然語言任務上實證比較 process 與 outcome 監督，定下 ORM／PRM、首錯前綴標註協定與 trace error 指標，是步驟層級評估與 process reward 的必讀起點；但數字的統計力弱、有測試集選模問題，需搭配後續工作解讀。",
+  "related": [
+    "2110.14168",
+    "2206.02336",
+    "2203.14465",
+    "2112.09332",
+    "2203.11171",
+    "2203.15556",
+    "2103.03874",
+    "2011.08827"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

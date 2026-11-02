@@ -1,0 +1,149 @@
+{
+  "id": "2209.06899",
+  "title": "Out of One, Many: Using Language Models to Simulate Human Samples",
+  "topic": "T6",
+  "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "拿真實調查受訪者的人口與態度背景當條件，讓 GPT-3 為每位受訪者生成一個「矽受訪者」（silicon subject）回答同一份問卷，並提出 algorithmic fidelity 的四條準則，用來量測模擬出來的回應分佈和各人類子群體的分佈有多一致。",
+  "problem": "社會科學想用大型語言模型代替人類受訪者，先探索假設、試問卷措辭，但有兩個障礙。第一，一般把模型偏差當成單一、整體的缺陷，沒人檢驗模型內部是不是其實存著許多對應不同人口群體的條件分佈。第二，訓練語料的使用者組成不具代表性，直接問模型會得到偏斜的邊際分佈。沒有一套判準說明模擬人群要多逼真才能用，研究者就無從判斷矽樣本的結論能不能推到真人身上。這和對話系統用 LLM 模擬使用者是同一個問題：模擬器產生的輸入分佈要像真實使用者，評估與訓練的結論才站得住。",
+  "core_idea": "把模型的「偏差」重新理解成許多與人口特徵相關的細粒度條件分佈，而不是單一偏差：只要給對條件（第一人稱的人口背景故事），就能選出與某個真實子群體相符的回應分佈。這個性質稱為 algorithmic fidelity，並用四條準則判斷它是否成立：(1) Social Science Turing Test，人分不出生成文本和人類文本；(2) Backward Continuity，看回應能反推出條件裡的人口與態度資訊；(3) Forward Continuity，回應自然延續條件的形式、語氣與內容；(4) Pattern Correspondence，回應重現人類資料中概念、人口與行為之間的關聯結構。另外提出 silicon sampling：不用模型隱含的背景分佈 P(B_GPT3)，而是從具全國代表性的調查（ANES）抽出真實受訪者的背景 B 來條件化，於是 P(V) 由 P(V|B_ANES)·P(B_ANES) 估計，藉此校正邊際分佈的偏斜。成立的前提是模型把 P(V|B) 建模得好。",
+  "method": {
+    "共通設定（附錄 A）": "透過 OpenAI API 使用 GPT-3 Davinci（175B，base model，沒有指令微調），生成時溫度 0.7（作者說沒調過）。需要機率的場合，把語意等價的 token 視為同一集合：各集合內的 token 機率先相加（log-sum-exp），再在剩下的集合之間正規化到總和為 1，其他 token 一律忽略。沒有任何微調，全靠條件文本（context）。",
+    "silicon sampling（§4）": "每位真實受訪者建一個矽受訪者：把他在調查中的人口與態度變數，經模板轉成第一人稱背景故事，接上要回答的問題，交給模型續寫或讀取機率。母體分佈由真實調查的受訪者名單決定，不靠模型自己的先驗，所以樣本的背景組成等同 ANES。評估一律做分佈層級的比較，刻意不比對個人（附錄 D.2 明言不計算個體層級的預測正確率）。",
+    "Study 1：自由文本（§5、附錄 B.1）": "資料來自 Rothschild et al. 的 Pigeonholing Partisans。保留五項背景變數齊全的 2,107 人。背景故事的模板片段固定依序串接：ideology、7 點政黨認同、race、gender、income、age；缺值的片段直接省略。年齡對映成四個詞：18–24 為 young、25–39 為 middle-aged、40–60 為 old、61 以上為 very old。收入對映成四個詞：年收入低於 $15k 為 very poor、$15k–$50k 為 poor、$50k–$150k 為 middle-class、$150k 以上為 upper-class。模板的確切字句只在 Figure 1／6 的圖裡，快取全文拿不到，要到 Dataverse 的產生程式碼取。每位矽受訪者分別生成描述 Republicans 與 Democrats 的清單，每次生成 128 tokens，用正規表示式抽出四個詞，抽不出來時做少量人工修補。超過四個取前四個，不足四個留白。剔除不合規的回應後，人類剩 3,592 份、GPT-3 剩 4,083 份，共 7,675 份清單。",
+    "Study 1 的人工評估（§5、附錄 B.2–B.3）": "在 Lucid 上招募 2,873 位評估者，問卷用 Qualtrics 製作，開頭先過 CAPTCHA，選項順序以受訪者為單位隨機化。第一段（內容判斷）：隨機看 8 份清單，每份以「Consider the following description of [Republicans/Democrats]:」開頭，接著回答六題：猜寫作者的政黨（R／I／D）、正負面（5 點量表）、是否極端，以及是否提到人格特質、政策議題、社會群體（各為是／否）。第二段（Turing 判斷）：先告知其中有些清單是電腦程式生成的，再看另外 8 份清單，判斷每份是人還是電腦程式寫的；兩段不會出現同一份清單。每份清單在每一段大約被評 3 次（有 120 份只評了 2 次、7 份評了 4 次）。分析用 OLS 線性機率模型（fixest），依變數對來源虛擬變數（0＝人、1＝GPT-3）迴歸，控制原寫作者的 gender、Hispanic、White、income（11 級壓到 0–1）、age、party ID；猜黨派的模型另加字數。所有模型都含評估者固定效果，標準誤對評估者與清單做雙向叢集。預測值固定在 Female、非 Hispanic、White、平均收入、平均年齡、Democrat 下計算。",
+    "Study 2：投票預測（§6、附錄 C.1–C.2）": "資料是 ANES 2012、2016、2020 三波，分別有 5,914、4,270、5,442 人。條件變數共 10 個：種族／族裔、性別、年齡、意識形態自評、政黨認同、政治興趣、上教會、是否和親友談政治、看到國旗的愛國感受、居住州；2020 年缺國旗與州兩項。各變數的 ANES 變數編號都列在附錄 C.1。模板把 ANES 選項轉成貼近原措辭的第一人稱短句，例如 attend church、extremely liberal；年齡與州直接填值，缺值省略。背景故事結尾接「In [year], I voted for」，只讀取下一個 token 的機率，不做取樣，所以溫度無關。候選人各有一個 token set：2016 年 Trump 用 trump、donald、republican、conservative；Clinton 用 clinton、hillary、rodham、senator、democrat、democratic、liberal；2012、2020 年類推，大小寫與前後空白的變體都算進去。這些 token set 沒有調過。P(共和黨) > 0.5 視為投共和黨，實際上沒有剛好等於 0.5 的情況。拿這個二元結果和 ANES 自報投票（presvote2012_x／V162062x／V202110x）比較，用 R 的 psych 套件算四個指標：tetrachoric correlation、Cohen's κ、ICC（三種 ICC 的平均版本取最低者）、proportion agreement，並依性別、黨派強度、意識形態、種族、宗教、政治興趣、年齡、州等子群分開報告。",
+    "Study 2 的消融與模型比較（附錄 C.3–C.4）": "消融只用 ANES 2016，指標是 proportion agreement：一次拿掉一或兩個背景元素、只留單一元素、同時拿掉 Party 與 Ideology（只剩人口變數），以及完全沒有背景故事。沒有背景故事時每個人得到相同的預測，約等於隨機。模型比較涵蓋五個模型家族，文中點名 GPT-3、Jurassic 與 GPT-Neo 最大的 6B 模型；數字只畫在 Figure 9，快取全文沒有。",
+    "Study 3：封閉式問卷與關聯結構（§7、附錄 D.1–D.2）": "只用 ANES 2016 的 4,270 人、12 個變數：性別、種族、年齡、教育、上教會、愛國感受、談政治、政治興趣、7 點意識形態、7 點政黨認同、2016 是否投票、投給誰。後兩項合成一項，所以共 11 個題目。條件文本採訪談格式，交替出現「Interviewer: 題目（選項逐一用引號列出）」與「Me: 答案」；題目措辭盡量照抄 ANES，各題的對照見 Table 11，例如種族從五類簡化成 White／Black／Asian／Hispanic 四類。每次實驗挑一個目標題放在最後，其餘 11 題填入該受訪者的真實答案，ANES 缺答的題目整題拿掉。對目標題取樣 5 tokens（溫度 0.7），結果轉小寫、去掉前後空白，再和允許的選項做完全比對；比對不到的記為缺漏。12 個目標題 × 4,270 人，總共超過 5 萬個條件文本。分析只保留 ANES 與 GPT-3 兩邊都完整的 1,782 筆，用 DescTools 的 CramerV 對 22 個變數（11 個 ANES、11 個 GPT-3）兩兩計算 Cramer's V，比較兩種組合：ANES 輸入對 ANES 輸出、ANES 輸入對 GPT-3 輸出。",
+    "Study 3 的替代設定（附錄 D.3）": "(a) 完全合成：兩個變數都用 GPT-3 輸出來算 Cramer's V（Figure 11，只有圖）；(b) 溫度改成 0.001 與 1.0 各跑一次，報告 Cramer's V 差值的平均、最小、最大與標準差（Table 17）。",
+    "成本（附錄 E，只計最終執行）": "定價為每千 token $0.06。Study 1 的背景故事平均 66 tokens，最多生成 128 tokens，共 $29。Study 2 共 15,626 次查詢，背景故事平均 80 tokens，每次只生成 1 token，共 $75。Study 3 的提示平均 458 tokens，最多生成 5 tokens，每次實驗 $119，12 次實驗共 $1,428。"
+  },
+  "assumptions": [
+    "LLM 的輸出不是來自單一分佈，而是多個子分佈的混合；精心安排的條件文本能選出和特定人口子群對應的那一個（§3 的核心假設）。",
+    "模型把條件分佈 P(V|B) 建模得夠好，才能換上具代表性的背景分佈 P(B_ANES) 來校正邊際（§4）。",
+    "人類調查資料（ANES、Pigeonholing Partisans）的自報答案是可信的真值。",
+    "分佈層級相符就足以支撐社會科學用途，不需要個體層級一致（§7、附錄 D.2）。",
+    "Study 2 需要能拿到下一個 token 的 logprob，而且同一個候選人的各種說法可以用人工列出的 token set 窮舉。",
+    "Lucid 招募的一般評估者有能力分辨人寫和機器寫的四詞清單，所以「分不出來」代表文本夠像人。",
+    "逼真度要逐領域、逐群體另外驗證，不能跨領域假設成立（§4、§9）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Pigeonholing Partisans（Rothschild et al. 2019），2,107 位受訪者、7,675 份四詞清單",
+      "ANES 2012／2016／2020 Time Series，分別 5,914／4,270／5,442 人（Study 2）",
+      "ANES 2016 的 12 個變數，完整個案 1,782 筆（Study 3）",
+      "Lucid 人工評估：2,873 位評估者、18,903 筆評分（Study 1）"
+    ],
+    "metrics": [
+      "Turing 判斷：清單被評為「人寫」的比例（兩尾檢定）",
+      "Backward Continuity：評估者猜中寫作者黨派的比例（亂猜為 33%）",
+      "清單內容特徵：正面、極端、提到特質、議題、群體（LPM 係數與預測百分比）",
+      "投共和黨候選人的整體機率 vs. ANES 比例",
+      "tetrachoric correlation、Cohen's κ、ICC、proportion agreement（二元投票，逐子群）",
+      "Cramer's V 差值（ANES 輸入配 GPT-3 輸出 vs. ANES 輸入配 ANES 輸出）",
+      "缺漏率／不合規率（Table 15）、描述統計（Table 16）",
+      "每個研究的 API 成本"
+    ],
+    "baselines": [
+      "同一題的人類樣本（唯一的比較對象，沒有任何非 LLM 的統計模型基線）",
+      "消融：沒有背景故事、拿掉一或兩個元素、只留單一元素、拿掉 Party 與 Ideology",
+      "其他語言模型：五個家族，點名 Jurassic、GPT-Neo 6B（只有圖）",
+      "溫度 0.001／1.0 對照、完全合成的 Cramer's V（附錄 D.3）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Turing 判斷上，評估者把人類清單與 GPT-3 清單判為「人寫」的比例幾乎相同，也就是分不出來。兩者都有約四成被判成電腦寫的。",
+      "numbers": "人類清單 61.7% vs. GPT-3 清單 61.2%，兩尾 p = 0.44",
+      "section": "§5",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "看了兩種清單的評估者都能以高於亂猜的比例猜中寫作者的黨派，但看 GPT-3 清單時顯著較低，代表 GPT-3 清單帶的身分線索比較弱。",
+      "numbers": "人類 60.1% vs. GPT-3 52.8%，差 7.3 個百分點，p < .001，亂猜為 33%；Table 3 的 Source:GPT-3 係數為 −0.073（SE 0.008）",
+      "section": "§5、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在只比較兩黨候選人 token set、強制二選一的設定下，silicon sampling 得到的整體投票比例接近 ANES，但每年都有幾個百分點的偏差，方向也不固定。",
+      "numbers": "投共和黨的機率：2012 年 GPT-3 0.391 vs. ANES 0.404；2016 年 0.432 vs. 0.477；2020 年 0.472 vs. 0.412",
+      "section": "§6",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "個人層級的二元投票和 ANES 自報高度對應，三個年份都成立，超過一半的子群 tetrachoric ≥ 0.90；2020 年在訓練語料截止之後，仍然維持高對應。",
+      "numbers": "全樣本 tetrachoric 0.90／0.92／0.94；proportion agreement 0.85／0.87／0.89；Cohen's κ 0.69／0.73／0.77；ICC 0.81／0.84／0.87（2012／2016／2020）",
+      "section": "§6、Table 1、Tables 8–10",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "作者認為純獨立選民是唯一的例外，2020 年幾乎沒有對應，並解釋這群人本來就最難預測。不過附錄的 Cohen's κ 顯示，其他子群也有偏低的情況（見 limitations_observed）。",
+      "numbers": "Independents 的 tetrachoric 0.31／0.41／0.02、κ 0.16／0.25／0.02、proportion agreement 0.59／0.62／0.53（2012／2016／2020）",
+      "section": "§6、Table 1、Tables 8–10",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "11 個題目兩兩之間的關聯強度，GPT-3 大致重現人類資料的強弱排序：人類資料裡強的關聯在 GPT-3 也強，弱的也弱。",
+      "numbers": "Cramer's V 差值平均 −0.026，標準差 0.068，範圍 −0.241 到 0.168（溫度 0.7，1,782 筆完整個案）；單對差距最大的例子：political.interest→discuss.politics 人類 0.40 vs. GPT-3 0.16，ideology→church.goer 0.28 vs. 0.07",
+      "section": "§7、Figure 4、Tables 12–14、Table 17",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "消融顯示沒有任何單一背景元素能單獨解釋預測力，模型確實在整合多個元素。Party 與 Ideology 都能預測投票，但 Party 較強。加入州與政治興趣反而稍微變差；只剩 8 個人口元素時，組合仍勝過任何單一元素。",
+      "numbers": "只有 Figure 8 的長條圖，正文沒有給數字；指標是 ANES 2016 的 proportion agreement",
+      "section": "附錄 C.3、Figure 8",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "溫度會明顯影響逼真度：溫度 0.001 接近 greedy，會高估關聯，還把所有受訪者的種族都生成成 white（mode collapse）；0.7 誤差最小，1.0 和它接近，但有效個案大減。",
+      "numbers": "Cramer's V 差值的平均與標準差：溫度 0.001 為 0.059（SD 0.141，N 2,518，最大 0.700）；0.7 為 −0.026（SD 0.068，N 1,782）；1.0 為 −0.031（SD 0.070，N 1,022）。每種溫度只跑一次",
+      "section": "附錄 D.3.2、Table 17",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "algorithmic fidelity 不代表模型能模擬特定個人，也不保證每個生成回應都連貫；大型語言模型已知的缺陷照樣存在（§3）。",
+    "不提出具體指標或數值門檻，只主張在多個資料來源、多種量測、多個群體上反覆得到支持（§3）。",
+    "證據只涵蓋美國政治與輿論，其他領域和群體都要另外驗證（§4、§9）。",
+    "純獨立選民的投票預測對應很差，2020 年尤其嚴重（§6）。",
+    "刻意不評估個體層級的對應，只比分佈（§7、附錄 D.2）。",
+    "溫度沒有調過；模板與 10 個背景元素是第一次嘗試，沒有最佳化（附錄 A、C.3）。",
+    "GPT-3 有不合規回應，Study 3 部分題目的缺漏率很高；作者認為針對題目另外訓練可以降低（附錄 D.2.1）。",
+    "同樣的逼真度可以被用來針對特定群體散布錯誤資訊、操弄或詐騙（§9）。",
+    "成本只計最終執行，另外還有額外的試跑（附錄 E）。"
+  ],
+  "limitations_observed": [
+    "Study 3 的邊際分佈嚴重失真，Cramer's V 把這件事蓋住了。Table 16 顯示，在同樣 1,782 筆資料上，GPT-3 的矽樣本和 ANES 差很多：White 0.974 vs. 0.803、Hispanic 0.001 vs. 0.089、Male 0.759 vs. 0.481、Graduate Degree 0.002 vs. 0.196、Some College 0.642 vs. 0.348；年齡平均 35.5 vs. 50.1，還出現最小值 0 的無效年齡；投給其他候選人 0.523 vs. 0.078、Trump 0.245 vs. 0.438。Study 3 每次都拿其他 11 項真實 ANES 答案當條件去預測目標項，所以這些偏移代表 P(V|B) 本身就錯了。§4 主張 silicon sampling 能校正邊際，前提正是 P(V|B) 建模良好，這個前提在 Table 16 裡並不成立。Cramer's V 經過邊際校正，對這種偏移不敏感，所以一個模擬器可以關聯結構看起來對，條件分佈產出的使用者樣貌卻是錯的。T6 驗收模擬器時，邊際與關聯要分開量。",
+    "Study 2 和 Study 3 的投票邊際互相矛盾，限縮輸出空間美化了逼真度。Study 2 只在兩黨候選人的 token set 之間正規化，「投給第三人」的機率在設計上就被丟掉，所以整體比例看起來接近 ANES（例如 2016 年 0.432 vs. 0.477）。Study 3 改成自由取樣，選項裡有 someone else：同樣是 2016 年，GPT-3 有 0.523 選第三人（ANES 0.078），投 Trump 只有 0.245（ANES 0.438）。可見 Study 2 的高一致度有一部分來自強制二選一。T6 用受限選項或 logprob 驗收模擬器時，會高估它在開放輸出下的逼真度。",
+    "Study 1 的正文說五項內容特徵都相似，但附錄 Table 2 的 Source:GPT-3 係數在 traits（−0.058）、issues（0.033）、groups（0.078）三項都超過 4 個標準誤（SE 約 0.007），在統計上顯著不同。正文只呈現預測百分比看起來都接近，沒有說明這些差異是顯著的。",
+    "Study 1 的 Turing 判斷沒有正對照：沒放一組明顯是機器寫的清單（例如沒有條件的 GPT-3 或隨機詞），來證明評估者有分辨能力。GPT-3 清單平均 7.78 個詞（最長 97），人類只有 4.54 個（最長 15），長度差這麼多仍被判為一樣像人，比較可能反映評估者在四詞清單這種低資訊量任務上分不出來，而不是 GPT-3 真的像人。GPT-3 的輸出還經過 regex 抽取與人工修補，研究者的整理也可能讓它看起來更像人。",
+    "Backward Continuity 的證據其實偏向不利：猜中黨派的比例 GPT-3 比人類低 7.3 個百分點（p < .001），代表 GPT-3 清單帶的身分線索比人類清單少，作者卻把它寫成支持準則 2。",
+    "Study 2 沒有非 LLM 基線。背景故事本身就寫了政黨認同與意識形態，而 token set 又把 republican、democrat、conservative、liberal 這些詞算成投票選擇。strong partisans 的 tetrachoric 0.99–1.00，有一部分可能只是模型把條件裡的詞原樣接下去；附錄 C.3 也顯示 Party 是最強的預測元素。拿同樣 10 個變數訓練一個 logistic regression，或用「依黨派投票」這條規則當對照，才能看出 GPT-3 額外帶來多少資訊，但論文沒做。",
+    "正文 Table 1 只報 tetrachoric 與 proportion agreement 這兩個比較好看的指標。附錄的 Cohen's κ 明顯較低：2012 年 Blacks 的 κ 只有 0.31，但 proportion agreement 是 0.97；2016 年 Liberals 的 κ 為 0.25，proportion agreement 0.95。這表示高一致度大多來自基準率極度一面倒，不是模型有鑑別力。",
+    "Study 3 只留兩邊都完整的 1,782 / 4,270 筆（約 42%），而 GPT-3 在投票（23.8%）、意識形態（22.6%）、政治興趣（14.8%）上缺漏率很高，所以留下來的是模型答得出來的那些人，有選擇偏誤。此外主結果的每一對 Cramer's V 有一邊是真實 ANES 輸入，和人類資料相符有一部分是機械性的；完全合成的版本（附錄 D.3.1）只有圖，沒有數字。",
+    "溫度只各跑一次，而 0.7 這個「業界標準」值正好在同一份資料上誤差最小。0.001 時所有人都被判成 white，這說明逼真度高度依賴取樣設定，而且會在低溫時整群崩成單一類別；對要用低溫求穩定的模擬器來說，這是直接的警訊。",
+    "「2020 年超出訓練語料仍然成立」的證據偏弱：Trump 在 2016 年就是候選人，Biden 在語料中也很常見；2020 年還少了國旗與州兩個條件變數。這比較像一般化到新的一年，還算不上真正的分佈外。",
+    "只測了 base 的 GPT-3 davinci，而 Study 2 依賴 next-token logprob，很多聊天 API 拿不到這個值。經過指令微調或 RLHF 的聊天模型，意見分佈可能會移動：Santurkar et al.（arXiv 2303.17548）發現對齊過的模型更不能代表美國整體民意。本文的結論不能直接套到今天用來當使用者模擬器的聊天模型上。",
+    "全部都是單輪問答，沒有多輪互動，也沒有 agent 在迴路裡；又刻意不評個體層級。所以它無法支持對話使用者模擬器最需要的性質：同一個 persona 在多輪中保持一致，並且對 agent 的回應做出合理反應。",
+    "附錄有幾處筆誤與交叉引用錯誤：附錄 E 寫 Study 1 有「1,1471」次查詢，但附錄 B.1 說是 2,107 人；「20112」；附錄 B.3、D.2 引用的圖號和正文對不上（寫 Figure 4／6，實際上是 Figure 3／4）。不影響結論，但降低附錄的可信度。"
+  ],
+  "framework_role": "在 T6 裡，這篇是「LLM 模擬人群的逼真度」這個概念的源頭。它提供四樣可以直接搬去驗收使用者模擬器的東西：(1) 四條準則可以當檢核清單，分別對應分不出人機、回應透露 persona、回應延續 persona、關聯結構相符；(2) silicon sampling 的做法：persona 池從真實使用者的背景分佈抽樣，不讓 LLM 自己生成 persona，以免邊際偏斜；(3) 只在分佈層級比較模擬與真實；(4) 用 token set 合併 logprob，把受限選項的回答轉成機率。它評的是模擬器本身，不是 agent：論文裡沒有接收使用者輸入的對話 agent，也沒有互動紀錄流回評估，所以不直接落在 E1 或 E6 上。它的價值在 E1 之前，決定模擬器生成的輸入分佈能不能信。Table 16 的反例同時提醒：關聯指標好看不等於邊際對，框架裡的模擬器驗收要把邊際分佈和關聯結構分開量。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有宣稱任何部署或產品。本次 WebSearch 額度已用盡（200/200），沒能廣泛搜尋官方產品頁或文件，所以這裡是「沒查到」，不是「查證過沒有」。期刊版刊於 Political Analysis 31(3)（2023，已經由 Cambridge 期刊頁確認），重現材料放在 Harvard Dataverse，但這兩者分別屬於學術影響力與可重現性，都不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://doi.org/10.7910/DVN/JPV20K（Harvard Dataverse 的重現材料，Political Analysis 期刊頁列為 data availability；內含資料產生程式碼、R 與 Python 分析腳本、master script 與 README）",
+    "data": "公開，CC0 授權。Dataverse 上有三個研究的矽樣本資料（Study 2 有多個語言模型在 ANES 2012／2016／2020 上的 pkl 檔，Study 3 為 CSV）以及背景資料。ANES 本身是公開資料；Pigeonholing Partisans 的原始人類資料有沒有完整附上，沒有逐檔確認。原始 GPT-3 Davinci 端點目前還能不能用，本次未查證。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是 LLM 模擬人群逼真度（algorithmic fidelity）的概念源頭，四條準則與 silicon sampling 可以直接當 T6 模擬器的驗收清單；但證據全是單輪問卷、base 模型、美國政治，Table 16 又顯示邊際嚴重偏移，不能外推到多輪對話的使用者模擬器，所以有價值但不算必讀。",
+  "related": ["2005.14165"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

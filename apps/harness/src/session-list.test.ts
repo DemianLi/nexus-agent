@@ -2,16 +2,24 @@
  * 冷讀的 thread 列表——[#302](https://github.com/DemianLi/nexus-agent/issues/302)。
  *
  * 檔案都是手寫的，不經 serve：這一檔問的是「讀出來對不對」，產品路徑上的「列表不建 agent、不拿租約」
- * 在 `serve-session-list.test.ts`。
+ * 在 `serve-session-list.test.ts`。讀都經過 JSONL 後端的 `list`／`open(id, 'read')`（#665）；最後一條換成不落檔的
+ * 假 `SessionStore`，驗列表只靠介面。
  */
 
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import {
+  generationLogFilename,
+  SESSION_LOG_FORMAT_VERSION,
+  SessionNotFoundError,
+  sessionDirectoryName,
+} from '@nexus/core';
+import type { SessionEvent, SessionStore, StoredSessionHeader } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
-import { openJsonlSessionStore } from './jsonl-session-store.js';
-import { fallbackThreadTitle, listStoredThreads } from './session-list.js';
+import { legacyTwoFilePathsIn, openJsonlSessionStore } from './jsonl-session-store.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionOf } from './session-files.fixture.js';
+import { listStoredThreads, readStoredSubagentSession } from './session-list.js';
 
 const CWD = '/專案/甲';
 const LIMITS = { maxWords: 5, maxBytes: 40 };
@@ -42,7 +50,12 @@ async function dir(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'nexus-session-list-'));
 }
 
-/** 照 JSONL 後端的檔名寫一份。`events` 省略即只有 header。 */
+/** 讀 `directory` 的那個後端。 */
+function store(directory: string): SessionStore {
+  return openJsonlSessionStore({ directory });
+}
+
+/** 照 JSONL 後端舊兩檔的檔名寫一份（`base` 省略就是 id）。`events` 省略即只有 header。 */
 async function writeThread(
   directory: string,
   id: string,
@@ -54,16 +67,18 @@ async function writeThread(
     readonly events?: readonly Draft[];
     /** 接在最後、沒有換行的那一段。 */
     readonly tail?: string;
+    readonly base?: string;
   } = {},
 ): Promise<void> {
+  const base = options.base ?? id;
   const header = {
-    version: options.version ?? SESSION_LOG_FORMAT_VERSION,
+    version: options.version ?? LEGACY_TWO_FILE_FORMAT_VERSION,
     id,
     createdAt: options.createdAt ?? 1_000,
     ...(options.cwd === null ? {} : { cwd: options.cwd ?? CWD }),
     ...(options.parentSession === undefined ? {} : { parentSession: options.parentSession }),
   };
-  await writeFile(join(directory, `${id}.header.json`), JSON.stringify(header));
+  await writeFile(join(directory, `${base}.header.json`), JSON.stringify(header));
   if (options.events === undefined) return;
   const body = options.events
     .map(
@@ -71,7 +86,7 @@ async function writeThread(
         `${JSON.stringify({ type: event.type, seq, time: event.time, data: event.data })}\n`,
     )
     .join('');
-  await writeFile(join(directory, `${id}.jsonl`), `${body}${options.tail ?? ''}`);
+  await writeFile(join(directory, `${base}.jsonl`), `${body}${options.tail ?? ''}`);
 }
 
 describe('listStoredThreads', () => {
@@ -95,7 +110,7 @@ describe('listStoredThreads', () => {
     await writeThread(directory, 'tie-b', { createdAt: 2_000, events: [] });
     await writeThread(directory, 'tie-a', { createdAt: 2_000, events: [] });
 
-    const { items } = await listStoredThreads(directory, { cwd: CWD, title: LIMITS });
+    const { items } = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
     expect(items.map((item) => [item.threadId, item.updatedAt])).toEqual([
       ['recent', 5_000],
       ['fresh', 4_000],
@@ -118,7 +133,7 @@ describe('listStoredThreads', () => {
     // 只有 header：還沒寫第一筆就當了。
     await writeThread(directory, 'header-only');
 
-    const { items } = await listStoredThreads(directory, { cwd: CWD, title: LIMITS });
+    const { items } = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
     const byId = Object.fromEntries(items.map((item) => [item.threadId, item]));
     expect(byId['talked']).toMatchObject({ title: '第一句', blank: false });
     expect(byId['goal-only']).toEqual(expect.objectContaining({ blank: false }));
@@ -128,15 +143,49 @@ describe('listStoredThreads', () => {
     expect(byId['header-only']).toMatchObject({ blank: true });
   });
 
+  it('記了標題就讀最後一顆；工具參數裡提到 session/title、形狀不對的都不算（#647）', async () => {
+    const directory = await dir();
+    const titled = (title: unknown, time: number): Draft => ({
+      type: 'session/title',
+      time,
+      data: { title, messageSeqs: [0], source: { kind: 'fallback' } },
+    });
+    await writeThread(directory, 'logged', {
+      events: [said('第一句', 1_100), titled('記下的標題', 1_101), titled('後來的標題', 1_300)],
+    });
+    // 記的標題跟第一句推出來的不一樣：讀到的是記的，不是當場推的。
+    await writeThread(directory, 'noise', {
+      events: [
+        said('第一句', 1_100),
+        {
+          type: 'tool/call',
+          time: 1_200,
+          data: { callId: 'c', name: 'grep', arguments: '{"pattern":"session/title"}' },
+        },
+        titled(42, 1_300),
+      ],
+    });
+
+    const { items } = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
+    const byId = Object.fromEntries(items.map((item) => [item.threadId, item]));
+    expect(byId['logged']).toMatchObject({ title: '後來的標題' });
+    // 一顆像樣的 `session/title` 都沒有：照舊從第一句推。
+    expect(byId['noise']).toMatchObject({ title: '第一句' });
+  });
+
   it('只列切得過去的：subagent、別的目錄、沒記目錄的都不列，也不算讀不懂', async () => {
     const directory = await dir();
     await writeThread(directory, 'root', { events: [said('我的', 1_100)] });
-    await writeThread(directory, 'root%2ftask', { parentSession: 'root', events: [] });
+    await writeThread(directory, 'root/task', {
+      base: 'root%2ftask',
+      parentSession: 'root',
+      events: [],
+    });
     // `projectKey` 有損：別的目錄可能落在同一格，header 的 cwd 才分得開。
     await writeThread(directory, 'elsewhere', { cwd: '/專案/乙', events: [said('別人的', 1_100)] });
     await writeThread(directory, 'nowhere', { cwd: null, events: [said('沒記的', 1_100)] });
 
-    const listed = await listStoredThreads(directory, { cwd: CWD, title: LIMITS });
+    const listed = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
     expect(listed.items.map((item) => item.threadId)).toEqual(['root']);
     expect(listed.unreadable).toBe(0);
   });
@@ -149,9 +198,15 @@ describe('listStoredThreads', () => {
       join(directory, 'no-id.header.json'),
       JSON.stringify({ version: 1, createdAt: 1 }),
     );
-    await writeThread(directory, 'future', { version: SESSION_LOG_FORMAT_VERSION + 1, events: [] });
+    // 比這一版新的寫方寫的是世代檔：舊路徑上版本 52 起的 header 是墓碑，驗不到「版本太新」。
+    const future = SESSION_LOG_FORMAT_VERSION + 1;
+    await mkdir(join(directory, sessionDirectoryName('future')), { recursive: true });
+    await writeFile(
+      join(directory, sessionDirectoryName('future'), generationLogFilename(future)),
+      `${JSON.stringify({ type: 'session', version: future, id: 'future', createdAt: 1_000, cwd: CWD })}\n`,
+    );
 
-    const listed = await listStoredThreads(directory, { cwd: CWD, title: LIMITS });
+    const listed = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
     expect(listed.items.map((item) => item.threadId)).toEqual(['good']);
     expect(listed.unreadable).toBe(3);
   });
@@ -173,14 +228,44 @@ describe('listStoredThreads', () => {
       ],
     });
 
-    const { items } = await listStoredThreads(directory, { cwd: CWD, title: LIMITS });
+    const { items } = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
     const byId = Object.fromEntries(items.map((item) => [item.threadId, item]));
     expect(byId['torn']).toMatchObject({ title: '完整的', updatedAt: 1_100 });
     expect(byId['mention']).toMatchObject({ blank: true });
   });
 
+  it('日誌中間壞掉：照樣列出來，讀得懂的照算，不算讀不懂（點下去由續接講原因）', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'broken', { events: [] });
+    await writeFile(
+      join(directory, 'broken.jsonl'),
+      [
+        JSON.stringify({
+          type: 'turn/start',
+          seq: 0,
+          time: 1_100,
+          data: { kind: 'message', text: '壞之前' },
+        }),
+        '{壞掉',
+        JSON.stringify({
+          type: 'turn/start',
+          seq: 2,
+          time: 1_300,
+          data: { kind: 'message', text: '壞之後' },
+        }),
+        '',
+      ].join('\n'),
+    );
+
+    const listed = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
+    expect(listed).toEqual({
+      items: [{ threadId: 'broken', updatedAt: 1_300, blank: false, title: '壞之前' }],
+      unreadable: 0,
+    });
+  });
+
   it('目錄還不存在：空的，不拋', async () => {
-    const listed = await listStoredThreads(join(await dir(), '還沒有'), {
+    const listed = await listStoredThreads(store(join(await dir(), '還沒有')), {
       cwd: CWD,
       title: LIMITS,
     });
@@ -191,53 +276,197 @@ describe('listStoredThreads', () => {
     ['maxWords 是 0', { maxWords: 0, maxBytes: 40 }],
     ['maxBytes 不是整數', { maxWords: 5, maxBytes: 1.5 }],
   ])('上限不合法（%s）：空目錄也當場拋', async (_label, title) => {
-    await expect(listStoredThreads(await dir(), { cwd: CWD, title })).rejects.toThrow('正整數');
+    await expect(listStoredThreads(store(await dir()), { cwd: CWD, title })).rejects.toThrow(
+      '正整數',
+    );
   });
 
   /**
    * **冷讀的一半在這一層就量得到**：續接那條路會拿寫租約，別的把手握著時它拋；列表不拿，所以照樣列得出來，
-   * 而且兩個檔一個位元組都沒動。產品路徑上的另一半（不建 agent）在 `serve-session-list.test.ts`。
+   * 而且這份會話的檔（墓碑、遷移來源的舊日誌、世代檔）一個位元組都沒動。產品路徑上的另一半（不建 agent）在
+   * `serve-session-list.test.ts`。
    */
   it('別的把手握著那一份：照樣列得出來，header 與日誌都沒動', async () => {
     const directory = await dir();
     await writeThread(directory, 'held', { events: [said('握著的', 1_100)], tail: '{"半行' });
-    const headerPath = join(directory, 'held.header.json');
-    const logPath = join(directory, 'held.jsonl');
-    const before = [await readFile(headerPath, 'utf8'), await readFile(logPath, 'utf8')];
+    // 續接先把舊兩檔遷成世代檔、舊 header 換成墓碑：比的是握住之後的樣子（墓碑、遷移來源的日誌、世代檔）。
     const holder = await openJsonlSessionStore({ directory }).resume('held');
+    const paths = [
+      legacyTwoFilePathsIn(directory, 'held').header,
+      legacyTwoFilePathsIn(directory, 'held').log,
+      (await sessionOf(directory, 'held')).logPath,
+    ];
+    const read = () => Promise.all(paths.map((path) => readFile(path, 'utf8')));
+    const before = await read();
     try {
-      const { items } = await listStoredThreads(directory, { cwd: CWD, title: LIMITS });
+      const { items } = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
       expect(items.map((item) => item.threadId)).toEqual(['held']);
     } finally {
       await holder.stored.close();
     }
-    expect([await readFile(headerPath, 'utf8'), await readFile(logPath, 'utf8')]).toEqual(before);
+    expect(await read()).toEqual(before);
+  });
+
+  /**
+   * **列表只靠 `SessionStore`**（#665）：一個不落檔的假後端也列得出 id、標題與 `blank`，`unreadable` 照後端說的轉交。
+   * 列與讀之間被刪掉的那一份（`open` 拋 not found）不列、不算讀不懂。
+   */
+  it('不落檔的假後端：照樣列得出 threadId、標題與 blank', async () => {
+    const header = (id: string, extra: Partial<StoredSessionHeader> = {}): StoredSessionHeader => ({
+      version: SESSION_LOG_FORMAT_VERSION,
+      id,
+      createdAt: 1_000,
+      cwd: CWD,
+      ...extra,
+    });
+    const event = (draft: Draft, seq: number) => ({ ...draft, seq }) as unknown as SessionEvent;
+    const stored = new Map<string, { header: StoredSessionHeader; events: SessionEvent[] }>([
+      ['talked', { header: header('talked'), events: [event(said('假後端的第一句', 2_000), 0)] }],
+      ['empty', { header: header('empty', { createdAt: 1_500 }), events: [] }],
+      ['child', { header: header('talked/sub', { parentSession: 'talked' }), events: [] }],
+    ]);
+    const fake: SessionStore = {
+      create: () => {
+        throw new Error('列表不該開新的');
+      },
+      resume: () => Promise.reject(new Error('列表不該續接')),
+      list: () =>
+        Promise.resolve({
+          sessions: [
+            ...[...stored.values()].map(({ header: h }) => ({
+              header: h,
+              storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
+              revision: 'r',
+            })),
+            {
+              header: header('gone'),
+              storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
+              revision: 'r',
+            },
+          ],
+          unreadable: 2,
+        }),
+      open: (id) => {
+        const found = [...stored.values()].find(({ header: h }) => h.id === id);
+        if (found === undefined) return Promise.reject(new SessionNotFoundError(id, '不在了'));
+        return Promise.resolve({
+          header: found.header,
+          storedFormatVersion: SESSION_LOG_FORMAT_VERSION,
+          read: () => Promise.resolve(found.events),
+        });
+      },
+    };
+
+    const listed = await listStoredThreads(fake, { cwd: CWD, title: LIMITS });
+    expect(listed).toEqual({
+      items: [
+        { threadId: 'talked', updatedAt: 2_000, blank: false, title: '假後端的第一句' },
+        { threadId: 'empty', updatedAt: 1_500, blank: true },
+      ],
+      unreadable: 2,
+    });
   });
 });
 
-describe('fallbackThreadTitle', () => {
-  it('中文吃位元組上限：40 個位元組是 13 個字，不切在一個字的中間', () => {
-    const title = fallbackThreadTitle('請幫我把登入頁面的錯誤訊息改成中文並補上測試', LIMITS);
-    expect(title).toBe('請幫我把登入頁面的錯誤訊息');
-    expect(Buffer.byteLength(title, 'utf8')).toBeLessThanOrEqual(40);
+describe('readStoredSubagentSession', () => {
+  const RUN = 'bg-0123456789ab';
+
+  it('讀得到這條 thread 底下的那一份；header 的 parentSession 不是這條 thread 就當沒有', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'root', { events: [said('主的', 1_100)] });
+    await writeThread(directory, `root/${RUN}`, {
+      base: `root%2f${RUN}`,
+      parentSession: 'root',
+      events: [said('派給你的', 1_200), ended(1_300)],
+    });
+    // 檔案被搬到別條 thread 的名字底下、header 還指著原本的：第二層擋下。
+    await writeThread(directory, `other/${RUN}`, {
+      base: `other%2f${RUN}`,
+      parentSession: 'root',
+      events: [said('搬錯家的', 1_200)],
+    });
+
+    const events = await readStoredSubagentSession(store(directory), 'root', RUN);
+    expect(events?.map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
+    expect(await readStoredSubagentSession(store(directory), 'other', RUN)).toBeUndefined();
   });
 
-  it('英文吃詞數上限', () => {
-    expect(fallbackThreadTitle('fix the login bug on safari please', LIMITS)).toBe(
-      'fix the login bug on',
-    );
+  it('沒有這一份是 undefined；壞檔照拋（由呼叫端決定怎麼講）', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'root', { events: [] });
+    expect(await readStoredSubagentSession(store(directory), 'root', RUN)).toBeUndefined();
+
+    await writeFile(join(directory, `root%2f${RUN}.header.json`), '{壞的');
+    await expect(readStoredSubagentSession(store(directory), 'root', RUN)).rejects.toThrow();
+  });
+});
+
+describe('客戶端放棄請求（#983）', () => {
+  /** 數開了幾份，並在第 `at` 次開檔時中止。 */
+  function abortingStore(
+    directory: string,
+    at: number,
+  ): { store: SessionStore; opened: string[]; signal: AbortSignal } {
+    const real = store(directory);
+    const controller = new AbortController();
+    const opened: string[] = [];
+    const counting: SessionStore = {
+      ...real,
+      async open(id, mode) {
+        opened.push(id);
+        if (opened.length === at) controller.abort(new Error('客戶端斷線'));
+        return real.open(id, mode);
+      },
+    };
+    return { store: counting, opened, signal: controller.signal };
+  }
+
+  it('中止之後不再多開一份，拋的是中止的原因', async () => {
+    const directory = await dir();
+    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+      await writeThread(directory, id, { events: [said(`問 ${id}`, 1_100)] });
+    }
+    const probe = abortingStore(directory, 2);
+
+    await expect(
+      listStoredThreads(probe.store, { cwd: CWD, title: LIMITS, signal: probe.signal }),
+    ).rejects.toThrow('客戶端斷線');
+    // 第二份開到一半被中止：那一份讀完，第三份起一份都不開。
+    expect(probe.opened).toHaveLength(2);
   });
 
-  it('控制字元、跳脫序列與方向控制字元都拿掉，空白收成一格', () => {
-    const esc = String.fromCharCode(0x1b);
-    const rlo = String.fromCharCode(0x202e);
-    const bell = String.fromCharCode(0x07);
-    expect(fallbackThreadTitle(`  ${esc}[31m紅字${esc}[0m\n\t${rlo}反過來${bell}  `, LIMITS)).toBe(
-      '紅字 反過來',
-    );
+  it('一開始就已經中止：一份都不開', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', { events: [said('問', 1_100)] });
+    const opened: string[] = [];
+    const real = store(directory);
+    const counting: SessionStore = {
+      ...real,
+      async open(id, mode) {
+        opened.push(id);
+        return real.open(id, mode);
+      },
+    };
+
+    await expect(
+      listStoredThreads(counting, {
+        cwd: CWD,
+        title: LIMITS,
+        signal: AbortSignal.abort(new Error('早就斷了')),
+      }),
+    ).rejects.toThrow('早就斷了');
+    expect(opened).toEqual([]);
   });
 
-  it('清完是空的就是空字串', () => {
-    expect(fallbackThreadTitle(`  ${String.fromCharCode(0x200b)}  `, LIMITS)).toBe('');
+  it('沒中止就跟沒傳 signal 一樣', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', { events: [said('問', 1_100)] });
+    const withSignal = await listStoredThreads(store(directory), {
+      cwd: CWD,
+      title: LIMITS,
+      signal: new AbortController().signal,
+    });
+    const without = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
+    expect(withSignal).toEqual(without);
   });
 });

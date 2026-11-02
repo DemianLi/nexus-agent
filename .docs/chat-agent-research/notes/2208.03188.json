@@ -1,0 +1,219 @@
+{
+  "id": "2208.03188",
+  "title": "BlenderBot 3: a deployed conversational agent that continually learns to responsibly engage",
+  "topic": "T6",
+  "subarea": "使用者回饋迴路與滿意度估計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Meta 的技術報告：以 OPT-175B（另有 R2C2-3B、OPT-30B）微調出模組化、可上網搜尋並具長期記憶的開放領域對話模型 BB3，公開部署在 blenderbot.ai 給美國成年使用者。部署介面收集逐則 thumbs up/down、負評原因與自由文字回饋，並摘要兩篇配套論文（FITS 回饋學習、SafetyMix 防 troll）的結論，作為之後分批持續學習的依據。",
+  "problem": "微調資料若靠付費 crowdworker 收集，規模上不去，分佈也由研究者的指示決定，不一定符合真實使用者的需求。把 agent 公開部署、從真實使用者的互動與回饋持續學習，可以解決分佈錯配與規模問題，但會碰上三個難題。第一，使用者不一定願意給足夠的回饋。第二，部分使用者是惡意的 troll，Tay 就是前車之鑑。第三，對話不對稱時（使用者把 bot 當助理），不能直接拿人類那一側的發言當模仿目標。本文要示範一個「負責任、能從部署互動持續改進」的研究型聊天系統該怎麼搭，並公開模型、程式碼與資料，讓社群可以重現。",
+  "core_idea": "用同一個 transformer 以 control code 切換，執行八個序列到序列模組：搜尋決策、查詢生成、知識回應、實體抽取、記憶生成、記憶存取決策、記憶存取、最終回覆。再加上由外部搜尋引擎執行的網路搜尋，共九個模組。部署端則在每則 bot 訊息上掛輕量的顯式回饋：按讚／倒讚；倒讚時要求選原因，bot 以樣板道歉並追問，引出自由文字。收進來的回饋先做品質稽核（與 crowdworker 比對一致率），再用 user-level 的可信度分數過濾 troll，最後分批重新微調。回饋學習的方法選擇（模組層監督優於只針對最終回覆的監督、Director 優於 reranking）由配套論文在 crowdworker 環境下先做對照實驗決定。",
+  "method": {
+    "模型架構與推論流程（§3.1、Table 1、Figure 2）": [
+      "單一 transformer 執行所有模組。輸入末端附上表示模組的特殊 control token，對話歷史中的每位說話者加上「Person 1:」或「Person 2:」前綴；依模組不同，歷史可能被截斷，例如決策模組只看最後一輪。",
+      "每收到一則使用者訊息：(1) 搜尋決策模組看最後一輪，輸出 do search 或 do not search；記憶存取決策模組看最後一輪加記憶庫，輸出 access memory 或 do not access memory。(2) 若要搜尋：以完整上下文生成查詢，呼叫外部搜尋引擎（部署用 Mojeek）取回 N 篇文件或片段，再以上下文加文件生成 knowledge response。這一步的訓練目標是從文件逐字複製，用來抑制幻覺。結果加上 control token 前綴後接回上下文。(3) 若要存取記憶：以上下文加記憶庫輸出一條記憶，同樣接回上下文。(4) 兩者都不需要時，從歷史中抽一個相關實體接回上下文。(5) 最終回覆模組以組好的上下文生成回覆；知識與記憶各有專屬前綴 token。",
+      "記憶寫入：記憶生成模組把最後一輪摘要成第一人稱事實，例如把「我的貓是黑的」摘成「我有一隻黑貓」，存進文字記憶庫；判斷不必記時輸出「no persona」。",
+      "記憶庫塞不進 context 時：3B 模型用 Fusion-in-Decoder；OPT 系列在 2048 token 的 context 內抽樣記憶，優先保留與前幾輪有關鍵字重疊的記憶。"
+    ],
+    "訓練資料建構（§3.2.2、Table 2、Table 16–17、附錄 B.1）": [
+      "搜尋決策：SQuAD、TriviaQA、NQ 當 do search 正例。WoW、WizInt 依該輪人類是否用了知識來標記。PersonaChat、ED、MSC 用啟發式標記：上下文中有實體就算 do search，否則算 do not search。",
+      "查詢生成：用 WizInt 與 FITS 中人類寫的搜尋查詢做監督學習。",
+      "知識回應：用 WoW、WizInt、FITS 中人類挑的知識句。QA 資料（MS MARCO、NQ、SQuAD、TriviaQA）把答案當知識回應；MS MARCO 的目標改成與答案 F1 重疊最高的輸入句，F1 < 0.5 的樣本丟掉，808,731 筆剩 281,658 筆。NQ 用三種設定：全部文件、只給 gold 文件、抽樣對話歷史。",
+      "實體抽取：用 nltk 找名詞片語，取同時出現在原始回覆與上下文中的那一個當目標（沿用 Adolphs et al. 2021 的程序）。",
+      "記憶生成只用 MSC 的人工摘要事實。記憶存取決策的標法同實體抽取：有實體就是正例。記憶存取的目標是與下一句詞重疊最高的 persona 句。",
+      "最終回覆：PC、ED、MSC、BST、WizInt、WoW、FITS、Funpedia、LIGHT、LIGHT WILD，加上 Google SGD、Taskmaster 1–3 等任務型對話，以及 SaFeRDialogues（學習在安全失誤後優雅地接話）。另外混入原始預訓練語言建模任務，避免過擬合並保留語言建模能力。",
+      "規模：約 400 萬筆 source/target、約 11.3 億 token；OPT 系列另混入 60 萬筆、約 1.7 億 token 的預訓練資料，用來穩定訓練。"
+    ],
+    "訓練超參數（附錄 B.2–B.3）": [
+      "BB3-3B（R2C2 encoder-decoder）：64 張 32GB V100，27k updates，batch 64，Adam 加 weight decay，warmup 100 步，LR 1e-6，context 1024 token，在部分訓練任務的驗證集上 early stopping。",
+      "BB3-30B／175B（OPT decoder-only）：各只訓練 1 個 epoch，因為作者發現 175B 看同一份資料超過一次就嚴重過擬合。30B 用 64 張、175B 用 128 張 40GB A100；batch 分別為 2^19 與 2^18，約 2800 與 5600 updates。warmup 占總步數 10%，最大 LR 6e-6（等於預訓練結束時的 LR），之後 polynomial decay（因子 0.1）。"
+    ],
+    "解碼設定（附錄 B.4）": [
+      "兩個決策模組與查詢生成都用 greedy；3B 的查詢生成最短長度 2。",
+      "175B 不用任何需要多條並行生成的解碼法（例如 beam、sample-and-rank），以顧及延遲與吞吐。實體抽取、記憶存取、知識回應都用 greedy，並加 InstructGPT 式的 presence／frequency 懲罰，α_pres = α_freq = 0.5。",
+      "175B 的最終回覆用 factual nucleus sampling：top-p 0.9、λ-decay 0.9、ω-bound 0.3，每遇到句點就 reset p。另加上對生成內容與來源（context）token 的 presence／frequency 懲罰，四個 α 都是 0.5。",
+      "3B 的最終回覆用 beam 10、最短長度 20，並對輸出與 context 做 tri-gram blocking。記憶生成、實體抽取、記憶存取、知識回應則用 beam 3，搭配各自的最短長度與 tri-gram blocking。"
+    ],
+    "部署端的安全層（§3.4、§4、Figure 3）": [
+      "獨立的二元安全分類器（transformer，依 Xu et al. 2020 的做法）：以對話上下文為輸入，用 WTC、BBF、BAD 訓練。另有安全關鍵字清單，以及自傷意圖、醫療（例如 covid）等主題的明確檢查，命中就回罐頭訊息。",
+      "bot 的候選回覆在顯示前要過這些檢查，判為不安全就改輸出一句轉移話題的 nonsequitur。使用者訊息也要過同一套檢查；使用者訊息判為不安全時，bot 同樣回 nonsequitur，避免被帶進難以處理的對話。"
+    ],
+    "使用者回饋迴路（§4、Figure 1、4、5）": [
+      "進入條件：限美國成年人，須同意條款。條款允許釋出去識別化的對話；每段對話都可以取消勾選「分享匿名對話」。",
+      "逐則回饋：每則 bot 訊息都有 thumbs up 與 thumbs down。按下 thumbs down 會跳出原因選單，共五類：Off Topic／Ignoring me、Nonsensical／Incorrect、Rude／Inappropriate、Looks like Spam／Ads、Other。選完之後，bot 下一輪用樣板道歉，可能再追問「我怎麼做會更好」，藉此引出自由文字回饋。",
+      "透明度介面（Look Inside）：點開任一則 bot 訊息，可以看到內部步驟，包括產生的搜尋查詢、被選中的文件、抽出的 knowledge response；也可以查看 bot 對該使用者建立的長期記憶。",
+      "持續學習指的是「分批重新微調、再釋出新的模型快照」，不是線上更新（見標題註腳）。"
+    ],
+    "回饋品質稽核（§6.2）": [
+      "從使用者有給回饋的部署對話中隨機抽樣，每則 bot 訊息請 3 位 crowdworker 標 like 或 dislike；只要有任一位標 dislike 就記為 dislike，再與使用者自己的標記比對一致率。",
+      "也請 3 位 crowdworker 以多數決評估使用者（人類）自己的發言好壞，並把 dislike 細分成原因類別，用來觀察 troll 的比例。"
+    ],
+    "回饋學習方法（§5.1，摘要配套論文 FITS，2208.03270）": [
+      "FITS 在 crowdworker 環境（不是公開部署）下收集四種回饋：二元好壞；自由文字；失敗類型（錯在搜尋查詢、搜尋結果或最終回覆）；針對失敗模組的改良建議，也就是該模組的監督目標。",
+      "學習法：(a) 以改良後的最終回覆做監督學習；(b) 模組層監督，例如搜尋出錯時提供更好的查詢，知識回應差時提供更好的知識回應；(c) 自由文字回饋用 Hancock et al. 2019 的 control code 法；(d) 二元回饋用 reranking／rejection sampling，或用 Director——每一步同時有 LM head 與 classifier head，把兩者的機率結合後預測下一個 token，classifier 以正負例序列訓練，把生成導離不良序列。",
+      "釋出的 BB3 用了 FITS 的模組層監督資料，但還沒用 Director。"
+    ],
+    "抗 troll 的資料過濾（§5.2，摘要配套論文 2208.03295）": [
+      "逐例方法：用 cross-validation 找出模型預測與人類標記不一致的例子並移除或翻轉標記，或改用 bootstrapping 損失（Reed et al. 2014）。",
+      "逐使用者方法：在使用者層級做 cross-validation，算出每位使用者的可信度分數。Per-User Removal 整批移除低可信的使用者；Per-User+Example Removal 同時做使用者層與例子層的移除；Soft PURR 則以「該例的可信度 + α × 同一使用者其他例子可信度之和」決定是否移除。",
+      "作者表示後續持續學習會用 user-based 方法過濾資料。"
+    ]
+  },
+  "assumptions": [
+    "真實使用者願意在一小部分回合給出顯式的讚／倒讚與原因，而且這些標記大致反映回覆品質。本文以 crowdworker 一致率 70%／79% 作為支持。",
+    "惡意使用者會在多則訊息、多段對話中持續作惡，所以把同一使用者的例子一起看，比逐例判斷更容易找出 troll；user-based 過濾就建立在這個假設上。",
+    "在 crowdworker 環境下比出來的回饋類型與學習法優劣（FITS），可以外推到公開部署的真實使用者。",
+    "用較小模型（3B）收集到的回饋資料，對訓練較大模型（175B）也有用。",
+    "持續學習以分批重新微調、再釋出快照的方式進行即可，不需要線上更新；重新訓練後的模型在完成安全評估前不上線。",
+    "對話可以拆成模組，錯誤能歸因到個別模組（搜尋查詢、搜尋結果、最終回覆），模組層的回饋才有意義。",
+    "crowdworker 的判斷可以當作檢驗使用者回饋正確性的參考標準。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "crowdworker 短對話評估：Wizard of Internet 角色設定，每段 15 則訊息（人 7、bot 8），每個模型 100 段、約 800 個標註（Table 5、20）",
+      "FITS open-domain 任務評估：從約 1000 個任務中讓使用者二選一，逐回合蒐集回饋（Table 3、6）",
+      "時事評估：從 Wikipedia 2022 年 7 月時事中隨機抽 300 個實體，提問「What's the latest news…」，與 InstructGPT 成對比較（Figure 9、附錄 C）",
+      "公開部署的使用者回饋：BB3-3B 15,088 則、BB3-175B 9,197 則 bot 訊息（Table 7–9、14）",
+      "Safety Bench 的 unsafe generation 與 offensive generation 測試（Table 10、11、21）",
+      "SaFeRDialogues 驗證集（Table 12）",
+      "HolisticBias Likelihood Bias（Table 13、15）",
+      "SafetyMix（配套論文的抗 troll 基準，Table 4）",
+      "各模組的驗證集 perplexity（Table 19）"
+    ],
+    "metrics": [
+      "逐回合二元標記：Consistent、Knowledgeable、Factually Incorrect、Engaging，以及 Knowledgeable & Engaging、對話結束時的 Final Rating",
+      "Good response %、Rating，以及錯誤拆解（Search Query、Search Results、Response 三類錯誤率）",
+      "成對勝率：Current、Specific（操作化為「哪個比較容易被證偽」）、True、Interesting、Sensible",
+      "部署中各類回饋占 bot 訊息的比例（Liked 與五類倒讚原因）",
+      "使用者回饋與 crowdworker 的一致率",
+      "被至少一個工具（safety classifier、string matcher、Perspective API）判為不安全的比例；負面詞比例、safety classifier 旗標率、正面情緒率",
+      "Perplexity",
+      "Likelihood Bias（兩個身分詞的 perplexity 分佈是否顯著不同）",
+      "陰性／陽性性別詞頻",
+      "訓練後的錯誤率（SafetyMix）"
+    ],
+    "baselines": [
+      "BlenderBot 1（Roller et al. 2021）",
+      "BlenderBot 2（Chen et al. 2021）",
+      "SeeKeR 3B（Shuster et al. 2022）",
+      "OPT-175B zero-shot／few-shot（模組化提示，附錄 D Table 18）",
+      "InstructGPT text-davinci-002（只用於時事評估）",
+      "BB3-3B（與 175B 互相比較）",
+      "Table 3 的回饋學習變體：free-form、supervised、module supervision、reranking binary、Director binary、Director module+binary",
+      "Table 4 的 troll 過濾法：Oracle Troll Removal、Standard Training、Soft Bootstrap、Per-Example Flip／Removal、Per-User Removal、Soft PURR、Per-User+Example Removal"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "模組層回饋（指出搜尋查詢、搜尋結果等特定模組的錯誤並提供修正）的效果，優於只針對最終回覆的回饋。二元回饋用 Director 學習比 reranking 好，模組層加二元回饋再用 Director 效果最好。",
+      "numbers": "Good response %／Rating：BB2 3B 基線 33.2%/3.09；+supervised 40.3%/3.37；+module supervision 42.0%/3.35；+reranking binary 36.1%/3.00；+Director binary 37.8%/3.07；+Director module+binary 47.0%/3.38。SeeKeR 3B 基線 49.3%/3.52；+module supervision 56.7%/3.64；+Director module+binary 59.1%/3.73。",
+      "section": "§5.1、Table 3（實驗在配套論文 FITS，crowdworker 環境）",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "持續學習（以前幾輪部署收集到的回饋重新訓練）能讓結果再往上提升。",
+      "numbers": "本文未給數字，只轉述配套論文的結論。",
+      "section": "§5.1 Findings",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "用較小的 3B 模型收集的回饋資料，也能用來改進較大的 175B 模型。",
+      "numbers": "本文未給數字，只轉述配套論文的結論。釋出的 BB3-175B 用了 FITS 的模組層監督資料，在 Table 3/6 的評估中達 64.8%/4.08，但這個比較同時差了模型規模與資料，不是這條主張的對照實驗。",
+      "section": "§5.1 Findings",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "有 troll 混入時，考慮使用者層級行為的過濾法能大幅降低錯誤率；沒有 troll 時也不會明顯傷害表現。",
+      "numbers": "SafetyMix 的 50% troll 設定：Standard Training 31%，Per-User+Example Removal 12%，Soft PURR 15%，Per-Example Removal 19%，Per-User Removal 23%，Oracle Troll Removal 8%。只有 helper 的設定，各方法的錯誤率在 4–6% 之間。",
+      "section": "§5.2、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 FITS 的 open-domain 任務評估中，BB3-175B 幾乎所有指標都最好，三類錯誤率也都下降。",
+      "numbers": "BB3-175B：Good response 64.8%、Rating 4.08；錯誤率 Search Query 7.5%、Search Results 11.6%、Response 8.2%。SeeKeR 49.3%/3.52，OPT-175B few-shot 43.0%/3.19，BB2 33.2%/3.09。",
+      "section": "§6.1、Table 6",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "真實使用者在部署中給的顯式回饋比例很低。倒讚原因以離題與無意義或錯誤為主，粗魯或不當的比例極小。",
+      "numbers": "BB3-175B（9,197 則 bot 訊息）：Liked 4.0%、Off Topic 1.15%、Nonsensical 1.10%、Rude 0.16%、Spam 0.12%、Other 0.46%。BB3-3B（15,088 則）：Liked 3.41%、Off Topic 1.49%、Nonsensical 1.25%、Rude 0.04%、Spam 0.03%、Other 0.35%。兩個模型的資料在不同時間收集，作者說明不一定可比。",
+      "section": "§6.2、Table 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "真實使用者的讚／倒讚與 crowdworker 的判斷在多數情況下一致。",
+      "numbers": "讚的一致率 70%（不一致 30%），倒讚的一致率 79%（不一致 21%）。資料來自 BB3-3B 部署；每則由 3 位 crowdworker 標記，只要有一位標 dislike 就記為 dislike。",
+      "section": "§6.2、Table 8",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "部署中的使用者本身有相當比例的不良發言。作者另外觀察到，產生過一次不安全發言的使用者比其他人更可能再產生不安全發言，也就是存在 troll 使用者；這個觀察本文沒給數字，也沒量化集中程度。",
+      "numbers": "人類發言 69% 被判為好、31% 被判為不好。不好的發言中，42% 屬 Rude/Inappropriate、35% 屬 Off Topic。對照之下，crowdworker 對 BB3-3B 倒讚訊息的歸類是 Off Topic 73%、Nonsensical 27%、Rude 0%。",
+      "section": "§6.2、Table 9",
+      "anchor_idx": 5
+    }
+  ],
+  "limitations_stated": [
+    "§5 的回饋學習研究幾乎都用 crowdworker 資料，只有 troll 研究用到部署資料；從真實使用者持續學習的研究仍在起步。",
+    "要求使用者給詳細回饋，可能讓他們不想繼續互動，降低參與度與資料量。作者推測自由文字或輕量回饋比較適合真實使用者，但這個取捨還沒研究。",
+    "BB3-3B 與 BB3-175B 的部署回饋在不同時間收集，不一定可比。",
+    "模型仍會離題、無意義、事實錯誤，偶爾粗魯；部分錯誤來自底層模組，例如搜尋引擎沒找到相關文件。安全與吸引力之間有取捨。",
+    "安全機制仍可能被繞過，在對抗性情境下尤其如此。安全基準是靜態、由 crowdworker 建立的，保證不了所有情境。",
+    "持續學習帶來新的安全風險：使用者可能透過回饋教模型錯誤推理、錯誤資訊或毒性行為，偵測方法也不完美；用新互動資料訓練的模型，在完成安全評估前不應上線。",
+    "只用英文資料訓練。",
+    "OPT-175B 基線的提示沒有調過，換別的提示可能更好或更差。",
+    "BB3-175B 常直接複製搜尋結果，容易出現過時、錯誤或格式怪異的資訊；也會模仿訓練資料，給人有感知能力的錯覺。"
+  ],
+  "limitations_observed": [
+    "顯式回饋極度稀疏。依 Table 7 換算，BB3-175B 的 9,197 則訊息中只有約 368 則被按讚，倒讚約 275 則（五類合計 2.99%）；BB3-3B 約 514 讚、約 477 倒讚（3.16%）。超過九成的回合沒有任何訊號，本文也完全沒用隱式訊號（例如使用者是否離開、回覆長度、改寫重問）或對話層級的滿意度估計。對 T6「滿意度估計」這個子領域，本文只提供原始顯式訊號，沒有估計模型。",
+    "部署比率不穩定，不能當固定基準。Meta 官方部落格 2022-08-08 的更新段寫的是 260K 則 bot 訊息、25% 的參與者給過回饋，旗標率為不當 0.11%、無意義 1.36%、離題 1%（https://ai.meta.com/blog/blenderbot-3-a-175b-parameter-publicly-available-chatbot-that-improves-its-skills-and-safety-over-time/）。論文 Table 7 的 175B 卻是 0.16%、1.10%、1.15%。兩者的收集期間、規模與模型組成不同，論文也沒給信賴區間，所以 Table 7 這種小樣本比率只能當描述統計。",
+    "Table 8 的一致率計算方式有偏。只要 3 位 crowdworker 中有一位標 dislike 就算 dislike，這種 OR 聚合會墊高「使用者倒讚」的一致率（79%），同時壓低「使用者按讚」的一致率（70%）。表中沒有 Cohen's kappa 這類經機率校正的一致性指標，也沒報樣本數；而且只抽了使用者有給回饋的對話，那些沒給回饋的回合品質如何，完全沒有被檢驗。",
+    "摘要宣稱 BB3 優於前代，但 Table 5 的 Final Rating 撐不起這個說法。BB3-175B 的 4.45 只對 BB2（4.11）統計顯著，對 BB1（4.32）與 SeeKeR（4.34）都不顯著；Consistent 85.8% 甚至低於 BB1 的 87.0%。顯著的優勢集中在 Knowledgeable 與 Knowledgeable & Engaging。",
+    "Table 3 不是乾淨的對照實驗。BB3-175B +modular supervision 的 64.8%／4.08，與 Table 6 是同一次評估；它和 3B 各變體之間同時差了模型規模、預訓練基底（OPT 對 R2C2）與整體微調資料，不能歸功於回饋。表中也沒有顯著性檢定。部分回饋變體的 Rating 反而下降：BB2 +reranking binary 從 3.09 降到 3.00，SeeKeR +supervised feedback 從 3.52 降到 3.47。對 SeeKeR 而言，Director binary 的 Rating（3.48）低於 reranking（3.55），所以「Director 優於 reranking」只在 Good% 上成立。",
+    "「user-based 優於 example-based」的結論要打折。Table 4 中單純的 Per-User Removal（23%）比 Per-Example Removal（19%）還差，只有結合例子層的版本（12%）或 Soft PURR（15%）才勝出。SafetyMix 是人工混合的基準；本文說在 BB3 部署資料上也有改善，但沒給任何數字。",
+    "標題寫「continually learns」，本文卻沒有任何一個用真實部署回饋重新訓練後的模型快照或評估，迴路在本文中並未閉合。釋出的 BB3 只用了 crowdworker 環境下收集的 FITS 模組層監督，也還沒用 Director。部署回饋在這裡只用於評估（Table 7–9），沒有回到訓練。",
+    "§6.3.1 說 BB3-175B 的原始安全性「大幅優於」原版 BlenderBot，但數據是好壞參半。offensive generation 的 safety classifier 旗標率，BB3-175B 是 42.6%，BB1 是 6.5%，BB3-3B 是 13.9%（Table 11）；adversarial unsafe 情境中，BB3-175B 是 27.8%，BB1 是 16.1%（Table 10）。部署中的 Rude 旗標率也是 175B（0.16%）高於 3B（0.04%）。",
+    "部署族群有選擇偏差：只限美國成年人，靠「有限的廣告投放」招募，多數在手機上使用。倒讚之後 bot 的樣板道歉與追問本身可能改變使用者後續行為，影響之後收到的回饋，但這一點沒有量測。"
+  ],
+  "framework_role": "本篇是 T6「真實使用者回饋迴路」的參考部署設計，不是使用者模擬器，也沒有訓練滿意度估計器。它示範一條完整的鏈：逐則顯式回饋（讚／倒讚、五類原因、樣板道歉後引出自由文字）→ 以 crowdworker 稽核回饋品質 → 以 user-level 可信度過濾 troll → 分批重新微調、釋出快照；並用透明度介面讓使用者看到搜尋查詢、文件與記憶，這有助於使用者給出模組層回饋。部署互動紀錄與回饋在本文中主要流向評估（T7）。倒讚後的道歉與追問，以及 SaFeRDialogues 訓練，屬於「使用者回饋觸發恢復」的 T6→T5 路徑，但這條不在框架的六條邊內。真正的回饋學習證據在兩篇配套論文（FITS 2208.03270、troll 過濾 2208.03295）。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "範圍很窄。真實使用者的每則訊息進入系統時，先經過安全分類器（WTC／BBF／BAD 訓練）、安全關鍵字清單，以及自傷意圖、醫療（例如 covid）等主題檢查：偵測到自傷或醫療話題就回罐頭訊息，判為不安全就回 nonsequitur 轉移話題。這是對外部輸入的敏感意圖偵測與分流。搜尋與記憶決策模組雖然也以使用者最後一輪為輸入，但不屬於目標對齊，這裡不算。"
+    },
+    {
+      "edge": "E6",
+      "how": "部署互動紀錄直接變成評估資料，有兩條路徑。第一，公開部署中使用者逐則的讚／倒讚與原因類別，直接成為部署評估指標（Table 7）；再從部署紀錄抽樣請 crowdworker 重標，得到使用者與 crowdworker 的一致率（Table 8），以及 bot 與人類發言的錯誤類別分佈（Table 9）；部署紀錄也用來算 Rude 旗標率與性別詞頻（§6.3.2、Table 14）。第二，在 FITS 設定下，crowdworker 每一回合給的回饋（好壞、錯誤出在哪個模組）被彙總成 Good response %、Rating 與錯誤拆解，作為模型比較的評估指標（Table 3、6）。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文 §4、§6.2：BB3-3B 與 BB3-175B 公開部署在 https://blenderbot.ai，限美國成年使用者，附逐則讚／倒讚與原因回饋介面；本文分析了 15,088 則（3B）與 9,197 則（175B）bot 訊息的使用者回饋。來源：本文。",
+      "Meta AI 官方部落格（2022-08-05 發布，2022-08-08 更新）：說明公開 demo 與讚／倒讚回饋機制；更新段寫明已從公開 demo 收集 70K 段對話，並有 25% 的參與者對 260K 則 bot 訊息給過回饋；也寫明 demo 僅供研究與娛樂用途，沒有提到整合進任何 Meta 產品。來源：https://ai.meta.com/blog/blenderbot-3-a-175b-parameter-publicly-available-chatbot-that-improves-its-skills-and-safety-over-time/",
+      "ParlAI 官方專案頁：3B、30B 權重放在 ParlAI model zoo，175B 需申請取得；另提供 model card、data card 與 logbook。部署對話資料標為 coming next，本次讀取時（2026-09-26）仍未見釋出。來源：https://parl.ai/projects/bb3/"
+    ],
+    "assessment": "有可查證的公開部署：由 Meta 官方營運的研究型 demo，實際收集了真實使用者的回饋。但官方部落格明言它僅供研究與娛樂，沒有證據顯示此回饋迴路被用在商用產品中，商用採納部分為未見證據。本次 WebSearch 額度已用盡，採納證據只來自以 WebFetch 打開的官方頁面。"
+  },
+  "reproducibility": {
+    "code": "https://parl.ai/projects/bb3/（ParlAI，3B 的訓練與互動程式碼、模組資料建構腳本）；https://github.com/facebookresearch/metaseq（30B／175B 的訓練）",
+    "data": "微調資料集都公開在 ParlAI；FITS 在 https://www.parl.ai/projects/fits，SafetyMix 在 https://www.parl.ai/projects/trollhunting，SaFeRDialogues 也已公開。權重方面，3B、30B 公開，175B 需申請。部署收集的真實使用者對話與回饋，本文承諾之後釋出，發表時未釋出；ParlAI 專案頁在本次讀取時仍標為 coming next。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "本文提供了少見的「真實公開部署」回饋迴路設計與使用者回饋統計，是 T6 的重要背景。但回饋學習的方法與對照證據都在配套論文 FITS（2208.03270）與 troll 過濾（2208.03295）裡，本文的部署回饋沒有回到訓練，也沒有滿意度估計模型，所以列為有價值但非必讀。",
+  "related": [
+    "2208.03270",
+    "2208.03295",
+    "1901.05415",
+    "2206.07694",
+    "1611.09823",
+    "1612.04936",
+    "2203.13224",
+    "2010.07079",
+    "2203.02155"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

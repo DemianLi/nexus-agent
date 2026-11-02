@@ -1,0 +1,167 @@
+{
+  "id": "2204.00763",
+  "title": "Metaphorical User Simulators for Evaluating Task-oriented Dialogue Systems",
+  "topic": "T6",
+  "subarea": "經典與神經使用者模擬器",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 MetaSim：一個以五個 T5 模組串成、會從訓練語料檢索「相似對話狀態下真人說過的話」當類比參考（稱為 metaphor）的神經使用者模擬器，並提出以刻意降級的系統變體檢驗模擬器能否排出正確優劣順序的 tester 評估框架（ExactDistinct）。",
+  "problem": "任務型對話系統（TDS）的離線評估多半只看單輪、不反映互動中的整體可用性；人工評估則干擾大、耗時且無法擴展。使用者模擬器是做大規模互動式評估的替代方案，但既有模擬器多半是為了訓練 RL 對話策略而設計：agenda-based 依賴領域專屬的人工規則、回覆不像人；端到端 seq2seq 模擬器只能在語意層面評估（例如系統推薦了沒見過的新項目時不知如何反應）。另一個缺口是「怎麼評估模擬器本身」—— 既有做法（文字生成指標、描述統計、人工評分、看用它訓練出的 RL 系統好不好）都無法直接回答「這個模擬器能不能正確分辨系統好壞」，而且多靠人工、難重現。",
+  "core_idea": "兩件事。(1) MetaSim：把使用者模擬拆成「偏好（目標）→ NLU（追蹤系統說了什麼）→ Metaphor（以目前對話狀態為查詢，從訓練語料的『狀態→使用者話語』索引中檢索並重排 k 筆相似紀錄）→ Policy（以偏好、上下文、狀態與檢索結果預測下一個使用者動作，並把使用者滿意度當成動作中的一個特殊 slot 聯合預測）→ NLG」五個 seq2seq 模組；作者把檢索相似歷史策略比喻為使用者的類比思考／心智模型，本質上是檢索增強（semi-parametric）的使用者行為生成。對話結束時以 Success 與逐輪滿意度的平均（calibrated satisfaction）為系統打分。(2) Tester-based 評估：不依賴架構與訓練資料各異的第三方系統，而是從同一個基礎系統（SOLOIST）用單一控制變因造出能力遞減的變體（縮短上下文、刪減推薦查詢特徵、減少訓練資料），讓模擬器分別與各變體對話、打分、排序，排出的順序與預期完全一致才算對，比例即 ExactDistinct（ED）；一個做好的 tester 可重複用來評估不同模擬器，不必每次重做人工評估。",
+  "method": {
+    "記號": "P＝使用者偏好（slot-value 集合，即使用者目標）；U＝對話上下文 {u1,r1,…,ut,rt}；S＝對話狀態 {a1,s1,…,at,st}（a 為使用者動作、s 為系統回覆後的系統動作）；M＝檢索到的 k 筆 metaphor（每筆是一句使用者話語）；a_{t+1}＝下一個使用者動作（串接滿意度）；u_{t+1}＝下一句使用者話語。動作格式為 (act, slot, value) 三元組清單，無 slot 的動作（如 bye）以 NULL 填。",
+    "偏好模組（目標生成與更新）": "初始化分三步：①從訓練集統計各「領域組合」（如 {hotel}、{hotel, restaurant}）的出現機率並依此抽一個組合；②每個領域從項目資料庫的對應表均勻抽一個項目；③從訓練集統計「偏好中使用幾個 slot」的分布抽出 k，再從該項目的屬性中均勻抽 k 個作為偏好（值取自該項目，保證目標可達成）。更新規則：使用者 inform 過的 slot 在 P 中標記為 Informed（推論流程描述為移除已 inform 的 slot）；系統推薦了 P 裡沒有的項目時，把該項目當成新 slot、使用者對它的喜好當值加入 P（例如系統問是否需要 WIFI、回答 yes 後就加入 WIFI_needed=yes，後續回答才前後一致）。",
+    "NLU 模組": "輸入 P 與 U，預測最後一句系統回覆的動作 s_t，附加到歷史動作形成 S；以負對數概似監督訓練。ReDial 因無動作標註，改用規則式模型把系統話語中的實體連結到 DBpedia 知識圖，並把連結到的子圖序列化當作系統動作。",
+    "Metaphor 模組（檢索＋重排）": "離線：把訓練資料中每句使用者話語以其當下對話狀態為索引鍵、該話語為值，建成記錄庫 D。線上兩階段：①候選生成：以目前對話狀態 S 與各記錄索引鍵的 TF-IDF 分數取回 k 筆候選（論文未給 k 值）；②重排：以 T5 做 monoT5 式 ranker（依 Nogueira 等人 2020 的做法），輸入候選話語 m_i、上下文 U、狀態 S，輸出 yes/no，相關分數取 P(\"yes\")；訓練時真實下一句的相關分數設 1、其餘設 0，最大化概似。",
+    "Policy 模組（動作＋滿意度）": "P(a_{t+1} | P, U, S, M)。滿意度被當成動作裡的一個特殊 slot，與動作一起以序列生成方式預測（沿用作者前作 USS）。因動作與滿意度標註不完整且有雜訊，另訓練一個後驗網路 Q(a_{t+1} | P, U, S, 真實下一句使用者話語)：先在有標註的資料上以 NLL 訓練 Q，再用 Q 替未標註資料打滿意度偽標籤，最後以 Q 與 P 之間的 KL 散度訓練 policy（知識蒸餾式）。滿意度把 USS 的 5 級改成 3 級（不滿意／普通／滿意），並把非「普通」的回合抽樣機率提高 10 倍以處理類別不平衡。",
+    "NLG 模組": "P(u_{t+1} | P, U, M, a_{t+1})，自回歸生成下一句使用者話語，NLL 監督訓練。",
+    "推論迴圈": "先從偏好模組抽出 P；每一輪：NLU 預測系統動作並更新 S → Metaphor 以 S 檢索並重排候選 → Policy 預測使用者動作與本輪滿意度 → NLG 產生話語回給系統 → 偏好模組更新 P；模擬器輸出 [END] 表示結束。結束後以 calibrated satisfaction＝(Success＋逐輪滿意度平均)/2 為系統打分，Success 為 1 表示系統解決了使用者的問題（論文未說明兩者尺度如何正規化）。",
+    "實作與超參數": "每個模組各用一個 T5：英文（MultiWOZ、ReDial）用 T5-base、AdaFactor、學習率 1e-3；中文（JDDC）用 Mengzi-T5-base、AdamW、學習率 5e-4。batch size 64、線性學習率排程含 500 步 warm-up、最多 20 epoch；最大長度 MultiWOZ 512、ReDial 與 JDDC 256；多輸入以 <SEP> 串接後截斷；解碼用 greedy。各模組分開訓練，測試時串接。",
+    "Tester 評估框架": "基礎系統：SOLOIST（GPT-2 為基礎的 seq2seq TDS），預設 α=15（保留的歷史句數）、β=1（推薦查詢保留的特徵比例）、γ=1（訓練資料比例）。三個 tester 各含基礎系統加兩個變體：Context tester {α=3, α=1}；Recommender tester {β=0.4, β=0.1}（從推薦查詢刪關鍵字）；Domain tester {γ=0.1, γ=0.01}（減少訓練對話）。系統訓練：AdamW、學習率 1.5e-4、batch 32、最多 20 epoch；依 SOLOIST 做法以 nucleus sampling 產生 5 個 delexicalized 候選，選含 slot 最多的一個，再用推薦器結果回填。MultiWOZ 由 belief state 產生 SQL 查資料庫；ReDial 的推薦器是 GPT 隱狀態與電影 embedding 的內積分類器；JDDC 因資料庫未公開，沒有推薦模組也沒有 Recommender tester。",
+    "ExactDistinct 計算": "對每一組抽出的偏好（共 1K 組），模擬器分別與 tester 內三個系統對話並以 calibrated satisfaction 打分；分數相同時以對話輪數較少者為佳；排出的順序與預期（基礎系統 > 較輕微降級 > 較嚴重降級）完全一致記 1，否則記 0，取平均即 ED。人類對照組：在 MultiWOZ 上請 40 位標註者依指定目標與隨機分派的系統變體對話，結束後評 Satisfaction 與 Success，取平均當系統分數，再算人類的 ED。"
+  },
+  "assumptions": [
+    "Tester 以單一控制變因（上下文長度、查詢特徵比例、訓練資料量）造出的變體，其優劣順序是確定且可當成標準答案的「人類預期」；ED 的正確答案不是由真人量出來的，而是由設計者規定的。",
+    "USS 資料集的滿意度（由第三方標註者閱讀對話後標註，而非對話當事人）可以代表使用者真實的滿意度，且由後驗網路補上的偽標籤夠準，能當 policy 的訓練目標。",
+    "MultiWOZ、ReDial、JDDC 這類人對人或 Wizard-of-Oz 語料裡的使用者行為，足以代表使用者面對機器系統時的行為。",
+    "以對話狀態做 TF-IDF 檢索得到的歷史使用者話語，在遇到新項目或新領域時仍能提供可遷移的行為參考（即「類比思考」確實有用）。",
+    "使用者目標可以用「訓練集的領域組合分布＋均勻抽項目＋訓練集的屬性數分布」抽出，且系統端有可查詢的項目資料庫，Success 可以自動判定。",
+    "由模擬器自己預測的逐輪滿意度，加上 Success 的簡單平均，足以作為系統的整體評分（沿用 PARADISE 式「成功＋成本」的滿意度觀點）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.1（多領域任務型對話，約 10K 段）",
+      "ReDial（電影對話式推薦，約 10K 段；作者自行補動作標註並連結 DBpedia）",
+      "JDDC（中文電商客服，只取 delivery 領域約 47K 段；以 LTP 抽實體、連結阿里雲知識圖）",
+      "USS（作者前作，對上述三個資料集的子集加上 5 級逐輪與整段滿意度標註）",
+      "MultiWOZ 未見領域切分（從訓練集移除所有含 hotel 或 attraction 的樣本，只在該領域測試）"
+    ],
+    "metrics": [
+      "測試集：F1（ParlAI 的字詞重疊）、Distinct（相異 3-gram 比例）、SlotAcc（真實回覆中的 slot／實體是否全部出現在生成文字中，全中才記 1）",
+      "互動：與基礎系統對話 10K 段的 Success（推薦項目是否滿足所有偏好；JDDC 無定義不計）與 Distinct",
+      "人工：約 700 段模擬對話，10 位標註者評 Coherence 與 Human-like（各 1–3 分）；另比較 3 級、5 級、排序三種人工評分法與其 Kappa",
+      "ExactDistinct（模擬器對 tester 內三個變體的排序與預期完全一致的比例，1K 組偏好平均）",
+      "評估 tester 本身：BLEU、Success、SlotAcc、互動 Success／Distinct、人工 Success（1–2）、Efficiency（1–2）、Naturalness（1–3）、Satisfaction（1–5，約 500 段）",
+      "效率：模型儲存空間（GB）與 MultiWOZ 測試集推論時間（秒）"
+    ],
+    "baselines": [
+      "Agenda（Schatzmann 2007 式 agenda，作者以訓練集的動作轉移分布重做，回覆用 TF-IDF 檢索模板）",
+      "AgendaGen（Shi 2019：同 agenda 策略，但以 T5-base 生成回覆）",
+      "SL+Template（Shi 2019：以神經 NLU＋policy 預測動作，再檢索模板填 slot）",
+      "Seq2seq（T5-base，只以上下文與偏好直接生成回覆）",
+      "ConvLab2+Template、ConvLab2+Retrieval（ConvLab-2 內建的 BERT NLU＋人工規則 agenda policy，及其 oracle agenda 版本）",
+      "消融：MetaSim-Metaphor、MetaSim-Policy、MetaSim-Preference、MetaSim-Ranking；合併模組的 Variant A／B 與 T5-small 的 Variant C；低資源 MetaSim (1k)、MetaSim (100)",
+      "人類評估者（tester ED 的上限對照，只在 MultiWOZ）",
+      "第三方被評系統：DAMD、SOLOIST、GALAXY"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "MetaSim 在三個資料集的測試集 SlotAcc 與 F1 都高於所有基準，最能準確把個人需求告知系統；相對 Seq2seq 的 SlotAcc 絕對提升最明顯。",
+      "numbers": "SlotAcc：MultiWOZ 57.65 vs Seq2seq 49.41（+8.24）、ReDial 15.72 vs 11.28（+4.47）、JDDC 44.00 vs 37.26（+6.47）；F1 MultiWOZ 44.13 vs 42.02。Distinct 則輸給檢索式的 Agenda／SL+Template（MultiWOZ 17.29 vs 20.20）。",
+      "section": "§6.1、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "與基礎系統互動時，MetaSim 的任務成功率最高，Agenda 類模擬器極低。",
+      "numbers": "互動 Success：MultiWOZ MetaSim 80.25、Seq2seq 76.75、SL+Template 59.78、AgendaGen 32.17、Agenda 12.19；ReDial MetaSim 13.70 vs 最佳基準 7.30。人工 Human-like：MultiWOZ 2.21 vs Seq2seq 2.04（作者自承人工評估未達顯著）。",
+      "section": "§6.1、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "Tester 評估中 MetaSim 的 ExactDistinct 在各 tester 都最高，但仍明顯低於人類；Agenda 幾乎等於隨機排序。",
+      "numbers": "MultiWOZ（Context／Recommender／Domain）：MetaSim 33.23／40.11／35.21、Seq2seq 30.84／37.15／32.81、Agenda 16.93／17.28／19.47、Human 43.63／40.54／42.54。ReDial MetaSim 17.48／20.61／20.43、JDDC 19.17／17.47（三個變體完全排對的隨機機率約 16.7%）。",
+      "section": "§6.2、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "用來替未標註資料補滿意度標籤的後驗網路在 USS 測試集上準確率很高。",
+      "numbers": "accuracy 97.79%、USR 88.72%（USR 縮寫文中未定義，也沒說明是哪個資料集）。",
+      "section": "§5.1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "移除任一模組都會降分，其中拿掉偏好（目標）影響最大，拿掉 policy 次之，拿掉 metaphor 最小。",
+      "numbers": "MultiWOZ SlotAcc：完整 57.65、-Metaphor 55.27、-Policy 49.46、-Preference 19.76；互動 Success：80.25、78.96、71.54、10.93。",
+      "section": "§6.1、Table 2、Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "神經模擬器全面勝過 ConvLab-2 的規則式 agenda 模擬器，且只用 100 段標註對話訓練的 MetaSim 也贏。",
+      "numbers": "MultiWOZ F1／SlotAcc／互動 Success：MetaSim 44.13／57.65／80.25；MetaSim (100) 35.86／31.60／35.90；ConvLab2+Template 18.26／18.25／27.10；ConvLab2+Retrieval 18.39／18.70／18.10。作者另稱 MetaSim 的互動在 10 輪內完成，ConvLab2 agenda 超過 20 輪（Figure 5）。",
+      "section": "§6.4、Table 7",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在未見領域上 metaphor 檢索的效益比在見過的領域更明顯，拿掉檢索或拿掉重排都會降分。",
+      "numbers": "Hotel SlotAcc：MetaSim 39.79、-Ranking 37.00、-Metaphor 37.38、Seq2seq 33.11；Attraction SlotAcc：50.12、47.72、47.66、39.05。",
+      "section": "§6.4、Table 12",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "MetaSim 對三個第三方系統給出的排序（GALAXY > SOLOIST > DAMD）與 benchmark 指標及人工評估一致。",
+      "numbers": "MetaSim 互動 Success／滿意度／合併分：GALAXY 74.90／2.78／0.819、SOLOIST 71.00／2.74／0.790、DAMD 20.90／2.15／0.392；benchmark Combine 105.10／95.74／85.00；人工 Sat. 2.66／2.40／1.79。",
+      "section": "§6.4、Table 10",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "人工評估的標註量有限，MetaSim 在人工評估上的領先未達統計顯著；大規模人工評估留待未來。",
+    "MetaSim 與人類在 tester 上仍有明顯差距（例如 Context tester 33.23 vs 43.63），打造像人的模擬器仍是挑戰，原因未探究。",
+    "使用者模擬與滿意度評估的結合還很初步：只是把滿意度當成序列預測的一部分，最後再與 Success 相加平均。",
+    "多模組設計運算成本高、推論效率受限（MetaSim 3.56 GB、1,987 秒 vs Seq2seq 0.89 GB、409 秒）。",
+    "心智模型（mental model）的研究仍在早期，跨領域與跨任務的有效性驗證有限。",
+    "生成式模擬器的多樣性（Distinct）不如檢索式方法；tester 對回覆多樣性沒有控制，因此較弱的變體不一定 Distinct 較低。",
+    "Recommender tester 產生的回覆看起來合理，連人類都難分辨，是最難的 tester。",
+    "JDDC 缺資料庫，無法定義 Success、也無法做 Recommender tester。"
+  ],
+  "limitations_observed": [
+    "Tester 的「標準答案」與自家資料互相矛盾：Table 5 中 Recommender tester 最弱的 β=0.1 變體，與 MetaSim 互動的 Success 是 87.40，反而高於基礎系統的 80.25 與 β=0.4 的 28.60；Domain tester 最弱的 γ=0.01 在人工 Success 拿到 82.13，遠高於基礎系統的 39.50 與 γ=0.1 的 16.33。作者宣稱各 tester 的差異人類都分得出來，卻沒有討論這兩格；若不是筆誤，就代表「變體必然單調變弱」這個 ED 的根本前提並不成立。",
+    "ED 的鑑別力在 MultiWOZ 以外幾乎不存在：三個變體完全排對的隨機機率約 1/6≈16.7%，Agenda 的 16.9–19.5 就等於隨機；MetaSim 在 ReDial（17.48／20.61／20.43）與 JDDC（19.17／17.47）也只比隨機高 1–4 個百分點，而且完全沒有做顯著性檢定。引言宣稱「跨領域泛化良好」，但 ED 數字撐不起這個說法。",
+    "連人類在 MultiWOZ 上的 ED 也只有 40–44%，表示單段對話一次比較的雜訊本來就很大；ED 是逐偏好的 0／1 全對判定，而不是系統層級的排序相關（如 Kendall τ），把大量雜訊放大成「模擬器 vs 人類差 10 分」的結論，說服力有限。人類 ED 只在 MultiWOZ 做，另外兩個資料集沒有上限可對照。",
+    "模擬器自己當評審：calibrated satisfaction 裡的逐輪滿意度由模擬器自己的 policy 模組預測，而這個模組的訓練標籤大多是後驗網路產生的偽標籤；論文也沒說明 1–3 級滿意度如何和 0／1 的 Success 正規化後相加。同分時再以輪數少者為佳，等於把效率也偷偷算進評分。",
+    "後驗網路 97.79% 準確率的參考價值低：Table 1 中「普通」回合在 MultiWOZ／ReDial／JDDC 各佔約 89%／81%／83%，多數類就已占去大半，準確率沒扣掉多數類基準，USR 縮寫也未定義。",
+    "USS 的滿意度是第三方標註者讀對話後的判斷，不是對話當事人的感受；把它稱為「使用者滿意度」再拿來評系統，會把標註者偏好帶進評估。",
+    "模擬器與被評系統共用同一份訓練語料（MultiWOZ 上的 SOLOIST 與 MetaSim），互動 Success 高（80.25）可能部分反映兩者學到相同的語料分布，而不是模擬器更像真人；真正跨語料、跨系統的測試只有 Table 10 的三個第三方系統，而 SOLOIST 與 GALAXY 在模擬器下的差距（71.00 vs 74.90）很小，沒有信賴區間。",
+    "比較不對等：MetaSim 用五個 T5-base（3.56 GB、推論時間約 Seq2seq 的 4.9 倍），Seq2seq 只用一個；而把 policy 與 NLG 合併的 Variant A 在 F1（44.56）與 SlotAcc（58.32）上還略勝完整 MetaSim，削弱了「模組化是關鍵」的論點。Metaphor 在見過的領域貢獻也小（MultiWOZ F1 44.13 vs 43.31）。",
+    "「隱喻／類比思考／心智模型」的說法沒有認知層面的驗證，實際機制是對話狀態的 TF-IDF 檢索＋monoT5 重排，屬於一般的檢索增強生成；未見領域的提升（Table 12）也可能只是檢索到更多相似句型，而不是類比推理。",
+    "內部不一致：§6.3 說比較基礎系統與 α=3 的 Success 差距，卻用 α=1 的數字計算（75.00−46.70、80.25−27.04）；§6.5 正文說 Figure 7 是 Recommender tester，但例子用的是 γ 變體（Domain tester，圖說也寫 Domain tester）；Table 3 與 Table 7 中 MetaSim 的人工分數不同（Coherence 2.31 vs 2.51），作者說是兩次獨立實驗，但這也顯示 1–3 分人工評分的絕對值不穩定。",
+    "時代限制：骨幹是 T5-base，沒有與 LLM 提示式模擬器比較；對今天以 LLM 為核心的 agent，參考價值主要在 tester／ED 這種「以受控降級變體驗證模擬器鑑別力」的評估思路，而不在模擬器架構本身。"
+  ],
+  "framework_role": "主要落在 T6：一個以語料訓練的模組化神經使用者模擬器，專為「評估」而非訓練 RL 策略而設計，含目標（偏好）抽樣與更新、系統動作追蹤、檢索增強的策略與逐輪滿意度預測。它同時跨到 T7：提出 tester／ExactDistinct 這種「元評估」方法，用同一基礎系統的受控降級變體檢驗模擬器能否正確分辨系統優劣，可直接借用來驗證我們自己的 LLM 使用者模擬器是否有評估鑑別力。其 calibrated satisfaction（Success 與逐輪滿意度的平均）也是一種 T8 任務完成分數的組合方式，但設計粗糙。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "偏好模組從項目資料庫抽出使用者目標，模擬器逐輪把目標中的 slot 告知系統，系統（SOLOIST）以 belief state 追蹤並轉成 SQL 查詢；Context tester 刻意限制系統可見的歷史句數（α=3、α=1），正是在量測系統把模擬器的多輪輸入吸收進目標追蹤的能力，Domain tester 則量測系統在資料不足時理解使用者目標的能力。"
+    },
+    {
+      "edge": "E6",
+      "how": "模擬器與系統變體互動產生的對話（每個模擬器與基礎系統互動 10K 段；每個 tester 以 1K 組偏好各跑一輪）連同模擬器在結束時給的 Success、逐輪滿意度與對話輪數，被彙整成系統評分，用來排序變體並計算 ExactDistinct；部分模擬對話（約 700 段）再交給人工評 Coherence 與 Human-like，互動紀錄因此同時回流到評估系統與評估模擬器兩端。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文只釋出作者自己的研究用程式碼（MetaSim 與 simtester 兩個 GitHub 儲存庫），沒有提到任何產品或部署；Semantic Scholar 顯示引用 15 次、influential 1 次（2026-09 查詢），屬學術影響力且偏低，不算採納。"
+  },
+  "reproducibility": {
+    "code": "http://github.com/sunnweiwei/MetaSim（模擬器與處理後資料）；https://github.com/Superbooming/simtester（tester 框架）",
+    "data": "公開：MultiWOZ 2.1、ReDial、JDDC、USS 皆為公開資料集，作者處理後的版本放在 MetaSim 儲存庫；但 JDDC 的項目資料庫未公開，JDDC 上無法定義 Success 或做 Recommender tester。人工評估的標註資料未說明是否釋出。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "確實屬於 T6 的神經使用者模擬器，tester／ExactDistinct 的「以受控降級變體驗證模擬器鑑別力」思路值得借用，但模型是前 LLM 時代的 T5 架構、影響力低（15 次引用），ED 在 MultiWOZ 以外接近隨機且表格有自相矛盾的數字，因此有參考價值但非必讀。",
+  "related": [
+    "2105.03748",
+    "2006.08732",
+    "1909.01388",
+    "2107.11904",
+    "2002.04793",
+    "2005.05298",
+    "2201.04723",
+    "1905.04071"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

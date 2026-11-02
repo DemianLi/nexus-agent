@@ -1,0 +1,161 @@
+{
+  "id": "2509.25370",
+  "title": "Where LLM Agents Fail and How They can Learn From Failures",
+  "topic": "T4",
+  "subarea": "軌跡分析、失敗分類與歸因",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出單 agent 的模組化失敗分類法 AgentErrorTaxonomy（5 模組 17 類）、200 條逐步逐模組標註根因的失敗軌跡資料集 AgentErrorBench，以及用 LLM 找出最早關鍵錯、再從該步帶著回饋重跑的偵錯框架 AgentDebug。",
+  "problem": "LLM agent 的失敗常是單一早期錯誤一路級聯到任務失敗；既有失敗分析多停在列舉錯誤類型或質性個案，沒有把失敗追回根因（哪一步、哪個模組、什麼類型）的系統化機制，也沒有讓 agent 依這個診斷修正自己。step-level self-reflection、ToT、Best-of-N 等方法把軌跡當成彼此獨立的步驟，不處理錯誤傳播，所以算力花不到真正出錯的位置。",
+  "core_idea": "把每一步 agent 的輸出切成 memory／reflection／planning／action 四個模組（外加 system 類），先逐步逐模組貼上分類法的錯誤標籤，再由 LLM 以全域視角挑出「最早、讓任務變成不可能的那一個關鍵錯」，只針對這個根因產生可行動的修正指令，並從該步開始重新 rollout；修一個根因比修所有表面錯誤更能把失敗軌跡翻成成功。",
+  "method": {
+    "軌跡格式（被分析的輸入）": "τ = {(s_t, a_t)}，t=1..T。agent 用作者設計的結構化 rollout 提示詞（附錄 Figure 17–19，ALFWorld／WebShop／GAIA 各一版）執行：每步必須依序輸出 <memory>（以 RAG 風格帶步驟編號回想相關的觀測與動作）、<reflection>（上一個動作是否成功、是否完成目標、是否有進度）、<plan>（下一步做什麼、為什麼、預期結果）、<action>（從 admissible actions 挑一個；GAIA 為 tool 名稱加 JSON 參數，或 <answer>）。第 1 步沒有歷史，只有 plan 與 action。GAIA 在最後一步強制給答案、不准回答 unknown。",
+    "AgentErrorTaxonomy（附錄 Table 2，共 17 類）": {
+      "Memory": "over-simplification／incomplete summary、hallucination（false memory）、retrieval failure",
+      "Reflection": "progress misassessment、outcome misinterpretation、causal misattribution、hallucination",
+      "Planning": "constraint ignorance、impossible action、inefficient planning",
+      "Action": "planning–action disconnect（misalignment）、format error、parameter error",
+      "System": "step limit exhaustion、tool execution error、LLM limit（逾時、token 上限）、environment error（模擬器或網路壞掉，不是 agent 的錯）",
+      "另有": "Stage 2 提示詞允許一個 others 類，收標準類型以外的罕見失敗"
+    },
+    "AgentErrorBench 建構": "先從 ALFWorld、WebShop、GAIA 收集 500 多條失敗軌跡做人工分析，歸納出分類法；再挑 200 條代表性軌跡（ALFWorld 100、WebShop 50、GAIA 50），由 10 名有 NLP／agent 研究經驗的研究生，以 decision step 為單位逐一檢查每個 action、reflection、plan，貼上錯誤類型，並標出能解釋下游級聯的「最小根因集合」與可行動回饋。流程：3 輪 pilot 標註修訂指引與校準範例 → 標註者訓練（作者給回饋）→ 共享子集獨立雙標 → 分歧集體裁決（例如區分 memory 的 retrieval failure 與 planning 的 constraint ignorance）。跨模組 Cohen's κ = 0.55。",
+    "Stage 1：逐步逐模組標錯": "對每個 t 與每個模組 m ∈ {memory, reflection, planning, action}，呼叫一次 detector 提示詞（附錄 Figure 14），輸入 task、environment、step 編號、該步完整輸入（含對話歷史）、模組名稱、該模組輸出、該步之後的環境回應、錯誤定義。判定規則：memory 只能依本步輸入來摘要回想；reflection 依本步輸入加本步 memory；planning 依輸入加本步 memory 與 reflection；action 依輸入加本步 plan；system 錯另外判。輸出嚴格 JSON：{error_detected, error_type, evidence, reasoning}。一條軌跡約 4T 次 LLM 呼叫，得到模組層級的錯誤輪廓。",
+    "Stage 2：關鍵錯偵測": "若 Eval(τ)=1（任務已成功）直接結束。否則把整條軌跡的逐步分析、錯誤定義、debug 輪次索引與先前已發出的指令，填入 AgentDebug 提示詞（附錄 Figure 15）。提示詞要求：以全域視角理解軌跡如何偏離成功；找最早一個讓軌跡走上不可逆失敗路徑的決策；第 1–3 步的探索通常正常，除非有明確根本錯誤否則不要標；第 1 步不能標 memory／reflection；若 agent 行為合理但撞到 step_limit 等 system 錯，system 錯就是關鍵錯；不要依任何預設的嚴重度權重。關鍵錯的判準：是讓任務不可能成功的根因、引發後續級聯、若沒發生就可能成功、修正它會根本改變軌跡走向。輸出 JSON：{critical_step, critical_module（memory|reflection|planning|action|system|others）, error_type, root_cause, evidence, correction_guidance, cascading_effects:[{step, impact}]}。取 t* = 關鍵步集合的最小值。注意：§3.2 正文把這一段描述成逐步替換修正動作、重跑看是否成功的反事實測試，但 Algorithm 1 明寫 Stage 2 不做 rollout／反事實，附錄提示詞與 GitHub README 也都是純 LLM 判斷；重做時應以純 LLM 版本為準，反事實搜尋在實驗裡其實是 Brute Force／Binary Search 基準。",
+    "Stage 3：帶回饋的迭代重跑": "保留 t* 之前的前綴，從 t* 重新 rollout；把 correction_guidance 當成「後續每一步都必須遵守的高優先指令」注入 agent 的上下文。每輪結束用 Eval 判定成功就回傳；失敗則 UpdateFeedback（同一個提示詞帶上新的 attempt_index 與先前指令，重新分析新軌跡），產生更具體的指引，最多 I 輪。",
+    "關鍵超參數與元件": "偵錯器（Stage 1、2 與回饋）用 GPT-4.1，temperature 0；下游實驗 re-rollout 上限 N=5，每輪都從 t* 開始而不是從頭；agent backbone 為 GPT-4o-mini、Qwen3-8B、Qwen3-Next-80B；下游基準（Self-Refine、Vanilla Debugger、ToT、Best-of-N）的嘗試次數以總 token 用量對齊 AgentDebug。",
+    "偵測評估指標": "Step accuracy（第一個關鍵錯的步驟完全對）、Step+Module（步驟與模組都對）、All Correct（步驟、模組、錯誤類型三者都對）。",
+    "基準的實作": "Direct Prompting：直接問 LLM 錯在哪一步；Brute Force：從 t=1 往後逐步替換一個修正動作、重跑，第一個讓 rollout 成功的步驟即關鍵步；Binary Search：從軌跡中點探測、遞迴二分；Vanilla Debugger：要求指出最早讓 agent 偏離或重複無效行為的步驟（0-based）並給一句理由與一個替代動作；Self-Refine：只問「為什麼這條軌跡沒完成任務」取得回饋；ToT：提出至多 k 個候選動作，以 0.0–1.0 的嚴格評分表打分。提示詞全文在附錄 Figure 16。"
+  },
+  "assumptions": [
+    "agent 的每步輸出能乾淨地切成 memory／reflection／planning／action 四段；這依賴作者自己的結構化 rollout 提示詞，原生 tool-calling 或不輸出顯式反思的 agent 需要先另外切分。",
+    "失敗大多有單一、可定位的最早根因，修正它就足以翻轉整條軌跡（單根因假設）。",
+    "環境可以保留前綴、從中間步驟 t* 重新開始執行，而且前綴重播是決定性的。",
+    "測試時有可靠的任務成功判定 Eval，可以拿來決定要不要啟動偵錯、何時停止重跑。",
+    "強模型（GPT-4.1）當偵錯器時，其判斷能對齊人工標註的根因；人工標的「最早關鍵錯」本身是可重現的 ground truth。",
+    "偵錯器看得到完整軌跡與最終失敗結果（事後分析），不是在執行中途即時判斷。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AgentErrorBench（200 條標註失敗軌跡：ALFWorld 100、WebShop 50、GAIA 50）",
+      "ALFWorld（下游任務成功率）",
+      "WebShop（下游任務成功率）",
+      "GAIA（下游任務成功率）"
+    ],
+    "metrics": [
+      "Step accuracy",
+      "Step+Module accuracy",
+      "All Correct（Step+Module+Error Type）",
+      "下游任務成功數／成功率（first attempt 與 N 次重跑後）",
+      "隨嘗試次數變化的成功率（ablation）",
+      "Cohen's κ（標註一致性）"
+    ],
+    "baselines": [
+      "偵測：Direct Prompting、Brute Force（逐步反事實重跑）、Binary Search",
+      "下游：Self-Refine、Vanilla Debugger、Tree-of-Thought、Best-of-N（以 token 用量對齊）",
+      "偵錯器底模消融：Llama-3.3-70B、GPT-4o-mini、Qwen3-Next-80B 對 GPT-4.1",
+      "rollout 策略消融：ReAct、Reflection、Act-only、Memory+ReAct 對 Modular"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 AgentErrorBench 三個環境的平均上，AgentDebug 的關鍵錯定位在三個粒度都勝過所有基準；摘要與引言的「24%」「17%」是百分點差，不是相對提升。",
+      "numbers": "平均 Step／Step+Module／All：AgentDebug 45.0% / 31.3% / 24.3%；Direct Prompting 28.0% / 10.0% / 0.3%；Binary Search 18.7% / 8.0% / 0.3%；Brute Force 12.0% / 4.3% / 0.0%。各環境 AgentDebug：ALFWorld 35.0/28.0/21.0，WebShop 42.0/22.0/14.0，GAIA 58.0/44.0/38.0",
+      "section": "Abstract；§4.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "GAIA 上的增益最大；但正文引用的基準數字與 Table 1 對不上。",
+      "numbers": "正文：Step 58.0% vs 30.0%，All-Correct 38.0% vs 12.0%。Table 1 的 GAIA 基準實際為 Direct Prompting 26.0/10.0/0.0、Brute Force 18.0/8.0/0.0、Binary Search 22.0/10.0/0.0，沒有任何一格是 30.0 或 12.0",
+      "section": "§4.1、Table 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "照「最早一個修正後就不失敗的步驟」這個定義做的反事實搜尋基準，對齊人工標註的程度反而比直接提示差。",
+      "numbers": "平均 Step accuracy：Brute Force 12.0%、Binary Search 18.7%，都低於 Direct Prompting 28.0%；Brute Force 的 All Correct 在三個環境全是 0.0%",
+      "section": "§4.1 Baselines、Table 1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 ALFWorld 上，AgentDebug 的回饋重跑對三個 backbone 都大幅提升成功，小模型的相對增益最大。",
+      "numbers": "first attempt → 重跑後：GPT-4o-mini 21 → 55；Qwen3-8B 48 → 74；Qwen3-Next-80B 60 → 84（正文未標單位與評估集大小）；另稱跨三個環境最高 26% relative improvement，Figure 6 只與 Self-Refine、Best-of-N 比",
+      "section": "§4.2、Figure 5、Figure 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "偵錯器的底模影響極大：只有 GPT-4.1 可用，其他開源或小模型幾乎定位不到根因。",
+      "numbers": "Step／Error／Step+M／All：GPT-4.1 42.0 / 44.0 / 32.0 / 32.0；Llama-3.3-70B 16.0 / 16.0 / 6.0 / 2.0；GPT-4o-mini 14.0 / 10.0 / 4.0 / 2.0；Qwen3-Next-80B 4.0 / 14.0 / 2.0 / 2.0",
+      "section": "§5.1、Figure 7(b)",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "作者的模組化 rollout 格式（memory→reflection→plan→action）在 ALFWorld zero-shot 下成功率最高。",
+      "numbers": "Modular 0.38；Memory+ReAct 0.34；Reflection 0.32；ReAct 0.26；Act Only 0.10",
+      "section": "§5.1、Figure 7(c)",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "AgentErrorBench 的規模、組成與標註一致性。",
+      "numbers": "200 條軌跡（ALFWorld 100、WebShop 50、GAIA 50）；10 名標註者；3 輪 pilot；跨模組 Cohen's κ = 0.55（作者稱 substantial）；分類法源自 500 多條失敗軌跡的人工分析",
+      "section": "§2.1、§2.2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "失敗集中在軌跡中段，memory 與 reflection 錯是最主要的級聯源；action 與 system 錯較少，但 system 錯（工具崩潰、步數耗盡）是直接終止點而不是級聯。",
+      "numbers": "失敗多落在第 6–15 步；級聯源多在第 5–15 步；各環境類型分布見附錄 Figure 11–13（正文只有圖，無數值）",
+      "section": "§2.2、§5.2、Figure 3、Figure 8",
+      "anchor_idx": 2
+    }
+  ],
+  "limitations_stated": [
+    "AgentErrorBench 只涵蓋 ALFWorld、GAIA、WebShop 三個環境，規模與領域多樣性有限；多模態、更長 horizon、高風險領域（醫療、金融）留待未來。",
+    "在學術資源下，大規模人工標註來訓練專用偵錯模型成本過高，所以改用提示工程加現成 LLM；效能可能不如專門訓練的偵錯模型。",
+    "倫理聲明：更強的偵錯框架可能被拿來強化惡意 agent。"
+  ],
+  "limitations_observed": [
+    "方法描述自相矛盾：§3.2 把 Stage 2 寫成「逐步替換修正動作、重跑看會不會成功」的反事實測試，Algorithm 1 卻註明 Stage 2 不做 rollout／反事實，附錄 Figure 15 的提示詞與 GitHub README 也都是單次 LLM 判斷。讀者若照正文實作會做出另一個方法（而且就是表現最差的 Brute Force 基準）。",
+    "反事實基準輸給直接提示（Brute Force 平均 Step 12.0% vs Direct Prompting 28.0%），這其實在質疑 benchmark 的標籤定義：論文把關鍵錯定義成「最早一個修正後就不失敗的步驟」，但照這個定義去搜的方法與人工標註最不一致，表示人工標的不是反事實意義上的關鍵步，或是基準裡的「修正動作」產生器太弱。論文沒有討論，也沒說 Brute Force 用哪個模型產生修正動作。",
+    "數字多處前後不一：摘要的「24% higher all-correct」與「17% higher step」都是百分點差（24.3 vs 0.3、45.0 vs 28.0），§4.1 又改用相對值說 step 提升 61%；§4.1 的 GAIA 基準數字（30.0、12.0）在 Table 1 找不到；§4.2 Findings 寫 50.0% step、42.5% all-correct，與 Table 1 平均 45.0／24.3 不符；Figure 7(b) 的 GPT-4.1 又是 42／32。看起來混用了不同子集或不同版本的結果，引用任何一個數字前都要回到 Table 1。",
+    "κ = 0.55 被稱為 substantial agreement，依 Landis–Koch 的慣例屬於 moderate；雙標子集有幾條、κ 是在 step、module 還是 error type 哪一層算的都沒交代。在 moderate 一致性的標籤上量 All Correct，24.3% 的意義難以解讀，也沒有報告人類對人類的 All Correct 當上限。",
+    "分類法與作者自己的 rollout 腳手架綁死：軌跡是用強制輸出 <memory>、<reflection>、<plan>、<action> 的提示詞跑出來的，「memory 與 reflection 錯最多」可能有一部分是腳手架每步都逼 agent 寫記憶與反思造成的，不一定代表一般 agent 的失敗分布。Figure 7(c) 用同一個 Modular 格式證明它最好，但那是 zero-shot 單一環境、無變異量的比較。對沒有顯式 memory／reflection 段的原生 tool-calling agent，要先解決切分問題，論文完全沒處理。",
+    "下游實驗的設定偏寬鬆：(1) 用環境的成功 oracle Eval 決定是否繼續偵錯，本質接近帶 oracle 的 pass@k；(2) 從 t* 重播前綴需要可重設且決定性的環境，GAIA 的網路搜尋工具並不決定，真實對話中也沒有 oracle；(3) 修正指令由 GPT-4.1 產生、再餵給 GPT-4o-mini／Qwen3-8B，增益可能有一部分是強模型把知識「提示」給弱模型，而不是根因定位本身。缺一個「GPT-4.1 給不定位的通用回饋，同樣從中途重跑」的對照；Self-Refine 的回饋由哪個模型產生也沒寫。",
+    "下游數字缺乏統計資訊：21→55 等沒有標單位、評估集大小、種子數或誤差棒；「up to 26% relative」與 GPT-4o-mini 21→55（相對 +162%）對不上，26 究竟相對什麼沒有定義。GAIA、WebShop 的偵測評估各只有 50 條，每條就是 2 個百分點，卻沒有信賴區間。",
+    "「token 用量對齊」的說法不完整：AgentDebug 每條軌跡要先做約 4T 次 GPT-4.1 的 Stage 1 呼叫，再加 Stage 2 與每輪 UpdateFeedback；論文沒說明這些偵錯器 token 是否算進與 Best-of-N、ToT 對齊的預算。",
+    "「第一個系統化標註的失敗軌跡資料集」這個宣稱過寬：Who&When（2505.00212，2025 年 5 月）已公開逐步標註「哪個 agent、哪一步」的失敗歸因資料，MAST（2503.13657）也有標註過的多 agent 軌跡；本文的「第一」只在單 agent＋模組層級上成立，而且沒有在 Who&When 上做比較，看不出方法能否推廣到多 agent。",
+    "Stage 2 提示詞寫死了「第 1–3 步通常不要標」這種啟發式，可能正是在迎合人工標註分布（失敗集中在 6–15 步），會讓真正在開頭就錯的任務（例如附錄 Figure 22 的 WebShop 第 1 步 constraint ignorance）被系統性低估；論文沒有消融這條規則。"
+  ],
+  "framework_role": "T4 子領域「軌跡分析、失敗分類與歸因」的單 agent 代表作，和多 agent 的 Who&When、MAST 互補。對框架有三樣可直接拿來用的東西：(1) 一套模組化的失敗標籤集（5 模組 17 類），可當 T4 軌跡異常事件的類型欄位；(2) 步驟×模組層級、附根因與回饋的標註資料集，可當我們 T4 歸因器的離線評估集；(3) 兩段式 LLM 偵錯器的輸出格式（critical_step、critical_module、error_type、root_cause、evidence、correction_guidance、cascading_effects），正好是 T4 交給 T5 的異常事件載荷。從關鍵步帶回饋重跑的部分落在 T5，屬於事後（任務已判定失敗後）的修正，不是執行中途的線上偵測。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "Stage 1、2 在失敗軌跡上逐步逐模組標錯並挑出最早關鍵錯，產出結構化的異常報告（步驟、模組、錯誤類型、根因、證據、級聯影響、correction_guidance）；Stage 3 把 correction_guidance 當高優先指令注入 agent，從 t* 重跑，最多 5 輪，失敗就精煉回饋。這就是「軌跡偵測到異常 → 觸發自我修正」的完整資料流；差別在觸發條件是 Eval 判定整條任務失敗之後，而不是執行中偵測到異常就立刻介入。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "作者群（含第一作者 Kunlun Zhu）後續發布開源工具包 AgentDebugX，README 明寫以本論文的 AgentErrorTaxonomy／AgentErrorBench／AgentDebug 為基礎，提供 PyPI 套件 agentdebugx，以及 Claude Code、Codex 外掛與 DeepSeek Harness 的 npm 外掛 dsh-agentdebugx（https://github.com/AgentDebugX/AgentDebugX ，已開啟確認）。這是作者自己的開源延伸，不是第三方產品採納；README 也沒有提到任何公司在生產環境使用。"
+    ],
+    "assessment": "未見第三方商用採納證據。論文本身沒有寫部署或產品；可查到的只有作者群自己把方法工具化的開源套件 AgentDebugX，屬於研究釋出的延伸，不能當成商用採納。作者所屬單位之一 OpenManus 是否把 AgentDebug 整合進產品，本次沒有查到任何官方說明，不做推測。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/ulab-uiuc/AgentDebug（MIT 授權，已公開；含兩階段偵錯管線與 OpenAI／Anthropic／Gemini／Together 的 LLM 介面）",
+    "data": "已公開：AgentErrorBench 的 200 條標註失敗軌跡（ALFWorld 100、GAIA 50、WebShop 50）由 repo README 連到 Google Drive 下載；論文附錄另有完整提示詞（Figure 14–19）與錯誤類型範例（Figure 20–26）。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "模組化失敗分類法、步驟×模組根因標註資料與偵錯器的 JSON 輸出格式可直接借用到 T4→T5，但資料只有 200 條、κ 僅 moderate、最佳 All Correct 只有 24.3%，且方法描述（反事實與否）與多處數字前後矛盾，重要但不到必讀。",
+  "related": [
+    "2505.00212",
+    "2503.13657",
+    "2503.12651",
+    "2412.18371",
+    "2404.17833",
+    "2303.11366",
+    "2210.03629",
+    "2305.10601",
+    "2010.03768"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 5,
+    "total": 8
+  }
+}

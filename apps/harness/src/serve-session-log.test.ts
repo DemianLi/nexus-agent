@@ -15,24 +15,27 @@
  * 3. **披露那一行**：一台正在把每一條 thread 的對話寫上磁碟的 server，畫面上要看得出來。
  */
 
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import {
-  appendHumanTurn,
-  createWireClient,
-  deliverableFilePath,
-  emptyConversation,
-  reduceConversation,
-} from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
+import { appendFile, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { createDeliverableClient, createWireClient, THREAD_ROOT_MISMATCH } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
-import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
+import { openJsonlSessionStore, projectKey, sessionPathsIn } from './jsonl-session-store.js';
+import { SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import {
+  closedSessionEvents,
+  rewriteSessionHeader,
+  sessionEventsOf,
+  sessionHeaderOf,
+  sessionsUnder,
+} from './session-files.fixture.js';
+import { generationLogFilename, SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { exchangeServeToken, fetchWithCookie, serveClient } from './fixtures.js';
+import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
 
 let running: RunningServe | undefined;
 
@@ -67,19 +70,14 @@ async function driveTurn(server: RunningServe, threadId: string): Promise<void> 
   const events = await client.openEvents(threadId);
   const prompt = '把這句話回聲一次。';
   await client.runStart(threadId, prompt);
-  let state: ConversationState = appendHumanTurn(emptyConversation(), prompt);
-  while (state.status === 'running') {
-    const next = await events.next();
-    if (next.done === true) break;
-    state = reduceConversation(state, next.value);
-  }
+  await foldTurn(events);
   await events.return?.(undefined);
 }
 
 /**
- * 打一次交付預覽路由，座標固定在 `seq 0`——**接回來的 thread 上，`seq 0` 一定在續接線以下**。
+ * 打一次命令通道上的交付預覽（`deliverable.read`），座標固定在 `seq 0`——**接回來的 thread 上，`seq 0` 一定在續接線以下**。
  *
- * 回的是那一次拒絕的文字：兩條路都是 404，分得開它們的只有訊息
+ * 回的是那一次拒絕的文字：兩條路都是 `deliverable/no-anchor`，分得開它們的只有訊息
  * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
  *
  * @param server - 正在跑的那台。
@@ -94,19 +92,28 @@ async function deliverableRefusal(server: RunningServe, threadId: string): Promi
     threadId,
   );
   if (page.kind !== 'ok') throw new Error(`歷史拿不到：${page.message}`);
-  const response = await withCookie(`${server.url}${deliverableFilePath(threadId)}?seq=0&index=0`, {
-    method: 'GET',
-    headers: { 'content-type': 'application/json' },
-  });
-  expect(response.status).toBe(404);
-  return response.text();
+  const read = await createDeliverableClient({ baseUrl: server.url, fetch: withCookie }).read(
+    threadId,
+    { seq: 0, index: 0 },
+  );
+  if (read.kind !== 'ok' || read.result.ok) throw new Error('應該被拒');
+  return read.result.error.message;
 }
 
-function readEvents(body: string): readonly SessionEvent[] {
-  return body
-    .split('\n')
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent);
+/** 這個專案那一格裡 `threadId` 那一份的事件，經 `session-files.fixture.ts`（#1868）。 */
+function eventsOn(root: string, threadId: string): Promise<SessionEvent[]> {
+  return sessionEventsOf(projectDirOf(root), threadId);
+}
+
+/** 同一份的日誌檔（世代檔：第一行是 header 行，事件從第二行起）。只給要動位元組的（補行、改行、比原文）。 */
+function logOn(root: string, threadId: string): string {
+  return sessionPathsIn(projectDirOf(root), threadId).log;
+}
+
+/** 世代檔的 header 行（不含換行）。 */
+async function headerLineOn(root: string, threadId: string): Promise<string> {
+  const text = await readFile(logOn(root, threadId), 'utf8');
+  return text.slice(0, text.indexOf('\n'));
 }
 
 describe('serve 的 --session-log', () => {
@@ -125,11 +132,11 @@ describe('serve 的 --session-log', () => {
     running = undefined;
 
     const runDir = await onlyProjectDir(root);
-    const files = (await readdir(runDir)).filter((name) => name.endsWith('.jsonl')).sort();
-    expect(files).toEqual(['alpha.jsonl', 'beta.jsonl']);
+    const sessions = (await sessionsUnder(runDir)).sort((a, b) => a.id.localeCompare(b.id));
+    expect(sessions.map((session) => session.id)).toEqual(['alpha', 'beta']);
 
-    for (const file of files) {
-      const events = readEvents(await readFile(join(runDir, file), 'utf8'));
+    for (const session of sessions) {
+      const events = await closedSessionEvents(session);
       expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
       expect(events.map((event) => event.type)).toContain('turn/start');
       expect(events.map((event) => event.type)).toContain('turn/end');
@@ -149,10 +156,7 @@ describe('serve 的 --session-log', () => {
     running = undefined;
 
     const runDir = await onlyProjectDir(root);
-    const header = JSON.parse(await readFile(join(runDir, 'gamma.header.json'), 'utf8')) as Record<
-      string,
-      unknown
-    >;
+    const { header } = await sessionHeaderOf(runDir, 'gamma');
     expect(header.id).toBe('gamma');
     expect(header.parentSession).toBeUndefined();
   });
@@ -183,24 +187,64 @@ describe('serve 的 --session-log', () => {
     running = undefined;
 
     const runDir = await onlyProjectDir(root);
-    const files = (await readdir(runDir)).filter((name) => name.endsWith('.jsonl'));
-    expect(files).toHaveLength(2);
-    // 兩個檔都真的有內容——「開得起來」與「寫得進去」是兩件事。
-    for (const file of files) {
-      expect(readEvents(await readFile(join(runDir, file), 'utf8')).length).toBeGreaterThan(0);
+    const sessions = await sessionsUnder(runDir);
+    expect(sessions).toHaveLength(2);
+    // 兩份都真的有內容——「開得起來」與「寫得進去」是兩件事。
+    for (const session of sessions) {
+      expect((await closedSessionEvents(session)).length).toBeGreaterThan(0);
     }
   });
 
-  it('沒給旗標就什麼都不落盤，而且畫面上講得出來', async () => {
+  /**
+   * **翻面來的**（#444）：以前這裡守「沒給旗標就什麼都不落盤」。照 dsh 改成預設落在 harness home
+   * 底下的 `sessions` 之後，同一個位置改守「沒給就寫進那裡，畫面上講得出那一格」。
+   *
+   * `env: {}` 沒有 `NEXUS_AGENT_HOME`，所以走的是 `~/.nexus-agent` 那條退路——`HOME` 由
+   * `test-home.setup.ts` 逐條換成暫存目錄，這裡當場再確認一次。
+   */
+  it('沒給旗標就寫進 harness home 底下的 sessions，畫面上講得出那一格', async () => {
+    expect(homedir().startsWith(tmpdir())).toBe(true);
+    const root = join(homedir(), '.nexus-agent', 'sessions');
     const lines: string[] = [];
     running = await runServe({
       argv: ['--port', '0'],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env: {},
     });
     await driveTurn(running as RunningServe, 'delta');
-    expect(lines.join('\n')).toContain('會話日誌：只在記憶體裡');
-    expect(lines.join('\n')).toContain('--session-log');
+    await (running as RunningServe).close();
+    running = undefined;
+
+    expect(lines.join('\n')).toContain(`會話日誌：${projectDirOf(root)}`);
+    expect(lines.join('\n')).not.toContain('只在記憶體裡');
+    const runDir = await onlyProjectDir(root);
+    expect((await sessionEventsOf(runDir, 'delta')).length).toBeGreaterThan(0);
+  });
+
+  it('NEXUS_AGENT_HOME 給了就落在它底下', async () => {
+    const home = await tmp('nexus-serve-home-');
+    const lines: string[] = [];
+    running = await runServe({
+      argv: ['--port', '0'],
+      log: bodyLog(lines),
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+    expect(lines.join('\n')).toContain(`會話日誌：${projectDirOf(join(home, 'sessions'))}`);
+  });
+
+  // 預設的根落在 `--workspace` 底下，就是 home 落在工作區裡：serve 先被 #1620 那一道擋下（它排在 home 鎖之前），
+  // 日誌根那一道到不了。日誌根那一道自己的訊息由 CLI 那邊守（`session-log-durability.test.ts`）。
+  it('預設的根落在 --workspace 底下時起不來：home 跟工作區重疊那一道先擋', async () => {
+    const workspace = await tmp('nexus-serve-ws-');
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--workspace', workspace],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: join(workspace, 'home') },
+      }),
+    ).rejects.toThrow(
+      /serve 起不來：下面這些跟 --workspace .*重疊.*harness home（NEXUS_AGENT_HOME）/su,
+    );
   });
 
   it('給了旗標就把落腳處印出來', async () => {
@@ -208,7 +252,7 @@ describe('serve 的 --session-log', () => {
     const lines: string[] = [];
     running = await runServe({
       argv: ['--port', '0', '--session-log', root],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env: {},
     });
     // 印的要是**那一格**，不只是根：根是那一格的前綴，斷言根的話印哪一個都綠。
@@ -231,6 +275,105 @@ describe('serve 的 --session-log', () => {
       runServe({ argv: ['--port', '0', '--session-log', '  '], log: () => undefined, env: {} }),
     ).rejects.toThrow('--session-log 要給一個目錄路徑');
   });
+
+  // #1559 N0633：會話根讀不了在啟動時就報，不等第一條 thread 第一次寫、在背景路徑上變成一行 warn。
+  it('--session-log 指到一般檔案：起不來', async () => {
+    const file = join(await tmp('nexus-serve-file-'), 'not-a-directory');
+    await writeFile(file, '');
+    await expect(
+      runServe({ argv: ['--port', '0', '--session-log', file], log: () => undefined, env: {} }),
+    ).rejects.toThrow(expect.objectContaining({ code: 'ENOTDIR' }));
+  });
+});
+
+/** 把落盤那一列關掉的夾具（#612）。 */
+const PERSISTENCE_OFF_PATCH = fileURLToPath(
+  new URL('./settings/persistence-off.patch.yml', import.meta.url),
+);
+
+/**
+ * 清單把落盤關掉（[#612](https://github.com/DemianLi/nexus-agent/issues/612)），serve 那一半。照 dsh
+ * 不掛 `session-persistence-jsonl`：一條 thread 都不寫、列表列不出來、以前寫過的也不接回來。
+ */
+describe('serve：清單把落盤關掉', () => {
+  it('跑完一輪 sessions 底下什麼都沒有，畫面講只在記憶體裡，列表回列不出來', async () => {
+    expect(homedir().startsWith(tmpdir())).toBe(true);
+    const lines: string[] = [];
+    const server = (await runServe({
+      argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH],
+      log: bodyLog(lines),
+      env: {},
+    })) as RunningServe;
+    running = server;
+    await driveTurn(server, 'delta');
+    const listed = await (await serveClient(server)).listThreads();
+    await server.close();
+    running = undefined;
+
+    expect(lines.join('\n')).toContain(SESSION_LOG_OFF_DISCLOSURE);
+    expect(listed.kind).toBe('rejected');
+    expect(listed.kind === 'rejected' && listed.message).toContain('session-persistence');
+    // home 會有（瀏覽器會話的密鑰住在那裡），**`sessions` 不會**。
+    await expect(readdir(join(homedir(), '.nexus-agent', 'sessions'))).rejects.toThrow();
+  });
+
+  it('以前寫過的 thread 不接回來，那個檔一個位元組都沒動', async () => {
+    // **兩台都用預設的根**——同一個家、同一格。第一台用 `--session-log` 的話，第二台根本不看那裡，
+    // 落盤沒關也碰不到那個檔，這一條就永遠綠。
+    const first = (await runServe({
+      argv: ['--port', '0'],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    running = first;
+    await driveTurn(first, 'echo');
+    await first.close();
+    const path = sessionPathsIn(
+      projectDirOf(join(homedir(), '.nexus-agent', 'sessions')),
+      'echo',
+    ).log;
+    const before = await readFile(path, 'utf8');
+
+    const second = (await runServe({
+      argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    running = second;
+    await driveTurn(second, 'echo');
+    await second.close();
+    running = undefined;
+    expect(await readFile(path, 'utf8')).toBe(before);
+  });
+
+  it('--session-log 跟它矛盾：起不來', async () => {
+    const root = join(await tmp('nexus-serve-log-'), 'not-yet');
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH, '--session-log', root],
+        log: () => undefined,
+        env: {},
+      }),
+    ).rejects.toThrow(/--session-log 跟設定矛盾.*session-persistence/su);
+    await expect(readdir(root)).rejects.toThrow();
+  });
+
+  // 落盤關掉時日誌根根本不解析，所以日誌根那一道不擋；但 home 裡還有憑證檔、會話密鑰、附件，serve 照樣起不來（#1620）。
+  // 「關掉時不解析預設的根」這件事在 serve 上量不到了（預設的根在工作區裡就是 home 在工作區裡），由 CLI 那條守
+  // （`session-log-durability.test.ts` 的「預設的根落在 --workspace 底下也不擋」）。
+  it('預設的根落在 --workspace 底下：關掉落盤也起不來，home 跟工作區重疊那一道不看落盤', async () => {
+    const workspace = await tmp('nexus-serve-ws-');
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH, '--workspace', workspace],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: join(workspace, 'home') },
+      }),
+    ).rejects.toThrow(
+      /serve 起不來：下面這些跟 --workspace .*重疊.*harness home（NEXUS_AGENT_HOME）/su,
+    );
+    expect(await readdir(workspace)).toEqual([]);
+  });
 });
 
 /**
@@ -243,11 +386,20 @@ describe('serve 的 --session-log', () => {
  * 靜默遺失。
  */
 describe('重開 server 之後接得回同一條 thread', () => {
-  async function start(root: string, extra: readonly string[] = []): Promise<RunningServe> {
+  async function start(
+    root: string,
+    extra: readonly string[] = [],
+    log: (line: string) => void = () => undefined,
+  ): Promise<RunningServe> {
+    // 這一檔守的是 #504 的續接守衛（header 記的根跟這一次的比），要的是「`--workspace` 就是可寫根」那個形狀：
+    // 用測試接縫 `workspaceRootOf` 固定成這樣。產品預設（#1775：新 thread 配私有根）的續接分類在 `thread-private-root.test.ts`。
+    const at = extra.indexOf('--workspace');
+    const workspace = at === -1 ? undefined : resolve(extra[at + 1] as string);
     running = await runServe({
       argv: ['--port', '0', '--session-log', root, ...extra],
-      log: () => undefined,
+      log,
       env: {},
+      ...(workspace !== undefined && { workspaceRootOf: () => workspace }),
     });
     return running as RunningServe;
   }
@@ -271,11 +423,116 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(second);
 
     const dir = await onlyProjectDir(root);
-    expect((await readdir(dir)).filter((name) => name.endsWith('.jsonl'))).toEqual(['alpha.jsonl']);
-    const events = readEvents(await readFile(join(dir, 'alpha.jsonl'), 'utf8'));
+    expect((await sessionsUnder(dir)).map((session) => session.id)).toEqual(['alpha']);
+    const events = await sessionEventsOf(dir, 'alpha');
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
     expect(count(events, 'session/end-seed')).toBe(1);
     expect(count(events, 'turn/start')).toBe(2);
+  });
+
+  /**
+   * 當掉那一輪的收尾寫回檔上（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：上一個行程死在
+   * 一輪中間、一次工具呼叫沒結果，續接之後檔上依序是原有事件、補的 `tool/result`、`turn/end {interrupted}`、
+   * `session/end-seed`；再重開一次，不再補。
+   */
+  it('當掉的那一輪：補結與 turn/end interrupted 寫在 end-seed 前面，再重開不重補', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+
+    const log = logOn(root, 'alpha');
+    const before = await eventsOn(root, 'alpha');
+    const tail = [
+      { type: 'turn/start', data: { kind: 'message', text: '跑到一半' } },
+      { type: 'tool/call', data: { callId: 'dead-1', name: 'write_file', arguments: '{}' } },
+    ].map((event, index) => ({ ...event, seq: before.length + index, time: 1 }));
+    await appendFile(log, `${tail.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const second = await start(root);
+    await driveTurn(second, 'alpha');
+    await stop(second);
+    const third = await start(root);
+    await driveTurn(third, 'alpha');
+    await stop(third);
+
+    const events = await eventsOn(root, 'alpha');
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+    const at = before.length + 2;
+    expect(events.slice(at, at + 3).map((event) => event.type)).toEqual([
+      'tool/result',
+      'turn/end',
+      'session/end-seed',
+    ]);
+    expect(events[at]).toMatchObject({
+      data: { callId: 'dead-1', isError: true, error: { code: 'TOOL_OUTCOME_UNKNOWN' } },
+    });
+    expect(events[at + 1]).toMatchObject({ data: { reason: { kind: 'interrupted' } } });
+    expect(
+      events.filter(
+        (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
+      ),
+    ).toHaveLength(1);
+  });
+
+  /** 日誌上 root 的核准政策事件（#437），照 seq 排。 */
+  function policies(events: readonly SessionEvent[]) {
+    return events.filter((event) => event.type === 'approval/policy').map((event) => event.data);
+  }
+
+  it('核准政策跨重啟（#437）：記著 never 的日誌，重開之後仍是 never，而且空轉的續接不讓日誌長', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+    const log = logOn(root, 'alpha');
+    const before = await eventsOn(root, 'alpha');
+    expect(policies(before)).toEqual([{ policy: 'ask' }]);
+
+    // 上一次跑到一半切成 never（這一步的切換入口在 `/permission`，這裡直接把那一顆寫進檔，量的是續接這一半）。
+    await appendFile(
+      log,
+      `${JSON.stringify({ type: 'approval/policy', data: { policy: 'never' }, seq: before.length, time: 1 })}\n`,
+    );
+
+    const second = await start(root);
+    await driveTurn(second, 'alpha');
+    await stop(second);
+    const third = await start(root);
+    await driveTurn(third, 'alpha');
+    await stop(third);
+
+    // 重開兩次之後，日誌上還是 [ask, never]：續接從最後一顆起算，沒有被預設的 ask 蓋回去，也沒有每次重釘一顆。
+    const events = await eventsOn(root, 'alpha');
+    expect(policies(events)).toEqual([{ policy: 'ask' }, { policy: 'never' }]);
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+  });
+
+  it('核准政策跨重啟（#437）：#437 以前的日誌沒有這一顆，照 ask 起算並補上一顆', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+    const log = logOn(root, 'alpha');
+    // 把這一顆從檔上拿掉，重排 seq：等於一份 #437 之前寫的日誌。
+    const [headerLine, head, ...rest] = (await readFile(log, 'utf8'))
+      .split('\n')
+      .filter((line) => line !== '');
+    const kept = rest
+      .map((line) => JSON.parse(line) as SessionEvent)
+      .filter((event) => event.type !== 'approval/policy')
+      .map((event, index) => ({ ...event, seq: index + 1 })); // header 行之後的第一顆佔 seq 0
+    await writeFile(
+      log,
+      `${[headerLine, head, ...kept.map((event) => JSON.stringify(event))].join('\n')}\n`,
+    );
+
+    const second = await start(root);
+    await driveTurn(second, 'alpha');
+    await stop(second);
+    const events = await eventsOn(root, 'alpha');
+    expect(policies(events)).toEqual([{ policy: 'ask' }]);
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
   });
 
   it('日誌壞了：這條 thread 起不來，檔案一個位元組都沒動', async () => {
@@ -283,9 +540,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const log = logOn(root, 'alpha');
     const lines = (await readFile(log, 'utf8')).split('\n');
-    lines[0] = '{壞的';
+    // lines[0] 是 header 行：壞的是第一顆事件。
+    lines[1] = '{壞的';
     await writeFile(log, lines.join('\n'));
     const before = await readFile(log, 'utf8');
 
@@ -293,6 +551,44 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     await stop(second);
     expect(await readFile(log, 'utf8')).toBe(before);
+  });
+
+  /**
+   * 這一版讀不懂的日誌（[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) N0646）：原始檔的位置記進伺服器日誌，
+   * 讓管理員找得到；**回給瀏覽器的錯誤不帶路徑**——多人共用的主機不把目錄結構交給每一個打開那條 thread 的人。
+   */
+  it('日誌比這一版新：起不來，伺服器日誌有原始日誌的路徑，回給 client 的錯誤沒有', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+    // 會話目錄裡多一份比這一版新的世代：這一版的世代檔原樣抄過去，只把 header 行的版號換成下一版。
+    const current = await readFile(logOn(root, 'alpha'), 'utf8');
+    const newline = current.indexOf('\n');
+    const stored = JSON.parse(current.slice(0, newline)) as Record<string, unknown>;
+    const log = join(
+      sessionPathsIn(projectDirOf(root), 'alpha').sessionDirectory,
+      generationLogFilename(SESSION_LOG_FORMAT_VERSION + 1),
+    );
+    await writeFile(
+      log,
+      `${JSON.stringify({ ...stored, version: SESSION_LOG_FORMAT_VERSION + 1 })}${current.slice(newline)}`,
+    );
+
+    const serverLines: string[] = [];
+    const second = await start(root, [], bodyLog(serverLines));
+    const cookie = await exchangeServeToken(second.authenticatedUrl);
+    const page = await createWireClient({
+      baseUrl: second.url,
+      fetch: fetchWithCookie(cookie),
+    }).threadHistory('alpha');
+    await stop(second);
+    expect(page.kind).not.toBe('ok');
+    // client 拿到固定訊息，原因與路徑只在 serve 的日誌（#2225）。
+    expect(JSON.stringify(page)).toContain('原因記在 serve 的日誌');
+    expect(JSON.stringify(page)).not.toContain(log);
+    expect(serverLines.some((line) => line.includes(log) && line.includes('alpha'))).toBe(true);
+    expect(serverLines.some((line) => line.includes('是比這一版新'))).toBe(true);
   });
 
   it('別的把手握著：起不來；它放了之後同一台 server 重試接得回來', async () => {
@@ -308,7 +604,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await driveTurn(second, 'alpha');
     await stop(second);
 
-    const events = readEvents(await readFile(join(projectDirOf(root), 'alpha.jsonl'), 'utf8'));
+    const events = await eventsOn(root, 'alpha');
     expect(count(events, 'turn/start')).toBe(2);
   });
 
@@ -321,16 +617,17 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const headerPath = join(projectDirOf(root), 'alpha.header.json');
-    const good = await readFile(headerPath, 'utf8');
-    await writeFile(headerPath, JSON.stringify({ ...JSON.parse(good), cwd: '/別的地方' }));
-    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const restore = await rewriteSessionHeader(projectDirOf(root), 'alpha', (header) => ({
+      ...header,
+      cwd: '/別的地方',
+    }));
+    const log = logOn(root, 'alpha');
     const before = await readFile(log, 'utf8');
 
     const second = await start(root);
     await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     expect(await readFile(log, 'utf8')).toBe(before);
-    await writeFile(headerPath, good);
+    await restore();
     await driveTurn(second, 'alpha');
     await stop(second);
   });
@@ -352,27 +649,30 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await driveTurn(first, 'alpha');
     await stop(first);
     // 前提：header 真的記了那一格。沒記的日誌照設計是放行的，下面那句證不了東西。
-    const headerPath = join(projectDirOf(root), 'alpha.header.json');
-    expect(JSON.parse(await readFile(headerPath, 'utf8')).workspaceRoot).toBe(workspace);
-    const log = join(projectDirOf(root), 'alpha.jsonl');
+    expect((await sessionHeaderOf(projectDirOf(root), 'alpha')).header.workspaceRoot).toBe(
+      workspace,
+    );
+    const log = logOn(root, 'alpha');
     const before = await readFile(log, 'utf8');
 
-    const second = await start(root, ['--workspace', other]);
+    const lines: string[] = [];
+    const second = await start(root, ['--workspace', other], (line) => lines.push(line));
     await expect(driveTurn(second, 'alpha')).rejects.toThrow();
     expect(await readFile(log, 'utf8')).toBe(before);
-    // **訊息要活著到瀏覽器那端**（卡上寫的是「訊息指名兩個根」）。只斷言「拋了」的話，有人
-    // 把 `threadOrError` 的錯包成一句通用的「thread 不可用」，這一條照樣綠，而多人共用主機上
-    // 的維運者失去唯一改得動的線索。形狀同下面那條沙箱檢查：協定層回 `rejected`，不是拋。
-    const refused = await (await serveClient(second)).slashRun('alpha', '/sandbox');
-    expect(refused).toMatchObject({ kind: 'rejected' });
-    expect(JSON.stringify(refused)).toContain(workspace);
-    expect(JSON.stringify(refused)).toContain(other);
+    // **碼要活著到瀏覽器那端，兩個根留在 serve 的日誌**（#2222）。只斷言「拋了」的話，有人把 `threadOrError` 的錯
+    // 包成一句通用的「thread 不可用」，這一條照樣綠。形狀同下面那條沙箱檢查：協定層回 `rejected`，不是拋。
+    const refused = await (await serveClient(second)).slashRun('alpha', '/permission');
+    expect(refused).toMatchObject({ kind: 'rejected', code: THREAD_ROOT_MISMATCH });
+    expect(JSON.stringify(refused)).not.toContain(workspace);
+    expect(JSON.stringify(refused)).not.toContain(other);
+    expect(lines.join('\n')).toContain(workspace);
+    expect(lines.join('\n')).toContain(other);
     await stop(second);
 
     const third = await start(root, ['--workspace', workspace]);
     await driveTurn(third, 'alpha');
     await stop(third);
-    expect(count(readEvents(await readFile(log, 'utf8')), 'turn/start')).toBe(2);
+    expect(count(await eventsOn(root, 'alpha'), 'turn/start')).toBe(2);
   });
 
   /**
@@ -391,9 +691,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const first = await start(root, ['--workspace', workspace]);
     await driveTurn(first, 'alpha');
     await stop(first);
-    const headerPath = join(projectDirOf(root), 'alpha.header.json');
     // 前提：第一次真的把那一格寫下去了。沒有這一條，下面兩臂的對比證不了東西。
-    expect(JSON.parse(await readFile(headerPath, 'utf8')).workspaceRoot).toBe(workspace);
+    expect((await sessionHeaderOf(projectDirOf(root), 'alpha')).header.workspaceRoot).toBe(
+      workspace,
+    );
 
     // 第一臂：header 記著根。錨過得了，於是問得到下一道閘——那個 seq 上沒有交付宣告。
     const second = await start(root, ['--workspace', workspace]);
@@ -401,11 +702,14 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(second);
 
     // 第二臂：把那一格拿掉（13 以前的日誌就長這樣），其餘原封不動。
-    const { workspaceRoot: dropped, ...rest } = JSON.parse(
-      await readFile(headerPath, 'utf8'),
-    ) as Record<string, unknown>;
-    expect(dropped).toBe(workspace);
-    await writeFile(headerPath, JSON.stringify(rest));
+    await rewriteSessionHeader(
+      projectDirOf(root),
+      'alpha',
+      ({ workspaceRoot: dropped, ...rest }) => {
+        expect(dropped).toBe(workspace);
+        return rest;
+      },
+    );
 
     const third = await start(root, ['--workspace', workspace]);
     expect(await deliverableRefusal(third, 'alpha')).toContain('header 沒記工作區根');
@@ -413,9 +717,10 @@ describe('重開 server 之後接得回同一條 thread', () => {
 
     // **續接把 version 覆寫成今天這一版，那一格仍然不在。** 照版本號判的實作會在上一句放行，
     // 然後拿這一次的 `--workspace` 去讀一個沒人驗證過的錨——靜默錯檔，剛好是 #504 存在的理由。
-    const rewritten = JSON.parse(await readFile(headerPath, 'utf8')) as Record<string, unknown>;
-    expect(rewritten['version']).toBe(SESSION_LOG_FORMAT_VERSION);
-    expect(rewritten).not.toHaveProperty('workspaceRoot');
+    // 比磁碟上的版號：經接縫讀出來的 `header.version` 永遠是這一版（#1868）。
+    const rewritten = await sessionHeaderOf(projectDirOf(root), 'alpha');
+    expect(rewritten.storedFormatVersion).toBe(SESSION_LOG_FORMAT_VERSION);
+    expect(rewritten.header).not.toHaveProperty('workspaceRoot');
   });
 
   it('沙箱模式跟著回來；日誌記著模式而這一次沒給 --workspace：擋下', async () => {
@@ -423,21 +728,62 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const workspace = await tmp('nexus-serve-resume-ws-');
     const first = await start(root, ['--workspace', workspace]);
     const client = await serveClient(first);
-    await client.slashRun('alpha', '/sandbox read-only');
+    await client.slashRun('alpha', '/permission read-only');
     await stop(first);
 
-    const bare = await start(root);
+    const lines: string[] = [];
+    const bare = await start(root, [], bodyLog(lines));
     // 建不起這條 thread 是協定層的錯（`wire-handler.ts` 的 `threadOrError`）：斜線命令回
-    // `rejected`，不是拋。原因要講到 `--workspace`——那是人唯一改得動的東西。
-    const refused = await (await serveClient(bare)).slashRun('alpha', '/sandbox');
+    // `rejected`，不是拋。serve 的日誌要講到 `--workspace`——那是人唯一改得動的東西。
+    const refused = await (await serveClient(bare)).slashRun('alpha', '/permission');
     expect(refused).toMatchObject({ kind: 'rejected' });
-    expect(JSON.stringify(refused)).toContain('--workspace');
+    expect(lines.join('\n')).toContain('--workspace');
     await stop(bare);
 
     const second = await start(root, ['--workspace', workspace]);
-    const reported = await (await serveClient(second)).slashRun('alpha', '/sandbox');
+    const reported = await (await serveClient(second)).slashRun('alpha', '/permission');
     await stop(second);
     // 前提：預設是 workspace-write，所以看得到 read-only 才證明是從日誌回來的。
     expect(JSON.stringify(reported)).toContain('read-only');
+  });
+
+  /**
+   * 日誌裡的模式名認不得（[#699](https://github.com/DemianLi/nexus-agent/issues/699)）：照 dsh 讀回時
+   * 不擋，接得回來；sandbox-policy 的配套入口在重播時報違規。serve 不傳違規去處，走 runner 預設的
+   * `console.error`，進的是伺服器日誌——所以收的是它。
+   */
+  it('最後一顆 `sandbox/mode` 被改成 bogus：接得回來，伺服器日誌報出帶 bogus 的違規', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const workspace = await tmp('nexus-serve-resume-ws-');
+    const first = await start(root, ['--workspace', workspace]);
+    await (await serveClient(first)).slashRun('alpha', '/permission read-only');
+    await stop(first);
+
+    // 逐行改，只動最後一顆的 `data.mode`（命令參數裡也有 `read-only`）。
+    const log = logOn(root, 'alpha');
+    const events = await eventsOn(root, 'alpha');
+    const last = events.findLastIndex((event) => event.type === 'sandbox/mode');
+    expect(events[last]).toMatchObject({ data: { mode: 'read-only' } });
+    const rewritten = events.map((event, index) =>
+      index === last ? { ...event, data: { mode: 'bogus' } } : event,
+    );
+    await writeFile(
+      log,
+      `${[await headerLineOn(root, 'alpha'), ...rewritten.map((event) => JSON.stringify(event))].join('\n')}\n`,
+    );
+
+    // 違規走伺服器日誌的 error 等級（#1534），不再是 `console.error`。
+    const serverLines: string[] = [];
+    const second = await start(root, ['--workspace', workspace], bodyLog(serverLines));
+    const reported = await (await serveClient(second)).slashRun('alpha', '/permission');
+    await stop(second);
+    // 前提：真的接回來了，那一格是日誌上的 bogus。
+    expect(JSON.stringify(reported)).toContain('bogus');
+    const violations = serverLines.filter((line) =>
+      line.includes('"@nexus/plugin-sandbox-policy"'),
+    );
+    expect(violations.length).toBeGreaterThanOrEqual(1);
+    expect(violations[0]).toContain(`seq ${String(last)}`);
+    expect(violations[0]).toContain('"bogus"');
   });
 });

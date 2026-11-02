@@ -1,0 +1,163 @@
+{
+  "id": "2201.08904",
+  "title": "Description-Driven Task-Oriented Dialog Modeling",
+  "topic": "T2",
+  "subarea": "LLM 時代的 zero/few-shot DST",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Google Research 提出 D3ST：把 schema 裡的 slot、intent 名稱整個換成自然語言描述，每個描述前面掛一個逐例隨機指派的索引，串在對話前面一起餵給 T5。模型一次解碼出所有 active slot 的「索引:值」與 active intent 的索引，藉此在 SGD 的未見服務與 MultiWOZ 的跨領域設定做 zero-shot 狀態追蹤。",
+  "problem": "傳統任務型對話的 schema 用 train-leaveat、hotel-internet 這類縮寫命名。seq2seq DST（例如 SimpleTOD、同作者的 Seq2seq）的輸出目標就是這些名稱串成的序列，模型容易記住名稱與值的表面對應，語意卻沒學到，換一個沒看過的服務或領域就轉移不過去；每個 slot 還要另外取名，也增加 schema 設計負擔。另一條路線（T5DST、DaP）雖然也用 slot 描述，但每個 slot 各解碼一次，slot 數一多推論成本線性上升，而且大多數 slot 在任一時刻都是 inactive，逐一預測容易誤報。作者要回答：schema 完全改用自然語言描述，能不能同時拿到較好的品質、資料效率、zero-shot 轉移與對措辭的穩健性。",
+  "core_idea": "把 schema 當成給模型的指令：每個 slot／intent 只留一句自然語言描述，前面加上數字索引（intent 用 i0、i1…，categorical 值用 1a)、1b)…）。訓練時每個樣本都重新打亂索引與描述的對應，模型無法記住「3 號就是出發時間」，只能讀描述才知道要把值填到哪個索引。輸出只列 active 的元素，所以整個對話狀態（slot 值加 active intent）一次解碼完成。作者稱之為 index-picking：模型挑的是索引，不是生成 schema 名稱。",
+  "method": {
+    "backbone_and_training": "T5 1.1 預訓練 checkpoint，用開源的 T5（Mesh TensorFlow）程式碼庫微調。尺寸有 base、large、XXL（11B）；§3.1 寫 220M／770M，§4.1 寫 250M／800M，後者對應 T5 1.1，以 §4.1 為準。每個實驗在 64 顆 TPU v3 上跑；batch size 32，全程固定 learning rate 1e-4（沒有 warmup 或衰減的描述）；輸入序列長度 1024 token、輸出 512 token；MultiWOZ 因為要放全部領域的描述，輸入上限拉到 2048。論文沒有明寫訓練目標，推定就是 T5 標準的 seq2seq teacher-forcing 交叉熵。",
+    "input_format": "編碼器輸入是一個字串，依序串接三段。(1) slot 描述：「0:描述0 1:描述1 …」。(2) categorical slot 在自己的描述後面列舉候選值，並使用該 slot 專屬的值索引，例如第 i 個 slot 寫成「i:描述 ia) 值a ib) 值b …」。作者試過全域共用 a)…k)，但 true／false 這類多個 slot 共用的值會造成選擇歧義，所以改成 slot 專屬索引。(3) intent 描述：「i0:描述 i1:描述 …」，其中 i 是字面字元，用來和 slot 索引區分。最後接上從第一輪到當前使用者語句的完整對話歷史，每句前面加說話者標記：公式寫 [usr]／[sys]，範例寫 [user]／[system]。",
+    "index_randomization": "每個訓練樣本都重新洗牌 slot 與 intent 的排列順序，並重新指派索引。Table A1 裡，Language 列的排列與 Name／Random 兩列不同（後兩者相同），而表中唯一一行 target（1:1a 2:summer anthems 4:no other love [intents] i0）只對得上 Name／Random 的排列；照 Language 的排列，1 號是 artist、i0 是搜尋歌曲，套上去就錯。重做時 target 字串必須依每個樣本自己的排列重新產生。這是 index-picking 能泛化的關鍵：索引本身沒有固定語意，模型只能靠描述去對齊對話內容。",
+    "output_format": "解碼器輸出「[states] 索引:值 索引:值 … [intents] i索引 …」，只列 active 的 slot 與 intent，inactive 的完全不生成。non-categorical slot 的值是自由生成的文字（例如 2:summer anthems）；categorical slot 輸出值的索引（例如 1:1a）。後處理時用該樣本的索引對照表，把索引映回真正的 slot、intent 與值。範例見 Table 5、Table A1、Table A2。",
+    "state_maintenance": "每一輪都從完整歷史重新生成截至該輪的累積狀態，沒有明確的「沿用上一輪狀態」或差分更新操作；狀態的延續完全靠模型每輪重讀歷史。這一點和 SGD 基線預測逐輪差分的設計不同。",
+    "descriptions_per_dataset": "描述直接取自資料集原本附的 slot 與 intent 描述。MultiWOZ 每一輪都放入全部領域的 slot 描述，並在描述前面加上領域名來消除跨領域歧義，例如 hotel-parking 寫成「hotel-parking facility at the hotel」。SGD 只放該輪相關服務的描述，也就是 SGD 標準評估提供的服務資訊。",
+    "description_type_ablation": "比較三種描述型態，模型架構完全相同。Language 是原始自然語言描述；Name 是 schema 元素名，例如 music_2-genre；Random 是把元素名的字元隨機重排得到的亂碼，例如 e-e_ciugs2mrn。categorical 的候選值清單在三種型態下都不變。Random 用來模擬「只能死記、完全讀不懂語意」的模型。",
+    "data_setup": "MultiWOZ 2.1 用 TRADE 的腳本前處理；2.2 到 2.4 不做任何前處理，以便和既有數字公平比較。few-shot 實驗在 SGD 上做：最小那組從每個訓練領域各抽 10 筆，共 260 筆；內文寫 0.16%，Table 3 表頭寫 0.18%。另有 1% 與 10% 兩組，從整個 train 均勻抽樣。每個設定跑 3 個隨機種子，報平均加減標準差。",
+    "zero_shot_protocols": "(a) MultiWOZ 2.1 leave-one-out：每次拿掉一個領域，只用不含該領域的樣本訓練，再在含該領域的樣本上評估。train 領域被留出時，會把 train-departure 與 train-destination 預測值尾端的「train station」去掉。(b) SGD 本身的 unseen 服務與領域：直接用全量訓練的模型，分 seen／unseen 報 JGA。(c) 跨資料集：用 §4.2 的 XXL，SGD 訓練的拿去測 MultiWOZ 2.4，反向亦同；為了對齊 SGD「每段對話事先給定服務」的慣例，MultiWOZ 的 prefix 只放本段對話出現的領域。(d) 質性測試：作者自己手寫會議投稿、網路業者、電商退貨等新領域對話，用 SGD 訓練的 XXL 推論。",
+    "metrics": "主指標是 Joint Goal Accuracy（JGA），也就是所有 slot 全對的 turn 比例。SGD 另報 active intent accuracy 與 requested slot F1。SGD-X 上報 5 個變體的平均 JGA，以及 Lee et al. 定義的 Schema Sensitivity SS(JGA)：同一個 turn 在 5 組不同描述下 JGA 的變異係數，再對所有 turn 取平均，越低越穩健。",
+    "not_specified_in_paper": "重做時會卡在以下幾處。(1) Table 1(b) 報了 requested slot F1，但 §3.2 的輸出格式只有 [states] 與 [intents]，requested slot 怎麼編進輸出沒有交代。(2) 沒寫訓練步數與 checkpoint 選擇準則；只有 Random 那組 large 模型提到在 85k 步截停。(3) 沒寫解碼策略（greedy 或 beam）。(4) 對話歷史超過 1024（MultiWOZ 為 2048）token 時怎麼截斷，沒有說明。(5) SGD 的 non-categorical 值評估是否沿用官方的 fuzzy matching，沒有說明。(6) MultiWOZ 是否也輸出 intent，沒有說明。(7) 評估時索引與順序是否也隨機化（或固定一種排列），沒有交代，這會影響重現出來的數字。(8) 分隔符不一致：§3.2 的公式用冒號，Table A1 與 Table A2 的範例部分用等號（1=、i0=）；公開 repo 的 README 範例指令用的是 --delimiter==。"
+  },
+  "assumptions": [
+    "推論時拿得到完整 schema，而且每個 slot、intent 都有品質夠好的自然語言描述；categorical slot 必須事先列舉候選值。",
+    "整份相關 schema 的描述加上完整對話歷史，塞得進 1024 token（MultiWOZ 為 2048）的輸入窗口。",
+    "對話狀態可以表示成扁平的 slot→單一值集合，外加一組 active intent；沒有處理巢狀、多值或跨服務參照的結構。",
+    "SGD 的評估假設每一輪相關的服務已知（oracle 服務資訊），模型不必自己判斷該看哪個服務的 schema。",
+    "所謂 zero-shot 是指「在其他領域或服務上監督微調過，再轉移到沒看過的 schema」，不是凍結 LLM 直接下提示詞；前提是新領域的描述與訓練領域在語意上相近。",
+    "索引隨機化足以阻止模型記住位置或索引與 slot 的對應，逼它讀描述。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.1（TRADE 前處理）",
+      "MultiWOZ 2.2",
+      "MultiWOZ 2.3",
+      "MultiWOZ 2.4",
+      "SGD（Schema-Guided Dialogue，含 seen／unseen 服務切分）",
+      "SGD-X（SGD 的 5 組群眾改寫 schema 變體）",
+      "MultiWOZ 2.1 leave-one-out 跨領域 zero-shot",
+      "SGD 與 MultiWOZ 2.4 互相的跨資料集 zero-shot",
+      "作者手寫的新領域對話（質性，無量化分數）"
+    ],
+    "metrics": [
+      "Joint Goal Accuracy (JGA)",
+      "Active intent accuracy（SGD）",
+      "Requested slot F1（SGD）",
+      "Schema Sensitivity SS(JGA)（SGD-X）"
+    ],
+    "baselines": [
+      "Transformer-DST",
+      "SOM-DST",
+      "TripPy",
+      "SAVN",
+      "SimpleTOD",
+      "Seq2seq（Zhao et al. 2021，同作者、T5 Base、不用描述）",
+      "DaP（seq 與 ind 兩種解碼，T5 Base，同樣用 slot 描述）",
+      "SGD baseline（BERT）",
+      "SGP-DST",
+      "paDST（有中英回譯資料增強與手寫規則）",
+      "Team14",
+      "TransferQA",
+      "T5DST",
+      "描述型態消融：Name、Random"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "全量訓練下，D3ST 在 MultiWOZ 與 SGD 上接近或達到當時最佳，而且模型越大品質越高；在 SGD 上，XXL 沒用資料增強、也沒用手寫規則，JGA 就追平 paDST。",
+      "numbers": "MultiWOZ 2.1／2.2／2.3／2.4 的 JGA：Base 54.2／56.1／59.1／72.1；Large 54.5／54.2／58.6／70.8；XXL 57.8／58.7／60.8／75.9。SGD（JGA／intent acc／req slot F1）：Base 72.9／97.2／98.9；Large 80.0／97.1／99.1；XXL 86.4／98.8／99.4。paDST 為 86.5／94.8／98.5，DaP(ind) 為 71.8／90.2／97.8。",
+      "section": "§4.2, Table 1(a)(b)",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "描述型態會影響品質。平均而言 Random 亂碼最差，即使在 MultiWOZ 這種訓練與測試 schema 相同、理論上可以死記的設定也一樣（但有例外：XXL 在 MW2.1 上 Random 57.6 略高於 Name 57.5）；Name 在 SGD 上明顯落後 Language。作者由此主張應該用語意豐富的自然語言描述。",
+      "numbers": "Table 2（Large／XXL），依 MW2.1、2.2、2.3、2.4、SGD 排列：Language 54.5、55.9、58.6、70.8、80.0／57.8、58.7、60.8、75.9、86.4；Name 55.1、55.8、59.6、72.2、73.7／57.5、57.9、60.4、75.4、79.7；Random 20.1、9.0、12.1、16.9、37.4（Large 未收斂，取 85k 步的數字）／57.6、56.1、59.3、73.6、64.8。",
+      "section": "§4.3, Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在 SGD 上，自然語言描述的資料效率比元素名好，而且模型越大越省資料：XXL 只用 1% 資料，就接近全量訓練的品質。",
+      "numbers": "JGA（0.18%／1%／10%，3 個種子）：Language-Large 6.1±0.7／36.7±2.0／73.1±0.2；Language-XXL 51.0±0.2／79.4±0.4／83.0±0.1；Name-Large 5.0±0.2／28.0±2.7／69.7±0.3；Name-XXL 47.7±0.5／74.9±1.4／78.6±0.7。對照全量 XXL 的 86.4。",
+      "section": "§4.4, Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "MultiWOZ 2.1 的 leave-one-out 跨領域 zero-shot，平均 JGA 大幅勝過 TransferQA 與 T5DST，但 hotel 領域略輸 TransferQA。",
+      "numbers": "D3ST／TransferQA／T5DST：Attraction 56.4／31.3／33.1；Hotel 21.8／22.7／21.2；Restaurant 38.2／26.3／21.7；Taxi 78.4／61.9／64.6；Train 38.7／36.7／35.4；平均 46.7／35.8／35.2。表中沒有註明 D3ST 用的模型尺寸。",
+      "section": "§4.5, Table 4(a)",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在 SGD 的 unseen 服務上，同尺寸的 D3ST Base 不如 DaP 與 SGP-DST；放大到 XXL 後，unseen JGA 才幾乎追平 paDST。seen 服務則在各尺寸都是最高。",
+      "numbers": "Overall／Seen／Unseen JGA：D3ST Base 72.9／92.5／66.4；Large 80.0／93.8／75.4；XXL 86.4／95.8／83.3。DaP(ind) 71.8／83.3／68.0；SGP-DST 72.2／87.9／66.9；Team14 77.3／90.0／73.0；paDST 86.5／92.4／84.6；SGD baseline 25.4／41.2／20.0。",
+      "section": "§4.5, Table 4(b)",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "跨資料集 zero-shot（兩邊 schema 慣例不同）可以運作，但遠低於各自的最佳水準；作者歸因於兩份資料集 schema 定義的偏差，以及 schema 本身沒有寫出來的隱性知識。",
+      "numbers": "XXL：SGD→MultiWOZ 2.4 的 JGA 28.9；MultiWOZ→SGD 的 JGA 23.1。對照 SGD BERT baseline 的 25.4。",
+      "section": "§4.5, Table 4(c)",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "在 SGD-X 的 5 組改寫 schema 上，同尺寸比較時，自然語言描述的平均 JGA 最高、schema sensitivity 最低；Name 與 Random 的平均依序下降、敏感度依序上升。",
+      "numbers": "Language：Large 平均 75.3、SS 0.26；XXL 平均 77.8、SS 0.27（v1 到 v5 為 85.5／85.1／73.9／75.5／68.9，原始 86.4）。Name：Large 66.9、0.37；XXL 73.0、0.35。Random：Large 28.4、0.74；XXL 67.1、0.51。",
+      "section": "§4.6, Table 6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "與 paDST 的比較不完全公平：paDST 用中英回譯做資料增強，又加了手寫規則。D3ST Large 明顯較低，要到 XXL 才追平。",
+    "Random 描述的 Large 模型訓練難以收斂，只能報 85k 步時的 JGA。",
+    "在 MultiWOZ 的 Large 模型上，Name 反而比 Language 好。作者推測原因是 MultiWOZ 要放全部領域的描述，完整描述讓輸入過長，中等尺寸的模型較難學。",
+    "D3ST Base 在 SGD 的 unseen 領域上，與 DaP、SGP-DST 公平比較時 JGA 較差。",
+    "跨資料集 zero-shot 遠低於各自的最佳水準，原因是兩份資料集 schema 定義的偏差，以及只看 schema 抓不到的隱性知識。",
+    "質性測試的網路業者例子漏掉「是否綁約」這個 slot。作者推測 bundle 是業界行話，模型沒能把它和對話內容連起來。",
+    "leave-one-out 的比較混用了資料集版本：TransferQA 在 MultiWOZ 2.1 上實驗，T5DST 在 2.0 上實驗，D3ST 則在 2.1。"
+  ],
+  "limitations_observed": [
+    "§4.2 聲稱 D3ST Base 在 SGD 與 MultiWOZ 上都比同樣用描述、同樣是 T5 Base 的 DaP 好，但 Table 1(a) 自己就推翻了 MultiWOZ 那一半：DaP(ind) 在 MW2.1 與 MW2.2 是 56.7 與 57.6，D3ST Base 只有 54.2 與 56.1。能勝過的只有 DaP(seq) 在 MW2.2 的 51.2。唯一站得住的同尺寸勝利是 SGD 的 72.9 對 71.8。",
+    "同作者、同樣是 T5 Base、完全不用描述的 Seq2seq（Zhao et al. 2021），在 MW2.2 與 MW2.3 反而高於 D3ST Base（57.6 對 56.1、59.3 對 59.1）；D3ST Base 贏的是 MW2.1（54.2 對 52.8）與 MW2.4（72.1 對 67.1），四個版本二比二。也就是說，在 schema 固定的 MultiWOZ 上，同尺寸看不到描述帶來的穩定增益。另外，MW2.3 的最佳其實是 BERT Base 的 TripPy，63.0 高於 D3ST XXL 的 60.8，「在所有 benchmark 上接近或達到最佳」的說法在 2.3 並不成立。",
+    "描述驅動與模型規模的貢獻混在一起。頭條數字都是 11B 的 XXL 對上 110M 到 340M 的基線。在 MultiWOZ 上，Large 還在 MW2.2 與 MW2.3 輸給 Base（54.2 對 56.1、58.6 對 59.1），和「模型越大品質顯著越好」的說法相衝突。SGD unseen 的 zero-shot 優勢也要到 Large 以上才出現（Base 66.4 低於 DaP 的 68.0）。論文沒有任何同尺寸、只換描述型態的 unseen 對照可以把兩者拆開；Table 2 雖然有 Language 對 Name 的同尺寸比較，但只報 SGD 整體 JGA，沒有分 seen／unseen。",
+    "「Language 一致勝出」只在 SGD 成立。Table 2 的 Large 在 MW2.1、2.3、2.4 都是 Name 較好（55.1 對 54.5、59.6 對 58.6、72.2 對 70.8），XXL 在 MW2.1 的差距只有 0.3。更關鍵的是，Random 亂碼的 XXL 在 MultiWOZ 上幾乎不輸 Language（57.6 對 57.8、73.6 對 75.9），表示 schema 固定時，大模型靠死記就夠了，描述的價值幾乎全在 SGD 的 unseen 服務。全量實驗又沒有報種子變異，約 1 分的差距無法判斷是否顯著。§4.4 說 Language「勝過其他型態」，但 Table 3 只比了 Name，沒有 Random。",
+    "核心機制沒有消融。索引隨機化是全文宣稱防止記憶、促成泛化的關鍵，卻沒有「固定索引或固定順序」的對照實驗；Random 字串實驗測的是描述有沒有語意，不是隨機化的作用。§3.3 與 §4.2 一再強調單次解碼比逐 slot 解碼有效率、可擴展，但全文沒有任何延遲、吞吐或解碼長度的量測。",
+    "SGD-X 上的穩健性只是相對的。XXL 的 SS(JGA) 是 0.27，不低於 Large 的 0.26，放大模型沒有降低對措辭的敏感度。XXL 在 v5 從 86.4 掉到 68.9，平均掉 8.6 分；Large 平均只掉 4.7 分。XXL 相對 Large 的優勢從原始 SGD 的 6.4 分縮到 SGD-X 平均的 2.5 分，表示 XXL 在 SGD 上的一部分增益綁在原始描述的特定措辭上。對一個主張「靠描述泛化」的方法，這正是部署時換人寫 schema 會踩到的風險。本文也沒有把 SGD-X 論文裡其他模型的數字放進來比較。",
+    "leave-one-out 的協定有模糊處。Table 4(a) 沒寫 D3ST 用哪個尺寸，本文也沒列出兩個基線的尺寸，差距可能部分來自規模。去掉「train station」尾綴的後處理看起來只套用在 D3ST 上。公開 repo 的 issue #9（2023-03-02 開，https://github.com/google-research/task-oriented-dialogue/issues/9）指出：釋出的轉換腳本用 --blocked_domains 時只跳過該領域的 turn，被留出領域的 slot 描述仍然出現在訓練 prompt 裡；截至查閱時未見維護者回覆。論文沒有說明 Table 4(a) 是否也是這樣做。如果是，模型在訓練時已經看過被留出領域的描述（只是永遠 inactive），這和嚴格的 zero-shot 定義不同，與 TransferQA、T5DST 的比較也未必同一協定。",
+    "跨資料集 zero-shot 的說法偏樂觀。MultiWOZ→SGD 的 23.1 仍低於論文拿來當參照的 SGD BERT baseline（25.4）；那是 2020 年、在 SGD 上監督訓練的 BERT Base 模型，一個 11B 模型在 zero-shot 下連它都沒追上。換到另一套 schema 慣例時，單靠描述的轉移能力很有限，這削弱了「只要寫好描述，新服務就能直接上線」的推論。",
+    "新領域的質性測試是作者自己手寫的對話，只展示 3 例，沒有報總共測了幾段、錯了幾個，存在挑選偏差；會議投稿那例的對話內容甚至是本論文自己的標題。這只能當示意，不能當 zero-shot 能力的證據。",
+    "論文內部有多處數字與記號不一致。Large 在 MW2.2 的 JGA，Table 1 是 54.2、Table 2 是 55.9。few-shot 比例內文寫 0.16%、Table 3 寫 0.18%。參數量 §3.1 寫 220M／770M、§4.1 寫 250M／800M。「每個訓練領域抽 10 筆、共 260 筆」對得上的是 SGD train 的 26 個服務，而不是 16 個領域，所以抽樣單位其實是服務。§3.2 的 N、M 在輸入段指 slot 數與 intent 數，到輸出段卻指 active slot 數與 active intent 數，符號前後對調。",
+    "從 T2（多輪狀態維護）的角度看，這個方法每輪都從完整拼接的歷史重新生成整份狀態，輸入上限 1024（MultiWOZ 為 2048）token，卻沒有交代歷史過長時的截斷策略，也沒有按對話長度或 turn 位置分析 JGA。多輪越後面是否越退化，完全沒量。schema prefix 隨 slot 數線性增長，作者自己也推測 MultiWOZ 上 Large 的退步來自輸入過長。這和「比逐 slot 解碼更可擴展」的主張有張力：解碼端省下的成本，轉嫁到了編碼端的長度。",
+    "SGD 的設定每輪直接給定相關服務（oracle），MultiWOZ 則放全部領域，兩邊難度不同。SGD 上漂亮的 intent accuracy（98.8）是在候選已被縮小的前提下得到的，實際部署時還要另外解決服務或領域選擇。"
+  ],
+  "framework_role": "屬於 T2，是「schema 描述驅動、zero-shot DST」的代表作。它把對話狀態定義成「以自然語言 schema 為條件、一次生成的 active slot 值加 active intent」，提供一套可直接實作的狀態表示與更新方式：每輪重讀歷史、重新生成整份累積狀態。同時預測 active intent，和 T1 的意圖偵測有交集。SGD-X 上的 schema sensitivity 則是 T2 狀態追蹤器在 T7 評估上的一個穩健性指標。要注意的是，它是微調過的 T5（最大 11B），不是用提示詞驅動凍結的 LLM。它是「LLM 時代 zero/few-shot DST」的前身與常用比較基線，同一團隊後續的 Show, Don't Tell 等工作延續了這條線。對本框架的啟示主要有三點：在提示詞裡用自然語言描述每個狀態欄位；輸出只列有變動或有值的欄位；把 schema 措辭變動當成必測的穩健性維度。它沒有處理長多輪互動中的記憶管理或多輪退化。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。查過兩個官方來源：Google Research 部落格〈Simple and Effective Zero-Shot Task-Oriented Dialogue〉（2022-04-13，https://research.google/blog/simple-and-effective-zero-shot-task-oriented-dialogue/），介紹 D3ST 與 SDT 並附程式碼連結，沒有提到任何產品部署；GitHub repo google-research/task-oriented-dialogue 則明寫「This is not an officially supported Google product」。兩者都是研究釋出，不構成商用採納證據。論文本身也沒有提到部署。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/google-research/task-oriented-dialogue（state_tracking/d3st）。README 內可見的是 SGD 與 MultiWOZ 2.1 到 2.4 轉成 D3ST 格式的資料轉換腳本（可選描述型態、分隔符、categorical 列舉格式，並有 --blocked_domains 用於 leave-one-out）。README 沒有描述訓練或評估程式，也沒有提到釋出 checkpoint；訓練要另外接 T5 開源程式碼庫。",
+    "data": "MultiWOZ 2.1 到 2.4、SGD、SGD-X 都是公開資料集；slot 與 intent 描述取自資料集原附的 schema。新領域的手寫對話只在論文 Table 5 與 Table A2 展示 3 例，沒有另外釋出完整集合。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是描述驅動 zero-shot DST 的代表作，也是後續工作的常見基線，「自然語言描述＋隨機索引＋單次輸出 active 狀態」這個設計值得知道；但實際增益主要出現在 SGD 的 unseen 服務，而且和 11B 的規模綁在一起，同尺寸在 MultiWOZ 上與自家 Seq2seq 互有勝負、在 MW2.1 與 MW2.2 輸給 DaP(ind)，核心的隨機化機制也沒有消融，所以讀摘要式理解即可，不列必讀（Semantic Scholar：73 次引用、14 次 influential）。",
+  "related": [
+    "1909.05855",
+    "2110.06800",
+    "2109.07506",
+    "2105.04222",
+    "2109.04655",
+    "2108.13990",
+    "2005.00796",
+    "2002.00181",
+    "1810.00278",
+    "2109.01652"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -5,9 +5,11 @@
  * # 只看披露改口（不需要任何端點）：
  * pnpm --filter @nexus/harness run cli --patch src/cli-telemetry.patch.yml "回聲一下"
  *
- * # 真的送出去：起一個收 POST 的東西在 4318，然後
+ * # 真的送出去：起一個收 POST 的東西在 4318，然後不給話、進 REPL：
  * NEXUS_OTLP_LOGS_URL=http://127.0.0.1:4318/v1/logs \
- *   pnpm --filter @nexus/harness run cli --patch src/cli-telemetry.patch.yml "回聲一下"
+ *   pnpm --filter @nexus/harness run cli --patch src/cli-telemetry.patch.yml
+ * # 先講一句話，等那一輪收完，再打 `/feedback <內容>`，最後 `/exit`。
+ * # `feedback-only` 只在人送出回饋時才把日誌補送出去；一次性模式（命令後面給話）不經斜線命令，送不了回饋。
  * ```
  *
  * 它要證明的是單元測試證明不了的那一件事：**披露那一行真的會改口。** 沒掛後端時印的是
@@ -44,7 +46,7 @@ const telemetryFixture: NexusPlugin = {
         url === undefined
           ? { mode: 'disabled' }
           : {
-              mode: 'full',
+              mode: 'feedback-only',
               exporter: { url },
               serviceName: 'nexus-agent',
               // 手動驗證要看得到東西，所以批次節奏調快——正式部署不該抄這個值。

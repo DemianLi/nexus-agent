@@ -4,6 +4,8 @@ import { AIMessage, AIMessageChunk } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
+import { assertImageBudget } from '@nexus/core';
+import type { ImageBudget } from '@nexus/core';
 
 /**
  * bindTools 會產生新實例，游標與綁定記錄要留在本體與副本共用的物件上。
@@ -14,14 +16,23 @@ import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 export interface ScriptedModelState {
   turn: number;
   boundToolNames: readonly string[];
+  /** `bindTools` 收到的工具物件本身（#442：工具目錄要讀模型實際拿到的名稱、描述與 schema）。省略就是還沒綁過。 */
+  boundTools?: readonly unknown[];
   lastPrompt: readonly BaseMessage[];
   prompts: (readonly BaseMessage[])[];
+  /** 被圖片額度擋下的嘗試次數（#1270）。省略＝沒擋過。 */
+  rejectedImageRequests?: number;
 }
 
 /** 腳本裡的一次工具呼叫。 */
 export interface ScriptedToolCall {
   readonly name: string;
   readonly args: Record<string, unknown>;
+  /**
+   * 指定 `tool_call_id`。預設是 `call_<輪>_<序>`——**兩顆假模型（root 與子代理）的編號會撞**，
+   * 而線上的折疊器照 id 認卡，撞了就是同一張卡；要在同一條線上看兩邊的卡時，子代理那邊給一個不撞的。
+   */
+  readonly id?: string;
 }
 
 /**
@@ -31,8 +42,23 @@ export interface ScriptedToolCall {
  * 時一樣。給了才有，這樣「成本算得出來」與「成本是我們捏的」在測試裡分得開。
  */
 export interface ScriptedUsage {
+  /** 完整的 prompt token 數，**含**下面兩格快取（LangChain 的 `input_tokens` 語義；日誌記的未快取那桶是記錄器減出來的）。 */
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /**
+   * 快取讀（#724）：翻成 `input_token_details.cache_read`。**省略就不放 key**，跟真模型沒報快取細節時一樣；
+   * `undefined` 的形狀由 `cacheDetailsUndefined` 另造。
+   */
+  readonly cacheReadTokens?: number;
+  /** 快取寫：翻成 `input_token_details.cache_creation`。省略就不放 key。 */
+  readonly cacheWriteTokens?: number;
+  /**
+   * 造出 LangChain 在 `prompt_tokens_details` 整個缺席時建出的那個形狀：`input_token_details: { cache_read: undefined }`
+   * （基座用 `!== null` 判斷，`undefined` 也會進去）。用來證明記錄器遇到 `undefined` 當沒報、不寫 key。
+   */
+  readonly cacheDetailsUndefined?: true;
+  /** 覆寫 `total_tokens`（預設 `inputTokens + outputTokens`）：造「總量與組成對不上」的回應。 */
+  readonly totalTokens?: number;
 }
 
 /** agent 迴圈的一輪：模型講一段話，並可選擇呼叫工具。 */
@@ -46,6 +72,12 @@ export interface ScriptedTurn {
    * `content` 與 `toolCalls` 在這一輪不會被用到。
    */
   readonly error?: string;
+  /**
+   * 給了就**每吐一個字**等這麼多毫秒：回覆串流到一半的那一段，測試可以停在裡面
+   * （[#953](https://github.com/DemianLi/nexus-agent/issues/953)）。是資料，所以腳本設定（`settings/scripted-model.ts`）也收。
+   * 只對串流那條路有作用——web 與產品路徑走的是它。
+   */
+  readonly tokenDelayMs?: number;
 }
 
 /**
@@ -58,11 +90,25 @@ function toUsageMetadata(usage: ScriptedUsage): {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  input_token_details?: { cache_read?: number | undefined; cache_creation?: number | undefined };
 } {
+  const reported = usage.cacheReadTokens !== undefined || usage.cacheWriteTokens !== undefined;
   return {
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
-    total_tokens: usage.inputTokens + usage.outputTokens,
+    total_tokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens,
+    ...(reported
+      ? {
+          input_token_details: {
+            ...(usage.cacheReadTokens === undefined ? {} : { cache_read: usage.cacheReadTokens }),
+            ...(usage.cacheWriteTokens === undefined
+              ? {}
+              : { cache_creation: usage.cacheWriteTokens }),
+          },
+        }
+      : usage.cacheDetailsUndefined === true
+        ? { input_token_details: { cache_read: undefined } }
+        : {}),
   };
 }
 
@@ -70,6 +116,11 @@ interface ScriptedChatModelOptions extends BaseChatModelParams {
   readonly turns: readonly ScriptedTurn[];
   /** bindTools 產生的副本要與本體共用這份狀態，否則每次綁定都會從第一輪重來。 */
   readonly shared?: ScriptedModelState;
+  /**
+   * 圖片額度（#1270）：跟真 adapter 一樣，**請求進來先量，超額就拋 `IMAGE_OFFLOAD_REQUIRED`**——拋在記 prompt 與取腳本之前，
+   * 所以被拒的嘗試不佔一輪腳本、不進 `prompts`，只進 {@link ScriptedChatModel.rejectedImageRequests}。
+   */
+  readonly imageBudget?: ImageBudget;
 }
 
 /**
@@ -83,17 +134,24 @@ interface ScriptedChatModelOptions extends BaseChatModelParams {
 export class ScriptedChatModel extends BaseChatModel {
   private readonly turns: readonly ScriptedTurn[];
   private readonly shared: ScriptedModelState;
+  private readonly imageBudget: ImageBudget | undefined;
 
   constructor(options: ScriptedChatModelOptions) {
-    const { turns, shared, ...rest } = options;
+    const { turns, shared, imageBudget, ...rest } = options;
     super(rest);
     this.turns = turns;
+    this.imageBudget = imageBudget;
     this.shared = shared ?? { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
   }
 
   /** bindTools 收到什麼，spike 用它斷言基座真的把工具交給了模型。 */
   get boundToolNames(): readonly string[] {
     return this.shared.boundToolNames;
+  }
+
+  /** `bindTools` 最近一次收到的工具物件，沒綁過是空陣列。 */
+  get boundTools(): readonly unknown[] {
+    return this.shared.boundTools ?? [];
   }
 
   /**
@@ -125,11 +183,16 @@ export class ScriptedChatModel extends BaseChatModel {
   }
 
   override bindTools(tools: readonly unknown[]): ScriptedChatModel {
+    this.shared.boundTools = tools;
     this.shared.boundToolNames = tools.map((candidate) => {
       const name = (candidate as { name?: unknown }).name;
       return typeof name === 'string' ? name : '<anonymous>';
     });
-    return new ScriptedChatModel({ turns: this.turns, shared: this.shared });
+    return new ScriptedChatModel({
+      turns: this.turns,
+      shared: this.shared,
+      ...(this.imageBudget !== undefined && { imageBudget: this.imageBudget }),
+    });
   }
 
   /** 腳本用完就代表 agent 迴圈跑得比預期多，直接失敗比靜默重播容易查。 */
@@ -145,7 +208,20 @@ export class ScriptedChatModel extends BaseChatModel {
     return turn;
   }
 
+  /** 被圖片額度擋下的嘗試次數：拋在記 prompt 之前，所以不在 {@link ScriptedChatModel.prompts} 裡。 */
+  get rejectedImageRequests(): number {
+    return this.shared.rejectedImageRequests ?? 0;
+  }
+
   private record(messages: BaseMessage[]): void {
+    if (this.imageBudget !== undefined) {
+      try {
+        assertImageBudget(messages, this.imageBudget);
+      } catch (error) {
+        this.shared.rejectedImageRequests = this.rejectedImageRequests + 1;
+        throw error;
+      }
+    }
     this.shared.lastPrompt = messages;
     this.shared.prompts.push(messages);
   }
@@ -154,7 +230,7 @@ export class ScriptedChatModel extends BaseChatModel {
     return new AIMessage({
       content: turn.content,
       tool_calls: turn.toolCalls?.map((call, index) => ({
-        id: `call_${this.shared.turn}_${index}`,
+        id: call.id ?? `call_${this.shared.turn}_${index}`,
         name: call.name,
         args: call.args,
         type: 'tool_call' as const,
@@ -191,6 +267,9 @@ export class ScriptedChatModel extends BaseChatModel {
     for (const token of [...turn.content]) {
       // handleLLMNewToken 要自己呼叫，基座才收得到 token 事件；
       // 少了這行，streamMode: 'messages' 只會拿到聚合後的整段訊息。
+      if (turn.tokenDelayMs !== undefined) {
+        await new Promise((resolve) => setTimeout(resolve, turn.tokenDelayMs));
+      }
       await runManager?.handleLLMNewToken(token);
       yield {
         text: token,

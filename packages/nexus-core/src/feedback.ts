@@ -29,9 +29,16 @@
  *
  * - **沒有 `sessionId`**：dsh 帶它是因為分叉出來的會話會繼承父會話的回饋。我們不分叉，一份日誌
  *   就是一個會話。
+ * - **兩個服務併成一個、兩顆套件併成一顆**（#1456 Q3 (a)，類別：遷移卡不改行為（暫時））：dsh 的評分是 `messageFeedback`
+ *   服務（list／put／delete），評語是另一顆套件 `command-feedback` 提供的 `sessionFeedback` 服務（`record`）。{@link FeedbackService}
+ *   把 `record` 併成第四個方法，一顆 `@nexus/plugin-feedback` 套件提供。#278 起如此，這裡先前沒有登記。**撤除條件**：要拆時
+ *   另開卡，連同 home 變更紀錄裡 `feedback` 列 id 的遷移一起處理（紀錄裡找不到 id 的 patch 只警告就跳過，停用過的列會靜靜
+ *   重新啟用）。完整的偏離表在 `docs/plugin-contract.md`。
  */
 
 import type { LoggedMessage } from './logged-message.js';
+import { loggedContentBlocks, loggedMessageId } from './logged-message.js';
+import { isLogicalTurnStart } from './session-log.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
 
 /**
@@ -176,9 +183,12 @@ export type FeedbackRecordResult = FeedbackSuccess<{ readonly recorded: true }>;
 /**
  * 評分與評語的規則，由 `@nexus/plugin-feedback` 提供成 {@link MESSAGE_FEEDBACK_SERVICE} 服務。
  *
- * **三個方法都是同步的，而那就是 dsh 那條 `enqueue` 的替身**：dsh 要把「讀、比、寫」包在一段
- * 非同步的寫入權裡，因為中間隔著磁碟；我們的日誌 `append` 是同步的，同一個行程裡兩次呼叫交錯
- * 不了，比對與寫入之間沒有縫。
+ * **四個方法都回 `Promise`，照 dsh**（契約 2.0.0，[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)）：評分的寫入（put／delete）
+ * 要等落盤確認（`@nexus/session` 的 `sessionDurability`）才回答，寫不進去就拋，不回假的成功；讀出來的評分事件先驗結構再折，壞的就拋
+ * {@link FeedbackLogCorruptionError}；沒掛落盤時評分那三個方法拋 {@link FeedbackDurabilityUnavailableError}。評語（`record`）照 dsh 不等落盤。
+ *
+ * **讀、比、寫仍在同一個同步段裡**，那是 dsh 那條逐會話 `enqueue` 的替身：dsh 要把它們包在一段非同步的寫入權裡，因為中間
+ * 隔著磁碟；我們的日誌 `append` 是同步的，await 排在 append 之後，兩次呼叫交錯不了比對與寫入。
  *
  * 呼叫端交進來的是**那個會話 root 的那一份日誌**——評分與評語都只寫 root。
  */
@@ -189,45 +199,40 @@ export interface FeedbackService {
    * @param request - 目標、想要的值與看到的版本。
    * @returns 目前那一筆，或一個業務碼。
    */
-  put(log: SessionLog, request: MessageFeedbackPutRequest): MessageFeedbackPutResult;
+  put(log: SessionLog, request: MessageFeedbackPutRequest): Promise<MessageFeedbackPutResult>;
   /**
    * 收回一則回覆的評分。本來就沒有也成功，而且不記。
    * @param log - 會話 root 的那一份日誌。
    * @param request - 目標與看到的版本。
    * @returns 「現在沒有了」，或版本衝突。
    */
-  delete(log: SessionLog, request: MessageFeedbackDeleteRequest): MessageFeedbackDeleteResult;
+  delete(
+    log: SessionLog,
+    request: MessageFeedbackDeleteRequest,
+  ): Promise<MessageFeedbackDeleteResult>;
   /**
    * 讀回目前的評分，照 dsh 的 `list`：web 靠它在重新整理之後把讚／踩畫回來。舊日誌裡以輪記、對不到
    * 回覆的那幾筆不在裡面（沒有畫面上的東西可以掛）。
    * @param log - 會話 root 的那一份日誌。
    * @returns 目前的評分。
    */
-  list(log: SessionLog): MessageFeedbackListResult;
+  list(log: SessionLog): Promise<MessageFeedbackListResult>;
   /**
    * 記一則對整個會話的評語。文字去掉前後空白，空的就當沒有。
    * @param log - 會話 root 的那一份日誌。
    * @param entry - 文字與分類，都可以省略。
    * @returns 記下了。
    */
-  record(log: SessionLog, entry: FeedbackRecord): FeedbackRecordResult;
+  record(log: SessionLog, entry: FeedbackRecord): Promise<FeedbackRecordResult>;
 }
 
-/** 一則訊息的文字：字串照原樣，區塊只取 `text` 那幾塊。 */
+/** 一則訊息的文字：區塊中有無非空的 text。 */
 function hasText(message: LoggedMessage): boolean {
-  const content: unknown = message.data.content;
-  if (typeof content === 'string') return content !== '';
-  if (!Array.isArray(content)) return false;
-  return content.some((block: unknown) => {
+  const blocks = loggedContentBlocks(message.data.content);
+  return blocks.some((block) => {
     const typed = block as { type?: unknown; text?: unknown } | null;
     return typed?.type === 'text' && typeof typed.text === 'string' && typed.text !== '';
   });
-}
-
-/** 一顆 `assistant/message` 記的訊息 id；沒記的是 `undefined`。 */
-export function loggedMessageId(message: LoggedMessage): string | undefined {
-  const id: unknown = message.data.id;
-  return typeof id === 'string' && id !== '' ? id : undefined;
 }
 
 /** 一則被評的回覆目前的評分，連同它所屬的那一輪。 */
@@ -237,7 +242,7 @@ export interface CurrentMessageFeedback {
    * （例如格式 9 以前根本沒記回覆）原樣是 {@link LegacyTurnFeedbackItem}。
    */
   readonly item: MessageFeedbackItem | LegacyTurnFeedbackItem;
-  /** 它所屬那一輪起頭那顆 `turn/start` 的 `seq`（往回找第一顆不是 `resume` 的）。 */
+  /** 它所屬那一輪起頭那顆 `turn/start` 的 `seq`（往回找第一顆開邏輯輪的，見 {@link isLogicalTurnStart}）。 */
   readonly turn: number;
 }
 
@@ -248,11 +253,18 @@ export interface CurrentMessageFeedback {
  * `assistant/message`（那時的按鈕就放在那一則上），之後同一則回覆的新評分照常覆蓋它。對不到的照輪留著，
  * 只有按輪統計的讀方（離線掃描）用得到。
  *
+ * **繼承來的前綴裡的評分不算**（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）：那是父會話給的。前綴裡的回覆照樣是
+ * 評分的目標（分叉之後可以對它重新評）。dsh 靠評分事件裡記的 `sessionId` 分（`message-feedback/src/index.ts:97-113`，只收
+ * `data.sessionId === sessionId` 的，`687f282e`）；**偏離（理由 1）**：我們的評分事件沒有 `sessionId` 這一格，舊檔也補不回來，
+ * 所以退到用切點分——分叉的前綴原樣是父會話的事件，切點之前的評分一定是父會話記的，結果與 dsh 相同。
+ *
  * @param events - root 那一份日誌的全部事件。
+ * @param inheritedEventCount - 切點（`SessionLog.inheritedEventCount`）；之前的評分事件略過。省略即 0。
  * @returns 目前每一則回覆（或對不到回覆的舊的一輪）的評分。
  */
 export function currentMessageFeedback(
   events: readonly SessionEvent[],
+  inheritedEventCount = 0,
 ): readonly CurrentMessageFeedback[] {
   /** 訊息 id → 它所屬那一輪。 */
   const turnOfMessage = new Map<string, number>();
@@ -260,8 +272,11 @@ export function currentMessageFeedback(
   const tailOfTurn = new Map<number, string>();
   let origin: number | undefined;
   for (const event of events) {
-    if (event.type === 'turn/start' && event.data.kind !== 'resume') origin = event.seq;
+    if (isLogicalTurnStart(event)) origin = event.seq;
     if (event.type !== 'assistant/message' || origin === undefined) continue;
+    // 講到一半被停下來的那則不能評（同 dsh：凍結的半段沒有 `messageId`）。它帶著即時那則的 id 只是為了讓重新整理時補送與歷史
+    // 對得上（#1044），不是為了讓它變成評分的目標。
+    if (event.data.interrupted === true) continue;
     const id = loggedMessageId(event.data.message);
     if (id === undefined) continue;
     turnOfMessage.set(id, origin);
@@ -275,6 +290,7 @@ export function currentMessageFeedback(
     return tail === undefined ? `turn:${String(target.turn)}` : `message:${tail}`;
   };
   for (const event of events) {
+    if (event.seq < inheritedEventCount) continue;
     if (event.type === 'feedback/message-put') {
       const stored = event.data.item;
       const key = keyOf(stored);
@@ -295,6 +311,30 @@ export function currentMessageFeedback(
     }
   }
   return [...current.values()];
+}
+
+/**
+ * 日誌裡的評分事件**結構不對**（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606)）：評分值不在兩種之內、時間戳倒過來、
+ * 備註全是空白……。照 dsh 的 `currentItems`（`message-feedback/src/index.ts:96-115`，`687f282e`）逐顆 `parse`、不合就拋，
+ * 不靜靜吞掉、也不折進畫面。另立一個類別，是為了讓 wire 分得出「紀錄壞了」與「沒存成」兩種失敗。
+ */
+export class FeedbackLogCorruptionError extends Error {
+  override readonly name = 'FeedbackLogCorruptionError';
+}
+
+/**
+ * 這個組裝**沒有掛落盤**，評分（list／put／delete）存不住（[#1606](https://github.com/DemianLi/nexus-agent/issues/1606) 題 2 (a)）。
+ *
+ * 對到 dsh：`messageFeedback` inject `sessionPersistence`（`message-feedback/src/index.ts:119`），沒掛落盤它根本不在；評語
+ * （`sessionFeedback`）照常。我們兩個服務併成一個（`@nexus/feedback` 檔頭的偏離），所以由評分那三個方法各自拋這一個，wire 回
+ * `not_supported`。訊息是 #1573 Q2 (a) 拍板的那一句。
+ */
+export class FeedbackDurabilityUnavailableError extends Error {
+  override readonly name = 'FeedbackDurabilityUnavailableError';
+
+  constructor() {
+    super('這個組裝沒有掛落盤，評分存不住');
+  }
 }
 
 /**

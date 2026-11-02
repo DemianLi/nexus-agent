@@ -1,0 +1,189 @@
+{
+  "id": "2301.13379",
+  "title": "Faithful Chain-of-Thought Reasoning",
+  "topic": "T3",
+  "subarea": "可觀測性／監控（執行期監控、異常偵測、安全監控）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 Faithful CoT：LM 只負責把問題翻譯成「自然語言子問題＋符號程式」交錯的推理鏈，答案一律交給 Python／Datalog／PDDL planner 等確定性求解器執行得出，讓推理鏈（的程式部分）按構造成為答案的忠實解釋；在 10 個推理資料集上多數勝過 CoT。",
+  "problem": "標準 CoT 的推理鏈不一定反映模型實際怎麼得出答案（不忠實）：答案不必然由推理鏈推出，Figure 1 的 GSM8K 例子中答案「0」根本沒出現在鏈裡，附錄 B.1 另有 StrategyQA 與 SayCan 的例子。當不忠實的解釋看起來合理（plausible）時，使用者會誤以為模型可自我解釋而過度信任它，在高風險應用中尤其危險；而且使用者即使手動改正推理鏈再讓模型重生答案，答案也未必跟著改，因為兩者之間沒有因果關係，CoT 無法拿來除錯。",
+  "core_idea": "把推理拆成兩段：Translation（LM 把自然語言問題翻譯成推理鏈 C，C 交錯 NL 註解 C_NL 與符號程式 C_SL）與 Problem Solving（確定性外部求解器執行 C_SL 得到答案 A）。因為 A 就是執行 C_SL 的結果，C_SL 按定義就是 A 的忠實解釋；C_NL 則負責把問題拆成有依賴關係的子問題並附上依據，給人讀。作者明言只保證 Problem Solving 階段忠實，Translation 階段（LM 怎麼寫出這條鏈）仍不透明。附帶效果是把計算交給求解器，準確率也上升。",
+  "method": {
+    "整體流程": [
+      "輸入：自然語言問題 Q（CLUTRR 另有一段故事 context）。輸出：答案 A（整數、布林、字串、日期或動作序列）。",
+      "Translation：以少樣本提示（每個範例是 (Q, C, A) 三元組，但 C 是 NL＋SL 交錯）讓 LM 生成 C。",
+      "Problem Solving：依任務呼叫對應求解器執行 C_SL；答案不由 LM 直接輸出。",
+      "主實驗不強制 C_NL 與 C_SL 之間有任何一致性約束（約束只在附錄 C.4 另做分析）。"
+    ],
+    "推理鏈格式（以 MWP 為例，Table 12）": [
+      "開頭是問題註解，接著一行 nudge 註解，大意是「要寫一支 Python 程式來回答下列子問題」。",
+      "之後每一步是一行編號註解：子問題本身，括號內標依賴關係（independent，或 depends on i and j）與 support 欄位。support 是原文片段，或以 External knowledge 開頭的外部知識（例如一週有 7 天）。",
+      "註解下一行是回答該子問題的 Python 指派敘述（例如 trees_today = trees_end - trees_begin）。",
+      "最後一步標 Final Answer，並把結果指派給變數 answer；求解器（Python 直譯器）執行整段後讀出 answer。",
+      "C_NL 的三種資訊：子問題（分解）、依賴圖（哪些子問題依賴哪些）、rationale（support）。"
+    ],
+    "各領域的 SL 與求解器": {
+      "MWP（GSM8K、SVAMP、MultiArith、ASDiv）": "Python；四個資料集共用同一組 8-shot 提示。求解器是 Python 直譯器。",
+      "AQuA": "8-shot 另一組提示，程式中用 Symbol 宣告未知數並呼叫 solve_it 解方程（sympy 風格）。答案是選擇題，所以分兩步：先依 MWP 方式算出數值，再第二次提示 LM，從選項中挑出最接近該數值的一項（Table 11）。",
+      "StrategyQA": "6-shot。先用 NL 列出子問題並用 NL 直接回答（例如梨子密度約 0.6、水的密度 1），再把這些答案轉成 Datalog 事實（.decl 宣告關係、寫入事實），最後以固定句型「The answer is Yes only if …」後接一條 Answer() 規則並 .output Answer。求解器是 Datalog 直譯器；論文沒點名，倉庫 README 指明用 Soufflé。",
+      "Date Understanding": "10-shot（從測試集抽出，其餘當測試）。Python，引入 datetime 與 dateutil 的 relativedelta 做日期加減，最後以 strftime 輸出 MM/DD/YYYY。",
+      "Sports Understanding": "10-shot。Python：一個子問題求球員所屬運動、一個求動作所屬運動，最後以字串相等判斷 plausibility，轉成 int 作答。",
+      "Planning（SayCan）": "7-shot（作者手寫，因無訓練集）。C_SL 是 PDDL 的 goal（例如 exists 某個 snack，且 not is-sweet、at user），C_NL 以 PDDL 註解（分號開頭）寫在 goal 內。求解器是 PDDL planner，產出 find／pick／put 動作序列。論文沒點名 planner；倉庫的 pddl_planner.py 顯示它呼叫線上服務 solver.planning.domains。",
+      "Relational Inference（CLUTRR）": "8-shot，範例取自 K∈{2,3} 的訓練 fold；測試集是 K=2 到 10 所有測試 fold 的串接。每個子問題以 relation(A, B) = 關係 的形式作答，support 引原文句子；最後一步以 @ 組合兩段關係。求解器是簡單的關係推論引擎，遞迴套用 Zhang et al. (2022) 提供的親屬關係傳遞規則（例如 son@daughter=grandson）。"
+    },
+    "解碼與超參數（Appendix A、§4.3）": [
+      "主 LM：code-davinci-002（Codex）。附錄 C.3 另測 code-davinci-001、text-davinci-002、text-davinci-003、gpt-4，但只在 5 個 MWP 資料集上測。",
+      "Greedy：temperature 0.0、n=1。",
+      "Self-consistency：temperature 0.4、n=40，對「執行求解器後得到的答案」做多數決（§5：此設定下 10 個資料集中 7 個最佳，例如 CLUTRR 71.9 對 LtM 50.9）。",
+      "max_tokens 1000；frequency_penalty 0；presence_penalty 0；其餘用 OpenAI API 預設值。",
+      "成本與時間：Codex 在 beta 期間免費；GSM8K 測試集 1,319 題用 Codex 約 3.5 小時（rate limit 150,000 tokens/min）。"
+    ],
+    "評估方式（§4.2）": [
+      "主指標是最終答案準確率。MWP（AQuA 除外）：預測與標準答案都四捨五入到最近整數後比對 exact match。",
+      "StrategyQA、Sports：都轉成布林值再比對。SayCan：產生的計畫只要落在標準計畫集合內就算對。其餘資料集：字串 exact match。",
+      "baseline（Standard、CoT、LtM）使用與本方法相同數量的範例。作者發現 CoT 原文的範例數前後不一（10 與 6），於是一律以 10 個重跑。"
+    ],
+    "資料清洗（Appendix E.3）": "作者手動清洗 ASDiv（多值答案原本只抽第一個值，改為集合比對）、Date（修正錯誤標準答案）、Sports（刪掉 8 題動作歧義與 5 題同名球員歧義）、SayCan（補齊或刪除標註不完整與語意模糊的題目，120 題剩 103 題），所有 baseline 都在清洗後的版本上重跑。",
+    "約束分析（Appendix C.4）": [
+      "只在 MWP、self-consistency 設定下做。定義三種約束：G＝依賴圖必須合法（無環、子問題不可依賴自己）；O＝no over-dependency，程式不可使用對應子問題沒宣告依賴的變數；U＝no under-dependency，程式必須使用對應子問題宣告依賴的所有變數。",
+      "論文沒寫約束具體怎麼施加。從「在 self-consistency 上加約束」與「有 1.0%–8.9% 生成不符約束」推斷，應是在多數決前把不符約束的樣本濾掉；這是本筆記的推斷，不是原文。"
+    ],
+    "分析實驗的設定": [
+      "Ablation（§6.1）：No rationale（刪掉括號內的依據）、No NL but nudge（只留 nudge 行）、No NL（刪掉所有 NL 註解；B.3 也以此作為 PAL／PoT 的代理）、No solver（在範例末尾加上答案，讓 LM 自己輸出答案）。",
+      "範例穩健性（§6.2）：標註 20 個範例，每次隨機抽 k 個（7–10）組提示，重複 5 次。",
+      "提示措辭（C.2）：獨立子問題隨機換序、改變數名、改寫 nudge 行。",
+      "錯誤分析（Appendix F）：用 text-davinci-002 嵌入所有錯誤，做 spectral clustering（約 70 群），再以 importance sampling 抽 100 例人工分類。StrategyQA 只取「CoT 對、本方法錯」的 70 例；Date 全部 69 個錯誤都標。",
+      "人評（§6.3、Appendix D）：在 Prolific 上，每個領域抽 100 條「答案正確」的 Codex greedy 推理鏈。每條至少 3 人標，選項為完全正確／NL 錯／SL 錯／題目有瑕疵／看不懂。設有注意力檢查，並剔除 spammer；最後取多數標籤。標註者須會該資料集的程式語言；Datalog 無此選項，改找會 Scala 的人。SayCan 無法確保標註者懂 PDDL，由作者自己標。時薪 16 美元，總成本 280 美元。"
+    ]
+  },
+  "assumptions": [
+    "任務能被重新表達成某種有確定性求解器的符號語言（Python、Datalog、PDDL goal、關係組合規則），而且求解器與它需要的領域定義（PDDL domain 與環境、CLUTRR 的傳遞規則表）事先已寫好。",
+    "「忠實」的定義是「答案由執行 C_SL 確定性導出」；保證範圍只到 Problem Solving，不含 LM 如何產生推理鏈。",
+    "LM 對所選的符號語言有足夠的預訓練曝光；Datalog 很稀少，StrategyQA 因此大量出現語法錯誤。",
+    "讀者看 C_NL 就能理解推理，前提是 C_NL 與 C_SL 一致，但主實驗並沒有強制兩者一致。",
+    "每個資料集能人工撰寫 6–10 個 NL＋SL 交錯的高品質範例。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "GSM8K",
+      "SVAMP",
+      "MultiArith",
+      "ASDiv",
+      "AQuA",
+      "StrategyQA（BIG-bench 開放域版本）",
+      "Date Understanding（BIG-bench）",
+      "Sports Understanding（BIG-bench）",
+      "SayCan（清洗後 103 題）",
+      "CLUTRR（K=2–10）"
+    ],
+    "metrics": [
+      "最終答案準確率（整數四捨五入 exact match、布林比對、計畫落在標準集合內、字串 exact match）",
+      "人評推理鏈正確率（五選一：完全正確／NL 錯／SL 錯／題目瑕疵／看不懂）與標註者一致性"
+    ],
+    "baselines": [
+      "Standard prompting（Brown et al. 2020）",
+      "CoT（Wei et al. 2022）",
+      "Least-to-Most（Zhou et al. 2022）",
+      "上述方法各自搭配 greedy 與 self-consistency（40 樣本、temperature 0.4）解碼；Standard 不做 self-consistency",
+      "PAL／PoT：以本文 No NL 提示詞作代理重現（Appendix B.3）",
+      "文獻上的 few-shot SOTA（Appendix B.2，各資料集來源不同；CLUTRR 用作者自己實作的 LtM）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以 Codex greedy 解碼，Faithful CoT 在 10 個資料集中的 8 個勝過所有 baseline。只輸 StrategyQA 與 Sports；在較難、步數多的資料集增益較大。",
+      "numbers": "GSM8K 72.3（CoT 63.3，相對 +14.2%）；AQuA 47.2（CoT 42.1）；SayCan 89.3（CoT 86.4）；Date 81.6（LtM 76.6）；CLUTRR 58.9（CoT 48.5，相對 +21.4%）；MultiArith 98.8、ASDiv 80.2，只小幅領先。",
+      "section": "§5、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "StrategyQA 明顯落後 CoT；作者歸因於 Codex 預訓練資料裡的 Datalog 太少，且 Datalog 放進提示後也干擾了 NL 子問題的生成。",
+      "numbers": "greedy 63.0 對 CoT 72.5；SC 65.2 對 79.8。在 70 個「CoT 對、本方法錯」的案例中：語法錯誤 29%、子問題無限迴圈 24%、子問題不相關 17%、推理錯 10%、知識錯 10%、答案句型反轉 6%。",
+      "section": "§5、Appendix F.2、Figure 11",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "準確率的來源主要是外部求解器，不是 NL 註解：拿掉求解器、改由 LM 自己輸出答案，準確率大跌（SayCan 例外）；NL 註解只在 CLUTRR 上關鍵。",
+      "numbers": "正文寫 No solver 使 GSM8K、Date、CLUTRR 分別下降 50.8、22.9、19.4 分，SayCan 上升 2.9。但 Table 4 的值是 GSM8K 72.3→21.5、Date 81.6→57.9、CLUTRR 58.9→40.9、SayCan 89.3→90.3，算出來是 −50.8、−23.7、−18.0、+1.0，兩者不一致（見 limitations_observed）。CLUTRR 上 No NL 只剩 9.3，No NL but nudge 是 39.6；GSM8K 的 No rationale 反而升到 75.4。",
+      "section": "§6.1、Figure 5、Appendix C.1 Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "換一組少樣本範例，表現大致不變，仍明顯高於 baseline。",
+      "numbers": "6 組範例的平均：GSM8K 71.8、Date 82.1、SayCan 88.7、CLUTRR 57.4；標準差依 Table 2 為 0.6／2.8／1.9／1.5。另外三種提示措辭變體（C.2 Table 5）的標準差為 1.3–1.7。",
+      "section": "§6.2、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "人評「答案正確時推理鏈是否也正確」：多數領域超過 88%，但 StrategyQA 是布林題，錯的推理鏈也常剛好得到對的答案。",
+      "numbers": "完全正確比例：MWP 92.0、Planning 94.0、StrategyQA 66.7、Date 87.9、Sports 100.0、Relation 88.0。標註者一致性：StrategyQA 只有 0.455，Planning 0.947。作者複查後認為，標註者把正確鏈誤標為錯的比例是 StrategyQA 8.3%、Date 41.7%、CLUTRR 100%。",
+      "section": "§6.3、Figure 6、Appendix D Table 8",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "換成 gpt-4 當 Translator，在 MWP 上仍穩定勝過 baseline，5 個 MWP 資料集中有 4 個達 95 以上。",
+      "numbers": "gpt-4 下的 Faithful CoT：GSM8K 95.0、SVAMP 95.4、MultiArith 98.5、ASDiv 95.6、AQuA 73.6，平均 91.6；LtM 平均 87.5、CoT 77.1。AQuA 輸給 CoT 的 75.2。四個替代 LM 相對最佳 baseline 的平均增益為 16.1%、11.0%、9.4%、4.6%。",
+      "section": "Appendix C.3、Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "對推理鏈施加結構一致性約束（依賴圖合法、不過度依賴、不漏依賴）大多會降低準確率；同時也顯示既有生成中有一部分 NL 宣告的依賴與程式實際用到的變數不一致。",
+      "numbers": "三種約束全開（GOU）時：GSM8K −5.0、SVAMP −5.9、ASDiv −3.2、AQuA −5.5、MultiArith −0.1。只開 G 時幾乎不變（0.0 到 −0.8）。不符合全部約束的生成佔 1.0%–8.9%。",
+      "section": "Appendix C.4、Table 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "GSM8K 的錯誤多半出在 NL 子問題分解，而不是程式；作者認為這類錯誤適合讓人在迴路中修改子問題來修正，但沒有做這個實驗。",
+      "numbers": "100 個錯誤樣本：子問題錯 49%、程式錯 24%、語意理解錯 12%、生成截斷（重複步驟）7%、標準答案錯 5%、漏子問題 3%。",
+      "section": "Appendix F.1、Figure 10",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "主實驗用的 code-davinci-002 已於 2023-03-23 被 OpenAI 停用，沒有持續存取權的人無法重現部分結果；作者也藉此點出用閉源模型做學術研究的問題。",
+    "忠實性只保證到 Problem Solving 階段；Translation 階段（LM 怎麼從問題產生推理鏈）仍不透明，整條管線並非完全可解釋。",
+    "NL 註解的角色尚待探索：在多數非知識密集的資料集上，有沒有 NL 註解對表現影響不大；讓非程式背景使用者透過 NL 互動除錯留待未來。",
+    "StrategyQA 表現仍遠落後 baseline，歸因於 Datalog 預訓練資料稀少，以及該任務難點在知識檢索而非推理。",
+    "忠實不等於正確，方法仍會產生錯誤答案，依賴它做決策的使用者仍有風險。",
+    "人評發現答對但推理鏈錯的情況（尤其 StrategyQA），會影響人該在什麼時候信任 LM。",
+    "強制推理鏈滿足結構約束會犧牲準確率。"
+  ],
+  "limitations_observed": [
+    "忠實性從頭到尾只靠定義成立，沒有量測過：論文沒有對推理鏈做任何介入測試，例如竄改 C_NL 或 C_SL 看答案是否跟著變。人真正讀的 C_NL 與被執行的 C_SL 之間，主實驗也沒有任何一致性約束；C.4 自己就顯示 1.0%–8.9% 的生成違反依賴約束。對非程式背景的審閱者或監控者來說，他讀的那一半正好不在保證範圍內。",
+    "在知識型資料集上，這份保證幾乎是空的：StrategyQA 的事實（例如梨子密度 0.6）是 LM 先在 NL 裡直接寫出來的答案，再抄成 Datalog 事實，求解器只做一次比大小（Table 13）；Sports 的 C_SL 只是比較兩個由 LM 填入的字串是否相等（Table 15）。真正決定答案的知識檢索與判斷都在不透明的 Translation 裡，保證只涵蓋最後一步聚合。",
+    "AQuA 其實破壞了保證：第二步又讓 LM 從選項中挑出與數值最接近的一項（Appendix G、Table 11），最終答案並非由推理鏈確定性導出。但 AQuA 仍被算進「9/10 勝過 CoT」與 SOTA 比較，論文沒有標註。",
+    "「7 個資料集 SOTA」是逐資料集挑最佳 LM 拼出來的，表格之間的數字也對不上。Table 3 中 SayCan 寫 93.2，但 Table 1 的 Codex SC 是 94.2；MultiArith 99.2 與 StrategyQA 65.2 都和 Codex SC 的數字相同，caption 卻說這幾欄用 gpt-4，而 Table 6 的 gpt-4 MultiArith 是 98.5。gpt-4 在 Date（95.8）與 Sports（99.3）的數字沒有出現在任何其他表，也沒有同模型的 baseline。CLUTRR 的「SOTA」是作者自己實作的 LtM。",
+    "正文數字與表格多處不一致：§6.1 說 No solver 在 Date、CLUTRR 分別掉 22.9、19.4 分，SayCan 升 2.9，但依 Table 4 算出是 23.7、18.0、+1.0；nudge 行帶來的 31.3 分，依 Table 4 是 30.3（39.6 對 9.3）；§5 後段說 GSM8K greedy 相對增益 9.0%，同段前面與 Table 1 算出的是 14.2%；§6.2 說標準差 1.3–2.9，Table 2 是 0.6–2.8。F.4 說 SayCan 有 120 題、本方法錯 7 題，但 E.3 說清洗後剩 103 題，§6 又說分析用 Codex greedy（89.3%，約 11 錯）；7 錯反而對應 Table 3 的 93.2%。這些不一致讓人無法確定錯誤分析對應的是哪一組輸出。",
+    "人評設計有偏：只評「答案正確」的推理鏈，所以不知道答錯時推理鏈有沒有診斷價值，而那才是除錯與監控最需要的情境。§6.3 名為 plausibility，實際問的卻是「是否完全正確」，與第 2 節把 plausibility 定義為「對人的說服力」不同。SayCan 由作者自己標；StrategyQA 的 Datalog 找會 Scala 的人代評，一致性只有 0.455。作者事後又判定標註者在 CLUTRR 的「不正確」標記 100% 是誤判，等於用作者自己的判斷覆寫人評結果。",
+    "B.3 與 PAL／PoT 的比較沒有使用原作提示詞，而是以本文 ablation 的 No NL 提示詞代理。10 個資料集中 6 個差距小於 2.0，AQuA 還輸。NL 註解的主要價值是「可解釋、非程式背景使用者能據此除錯」，但這項主張沒有任何使用者研究支撐。",
+    "SayCan 的「確定性求解器」依倉庫程式碼（source/model/solver/saycan/pddl_planner.py，非論文所述）是呼叫線上服務 solver.planning.domains，可用性與版本都不受控。而且 SayCan 只有 103 題、3 種動作，§6.1 顯示拿掉求解器反而略升，求解器在這個規劃任務上的價值並未被證明，與「planning」泛化的說法有落差。",
+    "外推到 T3 的安全監控：Translation 階段正是模型「決定要做什麼」的地方。若模型要做不當行為，它可以直接寫出錯誤或惡意的程式，執行軌跡依然符合本文定義的「忠實」。所以本文保證的是「解釋對應到執行」，不是「解釋揭露意圖」，不能拿來取代 CoT 或行動監控；論文也沒有任何偵測、標記或告警的實驗。"
+  ],
+  "framework_role": "在 T3 的可觀測性／監控這塊只算背景與設計原則，不是監控方法。它提供兩樣東西：(1) faithfulness（解釋是否反映真實的決策過程）與 plausibility（解釋看起來是否合理）的概念區分，以及 NL CoT 可能「說謊」、不能直接當監控訊號的論證；(2) 一種架構作法：讓被記錄的產物本身就是產生答案的因果路徑（答案＝執行 LM 寫出的程式），這樣記錄下來的軌跡在執行層面必然對得上。它沒有任何執行期觀測、異常偵測或安全監控實驗，主要貢獻是提升推理準確率的提示法。以下是本筆記的推斷，論文沒有這樣用：C.4 的結構一致性規則（依賴圖合法、宣告依賴與實際使用變數一致），以及 F.1 所說「可在後處理偵測」的重複生成截斷，可以借來當 T4 軌跡上的廉價異常檢查規則。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。搜尋只找到教學站 learnprompting.org 的介紹頁與作者實驗室頁面 debugml.github.io/fcot，都不算採納；論文本身也沒有提到任何部署或產品。GitHub 倉庫（MIT 授權、約 169 stars）屬於可重現性，不是採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/veronica320/Faithful-COT",
+    "data": "10 個資料集都公開（Appendix E.2 列出來源與授權）。作者清洗後的 ASDiv、Date、Sports、SayCan 測試集與完整提示詞放在倉庫中。但主要 LM code-davinci-002 已停用，Codex 的結果無法原樣重現；SayCan 的 planner 依倉庫所示仰賴線上服務，StrategyQA 需另外安裝 Soufflé。"
+  },
+  "value_verdict": "low",
+  "verdict_reason": "主要貢獻是「LM 翻譯成符號程式、交給確定性求解器執行」的推理提示法，忠實性只靠定義成立、從未量測，也沒有任何執行期監控或異常偵測實驗；對 T3 只提供 faithfulness 與 plausibility 的概念區分與一條設計原則，不是這個節點的必讀。",
+  "related": [
+    "2305.04388",
+    "2201.11903",
+    "2004.03685",
+    "2211.10435",
+    "2211.12588",
+    "2205.10625",
+    "2203.11171",
+    "2204.01691"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

@@ -1,0 +1,153 @@
+{
+  "id": "1905.08743",
+  "title": "Transferable Multi-Domain State Generator for Task-Oriented Dialogue Systems",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 TRADE：以跨領域共用的編碼器、soft-gated 複製式狀態生成器與三分類 slot gate，逐一生成每個 (domain, slot) 的值，不需預先列舉所有可能值，在 MultiWOZ 五領域拿到 48.62% joint goal accuracy，並示範留一領域的零樣本與 1% 資料的少樣本領域擴充。",
+  "problem": "傳統 DST 假設本體（ontology）事先定義好，把狀態追蹤變成對每個候選值的分類。但實務上資料庫常只透過外部 API 暴露，無法列舉每個 slot 的所有值；就算列得出來，像餐廳名稱、火車出發時間這類 slot 的值域又大又會變。MultiWOZ 這種多領域對話還多了兩個難處：30 個 (domain, slot) 組合、4,500 多個值的組合爆炸，以及「多輪映射」——某個 slot 的值要從前面其他領域的回合推得（例如景點的 area 沿用先前餐廳提過的 area）。此外每新增一個領域就要重新蒐集大量標註資料，成本高，所以需要能跨領域共享追蹤知識、能處理未見過的值與未見過的領域的 DST。",
+  "core_idea": "把 DST 從「對本體候選值打分」改成「對每個 (domain, slot) 從對話歷史生成值」：所有參數跨領域共用，解碼器以 domain 與 slot 嵌入相加作為起始輸入（類似多語 NMT 用不同起始符號區分語言），再用 pointer-generator 式的軟閘門把詞彙表分布與對歷史的注意力分布混合，讓值可以直接從對話中複製；另用 slot gate 判斷該 pair 是否被提及（ptr / none / dontcare）。因為 slot 名稱與值的抽取能力是共享的，同名 slot（如 area、people、day）的追蹤能力可以轉移到沒訓練過的領域。",
+  "method": {
+    "task_formulation": "對話 X = {(U_1,R_1),...,(U_T,R_T)}（使用者語句與系統回應成對），每回合 t 的狀態 B_t 是一組 (domain, slot, value) 三元組。共有 J 個 (domain, slot) pair（MultiWOZ 五領域 J=30）。每回合都針對全部 J 個 pair 重新預測完整狀態，而不是在上一回合狀態上做增量更新。",
+    "utterance_encoder": "輸入是最近 l 個回合的所有字詞串接 X_t=[U_{t-l},R_{t-l},...,U_t,R_t]（用多回合歷史而不只當前語句，是為了處理多輪映射；論文沒有給 l 的值）。以雙向 GRU 編碼成 H_t（每個 token 一個 d_hdd 維隱藏向量）。字詞嵌入為 GloVe 與字元嵌入串接，每個詞共 400 維。訓練時在編碼器輸入做 word dropout（隨機遮掉少量 token，模擬未登錄詞；比例未說明）。",
+    "state_generator": "一個 GRU 解碼器，J 個 pair 共用、彼此獨立解碼。第一步輸入是該 pair 的 domain 嵌入加 slot 嵌入。第 k 步：解碼器隱藏狀態 h_jk；(1) P_vocab = softmax(E · h_jk)，E 是可訓練的詞嵌入矩陣（|V|×d_hdd，即輸出與輸入嵌入共用）；(2) P_history = softmax(H_t · h_jk)，是對編碼後歷史的注意力；(3) 內容向量 c_jk = P_history · H_t；(4) p_gen = sigmoid(W_1 [h_jk; w_jk; c_jk])，w_jk 是當步輸入詞嵌入；(5) P_final = p_gen · P_vocab + (1 − p_gen) · P_history（把注意力依 token 身分散回詞彙空間相加）。因此可以複製不在詞彙表中的字。作者選 soft-gated 複製而非 index-based（標準值不一定原字出現在語句裡，例如 cheap 對應 economical）或 hard-gated（需要額外的閘門監督）。解碼用 greedy search（值通常很短）。",
+    "slot_gate": "三分類器 G_j = softmax(W_g · c_j0)，W_g 為 3×d_hdd，c_j0 是用解碼器第一步隱藏狀態算出的內容向量。類別為 ptr / none / dontcare：預測 none 或 dontcare 時丟棄解碼器輸出，直接填「未提及」或「不在意」；預測 ptr 才採用生成的字串為值。",
+    "training_objective": "L = α·L_g + β·L_v。L_g 是 J 個 pair 的 gate 交叉熵總和；L_v 是 J 個 pair、每個解碼步 P_final 對真實字詞的交叉熵總和。α = β = 1。",
+    "hyperparameters": "Adam、批次大小 32、學習率在 [0.001, 0.0001] 之間退火、dropout 0.2、嵌入 400 維（GloVe＋字元嵌入）、greedy 解碼。論文未交代：歷史長度 l、隱藏維度 d_hdd、word dropout 比例、最大解碼長度。",
+    "zero_shot_protocol": "留一領域：從訓練集排除一個領域，測試時餵入該領域的 (domain, slot) 嵌入直接生成值。作者說明同一段對話脈絡可能同時出現在來源與目標領域，只是目標的 (domain, slot) pair 沒被訓練過。若目標 slot 名稱從未在其他領域出現（如 hotel 的 parking），模型等於沒學過它。",
+    "few_shot_domain_expansion": "先在四個領域訓練基底模型，再用被排除領域 1% 的訓練資料（約 20–30 段對話）微調。比較三種策略：(a) naive 無約束微調；(b) EWC：損失加上 Σ λ/2 · F_i (Θ_i − Θ_S,i)^2，F 為以來源領域樣本估計的 Fisher 資訊矩陣對角線，λ 依領域在驗證集上網格搜尋；(c) GEM：保留來源領域 1% 的樣本作記憶 K，訓練新領域時約束 L(Θ,K) ≤ L(Θ_S,K)，違反時以二次規劃投影梯度。評估同時看四個舊領域（遺忘程度）與新領域。",
+    "metrics_definition": "joint goal accuracy：每回合預測的整組狀態與 B_t 完全一致才算對；slot accuracy：逐個 (domain, slot, value) 三元組各自比對。",
+    "data": "MultiWOZ（論文引用 Budzianowski et al. 2018，即 2.0 版）：8,438 段多回合人對人對話，平均 13.68 回合。只用 restaurant、hotel、attraction、taxi、train 五個領域（hospital、police 對話太少且只出現在訓練集），共 30 個 (domain, slot) pair，使用原始的 train/valid/test 切分與 DST 標註。"
+  },
+  "assumptions": [
+    "(domain, slot) pair 的集合必須事先定義；「不需要本體」只針對值，不針對 slot schema。",
+    "目標值多半能從最近 l 回合的歷史中複製，或能由訓練時學到的詞彙生成；值的標準化形式（例如 cheap）要在詞彙表裡。",
+    "每回合從歷史視窗重新生成整個狀態就足以維持狀態，不需要把上一回合的 B_{t-1} 當作輸入延續。",
+    "零樣本轉移依賴目標領域的 slot 名稱在來源領域出現過，且值的型態相近（例如 taxi 與 train 都有 departure／destination）。",
+    "少樣本擴充時假設能保留來源領域的少量樣本（GEM）或 Fisher 資訊（EWC）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.0（五領域：restaurant、hotel、attraction、taxi、train）",
+      "MultiWOZ 只取 restaurant 領域（對照單領域表現）",
+      "MultiWOZ 留一領域零樣本（五個領域各排除一次）",
+      "MultiWOZ 留一領域、以 1% 新領域資料做少樣本擴充"
+    ],
+    "metrics": [
+      "joint goal accuracy",
+      "slot accuracy",
+      "逐 slot 錯誤率（錯誤分析）",
+      "零樣本逐 slot 正確數（排除 none 標籤）"
+    ],
+    "baselines": [
+      "MDBT（Ramadan et al. 2018）",
+      "GLAD（Zhong et al. 2018）",
+      "GCE（Nouri and Hosseini-Asl 2018）",
+      "SpanPtr（Xu and Hu 2018，index-based pointer）",
+      "少樣本：naive fine-tuning、EWC、GEM、只用 1% 新領域資料從頭訓練"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "多領域聯合訓練下 TRADE 的 joint goal accuracy 明顯高於所有基線；只看 restaurant 領域也是 joint 最高。",
+      "numbers": "五領域 joint/slot：TRADE 48.62/96.92，GCE 36.27/98.42，GLAD 35.57/95.44，SpanPtr 30.28/93.85，MDBT 15.57/89.53；restaurant 單領域 joint：TRADE 65.35、GCE 60.93、GLAD 53.23、SpanPtr 49.12",
+      "section": "§4.3, Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "作者把與 SpanPtr 的差距歸因於 index-based 複製的限制：標準值不一定原字出現在語句中，因此改用把詞彙表分布與歷史注意力混合的 soft-gated 複製。",
+      "numbers": "joint goal accuracy 48.62（TRADE）對 30.28（SpanPtr）",
+      "section": "§2.2, §4.3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "slot gate 預測 none 或 dontcare 時直接覆寫解碼結果，只有 ptr 才採用生成值；這讓 30 個 pair 各自解碼時，大部分未提及的 pair 不需要靠解碼器輸出特殊字串。",
+      "numbers": "三分類（ptr / none / dontcare），W_g ∈ R^{3×d_hdd}",
+      "section": "§2.3, Eq. 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "留一領域零樣本中，只有 taxi 表現接近有監督；其餘領域 joint 只有一到二成，slot accuracy 約 50–65%。作者解釋 taxi 的四個 slot 都與 train 領域共享相近的值。",
+      "numbers": "零樣本 joint/slot：Taxi 60.58/73.92（全量單領域訓練 76.13/89.53）、Train 22.37/49.31、Attraction 19.87/55.53、Hotel 13.70/65.32、Restaurant 11.52/53.43",
+      "section": "§4.3 Zero-shot, Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "以 1% 新領域資料擴充時，GEM 最能抑制對四個舊領域的災難性遺忘，naive 微調遺忘最嚴重。",
+      "numbers": "以 hotel 為新領域：舊四領域 joint 由 58.98 降到 53.54（GEM，−5.44）、40.82（EWC）、36.08（naive，−22.9）",
+      "section": "§4.3 Domain Expanding, Table 3",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "從四領域基底模型微調到新領域，通常優於只用同樣 1% 資料從頭訓練。",
+      "numbers": "Train 新領域 joint：naive 微調 59.83 對從頭訓練 44.24；Restaurant 42.42 對 32.72；Taxi 63.81 對 60.38；Hotel 19.13–19.73 對 19.53（幾乎沒有差別）",
+      "section": "§4.3 Domain Expanding, Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "多領域訓練下，name 類 slot 錯誤率最高、數字類 slot 最低；hotel 的 type 雖只有兩個值卻錯誤率偏高，作者歸因於資料集常漏標。",
+      "numbers": "restaurant/attraction/hotel 的 name 錯誤率 8.50%/8.17%/7.86%；taxi arrive_by 最低 1.33%",
+      "section": "§5, Fig. 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "零樣本中能轉移的是跨領域共享的 slot（people、area、price_range、day）；只在單一領域出現的 slot（hotel 的 parking、stars、internet，restaurant 的 food）幾乎追蹤不到。",
+      "numbers": "論文只以 Fig. 5 長條圖呈現，未給數值表",
+      "section": "§5, Fig. 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "name 類 slot 值域太大，最難辨識（錯誤率最高）。",
+    "MultiWOZ 中 (hotel, type) 的標籤常缺漏，使正確預測被判錯。",
+    "只在單一領域出現的 slot 在零樣本下很難追蹤；taxi 以外的零樣本領域表現「不特別理想」。",
+    "hospital 與 police 對話太少且只在訓練集出現，因此排除，只用五個領域。",
+    "現有領域數太少，不足以做元學習；未來需要蒐集更多領域的資料，並引入其他資源來改善零樣本。"
+  ],
+  "limitations_observed": [
+    "正文與結論自相矛盾：§4.3 說 TRADE 在 MultiWOZ 取得「最高」的 joint 與 slot accuracy、結論也說兩者都是 state-of-the-art，但 Table 2 中 GCE 的五領域 slot accuracy 是 98.42，高於 TRADE 的 96.92；restaurant 單領域的 slot accuracy TRADE 也只有 93.28，低於 GLAD 96.54 與 GCE 95.85。能成立的主張只有 joint goal accuracy。",
+    "slot accuracy 幾乎沒有鑑別力：GCE 的 slot 98.42 配上 joint 只有 36.27，說明這個指標被大量 none 的 pair 墊高。論文仍把它當主要指標並列，讀者應只看 joint goal accuracy。",
+    "零樣本的亮點數字由 slot 重疊決定，而非一般化能力：60.58 只出現在四個 slot 都能在 train 領域找到同名同型態 slot 的 taxi；其他四個領域 joint 只有 11.52–22.37。摘要只報 taxi 的數字，容易被誤讀為 TRADE 能做一般的零樣本 DST。",
+    "Table 4 的零樣本 joint accuracy 可能被「全部為 none」的回合墊高：論文沒說明評估時是否排除目標領域尚未出現的回合，而作者在 §5 做逐 slot 分析時自己承認 none 比較好預測、因此另外排除。多領域對話中 taxi 常在後段才出現，前段回合只要全預測 none 就算對。",
+    "零樣本設定可能有脈絡暴露：§3.1 明說同一段對話脈絡可能同時出現在來源與目標領域，也就是排除的是目標 (domain, slot) 的監督，而不是含目標領域語句的對話。這比「完全沒看過新領域」寬鬆，論文沒量化其影響。",
+    "「不需要本體」只對值成立：(domain, slot) 清單仍需事先定義，而且未見過的 slot 只有一個未訓練的名稱嵌入，沒有任何 slot 描述或 schema 資訊可用，所以 parking、food 這類 slot 零樣本必然失敗。標準化值（如 cheap）也仍要靠訓練資料裡學到的詞彙生成。",
+    "少樣本實驗只用約 20–30 段對話、每格只報一次數字，沒有多次隨機種子或標準差；例如 attraction 新領域 GEM 34.73 對 naive 29.39 的 5 點差距，無法判斷是否超出種子變異。",
+    "「微調通常優於從頭訓練」並非處處成立：hotel 新領域微調 19.13–19.73 對從頭 19.53 幾乎沒有差別；taxi 用 1% 資料微調（63.81）也只比完全零樣本（60.58）多約 3 點。GEM 在 train（54.31 對 naive 59.83）與 restaurant（39.24 對 42.42）新領域上反而較差，穩定性與可塑性的取捨沒有被正面討論。",
+    "Table 3 有一格難以自洽：以 attraction 為新領域時，EWC 在舊四領域的 joint 45.37 高於 naive 的 40.05，slot accuracy 卻只有 84.94，遠低於 naive 的 95.54 與 GEM 的 96.66。joint 較高而 slot 大幅較低很不尋常，可能是誤植，論文未解釋。",
+    "基線由作者自行改寫後重跑（補上被丟掉的 name、destination、departure slot、移除手寫規則、自建完整本體），沒有報變異。TRADE 對基線的差距部分取決於改寫的品質。",
+    "重現關鍵超參數缺漏：歷史長度 l、隱藏維度 d_hdd、word dropout 比例、各領域 EWC 的 λ 值、最大解碼長度都沒寫，只能靠釋出的程式碼補。",
+    "狀態維護方式對長對話不利：每回合只看最近 l 回合的歷史、從頭重新生成全部 30 個 pair，沒有把上一回合狀態當輸入延續。視窗外提過的值只能靠模型當輪重新找到，找不到就會掉；而且每回合要跑 J 次解碼，成本隨 slot 數線性成長，論文沒報推論延遲。",
+    "所有數字都在 MultiWOZ 2.0 上，作者自己的錯誤分析已指出標註缺漏；後續的 MultiWOZ 2.1（arXiv:1907.01669）專門修正狀態標註，所以這裡的絕對數字不能直接和使用 2.1 以後版本的結果比較。"
+  ],
+  "framework_role": "T2 傳統任務型 DST 的代表性基線。它定義了一種狀態表示：固定的 (domain, slot) 清單加上每個 pair 的開放詞彙值，每回合從對話歷史整組重新生成；並示範了三件後來常被沿用的做法：用複製機制取代本體分類以處理未見過的值、用 ptr/none/dontcare gate 區分「未提及」與「不在意」、用留一領域零樣本與 1% 少樣本擴充來衡量跨領域轉移。對本框架而言，它提供 T2 的基準定義與 joint goal accuracy 這種狀態層級完全比對的指標；它的限制（依賴預先定義的 slot 清單、只看歷史視窗而不延續上一回合狀態）正好說明 LLM 時代的長多輪狀態維護要補的是什麼。slot gate 判斷哪些 pair 被觸發，與 T1 的領域／意圖偵測有部分重疊，但論文沒有把它當意圖偵測來評估。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據（商用採納）。論文沒有提到任何部署或產品；作者群部分來自 Salesforce Research，但未見 Salesforce 官方文件或產品頁說明使用 TRADE。可查證的只有學術開源工具鏈的整合：ConvLab-2 的 README 把 TRADE 列為內建的 DST 模型之一（https://github.com/thu-coai/ConvLab-2，由清華 THU-coai 與 Microsoft Research 維護的學術工具組），這屬於學術基礎建設，不算商用採納。原始碼儲存庫 https://github.com/jasonwu0731/trade-dst 為研究用程式碼，未提及生產用途。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/jasonwu0731/trade-dst",
+    "data": "公開：MultiWOZ（Budzianowski et al. 2018）為公開資料集，論文使用其原始 train/valid/test 切分。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "MultiWOZ 時代生成式、開放詞彙 DST 的代表基線，留一領域零樣本設定也常被後續零樣本 DST 沿用（Semantic Scholar 491 次引用、131 次 influential），是理解 T2 傳統 DST 狀態表示與評估方式的必讀，但要注意其 slot accuracy 與零樣本主張被誇大。",
+  "related": [
+    "1810.00278",
+    "1805.09655",
+    "1812.00899",
+    "1805.01555",
+    "1807.06517",
+    "1704.04368",
+    "1606.03777",
+    "1612.00796",
+    "1706.08840",
+    "1810.09587",
+    "1712.10224"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

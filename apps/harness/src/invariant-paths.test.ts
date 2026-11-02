@@ -16,11 +16,12 @@
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import type { PluginEntry } from '@nexus/core';
-import { createEchoPlugin } from '@nexus/plugin-echo';
+import { createEchoPlugin } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 
-import { createCliAgent, runTurn } from './cli.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
+import { runTurn } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedModelRow, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -86,7 +87,12 @@ describe('不變量接線：CLI 那條路', () => {
       await dispose();
     }
 
-    expect(sessionLog.events.map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
+    // 第一句跑完多一顆退回標題（#647），出貨的配套入口對它一條違規都不報。
+    expect(sessionLog.events.map((event) => event.type)).toEqual([
+      'turn/start',
+      'session/title',
+      'turn/end',
+    ]);
     expect(violations).toEqual([]);
   });
 
@@ -111,6 +117,7 @@ describe('不變量接線：CLI 那條路', () => {
 
     expect(violations).toEqual([
       'invariant violated by "@nexus/noisy": 看到 turn/start',
+      'invariant violated by "@nexus/noisy": 看到 session/title',
       'invariant violated by "@nexus/noisy": 看到 turn/end',
     ]);
   });
@@ -120,6 +127,7 @@ describe('不變量接線：CLI 那條路', () => {
     // 拿它問「沒有人註冊時會怎樣」問的是另一個問題。
     const { dispose, sessions, attachInvariants } = await createCliAgent({ live: false }, [
       createEchoPlugin(),
+      await shippedModelRow(),
     ]);
     try {
       expect(attachInvariants(sessions)).toBeUndefined();
@@ -130,17 +138,18 @@ describe('不變量接線：CLI 那條路', () => {
 });
 
 describe('預設清單', () => {
-  it('二十個配套入口都在，而且各自認領自己的包名', async () => {
-    // #107 拍的是「全進」。少掛的那幾個會讓「這個 package 沒有可檢的關係」與
-    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**二十**（#441 加了 `@nexus/plugin-present`，#443 加了
-    // `@nexus/plugin-workspace-changes`）。
+  it('八個配套入口都在，而且各自認領自己的包名', async () => {
+    // #107 拍的是「有檢查的全進」。少掛的那幾個會讓「這個 package 沒有可檢的關係」與
+    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**八**（#974 拿掉
+    // 十二個空殼；#720、#441、#443 加進來的 `system-prompt`、`present`、`workspace-changes`
+    // 之中只有後兩者有檢查，`system-prompt` 的空殼一併拿掉了）。
     const { dispose, sessions, attachInvariants } = await createCliAgent({ live: false }, shipped);
     try {
       expect(attachInvariants(sessions)).toBeDefined();
     } finally {
       await dispose();
     }
-    expect(shipped.filter((entry) => entry.plugin.name.endsWith('-invariant'))).toHaveLength(20);
+    expect(shipped.filter((entry) => entry.plugin.name.endsWith('-invariant'))).toHaveLength(8);
   });
 });
 
@@ -156,7 +165,7 @@ describe('不變量接線：web 那條路', () => {
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachInvariants: built.attachInvariants,
+        attachSessions: built.attachSessions,
       }),
     });
     const fetchImpl: typeof globalThis.fetch = async (input, init) =>

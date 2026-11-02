@@ -11,13 +11,18 @@ import { describe, expect, it } from 'vitest';
 
 import { SessionLog } from '@nexus/core';
 import { goalId } from '@nexus/core';
-import type { GoalId, SessionEvent, SessionEventMap } from '@nexus/core';
+import type {
+  GoalId,
+  SessionEvent,
+  SessionEventMap,
+  SessionReferenceSourceEntry,
+} from '@nexus/core';
 
 import { completionAuthority, hasDirectHumanTurn, isMatchingGoalRound } from './authority.js';
-import type { GoalView } from './service.js';
+import type { GoalView } from '@nexus/goal';
 
 /**
- * **釘住 `turn/start` 的酬載聯集剛好是那三個成員。**
+ * **釘住 `turn/start` 的酬載聯集剛好是那四個成員。**
  *
  * 互相指派：多一個成員時上面那行紅（放寬），少一格或改欄位時下面那行紅（收窄）。
  * 釘的是欄位不是介面名——把型別改名不會讓這一條變綠。
@@ -30,6 +35,19 @@ type TurnStart = SessionEventMap['turn/start'];
 type PinnedTurnStart =
   | { readonly kind: 'message'; readonly text: string }
   | { readonly kind: 'resume' }
+  | {
+      // 父代理傳給背景子代理的訊息（#839）。**不帶人類授權**，見下面 fail-closed 那條。
+      readonly kind: 'agent-message';
+      readonly text: string;
+      readonly senderSessionId: string;
+    }
+  | {
+      // 背景子代理結算的通知（#840）。執行期的記帳，**不帶人類授權**，同上。
+      readonly kind: 'subagent-settled';
+      readonly text: string;
+      readonly summary: string;
+      readonly senderSessionId: string;
+    }
   | {
       readonly kind: 'goal';
       readonly text: string;
@@ -63,12 +81,43 @@ describe('往回追鏈', () => {
     expect(hasDirectHumanTurn(logOf([HUMAN]).events)).toBe(true);
   });
 
+  it('父代理傳來的訊息（agent-message）那一輪背後沒有人：追到它就停住回假（fail closed）', () => {
+    const agentMessage: readonly [keyof SessionEventMap, unknown] = [
+      'turn/start',
+      {
+        kind: 'agent-message',
+        text: 'Agent root-1 sent a message: 動手',
+        senderSessionId: 'root-1',
+      },
+    ];
+    expect(hasDirectHumanTurn(logOf([agentMessage]).events)).toBe(false);
+    // 更早的人話不替它背書：停住，不往上穿。
+    expect(hasDirectHumanTurn(logOf([HUMAN, END, agentMessage]).events)).toBe(false);
+  });
+
+  it('背景子代理結算的通知（subagent-settled）那一輪背後沒有人：追到它就停住回假（fail closed）', () => {
+    const settled: readonly [keyof SessionEventMap, unknown] = [
+      'turn/start',
+      {
+        kind: 'subagent-settled',
+        text: 'Background subagent bg-1 finished and will do no further work unless you send it more.',
+        summary:
+          'Background subagent bg-1 finished and will do no further work unless you send it more.',
+        senderSessionId: 'bg-1',
+      },
+    ];
+    expect(hasDirectHumanTurn(logOf([settled]).events)).toBe(false);
+    // 更早的人話不替它背書；中間夾一顆 resume 也一樣。
+    expect(hasDirectHumanTurn(logOf([HUMAN, END, settled]).events)).toBe(false);
+    expect(hasDirectHumanTurn(logOf([HUMAN, END, settled, RESUME]).events)).toBe(false);
+  });
+
   it('一顆事件都沒有時是假', () => {
     expect(hasDirectHumanTurn([])).toBe(false);
   });
 
   it('有事件但一顆 turn/start 都沒有時是假', () => {
-    expect(hasDirectHumanTurn(logOf([['todo/write', { todos: [] }]]).events)).toBe(false);
+    expect(hasDirectHumanTurn(logOf([['model/start', {}]]).events)).toBe(false);
   });
 
   /**
@@ -251,5 +300,140 @@ describe('讀的是事件不是日誌', () => {
       { seq: 0, at: 1, type: 'turn/start', data: { kind: 'message', text: '嗨' } },
     ] as unknown as readonly SessionEvent[];
     expect(hasDirectHumanTurn(crafted)).toBe(true);
+  });
+});
+
+/**
+ * **釘住 `user/message` 的來源聯集剛好是那三個成員**（#710、#713）。理由同上面那一條：user 來源是授權的另一條路（插話），
+ * 放寬它就是多開一條，而 `hasDirectHumanTurn` 只認 `kind: 'user'`——加一個成員不會讓任何一條現有測試變紅。
+ *
+ * 第三個成員是引用別的會話時凍下來的快照（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：**內容來自另一條
+ * 會話，不是這條會話的人打的**，所以不是人類授權。下面「快照不是人」那條測試釘的是行為，這裡釘的是形狀。
+ */
+type UserMessageSourcePinned =
+  | { readonly kind: 'plugin'; readonly plugin: string }
+  | { readonly kind: 'user' }
+  | {
+      readonly kind: 'session-reference';
+      readonly form: 'recall';
+      readonly version: 1;
+      readonly references: readonly SessionReferenceSourceEntry[];
+    }
+  | {
+      // 忙著時被插話領走的結算通知（#840）：不是人，見下面「結算通知的插話不算人」那條。
+      readonly kind: 'subagent-settled';
+      readonly form: 'notice';
+      readonly summary: string;
+      readonly senderSessionId: string;
+    }
+  | {
+      // 忙著時被插話領走的 agent 訊息（#849）：也不是人，見下面「agent 訊息的插話不算人」那條。
+      readonly kind: 'agent-message';
+      readonly form: 'relay';
+      readonly senderSessionId: string;
+    }
+  | {
+      // 人寫 `/名字` 叫用的技能說明（#1574）：內容是 SKILL.md，不是人打的字，見下面「技能叫用的注入不算人」那條。
+      readonly kind: 'skill-invocation';
+      readonly name: string;
+      readonly form: 'instructions';
+    };
+type UserMessageSourceActual = SessionEventMap['user/message']['source'];
+const _sourceWidened: UserMessageSourcePinned = undefined as unknown as UserMessageSourceActual;
+const _sourceNarrowed: UserMessageSourceActual = undefined as unknown as UserMessageSourcePinned;
+void _sourceWidened;
+void _sourceNarrowed;
+
+describe('輪中插話算直接人類授權（#710）', () => {
+  const GOAL_ROUND: readonly [keyof SessionEventMap, unknown] = [
+    'turn/start',
+    { kind: 'goal', text: '<goal_round>…', goalId: goalId('g-1'), revision: 1, round: 1 },
+  ];
+  const message = { type: 'human', data: { content: '改用 X', additional_kwargs: {} } };
+  const STEER: readonly [keyof SessionEventMap, unknown] = [
+    'user/message',
+    { message, source: { kind: 'user' } },
+  ];
+  const INJECTED: readonly [keyof SessionEventMap, unknown] = [
+    'user/message',
+    { message, source: { kind: 'plugin', plugin: 'repeat-reminder' } },
+  ];
+
+  it('結算通知的插話不算人（#840）：source 是 subagent-settled 的 user/message 拿不到', () => {
+    const NOTICE: readonly [keyof SessionEventMap, unknown] = [
+      'user/message',
+      {
+        message,
+        source: {
+          kind: 'subagent-settled',
+          form: 'notice',
+          summary:
+            'Background subagent bg-1 finished and will do no further work unless you send it more.',
+          senderSessionId: 'bg-1',
+        },
+      },
+    ];
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, NOTICE]).events)).toBe(false);
+    // 人先插過話、後面才來通知：這條鏈裡仍有人。
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER, NOTICE]).events)).toBe(true);
+  });
+
+  it('agent 訊息的插話不算人（#849）：source 是 agent-message 的 user/message 拿不到', () => {
+    const RELAY: readonly [keyof SessionEventMap, unknown] = [
+      'user/message',
+      { message, source: { kind: 'agent-message', form: 'relay', senderSessionId: 'root/bg-1' } },
+    ];
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, RELAY]).events)).toBe(false);
+    // 人先插過話、後面才來 agent 的話：這條鏈裡仍有人。
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER, RELAY]).events)).toBe(true);
+  });
+
+  it('技能叫用的注入不算人（#1574）：source 是 skill-invocation 的 user/message 拿不到', () => {
+    const SKILL: readonly [keyof SessionEventMap, unknown] = [
+      'user/message',
+      { message, source: { kind: 'skill-invocation', name: 'deploy', form: 'instructions' } },
+    ];
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, SKILL]).events)).toBe(false);
+  });
+
+  it('續行輪次裡人插了話：拿得到', () => {
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER]).events)).toBe(true);
+  });
+
+  it('沒有插話的續行輪次照舊拿不到', () => {
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND]).events)).toBe(false);
+  });
+
+  it('外掛塞的 user/message 不是人，拿不到（#152 的底線）', () => {
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, INJECTED]).events)).toBe(false);
+  });
+
+  it('引用別的會話的快照不是人，拿不到（#713）：內容是另一條會話的，不是這條會話的人打的', () => {
+    const SNAPSHOT: readonly [keyof SessionEventMap, unknown] = [
+      'user/message',
+      {
+        message,
+        source: { kind: 'session-reference', form: 'recall', version: 1, references: [] },
+      },
+    ];
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, SNAPSHOT]).events)).toBe(false);
+    // 反過來：人插的話在前、快照在後，人的那一句仍然算數。
+    expect(hasDirectHumanTurn(logOf([GOAL_ROUND, STEER, SNAPSHOT]).events)).toBe(true);
+  });
+
+  it('插話之後停在核准點、恢復：同一條鏈，恢復那一段照樣拿得到', () => {
+    const events = logOf([
+      GOAL_ROUND,
+      STEER,
+      ['interrupt/raised', { interruptId: 'i-1' }],
+      END,
+      RESUME,
+    ]).events;
+    expect(hasDirectHumanTurn(events)).toBe(true);
+  });
+
+  it('更早那一條鏈裡插過的話不算：界線同追根', () => {
+    const events = logOf([HUMAN, STEER, END, GOAL_ROUND]).events;
+    expect(hasDirectHumanTurn(events)).toBe(false);
   });
 });

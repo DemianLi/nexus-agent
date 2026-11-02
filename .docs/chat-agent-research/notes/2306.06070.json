@@ -1,0 +1,172 @@
+{
+  "id": "2306.06070",
+  "title": "Mind2Web: Towards a Generalist Agent for the Web",
+  "topic": "T7",
+  "subarea": "agent 基準與評估環境設計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在 137 個真實網站（31 個領域）上用群眾外包收集 2,350 個高階目標任務，連同人類示範的動作序列與完整網頁快照，做成離線、以參考軌跡逐步比對的 web agent 基準。基準分成跨任務、跨網站、跨領域三層泛化切分；作者另提出 MindAct（小模型排序候選元素、大模型做多選題），最佳 Step SR 52.0%，但整題成功率不到 8%。",
+  "problem": "要打造能在任何網站上依自然語言指令完成任務的通用 web agent，缺一份能同時支撐開發與評估的資料。既有資料集至少缺一樣：MiniWoB++、WebShop 用模擬或簡化過的網站；RUSS、PixelHelp、MoTIF 只涵蓋少數網站，而且多半給逐步的低階指令，測的是「把指令翻成動作」而不是規劃；手機 App 資料集的功能又比完整網站少。真實網站平均每頁上千個元素、動態生成內容、互動樣式多元，所以評估 agent 的泛化能力需要：多領域多網站、真實且未經簡化的網頁，以及只給高階目標的開放式任務。沒有這樣的基準，就無法量測 agent 對沒看過的網站或整個領域的泛化。",
+  "core_idea": "不在模擬器裡重建網站，而是直接在真實網站上錄下人類示範，並把每一步的網頁完整快照（MHTML、含版面與截圖的 DOM snapshot、HAR 網路流量、Playwright trace）存下來，讓所有任務都能離線重播與評估。評估改成逐步的「元素＋操作」比對：每一步都給正確的歷史動作，只看下一步選的元素與操作對不對，再把整題所有步都對才算成功。切分上刻意保留整個頂層領域與整批網站不進訓練集，用三個測試集分別量任務、網站、領域三個層級的泛化。",
+  "method": {
+    "任務定義": "每筆資料三個部分：(1) 高階任務描述（刻意不給逐步指令）；(2) 動作序列，每一步是 (目標元素, 操作)，操作只有 Click（含 Hover 與 Press Enter）、Type、Select Option 三種，後兩者另帶一個值；動作常跨越多個網頁；(3) 網頁快照：MHTML（含原始 HTML）、DOM snapshot（DOM 樹加版面、樣式資訊與渲染截圖）、HAR（全部網路流量，供必要時重播）、trace 檔（標註過程的完整互動紀錄）。agent 一開始拿到任務描述，每一步拿到目前網頁與先前的動作歷史，輸出下一個動作（元素＋操作＋值）。",
+    "資料收集（四階段）": [
+      "網站選擇（作者做）：5 個頂層領域（Travel、Shopping、Service、Entertainment、Information）細分成 31 個次領域，每個次領域依 similarweb.com 的美國熱門度人工挑 3–5 個代表網站，共 137 個。",
+      "任務提案（MTurk）：給標註者目標網站、網站簡介與範例任務。範例由 ChatGPT 產生：每站 50 個種子任務，每次隨機顯示 10 個；提示詞（Table 3）要求每個任務一句話、不給步驟、不點名元素、用虛構的具體資訊（姓名、日期、限制條件）讓任務具體化。標註者每個 HIT 最多提 5 個任務，明令不得照抄種子；與種子或已收任務太相似的一律退件，第一作者再人工篩選。每站收到約 20 個任務後就不再顯示，以平衡各站分佈。",
+      "任務示範（MTurk）：Playwright 自製標註工具，左邊是對話控制視窗、右邊是瀏覽器。先有一段不錄製的探索期，讓標註者熟悉網站、預先關掉彈出視窗、處理 CAPTCHA，並使用提供的匿名帳號；之後回首頁、重設被改過的值再開始錄。錄製時禁止直接操作瀏覽器，每一步拆成兩段：先在瀏覽器點選目標元素（工具會高亮但攔下真正的點擊事件），再在對話視窗選操作，由工具代為執行。可選 6 種操作：Click、Type、Hover、Press Enter、Click (Fake)、Ignore；Click／Hover／Press Enter 在最終資料中都映射成 Click；對 select 元素選 Click 會轉成 Select Option 並要求選一個選項。Click (Fake) 記錄成一般 Click 但不真的執行，用於發文、預約這類會對世界產生副作用的動作；Ignore 用來取消選錯的元素。做完後可再修改任務描述。",
+      "任務驗證（作者做）：逐題判斷是否整題丟棄、逐步判斷是否丟掉多餘動作（例如關廣告、關彈窗）、修改任務描述使其與動作一致，並統一起訖點（例如找商品的任務停在搜尋結果頁）。不確定的標 unsure 交第一作者複核。",
+      "標註者資格與報酬：已核准 HIT ≥ 1,000 且核准率 > 98%；先看訓練文件與影片、完成問卷與試做示範的資格測驗並合格；提案每個 HIT 0.05 美元（不論是否錄取），錄取並示範成功每題 0.80 美元，估算時薪 10.10 美元。"
+    ],
+    "資料切分": "Train：1,009 題、73 個網站。Test Cross-Task：把剩下資料不分領域與網站隨機抽 20%，252 題、69 個網站，網站在訓練時看過。Test Cross-Website：剩下的每個頂層領域各留 10 個網站，177 題，網站沒看過但領域看過。Test Cross-Domain：整個保留 Information 與 Service 兩個頂層領域，912 題、73 個網站。",
+    "HTML 前處理": "用啟發式規則只保留可見、而且在屬性、文字或鄰近元素上帶有實質語意的元素，平均元素數從 1,135 降到 580，訓練資料中目標元素的保留率（recall）為 94.7%。規則細節論文沒有給。",
+    "評估協定": [
+      "等價元素：真實網頁上多個元素可能效果相同（例如按鈕與其內的文字 span）。作者往上找離標註元素最近、可點擊的祖先（含自己）當頂層可接受元素，再把它所有可見、位在其渲染後 bounding box 內的子孫都視為可接受。作者人工檢查 100 個「頂層元素不是標註元素本身」的案例來確認規則有效。訓練與評估都把所有可接受元素當正例。",
+      "Element Accuracy：選中的元素是否屬於可接受元素集合。",
+      "Operation F1：預測操作（含值）的 token 級 F1；Click 時等同準確率，Type 與 Select Option 會把值的正確性算進去。",
+      "Step Success Rate：元素與操作都正確才算該步成功。",
+      "Success Rate（整題）：所有步都成功才算。",
+      "每一步都獨立評估，並提供正確的歷史動作（teacher forcing），不讓 agent 自己的錯誤延續到下一步。步級指標對任務取 macro average。"
+    ],
+    "MindAct 第一段：候選生成": "把候選生成當排序問題。查詢字串＝任務描述接上先前動作；每個 DOM 元素的文字表示＝標籤、文字內容、重要屬性值，再加上父元素與子元素的文字表示。以 cross-encoder（Sentence-Transformers 實作）把 (查詢, 元素) 成對送進 DeBERTa-v3-base（86M）輸出匹配分數。訓練時以目標元素為正例、從同頁隨機抽負例，分數過 sigmoid 用 binary cross entropy 最佳化；batch 32、5 epochs、learning rate 3e-5。推論時對整頁所有元素打分，取 logit 最高的 top-50 進第二段。Recall@50 在三個測試集為 88.9%／85.3%／85.7%。",
+    "MindAct 第二段：動作預測": "用 top-k 候選修剪網頁快照，只保留候選及其鄰近節點組成 HTML 片段。元素選擇改成多選題：每題最多 5 個候選加一個 None 選項，候選集切成多組。輸出格式為「Answer: <選項字母>. Action: <CLICK|TYPE|SELECT> Value: <值>」，操作與值直接生成。訓練用 Flan-T5（base／large／xl）seq2seq、左到右語言模型目標，target 由正確動作組成；batch 32、5 epochs、learning rate 5e-5；訓練與推論都把元素打亂後隨機分組。推論時每 5 個一組，有多組選出元素就把勝出者重新分組再問，直到只剩一個，或所有組都選 None。",
+    "LLM in-context 版本": "gpt-3.5-turbo 與 gpt-4，temperature 0，3 個示範。system 訊息是一句「擅長網站設計、導覽與替使用者執行任務的助理」；user 訊息依序是 HTML 片段、任務、先前動作（格式為「[角色] 元素文字 -> 操作: 值」）、以及要求從選項中挑下一個動作並說明「正確動作不在頁面上就選 A. None of the above」；assistant 回「Answer: X.」加上 Action 與 Value（Table 8）。GPT-4 因預算只在每個測試集跑 50 題，並只給 top-10 候選。",
+    "基線": "Classification：直接用 DeBERTa 排序器的第一名當元素（無法預測操作）。Generation：Flan-T5B 直接生成目標元素而非做多選題（Figure 5 上半）。Flan-T5XL zero-shot（附錄 D.2）。",
+    "硬體": "flan-t5-xl 與 flan-t5-large 用 4×A100 80GB；其餘用單張 A6000 48GB。"
+  },
+  "assumptions": [
+    "離線快照能代表評估當下的網站：每一步的正確動作在錄下來的頁面上存在，且只有一條（加上同頁等價元素）參考路徑；走別條可行路徑會被判錯。",
+    "作者驗證後的高階任務描述足夠明確，能對應到唯一一條動作序列；每題只有一位標註者示範，沒有多人一致性檢查。",
+    "給正確歷史的逐步準確率是端到端能力的有意義代理指標；agent 自己犯錯後的連鎖效應與恢復能力不在量測範圍。",
+    "動作空間只有 Click／Type／Select 三種就足以描述任務；捲動、返回上一頁、切分頁、回傳答案都不是動作。資訊查詢類任務到達目標頁即算完成，不檢查 agent 是否真的取出答案。",
+    "清理後的純文字 HTML 足以做決策（前處理保留 94.7% 的目標元素），不需要視覺資訊。",
+    "拿掉彈出視窗、CAPTCHA 與廣告的乾淨示範，其分佈足以代表真實網頁操作。",
+    "MTurk 上熟悉網路的美國英語使用者提出的任務，能代表一般使用者的需求。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Mind2Web Test Cross-Task（252 題、69 網站）",
+      "Mind2Web Test Cross-Website（177 題、每個剩餘頂層領域各 10 個網站）",
+      "Mind2Web Test Cross-Domain（912 題、73 網站，保留 Information 與 Service 兩個頂層領域）",
+      "GPT-4 用的三個 50 題子集（附錄 D.3 另報所有方法在同一子集上的 Step SR）"
+    ],
+    "metrics": [
+      "Element Accuracy（對照同頁等價元素集合）",
+      "Operation F1（操作加值的 token 級 F1）",
+      "Step Success Rate（元素與操作都對；對任務取 macro average）",
+      "Success Rate（整題每一步都對）",
+      "候選生成的 Recall@50",
+      "隨機分組 5 個 seed 的平均與標準差（附錄 D.1）"
+    ],
+    "baselines": [
+      "Classification：DeBERTa-v3-base 排序器 top-1",
+      "Generation：Flan-T5B 直接生成目標元素",
+      "MindAct w/ Flan-T5 base／large／xl（微調）",
+      "MindAct w/ gpt-3.5-turbo、gpt-4（3-shot in-context）",
+      "Flan-T5XL zero-shot"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "資料集規模與人工驗證：驗證階段刪掉少量任務，並修改了相當比例的任務描述與多餘步驟，顯示群眾外包的原始示範需要作者層級的清理才能當參考答案",
+      "numbers": "收集 2,411 題、丟棄 61 題、保留 2,350 題；其中 390 題的描述被改寫以對齊示範動作，187 題刪掉多餘步驟。137 個網站、31 個次領域；平均每頁 1,135 個元素、每題平均 7.3 個動作（Table 1）",
+      "section": "§2.2、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "把元素選擇改寫成多選題，比直接生成元素好得多；直接生成的 Flan-T5B 在元素選擇上甚至輸給 86M 的分類基線",
+      "numbers": "Cross-Task／Website／Domain 的 Element Acc：Generation（Flan-T5B）20.2／13.9／14.2，Classification（DeBERTa）26.8／21.6／24.5，MindAct w/ Flan-T5B 43.6／32.1／33.9。Step SR：Generation 17.5／11.0／11.9，MindAct w/ Flan-T5B 41.0／29.5／31.6",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "步級表現尚可，但整題成功率極低，因為大部分任務至少會錯一步",
+      "numbers": "最佳 Step SR（MindAct w/ Flan-T5XL）52.0／38.9／39.6；整題 SR 最高只有 7.1（Flan-T5L，Cross-Task），Flan-T5XL 為 5.2／5.1／2.9，Generation 基線 0.0／0.0／0.4",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "三層泛化中，Cross-Task 明顯最容易；Cross-Website 與 Cross-Domain 幾乎一樣難，作者據此推論難點在網站設計與互動邏輯的差異，而不是領域知識",
+      "numbers": "Cross-Task 的 Step SR 平均高出另兩者 10 個百分點以上；Flan-T5XL Cross-Website 38.9 對 Cross-Domain 39.6，Flan-T5L 35.3 對 37.3；Figure 6 的逐站分佈也看不出兩者差別",
+      "section": "§4.3、Table 2、Figure 6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "GPT-3.5 以 3-shot 做多選題時元素準確率很低，主要失誤是傾向選 None、認定任務無法在當前頁面完成；未微調的 Flan-T5XL 也幾乎做不了",
+      "numbers": "GPT-3.5 Element Acc 20.3／19.3／21.6、Step SR 17.4／16.2／18.6、SR 0.8／0.6／1.0。Flan-T5XL zero-shot 10.8／7.8／11.7，微調後 52.0／38.9／39.6（Table 6）",
+      "section": "§4.3、Table 2、附錄 D.2 Table 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "GPT-4 以 3-shot 在跨網站、跨領域的元素選擇上被作者稱為與微調過的 Flan-T5 相當，但只在 50 題子集、top-10 候選上跑",
+      "numbers": "GPT-4 Element Acc 41.6／35.8／37.1、Op F1 60.6／51.1／46.5、Step SR 36.2／30.1／26.4、SR 三者皆 2.0；對照 Flan-T5XL 全測試集 Element Acc 55.1／42.0／42.1。同一 50 題子集上 Flan-T5XL Step SR 為 47.9／33.3／34.6（Table 7）",
+      "section": "§4.3、Table 2、附錄 D.3 Table 7",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "多選題的隨機分組對分數影響很小",
+      "numbers": "5 個 seed 的 Step SR 標準差都不到 1：Flan-T5B 41.5±0.7／30.0±0.8／31.3±0.5，Flan-T5L 49.9±0.2／35.7±0.5／36.7±0.3，Flan-T5XL 51.9±0.8／39.5±0.2／39.6±0.2",
+      "section": "附錄 D.1、Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "評估用的等價元素啟發式（往上找最近可點擊祖先、再納入其 bounding box 內的可見子孫）經人工抽查確認有效",
+      "numbers": "人工檢查 100 個頂層可接受元素不是標註元素本身的案例；論文只說確認有效，沒有報告不一致的比例",
+      "section": "附錄 C.1",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "網站以美國常用的英語網站為主；標註者全部來自 MTurk，可能偏向熟悉網路的族群，所以任務只涵蓋網路上可做之事的一個子集。",
+    "MindAct 只用網頁快照的文字，沒有用渲染後的視覺資訊（資料裡雖有完整快照可供渲染）。",
+    "每一步獨立編碼網頁，只把先前動作當歷史，沒有建模環境的動態變化（例如點按鈕後出現下拉選單）。",
+    "使用者只在開頭給一次任務描述，agent 從頭做到尾；沒有中途調整需求或向使用者確認的互動式設定。",
+    "用快取的離線環境評估：只要某個動作在收集時沒被快取，任務就會立即失敗，而同一任務常有多條可行路徑，因此會產生偽陰性；等價元素正規化只處理同一頁內的等價元素。尚未做在真實網站上的端到端即時評估。",
+    "部署安全：金融交易等敏感動作的處理、透明度與使用者掌控、agent 可能被用來突破 CAPTCHA 等安全措施。",
+    "示範刻意略去彈出視窗、CAPTCHA 等步驟，但這些是真實網頁動態環境的重要部分。",
+    "GPT-4 因預算只跑每個測試集 50 題；GPT-4 的運算成本高。",
+    "整題成功率仍低，離真正可泛化的 agent 還有很大距離。"
+  ],
+  "limitations_observed": [
+    "逐步評估一律餵正確歷史（teacher forcing），所以 Step SR 與 SR 都不是閉環的端到端成功率：agent 自己的錯誤永遠不會延續，錯誤恢復能力完全沒被量到。同時每題只有一條參考路徑，走別條可行路徑會被判錯。前者讓分數偏樂觀、後者讓分數偏悲觀，兩者方向相反，所以 Table 2 的 SR 既不是上界也不是下界，偏差方向無從判斷；論文沒有任何實驗估計這兩個偏差的大小。",
+    "GPT-4 的比較不公平而且樣本太小：只跑 50 題，SR 三個切分都是 2.0%，也就是各剛好 1 題成功；候選只給 top-10，其他方法用 top-50，論文沒報 Recall@10，因此 GPT-4 的元素準確率上限比其他方法低多少未知。「與微調 Flan-T5 相當」的說法在全測試集的 Element Acc 上其實低 5–6 個百分點（35.8 對 42.0、37.1 對 42.1），只能說介於 Flan-T5B 與 Flan-T5XL 之間。",
+    "附錄 D.3 宣稱 50 題子集與全測試集一致，但 Table 7 裡 Flan-T5L 的 Cross-Domain Step SR 在子集是 27.6、全集是 37.3，差近 10 個百分點；Flan-T5XL Cross-Website 也從 38.9 掉到 33.3。以這種子集誤差，Table 2 裡 GPT-4 與 Flan-T5 之間幾個點的差距無法判讀。",
+    "附錄 D.2 的 Table 6 標題寫的是 zero-shot「element selection」結果，但微調那一列 52.0／38.9／39.6 其實等於 Table 2 的 Step SR，而不是 Element Acc（55.1／42.0／42.1），指標定義前後不一致，zero-shot 那一列到底量的是哪個指標也就不確定。",
+    "Operation F1 是 token 級的部分給分，但 Step SR 要求「操作正確」，論文沒說清楚 Type／Select 的值要完全比對、還是 F1 達某門檻才算正確；這會直接影響 Step SR 與 SR。",
+    "Cross-Task 是對剩餘資料隨機抽 20%，同一網站的任務都源自同一批 ChatGPT 種子、每站約 20 題，訓練與測試之間很可能有近似重複的任務與相同頁面，Cross-Task 的高分部分可能來自記憶而非泛化；論文沒有做去重或相似度分析。",
+    "「Cross-Website 與 Cross-Domain 一樣難，所以難點不在領域」的推論有混淆：Cross-Domain 只保留 Information 與 Service 兩個特定領域，領域轉移與這兩個領域本身的難易度分不開；而且兩個測試集規模差 5 倍（912 對 177 題），Cross-Website 只有 30 個網站，逐站變異又大（Figure 6），1–2 個百分點的差異沒有信賴區間支撐。",
+    "動作空間沒有「回傳答案」：例如查天氣這類資訊任務，只要點到結果頁就算完成，agent 是否真的讀出正確資訊不被檢查，也沒有捲動、返回等動作。這讓 Mind2Web 的 SR 更接近導航準確率，而不是任務完成度。",
+    "沒有人類表現基準，也沒有標註者之間的一致性：每題只有一位標註者示範，僅由作者檢查。對一個宣稱成功率很低的基準，無法知道天花板在哪裡，也無法區分「任務本身模糊」與「模型能力不足」。",
+    "等價元素啟發式只做了 100 例人工抽查，而且只抽啟發式「改動了」的案例，沒報告錯誤率；而且規則只處理 DOM 祖先與子孫關係，不處理同一頁上位置不同但效果相同的兩個元素（例如頁首與頁尾各一個搜尋按鈕），這類偽陰性沒有被量化。",
+    "論文宣稱資料忠實複製真實網頁、訓練出的系統「應能直接轉移到真實網站」，但全文沒有任何線上實驗支持；快照是 2023 年的，網站改版後離線分數與線上能力的差距會隨時間擴大。",
+    "Step 指標對任務取 macro average，長任務與短任務權重相同；論文沒有報告成功率與任務長度的關係，而平均 7.3 步、最長可達十餘步的任務，其 SR 本來就會因連乘而趨近零，這讓 SR 對模型差異的鑑別力很低（各方法 SR 幾乎都在 0–7%）。"
+  ],
+  "framework_role": "T7 的代表性「離線、參考軌跡式」web agent 基準：以真實網站快照取代可執行環境，以人類示範的單一動作序列為參考答案，逐步比對元素與操作，並以跨任務／跨網站／跨領域三層切分量泛化。它示範了這類設計的優點（可重現、成本低、涵蓋面廣、不打擾真實網站）與結構性盲點（teacher forcing 量不到錯誤恢復、單一參考路徑造成偽陰性、沒有答案檢查），是理解後續可執行環境基準（例如 WebArena）與線上評估為何出現的對照組。附帶貢獻落在 T8（整題 SR 定義為所有步皆對，是很嚴格的任務完成分數）與 T3（HTML 前處理與小模型排序候選，處理上千元素的觀測壓縮）。資料中的人類示範 trace 屬於 T4 的參考軌跡，但論文沒有拿它做異常偵測或反思。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Z.ai（Hugging Face 組織 zai-org；此網址為原 THUDM 頁面，研究出自清華大學 THUDM）在 CogAgent 官方 Hugging Face model card 寫明 CogAgent-18B 在包括 AITW 與 Mind2Web 在內的 GUI 操作資料集上超越既有模型（卡上沒列數字）：https://huggingface.co/THUDM/cogagent-chat-hf 。屬於以本基準評估自家模型。",
+      "ByteDance Seed 的 UI-TARS-7B-DPO 官方 model card 在「Offline Agent Capability Evaluation」段落以表格列出 Multimodal Mind2Web 的成績：https://huggingface.co/bytedance-research/UI-TARS-7B-DPO 。Multimodal Mind2Web 是同一團隊在 SeeAct（2401.01614）中以本資料集任務加上截圖所做的衍生版本，屬於間接使用。"
+    ],
+    "assessment": "有可查證的業界使用，但限於評估用途：至少兩家公司的官方 model card 以 Mind2Web 或其多模態衍生版評估自家 GUI agent 模型。MindAct 本身被部署進商用產品，未見證據。本次 WebSearch 額度已用完，只能以 WebFetch 核對上述兩個已知頁面，其他可能的採納（例如大廠 computer-use 產品的評估報告）未能查證，不列入。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/OSU-NLP-Group/Mind2Web（MIT License）",
+    "data": "公開，CC BY 4.0。訓練資料在 Hugging Face（https://huggingface.co/datasets/osunlp/Mind2Web）；測試資料放在一個有密碼保護的短網址後面（論文公開密碼）。論文沒說明這樣做的用意；效果上能降低測試集被爬進預訓練語料的機會。訓練好的模型也宣稱開源。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "影響最大的真實網站 web agent 基準之一，也是「離線快照＋參考軌跡逐步比對」這一派評估設計的原型；它的指標定義、三層泛化切分，以及 teacher forcing 與單一參考路徑造成的偏差，都是 T7 基準設計子領域必須理解的起點與反例。",
+  "related": [
+    "2207.01206",
+    "2212.09736",
+    "2210.03629",
+    "2210.11416",
+    "2304.08244",
+    "2305.15334",
+    "2302.04761"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

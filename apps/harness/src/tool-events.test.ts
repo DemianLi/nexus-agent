@@ -13,12 +13,13 @@
 import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import { fromLoggedMessage, SessionRegistry } from '@nexus/core';
+import { APPROVAL_REJECTED_BY_USER, fromLoggedMessage, SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
-import { createAskUserPlugin } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
+import { humanChannelPlugin } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -142,7 +143,7 @@ async function assemble(turns: readonly ScriptedTurn[], plugins: readonly Plugin
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
-    plugins: [...plugins],
+    plugins: [humanChannelPlugin(), ...plugins],
   });
   const sessions = new SessionRegistry(ROOT_ID);
   const detach = built.attachSession(sessions);
@@ -292,6 +293,37 @@ describe('subagent 裡的呼叫', () => {
   });
 
   /**
+   * **未知工具的碼在子代理的疊裡也標得到**（#1024）。碼由最內層標（`invalid-tool-args.ts`），那一顆是槽位表裡
+   * `shared` 的一列；子代理那一欄漏接的話，這裡會退成沒碼的錯誤。
+   */
+  it('子代理叫不存在的工具：子代理那份記 UNKNOWN_TOOL', async () => {
+    const run = await assemble(
+      [
+        {
+          content: '委派。',
+          toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: 'worker' } }],
+        },
+        { content: '子代理動手。', toolCalls: [{ name: 'nope', args: {} }] },
+        { content: '子代理收工。' },
+        ...done,
+      ],
+      [toolsPlugin, workerPlugin],
+    );
+    try {
+      await run.agent.invoke(toAgentInvocation('跑。'), run.config);
+      const subagents = run.subagents();
+      expect(subagents).toHaveLength(1);
+      expect(resultsByName(subagents[0]!).get('nope')).toEqual({
+        callId: expect.any(String),
+        isError: true,
+        error: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' },
+      });
+    } finally {
+      await run.close();
+    }
+  });
+
+  /**
    * **沒有人註冊的 `general-purpose` 也一樣。** 它以前是基座自己補的那份，我們的 stack 一顆都
    * 沒有——跑完了，但 subagent 那份日誌根本沒出生，root 那份只看得到 `task`。
    */
@@ -326,7 +358,8 @@ describe('subagent 裡的呼叫', () => {
 
 /**
  * **中斷不是落定**（卡上「動工時的決定」第一條）。暫停那一次只留一顆呼叫；resume 之後以
- * **同一個 `callId`** 再記一對。拒絕那一格照 dsh 不帶碼——被拒不是工具的錯。
+ * **同一個 `callId`** 再記一對。拒絕那一格帶 `APPROVAL_REJECTED_BY_USER`（#1029，dsh 沒有這一格）：被拒不是工具的錯，
+ * 而碼讓日誌上「被人拒」與「工具自己失敗」分得開。
  */
 describe('被核准閘門中斷的呼叫', () => {
   it.each([
@@ -351,7 +384,13 @@ describe('被核准閘門中斷的呼叫', () => {
       const callIds = events.map((event) => (event.data as ToolCall | ToolResult).callId);
       expect(new Set(callIds).size).toBe(1);
       const { message: _message, ...verdict } = events[2]!.data as ToolResult;
-      expect(verdict).toEqual({ callId: callIds[0], isError });
+      expect(verdict).toEqual({
+        callId: callIds[0],
+        isError,
+        ...(decision === 'reject'
+          ? { error: { name: 'ApprovalDenied', code: APPROVAL_REJECTED_BY_USER } }
+          : {}),
+      });
     } finally {
       await run.close();
     }

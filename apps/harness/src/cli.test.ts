@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, readFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 
 import { SessionLog } from '@nexus/core';
@@ -14,21 +14,14 @@ import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { FIRST_PLUGIN_NAME, SECOND_PLUGIN_NAME } from './cli-collision.fixture.js';
-import {
-  APPROVAL_DISCLOSURE,
-  CLI_PROBE_FILE,
-  createCliAgent,
-  exitCodeFor,
-  parseCliArgs,
-  runCli,
-  runRepl,
-  runTurn,
-} from './cli.js';
+import type { ReplLine } from './cli.js';
+import { APPROVAL_DISCLOSURE, exitCodeFor, parseCliArgs, runCli, runRepl, runTurn } from './cli.js';
+import { CLI_PROBE_FILE, createCliAgent } from './assembly-root.js';
 import { DISPOSE_FAILURE } from './cli-dispose-failure.fixture.js';
 import { documentedFixture } from './documented-fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedModelRow, shippedPlugins } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
@@ -154,7 +147,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是七顆功能 ＋ 八列 core 設定 ＋ 六列 harness 設定 ＋ 二十個配套入口', async () => {
+  it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 二十二列 harness 設定 ＋ 八個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -186,11 +179,37 @@ describe('一次性模式', () => {
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
       'echo',
       'agent-instructions',
+      // **`skill-invocation` 進來的理由是人要叫得出只給人叫的技能**（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574)）：
+      // 同一個 `agent/pre-step` 接縫，root 的人話裡有 `/名字` 才注入那份技能的正文；不多工具、不多命令。排在 `time-context` 前面，同 dsh。
+      'skill-invocation',
+      // **`time-context` 進來的理由是模型沒有時鐘**（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）：
+      // 與 `agent-instructions` 同一個 `agent/pre-step` 接縫，每次 agent 呼叫開頭（同一條 thread 10 分鐘內不重複）追加一則
+      // 持久的使用者訊息；不多工具、不多命令、不進系統提示詞。CLI 也掛（偏離 dsh，登記在套件檔頭）。
+      'time-context',
+      // **`skills` 進來的理由是它本來就在，只是沒有人掛**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
+      // 工作區的 `skills/<name>/SKILL.md` 不進清單就永遠看不到。沒有 skill 的時候一個字都不加（組裝點包了一層，
+      // 見 `packages/nexus-core/src/skills-middleware.ts`），多的只是啟動時掃一次 `/skills/`。
+      'skills',
       'plan-mode',
       'goal',
       'todo',
       'feedback',
       'present',
+      // **`ask-user` 與 `submit-record` 進來的理由是它們本來就在產品路徑上，只是藏在程式碼裡**
+      // （[#669](https://github.com/DemianLi/nexus-agent/issues/669)）：`--dump-config` 印不出來、patch 關不掉。
+      // 它們各多一顆面向模型的工具（`ask_user_question`、`submit_record`），後者帶一道核准閘門。兩個入口照舊都有。
+      'ask-user',
+      'submit-record',
+      // **`trajectory` 進來的理由是 web 的觀測分頁讀它**（[#1027](https://github.com/DemianLi/nexus-agent/issues/1027)）：
+      // 不多工具、不改 prompt、不寫日誌，模型那一側零差別；多的是兩個從日誌折出來的投影（#1026 的通道）。
+      'trajectory',
+      // **`token-meter` 進來的理由同 `trajectory`**（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）：web 的觀測分頁讀它的逐輪與子代理用量；
+      // 不多工具、不改 prompt、不寫日誌，多的是一個從日誌折出來的投影（root 與每個子代理各一份）。
+      'token-meter',
+      // **`system-prompt` 進來的理由是模型該知道自己是誰**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）：
+      // 出貨值把「命令列助手」那句寫死在程式碼裡的身分，換成部署方寫得動的一列。它不多一顆工具、不多一個命令，
+      // 多的是系統提示詞前後各一段；沒有這一列，模型只剩組裝點那一句指引。
+      'system-prompt',
       // **底下這八顆不是第八到第十五個例外**，它們跟上面七個不同類：不多一顆工具、不多一
       // 個命令、不改 prompt。它們只把 core 那幾顆 middleware 的設定從程式碼搬到部署設定裡
       // （[#456](https://github.com/DemianLi/nexus-agent/issues/456)），middleware 本身
@@ -218,32 +237,65 @@ describe('一次性模式', () => {
       // `startupSetting`。它跟 `approval-gate` 一樣關不掉，理由卻是相反的那一種：關掉它
       // 不會有任何行為改變，只會讓讀設定的人以為自己改了落盤的節奏。
       'session-persistence',
-      // **這六顆跟上面那七顆同類——不裝功能、只講設定——但擁有者住在 `apps/harness`**
+      // **這八顆跟上面那七顆同類——不裝功能、只講設定——但擁有者住在 `apps/harness`**
       // （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。它們內部又分兩層，
       // 分界是消費點跑的時刻。
       //
-      // **前五列跑在任何 agent 出生之前**（serve 的冷讀清單、`BrowserAuth` 的建構子、
-      // `createWireHandler` 閉包裡的交付路由與工具文字那兩條、交給組裝的那顆 model），那一刻
+      // **前七列跑在任何 agent 出生之前**（serve 的冷讀清單與內容搜尋、`BrowserAuth` 的建構子、
+      // `createWireHandler` 閉包裡的交付方法與工具文字那兩條、交給組裝的那顆 model），那一刻
       // 註冊表還不存在，所以 `apply` 是空的，值由 `settings/startup.ts` 的 `startupSetting` 在
-      // 起動期解一次。**CLI 這條路只讀其中的 `live-model`**（#545，建 model 用）——其餘四列的
-      // 消費者都在 serve 那一側，它們出現在這份清單上是因為清單只有一份（#454）。
+      // 起動期解一次。**CLI 這條路讀其中三列**：`thread-title`（寫退回標題，#647）、`thread-title-llm`
+      // 與 `live-model`（建 model 用，#650、#545）——其餘四列的消費者都在 serve 那一側，它們出現在
+      // 這份清單上是因為清單只有一份（#454）。
       //
       // **`recursion-limit` 相反，它正是 CLI 在讀的那一個**：消費點是 `agent-factory.ts`，跑在
       // `loadPlugins` 之後，註冊表就在手上，所以它跟上面 core 那三列完全同形——`apply` 把驗過的
       // 值提供成服務，組裝點去讀。三態（旗標 > 條目 > 內建預設）釘在 `agent-factory.test.ts`。
       //
-      // **六列同樣在 `PROTECTED_ENTRY_NAMES` 上**，但理由分兩種，而且現在是逐列寫在
-      // `PROTECTED_ENTRY_REASONS` 這張表上的（訊息不再共用一段講核准閘門的文字）。
+      // **哪幾列在 `PROTECTED_ENTRY_NAMES` 上以那張表為準**（`thread-capacity` 自 #1619 出廠開著起也在上面），這裡不寫顆數；理由分兩種，而且現在是逐列
+      // 寫在 `PROTECTED_ENTRY_REASONS` 這張表上的（訊息不再共用一段講核准閘門的文字）。
+      // `thread-title-llm` 關得掉：關掉就真的沒有模型產生的標題，同 dsh 的 acp-app 與 sdk-app。`thread-search` 同理（#631）。
       'thread-title',
+      'thread-title-llm',
+      'thread-search',
+      // **`session-reference` 是跨會話引用的四個上限**（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862）：消費者是 serve 的候選與每條 thread 的 pump，
+      // 起動期讀一次；CLI 沒有引用。寫壞整個起不來、也關不掉（理由見 `settings/session-reference.ts`）。
+      'session-reference',
+      'thread-capacity',
+      'memory-gauge',
+      'ops-endpoints',
       'browser-session',
       'deliverable-files',
       'tool-text',
+      'projection-flush',
+      'downlink',
+      'tool-result-stash',
+      'spill-policy',
+      'tool-fs-search',
+      'tool-fs',
+      'background-subagents',
+      'subagent-model-selection',
       'live-model',
+      'default-model',
+      'scripted-model',
       'recursion-limit',
+      // **`turn-timeout` 是一輪的時鐘上限**（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：消費者是 serve 的 pump 與背景子代理，
+      // 起動期讀一次；CLI 一次性路徑不套（Q-B4 (a)）。關得掉，關掉就是不限。
+      'turn-timeout',
+      // **`goal-round-cap` 是操作者給續行輪數的上限**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)）：消費者是 harness 的
+      // 續行排程器，起動期讀一次；續行沒開（CLI 預設）時它安靜地不起作用。關得掉，關掉就只剩目標自己的 `max_goal_rounds`。
+      'goal-round-cap',
+      'agent-loop',
+      // **`sandbox-policy` 進來的理由是它本來就在產品路徑上，只是藏在組裝點的條件裡**
+      // （[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 3 步）：`--dump-config` 印不出來、patch 關不掉。
+      // 不論有沒有 `--workspace` 都掛：有圍堵時註冊升級與 `sandbox/mode`，沒有圍堵時只講一句不宣稱圍堵的政策。
+      'sandbox-policy',
+      // 權限組合（#437）：`/permission` 是切沙箱與核准的唯一入口，沒有圍堵時什麼都不註冊。
+      'permission-presets',
     ]);
-    // 二十個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
+    // 八個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。
-    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(20);
+    expect(names.filter((name) => name.endsWith('-invariant'))).toHaveLength(8);
   });
 
   it('**違規印到 stderr 而且帶前綴**——不是靠 runner 預設的 `console.error`', async () => {
@@ -445,10 +497,9 @@ describe('CLI 的核准政策', () => {
 
     const { agent, dispose, sessionLog } = await createCliAgent(
       { live: false },
-      [createEchoPlugin(), gateWriteFile],
+      [createEchoPlugin(), gateWriteFile, await shippedModelRow()],
       undefined,
-      undefined,
-      HEADLESS_APPROVALS,
+      { approvals: HEADLESS_APPROVALS },
     );
     const { printer, stdout } = recorder();
     try {
@@ -616,6 +667,92 @@ describe('REPL', () => {
     expect(stdout()).toContain('回聲：嗨');
   });
 
+  /**
+   * **非同步輸出不能弄亂輸入行**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）：組裝之後外掛執行期交出的話
+   * （MCP 掉線重連的進度）隨時會來，包括人正在提示字元後面打字的時候。停在提示字元且輸出是 TTY 時，`redraw` 要先清掉這一行、
+   * 印訊息、再把提示字元連同已經打的字畫回來；其餘情況（不是 TTY、沒在等輸入）照原樣直接印。
+   */
+  describe('非同步輸出與輸入行', () => {
+    /** 一條假 TTY：`isTTY` 為真，收下 readline 寫進去的所有轉義序列。 */
+    function terminal(isTTY: boolean) {
+      const output = Object.assign(new PassThrough(), { isTTY });
+      let written = '';
+      output.on('data', (chunk: Buffer) => void (written += chunk.toString()));
+      return { output, written: () => written };
+    }
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    async function start(isTTY: boolean) {
+      const { output, written } = terminal(isTTY);
+      const input = new PassThrough();
+      const line: ReplLine = {};
+      const repl = await replAgent();
+      const done = runRepl(
+        repl.agent,
+        { input, output },
+        recorder().printer,
+        new SessionLog('t'),
+        repl.commands,
+        undefined,
+        undefined,
+        undefined,
+        line,
+      );
+      await settle();
+      return { input, line, written, done };
+    }
+
+    it('停在提示字元、輸出是 TTY：清掉這一行、印訊息、把提示字元與已打的字畫回來', async () => {
+      const { input, line, written, done } = await start(true);
+      input.write('abc'); // 打到一半，沒按 Enter
+      await settle();
+      const before = written().length;
+      const order: string[] = [];
+      line.redraw?.(() => {
+        order.push(`印訊息時畫面：${JSON.stringify(written().slice(before))}`);
+      });
+      const after = written().slice(before);
+      // 先清行（`ESC[2K`）再移到行首（`ESC[1G`），印訊息之後才重畫提示字元，且帶回 `abc`。
+      expect(order[0]).toContain('\\u001b[2K');
+      expect(order[0]).toContain('\\u001b[1G');
+      expect(after.indexOf('> abc')).toBeGreaterThan(after.indexOf('\u001b[1G'));
+      expect(after).toContain('> abc');
+      input.end('\n/exit\n');
+      await done;
+    });
+
+    it('輸出不是 TTY：不碰轉義序列，只呼叫印的那一段', async () => {
+      const { input, line, written, done } = await start(false);
+      const before = written().length;
+      let printed = 0;
+      line.redraw?.(() => void (printed += 1));
+      expect(printed).toBe(1);
+      expect(written().slice(before)).toBe('');
+      input.end('/exit\n');
+      await done;
+    });
+
+    it('跑一輪的期間（沒在等輸入）：直接印，不畫提示字元', async () => {
+      const { input, line, written, done } = await start(true);
+      input.write('說點什麼\n'); // 送出之後那一輪還在跑，提示字元還沒回來
+      const before = written().length;
+      let printed = 0;
+      line.redraw?.(() => void (printed += 1));
+      expect(printed).toBe(1);
+      expect(written().slice(before)).not.toContain('> ');
+      input.end('/exit\n');
+      await done;
+    });
+
+    it('REPL 收掉之後 redraw 不再有值', async () => {
+      const { input, line, done } = await start(true);
+      expect(line.redraw).toBeDefined();
+      input.end('/exit\n');
+      await done;
+      expect(line.redraw).toBeUndefined();
+    });
+  });
+
   it('stdin 收掉就結束——沒有 /exit 也不會卡住', async () => {
     const input = new PassThrough();
     input.end('說點什麼\n');
@@ -692,11 +829,17 @@ describe('CLI 行程', () => {
     });
   }
 
-  it('兩個 plugin 撞同一個工具名時退出碼是 1，stderr 指名是誰撞了什麼', async () => {
+  /**
+   * 撞上去的那一列是 `insert` 進來的可少掛列（#751）：照 dsh，它 `apply` 拋錯只讓它自己掉，行程照樣跑完。錯誤沒有被
+   * 吞掉——它從 registry 一路傳到行程的 stderr，那段警告指名撞的是哪兩個 plugin。
+   */
+  it('兩個 plugin 撞同一個工具名：後來的那一列掉了、退出碼是 0，stderr 的警告指名是誰撞了什麼', async () => {
     const { code, stderr } = await runProcess(['--patch', fixture, '說點什麼']);
 
-    // **是 1 不是 2**：組裝失敗不是撞到迴圈上限，兩者要分得開。
-    expect(code).toBe(1);
+    expect(code).toBe(0);
+    expect(stderr).toMatch(
+      new RegExp(`^ {2}${SECOND_PLUGIN_NAME}（file:[^）]+）掛上時失敗：`, 'mu'),
+    );
     // **不能只 `toContain(FIRST_PLUGIN_NAME)`**：出貨清單上那顆 echo plugin 的名字，跟它
     // 註冊的那個工具名是同一個字串（`ECHO_TOOL_NAME === 'echo'`），而衝突訊息本來就會講
     // 「已經有名為 echo 的工具」——那半句自己就滿足了斷言，於是「有指名先註冊的是誰」
@@ -713,6 +856,26 @@ describe('CLI 行程', () => {
   }, 90_000);
 
   /**
+   * **起不來的那一次退出碼是 1，不是 2**：組裝失敗不是撞到迴圈上限，兩者要分得開。用必掛的 `browser-session` 寫壞測，
+   * 它掉了整個起不來（#751）。
+   */
+  it('必掛的列寫壞了：起不來、退出碼是 1，stderr 指名那一列', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'nexus-cli-required-'));
+    try {
+      await chmod(dir, 0o700);
+      const patch = join(dir, 'bad.yml');
+      await writeFile(patch, '- id: browser-session\n  config:\n    maxAgeDays: 0\n', {
+        mode: 0o600,
+      });
+      const { code, stderr } = await runProcess(['--patch', patch, '說點什麼']);
+      expect(code).toBe(1);
+      expect(stderr).toMatch(/browser-session（#settings\/browser-session）〔必掛〕設定驗不過/u);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 90_000);
+
+  /**
    * 退出碼只存在於行程上，所以分岔要在這裡釘一次（#362）。對照組是同一句話、不帶旗標：
    * 預設腳本兩次工具呼叫就講完，跑得完就是 0——所以 2 來自旗標，不是腳本本身出事。
    */
@@ -724,4 +887,52 @@ describe('CLI 行程', () => {
     const control = await runProcess(['說點什麼']);
     expect(control.code).toBe(0);
   }, 120_000);
+});
+
+describe('--patch 與工作區（#2162）', () => {
+  it('在工作區外：照常起', async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-ws-')));
+    const outside = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-out-')));
+    await writeFile(join(outside, 'p.yml'), '[]\n', { mode: 0o600 });
+    const { printer, stdout } = recorder();
+    await runCli({
+      argv: ['--dump-config', '--workspace', workspace, '--patch', join(outside, 'p.yml')],
+      input: new PassThrough(),
+      output: new PassThrough(),
+      printer,
+    });
+    expect(stdout()).toContain('# == ');
+    await rm(workspace, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  });
+
+  it('在工作區裡：起不來，一輪都沒跑', async () => {
+    const workspace = await realpath(await mkdtemp(join(tmpdir(), 'nexus-2162-ws-')));
+    await writeFile(join(workspace, 'p.yml'), '[]\n', { mode: 0o600 });
+    const { printer, stdout } = recorder();
+    await expect(
+      runCli({
+        argv: ['--workspace', workspace, '--patch', join(workspace, 'p.yml'), '說點什麼'],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer,
+      }),
+    ).rejects.toThrow('不能在 --workspace 底下');
+    expect(stdout()).toBe('');
+    await expect(
+      runCli({
+        argv: [
+          '--dump-config-schema',
+          '--workspace',
+          workspace,
+          '--patch',
+          join(workspace, 'p.yml'),
+        ],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer,
+      }),
+    ).rejects.toThrow('不能在 --workspace 底下');
+    await rm(workspace, { recursive: true, force: true });
+  });
 });

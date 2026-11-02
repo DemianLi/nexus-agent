@@ -28,19 +28,16 @@ import type {
   SessionTelemetryRecord,
   SessionTelemetryService,
 } from '@nexus/core';
-import {
-  createGoalPlugin,
-  GOAL_COMMAND_NAME,
-  goalAmbiguousMessage,
-  GOALS_SERVICE,
-} from '@nexus/plugin-goal';
+import { GOAL_COMMAND_NAME, GOAL_NONE_MESSAGE } from '@nexus/plugin-goal';
 import { createNexusAgent } from './agent-factory.js';
 
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedPlugins, withoutTimeContext } from './fixtures.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE } from '@nexus/goal';
 
-const shipped = await shippedPlugins();
+const shipped = withoutTimeContext(await shippedPlugins());
 
 const WRITER_TOOL_NAME = 'writer_tool';
 const ROOT_ID = 'consumers';
@@ -216,7 +213,7 @@ function delegatingModel(toolName: string): ScriptedChatModel {
 }
 
 /**
- * 跑一輪，回報**真的十二個配套入口**報了什麼。
+ * 跑一輪，回報**真的出貨的那幾個配套入口**報了什麼。
  *
  * **重點在「真的」。** 上面那一組掛的是自己寫的 `@nexus/observing`，它從來不 `fail`，
  * 所以它證得了「消費者接上了」，證不了「接上去之後不會誤報」。而誤報的去處是使用者的
@@ -269,22 +266,23 @@ describe('輪的擁有者是進入點，不是工具', () => {
    * 而日誌的價值來自它記的是量到的東西。
    */
   it('工具往 subagent 的日誌寫 turn 事件，核心配套入口會報——而那是對的', async () => {
-    // seq 0、2 是叫出這次工具的那次模型呼叫的起訖（#266），夾著它的回覆（seq 1，#305），seq 3
-    // 是摘要器在起訖外層記的量測（#528），seq 4 是工具呼叫自己的 `tool/call`（#264），工具在
-    // handler 裡寫的那顆落在它後面。**只報這一條**：
+    // seq 0 是子代理收到的那句話（`user/message`，出生就記，#1159），seq 1、5 是叫出這次工具的那次模型呼叫的起訖（#266），
+    // 夾著它的請求快照（seq 2、3，#1020）與回覆（seq 4，#305），seq 6 是摘要器在起訖外層記的量測（#528），seq 7 是工具呼叫
+    // 自己的 `tool/call`（#264），工具在 handler 裡寫的那顆落在它後面。**只報這一條**：
     // 模型起訖與工具事件的配對在這份沒有輪的日誌上一句話都不說。
     expect(await violationsFrom(boundaryPlugin(true), WRITE_TURN)).toEqual([
-      'invariant violated by "@nexus/core": turn/failed（seq 5）關了一個沒有開著的輪',
+      'invariant violated by "@nexus/core": turn/failed（seq 8）關了一個沒有開著的輪',
     ]);
   });
 });
 
 /**
- * **`@nexus/plugin-goal` 只接 root 那一份，而這一條就是那行 `if` 的絆索。**
+ * **`@nexus/plugin-goal` 只認 root 那一份，而這一條是 subagent 那一份沒有自己的 goal 服務的絆索。**
  *
- * 拿掉 `index.ts` 裡的 `if (subject.address.kind !== 'root') return;`，這裡會紅：參與者
- * 是每一份會話各裝一次的，所以每次委派都多長出一個 `GoalService`，`/goal` 從第二次
- * 委派開始一律回 {@link goalAmbiguousMessage}——一個沒有人動過它卻壞掉的命令。
+ * 遷上樹之前這裡守的是 `index.ts` 的 `if (subject.address.kind !== 'root') return;`：參與者每一份會話各裝一次，沒有那行 `if`，
+ * 每次委派就多長出一個 `GoalService`，`/goal` 從第二次委派開始一律回「接了不只一份」。#1486 之後服務是 lazy 的、`serviceFor`
+ * 只收 root 日誌，那行 `if` 與「接了不只一份」的判斷一起拿掉了；剩下要釘的是結果——委派過之後 `/goal` 照樣答得出來，而
+ * subagent 那一份日誌上沒有服務（`existingFor` 不建，所以這一問不會把它弄出來）。
  *
  * 而「只管 root」不是為了繞過那件事：**它就是 dsh 對 goal 的政策**（`tool-goal` 的
  * `hasDirectHumanInput` 第一道是 `ctx.agents.roots().includes(execution.agent)`）。目標是
@@ -303,16 +301,24 @@ describe('goal 的參與者只掛在 root 上', () => {
       await agent.invoke(toAgentInvocation('跑。'), { configurable: { thread_id: 'goal-root' } });
       // 子代理那一份真的開出來了，這一條才問得出東西。
       expect(sessions.list()).toHaveLength(2);
-      // 掛著的服務仍然只有一個——root 那個。
-      expect(services.use(GOALS_SERVICE).attached()).toHaveLength(1);
+      // 服務只長在 root 那一份上：lazy 之後 subagent 那一份沒人問就不建（#1486），而 `serviceFor` 本來就只收 root。
+      const goalCore = goalCoreOf(services.use(GOALS_SERVICE));
+      const rootLog = sessions.list().find((entry) => entry.address.kind === 'root')!.log;
+      const subagentLog = sessions.list().find((entry) => entry.address.kind !== 'root')!.log;
+      expect(goalCore.existingFor(subagentLog)).toBeUndefined();
 
       const definition = commands.find(GOAL_COMMAND_NAME);
       const answer = await definition?.handler({
         commandId: 'cmd-1',
         rawInput: '',
         signal: new AbortController().signal,
+        // 執行器手上的是 root 那一份。
+        sessionLog: rootLog,
+        attachments: [],
+        steer: () => undefined,
       });
-      expect(answer?.text).not.toBe(goalAmbiguousMessage(2));
+      expect(answer?.text).toBe(GOAL_NONE_MESSAGE);
+      expect(goalCore.existingFor(subagentLog)).toBeUndefined();
     } finally {
       detach();
       await dispose();

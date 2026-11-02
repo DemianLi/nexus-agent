@@ -22,14 +22,33 @@
  *    （`patchToolCallsMiddleware.before_agent` 補掉懸空的工具呼叫），那個等著核准的工具
  *    **既沒執行也沒被拒絕**，而且**不會再發第二顆 `input.requested`**——核准請求就這樣
  *    蒸發了，下行上一顆 frame 都看不出來。所以 pump 記著還掛著的那些中斷
- *    （{@link ThreadPump.awaitingInput}），讓上行那一側擋得下來。
+ *    （{@link ThreadPump.awaitingInput}），排在後面的說話由 pump 自己停住，等中斷答完才跑
+ *    （[#629](https://github.com/DemianLi/nexus-agent/issues/629)）。所以上行在停在核准點時照收
+ *    `run.start`（[#637](https://github.com/DemianLi/nexus-agent/issues/637) 的 Q4，同 dsh）。
+ *
+ * ## 送出佇列（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）
+ *
+ * 人送出的話一律先進佇列，閒著時也一樣，照 dsh 的收件匣（`packages/core/agent-loop/src/inbox.ts`，`477b4f4`）：
+ * 每一次變動在 root 日誌上落一顆 `inbox/spliced`，佇列由它折出來；一輪開始時領一件（{@link ThreadPump.#runQueued}）。
+ * 列得出（{@link ThreadPump.inbox}）、改得動刪得掉（{@link ThreadPump.updateQueue}）、每次變動推一顆 `custom`
+ * `inbox`。按停止之後排著的**停住**，下一次送出才喚醒；重啟之後從日誌折回來，一樣停住。
  *
  * ## 工具卡從日誌開、以日誌收（[#296](https://github.com/DemianLi/nexus-agent/issues/296)、[#297](https://github.com/DemianLi/nexus-agent/issues/297)）
  *
- * dsh 的 web 工具卡只從會話日誌導出：`tool/call` 開卡、`tool/result` 收卡，文字是那則結果的內容
+ * dsh 的 web 工具卡從會話日誌導出：`tool/call` 開卡、`tool/result` 收卡，文字是那則結果的內容
  * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:40-66`，`c291e79`）。`tool/call`
  * 在核准之前就寫（`packages/core/agent-loop/src/tool-calls.ts:168`），`tool/result` 在所有鉤子之後
  * 才寫，所以等核准時畫面上已經有卡，事後被改成錯誤的結果畫面上就是錯誤。
+ *
+ * **dsh 之後提前了開卡的時機，我們沒跟（2026-10-04 對讀 `5badb15009a`）。** `91818992b05`（2026-09-30）刪掉
+ * `partial.ts`，改成 `tool.ts` 的 `applyDelta` 在 `assistant/live-chunk` 的 `tool-call-delta`（帶名字的第一顆）
+ * 到達時就以 `phase: 'preparing'` 開卡、參數隨串流增長；`tool/call` 一到才換成 `phase: 'start'`（`rootCall`），
+ * `tool/result` 照舊收卡。所以今天 dsh 的卡在**參數還在串流時**就出現，不再只有 `tool/call` 之後。上面第一段
+ * 講的「日誌是開卡的唯一來源」因此已不是事實，仍成立的是：**定案與收卡**仍只以 `tool/call`／`tool/result` 為準。
+ * 我們的卡在 `tool/call` 才開，即比 dsh 晚一段（模型還在吐參數的那段）。這不屬於這條規則管的範圍：web 的 UI／UX
+ * 不以 dsh 為標準（AGENTS.md），要不要提前開由 dev-ui 以產品體驗判斷；要做的話得先讓 wire 的折疊吃工具參數的串流片段
+ * （今天 `conversation.ts` 的 `content-block-delta` 分支把它們丟掉，工具只走 `tools` channel），那會動到 wire 與
+ * 折疊（見 [#984](https://github.com/DemianLi/nexus-agent/issues/984)）。
  *
  * 我們的 `tools` frame 是基座在**工具本體**被呼叫時發的：本體沒被呼叫到的那些——核准閘門、先讀後改、
  * plan-mode 在 `handler` 之前擋下的，分派前就中止的，基座找不到的工具——一顆都沒有；本體之後才把結果
@@ -49,45 +68,147 @@
  * 基座的 frame。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
+  APPROVAL_INTERRUPT_KIND,
+  boundContextSummary,
+  childProjectionUnits,
+  createProjectionFold,
+  findPromptRequest,
+  foldInbox,
+  humanMessageForTurnStart,
+  ARCHIVE_GATE_CONFIG_KEY,
   INTERRUPTED_REPLY_MARKER,
+  isTurnBlocked,
+  TurnBlockedError,
   isTurnCancelled,
+  lastModelCall,
+  MAX_TOKENS_TURN_END,
   SessionRegistry,
+  spliceInbox,
+  streamRetrySignalOf,
+  STEP_INBOX_CONFIG_KEY,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
   TOOL_ABORTED_BEFORE_DISPATCH_REASON,
   TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
   TOOL_ABORTED_REASON,
   TOOL_ABORTED_TEXT,
+  thrownMessage,
   toolRefusal,
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
+  turnReachedMaxTokens,
+  unansweredCallResults,
+  stampImageOrigin,
+  userContent,
+  withModelCall,
+  type ApprovalOutcome,
+  type AttachmentRef,
+  type SubagentMentionRef,
+  type InboxSplice,
+  type InboxState,
+  type ProjectionFold,
+  type ProjectionSession,
+  type ProjectionUnit,
+  type QueuedInput,
+  type QueuedInputSource,
   type SessionAddress,
   type SessionEntry,
   type SessionEvent,
   type SessionEventMap,
   type SessionLog,
+  type SpillStore,
+  type StepInbox,
+  type SubagentSettleReason,
+  type TurnAbortCause,
   type TurnEndReason,
+  type UserMessageSource,
 } from '@nexus/core';
-import type { Event, WireChannel } from '@nexus/wire';
-import { channelOfMethod, eventId } from '@nexus/wire';
+import type { Event, ThreadFeedFrame, WireChannel } from '@nexus/wire';
+import {
+  channelOfMethod,
+  DELEGATION_TOOL_NAMES,
+  eventId,
+  LLM_RETRY,
+  LLM_RETRY_STARTED,
+  GOAL_ACTIVATION,
+  MESSAGE_DISCARD,
+  SessionReferenceError,
+  SUBAGENT_STATUS,
+} from '@nexus/wire';
+import type { CustomFrameData, SubagentStatusPayload } from '@nexus/wire';
 
 import {
+  BoundedQueue,
+  DEFAULT_DOWNLINK_MAX_BYTES,
+  DOWNLINK_MAX_DEPTH,
+  boundFrame,
+} from './bounded-event-queue.js';
+import { RootGoal } from './goal-wire.js';
+import { imageOffloadData } from './image-offload-wire.js';
+import {
+  compactionData,
   contextMeasureData,
   deliverablesData,
+  type ClaimedInput,
+  inboxData,
+  type InboxClaim,
   isTodosReset,
   modelUsageData,
   SessionTotals,
+  planModeData,
+  subagentCatalogData,
+  titleData,
   todosData,
   workspaceChangesData,
 } from './conversation-history.js';
+import type { ProjectionChildren } from './projection-children.js';
+import { ProjectionCoalescer } from './projection-coalescer.js';
+import { RUN_DURABILITY } from './pruned-memory-saver.js';
+import { projectionData } from './projection-wire.js';
 import { driveGoalRound } from './goal-driver.js';
+import {
+  parseReferencedText,
+  prepareSessionReferences,
+  type NormalizedReference,
+  type ParsedReferencedText,
+  type SessionReferenceReader,
+} from './session-reference.js';
+import type { SessionReferencePolicy } from './session-reference-budget.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
-import { toolResultText } from './tool-result-text.js';
+import { isBackgroundAddress } from './background-run-id.js';
+import { capToolResultMeta, toolResultText } from './tool-result-text.js';
+import { assertThreadTitleLimits, ensureFallbackTitle } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
+import { threadTitleConfigSchema } from './settings/thread-title.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
+import { TURN_TIMEOUT_REASON } from './settings/turn-timeout.js';
+import { startTurnClock, unsettledToolNames } from './turn-clock.js';
+import type { TurnClock } from './turn-clock.js';
+// 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
+import {
+  classifyTurnFailure,
+  failureOriginalText,
+  fixedFailureMessage,
+  turnFailureOf,
+} from './live-model.js';
+import {
+  answerElicitation,
+  declineAll,
+  parseMcpElicitation,
+  questionPayloadOf,
+  systemAnswerReasonOf,
+  urlKeysOf,
+} from './mcp-elicitation.js';
+import type { McpElicitation, SystemAnswerReason } from './mcp-elicitation.js';
+import { renderGoalRoundPrompt } from '@nexus/goal';
+import type {} from '@nexus/plugin-plan-mode';
+import type {} from '@nexus/plugin-workspace-changes';
 
 /** 基座 v3 run 抽出來的一顆原始封包（`GraphRunStream implements AsyncIterable<ProtocolEvent>`）。 */
 interface RawProtocolEvent {
@@ -119,7 +240,7 @@ interface SubagentProjection {
  *
  * 形狀照 `langchain@1.5.10` 的 `dist/agents/transformers/tool-call.js` 與 `subagent.js`。
  */
-interface RunProjections {
+export interface RunProjections {
   readonly toolCalls?: AsyncIterable<ToolCallProjection>;
   readonly subagents?: AsyncIterable<SubagentProjection>;
 }
@@ -138,15 +259,17 @@ const ignore = (): void => undefined;
  * **這不是吞錯。** 這一輪的失敗照舊以 `lifecycle failed` 上線、記成 `turn/failed`；工具的錯照舊由
  * `containment` 回給模型。標掉的只是那份沒有人要讀的副本。
  *
- * **偏離，登記**：dsh 沒有對應物——它的串流不造出這種 promise，行程層的 unhandled rejection 在那邊是
- * 「大聲死」（`installFailLoud`），所以我們也不在行程層接。代價是這裡**依賴投影的形狀**：哪天 langchain
- * 加一種帶 promise 的原生投影，這裡會漏。上游修掉那天，`tool-throw-orphan.test.ts` 的上游絆索會紅，
- * 這一段該拆。
+ * **偏離，登記**：dsh 沒有對應物——它的串流不造出這種 promise。行程層我們現在和 dsh 一樣大聲死
+ * （`installFailLoud`，[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 裝在 `serve.ts` 的 `main()`），
+ * 所以這裡標掉的是**已知會產生的孤兒**，不是替行程層的 handler 讓路：沒標到的 rejection 會被那個 handler
+ * 當成致命失敗收尾、以 1 結束。代價是這裡**依賴投影的形狀**：哪天 langchain 加一種帶 promise 的原生
+ * 投影，這裡會漏，而漏的後果現在是行程以 1 結束（帶標籤診斷），不再是 Node 預設的無診斷崩潰。
+ * 上游修掉那天，`tool-throw-orphan.test.ts` 的上游絆索會紅，這一段該拆。
  *
  * 不等它：投影在 run 收尾（或失敗）時才關，而那時 pump 早就往下走了。迭代本身在 run 失敗時也會拋，
  * 所以每一條背景迴圈自己也要接住——不然修掉一顆孤兒又生一顆。
  */
-function markProjectionsHandled(projections: RunProjections): void {
+export function markProjectionsHandled(projections: RunProjections): void {
   if (projections.toolCalls !== undefined) markToolCalls(projections.toolCalls);
   if (projections.subagents !== undefined) markSubagents(projections.subagents);
 }
@@ -184,15 +307,102 @@ export interface PumpAgent {
     input: never,
     config: {
       readonly version: 'v3';
+      readonly durability?: typeof RUN_DURABILITY;
       readonly configurable: {
         readonly thread_id: string;
         /** 這一輪的中止訊號。**不交給 LangGraph 的 `signal`**，理由見 `@nexus/core` 的 `turn-cancel.ts`。 */
         readonly [TURN_CANCEL_CONFIG_KEY]?: AbortSignal;
+        /** 插話的領取口（#710）。圖裡沒掛那顆 middleware 就沒人讀，見 `@nexus/core` 的 `step-inbox.ts`。 */
+        readonly [STEP_INBOX_CONFIG_KEY]?: StepInbox;
+        /** 準入閘門（#633）：每次模型呼叫之前問，回 `true` 就擋下。只有接了整理檔的組裝才放。 */
+        readonly [ARCHIVE_GATE_CONFIG_KEY]?: () => boolean;
       };
     },
   ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
   getState(config: ThreadConfig): Promise<{ readonly values: unknown }>;
   updateState(config: ThreadConfig, values: Record<string, unknown>): Promise<unknown>;
+}
+
+/**
+ * 送出佇列的一件開跑時用哪一種 {@link PumpInput}，**由它的 `source` 推出來**（[#686](https://github.com/DemianLi/nexus-agent/issues/686)）。
+ *
+ * `turn/start` 的 `kind` 是授權的判別欄，佇列項的 `source` 是另一個判別式；兩者之間的映射寫在這一支，對 `source.kind`
+ * 窮舉。`QueuedInputSource` 加成員時，這裡當場編不過，不會只紅在 wire 的投影——否則新成員的那一輪會被靜靜寫成 `message`，
+ * 讀者把它當成人說的話。
+ *
+ * @param item - 輪到的那一件。
+ * @returns 開這一輪的輸入。
+ */
+function pumpInputOf(item: QueuedInput): PumpInput {
+  const source = item.source;
+  switch (source.kind) {
+    case 'user':
+      return {
+        kind: 'message',
+        text: item.text,
+        // 帶了請求編號的才把佇列項目的 id 一起帶到 `turn/start`（`runId`）：領走之後它就不在收件匣上了，重送要靠日誌認回來。
+        ...(source.requestId === undefined ? {} : { id: item.id, requestId: source.requestId }),
+        ...(source.clientTimeZone === undefined ? {} : { clientTimeZone: source.clientTimeZone }),
+        ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
+        ...(item.mention === undefined ? {} : { mention: item.mention }),
+      };
+    case 'subagent-settled':
+      return {
+        kind: 'subagent-settled',
+        text: item.text,
+        summary: source.summary,
+        ...(source.reason === undefined ? {} : { reason: source.reason }),
+        ...(source.cause === undefined ? {} : { cause: source.cause }),
+        senderSessionId: source.senderSessionId,
+      };
+    case 'agent-message':
+      return { kind: 'agent-message', text: item.text, senderSessionId: source.senderSessionId };
+    case 'goal':
+      return {
+        kind: 'goal',
+        text: item.text,
+        goalId: source.goalId,
+        revision: source.revision,
+        round: source.round,
+      };
+    default: {
+      const unhandled: never = source;
+      throw new Error(`送出佇列的來源 ${JSON.stringify(unhandled)} 沒有對應的輸入種類`);
+    }
+  }
+}
+
+/**
+ * 插話被領走時寫進 `user/message` 的來源，由佇列項的 `source` 推出來（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）。
+ * 授權判別看這一格：`user` 才是人，結算通知不是（dsh 的 `SubagentSettledMessageSource`）。窮舉，理由同 {@link pumpInputOf}。
+ */
+function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
+  switch (source.kind) {
+    case 'user':
+      return {
+        kind: 'user',
+        ...(source.requestId === undefined ? {} : { requestId: source.requestId }),
+        ...(source.clientTimeZone === undefined ? {} : { clientTimeZone: source.clientTimeZone }),
+      };
+    case 'subagent-settled':
+      return {
+        kind: 'subagent-settled',
+        form: 'notice',
+        summary: source.summary,
+        ...(source.reason === undefined ? {} : { reason: source.reason }),
+        ...(source.cause === undefined ? {} : { cause: source.cause }),
+        senderSessionId: source.senderSessionId,
+      };
+    case 'agent-message':
+      return { kind: 'agent-message', form: 'relay', senderSessionId: source.senderSessionId };
+    case 'goal':
+      // 目標續行只走 `next-turn`（開一輪），不是插話；`updateQueue` 也不收把它改成插話。走到這裡是寫的那一側壞了。
+      throw new Error('目標續行不能作為輪中插話被領走');
+    default: {
+      const unhandled: never = source;
+      throw new Error(`送出佇列的來源 ${JSON.stringify(unhandled)} 沒有對應的 user/message 來源`);
+    }
+  }
 }
 
 /**
@@ -202,7 +412,42 @@ export interface PumpAgent {
  * 上那顆 `turn/start` 的 `kind`——而那一格是授權的判別欄（`session-log.ts`）。
  */
 export type PumpInput =
-  | { readonly kind: 'message'; readonly text: string }
+  | {
+      readonly kind: 'message';
+      readonly text: string;
+      /**
+       * 這一件在送出佇列裡的 id（#637）。wire 拿 `run.start` 回給呼叫端的 `run_id` 填，畫面據它對上自己送出的那一句；
+       * 省略就由 pump 自己產一個。
+       */
+      readonly id?: string;
+      /**
+       * 客戶端給這句話的請求編號（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）。
+       * 進佇列那一件的 `source`、開跑時的 `turn/start`、插話領走時的 `user/message` 都帶著它，重送時由
+       * {@link ThreadPump.findPromptRequest} 認出。省略就是客戶端沒帶，日誌與以前位元組相同。
+       */
+      readonly requestId?: string;
+      /**
+       * 使用者的時區（`run.start` 的 `client_time_zone`，[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)），邊界上已正規化。
+       * 進佇列那一件的 `source`、開跑時的 `turn/start`、插話領走時的 `user/message` 都帶著它，time-context 據此告訴模型使用者在哪個時區。
+       * 省略就是客戶端沒帶，日誌與以前位元組相同。
+       */
+      readonly clientTimeZone?: string;
+      /**
+       * 插話（#710，`run.start` 的 `mode: 'steer'`）：這一輪還收插話就排進 `next-step`，下一步送進模型、不開新的一輪；
+       * 不收了（閒著、按了停止、正在收尾）就排到 `next-turn` 的**頭**，照樣開一輪。見 {@link ThreadPump.submit}。
+       */
+      readonly steer?: true;
+      /**
+       * 這句話帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），照選取順序，只放參照；呼叫端（`run.start`）
+       * 已經收過收據、驗過圖。空陣列與省略同義，進佇列前正規化成省略。
+       */
+      readonly attachments?: readonly AttachmentRef[];
+      /**
+       * 這句話點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）；呼叫端（`run.start`）已驗過名字在清單上。
+       * 進佇列、`turn/start`、插話的 `HumanMessage` 都帶著它，形狀見 `@nexus/core` 的 `subagent-mention.ts`。
+       */
+      readonly mention?: SubagentMentionRef;
+    }
   | {
       readonly kind: 'resume';
       /**
@@ -216,32 +461,108 @@ export type PumpInput =
        */
       readonly interruptId: string;
       readonly response: unknown;
+      /**
+       * 這一次回答**不是人答的，是系統代答**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)，MCP 反問的
+       * `url` 模式與子代理）：這一輪裡記一顆 `interrupt/system-answered`。人答的路不帶。
+       */
+      readonly systemAnswered?: {
+        readonly reason: SystemAnswerReason;
+        readonly keys: readonly string[];
+      };
     }
-  | ({ readonly kind: 'goal' } & GoalRoundRequest);
+  | ({ readonly kind: 'goal' } & GoalRoundRequest)
+  | {
+      /**
+       * 背景子代理結算的通知（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：執行期的記帳，**不是人說的話**。
+       * 只有送出佇列開跑時會走到（{@link pumpInputOf}），它與 `goal` 一樣在圖上是一則 `HumanMessage`，差別全在日誌上
+       * `turn/start` 的 `kind`。
+       */
+      readonly kind: 'subagent-settled';
+      readonly text: string;
+      readonly summary: string;
+      /** 怎麼收的（#884）。選填：從舊日誌折出來的排著的一件沒有。 */
+      readonly reason?: SubagentSettleReason;
+      /** `reason` 是 `aborted` 時為什麼停（#1847）。選填，同上。 */
+      readonly cause?: TurnAbortCause;
+      readonly senderSessionId: string;
+    }
+  | {
+      /**
+       * 背景子代理用 `send_message` 寫來的話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）：agent 寫的，
+       * **不是人說的話**。同 `subagent-settled`，只有送出佇列開跑時會走到。`text` 含 dsh 的前綴 `Agent <寄件人> sent a message: `。
+       */
+      readonly kind: 'agent-message';
+      readonly text: string;
+      readonly senderSessionId: string;
+    };
 
 interface Subscriber {
   readonly channels: readonly WireChannel[];
-  readonly queue: Event[];
+  /** 位元組有界（#1504，偏離 B／C 的登記見 `bounded-event-queue.ts`）。 */
+  readonly queue: BoundedQueue<Event>;
   wake?: () => void;
   done: boolean;
 }
 
+/**
+ * 排著、還沒開跑的一件事（[#629](https://github.com/DemianLi/nexus-agent/issues/629)）。
+ *
+ * 分兩種，照 dsh：**答覆**（`resume` 與收回）屬於停在核准點的那一輪，**開新一輪的**（說話、續行）是收件匣
+ * 裡的東西，只在一輪開始時領（`packages/core/agent-loop/src/agent.ts:296-330` 的 `turn()`，`477b4f4`）。
+ */
+interface QueuedJob {
+  /** 是答覆：停在核准點時照樣跑，而且排在開新一輪的前面。 */
+  readonly answers: boolean;
+  /** 人送出的那一句在送出佇列裡的 id（#637）。續行那一輪與答覆沒有。 */
+  readonly itemId?: string;
+  /**
+   * 是回答核准的那一種（`resume`），不是收回：它跑起來會接著叫模型，所以停在核准點時送來的插話由它領走（#710）。
+   * 收回（{@link ThreadPump.#withdraw}）不叫模型。
+   */
+  readonly resumes?: true;
+  readonly run: () => Promise<void>;
+  readonly resolve: () => void;
+  readonly reject: (error: unknown) => void;
+}
+
 /** 掛在這條 thread 上、還沒被回答的其中一顆中斷。 */
+/**
+ * 這條 thread 對全部 thread 共用的那條下行講的事（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：
+ * 那條線上的 frame 拿掉 `threadId`，由接上的人補（`thread-feed.ts`）。契約見 `@nexus/wire` 的 `THREAD_FEED_PATH`。
+ */
+export type PumpActivity = WithoutThread<ThreadFeedFrame>;
+
+/** 逐個成員拿掉 `threadId`（聯集上的 `Omit` 會把成員併成一個）。 */
+type WithoutThread<F> = F extends unknown ? Omit<F, 'threadId'> : never;
+
 export interface PendingInterrupt {
   readonly interruptId: string;
   /** 這一批要回答幾筆決定——基座逐 index 配對，長度不符當場拋。 */
   readonly actionCount: number;
   /**
-   * 停在核准閘門上的那幾顆工具的名字（酬載的 `actionRequests[].name`）；問答那一種是空的。
+   * 停在核准上的那幾顆工具的名字（酬載的 `actionRequests[].name`）；問答那一種是空的。核准閘門與在本體裡問人的
+   * `request_sandbox_escalation`（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）發的是同一個形狀。
    *
    * 重播靠它分兩種等法（[#317](https://github.com/DemianLi/nexus-agent/issues/317)）：日誌上兩種都只留一顆沒落定的
-   * `tool/call` 與一顆只帶 id 的 `interrupt/raised`，閘門的酬載也沒有 callId——這裡是唯一分得出來的地方。
+   * `tool/call` 與一顆只帶 id 的 `interrupt/raised`，核准的酬載也沒有 callId——這裡是唯一分得出來的地方。
    */
   readonly gatedTools: readonly string[];
+  /**
+   * 發出去的那一顆 `input.requested`，**蓋過號的原物**（[#728](https://github.com/DemianLi/nexus-agent/issues/728)）。
+   *
+   * 中斷的酬載只在這顆 frame 上，日誌只記一顆帶 id 的 `interrupt/raised`。之後才接上的下行由
+   * {@link ThreadPump.subscribe} 補送它，重新整理的網頁因此拿得回面板。
+   */
+  readonly request: Event;
+  /**
+   * 這顆是 MCP server 的反問時，驗過形狀的原酬載（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。
+   * 廣播出去的是翻成問答卡的那一份，人的回覆要靠它翻回 adapter 要的 `{ responses }`（{@link answerElicitation}）。
+   */
+  readonly elicitation?: McpElicitation;
 }
 
 /** 基座把中斷發在 `updates` 上的那一顆的 data 形狀。 */
-interface InterruptEntry {
+export interface InterruptEntry {
   readonly id: string;
   readonly value: unknown;
 }
@@ -266,7 +587,7 @@ function interruptEntriesOf(values: unknown): readonly InterruptEntry[] {
   );
 }
 
-function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
+export function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
   // `updates` 的 data 是 `{ node, values }`，中斷那一顆的 values 才是中斷清單。
   return interruptEntriesOf((data as { values?: unknown } | null)?.values);
 }
@@ -295,14 +616,46 @@ function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
  * @returns 認得出中斷條目就是 `true`。
  */
 function isSuspensionMessage(message: unknown): boolean {
-  if (typeof message !== 'string') return false;
+  return suspensionEntriesOf(message).length > 0;
+}
+
+/** `tool-error` 的訊息 parse 得出來的中斷條目；不是中斷就是空的。 */
+function suspensionEntriesOf(message: unknown): readonly InterruptEntry[] {
+  if (typeof message !== 'string') return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(message);
   } catch {
-    return false;
+    return [];
   }
-  return Array.isArray(parsed) && interruptEntriesOf(parsed).length > 0;
+  return interruptEntriesOf(parsed);
+}
+
+/**
+ * 這顆 `tool-error` 是工具**本體**停在核准上嗎（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）——是的話
+ * 整顆不上線。
+ *
+ * 照 dsh，核准的等待不畫在工具卡上：卡維持執行中，面板接管輸入框（#317）。停在核准閘門上的那顆本體沒被呼叫到，
+ * 基座不發 `tool-started` 也不發這顆，所以從來不是問題；`request_sandbox_escalation` 照 dsh 在本體裡問人之後，
+ * 本體被呼叫到了，中斷又是拋出來的，基座就跟問答一樣發一顆 `tool-error`。換成 `tool-suspended` 會畫成
+ * 「等你回答」、重新整理又變回執行中（重播靠 `gatedTools` 認名字）；原樣放行會畫成失敗。所以丟掉。
+ *
+ * **只認明寫 `kind: 'approval'` 的**：判別式缺席在 `@nexus/wire` 那側是「當核准」的向後相容，但這裡丟掉的是一顆
+ * frame，認錯的代價是一張該變「等你回答」的卡停在執行中，所以只收明著說的那一種。
+ *
+ * @param data - 基座給的那顆 `tools` data。
+ * @returns 要丟掉就是 `true`。
+ */
+export function isApprovalSuspension(data: unknown): boolean {
+  const shaped = data as { event?: unknown; message?: unknown } | null;
+  if (shaped === null || typeof shaped !== 'object' || shaped.event !== 'tool-error') return false;
+  const entries = suspensionEntriesOf(shaped.message);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      (entry) => (entry.value as { kind?: unknown } | null)?.kind === APPROVAL_INTERRUPT_KIND,
+    )
+  );
 }
 
 /**
@@ -346,7 +699,7 @@ export function classifyToolData(data: unknown): unknown {
  * `tool-started` 來了換掉 `input`——這是 #269 登記的偏離：工具卡的參數由 pump 換，因為開卡的
  * `tool-started` 是基座產的，我們能做的是轉發時改它。
  *
- * **不讀 core 的載體**：那一份在工具落定時就刪鍵，而這一層讀到 frame 的時刻可能晚於落定。
+ * **不讀 core 記在 AI 訊息上的記號**（`invalid-tool-args.ts`）：這一層看的是串流 frame，不是 graph state。
  * 同一條串流上的先後則是保證的：模型那一段收尾之後，工具節點才開始。
  *
  * @param data - `messages` 那一顆的 `data`。
@@ -395,10 +748,21 @@ function failureTextOf(output: unknown): string | undefined {
   return typeof content === 'string' ? content : '未指名的錯誤';
 }
 
-/** 日誌對一次呼叫的判定（#296）：失敗與否，與失敗時模型看到的那一句。 */
+/**
+ * 日誌對一次呼叫的判定（#296）：失敗與否、模型看到的那一句、給畫面的 `meta`（#617，已照上限截過；
+ * 失敗的不帶），與失敗的錯誤碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
+ */
 interface ToolVerdict {
   readonly failed: boolean;
   readonly text: string | undefined;
+  readonly meta?: unknown;
+  /**
+   * 日誌 `tool/result.error.code` 的那個碼，原樣（例如 `ABORTED_BEFORE_DISPATCH`、`FS_SANDBOX_DENIED`）。
+   * 照 dsh 碼跨線（`packages/core/agent-loop/src/tool-calls.ts:285` 把 `error` 放進 `tool/result`，
+   * `packages/client/ui-chat/src/client/conversation-nodes/tool.ts:76` 原樣交給 client 的工具節點），畫面比碼不比字。
+   * 只在失敗那一支上線，見 {@link applyVerdict}。
+   */
+  readonly code?: string;
 }
 
 /** 已經轉發出去、還在等日誌判定的那顆 `tool-finished`。更正時原樣帶回它的 namespace 與 data。 */
@@ -411,21 +775,29 @@ interface ForwardedFinish {
  * 把日誌的判定套到一顆 `tool-finished` 的 data 上。
  *
  * `message` 是**這次呼叫的結果文字**，成功與失敗都帶（#439）：成功時就是日誌那一則的內容，
- * 沒抽出文字（多塊內容）就不帶這一格；失敗時取同一段字，沒有的話退回本體自己說的，再退回
+ * 沒抽出文字（內容混了非文字）就不帶這一格；失敗時取同一段字，沒有的話退回本體自己說的，再退回
  * 「未指名的錯誤」。畫面上分紅字還是輸出，看的是 `failed`，同 dsh 的 content ＋ isError。
  */
 function applyVerdict(
   data: Record<string, unknown>,
   verdict: ToolVerdict,
 ): Record<string, unknown> {
-  const { failed: _failed, message: bodyText, ...rest } = data;
+  const { failed: _failed, message: bodyText, meta: _meta, ...rest } = data;
   if (!verdict.failed) {
-    return verdict.text === undefined ? rest : { ...rest, message: verdict.text };
+    return {
+      ...rest,
+      ...(verdict.text === undefined ? {} : { message: verdict.text }),
+      // `meta` 同 dsh 的 `SessionWireEvent.data.meta`：原封不動交給 client 的卡片模型驗。
+      ...(verdict.meta === undefined ? {} : { meta: verdict.meta }),
+    };
   }
   return {
     ...rest,
     failed: true,
     message: verdict.text ?? (typeof bodyText === 'string' ? bodyText : '未指名的錯誤'),
+    // 欄位名照協定 `ToolErrorData` 的 `code`。`tool-finished` 的 data 在協定裡是 `Extensible`，
+    // 上面的 `failed`、`message`、`meta` 本來就是協定外的，多這一格同理（#667）。
+    ...(verdict.code === undefined ? {} : { code: verdict.code }),
   };
 }
 
@@ -445,9 +817,33 @@ function cardNamespace(address: SessionAddress): readonly string[] {
 function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
   switch (input.kind) {
     case 'message':
-      return { kind: 'message', text: input.text };
+      return {
+        kind: 'message',
+        text: input.text,
+        ...(input.attachments === undefined || input.attachments.length === 0
+          ? {}
+          : { attachments: input.attachments }),
+        ...(input.mention === undefined ? {} : { mention: input.mention }),
+        // 兩格一起寫、一起缺（#1335）：沒有 `id` 的話（手搭的呼叫端）認出重送也回不了原本那一件，所以不寫半套。
+        ...(input.requestId === undefined || input.id === undefined
+          ? {}
+          : { requestId: input.requestId, runId: input.id }),
+        // 和 `requestId` 各自獨立（#1629）：只帶時區沒帶編號的送出也要記下時區。
+        ...(input.clientTimeZone === undefined ? {} : { clientTimeZone: input.clientTimeZone }),
+      };
     case 'resume':
       return { kind: 'resume' };
+    case 'subagent-settled':
+      return {
+        kind: 'subagent-settled',
+        text: input.text,
+        summary: input.summary,
+        ...(input.reason === undefined ? {} : { reason: input.reason }),
+        ...(input.cause === undefined ? {} : { cause: input.cause }),
+        senderSessionId: input.senderSessionId,
+      };
+    case 'agent-message':
+      return { kind: 'agent-message', text: input.text, senderSessionId: input.senderSessionId };
     case 'goal':
       return {
         kind: 'goal',
@@ -465,27 +861,60 @@ function actionCountOf(value: unknown): number {
   return Array.isArray(requests) ? requests.length : 0;
 }
 
-/** 這顆中斷停在閘門上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。 */
-function gatedToolsOf(value: unknown): string[] {
+/**
+ * 這顆中斷停在核准上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。
+ *
+ * @param nested - 中斷是前景子代理發的（namespace 不空，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）。那時 root 上**停著的是委派
+ *   的那一張卡**（`task`／`subagent`，它的本體就是這個子代理）：它跟核准閘門上的工具一樣維持「執行中」，不畫成「等你回答」，所以委派工具名也算進去
+ *   （即時那條 {@link isApprovalSuspension} 不改卡，重播靠這份名字認）。同樣認名字不認 callId：同一步另一顆同名的委派卡也會維持執行中，它本來就在跑。
+ */
+function gatedToolsOf(value: unknown, nested = false): string[] {
   const requests = (value as { actionRequests?: unknown } | null)?.actionRequests;
   if (!Array.isArray(requests)) return [];
-  return requests.flatMap((request: unknown) => {
+  const names = requests.flatMap((request: unknown) => {
     const name = (request as { name?: unknown } | null)?.name;
     return typeof name === 'string' ? [name] : [];
   });
+  return nested ? [...names, ...DELEGATION_TOOL_NAMES] : names;
 }
 
+/** 改、刪送出佇列裡的一件（#637），或把它改成插話（#710）。照 dsh 的 `updateQueue` 的三種 action。 */
+export type QueueAction =
+  | { readonly kind: 'edit'; readonly text: string }
+  | { readonly kind: 'remove' }
+  | { readonly kind: 'steer' };
+
+const settled = (): void => undefined;
+
+/** 續行預約連續失效幾次就停用續行，見 `ThreadPump.#goalDropStreak`。 */
+const GOAL_DROP_LIMIT = 3;
+
+/** 人按了停止。見 `session-log.ts` 的 `TurnAbortCause`。 */
+const USER_CAUSE: TurnAbortCause = { kind: 'user' };
+
+/** 一輪的時鐘到點（#1624）。見 `settings/turn-timeout.ts`。 */
+const TURN_TIMEOUT_CAUSE: TurnAbortCause = { kind: 'hook', reason: TURN_TIMEOUT_REASON };
+
 /** 人按了停止——`turn/end` 帶的那一格。見 `session-log.ts` 的 `turn/end`。 */
-const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: { kind: 'user' } };
+const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: USER_CAUSE };
+
+/** 這一輪被中止時 `turn/end` 帶的那一格：原因記在 {@link CurrentRun.cause}，沒記就是人按了停止。 */
+function abortedBy(current: CurrentRun): TurnEndReason {
+  return { kind: 'aborted', cause: current.cause ?? USER_CAUSE };
+}
+
+/** 被準入閘門擋下的一輪（#633），見 {@link ThreadPump.#runOnce} 的 catch。 */
+const BLOCKED: TurnEndReason = { kind: 'blocked' };
 
 /**
  * 派子代理的那顆工具的名字。
  *
  * **只用在收回時選碼**：停在核准點時懸著的 root 呼叫，一般是那幾顆等核准的（從沒開始 →
  * `ABORTED_BEFORE_DISPATCH`）；而**等核准的是子代理的話**，root 這一層懸著的是 `task` 本身——它早就
- * 開始了，是 `ABORTED`。名字取自 deepagents 的 `task` 工具。
+ * 開始了，是 `ABORTED`。名字取自 deepagents 的 `task` 工具，與背景選項開啟時模型看到的 `subagent`
+ * （#831）——兩個都是「派子代理的那顆」。
  */
-const DELEGATION_TOOL = 'task';
+const DELEGATION_TOOLS: readonly string[] = DELEGATION_TOOL_NAMES;
 
 /**
  * 正在跑的那一輪：它自己的中止控制器，與 pump 在線上看到的、root 那則還沒講完的回覆。
@@ -494,16 +923,97 @@ const DELEGATION_TOOL = 'task';
  * 經過的是這條線（見 `@nexus/core` 的 `turn-cancel.ts`「兩處偏離」）。這裡收到的正好是瀏覽器畫出
  * 來的那些字。
  */
+/**
+ * 「這一刻的 async 鏈在哪一輪裡」（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。值是那一輪的 {@link CurrentRun}。
+ *
+ * 對應 dsh 的 `ctx.agents.currentInitiator()`（`packages/core/agent-loop/src/agent.ts` 的
+ * `loopCtx.agents.withInitiator(this, () => this.kick())`）：`goal-round-driver` 看到 `goal/changed` 的 `pause` 時，只有
+ * `currentInitiator() !== agent`——也就是這顆變更不是從 agent 自己這一輪的呼叫鏈裡寫的——才會中止那一輪
+ * （`goal-round-driver/src/index.ts:305-311`）。模型在輪內用 `update_goal` 暫停，工具跑在這一輪的 async 鏈上，寫日誌時
+ * 訂閱者同步地被叫到，`getStore()` 就是這一輪；人從 wire 或斜線命令下的暫停跑在 HTTP 請求自己的鏈上，沒有這個 store。
+ *
+ * **比的是這一輪的身分，不是「有沒有 store」**：這個 store 是模組層級的，所有 thread 共用同一個 `AsyncLocalStorage`，而且 store 會跟著
+ * 輪內排出去的計時器與回呼流到它們觸發的那一刻。比身分（`getStore() === this.#current`）就同時擋掉兩種誤判：別條 thread 的輪內鏈
+ * 寫進這條 thread 的暫停（身分是另一條 pump 的 `CurrentRun`），和這一輪早就收了、它排的計時器晚到、碰巧撞上下一輪才觸發的暫停
+ * （身分是舊的那一輪）。
+ */
+const runScope = new AsyncLocalStorage<CurrentRun>();
+
+/**
+ * 一輪失敗、`turn/failed` 寫進日誌之後交給外面的那一份（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)）：
+ * 管理者從 thread 與回合對得回伺服器日誌、再對到會話日誌的那一筆與閘道的那一次請求。**只有編號與失敗碼，不含訊息本文**
+ * （訊息可能帶路徑或使用者內容，那些留在會話日誌，誰能讀照會話日誌的規矩；偏離 dsh 的登記見 #1536）。
+ */
+export interface TurnFailedReport {
+  readonly threadId: string;
+  /** 這一輪的 `run_id`（送出佇列那一件的 id）。不是從佇列領走的輪（續答核准、直接叫 `submit` 的）沒有。 */
+  readonly runId?: string;
+  /**
+   * `seq` 屬於哪一份日誌。**只有背景子代理的失敗才有**（它的 `turn/failed` 寫在子代理自己那份日誌，id 是 `<thread>/<runId>`）；
+   * 沒有＝就是 `threadId` 這條 thread 自己的日誌。
+   */
+  readonly sessionId?: string;
+  /** 剛寫的那一筆 `turn/failed` 在 {@link sessionId}（沒有就是 thread 自己）那份會話日誌裡的 `seq`，用它回頭讀日誌。 */
+  readonly seq: number;
+  readonly code: string;
+  readonly status?: number;
+  /** 供應商的請求編號（`LlmFailure.requestId`）。 */
+  readonly requestId?: string;
+}
+
 interface CurrentRun {
   readonly controller: AbortController;
+  /**
+   * 這一輪為什麼被中止（#1624）；`undefined` 是人按了停止。**不放進 `controller.abort(reason)`**：中止訊號的 `reason` 會被原樣拋出來
+   * （`request-gate.ts` 的 `abortReason`、LangChain 的 `getAbortSignalError`），放一個不是 `Error` 的原因進去，排隊等名額的那一格
+   * 拋的就是一個普通物件。收尾時讀這一格，不讀 `signal.reason`。
+   */
+  cause?: TurnAbortCause;
   /** root 那則回覆到目前為止的文字。`message-finish` 之後清空——講完的那則已經在 checkpoint 裡了。 */
   partial: string;
   /** 同 {@link partial}，是那則回覆到目前為止的推理（#561）。 */
   reasoning: string;
   /** root 有一則回覆講到一半。 */
   replyOpen: boolean;
+  /**
+   * root 上最近一則**還沒落進日誌**的回覆，給新接上的下行補送（[#953](https://github.com/DemianLi/nexus-agent/issues/953)
+   * 第二刀）。跟 {@link partial} 分開：它撐到 `assistant/message` 落盤才放掉，不是撐到 `message-finish`（量過，
+   * `message-finish` 先到 pump、日誌後寫，中間那段重新整理拿不到歷史、線上也沒有，回覆就憑空消失）；而且不收人話。
+   */
+  reply: UnsettledReply | undefined;
   /** root 那顆收尾的 `lifecycle` 已經標成中止送上線了。日誌照它收尾，畫面與日誌才對得上。 */
   stopped: boolean;
+  /** 同 {@link stopped}，標的是撞到輸出上限（#433）。 */
+  maxTokens: boolean;
+  /** 準入閘門擋下了這一輪的某一步（#633）。收尾 frame 據它標 `blocked`，日誌據錯誤的類別收成 `blocked`。 */
+  blocked: boolean;
+  /**
+   * 這一輪不再收插話了（#710）：圖在收尾時沒有插話可領（`@nexus/core` 的 `StepInbox.finish`），或串流已經抽完。
+   * 之後到的插話排 `next-turn`，見 {@link ThreadPump.#acceptsSteer}。
+   */
+  closed: boolean;
+  /**
+   * 這一輪開頭那一句 `@` 的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)），還沒準備成快照的。
+   * 這一輪第一次 `claim` 時領走並清掉（{@link ThreadPump.#takeSteps}）：快照排在那一句人話後面、插話前面。
+   */
+  opening: OpeningReferences | undefined;
+}
+
+/** 一輪開頭那一句人話 `@` 的會話，與快照那則訊息的 id。 */
+interface OpeningReferences {
+  readonly references: readonly NormalizedReference[];
+  readonly messageId: string;
+}
+
+/** 這一次領走的東西：這一輪開頭的快照（有的話），與整條插話。 */
+interface TakenSteps {
+  readonly opening: OpeningReferences | undefined;
+  readonly steps: readonly ClaimedInput[];
+}
+
+/** 快照那則訊息的 id：掛在它所屬那一句人話的 id 後面，日誌、checkpoint、推回模型的是同一則。 */
+function snapshotIdOf(anchorId: string): string {
+  return `${anchorId}:session-reference`;
 }
 
 /** root 那一層的訊息片段（子代理的 namespace 至少兩段，見 `@nexus/wire` 的 `attribute`）。 */
@@ -533,7 +1043,137 @@ function trackRootReply(current: CurrentRun, raw: RawProtocolEvent): void {
   }
 }
 
+/** 一則已經上線、日誌還沒記的 root 回覆：開頭、到目前為止的推理與正文、收尾（有的話）。見 {@link CurrentRun.reply}。 */
+interface UnsettledReply {
+  /** 畫面上那一格的 key：`run_id`，沒有就取 `id`（同 `@nexus/wire` 的 `reduceMessage`）。 */
+  readonly key: string;
+  readonly namespace: readonly string[];
+  readonly node: string | undefined;
+  readonly timestamp: number;
+  /** `message-start` 的 `data` 原樣——`id`（評分用）、`run_id` 都在裡面，補送時才接得上之後的即時片段。 */
+  readonly start: object;
+  reasoning: string;
+  text: string;
+  /** `message-finish` 的 `data` 原樣；還沒收尾是 `undefined`。 */
+  finish: object | undefined;
+}
+
+/**
+ * 跟著 root 那一層的訊息片段，記下 {@link CurrentRun.reply}。
+ *
+ * **只收回覆、不收人話**：圖裡注進來的 human 訊息不上線（{@link ThreadPump.#dropInjectedMessage}），這裡記下它的話，
+ * 補送出去的是一則線上從沒出現過的訊息。**之後的片段認 key 不認順序**：別則訊息的 `message-finish` 不能把這一則收掉。
+ * 跟 {@link trackRootReply} 在同一個同步段裡呼叫、早於廣播，所以 `subscribe` 看到的永遠是已經廣播出去的那一份。
+ */
+function trackUnsettledReply(current: CurrentRun, raw: RawProtocolEvent): void {
+  if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
+  const data = raw.params.data as {
+    event?: string;
+    role?: string;
+    id?: unknown;
+    run_id?: unknown;
+    delta?: { type?: string; text?: string; reasoning?: string };
+  } | null;
+  if (data === null || typeof data !== 'object') return;
+  const key = typeof data.run_id === 'string' ? data.run_id : data.id;
+  if (typeof key !== 'string') return;
+  if (data.event === 'message-start') {
+    if (data.role === 'human') return;
+    current.reply = {
+      key,
+      namespace: raw.params.namespace,
+      node: raw.params.node,
+      timestamp: raw.params.timestamp,
+      start: data,
+      reasoning: '',
+      text: '',
+      finish: undefined,
+    };
+    return;
+  }
+  const reply = current.reply;
+  if (reply === undefined || reply.key !== key) return;
+  if (data.event === 'content-block-delta') {
+    if (data.delta?.type === 'text-delta') reply.text += data.delta.text ?? '';
+    if (data.delta?.type === 'reasoning-delta') reply.reasoning += data.delta.reasoning ?? '';
+  } else if (data.event === 'message-finish') {
+    reply.finish = data;
+  }
+}
+
+/**
+ * 把一則還沒落盤的回覆攤成一串 frame（**還沒蓋號**）：開頭、推理、正文、收尾（有的話）。
+ *
+ * 形狀同歷史重播那一側的 `message()`（`conversation-history.ts`）：推理是 `index: 1`、正文是 `index: 0`，推理排在前面；
+ * 片段合成一顆，不照原本一字一顆送。**照 dsh 的重連 baseline**（`packages/api/session-controller/src/client/sessions/assistant-stream.ts`
+ * 的 `replace`，`5badb15009a`）：進行中那一次嘗試的前綴在連上時一次交出，之後的即時片段接在後面。
+ *
+ * **三處偏離**（載體表達不出來，不是形狀不同）：dsh 的 baseline 與持久視窗在 `follow` 的同一個同步段裡產出，再用序號切掉
+ * 在那之前排進佇列的 frame（`packages/api/session-controller/src/history.ts` 的 `follow`），客戶端還把持久的那則壓到
+ * `end` 才發布；我們的下行與歷史是兩個請求，所以 ①在下行註冊時補送、②蓋新號（合成的片段沒有原始號）、③撐到
+ * `assistant/message` 落盤才放掉（量過 `message-finish` 先到），重疊由折疊器照訊息 id 擋。
+ */
+function replyBaseline(reply: UnsettledReply): Event[] {
+  const frame = (data: object): Event =>
+    ({
+      method: 'messages',
+      params: {
+        namespace: reply.namespace,
+        timestamp: reply.timestamp,
+        ...(reply.node === undefined ? {} : { node: reply.node }),
+        data,
+      },
+    }) as Event;
+  return [
+    frame(reply.start),
+    ...(reply.reasoning === ''
+      ? []
+      : [
+          frame({
+            event: 'content-block-delta',
+            run_id: reply.key,
+            index: 1,
+            delta: { type: 'reasoning-delta', reasoning: reply.reasoning },
+          }),
+        ]),
+    ...(reply.text === ''
+      ? []
+      : [
+          frame({
+            event: 'content-block-delta',
+            run_id: reply.key,
+            index: 0,
+            delta: { type: 'text-delta', text: reply.text },
+          }),
+        ]),
+    ...(reply.finish === undefined ? [] : [frame(reply.finish)]),
+  ];
+}
+
 /** root 那一層「這一輪結束了」的那顆 `lifecycle`：完成與失敗都算。 */
+/** root 那一層正常收尾的 `lifecycle`。失敗的那一顆不算：拋錯記的是 `turn/failed`。 */
+function isRootCompleted(raw: RawProtocolEvent): boolean {
+  return (
+    isRootTerminal(raw) && (raw.params.data as { event?: unknown } | null)?.event === 'completed'
+  );
+}
+
+function isRootFailed(raw: RawProtocolEvent): boolean {
+  return isRootTerminal(raw) && (raw.params.data as { event?: unknown } | null)?.event === 'failed';
+}
+
+/** 這顆 `failed` frame 補上錯誤碼，固定句的碼連字一起換，同 `turn/failed`。 */
+function withFailureDetail(raw: RawProtocolEvent, error: unknown): RawProtocolEvent {
+  const { code } = classifyTurnFailure(error);
+  const fixed = fixedFailureMessage(code);
+  const data = {
+    ...(raw.params.data as object),
+    code,
+    ...(fixed !== undefined && { error: fixed }),
+  };
+  return { ...raw, params: { ...raw.params, data } } as RawProtocolEvent;
+}
+
 function isRootTerminal(raw: RawProtocolEvent): boolean {
   if (raw.method !== 'lifecycle' || raw.params.namespace.length > 0) return false;
   const data = raw.params.data as { event?: unknown; graph_name?: unknown } | null;
@@ -543,8 +1183,8 @@ function isRootTerminal(raw: RawProtocolEvent): boolean {
 /**
  * checkpoint 上最後一則帶工具呼叫的 AI 訊息裡，**還沒配到結果的那幾顆**。
  *
- * 停在核准點時就是那幾顆等核准的。子代理照 dsh 不停下來等人
- * （[#324](https://github.com/DemianLi/nexus-agent/issues/324)），所以 `task` 不會是其中一顆。
+ * 停在核准點時就是那幾顆等核准的。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
+ * 那時 `task` 也是其中一顆沒配到結果的——`gatedToolsOf` 的 `nested` 把委派工具名併進等核准的名單，卡維持「執行中」。
  */
 function danglingToolCalls(values: unknown): { readonly id: string; readonly name: string }[] {
   const messages = (values as { messages?: unknown } | null)?.messages;
@@ -571,9 +1211,17 @@ function danglingToolCalls(values: unknown): { readonly id: string; readonly nam
 export class ThreadPump {
   readonly #agent: PumpAgent;
   readonly #threadId: string;
-  /** 一段工具結果文字放上線的上限，見建構子的 `toolText`（#538）。 */
+  /** `tool-text` 那一列的上限，見建構子的 `toolText`（#538）：管 meta 與壓縮摘要，結果文字自 #736 起不截。 */
   readonly #toolTextMaxBytes: number;
+  /** 退回標題的兩個上限（#647），建構時驗過。 */
+  readonly #titleLimits: ThreadTitleLimits;
+  /** 這台 server 講話的地方，見建構子的 `warn`。 */
+  readonly #warn: ((message: string) => void) | undefined;
+  /** 封存的閘門（#633）：放進圖的 `configurable`，每次模型呼叫之前問。見 {@link ThreadPump.#runOnce} 的 catch。 */
+  readonly #isArchived: (() => boolean) | undefined;
   readonly #subscribers = new Set<Subscriber>();
+  readonly #downlinkMaxBytes: number;
+  readonly #onTurnFailed: ((report: TurnFailedReport) => void) | undefined;
   readonly #sessions: SessionRegistry;
   /**
    * 傳輸層的號，給瀏覽器排序去重用的。
@@ -593,6 +1241,52 @@ export class ThreadPump {
    */
   readonly #pending = new Map<string, PendingInterrupt>();
   /**
+   * 已經記過 `approval/asked`、還欠一顆 `approval/decided` 的中斷 id（#1029）。
+   *
+   * 不能拿 {@link ThreadPump.#pending} 代替：回答收下的那一刻它就清掉了（`submit`），而 decided 要等這一輪的
+   * `turn/start` 落了才寫（審計要落在輪裡）。同 id 再度中斷（沒被答到的那些會帶著原本的 id 重來）時，靠它不重記 asked。
+   */
+  readonly #approvalOpen = new Set<string>();
+  /**
+   * MCP 反問的中斷 id → 它是不是子代理發的（#1098）。**第一次看到時的 namespace 定案**：前景子代理的中斷先以
+   * `["tools:<父呼叫>"]` 出現，隨後同一顆又在 root 層（`[]`）出現一次；只看後面那一顆會把子代理的反問當成 root 的、送給人。
+   */
+  readonly #elicitationOrigins = new Map<string, boolean>();
+  /**
+   * 這一次行程裡開跑的人話：日誌事件的 `seq` → 送出佇列那一件的 id（#1270）。`image/offload` 通知畫面時，同一句人話在客戶端手上可能是
+   * 即時長出來的（`inbox:<id>`）也可能是歷史載入的（`history-<seq>`），所以兩個都給；重啟前的那些不在表裡，只給 `seq`。
+   */
+  readonly #inboxIdBySeq = new Map<number, string>();
+  /**
+   * 核准問題的中斷 id：已經以子代理的 namespace 露過面、等著它在 root 層的第二次露面被吞掉（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）。
+   *
+   * **前景子代理的核准中斷會被看到兩次**（實測，同 #1098 的 MCP 反問）：先以 `["tools:<父呼叫>"]` 出現，隨後同一顆又在 root 層（`[]`）出現。
+   * 兩次都照原樣處理的話，`interrupt/raised` 記兩筆、下行收到兩顆 `input.requested`，而且 {@link ThreadPump.#pending} 被第二次（root 的
+   * namespace）蓋掉，畫面就認不出是哪個子代理在問。所以第一次（子代理的）定案，root 層那次吞掉並忘掉這個 id。
+   * 沒等到 root 層那次露面的 id 會留在這裡（實測兩次露面的 id 相同）；同一顆中斷之後再露面仍是先以子代理的 namespace 出現，所以留著的不會誤吞別的東西。
+   */
+  readonly #nestedApprovals = new Set<string>();
+  /**
+   * 這一輪裡要由系統代答的反問，等這一輪收尾後逐顆 resume（#1098）。**不放進 {@link ThreadPump.#pending}**：沒有人要答，
+   * 下行也不該看到一張沒人按的卡。
+   */
+  #systemAnswers: {
+    interruptId: string;
+    elicitation: McpElicitation;
+    reason: SystemAnswerReason;
+  }[] = [];
+  /**
+   * 最後一顆背景子代理現況的 frame（#867），**帶著它原本的號**。新接上的下行在註冊當下先收到它，見 {@link ThreadPump.subscribe}。
+   * 沒有背景派出、或從沒變過就是 `undefined`。
+   */
+  #subagentStatusFrame: Event | undefined;
+  /** 續行排程器正在飛的次數，見 {@link ThreadPump.goalRoundInFlight}。 */
+  #goalDrives = 0;
+  /** 聽 {@link PumpActivity} 的人，見 {@link ThreadPump.watch}。 */
+  readonly #watchers = new Set<(activity: PumpActivity) => void>();
+  /** 最後一次講出去的 {@link ThreadPump.agentRunning}，見 {@link ThreadPump.#noteStatus}。 */
+  #reportedRunning = false;
+  /**
    * 參數解不開的那幾顆：callId → 模型吐的原字串，見 {@link invalidArgumentsOf}。
    *
    * **活在 thread 上、不是 run 上**：要核准的那顆，模型那一段在第一個 run，`tool-started` 在人按了
@@ -605,12 +1299,12 @@ export class ThreadPump {
    *
    * middleware 往 state 塞一則 `HumanMessage` 時（工作區指令的基線、重複提醒），LangGraph 照樣把它當成
    * 一則訊息串出來：`message-start role: "human"` ＋ 逐段 `content-block-delta`。而 `@nexus/wire` 的
-   * `reduceMessage` 看到 `role: "human"` 就開一顆使用者泡泡——它的註解寫著「**`human` 只有歷史送**：
-   * 線上不回聲人打的字」，那句話一直是**假設**，不是有人在擋。基線一來就被打破：畫面上每個會話開頭都會多
+   * `reduceMessage` 看到 `role: "human"` 就開一顆使用者泡泡——它的註解寫著「**`human` 只有歷史送**」，
+   * 那句話一直是**假設**，不是有人在擋。基線一來就被打破：畫面上每個會話開頭都會多
    * 一顆幾百個位元組的 `<system-reminder>` 泡泡，而那是給模型看的東西，不是誰講的話。
    *
-   * **所以這裡把那個假設變成護欄**：線上一則 human 訊息都不送。人剛打的那句走 `appendHumanTurn`，
-   * 重播的那幾句走歷史（`conversation-history.ts`，它同樣不畫外掛注入的 `user/message`）——兩條都不經過
+   * **所以這裡把那個假設變成護欄**：線上一則 human 訊息都不送。人剛打的那句走 `inbox` 的 `claimed`（開跑那一刻
+   * 由 `#spliceInbox` 推），重播的那幾句走歷史（`conversation-history.ts`，它同樣不畫外掛注入的 `user/message`）——兩條都不經過
    * 這裡。認的是 `run_id`：`content-block-delta` 與 `message-finish` 上沒有 `role`。
    */
   readonly #injectedMessages = new Set<string>();
@@ -647,16 +1341,81 @@ export class ThreadPump {
    * 開頭折起。**這是 pump 唯一記著的投影狀態**——用量表、待辦清單一顆事件就算得出值，這兩個是累計的。
    */
   readonly #totals = new SessionTotals();
-  /** 一個 thread 一次只跑一個 run；後到的 submit 排隊，不平行跑。 */
-  #tail: Promise<void> = Promise.resolve();
   /**
-   * 還沒抽完的 run 有幾段——**排隊的也算**。
-   *
-   * 這個計數存在的理由在 {@link ThreadPump.running}：上行的回應是收件回條，
-   * 「已經收下但還沒開跑」與「正在跑」對發派斜線命令的那一側是同一件事。
+   * root 日誌的目標（[#897](https://github.com/DemianLi/nexus-agent/issues/897)）：從日誌開頭折起，輪數靠 `turn/start{kind:'goal'}`
+   * 推進，所以不像標題或計劃模式一顆事件就算得出值。跟 {@link ThreadPump.#totals} 同樣是 pump 記著的投影狀態。
    */
-  #inFlight = 0;
+  readonly #goal = new RootGoal();
+  /**
+   * 續行授權現在是什麼（#1575 N0376）。行程內的狀態、不落盤：**起始是 `disarmed`**（重啟之後一定是，dsh `agent/created` 一律 disarmed），
+   * 之後只由 {@link ThreadPump.notifyGoalActivation} 改。新接上的下行補送的是「這個值＋目前的目標」，不記上一顆 frame——
+   * 目標的修訂在授權不變時也會變，記著的 frame 會過期。
+   */
+  #goalActivation: 'armed' | 'disarmed' = 'disarmed';
+  /**
+   * 插件投影（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)）：單元清單與同一個折疊器（歷史路由用同一個
+   * `createProjectionFold`）。`#projections` 是 root 日誌那一份的即時折疊，接上 root 時 seed。只收 root：
+   * 歷史路由只讀 root，子代理的即時送出去重新整理就不見了。
+   */
+  readonly #projectionUnits: readonly ProjectionUnit[];
+  readonly #projectionFold: ProjectionFold;
+  #projections: ProjectionSession | undefined;
+  /**
+   * 子代理自己的投影（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）：只有宣告 `children` 的單元，一個子代理一份折疊
+   * （`runId` → 折疊），形狀與理由見 `projection-children.ts`。`#childSeeds` 是上一個行程留下的子代理日誌（啟動時讀進來），
+   * 歷史路由透過 {@link ThreadPump.projectionChildren} 與活著的合起來讀，兩條路讀同一份集合。
+   */
+  readonly #childFold: ProjectionFold;
+  /** 投影 frame 的出口（#1071）：輪中同一個單元連續的變更合成一顆，輪結束與收線之前送完，見 `projection-coalescer.ts`。 */
+  readonly #projectionOut: ProjectionCoalescer;
+  readonly #childUnits: readonly ProjectionUnit[];
+  readonly #childSeeds: ProjectionChildren;
+  readonly #childSessions = new Map<string, ProjectionSession>();
+  /**
+   * 排著、還沒開跑的事。**一個 thread 一次只跑一件**；後到的排隊，不平行跑。
+   *
+   * 挑下一件的規則在 {@link ThreadPump.#nextIndex}：答覆先跑；還有中斷掛著、又沒有答覆排著的時候，
+   * 開新一輪的停住（#629）；按了停止之後開新一輪的也停住（#637）。
+   *
+   * **人送出的那幾件跟 {@link ThreadPump.#inbox} 一一對應、順序相同**：送出時兩邊各加一件，刪的時候兩邊各拿掉
+   * 一件，改不動順序。所以輪到其中一件時，它一定是佇列的第一件（{@link ThreadPump.#runQueued} 會驗）。
+   */
+  readonly #queue: QueuedJob[] = [];
+  /**
+   * 送出佇列（#637）：從 root 日誌的 `inbox/spliced` 折出來的那份，**寫入當下就更新**。不靠日誌的訂閱者：
+   * 訂閱者拋錯只換來一行 warn，而且發佈期間不能寫。照 dsh 的 `mutate`，先算出下一份、驗過，才落日誌、才換掉這一份。
+   */
+  #inbox: InboxState;
+  /** 這個 agent 的圖裡掛沒掛插話的載體（#710），見建構子的 `stepInbox`。 */
+  readonly #stepInboxMounted: boolean;
+  /** 讀被引用的會話（#713）；省略即這條 thread 不收引用，見 {@link ThreadPump.referencedText}。 */
+  readonly #referenceReader: SessionReferenceReader | undefined;
+  /**
+   * 按了停止之後，開新一輪的停住（#637 的 Q2）：照 dsh 的 `cancel({keepInbox: true})`，排著的保留但不跑，等下一次
+   * 送出才喚醒（`agent-loop/tests/cancel.spec.ts:192-216`，`477b4f4`）。重啟之後接回來的佇列也是這個狀態。
+   *
+   * **跟停在核准點的那一種不能併成一個旗標**：那一種 `running` 為真、中斷答完就跑；這一種 `running` 為假、等人再送。
+   */
+  #stopParked = false;
+  /**
+   * 按了停止，還沒看到那一輪怎麼收。**停住以那一輪真的收成中止為準**（{@link ThreadPump.#parkIfStopped}），不以
+   * 按下去的那一刻為準：停止撞上核准點時那一輪照常停在核准點、不落 aborted，那時排著的是在等核准，不是停住。
+   * 那之間又送了一句的話，那一句就是「下一次送出」，把這一格清掉。
+   */
+  #stopRequested = false;
+  /** 一輪的時鐘（#1624），見建構參數 `turnClock`。 */
+  readonly #turnClock: TurnClock | undefined;
+  /** 這條 thread 自己的外溢存檔服務（#1553 N0948），見建構參數 `spillStore`。 */
+  readonly #spillStore: SpillStore | undefined;
+  /** 引用別的會話的上限與預算（#1573 N0862），見建構參數 `referencePolicy`。 */
+  readonly #referencePolicy: SessionReferencePolicy | undefined;
+  /** 有一件正在跑（一輪 run，或一次收回）。 */
+  #busy = false;
+  /** 等「沒有可跑的、也沒在跑」的人，見 {@link ThreadPump.whenIdle}。 */
+  readonly #idleWaiters: (() => void)[] = [];
   #closed = false;
+  /** 收線時舉起：正在等背景子代理的續行排程器放手（#1575，dsh `goal-round-driver` 的 `unloading`）。 */
+  readonly #closing = new AbortController();
   /** 正在跑的那一輪；沒有就是 `undefined`（閒著、停在核准點、或排著還沒開跑）。 */
   #current: CurrentRun | undefined;
   /**
@@ -666,6 +1425,22 @@ export class ThreadPump {
    * 而一條跑到一半忽然開始自己排輪次的 thread 沒有人要得起。
    */
   readonly #driver: GoalDriverPort | undefined;
+  /** 已經排了一次延後的「問排程器」，等它跑。一串 `goal/change` 只問一次。 */
+  #goalDriveScheduled = false;
+  /**
+   * 連續幾次領走時發現預約已經失效、丟掉重排（#638）。預約的失效條件（修訂、輪數、授權、人排在前面）每次都由日誌與目前的
+   * 視圖算出來，照理一次丟掉之後重排的就是有效的；這一格擋的是兩邊算法走散時的空轉——到頂就停用續行並說一聲。
+   * 一輪續行真的開跑就歸零。
+   */
+  #goalDropStreak = 0;
+  /**
+   * 被人從佇列上刪掉或改掉的續行預約，等 pump 閒下來再暫停目標（#638）。照 dsh：`agent/inbox/discarded` 只把
+   * `attempt.cancelled` 立起來，暫停在 `agent/status` 翻成 idle 時才做（`goal-round-driver/src/index.ts:258-283`）。
+   * 刪的當下若還有別的輪在跑，目標在那幾輪期間仍然 active——現在就暫停會讓那幾輪中途被 `goal/change` 攪動。
+   */
+  #cancelledGoalRounds: Extract<QueuedInputSource, { kind: 'goal' }>[] = [];
+  /** pump 自己正在替「被刪掉的續行預約」暫停目標（同步一段）；{@link ThreadPump.#stopRunForHostPause} 看到它就不中止。 */
+  #pausingInternally = false;
 
   /**
    * @param agent - 這條 thread 的 agent。
@@ -674,9 +1449,37 @@ export class ThreadPump {
    * @param rootSeed - root 日誌的 seed：serve 碰到一條以前寫過的 thread 時，上一個行程留下的
    *   事件（[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A，同 CLI 的
    *   `--resume`）。省略即一份新日誌。
-   * @param toolText - 一段工具結果文字放上線的上限（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   * @param toolText - `tool-text` 那一列（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）：工具結果 meta 與壓縮摘要
+   *   放上線的上限；結果文字本身自 [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不截。
    *   值由 `serve.ts` 在起動期從清單解出來、經 `createWireHandler` 傳進來。**省略即 schema 的
    *   預設**——這條路上有二十九個測試呼叫點，全部改成必填買不到任何東西：它們量的不是上限。
+   * @param titleLimits - 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。來路與
+   *   「省略即 schema 的預設」同 `toolText`。**在這裡驗**：寫標題的那一刻已經在一輪裡面，那時才拋只剩一行 warn，標題永遠寫不出來。
+   * @param warn - 這台 server 講話的地方（`createWireHandler` 的 `warn`）。今天只有退回標題寫不進去時會走到它。
+   *   **省略即不講**，同 `createWireHandler`。
+   * @param stepInbox - `agent` 的圖裡掛沒掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
+   *   `createNexusAgent` 回的那一格）。**省略即沒掛**：插話退成排隊，不放進一條沒人領的 `next-step`。
+   * @param sessionReferences - 讀被引用的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。**省略即這條
+   *   thread 不收引用**：帶引用的話會被 {@link ThreadPump.referencedText} 擋下。
+   * @param projectionChildSeeds - 上一個行程留下的子代理日誌（#1028），見 `projection-children.ts`。
+   * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve.ts` 在起動期解出來、
+   *   經 `createWireHandler` 傳進來。**省略即合併器的預設 100**，同 `toolText`。
+   * @param isArchived - 這條 thread 封存了沒有（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`）。
+   *   **省略即沒有封存這回事**（沒接整理檔的組裝）。封存的 thread 不跑模型步驟：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，
+   *   見 {@link ThreadPump.#runOnce} 的 catch。
+   * @param onTurnFailed - 一輪失敗、`turn/failed` 寫進日誌之後叫一次（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），
+   *   serve 用它在伺服器日誌記一行。**回呼拋錯吞掉**，不影響這一輪的收尾。使用者按停止、準入閘門擋下的輪不叫它（那兩條不是失敗）。
+   * @param downlinkMaxBytes - 每條下行的佇列位元組上限（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)，`downlink` 那一列）。
+   *   **省略即 {@link DEFAULT_DOWNLINK_MAX_BYTES}**（2 MiB，照 dsh `TerminalFollower`）。
+   * @param turnClock - 一輪的時鐘（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，`turn-timeout` 那一列）：一輪從
+   *   `turn/start` 起算，到點就照停止鍵的路中止，原因 `hook`。**省略即不限**，同今天。
+   * @param spillStore - 這條 thread 自己的外溢存檔服務（[#1553](https://github.com/DemianLi/nexus-agent/issues/1553) N0948）：
+   *   引用別的會話被截斷時，全文存進這裡、模型拿到讀得回的位址（dsh `session-reference/src/index.ts:348-352`）。同一份實例也給
+   *   外溢層與搜尋上限用（`agent-factory.ts`）。**省略即沒有地方存**，說明裡寫 `storage-not-configured`。
+   * @param referencePolicy - 引用別的會話的上限與預算（[#1573](https://github.com/DemianLi/nexus-agent/issues/1573) N0862，
+   *   `session-reference` 那一列）：一則訊息最多幾條，與每條來源的位元組預算（跟著這條 thread 下一步會走的模型）。
+   *   **省略即 3 條、每條 64 KiB**（`MAX_SESSION_REFERENCES`、`DEFAULT_MAX_REFERENCE_BYTES`），同今天。
+   * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
     agent: PumpAgent,
@@ -684,10 +1487,58 @@ export class ThreadPump {
     driver?: GoalDriverPort,
     rootSeed?: readonly SessionEvent[],
     toolText?: ToolTextConfig,
+    titleLimits?: ThreadTitleLimits,
+    warn?: (message: string) => void,
+    stepInbox = false,
+    sessionReferences?: SessionReferenceReader,
+    projections: readonly ProjectionUnit[] = [],
+    projectionChildSeeds?: ProjectionChildren,
+    projectionFlushMs?: number,
+    isArchived?: () => boolean,
+    downlinkMaxBytes: number = DEFAULT_DOWNLINK_MAX_BYTES,
+    onTurnFailed?: (report: TurnFailedReport) => void,
+    turnClock?: TurnClock,
+    spillStore?: SpillStore,
+    referencePolicy?: SessionReferencePolicy,
   ) {
+    this.#turnClock = turnClock;
+    this.#spillStore = spillStore;
+    this.#referencePolicy = referencePolicy;
+    this.#downlinkMaxBytes = downlinkMaxBytes;
+    this.#onTurnFailed = onTurnFailed;
     this.#agent = agent;
+    this.#isArchived = isArchived;
+    this.#projectionOut = new ProjectionCoalescer(
+      (data) => this.#presentCustom(data),
+      projectionFlushMs,
+    );
+    this.#projectionUnits = projections;
+    this.#childUnits = childProjectionUnits(projections);
+    this.#childFold = createProjectionFold(this.#childUnits, {
+      onFailure: (key, error) =>
+        this.#warn?.(
+          `[投影] thread ${threadId} 的子代理投影 "${key}" 折疊失敗，已停用：${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
+    this.#childSeeds = projectionChildSeeds ?? new Map();
+    // 上一個行程留下的子代理：先折進來、不送——那一段的值由歷史的最新一頁送，同 root。
+    for (const [runId, events] of this.#childSeeds) {
+      this.#childSessions.set(runId, this.#childFold.session(events));
+    }
+    this.#projectionFold = createProjectionFold(projections, {
+      // 每個單元在一份折疊器裡最多回報一次：拋錯的投影只停用自己，產品路徑不受影響（#1026）。
+      onFailure: (key, error) =>
+        this.#warn?.(
+          `[投影] thread ${threadId} 的投影 "${key}" 折疊失敗，已停用：${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
+    this.#stepInboxMounted = stepInbox;
+    this.#referenceReader = sessionReferences;
     this.#threadId = threadId;
     this.#toolTextMaxBytes = (toolText ?? toolTextConfigSchema.parse({})).maxBytes;
+    this.#titleLimits = titleLimits ?? threadTitleConfigSchema.parse({});
+    assertThreadTitleLimits(this.#titleLimits);
+    this.#warn = warn;
     this.#sessions = new SessionRegistry(threadId, rootSeed === undefined ? {} : { rootSeed });
     this.#driver = driver;
     // 訂閱**註冊表**，不是只訂 root：子代理的日誌後來才開，`observe` 會補上每一份（#296）。
@@ -699,6 +1550,19 @@ export class ThreadPump {
         // 總帳只剩這個行程叫的那幾次。**跟訂閱在同一個同步段裡**，中間沒有空檔讓一顆事件兩邊都沒算到或兩邊都算到。
         this.#totals.seed(entry.log.events);
         this.#totals.flush();
+        // 目標同理：那一段的值由歷史的最後一頁送，即時只送之後的變化。
+        this.#goal.seed(entry.log.events);
+        this.#goal.flush();
+        // 投影同理：已經在日誌裡的先折進來、不送，那一段的值由歷史的最新一頁送。
+        this.#projections = this.#projectionFold.session(entry.log.events);
+        this.#reportGoalFailure();
+      }
+      if (entry.address.kind === 'subagent' && this.#childUnits.length > 0) {
+        // 這個子代理的投影折疊（#1028）：已經有（上一個行程讀進來的）就沿用，否則從它目前的日誌開始。
+        const { runId } = entry.address;
+        if (!this.#childSessions.has(runId)) {
+          this.#childSessions.set(runId, this.#childFold.session(entry.log.events));
+        }
       }
       unsubscribes.push(entry.log.subscribe((event) => this.#noteLogEvent(entry, event)));
     });
@@ -706,6 +1570,25 @@ export class ThreadPump {
       unobserve();
       for (const unsubscribe of unsubscribes.splice(0)) unsubscribe();
     };
+    // 上一個行程留下的佇列（#637）：折回來、**停住**，同 dsh「收件匣從日誌折回來，但不自己開跑」
+    // （`.agents/notes/implemented/bug-fix/2026-08-17-durable-web-queue-recovery.md`）。不推：那一段的值由歷史送。
+    // 日誌壞了（範圍超出、id 重複）就在這裡拋，這條 thread 起不來——同 dsh 折疊那一側拋的
+    // `invalid persisted inbox splice`，靜靜收下的話跑的東西會跟佇列對不上。
+    //
+    // **插話那一條（`next-step`）不排工作**：它不開新的一輪，留著的由下一輪的第一次模型呼叫領走（同 dsh 按停止帶
+    // `keepInbox` 之後，下一輪開頭 `claim` 先領 `next-step`）。
+    this.#inbox = foldInbox(this.#sessions.root.events);
+    for (const item of this.#inbox['next-turn']) {
+      // 沒有人等這幾件的結果：resolve、reject 都是空的，收線時 reject 它們也不會變成沒人接的 rejection。
+      this.#queue.push({
+        answers: false,
+        itemId: item.id,
+        run: () => this.#runQueued(item.id),
+        resolve: settled,
+        reject: settled,
+      });
+    }
+    this.#stopParked = this.#inbox['next-turn'].length > 0;
   }
 
   get threadId(): string {
@@ -727,6 +1610,38 @@ export class ThreadPump {
     return this.#sessions.root;
   }
 
+  /**
+   * 這個請求編號收過沒有（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）：
+   * 查現在的收件匣，再查 root 日誌上已落地的 `turn/start`／`user/message`。**三個階段都認得**（排著、已領走、已落日誌，
+   * 含重啟之後），收過就回原本那一件的 `run_id`，呼叫端不再排第二次。判法與偏離登記見 {@link findPromptRequest}。
+   *
+   * @param requestId - 客戶端給的編號。
+   * @returns 收過就是原本那一件的 `run_id`，沒有就是 `undefined`。
+   */
+  findPromptRequest(requestId: string): string | undefined {
+    return findPromptRequest(this.#inbox, this.#sessions.root.events, requestId)?.runId;
+  }
+
+  /**
+   * 這條 thread 掛的會話投影單元。歷史路由用同一份清單折（{@link historyPage}），所以重新整理後長出的狀態與即時一致。
+   */
+  get projectionUnits(): readonly ProjectionUnit[] {
+    return this.#projectionUnits;
+  }
+
+  /**
+   * 子代理自己的日誌集合，給歷史路由折子代理的投影用（#1028）：上一個行程留下的（啟動時讀進來）加上註冊表裡活著的，
+   * 同一個 `runId` 以活著的為準。**沒有單元宣告 `children` 時是空的**——不為了沒人讀的東西把子日誌複製出來。
+   */
+  projectionChildren(): ProjectionChildren {
+    if (this.#childUnits.length === 0) return new Map();
+    const merged = new Map<string, readonly SessionEvent[]>(this.#childSeeds);
+    for (const entry of this.#sessions.list()) {
+      if (entry.address.kind === 'subagent') merged.set(entry.address.runId, entry.log.events);
+    }
+    return merged;
+  }
+
   /** 掛著等人回答的中斷，發出的順序。一顆都沒有就是空的。 */
   get pendings(): readonly PendingInterrupt[] {
     return [...this.#pending.values()];
@@ -737,7 +1652,7 @@ export class ThreadPump {
     return this.#pending.size > 0;
   }
 
-  /** 停在核准閘門上的工具名，所有掛著的中斷合起來。見 {@link PendingInterrupt.gatedTools}。 */
+  /** 停在核准上的工具名，所有掛著的中斷合起來。見 {@link PendingInterrupt.gatedTools}。 */
   get gatedTools(): ReadonlySet<string> {
     return new Set([...this.#pending.values()].flatMap((pending) => pending.gatedTools));
   }
@@ -747,15 +1662,76 @@ export class ThreadPump {
     return this.#pending.get(interruptId);
   }
 
+  /** 送出佇列：人送出、還沒開跑的那幾件（`next-turn`），照開跑的先後（#637）。 */
+  get inbox(): readonly QueuedInput[] {
+    return this.#inbox['next-turn'];
+  }
+
+  /** 插話：人在這一輪跑著時插的、還沒被領走送進模型的那幾句（`next-step`），照送出的先後（#710）。 */
+  get nextStep(): readonly QueuedInput[] {
+    return this.#inbox['next-step'];
+  }
+
   /**
-   * 這條 thread 上有沒有 run 還沒跑完——**排隊中的也算**。
+   * 這條 thread 上有沒有 run 還沒跑完——**排隊中的也算**，停在核准點而等著的那幾句也算（#629）。
+   * 所以停在核准點時它可以跟 {@link ThreadPump.awaitingInput} 同時為真。**按了停止之後停住的那幾件不算**
+   * （#637）：那時照 dsh 是閒著，斜線命令放行。
    *
    * 給上行那一側擋斜線命令用（[#123](https://github.com/DemianLi/nexus-agent/issues/123)）。
    * 與 {@link ThreadPump.awaitingInput} 各擋一種：那個是「停在核准點」，這個是「還在飛」。
    * 兩個都不擋的話，`/plan` 的 pending intent 會跟飛行中那一輪的 `beforeAgent` 賽跑。
    */
   get running(): boolean {
-    return this.#inFlight > 0;
+    // **算出來的，不是另外記的計數**：收下的那一刻就在 `#queue` 裡，緊接著到的 `slash.run` 看得到；停住的那一種
+    // 一個旗標就整批翻過去，計數要逐件加減、翻兩次。
+    return this.#busy || this.#queue.some((job) => job.answers || !this.#stopParked);
+  }
+
+  /**
+   * 整個 agent 在跑沒有，給列表與全域下行（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：
+   * {@link ThreadPump.running}，**加上停在等人回答**。照 dsh 的 `agent/status`：核准與提問發生在一輪的工具執行
+   * 當中，那段時間是 `running`（`packages/core/agent-loop/src/agent.ts:140-152`，`477b4f4`）。我們的那一輪在中斷時
+   * 就收了，所以要把掛著的中斷加回來。按了停止之後停住的仍然不算，同 dsh 的 `cancel({keepInbox: true})` 之後是 idle。
+   *
+   * **不拿它取代 {@link ThreadPump.running}**：斜線命令的閘門與續行的讓行靠的是那一個，停在核准點另有
+   * {@link ThreadPump.awaitingInput} 擋。
+   */
+  get agentRunning(): boolean {
+    return this.running || this.#pending.size > 0;
+  }
+
+  /**
+   * 聽這條 thread 的 {@link PumpActivity}。回呼在改動的那一段同步程式裡叫，**不接例外**：它是 `wire-handler.ts`
+   * 自己的集線器，不是任意的訂閱者。
+   *
+   * @returns 退訂。
+   */
+  watch(listener: (activity: PumpActivity) => void): () => void {
+    this.#watchers.add(listener);
+    return () => void this.#watchers.delete(listener);
+  }
+
+  #tell(activity: PumpActivity): void {
+    for (const watcher of this.#watchers) watcher(activity);
+  }
+
+  /**
+   * **狀態只從這裡講出去**：算一次 {@link ThreadPump.agentRunning}，跟上次講的不同才送。它由好幾格推出來
+   * （`#busy`、`#queue`、`#stopParked`、`#pending`），逐個改動點各自判斷翻了沒的話，漏一處就是側欄一直亮著。
+   *
+   * 叫它的是改得動那幾格、**又可能讓結果翻面**的地方：排進一件（{@link ThreadPump.#schedule}）、一件跑完
+   * （`#next` 的 `settle`）、開跑之前就被刪掉的一件（{@link ThreadPump.updateQueue}）。其餘的改動點翻不了面：
+   * 開跑那一刻，被挑中的那一件本來就算在 `running` 裡；中斷登記時一定有一輪在跑；答掉與收回緊接著就排進一件；
+   * 收線時丟掉的那幾件，不是被掛著的中斷擋著（那時照樣算在跑），就是按停止停住的（本來就不算）。
+   *
+   * 續行那一輪會在兩輪之間先講一次閒著：`settle` 放下 `#busy` 之後，排程器非同步才送下一輪。**dsh 也是**：它的
+   * 續行掛在 `agent/status` 翻成 idle 上（`packages/goal/goal-round-driver/src/index.ts:258-280`）。
+   */
+  #noteStatus(): void {
+    const running = this.agentRunning;
+    if (running === this.#reportedRunning) return;
+    this.#reportedRunning = running;
+    this.#tell({ type: 'status', running });
   }
 
   /**
@@ -763,6 +1739,14 @@ export class ThreadPump {
    *
    * 沒有重播——訂閱之前發生的事這條線上看不到，接回來的方式是重開 ＋ 重抓歷史
    * （照 dsh 的 `reconnection = reopen the stream + refetch history`）。
+   *
+   * **例外有三種現況，都是歷史折不出來的「現在」**：
+   * - 還掛著的中斷（[#728](https://github.com/DemianLi/nexus-agent/issues/728)）：註冊當下把它們那幾顆
+   *   `input.requested` 先放進這條線的佇列，同 dsh gateway 接上就補送還沒答的（`packages/api/gateway/src/index.ts:500`，
+   *   `477b4f4`）。歷史折不出它們——酬載不在日誌上。**號是原本那顆的**：歷史的 frame 不帶號，從空重折的一頁收得下它，
+   *   之後的即時 frame 號都比它大。答掉或收回的那一刻就從 `#pending` 拿掉，之後接上的不會再拿到。
+   * - 背景子代理現況（#867）。
+   * - 還沒落盤的 root 回覆（[#953](https://github.com/DemianLi/nexus-agent/issues/953)），見 {@link CurrentRun.reply}。
    */
   subscribe(
     channels: readonly WireChannel[],
@@ -770,7 +1754,69 @@ export class ThreadPump {
   ): AsyncGenerator<Event, void, undefined> {
     // **註冊是同步的**，抽是之後的事。這樣「線開好了」與「開始抽」才是兩件事——
     // 開好之後才發生的 frame 一顆都不會掉在中間，即使消費端還沒開始抽。
-    const subscriber: Subscriber = { channels, queue: [], done: this.#closed };
+    const subscriber: Subscriber = {
+      channels,
+      queue: new BoundedQueue(this.#downlinkMaxBytes),
+      done: this.#closed,
+    };
+    // 補送照算位元組、不判上限（`BoundedQueue.seed`）；序列化拋錯（`BigInt`、循環）就收掉這條線。
+    // 深度超過 `DOWNLINK_MAX_DEPTH` 的子樹先截掉（偏離 D）：補送的那一顆照爆的話，重連之後每一次開線都會再斷一次。
+    const seed = (frame: Event): void => {
+      const bounded = boundFrame(frame);
+      if (bounded.truncated) this.#warnTruncated(frame, '開線時補送');
+      subscriber.queue.seed(bounded.frame, bounded.bytes);
+    };
+    try {
+      if (!subscriber.done) {
+        // **照號排，不照 Map 的順序**：同 id 再度中斷時 `set` 留在原本的位置、換上新號，Map 順序就不再是發出的順序，
+        // 而折疊器丟掉號比上一顆小的。
+        for (const request of [...this.#pending.values()]
+          .map((pending) => pending.request)
+          .filter((request) => accepts(subscriber, request))
+          .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))) {
+          seed(request);
+        }
+      }
+      // **背景子代理現況也補送**（#867）：它是「現在」的事，歷史沒有，不補的話重新整理之後要等下一次變動才看得到。
+      // 號是原本那顆的，理由同上面那段。
+      if (!subscriber.done && this.#subagentStatusFrame !== undefined) {
+        if (accepts(subscriber, this.#subagentStatusFrame)) {
+          seed(this.#subagentStatusFrame);
+        }
+      }
+      // **續行授權也補送**（#1575 N0376）：行程內的「現在」，歷史沒有。**有目標才送**：沒有目標時授權沒有意義（web 的格子停在 `null`）；
+      // 有目標時不論有沒有發生過變化都送——重啟之後的 thread 從沒有過 `armed → disarmed` 的邊，但畫面要拿到「不會自己跑」。
+      // 蓋新號，理由同下面那段回覆。
+      const goalNow = this.#goal.value;
+      if (!subscriber.done && goalNow !== null) {
+        const frame = this.#customFrame({
+          name: GOAL_ACTIVATION,
+          payload: {
+            goal: { id: goalNow.id, revision: goalNow.revision, activation: this.#goalActivation },
+          },
+        });
+        if (accepts(subscriber, frame)) seed(frame);
+      }
+      // **還沒落盤的那則回覆也補送**（[#953](https://github.com/DemianLi/nexus-agent/issues/953) 第二刀）：它的開頭與已吐出的
+      // 字在下行開之前就送完了，歷史又要等那次模型呼叫結束才有，不補的話重新整理之後這一則要等下一次重新整理才看得到。
+      // **蓋的是新號、不是原本的號**：合成的字是一整塊，沒有哪一顆原始 frame 的號對得上；新號比這條線上已經排著的
+      // （上面兩種）都大、又比之後的即時 frame 都小，折疊器照號丟的規則不會把它丟掉，也不會把後面的丟掉。
+      // 補送與歷史可能重疊（回覆在開線與拿歷史之間落盤了），由折疊器照訊息 id 擋掉，見 `@nexus/wire` 的 `reduceMessage`。
+      const reply = this.#current?.reply;
+      if (!subscriber.done && reply !== undefined) {
+        const frames = replyBaseline(reply);
+        if (frames.length > 0 && accepts(subscriber, frames[0] as Event)) {
+          for (const frame of frames) seed(this.#seal(frame));
+        }
+      }
+    } catch (error: unknown) {
+      // 補送的某一顆序列化不了：這條線送不出完整的「現在」，收掉它（它會重連），記一行。
+      subscriber.done = true;
+      subscriber.queue.clear();
+      this.#warn?.(
+        `[下行] thread ${this.#threadId} 開線時補送的事件無法序列化，已斷開這一條：${errorText(error)}`,
+      );
+    }
     this.#subscribers.add(subscriber);
     return this.#drain(subscriber, signal);
   }
@@ -811,27 +1857,220 @@ export class ThreadPump {
   }
 
   /**
+   * 續行排程器有一次「決定 → 耐久檢查點 → 預約」正在飛（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，閒置逐出的判準）。
+   *
+   * 那段時間 `running` 是假的（一輪剛落定、下一輪還沒預約進佇列），但這條 thread 不閒：撤掉它，排程器接著會往一個已收線的
+   * pump 預約。{@link running} 看不到這一段，所以單獨給一個讀數。
+   */
+  get goalRoundInFlight(): boolean {
+    return this.#goalDrives > 0;
+  }
+
+  /**
    * 送一件事進去，排在目前那一輪後面跑。
    *
-   * 回傳的 promise 在**這一段** run 抽完時 resolve（跑完或停在核准點都算）。
-   * 上行的 handler 不等它——那是收件回條，不是「跑完了」。
+   * **說話與續行在停在核准點時不開跑**（[#629](https://github.com/DemianLi/nexus-agent/issues/629)）：
+   * 它們留在隊裡，等中斷被回答或收回、那一輪收掉之後才照 FIFO 跑。答覆（`resume`）排在它們前面。
+   *
+   * 回傳的 promise 在**這一段** run 抽完時 resolve（跑完或停在核准點都算）；停住的那段要等它真的
+   * 跑完。收線時還停著的會 reject。這一輪失敗就以原錯 reject；當場補寫沒配到結果的呼叫也失敗時是 `AggregateError`
+   * （`cause` 是原錯，見 {@link ThreadPump.#closeUnansweredCalls}）。上行的 handler 不等它——那是收件回條，不是「跑完了」。
+   *
+   * **插話**（`steer`，[#710](https://github.com/DemianLi/nexus-agent/issues/710)）：這一輪還收插話（{@link ThreadPump.#acceptsSteer}）
+   * 就排進 `next-step`，回的 promise 當場 resolve——它不開一段 run，由跑著的那一段在下一步領走。不收了就照送出開一輪，
+   * 但排在 `next-turn` 的**頭**（見下面的偏離）。
+   *
+   * **偏離（登記）**：dsh 把收尾中、閒著時到的插話照樣放 `next-step` 並叫醒迴圈，下一輪開頭 `claim` 先領整條 `next-step`、
+   * 再領一件 `next-turn`，一起送進同一輪（`packages/core/agent-loop/src/agent.ts:154-169`、`inbox.ts:109-114`，
+   * `477b4f4`）。我們的一輪一定由一件 `next-turn` 開頭：那件的文字記在 `turn/start`（`session-log.ts` 登記過的偏離，
+   * 授權的判別欄），只有插話開不出一顆 `turn/start`。所以退成排隊、**插在頭上**：佇列裡排著幾句時它仍是下一輪，不排到
+   * 它們後面。跟 dsh 的差別只在「收尾中或閒著時插話、而佇列裡還排著別的」那一刻：dsh 兩件同一輪，我們分兩輪。
    */
   submit(input: PumpInput): Promise<void> {
     if (this.#closed) {
       return Promise.reject(new Error('這條 thread 已經收掉了'));
     }
+    if (input.kind === 'message') {
+      const id = input.id ?? crypto.randomUUID();
+      const item: QueuedInput = {
+        id,
+        text: input.text,
+        source: {
+          kind: 'user',
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+          ...(input.clientTimeZone === undefined ? {} : { clientTimeZone: input.clientTimeZone }),
+        },
+        ...(input.attachments === undefined || input.attachments.length === 0
+          ? {}
+          : { attachments: input.attachments }),
+        ...(input.mention === undefined ? {} : { mention: input.mention }),
+      };
+      const steer = input.steer === true;
+      const intoStep = steer && this.#acceptsSteer();
+      try {
+        this.#spliceInbox(
+          intoStep
+            ? { target: 'next-step', start: this.#inbox['next-step'].length, inserted: [item] }
+            : {
+                target: 'next-turn',
+                start: steer ? 0 : this.#inbox['next-turn'].length,
+                inserted: [item],
+              },
+        );
+      } catch (error: unknown) {
+        return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+      }
+      if (intoStep) return Promise.resolve();
+      // **下一次送出喚醒停住的**（#637 的 Q2）：它們排在前面，照 FIFO 先跑。按了停止、那一輪還沒收尾就又送的話，
+      // 那一句一樣是「下一次送出」，所以停住的請求也一起清掉。退成排隊的插話同樣是一次送出，同 dsh 中止之後的插話
+      // 照樣叫醒迴圈（`agent.ts:157-158`）。
+      this.#stopParked = false;
+      this.#stopRequested = false;
+      return this.#schedule(() => this.#runQueued(id), false, { itemId: id, atHead: steer });
+    }
     // **收下的那一刻就不再掛著了，不是等它排到才清。** 排隊期間還掛著的話，連按兩次
     // 核准的第二次會通過上行的校驗、送出第二次 resume，而那時已經沒有中斷可以回答。
     //
     // **只收掉被答的那一顆。** 同一輪的其他中斷還等著人，整個清掉的話回答它們會被
-    // 判成 `no_such_interrupt`。說話與續行那兩種本來就要求一顆都沒掛著（上行擋著），
-    // 走到這裡代表狀態已經不對，清空是止血。
+    // 判成 `no_such_interrupt`。
+    //
+    // 說話與續行**不碰**掛著的中斷：它們停在隊裡等（#629）。以前這裡整個清掉當止血，那等於
+    // 讓繞過上行那道擋的呼叫端把中斷靜靜丟掉——正是這張卡要修的事換一扇門進來。
     if (input.kind === 'resume') {
-      this.#pending.delete(input.interruptId);
-    } else {
-      this.#pending.clear();
+      const elicitation = this.#pending.get(input.interruptId)?.elicitation;
+      if (elicitation !== undefined) {
+        // MCP 反問：人回的是問答卡的形狀，這裡翻成 adapter 要的 `{ responses }`。**翻不動就在收下之前拒絕**，掛著的那顆
+        // 不動，人可以再答一次。`url` 模式的 key 一律回絕，記成系統代答。
+        let response: unknown;
+        try {
+          response = answerElicitation(elicitation, input.response);
+        } catch (error: unknown) {
+          return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+        const urlKeys = urlKeysOf(elicitation);
+        input = {
+          ...input,
+          response,
+          ...(urlKeys.length === 0
+            ? {}
+            : { systemAnswered: { reason: 'url-mode' as const, keys: urlKeys } }),
+        };
+        if (urlKeys.length > 0) {
+          this.#warn?.(
+            `[MCP] thread ${this.#threadId}：server "${elicitation.server}" 的工具 "${elicitation.tool}" 要求開網址授權，這一版不支援，已代為回絕`,
+          );
+        }
+      }
+      if (this.#pending.delete(input.interruptId)) {
+        this.#tell({ type: 'input-withdrawn', interruptId: input.interruptId });
+      }
     }
-    return this.#schedule(() => this.#runOnce(input));
+    return input.kind === 'resume'
+      ? this.#schedule(() => this.#runOnce(input), true, { resumes: true })
+      : this.#schedule(() => this.#runOnce(input), false);
+  }
+
+  /**
+   * 背景子代理結算了，通知這條 thread 的主對話（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）。
+   * 照 dsh 的 `notifySettlement`（`subagent/src/continuation-activation.ts`，`477b4f4`）分三種：
+   *
+   * - **主對話閒著**：排進 `next-turn` 的尾巴並叫醒它開一輪。這一輪的 `turn/start` 是 `subagent-settled`，**不是人話、
+   *   也不授予直接人類授權**（{@link pumpInputOf}）。
+   * - **主對話正跑著**：收插話就排進 `next-step`，下一步送進模型、不開新的一輪；不收（沒掛載體、已被中止、正在收尾）
+   *   就退成排隊，同人的插話（{@link ThreadPump.submit}）。
+   * - **這條 thread 已經收了**：**不喚醒**——只落進佇列、不排程，下次接回來時折成停住的佇列（同 dsh 的 `inject`，
+   *   喚醒一個 idle 的 agent 是開一輪，不是排隊等工作）。
+   *
+   * 按了停止之後停住的佇列**不被這個叫醒**：那是「下一次人送出」才放行的（#637 的 Q2），機器的通知不替人放行。
+   *
+   * @param notice.text - 送進模型的那一串字。
+   * @param notice.summary - 一行摘要（記在來源上，經 {@link boundContextSummary} 夾到 `CONTEXT_SUMMARY_MAX_CHARS` 以內，#1567 N0136）。
+   * @param notice.reason - 怎麼收的（記在來源上，#884）；畫面據它分「完成、被停止、失敗、超出上限」。
+   * @param notice.cause - 被中止時為什麼停（記在來源上，#1847）。
+   * @param notice.senderSessionId - 結算的背景子代理的會話 id。
+   */
+  notifySettled(notice: {
+    readonly text: string;
+    readonly summary: string;
+    readonly reason: SubagentSettleReason;
+    readonly cause?: TurnAbortCause;
+    readonly senderSessionId: string;
+  }): void {
+    this.#deliverMachineInput(notice.text, {
+      kind: 'subagent-settled',
+      summary: boundContextSummary(notice.summary),
+      reason: notice.reason,
+      ...(notice.cause === undefined ? {} : { cause: notice.cause }),
+      senderSessionId: notice.senderSessionId,
+    });
+  }
+
+  /**
+   * 背景子代理的現況變了（[#867](https://github.com/DemianLi/nexus-agent/issues/867)）：合成一顆 `custom` frame，**整份取代**，
+   * 並記下它，新接上的下行補送。形狀與規則見 `@nexus/wire` 的 `subagent-status.ts`。
+   *
+   * @param items - 每個認得的背景子代理一項（host 給的整份）。
+   */
+  notifySubagentStatus(items: SubagentStatusPayload['items']): void {
+    if (this.#closed) return;
+    const frame = this.#customFrame({ name: SUBAGENT_STATUS, payload: { items } });
+    this.#subagentStatusFrame = frame;
+    this.#broadcast(frame);
+  }
+
+  /**
+   * 續行授權變了（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0376，dsh `goal/activation-changed` 經 `remote-events.ts:39`
+   * 轉給 UI）：記下新值、合成一顆 `goal/activation` frame 廣播。服務那一側已經只在值真的變了才通知，這裡不再去重。
+   * 沒有目前目標時 `goal` 缺席、授權收成 `disarmed`。收線之後什麼都不做。
+   *
+   * @param change - 服務交來的變化（`GoalActivationChange`）。
+   */
+  notifyGoalActivation(change: {
+    readonly goal?: {
+      readonly id: string;
+      readonly revision: number;
+      readonly activation: 'armed' | 'disarmed';
+    };
+  }): void {
+    if (this.#closed) return;
+    this.#goalActivation = change.goal?.activation ?? 'disarmed';
+    this.#presentCustom({
+      name: GOAL_ACTIVATION,
+      payload: change.goal === undefined ? {} : { goal: { ...change.goal } },
+    });
+  }
+
+  /**
+   * 背景子代理用 `send_message` 寫給主對話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）。投遞方式同
+   * {@link ThreadPump.notifySettled}（閒著叫醒開一輪、忙著走插話、已收線不喚醒），來源是 `agent-message`：agent 寫的話，
+   * **不是人說的話**，`hasDirectHumanTurn` 為假。照 dsh 的 `sendToParent`（`subagent/src/continuation.ts`，`477b4f4`）。
+   *
+   * @param message.text - 送進模型的那一串字，含前綴 `Agent <寄件人> sent a message: `。
+   * @param message.senderSessionId - 寄件的背景子代理的會話 id。
+   */
+  receiveAgentMessage(message: { readonly text: string; readonly senderSessionId: string }): void {
+    this.#deliverMachineInput(message.text, {
+      kind: 'agent-message',
+      senderSessionId: message.senderSessionId,
+    });
+  }
+
+  /** 機器（不是人）送來的一件輸入的投遞，三種去處見 {@link ThreadPump.notifySettled}。 */
+  #deliverMachineInput(text: string, source: QueuedInputSource): void {
+    const item: QueuedInput = { id: crypto.randomUUID(), text, source };
+    const intoStep = this.#acceptsSteer();
+    const target = intoStep ? 'next-step' : 'next-turn';
+    try {
+      this.#spliceInbox({ target, start: this.#inbox[target].length, inserted: [item] });
+    } catch (error: unknown) {
+      this.#warn?.(
+        `[背景子代理] thread ${this.#threadId} 收不下 ${source.kind} 的輸入：${String(error)}`,
+      );
+      return;
+    }
+    if (intoStep || this.#closed) return;
+    // 沒有人等這一件的結果：排程的 promise 收線時會 reject，接住免得變成沒人接的 rejection。
+    this.#schedule(() => this.#runQueued(item.id), false, { itemId: item.id }).catch(() => {});
   }
 
   /**
@@ -839,28 +2078,99 @@ export class ThreadPump {
    *
    * 收回走同一條序列，是因為它也要讀寫 checkpoint、也要寫一輪日誌——跟一輪 run 並行的話，
    * 兩邊的 `turn/start`／`turn/end` 會交錯，不變量會把它讀成寫錯了。
+   *
+   * @param answers - 是不是答覆（`resume`、收回），見 {@link QueuedJob.answers}。
+   * @param extra.itemId - 見 {@link QueuedJob.itemId}。
+   * @param extra.atHead - 排在其他開新一輪的前面（答覆照樣先跑）：退成排隊的插話（#710），它在送出佇列裡也插在頭上。
+   * @param extra.resumes - 見 {@link QueuedJob.resumes}。
    */
-  #schedule(job: () => Promise<void>): Promise<void> {
-    // **同步就加一**：上行回的是收件回條，緊接著到的 `slash.run` 必須看得到「在飛」。
-    this.#inFlight += 1;
-    const next = this.#tail.then(job);
-    // 排隊用的鏈不能因為某一輪炸掉就整條斷掉；減一兩條路都要走到。
-    //
-    // **排程掛在這裡，而且在減一之後**：`#driveGoalRound` 靠 `#inFlight === 0` 判斷
-    // 「沒有人在排隊」，減一之前問的話它永遠看得到自己。跑壞的那一條也走到這裡，
-    // 但決策函式會看到日誌上那顆 `turn/failed` 而回 `turn-failed`——**續行不重試**；
-    // 被中止的那一條同理，看到 `turn/end` 帶 aborted 而回 `turn-aborted`。
-    const settled = () => {
-      this.#inFlight -= 1;
-      this.#driveGoalRound();
-    };
-    this.#tail = next.then(settled, settled);
-    return next;
+  #schedule(
+    run: () => Promise<void>,
+    answers: boolean,
+    extra: { readonly itemId?: string; readonly atHead?: boolean; readonly resumes?: true } = {},
+  ): Promise<void> {
+    // **同步就排進去**：上行回的是收件回條，緊接著到的 `slash.run` 必須看得到「在飛」（{@link ThreadPump.running}）。
+    const done = new Promise<void>((resolve, reject) => {
+      const job: QueuedJob = {
+        answers,
+        run,
+        resolve,
+        reject,
+        ...(extra.itemId === undefined ? {} : { itemId: extra.itemId }),
+        ...(extra.resumes === undefined ? {} : { resumes: extra.resumes }),
+      };
+      const firstRound =
+        extra.atHead === true ? this.#queue.findIndex((queued) => !queued.answers) : -1;
+      if (firstRound < 0) this.#queue.push(job);
+      else this.#queue.splice(firstRound, 0, job);
+    });
+    this.#noteStatus();
+    // **不在這裡同步開跑**：`turn/start` 記在真正開跑的那一刻（`#runOnce`），不是收下的那一刻。
+    this.#kick();
+    return done;
   }
 
-  /** 等目前排隊的都跑完。測試用。 */
-  async whenIdle(): Promise<void> {
-    await this.#tail;
+  /** 下一個 microtask 看看有沒有能跑的。 */
+  #kick(): void {
+    void Promise.resolve().then(() => this.#next());
+  }
+
+  /**
+   * 下一件能跑的在隊裡哪一格；沒有就是 -1。
+   *
+   * **答覆先跑**：它屬於停在核准點的那一輪，連比它早排進來的說話也要讓它（第一輪還在收尾時就答了，
+   * 答覆排在第二句後面）。**還有中斷掛著、又沒有答覆排著的時候，開新一輪的停住**——照 dsh，收件匣只在
+   * 一輪開始時領，而那一輪還沒結束（#629）。**按了停止之後開新一輪的也停住**，等下一次送出（#637）。其餘照 FIFO。
+   */
+  #nextIndex(): number {
+    const answer = this.#queue.findIndex((job) => job.answers);
+    if (answer >= 0) return answer;
+    if (this.#stopParked || this.#pending.size > 0) return -1;
+    return this.#queue.length > 0 ? 0 : -1;
+  }
+
+  #next(): void {
+    if (this.#busy) return;
+    const index = this.#nextIndex();
+    if (index < 0) {
+      if (this.#closed) {
+        // **收線之後還停著的收掉**（#629）：停在核准點、又沒有答覆排著，它們永遠等不到開跑。不收的話
+        // 送出它們的 promise 永遠掛著，`running` 也永遠是真的。
+        // 日誌不動：佇列是耐久的，重啟之後接回來。
+        for (const job of this.#queue.splice(0)) job.reject(new Error('這條 thread 已經收掉了'));
+      }
+      for (const wake of this.#idleWaiters.splice(0)) wake();
+      return;
+    }
+    const [job] = this.#queue.splice(index, 1) as [QueuedJob];
+    this.#busy = true;
+    // 一件跑壞不能讓後面的斷掉；收尾兩條路都要走到。
+    //
+    // **收尾與排程在呼叫端接到結果之前**：`#driveGoalRound` 靠 `running` 判斷「沒有人在排隊」，
+    // `#busy` 放下之前問的話它永遠看得到自己。跑壞的那一條也走到這裡，
+    // 但決策函式會看到日誌上那顆 `turn/failed` 而回 `turn-failed`——**續行不重試**；
+    // 被中止的那一條同理，看到 `turn/end` 帶 aborted 而回 `turn-aborted`。
+    const settle = (finish: () => void) => {
+      this.#busy = false;
+      this.#noteStatus();
+      this.#driveGoalRound();
+      finish();
+      this.#kick();
+    };
+    job.run().then(
+      () => settle(job.resolve),
+      (error: unknown) => settle(() => job.reject(error)),
+    );
+  }
+
+  /**
+   * 等到沒有能跑的、也沒在跑的。測試用。
+   *
+   * **停住的不算**（#629）：停在核准點、後面有說話排著的 thread 是閒著的——它在等人。
+   */
+  whenIdle(): Promise<void> {
+    if (!this.#busy && this.#nextIndex() < 0) return Promise.resolve();
+    return new Promise((resolve) => this.#idleWaiters.push(resolve));
   }
 
   /**
@@ -872,28 +2182,77 @@ export class ThreadPump {
    * - **有一輪在跑**：觸發它的中止訊號。正在跑的工具等它落定、還沒開始的不開始、模型請求中途
    *   切斷，這一步之後圖停下（`@nexus/core` 的 `turn-cancel.ts`）；這一輪收成 `turn/end` 帶 aborted。
    * - **停在核准點**：收回——排一次 {@link ThreadPump.#withdraw}（#265 的 Q7／Q15）。
+   * - **續行排程器正在飛**（沒有輪在跑，但預約馬上要排進去）：收回續行授權、這一次不排（#1518）。
    * - **閒著**：什麼都不做，同 dsh「閒著時中止不影響之後的事」。
    *
-   * **排在後面的輸入不動**：停完就接著跑（#265 的 Q6，同 dsh web 的 `keepInbox`）。
+   * **排在後面的輸入保留但停住**（#637 的 Q2，翻過 #265 的 Q6）：照 dsh 的 `cancel({keepInbox: true})`，不接著跑，
+   * 等下一次送出才照 FIFO 跑。當時 Q6 引的 `keepInbox` 只管保留、不管接著跑。停不停住以那一輪真的收成中止為準，
+   * 見 {@link ThreadPump.#stopRequested}。
    *
+   * @param cause - 為什麼停（#1624），照 dsh 的 `agent.cancel(cause)`。省略即人按了停止。只有「有一輪在跑」那一格用得到它：
+   *   收回與停續行只有人會觸發。
    * @returns 這一次落在哪一種。線上只回受理，這個給測試看。
    */
-  cancel(): 'run' | 'withdrawn' | 'idle' {
+  cancel(cause?: TurnAbortCause): 'run' | 'withdrawn' | 'drive' | 'idle' {
     const current = this.#current;
     if (current !== undefined) {
-      current.controller.abort();
+      this.#abortRun(current, cause);
+      // **每次都設**，不只第一次：停止之後那一輪還在等工具落定時送了一句（`submit` 會清掉這個請求），再按停止，那一句要停住
+      // （#637 的 Q2；#1831 審查 B1）。`#abortRun` 在已經中止過時什麼都不做，所以這一行不能收進去。
+      this.#stopRequested = true;
       return 'run';
     }
     if (this.#pending.size > 0 && !this.#closed) {
-      // **同步就清**，同 `submit`：收下的那一刻就不再掛著，緊接著到的 `run.start` 不會被
-      // 「停在核准點」擋回去——它排在這次收回後面。
+      // **同步就清**，同 `submit`：收下的那一刻就不再掛著，緊接著到的 `run.start` 排在這次收回後面、
+      // 喚醒停住的那幾件（#637）。
+      const withdrawn = [...this.#pending.keys()];
       this.#pending.clear();
-      void this.#schedule(() => this.#withdraw()).catch(() => {
+      for (const interruptId of withdrawn) this.#tell({ type: 'input-withdrawn', interruptId });
+      this.#stopRequested = true;
+      void this.#schedule(() => this.#withdraw(), true).catch(() => {
         // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
       });
       return 'withdrawn';
     }
+    if (this.#goalDrives > 0 && !this.#closed) {
+      // **續行排程器正在飛**（決定了、`flush()` 還沒回來，預約還沒排進佇列）：這一刻 `running` 是假的，沒有輪可以中止，
+      // 但排程器回來之後會把下一輪排進去——按下去等於沒按。收回續行授權（#265 的 Q8：目標的相位不動），排程器回來的第二次決定
+      // 讀到 `disarmed` 就不排。第二次決定已經讀完視圖、預約還沒排進去的那一拍，擋住它的是領走時的驗證
+      // （{@link ThreadPump.#goalReservationValid}：授權不是 armed 就丟掉，不跑、不暫停目標）。不寫日誌：沒有輪被中止，
+      // 後面的 `resume` 不會撞到 aborted 收尾。
+      //
+      // **dsh 沒有這一格**：`agent.cancel` 在 idle 時對 inbox 保留的呼叫什麼都不做
+      // （`agent-loop/src/agent.ts:175-181`），而 `goal-round-driver` 的 `drive` 在 `await ctx.sessions.flush` 之後只複查
+      // `readyAfterCheckpoint`（`:119-122`，不含停止），照樣 `agent.followup`——同一個洞。這是補上的，不是照做的。
+      const driver = this.#driver;
+      try {
+        driver?.disarm();
+      } catch (error: unknown) {
+        driver?.warn(
+          `停止之後停用續行失敗：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      return 'drive';
+    }
     return 'idle';
+  }
+
+  /**
+   * 中止正在跑的這一輪：{@link ThreadPump.cancel} 的「有一輪在跑」那一格，與一輪的時鐘到點（#1624）共用。
+   *
+   * 時鐘**不經過 `cancel()`**，差在**已經中止過**的那一輪：人先按了停止、接著送了一句（`submit` 清掉停住的請求），那一輪還在
+   * 等工具落定時時鐘才到點——`cancel()` 每次都把停住的請求設回來，那一句會被一顆已經被人中止的輪的時鐘停住；這裡什麼都不做
+   * （先到的原因算數），那一句照常跑。這一輪第一次被中止時一樣把 {@link ThreadPump.#stopRequested} 設起來，排著的輸入照停止鍵停住
+   * （Q-B3 (a)）。
+   *
+   * 「只認它自己那一輪」（`#current !== current`）是防禦，今天量不出來：計時器在這一輪的 `finally` 裡、`#current` 清掉之前就同步
+   * 清掉，回呼也先查自己還算不算數，到點的回呼碰不到下一輪。
+   */
+  #abortRun(current: CurrentRun, cause: TurnAbortCause | undefined): void {
+    if (this.#current !== current || current.controller.signal.aborted) return;
+    if (cause !== undefined) current.cause = cause;
+    current.controller.abort();
+    this.#stopRequested = true;
   }
 
   /**
@@ -910,7 +2269,9 @@ export class ThreadPump {
   async #withdraw(): Promise<void> {
     const log = this.#sessions.root;
     log.append('turn/start', { kind: 'resume' });
-    const started = (name: string) => name === DELEGATION_TOOL;
+    // 還欠決定的那幾顆核准問題，在這一輪裡收回（#1029）。
+    for (const id of [...this.#approvalOpen]) this.#noteApprovalDecided(id, undefined);
+    const started = (name: string) => DELEGATION_TOOLS.includes(name);
     let dangling: { readonly id: string; readonly name: string }[];
     try {
       const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
@@ -937,17 +2298,21 @@ export class ThreadPump {
         await this.#agent.updateState(config, { messages: withdrawn });
       }
       log.append('turn/end', { reason: ABORTED_BY_USER });
+      this.#parkIfStopped();
     } catch (error) {
-      const failure = error instanceof Error ? error : new Error(String(error));
-      log.append('turn/failed', { message: failure.message });
+      const failure =
+        error instanceof Error ? error : new Error(thrownMessage(error), { cause: error });
+      this.#reportTurnFailed(log.append('turn/failed', this.#turnFailureNoted(error)));
       throw failure;
     }
     // 那幾張卡照上面寫的 `tool/result` 收（#297）。**不走日誌的訂閱者**：它只認有 run 的時候，
     // 見 `#noteVerdict`。文字就是寫進對話的那一句，模型看到的也是它。
+    // 碼跟寫進日誌的那個一樣（#667）：畫面比碼判「停在提問時被停止」，不比紅字的結尾。
     for (const call of dangling) {
       this.#closeCard(call.id, {
         failed: true,
         text: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+        code: started(call.name) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
       });
     }
     // 看得到那張核准卡的每一條下行都要知道「不必再問了、這一輪停了」。這一顆是合成的：
@@ -958,7 +2323,7 @@ export class ThreadPump {
         params: {
           namespace: [],
           timestamp: Date.now(),
-          data: { event: 'completed', graph_name: 'root', aborted: true },
+          data: { event: 'completed', graph_name: 'root', aborted: true, cause: USER_CAUSE },
         },
         // `aborted` 不在協定的 `LifecycleData` 裡——那正是它存在的理由，見 `#translate` 那一格。
       } as unknown as Event),
@@ -978,7 +2343,12 @@ export class ThreadPump {
    */
   close(): void {
     this.#closed = true;
+    this.#closing.abort();
     this.#unobserveLogs();
+    this.#projectionOut.dispose();
+    // 停住的那幾件由 `#next` 收掉（#629）。**不在這裡收**：這一刻還在跑的那一輪可能之後才撞上
+    // 核准點，那時排著的才變成停住的——只在這裡看一次會漏掉它們。
+    this.#kick();
     for (const subscriber of this.#subscribers) {
       subscriber.done = true;
       subscriber.wake?.();
@@ -989,38 +2359,685 @@ export class ThreadPump {
    * 一輪落定之後，問排程器要不要再排一輪。
    *
    * **不 await**：它自己就會把排出來的那一輪丟回 {@link ThreadPump.submit}，而那條路
-   * 跑完又會回到這裡。整串續行因此是一條由 `#tail` 序列化的鏈，不是一個遞迴呼叫堆。
+   * 跑完又會回到這裡。整串續行因此是一條由 `#queue` 序列化的鏈，不是一個遞迴呼叫堆。
    */
   #driveGoalRound(): void {
     const driver = this.#driver;
     if (driver === undefined || this.#closed) return;
     // **有人在排隊就讓行**，而且送出去之前還會再問一次（下面那一句）。
     //
-    // **這兩道今天量不出行為差異，而且那件事要講清楚**：`#tail` 已經把所有輸入序列化
+    // **這兩道今天量不出行為差異，而且那件事要講清楚**：`#queue` 已經把所有輸入序列化
     // 了，所以排程器排出來的那一輪一定接在人那一筆後面——它搶不了先。留著它們是因為
-    // 它們擋的是**多算一次**（連 `flush()` 都省下來），而且 `#tail` 那個保證一旦鬆動，
+    // 它們擋的是**多算一次**（連 `flush()` 都省下來），而且 `#queue` 那個保證一旦鬆動，
     // 這兩句就是唯一擋得住的東西。**不要把它們讀成有測試釘住的因果。**
-    if (this.#inFlight > 0) return;
+    if (this.running) return;
+    this.#pauseCancelledGoalRounds();
+    this.#goalDrives += 1;
     void (async () => {
       try {
-        const round = await driveGoalRound(() => this.#sessions.root.events, driver);
+        // 操作者上限跟著 port 來（serve 的 `goal-round-cap` 那一列，#1623）；缺席即只有目標自己那一條。
+        const round = await driveGoalRound(
+          () => this.#sessions.root.events,
+          driver,
+          driver.roundCap,
+          this.#closing.signal,
+        );
         // 再問一次：`flush()` 期間人可能已經送了東西進來。`driveGoalRound` 自己看不到
         // 排隊——它只讀日誌，而排隊中的那一筆還沒寫下任何事件——所以這是唯一看得到的地方。
-        if (round === undefined || this.#closed || this.#inFlight > 0) return;
-        void this.submit({ kind: 'goal', ...round }).catch(() => {
-          // 那一輪自己的失敗已經進了日誌（`turn/failed`），而 `submit` 回的 promise
-          // 沒有別人在等——不接住的話它是一顆 unhandled rejection，會殺掉整個行程。
-        });
+        if (round === undefined || this.#closed || this.running) return;
+        this.#reserveGoalRound(driver, round);
       } catch (error: unknown) {
         driver.warn(`排下一輪時出事：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.#goalDrives -= 1;
       }
     })();
   }
 
-  async #runOnce(input: PumpInput): Promise<void> {
+  /**
+   * 把排程器排出來的一輪**預約進送出佇列**（[#638](https://github.com/DemianLi/nexus-agent/issues/638)）：`next-turn` 的尾巴，
+   * `source` 是 `goal`。照 dsh（`goal-round-driver/src/index.ts` 的 `drive`：`agent.followup(message)`，`5badb15009a`），所以它
+   * 列得出、改得動刪得掉、和人送的一樣照 FIFO 開跑；開跑時 {@link ThreadPump.#runQueued} 先驗這份預約還有沒有效。
+   *
+   * **預約的狀態不另外記**：有沒有一件預約在排，看的是佇列裡有沒有 `goal` 來源的件——dsh 的 `RoundAttempt` 是行程內的
+   * 狀態，重啟就歸零；我們的在日誌上，重啟折回來還在，所以領走時的驗證（授權不持久，重啟後一定是 `disarmed`）是那一頭的守門員。
+   * 已經有一件在排就不再預約，避免兩份。
+   *
+   * 排不進去（日誌壞了、範圍錯）就把目標擋住，代碼 `queue-failed`，同 dsh 的 `ctx.goals.block`。
+   */
+  #reserveGoalRound(driver: GoalDriverPort, round: GoalRoundRequest): void {
+    if (this.#inbox['next-turn'].some((item) => item.source.kind === 'goal')) return;
+    const item: QueuedInput = {
+      id: crypto.randomUUID(),
+      text: round.text,
+      source: {
+        kind: 'goal',
+        goalId: round.goalId,
+        revision: round.revision,
+        round: round.round,
+      },
+    };
+    try {
+      this.#spliceInbox({
+        target: 'next-turn',
+        start: this.#inbox['next-turn'].length,
+        inserted: [item],
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      driver.warn(`續行第 ${String(round.round)} 輪排不進送出佇列：${message}`);
+      try {
+        driver.block(
+          { id: round.goalId, revision: round.revision },
+          {
+            code: 'queue-failed',
+            message: `Could not queue goal round ${String(round.round)}: ${message}`,
+          },
+        );
+      } catch (blockError: unknown) {
+        driver.warn(`連記 queue-failed 的 blocker 都失敗了：${String(blockError)}`);
+      }
+      return;
+    }
+    // 沒有人等這一件的結果：排程的 promise 收線時會 reject，接住免得變成沒人接的 rejection。
+    this.#schedule(() => this.#runQueued(item.id), false, { itemId: item.id }).catch(() => {});
+  }
+
+  /**
+   * 領走時驗一份續行預約還有沒有效，照 dsh 的 `validReservation`（`goal-round-driver/src/index.ts`）：目標還是同一個、同一個修訂、
+   * 相位 active、授權 armed、輪數正好是下一輪、提示詞逐字等於「現在」算出來的那份，而且**沒有人排在它後面**
+   * （dsh 的 `competingQueued`：人的輸入優先於一份預約）。
+   */
+  #goalReservationValid(item: QueuedInput): boolean {
+    const source = item.source;
+    if (source.kind !== 'goal') return true;
+    const goal = this.#driver?.goal();
+    if (
+      goal === undefined ||
+      goal.id !== source.goalId ||
+      goal.revision !== source.revision ||
+      goal.phase !== 'active' ||
+      goal.activation !== 'armed' ||
+      source.round !== goal.roundsStarted + 1 ||
+      item.text !== renderGoalRoundPrompt(goal, source.round)
+    ) {
+      return false;
+    }
+    return !this.#inbox['next-turn'].some(
+      (other) => other.id !== item.id && other.source.kind !== 'goal',
+    );
+  }
+
+  /**
+   * 目標續行的那一輪被準入閘門擋下：**把目標擋下**（`prompt-rejected`），照 dsh 的 `goal-round-driver`（`src/index.ts:403-415`，
+   * `5badb15009a`）——它的 pre-step 先 `await next()`（下游就是封存閘門），拿到 `reject` 且目標還是 active／armed，就
+   * `goals.block(…, { code: 'prompt-rejected', message: 'Goal round was rejected before entering its step.' })`。
+   * 排程器因此不認識封存，也不空轉：目標不是 active 了就不排。**解除封存不會自動恢復**，要人 `/goal resume`。
+   *
+   * 對的是目標本身（id 吻合、active、armed）而不是預約的修訂號：開跑那一刻目標的修訂可能已因這一輪而前進。
+   * 擋下失敗（目標剛好被別人改了）只講一聲。
+   */
+  #blockGoalOfRejectedRound(claimed: QueuedInput | undefined): void {
+    const source = claimed?.source;
+    if (source === undefined || source.kind !== 'goal' || this.#driver === undefined) return;
+    try {
+      const goal = this.#driver.goal();
+      if (
+        goal === undefined ||
+        goal.id !== source.goalId ||
+        goal.phase !== 'active' ||
+        goal.activation !== 'armed'
+      ) {
+        return;
+      }
+      this.#driver.block(
+        { id: goal.id, revision: goal.revision },
+        { code: 'prompt-rejected', message: 'Goal round was rejected before entering its step.' },
+      );
+    } catch (error: unknown) {
+      this.#driver.warn(
+        `擋下目標失敗（續行那一輪被準入閘門擋下）：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** 閒下來才暫停那些被取消的續行預約（{@link ThreadPump.#cancelledGoalRounds}）；還在跑就什麼都不做，等下一次問。 */
+  #pauseCancelledGoalRounds(): void {
+    if (this.running) return;
+    for (const source of this.#cancelledGoalRounds.splice(0)) this.#pauseForCancelledRound(source);
+  }
+
+  /**
+   * 一份續行預約被刪掉或被改掉（人在佇列上動了它）：**暫停目標**，照 dsh 的 `agent/status` idle 處理（那一段在
+   * `goal-round-driver/src/index.ts`，註解 "Fence the pause to the exact dropped attempt's ref"）。不暫停的話，刪掉預約只會讓
+   * 排程器下一個 idle 馬上再排一份——一件刪不掉的東西。**用預約的修訂釘住**：暫停之後馬上又 resume（修訂會變）的話，
+   * 不能把剛 resume 的目標又暫停。
+   */
+  #pauseForCancelledRound(source: Extract<QueuedInputSource, { kind: 'goal' }>): void {
+    const driver = this.#driver;
+    const goal = driver?.goal();
+    if (
+      driver === undefined ||
+      goal === undefined ||
+      goal.id !== source.goalId ||
+      goal.revision !== source.revision ||
+      goal.phase !== 'active' ||
+      goal.activation !== 'armed'
+    ) {
+      return;
+    }
+    try {
+      // pump 自己為了「刪不掉的預約」下的暫停，不是人在外面按的暫停：不中止任何東西（#1516，維持 #638 的行為）。
+      //
+      // **這道排除今天走不到，沒有測試釘住（突變：拿掉它，全套仍綠——已知）。** 它要有作用，得在清 `#cancelledGoalRounds` 的這一刻
+      // `agentRunning` 為真而 `running` 為假（核准掛著），且有一份預約剛被刪。但預約只在 pump 閒著時排、下一輪開始就被領走；
+      // 實測（模型建好目標後停在核准點）停在核准點時 inbox 是空的，排程器不在核准點排預約。所以這裡的暫停碰到 `agentRunning`
+      // 為真的機會是零。留著是保險：**以後誰改了預約的排程時機（例如允許在核准點排預約），就要在這裡補一條測試**——
+      // 人打的那一輪停在核准點、預約被刪，核准不該被收回。
+      this.#pausingInternally = true;
+      driver.pause({ id: goal.id, revision: goal.revision });
+    } catch (error: unknown) {
+      driver.warn(
+        `刪掉續行預約之後暫停目標失敗：${error instanceof Error ? error.message : String(error)}`,
+      );
+    } finally {
+      this.#pausingInternally = false;
+    }
+  }
+
+  /**
+   * 目標被暫停了：**人下的暫停會當場中止這一輪**（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)），模型在自己這一輪裡
+   * 用 `update_goal` 下的暫停照常收完。照 dsh `goal-round-driver` 對 `goal/changed` 的反應
+   * （`src/index.ts:305-311`，條件是 `operation === 'pause'`、agent 在跑、`currentInitiator() !== agent`，動作是
+   * `agent.cancel({ kind: 'user' }, { keepInbox: true })`）。**不分這一輪是續行輪還是人打的那一輪**，dsh 的條件裡沒有分。
+   *
+   * - **誰下的**：{@link runScope}。這顆事件是在哪條 async 鏈上寫的，訂閱者同步被叫到，所以 `getStore()` 讀得到寫它的人。
+   * - **「在跑」**：{@link ThreadPump.agentRunning}——一輪跑著、排著還沒開跑，**或停在核准點**都算。dsh 的 agent 停在核准點時
+   *   `status` 是 `running`（核准發生在一輪的工具執行當中，`agent-loop/src/agent.ts:140-152`），所以人在那時暫停也會 cancel；
+   *   對應到我們就是 {@link ThreadPump.cancel} 的「收回」那一支。
+   * - **中止的方式**：走既有的 {@link ThreadPump.cancel}，也就是停止鈕那條路，**不是另一套**。dsh 的 `keepInbox: true` 逐項對過，
+   *   我們的停止鈕早就是那個形狀（#637 的 Q2）：排在後面的人類輸入保留但停住、等下一次送出才照 FIFO 跑；排著的續行預約在那一輪收成
+   *   中止時整件拿掉（`#parkIfStopped`）。
+   * - **為什麼延後一拍才動手**：這裡跑在日誌的發佈期間（`#noteLogEvent` 的說明），中止會同步觸發訊號的監聽者，其中可能寫日誌——發佈期間不能
+   *   `append`。延到微任務，中止前再確認一次還在跑（這一拍之間那一輪若已經收了就不必動）。
+   */
+  #stopRunForHostPause(): void {
+    // **不看有沒有續行排程器**：`--no-goal-driver` 的組裝沒有自動續行，但人打的那一輪照樣會被「暫停」叫停。
+    if (this.#closed || this.#pausingInternally) return;
+    const store = runScope.getStore();
+    // 模型自己在這一輪裡下的：身分是這條 pump 現在的這一輪。
+    if (store !== undefined && store === this.#current) return;
+    if (!this.agentRunning) return;
+    queueMicrotask(() => {
+      if (this.#closed || !this.agentRunning) return;
+      this.cancel();
+    });
+  }
+
+  /**
+   * 目標變了（root 日誌出現 `goal/change`）：排一次延後的「問排程器」（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）。
+   *
+   * `/goal <目標>` 與 `/goal resume` 走 `wire-handler` 的斜線命令，直接叫執行器、不經過 pump，所以以前唯一的觸發點
+   * （一件工作收尾）一次都不會碰到：畫面回了「目標建好了」，然後什麼都不發生，要等人再講一句話。照 dsh：goal 服務每
+   * commit 一次就發 `goal/changed`，排程器訂閱它（`goal-round-driver/src/index.ts:282-293`，`477b4f4`）。
+   *
+   * **為什麼延後而不是當場問**：授權（`armed`）由 goal 服務自己訂這顆日誌事件時才掛上（`service.ts` 的 `#observe`），
+   * 這裡是另一個訂閱者，先到先後不是我們該押的東西；延一個 tick 就一定在它之後。同一串變更（建立後立刻改）也因此只問一次。
+   *
+   * 跑著一輪的時候（模型自己在輪中叫 `create_goal` 之類）不問：那一輪收尾時本來就會問。
+   */
+  #scheduleGoalDrive(): void {
+    if (this.#driver === undefined || this.#closed || this.#goalDriveScheduled) return;
+    this.#goalDriveScheduled = true;
+    setImmediate(() => {
+      this.#goalDriveScheduled = false;
+      this.#driveGoalRound();
+    });
+  }
+
+  /**
+   * 送出佇列的一件輪到了：用它**現在**的文字開一輪（改過的就是改過的），`turn/start` 之後領走它。
+   *
+   * 照 dsh 的 `turn()`：先寫 `turn/start`，`preStep` 才領（`packages/core/agent-loop/src/agent.ts:296-330`，`477b4f4`），
+   * 所以領走那一顆落在輪內。**領的一定是第一件**（同 dsh 的 `claim` 取 index 0）：對不上就是 `#queue` 與佇列走散了，
+   * 大聲拋，不去中間找那一件——那會靜靜跑錯件。
+   */
+  async #runQueued(id: string): Promise<void> {
+    const item = this.#inbox['next-turn'][0];
+    if (item === undefined || item.id !== id) {
+      throw new Error(`送出佇列與排程走散了：輪到 "${id}"，佇列第一件是 "${item?.id ?? '（空）'}"`);
+    }
+    if (item.source.kind === 'goal' && !this.#goalReservationValid(item)) {
+      // 預約失效：丟掉它、不開這一輪（dsh pre-step 的 `reject`）。這一件結束之後 `#next` 的收尾會再問一次排程器，
+      // 目標若還是 active 且授權著就重新預約——**空轉的擋法**見 {@link ThreadPump.#goalDropStreak}。
+      this.#spliceInbox({
+        target: 'next-turn',
+        start: 0,
+        removedCount: 1,
+        inserted: [],
+        outcome: 'canceled',
+      });
+      this.#goalDropStreak += 1;
+      if (this.#goalDropStreak >= GOAL_DROP_LIMIT) {
+        this.#goalDropStreak = 0;
+        this.#driver?.warn(`續行預約連續 ${String(GOAL_DROP_LIMIT)} 次領走時失效，停用續行`);
+        try {
+          this.#driver?.disarm();
+        } catch (error: unknown) {
+          this.#driver?.warn(
+            `停用續行失敗：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return;
+    }
+    if (item.source.kind === 'goal') this.#goalDropStreak = 0;
+    await this.#runOnce(pumpInputOf(item), item);
+  }
+
+  /**
+   * 送出佇列的一次變動：先算、驗過，再落日誌、換掉手上那份、推一顆（#637）。
+   *
+   * @param claimed - 這一次是領走開跑的那一件（`turn`），或領走送進模型的整條插話（`steps`，#710）：推送多帶它們，
+   *   畫面據它們畫人的泡泡。
+   * @throws 變動不合規（{@link spliceInbox}）——日誌不動。
+   */
+  #spliceInbox(splice: InboxSplice, claimed?: InboxClaim): void {
+    const next = spliceInbox(this.#inbox, splice);
+    this.#sessions.root.append('inbox/spliced', splice);
+    this.#inbox = next;
+    this.#presentCustom(inboxData(next, claimed));
+  }
+
+  /**
+   * 這一輪現在收不收插話（#710）：收就排進 `next-step`，跑著的這一段在下一步領走；不收就退成排隊。照 dsh 的兩條判準——
+   * agent 在跑（`status === 'running'`，含等核准），而且這一輪還沒被中止（`agent.ts:157`）——再加上我們自己的兩條：
+   *
+   * - **圖裡要掛了載體**（{@link ThreadPump.#stepInboxMounted}），否則放進去的永遠沒人領。
+   * - **這一輪還沒關窗**（{@link CurrentRun.closed}）：圖在收尾時已經問過最後一次。dsh 的迴圈收尾後還會回頭看
+   *   `hasPending` 開下一輪；我們由退成排隊的那一件開，見 {@link ThreadPump.submit} 的偏離。
+   *
+   * 停在核准點時（沒有 run 在跑、有中斷掛著，或答覆已經排著）也收：答覆那一段跑起來就接著叫模型，由它領走。收回不叫
+   * 模型，所以只排著收回時不收。
+   */
+  #acceptsSteer(): boolean {
+    if (!this.#stepInboxMounted || this.#closed) return false;
+    const current = this.#current;
+    if (current?.controller.signal.aborted === true) return false;
+    if (current !== undefined && !current.closed) return true;
+    return this.#pending.size > 0 || this.#queue.some((job) => job.resumes === true);
+  }
+
+  /**
+   * 解析並驗證一句人話裡的引用（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。**同步、不讀任何東西**，
+   * 所以 wire 能在收下那句話的時候呼叫：壞了回 `invalid_argument`，那句話不進佇列。
+   *
+   * 引用要能用才收：這條 thread 沒接讀會話的載體，或圖裡沒掛插話的載體（快照就是靠它進到模型手上的），都拒絕——收下之後
+   * 悄悄不引用，模型看到的是一個沒人解得開的網址。
+   *
+   * @returns 引用換成 `@標題` 之後的文字，與去重後的引用。沒有引用就是原文。
+   * @throws {@link SessionReferenceError} 網址壞、引用自己、超過上限、或這條 thread 不收引用。
+   */
+  referencedText(text: string): ParsedReferencedText {
+    const parsed = parseReferencedText(text, this.#threadId, this.#referencePolicy?.maxReferences);
+    if (
+      parsed.references.length > 0 &&
+      (this.#referenceReader === undefined || !this.#stepInboxMounted)
+    ) {
+      throw new SessionReferenceError(
+        'session references are not available on this server',
+        'SESSION_REFERENCE_INVALID_CONFIG',
+      );
+    }
+    return parsed;
+  }
+
+  /**
+   * 領走時用的解析：收下的時候驗過了，這裡不該再失敗。**萬一失敗（日誌是舊行程留下的、載體後來沒掛）就退回原文並講一聲**，
+   * 不賠上使用者那一輪——原文裡的網址不會被展開，但人話一個字沒少。
+   */
+  #referencedTextOrRaw(text: string): ParsedReferencedText {
+    try {
+      return this.referencedText(text);
+    } catch (error: unknown) {
+      this.#warn?.(
+        `[引用] thread ${this.#threadId} 的引用沒有展開，照原文送：${error instanceof Error ? error.message : String(error)}`,
+      );
+      return { text, references: [] };
+    }
+  }
+
+  /**
+   * 領走整條插話（#710）與這一輪開頭的快照（#713）：**領走本身是同步的**——這一個同步段裡整條 `next-step` 從收件匣
+   * 拿掉、落領走那一顆 `inbox/spliced`，之後到的插話屬於下一次。準備與落 `user/message` 是非同步的
+   * （{@link ThreadPump.#deliverSteps}）。
+   *
+   * **中止之後不領**：同 dsh 每一步 `preStep` 之前先 `signal.throwIfAborted()`。留著的由下一輪的第一次模型呼叫領走。
+   *
+   * @returns 沒有東西可領就是 `undefined`，日誌不動。
+   */
+  #takeSteps(current: CurrentRun): TakenSteps | undefined {
+    if (current.controller.signal.aborted || this.#current !== current) return undefined;
+    const items = this.#inbox['next-step'];
+    const opening = current.opening;
+    if (items.length === 0 && opening === undefined) return undefined;
+    current.opening = undefined;
+    const steps = items.map((item): ClaimedInput => {
+      // 不是人送的（結算通知）不解引用：它的字是子代理寫的，裡面長得像會話網址的東西不是使用者的 `@`。
+      if (item.source.kind !== 'user') return { ...item, references: [] };
+      const parsed = this.#referencedTextOrRaw(item.text);
+      return { ...item, text: parsed.text, references: parsed.references };
+    });
+    if (items.length > 0) {
+      this.#spliceInbox(
+        { target: 'next-step', start: 0, removedCount: items.length, inserted: [] },
+        { steps },
+      );
+    }
+    return { opening, steps };
+  }
+
+  /**
+   * 把領走的東西準備好、落日誌，回要併進 state 的訊息，照日誌的先後。同 dsh `claim` 之後 `step()` 逐則寫 `user/message`
+   * （`agent.ts:403-405`）；有引用的那一句，快照緊跟在它後面。回的訊息要原封不動併進 state：推回模型照日誌推。
+   *
+   * **沒有引用時整段同步**，跟 #710 一樣。有引用才 await 準備；**準備失敗就拋**，這一輪失敗，領走的那幾句丟了——同 dsh
+   * （`agent/pre-step` 拋錯，收件匣已經領走）。人按了停止的話，準備被取消、這裡拋出去，由 {@link ThreadPump.#runOnce} 照中止收。
+   */
+  async #deliverSteps(current: CurrentRun, taken: TakenSteps | undefined): Promise<HumanMessage[]> {
+    if (taken === undefined) return [];
+    const jobs = [
+      ...(taken.opening === undefined
+        ? []
+        : [
+            {
+              text: undefined,
+              references: taken.opening.references,
+              snapshotId: taken.opening.messageId,
+            },
+          ]),
+      ...taken.steps.map((step) => ({
+        text: step,
+        references: step.references ?? [],
+        snapshotId: snapshotIdOf(step.id),
+      })),
+    ];
+    const reader = this.#referenceReader;
+    const signal = current.controller.signal;
+    const hasReferences = jobs.some((job) => job.references.length > 0);
+    // **這一批的預算在第一個 await 之前同步算一次，整批共用**（#1573 N0862）：開場那句與插話走同一處（step-inbox 的 `claim`），
+    // 同一批的兩句不會各算各的。路由用控制器的 `next()`（純讀日誌），不叫 `assembleStep()`／`takeStepRoute()`，見
+    // `ModelSelectionHost.nextContextWindow`。領走發生在這一步的 `beforeModel` 裡、早於後面的 `assembleStep()`，所以這一步的路由
+    // 還沒定，見 `session-reference.ts` 檔頭偏離 5。沒有引用就不算，免得每一步都掃一次日誌。
+    const maxReferenceBytes = hasReferences ? this.#referencePolicy?.budgetBytes() : undefined;
+    const prepared = hasReferences
+      ? await Promise.all(
+          jobs.map((job) =>
+            job.references.length === 0
+              ? undefined
+              : prepareSessionReferences({
+                  selfId: this.#threadId,
+                  references: job.references,
+                  // 有引用就一定驗過有讀取端（{@link ThreadPump.referencedText}）；到這裡沒有是程式錯。
+                  reader:
+                    reader ??
+                    (() => {
+                      throw new Error('有引用但這條 thread 沒接讀會話的載體');
+                    })(),
+                  messageId: job.snapshotId,
+                  signal,
+                  ...(maxReferenceBytes !== undefined && { maxReferenceBytes }),
+                  ...(this.#spillStore !== undefined && { spillStore: this.#spillStore }),
+                }),
+          ),
+        )
+      : jobs.map(() => undefined);
+    const messages: HumanMessage[] = [];
+    jobs.forEach((job, index) => {
+      if (job.text !== undefined) {
+        // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
+        const message = new HumanMessage({
+          content: userContent(job.text.text, job.text.attachments, job.text.mention) as never,
+          id: job.text.id,
+        });
+        const logged = this.#sessions.root.append('user/message', {
+          message: toLoggedMessage(message),
+          source: userMessageSourceOf(job.text.source),
+        });
+        // 圖的來源記號（#1270）：`image/offload` 靠「出自哪顆事件」定位這則訊息裡的圖；記在記完事件之後才知道 seq。沒有圖時不動。
+        this.#inboxIdBySeq.set(logged.seq, job.text.id);
+        messages.push(stampImageOrigin(message, logged.seq));
+      }
+      const snapshot = prepared[index];
+      if (snapshot !== undefined) {
+        this.#sessions.root.append('user/message', {
+          message: toLoggedMessage(snapshot.message),
+          source: snapshot.source,
+        });
+        messages.push(snapshot.message);
+      }
+    });
+    return messages;
+  }
+
+  /**
+   * 改、刪送出佇列裡排著的一件（#637），或把它改成插話（#710）。照 dsh 的 `updateQueue`（`packages/api/session-controller/src/commands.ts:468-498`，
+   * `477b4f4`）：在兩條清單裡找那一件。
+   *
+   * - **改**：同一顆裡拿掉再插回（id、位置不變），帶 `outcome: 'canceled'`。
+   * - **刪**：拿掉，帶 `outcome: 'canceled'`。在 `next-turn` 的話排程那一件一起拿掉。
+   * - **插話**：只收還在 `next-turn`、而且這一輪還收插話的（{@link ThreadPump.#acceptsSteer}），否則 `'steer-unavailable'`，
+   *   同 dsh 的 `session/steer-unavailable`。從 `next-turn` 拿掉（帶 `outcome: 'canceled'`）、接到 `next-step` 尾巴，同 dsh
+   *   `inbox.remove` 之後 `agent.steer`。
+   *
+   * 改、刪**任何時候都收**：跑著、停在核准點、停住時都行，插話那一條裡的也行。
+   *
+   * @returns 那一件已經不在隊裡（開跑了、被領走了、刪掉了、從沒有過）就是 `'not-found'`，日誌不動。
+   */
+  updateQueue(itemId: string, action: QueueAction): 'updated' | 'not-found' | 'steer-unavailable' {
+    if (this.#closed) return 'not-found';
+    const target = (['next-turn', 'next-step'] as const).find((list) =>
+      this.#inbox[list].some((item) => item.id === itemId),
+    );
+    if (target === undefined) return 'not-found';
+    const index = this.#inbox[target].findIndex((item) => item.id === itemId);
+    const item = this.#inbox[target][index]!;
+    // 續行預約（#638）：改它的文字＝刪掉它（提示詞必須逐字等於目前目標的那一份，改過的就不是那一輪了，領走時一定失效），
+    // 所以兩者都是「取消這一輪並暫停目標」；不收轉成插話——續行不是人的插話。
+    if (item.source.kind === 'goal') {
+      if (action.kind === 'steer') return 'steer-unavailable';
+      this.#spliceInbox({
+        target,
+        start: index,
+        removedCount: 1,
+        inserted: [],
+        outcome: 'canceled',
+      });
+      const at = this.#queue.findIndex((job) => job.itemId === itemId);
+      const [job] = at < 0 ? [] : this.#queue.splice(at, 1);
+      job?.resolve();
+      this.#noteStatus();
+      // 暫停等閒下來：這一刻就閒著的話下一行馬上做，還有別的輪在跑就留給那幾輪收尾後的 `#driveGoalRound`。
+      this.#cancelledGoalRounds.push(item.source);
+      this.#pauseCancelledGoalRounds();
+      this.#kick();
+      return 'updated';
+    }
+    if (action.kind === 'edit') {
+      this.#spliceInbox({
+        target,
+        start: index,
+        removedCount: 1,
+        inserted: [{ ...item, text: action.text }],
+        outcome: 'canceled',
+      });
+      return 'updated';
+    }
+    if (action.kind === 'steer' && (target !== 'next-turn' || !this.#acceptsSteer())) {
+      return 'steer-unavailable';
+    }
+    this.#spliceInbox({ target, start: index, removedCount: 1, inserted: [], outcome: 'canceled' });
+    if (action.kind === 'steer') {
+      this.#spliceInbox({
+        target: 'next-step',
+        start: this.#inbox['next-step'].length,
+        inserted: [item],
+      });
+    }
+    if (target === 'next-turn') {
+      // 它不會開一輪了：排程那一件一起拿掉，送出它的 promise 就此有結果。
+      const at = this.#queue.findIndex((job) => job.itemId === itemId);
+      const [job] = at < 0 ? [] : this.#queue.splice(at, 1);
+      job?.resolve();
+      this.#noteStatus();
+      this.#kick();
+    }
+    return 'updated';
+  }
+
+  /**
+   * 那一輪收成了中止：按停止時的請求這時才算數，排著的開新一輪的停住（#637 的 Q2）。
+   *
+   * 續行那一輪（沒有 `itemId` 的）直接拿掉：中止之後目標不續行（#265 的 Q8），停住它等人再送的話，那時跑的是
+   * 一份過期的輪次。
+   */
+  #parkIfStopped(): void {
+    if (!this.#stopRequested) return;
+    this.#stopRequested = false;
+    for (let at = this.#queue.length - 1; at >= 0; at -= 1) {
+      const job = this.#queue[at]!;
+      if (job.answers) continue;
+      if (job.itemId !== undefined) {
+        // 排在佇列上的續行預約（#638）也一樣拿掉：人的件停住等下一次送出，預約不是人的——停住它等人再送的話，那時
+        // 跑的是一份過期的輪次。**不暫停目標**（#265 的 Q8：目標狀態不動）；授權由排程器的 `turn-aborted` 收回。
+        // dsh 同：idle 時撤回還排著的預約（`agent.inbox.remove(attempt.messageId)`，`9a8d21dfe75`）。
+        const list = this.#inbox['next-turn'];
+        const itemAt = list.findIndex((item) => item.id === job.itemId);
+        if (itemAt < 0 || list[itemAt]!.source.kind !== 'goal') continue;
+        this.#spliceInbox({
+          target: 'next-turn',
+          start: itemAt,
+          removedCount: 1,
+          inserted: [],
+          outcome: 'canceled',
+        });
+      }
+      this.#queue.splice(at, 1);
+      job.resolve();
+    }
+    this.#stopParked = this.#queue.some((job) => !job.answers);
+  }
+
+  /**
+   * 一輪失敗、寫 `turn/failed` 之前，替這一輪**沒配到結果的呼叫**當場補錯誤結果（[#2029](https://github.com/DemianLi/nexus-agent/issues/2029)）。
+   * 不補的話日誌上那幾顆一直沒有配對：續接的補結看到 `turn/failed` 就當這一輪收了，不會替它補。
+   *
+   * 結果從 {@link unansweredCallResults} 拿，句子與碼同續接的補結。對話那一側也由這裡寫，同 {@link ThreadPump.#withdraw}：
+   * 存檔點上還懸著的那幾顆推同一則 ToolMessage 進去，下一輪就不會由基座補上那句成因錯的話（#265 的 Q12）。
+   * 只推存檔點上真的懸著的：模型那一步還沒進存檔點就失敗的話，那則回覆不在 state 裡，推進去會是一則沒有呼叫的結果。
+   * 先寫日誌、再寫存檔點：存檔點那一步失敗時日誌已經有結果，存檔點沒有，下一輪那幾顆由基座補（句子不同，則數一樣）。
+   *
+   * @param failure - 這一輪的原錯。
+   * @returns 原錯；補寫也失敗時是把兩個錯一起帶出來的 `AggregateError`，`cause` 是原錯，沿 `cause` 認錯的地方照舊認得出原錯。
+   */
+  async #closeUnansweredCalls(failure: Error): Promise<Error> {
+    const log = this.#sessions.root;
+    try {
+      const results = unansweredCallResults(log.events);
+      if (results.length === 0) return failure;
+      for (const { data } of results) log.append('tool/result', data);
+      const config: ThreadConfig = { configurable: { thread_id: this.#threadId } };
+      const pending = new Set(
+        danglingToolCalls((await this.#agent.getState(config)).values).map((call) => call.id),
+      );
+      const messages = results
+        .filter(({ data }) => pending.has(data.callId))
+        .map(({ message }) => message);
+      if (messages.length > 0) await this.#agent.updateState(config, { messages });
+      return failure;
+    } catch (recoveryError) {
+      return new AggregateError(
+        [failure, recoveryError],
+        '這一輪失敗，沒配到結果的工具呼叫也補不進去',
+        { cause: failure },
+      );
+    }
+  }
+
+  /** {@link turnFailureOf}，固定句的碼多寫一行伺服器日誌：原文只留在這裡。 */
+  #turnFailureNoted(error: unknown): ReturnType<typeof turnFailureOf> {
+    const failure = turnFailureOf(error);
+    const original = failureOriginalText(failure, error);
+    if (original !== undefined) {
+      this.#warn?.(`[輪次] thread ${this.#threadId} ${failure.error.code}：${original}`);
+    }
+    return failure;
+  }
+
+  /** `turn/failed` 寫進日誌之後通知外面（#1536）。回呼拋錯吞掉：通知是附帶的，不能改變這一輪怎麼收尾。 */
+  #reportTurnFailed(failed: SessionEvent<'turn/failed'>, runId?: string): void {
+    const handler = this.#onTurnFailed;
+    if (handler === undefined) return;
+    const error = failed.data.error;
+    try {
+      handler({
+        threadId: this.#threadId,
+        ...(runId !== undefined && { runId }),
+        seq: failed.seq,
+        code: error?.code ?? 'UNKNOWN',
+        ...(error?.status !== undefined && { status: error.status }),
+        ...(error?.requestId !== undefined && { requestId: error.requestId }),
+      });
+    } catch {
+      // 吞掉：見上。
+    }
+  }
+
+  async #runOnce(input: PumpInput, claimed?: QueuedInput): Promise<void> {
     // **記在這裡而不是 submit 裡**：submit 只是排隊，真正開跑才是這一輪的起點。
     // 記在排隊時的話，兩件事排在一起時日誌會出現「兩個 start 之後才有第一個 end」。
-    this.#sessions.root.append('turn/start', turnStartOf(input));
+    // **引用先換成 `@標題`，日誌與模型看到的是同一份**（#713）：`turn/start.text` 是這一句話的唯一來源（`session-log.ts`
+    // 登記過的偏離），網址留在日誌上的話，重放與搜尋都會撞見一個不是人打的字串。
+    const referenced = input.kind === 'message' ? this.#referencedTextOrRaw(input.text) : undefined;
+    if (referenced !== undefined && input.kind === 'message') {
+      input = { ...input, text: referenced.text };
+    }
+    const turnStart = this.#sessions.root.append('turn/start', turnStartOf(input));
+    if (claimed !== undefined) this.#inboxIdBySeq.set(turnStart.seq, claimed.id);
+    // 人的決定落在它回答的那一輪裡（審計要在輪內，#1029）。
+    if (input.kind === 'resume') this.#noteApprovalDecided(input.interruptId, input.response);
+    // 答了就忘掉它是誰發的：同一個 task 的下一次反問會帶著**同一個 id** 再度中斷（id 是 task 的雜湊），留著會把新的一顆當成
+    // 看過的、不排代答，那一輪就永遠停在中斷上。
+    if (input.kind === 'resume') this.#elicitationOrigins.delete(input.interruptId);
+    if (input.kind === 'resume' && input.systemAnswered !== undefined) {
+      this.#sessions.root.append(
+        'interrupt/system-answered',
+        {
+          interruptId: input.interruptId,
+          reason: input.systemAnswered.reason,
+          keys: input.systemAnswered.keys,
+        },
+        { ignorable: true },
+      );
+    }
+    // 領走：落在 `turn/start` 之後、叫模型之前，所以帶 `claimed` 的那顆推送一定比這一輪模型與工具的任何 frame 早。
+    // 比它早的只有 `turn/start` 的訂閱者當場合成的 `custom`（清空待辦），同 dsh 的先後。
+    //
+    // **留在插話那一條的不在這裡領**（按停止之後留下的、重啟接回來的），由這一輪的第一次模型呼叫領走，排在這一件後面。
+    // **偏離（登記）**：dsh 的 `claim` 先領 `next-step` 再領 `next-turn`（`inbox.ts:109-114`），模型看到的是插話在前。我們
+    // 這一件的文字在 `turn/start`（`session-log.ts` 登記過的偏離），推回模型時它就是這一輪的第一則，所以插話只能在後。
+    if (claimed !== undefined) {
+      this.#spliceInbox(
+        { target: 'next-turn', start: 0, removedCount: 1, inserted: [] },
+        {
+          turn: {
+            ...claimed,
+            text: referenced?.text ?? claimed.text,
+            ...(referenced === undefined ? {} : { references: referenced.references }),
+          },
+        },
+      );
+    }
     // **`text` 只讀一次的那個值就是上面寫進日誌的那個。** 兩份分開算的話，一顆日誌上
     // 逐字正確的 `turn/start` 可以配上餵給模型的任意字串，而不變量伴生只看得到日誌那
     // 一份——它結構上驗不到這種偏差。所以這兩行必須共用同一個來源。
@@ -1028,8 +3045,15 @@ export class ThreadPump {
       input.kind === 'resume'
         ? // **逐 id 派送，不是裸值。** 鍵是那顆 `XXH3(checkpoint_ns)`，基座只把值送給
           // 那一顆 task；裸值會廣播給每一顆待決的 task（見 `PumpInput` 的 `interruptId`）。
+          // **這也是工具屏障（#711 第 2 步）的承重點**：中斷時排在後面、一起退出的呼叫，resume 時會重跑並掛出自己的卡；
+          // 改成裸值，答前一顆的那個決定就會被重跑的那一顆讀走，一個決定蓋住兩顆。
           new Command({ resume: { [input.interruptId]: input.response } })
-        : { messages: [new HumanMessage(input.text)] };
+        : // 蓋上這顆 `turn/start` 的 seq（#1270）：重放（`replayConversation`）蓋的是同一顆事件的 seq，所以續接前後同一張圖是同一個身分。
+          {
+            messages: [
+              stampImageOrigin(humanMessageForTurnStart(turnStartOf(input)), turnStart.seq),
+            ],
+          };
 
     // 一輪一個中止控制器，照 dsh（`packages/core/agent-loop/src/agent.ts:149-155`）。
     const current: CurrentRun = {
@@ -1037,50 +3061,184 @@ export class ThreadPump {
       partial: '',
       reasoning: '',
       replyOpen: false,
+      reply: undefined,
       stopped: false,
+      maxTokens: false,
+      blocked: false,
+      closed: false,
+      opening:
+        referenced === undefined || referenced.references.length === 0
+          ? undefined
+          : {
+              references: referenced.references,
+              messageId: snapshotIdOf(claimed?.id ?? crypto.randomUUID()),
+            },
+    };
+    // 插話的領取口（#710）：圖裡那顆 middleware 每次叫模型之前 `claim`、收尾時 `finish`，見 `@nexus/core` 的 `step-inbox.ts`。
+    const stepInbox: StepInbox = {
+      claim: () => this.#deliverSteps(current, this.#takeSteps(current)),
+      finish: () => {
+        // **領與關窗在同一個同步段**：`#takeSteps` 判定沒有東西可領的那一刻就關，之後到的插話排 `next-turn`。
+        const taken = this.#takeSteps(current);
+        if (taken === undefined) current.closed = true;
+        return this.#deliverSteps(current, taken);
+      },
     };
     this.#current = current;
+    // 一輪的時鐘（#1624）：從 `turn/start` 寫下之後起算，到點照停止鍵的路中止。停在核准點、正常收尾、拋錯都在 `finally` 清掉；
+    // 人批准是新的一輪，重新計時，等人的時間不算。
+    const stopClock = startTurnClock(
+      this.#turnClock,
+      () => this.#abortRun(current, TURN_TIMEOUT_CAUSE),
+      () => {
+        const tools = unsettledToolNames(this.#sessions.root.events);
+        this.#warn?.(
+          `[時鐘] thread ${this.#threadId} 的一輪到點中止之後還沒收尾，等著還沒落定的工具：${tools.length === 0 ? '（沒有）' : tools.join('、')}`,
+        );
+      },
+    );
     try {
+      // **輪頭先問一次，人話不進圖**（#633）：圖的輸入只要送進去，基座就把它存進存檔點——就算第一次模型呼叫被閘門擋下、圖拋錯也一樣
+      // （實測，見 `goal-driver-pump.test.ts`）。dsh 的 `user/message` 要等放行才寫，被擋下的話不在之後的對話裡，所以輪頭的擋要在
+      // 把輸入交給圖**之前**。`resume` 沒有人話可漏，留給圖裡的閘門（它要讓掛著的核准照常走到下一次模型呼叫才知道）。
+      // 輪頭放行、取到串流之前才封存的那個縫：閘門仍在圖裡每次模型呼叫前擋，只是那一句話已進了存檔點（已知的小縫）。
+      if (input.kind !== 'resume' && this.#isArchived?.() === true) {
+        current.blocked = true;
+        // 圖沒跑，基座不會發收尾 frame：自己補一顆，形狀同 `#translate` 把圖的 `failed` 換成的那一顆。
+        this.#broadcast(
+          this.#seal({
+            method: 'lifecycle',
+            params: {
+              namespace: [],
+              timestamp: Date.now(),
+              data: { event: 'completed', graph_name: 'root', blocked: true },
+            },
+          } as unknown as Event),
+        );
+        throw new TurnBlockedError();
+      }
+      // 退回標題（#647）：這條會話還沒有標題就從第一則合格的人話推一個。**在領走之後**，所以是開跑的那一刻、用開跑的
+      // 那份文字，同 dsh 的 `user/message` 開跑時才落。**寫不進去只講一聲，這一輪照跑**，同 dsh `onUserMessage` 的
+      // catch：標題是附帶的，不值得賠上使用者那一輪。自己包一層、又放在外層 try 裡面，兩件都保住。
+      if (input.kind === 'message') {
+        try {
+          ensureFallbackTitle(this.#sessions.root, this.#titleLimits);
+        } catch (error: unknown) {
+          this.#warn?.(`[標題] thread ${this.#threadId} 的退回標題寫不進去：${String(error)}`);
+        }
+      }
       // **取串流這一步也在 try 裡面。** 它自己就會拋（模型建不起來、憑證不對），
       // 而擺在外面的話那種失敗會留下一顆沒有結尾的 `turn/start` ——
       // 日誌上看起來像跑到一半消失，跟真的跑到一半消失分不出來。
-      const run = await this.#agent.streamEvents(payload as never, {
-        version: 'v3',
-        configurable: {
-          thread_id: this.#threadId,
-          // **放在 `configurable`，不是 LangGraph 的 `signal`**：交給 LangGraph 會丟下正在跑的
-          // 工具（實測），見 `@nexus/core` 的 `turn-cancel.ts`。
-          [TURN_CANCEL_CONFIG_KEY]: current.controller.signal,
-        },
-      });
+      const run = await runScope.run(current, () =>
+        this.#agent.streamEvents(payload as never, {
+          version: 'v3',
+          durability: RUN_DURABILITY,
+          configurable: {
+            thread_id: this.#threadId,
+            // **放在 `configurable`，不是 LangGraph 的 `signal`**：交給 LangGraph 會丟下正在跑的
+            // 工具（實測），見 `@nexus/core` 的 `turn-cancel.ts`。
+            [TURN_CANCEL_CONFIG_KEY]: current.controller.signal,
+            [STEP_INBOX_CONFIG_KEY]: stepInbox,
+            // 封存的會話不跑模型步驟（#633）：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，見下面的 catch。
+            ...(this.#isArchived !== undefined && {
+              [ARCHIVE_GATE_CONFIG_KEY]: () => {
+                const archived = this.#isArchived!();
+                if (archived) current.blocked = true;
+                return archived;
+              },
+            }),
+          },
+        }),
+      );
       // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
       markProjectionsHandled(run);
-      for await (const raw of run) {
-        trackRootReply(current, raw);
-        for (const event of this.#translate(raw)) {
-          this.#broadcast(event);
+      // 圖在串流被抽的時候推進，工具在這條 async 鏈上執行：包進 `runScope`，模型在輪內的 `update_goal` 才認得出自己是這一輪。
+      await runScope.run(current, async () => {
+        // 收尾的 `failed` frame 只帶字串，真的錯要等緊接著的拋出才看得到，所以押到那時候才送。
+        let heldFailure: RawProtocolEvent | undefined;
+        const send = (raw: RawProtocolEvent): void => {
+          for (const event of this.#translate(raw)) this.#broadcast(event);
+        };
+        const releaseFailure = (error?: unknown): void => {
+          if (heldFailure === undefined) return;
+          const raw = heldFailure;
+          heldFailure = undefined;
+          send(error === undefined ? raw : withFailureDetail(raw, error));
+        };
+        try {
+          for await (const raw of run) {
+            this.#applyStreamRetrySignal(current, raw);
+            trackRootReply(current, raw);
+            trackUnsettledReply(current, raw);
+            releaseFailure();
+            if (isRootFailed(raw)) heldFailure = raw;
+            else send(raw);
+          }
+        } catch (error) {
+          releaseFailure(error);
+          throw error;
         }
-      }
+        releaseFailure();
+      });
+      // 串流抽完就關窗（#710）：圖收尾時通常已經關了（`finish`），這裡擋的是沒經過那顆 middleware 就收掉的圖——停在
+      // 核准點的不算，那時之後的插話由 `#pending` 那一條收。
+      current.closed = true;
       // 跑完與停在核准點都算收工——停在核准點時前面會有一顆 `interrupt/raised`。
       // **中止照上線那顆收尾 frame 判**，不是照訊號：訊號在收尾 frame 送出之後才觸發的話，
       // 畫面上是「完成」，日誌也該是。
-      this.#sessions.root.append('turn/end', current.stopped ? { reason: ABORTED_BY_USER } : {});
+      this.#sessions.root.append(
+        'turn/end',
+        current.stopped
+          ? { reason: abortedBy(current) }
+          : current.maxTokens
+            ? { reason: MAX_TOKENS_TURN_END }
+            : {},
+      );
+      // 按了停止但這一輪沒有收成中止（停止撞上核准點、或早就跑完了）：請求作廢，排著的照常。
+      if (current.stopped) this.#parkIfStopped();
+      else this.#stopRequested = false;
+      this.#answerForSystem(current.stopped);
     } catch (error) {
+      // **被準入閘門擋下**（#633，封存的會話）：一個模型請求都沒發，這一輪以 `blocked` 收。**認的是類別**（沿 `MiddlewareError` 拆到底），
+      // 理由同下面的中止。在中止之前判不會搶：中止的訊號一舉起來，閘門那一側先讓路給中止（`turn-cancel.ts`），兩者不會同時成立。
+      //
+      // **被領走的輸入沒有進對話**，照 dsh（`agent.ts:419-423` 的 `user/message` 要等放行才寫）：人話在輪頭就擋下、沒交給圖，
+      // 之後的輪不會看到它。`turn/start` 帶著文字，所以日誌與歷史仍留著使用者打了什麼。
+      if (isTurnBlocked(error)) {
+        this.#sessions.root.append('turn/end', { reason: BLOCKED });
+        this.#stopRequested = false;
+        this.#blockGoalOfRejectedRound(claimed);
+        return;
+      }
       // **認的是中止訊號已經觸發**，不是錯誤長什麼樣：被切斷的模型請求拋什麼要看供應商與抽法，
       // 而 `TurnCancelledError` 是我們自己的類別（沿 `MiddlewareError` 拆到底再認），兩個都不比對
       // 訊息（#276）。
       if (current.controller.signal.aborted || isTurnCancelled(error)) {
         await this.#keepInterruptedReply(current);
-        this.#sessions.root.append('turn/end', { reason: ABORTED_BY_USER });
+        this.#sessions.root.append('turn/end', { reason: abortedBy(current) });
+        this.#parkIfStopped();
         return;
       }
       // 失敗的原因已經以 `lifecycle failed` 上了線（實測：失敗 frame 先發、然後才拋），
       // 所以這裡不再合成一顆。下行**不關**——這條線是長期的，下一次 submit 還要用。
-      const failure = error instanceof Error ? error : new Error(String(error));
-      this.#sessions.root.append('turn/failed', { message: failure.message });
+      const thrown =
+        error instanceof Error ? error : new Error(thrownMessage(error), { cause: error });
+      const failure = await this.#closeUnansweredCalls(thrown);
+      // 沒包成 AggregateError 就照舊拿原始的 `error` 分類：非 Error 的拋出物，分類要看它本身，不是包它的那一層。
+      this.#reportTurnFailed(
+        this.#sessions.root.append(
+          'turn/failed',
+          this.#turnFailureNoted(failure === thrown ? error : failure),
+        ),
+        claimed?.id,
+      );
+      this.#stopRequested = false;
       throw failure;
     } finally {
+      stopClock();
       if (this.#current === current) this.#current = undefined;
+      this.#systemAnswers = [];
       // 一輪裡的判定在這一輪裡就落定了：圍堵在 `wrapToolCall` 回傳之前寫，而圖要等每一顆工具回傳
       // 才走得完，串流才收得了尾。剩下的是已經由日誌收掉的那幾顆（本體沒被呼叫到、或本體拋錯走
       // `tool-error` 的）與沒接日誌的組裝轉發過的，留著只佔記憶體。**哪天有一層在回傳之後才非同步
@@ -1089,6 +3247,94 @@ export class ThreadPump {
       this.#earlyVerdicts.clear();
       this.#bodyStarted.clear();
     }
+  }
+
+  /**
+   * 串流中段出錯、整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）時，`@nexus/core` 的 `stream-retry.ts`
+   * 在**失敗當下**用 `config.writer` 送來一顆 {@link StreamRetrySignal}。它和字片段在同一條輸出佇列上，所以讀到它的時候失敗那次的
+   * 片段一個都不會再來（順序的依據與常駐測試見該檔檔頭與 `stream-retry.test.ts`）。
+   *
+   * - `scheduled`：①作廢 root 還沒收尾的回覆（`assistant/attempt` ＋ `message-discard`，{@link ThreadPump.#discardOpenReply}），
+   *   ②送 `llm-retry`（畫面據此畫「N 秒後重試」）。**兩者在同一刻**，同 dsh 在失敗當下記 `assistant/attempt`。
+   * - `started`：退避等完、下一次嘗試要開始，送 `llm-retry-started`。取消沒有專屬 frame：退避中按停止，這一輪直接收尾。
+   *
+   * **只管 root。** 圖裡 `custom` 的 namespace 是空的才是 root；子代理在更深的 namespace，它們的重打（共用同一個 slot）不擦已經畫出去的字，
+   * 代價是畫面上多一則斷尾的子代理回覆，跟重打之前一樣。**圖自己發的其餘 `custom` 仍然一律不上線**（{@link ThreadPump.#translate}）：
+   * 這裡只認 {@link streamRetrySignalOf} 認得的形狀，其餘原樣略過。
+   */
+  #applyStreamRetrySignal(current: CurrentRun, raw: RawProtocolEvent): void {
+    if (raw.method !== 'custom' || raw.params.namespace.length !== 0) return;
+    const signal = streamRetrySignalOf((raw.params.data as { payload?: unknown } | null)?.payload);
+    if (signal === undefined) return;
+    if (signal.phase === 'started') {
+      this.#presentCustom({
+        name: LLM_RETRY_STARTED,
+        payload: { retryId: signal.retryId, retry: signal.retry },
+      });
+      return;
+    }
+    this.#discardOpenReply(current, signal.modelCall);
+    this.#presentCustom({
+      name: LLM_RETRY,
+      payload: {
+        retryId: signal.retryId,
+        retry: signal.retry,
+        maxRetries: signal.maxRetries,
+        delayMs: signal.delayMs,
+        code: signal.code,
+      },
+    });
+  }
+
+  /**
+   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），線上送
+   * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
+   *
+   * @param modelCall - 失敗的那次呼叫的 `model/start` 的 `seq`（通知帶來的）；日誌沒接上就沒有。
+   */
+  #discardOpenReply(current: CurrentRun, modelCall: number | undefined): void {
+    const previous = current.reply;
+    if (!current.replyOpen || previous === undefined || previous.finish !== undefined) return;
+    const reasoning = current.reasoning;
+    const text = current.partial;
+    const liveId = (previous.start as { id?: unknown }).id;
+    const abandoned = new AIMessage({
+      ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
+      content:
+        reasoning.trim() === ''
+          ? text
+          : [
+              { type: 'reasoning', reasoning },
+              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+            ],
+    });
+    try {
+      this.#sessions.root.append(
+        'assistant/attempt',
+        withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
+        { ignorable: true },
+      );
+    } catch (error: unknown) {
+      // **偏離 dsh（理由 1：基座表達不出來），#1665。** dsh 寫不進去就讓這一步失敗：`assistant/attempt` 與回覆走同一個
+      // `settle`，被拒就 abandon 再重拋（`packages/core/agent-loop/src/assistant-stream.ts:83-88`；串流中途失敗那一支在
+      // `agent.ts:489-500`，重打前作廢那一支在 `:506-510`，`687f282e`）。
+      // 我們這一格在 pump、在圖外，從這裡拋停不住圖：`@langchain/langgraph@1.4.19` 的 `streamEvents` v3 由
+      // `createGraphRunStream` 在背景抽圖（`dist/stream/run-stream.js:428` 的 `pump(source, mux)`），上面那個 `for await` 只是
+      // mux 的一個訂閱（`:106-107`），跳出迴圈只是退訂；它的 abortController 也沒接到 Pregel 的 signal（`dist/pregel/index.js:983-1007`）。
+      // 交給 LangGraph 的 `signal` 停圖也不行：那會丟下正在跑的工具（實測，見上面 `streamEvents` 呼叫處的註解與 `turn-cancel.ts`），
+      // 所以 pump 不給它。拋出去的話 pump 記下 `turn/failed`，圖卻在背景照樣重打、照樣寫這份日誌。停得住圖的只有 turn-cancel 的訊號，而那是
+      // 「使用者按了停止」的語意。所以退到：不拋、大聲講，這一輪照常走（重打照跑）。這一顆 `ignorable`、不進模型歷史，吞掉不會
+      // 讓 state 與日誌分岔，只是少了作廢那半段的紀錄。
+      // **回頭點**：底座換成 Cordis、pump 改進迴圈裡之後（#1385），改回照 dsh 拋出。
+      this.#warn?.(
+        `[會話日誌] thread ${this.#threadId} 的 assistant/attempt 記不進去（作廢的那半段不留紀錄，這一輪照常重打）：${String(error)}`,
+      );
+    }
+    this.#presentCustom({ name: MESSAGE_DISCARD, payload: { messageId: previous.key } });
+    current.reply = undefined;
+    current.partial = '';
+    current.reasoning = '';
+    current.replyOpen = false;
   }
 
   /**
@@ -1103,17 +3349,29 @@ export class ThreadPump {
    * - 一則裡的推理攤平成一塊、排在正文前面，同 `@nexus/wire` 的 `AiEntry.reasoning`（#527 登記過的偏離）。
    * - 沒有推理時 content 照舊是字串。
    *
-   * **寫不進去不能把這一輪變成失敗**：人按了停止是事實，留不下半段只是少了一則訊息。
+   * **寫不進去不能把這一輪變成失敗**：人按了停止是事實，留不下半段只是少了一則訊息。同 dsh：被中止那一支直接重拋，不經
+   * `throwError`、不發 `agent/error`，這一輪記 aborted（`packages/core/agent-loop/src/agent.ts:370-373`、`:387`，`687f282e`），
+   * 錯在 driver 邊界由 `kick()` 收掉（`:252-265`）。**日誌不收就連對話也不寫**（#1665）：
+   * 兩邊一起少這一則，不分岔；並經 `warn` 大聲講。
    *
    * **日誌同時記一顆 `assistant/message {interrupted: true}`**（#305），照 dsh 被中止時把已送出的
    * 前綴收成一則帶記號的回覆。先記日誌再寫對話：日誌是對話的真相，對話那一側寫不進去時，推歷史的
    * 一側照樣拿得到這半段。它落在被切斷那次呼叫的 `model/end` 之後——寫入點看到的是拋錯，不是回覆。
    */
   async #keepInterruptedReply(current: CurrentRun): Promise<void> {
+    // 整次重打的退避期間被停止（#520）：上一次失敗的嘗試在失敗當下就作廢了（{@link ThreadPump.#applyStreamRetrySignal}），
+    // 這裡看到的 `replyOpen` 一定是這一輪真的被我打斷的那則。
     const reasoning = current.reasoning.trim() === '' ? '' : current.reasoning;
     const text = current.partial.trim() === '' ? '' : current.partial;
     if (!current.replyOpen || (reasoning === '' && text === '')) return;
+    // **沿用即時那則的 id**（[#1044](https://github.com/DemianLi/nexus-agent/issues/1044)）：沒有 id 的話，停止與重新整理撞在一起時，
+    // 下行補送的那份（帶即時 id，{@link CurrentRun.reply}）與歷史那份（日誌上這一則）對不起來，畫面出現同一則兩次，折疊器照訊息
+    // id 去重擋不到。**偏離 dsh**（凍結的半段沒有 id，`assembler.ts:169` 的 `interruptedBlocks`）：dsh 的下行與歷史同一刻產出、
+    // 沒有這個重疊；我們是兩個請求。**評分不因此開放**：兩處讀方都明確排除 `interrupted`（`@nexus/core` 的 `currentMessageFeedback`、
+    // 評分外掛的 `isAssistantMessage`），web 的 `isRatable` 也照舊不畫。
+    const liveId = (current.reply?.start as { id?: unknown } | undefined)?.id;
     const reply = new AIMessage({
+      ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
       content:
         reasoning === ''
           ? text
@@ -1124,12 +3382,21 @@ export class ThreadPump {
       additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true },
     });
     try {
-      this.#sessions.root.append('assistant/message', {
-        message: toLoggedMessage(reply),
-        interrupted: true,
-      });
-    } catch {
-      // 同下：這一輪照樣收成中止。
+      // 被切斷的是這份日誌最近開的那次呼叫（一份日誌一次一個），#1021。
+      this.#sessions.root.append(
+        'assistant/message',
+        withModelCall(
+          { message: toLoggedMessage(reply), interrupted: true as const },
+          lastModelCall(this.#sessions.root),
+        ),
+      );
+    } catch (error: unknown) {
+      // **日誌不收就不寫對話**（#1665）：這半段進模型歷史，只寫對話的話記憶體有、日誌沒有，續接後模型看到的歷史不同。
+      // 這一輪照樣收成中止（人按了停止是事實），所以不拋，大聲講一聲，兩邊都少這一則。
+      this.#warn?.(
+        `[會話日誌] thread ${this.#threadId} 被停止那則回覆的半段記不進去，對話也不留：${String(error)}`,
+      );
+      return;
     }
     try {
       await this.#agent.updateState(
@@ -1141,6 +3408,131 @@ export class ThreadPump {
     }
   }
 
+  /**
+   * 這顆中斷若是核准問題，記 `approval/asked`（#1029）。`id` 就是中斷的 id，之後的 `approval/decided` 靠它配對。
+   *
+   * **為什麼在這裡寫，不在核准閘門**：閘門在圖內，`interrupt()` 回來之後整顆 middleware 會從頭重跑，在它之前寫會寫成兩筆。
+   * 這裡每顆中斷只走一次——除了「沒被答到的那些會帶著原本的 id 再度中斷」，那一次靠 {@link ThreadPump.#approvalOpen} 擋掉。
+   *
+   * **只認明寫 `kind: 'approval'` 的**（同 {@link isApprovalSuspension}；線上每一顆都有寫，判別式缺席只是給舊測試的
+   * 向後相容）：問答（`ask_user_question`、計劃審核）不長這顆事件。核准閘門與在本體裡問人的 `request_sandbox_escalation`（#700）發的是同一個
+   * 形狀，所以兩者都算——那是刻意的：兩者都是「把一個放行與否的決定擺到人面前」。一顆中斷問幾件事都只記第一件，閘門與升級
+   * 工具今天都恆為一件。
+   */
+  #noteApprovalAsked(entry: InterruptEntry): void {
+    if (this.#approvalOpen.has(entry.id)) return;
+    const value = entry.value as { kind?: unknown; actionRequests?: unknown } | null;
+    if (value?.kind !== APPROVAL_INTERRUPT_KIND) return;
+    const first = (Array.isArray(value?.actionRequests) ? value.actionRequests : [])[0] as
+      { name?: unknown; callId?: unknown; description?: unknown } | undefined;
+    if (typeof first?.name !== 'string') return;
+    this.#approvalOpen.add(entry.id);
+    this.#sessions.root.append(
+      'approval/asked',
+      {
+        id: entry.id,
+        toolName: first.name,
+        ...(typeof first.callId === 'string' && first.callId !== ''
+          ? { callId: first.callId }
+          : {}),
+        ...(typeof first.description === 'string' ? { reason: first.description } : {}),
+      },
+      { ignorable: true },
+    );
+  }
+
+  /**
+   * 記 `approval/decided`（#1029），只對 {@link ThreadPump.#noteApprovalAsked} 記過的 id。
+   *
+   * @param id - 中斷的 id。
+   * @param response - 人的回覆（`{ decisions: [{ type }] }`）；`undefined` 是問題被收回（按了停止）。
+   *   不是 `approve` 也不是 `reject` 的回覆記 `unavailable`：沒有拿到有效的決定，提問的一方照拒絕處理，碼是 `APPROVAL_INVALID_REPLY`（#2027）。
+   */
+  #noteApprovalDecided(id: string, response: unknown): void {
+    if (!this.#approvalOpen.delete(id)) return;
+    let outcome: ApprovalOutcome;
+    if (response === undefined) {
+      outcome = 'cancelled';
+    } else {
+      const type = (response as { decisions?: { type?: unknown }[] } | null)?.decisions?.[0]?.type;
+      if (type === 'approve') outcome = 'allowed-once';
+      else if (type === 'reject') outcome = 'rejected';
+      else outcome = 'unavailable';
+    }
+    this.#sessions.root.append('approval/decided', { id, outcome }, { ignorable: true });
+  }
+
+  /**
+   * 一顆 MCP server 的反問（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。
+   *
+   * - 要問人的（root 發的、至少一個 `form`）：酬載換成問答卡（`kind: 'question'`＋`origin`）廣播，掛進 `#pending`，
+   *   並把原酬載記在上面，回覆時靠它翻回去（{@link ThreadPump.submit}）。
+   * - 不問人的（子代理發的、或全是 `url`）：**不廣播、不掛**，收進 {@link ThreadPump.#systemAnswers}，這一輪收尾後逐顆回絕。
+   *
+   * **同一顆中斷會被看到不只一次**：前景子代理的先以 `["tools:…"]` 出現，隨後又在 root 層出現（見
+   * {@link ThreadPump.#elicitationOrigins}）；`interrupt/raised` 與代答排程都只做第一次。
+   */
+  *#translateElicitation(
+    entry: InterruptEntry,
+    elicitation: McpElicitation,
+    raw: RawProtocolEvent,
+  ): Generator<Event> {
+    const known = this.#elicitationOrigins.get(entry.id);
+    const isSubagent = known ?? raw.params.namespace.length > 0;
+    this.#elicitationOrigins.set(entry.id, isSubagent);
+    if (known === undefined)
+      this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
+    const reason = systemAnswerReasonOf(elicitation, isSubagent);
+    if (reason !== undefined) {
+      if (known === undefined) {
+        this.#systemAnswers.push({ interruptId: entry.id, elicitation, reason });
+        this.#warn?.(
+          reason === 'subagent'
+            ? `[MCP] thread ${this.#threadId}：子代理呼叫 server "${elicitation.server}" 的工具 "${elicitation.tool}" 時被反問，子代理背後沒有人，已代為回絕`
+            : `[MCP] thread ${this.#threadId}：server "${elicitation.server}" 的工具 "${elicitation.tool}" 要求開網址授權，這一版不支援，已代為回絕`,
+        );
+      }
+      return;
+    }
+    const request = this.#seal({
+      method: 'input.requested',
+      params: {
+        namespace: raw.params.namespace,
+        timestamp: raw.params.timestamp,
+        data: { interrupt_id: entry.id, payload: questionPayloadOf(elicitation) },
+      },
+    } as Event);
+    this.#pending.set(entry.id, {
+      interruptId: entry.id,
+      actionCount: 0,
+      gatedTools: [],
+      request,
+      elicitation,
+    });
+    this.#tell({ type: 'input-requested', event: request });
+    yield request;
+  }
+
+  /**
+   * 這一輪收尾了：把要由系統代答的反問逐顆回絕（{@link ThreadPump.#translateElicitation}）。**走 {@link ThreadPump.submit}**，
+   * 所以排隊、日誌（`turn/start` resume 加 `interrupt/system-answered`）與人答的路是同一條。被停止的那一輪不接著跑——人說了停。
+   */
+  #answerForSystem(stopped: boolean): void {
+    const answers = this.#systemAnswers;
+    this.#systemAnswers = [];
+    if (stopped || this.#closed) return;
+    for (const { interruptId, elicitation, reason } of answers) {
+      this.submit({
+        kind: 'resume',
+        interruptId,
+        response: declineAll(elicitation),
+        systemAnswered: { reason, keys: Object.keys(elicitation.requests) },
+      }).catch(() => {
+        // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
+      });
+    }
+  }
+
   /** 一顆原始封包 → 零到多顆線上的封包。 */
   *#translate(raw: RawProtocolEvent): Generator<Event> {
     if (raw.method === 'updates' && raw.params.node === '__interrupt__') {
@@ -1148,14 +3540,19 @@ export class ThreadPump {
       // `input.requested`。這裡補上那一顆——順帶讓 `updates` 整條留在白名單外，
       // 它每一顆都夾著完整序列化的訊息。
       for (const entry of asInterruptEntries(raw.params.data)) {
-        // 同 id 覆寫：沒被答到的那些會帶著原本那顆 id 再度中斷（實測）。
-        this.#pending.set(entry.id, {
-          interruptId: entry.id,
-          actionCount: actionCountOf(entry.value),
-          gatedTools: gatedToolsOf(entry.value),
-        });
+        const elicitation = parseMcpElicitation(entry.value);
+        if (elicitation !== undefined) {
+          yield* this.#translateElicitation(entry, elicitation, raw);
+          continue;
+        }
+        if (raw.params.namespace.length === 0 && this.#nestedApprovals.delete(entry.id)) continue;
+        if (raw.params.namespace.length > 0) this.#nestedApprovals.add(entry.id);
+        // **先記日誌、再蓋號**，同以前的先後：日誌的訂閱者同步送出的 frame 要拿比這顆小的號，否則這顆廣播出去時
+        // 會被折疊器當成重複丟掉。
         this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
-        yield this.#seal({
+        this.#noteApprovalAsked(entry);
+        // **補送的是廣播出去的同一顆**，號也一樣：同 dsh 把原本那顆 frame 再送一次。
+        const request = this.#seal({
           method: 'input.requested',
           params: {
             namespace: raw.params.namespace,
@@ -1163,6 +3560,15 @@ export class ThreadPump {
             data: { interrupt_id: entry.id, payload: entry.value },
           },
         } as Event);
+        // 同 id 覆寫：沒被答到的那些會帶著原本那顆 id 再度中斷（實測）。
+        this.#pending.set(entry.id, {
+          interruptId: entry.id,
+          actionCount: actionCountOf(entry.value),
+          gatedTools: gatedToolsOf(entry.value, raw.params.namespace.length > 0),
+          request,
+        });
+        this.#tell({ type: 'input-requested', event: request });
+        yield request;
       }
       return;
     }
@@ -1181,12 +3587,53 @@ export class ThreadPump {
       // 這一種（`interrupted` 是停下來等輸入），所以用一格我們自己的 `aborted` 讓畫面分得出
       // 「已停止」與「失敗」（#265 的 Q13）。
       current.stopped = true;
+      // 取消不是失敗，不帶碼。
+      const { code: _code, ...data } = raw.params.data as { code?: string };
       yield this.#seal({
         method: raw.method,
         params: {
           namespace: raw.params.namespace,
           timestamp: raw.params.timestamp,
-          data: { ...(raw.params.data as object), aborted: true },
+          data: {
+            ...data,
+            aborted: true,
+            cause: current.cause ?? USER_CAUSE,
+          },
+        },
+      } as Event);
+      return;
+    }
+
+    if (current !== undefined && current.blocked && isRootTerminal(raw)) {
+      // **被準入閘門擋下（#633）一樣只加分類**：閘門拋的錯讓基座發了 `failed`，但這不是失敗——一個請求都沒發、沒有東西壞掉。
+      // 換成帶 `blocked` 的 `completed`，不帶錯誤字串，畫面不會畫成失敗；怎麼講「這句話沒有送給模型」是畫面的事。
+      yield this.#seal({
+        method: raw.method,
+        params: {
+          namespace: raw.params.namespace,
+          timestamp: raw.params.timestamp,
+          data: { event: 'completed', graph_name: 'root', blocked: true },
+        },
+      } as Event);
+      return;
+    }
+
+    if (
+      current !== undefined &&
+      isRootCompleted(raw) &&
+      this.#pending.size === 0 &&
+      turnReachedMaxTokens(this.#sessions.root.events)
+    ) {
+      // **撞到輸出上限（#433）一樣只加分類**，理由同上面那一格：協定的 `AgentStatus` 沒有這一種。判準讀的是
+      // 這一輪記下的回覆——`assistant/message` 在模型呼叫的 middleware 裡寫，早於這顆收尾 frame。中止先判，
+      // 蓋過它，同 dsh（`agent-loop/src/agent.ts:349-355`）。停在核准點的那一次不標：那一輪還沒收。
+      current.maxTokens = true;
+      yield this.#seal({
+        method: raw.method,
+        params: {
+          namespace: raw.params.namespace,
+          timestamp: raw.params.timestamp,
+          data: { ...(raw.params.data as object), maxTokens: true },
         },
       } as Event);
       return;
@@ -1203,6 +3650,8 @@ export class ThreadPump {
     if (raw.method === 'custom' || channelOfMethod(raw.method) === undefined) {
       return;
     }
+    // 本體停在核准上的那顆 `tool-error` 不上線，見 {@link isApprovalSuspension}。
+    if (raw.method === 'tools' && isApprovalSuspension(raw.params.data)) return;
     yield this.#seal({
       method: raw.method,
       params: {
@@ -1289,6 +3738,19 @@ export class ThreadPump {
   }
 
   /**
+   * 目標的折疊折壞了（接不上的變更、不屬於目前目標的續行輪次）：講一行 warn，**只講一次**。投影從此停在最後一個好的
+   * 值（`goal-wire.ts`）；日誌那一側的違規由 goal 的配套入口報，這裡報的是「畫面上的目標不再更新」。
+   */
+  #reportGoalFailure(): void {
+    const failure = this.#goal.takeFailure();
+    if (failure !== undefined) {
+      this.#warn?.(
+        `[目標] thread ${this.#threadId} 的目標折不下去，畫面上的目標停在最後一個好的值：${failure}`,
+      );
+    }
+  }
+
+  /**
    * 日誌的訂閱者（#296、#297）。
    *
    * **這裡跑在寫日誌那一層的呼叫堆疊上**（圍堵的 `wrapToolCall`），而且在發佈期間——不能 `append`
@@ -1298,21 +3760,68 @@ export class ThreadPump {
     // 會話累計（#574）：只收 root 的，同 dsh 的 `tokenUsage`／`sessionStats`；子代理是另一份日誌。值變了才送。
     if (entry.address.kind === 'root') {
       for (const data of this.#totals.apply(event)) this.#presentCustom(data);
+      const goal = this.#goal.apply(event);
+      if (goal !== undefined) this.#presentCustom(goal);
+      this.#reportGoalFailure();
+      if (event.type === 'goal/change') {
+        this.#scheduleGoalDrive();
+        if (event.data.operation === 'pause') this.#stopRunForHostPause();
+      }
+      // 插件投影：一個泛用呼叫，不是每種投影一個分支。變了的單元各送一顆 `projection` frame。
+      for (const value of this.#projections?.push(event) ?? []) {
+        // 輪外（命令、接上時的 baseline）當場送；輪中才合併。
+        this.#projectionOut.offer(value.key, projectionData(value), this.#current !== undefined);
+      }
+    }
+    // 子代理自己的投影（#1028）：宣告 `children` 的單元對每個子代理各折一份，值帶 `session`（它的 `runId`）送出。
+    if (entry.address.kind === 'subagent') {
+      const { runId } = entry.address;
+      for (const value of this.#childSessions.get(runId)?.push(event) ?? []) {
+        this.#projectionOut.offer(`${runId}\0${value.key}`, projectionData(value, runId));
+      }
+    }
+    // 一輪收尾（root 的 `turn/end`）：合併視窗裡待送的當場全送，下行看到的就是最終值（#1071）。
+    if (event.type === 'turn/end' && entry.address.kind === 'root') this.#projectionOut.flush();
+    // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。
+    if (
+      event.type === 'assistant/message' &&
+      entry.address.kind === 'root' &&
+      this.#current !== undefined
+    ) {
+      this.#current.reply = undefined;
     }
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
-    else if (event.type === 'tool/result') this.#noteVerdict(event);
+    else if (event.type === 'tool/result') this.#noteVerdict(event, entry.address);
     else if (event.type === 'deliverables/presented' && entry.address.kind === 'root') {
       this.#presentDeliverables(event.data, event.seq);
     } else if (event.type === 'workspace/changes' && entry.address.kind === 'root') {
       this.#presentCustom(workspaceChangesData(event.seq));
     } else if (event.type === 'model/usage' && entry.address.kind === 'root') {
       // 用量表（#528）：只收 root 的，同 dsh 的 `contextPressure`；子代理的呼叫不算進主對話的大小。
+      // 沒有正常回來的呼叫（#1022）也算一筆樣本：dsh 的 `contextPressure` 連 `assistant/attempt` 的用量也取樣
+      // （`token-meter/src/usage-projection.ts` 的 `usageOf`），那份請求真的送出去過，prompt 大小是真的。歷史那一側同一條。
       this.#presentCustom(modelUsageData(event.data));
     } else if (event.type === 'context/measure' && entry.address.kind === 'root') {
       this.#presentCustom(contextMeasureData(event.data));
     } else if (event.type === 'todo/write' && entry.address.kind === 'root') {
       // 待辦清單（#575）：只收 root 的，同 dsh 的 `todos` 投影；子代理各寫各的那一份，不進面板。
       this.#presentCustom(todosData(event.data.todos));
+    } else if (event.type === 'compaction/summary' && entry.address.kind === 'root') {
+      // 壓縮過這件事（#896）：只收 root 的；子代理壓縮是它自己那份日誌的事，歷史路由也只讀 root。
+      this.#presentCustom(compactionData(event, this.#toolTextMaxBytes));
+    } else if (event.type === 'plan/mode' && entry.address.kind === 'root') {
+      // 計劃模式（#895）：只收 root 的，同 dsh 的 `plan` 投影；`/plan` 與 `exit_plan_mode` 都只寫 root 那一份。
+      this.#presentCustom(planModeData(event.data.active));
+    } else if (event.type === 'session/title' && entry.address.kind === 'root') {
+      // 標題（#647）：只收 root 的，同 dsh 的 `title` 投影。
+      this.#presentCustom(titleData(event.data.title));
+    } else if (event.type === 'image/offload' && entry.address.kind === 'root') {
+      // 圖片額度省略（#1270）：只收 root 的（圖由人送出、住在 root 的日誌上）。與歷史那一側共用 {@link imageOffloadData}。
+      const data = imageOffloadData(event, entry.log.events, (seq) => this.#inboxIdBySeq.get(seq));
+      if (data !== undefined) this.#presentCustom(data);
+    } else if (event.type === 'subagent/catalog' && entry.address.kind === 'root') {
+      // 子代理目錄（#1023）：只收 root 的，同 dsh 的 `subagentCatalog`；與歷史那一側共用 {@link subagentCatalogData}。
+      this.#presentCustom(subagentCatalogData(event.data));
     } else if (entry.address.kind === 'root' && isTodosReset(event)) {
       // 開新的一輪：清單回到 `null`。每一輪都送，不管之前有沒有清單——pump 不記清單的狀態。
       this.#presentCustom(todosData(null));
@@ -1335,14 +3844,20 @@ export class ThreadPump {
    * [#443](https://github.com/DemianLi/nexus-agent/issues/443)）也走這裡，`data` 與歷史那一側共用
    * {@link workspaceChangesData}。
    */
-  #presentCustom(data: { readonly name: string; readonly payload: unknown }): void {
-    this.#broadcast(
-      this.#seal({
-        type: 'event',
-        method: 'custom',
-        params: { namespace: [], timestamp: Date.now(), data },
-      } as Event),
-    );
+  #presentCustom(data: CustomFrameData): void {
+    this.#broadcast(this.#customFrame(data));
+  }
+
+  /**
+   * 封一顆 `custom` frame。**即時這一側的 `custom` frame 一律從這裡長**：`data` 只收 `@nexus/wire` 那張名字→酬載表上的
+   * 一格（[#685](https://github.com/DemianLi/nexus-agent/issues/685)），名字不在表上、或酬載形狀不對，當場編不過。
+   */
+  #customFrame(data: CustomFrameData): Event {
+    return this.#seal({
+      type: 'event',
+      method: 'custom',
+      params: { namespace: [], timestamp: Date.now(), data },
+    } as Event);
   }
 
   /**
@@ -1407,16 +3922,29 @@ export class ThreadPump {
    * 今天樹上沒有「本體錯、日誌成功」的生產者（handler 之後改結果的只往錯誤那邊改；剪工具結果的那一層
    * 原樣帶 `status`），所以這一向目前只是對稱，沒有案例。
    */
-  #noteVerdict(event: SessionEvent<'tool/result'>): void {
-    if (this.#current === undefined) return;
-    const { callId, isError, message } = event.data;
+  #noteVerdict(event: SessionEvent<'tool/result'>, address: SessionAddress): void {
+    // **背景子代理的不看 run**：它的串流由 host 自己排空，線上從來沒有基座的 `tool-finished`，卡只能由
+    // 這裡收；而它在 root 閒著的時候照樣跑（#832）。判定也不記進 `#earlyVerdicts`——沒有 frame 會來取，
+    // 記著只是漏（同 id 的下一輪不會有，但表會一直長）。
+    const background = isBackgroundAddress(address);
+    if (this.#current === undefined && !background) return;
+    const { callId, isError, message, meta, error } = event.data;
+    // 失敗的不帶由 `applyVerdict` 管（它只在成功那一支放 meta），這裡不再判一次。
+    const capped = capToolResultMeta(meta, this.#toolTextMaxBytes);
     const verdict: ToolVerdict = {
       failed: isError,
       // **成功也帶文字**（#439）：dsh 的工具卡文字就是這一則的內容，`isError` 是另一個旗標。
       // 抽字的規則與重播那一條共用（`tool-result-text.ts`），兩邊不共用的話同一張卡會「即時
-      // 一個樣、重新整理另一個樣」。
-      text: toolResultText(message, this.#toolTextMaxBytes),
+      // 一個樣、重新整理另一個樣」。文字原樣不截（#736），meta 的上限同理共用。
+      text: toolResultText(message),
+      ...(capped === undefined ? {} : { meta: capped }),
+      // 碼原樣交出（#667）；成功的不上線由 `applyVerdict` 管。
+      ...(error?.code === undefined ? {} : { code: error.code }),
     };
+    if (background) {
+      this.#closeCard(callId, verdict);
+      return;
+    }
     const forwarded = this.#forwardedFinishes.get(callId);
     if (forwarded === undefined) {
       this.#earlyVerdicts.set(callId, verdict);
@@ -1427,7 +3955,14 @@ export class ThreadPump {
     this.#openCards.delete(callId);
     this.#forwardedFinishes.delete(callId);
     const settled = applyVerdict(forwarded.data, verdict);
-    if (settled.failed === forwarded.data.failed && settled.message === forwarded.data.message) {
+    // **meta 也要比**（#617）：基座那顆從來不帶 meta，只差這一格的時候不補發，卡就永遠拿不到它。
+    // **碼同理**（#667）：基座那顆從來不帶碼，`failed` 與文字都對得上、只差碼時不補發，碼就到不了畫面。
+    if (
+      settled.failed === forwarded.data.failed &&
+      settled.message === forwarded.data.message &&
+      settled.meta === forwarded.data.meta &&
+      settled.code === forwarded.data.code
+    ) {
       return;
     }
     // 同一個 `tool_call_id` 的第二顆 `tool-finished`：折疊器照 id 換掉那一格，帶著原本的 `output`。
@@ -1446,13 +3981,73 @@ export class ThreadPump {
   }
 
   #broadcast(event: Event): void {
-    const channel = channelOfMethod(event.method);
+    // 截斷與位元組數**廣播時算一次**，每條線共用；沒有線收這一顆就不算。
+    let outgoing = event;
+    let bytes: number | undefined;
     for (const subscriber of this.#subscribers) {
-      if (subscriber.done || channel === undefined || !subscriber.channels.includes(channel)) {
-        continue;
+      if (subscriber.done || !accepts(subscriber, event)) continue;
+      if (bytes === undefined) {
+        try {
+          // 巢狀超過 `DOWNLINK_MAX_DEPTH` 的子樹先換成佔位（偏離 D）：下行不斷，之後 root 的 `lifecycle failed` 照常到。
+          const bounded = boundFrame(event);
+          if (bounded.truncated) this.#warnTruncated(event, '廣播');
+          outgoing = bounded.frame;
+          bytes = bounded.bytes;
+        } catch (error: unknown) {
+          // 這一顆對每條會收它的線都送不出去：只收掉那些線（沒訂這個 channel 的不受影響）、記一行，函式正常返回——
+          // 錯誤不能打回產生事件的路徑（`#broadcast` 跑在 run 的事件迴圈上）。
+          this.#failSubscribers(event, error);
+          return;
+        }
       }
-      subscriber.queue.push(event);
-      subscriber.wake?.();
+      if (subscriber.queue.push(outgoing, bytes)) {
+        subscriber.wake?.();
+      } else {
+        this.#evictSubscriber(subscriber);
+      }
     }
   }
+
+  /** 一顆事件的下行副本被深度截斷：記一行，只寫路徑、thread id、事件的 method，不寫內容。 */
+  #warnTruncated(event: Event, where: string): void {
+    this.#warn?.(
+      `[下行] thread ${this.#threadId} 有一顆 ${event.method} 事件巢狀超過 ${String(DOWNLINK_MAX_DEPTH)} 層，${where}的下行副本已截斷（日誌那一關另行判定）`,
+    );
+  }
+
+  /** 積壓超過上限：同步從名單拿掉（不再收、不再算進 `subscriberCount`），清空，叫醒 drain 讓它結束這條線。可重複執行。 */
+  #evictSubscriber(subscriber: Subscriber): void {
+    subscriber.done = true;
+    subscriber.queue.clear();
+    this.#subscribers.delete(subscriber);
+    subscriber.wake?.();
+    this.#warn?.(
+      `[下行] thread ${this.#threadId} 有一條下行積壓超過 ${String(this.#downlinkMaxBytes)} 位元組，已斷開（它會自己重連）`,
+    );
+  }
+
+  #failSubscribers(event: Event, error: unknown): void {
+    let closed = 0;
+    for (const subscriber of this.#subscribers) {
+      if (subscriber.done || !accepts(subscriber, event)) continue;
+      subscriber.done = true;
+      subscriber.queue.clear();
+      this.#subscribers.delete(subscriber);
+      subscriber.wake?.();
+      closed += 1;
+    }
+    this.#warn?.(
+      `[下行] thread ${this.#threadId} 有一顆 ${event.method} 事件無法序列化，已斷開 ${String(closed)} 條下行：${errorText(error)}`,
+    );
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** 這條下行訂了這顆 frame 的 channel 沒有。即時廣播與補送共用這一個，兩邊的過濾才不會分岔。 */
+function accepts(subscriber: Subscriber, event: Event): boolean {
+  const channel = channelOfMethod(event.method);
+  return channel !== undefined && subscriber.channels.includes(channel);
 }

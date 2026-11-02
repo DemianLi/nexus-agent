@@ -1,0 +1,170 @@
+{
+  "id": "2310.01798",
+  "title": "Large Language Models Cannot Self-Correct Reasoning Yet",
+  "topic": "T5",
+  "subarea": "內在自我修正與口語反思（含批判性研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "定義「內在自我修正」（不借任何外部回饋），在 GSM8K、CommonSenseQA、HotpotQA 上證明拿掉 oracle 標籤後 GPT-3.5／GPT-4／GPT-4-Turbo／Llama-2 自我修正都救不了、甚至拉低推理準確率，並指出既有文獻的三個評估陷阱：偷用標籤、不對齊推論成本、初始提示詞寫得太弱。",
+  "problem": "2023 年 RCI、Reflexion、Self-Refine、Multi-Agent Debate 等工作宣稱 LLM 能靠自我回饋修正推理錯誤，但若模型真能自我修正，為何第一次不直接答對？作者要釐清這些增益到底來自模型自身的判斷能力，還是來自實驗設計裡混進的外部資訊（正確答案標籤、更多取樣次數、寫得更完整的回饋提示詞）。這很重要，因為真實應用多半沒有高品質的外部回饋，若把「模型會自己檢查」當成可靠機制部署，可能花 3–5 倍呼叫成本卻讓答案變差。",
+  "core_idea": "把回饋來源當成唯一的判別軸：內在自我修正＝只靠模型自身參數判斷與改寫，不含標籤、工具、人或其他模型。在此定義下重跑既有方法並加三組對照：(1) 有標籤 vs 無標籤，顯示增益來自標籤擋住「對改錯」；(2) 以相同回應數比較 Multi-Agent Debate 與 self-consistency，顯示辯論的增益其實是多數決式的一致性而非「批判」；(3) 把回饋提示裡的任務要求提前寫進初始提示，顯示 Self-Refine 的增益來自初始提示資訊不足。直覺解釋：對齊良好的模型配上好的初始提示，第一次回答已是該提示與解碼下的最佳解，追加的自我回饋提示只是額外條件，可能把模型推離最佳解。",
+  "method": {
+    "定義": "intrinsic self-correction：模型只依自身能力檢視並修改初始回答，不得使用任何外部回饋（含 ground-truth 標籤、工具、人、其他模型）。若文中寫 self-correction with oracle 才是用標籤版本。",
+    "三步提示流程（沿用 Kim et al. 2023／Shinn et al. 2023）": [
+      "步驟 1 初始生成（同時作為 Standard Prompting 基準）：GSM8K 要求解題、說明推理，並把最終答案寫成單一數字放在 \\boxed{} 內置於結尾；CommonSenseQA 給題目與 A–E 五個選項，要求說明推理、只能選一個選項，最終答案以括號包住單一字母置於結尾；HotpotQA 用 Reflexion 原提示、閉卷（closed-book）作答。完整提示見 Appendix A Figure 3–6。",
+      "步驟 2 回饋：把前一輪回答留在同一段多輪對話中，要求模型檢視前一個答案並產出回饋。GPT-3.5／GPT-4 沿用 Kim et al. 的提示（Appendix A 範例中是要求模型『檢視前一個答案並找出其中的問題』，語意上預設答案有錯）；GPT-4-Turbo 與 Llama-2 的預設回饋提示改為中性版本：先假設答案可能對也可能錯，再仔細檢查並回報嚴重問題。",
+      "步驟 3 改寫：要求模型依剛找出的問題改進答案，並重述最終答案、維持步驟 1 的格式約束（boxed 數字或括號字母）。",
+      "步驟 2–3 為一輪，最多兩輪；呼叫次數記帳為 Standard=1、round 1=3、round 2=5。"
+    ],
+    "兩種停止規則": {
+      "oracle（重現 RCI／Reflexion 的設定）": "每產生一個答案就拿 ground-truth 比對；已正確就停止、不再修正，錯誤才進下一輪回饋＋改寫，最多兩輪。",
+      "intrinsic（本文主角）": "不看標籤，一律跑滿指定輪數；模型只能自行決定保留或更改答案；以第 k 輪後的答案計分。"
+    },
+    "回饋提示消融（Table 5／6，GPT-4-Turbo 與 Llama-2）": [
+      "(a) 中性版：先假設答案可能對也可能錯，仔細檢查並回報嚴重問題（預設）。",
+      "(b) 檢視前一個答案並判斷是否正確；若錯才找出問題。",
+      "(c) 驗證答案是否正確並給出解釋。"
+    ],
+    "模型與解碼": "GPT-3.5-Turbo（gpt-3.5-turbo-0613）與 GPT-4（2023/08/29 存取）溫度 1；GPT-4-Turbo（gpt-4-1106-preview）與 Llama-2-70b-chat 溫度 0（刻意涵蓋不同解碼）。",
+    "資料與取樣": "GSM8K test 1,319 題；CommonSenseQA dev 1,221 題；HotpotQA 沿用 Reflexion 的 100 題、以 exact match 計分。GPT-3.5 跑全集；其餘模型為省成本各隨機抽 200 題（HotpotQA 100 題）。",
+    "答案轉移分析（§3.3、Figure 1）": "對每題比較修正前與兩輪修正後的答案，分成四類：不變、對→錯、錯→對、錯→錯（答案改了但仍錯），統計各類比例。HotpotQA 因樣本太小不做。",
+    "Multi-Agent Debate 對照（§4）": "完全沿用 Du et al. 2023 的提示，gpt-3.5-turbo-0301、3 個 agent、2 輪辯論，改在 GSM8K 全測試集（原作只用 100 題）。以回應數記帳：初始 3＋第 1 輪 3＝6，第 2 輪後＝9。對照組為 self-consistency（取樣 3／6／9 個回答後多數決）。",
+    "提示詞設計對照（§5）": "任務為 Self-Refine 的 Constrained Generation（CommonGen-Hard，每題 20–30 個概念，要寫出涵蓋所有概念的連貫句子），指標為 concept coverage，模型 gpt-3.5-turbo-0613。作者在初始提示中明寫必須涵蓋『全部』概念（Figure 8），得到新的 Standard Prompting (ours)，再把 Self-Refine 的回饋／改寫提示套在這個較強的初始回答上（共 7 次呼叫），與 Self-Refine 原提示的結果比較。",
+    "要照著重做的關鍵元件": "一個能維持多輪對話的 chat API；三段提示模板（初始、回饋、改寫）；答案抽取器（解析 \\boxed{} 數字、括號字母、HotpotQA EM）；兩種停止規則開關；呼叫次數計數器；修正前後答案的四類轉移統計；self-consistency 多數決基準。"
+  },
+  "assumptions": [
+    "推理任務有單一可自動判定的正確答案，準確率足以代表修正能力。",
+    "所用提示（大多取自原論文、僅加格式指令）能公平代表既有自我修正方法。",
+    "『回應數相同』是比較多次生成方法的合理成本單位。",
+    "若模型已對齊良好且初始提示設計得當，第一次回答已接近該提示與解碼演算法下的最佳解，因此額外的自我回饋只是偏移條件（作者的直覺解釋，未被實驗直接驗證）。",
+    "真實部署時高品質外部回饋（尤其答案正確與否）往往拿不到，所以內在自我修正才是值得量的設定。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "GSM8K（test 1,319 題）",
+      "CommonSenseQA（dev 1,221 題）",
+      "HotpotQA（閉卷，Reflexion 使用的 100 題）",
+      "CommonGen-Hard（Self-Refine 的 Constrained Generation）"
+    ],
+    "metrics": [
+      "accuracy（GSM8K、CommonSenseQA）",
+      "exact match（HotpotQA）",
+      "concept coverage（CommonGen-Hard）",
+      "# calls／# responses（推論成本）",
+      "答案轉移四類比例（No Change、Correct⇒Incorrect、Incorrect⇒Correct、Incorrect⇒Incorrect）"
+    ],
+    "baselines": [
+      "Standard Prompting（單次生成）",
+      "Self-Correct with oracle labels（RCI／Reflexion 設定）",
+      "Self-consistency（多數決，3／6／9 個回應）",
+      "Multi-Agent Debate（Du et al. 2023）",
+      "Self-Refine（Madaan et al. 2023）原提示與原報告數字"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "整體結論：沒有外部回饋時，LLM 無法靠自我修正改善推理，有時反而變差。",
+      "numbers": "例：GPT-4 GSM8K 95.5→91.5→89.0；Llama-2 GSM8K 62.0→43.5→36.5（Standard→round 1→round 2）。",
+      "section": "Abstract、§3.2、Table 3／4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "照 RCI／Reflexion 的做法用正確標籤決定何時停止，自我修正在三個 benchmark 都有明顯增益，重現了原論文的結論。",
+      "numbers": "GPT-3.5：GSM8K 75.9→84.3、CommonSenseQA 75.8→89.7、HotpotQA 26.0→29.0；GPT-4：95.5→97.5、82.0→85.5、49.0→59.0。",
+      "section": "§3.2、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "拿掉標籤、讓模型自己決定是否保留答案後，四個模型修正後的準確率都不升反降（GPT-4 HotpotQA round 1 持平）；呼叫次數同時增為 3–5 倍。",
+      "numbers": "GPT-3.5：GSM8K 75.9→75.1→74.7、CommonSenseQA 75.8→38.1→41.8、HotpotQA 26.0→25.0→25.0；GPT-4：95.5→91.5→89.0、82.0→79.5→80.0、49.0→49.0→43.0；GPT-4-Turbo：GSM8K 91.5→88.0→90.0、CommonSenseQA 84.0→81.5→83.0；Llama-2：62.0→43.5→36.5、64.0→37.5→36.5。",
+      "section": "§3.2、Table 3、Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "換三種不同措辭的回饋提示也無法讓內在自我修正超過單次生成；Llama-2 在每種提示下都大幅下滑。",
+      "numbers": "GPT-4-Turbo 最佳的『驗證並解釋』提示：GSM8K 91.0／91.0、CommonSenseQA 81.5／83.5（基準 91.5／84.0）；Llama-2 最差時 CommonSenseQA 降到 24.0（基準 64.0）、GSM8K 降到 30.5（基準 62.0）。",
+      "section": "§3.2、Table 5、Table 6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "答案轉移分析：GPT-3.5 在 GSM8K 多數時候保留原答案，而在有更改的題目中，把對的改錯比把錯的改對更常發生；CommonSenseQA 上更常改答案（干擾選項看似相關），Llama-2 也常對改錯；GPT-4／GPT-4-Turbo 較常保留原答案。",
+      "numbers": "GPT-3.5 GSM8K 兩輪後 74.7% 的題目答案不變（其他類別比例只在 Figure 1 圖中，正文未列數字）。",
+      "section": "§3.3、Figure 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "oracle 設定的增益本質上是標籤擋住了『對改錯』；如何在沒有標籤時防止這類誤改才是自我修正成敗的關鍵。",
+      "numbers": "同一模型同一資料集：GPT-3.5 CommonSenseQA oracle 89.7 vs intrinsic round 2 41.8；GPT-4 HotpotQA 59.0 vs 43.0。",
+      "section": "§3.3（回看 Table 2）",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Multi-Agent Debate 只比同 agent 數（3 個回應）的 self-consistency 略好；在回應數相同時明顯輸給單純多數決，其增益應歸於一致性而非批判。",
+      "numbers": "gpt-3.5-turbo-0301 GSM8K：Standard 76.7；SC@3 82.5；MAD round 1（6 回應）83.2 vs SC@6 85.3；MAD round 2（9 回應）83.0 vs SC@9 88.2。",
+      "section": "§4、Table 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "Self-Refine 在 Constrained Generation 的增益來自初始提示沒講清楚『要涵蓋全部概念』；把要求寫進初始提示後，單次生成就勝過 Self-Refine 修正後的結果，再套 Self-Refine 反而下降。",
+      "numbers": "concept coverage：Madaan et al. 報告 44.0→67.0（7 次呼叫）；作者用原提示重跑 53.0→61.1；作者改寫的初始提示 81.8，再套 Self-Refine 降為 75.1。",
+      "section": "§5、Table 8、Appendix A Figure 7–8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只評估推理任務；在風格調整、安全性等偏好對齊任務上，自我修正可能有效（例如模型能判斷回應是否不恰當，卻難以找出自己推理中的錯誤）。",
+    "HotpotQA 沿用原論文的 100 題，樣本太小，因此不做答案轉移分析。",
+    "為省成本，GPT-3.5 以外的模型只各抽 200 題（HotpotQA 100 題）。",
+    "oracle 設定的結果只能視為 oracle 的表現，不代表真實的自我修正能力。",
+    "結論限定在『目前』的 LLM（標題的 Yet），先前也已有工作指出沒有外部回饋時自我修正變弱、且易被誤導性回饋帶偏；本文主要貢獻是釐清文獻中的混淆並呼籲更嚴謹的評估。"
+  ],
+  "limitations_observed": [
+    "模型、回饋提示、溫度與樣本數四個變因被綁在一起、沒有交叉設計：GPT-3.5／GPT-4 在 GSM8K 與 CommonSenseQA 上用 Kim et al. 的回饋提示（HotpotQA 則用 Reflexion 的提示；依 Appendix A Figure 3–6 的範例，這個提示要模型『找出答案的問題』，語意上預設答案有錯）、溫度 1、GPT-3.5 跑全集；GPT-4-Turbo／Llama-2 則用中性提示、溫度 0、抽 200 題。跌幅最大的 GPT-3.5 CommonSenseQA（75.8→38.1）從未在中性提示下跑過，因此無法分辨多少跌幅是『預設有錯』的提示誘導所致、多少是模型真的判斷不了。公允地說，Llama-2 在中性提示下 CommonSenseQA 仍從 64.0 掉到 37.5，現象不只是提示假象，但幅度無法拆開。",
+    "『所有模型在所有 benchmark 都下降』照字面不成立：GPT-4 HotpotQA round 1 為 49.0，與基準相同；GPT-4-Turbo 在預設中性提示下（Table 4）n=200 只差 1.0–3.5 點（約 2–7 題），而且 round 2 反彈（GSM8K 88.0→90.0），全部為單次執行、沒有信賴區間或多種子。例外是 Table 5 的『判斷對錯、錯才找問題』提示讓 GPT-4-Turbo CommonSenseQA round 1 掉到 74.5（-9.5），可見強模型的退化幅度高度取決於提示措辭。就預設設定而言，對強模型較精確的說法是『花 3–5 倍呼叫換不到增益』，而不是『穩定退化』。",
+    "oracle 對照組有混淆：溫度 1 加上『答對就停』，本質接近『重抽到對為止』；CommonSenseQA 只有 5 個選項，最多三次作答加上標籤把關近似排除法。論文沒有跑『oracle 停止＋不給回饋、直接重抽』的對照，所以 Table 2 的增益有多少來自回饋內容、多少純粹是標籤洩漏加重抽，實驗上沒有拆開（作者的解讀合理，但是推論而非量測）。",
+    "CommonSenseQA 的崩跌沒有回報答案解析失敗率；改寫後若沒照『括號單一字母』格式輸出會直接判錯，可能放大跌幅。Figure 6 雖展示了真實的對改錯，但無從得知整體中格式失敗占多少。",
+    "Multi-Agent Debate 對照只在 gpt-3.5-turbo-0301、只在 GSM8K、只跑一次；以『回應數』對齊並未對齊 token 成本，辯論時每個 agent 還要讀其他 agent 的回答，實際成本更高（這反而加強作者結論）。未測 Liang et al. 的 MAD 變體或異質模型辯論（如文中引用的 ReConcile），把結論推廣到所有辯論式方法證據不足。",
+    "對 Reflexion 的批評只涵蓋其 HotpotQA 用 exact-match 標籤當訊號的那部分；Reflexion 在決策任務與程式碼任務用的是環境回饋或執行結果，本文沒有測，不能據此推論 Reflexion 在 agent 環境中無效。",
+    "範圍只到單輪 QA、答案層級、最多兩輪，沒有工具呼叫、多輪對話或 agent 軌跡；對 agent 框架的直接外推有限——真實 agent 迴圈通常有工具錯誤、測試失敗等外部觀測，恰好落在本文定義的『外部回饋』那一側。",
+    "§5 的 CommonGen-Hard 是約束生成而非推理，而且作者自承新提示是隨手寫的、只有一組數字；它證明的是評估方法學的問題（初始提示要與回饋提示同等用心），不是推理能力。另值得注意：作者用 Self-Refine 原提示在 gpt-3.5-turbo-0613 上重跑，增益從原報告的 +23.0 縮到 +8.1；由於模型快照很可能與原作不同，無法分辨是原結果不穩還是版本漂移，這也說明以 API 快照為對象的自我修正增益很脆弱。",
+    "可重現性偏弱：論文沒有附程式碼連結，200 題抽樣索引與模型輸出未公開，所用 gpt-3.5-turbo-0301／0613、gpt-4-1106-preview 等快照多已下架；Figure 1 的轉移比例只在圖中，正文僅給 GPT-3.5 GSM8K 的 74.7%。",
+    "後續工作修正了『Yet』的邊界：Tyen et al.（2311.08516）指出瓶頸在找出錯誤位置，給定錯誤位置後模型其實能改正；Kumar et al. 的 SCoRe（2409.12917）以多輪強化學習訓練出在 MATH、HumanEval 上的正向內在自我修正；Kamoi et al.（2406.01297）的綜述認為內在自我修正只在少數條件下成立、並同樣批評不公平的實驗設定。因此本文結論適用於『只靠提示的現成模型』，不能外推到經過專門訓練的自我修正模型。"
+  ],
+  "framework_role": "T5 的批判性基線與評估規範。它告訴框架兩件事：(1) T5 不能設計成『每輪都讓模型自我反思』——沒有外部訊號時反思的期望效益可能為負，且對改錯的風險在選項相近的任務（類似意圖分類）特別高；T5 應由可驗證的外部異常訊號觸發（工具錯誤、測試失敗、檢索矛盾、使用者更正），並需要能防止『對改錯』的把關。(2) 評估 T5 的價值時，必須對照同等推論成本的基準（self-consistency／重抽多數決）、對照把回饋要求提前寫進初始提示的強基準，並單獨報告修正前後的轉移類別，而不只報最終準確率。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "論文實際操弄的是『什麼條件下觸發修正』：oracle 設定以 ground-truth 判定答案錯才進入下一輪回饋＋改寫、答對就停；intrinsic 設定沒有任何異常訊號，每題都跑滿兩輪。兩者的落差（如 GPT-3.5 CommonSenseQA 89.7 vs 41.8）顯示增益主要來自觸發／停止訊號的品質而非反思本身。注意論文沒有軌跡或異常偵測器，是答案層級的標籤把關；對框架的含義是 E3 的異常訊號必須來自外部可驗證的來源，不能拿模型自評當觸發器。"
+    },
+    {
+      "edge": "E5",
+      "how": "§3.3 把每題修正前後的答案配對分成四類轉移（不變、對→錯、錯→對、錯→錯），並以 # calls（1／3／5）記帳每輪成本；§4 以 # responses 對齊 self-consistency 做等成本比較。這正是修正紀錄回流評估時該記的欄位：修正前後答案、轉移類別、呼叫次數，並以同成本基準評估、單獨追蹤對改錯率。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署或產品；以 WebSearch 查詢官方文件與官方部落格（LangChain、OpenAI Cookbook、Anthropic、Microsoft Learn、Google Cloud）未找到引用或採用此研究的官方來源。ICLR 2024 錄取與 Semantic Scholar 約 1,216 次引用（95 次 influential）屬學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "benchmark 皆為公開資料（GSM8K、CommonSenseQA、HotpotQA 沿用 Reflexion 的 100 題、CommonGen-Hard 沿用 Self-Refine），作者自擬的提示詞完整列於 Appendix A；但 200 題抽樣索引、模型輸出與評估程式未公開，所用 OpenAI 模型快照多已下架。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "T5 批判性研究的奠基論文（ICLR 2024、約 1,216 次引用），定義了 intrinsic self-correction 並點出偷用標籤、不對齊成本、初始提示太弱三個評估陷阱，直接決定框架裡 T5 該由外部訊號觸發、T7 該如何評估修正。",
+  "related": [
+    "2303.17491",
+    "2303.11366",
+    "2303.17651",
+    "2305.14325",
+    "2203.11171",
+    "2305.11738",
+    "2304.05128",
+    "2308.03188",
+    "2305.13160"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -228,7 +228,7 @@ describe('一批裡混著核准與拒絕', () => {
     expect(requested).toContain('bad_tool');
   });
 
-  it('兩個都要核准 → 一次暫停帶兩顆中斷，一個決定套到兩顆上', async () => {
+  it('兩個都要核准 → 一次暫停帶一顆中斷（逐顆問），一個決定套到兩顆上', async () => {
     // **這是裸 resume 值的行為，產品路徑走的線已經不是這樣了**：上行逐
     // `interrupt_id` 送 `Command({ resume: { [id]: 決定 } })`，基座據鍵逐 task 派送，
     // 所以經過線只答一顆就只有一顆跑（`fanout-wire.test.ts`，
@@ -246,8 +246,11 @@ describe('一批裡混著核准與拒絕', () => {
     });
     const config = { configurable: { thread_id: 'two-gated' } };
 
+    // **一次一顆**（#711 第 2 步）：這兩個工具沒宣告可重疊，是獨佔，排在後面的 `bad_tool` 等前面的收尾，前面的在核准點中斷時它
+    // 一起退出、什麼都不做。以前（沒有屏障）是同一步兩顆中斷同時掛出來；現在同 dsh，逐顆問。裸 resume 值照舊：退出的那顆
+    // resume 時重跑，讀到的還是同一個物件，所以一個決定仍蓋住兩顆。
     const paused = await agent.invoke(toAgentInvocation('動手'), config);
-    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(2);
+    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(1);
     expect(ran).toEqual([]);
 
     const after = await agent.invoke(
@@ -258,7 +261,7 @@ describe('一批裡混著核准與拒絕', () => {
     expect(ran).toEqual(['ok_tool', 'bad_tool']);
   });
 
-  it('**一顆拒絕蓋住同一輪的兩顆中斷**——兩個都沒跑，各拿各的拒絕（上一條的反面）', async () => {
+  it('**一顆拒絕蓋住同一輪的兩顆呼叫**——兩個都沒跑，各拿各的拒絕（上一條的反面）', async () => {
     // **上一條的反面**：同一個成因（每次呼叫各自去讀同一個 resume 物件的 `decisions[0]`，
     // 機制寫在上一條）在拒絕側的樣子——人只按了一次拒絕，兩顆中斷都走到 `denial(...)`。
     // 線上那一側同一輪兩顆中斷怎麼折疊是另一件事，這裡不下結論。
@@ -268,8 +271,9 @@ describe('一批裡混著核准與拒絕', () => {
     });
     const config = { configurable: { thread_id: 'two-gated-reject' } };
 
+    // 一次一顆，見上一條（#711 第 2 步）；裸 resume 值的那個拒絕仍蓋住退出後重跑的第二顆。
     const paused = await agent.invoke(toAgentInvocation('動手'), config);
-    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(2);
+    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(1);
     expect(ran).toEqual([]);
 
     const after = await agent.invoke(
@@ -313,18 +317,12 @@ describe('閘門本身的邊界', () => {
   });
 
   /**
-   * **這一條翻過一次面。** 它以前釘的是「當場拋」——閘門對看不懂的決定 `throw`，而那時
-   * 整場 run 跟著死。[#159](https://github.com/DemianLi/nexus-agent/issues/159) 把圍堵
-   * 打底進 fold 的第 0 格之後，閘門就在它裡面，所以那個 `throw` 變成一則 error
-   * ToolMessage：**run 走得完，工具還是一次都沒跑。**
+   * 閘門對看不懂的決定回一則帶碼的拒絕（`APPROVAL_INVALID_REPLY`，[#2027](https://github.com/DemianLi/nexus-agent/issues/2027)）：
+   * **run 走得完，工具一次都沒跑。**
    *
-   * **翻面之後仍然是同一句驗收**：詞彙是封閉的、`edit` 不被靜默降級成核准。變的只是
-   * 拒絕的載體。這也正是 dsh 那側的形狀——「缺失、不负责该请求、抛异常或**不合规**的
-   * 应答者会产生 `unavailable`，**而非放行**」，而呼叫端對 `unavailable` 執行拒絕
-   * （`docs/subsystems/approval.zh.md:21`，SHA `4e84901`）：那是「這次呼叫被拒」，
-   * 不是「這一輪結束」。
+   * 驗收是：詞彙是封閉的、`edit` 不被靜默降級成核准；看不懂的回覆是「這次呼叫被拒」，不是「這一輪結束」。
    */
-  it('resume 傳看不懂的決定 → **一則錯誤，不是靜默降級成核准，也不再殺掉整場 run**', async () => {
+  it('resume 傳看不懂的決定 → **一則錯誤，不是靜默降級成核准，也不會殺掉整場 run**', async () => {
     const { agent } = await gatedAgent({ tools: ['danger'], gated: ['danger'] });
     const config = { configurable: { thread_id: 'edit' } };
 
@@ -341,7 +339,7 @@ describe('閘門本身的邊界', () => {
       .at(-1) as (BaseMessage & { status?: string }) | undefined;
     expect(failure?.status).toBe('error');
     expect(failure?.text).toContain('核准回覆看不懂');
-    // **承重的還是這一條**：載體變了，「沒跑」沒變。
+    // **承重的是這一條**：拒絕不論怎麼送回，工具都沒跑。
     expect(ran).toEqual([]);
   });
 
@@ -420,93 +418,86 @@ function subagentRefusal(model: ScriptedChatModel): BaseMessage | undefined {
 }
 
 /**
- * **這兩條在 [#324](https://github.com/DemianLi/nexus-agent/issues/324) 翻了面。** 以前釘的是「中斷冒到 root、
- * 等人按」；照 dsh，子代理的核准政策在委派時釘成 `never`（`child-agent.ts:220-247`），子代理不停下來等人。
- * 現在釘的是：**不中斷**、工具沒跑、子代理收到 `policy-never` 那句、root 的 `task` 照常收尾。
+ * **這幾條在 [#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項翻回來**（[#324](https://github.com/DemianLi/nexus-agent/issues/324)
+ * 曾翻成「照 dsh 不停下來」）。前景子代理叫到要核准的工具會把中斷冒到 root 等人按：核准之後工具真的跑、拒絕只拒那一次呼叫（子代理收到
+ * 拒絕的訊息、照常收尾），root 的 `task` 都照常完成。背景子代理維持一律回絕，見 `subagent-background-probe.test.ts` 與
+ * `background-delegation.test.ts`。
  *
- * **閘門照樣要逐個注進去，這兩條仍然量它**：子代理不繼承 root 的 plugin middleware，不注的話 `danger` 在
- * 子代理裡會直接執行，`ran` 紅。腳本的輪數剛好：多一輪（例如又停下來）會當場拋。
+ * **閘門照樣要逐個注進去，這幾條仍然量它**：子代理不繼承 root 的 plugin middleware，不注的話 `danger` 在
+ * 子代理裡會直接執行，`ran` 紅。
  */
 describe('subagent 裡的閘門', () => {
-  it('子代理呼叫 gated 工具 → 不中斷、工具沒跑，子代理收到「沒有人被問到」，root 照常收尾', async () => {
-    const model = new ScriptedChatModel({
-      turns: [
-        {
-          content: '委派。',
-          toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: 'worker' } }],
-        },
-        { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
-        { content: '子代理收工。' },
-        { content: '根收工。' },
-      ],
-    });
+  const delegatePlugin: PluginEntry = {
+    plugin: {
+      name: 'delegate',
+      apply(registry) {
+        // 刻意不自帶 `tools`——什麼都不帶的 subagent 沿用 root 那組，`danger`
+        // 因此在子代理裡也叫得到，而閘門是不是跟著下去正是這一條要問的事。
+        // **這一條在換機制之後更吃重**：subagent 不繼承 root 的 plugin middleware
+        // （`SubAgentBase.middleware` 是「append after default_middleware」），
+        // 閘門是 fold 逐個注進去的。沒注就是默默地失去核准，而它紅在這裡。
+        registry.subagents.register({ name: 'worker', description: '幹活的。' });
+      },
+    },
+  };
 
+  const delegateTurns = (subagentType: string) => [
+    {
+      content: '委派。',
+      toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: subagentType } }],
+    },
+    { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
+    { content: '子代理收工。' },
+    { content: '根收工。' },
+  ];
+
+  async function pausedInSubagent(subagentType: string) {
+    const model = new ScriptedChatModel({ turns: delegateTurns(subagentType) });
     const { agent } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
-      plugins: [
-        spyPlugin(['danger']),
-        {
-          plugin: {
-            name: 'delegate',
-            apply(registry) {
-              // 刻意不自帶 `tools`——什麼都不帶的 subagent 沿用 root 那組，`danger`
-              // 因此在子代理裡也叫得到，而閘門是不是跟著下去正是這一條要問的事。
-              // **這一條在換機制之後更吃重**：subagent 不繼承 root 的 plugin middleware
-              // （`SubAgentBase.middleware` 是「append after default_middleware」），
-              // 閘門是 fold 逐個注進去的。沒注就是默默地失去核准，而它紅在這裡。
-              registry.subagents.register({ name: 'worker', description: '幹活的。' });
-            },
-          },
-        },
-        gatePlugin(['danger']),
-      ],
+      plugins: [spyPlugin(['danger']), delegatePlugin, gatePlugin(['danger'])],
     });
-    const config = { configurable: { thread_id: 'subagent' } };
+    const config = { configurable: { thread_id: `subagent-${subagentType}` } };
+    const paused = await agent.invoke(toAgentInvocation('委派'), config);
+    return { model, agent, config, paused };
+  }
 
-    const result = await agent.invoke(toAgentInvocation('委派'), config);
+  for (const subagentType of ['worker', 'general-purpose']) {
+    it(`${subagentType}：呼叫 gated 工具 → 中斷冒到 root，工具還沒跑；核准 → 工具真的跑、root 收尾`, async () => {
+      const { model, agent, config, paused } = await pausedInSubagent(subagentType);
 
-    expect(result.__interrupt__).toBeUndefined();
-    expect(ran).toEqual([]);
-    // 閘門真的判過，而且走的是 `policy-never` 那句——不是別的理由擋下，也不是有人拒絕。
-    expect(subagentRefusal(model)?.text).toContain('danger 要人看過');
-    expect(subagentRefusal(model)?.text).toContain('沒有人被問到');
-    expect((result.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
-  });
+      // 前提：真的停在核准上，而且停的是 `danger`（不是別的中斷）。
+      expect(paused.__interrupt__).toHaveLength(1);
+      expect(paused.__interrupt__?.[0]?.value).toMatchObject({
+        kind: 'approval',
+        actionRequests: [{ name: 'danger', description: 'danger 要人看過' }],
+      });
+      expect(ran).toEqual([]);
 
-  /**
-   * **沒有人註冊的那一個。** `general-purpose` 以前是基座自己補的：它那次
-   * `mergeMiddlewareStack(..., { appendNew: false })` 把名字不撞內建的 middleware 全部丟掉，
-   * 閘門就在其中——`task` 的描述對模型列著它，而叫它等於繞過核准。上一條是它的對照組。
-   */
-  it('general-purpose 裡呼叫 gated 工具 → 一樣不中斷、工具沒跑，root 照常收尾', async () => {
-    const model = new ScriptedChatModel({
-      turns: [
-        {
-          content: '委派。',
-          toolCalls: [
-            { name: 'task', args: { description: '幹活', subagent_type: 'general-purpose' } },
-          ],
-        },
-        { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
-        { content: '子代理收工。' },
-        { content: '根收工。' },
-      ],
+      const done = await agent.invoke(
+        new Command({ resume: { decisions: [{ type: 'approve' }] } }),
+        config,
+      );
+      expect(done.__interrupt__).toBeUndefined();
+      expect(ran).toEqual(['danger']);
+      expect(subagentRefusal(model)?.text).toContain('danger 跑過了');
+      expect((done.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
     });
 
-    const { agent } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      plugins: [spyPlugin(['danger']), gatePlugin(['danger'])],
+    it(`${subagentType}：拒絕 → 只拒那一次，工具沒跑，子代理收到拒絕、照常收尾，root 的 task 完成`, async () => {
+      const { model, agent, config } = await pausedInSubagent(subagentType);
+
+      const done = await agent.invoke(
+        new Command({ resume: { decisions: [{ type: 'reject' }] } }),
+        config,
+      );
+      expect(done.__interrupt__).toBeUndefined();
+      expect(ran).toEqual([]);
+      // 子代理收到的是「人拒絕」那句，不是「沒有人被問到」。
+      expect(subagentRefusal(model)?.text).toContain('拒絕');
+      expect(subagentRefusal(model)?.text).not.toContain('沒有人被問到');
+      expect((done.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
     });
-    const config = { configurable: { thread_id: 'general-purpose' } };
-
-    const result = await agent.invoke(toAgentInvocation('委派'), config);
-
-    expect(result.__interrupt__).toBeUndefined();
-    expect(ran).toEqual([]);
-    expect(subagentRefusal(model)?.text).toContain('danger 要人看過');
-    expect(subagentRefusal(model)?.text).toContain('沒有人被問到');
-    expect((result.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
-  });
+  }
 });

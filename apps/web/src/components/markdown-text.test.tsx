@@ -72,6 +72,74 @@ describe('GFM', () => {
     expect(container.querySelector('del')?.textContent).toBe('刪掉');
   });
 
+  describe('數字欄（#1330）', () => {
+    const table = [
+      '| 系統 | 筆數 | 佔比 | 備註 |',
+      '| --- | --- | :-: | --- |',
+      '| 人事 | 1,200 | 12% | 3 天 |',
+      '| 財務 | -35 | 7.5% | 5 |',
+    ];
+    /** 第 `column` 欄每一格（含表頭）的 [有沒有 md-num, 行內對齊]（短中文的 class 見下一組，#1332）。 */
+    const column = (container: HTMLElement, index: number) =>
+      [...container.querySelectorAll('tr')].map((row) => {
+        const cell = row.children[index] as HTMLElement;
+        return [cell.classList.contains('md-num') ? 'md-num' : '', cell.style.textAlign];
+      });
+
+    it('整欄是數字的套 md-num（表頭一起）；作者寫明的對齊留在行內樣式、蓋過靠右；混了文字的不套', () => {
+      const { container } = render(<MarkdownText text={table.join('\n')} />);
+      expect(column(container, 0)).toEqual([
+        ['', ''],
+        ['', ''],
+        ['', ''],
+      ]);
+      expect(column(container, 1)).toEqual([
+        ['md-num', ''],
+        ['md-num', ''],
+        ['md-num', ''],
+      ]);
+      expect(column(container, 2)).toEqual([
+        ['md-num', 'center'],
+        ['md-num', 'center'],
+        ['md-num', 'center'],
+      ]);
+      expect(column(container, 3).map(([name]) => name)).toEqual(['', '', '']);
+    });
+
+    it('串流中最後一列可能寫到一半，不參與判定；講完之後照實判', () => {
+      const partial = [...table, '| 採購 | 1,2'].join('\n');
+      const live = render(<MarkdownText text={partial} streaming />);
+      expect(column(live.container, 1).map(([name]) => name)).toEqual([
+        'md-num',
+        'md-num',
+        'md-num',
+        'md-num',
+      ]);
+      live.rerender(<MarkdownText text={partial} />);
+      expect(column(live.container, 1).map(([name]) => name)).toEqual(['', '', '', '']);
+    });
+  });
+
+  it('短中文值整格不斷行、長中文描述有最小寬度；英文、數字、網址不掛（#1332）', () => {
+    const { container } = render(
+      <MarkdownText
+        text={[
+          '| 負責人 | 說明 | 筆數 | Owner | 連結 |',
+          '| --- | --- | --- | --- | --- |',
+          '| 歐陽志強 | 預算科目對照表已三個月未更新 | 856 | Bob Lin | https://intranet.example.com/fin |',
+        ].join('\n')}
+      />,
+    );
+    const classes = [...container.querySelectorAll('tr')].map((row) =>
+      [...row.children].map((cell) => cell.className),
+    );
+    expect(classes).toEqual([
+      // 表頭也是格子：「負責人」「說明」「筆數」「連結」都是短中文。
+      ['md-cjk-short', 'md-cjk-short', 'md-num md-cjk-short', '', 'md-cjk-short'],
+      ['md-cjk-short', 'md-cjk-prose', 'md-num', '', ''],
+    ]);
+  });
+
   it('程式碼區塊帶語言標籤，內容原字不動', () => {
     const { container } = render(<MarkdownText text={'```ts {1}\nconst a = 1;\n```'} />);
     expect(container.querySelector('.md-code pre')?.textContent).toBe('const a = 1;');

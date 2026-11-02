@@ -9,7 +9,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { SessionLog } from './session-log.js';
+import { buildForkSeed, SessionLog, SessionLogOffset } from './session-log.js';
 import { SessionRegistry } from './session-registry.js';
 import {
   attachSessionPersistence,
@@ -18,7 +18,18 @@ import {
 } from './session-persistence.js';
 import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
 import type { SessionEvent } from './session-log.js';
-import type { SessionStore, StoredSession, StoredSessionHeader } from './session-store.js';
+import type {
+  SessionHeaderBuildMetadata,
+  SessionStore,
+  StoredSession,
+  StoredSessionHeader,
+} from './session-store.js';
+
+/** 協調器只寫不讀：唯讀的兩個方法一被叫就是錯。 */
+const NO_READS: Pick<SessionStore, 'list' | 'open'> = {
+  list: () => Promise.reject(new Error('協調器不該列會話')),
+  open: () => Promise.reject(new Error('協調器不該唯讀打開')),
+};
 
 /** 記下每一次呼叫的假把手，`fail` 打開之後每一次 `append` 都拒絕。 */
 function fakeStored(): StoredSession & {
@@ -191,12 +202,128 @@ describe('圍堵翻面', () => {
   });
 });
 
+describe('分叉的 root（#1580）', () => {
+  function seededRoot(): SessionEvent[] {
+    const source = new SessionLog('src');
+    source.append('turn/start', { kind: 'message', text: '一' });
+    source.append('turn/end', {});
+    return buildForkSeed(source.events, 1);
+  }
+
+  function storeInto(headers: StoredSessionHeader[], handle = fakeStored()): SessionStore {
+    return {
+      ...NO_READS,
+      create: (header) => {
+        headers.push(header);
+        return handle;
+      },
+      resume: () => Promise.reject(new Error('這一條不續接')),
+    };
+  }
+
+  it('給了 rootLineage：root 的 header 帶來源與 isSeeded，seed 從 0 整份寫出去', async () => {
+    const headers: StoredSessionHeader[] = [];
+    const handle = fakeStored();
+    const sessions = new SessionRegistry('child', { rootSeed: seededRoot() });
+    const persistence = attachSessionPersistence(sessions, storeInto(headers, handle), {
+      rootLineage: { parentSession: 'src', isSeeded: true },
+    });
+    await persistence.flush();
+    expect(headers).toEqual([
+      expect.objectContaining({ id: 'child', parentSession: 'src', isSeeded: true }),
+    ]);
+    expect(headers[0]?.origin).toBeUndefined();
+    expect(handle.written.map((event) => event.seq)).toEqual(
+      sessions.root.events.map((event) => event.seq),
+    );
+    expect(handle.written[0]?.seq).toBe(0);
+    await persistence.dispose();
+  });
+
+  it('切點與 rootLineage 對不上就在寫之前拒：帶標記沒給、給了沒帶標記', () => {
+    expect(() =>
+      attachSessionPersistence(
+        new SessionRegistry('child', { rootSeed: seededRoot() }),
+        storeInto([]),
+      ),
+    ).toThrow(/rootLineage/u);
+    expect(() =>
+      attachSessionPersistence(new SessionRegistry('plain'), storeInto([]), {
+        rootLineage: { parentSession: 'src', isSeeded: true },
+      }),
+    ).toThrow(/inherited/u);
+  });
+});
+
+// 這兩條量的是「磁碟上沒寫」，不量訂閱與排空者有沒有退掉：退掉之後協調器已經 disposed、`byLog` 也清了，
+// 留著的 listener 對磁碟沒有可觀察的差別（#1580 刀 2a 審查的不擋項）。
+describe('丟掉（#1580：還沒發佈的分叉子 thread 組裝失敗）', () => {
+  it('只關把手、不排空：窗口到期不寫，之後進來的事件也沒寫出去，再 dispose 是 no-op', async () => {
+    vi.useFakeTimers();
+    try {
+      const log = new SessionLog('s');
+      const stored = fakeStored();
+      const coordinator = new SessionPersistenceCoordinator({ log, stored, windowMs: 5 });
+      turn(log);
+      await coordinator.abandon();
+      turn(log);
+      await vi.advanceTimersByTimeAsync(50);
+      expect(stored.written).toEqual([]);
+      expect(stored.flushes).toBe(0);
+      expect(stored.closes).toBe(1);
+      await coordinator.dispose();
+      expect(stored.written).toEqual([]);
+      expect(stored.closes).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('接在註冊表上：每一份都丟；呼叫之後窗口到期、全域排空都不寫，這一點當下就成立，不等關把手', async () => {
+    vi.useFakeTimers();
+    try {
+      const sessions = new SessionRegistry('root-abandon');
+      const stored = fakeStored();
+      let release!: () => void;
+      const closing = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      // 關把手卡住：丟棄的同步那一半（退訂、取消窗口）不能排在它後面。
+      stored.close = () => {
+        stored.closes += 1;
+        return closing;
+      };
+      const store: SessionStore = {
+        ...NO_READS,
+        create: () => stored,
+        resume: () => Promise.reject(new Error('這一條不續接')),
+      };
+      const persistence = attachSessionPersistence(sessions, store, { windowMs: 5 });
+      turn(sessions.root);
+      const abandoning = persistence.abandon();
+      turn(sessions.root);
+      await vi.advanceTimersByTimeAsync(50);
+      await sessions.flush(sessions.root);
+      expect(stored.written).toEqual([]);
+      release();
+      await abandoning;
+      expect(stored.closes).toBe(1);
+      await persistence.dispose();
+      expect(stored.written).toEqual([]);
+      expect(stored.closes).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe('接在註冊表上', () => {
   it('root 與 subagent 各一份，subagent 的 header 帶血緣', async () => {
     const sessions = new SessionRegistry('root-1');
     const headers: StoredSessionHeader[] = [];
     const handles: ReturnType<typeof fakeStored>[] = [];
     const store: SessionStore = {
+      ...NO_READS,
       create(header) {
         headers.push(header);
         const stored = fakeStored();
@@ -210,13 +337,16 @@ describe('接在註冊表上', () => {
     const persistence = attachSessionPersistence(sessions, store, { cwd: '/w' });
     // **後來才出生的那一份也自動有**——subagent 的日誌是懶建的。
     const child = sessions.open({ kind: 'subagent', runId: 'r9' });
-    child.append('todo/write', { todos: [] });
+    child.append('model/start', {});
     sessions.root.append('turn/start', { kind: 'message', text: 'p' });
     await persistence.flush();
 
     expect(headers.map((header) => header.id)).toEqual(['root-1', 'root-1/r9']);
     expect(headers[0]?.parentSession).toBeUndefined();
     expect(headers[1]?.parentSession).toBe('root-1');
+    // 新建的子代理一律寫 `origin`（#1579）；root 不寫，也都不寫 `isSeeded`（沒給 `rootLineage`，見「分叉的 root」那一組）。
+    expect(headers.map((header) => header.origin)).toEqual([undefined, 'subagent']);
+    expect(headers.some((header) => 'isSeeded' in header)).toBe(false);
     expect(headers.every((header) => header.version === SESSION_LOG_FORMAT_VERSION)).toBe(true);
     expect(headers.every((header) => header.cwd === '/w')).toBe(true);
     expect(handles[0]?.written).toHaveLength(1);
@@ -224,6 +354,15 @@ describe('接在註冊表上', () => {
 
     await persistence.dispose();
     expect(handles.every((handle) => handle.closes === 1)).toBe(true);
+  });
+
+  /**
+   * **格式 45 守衛（#1301）：`compaction/summary` 的 `beforeCall` 從這一版開始。** 舊版讀到有這個欄位的日誌，會拿
+   * `messagesBefore + 1` 去對一筆其實是 `messagesBefore` 的事件，整串推不出來——所以寫出 `beforeCall` 的版本必須
+   * 讓舊版的 `SessionFormatUnsupportedError` 擋下。有人把版本號改回去，這條當場紅。
+   */
+  it('寫得出 compaction/summary 的 beforeCall 的版本，至少是 45', () => {
+    expect(SESSION_LOG_FORMAT_VERSION).toBeGreaterThanOrEqual(45);
   });
 
   /**
@@ -236,6 +375,7 @@ describe('接在註冊表上', () => {
       const sessions = new SessionRegistry('root-w');
       const headers: StoredSessionHeader[] = [];
       const store: SessionStore = {
+        ...NO_READS,
         create(header) {
           headers.push(header);
           return fakeStored();
@@ -259,6 +399,63 @@ describe('接在註冊表上', () => {
     expect(omitted.headers.every((header) => !('workspaceRoot' in header))).toBe(true);
     await omitted.persistence.dispose();
   });
+
+  /**
+   * 建置版本、插件清單、設定雜湊與模型型錄 id（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+   * 前三格是這個行程的性質，每一份新建的 header 都帶；模型只進 root——subagent 可能被選模型政策換掉。
+   */
+  it('建置那三格每一份都帶，模型型錄 id 只進 root；沒給就一格都沒有', async () => {
+    const metadata = {
+      build: { commit: 'a'.repeat(40), dirty: false },
+      plugins: [
+        { name: '@nexus/core/approval-gate', id: 'approval-gate', disabled: false },
+        { name: '#settings/x', disabled: true },
+      ],
+      configHash: 'hmac-sha256:0123456789abcdef',
+    } as const;
+    function headersFor(options: Parameters<typeof attachSessionPersistence>[2]) {
+      const sessions = new SessionRegistry('root-b');
+      const headers: StoredSessionHeader[] = [];
+      const store: SessionStore = {
+        ...NO_READS,
+        create(header) {
+          headers.push(header);
+          return fakeStored();
+        },
+        resume() {
+          return Promise.reject(new Error('這一條不續接'));
+        },
+      };
+      const persistence = attachSessionPersistence(sessions, store, options);
+      sessions.open({ kind: 'subagent', runId: 'r1' });
+      return { headers, persistence };
+    }
+
+    const given = headersFor({ buildMetadata: metadata, rootModelEntryId: 'vendor/model-a' });
+    expect(given.headers.map((header) => header.id)).toEqual(['root-b', 'root-b/r1']);
+    for (const header of given.headers) {
+      expect(header.build).toEqual(metadata.build);
+      expect(header.plugins).toEqual(metadata.plugins);
+      expect(header.configHash).toBe(metadata.configHash);
+    }
+    expect(given.headers[0]?.modelEntryId).toBe('vendor/model-a');
+    expect('modelEntryId' in given.headers[1]!).toBe(false);
+    await given.persistence.dispose();
+
+    const omitted = headersFor({});
+    expect(omitted.headers).toHaveLength(2);
+    for (const key of ['build', 'plugins', 'configHash', 'modelEntryId']) {
+      expect(omitted.headers.every((header) => !(key in header))).toBe(true);
+    }
+    await omitted.persistence.dispose();
+
+    // 雜湊算不出來（金鑰檔讀不到）時只少那一格，其餘照帶。
+    const { configHash: _dropped, ...withoutHash } = metadata;
+    const unhashed = headersFor({ buildMetadata: withoutHash });
+    expect(unhashed.headers.every((header) => header.build !== undefined)).toBe(true);
+    expect(unhashed.headers.every((header) => !('configHash' in header))).toBe(true);
+    await unhashed.persistence.dispose();
+  });
 });
 
 describe('批次窗口一路轉發', () => {
@@ -276,6 +473,7 @@ describe('批次窗口一路轉發', () => {
     const sessions = new SessionRegistry('root-window');
     const stored = fakeStored();
     const store: SessionStore = {
+      ...NO_READS,
       create() {
         return stored;
       },
@@ -318,6 +516,7 @@ describe('續接：只寫還沒存的後綴', () => {
     const resumed = fakeStored();
     const created: string[] = [];
     const store: SessionStore = {
+      ...NO_READS,
       create(header) {
         created.push(header.id);
         return fakeStored();
@@ -327,7 +526,7 @@ describe('續接：只寫還沒存的後綴', () => {
       },
     };
     const persistence = attachSessionPersistence(sessions, store, {
-      resumedRoot: { stored: resumed, storedCount: earlier.length },
+      resumedRoot: { stored: resumed, storedCount: SessionLogOffset(earlier.length) },
     });
     sessions.root.append('turn/start', { kind: 'message', text: '二' });
     await persistence.flush();
@@ -339,7 +538,7 @@ describe('續接：只寫還沒存的後綴', () => {
     // root 走的是續寫的把手，**沒有**替它 `create` 一份新的。
     expect(created).toEqual([]);
     // subagent 是這個行程新出生的，照常 `create`。
-    sessions.open({ kind: 'subagent', runId: 'r1' }).append('todo/write', { todos: [] });
+    sessions.open({ kind: 'subagent', runId: 'r1' }).append('model/start', {});
     await persistence.dispose();
     expect(created).toEqual(['root-r/r1']);
   });
@@ -359,6 +558,7 @@ describe('續接：只寫還沒存的後綴', () => {
     const sessions = new SessionRegistry('root-r', { rootSeed: earlier.events });
     const headers: StoredSessionHeader[] = [];
     const store: SessionStore = {
+      ...NO_READS,
       create(header) {
         headers.push(header);
         return fakeStored();
@@ -368,8 +568,11 @@ describe('續接：只寫還沒存的後綴', () => {
       },
     };
     const persistence = attachSessionPersistence(sessions, store, {
-      resumedRoot: { stored: fakeStored(), storedCount: earlier.length },
+      resumedRoot: { stored: fakeStored(), storedCount: SessionLogOffset(earlier.length) },
       workspaceRoot: '/今天的根',
+      // #1025：這一次的建置與模型同樣碰不到 root 那一份。
+      buildMetadata: { build: { commit: 'b'.repeat(40), dirty: true }, plugins: [] },
+      rootModelEntryId: 'vendor/today',
     });
     // root 一份 header 都沒建——這一次的根碰不到那一份已存的日誌。
     expect(headers).toEqual([]);
@@ -377,7 +580,120 @@ describe('續接：只寫還沒存的後綴', () => {
     expect(headers.map((header) => [header.id, header.workspaceRoot])).toEqual([
       ['root-r/r1', '/今天的根'],
     ]);
+    // 續接之後新生的 subagent 帶的是這一次的建置，沒有模型型錄 id。
+    expect(headers[0]?.build).toEqual({ commit: 'b'.repeat(40), dirty: true });
+    expect('modelEntryId' in headers[0]!).toBe(false);
     await persistence.dispose();
+  });
+
+  /**
+   * **續接的 root 記下這一次實際載入的清單**（[#1138](https://github.com/DemianLi/nexus-agent/issues/1138)）。
+   * header 沿用最初那一份，所以換了插件版本續接的 thread 要靠這一顆才讀得出現在跑哪一版。
+   */
+  describe('session/resumed', () => {
+    const metadata = {
+      build: { commit: 'c'.repeat(40), dirty: false },
+      plugins: [{ name: 'file:///v2/plugin.mjs', id: 'versioned-probe', disabled: false }],
+      configHash: 'hmac-sha256:0123456789abcdef',
+    } as const;
+
+    function resume(
+      seed: readonly SessionEvent[],
+      buildMetadata: SessionHeaderBuildMetadata | undefined,
+    ): {
+      sessions: SessionRegistry;
+      stored: ReturnType<typeof fakeStored>;
+      flush(): Promise<void>;
+    } {
+      const sessions = new SessionRegistry('root-r', { rootSeed: seed });
+      const stored = fakeStored();
+      const persistence = attachSessionPersistence(
+        sessions,
+        {
+          ...NO_READS,
+          create: () => fakeStored(),
+          resume: () => Promise.reject(new Error('不續接')),
+        },
+        {
+          resumedRoot: { stored, storedCount: SessionLogOffset(seed.length) },
+          ...(buildMetadata !== undefined && { buildMetadata }),
+        },
+      );
+      return { sessions, stored, flush: () => persistence.flush() };
+    }
+
+    function earlierTurn(): readonly SessionEvent[] {
+      const log = new SessionLog('root-r');
+      log.append('turn/start', { kind: 'message', text: '一' });
+      log.append('turn/end', {});
+      return log.events;
+    }
+
+    it('接在 end-seed 之後落盤，帶 ignorable，內容是這一次的清單', async () => {
+      const run = resume(earlierTurn(), metadata);
+      await run.flush();
+
+      expect(run.stored.written.map((event) => event.type)).toEqual([
+        'session/end-seed',
+        'session/resumed',
+      ]);
+      const event = run.stored.written[1]!;
+      expect(event.data).toEqual(metadata);
+      expect(event.ignorable).toBe(true);
+    });
+
+    it('入口沒給建置資料就不寫（不是每一種入口都算得出來）', async () => {
+      const run = resume(earlierTurn(), undefined);
+      await run.flush();
+      expect(run.stored.written.map((event) => event.type)).toEqual(['session/end-seed']);
+    });
+
+    it('空轉的續接不讓日誌長：同樣內容不疊，也不多疊一顆 end-seed', async () => {
+      const first = resume(earlierTurn(), metadata);
+      await first.flush();
+      const afterFirst = first.sessions.root.events;
+      expect(afterFirst.map((event) => event.type)).toEqual([
+        'turn/start',
+        'turn/end',
+        'session/end-seed',
+        'session/resumed',
+      ]);
+
+      const second = resume(afterFirst, metadata);
+      await second.flush();
+      expect(second.stored.written).toEqual([]);
+      expect(second.sessions.root.length).toBe(afterFirst.length);
+    });
+
+    it('內容變了才再記一顆：換了版本就多一顆，end-seed 仍只有一顆', async () => {
+      const first = resume(earlierTurn(), metadata);
+      await first.flush();
+      const v3: SessionHeaderBuildMetadata = {
+        ...metadata,
+        plugins: [{ name: 'file:///v3/plugin.mjs', id: 'versioned-probe', disabled: false }],
+      };
+
+      const second = resume(first.sessions.root.events, v3);
+      await second.flush();
+      expect(second.stored.written.map((event) => event.type)).toEqual(['session/resumed']);
+      expect(second.stored.written[0]?.data).toEqual(v3);
+      expect(second.sessions.root.events.filter((e) => e.type === 'session/end-seed')).toHaveLength(
+        1,
+      );
+    });
+
+    it('新建的會話不寫：header 就是它', async () => {
+      const sessions = new SessionRegistry('root-n');
+      const created = fakeStored();
+      const persistence = attachSessionPersistence(
+        sessions,
+        { ...NO_READS, create: () => created, resume: () => Promise.reject(new Error('不續接')) },
+        { buildMetadata: metadata },
+      );
+      sessions.root.append('turn/start', { kind: 'message', text: '一' });
+      await persistence.flush();
+      expect(created.written.map((event) => event.type)).toEqual(['turn/start']);
+    });
   });
 
   /** 反例：已存筆數不給的話，seed 那兩筆會被重送——撞號就是這個樣子。 */
@@ -396,8 +712,26 @@ describe('續接：只寫還沒存的後綴', () => {
   it('已存筆數比日誌還長就拒絕——那不是續接，是接錯了檔', () => {
     const log = new SessionLog('root-r');
     expect(
-      () => new SessionPersistenceCoordinator({ log, stored: fakeStored(), storedCount: 1 }),
+      () =>
+        new SessionPersistenceCoordinator({
+          log,
+          stored: fakeStored(),
+          storedCount: SessionLogOffset(1),
+        }),
     ).toThrow(/已存筆數 1 對不上日誌長度 0/);
+  });
+
+  it('已存筆數只收 SessionLogOffset：裸的 number 與事件位置都過不了型別', () => {
+    const log = new SessionLog('root-b');
+    const first = log.append('turn/start', { kind: 'message', text: 'hi' });
+    new SessionPersistenceCoordinator({
+      log,
+      stored: fakeStored(),
+      // @ts-expect-error 長度要先收成 SessionLogOffset
+      storedCount: log.events.length,
+    });
+    // @ts-expect-error 事件位置不是筆數
+    new SessionPersistenceCoordinator({ log, stored: fakeStored(), storedCount: first.seq });
   });
 });
 
@@ -406,6 +740,7 @@ describe('註冊表上的排空者（#599）', () => {
     const sessions = new SessionRegistry('root-1');
     const handles = new Map<string, ReturnType<typeof fakeStored>>();
     const store: SessionStore = {
+      ...NO_READS,
       create(header) {
         const stored = fakeStored();
         handles.set(header.id, stored);
@@ -423,7 +758,7 @@ describe('註冊表上的排空者（#599）', () => {
   it('`sessions.flush(log)` 只排空那一份，別份照舊等窗口', async () => {
     const { sessions, handles } = assemble();
     const child = sessions.open({ kind: 'subagent', runId: 'r9' });
-    child.append('todo/write', { todos: [] });
+    child.append('model/start', {});
     sessions.root.append('turn/start', { kind: 'message', text: 'p' });
 
     expect(await sessions.flush(child)).toBe(true);
@@ -456,5 +791,319 @@ describe('註冊表上的排空者（#599）', () => {
     stranger.append('turn/start', { kind: 'message', text: 'p' });
     // 有一位排空者（所以是 true），它不認得這一份，什麼都不做、也不拋。
     expect(await sessions.flush(stranger)).toBe(true);
+  });
+});
+
+describe('可忽略旗標（#507）', () => {
+  it('append 帶 { ignorable: true } 的那一筆，連旗標一起交給後端；沒帶的不多出這個鍵', async () => {
+    const log = new SessionLog('s');
+    const stored = fakeStored();
+    const coordinator = new SessionPersistenceCoordinator({ log, stored });
+    log.append('turn/end', {});
+    log.append('llm/retry-started', { retryId: 'r-1', retry: 1, waitedMs: 0 }, { ignorable: true });
+    await coordinator.flush();
+
+    expect(stored.written.map((event) => 'ignorable' in event)).toEqual([false, true]);
+    expect(stored.written[1]?.ignorable).toBe(true);
+  });
+});
+
+describe('子代理冷復活：執行期接回來的日誌往原檔續寫（#1271）', () => {
+  it('帶 resume 開的子代理不 create，走續寫的把手：只寫還沒存的後綴，第一筆是 end-seed', async () => {
+    const earlier = new SessionLog('root-r/bg-1');
+    earlier.append('turn/start', { kind: 'message', text: '重啟前' });
+    earlier.append('turn/end', {});
+    const sessions = new SessionRegistry('root-r');
+    const resumed = fakeStored();
+    const created: string[] = [];
+    const store: SessionStore = {
+      ...NO_READS,
+      create(header) {
+        created.push(header.id);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+    const persistence = attachSessionPersistence(sessions, store);
+    const log = sessions.open(
+      { kind: 'subagent', runId: 'bg-1' },
+      { events: earlier.events, stored: resumed },
+    );
+    log.append('turn/start', { kind: 'message', text: '重啟後' });
+    await persistence.flush();
+
+    expect(resumed.written.map((event) => [event.seq, event.type])).toEqual([
+      [2, 'session/end-seed'],
+      [3, 'turn/start'],
+    ]);
+    // 這個子代理沒有替它 `create` 新的一份；root 是這個行程新出生的，照常 create。
+    expect(created).toEqual(['root-r']);
+    await persistence.dispose();
+  });
+
+  it('沒帶 resume 的子代理照舊 create；兩種並存互不干擾', async () => {
+    const earlier = new SessionLog('root-r/bg-1');
+    earlier.append('turn/start', { kind: 'message', text: '重啟前' });
+    const sessions = new SessionRegistry('root-r');
+    const created: string[] = [];
+    const store: SessionStore = {
+      ...NO_READS,
+      create(header) {
+        created.push(header.id);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+    const persistence = attachSessionPersistence(sessions, store);
+    sessions.open(
+      { kind: 'subagent', runId: 'bg-1' },
+      { events: earlier.events, stored: fakeStored() },
+    );
+    sessions.open({ kind: 'subagent', runId: 'bg-new' }).append('model/start', {});
+    await persistence.dispose();
+    expect(created).toEqual(['root-r', 'root-r/bg-new']);
+  });
+});
+
+/**
+ * 一條 thread 底下有好幾份會話日誌（root 加子代理）：**其中一份寫不下去，其餘照 flush、照收尾**，最後一次把錯報出來
+ * （[#1511](https://github.com/DemianLi/nexus-agent/issues/1511)）。
+ *
+ * 以前全域 flush／dispose 逐一 await、遇到第一個錯就停：子代理那份收尾失敗，排在它後面的 root 就漏收——
+ * 不做最後一次 flush、不關檔、不放寫租約。
+ */
+describe('一份失敗、其餘照收（#1511）', () => {
+  /**
+   * 多兩種行為的假把手：`close` 可以失敗或被攔住，而且**close 開始之後 `flush` 會拒絕**（同 `jsonl-session-store.ts` 關檔之後的樣子）。
+   * 現成的 `fakeStored` 在 close 之後 `flush` 不拒絕，拿它量「關到一半的跳過」會因為錯的理由變綠。
+   */
+  function richStored() {
+    const base = fakeStored();
+    const extra = {
+      closeFail: undefined as Error | undefined,
+      closeGate: undefined as Promise<void> | undefined,
+      closing: false,
+    };
+    const rich = Object.assign(base, extra, {
+      flush(): Promise<void> {
+        if (rich.closing) return Promise.reject(new Error('把手已經關掉了'));
+        rich.flushes += 1;
+        return Promise.resolve();
+      },
+      async close(): Promise<void> {
+        rich.closing = true;
+        rich.closes += 1;
+        await rich.closeGate;
+        if (rich.closeFail !== undefined) throw rich.closeFail;
+      },
+    });
+    return rich;
+  }
+
+  function assemble(children: readonly string[]) {
+    const sessions = new SessionRegistry('root-1');
+    const handles = new Map<string, ReturnType<typeof richStored>>();
+    const store: SessionStore = {
+      ...NO_READS,
+      create(header) {
+        const stored = richStored();
+        handles.set(header.id, stored);
+        return stored;
+      },
+      resume: () => Promise.reject(new Error('這一條不續接')),
+    };
+    const persistence = attachSessionPersistence(sessions, store, {
+      windowMs: MAX_PERSISTENCE_WINDOW_MS,
+      warn: () => {},
+    });
+    // 依序開：協調器的順序是 root、再來是這些子代理，root 永遠第一。
+    const logs = children.map((runId) => sessions.open({ kind: 'subagent', runId }));
+    for (const log of [sessions.root, ...logs]) turn(log);
+    return { sessions, handles, persistence };
+  }
+
+  it('1 全域 flush：中間那份失敗，排在它後面的照 flush；拒絕成 AggregateError，指名那一份與原因', async () => {
+    const { handles, persistence } = assemble(['a', 'b', 'c']);
+    handles.get('root-1/b')!.fail = new Error('磁碟滿了');
+
+    const error: unknown = await persistence.flush().then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    const aggregate = error as AggregateError;
+    expect(aggregate.errors).toHaveLength(1);
+    expect(aggregate.message).toContain('root-1/b');
+    expect(aggregate.message).toContain('磁碟滿了');
+    // root、a、c 都被 flush 過，事件都寫進去了；c 排在失敗那份後面。
+    for (const id of ['root-1', 'root-1/a', 'root-1/c']) {
+      expect(handles.get(id)!.flushes, id).toBe(1);
+      expect(handles.get(id)!.written, id).toHaveLength(1);
+    }
+  });
+
+  it('1b 兩份都失敗：兩個都報，message 兩個會話 id 都在', async () => {
+    const { handles, persistence } = assemble(['a', 'b']);
+    handles.get('root-1/a')!.fail = new Error('磁碟滿了');
+    handles.get('root-1/b')!.fail = new Error('權限不對');
+
+    const error = await persistence.flush().then(
+      () => undefined,
+      (caught: unknown) => caught as AggregateError,
+    );
+
+    expect(error?.errors).toHaveLength(2);
+    expect(error?.message).toContain('root-1/a');
+    expect(error?.message).toContain('權限不對');
+  });
+
+  it('2 dispose 收完每一份：一份子代理失敗，root 在內每個把手都關過一次', async () => {
+    const { sessions, handles, persistence } = assemble(['a', 'b', 'c']);
+    handles.get('root-1/b')!.fail = new Error('磁碟滿了');
+
+    const error = await persistence.dispose().then(
+      () => undefined,
+      (caught: unknown) => caught as AggregateError,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error?.errors).toHaveLength(1);
+    expect(error?.message).toContain('root-1/b');
+    expect(error?.message).toContain('磁碟滿了');
+    for (const id of ['root-1', 'root-1/a', 'root-1/b', 'root-1/c']) {
+      expect(handles.get(id)!.closes, id).toBe(1);
+    }
+    // 收尾完成：排空者退下，不碰已關的把手。
+    const root = handles.get('root-1')!;
+    const flushes = root.flushes;
+    expect(await sessions.flush(sessions.root)).toBe(false);
+    expect(root.flushes).toBe(flushes);
+  });
+
+  it('2b dispose 之後 coordinators 清掉：再 dispose 一次是 no-op，不重關', async () => {
+    const { handles, persistence } = assemble(['a']);
+    handles.get('root-1/a')!.fail = new Error('磁碟滿了');
+    await expect(persistence.dispose()).rejects.toBeInstanceOf(AggregateError);
+    await persistence.dispose();
+    for (const id of ['root-1', 'root-1/a']) expect(handles.get(id)!.closes, id).toBe(1);
+  });
+
+  it('3 單一協調器：flush 與 close 都失敗，兩個錯都留（flush 在前）', async () => {
+    const log = new SessionLog('s');
+    const stored = richStored();
+    const coordinator = new SessionPersistenceCoordinator({ log, stored, warn: () => {} });
+    stored.fail = new Error('磁碟滿了');
+    stored.closeFail = new Error('關檔失敗');
+    turn(log);
+
+    const error = await coordinator.dispose().then(
+      () => undefined,
+      (caught: unknown) => caught as AggregateError,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error?.errors.map((e: Error) => e.message)).toEqual(['磁碟滿了', '關檔失敗']);
+    expect(error?.message).toContain('磁碟滿了');
+    expect(error?.message).toContain('關檔失敗');
+  });
+
+  it('3b 只有 close 失敗：拒絕的就是那個錯本身；只有 flush 失敗也是（不包）', async () => {
+    const closeOnly = richStored();
+    closeOnly.closeFail = new Error('關檔失敗');
+    const a = new SessionPersistenceCoordinator({
+      log: new SessionLog('a'),
+      stored: closeOnly,
+      warn: () => {},
+    });
+    await expect(a.dispose()).rejects.toBe(closeOnly.closeFail);
+
+    const flushOnly = richStored();
+    flushOnly.fail = new Error('磁碟滿了');
+    const logB = new SessionLog('b');
+    const b = new SessionPersistenceCoordinator({ log: logB, stored: flushOnly, warn: () => {} });
+    turn(logB);
+    await expect(b.dispose()).rejects.toBe(flushOnly.fail);
+    expect(flushOnly.closes).toBe(1);
+  });
+
+  it('4 收尾途中的全域 flush：卡在某一份的 close 上，flush 不拋「把手已經關掉了」', async () => {
+    const { handles, persistence } = assemble(['a']);
+    let release: () => void = () => undefined;
+    handles.get('root-1/a')!.closeGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const disposing = persistence.dispose();
+    // 倒著收：a 先收，卡在 close；它的旗標已經是 disposed。
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    expect(handles.get('root-1/a')!.closing).toBe(true);
+
+    await expect(persistence.flush()).resolves.toBeUndefined();
+
+    release();
+    await disposing;
+  });
+});
+
+describe('rootHeader()（#1599：搜尋拿它跟盤上那份比）', () => {
+  function recordingStore(headers: StoredSessionHeader[]): SessionStore {
+    return {
+      ...NO_READS,
+      create(header) {
+        headers.push(header);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+  }
+
+  it('新建的 root：就是交給 store.create 的那一份；之後生的 subagent 不蓋掉它', async () => {
+    const headers: StoredSessionHeader[] = [];
+    const sessions = new SessionRegistry('root-h');
+    const persistence = attachSessionPersistence(sessions, recordingStore(headers), {
+      cwd: '/專案',
+    });
+    sessions.open({ kind: 'subagent', runId: 'r1' });
+    expect(headers.map((header) => header.id)).toEqual(['root-h', 'root-h/r1']);
+    expect(persistence.rootHeader()).toBe(headers[0]);
+    await persistence.dispose();
+  });
+
+  it('續接的 root：是讀回來的那一份，不是這裡另外建的；沒給就是 undefined', async () => {
+    const earlier = new SessionLog('root-h');
+    earlier.append('turn/start', { kind: 'message', text: '一' });
+    const stored: StoredSessionHeader = {
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'root-h',
+      createdAt: 1_000,
+      cwd: '/專案',
+    };
+    const sessions = new SessionRegistry('root-h', { rootSeed: earlier.events });
+    const persistence = attachSessionPersistence(sessions, recordingStore([]), {
+      cwd: '/專案',
+      resumedRoot: {
+        stored: fakeStored(),
+        storedCount: SessionLogOffset(earlier.length),
+        header: stored,
+      },
+    });
+    sessions.open({ kind: 'subagent', runId: 'r1' });
+    expect(persistence.rootHeader()).toBe(stored);
+    await persistence.dispose();
+
+    const bare = attachSessionPersistence(
+      new SessionRegistry('root-h', { rootSeed: earlier.events }),
+      recordingStore([]),
+      { resumedRoot: { stored: fakeStored(), storedCount: SessionLogOffset(earlier.length) } },
+    );
+    expect(bare.rootHeader()).toBeUndefined();
+    await bare.dispose();
   });
 });

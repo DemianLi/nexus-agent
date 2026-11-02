@@ -1,0 +1,173 @@
+{
+  "id": "2305.13626",
+  "title": "Prompting and Evaluating Large Language Models for Proactive Dialogues: Clarification, Target-guided, and Non-collaboration",
+  "topic": "T1",
+  "subarea": "模糊指令與澄清提問",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 gpt-3.5-turbo-0301 與 Vicuna-13B 在澄清提問（Abg-CoQA、PACIFIC）、目標導引對話（OTTers、TGConv）與非合作談判（CraigslistBargain）三類主動式對話上比較 Standard／Proactive／ProCoT 三種提示，發現 LLM 在一般提示下幾乎從不主動澄清，先寫「模糊性分析」再決定動作的 ProCoT 能把一般領域的澄清需求判斷拉到與微調 SOTA 相近，但在金融領域仍遠落後微調模型。",
+  "problem": "ChatGPT 類對話系統被訓練成順從指令，面對模糊查詢時傾向直接猜一個答案，而不是反問；OpenAI 自己也承認這是已知限制。對話 agent 的目標對齊需要系統在使用者意圖不明時主動釐清，否則後續整條任務都建立在錯誤的目標上。2023 年初缺乏系統性證據回答：LLM 對話系統在「何時該問（Clarification Need Prediction, CNP）」與「問什麼（Clarification Question Generation, CQG）」上到底能做到什麼程度、和微調專用模型差多少、用提示詞能補回多少。論文同時把同一問題延伸到另兩種主動性：把對話導向指定話題、以及在利益衝突的談判中為自己爭取。",
+  "core_idea": "把 LLM 的回應生成從 p(r|D,C) 拆成三級提示：Standard 只給任務背景 D 與對話歷史 C 直接生成回應；Proactive 額外給一組可選的對話動作 A（例如「直接回答」或「提出澄清問題」），要求先選動作再生成 p(a,r|D,C,A)；ProCoT（Proactive Chain-of-Thought）再要求先產生一段描述性的思考 t —— 在澄清任務裡就是「這個問題哪裡模糊、有幾種可能指涉」的分析 —— 再依思考選動作、最後生成回應 p(t,a,r|D,C,A)。主張是：只給選項不夠，LLM 仍會選錯動作或問出不聚焦的問題；要讓它先對照對話目標做分析，才會把「提問」當成達成目標的手段。",
+  "method": {
+    "模型與生成設定（§4.1.2、§4.3.2、Limitation）": "ChatGPT 固定用 gpt-3.5-turbo-0301、temperature 0（求可重現的決定性輸出）；開源模型用 Vicuna-13B-delta-v1.1，於 NVIDIA DGX-1 V100 32G 推論。最大新 token 數：澄清任務 128，談判任務 256（因要多輸出策略與動作）；目標導引任務文中未另外說明。Vicuna 上下文只有 2,048 token，所以 few-shot 一律只做 one-shot。全部 ChatGPT 實驗的 API 費用約 120 美元。",
+    "提示詞組裝（Appendix C）": [
+      "zero-shot：任務指令＋測試樣本。",
+      "one-shot：任務指令＋一筆示範樣本（樣本內容＋該提示方案對應的示範輸出）＋測試樣本。",
+      "示範樣本固定取各資料集原始訓練集的第一筆對話，作者另以三筆不同示範測敏感度（Figure 3，僅 Vicuna-13B）。",
+      "ProCoT 示範中的思考鏈由人工撰寫；作者請三位標註者各寫一版，量到的變異小於換示範樣本的變異，最後每個資料集採用表現最好的那一版。",
+      "任務指令先照各任務的問題定義寫，再要求依固定輸出模板作答，方便解析。"
+    ],
+    "澄清任務的三種提示（Table 10，轉述）": {
+      "輸入": "Document（Abg-CoQA 為故事段落；PACIFIC 為金融報表的表格＋文字混合內容）、Conversation history（User／System 交替的清單）、Question（當前使用者問題）。",
+      "Standard": "指示依文件與對話歷史生成回應。無法從輸出直接判出 CNP 標籤，因此 Table 1 的 CNP F1 標為「-」。",
+      "Proactive": "指示「回答問題或提出澄清問題」二選一，輸出必須以固定前綴開頭（答案前綴或澄清問題前綴）；前綴即 CNP 決策，後面的文字即回答或澄清問題。",
+      "ProCoT": "指示先判斷問題是否模糊，模糊就問澄清問題、不模糊就回答；輸出必須先寫一段模糊性分析，接著寫「因此問題（不）模糊」的結論句，再接答案或澄清問題。示範的分析內容是「文件裡提到兩本書，無法確定指哪一本」，接著提出「是指第一本嗎」的澄清問題。",
+      "解析": "依結論句或前綴抽出二元模糊標籤 y（算 CNP F1），抽出澄清問題文字（算 CQG 指標與人工 Help.）。"
+    },
+    "澄清任務的定義與指標（§4.1.1–4.1.2）": "給文件 D 與脈絡 C={q1,a1,…,q_t}，先預測當前 q_t 是否需要澄清（二元），需要時生成澄清問題作為 a_t。CNP 用 F1；CQG 在 Abg-CoQA 用 BLEU-1、在 PACIFIC 用 ROUGE-2 (F1)；另加人工評分 Help.（生成的問題是否有助於釐清現有模糊），但論文沒交代澄清任務人工評估的樣本數與標註者人數。Baseline 與 SOTA 數字直接引自 Guo et al. (2021) 與 Deng et al. (2022a)。",
+    "澄清錯誤分析（§4.1.4、Appendix B）": "對 ChatGPT one-shot ProCoT 在兩個資料集各隨機抽 100 筆 CQG 錯誤，分四類：Wrong Aspect（問錯面向）、Under-specified（問得太籠統，使用者難以回答）、Over-specified（問的資訊其實查詢裡已經講清楚）、Generation Error（判出需要澄清卻沒依格式產出澄清問題，例如改口說文件裡沒有資訊）。",
+    "目標導引任務（§4.2、Table 11）": {
+      "輸入輸出": "給只有系統知道的目標話題（以一組關鍵字表示）與對話歷史，輸出下一步話題清單與過渡回應。Proactive 模板為「下一步話題是 [..]，回應是 ..」；ProCoT 模板先列「目前話題 [..]」，再說「為了銜接目前與目標話題，下一步話題是 [..]」，最後給回應。",
+      "turn-level": "OTTers（TopKG 的處理版），next topic 用 hits@1／hits@3，回應用 BLEU、METEOR、ROUGE-L。",
+      "dialogue-level": "TGConv（由 ConvAI2 建成，分 easy／hard 目標）以 self-play 模擬多輪對話，模擬使用者不知道目標；Succ.＝8 輪內生成目標詞的比例，Turns＝成功對話的平均輪數，Coh.＝以 MiniLM 算上一句與回應的語意相似度。人工評估每個方法 100 段模擬對話、3 位標註者、0–2 分，評 Global-Coherence 與 Effectiveness。論文沒說模擬使用者由哪個模型扮演。"
+    },
+    "非合作談判任務（§4.3、Table 12）": {
+      "輸入輸出": "系統扮演賣家；輸入商品描述、目標售價、對話歷史，以及預先定義的對話動作清單與談判策略清單（DialoGraph 處理版 CraigslistBargain：10 種 dialogue act、21 種策略）。Proactive 要求先選一組策略（多標籤）與一個對話動作再生成回應；ProCoT 要求先分析目前談判進度、訂下這一步的談判目標，再選策略與動作、生成回應。",
+      "指標": "策略預測與動作預測用 F1 與 ROC AUC，回應用 BLEU 與 BERTScore；人工評估隨機 100 段對話：Persuasive／Coherent／Natural（0–2 分）、各方案兩兩配對的勝率，以及由標註者讀出賣家當輪出價算 Sale-to-List ratio（Eq. 4：(出價−買家目標價)/(標價−買家目標價)，越低代表賣家讓步越多）。Gold 條件是把參考答案的動作與策略餵給 LLM 生成回應。Standard 不輸出動作，作者另訓練分類器標出其回應的動作與策略供 Figure 2／Figure 8 分析。"
+    },
+    "資料集規模（Appendix A、Table 8）": "全部用測試集：Abg-CoQA 1,055 段對話；PACIFIC 278 段（測試集標籤未公開，改用驗證集）；OTTers 372；TGConv 751；CraigslistBargain 567。",
+    "給框架工程師的重做要點": "若只想把 ProCoT 當成 T1 的澄清閘門：在回答前要求模型先寫一段「此問題可能的多種解讀、哪一處資訊缺漏」的分析，再輸出固定格式的模糊／不模糊結論句與後續動作，程式端只看結論句做路由（模糊→送出澄清問題，不模糊→進入回答或工具流程）；並準備一筆人工撰寫的思考鏈示範。論文的結果顯示 zero-shot 在較弱模型上幾乎無效，示範是必要元件。"
+  },
+  "assumptions": [
+    "判斷模糊所需的資訊都在給定的文件 D 與對話歷史裡；模型不需要外部知識就能看出有幾種可能指涉（PACIFIC 的結果顯示領域知識不足時這個前提會破）。",
+    "可選動作集合 A 是事先定義好的小集合（澄清任務只有回答／澄清兩種），而且 LLM 會遵守固定輸出前綴，讓程式能解析出決策。",
+    "一筆人工撰寫的 ProCoT 示範足以代表整個資料集的推理模式；示範樣本固定取訓練集第一筆。",
+    "離線資料集中的單一回合決策可以代表互動中的澄清能力：澄清問題問出去之後不需要使用者回答，也不評估回答後是否得到正確答案。",
+    "BLEU-1／ROUGE-2 與人工 Help. 分數能反映澄清問題的品質；目標導引以「8 輪內說出目標詞」代表成功。",
+    "self-play 中不知道目標的模擬使用者行為足以代表真實使用者。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Abg-CoQA（一般領域對話式問答中的模糊問題，1,055 段）",
+      "PACIFIC（金融領域表格＋文字混合問答的主動澄清，驗證集 278 段）",
+      "OTTers（單輪話題過渡，TopKG 處理版，372 段）",
+      "TGConv（多輪目標導引，easy／hard 目標，751 段）",
+      "CraigslistBargain（議價談判，DialoGraph 處理版，567 段）"
+    ],
+    "metrics": [
+      "CNP：F1",
+      "CQG：BLEU-1（Abg-CoQA）、ROUGE-2 F1（PACIFIC）、人工 Help.",
+      "目標導引 turn-level：hits@1、hits@3、BLEU、METEOR、ROUGE-L",
+      "目標導引 dialogue-level：Succ.（8 輪內）、Turns、Coh.（MiniLM 相似度）；人工 G-Coh.、Effect.（0–2）",
+      "談判：策略與動作的 F1、ROC AUC；BLEU、BERTScore；人工 Persuasive／Coherent／Natural、兩兩勝率、Sale-to-List ratio"
+    ],
+    "baselines": [
+      "澄清：Guo et al. (2021) 與 Deng et al. (2022a) 報告的 Baseline 與微調 SOTA（數字直接引用）",
+      "目標導引：GPT-2、DKRN、CKC、TopKG、Color（皆為微調方法）",
+      "談判：FeHED、HED+RNN、HED+TFM、DialoGraph（皆為微調方法）",
+      "LLM 內部對照：Standard vs Proactive vs ProCoT，各分 zero-shot 與 one-shot；談判人工評估另有 Gold（以參考策略生成）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "一般提示下兩個 LLM 都不會主動澄清；即使 one-shot 示範輸出本身就是一句澄清問題，照樣不學。",
+      "numbers": "Standard 提示下 Vicuna-13B 與 ChatGPT 在 Abg-CoQA 與 PACIFIC 的 Help. 全為 0.0（zero-shot 與 one-shot 皆然）；CNP 無法計算（標為「-」）。",
+      "section": "§4.1.3、Table 1、Table 10",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只給「回答或澄清」兩個選項時，Vicuna 幾乎選不對，ChatGPT 則在一般領域開始會問。",
+      "numbers": "Proactive 提示 CNP F1：Vicuna 在 Abg-CoQA 為 4.1（0-shot）／12.1（1-shot），在 PACIFIC 為 2.3／0.0；ChatGPT 在 Abg-CoQA 為 22.0／20.4，Help. 17.6／23.5。",
+      "section": "§4.1.3、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "ProCoT 讓 ChatGPT 在一般領域的澄清需求判斷達到微調 SOTA 的水準，但澄清問題品質仍落後；較弱的 Vicuna 需要 one-shot 示範 ProCoT 才有效。",
+      "numbers": "Abg-CoQA：ChatGPT ProCoT CNP F1 23.8（0-shot）／27.9（1-shot），SOTA 23.6、Baseline 22.1；Help. 32.4／45.9，SOTA 56.0。Vicuna ProCoT CNP F1 1.4（0-shot）→18.3（1-shot），Help. 9.1→22.7。",
+      "section": "§4.1.3、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在金融領域（PACIFIC）即使用了 ProCoT，LLM 與微調方法之間仍有很大差距，作者歸因於領域知識。",
+      "numbers": "LLM 最佳 CNP F1 28.0（ChatGPT 0-shot ProCoT），SOTA 86.9、Baseline 79.0；LLM 最佳 Help. 35.8（ChatGPT 1-shot ProCoT），SOTA 80.1。ChatGPT ProCoT 的 CNP F1 在 one-shot 反而是 27.7，沒有提升。",
+      "section": "§4.1.3、Table 1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "ChatGPT one-shot ProCoT 的澄清錯誤中，金融領域「問錯面向」與「問得太籠統」的比例高於一般領域；另有四成以上錯誤其實是沒照格式產出澄清問題。",
+      "numbers": "各抽 100 筆錯誤（Abg-CoQA vs PACIFIC）：Wrong Aspect 21% vs 30%；Under-specified 16% vs 23%；Over-specified 15% vs 5%；Generation Error 48% vs 42%。",
+      "section": "§4.1.4、Table 2、Table 9",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "目標導引對話中 ChatGPT 幾乎一定達標但轉場很粗暴、整體連貫度差；ProCoT 讓 Vicuna 轉場更平順，對 ChatGPT 效果有限。",
+      "numbers": "TGConv：ChatGPT 0-shot Standard Succ. 97.5%（easy）／96.3%（hard），Turns 2.26／2.30；人工評估（one-shot）ChatGPT Standard 的 G-Coh. 0.97（easy），低於 TopKG 的 1.42。Vicuna 1-shot ProCoT Succ. 72.3%／59.8%、Turns 3.55／3.81、Coh. 0.52／0.48，對照 1-shot Standard 62.7%／65.0%、2.83／2.90、0.45／0.43（hard 目標的成功率其實下降）。",
+      "section": "§4.2.4–4.2.5、Table 4、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "談判中 LLM 的策略預測遠落後微調方法，傾向讓步；把參考策略餵給它時成交價明顯更好，顯示瓶頸在策略規劃而非回應生成。",
+      "numbers": "ChatGPT 1-shot ProCoT 策略 F1 15.1、動作 F1 16.3，DialoGraph 為 26.1、33.4。人工 Sale-to-List ratio：Standard 0.48、Proactive 0.43、ProCoT 0.54、Gold 0.64；Persuasive 1.24／1.28／1.43／1.54。",
+      "section": "§4.3.3–4.3.4、Table 6、Table 7、Figure 2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "換不同人寫的 ProCoT 思考鏈，結果變異小於換 one-shot 示範樣本；正式結果採用每個資料集表現最好的那一版思考鏈。",
+      "numbers": "三版標註 × 三筆示範樣本，只在 Vicuna-13B 上量（Figure 3）；文中未給具體數值。",
+      "section": "Appendix C、Figure 3",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "結果對提示詞敏感，所用提示詞也未必最佳；提示詞敏感度與最佳化本身留待後續研究。",
+    "商用 API 成本高（約 120 美元）、本地算力有限，只測了 Vicuna-13B，沒測 GPT-4、LLaMA／Vicuna 65B 等更大的模型。",
+    "ProCoT 只是觸發規劃與決策能力的初步嘗試，規劃能力仍弱於微調方法；單靠提示詞可能不足以處理真實世界的動態環境，需要在搭配更多樣使用者模擬的互動設定下研究。",
+    "Vicuna 的 2,048 token 上限讓 few-shot 只能做 one-shot。",
+    "回應生成的自動指標不可靠（同一話題可有多種說法），目標導引部分主要看 next topic prediction。",
+    "PACIFIC 測試集標籤未公開，改用驗證集評估。"
+  ],
+  "limitations_observed": [
+    "ProCoT 的 one-shot 思考鏈是從三版人工標註中「挑最好的」（Appendix C），而 Proactive 沒有對應的挑選空間；論文沒說挑選是在哪份資料上比的，若是看測試集，ProCoT 相對 Proactive 的增益帶有選擇偏差。",
+    "ProCoT 與 Proactive 的差別不只多一段思考鏈：ProCoT 的指令另外明確要求「先判斷問題是否模糊」。兩個因素同時改變，沒有「只加判斷指令、不寫分析」的消融，無法把增益歸給推理鏈本身。",
+    "Abg-CoQA 上 Baseline 22.1、SOTA 23.6、ChatGPT 23.8–27.9 的二元 CNP F1 都很低，論文沒報正類比例，也沒有「全部判為模糊」之類的平凡基準；「與 SOTA 相當」的意思其實是大家都只做對一小部分，這個比較的資訊量有限。",
+    "Help. 是 Table 1 支撐 CQG 結論的主要指標，但澄清任務的人工評估沒交代樣本數、標註者人數與一致性；Baseline／SOTA 的 Help. 又是從 Guo et al. (2021) 與 Deng et al. (2022a) 直接抄來，是不同標註群、不同時間的評分，跨表直接比較並不嚴謹。",
+    "PACIFIC 上 LLM 用的是驗證集，而對照的 SOTA 數字引自原論文（論文沒說明原數字是哪個切分），86.9 vs 28.0 的差距可能混入資料切分差異；比較也沒有控制 SOTA 是用 PACIFIC 訓練資料微調過的這件事，所以「領域知識不足」只是其中一種解釋。",
+    "錯誤分析中 Generation Error 佔 48%／42%，也就是將近一半的 CQG 失敗是格式或決策前後不一致（判出要澄清卻沒問），不是澄清品質問題；「領域知識不足」的結論只建立在 Wrong Aspect＋Under-specified（37% vs 53%）這部分，而且這些是「錯誤中的比例」而非錯誤率，兩資料集的錯誤總數本身就不同。",
+    "只有 temperature 0 的單次執行、沒有信賴區間或顯著性檢定；Vicuna ProCoT 的 CNP F1 在 0-shot 與 1-shot 之間從 1.4 跳到 18.3，ChatGPT ProCoT 在 Abg-CoQA 的 BLEU-1 從 21.6 降到 18.4、PACIFIC 的 ROUGE-2 從 21.5 降到 16.2（同時 Help. 上升），顯示不同指標方向不一致、結果對示範高度敏感。",
+    "評估是離線單回合：澄清問題問出去後沒有使用者回答，也沒量「澄清後最終答案是否正確」或「多問一次的使用者成本」；對 T1 真正在乎的「問了值不值得」沒有證據，也沒涵蓋需要多輪澄清的情境。",
+    "結論綁在 2023 年的 gpt-3.5-turbo-0301 與 Vicuna-13B；「LLM 幾乎不澄清」其實是「這兩個模型＋一句只叫它生成回應的指令」的結果，不能直接外推到之後的指令微調或推理模型。",
+    "談判部分的 Sale-to-List ratio 定義前後矛盾：Figure 1 說明文字寫成 (標價−出價)/(標價−買家目標價)、並說系統扮演 Buyer，§4.3 的 Eq. 4 則是 (出價−買家目標價)/(標價−買家目標價)、系統扮演賣家，兩式互為補數，讀 Table 7 時要以 Eq. 4 為準。",
+    "TGConv 的 Succ. 只看 8 輪內有沒有說出目標詞，ChatGPT 在第一句回應就直接講出目標詞也算成功，這個指標本身就獎勵粗暴轉場；論文雖用人工 G-Coh. 補救，但自動指標的主結論（LLM 近乎滿分）要打折看。模擬使用者由哪個模型扮演也沒交代。"
+  ],
+  "framework_role": "只有 §4.1（全文約三分之一）屬於 T1：它把 LLM 時代的澄清拆成「何時問」（CNP，二元模糊判斷）與「問什麼」（CQG），並提供一個可直接落地的提示詞模式 —— 先寫模糊性分析、再輸出可解析的結論句、最後依結論選「回答」或「澄清」—— 可當作 T1 目標對齊入口的澄清閘門基線。它的四類澄清錯誤分類（問錯面向、太籠統、多此一問、格式失敗）也可以直接拿來當 T7 評估澄清品質的標註綱要。目標導引與談判兩部分處理的是系統自身目標的規劃與策略，屬於對話策略層，不是理解使用者目標，對 T1 參考價值低；其中 TGConv 的 self-play 評估與 T6／T7 有交集。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "只出現在目標導引部分（不是 T1 的澄清實驗）：TGConv 以 self-play 讓不知道目標的模擬使用者與系統對話最多 8 輪，每個方法產生 100 段模擬對話，這些互動紀錄再送去算 Succ.／Turns／Coh.，並交給 3 位標註者評 G-Coh. 與 Effect.。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身未提任何部署或產品；以 ProCoT 名稱搜尋只找到論文頁、OpenReview 與論文索引站，沒有官方產品文件、model card 或官方部落格採用此方法。Semantic Scholar 顯示 189 次引用、35 次 influential citation，屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/dengyang17/LLM-Proactive",
+    "data": "五個資料集皆公開（附錄 A 附了 Abg-CoQA、PACIFIC、TopKG 處理版 OTTers、DialoGraph 處理版 CraigslistBargain 的 GitHub 連結）；PACIFIC 測試集標籤未公開，本文用驗證集。程式碼倉庫存在，含 abgcoqa、pacific、otters、topkg、negotiate、data 等目錄（2026-09-26 查看）。完整提示詞在 Appendix C Table 10–12。實驗綁定 gpt-3.5-turbo-0301 這個 2023 年快照，重跑前須確認該快照是否仍可呼叫；人工評估（Help.、G-Coh.、Persuasive 等）的逐筆標註是否公開未確認。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是 LLM 時代最早、被大量引用的澄清能力評估之一，提供了 CNP／CQG 拆分、可落地的「先分析模糊再決定動作」提示模式與澄清錯誤分類，但只有三分之一內容屬於 T1，且評估是離線單回合、單次執行、人工評估細節不足、綁 2023 年舊模型，當基線與設計參考有價值，不到必讀。",
+  "related": [
+    "2210.08817",
+    "2305.02750",
+    "2305.04147",
+    "2305.05290",
+    "2305.10142",
+    "2201.11903",
+    "2210.03629"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

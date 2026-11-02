@@ -26,12 +26,12 @@ plugin 清單 ──fold──▶ agent ──┬──▶ CLI（一次性／REP
 | `apps/harness` | 組裝點：agent 工廠、訊息標準化、CLI 與 serve |
 | `apps/web` | Vite ＋ React 19 ＋ Tailwind v4 ＋ shadcn/ui |
 
-pnpm workspace，Node >= 22。
+pnpm workspace，Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
 ## 能力
 
-**開箱就有**，patch 也關不掉（CLI 與 serve 共用同一個組裝函式）：`ask_user_question`、
-`submit_record`，以及給了 `--workspace` 才掛的檔案圍堵與 `/sandbox`、工作區改動紀錄。
+**開箱就有**，patch 也關不掉（CLI 與 serve 共用同一個組裝函式）：給了 `--workspace` 才掛的檔案圍堵與
+`/permission`（權限組合）、工作區改動紀錄。`ask_user_question` 與 `submit_record` 現在在下面那份清單裡，跟其他列一樣看得見、關得掉。
 
 **在出貨的清單裡**（[`apps/harness/cordis.yml`](apps/harness/cordis.yml)，用 patch 檔改，見 [`docs/operations.md`](docs/operations.md#plugin-清單)）：
 
@@ -41,10 +41,12 @@ pnpm workspace，Node >= 22。
 | 長期目標 | 一個會話記得住跨多輪的目標；開關是 `/goal` | `nexus-plugin-goal` |
 | Todo | 模型自己維護的工作清單 | `nexus-plugin-todo` |
 | 工作區指令 | 工作區的 `AGENTS.md` 當一則訊息送進每個 agent | `nexus-plugin-agent-instructions` |
+| 時間讀數 | 每次呼叫開頭追加現在時間與距上一則訊息的時長，同一條會話 10 分鐘內不重複 | `nexus-plugin-time-context` |
+| 技能 | 工作區（`--workspace`）的 `skills/<name>/SKILL.md` 列進提示詞，模型需要時自己去讀；serve 的新對話從唯讀的 `/shared/skills/` 讀同一個目錄。沒有技能就不加任何字 | `nexus-plugin-skills` |
 | 交付宣告 | 模型指名這一輪交付了哪些檔 | `nexus-plugin-present` |
 | 評分與回饋 | `/feedback` | `nexus-plugin-feedback` |
 
-**要自己疊一層 patch 才掛**：MCP、QuickJS 沙箱、skills、記憶、OpenTelemetry 遙測。每個套件的
+**要自己疊一層 patch 才掛**：MCP、QuickJS 沙箱、記憶、OpenTelemetry 遙測。每個套件的
 `src/index.ts` 檔頭寫著它自己的完整規格與偏離標註。人打的斜線命令不經過模型，由進入點解析發派。
 
 ## 跑起來
@@ -57,6 +59,11 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 ```
 
 **預設走寫死腳本的假模型，不需要任何 key**——那條路徑驗的是接線，不是模型。
+
+開發時不必先建置：`tsx` 與 `vitest` 照 `tsconfig.base.json`／`tsconfig.runtime.json` 的 `paths` 把 `@nexus/*` 解到 `src/`。
+每個套件的 `package.json` 指的是 `lib/`（出貨的是編好的 ESM），要產出它：`pnpm run build:lib`；`pnpm lint` 會先做這一步，
+因為各插件的 `eslint.config.js` 載入的是 `@nexus/sdk/lint` 編好的 `lib/lint.js`。新增套件或 subpath 後跑
+`pnpm run gen-tsconfig-paths` 更新別名（`pnpm run verify-tsconfig-paths` 查有沒有漂移，CI 會跑）。
 
 在瀏覽器裡跟 agent 說話——**先 build 網頁再起 `serve`**，網頁是 `apps/web/dist` 的靜態產物，
 順序反了什麼都沒有：
@@ -77,19 +84,23 @@ pnpm --filter @nexus/harness run serve      # 印出「nexus-agent 在 http://12
 
 ```bash
 pnpm lint         # eslint（遞迴全部套件）
-pnpm typecheck    # tsc --noEmit
+pnpm typecheck    # 型別檢查（跟 CI 同一支 .github/scripts/typecheck.sh）
 pnpm test         # vitest run
 pnpm build        # vite build
 pnpm --filter @nexus/web dlx shadcn@latest add <component>   # 新增 shadcn/ui 元件
 ```
 
 程式碼規範見 [`docs/standards.md`](docs/standards.md)。分支策略、PR 標題格式、發版流程與設計方法論
-（含對 DeepSeek Harness 的偏離規則）見 [AGENTS.md](AGENTS.md)。
+（含怎麼參照 DeepSeek Harness 選做法）見 [AGENTS.md](AGENTS.md)。
 
-CI 只有 `gate` 一個 required status check，無條件觸發、在 job 內以 `git diff` 決定要掃什麼，
-沒有可掃的檔案時直接綠燈——純文件的 PR 不會卡住。**三個例外**，共通點是「測試會讀這個檔」：
+CI 只有 `gate` 一個 required status check，無條件觸發，`gate` 只是把其他 job 的結果收斂成單一燈號。
+功能分支 → `develop` 的 PR 走輕的模式：`plan` job 只做擋樹的檢查（PR 標題與格式、CI 腳本的測試、lockfile 新版本的發布年齡、受影響套件的型別檢查、異動檔的
+format 與 lint、改到的測試檔加上同名測試檔），沒東西可查時不安裝相依——純文件的 PR 不會卡住。全套測試與 web build
+在合併進 `develop` 之後的那一輪跑。動到 `.github/workflows|scripts|actions` 的功能 PR、`develop → main` 的 PR 與
+`main` 的 push 一律全跑（判斷邏輯見 [`.github/scripts/plan_ci.py`](.github/scripts/plan_ci.py)）。
+全跑時以 `git diff` 決定要不要掃 TypeScript；有幾個非 TypeScript 的檔會觸發掃描，共通點是「測試會讀這個檔」：
 `docs/operations.md`（測試從它讀核准 fixture 的參數，[#490](https://github.com/DemianLi/nexus-agent/issues/490)）、
 `apps/harness/cordis.yml`（出貨的 plugin 清單，十七個測試檔真的拿它組 agent，
 [#454](https://github.com/DemianLi/nexus-agent/issues/454)）
 與 `apps/harness/src/*.patch.yml`（patch 檔案，測試疊在出貨清單上組 agent，[#455](https://github.com/DemianLi/nexus-agent/issues/455)）。
-只改這些檔案也可能弄紅測試，所以它們會觸發完整掃描。細節見 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。
+細節見 [`.github/workflows/ci.yml`](.github/workflows/ci.yml)。

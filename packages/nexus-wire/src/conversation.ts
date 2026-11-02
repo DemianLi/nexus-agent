@@ -32,10 +32,42 @@
  */
 
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
-import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
+import type {
+  WireContextBreakdown,
+  WireContextMeasure,
+  WireContextPressure,
+} from './context-pressure.js';
+import type { CustomFrameName } from './custom-frame.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { IMAGE_MEDIA_TYPES } from './attachments.js';
+import type { WireAttachmentRef } from './attachments.js';
+import { mentionField } from './subagent-list.js';
+import type { SubagentMention } from './subagent-list.js';
+import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason, isTurnStopCause } from './inbox.js';
+import type {
+  WireQueuedInput,
+  WireQueuedInputSource,
+  WireSessionReference,
+  WireSettleReason,
+} from './inbox.js';
+import { COMPACTION } from './compaction.js';
+import { GOAL, GOAL_ACTIVATION, GOAL_PHASES } from './goal.js';
+import { LLM_RETRY, LLM_RETRY_STARTED, toWireLlmRetry } from './llm-retry.js';
+import type { WireLlmRetry } from './llm-retry.js';
+import { MESSAGE_DISCARD } from './message-discard.js';
+import type { WireGoal, WireGoalActivation, WireGoalPhase } from './goal.js';
+import { PLAN_MODE } from './plan-mode.js';
+import { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
+import type { WireProjection } from './projection.js';
+import type { PlanModePayload } from './plan-mode.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
+import { SUBAGENT_CATALOG } from './subagent-catalog.js';
+import type { SubagentCatalogPayload } from './subagent-catalog.js';
+import { SUBAGENT_STATUS } from './subagent-status.js';
+import type { SubagentRunStatus } from './subagent-status.js';
+import { IMAGE_OFFLOAD } from './image-offload.js';
+import { TITLE } from './title.js';
 import { TODOS } from './todos.js';
 import type { WireTodoItem } from './todos.js';
 import type { WirePresentedFile } from './deliverables.js';
@@ -52,6 +84,90 @@ export interface HumanEntry {
   readonly kind: 'human';
   readonly id: string;
   readonly text: string;
+  /** 這一句出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
+  /**
+   * 這一則是送出佇列的哪一件開跑時畫的（`inbox` 的 `claimed.id`）。同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
+   * 歷史重播的人話沒有這一格。
+   */
+  readonly inboxId?: string;
+  /**
+   * 這一句 `@` 的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)），照出現先後。`text` 裡對應的那段是
+   * `@<label>`，畫面據它把那一段畫成點得開的引用。沒有引用就不給這一格。
+   */
+  readonly references?: readonly WireSessionReference[];
+  /**
+   * 這一句帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：**參照，不是位元組**，照使用者選取的順序。
+   * 圖與檔案由 `type` 判別。沒有附件就不給這一格（空陣列與沒給是同一件事）。
+   */
+  readonly attachments?: readonly WireAttachmentRef[];
+  /**
+   * {@link attachments} 裡被請求的圖片額度省略的那幾格的位置（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)，0 起算、遞增）：
+   * 模型從此看不到那幾張圖（換成了一行佔位字），圖還在附件儲存裡、人看得到。畫面據它在縮圖上標「模型已看不到」。
+   * 冷載入由歷史的 `message-start` 帶來，即時由 {@link IMAGE_OFFLOAD} 累加。沒有被省略的就不給這一格。形狀與認條目的規則見 `image-offload.ts`。
+   */
+  readonly omittedAttachments?: readonly number[];
+  /**
+   * 這一句點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：畫面據它在人的泡泡上畫點名的標記。
+   * `text` 不含點名（送出時 `@` 那一段就從草稿拿掉了）。即時走 `inbox` 的 `claimed`，歷史重播走同一格，冷載入一樣畫得出來。沒有點名就不給這一格。
+   */
+  readonly mention?: SubagentMention;
+  /**
+   * 這一句被準入閘門擋下了（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：一個模型請求都沒發，話沒有送給模型。
+   * 讀的是 root 收尾 `lifecycle` 上 pump 補的 `blocked`，同 {@link AiEntry.maxTokens} 由收尾 frame 標；歷史重播補的是同一顆 frame，
+   * 所以冷載入一樣標得出來。**只在這句人話是整份最後一格時標**——後面有任何條目（這一輪已經有回覆或工具、結算通知、代理來信），話是送出去了的，
+   * 或被擋下的不是它，就不標（收尾原因看軌跡）。
+   */
+  readonly blocked?: true;
+}
+
+/**
+ * 「這一輪（或這一步）是被什麼叫醒的」（[#851](https://github.com/DemianLi/nexus-agent/issues/851)）：目前只有背景子代理的
+ * 結算通知。落在**觸發訊息本來會出現的位置**——人話的泡泡出現的地方——所以畫面能在模型的回覆前面畫出來由。
+ *
+ * **不帶文字**：通知的字是給模型的英文，畫面不顯示它；帶的是怎麼收的（{@link NoticeEntry.reason}，#884），字由畫面自己配。即時（`inbox` 的 `claimed`／`claimedNextStep`）與歷史重播
+ * （{@link SETTLE_NOTICE}）長出同一種東西，重新整理後畫面不變。不影響 `status`、`pendings`，也不會是 {@link AiEntry.turnTail}。
+ */
+export interface NoticeEntry {
+  readonly kind: 'notice';
+  /** 即時是 `inbox:<件的 id>`（跟排著時那一行的 key 同一個，同一格換成正式的）；歷史是 `history-<seq>`。 */
+  readonly id: string;
+  /** 通知的來源。今天只有 `subagent-settled`；`agent-message`（#849）的顯示是另一件，這裡不長。 */
+  readonly source: 'subagent-settled';
+  /**
+   * 怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：完成、被停止、超出上限、失敗。
+   * **沒有這一格＝不知道**（格式 26 以前的日誌）：畫面退成中性的說法，不假裝成「已完成」。
+   */
+  readonly reason?: WireSettleReason;
+  /** `reason` 是 `aborted` 時為什麼停（#1847），見 {@link TurnStopCause}。舊日誌沒有。 */
+  readonly stopCause?: TurnStopCause;
+  /** 即時的那一種是送出佇列的哪一件（`inbox` 的 `claimed.id`），同一顆 `claimed` 再到一次靠它認出來。歷史的沒有。 */
+  readonly inboxId?: string;
+  /** 這則通知出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
+}
+
+/**
+ * 背景子代理用 `send_message` 寫給主對話的話（[#863](https://github.com/DemianLi/nexus-agent/issues/863)）：畫成「某某子代理說：…」，
+ * 不是人的泡泡。方向永遠是子代理→主對話；主對話→子代理是主對話自己那顆 `send_message` 的工具卡。
+ *
+ * 落在**這則話被領走的位置**：主對話閒著時它叫醒的那一輪的開頭，忙著時插進那一輪的那一刻。即時（`inbox` 的
+ * `claimed`／`claimedNextStep`）與歷史重播（{@link AGENT_MESSAGE}）長出同一種東西。不影響 `status`、`pendings`，也不會是 {@link AiEntry.turnTail}。
+ */
+export interface AgentMessageEntry {
+  readonly kind: 'agent-message';
+  /** 即時是 `inbox:<件的 id>`；歷史是 `history-<seq>`。 */
+  readonly id: string;
+  /** 寄件的背景子代理的會話 id。 */
+  readonly senderSessionId: string;
+  /** 它的編號，對得上委派卡（`background-subagent` 的 `runId`）。 */
+  readonly runId: string;
+  /** 它寫的話，**已拿掉給模型看的 `Agent <寄件人> sent a message: ` 前綴**。 */
+  readonly text: string;
+  /** 即時的那一種是送出佇列的哪一件，同一顆 `claimed` 再到一次靠它認出來。歷史的沒有。 */
+  readonly inboxId?: string;
+  /** 這則話出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
 }
 
 export interface AiEntry {
@@ -75,11 +191,16 @@ export interface AiEntry {
   readonly attribution: Attribution;
   readonly error?: string;
   /**
-   * 講到一半被人按了停止（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**只標在那一刻
+   * 講到一半被中止（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。**只標在那一刻
    * 還在吐字的那幾則上**：講完的那些不是被打斷的。伺服器那側把這半段存回對話，下一輪模型看得到
    * 它說到哪。
    */
   readonly stopped?: true;
+  /**
+   * 為什麼停（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：同 {@link ConversationState.stopCause}，跟
+   * {@link AiEntry.stopped} 一起標。舊 server 的收尾沒帶原因就沒有這一格。
+   */
+  readonly stopCause?: TurnStopCause;
   /**
    * 那則回覆在日誌裡的訊息 id，**評分指名的就是它**（[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。
    * 取自 `message-start` 的 `id`：即時的是串流層給的那個，量過等於日誌 `assistant/message` 記的；重播的由
@@ -98,6 +219,33 @@ export interface AiEntry {
    * 判法見 {@link reduceConversation}，即時與歷史走同一條。
    */
   readonly turnTail?: true;
+  /**
+   * 這一輪是失敗收尾的（`failed`，不含被中止）：跟 {@link AiEntry.turnTail} 一起標在收尾那則上
+   * （[#1581](https://github.com/DemianLi/nexus-agent/issues/1581)）。web 的分支鈕對這種輪不給，同 server 的 `fork_unavailable`
+   * 與 dsh `turn-tail.ts` 的 `branchUnavailable`。即時與歷史都在 {@link reduceConversation} 收尾那一步標。
+   */
+  readonly turnFailed?: true;
+  /**
+   * 這一輪撞到了模型的輸出上限（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）：標在那一輪**最後一則
+   * root 回覆**上，有沒有字都標。讀的是 root 那顆收尾 `lifecycle` 上 pump 補的 `maxTokens`，同 {@link AiEntry.stopped}
+   * 讀 `aborted`。**一輪一格，不是一則一格**：日誌的 `turn/end` 是 sticky 的，前面某一步撞到、後面收掉也算。
+   *
+   * dsh 在收尾那則助手與輪尾之間畫一個提示節點（`ui-chat` 的 `conversation-nodes/turn-max-tokens.ts`，`477b4f4`）；
+   * 畫法歸畫面那一側，這裡只帶資料。
+   */
+  readonly maxTokens?: true;
+  /**
+   * `message-start` 的時刻。**兩條路的意思差一段首字等待（TTFT）**：即時是第一個字到的那一刻（`message-start` 跟它一起到，
+   * 同 dsh 的 `firstTokenTime`，不是 `stepStartTime`）；歷史重播是**這則回覆所屬那一次模型呼叫開始**的時刻（日誌
+   * `model/start`，由 `assistant/message.modelCall` 指到，同 dsh 的 `stepStartTime`），所以重新整理之後它早於
+   * {@link AiEntry.settledAt}、差的是整次呼叫的耗時（#1048；以前取落盤那一刻，兩格相等）。差距就是 TTFT，腳本模型
+   * 的量測見 `wire-entry-timestamps.test.ts`。dsh 重新整理後還留得住 `firstTokenTime`，是因為它的日誌記了逐字的
+   * `stream`；我們的日誌沒有（寫入點看不到逐字片段），所以歷史拿不到首字時刻。日誌沒有 `modelCall` 的舊回覆退回
+   * 落盤的時刻（兩格相等）。見 {@link ConversationEntry} 的「時刻」。
+   */
+  readonly startedAt?: number;
+  /** 講完的時刻：`message-finish`、`error`，或講到一半被停止時收尾那顆 `lifecycle` 的時刻。還在吐字就沒有。 */
+  readonly settledAt?: number;
 }
 
 export interface ToolEntry {
@@ -130,8 +278,8 @@ export interface ToolEntry {
    *
    * 就是模型收到的那一段（harness 從會話日誌的 `tool/result` 抽，兩條路共用同一個規則），
    * 同 dsh：工具卡的內容是那則結果的 content，`isError` 只是另一個旗標。**內容不是剛好一塊
-   * 文字時這一格不給**（照 dsh 的 `singleResultText`，不自己把幾塊拼起來），太長的那幾段由
-   * harness 取頭尾各半、中間放一行說明。
+   * 文字時這一格不給**（照 dsh 的 `singleResultText`，不自己把幾塊拼起來）。**不截**：上限在模型面
+   * （外溢層換成預覽加路徑，日誌記的就是那則），日誌到這裡照 dsh 原樣（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）。
    *
    * **`tool-finished` 失敗的那些，{@link ToolEntry.error} 裝的是同一串字**：紅字那一格留給
    * 畫面，判斷畫哪一種看 {@link ToolEntry.status}。`tool-error`（本體炸了、基座那條路）只寫
@@ -139,7 +287,53 @@ export interface ToolEntry {
    */
   readonly text?: string;
   readonly error?: string;
+  /**
+   * 失敗的**錯誤碼**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：判斷「這張卡是怎麼失敗的」讀這一格，
+   * 不讀 {@link ToolEntry.error} 的字。照 dsh，碼跨線、畫面比碼（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:76`
+   * 把 `data.error` 原樣交給 client，`packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289` 比
+   * `error?.code`）。
+   *
+   * - 日誌 `tool/result.error.code` 的那個碼，由 harness 放在失敗的 `tool-finished` 上（例如停在核准點或提問時按了
+   *   停止是 `ABORTED_BEFORE_DISPATCH`）；`tool-error` 帶了 `code` 也照抄。
+   * - 一輪關掉時還沒有結果的卡，折疊器自己補 {@link UNFINISHED_TOOL_CODE}，同 dsh 替沒結果的卡合成的 `'interrupted'`。
+   * - 線上沒有碼就是 `undefined`；成功的卡沒有這一格。
+   */
+  readonly errorCode?: string;
+  /**
+   * 給專屬卡畫的**結構化結果**（[#617](https://github.com/DemianLi/nexus-agent/issues/617)）：讀檔讀到
+   * 哪幾行、搜尋命中什麼、改檔改了哪幾段。照 dsh 的 `tool/result.meta`，**對這一層不透明**——形狀歸
+   * 工具，由畫面那一側的卡片模型自己驗，驗不過就走 generic。
+   *
+   * 只有成功的才有；模型看不到它。太大的由 harness 截過或整格拿掉：搜尋與改檔的上限是 harness `tool-text`
+   * 那一列的 `maxBytes`，讀檔是它的兩倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
+   * 格式 16 以前的日誌接回來沒有這一格。
+   */
+  readonly meta?: unknown;
+  /**
+   * 這一顆委派呼叫派出的子代理是哪一份會話（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）：`id` 是子會話
+   * 日誌的 id，拿它去找那個子代理的軌跡與用量。前景與背景都有，來源是 root 日誌的 `subagent/catalog`（見 `subagent-catalog.ts`）。
+   *
+   * **沒有這一格不等於沒派出子代理**：格式 31 以前的日誌沒記，派出去但子代理一筆都沒寫就失敗的也沒有。
+   */
+  readonly subagentSession?: {
+    readonly id: string;
+    readonly mode: SubagentCatalogPayload['mode'];
+  };
   readonly attribution: Attribution;
+  /**
+   * 這次呼叫**第一次**出現在線上的時刻（`tool-started`），同 dsh 結果節點的 `callTime`。
+   *
+   * **同一個 `tool_call_id` 再到一次不換**：即時那條本來就會到兩次（pump 從日誌 `tool/call` 開卡、基座的
+   * `tool-started` 晚到），續接時（答了中斷、圖從 tools 節點重跑）基座與日誌也都再發一次。dsh 不重派，
+   * `callTime` 就是那一顆 `tool/call` 的時刻，等核准、等回答的時間算在裡面；這裡取第一顆，意思相同。
+   */
+  readonly startedAt?: number;
+  /**
+   * 這張卡落定的時刻：最後一顆 `tool-finished`（pump 的更正幀照這一顆換掉，同 {@link ToolEntry.text}）、`tool-error`，或
+   * 一輪關掉時還沒有結果、由收尾那顆 `lifecycle` 收成失敗的時刻（同 dsh 替沒結果的卡合成的那則用收尾邊界的時刻）。
+   * 被翻回執行中（續接、晚到的 `tool-started`）就拿掉。執行中與等人回答時沒有。
+   */
+  readonly settledAt?: number;
 }
 
 /**
@@ -151,7 +345,7 @@ export interface ToolEntry {
  * ——但卡說的是「這顆沒執行、模型看到了什麼」，**不說人按了什麼**：同一張失敗的卡也可能來自
  * 規則直接擋、或沒有核准管道。我們沒有 dsh 的 `approval/asked`／`approval/decided`
  * （[#220](https://github.com/DemianLi/nexus-agent/issues/220) 認帳不做），所以決定要跟
- * {@link appendHumanTurn} 一樣在送出的那一刻自己寫進來，與那張卡並存——那不是裝飾，是唯一的紀錄。
+ * 所以決定要在送出的那一刻自己寫進來，與那張卡並存——那不是裝飾，是唯一的紀錄。
  */
 export interface DecisionEntry {
   readonly kind: 'decision';
@@ -188,6 +382,12 @@ export interface AnswerEntry {
    * （dsh 的 `ASK_CANCELLED`）。所以它是同一個 kind 裡的一格，不是一則假答案。
    */
   readonly cancelled?: true;
+  /**
+   * 人按了「拒絕」（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)，MCP elicitation）：**明確說不給**，
+   * 不是放棄（`cancelled`）也不是每題跳過。三者在 MCP 那頭是三種動作——`accept`（有 `answers`）、`decline`（本欄）、`cancel`（`cancelled`）。
+   * 只有 {@link PendingQuestion.origin} 是 MCP 反問時才會出現。
+   */
+  readonly declined?: true;
   /** 逐題的答案，順序同問題。空的 `selected` 且沒有 `custom` ＝ 那一題被跳過。 */
   readonly answers: readonly {
     readonly id: string;
@@ -217,6 +417,31 @@ export interface DeliverablesEntry {
   readonly seq: number;
   /** 交付的檔案，順序照模型給的。 */
   readonly files: readonly WirePresentedFile[];
+  /** 這次交付出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
+}
+
+/**
+ * 模型的歷史在這裡換成了一份摘要（[#896](https://github.com/DemianLi/nexus-agent/issues/896)）。來源是 `custom`
+ * frame，`data.name` 為 {@link COMPACTION}，見 `compaction.ts`。
+ *
+ * 獨立的一格、落在它在串流裡的位置，跟 {@link WorkspaceChangesEntry} 同形：不影響 `status`、`pendings`，也不會是
+ * {@link AiEntry.turnTail}；{@link prependEntries} 原樣接上。**不取代**被它蓋掉的那些列，畫面上的對話一則都沒少。
+ */
+export interface CompactionEntry {
+  readonly kind: 'compaction';
+  /** `compaction:<seq>`：確定值，當 React key。同一個 `seq` 第二次出現就忽略。 */
+  readonly id: string;
+  /** 那顆 `compaction/summary` 在 root 日誌裡的 `seq`。 */
+  readonly seq: number;
+  /** 前幾則原始訊息已被換成摘要，見 `compaction.ts`。 */
+  readonly cutoff: number;
+  /** 被壓掉的原文有沒有存成檔。 */
+  readonly saved: boolean;
+  /** 摘要全文，沒有就是沒有。 */
+  readonly summary?: string;
+  /** 這次壓縮出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
 }
 
 /**
@@ -234,8 +459,28 @@ export interface WorkspaceChangesEntry {
   readonly id: string;
   /** 那顆 `workspace/changes` 在 root 日誌裡的 `seq`，兩條路由拿它定位摘要。 */
   readonly seq: number;
+  /** 這份改動紀錄出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
 }
 
+/**
+ * 畫面上的一格。
+ *
+ * ## 時刻（[#1030](https://github.com/DemianLi/nexus-agent/issues/1030)）
+ *
+ * `startedAt`／`settledAt` 是 Unix epoch 毫秒，**取自長出（或收掉）那一格的 frame 的 `params.timestamp`**，折疊器自己
+ * 不看時鐘。照 dsh：每種節點都帶來源事件的時刻（`ui-conversation` 的 `contract/records.ts`，`5badb15`）。
+ *
+ * - **一個時刻的**（人話、通知、子代理來信、交付、改動紀錄、壓縮）只帶 `startedAt`，同 dsh 那幾種節點只有一個 `time`。
+ * - **有起訖的**（模型回覆、工具卡）兩格都帶：規則見 {@link AiEntry.startedAt}、{@link ToolEntry.startedAt}。
+ * - **人按的決定與答案**（{@link DecisionEntry}、{@link AnswerEntry}）不帶：它們不是從線上來的，沒有 frame 可取，
+ *   用瀏覽器的時鐘補會跟其餘的格混用兩個時鐘。
+ *
+ * **兩條路的時鐘不同**：歷史重播的 frame 帶的是日誌那一筆的 `time`；即時的是基座 frame 原帶的、或 pump 合成
+ * 那一刻的 `Date.now()`。實測（`@nexus/harness` 的 `wire-entry-timestamps.test.ts`）只有模型回覆的 `startedAt` 不同：
+ * 即時是第一個字到的那一刻、歷史是那一次模型呼叫開始（差一段首字等待，見 {@link AiEntry.startedAt}）；其餘的格兩條路只差幾毫秒。frame 沒帶可用的時刻（不是正的有限數字）就不給那一格，
+ * 理由見 {@link wireTime}。
+ */
 export type ConversationEntry =
   | HumanEntry
   | AiEntry
@@ -243,7 +488,10 @@ export type ConversationEntry =
   | DecisionEntry
   | AnswerEntry
   | DeliverablesEntry
-  | WorkspaceChangesEntry;
+  | WorkspaceChangesEntry
+  | NoticeEntry
+  | AgentMessageEntry
+  | CompactionEntry;
 
 /**
  * 型別窄化：這一顆是核准請求嗎。
@@ -267,23 +515,56 @@ export function isQuestionPending(pending: PendingInput): pending is PendingQues
  * `awaiting-input` 是停在核准點——**不是結束**。基座在中斷時照樣發
  * `lifecycle completed / root`，所以那顆不能當「跑完了」用（決策 6 第 2 條）。
  *
- * `stopped` 是人按了停止、這一輪收了——**不是失敗**（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
+ * `stopped` 是這一輪被中止、收了——**不是失敗**（[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。原因見 {@link TurnStopCause}。
  * 它讀的是 root 那顆收尾 `lifecycle` 上的 `aborted`：那一格是 pump 補的分類，協定的 `AgentStatus`
  * 沒有「被中止」這一種（`interrupted` 是停下來等輸入），而被切斷的那一次基座發的是 `failed`。
  */
 export type ConversationStatus = 'idle' | 'running' | 'awaiting-input' | 'failed' | 'stopped';
 
+/**
+ * 一輪被中止的原因（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：pump 補在 root 那顆收尾 `lifecycle` 的
+ * `aborted` 旁邊，歷史重放也帶；背景子代理的結算通知（`NoticeEntry.stopCause`）與軌跡（`TrajectoryDigest.endCause`）帶同一個值（#1847）。**與 `@nexus/core` 的 `TurnAbortCause` 同形**（這個套件不相依 core，所以各寫一份；
+ * `conversation.test.ts` 讀 core 的原始碼把兩份釘在一起）。`hook` 的 `reason` 是穩定的機器字串，今天只有時鐘到點的
+ * `turn-timeout`；`parent` 是背景子代理那一輪的原因：記在子代理自己的日誌與結算通知上，root 那顆收尾不會帶。
+ */
+export type TurnStopCause =
+  | { readonly kind: 'user' }
+  | { readonly kind: 'parent' }
+  | { readonly kind: 'hook'; readonly reason: string };
+
 /** 判別式的值。**與 `@nexus/core` 的兩個常數是同一組字串**，見 {@link reduceInputRequested}。 */
 export const APPROVAL_PENDING_KIND = 'approval';
 export const QUESTION_PENDING_KIND = 'question';
 
-/** 問人的一題。形狀照抄 dsh 的 `AskUserQuestionItem` 在**模型面**的那五格。 */
+/**
+ * 問人的一題。形狀照抄 dsh 的 `AskUserQuestionItem`：模型面的五格，加上只有內部生產者會填的
+ * `detail` 與 `intent`（[#652](https://github.com/DemianLi/nexus-agent/issues/652)：`exit_plan_mode`
+ * 的計劃審核）。**兩格都原樣從中斷酬載帶過來**，`reduceInputRequested` 不挑欄位。
+ *
+ * 生產者那側的同一份形狀在 `@nexus/core` 的 `QuestionInterruptItem`（這個套件不相依 core，所以各寫一份）。
+ */
 export interface QuestionItem {
   readonly id: string;
   readonly question: string;
   readonly header?: string;
+  /** 跟著這一題一起畫、但不進選項標籤的補充內容。計劃審核把計劃全文（Markdown）放在這裡。 */
+  readonly detail?: string;
   readonly options?: readonly { readonly label: string; readonly description?: string }[];
   readonly multiSelect?: boolean;
+  /** 純呈現用：認得的 UI 照它畫，不認得的照一般提問畫。**答法兩邊一樣**，送回的都是選項標籤。 */
+  readonly intent?: PlanReviewIntent;
+}
+
+/**
+ * 這一題**就是**一次計劃審核。照 dsh 的 `AskUserQuestionIntent`。
+ *
+ * `approve` 是同意那個選項的**標籤**，其餘選項都是不同意——用名字不用位置。`callId` 是參數裡
+ * 裝著這份計劃的那顆工具呼叫，歷史重播時計劃卡從那顆呼叫的參數畫。
+ */
+export interface PlanReviewIntent {
+  readonly kind: 'plan-review';
+  readonly approve: string;
+  readonly callId?: string;
 }
 
 interface PendingCommon {
@@ -315,10 +596,32 @@ export interface PendingApproval extends PendingCommon {
   readonly allowedDecisions: readonly string[];
 }
 
+/**
+ * 這組問題是哪裡問的（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。省略＝模型自己問的（`ask_user_question`、計劃審核），
+ * 畫面照舊。
+ *
+ * **超出 dsh**：dsh 的 `mcp-client` 宣告的 client capabilities 是 `{}`（`packages/mcp/mcp-client/src/connection.ts:261`，`5badb150`），
+ * 沒有 elicitation，所以沒有對應物。做它的理由是 demian 2026-10-08 指示（見卡上的 PM 決策）：MCP server 執行到一半反問使用者，
+ * 以前那一次呼叫會落成普通工具錯誤。形狀是我們定的，只加不減：舊 client 不認得這一格時把它當一般提問畫，答法不變。
+ *
+ * 畫面要讓人看得出**是哪台 server、哪支工具在問，用的是什麼有效參數**——一個不說來源的問答卡，讓人不知道自己在回答誰。
+ */
+export interface QuestionOrigin {
+  readonly kind: 'mcp-elicitation';
+  /** 反問的 MCP server 名（設定裡的名字）。 */
+  readonly server: string;
+  /** 那次呼叫的工具名。 */
+  readonly tool: string;
+  /** 那次呼叫的**有效參數**（經過模型與政策之後實際送出的）。純 JSON。 */
+  readonly arguments: unknown;
+}
+
 /** 停在問答點：模型問了一組問題，等人填。 */
 export interface PendingQuestion extends PendingCommon {
   readonly kind: typeof QUESTION_PENDING_KIND;
   readonly questions: readonly QuestionItem[];
+  /** 這組問題是哪裡問的；省略是模型自己問的。見 {@link QuestionOrigin}。 */
+  readonly origin?: QuestionOrigin;
 }
 
 /**
@@ -363,6 +666,34 @@ export interface ConversationState {
    */
   readonly todos: readonly WireTodoItem[] | null;
   /**
+   * 計劃模式現在開著還是關著（#895）：最後一顆 `plan` frame 的整份值。**日誌上還沒有過 `plan/mode` 就是 `null`**，
+   * 等同關著，不是「還沒收到」——理由與少了 dsh 的 `pending` 見 `plan-mode.ts`。只算 root。它是「現在」的事，所以
+   * {@link prependEntries} 不動它。
+   */
+  readonly planMode: PlanModePayload | null;
+  /**
+   * 插件投影（#1026）：`key` → 最後一顆該 key 的 `projection` frame 的整份值。**所有插件共用這一格**，新增一個投影不改
+   * 這個檔。沒有收到過的 key 就不在裡面；插件關掉（`disabled`）就不會有它的 key。往前翻頁不動它，規則見 `projection.ts`。
+   */
+  readonly projections: Readonly<Record<string, WireProjection>>;
+  /**
+   * 子代理自己的插件投影（#1028）：`runId` → `key` → 最後一顆的整份值，與 {@link projections} 同一種格子、同一套規則
+   * （整份取代、不認得的 version 由渲染它的元件擋）。只有宣告 `children` 的單元會有；root 那一格不受影響。
+   */
+  readonly subagentProjections: Readonly<Record<string, Readonly<Record<string, WireProjection>>>>;
+  /**
+   * 會話目前的目標與階段（#897）：最後一顆 `goal` frame 的整份值。**沒有目標（從沒建立、或清掉了、或還沒收到）就是
+   * `null`**，不分這幾種——activation 另走 {@link ConversationState.goalActivation}，見 `goal.ts`。只算 root。它是「現在」的事，所以
+   * {@link prependEntries} 不動它。
+   */
+  readonly goal: WireGoal | null;
+  /**
+   * 目標會不會自己續行（#1575 N0376）：最後一顆 `goal/activation` frame 的值。**還沒收到是 `null`**——有目標的 thread，下行開線時
+   * server 一定補送一顆，所以只有「沒有目標」或「frame 還在路上」會停在 `null`，讀法見 `goal.ts` 的 {@link GOAL_ACTIVATION}。
+   * 行程內的狀態、不持久，所以 {@link prependEntries} 不動它（同 {@link ConversationState.goal}）。
+   */
+  readonly goalActivation: WireGoalActivation | null;
+  /**
    * 這條對話累計燒了多少 token（#574）：root 日誌每一次模型呼叫的帳加起來，**整份日誌的**，不是畫面上看得到的那幾輪。
    * 一顆都還沒收到就是 `null`；總量是兩格相加。規則見 `session-totals.ts`。它是「現在」的事，所以
    * {@link prependEntries} 不動它。
@@ -373,6 +704,44 @@ export interface ConversationState {
    * `session-totals.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly sessionStats: WireSessionStats | null;
+  /**
+   * 送出佇列（#637）：人送出、還沒開跑的那幾句，照開跑的先後。後到的 `inbox` frame 整份換掉，**沒收到過就是空的**
+   * ——佇列從日誌開頭折起，不會在一輪開頭清空，所以沒有「還沒寫過」與「空」之分。規則見 `inbox.ts`。它是「現在」的事，
+   * 所以 {@link prependEntries} 不動它。
+   */
+  readonly inbox: readonly WireQueuedInput[];
+  /**
+   * 插話（#710）：跑著的那一輪下一步就要送進模型、還沒被領走的那幾句，照送出的先後。規則同 {@link inbox}，由同一顆
+   * `inbox` frame 的 `nextStep` 整份換掉；沒帶就是空的。
+   */
+  readonly inboxNextStep: readonly WireQueuedInput[];
+  /**
+   * 這條會話現在叫什麼（#647）：最後一顆 `title` frame 的。**還沒收到過就是 `null`**，同 dsh 投影的初值。規則見
+   * `title.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly title: string | null;
+  /**
+   * 背景子代理現在的狀態（#867）：runId → `running`／`idle`，最後一顆 `subagent/status` frame 的整份。**還沒收到過就是
+   * `null`**（不知道：歷史先到、快照還沒到的那一小段，或這份組裝根本沒有背景派出）；**收過而不在裡面＝收線**。規則見
+   * `subagent-status.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly subagentStatus: Readonly<Record<string, SubagentRunStatus>> | null;
+  /**
+   * 這一輪正在等著重打（#520）：最後一顆 `llm-retry` frame 的整份，`null` ＝ 沒有。**一輪開始、一輪收尾、下一則 root 回覆開始、
+   * `llm-retry-started` 到來都會清成 `null`**（後面幾條是保險，frame 掉了也不卡一行倒數）。不進歷史，重新整理之後是 `null`。
+   * 規則見 `llm-retry.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly retry: WireLlmRetry | null;
+  /**
+   * 這一輪為什麼停（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：root 那顆收尾 `lifecycle` 上的 `cause`，
+   * **只在 {@link status} 是 `stopped` 時有意義**，下一輪開跑時清掉。舊 server 沒帶原因就沒有這一格，畫面照舊當人按了停止。
+   */
+  readonly stopCause?: TurnStopCause;
+  /**
+   * 這一輪失敗的錯誤碼（[#1844](https://github.com/DemianLi/nexus-agent/issues/1844)），給程式判斷；給人看的是 {@link error}，兩格一起清。
+   * 舊 server、舊日誌沒帶，或 `failed` 之後沒有拋錯（不知道原因）時沒有這一格。
+   */
+  readonly errorCode?: string;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -387,20 +756,19 @@ export function emptyConversation(): ConversationState {
     turnStart: 0,
     contextPressure: null,
     todos: null,
+    planMode: null,
+    projections: {},
+    subagentProjections: {},
+    goal: null,
+    goalActivation: null,
     tokenUsage: null,
     sessionStats: null,
+    inbox: [],
+    inboxNextStep: [],
+    title: null,
+    subagentStatus: null,
+    retry: null,
   };
-}
-
-/**
- * 把使用者剛送出去的那句話放進來。
- *
- * **線上不會回聲它**：`run.start` 的 input 不會變成下行的 frame，而 `input` channel
- * 上只有核准請求。所以送出的那一刻由這裡補，不是等它回來。
- */
-export function appendHumanTurn(state: ConversationState, text: string): ConversationState {
-  const entry: HumanEntry = { kind: 'human', id: `human-${state.entries.length}`, text };
-  return trackTurn(state, { ...state, entries: [...state.entries, entry], status: 'running' });
 }
 
 /** 一輪在跑或停下來等人：還沒收尾。 */
@@ -424,21 +792,28 @@ function isTailCandidate(entry: ConversationEntry): boolean {
  *
  * - **一輪從沒在跑走到 `running` 算起**：人送一句話、續行驅動器排了一輪，都是。從 `awaiting-input` 回到
  *   `running` 是續接，同一輪。
- * - **收尾是 `idle`、`stopped`、`failed`**。停在核准點不是收尾；停在核准點時按停止是。
+ * - **收尾是 `idle`、`stopped`、`failed`**。停在核准點不是收尾；停在核准點時按停止是。`failed` 收尾的那則另標
+ *   {@link AiEntry.turnFailed}（#1581）。
  * - 子代理那幾則、串流中的、整輪只有工具的，都不標。
  */
 function trackTurn(previous: ConversationState, next: ConversationState): ConversationState {
   if (next === previous) return next;
   const wasActive = isTurnActive(previous.status);
   if (!wasActive && next.status === 'running') {
-    return { ...next, turnStart: previous.entries.length };
+    return { ...next, turnStart: previous.entries.length, retry: null };
   }
   if (!wasActive || isTurnActive(next.status)) return next;
+  // 一輪收尾（含退避中按停止）：「N 秒後重試」不能留到下一輪。
+  if (next.retry !== null) next = { ...next, retry: null };
   for (let at = next.entries.length - 1; at >= next.turnStart; at -= 1) {
     const entry = next.entries[at];
     if (entry === undefined || !isTailCandidate(entry)) continue;
     const entries = [...next.entries];
-    entries[at] = { ...entry, turnTail: true } as AiEntry;
+    entries[at] = {
+      ...entry,
+      turnTail: true,
+      ...(next.status === 'failed' ? { turnFailed: true } : {}),
+    } as AiEntry;
     return { ...next, entries, turnStart: next.entries.length };
   }
   return { ...next, turnStart: next.entries.length };
@@ -447,7 +822,7 @@ function trackTurn(previous: ConversationState, next: ConversationState): Conver
 /**
  * 把人剛按下去的那個決定放進來，並把核准請求收掉。
  *
- * 跟 {@link appendHumanTurn} 同一個理由：**線上不回聲**。被拒的那顆呼叫下行上有一張失敗的卡，
+ * **線上不回聲決定**，所以由這裡在按下去的那一刻補。被拒的那顆呼叫下行上有一張失敗的卡，
  * 但「是人按了拒絕」只有這一則說得出來，見 {@link DecisionEntry}。
  *
  * 認不得那顆 `interruptId` 時原樣回傳：重複按下去的第二次不該憑空長出一則紀錄。
@@ -521,6 +896,40 @@ export function cancelResponse(): unknown {
 }
 
 /**
+ * 拒絕整組問題時送回去的東西（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)，只有 MCP 反問有這個動作）。
+ * 與 {@link cancelResponse} 並列：沒有 `declined`／`cancelled` 的回覆就是接受（`{ answers }`），所以舊 client 與舊 server 照常運作。
+ */
+export function declineResponse(): unknown {
+  return { declined: true };
+}
+
+/**
+ * 人拒絕了整組問題。與 {@link appendQuestionCancel} 同一條路，只是留下的紀錄不同。
+ */
+export function appendQuestionDecline(
+  state: ConversationState,
+  interruptId: string,
+): ConversationState {
+  const pending = state.pendings.find((candidate) => candidate.interruptId === interruptId);
+  if (pending === undefined || pending.kind !== QUESTION_PENDING_KIND) {
+    return state;
+  }
+  const entry: AnswerEntry = {
+    kind: 'answer',
+    id: `answer-${pending.interruptId}`,
+    answers: [],
+    declined: true,
+  };
+  const rest = state.pendings.filter((candidate) => candidate.interruptId !== interruptId);
+  return {
+    ...state,
+    entries: [...state.entries, entry],
+    pendings: rest,
+    status: rest.length > 0 ? 'awaiting-input' : 'running',
+  };
+}
+
+/**
  * 人放棄了整組問題。與 {@link appendAnswers} 同一條路，只是留下的紀錄不同。
  */
 export function appendQuestionCancel(
@@ -570,21 +979,57 @@ function reduceFrame(state: ConversationState, event: Event): ConversationState 
   }
   const advanced = seq === undefined ? state : { ...state, lastSeq: seq };
   const namespace = event.params.namespace;
+  const time = wireTime((event.params as { timestamp?: unknown }).timestamp);
 
   switch (event.method) {
     case 'messages':
-      return reduceMessage(advanced, namespace, event.params.data);
+      return clearRetryOnReply(
+        reduceMessage(advanced, namespace, event.params.data, time),
+        namespace,
+        event.params.data,
+      );
     case 'tools':
-      return reduceTool(advanced, namespace, event.params.data);
+      return reduceTool(advanced, namespace, event.params.data, time);
     case 'lifecycle':
-      return reduceLifecycle(advanced, namespace, event.params.data);
+      return reduceLifecycle(advanced, namespace, event.params.data, time);
     case 'input.requested':
       return reduceInputRequested(advanced, namespace, event.params.data);
     case 'custom':
-      return reduceCustom(advanced, event.params.data);
+      return reduceCustom(advanced, event.params.data, time);
     default:
       return advanced;
   }
+}
+
+/** 下一則 root 回覆開始了：重打已經開跑，「N 秒後重試」不再成立（#520）。子代理與人話不算。 */
+function clearRetryOnReply(
+  state: ConversationState,
+  namespace: readonly string[],
+  data: unknown,
+): ConversationState {
+  if (state.retry === null || namespace.length > 1) return state;
+  const { event, role } = (data ?? {}) as { event?: unknown; role?: unknown };
+  return event === 'message-start' && role !== 'human' ? { ...state, retry: null } : state;
+}
+
+/**
+ * frame 的 `params.timestamp` 能不能當 entry 的時刻：正的有限數字才算，其餘當沒有（見 {@link ConversationEntry} 的「時刻」）。
+ *
+ * **0 也當沒有**：產品路徑上兩個生產者都給不出 0（即時是基座的時刻或 `Date.now()`，歷史是日誌寫入那一刻的
+ * `Date.now()`），而現有的測試夾具一律拿 0 佔位；收下 0 的話，那些比整個 entry 的斷言會因為多一格而紅。
+ */
+function wireTime(timestamp: unknown): number | undefined {
+  return typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0
+    ? timestamp
+    : undefined;
+}
+
+/** 有時刻才帶那一格：沒有時刻不留一個值是 `undefined` 的鍵。 */
+function timeField<K extends 'startedAt' | 'settledAt'>(
+  key: K,
+  time: number | undefined,
+): Partial<Record<K, number>> {
+  return time === undefined ? {} : ({ [key]: time } as Record<K, number>);
 }
 
 /** `files` 裡的一格長得像不像一個交付的檔案。 */
@@ -595,20 +1040,30 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 }
 
 /**
- * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE} 與 {@link SESSION_STATS}**，其他名字、形狀不對的一律略過：這個 channel 上的東西由 pump 從日誌
- * 合成，認不得的不猜。
+ * `custom` frame：照 `data.name` 分派給那一格的折疊。**認得的名字就是 `custom-frame.ts` 那張名字→酬載表上的鍵**
+ * （[#685](https://github.com/DemianLi/nexus-agent/issues/685)），這裡不另列一份。
+ *
+ * {@link CUSTOM_REDUCERS} 的型別對表上的鍵**窮舉**：表上多一格而這裡沒補分支，當場編不過。執行期遇到表上沒有的名字、
+ * 或酬載不是物件，一律原樣回 state：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。各格的酬載形狀由各自的
+ * `reduceX` 驗，不在這一層。
  */
-function reduceCustom(state: ConversationState, data: unknown): ConversationState {
+function reduceCustom(
+  state: ConversationState,
+  data: unknown,
+  time: number | undefined,
+): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
   if (typeof payload !== 'object' || payload === null) return state;
-  if (name === WORKSPACE_CHANGES) return reduceWorkspaceChanges(state, payload);
-  if (name === MODEL_USAGE) return reduceModelUsage(state, payload);
-  if (name === CONTEXT_MEASURE) return reduceContextMeasure(state, payload);
-  if (name === TODOS) return reduceTodos(state, payload);
-  if (name === TOKEN_USAGE) return reduceTokenUsage(state, payload);
-  if (name === SESSION_STATS) return reduceSessionStats(state, payload);
-  if (name !== DELIVERABLES_PRESENTED) return state;
+  if (typeof name !== 'string' || !Object.hasOwn(CUSTOM_REDUCERS, name)) return state;
+  return CUSTOM_REDUCERS[name as CustomFrameName](state, payload, time);
+}
+
+/** 一交付的那一格：`deliverables` 條目，同一個 `callId` 只長一次。 */
+function reduceDeliverablesPresented(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
     typeof callId !== 'string' ||
@@ -620,8 +1075,82 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   }
   const id = `deliverables:${callId}`;
   if (state.entries.some((entry) => entry.id === id)) return state;
-  const entry: DeliverablesEntry = { kind: 'deliverables', id, callId, seq, files };
+  const entry: DeliverablesEntry = {
+    kind: 'deliverables',
+    id,
+    callId,
+    seq,
+    files,
+    ...timeField('startedAt', time),
+  };
   return { ...state, entries: [...state.entries, entry] };
+}
+
+/**
+ * 名字→那一格的折疊。**型別對 {@link CustomFrameName} 窮舉**（見 {@link reduceCustom}）。酬載收成 `object`：執行期的形狀
+ * 驗證是各個 `reduceX` 的事，表上的型別只約束生產端。`time` 是那顆 frame 的時刻，只有長出 entry 的那幾格用得到。
+ */
+const CUSTOM_REDUCERS: {
+  readonly [K in CustomFrameName]: (
+    state: ConversationState,
+    payload: object,
+    time: number | undefined,
+  ) => ConversationState;
+} = {
+  [DELIVERABLES_PRESENTED]: reduceDeliverablesPresented,
+  [WORKSPACE_CHANGES]: reduceWorkspaceChanges,
+  [MODEL_USAGE]: reduceModelUsage,
+  [CONTEXT_MEASURE]: reduceContextMeasure,
+  [TODOS]: reduceTodos,
+  [PLAN_MODE]: reducePlanMode,
+  [PROJECTION]: reduceProjection,
+  [COMPACTION]: reduceCompaction,
+  [GOAL]: reduceGoal,
+  [GOAL_ACTIVATION]: reduceGoalActivation,
+  [TOKEN_USAGE]: reduceTokenUsage,
+  [SESSION_STATS]: reduceSessionStats,
+  [INBOX]: reduceInbox,
+  [SETTLE_NOTICE]: reduceSettleNotice,
+  [AGENT_MESSAGE]: reduceAgentMessage,
+  [TITLE]: reduceTitle,
+  [IMAGE_OFFLOAD]: reduceImageOffload,
+  [SUBAGENT_STATUS]: reduceSubagentStatus,
+  [SUBAGENT_CATALOG]: reduceSubagentCatalog,
+  [MESSAGE_DISCARD]: reduceMessageDiscard,
+  [LLM_RETRY]: reduceLlmRetry,
+  [LLM_RETRY_STARTED]: reduceLlmRetryStarted,
+};
+
+/**
+ * 子代理目錄（#1023）：掛到 `callId` 那張工具卡上。卡不在（不該發生：目錄永遠在配對的呼叫之後、同一輪之內）就原樣回，
+ * 不另開一張。任何一格不對就整顆不收。
+ */
+function reduceSubagentCatalog(state: ConversationState, payload: object): ConversationState {
+  const { childId, callId, mode } = payload as {
+    childId?: unknown;
+    callId?: unknown;
+    mode?: unknown;
+  };
+  if (
+    typeof childId !== 'string' ||
+    childId === '' ||
+    typeof callId !== 'string' ||
+    (mode !== 'one-shot' && mode !== 'continuable')
+  ) {
+    return state;
+  }
+  const id = `tool-${callId}`;
+  if (!state.entries.some((entry) => entry.id === id && entry.kind === 'tool')) return state;
+  const session: NonNullable<ToolEntry['subagentSession']> = {
+    id: childId,
+    mode: mode satisfies SubagentCatalogPayload['mode'],
+  };
+  return {
+    ...state,
+    entries: replace(state.entries, id, (entry) =>
+      entry.kind === 'tool' ? { ...entry, subagentSession: session } : entry,
+    ),
+  };
 }
 
 /**
@@ -651,10 +1180,12 @@ function reduceModelUsage(state: ConversationState, payload: object): Conversati
  * 話，環會量錯那一道，而且看起來正常。
  */
 function reduceContextMeasure(state: ConversationState, payload: object): ConversationState {
-  const { approxTokens, messageCount, thresholds } = payload as {
+  const { approxTokens, messageCount, thresholds, messagesCompactable, breakdown } = payload as {
     approxTokens?: unknown;
     messageCount?: unknown;
     thresholds?: unknown;
+    messagesCompactable?: unknown;
+    breakdown?: unknown;
   };
   // 空陣列也不收：`measure` 在就保證至少一道門檻，web 不必處理「有量測、沒分母」。摘要的設定本來就不准空陣列。
   if (!isCount(approxTokens) || !isCount(messageCount) || !Array.isArray(thresholds)) return state;
@@ -666,8 +1197,271 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
     if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return state;
     parsed.push({ type, value });
   }
-  const measure: WireContextMeasure = { approxTokens, messageCount, thresholds: parsed };
+  // 選填（#1443）：沒有就不出這一格（舊日誌），有就得是布林。
+  if (messagesCompactable !== undefined && typeof messagesCompactable !== 'boolean') return state;
+  // 選填（#1571）：沒有就不出這一格（舊日誌、還沒量過），有就得是三個非負整數。壞的整顆不收，不收一半。
+  let parsedBreakdown: WireContextBreakdown | undefined;
+  if (breakdown !== undefined) {
+    const { systemTokens, toolsTokens, messageTokens } = (breakdown ?? {}) as {
+      systemTokens?: unknown;
+      toolsTokens?: unknown;
+      messageTokens?: unknown;
+    };
+    if (!isCount(systemTokens) || !isCount(toolsTokens) || !isCount(messageTokens)) return state;
+    parsedBreakdown = { systemTokens, toolsTokens, messageTokens };
+  }
+  const measure: WireContextMeasure = {
+    approxTokens,
+    messageCount,
+    thresholds: parsed,
+    ...(messagesCompactable !== undefined && { messagesCompactable }),
+    ...(parsedBreakdown !== undefined && { breakdown: parsedBreakdown }),
+  };
   return { ...state, contextPressure: { ...state.contextPressure, measure } };
+}
+
+/**
+ * `subagent/status` 的 `payload`：整份換掉。`items` 不是陣列就整顆不收；陣列裡形狀不對的單項略過（同編號以後到的為準）。
+ */
+function reduceSubagentStatus(state: ConversationState, payload: object): ConversationState {
+  const { items } = payload as { items?: unknown };
+  if (!Array.isArray(items)) return state;
+  const subagentStatus: Record<string, SubagentRunStatus> = {};
+  for (const item of items) {
+    const { runId, status } = (item ?? {}) as { runId?: unknown; status?: unknown };
+    if (typeof runId !== 'string' || runId === '') continue;
+    if (status !== 'running' && status !== 'idle') continue;
+    subagentStatus[runId] = status;
+  }
+  return { ...state, subagentStatus };
+}
+
+/**
+ * 一句人話的 `omittedAttachments`：只收落在 `attachments` 範圍內的非負整數，遞增去重；留不下任何一格就不給這一格。
+ * 沒有附件的條目不可能有被省略的附件。
+ */
+function omittedField(
+  attachments: readonly WireAttachmentRef[] | undefined,
+  positions: unknown,
+): { readonly omittedAttachments: readonly number[] } | Record<string, never> {
+  if (attachments === undefined || !Array.isArray(positions)) return {};
+  const kept = [
+    ...new Set(
+      (positions as unknown[]).filter(
+        (position): position is number =>
+          typeof position === 'number' &&
+          Number.isSafeInteger(position) &&
+          position >= 0 &&
+          position < attachments.length,
+      ),
+    ),
+  ].sort((a, b) => a - b);
+  return kept.length === 0 ? {} : { omittedAttachments: kept };
+}
+
+/**
+ * `image-offload` 的 `payload`（#1270）：把每一項的 `positions` 併進對應那句人話的 `omittedAttachments`。條目先用 `inboxId` 找、
+ * 找不到再用 `history-<seq>` 找（見 `image-offload.ts`）；找不到的項略過。**任何一項形狀不對就整顆不收**，不收一半。
+ */
+function reduceImageOffload(state: ConversationState, payload: object): ConversationState {
+  const { items } = payload as { items?: unknown };
+  if (!Array.isArray(items)) return state;
+  const parsed: { seq: number; inboxId: string | undefined; positions: unknown[] }[] = [];
+  for (const item of items as unknown[]) {
+    const { seq, inboxId, positions } = (item ?? {}) as {
+      seq?: unknown;
+      inboxId?: unknown;
+      positions?: unknown;
+    };
+    if (!isSeq(seq) || (inboxId !== undefined && typeof inboxId !== 'string')) return state;
+    if (!Array.isArray(positions)) return state;
+    parsed.push({ seq, inboxId, positions: positions as unknown[] });
+  }
+  let entries = state.entries;
+  for (const { seq, inboxId, positions } of parsed) {
+    entries = entries.map((entry) => {
+      if (entry.kind !== 'human') return entry;
+      const hit =
+        (inboxId !== undefined && entry.inboxId === inboxId) ||
+        entry.id === `history-${String(seq)}`;
+      if (!hit) return entry;
+      const merged = omittedField(entry.attachments, [
+        ...(entry.omittedAttachments ?? []),
+        ...positions,
+      ]);
+      return 'omittedAttachments' in merged ? { ...entry, ...merged } : entry;
+    });
+  }
+  return entries === state.entries ? state : { ...state, entries };
+}
+
+/**
+ * `title` 的 `payload`：換成這一個。不是非空字串就不收，同 dsh 投影的 `z.string().min(1)`。
+ */
+function reduceTitle(state: ConversationState, payload: object): ConversationState {
+  const { title } = payload as { title?: unknown };
+  if (typeof title !== 'string' || title === '') return state;
+  return { ...state, title };
+}
+
+/**
+ * `compaction` 的 `payload`：`seq` 與 `cutoff` 要是非負整數、`saved` 要是布林，同一個 `seq` 只長一格。
+ * `summary` 不是字串就當沒有，不拿它擋整顆。
+ */
+function reduceCompaction(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
+  const { seq, cutoff, saved, summary } = payload as {
+    seq?: unknown;
+    cutoff?: unknown;
+    saved?: unknown;
+    summary?: unknown;
+  };
+  if (!isSeq(seq) || !isSeq(cutoff) || typeof saved !== 'boolean') return state;
+  const id = `compaction:${seq}`;
+  if (state.entries.some((entry) => entry.id === id)) return state;
+  const entry: CompactionEntry = {
+    kind: 'compaction',
+    id,
+    seq,
+    cutoff,
+    saved,
+    ...(typeof summary === 'string' ? { summary } : {}),
+    ...timeField('startedAt', time),
+  };
+  return { ...state, entries: [...state.entries, entry] };
+}
+
+const PHASES: ReadonlySet<unknown> = new Set(GOAL_PHASES);
+
+function isPositiveSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+}
+
+/** 一個目標長得對不對：每一格都驗，`blockedReason` 剛好在 `blocked` 時有。回傳乾淨的一份，多出來的欄位不收。 */
+function toWireGoal(value: unknown): WireGoal | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
+  const v = value as Record<string, unknown>;
+  const { id, revision, objective, phase, blockedReason, maxGoalRounds } = v;
+  const { roundsStarted, createdAt, updatedAt } = v;
+  if (typeof id !== 'string' || id === '' || typeof objective !== 'string') return undefined;
+  if (!isPositiveSafeInteger(revision) || !isPositiveSafeInteger(maxGoalRounds)) return undefined;
+  if (!PHASES.has(phase)) return undefined;
+  if (!isSeq(roundsStarted) || !isSeq(createdAt) || !isSeq(updatedAt)) return undefined;
+  let reason: { code: string; message: string } | undefined;
+  if (phase === 'blocked') {
+    const r = blockedReason as { code?: unknown; message?: unknown } | null | undefined;
+    if (typeof r?.code !== 'string' || typeof r.message !== 'string') return undefined;
+    reason = { code: r.code, message: r.message };
+  } else if (blockedReason !== undefined) {
+    return undefined;
+  }
+  return {
+    id,
+    revision,
+    objective,
+    phase: phase as WireGoalPhase,
+    ...(reason === undefined ? {} : { blockedReason: reason }),
+    maxGoalRounds,
+    roundsStarted,
+    createdAt,
+    updatedAt,
+  };
+}
+
+/**
+ * `message-discard` 的 `payload`（#520）：把 `messageId` 對應的 AI 回覆整格拿掉。先比 `messageId`、再比串流的 `id`；
+ * 找不到、重複送、或 `messageId` 不是非空字串，都是 no-op。只拿 AI 回覆，不碰同 id 的別種 entry。
+ */
+function reduceMessageDiscard(state: ConversationState, payload: object): ConversationState {
+  const { messageId } = payload as { messageId?: unknown };
+  if (typeof messageId !== 'string' || messageId === '') return state;
+  const entries = state.entries.filter(
+    (entry) => !(entry.kind === 'ai' && (entry.messageId === messageId || entry.id === messageId)),
+  );
+  return entries.length === state.entries.length ? state : { ...state, entries };
+}
+
+/** `llm-retry` 的 `payload`（#520）：整份換掉，`retryId` 不同也直接換。任何一格不對就整顆不收，留著前一份。 */
+function reduceLlmRetry(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
+  const next = toWireLlmRetry(payload, time);
+  return next === undefined ? state : { ...state, retry: next };
+}
+
+/** `llm-retry-started` 的 `payload`（#520）：`retryId` 對得上才清；對不上（或本來就沒有）是 no-op。 */
+function reduceLlmRetryStarted(state: ConversationState, payload: object): ConversationState {
+  const { retryId } = payload as { retryId?: unknown };
+  return state.retry !== null && state.retry.retryId === retryId
+    ? { ...state, retry: null }
+    : state;
+}
+
+/** `goal` 的 `payload`：投影的整個值，整份換掉。`null` 是沒有目標；任何一格不對就整顆不收，留著前一份。 */
+function reduceGoal(state: ConversationState, payload: object): ConversationState {
+  const { goal } = payload as { goal?: unknown };
+  if (goal === null) return { ...state, goal: null };
+  const next = toWireGoal(goal);
+  return next === undefined ? state : { ...state, goal: next };
+}
+
+/**
+ * `goal/activation` 的 `payload`（#1575 N0376）：`goal` 缺席＝沒有目前目標，授權收成 `disarmed`；有就取它的 `activation`。
+ * `goal` 不是物件、或 `activation` 不是 `armed`／`disarmed` 就整顆不收，留著前一份。只存 `activation`：身分與修訂由 `goal` 那一格管。
+ */
+function reduceGoalActivation(state: ConversationState, payload: object): ConversationState {
+  const { goal } = payload as { goal?: unknown };
+  if (goal === undefined) return { ...state, goalActivation: 'disarmed' };
+  if (typeof goal !== 'object' || goal === null) return state;
+  const { activation } = goal as { activation?: unknown };
+  return activation === 'armed' || activation === 'disarmed'
+    ? { ...state, goalActivation: activation }
+    : state;
+}
+
+/** `plan` 的 `payload`：投影的整個值，整份換掉。`active` 不是布林就整顆不收。 */
+function reducePlanMode(state: ConversationState, payload: object): ConversationState {
+  const { active } = payload as { active?: unknown };
+  if (typeof active !== 'boolean') return state;
+  return { ...state, planMode: { active } };
+}
+
+/**
+ * `projection` 的 `payload`：一個插件投影的整份值，整份換掉（#1026）。`key` 不合格、`version` 不是非負整數、
+ * `failed` 存在卻不是 `true`、或 `failed` 時 `view` 不是 `null`，整顆不收。`view` 是什麼由渲染它的元件驗，這一層不看。
+ */
+function reduceProjection(state: ConversationState, payload: object): ConversationState {
+  const { key, version, view, failed, session } = payload as {
+    key?: unknown;
+    version?: unknown;
+    view?: unknown;
+    failed?: unknown;
+    session?: unknown;
+  };
+  if (typeof key !== 'string' || !PROJECTION_KEY_PATTERN.test(key)) return state;
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) return state;
+  if (failed !== undefined && (failed !== true || view !== null)) return state;
+  // 酬載裡沒有 `view` 這個鍵（`undefined`）不是合法的 JSON 值，整顆不收。
+  if (view === undefined) return state;
+  const next: WireProjection =
+    failed === true ? { version, view: null, failed: true } : { version, view };
+  if (session === undefined) {
+    return { ...state, projections: { ...state.projections, [key]: next } };
+  }
+  // 子代理自己的值（#1028）：`session` 要是非空字串，不然整顆不收（不退回寫進 root 那一格）。
+  if (typeof session !== 'string' || session === '') return state;
+  return {
+    ...state,
+    subagentProjections: {
+      ...state.subagentProjections,
+      [session]: { ...state.subagentProjections[session], [key]: next },
+    },
+  };
 }
 
 /** 清單裡的一項長得對不對：同 dsh 的 `todosProjectionSchema`。 */
@@ -696,12 +1490,29 @@ function reduceTodos(state: ConversationState, payload: object): ConversationSta
  * 總量會是兩個不同時刻的數字加起來，而且看起來正常。
  */
 function reduceTokenUsage(state: ConversationState, payload: object): ConversationState {
-  const { inputTokens, outputTokens } = payload as {
-    inputTokens?: unknown;
-    outputTokens?: unknown;
-  };
+  const { inputTokens, outputTokens, uncachedInputTokens, cacheReadTokens, cacheWriteTokens } =
+    payload as {
+      inputTokens?: unknown;
+      outputTokens?: unknown;
+      uncachedInputTokens?: unknown;
+      cacheReadTokens?: unknown;
+      cacheWriteTokens?: unknown;
+    };
   if (!isCount(inputTokens) || !isCount(outputTokens)) return state;
-  return { ...state, tokenUsage: { inputTokens, outputTokens } };
+  // 快取分桶那三格（#724）選填，**缺席是「沒記」**；有就得是數量，有一格不對整顆不收（同上，不收一半）。
+  for (const optional of [uncachedInputTokens, cacheReadTokens, cacheWriteTokens]) {
+    if (optional !== undefined && !isCount(optional)) return state;
+  }
+  return {
+    ...state,
+    tokenUsage: {
+      inputTokens,
+      outputTokens,
+      ...(isCount(uncachedInputTokens) ? { uncachedInputTokens } : {}),
+      ...(isCount(cacheReadTokens) ? { cacheReadTokens } : {}),
+      ...(isCount(cacheWriteTokens) ? { cacheWriteTokens } : {}),
+    },
+  };
 }
 
 /** `sessionStats` 的 `payload`：投影的整個值，**整顆換掉**。任何一格不對就整顆不收，理由同 {@link reduceTokenUsage}。 */
@@ -711,13 +1522,339 @@ function reduceSessionStats(state: ConversationState, payload: object): Conversa
   return { ...state, sessionStats: { turns, steps, llmMs, toolMs } };
 }
 
+/**
+ * 線上送來的一件排著的話，**還沒歸類來源**：`source.kind` 只要求是非空字串（種類由 {@link queuedSource} 歸）。
+ * 認不得的種類照收（#638 後續：照 dsh，不丟那一件也不丟整份），所以這裡不驗種類。
+ */
+interface RawQueuedInput {
+  readonly id: string;
+  readonly text: string;
+  readonly source: Readonly<Record<string, unknown>> & { readonly kind: string };
+  readonly attachments?: readonly WireAttachmentRef[];
+  /** 沒驗：{@link mentionField} 投影時才驗，壞的當沒有。 */
+  readonly mention?: unknown;
+}
+
+/** 排著的一件長得對不對：`id`、`text` 是字串，`source` 是帶非空字串 `kind` 的物件；帶了 `attachments` 就要形狀合格。 */
+function isQueuedInput(value: unknown): value is RawQueuedInput {
+  if (typeof value !== 'object' || value === null) return false;
+  const { id, text, source, attachments } = value as {
+    id?: unknown;
+    text?: unknown;
+    source?: unknown;
+    attachments?: unknown;
+  };
+  return (
+    typeof id === 'string' &&
+    typeof text === 'string' &&
+    isWireAttachments(attachments) &&
+    typeof source === 'object' &&
+    source !== null &&
+    typeof (source as { kind?: unknown }).kind === 'string' &&
+    (source as { kind: string }).kind !== ''
+  );
+}
+
+/**
+ * 認得的佇列來源怎麼投影，**逐種列在一張以聯集為鍵的表上**：`WireQueuedInputSource` 多一種，這張表當場編不過；少一種（多出的鍵）也一樣。
+ * 以前是手寫的 `||` 串，#1242 加了 `goal` 沒跟著改，含 goal 件的 `inbox` frame 整顆被丟（#1243）。
+ * 表上沒有的種類由 {@link queuedSource} 歸到 `unrecognized`，照 dsh 收下。
+ */
+const QUEUED_SOURCE_PROJECTORS: {
+  readonly [K in WireQueuedInputSource['kind']]: (
+    source: Readonly<Record<string, unknown>>,
+  ) => Extract<WireQueuedInputSource, { kind: K }>;
+} = {
+  user: () => ({ kind: 'user' }),
+  'subagent-settled': (source) => ({
+    kind: 'subagent-settled',
+    ...(isSettleReason(source['reason']) ? { reason: source['reason'] } : {}),
+    ...(isTurnStopCause(source['cause']) ? { cause: source['cause'] } : {}),
+  }),
+  'agent-message': () => ({ kind: 'agent-message' }),
+  goal: () => ({ kind: 'goal' }),
+  // 線上直接送這個名字的話，原話不明，退回名字本身。
+  unrecognized: (source) => ({
+    kind: 'unrecognized',
+    original: typeof source['original'] === 'string' ? source['original'] : 'unrecognized',
+  }),
+};
+
+/** 把線上的 `source` 歸成 {@link WireQueuedInputSource}：認得的照表投影（只帶認得的欄位），不認得的收成 `unrecognized` 並留下原種類。 */
+function queuedSource(source: RawQueuedInput['source']): WireQueuedInputSource {
+  if (!Object.hasOwn(QUEUED_SOURCE_PROJECTORS, source.kind)) {
+    return { kind: 'unrecognized', original: source.kind };
+  }
+  const project = QUEUED_SOURCE_PROJECTORS[source.kind as WireQueuedInputSource['kind']] as (
+    source: Readonly<Record<string, unknown>>,
+  ) => WireQueuedInputSource;
+  return project(source);
+}
+
+/** 一句話 `@` 的會話長得對不對。沒給（`undefined`）合法，給了就每一條都要是兩個字串。 */
+function isWireReferences(value: unknown): value is readonly WireSessionReference[] | undefined {
+  if (value === undefined) return true;
+  return (
+    Array.isArray(value) &&
+    value.every((reference: unknown) => {
+      const { sessionId, label } = (reference ?? {}) as { sessionId?: unknown; label?: unknown };
+      return typeof sessionId === 'string' && typeof label === 'string';
+    })
+  );
+}
+
+/** 有引用才帶這一格：空陣列與沒給是同一件事，不讓兩種長相並存。 */
+function referencesField(
+  references: readonly WireSessionReference[] | undefined,
+): { readonly references: readonly WireSessionReference[] } | Record<string, never> {
+  return references === undefined || references.length === 0
+    ? {}
+    : {
+        references: references.map(({ sessionId, label }) => ({ sessionId, label })),
+      };
+}
+
+/** 一份附件參照長得對不對（`@nexus/core` 的 `AttachmentRef` 另寫一份，同 `WireAttachmentRef`）。 */
+function isWireAttachmentRef(value: unknown): value is WireAttachmentRef {
+  if (typeof value !== 'object' || value === null) return false;
+  const ref = value as Record<string, unknown>;
+  const count = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+  if (typeof ref['attachmentId'] !== 'string' || ref['attachmentId'] === '') return false;
+  if (!count(ref['bytes'])) return false;
+  if (ref['type'] === 'file') return typeof ref['name'] === 'string' && ref['name'] !== '';
+  if (ref['type'] === 'image') {
+    return (
+      typeof ref['mediaType'] === 'string' &&
+      (IMAGE_MEDIA_TYPES as readonly string[]).includes(ref['mediaType']) &&
+      count(ref['width']) &&
+      count(ref['height']) &&
+      (ref['name'] === undefined || typeof ref['name'] === 'string')
+    );
+  }
+  return false;
+}
+
+/** 一句話帶的附件長得對不對。沒給（`undefined`）合法，給了就每一份都要合格。 */
+function isWireAttachments(value: unknown): value is readonly WireAttachmentRef[] | undefined {
+  return value === undefined || (Array.isArray(value) && value.every(isWireAttachmentRef));
+}
+
+/** 有附件才帶這一格：空陣列與沒給是同一件事。只留認得的欄位，不把多出來的東西原樣轉手。 */
+function attachmentsField(
+  attachments: readonly WireAttachmentRef[] | undefined,
+): { readonly attachments: readonly WireAttachmentRef[] } | Record<string, never> {
+  if (attachments === undefined || attachments.length === 0) return {};
+  return {
+    attachments: attachments.map((ref): WireAttachmentRef => {
+      const { attachmentId, bytes } = ref;
+      return ref.type === 'file'
+        ? { type: 'file', attachmentId, name: ref.name, bytes }
+        : {
+            type: 'image',
+            attachmentId,
+            mediaType: ref.mediaType,
+            bytes,
+            width: ref.width,
+            height: ref.height,
+            ...(ref.name === undefined ? {} : { name: ref.name }),
+          };
+    }),
+  };
+}
+
+/**
+ * `inbox` 的 `payload`：兩條清單**整份換掉**。任何一件不對、`claimed`／`claimedNextStep` 不對，就整顆不收，不收一半——
+ * 少一件的清單分不出是開跑了還是被刪了，而且看起來正常。
+ *
+ * 帶 `claimed` 的那一顆是某一件剛被領走開跑：多折一則人的話，文字用開跑用的那份（改過的就是改過的）。帶
+ * `claimedNextStep` 的那一顆是整條插話剛被領走、送進模型（#710）：照先後各折一則人的話，規則相同。
+ *
+ * - **一律接在最後**：畫面不在送出當下先畫（#645），所以這一則就是人話在即時畫面上唯一的來處，沒有別的可以認領。
+ *   插話也一樣：它被領走時，這一輪前面的回覆與工具卡都已經在畫面上了，它接在它們後面，同它在對話裡的位置。
+ * - **id 是 `inbox:<項目 id>`**，跟歷史重播的人話（`message-start` 的 `run_id`）分得開；帶
+ *   {@link HumanEntry.inboxId}，同一顆再到一次靠它認出來，不畫第二次。
+ * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。插話被領走時
+ *   這一輪本來就在跑。
+ */
+function reduceInbox(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
+  const { items, nextStep, claimed, claimedNextStep } = payload as {
+    items?: unknown;
+    nextStep?: unknown;
+    claimed?: unknown;
+    claimedNextStep?: unknown;
+  };
+  if (!Array.isArray(items) || !items.every(isQueuedInput)) return state;
+  if (nextStep !== undefined && (!Array.isArray(nextStep) || !nextStep.every(isQueuedInput))) {
+    return state;
+  }
+  const claims: unknown[] = [];
+  if (claimed !== undefined) claims.push(claimed);
+  if (claimedNextStep !== undefined) {
+    if (!Array.isArray(claimedNextStep)) return state;
+    claims.push(...claimedNextStep);
+  }
+  const humans: (HumanEntry | NoticeEntry | AgentMessageEntry)[] = [];
+  for (const claim of claims) {
+    const { id, text, references, attachments, source, mention } = (claim ?? {}) as {
+      id?: unknown;
+      text?: unknown;
+      references?: unknown;
+      attachments?: unknown;
+      source?: unknown;
+      mention?: unknown;
+    };
+    if (
+      typeof id !== 'string' ||
+      typeof text !== 'string' ||
+      !isWireReferences(references) ||
+      !isWireAttachments(attachments)
+    ) {
+      return state;
+    }
+    // 不是人送的（#840、#849）：執行期的記帳，不畫人的泡泡。認得的來源之外的一律當成人畫——舊的一側沒有這一格。
+    // 結算通知（#851）長一格「通知」，子代理寄來的話（#863）長一格「某某說」，位置都是人話會出現的地方。
+    const sourceKind = (source as { kind?: unknown } | undefined)?.kind;
+    if (sourceKind === 'subagent-settled') {
+      const { reason, cause } = source as { reason?: unknown; cause?: unknown };
+      humans.push({
+        kind: 'notice',
+        id: `inbox:${id}`,
+        source: 'subagent-settled',
+        ...(isSettleReason(reason) ? { reason } : {}),
+        ...(isTurnStopCause(cause) ? { stopCause: cause } : {}),
+        inboxId: id,
+        ...timeField('startedAt', time),
+      });
+      continue;
+    }
+    // 目標續行的預約開跑（#638）：給模型的提示詞，畫面不長任何一格。
+    if (sourceKind === 'goal') continue;
+    // 不認得的來源（新版 harness 加的種類）：不是人說的話，**不畫人的泡泡**；沒有來源（舊的一側）與 `user` 才是人。
+    if (typeof sourceKind === 'string' && sourceKind !== 'user' && sourceKind !== 'agent-message') {
+      continue;
+    }
+    if (sourceKind === 'agent-message') {
+      const { senderSessionId, runId } = source as { senderSessionId?: unknown; runId?: unknown };
+      // 寄件人缺了就整顆不收：沒有寄件人的「某某說」畫不出來，又不能悄悄當成人話。
+      if (typeof senderSessionId !== 'string' || typeof runId !== 'string') return state;
+      humans.push({
+        kind: 'agent-message',
+        id: `inbox:${id}`,
+        senderSessionId,
+        runId,
+        text,
+        inboxId: id,
+        ...timeField('startedAt', time),
+      });
+      continue;
+    }
+    humans.push({
+      kind: 'human',
+      id: `inbox:${id}`,
+      text,
+      inboxId: id,
+      ...referencesField(references),
+      ...attachmentsField(attachments),
+      ...mentionField(mention),
+      ...timeField('startedAt', time),
+    });
+  }
+  const queued = (list: readonly RawQueuedInput[]): WireQueuedInput[] =>
+    list.map(({ id, text, source, attachments, mention }) => ({
+      id,
+      text,
+      source: queuedSource(source),
+      // 排著的件帶的附件（#732）：空陣列與沒給一樣不帶這一格。
+      ...attachmentsField(attachments),
+      // 點名（#328 第 2 項）：壞的當沒有。
+      ...mentionField(mention),
+    }));
+  const inbox = queued(items);
+  const inboxNextStep = queued(nextStep ?? []);
+  const fresh = humans.filter(
+    (fresh) =>
+      !state.entries.some(
+        (entry) =>
+          (entry.kind === 'human' || entry.kind === 'notice' || entry.kind === 'agent-message') &&
+          entry.inboxId === fresh.inboxId,
+      ),
+  );
+  if (fresh.length === 0) return { ...state, inbox, inboxNextStep };
+  return { ...state, inbox, inboxNextStep, entries: [...state.entries, ...fresh] };
+}
+
+/** {@link SETTLE_NOTICE} 的 `payload`：`id` 是字串，同一個 `id` 只長一格。 */
+function reduceSettleNotice(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
+  const { id, reason, cause } = payload as { id?: unknown; reason?: unknown; cause?: unknown };
+  if (typeof id !== 'string' || id === '') return state;
+  if (state.entries.some((entry) => entry.id === id)) return state;
+  const entry: NoticeEntry = {
+    kind: 'notice',
+    id,
+    source: 'subagent-settled',
+    ...(isSettleReason(reason) ? { reason } : {}),
+    ...(isTurnStopCause(cause) ? { stopCause: cause } : {}),
+    ...timeField('startedAt', time),
+  };
+  return { ...state, entries: [...state.entries, entry] };
+}
+
+/** {@link AGENT_MESSAGE} 的 `payload`：三個字串欄位都要在，`id` 非空，同一個 `id` 只長一格。 */
+function reduceAgentMessage(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
+  const { id, senderSessionId, runId, text } = payload as {
+    id?: unknown;
+    senderSessionId?: unknown;
+    runId?: unknown;
+    text?: unknown;
+  };
+  if (typeof id !== 'string' || id === '') return state;
+  if (
+    typeof senderSessionId !== 'string' ||
+    typeof runId !== 'string' ||
+    typeof text !== 'string'
+  ) {
+    return state;
+  }
+  if (state.entries.some((entry) => entry.id === id)) return state;
+  const entry: AgentMessageEntry = {
+    kind: 'agent-message',
+    id,
+    senderSessionId,
+    runId,
+    text,
+    ...timeField('startedAt', time),
+  };
+  return { ...state, entries: [...state.entries, entry] };
+}
+
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
-function reduceWorkspaceChanges(state: ConversationState, payload: object): ConversationState {
+function reduceWorkspaceChanges(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
   const { seq } = payload as { seq?: unknown };
   if (!isSeq(seq)) return state;
   const id = `workspace-changes:${seq}`;
   if (state.entries.some((entry) => entry.id === id)) return state;
-  const entry: WorkspaceChangesEntry = { kind: 'workspace-changes', id, seq };
+  const entry: WorkspaceChangesEntry = {
+    kind: 'workspace-changes',
+    id,
+    seq,
+    ...timeField('startedAt', time),
+  };
   return { ...state, entries: [...state.entries, entry] };
 }
 
@@ -735,7 +1872,8 @@ export function reduceAll(state: ConversationState, events: Iterable<Event>): Co
  *
  * **只接條目**：狀態、掛著的中斷、`lastSeq` 都是「現在」的事，更早那一頁說不動它們。那一頁要自己從
  * {@link emptyConversation} 折好再交進來——折進現在這一份的話，它的 `lifecycle` 會把現在的狀態蓋掉。
- * 頁是在一輪的開頭切的（server 那側），所以同一顆工具呼叫不會一半在這頁、一半在下一頁。
+ * 頁是在一輪的開頭切的（server 那側），所以同一顆工具呼叫不會一半在這頁、一半在下一頁。條目原樣接上，時刻
+ * （{@link ConversationEntry} 的「時刻」）跟著留著。
  */
 export function prependEntries(
   state: ConversationState,
@@ -768,19 +1906,28 @@ function replace(
 
 interface MessageData {
   readonly event: string;
-  /** `message-start` 的作者。**`human` 只有歷史送**：線上不回聲人打的字，見 {@link appendHumanTurn}。 */
+  /** `message-start` 的作者。**`human` 只有歷史送**：即時的人話走 `inbox` 的 `claimed`，見 {@link reduceInbox}。 */
   readonly role?: string;
   readonly id?: string;
   readonly run_id?: string;
   /** `text-delta` 帶 `text`，`reasoning-delta` 帶 `reasoning`（`@langchain/core` 的 `ContentBlockDelta`）。 */
   readonly delta?: { readonly type?: string; readonly text?: string; readonly reasoning?: string };
   readonly message?: string;
+  /** 歷史重播的人話帶的 `@` 引用（#713），即時那條走 `inbox` 的 `claimed`。 */
+  readonly references?: unknown;
+  /** 歷史重播的人話帶的附件參照（#732），即時那條走 `inbox` 的 `claimed`。 */
+  readonly attachments?: unknown;
+  /** 歷史重播的人話帶的被圖片額度省略的附件位置（#1270），即時那條走 {@link IMAGE_OFFLOAD}。 */
+  readonly omittedAttachments?: unknown;
+  /** 歷史重播的人話帶的點名（#328 第 2 項），即時那條走 `inbox` 的 `claimed`。 */
+  readonly mention?: unknown;
 }
 
 function reduceMessage(
   state: ConversationState,
   namespace: readonly string[],
   raw: unknown,
+  time: number | undefined,
 ): ConversationState {
   const data = raw as MessageData;
   // 一則訊息的 id 就是它的 entry key，所以交錯的 subagent 訊息天然分得開。
@@ -798,9 +1945,31 @@ function reduceMessage(
     case 'message-start': {
       if (data.role === 'human') {
         // **歷史才會送這一種**（`GET /threads/:id/history`，#306）：協定留給「整則重播的人話」的格。
-        // `status` 不動——這一句已經說過了，不是剛送出去的那一句（那一句走 `appendHumanTurn`）。
-        const entry: HumanEntry = { kind: 'human', id, text: '' };
+        // `status` 不動——這一句已經說過了，不是剛開跑的那一句（那一句走 `inbox` 的 `claimed`）。
+        // 引用長得不對就當沒有：這一則人話還是要畫，只是少了引用的標記。
+        const references = isWireReferences(data.references) ? data.references : undefined;
+        const attachments = isWireAttachments(data.attachments) ? data.attachments : undefined;
+        const entry: HumanEntry = {
+          kind: 'human',
+          id,
+          text: '',
+          ...referencesField(references),
+          ...attachmentsField(attachments),
+          ...omittedField(attachments, data.omittedAttachments),
+          ...mentionField(data.mention),
+          ...timeField('startedAt', time),
+        };
         return { ...state, entries: [...state.entries, entry] };
+      }
+      // **同一則回覆已經在畫面上就不再長一格**（[#953](https://github.com/DemianLi/nexus-agent/issues/953) 第二刀）：
+      // 重新整理時下行補送進行中的那則（它的 `id` 就是日誌記的訊息 id），歷史是另一個請求、晚一步才拿——
+      // 兩者之間回覆落盤了的話，歷史已經有它，補送再長一格就是畫面上同一則出現兩次。之後這一則的
+      // `content-block-delta` 與 `message-finish` 對不到 entry，`replace` 找不到就是不動。
+      if (typeof data.id === 'string' && data.id !== '') {
+        const messageId = data.id;
+        if (state.entries.some((entry) => entry.kind === 'ai' && entry.messageId === messageId)) {
+          return state;
+        }
       }
       const entry: AiEntry = {
         kind: 'ai',
@@ -809,6 +1978,7 @@ function reduceMessage(
         streaming: true,
         attribution: attribute(state, namespace),
         ...(typeof data.id === 'string' && data.id !== '' && { messageId: data.id }),
+        ...timeField('startedAt', time),
       };
       return { ...state, entries: [...state.entries, entry] };
     }
@@ -844,7 +2014,9 @@ function reduceMessage(
       return {
         ...state,
         entries: replace(state.entries, id, (entry) =>
-          entry.kind === 'ai' ? { ...entry, streaming: false } : entry,
+          entry.kind === 'ai'
+            ? { ...entry, streaming: false, ...timeField('settledAt', time) }
+            : entry,
         ),
       };
     case 'error':
@@ -852,7 +2024,12 @@ function reduceMessage(
         ...state,
         entries: replace(state.entries, id, (entry) =>
           entry.kind === 'ai'
-            ? { ...entry, streaming: false, error: data.message ?? '未指名的錯誤' }
+            ? {
+                ...entry,
+                streaming: false,
+                error: data.message ?? '未指名的錯誤',
+                ...timeField('settledAt', time),
+              }
             : entry,
         ),
       };
@@ -873,6 +2050,60 @@ interface ToolData {
   readonly message?: string;
   /** `tool-finished` 專用：那則 ToolMessage 自己說它失敗了。由 pump 分類，見它的檔頭。 */
   readonly failed?: boolean;
+  /** `tool-finished` 專用：給專屬卡的結構化結果（#617），見 {@link ToolEntry.meta}。 */
+  readonly meta?: unknown;
+  /**
+   * 失敗的錯誤碼（#667），見 {@link ToolEntry.errorCode}。`tool-finished` 由 pump 在失敗那一支放，
+   * `tool-error` 是協定 `ToolErrorData` 本來就有的 `code`。
+   */
+  readonly code?: string;
+}
+
+/**
+ * 派子代理的工具名：基座的 `task`，與背景選項開啟時模型看到的 `subagent`
+ * （[#831](https://github.com/DemianLi/nexus-agent/issues/831)）。
+ *
+ * 前景的 `subagent` 內部仍派給 `task`，所以歸屬的鑰匙（`task` 的 `tool-started`）不變；這個集合給認名字的地方
+ * 用——harness 的收回、web 的卡片——免得各自寫死一個。
+ */
+export const DELEGATION_TOOL_NAMES: readonly string[] = ['task', 'subagent'];
+
+/**
+ * 背景子代理的歸屬鑰匙，放在 `subagent` 那顆 `tool-finished` 的 `meta` 裡
+ * （[#832](https://github.com/DemianLi/nexus-agent/issues/832)）。
+ *
+ * 前景的子代理由基座的 `task` 那顆 `tool-started` 帶 `subagent_type`，之後掛在同一個 namespace 底下的
+ * 東西都是它的；背景的沒有那一顆——host 自己丟掉子代理的串流，線上只有從日誌開的卡，namespace 是
+ * `[runId, 'tools']`。**編號只有派出去那一刻的呼叫知道**，所以由那顆呼叫的結果告訴折疊器：`runId` 就是
+ * namespace 的第一段。
+ */
+export interface BackgroundSubagentMeta {
+  readonly kind: 'background-subagent';
+  readonly runId: string;
+  readonly subagentType: string;
+  /**
+   * 這個子代理被指定跑哪一顆模型（型錄 id；[#889](https://github.com/DemianLi/nexus-agent/issues/889)，卡 #709 的後續）。
+   * **只有這次派出帶了 `model` 或 `reasoning_effort` 才有**；沒有＝跟著主對話。一個編號從派出到收線不換模型（#876），
+   * 所以這是派出那一刻就定的事實，跟 `runId` 一樣放在結果的 `meta` 裡、隨日誌落盤，重新整理之後還在。
+   * 只給推理等級時，這裡是主對話目前那一顆。
+   */
+  readonly model?: string;
+  /** 被指定的推理等級（型錄條目宣告過的名字，今天是 `off`）；沒指定就沒有這一格。 */
+  readonly reasoningEffort?: string;
+}
+
+/** `meta` 是不是背景子代理的鑰匙；形狀歸產生者，這裡只認得出來就好，認不得的一律當沒有。 */
+export function isBackgroundSubagentMeta(meta: unknown): meta is BackgroundSubagentMeta {
+  if (typeof meta !== 'object' || meta === null) return false;
+  const candidate = meta as Partial<Record<keyof BackgroundSubagentMeta, unknown>>;
+  return (
+    candidate.kind === 'background-subagent' &&
+    typeof candidate.runId === 'string' &&
+    candidate.runId !== '' &&
+    typeof candidate.subagentType === 'string' &&
+    (candidate.model === undefined || typeof candidate.model === 'string') &&
+    (candidate.reasoningEffort === undefined || typeof candidate.reasoningEffort === 'string')
+  );
 }
 
 /** `task` 的參數裡才有 subagent 的名字，而它是一段 JSON 字串。 */
@@ -889,10 +2120,39 @@ function subagentTypeOf(input: string | undefined): string | undefined {
   }
 }
 
+/**
+ * 派子代理的那顆呼叫帶著背景鑰匙收尾：從此 `namespace[0] === runId` 的東西是那個子代理的，
+ * **而且已經到了的也追溯過去**（#832）。
+ *
+ * 追溯不是裝飾：背景那一輪從日誌開的卡和派出去的那顆呼叫收尾誰先到，取決於 pump 怎麼排，
+ * 先到的卡若永遠停在「未歸屬」，畫面就取決於一個沒人保證的順序。歷史重播的順序另有一套（背景卡
+ * 在重播裡會不會出現見卡 [#737](https://github.com/DemianLi/nexus-agent/issues/737) 的第 7 張），
+ * 但歸屬一樣只由這顆的 meta 決定，與到達順序無關。
+ */
+function attributeBackground(state: ConversationState, data: ToolData): ConversationState {
+  const entry = state.entries.find((candidate) => candidate.id === `tool-${data.tool_call_id}`);
+  if (entry?.kind !== 'tool' || !DELEGATION_TOOL_NAMES.includes(entry.name)) return state;
+  if (!isBackgroundSubagentMeta(data.meta)) return state;
+  const { runId, subagentType } = data.meta;
+  const found = { name: subagentType, callId: data.tool_call_id };
+  return {
+    ...state,
+    subagents: { ...state.subagents, [runId]: found },
+    entries: state.entries.map((candidate) =>
+      (candidate.kind === 'tool' || candidate.kind === 'ai') &&
+      candidate.attribution.kind === 'unattributed' &&
+      candidate.attribution.namespace[0] === runId
+        ? { ...candidate, attribution: { kind: 'subagent', ...found } }
+        : candidate,
+    ),
+  };
+}
+
 function reduceTool(
   state: ConversationState,
   namespace: readonly string[],
   raw: unknown,
+  time: number | undefined,
 ): ConversationState {
   const data = raw as ToolData;
   const id = `tool-${data.tool_call_id}`;
@@ -914,20 +2174,30 @@ function reduceTool(
       input: data.input ?? '',
       status: 'running',
       attribution: attribute(state, namespace),
+      ...timeField('startedAt', time),
     };
     // **同一個 `tool_call_id` 會來第二次**：人回答了中斷之後圖從 tools 節點重跑，基座
     // 再發一顆 `tool-started`（實測）。無條件 append 的話，畫面上同一顆呼叫長出兩個條目
     // ——而 `id` 是一樣的，所以連「哪一個是真的」都分不出來。第二次是**同一次呼叫的續行**，
-    // 更新那一格；`error` 要一起清掉，不然中斷那段留下的字會跟著新狀態一起顯示。
+    // 更新那一格；`error` 要一起清掉，不然中斷那段留下的字會跟著新狀態一起顯示。`text`、`meta` 同理。
+    // 時刻：`startedAt` 留第一顆的，`settledAt` 拿掉——卡又在跑了（見 {@link ToolEntry.startedAt}）。
     if (state.entries.some((existing) => existing.id === id)) {
       return {
         ...state,
         subagents,
-        entries: replace(state.entries, id, (existing) =>
-          existing.kind === 'tool'
-            ? { ...existing, status: 'running', error: undefined, text: undefined }
-            : existing,
-        ),
+        entries: replace(state.entries, id, (existing) => {
+          if (existing.kind !== 'tool') return existing;
+          const { settledAt: _settled, ...rest } = existing;
+          return {
+            ...rest,
+            status: 'running',
+            error: undefined,
+            errorCode: undefined,
+            text: undefined,
+            meta: undefined,
+            ...(rest.startedAt === undefined ? timeField('startedAt', time) : {}),
+          };
+        }),
       };
     }
     return { ...state, subagents, entries: [...state.entries, entry] };
@@ -945,19 +2215,25 @@ function reduceTool(
 
   if (data.event === 'tool-finished') {
     const failed = data.failed === true;
-    return {
+    const settled = {
       ...state,
-      entries: replace(state.entries, id, (entry) =>
-        entry.kind === 'tool'
-          ? {
-              ...entry,
-              status: failed ? 'failed' : 'done',
-              text: data.message,
-              ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
-            }
-          : entry,
-      ),
+      entries: replace(state.entries, id, (entry) => {
+        if (entry.kind !== 'tool') return entry;
+        // 碼同 `text`：照這一顆換掉（pump 的更正幀只差碼時也會來，#667）。沒有碼就不留這一格。
+        const { errorCode: _previous, ...rest } = entry;
+        return {
+          ...rest,
+          status: failed ? 'failed' : 'done',
+          text: data.message,
+          // 同 `text`：照這一顆換掉。pump 的更正幀只差 meta 時也會來（#617）。
+          meta: failed ? undefined : data.meta,
+          ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
+          ...(failed && data.code !== undefined ? { errorCode: data.code } : {}),
+          ...timeField('settledAt', time),
+        };
+      }),
     };
+    return failed ? settled : attributeBackground(settled, data);
   }
 
   if (data.event === 'tool-error') {
@@ -965,7 +2241,13 @@ function reduceTool(
       ...state,
       entries: replace(state.entries, id, (entry) =>
         entry.kind === 'tool'
-          ? { ...entry, status: 'failed', error: data.message ?? '未指名的錯誤' }
+          ? {
+              ...entry,
+              status: 'failed',
+              error: data.message ?? '未指名的錯誤',
+              ...(data.code === undefined ? {} : { errorCode: data.code }),
+              ...timeField('settledAt', time),
+            }
           : entry,
       ),
     };
@@ -978,12 +2260,68 @@ interface LifecycleData {
   readonly event: string;
   readonly graph_name?: string;
   readonly error?: string;
-  /** 人按了停止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
+  /** `failed` 的錯誤碼（`turn/failed.error.code`），見 {@link ConversationState.errorCode}。 */
+  readonly code?: string;
+  /** 這一輪被中止。pump 在 root 那顆收尾的 frame 上補的，見 {@link ConversationStatus}。 */
   readonly aborted?: boolean;
+  /** 為什麼停，跟 `aborted` 一起補（#1624），見 {@link TurnStopCause}。 */
+  readonly cause?: TurnStopCause;
+  /** 這一輪撞到了輸出上限。同 `aborted` 由 pump 補，見 {@link AiEntry.maxTokens}。 */
+  readonly maxTokens?: boolean;
+  /**
+   * 這一輪被準入閘門擋下（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。同 `aborted` 由 pump 補，
+   * 帶在 `completed` 上；狀態照一輪正常收尾回 `idle`，沒有錯誤，並把這一輪的人話標上 {@link HumanEntry.blocked}。
+   */
+  readonly blocked?: boolean;
+}
+
+/**
+ * 這一輪被擋下的人話標上 {@link HumanEntry.blocked}：**只在人話是整份最後一格時標**。被擋下的輪沒有輸出，人話送出去後後面不會再有東西；
+ * 後面有任何條目（回覆、工具、結算通知、代理來信）就表示這句話不是這次被擋下的那一句，或這一輪做過事、話是送出去了的——不標。
+ * （例：上一輪的人話後面接著結算通知再被擋下，被擋的是通知喚醒的那一輪，不是那句人話。）
+ *
+ * @param entries - 目前的條目。
+ * @returns 標過的條目；沒有可標的原樣。
+ */
+function markBlocked(entries: readonly ConversationEntry[]): readonly ConversationEntry[] {
+  const at = entries.length - 1;
+  const human = entries[at];
+  if (human?.kind !== 'human') return entries;
+  const next = [...entries];
+  next[at] = { ...human, blocked: true };
+  return next;
+}
+
+/**
+ * 這一輪最後一則 root 回覆標上 {@link AiEntry.maxTokens}。一則 root 回覆都沒有就原樣。
+ *
+ * @param entries - 目前的條目。
+ * @param turnStart - 這一輪從哪一格開始。
+ * @returns 標過的條目。
+ */
+function markMaxTokens(
+  entries: readonly ConversationEntry[],
+  turnStart: number,
+): readonly ConversationEntry[] {
+  for (let at = entries.length - 1; at >= turnStart; at -= 1) {
+    const entry = entries[at];
+    if (entry?.kind !== 'ai' || entry.attribution.kind !== 'root') continue;
+    const next = [...entries];
+    next[at] = { ...entry, maxTokens: true };
+    return next;
+  }
+  return entries;
 }
 
 /** 一輪收掉時還沒有結果的那次呼叫，卡上的紅字。 */
 export const UNFINISHED_TOOL_TEXT = '這一輪已經結束，這次呼叫沒有結果';
+
+/**
+ * 一輪收掉時還沒有結果的那次呼叫，卡上的錯誤碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
+ * 值照 dsh 替沒結果的卡合成的那個（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:217`），
+ * 畫面比它判 stopped（`packages/client/ui-tool/src/client/tool/models/tool-call-model.ts:289`）。
+ */
+export const UNFINISHED_TOOL_CODE = 'interrupted';
 
 /**
  * 這一輪關了（停止、失敗、或不是停在等人的收尾），還在執行中或掛著的工具卡收成失敗。
@@ -993,13 +2331,22 @@ export const UNFINISHED_TOOL_TEXT = '這一輪已經結束，這次呼叫沒有�
  * `interruption`，`c291e79`）——關閉的原因不分。有結果的那些 pump 已經照日誌收了；產品路徑上會走到
  * 這裡的是停在核准點時按了停止、等核准的在子代理裡（pump 只替 root 懸著的那幾顆寫結果）。正常收尾
  * 的那一支今天沒有生產者：圍堵記了 `tool/call` 之後，`tool/result` 只有日誌寫不進去時才會缺。
+ *
+ * 收掉的那幾張的 {@link ToolEntry.settledAt} 是收尾那顆 `lifecycle` 的時刻，同 dsh 合成的那則用收尾邊界的 `time`。
  */
 function settleUnfinishedTools(
   entries: readonly ConversationEntry[],
+  time: number | undefined,
 ): readonly ConversationEntry[] {
   return entries.map((entry) =>
     entry.kind === 'tool' && (entry.status === 'running' || entry.status === 'suspended')
-      ? { ...entry, status: 'failed', error: UNFINISHED_TOOL_TEXT }
+      ? {
+          ...entry,
+          status: 'failed',
+          error: UNFINISHED_TOOL_TEXT,
+          errorCode: UNFINISHED_TOOL_CODE,
+          ...timeField('settledAt', time),
+        }
       : entry,
   );
 }
@@ -1008,6 +2355,7 @@ function reduceLifecycle(
   state: ConversationState,
   namespace: readonly string[],
   raw: unknown,
+  time: number | undefined,
 ): ConversationState {
   const data = raw as LifecycleData;
   if (namespace.length > 0 || data.graph_name !== 'root') {
@@ -1015,17 +2363,20 @@ function reduceLifecycle(
     return state;
   }
   if (data.aborted === true) {
-    // **人按了停止**（#276）。先於 `failed`／`completed` 判：被切斷的那一次基座發的是 `failed`，
+    // **被中止**（#276）。先於 `failed`／`completed` 判：被切斷的那一次基座發的是 `failed`，
     // 那不是失敗。停在核准點時的收回也走這裡，所以掛著的卡片一起收掉——伺服器那側已經收回了。
-    // 還在吐字的那幾則標成被打斷，還沒有結果的工具卡收成失敗。
+    // 還在吐字的那幾則標成被打斷，還沒有結果的工具卡收成失敗。原因（#1624）照帶來的記下，沒帶就不寫。
+    const cause = data.cause === undefined ? {} : { stopCause: data.cause };
     return {
       ...state,
       status: 'stopped',
       error: undefined,
+      errorCode: undefined,
       pendings: [],
-      entries: settleUnfinishedTools(state.entries).map((entry) =>
+      stopCause: data.cause,
+      entries: settleUnfinishedTools(state.entries, time).map((entry) =>
         entry.kind === 'ai' && entry.streaming
-          ? { ...entry, streaming: false, stopped: true }
+          ? { ...entry, streaming: false, stopped: true, ...cause, ...timeField('settledAt', time) }
           : entry,
       ),
     };
@@ -1042,22 +2393,39 @@ function reduceLifecycle(
     // 其中一顆之後那個新 run 發的，而沒被答到的中斷會在同一個 run 裡帶著原本那顆 id
     // 再度發一次 `input.requested`（實測），上面的覆寫因此是冪等的。留著不清的話，
     // 旁觀的那一端會抱著一張已經被別人答掉、永遠回答不了的卡片。
-    return { ...state, pendings: [], status: 'running', error: undefined };
+    return {
+      ...state,
+      pendings: [],
+      status: 'running',
+      error: undefined,
+      errorCode: undefined,
+      stopCause: undefined,
+    };
   }
   if (data.event === 'failed') {
     return {
       ...state,
       status: 'failed',
       error: data.error ?? '未指名的錯誤',
-      entries: settleUnfinishedTools(state.entries),
+      errorCode: data.code,
+      entries: settleUnfinishedTools(state.entries, time),
     };
   }
   if (data.event === 'completed') {
     // **中斷時 root 照樣發 completed**，所以停在核准點的那一輪不能被它翻成 idle，卡也不收——
     // 那一輪還沒關，卡還在等人。
-    return state.status === 'awaiting-input'
-      ? state
-      : { ...state, status: 'idle', entries: settleUnfinishedTools(state.entries) };
+    if (state.status === 'awaiting-input') return state;
+    const settled = settleUnfinishedTools(state.entries, time);
+    return {
+      ...state,
+      status: 'idle',
+      entries:
+        data.blocked === true
+          ? markBlocked(settled)
+          : data.maxTokens === true
+            ? markMaxTokens(settled, state.turnStart)
+            : settled,
+    };
   }
   return state;
 }
@@ -1070,6 +2438,8 @@ interface InputRequestedData {
     readonly actionRequests?: readonly { name: string; args: unknown; description?: string }[];
     readonly reviewConfigs?: readonly { actionName: string; allowedDecisions: string[] }[];
     readonly questions?: readonly QuestionItem[];
+    /** 問答卡的來源（#1098）；省略是模型自己問的。 */
+    readonly origin?: QuestionOrigin;
   };
 }
 
@@ -1078,8 +2448,8 @@ interface InputRequestedData {
  *
  * ## 三支，不是兩支
  *
- * - `kind` **缺席** → 當核准。這是向後相容：五個既有測試檔用基座的 `interruptOn` 造
- *   payload，那條路發的中斷沒有這個欄位。
+ * - `kind` **缺席** 且酬載帶 `actionRequests` 陣列 → 當核准。這是向後相容：五個既有測試檔用基座的 `interruptOn` 造
+ *   payload，那條路發的中斷沒有這個欄位。**缺席又沒有 `actionRequests` 的不是核准**，明著壞掉（#1098）。
  * - `kind` 是**認得的值** → 照它折。
  * - `kind` **有值但認不得** → **明著壞掉**（`status: 'failed'`）。
  *
@@ -1103,7 +2473,10 @@ function reduceInputRequested(
   const kind = data.payload?.kind;
   const common = { interruptId: data.interrupt_id, namespace };
   let incoming: PendingInput;
-  if (kind === undefined || kind === APPROVAL_PENDING_KIND) {
+  // **缺席即核准只收基座 HITL 的形狀**（有 `actionRequests` 陣列）。沒有 `kind` 也沒有 `actionRequests` 的酬載（例如 adapter 的
+  // `type: 'mcp_elicitation'`，#1098）不是核准，畫成核准卡會讓按鈕送出對面不等的形狀；落到下面「認不得」那一支明著壞掉。
+  const hitlShaped = Array.isArray(data.payload?.actionRequests);
+  if (kind === APPROVAL_PENDING_KIND || (kind === undefined && hitlShaped)) {
     incoming = {
       ...common,
       kind: APPROVAL_PENDING_KIND,
@@ -1111,7 +2484,20 @@ function reduceInputRequested(
       allowedDecisions: intersectDecisions(data.payload?.reviewConfigs ?? []),
     };
   } else if (kind === QUESTION_PENDING_KIND) {
-    incoming = { ...common, kind: QUESTION_PENDING_KIND, questions: data.payload?.questions ?? [] };
+    incoming = {
+      ...common,
+      kind: QUESTION_PENDING_KIND,
+      questions: data.payload?.questions ?? [],
+      ...(data.payload?.origin === undefined ? {} : { origin: data.payload.origin }),
+    };
+  } else if (kind === undefined) {
+    return {
+      ...state,
+      status: 'failed',
+      error:
+        '這顆中斷沒有 kind，酬載裡也沒有 actionRequests（核准的形狀），這一版認不得它是什麼。' +
+        '把它當核准畫出來會讓人按到送錯形狀的按鈕，所以這裡停下來。',
+    };
   } else {
     return {
       ...state,

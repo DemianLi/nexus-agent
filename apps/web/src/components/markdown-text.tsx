@@ -102,6 +102,7 @@ class StreamingRenderer {
     }
     const tailContext: MarkdownRenderContext = {
       streaming: true,
+      tail: true,
       targets: frameTargets,
       footnoteOrder: [...this.frozenFootnoteOrder],
       footnoteCounts: new Map(this.frozenFootnoteCounts),

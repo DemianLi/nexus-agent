@@ -1,0 +1,20 @@
+===================================================================
+--- a/components/ui/turn-status.tsx
++++ b/components/ui/turn-status.tsx
+@@ -85,7 +85,6 @@
+         {opens ? (
+           <button
+             type="button"
+-            role="status"
+             aria-expanded={open}
+             onClick={() => setOpen((value) => !value)}
+             className="flex w-fit max-w-full items-center gap-2 text-[12.5px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:text-foreground"
+@@ -94,7 +93,7 @@
+             <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
+           </button>
+         ) : (
+-          <div role="status" className="flex w-fit max-w-full items-center gap-2 text-[12.5px] text-muted-foreground">
++          <div className="flex w-fit max-w-full items-center gap-2 text-[12.5px] text-muted-foreground">
+             {line}
+           </div>
+         )}

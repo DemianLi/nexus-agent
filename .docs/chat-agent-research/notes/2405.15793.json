@@ -1,0 +1,184 @@
+{
+  "id": "2405.15793",
+  "title": "SWE-agent: Agent-Computer Interfaces Enable Automated Software Engineering",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 agent-computer interface（ACI）的概念，為 LM 重新設計檔案檢視、搜尋、編輯指令與環境回饋的格式（含 lint 守門與舊觀測摺疊）。GPT-4 Turbo 在 SWE-bench 全集解出 12.47%，並用消融逐項量出各個觀測元件對成功率的貢獻。",
+  "problem": "LM agent 通常直接操作為人類設計的介面，例如 Linux shell。這類介面的輸出不受控：cat 會把整個檔案灌進 context，grep／find 回傳大量無關結果。編輯是沉默的：sed 或重導向改完檔不給任何回饋，錯誤的編輯也不會被指出。導航沒有狀態：要看下一段就得自己重算行號、重打整條指令。結果是 agent 在 repo 級的軟工任務上表現很差，此前最佳的是非互動 RAG，只有 3.8%。論文要回答的是：在不改模型權重的前提下，只重新設計「動作＋環境回饋」這一層介面，能不能明顯提升 agent 表現。這決定了觀測空間的設計是否是一層可以獨立改善、也值得獨立量測的元件。",
+  "core_idea": "把 LM 視為一種能力與限制都和人不同的新終端使用者，比照 HCI 為它設計專用介面 ACI。ACI 規定四件事：可用的指令與說明、環境狀態怎麼回報、歷史怎麼整理，以及怎麼和高階指示合成每一輪的輸入。作者歸納出四條設計原則：(1) 動作要簡單易懂，選項少、說明短；(2) 動作要精簡有效率，一步完成高階操作（例如多行編輯），不要讓模型跨多輪組合；(3) 環境回饋要有資訊量但精簡，要回報目前狀態與上一步動作的效果，不附多餘細節；(4) 守門機制（例如語法檢查）用來擋住錯誤擴散並加速恢復。",
+  "method": {
+    "迴圈": "ReAct 式單 agent 迴圈。每一輪模型輸出一段 DISCUSSION（想法）與恰好一個指令（包在 markdown code block 裡），在 Docker 容器內的 bash 中執行，輸出經模板包裝後當作下一則 observation。持續到模型下 submit，或超過每題 $4 的成本上限（此時自動把現有修改當成 patch 送出，記為 exit_cost）。環境與互動邏輯大量沿用 InterCode-Bash。",
+    "初始輸入": "system 訊息內容依序是：情境說明（自主程式設計師、特殊介面一次顯示 100 行）、各自訂指令的 signature 與 docstring（由指令檔自動彙整）、縮排警告，以及回覆格式與「一次只下一個指令、不支援 python／vim 等互動式指令」的規定。其後是選配的 demonstration：一條在 dev set 成功解題的軌跡，可以逐輪拆成獨立訊息（put_demos_in_history=True），也可以整段包成一則並註明是示範，哪種較好因模型而異。最後是 instance 訊息：issue 全文、重申的指示，以及 6 條 tips（先重現 bug、失敗的指令不要原樣重下、用 goto 不要連續 scroll、用 find_file 找輸入檔、留意目前開啟的檔案與工作目錄、編輯後檢查結果），結尾是 shell 提示字元。tips 是作者在 dev set 上人工檢視失敗軌跡後逐條寫出來的。",
+    "指令集（Table 4）": "檔案檢視：open <path> [<line>]、goto <line>、scroll_up、scroll_down（一次移動 100 行）。搜尋：search_file <term> [<file>]（在目前開啟的檔案或指定檔案中找字串）、search_dir <term> [<dir>]（列出含該字串的檔案與各檔命中數）、find_file <name> [<dir>]（依檔名找）。編輯：edit <n>:<m> <replacement_text> end_of_edit（把第 n 到 m 行換成新文字，可一次改多行）、create <filename>。任務：submit（由累積的修改產生 patch 並結束）。另外可以使用一般 bash 指令。",
+    "觀測表徵": [
+      "檔案檢視器：一次最多顯示 100 行，每行前綴行號。標頭是 [File: 完整路徑 (N lines total)]，視窗上下各標示「(k more lines above/below)」。視窗位置存在環境變數（CURRENT_FILE、CURRENT_LINE、WINDOW_SIZE 等）裡，跨指令保持狀態，所以 scroll 與 goto 不必讓模型自己算行號。",
+      "搜尋結果摘要：search_dir 列出檔名與各檔命中數；search_file 列出行號與該行內容，並以 Found N matches ... End of matches 包夾。任一查詢超過 50 筆就不列結果，改提示 agent 縮小查詢（軌跡中的實際訊息是「More than N files matched ... Please narrow your search」）。",
+      "編輯回顯：edit 成功後，檢視器自動顯示以編輯處為中心的視窗，並附上請 agent 檢查縮排與重複行的提示，不必另下指令確認。",
+      "lint 守門：編輯先套用，再對目前檔案執行 flake8 --isolated --select=F821,F822,F831,E111,E112,E113,E999,E902（未定義名稱、函式參數重複、縮排錯、語法錯、無法讀檔）。沒有輸出就保留編輯；有輸出就還原，並回傳三段內容：錯誤清單、這次編輯若套用後的樣子、原始內容，外加「修改未套用，請修正行號或程式碼，不要原樣重下」。作者在開發過程試過拿掉其中任一段，結論是三段都要。",
+      "狀態列：每則 observation 後面都接 (Open file: <path>) (Current directory: <cwd>) bash-$（next_step_template）。state_command 每一步回報 pwd 等狀態。",
+      "空輸出明示：指令沒有任何 stdout 時，不送空白，改送固定訊息，說明指令執行成功但沒有輸出（next_step_no_output_template）。原因是空白提示會讓模型多下不必要的確認指令。"
+    ],
+    "脈絡管理（history_processor）": [
+      "只保留最後 5 則 observation 的完整內容。更早的每一則都換成一行「Old output omitted (N lines)」，保留互動的結構與順序，也保留模型自己的 DISCUSSION 與動作。目的有二：減少 token，並避免過時的檔案內容誤導模型。",
+      "system 訊息從不摺疊或移除。",
+      "格式錯誤（沒有剛好一段想法加一個指令）時送 format_error_template 要求重來；連續 3 次格式錯誤就提前結束（Early Exit），把現有修改送出。收到合法回覆後，把格式錯誤那幾輪從歷史中移除，§3 的說法是只保留第一則錯誤訊息。作者的說法是：去掉雜訊之後，每一則合法回覆都成了一個 in-context 示範。",
+      "作者試過三種輸出格式：markdown code block、JSON 的 thought/action，以及 XML 標籤。論文沒有報告三者的量化比較。"
+    ],
+    "設定檔（YAML，A.3）": "ACI 完全由一個 .yaml 描述，分四類元件。(1) prompt 模板：system、instance、next_step、next_step_no_output、format_error、demonstration。(2) 指令檔：bash 或 Python 函式，檔頭用 @yaml 註解寫 signature、docstring、arguments（型別、說明、是否必填），執行時自動彙整進 system 訊息；指令透過 echo 到 stdout 回報效果，不看回傳值。(3) 控制流程：parse_function（解析並強制輸出格式）、parse_command（指令說明怎麼呈現）、history_processor（每輪由完整紀錄建出實際餵給模型的歷史）。(4) 環境變數的初值。",
+    "超參數與流程": "模型使用 gpt-4-1106-preview（128k）與 claude-3-opus-20240229（200k）。最終設定為 temperature 0.0、視窗 100 行、歷史保留最後 5 則。設計流程分兩段：先在 SWE-bench dev split 手挑少量例子，人工檢視 agent 行為以定出指令與回饋；再在隨機抽的 37 題 dev 子集上，對 temperature {0, 0.2} × 視窗 {100, 200} × 歷史 {Full, Last 5} 做網格搜尋，每組跑 5 次取平均。GPT-4 Turbo 調出的設定直接沿用到 Claude 3 Opus。",
+    "輸出與記錄": "submit 把所有修改彙整成一個 .patch，交給 SWE-bench harness 評分：套用後 repo 的相關測試必須全數過關才算解決。每個 episode 另存 .traj，內容是 agent 與環境的完整互動歷史。論文的行為分析（動作 n-gram 轉移、失敗編輯統計、失敗分類）都從這些 .traj 算出。"
+  },
+  "assumptions": [
+    "LM 權重固定，改善只來自介面；而且模型要有足夠長的 context（128k／200k），能容納 system 訊息、issue、示範與多輪互動（作者說 Llama 3 的 8k 放不下）。",
+    "lint 守門成立的前提，是任務的原始 codebase 在所選的 flake8 錯誤碼下是乾淨的，否則每次編輯都會被誤判而還原；而且只適用 Python。",
+    "issue 描述本身就是完整需求，過程中沒有人可以追問；單一 agent，沒有人類介入。",
+    "repo 裡既有、由人撰寫的單元測試能代表「解決了 issue」；agent 自己寫的重現腳本只是輔助。",
+    "Docker 的命名空間隔離足以承受 agent 執行任意 shell 指令（作者自承不如硬體虛擬化）。",
+    "在少量 dev 例子與 37 題子集上人工調出的介面與超參數，能推廣到 test set 與其他模型。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SWE-bench test 全集（2,294 題，12 個 Python repo）",
+      "SWE-bench Lite（300 題，偏自足的功能性 bug 修正；所有消融與行為分析都在這上面做）",
+      "SWE-bench dev 隨機 37 題子集（超參數網格搜尋，每組 5 次）",
+      "HumanEvalFix（每種語言 164 題；報告 Python、JS、Java，沿用與 SWE-bench 相同的設定檔，只換掉示範）"
+    ],
+    "metrics": [
+      "% Resolved（pass@1：套上 patch 後所有相關測試全數過關的比例）",
+      "$ Avg. Cost（只對已解題目平均的 API 推論成本；每題上限 $4）",
+      "pass@k（k=1..6，6 次獨立執行）",
+      "檔案定位 F1（agent 修改或刪除的檔案集合對 gold patch）",
+      "失敗編輯率與恢復機率（一次 lint 被拒後最終編輯成功的機率）",
+      "失敗模式分佈（GPT-4o 依 9 個人工定義類別自動標註）",
+      "結束方式分佈（submit／exit_cost 有無送出／Early Exit）"
+    ],
+    "baselines": [
+      "RAG：BM25 以 issue 為查詢取回檔案，模型一次生成 patch（GPT-4 Turbo、Claude 3 Opus；逐 repo 與逐年份的表另有 Claude 2）",
+      "Shell-only：改寫自 InterCode，只給 Linux shell，GPT-4 Turbo，有示範與無示範兩種，只在 Lite 上跑",
+      "ACI 消融（Table 3）：搜尋（摘要式／逐筆式 Iterative／無搜尋）、編輯（有 lint 的 edit／無 lint 的 edit／無 edit 指令）、檢視器（30 行／100 行／整個檔案）、脈絡（最後 5 則／完整歷史／無示範）",
+      "HumanEvalFix：CodeLLaMa-instruct-13B、GPT-4、DeepseekCoder-CodeAlpaca-6.7B、WaveCoder-DS-6.7B，數字取自他人論文，都是非互動設定"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "為 LM 設計的 ACI 明顯勝過為人類設計的 shell；在 SWE-bench 全集也大幅超越先前的非互動最佳結果",
+      "numbers": "Lite（GPT-4 Turbo）：SWE-agent 18.00% 對 Shell-only 11.00%（無示範 7.33%），相對提升 64%。全集：SWE-agent w/ GPT-4 Turbo 12.47%（286/2294），w/ Claude 3 Opus 10.46%；RAG 最佳為 3.79%（Claude 3 Opus）。Lite 上每題已解平均成本 $1.67（GPT-4 Turbo）／$2.18（Claude 3 Opus），對 RAG 的 $0.13／$0.25，論文稱貴 8–13 倍",
+      "section": "§5、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "搜尋結果的呈現方式決定成敗：一次列出摘要最好；逐筆瀏覽的 Iterative search 讓 agent 把每筆結果都翻完，耗光預算或 context，結果比完全不給搜尋工具還差",
+      "numbers": "Lite：Summarized 18.0%、No search 15.7%、Iterative 12.0%",
+      "section": "§5.1、Table 3、Figure 5",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "檔案檢視器一次顯示多少行對成功率很敏感，太少和太多都會下降",
+      "numbers": "Lite：100 行 18.0%、30 行 14.3%、整個檔案 12.7%",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "編輯時加上 lint 守門（有語法錯就不套用，並回傳錯誤與前後對照）能明顯改善錯誤恢復；完全不給 edit 指令、只能用 sed 或重導向時掉得最多",
+      "numbers": "Lite：edit＋lint 18.0%、edit 無 lint 15.0%、無 edit 指令 10.3%",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "把舊觀測摺疊成一行、只保留最後 5 則，比保留完整歷史好；最佳設定來自 dev 子集網格搜尋",
+      "numbers": "Lite：最後 5 則 18.0% 對完整歷史 15.0%（無示範 16.3%）。37 題 dev 子集（5 次平均，GPT-4 Turbo）：0.0/100/Last-5 為 15.1%、0.0/100/Full 為 14.1%；視窗 200 時降到 9.2%–10.8%。Claude 3 Opus 有三組並列 8.1%",
+      "section": "Table 3、§B.1 Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "編輯仍是主要難點，而且失敗會累積：第一次被 lint 擋下之後，最終編輯成功的機率大幅下降，連續失敗越多越難恢復",
+      "numbers": "全集中 1,185/2,294（51.7%）的軌跡至少有一次失敗編輯。任一次編輯最終成功的機率是 90.5%，一次失敗後降到 57.2%。全集共有 810 次成功恢復、555 次恢復失敗；恢復失敗前平均連續失敗 5.59 次，成功恢復前平均 2.2 次",
+      "section": "§5.2、§B.3.3、Figure 20",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "未解題目中最大的失敗類別是實作錯誤或過度特化，其次是編輯恢復失敗；定位失敗只佔少數",
+      "numbers": "Lite 上 248 條未解軌跡由 GPT-4o 依 9 類自動標註，與作者在 15 題驗證集上的人工標註一致率 87%。Incorrect Implementation＋Overly Specific Implementation 佔 52.0%，Failed Edit Recovery 佔 23.4%，其他各類合計不到 25%",
+      "section": "§5.2、§B.4、Figure 8、Table 9",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "錯誤回饋的內容設計會改變 agent 行為：lint 失敗訊息要同時附上錯誤類型、這次編輯若套用後的樣子、原始內容，缺一段就出現對應的壞行為（誤判錯誤、原樣重下、依據過時內容編輯）",
+      "numbers": "定性結論，來自開發過程中逐一拿掉訊息段落的觀察，沒有量化數字",
+      "section": "§A.1（File editor）、Figure 11",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "工具組很小，網頁瀏覽、靜態分析、spectrum-based fault localization、fuzzing 產生測試等工具都還沒加（§E.3）。",
+    "ACI 的設計與案例分析全靠人工，tips 也是看失敗軌跡手寫的，無法規模化；自動化 ACI 設計留待未來（§E.3、附錄 C）。",
+    "範圍只限程式與軟工任務，ACI 原則能不能遷移到其他數位工作領域尚未驗證（§E.3）。",
+    "lint 守門會強迫某些編輯順序，例如要刪一個參數，得先刪掉所有引用；守門與彈性之間要取捨（§A.1）。",
+    "搜尋結果上限 50 筆，超過就逼模型再下一次查詢，多花一次 LM 呼叫的成本（§A.1）。",
+    "Llama 3、DeepSeek Coder 等開源模型在 agent 設定下表現不佳，context 也太小（§4）。",
+    "成本比 RAG 高 8–13 倍；受預算限制，每題上限 $4（§4、§5）。",
+    "前 10–20 輪的解法若不成功，agent 很難利用後續輪次換策略，傾向繼續局部編輯（§B.3.1、§B.3.2）。",
+    "編輯仍是 agent 最吃力的動作，失敗越多越難恢復（§5.2）。",
+    "不確定 demonstration 是否真的教會領域解題，作者認為它主要是教指令格式（附錄 C）。",
+    "next step 模板的其他變體沒有探索（附錄 C）。",
+    "Docker 的命名空間隔離不如硬體虛擬化；也有被惡意資料集注入指示、被用來產生惡意程式碼的風險（§E.1）。"
+  ],
+  "limitations_observed": [
+    "消融的統計力不足：Table 3 全部在 Lite、只用 GPT-4 Turbo、每格只跑一次、一次只改一個因子。B.5 自己量到同一設定 6 次執行落在 17.33%–18.67%，pass@6 高達 32.67%，表示逐題結果波動很大。Table 3 裡 1.7 點（無示範 16.3%）或 2.3 點（No search 15.7%）的差距只相當於 5–7 題，在單次執行下未必顯著。也沒有測交互作用，例如完整歷史搭配較小的視窗是否就不吃虧。",
+    "超參數搜尋接近雜訊等級：37 題 × 5 次，GPT-4 Turbo 的 Last-5（15.1%）與 Full（14.1%）平均每次差不到半題。Claude 3 Opus 則是三組並列 8.1%，作者直接沿用 GPT-4 調出的設定。「ACI 可移植到其他模型」的證據只有 Claude 3 Opus 的 10.46% 這一個點，沒有任何 Claude 專屬的消融。",
+    "論文內部數字多處對不上：B.3.3 說 286 題已解中 113 題（31.5%）有失敗編輯，但 113/286≈39.5%；B.9 說以 submit 結束的題目有 14.3% 被解，Table 13 卻是 266/1589≈16.7%；Table 13 全集「All」列加總，GPT-4 Turbo 為 2,268、Claude 3 Opus 為 2,004，都不等於 2,294，缺的題目沒有說明；§5 寫 HumanEvalFix 88.3%，摘要與 Table 2 是 87.7%，同段還把 Table 1 誤標成 Table 3；Table 4 標示為呈現給 LM 的說明中，scroll_down 寫成「往上 100 行」，scroll_up 寫成「往下」。",
+    "「成功快、失敗慢」的比較統計量不一致：§5.2 拿成功組的中位數（$1.21、12 步）去比失敗組的平均數（$2.52、21 步），會放大差距。「提高預算不太會改善」的推論也只來自 GPT-4 Turbo；Claude 3 Opus 在全集有 1,048/2,004、Lite 有 156/300 是撞到預算自動送出的，這個結論不能外推到 Claude。",
+    "摘要式搜尋會把工具錯誤包裝成「沒有結果」：pylint-5859 的軌跡中，search_dir \"--notes\" 的 observation 同時出現 grep 的用法錯誤與「No matches found」，表示指令沒有把開頭是 - 的字串當字面值。agent 原樣重下同一指令，得到同樣結果，Tip 2 沒有擋住。這違反論文自己的原則 (3)：觀測介面的 bug 被模型讀成關於環境的事實。對 T3 來說，這是「壓縮後的觀測會掩蓋失敗訊號」的具體反例。",
+    "沒有軌跡層級的停滯偵測：sympy-21614 在 3,389 行的 function.py 裡連續 scroll_down 約二十次，直到 exit_cost，期間 observation 沒有新資訊，也沒有任何提示。B.3.3 自己也指出 edit×4、scroll_down×4 這類重複動作通常會繼續連鎖下去。ACI 的守門只在單步（lint、格式錯誤），對「同一動作重複 N 次」「連續幾輪沒有新資訊」這類可以低成本偵測的異常毫無作為；可觀測性停留在事後分析。",
+    "lint 守門的射程很窄：只查 8 個 flake8 錯誤碼，擋得住未定義名稱與縮排，擋不住語意錯誤。django-14411 在 Field 類別上新增了一個渲染流程根本不會呼叫的 label_tag，沒有測試就送出，gold patch 其實是在 widget 覆寫 id_for_label。它能改善的是 23.4% 的「編輯恢復失敗」那一類，對佔 52.0% 的實作錯誤沒有作用。",
+    "最佳值不宜當通用常數：100 行視窗與最後 5 則觀測，是在 2024 年的 GPT-4 Turbo（128k）上調出來的。「整個檔案 12.7%」「完整歷史 15.0%」反映的可能是當時模型處理長 context 的弱點（作者自己也引 Lost in the Middle 作動機）。context 更長、長文能力更強的模型需要重新量測。",
+    "舊觀測摺疊只留下行數（例如 Old output omitted (101 lines)），被摺掉的內容無法回溯，agent 必須重新 open 或 goto 取回。論文只量總分，沒有量摺疊造成的重讀次數、token 或資訊遺失，所以「摺疊有益」的機制究竟是省 context 還是去除過時內容，無法分開。",
+    "失敗分類作為可觀測性方法很弱：驗證集只有 15 題（87% 約等於 13/15），類別是作者看過軌跡之後事後定義的，而且分類器拿 gold patch 當參考。gold patch 在線上監控時拿不到，所以這套方法只能事後用，不能直接搬到執行期。",
+    "對照組混合了兩個因素：RAG 是單次生成（每題 $0.13–$0.25），SWE-agent 有 $4 預算與執行回饋。「6.7 倍提升」同時包含「互動」與「介面」兩個效果，真正把 ACI 效果隔離出來的只有 Shell-only 對照，而它只在 Lite、只用 GPT-4 Turbo 跑過。HumanEvalFix 的 87.7% 同樣是拿互動 agent 去比他人論文中的非互動數字（GPT-4 47.0%）。"
+  ],
+  "framework_role": "T3 的奠基文獻，兩塊都有涉及，但重心在 (a) 感知。(a) 感知／觀測空間：它把「環境回饋怎麼表徵給 LM」定義成一層可以獨立設計、獨立消融的介面 ACI。具體手法包括：搜尋結果摘要並設 50 筆上限、固定視窗的檔案檢視（行號、上下剩餘行數）、編輯後即時回顯、空輸出明示、每輪附狀態列、舊觀測摺疊成一行。Table 3 用消融證明觀測格式本身就能讓成功率差 3–8 個百分點。這是框架中 Observation 節點「觀測要有資訊但精簡」「長觀測要截斷或摘要」最直接的實證來源。(b) 可觀測性：.traj 完整記錄每一輪的想法、動作與觀測，作者在其上做動作 n-gram 轉移分析、失敗編輯與恢復統計，以及 LM 自動失敗分類。這是事後可觀測性的範例，但沒有執行期監控或停滯偵測。它同時為 T4（軌跡的結構與階段：重現→定位→編輯-執行循環→送出）與 T7（失敗模式分類）提供素材。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "只在單步層級成立。lint 在每一次 edit 當下偵測語法類錯誤，偵測到就還原檔案，並把錯誤類型、若套用後的樣子、原始內容回饋給 agent，觸發它修正後重下；格式錯誤的回覆同樣觸發重試，連續 3 次就提前結束。B.3.3 量了這條路徑的效果：一次失敗後最終成功的機率從 90.5% 降到 57.2%，全集有 810 次成功恢復、555 次失敗。軌跡層級的異常（同一動作重複、同一失敗指令原樣重下）則完全沒有偵測，sympy-21614 連續 scroll 到預算耗盡就是例子。"
+    },
+    {
+      "edge": "E2",
+      "how": "只有一個具體機制：agent 在格式錯誤之後改出合法回覆，history_processor 就把先前格式錯誤那幾輪從訊息歷史中刪除（§3 說只保留第一則錯誤訊息），等於用修正結果改寫送進模型的對話狀態。另外，被 lint 擋下的編輯不寫入檔案，環境狀態維持原樣。論文沒有量化這個去除雜訊的步驟本身的效果。"
+    },
+    {
+      "edge": "E5",
+      "how": "僅限離線分析。論文把軌跡中被 lint 拒絕的編輯與後續恢復紀錄當成評估資料：計算失敗編輯率、連續失敗次數對恢復機率的曲線（Figure 20），並在失敗分類中獨立列出 Failed Edit Recovery 一類（23.4%）。這些紀錄沒有回流改變 agent 本身，只用於作者的評估與分析。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Anthropic 官方工程文章寫明，跑 SWE-bench Verified 時以 SWE-Agent 框架作為其 agent 程式碼的基礎（2025-01-06，https://www.anthropic.com/engineering/swe-bench-sonnet）。這屬於模型廠商的評估用途，不是產品部署。",
+      "旁證，不計為採納：Anthropic 的「Building effective agents」（2024-12-19，https://www.anthropic.com/engineering/building-effective-agents）使用 agent-computer interface（ACI）一詞，並建議投入與 HCI 相當的心力設計 ACI；但全文沒有引用或連結本篇，無法確認是直接採納本篇。"
+    ],
+    "assessment": "有可查證的業界使用，但屬於評估 harness 用途（Anthropic 以 SWE-Agent 為基礎跑 SWE-bench）。把 SWE-agent 或其 ACI 部署進商用產品，未見官方證據。OpenAI 的 SWE-bench Verified 介紹頁無法開啟確認，不列入。ACI 這個概念在業界官方指引中出現，屬於概念擴散，不等同於採納本篇系統。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/SWE-agent/SWE-agent（論文寫 swe-agent.com）",
+    "data": "公開。SWE-bench（MIT）與 HumanEvalFix（MIT）都是公開資料集（Table 12）；作者聲明所有推論與評估產物都已開源，包括軌跡、patch、評估執行紀錄與分析 notebook（§E.2）。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "ACI 的奠基文獻，第一篇用消融量化觀測格式（搜尋摘要、檢視視窗行數、舊觀測摺疊、編輯回顯與 lint 回饋）對 agent 成功率影響的工作，是 T3 感知子領域的必讀。",
+  "related": [
+    "2310.06770",
+    "2306.14898",
+    "2210.03629",
+    "2307.03172",
+    "2308.07124",
+    "2303.11366",
+    "2404.07972",
+    "2402.01030"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 4,
+    "total": 8
+  }
+}

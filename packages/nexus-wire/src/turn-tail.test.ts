@@ -2,13 +2,13 @@ import { describe, expect, it } from 'vitest';
 
 import {
   appendDecision,
-  appendHumanTurn,
   emptyConversation,
   prependEntries,
   reduceAll,
   reduceConversation,
 } from './conversation.js';
 import type { ConversationState } from './conversation.js';
+import { INBOX } from './inbox.js';
 import type { Event } from './protocol.js';
 
 /**
@@ -105,10 +105,17 @@ function walk(steps: readonly Step[], from = emptyConversation()): ConversationS
 
 const events = (list: readonly Event[]): Step[] =>
   list.map((event) => (state: ConversationState) => reduceConversation(state, event));
-const human =
-  (text: string): Step =>
-  (state) =>
-    appendHumanTurn(state, text);
+/**
+ * 人說一句話：線上是 `inbox` 帶 `claimed` 的那一顆，接著才是 root 的 `running`。**frame 在這裡當場建**，理由同
+ * {@link reasoned}：拖到走的時候才建，seq 會排到後面那串之後，被當成退回去的丟掉。
+ */
+const human = (text: string): Step => {
+  const claimed = frame('custom', [], {
+    name: INBOX,
+    payload: { items: [], claimed: { id: `q-${seq}`, text } },
+  });
+  return (state) => reduceConversation(state, claimed);
+};
 
 /** 標了收尾的那幾則的 key。 */
 function tailIds(state: ConversationState): string[] {
@@ -283,5 +290,52 @@ describe('往前翻頁（prependEntries）', () => {
     const live = walk([human('跑。'), ...events([running(), ...reply('now', '現在這輪。')])]);
     const done = walk(events([completed()]), prependEntries(live, earlier));
     expect(tailIds(done)).toEqual(['old', 'now']);
+  });
+});
+
+describe('失敗收尾（turnFailed，#1581）', () => {
+  const failed = () =>
+    frame('lifecycle', [], { event: 'failed', graph_name: 'root', error: '模型連不上' });
+
+  /** 收尾那幾則：key、有沒有標失敗。 */
+  function tails(state: ConversationState) {
+    return state.entries.flatMap((entry) =>
+      entry.kind === 'ai' && entry.turnTail === true
+        ? [{ id: entry.id, failed: entry.turnFailed === true }]
+        : [],
+    );
+  }
+
+  /** 四輪：完成、失敗、人按停止、再完成。frame 當場建，理由見 {@link reasoned}。 */
+  function fourTurns(): Event[] {
+    return [
+      running(),
+      ...reply('ok', '第一輪完成。'),
+      completed(),
+      running(),
+      ...reply('bad', '講到一半就失敗了。'),
+      failed(),
+      running(),
+      ...reply('cut', '被停下來', ROOT, false),
+      stopped(),
+      running(),
+      ...reply('again', '失敗之後再完成一輪。'),
+      completed(),
+    ];
+  }
+
+  const expected = [
+    { id: 'ok', failed: false },
+    { id: 'bad', failed: true },
+    { id: 'cut', failed: false },
+    { id: 'again', failed: false },
+  ];
+
+  it('即時逐顆走：只有失敗收尾那則標，完成與人按停止的不標；後面的輪收尾不改掉前面那一格', () => {
+    expect(tails(walk(events(fourTurns())))).toEqual(expected);
+  });
+
+  it('歷史一次折完（reduceAll）：同一組標法', () => {
+    expect(tails(reduceAll(emptyConversation(), fourTurns()))).toEqual(expected);
   });
 });

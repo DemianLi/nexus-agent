@@ -1,8 +1,18 @@
 // @vitest-environment node
+import { EXTERNAL_MCP_CONTENT_NOTICE } from '../../../../packages/nexus-core/src/untrusted-content';
 import type { ToolEntry } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { OUTPUT_MAX_LINES, showsInput, toolOutput } from '@/lib/tool-output';
+import {
+  MCP_NOTICE,
+  OUTPUT_MAX_CHARS,
+  clipMiddle,
+  OUTPUT_MAX_LINES,
+  omittedLabel,
+  outputOf,
+  showsInput,
+  toolOutput,
+} from '@/lib/tool-output';
 
 /** #601：通用卡的結果畫哪一段、哪些工具不畫參數。 */
 
@@ -21,12 +31,66 @@ function entry(overrides: Partial<ToolEntry>): ToolEntry {
 const lines = (count: number) => Array.from({ length: count }, (_, index) => `l${index + 1}`);
 
 describe('showsInput', () => {
-  it.each(['ls', 'read_file', 'glob', 'grep', 'write_file', 'edit_file'])('%s 只畫結果', (name) => {
-    expect(showsInput(name)).toBe(false);
-  });
+  it.each(['ls', 'read_file', 'glob', 'grep', 'write_file', 'edit_file', 'delete'])(
+    '%s 只畫結果',
+    (name) => {
+      expect(showsInput(name)).toBe(false);
+    },
+  );
 
   it.each(['echo', 'run_javascript', 'task', 'mcp__x__y'])('%s 參數也畫', (name) => {
     expect(showsInput(name)).toBe(true);
+  });
+});
+
+describe('MCP 的外部內容前綴（#1930）', () => {
+  const NOTICE = `${EXTERNAL_MCP_CONTENT_NOTICE}\n\n`;
+  const shown = (overrides: Partial<ToolEntry>) => toolOutput(entry(overrides))?.head;
+
+  it('字句跟 core 的常數一樣', () => {
+    expect(MCP_NOTICE).toBe(EXTERNAL_MCP_CONTENT_NOTICE);
+  });
+
+  it('工具結果：前綴不畫，本文完整', () => {
+    expect(shown({ name: 'mcp__srv__note', text: `${NOTICE}第一行\n第二行` })).toBe(
+      '第一行\n第二行',
+    );
+  });
+
+  it.each(['read_mcp_resource', 'list_mcp_resources', 'list_mcp_resource_templates'])(
+    '%s：出處行留著，前綴不畫',
+    (name) => {
+      expect(shown({ name, text: `MCP server: srv\n\n${NOTICE}{"a":1}` })).toBe(
+        'MCP server: srv\n\n{"a":1}',
+      );
+    },
+  );
+
+  it('只拿掉標記加上去的那一次：本文開頭或中間有同一句話都留著', () => {
+    expect(shown({ name: 'mcp__srv__note', text: `${NOTICE}${NOTICE}本文` })).toBe(`${NOTICE}本文`);
+    expect(shown({ name: 'mcp__srv__note', text: `本文\n\n${NOTICE}後面` })).toBe(
+      `本文\n\n${NOTICE}後面`,
+    );
+    expect(
+      shown({ name: 'read_mcp_resource', text: `MCP server: srv\n\n${NOTICE}${NOTICE}{}` }),
+    ).toBe(`MCP server: srv\n\n${NOTICE}{}`);
+  });
+
+  it('前綴不在標記的位置就不碰', () => {
+    expect(shown({ name: 'mcp__srv__note', text: `前面\n${NOTICE}本文` })).toBe(
+      `前面\n${NOTICE}本文`,
+    );
+    expect(shown({ name: 'read_mcp_resource', text: `${NOTICE}{}` })).toBe(`${NOTICE}{}`);
+  });
+
+  it.each(['read_file', 'echo', 'task', 'x_mcp__y'])('非 MCP 的 %s 照原樣', (name) => {
+    expect(shown({ name, text: `${NOTICE}本文` })).toBe(`${NOTICE}本文`);
+  });
+
+  it('失敗的結果沒有標過，照原樣', () => {
+    expect(shown({ name: 'mcp__srv__note', status: 'failed', text: `${NOTICE}本文` })).toBe(
+      `${NOTICE}本文`,
+    );
   });
 });
 
@@ -45,6 +109,7 @@ describe('toolOutput', () => {
       head: 'boom',
       tail: '',
       omitted: 0,
+      omittedChars: 0,
     });
   });
 
@@ -53,7 +118,12 @@ describe('toolOutput', () => {
     ['有結尾換行', '\n'],
   ])(`剛好 ${OUTPUT_MAX_LINES} 行不切（%s）`, (_, end) => {
     const text = lines(200).join('\n') + end;
-    expect(toolOutput(entry({ text }))).toEqual({ head: text, tail: '', omitted: 0 });
+    expect(toolOutput(entry({ text }))).toEqual({
+      head: text,
+      tail: '',
+      omitted: 0,
+      omittedChars: 0,
+    });
   });
 
   it.each([
@@ -65,6 +135,121 @@ describe('toolOutput', () => {
       head: lines(100).join('\n'),
       tail: lines(201).slice(101).join('\n'),
       omitted: 1,
+      omittedChars: 0,
     });
+  });
+});
+
+/** #950：行數沒超過、一行超長時，畫面上還要有字元上限。 */
+const LONE_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
+describe('outputOf 的字元上限', () => {
+  const half = Math.ceil(OUTPUT_MAX_CHARS / 2);
+
+  it('剛好等於上限不切', () => {
+    const text = 'a'.repeat(OUTPUT_MAX_CHARS);
+    expect(outputOf(text)).toEqual({ head: text, tail: '', omitted: 0, omittedChars: 0 });
+  });
+
+  it('多一個字就切成頭尾各半，中間記下沒畫幾個字', () => {
+    const text = `${'h'.repeat(half)}${'m'.repeat(3)}${'t'.repeat(OUTPUT_MAX_CHARS - half + 1)}`;
+    // 總長 = 上限 + 4：頭取前 half、尾取後 (上限 - half)，被丟掉的是中間 3 個加尾多出來的 1 個。
+    expect(text.length).toBe(OUTPUT_MAX_CHARS + 4);
+    const output = outputOf(text);
+    expect(output.head).toBe('h'.repeat(half));
+    expect(output.tail).toBe('t'.repeat(OUTPUT_MAX_CHARS - half));
+    expect(output.omitted).toBe(0);
+    expect(output.omittedChars).toBe(4);
+  });
+
+  it('夾大量空白的一整行也切（#950 的最壞形狀）', () => {
+    const word = '字'.repeat(127);
+    const text = Array.from({ length: 4300 }, () => `${word} `).join('');
+    const output = outputOf(text);
+    expect(output.head.length + output.tail.length).toBe(OUTPUT_MAX_CHARS);
+    expect(output.omittedChars).toBe(text.length - OUTPUT_MAX_CHARS);
+  });
+
+  it('行數也超過時，頭尾各自超過各一半的那一邊被截在行的中間', () => {
+    const big = 'x'.repeat(OUTPUT_MAX_CHARS);
+    const all = [big, ...lines(OUTPUT_MAX_LINES + 48), big];
+    const output = outputOf(all.join('\n'));
+    const headFull = all.slice(0, 100).join('\n');
+    const tailFull = all.slice(all.length - 100).join('\n');
+    expect(output.omitted).toBe(50);
+    expect(output.head).toBe('x'.repeat(half));
+    expect(output.tail).toBe(tailFull.slice(tailFull.length - (OUTPUT_MAX_CHARS - half)));
+    expect(output.omittedChars).toBe(
+      headFull.length - half + (tailFull.length - (OUTPUT_MAX_CHARS - half)),
+    );
+  });
+
+  it('只有一邊超過它那一半時，另一邊照原樣', () => {
+    const all = [...lines(OUTPUT_MAX_LINES + 49), 'y'.repeat(OUTPUT_MAX_CHARS)];
+    const output = outputOf(all.join('\n'));
+    const tailFull = all.slice(all.length - 100).join('\n');
+    expect(output.omitted).toBe(50);
+    expect(output.head).toBe(lines(100).join('\n'));
+    expect(output.tail).toBe('y'.repeat(OUTPUT_MAX_CHARS - half));
+    expect(output.omittedChars).toBe(tailFull.length - (OUTPUT_MAX_CHARS - half));
+  });
+
+  it('不把代理對（emoji）從中間剖開', () => {
+    // 前後各墊一個半形字，讓兩個切點都剛好落在代理對的中間。
+    const text = `a${'😀'.repeat(OUTPUT_MAX_CHARS)}b`;
+    const output = outputOf(text);
+    for (const side of [output.head, output.tail]) {
+      expect(side).not.toMatch(LONE_SURROGATE);
+    }
+    expect(output.head.length + output.tail.length + output.omittedChars).toBe(text.length);
+  });
+});
+
+describe('omittedLabel', () => {
+  const base = { head: '', tail: '' };
+  it('只有行', () => {
+    expect(omittedLabel({ ...base, omitted: 4800, omittedChars: 0 })).toBe('⋯ 中間 4800 行沒畫 ⋯');
+  });
+  it('只有字', () => {
+    expect(omittedLabel({ ...base, omitted: 0, omittedChars: 527003 })).toBe(
+      '⋯ 中間 527003 字沒畫 ⋯',
+    );
+  });
+  it('行跟字都有', () => {
+    expect(omittedLabel({ ...base, omitted: 3, omittedChars: 20 })).toBe(
+      '⋯ 中間 3 行與 20 字沒畫 ⋯',
+    );
+  });
+  it('都沒有時沒有說明', () => {
+    expect(omittedLabel({ ...base, omitted: 0, omittedChars: 0 })).toBeUndefined();
+  });
+});
+
+/** #958：展開後的參數整段一刀切成頭尾各半。 */
+describe('clipMiddle', () => {
+  it('沒超過或剛好等於上限：原文，不切', () => {
+    expect(clipMiddle('abc', 4)).toEqual({ head: 'abc', tail: '', dropped: 0 });
+    expect(clipMiddle('abcd', 4)).toEqual({ head: 'abcd', tail: '', dropped: 0 });
+  });
+
+  it('多一個字就切：頭取前一半（奇數上限頭多一個）、尾取後面，中間記下丟了幾個', () => {
+    expect(clipMiddle('0123456789', 5)).toEqual({ head: '012', tail: '89', dropped: 5 });
+    expect(clipMiddle('0123456', 6)).toEqual({ head: '012', tail: '456', dropped: 1 });
+  });
+
+  it('頭尾加起來剛好是上限，丟掉的加頭尾剛好是原長', () => {
+    const text = 'x'.repeat(1000) + 'y'.repeat(1000);
+    const { head, tail, dropped } = clipMiddle(text, 100);
+    expect(head.length + tail.length).toBe(100);
+    expect(head.length + tail.length + dropped).toBe(text.length);
+  });
+
+  it('不把代理對（emoji）從中間剖開', () => {
+    const text = `a${'😀'.repeat(50)}b`;
+    for (const max of [10, 11, 12, 13]) {
+      const { head, tail } = clipMiddle(text, max);
+      expect(head).not.toMatch(LONE_SURROGATE);
+      expect(tail).not.toMatch(LONE_SURROGATE);
+    }
   });
 });

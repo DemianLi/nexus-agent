@@ -1,0 +1,622 @@
+/**
+ * 發版產物的 SBOM：CycloneDX JSON（[#1545](https://github.com/DemianLi/nexus-agent/issues/1545) 步驟 4，Q2 (a)）。
+ *
+ * 從 `pnpm deploy --prod` 的閉包產生：每一顆的 name、version、license、lockfile integrity。資料只取自閉包裡已安裝的 manifest
+ * 與閉包自己的 lockfile（`node_modules/.pnpm/lock.yaml`，`pnpm deploy` 寫的，跟著 tarball 出貨），產生時不連網。
+ *
+ * **偏離 dsh，理由 2（產品需求超出 dsh 的射程）。** dsh 沒有 SBOM（`687f282e` 的整棵樹 `grep -rliE 'sbom|cyclonedx'`，排除 `node_modules`，0 個檔），它的
+ * `THIRD_PARTY_NOTICES.md` 刻意只列直接相依。nexus 的交付物是完整閉包，部署在完全內網、多人共用的主機上，客戶的資安稽核要的是
+ * 閉包裡每一顆的清冊，管理者拿去對機關的弱點資料庫（卡上的失敗情境）。補的是這一份清冊，格式照 CycloneDX 1.6。
+ *
+ * 兩種列閉包的方法刻意分開（#1545 驗收 6）：
+ * - 產生用 {@link walkClosure}：從產物根沿 `dependencies`／`optionalDependencies`／`peerDependencies` 走相依圖，另外加上
+ *   只寫在 `peerDependenciesMeta` 的選用 peer（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
+ * - 核對用 {@link listInstalledPackages}：直接列 `node_modules/.pnpm` 底下實際裝了的套件目錄。
+ *
+ * 產生那一支漏了哪一段（例如拿掉 `optionalDependencies`，平台二進位套件就會漏），核對那一支照樣列得到，`sbomProblems` 就會紅。
+ *
+ * **沙箱 spawner**（#1946）：Linux 的產物帶一支 Rust 執行檔，它不在 npm 閉包裡，另外列四種元件：執行檔本身
+ * （`pkg:generic/nexus-sandbox-spawner`，雜湊是執行檔的 SHA-256）、Rust 標準函式庫（`pkg:generic/rust-std`）、工具鏈自帶的
+ * C 函式庫（`pkg:generic/musl`、`pkg:generic/llvm-libunwind`）、連進執行檔的 crate（`pkg:cargo/<名>@<版本>`，雜湊是 `Cargo.lock`
+ * 的 checksum）。crate 產生用 `spawner.ts` 的 `runtimeCrates`（crate 表加 `Cargo.lock`），核對用產物裡的授權目錄（`bundledCrates`，
+ * CI 的 `cargo tree` 收的），同樣是兩種獨立的列法。
+ *
+ * **我們自己的套件**（`@nexus/*`，含 `vendor/*`）：lockfile 不記 workspace 套件的 integrity，所以不帶 `hashes`。版本與 tarball
+ * 一起由 `.sha256` 釘住。`apps/*`、`packages/*` 的 manifest 沒有 `license` 欄位，授權取 repo 根 `LICENSE`（MIT，見
+ * {@link repoLicense}）。`vendor/*` 自己宣告 MIT，照它的 manifest。
+ *
+ * @module
+ */
+
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
+import { join } from 'node:path';
+
+import parseSpdx from 'spdx-expression-parse';
+
+import { isPermissive, isReviewedNonPermissive } from '../gen-third-party-notices.js';
+import { ROOT } from '../workspace-packages.js';
+import { SBOM_FILE, installedPackage } from './payload.js';
+import {
+  RUST_STD_COPYRIGHT,
+  SPAWNER_LICENSES_DIR,
+  SPAWNER_LOCK,
+  SPAWNER_NATIVE_LIBS,
+  SPAWNER_PATH,
+  bundledCrates,
+  lockedCrates,
+  runtimeCrates,
+  rustChannel,
+} from './spawner.js';
+
+/** `yaml` 是 apps/harness 的相依，不在根 `node_modules`：從 harness 的位置解（同 `payload.ts`）。 */
+const parseYaml = (
+  createRequire(join(ROOT, 'apps/harness/package.json'))('yaml') as {
+    parse: (text: string) => unknown;
+  }
+).parse;
+
+/** 閉包自己的 lockfile：`pnpm deploy` 寫在虛擬庫裡，跟著產物出貨。 */
+export const CLOSURE_LOCKFILE = 'node_modules/.pnpm/lock.yaml';
+
+/** 我們自己的套件：名字在這個 scope 底下。 */
+const FIRST_PARTY_SCOPE = '@nexus/';
+
+/**
+ * 產生 SBOM 時沿這幾段走相依圖。平台二進位套件只掛在 `optionalDependencies`。`peerDependenciesMeta` 也走：只在那裡宣告、
+ * `peerDependencies` 沒列的選用 peer，pnpm 照樣裝進閉包並連到宣告者底下（sharp 的 `@types/node`，workspace 有那一顆時就進正式閉包）。
+ */
+const GRAPH_SECTIONS = [
+  'dependencies',
+  'optionalDependencies',
+  'peerDependencies',
+  'peerDependenciesMeta',
+] as const;
+
+interface Manifest {
+  readonly name: string;
+  readonly version: string;
+  readonly license?: unknown;
+  readonly dependencies?: Readonly<Record<string, string>>;
+  readonly optionalDependencies?: Readonly<Record<string, string>>;
+  readonly peerDependencies?: Readonly<Record<string, string>>;
+  readonly peerDependenciesMeta?: Readonly<Record<string, unknown>>;
+}
+
+/** 閉包裡的一顆套件。 */
+export interface ClosurePackage {
+  readonly name: string;
+  readonly version: string;
+  readonly license?: unknown;
+}
+
+function readManifest(directory: string): Manifest {
+  return JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8')) as Manifest;
+}
+
+/**
+ * 產生用：從產物根沿相依圖走，回閉包裡每一顆（含根）。缺席的相依略過；缺不缺由 `walkInstalledGraph` 管。
+ *
+ * @param root - 產物根。
+ * @returns 依走到的順序，同一個目錄只回一次。
+ */
+export function walkClosure(root: string): ClosurePackage[] {
+  const seen = new Set<string>();
+  const packages: ClosurePackage[] = [];
+  const queue = [root];
+  for (const directory of queue) {
+    const canonical = realpathSync(directory);
+    if (seen.has(canonical)) continue;
+    seen.add(canonical);
+    const manifest = readManifest(canonical);
+    packages.push({ name: manifest.name, version: manifest.version, license: manifest.license });
+    for (const section of GRAPH_SECTIONS) {
+      for (const name of Object.keys(manifest[section] ?? {})) {
+        const dependency = installedPackage(canonical, name);
+        if (dependency !== undefined) queue.push(dependency);
+      }
+    }
+  }
+  return packages;
+}
+
+/**
+ * 核對用：列 `node_modules/.pnpm/<項目>/node_modules` 底下**不是**符號連結的套件目錄（那就是這個項目自己裝的套件；其餘是指向
+ * 相依的連結），再加上產物根。不走相依圖，所以跟 {@link walkClosure} 是兩種獨立的列法。
+ *
+ * @param root - 產物根。
+ * @returns `name@version` 的集合。
+ */
+export function listInstalledPackages(root: string): Set<string> {
+  const rootManifest = readManifest(root);
+  const ids = new Set([`${rootManifest.name}@${rootManifest.version}`]);
+  const store = join(root, 'node_modules/.pnpm');
+  if (!existsSync(store)) return ids;
+  for (const entry of readdirSync(store, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === 'node_modules') continue;
+    const modules = join(store, entry.name, 'node_modules');
+    if (!existsSync(modules)) continue;
+    for (const first of readdirSync(modules)) {
+      if (first.startsWith('.')) continue;
+      const names = first.startsWith('@')
+        ? readdirSync(join(modules, first)).map((second) => `${first}/${second}`)
+        : [first];
+      for (const name of names) {
+        const directory = join(modules, name);
+        if (lstatSync(directory).isSymbolicLink()) continue;
+        const manifest = readManifest(directory);
+        ids.add(`${manifest.name}@${manifest.version}`);
+      }
+    }
+  }
+  return ids;
+}
+
+/**
+ * lockfile `packages:` 區段裡每一顆的 integrity，鍵是 `name@version`。
+ *
+ * @param text - `lock.yaml`（或 `pnpm-lock.yaml`）的原文。
+ */
+export function lockfileIntegrities(text: string): Map<string, string> {
+  const document = parseYaml(text) as {
+    packages?: Record<string, { resolution?: { integrity?: unknown } }>;
+  } | null;
+  const integrities = new Map<string, string>();
+  for (const [key, value] of Object.entries(document?.packages ?? {})) {
+    const integrity = value.resolution?.integrity;
+    if (typeof integrity === 'string') integrities.set(key, integrity);
+  }
+  return integrities;
+}
+
+const HASH_ALGORITHMS: Readonly<Record<string, string>> = {
+  sha1: 'SHA-1',
+  sha256: 'SHA-256',
+  sha384: 'SHA-384',
+  sha512: 'SHA-512',
+};
+
+/** CycloneDX 的一筆雜湊。 */
+export interface CycloneDxHash {
+  readonly alg: string;
+  readonly content: string;
+}
+
+/**
+ * SRI 字串（`sha512-<base64>`，可能以空白分隔多筆）轉成 CycloneDX 的雜湊（十六進位）。
+ *
+ * @throws 認不得的演算法或格式。
+ */
+export function integrityToHashes(integrity: string): CycloneDxHash[] {
+  return integrity
+    .trim()
+    .split(/\s+/u)
+    .map((token) => {
+      const match = /^([a-z0-9]+)-([A-Za-z0-9+/]+={0,2})$/u.exec(token);
+      const alg = match === null ? undefined : HASH_ALGORITHMS[match[1] ?? ''];
+      if (match === null || alg === undefined) {
+        throw new Error(`認不得的 integrity：${token}`);
+      }
+      return { alg, content: Buffer.from(match[2] ?? '', 'base64').toString('hex') };
+    });
+}
+
+/** CycloneDX 的授權欄位：單一 SPDX id 用 `license.id`，運算式用 `expression`。 */
+export type CycloneDxLicense =
+  { license: { id: string } } | { license: { name: string } } | { expression: string };
+
+/**
+ * manifest 的 `license` 轉成 CycloneDX 的授權。
+ *
+ * @throws 不是字串、或不是合法的 SPDX 運算式（不猜；要補就在這裡加一條並寫理由）。
+ */
+export function cycloneDxLicense(license: unknown, name: string): CycloneDxLicense {
+  if (typeof license !== 'string' || license.trim() === '') {
+    throw new Error(`SBOM：${name} 的 manifest 沒有字串 license`);
+  }
+  let parsed: ReturnType<typeof parseSpdx>;
+  try {
+    parsed = parseSpdx(license);
+  } catch {
+    throw new Error(`SBOM：${name} 的 license 不是合法的 SPDX 運算式：${JSON.stringify(license)}`);
+  }
+  if ('license' in parsed && parsed.exception === undefined && parsed.plus !== true) {
+    // CycloneDX 的 `license.id` 只收 SPDX 清單上的 id；`LicenseRef-*`／`DocumentRef-*` 不在清單上，放 `name`。
+    return /^(?:LicenseRef|DocumentRef)-/u.test(parsed.license)
+      ? { license: { name: parsed.license } }
+      : { license: { id: parsed.license } };
+  }
+  return { expression: license };
+}
+
+/**
+ * repo 根 `LICENSE` 的 SPDX id：今天只認得 MIT 的標頭。換了授權要先在這裡加一條，不讓 SBOM 靜靜寫錯。
+ *
+ * @param text - `LICENSE` 原文。
+ * @throws 認不得的標頭。
+ */
+export function repoLicense(text: string): string {
+  if (text.split('\n', 1)[0]?.trim() === 'MIT License') return 'MIT';
+  throw new Error('SBOM：認不得 repo 根 LICENSE 的授權（今天只認得 MIT License 標頭）');
+}
+
+/** `name@version` 的 npm purl（scope 的 `@` 編成 `%40`）。 */
+export function npmPurl(name: string, version: string): string {
+  return `pkg:npm/${name.replace(/^@/u, '%40')}@${version}`;
+}
+
+/** CycloneDX 的一個元件。 */
+export interface CycloneDxComponent {
+  readonly type: 'application' | 'library';
+  readonly 'bom-ref': string;
+  readonly group?: string;
+  readonly name: string;
+  readonly version: string;
+  readonly purl: string;
+  readonly licenses: readonly CycloneDxLicense[];
+  readonly hashes?: readonly CycloneDxHash[];
+}
+
+/** 產生的 SBOM。 */
+export interface CycloneDxBom {
+  readonly bomFormat: 'CycloneDX';
+  readonly specVersion: '1.6';
+  readonly version: 1;
+  readonly metadata: { readonly component: CycloneDxComponent };
+  readonly components: readonly CycloneDxComponent[];
+}
+
+function component(
+  type: CycloneDxComponent['type'],
+  pkg: ClosurePackage,
+  integrities: ReadonlyMap<string, string>,
+  firstPartyLicense: string,
+): CycloneDxComponent {
+  const id = `${pkg.name}@${pkg.version}`;
+  const slash = pkg.name.startsWith('@') ? pkg.name.indexOf('/') : -1;
+  const purl = npmPurl(pkg.name, pkg.version);
+  const firstParty = pkg.name.startsWith(FIRST_PARTY_SCOPE);
+  const base = {
+    type,
+    'bom-ref': purl,
+    ...(slash > 0 ? { group: pkg.name.slice(0, slash) } : {}),
+    name: slash > 0 ? pkg.name.slice(slash + 1) : pkg.name,
+    version: pkg.version,
+    purl,
+    licenses: [
+      cycloneDxLicense(
+        firstParty && pkg.license === undefined ? firstPartyLicense : pkg.license,
+        id,
+      ),
+    ],
+  };
+  if (firstParty) return base;
+  const integrity = integrities.get(id);
+  if (integrity === undefined) {
+    throw new Error(`SBOM：${id} 在閉包的 lockfile 裡查不到 integrity`);
+  }
+  return { ...base, hashes: integrityToHashes(integrity) };
+}
+
+/** spawner 執行檔與標準函式庫的 purl 名（不含版本）。 */
+const SPAWNER_PURL = 'pkg:generic/nexus-sandbox-spawner';
+const RUST_STD_PURL = 'pkg:generic/rust-std';
+
+/** 標準函式庫的授權（工具鏈的 `COPYRIGHT-library.html`）。 */
+const RUST_STD_LICENSE = 'MIT OR Apache-2.0';
+
+/**
+ * 產物裡有 spawner 時，它與標準函式庫、C 函式庫、連進去的 crate 的元件；沒有就是空的。
+ *
+ * @param root - 產物根。
+ * @param lockText - spawner 的 `Cargo.lock` 全文。
+ * @param channel - 標準函式庫的版本。
+ * @param firstPartyLicense - 執行檔本身的授權。
+ * @throws `Cargo.lock` 沒有 spawner 自己、有讀不出 name 或 version 的 `[[package]]`，或連進去的 crate 沒有 checksum。
+ */
+function spawnerComponents(
+  root: string,
+  lockText: string,
+  channel: string,
+  firstPartyLicense: string,
+): CycloneDxComponent[] {
+  const binary = join(root, SPAWNER_PATH);
+  if (!existsSync(binary)) return [];
+  const self = lockedCrates(lockText).find((entry) => entry.name === 'nexus-sandbox-spawner');
+  if (self === undefined) throw new Error(`SBOM：${SPAWNER_LOCK} 沒有 nexus-sandbox-spawner`);
+  const selfPurl = `${SPAWNER_PURL}@${self.version}`;
+  const stdPurl = `${RUST_STD_PURL}@${channel}`;
+  return [
+    {
+      type: 'application',
+      'bom-ref': selfPurl,
+      name: 'nexus-sandbox-spawner',
+      version: self.version,
+      purl: selfPurl,
+      licenses: [cycloneDxLicense(firstPartyLicense, 'nexus-sandbox-spawner')],
+      hashes: [
+        {
+          alg: 'SHA-256',
+          content: createHash('sha256').update(readFileSync(binary)).digest('hex'),
+        },
+      ],
+    },
+    {
+      type: 'library',
+      'bom-ref': stdPurl,
+      name: 'rust-std',
+      version: channel,
+      purl: stdPurl,
+      licenses: [cycloneDxLicense(RUST_STD_LICENSE, 'rust-std')],
+    },
+    ...SPAWNER_NATIVE_LIBS.map((lib): CycloneDxComponent => {
+      const purl = `pkg:generic/${lib.name}@${lib.version}`;
+      return {
+        type: 'library',
+        'bom-ref': purl,
+        name: lib.name,
+        version: lib.version,
+        purl,
+        licenses: [cycloneDxLicense(lib.license, purl)],
+      };
+    }),
+    ...runtimeCrates(lockText).map((crate): CycloneDxComponent => {
+      const purl = `pkg:cargo/${crate.name}@${crate.version}`;
+      if (crate.checksum === undefined) {
+        throw new Error(`SBOM：${purl} 在 ${SPAWNER_LOCK} 裡沒有 checksum`);
+      }
+      return {
+        type: 'library',
+        'bom-ref': purl,
+        name: crate.name,
+        version: crate.version,
+        purl,
+        licenses: [cycloneDxLicense(crate.license, purl)],
+        hashes: [{ alg: 'SHA-256', content: crate.checksum }],
+      };
+    }),
+  ];
+}
+
+/**
+ * 對產物根產生 SBOM。根套件放 `metadata.component`，其餘照 purl 排序放 `components`；不放 `serialNumber`、時間戳，同一個閉包
+ * 產兩次位元組相同。
+ *
+ * @param root - 產物根（`pnpm deploy` 的暫存樹）。
+ * @param options - `lockfile`：閉包 lockfile 的原文（省略即讀 {@link CLOSURE_LOCKFILE}）；`firstPartyLicense`：我們自己的
+ *   套件沒宣告 license 時用的 SPDX id（省略即讀 repo 根 `LICENSE`）；`spawnerLock`、`rustChannel`：spawner 的 `Cargo.lock` 原文與
+ *   標準函式庫的版本（省略即讀 repo 的）。
+ * @throws 第三方套件查不到 integrity、或沒有合法的 license；產物帶 spawner 時，`Cargo.lock` 或 `rust-toolchain.toml`
+ *   讀不出需要的欄位。
+ */
+export function buildSbom(
+  root: string,
+  options: {
+    lockfile?: string;
+    firstPartyLicense?: string;
+    spawnerLock?: string;
+    rustChannel?: string;
+  } = {},
+): CycloneDxBom {
+  const integrities = lockfileIntegrities(
+    options.lockfile ?? readFileSync(join(root, CLOSURE_LOCKFILE), 'utf8'),
+  );
+  const firstPartyLicense =
+    options.firstPartyLicense ?? repoLicense(readFileSync(join(ROOT, 'LICENSE'), 'utf8'));
+  const [rootPackage, ...rest] = walkClosure(root);
+  if (rootPackage === undefined) throw new Error('SBOM：產物根讀不到 package.json');
+  // 同一個 name@version 可能裝成幾個 peer 變體目錄（`walkClosure` 依目錄回）：purl 與 integrity 都一樣，只收一份，
+  // `bom-ref`（＝purl）才唯一。
+  const byPurl = new Map<string, CycloneDxComponent>();
+  for (const pkg of rest) {
+    const entry = component('library', pkg, integrities, firstPartyLicense);
+    if (!byPurl.has(entry.purl)) byPurl.set(entry.purl, entry);
+  }
+  if (existsSync(join(root, SPAWNER_PATH))) {
+    for (const entry of spawnerComponents(
+      root,
+      options.spawnerLock ?? readFileSync(join(ROOT, SPAWNER_LOCK), 'utf8'),
+      options.rustChannel ?? rustChannel(),
+      firstPartyLicense,
+    )) {
+      byPurl.set(entry.purl, entry);
+    }
+  }
+  const components = [...byPurl.values()].sort((a, b) =>
+    a.purl < b.purl ? -1 : a.purl > b.purl ? 1 : 0,
+  );
+  return {
+    bomFormat: 'CycloneDX',
+    specVersion: '1.6',
+    version: 1,
+    metadata: {
+      component: component('application', rootPackage, integrities, firstPartyLicense),
+    },
+    components,
+  };
+}
+
+/** 寫檔的格式：兩格縮排、結尾換行。 */
+export function renderSbom(bom: CycloneDxBom): string {
+  return `${JSON.stringify(bom, null, 2)}\n`;
+}
+
+/** SBOM 元件的 `name@version`（`group` 接回名字前面）。 */
+function componentId(entry: { group?: unknown; name?: unknown; version?: unknown }): string {
+  const name =
+    typeof entry.group === 'string' ? `${entry.group}/${String(entry.name)}` : String(entry.name);
+  return `${name}@${String(entry.version)}`;
+}
+
+/**
+ * SBOM 裡不是 npm 的元件比對用的鍵：cargo 與 C 函式庫帶版本（版本從產物的授權目錄名讀得到）；執行檔與標準函式庫只到名字
+ * （產物裡讀不到版本，執行檔改用雜湊對）。認不得的 purl 回 undefined。
+ */
+function nonNpmKey(purl: string): string | undefined {
+  if (purl.startsWith('pkg:cargo/')) return purl;
+  if (!purl.startsWith('pkg:generic/')) return undefined;
+  const base = purl.replace(/@[^@/]*$/u, '');
+  return base === SPAWNER_PURL || base === RUST_STD_PURL ? base : purl;
+}
+
+/**
+ * spawner 那一側的核對：SBOM 的 cargo／generic 元件跟產物裡實際有的兩個方向相同，執行檔的雜湊對得上。
+ *
+ * @param root - 產物根。
+ * @param components - SBOM 裡不是 npm 的元件。
+ */
+function spawnerSbomProblems(
+  root: string,
+  components: readonly Record<string, unknown>[],
+): string[] {
+  const problems: string[] = [];
+  const listed = new Map<string, Record<string, unknown>>();
+  for (const entry of components) {
+    const key = nonNpmKey(String(entry.purl));
+    if (key === undefined) problems.push(`SBOM 有認不得的 purl：${String(entry.purl)}`);
+    else listed.set(key, entry);
+  }
+  const binary = join(root, SPAWNER_PATH);
+  const present = new Set(
+    bundledCrates(root).map((crate) => `pkg:cargo/${crate.name}@${crate.version}`),
+  );
+  for (const lib of SPAWNER_NATIVE_LIBS) {
+    if (existsSync(join(root, SPAWNER_LICENSES_DIR, `${lib.name}-${lib.version}`))) {
+      present.add(`pkg:generic/${lib.name}@${lib.version}`);
+    }
+  }
+  if (existsSync(binary)) present.add(SPAWNER_PURL);
+  if (existsSync(join(root, RUST_STD_COPYRIGHT))) present.add(RUST_STD_PURL);
+  for (const key of [...present].sort()) {
+    if (!listed.has(key)) problems.push(`SBOM 漏了產物裡的 ${key}`);
+  }
+  for (const key of [...listed.keys()].sort()) {
+    if (!present.has(key)) problems.push(`SBOM 列了產物裡沒有的 ${key}`);
+  }
+  const spawner = listed.get(SPAWNER_PURL);
+  if (spawner !== undefined && existsSync(binary)) {
+    const actual = createHash('sha256').update(readFileSync(binary)).digest('hex');
+    const hashes = Array.isArray(spawner.hashes) ? (spawner.hashes as CycloneDxHash[]) : [];
+    if (!hashes.some((hash) => hash.alg === 'SHA-256' && hash.content === actual)) {
+      problems.push(`SBOM 記的 ${SPAWNER_PATH} 的 SHA-256 跟產物裡的執行檔對不上`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * 核對產物根的 SBOM 與實際裝了的閉包：每一顆都要在 SBOM 裡，SBOM 裡也不能有閉包外的（#1545 驗收 6）。npm 閉包之外的
+ * spawner 那一側由 {@link spawnerSbomProblems} 核對。
+ *
+ * @param root - 產物根（解開後的安裝樹）。
+ * @returns 問題清單；空代表兩邊相同。
+ */
+export function sbomProblems(root: string): string[] {
+  const path = join(root, SBOM_FILE);
+  if (!existsSync(path)) return [`缺 ${SBOM_FILE}`];
+  let bom: {
+    metadata?: { component?: Record<string, unknown> };
+    components?: Record<string, unknown>[];
+  };
+  try {
+    bom = JSON.parse(readFileSync(path, 'utf8')) as typeof bom;
+  } catch (error) {
+    return [`${SBOM_FILE} 不是合法的 JSON：${(error as Error).message}`];
+  }
+  const isNpm = (entry: Record<string, unknown>): boolean =>
+    typeof entry.purl !== 'string' || entry.purl.startsWith('pkg:npm/');
+  const listed = new Set(
+    [bom.metadata?.component, ...(bom.components ?? [])]
+      .filter((entry) => entry !== undefined)
+      .filter(isNpm)
+      .map(componentId),
+  );
+  const installed = listInstalledPackages(root);
+  const problems: string[] = [];
+  for (const id of [...installed].sort()) {
+    if (!listed.has(id)) problems.push(`SBOM 漏了閉包裡的 ${id}`);
+  }
+  for (const id of [...listed].sort()) {
+    if (!installed.has(id)) problems.push(`SBOM 列了閉包裡沒有的 ${id}`);
+  }
+  problems.push(
+    ...spawnerSbomProblems(
+      root,
+      (bom.components ?? []).filter((entry) => !isNpm(entry)),
+    ),
+  );
+  return problems;
+}
+
+/** CycloneDX 授權欄位轉回一個字串：運算式原樣，單一授權取 id 或 name。 */
+function licenseText(entry: CycloneDxLicense): string {
+  return 'expression' in entry
+    ? entry.expression
+    : 'id' in entry.license
+      ? entry.license.id
+      : entry.license.name;
+}
+
+/**
+ * spawner 那一側審過的非寬鬆授權：purl（不含版本）對到它唯一放行的授權字串。LLVM libunwind 由 #1827 D62 審過；換一個授權、
+ * 或別的元件帶同樣的授權，都照樣報。
+ */
+const REVIEWED_NATIVE_LICENSES: ReadonlyMap<string, string> = new Map([
+  ['pkg:generic/llvm-libunwind', 'Apache-2.0 WITH LLVM-exception'],
+]);
+
+/**
+ * 閉包裡每一顆的授權都要是寬鬆授權，或是審過的例外（`gen-third-party-notices.ts` 的 `isReviewedNonPermissive`）。
+ * `THIRD_PARTY_NOTICES.md` 的授權檢查只看直接相依；遞移進來的非寬鬆授權（例如 sharp 底下的 libvips）只有在這裡、對著實際出貨的
+ * 閉包才看得到（[#2033](https://github.com/DemianLi/nexus-agent/issues/2033)）。
+ * 審過的例外是逐個 npm 套件審的，只對 npm 元件放行；spawner 那一側（cargo、generic）要是寬鬆授權，唯一的例外是
+ * {@link REVIEWED_NATIVE_LICENSES}，報的時候用 purl 指名。
+ *
+ * @param bom - 產生的或產物裡的 SBOM。
+ * @returns 問題清單；空代表都合格。
+ */
+export function licenseProblems(bom: {
+  readonly components?: readonly (Pick<CycloneDxComponent, 'group' | 'name' | 'version'> & {
+    /** 沒有 purl 的當成 npm 元件。 */
+    readonly purl?: string;
+    /** 產物裡那份 SBOM 讀進來的，可能少這一欄：當成沒有授權，照樣報。 */
+    readonly licenses?: readonly CycloneDxLicense[];
+  })[];
+}): string[] {
+  const problems: string[] = [];
+  for (const entry of bom.components ?? []) {
+    const name = entry.group === undefined ? entry.name : `${entry.group}/${entry.name}`;
+    const license = (entry.licenses ?? []).map(licenseText).join(' AND ');
+    if (isPermissive(license)) continue;
+    if (entry.purl === undefined || entry.purl.startsWith('pkg:npm/')) {
+      if (!isReviewedNonPermissive(name, license)) {
+        problems.push(
+          `閉包裡的 ${name}@${entry.version} 授權是 ${license}，不是寬鬆授權也不在審過的例外裡`,
+        );
+      }
+    } else if (REVIEWED_NATIVE_LICENSES.get(entry.purl.replace(/@[^@/]*$/u, '')) !== license) {
+      problems.push(`產物裡的 ${entry.purl} 授權是 ${license}，不是寬鬆授權也不在審過的例外裡`);
+    }
+  }
+  return problems;
+}
+
+/**
+ * 對產物根那份 SBOM 跑 {@link licenseProblems}。檔不在或不是合法 JSON 時回空：那兩種由 {@link sbomProblems} 報。
+ *
+ * @param root - 產物根（解開後的安裝樹）。
+ * @returns 問題清單；空代表都合格。
+ */
+export function installedLicenseProblems(root: string): string[] {
+  const path = join(root, SBOM_FILE);
+  if (!existsSync(path)) return [];
+  let bom: Parameters<typeof licenseProblems>[0];
+  try {
+    bom = JSON.parse(readFileSync(path, 'utf8')) as typeof bom;
+  } catch {
+    // 解析錯誤由 sbomProblems 報，這裡不重報。
+    return [];
+  }
+  return licenseProblems(bom);
+}

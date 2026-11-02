@@ -8,22 +8,27 @@ import {
   LIVE_API_KEY_ENV,
   DEFAULT_LIVE_BASE_URL,
   DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
-  DEFAULT_LIVE_MAX_RETRIES,
   DEFAULT_LIVE_MODEL_ID,
   DEFAULT_LIVE_TIMEOUT_MS,
   classifyFailedAttempt,
+  classifyTurnFailure,
   createLiveModel,
   isDerivedContextOverflow,
   modelGoneMessage,
   normalizeEmptyAssistantContent,
-  retryDecision,
+  stripAssistantName,
   StreamIdleTimeoutError,
   withEmptyAssistantContent,
   withInbandStreamErrors,
+  withoutAssistantName,
+  withShippedRequestBody,
   withStreamIdleTimeout,
+  EMPTY_TOOL_RESULT_TEXT,
+  fillEmptyToolContent,
+  withEmptyToolContent,
 } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
-import { liveModelConfigSchema } from './settings/live-model.js';
+import { liveModelConfigForModel, liveModelConfigSchema } from './settings/live-model.js';
 
 /** schema 預設的那一組（#545）。`createLiveModel` 沒有預設參數，要建預設那顆就明著傳這個。 */
 const DEFAULTS = liveModelConfigSchema.parse({});
@@ -72,7 +77,7 @@ describe('真實供應商的 key 處理', () => {
   it('modelId 傳得進去，eval:compare 才換得動模型', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     for (const tier of MEASURED_MODELS) {
-      const model = createLiveModel({ ...DEFAULTS, modelId: tier.modelId });
+      const model = createLiveModel(liveModelConfigForModel(tier.modelId));
       expect(model.model).toBe(tier.modelId);
       // **換掉的只有 model。** 端點與取樣設定跟著變的話，比出來的差異就不只是模型。
       expect(model.clientConfig.baseURL).toBe(DEFAULT_LIVE_BASE_URL);
@@ -96,28 +101,28 @@ describe('真實供應商的 key 處理', () => {
   it('逾時有上限 —— #57 的失敗模式是永遠不回來，沒有上限就是整輪比較沒有結果', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     expect(createLiveModel(DEFAULTS).timeout).toBe(DEFAULT_LIVE_TIMEOUT_MS);
-    expect(createLiveModel({ ...DEFAULTS, modelId: MEASURED_MODELS[0]!.modelId }).timeout).toBe(
+    expect(createLiveModel(liveModelConfigForModel(MEASURED_MODELS[0]!.modelId)).timeout).toBe(
       DEFAULT_LIVE_TIMEOUT_MS,
     );
   });
 
   /**
-   * **這條驗的是設定真的到得了重試層，不是我們有沒有寫那一行。**
+   * **這條驗的是設定真的到得了 `AsyncCaller`，不是我們有沒有寫那一行。**
    *
    * `maxRetries` 與 `onFailedAttempt` 都不是 `ChatOpenAI` 的公開屬性 —— 它們被拿去建
    * `AsyncCaller`。傳錯名字、或哪天基座換了收法，`createLiveModel` 一樣建得起來、
-   * 型別一樣是綠的，而重試會**靜默地沒有生效**。所以這裡直接問那個 caller。
+   * 型別一樣是綠的，而 #1427 的前提（SDK 層不重試，重試只在 `retryModelCall` 一層）會**靜默地沒有成立**：
+   * 兩層一起重試是乘法。所以這裡直接問那個 caller。
    */
-  it('重試設定到得了 AsyncCaller —— 不是只寫在建構參數裡', () => {
+  it('SDK 層不重試，onFailedAttempt 裝的是我們那支 —— 不是只寫在建構參數裡', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     const { caller } = createLiveModel(DEFAULTS) as unknown as {
       caller: { maxRetries: number; onFailedAttempt: (error: unknown) => void };
     };
 
-    expect(caller.maxRetries).toBe(DEFAULT_LIVE_MAX_RETRIES);
-    expect(DEFAULT_LIVE_MAX_RETRIES).toBeGreaterThan(0);
+    expect(caller.maxRetries).toBe(0);
 
-    // 裝上去的必須是**我們的**那個：對限流不拋（＝重試），對 4xx 拋（＝放棄）。
+    // 裝上去的必須是**我們的**那個：對限流不拋（＝交給外層那一層重試），對 4xx 拋（＝放棄）。
     // 只斷言 `typeof === 'function'` 的話，裝到基座的預設也會是綠的。
     expect(() =>
       caller.onFailedAttempt(Object.assign(new Error('429'), { status: 429 })),
@@ -129,61 +134,75 @@ describe('真實供應商的 key 處理', () => {
 });
 
 /**
- * 重試決策。
+ * 重試決策（#1437：只看碼）。
  *
  * **這一組是行為表，不是實作細節。** 它釘住的是 `onFailedAttempt` 取代掉基座預設之後，
- * 我們有沒有把預設的形狀維持住 —— 只改「沒有 `retry-after` 的 429」那一支，其餘照舊。
- * 不打真實 API，錯誤都是手工組出來的形狀。
+ * 重試與否是不是只由 {@link classifyTurnFailure} 的碼決定——碼在預設可重試集（`RATE_LIMIT`／`SERVER`／`TIMEOUT`／
+ * `TRANSPORT`／`EMPTY_RESPONSE`）裡才接著打。不打真實 API，錯誤都是手工組出來的形狀。
  */
-describe('限流的重試決策', () => {
+describe('重試決策（碼決定）', () => {
   const withProps = (message: string, props: Record<string, unknown>): Error =>
     Object.assign(new Error(message), props);
 
+  /** `classifyFailedAttempt` 不拋＝接著打；拋＝放棄。 */
+  const decide = (error: unknown): 'retry' | 'give-up' => {
+    try {
+      classifyFailedAttempt(error);
+      return 'retry';
+    } catch {
+      return 'give-up';
+    }
+  };
+
   it('沒有 retry-after 的 429 要重試 —— 基座對這個形狀是一次都不重試的', () => {
-    expect(retryDecision(withProps('429', { status: 429 }))).toBe('retry');
-    // `@langchain/core` 正規化之後掛上的名字。協定上的 status 有時被包掉，名字還在。
-    expect(retryDecision(withProps('rate limited', { name: 'RateLimitCapacityError' }))).toBe(
-      'retry',
-    );
+    expect(decide(withProps('429', { status: 429 }))).toBe('retry');
   });
 
   it('配額耗盡的 429 不重試 —— 它跟限流共用狀態碼，但重試幾次都一樣', () => {
-    expect(retryDecision(withProps('quota', { status: 429, code: 'insufficient_quota' }))).toBe(
-      'give-up',
-    );
-    expect(retryDecision(withProps('quota', { name: 'RateLimitQuotaExhaustedError' }))).toBe(
+    expect(decide(withProps('quota', { status: 429, code: 'insufficient_quota' }))).toBe('give-up');
+    // 基座自己的 handler 才會掛的名字，產品路徑上由我們的 `onFailedAttempt` 接手，這裡只確認分類器也認它。
+    expect(decide(withProps('quota', { status: 429, name: 'RateLimitQuotaExhaustedError' }))).toBe(
       'give-up',
     );
   });
 
-  it('4xx 不重試 —— 判準對照那個「只支援單筆工具呼叫」重試幾次都一樣', () => {
-    for (const status of [400, 401, 402, 403, 404, 405, 406, 407, 409, 413]) {
-      expect(retryDecision(withProps(String(status), { status }))).toBe('give-up');
+  it('4xx 與沒有碼可重試的狀態不重試 —— 含基座清單沒列的 408／410／418／422／425', () => {
+    for (const status of [
+      400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 413, 418, 422, 425,
+    ]) {
+      expect(decide(withProps(String(status), { status }))).toBe('give-up');
     }
   });
 
   it('5xx 與連線問題仍然重試 —— 這條擋的是「非限流一律放棄」那種退化', () => {
     // 自訂 onFailedAttempt 會**整個**取代基座的預設，所以很容易在只想改限流時，
     // 順手把本來會重試的那些也關掉。把它改成 give-up，這條當場紅。
-    expect(retryDecision(withProps('500', { status: 500 }))).toBe('retry');
-    expect(retryDecision(withProps('502', { status: 502 }))).toBe('retry');
-    expect(retryDecision(new Error('socket hang up'))).toBe('retry');
+    expect(decide(withProps('500', { status: 500 }))).toBe('retry');
+    expect(decide(withProps('502', { status: 502 }))).toBe('retry');
+    // 連線層：SDK 的 `APIConnectionError` 才是 `TRANSPORT`（名字認的是建構子，不是訊息）。
+    class APIConnectionError extends Error {}
+    expect(decide(new APIConnectionError('Connection error.'))).toBe('retry');
+  });
+
+  it('沒有任何供應商痕跡的錯誤（解不開的回應、程式錯誤）不重試 —— 它不是網路問題（Q2 (a)）', () => {
+    expect(decide(new Error('socket hang up'))).toBe('give-up');
+    expect(decide(new SyntaxError('Unexpected token'))).toBe('give-up');
   });
 
   it('中止不重試 —— 那是我們自己要的，重試等於違抗', () => {
-    expect(retryDecision(withProps('x', { name: 'AbortError' }))).toBe('give-up');
-    expect(retryDecision(new Error('Cancel: 使用者中止'))).toBe('give-up');
-    expect(retryDecision(withProps('x', { code: 'ECONNABORTED' }))).toBe('give-up');
+    expect(decide(withProps('x', { name: 'AbortError' }))).toBe('give-up');
+    expect(decide(new Error('Cancel: 使用者中止'))).toBe('give-up');
+    expect(decide(withProps('x', { code: 'ECONNABORTED' }))).toBe('give-up');
   });
 
   it('包在 cause 鏈深處也認得出來 —— 包裝層數是別人家的實作細節', () => {
     const inner = withProps('429', { status: 429 });
     const outer = new Error('外層', { cause: new Error('中層', { cause: inner }) });
-    expect(retryDecision(outer)).toBe('retry');
+    expect(decide(outer)).toBe('retry');
 
     const innerBad = withProps('400', { status: 400 });
     const outerBad = new Error('外層', { cause: new Error('中層', { cause: innerBad }) });
-    expect(retryDecision(outerBad)).toBe('give-up');
+    expect(decide(outerBad)).toBe('give-up');
   });
 });
 
@@ -337,7 +356,7 @@ describe('假端點回那個 400，到我們手上是 ContextOverflowError', () 
       model: 'openai/gpt-oss-20b',
       configuration: { baseURL },
       maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
-      maxRetries: DEFAULT_LIVE_MAX_RETRIES,
+      maxRetries: 0,
       ...(onFailedAttempt !== undefined && { onFailedAttempt }),
     });
   }
@@ -424,14 +443,11 @@ describe('模型下架（410）', () => {
   });
 
   /**
-   * **這條釘的是「今天為什麼會等 106.7 秒」的成因。**
-   *
-   * `410` 不在 {@link STATUS_NO_RETRY} 的複本裡，所以 `retryDecision` 會說「重試」。
-   * 這不是 bug 而是基座那份清單的實際成員——它哪天把 410 加進去，這條會紅，那時
-   * `modelGoneMessage` 就從「必要」降級成「只是把話講清楚」，值得回頭讀一次。
+   * **410 不重試靠的是碼，不是 `modelGoneMessage`**（#1437）：`HTTP_410` 不在可重試集裡。
+   * 原先 `retryDecision` 對它說「重試」（基座那份清單沒有 410，曾經一次等 106.7 秒），這條釘住那件事已經結束。
    */
-  it('retryDecision 自己是攔不住 410 的', () => {
-    expect(retryDecision(goneError())).toBe('retry');
+  it('410 的碼是 HTTP_410，不在預設可重試集裡', () => {
+    expect(classifyTurnFailure(goneError())).toMatchObject({ code: 'HTTP_410', status: 410 });
   });
 
   it('classifyFailedAttempt 直接放棄，而且原錯誤留在 cause 上', () => {
@@ -452,10 +468,10 @@ describe('模型下架（410）', () => {
  * **整條鏈走一遍：下架的模型只打一次，不是重試到底。**
  *
  * 量的是**送出去幾次請求**，不是錯誤長什麼樣——「快」才是這一段的產出，而它只有在
- * 請求數上看得見。真打量到的成本是 **106.7 秒**（2026-09-04，`DEFAULT_LIVE_MAX_RETRIES` 6 次，
+ * 請求數上看得見。真打量到的成本是 **106.7 秒**（2026-09-04，當時 SDK 層 6 次，
  * 退避 1／2／4／8／16／32 秒）。
  *
- * **這裡用 `maxRetries: 2` 而不是 {@link DEFAULT_LIVE_MAX_RETRIES}**：對照組要真的等完退避才數得到
+ * **這裡用 `maxRetries: 2` 而不是出廠的 6 次**：對照組要真的等完退避才數得到
  * 重試次數，6 次是 63 秒，那個代價不該由每次 `pnpm test` 付。2 次是 3 秒，而它證的是同一件
  * 事（有沒有重試），不是同一個數字。
  *
@@ -530,7 +546,7 @@ describe('假端點回那個 410，我們只打一次就放棄', () => {
  *
  * ## 這一段釘的是「政策有沒有被問到」，不是「政策判得對不對」
  *
- * 上面那些測試釘得住 `retryDecision` 的判斷力（400 不重試、410 不重試）。**它們釘不住
+ * 上面那些測試釘得住 `classifyFailedAttempt` 的判斷力（400 不重試、410 不重試）。**它們釘不住
  * 重試政策有沒有被呼叫到** —— 而 #516 正是後者：端點回 `200`，重試包裝器當場判定成功，
  * 錯誤稍後才從串流裡冒出來，那時已經在射程外。政策整條靜默地沒有作用，
  * 而每一條既有測試照樣是綠的。
@@ -782,9 +798,9 @@ describe('串流內回報的錯誤（#516）', () => {
   /**
    * ## 明確未涵蓋，而且這兩條就是那個宣告
    *
-   * 涵蓋範圍是**第一則 SSE 事件**。中段才出錯的串流不在裡面 —— 買下它要能表示
-   * 「已經送出去的那一段作廢」，而我們今天沒有那個載體（偏離登記見
-   * {@link withInbandStreamErrors} 的檔頭）。
+   * 這一層（翻成 HTTP 錯誤、交 `onFailedAttempt` 回報）涵蓋的是**第一則 SSE 事件**。中段才出錯的串流在這一層仍然只打一次 ——
+   * 它的整次重打在更上面的 `stream-retry`（#520，端到端的測試在 `stream-retry.test.ts`），這裡的 `ChatOpenAI` 直接
+   * 呼叫不經過那一顆（偏離登記見 {@link withInbandStreamErrors} 的檔頭）。
    *
    * **`mid503` 與 `midslow` 必須給出相同的結果**，那是「邊界是事件、不是位元組」的判準：
    * 前者整份 body 在 loopback 上會被併成一段送達，後者插了 0.3 秒逼它分段。
@@ -812,12 +828,12 @@ describe('串流內回報的錯誤（#516）', () => {
    *
    * 這條是為了一個**看起來很合理但實測不成立**的顧慮而存在的。嗅探迴圈是在 fetch
    * **裡面** await `read()` 的，所以掛住的連線會變成從 `configuration.fetch` 逃出去的
-   * 東西，落進 {@link retryDecision} —— 推論上，這一層把「逾時」從重試射程外搬進了射程內，
+   * 東西，落進 {@link classifyFailedAttempt} —— 推論上，這一層把「逾時」從重試射程外搬進了射程內，
    * 於是 {@link DEFAULT_LIVE_TIMEOUT_MS} 的止血變成「逾時 × 重試次數」。
    *
    * **實測說不是**：兩側的請求數相同，而且**都**是 `retries + 1`。SDK 的逾時本來就是掛在
    * 整個請求上（`APIConnectionTimeoutError` 的 `name` 不是 `AbortError`、沒有 status，
-   * 所以 {@link retryDecision} 本來就判它重試）。**這個乘法在這一刀之前就存在**，不是
+   * 所以 `TIMEOUT` 本來就在可重試碼裡）。**這個乘法在這一刀之前就存在**，不是
    * 這一層帶來的。#521 查過之後照 dsh 保留（dsh 的 `TIMEOUT` 也在預設可重試碼裡），見
    * {@link DEFAULT_LIVE_TIMEOUT_MS}。
    *
@@ -892,7 +908,7 @@ describe('createLiveModel 真的掛上了那一層（#516）', () => {
  *
  * | 格 | 接上之後 | 釘住的是 |
  * | --- | --- | --- |
- * | 吐一段就停（`midstall`） | 拋 {@link StreamIdleTimeoutError}、打 1 次 | 缺口補上了、中段不重試 |
+ * | 吐一段就停（`midstall`） | 拋 {@link StreamIdleTimeoutError}、打 1 次 | 缺口補上了（這一層不重打，整次重打在 `stream-retry`，#520） |
  * | 同一格不接（對照組） | 掛到外面的時限 | 缺口是真的，不是這一組量錯 |
  * | 段與段隔 200ms、總長超過逾時（`slowdrip`） | 完整讀完 | 是**閒置**逾時，不是整條串流一個總時限 |
  * | 開了線不吐位元組（`stalled`） | 兩側請求數相同 | 第一則事件之前照舊歸 SDK 管、照舊重試 |
@@ -1168,7 +1184,7 @@ describe('閒置計時器的收尾（#521）', () => {
   });
 });
 
-/** 工廠建出來的 client 真的帶著閒置計時，而且用的是設定裡的 `timeoutMs`。 */
+/** 工廠建出來的 client 真的帶著閒置計時，而且用的是設定裡的 `streamIdleTimeoutMs`（#1251 從 `timeoutMs` 拆出來）。 */
 describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
   const original = process.env[LIVE_API_KEY_ENV];
   const originalFetch = globalThis.fetch;
@@ -1179,7 +1195,7 @@ describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
     else process.env[LIVE_API_KEY_ENV] = original;
   });
 
-  it('吐一則事件就停：用 config.timeoutMs 逾時', async () => {
+  it('吐一則事件就停：用 config.streamIdleTimeoutMs 逾時', async () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     // 底層 fetch 是工廠建出來那一刻的全域 fetch，所以先換掉再建工廠。
     globalThis.fetch = (() =>
@@ -1194,7 +1210,7 @@ describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
         ),
       )) as typeof fetch;
 
-    const wired = createLiveModel({ ...DEFAULTS, timeoutMs: 80 }).clientConfig.fetch;
+    const wired = createLiveModel({ ...DEFAULTS, streamIdleTimeoutMs: 80 }).clientConfig.fetch;
     const response = await wired!(`${DEFAULT_LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
     const reader = response.body!.getReader();
     await reader.read();
@@ -1241,6 +1257,27 @@ describe('空的助手內容照 dsh 送（#592）', () => {
     ];
     expect(normalizeEmptyAssistantContent(messages)).toEqual([
       { role: 'assistant', content: null, tool_calls: [call] },
+    ]);
+  });
+
+  /**
+   * 撞到輸出上限的那一則清掉工具呼叫之後什麼都不剩（#433）：CLI 那條送 `""`、web 那條可能是 `null`，
+   * **不分形狀**整則不送，同 dsh 的 `surface.ts:142-147`。
+   */
+  it.each([
+    ['空字串', ''],
+    ['只有空白的字串', ' \n'],
+    ['null', null],
+    ['缺席', undefined],
+  ])('沒有工具呼叫、內容是%s：整則不送', (_label, content) => {
+    const messages = [
+      { role: 'user', content: '一' },
+      { role: 'assistant', ...(content === undefined ? {} : { content }) },
+      { role: 'user', content: '二' },
+    ];
+    expect(normalizeEmptyAssistantContent(messages)).toEqual([
+      { role: 'user', content: '一' },
+      { role: 'user', content: '二' },
     ]);
   });
 
@@ -1339,7 +1376,7 @@ describe('空的助手內容照 dsh 送（#592）', () => {
           ),
         );
       }) as typeof fetch;
-      return { model: createLiveModel({ ...DEFAULTS, maxRetries: 0 }), sent };
+      return { model: createLiveModel(DEFAULTS), sent };
     }
 
     it('truncateArgs 重建的推理＋工具呼叫那則：送 null，不送 []', async () => {
@@ -1387,5 +1424,312 @@ describe('空的助手內容照 dsh 送（#592）', () => {
       await model.invoke([new HumanMessage('一'), interrupted, new HumanMessage('二')]);
       expect(sent).toEqual([[]]);
     });
+  });
+});
+
+describe('助手訊息不送 name（#1392）', () => {
+  const call = { id: 'call-1', type: 'function', function: { name: 'noop', arguments: '{}' } };
+
+  it('只拿掉助手訊息的 name，其餘欄位與順序原樣；別的角色的 name 不動', () => {
+    const out = stripAssistantName([
+      { role: 'user', content: '嗨', name: 'u' },
+      { role: 'assistant', content: '好。', name: 'model' },
+      { role: 'assistant', content: null, name: 'model', tool_calls: [call] },
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+    expect(out).toEqual([
+      { role: 'user', content: '嗨', name: 'u' },
+      { role: 'assistant', content: '好。' },
+      { role: 'assistant', content: null, tool_calls: [call] },
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+    expect(Object.keys((out as Record<string, unknown>[])[2]!)).toEqual([
+      'role',
+      'content',
+      'tool_calls',
+    ]);
+  });
+
+  it('沒有助手訊息帶 name 時回原本那個陣列', () => {
+    const messages = [
+      { role: 'user', content: '嗨' },
+      { role: 'assistant', content: '好。' },
+      { role: 'tool', content: '結果', name: 'noop', tool_call_id: 'call-1' },
+    ];
+    expect(stripAssistantName(messages)).toBe(messages);
+  });
+
+  function recording() {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: input instanceof Request ? input.url : String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    return { calls, base };
+  }
+
+  const NAMED = JSON.stringify({
+    model: 'm',
+    messages: [{ role: 'assistant', name: 'model', content: '好。' }],
+  });
+
+  it('只改 /chat/completions 的 POST，而且只換 messages', async () => {
+    const { calls, base } = recording();
+    await withoutAssistantName(base)('http://h/v1/chat/completions', {
+      method: 'POST',
+      body: NAMED,
+      headers: { 'x-a': '1' },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init!.headers).toEqual({ 'x-a': '1' });
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      model: 'm',
+      messages: [{ role: 'assistant', content: '好。' }],
+    });
+  });
+
+  it('其餘原樣交下去：同一個 init 物件', async () => {
+    const { calls, base } = recording();
+    const wrapped = withoutAssistantName(base);
+    const cases: [string, RequestInit | undefined][] = [
+      ['http://h/v1/chat/completions', { method: 'GET' }],
+      ['http://h/v1/models', { method: 'POST', body: NAMED }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: '不是 JSON' }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: JSON.stringify({ messages: 1 }) }],
+      [
+        'http://h/v1/chat/completions',
+        {
+          method: 'POST',
+          body: JSON.stringify({ messages: [{ role: 'assistant', content: '好。' }] }),
+        },
+      ],
+      ['http://h/v1/chat/completions', undefined],
+    ];
+    for (const [url, init] of cases) await wrapped(url, init);
+    for (const [index, [, init]] of cases.entries()) expect(calls[index]!.init).toBe(init);
+  });
+
+  describe('經過 createLiveModel：出貨的 fetch 疊裡有這一層', () => {
+    const original = process.env[LIVE_API_KEY_ENV];
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+      else process.env[LIVE_API_KEY_ENV] = original;
+    });
+
+    it('非串流的歷史裡帶 name: "model" 的助手訊息，送出去的 body 沒有 name', async () => {
+      process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+      const sent: { role: string; name?: string }[][] = [];
+      globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string) as { messages: { role: string }[] };
+        sent.push(body.messages);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: 'c1',
+              object: 'chat.completion',
+              created: 0,
+              model: 'm',
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: 'stop',
+                  message: { role: 'assistant', content: '好。' },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }) as typeof fetch;
+      const model = createLiveModel(DEFAULTS);
+      await model.invoke([
+        new HumanMessage('一'),
+        new AIMessage({ content: '好。', name: 'model' }),
+        new HumanMessage('二'),
+      ]);
+      expect(sent).toHaveLength(1);
+      const assistants = sent[0]!.filter((message) => message.role === 'assistant');
+      expect(assistants).toHaveLength(1);
+      expect('name' in assistants[0]!).toBe(false);
+    });
+  });
+});
+
+/**
+ * **空的工具結果補上 `(no output)`**（[#1562](https://github.com/DemianLi/nexus-agent/issues/1562)，照 dsh `llm-pi-ai/src/context.ts:31-47`）。
+ *
+ * MCP 工具可以回空的 `content` 陣列，`@langchain/openai` 原樣送出（`""` 或 `[]`）。只換「沒有內容」的工具訊息，其餘一律不碰。
+ * 接線（真的 `runServe --live`＋夾具的 `empty_result`）在 `live-model-attribution.test.ts`。
+ */
+describe('fillEmptyToolContent：空的工具結果補上 (no output)（#1562）', () => {
+  it('字面是 dsh 的那幾個字', () => {
+    expect(EMPTY_TOOL_RESULT_TEXT).toBe('(no output)');
+  });
+
+  it.each([
+    ['空字串', ''],
+    ['空陣列', []],
+    ['文字區塊的 text 串起來是空字串', [{ type: 'text', text: '' }]],
+    [
+      '好幾個空的文字區塊',
+      [
+        { type: 'text', text: '' },
+        { type: 'text', text: '' },
+      ],
+    ],
+    ['null', null],
+  ])('換成 (no output)，tool_call_id 與其他欄位不變：%s', (_label, content) => {
+    const messages = [
+      { role: 'user', content: '嗨' },
+      { role: 'tool', content, tool_call_id: 'call-1', name: 'noop' },
+    ];
+    expect(fillEmptyToolContent(messages)).toEqual([
+      { role: 'user', content: '嗨' },
+      { role: 'tool', content: '(no output)', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+  });
+
+  it('缺席的 content 也補（沒有這個鍵）', () => {
+    expect(fillEmptyToolContent([{ role: 'tool', tool_call_id: 'call-1' }])).toEqual([
+      { role: 'tool', tool_call_id: 'call-1', content: '(no output)' },
+    ]);
+  });
+
+  it('不動的：有字的結果、只有空白的結果、帶圖的陣列、別的角色的空內容——一則都沒換時回原本那個陣列', () => {
+    const messages = [
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1' },
+      { role: 'tool', content: [{ type: 'text', text: '好' }], tool_call_id: 'call-2' },
+      // 只有空白的：dsh 是 `content || '(no output)'`，空白字串是真值，照原樣送（跟助手訊息 #592 的判準不同）。
+      { role: 'tool', content: '  ', tool_call_id: 'call-4' },
+      { role: 'tool', content: ' \n\t ', tool_call_id: 'call-5' },
+      { role: 'tool', content: [{ type: 'text', text: ' ' }], tool_call_id: 'call-6' },
+      {
+        role: 'tool',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'text', text: ' ' },
+        ],
+        tool_call_id: 'call-7',
+      },
+      // 空的文字區塊加一段圖：有一段不是文字就算有內容。
+      {
+        role: 'tool',
+        content: [
+          { type: 'text', text: '' },
+          { type: 'image_url', image_url: { url: 'x' } },
+        ],
+        tool_call_id: 'call-8',
+      },
+      {
+        role: 'tool',
+        content: [{ type: 'image_url', image_url: { url: 'x' } }],
+        tool_call_id: 'call-3',
+      },
+      { role: 'assistant', content: [] },
+      { role: 'user', content: '' },
+      { role: 'system', content: '' },
+      'not-an-object',
+      null,
+    ];
+    expect(fillEmptyToolContent(messages)).toBe(messages);
+  });
+
+  it('同一串裡只換空的那一則，其餘原樣、順序不變', () => {
+    const kept = { role: 'tool', content: '有字', tool_call_id: 'call-1' };
+    const out = fillEmptyToolContent([kept, { role: 'tool', content: [], tool_call_id: 'call-2' }]);
+    expect(out[0]).toBe(kept);
+    expect(out[1]).toEqual({ role: 'tool', content: '(no output)', tool_call_id: 'call-2' });
+  });
+
+  it('withEmptyToolContent：/chat/completions 的 POST 換掉；沒有空的就是同一個 init 物件；別的路徑與 GET 不碰', async () => {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    const body = JSON.stringify({
+      messages: [{ role: 'tool', content: '', tool_call_id: 'call-1' }],
+    });
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', { method: 'POST', body });
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      messages: [{ role: 'tool', content: '(no output)', tool_call_id: 'call-1' }],
+    });
+
+    const clean = {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'tool', content: '好', tool_call_id: 'c' }] }),
+    };
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', clean);
+    expect(calls[1]!.init).toBe(clean);
+
+    const other = { method: 'POST', body };
+    await withEmptyToolContent(base)('http://h/v1/embeddings', other);
+    expect(calls[2]!.init).toBe(other);
+    await withEmptyToolContent(base)('http://h/v1/chat/completions', { method: 'GET' });
+    expect(calls[3]!.init).toEqual({ method: 'GET' });
+  });
+});
+
+/**
+ * **夾具與出貨共用的那一組 body 改寫**（[#1398](https://github.com/DemianLi/nexus-agent/issues/1398)）。
+ *
+ * `createLiveModel` 與 `log-derived-history.fixture.ts` 的 `model()` 都用 `withShippedRequestBody`，所以夾具量到的是出貨時線上的
+ * 形狀。這裡釘住「這一組裡有哪三格」：少了任何一格，下面那條就紅（三格各自的細節在上面三個 describe）。
+ *
+ * 突變（#1398 實測）：函式裡拿掉 `withEmptyAssistantContent` → 紅（空內容還是 `[]`）；拿掉 `withoutAssistantName` → 紅（`name` 還在）。
+ * #1562 加的第三格：拿掉 `withEmptyToolContent` → 紅（空的工具結果還是空的）。
+ */
+describe('夾具與出貨共用的 body 改寫（#1398）', () => {
+  const call = { id: 'call-1', type: 'function', function: { name: 'echo', arguments: '{}' } };
+
+  function recording() {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: input instanceof Request ? input.url : String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    return { calls, base };
+  }
+
+  it('同一個請求裡：空的助手內容換成 null、空的工具結果補 (no output)、助手訊息的 name 拿掉，其餘原樣', async () => {
+    const { calls, base } = recording();
+    const body = JSON.stringify({
+      model: 'm',
+      messages: [
+        { role: 'user', content: '嗨' },
+        { role: 'assistant', name: 'model', content: [], tool_calls: [call] },
+        { role: 'tool', content: '結果', name: 'echo', tool_call_id: 'call-1' },
+        { role: 'assistant', name: 'model', content: [], tool_calls: [{ ...call, id: 'call-2' }] },
+        { role: 'tool', content: [], tool_call_id: 'call-2' },
+        { role: 'assistant', name: 'model', content: '好。' },
+      ],
+    });
+    await withShippedRequestBody(base)('http://h/v1/chat/completions', { method: 'POST', body });
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      model: 'm',
+      messages: [
+        { role: 'user', content: '嗨' },
+        { role: 'assistant', content: null, tool_calls: [call] },
+        // 工具訊息的 `name` 不是這一組的事（只動 `role: assistant`）。
+        { role: 'tool', content: '結果', name: 'echo', tool_call_id: 'call-1' },
+        { role: 'assistant', content: null, tool_calls: [{ ...call, id: 'call-2' }] },
+        { role: 'tool', content: '(no output)', tool_call_id: 'call-2' },
+        { role: 'assistant', content: '好。' },
+      ],
+    });
+  });
+
+  it('什麼都不用換的請求：原樣交下去，同一個 init 物件', async () => {
+    const { calls, base } = recording();
+    const init = {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: '嗨' }] }),
+    };
+    await withShippedRequestBody(base)('http://h/v1/chat/completions', init);
+    expect(calls[0]!.init).toBe(init);
   });
 });

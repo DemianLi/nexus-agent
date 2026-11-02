@@ -1,9 +1,17 @@
 import type { Event } from '@nexus/wire';
-import { appendHumanTurn, emptyConversation, reduceAll } from '@nexus/wire';
+import { emptyConversation, INBOX, reduceAll } from '@nexus/wire';
+import type { ToolEntry } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
+import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
+import { STOPPED_FOOTER_TEXT, TIMED_OUT_FOOTER_TEXT } from '@/lib/stop-cause';
+import {
+  SETTLED_NOTICE_TEXT,
+  SETTLED_NOTICE_TIMED_OUT_TEXT,
+  SETTLED_NOTICE_UNKNOWN_TEXT,
+} from '@/lib/queue-view';
 
 /**
  * 推理列與正文空的回覆（[#527](https://github.com/DemianLi/nexus-agent/issues/527)、#565）。只想、只呼叫工具的
@@ -34,8 +42,24 @@ const delta = (id: string, value: Record<string, unknown>) =>
 const finish = (id: string) =>
   frame('messages', ROOT, { event: 'message-finish', reason: 'stop', run_id: id });
 
+/**
+ * 人問的那一句：伺服器領走開跑時推的 `inbox`（`claimed`）。**不帶 `seq`**：各測試的 frame 在呼叫 {@link show} 之前就
+ * 取好了 `seq`，這一顆若另取一個比它們大的，後面那些會被當成重複丟掉；沒有 `seq` 的 frame 不推進 `lastSeq`。
+ */
+const asked = (text: string): Event =>
+  ({
+    type: 'event',
+    event_id: 't:asked',
+    method: 'custom',
+    params: {
+      namespace: [],
+      timestamp: 0,
+      data: { name: INBOX, payload: { items: [], claimed: { id: 'q', text } } },
+    },
+  }) as Event;
+
 function show(events: Event[]) {
-  const state = reduceAll(appendHumanTurn(emptyConversation(), '問'), events);
+  const state = reduceAll(emptyConversation(), [asked('問'), ...events]);
   render(<Transcript state={state} isFresh={() => false} />);
   return state;
 }
@@ -44,6 +68,21 @@ const think = (id: string, reasoning: string) => delta(id, { type: 'reasoning-de
 const say = (id: string, text: string) => delta(id, { type: 'text-delta', text });
 const bubbleIn = (entry: HTMLElement) => entry.querySelector('[data-slot=bubble]');
 const rowIn = (entry: HTMLElement) => within(entry).queryByTestId('reasoning-row');
+/**
+ * 推理列是原生 `<details>`／`<summary>`（#1683），jsdom 認不出 summary 的角色：直接找元素。真實的角色與 expanded 由 guard 讀
+ * Chromium 的 AX 樹。
+ */
+const summaryIn = (scope: HTMLElement) =>
+  scope.querySelector<HTMLElement>('[data-testid=reasoning-row] summary')!;
+const detailsIn = (scope: HTMLElement) =>
+  scope.querySelector<HTMLDetailsElement>('[data-testid=reasoning-row] details')!;
+/** summary 的名稱取自內容、跳過 `aria-hidden`（摘要與「·」、箭頭）：這裡只有純文字，照這條算就等於 accname。 */
+function nameOf(summary: HTMLElement): string {
+  const copy = summary.cloneNode(true) as HTMLElement;
+  for (const hidden of copy.querySelectorAll('[aria-hidden="true"], [aria-hidden=""]'))
+    hidden.remove();
+  return copy.textContent?.trim() ?? '';
+}
 
 describe('正文空的回覆', () => {
   it('只有推理、講完了的那一步只畫推理列、不畫泡泡；有正文的那則照畫泡泡', () => {
@@ -67,6 +106,25 @@ describe('正文空的回覆', () => {
     expect(bubbleIn(thought!)).toBeNull();
     expect(rowIn(reply!)).toBeNull();
     expect(bubbleIn(reply!)?.textContent).toContain('好了');
+  });
+
+  it('不是模型回覆的新種類項目不畫、也不炸：整格不佔列表的間距', () => {
+    // 線上的項目種類以後還會長，web 還不認得的那一格走到收尾分支會讀 `entry.text`。
+    // 這裡用一則改成編出來的 `kind` 的回覆頂替（壓縮格 #896 有了真的畫法之後，不能再拿它當替身，#944）。
+    const folded = reduceAll(emptyConversation(), [
+      asked('問'),
+      running(),
+      start('a'),
+      say('a', '你好'),
+      finish('a'),
+    ]);
+    const entries = folded.entries.map((entry) =>
+      entry.kind === 'ai' ? ({ ...entry, kind: 'not-yet-invented' } as never) : entry,
+    );
+    render(<Transcript state={{ ...folded, entries }} isFresh={() => false} />);
+    expect(screen.queryByTestId('ai-entry')).toBeNull();
+    expect(screen.queryByText('你好')).toBeNull();
+    expect(screen.getByText('問')).toBeTruthy();
   });
 
   it('沒推理、講完了的空回覆整則不畫', () => {
@@ -100,7 +158,7 @@ describe('正文空的回覆', () => {
   it('推理之後先吐了空白：仍然是「思考中」', () => {
     show([running(), start('a'), think('a', '想'), say('a', '\n\n')]);
     const entry = screen.getByTestId('ai-entry');
-    expect(within(entry).getByRole('button').textContent).toContain('思考中');
+    expect(nameOf(summaryIn(entry))).toBe('思考中');
   });
 
   it('還在吐字、沒推理的空回覆照畫帶游標的泡泡', () => {
@@ -113,13 +171,13 @@ describe('正文空的回覆', () => {
     show([running(), start('a'), think('a', '想')]);
     const entry = screen.getByTestId('ai-entry');
     expect(bubbleIn(entry)).toBeNull();
-    expect(within(entry).getByRole('button').textContent).toContain('思考中');
+    expect(nameOf(summaryIn(entry))).toBe('思考中');
   });
 
   it('正文一開始吐字，推理就算講完了；泡泡帶游標', () => {
     show([running(), start('a'), think('a', '想'), say('a', '答')]);
     const entry = screen.getByTestId('ai-entry');
-    expect(within(entry).getByRole('button').textContent).toContain('思考過程');
+    expect(nameOf(summaryIn(entry))).toBe('思考過程');
     expect(bubbleIn(entry)?.querySelector('.stream-caret')).not.toBeNull();
   });
 
@@ -137,6 +195,30 @@ describe('正文空的回覆', () => {
     expect(screen.getByTestId('ai-entry').textContent).toContain('（已停止）');
   });
 
+  it.each([
+    ['時鐘到點', { kind: 'hook', reason: 'turn-timeout' }, TIMED_OUT_FOOTER_TEXT],
+    ['人按了停止', { kind: 'user' }, STOPPED_FOOTER_TEXT],
+    ['舊 server 沒帶原因', undefined, STOPPED_FOOTER_TEXT],
+  ] as const)('講到一半停下（#1631）：%s，底下講對的那一句、不用紅字', (_name, cause, text) => {
+    show([
+      running(),
+      start('a'),
+      say('a', '寫到一半'),
+      frame('lifecycle', [], {
+        event: 'failed',
+        graph_name: 'root',
+        aborted: true,
+        ...(cause === undefined ? {} : { cause }),
+      }),
+    ]);
+    const entry = screen.getByTestId('ai-entry');
+    const footer = within(entry).getByText(text);
+    expect(footer.className).not.toContain('text-destructive');
+    expect(entry.textContent).not.toContain(
+      text === TIMED_OUT_FOOTER_TEXT ? STOPPED_FOOTER_TEXT : TIMED_OUT_FOOTER_TEXT,
+    );
+  });
+
   it('想到一半被按了停止：推理列講「思考過程」，不再是思考中', () => {
     show([
       running(),
@@ -150,8 +232,49 @@ describe('正文空的回覆', () => {
       }),
     ]);
     const entry = screen.getByTestId('ai-entry');
-    expect(within(entry).getByRole('button').textContent).toContain('思考過程');
+    expect(nameOf(summaryIn(entry))).toBe('思考過程');
     expect(entry.textContent).toContain('（已停止）');
+  });
+
+  describe('撞到輸出上限（#608）', () => {
+    const cut = () =>
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root', maxTokens: true });
+
+    it('有字的那則照畫泡泡，底下多一行提示', () => {
+      show([running(), start('a'), say('a', '寫到一半'), finish('a'), cut()]);
+      const entry = screen.getByTestId('ai-entry');
+      expect(bubbleIn(entry)?.textContent).toContain('寫到一半');
+      expect(entry.textContent).toContain(MAX_TOKENS_NOTICE);
+    });
+
+    it('一個字都沒吐（只在寫工具參數時被切斷）：照畫提示，不畫空泡泡', () => {
+      show([running(), start('a'), finish('a'), cut()]);
+      const entry = screen.getByTestId('ai-entry');
+      expect(entry.textContent).toBe(MAX_TOKENS_NOTICE);
+      expect(bubbleIn(entry)).toBeNull();
+    });
+
+    it('只有推理：推理列加提示，不畫空泡泡', () => {
+      show([running(), start('a'), think('a', '想'), finish('a'), cut()]);
+      const entry = screen.getByTestId('ai-entry');
+      expect(rowIn(entry)).not.toBeNull();
+      expect(entry.textContent).toContain(MAX_TOKENS_NOTICE);
+      expect(bubbleIn(entry)).toBeNull();
+    });
+
+    it('對照：沒撞到上限的沒有提示，沒字的那則照舊整則不畫', () => {
+      show([
+        running(),
+        start('a'),
+        say('a', '寫完了'),
+        finish('a'),
+        start('b'),
+        finish('b'),
+        frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+      ]);
+      expect(screen.getAllByTestId('ai-entry')).toHaveLength(1);
+      expect(document.body.textContent).not.toContain(MAX_TOKENS_NOTICE);
+    });
   });
 
   it('出錯的空回覆照畫錯誤', () => {
@@ -169,8 +292,8 @@ describe('推理列', () => {
 
   it('預設收合；講完的摘要是第一行、拿掉 `**`', () => {
     show([running(), start('a'), think('a', long), finish('a')]);
-    const trigger = screen.getByRole('button', { name: '思考過程' });
-    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(nameOf(summaryIn(document.body))).toBe('思考過程');
+    expect(detailsIn(document.body).open).toBe(false);
     expect(screen.getByTestId('reasoning-summary').textContent).toBe('First we list the files.');
   });
 
@@ -179,16 +302,17 @@ describe('推理列', () => {
     expect(screen.getByTestId('reasoning-summary').textContent).toBe('Now read b.txt.');
   });
 
-  it('摘要不進按鈕的可存取名稱：每來一顆 chunk 它就變一次', () => {
+  it('摘要不進 summary 的可存取名稱：每來一顆 chunk 它就變一次', () => {
     show([running(), start('a'), think('a', long)]);
-    expect(screen.getByRole('button', { name: '思考中' })).toBeTruthy();
+    const summary = summaryIn(document.body);
+    expect(summary.textContent).toContain('Now read b.txt.');
+    expect(nameOf(summary)).toBe('思考中');
   });
 
   it('展開後畫出推理全文（markdown），摘要收起來', () => {
     show([running(), start('a'), think('a', long), finish('a')]);
-    const trigger = screen.getByRole('button', { name: '思考過程' });
-    fireEvent.click(trigger);
-    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(summaryIn(document.body));
+    expect(detailsIn(document.body).open).toBe(true);
     const row = screen.getByTestId('reasoning-row');
     expect(row.querySelector('strong')?.textContent).toBe('First');
     expect(row.textContent).toContain('Now read b.txt.');
@@ -208,5 +332,198 @@ describe('推理列', () => {
       frame('messages', SUB, { event: 'message-finish', reason: 'stop', run_id: 's' }),
     ]);
     expect(screen.getByTestId('reasoning-summary').textContent).toBe('sub thinking');
+  });
+});
+
+describe('背景子代理結算通知（#851）', () => {
+  const inbox = (payload: unknown): Event =>
+    ({
+      type: 'event',
+      event_id: 't:inbox',
+      method: 'custom',
+      params: { namespace: [], timestamp: 0, data: { name: INBOX, payload } },
+    }) as Event;
+  const settled = {
+    id: 'n',
+    text: 'Background subagent finished.',
+    source: { kind: 'subagent-settled' },
+  };
+
+  it('排在插話那一條時只畫一行小字，不畫成人的泡泡，給模型的英文也不出現', () => {
+    const state = reduceAll(emptyConversation(), [
+      running(),
+      inbox({ items: [], nextStep: [settled] }),
+    ]);
+    render(<Transcript state={state} isFresh={() => false} />);
+    expect(screen.getByText(`${SETTLED_NOTICE_UNKNOWN_TEXT}・下一步送進模型`)).toBeTruthy();
+    expect(document.querySelector('[data-pending-settled]')).not.toBeNull();
+    expect(document.querySelector('[data-pending-steer]')).toBeNull();
+    expect(screen.queryByText(/Background subagent/)).toBeNull();
+  });
+
+  it('被領走之後折疊器長出 notice：同一格換成通知那一句，不留人的泡泡，也不畫英文', () => {
+    const pending = reduceAll(emptyConversation(), [
+      running(),
+      inbox({ items: [], nextStep: [settled] }),
+    ]);
+    const { rerender } = render(<Transcript state={pending} isFresh={() => false} />);
+    const slot = screen
+      .getByText(`${SETTLED_NOTICE_UNKNOWN_TEXT}・下一步送進模型`)
+      .closest('[data-slot="message-scroller-item"]');
+    expect(slot).not.toBeNull();
+
+    const claimed = reduceAll(pending, [
+      inbox({
+        items: [],
+        nextStep: [],
+        claimedNextStep: [{ id: 'n', text: settled.text, source: { kind: 'subagent-settled' } }],
+      }),
+    ]);
+    expect(claimed.entries).toContainEqual(expect.objectContaining({ kind: 'notice' }));
+    rerender(<Transcript state={claimed} isFresh={() => false} />);
+
+    const notice = screen.getByText(SETTLED_NOTICE_UNKNOWN_TEXT);
+    expect(notice.closest('[data-settled-notice]')).not.toBeNull();
+    expect(document.querySelector('[data-pending-settled]')).toBeNull();
+    expect(notice.closest('[data-slot="message-scroller-item"]')).toBe(slot);
+    expect(screen.queryByText(/Background subagent/)).toBeNull();
+    expect(document.querySelector('[data-pending-steer]')).toBeNull();
+  });
+
+  it('歷史重播長出的 notice（沒有 inboxId）畫成同一個樣子', () => {
+    const state = {
+      ...emptyConversation(),
+      entries: [{ kind: 'notice', id: 'history-7', source: 'subagent-settled' }],
+    } as ReturnType<typeof emptyConversation>;
+    render(<Transcript state={state} isFresh={() => false} />);
+    expect(
+      screen.getByText(SETTLED_NOTICE_UNKNOWN_TEXT).closest('[data-settled-notice]'),
+    ).not.toBeNull();
+    expect(screen.queryByText(SETTLED_NOTICE_TEXT.completed)).toBeNull();
+  });
+
+  it.each([
+    ['completed', '背景子代理已完成'],
+    ['aborted', '背景子代理已被停止'],
+    ['max-tokens', '背景子代理已達輸出上限，沒寫完'],
+    ['error', '背景子代理失敗了'],
+  ] as const)('歷史重播帶原因 %s 的 notice：畫成那一句（#884）', (reason, text) => {
+    const state = {
+      ...emptyConversation(),
+      entries: [{ kind: 'notice', id: 'history-7', source: 'subagent-settled', reason }],
+    } as ReturnType<typeof emptyConversation>;
+    render(<Transcript state={state} isFresh={() => false} />);
+    expect(screen.getByText(text).closest('[data-settled-notice]')).not.toBeNull();
+  });
+
+  it('歷史重播的 notice 帶時鐘到點的原因（#1847）：講超過時間上限', () => {
+    const stopCause = { kind: 'hook', reason: 'turn-timeout' } as const;
+    const state: ReturnType<typeof emptyConversation> = {
+      ...emptyConversation(),
+      entries: [
+        {
+          kind: 'notice',
+          id: 'history-7',
+          source: 'subagent-settled',
+          reason: 'aborted',
+          stopCause,
+        },
+      ],
+    };
+    render(<Transcript state={state} isFresh={() => false} />);
+    expect(screen.getByText(SETTLED_NOTICE_TIMED_OUT_TEXT)).toBeTruthy();
+  });
+
+  it('即時：排著時說「被停止」，領走後同一格換成同一句，原因沒有在換格時丟掉（#884）', () => {
+    const stopped = { ...settled, source: { kind: 'subagent-settled', reason: 'aborted' } };
+    const pending = reduceAll(emptyConversation(), [
+      running(),
+      inbox({ items: [], nextStep: [stopped] }),
+    ]);
+    const { rerender } = render(<Transcript state={pending} isFresh={() => false} />);
+    const slot = screen
+      .getByText('背景子代理已被停止・下一步送進模型')
+      .closest('[data-slot="message-scroller-item"]');
+    expect(slot).not.toBeNull();
+
+    const claimed = reduceAll(pending, [
+      inbox({
+        items: [],
+        nextStep: [],
+        claimedNextStep: [{ id: 'n', text: stopped.text, source: stopped.source }],
+      }),
+    ]);
+    rerender(<Transcript state={claimed} isFresh={() => false} />);
+    const notice = screen.getByText('背景子代理已被停止');
+    expect(notice.closest('[data-settled-notice]')).not.toBeNull();
+    expect(notice.closest('[data-slot="message-scroller-item"]')).toBe(slot);
+    expect(screen.queryByText(SETTLED_NOTICE_TEXT.completed)).toBeNull();
+  });
+});
+
+describe('背景子代理寄來的話與 send_message 卡（#861）', () => {
+  const delegation: ToolEntry = {
+    kind: 'tool',
+    id: 'tool-d',
+    callId: 'call-d',
+    name: 'subagent',
+    input: '{}',
+    status: 'done',
+    attribution: { kind: 'root' },
+    meta: { kind: 'background-subagent', runId: 'bg-1', subagentType: 'researcher' },
+  };
+  const claimedRelay = (runId: string): Event =>
+    ({
+      type: 'event',
+      event_id: 't:relay',
+      method: 'custom',
+      params: {
+        namespace: [],
+        timestamp: 0,
+        data: {
+          name: INBOX,
+          payload: {
+            items: [],
+            claimed: {
+              id: 'm',
+              text: '三個檔案看過了',
+              source: { kind: 'agent-message', senderSessionId: `root/${runId}`, runId },
+            },
+          },
+        },
+      },
+    }) as Event;
+
+  it('折疊器長出的來信畫成「某某 說」加上它寫的話：不是人的泡泡，名字從委派卡對回來', () => {
+    const folded = reduceAll(emptyConversation(), [claimedRelay('bg-1')]);
+    const state = { ...folded, entries: [delegation, ...folded.entries] };
+    render(<Transcript state={state} isFresh={() => false} />);
+    const card = document.querySelector('[data-agent-message]');
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByText('researcher 說')).toBeTruthy();
+    expect(within(card as HTMLElement).getByText('三個檔案看過了')).toBeTruthy();
+    expect(document.querySelector('[data-pending-steer]')).toBeNull();
+  });
+
+  it('重新整理後委派卡不在了：說背景子代理，不猜名字', () => {
+    const state = reduceAll(emptyConversation(), [claimedRelay('bg-1')]);
+    render(<Transcript state={state} isFresh={() => false} />);
+    const card = document.querySelector('[data-agent-message]') as HTMLElement;
+    expect(within(card).getByText('背景子代理 說')).toBeTruthy();
+  });
+
+  it('send_message 卡：標題與摘要說傳給誰，名字從委派卡對回來', () => {
+    const send: ToolEntry = {
+      ...delegation,
+      id: 'tool-s',
+      callId: 'call-s',
+      name: 'send_message',
+      input: '{"agent_id":"bg-1","message":"先看 A"}',
+      meta: undefined,
+    };
+    const state = { ...emptyConversation(), entries: [delegation, send] };
+    render(<Transcript state={state} isFresh={() => false} />);
+    const trigger = screen.getByRole('button', { name: /傳訊給子代理/ });
+    expect(trigger.textContent).toContain('傳給 researcher：先看 A');
   });
 });

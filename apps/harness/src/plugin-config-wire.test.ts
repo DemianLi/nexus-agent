@@ -17,20 +17,35 @@
  * @see [#454](https://github.com/DemianLi/nexus-agent/issues/454)
  */
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { parseCliArgs, runCli } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
+import { CREDENTIALS_FILE } from './credentials.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
+import { LIVE_API_KEY_ENV } from './live-model.js';
+import { toAgentInvocation } from './messages.js';
+import { loadDefaultPlugins } from './plugin-config.js';
+import { seedHomePatch } from './plugin-journal.fixture.js';
+import { ScriptedChatModel } from './scripted-model.js';
 import { parseServeArgs, runServe } from './serve.js';
+import type { RunningServe } from './serve.js';
 
 const temporary: string[] = [];
+let running: RunningServe | undefined;
 
-afterEach(() => {
+afterEach(async () => {
+  await running?.close();
+  running = undefined;
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -43,6 +58,11 @@ function privateHome(): string {
 
 function writePatch(root: string, name: string, content: string): string {
   const path = join(root, name);
+  // home 那一層是變更紀錄（#1412）：預先放的設定走夾具，不讓每一條測試都帶一行遷移通知。
+  if (name === 'cordis.patch.yml') {
+    seedHomePatch(root, content);
+    return path;
+  }
   writeFileSync(path, content);
   chmodSync(path, 0o600);
   return path;
@@ -51,8 +71,8 @@ function writePatch(root: string, name: string, content: string): string {
 /**
  * 一條合法但**值**不合法的 patch：`todo` 的 `allowParallelInProgress` 只收布林。
  *
- * 它是 `resolveEntries` 擋下來的，而那件事發生在 `createCliAgent` 裡——所以它證得了
- * 「設定一路流到了驗證」，但只在**開機就組 agent** 的入口上（CLI）。
+ * 讀完清單時逐列驗設定，驗不過的那一列掉了（#751）：`todo` 是可少掛的，所以兩個入口都起得來、
+ * 啟動時印一段警告指名它。**那段警告就是「這一層被讀了」的證據**：沒被讀的檔不會讓任何一列掉。
  */
 const BAD_CONFIG = "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n";
 
@@ -117,27 +137,61 @@ describe('--patch 的解析（兩個入口同一份規則）', () => {
   });
 });
 
+/** 跑一次 CLI，回它印到標準錯誤的每一行。 */
+async function cliErrors(argv: readonly string[], env: NodeJS.ProcessEnv): Promise<string[]> {
+  const errors: string[] = [];
+  await runCli({
+    argv: [...argv],
+    env,
+    input: new PassThrough(),
+    output: new PassThrough(),
+    printer: { log: () => undefined, error: (line) => errors.push(line) },
+  });
+  return errors;
+}
+
+/** 警告裡指名 `todo` 掉在設定驗證的那一行。 */
+const TODO_DROPPED = /^ {2}todo（@nexus\/plugin-todo）設定驗不過：/u;
+
 describe('CLI 真的走設定檔那條路', () => {
-  it('home 那一層壞掉就啟動不了——證明它被讀了', async () => {
+  it('home 那一層的 `todo` 設定寫壞了：起得來、標準錯誤有一段警告指名它——證明那一層被讀了', async () => {
     const home = privateHome();
     writePatch(home, 'cordis.patch.yml', BAD_CONFIG);
 
-    await expect(
-      runCli({ argv: ['說點什麼'], env: { [HARNESS_HOME_ENV]: home }, ...silent() }),
-    ).rejects.toThrow(/todo/u);
+    const errors = await cliErrors(['說點什麼'], { [HARNESS_HOME_ENV]: home });
+    expect(errors[0]).toBe('警告：1 列沒有掛上，其餘照樣起來：');
+    expect(errors.filter((line) => TODO_DROPPED.test(line))).toHaveLength(1);
   });
 
-  it('--patch 壞掉也啟動不了', async () => {
+  it('--patch 那一層也一樣', async () => {
     const home = privateHome();
     const patch = writePatch(home, 'bad.yml', BAD_CONFIG);
 
-    await expect(
-      runCli({
-        argv: ['--patch', patch, '說點什麼'],
-        env: { [HARNESS_HOME_ENV]: home },
-        ...silent(),
-      }),
-    ).rejects.toThrow(/todo/u);
+    const errors = await cliErrors(['--patch', patch, '說點什麼'], { [HARNESS_HOME_ENV]: home });
+    expect(errors.filter((line) => TODO_DROPPED.test(line))).toHaveLength(1);
+  });
+
+  /**
+   * **掉了就是沒掛**：跟 `runCli` 同一條載入、同一支 `createCliAgent`，看模型拿到的工具清單。對照組是沒寫壞的同一份，
+   * `todo_write` 在——不然「沒有」可能只是這個量法本來就看不到它。
+   */
+  it('掉了的 `todo` 不在模型拿到的工具清單上；對照：沒寫壞就在', async () => {
+    const boundTools = async (env: NodeJS.ProcessEnv): Promise<readonly string[]> => {
+      const { plugins } = await loadDefaultPlugins({ env });
+      const built = await createCliAgent({ live: false }, plugins);
+      try {
+        await built.agent.invoke(toAgentInvocation('說點什麼'), {
+          configurable: { thread_id: 'wire' },
+        });
+        return (built.model as ScriptedChatModel).boundToolNames;
+      } finally {
+        await built.dispose();
+      }
+    };
+    const home = privateHome();
+    expect(await boundTools({ [HARNESS_HOME_ENV]: home })).toContain('todo_write');
+    writePatch(home, 'cordis.patch.yml', BAD_CONFIG);
+    expect(await boundTools({ [HARNESS_HOME_ENV]: home })).not.toContain('todo_write');
   });
 
   it('--patch 指到不存在的檔就拋——是呼叫方指名它的', async () => {
@@ -188,17 +242,9 @@ describe('CLI 真的走設定檔那條路', () => {
 });
 
 /**
- * serve 那一半。
+ * serve 那一半：讀檔與形狀那一層（`BAD_SHAPE`），是 `composeEntries` 在開機當下做的，整份起不來。
  *
- * **這裡用 `BAD_SHAPE` 不是 `BAD_CONFIG`，而那個差別本身是一個發現。** serve 的 agent 是
- * **每條 thread 才組的**，所以 `resolveEntries` 擋的那一類（plugin 自己的 `config` 不合法）
- * 在開機的時候不會發生——伺服器照樣起得來，第一個開 thread 的人才會撞到。dsh 不是這樣：
- * 它在 `boot()` 就把每個條目掛起來，required 條目失敗就拆掉整個 app 非零退出
- * （`packages/boot/app-boot/README.zh.md` 的失敗矩陣）。
- *
- * 這一輪不動它——接線是這一刀的射程，而「設定錯了該在什麼時候炸」是另一個問題（多人共用
- * 的部署上，那是「第一個人的 thread 爆掉」與「伺服器不起來」的差別）。已經寫回卡上。
- * 讀檔與形狀那一層是 `composeEntries` 在開機當下做的，所以下面兩條在兩個入口上都成立。
+ * 值那一層（`BAD_CONFIG`）是一列自己的失敗：讀完清單時就驗、那一列掉了、照樣起來（#751），見下一組。
  */
 describe('serve 也真的走設定檔那條路', () => {
   // **兩個入口各釘一條，不是只釘一個然後說「另一邊一樣」。** 兩條路各自呼叫一次
@@ -240,6 +286,250 @@ describe('serve 也真的走設定檔那條路', () => {
   });
 });
 
+/**
+ * **serve 在綁 port 之前先照每條 thread 那一次組一份 agent**（#749），清單上哪一列壞了在啟動時就講，
+ * 跟 CLI 同一刻、同一句。dsh 在 `boot()` 就掛完整份清單（dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。
+ *
+ * 報了之後起不起得來照 #751 的必掛名單：設定驗不過的 `todo`、`apply` 裡才驗的 `tool-result-pruner` 都是可少掛的，
+ * 啟動時印警告、照樣起來。
+ */
+describe('serve 在啟動時就把清單組過一次', () => {
+  /**
+   * 卡上的驗收：同一份壞設定，serve 起得來、綁 port 之前伺服器日誌有**跟 CLI 同一段**警告，而且只印那一次——開兩條對話
+   * 都不再印。「綁 port 之前」量的是順序：警告排在印網址那一行前面，而網址那一行是 `listen` 之後才印的。
+   */
+  it('值不合法的設定：serve 起得來，綁 port 之前印跟 CLI 同一段警告，開兩條對話也只印那一次', async () => {
+    const home = privateHome();
+    writePatch(home, 'cordis.patch.yml', BAD_CONFIG);
+    const env = { [HARNESS_HOME_ENV]: home };
+    const cli = await cliErrors(['說點什麼'], env);
+
+    const lines: string[] = [];
+    const server = (await runServe({
+      argv: ['--port', '0'],
+      log: bodyLog(lines),
+      env,
+    })) as RunningServe;
+    running = server;
+    const client = await serveClient(server);
+    for (const thread of ['a', 'b']) {
+      const events = await client.openEvents(thread);
+      await client.runStart(thread, '說點什麼');
+      await foldTurn(events);
+      await events.return?.(undefined);
+    }
+
+    const warning = lines.filter((line) => line.startsWith('警告：') || TODO_DROPPED.test(line));
+    expect(warning).toEqual(cli);
+    const url = lines.findIndex((line) => line.includes(server.url));
+    expect(url).toBeGreaterThan(lines.indexOf(cli[0] ?? ''));
+    // 啟動那幾行裡的「plugin：」不列掉了的列。
+    const listed = lines.find((line) => line.startsWith('plugin：'));
+    expect(listed).not.toMatch(/[：、]todo(、|$)/u);
+    expect(listed).toMatch(/[：、]plan-mode(、|$)/u);
+  });
+
+  /**
+   * **`apply` 裡才驗的值也在啟動時報出來**，組裝那一次判定（#751）：那一列掉了、照樣起來，兩個入口印同一段警告，serve
+   * 那段在綁 port 之前（排在網址那一行前面）。
+   */
+  it('`apply` 裡才驗的值：設定格式過得了、`apply` 拋的那一類也在啟動時報出來，那一列掉了、照樣起來', async () => {
+    // 頭＋標記＋尾不能大於門檻，這條檢查刻意只放在 `apply` 裡（`tool-result-pruner.ts`），不在設定格式裡。
+    const home = privateHome();
+    writePatch(
+      home,
+      'cordis.patch.yml',
+      '- id: tool-result-pruner\n  config:\n    thresholdChars: 10\n',
+    );
+    const env = { [HARNESS_HOME_ENV]: home };
+    const cli = await cliErrors(['說點什麼'], env);
+    expect(cli).toHaveLength(2);
+    expect(cli[0]).toBe('警告：1 列沒有掛上，其餘照樣起來：');
+    expect(cli[1]).toMatch(
+      /^ {2}tool-result-pruner（@nexus\/core\/tool-result-pruner）掛上時失敗：.*apply 失敗/u,
+    );
+
+    const lines: string[] = [];
+    const server = (await runServe({
+      argv: ['--port', '0'],
+      log: bodyLog(lines),
+      env,
+    })) as RunningServe;
+    running = server;
+    const start = lines.indexOf(cli[0] ?? '');
+    expect(lines.slice(start, start + 2)).toEqual(cli);
+    expect(lines.findIndex((line) => line.includes(server.url))).toBeGreaterThan(start);
+    expect(lines.find((line) => line.startsWith('plugin：'))).not.toMatch(
+      /[：、]tool-result-pruner(、|$)/u,
+    );
+  });
+
+  /**
+   * **檢查排在建瀏覽器會話密鑰之前**：起不來的那一次，home 底下沒有密鑰檔。用「`--live` 而環境裡沒有金鑰」測，
+   * 因為它壞在組裝本身、不是某一列的設定，#751 合了之後照樣起不來，這條不會跟著翻。
+   *
+   * **`.env` 兩層都指到暫存資料夾**（#730）：目前資料夾與 home 都是空的，讀不到這台機器上任何真的檔。
+   */
+  it('`--live` 沒有金鑰：起不來、講缺哪一個，密鑰檔還沒建；對照：有金鑰就起得來、密鑰檔建了', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    const env = { [HARNESS_HOME_ENV]: home };
+    const secret = join(home, BROWSER_SESSION_SECRET_FILE);
+
+    vi.stubEnv(LIVE_API_KEY_ENV, undefined);
+    await expect(
+      runServe({ argv: ['--port', '0', '--live'], log: () => undefined, env, cwd }),
+    ).rejects.toThrow(`缺少環境變數 ${LIVE_API_KEY_ENV}`);
+    expect(existsSync(secret)).toBe(false);
+
+    vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-tests');
+    running = await runServe({ argv: ['--port', '0', '--live'], log: () => undefined, env, cwd });
+    expect(existsSync(secret)).toBe(true);
+  });
+
+  /**
+   * **兩層 `.env` 走真的入口**（#730）：key 只放在 harness home 的 `.env`，`--live` 起得來，
+   * 而且值進了行程的環境變數（模型從那裡讀）。
+   */
+  it('`--live`：key 只在 harness home 的 .env 也起得來', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    writeFileSync(join(home, '.env'), `${LIVE_API_KEY_ENV}=nvapi-from-home-env\n`);
+    vi.stubEnv(LIVE_API_KEY_ENV, undefined);
+
+    running = await runServe({
+      argv: ['--port', '0', '--live'],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+      cwd,
+    });
+
+    expect(process.env[LIVE_API_KEY_ENV]).toBe('nvapi-from-home-env');
+  });
+
+  /**
+   * **受管憑證檔走真的入口**（#730 B）：key 只放在 harness home 的受管檔，`--live` 起得來，
+   * 而且值**不進**行程的環境變數 —— 這是受管檔存在的意義。
+   */
+  it('`--live`：key 只在受管憑證檔也起得來，且不進 process.env', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    const file = join(home, CREDENTIALS_FILE);
+    writeFileSync(file, `version: 1\nrefs:\n  ${LIVE_API_KEY_ENV}: nvapi-only-in-managed-file\n`, {
+      mode: 0o600,
+    });
+    chmodSync(file, 0o600);
+    vi.stubEnv(LIVE_API_KEY_ENV, undefined);
+    delete process.env[LIVE_API_KEY_ENV];
+
+    running = await runServe({
+      argv: ['--port', '0', '--live'],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+      cwd,
+    });
+
+    expect(process.env[LIVE_API_KEY_ENV]).toBeUndefined();
+  });
+
+  /** 權限放太寬：起動就擋，訊息帶 `chmod 600` 與路徑，密鑰檔還沒建。對照：改成 0600 就起得來。 */
+  it('`--live`：受管憑證檔 0644：起不來，講 chmod 600；改成 0600 起得來', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    const file = join(home, CREDENTIALS_FILE);
+    writeFileSync(file, `version: 1\nrefs:\n  ${LIVE_API_KEY_ENV}: nvapi-only-in-managed-file\n`);
+    chmodSync(file, 0o644);
+    vi.stubEnv(LIVE_API_KEY_ENV, undefined);
+    delete process.env[LIVE_API_KEY_ENV];
+    const start = () =>
+      runServe({
+        argv: ['--port', '0', '--live'],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: home },
+        cwd,
+      });
+
+    const failure = start();
+    await expect(failure).rejects.toThrow(`chmod 600 ${file}`);
+    expect(existsSync(join(home, BROWSER_SESSION_SECRET_FILE))).toBe(false);
+
+    chmodSync(file, 0o600);
+    running = await start();
+    expect(existsSync(join(home, BROWSER_SESSION_SECRET_FILE))).toBe(true);
+  });
+
+  /** 目前資料夾那份 `.env` 想改行程怎麼起：server 起來之前就失敗，訊息指名檔案與變數，密鑰檔也還沒建。 */
+  it('`--live`：目前資料夾的 .env 設了 NODE_OPTIONS：起不來，指名檔案與變數', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    writeFileSync(join(cwd, '.env'), 'NODE_OPTIONS=--require=/tmp/evil.js\n');
+    vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-tests');
+
+    const failure = runServe({
+      argv: ['--port', '0', '--live'],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+      cwd,
+    });
+    await expect(failure).rejects.toThrow(join(cwd, '.env'));
+    await expect(failure).rejects.toThrow('NODE_OPTIONS');
+    expect(existsSync(join(home, BROWSER_SESSION_SECRET_FILE))).toBe(false);
+  });
+
+  /** CLI 同一條：入口就擋，不必等到建模型；沒帶 `--live` 的對照組不讀 `.env`，壞檔不影響。 */
+  it('CLI：`--live` 時壞的 .env 在入口就失敗；沒帶 `--live` 不讀任何 .env', async () => {
+    const home = privateHome();
+    const cwd = privateHome();
+    writeFileSync(join(cwd, '.env'), 'PATH=/evil\n');
+    const env = { [HARNESS_HOME_ENV]: home };
+    const io = () => ({ input: new PassThrough(), output: new PassThrough() });
+
+    await expect(runCli({ argv: ['--live', '嗨'], ...io(), cwd, env })).rejects.toThrow(
+      join(cwd, '.env'),
+    );
+    await expect(
+      runCli({
+        argv: ['嗨'],
+        ...io(),
+        cwd,
+        env,
+        printer: { log: () => undefined, error: () => undefined },
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('反面：`disabled: true` 的那一列設定再壞也不驗，serve 起得來、開得了對話', async () => {
+    const home = privateHome();
+    writePatch(
+      home,
+      'cordis.patch.yml',
+      "- id: todo\n  disabled: true\n  config:\n    allowParallelInProgress: '不是布林'\n",
+    );
+    const server = await runServe({
+      argv: ['--port', '0'],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+    running = server;
+    const client = await serveClient(server as RunningServe);
+    const events = await client.openEvents('t');
+    await client.runStart('t', '說點什麼');
+    await foldTurn(events);
+    await events.return?.(undefined);
+  });
+
+  it('遙測披露印在啟動時，不等第一條 thread', async () => {
+    const home = privateHome();
+    const lines: string[] = [];
+    running = await runServe({
+      argv: ['--port', '0'],
+      log: bodyLog(lines),
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+    expect(lines.filter((line) => line.startsWith('遙測：'))).toHaveLength(1);
+  });
+});
+
 describe('--dump-config 在兩個入口都印得出來', () => {
   it('CLI：印出疊完的設定就退出，一個 plugin 都沒載', async () => {
     const home = privateHome();
@@ -267,7 +557,7 @@ describe('--dump-config 在兩個入口都印得出來', () => {
 
     const result = await runServe({
       argv: ['--dump-config', '--patch', patch, '--port', '0'],
-      log: (line) => printed.push(line),
+      log: bodyLog(printed),
       env: { [HARNESS_HOME_ENV]: home },
     });
 

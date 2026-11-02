@@ -1,0 +1,146 @@
+{
+  "id": "1911.02557",
+  "title": "Feedback-Based Self-Learning in Large-Scale Conversational AI Agents",
+  "topic": "T6",
+  "subarea": "使用者回饋迴路與滿意度估計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "Amazon Alexa 把使用者在同一段對話裡的改述、打斷與放棄當作隱式／顯式回饋，用吸收馬可夫鏈在 NLU 解讀空間上做跨使用者的協同過濾，每天離線挖出「原句→改寫」對，線上在 NLU 之前查表替換使用者輸入；生產環境 A/B 測試中，被改寫的 utterance 缺陷率降低 30% 以上。",
+  "problem": "大型語音助理的 ASR、NLU、ER 錯誤，傳統上靠人工轉寫與標註來修正。隨著網域擴張，這種做法的成本與時程都失控。用規則或 FST 手工修補則不可擴充、容易出錯，還會隨時間過期甚至變成新的缺陷。另一方面，使用者遇到錯誤時常會自己改述（把聽錯的歌名講清楚、換一種說法讓系統聽懂），這些改述散落在數百萬使用者的日誌裡。如果能自動彙整，就能在沒有人工標註的情況下，同時修正系統性錯誤（ASR／NLU／實體解析）與使用者自身的錯誤（例如只記得部分歌名）。",
+  "core_idea": "把每段 session 看成馬可夫鏈上的一條路徑。節點不是原始字串，而是 NLU 給出的結構化解讀（domain|intent|slot）。session 結尾依使用者回饋注入兩個吸收狀態（成功／失敗）。對每個來源解讀 h_s，用基本矩陣 N=(I−Q)^-1 算出每個可到達的 h_t 的分數：從 h_s 到 h_t 的期望造訪量，乘上 h_t 直接被吸收為成功的機率，取分數最大的 h_t。若最大者不是 h_s 本身，就代表存在比原句更可能成功的改寫。若最大者就是 h_s，這句本身已經算成功，不需改寫。模型因此自動把解讀空間切成「成功」與「待修」兩群，只針對可能有缺陷的 utterance 動手，不需要人在迴路中。",
+  "method": {
+    "輸入與輸出": "輸入是 3 個月的匿名 Alexa 日誌，涵蓋數百萬使用者。每筆 utterance 帶 ASR 文字、NLU 的 domain／intent／NER 結果、Alexa 的回應，以及 friction 判定。輸出是一張線上 key-value 表，鍵是原 utterance 字串，值是改寫後的 utterance 字串，例如把 play babe shark 對應到 play baby shark。",
+    "步驟 1：切 session": "以（customer c、device d、起始時間 τ0）為鍵，把時間上嚴格遞增、相鄰兩句間隔不超過 δτ 的 utterance 串成一段 session。δτ=45 秒，數值取自另一項未公開的研究。session 結束之前出現的 interjecting utterance（導向 StopIntent、CancelIntent 等）會被移除。",
+    "步驟 2：投影到解讀空間 H": "每個 utterance 映射成 domain|intent|slot:value 的結構化解讀，例如把 play despicable me 映射成 Music|PlayMusicIntent|AlbumName:despicable me，得到 latent session。因為 NLU 本身有隨機性，U 與 H 之間是雙向多對多的映射。用共現次數 c(u,h) 估計兩個條件分布：P(h|u)=c(u,h)/Σ_h' c(u,h')，P(u|h)=c(u,h)/Σ_u' c(u',h)（Eq. 5）。",
+    "步驟 3：注入吸收狀態": "在每段 session 結尾加上 r−（失敗）或 r+（成功）。(a) 顯式回饋：最後一句是 interjection（例如 stop）時，丟掉那一句並加 r−。(b) 隱式回饋：Alexa 因內部例外或找不到實體而回錯誤，使用者接著放棄 session 時，加 r−。(c) 以上皆無時加 r+，也就是把「沒有失敗」定義為成功。作者說還有一些邊界情況，但沒有展開。friction 的判定由一個預訓練的 ML 模型負責，輸入是使用者 utterance 與 Alexa 回應，模型細節不在本文範圍。",
+    "步驟 4：轉移與吸收機率": "c(h_i,v) 是在所有 session 中，h_i 後面緊接著 v 的次數；v 可以是另一個解讀，也可以是吸收狀態（Eq. 7）。令 Z_i=Σ_v c(h_i,v)（Eq. 6），則 P(h_j|h_i)=c(h_i,h_j)/Z_i（Eq. 8），P(r+|h_i)=c(h_i,r+)/Z_i（Eq. 9）。組成標準形轉移矩陣 A=[[Q,R],[0,I2]]：Q 是 |H|×|H| 的暫態轉移，R=[r+,r−] 是 |H|×2 的吸收機率。",
+    "步驟 5：求解改寫目標": "Φ∞(h_t)=P(r+|h_t)·Σ_{n≥0} P^(n)(h_t|h_s)。其中 Σ Q^n=N=(I−Q)^-1 是基本矩陣（Eq. 16），所以 P=N·diag(r+)（Eq. 15）。對來源 h_s，取 p^(s)=N_s∘r+（Eq. 17），令 h_t*=argmax_t p_t^(s)（Eq. 18）；若 h_t*=h_s 就不改寫。回到 utterance 空間時，u_t*=argmax_{u_t} Σ_{h_s}Σ_{h_t} P(u_t|h_t)·Φ∞(h_t)·P(h_s|u_s)（Eq. 20）。候選條件是 Φ∞(h_t)>P(r+|h_s)（Eq. 12）。",
+    "步驟 6：規模化近似": "|H| 約 10^6，無法建出完整的 Q 並求逆。作者觀察到約 97.3% 的來源解讀在 5 步內就被吸收，而且高信心改寫只會造訪一小群目標解讀，因此 Q 高度稀疏、有群聚結構。做法如下：(1) 在 Apache Spark 上用一連串 map-reduce（sort-merge join）做分散式 BFS，深度固定為 5，收集每個 h_s 出發的所有路徑。(2) 每個任務只拿一個 h_s 的路徑，建出低維的近似轉移矩陣 Ā^(s)，就地算出近似的 N̄ 與 p̄^(s)。(3) 每次 join 只延伸非循環、尚未被吸收的路徑，機率趨近零的路徑剪掉。演算法成本是 O(d·|E|+|E|log|E|)，不含 shuffle 的網路成本。另外設有「最少使用者數與互動數」的門檻以穩定機率估計，但文中只說門檻較高，沒有給數值。",
+    "步驟 7：過濾（blacklist）": "離線部分：上傳前逐條比較改寫句與原句的 friction rate，用 Z-test（p=0.01）判定改寫比不改寫差的就剔除，以維持線上的高精確度。線上部分：另有一套 blacklist，用來移除改變使用者意圖的改寫（例如把 carter five 改成 carter four）。",
+    "步驟 8：部署": "每天重跑離線挖掘，移除過期或失效的改寫；改寫互相衝突時取最新的一筆。更新透過 feature flag 寫進高效能、低延遲的資料庫。線上服務在 ASR 之後、NLU 之前攔截 utterance，以字串查表拿到改寫，再把改寫交給 NLU 取代原句。服務跨使用者無狀態，對延遲的影響很小。每日作業有告警與指標監控；指標大幅變動時人工深挖根因，因為上下游元件的改動會影響挖掘結果。",
+    "基線": "LSTM encoder-decoder，帶 attention 與 copy 機制（pointer-generator）。訓練資料是用一個 rephrase 偵測模型從 3 個月日誌挖出的配對，條件是前句有缺陷、改述成功，且配對是去重後的唯一配對，不含頻率資訊。訓練後拿來改寫 Graph 改寫過的同一批 utterance，兩者直接比較。",
+    "評估流程": "(1) 離線：人工標註 5,679 對唯一的 utterance-rewrite，計算 accuracy 與 win/loss；win/loss 定義為讓體驗變好的改寫數除以讓體驗變差的改寫數。(2) 線上：A/B 測試進行兩週以上，比較改寫與不改寫的 defect rate。(3) 上線三個月後，用 Z-test（p=0.01）統計顯著較好（win）與顯著較差（loss）的唯一改寫數，重算 win/loss。(4) 長期：每週追蹤改寫總數、改寫的平均 friction rate、未改寫的平均 friction rate，並每週抽樣流量送人工標註。"
+  },
+  "assumptions": [
+    "使用者在失敗後的下一句，多半是同一意圖的改述；跨大量使用者聚合後，正確的改述會在統計上勝出。",
+    "打斷（顯式）與錯誤回應後放棄（隱式）能可靠地標出失敗，而沒有這些訊號就等於成功。",
+    "friction 偵測模型夠準確。它同時負責產生標籤、過濾改寫與計算線上指標，所以它的偏差會貫穿整條鏈。",
+    "NLU 的結構化解讀（domain|intent|slot）足以表達語意；把 utterance 投影到 H 空間，不會丟掉決定成敗的資訊。",
+    "45 秒的相鄰間隔，能切出屬於同一目標的 session。",
+    "絕大多數改述路徑很短（5 步以內），因此深度 5 的截斷近似足夠。",
+    "一句話該不該改寫、改成什麼，與使用者身分及當下對話狀態無關，所以可以跨使用者、無狀態地用字串查表。",
+    "系統上下游與使用者行為在每日更新的週期內大致穩定。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Alexa 內部匿名日誌（3 個月、數百萬使用者，未公開）",
+      "5,679 對唯一 utterance-rewrite 的人工標註集（未公開）",
+      "Alexa 生產環境 A/B 測試（兩週以上），以及上線三個月後的長期統計"
+    ],
+    "metrics": [
+      "accuracy（人工標註判定改寫是否正確）",
+      "win/loss ratio（離線版取自人工標註；線上版取自 Z-test 顯著性計數，p=0.01）",
+      "defect rate（由未公開的 friction 模型判定）",
+      "friction rate（改寫與不改寫各自的平均值，每週追蹤）"
+    ],
+    "baselines": [
+      "pointer-generator seq2seq（LSTM＋attention＋copy，以唯一的 rephrase 配對訓練）",
+      "no-rewrite（線上 A/B 測試與 Z-test 過濾的對照組）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "離線人工標註顯示 Graph 產生的改寫品質高：準確率 93.4%，win/loss 12.0。",
+      "numbers": "標註 5,679 對唯一 utterance-rewrite；accuracy 93.4%；win/loss 12.0",
+      "section": "Experiments／Offline Analysis",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "同一批 utterance 改用 seq2seq 產生改寫，準確率明顯較低。作者歸因於 Graph 聚合了全部 3 個月資料（不只 rephrase）、考慮了轉移頻率，並用 H 空間壓縮語意。seq2seq 的優點是召回率較高、能學到 SongName→play SongName 這類模式，但它無法判定「這句本身已經成功、不該改寫」，因此可能改壞原本正常的 utterance。",
+      "numbers": "seq2seq accuracy 55.2%，Graph 為 93.4%（同一批 5,679 對）",
+      "section": "Experiments／Offline Analysis",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "Graph 改寫能修正 ASR 錯誤、NLU 錯誤與使用者錯誤，但也有兩類常見失敗。第一類是改寫成泛用指令（例如 play、shuffle my songs），起因是原句不成功時使用者嘗試了許多不同路徑，資訊在聚合中流失。第二類是改寫改變了原意（換了歌名或歌手）。第一類可用規則或後接的 ranker 修正；第二類很難偵測，因為解讀改變常常是有益的，只能靠線上 blacklist 移除。",
+      "numbers": "Table 1 列 10 例：1–3 為 ASR 修正、4–7 為 NLU 修正、8 為使用者錯誤修正、9–10 為失敗例",
+      "section": "Experiments／Offline Analysis、Table 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "生產環境 A/B 測試中，改寫組相對於不改寫組，缺陷率降低 30% 以上。這個降幅是針對被改寫的 utterance，不是 Alexa 的整體缺陷率（摘要也寫明是 utterance level reformulations）。",
+      "numbers": "監測兩週以上；defect rate 降低超過 30%；p<0.001",
+      "section": "Application Deployment／Online Performance",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "上線三個月後重算的 win/loss 與離線估計接近。但兩個數字的量法不同：12.0 來自 5,679 對的人工標註；11.8 是用 Z-test 統計顯著優於或劣於不改寫的唯一改寫數，不是 A/B 測試的產物，而摘要把它與 A/B 並列。",
+      "numbers": "線上 11.8 vs 離線 12.0；Z-test p 值門檻 0.01",
+      "section": "Application Deployment／Online Performance",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "系統已在生產環境持續運作，服務數百萬使用者，並以每週的滿意度指標、改寫與未改寫的 friction rate，以及每週抽樣人工標註做長期監控。",
+      "numbers": "上線超過 9 個月（截至論文撰寫時；arXiv v1 公開於 2019-11-06）；每週監控",
+      "section": "Application Deployment／Online Performance",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "解讀空間有約 10^6 個狀態，完整求逆不可行。但約 97.3% 的來源解讀在 5 步內被吸收，所以用深度 5 的分散式 BFS 為每個來源建小型近似矩陣，就能在 Spark 上平行求解。",
+      "numbers": "|H| 約 10^6；約 97.3% 路徑長度 ≤5；BFS 深度 5；成本 O(d·|E|+|E|log|E|)",
+      "section": "Absorbing Markov Chain／Implementation",
+      "anchor_idx": 1
+    }
+  ],
+  "limitations_stated": [
+    "friction 偵測模型的細節不在本文範圍內，沒有公開。",
+    "吸收狀態的注入規則有一些邊界情況，為了篇幅沒有討論。",
+    "改寫可能退化成泛用指令（例如 play、shuffle my songs），因為失敗後使用者走過許多不同路徑，資訊在聚合中流失。",
+    "改寫可能改變原意（換了歌名或歌手）。這類錯誤很難偵測，因為解讀改變常常是有益的，只能靠線上 blacklist 移除。",
+    "Graph 只能改寫在日誌中出現過的 utterance；seq2seq 的召回率較高，也能學到可泛化的模式。",
+    "上下游 Alexa 元件每天都在改，可能影響挖掘演算法，所以需要告警與人工深挖；改寫也會過期，必須每日重算。",
+    "深度 5 的 BFS 是對完整基本矩陣的近似。"
+  ],
+  "limitations_observed": [
+    "循環評估：吸收狀態的標籤、上傳前的 Z-test blacklist、線上 A/B 的 defect rate，全都來自同一個未公開的 friction 模型。系統最佳化的代理指標就是它被評分的指標，所以 30% 以上的降幅只能解讀為「friction 模型判定的缺陷」降低。文中沒有驗證這個模型的精確度，也沒有處理它漏掉的不滿（例如沒打斷、沒放棄，只是改去做別的事）。",
+    "seq2seq 的比較有選擇偏差。比較集合是 Graph 自己選來改寫的 utterance，所以 93.4% 是 Graph 在自己高信心子集上的精確度；Graph 的覆蓋率與召回率完全沒有報告。seq2seq 則被迫對每一句都輸出改寫，不能選擇「不改」，而且只用去重後的唯一配對訓練、沒有頻率資訊。55.2% 對 93.4% 的差距，有很大部分來自實驗設定，不能直接當成模型能力的差距。",
+    "線上 win/loss 由構造而偏高。上傳前已用 Z-test（p=0.01）剔除比不改寫差的改寫，三個月後的線上 win/loss 又用同一種 Z-test 計算，loss 有一部分在事前就被濾掉了。所以「11.8 與離線 12.0 吻合」不算獨立驗證；兩者分別是人工標註比例與顯著性計數，量的也不是同一件事。",
+    "blacklist 隱含一個反事實假設。它比較的是改寫句被其他使用者直接說出時的 friction rate 與原句的 friction rate，等於假設「別人自己說出正確說法」與「替這位使用者把話換掉」效果相同。這忽略了自我選擇：能直接說出正確歌名的使用者，本來就可能比較不容易失敗。",
+    "成功的定義太弱，而且和作者承認的「泛用化改寫」失敗同源。引言裡的例子是使用者放棄後改說 play pop music；這類換話題的下一句會被當成 h 的後繼暫態並累積成功機率。沒有打斷或錯誤回應就記為 r+，使得泛用指令天生有高 P(r+)，argmax 自然偏向它。作者建議用規則或 ranker 事後修，但病根在標籤定義。",
+    "沒有任何情境。線上查表只以 utterance 字串為鍵，跨使用者無狀態，所以同一句話在不同對話狀態、或對不同使用者（例如個人播放清單名稱），都會被同樣改寫。Table 1 第 9 例把 play swaggy playlist 改成 shuffle my songs，很可能就是個人化實體被泛用化。這與 T2 狀態追蹤的前提相衝突，也讓它難以外推到多輪、有狀態的 agent。",
+    "回饋迴路的自我遮蔽沒有被討論。改寫上線後，原句的缺陷消失，使用者也不再改述，之後的日誌就缺少支撐這條改寫的證據。作者用每日重算並取最新的改寫，但沒有說明日誌記錄的是原句還是改寫後的句子，也沒有說明已上線的改寫如何避免被下一輪挖掘翻掉或誤刪。",
+    "數學論述不嚴謹。「Q 是機率矩陣，所以 ‖Q‖<1」並不成立，因為隨機矩陣的範數可以等於 1；真正的收斂理由是每一列都有一部分機率流向吸收狀態。N_{s,t} 是期望造訪次數，可以大於 1，所以 Φ∞(h_t) 不是機率，循環或多次造訪會膨脹分數，而實作又剪掉了循環路徑，理論與實作並不一致。Φ 的 n=0 項也讓 h_s 永遠把自己計入候選。",
+    "關鍵參數未公開：最少使用者數與互動數的門檻、friction 模型、被改寫的流量佔比、改寫覆蓋率，以及 δτ=45 秒所依據的研究。結果無法重現，也無法判斷 30% 的降幅換算成整體流量有多大意義。",
+    "外推到 LLM agent 有限。這套方法依賴離散的 domain|intent|slot 解讀空間、單輪就能完成的指令，以及海量重複的相同句子。對多輪任務型 agent 而言，意圖空間不是離散標籤，失敗訊號（打斷、放棄）也更稀疏、更延遲，H 空間投影沒有直接的對應物。"
+  ],
+  "framework_role": "這是 T6「使用者回饋迴路」的生產規模範例。它把部署中的隱式回饋（改述、錯誤回應後放棄）與顯式回饋（打斷）轉成 session 層級的成功／失敗吸收狀態，再跨使用者聚合成可以自動上線的修正，示範了不需人工標註、從真實互動紀錄學習的完整閉環：挖掘、過濾、上線、監控。它同時碰到 T1（改寫在 NLU 之前修正進入意圖辨識的輸入）與 T7（friction／defect rate 與 win/loss 的線上線下評估）。但「滿意度估計」這一半只有一個黑箱的 friction 模型，對該子題的方法貢獻有限；論文也完全不涉及使用者模擬器。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "3 個月的真實互動紀錄經 friction 模型標上成功／失敗吸收狀態後餵給 Markov 模型；同一批紀錄也回流到評估端：上傳前以 Z-test（p=0.01）比較改寫與原句的 friction rate 決定是否剔除，上線後用 A/B defect rate 與 Z-test 計數的 win/loss 評估，並每週追蹤改寫與未改寫的 friction rate、每週抽樣送人工標註。互動紀錄同時是訓練訊號與評估依據。"
+    },
+    {
+      "edge": "E1",
+      "how": "從真實使用者改述中學到的改寫，在 ASR 之後、NLU 之前攔截並替換使用者的原句，讓進入意圖辨識的外部輸入變成較可能被正確解讀的形式。它修的是「進入目標對齊的外部輸入」本身，而不是意圖分類模型。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文自述：系統在 Alexa 生產環境以 A/B 測試上線，監測兩週以上，改寫組缺陷率降低超過 30%；截至論文撰寫時（arXiv v1 公開於 2019-11-06）已運作超過 9 個月、服務數百萬使用者（arXiv:1911.02557，Application Deployment／Online Performance 節）。",
+      "Amazon Science 官方部落格（共同作者 Chenlei Guo，2020-01-21）描述同一套以 absorbing Markov chain 建模改述序列的系統，並說它已部署、每週修正數百萬則聽錯或說錯的請求，大約每學到 1 個無效替換就學到 12 個有效替換：https://www.amazon.science/blog/how-we-taught-alexa-to-correct-her-own-defects 。部落格說部署已超過一年，論文說超過 9 個月；兩者撰寫時點相差數月，時長描述大致相容。"
+    ],
+    "assessment": "有明確的第一方商用採納證據：論文本身的生產 A/B 測試與長期上線，加上 Amazon 官方部落格對同一系統的描述，採納方是 Amazon Alexa。限制是兩個來源都出自 Amazon 自己，沒有第三方稽核；現今的 Alexa 是否仍使用這個機制，未見證據。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "不公開。Alexa 內部匿名日誌、5,679 對人工標註集與 friction 模型都沒有釋出；多項超參數（最少使用者與互動門檻、blacklist 的線上規則）也未揭露。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "這是「從部署中的隱式／顯式回饋自動學習並上線修正」最完整的生產規模閉環範例，附 A/B 與長期監控，是回饋迴路子題的必讀；扣分在滿意度（friction）估計器完全黑箱，且訓練標籤與評估指標共用同一個代理模型。",
+  "related": ["1809.08267", "1704.04368", "1409.3215"],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

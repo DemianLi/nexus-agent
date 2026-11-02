@@ -1,11 +1,10 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
-
 import type { ConversationEntry, ConversationState, ToolEntry } from '@nexus/wire';
-import { UNFINISHED_TOOL_TEXT } from '@nexus/wire';
+import { UNFINISHED_TOOL_CODE, UNFINISHED_TOOL_TEXT } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
+  ABORTED_BEFORE_DISPATCH_CODE,
   answersOfText,
   answerText,
   isStoppedQuestion,
@@ -14,13 +13,10 @@ import {
   questionsOf,
   questionSummary,
   stoppedOnQuestion,
-  WITHDRAWN_TOOL_REASON,
 } from '@/lib/question-view';
 
-/** pump 收回時卡上的那一句（前綴＋理由）。 */
-const WITHDRAWN = `Error: ${WITHDRAWN_TOOL_REASON}`;
-
-const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf8');
+/** pump 收回時卡上的那一句與碼（值由 harness 的 `ask-user-wire.test.ts` 釘住）。 */
+const WITHDRAWN = 'Error: tool call aborted before dispatch';
 
 function tool(patch: Partial<ToolEntry>): ToolEntry {
   return {
@@ -31,6 +27,7 @@ function tool(patch: Partial<ToolEntry>): ToolEntry {
     input: '',
     status: 'failed',
     error: WITHDRAWN,
+    errorCode: ABORTED_BEFORE_DISPATCH_CODE,
     attribution: { kind: 'root' },
     ...patch,
   };
@@ -41,23 +38,21 @@ function state(status: ConversationState['status'], entries: ConversationEntry[]
 }
 
 describe('停在提問時被停止的那張卡', () => {
-  it('抄來的理由跟 `@nexus/core` 對得上（web 不相依 core，改了那邊這裡要紅）', () => {
-    const source = read('../../../../packages/nexus-core/src/turn-cancel.ts');
-    expect(/TOOL_ABORTED_BEFORE_DISPATCH_REASON = '([^']*)'/.exec(source)?.[1]).toBe(
-      WITHDRAWN_TOOL_REASON,
-    );
-    // 卡上的字是前綴接理由：理由要在結尾，比結尾才成立。
-    expect(source).toMatch(
-      /TOOL_ABORTED_BEFORE_DISPATCH_TEXT =\s*TOOL_ERROR_PREFIX \+ TOOL_ABORTED_BEFORE_DISPATCH_REASON/,
-    );
-  });
-
-  it('收回的那一句、折疊器補的那一句都算；別的失敗、別的工具、還沒收的不算', () => {
+  it('收回的那個碼、折疊器補的那個碼都算；別的失敗、別的工具、還沒收的不算', () => {
     expect(isStoppedQuestion(tool({}))).toBe(true);
-    expect(isStoppedQuestion(tool({ error: UNFINISHED_TOOL_TEXT }))).toBe(true);
-    expect(isStoppedQuestion(tool({ error: 'Error: 問答回覆看不懂' }))).toBe(false);
+    expect(
+      isStoppedQuestion(tool({ error: UNFINISHED_TOOL_TEXT, errorCode: UNFINISHED_TOOL_CODE })),
+    ).toBe(true);
+    expect(
+      isStoppedQuestion(tool({ error: 'Error: 問答回覆看不懂', errorCode: 'ANSWER_PARSE' })),
+    ).toBe(false);
+    // 比碼不比字：沒有碼，就算文字一模一樣也不算。
+    const { errorCode: _code, ...codeless } = tool({});
+    expect(isStoppedQuestion(codeless)).toBe(false);
     expect(isStoppedQuestion(tool({ name: 'write_file' }))).toBe(false);
-    expect(isStoppedQuestion(tool({ status: 'suspended', error: undefined }))).toBe(false);
+    expect(
+      isStoppedQuestion(tool({ status: 'suspended', error: undefined, errorCode: undefined })),
+    ).toBe(false);
   });
 
   it('輸入框換提示字只看這一輪（最後一句人話之後），而且這一輪是停止收的', () => {
@@ -66,6 +61,12 @@ describe('停在提問時被停止的那張卡', () => {
     // 人已經照著打字回覆了：那張卡是上一輪的。
     expect(stoppedOnQuestion(state('stopped', [tool({}), human]))).toBe(false);
     expect(stoppedOnQuestion(state('failed', [tool({})]))).toBe(false);
+  });
+
+  it('通知叫醒的新一輪也是新的一輪：上一輪停在提問上的那張卡不算這一輪（#859）', () => {
+    const notice = { kind: 'notice', id: 'n', source: 'subagent-settled' } as ConversationEntry;
+    expect(stoppedOnQuestion(state('stopped', [tool({}), notice]))).toBe(false);
+    expect(stoppedOnQuestion(state('stopped', [notice, tool({})]))).toBe(true);
   });
 });
 
@@ -162,6 +163,13 @@ describe('答案配到哪一張提問卡', () => {
     });
   });
 
+  it('通知叫醒的新一輪同樣不跨輪配答案（#859）', () => {
+    const notice = { kind: 'notice', id: 'n', source: 'subagent-settled' } as ConversationEntry;
+    expect(pairs([ask('old', ['a']), notice, ask('new', ['a']), answer('ans', ['a'])])).toEqual({
+      new: 'ans',
+    });
+  });
+
   it('放棄整組不是答案，不配；參數解不開的卡配不到', () => {
     expect(pairAnswers([ask('card', ['a']), answer('gave-up', ['a'], true)]).size).toBe(0);
     expect(pairAnswers([tool({ id: 'x', input: '{"questions":' }), answer('a', [])]).size).toBe(0);
@@ -198,7 +206,7 @@ describe('答案配到哪一張提問卡', () => {
     it('截過的結果文字解不開——而且頭尾看起來還是完整的 JSON', () => {
       // harness 超過上限（`#settings/tool-text` 那一列的 `maxBytes`，預設 50000）時取頭尾各半、中間放一行說明
       // （`apps/harness/src/tool-result-text.ts`）。這裡的長度與上限無關，只要形狀是截過的。
-      const truncated = `${text.slice(0, 14)}\n…（中間 40000 個位元組沒有送出來，全文在會話日誌裡）\n${text.slice(-14)}`;
+      const truncated = `${text.slice(0, 14)}\n…（中間 40000 個位元組沒有送出來）\n${text.slice(-14)}`;
       // 粗略的頭尾檢查會放行，所以判準只能是真的 parse。
       expect(truncated.startsWith('{') && truncated.endsWith('}')).toBe(true);
       expect(answersOfText(truncated)).toBeUndefined();

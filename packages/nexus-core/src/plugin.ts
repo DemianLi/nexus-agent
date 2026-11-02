@@ -32,7 +32,7 @@
  *
  * 我們讓它**載入失敗**：每一層 object 都用 `z.strictObject`。理由是 YAML 拼錯字會悄悄
  * 失效，而這是一台多人共用的內網主機，沒有人會發現。前例是
- * `createAgentInstructionsPlugin` 拒絕 dsh 用 `0` 代表關掉。
+ * `@nexus/plugin-agent-instructions` 的設定拒絕 dsh 用 `0` 代表關掉。
  *
  * @module
  */
@@ -52,8 +52,9 @@ import type { PluginRegistry } from './registry.js';
  */
 export interface NexusPlugin<TConfig = void> {
   /**
-   * 純標籤，唯一用途是錯誤訊息指名。**不唯一**：同一個 plugin 掛載多次是合法的
-   * （`mcp` 接兩台 server 就是兩個條目、同一個 `name`），真撞了會撞在它們註冊的東西
+   * 標籤：錯誤訊息指名用，**也是停用視圖與 core 條目開關的比對鍵**（`registry.disabledEntries`，
+   * #456、#678）——那幾個開關的鍵是字串，所以任何 plugin 取同名都碰得到。**不唯一**：同一個 plugin
+   * 掛載多次是合法的（`mcp` 接兩台 server 就是兩個條目、同一個 `name`），真撞了會撞在它們註冊的東西
    * 那一層，不是在這裡。指認某一次掛載是 {@link PluginEntry.id} 的工作。
    */
   readonly name: string;
@@ -63,8 +64,8 @@ export interface NexusPlugin<TConfig = void> {
    */
   readonly requires?: readonly string[];
   /**
-   * 這個 plugin 的設定 schema。省略即**這個 plugin 不收設定**，條目給了 `config` 就是
-   * 錯誤（見 {@link parseEntryConfig}）。
+   * 這個 plugin 的設定 schema。省略即**這個 plugin 不收設定**：條目給了 `config` 也沒有作用，
+   * 照 dsh 原樣交給 `apply`、不驗（見 {@link parseEntryConfig}）；產品路徑上啟動時印一句警告。
    *
    * 每一層 object 都要 `z.strictObject`——未知欄位讓載入失敗是登記過的偏離，見檔頭。
    * 預設值寫在 schema 裡，不寫在 `apply` 裡：`--dump-config`（#454）要印得出實際生效的值。
@@ -187,7 +188,7 @@ export interface ResolvedPluginEntry {
   /** 這一次掛載關著——{@link PluginEntry.disabled} 的解析結果，省略即 `false`。 */
   readonly disabled: boolean;
   /**
-   * 驗過的設定，直接交給 `apply`。沒有 `Config` 的 plugin 是 `undefined`；
+   * 驗過的設定，直接交給 `apply`。沒有 `Config` 的 plugin 是條目上原樣的 `config`（照 dsh 不驗，沒給就是 `undefined`）；
    * **停用的條目也是 `undefined`**（它的設定根本沒驗）。
    */
   readonly config: unknown;
@@ -260,9 +261,12 @@ export function parseEntry(
 /**
  * 驗一個條目的設定。
  *
- * 兩條規則各擋一種錯：
+ * 兩條規則：
  *
- * - plugin **沒有** `Config` 卻給了 `config`——設了一份不會有任何作用的設定。
+ * - plugin **沒有** `Config`：**不驗，給了什麼就原樣交下去**，照 dsh 的 `resolveConfig`
+ *   （`vendor/cordis/src/fiber.ts:50-51`，`477b4f4`：`if (!runtime.Config) return config`）。設了一份不會有
+ *   任何作用的設定不是失敗，這裡不擋（[#751](https://github.com/DemianLi/nexus-agent/issues/751) 拍板）；
+ *   產品路徑在讀完清單時另外印一句警告（`apps/harness` 的 `loadDefaultPlugins`）。
  * - plugin **有** `Config`：用 `config ?? {}` 去驗，預設值因此寫得進 schema。未知欄位
  *   讓它失敗（登記的偏離，見檔頭）。
  *
@@ -272,7 +276,7 @@ export function parseEntry(
  * @param entry - 待驗的條目。
  * @param plugin - 它掛的那顆 plugin。
  * @param origin - 已經解析好的身分，用來指名。
- * @returns 驗過的設定；plugin 沒有 `Config` 時是 `undefined`。
+ * @returns 驗過的設定；plugin 沒有 `Config` 時是條目上原樣的 `config`（沒給就是 `undefined`）。
  */
 export function parseEntryConfig(
   entry: PluginEntry,
@@ -280,13 +284,7 @@ export function parseEntryConfig(
   origin: PluginOrigin,
 ): unknown {
   const schema = plugin.Config;
-  if (schema === undefined) {
-    if (entry.config === undefined) return undefined;
-    throw new TypeError(
-      `${formatOrigin(origin)} 不收 config——這顆 plugin 沒有 Config schema，` +
-        `給它的設定不會有任何作用。`,
-    );
-  }
+  if (schema === undefined) return entry.config;
   const result = schema.safeParse(entry.config ?? {});
   if (!result.success) {
     throw new TypeError(
@@ -326,6 +324,65 @@ export function parseEntryConfig(
  *   指得出是清單裡哪一個。
  */
 export function resolveEntries(entries: readonly PluginEntry[]): ResolvedPluginEntry[] {
+  // **設定全部驗完才回傳**，不是邊回傳邊驗：`loadPlugins` 拿到清單就開始跑 `apply`，
+  // 所以「第三個條目的設定打錯時第一個的 apply 不能跑」這條驗收句活在這一圈裡。
+  return resolveIdentities(entries).map(({ entry, origin, disabled }) => ({
+    plugin: entry.plugin,
+    origin,
+    disabled,
+    config: disabled ? undefined : parseEntryConfig(entry, entry.plugin, origin),
+  }));
+}
+
+/** {@link resolveEntriesPerEntry} 的一格：解析得出身分，設定可能驗不過。 */
+export interface EntryResolution {
+  readonly plugin: NexusPlugin<unknown>;
+  readonly origin: PluginOrigin;
+  readonly disabled: boolean;
+  /** 驗過的設定；{@link configError} 在時沒有意義。 */
+  readonly config: unknown;
+  /** 這一列的設定驗不過時的錯誤，訊息同 {@link parseEntryConfig}。 */
+  readonly configError?: TypeError;
+}
+
+/**
+ * {@link resolveEntries} 的逐列版：**一列的設定驗不過只記在那一列**，不讓整份失敗。
+ *
+ * 給 `loadPlugins` 的逐列掉模式用（照 dsh：一列起不來，其他列照樣起來）。**整份清單的性質照舊整份失敗**：
+ * 條目形狀不合法、兩個條目寫了同一個 id——那是 dsh 失敗表的第一列，設定檔本身含不合法的條目
+ * （dsh `packages/boot/app-boot/README.zh.md:96`，`477b4f4`）。
+ *
+ * @param entries - 待解析的清單，順序有意義。
+ * @returns 與清單等長、同序的掛載。
+ * @throws 某個條目的形狀不合法，或兩個條目寫了同一個 id。
+ */
+export function resolveEntriesPerEntry(entries: readonly PluginEntry[]): EntryResolution[] {
+  return resolveIdentities(entries).map(({ entry, origin, disabled }) => {
+    if (disabled) return { plugin: entry.plugin, origin, disabled, config: undefined };
+    try {
+      return {
+        plugin: entry.plugin,
+        origin,
+        disabled,
+        config: parseEntryConfig(entry, entry.plugin, origin),
+      };
+    } catch (error) {
+      // schema 裡的 transform 或 refine 自己拋的也算這一列的設定壞了，不讓它拖垮整份。
+      const configError =
+        error instanceof TypeError
+          ? error
+          : new TypeError(`${formatOrigin(origin)} 的 config 不合法 — ${String(error)}`, {
+              cause: error,
+            });
+      return { plugin: entry.plugin, origin, disabled, config: undefined, configError };
+    }
+  });
+}
+
+/** 驗形狀、抓重複 id、補號。兩支解析共用，見 {@link resolveEntries}。 */
+function resolveIdentities(
+  entries: readonly PluginEntry[],
+): { entry: PluginEntry; origin: PluginOrigin; disabled: boolean }[] {
   const parsed = entries.map((entry, index) => ({ entry, ...parseEntry(entry, index) }));
 
   // 先把手寫的 id 全部收進來再補號：補號要跳過它們，而它們可能出現在清單的任何位置。
@@ -343,7 +400,7 @@ export function resolveEntries(entries: readonly PluginEntry[]): ResolvedPluginE
   }
 
   const counters = new Map<string, number>();
-  const resolved = parsed.map(({ entry, manifest, entryManifest }, index) => {
+  return parsed.map(({ entry, manifest, entryManifest }, index) => {
     const disabled = entryManifest.disabled ?? false;
     if (entryManifest.id !== undefined) {
       return { entry, origin: { id: entryManifest.id, name: manifest.name }, disabled };
@@ -358,13 +415,4 @@ export function resolveEntries(entries: readonly PluginEntry[]): ResolvedPluginE
     taken.set(id, index);
     return { entry, origin: { id, name: manifest.name }, disabled };
   });
-
-  // **設定全部驗完才回傳**，不是邊回傳邊驗：`loadPlugins` 拿到清單就開始跑 `apply`，
-  // 所以「第三個條目的設定打錯時第一個的 apply 不能跑」這條驗收句活在這一圈裡。
-  return resolved.map(({ entry, origin, disabled }) => ({
-    plugin: entry.plugin,
-    origin,
-    disabled,
-    config: disabled ? undefined : parseEntryConfig(entry, entry.plugin, origin),
-  }));
 }

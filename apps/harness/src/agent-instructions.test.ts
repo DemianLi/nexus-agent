@@ -34,9 +34,9 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedPlugins, withoutTimeContext } from './fixtures.js';
 
-const shipped = await shippedPlugins();
+const shipped = withoutTimeContext(await shippedPlugins());
 
 const GP = GENERAL_PURPOSE_SUBAGENT.name;
 
@@ -99,11 +99,13 @@ interface RunOptions {
    * 門檻壓低是為了在上限內摘要得到；**plugin 清單照舊是出貨的那一份**。
    */
   readonly looping?: {
-    readonly summarization: { readonly messages: number; readonly keep: number };
+    readonly summarization: { readonly messages: number; readonly retainTokens: number };
     readonly recursionLimit: number;
   };
   /** 送幾句話。預設一句。 */
   readonly submits?: readonly string[];
+  /** 留著出貨的 `time-context` 那一列（#1625）。預設關掉，這一檔問的是工作區指令；只有「畫面上看不到」那組要它在。 */
+  readonly timeContext?: boolean;
   /**
    * 加在出貨清單**後面**的 plugin。
    *
@@ -128,7 +130,10 @@ async function run(options: RunOptions) {
   const built = await createNexusAgent({
     model,
     checkpointer,
-    plugins: [...shipped, ...(options.extraPlugins ?? [])],
+    plugins: [
+      ...(options.timeContext === true ? await shippedPlugins() : shipped),
+      ...(options.extraPlugins ?? []),
+    ],
     ...(options.files !== undefined && {
       backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     }),
@@ -136,7 +141,7 @@ async function run(options: RunOptions) {
       recursionLimit: looping.recursionLimit,
       summarization: {
         trigger: [{ type: 'messages', value: looping.summarization.messages }],
-        keep: { type: 'messages', value: looping.summarization.keep },
+        retainTokens: looping.summarization.retainTokens,
       },
     }),
   });
@@ -362,6 +367,30 @@ describe('畫面上看不到它', () => {
   }, 20000);
 
   /**
+   * 時間讀數（#1625）同一個道理：它是給模型看的，不是誰講的話，同樣經 `agent/pre-step` 注進來、日誌記成 `source.plugin` 的 `user/message`。
+   * 沒有工作區也要有（讀數不依賴 AGENTS.md）。
+   */
+  it('時間讀數即時 frame 也一個字都沒有', async () => {
+    const found = await run({
+      files: { 'AGENTS.md': '規矩。' },
+      turns: [{ content: '好。' }],
+      timeContext: true,
+    });
+    try {
+      const reading = (found.prompts[0] ?? []).filter(
+        (message) => 'nexus.timeContext' in message.additional_kwargs,
+      );
+      // 前提：讀數這一輪確實注入了（不然這條是空掃）。
+      expect(reading).toHaveLength(1);
+      const wire = JSON.stringify(found.frames);
+      expect(wire).not.toContain('Time sampled');
+      expect(wire).not.toContain('Browser time zone');
+    } finally {
+      await found.close();
+    }
+  }, 20000);
+
+  /**
    * **同一個病，更早就在了。** 擋它的護欄（`thread-pump.ts` 的 `#injectedMessages`）擋的是「圖裡注進來的
    * human 訊息」整類，不是工作區指令一種——重複提醒（#147／#305）走 `beforeModel` 注入，2026-09-18 實測
    * 在這條線上一樣會變成一顆使用者泡泡。這一條把它一起釘住，免得哪天護欄窄化成只認基線。
@@ -421,7 +450,7 @@ describe('摘要之後下一句話把基線補回來', () => {
   beforeAll(async () => {
     found = await run({
       files: { 'AGENTS.md': '規矩。' },
-      looping: { summarization: { messages: 8, keep: 3 }, recursionLimit: 40 },
+      looping: { summarization: { messages: 8, retainTokens: 24 }, recursionLimit: 40 },
       submits,
     });
     state = await found.state();
@@ -531,8 +560,12 @@ describe('摘要之後下一句話把基線補回來', () => {
  * **宣告 `stateSchema` 沒有把私有鍵推上輸出通道。** `summarization.test.ts` 那條「回傳值只有 `files` 與
  * `messages`」量的組裝沒有這顆 plugin；這顆為了讀切點宣告了同一個鍵，而宣告 `stateSchema` 就是往圖的
  * channel 表上加東西。這一條在出貨清單＋`--workspace`、而且摘要真的發生過的組裝上再量一次。
+ *
+ * **`skillsMetadata` 是例外，而且只有它**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：出貨清單掛了
+ * skills 之後，基座的 skills 狀態 channel 是公開的、帶預設值 `[]`，掛了就出現在回傳值裡（沒有 skill 時是空陣列，
+ * 不影響 system prompt）。要量的是**私有鍵**（`_summarizationEvent` 之類）沒有外洩，所以其餘一律不准多。
  */
-it('shipped 摘要過之後，invoke 的回傳值還是只有 files 與 messages', async () => {
+it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格沒有多的鍵', async () => {
   const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-keys-'));
   await writeFile(join(root, 'AGENTS.md'), '規矩。', 'utf8');
   const model = new ScriptedChatModel({
@@ -545,7 +578,7 @@ it('shipped 摘要過之後，invoke 的回傳值還是只有 files 與 messages
     backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     summarization: {
       trigger: [{ type: 'messages', value: 3 }],
-      keep: { type: 'messages', value: 1 },
+      retainTokens: 1,
     },
   });
   try {
@@ -563,7 +596,7 @@ it('shipped 摘要過之後，invoke 的回傳值還是只有 files 與 messages
     ).getState({ configurable: { thread_id: 'keys' } });
     expect(snapshot.values._summarizationEvent).toBeDefined();
 
-    expect(Object.keys(returned).sort()).toEqual(['files', 'messages']);
+    expect(Object.keys(returned).sort()).toEqual(['files', 'messages', 'skillsMetadata']);
   } finally {
     await built.dispose();
     await rm(root, { recursive: true, force: true });

@@ -2,9 +2,9 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { loadPlugins, SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
-import { createNexusAgent } from './agent-factory.js';
+import { AssemblyDropError, createNexusAgent } from './agent-factory.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { LoopingChatModel } from './looping-model.js';
@@ -15,6 +15,7 @@ import {
   createToolPlugin,
   fakeTool,
   NOTE_TOOL_NAME,
+  virtualFilesOf,
 } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -111,7 +112,7 @@ describe('createNexusAgent', () => {
     const { agent } = await createNexusAgent({ model, plugins: [createNotePlugin()] });
 
     const result = await agent.invoke(toAgentInvocation('寫檔。'));
-    const files = Object.keys(result.files ?? {});
+    const files = Object.keys(virtualFilesOf(result));
 
     expect(files).not.toContain('/secrets/token');
     expect(files).toContain('/notes.md');
@@ -173,7 +174,7 @@ describe('createNexusAgent', () => {
 
     const result = await agent.invoke(toAgentInvocation('寫檔。'));
 
-    expect(Object.keys(result.files ?? {})).toContain('/a.md');
+    expect(Object.keys(virtualFilesOf(result))).toContain('/a.md');
   });
 
   it('組裝點給的 system prompt 到得了模型', async () => {
@@ -498,7 +499,7 @@ describe('迴圈上限', () => {
      * `~/.nexus-agent`**；自己傳一份 `env` 會把那道安全網繞過去。
      */
     it('整條路：patch 改掉出貨清單那一列，組裝點當場拿到新的值', async () => {
-      const plugins = await loadDefaultPlugins({
+      const { plugins } = await loadDefaultPlugins({
         patches: ['src/settings/settings-override.patch.yml'],
       });
       const message = await limitFrom({ plugins });
@@ -538,6 +539,33 @@ describe('迴圈上限', () => {
     // `模型輪數 = floor((上限 - 1) / 每輪格數)`：8 底下是 3 對 2。
     expect(await rounds(false)).toBe(3);
     expect(await rounds(undefined)).toBe(2);
+  });
+
+  /**
+   * **插話的載體（#710）再多一格，serve 每輪四格。** 它的 `beforeModel` 是另一個節點，跟提醒器那一顆一樣每輪走一次；
+   * `afterAgent` 那一半一次執行只走一次，跑掉的迴圈走不到它。CLI 不掛（`stepInbox` 只有 serve 給），所以這一格只在 serve 上付。
+   *
+   * 量在預設上限上，因為那是 serve 真正吃到的數字。
+   */
+  it('插話的載體把每輪的格數從三格變四格，預設上限底下從 33 輪變 24 輪', async () => {
+    const rounds = async (stepInbox: boolean): Promise<number> => {
+      const model = new LoopingChatModel();
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        plugins: [createEchoPlugin()],
+        summarization: false,
+        stepInbox,
+      });
+      try {
+        await expect(agent.invoke(toAgentInvocation('一直跑'))).rejects.toThrow(/Recursion limit/);
+      } finally {
+        await dispose();
+      }
+      return model.calls;
+    };
+
+    expect(await rounds(false)).toBe(Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 3));
+    expect(await rounds(true)).toBe(Math.floor((DEFAULT_RECURSION_LIMIT - 1) / 4));
   });
 
   it('正常收工的對話不受影響 —— 上限擋的是跑掉，不是複雜', async () => {
@@ -625,7 +653,7 @@ describe('不變量的選擇面', () => {
 
   it('blocklist 從組裝點傳得進去，那個 package 的檢查就真的沒裝', async () => {
     // **這條是 #104 那個落差的回歸測試**：`InvariantSelection` 早就存在，但組裝點沒有
-    // 把它接出來，所以九個配套入口一個都選不動。它要走 `createNexusAgent`，core 那側
+    // 把它接出來，所以當時的九個配套入口一個都選不動。它要走 `createNexusAgent`，core 那側
     // 的單元測試驗不到「接沒接出來」。
     expect(
       await violationsUnder([createEchoPlugin(), noisyInvariantPlugin('@nexus/noisy')], {
@@ -683,3 +711,125 @@ describe('不變量的選擇面', () => {
 type IsAny<T> = 0 extends 1 & T ? true : false;
 type AgentInvokeResult = Awaited<ReturnType<NexusAgentHandle['agent']['invoke']>>;
 type MessagesAreTyped = IsAny<AgentInvokeResult['messages']> extends true ? false : true;
+
+/**
+ * **組裝時逐列掉**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）：給了 `optionalEntries`，那幾個條目
+ * 自己的失敗只讓它掉；不在那份裡的條目掉了，整個組裝失敗。產品路徑上後者是組裝點自己加的外掛與必掛的列。
+ */
+describe('createNexusAgent 的可少掛條目', () => {
+  /** 一顆 `apply` 就拋的 plugin。 */
+  const throwing = (name: string): PluginEntry => ({
+    plugin: {
+      name,
+      apply: () => {
+        throw new Error(`${name} 故意壞掉`);
+      },
+    },
+  });
+
+  /** 模型綁到的工具名：跑一輪，讀假模型記下的那一份。 */
+  async function boundTools(handle: NexusAgentHandle, model: ScriptedChatModel) {
+    await handle.agent.invoke(toAgentInvocation('嗨'), { configurable: { thread_id: 'optional' } });
+    return model.boundToolNames;
+  }
+
+  /**
+   * 卡上的驗收（撞名）：一列註冊了基座保留的工具名，那一列掉了、**它註冊的東西撤乾淨**（同一顆 plugin 另一個工具
+   * 也不在），其他列照樣在。另一列 `apply` 拋錯也只讓它自己掉。
+   */
+  it('`apply` 拋錯與撞名：只有那兩列掉，註冊撤乾淨，其他列照樣在', async () => {
+    const echo = createEchoPlugin();
+    const broken = throwing('broken');
+    const colliding: PluginEntry = {
+      plugin: {
+        name: 'colliding',
+        apply(registry) {
+          registry.tools.register(fakeTool('side_tool'));
+          registry.tools.register(fakeTool('write_file'));
+        },
+      },
+    };
+    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
+    const handle = await createNexusAgent({
+      model,
+      plugins: [echo, broken, colliding],
+      optionalEntries: new Set([echo, broken, colliding]),
+    });
+    try {
+      expect(handle.dropped.map(({ entry, drop }) => [entry, drop.stage])).toEqual([
+        [broken, 'apply'],
+        [colliding, 'apply'],
+      ]);
+      expect(handle.dropped[0]?.drop.message).toMatch(/broken 故意壞掉/u);
+      expect(handle.dropped[1]?.drop.message).toMatch(/colliding.*"write_file"/su);
+      const tools = await boundTools(handle, model);
+      expect(tools).toContain(ECHO_TOOL_NAME);
+      expect(tools).not.toContain('side_tool');
+    } finally {
+      await handle.dispose();
+    }
+  });
+
+  it('`requires` 連鎖：提供服務的那一列掉了，要用它的那一列跟著掉，原因寫明缺的是什麼', async () => {
+    const provider: PluginEntry = {
+      plugin: {
+        name: 'provider',
+        apply(registry) {
+          registry.capabilities.provide('shared-thing');
+          throw new Error('提供方壞掉');
+        },
+      },
+    };
+    const consumer: PluginEntry = {
+      plugin: { name: 'consumer', requires: ['shared-thing'], apply: () => undefined },
+    };
+    const handle = await createNexusAgent({
+      model: new ScriptedChatModel({ turns: [] }),
+      plugins: [provider, consumer],
+      optionalEntries: new Set([provider, consumer]),
+    });
+    try {
+      expect(handle.dropped.map(({ drop }) => drop.stage)).toEqual(['apply', 'requires']);
+      expect(handle.dropped[1]?.drop.message).toMatch(/"shared-thing"，沒有人提供/u);
+    } finally {
+      await handle.dispose();
+    }
+  });
+
+  /**
+   * 卡上的驗收：**組裝點的外掛 `apply` 拋錯，整個組裝照舊失敗**，用一份混了設定檔列與組裝點外掛的清單測。可少掛的
+   * 那幾列已經掛上、開了資源，拋之前要收掉：拿到的是一個 exception，沒有第二個人知道那些東西還開著。
+   */
+  it('不在可少掛名單上的條目掉了：整個失敗（AssemblyDropError），已掛上的那幾列的資源收掉了', async () => {
+    let closed = 0;
+    const listed: PluginEntry = {
+      plugin: {
+        name: 'listed',
+        apply: (registry) => void registry.lifecycle.onDispose(() => void (closed += 1)),
+      },
+    };
+    const listedBroken = throwing('listed-broken');
+    const hostBroken = throwing('host-broken');
+    const failure = createNexusAgent({
+      model: new ScriptedChatModel({ turns: [] }),
+      plugins: [hostBroken, listed, listedBroken],
+      optionalEntries: new Set([listed, listedBroken]),
+    });
+    await expect(failure).rejects.toBeInstanceOf(AssemblyDropError);
+    const error = (await failure.catch((caught: unknown) => caught)) as AssemblyDropError;
+    expect([...error.fatal]).toEqual([hostBroken]);
+    // 可少掛的那一列掉了也一起列，呼叫端合成訊息時用得到。
+    expect(error.dropped.map(({ entry }) => entry)).toEqual([hostBroken, listedBroken]);
+    expect(error.message).toMatch(/host-broken 故意壞掉〔不能少掛〕/u);
+    expect(closed).toBe(1);
+  });
+
+  it('沒給 `optionalEntries`：照舊全有全無，一列 `apply` 拋錯就整個失敗', async () => {
+    await expect(
+      createNexusAgent({
+        model: new ScriptedChatModel({ turns: [] }),
+        plugins: [createEchoPlugin(), throwing('broken')],
+      }),
+    ).rejects.toThrow(/broken 故意壞掉/u);
+  });
+});

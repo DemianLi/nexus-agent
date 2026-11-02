@@ -1,0 +1,138 @@
+{
+  "id": "2007.12720",
+  "title": "MultiWOZ 2.2 : A Dialogue Dataset with Additional Annotation Corrections and State Tracking Baselines",
+  "topic": "T2",
+  "subarea": "傳統任務型對話 DST 與資料集",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在 MultiWOZ 2.1 之上再修一輪對話狀態標註，改用 SGD 式 schema 把槽位分成 categorical 與 non-categorical，允許一個槽位的狀態是多個等價值的清單，並補上 span、copy_from、active intents、requested slots 與缺漏的 dialogue act，最後用 TRADE、SGD-baseline、DS-DST 建立 JGA 基準，釋出 MultiWOZ 2.2。",
+  "problem": "MultiWOZ 是 DST 最常用的基準，但 2.1 版仍有大量沒修到的標註雜訊，會同時汙染訓練與評估。第一類是幻覺值：狀態裡出現對話歷史沒講過的值，作者分成四種——系統只是提議、使用者還沒接受就先標進狀態（early markup）、wizard 直接從資料庫查詢結果帶入、標註介面自由輸入造成的打字錯誤、隱式時間運算（加減一段時間或四捨五入到最近的一刻鐘）。這類錯誤出現在 948 段對話的 3128 輪。第二類是語意正確但標法不一致：同一個值可能來自使用者、系統、跨領域沿用或 ontology 本身；同一個值有多種說法（18:00、6 pm、evening at 6）；群眾標註者對「使用者同意的值要不要追蹤」看法不同。2.1 對每個槽位只給一個正解卻沒有明訂取值規則，模型輸出等價但字面不同的值會被錯判。第三類是 ontology 問題：hotel-name 有 51% 的值不是語意唯一（例如 a and b guesthouse 與 a and b guest house），約 21.0% 的 ontology 值無法以精確字串比對對回資料庫，還混有 cheap|moderate、NOT(hamilton lodge) 這類邏輯運算式。另外 MultiWOZ 沒有官方的 span 標註，各個 span-based DST 模型只好自寫字串比對啟發式來產生 span，結果彼此難以比較。",
+  "core_idea": "把「資料收集前就該定義 schema」的原則事後套回 MultiWOZ。槽位分成兩種：categorical 槽位的值域小而固定，只能從 schema 的候選清單挑；non-categorical 槽位的值必須出現在對話歷史，並以 span 標出位置。一個槽位的狀態可以是一份等價值清單，評估時命中清單中任一個值就算對。這樣一次處理三件事：幻覺值（值必須有出處）、說法不一致（等價說法全列入）、span 不統一（官方統一標註）。另外補齊 action、active intent 與 requested slots，讓資料可以直接套用 SGD 格式與 SGD 式的 DST 模型。",
+  "method": {
+    "輸入與輸出": "輸入是 MultiWOZ 2.1（逾 10,000 段對話、8 個領域：Restaurant、Hotel、Attraction、Taxi、Train、Hospital、Bus、Police）與它附帶的資料庫。輸出是 SGD 格式的 MultiWOZ 2.2：每輪標有 active intent、requested slots、槽位值清單、span，另有 schema 與 dialogue act 檔。",
+    "步驟1_錯誤盤點（§2–§3）": "逐輪檢查狀態值能不能在對話歷史中找到出處。找不到的依四種幻覺類型歸類：early markup、annotation from database、typo、implicit time processing。再列出每個槽位在全資料集的所有取值，用這份清單揪出異常值，例如時間槽位出現 thursday、飯店名稱出現 no。",
+    "步驟2_schema 定義（§4.1，Table 2）": "訓練集中不同值少於 50 個的槽位歸為 categorical，其餘歸為 non-categorical。Bus 與 Police 在訓練集分別只有 5 段與 145 段對話，門檻規則在這兩個領域沒有代表性，改依其他領域的相似槽位歸類。Table 2 的結果：Restaurant 的 categorical 是 pricerange、area、bookday、bookpeople，non-categorical 是 food、name、booktime；Hotel 除了 name 全部是 categorical；Taxi 全部是 non-categorical（destination、departure、arriveby、leaveat）；Train 的 destination、departure、day、bookpeople 是 categorical，arriveby、leaveat 是 non-categorical；Hospital 只有 department，Police 只有 name，兩者都是 non-categorical。",
+    "步驟3_categorical 槽位（§4.2）": "候選值清單從 2.1 附帶的資料庫建立，另加特殊值 dontcare（使用者沒有偏好）。使用者提出 schema 以外的值時（例如要求每晚 100 美元，而系統只有 cheap／moderate／expensive 三檔），狀態填 unknown，表示這個需求無法用 schema 表達。",
+    "步驟4_non-categorical 槽位（§4.3）": "不修改使用者語句，以保持對話自然。用客製的字串比對找出對話歷史中所有與標註值語意相近的提及，比對時會考慮打字錯誤與替代說法。命中多處時取最近一次提及並標出 span，同時把這個提及加進狀態、保留原標註值，狀態因此變成值清單。有些值是從其他槽位沿用、對話中沒有明說，例如「從博物館叫車到那家餐廳」時 taxi-destination 沿用先前的 restaurant-name；這種情況不標 span，改記錄來源槽位（README 稱為 copy from），需要 span 時沿著複製鏈回溯即可。",
+    "步驟5_user 與 system actions（§4.4）": "2.1 約有 5.82% 的輪次缺 action，共補標 8,333 輪（7,339 個 user 輪、994 個 system 輪），論文說是用群眾標註。dialogue act 的槽位名稱改成與狀態一致；拿掉 domain 前綴與 Booking 前綴，同一領域的 action 改以 frame 分組（沿用 SGD 表示法）。既有 action 約有 10% 的輪次經過核對與修正。",
+    "步驟6_額外標註（§5）": "每個 user 輪加上 active intents（一輪可以有多個）與 requested slots。intent 由 action 與 state 的標註導出：論文說 Attraction、Bus、Hotel、Police 各有一個 search intent，Taxi 有一個 booking intent，Restaurant、Hotel、Train 同時有 search 與 booking（Hotel 重複出現、Hospital 沒提到）。官方 README 的 schema 表則是 Restaurant、Hotel、Train 有 find 與 book，Attraction、Bus、Hospital、Police 只有 find，Taxi 只有 book。requested slots 由該輪的 user action 產生。",
+    "步驟7_基準（§6）": "選三個同時結合 span-based 與 candidate-based 的模型。TRADE 用 pointer-generator，每個槽位的值從詞彙表生成或從對話歷史複製。SGD-baseline 用共享的預訓練 BERT，分別編碼 user 輪的 context、每個槽位、每個 categorical 候選值，再用線性層做 categorical 分類與 non-categorical 的 start／end span 預測。DS-DST 同樣用 BERT，差別在 context 嵌入以 domain-slot 為條件。指標是 joint goal accuracy（每輪所有槽位全部預測正確的比例的平均），並拆成只算 categorical 槽位的 cat-joint-acc 與只算 non-categorical 的 noncat-joint-acc。",
+    "論文沒有交代的": "字串比對的演算法、相似度門檻與同義詞表；群眾標註的作業指示、每輪人數與品質控管；三個基準模型怎麼使用多值清單與新的 span 標註來訓練；超參數、seed、執行次數；Table 4 中 2.0／2.1 的數字是重跑還是引用原論文。要重做修正流程，這幾項只能自己定。",
+    "官方 README 補充（出處：https://raw.githubusercontent.com/budzianowski/multiwoz/master/data/MultiWOZ_2.2/README.md，不是論文內容）": "資料以 train／dev／test 三個目錄存放，另有 schema.json、dialog_acts.json 與 convert_to_multiwoz_format.py；轉換腳本可以把 2.2 的修正轉回 2.1 格式。schema 共 61 個槽位（Table 2 以外還有 address、phone、postcode、ref 等可請求的資訊槽位），其中 35 個在對話狀態中追蹤，police-name 不在追蹤清單內。span 以字元層級的 start／exclusive_end 索引，不是 token 層級。8,333 個缺 action 的輪次是用微調 T5 標註、再人工核對修正，仍有 749 輪沒有 action。相較 2.1，移除了一段無效對話 SNG01862.json。"
+  },
+  "assumptions": [
+    "non-categorical 槽位的正確值一定能在對話歷史找到字面出處；需要語意推理才得到的值（after lunch、時間加減、跨槽位推論）不算合法狀態值，只能以 copy from 或捨棄處理。",
+    "客製字串比對找到的「語意相近提及」確實與標註值等價，列進清單不會引入錯誤的正解。",
+    "有多個提及時，最近一次提及是合理的 span 來源。",
+    "以訓練集「不同值少於 50 個」切分 categorical／non-categorical，能反映槽位的本質；對話太少的領域可以靠人工類比補足。",
+    "資料庫的值域足以代表 categorical 槽位的合法值，超出範圍的使用者需求塌縮成 unknown 是可以接受的。",
+    "修正後的標註比原標註更接近正確——論文沒有另外量測修正品質，這一點是預設而不是結論。"
+  ],
+  "evaluation": {
+    "benchmarks": ["MultiWOZ 2.0", "MultiWOZ 2.1", "MultiWOZ 2.2"],
+    "metrics": [
+      "joint goal accuracy（JGA，多值清單命中任一即算對）",
+      "cat-joint-acc（只算 categorical 槽位的 JGA）",
+      "noncat-joint-acc（只算 non-categorical 槽位的 JGA）",
+      "修正統計：被修改的狀態／對話比例、修改筆數、補標 action 數"
+    ],
+    "baselines": [
+      "TRADE（Wu et al. 2019）",
+      "SGD-baseline（Rastogi et al. 2019）",
+      "DS-DST（Zhang et al. 2019）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "MultiWOZ 2.1 的幻覺值很常見，四種類型合計影響近千段對話。",
+      "numbers": "幻覺值出現在 948 段對話的 3128 輪。",
+      "section": "§2.1, Figure 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "2.1 的 ontology 對名稱類槽位有大量語意重複的值，而評估只承認一個正解，等價答案會被錯判。",
+      "numbers": "hotel-name 的值有 51% 不是語意唯一；restaurant-name 與 attraction-name 的比例相近（論文沒給確切數字）。",
+      "section": "§3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "categorical 與 non-categorical 以訓練集的不同值數量切分，對話太少的領域例外處理。",
+      "numbers": "門檻：不同值少於 50 個就歸為 categorical。Bus 5 段、Police 145 段對話，改依相似槽位歸類。依 Table 2 計數，categorical 20 個、non-categorical 16 個；README 列出的 35 個追蹤槽位不含 police-name，所以實際追蹤的 non-categorical 是 15 個。",
+      "section": "§4.1, Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "non-categorical 槽位的狀態改為值清單，預測命中其中任一個值就算正確；多處命中時取最近一次提及標 span；沿用自其他槽位的值改記錄來源槽位。",
+      "numbers": "沒有數字，屬於標註與評估規則的定義。",
+      "section": "§4.3, Figure 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "補齊缺漏的 dialogue act，並重整 act 的表示方式。",
+      "numbers": "約 5.82% 的輪次缺 action；補標 8,333 輪（7,339 個 user 輪、994 個 system 輪）；既有 action 約有 10% 的輪次經核對與修正。",
+      "section": "§4.4, §4.5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "修改規模：修改集中在「把同一個值的各種說法列進清單」，錯誤在三個切分間分布相當平均。",
+      "numbers": "17.3% 的 user 輪、28.2% 的對話被修改，共 12,375 筆狀態標註；其中 1497 筆（略多於 12%）涉及兩個以上槽位。依切分：train 17.3%／27.9%、dev 17.3%／28.7%、test 17.6%／29.5%（被修改的狀態比例／對話比例）。",
+      "section": "§4.5, Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "三個模型在 2.1 與 2.2 上的 JGA 相近；TRADE 與 SGD-baseline 在 2.2 上略降，DS-DST 略升。",
+      "numbers": "JGA（2.0／2.1／2.2）：TRADE 0.486／0.460／0.454；SGD-baseline —／0.434／0.420；DS-DST 0.522／0.512／0.517。",
+      "section": "§6, Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "TRADE 與 SGD-baseline 在 non-categorical 槽位上明顯比 categorical 好；作者推測原因是修正後 non-categorical 的值保證出現在對話歷史，但沒有做消融驗證。",
+      "numbers": "cat-joint-acc／noncat-joint-acc：TRADE 0.628／0.666；SGD-baseline 0.570／0.661；DS-DST 0.706／0.701。",
+      "section": "§6, Table 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "Wizard-of-Oz 流程高度倚賴人工標註，本質上容易產生雜訊；作者主張在收集資料前先定義 schema，並在標註介面強制檢查（categorical 只能挑候選值，non-categorical 只能填對話中出現過的值），事後才修補並非上策（§2、§4、§7）。",
+    "以邏輯運算式表達的偏好（例如 cheap > moderate、多個類型以 | 並列）出現在不到 1% 的對話，模型難以學會；要用什麼更有表達力的狀態表示、模型又該怎麼設計，作者列為開放問題（§7）。",
+    "Bus 與 Police 領域的對話太少，門檻規則不適用，只能改用人工類比歸類（§4.1）。",
+    "打字錯誤與改寫在真實對話中無法避免，所以作者選擇不修改語句、改用多值清單容納，而不是把資料洗乾淨（§4.3）。",
+    "Table 5 中 non-categorical 表現較好的原因，作者只寫成推測（§6）。"
+  ],
+  "limitations_observed": [
+    "論文與官方 README 對補標 action 的方式說法不一致。§4.4 說 8,333 輪是用群眾標註補上的；資料目錄的 README（https://raw.githubusercontent.com/budzianowski/multiwoz/master/data/MultiWOZ_2.2/README.md）卻說這些輪次是用微調過的 T5 模型標註，再經人工核對與修正，而且仍有 749 輪因語意無法用既有 act 表達而沒有 action。README 可能是事後更新的，但引用 2.2 的 action 標註時，應以 README 為準，並知道其中有模型產生的成分與缺口。",
+    "「17.3% 的輪次被修正」這個數字容易被讀成「修了 17.3% 的錯」。§4.5 自己說明，大多數修改是把同一個值的各種說法列進清單，也就是評估放寬，而不是更正錯值。§2.1 找到的 3128 輪幻覺值最後修掉幾輪、各類型各修多少，論文沒有分項。整份修正也沒有抽樣準確率、標註者一致性或殘餘錯誤率，「2.2 比 2.1 乾淨」沒有被量化。",
+    "Table 4 用來比較版本的尺並不一致：從 2.1 到 2.2，標籤與評估規則同時改變（多值清單命中任一即算對、categorical 候選值改由資料庫定、新增 unknown）。在放寬的評估下，TRADE 仍從 0.460 降到 0.454，SGD-baseline 從 0.434 降到 0.420，DS-DST 從 0.512 升到 0.517；差距都在 1.4 點以內，沒有 seed、多次執行的變異或錯誤分析。「表現相近」因此讀不出修正對模型的任何因果影響；放寬評估後分數反而下降，論文也沒有解釋。2.0／2.1 的數字是重跑還是引用原論文，同樣沒有交代。",
+    "Table 5 拿 cat-joint-acc 與 noncat-joint-acc 比較，但兩者計算的槽位集合不同。依 Table 2 計數，categorical 20 個、non-categorical 16 個；README 的追蹤清單不含 police-name，實際是 20 對 15。joint accuracy 會隨槽位數增加而自然下降，兩類槽位的難度也本來就不同，所以這個比較混雜了槽位數量與槽位性質，無法支撐「修正讓 non-categorical 變好」的推測。DS-DST 的 0.706 對 0.701 也不符合作者描述的規律。",
+    "「值必須出現在對話歷史」這條規則把需要推理的狀態更新排除在基準之外，例如 train-leaveat=after lunch、依預約時間回推計程車抵達時間、時間四捨五入。這讓資料更一致，但 2.2 上的分數因此不反映語意推理型的狀態追蹤能力；這正是 LLM 時代 DST 與 agent 長程狀態維護最常出錯的地方。拿 2.2 的 JGA 推論 LLM agent 的狀態維護能力時要打折扣。",
+    "論文對 active intent 的描述有內部矛盾：§5 把 Hotel 同時放進「只有 search intent」與「search 與 booking 都有」兩組，Hospital 則完全沒有提到。官方 README 的 schema 表寫的是 Hotel 有 find 與 book、Hospital 有 find，可見論文文字有誤，應以 README／schema.json 為準。intent 是由 action 與 state 以規則導出，不是人工標註，論文也沒有驗證導出結果；把它當意圖偵測的金標準之前要先知道這一點。",
+    "categorical 槽位的越界需求一律塌縮為 unknown（例如每晚 100 美元），使用者的實際約束值因此遺失。對政策模組來說，unknown 能提示「無法滿足」，但狀態追蹤器沒有學到保留原始約束；多值清單也只放寬了 non-categorical 槽位，categorical 槽位沒有對應的容錯機制。"
+  ],
+  "framework_role": "T2 的資料與評估基礎設施，不是狀態追蹤方法。它定義了任務型對話中「狀態」長什麼樣：schema、categorical／non-categorical、多值清單、span 出處、copy from 來源鏈、active intents、requested slots。它也定義了 DST 的評估規則：多值命中的 JGA，以及 cat／noncat 分拆。對框架有兩點可以轉用：(1) 每個狀態值都要能回溯到對話中的出處（span 或 copy from），這是可稽核的狀態表示，可以直接借來設計 LLM agent 的對話記憶；也可以反過來當作 T2 的一致性檢查——拿不出出處的值就是可疑的幻覺值。(2) 標註錯誤的類型學（early markup、從資料庫帶入、隱式運算、追蹤策略不一致）同樣是 LLM 狀態追蹤器常見的錯誤模式，可以當作 T7 評估狀態錯誤的分類框架。active intent 與 requested slots 的標註也能作為 T1 意圖偵測的多意圖子任務，但使用前要先核對 schema。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有提到任何部署或產品；能查到的只有資料散布：官方 GitHub（https://github.com/budzianowski/multiwoz 的 data/MultiWOZ_2.2），以及 Hugging Face 的社群鏡像 pfb30/multi_woz_v22 和 Kaggle。這些屬於散布，不算商用採納。被後續 DST 論文當成基準屬於學術影響力，也不計入。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "公開：MultiWOZ 官方 GitHub repo 的 data/MultiWOZ_2.2（https://github.com/budzianowski/multiwoz/tree/master/data/MultiWOZ_2.2，repo 授權為 MIT，GitHub API 回報 spdx_id=MIT），以 SGD 格式提供 train／dev／test、schema.json、dialog_acts.json，另附把 2.2 的修正轉回 2.1 格式的 convert_to_multiwoz_format.py。依 README，相較 2.1 移除了 SNG01862.json；Hugging Face（multi_woz_v22）與 ParlAI 另有鏡像。論文沒有釋出三個基準模型的訓練與評估程式碼，也沒有釋出修正用的字串比對程式，所以 code 填 null。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "要讀懂 LLM 前後 DST 論文在「哪個 MultiWOZ 版本、什麼評估規則」下報數，這份資料定義文件有實際價值，錯誤類型學對狀態表示的設計也有啟發；但它沒有任何模型貢獻，基準實驗在變動的評估規則下沒有證明什麼，核心資訊也多半能從 README 與 schema.json 取得，所以有價值但不算必讀。",
+  "related": [
+    "1810.00278",
+    "1907.01669",
+    "1909.05855",
+    "1905.08743",
+    "1910.03544",
+    "1904.08637",
+    "1907.03040",
+    "1911.06192"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

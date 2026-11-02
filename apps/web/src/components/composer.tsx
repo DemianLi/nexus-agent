@@ -1,36 +1,95 @@
 /**
- * 輸入框（規格 §4.2 列 26、27，#407）：shadcn `input-group`＋`textarea`，打 `/` 跳 shadcn `command` 選單。
+ * 輸入框（規格 §4.2 列 26、27，#407）：SG 的 `Composer`（`ui/composer.tsx`，#1591），打 `/` 跳 `command` 選單。
+ *
+ * **SG 的 `Composer` 從外面接**（#1468 Q16）：它的按鍵（IME → 開頭退格 → Enter 送出）寫死在 textarea 上，所以選單的鍵、
+ * Cmd/Ctrl＋Enter 在外層用 `onKeyDownCapture` 先攔，攔到就 `stopPropagation`，SG 收不到；Enter 送出與 Shift＋Enter 換行
+ * 交給 SG（`canSubmit` 給 `canSend`）。貼上與游標從外層收（React 的 `paste`／`select` 會冒泡）。
  *
  * **草稿不住在這裡**：由呼叫端持有（`draft`／`onDraftChange`）。⑧ 會用 `hidden`＋`inert` 把輸入框換成面板（§4.3），
  * 就算哪天改成卸載，草稿也不會跟著丟。這裡只留游標與選單這種換掉也無妨的狀態。
  *
  * **選單的行為照 dsh**（觸發、排序、選了之後做什麼，見 `lib/slash-trigger.ts`）：焦點一直留在輸入框，
  * 方向鍵換選項，Enter／Tab 選，Esc 與 Shift＋Tab 收起，收起後同一個片段不再自己跳出來。
- * 選單沒開時 Enter 送出、Shift＋Enter 換行；打注音、拼音時的 Enter 是選字，不送出。
+ * 選單沒開時 Enter 送出、Shift＋Enter 換行；打注音、拼音時的 Enter 是選字，不送出。Cmd/Ctrl＋Enter 也送出，
+ * 但標成加速的手勢，跑著時由呼叫端送成插話（#710）；草稿空白時它改成「把排著的全部改成插話」（`onSteerQueue`）。
  *
- * **外觀與動效是 nexus 的**：浮層 250／150、縮放 .97／.99（§7，在 `ui/popover.tsx`）；送出鍵是實心主按鈕，
- * 按壓 .96（`styles/motion.css`）。
+ * **打 `@` 跳檔案選單**（#653，規則見 `lib/file-mention.ts` 與 `lib/mention-menu.ts`）：跟 `/` 共用這一個浮層與
+ * 同一套鍵盤，**先判 `@` 再判 `/`**。候選是非同步的：查詢一變就取消上一次，還沒回來時留著舊的列、那些列選不到，
+ * Enter 與 Tab 在這時什麼都不做（dsh 的 `arbitrate`）；一列都還沒有時 Enter 照常送出——dsh 也是這樣，選單上沒有
+ * 選中的那一列，Enter 就不歸選單管。資料夾按 Tab 往下鑽，Enter 是選定。沒給 `fileReferences`、或伺服器說沒有
+ * 工作區時，`@` 就是普通字元。
+ *
+ * **同一個 `@` 選單也列會話與子代理**（#713，規則見 `lib/session-mention.ts`）：檔案、會話一起問、各回各的，分三段畫；
+ * 選了會話就把伺服器編好的引用文字原樣插進草稿。`@/` 與 `@"` 開頭只問檔案。
+ *
+ * **`@` 選單最上面可以再有一段「委派給」**（#328 第 2 項，規則見 `lib/agent-mention.ts`）：**給了 `agentMention` 才有**。
+ * 選了不進草稿——`@` 那一段拿掉，換成輸入框上方一顆標記；一句話最多一個，再選取代前一個；標記整顆刪（×、游標在最前面按退格）。
+ * 選單的清單是同步算的、不問伺服器，所以只有「委派給」一段也開得起來（沒給檔案與會話來源時）。
+ *
+ * **主按鈕照 dsh**（`InputBar.tsx:323-344`，SG 的 `stops` 是同一套）：一輪在跑、草稿送不出去（空的、或跑著時不收的
+ * 那一種）時是停止，其餘是送出；跑著時送出鈕的名稱說出這一下是排隊（按鈕永遠是 Enter 的送法）。斷線時沒有東西可停，
+ * 不給 `running`，按鈕是送出（草稿空就暗掉）。底列「Enter 送出」那句只給報讀（sr-only，掛在輸入框的描述上）。
  */
 
-import { ArrowUp, Square } from 'lucide-react';
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { Bot, Check, ChevronRight, File, Folder, MessageSquare, Plus } from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
-import type { SlashDescriptor } from '@nexus/wire';
+import type {
+  FileReferenceListOutcome,
+  SessionReferenceListOutcome,
+  SkillEntry,
+  SlashDescriptor,
+} from '@nexus/wire';
 
+import { AgentMentionChip } from '@/components/agent-mention-chip';
+import { AttachmentRail } from '@/components/attachment-rail';
+import { DropOverlay } from '@/components/drop-overlay';
 import { Button } from '@/components/ui/button';
-import { Command, CommandItem, CommandList } from '@/components/ui/command';
+import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
 import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupText,
-  InputGroupTextarea,
-} from '@/components/ui/input-group';
-import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
-import { applySlashPick, detectSlash, slashCandidates } from '@/lib/slash-trigger';
-import type { SlashHit } from '@/lib/slash-trigger';
+  Composer as SgComposer,
+  ComposerFooter,
+  ComposerFooterEnd,
+} from '@/components/ui/composer';
+import { Popover, PopoverContent } from '@/components/ui/popover';
+import { Skeleton } from '@/components/ui/skeleton';
+import { agentRows, applyAgentPick } from '@/lib/agent-mention';
+import type { AgentMentionState } from '@/lib/agent-mention';
+import type { ComposerAttachments } from '@/lib/attachments';
+import { applyMentionPick, detectMention } from '@/lib/file-mention';
+import {
+  MENTION_MENU_CLOSED,
+  MENTION_SECTIONS,
+  mentionMenuOpen,
+  mentionPickable,
+  mentionRowKey,
+  reduceMentionMenu,
+} from '@/lib/mention-menu';
+import type { MentionRow, MentionSource } from '@/lib/mention-menu';
+import { applySessionPick } from '@/lib/session-mention';
+import { namesCommand } from '@/lib/queue-view';
+import {
+  applySkillPick,
+  applySlashPick,
+  detectSlash,
+  skillDescription,
+  slashCandidateKey,
+  slashMenu,
+} from '@/lib/slash-trigger';
+import type { SlashCandidate } from '@/lib/slash-trigger';
+import { isAcceleratedEnter, resolveSubmitMode } from '@/lib/submit-mode';
+import { useFileDrop } from '@/lib/use-file-drop';
+import type { SendHint, SubmitGesture } from '@/lib/submit-mode';
 
-/** 收起的是哪一個片段：同一個 `/`、同樣的字才算同一個。 */
-function sameHit(left: SlashHit | null, right: SlashHit | null): boolean {
+/** 一個片段：`/` 或 `@` 的位置、游標、中間的字。 */
+interface Span {
+  readonly start: number;
+  readonly end: number;
+  readonly query: string;
+}
+
+/** 收起的是哪一個片段：同一個位置、同樣的字才算同一個。 */
+function sameHit(left: Span | null, right: Span | null): boolean {
   return (
     left !== null &&
     right !== null &&
@@ -40,56 +99,241 @@ function sameHit(left: SlashHit | null, right: SlashHit | null): boolean {
   );
 }
 
+const NO_SKILLS: readonly SkillEntry[] = [];
+
 export function Composer({
   draft,
   onDraftChange,
   placeholder,
   canSend,
   onSubmit,
+  sendHint = { text: 'Enter 送出' },
+  onSteerQueue,
   commands,
+  skills = NO_SKILLS,
   onRunCommand,
   decorated,
   stoppable,
   stopDisabled,
   onStop,
   textareaRef,
-  meter,
+  footerEnd,
+  fileReferences,
+  sessionReferences,
+  attachments,
+  footerStart,
+  agentMention,
+  locked = false,
+  removalLocked = false,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
   readonly placeholder: string;
   /** 現在這份草稿送不送得出去。 */
   readonly canSend: boolean;
-  /** 送出現在這份草稿（`canSend` 為真時才會叫）。 */
-  readonly onSubmit: () => void;
+  /**
+   * 送出現在這份草稿（`canSend` 為真時才會叫）。`gesture` 是 Enter（送出鈕同它）還是 Cmd/Ctrl+Enter，要排隊還是
+   * 插話由呼叫端照 `lib/submit-mode.ts` 判（#710）。
+   */
+  readonly onSubmit: (gesture: SubmitGesture) => void;
+  /**
+   * 送出的說明：只給報讀，掛在輸入框的 `aria-describedby`（畫面上不寫，#1591 Q3）。跑著時呼叫端換成兩種送法各一句（#710）。
+   */
+  readonly sendHint?: SendHint;
+  /**
+   * 草稿空白時按 Cmd/Ctrl+Enter：把排著的全部改成插話（#710，dsh 的 `canSteerQueue`）。**給了才生效**；呼叫端在
+   * 現在沒東西可插時不要給，那個手勢就跟以前一樣什麼都不做。
+   */
+  readonly onSteerQueue?: () => void;
   readonly commands: readonly SlashDescriptor[];
+  /**
+   * `/` 選單的技能組（#1929）：排在命令後面，選了在草稿落成字面的 `/名字 `、跟著那句話送給模型。**沒給就沒有**這一組。
+   */
+  readonly skills?: readonly SkillEntry[];
   /** 從選單直接執行一行命令；現在不能執行就回 false，那一行改留在草稿裡。 */
   readonly onRunCommand: (line: string) => boolean;
   /** 光打名字就另有動作的命令：從選單選到時直接執行，不等參數。 */
   readonly decorated?: ReadonlySet<string>;
-  /** 有東西可停（一輪在跑，或停在核准點）。 */
+  /** 有東西可停（一輪在跑）。 */
   readonly stoppable: boolean;
+  /** 停不了（斷線）：主按鈕不變成停止（dsh 的 `stop === undefined`）。 */
   readonly stopDisabled: boolean;
   readonly onStop: () => void;
   readonly textareaRef?: RefObject<HTMLTextAreaElement | null>;
-  /** 底列「Enter 送出」旁邊的用量表（#528）；資料由呼叫端接，這裡只管放哪。 */
-  readonly meter?: ReactNode;
+  /**
+   * 底列右邊（SG 的 `ComposerFooterEnd`）：這則訊息用什麼送——模型、推理強度、用量環（#1591 Q3，照 SG demo）。資料由
+   * 呼叫端接，這裡只管放哪。**沒給就沒有**。
+   */
+  readonly footerEnd?: ReactNode;
+  /** `@` 的候選（#653）；要穩定，每換一次就重查一次。沒給就沒有 `@` 選單。 */
+  readonly fileReferences?: (
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<FileReferenceListOutcome>;
+  /**
+   * `@` 的會話與子代理候選（#713）；同樣要穩定。沒給就只有檔案那一段。打 `@/` 或 `@"` 開頭時不問（那是檔案的路徑），
+   * 其餘情況跟檔案一起問，每打一個字兩邊都取消上一次。
+   */
+  readonly sessionReferences?: (
+    query: string,
+    signal: AbortSignal,
+  ) => Promise<SessionReferenceListOutcome>;
+  /**
+   * 草稿附件（#733）：輸入框底下的一排、底列的加入鈕、貼上、整頁拖放。**沒給就沒有這個功能**——四個入口一起沒有，
+   * 不是只藏按鈕（只藏按鈕的話，貼一張圖會變成一顆永遠送不出的晶片）。伺服器不收附件時呼叫端不要給。
+   */
+  readonly attachments?: ComposerAttachments;
+  /**
+   * 底列左邊：助理怎麼做事——模式（權限，#437；#1591 Q3，照 SG demo）。底列是 SG 的 `ComposerFooter`，在輸入框外面。
+   * **兩邊都沒給就沒有底列**——伺服器還沒實作的座位由呼叫端不傳，這裡不留空位。
+   */
+  readonly footerStart?: ReactNode;
+  /**
+   * `@子代理` 提及（#328 第 2 項）：清單、目前選的那一個、選與取消。**沒給就沒有**——`@` 選單沒有「委派給」那一段、
+   * 輸入框上方也沒有標記。清單要穩定（它在查詢的 effect 依賴裡）。
+   */
+  readonly agentMention?: AgentMentionState;
+  /**
+   * 鎖住草稿（[#1929](https://github.com/DemianLi/nexus-agent/issues/1929)）：開頭像命令的那一行在等命令清單認。照 dsh
+   * `InputBar` 的 `machineBusy`（`skeleton/InputBar.tsx:139-156`）與 `facade.ts:308-337`：文字框唯讀、草稿照樣看得到；附件
+   * 不能加、不能移除，貼上與拖放也不收；`@` 標記不能換也不能拿掉。送出時讀到的才一定是畫面上的值。
+   */
+  readonly locked?: boolean;
+  /**
+   * 只鎖附件列上的移除（[#1941](https://github.com/DemianLi/nexus-agent/issues/1941)）：附件正在送出，那一批送出當下就取好了，
+   * 移掉的照樣會送出（dsh `facade.ts:330-334`）。文字框、加入、貼上、拖放、取消上傳照舊。
+   */
+  readonly removalLocked?: boolean;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
   const textarea = textareaRef ?? ownRef;
   const [caret, setCaret] = useState(draft.length);
-  const [dismissed, setDismissed] = useState<SlashHit | null>(null);
+  const [dismissed, setDismissed] = useState<Span | null>(null);
   const [highlight, setHighlight] = useState(0);
   // 選了之後要把游標放回去的位置：草稿由呼叫端更新，要等它畫出來才放得進去。
   const pendingCaret = useRef<number | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const addFiles = attachments?.onAdd;
+  const onAddFiles =
+    addFiles === undefined
+      ? undefined
+      : (files: File[]) => {
+          if (!locked) addFiles(files);
+        };
+  // 沒給 `attachments` 時整頁拖放什麼都不掛（拖進來的檔案維持瀏覽器自己的行為）。鎖住時照樣接住（不然瀏覽器會把
+  // 檔案開成新頁、整頁跳走），只是不收、也不出「放開就加入」的提示。
+  const dragging = useFileDrop(addFiles !== undefined, (files) => onAddFiles?.(files));
+  const dropping = dragging && !locked;
+  // SG 的 `textareaProps` 不收 `readOnly`：從 ref 設在元素上（vendor 檔不動）。
+  useLayoutEffect(() => {
+    if (textarea.current !== null) textarea.current.readOnly = locked;
+  }, [locked, textarea]);
+  const selectAgent = (agent: Parameters<AgentMentionState['onSelect']>[0]) => {
+    if (!locked) agentMention?.onSelect(agent);
+  };
 
-  const hit = detectSlash(draft, Math.min(caret, draft.length));
+  const at = Math.min(caret, draft.length);
+  // 先判 `@` 再判 `/`（dsh `detectTrigger`）：`@/` 是一段路徑，不是命令。
+  const mention = detectMention(draft, at);
+  const hit = mention === null ? detectSlash(draft, at) : null;
+  const span: Span | null = mention ?? hit;
   // 照 dsh `InputTriggerController.track`：片段不見了、或換成別的片段，收起的記錄就作廢——刪光重打 `/` 要再跳出來。
-  if (dismissed !== null && !sameHit(hit, dismissed)) setDismissed(null);
-  const candidates = hit === null ? [] : slashCandidates(commands, hit);
-  const open = hit !== null && candidates.length > 0 && !sameHit(hit, dismissed);
+  if (dismissed !== null && !sameHit(span, dismissed)) setDismissed(null);
+  const candidates = hit === null ? [] : slashMenu(commands, skills, hit);
+  // 鎖住時兩個選單都收起、也不再問（dsh 進 adjudicating 時 `popup.dismiss()` 並凍結觸發，`facade.ts:428-431`）。
+  const open = !locked && hit !== null && candidates.length > 0 && !sameHit(hit, dismissed);
   const active = open ? candidates[Math.min(highlight, candidates.length - 1)] : undefined;
+
+  const [menu, dispatchMenu] = useReducer(reduceMentionMenu, MENTION_MENU_CLOSED);
+  const generation = useRef(0);
+  const asking =
+    !locked &&
+    mention !== null &&
+    (fileReferences !== undefined ||
+      sessionReferences !== undefined ||
+      agentMention !== undefined) &&
+    !sameHit(mention, dismissed);
+  const mentionQuery = mention?.query;
+  const mentionQuoted = mention?.quoted ?? false;
+  const mentionStart = mention?.start;
+  // 會話只在打普通的字時問：`@/…` 是路徑、`@"…` 是有空白的路徑（都只查檔案）。
+  const wantSessions =
+    sessionReferences !== undefined && !mentionQuoted && !(mentionQuery ?? '').startsWith('/');
+  // 委派給：同會話一樣只在打普通的字時列（`@/…`、`@"…` 是路徑）。清單是同步的，沒有「不可用」。
+  const agents = agentMention?.agents;
+  const wantAgents =
+    agents !== undefined && !mentionQuoted && !(mentionQuery ?? '').startsWith('/');
+  // 這一次想問的來源都確定不可用（伺服器說過沒有工作區、沒接落盤）：選單整個不開，也不再查。
+  const mentionOff =
+    (fileReferences === undefined || menu.availability.file === 'unavailable') &&
+    (!wantSessions || menu.availability.session === 'unavailable') &&
+    !wantAgents;
+  // 一個來源回來說不可用，不該讓另一個還在飛的請求重來：effect 只讀這一份，不把可用與否放進依賴。
+  const availability = useRef(menu.availability);
+  useLayoutEffect(() => {
+    availability.current = menu.availability;
+  });
+  useEffect(() => {
+    if (!asking || mentionQuery === undefined || mentionOff) {
+      dispatchMenu({ type: 'close' });
+      return;
+    }
+    generation.current += 1;
+    const mine = generation.current;
+    const controller = new AbortController();
+    const sources: MentionSource[] = [];
+    const askFiles = fileReferences !== undefined && availability.current.file !== 'unavailable';
+    const askSessions = wantSessions && availability.current.session !== 'unavailable';
+    if (askFiles) sources.push('file');
+    if (askSessions) sources.push('session');
+    if (wantAgents) sources.push('agent');
+    dispatchMenu({ type: 'hit', generation: mine, sources });
+    // 同步的來源一問就回；放在非同步的那兩個發出去之前，順序不影響結果（各自帶號）。
+    if (wantAgents) {
+      dispatchMenu({
+        type: 'settled',
+        generation: mine,
+        source: 'agent',
+        rows: agentRows(agents, mentionQuery),
+      });
+    }
+    // 取消掉的那一次不用另外擋：取消之後不是緊接著新的一號，就是收起來，reducer 兩種都會丟掉它回來的東西。
+    // 兩個來源各問各的：一個失敗、不可用或慢，都不拖累另一個。
+    if (askFiles) {
+      fileReferences(mentionQuery, controller.signal).then(
+        (outcome) => {
+          dispatchMenu({ type: 'settled', generation: mine, outcome, quoted: mentionQuoted });
+        },
+        () => {
+          dispatchMenu({ type: 'failed', generation: mine, source: 'file' });
+        },
+      );
+    }
+    if (askSessions) {
+      sessionReferences(mentionQuery, controller.signal).then(
+        (outcome) => {
+          dispatchMenu({ type: 'settled', generation: mine, source: 'session', outcome });
+        },
+        () => {
+          dispatchMenu({ type: 'failed', generation: mine, source: 'session' });
+        },
+      );
+    }
+    return () => controller.abort();
+  }, [
+    asking,
+    mentionQuery,
+    mentionQuoted,
+    mentionStart,
+    mentionOff,
+    wantSessions,
+    wantAgents,
+    agents,
+    fileReferences,
+    sessionReferences,
+  ]);
+  const mentionOpen = asking && mentionMenuOpen(menu);
 
   // cmdk 自己產生選項與清單的 id（傳進去的會被蓋掉），選中哪一項也是它在自己的 effect 裡更新。所以盯著清單的
   // `aria-selected`，讀回來給輸入框的 `aria-controls`／`aria-activedescendant`。
@@ -123,14 +367,21 @@ export function Composer({
   }, [draft, textarea]);
 
   function edit(next: string, at: number) {
+    if (locked) return;
     onDraftChange(next);
     setCaret(at);
     setHighlight(0);
   }
 
-  function pick(command: SlashDescriptor) {
+  function pick(candidate: SlashCandidate) {
     if (hit === null) return;
-    const result = applySlashPick(draft, hit, command, decorated);
+    if (candidate.kind === 'skill') {
+      const result = applySkillPick(draft, hit, candidate.skill);
+      pendingCaret.current = result.caret;
+      edit(result.draft, result.caret);
+      return;
+    }
+    const result = applySlashPick(draft, hit, candidate.command, decorated);
     if (result.run !== undefined && !onRunCommand(result.run)) {
       // 現在不能執行（例如這一輪還在跑）：那一行留在草稿裡，看得到為什麼送不出去。
       const kept = `${draft.slice(0, hit.start)}${result.run}${draft.slice(hit.end)}`;
@@ -144,8 +395,72 @@ export function Composer({
     edit(result.draft, result.caret);
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+  function pickMention(row: MentionRow, action: 'pick' | 'drill') {
+    if (mention === null) return;
+    if (row.source === 'agent') {
+      // 不進草稿：`@` 那一段拿掉、標記換成這一個（取代前一個）。
+      const result = applyAgentPick(draft, mention);
+      selectAgent(row.agent);
+      pendingCaret.current = result.caret;
+      edit(result.draft, result.caret);
+      return;
+    }
+    if (row.source !== 'file') {
+      // 會話與子代理沒有往下鑽，Tab 也是選定；插進去的是伺服器編好的引用文字。
+      const result = applySessionPick(draft, mention, row.candidate);
+      pendingCaret.current = result.caret;
+      edit(result.draft, result.caret);
+      return;
+    }
+    const result = applyMentionPick(draft, mention, row.candidate, action);
+    if (result === undefined) return;
+    pendingCaret.current = result.caret;
+    edit(result.draft, result.caret);
+  }
+
+  /** `@` 選單開著時這一鍵歸不歸它；歸它就回 true。 */
+  function mentionKey(event: KeyboardEvent<HTMLElement>): boolean {
+    const pickable = mentionPickable(menu);
+    switch (event.key) {
+      case 'ArrowDown':
+      case 'ArrowUp':
+        event.preventDefault();
+        dispatchMenu({ type: 'move', dir: event.key === 'ArrowDown' ? 1 : -1 });
+        return true;
+      case 'Escape':
+        event.preventDefault();
+        setDismissed(mention);
+        return true;
+      case 'Enter':
+        if (event.shiftKey || menu.highlight === null) return false;
+        event.preventDefault();
+        // 還在查：留在畫面上的舊列選不到，也不送出。
+        if (pickable !== undefined) pickMention(pickable, 'pick');
+        return true;
+      case 'Tab':
+        if (event.shiftKey) {
+          event.preventDefault();
+          setDismissed(mention);
+          return true;
+        }
+        if (menu.highlight === null) return false;
+        event.preventDefault();
+        if (pickable !== undefined) {
+          pickMention(
+            pickable,
+            pickable.source === 'file' && pickable.candidate.kind === 'directory'
+              ? 'drill'
+              : 'pick',
+          );
+        }
+        return true;
+    }
+    return false;
+  }
+
+  /** 選單與 Cmd/Ctrl＋Enter 的鍵；歸這裡就回 true（呼叫端擋下，不讓 SG 的 textarea 收到）。 */
+  function interceptKey(event: KeyboardEvent<HTMLElement>): boolean {
+    if (mentionOpen && mentionKey(event)) return true;
     if (open && active !== undefined) {
       switch (event.key) {
         case 'ArrowDown':
@@ -154,143 +469,433 @@ export function Composer({
           const step = event.key === 'ArrowDown' ? 1 : -1;
           const index = candidates.indexOf(active);
           setHighlight((index + step + candidates.length) % candidates.length);
-          return;
+          return true;
         }
         case 'Enter':
           if (event.shiftKey) break;
           event.preventDefault();
           pick(active);
-          return;
+          return true;
         case 'Tab':
           event.preventDefault();
           if (event.shiftKey) setDismissed(hit);
           else pick(active);
-          return;
+          return true;
         case 'Escape':
           event.preventDefault();
           setDismissed(hit);
-          return;
+          return true;
       }
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
+    // 只按 Enter（送出）、Shift＋Enter（換行）交給 SG；加速的 Cmd/Ctrl＋Enter 在這裡送——SG 只看 `shiftKey`，會把它當成一般的 Enter。
+    if (isAcceleratedEnter(event)) {
       event.preventDefault();
-      if (canSend) onSubmit();
+      // 草稿空白但有附件：這一下是送出那份附件（插話），不是把佇列改成插話。
+      const hasAttachments = attachments !== undefined && attachments.items.length > 0;
+      if (draft.trim() === '' && !hasAttachments && onSteerQueue !== undefined) onSteerQueue();
+      else if (canSend) onSubmit('accelerated');
+      return true;
     }
+    return false;
   }
 
+  const running = stoppable && !stopDisabled;
+  // 跑著時按鈕送出的是 Enter 的送法（排隊）。名稱只在這一下真的會送出一句普通訊息時說出送法（dsh 的 `primaryLabel`）：
+  // 命令照舊叫「送出」。是不是命令照送出路由認（#1929）：技能的 `/deploy 今天` 是一句話。
+  const sendLabel =
+    running && canSend && !namesCommand(commands, draft)
+      ? resolveSubmitMode('running', 'enter') === 'steer'
+        ? '插話送出'
+        : '排隊送出'
+      : '送出';
+  const hintId = useId();
+  const menuOpen = open || mentionOpen;
+
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        if (!next) setDismissed(hit);
-      }}
-    >
-      {/* anchor 自己包一層：`asChild` 會把 InputGroup 的 `data-slot` 蓋掉。 */}
-      <PopoverAnchor ref={anchorRef}>
-        <InputGroup className="rounded-3xl">
+    <>
+      {dropping && <DropOverlay />}
+      <Popover
+        open={menuOpen}
+        onOpenChange={(next, details) => {
+          // 點輸入框本身（含「＋」與標記）不算點外面。底列在輸入框外面（SG 的 `ComposerFooter`），點底列的 Pick、用量環就是
+          // 點外面，選單收起，不會跟它們的浮層疊在一起（#528）。Base UI 沒有 Radix 的 `onInteractOutside`，在這裡看 `reason`
+          // 取消（#1583）。
+          if (!next && details.reason === 'outside-press') {
+            const target = details.event.target;
+            if (target instanceof Element && anchorRef.current?.contains(target)) {
+              details.cancel();
+              return;
+            }
+          }
+          if (!next) setDismissed(span);
+        }}
+      >
+        {/* 選單錨在整個輸入框上（`PopoverContent` 的 `anchor`，vendor 本地修改第 19 條），不是錨在某顆 Trigger 上。 */}
+        <div
+          data-slot="popover-anchor"
+          ref={anchorRef}
+          onKeyDownCapture={(event) => {
+            // 只攔輸入框的鍵：「＋」、標記的 ×、附件列的按鈕也在這一層裡，它們的 Enter 照舊是按下去。
+            if (event.target !== textarea.current) return;
+            // 打注音、拼音時的 Enter 是選字（Safari 在選字結束後才報這一鍵，只剩 keyCode 229）：全部交給 SG，它也先判這個。
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (interceptKey(event)) event.stopPropagation();
+          }}
+          onSelect={(event) => {
+            if (event.target === textarea.current) setCaret(textarea.current.selectionStart);
+          }}
+          onPaste={(event) => {
+            // 剪貼簿裡有檔案（截圖、在檔案管理員複製的檔案）就收成附件，不貼文字；純文字照舊交給瀏覽器。
+            const files = Array.from(event.clipboardData.files);
+            if (onAddFiles === undefined || files.length === 0) return;
+            event.preventDefault();
+            onAddFiles(files);
+          }}
+        >
           <label className="sr-only" htmlFor="prompt">
             要說的話
           </label>
-          <InputGroupTextarea
-            ref={textarea}
-            id="prompt"
-            rows={1}
-            className="text-body max-h-48 min-h-12 px-4"
+          <SgComposer
+            textareaRef={textarea}
+            textareaProps={{
+              id: 'prompt',
+              'aria-describedby': hintId,
+              ...(menuOpen && ids.list !== undefined ? { 'aria-controls': ids.list } : {}),
+              ...(menuOpen && ids.option !== undefined
+                ? { 'aria-activedescendant': ids.option }
+                : {}),
+            }}
             value={draft}
+            onValueChange={(next) => {
+              // SG 只給值；游標從 textarea 讀（這時 DOM 已經是新的值）。
+              edit(next, textarea.current?.selectionStart ?? next.length);
+            }}
             placeholder={placeholder}
-            aria-controls={open ? ids.list : undefined}
-            aria-activedescendant={open ? ids.option : undefined}
-            onChange={(event) => {
-              edit(event.target.value, event.target.selectionStart);
+            canSubmit={canSend}
+            onSubmit={() => onSubmit('enter')}
+            running={running}
+            onStop={onStop}
+            sendLabel={sendLabel}
+            stopLabel="停止"
+            // 游標在最前面、沒選一段字時退格：整顆刪掉 `@子代理` 標記（一按就刪，不學 SG demo 的先選再刪）。
+            onBackspaceAtStart={() => {
+              if (agentMention?.selected === undefined) return false;
+              selectAgent(undefined);
+              return true;
             }}
-            onSelect={(event) => {
-              setCaret(event.currentTarget.selectionStart);
-            }}
-            onKeyDown={onKeyDown}
+            {...(onAddFiles === undefined
+              ? {}
+              : {
+                  leading: (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-foreground size-11 shrink-0 lg:size-8"
+                      aria-label="加入附件"
+                      disabled={locked}
+                      onClick={() => fileInput.current?.click()}
+                    >
+                      <Plus />
+                    </Button>
+                  ),
+                })}
+            {...(agentMention?.selected !== undefined ||
+            (attachments !== undefined && attachments.items.length > 0)
+              ? {
+                  above: (
+                    <>
+                      {agentMention?.selected !== undefined && (
+                        <AgentMentionChip
+                          agent={agentMention.selected}
+                          onRemove={() => selectAgent(undefined)}
+                        />
+                      )}
+                      {attachments !== undefined && attachments.items.length > 0 && (
+                        <AttachmentRail
+                          items={attachments.items}
+                          onRemove={(id) => {
+                            if (!locked && !removalLocked) attachments.onRemove(id);
+                          }}
+                          uploads={attachments.uploads}
+                          onCancelUpload={attachments.onCancelUpload}
+                        />
+                      )}
+                    </>
+                  ),
+                }
+              : {})}
           />
-          <InputGroupAddon align="block-end" className="px-2 pb-2">
-            <InputGroupText className="pl-2 text-xs">Enter 送出</InputGroupText>
-            {meter}
-            <div className="ml-auto flex items-center gap-2">
-              {stoppable && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="icon"
-                  className="size-11 rounded-full lg:size-9"
-                  aria-label="停止"
-                  disabled={stopDisabled}
-                  onClick={onStop}
-                >
-                  <Square className="fill-current" />
-                </Button>
-              )}
-              <Button
-                type="button"
-                size="icon"
-                className="size-11 rounded-full lg:size-9"
-                aria-label="送出"
-                disabled={!canSend}
-                onClick={onSubmit}
-              >
-                <ArrowUp />
-              </Button>
-            </div>
-          </InputGroupAddon>
-        </InputGroup>
-      </PopoverAnchor>
-      <PopoverContent
-        side="top"
-        align="start"
-        className="w-(--radix-popover-trigger-width) p-1"
-        aria-label="命令選單"
-        // 焦點一直留在輸入框：打開、關掉都不搬；點輸入框本身不算點外面。**底列另一顆浮層的按鈕算外面**（用量表，
-        // #528）：它也在輸入框裡，不收的話兩個浮層疊在同一個位置（真 Chrome 量過）。
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        onCloseAutoFocus={(event) => event.preventDefault()}
-        onInteractOutside={(event) => {
-          const target = event.target;
-          if (
-            target instanceof Element &&
-            anchorRef.current?.contains(target) &&
-            target.closest('[data-slot="popover-trigger"]') === null
-          ) {
-            event.preventDefault();
-          }
-        }}
-      >
-        <Command
-          shouldFilter={false}
-          value={active?.name ?? ''}
-          onValueChange={(name) => {
-            const index = candidates.findIndex((command) => command.name === name);
-            if (index !== -1) setHighlight(index);
-          }}
-          className="bg-transparent"
+          <span id={hintId} className="sr-only" data-testid="send-hint">
+            {sendHint.text}
+            {sendHint.wide}
+          </span>
+        </div>
+        {onAddFiles !== undefined && (
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            tabIndex={-1}
+            data-testid="attachment-input"
+            onChange={(event) => {
+              onAddFiles(Array.from(event.target.files ?? []));
+              // 同一個檔案選第二次也要觸發 change。
+              event.target.value = '';
+            }}
+          />
+        )}
+        {(footerStart !== undefined || footerEnd !== undefined) && (
+          <ComposerFooter>
+            {footerStart}
+            {/* 窄的時候讓右邊縮：模型名稱截短，不撐出底列（README 本地修改第 40 條）。 */}
+            {footerEnd !== undefined && (
+              <ComposerFooterEnd className="min-w-0">{footerEnd}</ComposerFooterEnd>
+            )}
+          </ComposerFooter>
+        )}
+        <PopoverContent
+          side="top"
+          align="start"
+          anchor={anchorRef}
+          // 寬度等於輸入框：Base UI 的 Positioner 把錨點的寬度給成 `--anchor-width`。
+          className="w-(--anchor-width) p-1"
+          aria-label={mentionOpen ? '@ 選單' : '命令選單'}
+          // 焦點一直留在輸入框：打開、關掉都不搬。
+          initialFocus={false}
+          finalFocus={false}
         >
-          <CommandList
-            ref={setList}
-            label="命令"
-            // 點選項時焦點不離開輸入框。
-            onMouseDown={(event) => event.preventDefault()}
-          >
-            {candidates.map((command) => (
-              <CommandItem
-                key={command.name}
-                value={command.name}
-                onSelect={() => pick(command)}
-                className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
+          {mentionOpen ? (
+            <MentionList
+              rows={menu.rows}
+              highlight={menu.highlight}
+              loading={menu.status === 'pending'}
+              listRef={setList}
+              onHover={(index) => dispatchMenu({ type: 'hover', index })}
+              selectedAgentId={agentMention?.selected?.id}
+              onPick={(row) => {
+                // 還在查的時候點舊列不算（同 Enter）。
+                if (menu.status === 'ready') pickMention(row, 'pick');
+              }}
+            />
+          ) : (
+            <Command
+              shouldFilter={false}
+              value={active === undefined ? '' : slashCandidateKey(active)}
+              onValueChange={(key) => {
+                const index = candidates.findIndex(
+                  (candidate) => slashCandidateKey(candidate) === key,
+                );
+                if (index !== -1) setHighlight(index);
+              }}
+              className="bg-transparent"
+            >
+              <CommandList
+                ref={setList}
+                label="命令"
+                // 點選項時焦點不離開輸入框。
+                onMouseDown={(event) => event.preventDefault()}
               >
-                <span className="font-mono text-sm">
-                  /{command.name}
-                  {command.input === undefined ? '' : ` ${command.input.hint}`}
-                </span>
-                <span className="text-muted-foreground text-xs">{command.description}</span>
-              </CommandItem>
-            ))}
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
+                <SlashList candidates={candidates} onPick={pick} />
+              </CommandList>
+            </Command>
+          )}
+        </PopoverContent>
+      </Popover>
+    </>
+  );
+}
+
+/** `/` 選單的一列：名字（命令帶參數提示），底下一行說明。 */
+function SlashItem({
+  candidate,
+  onPick,
+}: {
+  readonly candidate: SlashCandidate;
+  readonly onPick: (candidate: SlashCandidate) => void;
+}) {
+  const [name, hint, description] =
+    candidate.kind === 'command'
+      ? [candidate.command.name, candidate.command.input?.hint, candidate.command.description]
+      : [candidate.skill.name, undefined, skillDescription(candidate.skill)];
+  return (
+    <CommandItem
+      value={slashCandidateKey(candidate)}
+      onSelect={() => onPick(candidate)}
+      className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
+    >
+      <span className="font-mono text-body">
+        /{name}
+        {hint === undefined ? '' : ` ${hint}`}
+      </span>
+      <span className="text-muted-foreground text-tip">{description}</span>
+    </CommandItem>
+  );
+}
+
+/**
+ * `/` 選單的列（#1929）：命令一組、技能一組。**有技能時才畫段標題**，只有命令時跟原來一樣（同 `@` 選單只有檔案時不畫）。
+ */
+function SlashList({
+  candidates,
+  onPick,
+}: {
+  readonly candidates: readonly SlashCandidate[];
+  readonly onPick: (candidate: SlashCandidate) => void;
+}) {
+  const item = (candidate: SlashCandidate) => (
+    <SlashItem key={slashCandidateKey(candidate)} candidate={candidate} onPick={onPick} />
+  );
+  if (!candidates.some((candidate) => candidate.kind === 'skill')) return candidates.map(item);
+  return (['command', 'skill'] as const).map((kind) => {
+    const inGroup = candidates.filter((candidate) => candidate.kind === kind);
+    return inGroup.length === 0 ? null : (
+      <CommandGroup key={kind} heading={SLASH_HEADINGS[kind]}>
+        {inGroup.map(item)}
+      </CommandGroup>
+    );
+  });
+}
+
+const SLASH_HEADINGS = { command: '命令', skill: '技能' } as const;
+
+/** 段的標題（Q4：檔案、會話、子代理；#328：最上面可以再有「委派給」）。 */
+const SECTION_HEADINGS = {
+  agent: '委派給',
+  file: '檔案',
+  session: '會話',
+  subagent: '子代理',
+} as const;
+
+/**
+ * `@` 選單的列（#653、#713）：檔案寫名字加父目錄，資料夾右邊一個「Tab」提示與箭頭（按 Tab 往下鑽）；會話寫標題，
+ * 別的專案後面加目錄名；子代理寫它屬於哪條會話。分段照檔案、會話、子代理，**只有檔案時不畫段標題**（跟原來一樣）。
+ * 一列都還沒有時畫兩行骨架。高度上限 400px（dsh 的 `MenuView`）。
+ */
+function MentionList({
+  rows,
+  highlight,
+  loading,
+  listRef,
+  onHover,
+  onPick,
+  selectedAgentId,
+}: {
+  readonly rows: readonly MentionRow[];
+  readonly highlight: number | null;
+  readonly loading: boolean;
+  readonly listRef: (element: HTMLDivElement | null) => void;
+  readonly onHover: (index: number) => void;
+  readonly onPick: (row: MentionRow) => void;
+  /** 標記上現在是哪一個：選單上那一列右邊畫勾。 */
+  readonly selectedAgentId?: string | undefined;
+}) {
+  const active = highlight === null ? undefined : rows[highlight];
+  const sectioned = rows.some((row) => row.source !== 'file');
+  const item = (row: MentionRow) => {
+    const key = mentionRowKey(row);
+    if (row.source === 'agent') {
+      return (
+        <CommandItem
+          key={key}
+          value={key}
+          onSelect={() => onPick(row)}
+          className="gap-2 rounded-lg px-3 py-2"
+        >
+          <Bot aria-hidden className="text-muted-foreground" />
+          <span className="flex min-w-0 flex-1 items-baseline">
+            <span className="min-w-0 truncate text-body">{row.name}</span>
+            <span className="text-muted-foreground ml-2 min-w-0 truncate text-tip">{row.hint}</span>
+          </span>
+          {selectedAgentId === row.agent.id && (
+            <Check aria-label="目前選的" className="text-muted-foreground size-3.5 shrink-0" />
+          )}
+        </CommandItem>
+      );
+    }
+    if (row.source === 'file') {
+      const directory = row.candidate.kind === 'directory';
+      const Icon = directory ? Folder : File;
+      return (
+        <CommandItem
+          key={key}
+          value={key}
+          onSelect={() => onPick(row)}
+          className="gap-2 rounded-lg px-3 py-2"
+        >
+          <Icon aria-hidden className="text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate">
+            <span className="text-body">{row.name}</span>
+            {row.parent !== undefined && (
+              <span className="text-muted-foreground ml-2 text-tip">{row.parent}</span>
+            )}
+          </span>
+          {directory && (
+            <span aria-hidden className="text-muted-foreground flex items-center gap-1 text-tip">
+              Tab
+              <ChevronRight className="size-3" />
+            </span>
+          )}
+        </CommandItem>
+      );
+    }
+    const Icon = row.source === 'subagent' ? Bot : MessageSquare;
+    return (
+      <CommandItem
+        key={key}
+        value={key}
+        onSelect={() => onPick(row)}
+        className="gap-2 rounded-lg px-3 py-2"
+      >
+        <Icon aria-hidden className="text-muted-foreground" />
+        {/* 截斷的是名字這一格；小字（子代理屬於誰、別的專案的目錄）在它外面且不縮。子代理的名字是 id，約 80 字，
+            放在同一格裡會把小字擠到省略號後面（實機 #783 補驗）。 */}
+        <span className="flex min-w-0 flex-1 items-baseline">
+          <span className="min-w-0 truncate text-body" title={row.name}>
+            {row.name}
+          </span>
+          {row.hint !== undefined && (
+            <span className="text-muted-foreground ml-2 shrink-0 text-tip">{row.hint}</span>
+          )}
+        </span>
+      </CommandItem>
+    );
+  };
+  return (
+    <Command
+      shouldFilter={false}
+      value={active === undefined ? '' : mentionRowKey(active)}
+      onValueChange={(key) => {
+        const index = rows.findIndex((row) => mentionRowKey(row) === key);
+        if (index !== -1) onHover(index);
+      }}
+      className="bg-transparent"
+    >
+      <CommandList
+        ref={listRef}
+        label="@ 引用"
+        aria-busy={loading}
+        className="max-h-100"
+        onMouseDown={(event) => event.preventDefault()}
+      >
+        {rows.length === 0 && loading && (
+          <div className="flex flex-col gap-2 px-3 py-2" data-testid="mention-skeleton">
+            <Skeleton className="h-4 w-2/3" />
+            <Skeleton className="h-4 w-1/2" />
+          </div>
+        )}
+        {sectioned
+          ? MENTION_SECTIONS.map((section) => {
+              const inSection = rows.filter((row) => row.source === section);
+              return inSection.length === 0 ? null : (
+                <CommandGroup key={section} heading={SECTION_HEADINGS[section]}>
+                  {inSection.map(item)}
+                </CommandGroup>
+              );
+            })
+          : rows.map(item)}
+      </CommandList>
+    </Command>
   );
 }

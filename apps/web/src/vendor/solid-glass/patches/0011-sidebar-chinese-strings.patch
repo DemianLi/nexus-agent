@@ -1,0 +1,36 @@
+===================================================================
+--- a/components/ui/sidebar.tsx
++++ b/components/ui/sidebar.tsx
+@@ -198,8 +198,8 @@
+           side={side}
+         >
+           <SheetHeader className="sr-only">
+-            <SheetTitle>Sidebar</SheetTitle>
+-            <SheetDescription>Displays the mobile sidebar.</SheetDescription>
++            <SheetTitle>側欄</SheetTitle>
++            <SheetDescription>對話列表與新對話。</SheetDescription>
+           </SheetHeader>
+           <div className="flex h-full w-full flex-col">{children}</div>
+         </SheetContent>
+@@ -274,7 +274,7 @@
+       {...props}
+     >
+       <PanelLeftIcon />
+-      <span className="sr-only">Toggle Sidebar</span>
++      <span className="sr-only">開關側欄</span>
+     </Button>
+   )
+ }
+@@ -286,10 +286,10 @@
+     <button
+       data-sidebar="rail"
+       data-slot="sidebar-rail"
+-      aria-label="Toggle Sidebar"
++      aria-label="開關側欄"
+       tabIndex={-1}
+       onClick={toggleSidebar}
+-      title="Toggle Sidebar"
++      title="開關側欄"
+       className={cn(
+         "absolute inset-y-0 z-20 hidden w-4 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:start-1/2 after:w-[2px] hover:after:bg-sidebar-border sm:flex ltr:-translate-x-1/2 rtl:-translate-x-1/2",
+         "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",

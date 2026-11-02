@@ -1,21 +1,20 @@
-import {
-  GOAL_COMMAND_NAME,
-  GOAL_NONE_MESSAGE,
-  GOAL_NOT_ATTACHED_MESSAGE,
-} from '@nexus/plugin-goal';
+import { GOAL_COMMAND_NAME, GOAL_NONE_MESSAGE } from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, PLAN_ENTERED_MESSAGE } from '@nexus/plugin-plan-mode';
 
 import {
   appendDecision,
-  appendHumanTurn,
   emptyConversation,
   reduceConversation,
   uniformDecisions,
 } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { documentedFixture } from './documented-fixture.js';
-import { approvalAt, serveClient } from './fixtures.js';
+import { approvalAt, exchangeServeToken, foldTurn, serveClient } from './fixtures.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -40,23 +39,77 @@ describe('serve 的旗標', () => {
     expect(parseServeArgs([])).toEqual({
       live: false,
       port: DEFAULT_PORT,
-      // **續行預設關**，兩個入口同一個決定：dsh 的續行驅動器是「需要你刻意掛載的可選
-      // 消費方」，而我們的入口點擁有輪迴圈，掛載的等價物就是這個旗標。（2026-09-19 註：dsh 的
-      // base 其實出廠就掛著續行驅動器，這個前提待重核，見調研筆記 §三第 18 列。）
-      goalDriver: false,
+      // **續行 serve 預設開、CLI 預設關**（#445）：serve 要核准時停下來等人，不會空轉；
+      // CLI 的 `HEADLESS_APPROVALS` 確定性拒絕，續行只會一再撞同一個拒絕。
+      goalDriver: true,
       // 印設定預設關——它是一個診斷出口，不是一種跑法（#454）。
       dumpConfig: false,
+      dumpConfigSchema: false,
+      dumpDefaultConfig: false,
       help: false,
+      version: false,
     });
   });
 
-  it('--goal-driver 打得開', () => {
+  it('續行預設開；--no-goal-driver 關得掉；--goal-driver 是明講要開', () => {
+    expect(parseServeArgs([]).goalDriver).toBe(true);
+    expect(parseServeArgs(['--no-goal-driver']).goalDriver).toBe(false);
     expect(parseServeArgs(['--goal-driver']).goalDriver).toBe(true);
+  });
+
+  it('--goal-driver 與 --no-goal-driver 一起給就當場說清楚', () => {
+    expect(() => parseServeArgs(['--goal-driver', '--no-goal-driver'])).toThrow(
+      '--goal-driver 與 --no-goal-driver 不能一起給',
+    );
+  });
+
+  it('用法文字說得出怎麼關', () => {
+    expect(() => parseServeArgs(['--port', '七'])).toThrow('--no-goal-driver');
   });
 
   it('port 不是合法整數就當場說清楚', () => {
     expect(() => parseServeArgs(['--port', '七'])).toThrow('--port 要給 0 到 65535');
     expect(() => parseServeArgs(['--port', '99999'])).toThrow('--port 要給 0 到 65535');
+  });
+
+  it('壓縮旗標（#1570）：預設不壓；gzip 帶預設等級與門檻；不合法當場說清楚', () => {
+    // 預設：沒有 compression 這一格（跟以前的 ServeInvocation 一樣）。
+    expect('compression' in parseServeArgs([])).toBe(false);
+    expect(parseServeArgs(['--compression', 'none']).compression).toBeUndefined();
+    expect(parseServeArgs(['--compression', 'gzip']).compression).toEqual({
+      level: 1,
+      thresholdBytes: 1024,
+    });
+    expect(
+      parseServeArgs([
+        '--compression',
+        'gzip',
+        '--compression-level',
+        '9',
+        '--compression-threshold',
+        '0',
+      ]).compression,
+    ).toEqual({ level: 9, thresholdBytes: 0 });
+
+    expect(() => parseServeArgs(['--compression', 'gzip', '--compression-level', '10'])).toThrow(
+      /0 到 9/u,
+    );
+    expect(() => parseServeArgs(['--compression', 'gzip', '--compression-level', '1.5'])).toThrow(
+      /0 到 9/u,
+    );
+    expect(() => parseServeArgs(['--compression', 'gzip', '--compression-threshold=-1'])).toThrow(
+      /非負整數/u,
+    );
+    expect(() => parseServeArgs(['--compression', 'brotli'])).toThrow(/none 或 gzip/u);
+    // 逐欄獨立驗（dsh webserver/src/index.ts:295-296）：沒打開 gzip 時給等級或門檻照收、不用；值本身不合法照樣擋。
+    expect(parseServeArgs(['--compression-level', '3']).compression).toBeUndefined();
+    expect(
+      parseServeArgs(['--compression', 'none', '--compression-threshold', '10']).compression,
+    ).toBeUndefined();
+    expect(() => parseServeArgs(['--compression-level', '10'])).toThrow(/0 到 9/u);
+    expect(() => parseServeArgs(['--compression', 'none', '--compression-threshold', 'x'])).toThrow(
+      /非負整數/u,
+    );
   });
 
   it('--patch 給空字串是錯的，不是「沒給」', () => {
@@ -75,9 +128,19 @@ describe('起起來之後', () => {
   it('port 被佔住時說得出原因，而不是行程莫名其妙地死掉', async () => {
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
     const taken = Number(new URL((running as RunningServe).url).port);
-    await expect(
-      runServe({ argv: ['--port', String(taken)], log: () => undefined, env: {} }),
-    ).rejects.toThrow(/EADDRINUSE|address already in use/);
+    // 第二台要有自己的 home（#1503）：同一個 home 在綁 port 之前就被 home 鎖擋下，這一條量的是 port 那一關。
+    const otherHome = await mkdtemp(join(tmpdir(), 'nexus-serve-port-'));
+    try {
+      await expect(
+        runServe({
+          argv: ['--port', String(taken)],
+          log: () => undefined,
+          env: { [HARNESS_HOME_ENV]: otherHome },
+        }),
+      ).rejects.toThrow(/EADDRINUSE|address already in use/);
+    } finally {
+      await rm(otherHome, { recursive: true, force: true });
+    }
   });
 
   it('瀏覽器端連得上，而且一路折得出對話', async () => {
@@ -98,14 +161,7 @@ describe('起起來之後', () => {
     const events = await client.openEvents('web');
     await client.runStart('web', '把這句話回聲一次。');
 
-    let state: ConversationState = appendHumanTurn(emptyConversation(), '把這句話回聲一次。');
-    while (state.status === 'running') {
-      const next = await events.next();
-      if (next.done === true) {
-        break;
-      }
-      state = reduceConversation(state, next.value);
-    }
+    const state = await foldTurn(events);
 
     // 預設清單只有 echo，而 CLI 的假模型腳本第一輪就是呼叫它——「工具真的接上了」
     // 因此是這條線上看得到的事，不是靠讀 log 推的。
@@ -123,6 +179,30 @@ describe('起起來之後', () => {
  * 不會真的死（vitest 自己接住了），所以判準是**這條測試期間的未處理 rejection 數**，再加上
  * 「同一條 thread 再送一句、另一條 thread 也送一句都跑得完」那一半。
  */
+describe('gzip 壓縮接上了 serve（#1570）', () => {
+  /** 帶著登入 cookie 打 `GET /threads`，回 `content-encoding`。 */
+  async function listEncoding(argv: readonly string[]): Promise<string | null> {
+    running = await runServe({ argv: ['--port', '0', ...argv], log: () => undefined, env: {} });
+    const started = running as RunningServe;
+    const cookie = await exchangeServeToken(started.authenticatedUrl);
+    const response = await fetch(`${started.url}/threads`, {
+      headers: { cookie, 'accept-encoding': 'gzip', 'content-type': 'application/json' },
+    });
+    expect(response.status).toBe(200);
+    return response.headers.get('content-encoding');
+  }
+
+  it('--compression gzip：JSON 回應壓縮再送', async () => {
+    expect(await listEncoding(['--compression', 'gzip', '--compression-threshold', '0'])).toBe(
+      'gzip',
+    );
+  });
+
+  it('不給旗標：跟以前一樣，不壓', async () => {
+    expect(await listEncoding([])).toBeNull();
+  });
+});
+
 describe('serve 上的工具拋錯', () => {
   it('同一條 thread 再送一句、另一條 thread 也送一句都跑得完，沒有未處理的 rejection', async () => {
     const unhandled: unknown[] = [];
@@ -142,13 +222,8 @@ describe('serve 上的工具拋錯', () => {
         const events = await client.openEvents(threadId);
         let state: ConversationState = emptyConversation();
         for (const sentence of sentences) {
-          state = appendHumanTurn(state, sentence);
           await client.runStart(threadId, sentence);
-          while (state.status === 'running') {
-            const next = await events.next();
-            if (next.done === true) break;
-            state = reduceConversation(state, next.value);
-          }
+          state = await foldTurn(events, state);
           expect(state.status).toBe('idle');
         }
         return state;
@@ -199,7 +274,15 @@ describe('serve 的命令面', () => {
     // 這一條同時是 `/goal` 那個「一份 registry 只接一份日誌」假設的實地驗收：
     // `serve.ts` 每個 thread 呼叫一次 `createCliAgent`，所以各自一份 registry 一份日誌。
     // 假設破掉的話這裡不會靜靜串台，會直接收到 `goalAmbiguousMessage` 那句錯誤。
-    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
+    //
+    // **續行關掉**：開著的話 `/goal 把測試修綠` 之後 alpha 自己會開一輪（#661），第三次問 alpha 撞上就回「正在跑」。
+    // 以前綠，是賭第二、三次請求搶在那一輪的耐久檢查點（`flush()`）寫完之前；develop 上在第三次之前多等 80ms 就 3/3 紅，
+    // #1405 的 CI 兩次都輸掉這場賭。這一條驗的是目標各自一份，續行有下面兩條專門的測試。
+    running = await runServe({
+      argv: ['--port', '0', '--no-goal-driver'],
+      log: () => undefined,
+      env: {},
+    });
     const started = running as RunningServe;
     const client = await serveClient(started);
     await client.openEvents('alpha');
@@ -221,13 +304,9 @@ describe('serve 的命令面', () => {
     expect(again.text).toContain('目標：把測試修綠');
   });
 
-  it('**沒先訂事件流就打 `/goal` 也接得上**——接線在共用的那條懶載入路徑上', async () => {
-    // `/goal` 是第一個正確性**依賴 `attachSession` 跑過**的命令：`/plan` 的狀態活在
-    // `apply` 閉包裡，沒有接線這一步。而這整套測試（含 `slash-wire.test.ts`）一直都是
-    // 先 `openEvents` 再發派，所以「先發派」這個順序從來沒有人走過。
-    //
-    // 接線要是掛在事件流那個 endpoint 上，這裡收到的會是 `GOAL_NOT_ATTACHED_MESSAGE`
-    // ——一句為了排除這種情況而寫的錯誤，出現在一條合法的路徑上。
+  it('**沒先訂事件流就打 `/goal` 也接得上**——服務是 lazy 的，不依賴任何接線步驟', async () => {
+    // 遷上樹之前 `/goal` 的正確性依賴 `attachSession` 跑過（沒接就回「goal 沒接上」那句）。#1486 之後服務在第一次被問到時
+    // 才建，建的時候就讀 `log.events` 重播，所以「先發派」與「先 `openEvents`」是同一條路。
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
     const started = running as RunningServe;
     const client = await serveClient(started);
@@ -235,7 +314,57 @@ describe('serve 的命令面', () => {
     const created = await client.slashRun('gamma', `/${GOAL_COMMAND_NAME} 把測試修綠`);
     if (created.kind !== 'success') throw new Error(JSON.stringify(created));
     expect(created.text).toContain('目標建好了');
-    expect(created.text).not.toContain(GOAL_NOT_ATTACHED_MESSAGE);
+  });
+});
+
+/**
+ * **`/goal` 建立或 resume 之後立刻排第一輪續行**（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）：
+ * 整條線——真的 `runServe`、真的斜線命令、真的 pump。斜線命令走 `wire-handler` 的執行器、不經過 pump，所以這一條
+ * 只有在 pump 自己看著 root 日誌上的 `goal/change` 時才過得了；人從頭到尾沒有說過一句話。
+ */
+describe('/goal 之後的續行', () => {
+  /** 等第一輪續行收尾。它沒開始的話下行永遠沒有 root 的 `completed`，所以給一個期限。 */
+  async function untilFirstRound(
+    events: Parameters<typeof foldTurn>[0],
+  ): Promise<ConversationState> {
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('打 /goal 之後 5 秒內一輪續行都沒有開始')), 5000),
+    );
+    return Promise.race([foldTurn(events), timeout]);
+  }
+
+  it('沒給旗標（預設開）：打 /goal 之後不說話，第 1 輪自己開始', async () => {
+    running = await runServe({
+      argv: ['--port', '0'],
+      log: () => undefined,
+      env: {},
+    });
+    const client = await serveClient(running as RunningServe);
+    const events = await client.openEvents('goal-cmd');
+    const created = await client.slashRun('goal-cmd', `/${GOAL_COMMAND_NAME} 把測試修綠`);
+    if (created.kind !== 'success') throw new Error(JSON.stringify(created));
+
+    const state = await untilFirstRound(events);
+    // 假模型回聲：有它的回覆，代表模型真的被叫了一輪。
+    expect(JSON.stringify(state.entries)).toContain('回聲：');
+  }, 15000);
+
+  it('--no-goal-driver：打 /goal 之後一輪都不排', async () => {
+    running = await runServe({
+      argv: ['--port', '0', '--no-goal-driver'],
+      log: () => undefined,
+      env: {},
+    });
+    const client = await serveClient(running as RunningServe);
+    const events = await client.openEvents('goal-cmd-off');
+    const created = await client.slashRun('goal-cmd-off', `/${GOAL_COMMAND_NAME} 把測試修綠`);
+    if (created.kind !== 'success') throw new Error(JSON.stringify(created));
+    // 給排程器一個機會：同一個 tick 之後再等一下，下行上不該出現任何 root 的收尾。
+    const outcome = await Promise.race([
+      foldTurn(events).then(() => 'ran' as const),
+      new Promise<'quiet'>((resolve) => setTimeout(() => resolve('quiet'), 300)),
+    ]);
+    expect(outcome).toBe('quiet');
   });
 });
 
@@ -261,7 +390,7 @@ describe('核准那份清單', () => {
     const events = await client.openEvents('gated');
     await client.runStart('gated', '把這句話回聲一次。');
 
-    let state: ConversationState = appendHumanTurn(emptyConversation(), '把這句話回聲一次。');
+    let state: ConversationState = emptyConversation();
     const drainUntil = async (done: (current: ConversationState) => boolean) => {
       while (!done(state)) {
         const next = await events.next();
@@ -300,5 +429,30 @@ describe('核准那份清單', () => {
         .filter((entry) => entry.kind === 'tool')
         .map((entry) => (entry.kind === 'tool' ? [entry.name, entry.status] : [])),
     ).toEqual([['echo', 'done']]);
+  });
+
+  it('serve 的每條對話都掛了插話：停在核准點時送的插話進 next-step（#710）', async () => {
+    running = await runServe({
+      argv: ['--port', '0', '--patch', documentedFixture()],
+      log: () => undefined,
+      env: {},
+    });
+    const client = await serveClient(running as RunningServe);
+    const events = await client.openEvents('steer');
+    await client.runStart('steer', '把這句話回聲一次。');
+    let state = await foldTurn(events);
+    expect(state.status).toBe('awaiting-input');
+
+    expect((await client.runStart('steer', '回聲完順便說聲好', { mode: 'steer' })).type).toBe(
+      'success',
+    );
+    // 沒掛的話它退成排隊，落在 `inbox`：兩個都等，才分得出是哪一條。
+    while (state.inboxNextStep.length === 0 && state.inbox.length === 0) {
+      const next = await events.next();
+      if (next.done === true) throw new Error('下行斷了');
+      state = reduceConversation(state, next.value);
+    }
+    expect(state.inboxNextStep.map((item) => item.text)).toEqual(['回聲完順便說聲好']);
+    expect(state.inbox).toEqual([]);
   });
 });

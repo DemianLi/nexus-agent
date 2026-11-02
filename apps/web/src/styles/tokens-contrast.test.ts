@@ -1,66 +1,100 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
-import Color from 'colorjs.io';
 import { describe, expect, test } from 'vitest';
 
+import { DESTRUCTIVE_HOVER, DESTRUCTIVE_REST } from '../../tokengen/destructive-tint.mjs';
+
+import { surfaceContrast } from './color-math';
+import { readCascade, type Query } from './css-cascade';
+
 /**
- * `.docs/web-ui-spec.md` §11 第 2 條：用 colorjs.io 重算**產生出來的** token（`tokens.generated.css`），
- * 確認達到 §5 的對比度目標。產生器（`tokengen/generate.mjs`）解的是目標，這裡驗的是寫進版控的產物：
- * 手改了產物、改了產生器輸入卻忘了重跑、oklch 四捨五入吃掉邊際，都在這裡紅。
+ * `.docs/web-ui-spec.md` §11 第 2 條：用 colorjs.io 重算**實際生效**的顏色 token，確認達到 §5 的對比度目標。
+ * 產生器（`tokengen/generate.mjs`）解的是目標，這裡驗的是 `index.css` 照 import 順序疊出來的結果（`css-cascade.ts`，#1498）：
+ * 手改了產物、改了產生器輸入卻忘了重跑、oklch 四捨五入吃掉邊際、後面疊上來的樣式表蓋掉了產物，都在這裡紅。
  *
  * 目標（§5）：文字 ≥ 4.5、非文字 ≥ 3（SC 1.4.11）、狀態色對底色 5.2（產生器的解目標，讓暗色狀態色對卡片
- * 仍過 4.5）、brand 在亮色底色上 ≥ 4.5；亮暗鑑別度一樣＝表面這一層的每一對，亮暗差不超過 0.05。
+ * 仍過 4.5）、brand 在亮色底色上 ≥ 4.5；亮暗鑑別度一樣＝表面這一層的每一對，亮暗差不超過 0.05（只疊在底色上）。
+ *
+ * 量的是 token，不是元素：元件實際的底色若是 `color-mix()` 之類現場合成的，這裡看不到，由瀏覽器那一層（`guard/`）量。
+ *
+ * 面有三種狀態，每一種都要達標（{@link MODES}）：平常的半透明、系統要求減少透明度（`prefers-reduced-transparency`）、
+ * 頁面標了 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路）。後兩種的面換成 SG 的不透明值，跟半透明疊出來的不完全一樣。
  */
 
 type Theme = 'light' | 'dark';
-type Rgb = [number, number, number];
 
-const css = readFileSync(new URL('./tokens.generated.css', import.meta.url), 'utf8');
+const cascade = readCascade();
 
-function block(selector: string): Map<string, string> {
-  const start = css.indexOf(`${selector} {`);
-  if (start === -1) throw new Error(`tokens.generated.css 裡沒有 ${selector}`);
-  const body = css.slice(start, css.indexOf('}', start));
-  return new Map(
-    [...body.matchAll(/--([\w-]+):\s*([^;]+);/g)].map((m) => [m[1] ?? '', (m[2] ?? '').trim()]),
-  );
+/**
+ * `.dark` 掛在 `<html>` 上（`index.html`、`lib/theme.ts`），所以暗色時 `:root` 與 `.dark` 落在同一個元素、specificity 相同，
+ * 誰贏看 layer 與先後：後面一條只寫 `:root` 的覆寫，暗色也會被它蓋掉。
+ */
+const SELECTORS: Record<Theme, readonly string[]> = { light: [':root'], dark: [':root', '.dark'] };
+
+interface Mode {
+  readonly name: string;
+  readonly selectors: Record<Theme, readonly string[]>;
+  readonly query?: Query;
 }
 
-const tokens: Record<Theme, Map<string, string>> = { light: block(':root'), dark: block('.dark') };
+/** 量具只看 layer 與先後、不算 specificity；`data-glass` 掛在 `<html>` 上時，產物裡暗色那段排在後面，結果跟瀏覽器一樣。 */
+const TRANSLUCENT: Mode = { name: '半透明', selectors: SELECTORS };
 
-function parse(value: string): { rgb: Rgb; alpha: number } {
-  const color = new Color(value).to('srgb');
-  const rgb = color.coords.map((v) => Math.min(1, Math.max(0, v ?? 0))) as Rgb;
-  return { rgb, alpha: color.alpha ?? 1 };
+const MODES: Mode[] = [
+  TRANSLUCENT,
+  {
+    name: 'reduced-transparency',
+    selectors: SELECTORS,
+    query: { conditions: ['@media (prefers-reduced-transparency: reduce)'] },
+  },
+  {
+    name: 'data-glass="opaque"',
+    selectors: {
+      light: [':root', "[data-glass='opaque']"],
+      dark: [':root', '.dark', "[data-glass='opaque']", ".dark[data-glass='opaque']"],
+    },
+  },
+];
+
+function token(mode: Mode, theme: Theme, name: string): string | undefined {
+  return cascade.computed(mode.selectors[theme], `--${name}`, mode.query);
 }
 
-/** 瀏覽器在 sRGB（gamma 編碼）上疊 alpha；半透明 token 要先疊在它實際所在的底上。 */
-function resolve(theme: Theme, name: string, on?: Rgb): Rgb {
-  const value = tokens[theme].get(name);
-  if (value === undefined) throw new Error(`${theme} 沒有 --${name}`);
-  const { rgb, alpha } = parse(value);
-  if (alpha === 1) return rgb;
-  if (on === undefined) throw new Error(`--${name} 是半透明的，要指定疊在什麼上面`);
-  return rgb.map((c, i) => c * alpha + (on[i] ?? 0) * (1 - alpha)) as Rgb;
+/**
+ * 半透明的面疊在哪裡（#1512）：頁面底色，以及頁面漸層的每一個停點（`--light-N`，本身半透明、疊在底色上）。
+ * 最差的那一疊要達標（`color-math.ts` 的 `surfaceContrast`）。
+ */
+function bases(theme: Theme, mode: Mode = TRANSLUCENT): string[][] {
+  const stops = [...cascade.customProperties(mode.selectors[theme], mode.query).keys()]
+    .map((property) => /^--(light-\d+)$/.exec(property)?.[1])
+    .filter((name) => name !== undefined)
+    .sort();
+  return [['background'], ...stops.map((stop) => ['background', stop])];
 }
 
-function contrast(theme: Theme, fg: string, bg: string): number {
-  const under = resolve(theme, bg);
-  const over = resolve(theme, fg, under);
-  return new Color('srgb', over).contrast(new Color('srgb', under), 'WCAG21');
+const ONLY_BACKGROUND = [['background']];
+
+function contrast(
+  mode: Mode,
+  theme: Theme,
+  fg: string,
+  bg: string,
+  under = bases(theme, mode),
+): number {
+  return surfaceContrast((name) => token(mode, theme, name), fg, bg, under).ratio;
 }
 
 const THEMES: Theme[] = ['light', 'dark'];
 
 const TEXT: [string, string][] = [
   ['foreground', 'background'],
-  ['foreground', 'chip'],
+  ['foreground', 'muted'],
   ['card-foreground', 'card'],
   ['popover-foreground', 'popover'],
   ['muted-foreground', 'background'],
   ['muted-foreground', 'card'],
-  ['muted-foreground', 'stage'],
-  ['muted-foreground', 'chip'],
+  // 可點的小面（#1689）：平常是 `--muted`，上面是次要字；hover 照 SG ghost 是 `--hover`，字是 foreground。
+  ['muted-foreground', 'muted'],
+  ['foreground', 'hover'],
   ['primary-foreground', 'primary'],
   ['secondary-foreground', 'secondary'],
   ['accent-foreground', 'accent'],
@@ -71,15 +105,31 @@ const TEXT: [string, string][] = [
   ['brand', 'card'],
   ['destructive', 'card'],
   ['success', 'card'],
-  ['warning', 'card'],
-  ['info', 'card'],
-  // 程式碼區塊（stage）上的語法色（`shiki.css`）。
-  ['foreground', 'stage'],
-  ['brand', 'stage'],
-  ['destructive', 'stage'],
-  ['success', 'stage'],
-  ['warning', 'stage'],
+  ['status-interrupted', 'card'],
+  ['status-done', 'card'],
 ];
+
+/**
+ * 畫在 stage 上的字（#1689）：stage 的面是 SG 的 `--hover-faint`，本身半透明，疊在每一疊頁面上、也疊在每一疊頁面上的卡片上
+ * （工具卡、交付清單在對話裡，提問面板、程式碼區塊也可能在卡片裡），最差的那一疊要過 4.5。語法色見 `shiki.css`，連結是回覆裡的。
+ */
+const STAGE_TEXT = [
+  'foreground',
+  'muted-foreground',
+  'brand',
+  'link',
+  'destructive',
+  'success',
+  'status-interrupted',
+];
+
+function onPagesAndCards(theme: Theme, mode: Mode): string[][] {
+  const pages = bases(theme, mode);
+  return [...pages, ...pages.map((stack) => [...stack, 'card'])];
+}
+
+/** stage 疊在卡片上至少要分得出來：原型 eb800a1 的 stage 對卡片（產生器的 `T.stage`），只疊在底色上量，同 {@link SURFACES}。 */
+const STAGE_ON_CARD = 1.05;
 
 const NON_TEXT: [string, string][] = [
   ['ring', 'background'],
@@ -87,39 +137,108 @@ const NON_TEXT: [string, string][] = [
   ['brand', 'card'],
 ];
 
-const STATUS = ['destructive', 'success', 'warning', 'info'];
+/** SG 自己的 `status-*` 也算狀態色、套 5.2（demian，#1512，2026-10-17）。 */
+const STATUS = ['destructive', 'success', 'status-done', 'status-interrupted', 'status-running'];
 
-/** 表面這一層：亮暗要一樣分得出來。 */
+/**
+ * 表面這一層：亮暗要一樣分得出來。**只疊在 `--background` 上量**，不算漸層停點（PM，#1512）：鑑別度問的是「這一片面跟頁面分不分得開」，
+ * 面是一整片，停點只是頁面上幾處很淡的光暈（亮色 4–11%、暗色沒有）；算進去的話，亮色多了幾疊、暗色沒有，比的就不是同一件事。
+ */
 const SURFACES: [string, string][] = [
   ['card', 'background'],
-  ['stage', 'card'],
-  ['chip', 'background'],
+  ['hover-faint', 'card'],
+  ['muted', 'background'],
   ['sidebar', 'background'],
-  ['card-hairline', 'card'],
   ['border', 'background'],
 ];
+
+/**
+ * 淡紅底上的字（#1523）：SG 的 destructive 按鈕、badge、泡泡是 `bg-destructive/<alpha>` 配 `text-destructive`，按鈕 hover 的底由
+ * 覆寫檔調淡（README 本地修改第 17 條）。淡紅底疊在每一疊頁面上、也疊在每一疊頁面上的卡片上，最差的那一疊要過 4.5。
+ * alpha 跟產生器解色用的同一份（`tokengen/destructive-tint.mjs`）。
+ */
+const DESTRUCTIVE_TINTS: [string, { readonly light: number; readonly dark: number }][] = [
+  ['平常', DESTRUCTIVE_REST],
+  ['按鈕 hover', DESTRUCTIVE_HOVER],
+];
+
+function tintContrast(mode: Mode, theme: Theme, alpha: number): number {
+  const destructive = token(mode, theme, 'destructive') ?? '';
+  const oklch = /^oklch\(([^/)]*)\)$/.exec(destructive.trim());
+  if (oklch === null) throw new Error(`--destructive 不是不透明的 oklch()：${destructive}`);
+  const tint = `oklch(${oklch[1]} / ${alpha})`;
+  const lookup = (name: string) => (name === 'destructive-tint' ? tint : token(mode, theme, name));
+  const pages = bases(theme, mode);
+  const under = [...pages, ...pages.map((stack) => [...stack, 'card'])];
+  return surfaceContrast(lookup, 'destructive', 'destructive-tint', under).ratio;
+}
 
 /** oklch 寫到小數第四位，重算會比產生器的解少一點點；只容許這個量級。 */
 const ROUNDING = 0.01;
 
-describe('產生出來的 token 達到對比度目標', () => {
+describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mode) => {
   for (const theme of THEMES) {
     test.each(TEXT)(`${theme}：文字 %s 對 %s ≥ 4.5`, (fg, bg) => {
-      expect(contrast(theme, fg, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(4.5);
+    });
+
+    test.each(STAGE_TEXT)(
+      `${theme}：文字 %s 對 stage（hover-faint 疊在頁面與卡片上）≥ 4.5`,
+      (fg) => {
+        expect(
+          contrast(mode, theme, fg, 'hover-faint', onPagesAndCards(theme, mode)),
+        ).toBeGreaterThanOrEqual(4.5);
+      },
+    );
+
+    test(`${theme}：stage（hover-faint）疊在卡片上 ≥ ${STAGE_ON_CARD}`, () => {
+      expect(contrast(mode, theme, 'hover-faint', 'card', ONLY_BACKGROUND)).toBeGreaterThanOrEqual(
+        STAGE_ON_CARD,
+      );
     });
 
     test.each(NON_TEXT)(`${theme}：非文字 %s 對 %s ≥ 3`, (fg, bg) => {
-      expect(contrast(theme, fg, bg)).toBeGreaterThanOrEqual(3);
+      expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(3);
     });
 
+    test.each(DESTRUCTIVE_TINTS)(
+      `${theme}：destructive 的字對它%s的淡紅底 ≥ 4.5（疊在頁面與卡片上）`,
+      (_, tint) => {
+        expect(tintContrast(mode, theme, tint[theme])).toBeGreaterThanOrEqual(4.5);
+      },
+    );
+
     test.each(STATUS)(`${theme}：狀態色 %s 對底色 ≥ 5.2`, (status) => {
-      expect(contrast(theme, status, 'background')).toBeGreaterThanOrEqual(5.2 - ROUNDING);
+      expect(contrast(mode, theme, status, 'background')).toBeGreaterThanOrEqual(5.2 - ROUNDING);
     });
   }
 
-  test.each(SURFACES)('亮暗鑑別度一樣：%s 對 %s 亮暗差 ≤ 0.05', (fg, bg) => {
-    const light = contrast('light', fg, bg);
-    const dark = contrast('dark', fg, bg);
+  test.each(SURFACES)('亮暗鑑別度一樣：%s 對 %s 亮暗差 ≤ 0.05（只疊在底色上）', (fg, bg) => {
+    const light = contrast(mode, 'light', fg, bg, ONLY_BACKGROUND);
+    const dark = contrast(mode, 'dark', fg, bg, ONLY_BACKGROUND);
     expect(Math.abs(light - dark)).toBeLessThanOrEqual(0.05);
+  });
+});
+
+describe('量具自檢', () => {
+  test('每一疊底都有疊到——SG 的三個漸層停點都在（少了就只量平的底色，偏寬）', () => {
+    for (const theme of THEMES) {
+      expect(bases(theme)).toEqual([
+        ['background'],
+        ['background', 'light-1'],
+        ['background', 'light-2'],
+        ['background', 'light-3'],
+      ]);
+    }
+  });
+
+  test('不透明的兩種狀態真的換了面：--card 不透明、跟半透明那一套不同', () => {
+    for (const mode of MODES.slice(1)) {
+      for (const theme of THEMES) {
+        const card = token(mode, theme, 'card') ?? '';
+        expect(card, `${mode.name} ${theme}`).not.toMatch(/\//);
+        expect(card).not.toBe(token(TRANSLUCENT, theme, 'card'));
+      }
+    }
   });
 });

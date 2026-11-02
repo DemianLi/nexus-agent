@@ -1,0 +1,161 @@
+{
+  "id": "2211.00053",
+  "title": "Generating Sequences by Learning to Self-Correct",
+  "topic": "T5",
+  "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把生成拆成「凍結的 base generator 出初稿＋另外訓練的 corrector 逐步改稿」，用 value function 從模型自己的取樣中自動組出「變好且相近」的修正對來線上訓練 corrector，在數學程式合成、詞彙約束生成、去毒三類任務上都勝過原 generator，且訓練好的 corrector 可直接套到更大的 GPT-3 上。",
+  "problem": "一般文字生成是單次解碼：只要初稿差一點（漏一個關鍵字、程式少一步），就只能整個重來，初稿裡有用的結構被丟掉。同時最強的模型（GPT-3 這類）規模極大或只能透過 API 存取，無法為了特定任務的限制（程式要正確、要涵蓋關鍵字、不能有毒）去微調或做 RL。需要一種不動 generator 參數、又能針對任務品質指標迭代修正輸出的機制；而「怎麼改稿」沒有現成的監督資料。",
+  "core_idea": "把 p(y|x) 分解為 generator p0(y0|x) 與 corrector pθ(y|y0,x[,f(y0)]) 的串接，corrector 可重複套用形成修訂序列 y0→y1→…→yT。corrector 的訓練資料不靠人工編輯，而是用一個訓練期可用的純量 value function v(y) 在模型自己產生的輸出池裡挑出「v 變高、且與原稿相近」的 (初稿, 修正稿) 配對，並讓 corrector 自己的產出不斷回灌資料池（exploration），形成線上的 self-corrective learning。選配的回饋 f(y)（自然語言、API 細項分數、LLM 評語）可作為額外輸入。",
+  "method": {
+    "formulation": "p(y|x)=Σ_{y0} p0(y0|x)·pθ(y|y0,x)；多步時 p(yT|x)=Σ p0(y0|x)∏_t pθ(y_{t+1}|y_t,x)；帶回饋時 corrector 條件加上 f(y_t)。generator 凍結（可為微調過的 seq2seq 或 few-shot prompt 的 LLM），只訓練 corrector。",
+    "training_algorithm_self_corrective_learning": [
+      "輸入：generator p0、corrector pθ、訓練 prompt 集 X、value function v: Y→R，選配 feedback f: Y→F（F 形式任意）。",
+      "初始化資料池（Eq.2）：對每個 x 用解碼演算法 q（例如 temperature sampling）從 p0 取 N 個輸出，存成 (x, y, v(y), f(y))；若有現成資料集（例如 gold 解）也可一併放入。",
+      "每一輪 iteration 對每個 x：從資料池抽 hypothesis y（論文實驗是從資料池抽，而非重新從 generator 取樣），用目前的 corrector 產生修正 y'~pθ(·|y,x,f(y))，把 (x, y', v(y'), f(y')) 加回資料池（exploration，Eq.5）。",
+      "配對（Eq.3）：在同一個 x 的資料池內，所有滿足 v(y)<v(y') 的有序對 (x, y, y') 構成 value-improving pairs P_x；同時保存兩者的 v 與 f。",
+      "取樣（Eq.4）：每個 pair 被抽中的機率 ∝ exp(α·(v(y')−v(y)) + β·s(y,y'))/Z(y)，Z(y) 在 y 的所有可用修正上正規化；α≥0 越大越偏好增益大的目標，β≥0 越大越偏好與原稿相近的目標，s 為相似度函式（論文未指明具體形式）。",
+      "學習：對抽出的 batch 最小化 cross-entropy −log pθ(y'|y,x,f(y))，跑 M 步梯度更新，再回到下一輪 exploration。"
+    ],
+    "inference": "先從 generator 解碼 y0，再反覆從 corrector 解碼 y_{t+1}（每一步用單一條解碼序列近似 Eq.1 的邊際化）。停止時刻 T 為固定值，或在 v(y) 可用時一達到目標值就停。",
+    "input_serialization_appendix_A1": "數學任務把訓練樣本序列化成 [SC] x [CURR] y_i [START] y_j [END]（[·] 為特殊 token，y_i→y_j 為一個修正對），loss 只算 [START] 之後的 token。有回饋時改為 [SC] x [CURR] y_i [FEEDBACK] F(x,y_i) [START] y_j [END]，loss 從 [FEEDBACK] 之後開始算（也就是回饋文字本身也被當成預測目標）。",
+    "task_configs": {
+      "math_program_synthesis": "資料取自 Lila 的程式版本；三個設定：MultiArith、Multitask（MultiArith+AddSub+SingleOp+SVAMP），兩者做 60/20/20 切分；GSM8k 用官方 test、從 train 切 20% 當 valid。generator：微調過的 GPT-Neo 1.3B（HF 預設超參數，僅把 eval 步數調小以挑好 checkpoint），或 few-shot 的 GPT-3 davinci / text-davinci-002。corrector：GPT-Neo 1.3B，以微調後的 generator 權重初始化。v＝程式執行後輸出等於標準答案為 1，否則 0；主實驗 f=∅。generator 與 corrector 都用 greedy 解碼、只修 k=1 次。推論兩種模式：(1) 一律修正一次；(2) oracle 模式 Self-Correct*：只有初稿答錯才修（測試時需知道對錯）。",
+      "lexically_constrained_generation": "CommonGen（generator 為微調過的 GPT-2 Large）與 E2E（GPT-2 Medium）。v＝輸出中涵蓋的限制詞比例。推論時 generator 用 beam search，之後最多 3 次 beam search 修正，所有限制詞都出現即提前停止。附錄 Table 8/9 超參數：CommonGen 6000 steps、batch 128；E2E 10000 steps、batch 100；皆 Adam、lr 1e-5、beam k=5。E2E 的人工流暢度評估：隨機 100 例、每例 3 名 AMT 標註者、3 點 Likert、多數決，標註者限美加且核准率 98%、至少 5000 次歷史標註。",
+      "toxicity_reduction": "RealToxicityPrompts：訓練用 85K 個 train prompt，評估沿用 Liu et al. (2021) 的 10K 個 non-toxic test prompt。generator 為現成 GPT-2 Large，corrector 為另外微調的 GPT-2 Large。v＝Perspective API 的毒性分數（0–1）。推論 nucleus sampling p=0.9、每 prompt 取 25 個樣本，最多修 3 次。指標：25 個樣本最大毒性的平均（Avg. Max.）、25 個中至少 1 個有毒的機率（Prob.）、perplexity、dist-2/3。",
+      "explicit_feedback_section_3_5": "毒性：訓練時比較 y 與 y' 的 Perspective 細項屬性分數，取下降最多的屬性寫成自然語言（例如要求降低 profanity 方向的毒性）；推論時對當前稿呼叫 API、取最高分的屬性，因此推論期需要 API。詞彙約束：訓練時把 y' 比 y 多滿足的限制詞寫成回饋（例如「adding constraint word: read」），推論時列出當前稿所有缺漏的限制詞。數學：用 text-davinci-002、6 個人工撰寫的示範，prompt 內含題目、當前程式、gold 解，要求針對程式某一處給評語，正確則回 Correct；推論也用同一回饋模型，並改為修 5 輪（主實驗 1 輪）。",
+      "module_swap_section_3_4": "兩種換模組方式：(1) 用小 generator 訓練 corrector，測試時直接換上大 generator（GPT-2 XL、GPT-3、GPT-3 Instruct）；(2) 直接用大 generator 的取樣初始化資料池來訓練 corrector。數學表中的換模組結果一律只修錯的（oracle），去毒則修所有輸出。"
+    },
+    "unreported_hyperparameters": "數學與去毒實驗的 α、β、相似度函式 s、每個 x 的取樣數 N、iteration 數、每輪 M 步、資料池大小皆未報告；只有 CommonGen/E2E 給了訓練步數、batch、lr 與 beam 寬度。"
+  },
+  "assumptions": [
+    "訓練期能取得可自動計算的純量品質函式 v(y)：數學需要標準答案並能執行程式，約束生成需要限制詞清單，去毒需要可呼叫的 Perspective API。",
+    "generator 對同一輸入多次取樣時，品質有足夠差異，資料池裡才會存在 v 嚴格上升的配對；若 generator 幾乎全錯或全對，配對會稀少。",
+    "初稿帶有可再利用的結構，「就近修改」比從頭重寫更容易學；β 與相似度函式 s 能把這個偏好傳給 corrector。",
+    "輸入 x 加上一份完整初稿（與選配回饋）能放進 corrector 的 context，輸出與初稿同形（整份重寫一次，而非 diff）。",
+    "測試時 generator 的錯誤分布與訓練時接近，或 corrector 學到的修正模式可跨 generator 泛化（§3.4 換上 GPT-3 的前提）。",
+    "Self-Correct* 與 early stopping 模式假設測試時能判斷當前稿對不對、是否達標；帶回饋的設定假設推論期仍有回饋來源（API、缺漏詞清單、能看 gold 解的 LLM）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiArith（程式版，取自 Lila）",
+      "Multitask：MultiArith + AddSub + SingleOp + SVAMP（程式版）",
+      "GSM8k（程式版，官方 test split）",
+      "CommonGen",
+      "E2E NLG",
+      "RealToxicityPrompts（10K non-toxic test prompts）"
+    ],
+    "metrics": [
+      "數學：程式執行結果等於標準答案的比例（Correct；Correct* 為只修錯題的 oracle 模式）",
+      "約束生成：constraint coverage、BLEU-4、CIDEr、NIST、ROUGE-L、METEOR、每句 runtime、E2E 人工流暢度（3 點 Likert）",
+      "去毒：Perspective API 的 Avg. Max. toxicity 與 toxicity probability、perplexity（流暢度）、dist-2 / dist-3（多樣性）"
+    ],
+    "baselines": [
+      "數學：各自的 GPT-Neo 1.3B generator；GSM 另比 NEO FCP+PCP 2.7B 與其 GPT-Neo 2.7B 微調基準（Ni et al. 2022）、Cobbe et al. 的 3B/6B（非程式版 GSM）；§3.4 比 few-shot GPT-3 davinci / text-davinci-002",
+      "約束生成：GPT-2 generator、NeuroLogic、NeuroLogic-A*esque 解碼、Prefix-Tuning（E2E）",
+      "去毒：GPT-2 Large、PPLM、GeDi、DExperts、DAPT、PPO、Quark（數字取自 Lu et al. 2022a）",
+      "消融：拿掉 proportional sampling（改均勻取樣）、拿掉 value pairing、拿掉 exploration（只用 generator 產生的配對）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "數學程式合成：corrector 在三個設定都大幅提升 GPT-Neo 1.3B generator；非 oracle（一律修一次）的 GSM 21.26 已高於 2.7B 的 NEO FCP+PCP。括號內為只修錯題的 oracle 數字，實際部署拿不到。",
+      "numbers": "MultiArith 60.00→98.33（oracle 99.17）；Multitask 49.02→73.53（oracle 78.24）；GSM 8.57→21.26（oracle 24.22），對照 NEO FCP+PCP 2.7B 19.50、OpenAI 6B 20.00（非程式版 GSM）",
+      "section": "§3.1, Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "詞彙約束生成：只用 beam search 的 corrector 把 coverage 大幅拉高且流暢度指標持平；E2E 上 coverage 超過 NeuroLogic-A*esque，CommonGen 上加上 NeuroLogic 後打平 A*esque 的 coverage，但快一個數量級。",
+      "numbers": "CommonGen coverage 91.38→94.58、CIDEr 14.97→15.30、runtime 0.20s→0.80s；Self-Correct+NeuroLogic 97.80 / CIDEr 15.28 / 2.24s，對照 NeuroLogic-A*esque 97.80 / 15.20 / 19.24s。E2E coverage 91.50→98.77（NeuroLogic-A*esque 96.97），人工流暢度 2.94→2.98",
+      "section": "§3.2, Table 2, Table 11, Table 12",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "去毒：不改動 GPT-2 Large generator，只加 corrector，毒性指標優於所有推論期控制方法與 PPO、Quark 等 RL 方法，perplexity 只小幅上升。",
+      "numbers": "Avg. Max. 0.527→0.171、Prob. 0.520→0.026、perplexity 11.31→11.81、dist-2 0.85→0.80；Quark 0.196/0.035/12.47、PPO 0.218/0.044/14.27、DExperts 0.314/0.128/25.21",
+      "section": "§3.3, Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "換模組：用 GPT-Neo 1.3B 訓練的 corrector 可直接修正測試時換上的 GPT-3；改用 GPT-3 Instruct 的取樣訓練再多一點。數學這幾列全部是 oracle（只修錯題），沒有非 oracle 數字；去毒那欄未標是哪一個毒性指標。",
+      "numbers": "Multitask：GPT-3 46.70→80.00、GPT-3 Instruct 84.90→90.90（用 Instruct 訓練 92.75）；GSM：GPT-3 6.96→24.30、GPT-3 Instruct 36.80→45.00（用 Instruct 訓練 45.92）；去毒（corrector 為 GPT2-L）：GPT2-XL 0.383→0.027、GPT-3 0.182→0.025、GPT-3 Instruct 0.275→0.023",
+      "section": "§3.4, Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "加入明確的自然語言回饋在三個任務都再進一步；但數學的回饋模型 GPT-3 看得到 gold 解（有洩漏風險），且這組跑 5 輪修正，所以其 Self-Correct 基準 74.31 與 Table 1 的 1 輪數字 73.53 不同，作者自己也只把它當可行性研究。",
+      "numbers": "毒性 Avg. Max. 0.171→0.156、Prob. 0.026→0.020；CommonGen coverage 94.58→95.88（CIDEr 15.30→15.24）；Math Multitask Correct 74.31→81.76、Correct* 79.80→82.35（generator 49.02）",
+      "section": "§3.5, Table 5, Table 10, Table 11",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "消融：只配「value 變高」的對是關鍵，按 Eq.4 比例取樣的貢獻小；數學欄是 Multitask 的 oracle 數字。正文把這張表寫成 Table 7，實際標號是 Table 6。",
+      "numbers": "Math：完整 78.24、拿掉 proportional sampling 77.25、拿掉 value pairing 62.35；CommonGen：94.55 / 93.49 / 91.76",
+      "section": "§3.6, Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "消融：讓 corrector 自己的輸出回灌資料池（exploration）在三個數學資料集都有幫助；但即使不做 exploration，只用 generator 自身取樣組出的配對，也已大幅超過 generator。數字為 oracle 模式。",
+      "numbers": "無→有 exploration：MultiArith 89.20→99.17、Multitask 73.49→78.24、GSM8k 17.60→23.96（Table 1 同設定為 24.22，兩表不一致）",
+      "section": "§3.6, Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "數學的自然語言回饋由看得到 gold 解的 GPT-3 產生，推論期有解答洩漏風險，因此這部分只用來研究可行性。",
+    "毒性的細項回饋需要在推論期呼叫 Perspective API，主實驗則不需要。",
+    "數學任務缺乏自動找錯的手段（沒有類似毒性 API 的工具），只能改用 LLM 產生回饋。",
+    "數學任務修到 2–3 輪之後，沒有回饋的 corrector 就需要額外指引，多輪修正的效益在有回饋時才明顯。",
+    "Eq.1 對中間稿的邊際化無法計算，推論時每步只用一條解碼序列近似。",
+    "研究範圍只限於「固定 generator＋另外訓練的 corrector」，其他形式（例如同一個 LM 靠 prompt 自我修正）留待未來工作。"
+  ],
+  "limitations_observed": [
+    "oracle 數字貫穿主要宣稱：Table 1 的 Self-Correct*、Table 4 的全部數學列（含 GPT-3 從 36.80 到 45.00）、Table 6/7 的消融都只修「已知答錯」的題，測試時用到了標準答案。這個模式下 corrector 永遠不會把對的改錯，分數下限就是 generator。非 oracle 與 oracle 的差距顯示 corrector 確實會改壞對的初稿：GSM 21.26 vs 24.22、Multitask 73.53 vs 78.24。換上 GPT-3 的情境則完全沒有非 oracle 數字，實際效益未知。",
+    "缺少算力對等的對照組：Self-Correct* 性質上接近「知道自己錯了就讓第二個模型再答一次」，也就是 pass@2 加 oracle 挑選。應該拿 generator 自己的 pass@2、多數決或 best-of-k（同樣用 v 挑）來比，論文沒做。CommonGen 的推論時間也從 0.20s 變 0.80s，是 4 倍成本。",
+    "沒證明 corrector 是在「改稿」而不是「重寫」：數學的 v 只有 0/1，配對幾乎都是（錯解, 同題另一份對解）。corrector 可能只是在自身取樣的正確解上再微調的第二個 generator，本質接近 Ni et al. 的 FCP 路線。論文沒報 β、s，也沒量 y 與 y' 的編輯距離。Figure 10 的去毒例子把續寫整句換成語意無關的內容，更像重新生成。",
+    "摘要說「corrector 遠小於 generator 時仍有效」只在 §3.4 成立：§3.1 的 corrector 與 generator 都是 1.3B，且以 generator 權重初始化；§3.3 兩者都是 GPT-2 Large。主實驗其實是等大小的兩段式系統。",
+    "去毒拿評估指標當訓練訊號：訓練的 v 與評估都用同一個 Perspective API，沒有人工毒性評估，也沒有換一個毒性分類器做交叉驗證，有 Goodhart 風險。另外 §3.3 寫「最多修 3 次」，但若主實驗推論期不呼叫 API（§3.5 的說法），提前停止的依據就不清楚。",
+    "E2E 的「維持或提升語言品質」與附錄不完全相符：Table 12 相對 GPT-2，ROUGE-L 從 70.25 降到 68.60、METEOR 從 45.58 降到 45.11，BLEU-4 68.81 也低於 Prefix-Tuning 的 70.30。人工流暢度只抽 100 例，2.94 對 2.98 的差距沒有顯著性檢定。",
+    "論文內部數字與編號不一致：GSM 在 Table 1 是 24.22、在 Table 7 是 23.96；CommonGen 在 Table 2 是 94.58、在 Table 6 是 94.55；數學的 Self-Correct 在 Table 1 是 73.53、在 Table 5 是 74.31（輪數不同）；正文引用的表號也錯置。全篇沒有 seed 數與變異數，小差距（例如 proportional sampling 的 78.24 vs 77.25）無法判斷是否只是雜訊。",
+    "可重現性缺口：數學與去毒的 α、β、s、N、iteration 數、資料池大小都未報。GPT-3 davinci 與 text-davinci-002 已停止服務，§3.4 與數學回饋實驗現在無法原樣重跑。",
+    "對對話 agent 的外推有限：三個任務都是單回合、輸出短、v 可自動計算。多輪對話裡「回覆品質」通常沒有即時可算的純量 v，而修整份回覆會碰上 context 長度與語意漂移，這些情境都沒測。"
+  ],
+  "framework_role": "在 T5 裡代表「以訓練得到的自我修正」這條路線的早期代表作：把修正做成獨立、可替換的 corrector 模組，掛在任何（包括只能用 API 的）generator 後面，並給出一套不需人工編輯資料、只要一個純量評分器就能自動組出修正訓練資料的演算法。對框架的直接啟示有三點。第一，修正器可以跟主模型解耦，針對不同品質目標各自訓練。第二，value function 同時扮演訓練訊號與推論期停止條件，也就是「評估器驅動修正」。第三，回饋通道 f 讓外部工具（API 細項分數、缺漏清單、LLM 評語）能注入修正。它也是後來「LLM 靠自己 prompt 無法可靠自我修正」這類批判研究常拿來對照的「外部訓練 corrector」基準。需要注意，它處理的是單次輸出的改稿，不是 agent 多步行動軌跡的修正。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "修正由「偵測到不合格」觸發或終止：Self-Correct* 只在程式執行結果與標準答案不符時才呼叫 corrector；約束生成每修一次就檢查 coverage，全部限制詞滿足即停；§2.1 的推論在 v(y) 可用時一達目標值就停；§3.5 的毒性回饋則在推論期對當前稿呼叫 API，把分數最高的毒性屬性當成修正方向。這裡的「軌跡」是 y0→y1→…→yT 的修訂序列，不是 agent 的行動軌跡，偵測器也是任務專屬的外部檢查（執行器、關鍵字比對、毒性 API），不是從 trace 中學出的異常偵測。"
+    },
+    {
+      "edge": "E5",
+      "how": "範圍很窄：每一次修正 (x, y', v(y'), f(y')) 都寫回資料池並由 value function 評分，再依分數差組成配對餵回 corrector 訓練，所以修正紀錄流向的是「評分後再訓練」，不是離線評估報表。論文唯一把修正過程本身當評估對象的是 Figure 4/6 的「修正次數 vs 品質」曲線。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身只有研究實驗，沒有提到部署或產品。查證範圍：論文聲明接受後才會釋出程式碼；用 gh 搜尋 wellecks、allenai、GXimingLu 帳號下的 repo，以及全站以 self-correct 為關鍵字搜尋，都沒找到官方實作。本次 WebSearch 額度已用完，未能再查官方部落格或產品文件，因此無法排除有未被找到的採納紀錄。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "資料全部公開：MultiArith/AddSub/SingleOp/SVAMP/GSM8k 的程式版取自 Lila（https://github.com/allenai/Lila），另有 CommonGen、E2E、RealToxicityPrompts。但官方程式碼未找到（論文只說接受後釋出）；去毒的訓練訊號與評估依賴外部 Perspective API，論文未記錄其模型版本；GPT-3 davinci / text-davinci-002 已停止服務；數學與去毒的關鍵超參數（α、β、s、N、iteration 數）未報。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是「訓練獨立 corrector」路線的奠基作之一，給出只靠 value function、不需人工編輯資料就能自動組出修正訓練對的通用演算法，非 oracle 設定下 GSM 仍從 8.57 升到 21.26，是 T5「訓練得到的自我修正」子領域必讀；但 oracle 數字與數學回饋的 gold 洩漏要打折看。",
+  "related": [
+    "2206.05802",
+    "2205.14318",
+    "2205.13636",
+    "2110.14168",
+    "2208.11663",
+    "2201.11903",
+    "2207.10342",
+    "2108.07732",
+    "1909.08593"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

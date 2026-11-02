@@ -1,9 +1,15 @@
 /**
+ * **手搭組裝（#670）**：這一檔有 `fence: true` 的案例留在手搭那一份（`assemble`），產品組裝組不出來：它們用 `flipPlugin`
+ * 在子代理跑到一半時對**測試握著的那顆控制器**呼叫 `switchTo`，或讀 `peekGrant()`／`current`；產品的控制器建在
+ * 組裝點裡，測試拿不到，`/sandbox` 又只能在兩輪之間下、抓不到「子代理還在跑」那一刻。**沒給 `--workspace`
+ * 的案例**（沒有 backend、沒有沙箱 plugin）不碰控制器，走產品組裝（`assembleUnfenced`：`createCliAgent` ＋ 出貨清單 ＋
+ * 清單上的腳本提供者）。
+ *
  * 子代理照委派那一刻的沙箱模式判，而且碰不到 root 的 grant 與 denial——[#326](https://github.com/DemianLi/nexus-agent/issues/326)
  * 的驗收。
  *
  * 產品路徑：真的組裝、真的 deepagents `task`，fence 與 plugin 讀同一顆控制器，同 `cli.ts` 的接法。**前提（驗收 1）
- * 不另寫一條**：下面每一條要綠，快照都得真的穿過 `task` 到得了子代理的 fence 或閘門；拿掉 `sandbox-policy.ts`
+ * 不另寫一條**：下面每一條要綠，快照都得真的穿過 `task` 到得了子代理的 fence 或閘門；拿掉 `@nexus/plugin-sandbox-policy`
  * 那顆 `wrapToolCall` 時，「放寬／收緊」「子代理的升級」三條都會紅。
  *
  * **「委派之後 root 切換」用一顆 `flip` 工具代替**：它在子代理那一輪裡叫 `switchTo`，也就是 `/sandbox` 走的同一個
@@ -26,16 +32,35 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
+import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
-import { nonWideningRefusal, SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
+import {
+  nonWideningRefusal,
+  SANDBOX_ESCALATION_TOOL_NAME,
+  unaskedRefusal,
+} from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import { createSandboxPolicyPlugin, sandboxPolicySentence } from '@nexus/plugin-sandbox-policy';
+import {
+  CONTAINED_FILESYSTEM,
+  createSandboxPolicyPlugin,
+  sandboxPolicySentence,
+} from '@nexus/plugin-sandbox-policy';
+import {
+  shippedPlugins,
+  shippedPluginsWithFullAccess,
+  withScriptedModel,
+  withoutTimeContext,
+} from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
+
+const shipped = withoutTimeContext(await shippedPlugins());
+/** 部署方用 patch 加回全開那一組之後的清單（#1621：出廠表只有兩組，`--sandbox danger-full-access` 起不來）。 */
+const withFullAccess = withoutTimeContext(await shippedPluginsWithFullAccess());
 
 const WORKER: PluginEntry = {
   plugin: {
@@ -147,44 +172,70 @@ describe('子代理的沙箱模式', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  /** 照 `cli.ts` 的接法組起來。`fence: false` 是沒給 `--workspace` 的組裝：沒有 backend、沒有沙箱 plugin。 */
-  async function assemble(
-    mode: SandboxMode,
-    turns: readonly ScriptedTurn[],
-    options: { fence?: boolean } = {},
-  ) {
+  /**
+   * 照 `assembly-root.ts` 的接法組起來（有 `--workspace` 的那一種）。核准管道照產品路徑提供（有 checkpointer，所以是有人在）：
+   * 升級從 #700 起在工具本體裡讀它，讀不到就 fail-closed。
+   */
+  async function assemble(mode: SandboxMode, turns: readonly ScriptedTurn[]) {
     const controller = new SandboxModeController(mode);
     const model = new ScriptedChatModel({ turns });
-    const fence = options.fence !== false;
     const built = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
       plugins: [
-        ...(fence
-          ? [createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: root } })]
-          : []),
+        createHostServicesPlugin({
+          channel: { kind: 'human' },
+          fsContainment: CONTAINED_FILESYSTEM,
+          sandboxPolicy: { controller, rootDir: root },
+        }),
         WORKER,
         flipPlugin(controller),
-        ...(fence ? [createSandboxPolicyPlugin()] : []),
+        createSandboxPolicyPlugin(),
       ],
-      ...(fence && {
-        backend: new ContainedFilesystemBackend({
-          rootDir: root,
-          mode: controller.source,
-          grants: controller,
-        }),
+      backend: new ContainedFilesystemBackend({
+        rootDir: root,
+        mode: controller.source,
+        grants: controller,
       }),
     });
     return { ...built, controller, model };
   }
 
+  /**
+   * **產品組裝，有 `--workspace`**：權限組合那一列要真的掛著，所以不走上面手搭的 `assemble`。
+   * 全開那一格用加回全開的清單：出廠表沒有那一組（#1621）。
+   */
+  async function assembleProduct(mode: SandboxMode, turns: readonly ScriptedTurn[]) {
+    const base = mode === 'danger-full-access' ? withFullAccess : shipped;
+    const built = await createCliAgent(
+      { live: false, workspace: root, sandbox: mode },
+      withScriptedModel([...base, WORKER], turns),
+      root,
+    );
+    return { ...built, model: built.model as ScriptedChatModel };
+  }
+
+  /**
+   * **產品組裝，沒給 `--workspace`**（#670）：沒有 backend、沒有沙箱 plugin，產品組裝正是這樣，所以不必手搭。
+   * 腳本裡不能有 `flip`——這一種組裝沒有控制器可切。
+   */
+  async function assembleUnfenced(turns: readonly ScriptedTurn[]) {
+    const built = await createCliAgent(
+      { live: false },
+      withScriptedModel([...shipped, WORKER], turns),
+      root,
+    );
+    return { ...built, model: built.model as ScriptedChatModel };
+  }
+
   /** 真的 pump 跑一輪到收尾——看得到每一份會話日誌，serve 那條路的形狀。 */
-  async function runWithLogs(
-    mode: SandboxMode,
-    turns: readonly ScriptedTurn[],
-    options: { fence?: boolean } = {},
-  ) {
-    const built = await assemble(mode, turns, options);
+  async function drive<
+    B extends {
+      agent: unknown;
+      attachSession: (sessions: ThreadPump['sessions']) => () => void;
+      dispose: () => Promise<void>;
+    },
+  >(built: B) {
     const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'subagent-sandbox');
     const detach = built.attachSession(pump.sessions);
     const frames: Event[] = [];
@@ -205,9 +256,17 @@ describe('子代理的沙箱模式', () => {
           .filter((event) => event.type === 'sandbox/mode')
           .map((event) => event.data),
       );
+    const presetEvents = (kind: 'root' | 'subagent') =>
+      logOf(kind).map((session) =>
+        session.log.events
+          .filter((event) => event.type === 'permission/preset')
+          .map((event) => event.data),
+      );
     return {
       ...built,
+      pump,
       sandboxEvents,
+      presetEvents,
       close: async () => {
         line.abort();
         await draining;
@@ -216,6 +275,11 @@ describe('子代理的沙箱模式', () => {
       },
     };
   }
+
+  const runWithLogs = async (mode: SandboxMode, turns: readonly ScriptedTurn[]) =>
+    drive(await assemble(mode, turns));
+  const runUnfenced = async (turns: readonly ScriptedTurn[]) =>
+    drive(await assembleUnfenced(turns));
 
   /**
    * **子代理的模型請求也帶沙箱政策句，講的是委派那一格**（[#327](https://github.com/DemianLi/nexus-agent/issues/327)）。
@@ -249,18 +313,15 @@ describe('子代理的沙箱模式', () => {
     }
   });
 
-  it('沒掛沙箱 plugin 的組裝（沒給 `--workspace`），子代理請求裡沒有政策句', async () => {
-    const run = await runWithLogs(
-      'read-only',
-      [delegate, { content: '子代理收工。' }, { content: '根收工。' }],
-      { fence: false },
-    );
+  it('沒給 `--workspace` 的組裝，子代理請求照樣帶那一句不宣稱圍堵的政策句（#669）', async () => {
+    const run = await runUnfenced([delegate, { content: '子代理收工。' }, { content: '根收工。' }]);
     try {
       const subagentPrompts = run.model.prompts.filter(isSubagentPrompt);
       expect(subagentPrompts).toHaveLength(1);
-      expect(
-        subagentPrompts[0]?.find((message) => message.getType() === 'system')?.text ?? '',
-      ).not.toContain('目前的檔案政策');
+      const system =
+        subagentPrompts[0]?.find((message) => message.getType() === 'system')?.text ?? '';
+      expect(system).toContain('目前的檔案政策：workspace-write');
+      expect(system).not.toContain('圍堵');
     } finally {
       await run.close();
     }
@@ -320,12 +381,73 @@ describe('子代理的沙箱模式', () => {
     }
   }, 20000);
 
-  it('沒給 --workspace 的組裝：子代理的日誌一顆 `sandbox/mode` 都沒有', async () => {
-    const run = await runWithLogs(
-      'workspace-write',
-      [delegate, { content: '子代理收工。' }, { content: '根收工。' }],
-      { fence: false },
+  /**
+   * **權限組合名只在父代理是全開時帶給子代理**（#437，dsh `child-agent.ts:252`、`:277`）：其餘的組合子代理靠兩顆旋鈕各自的
+   * 委派快照就夠了，名字不另外帶；全開那一組要帶，是因為 web 的「全開」確認認的是組合名。
+   */
+  it('權限組合名：父代理全開，子代理日誌帶 danger-full-access；父代理 workspace-write，子代理沒有', async () => {
+    const full = await drive(
+      await assembleProduct('danger-full-access', [
+        delegate,
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ]),
     );
+    try {
+      expect(full.presetEvents('subagent')).toEqual([[{ preset: 'danger-full-access' }]]);
+      expect(full.presetEvents('root')).toEqual([[{ preset: 'danger-full-access' }]]);
+    } finally {
+      await full.close();
+    }
+    const fenced = await drive(
+      await assembleProduct('workspace-write', [
+        delegate,
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ]),
+    );
+    try {
+      expect(fenced.presetEvents('subagent')).toEqual([[]]);
+      expect(fenced.presetEvents('root')).toEqual([[{ preset: 'workspace-write' }]]);
+    } finally {
+      await fenced.close();
+    }
+  }, 20000);
+
+  /**
+   * **子日誌的順序：委派策略事件在前，子代理收到的那句話在後**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）。
+   * 照 dsh：子會話的 setup 先寫 `subagent/descriptor` 與委派那一刻的政策（`manager.ts:880-891` 的
+   * `appendDelegatedPolicyOverrides`），第一句話等子代理迴圈的第一步才寫（`agent.ts:426-436`）。我們這邊參與者在
+   * `open()` 裡寫，輸入在 `open()` 回來之後由那一次查找寫（`registry.ts` 的 `writePendingSpawnInput`）。
+   * 兩顆參與者都是真的：沙箱政策（`sandbox/mode {source:'delegation'}`）與權限組合（父代理全開才帶 `permission/preset`）。
+   */
+  it('委派策略事件排在子代理那句 user/message 前面', async () => {
+    const run = await drive(
+      await assembleProduct('danger-full-access', [
+        delegate,
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ]),
+    );
+    try {
+      const children = run.pump.sessions.list().filter((s) => s.address.kind === 'subagent');
+      expect(children).toHaveLength(1);
+      const types = children[0]!.log.events.map((event) => event.type);
+      const input = types.indexOf('user/message');
+      const mode = types.indexOf('sandbox/mode');
+      const preset = types.indexOf('permission/preset');
+      // 前提：三顆都在，而且那句話只有一則。
+      expect([mode, preset, input].every((at) => at >= 0)).toBe(true);
+      expect(types.filter((type) => type === 'user/message')).toHaveLength(1);
+      expect(mode).toBeLessThan(input);
+      expect(preset).toBeLessThan(input);
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
+  it('沒給 --workspace 的組裝：子代理的日誌一顆 `sandbox/mode` 都沒有', async () => {
+    const run = await runUnfenced([delegate, { content: '子代理收工。' }, { content: '根收工。' }]);
     try {
       // 前提：子代理的日誌真的開了。
       expect(run.sandboxEvents('subagent')).toHaveLength(1);
@@ -336,19 +458,42 @@ describe('子代理的沙箱模式', () => {
   }, 20000);
 
   it('子代理叫升級：「加寬」照委派那一格判，拿到的是不加寬的拒絕，不是 policy-never 那句', async () => {
+    // 委派那一格是全開，root 之後切到 read-only：照 root 現在那格判的話 workspace-write 升得到，會拿到 delegated 那句。
     const run = await runWithLogs('danger-full-access', [
       delegate,
-      flip('workspace-write'),
-      escalate('/a.txt', 'danger-full-access'),
+      flip('read-only'),
+      escalate('/a.txt', 'workspace-write'),
       { content: '子代理收工。' },
       { content: '根收工。' },
     ]);
     try {
       const [, refused] = subagentToolTexts(run.model);
-      expect(refused).toBe(
-        `Error: ${nonWideningRefusal('danger-full-access', 'danger-full-access')}`,
-      );
+      expect(refused).toBe(`Error: ${nonWideningRefusal('workspace-write', 'danger-full-access')}`);
       expect(refused).not.toContain('沒有人被問到');
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
+  /**
+   * **子代理的加寬請求不問人**（#700）。問人搬進工具本體之後，本體讀的核准管道是 root 那一份（有人在），
+   * 所以子代理那一格要由本體自己認出來：委派快照有值就拒（#324；#328 第 1 項後理由是 `delegated`，不再說政策關掉了——前景子代理的一般核准會問人，升級不會）。斷言**沒有中斷**，
+   * 不只比文字——控制器在委派裡的 `grant` 本來就不做事，只比文字的話拿掉那一格照樣綠，人卻被問到了。
+   */
+  it('子代理叫升級、真的加寬：被拒、沒有中斷、grant 沒發，拒絕說的是沒有人被問到', async () => {
+    const run = await runWithLogs('read-only', [
+      delegate,
+      escalate('/a.txt', 'workspace-write'),
+      { content: '子代理收工。' },
+      { content: '根收工。' },
+    ]);
+    try {
+      expect(run.pump.awaitingInput).toBe(false);
+      expect(run.pump.pendings).toHaveLength(0);
+      expect(run.controller.peekGrant()).toBeUndefined();
+      const [refused] = subagentToolTexts(run.model);
+      expect(refused).toBe(`Error: ${unaskedRefusal('delegated', 'workspace-write')}`);
+      expect(refused).toContain('沒有人被問到');
     } finally {
       await run.close();
     }

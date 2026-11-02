@@ -1,15 +1,17 @@
 {
   "name": "@nexus/wire",
-  "version": "0.0.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./src/index.ts",
-    "./invariant": "./src/invariant.ts",
+    ".": "./lib/index.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
+  "files": [
+    "lib"
+  ],
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "eslint .",
@@ -19,6 +21,7 @@
   },
   "devDependencies": {
     "@nexus/core": "workspace:*",
+    "@nexus/plugin-workspace-changes": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",

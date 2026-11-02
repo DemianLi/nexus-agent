@@ -16,11 +16,17 @@
  * 題目與工具參數會跟著 trace 出境。
  */
 
-import { createLiveModel, loadLiveEnvIfNeeded, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
-import { liveModelConfigSchema } from '../settings/live-model.js';
-import { parseCases, parseModels, parseSamples } from './cli-args.js';
+import { installLaunchProxy } from '../http-proxy-boot.js';
+import { createLiveModel, LIVE_API_KEY_ENV, loadLiveLaunchEnv } from '../live-model.js';
+import {
+  liveModelConfigForModel,
+  liveModelConfigSchema,
+  streamRetryOptionsOf,
+} from '../settings/live-model.js';
+import { parseCases, parseModels, parseOut, parseSamples } from './cli-args.js';
 import {
   compareTiers,
+  evalModelRounds,
   restrictTo,
   summarize,
   EVAL_DEADLINE_MS,
@@ -31,15 +37,23 @@ import {
   type TierSummary,
 } from './compare.js';
 import { BENCHMARK, HARD_CASES } from './dataset.js';
+import { intervalLines, tokenTotalsLine } from './compare-report.js';
+import { startResultFile } from './result-file.js';
+import type { CaseStats } from './stats.js';
 import { SURVEY_INVENTORY_DATE, SURVEY_MODELS, type SurveyModel } from './survey.js';
 
-const USAGE = `用法：eval:survey [--samples <n>] [--cases <id,...>] [--models <label,...>]
+/** eval 的重試政策（#1427）：跟出貨預設同一份，不跟任何一台部署的設定走（`settings/live-model.ts` 的「eval 不跟這一列走」）。 */
+const EVAL_RETRY_POLICY = streamRetryOptionsOf(liveModelConfigSchema.parse({}).retryPolicy);
+
+const USAGE = `用法：eval:survey [--samples <n>] [--cases <id,...>] [--models <label,...>] [--out <dir>]
 
   --samples <n>        每題重複幾次，預設 1。取樣是隨機的（temperature 1）。
   --cases <id,...>     只跑指定的題目，預設全部。id 見 src/eval/dataset.ts：
                        ${BENCHMARK.map((entry) => entry.id).join(' / ')}
   --models <label,...> 只跑指定的候選，預設全部 ${SURVEY_MODELS.length} 個。短名見 src/eval/survey.ts：
                        ${SURVEY_MODELS.map((model) => model.label).join(' / ')}
+  --out <dir>          結果檔放哪個目錄，預設 apps/harness/eval-results/（不進版控）。
+                       逐筆寫進一份 .jsonl，開頭記 commit、題庫與評分程式版本、取樣設定。
 
 冒煙（先量一次每題要跑多久，再決定整輪跑不跑得起）：
   pnpm --filter @nexus/harness eval:survey --cases reverse-round-trip
@@ -64,7 +78,7 @@ function formatSpread(spread: Spread | undefined): string {
   const body =
     spread.min === spread.max
       ? mean
-      : `${mean} (${spread.min.toFixed(2)}–${spread.max.toFixed(2)})`;
+      : `${mean}（範圍 ${spread.min.toFixed(2)}–${spread.max.toFixed(2)}）`;
   return `${body} n=${spread.count}`;
 }
 
@@ -106,14 +120,22 @@ function printModel(all: TierSummary<SurveyModel>, hard: TierSummary<SurveyModel
 
   console.log(`\n${tier.label}  ${tier.modelId}`);
   console.log(`  評到分      ${all.scored} 次${failed === '' ? '' : `，失敗 ${failed}`}`);
+  // **這題成功**不是下面「工具成功率」那一欄（見 `scorers.ts` 的 isCaseSuccess）。區間是
+  // 以題目為單位重抽的；難題只有四題，它會比全部那組寬得多，這是對的（見 `stats.ts`）。
+  console.log(
+    `  這題成功    全部 ${all.successes}/${all.scored}  ｜ 難題 ${hard.successes}/${hard.scored}`,
+  );
+  printIntervals(all.caseStats.success, hard.caseStats.success);
   console.log(
     `  工具成功率  全部 ${formatSpread(all.toolCallSuccess)}` +
       `  ｜ 難題 ${formatSpread(hard.toolCallSuccess)}`,
   );
+  printIntervals(all.caseStats.toolCallSuccess, hard.caseStats.toolCallSuccess);
   console.log(
     `  參數正確性  全部 ${formatSpread(all.argumentCorrectness)}` +
       `  ｜ 難題 ${formatSpread(hard.argumentCorrectness)}`,
   );
+  printIntervals(all.caseStats.argumentCorrectness, hard.caseStats.argumentCorrectness);
   console.log(
     `  多叫次數    全部 ${formatSpread(all.extraToolCalls)}` +
       `  ｜ 難題 ${formatSpread(hard.extraToolCalls)}`,
@@ -121,11 +143,18 @@ function printModel(all: TierSummary<SurveyModel>, hard: TierSummary<SurveyModel
   console.log(
     `  回覆提到    全部 ${formatSpread(all.mentions)}  ｜ 難題 ${formatSpread(hard.mentions)}`,
   );
+  printIntervals(all.caseStats.mentions, hard.caseStats.mentions);
   console.log(
     `  總 token    ${formatSpread(all.totalTokens)}` +
       `${all.costed === all.scored ? '' : `（只有 ${all.costed}/${all.scored} 次有回報 usage）`}`,
   );
+  const tokenTotal = tokenTotalsLine(all);
+  if (tokenTotal !== undefined) console.log(tokenTotal);
   console.log(`  單次秒數    ${formatSpread(all.seconds)}`);
+}
+
+function printIntervals(all: CaseStats | undefined, hard: CaseStats | undefined): void {
+  for (const line of intervalLines(all, hard)) console.log(line);
 }
 
 async function main(argv: readonly string[]): Promise<void> {
@@ -137,7 +166,16 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = parseSamples(argv);
   const cases = parseCases(argv);
   const models = parseModels(argv, SURVEY_MODELS);
-  loadLiveEnvIfNeeded();
+  const out = parseOut(argv);
+  const { credentials, launchEnv, keySourceOf, assertKeyLocated } = loadLiveLaunchEnv({
+    store: false,
+  });
+  // 這支腳本用出廠設定（`liveModelConfigForModel`），金鑰名一律是預設的（#1604），搬家檢查照舊在這裡做。
+  assertKeyLocated(LIVE_API_KEY_ENV);
+  const keySource = keySourceOf(LIVE_API_KEY_ENV);
+  if (keySource !== undefined) console.error(keySource);
+  // 對外代理（#746）：跟 CLI／serve 同一個時間點，載完環境之後、連模型之前。這支腳本跑到行程結束，不另收尾。
+  await installLaunchProxy(launchEnv, (message) => console.error(message));
 
   // 「難題」是題目的性質不是這一輪的性質，所以先跟這一輪實際要跑的取交集 ——
   // `--cases` 只點了簡單題時，難題那一欄整欄是 `—`，而那是對的。
@@ -155,23 +193,49 @@ async function main(argv: readonly string[]): Promise<void> {
       `是 14 個而且成員不同，所以報表上的每個數字都綁在這個日期上。`,
   );
   console.log(
-    `單次執行的上限：迴圈 ${EVAL_RECURSION_LIMIT} 個 super-step、時鐘 ${EVAL_DEADLINE_MS / 1000} 秒。` +
+    `單次執行的上限：迴圈 ${EVAL_RECURSION_LIMIT} 個 super-step（約 ${evalModelRounds(EVAL_RECURSION_LIMIT)} 輪模型呼叫）、時鐘 ${EVAL_DEADLINE_MS / 1000} 秒。` +
       `超過記成 budget，不是分數。**整輪沒有上限**，開跑前自己算好要跑多久。`,
   );
+
+  // 取樣設定從模型實例讀（建構不連外），不在這裡再抄一份字面值。先建檔：建不起來就在花錢之前拋。
+  const first = models[0];
+  if (first === undefined) throw new Error('沒有要跑的候選');
+  const probe = createLiveModel(liveModelConfigForModel(first.modelId), undefined, credentials);
+  const writer = startResultFile({
+    tool: 'eval:survey',
+    argv,
+    cases,
+    models,
+    samples,
+    sampling: { temperature: probe.temperature, topP: probe.topP },
+    dir: out,
+  });
+  console.log(`結果檔：${writer.path}（逐筆寫入）`);
   console.log('\n───── 逐次執行 ─────');
 
   const reports = await compareTiers<SurveyModel>(models, {
     // **只換模型 id**（#545）：其餘四格是 schema 預設，不跟任何一台部署的設定走——量的是出貨
     // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
-    createModel: (modelId) => createLiveModel(liveModelConfigSchema.parse({ modelId })),
+    createModel: (modelId) =>
+      createLiveModel(liveModelConfigForModel(modelId), undefined, credentials),
+    // 重試政策也吃 schema 預設（#1427）：SDK 層不重試了，沒有它真模型第一次限流就失敗。
+    streamRetry: EVAL_RETRY_POLICY,
     samples,
     cases,
-    onOutcome: printOutcome,
+    onOutcome: (model, outcome) => {
+      writer.append(model, outcome);
+      printOutcome(model, outcome);
+    },
   });
+  const saved = writer.finish();
 
   console.log('\n───── 各候選彙總 ─────');
   console.log('  平坦的一張表，沒有尺寸那一欄 —— 十六個候選跨八家廠商，那條線讀不成尺寸效應。');
   for (const report of reports) printReport(report, hardIds);
+  console.log(
+    `\n結果檔：${writer.path}（${saved.outcomes} 筆）` +
+      `${saved.writeFailed ? '。**中途有寫入失敗，檔案不完整**' : ''}`,
+  );
 
   if (samples === 1) {
     console.log('\n注意：每題只取樣一次，取樣是隨機的 —— 這組數字是指示性的，不是定論。');
@@ -184,7 +248,7 @@ async function main(argv: readonly string[]): Promise<void> {
   }
   if (throttledHits > 0) {
     console.log(
-      `\n注意：有 ${throttledHits} 次執行在重試 ${DEFAULT_LIVE_MAX_RETRIES} 次之後仍然被限流（throttled）。` +
+      `\n注意：有 ${throttledHits} 次執行在重試 ${EVAL_RETRY_POLICY.maxRetries} 次之後仍然被限流（throttled）。` +
         `**那不是分數，是沒有資料** —— 先看每一列的 n，被限流多的那幾列 n 會很小，` +
         `而小 n 的 1.00 跟大 n 的 1.00 不是同一個東西。\n` +
         `  2026-08-29 那一輪量到的是：47 次 throttled 全部集中在 3 個候選（其餘 11 個零），` +

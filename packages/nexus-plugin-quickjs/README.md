@@ -12,7 +12,7 @@ export default [
   createQuickJsPlugin({
     timeoutMs: 1_000,
     memoryLimitBytes: 16 * 1024 * 1024,
-    maxStackSizeBytes: 512 * 1024,
+    maxStackSizeBytes: 128 * 1024,
   }),
 ];
 ```
@@ -47,13 +47,22 @@ host function 的介面，要加就得改它的原始碼。
 **資源邊界只有設定的那麼強。** 無限迴圈與吃記憶體不是 QuickJS 自己會擋的事，是上面
 那三個上限擋的。三個都有預設值，但改小改大都由呼叫端決定。三條各自對應一種耗盡方式：
 
-| 上限 | 擋的是 | 撞到時 VM 回的 |
+| 上限 | 擋的是 | 撞到時的失敗 |
 | --- | --- | --- |
-| `timeoutMs` | 跑不完的迴圈 | `InternalError: interrupted`（翻成「執行超過 N 毫秒的上限」） |
-| `memoryLimitBytes` | 吃堆積 | `InternalError: out of memory` |
-| `maxStackSizeBytes` | 無窮遞迴 | `InternalError: stack overflow` |
+| `timeoutMs` | 跑不完的迴圈 | `timeout`：執行超過 N 毫秒的上限 |
+| `memoryLimitBytes` | 吃堆積 | `exception`：`InternalError: out of memory` |
+| `maxStackSizeBytes` | 無窮遞迴 | `exception`：`InternalError: stack overflow` |
+| `maxStackSizeBytes` 設大、host 的堆疊先用完 | 無窮遞迴 | `exception`：`RangeError: Maximum call stack size exceeded`；整個 WASM 模組換新 |
 
 堆疊與記憶體刻意分成兩個參數：無窮遞迴吃的是前者，只設記憶體上限擋不住它。
+
+QuickJS 在 WASM 裡遞迴，吃的是 Node 的原生堆疊。`maxStackSizeBytes` 比 host 剩下的堆疊大時，host 先用完、從 VM 外面
+打斷它，那個 WASM 模組停在一半，所以整個丟掉，下一次呼叫跑在新模組上。Node 預設的堆疊下，上限大約從 0.3 到 0.5 MiB 起
+就換成 host 先用完，所以預設是 128 KiB。
+
+**失敗種類看 host 的狀態，不看程式丟出來的值。** 逾時是 interrupt handler 觸發過；程式自己丟一個
+`InternalError: interrupted` 只是 `exception`。檢查回傳值的時候（例如 getter 裡）拋了錯，沒觸發中斷的一律是
+`invalid-output`，包括 getter 裡撞到記憶體或堆疊上限。
 
 **逾時期間主執行緒是塞住的。** `evalCode` 是同步呼叫，中斷靠 QuickJS 執行中回呼的
 interrupt handler。所以 `timeoutMs` 是「最多塞住多久」，不是「多久之後在背景被砍掉」。
@@ -67,7 +76,21 @@ interrupt handler。所以 `timeoutMs` 是「最多塞住多久」，不是「�
 
 **非同步的程式碼跑得完，但等不到外界。** 求值之後會把微任務佇列跑完
 （`executePendingJobs()`），所以 `async` 函式與 promise 鏈拿得到值。跑完還是 pending 的
-promise 代表它在等一個 VM 裡不存在的東西，那是永遠不會變的狀態，工具會照實說。
+promise 代表它在等一個 VM 裡不存在的東西，那是永遠不會變的狀態，算失敗（見下一段）。
+
+**程式失敗是工具失敗。** 程式拋例外、回傳的 promise 被 reject、逾時中斷、回傳一個永遠不會
+完成的 promise、**回傳值不是無損的 JSON**，工具都拋 `CodeRunFailedError`（`code: 'CODE_RUN_FAILED'`，照 dsh `run_code`
+的同名錯誤），訊息是 `code run failed (<kind>): <原因>`，`kind` 是 `exception`、`timeout` 或 `invalid-output`。
+接住它的是 `@nexus/core` 的圍堵：模型拿到 `status: 'error'` 的工具訊息、會話日誌記
+`isError: true`，web 的工具卡是失敗狀態（[#615](https://github.com/DemianLi/nexus-agent/issues/615)）。
+
+**回傳值只收無損的 JSON**（[#1572](https://github.com/DemianLi/nexus-agent/issues/1572)，照 dsh 的 `prepareCompletion`）。
+`NaN`、`Infinity`、`-0`、`Map`、函式、值為 `undefined` 的欄位、稀疏陣列、循環參照這些 JSON 表達不出來的東西，以前會默默變成
+`null`、`{}` 或少一格，模型照著講給使用者聽；現在拋 `invalid-output`。檢查**在 VM 裡**跑（純 JS、不 bridge 任何 host
+function），因為 `dump()` 交到 host 的時候值已經被 VM 的 `JSON.stringify` 改掉了。驗證與輸出是**同一趟**：快照一邊驗一邊把 JSON 文字組出來、
+每個值只讀一次，host 只拿那份文字去解析，不再回頭讀原本的值——所以 `Object.prototype.toJSON`、說謊的 `Proxy` 都改不了結果（dsh 的
+`snapshotPtcJsonValue` 同樣是一趟）。走訪是迭代的，幾萬層的巢狀也回得來。非字串的結果用 dsh `renderJsonValue` 的格式：
+兩個空白縮排，總縮排超過 10 個字元的子樹改緊湊；字串原樣、沒有回傳值是「（沒有回傳值）」。
 
 ## 為什麼是 custom tool，不是 sandbox backend
 
@@ -89,8 +112,11 @@ middleware are left untouched」。絆索測試在
 這是**結構性偏離**，不是細節不同。dsh 的 sandbox（`packages/sandbox/*`、
 `packages/shell/*-sandbox`）是把子行程的 argv 包進**核心級**的檔案效果策略（Linux
 bwrap/Landlock、macOS Seatbelt、Windows ACL 受限 token）。它整個 repo grep `quickjs`
-零命中——**dsh 沒有「JS 直譯器」這個 seam**，它有的那一個正是開發計劃第 7 節決策 3
-延後掉的那一個（shell 沙箱，等容器隔離方案明朗）。
+零命中。dsh 有程式碼執行的接口 `ctx.ptcRuntime`（`packages/ptc-runtime/ptc-runtime/src/index.ts:98`），語言與
+執行方式由提供方決定，是它「模型寫程式、程式裡呼叫工具」那個模式（PTC，工具叫 `run_code`）的執行環境；出廠的
+提供方是每支程式開一個 Node 行程、跟 Bash 走同一個 `ctx.sandbox`（2026-09-11 起）。我們的 `run_javascript` 是
+沒有外部函式可叫的純計算工具，不是那個接口的提供方；它取代的是開發計劃第 7 節決策 3 延後掉的那一格（shell 沙箱，
+等容器隔離方案明朗）。
 
 所以這裡沒有可照抄的 dsh 做法，退到最接近的實作：**用行程內的 WASM 直譯器換掉「跑
 任意 shell 指令」**。可以對齊的先例只有詞彙——dsh 的 `SandboxMode` 三個模式與
@@ -108,6 +134,6 @@ sandbox 等於宣稱一個這裡沒有填的 seam。
 - **沒有網路。**
 - **每次呼叫一個新 VM。** 兩次呼叫之間不共用狀態，前一次留在 global 上的東西下一次
   看不到。資源預算因此也是每次乾淨一份，而不是跨呼叫累計。
-- **不登記關機清理。** 沒有活的 handle 要收：WASM 模組是 `getQuickJS()` 快取住的行程級
-  單例，runtime 與 context 現建現拆。`lifecycle` 通道是給 `@nexus/plugin-mcp` 那種有
+- **不登記關機清理。** 沒有活的 handle 要收：WASM 模組由插件自己持有（`src/module.ts`），
+  整個行程一個，換掉的舊模組由 GC 收；runtime 與 context 現建現拆（host 的堆疊用完時不拆，跟著舊模組一起丟掉）。`lifecycle` 通道是給 `@nexus/plugin-mcp` 那種有
   子行程要收的 plugin 的。

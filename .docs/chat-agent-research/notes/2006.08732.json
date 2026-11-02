@@ -1,0 +1,163 @@
+{
+  "id": "2006.08732",
+  "title": "Evaluating Conversational Recommender Systems via User Simulation",
+  "topic": "T6",
+  "subarea": "經典與神經使用者模擬器",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 Agenda-based User Simulator（ABUS）為骨架，加上專為對話式推薦設計的互動模型 CIR6 與以 personal knowledge graph（PKG）維持偏好一致的偏好模型，拿三個電影推薦聊天機器人比較模擬使用者與真人的評估結果，檢驗模擬器排出的系統名次是否與真人一致，以及群眾評審能否分辨模擬對話與真人對話（KDD 2020）。",
+  "problem": "對話式資訊存取（含對話式推薦）的端到端評估只能靠真人，費時費錢、不能重複使用，成了研究進度的瓶頸。TREC CAsT 這類 test collection 只評單輪回應排序，看不到整段對話是否有用、使用者對對話流程是否滿意；蒐集並標註整段對話又貴又無法擴充。作者因此想要一個資料驅動的使用者模擬器，把系統當黑盒，只需要一小批真人與該系統的標註對話就能套用，而且它算出來的自動評估分數要能預測系統面對真人時的表現。",
+  "core_idea": "把模擬器的有效性定義成「保序」：對任兩個系統 S1、S2，若真人群體 U 上 M(S1,U) < M(S2,U)，則模擬群體 U* 上也要 M(S1,U*) < M(S2,U*)（§3 的 R3）。另外兩個要求是回應與使用者偏好一致（R1）、遵循任務專屬的對話流程（R2）。實作上沿用 ABUS 的「agenda 堆疊＋目標」狀態，R2 交給互動模型（通用的 QRFA 對照自創的 CIR6），R1 交給偏好模型（擲硬幣的 single-item 對照由真實評分推出的 PKG）。評估時同時量三件事：對話統計特徵像不像、系統名次對不對、群眾評審分不分得出來。",
+  "method": {
+    "整體架構（§3.1、§5、Figure 1、Figure 6）": "模擬器由三個元件組成：NLU（把系統發話轉成結構化的系統動作與實體）、response generation（決定下一個使用者動作，本文重點）、NLG（把結構化動作轉回文字）。評估平台另有一個 conversation manager 當膠水，把系統和模擬或真人使用者接起來；三個系統都部署成 Telegram 應用。輸入是系統的一句文字，輸出是模擬使用者的一句文字，系統內部完全不需要知道。",
+    "動作空間（§4.2.1、Table 1）": "取自 Azzopardi et al. (2018) 的對話式搜尋動作。使用者端：Query formulation 類的 Reveal（Disclose、Non-disclose、Revise、Refine、Expand）；Set retrieval 類的 Inquire（List、Compare、Subset、Similar）與 Navigate（Repeat、Back、More、Note、Complete）；mixed initiative 類的 Interrupt、Interrogate。系統端：Inquire（Elicit、Clarify）、Reveal（Show、List、Similar、Subset）、Traverse（Repeat、Back、More、Record、End）、Suggest。agenda 裡只放使用者動作；系統動作只用來判斷系統回得對不對。",
+    "agenda-based 狀態與更新（§4.1、Eq 1–2）": "對話建模成 MDP，使用者狀態 s 拆成 agenda A（使用者動作的堆疊，從頂端取下一個動作）與目標 g；g 再拆成約束 C 與請求 R，由偏好模型建構。目標更新被簡化成指示函數 δ：系統若以適當的系統動作回應了使用者當前動作就回 1，否則回 0。何謂「適當」靠一張使用者動作對系統動作的對照表，例如使用者 Inquire 可接受系統的 List 或 Elicit；完整對照表論文因篇幅省略，說會放上網。δ=1 時做 pull：把 a_t 移出 agenda，依互動模型挑下一個動作；δ=0 時做 push：找一個目標相同的替代動作 ã_t 推上去，機率是 P(ã_t | A_t, g_{t+1})。agenda 清空時對話結束。",
+    "互動模型一：QRFA（基準，§4.2.2、Table 2）": "QRFA（Vakulenko et al. 2019）只有四個粗類：使用者 Query、Feedback，系統 Request、Answer。作者先把細動作對應到粗類（Table 2），例如 Query 涵蓋 Reveal、Disclose、Inquire、Navigate、Interrupt 等，Feedback 涵蓋 Back、More、Note、Complete。初始 agenda A_0 直接從標註語料中抽一段。pull 時用兩步轉移 P(A_{t+1}|b_t)·P(b_t|A_t)，b_t 是兩個使用者動作之間的系統動作；push 時從 P(ã_t|b_t) 抽替代動作。更新在粗類層級進行，之後再依歷史對話的分布機率抽出對應的細動作。轉移矩陣都從訓練語料估計。",
+    "互動模型二：CIR6（本文提出，§4.2.3、Figure 5）": "以六個主要使用者動作當狀態（依 §4.2.1 為 Disclose、Reveal、Inquire、Navigate、Note、Complete），只建模使用者動作，不經過系統動作的轉移估計。pull 時 P(A_{t+1}|A_t)·𝟙(a_{t+1}, a_t)，其中 𝟙 表示兩個動作在 Figure 5 的狀態圖上有沒有邊，P(A_{t+1}|A_t) 用語料中 a_t 後面接 a_{t+1} 的次數估計；push 時同 QRFA，用 P(ã_t|b_t)。注意：狀態圖的邊只在 Figure 5，純文字版看不到，要重做得去讀圖或程式碼。",
+    "偏好模型一：single item（§4.3.1）": "從歷史使用者－物品互動語料隨機挑一位真實使用者，再從他的紀錄抽一組物品 I_u，假設模擬使用者看過這些。被問「看過 i 嗎」就檢查 i 是否在 I_u；被問「喜不喜歡」就擲硬幣。看過與否來自真實行為，但好惡不是，所以一致性有限。",
+    "偏好模型二：PKG（§4.3.2）": "PKG 有物品與屬性兩種節點。依評分把 I_u 分成喜歡與不喜歡兩組（評分正規化到 [-1, 1]）。屬性 j（本文是電影類型）的評分取擁有該屬性的物品評分平均：r_j = (1/|I_j|) Σ_{i∈I_j} r_i，再依正負分成喜歡、不喜歡的屬性集合。之後凡被問到物品或屬性的偏好，一律查 PKG 回答，保證前後一致。CIR6-PKG 另有一條規則：一旦找到喜歡的物品就強制清空 agenda，對話因此提早結束（§6 開頭）。",
+    "偏好模型的資料設定（§5.2）": "用 MovieLens（評分 0.5–5）。評分 ≥ 4 視為喜歡、≤ 2 視為不喜歡，中間算中性。每個模擬使用者從一位真實使用者的紀錄抽 8 部有評分的電影，至少一部是喜歡的，再由這 8 部推出電影與類型的 PKG。",
+    "NLU 與 NLG（§4.4）": "NLU 採檢索式：對系統發話找標註語料中最相似的一句，沿用它的系統動作標籤。實體連結先從標註語料抽出帶佔位符的句型範本，再只靠表面字串做檢索式消歧。作者說三個系統措辭僵硬，所以少量標註就夠；但論文同時在 §3.1 假設模擬器能完美理解系統意圖，NLU 準確率沒有報告。NLG 採範本式：每個動作從少量手寫變體中隨機挑一句，其中幾個範本刻意放了錯字，讓輸出更像人。",
+    "訓練資料蒐集（§5.2）": "在 Amazon Mechanical Turk 請群眾工作者到 Telegram 頻道與系統對話，一直聊到拿到自己喜歡的電影推薦為止；每個系統蒐集 25 段成功對話（每段不同人），每段付 1.5 美元。成功的定義是對話同時涵蓋 query formulation 與 set retrieval（mixed initiative 可有可無）。每句話由作者本人依 Table 1 人工標註動作，分歧靠討論解決，沒有報告一致性。§4.2 的所有條件機率都從這批經驗分布估計；論文沒有說明是每個系統各估一套，還是三個系統合併估。",
+    "受測系統（§5.1）": "三個電影推薦聊天機器人，以隨機順序匿名成 A、B、C：(1) And chill：Facebook 上的 Netflix 推薦聊天機器人，先問喜歡的電影與理由再推薦；(2) Kelly Movie Bot：以 Kaggle 版 MovieLens 為資料、IBM Watson Assistant 做語言元件，作者額外加了表達偏好與「看過沒」的意圖；(3) 作者以 Plato Research Dialogue System 自建的電影推薦系統。三者都支援 query formulation、set retrieval 與 mixed initiative。兩個系統各跑 100 段模擬對話，另一個因存取限制只跑 25 段（論文沒說是哪一個）。",
+    "比較的三種模擬器（Table 3）": "QRFA-Single（QRFA＋single item）、CIR6-Single（CIR6＋single item）、CIR6-PKG（CIR6＋PKG）；三者共用同一套狀態轉移建模、NLU 與 NLG，所以 QRFA-Single 對 CIR6-Single 只差互動模型，CIR6-Single 對 CIR6-PKG 只差偏好模型（但 PKG 版同時多了「找到就結束」的終止規則）。",
+    "評估一：對話特徵（§6.1）": "AvgTurns（平均對話輪數）、UserActRatio（使用者動作與系統動作的比例，代表使用者參與度）、DS-KL（模擬與真人對話中使用者動作分布的對稱 KL：DS(P||Q) = [D_KL(P||Q) + D_KL(Q||P)] / 2，無上界，越接近 0 越像）。",
+    "評估二：系統名次（§6.2）": "Reward 仿 ABUS：Full 滿分 20，平均分給 Disclose、Refinement、Inquire、Navigation、mixed initiative 五項功能各 4 分，系統不支援的功能就從 Full 扣掉（例如不支援 navigate 時 Full = 16）；每個使用者回合 Cost = 1；兩個連續的 Repeat 只算一回合（有些系統不支援多輪 Navigation）。Reward = max{0, Full − Cost·T}，T 為使用者回合數。Success Rate 在回合層級計算：系統回了錯的動作，該回合就算失敗。比較的是三個系統在各指標下的相對順序。",
+    "評估三：逼真度（§6.3，協定沿用 Li et al. 2016）": "每個「模擬器 × 系統」組合抽 25 段模擬對話（3×3 共 225 段），每段配一段同系統的真人對話，隨機左右並排給 3 位 MTurk 工作者，請他們選哪段是人；可以判平手，但必須附簡短理由，沒附理由的作答會被濾掉。Win 表示把模擬當成真人，Lose 表示認出真人，Tie 表示無法判斷。每個模擬器合計 225 筆判斷。",
+    "評估四：評語編碼（§7）": "作者依評審附的理由建一套編碼：Style 分成 Realisticity（像不像人）、Engagement（投入程度）、Emotion（情緒表達）；Content 分成 Response（看似沒聽懂或重複問）、Grammar（拼字標點）、Length（回覆或對話長度）。統計各類被提到的次數，用來找下一步該改進的面向。"
+  },
+  "assumptions": [
+    "系統可以當黑盒，但每個受測系統都要有一小批真人與它對話、逐句標好動作的語料；模擬器的轉移機率與 NLU 都靠這批語料。",
+    "模擬器能完美理解系統發話背後的意圖（§3.1 明說）；檢索式 NLU 之所以夠用，前提是系統措辭僵硬。",
+    "對話滿足 Markov 性質；CIR6 下一個使用者動作只取決於當前使用者動作，push 時的替代動作只取決於上一個系統動作。",
+    "目標更新可以用手寫的 δ（系統是否以適當動作回應）近似，而且有一張固定的「使用者動作可接受哪些系統動作」對照表；換句話說，使用者對系統該怎麼回應有預設的期待（§3.1 的 pre-defined interaction policy）。",
+    "MovieLens 的歷史評分足以代表對話式推薦使用者的偏好；8 部電影就足以描述一個使用者；類型偏好可以用該類型電影評分的平均推出。",
+    "R3 的「系統排序保持一致」是評估模擬器的正確判準，而 Reward 與回合層級的 Success Rate 是合理的系統表現量測。",
+    "群眾評審分不出模擬與真人，就代表模擬逼真。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "三個電影推薦聊天機器人（And chill、擴充過的 Kelly Movie Bot、以 Plato 自建的系統），匿名為 A、B、C",
+      "真人對照：每個系統 25 段在 MTurk 上蒐集、經 Telegram 進行的成功對話，由作者人工標註動作",
+      "MovieLens：初始化模擬使用者的偏好模型",
+      "模擬對話：兩個系統各 100 段、一個系統 25 段"
+    ],
+    "metrics": [
+      "AvgTurns、UserActRatio、DS-KL（對話統計特徵與真人的相似度）",
+      "Reward = max{0, Full − Cost·T}，Full 依系統支援的功能而定，Cost = 1",
+      "Success Rate（回合層級，系統回應動作是否適當）",
+      "以上兩項指標下三個系統的相對排序是否與真人一致",
+      "並排比較的 Win／Lose／Tie 比例（群眾評審把模擬誤認為真人的比例）",
+      "評審理由的六類編碼次數（Realisticity、Engagement、Emotion、Response、Grammar、Length）"
+    ],
+    "baselines": [
+      "真人使用者（參照組）",
+      "QRFA-Single：以通用的 QRFA 互動模型（Vakulenko et al. 2019）搭配擲硬幣偏好模型，作為基準模擬器",
+      "消融：CIR6-Single 對 CIR6-PKG（只換偏好模型）",
+      "沒有與任何神經使用者模擬器（El Asri et al. 2016、Kreyssig et al. 2018）比較，它們只出現在相關工作"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "以 Reward 排序時，三種模擬器排出的系統順序全部與真人相同（A > B > C）；QRFA-Single 與 CIR6-Single 的絕對分數也接近真人，CIR6-PKG 因提早結束對話而明顯偏高。",
+      "numbers": "真人 A 8.88 > B 7.56 > C 6.04；QRFA-Single 8.04 > 7.41 > 6.30；CIR6-Single 8.64 > 8.28 > 6.01；CIR6-PKG 11.12 > 10.65 > 9.31。",
+      "section": "§6.2、Table 5",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "以 Success Rate 排序時，只有 CIR6-PKG 與真人不一致：它把 A、B 的順序對調，雖然它的絕對數值反而最接近真人。作者以「A 在 Reward 上一向勝過 B」為這個對調辯護。",
+      "numbers": "真人 B 0.864 > A 0.833 > C 0.727；QRFA-Single B 0.836 > A 0.774 > C 0.718；CIR6-Single B 0.822 > A 0.807 > C 0.712；CIR6-PKG A 0.870 > B 0.847 > C 0.784。",
+      "section": "§6.2、Table 5",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "即使只看真人，兩個指標對系統的排序也互相矛盾（Reward 說 A 勝 B，Success Rate 說 B 勝 A）；作者承認哪個指標最貼近使用者滿意度仍是未解問題，結論也只建立在三個系統上。",
+      "numbers": "真人 Reward：A 8.88 > B 7.56；真人 Success Rate：B 0.864 > A 0.833。",
+      "section": "§6.2、Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "QRFA-Single 與 CIR6-Single 在三項對話特徵上都接近真人；CIR6-PKG 因找到喜歡的電影就結束，對話明顯變短、動作分布偏離較多，但 UserActRatio 最接近真人。",
+      "numbers": "AvgTurns（A/B/C）：真人 9.20/14.84/20.24；QRFA-Single 10.52/12.28/17.51；CIR6-Single 9.44/12.75/15.92；CIR6-PKG 6.16/9.87/10.56。DS-KL：QRFA-Single 0.027/0.056/0.029；CIR6-Single 0.055/0.040/0.025；CIR6-PKG 0.075/0.056/0.095。UserActRatio 在系統 A：真人 0.374，CIR6-PKG 0.371；系統 B、C 所有列都是 0.500 或 0.501。",
+      "section": "§6.1、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "較細的互動模型與 PKG 偏好模型都讓模擬對話更常被誤認為真人：CIR6 比 QRFA 多 6 個百分點的 Win，再加 PKG 又多 3 個百分點；但系統 A 上加 PKG 反而變差。",
+      "numbers": "整體 Win／Lose／Tie（各 225 筆判斷）：QRFA-Single 61 (27%)／115 (51%)／49 (22%)；CIR6-Single 76 (33%)／103 (46%)／46 (21%)；CIR6-PKG 81 (36%)／93 (41%)／51 (23%)。系統 A 的 Win：CIR6-Single 27 → CIR6-PKG 22。",
+      "section": "§6.3、Table 6",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "最佳模擬器 CIR6-PKG 有 36% 的判斷把它當成真人、23% 判平手；換個角度看，仍有 41% 的判斷正確認出真人，多於誤認。",
+      "numbers": "CIR6-PKG：Win 36%、Tie 23%、Lose 41%。",
+      "section": "§6.3、Table 6",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "評審判斷真人或模擬時，最常依據的是像不像人、回應是否切題、投入程度；作者據此建議改進語氣、對話歷史追蹤與回應多樣性，並指出真人找到喜歡的推薦之後還會繼續探索。",
+      "numbers": "全部 547 則編碼：Realisticity 227（41%）、Response 126（23%）、Engagement 102（19%）、Grammar 39、Emotion 31、Length 22。",
+      "section": "§7、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "結論只建立在三個系統上（§6.2）。",
+    "兩個自動指標對系統排序互相矛盾，哪個指標最貼近使用者滿意度仍是未解問題；需要更好的對話式資訊存取評估指標（§6.2、§8）。",
+    "只在電影領域驗證；方法本身不綁領域，但其他領域可用的對話服務太少（§8）。",
+    "部分元件依賴手寫啟發式或簡化假設，例如範本式 NLG；未來想改用深度學習生成（§8）。",
+    "模擬使用者缺乏個人化特質，例如情緒、投入程度、耐心（§7、§8）。",
+    "CIR6-PKG 找到喜歡的物品就結束，等於模擬了比真人更有效率的使用者，因此分數偏高；真人找到喜歡的推薦之後還會繼續探索（§6.2、§7）。",
+    "其中一個系統因存取限制只跑了 25 段模擬對話（§5.1）。",
+    "使用者動作與系統動作的完整對照表因篇幅省略（§4.2.1）。",
+    "假設模擬器能完美理解系統意圖（§3.1）。"
+  ],
+  "limitations_observed": [
+    "樣本內擬合（推論）：論文只蒐集了每個系統 25 段真人對話，用來估互動模型的轉移機率（§5.2），全文也沒提到任何保留的測試集；論文沒明說 Table 4、5 的「真人」列用的是哪批對話，但能用的只有這一批，所以真人參照應該就是訓練資料。若是如此，對話長度、DS-KL 接近真人，名次一致，有相當成分是擬合同一批資料的結果，不是對新使用者的預測；R3 要求的「預測真人表現」並沒有在樣本外驗過。",
+    "Reward 的保序幾乎等於「重現對話長度的相對順序」：Reward = max{0, Full − T}，各列的 Reward 排序與 AvgTurns 的反序完全一致（真人 9.20 < 14.84 < 20.24 對 A > B > C；三個模擬器的輪數也都是 A < B < C）。只要模擬器保留了各系統讓對話變長的程度，Reward 就會保序，這比「模擬器能預測系統優劣」弱得多。論文也沒說轉移機率是每個系統各估一套還是合併估；若是各估一套，這個保序幾乎是循環論證。",
+    "三個系統只有 3! = 6 種排序，而 C 在所有指標、所有列都是最差，實際上只在檢驗 A 與 B 的相對位置，等於一次二選一。摘要宣稱「high correlation」，但通篇沒有算任何排序相關係數（如 Kendall's τ），也沒有顯著性檢定；真人 A、B 的 Success Rate 只差 0.031，各只有 25 段對話。",
+    "逼真度與預測效度互相衝突：CIR6-PKG 的 Win 最高（36%），卻是唯一在 Success Rate 上把 A、B 排反、Reward 絕對值偏離真人最遠（11.12 對 8.88）的模擬器。拿「像不像人」挑模擬器，挑出來的反而最不適合拿來排系統；作者用「A 在 Reward 上本來就贏」辯護，是事後解釋。",
+    "對話統計相似度與人工逼真度判斷方向相反：QRFA-Single 在系統 A 的 DS-KL 最低（0.027），Win 卻最少；CIR6-PKG 的 DS-KL 最高（最高 0.095），Win 卻最多。這表示 §6.1 的統計指標不能代替 §6.3 的人工判斷，論文沒有討論這個矛盾。另外 UserActRatio 在 B、C 上所有列都是 0.500 或 0.501，只反映一問一答的輪替結構，沒有鑑別力。",
+    "逼真度的差距在雜訊範圍內：CIR6-Single 到 CIR6-PKG 的「+3%」是 225 筆判斷中多 5 筆 Win（76 → 81），二項分布在 33% 附近的標準誤約 3 個百分點；評審之間的一致性沒有報告。而且「找到就結束」的終止規則與 PKG 綁在一起改，所以這 +3% 也分不清是偏好一致帶來的還是對話變短帶來的。",
+    "刻意在 NLG 範本放錯字，會直接左右評審判斷（Table 7 有 39 則評語以文法、錯字為依據，有評審明說 bot 不會拼錯字）。這可能拉高 Win（論文的數字分不出評審是被錯字騙過，還是靠錯字認出模擬），但無論方向如何，都與行為層面的逼真無關。",
+    "Success Rate 的量測工具兩邊不一樣：真人對話由作者人工標註動作，模擬對話的回合是否「適當」推測是用模擬器自己的檢索式 NLU 加對照表 δ 判定，論文沒有寫明，也沒報 NLU 準確率。兩種標註器的誤差不同，名次差異可能來自量具而非系統。",
+    "真人參照組只收「成功」的對話（必須涵蓋 query formulation 與 set retrieval），失敗或中途放棄的使用者行為完全沒進入模擬器，也沒進入真人參照分數；模擬器因此學不到放棄、挫折這類行為，而這正是評估系統好壞時最有鑑別力的部分。",
+    "QRFA 基準被作者調整過（細分動作、從語料抽初始 agenda），而且沒有與任何神經模擬器比較；「CIR6 優於既有模型」只對這個改造版成立。CIR6 的狀態圖邊只畫在 Figure 5、文字中沒有，重現要依賴程式碼。"
+  ],
+  "framework_role": "T6 經典模擬器子領域裡「用模擬器做評估」（而不是當 RL 訓練對手）的代表作，也是對話式推薦領域把模擬器有效性形式化成「系統排序保持一致」（R3）的常見引用出處（Semantic Scholar 約 142 次引用、18 次 influential）。它連起 T6 與 T7：模擬對話產生的 Reward、Success Rate 是 T8 任務完成分數的兩種具體定義，而論文本身就示範了這兩種定義會給出相反的排序。對本框架最有用的教訓是：模擬器要分開驗兩條軸——逼真度（評審分不分得出）與預測效度（名次與真人是否一致），兩者在本文中方向相反；而且驗預測效度必須用沒拿來擬合模擬器的真人對話，否則保序可能只是擬合的結果。至於「模擬器名次與真人一致」有沒有直接證據：本文給了直接比對，但只有三個系統、樣本內擬合、無統計檢定，只能算薄弱的初步證據。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "偏好模型（從 MovieLens 真實評分抽出、推成 PKG）建構使用者目標的約束 C 與請求 R；agenda 頂端的使用者動作（Disclose、Inquire 等）經範本 NLG 轉成文字，透過 conversation manager 送進黑盒系統，成為系統做目標對齊的外部輸入。模擬器再用 δ 檢查系統回應的動作是否適當（是否理解了使用者當前意圖），不適當就推入同目標的替代動作重試，等於從使用者端持續測試系統的意圖理解。"
+    },
+    {
+      "edge": "E6",
+      "how": "所有模擬對話與真人對話都被記錄下來回流評估：(1) 以 AvgTurns、UserActRatio、DS-KL 比較模擬與真人對話的統計特徵；(2) 以 Reward、Success Rate 為三個系統排名，檢查排序是否與真人一致；(3) 把模擬對話與真人對話並排交給群眾評審判斷真假，並把評審理由編碼成六類，用來指出模擬器下一步該改什麼。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有宣稱任何部署或產品使用（第一作者發表時任職 Bloomberg，但註明研究在 University of Stavanger 完成，文中沒有提到 Bloomberg 的使用）。以 WebSearch 查詢只找到同一團隊後續的學術工具包（UserSimConvRec、UserSimCRS，arXiv:2301.05544），屬於學術延伸，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/iai-group/kdd2020-usersim（目前只剩 README，指向 https://github.com/iai-group/UserSimConvRec；後者標示不再維護、開發已移到 UserSimCRS，repo 沒有授權條款）",
+    "data": "部分公開。UserSimConvRec 的 data/ 目錄有三個對話檔（1219_andchill.json、1224_ms.json、1225_mb.json）；其中 1225_mb.json 已確認含 25 段逐句標註動作的對話，另外兩個檔名與大小相近、推測同格式但未逐一打開。MovieLens 要自行從 Kaggle 下載。受測系統只提供作者自建的 jmrs1；And chill 因存取限制沒有包裝程式，Kelly Movie Bot 要自己依 IBM Watson 工作區檔架設。群眾的並排判斷與評語未見公開。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "提供了「模擬器名次要與真人一致」的形式化判準和一份直接的真人對模擬比對，也揭露逼真度與預測效度會互相衝突，但證據只有三個系統、模擬器擬合在同一批真人對話上、沒有任何統計檢定，方法本身是 ABUS 加手畫狀態圖，判準與教訓看這份筆記即可，不必精讀原文。",
+  "related": [
+    "1805.06966",
+    "1607.00070",
+    "1812.10720",
+    "1606.01541",
+    "1701.06547",
+    "1603.08023",
+    "1801.06176",
+    "1703.01008"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

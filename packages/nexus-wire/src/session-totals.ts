@@ -22,8 +22,8 @@
  *
  * ## 總量由讀的那一側加
  *
- * 只送輸入、輸出兩格，不送總量：dsh 的 `StatsPills` 也是自己把各桶加起來（`:241-242`）。我們的 `inputTokens` 含快取
- * 讀取，所以兩格相加就是整筆帳。
+ * 不送總量：dsh 的 `StatsPills` 也是自己把各桶加起來（`:241-242`）。四桶互不重疊（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，見 {@link WireTokenUsage}）：
+ * `inputTokens` 是未快取輸入（照 dsh），整筆帳要把快取讀、快取寫與 `outputTokens` 一起加；日誌沒記快取的部分缺席而不是 0。
  *
  * ## 與 dsh 的偏離
  *
@@ -45,10 +45,28 @@ export const SESSION_STATS = 'sessionStats';
 
 /** {@link TOKEN_USAGE} 的 `payload`，也是 `ConversationState.tokenUsage`。 */
 export interface WireTokenUsage {
-  /** root 每一次模型呼叫的 prompt token 數加總，**含快取讀取**。 */
+  /**
+   * root 每一次模型呼叫的**未快取**輸入 token 加總，照 dsh 的 `tokenUsage` 投影（四桶互不重疊）。
+   * **2026-10-09 起的語義**（#724 收尾）：以前它含快取讀取（完整 prompt），web 已改讀四桶（#1206）之後換成這個。
+   */
   readonly inputTokens: number;
   /** root 每一次回應的 token 數加總。 */
   readonly outputTokens: number;
+  /**
+   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，照 dsh 的投影名
+   * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊——未快取的輸入、快取讀、快取寫、輸出。
+   *
+   * `uncachedInputTokens` **永遠等於 {@link inputTokens}，server 每次都送**：它是 web 分辨「新 server（四桶）」與「舊 server
+   * （`inputTokens` 含快取）」的標記，只看有沒有這一格、不看大小（0 也算新）。型別上選填是為了讀舊 server 的資料。
+   *
+   * **快取兩格缺席是「沒記」，不是 0**：舊日誌、供應商沒報快取細節的呼叫都沒有，畫面要把「沒記」與「0」分開
+   * （快取命中率的分母不能混進沒記的）。
+   */
+  readonly uncachedInputTokens?: number;
+  /** 命中快取、從快取讀出來的輸入 token 加總。缺席＝沒記。 */
+  readonly cacheReadTokens?: number;
+  /** 寫進快取的輸入 token 加總。缺席＝沒記。 */
+  readonly cacheWriteTokens?: number;
 }
 
 /** {@link SESSION_STATS} 的 `payload`，也是 `ConversationState.sessionStats`。 */
@@ -61,4 +79,12 @@ export interface WireSessionStats {
   readonly llmMs: number;
   /** 工具呼叫的牆鐘總和，ms。核准的等待不算。 */
   readonly toolMs: number;
+}
+
+// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
+declare module './custom-frame.js' {
+  interface CustomFramePayloads {
+    [TOKEN_USAGE]: WireTokenUsage;
+    [SESSION_STATS]: WireSessionStats;
+  }
 }

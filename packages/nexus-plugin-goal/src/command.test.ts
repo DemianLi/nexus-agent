@@ -9,26 +9,29 @@
 import { describe, expect, it } from 'vitest';
 
 import { createRegistry, createSessionRunner, SessionLog } from '@nexus/core';
+import type { AttachmentRef } from '@nexus/commands';
 import type { CommandDefinition, CommandResult, GoalChangeMeta, PluginRegistry } from '@nexus/core';
 
 import {
-  createGoalPlugin,
-  executeGoalCommand,
   goalConfigSchema,
-  GOALS_SERVICE,
+  GOAL_ATTACHMENTS_ONLY_MESSAGE,
+  GOAL_ATTACHMENTS_TEXT,
   GOAL_CLEARED_MESSAGE,
   GOAL_COMMAND_HINT,
   GOAL_COMMAND_NAME,
+  GOAL_RUN_WHILE_BUSY,
   GOAL_INVALID_EDIT_MESSAGE,
   GOAL_NONE_MESSAGE,
-  GOAL_NOT_ATTACHED_MESSAGE,
   GOAL_NOTHING_TO_CLEAR_MESSAGE,
   GOAL_REJECTED_MESSAGE,
-  goalAmbiguousMessage,
   goalMissingMessage,
   parseGoalCommand,
 } from './index.js';
-import type { GoalPluginOptions, GoalService } from './index.js';
+import { GOALS_SERVICE } from '@nexus/goal';
+
+import { createGoalPlugin, goalCoreOf } from './goal-shell.test.helper.js';
+import type { GoalPluginOptions } from './goal-shell.test.helper.js';
+import type { GoalService } from './index.js';
 
 /** 掛一次、接 `logs` 份日誌，回手上要用的每一個東西。 */
 function mount(
@@ -39,7 +42,11 @@ function mount(
   command: CommandDefinition;
   logs: SessionLog[];
   serviceFor: (log: SessionLog) => GoalService;
-  run: (rawInput: string) => CommandResult;
+  run: (rawInput: string, attachments?: readonly AttachmentRef[]) => CommandResult;
+  /** `run` 期間命令請宿主送的話（`steer` 收到的），照呼叫順序。 */
+  steers: { text: string; attachments?: readonly AttachmentRef[] }[];
+  /** `run` 期間命令問宿主「收不收會讓宿主開一輪的動作」（`openTurn`）的次數；`refuse` 打開時宿主拒收（拋）。 */
+  turnGate: { calls: number; refuse: boolean };
   detach: () => void;
 } {
   const clock = 100;
@@ -53,9 +60,11 @@ function mount(
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
   plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
   exit();
-  const goals = registry.services.use(GOALS_SERVICE);
+  const goals = goalCoreOf(registry.services.use(GOALS_SERVICE));
 
   const opened: SessionLog[] = [];
+  const steers: { text: string; attachments?: readonly AttachmentRef[] }[] = [];
+  const turnGate = { calls: 0, refuse: false };
   const detachers: (() => void)[] = [];
   for (let index = 0; index < logs; index += 1) {
     const log = new SessionLog(`goal-${String(index)}`);
@@ -64,6 +73,7 @@ function mount(
       createSessionRunner({
         address: { kind: 'root' },
         log,
+        rootLog: log,
         installers: registry.sessions.installers(),
         warn: (message) => {
           throw new Error(`不該有 warn：${message}`);
@@ -78,16 +88,27 @@ function mount(
     registry,
     command,
     logs: opened,
-    serviceFor: (log) => {
-      const service = goals.serviceFor(log);
-      if (service === undefined) throw new Error('接線之後應該找得到服務');
-      return service;
-    },
-    run: (rawInput) => {
+    serviceFor: (log) => goals.serviceFor(log),
+    steers,
+    turnGate,
+    run: (rawInput, attachments = []) => {
       const result = command.handler({
         commandId: 'cmd-test-1',
         rawInput,
+        attachments,
         signal: new AbortController().signal,
+        // 執行器手上的那一份（#688）：接了日誌就是第一份，一份都沒接時交一份沒人接的。
+        sessionLog: opened[0] ?? new SessionLog('unattached'),
+        steer: (text, steerAttachments) => {
+          steers.push({
+            text,
+            ...(steerAttachments === undefined ? {} : { attachments: steerAttachments }),
+          });
+        },
+        openTurn: () => {
+          turnGate.calls += 1;
+          if (turnGate.refuse) throw new Error('宿主不收');
+        },
       });
       if (result instanceof Promise) throw new TypeError('/goal 是同步的');
       return result;
@@ -163,77 +184,42 @@ describe('註冊', () => {
       {
         name: GOAL_COMMAND_NAME,
         description: expect.any(String) as unknown as string,
-        input: { hint: GOAL_COMMAND_HINT },
+        input: { hint: GOAL_COMMAND_HINT, attachments: true },
+        // 忙的時候放行的呼叫（#1516）：只有 `pause`。
+        runWhileBusy: ['pause'],
       },
     ]);
     detach();
   });
 
-  it('**提示裡沒有圖片**——附件那條水管不存在', () => {
-    // 絆索：`CommandInvocation` 有 `attachments` 的那天，提示要跟著改，不然它在騙人。
-    expect(GOAL_COMMAND_HINT).not.toContain('image');
-    expect(GOAL_COMMAND_HINT).not.toContain('圖');
+  it('**忙的時候放行的名單**只有 pause，而且名單裡每一格都解析成 pause——宣告與文法對得上（#1516）', () => {
+    expect(GOAL_RUN_WHILE_BUSY).toEqual(['pause']);
+    for (const literal of GOAL_RUN_WHILE_BUSY) {
+      expect(parseGoalCommand(literal)).toEqual({ kind: 'pause' });
+    }
+    const { registry, detach } = mount(1);
+    expect(registry.commands.find(GOAL_COMMAND_NAME)?.runWhileBusy).toEqual(GOAL_RUN_WHILE_BUSY);
+    detach();
+  });
+
+  it('**宣告收附件**——descriptor 的 input.attachments 是 true（#732，照 dsh）', () => {
+    // 這條是從「提示裡沒有圖片」翻面來的絆索：`CommandInvocation` 有 `attachments` 之前，提示不能寫圖片；現在附件水管在了，
+    // 宣告就是 `input.attachments`（提示字串跟 dsh 一樣不變）。
+    const { registry, detach } = mount(1);
+    expect(registry.commands.list()[0]?.input).toEqual({
+      hint: GOAL_COMMAND_HINT,
+      attachments: true,
+    });
+    detach();
   });
 });
 
-describe('找得到要動的那一份', () => {
-  it('**一份都沒接就說一份都沒接**，不是靜靜什麼都沒發生', () => {
-    const { run, detach } = mount(0);
-    expect(errorText(run(''))).toBe(GOAL_NOT_ATTACHED_MESSAGE);
-    expect(errorText(run('把測試修綠'))).toBe(GOAL_NOT_ATTACHED_MESSAGE);
-    detach();
-  });
-
-  it('**接了兩份就當場說分不出來**，不是讓後接的那份靜靜贏走', () => {
-    // 這一條釘住的是 `commands.ts` 上那句「一份 registry 只接一份日誌」——它是
-    // `/goal` 找得到目標的前提，而前提要可證偽。
-    const { run, logs, detach } = mount(2);
-    expect(errorText(run('把測試修綠'))).toBe(goalAmbiguousMessage(2));
-    // 而且真的什麼都沒寫進去：分不出來的時候不該賭一份。
-    for (const log of logs) {
-      expect(log.events.filter((event) => event.type === 'goal/change')).toEqual([]);
-    }
-    detach();
-  });
-
-  it('收掉一份之後剩下的那一份就不再有歧義', () => {
-    const plugin = createGoalPlugin();
-    const registry = createRegistry();
-    const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
-    exit();
-    const installers = registry.sessions.installers();
-    const first = new SessionLog('a');
-    const second = new SessionLog('b');
-    const detachFirst = createSessionRunner({
-      address: { kind: 'root' },
-      log: first,
-      installers,
-    });
-    const detachSecond = createSessionRunner({
-      address: { kind: 'root' },
-      log: second,
-      installers,
-    });
-    const command = registry.commands.find(GOAL_COMMAND_NAME);
-    if (command === undefined) throw new Error('應該註冊得到 /goal');
-    const run = (rawInput: string): CommandResult =>
-      command.handler({
-        commandId: 'cmd-test-1',
-        rawInput,
-        signal: new AbortController().signal,
-      }) as CommandResult;
-
-    expect(errorText(run(''))).toBe(goalAmbiguousMessage(2));
-    detachFirst();
-    expect(successText(run(''))).toBe(GOAL_NONE_MESSAGE);
-    // 而且剩下的是**沒被收掉的那一份**：寫進去的目標要落在 `second` 上。
-    run('把測試修綠');
-    expect(first.events.filter((event) => event.type === 'goal/change')).toEqual([]);
-    expect(second.events.filter((event) => event.type === 'goal/change')).toHaveLength(1);
-    detachSecond();
-  });
-
+/**
+ * #1486 之後 `/goal` 找的是**這一次呼叫帶來的那一份日誌**（`sessionLog`）上的服務，沒有「一份都沒接」與「接了不只一份」兩句了：
+ * 服務是 lazy 的，每份 root 日誌第一次被問到才建，一份 registry 想接幾份日誌都行。這兩句連同它們的測試一起拿掉，
+ * 紀錄在 PR 的「行為改變」一節；同一段的覆蓋改由 `lazy.test.ts` 與 harness 的 `session-participants.test.ts` 接手。
+ */
+describe('兩次組裝不串台', () => {
   it('**兩次組裝不串台**——同一個 plugin 物件掛兩次，各自動各自的', () => {
     // 這是 `apply` 裡那一格存在的理由。放進工廠閉包的話，這裡的兩條 registry 會共用
     // 同一格，而 `serve.ts` 每個 thread 組裝一次。
@@ -247,6 +233,7 @@ describe('找得到要動的那一份', () => {
       createSessionRunner({
         address: { kind: 'root' },
         log,
+        rootLog: log,
         installers: registry.sessions.installers(),
       });
       const command = registry.commands.find(GOAL_COMMAND_NAME);
@@ -257,7 +244,11 @@ describe('找得到要動的那一份', () => {
           command.handler({
             commandId: 'cmd-test-1',
             rawInput: input,
+            attachments: [],
             signal: new AbortController().signal,
+            sessionLog: log,
+            steer: () => undefined,
+            openTurn: () => undefined,
           }) as CommandResult,
       };
     };
@@ -342,6 +333,109 @@ describe('六種輸入', () => {
     expect(successText(run(''))).toBe(GOAL_NONE_MESSAGE);
     // 墓碑也是一顆事件——清掉不是刪掉。
     expect(logs[0]?.events.filter((event) => event.type === 'goal/change')).toHaveLength(2);
+    detach();
+  });
+});
+
+describe('附件隨目標（#732）', () => {
+  const sha = (c: string) => `sha256:${c.repeat(64)}`;
+  const image = {
+    type: 'image',
+    attachmentId: sha('a'),
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 1,
+    height: 1,
+  } as const;
+  const file = { type: 'file', attachmentId: sha('b'), name: 'a.txt', bytes: 1 } as const;
+  const attached = [image, file] as const;
+
+  it('/goal <目標> 帶附件：建起來，請宿主送一句固定的話，帶著附件（照選取順序）', () => {
+    const { run, logs, steers, detach } = mount(1);
+    expect(successText(run('把測試修綠', attached))).toContain('目標建好了');
+    expect(steers).toEqual([{ text: GOAL_ATTACHMENTS_TEXT, attachments: attached }]);
+    // 附件不進 goal 域：日誌上只有 goal/change。
+    expect(JSON.stringify(logs[0]?.events)).not.toContain(sha('a'));
+    detach();
+  });
+
+  it('**pause 不 steer**，連帶附件也不——忙的時候放行的呼叫不能起一輪（#1516）', () => {
+    const { run, steers, detach } = mount(1);
+    run('把測試修綠');
+    expect(successText(run('pause'))).toContain('目標暫停了');
+    expect(steers).toEqual([]);
+    // 帶附件的 pause 在動域之前就是 error（其餘子命令收到附件的既有規則），一樣沒有 steer。
+    run('resume');
+    expect(errorText(run('pause', attached))).toBe(GOAL_ATTACHMENTS_ONLY_MESSAGE);
+    expect(steers).toEqual([]);
+    detach();
+  });
+
+  it('沒帶附件就不 steer', () => {
+    const { run, steers, detach } = mount(1);
+    run('把測試修綠');
+    expect(steers).toEqual([]);
+    detach();
+  });
+
+  it('/goal edit <目標> 帶附件：改好了並 steer；完成掉的目標用 edit 換新的也 steer', () => {
+    const { run, logs, serviceFor, steers, detach } = mount(1);
+    run('把測試修綠');
+    expect(successText(run('edit 把文件補完', [image]))).toContain('目標改好了');
+    expect(steers).toEqual([{ text: GOAL_ATTACHMENTS_TEXT, attachments: [image] }]);
+
+    const service = serviceFor(logs[0] as SessionLog);
+    const current = service.get();
+    if (current === undefined) throw new Error('剛建好應該有目標');
+    service.complete({ id: current.id, revision: current.revision });
+    expect(successText(run('edit 再來一個', [file]))).toContain('目標建好了');
+    expect(steers).toHaveLength(2);
+    expect(steers[1]).toEqual({ text: GOAL_ATTACHMENTS_TEXT, attachments: [file] });
+    detach();
+  });
+
+  it('**其餘子命令收到附件一律在動域之前回 error**：什麼都沒改、沒有 steer', () => {
+    const { run, logs, steers, detach } = mount(1);
+    run('把測試修綠');
+    const before = logs[0]?.events.length;
+    for (const input of ['', 'pause', 'resume', 'clear', 'edit']) {
+      expect(errorText(run(input, [image])), input).toBe(GOAL_ATTACHMENTS_ONLY_MESSAGE);
+    }
+    expect(logs[0]?.events.length).toBe(before);
+    expect(steers).toEqual([]);
+    detach();
+  });
+
+  it('被拒絕的 create／edit 不 steer：已有未完成的目標、沒有目標就 edit', () => {
+    const none = mount(1);
+    expect(errorText(none.run('edit 新目標', [image]))).toBe(goalMissingMessage('edit'));
+    expect(none.steers).toEqual([]);
+    none.detach();
+
+    const have = mount(1);
+    have.run('把測試修綠');
+    expect(errorText(have.run('另一個目標', [image]))).toContain('已經有一個進行中的目標');
+    expect(have.steers).toEqual([]);
+    have.detach();
+  });
+
+  it('宿主拒收這句 steer（例如引用不能用）：拋出來，目標沒建', () => {
+    const { command, logs, detach } = mount(1);
+    const reject = () => {
+      throw new Error('宿主不收');
+    };
+    expect(() =>
+      command.handler({
+        commandId: 'c',
+        rawInput: '目標',
+        attachments: [image],
+        signal: new AbortController().signal,
+        sessionLog: logs[0] as SessionLog,
+        steer: reject,
+        openTurn: () => undefined,
+      }),
+    ).toThrow('宿主不收');
+    expect(logs[0]?.events.filter((event) => event.type === 'goal/change')).toHaveLength(0);
     detach();
   });
 });
@@ -443,16 +537,65 @@ describe('域的拒絕與域的壞掉分得出來', () => {
   });
 });
 
-describe('executeGoalCommand 直接呼叫', () => {
-  it('空清單與多份清單的那兩句話由它自己決定', () => {
-    expect(executeGoalCommand([], '')).toEqual({
-      kind: 'error',
-      text: GOAL_NOT_ATTACHED_MESSAGE,
-    });
-    const fake = [{}, {}, {}] as unknown as readonly GoalService[];
-    expect(executeGoalCommand(fake, '')).toEqual({
-      kind: 'error',
-      text: goalAmbiguousMessage(3),
-    });
+describe('會讓宿主開一輪的命令，先問宿主收不收（openTurn，#1787）', () => {
+  const image = {
+    type: 'image',
+    attachmentId: `sha256:${'a'.repeat(64)}`,
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 1,
+    height: 1,
+  } as const;
+  /** 宿主拒收之後：拋出來、日誌上一顆 `goal/change` 都沒有（沒建、沒續、沒改）。 */
+  function expectRefused(run: () => CommandResult, logs: SessionLog[], expectedChanges: number) {
+    expect(run).toThrow('宿主不收');
+    expect(logs[0]?.events.filter((event) => event.type === 'goal/change')).toHaveLength(
+      expectedChanges,
+    );
+  }
+
+  it('create（含附件）、resume、edit 進行中的目標：各問一次，拒收時什麼都沒寫', () => {
+    const m = mount(1);
+    m.turnGate.refuse = true;
+    // create：沒有目標時建。
+    expectRefused(() => m.run('把測試修綠'), m.logs, 0);
+    // 帶附件的 create：openTurn 排在 steer 之前，兩者拒收都是同一個結果。
+    expectRefused(() => m.run('把測試修綠', [image]), m.logs, 0);
+    expect(m.steers).toEqual([]);
+    expect(m.turnGate.calls).toBe(2);
+
+    // 建起一個（窗前），之後對它的 edit／resume 都先問。
+    m.turnGate.refuse = false;
+    m.run('把測試修綠');
+    const changes = m.logs[0]?.events.filter((event) => event.type === 'goal/change').length ?? 0;
+    m.turnGate.refuse = true;
+    const before = m.turnGate.calls;
+    expectRefused(() => m.run('edit 改個目標'), m.logs, changes); // active 的 edit
+    expectRefused(() => m.run('resume'), m.logs, changes);
+    expect(m.turnGate.calls).toBe(before + 2);
+    m.detach();
+  });
+
+  it('不開輪的不問：show、pause、clear、edit 停著的目標、被拒的 create／edit', () => {
+    const m = mount(1);
+    m.run('把測試修綠');
+    m.run('pause');
+    m.turnGate.calls = 0;
+    m.turnGate.refuse = true; // 問了就拋：下面每一格都不該被問
+    expect(successText(m.run(''))).toContain('暫停');
+    expect(successText(m.run('edit 暫停中改目標'))).toContain('目標改好了');
+    expect(m.turnGate.calls).toBe(0);
+    // pause 的是 active 的目標；resume 才會再讓它 active（這一格會問，所以放在最後單獨量）。
+    expect(successText(m.run('clear'))).toBe(GOAL_CLEARED_MESSAGE);
+    expect(m.turnGate.calls).toBe(0);
+    m.detach();
+
+    // 被域或前置檢查拒絕的 create／edit 也不問。
+    const none = mount(1);
+    none.turnGate.refuse = true;
+    expect(errorText(none.run('edit 新目標'))).toBe(goalMissingMessage('edit'));
+    expect(errorText(none.run('resume'))).toBe(goalMissingMessage('resume'));
+    expect(none.turnGate.calls).toBe(0);
+    none.detach();
   });
 });

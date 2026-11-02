@@ -9,8 +9,6 @@ import { describe, expect, it } from 'vitest';
 
 import { goalId, SessionLog } from '@nexus/core';
 import type { SessionEventMap } from '@nexus/core';
-import { renderGoalRoundPrompt } from '@nexus/plugin-goal';
-import type { GoalView } from '@nexus/plugin-goal';
 
 import {
   decideGoalRound,
@@ -19,6 +17,8 @@ import {
   ROUND_LIMIT_BLOCK_CODE,
 } from './goal-driver.js';
 import type { GoalDriverPort } from './goal-driver.js';
+import { renderGoalRoundPrompt } from '@nexus/goal';
+import type { GoalView } from '@nexus/goal';
 
 const ID = goalId('goal-1');
 
@@ -102,33 +102,155 @@ describe('上限耗盡', () => {
 
 /**
  * 操作的人那一條上限。**它跟目標自己那一條是兩件事**：目標那個數字是模型在
- * `create_goal` 裡填的（`service.ts:269` 的 `??` 不是 `Math.min`），所以「上限」在沒有這
+ * `create_goal` 裡填的（`service.ts:254` 的 `??` 不是 `Math.min`），所以「上限」在沒有這
  * 一格之前完全由模型自己挑。
+ *
+ * **數的是最後一次建立或恢復目標之後排過幾輪**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，#1614 Q-A2 (a)），
+ * 不是累計：以前比累計，`round-cap` 之後人按恢復也續不了。所以這一段的日誌都帶授權那一顆 `goal/change`。
  */
-describe('命令列給的那條上限', () => {
+const CAP = { limit: 3, source: '測試的上限' } as const;
+
+/** 一顆授權（或改目標）的變更：決定只讀它的 `operation` 與目標 id。 */
+function change(operation: 'create' | 'resume' | 'edit', id = ID): readonly [string, unknown] {
+  return ['goal/change', { kind: 'goal/change', operation, goal: { id }, roundsStarted: 0 }];
+}
+
+/** 一輪續行，好好收工了。 */
+function goalRound(round: number, id = ID): readonly (readonly [string, unknown])[] {
+  return [['turn/start', { kind: 'goal', text: '續', goalId: id, revision: 1, round }], END];
+}
+
+/** 建立目標之後跑了 `rounds` 輪續行。 */
+function afterCreate(rounds: number): readonly (readonly [string, unknown])[] {
+  return [
+    change('create'),
+    ...SETTLED,
+    ...Array.from({ length: rounds }, (_, at) => goalRound(at + 1)).flat(),
+  ];
+}
+
+describe('操作的人給的那條上限', () => {
   it('目標自己那條還很寬，人設的那條照樣夾得住', () => {
     const decision = decideGoalRound(
-      logOf(SETTLED).events,
+      logOf(afterCreate(3)).events,
       view({ maxGoalRounds: 99, roundsStarted: 3 }),
-      3,
+      CAP,
     );
     expect(decision).toEqual({
       kind: 'block',
       ref: { id: ID, revision: 1 },
       reason: {
         code: ROUND_CAP_BLOCK_CODE,
-        message: '這一次呼叫用完了 --max-goal-rounds 給的 3 個續行輪次。',
+        message:
+          '上一次建立或恢復目標之後已經續行了 3 輪，到了測試的上限給的上限；要繼續就恢復目標，會重新起算。',
       },
     });
   });
 
   it('還沒到就照排——邊界同樣是 >=，不是 >', () => {
     const decision = decideGoalRound(
-      logOf(SETTLED).events,
+      logOf(afterCreate(2)).events,
       view({ maxGoalRounds: 99, roundsStarted: 2 }),
-      3,
+      CAP,
     );
     expect(decision.kind === 'run' && decision.round.round).toBe(3);
+  });
+
+  /**
+   * **恢復之後重新起算**：累計已經 3 輪、到了上限；人按恢復之後，同一個累計數照樣排，第 4 輪的號碼照舊往上數（模型讀到的
+   * `Round: N/M` 是目標自己的累計，不動）。比累計的寫法在這裡會再記一次 `round-cap`，人怎麼按都續不了。
+   */
+  it('恢復之後重新起算：累計到了上限，恢復後照排', () => {
+    const decision = decideGoalRound(
+      logOf([...afterCreate(3), change('resume'), ...SETTLED]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 3 }),
+      CAP,
+    );
+    expect(decision.kind === 'run' && decision.round.round).toBe(4);
+  });
+
+  it('恢復之後再跑滿上限，又夾住', () => {
+    const decision = decideGoalRound(
+      logOf([
+        ...afterCreate(3),
+        change('resume'),
+        ...goalRound(4),
+        ...goalRound(5),
+        ...goalRound(6),
+      ]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 6 }),
+      CAP,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
+  });
+
+  /** `update_goal` 記的是 `edit`：模型改自己的上限不是人授權，不能讓這個數歸零。 */
+  it('edit 不重新起算', () => {
+    const decision = decideGoalRound(
+      logOf([...afterCreate(3), change('edit')]).events,
+      view({ maxGoalRounds: 1000, roundsStarted: 3 }),
+      CAP,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
+  });
+
+  /**
+   * 清掉再建：新目標從它自己的 `create` 起算。這一條分不出「只看同一個 id」——舊目標的輪都在新 `create` 之前，不看 id 也數不到；
+   * 分得出來的是下面兩條。
+   */
+  it('清掉再建：新目標從自己的 create 起算，舊目標排過的輪不算', () => {
+    const OTHER = goalId('goal-0');
+    const decision = decideGoalRound(
+      logOf([
+        change('create', OTHER),
+        ...goalRound(1, OTHER),
+        ...goalRound(2, OTHER),
+        ...goalRound(3, OTHER),
+        change('create'),
+        ...SETTLED,
+      ]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 0 }),
+      CAP,
+    );
+    expect(decision.kind === 'run' && decision.round.round).toBe(1);
+  });
+
+  /** 起算點只認同一個目標的授權：別的目標的 `resume` 夾在中間，不讓這個目標的數歸零（手搭的日誌，產品上一條 thread 一個目標）。 */
+  it('別的目標的授權不重新起算這一個', () => {
+    const OTHER = goalId('goal-0');
+    const decision = decideGoalRound(
+      logOf([...afterCreate(3), change('resume', OTHER), ...goalRound(1, OTHER)]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 3 }),
+      CAP,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
+  });
+
+  /** 授權之後只數同一個目標的輪：別的目標的續行輪不算進這一個的帳（手搭的日誌）。 */
+  it('授權之後別的目標的輪不算', () => {
+    const OTHER = goalId('goal-0');
+    const decision = decideGoalRound(
+      logOf([
+        change('create'),
+        ...SETTLED,
+        ...goalRound(1, OTHER),
+        ...goalRound(2, OTHER),
+        ...goalRound(3, OTHER),
+      ]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 0 }),
+      CAP,
+    );
+    expect(decision.kind === 'run' && decision.round.round).toBe(1);
+  });
+
+  /** 找不到授權那一顆（只有手搭的日誌會這樣）就退回累計，寧可早停。 */
+  it('日誌上沒有授權就比累計', () => {
+    const decision = decideGoalRound(
+      logOf(SETTLED).events,
+      view({ maxGoalRounds: 99, roundsStarted: 3 }),
+      CAP,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
   });
 
   /**
@@ -138,9 +260,9 @@ describe('命令列給的那條上限', () => {
    */
   it('兩條同時到頂，記的是 round-limit 不是 round-cap', () => {
     const decision = decideGoalRound(
-      logOf(SETTLED).events,
+      logOf(afterCreate(2)).events,
       view({ maxGoalRounds: 2, roundsStarted: 2 }),
-      2,
+      { limit: 2, source: '測試的上限' },
     );
     expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_LIMIT_BLOCK_CODE);
   });
@@ -166,6 +288,7 @@ describe('到頂之後記的那顆 blocker', () => {
       goal: () => goal,
       block: (_ref, reason) => void blocked.push(reason.code),
       disarm: () => {},
+      pause: () => {},
       flush: () => Promise.resolve(),
       warn: () => {},
     };
@@ -173,7 +296,7 @@ describe('到頂之後記的那顆 blocker', () => {
 
   it('人設的那條到頂，記 round-cap 而且不排', async () => {
     const port = portOf(view({ maxGoalRounds: 99, roundsStarted: 3 }));
-    const round = await driveGoalRound(() => logOf(SETTLED).events, port, 3);
+    const round = await driveGoalRound(() => logOf(afterCreate(3)).events, port, CAP);
     expect(round).toBeUndefined();
     expect(port.blocked).toEqual([ROUND_CAP_BLOCK_CODE]);
   });
@@ -185,15 +308,46 @@ describe('到頂之後記的那顆 blocker', () => {
    */
   it('同一個狀態沒給上限就照排——對照組', async () => {
     const port = portOf(view({ maxGoalRounds: 99, roundsStarted: 3 }));
-    const round = await driveGoalRound(() => logOf(SETTLED).events, port);
+    const round = await driveGoalRound(() => logOf(afterCreate(3)).events, port);
     expect(round?.round).toBe(4);
     expect(port.blocked).toEqual([]);
   });
 });
 
 describe('排不出來的每一種，理由各自有名字', () => {
-  it('一輪都還沒開始', () => {
-    expect(decideGoalRound([], view())).toEqual({ kind: 'idle', reason: 'no-turn' });
+  /**
+   * **一輪都還沒開始不是排不出的理由**（[#661](https://github.com/DemianLi/nexus-agent/issues/661)）：新開的行程第一件事就打
+   * `/goal <目標>`，之後該排第 1 輪。擋住自行復活的是授權，不是「跑過沒有」。
+   */
+  it('一輪都還沒開始：已授權就排', () => {
+    const decision = decideGoalRound([], view());
+    expect(decision.kind === 'run' && decision.round.round).toBe(1);
+  });
+
+  it('一輪都還沒開始，但沒有授權：不排——續接回來的會話不會自己動起來', () => {
+    expect(decideGoalRound([], view({ activation: 'disarmed' }))).toEqual({
+      kind: 'idle',
+      reason: 'disarmed',
+    });
+  });
+
+  /**
+   * **續接回來：上一個行程的輪不算這一個行程的**（[#251](https://github.com/DemianLi/nexus-agent/issues/251)）。
+   * seed 裡那一輪是拋錯結束的；越過 `session/end-seed` 去看它的話，這裡會誤判成 `turn-failed` 而收回授權，
+   * 把剛下的 `/goal resume` 吃掉。
+   */
+  it('續接回來還沒說過話：seed 裡那些輪不算，已授權就排', () => {
+    const seeded = [
+      HUMAN,
+      ['turn/failed', { message: '上個行程掛了' }],
+      ['session/end-seed', {}],
+    ] as const;
+    const decision = decideGoalRound(logOf(seeded).events, view());
+    expect(decision.kind === 'run' && decision.round.round).toBe(1);
+    expect(decideGoalRound(logOf(seeded).events, view({ activation: 'disarmed' }))).toEqual({
+      kind: 'idle',
+      reason: 'disarmed',
+    });
   });
 
   /**
@@ -224,6 +378,71 @@ describe('排不出來的每一種，理由各自有名字', () => {
     expect(decideGoalRound(aborted, view())).toEqual({ kind: 'idle', reason: 'turn-aborted' });
     // 對照：同一個形狀不帶 reason 就照排——擋住的是 aborted，不是 `turn/end` 本身。
     expect(decideGoalRound(logOf([...SETTLED]).events, view()).kind).toBe('run');
+  });
+
+  it('上一輪撞到輸出上限——`turn/end` 帶 max-tokens，不續行（#433）', () => {
+    const cut = logOf([HUMAN, ['turn/end', { reason: { kind: 'max-tokens' } }]]).events;
+    expect(decideGoalRound(cut, view())).toEqual({ kind: 'idle', reason: 'turn-max-tokens' });
+  });
+
+  /**
+   * **收尾在授權之前才算數**（#1516）：人下的暫停一定中止在跑的那一輪，所以「暫停 → 恢復」每次都是
+   * 「最後一顆 `turn/end` 是 aborted，後面接一次 `resume`」。dsh 在 `turn/end` 抵達的當下收回，事後的 resume 不受影響；
+   * 我們的決定讀日誌算，要靠先後。
+   */
+  describe('收尾之後又有人授權（create／resume）', () => {
+    const ABORTED: readonly [string, unknown] = [
+      'turn/end',
+      { reason: { kind: 'aborted', cause: { kind: 'user' } } },
+    ];
+    const RESUME: readonly [string, unknown] = ['goal/change', { operation: 'resume' }];
+
+    it('aborted 之後 resume：不再算 turn-aborted，照排', () => {
+      const log = logOf([HUMAN, ['goal/change', { operation: 'pause' }], ABORTED, RESUME]).events;
+      expect(decideGoalRound(log, view())?.kind).toBe('run');
+    });
+
+    it('拋錯與撞輸出上限之後 resume 同理', () => {
+      for (const tail of [
+        ['turn/failed', { message: '供應商掛了' }],
+        ['turn/end', { reason: { kind: 'max-tokens' } }],
+      ] as const) {
+        const log = logOf([HUMAN, tail, RESUME]).events;
+        expect(decideGoalRound(log, view())?.kind).toBe('run');
+      }
+    });
+
+    it('create 也算授權', () => {
+      const log = logOf([HUMAN, ABORTED, ['goal/change', { operation: 'create' }]]).events;
+      expect(decideGoalRound(log, view())?.kind).toBe('run');
+    });
+
+    it('對照：授權在收尾之前（同一份授權跑的那一輪被中止），照舊 turn-aborted', () => {
+      const log = logOf([RESUME, HUMAN, ABORTED]).events;
+      expect(decideGoalRound(log, view())).toEqual({ kind: 'idle', reason: 'turn-aborted' });
+    });
+
+    it('對照：收尾之後的是別的變更（pause、edit、complete），不算授權', () => {
+      for (const operation of ['pause', 'edit', 'block', 'complete']) {
+        const log = logOf([HUMAN, ABORTED, ['goal/change', { operation }]]).events;
+        expect(decideGoalRound(log, view())).toEqual({ kind: 'idle', reason: 'turn-aborted' });
+      }
+    });
+
+    it('driveGoalRound：resume 之後不收回剛武裝的授權', async () => {
+      const disarmed: number[] = [];
+      const port: GoalDriverPort = {
+        goal: () => view(),
+        block: () => undefined,
+        pause: () => undefined,
+        disarm: () => void disarmed.push(1),
+        flush: () => Promise.resolve(),
+        warn: () => undefined,
+      };
+      const log = logOf([HUMAN, ABORTED, RESUME]);
+      expect((await driveGoalRound(() => log.events, port))?.round).toBe(1);
+      expect(disarmed).toHaveLength(0);
+    });
   });
 
   it('停在核准點時按停止（收回）：resume 那一輪以 aborted 收尾，同樣不續行', () => {
@@ -269,5 +488,208 @@ describe('排不出來的每一種，理由各自有名字', () => {
       kind: 'idle',
       reason: 'disarmed',
     });
+  });
+});
+
+/**
+ * **撞到輸出上限、被人中止、拋錯：不只這一次不排，還收回授權**（#433、#660），同 dsh 的
+ * `goal-round-driver` 看到 max-tokens 與 aborted 就 `disarm`、收到 `agent/error` 也是。對照組是同一份日誌、
+ * 授權已經不在：不再收一次。
+ */
+describe('上一輪撞到輸出上限、被中止或拋錯', () => {
+  const CUT = [HUMAN, ['turn/end', { reason: { kind: 'max-tokens' } }]] as const;
+
+  function portOf(goal: GoalView): GoalDriverPort & { readonly disarmed: number[] } {
+    const disarmed: number[] = [];
+    return {
+      disarmed,
+      goal: () => goal,
+      block: () => {},
+      disarm: () => void disarmed.push(1),
+      pause: () => {},
+      flush: () => Promise.resolve(),
+      warn: () => {},
+    };
+  }
+
+  it('授權還在：收回，不排', async () => {
+    const port = portOf(view());
+    expect(await driveGoalRound(() => logOf(CUT).events, port)).toBeUndefined();
+    expect(port.disarmed).toHaveLength(1);
+  });
+
+  it('授權已經不在：不再收一次', async () => {
+    const port = portOf(view({ activation: 'disarmed' }));
+    expect(await driveGoalRound(() => logOf(CUT).events, port)).toBeUndefined();
+    expect(port.disarmed).toHaveLength(0);
+  });
+
+  it('被人中止的那一輪也收回——人再說一句話不會把續行接回來（#660）', async () => {
+    const port = portOf(view());
+    const aborted = [HUMAN, ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }]];
+    expect(await driveGoalRound(() => logOf(aborted as never).events, port)).toBeUndefined();
+    expect(port.disarmed).toHaveLength(1);
+  });
+
+  it('拋錯的那一輪也收回', async () => {
+    const port = portOf(view());
+    const failed = [HUMAN, ['turn/failed', { message: '供應商掛了' }]];
+    expect(await driveGoalRound(() => logOf(failed as never).events, port)).toBeUndefined();
+    expect(port.disarmed).toHaveLength(1);
+  });
+
+  it('中止或拋錯時授權已經不在：不再收一次', async () => {
+    for (const tail of [
+      ['turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
+      ['turn/failed', { message: '供應商掛了' }],
+    ]) {
+      const port = portOf(view({ activation: 'disarmed' }));
+      await driveGoalRound(() => logOf([HUMAN, tail] as never).events, port);
+      expect(port.disarmed).toHaveLength(0);
+    }
+  });
+
+  it('對照：人說完話、這一輪正常收工，照排而且不收回', async () => {
+    const port = portOf(view());
+    expect((await driveGoalRound(() => logOf(SETTLED).events, port))?.round).toBe(1);
+    expect(port.disarmed).toHaveLength(0);
+  });
+});
+
+/**
+ * 背景子代理還在推進就先等（[#1575](https://github.com/DemianLi/nexus-agent/issues/1575) N0372，dsh `goal-round-driver/src/index.ts`
+ * 的 `drive`：檢查點 → `waitForChildren` → 複查 → 判上限、預約）。接上真 pump 與真背景 host 的驗收在 `goal-driver-pump.test.ts`。
+ */
+describe('等背景子代理（N0372）', () => {
+  /** 一份記下每一步先後的 port；`waits` 是每次 `waitForChildren` 要回的值（用完回 `false`）。 */
+  function portOf(
+    goal: () => GoalView,
+    waits: readonly (boolean | (() => Promise<boolean>))[] = [],
+  ): GoalDriverPort & { readonly order: string[]; readonly warnings: string[] } {
+    const order: string[] = [];
+    const warnings: string[] = [];
+    let index = 0;
+    return {
+      order,
+      warnings,
+      goal,
+      block: (_ref, reason) => void order.push(`block:${reason.code}`),
+      disarm: () => void order.push('disarm'),
+      pause: () => {},
+      flush: () => {
+        order.push('flush');
+        return Promise.resolve();
+      },
+      warn: (message) => void warnings.push(message),
+      waitForChildren: async () => {
+        order.push('wait');
+        const next = waits[index];
+        index += 1;
+        if (next === undefined) return false;
+        return typeof next === 'function' ? next() : next;
+      },
+    };
+  }
+
+  it('檢查點之後等子代理，等過就整個重來一圈；這一圈沒等才排', async () => {
+    const port = portOf(() => view(), [true]);
+    const round = await driveGoalRound(() => logOf(SETTLED).events, port);
+    expect(round?.round).toBe(1);
+    expect(port.order).toEqual(['flush', 'wait', 'flush', 'wait']);
+  });
+
+  it('等的這段時間目標被改了（授權收回）：重來一圈讀到 disarmed，不排', async () => {
+    let goal = view();
+    const port = portOf(
+      () => goal,
+      [
+        () => {
+          goal = view({ activation: 'disarmed' });
+          return Promise.resolve(true);
+        },
+      ],
+    );
+    expect(await driveGoalRound(() => logOf(SETTLED).events, port)).toBeUndefined();
+    expect(port.order).toEqual(['flush', 'wait']);
+  });
+
+  it('等的這段時間日誌上開了一輪（結算通知喚醒的那一輪還沒收）：重來一圈讀到還在跑，不排', async () => {
+    const events: (readonly [string, unknown])[] = [...SETTLED];
+    const port = portOf(
+      () => view(),
+      [
+        () => {
+          events.push(['turn/start', { kind: 'subagent-settled' }]);
+          return Promise.resolve(true);
+        },
+      ],
+    );
+    expect(await driveGoalRound(() => logOf(events).events, port)).toBeUndefined();
+    expect(port.order).toEqual(['flush', 'wait']);
+  });
+
+  it('輪數到頂也先等、再判：等過重來，沒東西可等了才記 blocker', async () => {
+    const port = portOf(() => view({ maxGoalRounds: 2, roundsStarted: 2 }), [true]);
+    expect(await driveGoalRound(() => logOf(afterCreate(2)).events, port)).toBeUndefined();
+    expect(port.order).toEqual(['wait', 'wait', `block:${ROUND_LIMIT_BLOCK_CODE}`]);
+  });
+
+  it('輪數到頂、沒有東西可等：照今天直接 block，不補檢查點', async () => {
+    const port = portOf(() => view({ maxGoalRounds: 2, roundsStarted: 2 }));
+    await driveGoalRound(() => logOf(afterCreate(2)).events, port);
+    expect(port.order).toEqual(['wait', `block:${ROUND_LIMIT_BLOCK_CODE}`]);
+  });
+
+  it('排不出來的（沒有目標、已暫停、沒授權）不等', async () => {
+    const port = portOf(() => view({ activation: 'disarmed' }), [true]);
+    expect(await driveGoalRound(() => logOf(SETTLED).events, port)).toBeUndefined();
+    expect(port.order).toEqual([]);
+  });
+
+  it('等的時候 signal 舉起（收線）：放手，不排也不記 blocker', async () => {
+    const controller = new AbortController();
+    const run = portOf(
+      () => view(),
+      [
+        () => {
+          controller.abort();
+          return Promise.resolve(true);
+        },
+      ],
+    );
+    expect(
+      await driveGoalRound(() => logOf(SETTLED).events, run, undefined, controller.signal),
+    ).toBeUndefined();
+    expect(run.order).toEqual(['flush', 'wait']);
+
+    const second = new AbortController();
+    const block = portOf(
+      () => view({ maxGoalRounds: 2, roundsStarted: 2 }),
+      [
+        () => {
+          second.abort();
+          return Promise.resolve(false);
+        },
+      ],
+    );
+    expect(
+      await driveGoalRound(() => logOf(afterCreate(2)).events, block, undefined, second.signal),
+    ).toBeUndefined();
+    expect(block.order).toEqual(['wait']);
+  });
+
+  it('等的時候拋錯：說一聲、當作沒等過，照常往下', async () => {
+    const port = portOf(() => view(), [() => Promise.reject(new Error('壞掉了'))]);
+    const round = await driveGoalRound(() => logOf(SETTLED).events, port);
+    expect(round?.round).toBe(1);
+    expect(port.warnings).toHaveLength(1);
+    expect(port.warnings[0]).toContain('壞掉了');
+  });
+
+  it('port 沒給 waitForChildren（CLI、沒有背景 host）：與以前逐字相同', async () => {
+    const port = portOf(() => view());
+    delete (port as { waitForChildren?: unknown }).waitForChildren;
+    expect((await driveGoalRound(() => logOf(SETTLED).events, port))?.round).toBe(1);
+    expect(port.order).toEqual(['flush']);
   });
 });

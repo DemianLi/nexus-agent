@@ -1,0 +1,212 @@
+{
+  "id": "2407.00215",
+  "title": "LLM Critics Help Catch LLM Bugs",
+  "topic": "T5",
+  "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "OpenAI 以 RLHF 在 GPT-4 系列上訓練專門挑程式碼錯誤的 critique 模型 CriticGPT：輸入（問題、答案），輸出逐段引用答案並指出問題的評論；訓練資料靠承包商刻意植入隱微 bug（tampering）來提供已知的參考錯誤，再用 PPO 與推論期的 Force Sampling Beam Search（FSBS）調整「抓得全」與「少幻覺」的取捨。在 ChatGPT 真實 RLHF 資料上，它的 critique 比承包商自己寫的更常被偏好（自然 bug 約 63%），人機合作則在完整度與幻覺之間越過純模型的 Pareto 前緣。",
+  "problem": "RLHF 的上限是人類評估模型輸出的能力：模型越強、錯誤越隱微，標註員越難看出問題，而評估中的系統性缺陷一旦被強力最佳化，可能訓練出危險的 policy。scalable oversight（訓練模型幫人評估模型）先前的實證多停在玩具設定（例如 QuALITY 閱讀測驗的選擇題、辯論），還沒在真實助理任務上證明有用。作者選擇經濟價值最高、也最「可判對錯」的領域：寫程式。另外，若直接在未修改的答案上蒐集 critique 偏好資料會有四個問題：偏好受風格影響而高估模型；承包商難以驗證晦澀的主張；承包商看不出 critique 漏掉了什麼；很多答案本來就沒有嚴重錯誤、訓練價值低。",
+  "core_idea": "沿用 Saunders et al.（2206.05802）的設定，訓練一個 autoregressive policy，把 (question, answer) 映射成指出錯誤的文字 critique，但改用 RLHF、更大的模型與真實資料。關鍵是 tampering：由人把隱微 bug 植入 ChatGPT 的答案、寫下 bug 說明，再由同一人為多份 critique 評分。因為評分者知道正確答案（參考 bug），評分一致率較高，reward model（RM）也因此較好。RM 同時用在 PPO 訓練與推論期搜尋（FSBS），把 critique 的 precision／recall 取捨變成部署時可以調的旋鈕，不必重新訓練。它的定位是「幫人抓錯」，不是「讓模型自己改錯」。",
+  "method": {
+    "輸入輸出與格式": "輸入是一組 (question, answer)。輸出是純文字 critique，由多段「highlight＋comment」組成：highlight 是用 markdown 程式碼區塊（以 ``` 開頭）引用答案裡的一段，後面接一段說明該段有什麼錯的評論（例見 Figure 2 與 §7.13）。一份 critique 可以包含多個 highlight。",
+    "資料來源與前處理（§2.1.4）": "幾乎所有訓練與評估輸入都來自 OpenAI 的 RLHF pipeline。以啟發式篩選：模型回應依行數計至少 50% 是 Python 才收；取回應中最大的程式碼區塊當作 answer，其他文字丟掉。資料多半很短，tampered 資料的 answer 平均約 396 token、第 95 百分位 660 token（Table 1）。",
+    "Step 0 tampering（§2.2.1）": [
+      "承包商修改 ChatGPT 寫的答案、植入隱微 bug，並把每個 bug 的說明寫成「假裝在 code review 時抓到它」的口吻。",
+      "對抗式蒐集：承包商可以使用一個 LLM critic，並被要求確認它在 3 次取樣中至少漏掉 1 次（這條沒有強制執行）。蒐集期間 critic 更新了兩次，所以訓練資料大半是針對 ChatGPT 或早期 CriticGPT 的對抗樣本。",
+      "植入完成後，同一位承包商接著對該份被竄改答案的 critique 做比較與評分。",
+      "為了確認植入的 bug 不是顯而易見，另外訓練了判別「有沒有被竄改」的 discriminator：小模型很難分辨，且隨規模平滑進步（§7.7）。",
+      "另外也收了一些沒有參考 bug 的未修改資料。整體訓練分佈比較接近 Human Inserted Bugs。"
+    ],
+    "critique 比較任務與評分表（§2.1、§2.2.3、§7.4 Table 2）": [
+      "每個任務同時呈現 4 份 critique，評分者看不到來源。訓練資料的組成是 3 份 LLM critique，加上 1 份由承包商自己的 bug 說明組成的「gold critique」。",
+      "每份 critique 用 1–7 分評以下項目：是否點出指定的那個 bug（CBI，critique-bug inclusion，每個植入的 bug 分開評）；是否漏掉任何明確且嚴重的問題（comprehensiveness）；是否含有 ≥1 個 nitpick；是否含有 ≥1 個 FAKE PROBLEM（即 hallucinated bug）；是否簡潔；以及整體相對好壞。另外要寫理由。",
+      "品質控制：隨機抽任務給第二位較資深的 QCer 複查，每位承包商被複查的比例中位數是 14%；另開 Slack 頻道答疑，並提供每題語意與邊界的補充說明。",
+      "評估時，評分者會看到原始的 bug 說明（植入時寫的，或第一次被抓到時寫的）當作參考；有參考時，評分者之間的一致率較高（§7.5）。",
+      "承包商評自己寫的 critique 時分數普遍偏高，所以評估時確保沒有人評到自己的 critique。"
+    ],
+    "RLHF 訓練（§2.2、§2.2.4）": [
+      "Step 1：對每組 (question, answer) 取樣多份 critique。",
+      "Step 2：承包商依上面的評分表評分。",
+      "Step 3：訓練 RM 預測人類對「整體品質」的排序。",
+      "Step 4：用 PPO 對 RM 最佳化 policy。",
+      "Step 5：推論期用 FSBS。",
+      "所有 CriticGPT 與 ChatGPT（policy 與 RM）都從同一個 GPT-4 系列 checkpoint 初始化。",
+      "RM 用 ChatGPT 與 CriticGPT 的混合資料訓練，混合比例以 CriticGPT 驗證集表現為準：全部 critique 比較資料，加上算力預算允許的最多 ChatGPT 資料。",
+      "CriticGPT 的微調算力比 ChatGPT 少；PPO 的 prompt 分佈只含 RM 資料集中要求寫 critique 的 prompt。"
+    ],
+    "FSBS（§2.3、§7.1）": [
+      "1. Highlight 強制取樣：在 critique 後面接上字串 ```，強迫模型開始引用答案的一段，取樣 n=4 個接續。",
+      "2. 用 RM 分數保留前 k=2 個。",
+      "3. 把保留的候選去掉 EOS；如果最後一段沒有 highlight 就刪掉那段，再接一次 ``` 強迫產生下一則評論。",
+      "4. 重複共 d=4 輪。",
+      "5. 從所有輪次產生的候選中（共 n×[k×(d−1)+1] = 28 份），選出使 rm_score + LENGTH_MODIFIER × num_highlights 最大的一份。",
+      "LENGTH_MODIFIER 試了 4 個值，分別對應搜尋中 critique 長度的第 10、25、50、75 百分位。對 ChatGPT 大約是平均 4、5、6、7 個 highlight；對較精簡的 RL 模型是 2、3、4、5 個。",
+      "文中未特別說明時，「CriticGPT」指 RL＋FSBS、第 50 百分位（平均約 4 個 highlight）。"
+    ],
+    "評估設計（§2.1.2–§2.1.4）": [
+      "兩個評估集：Human Inserted Bugs 是留出不參與訓練的 tamper 樣本；Human Detected Bugs 是 ChatGPT 標註流程中，原評分者給了低分、並明確指出問題的程式任務（比較自然，但對人也比較容易）。",
+      "同一場比較內的分數差轉成偏好率，再用 BFGS 擬合成對模型得到 Elo：P(A 勝 B) = 1 / (1 + 10^((R_B − R_A)/400))。平手算半勝半負，信賴區間用無母數 bootstrap。",
+      "人類基準：從 ChatGPT 標註池找來的承包商，自報 Python 經驗中位數 5 年，每題花費中位數約 50 分鐘；可以執行程式、查手冊，也可以拒答（拒答率 4%）。",
+      "Human+CriticGPT：先把 LLM critique 預填進承包商的回答欄，承包商可以保留、刪除、改寫或新增（Figure 4）。"
+    ],
+    "延伸實驗": [
+      "§3.6：對大量被第一位標註員評為「flawless」的 ChatGPT 訓練資料（多數不是程式），用 CriticGPT（RL only）各取樣一份 critique；critique 有指出問題時，請人帶著 critique 重新審查。",
+      "§3.5 消融：用較接近 CriticGPT 的訓練長度與超參數，以 ChatGPT 資料子集重訓 RM 與 policy，得到「ChatGPT (less training)」，checkpoint 以驗證集上 inserted bug 的 CBI 挑選；另訓練只用未修改資料（不含 tamper）的 CriticGPT，只用 GPT-4 自動評估。",
+      "§7.7：用好／壞程式碼配對訓練二元 discriminator，並另加多來源資料，用來量 Discriminator-Critique Gap。",
+      "§7.8：在類似 DeepMind Code Contests 的題目上，蒐集跑得過與跑不過測試的解答配對，讓承包商在 20 分鐘內、不能執行程式的條件下，參考 critique 判斷哪份正確。"
+    ],
+    "論文沒給、重做時要自己補的": "提示詞內容（§7.3 只說所有模型共用同一份人工調過的提示）；模型大小（只以占 GPT-4 預訓練算力的比例表示）；PPO 與 RM 的超參數、RM 資料混合比例；資料筆數（只給 token 總量，例如 tampered 資料的 model critique 共 6.8M token、human critique 916.0K token）；LENGTH_MODIFIER 的實際數值。資料集與模型都沒有公開（§7.11）。",
+    "重做需要的元件": "一個能產生 (question, code answer) 的來源；tampering 標註介面（植入 bug＋寫說明＋對抗式檢查 critic 是否漏抓）；上面那份 7 點評分表與 4 選排序介面；RM 與 PPO 訓練堆疊；支援「強制前綴＋RM 評分」的 beam search 取樣器；以及一批評估用、有參考 bug 說明的留出資料。"
+  },
+  "assumptions": [
+    "幫承包商抓到更多 bug，就會產生更好的 RLHF 資料，進而訓練出更好的 policy。作者明說沒有驗證這個因果鏈（§5）。",
+    "人工植入的隱微 bug 足以作為自然 LLM 錯誤的代理；兩者分佈不同是作者自承的限制。",
+    "錯誤可以定位在答案的某一段並用一段話說明：critique 格式本身就是「引用片段＋評論」。",
+    "程式碼是「crisp」的領域，評分者判得出 critique 的主張是真是假；而且評分時有參考 bug 說明可以對照。",
+    "在有已知參考 bug 的資料上，評分一致率較高，所以 RM 較好、RL 才有效（§3.5 用這點解釋不含 tamper 時表現差）。",
+    "FSBS 用 RM 分數加長度獎勵做搜尋時，不會被 RM 的弱點利用；論文沒有討論搜尋期的 reward over-optimization。",
+    "輸入短、單檔、單回合；不涉及多檔、repo 導覽或多步互動。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Human Inserted Bugs（留出的 tamper 樣本）",
+      "Human Detected Bugs（ChatGPT 標註流程中被原評分者抓到明確問題的程式任務）",
+      "被評為 flawless 的 ChatGPT 訓練資料子集（多數不是程式，§3.6）",
+      "類 DeepMind Code Contests 的「跑得過／跑不過測試」解答配對（§7.8，附錄）",
+      "tamper 與否的二元判別任務（§7.7，附錄）"
+    ],
+    "metrics": [
+      "CBI（critique-bug inclusion，是否點出指定 bug）",
+      "comprehensiveness（是否沒漏掉明確且嚴重的問題）",
+      "nitpick 率、hallucinated bug（FAKE PROBLEM）率",
+      "conciseness",
+      "整體評分的成對偏好率與 Elo（bootstrap 信賴區間）",
+      "評分者間一致率（§7.5）",
+      "承包商因 critique 而大幅下修評分的比例（§3.6）",
+      "有 ground truth 時評審選中正確解答的準確率（§7.8）"
+    ],
+    "baselines": [
+      "Prompted ChatGPT（正式版，同一份提示）",
+      "ChatGPT (less training)：用 ChatGPT 資料子集、以接近 CriticGPT 的設定重訓",
+      "未受協助的人類承包商",
+      "Human+CriticGPT 人機合作",
+      "CriticGPT（RL only）與 CriticGPT（RL＋FSBS）",
+      "ChatGPT＋FSBS（搭配 critique RM，§7.1 Figure 9）",
+      "不同預訓練規模的模型家族（以占 GPT-4 算力的比例表示，§3.2）",
+      "不含 tamper 資料訓練的 CriticGPT（只有自動評估）",
+      "tamper discriminator"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在自然產生的 bug（Human Detected Bugs）上，CriticGPT 寫的 critique 比承包商自己寫的更常被另一位承包商偏好。",
+      "numbers": "CriticGPT vs Human 勝率 62.8%（區間 60.5–65.1）；摘要寫成 63%。",
+      "section": "Abstract、§7.9 Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在人工植入的 bug 上，兩個 LLM critic（prompted ChatGPT 與 CriticGPT）抓到的植入 bug 都明顯多於付費做 code review 的承包商，模型 critique 相對人類 critique 的偏好率超過八成。",
+      "numbers": "偏好率 >80%；CBI 的實際比例只畫在 Figure 1，文字沒有給數字。",
+      "section": "§1、§3.1、Figure 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "critique 專用的 RL 訓練在各個預訓練規模上都優於 prompted ChatGPT；只靠放大預訓練要追上 CriticGPT（RL only）在 inserted bug 上的漏抓率，需要大幅增加算力。",
+      "numbers": "粗略外推約需 30 倍預訓練算力。",
+      "section": "§3.2、Figure 5",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "模型 critique 的 nitpick 與 hallucinated bug 比例遠高於人類；CriticGPT 比 ChatGPT 明顯降低，人機合作介於兩者之間。",
+      "numbers": "文字沒有給比例（只在 Figure 7）；在 Detected Bugs 上 CriticGPT vs ChatGPT 的整體偏好勝率為 62.7%（59.6–65.8）。",
+      "section": "§3.3、Figure 7、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "FSBS 透過調整長度獎勵，能在 comprehensiveness 與 spurious claims 之間畫出 Pareto 曲線，部署時可以選擇取捨點，不必重訓；把同樣的 RM 搜尋套在 ChatGPT 上能提高完整度，但到不了高 precision。",
+      "numbers": "每題 28 個候選（n=4、k=2、d=4）；4 個 LENGTH_MODIFIER 對應第 10／25／50／75 百分位長度；RL 模型平均 2–5 個 highlight，ChatGPT 平均 4–7 個。",
+      "section": "§2.3、§3.4、§7.1、Figure 8、Figure 9",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Human+CriticGPT 越過純模型的 Pareto 前緣：比人類單獨寫的更完整，也比模型單獨寫的少幻覺與 nitpick；但相對 CriticGPT 單獨，並沒有提高 comprehensiveness。",
+      "numbers": "Detected Bugs 上 Human+CriticGPT vs Human 勝率 60.4%（58.0–62.8）。",
+      "section": "§3.3、§3.4、Figure 6、Figure 8、Table 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "tamper 資料是關鍵：不含 tamper 的 CriticGPT 在自動評估下表現明顯較差；與訓練設定相近的 ChatGPT (less training) 相比，CriticGPT（RL only）在 Human Detected Bugs 上 precision 與 recall 都較高。",
+      "numbers": "不含 tamper 的版本文字只寫「嚴重落後」，沒有給數字，也沒有人工評估。",
+      "section": "§3.5、Figure 8、§7.6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "critic 能推廣到程式以外：在被評為 flawless、且多數不是程式的 ChatGPT 訓練資料上，critique 讓人找出足以大幅下修評分的問題；用 critique RM 排序優先審查的資料，還能提高抓到問題的機率並降低幻覺。",
+      "numbers": "critique 指出問題的樣本中，24% 被承包商認定為大幅下修；沒有 critique 時，第二位承包商大幅下修的比例只有 6%。",
+      "section": "§3.6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "沒有量最終 policy：理想的評估是比較有無 critique 協助的 RLHF 訓練出來的寫程式 policy，但太貴，所以只假設「抓到更多 bug → 資料更好 → policy 更好」；critic 也可能引入新的、一致的標註偏誤，反而傷害 RLHF（§5）。",
+    "植入 bug 的分佈與自然 LLM 錯誤差很多；建議未來改由模型來植入（§5、§7.11）。",
+    "critique 只是 recursive reward modeling 的第一步，不知道何時該加下一步（§5）。",
+    "評估用的程式碼片段很短，沒有多檔支援、沒有 repo 導覽，不代表未來的 agent（§5）。",
+    "nitpick 與 hallucinated bug 的絕對比例仍然很高；幻覺可能誤導人犯下原本不會犯的錯（Abstract、§5）。",
+    "分散在多行、難以定位的真實 bug 沒有研究（§5）。",
+    "單步 critique 可能比 consultancy、debate 這類多步互動流程弱（§5）。",
+    "有雙重用途風險，攻擊者可以拿來找漏洞；但作者認為還不足以改變資安局勢（§5）。",
+    "有 ground truth 的競程實驗結果大致是負面的：critic 沒有顯著幫助人選出正確解答（§7.8、Figure 14）。",
+    "discriminator 分數對 critic 表現的預測力不高，DC gap 留待未來研究（§7.7）。",
+    "RL-only CriticGPT 在 Human Detected Bugs 上可能比 ChatGPT 不完整：它比較保守，而且算力也比較少（§3.4、§7.6）。",
+    "資料集沒有公開（§7.11）；§7.13 的範例顯示模型有時會誇大問題的嚴重程度。"
+  ],
+  "limitations_observed": [
+    "評分者手上有答案：評估時評分者看得到參考 bug 說明，所以 CBI 衡量的其實是「單一已知 bug 的 recall」，而且是由知道答案的評審判定。真正的標註情境是沒人知道 bug 在哪，§7.5 也顯示沒有參考時，評分者對整體偏好的一致率明顯較低。所以「critic 幫人抓到更多 bug」是在有 oracle 輔助評審的條件下量到的，搬到無參考的正式標註流程時，效果需要打折。",
+    "Human Inserted Bugs 可能有選擇偏差：留出的評估 tamper 來自同一套對抗式流程，要求 critic 在 3 次取樣中至少漏抓 1 次，而作者說相當多資料是針對 ChatGPT、也有相當多是針對早期 CriticGPT 蒐集的（§2.2.1），所以對 ChatGPT 基準可能不利。不過這條門檻寬、沒有強制執行，又有一部分是針對 CriticGPT 前身蒐集的，偏差的方向與大小無法從文中判斷。換到自然分佈的 Human Detected Bugs，RL-only CriticGPT 反而比 ChatGPT 不完整（§3.4），也學會省略 tamper 分佈中少見的錯誤類型（§7.6）；headline 用的 CriticGPT 是 RL＋FSBS（28 個候選加 RM 排序），自然分佈上的改善有一部分來自推論期搜尋，而不是 critique 訓練本身。",
+    "偏好率容易被長度與風格推高：作者自己說偏好率受風格影響（§2.2.2），也說 critique 越長 CBI 越高（§2.1.1、§3.4）。人類基準每題雖然花 50 分鐘，寫的評論卻比較少（§3.1），「模型勝過人類 63%／>80%」有多少來自篇幅，論文沒有控制長度來比較。",
+    "同一個 63% 在兩個地方指的是不同的比較：摘要的 63% 是「模型 critique 對人類 critique」（Table 3 的 62.8%），OpenAI 官方部落格則寫成「CriticGPT 對 ChatGPT 在自然 bug 上 63%」（Table 3 的 62.7%）。部落格開頭那句「有 CriticGPT 協助的人 60% 的時候勝過沒協助的人」寫得含糊，容易讀成抓錯正確率；部落格正文與 Table 3 都說明這是第二位承包商的偏好勝率（60.4%）。Table 3 表頭標的是「69% CI」，看起來像筆誤，信賴水準不明。引用時要回到 Table 3 核對比較對象。",
+    "最關鍵的消融沒有人工評估也沒有數字：「不含 tamper 的 CriticGPT 嚴重落後」只用 GPT-4 自動評估，文字只寫定性結論（§3.5）。自動評估器本身是 GPT-4 系列，和被評的模型同源，而這個消融正好支撐論文最核心的方法主張（tampering 必要）。",
+    "§3.6 的 24% 對 6% 不是對照實驗：24% 的分母是「critique 指出問題」的樣本，而且審查者看得到 critique；6% 是沒有 critique、未經篩選的第二位評分者重評比例。兩者的分母與條件都不同，也沒有確認下修是否正確。論文自己承認 hallucinated bug 會誤導人，所以這 24% 裡可能混有被幻覺帶偏的下修；分母大小也沒有給。",
+    "唯一有 ground truth 的直接量測是負面結果：§7.8 在有測試可判對錯的競程題上，critic 沒有顯著幫助人選出正確解答。這個結果只放在附錄，但它直接挑戰正文的核心假設（抓到更多 bug → 評審更準）。正文的正面結果全部是用 CBI 或偏好率這類間接指標量的。",
+    "放在 T5 的角度看，這篇沒有任何修正迴圈：critique 的消費者是人類標註員，全文沒有「critique 回饋給生成器、再改寫答案」的實驗，也沒有和執行測試這類外部驗證訊號比較（人類基準可以執行程式，CriticGPT 則是純讀程式碼）。critic 的輸出能否像 Self-Debug（2304.05128）或 Reflexion 那樣驅動修正，這篇沒有回答。",
+    "RM、PPO 與評估共用同一個承包商群體與同一份評分表：policy 對 RM 最佳化、FSBS 又對同一個 RM 搜尋，最後由同一群承包商評分。承包商群體若有一致的偏好（例如偏好某種語氣或篇幅），會一路被放大，而評估看不出來。"
+  ],
+  "framework_role": "T5「訓練得到的 critique 模型」這一支的代表作：示範如何把「找錯」單獨訓練成一個 critic 元件，以及如何量它（CBI、comprehensiveness、nitpick／hallucination 率）。但作者在 §4 明確把本文和 self-correction 分開：scalable oversight 的目標是讓人判得更準，不是讓模型變強。全文沒有 critique 回饋給生成器的修正迴圈，修正只在「人工標註 → RLHF → 下一版模型」這一層間接發生，而且最終效果沒有被量過。放進框架時，它提供的是 T5 前半段（偵測並用自然語言定位錯誤）的元件設計與三個可遷移的經驗：(1) 用植入已知錯誤的資料訓練與評估 critic，評分才可靠；(2) 用 RM 引導的受限搜尋把 critic 的 precision／recall 做成部署期旋鈕；(3) critic 的幻覺會誤導下游，要搭配人或驗證器。它的產出主要流向評估（T7），而不是回寫對話狀態（T2）；而且處理的是單一 (question, answer) 的程式碼，不是多輪對話軌跡。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "critic 的輸出直接進評估流程：Human+CriticGPT 模式把 LLM critique 預填進承包商的評估回答，承包商保留、刪除或改寫後形成最終的評估 critique（§2.1.3、Figure 4）；§3.6 用 CriticGPT 重新篩檢被評為 flawless 的 ChatGPT 訓練資料，再交給人審；也用 critique RM 的分數排序哪些資料優先送審。這些都是「critique／修正紀錄回流評估」的實作，只是這裡的評估服務的是 RLHF 標註，而不是 agent 的離線評估。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "OpenAI 官方部落格〈Finding GPT-4’s mistakes with GPT-4〉（2024-06-27，作者 Nat McAleese、Maja Trębacz）介紹 CriticGPT，並表示他們正開始把 CriticGPT 類模型整合進 RLHF 標註流程，讓 AI trainer 得到明確的 AI 協助；結尾說計劃擴大並投入實務。這是意圖聲明，不是部署完成的證據。原網址 https://openai.com/index/finding-gpt4s-mistakes-with-gpt-4/ 直接存取回 403，內容以 Wayback 快照核對：https://web.archive.org/web/20240627171933/https://openai.com/index/finding-gpt4s-mistakes-with-gpt-4/"
+    ],
+    "assessment": "只有 OpenAI 官方「開始整合進 RLHF 標註流程」的意圖聲明，未見部署證據。論文 §3.6 用 CriticGPT（RL only）篩檢 ChatGPT 正式訓練資料屬於研究實驗，不算部署。已查過之後的 OpenAI GPT-4o System Card（2024-08-08，https://cdn.openai.com/gpt-4o-system-card.pdf）與 o1 System Card（2024-12-05，https://cdn.openai.com/o1-system-card-20241205.pdf），兩者全文都沒有提到 CriticGPT 或 critic 模型；沒提到不等於沒用，但也就無法把它算成可查證的正式採納。模型、資料與提示詞都沒有對外釋出，外部無法採用。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "不公開：資料來自 ChatGPT 正式訓練資料，作者明說沒有釋出（§7.11）；CriticGPT、RM 與提示詞內容也沒有釋出。論文有足夠細節重做流程設計（評分表、FSBS 參數、Elo 公式），但沒有 GPT-4 等級的 RLHF 堆疊與大量承包商，無法重現數字。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是「訓練出來的 critique 模型」最有代表性的工業實證，tampering 資料、FSBS 的 precision／recall 旋鈕與「critic 幻覺會誤導人」的量測，對設計 T5 的偵錯元件很有參考價值；但作者自己在 §4 把它定位為 scalable oversight，全文沒有修正迴圈，唯一有 ground truth 的量測（§7.8）還是負面的，所以對 T5 是重要參考而非必讀，對 T7（評估輔助）的價值反而更直接。",
+  "related": [
+    "2206.05802",
+    "2310.01798",
+    "2211.03540",
+    "1805.00899",
+    "1811.07871",
+    "2402.06782",
+    "2304.05128",
+    "2212.08073",
+    "2203.02155",
+    "2211.03622"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

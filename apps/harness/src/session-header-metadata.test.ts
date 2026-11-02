@@ -1,0 +1,693 @@
+/**
+ * 會話日誌 header 的建置中繼資料（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ *
+ * 卡上四條驗收各有一組：
+ *
+ * 1. **設定裡放一個長得像金鑰的值，header 與雜湊都不洩漏它**——量的是寫上磁碟的 header 原文（交付物），不是投影函式的
+ *    回傳值；雜湊另外驗「不是無鍵的 sha256」與「換一把鍵就換一個值」。
+ * 2. **續接後 header 的建置版本仍是最初那個**——把磁碟上的 header 換成一個這台機器不可能算出來的版本，續接之後讀原文。
+ *    CLI 的 `--resume` 與 serve 重開後的續接各一條（後者 #1049 補上：serve 的續接是另一條路）。
+ * 3. **`--dump-config` 與 header 的插件清單一致**——同一組 env 與 `--patch` 跑一次 `--dump-config`，YAML 讀回來投影後逐字比。
+ * 4. **舊版 header 讀得出來，缺的欄位標「—」**——讀的一側（離線掃描）的投影與報表。
+ *
+ * 另有一組量「home 落在 `--workspace` 底下就不用鍵」：單元一條，CLI 與 serve 兩個入口各一條（#1049，量入口真的把
+ * `--workspace` 傳下去了）。
+ *
+ * **不靠跑測試的機器有沒有 `.git`**：產品路徑上的那兩條只驗建置版本那一格的形狀（字串或 `null`），值的取法與「取不到」的
+ * 降級在 `eval/result-file.test.ts` 的 `readGitProvenance` 與下面注入建置版本的那幾條。
+ *
+ * **零憑證、零外部連線**：假 key、`.invalid` 主機或本機假端點。
+ */
+
+import { createHash } from 'node:crypto';
+import { createServer } from 'node:http';
+import type { Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
+
+import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import type { StoredSessionHeader } from '@nexus/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { parse as parseYaml } from 'yaml';
+
+import { runCli } from './cli.js';
+import { foldTurn, serveClient } from './fixtures.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
+import { legacyTwoFilePathsIn, projectKey, sessionPathsIn } from './jsonl-session-store.js';
+import { DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
+import type { ConfigEntry } from './plugin-config.js';
+import { runServe } from './serve.js';
+import type { RunningServe } from './serve.js';
+import { LEGACY_TWO_FILE_FORMAT_VERSION, sessionHeaderOf } from './session-files.fixture.js';
+import {
+  CONFIG_HASH_KEY_FILE,
+  CONFIG_HASH_PREFIX,
+  configHashOf,
+  formatSessionHeaderMetadata,
+  pluginRowsOf,
+  readSessionHeaderMetadata,
+  resolveSessionHeaderMetadata,
+} from './session-header-metadata.js';
+import { stableStringify } from './stable-stringify.js';
+
+/** 長得像金鑰的值：`sk-` 開頭、夠長、夠亂。任何一處原文出現它就是漏了。 */
+const CANARY = 'sk-nexus-canary-1025-9f8e7d6c5b4a39281706f5e4d3c2b1a0';
+
+const temporary: string[] = [];
+let running: RunningServe | undefined;
+
+afterEach(async () => {
+  await running?.close();
+  running = undefined;
+  vi.unstubAllEnvs();
+  for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+function privateDir(prefix: string): string {
+  const root = mkdtempSync(join(tmpdir(), prefix));
+  temporary.push(root);
+  chmodSync(root, 0o700);
+  return root;
+}
+
+function writePatch(dir: string, content: string): string {
+  const path = join(dir, `patch-${String(readdirSync(dir).length)}.yml`);
+  writeFileSync(path, content);
+  chmodSync(path, 0o600);
+  return path;
+}
+
+/**
+ * 把金鑰樣的值藏進 `live-model` 那一列的設定：型錄條目的 chat template 參數（任意字串都收），`baseUrl` 給呼叫端決定
+ * （CLI 用一個帶著它的 `.invalid` 主機名，serve 用本機假端點）。
+ */
+function canaryPatch(baseUrl: string): string {
+  return [
+    '- id: live-model',
+    '  config:',
+    `    baseUrl: '${baseUrl}'`,
+    `    modelId: '${DEFAULT_LIVE_MODEL_ID}'`,
+    '    retryPolicy: { mode: normal, maxRetries: 0 }',
+    '    models:',
+    `      - id: '${DEFAULT_LIVE_MODEL_ID}'`,
+    '        contextWindow: 700045',
+    '        maxTokens: 16384',
+    '        compat:',
+    '          chatTemplateKwargs:',
+    `            api_token: '${CANARY}'`,
+    // 關掉一列可少掛的：清單一致要連 `disabled` 一起比，出貨清單上一列停用的都沒有。
+    '- id: todo',
+    '  disabled: true',
+    '',
+  ].join('\n');
+}
+
+/** 讀 home 底下那一把鍵。 */
+async function readKey(home: string): Promise<Buffer> {
+  const record = JSON.parse(await readFile(join(home, CONFIG_HASH_KEY_FILE), 'utf8')) as {
+    secret: string;
+  };
+  return Buffer.from(record.secret, 'base64url');
+}
+
+/**
+ * 跑一次 `--dump-config`，印出來的 YAML 讀回成條目清單。**要跟被量的入口同一個**：serve 多疊一層專屬出貨清單
+ * （`cordis.serve.yml`，#669），header 記的是各入口自己啟動會掛的那份。
+ */
+async function dumpEntries(
+  home: string,
+  patch: string,
+  via: 'cli' | 'serve' = 'cli',
+): Promise<ConfigEntry[]> {
+  const printed: string[] = [];
+  if (via === 'serve') {
+    await runServe({
+      argv: ['--dump-config', '--patch', patch, '--port', '0'],
+      log: (line) => printed.push(line),
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+    return parseYaml(printed.join('\n')) as ConfigEntry[];
+  }
+  await runCli({
+    argv: ['--dump-config', '--patch', patch],
+    env: { [HARNESS_HOME_ENV]: home },
+    input: new PassThrough(),
+    output: new PassThrough(),
+    printer: { log: (line) => printed.push(line), error: () => undefined },
+  });
+  return parseYaml(printed.join('\n')) as ConfigEntry[];
+}
+
+/** 無鍵的雜湊：拿日誌的人自己算得出來的那一種。 */
+function unkeyedHash(entries: readonly ConfigEntry[]): string {
+  const digest = createHash('sha256').update(stableStringify(entries)).digest('hex');
+  return `${CONFIG_HASH_PREFIX}${digest.slice(0, 16)}`;
+}
+
+/** 一份會話的世代檔：第一行的 header 行原文（不含換行）與其後的事件本文。 */
+async function generationOf(
+  directory: string,
+  id: string,
+): Promise<{ headerLine: string; body: Buffer }> {
+  const bytes = await readFile(sessionPathsIn(directory, id).log);
+  const newline = bytes.indexOf(0x0a);
+  return { headerLine: bytes.toString('utf8', 0, newline), body: bytes.subarray(newline + 1) };
+}
+
+/** 寫上磁碟的 header 原文：世代檔的 header 行，與舊路徑上的墓碑（同一份 header 的另一處）。 */
+async function headerTextsOf(
+  directory: string,
+  id: string,
+): Promise<{ headerLine: string; tombstone: string }> {
+  return {
+    headerLine: (await generationOf(directory, id)).headerLine,
+    tombstone: await readFile(sessionPathsIn(directory, id).tombstone, 'utf8'),
+  };
+}
+
+/**
+ * 把一份會話換成舊兩檔（v0.5.19 以前寫的樣子）：舊路徑寫 `header`，日誌是世代檔第二行起的原樣本文；會話目錄刪掉（留著的話
+ * 兩種佈局並存，讀方拒讀）。續接時遷成這一版的世代，新的 header 行記下這份日誌的位元組數與雜湊（`migratedFrom`）。
+ *
+ * @returns 續接遷過去之後，新世代 header 行該記的 `migratedFrom`。
+ */
+async function toLegacyTwoFile(
+  directory: string,
+  id: string,
+  header: Record<string, unknown>,
+): Promise<{ bytes: number; acceptedBytes: number; sha256: string }> {
+  const { body } = await generationOf(directory, id);
+  const legacy = legacyTwoFilePathsIn(directory, id);
+  await writeFile(legacy.header, JSON.stringify(header));
+  await writeFile(legacy.log, body);
+  await rm(sessionPathsIn(directory, id).sessionDirectory, { recursive: true });
+  return {
+    bytes: body.byteLength,
+    acceptedBytes: body.byteLength,
+    sha256: createHash('sha256').update(body).digest('hex'),
+  };
+}
+
+/** 建置版本那一格的形狀：產品路徑上的值取決於跑測試的機器，只驗形狀。 */
+function expectBuildShape(header: Record<string, unknown>): void {
+  const build = header['build'] as { commit: unknown; dirty: unknown } | undefined;
+  expect(build).toBeDefined();
+  expect(build!.commit === null || typeof build!.commit === 'string').toBe(true);
+  expect(build!.dirty === null || typeof build!.dirty === 'boolean').toBe(true);
+}
+
+describe('寫的一側：投影與雜湊', () => {
+  const entries: ConfigEntry[] = [
+    { id: 'live-model', name: '#settings/live-model', config: { token: CANARY } },
+    { name: '@nexus/plugin-todo', disabled: true },
+  ];
+
+  it('插件清單只留 name、id、disabled，沒寫 id 的列沒有那一格', () => {
+    expect(pluginRowsOf(entries)).toEqual([
+      { name: '#settings/live-model', id: 'live-model', disabled: false },
+      { name: '@nexus/plugin-todo', disabled: true },
+    ]);
+    expect('id' in pluginRowsOf(entries)[1]!).toBe(false);
+    expect(JSON.stringify(pluginRowsOf(entries))).not.toContain(CANARY);
+  });
+
+  it('雜湊帶鍵：同一把鍵同一份設定同一個值，換一把鍵就換，也不是無鍵的 sha256', () => {
+    const key = Buffer.alloc(32, 1);
+    const hash = configHashOf(entries, key);
+    expect(hash).toMatch(/^hmac-sha256:[0-9a-f]{16}$/u);
+    expect(hash).not.toContain(CANARY);
+    expect(configHashOf(structuredClone(entries), Buffer.alloc(32, 1))).toBe(hash);
+    expect(configHashOf(entries, Buffer.alloc(32, 2))).not.toBe(hash);
+    expect(hash).not.toBe(unkeyedHash(entries));
+    // 設定裡任何一個值變了，雜湊就變——它描述的是整份設定，不只是清單。
+    const changed = structuredClone(entries);
+    changed[0]!.config = { token: `${CANARY}x` };
+    expect(configHashOf(changed, key)).not.toBe(hash);
+  });
+
+  it('鍵檔第一次用時建在 home 底下、只有擁有者讀得到；第二次用同一把', async () => {
+    const home = join(privateDir('nexus-hdr-home-'), 'home');
+    const env = { [HARNESS_HOME_ENV]: home };
+    const build = { commit: 'c'.repeat(40), dirty: false };
+    const cwd = process.cwd();
+    const first = await resolveSessionHeaderMetadata({
+      entries,
+      env,
+      warn: () => undefined,
+      build,
+      cwd,
+    });
+    expect(statSync(join(home, CONFIG_HASH_KEY_FILE)).mode & 0o777).toBe(0o600);
+    const second = await resolveSessionHeaderMetadata({
+      entries,
+      env,
+      warn: () => undefined,
+      build,
+      cwd,
+    });
+    expect(second.configHash).toBe(first.configHash);
+    expect(first.configHash).toBe(configHashOf(entries, await readKey(home)));
+    expect(first.build).toEqual(build);
+  });
+
+  it('鍵檔權限過寬：講一聲、只少雜湊那一格，不擋', async () => {
+    const home = privateDir('nexus-hdr-home-');
+    const keyFile = join(home, CONFIG_HASH_KEY_FILE);
+    writeFileSync(
+      keyFile,
+      `${JSON.stringify({ version: 1, secret: Buffer.alloc(32, 3).toString('base64url') })}\n`,
+    );
+    chmodSync(keyFile, 0o644);
+    const warnings: string[] = [];
+    const metadata = await resolveSessionHeaderMetadata({
+      entries,
+      env: { [HARNESS_HOME_ENV]: home },
+      warn: (message) => warnings.push(message),
+      build: { commit: null, dirty: null },
+      cwd: process.cwd(),
+    });
+    expect(warnings.join('\n')).toContain('設定雜湊的鍵檔');
+    expect('configHash' in metadata).toBe(false);
+    expect(metadata.plugins).toHaveLength(2);
+    expect(metadata.build).toEqual({ commit: null, dirty: null });
+  });
+
+  it('home 在 `--workspace` 底下：不建鍵檔、只少雜湊那一格（模型讀得到的鍵等於沒有鍵）', async () => {
+    const workspace = privateDir('nexus-hdr-ws-');
+    const home = join(workspace, 'home');
+    const warnings: string[] = [];
+    const metadata = await resolveSessionHeaderMetadata({
+      entries,
+      env: { [HARNESS_HOME_ENV]: home },
+      warn: (message) => warnings.push(message),
+      build: { commit: null, dirty: null },
+      workspace,
+      cwd: process.cwd(),
+    });
+    expect('configHash' in metadata).toBe(false);
+    expect(warnings.join('\n')).toContain('--workspace');
+    expect(readdirSync(workspace)).toEqual([]);
+  });
+});
+
+describe('讀的一側：舊版讀得出來，缺的標「—」', () => {
+  it('29 以前的 header 一格都沒有：投影是空的，報表四格都是「—」', () => {
+    // 讀回來的 header 版號已轉譯成這一版（#1856），缺的格照舊缺：判準是那一格在不在，不是版號。
+    const old: StoredSessionHeader = {
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'cli',
+      createdAt: 1,
+    };
+    expect(readSessionHeaderMetadata(old)).toEqual({});
+    expect(formatSessionHeaderMetadata(readSessionHeaderMetadata(old))).toBe(
+      '建置 — ｜模型 — ｜插件 — ｜設定雜湊 —',
+    );
+  });
+
+  it('記了但取不到（寫的時候沒有 git）是「取不到」，不是「—」', () => {
+    expect(
+      formatSessionHeaderMetadata({
+        build: { commit: null, dirty: null },
+        plugins: [{ name: 'a', disabled: false }],
+      }),
+    ).toBe('建置 取不到（未提交的改動：取不到） ｜模型 — ｜插件 1 列（停用 0） ｜設定雜湊 —');
+  });
+
+  it('記全了：短 SHA、模型型錄 id、列數與停用數、雜湊', () => {
+    expect(
+      formatSessionHeaderMetadata({
+        build: { commit: '0123456789abcdef0123', dirty: true },
+        plugins: [
+          { name: 'a', disabled: false },
+          { name: 'b', id: 'b', disabled: true },
+        ],
+        configHash: 'hmac-sha256:00112233aabbccdd',
+        modelEntryId: 'vendor/model',
+      }),
+    ).toBe(
+      '建置 0123456789ab（未提交的改動：有） ｜模型 vendor/model ｜插件 2 列（停用 1） ｜' +
+        '設定雜湊 hmac-sha256:00112233aabbccdd',
+    );
+  });
+
+  it('形狀不對的那一格當成沒記，其餘照讀', () => {
+    const header = {
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'x',
+      createdAt: 1,
+      build: { commit: 42, dirty: false },
+      plugins: [{ name: 'a', disabled: 'no' }],
+      configHash: 'hmac-sha256:00112233aabbccdd',
+      modelEntryId: 7,
+    } as unknown as StoredSessionHeader;
+    expect(readSessionHeaderMetadata(header)).toEqual({
+      configHash: 'hmac-sha256:00112233aabbccdd',
+    });
+  });
+});
+
+describe('CLI：寫上磁碟的 header', () => {
+  /** 跑一次 CLI，日誌落在 `logs` 底下；回唯一那個 run 目錄。 */
+  async function cliRun(
+    home: string,
+    logs: string,
+    argv: readonly string[],
+    lines = '/exit\n',
+  ): Promise<string> {
+    const input = new PassThrough();
+    input.end(lines);
+    await runCli({
+      argv: [...argv],
+      env: { [HARNESS_HOME_ENV]: home },
+      input,
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: () => undefined },
+    }).catch(() => undefined);
+    const entries = readdirSync(logs);
+    expect(entries).toHaveLength(1);
+    return join(logs, entries[0]!);
+  }
+
+  it('不漏金鑰樣的值；插件清單與 `--dump-config` 一致；雜湊是這台的鍵算的、不是無鍵的；假模型沒有型錄 id', async () => {
+    const home = privateDir('nexus-hdr-home-');
+    const logs = privateDir('nexus-hdr-logs-');
+    const patch = writePatch(home, canaryPatch(`https://${CANARY}.invalid/v1`));
+
+    const runDir = await cliRun(home, logs, ['--session-log', logs, '--patch', patch]);
+    const { headerLine: raw, tombstone } = await headerTextsOf(runDir, 'cli');
+    // 量的是交付物：寫上磁碟的那一行原文。header 寫在兩處（世代檔第一行與舊路徑的墓碑），兩處都量。
+    expect(raw).not.toContain(CANARY);
+    expect(raw).not.toContain('canary');
+    expect(tombstone).not.toContain(CANARY);
+    expect(tombstone).not.toContain('canary');
+    const header = JSON.parse(raw) as Record<string, unknown>;
+
+    expect(header['version']).toBe(SESSION_LOG_FORMAT_VERSION);
+    expectBuildShape(header);
+    const dumped = await dumpEntries(home, patch);
+    // 前提：金鑰樣的值真的在設定裡（驗得過、印得出來），不然上面那句「沒漏」證不了什麼。
+    expect(JSON.stringify(dumped)).toContain(CANARY);
+    expect(header['plugins']).toEqual(pluginRowsOf(dumped));
+    // 前提：清單上真的有一列停用的，上面那句才連 `disabled` 一起比到。
+    expect(header['plugins']).toContainEqual(
+      expect.objectContaining({ id: 'todo', disabled: true }),
+    );
+    expect(header['configHash']).toBe(configHashOf(dumped, await readKey(home)));
+    expect(header['configHash']).not.toBe(unkeyedHash(dumped));
+    expect('modelEntryId' in header).toBe(false);
+  });
+
+  it('帶 `--live`：root 的 header 記模型型錄 id，同樣不漏', async () => {
+    vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-header-tests');
+    const home = privateDir('nexus-hdr-home-');
+    const cwd = privateDir('nexus-hdr-cwd-');
+    const logs = privateDir('nexus-hdr-logs-');
+    const patch = writePatch(home, canaryPatch(`http://${CANARY}.invalid/v1`));
+
+    const input = new PassThrough();
+    input.end('');
+    // 一次性：端點連不上，那一輪失敗，header 照樣在第一次寫入時落地。
+    await runCli({
+      argv: ['--live', '--session-log', logs, '--patch', patch, '嗨'],
+      cwd,
+      env: { [HARNESS_HOME_ENV]: home },
+      input,
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: () => undefined },
+    }).catch(() => undefined);
+    const [runDir] = readdirSync(logs);
+    const { headerLine: raw, tombstone } = await headerTextsOf(join(logs, runDir!), 'cli');
+    expect(raw).not.toContain(CANARY);
+    expect(tombstone).not.toContain(CANARY);
+    expect(JSON.parse(raw)).toMatchObject({ modelEntryId: DEFAULT_LIVE_MODEL_ID });
+  });
+
+  it('續接：header 的建置版本、插件清單、雜湊都還是最初那一份，版本升到這一版', async () => {
+    const home = privateDir('nexus-hdr-home-');
+    const logs = privateDir('nexus-hdr-logs-');
+    const runDir = await cliRun(home, logs, ['--session-log', logs]);
+    const { type: _type, ...written } = JSON.parse(
+      (await generationOf(runDir, 'cli')).headerLine,
+    ) as Record<string, unknown>;
+    // 前提：第一次跑真的寫了這幾格。
+    expectBuildShape(written);
+    expect(written['configHash']).toMatch(/^hmac-sha256:/u);
+
+    // 換成這個行程不可能算出來的值，假裝是更早一版的程式寫的舊兩檔：續接遷成這一版的世代時要是重算了，就會蓋掉它們。
+    const original = {
+      ...written,
+      version: LEGACY_TWO_FILE_FORMAT_VERSION,
+      build: { commit: 'f'.repeat(40), dirty: false },
+      plugins: [{ name: '@nexus/最初那一列', id: 'first', disabled: false }],
+      configHash: 'hmac-sha256:feedfacefeedface',
+    };
+    const migratedFrom = await toLegacyTwoFile(runDir, 'cli', original);
+
+    await cliRun(home, logs, ['--resume', runDir]);
+
+    const after = JSON.parse((await generationOf(runDir, 'cli')).headerLine) as Record<
+      string,
+      unknown
+    >;
+    expect(after).toEqual({
+      type: 'session',
+      ...original,
+      version: SESSION_LOG_FORMAT_VERSION,
+      migratedFrom,
+    });
+  });
+
+  /**
+   * **header 記的是宣告值，不是實際掛上的樣子**（#1049 缺口 4，選了寫明而不是加一格）：啟動時才掉的列（這裡是設定驗不過）
+   * 照宣告的樣子留著，跟 `--dump-config` 一致；「這一列實際沒掛」只在啟動警告裡。哪天 header 改成記實際值，這條會紅——
+   * 那時要連 `docs/operations.md` 的說法與格式版本一起改。
+   */
+  it('啟動時才掉的列照宣告值記：header 仍是沒停用，跟 `--dump-config` 一致，掉了只在啟動警告裡', async () => {
+    const home = privateDir('nexus-hdr-home-');
+    const logs = privateDir('nexus-hdr-logs-');
+    // `todo` 的設定格式只收布林：驗不過就掉（可少掛，照樣起來），但清單上它沒有被標成停用。
+    const patch = writePatch(
+      home,
+      ['- id: todo', '  config:', "    allowParallelInProgress: 'not-a-boolean'", ''].join('\n'),
+    );
+    const errors: string[] = [];
+    const input = new PassThrough();
+    input.end('/exit\n');
+    await runCli({
+      argv: ['--session-log', logs, '--patch', patch],
+      env: { [HARNESS_HOME_ENV]: home },
+      input,
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: (line) => errors.push(line) },
+    });
+    // 前提：`todo` 真的在啟動時掉了，而且是那一條警告講的。
+    expect(errors.join('\n')).toContain('沒有掛上');
+    expect(errors.join('\n')).toContain('todo（@nexus/plugin-todo）設定驗不過');
+
+    const [runDir] = readdirSync(logs);
+    const { header } = await sessionHeaderOf(join(logs, runDir!), 'cli');
+    expect(header['plugins']).toContainEqual({
+      name: '@nexus/plugin-todo',
+      id: 'todo',
+      disabled: false,
+    });
+    expect(header['plugins']).toEqual(pluginRowsOf(await dumpEntries(home, patch)));
+  });
+
+  /**
+   * 上面那條單元測試直接把 `workspace` 交給 {@link resolveSessionHeaderMetadata}；這一條量的是**入口真的把 `--workspace`
+   * 傳下去了**（#1049 缺口 1）。入口漏傳的話守衛形同不在：鍵檔照樣建進工作區，模型讀得到也改得動它。
+   */
+  it('home 在 `--workspace` 底下：header 照寫但沒有雜湊、工作區裡沒有鍵檔，stderr 講一聲', async () => {
+    const workspace = privateDir('nexus-hdr-ws-');
+    const home = join(workspace, 'home');
+    const logs = privateDir('nexus-hdr-logs-');
+    const errors: string[] = [];
+    const input = new PassThrough();
+    input.end('/exit\n');
+    await runCli({
+      argv: ['--workspace', workspace, '--session-log', logs],
+      env: { [HARNESS_HOME_ENV]: home },
+      input,
+      output: new PassThrough(),
+      printer: { log: () => undefined, error: (line) => errors.push(line) },
+    });
+    const [runDir] = readdirSync(logs);
+    const { header } = await sessionHeaderOf(join(logs, runDir!), 'cli');
+    // 前提：header 真的寫了，其餘那幾格都在——少的只有雜湊。
+    expectBuildShape(header);
+    expect(header['plugins']).toEqual(expect.arrayContaining([expect.anything()]));
+    expect('configHash' in header).toBe(false);
+    expect(existsSync(join(home, CONFIG_HASH_KEY_FILE))).toBe(false);
+    expect(errors.join('\n')).toContain('不記設定雜湊');
+  });
+});
+
+describe('serve：寫上磁碟的 header', () => {
+  let fake: { server: Server; baseUrl: string } | undefined;
+
+  afterEach(async () => {
+    const server = fake?.server;
+    fake = undefined;
+    if (server !== undefined) await new Promise<void>((resolve) => server.close(() => resolve()));
+  });
+
+  /** 本機假端點：回一句話就收。每次的 id 都不同（同 id 的 AI 訊息會被 reducer 取代）。 */
+  async function startEndpoint(): Promise<{ server: Server; baseUrl: string }> {
+    let next = 0;
+    const server = createServer((request, response) => {
+      request.resume();
+      request.on('end', () => {
+        next += 1;
+        const frame = (payload: Record<string, unknown>): string =>
+          `data: ${JSON.stringify({
+            id: `chatcmpl-header-${String(next)}`,
+            object: 'chat.completion.chunk',
+            created: 1_790_000_000,
+            model: DEFAULT_LIVE_MODEL_ID,
+            ...payload,
+          })}\n\n`;
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.write(
+          frame({ choices: [{ index: 0, delta: { role: 'assistant', content: '好' } }] }),
+        );
+        response.write(frame({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] }));
+        response.end('data: [DONE]\n\n');
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const { port } = server.address() as AddressInfo;
+    return { server, baseUrl: `http://127.0.0.1:${String(port)}/v1` };
+  }
+
+  it('帶 `--live`：記建置、插件清單（同 `--dump-config`）、雜湊與模型型錄 id，不漏金鑰樣的值', async () => {
+    vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-header-tests');
+    fake = await startEndpoint();
+    const home = privateDir('nexus-hdr-home-');
+    const root = privateDir('nexus-hdr-logs-');
+    const patch = writePatch(home, canaryPatch(fake.baseUrl));
+    running = (await runServe({
+      argv: ['--port', '0', '--live', '--session-log', root, '--patch', patch],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+    })) as RunningServe;
+    const client = await serveClient(running);
+    const events = await client.openEvents('alpha');
+    await client.runStart('alpha', '說一句話。');
+    await foldTurn(events);
+    await events.return?.(undefined);
+    await running.close();
+    running = undefined;
+
+    const { headerLine: raw, tombstone } = await headerTextsOf(
+      join(root, projectKey(process.cwd())),
+      'alpha',
+    );
+    expect(raw).not.toContain(CANARY);
+    expect(tombstone).not.toContain(CANARY);
+    const header = JSON.parse(raw) as Record<string, unknown>;
+    expectBuildShape(header);
+    const dumped = await dumpEntries(home, patch, 'serve');
+    expect(JSON.stringify(dumped)).toContain(CANARY);
+    expect(header['plugins']).toEqual(pluginRowsOf(dumped));
+    expect(header['configHash']).toBe(configHashOf(dumped, await readKey(home)));
+    expect(header['modelEntryId']).toBe(DEFAULT_LIVE_MODEL_ID);
+  }, 60_000);
+
+  /**
+   * **serve 的續接走另一條路**（#1049 缺口 2）：不是 `--resume`，是重開之後第一次碰到那條 thread 時 `createAgent` 裡的
+   * `resumeThread`，再把 `resumedRoot` 交給落盤。所以要真的關掉一台、用同一個 home 與日誌根**另起一台**，不能拿同一個
+   * 實例假裝續接——同一個實例的那條 thread 還在記憶體裡，根本不會走 `resumeThread`。
+   */
+  it('重開 server 續接同一條 thread：header 的四格還是最初那一份，只有版本升到這一版', async () => {
+    vi.stubEnv(LIVE_API_KEY_ENV, 'nvapi-fake-key-for-header-tests');
+    fake = await startEndpoint();
+    const home = privateDir('nexus-hdr-home-');
+    const root = privateDir('nexus-hdr-logs-');
+
+    /** 起一台新的 server、在 alpha 說一句、等那一輪收掉、關掉。 */
+    async function sayOnFreshServer(lines: string[]): Promise<void> {
+      running = (await runServe({
+        argv: ['--port', '0', '--live', '--session-log', root],
+        log: (line) => void lines.push(line),
+        env: { [HARNESS_HOME_ENV]: home },
+      })) as RunningServe;
+      const client = await serveClient(running);
+      const events = await client.openEvents('alpha');
+      await client.runStart('alpha', '說一句話。');
+      await foldTurn(events);
+      await events.return?.(undefined);
+      await running.close();
+      running = undefined;
+    }
+
+    await sayOnFreshServer([]);
+    const directory = join(root, projectKey(process.cwd()));
+    const { type: _type, ...written } = JSON.parse(
+      (await generationOf(directory, 'alpha')).headerLine,
+    ) as Record<string, unknown>;
+    // 前提：第一台真的寫了這四格。
+    expectBuildShape(written);
+    expect(written['configHash']).toMatch(/^hmac-sha256:/u);
+    expect(written['modelEntryId']).toBe(DEFAULT_LIVE_MODEL_ID);
+
+    // 換成這個行程算不出來的值、換成舊兩檔：第二台遷成這一版的世代時要是重算並寫回，就會蓋掉它們。
+    const original = {
+      ...written,
+      version: LEGACY_TWO_FILE_FORMAT_VERSION,
+      build: { commit: 'f'.repeat(40), dirty: false },
+      plugins: [{ name: '@nexus/最初那一列', id: 'first', disabled: false }],
+      configHash: 'hmac-sha256:feedfacefeedface',
+      modelEntryId: 'vendor/最初那一筆',
+    };
+    const migratedFrom = await toLegacyTwoFile(directory, 'alpha', original);
+
+    const lines: string[] = [];
+    await sayOnFreshServer(lines);
+
+    // 前提：第二台走的真的是續接那條路，不是把 alpha 當成新的 thread。
+    expect(lines.join('\n')).toContain('[會話日誌] thread "alpha" 接回來了');
+    const after = JSON.parse((await generationOf(directory, 'alpha')).headerLine) as Record<
+      string,
+      unknown
+    >;
+    // 版本升到這一版也是前提：它證明續接真的把 header 重寫了一次，上面那四格是「重寫時保留」，不是「根本沒寫」。
+    expect(after).toEqual({
+      type: 'session',
+      ...original,
+      version: SESSION_LOG_FORMAT_VERSION,
+      migratedFrom,
+    });
+  }, 60_000);
+
+  /**
+   * serve 上 home 落在 `--workspace` 底下就起不來（#1620，排在 home 鎖之前），所以「header 照寫、只少雜湊」那一格在 serve 上
+   * 到不了，只剩 CLI 到得了（上面那條）。這裡量的是更早的那一道：連鍵檔都沒機會建。
+   */
+  it('home 在 `--workspace` 底下：serve 起不來，工作區裡沒有鍵檔', async () => {
+    const workspace = privateDir('nexus-hdr-ws-');
+    const home = join(workspace, 'home');
+    const root = privateDir('nexus-hdr-logs-');
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--workspace', workspace, '--session-log', root],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: home },
+      }),
+    ).rejects.toThrow(/serve 起不來：下面這些跟 --workspace .*重疊/su);
+    expect(existsSync(join(home, CONFIG_HASH_KEY_FILE))).toBe(false);
+    expect(readdirSync(workspace)).toEqual([]);
+  });
+});

@@ -1,5 +1,5 @@
 /**
- * 那顆**切得動**的圍堵格子，與切它的入口 `/sandbox`。
+ * 那顆**切得動**的圍堵格子。切它的入口是 `@nexus/plugin-permission-presets` 的 `/permission`（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。
  *
  * ## 這一刀補的是什麼
  *
@@ -18,20 +18,17 @@
  * 3. **切換走的是各自的權威 setter。** dsh 的 preset 只改真的不同的那顆旋鈕，兩顆旋鈕各自
  *    保留自己的值。我們這裡只有一顆旋鈕，所以「權威 setter」就是 {@link SandboxModeController.switchTo}
  *    ——**fence 與提示句都跟它讀同一顆**，不各存快照。
- * 4. **不做具名 preset，而這是「還沒做」不是「做不到」。** dsh 把沙箱模式與核准政策捆成
- *    `workspace-write` / `danger-full-access` 兩個具名 preset 給人選。我們今天捆不起來，因為
- *    **另一顆旋鈕還不是逐次解析的**：`ApprovalPolicy.enabled` 在 fold 當下就被
- *    `deriveApprovalChannel` 算成一顆 `ApprovalChannel`，扣進 `createApprovalGateMiddleware`
- *    的閉包（`packages/nexus-core/src/approval.ts`）。今天發一個 preset 出去，它會**只搬得動
- *    自己的一半旋鈕而另一半靜靜不動**——一個承諾了捆綁卻只捆了一邊的選擇器。
- *    把核准那顆也變成來源是**同一個一行的把戲**（傳來源不傳值），所以這是排序不是障礙。
+ * 4. **具名 preset 在 `@nexus/plugin-permission-presets`。** dsh 把沙箱模式與核准政策捆成具名 preset 給人選；這一刀以前我們捆不起來，因為核准那顆旋鈕
+ *    不是逐次解析的（`ApprovalChannel` 在 fold 當下扣進閘門的閉包）。[#437](https://github.com/DemianLi/nexus-agent/issues/437) 把核准政策也做成一顆
+ *    控制器（`@nexus/core` 的 `ApprovalPolicyController`），兩顆旋鈕各自留著自己的權威入口，由那個 plugin 的 `/permission` 一次切兩顆。
+ *    **`/sandbox` 因此拿掉了**：留著的話，部署的人在設定裡刪掉「全開」那一組也關不掉全開（dsh 也沒有 `/sandbox`）。
  *
  * ## 這顆格子的壽命是「一次組裝」，而那剛好就是一條 thread
  *
  * 它由 `createCliAgent` 建，而 `serve.ts` 是**一條 thread 呼叫一次 `createCliAgent`**
  * （「一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統」）。所以兩條 thread
  * 不會共用同一格。**放進模組層或工廠閉包就會串台**，同 `@nexus/plugin-goal` 那段註解記的
- * 事故形狀：一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上。
+ * 事故形狀：一條 thread 的 `/permission read-only` 收緊到另一條 thread 的檔案工具上。
  *
  * ## 子代理照委派那一刻的那一格
  *
@@ -44,22 +41,38 @@
  * （`permission-presets/src/index.ts` 的 `pinInitialPermission`），所以產品路徑上每一條都有覆寫可拍。
  * 我們的 {@link SandboxModeController.attach} 就是那一步。
  *
- * **偏離（登記）：快照放在 ALS，不是從子代理自己的日誌折。** dsh 子代理的 fence 從子代理的日誌折出模式；
+ * **偏離（登記）：fence 讀的是 ALS，不是逐 session 從日誌折。** dsh 子代理的 fence 從子代理的日誌折出模式；
  * 我們子代理的檔案工具是基座拿 root 那一份 backend 建的，方法簽名裡沒有呼叫者，表達不出「逐 session
  * 折」。所以本套件的 `index.ts` 用 ALS 包住 `task` 那一次呼叫（{@link SandboxModeController.delegate}），
- * 在裡面讀這顆控制器的一律拿到快照；日誌只是審計面，同 root。子代理的摘要器 offload 也在 `task` 那一次
- * 呼叫裡跑，所以同樣照快照判——基礎建設的寫入不會繞過它（`uploadFiles` 本來就不認領 grant）。
+ * 在裡面讀這顆控制器的一律拿到快照。子代理的摘要器 offload 也在 `task` 那一次呼叫裡跑，所以同樣照快照判
+ * ——基礎建設的寫入不會繞過它（`uploadFiles` 本來就不認領 grant）。
+ *
+ * **背景續行的子代理（[#827](https://github.com/DemianLi/nexus-agent/issues/827)）把偏離縮到只剩 fence 那一格載體**：
+ * 快照的**來源**與 dsh 一致——委派那刻寫進子代理自己的日誌（`sandbox/mode { source: 'delegation' }`），被叫醒的每一輪
+ * 用 {@link SandboxModeController.delegateFromLog} 從那份日誌讀回、重新進 ALS。日誌不只是審計面，是背景路徑上
+ * 快照的記憶。
+ *
+ * ## 跟著 root 日誌走（[#1494](https://github.com/DemianLi/nexus-agent/issues/1494)）
+ *
+ * {@link SandboxModeController.attach} 接上日誌之後**也訂閱它**：root 日誌上出現不帶 `source` 的 `sandbox/mode`，控制器的格子就跟著那一顆。
+ * 寫入口有兩種：宿主在組 thread 時靜默 {@link SandboxModeController.switchTo} 起始值（`assembly-root.ts`，據 `permissionPresets.start` 的回傳），這時還沒有日誌接著；`/permission`（#1491 起在樹上的 `@nexus/plugin-permission-presets`，`index.ts` 的 `handler`）**不再碰控制器，直接往 root 日誌 `append` `sandbox/mode`**，控制器靠上面這條訂閱跟著。
+ * 訂閱者**只改格子、不寫日誌**（日誌的 listener 跑在發布期間，回頭 `append` 會被重入護欄擋下），`source: 'delegation'` 的那一顆是子代理的快照、
+ * 不是 root 的政策，一律略過。
+ *
+ * **偏離 dsh（登記，理由 1：基座表達不出來）。** dsh 沒有這顆控制器：它的 fence 每次從 session 日誌折出模式（`sandbox-policy/src/index.ts`），
+ * 所以「日誌就是唯一來源」天生成立。我們的格子住在控制器（fence 讀的是 ALS 快照，見上面「偏離」那段），不能整個改成逐次折疊，所以先讓格子**跟著**日誌，
+ * 把兩個來源收成一個。**移除條件：sandbox-policy 遷上樹時定**——那時 fence 可以直接讀投影，這個訂閱連同控制器的格子一起拿掉。
  *
  * ## 跨重啟
  *
  * 切換寫得進日誌，**CLI 的 `--resume <run 目錄>` 與 serve 碰到以前寫過的 thread 都讀得回來**：最後一顆 `sandbox/mode` 就是
  * 起始那一格（{@link recordedSandboxMode}，[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  * 的門 A）。續接不收 `--sandbox`——兩個來源不管誰贏，另一個都是靜靜被丟掉；接起來之後要換
- * 就用 `/sandbox`，那一次會記進日誌。**驗收在 `sandbox-mode.test.ts` 最後一組**，由原本釘住
+ * 就用 `/permission`，那一次會記進日誌。**驗收在 `sandbox-mode.test.ts` 最後一組**，由原本釘住
  * 「`SessionStore` 只有 `create`」的那條絆索翻面而來。
  *
  * serve 那一半在 `serve-session-log.test.ts` 的「重開 server 之後接得回同一條 thread」：上一次
- * 切成 `read-only`，重開之後 `/sandbox` 報的還是它；日誌記著模式而這一次沒給 `--workspace` 就
+ * 切成 `read-only`，重開之後 `/permission` 報的還是它；日誌記著模式而這一次沒給 `--workspace` 就
  * 擋下，同 CLI。web 那端把 thread id 記在瀏覽器裡，所以重新整理之後接的是同一條（`apps/web/src/lib/remembered-thread.ts`）。
  *
  * @module
@@ -74,17 +87,10 @@ import type {
   SandboxModeSource,
   SessionEvent,
   SessionLog,
+  SessionSubject,
 } from '@nexus/core';
-import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
 
-/** `/sandbox` 的命令名，不帶斜線。 */
-export const SANDBOX_COMMAND_NAME = 'sandbox';
-
-/** `/sandbox` 在探索清單裡的那一句。 */
-export const SANDBOX_COMMAND_DESCRIPTION = '看或切換這個會話的檔案效果政策';
-
-/** `/sandbox` 的輸入提示。 */
-export const SANDBOX_COMMAND_HINT = `[${SANDBOX_MODES.join('｜')}]`;
+import { canEscalateFrom } from './sandbox-escalation.js';
 
 /**
  * 一份日誌上**最後一顆** `sandbox/mode` 記的那一格，一顆都沒有時是 `undefined`。
@@ -104,6 +110,15 @@ export function recordedSandboxMode(events: readonly SessionEvent[]): SandboxMod
   }
   return undefined;
 }
+
+/**
+ * 背景子代理被叫醒、讀回委派快照時的上限（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）：收到的是日誌上記的那一格與子代理的日誌，
+ * 回傳這一輪實際用的那一格（不收就原樣回傳）。**純函式、不寫日誌**；由宿主在權限組合服務 `start` 之後設上。
+ */
+export type DelegationCeiling = (
+  recorded: SandboxMode,
+  log: Pick<SessionLog, 'sessionId'>,
+) => SandboxMode;
 
 /** 一次切換的結局。 */
 export type SandboxSwitchOutcome =
@@ -149,6 +164,9 @@ export class SandboxModeController implements SandboxGrantLedger {
    */
   readonly #delegated = new AsyncLocalStorage<{ readonly mode: SandboxMode }>();
 
+  /** 見 {@link SandboxModeController.setDelegationCeiling}。 */
+  #delegationCeiling: DelegationCeiling | undefined;
+
   /**
    * 接著的 root 日誌，**依接線順序**。
    *
@@ -169,7 +187,7 @@ export class SandboxModeController implements SandboxGrantLedger {
 
   /**
    * 這一刻是哪一格。**在子代理裡是委派那一刻拍下的那一格**，root 之後的切換影響不到它。
-   * fence（經 {@link SandboxModeController.source}）與升級閘門都讀這裡，所以兩邊一起跟著委派走。
+   * fence（經 {@link SandboxModeController.source}）與升級工具都讀這裡，所以兩邊一起跟著委派走。
    */
   get current(): SandboxMode {
     return this.#delegated.getStore()?.mode ?? this.#mode;
@@ -190,22 +208,69 @@ export class SandboxModeController implements SandboxGrantLedger {
    * @returns `run` 的回傳值，原樣。
    */
   delegate<T>(run: () => T): T {
-    return this.#delegated.run({ mode: this.current }, run);
+    return this.delegateAs(this.current, run);
+  }
+
+  /**
+   * 用**先前記下的那一格**重新進委派快照跑 `run`（[#827](https://github.com/DemianLi/nexus-agent/issues/827)）。
+   *
+   * 背景子代理被叫醒的那一輪不在 `task` 那一次呼叫的 ALS 裡，讀 {@link SandboxModeController.current} 拿到的是 root
+   * **現在**那一格：root 收緊，子代理跟著被擋；root 放寬，委派在 `read-only` 的子代理反而寫得進去（#738 第 3 項，實測）。
+   * 所以每一輪都用委派那刻記下的那一格重新進來。
+   *
+   * **進的是控制器自己這份 ALS，不是只換 `current`**：只換 `current` 的話，root 那顆待消費的一次性 grant 在這一輪
+   * `peekGrant()` 仍看得到（一律不給子代理，照 dsh），子代理日誌開啟讀的 {@link SandboxModeController.delegatedMode}
+   * 也是空的（探針實測）。
+   *
+   * @param mode - 委派那刻記下的那一格。
+   * @param run - 這一輪的本體。
+   * @returns `run` 的回傳值，原樣。
+   */
+  delegateAs<T>(mode: SandboxMode, run: () => T): T {
+    return this.#delegated.run({ mode }, run);
+  }
+
+  /**
+   * 叫醒時用：從**子代理自己的日誌**讀回委派那一格，再 {@link SandboxModeController.delegateAs} 進去跑 `run`。
+   *
+   * 委派那刻子代理日誌第一次開啟時寫下 `sandbox/mode { source: 'delegation' }`（`index.ts` 的 `sessions.join`），
+   * 這裡讀回的就是它。**日誌上沒有就拋**：不知道委派在哪一格，就不能拿 root 現在那格去猜——猜錯的方向是越權。
+   *
+   * @param log - 這個子代理自己的日誌。
+   * @param run - 這一輪的本體。
+   * @returns `run` 的回傳值，原樣。
+   * @throws 日誌上沒有任何 `sandbox/mode`。
+   */
+  delegateFromLog<T>(log: Pick<SessionLog, 'events' | 'sessionId'>, run: () => T): T {
+    const mode = recordedSandboxMode(log.events);
+    if (mode === undefined) {
+      throw new Error(
+        `子代理日誌 ${log.sessionId} 上沒有 sandbox/mode：不知道它是在哪一格委派的，不能拿 root 現在那格去猜`,
+      );
+    }
+    // 讀回時套上限（#1739）：日誌上記的不動，這一輪實際用的才是收窄後的那一格。
+    return this.delegateAs(this.#delegationCeiling?.(mode, log) ?? mode, run);
+  }
+
+  /**
+   * 設上（或拿掉）{@link SandboxModeController.delegateFromLog} 讀回委派快照之後要過的上限（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）。
+   *
+   * **只管讀回，不管 {@link SandboxModeController.delegate}**：同步子代理在 `task` 那一次呼叫裡拍的是 root 當下那一格，root 已經在續接時收過；
+   * 背景子代理的快照是委派當下寫進它自己日誌的，部署方事後把全開從組合表拿掉，冷復活的子代理讀回的仍是全開，所以要在這裡收。
+   * 上限算不出來就拋（fail-closed）：這一輪不開跑，不退回沒收窄的那一格。
+   *
+   * 為什麼不在這個套件裡算：組合表在 `@nexus/plugin-permission-presets`（相依方向是 presets → sandbox-policy），宿主不能 import 插件套件，
+   * 由宿主把服務的純函式包成這個型別交進來。
+   *
+   * @param ceiling - 上限；`undefined` 拿掉。
+   */
+  setDelegationCeiling(ceiling: DelegationCeiling | undefined): void {
+    this.#delegationCeiling = ceiling;
   }
 
   /** 這一次呼叫是不是在某個子代理裡。 */
   get #inDelegation(): boolean {
     return this.#delegated.getStore() !== undefined;
-  }
-
-  /**
-   * 現在接著幾份日誌。
-   *
-   * `/sandbox` 讀它是為了**在零份的時候把「這次切換沒留痕跡」講出來**——一次悄悄沒進
-   * 日誌的切換與一次進了日誌的切換，在畫面上長得一模一樣。
-   */
-  get attachedCount(): number {
-    return this.#logs.length;
   }
 
   /**
@@ -217,12 +282,15 @@ export class SandboxModeController implements SandboxGrantLedger {
   readonly source: SandboxModeSource = () => this.current;
 
   /**
-   * 被擋下時接在拒絕後面的升級指引。**只有真的掛了升級工具才有**——由掛它的那一步
-   * （{@link SandboxModeController.enableEscalation}）寫進來，所以 fence 與工具對「這個組裝
-   * 有沒有升級」讀的是同一個事實，不會一邊公告一邊沒有。
+   * 被擋下時接在拒絕後面的升級指引。兩個條件都要成立才有：
+   *
+   * - **真的掛了升級工具**——由掛它的那一步（{@link SandboxModeController.enableEscalation}）寫進來，所以 fence 與工具對「這個組裝
+   *   有沒有升級」讀的是同一個事實，不會一邊公告一邊沒有；
+   * - **這一刻還有一格升得到**（{@link canEscalateFrom}）。讀的是 {@link SandboxModeController.current}，所以跟著 `/permission` 切換，
+   *   在子代理裡是委派那一格。
    */
   get escalationHint(): string | undefined {
-    return this.#escalationHint;
+    return canEscalateFrom(this.current) ? this.#escalationHint : undefined;
   }
 
   /**
@@ -237,7 +305,7 @@ export class SandboxModeController implements SandboxGrantLedger {
    * 發一顆 grant：**只蓋一個目標、只蓋一次**。
    *
    * **在子代理裡什麼都不做**，下面四個同一條：一次性 grant 一律不給子代理（照 dsh），而 grant 與
-   * denial 各只有一格、是 root 的。子代理的升級今天在閘門就被拒（`policy-never`），走不到這裡；
+   * denial 各只有一格、是 root 的。子代理的升級在工具本體裡就被拒（`delegated`，#700／#328），走不到這裡；
    * 擋在這裡是 fail-closed 的那一層。
    *
    * @param grant - 核准來的模式與模型指名的那個檔。
@@ -282,16 +350,26 @@ export class SandboxModeController implements SandboxGrantLedger {
   }
 
   /**
-   * 接一份 root 會話日誌，**並且當場把起始值釘進去**。
+   * 接一份 root 會話日誌，**並且當場把起始值釘進去**，之後**跟著這份日誌走**（見模組註解「跟著 root 日誌走」）。
    *
    * 釘起始值是照 dsh 的挂载固定：不釘的話，一份沒有人切過的日誌答不出政策是哪一格。
+   * **先釘再訂閱**：訂閱會重播既有事件，釘在前，重播最後落在的就是剛釘的這一格，也就是接線前後的格子不變。
    *
-   * @param log - 要記帳的日誌。
-   * @returns 收掉這次接線的函式。
+   * @param subject - 要記帳的日誌與它的觀察面（`registry.sessions.join` 給的那一份）。
+   * @returns 收掉這次接線的函式；收掉之後那份日誌的事件不再影響這一格。
    */
-  attach(log: SessionLog): () => void {
+  attach(subject: Pick<SessionSubject, 'log' | 'observe'>): () => void {
+    const { log } = subject;
     this.#logs.push(log);
     log.append('sandbox/mode', { mode: this.#mode });
+    subject.observe((event) => {
+      // `observe` 沒有退訂把手（會話收掉時由 runner 一起清），所以「還接著嗎」要自己看。
+      if (!this.#logs.includes(log)) return;
+      if (event.type !== 'sandbox/mode' || event.data.source !== undefined) return;
+      // **不驗值，原樣跟**：續接時控制器就是從日誌最後一顆（連同被改壞的值）起算的，驗了的話重播會把格子停在
+      // 「最後一顆合法值」而不是剛釘的這一格，與接線前不一致。認不得的名字由 `invariant.ts` 報違規，不在這裡擋。
+      this.#mode = event.data.mode;
+    });
     return () => {
       const at = this.#logs.indexOf(log);
       if (at >= 0) this.#logs.splice(at, 1);
@@ -311,48 +389,4 @@ export class SandboxModeController implements SandboxGrantLedger {
     for (const log of this.#logs) log.append('sandbox/mode', { mode: next });
     return { kind: 'switched', from, to: next };
   }
-}
-
-/** 沒接上任何日誌時，`/sandbox` 的回覆會多的那一句。 */
-export const SANDBOX_UNRECORDED_NOTE = '（這次切換沒有記進任何會話日誌——沒有日誌接在上面。）';
-
-/**
- * 跑一次 `/sandbox`。
- *
- * 三條路：沒有引數就報告現況與可切的那幾格；引數是認得的模式就切；認不得就回一則說得出
- * 認得哪幾個的錯誤。**認不得的那一條回 `kind: 'error'`**——一個把打錯字靜靜當成「看一下
- * 現況」的命令，會讓人以為自己切過了。
- *
- * @param controller - 這次組裝那一格。
- * @param rootDir - 可寫根，報告時指名它。
- * @param rawInput - 命令名之後的原文，含分隔的空白。
- * @returns 直接呈現給人的結果。
- */
-export function executeSandboxCommand(
-  controller: SandboxModeController,
-  rootDir: string,
-  rawInput: string,
-): { readonly kind: 'success' | 'error'; readonly text: string } {
-  const argument = rawInput.trim();
-  const table = SANDBOX_MODES.join('、');
-  if (argument.length === 0) {
-    return {
-      kind: 'success',
-      text:
-        `目前的檔案政策：${controller.current}（可寫根 ${JSON.stringify(rootDir)}）。\n` +
-        `切得過去的：${table}。`,
-    };
-  }
-  if (!isSandboxMode(argument)) {
-    return { kind: 'error', text: `/sandbox 認不得 "${argument}"。認得的是 ${table}。` };
-  }
-  const outcome = controller.switchTo(argument);
-  if (outcome.kind === 'unchanged') {
-    return { kind: 'success', text: `本來就是 ${outcome.mode}，沒有變。` };
-  }
-  const note = controller.attachedCount === 0 ? `\n${SANDBOX_UNRECORDED_NOTE}` : '';
-  return {
-    kind: 'success',
-    text: `檔案政策從 ${outcome.from} 換成 ${outcome.to}。${note}`,
-  };
 }

@@ -11,21 +11,20 @@
  * （它要在瀏覽器裡跑），所以 `question` 這個值在兩邊各寫了一份。
  */
 
-import { MemorySaver } from '@langchain/langgraph';
 import {
   QUESTION_INTERRUPT_KIND,
   APPROVAL_INTERRUPT_KIND,
   SessionRegistry,
   type SessionEvent,
 } from '@nexus/core';
-import { createAskUserPlugin, ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
+import { ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   APPROVAL_PENDING_KIND,
   QUESTION_PENDING_KIND,
   answerResponse,
   appendAnswers,
-  appendHumanTurn,
   appendQuestionCancel,
   cancelResponse,
   createWireClient,
@@ -33,15 +32,22 @@ import {
   isQuestionPending,
   reduceConversation,
 } from '@nexus/wire';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import { historyFrames } from './conversation-history.js';
-import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import {
+  emptyCommandPoint,
+  humanChannelPlugin,
+  loopbackRequest,
+  TEST_BROWSER_AUTH,
+} from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const BASE_URL = 'http://ask.test';
 
@@ -72,8 +78,8 @@ async function open(threadId: string): Promise<Session> {
         { content: '再收一次工。' },
       ],
     }),
-    checkpointer: new MemorySaver(),
-    plugins: [createAskUserPlugin()],
+    checkpointer: new PrunedMemorySaver(),
+    plugins: [humanChannelPlugin(), createAskUserPlugin()],
   });
   // **日誌要接在 pump 自己那一份註冊表上**：handler 建完 pump 才把它交過來（`wire-handler.ts`），
   // 另外建一份的話圍堵寫的是別人，pump 一顆 `tool/result` 都收不到——工具卡的終態就退回只看基座的
@@ -84,9 +90,9 @@ async function open(threadId: string): Promise<Session> {
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: emptyCommandPoint(),
-      attachSession: (registry: SessionRegistry) => {
+      attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return built.attachSession(registry);
+        return composeAttachSessions(built)(registry, backgroundPort);
       },
       dispose: built.dispose,
     }),
@@ -101,7 +107,7 @@ async function open(threadId: string): Promise<Session> {
     client,
     events,
     frames: [],
-    state: appendHumanTurn(emptyConversation(), '幫我登記一位訪客'),
+    state: emptyConversation(),
     log: () =>
       sessions
         ?.list()
@@ -347,6 +353,54 @@ describe('掛著與收尾各自說對了什麼', () => {
     if (tool === undefined || tool.kind !== 'tool') throw new Error('一則工具紀錄都沒有');
     expect(tool.status).toBe('done');
     expect(tool.error).toBeUndefined();
+    await session.close();
+  });
+});
+
+/**
+ * **停在提問時按停止：線上帶的碼就是畫面要比的那個值**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
+ *
+ * 畫面判「這張提問卡是停在提問時被停止的」照 dsh 比碼不比字（dsh 的 UI 那側是手寫字面值，
+ * `packages/client/ui-tool/src/client/tool/toolviews/ask-question-row.tsx:160`）。所以這一條**用字面值斷言**：pump
+ * 對提問改送別的碼（例如換成「已開始的中止」）時，這裡會紅，而不是讓畫面靜靜比不到。工具是真的
+ * `ask_user_question`，不是等核准的工具。
+ */
+describe('停在提問時按停止：碼跨線（#667）', () => {
+  const STOPPED_ON_QUESTION = 'ABORTED_BEFORE_DISPATCH';
+
+  it('即時與重新整理那顆 `tool-finished` 都帶同一個碼，卡上的 `errorCode` 也是它', async () => {
+    const session = await open('a-stop');
+    await until(session, (s) => s.state.status === 'awaiting-input');
+    // 停在提問的那一輪先在日誌上收完（中斷那一輪照樣寫 `turn/end`），這時按停止走的才是收回那條路。
+    await vi.waitFor(() => {
+      expect(session.log().some((event) => event.type === 'turn/end')).toBe(true);
+    });
+    await session.client.runCancel('a-stop');
+    await until(session, (s) => s.state.status === 'stopped');
+
+    const finishedOf = (frames: readonly Event[]) =>
+      frames
+        .filter(
+          (frame) =>
+            frame.method === 'tools' &&
+            (frame.params.data as { event?: unknown }).event === 'tool-finished',
+        )
+        .map((frame) => frame.params.data as Record<string, unknown>);
+
+    const live = finishedOf(session.frames);
+    expect(live.at(-1)).toMatchObject({ failed: true, code: STOPPED_ON_QUESTION });
+    expect(lastToolEntry(session)).toMatchObject({
+      name: ASK_USER_QUESTION_TOOL_NAME,
+      status: 'failed',
+      errorCode: STOPPED_ON_QUESTION,
+    });
+
+    const history = historyFrames(session.log(), DEFAULT_TOOL_TEXT_MAX_BYTES);
+    expect(finishedOf(history).at(-1)).toMatchObject({ failed: true, code: STOPPED_ON_QUESTION });
+    const replayed = history
+      .reduce(reduceConversation, emptyConversation())
+      .entries.filter((entry) => entry.kind === 'tool');
+    expect(replayed.at(-1)).toMatchObject({ status: 'failed', errorCode: STOPPED_ON_QUESTION });
     await session.close();
   });
 });

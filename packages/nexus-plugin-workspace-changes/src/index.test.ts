@@ -27,17 +27,26 @@ import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createRegistry, createSessionRunner, loadPlugins, SessionRegistry } from '@nexus/core';
+import {
+  createHostServicesPlugin,
+  createRegistry,
+  createSessionRunner,
+  loadPlugins,
+  SessionRegistry,
+  WORKSPACE_ROOT_SERVICE,
+} from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
 
 import {
   createWorkspaceChanges,
+  directGitStarter,
+  GIT_STARTER_SERVICE,
   WORKSPACE_CHANGES_LIMITS,
   WORKSPACE_CHANGES_SERVICE,
   workspaceChangesConfigSchema,
   workspaceChangesPlugin,
 } from './index.js';
-import type { WorkspaceChanges, WorkspaceChangesLimits } from './index.js';
+import type { GitStarter, WorkspaceChanges, WorkspaceChangesLimits } from './index.js';
 
 /**
  * 把一個條目掛上一個 registry，回它提供的服務。
@@ -48,8 +57,18 @@ import type { WorkspaceChanges, WorkspaceChangesLimits } from './index.js';
 function applyWorkspaceChangesTo(
   registry: ReturnType<typeof createRegistry>,
   entry: PluginEntry,
+  root: string,
   id = 'workspace-changes#0',
+  gitStarter?: GitStarter,
 ): WorkspaceChanges {
+  // 根走 host 服務（#669），同產品組裝：組裝點在最前面交 `workspaceRoot`，這一列在 `apply` 當下讀。
+  // 同一個 registry 掛第二次時服務已經在了，不重複提供（重複提供那一條測的是 `workspaceChanges` 服務）。
+  if (registry.services.get(WORKSPACE_ROOT_SERVICE) === undefined) {
+    const host = registry.enter({ id: 'host-services#0', name: 'host-services' });
+    registry.services.provide(WORKSPACE_ROOT_SERVICE, root);
+    registry.services.provide(GIT_STARTER_SERVICE, gitStarter ?? directGitStarter);
+    host();
+  }
   const exit = registry.enter({ id, name: entry.plugin.name });
   entry.plugin.apply(registry, workspaceChangesConfigSchema.parse(entry.config));
   exit();
@@ -106,6 +125,7 @@ async function mount(
     /** 事先準備好的工作區根（例如一個 repo）；給了就不寫 `files`。 */
     readonly root?: string;
     readonly git?: string | null;
+    readonly gitStarter?: GitStarter;
   } = {},
 ): Promise<Mounted> {
   const root = options.root ?? (await directory('nexus-wc-root-'));
@@ -115,7 +135,6 @@ async function mount(
   }
   const warnings: string[] = [];
   const wcEntry = createWorkspaceChanges({
-    root,
     tempRoot,
     ...limits,
     warn: (message) => void warnings.push(message),
@@ -123,13 +142,14 @@ async function mount(
     ...(options.git !== undefined && { git: options.git }),
   });
   const registry = createRegistry();
-  const service = applyWorkspaceChangesTo(registry, wcEntry);
+  const service = applyWorkspaceChangesTo(registry, wcEntry, root, undefined, options.gitStarter);
   const sessions = new SessionRegistry('wc');
   registry.sessions.bind(sessions);
   const log = sessions.root;
   createSessionRunner({
     address: { kind: 'root' },
     log,
+    rootLog: log,
     installers: registry.sessions.installers(),
   });
   const [entry] = registry.middleware.list();
@@ -376,7 +396,7 @@ describe('輪的邊界', () => {
     const root = await directory('nexus-wc-seed-');
     const tempRoot = await directory('nexus-wc-temp-');
     const registry = createRegistry();
-    applyWorkspaceChangesTo(registry, createWorkspaceChanges({ root, tempRoot }));
+    applyWorkspaceChangesTo(registry, createWorkspaceChanges({ tempRoot }), root);
     const sessions = new SessionRegistry('seeded');
     const log = sessions.root;
     log.append('turn/start', { kind: 'message', text: '以前那一輪。' });
@@ -384,6 +404,7 @@ describe('輪的邊界', () => {
     createSessionRunner({
       address: { kind: 'root' },
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     log.append('turn/end', {});
@@ -442,13 +463,19 @@ describe('上限與內容', () => {
         // `loadPlugins` 把 `apply` 的拋出包進一層 generic `Error`（`load.ts:80-82`），所以對的是
         // 訊息文字——這一刀之前它是工廠當場拋的，句子沒換，換的只有拋的時刻。
         await expect(
-          loadPlugins([createWorkspaceChanges({ root: tmpdir(), [field]: bad })]),
+          loadPlugins([
+            createHostServicesPlugin({ workspaceRoot: tmpdir() }),
+            createWorkspaceChanges({ [field]: bad }),
+          ]),
         ).rejects.toThrow(`workspace-changes requires a positive integer ${field}`);
       }
       // **`NaN` 由載體先擋掉**：zod 4 的 `z.number()` 不收 NaN（schemastery 收，所以 dsh 那句話
       // 在它那邊管得到四種）。載入照樣失敗，只是這一種的訊息出處是 schema 不是 dsh 那一行。
       await expect(
-        loadPlugins([createWorkspaceChanges({ root: tmpdir(), [field]: Number.NaN })]),
+        loadPlugins([
+          createHostServicesPlugin({ workspaceRoot: tmpdir() }),
+          createWorkspaceChanges({ [field]: Number.NaN }),
+        ]),
       ).rejects.toThrow(new RegExp(`config 不合法 — ${field}`, 'u'));
     }
     expect(WORKSPACE_CHANGES_LIMITS).toEqual({
@@ -470,10 +497,7 @@ describe('上限與內容', () => {
     // 第二次組裝：同一顆 plugin、同一個工作區根，另一個 registry，而且**沒有接上任何日誌**。
     // 記錄器與 `current` 住在各自 `apply` 的閉包裡，所以這一份應該什麼都答不出來；把它們提到
     // 模組層級的話，這一份會看到第一次那顆記錄器（突變驗收 7）。
-    const second = applyWorkspaceChangesTo(
-      createRegistry(),
-      createWorkspaceChanges({ root: m.root }),
-    );
+    const second = applyWorkspaceChangesTo(createRegistry(), createWorkspaceChanges({}), m.root);
     m.log.append('turn/start', { kind: 'message', text: '改。' });
     await m.tool('edit_file', { file_path: 'a.md', old_string: 'a', new_string: 'b' }, () =>
       writeFile(join(m.root, 'a.md'), 'b\n'),
@@ -488,11 +512,12 @@ describe('上限與內容', () => {
 
   it('同一個 registry 裡提供兩次會拋，訊息指名前一個提供者', () => {
     const registry = createRegistry();
-    applyWorkspaceChangesTo(registry, createWorkspaceChanges({ root: tmpdir() }));
+    applyWorkspaceChangesTo(registry, createWorkspaceChanges({}), tmpdir());
     expect(() =>
       applyWorkspaceChangesTo(
         registry,
-        createWorkspaceChanges({ root: tmpdir() }),
+        createWorkspaceChanges({}),
+        tmpdir(),
         'workspace-changes#1',
       ),
     ).toThrow(/workspace-changes#0/u);
@@ -500,10 +525,60 @@ describe('上限與內容', () => {
 
   it('沒有縫的時候回的就是模組層級那一顆，有縫才包一層', () => {
     // 生產路徑一道縫都不傳，所以「測試量到的」與「出廠跑的」必須是同一顆物件。
-    expect(createWorkspaceChanges({ root: tmpdir() }).plugin).toBe(workspaceChangesPlugin);
-    expect(createWorkspaceChanges({ root: tmpdir(), warn: () => undefined }).plugin).not.toBe(
+    expect(createWorkspaceChanges({}).plugin).toBe(workspaceChangesPlugin);
+    expect(createWorkspaceChanges({ warn: () => undefined }).plugin).not.toBe(
       workspaceChangesPlugin,
     );
+  });
+});
+
+describe('合格與否（#669，照 dsh 的 eligible）', () => {
+  it('沒有工作區根：什麼都不註冊——沒有服務、沒有 middleware、不接會話', async () => {
+    const registry = createRegistry();
+    const exit = registry.enter({ id: 'workspace-changes#0', name: 'workspace-changes' });
+    workspaceChangesPlugin.apply(registry, workspaceChangesConfigSchema.parse({}));
+    exit();
+    expect(registry.services.get(WORKSPACE_CHANGES_SERVICE)).toBeUndefined();
+    expect(registry.middleware.list()).toHaveLength(0);
+    expect(registry.sessions.installers()).toHaveLength(0);
+  });
+
+  it('沒有工作區根時上限寫壞照樣當場失敗（設定寫壞不因為這一次用不到就放過）', async () => {
+    await expect(loadPlugins([createWorkspaceChanges({ maxFiles: 0 })])).rejects.toThrow(
+      'workspace-changes requires a positive integer maxFiles',
+    );
+  });
+
+  it('子代理的會話不記：接進來也不建記錄器，它自己的日誌沒有 workspace/changes', async () => {
+    // 用 git 工作樹：真的有改動時，錯接上記錄器的會話會在收尾寫出 `workspace/changes`，所以這條不是空轉。
+    const root = await repository({ 'a.md': 'a\n' });
+    const tempRoot = await directory('nexus-wc-temp-');
+    const registry = createRegistry();
+    applyWorkspaceChangesTo(
+      registry,
+      createWorkspaceChanges({ tempRoot, info: () => undefined }),
+      root,
+    );
+    const sessions = new SessionRegistry('sub');
+    registry.sessions.bind(sessions);
+    const log = sessions.root;
+    createSessionRunner({
+      address: { kind: 'subagent', runId: 'task-1' },
+      log,
+      rootLog: log,
+      installers: registry.sessions.installers(),
+    });
+    log.append('turn/start', { kind: 'message', text: '子代理的一輪。' });
+    await drain();
+    await writeFile(join(root, 'a.md'), 'b\n');
+    log.append('tool/result', { callId: 'sub-1', isError: false });
+    log.append('turn/end', {});
+    await drain();
+    expect(log.events.some((event) => event.type === 'workspace/changes')).toBe(false);
+    // 錯接上記錄器的話，這一輪開始排的基準快照會在 tempRoot 底下建暫存目錄（收尾的寫入走 afterAgent，這裡驅動不到）。
+    // 基準是背景 I/O，沒有可等的把手；給它足夠的時間，突變驗證過接錯時這裡會紅。
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(await readdir(tempRoot)).toEqual([]);
   });
 });
 
@@ -817,6 +892,63 @@ describe('git 快照（#461）', () => {
     expect(await readdir(join(m.tempRoot, scratch!))).toEqual(['captures']);
   });
 
+  describe('沙箱不可用（#1946）', () => {
+    /** 這一支 starter 的開關：`down` 時回 `sandbox-unavailable`，其餘直接 spawn。 */
+    const switchable = (): { starter: GitStarter; down: boolean } => {
+      const state: { starter: GitStarter; down: boolean } = {
+        down: false,
+        starter: (start) =>
+          state.down ? Promise.resolve('sandbox-unavailable') : directGitStarter(start),
+      };
+      return state;
+    };
+    const turn = async (m: Mounted): Promise<void> => {
+      m.log.append('turn/start', { kind: 'message', text: '改。' });
+      await m.settle();
+    };
+
+    it('基準快照失敗、輪末恢復：這一輪不記，不出假 diff；不 warn；下一輪恢復記錄', async () => {
+      const root = await repository({ 'a.md': 'a\n' });
+      const gate = switchable();
+      const m = await mount({}, {}, { root, gitStarter: gate.starter });
+      gate.down = true;
+      await turn(m);
+      gate.down = false;
+      await m.tool('edit_file', { file_path: 'a.md', old_string: 'a', new_string: 'b' }, () =>
+        writeFile(join(root, 'a.md'), 'b\n'),
+      );
+      result(m.log);
+      await m.afterAgent();
+      m.log.append('turn/end', {});
+      await m.settle();
+      expect(m.changes()).toEqual([]);
+      expect(m.warnings).toEqual([]);
+
+      await turn(m);
+      await writeFile(join(root, 'a.md'), 'c\n');
+      result(m.log, 'd');
+      await m.afterAgent();
+      const [event] = m.changes();
+      expect(m.service.summary(event!.seq)?.files.map((file) => file.path)).toEqual(['a.md']);
+      expect(m.warnings).toEqual([]);
+    });
+
+    it('其他失敗照舊每次講', async () => {
+      const root = await repository({ 'a.md': 'a\n' });
+      const m = await mount({}, {}, { root, gitStarter: () => Promise.resolve('launch-failed') });
+      for (const id of ['c', 'd']) {
+        m.log.append('turn/start', { kind: 'message', text: '改。' });
+        await m.settle();
+        result(m.log, id);
+        await m.afterAgent();
+        m.log.append('turn/end', {});
+        await m.settle();
+      }
+      expect(m.warnings).toHaveLength(2);
+      expect(m.changes()).toEqual([]);
+    });
+  });
+
   it('git 失敗的一輪什麼都不記、留一行 warn，下一輪重來', async () => {
     const root = await repository({ 'a.md': 'a\n' });
     const m = await mount({}, {}, { root, git: join(root, 'not-git') });
@@ -838,7 +970,8 @@ describe('git 快照（#461）', () => {
     const registry = createRegistry();
     const service = applyWorkspaceChangesTo(
       registry,
-      createWorkspaceChanges({ root, tempRoot, info: () => undefined }),
+      createWorkspaceChanges({ tempRoot, info: () => undefined }),
+      root,
     );
     const sessions = new SessionRegistry('seeded');
     registry.sessions.bind(sessions);
@@ -856,6 +989,7 @@ describe('git 快照（#461）', () => {
     createSessionRunner({
       address: { kind: 'root' },
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     const [entry] = registry.middleware.list();

@@ -1,0 +1,171 @@
+{
+  "id": "2505.08638",
+  "title": "TRAIL: Trace Reasoning and Agentic Issue Localization",
+  "topic": "T4",
+  "subarea": "軌跡分析、失敗分類與歸因",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出涵蓋推理、規劃協調、系統執行三大類約 20 個葉節點的 agent 錯誤分類法，並以它人工標註 148 條 OpenTelemetry／OpenInference 結構化軌跡（1987 個 span、841 個錯誤）作為 benchmark，測 LLM 當裁判能否在原始軌跡 JSON 中找出錯誤類別與出錯的 span；最好的 Gemini-2.5-Pro 聯合準確率在 GAIA 分割只有 0.183、SWE-Bench 分割 0.050。",
+  "problem": "agent 的除錯目前仰賴人工逐條看冗長軌跡，無法隨軌跡數量與長度擴充；既有 benchmark 多只看端到端成敗，既有失敗分類（如 MAST）多針對解析成純文字的軌跡、偏重推理與多 agent 協調，缺少 API 錯誤、環境設定、資源管理這類系統執行錯誤，也不對應實務上 agent 框架輸出的 OpenTelemetry 結構化 span。作者要的是一份步驟（span）層級、接地於真實框架輸出格式的標註資料，用來衡量「自動化軌跡除錯／LLM-as-judge」到底能不能做。",
+  "core_idea": "把一次 agent 執行當成 OpenTelemetry span 樹（LLM 呼叫、工具呼叫各為一個 span），用一份三層分類法在 span 層級標出每個錯誤的類別、位置（span id）、證據、描述與影響程度，並在軌跡層級給四項 1–5 分的 rubric；再把整份原始軌跡 JSON 丟給長上下文 LLM，要它輸出同格式的錯誤清單與分數，與人工標註比對類別、位置與分數相關性。",
+  "method": {
+    "taxonomy": "三大類、葉節點共 20 個（加一個開放的 Domain Specific Errors）。Reasoning Errors：Hallucinations（Language-only、Tool-related）、Information Processing（Poor Information Retrieval、Tool Output Misinterpretation）、Decision Making（Incorrect Problem Identification、Tool Selection Errors）、Output Generation（Formatting Errors、Instruction Non-compliance）。System Execution Errors：Configuration（Tool Definition Issues、Environment Setup Errors）、API Issues（Rate Limiting 429、Authentication Errors 401/403、Service Errors 500、Resource Not Found 404）、Resource Management（Resource Exhaustion、Timeout Issues）。Planning and Coordination Errors：Context Management（Context Handling Failures、Resource Abuse＝因記憶問題重複呼叫工具）、Task Management（Goal Deviation、Task Orchestration）。每個葉節點在評估提示詞裡附一行括號定義（§3、§A.11）。",
+    "trace_collection": {
+      "GAIA_split": "GAIA 純文字題。用 Hugging Face OpenDeepResearch（smolagents）階層式編排：manager agent 把需要瀏覽的子任務交給 search agent；兩者 backbone 都是 o3-mini-2025-01-31。search agent 的工具：web_search（Google，可選 filter_year）、visit_page、page_up、page_down、find_on_page_ctrl_f、find_next、find_archived_url（Wayback Machine）、inspect_file_as_text、visualizer；工具定義全文見 §A.10。",
+      "SWE_split": "SWE-Bench Lite。單一 CodeAct agent（Thought／Code／Observation 迴圈，程式碼以 <end_code> 結尾），backbone claude-3-7-sonnet-20250219，只給沙箱 Python 直譯器、final_answer 工具與 gitingest 函式庫讀 repo；可 import 的模組列白名單。為「有機地」誘發錯誤，刻意加指令限制：禁止用 git、禁止印出檔案內容、一次只看 500 字元、必須以正規表達式解析 gitingest 字串、輸出長度限制，並在系統提示詞結尾加「答對給一百萬美元」（§4.1、§A.12）。",
+      "tracing": "全部以 OpenTelemetry 收集，具體用 Arize 的 OpenInference 規格；每條軌跡是一份 JSON，span 有 span id、父子關係、LLM 輸入輸出與工具輸入輸出。平均每條 GAIA 軌跡 8.28 個 span、SWE 軌跡 32.58 個 span（Table 5）；原始 JSON 的輸入 token 數 GAIA 平均約 287K（gpt-4.1 tokenizer），最長 7.5M；SWE 平均約 617K，最長 2.05M（Table 2）。"
+    },
+    "annotation": "4 位具軟體工程與記錄檔除錯經驗的標註者，逐一檢查每個 LLM span 與工具 span；每個錯誤標：span ID、錯誤類別（只能用葉節點）、證據（軌跡中的原文）、描述、影響（LOW／MEDIUM／HIGH）。軌跡層級另給四項 1–5 Likert：Reliability、Security、Instruction adherence、Plan optimality（rubric 全文在 §A.7.1），以及 overall。之後做四輪由 ML 研究員執行的複核；另挑 63 條軌跡（SWE 30 條、GAIA 33 條）量複核修改率當一致性證據。每條 GAIA 軌跡標註約 30 分鐘、SWE 約 40 分鐘，加複核約 110／120 分鐘；標註者不查證軌跡以外的外部資訊；報酬每條 12.66 美元。",
+    "judge_task": {
+      "input": "評估提示詞（§A.11）＝分類法樹狀清單＋指令＋輸出模板＋一個範例＋整份原始軌跡 JSON（直接字串插入，不切塊、不壓縮、不給工具）。",
+      "output": "純 JSON：errors 陣列（每筆 category／location＝span id／evidence／description／impact），以及 scores（reliability、security、instruction_adherence、plan_opt 各含分數與理由，加 overall）。",
+      "rules": "必須窮舉所有錯誤；只能填葉節點類別；位置一律標該錯誤第一次出現的 span，唯獨 Resource Abuse 標最後一次出現的 span；軌跡無錯時 errors 為空陣列。"
+    },
+    "metrics": {
+      "note": "論文本文與附錄都沒有寫出三個主指標的公式；以下取自官方 repo 的 benchmarking/calculate_scores.py（我自己讀過），不保證與 Table 1 的計算完全一致。",
+      "Cat_F1": "每條軌跡把金標與預測各轉成 21 維 multi-hot 向量（只看某類別有沒有出現，不看次數與位置），跨軌跡用 sklearn f1_score(average='weighted') 算加權 F1。類別字串先做大小寫、去空白、子字串的正規化。",
+      "Loc_Acc": "每條軌跡：金標 span id 集合與預測 span id 集合的交集大小 ÷ 金標集合大小，再對可解析的軌跡取平均。本質是 recall，沒有 precision 懲罰。",
+      "Joint": "同上，但比對的是 (span id, 類別) 配對集合。",
+      "rho": "金標與預測的 rubric 分數之間的 Pearson 相關（Table 1 的 ρ 是 overall；Table 6 拆成四項）。",
+      "aggregation": "Table 1 為三次執行平均。公開腳本中，超過上下文或輸出不是可解析 JSON 的軌跡會被跳過、不計入分母。"
+    },
+    "eval_settings": "受測模型：gpt-4.1、o1、o3、claude-3.7-sonnet、gemini-2.5-pro-preview-05-06、gemini-2.5-flash-preview-04-17、Llama-4-Scout／Maverick（經 Together AI）。非推理模型 temperature 0、top_p 1；推理模型用 API 預設並把 reasoning effort 設為 high。公開 run_eval.py 以 litellm 呼叫、max_completion_tokens 8000、遇 429 等待後重試一次、遇上下文超限寫入非 JSON 字串。另做 o3 的 reasoning effort high／medium／low 消融（只在 GAIA 分割）。",
+    "reproduce_steps": "1) 從 Hugging Face 取 PatronusAI/TRAIL（需同意分享聯絡資訊）；2) clone patronus-ai/trail-benchmark，執行 run_eval.py --model <litellm 模型 id> --split GAIA 或 'SWE Bench'；3) 執行 calculate_scores.py 取得加權 F1、Location Accuracy、Joint Accuracy、rubric Pearson 與逐類別 P／R／F1。若要自建同類資料：用 OpenInference instrumentor 包住 agent 框架輸出 span JSON，照上面的分類法與標註欄位逐 span 標註。"
+  },
+  "assumptions": [
+    "原始 OpenTelemetry／OpenInference JSON 完整而忠實地呈現了 agent 的決策與工具互動，裁判只看軌跡就足以判定錯誤（作者明說不要求、標註者也沒有查證軌跡以外的資訊）。",
+    "每個錯誤有唯一的「正確位置」（第一次出現；Resource Abuse 取最後一次），因此以 span id 完全相符當作定位正確是合理的。",
+    "單一標註者加上複核得到的金標接近完整，漏標可忽略；否則以金標為分母的 recall 型指標會失真。",
+    "兩種 agent 設定（o3-mini 的 OpenDeepResearch、claude-3.7 的 CodeAct）產生的錯誤分布足以代表真實世界的 agent 失敗，SWE 分割刻意加上的指令限制不會扭曲分布。",
+    "分類法的葉節點彼此足夠互斥，一個錯誤只給一個類別是可行的。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "TRAIL（GAIA 分割，約 118 條軌跡，源自 GAIA 純文字題）",
+      "TRAIL（SWE Bench 分割，約 30–31 條軌跡，源自 SWE-Bench Lite）"
+    ],
+    "metrics": [
+      "Error Category F1（加權 F1）",
+      "Location Accuracy（span 定位準確率）",
+      "Joint Accuracy（類別＋位置同時正確）",
+      "人類與模型 rubric 分數的 Pearson ρ（overall；附錄拆 Reliability／Security／Instruction Adherence／Plan Optimality）",
+      "輸入長度與上述指標的 Pearson／Spearman 相關"
+    ],
+    "baselines": [
+      "GPT-4.1",
+      "OpenAI o1（reasoning high）",
+      "OpenAI o3（reasoning high／medium／low）",
+      "Claude-3.7-Sonnet（reasoning high）",
+      "Gemini-2.5-Pro-Preview-05-06",
+      "Gemini-2.5-Flash-Preview-04-17",
+      "Llama-4-Scout-17B-16E-Instruct",
+      "Llama-4-Maverick-17B-128E-Instruct"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "資料集規模：148 條軌跡、共 1987 個 OpenTelemetry span，其中 575 個 span 至少有一個錯誤；共 841 個標註錯誤，平均每條軌跡 5.68 個。",
+      "numbers": "148 traces；1987 spans；575 error spans；841 errors；5.68 errors/trace；GAIA 平均 8.28 spans/trace、SWE 32.58 spans/trace",
+      "section": "§1、§4、Table 5",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "錯誤分布極度偏斜：Output Generation 類（Formatting Errors＋Instruction Non-compliance）佔大宗，System Execution Errors 很少；Output Generation 錯誤中約 44% 屬低影響。",
+      "numbers": "353/841 ≈ 42%；Output Generation 低影響約 44%",
+      "section": "§4.3、Figure 3、Figure 6",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "所有受測 LLM 在軌跡除錯上都很差；最佳的 Gemini-2.5-Pro 聯合準確率 GAIA 0.183、SWE 0.050，且 o1、o3、Claude-3.7-Sonnet 因上下文不足無法處理 SWE 分割。非推理模型的聯合準確率幾乎為 0（GPT-4.1 GAIA 0.028，Llama-4 兩者皆 0）。",
+      "numbers": "Gemini-2.5-Pro：GAIA Cat F1 0.389／Loc 0.546／Joint 0.183；SWE 0.148／0.238／0.050。o3 GAIA 0.296／0.535／0.092；Claude-3.7 GAIA 0.254／0.204／0.047；摘要所稱 11% 接近兩分割聯合準確率的簡單平均（0.1165），而非依軌跡數加權（約 0.156）",
+      "section": "§6、Table 1",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "所有指標都與輸入長度負相關，佐證「軌跡越長越難」。",
+      "numbers": "Pearson r：Location −0.379、Joint −0.291、Cat F1 −0.296；Spearman ρ：−0.508、−0.349、−0.225",
+      "section": "§5.1.3、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "同一模型 o3 的 reasoning effort 從 high 降到 low 時，Category F1 與 Location Accuracy 單調下降；作者據此主張測試時推理量有幫助。但 Joint 在 medium 反而最高，與作者「三個指標都下降」的敘述不符。",
+      "numbers": "Cat F1 0.296→0.277→0.264；Loc 0.535→0.373→0.331；Joint 0.092→0.104→0.071（high→medium→low，僅 GAIA）",
+      "section": "§5.1.5、Table 4（§A.4）",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "各類別難度差異大：Context Handling Failures 幾乎所有模型 F1 為 0；Tool Selection Errors 多數模型 0–0.08；Task Orchestration 多數 0–0.08；相對地 Goal Deviation 與 Poor Information Retrieval 以 Gemini 系列最好，Language-only 幻覺各模型都抓得到一些。",
+      "numbers": "Context Handling：Claude-3.7 0.18，其餘約 0.00；Tool Selection：o3 0.53、Claude 0.27、Gemini-Pro 0.26；Task Orchestration：Gemini-Flash 0.47；Goal Deviation：Gemini-Pro 0.70；Language-only 0.14–0.59",
+      "section": "§5.1.6、Figure 4、§A.6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "標註品質以複核修改率佐證：在另挑的軌跡上，複核後只有約 5% 的 span 被改動；作者據此宣稱高一致性。",
+      "numbers": "SWE：30 條軌跡、444 spans，5.63% 被修改（主要是 Resource Abuse 33.33%）；GAIA：33 條、697 spans，5.31% 被修改",
+      "section": "§4.2、§A.7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "軌跡層級 rubric 分數與人類的相關：Claude-3.7-Sonnet 在 GAIA 最高，Gemini-2.5-Pro 在 SWE 最高；Security 一欄所有模型都是 1.00。",
+      "numbers": "Claude-3.7 GAIA 平均 0.738；Gemini-2.5-Pro SWE 平均 0.817（其 SWE 的 Reliability／Instruction／Plan 皆 1.00）；Security 全部 1.00",
+      "section": "§A.8、Table 6、Table 1 的 ρ 欄",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "資料集與分類法只處理純文字輸入輸出，多模態 agent（多模態工具使用）需要擴充分類法。",
+    "長尾類別樣本很少，但這些往往是高影響失敗；建議未來以系統性修改既有軌跡的方式合成高影響、低頻的錯誤。",
+    "軌跡長度常超過模型上下文，8 個模型中有 3 個無法處理 SWE 分割的完整軌跡。",
+    "標註者沒有查證軌跡以外的資訊（網路或其他來源），若要查證標註時間會更長。"
+  ],
+  "limitations_observed": [
+    "指標只量 recall、不罰誤報：依官方 calculate_scores.py，Location Accuracy 與 Joint Accuracy 的分母是金標集合，預測多列 span 不扣分。理論上把所有 span id 都列出來就能拿到 Location Accuracy 1.0；Table 1 中 o3 Loc 0.535 對 Joint 0.092 的巨大落差，無法區分是「位置對、類別錯」還是「大量撒網」。論文本文完全沒有定義這三個指標，讀者只能從 repo 反推。",
+    "Security rubric 在金標中是常數：我統計 repo 中 147 份可解析的金標檔，Security 分數全部是 5（GAIA 116 份、SWE 31 份）。常數序列的 Pearson 相關在數學上沒有定義，Table 6 卻對每個模型都報 1.00，這一欄沒有任何資訊量。Table 1 的 ρ 與 Table 6 的關係也對不上：§A.8 稱 Claude-3.7 在 GAIA 的「平均」是 0.738，但 Table 6 四項（0.79、1.00、0.53、0.59）的平均是 0.7275；Gemini-2.5-Pro 在 SWE 四項全是 1.00，「平均」卻是 0.817。ρ 的算法沒有寫清楚。",
+    "作者對 reasoning effort 的結論與自己的 Table 4 矛盾：o3 的 Joint 在 medium（0.104）高於 high（0.092），並非三個指標都隨 effort 下降；而且只有單一模型、只有 GAIA 分割、每格三次平均卻未報變異數，不足以支撐「推理量有幫助」的一般性結論。",
+    "TRAIL 分數很大程度在量長上下文能力而非除錯能力：§A.2 顯示模型排名幾乎與 LongBench v2、fiction.live 長上下文排行榜一致；輸入是未經處理的原始 JSON（GAIA 平均約 287K、最長 7.5M tokens），沒有任何切塊、摘要、逐 span 掃描或 Agent-as-a-Judge 式有工具裁判的對照組，因此「LLM 不會除錯軌跡」與「LLM 讀不完軌跡」沒被分開。",
+    "超長軌跡的處理不透明、分母可能不一致：GAIA 最長軌跡遠超所有模型的 1M 上限，但 Table 1 只在 SWE 標 CLE；公開腳本把超限或輸出無法解析的軌跡直接跳過、不計為 0，論文也沒報每個模型實際計分的軌跡數，跨模型比較可能不是同一批樣本。公開腳本對推理模型設 max_completion_tokens 8000，推理 token 也吃這個額度，輸出被截斷導致 JSON 解析失敗的風險未被討論。",
+    "「高一致性」的證據不是一致性：§A.7 用的是複核後 span 被修改的比例（5.31%／5.63%），不是兩位標註者獨立標註後的 Cohen's κ 或類別／位置一致率；而且被改動最多的恰好是 Resource Abuse 與幻覺類，正是定位規則最模糊、模型最常被判錯的類別。",
+    "資料筆數與類別支援在文中自相矛盾且長尾實際上是空的：摘要 148 條、Table 5 為 118＋31＝149 條、§4.3 說有錯誤的是 114＋30 條、HF 卡為 118＋30；Table 5 錯誤總數 579＋256＝835，與 841 不符；repo 中有一份 GAIA 金標不是合法 JSON。我對金標的統計顯示 Rate Limiting 為 0 筆、Service Errors 2、Timeout Issues 2、Tool Definition Issues 3，金標中還混有「Incorrect Memory Usage」這種不在分類法內的類別與多種拼法。作者主打的「涵蓋長尾系統執行錯誤」在資料上幾乎無法評估，這些類別的 F1 沒有統計意義。",
+    "生態效度被 SWE 分割的人為限制削弱：SWE 256 個錯誤中 Instruction Non-compliance（約 90）與 Formatting Errors（約 73）佔六成以上，而這兩類正對應作者刻意加上的「不准印檔案、一次 500 字元、禁用 git、輸出長度限制」等提示詞限制；每個資料來源只用一種 agent 框架與一個 backbone，對 LangGraph、AutoGen 等其他框架或其他 span 結構能否外推未知。",
+    "定位規則把「多個合理位置」壓成一個：錯誤一律取第一次出現（Resource Abuse 取最後一次）的 span，對跨多步累積形成的錯誤（Context Handling、Goal Deviation、Task Orchestration）而言，模型指向另一個同樣合理的 span 會被判全錯，這可能是這些類別 F1 接近 0 的部分原因，而不全是「需要高階推理」。",
+    "規模小、統計檢定缺席：SWE 分割只有約 30 條軌跡，Table 1、Table 6 的差異都沒有信賴區間或顯著性檢定；Gemini-2.5-Pro 在 SWE 上三項 rubric 相關都是 1.00，在這麼小且分數集中的樣本上更像退化結果。金標已在公開 repo 裡，未來模型有資料污染風險。"
+  ],
+  "framework_role": "T4 的核心參考之一，定義了「軌跡作為資料物件」的一種具體形狀：OpenTelemetry／OpenInference span 樹＋逐 span 的錯誤標註（類別、span id 位置、證據、描述、影響程度）＋軌跡層級 rubric 分數，並提供一份涵蓋推理、規劃、系統執行的失敗分類法，直接對應子領域「軌跡分析、失敗分類與歸因」中的步驟層級歸因。它的實驗本質是評估「LLM 當軌跡裁判」的能力，因此也是 T7（評估方法，LLM-as-judge 的元評估）的輸入，並與 T3（可觀測性：以 OpenTelemetry 收集 agent 執行）相接。對本框架最可直接借用的是錯誤紀錄的欄位設計與分類法；其結果也提醒：把整條原始軌跡丟給單一 LLM 做異常偵測在長軌跡上不可靠，需要切塊或逐步掃描的設計。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "TRAIL 只實作並評估這條邊的上游半段：在軌跡中偵測異常並輸出可被下游消費的異常紀錄（錯誤類別、span id 位置、證據、描述、影響程度）。論文沒有把偵測結果回饋給 agent 做自我修正，也沒有量測修正效果；它的數字（最佳聯合準確率 GAIA 0.183、SWE 0.050）可視為以單次 LLM 呼叫當 E3 偵測器時的準確度上限參考。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Patronus AI 官方部落格〈Introducing TRAIL: A Benchmark for Agentic Evaluation〉明言其產品 Percival（agent 軌跡除錯器）依 TRAIL 的分類法呈現 20 多種失敗模式並建議提示詞修改：https://www.patronus.ai/blog/introducing-trail-a-benchmark-for-agentic-evaluation",
+      "Patronus AI 官方 Agents 產品頁同時列出 TRAIL benchmark 與可偵測 agent 軌跡中 20 多種失敗模式的 Percival：https://www.patronus.ai/agents",
+      "資料集與評估程式碼公開：https://huggingface.co/datasets/PatronusAI/TRAIL（MIT、需同意分享聯絡資訊的 gated 資料集）；https://github.com/patronus-ai/trail-benchmark（MIT）"
+    ],
+    "assessment": "有商用採納證據，但來源是作者所屬公司 Patronus AI 自家產品 Percival 的官方自述（分類法被用作產品偵測失敗模式的依據），屬於同一公司的內部採用，不是第三方採用；docs.patronus.ai 的 Percival 文件需要登入（回傳 401），無法進一步核對分類法在產品內的實際對應。未見其他廠商以官方文件表明採用 TRAIL 分類法或資料集。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/patronus-ai/trail-benchmark",
+    "data": "公開但需登入同意：Hugging Face PatronusAI/TRAIL（MIT，gated，需同意分享聯絡資訊）提供原始 OpenTelemetry 軌跡；金標標註另放在 GitHub repo 的 benchmarking/processed_annotations_gaia（117 份，其中 1 份不是合法 JSON）與 processed_annotations_swe_bench（31 份）。論文承諾的 HuggingFace leaderboard 未核實。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是結構化（OpenTelemetry span）軌跡上做步驟層級錯誤分類與定位的代表性 benchmark，分類法與標註欄位可直接當 T4 的異常紀錄格式參考，且有作者公司產品採用；但指標只量 recall、Security 相關係數退化、資料筆數自相矛盾，引用它的數字時必須搭配上述批判。",
+  "related": [
+    "2503.13657",
+    "2311.12983",
+    "2310.06770",
+    "2402.01030",
+    "2503.06745",
+    "2410.10934",
+    "2407.01502",
+    "2411.13547",
+    "2503.02068",
+    "2412.14140"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

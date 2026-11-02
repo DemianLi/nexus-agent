@@ -10,6 +10,8 @@
  * 由 `mcp.test.ts` 以 `node --import tsx <這個檔>` 啟動。
  */
 
+import { appendFileSync } from 'node:fs';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -27,5 +29,106 @@ server.registerTool(
   },
   ({ project }) => ({ content: [{ type: 'text', text: `${project}：${CHANGELOG}` }] }),
 );
+
+// MCP 的 `isError`：工具本身失敗（不是協定層的錯）。agent 看到的要帶 `Error: ` 前綴、`status: 'error'`，與其他失敗的工具一致
+// （#1074：adapter 2.0.0 預設直接回沒有前綴的錯誤訊息，要在 plugin 裡補回）。
+export const FAILURE_TEXT = 'upstream exploded: 503';
+server.registerTool('fail', { description: '一定失敗，回 isError。', inputSchema: {} }, () => ({
+  isError: true,
+  content: [{ type: 'text', text: FAILURE_TEXT }],
+}));
+
+/**
+ * 核准宣告的驗收用（#1622）：量的是 **server 這一側有沒有收到 `tools/call`**，不是 client 看到什麼。`FIXTURE_CALL_LOG` 指一個檔，
+ * 這兩支每被呼叫一次就往裡面附加一行 raw name；沒設就不記。環境變數經那一列的 `connection.env` 傳進來。
+ */
+const CALL_LOG = process.env['FIXTURE_CALL_LOG'];
+const recordCall = (rawName: string): void => {
+  if (CALL_LOG !== undefined) appendFileSync(CALL_LOG, `${rawName}\n`);
+};
+
+/** 會寫東西的那一支：宣告成要問。 */
+export const RECORD_ORDER = 'record_order';
+server.registerTool(
+  RECORD_ORDER,
+  { description: '登記一筆訂單。', inputSchema: { item: z.string().describe('品項') } },
+  ({ item }) => {
+    recordCall(RECORD_ORDER);
+    return { content: [{ type: 'text', text: `已登記：${item}` }] };
+  },
+);
+
+/**
+ * 查詢的那一支，名字刻意帶句點：public name 會被換字並補指紋（`publicToolName`），`exempt` 寫的是 raw name，
+ * 拿 public name 去掉前綴來比就對不上。
+ */
+export const SEARCH_ORDERS = 'orders.search';
+server.registerTool(
+  SEARCH_ORDERS,
+  { description: '查訂單。', inputSchema: { query: z.string().describe('查什麼') } },
+  ({ query }) => {
+    recordCall(SEARCH_ORDERS);
+    return { content: [{ type: 'text', text: `${query}：查無資料` }] };
+  },
+);
+
+/**
+ * 回**空的** `content` 陣列的那一支（#1562）：MCP 允許工具什麼都不回（只做事、沒有可講的結果）。`projectNonText`
+ * （`packages/nexus-plugin-mcp/src/project-content.ts:66`）遇到空陣列不換，ToolMessage 的 content 留著 `[]`，模型端點收到的
+ * 工具訊息就是空的——驗收看的是下一個請求裡那則工具訊息被補成 `(no output)`。
+ */
+export const EMPTY_RESULT = 'empty_result';
+server.registerTool(
+  EMPTY_RESULT,
+  { description: '做完就好，沒有東西可以回。', inputSchema: {} },
+  () => ({ content: [] }),
+);
+
+/**
+ * 停止的驗收用（#1985）：一支慢查詢與一份讀很慢的資源，量的是 **server 這一側有沒有收到取消**。只在設了 `FIXTURE_SLOW_LOG`
+ * 時掛上（資源會讓這台多宣告 `resources` 能力）。被呼叫時往那個檔附加 `started`，請求的中止訊號舉起來（client 送了
+ * `notifications/cancelled`）時附加 `cancelled` 並回，否則睡滿 {@link SLOW_QUERY_MS} 才回。
+ */
+export const SLOW_QUERY = 'slow_query';
+export const SLOW_REPORT_URI = 'slow://report';
+export const SLOW_QUERY_MS = 15_000;
+const SLOW_LOG = process.env['FIXTURE_SLOW_LOG'];
+
+/** 等到被取消或睡滿；被取消時記一行。 */
+async function slowly(signal: AbortSignal, log: string): Promise<void> {
+  appendFileSync(log, 'started\n');
+  const cancelled = await new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), SLOW_QUERY_MS);
+    signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      { once: true },
+    );
+  });
+  if (cancelled) appendFileSync(log, 'cancelled\n');
+}
+
+if (SLOW_LOG !== undefined) {
+  server.registerTool(
+    SLOW_QUERY,
+    { description: '一支很慢的查詢。', inputSchema: { query: z.string().describe('查什麼') } },
+    async ({ query }, extra) => {
+      await slowly(extra.signal, SLOW_LOG);
+      return { content: [{ type: 'text', text: `${query}：查完了` }] };
+    },
+  );
+  server.registerResource(
+    'slow-report',
+    SLOW_REPORT_URI,
+    { mimeType: 'text/plain' },
+    async (uri, extra) => {
+      await slowly(extra.signal, SLOW_LOG);
+      return { contents: [{ uri: uri.href, text: '報表產好了' }] };
+    },
+  );
+}
 
 await server.connect(new StdioServerTransport());

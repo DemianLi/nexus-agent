@@ -25,7 +25,7 @@ import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
-import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { emptyCommandPoint, loopbackRequest, noSessions, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -206,12 +206,16 @@ describe('有一輪在跑', () => {
       const subagents = run.subagents();
       expect(subagents).toHaveLength(1);
       expect(resultsOf(subagents[0] ?? [])).toEqual([abortedResult(TOOL_ABORTED)]);
+      // 開頭那顆 `user/message` 是子代理收到的那句話（出生就記，#1159）。
       // **子代理那一層「正常收尾」不在它的日誌上多記一步**：擋下的那次模型呼叫在起訖紀錄器
-      // 外面就回了，所以只有真的叫過的那一對，夾著那一次的回覆（#305）。**量測有兩筆**（#528）：
+      // 外面就回了，所以只有真的叫過的那一對，夾著那一次的請求快照（#1020）與回覆（#305）。**量測有兩筆**（#528）：
       // 摘要器在停止閘門的外層，它交下去的那份請求被閘門擋下、回了合成的收尾，對它來說是正常回來，
       // 所以照記——量的是判準看過的那份，數字照樣成立。
       expect(typesOf(subagents[0] ?? [])).toEqual([
+        'user/message',
         'model/start',
+        'request/system',
+        'request/header',
         'assistant/message',
         'model/end',
         'context/measure',
@@ -228,27 +232,42 @@ describe('有一輪在跑', () => {
     }
   });
 
-  it('排在後面的那一句不動：停完接著跑', async () => {
+  it('排在後面的那一句停住：停完不接著跑，下一次送出才照 FIFO 跑（#637 的 Q2，翻過 #265 的 Q6）', async () => {
     const probe: Probe = { started: 0, settled: 0 };
     const run = await assemble(
       [
         { content: '動手寫。', toolCalls: [{ name: 'slow_write', args: {} }] },
         { content: '第二句收到。' },
+        { content: '第三句收到。' },
       ],
       [toolsPlugin(probe)],
     );
     try {
       const first = run.pump.submit({ kind: 'message', text: '寫檔' });
-      const second = run.pump.submit({ kind: 'message', text: '第二句' });
+      void run.pump.submit({ kind: 'message', text: '第二句' });
       await until(() => probe.started === 1);
       run.pump.cancel();
       await first;
-      await second;
-      const ends = run
+      await run.pump.whenIdle();
+      const ends = () =>
+        run
+          .root()
+          .filter((event) => event.type === 'turn/end')
+          .map((event) => event.data);
+      // 照 dsh 的 `keepInbox`：保留但停住（`agent-loop/tests/cancel.spec.ts:192-216`，`477b4f4`）。
+      expect(ends()).toEqual([ABORTED_END]);
+      expect(run.pump.running).toBe(false);
+      expect(run.pump.inbox.map((item) => item.text)).toEqual(['第二句']);
+
+      await run.pump.submit({ kind: 'message', text: '第三句' });
+      await run.pump.whenIdle();
+      expect(ends()).toEqual([ABORTED_END, {}, {}]);
+      const texts = run
         .root()
-        .filter((event) => event.type === 'turn/end')
-        .map((event) => event.data);
-      expect(ends).toEqual([ABORTED_END, {}]);
+        .flatMap((event) =>
+          event.type === 'turn/start' && event.data.kind === 'message' ? [event.data.text] : [],
+        );
+      expect(texts).toEqual(['寫檔', '第二句', '第三句']);
     } finally {
       await run.close();
     }
@@ -285,17 +304,19 @@ describe('沒有一輪在跑', () => {
       await run.pump.whenIdle();
 
       const tail = run.root().slice(before);
-      expect(typesOf(tail)).toEqual(['turn/start', 'tool/result', 'turn/end']);
+      // 收回那一輪：先記還欠的 `approval/decided`（`cancelled`，#1029），再是被收回的呼叫的結果與收尾。
+      expect(typesOf(tail)).toEqual(['turn/start', 'approval/decided', 'tool/result', 'turn/end']);
       expect(tail[0]?.data).toEqual({ kind: 'resume' });
+      expect(tail[1]?.data).toMatchObject({ outcome: 'cancelled' });
       expect(resultsOf(tail)).toEqual([abortedResult(TOOL_ABORTED_BEFORE_DISPATCH)]);
       // #305：帶的就是寫進對話的那一則——下面「下一句」量到模型看到的也是這一句。
-      expect((tail[1]?.data as SessionEventMap['tool/result']).message?.data.content).toBe(
+      expect((tail[2]?.data as SessionEventMap['tool/result']).message?.data.content).toBe(
         TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
       );
-      expect(tail[2]?.data).toEqual(ABORTED_END);
+      expect(tail[3]?.data).toEqual(ABORTED_END);
       // 配的是暫停那一輪留下、還沒配到結果的那顆 `tool/call`。
       const call = run.root().find((event) => event.type === 'tool/call');
-      expect((tail[1]?.data as { callId: string }).callId).toBe(
+      expect((tail[2]?.data as { callId: string }).callId).toBe(
         (call?.data as { callId: string }).callId,
       );
       await until(() => run.frames.some(isStoppedFrame));
@@ -339,6 +360,7 @@ describe('線上', () => {
         created += 1;
         return {
           agent: built.agent as unknown as PumpAgent,
+          attachSessions: noSessions,
           commands: emptyCommandPoint(),
           dispose: () => built.dispose(),
         };

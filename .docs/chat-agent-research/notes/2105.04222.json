@@ -1,0 +1,160 @@
+{
+  "id": "2105.04222",
+  "title": "Leveraging Slot Descriptions for Zero-Shot Cross-Domain Dialogue State Tracking",
+  "topic": "T2",
+  "subarea": "LLM 時代的 zero/few-shot DST",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "把 DST 寫成「對話歷史＋slot 描述 → 生成 slot 值」的 T5 seq2seq 問答（T5DST），並比較五種 slot 描述寫法，發現在描述前加上 slot 型別前綴（number of／location of／time of…）最有利於 MultiWOZ 的 zero-shot 跨領域遷移。",
+  "problem": "任務型對話系統常要支援新領域，但當時的 DST 需要大量該領域標註資料。zero-shot 跨領域 DST 要追蹤模型從沒看過標註的 slot；既有兩條路各有缺點：TRADE、DSTQA 這類靠 copy 機制或 ontology graph 的專用架構不容易吃到預訓練語言模型的好處；SGD 那一路把 slot 描述當輸入，但描述是群眾標註、跨領域寫法不一致，而且沒有人比較過「有描述 vs 沒描述」、也沒人研究描述該怎麼寫。",
+  "core_idea": "用不改架構的預訓練 seq2seq 模型（T5）逐 slot 生成值，把 slot 當成問題、對話當成文章；再把 slot 名稱換成描述，而描述裡明確寫出 slot 的「型別」（數量、地點、時間、布林、名稱、日期），讓不同領域中型別相同的 slot 共享表示，藉此把在已知領域學到的抽取能力轉到未見領域。",
+  "method": {
+    "task_formulation": "對話狀態是 slot-value 配對的清單。在第 t 輪，輸入是完整對話歷史 C_t（使用者與系統交替的所有句子，不是只有最後一句），對每一個要追蹤的 slot s_i 各做一次推論，輸出該 slot 的值 v_i。每輪都從完整歷史重新預測整份狀態，沒有顯式的「上一輪狀態＋增量更新」。",
+    "input_string": "每句加上說話者前綴後串起來，再接分隔符與 slot 名稱（或其描述）：論文寫成「user: U_1 … system: R_{t-1} user: U_t [sep] s_i」。公開程式碼（T5DST/data_loader.py）的實際做法是逐輪累加「System: 系統句 User: 使用者句」，然後接上 tokenizer 的 sep_token 與描述字串並在尾端加一個問號。",
+    "output": "decoder 以自迴歸方式生成值字串（例如 cheap、7、yes）。論文沒寫未提及的 slot 怎麼表示；公開程式碼對沒有值的 slot 以字串 none 當目標。測試時用 greedy decoding。",
+    "training_objective": "最小化每個 slot 值的負對數概似，對所有 n 個要追蹤的 slot 加總（式 2）；也就是把每一個（對話歷史, slot）配對當成一筆獨立的 seq2seq 訓練樣本，包含值為 none 的配對。",
+    "backbone": "T5-small（60M 參數、6 層 encoder-decoder、d_model=512、相對位置嵌入），不做任何任務專屬的架構修改；加描述時只是把輸入尾端的 slot 名稱換成描述。",
+    "slot_description_variants": {
+      "slot_name": "原始「domain-slot」名稱（表中的 T5DST 列），例如 hotel-book stay。",
+      "human": "MultiWOZ 2.1 補標、MultiWOZ 2.2 沿用的人寫描述；同一種 slot 在不同領域寫法不同（attraction-area 與 restaurant-area 的描述句型完全不同）。",
+      "naive": "把 domain-slot 機械轉成「[slot] of the [domain]」。",
+      "slot_value": "類別型 slot 在 naive 描述後接「is 值1 or 值2 …?」列出所有候選值（順序隨機）；非類別型 slot 與 naive 相同。",
+      "question": "改寫成問句「What is the [slot] of the [domain] that is the user interested in?」。",
+      "slot_type": "本文提出。先把 MultiWOZ 的 slot 分進七類（附錄 Table 4 只列出 29 個，hotel-pricerange 沒列，論文沒交代歸類）：Number（hotel-book stay、hotel-book people、hotel-stars、train-book people、restaurant-book people）、Location（train／taxi 的 destination 與 departure）、Time（train-arriveby、train-leaveat、taxi-leaveat、taxi-arriveby、restaurant-book time）、Boolean（hotel-parking、hotel-internet）、Name（三個 name slot）、Day（三個 day slot）、Others（hotel-type、attraction-type、三個 area、restaurant-food、restaurant-pricerange）。每類一個前綴：Number→number of、Location→location of、Time→time of、Boolean→whether have；Name、Day、Others 的前綴為空字串（slot 名本身已含型別，或不屬於任何型別）。再套三種模板之一：訂位類 slot 用「[prefix] [slot] for the [domain] booking」（例：number of people for the hotel booking），布林 slot 用「[prefix] [slot] in the [domain]」（例：whether have parking in the hotel），其他用「[prefix] [slot] of the [domain]」（例：location of destination of the train、time of arrive by of the train）。公開程式碼把這些字串放在 utils/slot_description.json。"
+    },
+    "training_protocol": {
+      "zero_shot": "沿用 TRADE（Wu et al. 2019）的前處理與切分：只用 restaurant、train、attraction、hotel、taxi 五個領域；每次留出一個領域，用其餘四個訓練，再在留出領域的測試集上評估。依公開程式碼：訓練與驗證只丟掉「只含留出領域」的單領域對話，含留出領域的多領域對話仍留在訓練集中，但只拿非留出領域的 slot 當目標；測試只保留含留出領域的對話、只評該領域的 slot。AdamW、初始學習率 1e-4、batch size 128、訓練 5 epochs。",
+      "few_shot": "先照 zero-shot 在四個領域訓練 5 epochs，再用目標領域 1%、5%、10% 的資料微調 10 epochs（公開 README 的指令寫的是 --n_epochs 15，與論文不一致）。只報 Slot Type 描述版本。",
+      "full_shot": "全部資料訓練最多 10 epochs、batch size 64、依驗證集 loss early stop，在 MultiWOZ 2.0 與 2.1 各跑一次。",
+      "compute": "8 張 NVIDIA V100；zero-shot 每組設定用三個隨機種子，報平均與標準差。"
+    },
+    "evaluation_metric": "joint goal accuracy：該輪所有被評 slot 的預測值都與標準答案完全相符才算對。zero-shot 表中的領域 JGA 只看目標領域的 slot，作者明言不能與多領域 JGA 相比。另以 slot accuracy 做逐 slot 分析（Figure 3、4，只有圖）。",
+    "baselines_setup": "TRADE（copy 機制）、SUMBT（BERT slot-utterance matching，zero-shot 數字引自 Campagna et al. 2020）、DSTQA（ontology graph 上的 QA，只比 few-shot）、SimpleTOD++（作者把 GPT-2 的 SimpleTOD 改成輸入也帶 slot 名稱，使其能做 zero-shot）。STARC 因訓練資料不同而沒有放進 zero-shot 比較。",
+    "inference_cost": "每輪、每個 slot 各一次完整的 encoder-decoder 前向，輸入都是完整對話歷史；全狀態追蹤等於每輪 30 次前向。論文沒有報延遲，也沒寫輸入長度上限或截斷策略。"
+  },
+  "assumptions": [
+    "目標領域的 schema（slot 清單、每個 slot 屬於哪個型別、類別型 slot 的候選值）在推論前就已由人定好；所謂 zero-shot 是零標註對話，不是零 schema 工程。",
+    "不同領域的 slot 之間存在可共享的型別（時間、地點、數量、布林），而新領域的 slot 大多能歸入這幾類。",
+    "每個 slot 可以獨立預測，slot 之間的相依（例如 taxi-departure 常等於先前預訂的 restaurant 名稱）可以只靠對話歷史隱含處理。",
+    "每輪都能取得並重新編碼完整對話歷史；狀態是對話歷史的函數，不需要另行維護。",
+    "slot 值可以用短字串逐字生成，並以與標準答案完全相符來判對錯（MultiWOZ 的正規化值）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MultiWOZ 2.0（zero-shot、few-shot、full-shot，採 TRADE 的五領域設定）",
+      "MultiWOZ 2.1（只做 full-shot，附錄 Table 5）"
+    ],
+    "metrics": [
+      "Joint Goal Accuracy（zero-shot 時只計目標領域 slot）",
+      "Slot Accuracy（Figure 3、4 的逐 slot 分析）"
+    ],
+    "baselines": [
+      "TRADE",
+      "SUMBT（數字引自 Campagna et al. 2020）",
+      "SimpleTOD++（GPT-2，加 slot 名稱輸入）",
+      "DSTQA（few-shot 與 full-shot）",
+      "五種 slot 描述變體：slot name、Human、Naive、Slot Value、Question",
+      "full-shot 對照：STARC、SGD-baseline、MinTL、SOM-DST、SST、TripPy、SimpleTOD"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "只用 slot 名稱的 T5DST 在 zero-shot 平均 JGA 就高於三個基線，模型本身（而非描述）貢獻了大部分增益。",
+      "numbers": "五領域平均 JGA：T5DST 33.56±0.54，SimpleTOD++ 29.65±0.58，SUMBT 28.18，TRADE 25.76；Attraction 32.66 vs TRADE 19.87，Train 31.27 vs 22.37，Taxi 64.62 vs 60.58。",
+      "section": "§4.4.1、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Slot Type 描述是五種寫法中平均最好的一種，作者稱比人寫與 naive 描述平均高約 2 點 JGA；增益主要集中在 Train 與 Hotel。",
+      "numbers": "平均 JGA：Slot Type 35.20±0.59，Question 34.21±0.63，slot name 33.56，Naive 33.37，Human 33.14，Slot Value 32.86。Train：35.42 vs slot name 31.27、Human 28.83；Hotel：21.21 vs slot name 18.73。對 Human 高 2.06、對 Naive 高 1.83、對 slot name 只高 1.64、對 Question 只高 0.99。",
+      "section": "§3.2、§4.4.1、Table 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "人寫的 slot 描述沒有帶來 zero-shot 增益，作者歸因於跨領域寫法不一致；naive 描述與原始名稱表現相近。",
+      "numbers": "平均 JGA：Human 33.14 vs slot name 33.56；Naive 33.37。",
+      "section": "§4.4.1、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "把候選值寫進描述會幫到類別型 slot，但傷害未見過的非類別型 slot，而後者正是 JGA 的瓶頸。",
+      "numbers": "Restaurant 領域 JGA 從 20.55（slot name）掉到 16.65；restaurant-area slot accuracy 68.35%→82.25%，restaurant-food 40.63%→26.10%。",
+      "section": "§4.4.1、Table 2、Figure 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "型別資訊帶來的增益集中在時間、地點、數量三類 slot，作者推測在資料不足時，明確告知目標值的型別特別重要。",
+      "numbers": "論文只以圖（Figure 3、4）呈現 Naive 與 Slot Type 的逐 slot accuracy，文字未給具體數字。",
+      "section": "§3.2、§4.4.1、Figure 3–4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "few-shot 下 T5DST＋Slot Type 在 5 個領域中有 4 個勝過 DSTQA，且不需要完整 ontology graph；1% 資料時遠高於 TRADE。",
+      "numbers": "1%：Attraction 58.77 vs TRADE 35.88、Hotel 43.07 vs 19.73、Train 70.82 vs 59.83。5%：對 DSTQA 只輸 Attraction（65.72 vs 70.47）。10%：Attraction 69.54 vs 71.60、Restaurant 63.47 vs 64.51 兩項都輸 DSTQA，所以「5 贏 4」只在 5% 成立。",
+      "section": "§4.4.2、Table 3",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "資料充足時描述的作用幾乎消失；T5DST 在 full-shot 上與同為 zero-shot 可用的模型相比有競爭力，但在 MultiWOZ 2.1 落後當時的 SOTA。",
+      "numbers": "Slot Type 描述只加 0.56（MWOZ 2.0：52.86→53.42）與 0.30（2.1：51.91→52.21）；2.1 上 SimpleTOD 55.76、TripPy 55.29、SST 55.23。",
+      "section": "附錄 A.2、Table 5",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "只有 60M 參數的 T5-small 就達到上述結果，比 110M 的 BERT 系基線與 GPT-2 的 SimpleTOD++ 還小。",
+      "numbers": "T5DST 60M；STARC、SGD-baseline、SST、TripPy 各 110M；MinTL（BART）400M；SOM-DST 340M。",
+      "section": "§4.2、Table 5",
+      "anchor_idx": 1
+    }
+  ],
+  "limitations_stated": [
+    "slot 描述在資料充足的 full-shot 訓練下幫助很小（MWOZ 2.0 只加 0.56、2.1 只加 0.30）。",
+    "full-shot 在 MultiWOZ 2.1 不如為 full-shot 最佳化的 SOTA；作者認為 token masking、完整 ontology、標籤清理等訓練策略會影響結果，並預期更大的 T5 會更好，但追 full-shot SOTA 不在本文範圍。",
+    "zero-shot 的領域 JGA 只看目標領域的 slot，不能與多領域 JGA 相比。",
+    "Question 式描述只在部分領域有效，其他領域失效；Slot Value 描述會傷害非類別型 slot。",
+    "無法與 STARC 比較，因為對方用了不同的訓練資料。"
+  ],
+  "limitations_observed": [
+    "「在所有領域一致提升」的說法與 Table 2 不符：Taxi 上 Slot Type 64.62 與只用 slot 名稱的 64.62 完全相同，且低於 Slot Value 的 65.09；Restaurant 上 21.65 低於 Question 的 21.82；Attraction 上 33.09±1.60 與 Naive 32.98、slot name 32.66 的差距遠小於標準差。平均增益幾乎全靠 Train（+4.15）與 Hotel（+2.48）。",
+    "「平均高 2 點」挑的是最弱的兩個對照（Human 33.14、Naive 33.37）；對最自然的對照 slot name 只高 1.64，對 Question 只高 0.99 且兩者標準差約 0.6，三個種子不足以宣稱顯著，論文也沒有做任何顯著性檢定。Naive 在 Train 的標準差達 4.31，顯示單一領域的比較很不穩。",
+    "few-shot 的「5 個領域贏 4 個」只在 5% 成立；10% 時 Attraction 與 Restaurant 都輸 DSTQA（3 贏 2 輸），1% 則 DSTQA 沒有數字。few-shot 只報 Slot Type 一種描述、沒有標準差，也沒有 slot name 的 few-shot 對照，無法判斷描述在 few-shot 下是否仍有貢獻。",
+    "zero-shot 的前提其實含有大量人工 schema 工程：每個新 slot 都要人工指定型別與模板（訂位類、布林類、其他類三種句型）。而且 Table 4 列出的 29 個 slot 中有 7 個落在 Others、另有 6 個（Name、Day）前綴為空，等於這 13 個 slot 的描述和 naive 幾乎一樣（hotel-pricerange 甚至沒列出）；作者自己點名的瓶頸 restaurant-food 正好在 Others，方法對最難的 slot 沒有提供任何額外資訊。",
+    "依公開程式碼的資料切分（沿用 TRADE），訓練時只排除「只含留出領域」的單領域對話，含留出領域的多領域對話仍在訓練集中，只是不計該領域 slot 的損失。因此模型在訓練時看過目標領域的語句，只是沒看過標籤；這是零標籤而非零曝光的 zero-shot，對真實新領域上線的外推要打折。",
+    "slot type 分類法是替 MultiWOZ 的 30 個 slot 量身訂做的，沒有在 SGD 這類有大量未見服務、且本身附描述的資料集上驗證；「人寫描述無效」的結論也只來自 MultiWOZ 2.1 那一份描述，它證明的是「這份寫法不一致的描述」無效，不能推論到寫法一致的人寫描述；本文也沒有做「把人寫描述改寫成一致句型」的對照來分開「人寫」與「不一致」兩個因素。",
+    "逐 slot 各跑一次完整歷史的前向，每輪成本隨 slot 數線性成長（MultiWOZ 全狀態每輪 30 次），且輸入是整段歷史、沒有截斷策略或長度上限的說明；對長多輪互動，這種「每輪從頭重推整份狀態」的設計既沒有報延遲，也沒有測對話長度對 JGA 的影響。",
+    "SUMBT 的 zero-shot 數字引自 Campagna et al. 2020 而非自己重跑，與本文三種子平均的數字不是同一套實驗條件；TRADE 也只有單一數字沒有標準差。",
+    "公開程式碼與論文超參數不完全一致：README 的 few-shot 與 full-shot 指令都寫 --n_epochs 15，論文寫 10 epochs；full-shot 論文寫 batch size 64，README 的指令（16×8 GPU）等於 128。照 README 重做未必能對上論文數字。",
+    "Figure 3、4 的逐 slot 分析只有圖，文字只引用了 restaurant-area 與 restaurant-food 兩個數字；「時間、地點、數量 slot 顯著提升」的主張在文字版無法核對幅度。"
+  ],
+  "framework_role": "屬於 T2 的「狀態表示與 schema 化」一環，但年代上是 LLM 之前的預訓練 seq2seq（T5-small 微調）而非提示式 LLM，比較適合當作 LLM 時代 zero-shot DST 的前身與標準基線：它確立了三件後續工作沿用的做法：(1) DST 可以寫成「對話＋slot 問題 → 生成值」的生成式問答，不需專用架構；(2) 狀態欄位的自然語言描述是跨領域遷移的主要介面；(3) 描述寫法本身是會影響結果的設計變數，一致的、帶型別資訊的描述比群眾寫的描述好。對我們的框架而言，可借鏡的是「狀態欄位要附一致的型別化描述」這條 schema 設計原則；逐 slot 前向、每輪從完整歷史重推狀態的做法則不適合長多輪 agent。同一個 repo 另含作者後續的 TransferQA（EMNLP 2021）。論文沒有自我修正、軌跡、使用者模擬或評估回流等機制，與其他節點沒有實質連結。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "論文作者多數任職於 Facebook，程式碼以 facebookresearch/Zero-Shot-DST 釋出（https://github.com/facebookresearch/Zero-Shot-DST，授權主要為 CC-BY-NC-SA-4.0，非商用）；這只是研究程式碼的釋出，論文與 repo 都沒有提到任何產品部署。"
+    ],
+    "assessment": "未見證據。論文沒有宣稱部署；以 WebSearch 查詢也只找到後續學術論文與論文頁面，沒有官方產品頁、model card 或官方部落格提到 T5DST 或 Slot Type 描述被用在產品中。repo 採非商用授權，也不利於直接商用。它被大量後續 zero-shot DST 論文當作基線，但那是學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/facebookresearch/Zero-Shot-DST（T5DST 資料夾；提供 create_data.py、以 --slot_lang 切換 none／human／naive／value／question／slottype 六種描述、以 --except_domain 指定留出領域、--fewshot 0.01／0.05／0.1）",
+    "data": "公開。MultiWOZ 2.0／2.1 為公開資料集；Slot Type 描述放在 repo 的 utils/slot_description.json，論文附錄 Table 4 也列出分類與範例。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "T5DST 是後續 zero-shot DST 論文最常引用的基線、也最早系統比較 slot 描述寫法，值得知道；但本身是 LLM 之前的 T5-small 微調、只在 MultiWOZ 2.0 上驗證、Slot Type 的增益不到 2 點且逐領域不一致，不是 T2 的必讀。",
+  "related": [
+    "1905.08743",
+    "1911.06192",
+    "2005.00796",
+    "1909.05855",
+    "2005.00891",
+    "2004.05827",
+    "1907.01669",
+    "2007.12720",
+    "1910.10683",
+    "2008.06239"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

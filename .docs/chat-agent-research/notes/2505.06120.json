@@ -1,0 +1,195 @@
+{
+  "id": "2505.06120",
+  "title": "LLMs Get Lost In Multi-Turn Conversation",
+  "topic": "T2",
+  "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "作者把六個單輪基準的完整指令，半自動切成一組資訊碎片（shard）。GPT-4o-mini 扮演使用者模擬器，每輪最多揭露一片。用這套設定對 15 個 LLM 跑了逾 20 萬段模擬對話，結果所有模型在「資訊逐輪補齊」的多輪對話中平均掉 39%。退化主要來自同一題多次執行之間的不穩定度（unreliability）暴增，最佳情況下的能力（aptitude）只小幅下降。",
+  "problem": "真實使用者很少一開始就把需求講完，而是在多輪對話中逐步補齊；Herlihy et al. 分析聊天紀錄，已證實 underspecification 很常見。但 LLM 評估幾乎都採單輪、指令完整的設定。既有的多輪基準（MT-bench、MT-Bench-101、MT-Eval 等）多半是 episodic：每一輪都是可以單獨評分的子任務，模型不必把分散在各輪的資訊融合成一個答案，因此會高估多輪能力。這些基準的多輪與單輪也用不同任務，無法直接比較同一份內容在兩種設定下的差距。作者要回答三個問題：同一批任務改成資訊逐輪揭露時，LLM 會掉多少？掉在能力還是穩定度？常見補救（agent 式重述、降溫度）有沒有用？對 T2 來說，這篇量的正是一件事的失敗率：把跨輪累積的限制條件維持成一個一致的狀態。",
+  "core_idea": "核心有三點。（1）Sharding：把一條完整指令拆成一組 shard，第一片是高層意圖，其餘每片是一個澄清條件，全部合起來的資訊量等於原指令。這樣同一份內容就能同時跑單輪（Full、Concat）與多輪（Sharded），做受控比較。（2）以 Concat 當對照組：把 shard 條列成一則單輪指令。如果 Concat ≈ Full、只有 Sharded 掉，就能排除「切片改寫造成資訊流失」這個解釋，把退化歸給「多輪＋資訊不完整」。（3）用重複取樣拆解退化：每個（模型、指令、設定）跑 N=10 次。第 90 百分位當 aptitude（最佳情況下的能力），第 90 與第 10 百分位之差當 unreliability（同一題最好與最壞差多少），把平均分數的下降拆成這兩個成分。",
+  "method": {
+    "分片的正式定義（附錄 B）": "把查詢 q 的原子內容單位（ACU）寫成 I(q) = [主要意圖 𝓘, (c1…cm) 澄清條件]。分片的目標是產生 q′ = [s1…sk]，使 I(q) = I(q′)。有效分片要滿足五個性質。P1 資訊保留：不能漏掉完成任務所需的資訊。P2 意圖先行：s1 就是高層意圖，例如「寫一個 Python 函式」。P3 順序無關：s2…sk 要去脈絡化、彼此不引用，任意排列後資訊等價。P4 最大化切分：每片只帶一個具體資訊，k 越大越好。P5 最小改寫：盡量保留原文用語，不簡化、不詮釋。",
+    "半自動分片流程（附錄 C、O.1）": [
+      "步驟 1 分段：GPT-4o 搭配各任務專屬、至少三個 few-shot 範例的提示，從原指令抽出互不重疊的最小資訊片段。複合條件（X and Y）要拆成兩段，分隔符、標題這類非必要文字可以略過。輸出 JSON 片段清單。少於三段的指令直接淘汰。",
+      "步驟 2 改寫：挑一個片段當第一片，改寫成像搜尋引擎關鍵字那樣的短句。其餘片段改寫成口語、去脈絡化的句子，並依對第一片的重要性排序。輸出 JSON，欄位為 initial_segment、initial_shard、shards[{segment, shard}]。",
+      "步驟 3 驗證，分兩層。第一層讓 LLM 判斷 shard 集合是否涵蓋原指令的全部資訊，輸出 coverage 與缺漏的片段。第二層做模擬：原指令跑 10 次 Full，shard 跑 10 次 Concat，再跑 10 次 Shuffle-concat（第一片以外的 shard 隨機排列後串接，用來驗 P3）。只保留同時滿足 P̄_Concat ≥ 0.8·P̄_Full 與 P̄_Shuffle-concat ≥ 0.8·P̄_Full 的指令。",
+      "步驟 4 人工檢查：作者在自製的網頁標註介面中逐筆檢視，可以增刪修 shard，並決定接受或淘汰。所有入選指令都經兩位作者檢視。每筆約 1–3 分鐘，100 筆約需 3 小時人工。"
+    ],
+    "任務與資料（§4.1、附錄 I）": [
+      "Code：HumanEval 切出 45 筆，其餘因太簡單、切不出足夠的 shard 而丟棄；再從 LiveCodeBench v5 call-based 子集的 Easy/Medium 補到共 100 筆。以測試案例執行判對錯，沿用 LiveCodeBench 的評估程式。回應裡有多個程式碼區塊時，取最後一個區塊的最後一個函式定義。",
+      "Database：取 Spider 1.0 驗證集，濾掉 EASY 難度後切到 107 筆，schema 放在系統訊息。依 Zhong et al. 的 test-suite，在多個資料庫上執行並比對結果，全部一致才算對；無法執行的查詢算錯。",
+      "Actions：取 BFCL V3 的 Parallel 子類（最適合切片），共 105 筆。工具文件 JSON 放在系統訊息，以官方工具判斷語意是否等價。",
+      "Math：取 GSM8K main，不做過濾，共 103 筆。用官方工具正規化數字後做 exact match。",
+      "Data-to-text：取 ToTTo 測試集 120 筆。論文說五片的內容固定，依序為：無標示的 HTML 表格、標示了目標儲存格的表格、維基頁名、段落名、10 則訓練集範例 caption。釋出檔則是 6–7 片（102 筆 6 片、18 筆 7 片），以抽查的一筆為例，順序是：表格與任務說明、10 則範例、標示後的表格、頁面 URL、頁名、段落名。範例 caption 提前到第 2 片，另外多了 URL 一片。以 BLEU 評分。",
+      "Summary：論文說把 Summary of a Haystack 縮成 mini-Haystack（20 篇文件，每個洞見重複出現在 3 篇），共 92 筆，每片隨機放 2 篇文件、共 10 片，第一片另外帶查詢、條列格式與引用格式。repo 的產生程式（tasks/summary/task_summary.py）則不同：貪婪挑文件直到每個洞見至少出現 2 次，再加至少 6 篇干擾文件，然後把文件切成至多 10 批（每批篇數取上整）。所以釋出檔是 6–10 片（6 片 36 筆、7 片 27 筆、8 片 12 筆、9 片 10 筆、10 片 7 筆），每片的篇數也不固定。評分用 Joint Score（LLM-as-a-judge，看涵蓋率與引用正確度）。所有設定都要求摘要不超過 300 字，超過的會從各條目按比例刪字後再評。",
+      "Data-to-text 與 Summary 屬 refinement 任務：每輪回應都直接當作答案嘗試，抽取結果就是整段回應，使用者輪次由模板產生、不經 LLM。",
+      "二元任務的 0/1 映射成 0/100，與連續分數放在同一尺度彙整。"
+    ],
+    "Sharded 模擬迴圈（§3.2、附錄 O.2；已對照 repo 的 simulator_sharded.py、user_agent.py）": [
+      "三個角色：被評估的 assistant；使用者模擬器（GPT-4o-mini，看得到全部 shard 與至今的對話）；system（同樣是 GPT-4o-mini，負責回應策略分類與答案抽取）。",
+      "第 1 輪直接送出第一片原文，不經 LLM。之後每輪由使用者模擬器依對話現況，挑「最基本、當下最相關」的一片揭露，並改寫成口語。提示詞的規則包括：每輪至多一片；要完整帶出該片的資訊；不重複揭露；只用陳述句、不反問；回答簡短，可以有錯字；扮演懶惰、不主動的使用者。assistant 問到與 shard 無關或籠統的問題時，只回「不知道」之類，不揭露新的 shard。輸出 JSON {response, shard_id}，shard_id = -1 表示這輪沒揭露。",
+      "assistant 回應後，由 system 分成七類：answer attempt、clarification（少於 100 字的單一問題）、interrogation（多個問題）、discussion、hedge（依假設列出多個候選答案）、refuse、missing。分類改自 Herlihy et al.，把 Miscellaneous 改成 Discussion。",
+      "只有 answer attempt 會進入答案抽取。短答案逐字複製；長答案標出開頭與結尾（各至少 4 個字或一整行），中間用省略號表示。抽取結果再交給任務評估函式。",
+      "終止條件有兩個：某次答案嘗試被判正確，或 shard 已全部揭露（最後一片揭露後，assistant 還有一次回應）。依 repo 實作，最終分數是最後一次被評的答案嘗試分數。二元任務答對即停，等於「任一輪答對就算對」。",
+      "assistant 只拿到最小的系統訊息（schema、工具清單等），不會被告知這是資訊逐步揭露的多輪對話，也沒有被提示要先澄清。目的是量模型的預設行為。"
+    ],
+    "五種模擬設定（§3.3、§7.1、附錄 M）": "Full：原指令，單輪。Concat：shard 條列成一則單輪指令，前面加一句要求綜合所有條列。Sharded：上述的多輪迴圈。Recap：沿用 Sharded 的對話紀錄，最後再加一輪，把先前所有使用者輪次一次重述（重述的是模擬器改寫後的口語句，不是原始 shard）。Snowball：每一輪先以「Just to reiterate」條列先前所有使用者輪次，再接上本輪新片；整段對話從頭重新模擬。",
+    "指標（§4.2、附錄 E）": "每個（模型、指令、設定）跑 N 次，得到分數集合 S。P̄ 是平均；A⁹⁰ 是 S 的第 90 百分位（aptitude）；U⁹⁰₁₀ 是第 90 百分位減第 10 百分位（unreliability）；reliability R = 100 − U。三者都先逐指令計算，再對整個語料平均。附錄 E 用 10 題 × 10 次的例子說明：同樣從 P̄=90 掉到 60，可以是 A 掉到 60、U 維持 0，也可以是 A 維持 90、U 升到 90。",
+    "日誌分析方法（附錄 F）": [
+      "過早作答：依首次答案嘗試出現在對話進度的哪個區間（每 20% 一格）分成五組，比較各組的 P̄。只有 Code、Math 的首答時點夠分散，其餘任務大多第一輪就作答。",
+      "答案膨脹：分別計算第 1、2、3… 次答案嘗試的平均長度（以抽取後的答案計，不含說明文字），與 Full、Concat 的答案長度比較。另外只取最終答對的 Code、Database 對話，比較正確解的長度。",
+      "跨輪注意力：在 Summary 任務中，統計第 t 輪摘要引用的文件分別是在第幾輪引入的。",
+      "冗長度：每個（模型、指令）的 10 次對話，按每輪平均回應字元數分成五個分位（每格 2 次），比較各格的 P̄。"
+    ],
+    "規模與超參數（§5、附錄 H、K、L、I.7）": "主實驗：600 條分片指令 × 3 種設定（Full、Concat、Sharded）× 15 個模型 × N=10，超過 20 萬段對話，成本約 5,000 美元。repo 釋出的 sharded_instructions_600.json 實際有 627 筆：code 100、database 107、actions 105、math 103、data2text 120、summary 92。各任務平均 shard 數約 4.3（database）到 7.2（summary）。所有角色預設 T=1.0；回應上限 1,000 tokens，推理模型（o3、R1）放寬到 10,000。15 個模型是 GPT-4o-mini、GPT-4o、o3、GPT-4.1、Claude 3 Haiku、Claude 3.7 Sonnet、Gemini 2.5 Flash、Gemini 2.5 Pro、Llama 3.1-8B、Llama 3.3-70B、Llama 4 Scout、OLMo-2-13B、Phi-4、DeepSeek-R1、Command-A。漸進分片實驗：挑恰好 8 片的指令，請 GPT-4o 合併成 2–7 片的版本，再加上 1 片（concat）版，每條原指令共 8 個版本，合計 248 條；在 GPT-4o 與 GPT-4o-mini 上各跑 10 次。溫度實驗：Code、Database、Actions、Math 各取 10 題，共 40 題；assistant 與使用者的溫度各取 0.0、0.5、1.0，每個條件跑 20 次。Recap/Snowball 實驗：GPT-4o 與 GPT-4o-mini，四個二元任務的全部指令，各跑 10 次。Translation 延伸：WMT 2019 德→英 30 篇，每篇截前 10 句，每片 2 句、共 5 片，以 BLEU 評分。"
+  },
+  "assumptions": [
+    "單輪基準的指令可以無損地切成順序無關的原子碎片，而且 Concat ≈ Full 就代表切片沒有流失資訊。",
+    "LLM 使用者模擬器（GPT-4o-mini）與 LLM 分類器、抽取器夠準確。作者人工抽查四個任務得到的低誤差率，可以外推到全部 20 萬段對話與全部 15 個被測模型。",
+    "這個理想化的使用者（每輪最多一片、最後一定補齊、第一輪就講清楚高層意圖）是真實使用者的良性下界，所以量到的退化是低估。",
+    "應該被評估的是預設行為，也就是只給最小系統訊息、不提示任何多輪策略時的表現。",
+    "同一指令重複取樣 10 次，其第 90／第 10 百分位足以分別代表最佳情況能力與不穩定度。",
+    "會「迷失」的任務具備三個性質：生成式、夠複雜、答案不可分解。翻譯實驗被拿來佐證，不具這些性質的任務不會退化。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "HumanEval + LiveCodeBench v5（Code，100 條）",
+      "Spider 1.0（Database，107 條）",
+      "BFCL V3 Parallel（Actions，105 條）",
+      "GSM8K（Math，103 條）",
+      "ToTTo（Data-to-text，120 條）",
+      "Summary of a Haystack 的 mini-Haystack 版（Summary，92 條）",
+      "WMT 2019 文件級德→英翻譯（延伸實驗，30 篇）"
+    ],
+    "metrics": [
+      "沿用各任務原本的指標。Code 以測試案例執行，Database 以 test-suite 執行比對，Actions 以 BFCL 官方工具判語意等價，Math 用 exact match（這四項皆為 0/100）；Data-to-text 與 Translation 用 BLEU；Summary 用 Joint Score（LLM-as-a-judge）。",
+      "P̄（平均表現）、A⁹⁰（aptitude，第 90 百分位）、U⁹⁰₁₀（unreliability，第 90 與第 10 百分位之差）",
+      "Sharded/Full、Concat/Full 的相對保留率（Table 1 最後兩欄）",
+      "模擬器品質（附錄 D 人工標註）：Shard Fully Revealed、Shard Contextualized、Strategy Accuracy、Extraction Success、Overall Success",
+      "日誌分析：首次答案嘗試的時點、答案長度（字元數）、各輪引入的文件被引用的比例、回應冗長度分位"
+    ],
+    "baselines": [
+      "同一內容的 Full（原單輪指令）",
+      "Concat（shard 串成一則單輪指令，用來排除改寫造成的資訊流失）",
+      "Shuffle-concat（只用在分片驗證）",
+      "Recap、Snowball（agent 式的使用者輪次重述）",
+      "調降溫度（assistant 與使用者 T ∈ {0, 0.5, 1}）",
+      "15 個模型相互比較，其中包含推理模型 o3 與 DeepSeek-R1"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "作者主張 15 個模型在全部六個任務上，Sharded 都低於 Full，平均只保留約六成。",
+      "numbers": "平均 −39%。Table 1 最後一欄，15 個模型的 Sharded/Full 保留率介於 50.5%（OLMo-2-13B）與 66.1%（Llama 4 Scout）之間。對照組 Concat 平均為 Full 的 95.1%。單項例子：Gemini 2.5 Pro 的 Database 從 97.3 掉到 43.8、Actions 從 97.8 掉到 36.3；GPT-4.1 的 Database 從 93.0 掉到 46.0。但「每個任務都掉」有例外：Command-A 的 Data-to-text 是 27.7→27.9，沒有下降。",
+      "section": "§6.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "退化主要來自 unreliability 暴增，aptitude 只小幅下降。單輪時，能力越強的模型越穩；多輪時，各模型的不穩定度都差不多高。",
+      "numbers": "A 平均 −16%，U 平均 +112%（超過兩倍）。多輪下，同一指令最好與最壞的執行平均差 50 個百分點。",
+      "section": "§6.2、Figure 6(b)",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "只要資訊分散在兩輪以上，模型就會迷失。切得細或粗影響不大，唯一有效的做法是一次給齊（1 片）。",
+      "numbers": "GPT-4o 與 GPT-4o-mini，1–8 片共 248 條指令，每條跑 10 次。從 2 片起就出現 aptitude 小降、unreliability 大增。數值只畫在 Figure 6(c)，正文沒有給。",
+      "section": "§6.3、Figure 6(c)、附錄 K",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Recap 與 Snowball 這兩種 agent 式的重述都有改善，但追不上 Full 與 Concat。作者稱 Snowball 能挽回 15–20% 的退化。",
+      "numbers": "Table 2，四個二元任務的平均。GPT-4o-mini：Full 86.8、Concat 84.4、Sharded 50.4、Recap 66.5、Snowball 61.8。GPT-4o：Full 93.0、Concat 90.9、Sharded 59.1、Recap 76.6、Snowball 65.3。",
+      "section": "§7.1、Table 2、附錄 M",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "調降溫度在單輪有效，在多輪幾乎無效。",
+      "numbers": "Full 與 Concat 把 assistant 溫度從 1.0 降到 0.0，作者說 U 下降 50–80%。實際四格中有三格落在這個範圍（例如 GPT-4o-mini 的 Full 從 16.0 降到 6.8，−58%），GPT-4o 的 Full 從 17.8 降到 2.8，達 −84%。Sharded 下，GPT-4o-mini 沒有改善（UT=1.0 時從 49.8 變成 51.0），GPT-4o 只改善 15–20%。使用者與 assistant 溫度都設 0.0 時，U 仍約 30（GPT-4o-mini 30.5、GPT-4o 29.7）。",
+      "section": "§7.2、Table 3、附錄 L",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "越早提出完整答案，最終表現越差。這項分析只做了 Code 與 Math。",
+      "numbers": "首次答案嘗試落在對話前 20% 的，平均 30.9；落在最後 20% 的，平均 64.4。作者稱每個模型都是越晚作答分數越高，但 Table 6 並非逐格單調：OLMo-2 與 DeepSeek-R1 在最晚一組反而下降（47.3→26.4、66.4→50.2）。",
+      "section": "附錄 F.1、Table 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "答案膨脹：多輪中每次新嘗試都越改越長，模型沒有撤回先前的錯誤假設。",
+      "numbers": "Sharded 的最終答案比 Full、Concat 長 20–300%。只看答對的也一樣：Code 平均 850 對 668 字元（+27%），Database 平均 129 對 113 字元（+14%）。",
+      "section": "附錄 F.2、Figure 9",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "loss-in-middle-turns：多輪對話中，模型偏向引用第一輪與最後一輪提供的文件，中間輪次提供的文件容易被忽略。",
+      "numbers": "第 2 輪的摘要，引用第 1、2 輪文件的比例各為 48%、49%。第 8 輪的摘要，第 8 輪文件佔 20%，第 2、3 輪文件各只佔 8%。這是 15 個模型的平均；作者說強模型的效應較弱，但沒有給各模型的數字。",
+      "section": "附錄 F.3、Figure 10",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "模擬完全自動化，使用者的結構很窄：每輪揭露一片、最後一定補齊全部資訊、第一輪就講出高層意圖，而且 shard 切到最小，可能帶有對抗性。這不代表真實的人機對話；作者認為這會讓退化被低估。",
+    "自動模擬少了人類對話中的細節，例如術語誤解、因挫折而放棄、目標本身不可行。",
+    "只測分析型任務（有明確解答），沒有涵蓋創意寫作等開放任務。",
+    "只測英文、純文字，沒有涵蓋其他語言與多模態。",
+    "LLM 模擬元件會出錯。人工檢查的對話中，出錯的不到 5%，錯誤對 assistant 不利的不到 2%。",
+    "Recap 要事先知道哪一輪是最後一輪，實務上做不到。",
+    "翻譯這類可分解（episodic）的任務不會退化。「生成式、夠複雜、答案不可分解」這三個性質是作者的假說，並未系統驗證。",
+    "首答時點分析只能在 Code、Math 上做；冗長度分析在 Actions 上的趨勢相反。"
+  ],
+  "limitations_observed": [
+    "A/U 指標在二元任務、N=10 的設定下，可能把退化機械性地歸給 unreliability。這點無法直接驗證，因為 repo（microsoft/lost_in_conversation）沒有附 A/U 的計算程式；以下以 numpy 預設的線性內插百分位推算。在這個假設下，10 次中只要答對至少 2 次，A⁹⁰ 就是 100；答對次數落在 2–8 次時，U 一律是 100。因此在四個二元任務上，A 近似「10 次裡至少答對 2 次」，U 近似「結果不是全對，也不是幾乎全錯」。單題成功率從 100% 掉到 20%–80% 之間的任何程度，都只會算進 U，不會算進 A。§6.2「退化主要是 unreliability 而非 aptitude」有相當一部分是指標定義推出來的，不能直接讀成「能力沒變、只是不穩」。「aptitude 下降不顯著」這句話也沒有做任何統計檢定。",
+    "量到的 unreliability 混進了使用者模擬器的變異。主實驗的使用者模擬器同樣是 T=1.0（repo 預設），每次挑哪一片、怎麼改寫都不一樣。Table 3 顯示，把 UT 從 1.0 降到 0.0，U 會下降約 7–40%，視格子而定。在主實驗條件 AT=1.0 下，GPT-4o-mini 是 49.8→38.5（−23%），GPT-4o 是 41.0→35.8（−13%）；AT=0.0 時，GPT-4o-mini 是 51.0→30.5（−40%），GPT-4o 是 31.8→29.7（−7%）。趨勢也不單調：GPT-4o-mini 在 AT=1.0 時，UT=0.5 的 31.7 反而低於 UT=0.0 的 38.5。每格只有 20 次取樣，百分位估計的雜訊不小。方向上，輸入端的變異確實是 unreliability 的一部分，但 §7.2 把它全歸給「LLM 生成文字的隨機性」，說法過頭。真實使用者的措辭本來就會變，但輸入端與 assistant 端的變異應該分開報告。",
+    "首答時點分析（F.1）可能有機械性混淆。對話在答對時就結束；如果「對話進度」以實際輪數正規化，第一次作答就答對的對話，首答必然落在最後 20%，成功案例會被機械性地塞進晚期那一組。論文沒寫分母是實際輪數還是 shard 數，分析程式也沒有釋出。此外這只是相關、不是因果：較難或較模糊的題目，本來就可能同時引發早答與低分。冗長度分析（F.4，最短比最長高 10–50%）同樣只是相關。",
+    "§7.1 從 Recap、Snowball 推論「靠 agent 框架處理有限，LLM 應原生支援多輪」，但這兩種做法都只是把使用者的原話重貼進已經含有錯誤嘗試的上下文。最直接的狀態管理做法沒被測：由 LLM 把目前狀態彙整成結構化摘要，放進乾淨的上下文重問。論文自己在 §7.4 建議使用者「先請模型彙整，再開新對話」，而 Concat 又達到 Full 的 95%；兩者合起來，反而指向這個沒被測的組合可能很有效，與 §7.1 的結論有張力。而且這個推論只建立在同一家族的兩個模型（GPT-4o、GPT-4o-mini）和四個任務上。",
+    "「Snowball 能挽回 15–20% 退化」與 Table 2 對不起來。以 Full−Sharded 的缺口換算，Snowball 補回的比例是 GPT-4o-mini 31%、GPT-4o 18%；Recap 則是 44% 與 52%。論文沒說明 15–20% 是怎麼算的。",
+    "沒有 T2 意義上的顯式狀態。assistant 只拿到最小的系統訊息，既沒有「先釐清再作答」或維護狀態的指示，也沒有結構化的 slot 或記憶模組。所以結果量的是「原始對話歷史＋預設行為」的下界，不能直接外推到有顯式 DST 或記憶管理的 agent。F.1 提到四個任務大多在第一輪就作答，提示詞層級的澄清指示可能就能改變很多，但這點沒測。",
+    "計分方式不對稱。依 repo 實作，二元任務在 Sharded 下是「任一輪答對就停、算對」，等於有多次嘗試機會，而 Full 只有一次。這會讓 Sharded 的分數偏高，作者的結論因此偏保守。但這也代表 Sharded 分數量的是「過程中有沒有碰到正解」，不是「最後維持住的狀態對不對」。refinement 任務則取最後一次答案，兩類任務的 P̄ 語意不同，卻被平均在一起。另外，最後一片揭露後 assistant 如果選擇追問而不作答，就沒有再作答的機會。",
+    "模擬元件與被測模型重疊。使用者模擬器、策略分類器、答案抽取器都是 GPT-4o-mini，而 GPT-4o-mini 本身也在被測名單裡。分片的步驟 1–3 用 GPT-4o；「Concat ≥ 0.8 Full」這道篩選是用哪個模型跑的，論文沒寫。這可能讓 OpenAI 系模型在 Concat 上佔便宜。模擬器誤差只檢查了四個任務，由作者自己標註，也沒有報告標註者之間的一致性。",
+    "推理模型沒幫助的解釋（回應平均長 33%，因此帶進更多假設）只是推測，沒有做控制長度的對照實驗。Figure 10 只給 15 個模型的平均，強弱模型之間的差異沒有量化。",
+    "arXiv v1 裡有幾處數字彼此不一致。整體退化：摘要寫 −39%，Figure 1 寫 −35%，引言寫 90%→65%（25 點）。漸進分片的指令數：§6.3 寫 31 條；附錄 K 先寫 8 條，又寫 31 條（248 = 31×8）。人工檢查的對話數：附錄 D 的 Table 5 標題寫 100 段，正文寫 200 段，§3.2 寫 several hundred。指令總數：正文寫 600 條，釋出檔實際有 627 條。Data-to-text 與 Summary 的片數和組成，論文描述與釋出檔不同（見 method）。「每個模型在每個任務都下降」也有反例：Command-A 的 Data-to-text 是 27.7→27.9。這些都不動搖主結論，但引用數字時要小心。本筆記讀的是快取中的 v1，ICLR 2026 定稿可能已經修正。"
+  ],
+  "framework_role": "這篇是 T2 的核心問題陳述與量測工具。它把「LLM 無法把跨輪累積的限制條件維持成一致的狀態」量化成 aptitude 與 unreliability，並拆出四個機制：過早作答、答案膨脹且不撤回舊假設、loss-in-middle-turns、回應冗長。這四項可以直接當 T2 狀態維護模組的失敗模式清單與回歸測試。Database（Spider）與 Actions（BFCL）本質上就是把分散在各輪的限制條件（slot）累積起來，一次送出查詢或 API 呼叫，是這篇裡最接近 DST 的兩個任務。依 Table 1 算相對降幅，Database 在強模型上一致是最大或次大的降幅（GPT-4.1 −51%、Gemini 2.5 Pro −55%、o3 −62%、Claude 3.7 Sonnet −63%、DeepSeek-R1 −66%）。Actions 則因模型而異：Claude 3.7 Sonnet −65%、Gemini 2.5 Pro −63%，但 GPT-4o −32%、GPT-4.1 −34%、Command-A −27%。這可以當作 LLM 在類 DST 任務上會失敗的證據，但不能說 slot 類任務一律掉最多：GPT-4o 與 GPT-4.1 在 Data-to-text、Summary 上也掉了 48–56%，只是連續指標的基數低，相對降幅不完全可比。答案膨脹（新資訊進來後，模型沒有撤回先前的假設）正是框架裡缺少 E2（反思修正回寫狀態）時會出現的樣子，可以當作 E2 的實證動機。次要角色有三個：sharding 加上 LLM 使用者模擬器是 T6 的一種受控設計；A/U 指標與 Full/Concat/Sharded 對照是 T7 的評估方法；過早作答與回應策略分類則連到 T1 的澄清問題。這篇只量測問題，沒有提出狀態的表示或更新方法。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "使用者模擬器依對話現況逐輪揭露 shard：第一片固定是高層意圖，後面是澄清條件；assistant 問到與 shard 無關的問題時，只回不知道。這就是外部輸入進入目標理解的方式。論文操縱了揭露的粒度（漸進分片 1–8 片）與使用者溫度，量測意圖逐步補齊時 assistant 的表現，並以 Concat 當作一次給齊的對照。"
+    },
+    {
+      "edge": "E6",
+      "how": "每段模擬對話中，每一輪 assistant 回應都由 system 分成七類回應策略；答案嘗試再經抽取、交給任務評估函式。10 次重複的分數彙整成 P̄、A、U。附錄 D 以人工檢查模擬紀錄的品質；附錄 F 從 20 萬段互動紀錄中分析首答時點、答案長度、跨輪引用分布與冗長度。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Oracle 官方部落格〈When LLMs Get Lost in Multi-Turn Chats – and How OCI-STM Helps〉（2026-04-20，作者是 OCI Gen AI 的應用科學與產品團隊）介紹 OCI GenAI Enterprise AI Responses API 的 OCI-STM 短期記憶功能。這個功能定期把較舊的對話輪次壓縮成結構化的 memory state，最近幾輪保留原文。文中說以 sharded 版的 GSM8K、HumanEval、Spider、BFCL 等多輪基準驗證，並把本文列為參考文獻 [3]。頁面沒說是否直接使用 microsoft/lost_in_conversation 的釋出資料；同段提到的 recollection、refinement、expansion、follow-up 屬於 episodic 類別，不是本文的設計；品質結果只有圖，沒有數字。來源：https://blogs.oracle.com/ai-and-datascience/multiturn-ocistm（WebFetch 與 curl 都回 403，改用瀏覽器開啟確認內容）"
+    ],
+    "assessment": "有一筆可查證的商用採納：Oracle OCI 把本文的 sharded 多輪設定（同樣的四個基準）當作產品功能 OCI-STM 的驗證基準之一，並直接以本文的問題定義當產品動機。其餘影響都屬於學術面，不列為採納證據：ICLR 2026 Outstanding Paper（https://blog.iclr.cc/2026/04/23/announcing-the-iclr-2026-outstanding-papers/），以及許多以它為基準的後續研究，例如 Oracle 團隊自己的 MT-OSC（arXiv:2604.08782）。論文本身只引了 Cursor 使用者在 Reddit 上的經驗談（常開新對話），那是社群軼事，也不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/microsoft/lost_in_conversation",
+    "data": "公開。Hugging Face 上的 microsoft/lost_in_conversation（CDLA-Permissive-2.0）；repo 內也有 data/sharded_instructions_600.json（實際 627 筆）與 sharded_translation.json。程式碼採 MIT 授權，附模擬器（Full、Sharded、Recap、Snowball）、分片與模擬的提示詞、對話檢視器。沒有附 A/U 指標與附錄 F 各項分析的程式。15 個模型多數是閉源 API，版本列在附錄 H，完整重跑約需 5,000 美元。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "這是 LLM 多輪退化最具代表性的受控量測（15 個模型、20 萬段對話、ICLR 2026 Outstanding Paper），直接定義了 T2「多輪狀態維護」要處理的失敗模式，並附開源工具，Oracle 已用它的設定驗證產品。但它只量不解，A/U 指標的解讀也要小心。",
+  "related": [
+    "2406.01633",
+    "2306.05685",
+    "2402.14762",
+    "2401.16745",
+    "2501.17399",
+    "2307.03172",
+    "2311.08596",
+    "2407.01370",
+    "2503.13975",
+    "2504.07114",
+    "2502.13069",
+    "2402.15057"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

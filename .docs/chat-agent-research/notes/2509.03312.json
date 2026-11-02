@@ -1,0 +1,154 @@
+{
+  "id": "2509.03312",
+  "title": "AgenTracer: Who Is Inducing Failure in the LLM Agentic Systems?",
+  "topic": "T4",
+  "subarea": "軌跡分析、失敗分類與歸因",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 AgenTracer，用兩種方式自動標註多 agent 失敗軌跡的決定性錯誤（哪個 agent、哪一步），得到約 2.5K 筆的 TracerTraj：一是反事實重放，對失敗軌跡換上 DeepSeek-R1 提出的局部修正後重跑，看哪一步修好就能翻成成功；二是程式化故障注入，在成功軌跡的某一步植入錯誤使它失敗。再用 GRPO 加多粒度獎勵，把 Qwen3-8B 訓練成歸因器 AgenTracer-8B；它的診斷推理可當回饋餵回 MetaGPT、MaAS、OWL 等系統。",
+  "problem": "多 agent 系統把多個模型、工具與協調協定疊在一起，失敗率很高（引 MAST 的觀察，熱門框架的失敗率最高達 86.7%）。要除錯、把失敗軌跡變成有用的訓練資料、或替每個 agent 做 credit assignment，都得先回答「是哪個 agent、在哪一步把事情搞砸」，但這件事目前靠人工讀冗長的 log。先前的自動化嘗試（Who&When 用 o1、DeepSeek-R1 做歸因）step-level 準確率不到 10%；現有的人工標註集也很小（論文寫 MAST 200 條、Who&When 127 條）。因此缺兩樣東西：能大量產生標註軌跡的自動管線，以及又快又準的專用歸因器（tracer）。",
+  "core_idea": "決定性錯誤的定義沿用 Who&When：軌跡中最早的一個動作，只要把它換成 oracle 動作、後續重新模擬，就足以讓失敗翻成成功。這個定義本身就是反事實的，所以可以用程式近似 oracle，把標註變成可自動驗證的搜尋。對失敗軌跡，讓看得到 ground truth 的強模型對某一步提出最小的局部修正，重跑驗證；反過來對成功軌跡，在某一步植入錯誤，只要系統因此失敗，錯誤位置就是構造時已知的標籤。兩種來源合成 (軌跡, 〈agent, step〉) 標籤，再以可驗證的獎勵用 RL 訓練小模型。獎勵分兩個粒度：agent 對不對，以及預測步與真實步的距離。",
+  "method": {
+    "形式化": "多 agent 系統 M = 〈I, S, A, Ψ, μ〉，採回合制：每個時間步只有 μ(t) 這個 agent 行動，動作 a_t = π_{μ(t)}(s_t, H_t, Q)，其中 H_t 是先前動作的子集，內容依框架而定。一次執行記為 τ = (s_0, a_0, …, s_T)，Ω(τ) ∈ {0,1} 表示失敗或成功。R(τ, t, a'_t) 是矯正算子：把第 t 步換成 a'_t 並重新模擬後續所有步。決定性配對集合 C(τ) 收集所有「原本失敗、換掉第 t 步後成功」的 (μ(t), t)，取其中 t 最小者為 (i*, t*)。Eq.4 的集合條件在原文印成 Ω(τ)=1 且 Ω(R(…))=0，方向與文字敘述相反，應是排版錯誤。",
+    "軌跡收集": "取 6 個多 agent 框架，涵蓋三種自動化程度：人工配置的 MetaGPT、AutoGen、Smolagents；部分自動的 AgentPrune；全自動的 AFlow、OWL-Workforce。任務來自三個領域：程式（MBPP+、KodCode、Blackjack）、數學（MATH、GSM8K）、通用 agentic（GAIA，附錄 Table 3 另列 HotpotQA）。每個框架對每個查詢執行一次，依 Ω 分成成功集 T_succ 與失敗集 T_fail。",
+    "失敗軌跡標註（反事實重放，Algorithm 1 Part 1）": "analyzer agent（DeepSeek-R1）的輸入是完整軌跡 τ、環境回饋 F（程式執行錯誤、工具錯誤等）與 ground-truth 解答 G。依論文，對 t = 0..T 逐步執行：analyzer 對第 t 步提出最小侵入的修正 a'_t，只修局部錯誤、不給完整解答；接著重跑得到 τ'；Ω(τ') = 1 就把 (μ(t), t) 記為標籤並停止，這就是最早的決定性錯誤。附錄 B 的診斷提示詞轉述如下：把 analyzer 設定成診斷失敗程式任務的軟體團隊，輸入題目、ground truth、模型預測與執行歷史，要求輸出 JSON，欄位為 mistake_step、mistake_agent、reason、suggested_fix；suggested_fix 只能給修正方向、不能給完整解答；提交前要自我檢查該步確實存在，且 agent 名稱與實際執行者一致；結果以 Editor.create_file 寫成檔案。",
+    "成功軌跡的故障注入（Algorithm 1 Part 2）": "對每條成功軌跡，依 Algorithm 1 從 {0..T} 隨機抽 K 個注入點（K 未報告）。在第 t 步用擾動算子 Π（同樣是 DeepSeek-R1）把 a_t 改成 ã_t，重跑得到 τ̃；若 Ω(τ̃) = 0，(μ(t), t) 就是 τ̃ 的標籤，每條成功軌跡找到第一個成功的注入就停。附錄 B 的攻擊提示詞轉述如下：把 LLM 設定成分析成功程式任務的攻擊專家，要它挑出改了最可能導致失敗的最關鍵步驟，輸出 attack_step、mistake_agent、original_content、attack_content、reason；attack_content 必須是具體可執行的程式碼改動（例如改 return 敘述、回傳 None），不能是含糊的指示。注意：這個提示詞是讓 LLM 自己挑步，與 Algorithm 1 寫的隨機抽樣不一致。",
+    "資料集 TracerTraj-2.5K": "D_tracer = D⁻（失敗軌跡的反事實標註）∪ D⁺（注入產生的合成失敗）。依 Table 3，程式領域收集 2,170 條、標註 1,288 條，數學 1,185 條、標註 630 條，agentic 1,300 條、標註 558 條，合計標註 2,476 條。以 9:1 切出測試集，Table 3 列 code 147、math 63、agentic 56。D⁺ 與 D⁻ 各佔多少沒有報告。",
+    "歸因器的輸入與輸出": "採 all-at-once 設定，把整條軌跡（含環境回饋）一次交給模型。輸出格式固定為先 <think>…</think> 推理，再 <answer>agentID | stepID</answer>。另分成可看 ground truth G（w/ G）與不可看（w/o G）兩種設定。",
+    "RL 目標": "以 Qwen3-8B 為底座，在 verl 平台上跑 GRPO。每條軌跡取樣 G 個候選 〈î_k, t̂_k〉，advantage A_k = (R_k − mean) / (std + 1e-6)。與標準 GRPO 的兩點差別：拿掉 KL 項；clip 範圍改用隨訓練步 s 線性收縮的動態值 B_s = max(0.2·B_0, B_0·(1 − s/S_total))，先鼓勵探索、後期求穩定，做法引自 GuardReasoner-VL。",
+    "多粒度獎勵": "R = I_format · (λ·r_step + (1−λ)·r_agent)。I_format 是硬閘門，輸出必須符合 think/answer 標籤與「agentID | stepID」格式才得分，否則整體為 0。r_agent = 1[î = i*]。r_step = exp(−(t̂ − t*)² / (2σ²))，差一步仍得約 0.61 分，差兩步約 0.14。",
+    "超參數": "λ = 0.5，σ = 1；batch size 32，每題 rollout 8 條（即 G = 8），learning rate 1e-6。硬體是 8 張 H100 80GB。",
+    "評估設定": "指標沿用 Who&When：agent-level accuracy（預測的 agent 是否等於 i*）與 step-level accuracy（預測步是否恰為 t*，完全比對）。w/ G 與 w/o G 各報一次。基線模型全部用相同的 all-at-once 提示直接歸因，沒有另外訓練。",
+    "下游回饋實驗（§5.3）": "系統 M 產生失敗軌跡 τ 後，把 τ（w/o G）交給 AgenTracer-8B，取它 <think> 內的推理當作反思回饋，注入下一輪解題，共迭代三輪。對照組是以 GPT-4.1 實作的 Self-Refine 與 CRITIC，用同樣的方式產生回饋。受測組合為 MaAS、OWL Workforce、MetaGPT 三個系統，搭配 GAIA、HumanEval+、MATH-500。",
+    "公開實作與論文描述的差異（依 GitHub repo，2026-09-26 查閱）": "公開的只有 MetaGPT 上的資料管線範例。它的失敗診斷流程不是 Algorithm 1 的逐步掃描，而是三步：先由 R1 直接指定 mistake_step，再依 suggested_fix 重跑；重跑仍失敗時，把已試過的步列入排除清單再問一次；預設最多 3 輪。重放方式是整個系統從頭重跑，由監測器偵測到錯誤步的前一步後才注入修正，前綴並沒有凍結。README 也自承釋出的資料是擴充版，與論文版本不完全相同。",
+    "未報告的細節": "B_0、S_total 與總訓練步數；注入取樣數 K；最大上下文長度與長軌跡的截斷方式；重放時每步取樣幾次；D⁺／D⁻ 比例；找不到可翻轉步的失敗軌跡如何處理；math 與 agentic 領域使用的提示詞（附錄只給程式任務版本）。"
+  },
+  "assumptions": [
+    "失敗可以歸到單一最早的決定性步驟：只修一步就足以把失敗翻成成功。需要同時修兩處才會成功的軌跡，在這個定義下沒有標籤。",
+    "看得到 ground truth 的 DeepSeek-R1 提出的局部修正，可以近似「理論上完美的 oracle 動作」，而且修正不會把答案洩漏給後續步驟，否則被標為決定性錯誤的會是「洩漏得最早」的步，而不是真正出錯的步。",
+    "重跑後由失敗翻成成功，是修正造成的，不是 LLM 取樣本身的隨機性造成的。",
+    "LLM 植入的程式碼破壞所造成的合成失敗，分布上足以代表自然發生的失敗（例如誤解任務、檢索到錯的檔案）。",
+    "任務有可自動判定的 Ω（單元測試、標準答案），重放與注入才能驗證。這限制了管線只能用在有 ground truth 的基準上。",
+    "系統是回合制、每步只有一個 agent 行動，所以 step 決定之後 agent 也就跟著決定。",
+    "整條軌跡放得進 8B 模型的上下文，可以 all-at-once 一次判斷。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Who&When handcraft 子集（Magentic-One 的軌跡；由百分比反推約 58 條）",
+      "Who&When automated 子集（AG2 的軌跡；由百分比反推約 126 條）",
+      "TracerTraj-code／math／agentic 保留測試集（與訓練集同分布，9:1 切分；Table 3 列 147／63／56 條）",
+      "§5.3 下游任務：GAIA、HumanEval+、MATH-500，搭配 MaAS、OWL Workforce、MetaGPT"
+    ],
+    "metrics": [
+      "agent-level accuracy（預測的肇事 agent 是否等於 i*）",
+      "step-level accuracy（預測的步是否恰為 t*，完全比對）",
+      "上述兩項各在 w/ G（可看 ground truth）與 w/o G 下報告",
+      "§5.3：三輪回饋迭代後的任務準確率（僅以圖呈現）"
+    ],
+    "baselines": [
+      "小型：Qwen3-8B（即底座）、Llama-3.2-3B",
+      "中型：Qwen3-32B、Qwen3-Coder-480B-A35B-Instruct",
+      "大型：GPT-4.1、DeepSeek-R1、Gemini-2.5-Pro、Claude-Sonnet-4",
+      "所有基線都用 all-at-once 提示直接歸因，沒有 step-by-step 或 binary search 等其他 Who&When 策略，也沒有其他經訓練的歸因器",
+      "§5.3：Self-Refine、CRITIC（皆以 GPT-4.1 實作）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "自動管線從 6 個框架、三個領域的軌跡中，產生約 2.5K 筆帶 (agent, step) 標籤的軌跡。",
+      "numbers": "收集 4,655 條，標註 2,476 條：code 1,288／2,170、math 630／1,185、agentic 558／1,300；測試集 147／63／56",
+      "section": "§4、§4.1、附錄 A Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "現成 LLM 直接做歸因的表現很差，step-level 尤其差，小模型幾乎等於沒判斷。",
+      "numbers": "Who&When handcraft 的 step-level（w/ G / w/o G）：Qwen3-8B 1.72/3.45、Qwen3-32B 1.72/1.72、Gemini-2.5-Pro 9.72/6.90、Claude-Sonnet-4 17.24/18.97；automated 子集 w/ G 的 step-level：DeepSeek-R1 31.32、GPT-4.1 29.52",
+      "section": "§5.2 Observation 1、Table 1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "AgenTracer-8B 在 Who&When 兩個子集、兩個層級都拿到最高分；但 handcraft 子集的 step-level 仍只有約兩成。",
+      "numbers": "handcraft：agent 69.10/63.82、step 20.68/20.68；automated：agent 69.62/63.73、step 42.86/37.30。handcraft agent-level w/ G 比 GPT-4.1 高 26.0 點、比 Claude-Sonnet-4 高 12.2 點",
+      "section": "§5.2 Observation 2、Table 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在同分布的 TracerTraj 測試集上，AgenTracer-8B 的 step-level 大幅領先。agent-level 大多領先，但 agentic 子集 w/ G 時輸給 Claude-Sonnet-4。",
+      "numbers": "step-level：code 18.85/18.85、math 57.63/57.63、agentic 36.17/35.55。agentic step-level w/ G 比 Qwen3-8B 高 22.68 點、比 DeepSeek-R1 高 9.04 點、比 Gemini-2.5-Pro 高 17.57 點。agentic agent-level w/ G：AgenTracer 53.28、Claude-Sonnet-4 55.20",
+      "section": "§5.2、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "提供 ground truth 不一定幫得上基線，有時反而更差。AgenTracer-8B 在 TracerTraj 的 code 與 math 上，step-level 有沒有 G 都一樣；但在 Who&When 上，少了 G 的降幅和大模型差不多，甚至更大，所以論文說的「remains robust」只在部分子集成立。",
+      "numbers": "基線有 G 反而較差：Claude-Sonnet-4 在 TracerTraj-math 的 agent-level 46.03（w/ G）對 50.79（w/o G）、step-level 38.10 對 46.03；Qwen3-Coder 在 Who&When handcraft 的 agent-level 51.72 對 60.35。AgenTracer 的 step-level：math 57.63/57.63、code 18.85/18.85。Who&When automated 的 step-level 少了 G 之後，AgenTracer 掉 5.56 點（42.86→37.30），Claude-Sonnet-4 掉 1.82 點、Gemini-2.5-Pro 掉 3.66 點。",
+      "section": "§5.2、Table 1、Table 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "把 AgenTracer-8B 的診斷推理當回饋、迭代三輪，能提升現成的多 agent 系統；以 GPT-4.1 實作的 CRITIC 反而會讓表現變差。",
+      "numbers": "OWL Workforce 在 GAIA +4.8%；MaAS 在 MATH-500 +14.21%；CRITIC+MaAS+GAIA 在第 2 輪 −4.9%、第 3 輪 −5.5%（其餘數字只在 Figure 3 圖中）",
+      "section": "§5.3、Figure 3",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "案例研究：一個長鏈文件分析任務的最終答案錯誤。AgenTracer-8B 把根因定位到 Web Surfer 在第 2 步取錯日期的檔案；Qwen3-8B 只歸咎於第 6 步 Coder 的執行錯誤，Claude-Sonnet-4 察覺第 6 步背後另有原因但沒有定位出來。",
+      "numbers": "質性單例，無數字",
+      "section": "§5.4、Figure 4",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "論文沒有獨立的限制章節，正文對自身方法幾乎沒有承認任何限制。",
+    "§5.2 承認提供 ground truth 不一定能提升歸因準確率，甚至可能誤導歸因。但這是對基線模型的觀察，不是對自身方法的限制。",
+    "作者在 GitHub README（不在論文中）說明：釋出的資料是擴充版，與論文使用的版本不完全相同；基於內部考量，目前不打算釋出 AgenTracer-8B 權重。"
+  ],
+  "limitations_observed": [
+    "標籤品質完全沒有驗證。論文稱 TracerTraj 為 high-fidelity，卻沒有人工抽查、沒有與 Who&When 人工標籤比對一致性，也沒有報告同一條軌跡重標兩次是否得到同一步。整個訓練訊號都建立在 R1 的判斷上。",
+    "反事實重放缺少最關鍵的對照組：不做任何修改、原樣重跑的成功率。Eq.4 要重新模擬後續所有步，LLM 多 agent 系統的變異又很大，Ω(τ') = 1 很可能只是重抽剛好成功；每步只試一次修正、也不重複取樣，標籤可能被隨機性污染，而且越早的步重跑的步數越多，越可能被誤標。",
+    "公開實作與 Algorithm 1 不一致。repo 的 MetaGPT 範例是由 R1 直接指定 mistake_step，重放失敗才排除已試過的步再問，最多 3 輪，而且整個系統從頭重跑、前綴沒有凍結。這表示「最早的決定性步驟」這個定義上的保證並未被強制，得到的是「R1 猜中、重跑又剛好成功」的步。論文的正式管線是否也這樣做，無法從論文確認。",
+    "故障注入的描述自相矛盾：Algorithm 1 寫隨機抽 K 個注入點，附錄 B 的提示詞卻要 LLM 挑「最關鍵」的步，並給出具體的程式碼破壞。這樣產生的合成失敗是明顯的局部 bug，和自然失敗（誤解任務、取錯檔案、角色不遵從）分布不同，也可能偏向容易被認出的步。D⁺ 與 D⁻ 各佔多少沒有報告，無法判斷模型學到的是哪一種失敗。",
+    "附錄只給程式任務版本的提示詞（把 analyzer 設定成軟體團隊、診斷 programming task），math 與 agentic 領域用什麼提示詞沒有交代，這兩個領域的標註流程無法重做。",
+    "完全沒有 ablation：多粒度獎勵與只用 step 或只用 agent 的比較、λ 與 σ 的敏感度、動態 clip、D⁺ 與 D⁻ 各自的貢獻、RL 與 SFT 的比較，都沒有做，無法判斷增益來自資料、獎勵設計還是 RL 本身。",
+    "Table 2 是同分布測試：TracerTraj 測試集和訓練集出自同一批框架與同一條 R1 標註管線，AgenTracer 的領先有一部分只是學會了標註者的偏好。更奇怪的是，DeepSeek-R1 本身就是標註者，在 code 子集卻只拿到 agent 11.81、step 10.23，連 Qwen3-8B 的 agent-level 都有 45.35。文中沒有解釋這個異常，很可能是輸出解析失敗，這會讓 code 子集的領先幅度失真。",
+    "唯一的分布外測試 Who&When 樣本很小。由基線的百分比反推，handcraft 子集約 58 條（1.72% ≈ 1/58、17.24% = 10/58），AgenTracer 的 step-level 20.68 ≈ 12/58，與 Claude-Sonnet-4 的 17.24／18.97 只差 1 到 2 條軌跡。不過 AgenTracer 那一列的分母本身也不確定：它的 handcraft agent-level 69.10 不是任何 k/58（40/58 = 68.97）。沒有信賴區間，也沒有多次取樣的變異，「全面超越」在 step-level 上缺乏統計支撐。",
+    "Table 2 的分母疑似不一致：math 列中，AgenTracer 的三格恰好是 34/59、35/59、39/59，而多數基線（例如 Claude-Sonnet-4 的 46.03 = 29/63、38.10 = 24/63，Qwen3-32B 的 17.46 = 11/63）落在 Table 3 所列的 63 條上。若屬實，AgenTracer 少算了 4 條，文中沒有說明；不過就算改用 63 當分母（34/63 ≈ 54.0%），它的 step-level 仍然領先。code 列的數字只有部分能反推出分母，不下結論。",
+    "摘要與正文的幾個數字無法由表格重算：對 Gemini-2.5-Pro「最多高 18.18%」在 Table 1 找不到對應的格子，對 Gemini 的最大差距是 handcraft agent-level w/ G 的 17.38 點。這個數字也可能來自 Figure 1，但文字版看不到圖。DeepSeek-R1 在 math「掉 9.21%」同樣對不上 Table 2。此外，「在 agent 與 step 兩個層級都持續勝過 Claude-Sonnet-4」並非每格都成立：agentic agent-level w/ G 時是 55.20 對 53.28。 §5.2 說 AgenTracer 在 w/o G 下仍然穩健，但 Who&When automated 的 step-level 少了 G 後，它掉 5.56 點，比 Claude-Sonnet-4（1.82 點）與 Gemini-2.5-Pro（3.66 點）掉得還多。",
+    "訓練目標與評估目標不一致：step 獎勵用 σ = 1 的 Gaussian，差一步仍能拿到約 0.61 的部分分數，評估卻是完全比對。agent 與 step 又是分開給獎勵，模型可能輸出一個 agent 對、但 step 落在別的 agent 身上的矛盾組合；論文沒有報告這種情況有多常見。",
+    "§5.3 的回饋實驗建立在 oracle 失敗訊號上：只有已知失敗的軌跡才會被送去診斷，而判定失敗需要 ground truth。真實部署時沒有這個訊號，所以報告的增益是上限。另外，缺少「用 Claude 或 GPT-4.1 做同樣的 all-at-once 歸因，再把結果當回饋」的對照，Self-Refine 與 CRITIC 是通用反思而不是歸因器，因此分不出增益來自「精準歸因」還是「任何一種外部診斷」。論文說要同時測 seen 與 unseen 的系統與資料集，但沒有把兩類分開報告：正文點名的組合中，OWL Workforce＋GAIA 的框架與基準都在訓練資料裡，屬於同分布；MaAS、HumanEval+、MATH-500 則是訓練時沒見過的。MetaGPT 搭哪個基準，文字版看不出來。多數數字只在 Figure 3 圖中，也沒有報告變異。",
+    "單一最早決定性錯誤的假設會把需要多處修正才會成功的失敗排除在資料之外（4,655 條只標出 2,476 條，其餘去向沒有說明），資料集因此偏向單點失敗；而 MAST 描述的角色不遵從、協調失敗等系統性失敗，未必能歸到單一步驟。",
+    "all-at-once 把整條軌跡塞給 8B 模型，論文沒有報告上下文上限與截斷方式。GAIA 這類長軌跡在實務上能否整條放進去，決定了這個方法能不能用在長對話上。"
+  ],
+  "framework_role": "屬於 T4 的「軌跡分析與失敗歸因」，而且是其中少數經訓練的歸因器：把一次多 agent 執行當成資料物件，給出決定性錯誤的標籤定義（沿用 Who&When）、一條自動合成標籤的管線（反事實重放加故障注入），以及一個輸出（肇事 agent、錯誤步、推理說明）的 8B 歸因模型。在框架裡，它是 T4 內部「從軌跡找出哪裡壞了」的分析元件，輸出正好是 E3 觸發 T5 自我修正時需要的內容；step 層級的距離獎勵，也可以當成 T7／T8 做步驟層級評估或 process reward 的參考做法。歸在 T4 是正確的。它不處理「偵測是否失敗」，這一步在論文裡由 ground truth 代勞。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "§5.3 實際實作了這條資料流：多 agent 系統產生失敗軌跡後，交給 AgenTracer-8B 做歸因，把 <think> 內的診斷推理當作外部回饋注入下一輪解題，迭代三輪，在 MaAS、OWL、MetaGPT 上帶來 4.8% 到 14.21% 的提升。要注意兩點：觸發條件是 oracle 給的失敗訊號，tracer 只負責定位、不負責偵測異常；回饋是塞進下一輪的文字，不是回寫對話狀態，所以不算 E2。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文 §5.3 所謂的「部署到現成系統」，是作者在研究設定內把回饋接回 MetaGPT、MaAS、OWL，不是產品採納。GitHub repo（https://github.com/bingreeky/AgenTracer）README 明說目前不打算釋出 AgenTracer-8B 權重，公開的只有 MetaGPT 上的資料標註範例與一份擴充版資料，外部無法直接部署這個歸因器。repo 的 stars 與 Hugging Face 論文頁都只是學術關注，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/bingreeky/AgenTracer（2026-09-26 查閱）。只有 MetaGPT 上的資料標註管線範例（失敗診斷重放、成功軌跡攻擊）。沒有 RL 訓練程式，只知道用了 verl；沒有其他五個框架的管線；README 明說目前不打算釋出 AgenTracer-8B 權重。",
+    "data": "部分公開。repo 內只有 data/tracertraj-code-test.parquet；2026-08-27 的 release data-v1.0.0（agentracer-data-v1.0.0.zip，約 24MB）是擴充版，README 自承與論文版本不完全相同，並含額外樣本。Who&When 與各來源基準是公開的。沒有權重，也缺少 B_0、K、訓練步數、上下文長度等細節，Table 1、Table 2 的數字無法原樣重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T4 失敗歸因子領域少數經訓練的歸因器，而且提供了可重用的標註設計：用反事實重放加程式化故障注入，把「決定性錯誤」變成可自動驗證的標籤，並示範歸因結果怎麼回饋給修正迴路（E3）；但評估樣本小、同分布、沒有 ablation、分母與數字對不上，權重也沒有釋出，表中數字只能當方向參考。",
+  "related": [
+    "2505.00212",
+    "2503.13657",
+    "2502.14496",
+    "2502.04180",
+    "2505.23885",
+    "2410.10762",
+    "2410.02506",
+    "2411.04468",
+    "2501.12948"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

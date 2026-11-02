@@ -1,0 +1,189 @@
+{
+  "id": "2402.08115",
+  "title": "On the Self-Verification Limitations of Large Language Models on Reasoning and Planning Tasks",
+  "topic": "T5",
+  "subarea": "內在自我修正與口語反思（含批判性研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在 Game of 24、Graph Coloring、Blocksworld／Mystery Blocksworld 三類可形式驗證的任務上，把 GPT-4 的自我修正迴圈拆成「驗證、批評生成、批評採納」三個角色逐一消融，發現 LLM 當自己的驗證器在 3／4 個領域拉低表現；換成外部 sound verifier 就大幅提升，而且批評內容給多給少差別不大，甚至完全不給回饋、只重抽到驗證器放行，也能拿到大部分增益。",
+  "problem": "2023 年 Reflexion、Self-Refine、Self-Debug 等工作宣稱 LLM 能反覆自我批評並改進答案，背後的直覺是「驗證比生成容易」（NP 類問題的經典論證）。作者認為，若 LLM 做的其實是近似檢索，計算複雜度的論證就不適用，這個樂觀假設需要被檢驗。既有評估又有三個漏洞：題目可能被背過（測試集汙染）、題目太簡單或是選擇題（n 選項題靠 n−1 次排除就解得掉）、任務沒有明確 ground truth（靠人或另一個 LLM 打分）。要回答的是：自我修正迴圈的增益到底來自哪一個環節？若 LLM 驗證不可靠，部署這種迴圈不只浪費成本，還可能讓系統比單次生成更差，在高可靠度領域尤其危險。",
+  "core_idea": "選三類有形式正確性定義、可任意產生新題、解空間大的任務，讓每一個環節都能對照 sound verifier 的真值打分。把迴圈中 LLM 扮演的三個角色（答案猜測者、二元驗證者、批評生成者）逐一替換或拿掉：(1) LLM+LLM 全自我迴圈；(2) 驗證與批評交給 sound verifier，回饋分三級（只說錯、第一個錯誤、全部錯誤）；(3) 連批評與歷史都拿掉，同一個提示詞反覆重抽，直到 sound verifier 放行。若增益真的來自批評內容，(2) 的三級之間與 (3) 應有明顯落差；結果顯示落差很小，增益主要來自驗證器是否 sound 與猜的次數，因此作者把 LLM 定位為「點子產生器」，主張採用 LLM-Modulo 架構，由外部 sound 系統負責驗證。",
+  "method": {
+    "迴圈架構（§4、Figure 1）": [
+      "(1) 用一支寫死的自然語言轉換器，把形式化的題目實例轉成生成提示詞送給 LLM。",
+      "(2) 把 LLM 的回答包進領域專屬的驗證／批評提示詞，另開一次查詢送給同一個 LLM。",
+      "(3) 若回應宣稱答案正確，系統停止並輸出該答案；否則抽出批評、包上指示文字，附加到一份含有「全部歷史猜測與其回饋」的提示詞後面，再送回 LLM，如此循環，最多 15 輪（timeout）。",
+      "作者刻意讓提示詞包含完整歷史，目的是給 LLM 盡可能多的資訊。"
+    ],
+    "消融條件（Table 1）": {
+      "S.P.（Standard Prompting）": "單次查詢，直接以輸出當最終答案；這是基準線。",
+      "LLM+LLM": "生成、驗證、批評全由 GPT-4 擔任，最多 15 輪。",
+      "LLM+Sound Critique": "驗證與批評改由 sound verifier 擔任，回饋分三級：B.F.（Binary Feedback，只說上一個答案錯了）、F.E.F.（First Error Feedback，只講第一個錯誤，例如第一條同色的邊、第一個不可執行的動作、算式的實際值）、A.E.F.（All Error Feedback，列出全部錯誤；Game of 24 太簡單所以沒有這一級）。仍然保留完整歷史。",
+      "Sampling（k=15、k=25）": "保留 sound verifier 但每輪提示詞完全不變、沒有歷史也沒有批評，同一題反覆重抽直到驗證器放行或達 k 次。因為提示詞不隨輪數累加，token 成本比帶歷史的迴圈低一個平方量級。文中只寫「at t=1」，推測指溫度 1，但未明說。",
+      "S.C.（Self-Consistency，k=15）": "不用驗證器，取 15 個回答中出現最多次的那個。",
+      "LLM+LLM-C（附錄 A.1）": "與 LLM+LLM 相同，但驗證提示詞要求先做 chain-of-thought 再判斷。"
+    },
+    "三個領域與 sound verifier（§3）": {
+      "Game of 24": "四個 1–12 的數字，用加減乘除與括號湊出 24。題目沿用 Tree of Thoughts 從 4nums.com 爬下、依人類平均解題時間排序的清單；生成實驗用第 901–1000 題（與 ToT 相同），驗證／批評單獨實驗用第 1–1000 題。驗證器用 SymPy 化簡算式並比對是否等於 24；SymPy 拋錯（例如括號不平衡）時回饋「格式錯誤」。",
+      "Graph Coloring": "平面圖加上最佳色數 n，要求每個頂點從 n 色中選一色、相鄰頂點不同色。用 GrinPy 以 Erdős–Rényi 變體（p=0.4）產生 100 張小圖，丟掉非平面圖與重複圖，存成 DIMACS 格式並附上預先算好的 chromatic number。驗證器是一個 for 迴圈：逐條邊檢查兩端顏色不同。",
+      "STRIPS 規劃": "Blocksworld 與其混淆版 Mystery Blocksworld（謂詞與動作名稱換成無意義詞），實例取自 PlanBench（Valmeekam et al.）。以 PDDL 表示 domain、初始狀態與目標；驗證器是 VAL，回報第一個前置條件不成立的動作，或計畫沒達成目標。"
+    },
+    "驗證與批評的單獨實驗（§5.1、附錄 A.3.1／A.4.1／A.5.1）": [
+      "每題人工建構多種候選解，包進驗證提示詞請 LLM 判斷並寫出批評，再用寫死的腳本解析輸出、與 sound verifier 的結果比對。",
+      "Game of 24：五類算式各 1000 個（正確、恰好一個運算子錯、恰好一個數字錯、隨機）加上 100 個 LLM 生成的算式，要求先算出算式的值再判斷是否等於 24；另有兩組「no info」只要求算值、不提 24。",
+      "Graph Coloring：五類著色各 100 個（正確、恰好一條邊同色、無衝突但用色過多、隨機、LLM 生成），解析批評中宣稱同色的邊，分類成頂點顏色幻覺、邊幻覺、兩者皆有、無幻覺。觀察結果（Table A4）：邊幻覺（把沒有相連的同色頂點說成相連）共 256 例，遠多於頂點顏色幻覺 107 例；模型從不捏造頂點名稱；錯誤邊越多的著色，模型越容易指到真的錯誤邊。",
+      "規劃：五類計畫各 100 個（正確、某動作不可執行、可執行但沒達成目標、隨機、LLM 生成）。批評格式要求：計畫有效就直接說有效；不可執行就指出第一個失效的動作與其未滿足的前置條件；沒達成目標就列出未滿足的目標。分三層打分：二元判斷、錯誤類型是否判對、批評內容是否正確。"
+    ],
+    "計分方式": "每個領域 100 題，最終答案一律由 sound verifier 判對錯。Figure 2 第 n 輪的表現＝目前候選答案正確的題數（不論 LLM 是否已放行，等於把 timeout 設為 n）加上 LLM 已正確放行的題數。驗證器計 accuracy、False Positive Rate（錯的被判對）、False Negative Rate（對的被判錯）。",
+    "提示詞要點": "附錄每個領域都列了直接生成、驗證、CoT 驗證、交換「答案與理由順序」的驗證、三種 backprompt、以及完整多輪範例的提示詞框，但快取的 HTML 全文在轉換時遺失了框內文字，只剩標題；要照著重做需改讀 PDF 附錄。正文可確認的要點：backprompt 是「批評＋指示文字＋全部歷史」；sound verifier 的回饋是任務專屬的具體錯誤句（例如某兩個相鄰頂點都塗紅、某動作的前置條件不成立、某算式等於 12 而非 24）。",
+    "模型": "GPT-4，與生成、驗證用同一個模型；論文沒有寫明快照版本、非 sampling 條件的溫度與上下文長度處理。"
+  },
+  "assumptions": [
+    "任務具備形式化的正確性定義，而且有便宜、可程式化的 sound verifier（SymPy、逐邊檢查、VAL）。",
+    "可以任意產生新題目，因此能降低被訓練資料背過的機率；作者的立論前提是 LLM 做的比較接近近似檢索而非推理。",
+    "解空間夠大，排除少數錯誤候選不會讓問題變簡單（相對於選擇題靠排除法就解得掉）。",
+    "以 GPT-4（2023 年的 SOTA）代表 LLM 的自我驗證能力；15 輪的上限足以看出趨勢。",
+    "用人工建構的錯誤類型（運算子錯、一條邊錯、不可執行、隨機）組成的候選集合，量得到 LLM 驗證能力的代表值。",
+    "Game of 24、著色、Blocksworld 是更困難推理任務的合理代理：作者主張任何推理任務都必須包含這類演繹成分，否則只是在考記憶。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Game of 24（4nums.com，生成實驗用第 901–1000 題，驗證實驗用第 1–1000 題）",
+      "Graph Coloring（作者自建的 100 張隨機平面圖，DIMACS 格式）",
+      "Blocksworld（PlanBench 實例，100 題）",
+      "Mystery Blocksworld（PlanBench 的混淆版，100 題）"
+    ],
+    "metrics": [
+      "最終答案 accuracy（由 sound verifier 判定，每領域 100 題）",
+      "隨迭代輪數變化的 accuracy 曲線（Figure 2）",
+      "LLM 驗證器的 accuracy、False Positive Rate、False Negative Rate（Table 2、Table A2）",
+      "批評品質：Game of 24 的算值正確率與判斷正確率（Table A3）；著色的幻覺分類計數（Table A4）；規劃的二元判斷、錯誤類型、批評內容三層正確率（Table A5、A6）",
+      "輸出 token 數（CoT 驗證的成本，附錄 A.1）"
+    ],
+    "baselines": [
+      "Standard Prompting（單次生成）",
+      "LLM+LLM 自我驗證迴圈（15 輪）",
+      "LLM+Sound Critique：Binary／First Error／All Error 三級回饋",
+      "Sampling：無回饋重抽 k=15、k=25，搭配 sound verifier",
+      "Self-Consistency（15 個取多數，無驗證器）",
+      "LLM+LLM-C：CoT 驗證版的自我迴圈（附錄 A.1）",
+      "Tree of Thoughts 在 Game of 24 報告的 74%（附錄 A.2，以 150 次直接查詢的 sampling 對照）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "全由 GPT-4 擔任生成與驗證的自我修正迴圈，在 4 個領域中有 3 個低於單次生成；Blocksworld 是例外，有上升但仍遠低於 sound verifier。",
+      "numbers": "S.P.→LLM+LLM：Game of 24 5%→3%、Graph Coloring 16%→2%、Mystery Blocksworld 4%→0%、Blocksworld 40%→55%。",
+      "section": "§5、Table 1、Figure 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "崩跌的主因是 LLM 驗證器的偽陰性：在著色與 Mystery Blocksworld，正確答案幾乎都被判錯，系統在後續更差的生成上耗到 timeout。",
+      "numbers": "FNR：Graph Coloring 95.8%（113/118）、Mystery Blocksworld 97.09%（100/103）、Game of 24 20.7%（213/1029）、Blocksworld 15.48%（24/155）；FPR 依序為 6.5%、0.5%、10.4%、18.55%；驗證 accuracy 72.4%／79.6%／87.0%／71.8%。",
+      "section": "§5、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "把驗證與批評換成 sound verifier 後，四個領域都明顯優於單次生成，而且表現隨 backprompt 輪數單調上升到某個漸近值；未達 100% 只能歸因於生成端在 15 輪內沒猜中。",
+      "numbers": "B.F.／F.E.F.／A.E.F.：Game of 24 36%／38%／N/A；Graph Coloring 38%／37%／34%；Blocksworld 60%／87%／83%；Mystery Blocksworld 10%／8%／6%。",
+      "section": "§5、Table 1、Figure 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "Game of 24 中 LLM 的算值與判斷彼此脫節：有些算式它算出等於 24，卻仍判為錯；對錯誤算式則反過來，算值很差但判斷常對。",
+      "numbers": "正確算式：算值正確 81.6%、判為正確 79.1%；只改一個運算子：算值 47.5%、判斷 92.1%；只改一個數字：52.2%／82.9%；隨機：48.8%／95.5%；LLM 生成：55%／71%。",
+      "section": "§5.1、附錄 A.3.1、Table A3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "作者主張：只要驗證器是 sound，回饋給多給少對表現影響很小；在著色與 Mystery Blocksworld，回饋越多反而略低。（注意 Blocksworld 是明顯例外，見 limitations_observed。）",
+      "numbers": "Graph Coloring 38%→37%→34%、Mystery Blocksworld 10%→8%→6%、Game of 24 36%→38%；但 Blocksworld 為 60%→87%→83%。",
+      "section": "§5.2、Table 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "完全拿掉批評與歷史、同一提示詞重抽直到 sound verifier 放行，可拿到與回饋條件相當的增益，token 成本低一個平方量級；沒有驗證器的 Self-Consistency 則幾乎沒有增益。",
+      "numbers": "Sampling k=15／k=25：Game of 24 28%／42%、Graph Coloring 40%／44%、Blocksworld 68%／72%、Mystery Blocksworld 9%／14%；Self-Consistency k=15：6%、14%、42%、4%。",
+      "section": "§5.2、Table 1",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "改用 CoT 驗證提示詞能大幅提升部分領域的驗證準確率，但仍追不上 sound verifier，且成本暴增；著色與規劃的改善有限。",
+      "numbers": "Game of 24 驗證 accuracy 87.0%→98.8%（FPR 0.2%、FNR 4.3%），LLM+LLM-C 32% vs sound F.E.F. 38%，輸出 token 增為 17 倍、驗證成本超過兩倍；Graph Coloring-CoT FNR 仍有 60.2%、LLM+LLM-C 0%；Blocksworld-CoT 驗證 77.6%、LLM+LLM-C 53%；Mystery LLM+LLM-C 5%。",
+      "section": "附錄 A.1、Table A1、Table A2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "規劃領域中，即使 LLM 把二元標籤判對，給出的批評內容（哪個動作失效、哪個前置條件沒滿足、哪個目標沒達成）大多是錯的；Mystery Blocksworld 中正確計畫幾乎都被判錯。",
+      "numbers": "Blocksworld：不可執行計畫二元判對 70% 但批評正確 8%；隨機計畫二元 100%、批評 2%；LLM 生成的不可執行計畫批評 0/40。Mystery Blocksworld：正確計畫只放行 3/100；不可執行計畫二元 100%、批評 24%；未達目標的計畫錯誤類型只判對 12%。",
+      "section": "§5.1、附錄 A.5.1、Table A5、Table A6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "刻意只測有形式正確性定義、可機器驗證的任務；創意寫作這類風格或品質型任務沒有正確性的形式定義，無法用同樣方式驗證。",
+    "LLM 結果對提示詞措辭很敏感；作者補跑了 CoT 與交換答案／理由順序的驗證提示詞（附錄 A.1），承認部分情況有改善，只是仍追不上 sound verifier。",
+    "Blocksworld 中 LLM+LLM 有「小幅」上升（40%→55%），作者承認這是例外，只是仍遠低於 sound verifier。",
+    "即使用 sound verifier，表現也到不了 100%，原因是生成端在 15 輪內沒猜中而 timeout。",
+    "Game of 24 的結果看似與 Tree of Thoughts 矛盾，作者說明兩者設定不可直接比較，並補做了成本對齊的比較（附錄 A.2）。",
+    "真實應用多半沒有 sound verifier；作者預期屆時要靠一組各自只看部分條件的批評者以共識當驗證，但本文沒有實驗這種設定。",
+    "CoT 驗證帶來的改善伴隨很大的成本增加（Game of 24 輸出 token 為 17 倍）。"
+  ],
+  "limitations_observed": [
+    "「三級回饋差別很小」與自家數字在 Blocksworld 不符：B.F. 60% 對 F.E.F. 87%，差 27 點；無回饋重抽 k=15 為 68%、k=25 為 72%，也比 F.E.F. 低 15–19 點。也就是在唯一不是地板也不是天花板的規劃領域，錯誤位置的資訊明顯有用。這和 Tyen et al.（2311.08516）的「給定錯誤位置後模型就能改正」一致。「批評內容不重要」的證據其實主要來自 Game of 24 與著色；Mystery Blocksworld 的表現都在 4–14% 的地板區，分不出條件之間的差別。",
+    "「回饋越多越差」（著色 38→37→34、Mystery 10→8→6）在 100 題上只差 1–4 題，全文都是單次執行、沒有信賴區間或顯著性檢定，不足以支持方向性的結論。同理，附錄 A.1 強調 Game of 24 的 CoT 版與 sound verifier 仍有「6 個百分點的差距」（32% vs 38%），也只是 6 題。",
+    "標題式的「自我驗證崩跌」取決於驗證提示詞：附錄 A.1 中 Game of 24 改用 CoT 驗證後，LLM+LLM-C 為 32%，是單次生成 5% 的 6 倍，高於無回饋重抽 k=15 的 28%，接近 sound B.F. 的 36%。崩跌最嚴重的著色與 Mystery Blocksworld，FNR 都超過 95%，驗證器幾乎等於「一律說錯」，比較像提示詞誘發的偏誤，而不是驗證能力本身的上限。著色改用 CoT 後 FNR 降到 60.2%，就是佐證。",
+    "Sampling＋sound verifier 本質上是帶 oracle 的 pass@k：只要 k 次內有一次對，就一定被選中。附錄 A.2 拿 150 次直接查詢的 70% 去比 Tree of Thoughts 的 74%，等於只讓一方使用 ground-truth 檢查器，ToT 在選答時並沒有這種 oracle，所以「與 ToT 相當」高估了重抽的實力。在沒有 sound verifier 的場景，這條路徑根本選不出答案。",
+    "驗證單獨實驗用的是人工配比的候選集合（例如 Game of 24 是 1029 個正確對 3071 個錯誤，著色 118／382，Mystery 103／397），錯誤類型也是人造的（只改一個運算子、只錯一條邊）。這和迴圈裡實際遇到的候選分布不同；LLM 生成的子集很小（Blocksworld 只有 55 個正確計畫，Mystery 只有 3 個）。因此 Table 2 的 FPR／FNR 不能直接拿來預測迴圈表現，Mystery 97% 的 FNR 幾乎全由人造的正確計畫決定。",
+    "附錄表格有多處帳目對不上：Table A2 的 Mystery-S FNR 寫成「96.1%（149/103）」、Mystery-CoT 寫成「72.8%（113/103）」，分子都大於分母；Table A4 Total 列的 Errors 寫 282，但該欄加總為 0+187+0+736+240=1163；Table A6 隨機計畫的批評正確寫成「59/100（100%）」。主結論不受影響，但引用精確數字時要小心。",
+    "變因控制與可重現資訊不足：只測 GPT-4 一個模型且未寫快照版本，非 sampling 條件的溫度沒寫（sampling 的「t=1」語意含糊）；15 輪完整歷史可能讓規劃題的提示詞很長，是否碰到上下文長度上限、有沒有截斷都沒有交代，這可能也是 LLM+LLM 後期越猜越差的原因之一。比較也沒有對齊呼叫次數：k=25 的 sampling 欄位比回饋條件多 10 次查詢，而在 k=15 的同預算下，Game of 24 的重抽（28%）其實低於回饋條件（36–38%）。",
+    "只比較了兩個極端：同一個 LLM 自評，或完全 sound 的程式驗證器。實務上最常見的中間地帶，例如另一個模型當 judge、只檢查部分條件的 checker、工具執行結果這類有雜訊的外部訊號，本文完全沒測。作者在結論提出的「多個部分批評者取共識」也沒有實驗支持。對對話型 agent 來說，目標是否達成通常沒有 sound verifier，這篇能直接給的處方有限。",
+    "結論的時效：實驗是 2023 年提示驅動的 GPT-4。之後以強化學習訓練的推理模型與專門訓練的自我修正方法（如 SCoRe，2409.12917）改變了自我驗證的能力邊界；作者團隊後續也以 o1 重測 PlanBench（2409.13373）。本文結論應限定在「未經專門訓練、只靠提示的模型」。",
+    "與 Huang et al.（2310.01798）相比，本文的獨特貢獻是把迴圈拆成三個角色，並用無回饋重抽做對照，但兩篇都沒有在 agent 軌跡、多輪對話或工具使用中測試。本文的任務都是一次性輸出完整解答再整體驗證，沒有中途觀測，外推到逐步執行的 agent 時，「何時觸發驗證」這個問題本文並未涉及。"
+  ],
+  "framework_role": "T5 批判性研究的核心證據之一，提供一個可操作的拆解：自我修正＝驗證（要不要修）＋批評生成（哪裡錯）＋批評採納（怎麼改）。它對框架的含義是：(1) T5 的成敗主要取決於觸發與停止訊號是否 sound；LLM 自評當觸發器時，偽陰性會把對的答案改壞，所以 T5 應優先接外部、可驗證的訊號。(2) 只要手上有 sound checker，「不帶回饋、重抽到驗證器放行」就是很強又便宜的基準，任何反思模組都必須在同成本下贏過它，才證明批評內容有價值。(3) 錯誤位置這類具體回饋是否有用要看任務（Blocksworld 有用、著色與 Game of 24 不明顯），不能預設越詳細越好。(4) 評估 T5 時要分開記錄驗證器的 FPR／FNR 與批評內容的正確率，而不是只看最終準確率。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "論文實際操弄的就是「誰來判定答案有錯並觸發下一輪修正」：LLM+LLM 由同一個 LLM 判定，LLM+Sound 由程式驗證器判定，並量了 LLM 當觸發器的 FPR／FNR（Table 2）。結果顯示，觸發訊號的偽陰性會讓系統把對的答案打回去、在更差的候選上耗到 timeout，以致低於單次生成；換成 sound 觸發則穩定提升。注意論文沒有軌跡或逐步異常偵測，判定的對象是整份最終答案；對框架的含義是 E3 的異常訊號要來自外部可驗證的來源，而且要監控它的偽陰性。"
+    },
+    {
+      "edge": "E2",
+      "how": "backprompt 會把每一輪的猜測與批評附加進提示詞的完整歷史，相當於把修正結果回寫進對話狀態。Sampling 消融把這份狀態整個拿掉（每輪都用原始提示詞），在 Game of 24、著色、Mystery 仍拿到相當的增益，只有 Blocksworld 帶第一個錯誤的歷史明顯較好（87% vs 68–72%）。這直接量出「把修正紀錄回寫狀態」的邊際價值隨任務而異，而且帶歷史的 token 成本是平方成長。"
+    },
+    {
+      "edge": "E5",
+      "how": "論文把修正迴圈的紀錄拿去對照 sound verifier 的真值評估：逐輪計算正確題數畫成曲線（Figure 2）、統計 LLM 驗證判斷的 FPR／FNR（Table 2、A2）、把批評內容解析後分類幻覺類型（Table A4）並逐層打分（Table A5、A6）。這示範了修正紀錄回流評估時應該記的欄位：每輪候選、驗證判斷、批評內容，以及它們各自對照真值的正確率。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署或產品；以 WebSearch 查詢論文名稱搭配 OpenAI、Anthropic、Microsoft Learn、Google Cloud、LangChain 等官方網域，沒有找到引用或採用此研究的官方文件、model card 或產品頁。ICLR 2025 錄取（Arizona State University 研究入口網 asu.elsevierpure.com 的書目紀錄）與 Semantic Scholar 168 次引用（8 次 influential）屬學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "Game of 24 題目來自公開的 4nums.com（與 Tree of Thoughts 相同的題號範圍）；Blocksworld 與 Mystery Blocksworld 取自公開的 PlanBench；著色的 100 張圖是作者以 GrinPy 自行產生，生成方法有寫（Erdős–Rényi 變體 p=0.4、只留平面圖），但論文沒有附下載連結。提示詞與完整多輪範例在 PDF 附錄（arXiv HTML 版遺失框內文字）；論文未附程式碼連結，搜尋也沒找到官方 repo；GPT-4 快照版本未註明。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "T5 批判性研究必讀：用可形式驗證的任務把自我修正拆成驗證、批評生成、批評採納逐一消融，量出 LLM 自評的偽陰性如何讓迴圈崩跌，並以「無回饋重抽＋sound verifier」對照，揭示增益主要來自驗證器是否 sound；這直接決定框架中 T5 該由什麼訊號觸發、該拿什麼基準評估。不過「回饋內容不重要」在 Blocksworld 不成立，引用時要附這個但書。",
+  "related": [
+    "2310.01798",
+    "2303.11366",
+    "2303.17651",
+    "2304.05128",
+    "2305.11738",
+    "2305.10601",
+    "2402.01817",
+    "2203.11171",
+    "2311.07954",
+    "2212.09561",
+    "2206.10498",
+    "2310.12397",
+    "2310.08118"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

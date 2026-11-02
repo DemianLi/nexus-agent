@@ -24,6 +24,7 @@
 
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   realpathSync,
@@ -53,6 +54,7 @@ import {
   renderConfigDump,
   parsePatchList,
   PluginConfigError,
+  PluginModuleAccessError,
   resolveEntryModule,
   shippedConfigPath,
   validateEntries,
@@ -69,10 +71,28 @@ import {
   DEFAULT_DELIVERABLE_MAX_PAGE_BYTES,
 } from './settings/deliverable-files.js';
 import { DEFAULT_RECURSION_LIMIT } from './settings/recursion-limit.js';
+import { DEFAULT_GOAL_ROUND_CAP, goalRoundCapConfigSchema } from './settings/goal-round-cap.js';
+import { DEFAULT_TURN_TIMEOUT_MS, turnTimeoutConfigSchema } from './settings/turn-timeout.js';
+import { DEFAULT_DOWNLINK_MAX_BYTES } from './bounded-event-queue.js';
+import { DEFAULT_SSE_HEARTBEAT_INTERVAL_MS } from './wire-server.js';
+import { PROJECTION_FLUSH_MS } from './projection-coalescer.js';
+import { downlinkConfigSchema } from './settings/downlink.js';
+import { projectionFlushConfigSchema } from './settings/projection-flush.js';
+import { memoryGaugeConfigSchema } from './settings/memory-gauge.js';
+import { opsEndpointsConfigSchema } from './settings/ops-endpoints.js';
+import { threadCapacityConfigSchema } from './settings/thread-capacity.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import { DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS } from './settings/tool-result-stash.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
+import { DEFAULT_MAX_PARALLEL_TOOL_CALLS } from './settings/agent-loop.js';
+import { toolFsConfigSchema } from './settings/tool-fs.js';
+import { toolFsSearchConfigSchema } from './settings/tool-fs-search.js';
+import { sessionReferenceConfigSchema } from './settings/session-reference.js';
+import { threadSearchConfigSchema } from './settings/thread-search.js';
+import { threadTitleLlmConfigSchema } from './settings/thread-title-llm.js';
 import {
   DEFAULT_THREAD_TITLE_MAX_BYTES,
+  DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES,
   DEFAULT_THREAD_TITLE_MAX_WORDS,
 } from './settings/thread-title.js';
 
@@ -99,18 +119,20 @@ function writePrivate(root: string, name: string, content: string): string {
 
 describe('出貨的 cordis.yml', () => {
   it('每一列都載得起來，而且每一顆都是真的 plugin', async () => {
-    const fromYaml = await loadPluginConfig();
-    // 41 = 7 個功能 ＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
+    expect(dropped).toEqual([]);
+    expect(ignoredConfig).toEqual([]);
+    // 58 = 17 個功能（#1574 加了 `skill-invocation`，#1625 加了 `time-context`，#440 加了 `skills`，#669 加了 `ask-user`、`submit-record` 與 `sandbox-policy`，#1027 加了 `trajectory`，#1028 加了 `token-meter`，#437 加了 `permission-presets`）＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
-    // ＋ **6 個 harness 自己的設定條目**（#529、#538、#545）＋ 20 個配套入口。**數目寫在這裡是為了擋
-    // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
+    // ＋ **24 個 harness 自己的設定條目**（#1573 加了 `session-reference`；#1605 加了 `tool-fs`；#1624 加了 `turn-timeout`；#1623 加了 `goal-round-cap`；#1535 加了 `ops-endpoints`；#1490 加了 `memory-gauge`；#1504 加了 `downlink`；#1476 加了 `thread-capacity`；#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#670、#735、#1071；#670 之後 `agent-default-model` 旁多一列出貨的腳本提供者 `cli-script`，所以是 19 個）＋ 8 個配套入口（#974 之前是 20 個，其中 12 個是空 installer，拿掉後 53 → 41）。**數目寫在這裡是為了擋
+    // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個配套入口
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
-    // `loadPluginConfig`，所以那六列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 41。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(41);
+    // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
+    // 解析、import、而且長得像一顆 plugin，才數得到 58。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(58);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -119,8 +141,8 @@ describe('出貨的 cordis.yml', () => {
     expect(ids).not.toContain(undefined);
     expect(ids).toContain('echo');
     expect(ids).toContain('core-invariant');
-    // 二十個配套入口一個不漏，對帳的另一半在 `invariant-companions.test.ts`。
-    expect(ids.filter((id) => id?.endsWith('-invariant'))).toHaveLength(20);
+    // 八個配套入口一個不漏，對帳的另一半在 `invariant-companions.test.ts`。
+    expect(ids.filter((id) => id?.endsWith('-invariant'))).toHaveLength(8);
   });
 
   /**
@@ -128,7 +150,7 @@ describe('出貨的 cordis.yml', () => {
    *
    * 等價斷言退休之後跑了一輪突變，問「`cordis.yml` 被改壞時還有沒有人紅」。結構那幾格答案
    * 是有：少一列 present → 3 個檔紅、少一列 plan-mode → 6 個檔、少一個空 installer 的配套
-   * 入口 → 3 個檔、改一個 id → `approval-gate-order` 紅、把 goal 關掉 → 4 個檔。
+   * 入口 → 3 個檔（當時有；#974 之後沒有空 installer，這一格不能再量）、改一個 id → `approval-gate-order` 紅、把 goal 關掉 → 4 個檔。
    *
    * **但那幾個 `config` 值改掉是全綠的。** 它們只在執行期被讀，不在任何註冊點上留下痕跡，所以
    * 十七個載出貨清單的測試檔一個都不會動。那是等價探針原本蓋著、而它退休之後露出來的洞。
@@ -165,18 +187,37 @@ describe('出貨的 cordis.yml', () => {
     // 這一行只管出貨檔跟它沒有漂開。
     expect(byId.get('summarization')).toEqual({ ...DEFAULT_SUMMARIZATION });
 
-    // **其餘每一列都不帶 config**，這半句同樣承重：二十個配套入口一個 `Config` schema 都
-    // 沒有，給它們設定會在載入時拋（`parseEntryConfig`）。
+    // **其餘每一列都不帶 config**，這半句同樣承重：八個配套入口一個 `Config` schema 都
+    // 沒有，給它們設定沒有作用——照 dsh 原樣交下去、不驗，啟動時印警告（#751）。
     //
     // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
-    // 也沒有 Config schema，所以替它加一行 `config:` 會在載入期拋。它進到這棵樹裡的唯一
+    // 也沒有 Config schema，替它加一行 `config:` 沒有作用、啟動時印警告。它進到這棵樹裡的唯一
     // 意義是「關得掉」，關掉的行為由 `observation-policy-entry` 那組測試守著。
-    // harness 自己那六列（#529）：跟上面那幾列同一個用途（只講設定），擁有者住在 `apps/harness`。
-    // 前五列的消費者跑在任何 agent 出生之前，所以 `apply` 是空的、值由 `startupSetting` 在起動期
+    // harness 自己那八列（#529）：跟上面那幾列同一個用途（只講設定），擁有者住在 `apps/harness`。
+    // 前七列的消費者跑在任何 agent 出生之前，所以 `apply` 是空的、值由 `startupSetting` 在起動期
     // 讀；`recursion-limit` 的消費者在組裝期，所以它跟上面那幾列一樣走服務。
     expect(byId.get('thread-title')).toEqual({
       maxWords: DEFAULT_THREAD_TITLE_MAX_WORDS,
       maxBytes: DEFAULT_THREAD_TITLE_MAX_BYTES,
+      maxTitleBytes: DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES,
+    });
+    // **LLM 標題那五格**（#650）。出貨那一列五格全寫出來，值必須就是 schema 的預設，同上面幾列。
+    expect(byId.get('thread-title-llm')).toEqual(threadTitleLlmConfigSchema.parse({}));
+    // **內容搜尋出廠不開**（#631），這一列是**唯一不等於 schema 預設的**：預設是 `startup`（同 dsh），出廠寫 `never`（同
+    // dsh `base` 與 `web-app` 兩個 bundle，dsh 也用測試釘這一列）。改成開著是部署的選擇，不該是有人順手改了出貨檔。
+    expect(byId.get('thread-search')).toEqual({ openAt: 'never' });
+    expect(threadSearchConfigSchema.parse({})).toEqual({ openAt: 'startup' });
+    // **跨會話引用的出廠比例是 0.1，不等於 schema 預設的 0.2（dsh 的值）**（#1573 N0862，Q4 (b)，偏離理由 2）：中文三條 0.2 的來源逼近摘要門檻，
+    // 量法與數字在 `cordis.yml` 那一列與 `session-reference-budget.test.ts` 的 H。改回 0.2 是行為變了，不該是順手改了出貨檔。
+    expect(byId.get('session-reference')).toEqual({
+      maxReferences: 3,
+      candidateLimit: 50,
+      referenceContextFraction: 0.1,
+    });
+    expect(sessionReferenceConfigSchema.parse({})).toEqual({
+      maxReferences: 3,
+      candidateLimit: 50,
+      referenceContextFraction: 0.2,
     });
     expect(byId.get('browser-session')).toEqual({
       maxAgeDays: DEFAULT_BROWSER_SESSION_MAX_AGE_DAYS,
@@ -188,32 +229,182 @@ describe('出貨的 cordis.yml', () => {
     });
     // **每則工具結果文字的上限**（#538）。出貨那一行的值必須就是 schema 的預設，同上面幾列。
     expect(byId.get('tool-text')).toEqual({ maxBytes: DEFAULT_TOOL_TEXT_MAX_BYTES });
-    // **真實供應商那五格**（#545）。出貨那一列五格全寫出來，值必須就是 schema 的預設，同上面幾列。
-    expect(byId.get('live-model')).toEqual(liveModelConfigSchema.parse({}));
+    // **插件投影 frame 的合併視窗**（#1071）。出貨那一行的值必須就是 schema 的預設（合併器的 100），同上面幾列。
+    expect(byId.get('projection-flush')).toEqual({ flushMs: PROJECTION_FLUSH_MS });
+    expect(projectionFlushConfigSchema.parse({})).toEqual({ flushMs: PROJECTION_FLUSH_MS });
+    // **下行串流的心跳間隔與位元組上限**（#1504）。出貨那一行的值必須就是 schema 的預設，同上面幾列；預設又照 dsh（2000 毫秒、2 MiB）。
+    expect(byId.get('downlink')).toEqual({
+      heartbeatIntervalMs: DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
+      maxQueuedBytes: DEFAULT_DOWNLINK_MAX_BYTES,
+    });
+    expect(downlinkConfigSchema.parse({})).toEqual({
+      heartbeatIntervalMs: 2000,
+      maxQueuedBytes: 2 * 1024 * 1024,
+    });
+    // **thread 數上限與閒置逐出**（#1619，出廠打開）。出貨那一行的值必須就是 schema 的預設，同上面幾列：兩邊各寫一份數字，
+    // 改了一邊忘了另一邊，`--dump-config` 印的跟沒寫 `config:` 的部署實際拿到的就會不一樣。預設是 500 條（理由 2）與 2 小時（照 dsh）。
+    expect(byId.get('thread-capacity')).toEqual(threadCapacityConfigSchema.parse({}));
+    expect(threadCapacityConfigSchema.parse({})).toEqual({
+      maxThreads: 500,
+      idleEvictAfterMs: 7_200_000,
+    });
+    // **記憶體量具**（#1490，預設關閉）：出貨那一行與 schema 預設相等，預設是 0＝不啟動量具。
+    expect(byId.get('memory-gauge')).toEqual(memoryGaugeConfigSchema.parse({}));
+    // **探針與指標**（#1535，探針預設開、指標預設關）：出貨那一行與 schema 預設相等。
+    expect(byId.get('ops-endpoints')).toEqual(opsEndpointsConfigSchema.parse({}));
+    expect(opsEndpointsConfigSchema.parse({})).toEqual({
+      probes: { enabled: true, drainMs: 500 },
+      metrics: { enabled: false },
+    });
+    expect(
+      opsEndpointsConfigSchema.safeParse({ metrics: { enabled: true, port: 1 } }).success,
+    ).toBe(false);
+    expect(opsEndpointsConfigSchema.safeParse({ metrics: { tokenFile: '' } }).success).toBe(false);
+    // tokenFile 要是絕對路徑（#1777）：相對路徑會跟著 serve 的工作目錄走，檔頭註解說絕對、程式卻不驗。
+    expect(
+      opsEndpointsConfigSchema.safeParse({ metrics: { tokenFile: 'tokens/metrics' } }).success,
+    ).toBe(false);
+    expect(
+      opsEndpointsConfigSchema.safeParse({
+        metrics: { tokenFile: '/var/lib/nexus-agent/metrics-token' },
+      }).success,
+    ).toBe(true);
+    // 收尾時間窗（#1777）：0 關掉、上限 2000（整體收尾 5 秒，#599）、多 1 拒、小數與負數拒。
+    for (const drainMs of [0, 500, 2000]) {
+      expect(opsEndpointsConfigSchema.safeParse({ probes: { drainMs } }).success).toBe(true);
+    }
+    for (const drainMs of [2001, -1, 0.5]) {
+      expect(opsEndpointsConfigSchema.safeParse({ probes: { drainMs } }).success).toBe(false);
+    }
+    expect(memoryGaugeConfigSchema.parse({})).toEqual({ reportIntervalMs: 0, warnAtPercent: 75 });
+    // 間隔的邊界（M1）：計時器上限收、多 1 拒——超過 2³¹−1 時 Node 會把間隔改成 1 ms，日誌每毫秒一行。
+    expect(memoryGaugeConfigSchema.parse({ reportIntervalMs: 2_147_483_647 })).toEqual({
+      reportIntervalMs: 2_147_483_647,
+      warnAtPercent: 75,
+    });
+    expect(memoryGaugeConfigSchema.safeParse({ reportIntervalMs: 2_147_483_648 }).success).toBe(
+      false,
+    );
+    expect(memoryGaugeConfigSchema.parse({ reportIntervalMs: 1000 })).toEqual({
+      reportIntervalMs: 1000,
+      warnAtPercent: 75,
+    });
+    expect(memoryGaugeConfigSchema.safeParse({ reportIntervalMs: 999 }).success).toBe(false);
+    // 用量警告門檻（#1493）：1 到 99 的整數；0、100、小數、負數都拒（100 的「超過」永遠不會發生，等於沒設）。
+    for (const percent of [1, 75, 99]) {
+      expect(memoryGaugeConfigSchema.parse({ warnAtPercent: percent }).warnAtPercent).toBe(percent);
+    }
+    for (const bad of [0, 100, 75.5, -1, Number.NaN]) {
+      expect(memoryGaugeConfigSchema.safeParse({ warnAtPercent: bad }).success).toBe(false);
+    }
+    // **過大工具結果的暫存**（#734）。`root` 不寫（缺席才是 harness home 底下的預設位置），保留天數寫出來，值必須就是預設。
+    expect(byId.get('tool-result-stash')).toEqual({
+      cleanupPeriodDays: DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS,
+    });
+    // **工具結果外溢層**（#719）。出貨值是 dsh base 的 12500；這一格**沒有 schema 預設**（省略就是停用，照 dsh），
+    // 所以出貨那一行必須把它寫出來——刪掉它，外溢層就靜靜停用，回到基座 80,000 字元那條線。
+    expect(byId.get('spill-policy')).toEqual({ maxInlineTokens: 12_500 });
+    // **搜尋結果的筆數上限**（#735）。出貨那一行的值必須就是 schema 的預設（dsh 的 250／100），同上面幾列。
+    expect(byId.get('tool-fs-search')).toEqual(toolFsSearchConfigSchema.parse({}));
+    // **檔案工具組態**（#1605）。出貨值全是 schema 的預設（全開、讀檔上限回到常數）：改掉出貨那一行的任何一格，
+    // 預設就靜靜偏離 dsh `tool-fs` 的 2000／2000／51200／10 MiB。
+    expect(byId.get('tool-fs')).toEqual(toolFsConfigSchema.parse({}));
+    // **背景續行**（#841）。出貨值是 dsh base 打開的 `continuable`，**不是 schema 的預設**（schema 預設 `one-shot`，照 dsh）：
+    // 刪掉出貨那一行的 `backgroundMode`，預設就靜靜翻回一次性，模型看不到 `subagent`。
+    expect(byId.get('background-subagents')).toEqual({
+      backgroundMode: 'continuable',
+      maxActiveSubagents: 8,
+    });
+    // **子代理選模型**（#875）。出廠關著、清單空，同 dsh：打開得是使用者自己寫的決定，不是出貨值替他選。
+    expect(byId.get('subagent-model-selection')).toEqual({ enabled: false, allowedModels: [] });
+    // **真實供應商那五格**（#545）。出貨那一列五格全寫出來，值就是 schema 的預設——**除了型錄多一筆**：出貨清單的第二、三顆是
+    // 看圖模型（#731 判定，每會話選擇 #723 才有東西可選），schema 的預設型錄仍只有預設那一顆。
+    const shippedLive = liveModelConfigSchema.parse({});
+    expect(byId.get('live-model')).toEqual({
+      ...shippedLive,
+      models: [
+        ...shippedLive.models,
+        {
+          id: 'meta/llama-3.2-11b-vision-instruct',
+          contextWindow: 131072,
+          maxTokens: 4096,
+          input: ['text'],
+        },
+        {
+          id: 'meta/llama-3.2-90b-vision-instruct',
+          contextWindow: 32768,
+          maxTokens: 4096,
+          input: ['text', 'image'],
+          // 端點每次請求最多一張圖（#1270 實測，見 `cordis.yml`）。
+          imageBudget: { maxImages: 1 },
+        },
+      ],
+    });
+    // **沒帶 `--live` 時的模型提供者**（#670）。出貨值指到清單上 id 為 `cli-script` 的那一列腳本提供者（下面 `cli-script`）。
+    expect(byId.get('agent-default-model')).toEqual({ provider: 'cli-script' });
 
-    // `recursion-limit` 是這六列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
+    // `recursion-limit` 是這八列裡唯一走服務的（消費點在組裝期，註冊表在手上）——
     // 它的 `apply` 不是空的，三態的解析由 `agent-factory.test.ts` 那組釘著。
     expect(byId.get('recursion-limit')).toEqual({ limit: DEFAULT_RECURSION_LIMIT });
+    // **續行輪數的操作者上限**（#1623）。出貨那一行的值必須就是 schema 的預設，同上面幾列；預設 20 的來歷在 `settings/goal-round-cap.ts` 檔頭。
+    expect(byId.get('goal-round-cap')).toEqual(goalRoundCapConfigSchema.parse({}));
+    expect(goalRoundCapConfigSchema.parse({})).toEqual({ limit: DEFAULT_GOAL_ROUND_CAP });
+    // **一輪的時鐘上限**（#1624）同形：出貨那一行的值就是 schema 的預設；30 分鐘的來歷（暫定、沒有量）在 `settings/turn-timeout.ts` 檔頭。
+    expect(byId.get('turn-timeout')).toEqual(turnTimeoutConfigSchema.parse({}));
+    expect(turnTimeoutConfigSchema.parse({})).toEqual({ timeoutMs: DEFAULT_TURN_TIMEOUT_MS });
+    // **每步平行工具呼叫上限**（#711）同形：走服務、出貨值就是 dsh 的 10。
+    expect(byId.get('agent-loop')).toEqual({
+      maxParallelToolCalls: DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+    });
 
     // **落盤窗口住在 `@nexus/core`，不是 `#settings/…`**（#529）：值的家在那個套件裡，而
     // `@nexus/core/*` 本來就解得到，所以這一列沒有載體偏離。它排在 core 那一段是因為擁有者
     // 是 core；它的消費點卻在起動期，那條不對稱寫在 `session-persistence.ts` 的檔頭上。
     expect(byId.get('session-persistence')).toEqual({ windowMs: DEFAULT_PERSISTENCE_WINDOW_MS });
 
+    // **出貨的計劃指引逐字釘死**（#1607）：套件沒有預設值了，這一句住在 `cordis.yml`，改一個字就是改每個計劃模式的 system prompt。
+    // `plan-mode.test.ts` 的 `SHIPPED_GUIDANCE` 是從 yml 讀的，量不到字有沒有變；字面值只能釘在這裡。
+    expect(byId.get('plan-mode')).toEqual({
+      guidance:
+        '你現在在計劃模式。先探索與設計，不要動手改東西；計劃完成後用 exit_plan_mode 把完整的計劃交出去等人批准。',
+    });
+
     const withConfig = [...byId].filter(([, config]) => config !== undefined).map(([id]) => id);
     expect(withConfig).toEqual([
+      // **`guidance` 必填、套件沒有預設值**（#1607，照 dsh），所以出貨那一列帶 config；內容的字面值在上面釘住。
+      'plan-mode',
       'todo',
       'feedback',
+      'system-prompt',
       'repeat-reminder',
       'tool-result-pruner',
       'summarization',
       'session-persistence',
       'thread-title',
+      'thread-title-llm',
+      'thread-search',
+      'session-reference',
+      'thread-capacity',
+      'memory-gauge',
+      'ops-endpoints',
       'browser-session',
       'deliverable-files',
       'tool-text',
+      'projection-flush',
+      'downlink',
+      'tool-result-stash',
+      'spill-policy',
+      'tool-fs-search',
+      'tool-fs',
+      'background-subagents',
+      'subagent-model-selection',
       'live-model',
+      'agent-default-model',
+      'cli-script',
       'recursion-limit',
+      'turn-timeout',
+      'goal-round-cap',
+      'agent-loop',
     ]);
   });
 
@@ -449,6 +640,79 @@ describe('權限', () => {
   });
 });
 
+describe('insert 進來的模組宣告的 @nexus 範圍不滿足：import 之前那一列掉了（#1137、#1568）', () => {
+  /** 私有目錄裡一個帶 manifest 的插件；模組頂層會寫一個見證檔。回傳 { 目錄, 見證檔 }。 */
+  function peerPlugin(root: string, peer: string, peerName = '@nexus/core') {
+    const witness = join(root, 'ran');
+    writePrivate(
+      root,
+      'package.json',
+      JSON.stringify({
+        name: 'team-plugin',
+        version: '2.0.0',
+        peerDependencies: { [peerName]: peer },
+      }),
+    );
+    const module = writePrivate(
+      root,
+      'team.mjs',
+      `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(witness)}, 'x');\n` +
+        "export default { name: 'team', apply() {} };\n",
+    );
+    return { module, witness };
+  }
+
+  function loadWith(root: string, name: string) {
+    const shipped = writePrivate(root, 'cordis.yml', '[]\n');
+    const patch = writePrivate(root, 'p.yml', `- insert:\n    - id: team\n      name: '${name}'\n`);
+    return loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+  }
+
+  it('不滿足：那一列掉了、其餘照樣載，訊息指名 套件@版本、範圍與執行中的版本，模組主體一行都沒跑', async () => {
+    const root = privateDirectory();
+    const { witness } = peerPlugin(root, '>=999.0.0');
+    const { plugins, dropped } = await loadWith(root, './team.mjs');
+    expect(plugins).toEqual([]);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toMatchObject({ id: 'team', stage: 'module' });
+    expect(dropped[0]?.message).toMatch(
+      /^條目 "team"（file:[^）]+） 不相容：team-plugin@2\.0\.0 需要 @nexus\/core >=999\.0\.0，執行中的是 \d+\.\d+\.\d+/u,
+    );
+    expect(existsSync(witness)).toBe(false);
+  });
+
+  it('只 peer @nexus/sdk（沒有 @nexus/core）、範圍不滿足：同樣在 import 之前掉了，訊息指名 @nexus/sdk（#1568）', async () => {
+    const root = privateDirectory();
+    const { witness } = peerPlugin(root, '>=999.0.0', '@nexus/sdk');
+    const { plugins, dropped } = await loadWith(root, './team.mjs');
+    expect(plugins).toEqual([]);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toMatchObject({ id: 'team', stage: 'module' });
+    expect(dropped[0]?.message).toMatch(
+      /^條目 "team"（file:[^）]+） 不相容：team-plugin@2\.0\.0 需要 @nexus\/sdk >=999\.0\.0，執行中的是 \d+\.\d+\.\d+/u,
+    );
+    expect(existsSync(witness)).toBe(false);
+  });
+
+  it('peer 寫 workspace:*（從 repo 複製出來的 package.json）：放行，模組主體有跑（#1568）', async () => {
+    const root = privateDirectory();
+    const { witness } = peerPlugin(root, 'workspace:*', '@nexus/sdk');
+    const loaded = await loadWith(root, './team.mjs');
+    expect(loaded.dropped).toEqual([]);
+    expect(loaded.plugins[0]?.plugin.name).toBe('team');
+    expect(existsSync(witness)).toBe(true);
+  });
+
+  it('滿足：照常載入，模組主體有跑（對照：見證檔量得到「跑了」）', async () => {
+    const root = privateDirectory();
+    const { witness } = peerPlugin(root, '>=0.0.0');
+    const { plugins, dropped } = await loadWith(root, './team.mjs');
+    expect(dropped).toEqual([]);
+    expect(plugins[0]?.plugin.name).toBe('team');
+    expect(existsSync(witness)).toBe(true);
+  });
+});
+
 describe('insert 進來的模組檔也要只有自己動得了（#542）', () => {
   /** 一顆會匯出 plugin 的模組，模式位照給的設。 */
   function moduleFile(dir: string, name: string, mode = 0o600): string {
@@ -506,7 +770,7 @@ describe('insert 進來的模組檔也要只有自己動得了（#542）', () =>
   it('私有的模組照常載得起來', async () => {
     const root = privateDirectory();
     moduleFile(root, 'team.ts');
-    const loaded = await loadWith(root, './team.ts');
+    const { plugins: loaded } = await loadWith(root, './team.ts');
     expect(loaded[0]?.plugin.name).toBe('m-team.ts');
   });
 
@@ -525,13 +789,114 @@ describe('insert 進來的模組檔也要只有自己動得了（#542）', () =>
     }
   });
 
-  it('模組檔不存在：照舊說那一列載不起來，不是一個裸的 ENOENT', async () => {
+  it('模組檔不存在：那一列掉了（#751），原因照舊說那一列載不起來，不是一個裸的 ENOENT', async () => {
     const root = privateDirectory();
-    const rejected = loadWith(root, './沒這個檔.ts');
-    await expect(rejected).rejects.toThrow(PluginConfigError);
-    await expect(rejected).rejects.toThrow(
-      /^條目 "team"（file:[^）]+） 載不起來：Cannot find module/,
+    const { plugins, dropped } = await loadWith(root, './沒這個檔.ts');
+    expect(plugins).toEqual([]);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toMatchObject({ id: 'team', stage: 'module' });
+    expect(dropped[0]?.message).toMatch(/^條目 "team"（file:[^）]+） 載不起來：Cannot find module/);
+  });
+
+  /**
+   * 卡上的驗收（#751）：**權限太寬照舊整個起不來，而且模組沒被載入**——見證是模組頂層寫一個檔，那個檔不存在。
+   * 對照：同一個模組放進私有目錄，但模組本身 import 時拋錯——那一列掉了、其餘照樣起來。兩條用同一種模組，量得到
+   * 分岔在權限那一格，不是在「載不載得起來」那一格。
+   */
+  it('權限太寬：照舊整個拋（子類別分得出來），模組一行都沒跑；對照：私有但 import 時拋錯只讓那一列掉', async () => {
+    const root = privateDirectory();
+    const witness = join(root, 'ran');
+    const body = `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(witness)}, 'x');\nthrow new Error('模組自己拋的');\n`;
+    const shared = join(root, 'shared');
+    mkdirSync(shared);
+    chmodSync(shared, 0o775);
+    writeFileSync(join(shared, 'team.mjs'), body);
+    const rejected = loadWith(root, join(shared, 'team.mjs'));
+    await expect(rejected).rejects.toThrow(PluginModuleAccessError);
+    expect(existsSync(witness)).toBe(false);
+
+    const own = join(root, 'own.mjs');
+    writeFileSync(own, body);
+    chmodSync(own, 0o600);
+    const { dropped } = await loadWith(root, own);
+    expect(existsSync(witness)).toBe(true);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]?.message).toMatch(/載不起來：模組自己拋的/);
+  });
+});
+
+/**
+ * 讀清單那一次的逐列掉（#751），照 dsh 的失敗表（`packages/boot/app-boot/README.zh.md:96-106`，`477b4f4`）：一列自己的
+ * 失敗只讓那一列掉，整份的錯照舊整個拋。哪幾列掉了要整個起不來不在這一層判，見 `startup-audit.test.ts`。
+ */
+describe('讀清單時一列自己的失敗只讓那一列掉（#751）', () => {
+  /** 私有目錄裡一份出貨清單＋一份 patch，載下去。 */
+  function loadRows(shippedRows: string, patchRows = '[]\n') {
+    const root = privateDirectory();
+    const shipped = writePrivate(root, 'cordis.yml', shippedRows);
+    const patch = writePrivate(root, 'p.yml', patchRows);
+    return loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+  }
+
+  it('設定驗不過：那一列留在清單上、改成停用，原因指名它；前後的列照樣在', async () => {
+    const { plugins, dropped } = await loadRows(
+      "- id: echo\n  name: '@nexus/plugin-echo'\n" +
+        "- id: todo\n  name: '@nexus/plugin-todo'\n  config:\n    allowParallelInProgress: '不是布林'\n" +
+        "- id: plan\n  name: '@nexus/plugin-plan-mode'\n  config:\n    guidance: 計劃指引\n",
     );
+    expect(plugins.map((entry) => [entry.id, entry.disabled === true])).toEqual([
+      ['echo', false],
+      ['todo', true],
+      ['plan', false],
+    ]);
+    expect(dropped).toEqual([
+      {
+        id: 'todo',
+        module: '@nexus/plugin-todo',
+        stage: 'config',
+        message: expect.stringMatching(
+          /^todo \(todo\) 的 config 不合法 — allowParallelInProgress/u,
+        ) as unknown,
+        entry: plugins[1],
+      },
+    ]);
+  });
+
+  it('模組載得起來但不是一顆 plugin：那一列掉了', async () => {
+    const { plugins, dropped } = await loadRows("- id: path\n  name: 'node:path'\n");
+    expect(plugins).toEqual([]);
+    expect(dropped).toMatchObject([{ id: 'path', module: 'node:path', stage: 'module' }]);
+    expect(dropped[0]?.message).toContain('沒有匯出一顆 plugin');
+  });
+
+  it('停用的列模組載不起來、設定寫壞都不算掉：dsh 對停用的列不載入、不驗', async () => {
+    const { plugins, dropped } = await loadRows(
+      "- id: gone\n  name: '@nexus/根本沒這個套件'\n  disabled: true\n" +
+        "- id: todo\n  name: '@nexus/plugin-todo'\n  disabled: true\n  config:\n    allowParallelInProgress: 1\n",
+    );
+    expect(dropped).toEqual([]);
+    expect(plugins.map((entry) => entry.id)).toEqual(['todo']);
+  });
+
+  it('沒有設定格式卻寫了 config：不算掉，照樣掛、原樣帶著，記一筆', async () => {
+    const { plugins, dropped, ignoredConfig } = await loadRows(
+      "- id: observation-policy\n  name: '@nexus/core/observation-policy'\n  config:\n    anything: 1\n",
+    );
+    expect(dropped).toEqual([]);
+    expect(plugins[0]?.disabled).not.toBe(true);
+    expect(plugins[0]?.config).toEqual({ anything: 1 });
+    expect(ignoredConfig).toEqual([
+      { id: 'observation-policy', module: '@nexus/core/observation-policy' },
+    ]);
+  });
+
+  it('整份的錯照舊整個拋：重複 id', async () => {
+    await expect(
+      loadRows(
+        "- id: echo\n  name: '@nexus/plugin-echo'\n",
+        "- insert:\n    - id: echo\n      name: '@nexus/plugin-echo'\n",
+      ),
+    ).rejects.toThrow(/echo/u);
   });
 });
 
@@ -552,7 +917,7 @@ describe('模組解析', () => {
     expect(entry).toMatchObject({ disabled: true, config: { allowParallelInProgress: true } });
   });
 
-  it('沒寫 config 就不帶——沒有 Config 的 plugin 收到設定會拋', async () => {
+  it('沒寫 config 就不帶——不替沒有 Config 的 plugin 編一份設定出來', async () => {
     const entry = await resolveEntryModule({ name: '@nexus/core/invariant' });
     expect('config' in entry).toBe(false);
   });
@@ -735,13 +1100,22 @@ describe('保護名單', () => {
   it('這幾列必須在保護名單上', () => {
     const expected = [
       '@nexus/core/approval-gate',
-      '@nexus/core/session-persistence',
       '#settings/thread-title',
       '#settings/browser-session',
       '#settings/deliverable-files',
       '#settings/tool-text',
+      '#settings/projection-flush',
+      '#settings/downlink',
+      '#settings/thread-capacity',
+      '#settings/session-reference',
+      '#settings/logger-console',
+      '#settings/attachment-images',
+      '#settings/tool-result-stash',
       '#settings/live-model',
+      '#settings/default-model',
       '#settings/recursion-limit',
+      '#settings/agent-loop',
+      '#settings/tool-fs',
     ];
     for (const name of expected) {
       expect(PROTECTED_ENTRY_NAMES.has(name), name).toBe(true);
@@ -750,6 +1124,22 @@ describe('保護名單', () => {
     // 加一列不會有任何東西紅——而多保護一列跟少保護一列一樣是行為變了，那一列的 `disabled`
     // 會從「真的關掉」變成「當場拋」。
     expect(PROTECTED_ENTRY_NAMES.size).toBe(expected.length);
+  });
+
+  /**
+   * **落盤那一列關得掉**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)）。它曾經在
+   * 名單上（只講批次窗口時，關掉只會回到預設）；#444 讓落盤預設開著之後，它代表落盤本身，照 dsh
+   * 的 `session-persistence-jsonl`：`disabled: true` 就是不落盤。上面那條寫死的清單已經不含它，
+   * 這一條是翻面後的正面斷言——哪天有人把它加回名單，這裡紅。
+   */
+  it('`@nexus/core/session-persistence` 寫 `disabled: true` 放行', () => {
+    expect(PROTECTED_ENTRY_NAMES.has('@nexus/core/session-persistence')).toBe(false);
+    expect(() =>
+      validateEntries(
+        [{ id: 'session-persistence', name: '@nexus/core/session-persistence', disabled: true }],
+        '測試',
+      ),
+    ).not.toThrow();
   });
 
   /**
@@ -874,7 +1264,11 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
       "- insert:\n    - id: probe\n      name: './probe.ts'\n",
     );
 
-    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    const { plugins: loaded } = await loadPluginConfig({
+      shipped,
+      overlays: [patch],
+      warn: () => {},
+    });
     expect(loaded).toHaveLength(1);
     expect(loaded[0]?.plugin.name).toBe('probe');
   });
@@ -891,7 +1285,11 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
       "- insert:\n    - id: up\n      name: '../up.ts'\n",
     );
 
-    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    const { plugins: loaded } = await loadPluginConfig({
+      shipped,
+      overlays: [patch],
+      warn: () => {},
+    });
     expect(loaded[0]?.plugin.name).toBe('up');
   });
 
@@ -905,7 +1303,11 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
       `- insert:\n    - id: abs\n      name: '${module}'\n`,
     );
 
-    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    const { plugins: loaded } = await loadPluginConfig({
+      shipped,
+      overlays: [patch],
+      warn: () => {},
+    });
     expect(loaded[0]?.plugin.name).toBe('abs');
   });
 
@@ -918,7 +1320,11 @@ describe('insert 的模組路徑錨在 patch 檔旁邊', () => {
       "- insert:\n    - id: echo\n      name: '@nexus/plugin-echo'\n",
     );
 
-    const loaded = await loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+    const { plugins: loaded } = await loadPluginConfig({
+      shipped,
+      overlays: [patch],
+      warn: () => {},
+    });
     expect(loaded[0]?.plugin.name).toBe('echo');
   });
 

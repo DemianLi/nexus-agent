@@ -7,8 +7,14 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { SessionLog, createRegistry } from '@nexus/core';
-import type { CommandDefinition, PluginOrigin, SessionEvent } from '@nexus/core';
-import { createCommandExecutor, parseCommand } from './index.js';
+import type { AttachmentRef, CommandDefinition, PluginOrigin, SessionEvent } from '@nexus/core';
+import {
+  CommandAttachmentRejected,
+  createCommandExecutor,
+  parseCommand,
+  runsWhileBusy,
+} from './index.js';
+import type { CommandAttachmentSubmission } from './index.js';
 
 const origin: PluginOrigin = { id: 'alpha#0', name: 'alpha' };
 
@@ -23,6 +29,14 @@ function commandsOf(...definitions: CommandDefinition[]) {
 
 /** 日誌 ＋ 一個現成的執行器。 */
 function harness(...definitions: CommandDefinition[]) {
+  return harnessWith({}, ...definitions);
+}
+
+/** 同上，另外可以給執行器選項（`acceptSteer`、`acceptOpenTurn`）。 */
+function harnessWith(
+  extra: { acceptSteer?: (text: string) => void; acceptOpenTurn?: () => void },
+  ...definitions: CommandDefinition[]
+) {
   const sessionLog = new SessionLog('t');
   const events: SessionEvent[] = [];
   sessionLog.subscribe((event) => events.push(event));
@@ -31,8 +45,9 @@ function harness(...definitions: CommandDefinition[]) {
     commands: commandsOf(...definitions),
     sessionLog,
     onWarn,
+    ...extra,
   });
-  return { executor, events, onWarn, signal: new AbortController().signal };
+  return { executor, events, onWarn, sessionLog, signal: new AbortController().signal };
 }
 
 function ok(name: string, handler: CommandDefinition['handler']): CommandDefinition {
@@ -48,13 +63,21 @@ describe('parseCommand', () => {
     expect(parseCommand('/plan  off ')).toEqual({ name: 'plan', rawInput: '  off ' });
   });
 
-  it('**`/planning` 不是 `/plan`**——命令名後面要嘛是結尾、要嘛是空白', () => {
+  // 這一條**不是 lookahead 的守衛**：拿掉 lookahead 它照綠（2026-10-11 實測）。它只是把「名字吃到底」這個性質說出來。
+  // lookahead 的守衛是下面「解析不出命令」那組的路徑、標點與大寫四行（拿掉之後四行都紅）。
+  it('名字整個吃到底：`/planning` 的名字是 `planning`，不會被截成較短的 `/plan`', () => {
     expect(parseCommand('/planning')).toEqual({ name: 'planning', rawInput: '' });
   });
 
   it('tab 與換行也算分隔', () => {
     expect(parseCommand('/plan\toff')).toEqual({ name: 'plan', rawInput: '\toff' });
     expect(parseCommand('/plan\noff')).toEqual({ name: 'plan', rawInput: '\noff' });
+  });
+
+  it('全形空白也算分隔（#1935）：參數原樣留著，handler 的 trim 拿得掉', () => {
+    const parsed = parseCommand('/plan\u3000off');
+    expect(parsed).toEqual({ name: 'plan', rawInput: '\u3000off' });
+    expect(parsed?.rawInput.trim()).toBe('off');
   });
 
   it.each([
@@ -64,6 +87,9 @@ describe('parseCommand', () => {
     ['數字開頭', '/1plan'],
     ['只有一條斜線', '/'],
     ['路徑不是命令', '/usr/bin/env'],
+    ['名字後緊接標點', '/plan.md'],
+    ['名字後緊接冒號', '/plan:off'],
+    ['名字後緊接大寫', '/planOff'],
   ])('%s 解析不出命令', (_label, line) => {
     expect(parseCommand(line)).toBeUndefined();
   });
@@ -120,6 +146,19 @@ describe('認得的命令：一對事件', () => {
     );
     const execution = await executor.execute('/plan  兩個空白', signal);
     expect(seen).toEqual([{ commandId: execution?.commandId, rawInput: '  兩個空白' }]);
+  });
+
+  it('handler 收到的 sessionLog 就是建執行器時給的那一份（#688）', async () => {
+    const seen: unknown[] = [];
+    const { executor, sessionLog, signal } = harness(
+      ok('plan', (invocation) => {
+        seen.push(invocation.sessionLog);
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/plan', signal);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toBe(sessionLog);
   });
 
   it('**沒話說的成功不放 text 這個 key**——放 `undefined` 會讓 append 當場拋', async () => {
@@ -212,5 +251,434 @@ describe('失敗路徑也要落定', () => {
       'handler 壞了',
     );
     expect(onWarn).toHaveBeenCalledWith(expect.stringContaining('日誌滿了'));
+  });
+});
+
+/**
+ * `steer`（[#776](https://github.com/DemianLi/nexus-agent/issues/776)）：命令請宿主在落定後送一句話。
+ * **走真的執行器**——結果正規化只複製 `kind` 與 `text`，用替身會看不到新欄位被丟掉。
+ */
+describe('steer', () => {
+  it('依呼叫順序交給宿主，而且日誌上一個字都不多', async () => {
+    const { executor, events, signal } = harness(
+      ok('plan', ({ steer }) => {
+        steer('第一句');
+        steer('第二句');
+        return { kind: 'success', text: '好' };
+      }),
+    );
+
+    const execution = await executor.execute('/plan', signal);
+    expect(execution?.steers).toEqual([{ text: '第一句' }, { text: '第二句' }]);
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+    expect(events[1]?.data).toEqual({
+      commandId: execution?.commandId,
+      kind: 'success',
+      text: '好',
+    });
+  });
+
+  it('沒呼叫就是空的', async () => {
+    const { executor, signal } = harness(ok('plan', () => ({ kind: 'success' })));
+    expect((await executor.execute('/plan', signal))?.steers).toEqual([]);
+  });
+
+  it('命令回 error：已經收下的話一起作廢', async () => {
+    const { executor, signal } = harness(
+      ok('plan', ({ steer }) => {
+        steer('不該送');
+        return { kind: 'error', text: '沒成' };
+      }),
+    );
+    expect((await executor.execute('/plan', signal))?.steers).toEqual([]);
+  });
+
+  /** 宿主拒收的例外從 `steer` 冒出去，命令照拋錯的路徑落定成 error，什麼都沒送。 */
+  it('宿主拒收：例外冒出 handler，command/done 是 error', async () => {
+    const { executor, events, signal } = harnessWith(
+      {
+        acceptSteer: () => {
+          throw new Error('這句話不收');
+        },
+      },
+      ok('plan', ({ steer }) => {
+        steer('幫我');
+        return { kind: 'success' };
+      }),
+    );
+
+    await expect(executor.execute('/plan', signal)).rejects.toThrow('這句話不收');
+    expect(events[1]?.data).toMatchObject({ kind: 'error', text: '這句話不收' });
+  });
+
+  it('acceptSteer 看到的是命令給的原文', async () => {
+    const seen: string[] = [];
+    const { executor, signal } = harnessWith(
+      { acceptSteer: (text) => void seen.push(text) },
+      ok('plan', ({ steer }) => {
+        steer('幫我 @x');
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/plan', signal);
+    expect(seen).toEqual(['幫我 @x']);
+  });
+
+  it('空字串不收', async () => {
+    const { executor, events, signal } = harness(
+      ok('plan', ({ steer }) => {
+        steer('  ');
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/plan', signal)).rejects.toThrow('非空字串');
+    expect(events[1]?.data).toMatchObject({ kind: 'error' });
+  });
+
+  /** 命令結束後才叫：宿主已經不看了，靜靜丟掉比拋錯更糟。 */
+  it('命令結束之後再叫會拋', async () => {
+    let late: (() => void) | undefined;
+    const { executor, signal } = harness(
+      ok('plan', ({ steer }) => {
+        late = () => steer('太晚了');
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/plan', signal);
+    expect(() => late?.()).toThrow('已經結束');
+  });
+});
+
+/**
+ * 附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。**斷言的是順序與沒被碰的東西**：沒宣告的命令，收下（`admit`）
+ * 一次都不該被呼叫；error 要把收據放回去；`steer` 只能帶這次收下的。
+ */
+describe('附件', () => {
+  const sha = (c: string) => `sha256:${c.repeat(64)}`;
+  const image: AttachmentRef = {
+    type: 'image',
+    attachmentId: sha('a'),
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 1,
+    height: 1,
+  };
+  const file: AttachmentRef = { type: 'file', attachmentId: sha('b'), name: 'a.txt', bytes: 1 };
+
+  /** 一個假的收下：記錄呼叫與放回。 */
+  function submission(attachments: readonly AttachmentRef[] = [image, file]) {
+    const calls = { admit: 0, rollback: 0 };
+    const value: CommandAttachmentSubmission = {
+      admit: async () => {
+        calls.admit += 1;
+        return {
+          attachments,
+          rollback: () => {
+            calls.rollback += 1;
+          },
+        };
+      },
+    };
+    return { value, calls };
+  }
+  const accepting = (handler: CommandDefinition['handler']): CommandDefinition => ({
+    name: 'goal',
+    description: '目標',
+    input: { hint: '[<目標>]', attachments: true },
+    handler,
+  });
+
+  it('宣告收附件：handler 收到收下之後的參照（照選取順序、凍過），成功時不放回', async () => {
+    let seen: readonly AttachmentRef[] | undefined;
+    const { executor, signal } = harness(
+      accepting((invocation) => {
+        seen = invocation.attachments;
+        return { kind: 'success' };
+      }),
+    );
+    const { value, calls } = submission();
+    const execution = await executor.execute('/goal 目標', signal, value);
+    expect(execution?.result).toEqual({ kind: 'success' });
+    expect(seen).toEqual([image, file]);
+    expect(Object.isFrozen(seen)).toBe(true);
+    expect(calls).toEqual({ admit: 1, rollback: 0 });
+  });
+
+  it('沒帶附件：handler 收到空陣列', async () => {
+    let seen: readonly AttachmentRef[] | undefined;
+    const { executor, signal } = harness(
+      accepting((invocation) => {
+        seen = invocation.attachments;
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/goal 目標', signal);
+    expect(seen).toEqual([]);
+  });
+
+  it('**沒宣告的命令**：在收下與 handler 之前落定成 error，日誌有一對，沒有任何東西被收', async () => {
+    const handler = vi.fn(() => ({ kind: 'success' as const }));
+    const { executor, events, signal } = harness(ok('plan', handler));
+    const { value, calls } = submission();
+    const execution = await executor.execute('/plan x', signal, value);
+    expect(execution?.result).toEqual({ kind: 'error', text: '命令 "/plan" 不收附件。' });
+    expect(handler).not.toHaveBeenCalled();
+    expect(calls).toEqual({ admit: 0, rollback: 0 });
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+    expect(events[1]?.data).toMatchObject({ kind: 'error', text: '命令 "/plan" 不收附件。' });
+  });
+
+  it('宣告 attachments:false 等於沒宣告', async () => {
+    const { executor, signal } = harness({
+      name: 'x',
+      description: 'x',
+      input: { hint: 'h', attachments: false },
+      handler: () => ({ kind: 'success' }),
+    });
+    const { value, calls } = submission();
+    const execution = await executor.execute('/x', signal, value);
+    expect(execution?.result.kind).toBe('error');
+    expect(calls.admit).toBe(0);
+  });
+
+  it('宿主拒收（CommandAttachmentRejected）：訊息就是結果文字，handler 沒跑，不往外拋', async () => {
+    const handler = vi.fn(() => ({ kind: 'success' as const }));
+    const { executor, events, signal } = harness(accepting(handler));
+    const value: CommandAttachmentSubmission = {
+      admit: async () => {
+        throw new CommandAttachmentRejected('目前的模型不收圖片');
+      },
+    };
+    const execution = await executor.execute('/goal x', signal, value);
+    expect(execution?.result).toEqual({ kind: 'error', text: '目前的模型不收圖片' });
+    expect(handler).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+  });
+
+  it('收下時的別種錯誤：落定成 error 之後往外拋', async () => {
+    const { executor, events, signal } = harness(accepting(() => ({ kind: 'success' })));
+    const value: CommandAttachmentSubmission = {
+      admit: async () => {
+        throw new Error('磁碟壞了');
+      },
+    };
+    await expect(executor.execute('/goal x', signal, value)).rejects.toThrow('磁碟壞了');
+    expect(events[1]?.data).toMatchObject({ kind: 'error', text: '磁碟壞了' });
+  });
+
+  it('**命令回 error 或拋錯：收據放回去**（輸入框留著草稿與附件）', async () => {
+    const erroring = harness(accepting(() => ({ kind: 'error', text: '不成立' })));
+    const a = submission();
+    await erroring.executor.execute('/goal x', erroring.signal, a.value);
+    expect(a.calls).toEqual({ admit: 1, rollback: 1 });
+
+    const throwing = harness(
+      accepting(() => {
+        throw new Error('炸了');
+      }),
+    );
+    const b = submission();
+    await expect(throwing.executor.execute('/goal x', throwing.signal, b.value)).rejects.toThrow(
+      '炸了',
+    );
+    expect(b.calls).toEqual({ admit: 1, rollback: 1 });
+  });
+
+  it('steer 帶附件：交給宿主的是 { text, attachments }；空陣列等於沒帶；error 時作廢', async () => {
+    const { executor, signal } = harness(
+      accepting(({ steer, attachments }) => {
+        steer('帶圖', attachments);
+        steer('不帶', []);
+        return { kind: 'success' };
+      }),
+    );
+    const execution = await executor.execute('/goal x', signal, submission().value);
+    expect(execution?.steers).toEqual([
+      { text: '帶圖', attachments: [image, file] },
+      { text: '不帶' },
+    ]);
+  });
+
+  it('**空白文字加附件的 steer 收下**（`/plan` 只貼圖，照 dsh 的 hasPromptContent）；空白又沒附件（含空陣列）仍拒', async () => {
+    const { executor, signal } = harness(
+      accepting(({ steer, attachments }) => {
+        steer('', attachments);
+        return { kind: 'success' };
+      }),
+    );
+    const execution = await executor.execute('/goal x', signal, submission().value);
+    expect(execution?.steers).toEqual([{ text: '', attachments: [image, file] }]);
+
+    const empty = harness(
+      accepting(({ steer }) => {
+        steer('  ', []);
+        return { kind: 'success' };
+      }),
+    );
+    await expect(
+      empty.executor.execute('/goal x', empty.signal, submission().value),
+    ).rejects.toThrow('非空字串');
+  });
+
+  it('**steer 只能帶這次收下的附件**：憑空造的參照與形狀壞的都拋，目標命令落定成 error', async () => {
+    const forged: AttachmentRef = { ...file, attachmentId: sha('c') };
+    const { executor, events, signal } = harness(
+      accepting(({ steer }) => {
+        steer('偷渡', [forged]);
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/goal x', signal, submission().value)).rejects.toThrow(
+      '只能帶這次呼叫收下的附件',
+    );
+    expect(events[1]?.data).toMatchObject({ kind: 'error' });
+  });
+
+  it('沒帶附件的呼叫 steer 帶附件：一樣拋（沒有收下的東西可以帶）', async () => {
+    const { executor, signal } = harness(
+      accepting(({ steer }) => {
+        steer('x', [image]);
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/goal x', signal)).rejects.toThrow('只能帶這次呼叫收下的附件');
+  });
+
+  it('發派的請求在收下期間中止：往外拋，晚到的收下結果把收據放回去', async () => {
+    const controller = new AbortController();
+    const { executor } = harness(accepting(() => ({ kind: 'success' })));
+    let resolveAdmit: (() => void) | undefined;
+    const calls = { rollback: 0 };
+    const value: CommandAttachmentSubmission = {
+      admit: () =>
+        new Promise((resolve) => {
+          resolveAdmit = () =>
+            resolve({
+              attachments: [image],
+              rollback: () => {
+                calls.rollback += 1;
+              },
+            });
+        }),
+    };
+    const pending = executor.execute('/goal x', controller.signal, value);
+    controller.abort(new Error('關掉了'));
+    await expect(pending).rejects.toThrow('關掉了');
+    resolveAdmit?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.rollback).toBe(1);
+  });
+});
+
+describe('runsWhileBusy（#1516）：依這一次呼叫的完整字面值判斷，fail-closed', () => {
+  const goal: CommandDefinition = {
+    ...ok('goal', () => ({ kind: 'success' })),
+    runWhileBusy: ['pause'],
+  };
+  const plan = ok('plan', () => ({ kind: 'success' }));
+  const commands = commandsOf(goal, plan);
+
+  it('宣告過的字面值放行（頭尾空白不計）', () => {
+    expect(runsWhileBusy(commands, '/goal pause')).toBe(true);
+    expect(runsWhileBusy(commands, '/goal   pause  ')).toBe(true);
+  });
+
+  it.each([
+    ['同一個命令的別的呼叫', '/goal resume'],
+    ['裸命令', '/goal'],
+    ['字面值大小寫不同（文法上 PAUSE 也是暫停，但放行名單逐字）', '/goal PAUSE'],
+    ['字面值後面多了字', '/goal pause now'],
+    ['沒宣告的命令', '/plan'],
+    ['沒宣告的命令帶著同一個字', '/plan pause'],
+    ['不認得的命令', '/nope pause'],
+    ['不是命令', 'goal pause'],
+    ['空字串', ''],
+  ])('%s 不放行', (_label, line) => {
+    expect(runsWhileBusy(commands, line)).toBe(false);
+  });
+
+  it('放行靠的是宣告的資料，不是寫死的名字或字面值：別的命令宣告別的字面值照樣放行', () => {
+    const other = commandsOf({
+      ...ok('x', () => ({ kind: 'success' })),
+      runWhileBusy: ['go', 'go now'],
+    });
+    expect(runsWhileBusy(other, '/x go')).toBe(true);
+    expect(runsWhileBusy(other, '/x go now')).toBe(true);
+    expect(runsWhileBusy(other, '/x pause')).toBe(false);
+    expect(runsWhileBusy(other, '/goal pause')).toBe(false);
+  });
+
+  it('忙的時候執行的呼叫 steer 直接拋錯（同宿主拒收：例外冒出 handler、命令落定成 error），什麼都沒送；平常照送', async () => {
+    const sent: string[] = [];
+    const { executor, events, signal } = harnessWith(
+      { acceptSteer: (text) => void sent.push(text) },
+      ok('goal', ({ steer }) => {
+        steer('幫我接著做');
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/goal', signal, undefined, { busy: true })).rejects.toThrow(
+      '不能 steer',
+    );
+    expect(sent).toEqual([]);
+    const done = events.filter((event) => event.type === 'command/done');
+    expect(done).toHaveLength(1);
+    expect(done[0]?.data).toMatchObject({ kind: 'error' });
+
+    const idle = await executor.execute('/goal', signal);
+    expect(idle?.steers).toEqual([{ text: '幫我接著做' }]);
+    expect(sent).toEqual(['幫我接著做']);
+  });
+});
+
+/** `openTurn`（#1787）：命令要做出會讓宿主自己開一輪的動作之前先問宿主；跟 `acceptSteer` 同一個形狀。 */
+describe('openTurn', () => {
+  it('宿主不收：例外冒出 handler、命令之後的動作沒做，command/done 是 error', async () => {
+    let afterAsk = false;
+    const { executor, events, signal } = harnessWith(
+      {
+        acceptOpenTurn: () => {
+          throw new Error('收尾中');
+        },
+      },
+      ok('go', ({ openTurn }) => {
+        openTurn?.();
+        afterAsk = true;
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/go', signal)).rejects.toThrow('收尾中');
+    expect(afterAsk).toBe(false);
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+    expect(events[1]?.data).toMatchObject({ kind: 'error' });
+  });
+
+  it('宿主收（或沒設）：照常落定，不多出任何東西', async () => {
+    const asked = vi.fn();
+    const { executor, events, signal } = harnessWith(
+      { acceptOpenTurn: asked },
+      ok('go', ({ openTurn }) => {
+        openTurn?.();
+        return { kind: 'success' };
+      }),
+    );
+    expect((await executor.execute('/go', signal))?.result).toEqual({ kind: 'success' });
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+
+    const bare = harness(ok('go', ({ openTurn }) => (openTurn?.(), { kind: 'success' })));
+    expect((await bare.executor.execute('/go', bare.signal))?.result.kind).toBe('success');
+  });
+
+  it('命令結束之後不能再問：拋錯，不靜靜丟掉', async () => {
+    let late: (() => void) | undefined;
+    const { executor, signal } = harness(
+      ok('go', ({ openTurn }) => {
+        late = openTurn;
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/go', signal);
+    expect(() => late?.()).toThrow('已經結束');
   });
 });

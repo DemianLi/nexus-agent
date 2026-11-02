@@ -1,0 +1,240 @@
+{
+  "sources": {
+    "solid-glass": {
+      "upstream": "https://github.com/deeplethe/solid-glass",
+      "commit": "6e8903e494a15491ceda38fafea5056c95a74d44"
+    },
+    "shadcn": {
+      "upstream": "https://www.npmjs.com/package/shadcn",
+      "package": "shadcn",
+      "version": "4.21.4",
+      "integrity": "sha512-YYfn/hsHbRH2mGwnKBx9tk+DjTQH+RUMS5iCxjKzwzuJ5uoHPqLOFUCJSeX0sXfrcBSfgQaXiOLGKNLjlIQxxw=="
+    }
+  },
+  "files": {
+    "solid-glass.css": {
+      "source": "solid-glass",
+      "from": "src/solid-glass.css",
+      "sha256": "c3c9e4e739f2b3f991d2412c07970f53df4a54f9d416ec3e8e1c0d5261e84bc3"
+    },
+    "LICENSE": {
+      "source": "solid-glass",
+      "from": "LICENSE",
+      "sha256": "eb9d03950a82b3fa15b16bd05163f6691843be957e69ce8eb6f062913848be87"
+    },
+    "components/ui/alert-dialog.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/alert-dialog.tsx",
+      "sha256": "d1811546e2248fe9b04e7cefcd4f0ed3acc4e87cb26a083eb17b3c836707d4d0"
+    },
+    "components/ui/badge.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/badge.tsx",
+      "sha256": "d9fb280e266119c4b62a4c518e63152de27b094c68d3e5f8929d05bfb0c1bc6c"
+    },
+    "components/ui/bubble.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/bubble.tsx",
+      "sha256": "cef49b9490c90d90451037247adedb8671eae234d388f8c30c7b2eac37356983"
+    },
+    "components/ui/button.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/button.tsx",
+      "sha256": "af601664c0de75b234a15115801644a33116cdd7bc92d9e1262b12c403ed148c"
+    },
+    "components/ui/card.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/card.tsx",
+      "sha256": "7620e0f122bb5aa0a422254909bd11d5b088bb368eb60e6ba28010c332163cc0"
+    },
+    "components/ui/collapsible.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/collapsible.tsx",
+      "sha256": "ead4349ff7b01d696ef89294a81d18ee1d3f732321398896462c834ab9b9e065"
+    },
+    "components/ui/command.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/command.tsx",
+      "sha256": "eaccda4b82a74406fc744a6ec084f56951a0a613e9c2a4f762b54fa548b376e9"
+    },
+    "components/ui/composer.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/composer.tsx",
+      "sha256": "a0a50a49499ec6900d7334cda6fcfa3bfdfdd6e52c575e07ac2ecefad9b2280f",
+      "patches": [
+        "patches/0005-composer-combobox.patch",
+        "patches/0006-composer-width-resize.patch",
+        "patches/0007-composer-pick-trigger.patch"
+      ],
+      "upstreamSha256": "fd8244424f03d2aaae9bbd0ab685f823fe3b1da2d9ffaa1597f8fc54cfe0b637"
+    },
+    "components/ui/context-ring.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/context-ring.tsx",
+      "sha256": "968af7e5be491aee2b3aa58d2bf743a8612fd6b7329b7b5b82cf7ce307122ea8",
+      "patches": ["patches/0008-context-ring-body.patch"],
+      "upstreamSha256": "f6c7441e7a9147f4c52af502c35a15ad7712034ce46fd37c721be92846b62304"
+    },
+    "components/ui/dialog.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/dialog.tsx",
+      "sha256": "3ec9bb1a9016d9d0c91294c30217bd672d90d7025b48df2768c3ee330576e9ce",
+      "patches": ["patches/0002-dialog-close-label.patch"],
+      "upstreamSha256": "bbc16e198416a5351dc62ad5d20781d32dac72dbe7ad871b2a4842852bbf1120"
+    },
+    "components/ui/dropdown-menu.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/dropdown-menu.tsx",
+      "sha256": "75eb750ad1a6d46052ac8102ce2b0176d61c0cf4b86a17715e1538d3fb3acf2b"
+    },
+    "components/ui/input-group.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/input-group.tsx",
+      "sha256": "f0b7cf39da3481d37953aedcdf27f353421000a5b05446b0bab843e074d0d17d"
+    },
+    "components/ui/input.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/input.tsx",
+      "sha256": "d108ceb1932f7228176b9f490eb325763ca546d5f9c6a34bf4db10a28dc486f1"
+    },
+    "components/ui/message-scroller.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/message-scroller.tsx",
+      "sha256": "1ef6405c562a70f3012639ed251283d9e400aadda75869849a93deeb9ad30083",
+      "patches": ["patches/0009-message-scroller-scroll-label.patch"],
+      "upstreamSha256": "653012cfeefe555badfb7b7f2079bd758c21fbfc7123140cf0d0bdcb7d6ca349"
+    },
+    "components/ui/message.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/message.tsx",
+      "sha256": "64e9ae0f9d1e268b0ed7b738a53d374d273fe1e7e2dd7b35ad7417e50a9bbe6c"
+    },
+    "components/ui/popover.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/popover.tsx",
+      "sha256": "e348fdc2d2d975a9a4b2222c532949517ec0857b6df68d5d7006ffd72c749c19",
+      "patches": ["patches/0001-popover-anchor.patch"],
+      "upstreamSha256": "5fecff622f4eecc06e8be32bface11c59d529be5c0a1484c78c9e40530b2b7d0"
+    },
+    "components/ui/separator.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/separator.tsx",
+      "sha256": "9a80ff8c110e0c55489509f4f82ebcc929c0174b59544047147b7134f86a54e7"
+    },
+    "components/ui/sheet.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/sheet.tsx",
+      "sha256": "f020d15c067389ec21ee9e49d443514aa6a5f97679a0d4bef124ff1f82e601f8",
+      "patches": ["patches/0003-sheet-close-label.patch"],
+      "upstreamSha256": "db422e2934b79774850defd2ea12bf2d469a77f7237bf93ce0416bde87d8a610"
+    },
+    "components/ui/skeleton.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/skeleton.tsx",
+      "sha256": "4c2af7fa9c645358a0fb188779deab6f0b981733b62befc25e18aaebea1350dc"
+    },
+    "components/ui/textarea.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/textarea.tsx",
+      "sha256": "82601c91ffc6c727d924162c78d7cb853114bcced4e2eb922a68ca12d4239c0f"
+    },
+    "components/ui/tooltip.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/tooltip.tsx",
+      "sha256": "f83d5f511812573f4ac98b866d397a46fda0f27eeb0af0ea89af01969eefbc5a"
+    },
+    "shadcn/tailwind.css": {
+      "source": "shadcn",
+      "from": "dist/tailwind.css",
+      "sha256": "4c371f7a1ff5d219ae2f7ff28bd256b4346fd546fe46fbae22092e57db2f0fae"
+    },
+    "shadcn/LICENSE.md": {
+      "source": "shadcn",
+      "from": "LICENSE.md",
+      "sha256": "1564074e13439397221ffd522e2e504d56561994a23d371aa5e3ad43e4f5423f"
+    },
+    "components/ui/questionnaire.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/questionnaire.tsx",
+      "sha256": "69055933125041d2850cda62188fece151780e1236bb4892eca9659509bff685"
+    },
+    "components/ui/attachment.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/attachment.tsx",
+      "sha256": "c2e378aed9b2d11e0b0d910443a128a5fa67e58a748e1acc8cfb9d8122036c77"
+    },
+    "components/ui/sonner.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/sonner.tsx",
+      "sha256": "2d40f0b3d9021086eab403fe042df04aff794f4dca5214b13aaf23ce8dd37a50",
+      "patches": ["patches/0010-sonner-theme-prop.patch"],
+      "upstreamSha256": "0c729f9f1ada0b0bedd9296710cc257dc43559fa6b8cc40f010d129e8ff85fdd"
+    },
+    "components/ui/sidebar.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/sidebar.tsx",
+      "sha256": "231a812d637317874675f08d12b507fcf93659893b23066022fdc32079e61cbf",
+      "patches": [
+        "patches/0011-sidebar-chinese-strings.patch",
+        "patches/0012-sidebar-lg-breakpoint.patch",
+        "patches/0013-sidebar-cookie-try-catch.patch",
+        "patches/0014-sidebar-final-focus.patch",
+        "patches/0015-sidebar-mobile-width.patch"
+      ],
+      "upstreamSha256": "45d425d44b65638d390e9d13b868790bf7f948cf35a5b127c00b3e7a009ccdd1"
+    },
+    "components/ui/tool-steps.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/tool-steps.tsx",
+      "sha256": "f7eaf97d65c6fb20cc371034bf1439e19943c38943d5a3a89d085a3121039636",
+      "patches": [
+        "patches/0016-tool-steps-strict-index.patch",
+        "patches/0017-tool-steps-controlled-open.patch",
+        "patches/0018-tool-steps-slots.patch",
+        "patches/0019-tool-steps-output-focus.patch"
+      ],
+      "upstreamSha256": "65d161ca73c2c6ace8782302db0557ef4c101e39c78513f9de3dd00bb986f7bb"
+    },
+    "components/ui/diff-view.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/diff-view.tsx",
+      "sha256": "894e21b771193ffe455672ff2a1a2b1488ad8b05b50ce003d1336e8a4c3aba21",
+      "patches": ["patches/0024-diff-view-keyboard-scroll.patch"],
+      "upstreamSha256": "f2661b83cbd3e3994ae865c3de399ebe8fe136c9d6e5dadd9d44d200438ae00c"
+    },
+    "components/ui/reasoning.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/reasoning.tsx",
+      "sha256": "af3ee334b82347dd9818e8019d89bfc78ed217b3cb7e0721b5664aa82ecbb376",
+      "patches": [
+        "patches/0020-reasoning-node-children.patch",
+        "patches/0021-reasoning-trailing.patch"
+      ],
+      "upstreamSha256": "cc17a2722b0db779242b7eaa09ae50f272fae1aeb680db443ff96987ebf9fe87"
+    },
+    "components/ui/status-glyph.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/status-glyph.tsx",
+      "sha256": "2dd2713e7173b536c7aea0ee1b504d83fe89c567fb43df696ca775ee87569977",
+      "patches": ["patches/0022-status-glyph-strict-index.patch"],
+      "upstreamSha256": "248c3de628f366138aaba13641238fba16f3ff2b175cf41bce8ada394f9eefea"
+    },
+    "components/ui/turn-status.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/turn-status.tsx",
+      "sha256": "aa78ab42b3168284685db9bb0910d0603f969aa4137876533d1a2d08f4af71df",
+      "patches": ["patches/0023-turn-status-no-live-region.patch"],
+      "upstreamSha256": "c04bfe27e83c34c73308e2c7543c349fff8c934674903c0a6f9988ba8759a36c"
+    },
+    "components/ui/dot-loader.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/dot-loader.tsx",
+      "sha256": "62bda1c7ab3b0cbc26735de51122ab051482132e51828f7553da42f38d9e2387"
+    },
+    "components/ui/empty.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/empty.tsx",
+      "sha256": "e339e4d7659e7225968edc5c2cea047eb6946e723ea0591cde93877000bc1808"
+    }
+  }
+}

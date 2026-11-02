@@ -1,0 +1,195 @@
+{
+  "id": "2307.16789",
+  "title": "ToolLLM: Facilitating Large Language Models to Master 16000+ Real-world APIs",
+  "topic": "T7",
+  "subarea": "agent 基準與評估環境設計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用 ChatGPT 自動建出以 RapidAPI 上 16,464 支真實 REST API 為執行環境的工具使用資料集與測試集 ToolBench（本文這一份，非 2305.16504 的同名 ToolBench），提出 DFSDT 樹搜尋標註解答路徑、微調出 ToolLLaMA，並設計以 ChatGPT 當評審的 ToolEval（pass rate＋對 ChatGPT-ReACT 的 win rate）來評估工具使用 agent。",
+  "problem": "2023 年中開源 LLM（LLaMA、Vicuna、Alpaca）幾乎不會用工具，而既有工具學習資料集（APIBench、API-Bank、ToolAlpaca、Xu et al. 的 ToolBench）有三個缺口：API 不是真實的或數量少、只有單工具情境且假設使用者事先指定好 API、推理只用 CoT／ReACT，有些甚至不實際執行 API 拿回應。對評估而言，真實 API 的回應會隨時間變、同一指令有無限多條正確路徑，無法標固定的 ground-truth 路徑，人評又太慢，因此需要一個能在真實可執行環境上、不依賴標準答案、可大規模自動化的評估方法。",
+  "core_idea": "資料、訓練、評估三支柱一起做：(1) 從 RapidAPI 爬 API 文件並實測過濾，得到可執行的真實 API 環境；(2) 反過來先抽 API 組合、再讓 ChatGPT 依文件寫出需要這些 API 的指令，保證多工具情境的覆蓋；(3) 用深度優先的決策樹（DFSDT）讓 ChatGPT 在失敗時放棄節點、回溯並產生不同的動作，提高找到可行路徑的機率；(4) 評估不比對標準路徑，改由 ChatGPT 評審依規則判定這條路徑是否完成任務（pass rate，區分指令可解／不可解）以及兩條路徑誰比較好（win rate），並用人評一致率背書；(5) 以指令與 API 文件訓練稠密檢索器，取代人工指定 API。",
+  "method": {
+    "API 蒐集與過濾（§2.1、§A.1）": [
+      "來源：RapidAPI Hub，49 個粗分類（category）與 500 多個細分集合（collection）。階層是 tool → 多個 API。",
+      "每個 tool 爬：名稱、描述、host URL、所屬全部 API；每個 API 記：名稱、描述、HTTP method、必填與選填參數、request body、可執行的呼叫程式碼片段、一筆範例回應。",
+      "初始 10,853 個 tool（53,190 支 API）。過濾兩步：先實測基本功能，不可用就丟；再實際呼叫取範例回應，依回應時間與品質篩，長期回應慢的、回 HTML 原始碼或錯誤訊息的都丟。最後留 3,451 個 tool、16,464 支 API。"
+    ],
+    "API 回應壓縮（§A.2）": "每支 API 的回應格式固定，所以對每支 API 只做一次：給 ChatGPT 該 API 的文件（含範例回應）加 3 個專家寫的『原始回應 → 壓縮後 schema』範例，讓它決定要刪哪些不重要的 key，得到該 API 的壓縮策略。推論時回應超過 1024 tokens 就套用壓縮；壓完仍超過 1024 就只留前 1024 tokens。作者稱人評確認壓縮保留了關鍵資訊，但沒給數字。",
+    "指令生成（§2.2、§A.7）": [
+      "形式：從全體 API 抽一個子集 S_sub，提示 ChatGPT（gpt-3.5-turbo-16k）產出多條（指令, 相關 API 子集）配對，相關 API 必須取自 S_sub。",
+      "提示詞組成：任務描述＋S_sub 每支 API 的完整文件（JSON：name、url、description、method、required/optional parameters 等）＋ 3 個隨機抽的人寫種子範例（單工具 12 個、多工具 36 個種子池）＋其他要求。",
+      "任務描述要點（轉述）：每次寫 10 條查詢，前 7 條要非常具體、後 3 條要長而複雜、描述能用到全部 API 的情境；每條要組合多支 API（單工具情境只用一支 API 的不收；多工具情境只用一個 tool 的不收）；必要參數要直接寫進查詢裡並自己編造具體值（真實路名、具體商品、虛構公司名），不能問使用者要參數，也不能問『該用哪支 API』；不同查詢的相關 API 重疊要盡量少；輸出格式為『Query + related_apis 清單』。",
+      "其他要求（轉述）：句型要混合祈使、陳述、疑問；語氣有禮貌也有直接的；主詞涵蓋自己、朋友、家人、公司；每條查詢呼叫 2 到 5 支 API；至少 30 個英文字。",
+      "抽樣策略：I1 單工具——逐一走過每個 tool，對其 API 生成；I2 同 category 多工具——從同一 category 隨機取 2 到 5 個 tool、每個 tool 最多取 3 支 API；I3 同 collection 多工具——同上但從同一 collection 取。用 RapidAPI 階層是因為隨機湊的 tool 組合常彼此無關，寫不出自然的指令。",
+      "後處理：相關 API 不在 S_sub 裡的（幻覺 API）整筆濾掉。最後約 20 萬筆：I1 87,413、I2 84,815、I3 25,251。這些（指令, 相關 API）配對同時當檢索器的訓練資料與 ground-truth。"
+    ],
+    "解答路徑標註與 DFSDT（§2.3、§A.4、§A.8）": [
+      "把多步決策寫成與 ChatGPT 的多輪對話：第 t 輪依指令與先前的 (動作, 真實 API 回應) 序列產生動作 a_t，格式是 Thought＋API 名稱＋參數。",
+      "用 ChatGPT 的 function call：每支 API 當成一個 function，把該指令的整個 S_sub 都放進可用 functions。另加一個 Finish function，參數 return_type 為 give_answer 或 give_up_and_restart，give_answer 時附 final_answer。",
+      "System prompt 要點（轉述）：自稱能用很多工具的助手；每步分析目前狀態後做一次 function call，拿到結果後進入新狀態再決策；提醒狀態改變不可逆、思考不超過五句、若要連續試不同條件就每次只試一種；資訊足夠就呼叫 Finish 給答案，覺得這一步處理不了就呼叫放棄並重來。",
+      "DFSDT：把動作序列展開成樹。模型走到某節點若呼叫 give_up_and_restart，就放棄該節點、回溯到父節點展開新的子節點。展開新子節點時附上 diversity prompt：告訴模型『之前的嘗試都失敗了』，列出該狀態下先前生成過的候選動作，要求先分析目前狀態與這些候選，再產生與它們全都不同的動作。",
+      "搜尋順序：用 DFS 而不用 BFS，因為標註只要找到一條可行路徑就能停，BFS 會燒太多 OpenAI 呼叫。進一步省掉子節點排序：經典 DFS 每層要生多個子節點再用 LLM 兩兩比較排序（約 O(n log n) 次呼叫），作者觀察最先生成的節點通常就是排名最高的，所以改用前序走訪（pre-order）。性質：模型從不回退時 DFSDT 退化成 ReACT；ReACT 也可看成 DFSDT 的退化版，所以用 DFSDT 資料訓練的模型推論時兩種都能用。",
+      "對所有生成的指令跑 DFSDT，只保留 passed 的解答路徑，得到 126,486 筆（指令, 解答路徑）配對。論文未說明 passed 由誰、依什麼判定（是 ToolEval 評審判 Pass，還是只要以 give_answer 收尾就算）。",
+      "論文未載：樹的寬度／深度上限、每條指令的 API 呼叫預算、ReACT@N 的成本如何對齊。"
+    ],
+    "API 檢索器（§3.1）": "Sentence-BERT 架構、BERT-base 骨幹的雙塔稠密檢索器：指令與 API 文件各自編碼成向量，用向量相似度算相關性。對比學習：正例是 §2.2 產生的相關 API，負例是隨機抽的其他 API。基準為 BM25 與 OpenAI text-embedding-ada-002，指標 NDCG@1、@5，分 I1／I2／I3 訓練與評估。推論時把檢索器前 5 名的 API 當作可用 API 餵給 ToolLLaMA。",
+    "ToolLLaMA 訓練（§3.2、§A.3）": "基底 LLaMA-2 7B；用 positional interpolation（比例 2）把上下文從 4096 拉到 8192，因為 API 回應很長。以多輪對話模式訓練，輸入輸出格式與 ChatGPT 相同；由於不清楚 ChatGPT 內部怎麼組 function 欄位，就把 function 資訊直接串進 prompt。超參數：learning rate 5e-5、warmup ratio 0.04、總 batch size 64、最大序列長度 8192、2 個 epoch，取開發集最佳 checkpoint 再測。",
+    "ToolEval：pass rate（§3.1、§A.5）": [
+      "評審：ChatGPT，規則寫成提示詞。每條路徑給 Pass／Fail／Unsure 三種標籤之一。",
+      "先判指令是否可解：可解＝至少一支提供的 API 可能有幫助；不可解＝所有 API 都無關，或指令本身給了無效資訊（例如無效 email）。",
+      "可解時：以放棄收尾——若已大量嘗試所有 API 仍拿不到有用資訊，判 Pass；若只試了少數 API 或其實拿到了有效資訊，判 Fail。以答案收尾——API 都沒給有效資訊、已試遍所有 API、答案未解決或是拒答，判 Pass；API 有給有效資訊但答案沒完整解決或拒答，判 Fail；答案完整解決指令，判 Pass；無法從答案判斷，判 Unsure。",
+      "不可解時：答案竟然解決了原本被認為不可解的指令，判 Pass；拒答判 Pass；答案是模型自己編的假陽性（宣稱已完成），判 Fail；以放棄收尾，一律判 Pass。",
+      "每條路徑讓評審產生至少 4 次預測，多數決。",
+      "論文未載：Unsure 怎麼計入 pass rate、pass rate 定義中的『有限預算』具體是多少、評審 ChatGPT 的版本與溫度、評審看到的是最終路徑還是整棵 DFSDT 樹。"
+    ],
+    "ToolEval：win rate（§3.1、§A.5）": [
+      "兩條路徑對同一指令做成對比較，輸出 win／lose／tie。假設 Pass 的一定勝過 Fail 的，所以只有兩條同為 Pass 或同為 Fail 時才交給評審比。",
+      "評審準則六項：資訊豐富度（答案是否含回答指令所需的全部資訊）、事實性（是否如實描述做了什麼、哪裡失敗）、推理（未解決時是否給出詳細且正確的失敗原因）、里程碑（執行中達成幾個里程碑）、探索（試過越多可能有用的 API 越好）、成本（API 數相同時，重複呼叫越少越好）。",
+      "每組比較也做至少 4 次預測後多數決。參照對象固定是 ChatGPT-ReACT；Table 4 把 tie 對半分進 win 與 lose，Table 6 給拆開前的原始 win／tie。"
+    ],
+    "ToolEval 的人評驗證（§A.5）": "從四種方法（ChatGPT+ReACT、ChatGPT+DFSDT、ToolLLaMA+DFSDT、GPT4+DFSDT）各取 300 條測試指令的解答路徑。人標 pass 的只有 ChatGPT+DFSDT、ToolLLaMA+DFSDT、GPT4+DFSDT 三種；人標 win 的只有 ChatGPT+ReACT 對 ChatGPT+DFSDT 這一組。報的是評審與人的原始一致率，沒有 kappa。",
+    "評估設定（§3.2）": [
+      "泛化三層級：Inst.＝訓練中見過的 tool、沒見過的指令；Tool＝同一（見過的）category 下沒見過的 tool；Cat.＝沒見過的 category 下沒見過的 tool。",
+      "六個測試組：I1-Inst.、I1-Tool、I1-Cat.、I2-Inst.、I2-Cat.、I3-Inst.（I2 本來就跨 tool，所以只測 Inst. 與 Cat.；I3 本來就跨 category，所以只測 Inst.）。",
+      "預設給每個模型 oracle API 集合 S_sub，模擬使用者自己指定 API；另有一組 ToolLLaMA-DFSDT-Retriever 改用檢索器前 5 名。",
+      "基準：Vicuna、Alpaca（大量 prompt engineering 後仍全 0）；ChatGPT、Text-Davinci-003、GPT-4、Claude-2 各配 ReACT 與 DFSDT。",
+      "測試集大小論文未載；repo README 寫每個測試集抽 200 題（出自 repo，可能對應後續版本）。Table 4 的 pass rate 全是 0.5 的倍數，與每組 200 題相符。"
+    ],
+    "APIBench OOD 實驗（§3.3、§A.6）": "ToolLLaMA 不再訓練，改把『選一支 API、給出呼叫程式碼、用自然語言描述輸出』定義成單一 function。測 APIBench 的 TorchHub、TensorHub、HuggingFace 三個領域，配自家檢索器或 oracle 檢索器；對照 Gorilla（LLaMA-7B 在 APIBench 訓練資料上微調）的 ZS 與 RS 兩種官方設定，Gorilla 配 BM25 或 oracle。指標沿用官方的 AST accuracy 與幻覺率。不測 prompt 裡沒有 API 描述的 zero-shot 設定。"
+  },
+  "assumptions": [
+    "ChatGPT 評審在沒有標準答案的情況下，能可靠判定指令可解與否、路徑是否完成任務；而且評審本身沒有偏好 ChatGPT 風格的輸出。",
+    "RapidAPI 上的 API 在整個評估期間行為穩定，被比較的各模型打到的是同一版本的 API。",
+    "由 ChatGPT 看著 API 文件寫出、參數值是編出來的合成指令，能代表真實使用者的工具使用需求。",
+    "生成指令時標的『相關 API』可以當檢索的 ground truth，也可以當評估時的 oracle API 集合。",
+    "DFSDT 標註時被判為 passed 的路徑是正確的解答，可以直接當監督訊號（論文未說明 passed 的判定方式）。",
+    "API 文件足以讓模型零樣本使用沒見過的 API；回應壓縮與 1024 tokens 截斷不會丟掉完成任務所需的資訊。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ToolBench（本文）六個測試組：I1-Inst.、I1-Tool、I1-Cat.、I2-Inst.、I2-Cat.、I3-Inst.，在真實 RapidAPI 上執行",
+      "ToolBench 檢索評估：I1、I2、I3",
+      "APIBench（Gorilla）的 HuggingFace、TorchHub、TensorHub 三個領域（OOD）"
+    ],
+    "metrics": [
+      "Pass rate（ChatGPT 評審依可解／不可解規則判 Pass／Fail／Unsure，至少 4 次多數決）",
+      "Win rate（對 ChatGPT-ReACT 成對比較，tie 對半分；Table 6 另給原始 win／tie）",
+      "評審與人評的一致率（pass 87.1%、win 80.3%）",
+      "NDCG@1、NDCG@5（API 檢索）",
+      "AST accuracy 與 hallucination rate（APIBench）"
+    ],
+    "baselines": [
+      "Vicuna、Alpaca（以 ReACT 與 DFSDT 提示）",
+      "ChatGPT（gpt-3.5-turbo-16k）、GPT-4、Claude-2、Text-Davinci-003，各配 ReACT 與 DFSDT",
+      "ReACT、ReACT@N（重複跑 ReACT 直到成本與 DFSDT 相當）",
+      "檢索：BM25、OpenAI text-embedding-ada-002",
+      "APIBench：Gorilla-ZS、Gorilla-RS，配 BM25 或 oracle 檢索器"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "ChatGPT 評審（ToolEval）與人評的一致率，pass rate 為 87.1%、win rate 為 80.3%，作者據此稱它可當作可信的人評替身。",
+      "numbers": "pass 一致率 87.1%、win 一致率 80.3%；每種方法 300 條測試指令；pass 人評涵蓋 3 種方法、win 人評只涵蓋 ChatGPT+ReACT 對 ChatGPT+DFSDT 一組",
+      "section": "§3.1、§A.5",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "作者初步調查發現，人類專家之間對哪條解答路徑比較好常常意見不一、一致率偏低（有人偏好少呼叫快速作答，有人偏好試遍 API 交叉驗證），因此工具使用的公平評估仍是開放問題。",
+      "numbers": "論文未給人與人之間一致率的數字",
+      "section": "§A.5 Comparing Human Evaluation and ToolEval",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "以 ChatGPT 為底，DFSDT 的 pass rate 在三種指令上都高於 ReACT 與成本對齊的 ReACT@N，而且越難的多工具指令差距越大。",
+      "numbers": "平均 pass rate：DFSDT 63.8、ReACT@N 44.5、ReACT 35.3；I1 58.0／49.4／37.8；I2 70.6／49.4／40.6；I3 62.8／34.6／27.6",
+      "section": "§3.1、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "DFSDT 讓所有閉源模型的 pass rate 與 win rate 都上升；ChatGPT+DFSDT 的 pass rate 超過 GPT-4+ReACT，win rate 則相當。",
+      "numbers": "平均 pass／win：ChatGPT ReACT 40.2／—、DFSDT 64.8／64.3；GPT-4 ReACT 57.2／64.4、DFSDT 71.1／70.4；Text-Davinci-003 ReACT 16.5／33.2、DFSDT 43.1／46.3；Claude-2 ReACT 6.8／34.4、DFSDT 22.6／43.5",
+      "section": "§3.2、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "ToolLLaMA（7B）配 DFSDT 時明顯勝過 Text-Davinci-003 與 Claude-2，pass rate 與老師 ChatGPT 相當、僅次於 GPT-4+DFSDT；win rate 則仍低於 ChatGPT+DFSDT。",
+      "numbers": "ToolLLaMA-DFSDT 平均 pass 66.7、win 60.0（拆 tie 前原始 win 55.2、tie 9.8）；ToolLLaMA-ReACT 29.0／47.0；對照 ChatGPT-DFSDT 64.8／64.3、GPT-4-DFSDT 71.1／70.4；Vicuna、Alpaca 全為 0",
+      "section": "§3.2、Table 4、Table 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "自訓的稠密 API 檢索器在三種指令上的 NDCG 都大幅高於 BM25 與 Ada embedding；單工具指令比多工具指令好檢索。",
+      "numbers": "平均 NDCG@1／@5：本文 78.0／84.9、Ada 49.6／45.4、BM25 18.5／17.0；本文 I1 84.2／89.7、I2 68.2／77.9、I3 81.7／87.1",
+      "section": "§3.1、Table 2（正文誤寫為 Table 3）",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "把 oracle API 換成檢索器前 5 名後，ToolLLaMA-DFSDT 的平均 pass rate 與 win rate 反而略升，作者解釋為 ground-truth 集合裡不少 API 可被功能更好的相似 API 取代。",
+      "numbers": "平均 pass／win：Retriever 67.3／63.1 對 oracle 66.7／60.0；但 I1-Cat.（60.5 對 62.0）、I2-Cat.（68.5 對 77.0）、I3-Inst.（65.0 對 66.0）的 pass rate 下降",
+      "section": "§3.2、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "未在 APIBench 上訓練的 ToolLLaMA，在 OOD 的 APIBench 上配自家檢索器時，HuggingFace 與 TorchHub 的 AST accuracy 高於 Gorilla-ZS／RS+BM25；配 oracle 時一律高於 Gorilla-ZS。",
+      "numbers": "AST（HF／Torch／Tensor）：ToolLLaMA+自家檢索器 16.77／51.16／40.59，Gorilla-RS+BM25 15.71／50.00／41.90，Gorilla-ZS+BM25 10.51／44.62／34.31；oracle 下 ToolLLaMA 88.80／85.88／88.62，Gorilla-RS 89.27／93.01／94.16，Gorilla-ZS 44.36／59.14／83.21；幻覺率 ToolLLaMA+自家檢索器 10.60／15.70／6.48，Gorilla-RS+BM25 6.42／5.91／2.77",
+      "section": "§3.3、Table 5",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "RapidAPI 上的 API 會隨時間變動，且同一指令有無限多條可行路徑，所以無法為測試指令標固定的 ground-truth 路徑；比較不同模型時必須確保用同一版本的 API（§3.1）。",
+    "工具使用的評估遠比對話任務複雜；人類專家之間對哪條路徑較好常常意見不一、一致率偏低，公平評估還有很長的路要走（§A.5）。",
+    "API 回應常含大量冗餘、長度超出 LLM 上下文，必須壓縮，壓縮後仍超過 1024 tokens 就截斷（§A.2）；LLaMA-2 原生的 4096 上下文不夠用（§3.2）。",
+    "DFSDT 比 ReACT 花更多 OpenAI 呼叫；經典 DFS 的子節點排序成本太高，所以改用前序走訪近似（§3.1、§A.4）。",
+    "即使是 GPT-4，面對複雜指令的 pass rate 也偏低，導致標註效率差（§1、§2.3）。"
+  ],
+  "limitations_observed": [
+    "論文本身無法重做主表。三個關鍵量都沒寫：(1) 測試集大小，只有 repo README 提到每組抽 200 題；(2) pass rate 定義裡的『有限預算』，也就是 API 呼叫上限、DFSDT 樹的寬深上限；(3) Unsure 標籤怎麼計入 pass rate。評審 ChatGPT 的版本與溫度也沒交代。",
+    "pass rate 會高估任務完成。它沒有標準答案，指令可不可解由評審看路徑自行判定。依 §A.5，可解指令在『試遍 API 仍無有用資訊』後放棄或拒答也判 Pass；不可解指令只要放棄一律 Pass。指令裡的參數值是 ChatGPT 自己編的（虛構地址、公司名），很多指令很可能打到真實 API 就是無解，於是一個會及早放棄的 agent 能不能拿分，取決於評審對『試遍』的主觀判斷。這個指標量的是『有沒有合理收尾』，不是『有沒有完成使用者要的事』。",
+    "人評驗證偏薄，撐不起它背書的範圍。(1) 只報原始一致率 87.1%／80.3%，沒有 Cohen's kappa，也沒有 Pass／Fail 的類別分佈，無法扣掉機率一致的部分；以受測方法 pass rate 約 65% 粗估，兩邊隨機亂標就有約 55% 的一致率，據此推算的 kappa 約 0.7，仍屬實質一致，只是沒有字面上的 87.1% 那麼漂亮；win rate 那一項連這樣的粗估都做不了。(2) win rate 的人評只涵蓋 ChatGPT+ReACT 對 ChatGPT+DFSDT 一組，卻被用來支撐 ToolLLaMA、Claude-2、Text-Davinci-003 等所有對比。(3) 作者自己說人與人之間一致率低，卻沒給數字，80.3% 究竟算高算低無從判斷。",
+    "ChatGPT 一身四職：寫指令、當 teacher 標解答路徑、當評審、也是 win rate 的參照（ChatGPT-ReACT）。ToolLLaMA 是模仿 ChatGPT 路徑訓練的，風格最接近評審；訓練資料只留 passed 的路徑，若 passed 也是由同一個 ChatGPT 評審判的，模型等於直接學評審心目中的『成功』，評估就有循環。『ToolLLaMA 與 ChatGPT 相當』這個主張，正好落在評審自我偏好最可能作用的位置，論文卻沒有換評審（例如改用 GPT-4）或人評盲測的對照實驗。",
+    "win rate 的準則與 DFSDT 的設計目標同向。『探索：試越多 API 越好』、『資訊越豐富越好』、『未解決時失敗原因越詳細越好』都偏好多探索、多回溯的路徑；唯一抑制成本的準則，只在 API 數相同時才比重複呼叫。因此 DFSDT 在 win rate 上的優勢，有一部分是準則本身造成的，不完全是品質差異。",
+    "格式遵循被一起量進了能力分數。Vicuna、Alpaca 全為 0；Claude-2 ReACT 的平均 pass rate 只有 6.8，win rate 卻有 34.4（Table 4），兩個指標嚴重分歧。論文沒有交代 Text-Davinci-003（純 completion 模型）與 Claude-2 這類沒有 ChatGPT 式 function call 介面的基準，是怎麼把 API 與 Finish function 接上去的；在這個缺口下，低 pass rate 有可能反映的是格式轉接失敗而非工具使用能力（這一點是推測，論文無法驗證）。",
+    "『檢索器勝過 oracle』的證據太弱。平均 pass rate 只差 0.6 pp（67.3 對 66.7），以每組約 200 題計落在雜訊內；六組裡有三組 pass rate 反而下降，I2-Cat. 從 77.0 掉到 68.5。作者的解釋是 ground-truth API 可被更好的替代品取代，這等於承認生成時標的『相關 API』是弱標籤——而同一份標籤正是 Table 2 NDCG 的 ground truth，也是評估時的 oracle 集合。",
+    "同一模型、同一方法出現兩組數字，論文沒有說明。Table 3 的 ChatGPT+ReACT 與 ChatGPT+DFSDT 平均 pass rate 是 35.3 與 63.8，Table 4 同樣組合是 40.2 與 64.8。Table 3 是依 I1／I2／I3 分的前導實驗，樣本可能本來就不同，但文中沒交代兩表的測試樣本或預算差在哪；讀者無法判斷差距來自樣本、預算，還是 live 環境與評審本身的變異。",
+    "OOD 結論寫得太寬。引言說 ToolLLaMA 與 Gorilla『相當』，但 Table 5 顯示：(1) 同樣用 oracle 時，ToolLLaMA 的 AST 三個領域都輸 Gorilla-RS（88.80 對 89.27、85.88 對 93.01、88.62 對 94.16）；(2) 配檢索器時幻覺率三個領域都較高（10.60 對 6.42、15.70 對 5.91、6.48 對 2.77），TensorHub 的 AST 也較低（40.59 對 41.90）；(3) 兩邊用的檢索器不同（自家稠密檢索器對 BM25），差異混入了檢索器的貢獻。",
+    "評估環境是 live 的，時間上不可重現。可查證的外部證據：Salesforce 的 xLAM-7b-r model card 記載 ToolBench 伺服器在 2024/07/28 到 2024/09/03 之間停擺，導致 xLAM-8x22b-r 無法評估；同一團隊後來另做 StableToolBench（2403.07714，repo README 描述為以 API 回應模擬為基礎的穩定本地伺服器）。所以在不同時間點、不同論文裡報的 ToolEval 分數，原則上不能直接比。",
+    "泛化切分只換了 API，沒有換使用者分佈。I1-Tool、I1-Cat. 的 tool 沒見過，但測試指令與訓練指令出自同一套 ChatGPT 提示詞與種子範例，句型、長度、參數編造方式完全同分佈，所以『泛化到新 API』不能外推成『泛化到真實使用者的請求』。另外全部是單輪指令，沒有多輪澄清或使用者回饋。"
+  ],
+  "framework_role": "主要落在 T7 的『agent 基準與評估環境設計』：它提供一個可執行的真實 API 環境（16k 支 RESTful API）、按『沒見過的指令／tool／category』切分的泛化測試組，以及 LLM-as-a-judge 的 ToolEval。其中 pass rate 依『指令可解／不可解 × 以答案或放棄收尾』分支判定任務是否完成，本質上就是任務完成分數，與 T8 高度重疊，可直接借來當工具型回合的完成判準範本；win rate 的六項準則（資訊豐富度、事實性、失敗原因、里程碑、探索、成本）則是軌跡層級的品質維度。它的缺陷同樣是 T7 的反面教材：live 環境會漂移，評審驗證只報原始一致率，評審與 teacher、參照模型是同一個。DFSDT 的『放棄節點、回溯、要求產生不同動作』是 T5 自我修正在 T4 軌跡上的一種實作，但本文把它用在資料標註與推論策略上，不是評估方法本身。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "DFSDT 由模型自己判斷目前這條軌跡走不下去（例如一直用錯方式呼叫 API、陷入錯誤迴圈），呼叫 Finish 的 give_up_and_restart；系統隨即放棄該節點、回溯到父節點，並用 diversity prompt 把該狀態下先前失敗的候選動作列給模型，要求產生不同的動作。這就是『軌跡中偵測到異常 → 觸發修正』，只是異常由 agent 自評，不是外部偵測器判的。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Salesforce AI Research 發布的 xLAM-7b-r 官方 model card（https://huggingface.co/Salesforce/xLAM-7b-r）列有『ToolBench 三種情境的 Pass Rate』結果表，並註明 xLAM-8x22b-r 因 ToolBench 伺服器於 2024/07/28 至 2024/09/03 停擺而沒有結果。這是業界實驗室拿本文的基準評估自家發布的模型；該卡授權為 CC-BY-NC-4.0，屬研究發布，不是產品部署。",
+      "官方 repo（https://github.com/OpenBMB/ToolBench）README：資料以 Apache-2.0 釋出，自述僅供研究與教育用途，沒有任何產品部署宣稱。"
+    ],
+    "assessment": "未見產品部署證據。可查證的是評估方法被業界沿用：Salesforce 的 xLAM model card 以 ToolBench pass rate 當評估項目。判定那張卡指的是本文（OpenBMB）版 ToolBench，而不是 2305.16504 的同名 ToolBench，依據是卡上提到的『ToolBench 伺服器停擺』，與本文 repo README 所述、需申請 ToolBench key 才能使用的 RapidAPI 後端服務吻合；卡片本身沒有引用論文或連結 repo，所以這一點是推斷。ToolLLaMA 模型本身未見被採用於產品。取證方式：本次 WebSearch 額度已用完，xLAM model card 與 repo README 是直接以已知 URL 用 WebFetch 打開確認的，不是搜尋得來；可能還有其他採納證據沒被找到。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/OpenBMB/ToolBench",
+    "data": "ToolBench 資料（Apache-2.0）與 ToolLLaMA 權重由官方 repo 公開。但測試要打 live 的 RapidAPI（或作者託管的伺服器），API 會下架、會改回應，伺服器也停擺過，所以分數在時間上不可重現；後續的 StableToolBench（2403.07714）以 API 模擬與快取補救。論文本身缺測試集大小、預算與 Unsure 的處理方式。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "主要貢獻雖然是資料與訓練，但它定義了被業界 model card 與後續基準沿用的工具使用評估範式（真實可執行 API 環境＋泛化切分＋LLM 評審的 pass／win rate）；讀它的價值一半來自這個範式本身，一半來自它的失效方式（live API 漂移、評審驗證薄、評審與 teacher 同一個），這正是 T7 可重現性與評審可靠性議題的典型案例，而不是因為它的評估方法本身嚴謹。",
+  "related": [
+    "2305.15334",
+    "2304.08244",
+    "2306.05301",
+    "2305.16504",
+    "2210.03629",
+    "2303.11366",
+    "2305.10601",
+    "2304.08354",
+    "2302.04761"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

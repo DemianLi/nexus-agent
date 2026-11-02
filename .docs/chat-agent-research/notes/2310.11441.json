@@ -1,0 +1,171 @@
+{
+  "id": "2310.11441",
+  "title": "Set-of-Mark Prompting Unleashes Extraordinary Visual Grounding in GPT-4V",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用現成分割模型把影像切成區域、在每個區域疊上唯一的數字等標記，讓 GPT-4V 以「說出標記 ID」取代「輸出座標」來做視覺 grounding，在六個細粒度視覺任務的小子集上 zero-shot 逼近或超過專家模型。",
+  "problem": "GPT-4V 語意理解強，但細粒度 grounding 弱：要它輸出框座標時，RefCOCOg REC 只有 25.7（ACC@0.5）。作者認為讓 LLM 吐一串數字座標既傷語言流暢度，也浪費視覺編碼器的空間理解。先前的視覺提示（紅圈、高亮、箭頭）一次只能指一兩個物件，而且這些記號「說不出口」，模型無法在文字回答中引用。對 agent 而言，這正是截圖類觀測的核心難題：模型看得懂畫面，卻無法把決策精準落到畫面上的某個區域或元素。",
+  "core_idea": "不改模型、也不改文字提示，只改影像觀測：先把影像切成語意區域，再在每個區域疊上可被 OCR 讀出、可在文字中說出的唯一標記（數字為主，輔以框與遮罩）。這樣 grounding 就從座標迴歸變成「從候選集合中選 ID」，並靠 ID↔區域對照表把文字回答回溯成遮罩或框。",
+  "method": {
+    "形式化": "一般 LMM 是 T^o = F(I, T^i)。SoM 只替換影像輸入，變成 T^o = F(SoM(I), T^i)。SoM(I) 產生疊了標記的影像 I^m，同時保留 K 組（區域 r_k、標記 m_k）對照表，文字提示可以完全不變。",
+    "步驟一：影像切分（§2.2）": "用現成分割模型把 H×W 影像切成 K 個二值遮罩 R ∈ {0,1}^{K×H×W}。工具箱包括 MaskDINO（精準，封閉詞表）、SEEM（開放詞表）、SAM 與 Semantic-SAM（多粒度，可切到物件的部件）。支援自動模式與互動模式（使用者點選、可修改），並可選粒度。",
+    "步驟二：標記類型（§2.3）": "主結果一律用阿拉伯數字，因為它小、不太佔畫面，且 GPT-4V 能靠 OCR 讀出。方框、遮罩邊界、半透明遮罩是輔助標記。原則是標記不能與影像內容衝突：滿是數字的算術題圖不要用數字標記，文件截圖不要用字母標記。自動挑選標記類型留待未來。",
+    "步驟三：標記位置（mark allocation，§2.3 的文字描述；演算法本體畫在圖裡，快取全文沒有）": [
+      "計算所有遮罩的面積，由小到大排序，讓小區域先分配位置",
+      "第 k 個遮罩扣掉前 k−1 個遮罩已經覆蓋的部分，避免標記落在重疊處",
+      "把剩下的遮罩丟進 distance transform，取「到邊界最短距離最大」的點當標記位置，約等於最大內切圓的圓心；如果直接取遮罩中心，密集物件或凹形區域會讓標記互相衝突",
+      "區域小到標記幾乎會蓋滿整個區域時，把標記稍微移到區域外；作者說 GPT-4V 仍能建立標記與區域的關聯",
+      "每個標記都唯一，確保整組標記可區分、可被說出"
+    ],
+    "未揭露的參數": "字型、字級、顏色、底框樣式，以及「區域太小」的判定門檻，論文都沒寫，要查 microsoft/SoM 的實作。",
+    "步驟四：文字提示（§2.4、Fig. 6、Fig. 7）": {
+      "Plain 提示": "照常提問，完全不提標記；GPT-4V 會在回答中自己引用標記（Fig. 1、Fig. 6 左）。",
+      "Interleaved 提示": "在問題裡直接用標記指稱區域，例如問某個編號裡是什麼、能不能把某編號的東西放進另一個編號（Fig. 6 右）。兩種可在多輪對話中混用。",
+      "量化實驗用的提示（Fig. 7，轉述）": "先告訴模型每個物件的中心已經標上醒目的數字 ID，再依任務要求：(a) 列出各 ID 的名稱，而且只能從給定的類別詞表中選；(b) 給出某個指代語對應的 ID；(c) 替一句描述中的每個名詞片語找出對應區域的 ID；(d) 說明兩張圖是同一影片的首幀與後續幀、首幀標了哪些 ID，要求在第二張圖中追蹤它們。",
+      "脈絡隔離": "每個問題、每個評估實例都開新的對話視窗，避免前一題的脈絡洩漏。"
+    },
+    "步驟五：輸出回溯（§3）": "從回答文字抽出提到的標記 ID，經 m_k↔r_k 對照表取回遮罩，組成（r_k、m_k、text_k）三元組。REC 再把遮罩轉成外接框。整個流程 LMM 不必輸出任何座標。",
+    "各任務的實驗管線（§4.2、Table 1）": {
+      "COCO／ADE20K 區域分類（Generic／OV Segmentation）": "疊 GT 遮罩（COCO 用 alpha 0.4，ADE20K 用 0.2；原文把後者寫成 OpenSeeD）與數字，給資料集的類別詞表，要 GPT-4V 替每個區域選類別，指標是 Precision。對照組 MaskDINO、OpenSeeD 則給 GT 框，評估輸出的類別。",
+      "RefCOCOg RES／REC": "MaskDINO 提候選遮罩，疊遮罩與數字，GPT-4V 依指代語選一個 ID。RES 用 mIoU；REC 把遮罩轉成框後算 ACC@0.5。",
+      "Flickr30K 片語 grounding": "Grounding DINO 產生框候選，用 0.27 的門檻過濾冗餘框，再用 SAM 依框預測遮罩；影像上同時畫框、遮罩與數字。給 GPT-4V 整句 caption 與其中的名詞片語，要它替每個片語指派區域，指標是 Recall@1。",
+      "DAVIS2017 VOS": "每一幀用 MaskDINO 提候選並疊數字。採半監督設定，以首幀遮罩為參考；每次把首幀與目前幀兩張圖一起送給 GPT-4V，依物件相似度跨幀對應 ID，指標是 J&F。"
+    },
+    "執行方式（§4.1）": "不訓練任何模型。當時沒有 GPT-4V API，作者分工（divide-and-conquer）手動把標記影像送進 ChatGPT 網頁介面，每個實例開新視窗，所以全部是 zero-shot。受配額限制，每個任務只抽約 100 張影像（DAVIS 71 張）。主結果一律用數字標記。"
+  },
+  "assumptions": [
+    "底層 LMM 能用 OCR 讀出疊印的字元，並把字元綁到鄰近的區域。論文只在 GPT-4V 上成立；作者自己試過 LLaVA-1.5 與 MiniGPT-v2，兩者幾乎讀不懂標記",
+    "外部分割或偵測模型的候選區域要涵蓋答案。GPT-4V 只能在候選中挑選，不能修框或補框；Table 4 顯示候選品質直接決定上限",
+    "任務能改寫成「從候選集合挑 ID」的選擇題；需要連續座標或不在候選內的區域時，這個形式就不適用",
+    "標記不能與影像內容衝突（數字圖不用數字標記、文件截圖不用字母），也不能密到互相遮擋或讓模型混淆；論文沒有量化密度的影響",
+    "每個實例的對話都互相獨立（每題開新視窗），所以結果不涵蓋多步、累積脈絡下的表現"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "COCO Panoptic（100 張／567 個實例，數字加遮罩）",
+      "ADE20K（100 張／488 個實例，數字加遮罩）",
+      "Flickr30K Entities（100 張／274 個實例，數字加框）",
+      "RefCOCOg RES 與 REC（100 張／177 個實例，數字加遮罩；Table 1 誤寫成 RefCOCO）",
+      "DAVIS 2017（71 張／157 個實例，數字加遮罩）"
+    ],
+    "metrics": [
+      "Precision（區域分類正確率）",
+      "mIoU（RES）",
+      "ACC@0.5（REC）",
+      "Recall@1（片語 grounding）",
+      "J&F（VOS）"
+    ],
+    "baselines": [
+      "GPT-4V 直接輸出框座標（主要對照組）",
+      "專家模型：MaskDINO、OpenSeeD、GLIPv2、Grounding DINO、X-Decoder、PolyFormer、SegGPT、SEEM",
+      "zero-shot 視覺提示法：RedCircle、FGVP（CLIP 為底）",
+      "開源 LMM：Shikra、LLaVA-1.5、MiniGPT-v2、Ferret（除 LLaVA-1.5 外多為引用原論文的全集數字）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "同一個 GPT-4V，從「輸出座標」改成「選標記 ID」，REC 從幾乎不能用變成與專家模型同級，這是全文最能說明機制的一組對照",
+      "numbers": "RefCOCOg REC（ACC@0.5）：GPT-4V 輸出座標 25.7 → GPT-4V + SoM 86.4。同一子集上 LLaVA-1.5 為 63.3；Grounding DINO 86.1*、PolyFormer 85.8*、Ferret 85.8*、MiniGPT-v2 84.4* 則是原論文的全集數字（*）",
+      "section": "§4.2 Referring、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在同一子集上，SoM 的指代分割大幅勝過專門訓練的 PolyFormer",
+      "numbers": "RefCOCOg RES（mIoU）：GPT-4V + SoM 75.6 對 PolyFormer 67.2（在作者子集上重跑）；SEEM 65.7*、X-Decoder 64.6* 為原論文全集數字",
+      "section": "§4.2 Referring、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "給定 GT 區域後做開放詞表分類，zero-shot 的 GPT-4V + SoM 接近微調過的 MaskDINO，並遠高於 zero-shot 的 OpenSeeD；作者稱兩資料集表現相近，並據此主張泛化性強（實際相差 12.3 點）",
+      "numbers": "COCO Precision：75.7 對 MaskDINO 80.7；ADE20K：63.4 對 OpenSeeD 23.4。GPT-4V 拿到的是疊上去的 GT 遮罩，對照組拿到的是 GT 框",
+      "section": "§4.2 Image Segmentation、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "片語 grounding 與專家模型相當，但在同一子集上並沒有超過 Grounding DINO",
+      "numbers": "Flickr30K Recall@1：GPT-4V + SoM 89.2；Grounding DINO 90.5（同一子集）、GLIPv2 87.7*（全集）",
+      "section": "§4.2 Phrase Grounding、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "標記類型有影響：在數字加遮罩之外再加方框，片語 grounding 明顯提升",
+      "numbers": "Flickr30K 子集 R@1：Number & Mask 84.4 → Number & Mask & Box 89.2（+4.8）",
+      "section": "§4.3、Table 3（正文誤標為 Table 4）",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "靠兩張圖之間的 ID 對應，GPT-4V + SoM 在 VOS 上勝過其他通用視覺模型",
+      "numbers": "DAVIS2017 J&F：GPT-4V + SoM 78.8；SegGPT 75.6、X-Decoder 62.8、SEEM 62.8（皆為同一子集）",
+      "section": "§4.2 Video Object Segmentation、Table 2",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "瓶頸大半在候選區域而非 GPT-4V：把 MaskDINO 候選換成 GT 遮罩，RES 大幅提升；作者說換成 GT 後剩下的失敗多是標註本身有歧義或錯誤",
+      "numbers": "RefCOCOg RES mIoU：MaskDINO 候選 75.6 → GT 遮罩 90.1（+14.5）",
+      "section": "§4.3 Golden mark location、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "SoM 的效果高度依賴底層模型：作者試跑的開源 LMM 幾乎讀不懂標記，也無法把回答落到標記上",
+      "numbers": "無量化數字；LLaVA-1.5 與 MiniGPT-v2 只做了定性試跑",
+      "section": "§6 The mystery in GPT-4V、§2.1",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "受 GPT-4V 配額限制，每個任務只能從驗證集抽一個小子集（約 100 張）評估",
+    "當時沒有 GPT-4V API，只能手動把影像送進 ChatGPT 介面",
+    "標記類型要依影像內容動態選擇（數字圖、文件截圖各有禁忌），自動化留待未來；使用者可能要自己仔細設計 SoM 提示",
+    "預設把標記放在區域中心不一定最好：GPT-4V 會把疊在人身上的背包標記當成人、把落在人身上的草地標記誤認；需要更好的標記分配演算法",
+    "分割工具的區域有誤差；換成 GT 遮罩可再提升 14.5 mIoU",
+    "LLaVA-1.5、MiniGPT-v2 幾乎讀不懂標記；GPT-4V 為何可以仍是謎，作者提出的規模與資料策展假設沒有事實根據",
+    "受配額限制，region captioning、keypoint localization、part segmentation 等任務沒有評估"
+  ],
+  "limitations_observed": [
+    "Table 2 把兩種評估協定混在一起比。REC 86.4 是 177 個實例的子集分數，而它聲稱勝過的 Grounding DINO 86.1、PolyFormer 85.8、Ferret 85.8、MiniGPT-v2 84.4 都標了星號，是原論文在全集上的數字。對 GDINO 的 0.3 個百分點、對 PolyFormer／Ferret 的 0.6 個百分點，在 177 個實例上至多約一個實例的差距（1/177 ≈ 0.56 個百分點），撐不起摘要所說的「勝過 SOTA」。真正同子集的比較只有 PolyFormer RES 67.2、LLaVA-1.5 REC 63.3，以及 Flickr30K 上的 Grounding DINO 90.5——而最後這一個反而比 SoM 的 89.2 高",
+    "星號標示前後不一致。作者在 §4.1 說開源 LMM 裡只量化評估了 LLaVA-1.5，但 Shikra 的 Flickr30K 77.4 與 Ferret 的 81.1 沒有星號；照表註，沒有星號代表在作者子集上評估，所以至少有一邊寫錯",
+    "功勞歸屬不清。GPT-4V 只負責在外部模型提出的候選中挑一個，分割品質來自 MaskDINO／SAM：RES 換上 GT 遮罩從 75.6 升到 90.1，可見分數有很大一部分屬於候選產生器。還有一個待查證的風險：如果 RefCOCOg 的影像取自 MS COCO 訓練集（本文沒提，筆者也未在此核實），而 MaskDINO 用的又是 COCO 訓練權重，那麼候選品質可能在這組評估上被高估；論文沒寫權重來源",
+    "COCO／ADE20K 兩列其實是給定 GT 區域的分類任務，不是分割；而且 GPT-4V 拿到的是疊上去的 GT 遮罩，MaskDINO、OpenSeeD 拿到的是 GT 框，輸入條件不同。63.4 對 OpenSeeD 23.4 的差距，混著模型能力與輸入形式兩個因素",
+    "對 T3 最關鍵的缺口：全文沒有報告每張圖疊了多少標記，也沒有分析密度。後續工作正好量到 SoM 在這裡崩壞：OmniParser（2408.00203）的 SeeAssign 在 GPT-4V 上，少於 10 個框時 0.913，超過 40 個框時掉到 0.620，整體 0.705；補上各框的文字描述後回到 0.938。SeeAct（2401.01614）在網頁上用 SoM 式框加編號，Step SR 只有 20.3／13.9／23.7，遠低於給候選 HTML 文字做選擇題的 39.1／32.7／42.0；錯誤裡 54% 是編造不存在的標記、46% 是把框與編號配錯。這兩篇的框都來自 DOM 而非分割，所以壞在「標記與連結」本身，而不是分割品質。本文以物件場景圖為主的結論不能直接外推到元素密集的 GUI 截圖",
+    "評估協定的可重現性差：幾位作者分工在 ChatGPT 網頁上手動跑，沒有說明解碼設定、重跑次數、答案如何從自由文字解析成 ID、是否盲測；當時的 GPT-4V 快照也已不可得，Table 2 的 GPT-4V 數字事實上無法重現",
+    "「標記資訊沒有洩漏到對話中」只在 Fig. 1／Fig. 6 的定性 plain 提示成立；量化實驗的提示（Fig. 7）明白告訴模型每個物件已經標上數字 ID，所以量化結果證明的是「被告知有 ID 時會用 ID」，不是模型自發地 grounding",
+    "表格與正文有多處標示錯誤：Table 1 寫 RefCOCO，結果卻是 RefCOCOg；標記類型消融的正文指向 Table 4，實際數字在 Table 3；Table 4 的標題寫 Flickr30K，欄位卻是 RefCOCOg mIoU；§4.2 把 ADE20K 的 alpha 寫成 OpenSeeD 的",
+    "DAVIS 那一列在 Table 1 寫的是 71 張「影像」、157 個實例；如果 DAVIS 2017 驗證集如一般所知只有約 30 支影片（筆者未能從快取的 DAVIS 論文核實，它只抓到摘要），71 就應是抽樣幀，而不是對完整序列的標準 J&F；GPT-4V 每次只看首幀與目前幀，也沒有時序傳遞。78.8 對 SegGPT 75.6 的比較不能讀成標準 VOS 的排名",
+    "附錄中像 agent 的案例（2D 遊戲規劃、平面圖導航、CAPTCHA）都是單一挑選範例，沒有任何閉環執行或任務成功率；論文完全沒測 SoM 當 agent 觀測時的多步表現與逐步延遲成本（每一步都要多跑一次分割模型）。Fig. 10 把「解開 CAPTCHA」當成能力展示：同一種觀測表徵也能用來繞過機器人偵測，而作者沒有討論這一點"
+  ],
+  "framework_role": "屬於 T3 的 (a) 感知／觀測空間，不涉及 (b) 可觀測性。它定義了一種觀測表徵的轉換：原始截圖或影像 → 疊了可說出 ID 的標記影像，外加 ID↔區域的側表。它的本質是觀測與動作空間的共同設計（ACI 角度）：把「在畫面上指一個位置」從輸出座標改成選一個離散 ID，模型的回答因此能精準回溯到區域。後續 GUI／網頁 agent（SeeAct、OmniParser、AutoGen 的 MultimodalWebSurfer）的「截圖疊編號＋元素清單」觀測都繼承自這個想法。對我們的框架，它是設計截圖類觀測時的基準做法與出處。它的弱點（標記密度、框與編號連結錯誤）則提示我們：觀測除了疊標記，還要附上每個 ID 的文字語意。穩定的 ID 也能讓 T4 的軌跡紀錄引用同一個元素，但這是推論，論文本身沒有處理。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Microsoft AutoGen 官方 API 文件描述 MultimodalWebSurfer：先截圖、抽出可互動元素，再做出在元素上畫框的 set-of-mark 截圖，連同訊息歷史與可用工具一起送給模型（https://microsoft.github.io/autogen/stable/reference/python/autogen_ext.agents.web_surfer.html）",
+      "同一框架的官方原始碼頁面顯示，web surfer 匯入 _set_of_mark 模組的 add_set_of_mark 產生 SoM 截圖，並在文字提示中以 id、ARIA name、role、可用動作列出每個元素（https://microsoft.github.io/autogen/stable//_modules/autogen_ext/agents/web_surfer/_multimodal_web_surfer.html）",
+      "AutoGen 的 Magentic-One 官方使用者指南寫明它用的是 MultimodalWebSurfer，並說 WebSurfer 靠瀏覽器的 accessibility tree 與 set-of-marks prompting 來執行動作（https://microsoft.github.io/autogen/dev/user-guide/agentchat-user-guide/magentic-one.html）"
+    ],
+    "assessment": "有官方開源框架層級的採納：Microsoft AutoGen 的 MultimodalWebSurfer（也就是 Magentic-One 的 web agent）以 SoM 截圖加 accessibility tree 作為網頁 agent 的觀測。但要注意三點：(1) AutoGen 與本文作者同屬 Microsoft，而且它是開源框架，不是付費商用產品；(2) 它採用的是「疊唯一 ID＋文字列出各 ID 的名稱與角色」這個表徵概念，框來自瀏覽器的可互動元素，並沒有用本文的分割管線；(3) OmniParser 的官方頁面（Microsoft Research 部落格兩篇、GitHub README、Hugging Face model card）查過都沒有明文提到 SoM，只有它的論文提到，屬於學術延伸，不計入。付費商用產品明文採用 SoM：未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/microsoft/SoM",
+    "data": "repo（MIT 授權）提供標記生成工具箱與各分割後端，README 記載 2023-11-07 釋出了評估用的 benchmark 子集。但所有 GPT-4V 結果都是在 ChatGPT 網頁上手動跑的，模型快照已不可得，解碼設定與答案解析方式也沒公開，原數字無法重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 GUI／網頁 agent 廣泛使用的「截圖疊唯一 ID、以選 ID 取代輸出座標」觀測表徵的出處，REC 從 25.7 到 86.4 清楚說明了機制，後續工作都直接繼承而非重新推導；但本文沒有測任何 agent 任務，agent 端的證據來自後續工作，而且好壞參半（SeeAct、OmniParser）。",
+  "related": [
+    "2304.02643",
+    "2304.06718",
+    "2307.04767",
+    "2304.06712",
+    "2306.04356",
+    "2309.17421",
+    "2310.07704",
+    "2303.05499",
+    "2310.03744",
+    "2303.11381"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

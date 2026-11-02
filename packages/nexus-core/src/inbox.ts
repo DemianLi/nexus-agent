@@ -1,0 +1,279 @@
+/**
+ * 送出佇列：人送出、還沒送進模型的那幾句（[#637](https://github.com/DemianLi/nexus-agent/issues/637)、
+ * [#710](https://github.com/DemianLi/nexus-agent/issues/710)）。
+ *
+ * 照 dsh 的收件匣（`packages/core/agent-loop/src/inbox.ts`，`477b4f4`）：**狀態不另外存，由日誌上一顆顆
+ * `inbox/spliced` 折出來**。每一次變動（送進來、領走、改、刪）落一顆，折疊就是對那一條清單做陣列的 `splice`。
+ *
+ * 兩條清單，同 dsh：
+ *
+ * - `next-turn`：排著等開新一輪的。一輪開始時領第一件。
+ * - `next-step`：插話（steer）。跑著的那一輪每次叫模型之前領走整條，送進模型；這一輪不停。
+ *
+ * 變動的形狀：
+ *
+ * - 送進來：`inserted` 非空。
+ * - 領走（一輪開始領 `next-turn` 第一件、一步之前領整條 `next-step`）：`removedCount` 非零，不帶 `outcome`。
+ * - 刪：`removedCount: 1` 加 `outcome: 'canceled'`。
+ * - 改：同一顆裡 `removedCount: 1` 加 `inserted: [新的]`，帶 `outcome: 'canceled'`，id 不變。
+ * - 排著的一件改成插話：從 `next-turn` 拿掉（帶 `outcome: 'canceled'`）、接到 `next-step` 尾巴，兩顆。
+ *
+ * **id 在兩條清單之間唯一**，同 dsh 的折疊：一件只會在其中一條。
+ *
+ * 寫的人只有 web 的 pump（`apps/harness/src/thread-pump.ts`）：CLI 的 REPL 一行一輪，沒有排隊也沒有插話。
+ *
+ * @module
+ */
+
+import type { AttachmentRef } from './attachment-ref.js';
+import type { GoalId } from './goal.js';
+import type { TurnAbortCause } from './session-log.js';
+import type { SubagentMentionRef } from './subagent-mention.js';
+
+/**
+ * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，五種。
+ * 給模型看的那句英文（`summary`）由它決定，畫面的字也由它決定——畫面不解析英文句，認這個列舉。
+ *
+ * `refusal`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：子代理那一輪被準入閘門擋下（它所屬的會話封存了），
+ * 領走的輸入丟掉、一個請求都沒發——任務是被**拒絕**，不是做完了、也不是被停。照 dsh：`toStopReason` 與 `epochStopReason` 把 turn 的
+ * `blocked` 收成 `refusal`（`subagent-in-process-driver/src/index.ts:50-66`、`subagent/src/lifecycle.ts:248-251`，`5badb15009a`）。
+ */
+export type SubagentSettleReason = 'completed' | 'aborted' | 'max-tokens' | 'error' | 'refusal';
+
+/**
+ * 收件匣的哪一條清單，同 dsh 的 `InboxTarget`。格式 20 以前的日誌只有 `next-turn`（見 `session-store.ts`）。
+ */
+export type InboxTarget = 'next-turn' | 'next-step';
+
+/**
+ * 一件排著的輸入是誰送的。dsh 分人（`{kind:'user'}`）與目標續行（`{kind:'goal', …}`）；**這一版有人、背景子代理的結算通知與目標續行**（#638）。開跑時 `turn/start` 的 `kind` 由它決定。
+ *
+ * 加成員要在 pump 的 `pumpInputOf`（`apps/harness/src/thread-pump.ts`）補一支，不補就編不過。goal 成員要帶 `goalId`、
+ * `revision`、`round`，因為 `turn/start` 的 goal 那幾格全部必填。
+ */
+export type QueuedInputSource =
+  | {
+      readonly kind: 'user';
+      /**
+       * 客戶端給這一次送出的請求編號（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）。
+       * 照 dsh：`MessageSource` 的 `{ kind: 'user', rpcId }`（`packages/api/session-controller/src/commands.ts:331-335`，
+       * `d7432673886`）。重送同一個編號時，伺服器靠它認出「這一句已經收過了」（{@link findPromptRequest}）。
+       * 客戶端沒帶就整個不放這個 key。**格式 48 起才有**。
+       */
+      readonly requestId?: string;
+      /**
+       * 使用者在哪個時區（`run.start` 的 `client_time_zone`，[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)），
+       * 邊界上已驗證並正規化。照 dsh 的 `MessageSource` `{ kind: 'user', rpcId, clientTimeZone }`（`packages/api/session-controller/src/types.ts:418`，
+       * `687f282e`）。客戶端沒帶就整個不放這個 key。**格式 49 起才有**。
+       */
+      readonly clientTimeZone?: string;
+    }
+  | {
+      /** 背景子代理結算的通知（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：執行期的記帳，不是人說的話。 */
+      readonly kind: 'subagent-settled';
+      readonly summary: string;
+      /** 怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）；選填只為了格式 26 以前的日誌。 */
+      readonly reason?: SubagentSettleReason;
+      /** `reason` 是 `aborted` 時為什麼停（[#1847](https://github.com/DemianLi/nexus-agent/issues/1847)）。舊日誌沒有。 */
+      readonly cause?: TurnAbortCause;
+      readonly senderSessionId: string;
+    }
+  | {
+      /** 背景子代理用 `send_message` 寫給主對話的話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）：agent 寫的，不是人說的。 */
+      readonly kind: 'agent-message';
+      readonly senderSessionId: string;
+    }
+  | {
+      /**
+       * 目標續行（[#638](https://github.com/DemianLi/nexus-agent/issues/638)）：排程器為下一輪預約的一件，不是人說的話。
+       * 照 dsh 的 `GoalMessageSource`（`goal-round-driver/src/index.ts`，`5badb15009a`）：三格全必填，因為開跑時 `turn/start`
+       * 的 goal 那幾格全部必填，而且領走時要拿它對照目標「現在」的修訂與輪數判這份預約還有沒有效。
+       */
+      readonly kind: 'goal';
+      readonly goalId: GoalId;
+      readonly revision: number;
+      readonly round: number;
+    };
+
+/**
+ * 排著的一件。
+ *
+ * **對 dsh 的偏離**：dsh 的 `UserMessage.content` 是一串內容區塊（文字、圖片、檔案），我們是 `text` 加一格選填的 `attachments`：
+ * `run.start` 的文字欄位本來就是獨立的，附件另開一個陣列（`@nexus/wire` 的 `attachments.ts` 偏離 3）。
+ */
+export interface QueuedInput {
+  /** 就是 `run.start` 回給呼叫端的 `run_id`。改過之後不變。 */
+  readonly id: string;
+  readonly text: string;
+  readonly source: QueuedInputSource;
+  /**
+   * 這一件帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），照選取順序，只放參照。沒有就整個不放這個 key。
+   * 改文字（`updateQueue` 的 `edit`）時原樣保留。**格式 38 起才有**，不標 `ignorable`（見 `session-store.ts`）。
+   */
+  readonly attachments?: readonly AttachmentRef[];
+  /**
+   * 這一件點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）。沒有就整個不放這個 key。
+   * 改文字（`updateQueue` 的 `edit`）時原樣保留。**格式 42 起才有**，不標 `ignorable`（見 `session-store.ts`）。
+   */
+  readonly mention?: SubagentMentionRef;
+}
+
+/** 一次變動。形狀照 dsh 的 `agent/inbox/spliced`。 */
+export interface InboxSplice {
+  readonly target: InboxTarget;
+  /** 從哪一格開始。 */
+  readonly start: number;
+  /** 拿掉幾件；沒拿就不放這個 key。 */
+  readonly removedCount?: number;
+  /** 插進去的。 */
+  readonly inserted: readonly QueuedInput[];
+  /** 拿掉的那幾件是被取消的（刪、改），不是被領走開跑。 */
+  readonly outcome?: 'canceled';
+}
+
+/** 兩條清單。形狀照 dsh 的 `InboxState`。 */
+export type InboxState = { readonly [target in InboxTarget]: readonly QueuedInput[] };
+
+/** 還沒有任何變動時的收件匣。 */
+export const EMPTY_INBOX: InboxState = { 'next-turn': [], 'next-step': [] };
+
+/**
+ * 套一次變動，回傳新的收件匣。**不合規就拋**，照 dsh 的 `inboxProjectionDefinition.apply`：範圍超出、id 重複
+ * 都代表寫的那一側壞了，靜靜收下的話佇列會跟實際跑的東西對不上。
+ *
+ * 寫的那一側先用它算出下一份、驗過了才落日誌（同 dsh 的 `mutate`），所以產品路徑上它不會在讀的那一側拋。
+ *
+ * @param inbox - 目前的收件匣。
+ * @param splice - 這一次變動，套在 `splice.target` 那一條上。
+ * @returns 新的收件匣。
+ * @throws 範圍不合規，或變動之後兩條清單合起來有兩件同 id。
+ */
+export function spliceInbox(inbox: InboxState, splice: InboxSplice): InboxState {
+  const list = inbox[splice.target];
+  const removedCount = splice.removedCount ?? 0;
+  if (
+    !Number.isSafeInteger(splice.start) ||
+    splice.start < 0 ||
+    splice.start > list.length ||
+    !Number.isSafeInteger(removedCount) ||
+    removedCount < 0 ||
+    splice.start + removedCount > list.length
+  ) {
+    throw new Error(
+      `送出佇列（${splice.target}）的變動超出範圍：start ${String(splice.start)}、` +
+        `removedCount ${String(removedCount)}，清單只有 ${list.length} 件`,
+    );
+  }
+  const next: InboxState = {
+    ...inbox,
+    [splice.target]: list.toSpliced(splice.start, removedCount, ...splice.inserted),
+  };
+  const ids = new Set<string>();
+  for (const item of [...next['next-turn'], ...next['next-step']]) {
+    if (ids.has(item.id)) throw new Error(`送出佇列裡已經有一件 id 是 "${item.id}"`);
+    ids.add(item.id);
+  }
+  return next;
+}
+
+/**
+ * 從一段日誌折出目前的收件匣。**從日誌開頭折起**：佇列不會在一輪開頭清空，前幾頁插進來、還沒領走的只看
+ * 一段會漏掉。
+ *
+ * @param events - 一份日誌到目前為止的事件（或它的開頭一段）。只讀 `inbox/spliced`。
+ * @returns 目前的收件匣。
+ * @throws 某一顆不合規，見 {@link spliceInbox}。訊息帶那一顆的 `seq`。
+ */
+export function foldInbox(
+  events: Iterable<{ readonly type: string; readonly seq: number; readonly data: unknown }>,
+): InboxState {
+  let inbox = EMPTY_INBOX;
+  for (const event of events) {
+    if (event.type !== 'inbox/spliced') continue;
+    try {
+      inbox = spliceInbox(inbox, event.data as InboxSplice);
+    } catch (error: unknown) {
+      throw new Error(`日誌 seq ${event.seq} 的 inbox/spliced 不合規`, { cause: error });
+    }
+  }
+  return inbox;
+}
+
+/** 一個請求編號對應到哪一句、那一句現在在哪個階段（{@link findPromptRequest}）。 */
+export interface PromptRequestMatch {
+  /** 原本那一件的 `run_id`：就是佇列項目的 id。 */
+  readonly runId: string;
+  /**
+   * 那一句現在在哪：
+   *
+   * - `queued`：還排在收件匣的某一條清單上。
+   * - `started`：已經領走、開了一輪（`turn/start` 帶著這個編號），或是插話被領走、進了模型（`user/message` 帶著）。
+   */
+  readonly stage: 'queued' | 'started';
+}
+
+/**
+ * 這個請求編號有沒有收過。照 dsh 的 `hasPromptRequest`（`packages/api/session-controller/src/commands.ts:602-614`，
+ * `d7432673886`）：先查收件匣兩條清單，再查日誌上已落地的人話事件（`user/message`，我們還要加上一輪開頭那句所在的
+ * `turn/start`，見下）。**只比編號，不比內容**，同 dsh：同編號不同字的第二次也回原本那一件。
+ *
+ * 三個階段都認得，所以重送發生在「還排著」「已領走」「已落日誌」任何一個時刻都不會再排一次：
+ *
+ * 1. 排著：`inbox` 上某一件的 `source` 帶這個編號。
+ * 2. 開了一輪：`turn/start { kind: 'message' }` 帶 `requestId` 與 `runId`。
+ * 3. 插話被領走：`user/message` 的 `source` 帶 `requestId`，`run_id` 就是它那則訊息的 id（`message.data.id`，佇列項目的 id，pump 領走時原樣填）。
+ *
+ * **偏離（登記，同 `run.start` 的回應形狀）**：dsh 找到了只回 `{ accepted: true }`；我們的 `run_id` 就是佇列項目的 id，畫面
+ * 靠它對上自己送出的那一句（`wire-handler.ts` 的註解），所以這裡把原本那一件的 id 一起交出去。
+ *
+ * **被取消的不算**：排著的一句被刪掉之後，它不在收件匣上、也沒有落過任何一顆帶編號的事件，同一個編號再送就是新的一句。
+ * dsh 同。
+ *
+ * @param inbox - 目前的收件匣。
+ * @param events - 這份日誌的事件。**從尾端往前找**：重送多半緊接在原本那一次之後。
+ * @param requestId - 客戶端給的編號。
+ * @returns 收過就是原本那一件的 `run_id` 與階段，沒有就是 `undefined`。
+ */
+export function findPromptRequest(
+  inbox: InboxState,
+  events: readonly { readonly type: string; readonly data: unknown }[],
+  requestId: string,
+): PromptRequestMatch | undefined {
+  for (const item of [...inbox['next-turn'], ...inbox['next-step']]) {
+    if (item.source.kind === 'user' && item.source.requestId === requestId) {
+      return { runId: item.id, stage: 'queued' };
+    }
+  }
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at];
+    if (event === undefined) continue;
+    if (event.type === 'turn/start') {
+      const data = event.data as {
+        kind?: unknown;
+        requestId?: unknown;
+        runId?: unknown;
+      };
+      if (
+        data.kind === 'message' &&
+        data.requestId === requestId &&
+        typeof data.runId === 'string'
+      ) {
+        return { runId: data.runId, stage: 'started' };
+      }
+    } else if (event.type === 'user/message') {
+      const data = event.data as {
+        source?: { kind?: unknown; requestId?: unknown };
+        message?: { data?: { id?: unknown } };
+      };
+      const id = data.message?.data?.id;
+      if (
+        data.source?.kind === 'user' &&
+        data.source.requestId === requestId &&
+        typeof id === 'string'
+      ) {
+        return { runId: id, stage: 'started' };
+      }
+    }
+  }
+  return undefined;
+}

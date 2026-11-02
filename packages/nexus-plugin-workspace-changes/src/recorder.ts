@@ -22,7 +22,7 @@
  *    接上當下已經在的事件，一份有 N 輪的 thread 接上就會跑 N 次 `git add --all`。所以重播出來的一輪基準
  *    **延後**（`'deferred'`），只有活的 resume 接回那一輪時（serve 重開之後在核准點接著跑）才補拍——那一刻
  *    的工作樹就是那一輪剩下那一段的起點。
- * 4. **擷取的路徑先從虛擬路徑對到磁碟**（`hostPathOf`），見 `paths.ts`。
+ * 4. **擷取的路徑先從虛擬路徑對到磁碟**（`@nexus/core` 的 `hostPathOf`，跟 present、交付讀檔路由共用一份）。
  *
  * @module
  */
@@ -31,8 +31,9 @@ import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
+import { hostPathOf } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
-import type { WorkspaceChangedFile, WorkspaceChangesSummary, WorkspaceFileDiff } from '@nexus/wire';
+import type { WorkspaceChangedFile, WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
 import { captureFile, mutationPath, sameCapture } from './capture.js';
 import type { Capture } from './capture.js';
@@ -40,6 +41,7 @@ import { compareText } from './compare.js';
 import {
   blobText,
   diffTrees,
+  GitStartError,
   gitlinkPaths,
   ignoredPaths,
   locateGitWorkspace,
@@ -52,7 +54,6 @@ import {
   compareDisplay,
   displayPathOf,
   durablePathOf,
-  hostPathOf,
   isInside,
   isTemporaryPath,
   temporaryRoots,
@@ -332,8 +333,13 @@ export class TurnRecorder {
       try {
         await task(this.#lifetime.signal);
       } catch (error: unknown) {
-        // 收掉之後的失敗是預期中的取消，不講。
-        if (!this.#lifetime.signal.aborted) this.env.warn(`workspace-changes: ${String(error)}`);
+        // 收掉之後的失敗是預期中的取消，不講。沙箱不可用可能每一輪都來，組裝點的 starter 會講一次。
+        const quiet =
+          error instanceof GitStartError &&
+          (error.reason === 'sandbox-unavailable' || error.reason === 'repo-covers-home');
+        if (!this.#lifetime.signal.aborted && !quiet) {
+          this.env.warn(`workspace-changes: ${String(error)}`);
+        }
       }
     });
     this.#chain = run;

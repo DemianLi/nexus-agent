@@ -1,13 +1,14 @@
 /**
- * 路徑的分類與顯示形式。照 dsh `workspace-changes/src/paths.ts`（`ddefc45`）逐條移植，多一個
- * {@link hostPathOf}：我們的檔案工具收的是以工作區為根的虛擬路徑，要先對到磁碟上。
+ * 路徑的分類與顯示形式。照 dsh `workspace-changes/src/paths.ts`（`ddefc45`）逐條移植，export 跟它一對一。
+ * 我們的檔案工具收的是以工作區為根的虛擬路徑，先對到磁碟上的那一步不在這裡：它是 `@nexus/core` 的
+ * `hostPathOf`，跟 present、交付讀檔路由共用同一份（[#693](https://github.com/DemianLi/nexus-agent/issues/693)）。
  *
  * @module
  */
 
 import { realpath } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, isAbsolute, join, posix, relative, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, sep } from 'node:path';
 
 /**
  * 原生相對路徑的斜線形式。
@@ -110,19 +111,4 @@ export function durablePathOf(absolute: string, cwd: string): string {
  */
 export function compareDisplay(a: { display: string }, b: { display: string }): number {
   return a.display < b.display ? -1 : a.display > b.display ? 1 : 0;
-}
-
-/**
- * 檔案工具收到的虛擬路徑，對到磁碟上。
- *
- * `ContainedFilesystemBackend` 一律 `virtualMode: true`：`/a.md` 與 `a.md` 都是工作區根底下的 `a.md`。
- * 這裡照同一條規則正規化；含 `..` 的路徑基座的 `validatePath` 會先擋掉，工具不會改到檔，這裡把它夾回
- * 工作區根之下，副本前後一樣、不會列出來。
- * @param root - 工作區根。
- * @param path - 模型給的路徑。
- * @returns 磁碟上的絕對路徑。
- */
-export function hostPathOf(root: string, path: string): string {
-  const virtual = posix.normalize(path.startsWith('/') ? path : `/${path}`);
-  return join(root, ...virtual.split('/').filter((segment) => segment !== ''));
 }

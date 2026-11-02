@@ -1,43 +1,123 @@
-import type { WireClient } from '@nexus/wire';
+import type { ConversationEntry, SlashDescriptor, WireClient } from '@nexus/wire';
 import { X } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { AppSidebar } from '@/components/app-sidebar';
+import { AppSidebar } from '@/components/sidebar/app-sidebar';
 import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
+import { ModelSeat, MODEL_SELECT_FAILED } from '@/components/model-seat';
+import { PermissionSeat } from '@/components/permission-seat';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
+import { ArchivedBanner } from '@/components/archived-banner';
+import { GoalBar } from '@/components/goal-bar';
+import { PlanChip } from '@/components/plan/chip';
+import { PlanReviewPanel, usePlanLibrary } from '@/components/plan/review';
+import { QueueDock } from '@/components/queue-dock';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionPanel } from '@/components/question-panel';
-import { SessionUsage } from '@/components/session-usage';
+import {
+  RightSidebarPanel,
+  RightSidebarProvider,
+  RightSidebarToggle,
+} from '@/components/sidebar/right-sidebar';
+import { SessionReferenceContext } from '@/components/session-reference';
+import { SubagentControlContext, useSubagentControl } from '@/components/tool/subagent-control';
+import { SessionUsage } from '@/components/cost/session-usage';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { TodoPanel } from '@/components/todo-panel';
-import { Transcript, useFreshItems } from '@/components/transcript';
+import { TodoPanel } from '@/components/todo/panel';
+import { Entry as TranscriptEntry, Transcript, useFreshItems } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
+import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
+import { useAgentMention } from '@/hooks/use-agent-mention';
+import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat';
+import { PERMISSIONS_PROJECTION_KEY, usePermissionSeat } from '@/hooks/use-permission-seat';
+import { useThreadDirectory } from '@/hooks/use-thread-directory';
+import {
+  forkThread,
+  renameThread,
+  useAcceptedTitles,
+  useThreadManagement,
+} from '@/hooks/use-thread-management';
+import { isArchivedThread } from '@/lib/archived-view';
+import type { ThreadManagement } from '@/lib/thread-management';
+import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/lib/agent';
 import { createChangesStores } from '@/lib/changes-diff';
+import { retainedSuffix } from '@/lib/committed-draft';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
+import { createSubagentUsageLoader } from '@/lib/subagent-usage';
+import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
+import { isPlanReview, planReviewOf } from '@/lib/plan-review';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
+import {
+  canRunSlash,
+  canSendText,
+  commandToken,
+  namesCommand,
+  steerableItems,
+} from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
+import {
+  FORK_FAILED_TEXT,
+  FORK_RENAME_FAILED_TEXT,
+  FORKED_THREAD_NOTICE,
+  forkSupported,
+  increasedForkTitle,
+} from '@/lib/thread-fork';
+import {
+  canSteerQueue,
+  steerAll,
+  STEER_FAILED_TEXT,
+  STEER_QUEUE_PLACEHOLDER,
+  STEER_UNAVAILABLE_TEXT,
+} from '@/lib/steer-queue';
+import { pendingAsker } from '@/lib/approval-asker';
+import { toMention } from '@/lib/agent-mention';
+import type { MentionAgent } from '@/lib/agent-mention';
+import { serverSupportsAttachments } from '@/lib/attachments';
+import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
+import { permissionLocked } from '@/lib/permission-presets';
+import { pendingSteers } from '@/lib/steer-view';
+import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
+import { connectionStall, disconnectedPlaceholder } from '@/lib/connection-stall';
+import type { ConnectionStall } from '@/lib/connection-stall';
+import { threadCapacityText } from '@/lib/thread-capacity';
+import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
+import { threadLogBudgetText } from '@/lib/thread-log-budget';
+import { threadRootMismatchText } from '@/lib/thread-root-mismatch';
+import { threadWriterHeldText } from '@/lib/thread-writer-held';
+import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
+import { prepareAttachments } from '@/lib/attachment-send';
+import { randomUuid } from '@/lib/uuid';
+import { requestIdFor } from '@/lib/request-id';
+import type { PendingRequest, Sentence } from '@/lib/request-id';
+import { useDraftAttachments } from '@/lib/use-draft-attachments';
+import { useUploads } from '@/lib/use-uploads';
+import { createAttachmentImageSource } from '@/lib/attachment-image';
+import { AttachmentImageContext } from '@/components/sent-attachments';
 
 /**
  * 接回上一次那條 thread 時講的話。
  *
- * **條件句不是客氣**：這一端分不出伺服器是接回來還是新開的（見 `remembered-thread.ts`）——
- * serve 沒開 `--session-log` 時，重開過的 server 上同一個 id 就是一條新的，畫面與模型都從空的開始；沒重開過的話
- * 兩者都在（日誌與 `MemorySaver` 都還在記憶體裡）。之前說過的話畫在底下，是從日誌重播的
+ * **條件句不是客氣**：這一端分不出伺服器是接回來還是新開的（見 `remembered-thread.ts`）。會話日誌預設落盤
+ * （#607），但部署設定可以把清單上 `session-persistence` 那一列關掉（#613），那時日誌只在記憶體裡，重開過的
+ * server 上同一個 id 就是一條新的，畫面與模型都從空的開始；落盤開著但換了 `NEXUS_AGENT_HOME` 或 cwd 再重開，
+ * 也一樣找不到。沒重開過的話兩者都在（日誌與 `MemorySaver` 都還在記憶體裡）。
+ * **條件講白話**（#620）：看這一句的人不一定知道部署設定長怎樣；要查的話，server 起動時印的那一行與列不出清單的
+ * 錯誤都會點名那一列。之前說過的話畫在底下，是從日誌重播的
  * （[#306](https://github.com/DemianLi/nexus-agent/issues/306)）——所以「接得回來」看畫面就知道，不用這一句講。
  * **最後一句是出口**：不講的話，重新整理之後只會一直回到同一條 thread 上。
  *
@@ -45,13 +125,13 @@ import type { ThreadChoice } from '@/lib/remembered-thread';
  * 看得到；最後一輪之後又開了新的一輪就是沒有，照 dsh 的投影。模型則是從對話裡那幾次 `todo_write` 記得它的。
  */
 export const RESUMED_THREAD_NOTICE =
-  '接著上一次的 thread。伺服器開著 --session-log、或還沒重開過的話，之前的對話重播在底下，模型也記得，' +
+  '接著上一次的 thread。伺服器有把會話存到磁碟（預設會存）、或還沒重開過的話，之前的對話重播在底下，模型也記得，' +
   '模式、目標與計劃模式跟著回來。不想接就按「新對話」。';
 
 /**
  * 從「以前的會話」點過去時講的話（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。
  *
- * **跟上一句不同，這一句不用條件句**：清單只在開了 --session-log 的 server 上有，而且只列切得過去的，所以
+ * **跟上一句不同，這一句不用條件句**：清單只在會話日誌落盤的 server 上有（預設就落盤，#607；清單上 `session-persistence` 那一列關掉時列不出來，#613），而且只列切得過去的，所以
  * 「日誌上的東西回來了」是確定的。畫面照日誌重播、模型照日誌推回（[#306](https://github.com/DemianLi/nexus-agent/issues/306)）；
  * 舊格式那一種推不回模型，畫面上另有一句 {@link LEGACY_THREAD_NOTICE} 講，所以這一句不再帶例外。todo 不另外講，
  * 理由同上一句。
@@ -66,17 +146,24 @@ export const SWITCHED_THREAD_NOTICE =
 export const LEGACY_THREAD_NOTICE =
   '這條會話是舊格式：模型的回覆沒有保存，底下只有你打的字與工具卡；模型也不記得之前的對話，從空的開始。';
 
-/** 往前翻那顆按鈕。 */
-export const LOAD_EARLIER_LABEL = '載入更早的對話';
-
 const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>> = {
   fresh: undefined,
   recalled: RESUMED_THREAD_NOTICE,
   listed: SWITCHED_THREAD_NOTICE,
+  forked: FORKED_THREAD_NOTICE,
 };
 
 /** 光打名字就另有動作的命令（`/feedback` 開回饋框，見 `use-conversation` 的 `send`）。 */
-const DECORATED_COMMANDS: ReadonlySet<string> = new Set([FEEDBACK_COMMAND_LINE.slice(1)]);
+const DECORATED_COMMANDS: ReadonlySet<string> = new Set([
+  FEEDBACK_COMMAND_LINE.slice(1),
+  MODEL_COMMAND,
+]);
+
+/** `/` 選單裡的 `/model`：客戶端自己攔（#723），模型座存在時才加進去。 */
+const MODEL_SLASH: SlashDescriptor = {
+  name: MODEL_COMMAND,
+  description: '切換模型與推理強度（從下一步生效）。',
+};
 
 /**
  * 送出框裡那句灰字。
@@ -89,22 +176,36 @@ const DECORATED_COMMANDS: ReadonlySet<string> = new Set([FEEDBACK_COMMAND_LINE.s
  */
 export function inputPlaceholder({
   connected,
+  stall,
   stoppedOnQuestion,
+  steerQueue = false,
 }: {
   readonly connected: boolean;
+  /** 沒連上、也不會自己接回的那兩種（{@link connectionStall}）；沒有就是在重接，講「連線中…」。 */
+  readonly stall?: ConnectionStall | undefined;
   readonly stoppedOnQuestion: boolean;
+  /** 草稿空白、這一輪跑著、佇列裡有排著的：提示那個手勢（#710，dsh 的 `placeholder.steerQueue`）。 */
+  readonly steerQueue?: boolean;
 }): string {
-  if (!connected) return '連線中…';
-  return stoppedOnQuestion ? STOPPED_QUESTION_TEXT : '說點什麼…';
+  if (!connected) return disconnectedPlaceholder(stall);
+  if (stoppedOnQuestion) return STOPPED_QUESTION_TEXT;
+  return steerQueue ? STEER_QUEUE_PLACEHOLDER : '說點什麼…';
 }
 
 /** 提問面板名稱列右邊的 ❌：停止這一輪、不回答這些問題（§4.3、§8）。名稱與 tooltip 同一句，不加確認。 */
 export const STOP_QUESTIONS_LABEL = '停止這一輪，不回答這些問題';
 
+const NO_NAMES: ReadonlyMap<string, string> = new Map();
+
+/** 背景子代理自己的對話裡一則項目的畫法：同主對話（`Transcript` 的 `Entry`），不給評分。 */
+function renderSubagentEntry(entry: ConversationEntry) {
+  return <TranscriptEntry entry={entry} subagentNames={NO_NAMES} />;
+}
+
 /**
  * 對話介面。
  *
- * agent 跑在 Node 那一端，中間是 `@nexus/wire` 那條線（上行 HTTP POST、下行 SSE）。
+ * agent 跑在 Node 那一端，中間是 `@nexus/wire` 那條線（上行 HTTP POST、下行走 WebSocket（退路是 SSE））。
  * 起 agent 的方式：`pnpm --filter @nexus/harness run serve`，dev server 的
  * `/threads` 會轉過去（見 `vite.config.ts`）。
  */
@@ -118,11 +219,23 @@ export function App({ client }: { client?: WireClient } = {}) {
   // 一個 App 一個 client：清單與對話走同一條線。放在這裡而不是 hook 裡，是因為清單不屬於任何一條 thread。
   const wire = useMemo(() => client ?? createAgentClient(), [client]);
   const [theme] = useThemePreference();
-  // 換 thread 有兩條路（「新對話」與從清單點一條），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
+  // 清單與每一列的即時狀態（#632）也在 thread 外面：換一條不重開全域下行，「跑完沒看」不歸零。
+  const directory = useThreadDirectory(wire, choice.threadId);
+  // 釘選、封存、改名（#633）也在 thread 外面：換一條不歸零。列表沒帶兩個集合（server 還沒實作）時是 `undefined`，
+  // 側欄什麼都不多畫。
+  // server 受理過的標題：側欄改名與分叉的改名共用一份（#1581），所以提到 App，再交給會話管理。
+  const acceptedTitles = useAcceptedTitles();
+  const threadManagement = useThreadManagement(wire, directory, acceptedTitles);
+  // 換 thread 有三條路（「新對話」、從清單點一條、分叉），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
   // 點了別條的話，晚到的結果不能把人拉回去。讀清單期間再按一次「新對話」不另開一次（dsh `connectWorkspace` 的
   // `connecting`）——兩次讀到的是同一份清單，只會換一次。
   const navigation = useRef(0);
   const connecting = useRef(false);
+  // 清單讀回來的那一刻才挑，要用那時的有效空白，不是按下去那一刻的（讀清單要好幾秒，這段時間全域下行照樣在推）。
+  const blankOf = useRef(directory.blankOf);
+  useEffect(() => {
+    blankOf.current = directory.blankOf;
+  }, [directory.blankOf]);
 
   /**
    * 「新對話」（[#313](https://github.com/DemianLi/nexus-agent/issues/313)）：目前這條還是空白就留在原地，否則
@@ -139,15 +252,79 @@ export function App({ client }: { client?: WireClient } = {}) {
     void readThreadListing(wire)
       .then((listing) => {
         if (navigation.current !== ticket) return;
-        const target = newConversationTarget(listing, current);
+        const target = newConversationTarget(listing, current, blankOf.current);
         setChoice({
-          threadId: target.kind === 'reuse' ? target.threadId : crypto.randomUUID(),
+          threadId: target.kind === 'reuse' ? target.threadId : randomUuid(),
           origin: 'fresh',
         });
       })
       .finally(() => {
         connecting.current = false;
       });
+  };
+
+  // 分叉（#1581）送出去到回應之前：所有分支鈕都按不了。ref 擋同一個 tick 裡的第二下，state 讓按鈕畫成按不了。
+  const forkingNow = useRef(false);
+  const [forking, setForking] = useState(false);
+  const directoryRef = useRef(directory);
+  useEffect(() => {
+    directoryRef.current = directory;
+  }, [directory]);
+
+  /**
+   * 從 `messageId` 那則回覆分出一條新對話，照 dsh `ui-chat/src/client/apply.ts:285-295` 的 `forkAt` 與
+   * `client/sessions/service.ts:459-483` 的 `fork({ increaseTitle: true })`：分好了先把佔位放進清單，來源有標題就把子 thread
+   * 改成遞增的名字，再切過去。**流程在 `App`**：切過去之後 `ConversationView` 整個重掛，流程不能跟著它卸掉。
+   *
+   * 與 dsh 不同的兩處（卡面拍板）：分不出去時用 toast 講原因（dsh 不出聲，使用者按了沒反應會以為沒按到）；改名失敗時子 thread 照樣
+   * 切過去、toast 講改名失敗（dsh 拋出、留在原畫面）。途中人自己換到別條的話，佔位與改名照做，但不把人拉回來（後按的贏）。
+   *
+   * @param liveTitle - 來源這條即時推來的標題（`ConversationState.title`）。
+   */
+  const forkConversation = (source: string, messageId: string, liveTitle: string | null): void => {
+    if (forkingNow.current) return;
+    forkingNow.current = true;
+    setForking(true);
+    const ticket = navigation.current;
+    void (async () => {
+      try {
+        const forked = await forkThread(wire, source, messageId);
+        if ('message' in forked) {
+          toast.error(FORK_FAILED_TEXT, { description: forked.message });
+          return;
+        }
+        const child = forked.threadId;
+        const listing = directoryRef.current.listing;
+        directoryRef.current.addPlaceholder({
+          threadId: child,
+          updatedAt: Date.now(),
+          running: false,
+          blank: true,
+          parentThreadId: source,
+        });
+        // 來源的標題：畫面上那一列寫的那個——即時推來的、剛改名頂著的、清單上的，依序。都沒有就不改名（dsh 同）。
+        const sourceTitle =
+          (liveTitle === '' ? null : liveTitle) ??
+          acceptedTitles.renamed.get(source) ??
+          (listing.kind === 'ok'
+            ? listing.result.items.find((item) => item.threadId === source)?.title
+            : undefined);
+        if (sourceTitle !== undefined && sourceTitle !== null && sourceTitle !== '') {
+          const renamed = await renameThread(wire, child, increasedForkTitle(sourceTitle));
+          if ('message' in renamed) {
+            toast.error(FORK_RENAME_FAILED_TEXT, { description: renamed.message });
+          } else {
+            acceptedTitles.accept(child, renamed.title);
+          }
+        }
+        if (navigation.current !== ticket) return;
+        navigation.current += 1;
+        setChoice({ threadId: child, origin: 'forked' });
+      } finally {
+        forkingNow.current = false;
+        setForking(false);
+      }
+    })();
   };
 
   // **換 thread 就整個重掛。** 只換 `threadId` 的話 hook 會重開下行，但上一條的 transcript、
@@ -158,8 +335,17 @@ export function App({ client }: { client?: WireClient } = {}) {
       <ConversationView
         key={choice.threadId}
         client={wire}
+        directory={directory}
+        threadManagement={threadManagement}
         threadId={choice.threadId}
         notice={ORIGIN_NOTICE[choice.origin]}
+        forking={forking}
+        {...(forkSupported(directory.listing)
+          ? {
+              onFork: (messageId: string, liveTitle: string | null) =>
+                forkConversation(choice.threadId, messageId, liveTitle),
+            }
+          : {})}
         onNewConversation={newConversation}
         onSwitch={(threadId) => {
           navigation.current += 1;
@@ -174,18 +360,43 @@ export function App({ client }: { client?: WireClient } = {}) {
 
 function ConversationView({
   client,
+  directory,
+  threadManagement,
   threadId,
   notice,
+  forking,
+  onFork,
   onNewConversation,
   onSwitch,
 }: {
   readonly client: WireClient;
+  readonly directory: ThreadDirectory;
+  readonly threadManagement: ThreadManagement | undefined;
   readonly threadId: string;
   readonly notice: string | undefined;
+  /** 分叉送出去了、回應還沒到（#1581）。 */
+  readonly forking: boolean;
+  /** 沒給就不畫分支鈕：這台 server 沒接落盤（#1964，`forkSupported`）。 */
+  readonly onFork?: (messageId: string, liveTitle: string | null) => void;
   readonly onNewConversation: (engaged: boolean) => void;
   readonly onSwitch: (threadId: string) => void;
 }) {
   const conversation = useConversation({ client, threadId });
+  // 模型座（#723）：伺服器沒實作（`not_supported`）或還在讀就是 `null`，座位與 `/model` 一起沒有。
+  const modelSeat = useModelSeat(
+    client,
+    threadId,
+    conversation.state.projections[MODEL_SELECTION_PROJECTION],
+    conversation.connections,
+  );
+  const [modelOpen, setModelOpen] = useState(false);
+  // 權限座（#437）：目錄回 `not_supported` 或投影沒送來就是 `null`，座位整個沒有。
+  const permissionSeat = usePermissionSeat(
+    client,
+    threadId,
+    conversation.state.projections[PERMISSIONS_PROJECTION_KEY],
+    conversation.connections,
+  );
   // 改動的摘要與比較都快取到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
   const changes = useMemo(
     () => createChangesStores({ threadId, baseUrl: agentBaseUrl() }),
@@ -196,6 +407,40 @@ function ConversationView({
     () => createDeliverableFileStore({ threadId, baseUrl: agentBaseUrl() }),
     [threadId],
   );
+  // `@` 的候選（#653）綁在這條 thread 上；要穩定，輸入框每換一次就重查一次。
+  const fileReferences = useCallback(
+    (query: string, signal: AbortSignal) => client.fileReferences(threadId, query, signal),
+    [client, threadId],
+  );
+  // `@` 的會話與子代理候選（#713）同樣綁在這條 thread 上（候選裡不含它自己）。
+  const sessionReferences = useCallback(
+    (query: string, signal: AbortSignal) => client.sessionReferences(threadId, query, signal),
+    [client, threadId],
+  );
+  // 人的泡泡裡的會話引用（#713 Q3）：清單上有的（同專案的主會話）點了切過去，其餘只顯示。
+  const subagentControl = useSubagentControl({
+    client,
+    threadId,
+    status: conversation.state.subagentStatus,
+    connected: conversation.connected,
+    stall: connectionStall(conversation),
+    renderEntry: renderSubagentEntry,
+  });
+  const sessionLinks = useMemo(() => {
+    const listed =
+      directory.listing.kind === 'ok'
+        ? new Set(directory.listing.result.items.map((item) => item.threadId))
+        : new Set<string>();
+    return {
+      openable: (sessionId: string) => sessionId !== threadId && listed.has(sessionId),
+      open: onSwitch,
+    };
+  }, [directory.listing, threadId, onSwitch]);
+  // 側欄按內容搜（#760）：不分哪一條，搜的是整個清單。參照要穩，側欄靠它決定要不要重問。
+  const searchThreads = useCallback(
+    (query: string, signal: AbortSignal) => client.searchThreads(query, signal),
+    [client],
+  );
   // 下載沒有快取（#452 第三刀）——它是一次性的副作用，留著等於把整份檔擱在記憶體裡。
   // 仍然綁 `threadId`：座標只在自己那條 thread 上有意義。
   const deliverableDownload = useMemo(
@@ -204,11 +449,61 @@ function ConversationView({
   );
   // **這個分頁在這條上講過話沒有**，決定「新對話」要不要留在原地（#313）。照 dsh `Session.handleBlank` 的鏡像：
   // 畫面上有東西（自己送出的話、重播回來的歷史、目標排的輪次）就不是空白，斜線命令不算——它不起一輪。
+  // **送出了、人話還沒折進來也算**（`attempted`，#1600）：不然那一個來回裡按「新對話」會留在原地，要按第二次。
   // **判準看自己的畫面，不看清單**：清單是冷讀磁碟，還沒落盤的這一條根本不在上面。
   // **歷史還沒折完（`connected` 還沒翻）就當成講過**：那時分不出來，而這顆按鈕是停在核准點、連不上的 thread
   // 唯一的出口——寧可多開一條，也不能把人留在原地。
-  const engaged = !conversation.connected || conversation.state.entries.length > 0;
+  const engaged =
+    !conversation.connected || conversation.attempted || conversation.state.entries.length > 0;
+  const title = conversation.state.title;
+  const heading = headerTitle(
+    title,
+    conversation.state.entries.length === 0,
+    conversation.connected,
+  );
+  // 瀏覽器分頁標題（Q2）：照 dsh `DocumentTitle`，卸掉時還原成產品名。
+  useEffect(() => {
+    document.title = documentTitle(title);
+    return () => {
+      document.title = PRODUCT_TITLE;
+    };
+  }, [title]);
   const [draft, setDraft] = useState('');
+  // 草稿附件（#733）。伺服器不收附件時不傳給輸入框，整個功能不出現；上傳與送出帶收據等 #732 的連線協定。
+  const draftAttachments = useDraftAttachments((messages) => {
+    toast.error('有附件沒加進來', { description: messages.join('\n') });
+  });
+  // 上傳的進度與取消（#733）：卡片上的進度條、取消鈕。
+  const uploads = useUploads();
+  // 已送出的圖讀回來畫縮圖（#733）：一條 thread 一份，換 thread 整個重掛，卸載時放掉 blob URL。
+  const imageSource = useMemo(
+    () => createAttachmentImageSource(client, threadId),
+    [client, threadId],
+  );
+  useEffect(() => () => imageSource.dispose(), [imageSource]);
+  // `@子代理` 提及（#328 第 2 項）：這一輪委派給誰，一句話最多一個。清單由 server 給（`subagent.list`），
+  // 沒實作、被拒或空的就是 `null`：整個功能不出現。送出時放進 `run.start` 的 `mention`，不轉成文字塞進 `input`。
+  const agents = useAgentMention(client, threadId, conversation.connections);
+  const [mentionedAgent, setMentionedAgent] = useState<MentionAgent | undefined>(undefined);
+  // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
+  const [sendingAttachments, setSendingAttachments] = useState(false);
+  /**
+   * 開頭像命令的那一行在等命令清單認（#1929，dsh 送出狀態機的 `adjudicating`）：等的期間不再送任何一行、草稿不動。
+   */
+  const [adjudicating, setAdjudicating] = useState(false);
+  // 同一件事給非同步回呼讀：前一句晚到的拒收不能在鎖住期間改寫畫面（dsh `draftInitializationBlocked`）。
+  const adjudicatingNow = useRef(false);
+  /**
+   * 認出是命令、`slash.run` 還在途（[#1941](https://github.com/DemianLi/nexus-agent/issues/1941)，dsh 送出狀態機的
+   * `submitting`，`input/machine.ts:138`）：等的期間不收下一次送出、輸入框鎖住；收下才清草稿，沒收下草稿不動。只管不帶附件的
+   * 命令：帶附件的由 {@link sendingAttachments} 擋（#733）。ref 給同一個 tick 裡的第二下與非同步回呼讀。
+   */
+  const [submitting, setSubmitting] = useState(false);
+  const submittingNow = useRef(false);
+  // dsh `InputBar.tsx:147` 的 `machineBusy`：認命令與命令在途兩段一起鎖。
+  const machineBusy = adjudicating || submitting;
+  // 上次沒送出去的那一句和它的請求編號（#1335）：原樣重送時沿用，伺服器才認得是同一句；收下了就丟掉。
+  const pendingRequest = useRef<PendingRequest | undefined>(undefined);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
   const lastDialog = useRef(conversation.feedbackDialog);
   // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
@@ -225,47 +520,175 @@ function ConversationView({
   // 並存——每一顆各自帶著回答自己要用的那把鑰匙，所以每一個面板按下去落在自己那顆上。
   // 面板換掉輸入框、一次一個、先來先處理（#408，`PendingSwap`）。
   const pendings = conversation.state.pendings;
+  // 還沒被領走的插話也算一格（#710）：它的鍵就是領走後那則人的話的 id，先記住，換成正式的時候才不會重播進場。
+  const steers = pendingSteers(conversation.state);
   const isFresh = useFreshItems(
-    conversation.state.entries.map((entry) => entry.id),
+    [...conversation.state.entries.map((entry) => entry.id), ...steers.map((steer) => steer.key)],
     conversation.connected,
   );
   const composerRef = useRef<HTMLTextAreaElement>(null);
-  // **`awaiting-input` 也算忙**。少了它，等核准時送得出下一句話——而基座那時會把
-  // 中斷靜靜丟掉：那個工具既沒執行也沒被拒絕，也不會再問第二次（實測）。
-  //
-  // **沒有例外。** 原本一顆按鈕都長不出來的核准請求（交集是空的）會把送出框放開（`stuck`），讓人至少講得出原因；
-  // 但送出去會撞上伺服器那句「這條 thread 停在核准點」（`wire-handler.ts`），那本來就是假出口。現在那種面板自己
-  // 帶「停止這一輪」（#408，#376 第 12 條），而輸入框在面板底下看不見，放開它也沒人按得到。
-  const busy =
-    conversation.state.status === 'running' || conversation.state.status === 'awaiting-input';
-  // **只打 `/feedback` 跑著也送得出去**：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record`
-  // 任何時候都收（#267 的 Q10）。
+  // 草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話（#710）。一次只跑一趟：上一趟還在送時再按不重複送。
+  const steeringAll = useRef(false);
+  // 手機沒有實體鍵盤：手勢照樣生效，提示字在 640 以下不講快捷鍵（跟底列「⌘Enter 插話」同一條線，#710 第一步）。
+  const keyboardWide = useMinWidth(SM_BREAKPOINT);
+  const steerQueueReady =
+    canSteerQueue(
+      conversation.connected,
+      conversation.state.status,
+      draft,
+      steerableItems(conversation.state.inbox).length,
+    ) &&
+    !steeringAll.current &&
+    // 等命令清單認、命令在途的期間不收（dsh `InputBar.tsx:156` 的 `canSteerQueue` 排除 `machineBusy`，#1929、#1941）。
+    !machineBusy;
+  const steerQueue = () => {
+    if (steeringAll.current) return;
+    steeringAll.current = true;
+    void steerAll(steerableItems(conversation.state.inbox), conversation.updateQueue).then(
+      (outcome) => {
+        steeringAll.current = false;
+        if (outcome.kind === 'stopped') toast(STEER_UNAVAILABLE_TEXT);
+        else if (outcome.kind === 'failed') {
+          toast.error(STEER_FAILED_TEXT, { description: outcome.message });
+        }
+      },
+    );
+  };
+  // **送出分兩道閘**（#645 Q2）。純文字跑著也送得出去：伺服器收下就排進送出佇列，開跑時才畫人的話。停在核准點時
+  // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令（開頭那個字在命令清單上，#1929；技能的 `/名字` 是一句話）一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
+  // 例外：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record` 任何時候都收（#267 的 Q10）。命令在 `slash.list` 宣告過
+  // 「忙的時候也放行」的那幾行（`/goal pause`）也過得去，判斷照伺服器的宣告，不在這裡另寫文法（#1517）。
+  const status = conversation.state.status;
+  // `/model` 客戶端自己攔（#723）：它不起一輪、不進日誌，只改「下一步用哪顆」，所以跑著也能打，只要連著。
+  const isModelLine = (line: string) =>
+    modelSeat !== null &&
+    parseModelLine(line, modelSeat.catalog, modelSeat.selection) !== undefined;
+  // 功能開著且草稿裡有附件：沒打字也送得出去（文字或附件至少一個）。
+  const hasDraftAttachments = serverSupportsAttachments() && draftAttachments.items.length > 0;
   const canSendLine = (line: string) =>
-    conversation.connected &&
-    line.trim() !== '' &&
-    (!busy || line.trim() === FEEDBACK_COMMAND_LINE);
-  const canSend = canSendLine(draft);
+    isModelLine(line)
+      ? conversation.connected
+      : namesCommand(conversation.slashCommands, line)
+        ? canRunSlash(
+            conversation.connected,
+            status,
+            line,
+            FEEDBACK_COMMAND_LINE,
+            conversation.slashCommands,
+          )
+        : canSendText(conversation.connected, status, line, hasDraftAttachments);
+  /**
+   * 執行一行 `/model`。不是 `/model` 回 `undefined`（走一般流程）；打不開、找不到那顆回 `false`（那一行留在草稿，
+   * 看得到為什麼）；其餘回 `true`。
+   */
+  const runModelLine = (line: string): boolean | undefined => {
+    if (modelSeat === null) return undefined;
+    const parsed = parseModelLine(line, modelSeat.catalog, modelSeat.selection);
+    if (parsed === undefined) return undefined;
+    if (parsed.kind === 'open') {
+      setModelOpen(true);
+      return true;
+    }
+    if (parsed.kind === 'unknown') {
+      toast.error(MODEL_SELECT_FAILED, { description: `型錄上找不到「${parsed.query}」。` });
+      return false;
+    }
+    void modelSeat.select(parsed.selection).then((failure) => {
+      if (failure !== undefined) toast.error(MODEL_SELECT_FAILED, { description: failure });
+    });
+    return true;
+  };
+  // 封存的會話不給送（#633）：橫幅在輸入框上方，送出鈕停用。伺服器端也擋，這一道是第一道。
+  const archived = isArchivedThread(threadManagement?.archivedIds, threadId);
+  const canSend = canSendLine(draft) && !sendingAttachments && !archived && !machineBusy;
+  const hasModelSeat = modelSeat !== null;
+  const commands = useMemo(
+    () =>
+      hasModelSeat ? [...conversation.slashCommands, MODEL_SLASH] : conversation.slashCommands,
+    [hasModelSeat, conversation.slashCommands],
+  );
+  // 佇列裡焦點要去的那一列不在了：輸入框看得到就交給它，被面板換掉時交給面板（同 `PendingSwap` 的落點）。
+  const focusBelowQueue = useCallback(() => {
+    const composer = composerRef.current;
+    if (composer !== null && composer.closest('[inert]') === null) {
+      composer.focus();
+      return;
+    }
+    const panel = document.querySelector<HTMLElement>('[data-slot="pending-panel"]');
+    (panel?.querySelector<HTMLElement>('[data-pending-focus]') ?? panel)?.focus();
+  }, []);
+  // 計劃分頁讀的是對話裡那一份（#654）：沒變就是同一個參照。
+  const plans = usePlanLibrary(conversation.state.entries, pendings);
+  // 成本分頁讀背景子代理自己的總帳（#1032）：身分跟著 `[client, threadId]`，不然 `sources` 一變身分 memo 就擋不住。
+  const subagentUsage = useMemo(
+    () => createSubagentUsageLoader(client, threadId),
+    [client, threadId],
+  );
+  // 觀測分頁按需拉軌跡的細節（#1083）：快取跟著 `[client, threadId]`，分頁切走再回來不必重拉；換對話時中止進行中的請求。
+  const trajectoryPull = useMemo(
+    () => createTrajectoryPuller(client, threadId),
+    [client, threadId],
+  );
+  useEffect(() => () => trajectoryPull.dispose(), [trajectoryPull]);
+  // 右側欄讀的跟卡片同一批 store（#640）：分頁與卡片看到的是同一份快取。
+  // `conversation` 放的是 store（身分穩定），不是對話狀態：後者每一格串流都變，`sources` 一變 `RightSidebarPanel` 的 `memo` 就擋不住（#1033）。
+  // 計劃分頁的旁路掃描（#1798）從已載入那一頁的游標往前讀：第一頁到了才給，之前沒有游標可以起頭。
+  const historyReady = conversation.history !== undefined;
+  const sidebarSources = useMemo(
+    () => ({
+      changes,
+      deliverableFiles,
+      deliverableDownload,
+      plans,
+      conversation: conversation.store,
+      subagentUsage,
+      trajectoryPull,
+      loadThrough: conversation.loadThrough,
+      ...(historyReady ? { findPlan: conversation.findPlan } : {}),
+    }),
+    [
+      changes,
+      deliverableFiles,
+      deliverableDownload,
+      plans,
+      conversation.store,
+      subagentUsage,
+      trajectoryPull,
+      conversation.loadThrough,
+      historyReady,
+      conversation.findPlan,
+    ],
+  );
 
   return (
-    <>
+    <RightSidebarProvider threadId={threadId} sources={sidebarSources}>
       <AppSidebar
-        client={client}
+        directory={directory}
         currentThreadId={threadId}
+        currentTitle={title}
         onNewConversation={() => onNewConversation(engaged)}
         onPick={onSwitch}
+        search={searchThreads}
+        {...(threadManagement === undefined ? {} : { management: threadManagement })}
       />
       {/* `SidebarInset` 就是 `<main>`。 */}
-      <SidebarInset className="flex h-svh min-w-0 flex-col">
+      {/* 基準寬 480：右側欄打開時會話區至少留這麼多，視窗再窄才輪到它讓（#640，見 `right-sidebar.tsx`）。 */}
+      <SidebarInset className="flex h-svh min-w-0 flex-col" style={{ flexBasis: 480 }}>
         <header className="flex h-14 shrink-0 items-center gap-2 border-b px-2">
-          {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
-          <SidebarTrigger className="size-11 rounded-full lg:size-9" />
-          <h1 className="min-w-0 flex-1 truncate text-sm font-medium">nexus-agent</h1>
+          {/* 觸控目標 44px，1024 以上回到 36（§9）。三顆都用 SG 36px 圖示鈕（`icon-lg`）的 `rounded-md`；側欄鈕與主題鈕是 `icon-sm`、自帶 `rounded-sm`，靠這裡蓋掉。 */}
+          <SidebarTrigger className="size-11 rounded-md lg:size-9" />
+          {/* 換字不做動效（Q4）；截斷時 `title` 帶全文。 */}
+          <h1 className="min-w-0 flex-1 truncate text-body font-medium" title={heading}>
+            {heading}
+          </h1>
           {/* #574：這條對話累計燒了多少（root 日誌的總帳，不是畫面加總）。 */}
           <SessionUsage
             tokenUsage={conversation.state.tokenUsage}
             sessionStats={conversation.state.sessionStats}
           />
-          <ThemeToggle className="size-11 rounded-full lg:size-9" />
+          <ThemeToggle className="size-11 rounded-md lg:size-9" />
+          {/* 會話標頭那一列的右端（#640 決定 2；#655 確認不用再搬）。 */}
+          <RightSidebarToggle className="size-11 rounded-md lg:size-9" />
         </header>
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-4">
@@ -273,9 +696,11 @@ function ConversationView({
             <StatusLine
               state={conversation.state}
               connected={conversation.connected}
+              slowConnect={conversation.slowConnect}
               {...(conversation.connectionError === undefined
                 ? {}
                 : { connectionError: conversation.connectionError })}
+              {...(conversation.refusal === undefined ? {} : { refusal: conversation.refusal })}
               {...(conversation.commandError === undefined
                 ? {}
                 : { commandError: conversation.commandError })}
@@ -291,73 +716,141 @@ function ConversationView({
               recovered={conversation.recovered}
               onReconnect={conversation.reconnectNow}
             />
-            {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
-            {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
+            {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。
+                伺服器不收這條下行時（thread 數滿了）不講「接著上一次／之前的對話回來了」：跟狀態列的「打不開」矛盾（#1483）。 */}
+            {notice !== undefined && conversation.refusal === undefined && (
+              <p className="text-muted-foreground text-tip">{notice}</p>
+            )}
             {conversation.history?.legacy === true && (
-              <p className="text-muted-foreground text-xs">{LEGACY_THREAD_NOTICE}</p>
+              <p className="text-muted-foreground text-tip">{LEGACY_THREAD_NOTICE}</p>
             )}
             {conversation.historyError !== undefined && (
-              <p className="text-destructive text-xs">
-                之前說過的話拿不回來：{conversation.historyError}
+              <p className="text-destructive text-tip">
+                {/* thread 數滿了、歷史太深、日誌超過額度、被別處握著、開在別的 home 或工作區都不是歷史掉了：換成那一句，不加這個前綴（#1478、#1753、#2203、#2214、#2222）。 */}
+                {threadCapacityText(conversation.historyError.code) ??
+                  threadHistoryTooDeepText(conversation.historyError.code) ??
+                  threadLogBudgetText(conversation.historyError.code) ??
+                  threadWriterHeldText(conversation.historyError.code) ??
+                  threadRootMismatchText(conversation.historyError.code) ??
+                  `之前說過的話拿不回來：${conversation.historyError.message}`}
               </p>
             )}
           </div>
         </div>
 
-        {conversation.state.entries.length === 0 ? (
+        {/* 排著插話就有東西可畫（#710），就算這一輪是從還沒有任何一則的地方跑起來的。 */}
+        {conversation.state.entries.length === 0 && steers.length === 0 ? (
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-6">
             <EmptyHero />
           </div>
         ) : (
-          <Transcript
-            state={conversation.state}
-            isFresh={isFresh}
-            changes={changes}
-            deliverableFiles={deliverableFiles}
-            deliverableDownload={deliverableDownload}
-            feedback={{
-              ratings: conversation.ratings,
-              busy: !conversation.connected,
-              loadFailed: conversation.ratingsLoadFailed,
-              onSeed: conversation.seedRatings,
-              onRate: (messageId, rating) => void conversation.rate(messageId, rating),
-            }}
-            before={
-              conversation.history?.hasMore === true && (
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="self-center"
-                  disabled={conversation.history.loading}
-                  onClick={() => void conversation.loadEarlier()}
-                >
-                  {LOAD_EARLIER_LABEL}
-                </Button>
-              )
-            }
-          />
+          <SessionReferenceContext.Provider value={sessionLinks}>
+            <AttachmentImageContext.Provider value={imageSource}>
+              <SubagentControlContext.Provider value={subagentControl}>
+                <Transcript
+                  state={conversation.state}
+                  isFresh={isFresh}
+                  changes={changes}
+                  deliverableDownload={deliverableDownload}
+                  {...(onFork === undefined
+                    ? {}
+                    : {
+                        fork: {
+                          forking,
+                          onFork: (messageId: string) =>
+                            onFork(messageId, conversation.state.title),
+                        },
+                      })}
+                  feedback={{
+                    ratings: conversation.ratings,
+                    busy: !conversation.connected,
+                    loadFailed: conversation.ratingsLoadFailed,
+                    unsupported: conversation.ratingsUnsupported,
+                    onSeed: conversation.seedRatings,
+                    onRate: (messageId, rating) => void conversation.rate(messageId, rating),
+                  }}
+                  {...(conversation.history === undefined
+                    ? {}
+                    : {
+                        earlier: {
+                          ...conversation.history,
+                          onLoad: () => void conversation.loadEarlier(),
+                        },
+                      })}
+                />
+              </SubagentControlContext.Provider>
+            </AttachmentImageContext.Provider>
+          </SessionReferenceContext.Provider>
         )}
 
         <div className="mx-auto w-full max-w-2xl shrink-0 px-6 pt-2 pb-6">
+          {/* 也在換手區外面，而且排最上面：計劃模式開著這件事，停在計劃審核點時更要看得到（#900）。 */}
+          <PlanChip
+            planMode={conversation.state.planMode}
+            status={conversation.state.status}
+            connected={conversation.connected}
+            onExit={conversation.exitPlanMode}
+          />
+          {/* 目標列也在換手區外面（#945）：停在核准點時也看得到、暫停得了（#1517）；排在計劃標籤之後、待辦面板之前。 */}
+          <GoalBar
+            goal={conversation.state.goal}
+            activation={conversation.state.goalActivation}
+            connected={conversation.connected}
+            onPause={conversation.pauseGoal}
+          />
           {/* 換手區外面：底下換成核准或提問面板時照樣看得到，焦點搬移也不算它（#575 Q1）。 */}
           <TodoPanel todos={conversation.state.todos} status={conversation.state.status} />
+          {/* 也在換手區外面：停在核准點時排著的照樣看得到、改得到（#645 Q3、Q7）。 */}
+          <QueueDock
+            items={conversation.state.inbox}
+            status={conversation.state.status}
+            connected={conversation.connected}
+            onUpdate={conversation.updateQueue}
+            onFocusFallback={focusBelowQueue}
+          />
+          {archived && threadManagement !== undefined && (
+            <ArchivedBanner onRestore={() => threadManagement.onUnarchive(threadId)} />
+          )}
           <PendingSwap
             pendings={pendings}
+            askerOf={(pending) => pendingAsker(conversation.state, pending)?.label}
             composerRef={composerRef}
             // **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
             // 完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
             // 這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
-            renderPanel={(pending) =>
-              pending.kind === 'question' ? (
+            // 計劃審核（#654）是問答中斷的一種：認得 `intent` 才換成審核面板，其餘照一般提問。
+            renderPanel={(pending) => {
+              const asker = pendingAsker(conversation.state, pending);
+              const review =
+                pending.kind === 'question' ? planReviewOf(pending.questions) : undefined;
+              if (pending.kind === 'question' && review !== undefined) {
+                return (
+                  <PlanReviewPanel
+                    pending={pending}
+                    review={review}
+                    busy={!conversation.connected}
+                    onApprove={() =>
+                      void conversation.answer(pending.interruptId, [
+                        { id: review.questionId, selected: [review.approve] },
+                      ])
+                    }
+                    // 關掉這一題，這一輪不停；面板一收，焦點由換手層交回輸入框。
+                    onRevise={() => void conversation.dismissQuestion(pending.interruptId)}
+                  />
+                );
+              }
+              return pending.kind === 'question' ? (
                 <QuestionPanel
                   pending={pending}
                   busy={!conversation.connected}
                   onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
+                  onDecline={() => void conversation.declineQuestion(pending.interruptId)}
+                  onDismiss={() => void conversation.dismissQuestion(pending.interruptId)}
                 />
               ) : (
                 <ApprovalCard
                   pending={pending}
+                  {...(asker === undefined ? {} : { asker })}
                   busy={!conversation.connected}
                   onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
                   onStop={() => {
@@ -365,29 +858,33 @@ function ConversationView({
                     toast('已停止這一輪');
                   }}
                 />
-              )
-            }
+              );
+            }}
             // 提問的 ❌＝停止這一輪（§4.3 寫明的例外：dsh 是放棄後這一輪繼續，demian 選擇不讓模型接著猜）。
             // 停下來之後那張提問工具卡展開、列出題目，輸入框提示字同一句。
+            // 計劃審核面板沒有 ❌：「要求修改」才是它的出口（#654 二-Q1）。
             renderActions={(pending) =>
-              pending.kind === 'question' && (
+              pending.kind === 'question' &&
+              !isPlanReview(pending.questions) && (
                 <TooltipProvider>
                   <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-11 shrink-0 rounded-full lg:size-8"
-                        aria-label={STOP_QUESTIONS_LABEL}
-                        disabled={!conversation.connected}
-                        onClick={() => {
-                          void conversation.cancel();
-                          toast('已停止這一輪', { description: STOPPED_QUESTION_TEXT });
-                        }}
-                      >
-                        <X />
-                      </Button>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-11 shrink-0 lg:size-8"
+                          aria-label={STOP_QUESTIONS_LABEL}
+                          disabled={!conversation.connected}
+                          onClick={() => {
+                            void conversation.cancel();
+                            toast('已停止這一輪', { description: STOPPED_QUESTION_TEXT });
+                          }}
+                        />
+                      }
+                    >
+                      <X />
                     </TooltipTrigger>
                     <TooltipContent>{STOP_QUESTIONS_LABEL}</TooltipContent>
                   </Tooltip>
@@ -401,45 +898,263 @@ function ConversationView({
                 onDraftChange={setDraft}
                 placeholder={inputPlaceholder({
                   connected: conversation.connected,
+                  stall: connectionStall(conversation),
                   stoppedOnQuestion: stoppedOnQuestion(conversation.state),
+                  steerQueue: steerQueueReady && keyboardWide,
                 })}
+                {...(steerQueueReady ? { onSteerQueue: steerQueue } : {})}
                 canSend={canSend}
-                onSubmit={() => {
-                  if (!canSend) {
+                {...(conversation.state.status === 'running'
+                  ? { sendHint: runningSendHint(navigator.userAgent) }
+                  : {})}
+                onSubmit={(gesture) => {
+                  // ref 那兩道擋同一個 tick 裡的第二下：`canSend` 要等重畫才關（#1941）。
+                  if (!canSend || adjudicatingNow.current || submittingNow.current) {
                     return;
                   }
                   const text = draft;
-                  setDraft('');
-                  void conversation.send(text);
+                  const modelRan = runModelLine(text);
+                  if (modelRan !== undefined) {
+                    // 打開座位或換好了就清掉；找不到那顆（`false`）留著讓人改。
+                    if (modelRan) setDraft('');
+                    return;
+                  }
+                  // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。按下去那一刻就定。
+                  const mode = resolveSubmitMode(conversation.state.status, gesture);
+                  // `route` 是等清單認出來的結果（沒認就是 `undefined`），一路交給 `send`，不再認第二次（#1929）。等的期間
+                  // 輸入框鎖著，這裡讀到的草稿、附件、標記就是畫面上的值。
+                  const submit = (route: 'command' | 'sentence' | undefined, detached = false) => {
+                    // 開頭是不是命令照送出路由認（#1929）：技能的 `/deploy 今天` 是一句話。
+                    const isCommand =
+                      route === undefined
+                        ? namesCommand(conversation.slashCommands, text)
+                        : route === 'command';
+                    // 只有功能開著才帶附件；`/` 開頭的命令也帶（#733：命令有宣告收附件才收，其餘伺服器回錯誤、草稿與附件留著），
+                    // 只有光打 `/feedback`（開回饋框、不送出）不帶，附件留在草稿裡。
+                    const items =
+                      serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
+                        ? draftAttachments.items
+                        : [];
+                    // 沒宣告 input、整行只有 `/名字` 的命令照 dsh 的 detached（`ui-commands/src/client/service.ts:361-365` 先
+                    // `consumeVia` 再 `runDetached`，`input/machine.ts:155-175` 收到 `'handled'` 就回 plain，#1971）：當場拿掉、
+                    // 背景執行，不進在途、不鎖輸入框；沒收下由狀態列講（`runSlash`），草稿不放回去。
+                    if (detached && items.length === 0) {
+                      setDraft('');
+                      pendingRequest.current = undefined;
+                      void conversation.send(text, mode, undefined, undefined, undefined, route);
+                      return;
+                    }
+                    // 有 input 的命令照 dsh 的 `submitting`（`input/machine.ts:138`、`:183-192`，#1941）：在途期間不收下一次送出、
+                    // 輸入框鎖住、草稿不動；收下（命令成功）才清掉送出的那段，沒收下草稿原樣，原因由狀態列講（`runSlash`），
+                    // 不另跳 toast。在認命令那一段的回呼裡同步進來，兩段之間沒有空檔。
+                    if (isCommand && items.length === 0) {
+                      submittingNow.current = true;
+                      setSubmitting(true);
+                      pendingRequest.current = undefined;
+                      void conversation
+                        .send(text, mode, undefined, undefined, undefined, route)
+                        .then((rejected) => {
+                          if (rejected === undefined) {
+                            setDraft((current) => retainedSuffix(current, text));
+                          }
+                        })
+                        .finally(() => {
+                          submittingNow.current = false;
+                          setSubmitting(false);
+                        });
+                      return;
+                    }
+                    setDraft('');
+                    // 命令不帶提及（留著，同附件）；否則這一句送出就用掉它。技能的 `/deploy 今天` 照樣帶。
+                    const mentioned = isCommand ? undefined : mentionedAgent;
+                    if (mentioned !== undefined) setMentionedAgent(undefined);
+                    // 跟上次沒送出去的那一句完全相同才沿用它的編號；改過字、換了點名、增減附件都是新的一句（#1335）。
+                    const sentence: Sentence = {
+                      text,
+                      mention: mentioned?.name,
+                      attachmentIds: items.map((item) => item.id),
+                    };
+                    const requestId = requestIdFor(pendingRequest.current, sentence);
+                    pendingRequest.current = undefined;
+                    void (async () => {
+                      const mention = mentioned === undefined ? undefined : toMention(mentioned);
+                      if (items.length === 0) {
+                        return conversation.send(text, mode, undefined, mention, requestId, route);
+                      }
+                      setSendingAttachments(true);
+                      try {
+                        const prepared = await prepareAttachments(
+                          client,
+                          threadId,
+                          items,
+                          undefined,
+                          uploads.begin(),
+                        );
+                        if (prepared.kind === 'cancelled') {
+                          uploads.settle('cancelled');
+                          return { message: '附件還在，再按送出會重新上傳。', cancelled: true };
+                        }
+                        if (prepared.kind === 'failed') {
+                          uploads.settle('failed');
+                          return { message: prepared.message };
+                        }
+                        const rejected = await conversation.send(
+                          text,
+                          mode,
+                          prepared.attachments,
+                          mention,
+                          requestId,
+                          route,
+                        );
+                        // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
+                        if (rejected === undefined) {
+                          const ids = items.map((item) => item.id);
+                          draftAttachments.removeMany(ids);
+                          uploads.forget(ids);
+                        } else {
+                          // 上傳都成功了，是伺服器沒收下這一句：卡片沒有哪裡出錯。
+                          uploads.settle();
+                        }
+                        return rejected;
+                      } finally {
+                        setSendingAttachments(false);
+                      }
+                    })().then((rejected) => {
+                      if (rejected === undefined) return;
+                      // 「沒送出去」可能其實到了、只是回條斷了：留著編號，原樣重送這一句時帶同一個。
+                      pendingRequest.current = { id: requestId, sentence };
+                      // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
+                      setDraft((current) => (current === '' ? text : current));
+                      // 標記不放回鎖住的輸入框：那一行送出時帶的是按 Enter 當下的標記，放回去畫面就跟送出的對不上
+                      // （dsh `facade.ts:301-304` 的 `draftInitializationBlocked`，#1929）。草稿那一行不用擋：鎖住時草稿一定不是空的。
+                      if (
+                        mentioned !== undefined &&
+                        !adjudicatingNow.current &&
+                        !submittingNow.current
+                      )
+                        setMentionedAgent((current) => current ?? mentioned);
+                      if ('cancelled' in rejected) {
+                        toast('已取消上傳', { description: rejected.message });
+                      } else if (rejected.uncertain === true) {
+                        // 斷在網路層：可能其實到了。不說「沒送出去」，說原樣重送是安全的（#1335）。
+                        toast.warning('不確定這一句有沒有送到', {
+                          description: `原樣再按一次送出，不會重複。（${rejected.message}）`,
+                        });
+                      } else {
+                        toast.error('這一句沒送出去', { description: rejected.message });
+                      }
+                    });
+                  };
+                  // 開頭像命令的那一行先等命令清單認（dsh 的 `adjudicate`）：等的期間 `canSend` 是關的、輸入框整個鎖住（`locked`），
+                  // Enter 不動作、草稿不動；認完才照命令或一句話送。抓不到清單就說原因，草稿、附件、標記都沒動過。光打
+                  // `/feedback` 是開對話框，不用認。
+                  if (commandToken(text) !== undefined && text.trim() !== FEEDBACK_COMMAND_LINE) {
+                    adjudicatingNow.current = true;
+                    setAdjudicating(true);
+                    void conversation.adjudicate(text).then((verdict) => {
+                      adjudicatingNow.current = false;
+                      setAdjudicating(false);
+                      if (verdict.kind === 'released') return;
+                      if (verdict.kind === 'failed') {
+                        toast.error('這一句沒送出去', { description: verdict.message });
+                        return;
+                      }
+                      submit(verdict.kind, verdict.kind === 'command' && verdict.detached);
+                    });
+                    return;
+                  }
+                  submit(undefined);
                 }}
-                commands={conversation.slashCommands}
+                commands={commands}
+                skills={conversation.skills}
+                fileReferences={fileReferences}
+                sessionReferences={sessionReferences}
+                // 底列照 SG demo（#1591 Q3）：左邊是助理怎麼做事（模式＝權限），右邊是這則訊息用什麼送（模型、推理強度、
+                // 用量環）。有待決時輸入框被面板換掉（藏起來、不卸載），三個都不畫，點開的清單與明細跟著關（#528）。
+                {...(permissionSeat === null
+                  ? {}
+                  : {
+                      footerStart: (
+                        <PermissionSeat
+                          seat={permissionSeat}
+                          hidden={pendings.length > 0}
+                          locked={permissionLocked(
+                            conversation.connected,
+                            status === 'running' || status === 'awaiting-input',
+                          )}
+                          // 成功的回話與失敗的原因由斜線命令那一套顯示（狀態列），這裡不另開一條。
+                          // 座位送的一定是命令：直接走 `slash.run`，不經過送出認命令那一道（#1929）。
+                          onSwitch={(line) => void conversation.runCommand(line)}
+                        />
+                      ),
+                    })}
+                {...(agents !== null
+                  ? {
+                      agentMention: {
+                        agents,
+                        selected: mentionedAgent,
+                        onSelect: setMentionedAgent,
+                      },
+                    }
+                  : {})}
+                {...(serverSupportsAttachments()
+                  ? {
+                      attachments: {
+                        items: draftAttachments.items,
+                        onAdd: draftAttachments.add,
+                        onRemove: draftAttachments.remove,
+                        uploads: uploads.states,
+                        onCancelUpload: uploads.cancel,
+                      },
+                    }
+                  : {})}
                 decorated={DECORATED_COMMANDS}
-                // 從 `/` 選單直接執行不帶參數的命令：跟送出同一道閘（跑著時只有 `/feedback` 過得去）。
+                // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 與命令宣告過的那幾行過得去，#1517）。
+                // 認命令或有 input 的命令在途的期間不收（#1941；dsh 那段期間整個 editor 鎖著，選單沒有入口，`InputBar.tsx:147`、
+                // `:154`）。選單直接執行的只有 bare 命令與被裝飾的命令（`applySlashPick`）：照 dsh 背景執行，不進在途
+                // （`ui-commands/src/client/service.ts:271-275` 的 `runDetached`，#1971），沒收下由狀態列講（`runSlash`）。
                 onRunCommand={(line) => {
-                  if (!canSendLine(line)) {
+                  if (adjudicatingNow.current || submittingNow.current || !canSendLine(line)) {
                     return false;
                   }
+                  const modelRan = runModelLine(line);
+                  if (modelRan !== undefined) return modelRan;
                   void conversation.send(line);
                   return true;
                 }}
+                // 一行在等命令清單認的期間整個鎖住：文字框唯讀、附件與 @ 標記改不了（dsh `InputBar.tsx:139-156`，#1929）。
+                locked={machineBusy}
+                // 附件上傳、等伺服器收下的期間，附件列上的移除不收：這一批在按送出當下就取好了，移掉的照樣會送出（#1941，dsh
+                // `facade.ts:330-334`）。加入、貼上、拖放與取消上傳照舊：送出期間才加進來的留著（同一般句子在 dsh 的 detached）。
+                removalLocked={sendingAttachments}
                 // **一輪在跑時才出現**。停在等人時輸入框被面板換掉了（§4.3）：核准面板沒有停止（#376 第 10、11 條），
                 // 提問面板的停止是它自己的 ❌。伺服器只回受理，停下來的事實走下行，所以按下去不自己改狀態。任何分頁
                 // 都按得動，不查是誰起的這一輪（#265 的 Q3）。
                 stoppable={conversation.state.status === 'running'}
                 stopDisabled={!conversation.connected}
                 onStop={() => void conversation.cancel()}
-                meter={
-                  // 有待決時輸入框被面板換掉（藏起來、不卸載），點開的明細要跟著關（#528）。
-                  <ContextMeter
-                    pressure={conversation.state.contextPressure}
-                    hidden={pendings.length > 0}
-                  />
+                footerEnd={
+                  <>
+                    {modelSeat !== null && (
+                      <ModelSeat
+                        seat={modelSeat}
+                        open={modelOpen}
+                        onOpenChange={setModelOpen}
+                        hidden={pendings.length > 0}
+                      />
+                    )}
+                    <ContextMeter
+                      pressure={conversation.state.contextPressure}
+                      hidden={pendings.length > 0}
+                    />
+                  </>
                 }
               />
             }
           />
         </div>
       </SidebarInset>
+      <RightSidebarPanel />
 
       {feedbackDialog !== undefined && (
         <FeedbackDialog
@@ -452,6 +1167,6 @@ function ConversationView({
           onDismiss={conversation.dismissFeedback}
         />
       )}
-    </>
+    </RightSidebarProvider>
   );
 }

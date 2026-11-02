@@ -1,0 +1,174 @@
+{
+  "id": "2310.10176",
+  "title": "Large Language Models Meet Open-World Intent Discovery and Recognition: An Evaluation of ChatGPT",
+  "topic": "T1",
+  "subarea": "LLM 時代的意圖理解、zero-shot 意圖與意圖路由",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 gpt-3.5-turbo-0301 透過提示詞做 OOD 意圖發現（把未知意圖的查詢分群）與 Generalized Intent Discovery（先分群並命名新意圖、再對「舊＋新」意圖集聯合分類），在 Banking77 抽樣子集上與 BERT 系微調方法比較，結論是 ChatGPT 在零先驗時遠勝未微調的 BERT，但全面落後微調方法，且 IND 示範反而有害、分群規模一大就出現大量漏分與重複分派。",
+  "problem": "傳統任務型對話的意圖分類器建立在封閉集合假設上，只認得預先定義的 in-domain（IND）意圖；上線後使用者會丟出不在集合裡的 out-of-domain（OOD）意圖。OOD intent discovery 要把這些未標註的 OOD 查詢依意圖分群，以便找出該開發的新技能；GID 進一步要求把發現的新意圖併入分類器，讓系統能同時辨識 IND 與新 OOD 意圖。過去都是微調 BERT 類判別模型，而 2023 年 LLM 以提示詞做下游任務成為主流，但 LLM 能否在不微調的情況下完成「發現＋擴充」意圖集合、會卡在哪裡，缺乏系統性評估。對依意圖路由的對話 agent 來說，這決定了意圖目錄能否由 LLM 自動長出來。",
+  "core_idea": "把 OOD 發現改寫成單一提示詞內的端到端分群：一次把全部待分群查詢編號後丟給 ChatGPT，要求輸出「類別編號：句子編號清單」，並依可用的 IND 先驗設計三種提示（不給先驗 DC、只給 IND 意圖名 ZSD、給 IND 標註範例 FSD）。GID 方面指出判別式框架用抽象的虛擬標籤索引，但生成式 LLM 分類依賴意圖的語意，因此提出兩階段管線：第一階段在分群提示後加一句要求為每群歸納意圖，得到自然語言描述的 pseudo-intent 集合；第二階段把 IND 意圖名與 pseudo-intent 合併成聯合意圖清單，逐筆查詢要求 ChatGPT 回答類別編號。之後用一系列控制實驗拆解瓶頸：示範的分布、意圖集合品質、漏分／重複分派、每群樣本數、群數估計、不同 LLM、提示詞變體。",
+  "method": {
+    "任務定義（§3.1）": "OOD discovery：給定有標註的 IND 資料（N 個意圖）與未標註的 OOD 查詢（屬於 M 個未知意圖），把 OOD 查詢分成 M 群；M 視為已知（ground truth），估計 M 不在本文範圍，僅在 §5.5 另做分析。GID：同時分類 N 個 IND 意圖，並從未標註 OOD 資料發現 M 個新意圖，最終把分類能力擴到 N+M 個意圖。",
+    "資料設定（§4.1、Appendix A）": [
+      "主資料集 Banking77：13,083 筆查詢、77 個意圖、類別不平衡；train 9,003／val 1,000／test 3,080；平均 11.91 token，最長 79。",
+      "因 ChatGPT 對話長度限制，隨機固定抽 15 個 IND 類別與 15 個 OOD 類別（清單列於 Table 7）；三種切分 IND/OOD=3:1、3:2、1:1 分別使用 OOD 清單的前 5、10、15 類。",
+      "OOD discovery：每個 OOD 類別從 test set 抽 5 筆，所以一次提示內要分群的查詢是 25／50／75 筆，群數 M 寫在提示裡。",
+      "GID：從 test set 抽 10 筆做測試；論文字面沒說是每類 10 筆，但從 ACC 的數值顆粒度（例如 3:1 的 IND ACC 68.44 × 150 筆 × 3 次恰為整數）推斷是每類 10 筆，即 3:1 時 IND 150 筆、OOD 50 筆。",
+      "只有 FSD／GID-FSD 會額外從 train set 每個 IND 類別抽 3 筆當示範（15 類共 45 筆）。",
+      "附錄 C 另在 CLINC（IND/OOD=1:1）重跑一次主實驗。"
+    ],
+    "OOD discovery 的三種提示（§3.2、Fig 2、Appendix D Table 9 第一階段）": {
+      "DC（Direct Clustering）": "結構為 <分群指令><群數><回覆格式><OOD 測試句>，不給任何 IND 資訊。附錄範例：先說明會給一組句子記為 Set 1，要求依意圖分成 K 類，只輸出「Category 1: 1,2,3,4,5 ……」形式的類別編號與句子編號。",
+      "ZSD（Zero Shot Discovery）": "在前面加上 IND 意圖名清單（Set 1）當先驗，但不給 IND 句子；指令要求先學 Set 1 的知識，再把 Set 2（OOD 句子）分成 K 類，並明確告知 Set 1 與 Set 2 的意圖不重疊。作者主張可用於不能外露使用者資料的情境。",
+      "FSD（Few Shot Discovery）": "先驗改成 IND 標註範例（句子＋intention 標籤，每類 3 筆），其餘同 ZSD，同樣告知兩組意圖不重疊。",
+      "輸出": "ChatGPT 回覆每一群包含哪些 OOD 句子編號（<Cluster Index><OOD Sample Index>），再解析成分群結果。"
+    },
+    "GID 兩階段管線（§3.3、Fig 3、Table 9）": {
+      "第一階段：分群＋命名": "在上述三種 OOD discovery 提示的尾端加一句 Intent Describe Instruction（附錄措辭為要求模型接著為 Category 1 到 Category K 各自歸納意圖），把每群的自然語言描述收集成 OOD pseudo-intent 集合，再與 IND 意圖名合併成聯合意圖集。",
+      "第二階段：逐筆聯合分類": "對 IND 與 OOD 測試查詢逐筆送出分類提示：列出編號過的預定義意圖集（IND 意圖名＋pseudo-intent 描述），要求依意圖把句子歸入其中一類、只回覆類別編號。GID-FSD 的第二階段額外附上 IND 標註範例（sentence＋intention）並要求先學習範例再分類；GID-DC／GID-ZSD 不附範例。",
+      "變體命名": "依第一階段用的提示分成 GID-DC、GID-ZSD、GID-FSD。"
+    },
+    "輸出後處理（§4.3）": "所有 ChatGPT 方法都會出現 missing recall（某句沒被分到任何群／意圖）與 repeated recall（某句被分到多群／多個意圖）。處理規則：漏分的句子隨機指派一個群或意圖；重複分派的只保留第一個。",
+    "評估指標（§4.3）": "OOD discovery 用 ACC（以 Hungarian algorithm 對齊預測群與真實類別）、NMI、ARI；GID 用 ACC 與 F1，分別報 IND、OOD、ALL。GID 中 pseudo-intent 如何對應到真實 OOD 意圖以計算 OOD ACC／F1，論文沒有交代。",
+    "實作細節（Appendix B）": "ChatGPT 版本為 gpt-3.5-turbo-0301，透過 OpenAI 官方 API 呼叫，temperature 等超參數維持 API 預設值；所有 ChatGPT 方法與 baseline 都跑 3 次取平均。baseline 骨幹為 bert-base-uncased（12 層），凍結最後一層以外的參數，超參數沿用各 baseline 官方程式碼；微調方法用 Banking train set 中屬於所選 IND 與 OOD 類別的全部樣本訓練。",
+    "Baseline（§4.2）": "OOD discovery：未微調 BERT 表示＋k-means、DeepAligned（DeepCluster 改良版，偽標籤對齊）、DKT（多頭對比學習，IND 預訓練階段 CE＋SCL、OOD 分群階段 instance-level 與 cluster-level CL）。GID：DeepAligned-GID（先 DeepAligned 分群取得 OOD 偽標籤再與 IND 一起訓練新分類器）、E2E（IND head 與 OOD head 兩個投影層，以 swapped prediction 產生 OOD 偽標籤、統一分類損失）。",
+    "分析實驗（§5）": [
+      "§5.1 示範分布：比較不給示範、IND 示範、OOD 示範（每類 3 筆），分群用 15 個 OOD 類、分類用 10 個 OOD 類並直接給 ground-truth 意圖集以排除 pseudo-intent 的影響（Fig 4）。",
+      "§5.2 GID 瓶頸拆解：把 pseudo-intent 集換成 ground-truth OOD 意圖集，再進一步為每個 IND 與 OOD 意圖加上人工撰寫的描述（Fig 5），並列出 3 次執行產生的 pseudo-intent（Table 3）。",
+      "§5.3 漏分／重複分派統計（Fig 6，三種方法平均），個案見 Appendix E Table 11–12。",
+      "§5.4 在 3:1 下改變每個 OOD 類別的樣本數，看分群表現（Fig 7）。",
+      "§5.5 從提示中拿掉群數，讓 ChatGPT 自己決定並計數，與 DeepAligned 的估計法（超參數 K'=2、3）比較（Table 4）。",
+      "§5.6 在 3:2 下比較 text-davinci-002、text-davinci-003、Claude（未註明版本）與 ChatGPT（Table 5）；GPT-3 davinci 完全無法執行任務。",
+      "§5.7 在 1:1 下為 DC／GID-DC 另寫 Paraphrase、Verbosity、Simplification 三種提示詞變體（Table 6、Table 10）。"
+    ]
+  },
+  "assumptions": [
+    "OOD 查詢已經事先從 IND 流量中分離出來；本文不處理「判斷某句是不是 OOD」這一步。",
+    "OOD 群數 M 已知並寫進提示（僅 §5.5 放寬）。",
+    "待分群的所有查詢能一次塞進單一提示的上下文長度內（這也是只抽 15 類、每類 5 筆的原因）。",
+    "意圖顆粒度在 IND 與 OOD 之間一致（都來自 Banking77 的同一套標註）。",
+    "漏分隨機指派、重複分派取第一個，這種後處理不會系統性偏袒某個方法。",
+    "每次 API 呼叫彼此獨立、同一版本的 ChatGPT 在實驗期間行為穩定。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Banking77（抽 15 IND＋5／10／15 OOD 類，IND/OOD=3:1、3:2、1:1）",
+      "CLINC（Appendix C，只做 IND/OOD=1:1）"
+    ],
+    "metrics": [
+      "OOD discovery：ACC（Hungarian 對齊）、NMI、ARI",
+      "GID：IND／OOD／ALL 的 ACC 與 F1",
+      "missing recall 與 repeated recall 比例（§5.3）",
+      "群數估計誤差 |K_pred − K_true|（§5.5）"
+    ],
+    "baselines": [
+      "BERT（bert-base-uncased 未微調）＋k-means",
+      "DeepAligned",
+      "DKT",
+      "DeepAligned-GID",
+      "E2E（GID）",
+      "LLM 比較：text-davinci-002、text-davinci-003、Claude、GPT-3 davinci"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "不給任何 IND 先驗時，ChatGPT 直接分群遠勝未微調 BERT＋k-means，差距隨 OOD 類別數增加而縮小但仍明顯。",
+      "numbers": "OOD discovery ACC：3:1 時 ChatGPT(DC) 88.00 vs BERT 52.00（+36.00）；3:2 時 78.00 vs 36.00；1:1 時 58.22 vs 29.33（+28.89）。ARI 在 1:1 時為 28.21 vs 2.499。",
+      "section": "§4.4、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "GID 上 ChatGPT 全面落後微調方法；OOD discovery 只有在 OOD 類別少時接近微調方法，類別一多就大幅落後。",
+      "numbers": "GID 三種切分平均，最佳 ChatGPT 方法比最佳微調方法低 17.37（IND ACC）、20.56（OOD ACC）、23.40（ALL ACC）；例如 3:1 的 ALL ACC 為 ChatGPT(GID-DC) 70.17 vs E2E 95.88。OOD discovery 3:1 時 ChatGPT(ZSD) ACC 92.00 vs DKT 93.33／DeepAligned 100.0，1:1 時 ChatGPT(DC) 58.22 vs DKT 76.45。",
+      "section": "§4.4、Table 1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "給越多 IND 先驗，ChatGPT 的 OOD 分群反而越差；IND 示範會被當成雜訊拉低分群、對分類幾乎無幫助，而同分布的 OOD 示範則顯著有益，顯示 in-context learning 無法把 IND 知識遷移到 OOD。",
+      "numbers": "Table 1 ACC：1:1 時 DC 58.22 > ZSD 50.67 > FSD 49.78；3:2 時 DC 78.00 > ZSD 67.33 > FSD 56.67；3:1 時 ZSD 92.00 略高於 DC 88.00，FSD 74.67 最差。Fig 4 的 IND 示範／OOD 示範對照數值只在圖中呈現，文字未給。",
+      "section": "§4.4、§5.1、Table 1、Fig 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "GID 的 OOD 表現取決於第一階段產生的 pseudo-intent 集合；只差在 pseudo-intent 集的 GID-ZSD 平均落後 GID-DC。同一提示跑三次，pseudo-intent 語意大致對但顆粒度忽粗忽細。",
+      "numbers": "GID-ZSD 的 ALL ACC 三種切分平均比 GID-DC 低 6.22（GID-DC 70.17／63.33／64.22 vs GID-ZSD 66.33／55.07／57.67）。Table 3 例：apple_pay_or_google_pay 三次分別被描述成以行動支付儲值、以各種方法儲值、泛稱付款相關。",
+      "section": "§4.4、§5.2、Table 2、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "把 pseudo-intent 換成真實意圖名只帶來小幅提升，再為每個意圖加上人工描述才顯著提升；作者據此認定 GID 的主要瓶頸是缺乏領域知識、其次才是 pseudo-intent 品質。",
+      "numbers": "Fig 5 的數值只在圖中呈現，文字只給定性描述（slight vs significant）。",
+      "section": "§5.2、Fig 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "生成式輸出會漏分與重複分派；OOD discovery 的錯誤率隨一次要分群的樣本數上升而急升，GID 因逐筆分類而幾乎不受 OOD 比例影響，其錯誤多來自對意圖邊界不清（拒絕歸類或同時給多個意圖）。",
+      "numbers": "OOD discovery 在 1:1（一次 75 句、15 群）時 missing recall 24.15%、repeated recall 4.44%（三種方法平均，Fig 6）。",
+      "section": "§5.3、Fig 6、Appendix E Table 11–12",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "ChatGPT 分群對每群樣本數很不穩健：太少找不到模式、太多又要同時處理太多句子；微調方法則穩健。",
+      "numbers": "3:1 下每類 5 到 10 筆時分群表現最佳，之後迅速下滑（Fig 7，精確數值只在圖中）。",
+      "section": "§5.4、Fig 7",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "拿掉提示中的群數讓 ChatGPT 自行決定時，群少時估得準，群多時傾向高估，整體不如調好超參數的 DeepAligned，但後者對超參數很敏感。",
+      "numbers": "真實群數 5／10／15：ChatGPT(DC) 預測 5／14／23（誤差 0／4／8）；DeepAligned K'=2 預測 4／11／11（誤差 1／1／4），K'=3 預測 8／16／16（誤差 3／6／1）。",
+      "section": "§5.5、Table 4",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "ChatGPT 只能取得輸出，無法深入分析其內部運作。",
+    "三種切分都來自同一個資料集，意圖顆粒度一致，沒有探討不同顆粒度的影響。",
+    "所有實驗雖使用同一版本 ChatGPT，但後續版本更新可能改變結論。",
+    "本文假設 OOD 群數已知，估計群數不在範圍內（僅 §5.5 簡單分析）。",
+    "§6 自承的三個挑戰：輸入長度限制群數、群多時嚴重漏分／重複分派、對每群樣本數不穩健；領域知識不足；跨領域 in-context learning 失效；把領域知識塞進提示會增加每次推論成本。"
+  ],
+  "limitations_observed": [
+    "測試樣本極小：OOD discovery 每次只分群 25／50／75 句，跑 3 次取平均；3:1 時 DeepAligned 的 ACC／NMI／ARI 全是 100.0，實際只是 25 句全對。表 1 標註 p < 0.01（t-test），但沒說比的是哪兩組、也沒報標準差，3 次執行撐不起這個顯著性宣稱。",
+    "資料取用量不對等：微調 baseline 用 Banking train set 中所選 IND＋OOD 類別的全部樣本訓練（每類上百筆、含大量未標註 OOD 樣本），ChatGPT 只看到提示裡的 25–75 句（FSD 另加 45 筆 IND 示範）。「ChatGPT 落後微調方法」混合了模型能力與資料量兩個變數，缺少在同樣 25–75 句上做 BERT 分群或讓 ChatGPT 分批處理全部 OOD 資料的對照。",
+    "後處理把格式失誤直接換成隨機雜訊：1:1 時 24.15% 的句子漏分後被隨機指派，Table 1 的 1:1 結果有相當比例在量「能不能照格式列全編號」而非分群能力。作者把漏分歸因於生成式架構，卻沒試最便宜的修補（§6.1 自己提議的「挑出漏分編號再追問」、結構化輸出、分批）就下結論。",
+    "把「拒絕歸類」當錯誤：Appendix E Table 12 中 ChatGPT 回答某句不屬於清單中任何意圖，這正是 T1 需要的 out-of-scope 拒答行為，但評估一律強制隨機指派，GID 的聯合意圖集也沒有 reject／OOS 類別。因此本文完全沒有量到 LLM 做 OOD 偵測的能力，OOD discovery 還假設 OOD 句子已被預先挑出、群數已知。",
+    "Table 5 數字與標題不一致：標題寫所有 LLM 都在 IND/OOD=3:2 下比較，ChatGPT 的 OOD discovery 數值（78.00／78.20／55.32）確實是 Table 1 的 3:2，但 GID 欄（68.44／75.33／70.17）與 Table 2 的 3:1 GID-DC 完全相同；3:2 的 GID-DC 應為 64.67／61.33／63.33。若依 3:2 比，Claude 的 GID ALL ACC 62.00 與 ChatGPT 63.33 幾乎持平，「Claude 在 GID 較弱」的結論站不太住。",
+    "GID-FSD 在 3:1 的 OOD 表現崩到 OOD ACC 17.33（F1 20.27），在 3:2 卻有 52.00，同一方法在較容易的切分反而大幅變差，作者只以「IND 示範是雜訊、pseudo-intent 品質差」籠統帶過，沒有逐次檢查是否為解析失誤或單次極端值；加上 temperature 用 API 預設值（非 0），分類任務的變異被放大卻沒有報告。",
+    "GID 的 OOD ACC／F1 需要把 pseudo-intent 對應到真實意圖，但論文沒說對應方式（Hungarian 或其他），而 Table 3 顯示 pseudo-intent 可能把兩個真實意圖揉成一類，對應方式會直接影響 OOD 分數。",
+    "外推性有限：IND／OOD 類別只抽一組固定清單（Table 7），主實驗只有 Banking77，CLINC 只補 1:1；gpt-3.5-turbo-0301 已下架。實驗設計（只抽 15 類、每類 5 句）是被 2023 年的上下文長度逼出來的，「大規模分群受限於輸入長度」這條結論對長上下文模型需要重測，但漏分與顆粒度漂移等行為面的觀察仍值得當成檢查項。",
+    "§5.1 的 IND 示範有害可能與提示設計交纏：ZSD／FSD 提示明說兩組意圖不重疊，卻給同領域（都是銀行）的示範，模型可能刻意避開 IND 類似的語意切分；沒有做「拿掉不重疊聲明」或「跨領域 IND 示範」的消融，就無法把效果歸因到 in-context learning 本身。"
+  ],
+  "framework_role": "屬於 T1，涵蓋意圖目錄如何從 open-world 流量中長出來：一是把未知意圖的查詢分群並命名（OOD discovery），二是把新意圖併入既有意圖集後做聯合分類（GID），後者即是意圖路由在意圖集持續擴充時的形狀。本文是 2023 年 ChatGPT 的評估型研究，而非可直接部署的方法，對框架的價值在幾條可轉成設計檢查的經驗：用 LLM 做意圖路由時，意圖清單要附語意描述而不只是標籤名（§5.2 顯示描述才是主要增益來源）；一次丟給 LLM 的待分群句子要控制在小批量（每群約 5–10 句），並驗證每個輸入都恰好被分派一次（漏分／重複分派）；同領域舊意圖的示範不一定能幫忙發現新意圖；LLM 產生的意圖名稱在多次執行間顆粒度不穩，需要人工或規則收斂。本文只處理單句、離線批次，不涉及多輪對話、澄清提問或使用者目標推斷，也沒有 OOD 偵測。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "本文研究的正是 E1 送進 T1 的輸入含有已知意圖集以外的查詢時怎麼辦：未標註的 OOD 使用者查詢被批次分群、命名成 pseudo-intent，再與 IND 意圖合併成新的路由目標集，之後逐筆將 IND＋OOD 查詢歸類。但輸入是 Banking77／CLINC 的靜態測試句、離線批次處理，沒有使用者模擬器、沒有真實互動，也沒有多輪對話；它只示範 T1 端如何吸收 open-world 輸入，不涉及 T6 如何產生輸入。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何部署或產品；部分作者任職於 Meituan，但文中沒有提到在美團系統中使用，作者任職不等於採納。以 WebSearch 查詢只找到 arXiv、ACL Anthology（2023.emnlp-main.636）、作者實驗室頁與 GitHub repo（https://github.com/songxiaoshuai/OOD-Evaluation），沒有官方產品文件、model card 或官方部落格引用。EMNLP 2023 main 錄取與 Semantic Scholar 29 次引用（1 次 influential）屬學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/songxiaoshuai/OOD-Evaluation",
+    "data": "Banking77 與 CLINC 皆為公開資料集；所抽的 15 個 IND 與 15 個 OOD 類別列於 Table 7，GID 三種方法的完整提示詞列於 Appendix D Table 9，DC 的三種變體列於 Table 10。但每類抽樣的句子索引沒有列在論文中（repo 內容未檢查），gpt-3.5-turbo-0301 已下架，Claude 版本未註明，因此 ChatGPT 端的數字無法精確重現。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "確實屬於 T1（LLM 做 open-world 意圖發現與擴充後的聯合分類），並給出意圖描述比標籤重要、小批量分群、漏分／重複分派、IND 示範有害等可操作的負面經驗，但樣本極小、資料取用不對等、模型已下架、表格有不一致，而且完全沒量 OOD 偵測與拒答，當參考值得、當必讀不足。",
+  "related": [
+    "2209.06030",
+    "2012.08987",
+    "2210.08909",
+    "1911.08891",
+    "2003.04807",
+    "1909.02027",
+    "2202.12837",
+    "2302.12095"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

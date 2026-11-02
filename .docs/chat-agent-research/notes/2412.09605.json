@@ -1,0 +1,168 @@
+{
+  "id": "2412.09605",
+  "title": "AgentTrek: Agent Trajectory Synthesis via Guiding Replay with Web Tutorials",
+  "topic": "T4",
+  "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "從 RedPajama 撈出網頁操作教學、改寫成結構化任務，再讓 GPT-4o agent 在真實網站上照著教學重放並由 GPT-4o 評估器過濾，以每條約 0.55 美元合成出 10,398 條多模態網頁 agent 軌跡，並用來微調 Qwen2.5 與 Qwen2-VL。",
+  "problem": "GUI／網頁 agent 需要「目標＋交錯觀測＋推理＋落地動作」的多步軌跡資料來訓練，但這類資料網路上幾乎不存在，現有資料集（Mind2Web、WebLINX、AITW 等）仰賴人工標註，成本高且難以擴充；純靠 LLM 自行探索（無引導）合成時成功率低、任務不真實。沒有便宜可擴充的軌跡來源，開源模型在 WebArena 等長序列任務上就一直遠落後閉源模型。",
+  "core_idea": "網路上本來就有大量人寫的操作教學（how-to），它們等於「沒有觀測與動作的軌跡草稿」。先把教學挑出來並標準化成任務規格（平台、目標網址、任務描述、前置條件、逐步指令、預期結果），再讓強 VLM agent 在真實瀏覽器裡「照教學重放」，把教學的文字步驟補成帶截圖、AXTree、推理與 Playwright 動作的完整軌跡；最後用 LLM 評估器只留下判定成功的軌跡。教學提供目標網址、人類規劃與多層選單的路徑，大幅提高重放成功率。",
+  "method": {
+    "stage1_tutorial_collection": {
+      "input": "RedPajama 網頁語料（約 208 億筆）",
+      "step1_prefilter": "規則式預篩：動作動詞（click、type）、UI 元件（button、menu）、平台詞（macOS、Windows）等關鍵字比對；文長 200–5000 字；網址含 how-to、guide 等樣式者優先。附錄 G.1 的門檻：關鍵字總出現至少 20 次、至少 4 種不同關鍵字、至少一個必要關鍵字出現兩次以上。在 285 筆人工標註樣本上 recall 92.69%，語料由 208 億降到 6,880 萬筆。",
+      "step2_llm_labeler": "GPT-4o mini 對 9 萬筆預篩結果做二元分類（輸出 1＝GUI 教學、0＝非教學）；判準為「有任務描述」且「有與 GUI 互動的逐步指令」，輸入是 URL 與內文（提示詞見附錄 G.2）。對人工標註驗證集 F1 88.5%。",
+      "step3_fasttext": "以上述 9 萬筆 LLM 標籤訓練 FastText（95:5 切分，驗證 F1 89.5%），跑完整個 6,880 萬筆預篩集，去重後得約 1,880 萬筆疑似教學。",
+      "step4_tag_and_paraphrase": "GPT-4o mini 只抽取每篇的第一份教學，填成 JSON schema：platform（macOS／Windows 預設／Linux／Android／iOS）、target type（Web browser、PC app 等）、target object、target web URL（提示詞特別要求填『操作發生的網站』而非教學文章本身的網址）、task description（一句話）、prerequisites、instructions（Step_1…）、instructions steps、expected_result。成本約 0.89 美元／千筆。只有 target type 為網頁的才進入重放（網頁教學比例 0.275）。"
+    },
+    "stage2_guided_replay": {
+      "environment": "BrowserGym（Chromium），agent 收到標準化教學與 target_web_url 後直接開到目標頁。",
+      "agent": "GPT-4o（2024-08-06）當重放 agent；觀測為視窗截圖＋AXTree（刻意不給完整 HTML），每個元素以 bid 標識；動作為 Playwright API（click、select_option、clear 等），以 bid 指定目標，例如 click('119')。每一步先產生推理再輸出動作。",
+      "recording": "同步記錄目標元素、精確座標、逐步截圖、DOM snapshot 與推理。每步平均約 8,027 tokens、每任務約 86,114 tokens，重放 1,000 個任務約 215 美元。",
+      "trajectory_schema": "每條軌跡分四層：(1) 任務資訊（平台、描述、前置條件、逐步指令、預期結果）；(2) 截圖與整段錄影；(3) 可重現的原生 trace：Playwright 的 DOM snapshot、HTML、網路流量與動作序列；(4) 後處理成「任務 metadata＋觀測＋中間推理＋動作」的微調用格式。平均 12.1 步。"
+    },
+    "stage3_trajectory_evaluation": {
+      "evaluator": "GPT-4o，輸入是任務描述 d 與交錯序列 {d, r1, a1, …, rn, an}（推理＋動作；公式中未列入截圖）。論文宣稱輸出三層：軌跡層判定、逐步分析、最早失敗點；但附錄 Figure 10 的實際提示詞只要求輸出 Thoughts 與二元 Status（success／failure）。",
+      "rubric_from_figure10": "判定規則偏寬鬆（轉述）：卡在一開始的登入就算失敗；前三步內就陷入迴圈算失敗；完成後停不下來而重複動作仍算成功；軌跡中超過 8 個正確動作即可判成功；最後沒按儲存仍算成功；兩個子任務只做完一個也算成功；寫好評論但沒按送出、走到列印按鈕為止都算成功；任務在初始狀態已完成而 agent 不動作也算成功。",
+      "filter": "只保留 Status=success 的軌跡。重放成功率 39.9%。",
+      "validation": "人工複核 1,081 條軌跡，建出 558 筆附理由的金標準集，評估器準確率 84.0%（Table 2／附錄 D）。"
+    },
+    "stage4_training": {
+      "text_agent": "Qwen2.5-7B-Instruct 與 Qwen2.5-32B-Instruct，用 6,000 條軌跡（AXTree 觀測＋Playwright 動作）做 SFT。",
+      "vision_agent": "Qwen2-VL-7B（NaViT 動態解析度編碼器），用 10,000 條軌跡做 SFT；只看截圖（720p 約 1,200 tokens，對比 HTML 約 4,000 tokens），動作空間由 Playwright 映射到 pyautogui（附錄 E Table 8：click→click、type→write、fill→清空後 write、clear→點擊＋ctrl+A＋delete、select_option 以外掛動作 browser.select() 處理），座標取自錄下的元素位置。",
+      "hyperparameters": "論文未提供學習率、epoch、batch size、序列長度、是否對觀測做 loss masking 等訓練超參數。"
+    },
+    "cost_model": "附錄 C：每千條有效軌跡成本 = T&P 價格 ÷ 網頁比例 + (重放價格 + 評估價格) ÷ 重放成功率 = 0.886/0.275 + (215.359+3.104)/0.399 ≈ 550.75 美元，即每條約 0.551 美元；此成本不含預篩運算、9 萬筆 GPT-4o mini 標註、FastText 訓練與人工複核。"
+  },
+  "assumptions": [
+    "網路教學的步驟在重放當下仍然有效（網站 UI 沒大改、功能沒下架）；附錄 H 已出現教學過期導致失敗的例子。",
+    "GPT-4o 級的強模型在有教學引導時能以約四成的成功率完成任務，且其推理文字足以作為 SFT 的中間推理標註。",
+    "LLM 評估器在只看推理＋動作文字的情況下，能以約 84% 準確率判斷任務是否完成，其誤判不會系統性地汙染訓練訊號。",
+    "目標網站可以不登入或可自動處理登入；需要真實帳號、付款或個資的任務大致被排除或失敗。",
+    "Playwright 動作可以無損地映射為 pyautogui 像素動作，讓同一批軌跡同時服務文字與視覺兩種 agent。",
+    "教學網站分布（127 個網站、11 類）與評估網站之間的重疊不足以解釋效果（即 WebArena 被當成 OOD）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WebArena（文字 agent，線上任務成功率）",
+      "ScreenSpot 的 Web 子集（視覺 grounding）",
+      "Multimodal-Mind2Web（cross-task／cross-website／cross-domain，離線）",
+      "自建：558 筆人工金標準的評估器對齊集",
+      "自建：400 個任務的有／無教學引導重放對照"
+    ],
+    "metrics": [
+      "WebArena task success rate",
+      "ScreenSpot grounding accuracy（Text、Icon/Widget、Average）",
+      "Mind2Web Ele.Acc、Op.F1、Step SR",
+      "評估器與人工判定的一致準確率",
+      "每條有效軌跡成本（美元）"
+    ],
+    "baselines": [
+      "WebArena：LLaMa3-chat-8B／70B、Qwen2.5-7B-Instruct、GPT-4o、GPT-4、Synatra-CodeLlama-7B、AutoWebGLM（OOD SFT）",
+      "ScreenSpot：GPT-4、GPT-4o、Qwen2-VL-7B、SeeClick、CogAgent、GPT-4 + OmniParser",
+      "Mind2Web：SeeAct 的 GPT-3.5／GPT-4（Choice、SoM），Qwen2-VL 分別以 AgentTrek、Mind2Web 訓練集、兩者合併微調",
+      "資料集比較（Table 1）：RUSS、ScreenAgent、WebLINX、MM-Mind2Web、GUIAct",
+      "評估器比較：Pan et al. 在 WebArena 上的 GPT-4V、Captioner + GPT-4、Captioner + Mixtral"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "整條管線從 RedPajama 篩出 23,430 份網頁教學，重放後得到 10,398 條判定成功的軌跡，涵蓋 127 個網站、11 類任務，平均 12.1 步。",
+      "numbers": "208 億 → 6,880 萬（預篩）→ 約 1,880 萬（FastText）→ 23,430 教學 → 10,398 條軌跡；127 網站、11 類、平均 12.1 步",
+      "section": "§2.1、§4、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "GPT-4o 評估器在人工金標準集上與人工判定的一致率為 84.0%；作者稱其判準比人工更嚴格。",
+      "numbers": "人工複核 1,081 條，金標準 558 筆；準確率 84.0%（對照 Pan et al. 在 WebArena 上的 GPT-4V 80.6%、Captioner+GPT-4 82.1%、Captioner+Mixtral 74.4%，但不同資料集）",
+      "section": "§2.2.3、Table 2、附錄 D",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "有教學引導的重放成功率遠高於只給高層目標的重放。",
+      "numbers": "400 個任務：有教學 52%（208 條有效）對 只給目標 15.78%（63 條有效），差 36.2 個百分點（論文文字寫成 23% improvement，算術不符）",
+      "section": "§4 Realism、附錄 B",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "全自動管線每條有效軌跡成本約 0.551 美元，主要花在 GPT-4o 重放。",
+      "numbers": "每千筆：T&P 0.886、重放 215.359、評估 3.104 美元；網頁比例 0.275、重放成功率 39.9%；每千條有效軌跡 550.75 美元",
+      "section": "附錄 C、Table 3／Table 7",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "以 AgentTrek 文字軌跡微調後 WebArena 成功率明顯上升；32B 版本高於 GPT-4o，7B 版本仍低於 GPT-4o。",
+      "numbers": "Qwen2.5-7B-Instruct 3.80 → 10.46；Qwen2.5-32B w/ AgentTrek 22.40（無未微調 32B 基線）；GPT-4o 13.10、GPT-4 14.41、AutoWebGLM 8.50、Synatra-7B 6.28",
+      "section": "§3.2、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "Qwen2-VL-7B 以 AgentTrek 微調後 ScreenSpot Web grounding 分數翻倍以上，略高於 GPT-4 + OmniParser。",
+      "numbers": "Average 30.7 → 67.4（Text 35.2 → 81.7；Icon/Widget 25.7 → 51.5）；GPT-4 + OmniParser 67.0；CogAgent 50.7；SeeClick 44.7",
+      "section": "§3.2、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在 Multimodal-Mind2Web 上，AgentTrek 單獨訓練不如 Mind2Web 人工訓練集，但兩者合併在三個切分都最好，顯示互補。",
+      "numbers": "Step SR（cross-task／cross-website／cross-domain）：+AT 40.9／35.1／42.1；+M2W 50.9／44.9／47.7；+AT+M2W 55.7／51.4／52.6；GPT-4 HTML+Image Choice 40.2／32.4／36.8",
+      "section": "§3.2、Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "增加 AgentTrek 資料量時，Mind2Web 跨網域 Step SR 穩定上升並逼近人工 Mind2Web 訓練集的水準。",
+      "numbers": "cross-domain Step SR：20% 39.5 → 40% 42.5 → 60% 42.8 → 80% 44.3 → 100% 45.0，對照人工 Mind2Web 47.7；cross-website 在 80% 38.0 → 100% 37.5 已持平",
+      "section": "§4 Effectiveness of Data Scaling、Figure 7、附錄 I Table 9",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "教學會過期：網站改版或時效性任務（例如訂位日期已過）讓重放失敗（附錄 H）。",
+    "資料品質、雜訊網頁內容與持續演變的 GUI 仍是挑戰；未來要處理網站變動的動態適應（§4 Research Challenges）。",
+    "任務覆蓋目前只有 11 類，需要擴大（§4）。",
+    "未微調的 Qwen2-VL-7B grounding 太弱，無法在 Mind2Web 上當基線而被排除（§3.2）。"
+  ],
+  "limitations_observed": [
+    "評估器宣稱與實作不一致：§2.2.3 說會給軌跡層判定、逐步分析與最早失敗點，但附錄 Figure 10 的提示詞只要求 Thoughts 加上二元 Status；論文沒有任何逐步或失敗定位的輸出、準確率或使用方式。對 T4 而言，這篇不能被引用為「步驟層級評估」或「失敗歸因」的依據。",
+    "「VLM 評估器」的輸入序列 {d, r1, a1, …} 只列推理與動作文字，沒有截圖；判定成功與否主要依賴重放 agent 自己寫的推理，等於讓 GPT-4o 評自己的自述，有自我確認偏誤。",
+    "成功判準非常寬鬆（超過 8 個正確動作即成功、沒按儲存／送出也成功、兩個子任務只完成一個也成功），這和作者「評估器比人工更嚴格」的說法矛盾；也表示 10,398 條『成功』軌跡可能包含未完成的軌跡（比例論文未量），被當成完整示範拿去 SFT，可能教會模型在最後一步前停下。",
+    "WebArena 被稱為 OOD，但附錄 K 的 guided replay 範例畫面正是 Magento Admin Panel（WebArena 的購物後台環境之一），無法排除其他 WebArena 網站類型也出現在教學池；論文沒有做網站或任務層級的去汙染檢查。",
+    "WebArena 表缺少未微調的 Qwen2.5-32B-Instruct 基線，22.40 的成績無法區分是 AgentTrek 資料還是 32B 本身的能力；而文字宣稱「顯著超越 GPT-4o」只對 32B 成立，7B 的 10.46 仍低於 GPT-4o 的 13.10。GPT-4o 13.10 被標註引自 Zhou et al. (2023)，時間上不可能，數字出處不明。",
+    "文內數字彼此不一致：§4 寫「近 5,000 條驗證軌跡」而 Table 1 與 §4 另一處寫 10,398；Table 6 的 AgentTrek 單用 cross-domain Step SR 是 42.1，附錄 I 用 100% 資料卻是 45.0（其他兩切分也不同），§2.3.3 又說用 10,000 條，看不出 Table 6 用的是哪一批資料；附錄 F 說 MiniWob++ 結果在 Table 4，但 Table 4 沒有；內文把評估器準確率指向 Table 3，實際在 Table 2；10,398 / 23,430 ≈ 44.4% 的產出率也對不上成本公式分母用的重放成功率 39.9%，成本估算與實際產出的資料可能不是同一批。",
+    "有無教學的對照（52% 對 15.78%）兩邊都由同一個寬鬆評估器判定、也沒有人工抽驗，且 52% 與附錄 C 成本公式所用的整體重放成功率 39.9% 不是同一批數字；文字把 36 個百分點的差距寫成「23% improvement」。",
+    "「接近人工資料」只在 Mind2Web cross-domain 一欄成立（45.0 對 47.7）；cross-task 為 42.6 對 50.9、cross-website 在 80%→100% 已持平甚至下降（38.0→37.5），擴量曲線看不出持續逼近人工資料的趨勢，而且沒有與 BAGEL、NNetNav、Synatra 等其他合成方法在同一預算下做正面比較。",
+    "0.551 美元／條的成本只算 T&P、重放、評估三段，排除了 RedPajama 預篩運算、9 萬筆 GPT-4o mini 標註、FastText 訓練與 1,081 條人工複核；且綁定 GPT-4o 2024 年的價格，換成其他重放模型時成功率 39.9% 這個分母會大幅變動。",
+    "ScreenSpot 只評 Web 子集、且是單步 grounding；效果可能主要來自大量（截圖, 元素座標）配對，而非軌跡的多步結構本身，論文沒有消融把軌跡拆成獨立 grounding 樣本來區分。",
+    "可重現性不足：沒有提供任何 SFT 超參數；HF 資料集頁面雖描述有文字與視覺兩類軌跡，但 main 分支檔案樹只有一個 1.81 GB 的 agenttrek_1207.json（標示為文字模態、52,594 個對話輪次），未見截圖、影片或原生 Playwright trace 檔案，論文宣稱的四層軌跡 schema 中後三層無法由公開資料驗證。",
+    "只收判定成功的軌跡、失敗軌跡全丟：資料裡沒有錯誤與修正的樣本，無法支撐 process reward、錯誤恢復或失敗分類的研究，也可能讓模型缺乏從錯誤狀態回復的示範。"
+  ],
+  "framework_role": "T4 的「軌跡合成與資料集」代表作：提供一套可照抄的四層軌跡 schema（任務規格、截圖／錄影、可重放的 Playwright 原生 trace、後處理成觀測＋推理＋動作的訓練格式）與一條低成本合成管線（教學挖掘 → 標準化任務規格 → 強模型引導重放 → LLM 評估器過濾）。它把『教學』當成軌跡的骨架，說明外部知識如何提高合成軌跡的成功率。軌跡在這篇裡唯一的外流是「T4 → 評估器過濾」，性質上接近 T7 的軌跡層級評估，但只用於篩資料、不回饋修正，也不在框架列出的六條邊上；論文宣稱的逐步分析與最早失敗點在提示詞與實驗中都沒有落地，因此對 T4 的失敗歸因與 process reward 子領域幫助有限。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。作者自行在 Hugging Face 釋出資料集 xlangai/AgentTrek 與 Apache-2.0 授權的 AgentTrek-1.0-32B 模型（屬作者本身的開源釋出，不算第三方採納）；模型頁標示沒有任何推論服務商部署。查無官方產品、model card 或官方部落格說明以 AgentTrek 資料訓練商用模型。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/xlang-ai/AgentTrek（可見 WebArena／MiniWob++ 評估腳本與模型連結；教學篩選與 guided replay 的完整合成管線是否公開未能確認）；專案頁 https://agenttrek.github.io",
+    "data": "部分公開：Hugging Face xlangai/AgentTrek（https://huggingface.co/datasets/xlangai/AgentTrek）main 分支只見 agenttrek_1207.json 一檔（約 1.81 GB，標示為文字模態、52,594 個對話輪次）；頁面描述提到視覺軌跡，但未見截圖／影片／原生 trace 檔案。模型 xlangai/AgentTrek-1.0-32B（Apache-2.0）。論文未提供 SFT 超參數。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是「以外部教學引導重放來合成 agent 軌跡」的代表作（ICLR 2025 Spotlight），軌跡 schema、成本模型與管線都能直接借用，屬 T4 合成子領域必讀；但評估器判準寬鬆且只做二元判定，讀的時候要把它當成合成方法而非步驟層級評估的依據。",
+  "related": [
+    "2403.08140",
+    "2410.02907",
+    "2409.15637",
+    "2404.06474",
+    "2307.13854",
+    "2403.07718",
+    "2401.01614",
+    "2401.10935",
+    "2408.00203",
+    "2406.13264"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

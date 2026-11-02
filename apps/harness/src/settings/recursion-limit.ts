@@ -3,7 +3,7 @@
  * [#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
  *
  * **這一顆不裝功能，只講設定**——同 `@nexus/core/tool-result-pruner` 那一列（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
- * 跟同目錄那兩列（`thread-title`、`browser-session`）的差別是**消費點跑的時刻**：那兩個的消費者
+ * 跟同目錄那兩列（`thread-title`、`browser-session`）的差別是**消費點跑的時刻**：那兩個都有消費者
  * （`serve.ts` 的冷讀清單、`BrowserAuth` 的建構子）跑在任何 agent 出生之前，所以值由
  * {@link ./startup.ts | startupSetting} 在起動期讀；**這一個的消費點在組裝期**
  * （`agent-factory.ts` 的 `createDeepAgent(...).withConfig(...)`，跑在 `loadPlugins` 之後），
@@ -107,11 +107,30 @@ export const RECURSION_LIMIT_SERVICE = 'recursionLimit';
  * `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`，所以**預設組裝每一輪是三格，
  * 100 換算成 33 輪而不是 49**。2026-09-03 實測，逐格對照見
  * [`looping-model.ts`](../looping-model.ts) 的檔頭。`beforeAgent` 也是節點，只是每次 invoke 走一次：
- * CLI 與 serve 給了 `--workspace` 時，出貨清單裡的工作區指令那顆每次 invoke 再吃一格，
- * 100 換算成 32 輪（2026-09-18 實測，見 `@nexus/plugin-agent-instructions` 檔頭「代價」）。
+ * 宿主為 `agent/pre-step` 接縫的**每一位** listener 建一顆 `beforeAgent` middleware（#1474），每顆每次 invoke 再吃一格。
+ * 出貨清單不經樹組裝（`createNexusAgent`）時有三位（工作區指令、`/名字` 叫用、時間讀數），2026-10-23 實測（#1574）：每輪三格時
+ * `模型輪數 = floor((上限 - 2 - 顆數) / 3)`，100 換算成 **31 輪**（只有工作區指令那一顆的年代是 32，2026-09-18）。
+ * CLI 與 serve 的樹有圍堵時多一位（切換核准政策的通知，`permission-presets`；沒有圍堵時那一列什麼都不註冊），共四位，
+ * 2026-11-02 實測（#2057）：CLI 是 **31 輪**（`floor((100 - 2 - 4) / 3)`），serve 是 **23 輪**（每輪四格，見下），都跟三位時同值
+ * （`agent-instructions-on-tree.test.ts` 的 D 組）。
+ * `− 2` 是裸組裝的 `− 1` 再加基座 skills 中介層的 `SkillsMiddleware.before_agent`（裸組裝沒有這一顆，2026-10-23 對兩邊的節點清單實測）。
+ * **有沒有給 `--workspace` 都一樣**：沒有工作區時組裝點照樣墊一顆 `StateBackend`，那幾顆 middleware 照建，只是 listener
+ * 找不到東西就什麼都不加（`agent-instructions-on-tree.test.ts` 的 D 組兩邊都量到 31）。dsh 的 pre-step 是一個事件依序跑完，
+ * 不會每位 listener 吃一格；這一格是 LangGraph 基座的代價，併成一顆節點的討論在 [#1917](https://github.com/DemianLi/nexus-agent/issues/1917)。
+ *
+ * **serve 每輪是四格**：它另掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
+ * `@nexus/core` 的 `step-inbox.ts`），那顆 `beforeModel` 同樣每輪一個節點；另一半掛在 `afterAgent`，一次執行只走一次，
+ * 跑掉的迴圈走不到。2026-09-28 實測：出貨清單上 100 換算成 24 輪，給不給 `--workspace` 都一樣（不掛時兩者都是 32）；
+ * 2026-10-23 多了 `/名字` 叫用那一顆 `beforeAgent` 之後是 23 輪（不掛時 31，#1574）；
+ * 裸組裝的 33 對 24 由 `agent-factory.test.ts` 那條「三格變四格」正面量。CLI 不掛，照舊三格。
+ *
+ * **背景子代理的圖也是四格、也帶這個上限**（[#858](https://github.com/DemianLi/nexus-agent/issues/858)）：它是 `createAgent` 直接編的，
+ * 原本沒有這個上限（沒有 `createDeepAgent` 最後那層 `withConfig`，也沒有一次性子代理從 `task` 繼承來的），落在 LangGraph 的預設 25，
+ * 連續 8 次工具呼叫就撞牆（`background-recursion-limit.test.ts`）。`compileSubagent` 現在給它跟 root 同一個值，
+ * 背景子代理一輪的長度才跟一次性的一致。
  *
  * **這個常數沒有跟著動。** 方向是護欄變嚴不是變鬆，而校準的兩端換算過去都還成立（見
- * 上一段）。要拿回原本的預算就自己傳一個大的 `recursionLimit`，或明著關掉提醒器。
+ * 上一段；每輪四格時是 ≈ 114 與 ≈ 16，跑掉的那次照樣攔得住，正常任務照樣很遠）。要拿回原本的預算就自己傳一個大的 `recursionLimit`，或明著關掉提醒器。
  *
  * ## 它現在是 schema 的預設值
  *

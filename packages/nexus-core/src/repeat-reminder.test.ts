@@ -1,14 +1,18 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { SessionLookup } from './registry.js';
 import {
   createRepeatReminder,
+  createStepNoticeMiddleware,
   DEFAULT_REPEAT_REMINDER,
-  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   resolveRepeatReminderSettings,
 } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
+import { sourceKwargs } from './message-source.js';
+import type { MessageSource } from './message-source.js';
+import { SessionLog } from './session-log.js';
 
 /** `beforeModel` 拿出來直接呼叫用的形狀。 */
 type BeforeModel = (state: {
@@ -219,11 +223,14 @@ describe('偵測：連續同工具同參數', () => {
 });
 
 describe('goal 收尾指示這則合成訊息', () => {
-  /** 一則帶記號的收尾指示，形狀同 `@nexus/plugin-goal` 造的那顆。 */
+  /** 一則帶來源的收尾指示，形狀同 `@nexus/plugin-goal` 造的那顆（來源 `plugin`）。 */
   function wrapup(): HumanMessage {
     return new HumanMessage({
       content: '<goal_complete>\n…\n</goal_complete>',
-      additional_kwargs: { [GOAL_WRAPUP_MARKER]: { action: 'complete' } },
+      additional_kwargs: {
+        nexus_goal_wrapup: { action: 'complete' },
+        ...sourceKwargs({ kind: 'plugin', plugin: 'update_goal' }),
+      },
     });
   }
 
@@ -264,6 +271,55 @@ describe('goal 收尾指示這則合成訊息', () => {
     const update = hook({ messages });
     expect((update?.messages ?? []).map((message) => message.text)).toHaveLength(1);
     expect(update?.messages[0]?.text).toContain(GENTLE_HEAD);
+  });
+});
+
+/**
+ * **只有人講話才清零，生產者自己宣告來源**（[#662](https://github.com/DemianLi/nexus-agent/issues/662)）。
+ *
+ * 判準讀的是 `additional_kwargs` 上通用的來源，不是 core 裡一張記號白名單：續行輪次的頭、插件在一輪中間注入的
+ * 訊息，都不必在這裡登記。
+ */
+describe('誰算「人講話」：看來源，不看記號白名單', () => {
+  /** 兩次呼叫、一則 `human`、一次呼叫：總共第 3 次命中門檻，除非 `human` 把鏈清零。 */
+  function hitsAfter(human: HumanMessage): number {
+    const messages: BaseMessage[] = [new HumanMessage('開始')];
+    for (const [index, call] of same(2).entries())
+      messages.push(...turn(call.name, call.args, `s${index}`));
+    messages.push(human);
+    messages.push(...turn('grep', { pattern: 'x' }, 's2'));
+    return (hookOf()({ messages })?.messages ?? []).length;
+  }
+  const withSource = (source: MessageSource) =>
+    new HumanMessage({ content: 'x', additional_kwargs: sourceKwargs(source) });
+
+  it('續行輪次的頭（goal 來源）不清零：兩個續行輪各重複兩次，第 3 次拿到提醒', () => {
+    expect(hitsAfter(withSource({ kind: 'goal', goalId: 'g', revision: 1, round: 2 }))).toBe(1);
+  });
+
+  it('沒有來源的 HumanMessage 是人講的話：清零', () => {
+    expect(hitsAfter(new HumanMessage('等一下'))).toBe(0);
+  });
+
+  it('來源是 user（輪中插話）：清零', () => {
+    expect(hitsAfter(withSource({ kind: 'user' }))).toBe(0);
+  });
+
+  it('沒見過的 kind 也不清零——新的生產者不必改提醒器', () => {
+    expect(hitsAfter(withSource({ kind: 'some-future-producer' }))).toBe(1);
+    for (const kind of ['subagent-settled', 'agent-message', 'session-reference', 'plugin']) {
+      expect(hitsAfter(withSource({ kind }))).toBe(1);
+    }
+  });
+
+  it('來源形狀不對（沒有字串 kind）當作沒有來源：清零', () => {
+    for (const bad of [null, 'goal', 3, { kind: 3 }, {}]) {
+      const message = new HumanMessage({
+        content: 'x',
+        additional_kwargs: { nexus_source: bad },
+      });
+      expect(hitsAfter(message)).toBe(0);
+    }
   });
 });
 
@@ -314,5 +370,70 @@ describe('參數預覽的上限', () => {
   it('沒超過上限就原樣，不會多一條尾巴', () => {
     const calls = Array.from({ length: 5 }, () => ({ name: 'grep', args: { pattern: 'x' } }));
     expect(conversation(hookOf(), calls)[4]?.[0]).not.toContain('more chars');
+  });
+});
+
+/**
+ * [#1665](https://github.com/DemianLi/nexus-agent/issues/1665)：提醒與通知都進模型歷史，日誌那一關拒收就照 dsh 讓這一步失敗
+ * （`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`），不吞。提醒的內容是工具名與截過的參數預覽，日誌那一關拒不了它的值，
+ * 所以這幾格用 spy 造拒收。
+ */
+describe('記不進去：這一步失敗', () => {
+  type Hook = (
+    state: { messages: readonly BaseMessage[] },
+    runtime?: { readonly configurable?: unknown },
+  ) => { messages: BaseMessage[] } | undefined;
+
+  const sessionsOf = (log: SessionLog) => ({
+    forCall: (): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log }),
+  });
+
+  /** 讓 `user/message` 寫不進去，其餘照真的寫。 */
+  function rejectUserMessages(log: SessionLog, error: Error): void {
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((type: never, data: never, options: never) => {
+      if (type === 'user/message') throw error;
+      return real(type, data, options);
+    }) as typeof log.append);
+  }
+
+  /** 叫三次同一顆工具之後的訊息串：第三次之後一定有一則提醒。 */
+  const repeated = (): BaseMessage[] => [
+    new HumanMessage('開始'),
+    ...turn('grep', { pattern: 'x' }, 'c0'),
+    ...turn('grep', { pattern: 'x' }, 'c1'),
+    ...turn('grep', { pattern: 'x' }, 'c2'),
+  ];
+
+  const reminderHook = (log: SessionLog): Hook =>
+    (
+      createRepeatReminder(resolveRepeatReminderSettings(), sessionsOf(log)) as unknown as {
+        beforeModel: Hook;
+      }
+    ).beforeModel;
+
+  it('提醒寫不進去：原錯往外拋', () => {
+    const log = new SessionLog('r');
+    const boom = new Error('寫不進去');
+    rejectUserMessages(log, boom);
+    expect(() => reminderHook(log)({ messages: repeated() }, { configurable: {} })).toThrow(boom);
+  });
+
+  it('反例：寫得進去就照常記、照常送', () => {
+    const log = new SessionLog('r');
+    const update = reminderHook(log)({ messages: repeated() }, { configurable: {} });
+    expect(update?.messages).toHaveLength(1);
+    expect(log.events.map((event) => event.type)).toEqual(['user/message']);
+  });
+
+  it('通知來源拋的錯不被吞：原樣往外拋', () => {
+    const log = new SessionLog('n');
+    const boom = new Error('寫不進去');
+    const hook = (
+      createStepNoticeMiddleware(() => {
+        throw boom;
+      }, sessionsOf(log)) as unknown as { beforeModel: Hook }
+    ).beforeModel;
+    expect(() => hook({ messages: [] }, { configurable: {} })).toThrow(boom);
   });
 });

@@ -1,20 +1,30 @@
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 import type { ConversationState, Event } from './index.js';
 import {
   answerResponse,
   appendAnswers,
   appendDecision,
-  appendHumanTurn,
   appendQuestionCancel,
+  appendQuestionDecline,
   cancelResponse,
+  declineResponse,
   emptyConversation,
   isApprovalPending,
+  isBackgroundSubagentMeta,
+  prependEntries,
   reduceAll,
   reduceConversation,
+  UNFINISHED_TOOL_CODE,
   UNFINISHED_TOOL_TEXT,
   uniformDecisions,
 } from './conversation.js';
-import type { PendingApproval } from './conversation.js';
+import type { ConversationEntry, PendingApproval } from './conversation.js';
+import { COMPACTION } from './compaction.js';
+import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
+import { WORKSPACE_CHANGES } from './workspace-changes.js';
 
 /**
  * 取第 n 顆，並斷言它是核准請求。
@@ -75,13 +85,6 @@ function aiEntries(state: ConversationState) {
 }
 
 describe('折疊器', () => {
-  it('使用者那句話由送出端補，因為線上不會回聲它', () => {
-    const state = appendHumanTurn(emptyConversation(), '記一筆。');
-    expect(state.entries).toEqual([{ kind: 'human', id: 'human-0', text: '記一筆。' }]);
-    // 送出去的那一刻就算 running，不必等第一顆 frame 回來畫面才動。
-    expect(state.status).toBe('running');
-  });
-
   it('重連之後接上的巢狀訊息標成未歸屬——鑰匙已經過去了', () => {
     seq = 0;
     // 這條線沒有重播也沒有歷史重抓（決策 6），所以 `task` 那顆 tools frame 收不到了。
@@ -104,6 +107,35 @@ describe('折疊器', () => {
     const twice = reduceAll(once, frames);
     expect(aiEntries(twice)).toEqual(aiEntries(once));
     expect(twice.entries.length).toBe(1);
+  });
+
+  it('同一則回覆的第二個開頭不再長一格（#953：歷史已有它、下行又補送一次）', () => {
+    seq = 0;
+    // 歷史那一側：`run_id` 是 `history-<seq>`、`id` 是日誌記的訊息 id；補送那一側：`run_id` 是即時的 uuid、`id` 同上。
+    const history: Event[] = [
+      frame('messages', [], {
+        event: 'message-start',
+        role: 'ai',
+        run_id: 'history-7',
+        id: 'run-X',
+      }),
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '講完了' },
+        run_id: 'history-7',
+      }),
+      frame('messages', [], { event: 'message-finish', reason: 'stop', run_id: 'history-7' }),
+    ];
+    const replayed = text('X', [], '講完了');
+    const state = reduceAll(reduceAll(emptyConversation(), history), replayed);
+    expect(aiEntries(state)).toEqual([{ text: '講完了', attribution: { kind: 'root' } }]);
+  });
+
+  it('不同訊息 id 的兩則照常各長一格', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [...text('a', [], '一'), ...text('b', [], '二')]);
+    expect(aiEntries(state).map((entry) => entry?.text)).toEqual(['一', '二']);
   });
 
   it('seq 退回去的 frame 一律丟掉', () => {
@@ -239,6 +271,52 @@ describe('折疊器', () => {
     // 續行回到執行中，而且中斷那段留下的東西要清乾淨。
     expect(entry.status).toBe('running');
     expect(entry.error).toBeUndefined();
+  });
+
+  it('`tool-finished` 的 meta 原樣進條目；同一個 id 再開一次時跟 `text` 一起清掉，失敗的不留（#617）', () => {
+    seq = 0;
+    const meta = { shape: 'paths', paths: ['/a.md'], truncated: false, total: 1 };
+    const started = {
+      event: 'tool-started',
+      tool_call_id: 'call_1_0',
+      tool_name: 'glob',
+      input: '{}',
+    };
+    // frame 照送達順序建：`seq` 在建的時候發，倒著建的那顆會被當成舊幀丟掉。
+    const done = reduceAll(emptyConversation(), [
+      frame('tools', ['tools:a'], started),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'call_1_0',
+        message: '/a.md',
+        meta,
+      }),
+    ]);
+    const entry = done.entries[0];
+    if (entry?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(entry.meta).toEqual(meta);
+
+    const restarted = reduceAll(done, [frame('tools', ['tools:a'], started)]);
+    const again = restarted.entries[0];
+    if (again?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(again.status).toBe('running');
+    expect(again.text).toBeUndefined();
+    expect(again.meta).toBeUndefined();
+
+    // 同一個 id 的更正幀把它改判成失敗：meta 跟著拿掉，不留成功那一顆的。
+    const failed = reduceAll(done, [
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'call_1_0',
+        failed: true,
+        message: '被擋下',
+        meta,
+      }),
+    ]);
+    const last = failed.entries[0];
+    if (last?.kind !== 'tool') throw new Error('沒有工具條目');
+    expect(last.status).toBe('failed');
+    expect(last.meta).toBeUndefined();
   });
 
   it('**收尾了不等於成功了**：帶 `failed` 的 `tool-finished` 是失敗不是完成', () => {
@@ -402,6 +480,103 @@ describe('按了停止（#276）', () => {
   });
 });
 
+/**
+ * 停下的原因（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)）：pump 在 `aborted` 旁邊補 `cause`，即時是 `failed`
+ * （切斷的那一次）或 `completed`（停在核准點時收回合成的那顆），歷史重放是 `failed`。形狀照 `@nexus/harness` 的
+ * `thread-pump.ts` 與 `conversation-history.ts`（`21aedf16`）。
+ */
+describe('停下的原因（#1624）', () => {
+  const TIMEOUT = { kind: 'hook', reason: 'turn-timeout' } as const;
+  const USER = { kind: 'user' } as const;
+  const streamingThenStop = (closing: Record<string, unknown>) =>
+    reduceAll(emptyConversation(), [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...text('a', ['model_request:1'], '甲乙').slice(0, -1),
+      frame('lifecycle', [], { graph_name: 'root', aborted: true, ...closing }),
+    ]);
+
+  it.each([
+    ['時鐘到點', TIMEOUT],
+    ['人按了停止', USER],
+  ] as const)('%s：狀態與那則被打斷的回覆都記下原因', (_name, cause) => {
+    const state = streamingThenStop({ event: 'failed', cause });
+    expect(state.status).toBe('stopped');
+    expect(state.stopCause).toEqual(cause);
+    expect(state.entries).toMatchObject([{ kind: 'ai', stopped: true, stopCause: cause }]);
+  });
+
+  it('停在核准點時收回（`completed` 那顆）也帶原因', () => {
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', [], {
+        interrupt_id: 'i1',
+        payload: {
+          actionRequests: [{ name: 'danger', args: {} }],
+          reviewConfigs: [{ actionName: 'danger', allowedDecisions: ['approve', 'reject'] }],
+        },
+      }),
+      frame('lifecycle', [], {
+        event: 'completed',
+        graph_name: 'root',
+        aborted: true,
+        cause: TIMEOUT,
+      }),
+    ]);
+    expect(state.status).toBe('stopped');
+    expect(state.stopCause).toEqual(TIMEOUT);
+  });
+
+  it('舊 server 沒帶原因：兩格都沒有，跟今天一樣', () => {
+    const state = streamingThenStop({ event: 'failed' });
+    expect(state.status).toBe('stopped');
+    expect(state.stopCause).toBeUndefined();
+    expect(state.entries[0]).toMatchObject({ stopped: true });
+    expect(state.entries[0]).not.toHaveProperty('stopCause');
+  });
+
+  it('下一輪開跑就清掉；上一則回覆上的原因留著（那一輪就是這樣停的）', () => {
+    const stopped = streamingThenStop({ event: 'failed', cause: TIMEOUT });
+    const next = reduceAll(stopped, [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    ]);
+    expect(next.status).toBe('running');
+    expect(next.stopCause).toBeUndefined();
+    expect(next.entries[0]).toMatchObject({ stopCause: TIMEOUT });
+  });
+
+  it('子圖那顆收尾帶的原因不算這一輪的', () => {
+    const state = reduceAll(emptyConversation(), [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      frame('lifecycle', ['tools:a'], {
+        event: 'failed',
+        graph_name: 'worker',
+        aborted: true,
+        cause: TIMEOUT,
+      }),
+    ]);
+    expect(state.status).toBe('running');
+    expect(state.stopCause).toBeUndefined();
+  });
+
+  it('與 `@nexus/core` 的 `TurnAbortCause` 同形：core 加了一種，這裡要跟著加', () => {
+    const union = (source: string, name: string) => {
+      const match = new RegExp(`export type ${name} =([^;]*);`).exec(source);
+      if (match === null) throw new Error(`找不到 ${name}`);
+      return match[1]!.replace(/\s+/g, ' ').trim();
+    };
+    const core = readFileSync(
+      new URL('../../nexus-core/src/session-log.ts', import.meta.url),
+      'utf8',
+    );
+    const wire = readFileSync(new URL('./conversation.ts', import.meta.url), 'utf8');
+    expect(union(wire, 'TurnStopCause')).toBe(union(core, 'TurnAbortCause'));
+  });
+});
+
+/**
+ * 還沒有結果的卡收成失敗時也補碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：照 dsh 合成的
+ * `{ code: 'interrupted' }`（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:217`），停止、失敗、收尾三條
+ * 路都補——dsh 也不分關閉的原因。所以每一列多比一格碼。
+ */
 describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Interrupted`）', () => {
   const open = (id: string, namespace: string[] = ['tools:a']) =>
     frame('tools', namespace, {
@@ -412,8 +587,12 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
     });
   const cards = (state: ReturnType<typeof emptyConversation>) =>
     state.entries.flatMap((entry) =>
-      entry.kind === 'tool' ? [[entry.callId, entry.status, entry.error]] : [],
+      entry.kind === 'tool' ? [[entry.callId, entry.status, entry.error, entry.errorCode]] : [],
     );
+
+  it('碼的值照 dsh', () => {
+    expect(UNFINISHED_TOOL_CODE).toBe('interrupted');
+  });
 
   it('停止：執行中與掛著的收成失敗，已經有結果的不動', () => {
     const state = reduceAll(emptyConversation(), [
@@ -432,10 +611,10 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
     ]);
     expect(cards(state)).toEqual([
-      ['running', 'failed', UNFINISHED_TOOL_TEXT],
-      ['suspended', 'failed', UNFINISHED_TOOL_TEXT],
-      ['done', 'done', undefined],
-      ['failed', 'failed', '被擋下'],
+      ['running', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+      ['suspended', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+      ['done', 'done', undefined, undefined],
+      ['failed', 'failed', '被擋下', undefined],
     ]);
   });
 
@@ -444,7 +623,9 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       open('running'),
       frame('lifecycle', [], { event: 'failed', graph_name: 'root', error: '供應商掛了' }),
     ]);
-    expect(cards(state)).toEqual([['running', 'failed', UNFINISHED_TOOL_TEXT]]);
+    expect(cards(state)).toEqual([
+      ['running', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+    ]);
   });
 
   it('正常收尾也收：dsh 不分關閉的原因，一輪關了還沒結果就是沒有結果', () => {
@@ -453,7 +634,9 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
     ]);
     expect(state.status).toBe('idle');
-    expect(cards(state)).toEqual([['running', 'failed', UNFINISHED_TOOL_TEXT]]);
+    expect(cards(state)).toEqual([
+      ['running', 'failed', UNFINISHED_TOOL_TEXT, UNFINISHED_TOOL_CODE],
+    ]);
   });
 
   it('對照：停在核准點那顆 `completed` 不收——那一輪還沒關，卡還在等人', () => {
@@ -469,7 +652,7 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
     ]);
     expect(state.status).toBe('awaiting-input');
-    expect(cards(state)).toEqual([['running', 'running', undefined]]);
+    expect(cards(state)).toEqual([['running', 'running', undefined, undefined]]);
   });
 
   it('子代理那一層的收尾不算：只有 root 那顆在講「這一輪」', () => {
@@ -477,7 +660,7 @@ describe('一輪收掉時還沒有結果的工具卡（#297，照 dsh 的 `Inter
       open('running'),
       frame('lifecycle', ['tools:a'], { event: 'failed', graph_name: 'worker', aborted: true }),
     ]);
-    expect(cards(state)).toEqual([['running', 'running', undefined]]);
+    expect(cards(state)).toEqual([['running', 'running', undefined, undefined]]);
   });
 });
 
@@ -486,6 +669,24 @@ describe('判別式', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [inputRequested(['alpha'])]);
     expect(approvalAt(state, 0).actions.map((action) => action.name)).toEqual(['alpha']);
+  });
+
+  /**
+   * **缺席即核准只對基座 HITL 的形狀成立**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。
+   * `@langchain/mcp-adapters` 2.0.0 的 elicitation 中斷酬載沒有 `kind`、只有 `type: 'mcp_elicitation'`；只看 `kind` 缺席就當核准的話，
+   * 打開 `elicitation` 之後它會被畫成一張空的核准卡，按鈕送出 `{decisions:[…]}`，而對面等的是 `{responses:…}`——誤放行，不會有人報錯。
+   */
+  it('`kind` 缺席、也沒有 `actionRequests`（例如 `type: "mcp_elicitation"`）：明著壞掉，不畫核准卡', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', ['tools:a'], {
+        interrupt_id: 'e-1',
+        payload: { type: 'mcp_elicitation', server: 'srv', tool: 'ask', requests: {} },
+      }),
+    ]);
+    expect(state.status).toBe('failed');
+    expect(state.error).toContain('actionRequests');
+    expect(state.pendings).toEqual([]);
   });
 
   it('`kind: "question"` 折成問答，欄位一格不掉', () => {
@@ -507,6 +708,27 @@ describe('判別式', () => {
       ],
     });
     expect(state.status).toBe('awaiting-input');
+  });
+
+  it('計劃審核那一題（#652）：`detail` 與 `intent` 原樣帶到卡上', () => {
+    seq = 0;
+    const review = {
+      id: 'plan-review',
+      header: '計劃審核',
+      question: '同意這份計劃並離開計劃模式？',
+      detail: '# 計劃\n\n先看再改。',
+      options: [{ label: '同意' }, { label: '繼續規劃' }],
+      intent: { kind: 'plan-review', approve: '同意', callId: 'call-1' },
+    } as const;
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', ['tools:call-1'], {
+        interrupt_id: 'q-plan',
+        payload: { kind: 'question', questions: [review] },
+      }),
+    ]);
+    expect(state.pendings).toEqual([
+      { kind: 'question', interruptId: 'q-plan', namespace: ['tools:call-1'], questions: [review] },
+    ]);
   });
 
   it('**認不得的 `kind` 明著壞掉，不會靜靜變成一張核准卡**', () => {
@@ -565,6 +787,47 @@ describe('問答的回答', () => {
       { kind: 'answer', id: 'answer-q-1', answers: [], cancelled: true },
     ]);
     expect(cancelResponse()).toEqual({ cancelled: true });
+  });
+
+  it('MCP 反問（#1098）：origin 原樣帶到待答卡上；沒有就省略這個 key（模型自己問的照舊）', () => {
+    seq = 0;
+    const origin = {
+      kind: 'mcp-elicitation',
+      server: 'files',
+      tool: 'delete_all',
+      arguments: { path: '/tmp/x' },
+    };
+    const asked = reduceAll(emptyConversation(), [
+      frame('input.requested', ['tools:a'], {
+        interrupt_id: 'q-mcp',
+        payload: { kind: 'question', questions: [{ id: 'ok', question: '確定嗎？' }], origin },
+      }),
+      questionRequested('q-plain'),
+    ]);
+    const [mcp, plain] = asked.pendings;
+    expect(mcp?.kind === 'question' && mcp.origin).toEqual(origin);
+    expect(plain !== undefined && 'origin' in plain).toBe(false);
+  });
+
+  it('**拒絕、放棄、接受是三種不同的紀錄與回覆**（#1098）：拒絕不是每題跳過，也不是放棄', () => {
+    seq = 0;
+    const asked = reduceAll(emptyConversation(), [questionRequested()]);
+    const declined = appendQuestionDecline(asked, 'q-1');
+    expect(declined.pendings).toEqual([]);
+    expect(declined.status).toBe('running');
+    expect(declined.entries).toEqual([
+      { kind: 'answer', id: 'answer-q-1', answers: [], declined: true },
+    ]);
+    expect(declineResponse()).toEqual({ declined: true });
+    // 與放棄、接受互不相同：舊 server 收到 `declined` 之外的形狀照常運作。
+    expect(declineResponse()).not.toEqual(cancelResponse());
+    expect(declineResponse()).not.toEqual(answerResponse([]));
+    // 送錯形狀時原樣回傳：核准那顆不收「拒絕整組問題」。
+    const approval = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+    ]);
+    expect(appendQuestionDecline(approval, 'int-1')).toEqual(approval);
+    expect(appendQuestionDecline(asked, 'nope')).toEqual(asked);
   });
 
   it('兩條路都認人：核准那顆不收答案，問答那顆不收決定', () => {
@@ -695,5 +958,706 @@ describe('核准請求', () => {
     ]);
     expect(state.status).toBe('awaiting-input');
     expect(state.pendings).toHaveLength(1);
+  });
+});
+
+/**
+ * 撞到輸出上限（#433）：pump 在 root 收尾的 `completed` 上補 `maxTokens`，折疊器標在**這一輪最後一則
+ * root 回覆**上。子代理的、上一輪的都不標。
+ */
+describe('撞到輸出上限', () => {
+  function twoTurns(closing: Record<string, unknown>) {
+    return reduceAll(emptyConversation(), [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...text('a', ['model_request:1'], '第一輪'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...text('b', ['model_request:2'], '寫到'),
+      ...text('c', ['tools:t', 'model_request:3'], '子代理'),
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root', ...closing }),
+    ]);
+  }
+
+  function marks(state: ConversationState) {
+    return state.entries.flatMap((entry) =>
+      entry.kind === 'ai' ? [[entry.text, entry.maxTokens ?? false]] : [],
+    );
+  }
+
+  it('標在這一輪最後一則 root 回覆上；狀態照常回到 idle', () => {
+    const state = twoTurns({ maxTokens: true });
+    expect(state.status).toBe('idle');
+    expect(marks(state)).toEqual([
+      ['第一輪', false],
+      ['寫到', true],
+      ['子代理', false],
+    ]);
+  });
+
+  it('對照：沒帶 maxTokens 一則都不標', () => {
+    expect(marks(twoTurns({}))).toEqual([
+      ['第一輪', false],
+      ['寫到', false],
+      ['子代理', false],
+    ]);
+  });
+});
+
+/**
+ * 被準入閘門擋下（封存的會話，#633）：pump 在 root 收尾的 `completed` 上補 `blocked`，折疊器把這一輪的人話標上 `blocked`。
+ * 歷史重播補的是同一顆 frame，所以走同一條路。
+ */
+describe('被準入閘門擋下', () => {
+  const human = (id: string, text: string) => ({ kind: 'human' as const, id, text });
+  const closing = (extra: Record<string, unknown> = {}) =>
+    frame('lifecycle', [], { event: 'completed', graph_name: 'root', ...extra });
+
+  it('輪頭擋（沒有 running，圖沒跑）：人話標 blocked，狀態回 idle、沒有錯誤', () => {
+    const state = reduceAll({ ...emptyConversation(), entries: [human('h', '封存之後的話')] }, [
+      closing({ blocked: true }),
+    ]);
+    expect(state.status).toBe('idle');
+    expect(state.error).toBeUndefined();
+    expect(state.entries).toEqual([{ ...human('h', '封存之後的話'), blocked: true }]);
+  });
+
+  it('輪中擋之前這一輪沒做事（人話畫在 running 之前，落在 turnStart 之前）：照樣標', () => {
+    const state = reduceAll({ ...emptyConversation(), entries: [human('h', '話')] }, [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      closing({ blocked: true }),
+    ]);
+    expect(state.entries).toEqual([{ ...human('h', '話'), blocked: true }]);
+  });
+
+  it('這一輪已經有回覆：話是送出去了的，不標', () => {
+    const state = reduceAll({ ...emptyConversation(), entries: [human('h', '話')] }, [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...text('a', ['model_request:1'], '做了一半'),
+      closing({ blocked: true }),
+    ]);
+    expect(state.entries.some((entry) => entry.kind === 'human' && entry.blocked)).toBe(false);
+    expect(state.status).toBe('idle');
+  });
+
+  it('人話後面接著結算通知（被擋下的是通知喚醒的那一輪）：那句人話不標', () => {
+    const notice = {
+      kind: 'notice' as const,
+      id: 'n',
+      source: 'subagent-settled' as const,
+      summary: '背景子代理已完成',
+    };
+    const state = reduceAll(
+      { ...emptyConversation(), entries: [human('h', '早就送出去的話'), notice] },
+      [closing({ blocked: true })],
+    );
+    expect(state.entries.some((entry) => entry.kind === 'human' && entry.blocked)).toBe(false);
+  });
+
+  it('只標最後一則人話：前面的輪不動；blocked 之後再正常送一句，後一句不被標', () => {
+    const afterBlocked = reduceAll(
+      { ...emptyConversation(), entries: [human('h1', '正常的'), human('h2', '被擋的')] },
+      [closing({ blocked: true })],
+    );
+    expect(afterBlocked.entries.map((entry) => entry.kind === 'human' && entry.blocked)).toEqual([
+      undefined,
+      true,
+    ]);
+    const next = reduceAll(
+      { ...afterBlocked, entries: [...afterBlocked.entries, human('h3', '取消封存之後')] },
+      [
+        frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+        ...text('b', ['model_request:2'], '收到'),
+        closing(),
+      ],
+    );
+    expect(
+      next.entries.flatMap((entry) => (entry.kind === 'human' ? [[entry.id, entry.blocked]] : [])),
+    ).toEqual([
+      ['h1', undefined],
+      ['h2', true],
+      ['h3', undefined],
+    ]);
+  });
+
+  it('對照：沒帶 blocked 一則都不標', () => {
+    const state = reduceAll({ ...emptyConversation(), entries: [human('h', '話')] }, [closing()]);
+    expect(state.entries).toEqual([human('h', '話')]);
+  });
+});
+
+describe('背景子代理的歸屬（#832）', () => {
+  const key = { kind: 'background-subagent', runId: 'bg-abc123def456', subagentType: 'worker' };
+  const dispatch = (callId: string) =>
+    frame('tools', [], {
+      event: 'tool-started',
+      tool_call_id: callId,
+      tool_name: 'subagent',
+      input: JSON.stringify({ description: '幹活', subagent_type: 'worker' }),
+    });
+  const settle = (callId: string, meta?: unknown) =>
+    frame('tools', [], {
+      event: 'tool-finished',
+      tool_call_id: callId,
+      message: '子代理已在背景啟動',
+      ...(meta === undefined ? {} : { meta }),
+    });
+  const innerStarted = (callId: string) =>
+    frame('tools', ['bg-abc123def456', 'tools'], {
+      event: 'tool-started',
+      tool_call_id: callId,
+      tool_name: 'look',
+      input: '{}',
+    });
+  const innerFinished = (callId: string) =>
+    frame('tools', ['bg-abc123def456', 'tools'], {
+      event: 'tool-finished',
+      tool_call_id: callId,
+      message: '看過了',
+    });
+
+  const attributionOf = (state: ConversationState, callId: string) => {
+    const entry = state.entries.find((candidate) => candidate.id === `tool-${callId}`);
+    if (entry?.kind !== 'tool') throw new Error(`沒有 ${callId} 這顆工具`);
+    return entry.attribution;
+  };
+
+  it('派出去的呼叫先收尾：背景那一輪之後的卡直接歸給那個子代理', () => {
+    const state = reduceAll(emptyConversation(), [
+      dispatch('root-1'),
+      settle('root-1', key),
+      innerStarted('bg-1'),
+      innerFinished('bg-1'),
+    ]);
+    expect(attributionOf(state, 'bg-1')).toEqual({
+      kind: 'subagent',
+      name: 'worker',
+      callId: 'root-1',
+    });
+    expect(state.subagents['bg-abc123def456']).toEqual({ name: 'worker', callId: 'root-1' });
+  });
+
+  it('背景的卡先到：先是未歸屬，鑰匙一到就追溯過去（不取決於誰先到）', () => {
+    const early = reduceAll(emptyConversation(), [dispatch('root-1'), innerStarted('bg-1')]);
+    expect(attributionOf(early, 'bg-1').kind).toBe('unattributed');
+    const settled = reduceAll(early, [innerFinished('bg-1'), settle('root-1', key)]);
+    expect(attributionOf(settled, 'bg-1')).toEqual({
+      kind: 'subagent',
+      name: 'worker',
+      callId: 'root-1',
+    });
+  });
+
+  it('被選的模型與推理等級（#889）是選填的字串：有或沒有都認得，型別不對就整顆不認', () => {
+    expect(isBackgroundSubagentMeta(key)).toBe(true);
+    expect(isBackgroundSubagentMeta({ ...key, model: 'cheap' })).toBe(true);
+    expect(isBackgroundSubagentMeta({ ...key, model: 'cheap', reasoningEffort: 'off' })).toBe(true);
+    expect(isBackgroundSubagentMeta({ ...key, model: 1 })).toBe(false);
+    expect(isBackgroundSubagentMeta({ ...key, reasoningEffort: null })).toBe(false);
+  });
+
+  it('認得不出來的 meta、失敗的呼叫、不是派子代理的工具：不歸屬', () => {
+    for (const meta of [
+      undefined,
+      { kind: 'background-subagent', runId: '', subagentType: 'worker' },
+      { kind: 'background-subagent', runId: 'bg-abc123def456' },
+      { kind: 'something-else', runId: 'bg-abc123def456', subagentType: 'worker' },
+      { ...key, model: 42 },
+      { ...key, reasoningEffort: { level: 'off' } },
+      'bg-abc123def456',
+    ]) {
+      const state = reduceAll(emptyConversation(), [
+        dispatch('root-1'),
+        settle('root-1', meta),
+        innerStarted('bg-1'),
+      ]);
+      expect(attributionOf(state, 'bg-1').kind).toBe('unattributed');
+    }
+    const failed = reduceAll(emptyConversation(), [
+      dispatch('root-1'),
+      frame('tools', [], {
+        event: 'tool-finished',
+        tool_call_id: 'root-1',
+        failed: true,
+        message: '沒有這個子代理',
+        meta: key,
+      }),
+      innerStarted('bg-1'),
+    ]);
+    expect(attributionOf(failed, 'bg-1').kind).toBe('unattributed');
+    const otherTool = reduceAll(emptyConversation(), [
+      frame('tools', [], {
+        event: 'tool-started',
+        tool_call_id: 'x',
+        tool_name: 'look',
+        input: '{}',
+      }),
+      frame('tools', [], { event: 'tool-finished', tool_call_id: 'x', meta: key }),
+      innerStarted('bg-1'),
+    ]);
+    expect(attributionOf(otherTool, 'bg-1').kind).toBe('unattributed');
+  });
+
+  it('前景：subagent 內部派給 task（同一個 tool_call_id），靠 task 的 tool-started 歸屬，鑰匙用不到', () => {
+    const state = reduceAll(emptyConversation(), [
+      dispatch('root-1'),
+      frame('tools', ['tools:abc'], {
+        event: 'tool-started',
+        tool_call_id: 'root-1',
+        tool_name: 'task',
+        input: JSON.stringify({ description: '幹活', subagent_type: 'worker' }),
+      }),
+      frame('tools', ['tools:abc', 'tools:def'], {
+        event: 'tool-started',
+        tool_call_id: 'fg-1',
+        tool_name: 'look',
+        input: '{}',
+      }),
+    ]);
+    expect(attributionOf(state, 'fg-1')).toEqual({
+      kind: 'subagent',
+      name: 'worker',
+      callId: 'root-1',
+    });
+    // 同一個 id 來第二次是續行：root 那張卡還是 subagent、歸 root，不被內層的 task 改寫。
+    const root = state.entries.find((entry) => entry.id === 'tool-root-1');
+    expect(root).toMatchObject({ kind: 'tool', name: 'subagent', attribution: { kind: 'root' } });
+  });
+});
+
+describe('`custom` frame 的分派（#685）', () => {
+  // 分派查的是名字→折疊那張表。**只認表自己的鍵**：`Object.prototype` 上的名字（`toString`、`constructor`
+  // ⋯⋯）也是字串，用 `in` 或直接索引查的話會拿到原型上的函式、把它當折疊叫下去，state 被換成別的東西。
+  it.each(['toString', 'constructor', 'hasOwnProperty', '__proto__', 'valueOf'])(
+    '原型上的名字 %s 也略過，state 原封不動',
+    (name) => {
+      const before = emptyConversation();
+      const after = reduceConversation(before, frame('custom', [], { name, payload: {} }));
+      expect(after.entries).toBe(before.entries);
+      expect(after).toEqual({ ...before, lastSeq: after.lastSeq });
+    },
+  );
+});
+
+/**
+ * **錯誤碼跨線**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：frame 有碼時 `ToolEntry.errorCode`
+ * 帶碼，沒碼時是 `undefined`。判斷「這張卡是怎麼失敗的」讀這一格，不讀紅字。
+ */
+describe('工具卡的錯誤碼（#667）', () => {
+  const open = (id: string) =>
+    frame('tools', ['tools:a'], {
+      event: 'tool-started',
+      tool_call_id: id,
+      tool_name: id,
+      input: '{}',
+    });
+  const tool = (state: ConversationState) => {
+    const entry = state.entries.find((candidate) => candidate.kind === 'tool');
+    if (entry?.kind !== 'tool') throw new Error('一張工具卡都沒有');
+    return entry;
+  };
+
+  it('失敗的 `tool-finished` 帶碼：卡上有碼，紅字照舊是文字', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        failed: true,
+        message: '這次呼叫在開始之前就被中止了',
+        code: 'ABORTED_BEFORE_DISPATCH',
+      }),
+    ]);
+    expect(tool(state)).toMatchObject({
+      status: 'failed',
+      error: '這次呼叫在開始之前就被中止了',
+      errorCode: 'ABORTED_BEFORE_DISPATCH',
+    });
+  });
+
+  it('沒帶碼就是 `undefined`；成功的就算帶了也不收', () => {
+    const failed = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        failed: true,
+        message: '壞了',
+      }),
+    ]);
+    expect(tool(failed).errorCode).toBeUndefined();
+    const done = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        message: '好了',
+        code: 'X',
+      }),
+    ]);
+    expect(tool(done)).toMatchObject({ status: 'done' });
+    expect(tool(done).errorCode).toBeUndefined();
+  });
+
+  it('更正幀照這一顆換掉：先沒碼、後帶碼，留下後面那個', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        failed: true,
+        message: '被擋下',
+      }),
+      frame('tools', ['tools:a'], {
+        event: 'tool-finished',
+        tool_call_id: 'c1',
+        failed: true,
+        message: '被擋下',
+        code: 'FS_SANDBOX_DENIED',
+      }),
+    ]);
+    expect(tool(state).errorCode).toBe('FS_SANDBOX_DENIED');
+  });
+
+  it('`tool-error` 帶了 `code`（協定 `ToolErrorData` 本來就有）也照抄', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-error',
+        tool_call_id: 'c1',
+        message: '炸了',
+        code: 'TOOL_TIMEOUT',
+      }),
+    ]);
+    expect(tool(state)).toMatchObject({
+      status: 'failed',
+      error: '炸了',
+      errorCode: 'TOOL_TIMEOUT',
+    });
+  });
+
+  it('同一次呼叫續行（第二顆 `tool-started`）時碼跟紅字一起清掉', () => {
+    const state = reduceAll(emptyConversation(), [
+      open('c1'),
+      frame('tools', ['tools:a'], {
+        event: 'tool-error',
+        tool_call_id: 'c1',
+        message: '炸了',
+        code: 'TOOL_TIMEOUT',
+      }),
+      open('c1'),
+    ]);
+    expect(tool(state)).toMatchObject({ status: 'running' });
+    expect(tool(state).errorCode).toBeUndefined();
+  });
+});
+
+/**
+ * 條目的時刻（[#1030](https://github.com/DemianLi/nexus-agent/issues/1030)）：取自 frame 的 `params.timestamp`。
+ *
+ * 這裡造的是兩條路各自會送的 frame 形狀；真組裝下兩條路的時刻差多少在 `@nexus/harness` 的
+ * `wire-entry-timestamps.test.ts` 量。
+ */
+describe('時刻（#1030）', () => {
+  let at = 0;
+  function timed(
+    method: string,
+    data: unknown,
+    timestamp: unknown,
+    namespace: readonly string[] = [],
+  ): Event {
+    const current = at++;
+    return {
+      type: 'event',
+      seq: current,
+      event_id: `time:${current}`,
+      method,
+      params: { namespace, timestamp, data },
+    } as Event;
+  }
+  const custom = (name: string, payload: unknown, timestamp: number) =>
+    timed('custom', { name, payload }, timestamp);
+  const started = (callId: string, timestamp: number) =>
+    timed(
+      'tools',
+      { event: 'tool-started', tool_call_id: callId, tool_name: 'echo', input: '{}' },
+      timestamp,
+      ['tools:a'],
+    );
+  const finished = (callId: string, timestamp: number, extra: object = {}) =>
+    timed(
+      'tools',
+      { event: 'tool-finished', tool_call_id: callId, message: 'ok', ...extra },
+      timestamp,
+      ['tools:a'],
+    );
+  const lifecycle = (event: string, timestamp: number, extra: object = {}) =>
+    timed('lifecycle', { event, graph_name: 'root', ...extra }, timestamp);
+  const only = (state: ConversationState, id: string): ConversationEntry => {
+    const found = state.entries.find((entry) => entry.id === id);
+    if (found === undefined) throw new Error(`沒有 ${id}`);
+    return found;
+  };
+  /** 決定與答案沒有這一格（型別上也沒有），所以用 `in` 取。 */
+  const startedAtOf = (entry: ConversationEntry) =>
+    'startedAt' in entry ? entry.startedAt : undefined;
+
+  it('模型回覆：`message-start` 是開始、`message-finish` 是講完；還在吐字時沒有 settledAt', () => {
+    at = 0;
+    const open = reduceAll(emptyConversation(), [
+      lifecycle('running', 90),
+      timed('messages', { event: 'message-start', id: 'run-m', run_id: 'm' }, 100),
+      timed(
+        'messages',
+        { event: 'content-block-delta', delta: { type: 'text-delta', text: '嗨' }, run_id: 'm' },
+        150,
+      ),
+    ]);
+    expect(only(open, 'm')).toMatchObject({ startedAt: 100, streaming: true });
+    expect(only(open, 'm')).not.toHaveProperty('settledAt');
+    const done = reduceConversation(
+      open,
+      timed('messages', { event: 'message-finish', run_id: 'm' }, 300),
+    );
+    expect(only(done, 'm')).toMatchObject({ startedAt: 100, settledAt: 300, streaming: false });
+  });
+
+  it('模型回覆出錯：settledAt 是 `error` 那顆的時刻', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      timed('messages', { event: 'message-start', id: 'run-m', run_id: 'm' }, 100),
+      timed('messages', { event: 'error', run_id: 'm', message: '斷了' }, 240),
+    ]);
+    expect(only(state, 'm')).toMatchObject({ startedAt: 100, settledAt: 240, error: '斷了' });
+  });
+
+  it('工具卡：同一顆 `tool-started` 到兩次（日誌開卡、基座晚到）取第一顆；收卡取最後一顆 `tool-finished`', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      started('c1', 1000),
+      started('c1', 1004),
+      finished('c1', 2000),
+      // pump 的更正幀（#296）：同一張卡再收一次，照這一顆換掉。
+      finished('c1', 2003, { failed: true, message: '其實失敗了' }),
+    ]);
+    expect(only(state, 'tool-c1')).toMatchObject({
+      status: 'failed',
+      startedAt: 1000,
+      settledAt: 2003,
+    });
+  });
+
+  it('續接（resume）：答了中斷、同一顆 `tool-started` 再到，startedAt 不換，等人的時間算在裡面', () => {
+    at = 0;
+    const suspended = reduceAll(emptyConversation(), [
+      started('c1', 1000),
+      timed('tools', { event: 'tool-suspended', tool_call_id: 'c1' }, 1100, ['tools:a']),
+    ]);
+    expect(only(suspended, 'tool-c1')).toMatchObject({ status: 'suspended', startedAt: 1000 });
+    expect(only(suspended, 'tool-c1')).not.toHaveProperty('settledAt');
+    const resumed = reduceAll(suspended, [started('c1', 5000), finished('c1', 6000)]);
+    expect(only(resumed, 'tool-c1')).toMatchObject({
+      status: 'done',
+      startedAt: 1000,
+      settledAt: 6000,
+    });
+  });
+
+  it('收過的卡被翻回執行中（判定先到、基座的 `tool-started` 晚到，#297）：settledAt 拿掉，不是留著舊的', () => {
+    at = 0;
+    const reopened = reduceAll(emptyConversation(), [
+      started('c1', 1000),
+      finished('c1', 1010),
+      started('c1', 1020),
+    ]);
+    expect(only(reopened, 'tool-c1')).toMatchObject({ status: 'running', startedAt: 1000 });
+    expect(only(reopened, 'tool-c1')).not.toHaveProperty('settledAt');
+    const settled = reduceConversation(reopened, finished('c1', 1030));
+    expect(only(settled, 'tool-c1')).toMatchObject({ startedAt: 1000, settledAt: 1030 });
+  });
+
+  it('`tool-error` 收卡：settledAt 是它的時刻', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      started('c1', 1000),
+      timed('tools', { event: 'tool-error', tool_call_id: 'c1', message: '炸了' }, 1500, [
+        'tools:a',
+      ]),
+    ]);
+    expect(only(state, 'tool-c1')).toMatchObject({ status: 'failed', settledAt: 1500 });
+  });
+
+  it('按了停止：還在吐字的回覆與沒結果的卡，settledAt 都是收尾那顆 `lifecycle` 的時刻', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      lifecycle('running', 90),
+      timed('messages', { event: 'message-start', id: 'run-m', run_id: 'm' }, 100),
+      started('c1', 200),
+      lifecycle('failed', 9000, { aborted: true }),
+    ]);
+    expect(only(state, 'm')).toMatchObject({ stopped: true, startedAt: 100, settledAt: 9000 });
+    expect(only(state, 'tool-c1')).toMatchObject({
+      status: 'failed',
+      errorCode: UNFINISHED_TOOL_CODE,
+      startedAt: 200,
+      settledAt: 9000,
+    });
+  });
+
+  it('一輪正常收掉或失敗時沒結果的卡：settledAt 同樣是收尾那顆的時刻', () => {
+    at = 0;
+    for (const close of ['completed', 'failed']) {
+      const state = reduceAll(emptyConversation(), [
+        lifecycle('running', 90),
+        started('c1', 200),
+        lifecycle(close, 7000),
+      ]);
+      expect(only(state, 'tool-c1')).toMatchObject({ status: 'failed', settledAt: 7000 });
+    }
+  });
+
+  it('一個時刻的條目只帶 startedAt：人話、通知、子代理來信、交付、改動紀錄、壓縮', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      // 歷史重播的人話。
+      timed('messages', { event: 'message-start', role: 'human', id: 'history-0' }, 10),
+      // 即時那條：送出佇列被領走。
+      custom(INBOX, { items: [], claimed: { id: 'q1', text: '嗨' } }, 20),
+      custom(
+        INBOX,
+        { items: [], claimed: { id: 'q2', text: 'done', source: { kind: 'subagent-settled' } } },
+        30,
+      ),
+      custom(
+        INBOX,
+        {
+          items: [],
+          claimed: {
+            id: 'q3',
+            text: '話',
+            source: { kind: 'agent-message', senderSessionId: 's', runId: 'r' },
+          },
+        },
+        40,
+      ),
+      // 歷史那條：通知與來信是自己的 frame。
+      custom(SETTLE_NOTICE, { id: 'history-5' }, 50),
+      custom(AGENT_MESSAGE, { id: 'history-6', senderSessionId: 's', runId: 'r', text: '話' }, 60),
+      custom(DELIVERABLES_PRESENTED, { callId: 'c9', seq: 7, files: [{ path: 'a.md' }] }, 70),
+      custom(WORKSPACE_CHANGES, { seq: 8 }, 80),
+      custom(COMPACTION, { seq: 9, cutoff: 2, saved: true }, 90),
+    ]);
+    expect(state.entries.map((entry) => [entry.kind, entry.id, startedAtOf(entry)])).toEqual([
+      ['human', 'history-0', 10],
+      ['human', 'inbox:q1', 20],
+      ['notice', 'inbox:q2', 30],
+      ['agent-message', 'inbox:q3', 40],
+      ['notice', 'history-5', 50],
+      ['agent-message', 'history-6', 60],
+      ['deliverables', 'deliverables:c9', 70],
+      ['workspace-changes', 'workspace-changes:8', 80],
+      ['compaction', 'compaction:9', 90],
+    ]);
+    for (const entry of state.entries) expect(entry).not.toHaveProperty('settledAt');
+  });
+
+  it('續行預約（goal 來源）被領走不畫任何條目：它不是人說的話，那一輪另有自己的畫法（#638）', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      custom(
+        INBOX,
+        {
+          items: [],
+          claimed: {
+            id: 'g1',
+            text: '續行第 1 輪',
+            source: { kind: 'goal' },
+          },
+        },
+        10,
+      ),
+    ]);
+    expect(state.entries).toEqual([]);
+  });
+
+  it('人按的決定與答案不帶時刻：它們不是從線上來的', () => {
+    at = 0;
+    const asked = reduceAll(emptyConversation(), [
+      timed(
+        'input.requested',
+        {
+          interrupt_id: 'i1',
+          payload: {
+            actionRequests: [{ name: 'echo', args: {} }],
+            reviewConfigs: [{ actionName: 'echo', allowedDecisions: ['approve'] }],
+          },
+        },
+        100,
+      ),
+      timed(
+        'input.requested',
+        { interrupt_id: 'q1', payload: { kind: 'question', questions: [] } },
+        110,
+      ),
+    ]);
+    const decided = appendAnswers(appendDecision(asked, 'i1', 'approve'), 'q1', []);
+    const local = decided.entries.filter(
+      (entry) => entry.kind === 'decision' || entry.kind === 'answer',
+    );
+    expect(local).toHaveLength(2);
+    for (const entry of local) expect(entry).not.toHaveProperty('startedAt');
+  });
+
+  it('不能用的時刻（0、負數、NaN、不是數字、沒帶）不給那一格，JSON 往返也沒有這個鍵', () => {
+    at = 0;
+    for (const timestamp of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, '100', undefined]) {
+      const state = reduceAll(emptyConversation(), [
+        timed('messages', { event: 'message-start', id: 'run-m', run_id: 'm' }, timestamp),
+        timed('messages', { event: 'message-finish', run_id: 'm' }, timestamp),
+        started('c1', 0),
+        custom(WORKSPACE_CHANGES, { seq: 1 }, 0),
+      ]);
+      for (const entry of state.entries) {
+        expect(entry).not.toHaveProperty('startedAt');
+        expect(entry).not.toHaveProperty('settledAt');
+        expect(Object.keys(JSON.parse(JSON.stringify(entry)) as object)).not.toContain('startedAt');
+      }
+    }
+  });
+
+  it('`prependEntries`（往前翻頁）原樣留著較早那一頁的時刻', () => {
+    at = 0;
+    const earlier = reduceAll(emptyConversation(), [
+      timed('messages', { event: 'message-start', role: 'human', id: 'history-0' }, 10),
+      started('c0', 20),
+      finished('c0', 30),
+    ]);
+    const now = reduceAll(emptyConversation(), [
+      timed('messages', { event: 'message-start', role: 'human', id: 'history-9' }, 900),
+    ]);
+    const joined = prependEntries(now, earlier);
+    expect(joined.entries.map(startedAtOf)).toEqual([10, 20, 900]);
+    expect(only(joined, 'tool-c0')).toMatchObject({ startedAt: 20, settledAt: 30 });
+  });
+});
+
+describe('失敗的錯誤碼（#1844）', () => {
+  it('失敗的碼跟 error 一起記、一起清', () => {
+    const lifecycle = (data: object) =>
+      ({
+        type: 'event',
+        method: 'lifecycle',
+        params: { namespace: [], timestamp: 0, data: { graph_name: 'root', ...data } },
+      }) as unknown as Event;
+    const failed = reduceConversation(
+      emptyConversation(),
+      lifecycle({ event: 'failed', error: '壞了', code: 'AUTH' }),
+    );
+    expect(failed).toMatchObject({ status: 'failed', error: '壞了', errorCode: 'AUTH' });
+    const running = reduceConversation(failed, lifecycle({ event: 'running' }));
+    expect(running.errorCode).toBeUndefined();
+    const stopped = reduceConversation(failed, lifecycle({ event: 'completed', aborted: true }));
+    expect(stopped.errorCode).toBeUndefined();
+    const uncoded = reduceConversation(emptyConversation(), lifecycle({ event: 'failed' }));
+    expect(uncoded.errorCode).toBeUndefined();
   });
 });

@@ -32,7 +32,7 @@ import {
 import type { PluginEntry } from '@nexus/core';
 import { countTokensApproximately, tool } from 'langchain';
 import { z } from 'zod';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { computeSummarizationDefaults, createSummarizationMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -183,27 +183,44 @@ describe('同名取代是唯一的縫', () => {
         'subAgentMiddleware',
         'SummarizationMiddleware',
         'patchToolCallsMiddleware',
+        'nexusToolBarrier',
         'nexusToolFailureContainment',
         // 中止這一輪的外層那顆（#276）：緊貼圍堵，在起訖紀錄器外面。
         'nexusTurnCancel',
+        // `tools/pre-execute` 的生產者（#1248）：緊貼核准閘門外側，被拒的呼叫不會先跳核准卡。
+        'nexusToolPreExecute',
         'nexusApprovalGate',
         'nexusFileObservationPolicy',
         'nexusRepeatToolReminder',
         // 模型呼叫的起訖（#266）。它原本要排在摘要器外層，而摘要器原地取代回第三格——
         // 這一條就是「表達不出來」的證據，見 `model-calls.ts` 的偏離那一節。
         'nexusModelCallEvents',
+        // 空回覆算失敗（#1437）：起訖紀錄器內側、用量記錄器外側。
+        'nexusEmptyResponse',
         'nexusModelUsage',
         // 耐久檢查點（#599）：緊貼用量記錄器內側。
         'nexusSessionCheckpoint',
+        // 核准政策句（#1986）：其餘 plugin 的內側；這份清單沒有其餘 plugin，所以緊接檢查點。
+        'nexusApprovalPolicyPrompt',
+        // `tools/post-execute` 的生產者（#1248）：在輸出校驗等貼著工具本體的那幾顆外側、plugin middleware 內側。
+        'nexusToolPostExecute',
         // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。
         'nexusToolOutputSchema',
         // 檔案工具的失敗標成錯誤（#293）：有 backend 就有，貼著工具本體。
         'nexusFsToolErrors',
         // 讀檔結果最後補上讀到哪（#594）：有 backend 就有，同一個理由貼著工具本體。
         'nexusReadContinuation',
+        // `grep` 參數說明的換法（#1605）：同一個時刻、同一個理由，緊接讀檔續讀。
+        'nexusSearchDescriptions',
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
         'nexusInvalidToolArgs',
+        // `tools/execute` 的生產者（#1248）：環繞工具本體，在解不開參數那顆內側、撞到輸出上限那顆（只對 `task`）外側。
+        'nexusToolExecute',
+        // 撞到輸出上限（#433）：貼在修補的內側，清掉被切斷的回覆裡的工具呼叫。
+        'nexusMaxTokens',
+        // 請求快照（#1020）：模型呼叫上的 callback，緊貼綁訊號那顆外面（兩顆併成同一層綁定，見 `model-binding.ts`）。
+        'nexusRequestSnapshot',
         // 中止的內層那顆（#276）：最內層，只替模型綁中止訊號。它在摘要器**裡面**，所以摘要器
         // 讀到的是原本的模型，不是那層 `RunnableBinding`——見 `turn-cancel.ts` 的「為什麼是兩顆」。
         'nexusTurnCancelModelSignal',
@@ -806,10 +823,12 @@ describe('正式路徑上的門檻是我們選的', () => {
   it('預設那組四格都在，而且一個 fraction 都沒有', () => {
     const settings = resolveSummarizationSettings();
     expect(settings).toEqual(DEFAULT_SUMMARIZATION);
+    // 保留量只有比例那一個在場（dsh 的 `retainRatio` 預設 0.16），`retainTokens` 沒有——兩個互斥。
+    expect(settings.retainRatio).toBe(0.16);
+    expect(settings.retainTokens).toBeUndefined();
 
     const types = [
       ...settings.trigger.map((threshold) => threshold.type),
-      settings.keep.type,
       settings.truncateArgs.trigger.type,
       settings.truncateArgs.keep.type,
     ];
@@ -831,7 +850,6 @@ describe('正式路徑上的門檻是我們選的', () => {
    */
   it.each([
     ['trigger[0]', { trigger: [{ type: 'fraction', value: 0.85 }] }],
-    ['keep', { keep: { type: 'fraction', value: 0.1 } }],
     [
       'truncateArgs.trigger',
       {
@@ -853,9 +871,49 @@ describe('正式路徑上的門檻是我們選的', () => {
   });
 
   it('門檻的值要是正的有限數', () => {
-    expect(() => resolveSummarizationSettings({ keep: { type: 'messages', value: 0 } })).toThrow(
-      /正的有限數/,
-    );
+    expect(() =>
+      resolveSummarizationSettings({ trigger: [{ type: 'tokens', value: -1 }] }),
+    ).toThrow(/正的有限數/);
+  });
+
+  /**
+   * **保留量（#1374）：兩個互斥、值合理、舊的 `keep` 要有看得懂的錯誤。**
+   *
+   * `keep` 是靜靜忽略的話，人會以為保留量還是自己設的那個——所以載入就拋，並說明要改成哪兩個欄位。
+   */
+  describe('保留量', () => {
+    it('給 retainTokens 就換掉預設的比例，不是兩個同時在場', () => {
+      const settings = resolveSummarizationSettings({ retainTokens: 8_000 });
+      expect(settings.retainTokens).toBe(8_000);
+      expect(settings.retainRatio).toBeUndefined();
+    });
+
+    it('給 retainRatio 照給；沒給任何一個就是出廠的 0.16', () => {
+      expect(resolveSummarizationSettings({ retainRatio: 0.1 }).retainRatio).toBe(0.1);
+      expect(resolveSummarizationSettings({}).retainRatio).toBe(0.16);
+    });
+
+    it('兩個一起給就拋', () => {
+      expect(() => resolveSummarizationSettings({ retainRatio: 0.1, retainTokens: 100 })).toThrow(
+        /互斥/,
+      );
+    });
+
+    it.each([
+      ['比例要小於窗口門檻的比例 0.8（dsh 同一條）', { retainRatio: 0.8 }],
+      ['比例要是正的', { retainRatio: 0 }],
+      ['retainTokens 要是非負整數', { retainTokens: -1 }],
+      ['retainTokens 要是整數', { retainTokens: 1.5 }],
+    ])('%s', (_label, override) => {
+      expect(() => resolveSummarizationSettings(override)).toThrow(/summarization\.retain/);
+    });
+
+    it('舊的 keep 拋，訊息說得出要改成哪兩個欄位', () => {
+      const legacy = { keep: { type: 'messages', value: 20 } } as never;
+      expect(() => resolveSummarizationSettings(legacy)).toThrow(/retainRatio/);
+      expect(() => resolveSummarizationSettings(legacy)).toThrow(/retainTokens/);
+      expect(() => resolveSummarizationSettings(legacy)).toThrow(/summarization\.keep/);
+    });
   });
 
   /**
@@ -869,8 +927,7 @@ describe('正式路徑上的門檻是我們選的', () => {
    * `ContextOverflowError` 借基座的緊急摘要。基座那條 `catch` 在解得出 `maxInputTokens` 時會拿它去調
    * `tokenEstimationMultiplier`，也可能改走 `compactToolResults`——兩件都不是我們要的。
    *
-   * 手法照 [`harness-profile.test.ts`](./harness-profile.test.ts) 那條「真實 live model
-   * 過得了這道檢查」：塞一把假 key 進環境變數、只建模型不發任何請求。**刻意不是
+   * 手法：塞一把假 key 進環境變數、只建模型不發任何請求。**刻意不是
    * `it.skipIf(缺 key)`**——缺 key 就跳過的絆索永遠不紅。
    */
   it('live model 今天仍然解不出 maxInputTokens，所以走的是固定值那條', () => {
@@ -912,15 +969,20 @@ describe('我們配的那份打底到每個 subagent', () => {
     }
   }
 
+  /** 墊料：框好的摘要要比被取代那段小才會提交（#1396），這幾句短話連框架文字都比不過。 */
+  const PAD = '內容'.repeat(100);
+
   /** root 叫 subagent、subagent 自己再叫一次工具——兩邊都累積得到門檻。 */
   function crewModel(): ScriptedChatModel {
     return new ScriptedChatModel({
       turns: [
         {
           content: '',
-          toolCalls: [{ name: 'task', args: { description: '去寫', subagent_type: 'writer' } }],
+          toolCalls: [
+            { name: 'task', args: { description: `去寫${PAD}`, subagent_type: 'writer' } },
+          ],
         },
-        { content: '', toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: '一' } }] },
+        { content: '', toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: `一${PAD}` } }] },
         { content: '（subagent 那側的摘要）' },
         { content: 'subagent 做完了。' },
         { content: '（root 那側的摘要）' },
@@ -949,12 +1011,12 @@ describe('我們配的那份打底到每個 subagent', () => {
       summarization: {
         historyPathPrefix: '/ours',
         trigger: [{ type: 'messages', value: 3 }],
-        keep: { type: 'messages', value: 1 },
+        retainTokens: 1,
       },
     });
 
     try {
-      await agent.invoke(toAgentInvocation('叫 writer 去做事。'));
+      await agent.invoke(toAgentInvocation(`叫 writer 去做事。${PAD}`));
     } finally {
       await dispose();
     }
@@ -1209,7 +1271,7 @@ describe('關掉摘要是真的關掉', () => {
           plugin: summarizationPlugin,
           config: {
             trigger: [{ type: 'messages', value: 2 }],
-            keep: { type: 'messages', value: 2 },
+            retainTokens: 12,
           },
         },
       ],
@@ -1244,8 +1306,17 @@ describe('關掉摘要是真的關掉', () => {
  * 100 換算成 33 輪。這條照樣不傳任何參數——量的就是**真正的預設組裝**，換算跟著它走。
  */
 describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
+  /**
+   * 每一輪的參數（也就是 echo 回來的結果）要夠大：保留量是 token 了（#1374，`retainTokens` 的上限是門檻的兩成，
+   * 這個組裝沒有型錄所以就是 20,000），tiny 的訊息串整串都在保留的尾巴裡，`messages: 60` 那道照樣成立、
+   * 但沒有東西可摘——那是對的，不是壞掉。要摘得到，每則得夠大，六十則湊得過兩萬 token。每輪不同，免得重複提醒插手。
+   */
+  const bulkyArgs = (call: number) => ({
+    message: `第 ${call} 輪：${'這是一段資料。'.repeat(120)}`,
+  });
+
   it('模型被叫的次數比迴圈上限換算多一次，多的那次是摘要器', async () => {
-    const model = new LoopingChatModel();
+    const model = new LoopingChatModel({ argsFor: bulkyArgs });
     const { agent, dispose } = await createNexusAgent({ model, plugins: [createEchoPlugin()] });
 
     try {
@@ -1271,7 +1342,7 @@ describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
    * （我們的剪刀先把壓力剪掉了），所以那邊的「模型只被叫兩次」同時被兩態滿足。
    */
   it('條目 `disabled: true` 之後，多的那一次不見了', async () => {
-    const model = new LoopingChatModel();
+    const model = new LoopingChatModel({ argsFor: bulkyArgs });
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins: [createEchoPlugin(), { plugin: summarizationPlugin, disabled: true }],
@@ -1289,33 +1360,20 @@ describe('預設門檻在跑滿的迴圈裡摘要一次', () => {
 });
 
 /**
- * **`trigger` 用 token、`keep` 用訊息數，兩邊不同尺——這條量的是那個縫平常不會裂開。**
+ * **保留量與門檻同一把尺（token），而且封在門檻的兩成——這條量的是那個縫平常不會裂開。**
  *
- * 病徵長這樣：摘要留下 K 則，那 K 則的 token 總量又立刻越過門檻，於是**每一輪都重摘一次**，
- * 每輪的 prompt 訊息數塌成一條平線。`keep: fraction` 那組量到的 `[1,1,1,…]` 就是它，
- * 只是成因不同。
+ * 病徵長這樣：摘要留下的那些，token 總量又立刻越過門檻，於是**每一輪都重摘一次**，每輪的 prompt 訊息數塌成
+ * 「摘要器那次 1 則、agent 那次幾則」的平線。從前 `keep` 是 20 則而 `trigger` 是 token，兩邊不同尺，小窗口上
+ * 20 則自己就比門檻大（#1374 量到 90b 上 30,342 > 26,214）；現在保留量是 token、而且 ≤ 門檻 × 0.2
+ * （`retainTokensFor`），摘要之後至少還有八成的餘裕。
  *
- * 那為什麼 `keep` 不乾脆也用 token？因為 `determineCutoffIndex` 的 token 分支是從最新那則
- * 往前累加、超過就切：
+ * 那為什麼不用基座的 `{type:'tokens'}`？它的 token 分支從最新往前累加、**超過就切**，最新一則自己就超過時
+ * **一則都不留**（fail-open），而且量具是 `countTokensApproximately`。我們用的選法是 dsh 的：累加到 **≥** 為止、
+ * 跨過的那則也留（`retainedTailCount`），所以至少留一則。
  *
- * ```js
- * if (tokensKept + msgTokens > targetTokenCount) { rawCutoff = i + 1; break; }
- * ```
- *
- * 最新那一則自己就超過門檻時（一個剛回來的超大工具結果），第一圈就
- * `rawCutoff = messages.length`——**一則都不留**。那是 fail-open，跟我們拒絕 `fraction`
- * 的理由同型。`messages` 分支是 `messages.length - keep.value`，恆定留得下東西。所以這裡
- * 選的是「保證留得下」。
- *
- * **代價是誠實的：退化條件真的存在，只是這條測不到它。** 退化要 `keep 則數 × 每則 token
- * ≥ trigger`——用預設值換算是留下的 20 則平均每則超過 5,000 token。單一則就辦得到（讀一個
- * 大檔的工具結果），而那時真正的解法是**壓縮前先剪掉過大的工具結果**
- * （[#149](https://github.com/DemianLi/nexus-agent/issues/149)，dsh 的 `ctx.toolResultPruner`
- * 做的正是這件事），不是把 `keep` 換成一把會 fail-open 的尺。這條盯的是「一般長對話不該
- * 退化」，那條退路留給 #149。
- *
- * 設定是等比縮小的：`tokens: 3_000` 配預設的 `keep: 20 則`，訊息長度普通——結構上等同
- * 預設的 `tokens: 100_000` 配一般大小的訊息。
+ * **門檻要比固定開銷大。** 這個組裝沒有任何 plugin，但基座的系統提示與工具定義就占約 2,300 token；`3_000` 的門檻
+ * 只剩 700 給對話，兩成是 600，摘要完一輪就又過門檻——那是設定把門檻開得比固定開銷還緊，不是保留量的毛病。
+ * 這裡用 4,500：兩成 900 約當 5 則，摘要之後 prompt 回到 7 則（摘要＋5 則＋新一句）、再長到 13 則才又摘。
  */
 describe('一般長對話不會退化成逐輪重摘', () => {
   it('prompt 的訊息數是鋸齒不是平線', async () => {
@@ -1331,7 +1389,7 @@ describe('一般長對話不會退化成逐輪重摘', () => {
       backend: new ContainedFilesystemBackend({ rootDir: root }),
       checkpointer: new MemorySaver(),
       plugins: [],
-      summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
+      summarization: { trigger: [{ type: 'tokens', value: 4_500 }] },
     });
 
     try {
@@ -1349,10 +1407,16 @@ describe('一般長對話不會退化成逐輪重摘', () => {
     );
     // 前提：真的摘要過。少了它，一個門檻根本沒碰到的組裝也會讓下面通過。
     expect(summarizedWithHistory(model)).toBe(true);
-    // 平線的話最大值會是 1（只剩摘要載體）。`keep: 20 則`留得下東西，所以看得到爬升。
-    expect(Math.max(...sizes)).toBeGreaterThan(20);
-    // 摘要器自己那幾輪的 prompt 也算在裡面，所以不要求「一則 1 都沒有」，要求的是它不是常態。
-    expect(sizes.filter((size) => size <= 1).length).toBeLessThan(sizes.length / 2);
+    // 摘要器自己那次的 prompt 只有 1 則（摘要請求本身）。
+    const summaryCalls = sizes.filter((size) => size === 1).length;
+    // 平線的話，每一輪都夾一次摘要器那次（1）：十五輪就是十幾次。鋸齒的話兩次摘要之間隔著好幾輪。
+    expect(summaryCalls).toBeGreaterThan(1);
+    expect(summaryCalls).toBeLessThanOrEqual(sizes.length / 4);
+    // 摘要之後留得下東西：緊接著摘要器那次的 agent 那一輪帶得到摘要＋尾巴＋新一句，不只是摘要載體。
+    const afterSummary = sizes[sizes.indexOf(1, 1) + 1]!;
+    expect(afterSummary).toBeGreaterThan(3);
+    // 然後會再長起來：最大值不在剛摘要完的那一輪。
+    expect(Math.max(...sizes)).toBeGreaterThan(afterSummary);
   });
 });
 
@@ -1383,8 +1447,8 @@ describe('一般長對話不會退化成逐輪重摘', () => {
  * 這一段是量出來的、也是這組測試最容易被寫錯的地方：第一版 fixture 用 50 萬字元，結果
  * 每一格都在測基座的 eviction，一條都沒測到剪刀。
  *
- * **三、`keep` 要調到 1 才看得到「摘要那次模型呼叫沒有發生」。** 預設的 `keep: 20 則`碰上
- * 一段只有幾則訊息的對話，`determineCutoffIndex` 會算出 `cutoffIndex <= 0`、直接
+ * **三、保留量要調到 `retainTokens: 1` 才看得到「摘要那次模型呼叫發生」。** 預設的保留量（有型錄時訊息預算的 0.16、
+ * 夾在門檻的 0.2 倍內；沒型錄時 20 則）碰上一段只有幾則訊息的對話，整段都落在尾巴裡，`cutoffIndex <= 0`、直接
  * `return handler(...)`——**摘要本來就不會呼叫模型**，那樣的綠是假的。
  */
 describe('壓縮前先剪掉過大的工具結果', () => {
@@ -1541,7 +1605,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
       plugins: [bulkPlugin(BULK)],
       summarization: {
         trigger: [{ type: 'tokens', value: 5_000 }],
-        keep: { type: 'messages', value: 1 },
+        retainTokens: 1,
       },
     });
     try {
@@ -1563,7 +1627,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   it('拔掉剪刀（換成基座原版摘要器）就多一次模型呼叫', async () => {
     const settings = resolveSummarizationSettings({
       trigger: [{ type: 'tokens', value: 5_000 }],
-      keep: { type: 'messages', value: 1 },
+      retainTokens: 1,
     });
     // 摘要器一動手就要有地方寫歷史。這一格的重點是「有摘要器、沒有剪刀」，所以 backend
     // 要給——不給的話它會在 `resolveBackend` 當場炸掉，測到的就變成別的東西了。
@@ -1578,7 +1642,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
             createSummarizationMiddleware({
               backend,
               trigger: [...settings.trigger],
-              keep: { ...settings.keep },
+              keep: { type: 'messages', value: 1 },
               historyPathPrefix: settings.historyPathPrefix,
               truncateArgsSettings: {
                 trigger: { ...settings.truncateArgs.trigger },
@@ -1595,7 +1659,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
       plugins: [bulkPlugin(BULK), bare],
       summarization: {
         trigger: [{ type: 'tokens', value: 5_000 }],
-        keep: { type: 'messages', value: 1 },
+        retainTokens: 1,
       },
     });
     try {
@@ -1610,12 +1674,13 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   });
 
   /**
-   * **`summarization: false` 就沒有剪。**
+   * **`summarization: false` 就不剪新的。**
    *
    * 照 dsh，剪刀只在摘要開著時作用：那邊的 pruner 唯一的消費者是 compaction，
    * `ctx.get('toolResultPruner')` 選擇性地讀，摘要不掛就沒人叫它。剪刀有自己的開關
    * （`toolResultPruning`，#446），但那是「摘要照跑、只是不先剪」；反過來沒有「只剪不摘要」。
-   * 這條釘住那個方向，免得下一個人以為關掉摘要還會剩下剪刀。
+   * 這條釘住那個方向，免得下一個人以為關掉摘要還會剩下剪刀。日誌上記過的剪法照樣換上去（#1567），
+   * 那一半在 `recorded-projection-on-resume.test.ts`。
    */
   it('關掉摘要就一起沒有剪刀', async () => {
     const model = bulkTurns();
@@ -1635,7 +1700,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
 
   /**
    * **剪刀可以單獨關掉**（#446）：摘要照跑，只是不先剪。壓力用 `messages: 2` 確定達標——
-   * 同「沒超過預算的工具結果一字不動」那條；`keep` 用預設的 20 則，所以摘要器自己不會
+   * 同「沒超過預算的工具結果一字不動」那條；保留量用預設值（沒有型錄，退到 20 則），所以摘要器自己不會
    * 動手，模型看到的就是剪刀留下（或沒留下）的東西。
    */
   it('toolResultPruning: false 時壓力達標也不剪', async () => {
@@ -1662,11 +1727,12 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   it('toolResultPruning 的覆寫會生效', async () => {
     const medium = 'M'.repeat(5_000);
     const budget = { thresholdChars: 2_000, headChars: 500, tailChars: 100 };
-    const model = bulkTurns();
+    // 則數門檻要「摘得到東西」才算壓力（#1441）：保留量壓到 1，這一步真的會摘要，摘要那次呼叫吃掉一份備料。
+    const model = bulkTurns(1, 1);
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins: [bulkPlugin(medium)],
-      summarization: { trigger: [{ type: 'messages', value: 2 }] },
+      summarization: { trigger: [{ type: 'messages', value: 2 }], retainTokens: 1 },
       toolResultPruning: budget,
     });
     try {
@@ -1675,7 +1741,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
       await dispose();
     }
 
-    const text = String(toolResults(model.prompts[1]!)[0]!.content);
+    const text = String(toolResults(model.prompts.at(-1)!)[0]!.content);
     expect(text).toBe(`${'M'.repeat(500)}${TOOL_RESULT_PRUNE_MARKER}${'M'.repeat(100)}`);
   });
 
@@ -1752,14 +1818,15 @@ describe('壓縮前先剪掉過大的工具結果', () => {
           { type: 'messages', value: 3 },
           { type: 'tokens', value: 5_000 },
         ],
-        keep: { type: 'messages', value: 1 },
+        retainTokens: 1,
       },
     });
 
     let last: { readonly messages: readonly BaseMessage[] } = { messages: [] };
     try {
+      // 使用者句墊長：框好的摘要要比被取代那段小才會提交（#1396），「一。」連框架都比不過。
       for (const line of ['一。', '二。', '三。']) {
-        last = (await agent.invoke(toAgentInvocation(line), {
+        last = (await agent.invoke(toAgentInvocation(`${line}${'內容'.repeat(100)}`), {
           configurable: { thread_id: 'prune' },
         })) as unknown as { readonly messages: readonly BaseMessage[] };
       }
@@ -1782,7 +1849,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
    * 帶著我們的標記，它會被換成基座那句 `read_file` 指路。
    *
    * **它守的只有「eviction 還在」這一半（#170 之後）。** 那條路現在被路由到獨立的
-   * `StateBackend`，所以這一條分不出「基座還在 80,000 那條線上驅逐」與「我們的路由把它
+   * 暫存 backend（#734 起優先存主機私有目錄），所以這一條分不出「基座還在 80,000 那條線上驅逐」與「我們的路由把它
    * 吸收掉了」。**路徑那一半歸 [`tool-result-stash.test.ts`](./tool-result-stash.test.ts)**，
    * 那裡有一條斷言基座指路的路徑落在我們路由的前綴底下。
    */
@@ -1805,6 +1872,42 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   });
 
   /**
+   * **翻面（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：外溢層開著時，剪刀碰到的不再是原文。**
+   * 上面那條絆索守的是「外溢層沒開，上界是基座的 80,000 字元」；這一條守它的反面——同一則 6 萬字元（低於基座那條線）的
+   * 結果，外溢層開著就先被換成預覽加路徑，剪刀（門檻 8,192 字元）之後再剪的是**那份預覽**，而尾巴那句通知
+   * （1,024 字元的尾巴放得下）留下來，全文照路徑讀得回。外溢層沒開的話，同一則會被剪成頭 4,096 加尾 1,024，
+   * **一個能讀回原文的路徑都沒有**——這一條紅代表外溢層被拿掉，或排到剪刀後面了。
+   */
+  it('外溢層開著：低於 8 萬字元但超過預算的結果，剪刀剪過之後通知與路徑還在', async () => {
+    const varied = Array.from({ length: 2_000 }, (_, i) => `line ${i} alpha beta ${i * 7919}`).join(
+      '\n',
+    );
+    const root = await mkdtemp(join(tmpdir(), 'prune-spill-'));
+    const model = bulkTurns();
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [bulkPlugin(varied)],
+      summarization: { trigger: [{ type: 'tokens', value: 5_000 }] },
+      toolResultStash: { rootDir: root, session: 's' },
+      spillPolicy: { maxInlineTokens: 4_000 },
+    });
+    try {
+      await agent.invoke(toAgentInvocation('去拿一坨。'));
+    } finally {
+      await dispose();
+    }
+    expect(varied.length).toBeLessThan(80_000);
+    const text = String(toolResults(model.prompts[1]!)[0]!.content);
+    // 剪刀動過那份預覽（前提：預覽比它的門檻大），通知還在尾巴上。
+    expect(text).toContain(TOOL_RESULT_PRUNE_MARKER);
+    expect(text).toMatch(
+      /Full formatted result stored at: \/large_tool_results\/[0-9a-f]{12}-bulk\.txt\./u,
+    );
+    const [session] = await readdir(root);
+    expect(await readdir(join(root, session!))).toHaveLength(1);
+  });
+
+  /**
    * 剪刀的預算從部署設定的條目來（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
    *
    * **判準必須是行為，不能是「stack 裡有那一顆」。** 剪刀不是獨立的一顆 middleware，它包在
@@ -1815,7 +1918,8 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   describe('剪刀的預算從條目來，在正式路徑上', () => {
     it('條目給的預算真的傳到剪刀手上——頭尾長度照它的值', async () => {
       const medium = 'M'.repeat(5_000);
-      const model = bulkTurns();
+      // 同上一組的覆寫那條：保留量壓到 1，則數門檻才摘得到東西、才算壓力（#1441）。
+      const model = bulkTurns(1, 1);
       const { agent, dispose } = await createNexusAgent({
         model,
         plugins: [
@@ -1825,7 +1929,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
             config: { thresholdChars: 2_000, headChars: 500, tailChars: 100 },
           },
         ],
-        summarization: { trigger: [{ type: 'messages', value: 2 }] },
+        summarization: { trigger: [{ type: 'messages', value: 2 }], retainTokens: 1 },
       });
       try {
         await agent.invoke(toAgentInvocation('去拿一坨。'));
@@ -1835,7 +1939,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
 
       // 5,000 在預設的 8,192 之下——預設那條路會一字不動。剪成這個樣子只有條目那份預算
       // 生效才可能。
-      const text = String(toolResults(model.prompts[1]!)[0]!.content);
+      const text = String(toolResults(model.prompts.at(-1)!)[0]!.content);
       expect(text).toBe(`${'M'.repeat(500)}${TOOL_RESULT_PRUNE_MARKER}${'M'.repeat(100)}`);
     });
 

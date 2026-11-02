@@ -1,0 +1,161 @@
+{
+  "id": "2403.02502",
+  "title": "Trial and Error: Exploration-Based Trajectory Optimization for LLM Agents",
+  "topic": "T4",
+  "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 ETO：先以專家軌跡做 SFT 行為複製得到基礎 agent，再讓 agent 在訓練集任務上探索、收集最終報酬較低的失敗軌跡，與同一任務的專家軌跡配成「成功／失敗」偏好對，用 DPO 更新策略並反覆多輪；在 WebShop、ScienceWorld、ALFWorld 上以 Llama-2-7B-Chat 勝過 SFT、Best-of-N、RFT、PPO。",
+  "problem": "開源 LLM 當 agent 的標準做法是對專家軌跡做行為複製（SFT／teacher forcing），但模型只看過成功示範、從未在環境中探索過自己的錯誤，得到的策略次佳、泛化到未見情境時容易退化。直接跑線上 RL（PPO）又有不穩定與效率低的問題，尤其在只有二元報酬的環境。需要一種能把 agent 自己產生的失敗軌跡轉成訓練訊號、又不必做線上 RL 的方法。",
+  "core_idea": "把 agent 一次執行的完整軌跡當成偏好學習的單位：同一條任務指令下，專家軌跡（報酬高）與 agent 自己探索出來的軌跡（報酬低）構成一對「成功 ≻ 失敗」的比較資料，用 DPO 直接在軌跡層級提高成功軌跡、壓低失敗軌跡的似然。DPO 等價於帶 KL 約束的報酬最大化，因此能取得 RL 的「從試錯中學」效果，卻只需要離線的對比資料；再以「探索 → 訓練」交替迭代，讓新策略產生新的失敗案例。",
+  "method": {
+    "軌跡的形式化": "把任務視為 POMDP（指令空間 U、狀態 S、動作 A、觀測 O、轉移 T、報酬 R→[0,1]），其中 U、A、O 都是自然語言。一條軌跡 e = (u, a1, o1, …, o_{n-1}, a_n)，策略機率 π(e|u) = Π_j π(a_j | u, a1, o1, …, o_{j-1})；互動直到任務完成或超過最大步數（最大步數的數值論文未載明）。環境在結束時給出最終報酬 r(u,e) ∈ [0,1]，1 代表完成。",
+    "軌跡的文字格式": "採 ReAct 格式：每一步先輸出 CoT 理由（Thought）再輸出動作（Action），兩者合在一起視為一個動作 a。訓練時把 u、a1、o1、…、a_n 串接成一段 token 序列，只對屬於 agent 動作的 token 計算 log 機率，指令與環境觀測的 token 一律遮蔽（mask）。因此 log π(e|u) = 各動作 token 的 log 機率總和。注意：論文 Eq. 3 與 Eq. 5 的寫法少了 log 且正負號混在一起（Eq. 5 定義出來的其實是負對數似然），重做時應以「動作 token 的 log 機率總和」為準；Eq. 9 的 Z(x) 應為 Z(u)。",
+    "專家軌跡的來源（資料合成）": {
+      "WebShop": "環境附的少量人工標註軌跡，加上以 GPT-4 當 teacher agent 在環境中探索、只保留最終報酬大於 0.7 的軌跡。",
+      "ScienceWorld": "環境內建的啟發式搜尋演算法為每個子任務產生黃金軌跡；原軌跡沒有 CoT，事後用 GPT-4 為每一步補寫理由。",
+      "ALFWorld": "環境附的人工標註軌跡。附錄 A 的「用 GPT-4 補寫 CoT」一句緊接在 ScienceWorld 之後，是否也套用到 WebShop／ALFWorld 的人工軌跡，原文未明說。",
+      "規模": "訓練集 WebShop 1,938、ScienceWorld 1,483、ALFWorld 3,321 條；專家軌跡平均輪數分別為 4.9、14.4、10.1。"
+    },
+    "步驟一：行為複製（SFT）": "在專家軌跡資料集 D 上以自迴歸損失微調，得到基礎 agent π_base。超參數：AdamW、batch size 64、learning rate 1e-5、3% warmup、cosine scheduler、3 epochs。",
+    "步驟二：探索階段": "令 π_base = π_ref = 目前策略。用它對訓練集的每一條指令各跑一次（探索次數 1），得到 agent 軌跡 ê 與環境報酬 r̂。探索時的解碼溫度論文未載明（評估一律溫度 0.0，只有 self-play 實驗明寫 1.0）。",
+    "步驟三：建構對比資料": "把 ê 與同一指令的專家軌跡 e 依最終報酬比較，報酬高者為 e_w、低者為 e_l；兩者報酬相同就丟棄（包含兩者都成功的情況）。依 Algorithm 1，每一輪用新策略的探索結果重新建一份 D_p = {(u, e_w, e_l)}，而非累加。正文措辭與演算法都暗示 e_w 固定是專家軌跡，但 agent 軌跡報酬高於專家時（WebShop 的 GPT-4 專家軌跡只要求報酬 > 0.7，這種情況可能發生）怎麼處理，論文未明說。每輪 D_p 的配對數量未載明。",
+    "步驟四：訓練階段（軌跡層級 DPO）": "以 Bradley-Terry 模型描述 e_w ≻ e_l，代入 KL 約束 RL 最佳解的報酬重參數化，得到損失 L = −E[ log σ( β·log(π_θ(e_w|u)/π_θ(e_l|u)) − β·log(π_ref(e_w|u)/π_ref(e_l|u)) ) ]，其中每條軌跡的 log 機率只算動作 token。超參數：batch size 32、learning rate 1e-6、3 epochs；β = 0.1（WebShop、ScienceWorld）、0.5（ALFWorld）。",
+    "步驟五：迭代": "訓練完的策略成為新的 π_base 與 π_ref，回到步驟二重新探索、配對、訓練。迭代次數：WebShop 與 ScienceWorld 2 輪、ALFWorld 1 輪。",
+    "變體：步驟層級對比（附錄 C）": "對專家軌跡的前 t−1 步做 teacher forcing，從第 t 步起讓 agent 自己產生直到結束，得到 ê；依 ê 與專家軌跡的最終報酬決定第 t 步的專家動作 a_t 與 agent 動作 â_t 誰是 a_w、誰是 a_l，再以條件於 (u, 專家前綴 e_(t−1)) 的單步 DPO 訓練。t 怎麼選（每一步都做或隨機抽）未載明。「Mixture」變體把軌跡層級與步驟層級資料合併。",
+    "變體：無專家軌跡的 self-play": "跳過 SFT，讓未微調的 Llama-2-7B-Chat 以溫度 1.0 探索，對同一指令的多條自產軌跡依最終報酬排出偏好對，只用這些資料訓練；每條指令取樣幾條未載明。另測 RFT 以及「先 RFT 再 ETO」的組合。",
+    "評估設定": "所有方法用 ReAct 格式、指令提示中放 1-shot 範例（附錄 E 有三個環境的指令提示：WebShop 限定 search[...] 與 click[...]；ScienceWorld 列出 open、teleport to、focus on 等 19 種動作；ALFWorld 列出 go to、put、heat 等 9 種動作並說明環境回「Nothing happened」代表動作無效）。解碼溫度 0.0（Best-of-N 除外）。主指標是測試集平均報酬，附錄 B 另報成功率。",
+    "基礎模型與硬體": "主實驗 Llama-2-7B-Chat；補充實驗 Llama-2-13B-Chat 與 Mistral-7B。8 張 NVIDIA A100 80G。依作者 GitHub README，訓練程式是修改過的 FastChat，評估框架參考 MINT（此點出自 README 而非論文）。"
+  },
+  "assumptions": [
+    "環境能在軌跡結束時給出可比較的最終報酬（WebShop、ScienceWorld 為 0–1 的連續值，ALFWorld 為二元），而且這個報酬足以判定兩條軌跡誰較好。",
+    "每一條訓練指令都有一條事先收集好的專家軌跡可當 e_w；失敗軌跡的比較對象永遠是同一指令的專家軌跡。",
+    "失敗軌跡整條都可以視為「較差」，不需要定位是哪一步開始出錯（作者在限制中明說這是簡化）。",
+    "先做 SFT 行為複製的基礎 agent 已具備基本能力，探索出來的失敗軌跡與專家軌跡足夠接近，DPO 的 KL 約束才能保住基本能力。",
+    "訓練與探索都在同一份固定的訓練指令集上進行，對比資料的多樣性足以支撐一到兩輪迭代。",
+    "任務是單一指令、由環境回饋觀測的互動（網頁購物、文字模擬實驗、家務），沒有需要多輪澄清意圖的真實使用者。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WebShop（網頁購物；訓練 1,938、測試 200）",
+      "ScienceWorld（文字模擬科學實驗；訓練 1,483、seen 測試 194、unseen 測試 241；排除 Task-9、Task-10，每類任務只取前 10 個變體）",
+      "ALFWorld（文字化家務環境；訓練 3,321、seen 測試 140、unseen 測試 134）"
+    ],
+    "metrics": [
+      "Average Reward（測試集平均最終報酬，主指標）",
+      "Success Rate（附錄 B；三個環境定義不同：WebShop 為報酬 = 1.0 的比例，ScienceWorld 為到達預定潛在狀態的比例，ALFWorld 等於平均報酬）",
+      "ScienceWorld 的逐步得分曲線（以達到相同分數所需步數看效率，只以個案圖呈現）"
+    ],
+    "baselines": [
+      "GPT-4、GPT-3.5-Turbo（1-shot 提示，不微調）",
+      "未微調的 Llama-2-7B-Chat",
+      "Llama-2-7B-Chat + SFT（行為複製，也是所有後續方法的起點）",
+      "Llama-2-7B-Chat + Best-of-N（N = 10，以環境報酬挑最佳軌跡）",
+      "Llama-2-7B-Chat + RFT（把 agent 成功軌跡加入專家資料再訓練）",
+      "Llama-2-7B-Chat + PPO（直接以最終報酬做 RL，細節未載明）",
+      "消融：迭代輪數、軌跡層級／步驟層級／混合對比、無專家軌跡的 self-play（RFT、ETO、RFT+ETO）",
+      "其他基礎模型：Llama-2-13B-Chat、Mistral-7B（各自的 SFT 對 ETO）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "ETO 在三個環境的 seen 測試集都勝過所有基線；WebShop 上甚至超過 GPT-4 的平均報酬。",
+      "numbers": "平均報酬（Llama-2-7B-Chat）：WebShop SFT 63.1 → ETO 67.4（Best-of-N 63.8、RFT 63.6、PPO 64.2、GPT-4 63.2）；ScienceWorld-Seen 67.4 → 73.8；ALFWorld-Seen 60.0 → 68.6。",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "在未見變體（out-of-distribution）上 ETO 的優勢更明顯，而 RFT 與 PPO 在 ALFWorld-Unseen 反而低於 SFT。",
+      "numbers": "ScienceWorld-Unseen：SFT 53.0、RFT 54.3、PPO 51.7、ETO 65.0（+12.0 分，相對約 +22.6%）；ALFWorld-Unseen：SFT 67.2、RFT 66.4、PPO 29.1、ETO 72.4。",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "換基礎模型時 ETO 仍一致提升；13B 的增幅比 7B 小，Mistral-7B 經 SFT 或 ETO 後都不如 Llama-2-7B。",
+      "numbers": "Llama-2-13B：WebShop 66.3 → 70.7、ScienceWorld-Seen 68.1 → 71.4、Unseen 57.6 → 68.6；Mistral-7B：60.1 → 66.2、63.8 → 68.5、52.2 → 62.5。",
+      "section": "§4.2、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "迭代不是越多越好：WebShop 與 ScienceWorld 前兩輪有提升、第三輪後下降；ALFWorld 只有第一輪有效，第二、三輪甚至低於 SFT。作者歸因於固定的專家集與訓練集讓對比資料多樣性不足而過擬合，以及 ALFWorld 的二元報酬太粗。",
+      "numbers": "只以 Figure 4 呈現，正文未給逐輪數值；最終採用的輪數為 WebShop 2、ScienceWorld 2、ALFWorld 1。",
+      "section": "§4.3、Figure 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "軌跡層級對比最好；只用最終報酬替單步動作標好壞的步驟層級對比很不穩定，需要更低的 learning rate 與更大的 β 才不崩，混合兩者也不如純軌跡層級。",
+      "numbers": "WebShop 平均報酬：SFT 63.1；軌跡層級（lr 1e-6、β 0.1）67.4；步驟層級（lr 1e-6、β 0.1）8.3；步驟層級（lr 1e-7、β 0.5）62.8；混合（lr 1e-6、β 0.1）64.3。",
+      "section": "§4.4、Table 4、附錄 C",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "沒有專家軌跡、跳過 SFT 時，單獨的 ETO 反而讓表現下降；先做 RFT 再接 ETO 才有進一步提升。",
+      "numbers": "WebShop：未微調 Llama-2-7B-Chat 17.9；無 BC 的 RFT 48.4、ETO 12.5、RFT+ETO 51.2（對照：有 BC 的 SFT 63.1、RFT 63.6、ETO 67.4）。",
+      "section": "§4.5、Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "以成功率計，ETO 仍是各欄最高，但增幅比平均報酬小很多，尤其 ScienceWorld-Unseen。",
+      "numbers": "成功率：WebShop SFT 33.0 → ETO 37.5（GPT-4 34.0）；ScienceWorld-Seen 70.6 → 80.3、Unseen 73.5 → 78.2（僅 +4.7，平均報酬則是 +12.0）；ALFWorld 與平均報酬相同（60.0 → 68.6、67.2 → 72.4）。",
+      "section": "附錄 B、Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "ETO 假設 agent 從第一步就開始出錯，整條失敗軌跡與專家軌跡對比；實際上錯誤多半從中間某一步開始，理想做法是找出壞動作那一步、再從那裡收集專家的後續動作，但多數環境沒有步驟層級的資訊，難以做動作層級或過程層級的報酬建模；作者建議未來可用 GPT-4 標出壞動作。",
+    "研究聚焦在針對單一任務訓練專門 agent，沒有探討多任務訓練與可轉移性，通用 agent 的建構留待未來。",
+    "學習過程依賴固定的專家軌跡集，探索也在同一份訓練集上進行，對比資料的多樣性與數量受限，多輪迭代後會過擬合而下降；ALFWorld 的二元報酬又進一步妨礙迭代改善（§4.3）。",
+    "步驟層級對比不穩定，可能是只用最終報酬估計單步動作品質不夠準確（§4.4）。",
+    "沒有專家軌跡時，單獨使用 ETO 無法提升表現，需要先做 RFT（§4.5）。"
+  ],
+  "limitations_observed": [
+    "正文的相對增幅與表格對不上：§4.2 說 WebShop 平均報酬增加 8%，但 Table 2 是 63.1 → 67.4（+4.3 分、相對約 6.8%）；ScienceWorld-Unseen 在 §1 寫 22%、§4.2 寫 20%，按表格是 53.0 → 65.0（相對約 22.6%）。引用時應以表格數字為準。",
+    "OOD 的主要賣點建立在平均報酬上，換成成功率就縮水：ScienceWorld-Unseen 平均報酬 +12.0，成功率只有 73.5 → 78.2（+4.7）；WebShop 成功率 33.0 → 37.5。ScienceWorld 的平均報酬含子目標的部分分數，大幅增益有相當一部分可能來自多拿到部分子目標，而不是多完成任務；作者沒有討論兩個指標的落差。",
+    "看不到獨立的驗證集：ScienceWorld 把原本的 dev set 拿來當 seen 測試集，迭代輪數（2／2／1）與 β（0.1／0.1／0.5）正好落在 Figure 4 各資料集的最佳點上，論文沒有說明用哪個 split 選超參數，有在測試集上挑選的風險。所有結果都是單次、溫度 0 的執行，沒有多個 seed 或變異數；ALFWorld 測試集只有 140／134 題，seen 的 +8.6 分約等於多解出 12 題。",
+    "ScienceWorld 測試集經過裁剪（排除 Task-9、Task-10，每類只取前 10 個變體），數字不能直接與使用完整測試集的其他工作比較。",
+    "關鍵實作細節未載明：最大步數、主實驗探索時的解碼溫度（只探索一次；若是溫度 0，失敗軌跡就只是 SFT 的貪婪輸出，多樣性很低）、每輪 D_p 的配對數、PPO 的超參數與報酬設計、步驟層級變體如何選 t、agent 報酬高於專家時如何配對。這些都會影響能否重現。",
+    "Best-of-N 用測試時的真實環境報酬挑選 10 條軌跡，等於帶著 oracle，卻只從 63.1 升到 63.8，暗示 SFT agent 的取樣多樣性很低（取樣溫度也未載明）；這同時意味著只探索一次的 ETO 能拿到的失敗樣態有限，與 §4.3 的「多樣性不足」互相印證。PPO 在 ALFWorld 崩到 22.1／29.1，但沒有任何 PPO 設定細節，無法排除是調參不足而非方法本身不行。",
+    "與 GPT-4 的比較不對等：GPT-4 只有 1-shot 提示，Llama 則在同領域上 SFT＋DPO 過；GPT-4 的版本也未註明。「WebShop 上超過 GPT-4」不能解讀為一般性的能力超越。",
+    "步驟層級的負面結果只證明「用單次 rollout 的最終報酬替單步動作標好壞」不可行：第 t 步之後整段都是 agent 自己產生，最終報酬混入了後續所有動作的好壞，信用分派本來就不準。Table 4 不應被外推成「過程層級監督在 agent 上無效」；ETO 第一作者 Yifan Song 參與的後續工作 IPR（2406.11176）就改走步驟層級的過程監督，本筆記未讀其全文、不引其數字。",
+    "摘要稱在沒有專家軌跡的情境下「仍有亮眼表現」，但 Table 5 顯示無 BC 的 ETO 是 12.5，低於未微調模型的 17.9；無專家時的增益幾乎全來自 RFT（48.4），ETO 只在其上再加 2.8 分。主方法中每一對偏好的 e_w 都是專家軌跡，方法本質上仍依賴專家資料。",
+    "偏好對的勝方是離策略（off-policy）的專家軌跡、敗方是在策略（on-policy）的 agent 軌跡，兩者在文風上可能有系統性差異（例如 GPT-4 補寫的 CoT 語氣）。DPO 有可能部分學到區分文風而不只是決策品質；論文沒有任何分析排除這點（此為推測）。",
+    "ScienceWorld 的專家 CoT 是在動作決定後由 GPT-4 事後補寫，理由與動作之間的因果關係是反過來的；附錄 D 中 SFT agent「CoT 正確但動作與 CoT 矛盾」的現象，可能與這種事後合成的理由有關（此為推測，論文未檢驗）。對 T4 而言，這是軌跡合成品質會回頭影響訓練結果的具體風險。",
+    "「用更少步數拿到更高分」的效率主張只靠 Figure 3 幾個挑選過的 ScienceWorld 任務曲線，沒有整體的平均步數統計。",
+    "三個環境都是單一指令＋環境回饋，沒有真實或模擬使用者，也沒有多輪澄清意圖；報酬由環境自動給出。套到對話 agent 時，最大的缺口是「最終報酬從哪裡來」，論文完全未觸及。"
+  ],
+  "framework_role": "屬於 T4 的「軌跡作為訓練資料」一端，是把失敗軌跡轉成偏好對來訓練 agent 的代表性基線。它具體示範了：（1）軌跡格式：ReAct 的 Thought＋Action 與 Observation 串接成一段序列，只對動作 token 計損失；（2）軌跡收集：用目前策略在訓練指令上探索、以環境最終報酬判定成敗；（3）軌跡合成：專家軌跡來自人工標註、GPT-4 探索後以報酬門檻篩選、啟發式搜尋，CoT 再由 GPT-4 補寫；（4）軌跡層級對比與步驟層級對比的取捨，給「過程獎勵要怎麼標」提供一個負面對照：只用最終報酬回推單步好壞會不穩。它把 T8 的任務完成分數直接當成軌跡標籤，並顯示二元分數（ALFWorld）會限制迭代改善。與 T5 的關係是訓練期的「從失敗中學」，不是推論期的自我修正或反思。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "只在離線、訓練期的意義上成立：以最終報酬低於同一指令專家軌跡來判定一條軌跡「失敗」，再把失敗軌跡與專家軌跡配對、用 DPO 更新策略，等於由軌跡層級的異常偵測觸發策略修正。沒有推論期的即時偵測與修正，也不定位出錯的步驟（作者限制第 1 點）；步驟層級的變體在實驗中不穩定。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品；WebSearch 找到的只有論文彙整站與作者自己釋出的程式碼、Hugging Face 資料集與 Space，這些屬於可重現性而非採納。被後續論文大量引用與比較屬於學術影響力，不計入採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/Yifan-Song793/ETO",
+    "data": "公開。專家 SFT 軌跡放在 Hugging Face 資料集 agent-eto/eto-sft-trajectory（README 另提供 Google Drive 下載）；README 附 WebShop、ScienceWorld 的互動環境改寫版與評估框架，並有 Hugging Face Space agent-eto/Agent-ETO 作為首頁。README 未提及釋出訓練好的模型權重。論文未載明的最大步數、探索溫度、配對數與 PPO 設定需從程式碼確認。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "「以失敗軌跡建偏好對訓練 agent」的經典基線（ACL 2024 主會，Semantic Scholar 引用 206、其中 influential 30），程式碼與軌跡資料公開，且有軌跡層級對步驟層級的直接對照，是 T4 軌跡收集與合成子領域的必讀；但數字需以表格與成功率交叉看，不能照抄正文的百分比。",
+  "related": [
+    "2305.18290",
+    "2210.03629",
+    "2310.05915",
+    "2310.12823",
+    "2311.05657",
+    "2312.10003",
+    "2308.08998",
+    "2308.01825",
+    "2305.20050",
+    "2312.08935",
+    "2311.16714"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

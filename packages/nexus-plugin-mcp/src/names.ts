@@ -8,7 +8,7 @@
  * 正好就是它，所以常見情況下這裡什麼都不必改。
  *
  * 要補的是 adapter **沒有**做的那一半：正規化。它只是把字串接起來
- * （`dist/tools.js:439`），而供應商的 function name 契約是 64 字元的
+ * （`dist/tools.js` 的 `toolNamePrefix`），而供應商的 function name 契約是 64 字元的
  * `[A-Za-z0-9_-]`——一個名字太長或帶了句點的 MCP server 會讓整輪對話在供應商那端
  * 被退回，而且錯誤訊息不會指向這裡。
  */

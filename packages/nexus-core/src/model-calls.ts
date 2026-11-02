@@ -15,7 +15,19 @@
  * `finally` 裡記結束，完成、失敗、中止的呼叫都落一顆，同 dsh 那條「每一個進入的步
  * 恰好一顆 `step/end`」。
  *
- * 兩顆都不帶資料：步數與耗時都只要事件自己的 `time`。
+ * `model/start` 不帶資料：步數與耗時都只要事件自己的 `time`。
+ *
+ * ## 識別：哪些事件屬於同一次呼叫（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)）
+ *
+ * dsh 的 `assistant/message`、`tool/call`、`tool/result`、`system/message` 都帶 `{turn, step}`；我們的事件只有 `seq`／`time`，
+ * 一對起訖之間夾什麼、量測寫在哪一顆之後，位置都不可靠（`model-call-index.ts` 檔頭有三個真實日誌的反例）。所以
+ * 呼叫的識別就是**它的 `model/start` 的 `seq`**，`model/end`、`model/usage`、`llm/retry*`、`assistant/message`、
+ * `context/measure` 各帶一格 `modelCall` 指回去；`tool/call`／`tool/result` 靠 `callId` 出現在發出它的那則回覆裡來歸
+ * （不另存，見 `indexModelCalls`）。傳法見 {@link ./model-call-scope.ts}。**輪編號維持由 `seq` 推導、不另存。**
+ *
+ * 這一格是 dsh `step` 的對應物——**同一個詞、不同的邊界**：我們的「一次呼叫」只包模型那一段（見上），工具在它外面，
+ * 所以工具歸它靠 `callId` 而不是時刻。上面登記的三處偏離逐項重核過：`model/start` 不是 `step/start`（載體是
+ * `wrapModelCall`，沒變）、脈絡溢出算兩次呼叫（現在兩次各有各的識別，不再只是顆數）、拋錯的呼叫在串流中途失敗、又整次重打時有 `assistant/attempt`（#520，由 pump 寫，見 `session-log.ts`）；其餘拋錯的仍然沒有（沒變）。
  *
  * ## 鉤子與位置都是選的
  *
@@ -39,22 +51,40 @@
  * 摘要，`llmMs` 不會把同一段牆鐘算兩次。`apps/harness/src/context-overflow.test.ts` 釘著
  * 「四次模型節點、五步」。
  *
+ * ## 重試在這一格外面（[#712](https://github.com/DemianLi/nexus-agent/issues/712)、#1427）
+ *
+ * 重試只有一層，在 {@link ./stream-retry.ts} 的 middleware（站在這一格外面）：每次嘗試各走一遍這一格，所以各是一對
+ * `model/start`／`model/end`，`llm/retry` 與 `llm/retry-started` 寫在兩對之間。這一格自己不開重試範圍。
+ *
  * ## 回覆也在這一格記（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）
  *
  * `handler(request)` 回來的就是那一則完整的 AIMessage，web 與 CLI 兩條路都是——所以
  * `assistant/message` 寫在這裡，在 `model/end` 之前，順序同 dsh。這一格看到的是**進 graph state 的
  * 那一則**：外層只剩改請求不改回覆的那幾顆（摘要器、計劃模式的提示詞、基座那幾顆），改寫解不開
- * 參數的那顆在內側。
+ * 參數的那顆與清掉截斷回覆裡呼叫的那顆（{@link ./max-tokens.ts}）都在內側。
  *
- * **拋錯的呼叫不記**：那次沒有回覆可記（dsh 那一次記的是 `assistant/attempt`，我們沒有，見
- * `session-log.ts`）。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
+ * **拋錯的呼叫不記**：那次沒有回覆可記（dsh 那一次記的是 `assistant/attempt`；我們只在串流中途失敗又整次重打時由 pump 補一顆，見
+ * `session-log.ts`）。**但 `model/end` 帶 `outcome`**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：
+ * 拋錯是 `error`、被中止是 `aborted`（人按的、時鐘到點或父代理中斷，見 `TurnAbortCause`），讓「這次燒了多少不知道」讀得出來。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
  * 讓子代理的圖收尾的，不是模型的回覆；dsh 那側被中止、沒有看得見內容的那一步沒有 `assistant/message`。
  *
- * ## 記不進去不能扳倒模型呼叫
+ * ## 起訖與回覆記不進去，這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
  *
- * 同 {@link ./model-usage.ts}：`forCall` 的非 `ok` 與 `append` 自己拋，一律吃掉。**開頭那顆
- * 沒記成，結尾那顆也不記**——半對的事件比沒有更糟，不變量會把它讀成寫錯了。回覆那顆吞得起，是因為
- * 會讓它拋的那條路（`undefined` 欄位）已經在 {@link ./logged-message.ts} 從源頭拿掉了。
+ * dsh 沒有 `model/start`／`model/end`，最接近的是請求前的 `request/header`（`agent.ts:637-650`）與結算那次呼叫的
+ * `assistant/message`／`assistant/attempt`（`:484-510`、`:537-558`）：全部直接 `append`、不吞，寫不進去這一輪失敗。照它：
+ *
+ * - **`model/start` 記不進去**：不叫 `handler`，錯直接往外拋。這次請求沒送出去，所以沒有 `model/end` 要配。
+ * - **`model/end` 記不進去**：正常回來的那次，寫入錯往外拋，回覆不進 graph state；**已經在失敗路徑上**（`handler` 拋了、
+ *   回覆記不進去）的那次，兩個錯一起拋，原錯在前、也是 `cause`（dsh `:495-499` 的 `AggregateError`），不蓋掉原錯。
+ * - `forCall` 不是 `ok`（這次呼叫不屬於任何一份日誌）照舊不記、照常呼叫：那不是寫入失敗。
+ * - **請求快照**（`request/header`／`request/system`，{@link ./request-snapshot.ts}）記不進去也一樣：在模型被叫的那一刻拋，
+ *   這次請求沒送出，這裡記 `model/end{outcome:'error'}` 再往外拋（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）。
+ *
+ * **回覆那顆不吞**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)），照 dsh：`assistant/message` 在
+ * `live.settle()` 裡寫（`packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
+ * （`assistant-stream.ts:83-88`），不交給重試，這一輪失敗。會讓它拋的是日誌那一關拒收（#1526 的有損值、#1661 的深度上限）。
+ * 吞掉的話，這則回覆照樣進 graph state、日誌上卻沒有：記憶體與日誌分岔，續接後模型看到的歷史跟之前不同。往外拋則模型
+ * 節點失敗，state 不收它，兩邊一致。重試只看回報的碼（{@link ./stream-retry.ts}），這個錯沒有回報碼，所以不會重打，同 dsh。
  *
  * @module
  */
@@ -63,43 +93,42 @@ import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
-import type { SessionLog } from './session-log.js';
+import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
+import { routeOfModel } from './model-route.js';
+import type { ModelCallOutcome, SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
-import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
+import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const MODEL_CALL_EVENTS_MIDDLEWARE_NAME = 'nexusModelCallEvents';
 
-/** 記一顆，記不進去回 `false`。 */
-function tryAppend(log: SessionLog, type: 'model/start' | 'model/end'): boolean {
+/**
+ * 失敗路徑上補記 `model/end`：記不進去兩個錯一起拋（原錯在前、也是 `cause`，同 dsh `agent.ts:495-499`）；記進去了就交回，
+ * 由呼叫的人拋原錯。
+ */
+function appendEndAfterFailure(
+  log: SessionLog,
+  modelCall: number,
+  outcome: ModelCallOutcome,
+  original: unknown,
+): void {
   try {
-    log.append(type, {});
-    return true;
-  } catch {
-    return false;
+    log.append('model/end', { modelCall, outcome });
+  } catch (appendError) {
+    throw new AggregateError([original, appendError], '模型呼叫失敗，model/end 也記不進去', {
+      cause: original,
+    });
   }
 }
 
 /**
- * 子代理被中止時 {@link ./turn-cancel.ts} 回的那則空訊息：帶中斷記號、沒有字、沒有呼叫。
- * 它不是模型的回覆，見檔頭。
+ * 記下這次呼叫回來的那一則。不是回覆的（`Command`、合成的空訊息）不記。**記不進去原錯往外拋**，見檔頭。
  */
-function isSyntheticStop(message: AIMessage): boolean {
-  return (
-    message.additional_kwargs[INTERRUPTED_REPLY_MARKER] === true &&
-    message.text === '' &&
-    (message.tool_calls ?? []).length === 0
-  );
-}
-
-/** 記下這次呼叫回來的那一則。不是回覆的（`Command`、合成的空訊息）不記；記不進去就算了。 */
-function tryRecordReply(log: SessionLog, response: unknown): void {
-  if (!AIMessage.isInstance(response) || isSyntheticStop(response)) return;
-  try {
-    log.append('assistant/message', { message: toLoggedMessage(response) });
-  } catch {
-    // 見檔頭「記不進去不能扳倒模型呼叫」。
-  }
+function recordReply(log: SessionLog, response: unknown, modelCall: number): void {
+  if (!AIMessage.isInstance(response) || isSyntheticStopReply(response)) return;
+  log.append('assistant/message', withModelCall({ message: toLoggedMessage(response) }, modelCall));
+  // 這一次有正常回覆了：之後 pump 補記的被切斷半段不會再掛到它底下（`lastModelCall`）。
+  noteModelCallReplied(log, modelCall);
 }
 
 /**
@@ -118,14 +147,34 @@ export function createModelCallRecorder(sessions: {
       const found = sessions.forCall({
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       });
-      if (found.kind !== 'ok' || !tryAppend(found.log, 'model/start')) return handler(request);
+      if (found.kind !== 'ok') return handler(request);
+      const { log } = found;
+      // 記不進去從這裡拋，請求不送出（#1702，見檔頭）。
+      const route = routeOfModel(request.model);
+      const modelCall = log.append('model/start', route === undefined ? {} : { route }).seq;
+      let response;
+      // 沒有正常回來的方式（#1022）：被中止。正常回來沒有。
+      let outcome: ModelCallOutcome | undefined;
       try {
-        const response = await handler(request);
-        tryRecordReply(found.log, response);
-        return response;
-      } finally {
-        tryAppend(found.log, 'model/end');
+        // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量的寫入點，往外填給摘要器的量測
+        // （{@link ./model-call-scope.ts}）。重試在這一格外面（{@link ./stream-retry.ts}），每次嘗試各是一對起訖。
+        response = await runInModelCall(log, modelCall, () => handler(request));
+        // 子代理被中止時回的是合成的空收尾，不是拋錯：它沒有回覆可記，這次呼叫算被中止。
+        if (AIMessage.isInstance(response) && isSyntheticStopReply(response)) outcome = 'aborted';
+        // 記不進去就從這裡拋，下面的 `catch` 把這次呼叫記成 `error`（#1665）。
+        recordReply(log, response, modelCall);
+      } catch (error) {
+        appendEndAfterFailure(
+          log,
+          modelCall,
+          modelCallAborted(request) ? 'aborted' : 'error',
+          error,
+        );
+        throw error;
       }
+      // 記不進去從這裡拋：回覆不進 graph state（#1702）。
+      log.append('model/end', outcome === undefined ? { modelCall } : { modelCall, outcome });
+      return response;
     },
   }) as unknown as AgentMiddleware;
 }

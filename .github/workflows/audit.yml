@@ -1,0 +1,32 @@
+name: Audit（相依漏洞）
+
+# 每天對 prod 相依跑一次漏洞掃描（#1545 步驟 5，Q1 (a)）：判斷在 `.github/scripts/check_audit.py`，例外清單在
+# `.github/audit-exceptions.json`。發版前 `release.yml` 也跑同一支。**不在 pull_request 上跑、不列進 gate**：
+# 掃描結果跟著上游 advisory 變，不是這張 PR 改出來的，擋 PR 只會讓不相干的改動跟著紅（#1545 Q1 (a)）。
+#
+# 每天跑，是為了在發版之前就知道三件事：有沒有新的 high／critical、例外到期了沒、列了例外的 advisory 有沒有出修補版。
+# 排程只在預設分支（develop）上跑；repo 六十天沒有動靜，GitHub 會自動停掉排程，手動是備援。
+# 失敗通知：GitHub 預設通知最後改過這份 cron 的人，沒有另外接。
+on:
+  workflow_dispatch:
+  schedule:
+    # 00:43 UTC = 08:43 Asia/Taipei，上班前看得到結果；避開整點的排程尖峰。
+    - cron: '43 0 * * *'
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup
+      - name: 漏洞掃描
+        run: python3 .github/scripts/check_audit.py

@@ -1,0 +1,179 @@
+/**
+ * `fs` 服務：**工具拿到工具實際讀寫的那一個 backend** 的地方（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。
+ *
+ * dsh 只有一個 `fs` 服務（`packages/fs/fs/src/index.ts:89` 的 `super(ctx, 'fs')`，SHA `477b4f4`），
+ * 檔案工具、`present` 與 `agent-instructions` 注入的都是同一個（`packages/fs/tool-fs/src/index.ts:22`、
+ * `packages/deliverables/tool-present/src/index.ts:26`）。我們照它：要讀寫工作區檔案的工具從這裡拿，
+ * 拿到的是 {@link foldRegistry} 折出來、也交給基座檔案工具的那一個——包含組裝點在 fold 之前包的路由
+ * （`apps/harness/src/agent-factory.ts` 的會話歷史與工具結果暫存）與 plugin `backend.mount()` 掛的路由。
+ *
+ * ## 偏離登記：服務的值是一格把手，不是檔案系統本身
+ *
+ * **哪一條**：dsh 的 `ctx.fs` 就是那個檔案系統，提供方在自己的 `apply` 裡交出它。
+ *
+ * **為什麼表達不出來**：plugin 在 `apply` 裡看不到折後的
+ * backend，它要等 `foldRegistry` 把路由與兜底那個折起來才算得出來；而 `services.provide()` 只能在 `apply`
+ * 裡呼叫（`registry.ts` 的 `requireOrigin`）。（`@nexus/plugin-agent-instructions` 當年為同一件事退到
+ * `useWithBackend`，#1474 起改成呼叫當下問這個服務，那條偏離已撤。）
+ *
+ * **退到什麼**：組裝點在 `apply` 裡先提供一格（{@link createFsService}），fold 折完把折出來的那一個填進去
+ * （{@link settleFsService}）。消費者**在工具被叫時才讀** {@link FsService.backend}，所以排在提供者前面
+ * 或後面都一樣；這次組裝一個 backend 都沒有時讀到 `undefined`，同 dsh 拿不到提供方。
+ *
+ * @module
+ */
+
+import type { AnyBackendProtocol } from 'deepagents';
+
+import { threadSkillSources } from './skill-catalog.js';
+
+/** 服務名，照 dsh。 */
+export const FS_SERVICE = 'fs';
+
+/** {@link FS_SERVICE} 的值。 */
+export interface FsService {
+  /**
+   * 折出來的那一個 backend。
+   * @returns 工具實際讀寫的 backend；這次組裝沒有 backend、或還沒 fold 時是 `undefined`。
+   */
+  backend(): AnyBackendProtocol | undefined;
+  /**
+   * 組裝點在 fold **之前**包上去、**不在工作區磁碟上**的路由前綴（會話歷史、工具結果暫存）。
+   *
+   * 為什麼組裝點要明著交出來：折出來的 backend 是巢狀的 `CompositeBackend`，最外層只露得出 plugin 掛的那幾格，
+   * 裡面那兩層的前綴在 private 欄位裡（[#951](https://github.com/DemianLi/nexus-agent/issues/951)）。
+   *
+   * **plugin 自己用 `backend.mount()` 掛的路由也在這裡**（[#1469](https://github.com/DemianLi/nexus-agent/issues/1469)，`@nexus/fs`
+   * 1.1.0 起）：fold 填 backend 的同一處（{@link settleFsService}）把 `registry.backend.mounts()` 的前綴併進來，所以消費者
+   * 只讀這一個東西，不必另外握著 registry 去問 mounts。
+   *
+   * 消費者是要把檔案**交給磁碟那一側**讀的工具（`present`：讀端只認工作區磁碟）；走 backend 讀寫的不需要它。
+   * @returns 路由前綴，原樣（有沒有結尾斜線由組裝點決定，比對的人自己正規化）。fold 之前只有組裝點明著交的那幾格。
+   */
+  offWorkspacePrefixes(): readonly string[];
+  /**
+   * 這次組裝有沒有工作區（[#1469](https://github.com/DemianLi/nexus-agent/issues/1469) Q2 (a)，`@nexus/fs` 1.1.0 起）。
+   *
+   * 就是 fold 當下 `registry.capabilities.has(WORKSPACE_CAPABILITY)` 的結果——`sandbox-policy` 只在有圍堵時（給了 `--workspace`）
+   * 宣告那個能力，而 fold 在所有 `apply` 之後，所以跟「工具被叫時才讀能力」的結果相同。**逐條 thread**：能力每次組裝各提供一次，
+   * 這個把手是這次組裝的那一格，不會出現「這條 thread 的 backend 配上別條的工作區」。
+   * @returns 有工作區就是 `true`；還沒 fold 或這次組裝沒有工作區是 `false`。
+   */
+  hasWorkspace(): boolean;
+  /**
+   * **這條 thread** 的可寫根（主機上的絕對路徑；[#1774](https://github.com/DemianLi/nexus-agent/issues/1774)，`@nexus/fs` 2.0.0 起）。
+   *
+   * 就是這次組裝的 host 服務 `workspaceRoot`（組裝點只在有圍堵時提供，`sandbox.ts` 的 `WORKSPACE_ROOT_SERVICE`），在 fold 填 backend 的同一處
+   * 讀進來，跟 {@link hasWorkspace} 同一次算、同一條 thread。**逐條 thread**：每條 thread 的根由組裝點依「thread → 根」那支函式取得，
+   * 這個把手是這次組裝的那一格，不會出現「這條 thread 的 backend 配上別條的根」。以前它是 `@nexus/fs` 查找服務上行程級的一格（1.2.0）。
+   * @returns 這次組裝的可寫根；還沒 fold 或這次組裝沒有圍堵是 `undefined`。
+   */
+  workspaceRoot(): string | undefined;
+  /**
+   * **這條 thread** 的唯讀共用參考區在模型位址空間裡的前綴（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)，`@nexus/fs` 2.1.0 起）。
+   *
+   * 新 thread 有私有可寫根，`--workspace` 退成唯讀共用區、掛在這個前綴底下（`apps/harness/src/agent-factory.ts`）；舊 thread 的可寫根本來就是
+   * 共用區，沒有這一格。fold 當下讀組裝點提供的 host 服務 `sharedWorkspace`，跟 {@link workspaceRoot} 同一次算、同一條 thread。
+   * 消費者：`agent-instructions`（部署方放在共用區的指示檔從這裡讀）；技能來源在把手填值時據它換到共用區底下（{@link skillSources}，#1928）。這個前綴同時也在 {@link offWorkspacePrefixes} 裡。
+   * @returns 前綴（不含結尾斜線）；還沒 fold、或這條 thread 沒有共用區是 `undefined`。
+   */
+  sharedWorkspacePrefix(): string | undefined;
+  /**
+   * **這條 thread** 要掃的技能來源（[#1919](https://github.com/DemianLi/nexus-agent/issues/1919)，`@nexus/fs` 2.2.0 起），順序就是優先序（後者贏）。
+   *
+   * 就是模型清單用的那一份：fold 當下折進這次組裝的來源，經 `threadSkillSources` 依這個把手的 {@link sharedWorkspacePrefix} 與
+   * {@link offWorkspacePrefixes} 換過，跟 {@link workspaceRoot} 同一次算、同一條 thread。消費者：`skill-invocation`（`/名字`）與 `skill.list`
+   * 直接掃這一份，所以模型清單、`/名字`、`skill.list` 三條路掃的是同一組。
+   * @returns 來源；還沒 fold、或這次組裝沒有技能來源是空陣列。
+   */
+  skillSources(): readonly string[];
+}
+
+/** {@link settleFsService} 在 fold 當下算好、一起填進把手的事實（#1469）。 */
+export interface FsFacts {
+  /** 這次組裝有沒有工作區（`registry.capabilities.has(WORKSPACE_CAPABILITY)`）。 */
+  readonly hasWorkspace: boolean;
+  /** plugin 用 `backend.mount()` 掛上的路由前綴（`registry.backend.mounts()` 的鍵），原樣。 */
+  readonly mountPrefixes: readonly string[];
+  /** 這次組裝的可寫根（host 服務 `workspaceRoot`，#1774）；沒有圍堵是 `undefined`。 */
+  readonly workspaceRoot: string | undefined;
+  /** 這條 thread 的唯讀共用區前綴（host 服務 `sharedWorkspace`，#1775）；沒有是 `undefined`。 */
+  readonly sharedWorkspacePrefix: string | undefined;
+  /** 折進這次組裝的技能來源（`registry.skills.sources()`），還沒換到共用區底下；換由把手在填值時做（#1919）。 */
+  readonly skillSources: readonly string[];
+}
+
+/** {@link createFsService} 的參數。 */
+export interface FsServiceOptions {
+  /** 見 {@link FsService.offWorkspacePrefixes}。省略即沒有。 */
+  offWorkspacePrefixes?: readonly string[];
+}
+
+/** 填值的那一半只留在這個模組裡：消費者手上的把手只讀得到、改不了。 */
+const settlers = new WeakMap<
+  object,
+  (backend: AnyBackendProtocol | undefined, facts: FsFacts) => void
+>();
+
+/**
+ * 建一格還沒填值的 `fs` 服務。組裝點在 `apply` 裡把它提供出去（例如經 `createHostServicesPlugin`）。
+ * @param options - 組裝點自己包的、不在磁碟上的路由前綴。
+ * @returns 一格把手，fold 之前讀到 `undefined`。
+ */
+export function createFsService(options: FsServiceOptions = {}): FsService {
+  let folded: AnyBackendProtocol | undefined;
+  let workspace = false;
+  let root: string | undefined;
+  let shared: string | undefined;
+  let skills: readonly string[] = [];
+  const assembly = [...(options.offWorkspacePrefixes ?? [])];
+  let prefixes: readonly string[] = assembly;
+  const service: FsService = {
+    backend: () => folded,
+    offWorkspacePrefixes: () => prefixes,
+    hasWorkspace: () => workspace,
+    workspaceRoot: () => root,
+    sharedWorkspacePrefix: () => shared,
+    skillSources: () => skills,
+  };
+  settlers.set(service, (backend, facts) => {
+    folded = backend;
+    workspace = facts.hasWorkspace;
+    root = facts.workspaceRoot;
+    shared = facts.sharedWorkspacePrefix;
+    // 組裝點明著交的在前，plugin 掛的在後；重複填（同一格 fold 兩次）不累加。
+    const settled = [...assembly, ...facts.mountPrefixes];
+    prefixes = settled;
+    skills = threadSkillSources(facts.skillSources, {
+      sharedWorkspacePrefix: () => facts.sharedWorkspacePrefix,
+      offWorkspacePrefixes: () => settled,
+    });
+  });
+  return service;
+}
+
+/**
+ * 把折出來的 backend 填進那一格。**只有 fold 呼叫**。
+ *
+ * 不是 {@link createFsService} 建的那一種（測試直接交一個物件、或根本沒人提供）就不碰：那個值是誰提供的，
+ * 就由誰說了算。
+ *
+ * **這是「這次組裝有沒有工作區」、「可寫根是哪個」與「plugin 掛了哪些路由」唯一被算的地方**（#1469、#1774）：fold 把它們一起交進來，
+ * 消費者之後只從把手讀，不在別處再算一次。
+ *
+ * @param service - `registry.services.get(FS_SERVICE)` 拿到的東西。
+ * @param backend - `foldBackend` 折出來的那一個。
+ * @param facts - fold 當下算好的工作區事實、掛載前綴與技能來源。
+ * @returns 填了值的那一格把手（fold 從它讀回換過的技能來源，#1919）；沒填（不是這一種）是 `undefined`。
+ */
+export function settleFsService(
+  service: unknown,
+  backend: AnyBackendProtocol | undefined,
+  facts: FsFacts,
+): FsService | undefined {
+  if (typeof service !== 'object' || service === null) return undefined;
+  const settle = settlers.get(service);
+  if (settle === undefined) return undefined;
+  settle(backend, facts);
+  return service as FsService;
+}

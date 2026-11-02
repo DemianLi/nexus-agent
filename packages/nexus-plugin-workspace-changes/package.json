@@ -1,15 +1,19 @@
 {
   "name": "@nexus/plugin-workspace-changes",
-  "version": "0.0.0",
+  "version": "0.6.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./src/index.ts",
-    "./invariant": "./src/invariant.ts",
+    ".": "./lib/index.js",
+    "./types": "./lib/types.js",
+    "./invariant": "./lib/invariant.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
+  "files": [
+    "lib"
+  ],
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "eslint .",
@@ -20,14 +24,15 @@
   "devDependencies": {
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
+    "tsx": "^4.22.4",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   },
   "dependencies": {
     "@nexus/core": "workspace:*",
-    "@nexus/wire": "workspace:*",
+    "@nexus/timeout": "workspace:*",
     "diff": "^9.0.0",
     "langchain": "^1.5.10",
-    "zod": "^4.3.6"
+    "zod": "^4.6.7"
   }
 }

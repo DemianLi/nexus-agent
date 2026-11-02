@@ -1,11 +1,6 @@
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
-import {
-  createMemoryPlugin,
-  DEFAULT_MEMORY_SOURCE,
-  MEMORY_CAPABILITY,
-  memoryPlugin,
-} from './index.js';
+import { createMemoryPlugin, DEFAULT_MEMORY_SOURCE, memoryPlugin } from './index.js';
 
 /**
  * 薄測試，只斷言「`apply` 真的往那兩個註冊點放了東西」，加上這個套件自己拒絕的那一種。
@@ -14,10 +9,9 @@ import {
  * ——那裡看的是模型收到的 system prompt，這裡看的是 registry 的內容。兩件事。
  */
 describe('createMemoryPlugin', () => {
-  it('省略 sources 時註冊慣例路徑並宣告 memory 能力', async () => {
+  it('省略 sources 時註冊慣例路徑', async () => {
     const { registry } = await loadPlugins([createMemoryPlugin()]);
 
-    expect(registry.capabilities.has(MEMORY_CAPABILITY)).toBe(true);
     expect(registry.memory.sources()).toEqual([DEFAULT_MEMORY_SOURCE]);
   });
 

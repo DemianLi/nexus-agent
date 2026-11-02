@@ -1,0 +1,7 @@
+# 把背景續行的並存上限改成 3（#841 的驗收：「在設定裡覆寫會生效」）。
+# **3 非得不是 8 不可**：出貨那一列、schema 預設與 `DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS` 是同一個 8，三個來源重合，
+# 拿 8 去驗量不出東西。讀它的是 `serve-background-setting.test.ts`。
+- id: background-subagents
+  config:
+    backgroundMode: continuable
+    maxActiveSubagents: 3

@@ -30,8 +30,15 @@ export type {
   FeedbackTargetNotFound,
   FeedbackVersionConflict,
   InputRespondOne,
+  QueueSteerAction,
+  QueueUpdateAction,
+  QueueUpdateCommand,
   RpcMethod,
   RunCancelCommand,
+  SubagentInterruptCommand,
+  SubagentSendCommand,
+  RunStartCommand,
+  RunStartMode,
   RunStartParams,
   SlashCommand,
   SlashDescriptor,
@@ -39,33 +46,168 @@ export type {
   SlashListCommand,
   SlashListResult,
   SlashMethod,
+  SkillEntry,
+  SkillListCommand,
+  SkillListResult,
+  SkillMethod,
   SlashRunCommand,
   SlashRunResult,
+  ThreadFeedFrame,
   ThreadHistoryQuery,
   ThreadHistoryResponse,
+  TrajectoryTurnResponse,
   ThreadHistoryResult,
   ThreadListResponse,
   ThreadListResult,
+  ThreadInputRequestedFrame,
+  ThreadSearchItem,
+  ThreadSearchRequest,
+  ThreadSearchResponse,
+  ThreadSearchResult,
+  ThreadInputWithdrawnFrame,
+  ThreadStatusFrame,
   ThreadSummary,
   UplinkMethod,
   WireChannel,
   WireFeedbackCategory,
   WireFeedbackItem,
   WireFeedbackRating,
+  WireErrorCode,
+  WireErrorResponse,
 } from './protocol.js';
 export type {
-  DeliverableFileBytes,
+  BinaryAttachmentRef,
+  DeliverableBytes,
+  DeliverableCommand,
   DeliverableFilePage,
   DeliverableFileStat,
+  DeliverableMethod,
+  DeliverableReadBytesCommand,
+  DeliverableReadBytesParams,
+  DeliverableReadBytesResult,
+  DeliverableReadCommand,
+  DeliverableReadError,
+  DeliverableReadParams,
+  DeliverableReadResult,
+  DeliverableRefusalCode,
   DeliverablesPresentedPayload,
   WirePresentedFile,
 } from './deliverables.js';
 export {
-  deliverableBytesPath,
-  deliverableDownloadPath,
-  deliverableFilePath,
+  DELIVERABLE_METHODS,
+  DELIVERABLE_READ_BYTES_METHOD,
+  DELIVERABLE_READ_METHOD,
   DELIVERABLES_PRESENTED,
+  decodeBinaryResult,
+  encodeBinaryResult,
+  isBinaryResponse,
+  isDeliverableMethod,
 } from './deliverables.js';
+export type { CustomFrameData, CustomFrameName, CustomFramePayloads } from './custom-frame.js';
+export type {
+  AttachmentReadResponse,
+  AttachmentReadResult,
+  ImageMediaType,
+  PromptAttachment,
+  UploadReceipt,
+  WireAttachmentRef,
+  UploadResponse,
+} from './attachments.js';
+export {
+  ATTACHMENT_NOT_FOUND,
+  IMAGE_MEDIA_TYPES,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGE_DIMENSION,
+  MAX_IMAGE_PIXELS,
+  MAX_IMAGES_PER_MESSAGE,
+  MAX_MESSAGE_IMAGE_BYTES,
+  MODEL_DOES_NOT_SUPPORT_IMAGES,
+  UPLOAD_NAME_PARAM,
+  attachmentPath,
+  uploadPath,
+} from './attachments.js';
+export type {
+  ModelCatalog,
+  ModelCatalogCommand,
+  ModelCatalogModel,
+  ModelCatalogResult,
+  ModelCommand,
+  ModelMethod,
+  ModelReasoning,
+  ModelReasoningEffort,
+  ModelSelectCommand,
+  ModelSelection,
+  ModelSelectionState,
+  ModelSelectResult,
+  ModelUnavailable,
+} from './model-selection.js';
+export { isModelMethod, MODEL_METHODS, MODEL_SELECTION_PROJECTION_KEY } from './model-selection.js';
+export type {
+  ThreadArchiveCommand,
+  ThreadActivityKind,
+  ThreadArchiveError,
+  ThreadArchiveResult,
+  ThreadForkCommand,
+  ThreadForkError,
+  ThreadForkResult,
+  ThreadListSets,
+  ThreadManagementCommand,
+  ThreadManagementMethod,
+  ThreadNotFound,
+  ThreadPinCommand,
+  ThreadPinError,
+  ThreadPinResult,
+  ThreadRenameCommand,
+  ThreadRenameError,
+  ThreadRenameResult,
+  ThreadUnarchiveCommand,
+  ThreadUnarchiveResult,
+  ThreadUnpinCommand,
+  ThreadUnpinResult,
+} from './thread-management.js';
+export {
+  isThreadManagementMethod,
+  THREAD_ACTIVITY_KINDS,
+  THREAD_MANAGEMENT_METHODS,
+} from './thread-management.js';
+export type {
+  SubagentKind,
+  SubagentListCommand,
+  SubagentListResult,
+  SubagentMention,
+} from './subagent-list.js';
+export {
+  isSubagentListMethod,
+  isSubagentMention,
+  mentionField,
+  SUBAGENT_LIST_METHOD,
+} from './subagent-list.js';
+export type { MessageDiscardPayload } from './message-discard.js';
+export { AUTH_FAILURE_CODE, AUTH_FAILURE_MESSAGE, turnFailureText } from './turn-failure.js';
+export { LLM_RETRY, LLM_RETRY_STARTED } from './llm-retry.js';
+export type { LlmRetryPayload, LlmRetryStartedPayload, WireLlmRetry } from './llm-retry.js';
+export { MESSAGE_DISCARD } from './message-discard.js';
+export type {
+  PermissionCatalog,
+  PermissionCatalogCommand,
+  PermissionCatalogResult,
+  PermissionCommand,
+  PermissionMethod,
+  PermissionSelection,
+  PresetOption,
+} from './permission-presets.js';
+export {
+  CUSTOM_PRESET,
+  isPermissionMethod,
+  PERMISSION_METHODS,
+  PERMISSIONS_PROJECTION_KEY,
+} from './permission-presets.js';
+export type {
+  DeliverableClient,
+  DeliverableClientOptions,
+  DeliverableOutcome,
+} from './deliverable-client.js';
+export { createDeliverableClient } from './deliverable-client.js';
 export type {
   WorkspaceChangedFile,
   WorkspaceChangesPayload,
@@ -73,15 +215,103 @@ export type {
   WorkspaceDiffHunk,
   WorkspaceFileDiff,
 } from './workspace-changes.js';
-export { changesDiffPath, changesSummaryPath, WORKSPACE_CHANGES } from './workspace-changes.js';
+export {
+  changesDiffPath,
+  changesDiffUrl,
+  changesSummaryPath,
+  changesSummaryUrl,
+  isChangesDiff,
+  isChangesSummary,
+  WORKSPACE_CHANGES,
+} from './workspace-changes.js';
+export type {
+  FileReferenceCandidate,
+  FileReferenceListResponse,
+  FileReferenceListResult,
+} from './file-references.js';
+export { fileReferencesPath } from './file-references.js';
+export type {
+  ParsedSessionReferenceText,
+  SessionReferenceCandidate,
+  SessionReferenceErrorCode,
+  SessionReferenceInput,
+  SessionReferenceListResponse,
+  SessionReferenceListResult,
+} from './session-references.js';
+export {
+  DEFAULT_SESSION_REFERENCE_CANDIDATE_LIMIT,
+  decodeSessionReferenceUri,
+  encodeSessionReferenceUri,
+  formatSessionReferenceMention,
+  MAX_SESSION_REFERENCES,
+  parseSessionReferenceText,
+  SESSION_REFERENCE_SCHEME,
+  SessionReferenceError,
+  sessionReferencesPath,
+} from './session-references.js';
 export type {
   ModelUsagePayload,
+  WireContextBreakdown,
   WireContextMeasure,
   WireContextPressure,
   WireSummaryThreshold,
 } from './context-pressure.js';
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
+export type { CompactionPayload } from './compaction.js';
+export type {
+  GoalMethod,
+  GoalPauseCommand,
+  GoalPauseResult,
+  GoalPauseState,
+  GoalActivationPayload,
+  GoalPayload,
+  WireGoal,
+  WireGoalActivation,
+  WireGoalBlockedReason,
+  WireGoalPhase,
+  WireGoalRef,
+} from './goal.js';
+export type { PlanModePayload } from './plan-mode.js';
+export type { ProjectionPayload, WireProjection } from './projection.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
+export type {
+  AgentMessagePayload,
+  InboxPayload,
+  SettleNoticePayload,
+  WireClaimedInput,
+  WireClaimedSource,
+  WireQueuedInput,
+  WireQueuedInputSource,
+  WireSessionReference,
+  WireSettleReason,
+} from './inbox.js';
+export {
+  AGENT_MESSAGE,
+  INBOX,
+  SETTLE_NOTICE,
+  SETTLE_REASONS,
+  isSettleReason,
+  isTurnStopCause,
+} from './inbox.js';
+export type { TitlePayload } from './title.js';
+export { SUBAGENT_STATUS } from './subagent-status.js';
+export { SUBAGENT_CATALOG } from './subagent-catalog.js';
+export type { SubagentCatalogPayload } from './subagent-catalog.js';
+export type { SubagentRunStatus, SubagentStatusPayload } from './subagent-status.js';
+export { COMPACTION } from './compaction.js';
+export {
+  GOAL,
+  GOAL_ACTIVATION,
+  GOAL_METHODS,
+  GOAL_PAUSE_METHOD,
+  GOAL_PHASES,
+  isGoalMethod,
+} from './goal.js';
+export { PLAN_MODE } from './plan-mode.js';
+export { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
+export { TITLE } from './title.js';
+export { IMAGE_OFFLOAD } from './image-offload.js';
+export type { ImageOffloadItem, ImageOffloadPayload } from './image-offload.js';
 export { TODOS } from './todos.js';
 export type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 export { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
@@ -90,54 +320,102 @@ export {
   HISTORY_PAGE_MAX_BYTES,
   HISTORY_PAGE_MESSAGES,
   historyPath,
+  subagentHistoryPath,
+  trajectoryTurnPath,
   isFeedbackMethod,
+  isQueueUpdateMethod,
+  isSubagentMethod,
+  QUEUE_ITEM_NOT_FOUND,
+  QUEUE_UPDATE_METHOD,
+  REQUEST_ID_MAX_LENGTH,
+  RPC_PARAM_KEYS,
+  RPC_PARAMS_NOT_IMPLEMENTED,
   RUN_CANCEL_METHOD,
+  RUN_START_MODES,
+  SKILL_METHODS,
   SLASH_METHODS,
+  STEER_UNAVAILABLE,
+  SUBAGENT_AT_CAPACITY,
+  SUBAGENT_CLOSED,
+  SUBAGENT_INTERRUPT_METHOD,
+  SUBAGENT_NOT_FOUND,
+  TURN_NOT_FOUND,
+  SUBAGENT_SEND_METHOD,
+  THREAD_AT_CAPACITY,
+  SERVER_CLOSING,
+  THREAD_HISTORY_TOO_DEEP,
+  THREAD_IS_SUBAGENT,
+  THREAD_LOG_BUSY,
+  THREAD_LOG_TOO_LARGE,
+  THREAD_ROOT_MISMATCH,
+  THREAD_WRITER_HELD,
+  THREAD_FEED_PATH,
+  THREAD_SEARCH_PATH,
+  THREAD_SEARCH_QUERY_MAX_LENGTH,
+  THREAD_SEARCH_RESULT_LIMIT,
+  THREAD_SEARCH_SNIPPET_MAX_CODE_POINTS,
   THREADS_PATH,
   UPLINK_METHODS,
   WIRE_CHANNELS,
   channelOfMethod,
+  assertWireEvent,
   commandPath,
   errorResponse,
   eventId,
   isRpcMethod,
   isRunCancelMethod,
+  isSkillMethod,
   isSlashMethod,
+  isThreadFeedFrame,
   isUplinkMethod,
   isWireChannel,
+  isWireEvent,
   streamPath,
   successResponse,
+  unknownParamKeys,
 } from './protocol.js';
 
-export { decodeSseStream, encodeSseFrame } from './sse.js';
+export { decodeSseData, decodeSseStream, encodeSseData, encodeSseFrame } from './sse.js';
+export { canonicalClientTimeZone } from './time-zone.js';
 
 export type {
   AiEntry,
   AnswerEntry,
   Attribution,
+  BackgroundSubagentMeta,
+  AgentMessageEntry,
+  CompactionEntry,
   ConversationEntry,
   DeliverablesEntry,
   ConversationState,
   ConversationStatus,
   DecisionEntry,
   HumanEntry,
+  NoticeEntry,
   PendingApproval,
   PendingInput,
   PendingQuestion,
+  QuestionOrigin,
+  PlanReviewIntent,
   QuestionItem,
   ToolEntry,
+  TurnStopCause,
   WorkspaceChangesEntry,
 } from './conversation.js';
 export {
   APPROVAL_PENDING_KIND,
+  DELEGATION_TOOL_NAMES,
+  isBackgroundSubagentMeta,
   QUESTION_PENDING_KIND,
+  UNFINISHED_TOOL_CODE,
   UNFINISHED_TOOL_TEXT,
   answerResponse,
   appendAnswers,
   appendQuestionCancel,
+  appendQuestionDecline,
   cancelResponse,
+  declineResponse,
   appendDecision,
-  appendHumanTurn,
   emptyConversation,
   isApprovalPending,
   isQuestionPending,
@@ -148,14 +426,93 @@ export {
 } from './conversation.js';
 
 export type {
+  CommandOutcome,
   FeedbackOutcome,
+  FileReferenceListOutcome,
   OpenEventsOptions,
+  SessionReferenceListOutcome,
+  SkillListOutcome,
   SlashListOutcome,
   SlashRunOutcome,
   ThreadHistoryOutcome,
+  TrajectoryTurnOutcome,
   ThreadListOutcome,
+  ThreadSearchOutcome,
+  UploadOutcome,
+  UploadProgress,
+  UploadProgressEvent,
+  UploadXhr,
   UplinkResult,
   WireClient,
   WireClientOptions,
 } from './client.js';
 export { createWireClient } from './client.js';
+export {
+  MUX_FALLBACK_MS,
+  WIRE_MUX_PATH,
+  createMuxFetch,
+  isMuxRoute,
+  parseMuxClientMessage,
+  parseMuxServerMessage,
+} from './mux.js';
+export type { MuxClientMessage, MuxFetchOptions, MuxServerMessage, MuxSocket } from './mux.js';
+export { UplinkTransportError } from './uplink-error.js';
+export { WireRejectedError } from './rejected-error.js';
+export { WireProtocolError } from './protocol-error.js';
+export type {
+  RequestHeaderSnapshot,
+  RequestSnapshotsView,
+  RequestSystemSnapshot,
+  TrajectoryCall,
+  TrajectoryApproval,
+  TrajectoryApprovalOutcome,
+  TrajectoryDecision,
+  TrajectoryDigest,
+  TrajectoryElided,
+  TrajectoryEnd,
+  TrajectoryInput,
+  TrajectoryReply,
+  TrajectoryRetry,
+  TrajectorySubagentLink,
+  TrajectoryTool,
+  TrajectoryTurn,
+  TrajectoryTurnDetail,
+  TrajectoryTurnKind,
+  TrajectoryTurnQuery,
+  TrajectoryView,
+} from './trajectory.js';
+export {
+  REQUEST_SNAPSHOTS_KEEP,
+  REQUEST_SNAPSHOTS_PROJECTION,
+  REQUEST_SNAPSHOTS_VERSION,
+  REQUEST_SYSTEM_MAX_CHARS,
+  TRAJECTORY_CALL_TOOLS_CAP,
+  TRAJECTORY_DETAIL_TURNS,
+  TRAJECTORY_DIGEST_CAP,
+  TRAJECTORY_PREVIEW_CHARS,
+  TRAJECTORY_PROJECTION,
+  TRAJECTORY_TURN_CALLS_CAP,
+  TRAJECTORY_TURN_LIST_CAP,
+  TRAJECTORY_VERSION,
+} from './trajectory.js';
+export type {
+  TokenMeterEarlier,
+  TokenMeterEnd,
+  TokenMeterLink,
+  TokenMeterModelRow,
+  TokenMeterModelsOther,
+  TokenMeterSpan,
+  TokenMeterToolRow,
+  TokenMeterToolsOther,
+  TokenMeterTurn,
+  TokenMeterView,
+} from './token-meter.js';
+export {
+  TOKEN_METER_CALIBER,
+  TOKEN_METER_LINKS_CAP,
+  TOKEN_METER_MODELS_CAP,
+  TOKEN_METER_PROJECTION,
+  TOKEN_METER_TOOL_NAMES_CAP,
+  TOKEN_METER_TURNS_KEEP,
+  TOKEN_METER_VERSION,
+} from './token-meter.js';

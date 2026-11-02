@@ -4,13 +4,13 @@
  *
  * **這一顆不裝功能，只講設定**，同目錄那幾列一樣。值的消費者是
  * [`deliverable-files.ts`](../deliverable-files.ts) 的兩個讀檔函式，而**叫它們的是
- * `createWireHandler` 閉包裡的兩條路由**（`wire-handler.ts` 的 `handleDeliverableFile`、
- * `handleDeliverableDownload`）。
+ * `createWireHandler` 閉包裡的命令通道方法**（`wire-handler.ts` 的 `handleDeliverableCommand`：
+ * `deliverable.read`、`deliverable.readBytes`）。
  *
  * ## 它在起動期，不在請求期
  *
  * [#529](https://github.com/DemianLi/nexus-agent/issues/529) 的 triage 把這三個值放在「請求期，
- * `ThreadAgent` 才構得到」那一格。**量到的不是那樣**：那兩條路由住在 `createWireHandler(options)`
+ * `ThreadAgent` 才構得到」那一格。**量到的不是那樣**：那兩支方法住在 `createWireHandler(options)`
  * 的閉包裡，而 `createWireHandler` 在 `serve.ts` 被呼叫**一個 server 一次、早於任何 agent 組裝**
  * ——`threadId` 是它們的參數，不是閉包捕獲的東西。所以這一層**沒有註冊表**，跟
  * [`thread-title`](./thread-title.ts) 完全同層（那一列的消費點就在隔壁幾行）。
@@ -36,7 +36,7 @@
  * `:372` 擋超標，**兩處讀同一個 `this.config.maxLines`**。
  *
  * **這一格因此有一條特別的驗收**：兩個消費點必須一起吃到設定值。只接其中一處的話兩個方向都會壞
- * ——設定高於寫死的上限，不帶 `limit` 的請求全部 400；設定低於寫死的預設，一樣。所以驗收要用
+ * ——設定高於寫死的上限，不帶 `limit` 的請求全部被拒；設定低於寫死的預設，一樣。所以驗收要用
  * **不帶 `limit` 查詢參數**的請求去打，一條每次都明著傳 `limit` 的測試會從這個缺陷底下綠著走過去。
  *
  * ## 這一列關不掉
@@ -61,13 +61,13 @@ export const DELIVERABLE_FILES_PLUGIN_NAME = 'deliverable-files';
  * **超標是拒絕，不是切短**——dsh 的理由逐字：「a silently cut page reads as the whole page」。
  *
  * **它是雙用的，同 dsh**（「Inclusive byte cap on one page's text and on one byte window」）：也是
- * 位元組窗口路由 `length` 的預設與上限（[#544](https://github.com/DemianLi/nexus-agent/issues/544)，
- * `deliverable-window.ts`）。改這一格會同時動到兩條路由。
+ * 位元組窗口 `length` 的預設與上限（[#544](https://github.com/DemianLi/nexus-agent/issues/544)，
+ * `deliverable-window.ts`）。改這一格會同時動到兩支方法。
  */
 export const DEFAULT_DELIVERABLE_MAX_PAGE_BYTES = 2 * 1024 * 1024;
 
 /**
- * 整檔讀取的上限，照 dsh 的 `maxFileBytes`（32 MiB）。**只有下載吃它**，同 dsh 的 `readAll`；預覽
+ * 整檔讀取的上限，照 dsh 的 `maxFileBytes`（32 MiB）。**只有整檔讀吃它**（`deliverable.readBytes` 不給範圍），同 dsh 的不帶範圍的 `readBytes`；預覽
  * 串流分頁，整檔沒有上限（[#544](https://github.com/DemianLi/nexus-agent/issues/544)）。
  */
 export const DEFAULT_DELIVERABLE_MAX_FILE_BYTES = 32 * 1024 * 1024;

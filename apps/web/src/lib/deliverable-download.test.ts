@@ -2,9 +2,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import type { LocatedFile } from '@/lib/deliverables-view';
+import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
+import {
+  badRequestReply,
+  bytesReply,
+  carrierReply,
+  deliverableFetch,
+  protocolErrorReply,
+  refuseReply,
+  tooLargeReply,
+} from '@/test/deliverable-commands';
 
 /**
- * 交付檔的下載（#452 web 第三刀）。
+ * 交付檔的下載（#452 web 第三刀；#747 起走命令通道的 `deliverable.readBytes`）。
  *
  * **這一組的主角是位元組。** 下載存在的理由就是那些預覽讀不了的檔（二進位、非 UTF-8），而讓它
  * 悄悄壞掉的方法只有一個：中間出現一次文字解碼。基座的 `readRaw` 正是這樣壞的——6 位元組進、
@@ -30,18 +40,11 @@ let clicked: { href: string; download: string }[] = [];
 let serial = 0;
 
 /**
- * 讀出 blob 的位元組。
- *
- * **走 `FileReader`**：這一版 jsdom 的 `Blob` 沒有 `arrayBuffer()`，而 `new Response(blob)` 要把
- * jsdom 的 Blob 交給 undici，那是另一套實作。`FileReader` 是 jsdom 自己的，讀自己的 Blob。
+ * 讀出 blob 的位元組。`Blob` 是 Node 的那一個（`test/deliverable-commands.ts` 換掉了 jsdom 的，理由寫在那裡），
+ * 所以用它自己的 `arrayBuffer()`；jsdom 的 `FileReader` 不收 Node 的 Blob。
  */
-function bytesOf(blob: Blob): Promise<Uint8Array> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(new Uint8Array(reader.result as ArrayBuffer));
-    reader.onerror = () => reject(reader.error ?? new Error('讀不到 blob'));
-    reader.readAsArrayBuffer(blob);
-  });
+async function bytesOf(blob: Blob): Promise<Uint8Array> {
+  return new Uint8Array(await blob.arrayBuffer());
 }
 
 beforeEach(() => {
@@ -70,35 +73,29 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function downloaderWith(respond: (url: string) => Response | Promise<Response>) {
-  const calls: { url: string; init: RequestInit | undefined }[] = [];
-  const doFetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    calls.push({ url: String(input), init });
-    return respond(String(input));
-  }) as unknown as typeof globalThis.fetch;
+function downloaderWith(respond: (call: DeliverableCall) => Reply | Promise<Reply>) {
+  const { fetch: doFetch, calls, urls, inits } = deliverableFetch(respond);
   return {
     calls,
-    doFetch,
+    urls,
+    inits,
     downloader: createDeliverableDownloader({ threadId: 't1', baseUrl: '', fetch: doFetch }),
   };
 }
 
-/**
- * 原始位元組的回應，照路由實際送的那組 header。
- *
- * 交的是 `buffer` 而不是那個 view：這一版的型別裡 `Uint8Array` 不算合法的 body，而 fixture 都是
- * 整塊新建的，兩者的位元組相同。
- */
+/** 整檔的回覆：位元組走多段表單，照命令通道實際送的形狀。 */
 const octets = (bytes: Uint8Array) =>
-  new Response(bytes.buffer as ArrayBuffer, {
-    headers: {
-      'content-type': 'application/octet-stream',
-      'content-disposition': 'attachment; filename="app.bin"',
-    },
+  bytesReply({
+    path: 'out/build/app.bin',
+    version: 'v1',
+    bytes: bytes.length,
+    offset: 0,
+    data: bytes,
+    eof: true,
   });
 
 describe('交付檔的下載', () => {
-  it('存下去的位元組跟路由送來的一字不差', async () => {
+  it('存下去的位元組跟命令送來的一字不差', async () => {
     const { downloader } = downloaderWith(() => octets(BYTES));
     expect(await downloader.download(FILE)).toBe('ok');
 
@@ -110,41 +107,53 @@ describe('交付檔的下載', () => {
     expect([...saved]).toEqual([...BYTES]);
   });
 
-  it('打的是下載路由、帶座標、帶那道 header 的閘門', async () => {
-    const { downloader, calls } = downloaderWith(() => octets(BYTES));
+  it('打的是 readBytes 命令、帶座標、整檔（不帶 offset 與 length）、帶那道 header 的閘門', async () => {
+    const { downloader, calls, urls, inits } = downloaderWith(() => octets(BYTES));
     await downloader.download(FILE);
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.url).toContain('/deliverables/download');
-    expect(calls[0]!.url).toContain('seq=11');
-    expect(calls[0]!.url).toContain('index=2');
-    // 拿掉它，這條線上的每一條 GET 都會被 415 擋下來。
-    expect(calls[0]!.init?.headers).toMatchObject({ 'content-type': 'application/json' });
-  });
-
-  it('不送翻頁參數——下載沒有頁', async () => {
-    const { downloader, calls } = downloaderWith(() => octets(BYTES));
-    await downloader.download(FILE);
-    expect(calls[0]!.url).not.toContain('offset');
-    expect(calls[0]!.url).not.toContain('limit');
+    expect(calls).toEqual([
+      // **不帶 `offset`／`length`**：兩個都不給才是整檔，給任何一個就變成窗口。
+      { method: 'deliverable.readBytes', params: { seq: 11, index: 2 } },
+    ]);
+    expect(urls[0]).toBe('/threads/t1/commands/deliverable.readBytes');
+    expect(inits[0]?.method).toBe('POST');
+    // 拿掉它，這條線上的每一條請求都會被 415 擋下來。
+    expect(inits[0]?.headers).toMatchObject({ 'content-type': 'application/json' });
   });
 
   it.each([
-    [400, 'invalid'],
-    [404, 'missing'],
-    [413, 'too-large'],
-    [500, 'error'],
-  ])('%i 對到 %s', async (status, expected) => {
-    const { downloader } = downloaderWith(() => new Response('nope', { status }));
+    ['deliverable/no-anchor', 'missing'],
+    ['deliverable/not-found', 'missing'],
+    ['deliverable/not-regular-file', 'missing'],
+  ] as const)('理由碼 %s 對到 %s', async (code, expected) => {
+    const { downloader } = downloaderWith(() => refuseReply(code));
     expect(await downloader.download(FILE)).toBe(expected);
     // 失敗就不該有東西被存下來。
     expect(created).toHaveLength(0);
     expect(clicked).toHaveLength(0);
   });
 
-  it('422 是可重試的 error，不是 not-text——下載那條不看內容（#452）', async () => {
-    // 預覽那條用 422 講「不是文字，改走下載」。下載這條**不會**回它：二進位正是它存在的理由。
+  it('too-large（整檔超過 maxFileBytes）是終局', async () => {
+    const { downloader } = downloaderWith(() => tooLargeReply(32 * 1024 * 1024));
+    expect(await downloader.download(FILE)).toBe('too-large');
+    expect(created).toHaveLength(0);
+  });
+
+  it('參數不合格（invalid_argument）是 invalid；載體層擋下與別的協定碼是可重試的 error（#813）', async () => {
+    expect(await downloaderWith(() => badRequestReply).downloader.download(FILE)).toBe('invalid');
+    for (const reply of [
+      carrierReply(500),
+      carrierReply(401),
+      protocolErrorReply('queue_item_not_found'),
+    ]) {
+      expect(await downloaderWith(() => reply).downloader.download(FILE)).toBe('error');
+    }
+    expect(created).toHaveLength(0);
+  });
+
+  it('not-text 是可重試的 error，不是 not-text——readBytes 不看內容（#452）', async () => {
+    // 預覽那條用 `deliverable/not-text` 講「不是文字，改走下載」。下載這條**不會**回它：二進位正是它存在的理由。
     // 真收到就代表我們對協定的理解錯了，那該當「再試一次」，不是一句斬釘截鐵的終局。
-    const { downloader } = downloaderWith(() => new Response('', { status: 422 }));
+    const { downloader } = downloaderWith(() => refuseReply('deliverable/not-text'));
     expect(await downloader.download(FILE)).toBe('error');
   });
 

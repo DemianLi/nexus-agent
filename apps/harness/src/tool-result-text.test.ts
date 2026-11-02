@@ -1,17 +1,22 @@
 /**
- * 抽字的規則與上限（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）。
+ * 抽字的規則（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）與 `capToolText` 的上限（壓縮摘要在用，#896）。
  *
  * 產品路徑上這兩件事的效果在 `tool-card-from-log.test.ts`（即時與重播同一串）與
  * `conversation-history.test.ts`（重播那一側）驗；這一份釘的是規則本身。
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { toLoggedMessage } from '@nexus/core';
+import { SessionLog, SessionSeq, toLoggedMessage } from '@nexus/core';
 import type { LoggedMessage } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
-import { capToolText, toolResultText } from './tool-result-text.js';
+import {
+  capToolResultMeta,
+  capToolText,
+  READ_META_MAX_BYTES_FACTOR,
+  toolResultText,
+} from './tool-result-text.js';
 
 /**
  * 這一組釘的是**規則**，不是那個數字，所以每一條都明著傳預設值
@@ -28,40 +33,49 @@ const logged = (content: unknown): LoggedMessage =>
 
 describe('抽字的規則', () => {
   it('內容是字串就原樣給', () => {
-    expect(toolResultText(logged('寫好了'), CAP)).toBe('寫好了');
+    expect(toolResultText(logged('寫好了'))).toBe('寫好了');
   });
 
   it('剛好一塊文字：取那一塊', () => {
-    expect(toolResultText(logged([{ type: 'text', text: '寫好了' }]), CAP)).toBe('寫好了');
+    expect(toolResultText(logged([{ type: 'text', text: '寫好了' }]))).toBe('寫好了');
   });
 
-  /**
-   * **不自己把幾塊接起來**，照 dsh 的 `singleResultText`
-   * （`packages/client/ui-tool/src/client/tool/models/raw-tool-call.ts:46-50`，`ddefc45`）：
-   * 接出來的那串字是我們發明的，dsh 的卡在同樣的輸入下什麼都不顯示。
-   */
-  it('多塊就不給——不是把它們接起來', () => {
+  it('多塊文字：空一行接起來', () => {
     expect(
       toolResultText(
         logged([
           { type: 'text', text: '第一塊' },
           { type: 'text', text: '第二塊' },
         ]),
-        CAP,
+      ),
+    ).toBe('第一塊\n\n第二塊');
+  });
+
+  it('文字混了圖片就不給，不拿其中的文字代表整個結果', () => {
+    expect(
+      toolResultText(
+        logged([
+          { type: 'text', text: '前綴' },
+          { type: 'image', source: {} },
+        ]),
       ),
     ).toBeUndefined();
   });
 
+  it('空陣列不是一段文字', () => {
+    expect(toolResultText(logged([]))).toBeUndefined();
+  });
+
   it('那一塊不是文字（圖片、檔案）也不給', () => {
-    expect(toolResultText(logged([{ type: 'image', source: {} }]), CAP)).toBeUndefined();
+    expect(toolResultText(logged([{ type: 'image', source: {} }]))).toBeUndefined();
   });
 
   it('沒有訊息（格式 9 以前的日誌）就不給', () => {
-    expect(toolResultText(undefined, CAP)).toBeUndefined();
+    expect(toolResultText(undefined)).toBeUndefined();
   });
 
   it('空字串照樣是一段文字，不會被當成沒有', () => {
-    expect(toolResultText(logged(''), CAP)).toBe('');
+    expect(toolResultText(logged(''))).toBe('');
   });
 });
 
@@ -87,6 +101,12 @@ describe('上限', () => {
     expect(capped).toContain('沒有送出來');
     // 正中間那一段真的被拿掉了——不是只在尾巴接一行字。（暗號要挑通知本身不會用到的字。）
     expect(capped).not.toContain('藍鯨');
+  });
+
+  it('說明只講被截掉，**不說全文在哪**：會話日誌可以不落盤（#613），網頁上也打不開它', () => {
+    const capped = capToolText(`${HALF}${HALF}`, CAP);
+    expect(capped).toContain('沒有送出來');
+    expect(capped).not.toContain('日誌');
   });
 
   /**
@@ -129,9 +149,90 @@ describe('上限', () => {
     expect(capped.endsWith('x')).toBe(true);
   });
 
-  it('抽字時就套上限，兩條路拿到的都是截過的那一份', () => {
-    const capped = toolResultText(logged(`${HALF}藍鯨${HALF}`), CAP);
-    expect(capped).toBeDefined();
-    expect(Buffer.byteLength(capped!, 'utf8')).toBeLessThanOrEqual(CAP);
+  /**
+   * **抽字不截**（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）：這條原本釘的是「抽字時就套上限」，
+   * 外溢層落地後照 dsh 翻面——上限在模型面，日誌裡那則原樣上線。`capToolText` 只剩壓縮摘要在用（#896）。
+   */
+  it('抽字不套上限：比 `tool-text` 預設上限長的文字照樣一字不差', () => {
+    const long = `${HALF}藍鯨${HALF}`;
+    expect(Buffer.byteLength(long, 'utf8')).toBeGreaterThan(CAP);
+    expect(toolResultText(logged(long))).toBe(long);
+    expect(toolResultText(logged([{ type: 'text', text: long }]))).toBe(long);
+  });
+});
+
+/**
+ * 讀檔 meta 的上限是文字上限的兩倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
+ * 產品路徑上的效果（真的讀檔、即時與重播）在 `tool-card-from-log.test.ts`；這一組釘比較式的邊界。
+ */
+describe('讀檔 meta 的上限', () => {
+  const bytes = (meta: unknown) => Buffer.byteLength(JSON.stringify(meta), 'utf8');
+
+  /** JSON 剛好 `target` 位元組的讀檔 meta：用 ASCII 墊那一行。 */
+  function readMetaOf(target: number) {
+    const bare = { path: '/a.txt', offset: 1, lines: [{ number: 1, text: '' }], totalLines: 1 };
+    const meta = { ...bare, lines: [{ number: 1, text: 'x'.repeat(target - bytes(bare)) }] };
+    expect(bytes(meta)).toBe(target);
+    return meta;
+  }
+
+  it('剛好等於兩倍上限：照給；多一個位元組：整格不給', () => {
+    const limit = READ_META_MAX_BYTES_FACTOR * CAP;
+    const atLimit = readMetaOf(limit);
+    expect(capToolResultMeta(atLimit, CAP)).toEqual(atLimit);
+    expect(capToolResultMeta(readMetaOf(limit + 1), CAP)).toBeUndefined();
+  });
+
+  it('上限是乘數：跟著傳進來的文字上限走', () => {
+    const meta = readMetaOf(3_000);
+    expect(capToolResultMeta(meta, 1_500)).toEqual(meta);
+    expect(capToolResultMeta(meta, 1_499)).toBeUndefined();
+  });
+
+  it('搜尋與 diff 不跟著放寬：一倍的上限', () => {
+    const diff = { diffs: [{ path: '/a.ts', oldText: null, newText: 'x'.repeat(CAP) }] };
+    expect(bytes(diff)).toBeLessThan(2 * CAP);
+    expect(capToolResultMeta(diff, CAP)).toBeUndefined();
+    const search = {
+      shape: 'paths',
+      paths: ['/a', 'x'.repeat(CAP)],
+      truncated: false,
+      total: 2,
+    };
+    expect(capToolResultMeta(search, CAP)).toEqual({ ...search, paths: ['/a'], truncated: true });
+  });
+});
+
+/**
+ * 陣列巢狀（#1526）。深度取 3000：CI（Node 22.23.3 Linux x64）上原生 `JSON.stringify` 對凍過的陣列約 2200 層就
+ * `RangeError`、沒凍過的約 4100 層，夾在中間才分得出「先拷再量」。
+ */
+function nestedArray(depth: number): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < depth; level++) value = [value];
+  return value;
+}
+
+describe('日誌裡凍過的深 meta（#1526）', () => {
+  it('3000 層陣列巢狀：量得動、交出去的是沒凍過的副本，之後的原生 JSON.stringify 也序列化得了', () => {
+    const meta = { deep: nestedArray(3_000) };
+    // 照正式路徑凍：從日誌拿，不自己 `Object.freeze`。經 seed 進來：寫入那一關有深度上限（#1661），3000 層只會出現在
+    // 上限之前寫下、續接回來的舊日誌裡。
+    const event = new SessionLog('t', {
+      seed: [
+        {
+          type: 'tool/result',
+          seq: SessionSeq(0),
+          time: 0,
+          data: { callId: 'c1', isError: false, meta },
+        },
+      ],
+    }).events[0]!;
+    const logged = (event.data as { meta: unknown }).meta;
+    // 上限明著放大：這一格量的是「量得動、交得出去」，不是上限本身；超過上限的話回 `undefined`，什麼都測不到。
+    const capped = capToolResultMeta(logged, 1_000_000);
+    expect(Object.isFrozen(capped)).toBe(false);
+    // 呼叫端拿去組 frame、歷史頁與 SSE 都是原生 `JSON.stringify`；比對也用它，vitest 的 toEqual 是遞迴的。
+    expect(JSON.stringify(capped)).toBe(JSON.stringify(meta));
   });
 });

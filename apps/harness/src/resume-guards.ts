@@ -100,17 +100,21 @@ export class ResumeWorkspaceConflictError extends Error {
    * @param sessionId - 要續接的那份會話。
    * @param requestedRoot - 這一次 `--workspace` 解析出來的根。
    * @param existingRoot - header 記的那個。
+   * @param remedy - 訊息最後那句出路；省略就是「用 --workspace <header 的根> 再接」。serve 的私有根（#1775）另有出路，由它自己講。
+   * @param otherHome - header 的根名字是私有根的形狀、卻不在目前基底底下（多半是換過 home）；wire 的訊息不帶路徑，靠這一格講對出路。
    */
   constructor(
     readonly entry: string,
     readonly sessionId: string,
     readonly requestedRoot: string,
     readonly existingRoot: string,
+    remedy?: string,
+    readonly otherHome = false,
   ) {
     super(
       `${entry} 接不回來：會話 "${sessionId}" 跑在工作區 ${existingRoot} 底下，` +
         `不是 ${requestedRoot}。那份日誌記下的檔案路徑錨在前者，接到後者上讀到的會是` +
-        `另一個工作區裡的同名檔。用 --workspace ${existingRoot} 再接。`,
+        `另一個工作區裡的同名檔。${remedy ?? `用 --workspace ${existingRoot} 再接。`}`,
     );
   }
 }
@@ -128,8 +132,8 @@ export class ResumeWorkspaceConflictError extends Error {
  * **第二列放行的理由不是「別的守衛管了」。** `serve.ts` 那條沙箱模式檢查看的是日誌裡有沒有
  * `sandbox/mode`，而 sandbox-policy 那顆 plugin 被一份 patch 關掉時，上一次確實跑在
  * `--workspace` 底下卻一顆都沒寫——那條不會響。真正的理由是**沒給 `--workspace` 就沒有根**，
- * 而交付那兩條讀檔路由在沒有根的時候**每一次讀都拒**：`wire-handler.ts` 的
- * `locateRequested` 在 `state.workspaceRoot === undefined` 時回 `no-anchor`，而
+ * 而交付那兩支讀檔方法在沒有根的時候**每一次讀都拒**：`wire-handler.ts` 的
+ * `locateAt` 在 `state.workspaceRoot === undefined` 時回 `no-anchor`，而
  * `no-anchor` 對到 404。讀不到檔，就沒有讀錯檔這回事。
  *
  * **[#519](https://github.com/DemianLi/nexus-agent/issues/519) 放寬了那條路由，但沒有碰這個理由。**

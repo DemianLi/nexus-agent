@@ -44,7 +44,8 @@ import { createRegistry } from '@nexus/core';
 import type { NamedEntry } from '@nexus/core';
 import type { StructuredTool } from '@langchain/core/tools';
 
-import { createGoalPlugin, goalConfigSchema } from './index.js';
+import { goalConfigSchema } from './index.js';
+import { createGoalPlugin } from './goal-shell.test.helper.js';
 import { GOAL_UPDATE_TOOL_NAME, goalToolBlockTooSoonMessage } from './tools.js';
 
 /**

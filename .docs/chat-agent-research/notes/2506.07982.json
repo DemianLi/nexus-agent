@@ -1,0 +1,161 @@
+{
+  "id": "2506.07982",
+  "title": "$τ^2$-Bench: Evaluating Conversational Agents in a Dual-Control Environment",
+  "topic": "T6",
+  "subarea": "LLM 使用者模擬器（評估／訓練用，含逼真度研究）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 τ²-bench：把客服對話建模成雙控制 Dec-POMDP，讓 LLM 模擬使用者用工具操作自己的模擬手機，以環境約束提高模擬器可靠度，並量出 agent 要指導使用者動手時的成功率落差。",
+  "problem": "τ-bench 這一類對話 agent 基準都是「單控制」：只有 agent 能用工具改動世界，模擬使用者只負責提供偏好與資訊，對環境狀態的理解全靠初始的自然語言指令。真實的技術支援不是這樣，使用者得親手做事，例如重開機、關飛航模式，agent 要負責引導與協調。另一方面，LLM 使用者模擬器本身的可靠度一直是 τ-bench 這類基準的疑慮；作者實測發現，即使在修訂過的 retail／airline 上，只靠自然語言指令的模擬器錯誤率仍達 40–47%，其中 12–13% 是讓任務無法完成的 critical error。問題是：怎麼評估 agent 的協作與溝通能力，同時讓使用者模擬器更可靠？",
+  "core_idea": "讓使用者也擁有工具，形成 agent 與使用者共享同一個動態世界的 Dec-POMDP。重點是維持「複雜度不對稱」：使用者工具只回傳人看得懂的輸出（例如狀態列文字），使用者的規劃限縮成「agent 要求才呼叫工具、一次只做一個動作」的反應式行為，行為受環境狀態牢牢約束。這樣就不必靠冗長的自然語言提示詞去框住模擬器，模擬更穩定。再搭配由原子子任務組合出來的可驗證任務生成器，以及 No-User／Oracle Plan 消融，把「推理失敗」和「溝通／協調失敗」拆開量。",
+  "method": {
+    "形式化": "Dec-POMDP 七元組 (S, {A_i}, {O_i}, T, R, U, M)，i ∈ {agent, user}。全域狀態 S = S_world ⊗ S_history，其中 S_world = S_db,agent ⊗ S_db,user（例如 agent 端是 CRM 的客戶／門號資料，user 端是手機狀態），S_history 記錄所有動作、觀測、訊息。每回合只有一方行動；行動是工具呼叫 tool_name(**kwargs) 或自然語言訊息，二者擇一。工具呼叫可能改變 S_world 並回傳工具觀測；訊息則成為對方的觀測。獎勵 R: S → [0,1] 看整體狀態（資料庫加歷史）。U 是指令空間，同時包含使用者情境與 agent 必須遵守的領域政策。agent 端工具可以影響 user 端狀態，例如 agent 呼叫 enable_roaming 之後，使用者手機才能漫遊。",
+    "領域建置五階段": [
+      "Stage 1：請 LLM 寫產品需求文件（PRD），定出 agent 端 DB schema 與函式；再由 LLM 產生函式實作、mock DB 與單元測試，人工修到測試全數過關。",
+      "Stage 2：user 端比照辦理，telecom 是模擬手機，含訊號強度、飛航模式、SIM、APN、VPN、Wi-Fi Calling、App 權限等狀態與操作。",
+      "Stage 3：程式化組合任務。每個原子子任務 t = ({f_init}, {f_sol}, {f_assert})。init 設定初始狀態，例如 set_airplane_mode(True)；sol 限定用 agent 或 user 的工具，例如 toggle_airplane_mode()；assert 檢查終態條件，例如 assert_service_status(\"connected\")。互斥或替代的子任務放在同一組，每組至多挑一個，把函式串接起來就是複合任務。自動驗證有兩條：套用 init 再套用全部 sol 之後，所有 assert 為真；全部 sol 做完之前，任務不能已經解決。telecom 有 15 個原子子任務組、3 種意圖（service_issue、mobile_data_issue、mms_issue），組合出 2285 題，再依意圖與子任務數抽 114 題（Table 3：各意圖 29／36／49 題，子任務數 2–9；平均所需動作數分別為 2.31、4.31、6.00）。",
+      "Stage 4：依任務與解法請 LLM 生成 agent 的領域政策。telecom 分成通用政策與技術支援政策，後者有 original 與 workflow 兩版，workflow 版另附三種意圖的排障決策圖。No-User 模式用改寫過的政策，把「請使用者做 X」改成「執行 X」。",
+      "Stage 5：人工聯合修訂工具、政策與原子子任務。"
+    ],
+    "任務格式": "每題含：ID 與 purpose；使用者情境，含 reason for call、known info、unknown info、task instructions（例如「第一次沒修好時表達輕微不滿」「狀態列顯示有訊號才算解決」「願意加購 2GB 但不換方案」）；給 No-User 模式用的 ticket（問題摘要加成功條件）；initial state，即初始化動作與其 env type；評估準則，即應出現的動作（含 requestor）與環境 assertion。每題隨機指派一種 persona：None、Easy（41 歲行政人員，技術中等、耐心、會回報每一步）、Hard（64 歲退休圖書館員，技術知識有限、容易慌張、只在被問到時才給資訊）。",
+    "使用者模擬器": "gpt-4.1-2025-04-14，以 function-calling agent 實作，工具用 OpenAI tools 格式。system prompt 的要點：扮演聯絡客服的顧客；一次產生一則訊息；每回合只能傳訊息或呼叫工具，不能同時做；嚴格遵循情境指令；不捏造指令裡沒有的資訊，沒給的一律視為未知；工具結果必須以實際回傳為據；轉述而不照抄指令；漸進揭露，等 agent 問了才給；只在 agent 要求時才呼叫工具，不知道該用哪個工具就反問；agent 一次要求多個動作時，要回說一次只能做一個；帶工具呼叫的訊息不會顯示給 agent。結束協定用三個 token：目標達成輸出 ###STOP###，被轉接輸出 ###TRANSFER###，情境資訊不足以繼續輸出 ###OUT-OF-SCOPE###。telecom 使用者工具 15 write／15 read，回傳可讀文字（例如 Status Bar: [Signal 4] Excellent | 5G）。",
+    "agent 設定": "system prompt 很短：依 <policy> 服務使用者；每回合傳訊息或呼叫工具擇一；只輸出合法 JSON；後面接領域政策全文。評估的 agent 模型有 gpt-4.1-mini、gpt-4.1、o4-mini、claude-3-7-sonnet；所有 LLM 呼叫走 LiteLLM；temperature 0；每題跑 4 次。gpt-4.1 配 gpt-4.1 使用者時，每題成本約 agent 0.086 美元、使用者 0.059 美元；所有領域各跑一輪約 40 美元。",
+    "成功判定": "可選五類準則：DB check、status assertion（終態 S_world 的 assertion 函式）、自然語言 assertion（對 S_history 做描述式檢查）、communication info check、action matching（每個 sol 函式都要出現在軌跡裡）。每題可自選子集；telecom 只用 assertion 函式。主指標沿用 τ-bench 的 pass^k。",
+    "消融設計": "Default 是雙控制；No-User 給 agent 一張 ticket，由 agent 操作所有工具（包含原本屬於使用者的工具），用來量純推理與工具呼叫；Oracle Plan 直接給 agent 完整的 agent 加使用者工具呼叫序列，用來量「已知計畫下」的協作。另外比較 original 與 workflow 兩版政策，並依動作數、子任務數、意圖、persona 分組。",
+    "模擬器品質稽核": "retail／airline 先做實作與任務驗證：統一工具形式、資料模型、單元測試用的 mock 領域、結構化任務資料、分類式評估準則、以模擬結果為本的迭代審查。之後以 gpt-4.1 同時當 agent 與使用者產生軌跡，每段對話由兩位標註者逐一檢視每個使用者回合。標註者拿到的材料是模擬器 guideline、該題指令、使用者工具說明與完整軌跡。四項準則：遵守 guideline、遵守指令、正確使用工具、產生自然且一致的延續。錯誤分為 critical（使任務無法完成，例如產生與目標矛盾的意圖、造成不可逆的狀態轉移）與 benign。樣本數：airline 100 段、retail 50 段、telecom 50 段。"
+  },
+  "assumptions": [
+    "技術支援情境下，使用者的「動手」可以化約成對確定性 mock 手機的反應式工具呼叫，而工具回傳的可讀文字足以代表真人看到的畫面。",
+    "「複雜度不對稱」成立：使用者只需照指令做，不必推理解法；解法的推理負擔全落在 agent 身上。",
+    "以 gpt-4.1 扮演的模擬器，只要遵守 guideline 與指令，就能當作真實使用者的代理；模擬器的「可靠」等同於「遵守指令的錯誤少」。",
+    "telecom 的成敗只看終態 assertion 就夠，過程中是否遵守政策不必另外判定。",
+    "子任務數與所需動作數可以當作難度的代理指標；同組互斥之外，原子子任務組合起來沒有其他交互作用（由自動驗證把關）。",
+    "temperature 0 下跑 4 次得到的 pass^k 能反映 agent 的一致性。",
+    "No-User 與 Default 的差距可以歸因於溝通與雙控制本身。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "τ²-bench telecom（新領域；114 題，由 2285 題抽樣；agent DB 為 5 plans、9 lines、4 customers；agent 工具 6 write／7 read；user 工具 15 write／15 read）",
+      "τ²-bench retail（驗證修訂版；115 題；500 users、50 products、1,000 orders；agent 工具 7 write／6 read；無 user 工具）",
+      "τ²-bench airline（驗證修訂版；50 題；500 users、300 flights、2,000 reservations；agent 工具 6 write／6 read；無 user 工具）"
+    ],
+    "metrics": [
+      "pass^k（k = 1–4），依領域、意圖、persona 分組",
+      "pass^1，依模式（Default／No-User／Oracle Plan）與政策版本（original／workflow）",
+      "pass^1，依所需動作數與子任務數分箱",
+      "使用者模擬器錯誤率（人工標註；critical／benign／total）與失敗模式分類計數",
+      "每題 agent／使用者模擬成本（美元）"
+    ],
+    "baselines": [
+      "agent 模型：gpt-4.1-mini-2025-04-14、gpt-4.1-2025-04-14、o4-mini-2025-04-16、claude-3-7-sonnet-20250219（使用者模擬器固定為 gpt-4.1-2025-04-14）",
+      "模式對照：Default vs No-User vs Oracle Plan（gpt-4.1 與 o4-mini）",
+      "政策對照：original vs workflow 技術支援政策",
+      "模擬器對照：只靠自然語言指令的 retail／airline 使用者 vs 受工具約束的 telecom 使用者"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "組合式任務生成器從少量原子子任務自動展開出大量可驗證任務，並依意圖與子任務數抽樣成正式題組。",
+      "numbers": "15 個原子子任務組、3 種意圖 → 2285 題 → 抽 114 題（各意圖 29／36／49 題；子任務數 2–9）",
+      "section": "§3.2、Appendix A Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "telecom 雙控制領域明顯比 retail／airline 難；claude-3.7-sonnet 的 pass^1 雖與 airline 相當，但隨 k 增加下滑得更快，一致性較差。",
+      "numbers": "gpt-4.1 pass^1：retail 74%、airline 56%、telecom 34%；gpt-4.1-mini、o4-mini、claude-3.7-sonnet 的 telecom pass^1 約 50%（引言寫 o4-mini 42%、claude-3.7-sonnet 49%）；各 k 的數值只畫在 Figure 3",
+      "section": "§1、§4.2、Figure 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "從 No-User（agent 自己操作所有工具）改成 Default（要指導使用者動手），pass^1 大幅下滑；Oracle Plan 高於 Default，而且 o4-mini 受益比 gpt-4.1 大；workflow 版政策讓 Default／No-User 小幅進步，卻讓 Oracle Plan 退步。",
+      "numbers": "No-User → Default：gpt-4.1 下滑 18%、o4-mini 下滑 25%（引言概括為約 20%）；Oracle Plan 與政策版本的具體數值只畫在 Figure 4",
+      "section": "§4.2、Figure 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "使用者 persona 會影響 agent 成績：Easy 高於 Hard；沒有指定 persona（None）的題目，成績與 Hard 相當甚至更低。",
+      "numbers": "只有 Figure 7 的圖，內文沒給數值",
+      "section": "§4.2、Figure 7",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "受工具與環境約束的 telecom 使用者模擬器，錯誤率遠低於只靠自然語言指令的 retail／airline 模擬器，作者把改善歸因於領域設計。",
+      "numbers": "airline 100 段：critical 13（13%）、benign 34（34%）、total 47（47%）；retail 50 段：6（12%）、14（28%）、20（40%）；telecom 50 段：3（6%）、5（10%）、8（16%）",
+      "section": "§4.3、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "retail／airline 模擬器最常見的是違反對話結構規則（例如同一回合混用工具呼叫與訊息）與無根據的引用，但這兩類多半是 benign；critical error 主要來自漏掉限制條件，以及提早結束對話。",
+      "numbers": "retail 20 個錯誤：對話結構 11、漏限制 4、提早結束 3、無根據引用 2；airline 47 個錯誤：對話結構 19、無根據引用 15、漏限制 11、提早結束 2",
+      "section": "Appendix E.1、E.2",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "telecom 模擬器的錯誤全部是提早結束：agent 還沒呼叫轉接工具，使用者就先輸出 ###TRANSFER###；只有在因此阻止了應有的轉接時才算 critical。",
+      "numbers": "8/8（100%）",
+      "section": "Appendix E.3、E.4",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "用工具加強使用者模擬器、減少 critical error 的做法，還沒套用到既有的 airline 與 retail 領域；通用的高品質模擬器方案仍待研究。",
+    "擴充領域仍高度依賴人類專家，領域策展流程需要自動化，產業才可能採用為標準。",
+    "沒有明確建模客服中的專家與新手落差：面對不熟技術的使用者，agent 應理解對方的心智模型並調整說明方式，目前的基準沒評這件事。",
+    "基準可靠度受三種誤差來源影響（實作錯誤、任務規格錯誤、使用者模擬器錯誤）；即使做了驗證，telecom 模擬器仍有 16% 錯誤率。"
+  ],
+  "limitations_observed": [
+    "「16% 對 40–47%」的因果歸因缺少對照組。作者把模擬器錯誤率下降歸功於「用工具約束使用者」，卻沒做兩個關鍵消融：telecom 拿掉 user 工具、改用自然語言描述手機狀態；或把工具加進 retail／airline。兩邊的指令複雜度也差很多。retail／airline 的指令是多層條件分支，例如「價格超過 500 美元就拿掉第二位乘客」「退款不能進禮物卡就不取消」。telecom 指令幾乎只有「照 agent 指示做、訊號恢復就算解決」。Appendix E 顯示 critical error 主要來自「漏掉限制條件」，這本來就是指令複雜度的函數，所以錯誤率差距至少有一部分可能只是 telecom 指令比較簡單。",
+    "統計力不足。telecom 與 retail 各只標 50 段對話，critical error 是 3/50 對 6/50。用 Wilson 95% 信賴區間估算，大約是 2–16% 對 6–24%，兩者重疊，「critical error 減半」在這個樣本下分不出來；只有 total error（8/50 對 20/50）的差距比較站得住。兩位標註者的一致性（例如 Cohen's κ）與分歧怎麼裁決也都沒報告。",
+    "量的是「遵守指令」，不是「逼真度」。四項標註準則都在檢查模擬器有沒有照 guideline 與指令走；沒有真人使用者對照，也沒比較話語長度、揭露節奏、情緒表現等分布。Hard persona 設定為會焦慮打斷、怕重開機弄丟照片，這些行為是否真的出現、像不像真人，也沒驗證。對 T6「含逼真度研究」的子領域來說，這篇只證明了模擬器比較「聽話」，沒有證明它比較「像人」。",
+    "使用者模擬器只用 gpt-4.1 一種模型，而且稽核用的軌跡是 gpt-4.1 agent 配 gpt-4.1 使用者，同模型配對可能讓對話特別順。論文沒做「換模擬器模型，agent 排名會不會變」的敏感度分析。persona 的結果（Figure 7）本身就顯示 agent 分數會隨模擬器行為變動，所以排行榜數字其實隱含「以 gpt-4.1 為使用者」這個條件。",
+    "終止協定把「何時結束一集」交給模擬器決定。telecom 剩下的錯誤 8/8 都是 ###TRANSFER### 提早輸出，屬於協定設計的缺陷，不是語言能力問題；把結束判定改由環境處理（例如偵測到轉接工具被呼叫才結束）應該就能消掉。外部佐證：Anthropic 的 Claude Sonnet 4.5 發表頁說明，跑 τ2-bench 時在 Telecom User prompt 加了補充說明，避免使用者錯誤結束對話。這代表廠商回報的分數用的是改過的模擬器，跨廠商分數不能直接比較。",
+    "No-User 與 Default 的差距（18%／25%）混了兩個因素。No-User 模式的 agent 拿到一張附成功條件的 ticket，政策也改寫過；Default 模式的 agent 得自己從使用者口中問出問題與「怎樣才算解決」。所以這段落差同時包含資訊取得難度與雙控制的溝通成本，不能全部算在「溝通／協調」頭上。",
+    "temperature 0 下每題跑 4 次，run 之間的變異主要來自 API 的非決定性與模擬器，不是刻意取樣。pass^k 在這裡量到的「一致性」意義變弱，k 最大也只到 4。",
+    "telecom 只用終態 assertion 判定成敗，不用 action matching 或政策檢查。例如沒先確認價格就加購流量、做了多餘的診斷步驟，只要終態正確就算成功，所以 agent 的政策遵循在這個領域基本上沒被量到。",
+    "論文內部有幾處不一致。Table 2 標題寫 telecom「沒有 critical error」，但表內、引言與正文都寫 3（6%）。E.1 與 E.2 都說有三種主要失敗模式，實際各列了四種。§3.2 說抽樣分布均衡，Table 3 各意圖卻是 29／36／49 題。Related Work 把 pass^k 描述成「k 次獨立執行中成功的比例」，與 τ-bench 的定義（k 次全部成功的機率）不符。",
+    "環境與題組的變化有限：agent DB 只有 4 位客戶、9 條門號、5 種方案，mock 手機是確定性的，2285 題全來自 15 組原子子任務的排列組合。另外，官方 repo README 記載後來依 SABER（arXiv:2512.07850）的分析，在 airline、retail、banking 三個領域修了 75 個以上的任務（移除錯誤的期望動作、釐清模糊指令、修正不可能達成的限制、補上缺漏的退路行為）。可見 Appendix B 對 retail／airline 的迭代審查沒能消除任務規格錯誤，論文的 retail／airline 數字是在修正前的題組上算的，而 §4.3 的模擬器錯誤標註也可能混入了任務本身的錯誤。"
+  ],
+  "framework_role": "主體其實是 T7／T8 的評估基準（pass^k 與終態 assertion 判定任務完成），四項貢獻中只有「受環境約束的使用者模擬器」直接屬於 T6，但這一項對 T6 很有份量。它示範了評估用 LLM 使用者模擬器的一種設計：讓模擬器擁有工具與自己的狀態；以反應式工具呼叫、一次一動作、漸進揭露、可讀輸出來限縮模擬器的自由度；用三種 token 結束一集；用 persona 條件化使用者類型。它也提供一套模擬器品質稽核法：逐回合人工標註、區分 critical／benign，失敗模式分成漏限制、對話結構、無根據引用、提早結束四類。不涵蓋模擬器用於訓練，也不涉及從部署回饋學習的回饋迴路。在框架中，它是「T6 模擬器 → agent → 互動紀錄 → T7／T8 評估」這條評估管線的代表實作。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "模擬器依情境指令（reason for call、known／unknown info、task instructions）與 persona 產生外部輸入，並且漸進揭露資訊，agent 必須從對話中辨識意圖（service／mobile_data／mms）與限制，例如只接受加購 2GB、不換方案。No-User 模式把這條通道換成一張寫好問題與成功條件的 ticket，Default 與 No-User 的差距（18%／25%）部分量的就是 E1 這條通道的成本；persona 分組則顯示輸入端的使用者類型會改變 agent 成績。"
+    },
+    {
+      "edge": "E4",
+      "how": "雙控制的正常路徑就是 agent 與模擬器持續互動：agent 用訊息要求使用者做某個診斷或修復動作，模擬器呼叫自己手機上的工具，再把可讀結果轉述回去。agent 端的工具呼叫（例如 enable_roaming）也會改變共享世界，讓使用者端的工具觀測到變化。這個迴圈一直走到模擬器輸出 ###STOP###／###TRANSFER###／###OUT-OF-SCOPE### 為止。"
+    },
+    {
+      "edge": "E6",
+      "how": "互動紀錄 S_history 與終態 S_world 直接交給評估：telecom 以 assertion 函式檢查終態，其他準則（自然語言 assertion、action matching）則對軌跡做檢查。作者也把 gpt-4.1 對 gpt-4.1 的互動軌跡交給兩位標註者逐回合稽核模擬器錯誤（Table 2、Appendix E），並依動作數、意圖、persona 對軌跡分組分析。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Anthropic 的 Claude Sonnet 4.5 官方發表頁在方法說明中寫到，τ2-bench 分數是在 Airline 與 Telecom agent policy 加上提示補充後取得；Telecom User prompt 也加了補充說明，避免使用者錯誤結束對話（https://www.anthropic.com/news/claude-sonnet-4-5 ，已開頁確認）。",
+      "官方程式碼庫 https://github.com/sierra-research/tau2-bench （MIT）持續維護，後來加了 banking_knowledge 領域、語音全雙工模式與 75 個以上的任務修正，排行榜在 taubench.com。這屬於作者方（Sierra）的發布，不算第三方採納。"
+    ],
+    "assessment": "有可查證的證據顯示，至少一家主要商用模型廠商（Anthropic）在官方模型發表中用 τ2-bench 當 agent 評估基準，而且為了使用者模擬器提早結束的問題自行修改了模擬器提示詞。OpenAI 的 GPT-5 相關頁面回 403、PDF 無法解析，沒能確認，所以不列入。至於這套使用者模擬器設計被用在實際客服產品的開發或上線流程中，未見證據；論文本身也沒聲稱 Sierra 的產品有部署。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/sierra-research/tau2-bench",
+    "data": "公開：三個領域的 DB、任務、政策與提示詞都在 repo 內，論文附錄也列出完整的 agent／user system prompt 與政策全文。repo 之後修正過 airline／retail 任務（README 記載 75 個以上的修正），也加了新領域與語音模式；2026-07 的 v1.0.1 又更正了 banking_knowledge 的評分。要重現論文數字得鎖定論文發表時（2025-06）的版本。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是目前商用廠商實際拿來評 agent 的 LLM 使用者模擬器之一。「用工具與環境狀態約束模擬器」的設計、完整的模擬器提示詞、critical／benign 錯誤分類與提早結束這類失敗模式，都是做評估用使用者模擬器的工程師必須知道的；缺點是逼真度幾乎沒量，因果歸因也缺對照組。",
+  "related": [
+    "2406.12045",
+    "2504.03601",
+    "2501.11067",
+    "2411.09972",
+    "2408.04682",
+    "2406.14884",
+    "2309.15817",
+    "2503.01935"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

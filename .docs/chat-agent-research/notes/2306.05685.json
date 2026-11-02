@@ -1,0 +1,174 @@
+{
+  "id": "2306.05685",
+  "title": "Judging LLM-as-a-Judge with MT-Bench and Chatbot Arena",
+  "topic": "T7",
+  "subarea": "LLM/agent-as-judge 與評估可靠性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "LMSYS 團隊用 80 題兩輪的 MT-bench（58 位專家、約 3K 票）和群眾對戰平台 Chatbot Arena（30K 票）當人類偏好的金標準，系統性量測 GPT-4 等 LLM 當裁判時的位置、冗長、自我偏好偏差與數學判分失誤，提出交換位置、CoT／reference-guided 與微調 judge 等緩解法，並顯示 GPT-4 裁判在不計平手時與專家的一致率（85%）不輸專家彼此（81%）",
+  "problem": "經過指令微調與 RLHF 的聊天模型明顯比基座模型更受使用者喜愛，但 MMLU、HELM 這類以短答、選擇題為主的傳統基準分不出兩者差異（Vicuna-13B 與 LLaMA-13B 在 MMLU 上差距有限，人類卻明顯偏好前者）。開放式、多輪、遵循指令的能力缺乏自動評估方法：沒有標準答案，規則程式判不了，ROUGE／BLEU 這類參考相似度指標也無效；人工評估是金標準，卻慢又貴。當時已有不少工作（Vicuna 部落格、AlpacaFarm、QLoRA 等）直接拿 GPT-4 當裁判，但沒人系統性地驗證它和人類偏好到底多一致、會犯哪些系統性錯誤。對 T7 來說，這就是「評估器本身可不可靠」這個問題的起點。",
+  "core_idea": "把『LLM 當裁判』本身當作被評估對象：先建兩個以人類偏好為主指標的基準，一個是受控的專家評分（MT-bench，題目固定、兩輪），一個是野外群眾投票（Chatbot Arena，匿名兩兩對戰），再拿同一批模型回答，比較 LLM 裁判與人類、人類與人類的一致率。途中把裁判的失誤分類成可量測的偏差（位置、冗長、自我偏好、推理能力不足），各自設計小型壓力測試量化，並給出便宜的緩解手段（交換位置取一致、先自己解題再評、把自己的解答當參考、few-shot、整段多輪對話放進同一個 prompt、用 Arena 投票微調開源 judge）。結論是：強 LLM 裁判在去除明顯偏差後，可以當人類偏好的可擴展代理，並主張未來基準採用『能力型基準＋偏好型基準（LLM 裁判）』的混合框架。",
+  "method": {
+    "MT-bench 題庫": "80 題，8 類各 10 題：writing、roleplay、extraction、reasoning、math、coding、knowledge I（STEM）、knowledge II（人文社科）。每題固定兩輪：第二輪是預先寫好的追問（例如『把上一個回答改寫成每句都以 A 開頭』『像對五歲小孩那樣再解釋一次』），不依模型第一輪的回答而變。題目以『能拉開模型差距』為目標人工設計。FastChat repo 現行版本的作答溫度依類別設定：writing／roleplay 0.7，extraction／math／coding／reasoning 0.0，STEM／humanities 0.1（這是 repo 資訊，論文本文沒寫）。",
+    "三種裁判形式": "(1) pairwise comparison：給問題與兩個回答，裁判輸出 A 較好、B 較好或平手；repo 的 prompt 要求先寫簡短說明再輸出 [[A]]／[[B]]／[[C]]，並在指示中要求不要受位置、回答長度、助理名稱影響，評比面向包括有用性、相關性、正確性、深度、創意與細節。(2) single answer grading：只給一個回答，裁判打 1–10 分，輸出格式為 [[rating]]。(3) reference-guided grading：math 等題型在 prompt 中附參考解答。作者指出 pairwise 的組合數隨模型數平方成長、不易擴展；single 較能擴展，但分不出細微差異，而且絕對分數在換裁判模型時較不穩定。",
+    "位置偏差的緩解（交換位置）": "保守做法：同一對回答以 (A,B) 與 (B,A) 各呼叫裁判一次，兩次都判同一方勝才算勝，前後不一致就記為平手。論文所有後續實驗都用這個保守版。另一種積極做法是隨機指派位置，靠大量樣本在期望值上抵銷。repo 以 game 1／game 2 兩場反向排列實作，再把 A／B 映射回 model_1／model_2。",
+    "數學與推理題的緩解": "CoT judge：prompt 要求裁判先獨立解題、再評分。reference-guided judge：先讓裁判模型單獨產生自己的答案，再把它當成參考解答放進評分 prompt。作者發現 CoT 版裁判仍常照抄被評回答裡的錯誤算式，所以主推 reference-guided。repo 現行的 NEED_REF_CATS 為 math、reasoning、coding 與事後加入的 arena-hard-200。",
+    "few-shot judge": "挑 3 個好的判例（A 較好、B 較好、平手各一；題目仿 MT-bench，回答由 GPT-3.5 與 Vicuna 生成，判語由 GPT-4 生成）放進 prompt。可提高位置一致性，但 prompt 變長使 API 成本約 4 倍，而且和人類的一致率沒有改善，所以預設仍用 zero-shot。",
+    "多輪裁判": "比較過兩種設計：把兩輪拆成兩個 prompt，裁判會找錯『上一個回答』是誰的（Figure 15 的案例把 B 的內容當成 A 的）；改成在單一 prompt 裡放兩段完整的兩輪對話，並要求裁判只評第二個問題的回答，可明顯減少指涉錯誤。single grading 的多輪版本同理，把整段對話放進 prompt，只為第二輪打分。",
+    "MT-bench 分數": "§5 的正式分數用 GPT-4 single-answer grading（必要時用 reference-guided 多輪 prompt）：每題每輪打 1–10 分，對 80 題 × 2 輪＝160 個分數取平均。",
+    "裁判呼叫與解析（repo）": "repo 現行設定：裁判 temperature 0；OpenAI 的 max_tokens 2048，Anthropic 1024；API 失敗最多重試 16 次，每次間隔 10 秒。分數用 regex 抓 [[x]] 或 [x]，也支援 [[a,b]] 雙分數格式；解析失敗記 -1；雙分數模式下差距小於 TIE_DELTA＝0.1 判平手。論文 Table 2 另外統計了『輸出格式錯誤』比例（Error 欄）。",
+    "人類評估協定（MT-bench）": "58 位專家級標註者（多為十餘所大學的研究生）。每人至少判 20 題隨機多輪題，酬勞 20 美元／20 題，約合時薪 35 美元。介面顯示與 GPT-4 prompt 類似的指示、題目與兩個匿名助理的回答；先判第一輪，再判第二輪。最多可跳過 5 題；math、reasoning 題可看參考解答。合計約 3K 票。當人類的選擇和 GPT-4 不同時，介面會另外顯示 GPT-4 的判語，請標註者按三個按鈕之一表示 GPT-4 的判斷是否合理。",
+    "Chatbot Arena": "免費、免註冊的網站。使用者同時和兩個匿名模型對話，對兩者問同樣的問題，投票選較好的一方，投票後才揭露模型身分；使用者須同意使用條款，授權釋出對話資料。上線一個月收到約 30K 票。一致率分析從中隨機抽 3K 張『單輪』票，涵蓋 GPT-4、GPT-3.5、Claude、Vicuna-7B／13B、Koala-13B、Alpaca-13B、LLaMA-13B、Dolly-12B，投票者為 2114 個不同 IP。釋出前用 OpenAI moderation API 標記有毒對話，並清除 PII。",
+    "一致率指標": "兩類裁判的 agreement 定義為：隨機抽一題、從兩類中各隨機抽一個（不能是同一人）的個體，兩者投票相同的機率。人類之間的一致率是同一題兩個不同人類的一致機率。兩種設定：S1 包含非平手、平手與（因位置偏差造成的）不一致票，不一致視為平手，隨機基準 33%；S2 只計非平手票，隨機基準 50%。附錄 D.3 另設 human-majority（每題的人類多數決，平票時各算 1/2），並指出 GPT-4 對人類一致率的上限是 human-majority 對 human 的一致率。single grading 的分數會轉成 pairwise 結果再計算一致率。平均勝率（average win rate）是對其他所有模型勝率的平均，可含或不含平手。",
+    "偏差壓力測試": "位置偏差：對每個 MT-bench 第一輪題目，以 temperature 0.7 呼叫 GPT-3.5 兩次，產生兩個相近的回答，再用四種 prompt 讓 Claude-v1、GPT-3.5、GPT-4 判斷、並交換順序：default；rename（把 Assistant A／B 改名，區分偏好的是位置還是名稱）；score（改成輸出兩個絕對分數）；short（刪掉『避免位置偏差』與『先說明』等指示）。指標為 Consistency、偏好第一個、偏好第二個、格式錯誤（Table 2、Table 10），並依類別（Table 11）與模型對（Table 12）拆解。冗長偏差：挑 23 個含編號清單的 MT-bench 回答，請 GPT-4 在不增加資訊的前提下改寫清單，並把改寫版插在原清單前面（例如 5 項變 10 項）；裁判判新版較好就算攻擊成功（Table 3）。校準檢查：兩個完全相同的回答，裁判一律判平手。數學判分：10 題數學，LLaMA-13B 對 Vicuna-13B 並交換位置，共 20 次判斷，失敗定義為 GPT-4 把錯的答案判成對（Table 4）。自我偏好：只做觀察性比較，看各裁判給各模型的勝率和人類相比的差異（Figure 2(b)），沒有對照實驗。",
+    "開源 judge（附錄 F）": "zero-shot Vicuna-13B 的位置一致性只有 11.2–16.2%，格式錯誤率 22.5–78.8%，因此改用 Arena 的人類票微調：隨機抽 22K 張單輪票（涵蓋當時 15 個模型），20K 訓練、2K 驗證。任務設成三類序列分類（A／B／平手，平手包含『兩個都差』的票），輸入是 default prompt 加兩個回答，所以不需要依模板生成文字。訓練 3 epoch，cosine 學習率排程，最大學習率 2e-5，以 2K 驗證集選超參數，在正文的 3K Arena 測試集上評估。",
+    "§5 的混合評估示範": "對 LLaMA-7B／13B、Alpaca-7B／13B、Vicuna-7B（selected／single／all）、Vicuna-13B（all）、GPT-3.5、GPT-4 同時報 MMLU（5-shot）、TruthfulQA（0-shot，MC1）與 MT-bench（GPT-4 single grading）。Vicuna 用清理後的 125K 段 ShareGPT 對話訓練：all 是全部資料（370M tokens）；single 只取每段對話的第一輪（184M）；selected 從至少 3 輪的 GPT-4 對話中分 3K 群取群心（4.8M tokens）。超參數：global batch 128、lr 2e-5、3 epoch（selected 為 5 epoch）、seq length 2048，8×A100。"
+  },
+  "assumptions": [
+    "人類偏好（專家或群眾的兩兩投票）是聊天助理品質的合適金標準；有用性的各面向（正確、相關、創意等）可以壓成單一偏好。",
+    "裁判模型本身經過 RLHF，已大致對齊人類偏好，所以它的判斷可以當人類判斷的代理。",
+    "位置偏差大致對稱、可以用交換位置抵銷；前後不一致的判斷當成平手是合理處理。",
+    "『GPT-4 對人類』與『人類對人類』用同一個隨機抽樣一致率定義就可以公平比較，即使一邊是單一、確定性的裁判，另一邊是一群人。",
+    "裁判自己獨立產生的答案夠可靠，足以當 reference-guided 評分的參考解答。",
+    "80 題 MT-bench 與 3K 張抽樣的 Arena 票，足以代表聊天助理的主要使用情境，也足以支撐一致率結論。",
+    "閉源裁判 API（gpt-4-0314 等快照）在評估期間不變；作者也承認換版本後案例未必能重現。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MT-bench：80 題 × 2 輪，8 類；6 個被評模型的回答配上 58 位專家約 3K 票",
+      "Chatbot Arena：30K 張野外對戰票中隨機抽 3K 張單輪票，9 個模型，2114 個 IP",
+      "自建偏差壓力測試：位置偏差（MT-bench 第一輪 80 題 × GPT-3.5 兩個相近回答）、repetitive list 冗長攻擊（23 個回答）、數學判分（10 題 × 2 種順序）",
+      "§5：MMLU（5-shot）、TruthfulQA（MC1，0-shot）與 MT-bench 並列"
+    ],
+    "metrics": [
+      "agreement（隨機抽樣個體的投票一致率），分 S1（含平手與不一致，隨機 33%）與 S2（只計非平手，隨機 50%）",
+      "對 human-majority 的一致率（附錄 D.3）",
+      "position consistency、偏好第一個／第二個比例、格式錯誤率",
+      "冗長攻擊失敗率；數學判分失敗數（x/20）",
+      "average win rate（含或不含平手）、分類別勝率",
+      "MT-bench score（GPT-4 single grading，160 個 1–10 分的平均）",
+      "微調 judge 的三類與二類分類準確率"
+    ],
+    "baselines": [
+      "裁判：GPT-4（pairwise 與 single）、GPT-3.5、Claude-v1、Vicuna-13B（zero-shot 與 Arena 微調）",
+      "人類：58 位專家、作者投票、human-majority、Arena 群眾",
+      "隨機裁判（S1 33%、S2 50%）",
+      "被評模型：GPT-4、GPT-3.5、Claude-v1、Vicuna-7B／13B、Alpaca-13B、LLaMA-13B、Koala-13B、Dolly-12B"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 MT-bench 上，GPT-4 裁判與專家的一致率在不計平手時達到、甚至超過專家彼此的一致率；single grading 也與 pairwise GPT-4 高度一致。但這個『超過』只在 S2 成立，計入平手的 S1 大致打平，第二輪甚至略低。",
+      "numbers": "S2：G4-Pair 對 Human 第一輪 85%（859 票）、第二輪 85%（864 票）；Human 對 Human 81%（479 票）、82%（474 票）；G4-Pair 對 G4-Single 97%／95%。S1：G4-Pair 對 Human 66%／66%，Human 對 Human 63%／67%。",
+      "section": "§4.2、Table 5",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在 Chatbot Arena 的 3K 張單輪票上，GPT-4 與群眾的一致率同樣很高。其他 LLM 裁判在不計平手時的一致率相近，但 GPT-4 給出的非平手票明顯較多，也就是較果斷、較少受位置偏差影響。",
+      "numbers": "G4 對 H：S2 87%（1944 票）、S1 64%（3066 票）。G4-S 對 H S2 85%，G3.5 對 H 83%，C 對 H 84%。S2 的非平手票數：G4 對 H 1944 張、G3.5 對 H 1567 張、C 對 H 1475 張。",
+      "section": "§4.2、Table 6（正文誤寫為 Table 7）",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "所有 LLM 裁判都有明顯的位置偏差，多數偏好第一個位置；Claude-v1 還有名稱偏差（偏好『Assistant A』這個名字）。只有 GPT-4 的交換位置一致性超過 60%。這個測試用的是兩個幾乎相同的回答，屬於困難情境。",
+      "numbers": "Consistency（default prompt）：Claude-v1 23.8%（偏好第一個 75.0%）、GPT-3.5 46.2%（50.0%）、GPT-4 65.0%（30.0%）。rename 後 Claude-v1 升到 56.2%，且轉為偏好第二個 28.7%。分類別看，GPT-4 在 humanities 只有 36.0%、writing 42.0%，math 與 coding 各 86.0%（Table 11）。",
+      "section": "§3.3、Table 2、Table 10、Table 11",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "repetitive list 冗長攻擊只把清單改寫後重複一次、沒有新增資訊，就能騙過 GPT-3.5 與 Claude-v1；GPT-4 抵抗力強得多。所有裁判對兩個完全相同的回答都會判平手。",
+      "numbers": "23 個回答的攻擊失敗率：Claude-v1 91.3%、GPT-3.5 91.3%、GPT-4 8.7%",
+      "section": "§3.3、Table 3（正文誤寫為 Table 4）",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "GPT-4 就算自己會解，也會被被評回答誤導，把錯誤答案判成正確。CoT 裁判有幫助，但仍會照抄被評回答的錯誤；把裁判自己先獨立產生的答案當參考（reference-guided）效果最好。",
+      "numbers": "10 題數學 × 2 種順序＝20 次判斷的失敗數：default 14/20（70%）、CoT 6/20、reference 3/20（15%）",
+      "section": "§3.4、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "位置偏差與人機不一致都集中在『兩個模型實力相近』的情況；實力差距一大，位置偏差幾乎消失，GPT-4 與人類的一致率也接近 100%。",
+      "numbers": "模型對的 GPT-4 對人類一致率隨勝率差距，從約 70% 升到接近 100%（Table 7 散佈圖，非平手票）。GPT-4 default prompt 的位置一致性：GPT-3.5 對 Claude-v1 67.5%、對 Vicuna-13B 73.8%、對 LLaMA-13B 98.8%（Table 12）。",
+      "section": "§4.2 Table 7、附錄 D.1 Table 12",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "收集 MT-bench 人類票時，若標註者的選擇與 GPT-4 不同，就另外顯示 GPT-4 的判語。標註者多半認為 GPT-4 的理由合理，約三分之一願意改票。作者據此認為 GPT-4 的判語能幫人做出更好的判斷。",
+      "numbers": "75% 認為合理；34% 願意更改選擇",
+      "section": "§4.2、附錄 C.1 Figure 17",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "開源 Vicuna-13B 以 zero-shot 當裁判幾乎不堪用；用 20K 張 Arena 人類票微調成三類分類器後，位置一致性與一致率都逼近 GPT-4，可當便宜的開源替代。",
+      "numbers": "位置一致性：zero-shot 11.2–16.2%（格式錯誤 22.5–78.8%）→ 微調後 65.0%（錯誤 0%）。在 3K Arena 測試集上，三類準確率 56.8%、排除平手 85.5%；GPT-4 分別為 66% 與 87%，隨機為 33% 與 50%。",
+      "section": "附錄 F.1–F.2、Table 16",
+      "anchor_idx": 6
+    }
+  ],
+  "limitations_stated": [
+    "只評有用性（helpfulness），幾乎沒處理安全、誠實與無害。",
+    "有用性的多個面向（正確、相關、創意）被壓成單一指標，沒有拆開分析。",
+    "位置、冗長與數學判分的緩解都只是初步方法；few-shot 可提高一致性，但一致性高不代表準確率高，可能引入新偏差，而且成本約 4 倍。",
+    "自我偏好偏差因資料量有限、差距小而無法定論，也很難做受控實驗：沒辦法在不改變品質的前提下，把一個回答改寫成另一個模型的風格。",
+    "位置偏差的來源（訓練資料，或因果 transformer 由左到右的架構）尚未研究。",
+    "single grading 分不出細微差異，而且絕對分數在換裁判模型時比 pairwise 更不穩定；pairwise 的配對數隨模型數平方成長。",
+    "人類之間的一致率可能被低估（三人投 A、A、B 時人對人只有 1/3），所以另外引入 human-majority 對照。",
+    "附錄的案例由 gpt-4-0314 產生，換成日後的 GPT-4 版本不一定能重現。"
+  ],
+  "limitations_observed": [
+    "『GPT-4 比人類彼此更一致』只在 S2 成立，而 S2 丟掉的正好是 GPT-4 最不可靠的案例。保守的交換規則把前後不一致的判斷轉成平手，S2 又剔除所有平手票，所以位置偏差造成的不一致被整批排除。G4-Pair 對 Human 從 S1 的 1343 票降到 S2 的 859 票，約 36% 的票不計入。計入平手後，S1 第一輪是 GPT-4 對人 66%、人對人 63%，第二輪則是 66% 對 67%，GPT-4 反而較低。標題級的『超過 80%、與人類相當』，應該讀成『在兩邊都果斷表態的子集上』。",
+    "以附錄 D.3 自己定義的上限來看，Human 對 Human-majority 在 S2 第一輪是 90%，GPT-4 的 85% 仍差 5 個百分點；第二輪 91% 對 85%，差 6 個百分點。拿人對人的 81% 當比較對象，會讓 GPT-4 看起來比實際好；換成 human-majority 當參照，GPT-4 其實還不如『多數人類』。",
+    "Arena 每題只有一張人類票，無法計算人對人的一致率。所以『與人類之間的一致水準相當』只有 MT-bench 撐得住；Arena 上的 87%（S2）沒有人類對照組，S1 也只有 64%。Arena 的一致率分析還只用單輪票，多輪情境下的一致率只在 80 題 MT-bench 上量過。",
+    "一致率被模型池的能力跨度墊高。6 個被評模型從 GPT-4 一路排到 LLaMA-13B，大量配對的勝負一目了然。作者自己的 Table 7 顯示，實力相近的模型對一致率約 70%；Table 12 裡 GPT-3.5 對 Claude-v1 的位置一致性只有 67.5%。實務上最需要裁判的，正是比較兩個相近的前沿模型或同一 agent 的兩個版本，而這個區間的可靠度論文沒有單獨報告。",
+    "偏差壓力測試的樣本很小，也沒有信賴區間：冗長攻擊 23 個回答（GPT-4 失敗 2 個）、數學判分 10 題 × 2 種順序、few-shot 判例只有 3 個。reference-guided 從 14/20 降到 3/20，用的是 GPT-4 自己會解的小學程度數學；題目一難到裁判自己解錯，參考解答就會把錯誤帶進評分，論文沒有測這個情況。",
+    "§5 的結果反過來看，正是分數可以靠風格操弄的證據。Vicuna-7B (selected) 只用 4.8M tokens、3K 段 GPT-4 對話微調，MT-bench 就從 LLaMA-7B 的 2.74 升到 5.95，MMLU 卻只有 37.3，和 LLaMA-7B 的 35.2 差不多。作者把這寫成『能快速學到 GPT-4 偏好的風格』，但這也說明 GPT-4 裁判會獎勵模仿 GPT-4 風格的模型。這與未能定論的自我偏好偏差是同一個風險：被評模型若拿 GPT-4 的輸出蒸餾，分數就會偏高。",
+    "人類標註可能被 GPT-4 汙染。標註者和 GPT-4 意見不同時，介面會顯示 GPT-4 的判語，34% 的人表示願意改票。論文沒說明改過的票有沒有算進一致率；就算沒算，每位標註者要判至少 20 題，前面看過的 GPT-4 判語也可能影響後面的投票，讓人對 GPT-4 的一致率偏高。",
+    "MT-bench 的『多輪』是寫死的腳本：第二輪不依模型第一輪的回答變化，也只有兩輪，不算互動式評估。它沒有工具呼叫、環境狀態或軌跡，所以結論外推到 agent 評估（判斷一整條含工具呼叫的軌跡、長對話的狀態一致性、任務是否完成）時有限。§3.5 發現拆開 prompt 會讓裁判找錯前文，這在長軌跡上只會更嚴重，論文沒有量測。",
+    "結論綁在特定的閉源快照上，分數跨版本不可比。論文用 gpt-4-0314，作者也承認案例未必能重現；後來的產業使用已經換掉裁判，例如 NVIDIA 的 Nemotron model card 報的是以 GPT-4-Turbo 當裁判的 MT-Bench。這正好應驗作者自己說的『single grading 的絕對分數在換裁判時較不穩定』，但論文沒有提供跨裁判版本的校準方法。另外，80 題題目公開後有污染風險，GPT-4 在發表當時已拿到 8.99／10，天花板效應明顯，論文也沒有討論題目更新機制。",
+    "自我偏好的觀察裡，GPT-4 同時是參賽者與裁判：GPT-4 自評的勝率比人類給的高約 10%，Claude-v1 則高約 25%。但正文的全部結論，包括排名與 §5 的模型比較，都用 GPT-4 當唯一裁判，沒有和其他裁判交叉驗證。",
+    "小錯誤：正文兩處引錯表，冗長攻擊結果寫 Table 4（實際是 Table 3），Arena 一致率寫 Table 7（實際是 Table 6）。另外，Table 7 其實是散佈圖，不是表格。"
+  ],
+  "framework_role": "這篇是 T7『LLM-as-a-judge 與評估可靠性』的奠基文獻。它把『裁判本身要被評估』變成可操作的流程：用人類偏好當金標準，定義裁判與人類的一致率（S1／S2、human-majority 上限），並把裁判失誤拆成可量測的偏差（位置、名稱、冗長、自我偏好、推理不足），各配一個小型壓力測試與緩解法（交換位置取一致、reference-guided、多輪整段放進同一個 prompt、微調開源 judge）。框架裡 T7 若要用 LLM 裁判評估對話或 agent 輸出，這篇提供最低限度的驗證清單：先對一小批人類標註量一致率（分計不計平手兩種口徑），再用交換位置與冗長攻擊測裁判偏差。對 T8 的間接貢獻是『MT-bench score＝逐輪 1–10 分取平均』這種分數形式，以及它的缺點：跨裁判版本不可比，也會獎勵風格模仿。它不涵蓋工具、環境、軌跡或任務完成判準，所以不能直接當 agent-as-a-judge 的方法；多輪部分也只有寫死的兩輪，與 T2、T6 的關係很淺。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "Chatbot Arena 讓真實使用者同時和兩個匿名模型對話並投票，這些互動紀錄（約 30K 段對話與偏好票）直接回流評估，有三種用途：(1) 當人類偏好金標準，量測 GPT-4 等 LLM 裁判的一致率（抽 3K 張單輪票）；(2) 產生排行榜（作者在 HF 上架定期更新的 leaderboard）；(3) 當訓練資料，把 Vicuna-13B 微調成三類分類 judge（20K 訓練、2K 驗證）。這是『真實使用者互動紀錄 → 評估器』的具體實作。不過論文只用單輪票做一致率分析，也沒有把互動紀錄回饋到被評的 agent 本身。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文自述的部署（作者方）：作者在 Hugging Face 上架定期更新的 Chatbot Arena leaderboard（https://huggingface.co/spaces/lmsys/chatbot-arena-leaderboard），MT-bench 題目、3K 專家票與 30K 對話也隨 FastChat 公開（https://github.com/lm-sys/FastChat/tree/main/fastchat/llm_judge）。",
+      "Mistral AI 官方部落格〈Mixtral of experts〉（2023-12-11）以 MT-Bench 8.30 分，支撐 Mixtral 8x7B Instruct 是當時最佳開源模型的主張。來源：https://mistral.ai/news/mixtral-of-experts",
+      "Hugging Face H4 的 zephyr-7b-beta 官方 model card 報 MT-Bench 7.34，並以 MT-Bench 與 AlpacaEval 排名作為發布時的主要賣點。來源：https://huggingface.co/HuggingFaceH4/zephyr-7b-beta",
+      "NVIDIA 的 Llama-3.1-Nemotron-70B-Instruct 官方 model card 報以 GPT-4-Turbo 為裁判的 MT-Bench 分數 8.98。來源：https://huggingface.co/nvidia/Llama-3.1-Nemotron-70B-Instruct-HF",
+      "xAI 官方〈Grok-2 Beta Release〉（2024-08-13）表示，早期版本 Grok-2 曾以化名『sus-column-r』放上 Chatbot Arena 參與評比。來源：https://x.ai/news/grok-2"
+    ],
+    "assessment": "有可查證的產業採納，但被採用的是這篇的兩個評估產物，而不是論文的偏差緩解細節：(1) MT-Bench（GPT-4 或後繼模型當裁判）成為模型廠商在官方公告與 model card 中自報的標準指標，Mistral、Hugging Face、NVIDIA 都有；(2) Chatbot Arena 成為前沿廠商發布前匿名測試的平台，例如 xAI。以上都是廠商自報或自願參加，不代表這些公司內部評估流程採用論文的一致率驗證協定；NVIDIA 換用 GPT-4-Turbo 當裁判，也說明實務上沒有固定裁判版本。在 agent 或工具使用評估上，未見直接採用本文協定的證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/lm-sys/FastChat/tree/main/fastchat/llm_judge",
+    "data": "公開：MT-bench 80 題與參考答案、裁判 prompt 模板（judge_prompts.jsonl）、3K 專家票、30K Arena 對話與偏好票（已清 PII 並標記有毒內容）。裁判依賴閉源 API（gpt-4-0314、gpt-3.5-turbo、claude-v1），這些快照後來陸續下架，一致率與位置偏差數字無法完整重跑；作答溫度、regex 解析等細節只能從 repo 取得，repo 也持續更新（例如 NEED_REF_CATS 後來加入 arena-hard-200），和論文當時的設定未必一致。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 LLM-as-a-judge 可靠性的奠基研究，定義了一致率口徑、四類偏差與對應緩解，後續裁判評估幾乎都以它為起點，MT-Bench 與 Chatbot Arena 也有明確的產業使用；T7 必讀。但要自己讀出 S1／S2 口徑差異與樣本量問題，而且它不涵蓋 agent 軌跡評估。",
+  "related": [
+    "2305.17926",
+    "2305.01937",
+    "2305.14387",
+    "2303.15056",
+    "2211.09110",
+    "2009.03300",
+    "2204.05862",
+    "2305.11206",
+    "2305.15717",
+    "2201.11903",
+    "2004.14602",
+    "2304.07327"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

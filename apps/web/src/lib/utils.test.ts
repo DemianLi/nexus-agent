@@ -1,0 +1,73 @@
+// @vitest-environment node
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, test } from 'vitest';
+
+import { cn } from '@/lib/utils';
+import { readCascade } from '@/styles/css-cascade';
+import { isVendorUpstream } from '@/test/vendor-upstream';
+
+const SRC = fileURLToPath(new URL('..', import.meta.url));
+
+function files(dir: string): string[] {
+  return readdirSync(dir).flatMap((name) => {
+    const path = join(dir, name);
+    return statSync(path).isDirectory() ? files(path) : /\.tsx?$/.test(name) ? [path] : [];
+  });
+}
+
+/**
+ * `@theme` 疊出來實際生效的自訂字級名：`--text-body: 14px;`（`--text-body--line-height` 不算）。
+ * 照 import 順序算過 cascade（`styles/css-cascade.ts`，#1498），後面疊上來的 `@theme` 也算進來。
+ */
+const TEXT_SIZES = [...readCascade().customProperties(['@theme'])]
+  .filter(([property, value]) => /^--text-[a-z]+$/.test(property) && /^\d/.test(value))
+  .map(([property]) => property.slice('--text-'.length));
+
+describe('cn 認得我們的字級名', () => {
+  test('量得到 index.css 的四階（量具不是空的）', () => {
+    expect(TEXT_SIZES).toEqual(['ui', 'body', 'tip', 'micro']);
+  });
+
+  test.each(TEXT_SIZES)('text-%s 是字級，不跟文字顏色互相吃掉（兩個順序都是）', (size) => {
+    expect(cn(`text-${size}`, 'text-primary-foreground').split(' ').sort()).toEqual(
+      [`text-${size}`, 'text-primary-foreground'].sort(),
+    );
+    expect(cn('text-muted-foreground', `text-${size}`).split(' ').sort()).toEqual(
+      ['text-muted-foreground', `text-${size}`].sort(),
+    );
+  });
+
+  test('同是字級的才互相取代：後面的贏，預設階與任意值也算', () => {
+    expect(cn('text-tip', 'text-body')).toBe('text-body');
+    // Button 本體是 `text-body`，呼叫端給 `text-ui` 要蓋過去（#1281）。
+    expect(cn('text-body', 'text-ui')).toBe('text-ui');
+    expect(cn('text-sm', 'text-tip')).toBe('text-tip');
+    expect(cn('text-body', 'lg:text-tip')).toBe('text-body lg:text-tip');
+  });
+
+  test('rounded-row 是圓角：同組的互相取代，不影響其他 class', () => {
+    expect(cn('rounded-lg', 'rounded-row')).toBe('rounded-row');
+    expect(cn('rounded-row', 'rounded-lg')).toBe('rounded-lg');
+    expect(cn('rounded-row', 'px-3')).toBe('rounded-row px-3');
+  });
+
+  test('顏色之間照舊互相取代', () => {
+    expect(cn('text-muted-foreground', 'text-foreground')).toBe('text-foreground');
+  });
+});
+
+describe('cn 只有一個出口', () => {
+  test('除了 lib/utils.ts，沒有檔案直接 import `cn` 套件（預設的 cn 不認得字級名）', () => {
+    const direct = files(SRC)
+      .filter((f) => !f.endsWith(join('lib', 'utils.ts')))
+      // vendor 的 solid-glass 元件原樣 `from "cn"`（Q19 放行），解析層把它換成 lib/utils.ts（`lib/cn-alias.test.tsx`、#1523）。
+      .filter((f) => !isVendorUpstream(f))
+      .filter((f) =>
+        /^import\b[^;]*\bfrom\s+['"]cn(?:\/[a-z]+)?['"]/m.test(readFileSync(f, 'utf8')),
+      )
+      .map((f) => relative(SRC, f));
+    expect(direct).toEqual([]);
+  });
+});

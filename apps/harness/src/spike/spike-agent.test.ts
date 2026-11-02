@@ -1,6 +1,7 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { AIMessageChunk } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
+import { virtualFilesOf } from '../fixtures.js';
 import { createSpikeAgent } from './spike-agent.js';
 
 describe('Phase 0 spike：最小 deep agent', () => {
@@ -15,7 +16,7 @@ describe('Phase 0 spike：最小 deep agent', () => {
     expect(toolMessages.map((message) => message.name)).toEqual(['record_finding', 'write_file']);
 
     expect(toolMessages[0]?.content).toContain('已記錄');
-    expect(Object.keys(result.files ?? {})).toContain('/findings.md');
+    expect(Object.keys(virtualFilesOf(result))).toContain('/findings.md');
     expect(result.messages.at(-1)?.text).toBe('已記錄並寫入 /findings.md。');
 
     // 基座確實把自訂工具與內建檔案工具一起交給了模型。

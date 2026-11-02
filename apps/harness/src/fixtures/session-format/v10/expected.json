@@ -1,0 +1,48 @@
+{
+  "writer": {
+    "rev": "v0.5.0",
+    "commit": "1095a9af1305269aff7dc333f22af2c3fe90415f",
+    "formatVersion": 10,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 10,
+      "eventCount": 15,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.5.0",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": []
+}

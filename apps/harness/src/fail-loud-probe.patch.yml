@@ -1,0 +1,4 @@
+# 掛上 #1501 的探針：閒著的 thread 上漏一顆 rejection、收尾時留記號（環境變數沒給就什麼都不做）。
+- insert:
+    - id: fail-loud-probe
+      name: './fail-loud-probe.fixture.ts'

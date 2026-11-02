@@ -34,6 +34,14 @@ export interface BenchmarkCase {
     readonly toolCalls: readonly ExpectedToolCall[];
     /** 最終那段回覆裡必須出現的字串。省略即不看回覆內容。 */
     readonly mentions?: readonly string[];
+    /**
+     * 多叫幾次工具仍然算「這題成功」。**省略就是 0**。
+     *
+     * 這個數字只影響「這題成功」那一個判定（見 `scorers.ts` 的 {@link CaseScore.success}），
+     * 不影響「多叫次數」那一欄 —— 那一欄照實記多叫了幾次。要宣告大於 0 的值，理由要寫在
+     * 那一題旁邊：容許值越大，亂叫工具的 agent 越過得去。
+     */
+    readonly maxExtraToolCalls?: number;
   };
 }
 
@@ -114,6 +122,9 @@ export const BENCHMARK: readonly BenchmarkCase[] = [
         },
       ],
       mentions: ['第二版：接線測試'],
+      // 題目最後一句要模型「念出檔案現在的完整內容」，改完再讀一次是合理的做法（標準解是
+      // 憑記憶念，但那是猜得到內容，不是看過）。多這一次讀不該讓整題判成不成功。
+      maxExtraToolCalls: 1,
     },
   },
   {

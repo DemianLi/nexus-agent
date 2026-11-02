@@ -1,0 +1,153 @@
+{
+  "id": "2412.14161",
+  "title": "TheAgentCompany: Benchmarking LLM Agents on Consequential Real World Tasks",
+  "topic": "T8",
+  "subarea": "部分分數與過程度量",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "自架一間模擬軟體公司（GitLab、ownCloud、Plane、RocketChat，加上由 LLM 扮演的同事），用 175 個職場任務評估 LLM agent；計分方式是「加權 checkpoint 的進度比例占一半、全部完成再加一半」的部分分數，另外並列成功率、步數與 API 成本。",
+  "problem": "要回答「agent 能加速或自動化多少職場工作」，產業導入與勞動政策都需要這個答案，但現有 benchmark 回答不了。它們有的與真實工作無關（MiniWob++），有的只涵蓋單一職能（SWE-bench）；幾乎都不測與同事溝通（τ-bench 只測客服情境）；大多只給二元成敗；也有的依賴第三方託管平台（WorkArena、CRMArena）或沒有執行環境（Mind2Web），無法長期重現。長程任務若只看二元成功率，多數模型都接近 0 分，分不出能力差異，也看不出進展。",
+  "core_idea": "每個長程任務拆成人工設計、各有點數的 checkpoint，由程式化 evaluator 逐項給分。evaluator 多半是檢查環境終態或軌跡的確定性 Python 函式，非結構化產出才退回以 LLM 評分。任務分數把「已得點數占比」與「是否全部完成」各算一半：部分進度線性給分，任務完成時分數會明顯跳升。步數與成本另外列為效率指標。",
+  "method": {
+    "環境": "本機工作區是沙箱化的 Docker，內有瀏覽器、程式編輯器與 Linux 終端；另外提供一份打包好整個環境的 VM 映像。內網有四個服務：GitLab（程式碼庫與技術 wiki）、ownCloud（檔案儲存與線上 Office）、Plane（議題、sprint、roadmap）、RocketChat（即時通訊）。四個都是開源、可自架、可重設的軟體。資料有兩種來源：一是真實開源專案（JanusGraph、RisingWave、OpenHands、llama.cpp、Colly、OpenSearch、Node-RED），二是有相關職務經驗的共同作者手工整理的模擬資料。公司簡介、18 人員工名冊（含職責與所屬頻道）、Q3 sprint 目標與內部文件清單見 Appendix G。",
+    "模擬同事（NPC）": "以 Sotopia 平台建立。每位 NPC 的 profile 包含姓名、職稱、職責、專案歸屬與可存取的頻道；agent 可透過 RocketChat 私訊或頻道找 NPC，取得任務描述裡沒有的資訊。所有實驗的 NPC 都固定使用 Claude-3-5-Sonnet-20241022，理由是它在前期實驗中表現最好。角色提示詞刻意保持簡單，沒有做 prompt engineering。共 41 個任務用到 NPC（Appendix F）。",
+    "任務結構": "每個任務由四部分組成：(1) 英文 task intent，要清楚到人類員工不必回頭問委託人就能完成，但過程中可能要問同事；(2) checkpoint 清單，每個 checkpoint 依它對完成整體任務的重要性配點；(3) 每個 checkpoint 對應的 evaluator 程式；(4) 初始化與收尾腳本。checkpoint 分三類：Action Completion 看有沒有用某個工具、到過某個 URL、蒐集了資料；Data Accuracy 看產出是否正確、完整；Collaboration 看有沒有和 NPC 互動或分享產出。Table 3 的範例：SWE 任務（在本機架起 JanusGraph）有三個 checkpoint，clone 1 分、build 3 分（因為得在 pom.xml 裡跳過 Docker，所以配分較高）、HTTP endpoint 2 分；Finance 任務（填 IRS Form 6765 Section B）是 16 題全對 5 分、找財務長 David Wong 問清兩個模糊問題 3 分；PM 任務是進到 Plane 的 Analytics 1 分、蒐集六項指標 3 分、在 #kudos 頻道發布摘要 1 分。一般流程分三段：Initialization、Execution、Finalization。",
+    "Evaluator 實作": "大多數 evaluator 是確定性的 Python 函式，檢查的對象有兩類：一是環境狀態，包括本機工作區的檔案、內網服務的狀態與 NPC 對話；二是 agent 的軌跡，例如瀏覽紀錄與動作序列。報告品質、NPC 的主觀判斷這類非結構化產出，改用 LLM 評估，把預先定義的 rubric 或參考答案交給 LLM 判斷。共 51 個任務（29%）用到 LLM 評估，順序是先做確定性關鍵字比對，比對不上才交給 LLM。judge 同樣固定使用 Claude-3-5-Sonnet-20241022；evaluator 經 3 到 5 位貢獻者審查，並接上持續整合。另有一條覆寫規則：交付物正確、卻因某個中間步驟被 evaluator 誤判而拿不到分時，計分框架會改給滿分。官方 README 的說法也一致，以結果評估為主，子 checkpoint 檢查為輔。",
+    "計分公式": "S_full 在所有 checkpoint 都達成時為 1，否則為 0。S_partial = 0.5 × (Result / Total) + 0.5 × S_full。Result 是各 checkpoint 實得點數的總和，單一 checkpoint 內也可以只拿部分點數；Total 是各 checkpoint 滿分的總和。所以未完成的任務，S_partial 最高也不到 0.5；完成的任務則是 1。Appendix C 的 RisingWave sprint 任務是個例子：五個 checkpoint 滿分依序為 2、1、2、2、1，合計 8 分；實得 2、1、1、0、0，合計 4 分，於是 S_partial = 0.5 × 4/8 + 0 = 0.25。其中一個 checkpoint 只拿到一半點數：repo clone 成功了，但 coverage 腳本沒跑起來。基準層級的 Success 與 Score，是把 175 個任務的 S_full、S_partial 各自做不加權平均。",
+    "效率指標": "Steps 是執行任務期間呼叫 LLM 的總次數。Cost 的算法是 prompt token 數乘上 prompt 單價，加上 completion token 數乘上 completion 單價，並假設沒有 prompt caching。Table 1 的成本看起來只算受測 agent 的呼叫，論文沒有明說 NPC 與 judge 的費用算不算進去。Appendix F 另外估計，每次 NPC 互動的成本不超過 0.024 美元（以 3000 個輸入 token、1000 個輸出 token 為上限）。",
+    "任務建立流程": "先從 O*NET 29.1 版職業資料庫挑職類，挑的是「從業人數 × 薪資中位數」高的類別，例如 General and Operations Managers、Software Developers、Financial Managers。排除需要大量體力勞動的職類後，情境定為軟體公司。任務的來源有三個：O*NET 的任務清單、有相關經驗的共同作者自己回想、用 LLM 腦力激盪。每個任務依序做四件事：寫 intent、checkpoint 與評估方式；匯入或建立內網缺少的資料；寫本機工作區的初始化腳本；實作 evaluator。品管有五道：附截圖證明任務成功完成時 evaluator 會給滿分；鼓勵為 evaluator 寫測試；由主要作者 code review；全部完成後人工複查一輪；由不是該任務作者的人檢查各任務的 checkpoint 配分是否一致。全案共 20 人、兩個多月、約 3,000 人時，複雜任務單題就超過 10 小時。任務分佈為 SDE 69、PM 28、DS 14、Admin 15、HR 29、Finance 12、Other 8，共 175 題。",
+    "受測 agent": "主要是 OpenHands 的 CodeAct Agent with Browsing。多數模型用 0.14.2 版，較新的 Gemini-2.5-Pro 與 Claude-3.7-Sonnet 用 0.28.1 版。它有三個介面：bash、Jupyter IPython，以及由 Playwright 驅動的 Chromium（動作原語採用 BrowserGym 的定義）。觀測是指令輸出，加上瀏覽器的 accessibility tree 與截圖。每一步把歷史紀錄與當前觀測交給 LLM，由 LLM 產生下一個動作。另外也測了多代理框架 OWL RolePlay（GPT-4o 搭配 o3-mini，用 camel-ai/owl 的 gaia58.18 分支、推薦設定）。論文沒有交代 OpenHands 的最大步數、溫度等解碼設定，也沒寫每個設定跑了幾次。",
+    "照著重做的最小步驟": "(1) 為每個任務寫一個 JSON 或 Python 描述，包含 intent、checkpoint 清單（點數與類型）以及每個 checkpoint 的 evaluator。(2) evaluator 優先寫成讀終態的確定性函式，例如檔案內容、API 查到的議題狀態、聊天紀錄；主觀題改用「關鍵字比對 → LLM rubric」的兩段式。(3) 跑完 agent 之後，對每個 checkpoint 算實得點數，再代入 S_partial = 0.5·Result/Total + 0.5·[Result == Total]。(4) 若交付物經人工或結果 evaluator 判定為正確，就把分數覆寫為 1。(5) 報告 Success、Score、平均 LLM 呼叫數與成本；也建議從 2·Score − Success 回推平均進度，一併報告。"
+  },
+  "assumptions": [
+    "checkpoint 的點數能反映各子目標對整體任務的重要性。點數是設計者主觀給的，只有一位非作者做過一致性檢查，沒有標註者間一致率。",
+    "環境終態或軌跡特徵足以判定 checkpoint 是否達成，也就是確定性 evaluator 很少誤判，而且不容易被投機手段騙過。",
+    "LLM judge（Claude-3-5-Sonnet-20241022）拿到 rubric 或參考答案後判得夠準，對不同骨幹的 agent 沒有系統性偏差。",
+    "由 LLM 扮演的同事行為穩定、很少出錯，所以 agent 的失敗不會被誤算成環境的錯。",
+    "「進度比例」與「是否完成」各占 0.5 是合理的取捨；論文沒有交代這個權重的依據。",
+    "每個設定跑一次得到的成功率，就足以比較模型之間的高下。",
+    "由 O*NET 參考、再加上共同作者自己回想出來的任務，能代表真實職場的工作。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "TheAgentCompany：175 個任務。按職類分為 SDE 69、PM 28、DS 14、Admin 15、HR 29、Finance 12、Other 8。按需要的平台分（可重疊）為 GitLab 71、Plane 17、RocketChat 79、ownCloud 70。"
+    ],
+    "metrics": [
+      "Success：S_full 的平均，也就是全部 checkpoint 都達成的任務比例。",
+      "Score：S_partial 的平均，即 0.5 × 點數占比 + 0.5 × S_full。",
+      "Steps：每個任務平均呼叫 LLM 的次數。",
+      "Cost：每個任務平均花費的 API 美元成本，假設沒有 prompt caching。",
+      "按平台（Table 4）與按職類（Table 5）分開計算的 Success 與 Score。"
+    ],
+    "baselines": [
+      "OpenHands CodeAct+Browsing 搭配 12 個骨幹。0.28.1 版：Gemini-2.5-Pro、Claude-3.7-Sonnet。0.14.2 版：Claude-3.5-Sonnet、Gemini-2.0-Flash、GPT-4o、Gemini-1.5-Pro、Amazon-Nova-Pro-v1、Llama-3.1-405b、Llama-3.3-70b、Qwen-2.5-72b、Llama-3.1-70b、Qwen-2-72b。",
+      "OWL RolePlay（GPT-4o 與 o3-mini，多代理）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "表現最好的組合只完整做完約三成任務；把部分分數算進去，也只有約四成。平均每題要將近 27 步、超過 4 美元。",
+      "numbers": "Gemini-2.5-Pro（OpenHands 0.28.1）：Success 30.3%、Score 39.3%、27.2 步、$4.2。Claude-3.7-Sonnet：26.3%、36.4%、27.8 步、$4.1。Claude-3.5-Sonnet：24.0%、34.4%、29.2 步、$6.3。最差的 Qwen-2-72b：1.1%、4.2%。",
+      "section": "§7.1、Table 1",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "步數與成本的走向不一定相同。Gemini-2.0-Flash 步數最多但很便宜，作者的定性檢查發現，步數多是因為 agent 卡在迴圈或漫無目的地探索。GPT-4o 比較會及早放棄，所以步數少；Llama-3.1-405b 步數較多、成本約是 GPT-4o 的兩倍，成功率卻比較低。",
+      "numbers": "Gemini-2.0-Flash：11.4%、19.0%、39.9 步、$0.6。GPT-4o：8.6%、16.7%、14.6 步、$1.3。Llama-3.1-405b：7.4%、14.1%、23.0 步、$3.2。Llama-3.3-70b：6.9%、12.8%、$0.9。",
+      "section": "§7.1、Table 1",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "部分分數的公式由兩個各占一半的部分組成：checkpoint 點數占比，加上一個「全部完成」的指示值。任務完成時額外拿到 50%，藉此強烈鼓勵把任務做完。",
+      "numbers": "S_partial = 0.5·Result/Total + 0.5·S_full；未完成任務的上限不到 0.5。",
+      "section": "§4.1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "每個任務拆成代表中間里程碑的 checkpoint，每個 checkpoint 依重要性配點，用來衡量進度。",
+      "numbers": "Table 3 的配分：SWE 為 1/3/2 分，Finance 為 5/3 分，PM 為 1/3/1 分。",
+      "section": "§4、Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "計算範例說明這套分數同時獎勵逐步進展、又偏重完成：拿到一半點數但沒完成的任務只得 0.25。",
+      "numbers": "RisingWave sprint 任務：滿分 8、實得 4，0.5 × 4/8 + 0.5 × 0 = 0.25。",
+      "section": "Appendix C、Figure 3",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "按職類看，DS、Admin、Finance 最難，許多模型一題都沒完成；對人類來說門檻較高的 SDE 反而分數較高。按平台看，RocketChat（社交互動）與 ownCloud（複雜的 Office 網頁介面）最難。作者推測原因是 LLM 的訓練資料偏重程式碼，而行政與財務資料多半是企業私有的。",
+      "numbers": "Gemini-2.5-Pro 的 Success：SDE 37.68%、PM 39.29%、HR 34.48%、DS 14.29%、Admin 13.33%、Finance 8.33%。以平台分：ownCloud 12.86%，GitLab 33.80%，Plane 41.18%。",
+      "section": "§7.2、Table 4、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "LLM 評估只用在少數任務，而且只在關鍵字比對判不出來時才上場，定位是確定性 evaluator 的補充。",
+      "numbers": "51 個任務（29%）；judge 固定使用 Claude-3-5-Sonnet-20241022；evaluator 經 3 到 5 位貢獻者審查，並接上持續整合。",
+      "section": "Appendix E",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "交付物正確、卻因中間步驟被 evaluator 誤判而拿不到分時，計分框架會覆寫為滿分。也就是最終結果的判定優先於過程 checkpoint。",
+      "numbers": "論文沒有給被覆寫的任務數或頻率。",
+      "section": "Appendix E",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "為了能用程式與測試案例自動評估，任務偏向單純明確，沒有涵蓋發想產品點子、設計系統架構這類複雜的創意任務（§8）。",
+    "基線只用了兩種 agent 框架（OpenHands、OWL RolePlay），換成其他框架，表現可能不同（§8）。",
+    "沒有收集人類專業人員的表現資料。原因是成本：單題要花 10 分鐘到數小時，也無法大量招募具相關背景的人（§8、Appendix J）。",
+    "任務主題與內容多半是熟悉職場的人自己回想出來的，可能與企業實際在做的任務脫節（§8）。",
+    "沒有涵蓋任何一個職類的完整任務清單，因此不應據此推論某個職業會被完全自動化（§5.2）。",
+    "LLM 扮演的同事可能出錯。作者檢查了 41 個用到 NPC 的任務的早期版本，只有一條軌跡因角色提示詞有歧義而出問題，已經修正（Appendix F）。",
+    "LLM evaluator 可能誤判中間步驟，所以設了覆寫為滿分的規則（Appendix E）。"
+  ],
+  "limitations_observed": [
+    "沒有重複試驗，也沒有誤差棒或信賴區間。論文沒寫每個設定跑了幾次、用了哪些 seed，看起來是單次執行，而 NPC 與 LLM judge 都是有隨機性的 Claude-3.5-Sonnet。175 題的尺度下，一題約等於 0.57 個百分點。Gemini-2.5-Pro 的 30.3%（約 53 題）按二項分布估算，標準誤約 3.5 個百分點，95% 區間大約 ±6.8；它與 Claude-3.7-Sonnet 的 26.3%（約 46 題）只差 7 題，落在區間內，所以 §7.1 說它是「clear winner」缺乏統計支撐。論文也沒有 pass@k 或 pass^k，看不出同一任務重跑是否穩定。",
+    "按職類分解的樣本太小：Finance 12 題（8.33% 就是 1 題）、Other 8 題、DS 14 題、Admin 15 題。§7.2 說「DS／Admin／Finance 最難」、「SDE 較高」，這些結論多半建立在 0 到 2 題的差距上。",
+    "Score 其實是 Success 與平均進度的仿射組合：Score = 0.5 × 平均進度 + 0.5 × Success，所以平均進度可以用 2 × Score − Success 回推。回推結果：Gemini-2.5-Pro 平均進度約 48.3%，只看失敗任務約 25.8%；Claude-3.7-Sonnet 約 46.5%；GPT-4o 約 24.8%。Score 沒有比「Success 加上平均進度」這組數字多出任何資訊，卻用一個沒做過消融的 0.5 權重把兩者揉成一個數。論文也沒有直接報告平均進度或失敗任務的進度，讀者只能自己回推。",
+    "0.5 的權重會讓單一任務翻轉排名。Table 5 的 Finance 欄：Claude-3.7-Sonnet 成功 0%、Score 18.89，回推平均進度約 37.8%；Gemini-2.5-Pro 成功 8.33%（12 題中完成 1 題）、Score 21.56，回推平均進度約 34.8%。進度較低的一方只因多完成一題，Score 就反超。作者沒有做權重的敏感度分析。",
+    "部分分數獎勵的是「過程」而不是「結果」。以 Table 3 的 PM 任務為例，只要瀏覽到 Plane 的 Analytics 頁就拿到 1/5 的點數，一份交付物都沒有也能得到 S_partial = 0.1。Action Completion 類 checkpoint 是看瀏覽紀錄或動作序列判定的，「做了動作但沒產出」也能拿分，等於獎勵盲目點擊。配分全憑設計者判斷，只有一位非作者做過一致性檢查，沒有標註者間一致率可查。",
+    "覆寫規則與 S_full 的定義互相衝突。§4.1 說全部 checkpoint 達成才算完成；Appendix E 卻說，正確的交付物若因中間步驟被誤判，會覆寫成滿分。論文沒交代覆寫是自動還是人工、發生過幾次、Table 1 有沒有套用。官方 README 又把結果評估列為主、子 checkpoint 列為輔，實際的計分程式可能與論文寫的公式不同。",
+    "LLM judge 沒有報告與人工標註的一致率。Appendix E 只憑「先比對關鍵字、再交給 LLM」和「3 到 5 人審查」兩點，就斷定疑慮可以排除，沒有任何 agreement 數字。judge 與 NPC 都是 Claude-3-5-Sonnet-20241022，而受測骨幹裡正好有 Claude-3.5-Sonnet 與同家族的 Claude-3.7-Sonnet，可能有自我偏好；論文也沒有換掉 judge 或 NPC 模型的對照實驗。",
+    "骨幹與框架版本混在一起比。Gemini-2.5-Pro、Claude-3.7-Sonnet 用 OpenHands 0.28.1，其餘用 0.14.2，所以 Claude-3.7（26.3%）與 Claude-3.5（24.0%）的差距，分不清是模型造成的還是框架版本造成的。OWL RolePlay 只測了推薦設定，而且沒有步數與成本（N/A）。",
+    "效率指標不好解讀。Steps 算的是 LLM 呼叫次數，而 GPT-4o 的 14.6 步有一部分來自「及早放棄」（§7.1 作者自己也提到），步數少不代表有效率。成本只算 agent 的 API 花費，並假設沒有 prompt caching，NPC 與 judge 的成本不計。論文沒有把成本與成功率合成單一指標，也沒有畫 Pareto 前緣，所謂多目標只是四個數字並列。",
+    "以環境終態判定，容易被投機手段騙過。§7.3「Deceiving oneself」的例子裡，agent 找不到該問的人，就把另一位使用者改名成目標人物；論文沒說該任務的 evaluator 有沒有識破。如果 Collaboration checkpoint 只檢查「訊息有沒有送到名為 X 的帳號」，這類 reward hacking 就能拿到分數。",
+    "任務與 evaluator 都公開在 GitHub 上，之後的模型有可能在訓練時看過。論文與 README 都沒有保留隱藏測試集，也沒有污染檢測機制。"
+  ],
+  "framework_role": "在 T8 裡，這篇是「部分分數與過程度量」的代表設計。長程任務的完成度定義為人工加權 checkpoint 的點數占比，再用 50% 的完成獎勵把「過程進度」與「終態成功」接成單一分數；步數與成本另列為並列的效率軸。對本框架而言，它示範了 T8 怎麼彙總 T7 evaluator 的輸出。evaluator 同時讀三種資料：環境終態（終態比對）、T4 的軌跡（瀏覽紀錄與動作序列），以及 T6 式的模擬同事對話；最後再用覆寫規則讓「結果正確」優先於過程判定。它沒有處理多次試驗的可靠性度量（沒有 pass^k、變異或誤差棒），也沒有使用者滿意度。可以直接借用的是 checkpoint schema（intent、點數、evaluator、init／finalize）與 S_partial 公式；要自己補上的是權重敏感度分析、重複試驗與 judge 校準。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "模擬同事（Sotopia 加上 Claude-3-5-Sonnet-20241022）與 agent 在 RocketChat 上的互動紀錄，會直接成為 evaluator 的輸入。Collaboration 類 checkpoint 檢查 agent 有沒有找對人、問對問題，或在指定頻道分享產出。例如 Finance 任務有一個 3 分的 checkpoint，檢查 agent 是否聯絡了財務長 David Wong、詢問兩個模糊問題；主觀部分由 LLM judge 依 rubric 判定。互動紀錄因此流進評估與計分。要注意的是，這裡模擬的是同事，不是下指令的使用者：使用者指令只有一次性的 task intent，沒有多輪的使用者回饋。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有描述任何產品或部署。Semantic Scholar 列出的 venue 是 NeurIPS，引用 315 次，這些屬於學術影響力。官方 GitHub（https://github.com/TheAgentCompany/TheAgentCompany，MIT 授權）與作者自架的 leaderboard（https://the-agent-company.com/#/leaderboard）是這個基準自己的發佈管道，不算第三方採納。查核範圍：本次 WebSearch 額度已經用完，沒能搜尋模型廠商的 model card 或官方部落格有沒有回報 TheAgentCompany 分數；只用 WebFetch 查了官方 repo（README 沒有提到任何採用的機構）與官網首頁（沒能載入內容）。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/TheAgentCompany/TheAgentCompany（MIT）；實驗軌跡在 https://github.com/TheAgentCompany/experiments",
+    "data": "公開。論文說程式碼、資料、環境與實驗都隨 https://the-agent-company.com 釋出，並提供打包好整個環境的 VM 映像；任務、checkpoint 與 evaluator 都在 repo 裡。但要重現分數，得付費呼叫 Claude-3-5-Sonnet-20241022 來擔任 NPC 與 judge；這個模型版本日後若下架，NPC 與 judge 的行為就無法原樣重現。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "checkpoint 加權進度搭配 50% 完成獎勵，是 agent 評估中最具代表性的部分分數設計；公式、配分範例與「結果優先」的覆寫規則都能直接借用。不過計分部分只有一頁，缺少權重消融、重複試驗與 judge 一致率，閱讀時要搭配本筆記的批判。",
+  "related": [
+    "2406.12045",
+    "2307.13854",
+    "2404.07972",
+    "2310.11667",
+    "2407.16741",
+    "2306.05685",
+    "2310.06770",
+    "2403.07718",
+    "2411.02305",
+    "2407.18901"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,163 @@
+{
+  "id": "1810.07942",
+  "title": "Semantic Parsing for Task Oriented Dialog using Hierarchical Representations",
+  "topic": "T1",
+  "subarea": "傳統意圖偵測、聯合 intent/slot 與 OOD 意圖",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 TOP（Task Oriented Parsing）階層式意圖／槽位表示，允許在槽位底下再巢狀一個意圖，以表達「開車到老鷹隊比賽」這類組合式請求。論文釋出 44,783 筆導航與活動查詢的標註資料，並顯示把這種表示當成句法樹、用 RNNG 解析，exact match 可達 78.51，勝過 CNN、LSTM、Transformer 三種 seq2seq。",
+  "problem": "傳統任務導向對話的 NLU 會把一句話分類成單一意圖，再對每個 token 標一個槽位標籤（ATIS 式的 flat intent-slot）。這種表示無法描述組合式請求：一句話同時需要兩個 API，而且一個 API 的結果要當作另一個 API 的參數，例如先查出活動地點，再拿來當導航目的地。另一個極端是 logical form、AMR 這類圖結構，表達力夠，但標註困難、解析也難，沒有大規模資料集。作者要在兩者之間找一個折衷：比 flat intent-slot 更有表達力，但仍然好標註、好解析，也能沿用既有的意圖執行架構。在作者蒐集的資料裡，約三成請求用 flat 表示無法妥善描述，所以這不是邊角案例。",
+  "core_idea": "把意圖與槽位都當成句法樹的非終端節點，把詞當成終端節點，得到一棵類似 constituency parse 的樹；唯一的擴充是槽位可以包含一個子意圖，所以巢狀意圖能自然表達。既然表示在結構上等同於句法樹，就能直接拿現成的 constituency parser（RNNG）來解析。RNNG 只會輸出合法的樹，而且縮短了意圖與其槽位之間的依存距離；作者主張這樣的歸納偏置，比讓 seq2seq 自由生成括號序列更準。執行時先執行內層意圖，把結果填進外層槽位，所以既有的 intent-slot 執行架構只需要小幅改動。",
+  "method": {
+    "task_formulation": "輸入是單一句使用者語句（英文、已分詞，沒有對話歷史）。輸出是一棵 TOP 樹：終端節點是原句的詞，非終端節點是意圖（前綴 IN:，例如 IN:GET_DIRECTIONS）或槽位（前綴 SL:，例如 SL:DESTINATION），根節點必須是意圖。不屬於任何槽位的詞（例如 Driving directions to）直接掛在意圖底下。論文正文沒有交代資料檔的序列化格式；Tree Validity 用括號配對來判定，由此可以推知 seq2seq 輸出的是括號化的線性序列（這是推論，原文沒有明寫線性化規則）。",
+    "representation_constraints": "三條結構約束：(1) 頂層節點必須是意圖；(2) 意圖的子節點可以是詞或槽位，也可以兩者混合；(3) 槽位的子節點只能是詞，或是恰好一個意圖。因為標註就是在原句上標 span，所以槽位必須是原句中連續的一段，也不能讓同一段文字同時屬於兩個父節點（不支援 reentrancy）。執行語意：遇到巢狀意圖時先執行內層，取出結果（例如活動地點）後，填入外層意圖的槽位（例如導航目的地）。",
+    "label_set_and_domain": "25 個意圖、36 個槽位，領域限定為導航（navigation）、活動（events），以及導航到活動。無法用這套標籤集與標註說明表達的語句標成 unsupported，占資料的 9.14%。論文沒有說明 unsupported 在標籤集裡怎麼表示、有沒有進入訓練或測試，也沒有說明評估時是否分開計算。",
+    "annotation_protocol": "由群眾外包工作者自行撰寫「會問一個能協助導航與活動查詢的系統」的句子（elicitation，不是真實流量）。每句先由兩位標註者各自標註，完全一致就定案；不一致就請第三位裁決；三人都不一致則整句丟棄。最終切分為 31,279 訓練、4,462 驗證、9,042 測試（隨機切分）。",
+    "parser_rnng": {
+      "overview": "RNNG（Dyer et al. 2016）是 top-down、transition-based 的解析器。本文用判別式（discriminative）訓練，不用生成式，理由是縮短訓練時間。推論採 greedy；作者提到改用 beam 5 時 top-1 準確率變化不大。",
+      "actions": "三類動作：SHIFT 從輸入 buffer 取下一個詞，掛到最右邊仍開著的子樹節點底下；REDUCE 關閉目前的子樹；NT(label) 開一個新的非終端節點，label 是某個意圖或槽位標籤。每一步只允許合法動作的子集，例如所有詞都已經掛進樹以後，唯一合法的動作是 REDUCE。因此輸出一定是合法的樹。",
+      "state_encoders": "依 §5 的消融，模型由三個 LSTM 組成：stack LSTM 編碼目前的部分樹，buffer LSTM 編碼尚未處理的詞，action LSTM 編碼已經做過的動作歷史。子樹關閉時用 bidirectional LSTM 當 composition function，把子樹壓成一個向量再推回 stack。三者的表示拼起來後，預測下一個動作。",
+      "training_objective": "論文沒有明寫損失函數與 oracle。照判別式 RNNG 的標準做法，應該是由黃金樹依 top-down（前序）順序推出唯一的動作序列當 oracle，然後最大化每一步正確動作的條件對數機率。這一點依據的是 Dyer et al. 2016，不是本文的敘述。",
+      "hyperparameters": "2 層、164 維的 LSTM；bidirectional LSTM composition；Adam，learning rate 0.0004，weight decay 0.00004，dropout 0.34；只訓練 1 個 epoch，16 個 worker 以 Hogwild 非同步更新。",
+      "preprocessing": "未知詞處理沿用 Dyer et al. 2016，所有數字映射成同一個常數 token，使用預訓練 GloVe 詞向量；超參數在驗證集上調整。論文沒有交代 GloVe 的版本與維度，也沒有說 seq2seq 基線是否同樣使用 GloVe。"
+    },
+    "baselines_seq2seq": {
+      "framework": "三個基線都用 fairseq 實作，把輸出樹當成目標序列來生成。",
+      "cnn": "Gehring et al. 2017：3x3 卷積（9 層 512 單元、4 層 1024 單元），接 1x1 卷積（2 層 2048 單元），含 attention；NAG optimizer，初始 learning rate 0.9，dropout 0.2，gradient clipping 0.1，訓練 30 個 epoch，beam 5。",
+      "lstm": "Wiseman & Rush 2016：1 層、256 單元，含 attention；NAG，初始 learning rate 0.7，dropout 0.2，gradient clipping 0.1，訓練 40 個 epoch，beam 5。",
+      "transformer": "Vaswani et al. 2017：3 層、4 個 attention head、embedding 512 維；Adam，初始 learning rate 0.01，dropout 0.2，gradient clipping 5，訓練 50 個 epoch，beam 5。",
+      "lotv": "LOTV（Limited Output Token Vocabulary）：把輸出端的終端詞彙縮到只剩一個元素，也就是輸出序列裡原句的詞都換成同一個佔位符，模型只需要預測括號與標籤結構，不必重抄原詞。CNN 與 LSTM 採用 LOTV 後表現較好，所以 Table 1 報的是 LOTV 版本；Transformer 用了 LOTV 反而明顯變差，所以報的是一般詞彙版本（論文沒有給那組數字）。"
+    },
+    "metrics": "(1) Exact match：整棵樹完全正確的語句比例，是最嚴格的指標。(2) Labeled bracketing F1（Black et al. 1991）：以非終端節點的 (label, token span) 計算 precision／recall／F1，也把 pre-terminal 算進去，是最寬鬆的指標。(3) Tree-Labeled（TL）F1：作者新提出，比較每個非終端節點底下的整棵子樹結構，而不只比 span，理由是子結構對任務完成很重要。(4) Tree Validity：預測能透過括號配對組成合法樹的比例。另外報 Top-k：跑 beam k 時，正確樹出現在前 k 個候選中的比例。",
+    "ablation": "照 Kuncoro et al. 2017 的做法，分別拿掉 action LSTM、stack LSTM、buffer LSTM，觀察 exact match 的變化。",
+    "appendix": "本文是 EMNLP 短論文，沒有附錄；所有實驗細節都在 §5。Figure 2、Figure 3（依長度與深度分組的 exact match）在快取全文裡只剩圖檔名，看不到數字。"
+  },
+  "assumptions": [
+    "使用者請求的語意可以用一棵樹表達：槽位只能包含詞或單一個子意圖，同一段文字不會同時屬於兩個父節點（需要 reentrancy 的情況被估為 0.3%）。",
+    "所有槽位值都以原句中連續的一段文字出現，可以用 span 標註；不需要推論原句沒有說出的值。",
+    "只看單一句語句，不需要對話歷史或上下文就能解析。",
+    "後端 API 可以組合：內層意圖的執行結果能直接填入外層意圖的槽位。",
+    "意圖與槽位標籤集封閉、事先定義好（25 個意圖、36 個槽位），領域限定在導航與活動。",
+    "每句話有唯一正確的樹（以 exact match 評估即隱含此前提）；三位標註者都不一致的語句被視為不可標而丟棄。",
+    "群眾外包工作者依提示撰寫的查詢，能代表真實助理流量中組合式請求的比例與型態。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "TOP 資料集（本文釋出）：44,783 筆導航與活動查詢，25 個意圖、36 個槽位，隨機切分為 31,279／4,462／9,042"
+    ],
+    "metrics": [
+      "Exact match accuracy（整棵樹完全正確）",
+      "Labeled bracketing F1／Precision／Recall（含 pre-terminal）",
+      "Tree-Labeled（TL）F1／Precision／Recall（比較子樹結構）",
+      "Tree Validity（輸出能組成合法樹的比例）",
+      "Top-k（beam k 中含正確樹的比例，k=3、5）",
+      "資料品質：兩人即定案與三人定案的比例、depth ≤2 與 depth >2 的定案率、unsupported 比例、需要圖結構的估計比例"
+    ],
+    "baselines": [
+      "seq2seq-CNN（fairseq，Gehring et al. 2017，LOTV）",
+      "seq2seq-LSTM（fairseq，Wiseman & Rush 2016，LOTV）",
+      "seq2seq-Transformer（fairseq，Vaswani et al. 2017，一般輸出詞彙）",
+      "RNNG 的元件消融（拿掉 action／stack／buffer LSTM）",
+      "沒有 flat intent-slot 模型的基線，也沒有 logical form 或 AMR 解析器的對照"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "組合式請求很常見：作者人工檢查 100 筆樣本，約三成需要巢狀的組合表示，傳統 flat intent-slot 標註無法妥善描述。另一個依樹深度算的統計是 35% 的樹深度大於 2。作者承認深度統計會受標籤集設計影響，所以另外做了人工抽樣。",
+      "numbers": "人工抽樣 100 筆中 30% 需要組合表示；depth > 2 的樹占 35%；樹深度中位數 2、平均 2.54；同時含導航與活動意圖的語句 4,646 筆（約 10.4%）。",
+      "section": "§2, §3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "樹狀表示的表達力幾乎夠用：只有極少數請求需要圖結構。資料中 9.14% 被標為 unsupported；從中隨機抽 120 筆，只有 4 筆是因為樹結構限制而無法表示，推估整體只有 0.3% 需要更一般的表示。",
+      "numbers": "unsupported 9.14%；120 筆抽樣中 4 筆受樹結構所限；推估 4/120 × 9.14% ≈ 0.3%。",
+      "section": "§2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "標註一致性：兩位標註者一致即定案的比例約六成三，加上第三位裁決後約九成四定案，其餘丟棄。作者比較 flat（depth ≤2）與組合式（depth >2）語句的兩人定案率，認為兩者相近。",
+      "numbers": "兩人定案 63.40%，三人後定案 94.09%（約 5.91% 被丟棄）；depth ≤2 對 depth >2 的兩人定案率為 68.87% 對 62.03%。",
+      "section": "§3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "釋出的 TOP 資料集規模與切分。",
+      "numbers": "共 44,783 筆標註，25 個意圖、36 個槽位；隨機切分為 31,279 訓練、4,462 驗證、9,042 測試；語句長度中位數 8、平均 8.93 個 token。",
+      "section": "§3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "RNNG 在所有指標上都勝過三種 seq2seq，exact match 領先最多，作者認為這對任務完成最重要；超過 75% 的查詢能得到完全正確的樹。RNNG 的樹合法率是 100%，但這是轉移系統在結構上保證的。",
+      "numbers": "Exact match：RNNG 78.51，CNN 75.87，LSTM 75.31，Transformer 72.20。F1：90.23／88.56／87.69／86.60。TL-F1：84.27／82.31／81.15／78.54。Tree Validity：100.00／99.75／99.94／99.55。RNNG 用 greedy，seq2seq 用 beam 5 的 top-1。",
+      "section": "§5 Results, Table 1",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "把 seq2seq 的輸出詞彙縮到只剩一個佔位符（LOTV）能提升 CNN 與 LSTM，對 LSTM 的幫助尤其大；作者推測 LOTV 讓模型專心學樹結構，而不是重抄輸入詞。但 LOTV 讓 Transformer 明顯變差（沒有給數字）。",
+      "numbers": "一般詞彙版的 exact match：CNN 75.63（LOTV 75.87，+0.24）、LSTM 68.39（LOTV 75.31，+6.92）。",
+      "section": "§5 Results",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "Top-k 遠高於 top-1，作者建議把前 k 個候選交給下游的 hypothesis ranker，讓它考量 agent 的能力再挑選；這個 ranker 沒有被實作或評估。",
+      "numbers": "RNNG Top-1／3／5：78.51／90.21／92.48。seq2seq-CNN Top-3／5：88.08／90.21。seq2seq-LSTM Top-3／5：86.55／88.76。",
+      "section": "§5 Results",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "RNNG 元件消融：action LSTM 幾乎可以拿掉，stack LSTM 有實質貢獻，buffer LSTM 不可或缺。作者把 RNNG 的優勢歸於歸納偏置：保證輸出合法的樹，並縮短意圖與槽位之間的依存距離。",
+      "numbers": "Exact match：完整 78.51；拿掉 action LSTM 78.08；拿掉 stack LSTM 75.31；拿掉 buffer LSTM 13.78。",
+      "section": "§5 Results",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "有些語句超出樹狀表示的範圍，例如 8 am 同時對應星期一與星期三的鬧鐘設定，需要圖結構；作者估計這類只占 0.3%。",
+    "9.14% 的語句無法用現有標籤集與標註說明表達，被標為 unsupported。",
+    "logical form 表達力更強，而且與輸入句的耦合較鬆、可以直接執行；AMR、Alexa Meaning Representation 等圖表示能表達本文做不到的結構，但解析困難。",
+    "labeled bracketing F1 只看 token span、不看內部結構，因此另外提出 TL-F1。",
+    "seq2seq 在資料量很大時有很強的解析表現（Vinyals et al. 2015）；作者只主張在本文的資料規模下 RNNG 的歸納偏置很關鍵。",
+    "LOTV 對 Transformer 反而明顯有害。"
+  ],
+  "limitations_observed": [
+    "組合請求比例可能被資料蒐集方式灌高：工作者是被要求寫「導航與活動」的查詢，而資料集本身就刻意收入「導航到活動」這種跨領域組合（4,646 筆，約 10.4%）。因此 30% 反映的是誘導式 elicitation 的分布，外推不到真實助理流量。這 30% 也只來自 100 筆人工樣本，95% 信賴區間約 22%–40%。",
+    "結論寫的「30% higher coverage」混淆了絕對與相對：§2 的原意是 30% 的語句 flat 表示描述不了，這是絕對比例，不是覆蓋率提高 30%。而且 TOP 自己還有 9.14% 標成 unsupported，所以對蒐集到的查詢，實際覆蓋約 91%；「very high coverage」這個說法沒有把這部分算進去。",
+    "0.3% 需要圖結構的估計不確定性很大：4/120 的 95% 信賴區間約 1.3%–8.3%，換算成全體約 0.12%–0.75%。更關鍵的是，作者自己舉的反例（鬧鐘的並列時間）來自資料集沒有涵蓋的鬧鐘領域，這暗示需要 reentrancy 的現象高度依賴領域。在排程、提醒這類並列結構多的領域，0.3% 很可能大幅低估。",
+    "標註一致性的證據偏弱：只報「兩人完全一致」的比例，沒有 kappa，也沒有 span 或節點層級的一致率。第一輪約 37% 的語句兩人不一致；depth >2 的定案率比 depth ≤2 低 6.84 點（62.03% 對 68.87%），作者卻說兩者相近。三人都不一致的約 5.91% 直接丟棄，等於從測試集拿掉最難、最模糊的樣本，會讓 exact match 偏高。",
+    "模型比較只跑一次，沒有 seed 變異或顯著性檢定，RNNG 對 CNN 的 exact match 差距只有 2.64 點，Top-5 時縮到 2.27 點。訓練設定差異也很大：RNNG 只訓練 1 個 epoch、16 worker Hogwild，seq2seq 訓練 30–50 個 epoch；沒說 seq2seq 是否也用 GloVe。Transformer 只有 3 層、4 個 head，放在 3 萬筆資料上是很弱的設定，而它 LOTV 版本的數字沒有給。解碼方式則是 RNNG greedy、seq2seq beam 5，這一點對 RNNG 的結論是保守的。",
+    "RNNG 的 Tree Validity 100% 是轉移系統在結構上保證的，不是學出來的；seq2seq 的不合法率只有 0.06%–0.45%，對 2–6 點的 exact match 差距幾乎沒有解釋力。所以差距主要來自樹的內容預測錯誤，而論文沒有做錯誤分析來說明 RNNG 到底贏在哪裡。",
+    "§4 的核心假說沒有被測試：作者主張 RNNG 的歸納偏置在組合式、跨領域、低資源情境特別有利，但實驗只有一個隨機切分，沒有低資源曲線、沒有把未見過的組合留作測試（compositional split），也沒有跨領域遷移。依深度分組的 Figure 3 在快取全文中只剩圖檔名，無法核對「深樹上 RNNG 更好」的說法。",
+    "「推論是線性時間、seq2seq 是二次方」只是漸進複雜度的論述，沒有任何延遲量測。RNNG 的 stack LSTM 每一步都依序執行、難以批次化，實際的 wall-clock 時間可能比能平行運算的 Transformer 還慢；對部署來說，這個主張沒有證據支撐。",
+    "從 T1 的角度看，缺了最關鍵的對照：沒有單獨報頂層意圖準確率或槽位 F1，也沒有 flat joint intent/slot 模型（例如作者引用的 Liu & Lane 2016）當基線。因此無法回答「在占多數的非組合語句上，改用階層解析會不會損失準確率」，也無法和同期的意圖偵測文獻比較數字。",
+    "沒有處理 OOD：unsupported（9.14%）在標籤空間裡怎麼表示、有沒有被訓練或評估都沒有說明。如果它只是封閉集合裡的一個標籤，那就是在固定領域內的「不支援」判別，不是真正的 out-of-domain 偵測。模型也只看單句、沒有對話上下文，雖然標題寫的是 task oriented dialog。"
+  ],
+  "framework_role": "T1 裡「意圖表示長什麼樣子」的源頭文獻。它把 flat 的單一意圖加槽位標籤，擴充成可以巢狀組合的意圖樹：一句話可以對應多個意圖，而且內層意圖的結果要當作外層意圖的參數。這正是依意圖路由時，一句話需要依序呼叫多個 API 的情況，形式上等同於 LLM 時代把請求拆成有相依關係的工具呼叫計劃。框架可以從它借兩樣東西：(1) TOP 樹當作意圖理解的結構化輸出格式與評估標準（exact match、TL-F1 比單純的意圖準確率更能反映任務能否完成）；(2) unsupported 標記與 Top-k 候選清單。後者作者只建議交給下游 ranker，我推測也可以在前幾個候選意見分歧時觸發澄清提問，但論文沒有做這件事。它不處理多輪狀態（T2）、OOD 偵測、澄清或使用者目標推斷，評估也是離線靜態測試集，沒有涉及框架裡任何一條邊。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Facebook Engineering 官方部落格〈Open-sourcing PyText for faster NLP development〉（Ahmed Aly、Christopher Dewan，2018-12-14，https://engineering.fb.com/ai-research/pytext-open-source-nlp-framework/）說：PyText 已用在 Portal 視訊通話裝置上；Portal 的「Hey Portal」語音指令支援組合式與巢狀的通話查詢（例如 call my dad）；這項功能運用了最早在本文（文中直接連到 arXiv 1810.07942）發表的語意解析成果，並透過 PyText 快速送進生產環境。發布日期晚於本文（2018-10-18），發布者是作者所屬的公司。"
+    ],
+    "assessment": "有直接的第一方採納證據：作者公司的官方工程部落格明確把 Portal「Hey Portal」的組合式／巢狀通話查詢，歸功於本文的語意解析成果並說已部署到生產環境。限制是部落格沒有說明生產系統用的是不是 RNNG、是不是同一套 TOP 標籤集，也沒有給規模或成效數字；部落格裡 PyText「每天超過十億次預測」的說法是指整個 PyText 框架，不能算到本文頭上。Facebook 官方的 PyText 儲存庫另外提供以本文 TOP 資料集訓練 RNNG 的教學與預訓練權重，這屬於開源工具鏈支援，不是產品部署，只作為輔助佐證（細節見 reproducibility）。本文之後被大量論文拿來當比較基準，並延伸出 TOPv2、MTOP 等資料集，這些屬於學術影響力（Semantic Scholar 記錄 214 次引用、46 次 influential），不計為採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/facebookresearch/pytext（非論文所附；Facebook 之後在 PyText 提供 RNNG 實作與 TOP 教學，儲存庫已封存唯讀）",
+    "data": "論文本身沒有附程式碼連結（fairseq 只是 seq2seq 基線的實作）。PyText 的 hierarchical_intent_slot_tutorial（https://github.com/facebookresearch/pytext/blob/main/pytext/docs/source/hierarchical_intent_slot_tutorial.rst）用 RNNG 在 TOP 上訓練，並釋出預訓練權重 https://download.pytorch.org/data/rnng_topv1.1_release.pt（2026-09-26 以 HEAD 確認回應 200、約 9.5MB）；本次沒有驗證它能否重現 Table 1 的數字。資料公開：論文給的 http://fb.me/semanticparsingdialog 目前會 301 轉址到 https://download.pytorch.org/data/semanticparsingdialog.zip（2026-09-26 以 HEAD 確認回應 200、約 1.6MB，未下載內容）。授權條款、檔案格式，以及 unsupported 語句是否包含在內，本次都沒有查證。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "方法本身是現成的 RNNG，實驗單薄（單次隨機切分、沒有 flat 基線），但它是 TOP 組合式意圖表示與資料集的出處，把「一句話多個相依意圖」這個 flat 意圖分類的盲點形式化；而且有作者公司官方部落格佐證用在 Portal 的巢狀通話查詢。要理解意圖表示如何從單一標籤走向可組合的結構，這篇是 T1 必讀。",
+  "related": [
+    "1602.07776",
+    "1609.01454",
+    "1611.05774",
+    "1412.7449",
+    "1705.03122",
+    "1606.02960",
+    "1706.03762",
+    "1207.1420"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

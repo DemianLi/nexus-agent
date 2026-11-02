@@ -25,7 +25,6 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, toLoggedMessage } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import { createPlanModePlugin, NOT_IN_PLAN_MODE_MESSAGE } from '@nexus/plugin-plan-mode';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -200,25 +199,6 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
     }
   }, 20000);
 
-  it('plan-mode：模式外叫 `exit_plan_mode`，失敗、紅字是 plugin 那一句', async () => {
-    const run = await assemble(
-      [
-        { content: '', toolCalls: [{ name: 'exit_plan_mode', args: { plan: '計劃' } }] },
-        { content: '收工。' },
-      ],
-      [createPlanModePlugin()],
-    );
-    try {
-      await run.say('交計劃');
-      expect(baseToolFrames(run.frames)).toEqual([]);
-      expect(toolEntries(run.frames)).toMatchObject([
-        { name: 'exit_plan_mode', status: 'failed', error: `Error: ${NOT_IN_PLAN_MODE_MESSAGE}` },
-      ]);
-    } finally {
-      await run.close();
-    }
-  }, 20000);
-
   it('停在核准點按停止：等核准時卡在執行中，收回之後失敗、紅字是 before dispatch 那一句', async () => {
     const run = await assemble(
       [{ content: '動手。', toolCalls: [{ name: 'danger', args: {} }] }, { content: '換個話題。' }],
@@ -278,11 +258,11 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
   }, 20000);
 
   /**
-   * **[#324](https://github.com/DemianLi/nexus-agent/issues/324) 翻了面。** 以前子代理停在核准點、按停止收卡；照 dsh，
-   * 子代理的核准政策在委派時釘成 `never`，它不停下來。`danger` 的本體沒被呼叫到，卡從子代理日誌的 `tool/call` 開、
-   * 由它的 `tool/result` 收成失敗，紅字是 `policy-never` 那句；root 的 `task` 照常完成。
+   * **[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項翻回來**（#324 曾翻成不停）。前景子代理叫到要核准的工具會停在核准點：
+   * `danger` 的本體沒被呼叫到，卡從子代理日誌的 `tool/call` 開、掛在那個子代理底下、執行中；人拒絕之後由它的 `tool/result` 收成失敗，
+   * 紅字是人拒絕那句；root 的 `task` 照常完成。
    */
-  it('子代理叫到要核准的工具：不停下來，卡掛在子代理底下、失敗、紅字是「沒有人被問到」', async () => {
+  it('前景子代理叫到要核准的工具：卡掛在子代理底下，人拒絕後失敗、紅字是人拒絕', async () => {
     const run = await assemble(
       [
         DELEGATE,
@@ -294,15 +274,29 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
     );
     try {
       await run.say('派出去');
+      // 前提：真的停在核准上，而且是子代理在問（中斷帶子代理的 namespace）。
+      expect(run.pump.awaitingInput).toBe(true);
+      const waiting = toolEntries(run.frames).find((card) => card.name === 'danger');
+      expect(waiting).toMatchObject({
+        status: 'running',
+        attribution: { kind: 'subagent', name: 'worker' },
+      });
+
+      const done = run.frames.filter(isRootDone).length;
+      await run.pump.submit({
+        kind: 'resume',
+        interruptId: run.pump.pendings[0]!.interruptId,
+        response: { decisions: [{ type: 'reject' }] },
+      });
+      await until(() => run.frames.filter(isRootDone).length > done);
       expect(run.pump.awaitingInput).toBe(false);
-      expect(baseToolFrames(run.frames, 'danger')).toEqual([]);
       const cards = toolEntries(run.frames);
       const danger = cards.find((card) => card.name === 'danger');
       expect(danger).toMatchObject({
         status: 'failed',
         attribution: { kind: 'subagent', name: 'worker' },
       });
-      expect(danger?.error).toMatch(/沒有人被問到/);
+      expect(danger?.error).toMatch(/有人看過並拒絕了 "danger"/);
       expect(cards.find((card) => card.name === 'task')).toMatchObject({ status: 'done' });
     } finally {
       await run.close();
@@ -317,8 +311,11 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
     return { type: 'event' as const, seq: 0, method, params: { namespace, timestamp: 0, data } };
   }
 
-  /** 假的 agent：先往 root 那份日誌寫一對 `tool/call`／`tool/result`，基座的 frame 要不要跟、何時跟由參數排。 */
-  async function play(base: 'none' | 'late') {
+  /**
+   * 假的 agent：先往 root 那份日誌寫一對 `tool/call`／`tool/result`，基座的 frame 要不要跟、何時跟由參數排。
+   * `early` 是基座那顆 `tool-finished` 先轉發、日誌的判定後到（本體自己標了 error，文字跟日誌同一句）。
+   */
+  async function play(base: 'none' | 'late' | 'early') {
     const record = () => {
       const log = pump.sessionLog;
       log.append('tool/call', { callId: 'c1', name: 'write_file', arguments: '{"a":1}' });
@@ -337,8 +334,8 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
       });
     };
     async function* stream() {
-      record();
-      if (base === 'late') {
+      if (base !== 'early') record();
+      if (base !== 'none') {
         yield frame('tools', ['tools:x'], {
           event: 'tool-started',
           tool_call_id: 'c1',
@@ -348,8 +345,13 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
         yield frame('tools', ['tools:x'], {
           event: 'tool-finished',
           tool_call_id: 'c1',
-          output: OUTPUT,
+          output: base === 'early' ? { status: 'error', content: '被擋下' } : OUTPUT,
         });
+      }
+      if (base === 'early') {
+        // 讓 pump 先把基座那顆轉發出去，判定才落。
+        await until(() => frames.filter((next) => next.method === 'tools').length >= 2);
+        record();
       }
       yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
     }
@@ -390,6 +392,47 @@ describe('送達的先後：判定比基座那顆 `tool-started` 先到', () => 
       { name: 'write_file', status: 'failed', error: '被擋下', text: '被擋下' },
     ]);
   });
+
+  /**
+   * **日誌的錯誤碼跟著上線**（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）：經 `#noteVerdict` 收的
+   * 失敗結果，frame 帶 `tool/result.error.code`，折疊器放進 `ToolEntry.errorCode`。三種先後各一條。
+   */
+  it.each(['none', 'late', 'early'] as const)('碼跟著判定上線（基座 %s）', async (base) => {
+    const frames = await play(base);
+    const finished = frames.filter(
+      (next) =>
+        next.method === 'tools' &&
+        (next.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    expect(finished.at(-1)?.params.data).toMatchObject({ failed: true, code: 'FS_SANDBOX_DENIED' });
+    expect(toolEntries(frames)).toMatchObject([
+      { status: 'failed', error: '被擋下', errorCode: 'FS_SANDBOX_DENIED' },
+    ]);
+  });
+
+  /**
+   * **只差碼也要補發**（#667，同 #617 替 meta 補的那一格）：基座那顆已經轉發，`failed` 與文字都跟日誌一樣，
+   * 少的只有碼。不補發的話碼永遠到不了畫面。
+   */
+  it('基座那顆先轉發、只差碼：補一顆帶碼的更正', async () => {
+    const frames = await play('early');
+    const finished = frames
+      .filter(
+        (next) =>
+          next.method === 'tools' &&
+          (next.params.data as { event?: unknown }).event === 'tool-finished',
+      )
+      .map((next) => next.params.data as Record<string, unknown>);
+    // 前提：基座那顆自己就是失敗、文字跟日誌同一句——差別只剩碼。
+    expect(finished).toHaveLength(2);
+    expect(finished[0]).toMatchObject({ failed: true, message: '被擋下' });
+    expect(finished[0]).not.toHaveProperty('code');
+    expect(finished[1]).toMatchObject({
+      failed: true,
+      message: '被擋下',
+      code: 'FS_SANDBOX_DENIED',
+    });
+  });
 });
 
 /**
@@ -407,7 +450,7 @@ describe('結果文字：即時與重播同一串（#439）', () => {
     return { type: 'event' as const, seq: 0, method, params: { namespace, timestamp: 0, data } };
   }
 
-  /** 兩塊文字：抽字的規則對它是「不給」，把幾塊接起來的規則對它是「給一串」。 */
+  /** 兩塊文字：「只取一塊」的規則對它是「不給」，抽字的規則對它是「給一串」。 */
   const TWO_BLOCKS = [
     { type: 'text', text: '第一塊' },
     { type: 'text', text: '第二塊' },
@@ -498,42 +541,470 @@ describe('結果文字：即時與重播同一串（#439）', () => {
   });
 
   /**
-   * **上限是設定來的，而且兩條路吃同一份**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   * **`tool-text` 那一列不再截結果文字**（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）。
    *
-   * 這一條跟上面那條同一個主題的第二半：不只「抽字的規則」要共用，**截字的上限**也要——
-   * 兩邊各讀各的設定的話，同一張卡會「即時一個樣、重新整理另一個樣」，而那是這整個 describe
-   * 存在的理由。
-   *
-   * **最後那一行是對照組**：同一份日誌在預設上限底下一個字都不截，所以上面的差別只可能來自
-   * 那個參數，不是因為內容本來就長到會被某個寫死的數字截掉。
+   * 這條原本是「上限從設定來：即時與重播截在同一個位置」（#538）。外溢層（#719）落地後照 dsh 翻面：上限在模型面，
+   * 日誌到畫面不截。所以給一個**離預設很遠的小值**（schema 的下限 128），兩條路照樣是日誌裡那則的原文——
+   * 把傳輸截斷加回去的話，這裡會紅；不把值調小的話，2000 個位元組本來就在預設底下，加回去也綠。
    */
-  it('上限從設定來：即時與重播截在同一個位置', async () => {
+  it('`tool-text` 調到最小，即時與重播照樣是原文', async () => {
     const long = 'x'.repeat(2_000);
-    const small = 300;
+    const small = 128;
     const { frames, events } = await play('late', long, { maxBytes: small });
+    // 前提：原文確實比這一格長，不然「沒被截」什麼都沒證明。
+    expect(Buffer.byteLength(long, 'utf8')).toBeGreaterThan(small);
 
-    const live = toolEntries(frames)[0]?.text;
-    expect(live).toBeDefined();
-    expect(Buffer.byteLength(live!, 'utf8')).toBeLessThanOrEqual(small);
-    expect(live).toContain('沒有送出來');
-
-    const replayed = toolEntries(historyFrames(events, small))[0]?.text;
-    expect(replayed).toBe(live);
-
-    expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.text).toBe(long);
+    expect(toolEntries(frames)[0]?.text).toBe(long);
+    expect(toolEntries(historyFrames(events, small))[0]?.text).toBe(long);
   });
 
   /**
-   * **這一條才讓「共用同一個抽字函式」承重。** 上面那條的內容是單塊，「只取一塊」與「把幾塊
-   * 接起來」對它的答案一樣，所以兩邊各寫一份規則也會綠。多塊的內容兩種規則答案相反：
-   * 一邊不給，一邊給一串我們自己拼的字。
+   * **這一條才讓「共用同一個抽字函式」承重。** 上面那條的內容是單塊，「只取一塊」與「全部接起來」對它的答案一樣，
+   * 所以兩邊各寫一份規則也會綠。多塊的內容兩種規則答案相反。
    */
-  it('多塊的內容：兩條路都不給文字，不是一邊給一邊不給', async () => {
+  it('多塊的內容：兩條路是同一串接起來的文字', async () => {
     const { frames, events } = await play('late', TWO_BLOCKS);
     const live = toolEntries(frames)[0];
     const replayed = toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0];
     expect(live).toMatchObject({ status: 'done' });
-    expect(live?.text).toBeUndefined();
-    expect(replayed?.text).toBeUndefined();
+    expect(live?.text).toBe('第一塊\n\n第二塊');
+    expect(replayed?.text).toBe(live?.text);
   });
+});
+
+/**
+ * 給專屬卡的 `meta`：**即時與重播是同一份**（[#617](https://github.com/DemianLi/nexus-agent/issues/617)
+ * 驗收 5、6）。
+ *
+ * 同上一組的理由：截的規則兩條路共用（`tool-result-text.ts` 的 `capToolResultMeta`），各寫一份的話
+ * 同一張卡會「即時一個樣、重新整理另一個樣」。
+ */
+describe('meta：即時與重播同一份（#617）', () => {
+  const META = {
+    path: '/a.ts',
+    offset: 1,
+    lines: [{ number: 1, text: 'const a = 1;' }],
+    totalLines: 1,
+    lang: 'ts',
+  };
+
+  /** 文字混了圖片：抽字的規則對它不給文字，所以卡上的 `message` 兩邊都沒有、只差 `meta`。 */
+  const MIXED_BLOCKS = [
+    { type: 'text', text: '第一塊' },
+    { type: 'image', source: {} },
+  ];
+
+  function frame(method: string, namespace: string[], data: unknown) {
+    return { type: 'event' as const, seq: 0, method, params: { namespace, timestamp: 0, data } };
+  }
+
+  /**
+   * 日誌寫一對 `tool/call`／`tool/result`（帶 `meta`），基座的 frame 何時跟由參數排：
+   *
+   * - `none`：基座一顆都沒發，pump 自己收卡。
+   * - `first`：基座那一對**先**轉發出去，日誌的判定之後才到——走補發更正那條。
+   */
+  async function play(
+    base: 'none' | 'first',
+    {
+      content = '讀好了' as unknown,
+      meta = META as unknown,
+      isError = false,
+      toolText,
+    }: {
+      content?: unknown;
+      /** `'absent'`：這一格整個不放（`undefined` 會被預設值吃掉，日誌也不收 `undefined`）。 */
+      meta?: unknown;
+      isError?: boolean;
+      toolText?: { maxBytes: number };
+    } = {},
+  ) {
+    const record = () => {
+      const log = pump.sessionLog;
+      log.append('tool/call', { callId: 'c1', name: 'read_file', arguments: '{}' });
+      log.append('tool/result', {
+        callId: 'c1',
+        isError,
+        message: toLoggedMessage(
+          new ToolMessage({ content: content as string, tool_call_id: 'c1', name: 'read_file' }),
+        ),
+        ...(meta === 'absent' ? {} : { meta }),
+      });
+    };
+    async function* stream() {
+      if (base === 'first') {
+        yield frame('tools', ['tools:x'], {
+          event: 'tool-started',
+          tool_call_id: 'c1',
+          tool_name: 'read_file',
+          input: '{}',
+        });
+        yield frame('tools', ['tools:x'], {
+          event: 'tool-finished',
+          tool_call_id: 'c1',
+          output: { status: 'success', content: MIXED_BLOCKS },
+        });
+      }
+      record();
+      yield frame('lifecycle', [], { event: 'completed', graph_name: 'root' });
+    }
+    const agent = {
+      streamEvents: async () => stream(),
+      getState: async () => ({ values: {} }),
+      updateState: async () => ({}),
+    };
+    const pump = new ThreadPump(
+      agent as unknown as PumpAgent,
+      'meta',
+      undefined,
+      undefined,
+      toolText,
+    );
+    const frames: Event[] = [];
+    const line = new AbortController();
+    const draining = (async () => {
+      for await (const next of pump.subscribe(['tools', 'lifecycle'], line.signal))
+        frames.push(next);
+    })();
+    await pump.submit({ kind: 'message', text: '讀' });
+    await until(() => frames.some(isRootDone));
+    line.abort();
+    await draining;
+    return { frames, events: pump.sessionLog.events };
+  }
+
+  it('基座一顆都沒發：pump 合成的那顆收卡帶 meta，重播出同一份', async () => {
+    const { frames, events } = await play('none');
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done', meta: META }]);
+    expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(META);
+  });
+
+  it('**更正幀只差 meta 也要送**：基座那顆先轉發了，日誌那則抽不出文字，兩邊只差這一格', async () => {
+    const { frames, events } = await play('first', { content: MIXED_BLOCKS });
+    const finishes = frames.filter(
+      (next) =>
+        next.method === 'tools' &&
+        (next.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    // 基座那顆、再加一顆同 id 的更正。
+    expect(finishes).toHaveLength(2);
+    expect(finishes[1]?.params.data).toMatchObject({ tool_call_id: 'c1', meta: META });
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done', meta: META }]);
+    expect(toolEntries(frames)[0]?.text).toBeUndefined();
+    expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(META);
+  });
+
+  it('失敗的不帶，兩條路都是', async () => {
+    const { frames, events } = await play('none', { isError: true });
+    expect(toolEntries(frames)[0]).toMatchObject({ status: 'failed' });
+    expect(toolEntries(frames)[0]?.meta).toBeUndefined();
+    expect(
+      toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta,
+    ).toBeUndefined();
+  });
+
+  it('格式 16 以前的日誌（沒有 meta 這一格）：卡照收、沒有 meta', async () => {
+    const { frames, events } = await play('none', { meta: 'absent' });
+    expect(toolEntries(frames)).toMatchObject([{ status: 'done', text: '讀好了' }]);
+    expect(toolEntries(frames)[0]?.meta).toBeUndefined();
+    const replayed = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES).find(
+      (next) =>
+        next.method === 'tools' &&
+        (next.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    expect(replayed?.params.data).not.toHaveProperty('meta');
+  });
+
+  describe('上限從設定來：搜尋與 diff 同文字，讀檔兩倍（#630）', () => {
+    const SMALL = 400;
+    const SEARCH = {
+      shape: 'matches',
+      files: Array.from({ length: 10 }, (_, i) => ({
+        path: `/f${i}.ts`,
+        matches: [{ lineNumber: 1, line: 'x'.repeat(60) }],
+      })),
+      truncated: false,
+      total: 10,
+    };
+
+    it('搜尋超過：從尾巴整組砍、truncated、total 不動、至少留一項；兩條路一樣', async () => {
+      const { frames, events } = await play('none', {
+        meta: SEARCH,
+        toolText: { maxBytes: SMALL },
+      });
+      const live = toolEntries(frames)[0]?.meta as typeof SEARCH;
+      expect(Buffer.byteLength(JSON.stringify(live), 'utf8')).toBeLessThanOrEqual(SMALL);
+      expect(live.truncated).toBe(true);
+      expect(live.total).toBe(10);
+      expect(live.files.length).toBeGreaterThan(0);
+      expect(live.files.length).toBeLessThan(10);
+      expect(live.files).toEqual(SEARCH.files.slice(0, live.files.length));
+      expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toEqual(live);
+      // 對照組：同一份日誌在預設上限底下原樣上線。
+      expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(
+        SEARCH,
+      );
+    });
+
+    it('一項自己就超過的搜尋照樣留那一項，不給一張空卡', async () => {
+      const one = {
+        ...SEARCH,
+        files: [SEARCH.files[0], SEARCH.files[1]].map((file) => ({
+          ...file,
+          matches: [{ lineNumber: 1, line: 'y'.repeat(SMALL) }],
+        })),
+        total: 2,
+      };
+      const { frames } = await play('none', { meta: one, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(frames)[0]?.meta).toMatchObject({
+        truncated: true,
+        total: 2,
+        files: [one.files[0]],
+      });
+    });
+
+    const bytes = (meta: unknown) => Buffer.byteLength(JSON.stringify(meta), 'utf8');
+
+    it('讀檔超過一倍、不超過兩倍：照給；兩條路一樣', async () => {
+      const read = { ...META, lines: [{ number: 1, text: 'z'.repeat(SMALL) }] };
+      expect(bytes(read)).toBeGreaterThan(SMALL);
+      expect(bytes(read)).toBeLessThanOrEqual(2 * SMALL);
+      const { frames, events } = await play('none', { meta: read, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(frames)[0]).toMatchObject({ status: 'done', meta: read });
+      expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toEqual(read);
+    });
+
+    it('讀檔超過兩倍：整格不給；兩條路一樣', async () => {
+      const read = { ...META, lines: [{ number: 1, text: 'z'.repeat(2 * SMALL) }] };
+      expect(bytes(read)).toBeGreaterThan(2 * SMALL);
+      const { frames, events } = await play('none', { meta: read, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(frames)[0]).toMatchObject({ status: 'done', text: '讀好了' });
+      expect(toolEntries(frames)[0]?.meta).toBeUndefined();
+      expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toBeUndefined();
+      // 對照組：同一份日誌在預設上限底下原樣上線。
+      expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.meta).toEqual(
+        read,
+      );
+    });
+
+    it('diff 超過一倍：整格不給，不跟著讀檔放寬；兩條路一樣', async () => {
+      const diff = { diffs: [{ path: '/a.ts', oldText: null, newText: 'z'.repeat(SMALL) }] };
+      // 落在讀檔會放行的那一段，才分得出 diff 有沒有被當成讀檔。
+      expect(bytes(diff)).toBeGreaterThan(SMALL);
+      expect(bytes(diff)).toBeLessThanOrEqual(2 * SMALL);
+      const { frames, events } = await play('none', { meta: diff, toolText: { maxBytes: SMALL } });
+      expect(toolEntries(frames)[0]?.meta).toBeUndefined();
+      expect(toolEntries(historyFrames(events, SMALL))[0]?.meta).toBeUndefined();
+    });
+  });
+});
+
+/**
+ * **讀檔 meta 的兩倍上限，量在真的讀檔上**（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
+ *
+ * meta 由真的組裝、真的基座 `read_file` 產生，一頁照 #602 是 2000 行、50 KiB，上限用 `tool-text` 的預設值。
+ * 兩個檔的 meta 各落在一段：短行的大檔落在一倍與兩倍之間（#628 探針量到被丟掉的那種），tab 縮排的
+ * 2000 行超過兩倍。每個檔都先斷言它真的落在那一段——少了這一句，檔的形狀一變，這組就不再問它要問的事。
+ */
+describe('產品路徑：讀檔 meta 的上限是文字的兩倍（#630）', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'nexus-read-meta-cap-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const bytes = (meta: unknown) => Buffer.byteLength(JSON.stringify(meta), 'utf8');
+
+  it('短行 2000 行帶得到 meta，超過兩倍的整格不給；即時與重播逐格一樣', async () => {
+    // `line N`：一頁 2000 行，文字沒撞 50 KiB，meta 的外殼讓它超過一倍上限。
+    await writeFile(
+      join(root, 'short.txt'),
+      `${Array.from({ length: 2000 }, (_, i) => `line ${i + 1}`).join('\n')}\n`,
+    );
+    // tab 縮排的 2000 行（Go 那種）：每行 24 位元組，一頁照樣 2000 行。tab 在 JSON 裡跳脫成兩個位元組，
+    // 加上每行約 26 位元組的外殼，meta 超過兩倍上限。**不跳脫的 ASCII 最多剛好擦過兩倍**：一頁要同時
+    // 頂滿 2000 行與 50 KiB 才到約 100.2 KB（2026-09-25 量），行寬一致的檔兩者頂不滿，停在 99 KB 左右。
+    await writeFile(
+      join(root, 'wide.txt'),
+      `${Array.from({ length: 2000 }, () => `${'\t'.repeat(4)}${'x'.repeat(20)}`).join('\n')}\n`,
+    );
+
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [
+          {
+            content: '',
+            toolCalls: [
+              { name: 'read_file', args: { file_path: '/short.txt', offset: 0 } },
+              { name: 'read_file', args: { file_path: '/wide.txt', offset: 0 } },
+            ],
+          },
+          { content: '收工。' },
+        ],
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [],
+      backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
+    });
+    const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'read-meta-cap');
+    const detach = built.attachSession(pump.sessions);
+    const frames: Event[] = [];
+    const line = new AbortController();
+    const draining = (async () => {
+      for await (const frame of pump.subscribe(['tools', 'lifecycle'], line.signal))
+        frames.push(frame);
+    })();
+    try {
+      await pump.submit({ kind: 'message', text: '讀兩個檔' });
+      await until(() => frames.some(isRootDone));
+
+      // 日誌記的是全份：先確定兩份各落在要問的那一段。
+      const logged = pump.sessionLog.events
+        .filter((event) => event.type === 'tool/result')
+        .map((event) => (event.data as { meta?: { path: string; lines: unknown[] } }).meta);
+      const short = logged.find((meta) => meta?.path === '/short.txt');
+      const wide = logged.find((meta) => meta?.path === '/wide.txt');
+      expect(short?.lines).toHaveLength(2000);
+      expect(bytes(short)).toBeGreaterThan(DEFAULT_TOOL_TEXT_MAX_BYTES);
+      expect(bytes(short)).toBeLessThanOrEqual(2 * DEFAULT_TOOL_TEXT_MAX_BYTES);
+      expect(wide?.lines).toHaveLength(2000);
+      expect(bytes(wide)).toBeGreaterThan(2 * DEFAULT_TOOL_TEXT_MAX_BYTES);
+
+      const live = toolEntries(frames);
+      expect(live.map((card) => [card.name, card.status])).toEqual([
+        ['read_file', 'done'],
+        ['read_file', 'done'],
+      ]);
+      const byPath = (cards: ToolEntry[], path: string) =>
+        cards.find((card) => card.input.includes(path));
+      expect(byPath(live, 'short.txt')?.meta).toEqual(short);
+      expect(byPath(live, 'wide.txt')?.meta).toBeUndefined();
+      // 文字照舊：meta 丟掉不影響結果文字。
+      expect(byPath(live, 'wide.txt')?.text).toBeDefined();
+
+      const replayed = toolEntries(
+        historyFrames(pump.sessionLog.events, DEFAULT_TOOL_TEXT_MAX_BYTES),
+      );
+      expect(replayed.map((card) => [card.meta, card.text])).toEqual(
+        live.map((card) => [card.meta, card.text]),
+      );
+    } finally {
+      line.abort();
+      await draining;
+      detach();
+      await built.dispose();
+    }
+  }, 20000);
+});
+
+/**
+ * **外溢層開著時，卡上就是日誌裡那則**（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）。
+ *
+ * 照 dsh：上限在模型面（外溢層把超過預算的結果換成頭尾預覽加帶路徑的通知，日誌記的就是換過的那則），
+ * 日誌到畫面不再截第二次。組裝是真的 `createNexusAgent`＋外溢層＋主機暫存目錄，pump 的 `tool-text` 調到
+ * schema 的下限 128——**比預覽小得多**，所以傳輸截斷要是還在，即時與重播都會被它截，這兩條就紅。
+ */
+describe('產品路徑：外溢層開著，卡上是日誌裡那則預覽，一字不差（#736）', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'nexus-spill-card-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** 每行都不一樣（一種字重複 o200k 會壓成很少的 token，量不出預算），約 40,000 字元。 */
+  const BIG = Array.from(
+    { length: 1_000 },
+    (_, i) => `line ${i} alpha beta gamma ${i * 7919}`,
+  ).join('\n');
+  const SMALL = '小結果：在預算內。';
+  const TOOL_TEXT = { maxBytes: 128 };
+
+  function bulk(payload: string): PluginEntry {
+    return {
+      plugin: {
+        name: 'bulk-host',
+        apply: (registry) => {
+          registry.tools.register(
+            tool(() => payload, {
+              name: 'bulk',
+              description: '拿一坨東西。',
+              schema: z.object({}),
+            }),
+          );
+        },
+      },
+    };
+  }
+
+  async function run(payload: string) {
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [{ content: '', toolCalls: [{ name: 'bulk', args: {} }] }, { content: '看完了。' }],
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [bulk(payload)],
+      toolResultStash: { rootDir: root, session: 'spill-card' },
+      spillPolicy: { maxInlineTokens: 3_000 },
+    });
+    const pump = new ThreadPump(
+      built.agent as unknown as PumpAgent,
+      'spill-card',
+      undefined,
+      undefined,
+      TOOL_TEXT,
+    );
+    const detach = built.attachSession(pump.sessions);
+    const frames: Event[] = [];
+    const line = new AbortController();
+    const draining = (async () => {
+      for await (const frame of pump.subscribe(['tools', 'lifecycle'], line.signal))
+        frames.push(frame);
+    })();
+    try {
+      await pump.submit({ kind: 'message', text: '去拿一坨。' });
+      await until(() => frames.some(isRootDone));
+      const results = pump.sessionLog.events.filter((event) => event.type === 'tool/result');
+      expect(results).toHaveLength(1);
+      const content = (results[0]!.data as { message?: { data: { content: unknown } } }).message
+        ?.data.content;
+      expect(typeof content).toBe('string');
+      return {
+        logged: content as string,
+        live: toolEntries(frames)[0],
+        replayed: toolEntries(historyFrames(pump.sessionLog.events, TOOL_TEXT.maxBytes))[0],
+      };
+    } finally {
+      line.abort();
+      await draining;
+      detach();
+      await built.dispose();
+    }
+  }
+
+  it('超過預算：即時與重新整理後的卡都是日誌裡那則預覽加路徑，沒有第二層截斷', async () => {
+    const { logged, live, replayed } = await run(BIG);
+    // 前提：外溢層真的動了（換成帶路徑的預覽），而且那則比 `tool-text` 那一格長得多。
+    expect(logged).toMatch(/stored at: \/\S+\.txt\./u);
+    expect(logged.length).toBeLessThan(BIG.length);
+    expect(Buffer.byteLength(logged, 'utf8')).toBeGreaterThan(TOOL_TEXT.maxBytes);
+
+    expect(live).toMatchObject({ name: 'bulk', status: 'done' });
+    expect(live?.text).toBe(logged);
+    expect(replayed?.text).toBe(logged);
+  }, 20000);
+
+  it('在預算內：原樣上線', async () => {
+    const { logged, live, replayed } = await run(SMALL);
+    expect(logged).toBe(SMALL);
+    expect(live?.text).toBe(SMALL);
+    expect(replayed?.text).toBe(SMALL);
+  }, 20000);
 });

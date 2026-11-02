@@ -18,9 +18,16 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
+import { indexModelCalls } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import type { Event, WireContextPressure } from '@nexus/wire';
-import { CONTEXT_MEASURE, MODEL_USAGE, emptyConversation, reduceAll } from '@nexus/wire';
+import {
+  COMPACTION,
+  CONTEXT_MEASURE,
+  MODEL_USAGE,
+  emptyConversation,
+  reduceAll,
+} from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -233,8 +240,8 @@ const NEVER = 1_000_000_000;
 const TURNS = ['很長的第一句。'.repeat(500), '第二句。'] as const;
 
 function summarizeAt(trigger: { type: 'tokens' | 'messages'; value: number }[]) {
-  // `keep` 留一則：第二次呼叫時訊息串是 [人, 模型, 人]，切點落在 2，前兩則被摘要掉。
-  return { trigger, keep: { type: 'messages' as const, value: 1 } };
+  // 保留量 1 token（尾巴只留最新一則）：第二次呼叫時訊息串是 [人, 模型, 人]，切點落在 2，前兩則被摘要掉。
+  return { trigger, retainTokens: 1 };
 }
 
 describe('分子跟摘要判準同源：門檻夾擠', () => {
@@ -255,6 +262,15 @@ describe('分子跟摘要判準同源：門檻夾擠', () => {
     ]);
     const { approxTokens: A, messageCount: M } = measured[1]!;
     expect(M).toBe(3);
+    // #1021：每筆量測指回它量的那一次呼叫——量測寫在 `model/end` 之後，位置歸不對。走產品組裝（摘要器在起訖紀錄器外層）。
+    const index = indexModelCalls(baseline.root);
+    expect(index.calls).toHaveLength(2);
+    expect(index.calls.map((each) => each.measures.length)).toEqual([1, 1]);
+    expect(index.unattributed.filter((event) => event.type === 'context/measure')).toEqual([]);
+    for (const each of index.calls) {
+      const measure = each.measures[0]!;
+      expect(measure.seq).toBeGreaterThan(each.end!.seq);
+    }
     // 前提：同一段對話量兩次是同一個數，夾擠才有意義。
     const again = eventsOf(
       (
@@ -329,8 +345,24 @@ describe('即時與重新整理拿到同一份，只算 root', () => {
     expect(eventsOf(subagents, 'model/usage').map((usage) => usage.inputTokens)).toEqual([1001]);
     expect(eventsOf(subagents, 'context/measure')).toHaveLength(1);
     expect(eventsOf(root, 'model/usage').map((usage) => usage.inputTokens)).toEqual([1000, 1002]);
-    const rootMeasures = eventsOf(root, 'context/measure');
+    // 線上的量測沒有 `modelCall`（識別是日誌內的事，畫面不需要）；其餘幾格與日誌逐一相等。
+    const rootMeasures = eventsOf(root, 'context/measure').map(
+      ({ modelCall: _modelCall, ...wire }) => wire,
+    );
     expect(rootMeasures).toHaveLength(2);
+    // 前提：出廠門檻帶 `messages` 那道，所以日誌上每筆都有 `messagesCompactable`（#1443）——下面的「逐一相等」才問得到
+    // 逐欄手抄的 `contextMeasureData` 有沒有把它帶上線。
+    expect(rootMeasures.map((each) => typeof each.messagesCompactable)).toEqual([
+      'boolean',
+      'boolean',
+    ]);
+    // 前提：每一筆都帶 `breakdown`（#1571 N1193），三格是非負整數——「逐一相等」才問得到手抄的 `contextMeasureData` 有沒有把它帶上線。
+    for (const each of rootMeasures) {
+      expect(each.breakdown).toBeDefined();
+      for (const value of Object.values(each.breakdown!)) {
+        expect(Number.isInteger(value) && value >= 0).toBe(true);
+      }
+    }
     // 前提：最後一輪真的失敗了，而且沒有留下任何一筆。
     expect(root.at(-1)?.type).toBe('turn/failed');
 
@@ -370,7 +402,7 @@ describe('生摘要的那次模型呼叫不上線（#584）', () => {
       entry.kind === 'ai' ? [entry.text] : [],
     );
 
-  it('摘要那一輪即時與重新整理一樣，摘要本身不在任何一顆 frame 裡', async () => {
+  it('摘要那一輪即時與重新整理一樣，摘要本身只出現在壓縮標記裡，不在任何一則回話或逐段的 frame 裡', async () => {
     const { frames, root, requests } = await converse(TURNS, {
       summarization: summarizeAt([{ type: 'messages', value: 3 }]),
       script: [{ text: '第一輪回話' }, { text: SUMMARY }, { text: '第二輪回話' }],
@@ -388,7 +420,17 @@ describe('生摘要的那次模型呼叫不上線（#584）', () => {
     // 摘要之後那一輪真正的回話照常即時上線。
     expect(aiTexts(frames)).toEqual(['第一輪回話', '第二輪回話']);
     expect(aiTexts(historyPage(root).events)).toEqual(aiTexts(frames));
-    expect(JSON.stringify(frames)).not.toContain(SUMMARY);
+    // **#584 擋的是生摘要那次呼叫的輸出被當成回話串出去**。#896 之後摘要全文會以壓縮標記的酬載上線（那是故意的），
+    // 所以把壓縮標記那一顆拿掉再問「摘要有沒有漏在別處」，而摘要在標記裡出現一次、兩條路相同。
+    const isCompaction = (frame: Event) =>
+      frame.method === 'custom' && (frame.params.data as { name?: string }).name === COMPACTION;
+    expect(JSON.stringify(frames.filter((frame) => !isCompaction(frame)))).not.toContain(SUMMARY);
+    const markers = (list: readonly Event[]) =>
+      reduceAll(emptyConversation(), list).entries.flatMap((entry) =>
+        entry.kind === 'compaction' ? [entry.summary] : [],
+      );
+    expect(markers(frames)).toEqual([SUMMARY]);
+    expect(markers(historyPage(root).events)).toEqual([SUMMARY]);
   }, 30000);
 });
 
@@ -411,7 +453,19 @@ describe('會話總帳不含生摘要的那一次（#574）', () => {
     const inputs = eventsOf(run.root, 'model/usage').map((usage) => usage.inputTokens);
     expect(inputs).toHaveLength(2);
     expect(inputs).not.toContain(1000 + summaryAt);
-    const expected = { inputTokens: inputs[0]! + inputs[1]!, outputTokens: 2 };
+    // 摘要那次報的用量不進總帳，但存在 `compaction/summary.usage`（#1022，照 dsh）：假端點報的 prompt 是 `1000 + 第幾次`、
+    // completion 恆為 1，所以這一格的數字能對上是哪一次請求。
+    expect(eventsOf(run.root, 'compaction/summary')[0]!.usage).toEqual({
+      inputTokens: 1000 + summaryAt,
+      outputTokens: 1,
+      totalTokens: 1001 + summaryAt,
+    });
+    const expectedInput = inputs[0]! + inputs[1]!;
+    const expected = {
+      inputTokens: expectedInput,
+      uncachedInputTokens: expectedInput,
+      outputTokens: 2,
+    };
     expect(reduceAll(emptyConversation(), run.frames).tokenUsage).toEqual(expected);
     expect(reduceAll(emptyConversation(), historyPage(run.root).events).tokenUsage).toEqual(
       expected,

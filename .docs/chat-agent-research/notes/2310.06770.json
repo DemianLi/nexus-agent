@@ -1,0 +1,196 @@
+{
+  "id": "2310.06770",
+  "title": "SWE-bench: Can Language Models Resolve Real-World GitHub Issues?",
+  "topic": "T7",
+  "subarea": "agent 基準與評估環境設計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "從 12 個熱門 Python repo 的真實 GitHub issue 與合併 PR 自動建出 2,294 個可執行評估實例：模型拿到 issue 文字與整個 codebase 快照，產出 patch，再用 PR 附帶、模型看不到的測試（FAIL_TO_PASS＋PASS_TO_PASS）判定是否解決。以 BM25／oracle 檢索加單次生成的基線顯示，當時最強的 Claude 2 只解得了約 2%（v3 表格中 Claude 3 Opus 為 3.79%）。",
+  "problem": "既有 LM 基準快速飽和，程式碼基準（HumanEval 等）多是幾行就能寫完的自足函式題，量不到真實軟體工程需要的能力：在數千個檔案的 repo 裡定位問題、理解跨檔案的函式互動、做多處協調修改、處理超長 context。好的基準要同時「夠難」又「容易驗證」，而程式碼可以用單元測試自動驗證，正好兼顧兩者。另外，靜態基準會被後出的模型訓練資料污染，需要能持續以新資料更新、低人工成本的收集流程。",
+  "core_idea": "把開源協作留下的痕跡當成免費標註：一個「已合併、宣告解決某個 issue、且改到測試檔」的 PR，本身就提供了任務規格（issue 文字）、初始環境（PR 的 base commit）、隱藏驗證器（PR 新增或修改的測試）與參考解（PR 的非測試改動）。評分只看行為，不看與參考解的文字相似度。FAIL_TO_PASS 測試檢查 issue 是否真的被解決，PASS_TO_PASS 測試檢查既有行為沒被弄壞。再用執行式過濾，只留下能安裝、能跑、且至少有一個測試由 fail 轉 pass 的實例，確保每題可執行、非平凡。",
+  "method": {
+    "任務實例結構（§2.2、A.2 Table 9）": "每個實例含 repo、instance_id（repo＋PR 編號）、base_commit、problem_statement（所有連結 issue 的標題＋內文，以及在 PR 第一個 commit 時間點之前留下的留言，避免洩漏解法）、hints_text（PR 第一個 commit 前的 PR 留言；本文實驗未使用）、patch（金標解，.patch 格式）、test_patch（隱藏測試）、FAIL_TO_PASS 與 PASS_TO_PASS 測試清單、version（repo 的發行版本）、env_install_commit、created_at。codebase 不存全文，以 repo＋base_commit 指向作者建立的 GitHub mirror（保留原 commit hash，避免原 repo 改寫歷史後題目失效）。",
+    "建構管線（§2.1、A.1–A.3）": [
+      "Stage I：取 2023 年 8 月 PyPI 下載量前 100 名套件，找對應 GitHub repo、確認授權允許使用，最後選 12 個 repo，用 GitHub API 抓全部 PR（共 93,139 個）。",
+      "Stage II 屬性過濾：PR 狀態須為 Merged；在 PR 標題、內文、commit message 中找『closes／fixes／resolves #N』這類關鍵字加 issue 編號，須至少連結一個 issue；PR 須改到路徑含 test／testing 等關鍵字的檔案。符合者轉成候選實例（11,407 個）。PR 的 diff 按檔案路徑切成 test_patch（測試相關路徑）與 patch（其餘）。",
+      "Stage III 執行式驗證：每個 repo 的每個 release version 手動建一個 conda 環境（依該版本最新實例的 README／CONTRIBUTING 決定 Python 版本、相依套件與安裝指令）。作者試過每題一個環境（太耗人工）與每 repo 一個環境（太粗、舊版不相容），最後選以 release version 為粒度。",
+      "驗證引擎逐題：(a) 清掉改動並 checkout base_commit；(b) 執行安裝指令；(c) 套用 test_patch；(d) 跑測試得 log_pre；(e) 套用金標 patch；(f) 再跑一次測試得 log_post。測試指令是 repo 的測試框架（pytest、tox 等）加上 test_patch 內的檔案路徑。任一步失敗即丟棄；這步大約刷掉一半候選。",
+      "log 檢查：log_pre 出現 ImportError 或 AttributeError 的丟棄（代表測試呼叫了解法才新增的函式或類別名稱，命名無法從 issue 推得）；用各 repo 專屬的 log parser 把兩份 log 轉成「測試→pass/fail」對應表，須至少一個測試由 fail 轉 pass，否則丟棄。最後得 2,294 題。",
+      "把 log_pre／log_post 的對照存成 FAIL_TO_FAIL、FAIL_TO_PASS、PASS_TO_FAIL、PASS_TO_PASS 四組清單當 ground truth，評估時不必重跑金標解。"
+    ],
+    "評估流程（A.4、Figure 8）": [
+      "1. 清掉改動並 checkout base_commit；2. 啟用該實例 version 對應的執行環境；3. 執行安裝指令；4. 套用 test_patch；5. 套用模型產出的 patch；6. 若套用失敗，自動修補 patch（刪掉多餘的 context 行、重算 hunk header）後再試；7. 跑測試指令得 log。",
+      "修補後仍套用失敗、或測試指令執行失敗 → 該題 0 分。",
+      "判定：log 解析成測試→狀態對應表，FAIL_TO_PASS 與 PASS_TO_PASS 清單中的每個測試都必須出現且為 pass；缺席或非 pass 一律視為 fail。FAIL_TO_FAIL 與 PASS_TO_FAIL 不參與評分。"
+    ],
+    "指標": {
+      "% Resolved": "完全解決的實例比例（主指標）",
+      "% Apply": "patch 能成功套用（含自動修補）的比例",
+      "F2P×P2P 六種結果（C.5 Table 22）": "只針對套用成功者：Resolved（F2P 全 pass、P2P 全 pass）、Breaking Resolved（F2P 全 pass、P2P 未全 pass）、Partially Resolved（F2P 部分、P2P 全 pass）、Work in Progress（F2P 部分、P2P 未全 pass）、No-Op（F2P 全失敗、P2P 全 pass）、Regression（F2P 全失敗、P2P 未全 pass）",
+      "其他分析": "patch 的增刪行數、改動函式數與檔案數（對照金標）；BM25 對 oracle 檔案的召回率；以 Radon 計算 Cyclomatic 與 Halstead complexity 的探索性分析（C.7）"
+    },
+    "資料切分": {
+      "test": "2,294 題，12 個 repo（django 850、sympy 386、scikit-learn 229、sphinx 187、matplotlib 184 … flask 11）",
+      "Lite": "300 題、涵蓋 11 個 repo，抽樣原則是題目較自足、以功能性 bug 修正為主；完整過濾條件在附錄 A.7，但快取全文的 A.7 被截斷，無法讀到細節",
+      "dev": "225 題、6 個另外的 repo，只收 2019-01-01 之後建立的實例",
+      "SWE-bench-train": "37 個與測試集不重疊的 repo 的約 19,000 組 issue–PR，不要求 PR 附測試，只用於精調"
+    },
+    "基線推論設定（§4、D.1–D.3）": [
+      "檢索：BM25，文件是整個檔案，檔案內容前面加上檔案路徑，好讓 issue 裡提到的檔名能被匹配到；以 issue 文字為查詢，依 13k／27k／50k token 三種上限盡量塞滿檔案，每個模型在它 context 能容納的上限中報最佳值。",
+      "oracle 檢索：直接給金標 patch 改到的非測試檔案（分析用，不真實）。oracle-collapsed：同上，但檔案只保留金標改動行上下 ±15 行，其餘摺疊。",
+      "提示詞（D.3 轉述）：先說明會提供部分 codebase 與 issue；用 <issue> 標籤包 issue 文字；用 <code> 標籤包 README 與檢索到的檔案，每個檔案以 [start of 檔名]／[end of 檔名] 標記；接著給一個跨多個 hunk 的 unified diff 範例並說明 patch 格式；最後要求輸出單一個可用 git apply 套用的 patch 檔。作者說增減幾行指示或範例對結果影響不大。",
+      "解碼：每題只生成一個 patch，所有模型都用 greedy decoding（比照 pass@1）。",
+      "對照實驗：要求模型重寫整個檔案，而不是產生 patch。",
+      "模型：ChatGPT-3.5（gpt-3.5-turbo-16k-0613）、GPT-4（gpt-4-32k-0613，因預算只跑 25% 隨機子集 574 題）、Claude 2（100k）、SWE-Llama 7b／13b；v3 的 Table 5 另加 Claude 3 Opus 與 GPT-4-turbo。"
+    ],
+    "SWE-Llama 精調（§3、B.1）": "以 CodeLlama-Python 7B／13B 初始化；輸入為指示＋issue＋oracle 檢索的相關檔案，目標是輸出金標 patch；排除超過 30k token 的序列後剩約 10,000 筆。LoRA r=16、alpha=16、dropout 0.05，只套在每個 attention 子層的 q、k、v、o 投影；learning rate 6e-4、batch size 32、最多 4 個 epoch；每 50 step 存一次 checkpoint，以 100 筆 held-out 的 validation loss 挑最佳。7B 在 4 張 A100 上訓練 20 小時，13B 在 8 張 A100 上訓練 47 小時；用 DeepSpeed Ulysses 與 FlashAttention 支援長序列。",
+    "後續演進（不在本文，依官方 repo README）": "2024-06-27 官方 harness 改為全 Docker 容器化評估；2024-08-13 釋出 SWE-bench Verified（500 題）。兩者都在 README 中註明是與 OpenAI Preparedness 團隊的合作。本文描述的是 conda 環境版本。"
+  },
+  "assumptions": [
+    "PR 附帶的測試足以代表 issue 的需求：任何真正解決 issue 的 patch 都會讓 FAIL_TO_PASS 測試成立，反之亦然（也就是測試既不過嚴、也不過鬆）。",
+    "issue 文字加上 PR 第一個 commit 之前的留言，足以讓人推導出解法；問題描述沒有嚴重不足。",
+    "只跑 test_patch 涉及的測試檔所得的 PASS_TO_PASS，能代表『沒有破壞既有功能』。",
+    "以 release version 為粒度的執行環境可以穩定重現每題的測試結果（測試是決定性的，不依賴網路或時間）。",
+    "以 issue 建立日期切分，可以用來檢驗模型是否靠記憶訓練資料作答。",
+    "模型不需要與環境互動；基線把整個任務當成一次性的「檢索＋生成」。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "SWE-bench test（2,294 題、12 個 repo）",
+      "SWE-bench Lite（300 題、11 個 repo）",
+      "SWE-bench dev（225 題、6 個 repo）",
+      "SWE-bench-train（約 19k 題、37 個 repo，僅用於精調）"
+    ],
+    "metrics": [
+      "% Resolved",
+      "% Apply",
+      "F2P×P2P 六種結果分類（Resolved／Breaking Resolved／Partially Resolved／Work in Progress／No-Op／Regression）",
+      "Patch Fix %（套用成功者中需經自動修補的比例）",
+      "BM25 對 oracle 檔案的召回率（Avg／All／Any）",
+      "patch 增刪行數、改動函式數與檔案數",
+      "Cyclomatic complexity、Halstead complexity（探索性）"
+    ],
+    "baselines": [
+      "Claude 2",
+      "Claude 3 Opus（v3 Table 5）",
+      "ChatGPT-3.5（gpt-3.5-turbo-16k-0613）",
+      "GPT-4（gpt-4-32k-0613，25% 子集）",
+      "GPT-4-turbo（v3 Table 5）",
+      "SWE-Llama 7b／13b（CodeLlama-Python＋LoRA）",
+      "檢索設定：BM25 13k／27k／50k、oracle、oracle-collapsed",
+      "輸出形式：patch vs 重寫整個檔案"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 BM25 檢索設定下，所有模型幾乎都解不了。摘要與 §5 內文寫最佳是 Claude 2 的 1.96%，但 v3 的 Table 5 已經加入更強的 Claude 3 Opus，Claude 2 那列寫的是 1.97。",
+      "numbers": "摘要／§5 內文：Claude 2 1.96%（BM25）。v3 Table 5（完整集 % Resolved／% Apply）：Claude 3 Opus 3.79／46.56、Claude 2 1.97／43.07、GPT-4-turbo 1.31／26.90、ChatGPT-3.5 0.17／26.33、SWE-Llama 7b 0.70／51.74、SWE-Llama 13b 0.70／53.62。Lite 的 % Resolved：Claude 3 Opus 4.33、Claude 2 3.00、GPT-4-turbo 2.67。oracle 檢索（Table 18）：Claude 2 4.80、SWE-Llama 13b 3.97、SWE-Llama 7b 3.01、GPT-4 1.74（25% 子集）、ChatGPT-3.5 0.52。",
+      "section": "摘要、§5、Table 5（v3）、Table 18",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "給更多 context 反而更差：BM25 的 context 上限加大後，對 oracle 檔案的召回率上升，解決率卻下降。模型的瓶頸在定位要改的程式碼；只保留金標改動行附近的 oracle-collapsed 設定會讓分數上升。",
+      "numbers": "Table 2：Claude 2 在 13k／27k／50k 分別為 1.96／1.87／1.22，SWE-Llama 13b 為 0.70／0.48／0.00。Table 3：BM25 對 oracle 檔案的平均召回率為 29.58／44.41／51.06。27k 上限時，約 40% 的實例撈到 oracle 檔案的超集，但近半實例一個 oracle 檔都沒撈到。oracle-collapsed（Table 6）：Claude 2 由 4.8 升到 5.93，Claude 3 Opus 9.39，GPT-4 3.40。",
+      "section": "§4.1、§5、Table 2、Table 3、Table 6",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "直接產生 patch 比重寫整個檔案容易。儘管模型在 patch 格式上常出錯，改成重寫整檔之後表現更差。",
+      "numbers": "oracle 設定下 Claude 2 重寫整檔 2.2% vs 產生 patch 4.8%；只看輸入 token 較短的一半實例，則是 3.9% vs 7.8%。",
+      "section": "§5",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "三階段管線的過濾非常嚴格。作者說執行 (a)–(f) 的驗證那一步大約刷掉一半候選，之後的 log 檢查（ImportError／AttributeError、有沒有 fail→pass 測試）再刷掉一批，最後只剩約兩成。題目在各 repo 間的分佈極不均。",
+      "numbers": "93,139 個 PR → 屬性過濾後 11,407 → 最終 2,294（候選只留約 20%）。若 (a)–(f) 真的刷掉一半，推算 log 檢查又刷掉剩下的約六成；這是依作者的『約一半』推算，論文沒有給出兩段各自的數字。各 repo 例如 django 16,914→2,880→850、flask 2,434→107→11、astropy 9,469→1,016→95。",
+      "section": "§2.1、A.3、Table 10",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "判定規則是 FAIL_TO_PASS 與 PASS_TO_PASS 清單中的每個測試都必須出現且為 pass；每題都有不只一個測試在守既有行為。",
+      "numbers": "每題至少 1 個 F2P，40% 的題目有 ≥2 個；P2P 中位數 51 個。平均 F2P 9.1 個（最多 1,633），總測試數平均 120.8（Table 1）。金標解平均改 1.7 個檔、3.0 個函式、32.8 行；codebase 平均 3,010 個非測試檔、438K 行。",
+      "section": "§2.2、§2.3、Table 1、A.4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "解決率與 issue 的建立年份沒有一致的相關，作者據此認為模型不是靠記住較新版本的程式碼來作答。",
+      "numbers": "Table 7（oracle，2023 前／後）：Claude 2 4.87／4.23，SWE-Llama 13b 3.98／3.85，SWE-Llama 7b 2.95／3.46，GPT-4（25% 子集）1.96／0.0。Table 21 逐年的 Claude 2 介於 4.05–5.72。",
+      "section": "§5 Table 7、C.4 Table 21",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "patch 套用成功卻沒解決的，多數連一個 F2P 測試都沒變成 pass（No-Op 或 Regression），只 pass 部分測試的中間態很少。作者說這兩類中 60–70% 是 No-Op，但依 Table 23 自己的數字，這個比例只在 ChatGPT-3.5 與 SWE-Llama 成立；Claude 2 與 GPT-4 大約是一半一半。",
+      "numbers": "Table 23（標籤未註明檢索設定；由 Claude 2 Resolved 110 與 §5 的 oracle 110 題吻合推得是 oracle）：Claude 2 套用 1,078 → Resolved 110、Breaking Resolved 26、Partially Resolved 15、Work in Progress 20、No-Op 471、Regression 436，No-Op 占兩類的 52%。GPT-4 為 30／(30+29)≈51%，ChatGPT-3.5 為 174／(174+90)≈66%，SWE-Llama 7b 為 716／(716+421)≈63%，SWE-Llama 13b 為 672／(672+397)≈63%。",
+      "section": "C.5 Table 22–23",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "GPT-4 與 ChatGPT-3.5 產出的 patch 格式較差：套用成功的較少，而且其中有較高比例要靠 harness 自動修補才能套上。但在相同檢索設定下，Claude 2 與精調過的 SWE-Llama 修補比例幾乎相同。作者把這個現象概括成『閉源模型』，只有兩個 OpenAI 模型撐得起這個說法。",
+      "numbers": "Table 14 的 Patch Fix %：BM25 13k 下 Claude 2 30.57、SWE-Llama 13b 30.0、SWE-Llama 7b 28.64、ChatGPT-3.5 60.1；GPT-4 BM25 27k 為 69.41（套用成功 85 個中 59 個經修補，25% 子集）。oracle 下 Claude 2 24.98、SWE-Llama 13b 24.67、SWE-Llama 7b 19.83、ChatGPT-3.5 44.4、GPT-4 62.05。",
+      "section": "A.5 Table 14",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "所有實例都是 Python；希望把收集流程擴到其他語言與領域。",
+    "實驗只建立最簡單的基線（檢索＋單次生成），鼓勵後續研究 agent 與工具增強的方法。",
+    "只靠執行測試不足以保證生成品質：模型的解法常比人寫的更不完整、效率更差、可讀性更低。",
+    "部分 issue 內含圖片連結（matplotlib 32%、seaborn 10%，全體約 2%），可能需要多模態模型或外部工具才能處理。",
+    "oracle 檢索不真實（工程師事先不知道要改哪些檔），也不一定完整（改到的檔案不見得包含理解行為所需的全部 context）。",
+    "GPT-4 因預算只在 25% 隨機子集上評估。",
+    "SWE-Llama 以 oracle context 訓練，換到 BM25 context 時表現大幅下降，對 context 分佈偏移敏感。",
+    "每個 release version 的執行環境需要人工建立。"
+  ],
+  "limitations_observed": [
+    "版本不一致：快取的是 v3（2024-11），Table 5 已加入 Claude 3 Opus（3.79%）與 GPT-4-turbo，Claude 2 列為 1.97。摘要、引言與 §5 內文卻仍寫「最佳是 Claude 2 的 1.96%」。引用本文數字時必須註明取自哪一段、哪個版本。",
+    "時間／污染分析沒有統計檢定力。GPT-4 在 25% 子集中 2023 年的題目只有 61 題（Table 21），以它 1.7–2.0% 的解決率估計，期望只解約 1 題，所以觀察到 0 題完全可能是機率造成的。Claude 2 的 4.23% 對應 244 題，也只有約 10 題。全文沒有信賴區間或任何檢定，卻據此下「不太會作弊」的結論。此外 Table 7 的 Claude 2「2023 後」是 4.23，Table 21 的 2023 列卻是 4.51，兩表對不上。",
+    "oracle-collapsed 的比較口徑對不上：§5 內文說 GPT-4 由 1.3% 跳到 3.4%，但 Table 18 的 GPT-4 oracle 是 1.74，不是 1.3。1.3 恰好等於 Table 5 中 GPT-4-turbo 的 BM25 分數（1.31），也可能是舊版留下的數字，成因不明。此外 GPT-4 的 oracle 只跑 25% 子集，oracle-collapsed 卻跑全集（Table 14 註明），兩者的題目集合本來就不同。",
+    "harness 會自動修補 patch（A.4 step 6），這讓 % Apply 混入了評估器本身的貢獻。GPT-4 BM25 套用成功的 patch 有 69% 是修補後才套上的，ChatGPT-3.5 也有 60%（Table 14）。因此 % Apply 在不同模型之間不能直接當作『格式能力』比較，換一版修補邏輯就會改變分數。",
+    "「模型只寫不到一半長度的 patch」的說法有選擇偏差。§5 引用的是 ChatGPT-3.5 的 30.1 行對上未條件化的 All Gold 74.5 行；同一批題目的對應金標其實是 39.6 行。改看 Table 24（包含套用失敗的 patch），SWE-Llama 13b／7b 反而比對應金標更長（68.9 vs 61.5、78.9 vs 65.1）。『模型寫得短』有一部分是『只看套用成功者』造成的。",
+    "測試品質的過濾很弱：只排除 log_pre 出現 ImportError／AttributeError 的題目，抓不到比對精確字串、錯誤訊息或特定實作細節的過嚴測試，也不處理 issue 描述不足的題目。後來官方要另外以人工篩出 500 題的 Verified 子集，Anthropic 官方文章也把 Verified 描述為『經人工審查、確認可解』，正好說明原集合含有不可解或規格不清的題目，而本文沒有量化這個比例。",
+    "PASS_TO_PASS 只涵蓋 test_patch 所涉及的測試檔（A.3 的測試指令只附上 T 裡的路徑）。對 repo 其他地方的破壞偵測不到，所以 Resolved 與 Breaking Resolved 的區分只在局部成立，§2.3 的『Robust evaluation』主張應打折扣。",
+    "測試可能不具決定性：psf__requests-1724 的 F2P 清單中包含 test_DIGEST_AUTH_RETURNS_COOKIE 等看起來會對外發 HTTP 請求的測試（Table 31）。這是從測試名稱推論，沒有實際驗證；若屬實，評分會受網路狀態影響。本文沒有報告重跑的一致性。",
+    "附錄案例表有多處錯誤：Table 25 的 Issue 與 PR 連結對調；Table 29 標成 sympy__sympy-18211，連結卻是 pylint 的 issue／PR，F2P 測試更是 seaborn 的 tests/_marks/test_bar.py；Table 34 同一個 test_kernel_pca_deterministic_output 同時列在 F2P 與 P2P。質性分析的可信度因此受影響。",
+    "所有結果都是 greedy 單一樣本，沒有多次取樣的變異或 pass@k；GPT-4 只有 25% 子集。數字都在 0–5% 的區間，模型間 0.5 個百分點左右的差距（例如 SWE-Llama 13b 與 7b 的 0.70 vs 0.70、Lite 1.00 vs 1.33）在統計上分不開。",
+    "摘要強調解題需要『與執行環境互動』，但本文自己的基線完全不互動：一次檢索、一次生成、不看測試回饋。所以這篇對 agent 評估的貢獻在於環境與判定協定，而不在於量測了 agent 能力。它只評最終 patch，不記錄也不評估過程（軌跡、步數、成本、工具使用）。",
+    "任務是單輪、一次性給定的：problem_statement 固定，模型不能向 issue 作者追問；hints_text 已收集但沒有使用。以對話 agent 的角度來看，它把『需求澄清』完全排除在評估之外，issue 規格不清的題目只會被記為失敗。",
+    "題目選擇有偏差：必須有 PR 連結 issue 且附測試，才會留下容易寫成測試的 bug 類問題。在 Table 13 的 2,289 個標籤中，Bug 442、Feature 167，其餘多為 Other；題目在 repo 間也極不均（django 850 題、flask 11 題），整體分數大半由少數 repo 決定。",
+    "§2.2 說評估用 unix 的 patch 程式套用 patch，D.3 的提示詞卻要求輸出可用 git apply 套用的 patch，兩者對格式的容忍度不同，本文沒有說明是否影響 % Apply。",
+    "「可持續更新」只是設計主張，本文沒有實際示範一輪更新，也沒有檢驗新舊題目的難度是否可比。",
+    "C.5 的結論與它自己的表格不符：作者說未解決且一個 F2P 都沒 pass 的題目中 60–70% 是 No-Op，但 Table 23 的 Claude 2 是 471 對 436（約 52%），GPT-4 是 30 對 29（約 51%），只有 ChatGPT-3.5 與 SWE-Llama 落在 60–70%。對最強的模型而言，『弄壞既有行為』和『完全沒效果』一樣常見，這對 P2P 的重要性是更強的論據，作者卻把它講弱了。",
+    "Patch Fix % 的結論被過度概括：A.5 說閉源模型套用成功者中需修補的比例較高，但同在 BM25 13k 下 Claude 2（30.57%）與 SWE-Llama 13b（30.0%）幾乎一樣，oracle 下也是 24.98% 對 24.67%。只有 GPT-4（69%）與 ChatGPT-3.5（60%）明顯偏高，說法應限定在這兩個模型。",
+    "六類結果分析的分母不清楚：Table 23 的 Applied 數與 Table 14 的 Applies 數對不上。以 oracle 設定為例，Claude 2 是 1,078 對 1,441，ChatGPT-3.5 是 284 對 500，SWE-Llama 13b 是 1,196 對 1,532。論文沒有說明 Table 23 排除了哪些 patch，六類比例因此難以解讀。"
+  ],
+  "framework_role": "主要屬於 T7：它是「可執行環境＋隱藏測試」型 agent 基準的原型。環境是真實 repo 在 base commit 的快照加上對應版本的執行環境；判定完全以行為為準；題目來源可以自動擴充。這套設計（實例結構、建構管線、F2P／P2P 判定、自動修補與 0 分規則）是之後 agent 評估環境常被沿用的樣板。它也直接連到 T8：% Resolved 是二元的任務完成分數，而 C.5 的 F2P×P2P 六種結果分類，把『目標達成程度』（F2P）與『副作用／回歸』（P2P）拆成兩個軸，可以直接拿來當部分完成度的評分設計。對本框架的對話 agent 而言，它的限制是單輪、不可追問、只評最終產物，不涉及使用者模擬器、多輪狀態或軌跡評估。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "Anthropic 官方公告（2024-10-22）用 SWE-bench Verified 報告 coding 表現：Claude 3.5 Sonnet（升級版）從 33.4% 提升到 49.0%，Claude 3.5 Haiku 為 40.6%。來源：https://www.anthropic.com/news/3-5-models-and-computer-use",
+      "Anthropic 官方 engineering 文章〈Raising the bar on SWE-bench Verified with Claude 3.5 Sonnet〉（2025-01-06）公開其在 SWE-bench Verified 上的 agent 架構（bash tool＋edit tool，極簡 scaffold，49%），並把 Verified 描述為經人工審查、確認可解的 500 題子集。來源：https://www.anthropic.com/engineering/swe-bench-sonnet",
+      "（作者方發布，非第三方採納，列出作為背景）SWE-bench 官方 repo README：2024-06-27 改為全 Docker 容器化評估 harness，2024-08-13 釋出 SWE-bench Verified（500 題，經真人軟體工程師確認可解），兩者都註明是與 OpenAI Preparedness 團隊的合作。這是作者方的說法；OpenAI 的原始公告頁在查證時回傳 403，未能打開確認。來源：https://github.com/SWE-bench/SWE-bench"
+    ],
+    "assessment": "採納證據強，但確認過的範圍有限。已直接打開確認的第三方證據是 Anthropic 的兩份官方頁面：它們用 SWE-bench Verified 公開報告模型的 coding／agent 表現。與 OpenAI Preparedness 團隊合作這一點，目前只有作者方 README 的說法。要注意，廠商實際報告的是後來經人工篩選的 Verified 500 題子集，而且多半搭配 agent scaffold，不是本文的 2,294 題全集，也不是本文的 RAG 單次生成基線。被採納的是『資料建構＋執行式判定』這套方法與其衍生子集。查證限制：這個 session 的 WebSearch 額度已用完，無法再搜尋；OpenAI 官方頁面回傳 403。因此只收錄直接用 WebFetch 打開確認過的頁面，其他廠商（例如 OpenAI、Google 的 model card）是否也報告 SWE-bench，這裡沒有查證，不列入。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/SWE-bench/SWE-bench",
+    "data": "公開。論文宣稱 2,294 題、收集與評估程式、SWE-bench-train 與 SWE-Llama 權重都會開源（Data, code, and leaderboard at swebench.com）；官方 repo（MIT 授權）與 Hugging Face 上的 Verified 資料卡已實際打開確認。注意：本文的執行環境是手工 conda 環境，官方 harness 在 2024-06 改成 Docker，用現行 harness 重現的結果不一定與本文數字相同。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它定義了「真實 repo 快照＋隱藏測試＋F2P／P2P 行為判定」這種可執行 agent 評估環境的原型，也被模型廠商廣泛當成官方指標，是 T7 評估環境設計的必讀文獻；價值在環境與判定協定的設計，不在它那組偏弱的基線。",
+  "related": [
+    "2107.03374",
+    "2308.03688",
+    "2307.13854",
+    "2306.06070",
+    "2207.01206",
+    "2306.14898",
+    "2305.01210",
+    "2307.03172",
+    "2308.12950"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 5,
+    "total": 8
+  }
+}

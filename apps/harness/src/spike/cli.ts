@@ -1,6 +1,8 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { loadLiveEnvIfNeeded, DEFAULT_LIVE_MODEL_ID } from '../live-model.js';
+import { installLaunchProxy } from '../http-proxy-boot.js';
+import { loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from '../live-model.js';
+import type { CredentialService } from '../credentials.js';
 import { createLiveSpikeAgent, createSpikeAgent } from './spike-agent.js';
 
 /**
@@ -16,15 +18,28 @@ import { createLiveSpikeAgent, createSpikeAgent } from './spike-agent.js';
  * **不進 CI** —— CI 不放模型 secret。
  */
 
+/** 真模型路徑的啟動：載入環境、裝對外代理（#746），回憑證服務。這支腳本跑到行程結束，代理不另收尾。 */
+async function launchLive(): Promise<CredentialService> {
+  const { credentials, launchEnv, keySourceOf, assertKeyLocated } = loadLiveLaunchEnv({
+    store: false,
+  });
+  // 用出廠設定，金鑰名一律是預設的（#1604），搬家檢查照舊在這裡做。
+  assertKeyLocated(LIVE_API_KEY_ENV);
+  const keySource = keySourceOf(LIVE_API_KEY_ENV);
+  if (keySource !== undefined) console.error(keySource);
+  await installLaunchProxy(launchEnv, (message) => console.error(message));
+  return credentials;
+}
+
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   const live = args.includes('--live');
   const prompt =
     args.filter((arg) => arg !== '--live').join(' ') || '記錄 Phase 0 的結論並寫成檔案。';
 
-  if (live) loadLiveEnvIfNeeded();
-
-  const { agent } = live ? await createLiveSpikeAgent() : await createSpikeAgent();
+  const { agent } = live
+    ? await createLiveSpikeAgent(await launchLive())
+    : await createSpikeAgent();
 
   console.log(`模型：${live ? DEFAULT_LIVE_MODEL_ID : '假模型（ScriptedChatModel）'}`);
   console.log(`> ${prompt}\n`);

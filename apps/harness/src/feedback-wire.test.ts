@@ -20,12 +20,11 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { loggedMessageId } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
-import { createFeedbackPlugin } from '@nexus/plugin-feedback';
+import type { SessionDurabilityService } from '@nexus/session';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import type { AiEntry, ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   appendDecision,
-  appendHumanTurn,
   createWireClient,
   emptyConversation,
   reduceAll,
@@ -36,7 +35,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
+import { createFeedbackPlugin } from './feedback.fixture.js';
 import { TEST_BROWSER_AUTH, approvalAt, loopbackRequest, shippedPlugins } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -44,6 +44,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { composeAttachSessions } from './session-attach.js';
 
 const shipped = await shippedPlugins();
 
@@ -85,12 +86,15 @@ afterEach(async () => {
   for (const handler of opened.splice(0)) await handler.close();
 });
 
-async function line(turns: readonly ScriptedTurn[]): Promise<Line> {
+async function line(
+  turns: readonly ScriptedTurn[],
+  durability?: SessionDurabilityService,
+): Promise<Line> {
   const model = new ScriptedChatModel({ turns });
   const built = await createNexusAgent({
     model,
     checkpointer: new MemorySaver(),
-    plugins: [createFeedbackPlugin({ maxNoteBytes: 64 }), fixturePlugin],
+    plugins: [createFeedbackPlugin({ maxNoteBytes: 64 }, durability), fixturePlugin],
   });
   let captured: SessionLog | undefined;
   const handler = createWireHandler({
@@ -100,9 +104,9 @@ async function line(turns: readonly ScriptedTurn[]): Promise<Line> {
       commands: built.commands,
       ...(built.feedback !== undefined && { feedback: built.feedback }),
       dispose: built.dispose,
-      attachSession: (sessions) => {
+      attachSessions: (sessions, backgroundPort) => {
         captured = sessions.root;
-        return built.attachSession(sessions);
+        return composeAttachSessions(built)(sessions, backgroundPort);
       },
     }),
   });
@@ -133,7 +137,7 @@ interface Session {
 async function open(wired: Line, threadId: string, text: string): Promise<Session> {
   const events = await wired.client.openEvents(threadId);
   await wired.client.runStart(threadId, text);
-  return { events, state: appendHumanTurn(emptyConversation(), text) };
+  return { events, state: emptyConversation() };
 }
 
 /** 抽到條件成立為止。**用 `next()` 不用 `for await`**，理由同 `hitl-wire.test.ts`。 */
@@ -234,6 +238,78 @@ describe('評一則回覆', () => {
     // 對照：抓到的是下一輪那一份。
     expect(prompt).toContain('再一句。');
     expect(prompt).not.toContain('QX7');
+  });
+
+  it('日誌裡有一顆壞掉的評分事件：list／put 回 unknown_error「評分紀錄壞了」，歷史照樣讀得到（#1606）', async () => {
+    const wired = await line([{ content: '答。' }]);
+    const session = await open(wired, 't', '跑。');
+    await until(session, settled(1));
+    const messageId = messageIdOf(aiEntries(session.state, 'root')[0]);
+    wired.log().append('feedback/message-put', {
+      item: { messageId, rating: 'meh', version: 'v', createdAt: 1, updatedAt: 1 },
+    } as never);
+
+    for (const outcome of [
+      await wired.client.feedbackList('t'),
+      await wired.client.feedbackPut('t', { messageId, rating: 'positive', ifVersion: null }),
+    ]) {
+      expect(outcome).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+      expect(outcome.kind === 'rejected' && outcome.message).toContain('評分紀錄壞了');
+    }
+    // 壞的只有評分：重新整理照樣拿得到這條 thread 的歷史。
+    expect((await reloaded(wired.client, 't')).entries.length).toBeGreaterThan(0);
+  });
+
+  it('落盤確認被拒（磁碟寫不進去）：put 與 delete 都回 unknown_error「評分沒存成」，不回 ok（#1606 A）', async () => {
+    let refuse = false;
+    const wired = await line([{ content: '答。' }], {
+      checkpoint: () => (refuse ? Promise.reject(new Error('磁碟滿了')) : Promise.resolve()),
+    });
+    const session = await open(wired, 't', '跑。');
+    await until(session, settled(1));
+    const messageId = messageIdOf(aiEntries(session.state, 'root')[0]);
+    const first = await wired.client.feedbackPut('t', {
+      messageId,
+      rating: 'positive',
+      ifVersion: null,
+    });
+    if (first.kind !== 'ok' || !first.result.ok) throw new Error('評不下去');
+    const version = first.result.value.version;
+
+    refuse = true;
+    // 先 append、再確認（同 dsh）：被拒的那一顆留在記憶體的日誌裡，所以先收回（拿現行 version），再從「沒評過」評一次。
+    for (const outcome of [
+      await wired.client.feedbackDelete('t', { messageId, ifVersion: version }),
+      await wired.client.feedbackPut('t', { messageId, rating: 'negative', ifVersion: null }),
+    ]) {
+      expect(outcome).toMatchObject({ kind: 'rejected', code: 'unknown_error' });
+      expect(outcome.kind === 'rejected' && outcome.message).toBe(
+        '評分沒存成，原因記在 serve 的日誌',
+      );
+    }
+  });
+
+  it('rating 不是 positive／negative：整顆退回 invalid_argument，連原型鏈上的名字也一樣', async () => {
+    const wired = await line([{ content: '答。' }]);
+    const session = await open(wired, 't', '跑。');
+    await until(session, settled(1));
+    const messageId = messageIdOf(aiEntries(session.state, 'root')[0]);
+    for (const rating of ['neutral', 'constructor', 'toString', '__proto__']) {
+      const put = await wired.client.feedbackPut('t', {
+        messageId,
+        rating: rating as never,
+        ifVersion: null,
+      });
+      expect(put).toMatchObject({ kind: 'rejected' });
+    }
+    expect(feedbackEvents(wired.log())).toEqual([]);
+    // 對照：同一則、同一條線，合法的那兩種評得下去。
+    const ok = await wired.client.feedbackPut('t', {
+      messageId,
+      rating: 'positive',
+      ifVersion: null,
+    });
+    expect(ok.kind).toBe('ok');
   });
 
   it('停在核准點又續接：一輪只有一個收尾，放在續接後那則；停著時照樣評得到', async () => {
@@ -554,9 +630,9 @@ describe('/feedback 與零 plugin 設定', () => {
         commands: built.commands,
         ...(built.feedback !== undefined && { feedback: built.feedback }),
         dispose: built.dispose,
-        attachSession: (sessions) => {
+        attachSessions: (sessions, backgroundPort) => {
           captured = sessions.root;
-          return built.attachSession(sessions);
+          return built.attachSessions(sessions, backgroundPort);
         },
       }),
     });

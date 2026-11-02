@@ -15,20 +15,53 @@
  * 3. **實體化可以延後。** 後端可以把建檔推遲到第一次 `append` 或 `flush`——那是純粹的
  *    優化，dsh 明文允許。所以 {@link SessionStore.create} 是同步的，IO 在把手上。
  *
- * ## 兩處跟 dsh 不一樣的
+ * ## 讀回有兩條
  *
- * - **沒有 `stat`／`list`，讀回只有一個 `resume`。** dsh 的 `open`／`stat`／`list` 是給一個
- *   會列出、查詢、續接任何會話的服務用的；我們的讀方只有續接——CLI 的 `--resume <run 目錄>`
- *   與 serve 碰到一條 thread 時（[#251](https://github.com/DemianLi/nexus-agent/issues/251)
- *   的門 A），兩個手上都已經有位址（目錄與 thread id），不需要列。所以只抄續接要的那一條：讀回、交出一個接著寫的把手。`stat`／`list` 等有人
- *   要列的那天再加。**離線掃描（[#268](https://github.com/DemianLi/nexus-agent/issues/268)）是列的，
- *   但它不經過這個介面**：它在產品路徑外、只讀 JSONL 後端的檔（`apps/harness/src/eval/session-scan.ts`），
- *   不要把手也不拿租約。所以這一條說的仍是執行期的讀方。
+ * - **續接**（{@link SessionStore.resume}）：拿寫租約、截掉撕裂的尾巴、交出接著寫的把手。對到 dsh 的
+ *   `open(id, 'write')`。CLI 的 `--resume <run 目錄>` 與 serve 碰到一條 thread 時走它
+ *   （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
+ * - **唯讀**（{@link SessionStore.list} 與 {@link SessionStore.open}）：照 dsh 的 `list` 與 `open(id, 'read')`
+ *   （[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。**不拿租約、不截尾巴、不動 header**，別的行程
+ *   握著的那一份照樣讀得到。讀方：serve 的會話列表（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）與
+ *   按內容搜尋（[#631](https://github.com/DemianLi/nexus-agent/issues/631)），都在產品路徑上——所以列與冷讀要經過這個
+ *   介面，檔名與 header 的規則只留在後端。離線掃描（[#268](https://github.com/DemianLi/nexus-agent/issues/268)）
+ *   在產品路徑外、要讀比這一版新的，不走 `list`，只 import 後端那一份檔名與 header 規則
+ *   （同 dsh 的日誌匯出只 import 檔名定義）。
+ *
+ * ## 跟 dsh 不一樣的
+ *
+ * - **沒有 `stat`**：今天沒有消費者（dsh 拿它給投影快取，那一層在
+ *   [#725](https://github.com/DemianLi/nexus-agent/issues/725) 等決定）。`list` 的
+ *   {@link StoredSessionSnapshot.revision} 照抄了：內容搜尋的索引就是 dsh 說的衍生讀取快取。
+ * - **`list` 只列落了盤的**：dsh 連這個行程 `create` 了、還沒實體化的也列
+ *   （`packages/session/session-persistence/src/index.ts:125-130`）。#665 是不改行為的重構，照舊只讀盤；要照 dsh
+ *   列得另開一刀（demian 2026-09-29 拍板）。
+ * - **`list` 多回一格 {@link StoredSessionListing.unreadable}**：dsh 的 JSONL `list` 碰到讀不懂或版本太新的 header
+ *   直接略過、不數。我們的列表把它數出來、一路畫到 web 上（不數的話「少了一條」跟「本來就沒有」分不出來），
+ *   demian 2026-09-29 拍板照舊。
+ * - **唯讀讀有撿回模式**（{@link StoredSessionReadOptions.salvage}）：dsh 的冷讀碰到中段壞掉就拋。我們的列表與搜尋
+ *   以前各自逐行撿回、不讓一份壞檔拖垮整份清單；#665 把那條規則收進後端，只留一份。不是新偏離，是搬家。
  * - **`create` 撞到已存在的 session 必須拒絕**，不得覆寫也不得續寫。我們的 session id 只在
  *   一次組裝內唯一（`SessionRegistry` 的 `<root>/<runId>`），不像 dsh 的 `SessionId` 全域
  *   唯一，所以後端要自己把每一次組裝隔開。這條拒絕**在續接出現之後照樣成立**：續接是另一個
  *   方法（{@link SessionStore.resume}），它明著打開一份已存的，`create` 撞到已存在的仍然
  *   拒絕——撞名照樣會響，續接不會被當成撞名。
+ * - **原版號另外交一格 `storedFormatVersion`**（{@link ReadonlyStoredSession.storedFormatVersion} 等三處；理由 1，
+ *   **類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：dsh 的邏輯 header 永遠是目前版，
+ *   舊的實體 header 走遷移鏈寫成新一代的檔、轉譯完才進介面（`packages/core/session/src/types.ts:96-100`，`687f282e`），
+ *   所以介面上沒有原版號。我們沒有遷移鏈：續接把舊檔的事件原樣搬進目前版的世代檔
+ *   （[#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③），只讀打開不遷，舊檔一直是舊版號的那一份。讀方
+ *   （本文解析、引用快照的 `capturedFormatVersion`、離線掃描的版本門檻）真的要知道它。header 照 dsh 轉譯成目前版，原版號另交
+ *   這一格，要它的讀方被型別逼著明講。**撤除條件**：遷移鏈把舊版的事件轉成目前版再交給讀方
+ *   （[#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第四刀）落地。跟 #1594 ③ 的遷移無關：只讀不寫的會話永遠
+ *   不遷，這一格在它們身上一直有意義。
+ * - **引用快照的 `capturedFormatVersion` 記原版號**（`SessionReferenceSourceEntry.capturedFormatVersion`，寫在
+ *   `apps/harness/src/session-reference.ts`；理由 1，**類別：過渡**，[#1856](https://github.com/DemianLi/nexus-agent/issues/1856)）：
+ *   dsh 記 `snapshot.session.version`（`packages/context/session-reference/src/index.ts:409`，`687f282e`），也就是目前版——
+ *   前提是 store 先把事件轉成目前版才交出去（`packages/core/session/src/types.ts:96-100`）。我們今天沒有遷移鏈
+ *   （`session-format.ts` 模組說明），交給讀方的事件是磁碟上的原樣，不是目前版的表示法，所以記原版號才對得上內容。
+ *   **撤除條件**：遷移鏈把事件轉成目前版再交給讀方的那一刀（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)
+ *   第四刀）落地時，改成照 dsh 記目前版。跟上一條的撤除條件不同，兩條分開撤。
  *
  * **跨行程的寫租約照抄了**（{@link SessionAlreadyOwnedError}）：兩個行程寫同一份會話的話
  * `seq` 會撞號，dsh 靠 `open(id, 'write')` 的所有權把第二個擋掉，我們同樣。**擋的機制是後端
@@ -50,6 +83,18 @@ import type { SessionEvent } from './session-log.js';
  * 的六種一路長到今天、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
  * 分支的遷移**——讀方只能靠猜。
  *
+ * **格式紀錄在兩個地方**：50 版以前每一次升版改了什麼、讀舊檔怎樣，寫在下面這些段落。從
+ * [#1856](https://github.com/DemianLi/nexus-agent/issues/1856) 起，不論同版還是升版，每一次持久化型別變更都在
+ * `docs/persistence-changes/` 有一筆由驗證器核過的紀錄（`apps/harness/src/persistence-changes.ts`，CI 擋；50 版以前
+ * 同一版之內的新增寫在那裡的基線 `2026-10-23-initial.md`）。這份檔頭的段落是讀舊檔的敘事說明：營運者讀的升級指南
+ * （`docs/upgrade-guide/`，AGENTS.md「發版」〈升級指南〉）只寫要動手的事，再連到這裡，不另抄一份。
+ * **偏離 dsh，已部分撤除**（#1537 Q2 (a)，demian 2026-10-17 拍板）：dsh 的格式紀錄是機器檢查的——
+ * `docs/persistence-changes/` 逐筆一份 `.md` 加從型別抽出的 `.schema.json`、digest、`finalized/` 凍結點，
+ * 由 `scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。這裡原本退到人寫的
+ * 段落（理由 1）；機器檢查那一半已由 #1856 補上（`82c95e1a`）。剩下 `finalized/` 凍結點與 `session-format-status.md`，
+ * **類別：過渡**（型別抽取的工具鏈已經有了，不再是理由 1；延到發版節奏定了再做），撤除條件
+ * [#1890](https://github.com/DemianLi/nexus-agent/issues/1890)。七層盤點 O-13 的「形狀不同、未登記成偏離」就是這一條的來歷。
+ *
  * ## 2：`turn/start` 多了 `kind: 'goal'`
  *
  * 續行驅動器（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）加了第三種輪次
@@ -65,7 +110,10 @@ import type { SessionEvent } from './session-log.js';
  *   [#98](https://github.com/DemianLi/nexus-agent/pull/98) 就在，格式版本到
  *   [#173](https://github.com/DemianLi/nexus-agent/pull/173) 才開始蓋，v2 只多了 `goal`
  *   這個變體；v2 之於 v3、v3 之於 v4 同理，各只多了一種事件。所以不需要遷移包——dsh 養兩個是因為它的
- *   舊版真的長得不一樣。
+ *   舊版真的長得不一樣。**這段推理留作歷史**：「哪一版直接讀得了」現在由版本邊目錄回答
+ *   （{@link ./session-format.ts | SESSION_FORMAT_EDGES}，[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）——
+ *   每一次升版逐條登記成 `additive`（舊檔直接讀，靠讀方分支的記 `readerBranch`）或 `breaking`（沒有遷移、拒讀），
+ *   模組載入時驗，`parseHeader` 據它判。
  * - **比這個號新的拒絕**，而且跟壞檔分開報（{@link SessionFormatUnsupportedError} 與
  *   {@link SessionCorruptionError}，照 dsh 的 `SessionFormatUnsupportedError`／
  *   `SessionPersistenceCorruptionError`）：新版寫的檔不是壞的，是這一版讀不懂。
@@ -111,8 +159,8 @@ import type { SessionEvent } from './session-log.js';
  *
  * **這一次比前幾次更非升不可。** 前幾次升版是慣例，這一次是閘：一個讀不懂 9 的舊 runtime 接續新檔的話，
  * 它寫下去的輪次沒有回覆、沒有結果內容，推出來的歷史就有洞。它得看到「版本太新」而拒讀
- * （{@link SessionFormatUnsupportedError}）。守這條線的**只有**這個號：我們的 body parser 對不認得的
- * `type` 照收（`apps/harness/src/jsonl-session-store.ts`），沒有 dsh 那個逐顆的 `ignorable` 旗標。
+ * （{@link SessionFormatUnsupportedError}）。守這條線的**只有**這個號：那時我們的 body parser 對不認得的
+ * `type` 照收（`apps/harness/src/jsonl-session-store.ts`），沒有 dsh 那個逐顆的 `ignorable` 旗標（32 補上了，見下）。
  *
  * ## 10：評分指名回覆，不指名輪
  *
@@ -157,8 +205,484 @@ import type { SessionEvent } from './session-log.js';
  * 摘要器量到的每一次模型呼叫：離自動摘要還有多遠（[#528](https://github.com/DemianLi/nexus-agent/issues/528)，
  * web 的用量表讀它）。v13 的檔直接讀：那時候沒有這一層，一顆都沒有就是當時的樣子——用量表要等接回來之後的第一次
  * 模型呼叫才畫得出來（它看的是 `measure`；舊檔裡的 `model/usage` 照樣送上線）。升版理由同 11。
+ *
+ * ## 15：`turn/end` 的 `reason` 多一種 `max-tokens`
+ *
+ * root 的回覆撞到輸出上限的那一輪以 `reason: {kind:'max-tokens'}` 收尾（[#433](https://github.com/DemianLi/nexus-agent/issues/433)）。
+ * **非升不可**：14 讀到它會當成正常結束——14 的 goal 續行只認得 `aborted`，於是在一輪撞到上限之後照樣
+ * 排下一輪，而 15 在那一刻收回了續行授權。同 dsh 那條門檻（「no longer handle a new log with full semantic
+ * correctness」，`packages/core/session/src/types.ts:74-85`，`477b4f4`）。
+ *
+ * v14 的檔直接讀：沒有這一種就是那時候沒記——**不是沒撞到**。那時候的 `assistant/message` 已經帶著
+ * `response_metadata.finish_reason`，要數舊檔的截斷得從那一格推，不能讀 `turn/end`。
+ *
+ * ## 16：`tool/result` 帶 `meta`
+ *
+ * 讀檔、搜尋、改檔的結構化結果，給 web 的專屬卡畫（[#617](https://github.com/DemianLi/nexus-agent/issues/617)），
+ * 同 dsh 的 `tool/result.meta`（`packages/core/session/src/types.ts:363-385`，`477b4f4`）。模型看不到它，推模型
+ * 歷史的一側不讀。v15 的檔直接讀：沒有這一格就是那時候沒記，接回來的卡走 generic。
+ *
+ * 升版照新增詞彙的慣例（同 11、12、14），不是 15 那種非升不可：15 讀到這一格只是不畫專屬卡，重建出來的
+ * 對話不差一個字。
+ *
+ * ## 17：`inbox/spliced`
+ *
+ * 送出佇列（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：人送出、還沒開跑的那幾句存在 server 上，由
+ * 這一顆折出來。v16 的檔直接讀：那時候送出的話不排進日誌，一顆都沒有就是當時的樣子，接回來的佇列是空的。
+ *
+ * **非升不可**：16 接回一份 17 的日誌時認不得這一顆，停住的那幾件從它眼裡消失——續寫下去之後，一台 17 再接回來
+ * 時它們又冒出來、而且排在 16 那段時間送出並跑完的話前面。同 13 那條門檻：靜靜略過會左右重建的內容就是一次讀錯。
+ *
+ * ## 18：`session/title`
+ *
+ * 這條會話叫什麼（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），web 的 header 與列表讀它。v17 的檔直接讀：
+ * 那時候沒有這一顆，讀的人照 v17 的做法從第一則人打的字推（列表與歷史都是）。
+ *
+ * 升版照新增詞彙的慣例（同 11、12、14、16），不是 17 那種非升不可：這一版只有 `fallback` 一種，17 自己推出來的
+ * 標題一字不差。
+ *
+ * ## 19：LLM 標題
+ *
+ * `session/title` 的 `source` 多一種 `provider`（模型產生的），加一顆只進日誌的 `session/title-llm-request`
+ * （[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。v18 的檔直接讀：那時候沒有模型產生的標題，一顆都沒有就是
+ * 當時的樣子。
+ *
+ * 升版照新增詞彙的慣例（同 18），不是非升不可：18 讀到 `provider` 的標題照樣拿最後一顆，一字不差；讀到
+ * `session/title-llm-request` 只是不認得一種它本來就不用的事件。
+ *
+ * ## 20：插話（`next-step`）
+ *
+ * 跑著的那一輪可以插話（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）：`inbox/spliced` 的 `target` 多一種
+ * `next-step`，`user/message` 的 `source` 多一種 `user`（輪中領走、送進模型的那一句）。v19 的檔直接讀：那時候只有
+ * `next-turn`，也沒有人話的 `user/message`，一顆都沒有就是當時的樣子。
+ *
+ * **非升不可**，同 17：19 的折疊不看 `target`，每一顆都套在同一條清單上——`next-step` 的變動會混進 `next-turn`，
+ * 或讓折疊拋錯。19 推回模型時也把人話的 `user/message` 當成外掛注入的那一種讀。
+ *
+ * ## 21：引用別的會話的快照
+ *
+ * `user/message` 的 `source` 多一種 `session-reference`（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：人在句子裡
+ * `@` 了別的會話，準備那一步把那條會話當時看得到的對話凍成一則 user-role 訊息，緊跟在那句人話後面。v20 的檔直接讀：那時候沒有
+ * 引用，一顆都沒有就是當時的樣子。
+ *
+ * **非升不可**，同 13、17：20 讀到一份 21 的日誌時，`source` 不是 `plugin` 也不是 `user`，推回模型時照「外掛塞的」那一種讀、
+ * 畫面（歷史）對它視而不見，goal 的授權判準與內容搜尋各自的判斷也都沒見過這個成員——靜靜略過會左右重建的內容就是一次讀錯。
+ *
+ * ## 22：`turn/end` 的 `aborted` 多一種原因 `parent`
+ *
+ * 父代理用 `interrupt_agent` 只停一個背景子代理當下那一輪（[#838](https://github.com/DemianLi/nexus-agent/issues/838)），
+ * 該子代理的日誌以 `reason: {kind:'aborted', cause:{kind:'parent'}}` 收尾。v21 的檔直接讀：那時候沒有這條路，
+ * `cause` 只有 `user`。
+ *
+ * 升版照新增詞彙的慣例（同 11、12、14、16），不是非升不可：21 讀到它只看 `reason.kind`，一樣當成「被打斷」，
+ * 沒有任何讀方分 `cause`。
+ *
+ * ## 23：`turn/start` 多一種 `agent-message`
+ *
+ * 父代理用 `send_message` 給背景子代理追加指示（[#839](https://github.com/DemianLi/nexus-agent/issues/839)），子代理那一輪
+ * 以 `{kind:'agent-message', text, senderSessionId}` 開頭。v22 的檔直接讀：那時候沒有這條路，子代理的輪只有 `message`。
+ *
+ * 升版照新增詞彙的慣例（同 18、19、22），不是非升不可：授權判別對認不得的 `kind` 都是停住回假（fail closed），
+ * 22 讀到它不會把它當成人。
+ *
+ * ## 24：背景子代理結算通知（`subagent-settled`）
+ *
+ * 背景子代理結算時通知主對話（[#840](https://github.com/DemianLi/nexus-agent/issues/840)），root 日誌上出現三處新詞彙：
+ * `turn/start` 的 `subagent-settled`（閒著時通知開了一輪）、`user/message` 的 `source: {kind:'subagent-settled', form:'notice', …}`
+ * （忙著時被插話領走），以及送出佇列 `inbox/spliced` 項目的 `source: {kind:'subagent-settled', …}`。v23 的檔直接讀：那時候沒有這條路。
+ *
+ * 升版照新增詞彙的慣例（同 18、19、22、23）：23 讀到它，授權判別對認不得的 `kind` 停住回假，不會把它當成人；但畫面（歷史）
+ * 與送出佇列的 wire 投影沒見過這個成員，所以這一版改了它們。
+ *
+ * ## 25：子代理寫給主對話的話（`agent-message` 進 root 日誌）
+ *
+ * 背景子代理用 `send_message` 寫給主對話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)），root 日誌上出現：
+ * `turn/start` 的 `agent-message`（v23 起就有，那時只出現在子代理日誌）、`user/message` 的
+ * `source: {kind:'agent-message', form:'relay', senderSessionId}`（忙著時被插話領走），以及送出佇列項目的
+ * `source: {kind:'agent-message', senderSessionId}`。v24 的檔直接讀：那時候沒有這條路。
+ *
+ * 升版照新增詞彙的慣例（同 24）：授權判別對認不得的 `kind` 停住回假。
+ *
+ * ## 26：子代理選模型的政策（`subagent/model-selection-policy`）
+ *
+ * root 日誌上出現新事件種類 `subagent/model-selection-policy`（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，
+ * 卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）：沒有歷史的新會話在設定打開時寫一顆 `{allowedModels}`，
+ * 事件存在＝政策開著。v25 的檔直接讀：沒有這一顆就是關，跟那時一樣。
+ *
+ * 升版照新增詞彙的慣例：25 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），不會壞，只是不知道政策——
+ * 而 25 的組裝也沒有逐次選模型這個功能，所以略過是對的。
+ *
+ * ## 27：結算通知多一格 `reason`
+ *
+ * 背景子代理結算通知的來源多一個選填欄 `reason`（`completed`／`aborted`／`max-tokens`／`error`，
+ * [#884](https://github.com/DemianLi/nexus-agent/issues/884)）：`turn/start` 與 `user/message` 的 `subagent-settled`，
+ * 以及送出佇列項目的 `source`。畫面據它分得出「完成、被停止、失敗、超出上限」，不去解析給模型看的英文 `summary`。
+ * v26 的檔直接讀：沒有這一格，畫面退成中性的說法，不假裝成「已完成」。
+ *
+ * 升版照新增欄位的慣例（同 21 的 `cause`），不是非升不可：26 讀到它只多一個不認得的欄位，一樣照舊投影。
+ *
+ * ## 28：模型重試（`llm/retry`、`llm/retry-started`）
+ *
+ * 真模型的請求失敗、排定重試時寫 `llm/retry`，等完重打前寫 `llm/retry-started`
+ * （[#712](https://github.com/DemianLi/nexus-agent/issues/712)），落在一次模型呼叫的 `model/start`／`model/end`
+ * 之間。維運者查「這一輪為什麼慢」靠它。v27 的檔直接讀：那時候重試不進日誌，一顆都沒有就是當時的樣子——
+ * **不是沒重試過**。
+ *
+ * 升版照新增詞彙的慣例（同 26）：27 的讀者遇到它們會當成認不得的種類略過（各 switch 都有 `default`），兩顆都不進模型、
+ * 也不左右任何折疊，所以略過是對的。
+ *
+ * ## 29：`turn/end` 的 `reason` 多一種 `interrupted`（續接補寫的收尾）
+ *
+ * 行程在一輪中間死掉，續接時把那一輪的收尾寫回檔上（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：
+ * 記過 `tool/call` 沒配到結果的各補一顆「結果不明」的 `tool/result`，最後補 `turn/end {reason:{kind:'interrupted'}}`，
+ * 兩者都在 `session/end-seed` 前面。v28 的檔直接讀：那時候續接只補 end-seed，當掉的那一輪永遠開著，
+ * 模型那一側由 replay 在記憶體裡補同樣的句子——**不是沒有當掉過**。
+ *
+ * 升版照新增詞彙的慣例（同 22、23），不是非升不可：28 讀到 `interrupted` 時，goal 續行只認得 `aborted`、`max-tokens`
+ * 就把它當正常收尾，但那顆 `turn/end` 在 end-seed 之前，而 28 的續行判準從 `currentTurnStart`（不往 end-seed 前找）起算，
+ * 續接回來的授權也從 `disarmed` 起，所以不會因此多排一輪；歷史把它當完成收掉，同 28 在 end-seed 收掉的那一條。
+ *
+ * ## 30：header 多四格——`build`、`plugins`、`configHash`、`modelEntryId`
+ *
+ * 拿到一份日誌要答得出「哪一版程式寫的、掛了哪些插件、用哪一筆模型型錄」（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ * 四格都是**建立者的描述**，見 {@link StoredSessionHeader} 各格。這是 header 的形狀第二次變（第一次是 13）。
+ *
+ * 升版照新增欄位的慣例（同 27），也照 dsh 那條門檻把 header 的形狀列為結構性變更、「拿不準就升」
+ * （`packages/core/session/src/types.ts:74-87`，`5badb15`），**不是 13 那種非升不可**：29 續接一份 30 的日誌時，
+ * 重寫 header 那一行是 `{ ...header, version: … }`（`apps/harness/src/jsonl-session-store.ts`），這四格原樣活過重寫；
+ * 而它們描述的本來就是**最初寫這份日誌的那一個行程**，續接的行程不該蓋掉它（30 自己續接也不蓋），沒有任何讀方拿它們
+ * 判准不准續接、怎麼重建對話。
+ *
+ * 29 以前的檔直接讀：一格都沒有就是那時候沒記。**判準是那一格在不在，不是 {@link StoredSessionHeader.version}**
+ * ——續接會把舊檔的 `version` 蓋成這一版而不回填這四格，理由同 13 的 `workspaceRoot`。
+ *
+ * ## 31：`subagent/catalog`
+ *
+ * 父那一份記下派出去的子代理：子會話 id 與派它的那一顆 `tool/call`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)，
+ * 照 dsh 的同名事件，見 `subagent-catalog.ts`）。v30 以前的檔直接讀：那時候沒有這一顆，前景子代理從父日誌找不到，只剩子日誌 header
+ * 的 `parentSession`；背景的仍可從 `tool/result.meta.runId` 推。讀的人照「沒記」表態（「—」），**不是沒有子代理**。
+ *
+ * 升版照新增詞彙的慣例（同 26、28），不是非升不可：30 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），它不進模型、
+ * 也不左右任何折疊，所以略過是對的。
+ *
+ * ## 32：事件信封多一格 `ignorable`，讀方開始拒絕不認得的必需種類
+ *
+ * 每一筆事件可以帶 `ignorable: true`（[#507](https://github.com/DemianLi/nexus-agent/issues/507)，見 {@link SessionEvent.ignorable}），
+ * 同時讀方多了一道守衛：**碰到不認得的 `type`、又沒有這個標記，就拒絕重建整份日誌**（{@link SessionEventUnsupportedError}），
+ * 不再照收。前面三十一版「對不認得的種類照收」，所以那時守這條線的**只有版本號**，詞彙每長一次都得升。
+ *
+ * **非升不可，而且這是最後一次因為「守衛不存在」而升**：31 以前的 runtime 沒有這道守衛，讀到一份 32 以後的日誌裡它不認得、
+ * 也沒有人替它把關的種類，只會照收然後續寫下去。升到 32，它們讀 header 就以 {@link SessionFormatUnsupportedError} 拒讀。
+ * 同 dsh 那條門檻裡的「事件信封」一項（`packages/core/session/src/types.ts:74-87`，`5badb15`）。
+ *
+ * ### 32 起什麼時候要升版
+ *
+ * 照 dsh：**判準是寫方寫出來的東西，一台舊 runtime 還能不能完整正確地處理**，不是「讀得過不過」。只有結構性變更才算：
+ * header 的形狀、事件信封、**已有種類的語意**（含它進不進模型、左右不左右折疊）、以及會左右重建的必需種類。純資訊性的新種類
+ * **不升**，由 `ignorable` 承擔——新增時在 {@link ./session-log.ts | SessionLog.append} 帶 `{ ignorable: true }`；一台還不認得它的舊 runtime
+ * 讀得回這份日誌，把它略過。**拿不準就升**：多升一次的代價是營運面的（一台停在舊號的 server 接不回新號寫過的 thread），
+ * 少升一次是舊 runtime 靜靜讀錯；忘了標 `ignorable` 則只是多拒一次（預設必需），不會讀錯。
+ *
+ * ### 這一版的讀法
+ *
+ * - **舊的號直接讀。** 31 以前的檔沒有 `ignorable` 這一格，而它們裡面的每一種都在 {@link ./session-log.ts | isKnownSessionEventType} 的表裡——
+ *   **種類只增不減**（缺席＝必需，所以任何一版寫過的種類這一版都必須認得；要退役一種，留在表裡、只是不再寫）。
+ *   這是一條要守的前提，`session-log.test.ts` 有一份凍結的清單釘它。
+ * - **守衛只在讀方**，不在 append：append 時拒絕詞彙會讓正在跑的會話的耐久寫入卡住（同 dsh）。離線掃描
+ *   （`apps/harness/src/eval/session-scan.ts`，產品路徑外）不守，它照格式版本表態、認不得的略過並報數。
+ * - **不追溯改前三十一次的版本號**：寫下的 header 就是那些號。
+ *
+ * ### 32 之內新增、沒有升版的欄位
+ *
+ * 移到持久化變更紀錄的基線 `docs/persistence-changes/2026-10-23-initial.md`〈相容性〉的「32 之內」（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-3）：
+ * `modelCall`（#1021）、`outcome` 與 `usage`（#1022）、`approval/asked` 與 `approval/decided`（#1029）、`session/resumed`（#1138）、
+ * `turn/failed.error`（#434）、前景子代理日誌的第一顆 `user/message`（#1159）。
+ *
+ * ## 33：續接把當掉那一輪的收尾寫回日誌（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）
+ *
+ * 續接時（{@link ./interrupted-turn.ts | resumeClosingInterruptedTurn}）日誌尾巴停在一輪開著，就在 `session/end-seed` **之前**補寫：
+ * 沒配到結果的呼叫各一顆錯誤 `tool/result`、開著的 `model/start` 各一顆 `model/end {outcome:'error'}`、最後一顆 `turn/end {reason:{kind:'interrupted'}}`。
+ * 照 dsh 的 `interruptedTurnClosers`（見該檔檔頭）。
+ *
+ * **升的理由是已有種類的語意變了，不是新增了種類**（判準見 32 的「什麼時候要升版」）：
+ *
+ * - `tool/result` 現在可以**沒有前面的 `tool/call`**：回覆裡要了、行程在記 `tool/call` 之前死掉的呼叫，補的結果帶 `TOOL_NOT_STARTED`
+ *   （dsh 的不變量同樣明文放行）。一台 32 的舊 runtime 的不變量會把它報成違規。
+ * - `turn/end` 之後才接 `session/end-seed` 成了常態；舊 runtime 重建對話時在 end-seed 處把「開著的呼叫」補成結果不明，
+ *   讀到新檔時那些呼叫已有真的結果，它得靠對得上才不重複補——這個對法左右模型看到的歷史，屬於「會左右重建」那一類。
+ *
+ * **讀舊檔**：32 以前的檔尾巴沒有補結，照舊靠重建當下在記憶體補（`closer()`）；新程式碼續接它們時會把補結寫在 end-seed **後面**
+ * （dsh 的 `repair.ts` 掃描遇到 end-seed 不重設，所以這個形狀是它本來就允許的），之後再續接不會重複補（冪等）。
+ * 數字影響：被當掉收尾的輪現在在檔上是 `interrupted` 而不是「開著」，`session-stats`、`eval/session-scan`、`eval/session-draft` 與 web 歷史
+ * 對「當掉的輪」的計數會從「沒收尾」移到「被中斷」，見 PR 內文。
+ *
+ * ## 34：核准政策進日誌（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）
+ *
+ * 新增 `approval/policy { policy: 'ask' | 'never', source? }`（root 起始值與每次切換；子代理日誌一顆 `source: 'delegation'`）。
+ *
+ * **升版，而且不標 `ignorable`**——它是新增的**種類**，但判準（見 32 的「什麼時候要升版」）看的是舊 runtime 略過它會不會讀錯：
+ * 它**左右續接之後的行為**（記著 `never` 的日誌，被一台 33 的 runtime 略過後會當 `ask` 續接，也就是本來被回絕的事開始去問人）。
+ * 同 `sandbox/mode`，也同 dsh（它的 `approval/policy` 沒有略過旗標）：舊 runtime 該拒絕讀。
+ *
+ * **讀舊檔**：33 以前沒有這一顆，續接時照 `ask` 起算，也就是以前的行為，不補寫歷史。
+ *
+ * ## 35：具名權限組合進日誌（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）
+ *
+ * 新增 `permission/preset { preset }`（使用者選了哪一組；由 `@nexus/plugin-permission-presets` 宣告與寫入）。
+ *
+ * **升版，不標 `ignorable`**——它自己不控制執行（兩顆旋鈕各自的事件才控制），但 dsh 的 `permission/preset` 同樣沒有略過旗標，而且它是
+ * 新增的**種類**：舊 runtime 讀到不認得的種類就該拒絕，由版本號管相容，不要靠「略過了應該沒事」。
+ *
+ * **讀舊檔**：34 以前沒有這一顆，續接時由目前的沙箱與核准值推導現在是哪一組，不補寫歷史；新會話在起始時把推出來的那一組釘進去。
+ *
+ * ## 36：`model/usage` 的輸入分桶（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）
+ *
+ * `model/usage` 與 `compaction/summary.usage` 的 `inputTokens` 改成**未快取**的輸入，新增選填的 `cacheReadTokens`、`cacheWriteTokens`
+ * （缺席＝沒記），四桶互不重疊，照 dsh 的 `TokenUsage`。完整的 prompt 是三桶相加。
+ *
+ * **升版，不標 `ignorable`——而且這次非升不可**：事件種類沒變，**欄位的語意變了**。一台 35 的 runtime 讀新檔，會把未快取的 `inputTokens`
+ * 當成整個 prompt，總帳與上下文壓力都少算快取的那一段，而且不會有任何東西報錯。同 13、15、17 那條門檻，dsh 對核心事件語意改變也升版（#507）。
+ *
+ * **讀舊檔**：35 以前沒有快取兩格，`inputTokens` 當未快取（它本來就是整個 prompt）、兩桶當「沒記」，總帳與壓力的數字跟以前一樣，
+ * 不必逐版分辨。
+ *
+ * ## 37：每會話模型選擇（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）
+ *
+ * 新增 `model/selection { modelId, reasoningEffort? }`（使用者替會話選了下一步起用的模型與強度），並讓 `model/start` 多一格選填的
+ * `route { model, effort? }`（這次請求實際走的路由）。
+ *
+ * **升版，`model/selection` 不標 `ignorable`**——它左右續接之後的行為：一台 36 的 runtime 略過它，續接時會悄悄用回部署預設那顆。
+ * `model/start.route` 單獨看是純附加的選填欄位，但它是續接「沒選過的會話」時沿用上一次路由的依據，所以跟著同一個版本。
+ *
+ * **讀舊檔**：36 以前沒有這兩樣，續接時走部署預設、不補寫歷史；舊日誌上沒有路由，所以第一次選了別顆之後也不附換模型的通知
+ * （沒有「上一次走的是誰」可比）。
+ *
+ * ## 38：訊息帶附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）
+ *
+ * 人送出的一句話可以帶檔案與圖片。位元組在日誌之外（附件儲存，內容定址），日誌與存檔點只留**參照**：`inbox/spliced` 裡那一件
+ * （`QueuedInput`）與 `turn/start`（`kind: 'message'`）各多一格選填的 `attachments`（`AttachmentRef` 的陣列，照選取順序），
+ * 輪中插話被領走時記的 `user/message` 的 `HumanMessage` 內容多了 `nexus-file`／`nexus-image` 區塊。
+ *
+ * **升版，不標 `ignorable`——而且前例（#1021、#1022 的觀測欄位）不適用**：那兩次的欄位只供觀測，這次的欄位**左右續接之後的行為**。
+ * 一台 37 的 runtime 讀到新檔會把 `attachments` 略過：排著的項目被折回來重跑時附件悄悄消失，模型收到一句缺了檔案的話，沒有任何東西報錯。
+ *
+ * **讀舊檔**：37 以前沒有這一格，等於沒有附件，不補寫歷史。
+ *
+ * ## 39：目標續行走送出佇列（[#638](https://github.com/DemianLi/nexus-agent/issues/638)）
+ *
+ * `inbox/spliced` 裡的 `QueuedInput.source` 多一種成員 `{ kind: 'goal', goalId, revision, round }`：排程器為下一輪預約的一件，
+ * 以前續行直接開一輪、不經佇列。開跑時 `turn/start` 照舊是 `kind: 'goal'`（那一顆沒變）。
+ *
+ * **升版，不標 `ignorable`**——`inbox/spliced` 是既有種類，新增的是**欄位值的成員**，舊 runtime 不能略過這一顆（略過就是佇列折錯）。
+ * 一台 38 的 runtime 折到新檔時，佇列裡還排著的一件預約它認不得來源：`pumpInputOf` 對不認得的來源大聲拋，這條 thread 起不來——
+ * 這是對的方向（拒絕讀），但要由版本號擋在讀檔那一步，而不是等到續接後第一次領走才炸。
+ *
+ * **讀舊檔**：38 以前沒有這個來源，續行是直接開的一輪，不補寫歷史。日誌裡**排著沒領走的預約**（行程死在預約與開跑之間）：
+ * 重啟後折回來和人排的一樣停住，領走時驗證不過（授權不持久，重啟後一定是 `disarmed`）就丟掉、不開那一輪。
+ *
+ * ## 40：`turn/end` 多一種原因 `blocked`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）
+ *
+ * 封存的會話不跑模型：每一步送出模型請求之前問一次準入閘門，被擋下的那一輪以 `reason: { kind: 'blocked' }` 收尾、一個請求都沒發
+ * （見 {@link ./session-log.ts | TurnEndReason}）。背景子代理被擋下的輪同樣以它收尾。
+ *
+ * **升版，不標 `ignorable`**——`turn/end` 是既有種類，新增的是**欄位值的成員**，而且舊 runtime 照舊讀會讀錯：39 的讀方只認
+ * `aborted`／`max-tokens`（goal 續行的判準），對不認得的 `reason.kind` 一律當一輪正常做完，於是一輪**什麼都沒做**的收尾被讀成做完了，
+ * 歷史也不會標出來。拒絕讀（由版本號在讀檔那一步擋下）才是對的方向。
+ *
+ * **讀舊檔**：39 以前沒有這個原因，不補寫歷史。
+ *
+ * ## 41：`session/title` 的 `source` 多一種 `user`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）
+ *
+ * 使用者改名：追加一顆 `session/title`，`source: { kind: 'user' }`、`messageSeqs: []`，**釘住**這個標題（見 {@link ./session-log.ts | SessionTitleSource}）。
+ * 40 以前的檔直接讀：那時沒有人工改名，一顆 `user` 都沒有就是當時的樣子。
+ *
+ * 升版照新增詞彙的慣例（同 18、19），不是非升不可：40 讀到 `user` 標題照樣拿最後一顆（列表、歷史讀的就是文字），一字不差。釘住由寫標題的人
+ * 守：退回標題只在沒有標題時寫，模型標題在寫入前看到最後一顆是 `user` 就放棄（見 `apps/harness/src/session-title.ts` 的 `titlePinnedByUser`）。
+ *
+ * ## 42：訊息點名子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）
+ *
+ * 人送出的一句話可以點名派哪一個子代理（`run.start` 的 `mention`）。`inbox/spliced` 裡那一件（`QueuedInput`）與 `turn/start`（`kind: 'message'`）各多一格選填的
+ * `mention { kind: 'subagent', name }`；輪中插話被領走時記的 `user/message` 的 `HumanMessage` 內容在文字之後多一個固定的文字區塊（見 `subagent-mention.ts`）。
+ *
+ * **升版，不標 `ignorable`**——同 38：這個欄位**左右續接之後的行為**。一台 41 的 runtime 讀到新檔會把 `mention` 略過，排著的項目被折回來重跑時，
+ * 模型收到的是一句沒有點名的話，沒有任何東西報錯。
+ *
+ * **讀舊檔**：41 以前沒有這一格，等於沒有點名，不補寫歷史。
+ *
+ * ## 43：`image/offload`——把最舊的幾張圖永久從之後的請求省略（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）
+ *
+ * 看圖模型的請求超過型錄宣告的圖片額度（`imageBudget`）時（adapter 在送出之前量到、以 `IMAGE_OFFLOAD_REQUIRED` 失敗，上層接住），記一筆 `image/offload { targets: [{ seq, imageIndexes }] }`，最舊的幾張換成佔位字，
+ * 之後每一次請求都沿用（見 {@link ./session-log.ts | SessionEventMap} 的 `image/offload`）。
+ *
+ * **升版，不標 `ignorable`**——它左右之後模型看到什麼：一台 42 的 runtime 會拒絕讀這種新檔（不認得又沒標可忽略），那是對的方向；略過它，
+ * 模型就又看到已經省略的圖，請求再度超額，沒有任何東西說為什麼。
+ *
+ * **讀舊檔**：42 以前沒有這一種，等於沒省略過，不補寫歷史。
+ *
+ * ## 44：`subagent/descriptor`——背景子代理記下自己是誰，重啟後才叫得醒（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）
+ *
+ * 背景子代理的子日誌第一顆記 `subagent/descriptor { version, mode: 'continuable', subagent, model?, effort? }`（照 dsh 的同名事件，見
+ * `subagent-descriptor.ts`）。行程重啟之後冷復活（有人對舊編號 `subagent.send`）靠它重建；沒有這一顆的子日誌（43 以前、前景子代理）仍可讀、
+ * 仍可唯讀冷讀，只是**分不出身分，不能復活**——讀的人照「不能復活」表態，不是壞檔。
+ *
+ * **升版，不標 `ignorable`**：一台 43 的 runtime 看不懂它，不該以為自己讀得懂這份子日誌。
+ *
+ * **讀舊檔**：43 以前沒有，不補寫歷史（補了也不知道當時用的是哪一顆模型）。
+ *
+ * ## 45：`compaction/summary` 記在用到它的那次 `model/start` 之前（[#1301](https://github.com/DemianLi/nexus-agent/issues/1301)）
+ *
+ * 以前摘要事件記在觸發它的那次呼叫的**回覆之後**（`assistant/message`、`model/end`、`context/measure`、`compaction/summary`），
+ * 只取 `model/start` 之前的事件推那次請求的歷史會缺摘要。現在記在 `model/start` 之前（摘要生好、基座把摘要過的請求交下去的那一刻），
+ * 照 dsh；這種事件多一格 `beforeCall: true`（見 {@link ./session-log.ts | SessionEventMap} 的 `compaction/summary`）。
+ *
+ * **升版，不標 `ignorable`**：這個欄位**左右重建**。一台 44 的 runtime 讀新檔，推導時對新順序的摘要用舊的則數檢查
+ * （`messagesBefore + 1`），差一則，判成 `compaction-misaligned`、整串不灌，模型從空的開始——是安全的失敗方向，但要由版本號在讀檔那一步擋下。
+ *
+ * **讀舊檔**：44 以前的摘要事件沒有 `beforeCall`，仍是舊順序，推導端照舊檢查（`messagesBefore + 1`），讀得回來。
+ * **逐顆事件判，不看 header 的版本**：續寫舊檔時 header 的 `version` 會被蓋成新的（見上），所以同一份檔可以前段舊順序、後段新順序。
+ * 不遷移、不補寫歷史。
+ *
+ * ## 46：`compaction/prune`（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)）
+ *
+ * 工具結果剪刀（`tool-result-pruner.ts`）剪了哪幾顆、剪成什麼，以前只改請求、不寫日誌，日誌只有原文，所以從日誌推不回模型實際看到的那一份。
+ * 現在剪的當下記一筆 `compaction/prune { results: [{ callId, originalChars, content }] }`，每顆結果只記一次、之後每次請求都沿用（照 dsh）。
+ *
+ * **升版，不標 `ignorable`**：一台 45 的 runtime 讀到這一筆會拒絕重建（歸 {@link ./session-log.ts | MESSAGE_PROJECTION_EVENT_TYPES}）。
+ * 略過它推出來的歷史會比實際送出去的長，而且沒有任何東西說為什麼。
+ *
+ * **讀舊檔**：45 以前沒有這一筆，照舊讀得回來，不補寫（補了也不知道當時剪成什麼）。沒有剪過的會話，日誌與以前位元組相同。
+ *
+ * ## 47：`compaction/truncate-args`（[#1303](https://github.com/DemianLi/nexus-agent/issues/1303)）
+ *
+ * 基座摘要器的 `truncateArgs` 把舊的 `write_file`／`edit_file` 長參數縮成「開頭 20 字＋標記」，只改請求、不寫日誌。現在基座把請求交下去的那一刻
+ * 拿交下去的串跟進來的串比，縮短了的記一筆 `compaction/truncate-args { calls: [{ callId, args: { 參數名: { originalChars, value } } }] }`，
+ * 每個參數只記一次、之後每次請求都沿用。dsh 沒有這個行為，形狀退到 `compaction/prune` 的鄰居（見事件宣告的偏離登記）。
+ *
+ * **升版，不標 `ignorable`**：一台 46 的 runtime 讀到這一筆會拒絕重建。**讀舊檔**：46 以前沒有這一筆，照舊讀得回來，不補寫。
+ * 沒有被縮短的會話，日誌與以前位元組相同。
+ *
+ * ## 48：訊息帶客戶端的請求編號（[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）
+ *
+ * `run.start` 可以帶一格選填的 `request_id`（照 dsh `session.prompt` 的 `requestId`，記在訊息來源的 `rpcId`）。重送同一個編號時
+ * 伺服器認得「這一句已經收過了」，不再排第二次，回原本那一件的 `run_id`。編號記在三個地方，涵蓋一句話的三個階段：
+ * 排著時在 `inbox/spliced` 裡那一件（`QueuedInput.source.requestId`）；開了一輪之後在 `turn/start`（`kind: 'message'`，
+ * `requestId` 加 `runId`）；輪中插話被領走時在 `user/message` 的 `source.requestId`。
+ *
+ * **升版，不標 `ignorable`**——同 38、42：這些欄位**左右續接之後的行為**。一台 47 的 runtime 讀到新檔會把它們略過，重啟之後客戶端
+ * 重送同一個編號，那一句就排第二次，模型看到兩次同樣的話，沒有任何東西報錯——正是這個欄位要擋的事。
+ *
+ * **讀舊檔**：47 以前沒有這幾格，等於沒帶編號，不補寫歷史。客戶端沒帶 `request_id` 的送出，日誌與以前位元組相同。
+ *
+ * ### 48 之內新增、沒有升版的欄位
+ *
+ * 移到持久化變更紀錄的基線 `docs/persistence-changes/2026-10-23-initial.md`〈相容性〉的「48 之內」（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-3）：
+ * `context/measure.messagesCompactable`（#1443）。
+ *
+ * ## 49：訊息帶使用者的時區（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)）
+ *
+ * `run.start` 可以帶一格選填的 `client_time_zone`（照 dsh `session.prompt` 的 `clientTimeZone`，記在訊息來源 `{ kind: 'user', rpcId, clientTimeZone }`；`subagent.send` 也帶，寫進**子代理自己的日誌**同樣這幾個位置，[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)）。
+ * 伺服器在邊界上驗證並正規化（`UTC` 或 IANA `Area/Location`，別名退回這個執行期的正規名），記在人話的三個來源，涵蓋一句話的三個階段，和 48 的
+ * `requestId` 同一批位置：排著時在 `inbox/spliced` 裡那一件（`QueuedInput.source.clientTimeZone`）；開了一輪之後在 `turn/start`（`kind: 'message'`）；
+ * 輪中插話被領走時在 `user/message` 的 `source.clientTimeZone`。`@nexus/plugin-time-context` 讀這一輪裡的這幾格，決定給模型的「Browser time zone」那一行。
+ *
+ * **升版，不標 `ignorable`**（判準見上面 32 那段「什麼時候要升版」：寫出來的東西，一台舊 runtime 還能不能完整正確地處理）：這是既有事件上多的選填欄位，
+ * 不是新的事件種類，所以沒有 `ignorable` 可標。一台 48 的 runtime **讀不了** 49 的檔：`parseHeader` 遇到比自己新的版本會拋 `SessionFormatUnsupportedError`
+ * （只有 `eval/session-scan.ts` 開了 `acceptNewer`）。而且續接一條舊 thread 時 header 會被改寫成 49，所以**只要一條 thread 被 49 碰過，退回 48 就打不開**。
+ * **回滾的後果**：發版後退回前一版，被新版碰過的 thread 在舊版打不開；這是升版的營運代價，不是描述上的小事。
+ *
+ * **讀舊檔**：48 以前沒有這一格，等於沒帶時區，不補寫歷史（補了也不知道當時使用者在哪）。客戶端沒帶 `client_time_zone` 的送出，日誌與以前位元組相同
+ * （有測試釘住）。
+ *
+ * **併行的升版**：#1624、#1579 也各自要升版。**誰先合進 `develop` 誰拿下一號，後合的以先合的為底重算**（rebase 時把這一段的編號往後挪，內容不變）。
+ * 這張寫的時候 `develop` 的版本是 48，所以拿 49。
+ *
+ * ### 49 之內新增、沒有升版的欄位
+ *
+ * 移到持久化變更紀錄的基線 `docs/persistence-changes/2026-10-23-initial.md`〈相容性〉的「49 之內」（[#1856](https://github.com/DemianLi/nexus-agent/issues/1856) ⓪b-3）：
+ * `llm/retry.failure.requestId` 與 `turn/failed.error.requestId`（#1536）。
+ *
+ * ## 50：`turn/end` 的 `aborted` 多一種原因 `hook`
+ *
+ * 一輪的時鐘到點（[#1624](https://github.com/DemianLi/nexus-agent/issues/1624)，`turn-timeout` 那一列）時，這一輪照停止鍵的路收尾，
+ * 日誌以 `reason: {kind:'aborted', cause:{kind:'hook', reason:'turn-timeout'}}` 收尾；root 與背景子代理的日誌都會寫。形狀照 dsh 的
+ * `AgentCancelCause`（`packages/core/session/src/types.ts:189-193`，`687f282e`）。v49 的檔直接讀：那時候沒有時鐘，`cause` 只有
+ * `user` 與 `parent`。
+ *
+ * 升版照新增詞彙的慣例（同 22），不是非升不可：讀 `aborted` 的 goal 續行與掃描只看 `reason.kind`，一樣當成「被打斷」；歷史把 `cause` 原樣帶上收尾的 frame。
+ * 版號照上面 49 那段「併行的升版」：#1579 還沒開工，這張先拿 50。**回滾的後果**同 49：被 50 碰過的 thread，49 的 runtime 打不開。
+ *
+ * ## 51：日誌承載分叉前綴，header 分開子代理與分叉
+ *
+ * [#1579](https://github.com/DemianLi/nexus-agent/issues/1579)，照 dsh 的形狀（`687f282e`）：
+ * - header 多兩格：`origin: 'subagent'`（新建的子代理一律寫）與 `isSeeded: true`（分叉來的，只在 true 時寫）。見 {@link StoredSessionHeader}。
+ * - `session/end-seed` 的 data 可以帶 `inherited: true`，標出繼承來的前綴在哪裡切（`session-log.ts` 的 `inheritedEventCount`）。切點**不另外落盤**，
+ *   照 dsh 讀盤從最後一顆標記推（`packages/session/session-format-v1-to-v2/src/codec.ts:114-127`），所以 dsh v0 的 `seedLength` 沒有對應的鍵。
+ * - 讀盤驗證照 dsh `session-format-v3-to-v4/src/validation.ts:52-76`：seeded 就一定要有標記、沒 seeded 就不能有（`apps/harness/src/session-log-validation.ts`）。
+ *
+ * **升版，不是可選的**（判準見上面 32 那段）。這張 PR 開工時實測過 50 的讀方（develop `f210b3ac`）：header 帶 `origin` 或 `isSeeded` 的 50 檔，
+ * `parseHeader` 的白名單（#1549）拒成 `SessionCorruptionError`（「header 有這一版不寫的鍵」）——**把一份好好的新檔判成壞檔**，列表也把它算成壞的；
+ * 只帶 `inherited` 標記、header 沒新鍵的 50 檔則照常讀回，標記被當成普通的 end-seed，前綴被當成自己的。兩種都是靜靜讀錯或報錯錯，所以要讓舊讀方
+ * 在讀之前就停：51 的檔在 50 的 runtime 上拋 `SessionFormatUnsupportedError`（「比這一版新」），列表算進 unreadable。
+ *
+ * **讀舊檔**：50 以前沒有這三樣，等於不是分叉、子代理靠 `parentSession` 認（{@link isSubagentSessionHeader} 的退路）。續接一份 50 的檔，
+ * header 改寫成 51 但不補 `origin`、不寫 `isSeeded`（續接改寫只動 `version`）。**回滾的後果**同 49：被 51 碰過的 thread，50 的 runtime 打不開。
+ *
+ * ## 52：寫方改寫每會話目錄的世代檔，舊路徑留墓碑
+ *
+ * [#1594](https://github.com/DemianLi/nexus-agent/issues/1594) ③（[#2132](https://github.com/DemianLi/nexus-agent/issues/2132)），
+ * 落盤佈局：
+ * - 新會話寫成 `<目錄>/<sessionDirectoryName(id)>/session.v52.jsonl`，第一行是 header 行（`type: 'session'` 加上 header 各格），
+ *   之後一行一顆事件。header 行與首批事件一次 `link` 發佈。寫租約是同一個目錄裡的 `session.lock`。
+ * - 續接一份舊兩檔或比這一版舊的世代，先把事件原樣搬進一份新的 `session.v52.jsonl`，header 換成這一版；來源一個位元組都不動。
+ *   從舊兩檔搬來的，header 行多記一格 `migratedFrom`（來源日誌的大小、已接受前綴的位元組數與 SHA-256）。只讀打開不搬。
+ * - 新建與從舊兩檔搬過來的，都在舊路徑 `<base>.header.json` 留一份版本 52 的 header 行當墓碑，不留 `<base>.jsonl`。
+ *
+ * **升版，不是可選的**：不升的話，舊兩檔與 `session.v51.jsonl` 都是 51，同一個 id 兩種佈局都在時分不出誰優先；墓碑也要比
+ * v0.5.19 寫得出的版本新，那一版才會以「格式太新」拒讀，而不是把它當成一份零事件的會話、另開一份分叉的日誌。
+ *
+ * **讀舊檔**：51 以前的舊兩檔與手寫的舊世代都直接讀。事件詞彙沒變，所以這條邊是加性的。
+ * **回滾的後果**：被 52 碰過的 thread（新建，或續接過一次的舊 thread），v0.5.19 的 runtime 讀到墓碑，續接與列表都當成
+ * 格式太新拒讀。
  */
-export const SESSION_LOG_FORMAT_VERSION = 14;
+export const SESSION_LOG_FORMAT_VERSION = 52;
+
+/**
+ * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ *
+ * 取法同 eval 結果檔（`apps/harness/src/eval/result-file.ts` 的 `readGitProvenance`，#1000）：**拿不到就是 `null`**，
+ * 不填 `'unknown'` 字串——字串會被當成一個 SHA 比對，`null` 不會。
+ */
+export interface StoredSessionBuild {
+  /** `git rev-parse HEAD`；不在 git 底下、沒有 git 就是 `null`。 */
+  readonly commit: string | null;
+  /** 工作樹有沒有未提交的改動（含未追蹤的檔）；問不到就是 `null`。只記 SHA 的話，本機改過的程式會冒名成那個 commit。 */
+  readonly dirty: boolean | null;
+}
+
+/**
+ * 疊完的插件清單上的一列，**不帶 `config`**（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ *
+ * 設定可能含金鑰或內網位址，所以內容不進日誌，只進 {@link StoredSessionHeader.configHash}。
+ */
+export interface StoredSessionPluginRow {
+  /** 那一列的 `name`：**模組 specifier**（`@nexus/…`、`#settings/…`、`file:` 網址），不是 plugin 物件上的 `name`。 */
+  readonly name: string;
+  /** 那一列寫的 `id`；沒寫就沒有這一格（不補載入器補的號，那是 `--dump-config` 印不出來的東西）。 */
+  readonly id?: string;
+  /** 那一列寫了 `disabled: true`。 */
+  readonly disabled: boolean;
+}
+
+/**
+ * 一次組裝裡**每一份新建的 header** 都帶的那三格，由入口算一次、交給
+ * {@link ./session-persistence.ts | attachSessionPersistence}（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ */
+export interface SessionHeaderBuildMetadata {
+  readonly build: StoredSessionBuild;
+  readonly plugins: readonly StoredSessionPluginRow[];
+  /** 見 {@link StoredSessionHeader.configHash}。算不出來（金鑰檔讀不到）就沒有這一格。 */
+  readonly configHash?: string;
+}
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
@@ -167,8 +691,11 @@ export const SESSION_LOG_FORMAT_VERSION = 14;
  * 存檔，不是對話裡發生過的事。
  */
 export interface StoredSessionHeader {
-  /** 格式版本，蓋 {@link SESSION_LOG_FORMAT_VERSION}。 */
-  readonly version: number;
+  /**
+   * 格式版本，蓋 {@link SESSION_LOG_FORMAT_VERSION}。**永遠是這一版**（照 dsh `types.ts:96-100`）：讀回來的舊檔，
+   * 後端在交出去之前就把它轉譯成這一版；磁碟上寫的那個原版號另外交，見 {@link ReadonlyStoredSession.storedFormatVersion}。
+   */
+  readonly version: typeof SESSION_LOG_FORMAT_VERSION;
   /** 這份日誌屬於誰，就是 `SessionLog.sessionId`。 */
   readonly id: string;
   /** 建立當下的 Unix 毫秒。 */
@@ -183,7 +710,7 @@ export interface StoredSessionHeader {
    * `--workspace`，兩次跑的根不同而 `cwd` 一模一樣——`cwd` 那一格分不出這件事。記下它是為了
    * 讓一顆重播的 `deliverables/presented` 有錨（#452），而
    * [#519](https://github.com/DemianLi/nexus-agent/issues/519) 起真的有人在讀它：
-   * `apps/harness/src/wire-handler.ts` 的 `locateRequested` 拿「這一格在不在」當准不准用今天
+   * `apps/harness/src/wire-handler.ts` 的 `locateAt` 拿「這一格在不在」當准不准用今天
    * 這個根的判準（**不是拿 {@link version} 判**，理由見那裡與下一段）。
    *
    * **舊日誌永遠沒有這一格，而且續接不回填。** 續接時 root 那一份走的是已存的把手，
@@ -193,12 +720,70 @@ export interface StoredSessionHeader {
    */
   readonly workspaceRoot?: string;
   /**
-   * 它 fork／spawn 自哪一份，有的話。
+   * 它 spawn／fork 自哪一份，有的話。**帶了它不等於是子代理**：問「是不是子代理」一律用 {@link isSubagentSessionHeader}
+   * （[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
    *
-   * subagent 的日誌帶 root 的 id——**血緣要讀得出來**，同 `SessionRegistry` 檔頭那條
-   * 「id 是 `<root>/<runId>`，對到 dsh 的 `header.parentSession`」。
+   * - **子代理**的日誌帶 root 的 id——**血緣要讀得出來**，同 `SessionRegistry` 檔頭那條
+   *   「id 是 `<root>/<runId>`，對到 dsh 的 `header.parentSession`」。
+   * - **分叉**的日誌帶來源 thread 的 id，同時帶 {@link isSeeded}（照 dsh `core/session/src/index.ts:1392-1396`，`687f282e`）。
+   *   分叉之後和來源只剩這一格關聯，不共用任何狀態。
    */
   readonly parentSession?: string;
+  /**
+   * 這份是 spawn 出來的子代理（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)），照 dsh `SessionHeader.origin`
+   * （`packages/core/session/src/types.ts:95-131`，`687f282e`）。51 起新建的子代理一律寫；50 以前的沒有，見 {@link isSubagentSessionHeader}。
+   */
+  readonly origin?: 'subagent';
+  /**
+   * 這份是帶著另一份會話的前綴開出來的（分叉，[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。照 dsh 的 `isSeeded`，
+   * 但**只在 true 時寫**（dsh 是必填的 boolean；我們沒寫就是 false，50 以前的檔一格都沒有）。
+   *
+   * **繼承了幾顆不另外落盤**：照 dsh 讀盤的求法，從最後一顆 `session/end-seed {inherited: true}` 推（`inheritedEventCount`，
+   * `session-log.ts`）。讀盤時兩者要對得上，見 `apps/harness/src/session-log-validation.ts`。
+   */
+  readonly isSeeded?: true;
+  /**
+   * 寫這份日誌的程式碼版本（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+   *
+   * **續接不改它**：續接的行程沿用已存的 header，所以這一格永遠是最初那一個行程。續接之後才新開的 subagent
+   * 日誌帶的是續接那個行程的版本——同 {@link workspaceRoot} 那條「root 沒有、subagent 有」，那是對的，不要回填。
+   * 30 以前的日誌沒有這一格。
+   */
+  readonly build?: StoredSessionBuild;
+  /** 建立當下疊完的插件清單，順序同 `--dump-config`。見 {@link StoredSessionPluginRow}；續接規則同 {@link build}。 */
+  readonly plugins?: readonly StoredSessionPluginRow[];
+  /**
+   * 建立當下疊完的整份插件設定（含每一列的 `config` 與 `disabled`）的**帶鍵雜湊**，格式 `hmac-sha256:<16 個十六進位字元>`。
+   *
+   * **只能跟同一台機器、同一個 harness home 寫的比**：鍵是 home 底下一個只有擁有者讀得到的檔，不進日誌。不用無鍵
+   * 雜湊是因為設定的大半是公開的（出貨的 `cordis.yml` 在 repo 裡），剩下的未知數常常只是一個內網位址——無鍵的話，
+   * 拿日誌的人可以逐一猜到雜湊對上。續接規則同 {@link build}。
+   */
+  readonly configHash?: string;
+  /**
+   * root 用的那一筆模型型錄 id（`live-model` 的 `modelId`）。**只有 root 的 header 有**：subagent 可能被選模型政策換成
+   * 型錄裡的另一筆，蓋上 root 的 id 等於替它宣稱一個沒用過的模型；假模型（沒帶 `--live`）不是型錄裡的一筆，也沒有。
+   * 續接規則同 {@link build}。
+   */
+  readonly modelEntryId?: string;
+}
+
+/**
+ * 這份 header 是不是一個子代理的（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。列表不列、@ 選單標成誰的子代理、
+ * eval 不算 root，問的都是這一支。
+ *
+ * dsh 只看 `origin === 'subagent'`。**偏離（理由 1：既有落盤資料表達不出 dsh 的判準）**：50 以前的子代理 header 都沒有 `origin`，
+ * 只看它會把它們全當成一般 thread。退到：沒有 `origin` 時，帶 `parentSession` 又不是分叉（`isSeeded`）的就是子代理。
+ *
+ * **「是不是我的子代理」不是這一支**：那要比 `parentSession` 是不是自己的 id（`background-cold.ts`、`session-list.ts` 的血緣核對），
+ * 分叉 header 的 `parentSession` 是一條 thread 的 id，不會是 `<thread>/<runId>`，核對自然不過。
+ */
+export function isSubagentSessionHeader(
+  header: Pick<StoredSessionHeader, 'parentSession' | 'origin' | 'isSeeded'>,
+): boolean {
+  return (
+    header.origin === 'subagent' || (header.parentSession !== undefined && header.isSeeded !== true)
+  );
 }
 
 /**
@@ -214,13 +799,16 @@ export interface StoredSession {
    * 盡力而為：resolve 只代表這一批被接受並排好序，**耐久要靠 {@link flush}**。
    *
    * @param events - 這一批，第一顆的 `seq` 必須等於已存的 next-seq。
-   * @throws 這一批不連續、或把手已經關掉。
+   * @throws {@link SessionHandleClosedError} 把手已經關掉。
+   * @throws {@link SessionAlreadyExistsError} 第一次實體化時，這個 id 的檔已經在了（`create` 之後才出現的競態）。
+   * @throws 這一批不連續。
    */
   append(events: readonly SessionEvent[]): Promise<void>;
   /**
    * 耐久屏障——**唯一承諾儲存的那個操作**。resolve 之後，每一筆被接受過的 append
    * 都撐得過崩潰。
    *
+   * @throws {@link SessionHandleClosedError} 把手已經關掉。
    * @throws 寫不進去。**要響亮地拒絕**：這是呼叫端唯一聽得見耐久失敗的地方。
    */
   flush(): Promise<void>;
@@ -242,8 +830,14 @@ export interface SessionStore {
   /**
    * 開一份新的已存會話。
    *
+   * **當下就驗、當下就報撞名**，照 dsh 的 `create`（`session-persistence-jsonl/src/index.ts:360-379`）：
+   * header 不是這一版寫得出來的形狀就拒，這個 id 已經建過（同一個後端還沒實體化的，或磁碟上已經有的）也拒。
+   * 寫入仍然延後到第一次 `append`／`flush`。
+   *
    * @param header - 這份存檔的元資料。
-   * @returns 它的把手。IO 延後到第一次 `append`／`flush`。
+   * @returns 它的把手。
+   * @throws `TypeError` header 不是無損的 JSON、版本不是這一版、或某一格的形狀不對。
+   * @throws {@link SessionAlreadyExistsError} 這個 id 已經建過。
    */
   create(header: StoredSessionHeader): StoredSession;
   /**
@@ -251,25 +845,128 @@ export interface SessionStore {
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
    *
    * 照 dsh 的續接：讀回來的是**實體上有效的前綴**——最後一行寫到一半（當掉時的常態）不算
-   * 進去，把手第一次寫入之前把它截掉。中段的壞行或缺號不是當掉，是壞檔，要拒絕。
+   * 進去，把手第一次寫入之前把它截掉。**尾端的壞行也可復原**（dsh 的 `SessionLogScanner` 預設
+   * `recoverable`，`session-persistence-jsonl/src/format.ts:478-521`）：讀不懂的完整行（斷電時一頁落盤、
+   * 前一頁沒落）與它之後沒收尾的行都屬於那一次沒寫完的輪，丟掉，由續接補「中斷」；**壞行之後若還有
+   * 收尾事件（`turn/end` 或 `turn/failed`），那是已收尾的輪中間壞了，不是當掉的尾巴，是壞檔，要拒絕**。
+   * 這一條原本的註解寫「中段的壞行一律拒絕」並自稱照 dsh，是當初抄 dsh 時漏讀了 issue 之後才拋的規則
+   * （[#1508](https://github.com/DemianLi/nexus-agent/issues/1508)）。
    *
    * @param id - 要續接的會話 id，就是當初 `create` 的 `header.id`。
    * @returns 讀回來的 header（`version` 是存的那個）、事件，與 next-seq 等於事件數的把手。
-   * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
-   * @throws {@link SessionCorruptionError} header 或某一行讀不懂、或 `seq` 不連續。
+   * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新；後端換不了舊版本的檔時，比這一版舊也拋（JSONL 後端的單檔佈局）。
+   * @throws {@link SessionCorruptionError} header 讀不懂，或某一行讀不懂／`seq` 不連續**而且它之後還有收尾事件**；後端特有的壞法（例如
+   *   JSONL 後端同一個 id 兩種佈局並存）見各後端。
    * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
    */
   resume(id: string): Promise<ResumedStoredSession>;
+  /**
+   * 列出這裡每一份**落了盤的**會話，照 dsh 的 `list`（`packages/session/session-persistence/src/index.ts:201`）。
+   * 唯讀：不拿租約、不讀本文。root 與 subagent 都列，誰要過濾誰自己濾。
+   *
+   * @param options - 中止訊號，同 dsh 的 `SessionPersistenceListOptions`。
+   * @returns 讀得懂的每一份，**不承諾順序**；與讀不懂、版本太新而沒列的份數（偏離，見模組說明）。
+   * @throws 存放處存在但讀不到；`signal` 中止時拋它的 `reason`。
+   */
+  list(options?: StoredSessionListOptions): Promise<StoredSessionListing>;
+  /**
+   * 唯讀打開一份，照 dsh 的 `open(id, 'read')`（`packages/session/session-persistence/src/index.ts:165`）。
+   * **不拿租約、不截尾巴、不動 header**：別的行程握著的那一份照樣打得開，打開、讀完，一個位元組都不改。
+   *
+   * @param id - 哪一份，就是 `header.id`。
+   * @param access - 只有 `'read'`。寫的那一條是 {@link resume}。
+   * @returns header 已讀好的把手；本文等 {@link ReadonlyStoredSession.read} 才讀。
+   * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
+   * @throws {@link SessionCorruptionError} header 讀不懂；後端特有的壞法（例如 JSONL 後端同一個 id 兩種佈局並存）見各後端。
+   * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
+   */
+  open(id: string, access: 'read'): Promise<ReadonlyStoredSession>;
+}
+
+/** {@link SessionStore.list} 的選項。 */
+export interface StoredSessionListOptions {
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * {@link SessionStore.list} 的一格，照 dsh 的 `SessionPersistenceSnapshot`
+ * （`packages/session/session-persistence/src/index.ts:50-59`）。`eventCount`、`sizeBytes` 是選填的，沒抄。
+ */
+export interface StoredSessionSnapshot {
+  /** 存的那份 header，`version` 已轉譯成這一版（見 {@link StoredSessionHeader.version}），其餘各格原樣。 */
+  readonly header: StoredSessionHeader;
+  /** 磁碟上那份 header 寫的格式版本，同 {@link ReadonlyStoredSession.storedFormatVersion}。 */
+  readonly storedFormatVersion: number;
+  /**
+   * 不透明的變更記號，照 dsh（`index.ts:184-189`）：**只能跟同一個後端、同一個 id 的比**；相等可以當成這份沒變，
+   * 不相等什麼都不承諾。給衍生的讀取快取用（按內容搜尋的索引），不參與 {@link SessionStore.open}／
+   * {@link SessionStore.resume}。
+   */
+  readonly revision: string;
+}
+
+/** {@link SessionStore.list} 交出來的東西。 */
+export interface StoredSessionListing {
+  readonly sessions: readonly StoredSessionSnapshot[];
+  /**
+   * header 讀不懂、版本比這一版新，或後端特有的理由（例如 JSONL 後端同一個 id 兩種佈局並存）而沒列的份數。**dsh 沒有這一格**（它的 JSONL `list` 略過不數），見模組說明。
+   */
+  readonly unreadable: number;
+}
+
+/** {@link ReadonlyStoredSession.read} 的選項。 */
+export interface StoredSessionReadOptions {
+  /**
+   * 中段壞掉時**撿回讀得懂的**，不拋：解析不動、或不像一筆事件（沒有數字的 `seq` 與 `time`）的那幾行略過，
+   * 其餘照原樣交出——`seq` 可能不連續。給「一份壞檔不該拖垮整份清單」的讀方用（列表、按內容搜尋）；推回模型、
+   * 續接這種要整份對得上的，不要開。偏離，見模組說明。
+   */
+  readonly salvage?: boolean;
+}
+
+/** {@link SessionStore.open} 交出來的唯讀把手。 */
+export interface ReadonlyStoredSession {
+  /** 存的那份 header，`version` 已轉譯成這一版（見 {@link StoredSessionHeader.version}），其餘各格原樣。 */
+  readonly header: StoredSessionHeader;
+  /**
+   * 磁碟上那份 header 寫的格式版本，也就是寫它的那一版；用 `acceptNewer` 讀的可能比這一版新。本文要照它解析，
+   * 引用快照記的 `capturedFormatVersion` 與離線掃描的版本門檻也看它。dsh 介面上沒有這一格，偏離見模組說明。
+   */
+  readonly storedFormatVersion: number;
+  /**
+   * 讀整份本文：**實體上有效的前綴**，同續接——最後一行寫到一半不算進去、可復原的壞尾也不算進去（規則見
+   * {@link SessionStore.resume}），但都不截掉、不講。只有 header 沒有本文的是零顆。
+   * 每叫一次讀一次，讀到的是叫的當下。後端可以把解析結果留著給緊接的續接或下一次讀用（檔案沒變才用，
+   * [#1559](https://github.com/DemianLi/nexus-agent/issues/1559)），所以交出來的事件**是凍結的、可能與別的讀方共用**，不要就地改。
+   *
+   * @throws {@link SessionCorruptionError} 某一行讀不懂、或 `seq` 不連續，**而且它之後還有收尾事件**（開了
+   *   {@link StoredSessionReadOptions.salvage}：任何一行壞就先拋、再撿回，所以不拋）。
+   * @throws {@link SessionNotFoundError} 打開之後、讀的當下，這一份已經不在了（例如 JSONL 後端挑定的世代檔被刪掉）。
+   */
+  read(options?: StoredSessionReadOptions): Promise<readonly SessionEvent[]>;
 }
 
 /** {@link SessionStore.resume} 交出來的東西。 */
 export interface ResumedStoredSession {
-  /** 存的那份 header，**原樣**——`version` 是寫它的那一版，不是這一版。 */
+  /** 存的那份 header，`version` 已轉譯成這一版（見 {@link StoredSessionHeader.version}），其餘各格原樣。 */
   readonly header: StoredSessionHeader;
+  /** 磁碟上那份 header 寫的格式版本，**是寫它的那一版，不是這一版**。同 {@link ReadonlyStoredSession.storedFormatVersion}。 */
+  readonly storedFormatVersion: number;
   /** 讀回來的事件，照 `seq` 排、從 0 連續。拿去當 `SessionLog` 的 seed。 */
   readonly events: readonly SessionEvent[];
   /** 接著寫的把手。它的 next-seq 就是 `events.length`。 */
   readonly stored: StoredSession;
+}
+
+/**
+ * 這一版拒絕解讀的那份原始日誌在哪裡，照 dsh 的 `SessionLocation`
+ * （`packages/session/session-persistence/src/errors.ts:85-90`）：只給拒絕診斷用，讓管理員找得到那份檔。
+ */
+export interface SessionLocation {
+  /** 後端的種類，例如 `'jsonl'`。 */
+  readonly kind: string;
+  /** 那份日誌的絕對路徑。 */
+  readonly path: string;
 }
 
 /**
@@ -279,19 +976,64 @@ export interface ResumedStoredSession {
  * 一個升級過的使用者拿舊版打開新檔，看到的會是「你的檔案壞了」。
  */
 export class SessionFormatUnsupportedError extends Error {
-  override readonly name = 'SessionFormatUnsupportedError';
+  // 子類（{@link SessionEventUnsupportedError}）換名字，所以不寫成字面量型別。
+  override readonly name: string = 'SessionFormatUnsupportedError';
 
   /**
    * @param id - 哪一份會話。
    * @param version - 存檔上寫的版本，原樣。
+   * @param message - 子類說明自己是怎麼發現的；省略即「版本比這一版新」。
+   * @param location - 那份日誌在哪裡（後端知道的話）。**不接進訊息**：偏離 dsh（`errors.ts:111-121` 的訊息帶路徑），
+   *   理由 2——serve 是多人共用的內網主機，`threadOrError` 把訊息記進 serve 的日誌、不上線
+   *   （[#2225](https://github.com/DemianLi/nexus-agent/issues/2225)），路徑只放這一格，由 `serve.ts` 與 CLI 自己記
+   *   （[#1558](https://github.com/DemianLi/nexus-agent/issues/1558) Q1 (a)）。
    */
   constructor(
     readonly id: string,
     readonly version: unknown,
+    message?: string,
+    readonly location?: SessionLocation,
   ) {
     super(
-      `會話 "${id}" 的格式版本是 ${JSON.stringify(version)}，這一版只讀得懂到 ` +
-        `${SESSION_LOG_FORMAT_VERSION}。檔案沒有壞，是比這一版新。`,
+      message ??
+        `會話 "${id}" 的格式版本是 ${JSON.stringify(version)}，這一版只讀得懂到 ` +
+          `${SESSION_LOG_FORMAT_VERSION}。檔案沒有壞，是比這一版新。`,
+    );
+  }
+}
+
+/**
+ * 存檔裡有一筆事件的種類這一版不認得、又沒標 {@link SessionEvent.ignorable}——**不是壞的，是讀不懂**
+ * （[#507](https://github.com/DemianLi/nexus-agent/issues/507)）。
+ *
+ * 繼承 {@link SessionFormatUnsupportedError}：兩者對讀者是同一件事（這份是更新的版本寫的、升級再來），
+ * 所以列表、搜尋、引用候選那幾處本來就擋 `SessionFormatUnsupportedError` 的地方不用改。差別只在是怎麼發現的：
+ * 版本號比這一版新（讀 header 就知道），或版本號沒升但本文裡有這一版不認得的必需種類（讀到那一行才知道）。
+ * 不認得的必需事件可能左右後面每一筆怎麼讀，所以拒絕整份而不是略過那一筆。
+ */
+export class SessionEventUnsupportedError extends SessionFormatUnsupportedError {
+  override readonly name: string = 'SessionEventUnsupportedError';
+
+  /**
+   * @param id - 哪一份會話。
+   * @param version - header 上寫的版本，原樣。
+   * @param seq - 那一筆事件的 `seq`。
+   * @param eventType - 那一筆的 `type`，原樣。
+   * @param location - 同 {@link SessionFormatUnsupportedError}。
+   */
+  constructor(
+    id: string,
+    version: unknown,
+    readonly seq: number,
+    readonly eventType: string,
+    location?: SessionLocation,
+  ) {
+    super(
+      id,
+      version,
+      `會話 "${id}" 的第 ${seq} 筆事件種類是 ${JSON.stringify(eventType)}，這一版（格式版本 ` +
+        `${SESSION_LOG_FORMAT_VERSION}）不認得它，它也沒標可忽略。檔案沒有壞，多半是更新的版本寫的。`,
+      location,
     );
   }
 }
@@ -301,8 +1043,9 @@ export class SessionFormatUnsupportedError extends Error {
  *
  * **它有自己的型別，是因為有人要據此改走「新開一份」**：serve 碰到一條 thread 時先試著接，
  * 接不到才開新的。拿不到型別的話那一步只能比對字串、或一律改開新的——後者會讓一份壞掉
- * 或版本太新的日誌退到 `create`，撞上 `wx`，而那個失敗在協調器的背景路徑上被收成一行
- * warn：**那條 thread 的日誌就這樣沒了**。所以只有這一種失敗准退，其餘照拋。
+ * 或版本太新的日誌退到 `create`。以前那裡要等第一次寫才撞上 `wx`、在協調器的背景路徑上被收成一行
+ * warn，**那條 thread 的日誌就這樣沒了**；[#1559](https://github.com/DemianLi/nexus-agent/issues/1559) 之後 `create` 當下就拋
+ * {@link SessionAlreadyExistsError}，不再安靜，但報的是「已經存在」而不是真正的原因。所以只有這一種失敗准退，其餘照拋。
  */
 export class SessionNotFoundError extends Error {
   override readonly name = 'SessionNotFoundError';
@@ -335,6 +1078,81 @@ export class SessionAlreadyOwnedError extends Error {
   }
 }
 
+/**
+ * 這個 id 已經建過——照 dsh 的 `SessionAlreadyExistsError`（`packages/session/session-persistence/src/errors.ts:22`）。
+ *
+ * 同一個後端建過還沒實體化的、磁碟上已經有 header 或日誌的，都算。**不覆寫、也不續寫**：要接著寫的走
+ * {@link SessionStore.resume}。
+ */
+export class SessionAlreadyExistsError extends Error {
+  override readonly name = 'SessionAlreadyExistsError';
+
+  /**
+   * @param id - 哪一份會話。
+   * @param options - `cause`：實體化那一步撞上的原始錯誤（`EEXIST`）。
+   */
+  constructor(
+    readonly id: string,
+    options?: ErrorOptions,
+  ) {
+    super(`會話 "${id}" 已經存在，不覆寫也不續寫；要接著寫請續接它。`, options);
+  }
+}
+
+/**
+ * 把手已經關掉了還在用——照 dsh 的 `SessionHandleClosedError`（`packages/session/session-persistence/src/errors.ts:68-77`）。
+ *
+ * 有自己的型別，是讓呼叫方分得出「已經關了」與真正的寫入失敗，不用比對訊息字串。**訊息原文沿用型別化之前那一句**：
+ * 伺服器日誌與既有測試靠它。
+ */
+export class SessionHandleClosedError extends Error {
+  override readonly name = 'SessionHandleClosedError';
+
+  /** @param id - 哪一份會話。 */
+  constructor(readonly id: string) {
+    super(`會話 "${id}" 的把手已經關掉了。`);
+  }
+}
+
+/**
+ * 這份會話的日誌太大，這個行程放不下，所以**在讀之前就不讀**（[#2115](https://github.com/DemianLi/nexus-agent/issues/2115)）。
+ *
+ * 不是壞檔，也不是讀不懂：給這個行程更多記憶體，同一份就讀得回來。分兩種：
+ * - `too-large`：這一份單獨就超過行程能收的上限，什麼時候都不收；
+ * - `busy`：這一份放得下，但別的會話正佔著那份額度，等它們收掉（thread 閒置逐出、關掉）再試。
+ *
+ * 有自己的型別，是讓列表分得出「太大」與「壞了」：太大的照樣列（不算進讀不了的），只是開不了；搜尋與引用候選跳過它，同壞檔。
+ * 訊息不帶路徑：它會原樣上線（`wire-handler.ts` 的 `threadOrError` 回 `thread_log_too_large`、`thread_log_busy`）。
+ */
+export class SessionLogTooLargeError extends Error {
+  override readonly name = 'SessionLogTooLargeError';
+
+  /**
+   * @param id - 哪一份會話。
+   * @param reason - 見類別說明。
+   * @param logBytes - 這份日誌本文的位元組數。
+   * @param limitBytes - 行程能收的日誌位元組上限（開著的會話與正在讀的合計）。
+   * @param heldBytes - 開著的會話已經佔掉的位元組數，不含正在讀的唯讀（`busy` 才有意義：只有它們佔的加上這一份放不下才拒收）。
+   */
+  constructor(
+    readonly id: string,
+    readonly reason: 'too-large' | 'busy',
+    readonly logBytes: number,
+    readonly limitBytes: number,
+    readonly heldBytes: number,
+  ) {
+    const mib = (bytes: number) => `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+    super(
+      reason === 'too-large'
+        ? `會話 "${id}" 的日誌有 ${mib(logBytes)}，超過這個行程能收的 ${mib(limitBytes)}，沒有讀它（讀進來會把整個行程的記憶體用完）。` +
+            '檔案沒有壞。要打開它，請管理者給這個行程更多記憶體（容器或 systemd 的記憶體上限，與跟著它的 --max-old-space-size）後重啟；' +
+            '或在 thread-capacity 的 sessionLogBudgetMiB 調高額度（調得比記憶體撐得住的大，就可能把整個行程撐死）。'
+        : `會話 "${id}" 的日誌有 ${mib(logBytes)}；別的會話已經佔掉 ${mib(heldBytes)}，上限 ${mib(limitBytes)}，這一份現在放不下，沒有讀它。` +
+            '檔案沒有壞。等其他開著的大會話關掉或閒置逐出後再試，或請管理者給這個行程更多記憶體後重啟。',
+    );
+  }
+}
+
 /** 存檔讀得到但讀不懂：header 或中段某一行不是這一版寫得出來的形狀、或 `seq` 不連續。 */
 export class SessionCorruptionError extends Error {
   override readonly name = 'SessionCorruptionError';
@@ -342,10 +1160,12 @@ export class SessionCorruptionError extends Error {
   /**
    * @param id - 哪一份會話。
    * @param reason - 哪裡壞了。
+   * @param location - 那份日誌在哪裡（後端知道的話）。不接進訊息，理由同 {@link SessionFormatUnsupportedError.location}。
    */
   constructor(
     readonly id: string,
     reason: string,
+    readonly location?: SessionLocation,
   ) {
     super(`會話 "${id}" 的存檔壞了：${reason}`);
   }

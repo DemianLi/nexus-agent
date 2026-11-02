@@ -4,28 +4,33 @@
  * 形狀照 dsh 的 `@deepseek-ai/dsh-commands`
  * （`references/deepseek-harness/packages/interaction/commands/src/`，對讀版本
  * `cd5ef8148158c3a752a658978873241fdf8e2bbc`）：`name` / `description` / `input` /
- * `handler`，handler 回一個 `CommandResult`，由**發派的 UI 直接呈現**——命令不進模型。
+ * `handler`，handler 回一個 `CommandResult`，由**發派的 UI 直接呈現**——命令與它的結果不進模型（要讓一句話進模型，走 {@link CommandInvocation.steer}：那是宿主在命令落定後替人開的一輪）。
  *
  * **這一層與工具是兩件事，不要合併。** 工具是模型呼叫的，命令是人打的；工具的結果回
  * 到 transcript 裡影響下一次推理，命令的結果只印給人看。dsh 兩者分屬不同子系統，
  * 我們照做。
  *
- * **`agent` 與 `attachments` 這兩格我們沒有。** dsh 的 `CommandInvocation` 帶
- * `agent`（它的註冊表跨 agent，要靠它決定作用在誰身上）與 `attachments`（圖片附件經
- * attachment store 收下之後交給 handler）。attachment store 還不存在，**那一格是缺，
- * 不是省略**。
+ * **附件**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：照 dsh 的 `CommandInvocation.attachments`
+ * （`packages/interaction/commands/src/index.ts`，`5badb150`）。命令用 `input.attachments: true` **宣告收附件**，宣告了才會在
+ * {@link CommandInvocation.attachments} 收到收下之後的**參照**（圖與一般檔案，照選取順序；位元組在日誌之外，見
+ * `apps/harness` 的 `attachment-store.ts`）；沒宣告的命令收到附件，執行器在 handler 之前就落定成 `error`，輸入框的草稿與附件留著。
+ * **registry 從不自己拿附件做事**：怎麼讓模型看到（`/goal` 是送一句帶附件的話，{@link CommandInvocation.steer} 的第二個參數）、
+ * 這個文法收不收，全是 handler 的決定，收不下就回 `error`。
  *
- * **`agent` 這一格的理由在 [#126](https://github.com/DemianLi/nexus-agent/issues/126)
- * 之後換過一次，結論沒換。** 原本寫的是「我們一次 `createNexusAgent` 一個 registry，
- * 『作用在誰身上』沒有指涉對象」——`/goal` 是第一個真的需要一個作用對象的命令
- * （它變更的是會話日誌上的耐久狀態），所以那個指涉對象現在存在了，只是它不是 agent
- * **而是會話日誌**。而 handler 找得到它，靠的不是這裡多一格：`load.ts` 一次組裝呼叫
- * 一次 `apply`，接線那一層一份 registry 接一份日誌，所以逐次 `apply` 的閉包就把兩者
- * 對上了。**「一份 registry 只接一份日誌」是這條推論的前提**，而它是可證偽的——
- * `@nexus/plugin-goal` 的命令在接了不只一份時當場回一句錯誤，那條線有測試釘著。
+ * **dsh 的 `agent`（「收到命令的那個 agent」）在我們這裡對應 {@link CommandInvocation.sessionLog}**
+ * （[#688](https://github.com/DemianLi/nexus-agent/issues/688)）。這一格的理由換過兩次：原本寫的是
+ * 「我們一次 `createNexusAgent` 一個 registry，『作用在誰身上』沒有指涉對象」；
+ * [#126](https://github.com/DemianLi/nexus-agent/issues/126) 之後指涉對象存在了——`/goal`
+ * 變更的是會話日誌上的耐久狀態，所以它不是 agent **而是會話日誌**，當時以為 handler 靠 `apply`
+ * 的閉包找得到它（前提是「一份 registry 只接一份日誌」）。**那是形狀偏好，不是表達不出來**：執行器
+ * 本來就持有那份日誌（`command/run` 寫的就是它），而前提在 #137 之後只剩靠每個 plugin 自己過濾 root
+ * 才成立。所以照 dsh 讓執行器把它交給 handler，每個需要日誌的命令不必再各自追一遍。
  *
  * @see [#118](https://github.com/DemianLi/nexus-agent/issues/118)
  */
+
+import type { AttachmentRef } from './attachment-ref.js';
+import type { SessionLog } from './session-log.js';
 
 /** 命令名的形狀。**正則照抄 dsh**——小寫開頭，其後小寫、數字、底線、連字號。 */
 export const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
@@ -34,6 +39,11 @@ export const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
 export interface CommandInputDescriptor {
   /** 使用者還沒打字時顯示的佔位字串。 */
   readonly hint: string;
+  /**
+   * 這個命令收不收附件（照 dsh 的 `input.attachments`）。**沒給或 `false`＝不收**：執行器拒絕帶附件的呼叫，
+   * 會看這一格的輸入框在送出之前就擋下。宣告了，handler 收到收下之後的參照，並**自己決定**每一種文法收不收。
+   */
+  readonly attachments?: boolean;
 }
 
 /**
@@ -70,8 +80,50 @@ export interface CommandInvocation {
    * 不做 trim：要不要 trim 是 handler 自己的文法決定的，這一層先把原文原樣交出去。
    */
   readonly rawInput: string;
+  /**
+   * 這次呼叫帶的附件，**收下之後的參照**，照選取順序。沒宣告 `input.attachments` 的命令永遠是空的（帶了附件的呼叫根本進不了
+   * handler）；宣告了但這一次沒帶也是空的。handler 的文法收不下它們時回 `error`，這樣發派的輸入框留著草稿與附件。
+   */
+  readonly attachments: readonly AttachmentRef[];
   /** 發派它的那次請求擁有的取消訊號。 */
   readonly signal: AbortSignal;
+  /**
+   * 這個命令作用的會話日誌——**就是執行器寫 `command/run`／`command/done` 的那一份**，兩個入口
+   * （`runRepl`、wire handler）交給執行器的都是 root 那一份。對應 dsh 的 `CommandInvocation.agent`
+   * （「收到命令的那個 agent」）。
+   */
+  readonly sessionLog: SessionLog;
+  /**
+   * 請宿主在這個命令**落定之後**，把 `text` 當成人打的一句話送進對話（`/plan <message>` 用它）。
+   *
+   * 對應 dsh 的 `agent.steer()`：dsh 的 handler 直接拿到 agent，閒著的時候 steer 會開一輪
+   * （`packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
+   * **我們的命令只跑在兩輪之間**（`serve` 的發派面在跑著、停在核准點時拒收；REPL 一行一輪），
+   * 所以這裡的 steer 永遠是閒著的那一種——也就是「命令結束後開一輪」。命令沒有 agent 把手，
+   * 這一格是宿主替它保管的那一半。**唯一的例外是命令用 {@link CommandDefinition.runWhileBusy} 宣告過的那幾種呼叫**
+   * （#1516）：它們可以在一輪跑著時執行，這時宿主讓 `steer` 直接拋錯——在一輪中間「命令結束後開一輪」不成立。
+   *
+   * - **時刻**：宿主等 `command/done` 寫完才動，所以日誌上 `command/run` → `command/done` 的配對
+   *   完整結束之後才有 `turn/start`。`CommandResult` 與 `command/done` 都不因此多任何一格。
+   * - **驗證**：宿主可以在這一次呼叫裡就拒收（例如 `@` 的會話引用不能用），**拋出來的例外會從 `steer` 冒出去**。
+   *   handler 該在做任何有副作用的事**之前**呼叫，這樣被拒收的命令什麼都沒改，`command/done` 落定成 `error`。
+   * - **只在成功時送**：命令落定成 `error`（回的或拋的），已經收下的 steer 一律作廢。
+   * - **不能在命令結束後才叫**：那時候宿主已經不看了，靜靜丟掉比拋錯更糟，所以拋錯。
+   *
+   * @param text - 要送的話，非空字串。
+   * @param attachments - 這句話帶的附件參照（通常是 {@link CommandInvocation.attachments} 原樣），省略＝沒有。送進對話的那一輪
+   *   開場那句就帶著它們（`turn/start.attachments`），所以讀圖的授權（日誌引用過它）自然成立。
+   */
+  readonly steer: (text: string, attachments?: readonly AttachmentRef[]) => void;
+  /**
+   * 命令**即將做出會讓宿主自己開一輪的動作**時，先問宿主收不收（#1787）。`steer` 只管「命令送一句話」那一條路；
+   * 還有一條不經過它：命令改了域的狀態，宿主的排程器看見變更就自己開一輪（`/goal <目標>`、`/goal resume` 把目標變成進行中，
+   * 排程器接著起第一輪）。宿主不收（伺服器收尾中）就**拋例外**，從這裡冒出去。
+   *
+   * handler 該在動任何域**之前**呼叫，這樣被拒的命令什麼都沒寫：沒有目標被建起來、也沒有被續上，`command/done` 落定成 `error`。
+   * 在 REPL 與沒有收尾時間窗的宿主上永遠收。**執行器一定交這一格**；省略只會出現在手搭的呼叫（測試），省略即不問，所以 handler 用 `openTurn?.()`。
+   */
+  readonly openTurn?: () => void;
 }
 
 /** 一筆命令註冊。 */
@@ -89,7 +141,28 @@ export interface CommandDefinition {
    */
   readonly recordInput?: boolean;
   /**
+   * **這幾種呼叫在一輪跑著、或停在核准點時也可以執行**（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。
+   * 每一格是命令名後面那段輸入的**完整字面值**（頭尾空白不計，其餘逐字比對、區分大小寫），例如 `/goal` 宣告 `['pause']`，
+   * 就只放行 `/goal pause`，不放行 `/goal pause 1`、`/goal Pause`，也不放行 `/goal edit …`。沒給＝這個命令任何呼叫都
+   * 只能在兩輪之間執行（今天所有命令的樣子）。
+   *
+   * **為什麼是字面值清單，不是整個命令的布林、也不是函式**：
+   *
+   * - 布林太粗：`/goal` 底下有七種子命令，`create`／`edit` 帶附件時會 `steer`、起一輪，不能跟著放行。要放行的是「這一次呼叫」。
+   * - 函式帶不上線：`slash.list` 的 {@link CommandDescriptor} 要把這一格交給 web，web 才不必自己重寫一份 `/goal` 的文法
+   *   就知道哪一行現在打得動。字面值可以序列化，宿主的閘門與 descriptor 讀的是同一份宣告，沒有第二個出處。
+   *
+   * **這是我們自己加的**——dsh 的命令執行根本沒有「忙的時候擋」這一道閘（`packages/interaction/commands/src/index.ts:332-372`），
+   * 所以沒有可以照的形狀，也沒有偏離 dsh 的行為可標：dsh 什麼都放行，我們原本全擋（#123），這一格是在中間開一個窄口。
+   *
+   * **跟 #123 的關係：`/plan` 不准宣告這一格。** #123 擋的理由完全是 `/plan`：plan-mode 的 pending intent 會跟飛行中那一輪的
+   * `beforeAgent` 賽跑，`@nexus/plugin-plan-mode` 的偏離註記押著「命令一定跑在兩輪之間」。宣告這一格的命令要自己保證：
+   * 這幾種呼叫**不碰那種跟飛行中的輪賽跑的狀態**，也**不呼叫 `steer`**（宿主在忙的時候讓它拋錯）。
+   */
+  readonly runWhileBusy?: readonly string[];
+  /**
    * 執行。**不把命令送給模型**——命令是人對工具說的話，不是對模型說的話。
+   * 命令要讓模型看到一句話時，呼叫 `invocation.steer`：那句話是普通的人話，不是命令。
    *
    * @param invocation - 這一次執行的原文、配對 id 與取消訊號。
    * @returns 直接呈現給人的結果。
@@ -102,6 +175,8 @@ export interface CommandDescriptor {
   readonly name: string;
   readonly description: string;
   readonly input?: CommandInputDescriptor;
+  /** {@link CommandDefinition.runWhileBusy} 的凍結副本；沒宣告就整個不放這個 key。 */
+  readonly runWhileBusy?: readonly string[];
 }
 
 /**
@@ -137,23 +212,48 @@ export function normalizeCommandDefinition(definition: CommandDefinition): {
     if (typeof hint !== 'string' || hint.trim().length === 0) {
       throw new TypeError(`命令 "${definition.name}" 的 input.hint 要是非空字串。`);
     }
-    input = Object.freeze({ hint });
+    const attachments: unknown = definition.input.attachments;
+    if (attachments !== undefined && typeof attachments !== 'boolean') {
+      throw new TypeError(`命令 "${definition.name}" 的 input.attachments 要是布林。`);
+    }
+    // 沒宣告（或宣告 false）就整個不放這個 key：descriptor 上只有「收」這一種說法。
+    input = Object.freeze({ hint, ...(attachments === true ? { attachments: true } : {}) });
   }
   const recordInput: unknown = definition.recordInput;
   if (recordInput !== undefined && typeof recordInput !== 'boolean') {
     throw new TypeError(`命令 "${definition.name}" 的 recordInput 要是布林。`);
+  }
+  const declared: unknown = definition.runWhileBusy;
+  let runWhileBusy: readonly string[] | undefined;
+  if (declared !== undefined) {
+    if (!Array.isArray(declared) || declared.length === 0) {
+      throw new TypeError(`命令 "${definition.name}" 的 runWhileBusy 要是非空的字串陣列。`);
+    }
+    const literals: string[] = [];
+    for (const literal of declared as unknown[]) {
+      // 頭尾有空白的字面值永遠比不中（比的是 trim 過的輸入），當場拒絕比靜靜失效好。
+      if (typeof literal !== 'string' || literal.length === 0 || literal !== literal.trim()) {
+        throw new TypeError(
+          `命令 "${definition.name}" 的 runWhileBusy 每一格要是非空、頭尾沒有空白的字串。`,
+        );
+      }
+      if (!literals.includes(literal)) literals.push(literal);
+    }
+    runWhileBusy = Object.freeze(literals);
   }
   const normalized: CommandDefinition = Object.freeze({
     name: definition.name,
     description: definition.description,
     ...(input === undefined ? {} : { input }),
     ...(recordInput === undefined ? {} : { recordInput }),
+    ...(runWhileBusy === undefined ? {} : { runWhileBusy }),
     handler: definition.handler,
   });
   const descriptor: CommandDescriptor = Object.freeze({
     name: normalized.name,
     description: normalized.description,
     ...(input === undefined ? {} : { input }),
+    ...(runWhileBusy === undefined ? {} : { runWhileBusy }),
   });
   return { definition: normalized, descriptor };
 }

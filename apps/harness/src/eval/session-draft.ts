@@ -19,10 +19,15 @@
  * `resume` 的 `turn/start`、`session/end-seed`，見 `session-scan.ts` 檔頭）恰好就是輪的邊界，所以
  * 「一輪裡的最長串」就是那條鏈在這一輪裡走到的最長。測試拿 `scan` 的逐份最長串對過。
  *
- * 輪＝起頭那顆**不是 `resume`** 的 `turn/start`，`resume` 那一段併回去——同 `@nexus/core` 的
+ * 輪＝起頭那顆開邏輯輪的 `turn/start`（`isLogicalTurnStart`，不是 `resume`），`resume` 那一段併回去——同 `@nexus/core` 的
  * `currentMessageFeedback` 把回覆歸到輪的算法（格式 10 以前點踩直接綁這個輪，
  * [#267](https://github.com/DemianLi/nexus-agent/issues/267)）。
  * `session/end-seed` 收掉當下那一輪：之後、下一顆起頭之前的事件沒有輪可歸，略過。
+ *
+ * 分叉繼承來的輪不起草（[#1580](https://github.com/DemianLi/nexus-agent/issues/1580)）：那幾輪是來源 thread 的，起草來源那一份時
+ * 已經在了，子 thread 再出一次就是同一句話兩塊草稿。**例外是子 thread 自己對前綴裡的回覆評了分**（分叉之後照樣評得到，
+ * 見 `@nexus/core` 的 `currentMessageFeedback`）：那筆評分只在這一份裡，跳過那一輪它就哪一份都不在。所以那一輪留下，
+ * 但只認點踩；中止、失敗、打轉是來源那一輪發生的事，不算。輪照樣從頭數，第幾輪對得上日誌裡的位置。
  *
  * ## 排序
  *
@@ -30,7 +35,7 @@
  *
  * ## 不起草的
  *
- * - **子代理那幾份**（header 有 `parentSession`）：沒有 `turn/start`，也就沒有「使用者那句話」。
+ * - **子代理那幾份**（`isSubagentSessionHeader`，#1579；分叉帶 `parentSession` 但不是子代理，照起草）：沒有 `turn/start`，也就沒有「使用者那句話」。
  *   它的打轉照樣在 `scan` 裡看得到，root 那一輪也看得到它那顆 `task`。
  * - **`/feedback`**：沒綁輪，不參與排序，印在該會話第一份草稿的前面；會話裡一輪都沒入選的另列最後。
  *
@@ -40,6 +45,9 @@
  */
 
 import {
+  inheritedEventCount,
+  isLogicalTurnStart,
+  isSubagentSessionHeader,
   repeatCallKey,
   repeatReminderTracks,
   resolveRepeatReminderSettings,
@@ -92,14 +100,14 @@ export interface DraftToolCall {
   readonly result?: { readonly isError: boolean; readonly code?: string };
 }
 
-/** 一輪。**每一輪都在**，`signals` 空的就是沒入選。 */
+/** 一輪。**這一份自己的每一輪都在**（分叉繼承來的不在），`signals` 空的就是沒入選。 */
 export interface DraftTurn {
   /** 起頭那顆 `turn/start` 的 `seq`。點踩綁的是這一輪裡的回覆（格式 10 以前綁的是它）。 */
   readonly seq: number;
-  /** 這份日誌裡的第幾輪，從 1 起算，給人看的。 */
+  /** 這份日誌裡的第幾輪，從 1 起算，給人看的；分叉來的連繼承來的輪一起數，同日誌裡的位置。 */
   readonly ordinal: number;
-  /** `goal` 是續行輪次：`text` 是機器排的，不是人說的話。 */
-  readonly kind: 'message' | 'goal';
+  /** `goal` 是續行輪次、`agent-message` 是父代理傳來的（#839）、`subagent-settled` 是背景子代理結算的通知（#840）：`text` 都不是人說的話。 */
+  readonly kind: 'message' | 'goal' | 'agent-message' | 'subagent-settled';
   readonly text: string;
   readonly toolCalls: readonly DraftToolCall[];
   /** 這一輪裡最長的那一段同工具同參數；一次受追蹤的呼叫都沒有時是 `null`。 */
@@ -117,6 +125,8 @@ export interface SessionDrafts {
   readonly file: string;
   readonly sessionId: string;
   readonly parentSession?: string;
+  /** 子代理的那幾份（core 的 `isSubagentSessionHeader`），不起草。 */
+  readonly subagent?: true;
   readonly version: number;
   readonly turns: readonly DraftTurn[];
   readonly feedbackRecords: readonly FeedbackRecord[];
@@ -126,7 +136,7 @@ export interface SessionDrafts {
 
 interface OpenTurn {
   readonly seq: number;
-  readonly kind: 'message' | 'goal';
+  readonly kind: 'message' | 'goal' | 'agent-message' | 'subagent-settled';
   readonly text: string;
   readonly calls: Map<
     string,
@@ -160,11 +170,13 @@ export function draftSessionLog(
   const callTurn = new Map<string, OpenTurn>();
   const ratings = ratingsByTurn(log.events);
   const feedbackRecords: FeedbackRecord[] = [];
+  // 分叉繼承來的前綴（#1579）：評語同評分（`ratingsByTurn`），是來源 thread 的，不收。
+  const inherited = inheritedEventCount(log.events);
 
   for (const event of log.events) {
     switch (event.type) {
       case 'turn/start':
-        if (event.data.kind === 'resume') break;
+        if (!isLogicalTurnStart(event)) break;
         current = {
           seq: event.seq,
           kind: event.data.kind,
@@ -209,7 +221,7 @@ export function draftSessionLog(
         break;
       }
       case 'feedback/record':
-        feedbackRecords.push(event.data);
+        if (event.seq >= inherited) feedbackRecords.push(event.data);
         break;
       default:
         break;
@@ -221,23 +233,29 @@ export function draftSessionLog(
     file: log.file,
     sessionId: log.header.id,
     ...(log.header.parentSession !== undefined && { parentSession: log.header.parentSession }),
+    ...(isSubagentSessionHeader(log.header) && { subagent: true as const }),
     version,
-    turns: turns.map((turn, index) => {
+    // 先照整份數第幾輪，再丟掉繼承來的：前綴的輪起頭都在切點之前。`ratings` 已經只收切點之後的評分（`ratingsByTurn`），
+    // 所以前綴那一輪查得到評分，就是子 thread 自己評的。
+    turns: turns.flatMap((turn, index) => {
       const rating = ratings.get(turn.seq);
+      const own = turn.seq >= inherited;
+      if (!own && rating === undefined) return [];
       const hit: Readonly<Record<DraftSignal, boolean>> = {
         negative: rating?.rating === 'negative',
-        aborted: turn.aborted,
-        failed: turn.failures.length > 0,
-        looping: turn.longest !== null && turn.longest.count >= threshold,
+        aborted: own && turn.aborted,
+        failed: own && turn.failures.length > 0,
+        looping: own && turn.longest !== null && turn.longest.count >= threshold,
       };
       return {
         seq: turn.seq,
         ordinal: index + 1,
         kind: turn.kind,
         text: turn.text,
+        // 前綴那一輪的呼叫照印：被評的就是那則回覆，人要看它當時做了什麼。
         toolCalls: [...turn.calls.values()],
-        longestRun: turn.longest,
-        failures: turn.failures,
+        longestRun: own ? turn.longest : null,
+        failures: own ? turn.failures : [],
         ...(rating !== undefined && { rating }),
         signals: DRAFT_SIGNALS.filter((signal) => hit[signal]),
       };
@@ -327,6 +345,12 @@ function draftBlock(session: SessionDrafts, turn: DraftTurn): string[] {
   if (turn.kind === 'goal') {
     lines.push('// goal 續行輪次：prompt 是機器排的，不是人說的話。');
   }
+  if (turn.kind === 'agent-message') {
+    lines.push('// 父代理傳來的訊息：prompt 不是人說的話。');
+  }
+  if (turn.kind === 'subagent-settled') {
+    lines.push('// 背景子代理結算的通知：prompt 是執行期的記帳，不是人說的話。');
+  }
   if (turn.signals.includes('negative') && rating !== undefined) {
     const category = rating.category === undefined ? '' : `〔${rating.category}〕`;
     lines.push(
@@ -369,7 +393,7 @@ export function formatDraftReport(
   options: { readonly threshold: number; readonly base?: string },
 ): readonly string[] {
   const shown = (file: string): string => displayPath(file, options.base);
-  const roots = sessions.filter((session) => session.parentSession === undefined);
+  const roots = sessions.filter((session) => session.subagent !== true);
   const ranked = rankDrafts(roots);
 
   const lines: string[] = [

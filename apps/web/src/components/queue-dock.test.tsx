@@ -1,0 +1,670 @@
+import type {
+  ConversationStatus,
+  QueueSteerAction,
+  QueueUpdateAction,
+  WireQueuedInput,
+} from '@nexus/wire';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+import { QueueDock } from '@/components/queue-dock';
+import type { QueueUpdateRejected } from '@/hooks/use-conversation';
+import {
+  GOAL_CONTINUATION_TEXT,
+  GOAL_CONTINUATION_WARNING,
+  QUEUE_GONE_TEXT,
+  UNRECOGNIZED_SOURCE_TEXT,
+  QUEUE_LEAVE_MS,
+  QUEUE_PARKED_TEXT,
+  QUEUE_SETTLE_MS,
+  AGENT_MESSAGE_QUEUED_TEXT,
+  SETTLED_NOTICE_TEXT,
+  SETTLED_NOTICE_UNKNOWN_TEXT,
+} from '@/lib/queue-view';
+import { axeViolations } from '@/test/axe';
+
+const toastSpy = vi.hoisted(() => {
+  const spy = vi.fn() as ReturnType<typeof vi.fn> & { error: ReturnType<typeof vi.fn> };
+  spy.error = vi.fn();
+  return spy;
+});
+vi.mock('sonner', () => ({ toast: toastSpy }));
+
+/**
+ * 送出佇列（#645）。清單由 harness 推（`ConversationState.inbox`），這裡手餵；改、刪的回條由 `onUpdate` 決定，
+ * 清單的新樣子照伺服器那樣另外推進來——不拿回條改畫面。
+ */
+
+function item(id: string, text: string): WireQueuedInput {
+  return { id, text, source: { kind: 'user' } };
+}
+
+type Update = (
+  id: string,
+  action: QueueUpdateAction | QueueSteerAction,
+) => Promise<QueueUpdateRejected | undefined>;
+
+function mount(
+  items: readonly WireQueuedInput[],
+  {
+    status = 'running' as ConversationStatus,
+    onUpdate = vi.fn<Update>(async () => undefined),
+    onFocusFallback = vi.fn(),
+  } = {},
+) {
+  const view = render(
+    <div>
+      <QueueDock
+        items={items}
+        status={status}
+        connected
+        onUpdate={onUpdate}
+        onFocusFallback={onFocusFallback}
+      />
+      <textarea aria-label="輸入框" />
+    </div>,
+  );
+  const rerender = (next: readonly WireQueuedInput[], nextStatus: ConversationStatus = status) =>
+    view.rerender(
+      <div>
+        <QueueDock
+          items={next}
+          status={nextStatus}
+          connected
+          onUpdate={onUpdate}
+          onFocusFallback={onFocusFallback}
+        />
+        <textarea aria-label="輸入框" />
+      </div>,
+    );
+  return { ...view, rerender, onUpdate, onFocusFallback };
+}
+
+/** 讓新進來的撐過延遲、淡出的走完、rAF 跑掉。 */
+function settle(ms = QUEUE_SETTLE_MS) {
+  act(() => {
+    vi.advanceTimersByTime(ms);
+  });
+}
+
+/** 等 `onUpdate` 的 promise 收掉。 */
+async function flush() {
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+  toastSpy.mockReset();
+  toastSpy.error.mockReset();
+});
+
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
+
+describe('出現與消失', () => {
+  it('空的不畫', () => {
+    mount([]);
+    expect(screen.queryByTestId('queue-dock')).toBeNull();
+  });
+
+  it('新的一件撐過延遲才畫（Q5）', () => {
+    mount([item('a', '第一句')]);
+    act(() => vi.advanceTimersByTime(QUEUE_SETTLE_MS - 1));
+    expect(screen.queryByTestId('queue-dock')).toBeNull();
+    settle(1);
+    expect(within(screen.getByTestId('queue-dock')).getByText('第一句')).toBeTruthy();
+  });
+
+  it('閒著時收下又當場領走：一次都不畫', () => {
+    const { rerender } = mount([item('a', '第一句')], { status: 'idle' });
+    act(() => vi.advanceTimersByTime(QUEUE_SETTLE_MS / 2));
+    rerender([]);
+    settle(QUEUE_SETTLE_MS * 2);
+    expect(screen.queryByTestId('queue-dock')).toBeNull();
+  });
+
+  it('畫出來之後被領走：先淡出，再拿掉', () => {
+    const { rerender } = mount([item('a', '第一句'), item('b', '第二句')]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    rerender([item('b', '第二句')]);
+    const leaving = document.querySelector('[data-queue-item="a"]');
+    expect(leaving?.hasAttribute('data-leaving')).toBe(true);
+    settle(QUEUE_LEAVE_MS);
+    expect(document.querySelector('[data-queue-item="a"]')).toBeNull();
+    expect(document.querySelector('[data-queue-item="b"]')).not.toBeNull();
+  });
+
+  it('同一件改了文字：立刻換字，不重算延遲', () => {
+    const { rerender } = mount([item('a', '原本')]);
+    settle();
+    rerender([item('a', '改過')]);
+    expect(within(screen.getByTestId('queue-dock')).getByText('改過')).toBeTruthy();
+  });
+
+  it('預覽攤成一行', () => {
+    mount([item('a', '第一行\n\n第二行')]);
+    settle();
+    expect(within(screen.getByTestId('queue-dock')).getByText('第一行 第二行')).toBeTruthy();
+  });
+});
+
+describe('收合', () => {
+  it('一件直接畫；兩件以上預設收合，表頭寫件數', () => {
+    const { rerender } = mount([item('a', '第一句')]);
+    settle();
+    expect(screen.queryByRole('button', { name: /則排著的訊息/ })).toBeNull();
+    expect(screen.getByRole('button', { name: '編輯：第一句' })).toBeTruthy();
+
+    rerender([item('a', '第一句'), item('b', '第二句')]);
+    settle();
+    const header = screen.getByRole('button', { name: '2 則排著的訊息' });
+    expect(header.getAttribute('aria-expanded')).toBe('false');
+    fireEvent.click(header);
+    expect(screen.getByRole('button', { name: '編輯：第二句' })).toBeTruthy();
+  });
+
+  it('清空之後下一次出現回到收合', () => {
+    const { rerender } = mount([item('a', '一'), item('b', '二')]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    rerender([]);
+    settle(QUEUE_LEAVE_MS);
+    rerender([item('c', '三'), item('d', '四')]);
+    settle();
+    expect(
+      screen.getByRole('button', { name: '2 則排著的訊息' }).getAttribute('aria-expanded'),
+    ).toBe('false');
+  });
+});
+
+describe('停住（Q6）', () => {
+  it.each<[ConversationStatus, boolean]>([
+    ['running', false],
+    ['awaiting-input', false],
+    ['stopped', true],
+    ['idle', true],
+  ])('%s：提示%s', (status, shown) => {
+    mount([item('a', '第一句')], { status });
+    settle();
+    expect(screen.queryByText(QUEUE_PARKED_TEXT) !== null).toBe(shown);
+  });
+});
+
+describe('編輯', () => {
+  function startEditing(onUpdate = vi.fn<Update>(async () => undefined)) {
+    const view = mount([item('a', '原本'), item('b', '另一句')], { onUpdate });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    fireEvent.click(screen.getByRole('button', { name: '編輯：原本' }));
+    const editor = screen.getByRole('textbox', { name: '改這一則排著的訊息' });
+    return { ...view, editor };
+  }
+
+  it('Enter 存：送出改過的文字；Shift+Enter 不存', async () => {
+    const { editor, onUpdate } = startEditing();
+    fireEvent.change(editor, { target: { value: '改過\n第二行' } });
+    fireEvent.keyDown(editor, { key: 'Enter', shiftKey: true });
+    expect(onUpdate).not.toHaveBeenCalled();
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    await flush();
+    expect(onUpdate).toHaveBeenCalledWith('a', { kind: 'edit', text: '改過\n第二行' });
+    expect(screen.queryByRole('textbox', { name: '改這一則排著的訊息' })).toBeNull();
+  });
+
+  it('組字中按 Enter 不存', () => {
+    const { editor, onUpdate } = startEditing();
+    fireEvent.keyDown(editor, { key: 'Enter', isComposing: true });
+    fireEvent.keyDown(editor, { key: 'Enter', keyCode: 229 });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('空白不能存', () => {
+    const { editor, onUpdate } = startEditing();
+    fireEvent.change(editor, { target: { value: '   ' } });
+    expect(
+      (screen.getByRole('button', { name: '存下改過的這一則' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('Esc 取消：不動佇列、不往外冒，焦點回到那一列的編輯鈕', () => {
+    const outside = vi.fn();
+    document.addEventListener('keydown', outside);
+    try {
+      const { editor, onUpdate } = startEditing();
+      fireEvent.keyDown(editor, { key: 'Escape' });
+      expect(onUpdate).not.toHaveBeenCalled();
+      expect(outside).not.toHaveBeenCalled();
+      settle(16);
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: '編輯：原本' }));
+    } finally {
+      document.removeEventListener('keydown', outside);
+    }
+  });
+
+  it('編輯時其他列的鈕鎖住，表頭收不起來', () => {
+    startEditing();
+    expect(
+      (screen.getByRole('button', { name: '刪除：另一句' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole('button', { name: '2 則排著的訊息' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+
+  it('編輯中那一件開跑了：編輯器收掉，說一次；存的回條再說「不在隊裡」也不重複', async () => {
+    let answer: (value: QueueUpdateRejected) => void = () => undefined;
+    const onUpdate = vi.fn<Update>(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { editor, rerender } = startEditing(onUpdate);
+    fireEvent.change(editor, { target: { value: '改過' } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    rerender([item('b', '另一句')]);
+    answer({ gone: true, unavailable: false, message: '這一件已經不在隊裡' });
+    await flush();
+    expect(screen.queryByRole('textbox', { name: '改這一則排著的訊息' })).toBeNull();
+    expect(toastSpy).toHaveBeenCalledTimes(1);
+    expect(toastSpy).toHaveBeenCalledWith(QUEUE_GONE_TEXT);
+  });
+});
+
+describe('刪除與錯誤', () => {
+  it('刪除送 remove；清單的新樣子等伺服器推', async () => {
+    const { onUpdate } = mount([item('a', '第一句')]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '刪除：第一句' }));
+    await flush();
+    expect(onUpdate).toHaveBeenCalledWith('a', { kind: 'remove' });
+    expect(screen.getByText('第一句')).toBeTruthy();
+  });
+
+  it('不在隊裡：講「可能已經開始跑了」，不是紅字錯誤', async () => {
+    mount([item('a', '第一句')], {
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: true,
+        unavailable: false,
+        message: '不在隊裡',
+      })),
+    });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '刪除：第一句' }));
+    await flush();
+    expect(toastSpy).toHaveBeenCalledWith(QUEUE_GONE_TEXT);
+    expect(toastSpy.error).not.toHaveBeenCalled();
+  });
+
+  it('別的失敗：toast.error 帶原因', async () => {
+    mount([item('a', '第一句')], {
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: false,
+        unavailable: false,
+        message: 'fetch failed',
+      })),
+    });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '刪除：第一句' }));
+    await flush();
+    expect(toastSpy.error).toHaveBeenCalledWith('刪不掉這一則', { description: 'fetch failed' });
+  });
+});
+
+describe('插話（#710）', () => {
+  it('每一列有插話鈕：跑著時按下去送 steer', async () => {
+    const { onUpdate } = mount([item('a', '第一句')]);
+    settle();
+    const button = screen.getByRole('button', { name: '插話：第一句' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(false);
+    fireEvent.click(button);
+    await flush();
+    expect(onUpdate).toHaveBeenCalledWith('a', { kind: 'steer' });
+  });
+
+  it.each(['idle', 'stopped', 'failed', 'awaiting-input'] as const)(
+    '這一輪不是跑著（%s）：鈕按不下去，說明講為什麼',
+    (status) => {
+      const { onUpdate } = mount([item('a', '第一句')], { status });
+      settle();
+      const button = screen.getByRole('button', { name: '插話：第一句' }) as HTMLButtonElement;
+      expect(button.disabled).toBe(true);
+      expect(button.getAttribute('title')).toBe('只有這一輪跑著時才能插話');
+      fireEvent.click(button);
+      expect(onUpdate).not.toHaveBeenCalled();
+    },
+  );
+
+  it('伺服器說不收了：一般 toast，不是紅字；那一則照舊排著', async () => {
+    mount([item('a', '第一句')], {
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: false,
+        unavailable: true,
+        message: '這一輪不收插話了',
+      })),
+    });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '插話：第一句' }));
+    await flush();
+    expect(toastSpy).toHaveBeenCalledWith('這一輪已經不收插話了，那一則照舊排著');
+    expect(toastSpy.error).not.toHaveBeenCalled();
+    expect(screen.getByText('第一句')).toBeTruthy();
+  });
+
+  it('那一件已經不在隊裡：講「可能已經開始跑了」', async () => {
+    mount([item('a', '第一句')], {
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: true,
+        unavailable: false,
+        message: '不在隊裡',
+      })),
+    });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '插話：第一句' }));
+    await flush();
+    expect(toastSpy).toHaveBeenCalledWith(QUEUE_GONE_TEXT);
+  });
+
+  it('別的失敗：toast.error 帶原因', async () => {
+    mount([item('a', '第一句')], {
+      onUpdate: vi.fn<Update>(async () => ({
+        gone: false,
+        unavailable: false,
+        message: 'fetch failed',
+      })),
+    });
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '插話：第一句' }));
+    await flush();
+    expect(toastSpy.error).toHaveBeenCalledWith('插話沒送出去，請再試一次', {
+      description: 'fetch failed',
+    });
+  });
+});
+
+describe('焦點', () => {
+  it('焦點所在那一列淡出：交給旁邊那一列', () => {
+    const { rerender } = mount([item('a', '一'), item('b', '二')]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    screen.getByRole('button', { name: '刪除：一' }).focus();
+    rerender([item('b', '二')]);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '刪除：二' }));
+  });
+
+  it('最後一列淡出：交出去，不掉到 body', () => {
+    const { rerender, onFocusFallback } = mount([item('a', '一')]);
+    settle();
+    screen.getByRole('button', { name: '刪除：一' }).focus();
+    rerender([]);
+    expect(onFocusFallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('焦點不在佇列裡：不搶', () => {
+    const { rerender, onFocusFallback } = mount([item('a', '一')]);
+    settle();
+    screen.getByRole('textbox', { name: '輸入框' }).focus();
+    rerender([]);
+    expect(onFocusFallback).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: '輸入框' }));
+  });
+});
+
+describe('背景子代理的結算通知（#851）', () => {
+  const notice: WireQueuedInput = {
+    id: 'n',
+    text: 'Background subagent finished. It left no closing message.',
+    source: { kind: 'subagent-settled' },
+  };
+
+  it('畫成中文一句，不照抄給模型的英文，也沒有編輯、刪除、插話', () => {
+    mount([notice]);
+    settle();
+    const dock = screen.getByTestId('queue-dock');
+    // 沒有原因（舊日誌）：中性的一句，不是「已完成」
+    expect(within(dock).getByText(SETTLED_NOTICE_UNKNOWN_TEXT)).toBeTruthy();
+    expect(within(dock).queryByText(SETTLED_NOTICE_TEXT.completed)).toBeNull();
+    expect(dock.textContent).not.toContain('Background subagent');
+    expect(within(dock).queryAllByRole('button')).toEqual([]);
+  });
+
+  it.each([
+    ['completed', '背景子代理已完成'],
+    ['aborted', '背景子代理已被停止'],
+    ['max-tokens', '背景子代理已達輸出上限，沒寫完'],
+    ['error', '背景子代理失敗了'],
+  ] as const)('帶原因 %s 時依原因畫那一句（#884）', (reason, text) => {
+    mount([{ ...notice, source: { kind: 'subagent-settled', reason } }]);
+    settle();
+    const dock = screen.getByTestId('queue-dock');
+    expect(within(dock).getByText(text)).toBeTruthy();
+    expect(dock.textContent).not.toContain('Background subagent');
+  });
+
+  it('跟人排的並排時：人的那一列照舊有鈕，通知那一列沒有，件數兩件都算', () => {
+    mount([item('a', '第一句'), notice]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    const dock = screen.getByTestId('queue-dock');
+    const rows = [...dock.querySelectorAll('[data-queue-item]')];
+    expect(rows.map((row) => row.hasAttribute('data-queue-readonly'))).toEqual([false, true]);
+    expect(within(rows[0] as HTMLElement).getAllByRole('button')).toHaveLength(3);
+    expect(within(rows[1] as HTMLElement).queryAllByRole('button')).toEqual([]);
+  });
+
+  it('背景子代理的來信（#861）：畫成中文一句，不照抄帶前綴的英文，也沒有鈕', () => {
+    mount([
+      {
+        id: 'm',
+        text: 'Agent root/bg-1 sent a message: 三個檔案看過了',
+        source: { kind: 'agent-message' },
+      },
+    ]);
+    settle();
+    const dock = screen.getByTestId('queue-dock');
+    expect(within(dock).getByText(AGENT_MESSAGE_QUEUED_TEXT)).toBeTruthy();
+    expect(dock.textContent).not.toContain('sent a message');
+    expect(within(dock).queryAllByRole('button')).toEqual([]);
+  });
+
+  it('人的那一列淡出、旁邊只剩通知：焦點交給輸入框，不落到沒有鈕的那一列', () => {
+    const { rerender, onFocusFallback } = mount([item('a', '一'), notice]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    screen.getByRole('button', { name: '刪除：一' }).focus();
+    rerender([notice]);
+    expect(onFocusFallback).toHaveBeenCalledTimes(1);
+  });
+});
+
+it('可近用：展開的兩件與編輯中都沒有 axe 違規', async () => {
+  vi.useRealTimers();
+  const { container } = mount([item('a', '一'), item('b', '二')]);
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, QUEUE_SETTLE_MS + 20));
+  });
+  fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+  expect(await axeViolations(container)).toEqual([]);
+  fireEvent.click(screen.getByRole('button', { name: '編輯：一' }));
+  expect(await axeViolations(container)).toEqual([]);
+});
+
+describe('排著的那一句帶附件（#732）', () => {
+  const withFiles = (id: string, text: string): WireQueuedInput => ({
+    ...item(id, text),
+    attachments: [
+      { type: 'file', attachmentId: 'sha256:f', name: 'note.txt', bytes: 55 },
+      {
+        type: 'image',
+        attachmentId: 'sha256:i',
+        mediaType: 'image/png',
+        bytes: 221,
+        width: 96,
+        height: 96,
+        name: 'red.png',
+      },
+    ],
+  });
+
+  it('有附件的一列多一個迴紋針與件數，名字在 aria-label 與 title；沒附件的列不畫', () => {
+    mount([withFiles('a', '看這個')]);
+    settle();
+    const badge = screen.getByTestId('queue-attachments');
+    expect(badge.textContent).toBe('2');
+    expect(badge.getAttribute('aria-label')).toBe('帶 2 個附件：note.txt、red.png');
+    expect(badge.getAttribute('title')).toBe('note.txt、red.png');
+    cleanup();
+    mount([item('b', '沒附件')]);
+    settle();
+    expect(screen.queryByTestId('queue-attachments')).toBeNull();
+  });
+
+  it('只有附件、沒有字：預覽寫附件的名字，不留空白列；操作鈕的名字也用它', () => {
+    mount([withFiles('a', '')]);
+    settle();
+    const row = document.querySelector('[data-queue-item="a"]') as HTMLElement;
+    expect(within(row).getByText('note.txt、red.png')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '刪除：note.txt、red.png' })).toBeTruthy();
+  });
+});
+
+describe('排著的那一句點名了子代理（#328 第 2 項）', () => {
+  const mentioned = (id: string, text: string): WireQueuedInput => ({
+    ...item(id, text),
+    mention: { kind: 'subagent', name: 'general-purpose' },
+  });
+
+  it('點名的一列有 chip「委派給 general-purpose」；沒點名的不畫', () => {
+    mount([mentioned('a', '整理 README')]);
+    settle();
+    const rowA = document.querySelector('[data-queue-item="a"]') as HTMLElement;
+    expect(within(rowA).getByTestId('delegated-chip').textContent).toBe('委派給 general-purpose');
+    cleanup();
+    mount([item('b', '一般的')]);
+    settle();
+    expect(screen.queryByTestId('delegated-chip')).toBeNull();
+  });
+
+  it('編輯時點名還畫在編輯框旁邊（編輯只改字，不動點名）', () => {
+    mount([mentioned('a', '整理 README')]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '編輯：整理 README' }));
+    const row = document.querySelector('[data-queue-item="a"]') as HTMLElement;
+    expect(within(row).getByLabelText('改這一則排著的訊息')).toBeTruthy();
+    expect(within(row).getByTestId('delegated-chip').textContent).toBe('委派給 general-purpose');
+  });
+
+  it('只有點名、沒有字的一列不留空白預覽', () => {
+    mount([mentioned('a', '')]);
+    settle();
+    const row = document.querySelector('[data-queue-item="a"]') as HTMLElement;
+    expect(within(row).getByTestId('delegated-chip')).toBeTruthy();
+  });
+});
+
+describe('目標續行的預約（#638）', () => {
+  const goal: WireQueuedInput = {
+    id: 'g',
+    text: 'Continue working toward the goal. (給模型的提示詞)',
+    source: { kind: 'goal' },
+  };
+  const rowOf = (id: string) => document.querySelector(`[data-queue-item="${id}"]`) as HTMLElement;
+
+  it('畫成「目標續行」，不照抄給模型的提示詞；有編輯、刪除，沒有插話鈕；後果寫在那一列上', () => {
+    mount([goal]);
+    settle();
+    const row = rowOf('g');
+    expect(row.getAttribute('data-queue-goal')).toBe('true');
+    expect(within(row).getByTestId('queue-goal-label').textContent).toBe(GOAL_CONTINUATION_TEXT);
+    expect(row.textContent).not.toContain('Continue working');
+    expect(within(row).getByTestId('queue-goal-warning').textContent).toBe(
+      GOAL_CONTINUATION_WARNING,
+    );
+    expect(row.querySelector('[data-queue-action="edit"]')).not.toBeNull();
+    expect(row.querySelector('[data-queue-action="remove"]')).not.toBeNull();
+    expect(row.querySelector('[data-queue-action="steer"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /插話/u })).toBeNull();
+  });
+
+  it('編輯、刪除鈕的名字與提示都帶著後果', () => {
+    mount([goal]);
+    settle();
+    const remove = screen.getByRole('button', {
+      name: `刪除：目標續行（${GOAL_CONTINUATION_WARNING}）`,
+    });
+    expect(remove.getAttribute('title')).toBe(`刪除（${GOAL_CONTINUATION_WARNING}）`);
+    const edit = screen.getByRole('button', {
+      name: `編輯：目標續行（${GOAL_CONTINUATION_WARNING}）`,
+    });
+    expect(edit.getAttribute('title')).toBe(`編輯（${GOAL_CONTINUATION_WARNING}）`);
+  });
+
+  it('人排的那一列照舊：沒有後果那句、有插話鈕；並排時各是各的', () => {
+    mount([item('a', '我說的'), goal]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    const human = rowOf('a');
+    expect(human.getAttribute('data-queue-goal')).toBeNull();
+    expect(within(human).queryByTestId('queue-goal-warning')).toBeNull();
+    expect(human.querySelector('[data-queue-action="steer"]')).not.toBeNull();
+    expect(rowOf('g').querySelector('[data-queue-action="steer"]')).toBeNull();
+  });
+
+  it('刪除照常送 remove；編輯時後果那句還在，存下送 edit', async () => {
+    const { onUpdate } = mount([goal]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: /^編輯：目標續行/u }));
+    expect(within(rowOf('g')).getByTestId('queue-goal-warning')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '取消編輯' }));
+    fireEvent.click(screen.getByRole('button', { name: /^刪除：目標續行/u }));
+    await flush();
+    expect(onUpdate).toHaveBeenCalledWith('g', { kind: 'remove' });
+  });
+
+  it('沒有無障礙違規', async () => {
+    mount([goal]);
+    settle();
+    vi.useRealTimers();
+    expect(await axeViolations(screen.getByTestId('queue-dock'))).toEqual([]);
+  });
+});
+
+describe('不認得來源的佇列件（#1247）', () => {
+  const future: WireQueuedInput = {
+    id: 'f',
+    text: 'internal instruction for the model',
+    source: { kind: 'unrecognized', original: 'future-kind' },
+  };
+  const rowOf = (id: string) => document.querySelector(`[data-queue-item="${id}"]`) as HTMLElement;
+
+  it('畫成通用標籤，不照抄文字；來源種類在提示文字裡；有編輯、刪除，沒有插話鈕，也沒有暫停目標那句', () => {
+    mount([future]);
+    settle();
+    const row = rowOf('f');
+    expect(row.getAttribute('data-queue-generic')).toBe('true');
+    const label = within(row).getByTestId('queue-generic-label');
+    expect(label.textContent).toBe(UNRECOGNIZED_SOURCE_TEXT);
+    expect(label.getAttribute('title')).toBe(`${UNRECOGNIZED_SOURCE_TEXT}（來源：future-kind）`);
+    expect(row.textContent).not.toContain('internal instruction');
+    expect(row.querySelector('[data-queue-action="edit"]')).not.toBeNull();
+    expect(row.querySelector('[data-queue-action="remove"]')).not.toBeNull();
+    expect(row.querySelector('[data-queue-action="steer"]')).toBeNull();
+    expect(within(row).queryByTestId('queue-goal-warning')).toBeNull();
+    expect(row.getAttribute('data-queue-goal')).toBeNull();
+  });
+
+  it('跟人排的並排：人的那列照舊有插話鈕，件數兩件都算', () => {
+    mount([item('a', '我說的'), future]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    expect(rowOf('a').querySelector('[data-queue-action="steer"]')).not.toBeNull();
+    expect(rowOf('f').querySelector('[data-queue-action="steer"]')).toBeNull();
+  });
+});

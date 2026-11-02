@@ -1,0 +1,188 @@
+{
+  "id": "2310.12823",
+  "title": "AgentTuning: Enabling Generalized Agent Abilities for LLMs",
+  "topic": "T4",
+  "subarea": "軌跡的格式、收集與合成（含以軌跡訓練 agent）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "用 GPT-4 在六個 agent 環境中 rollout、以最終 reward 只留成功軌跡，做出 1,866 條 ReAct 格式的互動軌跡資料集 AgentInstruct，再與 ShareGPT 一般對話以 2:8 混合微調 Llama-2-chat，得到 AgentLM-7B／13B／70B。",
+  "problem": "2023 年的開源 LLM（Llama 2、Vicuna）在 AgentBench 這類多輪、要與環境互動的 agent 任務上遠落後 GPT-3.5／GPT-4，許多任務接近零分。既有工作多半是替單一任務設計提示詞或框架（ReAct、RCI、ReWOO），或用單一任務的資料微調（Mind2Web、ToolLLM）；前者沒有提升模型本身，後者容易犧牲一般能力與跨任務泛化。作者要回答：能不能用少量「互動軌跡」資料，讓開源模型的 agent 能力在沒看過的任務上也提升，同時不損失 MMLU、GSM8K、HumanEval 這類一般能力。這件事重要，是因為 agent 研究若只能依賴封閉 API，社群就無法在模型層面研究或改進 agent 行為。",
+  "core_idea": "把 agent 的一次執行當成一段多輪對話資料：環境回饋放在使用者回合，模型回合是 ReAct 的 Thought＋Action，整條軌跡附一個最終 reward。用強教師（GPT-4）在有自動評分的環境中大量 rollout，只保留 reward 滿分的軌跡（拒絕取樣），沒有訓練集的任務則用「從既有資料集反推」與「self-instruct 出題並附可執行驗證器」補出指令。訓練時不單獨用 agent 資料，而是與一般指令資料按比例混合，作者認為一般能力（規劃、推理）是 agent 能力能泛化的前提。",
+  "method": {
+    "軌跡資料格式": [
+      "一條軌跡記為對話歷史 (u1, a1, …, un, an)：u 是「使用者」角色的輸入（任務指令、環境回饋），a 是模型回覆；每條軌跡附一個最終 reward r∈[0,1]，代表任務完成程度（§2）。",
+      "模型回覆採 ReAct：每個 action 前先有一段 thought（CoT 理由）。Task Derivation 產生、原本沒有 thought 的軌跡，由 GPT-4 事後補寫 thought，讓格式一致（§2.1.2）。",
+      "所有資料照 Vicuna 標準化成多輪 chatbot 格式，以便與 ShareGPT 混合；附錄 C.2 的範例是 conversations 陣列，每則有 from（human／gpt）與 value 欄位，開頭是一則說明輸出格式的 human 訊息加一則 gpt 回覆「Ok.」。"
+    ],
+    "階段一：指令建構（§2.1.1）": [
+      "有訓練集的任務（ALFWorld、WebShop、Mind2Web、Knowledge Graph）直接用 train split 的指令。",
+      "Database 的 Task Derivation（來源是只有 SELECT 的 BIRD）有兩種做法。(a) 直接合成軌跡：用 BIRD 的問題與參考 SQL 組成一條軌跡，實際執行參考 SQL，把資料庫輸出當成 agent 提交的答案，再請 GPT-4 補上 thought；這種軌跡的輪數固定為 2。(b) 為了多樣性改成只建指令：把 BIRD 的問題交給 GPT-4 與資料庫互動，之後執行參考 SQL 比對結果，只留答對的軌跡。",
+      "補寫 thought 的提示詞（附錄 C.2.1）：輸入是一段 human／AI 的資料庫對話紀錄與一段 evidence 提示，要求 GPT-4 以 JSON 輸出 thought_1、thought_2 等欄位，要逐步推理、把 evidence 寫進 thought、保持簡短；提示中附兩個完整範例。",
+      "Operating System 的 Self-Instruct：請 GPT-4 扮演作業系統助教出 Linux 題目，一次產出題目描述、解說、初始化 bash 腳本、參考解腳本，以及評估方式（exact_match、以 exit code 判定的 bash_script、integer_match、size_match、string_match 五選一）。提示要求題目要鼓勵多輪 shell 互動、不能寫成「寫一個 bash 腳本」、檔名與目錄要寫明（附錄 C.1.2）。另一個 GPT-4 實例當 solver 互動；完成後執行參考解，用評估腳本比對，兩者一致才收。",
+      "Database 的 INSERT／UPDATE／DELETE 也用 self-instruct：請 GPT-4 以 JSON 產出任務描述、標準答案 SQL（label）、資料表（表名、欄位名與型別、資料列）、操作類型與表格說明，並要求主題與人名要多樣（附錄 C.1.1）。",
+      "作者承認這兩種做法可能造成測試資料洩漏，另以附錄 B 的汙染分析回應。"
+    ],
+    "階段二：軌跡互動（§2.1.2）": [
+      "教師：gpt-4-0613；Mind2Web 因為指令太多、預算有限，部分改用 gpt-3.5-turbo-0613。",
+      "沿用 AgentBench 的 1-shot 設定（agent 任務對輸出格式要求嚴格）：先給任務描述與一個取自訓練集的完整成功範例，接著每一步給當前指令與必要資訊，模型依先前回饋產生 thought 再給 action，環境回傳變化或新資訊，循環到達成目標或用完 token 上限為止。",
+      "harness 規則一：模型連續三次輸出相同內容，判為重複失敗。",
+      "harness 規則二：輸出格式錯誤時，用 BLEU 把它和所有合法動作比對，取最接近的當作這一步的動作。",
+      "各任務的互動提示詞在附錄 D（例如 ALFWorld 要求 THOUGHT／ACTION 格式、WebShop 只能用 search[…] 與 click[…]、KG 提供 get_relations 等 7 個函式且最多 15 步、OS 只能用 bash／finish／answer 三種動作）。"
+    ],
+    "階段三：軌跡過濾（§2.1.3）": [
+      "依每條軌跡的最終 reward 自動篩選：除了 Mind2Web，其餘都只留 r=1（完全正確）。",
+      "Mind2Web 太難，門檻放寬到 r≥2/3，才湊得到足夠軌跡。Mind2Web 的評估採 teacher forcing，把完整軌跡拆成單步，所以它的軌跡長度一律是 1。"
+    ],
+    "資料規模（Table 1）": "35,341 條指令，過濾後剩 1,866 條軌跡（5.29%），平均 5.24 輪。逐任務是指令數→軌跡數（保留率，平均輪數）：ALFWorld 954→336（35.2%，13.52）、WebShop 1,485→351（23.6%，3.68）、Mind2Web 23,378→122（0.52%，1）、KG 2,501→324（13.0%，6.04）、OS self-instruct 647→195（30.1%，3.85）、DB self-instruct 1,074→178（16.6%，2.13）、DB task derivation 5,302→360（6.79%，2.03）。",
+    "混合訓練（§2.2）": [
+      "一般資料：ShareGPT（Hugging Face 上的 ShareGPT_Vicuna_unfiltered），只留英文對話，得 GPT-3.5 對話 57,096 則、GPT-4 對話 3,670 則；GPT-4 與 GPT-3.5 的取樣比 1:4（附錄 A 寫成 0.2 與 0.8）。",
+      "目標函數（Eq.1）：η 乘上 AgentInstruct 的 log-likelihood 期望值，加上 (1−η) 乘上一般資料的 log-likelihood 期望值；η 是 AgentInstruct 的取樣比例。",
+      "η 的選法：在 7B 上從 0 到 1、每隔 0.1 掃一次，挑 held-out 任務表現最好的 η=0.2，13B 與 70B 直接沿用。",
+      "loss 只算在模型輸出（assistant 回合）上，也就是軌跡中所有的 Thought＋Action 回合。"
+    ],
+    "訓練超參數（§2.2.3、附錄 A）": "底座是 Llama-2-{7,13,70}b-chat（因為指令遵循比 base 版好）；框架為 Megatron-LM；峰值學習率 7B／13B 是 5e-5、70B 是 1e-5；batch size 64；序列長度 4,096；AdamW（β1 0.9、β2 0.95、ε 1e-8）；weight decay 0.1；梯度裁切 1.0；cosine 衰減、warm-up 2%、decay ratio 0.9；hidden dropout 0.05、attention dropout 0；7B／13B 用 tensor parallelism，70B 再加 pipeline parallelism。",
+    "評估設定（§3.1）": [
+      "6 個 held-in 任務（與訓練同源的 AgentBench 任務）、6 個 held-out 任務（SciWorld、MiniWoB++、WebArena、HotpotQA、ReWOO、Digital Card Game），以及 4 個一般任務。",
+      "照 AgentBench，對話歷史超過模型長度就截斷；多數任務用 greedy decoding，WebArena 用 nucleus sampling（p=0.9）。",
+      "Overall 分數：每個任務的分數先除以所有受評模型在該任務的平均分（正規化成平均 1），再依 Table 3 的權重加權平均，避免 ReWOO 這類高分任務蓋過 WebArena 這類低分任務。",
+      "錯誤分析（§3.3）：在 ALFWorld、WebShop、KG 三個 held-in 任務上，用規則式方法把失敗軌跡依「第一個錯誤的類型」歸類（例如無效動作、重複生成）；一條失敗軌跡可能計入多個類型。"
+    ],
+    "論文未給、重現需查 repo 的部分": "訓練的 epoch 數或總步數；BLEU 替換後，存進訓練資料的是模型原始輸出還是替換後的動作；訓練樣本有沒有保留 1-shot 範例；Mind2Web 的 reward r 由哪些分項組成（2/3 門檻對應什麼）；錯誤分類的具體規則與各類比例的數值（正文只有 Figure 3 圖示）。"
+  },
+  "assumptions": [
+    "教師模型（GPT-4）在這些環境中能產出足夠多的成功軌跡，而且最終 reward 滿分就代表每一步都值得模仿。",
+    "環境能自動算出最終 reward，或者有可執行的參考解與評估腳本，過濾才能完全不靠人工。",
+    "只模仿成功軌跡（behavior cloning）就學得到 agent 能力，不需要失敗樣本、負樣本或強化學習。",
+    "GPT-4 自己出的題目與參考解是對的；solver 的答案與參考解一致就代表答對（兩者可能一起錯）。",
+    "一般對話資料是 agent 泛化的必要成分，而且在 7B 上選出的 η=0.2 可以直接搬到 13B 與 70B。",
+    "held-out 任務與訓練任務差得夠遠，足以代表「沒看過的 agent 任務」。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "held-in（AgentBench 版本）：ALFWorld、WebShop、Mind2Web、Knowledge Graph、Operating System、Database",
+      "held-out：SciWorld、MiniWoB++、WebArena、HotpotQA、ReWOO、Digital Card Game（AgentBench）",
+      "一般能力：MMLU（5-shot）、GSM8K（8-shot）、HumanEval、MT-Bench"
+    ],
+    "metrics": [
+      "Success Rate：ALFWorld、OS、Database、MiniWoB++、WebArena、ReWOO、Digital Card Game",
+      "Reward：WebShop、SciWorld、HotpotQA",
+      "Step SR：Mind2Web",
+      "F1：Knowledge Graph",
+      "Overall：各任務分數依受評模型平均正規化後加權平均（held-in、held-out、general 各一個）",
+      "錯誤分析：失敗軌跡中各「第一個錯誤類型」的比例"
+    ],
+    "baselines": [
+      "GPT-3.5（gpt-3.5-turbo-0613）、GPT-4（gpt-4-0613）",
+      "Llama-2-{7,13,70}b-chat（未微調的底座）",
+      "消融：只用一般資料（general only）、只用 agent 資料（agent only）、用未過濾軌跡訓練（7B）、只用單一任務的軌跡訓練（7B）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "AgentInstruct 的規模很小：六個任務、1,866 條經過驗證的成功軌跡，每個動作前都附 CoT 理由；它是從 35,341 條指令中以 reward 篩出的極小子集",
+      "numbers": "35,341 條指令→1,866 條軌跡（保留率 5.29%），平均 5.24 輪；Mind2Web 保留率只有 0.52%，ALFWorld 最高 35.2%",
+      "section": "§1、§2.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "以 reward 過濾軌跡有明顯效果：7B 用未過濾軌跡訓練，held-in 與 held-out 都顯著較差",
+      "numbers": "Overall（7B）：過濾後 held-in 1.96、held-out 0.65；未過濾 held-in 1.34、held-out 0.47。論文沒交代未過濾組的軌跡數量，也沒說是否同樣混了 ShareGPT",
+      "section": "§2.1.3、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "held-in 任務上，AgentLM 從接近零分提升到接近 GPT-4；在分布內的幾個任務上甚至超過 GPT-4",
+      "numbers": "held-in Overall：Llama-2-70B 0.27→AgentLM-70B 2.55（GPT-4 2.75、GPT-3.5 1.59）；ALFWorld 70B 86.0 對 GPT-4 78.0；WebShop 13B 70.8 對 GPT-4 58.6；Database 70B 37.7 對 GPT-4 33.7；Mind2Web 70B 13.5 仍低於 GPT-4 的 22.6",
+      "section": "§3.2、Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "held-out 任務上，AgentLM-70B 接近 GPT-3.5；相對未微調的 Llama-2-chat，70B 的提升遠大於 7B",
+      "numbers": "held-out Overall：7B 0.38→0.67（+76%）、13B 0.49→0.78（+57%）、70B 0.51→1.40（+176%）；GPT-3.5 1.49、GPT-4 2.13。正文寫「最多達 170%」，與表格的 +176% 不一致",
+      "section": "§3.2、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "歸因：在 7B／13B，held-out 的提升幾乎全部來自一般資料（ShareGPT），AgentInstruct 軌跡的淨貢獻只有在 70B 看得到",
+      "numbers": "held-out Overall，混合訓練對只用一般資料：7B 0.67 對 0.64、13B 0.78 對 0.81（混合反而較低）、70B 1.40 對 0.98",
+      "section": "§3.4、Table 5",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "只用 agent 軌跡訓練，held-in 大幅提升，但 held-out 與一般能力崩掉；混入一般資料才兼顧",
+      "numbers": "agent only 的 held-in／held-out／general：7B 1.34／0.09／0.22、13B 1.57／0.10／0.19、70B 2.47／0.87／0.83；混合訓練 7B 1.96／0.67／0.63、70B 2.55／1.40／0.96",
+      "section": "§2.2.2、§3.4、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "一般能力的 Overall 與 Llama-2-chat 大致持平，但個別指標有升有降",
+      "numbers": "general Overall：7B 0.62 對 0.63（−1%）、13B 0.69 對 0.74（−7%）、70B 0.96 對 0.95（+1%）。70B 的 MMLU 62.1→59.5、HumanEval 30.8→28.7，GSM8K 54.7→59.7、MT-Bench 6.85→7.26",
+      "section": "§3.2、Table 4",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "錯誤分析顯示，Llama-2 的失敗多半是重複、無效動作、拒答等基本錯誤，AgentTuning 明顯減少這類錯誤",
+      "numbers": "只做 ALFWorld、WebShop、KG 三個 held-in 任務，依失敗軌跡的第一個錯誤類型分類；比例只有 Figure 3(a) 圖示，正文沒有數字",
+      "section": "§3.3、Figure 3(a)",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "task derivation 與 self-instruct 可能造成測試資料洩漏（GPT-4 產出與測試集相同的指令，或測試任務與反推來源是同一資料集）；作者以附錄 B 的 10-gram 汙染分析回應，結論是沒有證據（§2.1.1、附錄 B）。",
+    "附錄 B 承認 OS、DB 的汙染率較高，ALFWorld 有 6 題 dirty，WebShop 汙染率達 47.18%，但把原因分別歸於程式碼關鍵字、ALFWorld 的範本式任務，以及 WebShop 的價格限制句型。",
+    "Mind2Web 太難，只能把門檻放寬到 r≥2/3，而且因為預算部分改用 GPT-3.5 收集（§2.1.2、§2.1.3）。",
+    "只用 agent 資料訓練，在沒看過的任務上反而較差（§2.2.2、§3.4）。",
+    "7B／13B 在 held-out 上從混合訓練得到的提升，和只用一般資料幾乎一樣；作者推測要到一定模型規模才能泛化（§3.4）。",
+    "Mind2Web 幾乎不幫助其他任務，作者推測是它的單輪格式和其他多輪任務不同（§3.4）。"
+  ],
+  "limitations_observed": [
+    "held-out 同時是模型選擇集：η 是依 held-out 表現挑出來的（§2.2.2），所以 held-out 分數不是乾淨的泛化估計；而且只在 7B 掃 η，13B 與 70B 直接沿用，沒有證據說明 0.2 在大模型上也最好。",
+    "標題與摘要的「泛化的 agent 能力」主要不是軌跡資料帶來的。Table 4 的 +76%／+57% 比的是未微調的 Llama-2-chat，把 ShareGPT SFT 的效果也算給了 AgentTuning：7B 只用一般資料就從 0.38 升到 0.64（混合是 0.67），13B 只用一般資料的 0.81 甚至高於混合的 0.78。軌跡資料對 held-out 的淨貢獻只在 70B 看得到（0.98→1.40），而全文都是單次訓練、沒有種子變異或信賴區間，7B 的 0.03 差距無法判斷是不是雜訊。",
+    "過濾消融（Table 2）的條件沒交代：沒說未過濾組有多少條軌跡、有沒有同樣混 ShareGPT。未過濾組的 held-in 1.34 與 Table 5「只用 agent 資料」的 1.34 完全相同，過濾組的 held-out 0.65 又和 Table 5 AgentLM-7B 的 0.67 對不上。另外，未過濾組含 reward<1 的失敗軌跡，模型是在模仿失敗行為；這個消融混淆了「資料量」與「學到錯誤示範」，撐不起「品質勝於數量」這個一般性結論。",
+    "只留 r=1 會系統性偏向教師本來就會的實例：整體保留率 5.29%，Mind2Web 0.52%、DB task derivation 6.79%。失敗步驟與出錯後的恢復行為全被丟掉，而這正是 T4 失敗歸因與 T5 自我修正最需要的資料。結果 reward 滿分也不保證每一步都好，成功軌跡裡的冗餘或無效動作照樣會被模仿。",
+    "BLEU 替換造成軌跡文字與實際動作可能不一致：格式錯的輸出由 harness 對映成最接近的合法動作，但論文沒說訓練資料存的是原文還是替換後的動作。存原文，模型就會學到錯誤格式；存替換版，thought 與 action 就可能對不上。",
+    "汙染分析只做 held-in，而且只數 dirty（>80%）：WebShop 200 題中 clean 3 題、dirty 1 題，其餘 196 題落在 20–80% 的灰色地帶；OS 144 題中有 49 題在灰色地帶。ALFWorld 50 題有 6 題 dirty，恰好是 AgentLM 勝過 GPT-4 的那一格（7B 84、70B 86 對 GPT-4 的 78；13B 只有 76，規模與分數並不單調），6 題就等於 12 個百分點。held-out 完全沒做汙染分析。",
+    "held-in 的「超過 GPT-4」是分布內微調對 1-shot 提示的比較：ALFWorld、WebShop 的訓練指令直接取自同一資料集的 train split，教師又正是 GPT-4。學生在 ALFWorld 超過教師，反映的是分布內模仿加上只留成功樣本，不代表能力超越。",
+    "「沒看過的任務」只到任務層級，不到領域層級：MiniWoB++、WebArena 與訓練中的 WebShop、Mind2Web 同屬網頁操作，HotpotQA 的 ReAct 工具呼叫也與 KG 相近。而且 WebArena 上 AgentLM-7B（0.74）反而低於 Llama-2-7B（1.23），HotpotQA 的 7B 也小幅下降（22.6→22.3），泛化並不一致。",
+    "「不損一般能力」是正規化總分下的結論：13B 的 general Overall 降 7%（GSM8K 37.5→32.4、HumanEval 18.4→14.8），70B 的 MMLU 與 HumanEval 也都下降，只是被 GSM8K 與 MT-Bench 的上升抵銷。Overall 又是對「本次受評模型集合」正規化，換一組模型分數就變，不能跨論文比較。",
+    "錯誤分析很薄：只做 3 個 held-in 任務、用規則分類、只記第一個錯誤、只有圖沒有數字。作者把「格式錯誤減少」解讀成喚醒了 agent 能力，但訓練軌跡與評估用的是同一套 AgentBench 提示格式（附錄 D），同樣的現象也可以只是學會了輸出格式。",
+    "重現缺件：超參數表沒有 epoch 或總步數；Eq.1 是 log-likelihood 的加權期望值，正文卻說要把它最小化，符號與文字矛盾；錯誤分類規則與 Mind2Web 的 reward 組成也沒公開。",
+    "「第一個以多個 agent 任務的互動軌跡做指令微調」的說法要打折：FireAct（arXiv:2310.05915，2023-10-09 上傳；本篇是 2023-10-19，晚 10 天）已經用 GPT-4 軌跡微調 Llama-2 做 agent，只是任務集中在搜尋式 QA；本篇沒有引用它。"
+  ],
+  "framework_role": "T4「軌跡當訓練資料」的原型管線。它先定義軌跡這個資料物件：一段多輪對話，環境回饋放在使用者回合，模型回合是 Thought＋Action，整條附一個最終 reward。再給出完整流程：收集（強教師在真實環境 rollout，加上重複三次判失敗、BLEU 對映非法輸出兩條 harness 規則）、合成（從既有資料集反推軌跡並補寫 thought；self-instruct 出題時連同可執行的參考解與評估腳本一起產生，當作驗證器）、過濾（以結果 reward 為門檻）、消費（與一般對話資料按比例混合做 SFT）。從框架角度看，它等於把 T8 的任務完成分數當成 T4 資料集的篩選器。§3.3 依第一個錯誤類型分類失敗軌跡，是 T4 失敗分類的最陽春版本，沒有步驟層級的歸因，也沒有 process reward。對本框架的直接用途：如果要用自家 agent 的執行紀錄訓練或蒸餾模型，這篇給了最低限度的配方，以及兩個可重用的教訓（要過濾、要混一般資料）。但它只收成功軌跡，對異常偵測與自我修正（E3、T5）沒有提供資料，也沒有機制。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "智譜的 ChatGLM 技術報告（廠商自家技術報告，arXiv:2406.12793，https://arxiv.org/abs/2406.12793）在「ChatGLM Techniques」一節把 AgentTuning（連同 AgentInstruct 資料集）列為 ChatGLM 開發過程中引入的技術之一，並寫明 GLM-4 與 GLM-4 All Tools 是用上列技術訓練與對齊的。本篇作者 Aohan Zeng、Xiao Liu 標註智譜（Zhipu.AI）所屬，論文腳註也說部分工作是在智譜實習期間完成。",
+      "作者公開了 AgentInstruct 與 AgentLM-7B／13B／70B（https://huggingface.co/datasets/THUDM/AgentInstruct、https://github.com/THUDM/AgentTuning）。Hugging Face 上標註以這個資料集訓練的模型有 52 個（https://huggingface.co/models?dataset=dataset:THUDM/AgentInstruct，2026-09-26 查），多數是 AgentLM 的量化版與個人或社群的微調，屬於開源重用，不是商用。"
+    ],
+    "assessment": "唯一的商用線索是作者所屬公司的自家技術報告，措辭只是概括性地說 GLM-4 以上列技術訓練，沒有交代 AgentInstruct 或這套混合配方在 GLM-4 中用到什麼程度，也沒有獨立來源佐證，屬於弱到中等的證據。第三方企業在產品中採用：未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/THUDM/AgentTuning",
+    "data": "AgentInstruct（1,866 條軌跡）與 AgentLM-7B／13B／70B 權重已公開於 Hugging Face；一般資料用的 ShareGPT_Vicuna_unfiltered 是第三方上傳的資料集。訓練步數或 epoch 未公開，BLEU 替換後存哪一版也沒交代，完全重現訓練需要查 repo。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T4「以軌跡訓練 agent」子題的原型管線與最常被拿來比較的公開軌跡資料集，過濾與混合兩個消融至今仍是做法依據；但 7B／13B 的 held-out 泛化多半來自 ShareGPT，該拿的是管線，不是數字。",
+  "related": [
+    "2308.03688",
+    "2210.03629",
+    "2212.10560",
+    "2305.03111",
+    "2306.06070",
+    "2307.13854",
+    "2207.01206",
+    "2010.03768",
+    "2203.07540",
+    "2303.17491",
+    "2305.18323",
+    "2307.16789",
+    "2307.09288",
+    "2309.11235"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -5,17 +5,21 @@
  * **表的內容照 nexus 實際的工具名**（deepagents 基座＋各 plugin 匯出的 `*_TOOL_NAME`），不是 dsh 的。
  *
  * **這一份只管參數，不管輸出**：結果文字（`ToolEntry.text`）怎麼畫在 `lib/tool-output.ts`，寫檔／改檔的 diff 在
- * `lib/tool-diff.ts`（[#601](https://github.com/DemianLi/nexus-agent/issues/601)）。
+ * `lib/tool-diff.ts`（[#601](https://github.com/DemianLi/nexus-agent/issues/601)），讀檔卡與搜尋卡在
+ * `lib/tool-result-card.ts`（[#625](https://github.com/DemianLi/nexus-agent/issues/625)）。
  *
  * **`execute` 還沒有終端卡**：dsh 有（`terminal-card-model.ts`，解析結果結尾的 exit code），但今天產品路徑上的
  * backend 都沒有 shell，基座不註冊 `execute`（`apps/harness/src/base-tools.ts`）。sandbox backend 註冊它的那天要補
- * 終端卡；`tool-view.test.ts` 有一條讀 harness 用哪些 backend 的絆索，會在那時紅。
+ * 終端卡；絆索在 harness：`apps/harness/src/execute-not-bound.test.ts` 經產品組裝量模型實際綁到的工具，`execute` 一出現就紅
+ * （#666，原本這裡有一組讀 harness 原始碼的，已搬走）。
  *
  * 新增工具時在 {@link TOOL_VARIANTS}（或 {@link TOOL_TITLES}）加一列；`tool-view.test.ts` 列著每一個實際工具名，
  * 漏了會紅。
  *
  * @module
  */
+
+import { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL } from '@/lib/sandbox-escalation';
 
 /** 工具卡的呈現類別。 */
 export type ToolVariant = 'search' | 'read' | 'bash' | 'write' | 'edit' | 'code' | 'others';
@@ -34,9 +38,12 @@ export const VARIANT_TITLE: Record<ToolVariant, string> = {
 /**
  * 認得的工具名 → 類別。`others` 不用列：查不到就是它。
  *
- * - 基座（deepagents 1.13）：`ls`、`read_file`、`write_file`、`edit_file`、`glob`、`grep`、`execute`、`task`。
+ * - 基座（deepagents 1.13）：`ls`、`read_file`、`write_file`、`edit_file`、`delete`、`glob`、`grep`、`execute`、`task`。
  * - `@nexus/plugin-quickjs`：`run_javascript`。
- * - 標題表另含 `apps/harness` 的 `request_sandbox_escalation`。
+ * - 委派子代理的 `subagent`（預設關，開了之後模型視野裡取代 `task`）：標題表有，同 `task`。
+ * - 背景子代理的三顆管理工具 `list_agents`、`interrupt_agent`、`send_message`（名字照 dsh，#737）：純文字結果，標題表有，不做專屬卡。
+ * - 子代理選模型的 `list_subagent_models`（有政策才有，#877）：同上，純文字、只有標題。
+ * - 標題表另含 `@nexus/plugin-sandbox-policy` 的 `request_sandbox_escalation`。
  */
 const TOOL_VARIANTS: Readonly<Record<string, ToolVariant>> = {
   ls: 'read',
@@ -55,7 +62,14 @@ const TOOL_VARIANTS: Readonly<Record<string, ToolVariant>> = {
  */
 const TOOL_TITLES: Readonly<Record<string, string>> = {
   echo: '回聲',
+  // 刪檔不能復原（基座的工具說明寫明），標題不能是一句「工具」；參數只有 `file_path`，摘要退到第一個字串值就是它（#672）。
+  delete: '刪除檔案',
   task: '委派子代理',
+  subagent: '委派子代理',
+  list_agents: '列出子代理',
+  interrupt_agent: '停止子代理',
+  send_message: '傳訊給子代理',
+  list_subagent_models: '列出可選的子代理模型',
   todo_write: '更新待辦',
   create_goal: '設定目標',
   get_goal: '查看目標',
@@ -64,7 +78,8 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
   ask_user_question: '提問',
   // #441：harness 那半還沒合；工具名照 dsh `tool-present`，合進來時 `tool-view.test.ts` 會從原始碼讀到它。
   present: '交付檔案',
-  request_sandbox_escalation: '申請放寬沙箱',
+  // 同核准面板的名稱（#1292）：同一件事只有一種說法，改字只改 `lib/sandbox-escalation.ts`。
+  [SANDBOX_ESCALATION_TOOL]: ESCALATION_TITLE,
   submit_record: '提交紀錄',
 };
 
@@ -101,9 +116,25 @@ function parseArgs(input: string): unknown {
   }
 }
 
+/**
+ * 收合那一行摘要最多留幾個字元。那一格靠 CSS 省略號截成一行，寬螢幕也只排得下一兩百字，
+ * 但整串字都進了 DOM：一個 527KB 的單行參數就是 527KB 的文字要排版（#958）。
+ */
+export const SUMMARY_MAX_CHARS = 500;
+
+/** 摘要用的第一行：多半是參數裡挑出來的字串，或失敗的錯誤文字；超過 {@link SUMMARY_MAX_CHARS} 的尾巴換成「…」。 */
 function firstLine(text: string): string {
   const newline = text.indexOf('\n');
-  return newline === -1 ? text : text.slice(0, newline);
+  const line = newline === -1 ? text : text.slice(0, newline);
+  if (line.length <= SUMMARY_MAX_CHARS) return line;
+  const end = isHighSurrogate(line.charCodeAt(SUMMARY_MAX_CHARS - 1))
+    ? SUMMARY_MAX_CHARS - 1
+    : SUMMARY_MAX_CHARS;
+  return `${line.slice(0, end)}…`;
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
 }
 
 /** 收合時那一行的摘要。挑不到欄位就拿第一個字串值，再不行就是參數原文的第一行。 */
@@ -120,6 +151,14 @@ export function toolSummary(name: string, input: string): string {
   }
   return firstLine(input);
 }
+
+/**
+ * 展開後參數最多畫幾個字元，多的收在中間（#958）。參數是 JSON 時整串字串值是一行（換行被跳脫成 `\\n`），
+ * 位元組或行數的上限擋不住畫面。20,000 來自實測（headless Chrome、`serve` 假模型，527KB 的單筆參數，
+ * 切開的兩塊畫純文字）：參數很小時點開約 49ms 是底；上限 10,000、20,000 時各種形狀都貼著底，最壞的不含空白連續中文
+ * 20,000 時 79ms、沒有長任務；40,000 時同一形狀 385ms，80,000 時 800ms。跟結果的 `OUTPUT_MAX_CHARS` 同一個值。
+ */
+export const INPUT_MAX_CHARS = 20_000;
 
 /** 展開後的參數：`code` 類直接是那段程式、`bash` 類是那行指令，其他是排好的 JSON（照 dsh `formatToolBody`）。 */
 export function toolInputBody(

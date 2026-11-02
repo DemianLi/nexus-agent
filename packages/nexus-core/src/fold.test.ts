@@ -11,19 +11,40 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
+import { APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME } from './approval-policy-prompt.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
+import { EventBus } from './events.js';
+import { TOOL_BARRIER_MIDDLEWARE_NAME } from './tool-barrier.js';
+import {
+  TOOL_EXECUTE_MIDDLEWARE_NAME,
+  TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
+  TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
+} from './tool-pipeline.js';
 import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
+import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
+import { MAX_TOKENS_MIDDLEWARE_NAME } from './max-tokens.js';
 import { OBSERVATION_POLICY_MIDDLEWARE_NAME, observationPolicyPlugin } from './observation.js';
 import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+import {
+  MODEL_SELECTION_MIDDLEWARE_NAME,
+  ModelSelectionController,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+} from './model-selection.js';
+import { REQUEST_SNAPSHOT_MIDDLEWARE_NAME } from './request-snapshot.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
+import { SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME } from './subagent-tool-filter.js';
+import { SPILL_POLICY_MIDDLEWARE_NAME } from './spill-policy.js';
+import { SEARCH_OVERFLOW_MIDDLEWARE_NAME } from './search-overflow.js';
+import { STEP_INBOX_MIDDLEWARE_NAME } from './step-inbox.js';
 import {
   TURN_CANCEL_MIDDLEWARE_NAME,
   TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
 } from './turn-cancel.js';
+import { EMPTY_RESPONSE_MIDDLEWARE_NAME } from './empty-response.js';
 import { MODEL_USAGE_MIDDLEWARE_NAME, modelUsagePlugin } from './model-usage.js';
 import {
   SESSION_CHECKPOINT_MIDDLEWARE_NAME,
@@ -41,10 +62,21 @@ import {
 } from './summarization.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, toolResultPrunerPlugin } from './tool-result-pruner.js';
 import type { FoldOptions } from './fold.js';
+import { createFsService } from './fs-service.js';
+import { WORKSPACE_CAPABILITY } from './sandbox.js';
+import { createHostServicesPlugin } from './host-services.js';
 import { loadPlugins } from './load.js';
+import { createRegistry } from './registry.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
 import type { PluginEntry } from './plugin.js';
 import { toolErrorOf } from './tool-events.js';
+
+/**
+ * 摘要那格關掉時的空殼長相：同名、只有一個 `wrapModelCall`（照日誌換上記過的剪法與參數截斷，#1567），沒有 `stateSchema`、
+ * 也沒有會變成圖節點的鉤子。真的摘要器鍵比這多，所以拿鍵集合就分得出兩者。
+ */
+const RECORDED_SHELL_KEYS = ['name', 'wrapModelCall'];
+const keysOf = (middleware: unknown): string[] => Object.keys(middleware as object).sort();
 
 /**
  * 樁回的東西：模型看到的字、狀態與碼。**樁是錯誤、不帶碼**（#273）——dsh 沒有 root-only 旗標，
@@ -164,18 +196,23 @@ describe('middleware 註冊點', () => {
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       'b',
       'c',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -187,18 +224,23 @@ describe('middleware 註冊點', () => {
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
       'c',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -210,6 +252,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { prepend: true })),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -217,11 +260,46 @@ describe('middleware 註冊點', () => {
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
+    ]);
+  });
+
+  it('last: true 排在其餘 plugin middleware 之後、輸出校驗之前，不管註冊得多早', async () => {
+    const params = await fold([
+      fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'), { last: true })),
+      fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'))),
+      fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { prepend: true })),
+      fakePlugin('d', (r) => void r.middleware.use(fakeMiddleware('d'), { last: true })),
+    ]);
+    expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
+      CONTAINMENT_MIDDLEWARE_NAME,
+      TURN_CANCEL_MIDDLEWARE_NAME,
+      'c',
+      APPROVAL_GATE_MIDDLEWARE_NAME,
+      SUMMARIZATION_MIDDLEWARE_NAME,
+      MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
+      MODEL_USAGE_MIDDLEWARE_NAME,
+      SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      'b',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
+      // 兩顆 last 之間仍是註冊順序。
+      'a',
+      'd',
+      OUTPUT_SCHEMA_MIDDLEWARE_NAME,
+      INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -231,7 +309,7 @@ describe('middleware 註冊點', () => {
    * 照 dsh：子代理併入父代理同一份組合，同樣的 plugin 物件。
    *
    * 名字全列：只驗「在不在」的話，`prepend` 的排到閘門內側也會綠——而它排在閘門外側是承重的（計劃模式要在
-   * `policy-never` 之前擋掉模式外的 `exit_plan_mode`）。**假 middleware 的名字不撞基座**，所以這裡釘不到
+   * 任何會問人的閘門之前擋掉模式外的 `exit_plan_mode`）。**假 middleware 的名字不撞基座**，所以這裡釘不到
    * 「撞名的會被原地取代、位置不再決定層次」那一格；那一格寫在 `foldSubAgents` 的註解裡。
    */
   it('每個子代理也拿到 plugin 的 middleware：同 root 的分區、同一個實例', async () => {
@@ -251,6 +329,7 @@ describe('middleware 註冊點', () => {
       const list = subagent.middleware ?? [];
       const names = list.map((mw) => (mw as unknown as { name: string }).name);
       expect(names).toEqual([
+        TOOL_BARRIER_MIDDLEWARE_NAME,
         CONTAINMENT_MIDDLEWARE_NAME,
         TURN_CANCEL_MIDDLEWARE_NAME,
         'early',
@@ -258,13 +337,17 @@ describe('middleware 註冊點', () => {
         SUMMARIZATION_MIDDLEWARE_NAME,
         SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
         MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+        EMPTY_RESPONSE_MIDDLEWARE_NAME,
         MODEL_USAGE_MIDDLEWARE_NAME,
         SESSION_CHECKPOINT_MIDDLEWARE_NAME,
         'late',
+        APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
         // plugin 打底、子代理自帶的在內側。
         ...(subagent.name === 'releaser' ? ['subagent-own'] : []),
         OUTPUT_SCHEMA_MIDDLEWARE_NAME,
         INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+        MAX_TOKENS_MIDDLEWARE_NAME,
+        REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
         TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
       ]);
       expect(list[names.indexOf('early')]).toBe(early);
@@ -307,17 +390,21 @@ describe('圍堵打底', () => {
    */
   it('**清單全空也有圍堵，而且在第 0 格**', async () => {
     const params = await fold([]);
-    expect(middlewareNames(params)[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+    // 屏障（#711 第 2 步）在圍堵外面一格，是唯一排在它前面的：等待中的呼叫通過屏障前不能被圍堵記一顆 `tool/call`。
+    expect(middlewareNames(params).slice(0, 2)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
+      CONTAINMENT_MIDDLEWARE_NAME,
+    ]);
   });
 
   it('**連 prepend 的 registry middleware 都在它裡面**——射程要蓋過每一個', async () => {
     const params = await fold([
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
     ]);
-    expect(middlewareNames(params).indexOf(CONTAINMENT_MIDDLEWARE_NAME)).toBe(0);
-    // 中止外層那顆緊貼圍堵（#276），所以 prepend 的那一顆落在第 2 格，仍在圍堵裡面。
-    expect(middlewareNames(params).indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(1);
-    expect(middlewareNames(params).indexOf('b')).toBe(2);
+    expect(middlewareNames(params).indexOf(CONTAINMENT_MIDDLEWARE_NAME)).toBe(1);
+    // 中止外層那顆緊貼圍堵（#276），所以 prepend 的那一顆落在第 3 格，仍在圍堵裡面。
+    expect(middlewareNames(params).indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(2);
+    expect(middlewareNames(params).indexOf('b')).toBe(3);
   });
 
   it('**每個 subagent 也有，而且同樣在第 0 格**——不注就是漏掉半棵樹', async () => {
@@ -332,7 +419,10 @@ describe('圍堵打底', () => {
       const names = (subagent.middleware ?? []).map(
         (mw) => (mw as unknown as { name: string }).name,
       );
-      expect(names[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+      expect(names.slice(0, 2)).toEqual([
+        TOOL_BARRIER_MIDDLEWARE_NAME,
+        CONTAINMENT_MIDDLEWARE_NAME,
+      ]);
     }
     // 兩個註冊的，外加 fold 補的 `general-purpose`——它也在上面那個迴圈裡。
     expect(registered(params)).toHaveLength(2);
@@ -343,9 +433,59 @@ describe('圍堵打底', () => {
     const params = await fold([
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser'))),
     ]);
-    const rootOne = params.middleware[0];
-    const subOne = (registered(params)[0]?.middleware ?? [])[0];
+    const rootOne = params.middleware[1];
+    const subOne = (registered(params)[0]?.middleware ?? [])[1];
     expect(subOne).toBe(rootOne);
+  });
+});
+
+describe('工具事件的三顆生產者（#1248）', () => {
+  const names = (list: readonly unknown[]): string[] =>
+    list.map((mw) => (mw as { name: string }).name);
+
+  it('給了 events 才掛：pre 緊貼閘門外側、post 在輸出校驗外側、execute 在 invalidToolArgs 內側', async () => {
+    const params = await fold(
+      [fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a')))],
+      { events: new EventBus() },
+    );
+    const list = names(params.middleware);
+    const at = (name: string): number => list.indexOf(name);
+    // pre：緊貼閘門外側（相鄰、在前）。
+    expect(at(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME)).toBe(at(APPROVAL_GATE_MIDDLEWARE_NAME) - 1);
+    // post：plugin middleware 的內側、輸出校驗的外側。
+    expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBeGreaterThan(at('a'));
+    expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBe(at(OUTPUT_SCHEMA_MIDDLEWARE_NAME) - 1);
+    // execute：解不開參數那顆的內側，緊貼。
+    expect(at(TOOL_EXECUTE_MIDDLEWARE_NAME)).toBe(at(INVALID_TOOL_ARGS_MIDDLEWARE_NAME) + 1);
+  });
+
+  it('沒給 events 一顆都不掛（行為與沒有這一格時一樣）', async () => {
+    const params = await fold([]);
+    expect(names(params.middleware)).not.toContain(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME);
+    expect(names(params.middleware)).not.toContain(TOOL_POST_EXECUTE_MIDDLEWARE_NAME);
+    expect(names(params.middleware)).not.toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
+  });
+
+  it('每個子代理也有，且與 root 共用同一份實例（身分從每次請求現算）', async () => {
+    const params = await fold(
+      [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser')))],
+      { events: new EventBus() },
+    );
+    for (const subagent of params.subagents) {
+      const list = subagent.middleware ?? [];
+      for (const name of [
+        TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
+        TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
+        TOOL_EXECUTE_MIDDLEWARE_NAME,
+      ]) {
+        const inSub = list.find((mw) => (mw as unknown as { name: string }).name === name);
+        const inRoot = params.middleware.find(
+          (mw) => (mw as unknown as { name: string }).name === name,
+        );
+        expect(inSub).toBeDefined();
+        expect(inSub).toBe(inRoot);
+      }
+    }
   });
 });
 
@@ -364,6 +504,7 @@ describe('「先讀後改」策略打底', () => {
     // 排在閘門**裡面**：閘門是安全邊界，這個是正確性的門，兩者不換位。排在其餘 registry
     // middleware **外面**：不然任何一個 plugin middleware 都可以在它之前把工具跑掉。
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -371,14 +512,18 @@ describe('「先讀後改」策略打底', () => {
       OBSERVATION_POLICY_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       // 有 backend 就有：檔案工具的失敗標成錯誤，貼著工具本體（#293）。
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -397,6 +542,7 @@ describe('「先讀後改」策略打底', () => {
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -404,13 +550,17 @@ describe('「先讀後改」策略打底', () => {
       SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -443,7 +593,7 @@ describe('「先讀後改」策略打底', () => {
     expect(first).not.toBe(rootOne);
     expect(second).not.toBe(first);
     // 對照：圍堵是共用的，兩條放在一起才看得出這是選的、不是漏的。
-    expect(registered(params)[0]?.middleware?.[0]).toBe(params.middleware[0]);
+    expect(registered(params)[0]?.middleware?.[1]).toBe(params.middleware[1]);
   });
 
   it('明著關掉就一份都不建，root 與 subagent 都沒有', async () => {
@@ -485,7 +635,7 @@ describe('中止這一輪打底（#276）', () => {
    */
   it('清單全空也有：外層緊貼圍堵、在起訖紀錄器外面，內層在最後', async () => {
     const names = middlewareNames(await fold([]));
-    expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(1);
+    expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(2);
     expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBeLessThan(
       names.indexOf(MODEL_CALL_EVENTS_MIDDLEWARE_NAME),
     );
@@ -501,7 +651,7 @@ describe('中止這一輪打底（#276）', () => {
     ]);
     const sub = registered(params)[0]?.middleware ?? [];
     const names = sub.map((mw) => (mw as unknown as { name: string }).name);
-    expect(names[1]).toBe(TURN_CANCEL_MIDDLEWARE_NAME);
+    expect(names[2]).toBe(TURN_CANCEL_MIDDLEWARE_NAME);
     // 內層那顆排在 subagent 自帶的那些後面：它自帶的 middleware 讀到的也是原本的模型。
     expect(names.at(-1)).toBe(TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME);
     expect(names.indexOf('subagent-own')).toBeLessThan(names.length - 1);
@@ -625,17 +775,22 @@ describe('approvals 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -653,17 +808,22 @@ describe('approvals 註冊點', () => {
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -676,16 +836,21 @@ describe('approvals 註冊點', () => {
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -929,7 +1094,7 @@ describe('general-purpose 由 fold 註冊', () => {
     const researcher = params.subagents.find((subagent) => subagent.name === 'researcher');
     const names = subagentMiddlewareNames(gp);
     expect(names).toEqual(subagentMiddlewareNames(researcher));
-    expect(names[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+    expect(names.slice(0, 2)).toEqual([TOOL_BARRIER_MIDDLEWARE_NAME, CONTAINMENT_MIDDLEWARE_NAME]);
     expect(names).toContain(APPROVAL_GATE_MIDDLEWARE_NAME);
     expect(names).toContain(MODEL_USAGE_MIDDLEWARE_NAME);
     expect(names).toContain(SUMMARIZATION_MIDDLEWARE_NAME);
@@ -1232,6 +1397,39 @@ describe('組裝點自有的那五樣', () => {
  * default backend），所以**這一組要自己明著打開**——不然 fold 產出的摘要器在 core 這側
  * 一條測試都沒有。`false` 本身折出什麼也在這一組量（#446）。
  */
+describe('搜尋工具的說明（workspaceSearch，#1605）', () => {
+  const searchNames = (params: { middleware: unknown[] }) =>
+    middlewareNames(params).filter((name) => name === SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+
+  it('組裝點說搜尋走工作區 backend → root 與每個 subagent 都拿到，緊貼讀檔續讀之後', async () => {
+    const params = await fold(
+      [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser')))],
+      { defaultBackend: fakeBackend('default'), workspaceSearch: true },
+    );
+    const rootNames = middlewareNames(params);
+    expect(rootNames).toContain(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+    expect(rootNames.indexOf(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME)).toBe(
+      rootNames.indexOf(READ_CONTINUATION_MIDDLEWARE_NAME) + 1,
+    );
+    const subNames = (registered(params)[0]?.middleware ?? []).map(
+      (mw) => (mw as unknown as { name: string }).name,
+    );
+    expect(subNames).toContain(SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME);
+  });
+
+  it('省略或 false → 不掛（記憶體 backend 的 grep 是字面比對，說正規式是說謊）', async () => {
+    for (const extra of [{}, { workspaceSearch: false }]) {
+      const params = await fold([], { defaultBackend: fakeBackend('default'), ...extra });
+      expect(searchNames(params)).toEqual([]);
+    }
+  });
+
+  it('沒有 backend → 就算說了也不掛', async () => {
+    const params = await fold([], { workspaceSearch: true });
+    expect(searchNames(params)).toEqual([]);
+  });
+});
+
 describe('摘要器打底', () => {
   it('排在閘門之後、其餘 registry middleware 之前', async () => {
     const params = await fold(
@@ -1244,19 +1442,24 @@ describe('摘要器打底', () => {
     // 位置只決定同名誰贏（`mergeMiddleware$1` 是以 name 為鍵的 Map，後設的覆蓋前設的）：
     // 排在所有 registry middleware 之前 ＝ 任何 plugin 掛一個同名的都蓋得過我們這份。
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1277,19 +1480,24 @@ describe('摘要器打底', () => {
     // **自帶的排在後面 ＝ 自帶的贏。** 這是「打底」不是「強制」，跟同一個函式裡 `tools`
     // 那條軸線一致；摘要門檻是效能與正確性的預設值，不是安全邊界。閘門那一格沒動。
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
       SUMMARIZATION_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1321,7 +1529,7 @@ describe('摘要器打底', () => {
   /**
    * **`false` 是真的關掉，射程涵蓋三種 agent**（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
    *
-   * 不給的話基座會補回它自己那顆，所以要的是「每一處都有一顆同名、沒有任何鉤子的」。
+   * 不給的話基座會補回它自己那顆，所以要的是「每一處都有一顆同名、只有 `wrapModelCall` 的」。
    * 只看 root 的話，「空殼沒發給子代理」這個錯寫法照樣綠——行為上也量不出來，基座那顆的
    * 兜底門檻是 170k token，測試裡永遠碰不到。
    */
@@ -1336,8 +1544,7 @@ describe('摘要器打底', () => {
     expect(params.subagents.map((sub) => sub.name).sort()).toEqual(
       [GENERAL_PURPOSE_SUBAGENT.name, 'writer'].sort(),
     );
-    for (const stack of stacks)
-      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    for (const stack of stacks) expect(keysOf(pick(stack))).toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('關掉時不需要 default backend', async () => {
@@ -1354,7 +1561,6 @@ describe('摘要器打底', () => {
 
   it.each([
     ['trigger[0]', { trigger: [{ type: 'fraction', value: 0.85 }] }],
-    ['keep', { keep: { type: 'fraction', value: 0.1 } }],
     [
       'truncateArgs.trigger',
       {
@@ -1416,6 +1622,7 @@ describe('提醒器打底', () => {
     // 摘要器是 `wrapModelCall`（模型節點內部）、提醒器是 `beforeModel`（模型節點之前），
     // 誰先跑由圖決定。這條釘的是「我們打底的三根都排在 registry middleware 之前」。
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -1423,13 +1630,17 @@ describe('提醒器打底', () => {
       SUMMARIZATION_MIDDLEWARE_NAME,
       REPEAT_REMINDER_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
       'a',
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       FS_TOOL_ERRORS_MIDDLEWARE_NAME,
       READ_CONTINUATION_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1450,6 +1661,7 @@ describe('提醒器打底', () => {
     // 自帶的排在後面 ＝ 自帶的贏，同 `tools` 那條軸線。提醒器是 fold 自己建的、不經過
     // `registry.middleware`，所以不打底的話那個 subagent 就完全沒有這道提醒。
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -1457,11 +1669,15 @@ describe('提醒器打底', () => {
       REPEAT_REMINDER_MIDDLEWARE_NAME,
       SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
       MODEL_CALL_EVENTS_MIDDLEWARE_NAME,
+      EMPTY_RESPONSE_MIDDLEWARE_NAME,
       MODEL_USAGE_MIDDLEWARE_NAME,
       SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+      APPROVAL_POLICY_PROMPT_MIDDLEWARE_NAME,
       'subagent-own',
       OUTPUT_SCHEMA_MIDDLEWARE_NAME,
       INVALID_TOOL_ARGS_MIDDLEWARE_NAME,
+      MAX_TOKENS_MIDDLEWARE_NAME,
+      REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
       TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
     ]);
   });
@@ -1679,6 +1895,133 @@ describe('useWithBackend', () => {
 });
 
 /**
+ * `fs` 服務：工具拿 backend 的那一格（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。
+ *
+ * 組裝點在 `apply` 裡先提供一格，fold 折完填進去。要釘的是**填的是折出來的那一個**：產品組裝今天零個
+ * `backend.mount()`，折出來的就是兜底那個，所以填成兜底那個的突變在 harness 那側一條都不會紅，只有這裡的
+ * 第一條量得到。
+ */
+describe('fs 服務', () => {
+  const marker = (backend: unknown): string =>
+    (backend as { nexusFakeBackend?: string }).nexusFakeBackend ?? '（不是假 backend）';
+
+  it('掛了路由時，那一格裡是包好的 CompositeBackend，不是組裝點給的那一個', async () => {
+    const fs = createFsService();
+    await fold(
+      [
+        createHostServicesPlugin({ fs }),
+        fakePlugin('store', (r) => void r.backend.mount('/memories/', fakeBackend('store'))),
+      ],
+      { defaultBackend: fakeBackend('default') },
+    );
+    const folded = fs.backend();
+    expect(CompositeBackend.isInstance(folded)).toBe(true);
+    expect((folded as CompositeBackend).routePrefixes).toEqual(['/memories/']);
+  });
+
+  it('沒有路由時就是兜底那一個', async () => {
+    const fs = createFsService();
+    const defaultBackend = fakeBackend('default');
+    await fold([createHostServicesPlugin({ fs })], { defaultBackend });
+    expect(marker(fs.backend())).toBe('default');
+  });
+
+  it('fold 之前、以及這次組裝一個 backend 都沒有時，讀到的是 undefined', async () => {
+    const fs = createFsService();
+    expect(fs.backend()).toBeUndefined();
+    await fold([createHostServicesPlugin({ fs })]);
+    expect(fs.backend()).toBeUndefined();
+  });
+
+  it('不是 createFsService 建的那一種不碰：誰提供的就由誰說了算', async () => {
+    const own = fakeBackend('own');
+    const fs = {
+      backend: () => own,
+      offWorkspacePrefixes: () => [],
+      hasWorkspace: () => false,
+      workspaceRoot: () => undefined,
+      sharedWorkspacePrefix: () => undefined,
+      skillSources: () => [],
+    };
+    await fold([createHostServicesPlugin({ fs })], { defaultBackend: fakeBackend('default') });
+    expect(marker(fs.backend())).toBe('own');
+  });
+
+  // 工作區事實與 plugin 掛的路由前綴（#1469）：在 fold 填 backend 的同一處算，消費者只從這一格把手讀。
+  it('hasWorkspace：fold 之前是 false；有能力的組裝 fold 之後是 true；沒有能力是 false（逐條組裝各自的）', async () => {
+    const withWorkspace = createFsService();
+    const without = createFsService();
+    expect(withWorkspace.hasWorkspace()).toBe(false);
+    await fold([
+      createHostServicesPlugin({ fs: withWorkspace }),
+      fakePlugin('sandbox', (r) => void r.capabilities.provide(WORKSPACE_CAPABILITY)),
+    ]);
+    await fold([createHostServicesPlugin({ fs: without })]);
+    expect(withWorkspace.hasWorkspace()).toBe(true);
+    expect(without.hasWorkspace()).toBe(false);
+  });
+
+  // 可寫根逐條 thread（#1774）：跟 hasWorkspace 同一處算，值是這一次組裝的 host 服務 `workspaceRoot`。
+  it('workspaceRoot()：fold 之前是 undefined；每次組裝讀自己的 host 服務（A 是 /x、B 是 /y）；沒有圍堵是 undefined', async () => {
+    const a = createFsService();
+    const b = createFsService();
+    const none = createFsService();
+    expect(a.workspaceRoot()).toBeUndefined();
+    await fold([createHostServicesPlugin({ fs: a, workspaceRoot: '/x' })]);
+    await fold([createHostServicesPlugin({ fs: b, workspaceRoot: '/y' })]);
+    await fold([createHostServicesPlugin({ fs: none })]);
+    expect(a.workspaceRoot()).toBe('/x');
+    expect(b.workspaceRoot()).toBe('/y');
+    expect(none.workspaceRoot()).toBeUndefined();
+  });
+
+  // 唯讀共用區前綴（#1775）：跟 workspaceRoot 同一處算，值是這一次組裝的 host 服務 `sharedWorkspace`；與有沒有圍堵無關。
+  it('sharedWorkspacePrefix()：fold 之前是 undefined；每次組裝讀自己的 host 服務；沒提供是 undefined；沒有根也照樣有', async () => {
+    const withShared = createFsService();
+    const withoutShared = createFsService();
+    const sharedNoRoot = createFsService();
+    expect(withShared.sharedWorkspacePrefix()).toBeUndefined();
+    await fold([
+      createHostServicesPlugin({ fs: withShared, workspaceRoot: '/x', sharedWorkspace: '/shared' }),
+    ]);
+    await fold([createHostServicesPlugin({ fs: withoutShared, workspaceRoot: '/y' })]);
+    await fold([createHostServicesPlugin({ fs: sharedNoRoot, sharedWorkspace: '/shared' })]);
+    expect(withShared.sharedWorkspacePrefix()).toBe('/shared');
+    expect(withoutShared.sharedWorkspacePrefix()).toBeUndefined();
+    expect(sharedNoRoot.workspaceRoot()).toBeUndefined();
+    expect(sharedNoRoot.sharedWorkspacePrefix()).toBe('/shared');
+  });
+
+  it('能力排在提供 fs 那一列的後面也算數：fold 在所有 apply 之後才算', async () => {
+    const fs = createFsService();
+    await fold([
+      fakePlugin('sandbox', (r) => void r.capabilities.provide(WORKSPACE_CAPABILITY)),
+      createHostServicesPlugin({ fs }),
+    ]);
+    expect(fs.hasWorkspace()).toBe(true);
+  });
+
+  it('offWorkspacePrefixes：組裝點交的在前，plugin 掛的路由併在後面；沒有路由就只有組裝點交的', async () => {
+    const fs = createFsService({ offWorkspacePrefixes: ['/conversation_history/'] });
+    expect(fs.offWorkspacePrefixes()).toEqual(['/conversation_history/']);
+    await fold(
+      [
+        createHostServicesPlugin({ fs }),
+        fakePlugin('store', (r) => void r.backend.mount('/memories/', fakeBackend('store'))),
+      ],
+      { defaultBackend: fakeBackend('default') },
+    );
+    expect(fs.offWorkspacePrefixes()).toEqual(['/conversation_history/', '/memories/']);
+
+    const bare = createFsService({ offWorkspacePrefixes: ['/conversation_history/'] });
+    await fold([createHostServicesPlugin({ fs: bare })], {
+      defaultBackend: fakeBackend('default'),
+    });
+    expect(bare.offWorkspacePrefixes()).toEqual(['/conversation_history/']);
+  });
+});
+
+/**
  * 「先讀後改」的條目——**三態，不是四態**。
  *
  * 它沒有設定，所以「條目在場」與「沒有人問過部署設定層」的正確答案都是「照預設開著」，
@@ -1756,12 +2099,14 @@ describe('先讀後改的條目', () => {
     expect(off.registry.disabledEntries.names()).toEqual(['observation-policy']);
   });
 
-  it('它不收 config——給了會在載入期拋', async () => {
-    // 這一顆沒有 Config schema，而 `parseEntryConfig` 對這件事是當場拋，不是默默吞掉。
-    // 出貨的 `cordis.yml` 那一列因此刻意沒有 `config:`。
-    await expect(
-      loadPlugins([{ plugin: observationPolicyPlugin, config: { anything: 1 } } as PluginEntry]),
-    ).rejects.toThrow(/不收 config/);
+  it('它沒有 config——給了也照樣掛，先讀後改照樣在（#751 拍板照 dsh）', async () => {
+    // 這一顆沒有 Config schema，`parseEntryConfig` 照 dsh 原樣交下去、不驗。**多寫一行 `config:` 不能讓它掉**：
+    // 掉了就是沒讀過的檔改得動，那是 dsh 沒有的「設定寫壞反而放行」。警告只在產品路徑上印。
+    const { registry } = await loadPlugins([
+      { plugin: observationPolicyPlugin, config: { anything: 1 } } as PluginEntry,
+    ]);
+    expect(registry.disabledEntries.names()).toEqual([]);
+    expect(() => foldRegistry(registry, { summarization: false })).toThrow(/先讀後改/);
   });
 });
 
@@ -1861,10 +2206,11 @@ describe('用量記錄器的條目', () => {
     expect(off.registry.disabledEntries.names()).toEqual(['model-usage']);
   });
 
-  it('它不收 config——給了會在載入期拋', async () => {
-    await expect(
-      loadPlugins([{ plugin: modelUsagePlugin, config: { anything: 1 } } as PluginEntry]),
-    ).rejects.toThrow(/不收 config/);
+  it('它沒有 config——給了也照樣掛（#751 拍板照 dsh）', async () => {
+    const { registry } = await loadPlugins([
+      { plugin: modelUsagePlugin, config: { anything: 1 } } as PluginEntry,
+    ]);
+    expect(registry.disabledEntries.names()).toEqual([]);
   });
 });
 
@@ -1914,14 +2260,15 @@ describe('耐久檢查點打底', () => {
     expect(middlewareNames(params)).toContain(SESSION_CHECKPOINT_MIDDLEWARE_NAME);
   });
 
-  it('它一顆服務都不註冊，也不收 config', async () => {
+  it('它一顆服務都不註冊，也沒有 config——給了也照樣掛（#751）', async () => {
     const { registry } = await loadPlugins([{ plugin: sessionCheckpointPlugin }]);
     expect(registry.services.names()).toEqual([]);
     const off = await loadPlugins([{ plugin: sessionCheckpointPlugin, disabled: true }]);
     expect(off.registry.disabledEntries.names()).toEqual(['session-checkpoint-policy']);
-    await expect(
-      loadPlugins([{ plugin: sessionCheckpointPlugin, config: { anything: 1 } } as PluginEntry]),
-    ).rejects.toThrow(/不收 config/);
+    const given = await loadPlugins([
+      { plugin: sessionCheckpointPlugin, config: { anything: 1 } } as PluginEntry,
+    ]);
+    expect(given.registry.disabledEntries.names()).toEqual([]);
   });
 });
 
@@ -2005,7 +2352,7 @@ describe('摘要的設定從條目來', () => {
     const params = await foldBare([]);
     for (const stack of stacks(params)) {
       expect(pick(stack)).toBeDefined();
-      expect(pick(stack)).not.toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+      expect(keysOf(pick(stack))).not.toEqual(RECORDED_SHELL_KEYS);
     }
   });
 
@@ -2014,7 +2361,7 @@ describe('摘要的設定從條目來', () => {
       { plugin: summarizationPlugin, config: { trigger: [{ type: 'messages', value: 2 }] } },
     ]);
     for (const stack of stacks(params))
-      expect(pick(stack)).not.toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+      expect(keysOf(pick(stack))).not.toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('第 3 態：`disabled: true` 給三種 agent 各一顆同名空殼', async () => {
@@ -2024,8 +2371,7 @@ describe('摘要的設定從條目來', () => {
     expect(params.subagents.map((sub) => sub.name).sort()).toEqual(
       [GENERAL_PURPOSE_SUBAGENT.name, 'writer'].sort(),
     );
-    for (const stack of stacks(params))
-      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    for (const stack of stacks(params)) expect(keysOf(pick(stack))).toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('第 1 態：組裝點明著講的贏過條目——傳 false 就是空殼', async () => {
@@ -2033,8 +2379,7 @@ describe('摘要的設定從條目來', () => {
       [{ plugin: summarizationPlugin, config: { trigger: [{ type: 'messages', value: 2 }] } }],
       { summarization: false },
     );
-    for (const stack of stacks(params))
-      expect(pick(stack)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    for (const stack of stacks(params)) expect(keysOf(pick(stack))).toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('被關掉時不需要 default backend——空殼沒有歷史要寫', async () => {
@@ -2042,7 +2387,7 @@ describe('摘要的設定從條目來', () => {
     const params = await foldBare([{ plugin: summarizationPlugin, disabled: true }], {
       defaultBackend: undefined,
     });
-    expect(pick(params.middleware)).toEqual({ name: SUMMARIZATION_MIDDLEWARE_NAME });
+    expect(keysOf(pick(params.middleware))).toEqual(RECORDED_SHELL_KEYS);
   });
 
   it('條目不在清單上、又沒給 default backend 時照樣拋', async () => {
@@ -2066,13 +2411,349 @@ describe('摘要的設定從條目來', () => {
 
   it('條目的壞門檻型別在載入期就失敗，而且訊息指得出是哪一格', async () => {
     // **只斷言得到這麼多，而那是量出來的。** 今天擋它的是 schema 的 `z.enum`，但把那一格
-    // 放寬成 `z.string()` 之後換成 `assertThreshold` 擋，載入一樣失敗、一樣指名 `keep`
+    // 放寬成 `z.string()` 之後換成 `assertThreshold` 擋，載入一樣失敗、一樣指名 `trigger`
     // ——兩層對這個輸入是等價的，差別只有措辭。斷言寫到「是哪一層」就是在釘 zod 的訊息
     // 格式，不是在釘我們的行為。理由見 `summarizationConfigSchema` 的檔頭。
     await expect(
       loadPlugins([
-        { plugin: summarizationPlugin, config: { keep: { type: 'fraction', value: 0.5 } } },
+        {
+          plugin: summarizationPlugin,
+          config: { trigger: [{ type: 'fraction', value: 0.5 }] },
+        },
       ]),
-    ).rejects.toThrow(/keep/);
+    ).rejects.toThrow(/trigger/);
+  });
+
+  /**
+   * 舊設定裡還寫著 `keep` 的，載入就要有看得懂的錯誤（#1374）：schema 若只是 strictObject 的「不認得的欄位」，
+   * 讀的人看不出要改成什麼；靜靜忽略則更糟——以為保留量還是自己設的那個。
+   */
+  it('條目裡還寫著舊的 keep：載入期就失敗，訊息說得出要改成 retainRatio 或 retainTokens', async () => {
+    const load = loadPlugins([
+      { plugin: summarizationPlugin, config: { keep: { type: 'messages', value: 20 } } },
+    ]);
+    await expect(load).rejects.toThrow(/summarization\.keep/);
+    await expect(load).rejects.toThrow(/retainRatio/);
+    await expect(load).rejects.toThrow(/retainTokens/);
+  });
+});
+
+/**
+ * 「關掉」是逐條目的（#678，照 dsh：停用只讓那一列不 init，不影響別列）：有被關的同名列、**而且沒有開著的同名列**
+ * 才算關掉。鍵仍是 `NexusPlugin.name`，所以一列被關掉的同名條目不能讓開著的那一列失效。
+ */
+describe('同名的一開一關：開著的那一列不被關掉', () => {
+  const inStack = (stack: readonly unknown[], name: string): boolean =>
+    stack.some((mw) => (mw as { name: string }).name === name);
+
+  /** 三種條目各一條：先讀後改、用量記錄器、耐久檢查點。 */
+  const cases = [
+    { label: '先讀後改', plugin: observationPolicyPlugin, mw: OBSERVATION_POLICY_MIDDLEWARE_NAME },
+    { label: '用量記錄器', plugin: modelUsagePlugin, mw: MODEL_USAGE_MIDDLEWARE_NAME },
+    {
+      label: '耐久檢查點',
+      plugin: sessionCheckpointPlugin,
+      mw: SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+    },
+  ] as const;
+
+  for (const { label, plugin, mw } of cases) {
+    it(`${label}：開著的列加一列被關掉的同名列，root 與每個子代理都還有它`, async () => {
+      const { registry } = await loadPlugins([
+        fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('one'))),
+        { plugin },
+        { plugin, id: 'again', disabled: true },
+      ]);
+      const params = foldRegistry(registry, {
+        summarization: false,
+        repeatReminder: false,
+        defaultBackend: fakeBackend('default'),
+      });
+      expect(inStack(params.middleware, mw)).toBe(true);
+      expect(params.subagents.length).toBeGreaterThan(0);
+      for (const subagent of params.subagents) {
+        expect(inStack(subagent.middleware ?? [], mw), subagent.name).toBe(true);
+      }
+    });
+  }
+
+  it('先關後開，順序不影響：被關的列排在前面也一樣', async () => {
+    const { registry } = await loadPlugins([
+      { plugin: modelUsagePlugin, id: 'off', disabled: true },
+      { plugin: modelUsagePlugin },
+    ]);
+    const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
+    expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(true);
+  });
+
+  it('無關的 plugin 剛好叫 `model-usage` 又被關掉：core 的用量記錄器還在', async () => {
+    const { registry } = await loadPlugins([
+      { plugin: modelUsagePlugin },
+      { plugin: { name: 'model-usage', apply: () => {} }, disabled: true },
+    ]);
+    const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
+    expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(true);
+  });
+
+  it('只有被關的那一列就真的沒有：不因為多了「開著」這一格而變', async () => {
+    const { registry } = await loadPlugins([{ plugin: modelUsagePlugin, disabled: true }]);
+    expect(registry.disabledEntries.has('model-usage')).toBe(true);
+    const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
+    expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(false);
+  });
+
+  it('逐列掉：同名的另一列 `apply` 拋錯掉了，開著的那一列不受影響', async () => {
+    const { registry, dropped } = await loadPlugins(
+      [
+        { plugin: modelUsagePlugin },
+        {
+          plugin: {
+            name: 'model-usage',
+            apply: () => {
+              throw new Error('apply 拋了');
+            },
+          },
+          id: 'boom',
+        },
+      ],
+      createRegistry(),
+      { perEntry: true },
+    );
+    // 掉的那一列照 dsh 算沒掛、被標記了；但開著的那一列在，所以視圖不能說「關掉」。
+    expect(dropped.map(({ origin }) => origin.id)).toEqual(['boom']);
+    expect(registry.disabledEntries.names()).toEqual(['model-usage']);
+    expect(registry.disabledEntries.has('model-usage')).toBe(false);
+    const params = foldRegistry(registry, { summarization: false, observationPolicy: false });
+    expect(inStack(params.middleware, MODEL_USAGE_MIDDLEWARE_NAME)).toBe(true);
+  });
+});
+
+/**
+ * **root 與每個子代理的 middleware 疊對齊**（#664 的通用斷言）。
+ *
+ * 新增一顆 core middleware 時，只補 root 那一份、子代理漏掉，上面那十三條全名單**不會紅**：
+ * 子代理那六條比的是 `foldSubAgents` 的實際輸出對手寫的期望值，兩邊都沒動，照樣綠。
+ * 這一條比的是**子代理那疊對 root 那疊**：把子代理專屬的名字拿掉之後，兩疊的名字序列要一樣。
+ *
+ * **三個集合寫死在這裡，不從 fold 匯入。** 從 fold 的表算期望值的話，表上一列寫錯，實作與期望會
+ * 一起錯；寫死在測試裡，「只給 root」「只給子代理」要改就得在這裡明著改。
+ *
+ * **在所有選填槽位都在場的組裝上跑**：這個檔的入口預設把摘要器、觀測策略、提醒器關掉，沒有任何一條
+ * 同時帶齊它們。少一格在場，那一格就沒被這條問到。
+ */
+describe('root 與每個子代理的 middleware 疊對齊', () => {
+  /** 只給 root 的：插話只折進 root 的陣列（`FoldOptions.stepInbox`）。 */
+  const ROOT_ONLY = new Set([STEP_INBOX_MIDDLEWARE_NAME]);
+  /**
+   * 只給子代理的：委派聲明、工具過濾（遮基座工具，每個子代理都一樣），以及子代理自己帶的
+   * `spec.middleware`。
+   */
+  const SUBAGENT_ONLY = new Set([
+    SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
+    SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
+    'subagent-own',
+  ]);
+  /** 逐個 agent 各建一份的：狀態在閉包裡，共用會串台。 */
+  const FRESH_PER_AGENT = new Set([
+    TOOL_BARRIER_MIDDLEWARE_NAME,
+    OBSERVATION_POLICY_MIDDLEWARE_NAME,
+    SUMMARIZATION_MIDDLEWARE_NAME,
+  ]);
+  /**
+   * 同名但是另一顆。**現在沒有了**：前景子代理的核准閘門跟 root 同一顆（#328 第 1 項，翻了 #324 的「管道固定 `policy-never`」）；
+   * 背景圖的 `policy-never` 那顆在編圖時換上（`compileSubagentGraph` 的 `approvalGate`），不在 fold 的產物裡。
+   */
+  const OTHER_INSTANCE = new Set<string>();
+
+  type Named = { name: string };
+  const nameOf = (middleware: unknown): string => (middleware as Named).name;
+
+  /** 每一個選填槽位都打開、每一種 plugin 位置都有、子代理自帶 middleware 的組裝。 */
+  async function foldEverything() {
+    const own = fakeMiddleware('subagent-own');
+    const params = await fold(
+      [
+        fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a'))),
+        fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
+        fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { last: true })),
+        fakePlugin('team', (r) => {
+          r.subagents.register({ ...fakeSubAgent('releaser'), middleware: [own] } as SubAgent);
+          r.subagents.register(fakeSubAgent('auditor'));
+        }),
+      ],
+      {
+        observationPolicy: true,
+        summarization: {},
+        repeatReminder: {},
+        defaultBackend: fakeBackend('default'),
+        stepInbox: true,
+        spillPolicy: {
+          maxInlineTokens: 1000,
+          store: { saveText: () => Promise.reject(new Error('這條測試不會存')) },
+        },
+        searchOverflow: { limits: { grepMaxMatches: 250, globMaxResults: 100 } },
+        workspaceSearch: true,
+        baseToolNames: gatedTools,
+        subagentToolFilter: { deny: ['write_file'] },
+        checkpointer: true,
+      },
+    );
+    return params;
+  }
+
+  it('前提：這個組裝真的把每一個選填槽位都打開了', async () => {
+    const params = await foldEverything();
+    expect(middlewareNames(params)).toEqual(
+      expect.arrayContaining([
+        STEP_INBOX_MIDDLEWARE_NAME,
+        SPILL_POLICY_MIDDLEWARE_NAME,
+        SEARCH_OVERFLOW_MIDDLEWARE_NAME,
+        OBSERVATION_POLICY_MIDDLEWARE_NAME,
+        SUMMARIZATION_MIDDLEWARE_NAME,
+        REPEAT_REMINDER_MIDDLEWARE_NAME,
+        MODEL_USAGE_MIDDLEWARE_NAME,
+        SESSION_CHECKPOINT_MIDDLEWARE_NAME,
+        FS_TOOL_ERRORS_MIDDLEWARE_NAME,
+        READ_CONTINUATION_MIDDLEWARE_NAME,
+        SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME,
+        'a',
+        'b',
+        'c',
+      ]),
+    );
+    // 三個子代理：fold 補的 general-purpose 加兩個註冊進來的。
+    expect(params.subagents.map((subagent) => subagent.name)).toEqual([
+      GENERAL_PURPOSE_SUBAGENT.name,
+      'releaser',
+      'auditor',
+    ]);
+  });
+
+  it('子代理那疊去掉子代理專屬的名字，等於 root 那疊去掉只給 root 的名字——每個子代理都一樣', async () => {
+    const params = await foldEverything();
+    const rootNames = (params.middleware as unknown[])
+      .map(nameOf)
+      .filter((name) => !ROOT_ONLY.has(name));
+    for (const subagent of params.subagents) {
+      const subNames = ((subagent.middleware ?? []) as unknown[])
+        .map(nameOf)
+        .filter((name) => !SUBAGENT_ONLY.has(name));
+      expect(subNames, subagent.name).toEqual(rootNames);
+    }
+  });
+
+  it('只給 root 的不在任何子代理裡，只給子代理的每個子代理都有（自帶的只在自帶的那個）', async () => {
+    const params = await foldEverything();
+    for (const subagent of params.subagents) {
+      const names = ((subagent.middleware ?? []) as unknown[]).map(nameOf);
+      for (const only of ROOT_ONLY) expect(names, subagent.name).not.toContain(only);
+      expect(names, subagent.name).toContain(SUBAGENT_DELEGATION_MIDDLEWARE_NAME);
+      expect(names, subagent.name).toContain(SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME);
+      expect(names.includes('subagent-own'), subagent.name).toBe(subagent.name === 'releaser');
+    }
+  });
+
+  it('實例身分：共用的是同一顆，逐個建的與另一顆不是 root 那顆、子代理之間也不共用', async () => {
+    const params = await foldEverything();
+    const rootStack = (params.middleware as unknown[]).filter(
+      (middleware) => !ROOT_ONLY.has(nameOf(middleware)),
+    );
+    const seen = new Map<string, unknown[]>();
+    for (const subagent of params.subagents) {
+      const subStack = ((subagent.middleware ?? []) as unknown[]).filter(
+        (middleware) => !SUBAGENT_ONLY.has(nameOf(middleware)),
+      );
+      subStack.forEach((middleware, index) => {
+        const name = nameOf(middleware);
+        const rootMiddleware = rootStack[index];
+        if (FRESH_PER_AGENT.has(name) || OTHER_INSTANCE.has(name)) {
+          expect(middleware, `${subagent.name} 的 ${name}`).not.toBe(rootMiddleware);
+          seen.set(name, [...(seen.get(name) ?? []), middleware]);
+        } else {
+          expect(middleware, `${subagent.name} 的 ${name}`).toBe(rootMiddleware);
+        }
+      });
+    }
+    // 逐個建的：三個子代理各一份，彼此不同。另一顆（核准閘門）無狀態，一顆走遍每個子代理。
+    for (const name of FRESH_PER_AGENT) {
+      expect(new Set(seen.get(name)).size, name).toBe(params.subagents.length);
+    }
+    for (const name of OTHER_INSTANCE) {
+      expect(new Set(seen.get(name)).size, name).toBe(1);
+    }
+  });
+});
+
+describe('子代理定義的 model／maxTurns／reasoningEffort（#328 第 3 項）', () => {
+  const controller = () =>
+    new ModelSelectionController({ defaultRoute: { model: 'm' }, instanceFor: () => undefined });
+  const worker = (extra: Record<string, unknown>) =>
+    fakePlugin('host', (r) => void r.subagents.register({ ...fakeSubAgent('worker'), ...extra }));
+  const stackOf = (params: { subagents: SubAgent[] }, name: string) =>
+    middlewareNames({
+      middleware: [...(params.subagents.find((sub) => sub.name === name)?.middleware ?? [])],
+    });
+
+  it('有控制器：每個子代理（含 general-purpose）都有跟隨那顆，root 是換模型那顆而不是跟隨', async () => {
+    const params = await fold([worker({})], { modelSelection: controller() });
+    expect(stackOf(params, 'worker')).toContain(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME);
+    expect(stackOf(params, GENERAL_PURPOSE_SUBAGENT.name)).toContain(
+      SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+    );
+    expect(middlewareNames(params)).toContain(MODEL_SELECTION_MIDDLEWARE_NAME);
+    expect(middlewareNames(params)).not.toContain(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME);
+    expect(stackOf(params, 'worker')).not.toContain(MODEL_SELECTION_MIDDLEWARE_NAME);
+  });
+
+  it('沒有控制器：兩顆都不折（沒開選模型的組裝與今天逐位相同）', async () => {
+    const params = await fold([worker({})]);
+    expect(stackOf(params, 'worker')).not.toContain(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME);
+    expect(middlewareNames(params)).not.toContain(MODEL_SELECTION_MIDDLEWARE_NAME);
+  });
+
+  it('字串 model、maxTurns、reasoningEffort 不交給基座：基座看到的規格沒有這三格', async () => {
+    const params = await fold([worker({ model: 'cheap', maxTurns: 3, reasoningEffort: 'off' })], {
+      modelSelection: controller(),
+    });
+    const handed = params.subagents.find((sub) => sub.name === 'worker') as unknown as Record<
+      string,
+      unknown
+    >;
+    expect('model' in handed).toBe(false);
+    expect('maxTurns' in handed).toBe(false);
+    expect('reasoningEffort' in handed).toBe(false);
+  });
+
+  it('給實例的 model 原樣留給基座', async () => {
+    const instance = { invoke: () => 0 };
+    const params = await fold([worker({ model: instance })], { modelSelection: controller() });
+    expect(
+      (params.subagents.find((sub) => sub.name === 'worker') as { model?: unknown }).model,
+    ).toBe(instance);
+  });
+
+  it('maxTurns 只折進給了它的那個子代理，root 與別的子代理沒有', async () => {
+    const plugins = [
+      worker({ maxTurns: 3 }),
+      fakePlugin('other', (r) => void r.subagents.register(fakeSubAgent('other'))),
+    ];
+    const params = await fold(plugins);
+    expect(stackOf(params, 'worker')).toContain('ModelCallLimitMiddleware');
+    expect(stackOf(params, 'other')).not.toContain('ModelCallLimitMiddleware');
+    expect(middlewareNames(params)).not.toContain('ModelCallLimitMiddleware');
+  });
+
+  it('釘住的值進跟隨那顆：兩個子代理各用各的，不共用一份', async () => {
+    const plugins = [
+      worker({ model: 'cheap' }),
+      fakePlugin('other', (r) => void r.subagents.register(fakeSubAgent('other'))),
+    ];
+    const params = await fold(plugins, { modelSelection: controller() });
+    const pick = (name: string) =>
+      (params.subagents.find((sub) => sub.name === name)?.middleware ?? []).find(
+        (mw) => (mw as { name: string }).name === SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+      );
+    expect(pick('worker')).toBeDefined();
+    expect(pick('worker')).not.toBe(pick('other'));
   });
 });

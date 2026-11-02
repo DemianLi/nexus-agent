@@ -7,14 +7,15 @@
  * 圖是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)，這一份是它第 1 格
  * （`agent/session-start`）掉出來的 [#201](https://github.com/DemianLi/nexus-agent/issues/201)
  * 再掉出來的 [#203](https://github.com/DemianLi/nexus-agent/issues/203)。
- * **這一份不建 resume**——門 A 的實作在 `@nexus/core` 與 `cli.ts`，行為驗在
+ * **這一份不建 resume**——門 A 的實作在 `@nexus/core` 與 `assembly-root.ts`，行為驗在
  * `session-resume.test.ts`；這裡只守形狀，與守著門 B。
  *
  * ## 兩扇門，各自只帶得回半個會話
  *
  * | 狀態 | 住在哪 | 哪扇門帶得回來 |
  * | --- | --- | --- |
- * | 虛擬檔案系統、工具結果暫存 | graph state ／ checkpointer | **門 B** |
+ * | 虛擬檔案系統 | graph state ／ checkpointer | **門 B** |
+ * | 工具結果暫存（#734） | 主機的私有目錄，按會話分目錄 | 不靠門；續接用同一把會話鑰匙找回 |
  * | 對話訊息 | graph state，**從會話日誌推回來** | **門 A** |
  * | goal 的相位與輪次、`turn/*`、沙箱模式、計劃模式 | 會話日誌 | **門 A** |
  *
@@ -35,7 +36,7 @@
  *
  * ## 這條絆索釘得到什麼、釘不到什麼
  *
- * 下面第一層掃的是**整棵樹上「誰 `new` 了一顆 checkpointer」**，不是「`cli.ts` 那一行還在
+ * 下面第一層掃的是**整棵樹上「誰 `new` 了一顆 checkpointer」**，不是「`assembly-root.ts` 那一行還在
  * 不在」。今天的答案是恰好一處，而那一處在 `createCliAgent` 裡——**`serve.ts` 走的是同一個
  * 組裝點**（它呼叫 `createCliAgent`，不自己 `createNexusAgent`），所以釘一處就把 CLI 與 web
  * 兩條產品路徑都蓋住了。
@@ -132,20 +133,22 @@ function saverConstructions(): string[] {
  * 把它提成一個區域變數，因為 `ask_user_question` 的 fail-closed 要問「這次組裝有沒有
  * checkpointer」，而寫死 `true` 就會在門真的開的那天靜靜地說謊。**建的仍是同一顆、
  * 仍然只有這一處、仍然是不耐久的那一種**——所以這裡改的是 characterization 的字面，
- * 不是上面那三個目的地的任何一個。
+ * 不是失敗訊息裡那兩個目的地的任何一個。
  */
-const THE_ONLY_SAVER = ['apps/harness/src/cli.ts: const checkpointer = new MemorySaver();'];
+const THE_ONLY_SAVER = [
+  'apps/harness/src/assembly-root.ts: const checkpointer = new PrunedMemorySaver();',
+];
 
 /**
- * 這條絆索響的時候，讀的人該往哪裡去。**三個目的地，不是「值不對」。**
+ * 這條絆索響的時候，讀的人該往哪裡去。**兩個目的地，不是「值不對」。**
  *
- * 三個路徑常數在下面各自被讀過一次（改名就 ENOENT，不會靜靜地掃不到），所以這段文字裡
+ * 兩個路徑常數在下面各自被讀過一次（改名就 ENOENT，不會靜靜地掃不到），所以這段文字裡
  * 的路徑不會指向一個已經不在的檔案。
  */
 const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
   '**門 B（落盤 checkpointer）動了。**\n' +
   '這不是把期望值改一改就好的事——會話 resume 在我們這裡是**兩扇門**，' +
-  '而它們載的是不同的東西：checkpointer 帶回虛擬檔案系統、工具結果暫存（以及 graph state 裡的對話）；' +
+  '而它們載的是不同的東西：checkpointer 帶回虛擬檔案系統（以及 graph state 裡的對話）；工具結果暫存已在 [#734](https://github.com/DemianLi/nexus-agent/issues/734) 搬到主機的私有目錄，不靠這扇門；' +
   '會話日誌帶回 goal 的相位與輪次、`turn/*`、沙箱模式、計劃模式，對話也從它推回模型' +
   '（[#306](https://github.com/DemianLi/nexus-agent/issues/306)）。\n' +
   '**門 A 已經開了**（CLI 的 `--resume`、serve 重開），而 ' +
@@ -156,17 +159,19 @@ const DOOR_B_GUIDANCE = (paths: readonly string[]): string =>
   `  1. ${paths[0]} —— 續接時從日誌推回對話、灌進 graph state 的那一步。` +
   '門 B 一開，graph state 會從 checkpointer 回來，再灌一次對話就重複了——兩份來源誰是對話的真相要先決定。\n' +
   `  2. ${paths[1]} 的 ${TOOL_RESULT_STASH_PREFIX} —— ` +
-  '[#155](https://github.com/DemianLi/nexus-agent/issues/155) 記著「軸 2 一旦要做，' +
-  '第一個要處理的是 [#170](https://github.com/DemianLi/nexus-agent/issues/170) ' +
-  '工具結果暫存的保留策略」：checkpointer 落盤之後，暫存檔要不要跟著活下來是一個新問題。\n' +
+  '暫存現在優先存主機的私有目錄（[#734](https://github.com/DemianLi/nexus-agent/issues/734)），只有存不進去才退回 graph state；' +
+  'checkpointer 落盤之後，退回 graph state 的那一份要不要跟著活下來是一個新問題。\n' +
+  '參數解不開的那一顆（`invalid-tool-args.ts`）不在這份清單上：原字串記在那則 AI 訊息自己的 ' +
+  '`additional_kwargs`，跟著 checkpoint 與日誌走，[#701](https://github.com/DemianLi/nexus-agent/issues/701) ' +
+  '用「核准卡跨組裝續接」量過。\n' +
   '全文見 [#203](https://github.com/DemianLi/nexus-agent/issues/203) 與 ' +
   '[#251](https://github.com/DemianLi/nexus-agent/issues/251)。';
 
 /**
- * 失敗訊息裡那三個目的地，**逐一從磁碟讀過**。
+ * 失敗訊息裡那兩個目的地，**逐一從磁碟讀過**。
  *
- * 讀而不 glob：檔案改名要 `ENOENT`，**不能靜靜地掃不到**（同 #195 的做法）。第三個目的地
- * 用的是 `TOOL_RESULT_STASH_PREFIX` 這個 import——那一格連檔名都不必猜，編譯器會擋。
+ * 讀而不 glob：檔案改名要 `ENOENT`，**不能靜靜地掃不到**（同 #195 的做法）。第二個目的地
+ * 另外用了 `TOOL_RESULT_STASH_PREFIX` 這個 import——那一格連名字都不必猜，編譯器會擋。
  */
 const DESTINATIONS = [
   'apps/harness/src/conversation-restore.ts',

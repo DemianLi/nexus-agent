@@ -13,8 +13,8 @@
  * @module
  */
 
-import type { WorkspaceDiffHunk, WorkspaceFileDiff } from '@nexus/wire';
-import { changesDiffPath } from '@nexus/wire';
+import type { WorkspaceFileDiff } from '@nexus/wire';
+import { changesDiffUrl, isChangesDiff } from '@nexus/wire';
 
 import type { ChangesSummaryStore } from '@/lib/changes-summary';
 import { createChangesSummaryStore } from '@/lib/changes-summary';
@@ -34,33 +34,6 @@ export interface ChangesDiffStore {
 export interface ChangesStores {
   readonly summary: ChangesSummaryStore;
   readonly diff: ChangesDiffStore;
-}
-
-function isHunk(value: unknown): value is WorkspaceDiffHunk {
-  const hunk = value as Partial<WorkspaceDiffHunk> | null;
-  return (
-    [hunk?.oldStart, hunk?.oldLines, hunk?.newStart, hunk?.newLines].every(
-      (field) => Number.isSafeInteger(field) && (field as number) >= 0,
-    ) &&
-    Array.isArray(hunk?.lines) &&
-    hunk.lines.every((line) => typeof line === 'string' && /^[+ -]/.test(line))
-  );
-}
-
-/** 形狀檢查，同 dsh `isChangesDiff`：對不上就當成讀壞了。 */
-export function isFileDiff(value: unknown): value is WorkspaceFileDiff {
-  const diff = value as Record<string, unknown> | null;
-  if (typeof diff?.path !== 'string' || diff.path === '') return false;
-  if (typeof diff.display !== 'string' || diff.display === '') return false;
-  if (diff.kind === 'binary' || diff.kind === 'oversized') return true;
-  return (
-    diff.kind === 'text' &&
-    typeof diff.before === 'boolean' &&
-    typeof diff.after === 'boolean' &&
-    typeof diff.coarse === 'boolean' &&
-    Array.isArray(diff.hunks) &&
-    diff.hunks.every(isHunk)
-  );
 }
 
 export function createChangesDiffStore({
@@ -84,14 +57,14 @@ export function createChangesDiffStore({
   const request = async (seq: number, index: number): Promise<ChangesDiffState> => {
     try {
       const response = await doFetch(
-        `${base}${changesDiffPath(threadId)}?seq=${seq}&index=${index}`,
+        `${base}${changesDiffUrl(threadId, seq, index)}`,
         // content-type 的理由同 `changes-summary.ts`。
         { method: 'GET', headers: { 'content-type': 'application/json' } },
       );
       if (response.status === 404) return 'missing';
       if (!response.ok) return 'error';
       const body: unknown = await response.json();
-      return isFileDiff(body) ? body : 'error';
+      return isChangesDiff(body) ? body : 'error';
     } catch {
       return 'error';
     }

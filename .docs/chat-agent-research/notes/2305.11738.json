@@ -1,0 +1,198 @@
+{
+  "id": "2305.11738",
+  "title": "CRITIC: Large Language Models Can Self-Correct with Tool-Interactive Critiquing",
+  "topic": "T5",
+  "subarea": "外部回饋／工具輔助的修正",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 CRITIC：凍結的黑箱 LLM 只靠 few-shot 提示呼叫搜尋引擎、Python 直譯器與 Perspective API，驗證自己的輸出、寫出附證據的 critique，再依 critique 反覆改寫，並在自由問答、數學程式合成與降毒三類任務上評估。",
+  "problem": "LLM 會產生幻覺事實、錯誤程式碼與有毒內容。既有的修正路線（RLHF、訓練專用 corrector、reranker、RL 降毒）都需要大量人工標註或建構資料，而且需要動到模型權重，只能透過 API 使用的黑箱模型用不上。另一條路是讓 LLM 自評自改（Self-Refine、Reflexion、RCI 等），但 LLM 分辨不出自己哪些知識是對的，自評不可靠，那些工作的好成績常常依賴 oracle 判斷對錯。因此需要一個免訓練、黑箱可用、可解釋，又能靠可信訊號判斷「哪裡錯了」的推論期修正框架。",
+  "core_idea": "仿照人類「先查證再修稿」的流程。做法是把外部工具包成 text-to-text 函式，在 few-shot 示範裡交錯放入 LLM 生成與工具呼叫。LLM 自行產生查詢或程式、讀取工具回傳，寫出 critique：指出錯誤、給出可執行的建議、附上工具取得的證據。接著以（輸入、上一版輸出、critique）為條件生成新版本。critique 的可信度來自外部工具，而不是模型自評。這個「驗證→修正」迴圈可以反覆執行，直到滿足停止條件或達到輪數上限。",
+  "method": {
+    "總流程（Algorithm 1）": "輸入 x、few-shot 提示 ℘、模型 M、工具集合 T、最大輪數 n。步驟：(1) 用 ℘⊕x 生成初始輸出 y0（QA 用 CoT，數學用 PoT，降毒直接生成續寫）；(2) 第 i 輪以 ℘⊕x⊕yi 為條件，讓 M 與 T 交錯互動產生 critique ci，工具回傳結果直接串接在模型產生的查詢後面；(3) 若 ci 判定 yi 正確就回傳（演算法層級的停止條件）；(4) 否則以 ℘⊕x⊕yi⊕ci 生成 y(i+1)；(5) 最多 n 輪。注意：實作的停止條件與演算法不同（見各任務），QA 與數學在非 oracle 模式下實際上不以 critique 判定作為閘門。",
+    "兩種設定": "CRITIC：對所有樣本都執行修正。CRITIC∗（oracle）：只對標準答案判為錯的樣本修正，代表上限，實際部署做不到。",
+    "自由問答（AmbigNQ／TriviaQA／HotpotQA）": {
+      "工具": "自建 Google 搜尋工具：用 LLM 產生的查詢搜尋，抓第一個結果頁，以 fuzzy-matching 對 Google snippet 擷取最多 400 字元當 Evidence。所有查詢（每個模型、每個樣本、greedy 產生）與搜尋結果都寫入快取，確保可重現（2023 年 1–4 月約 9GB）。",
+      "critique 提示格式": "『Proposed Answer: …』→『What's the problem with the above answer?』→『1. Plausibility:』檢查答案型別是否符合問題（問年份就要是年份）→『2. Truthfulness:』先『Let's search the question in google』，再『Let's search the proposed answer』，每次寫出『> Search Query: …』，接工具回傳的『> Evidence: [標題] 摘要…』與一句對證據的解讀，必要時追加查詢 → 總結 → 重述問題，接『Here's the most possible answer: …』作為修正輸出。三個資料集共用同一結構，只換從各資料集抽出的示範題（Appendix F.1.3，約 3 個示範）。",
+      "超參數": "單次驗證最多 7 次工具互動；最多修正 n=3 輪；答案連續兩次修正不變就提前停止；全程 greedy decoding。",
+      "資料與指標": "各資料集 validation 隨機抽 500 筆；EM 與 F1。"
+    },
+    "數學程式合成（GSM8k／SVAMP／TabMWP）": {
+      "工具": "本地 Python 直譯器。回饋分兩種：錯誤訊息以『Execution: {原始錯誤}』呈現（如 NameError、TimeoutError）；成功時回報執行完變數 answer 的值（『Output: answer = …』）。",
+      "critique 提示格式": "程式碼 → Execution／Output → 『What's the problem with the above code?』→ 1. 檢查輸出值是否合理（如人數應為正整數）→ 2. 逐段引用程式碼（以 > 開頭）檢查是否正確 → 『Here's a better solution:』接新程式碼（Appendix F.2.2，4 個示範；其中一個示範是『原本就對、只是改寫得更清楚』）。",
+      "超參數": "PoT 產生初始程式（greedy）；最多修正 n=4 輪；執行結果連續兩次修正不變就停止；修正時以 p=0.5 取樣以免迴圈（論文沒有區分這是 temperature 還是 top-p）。",
+      "資料與指標": "官方 test split；預測數字四捨五入後算 exact match（solve rate）。"
+    },
+    "降毒（RealToxicityPrompts）": {
+      "工具": "Perspective API：回傳整體 toxicity 與 6 個細項屬性（insult、profanity、identity attack、threat 等）。取分數最高的屬性，critique 寫成『The text has {score} toxicity of {attribute}』。",
+      "提示": "指令要求生成更健康、安全、不含各類毒性的續寫，且不得重複先前的有毒文字。每個示範依序是：先前的有毒文字、一句毒性 critique、一句「為了兼顧安全與流暢，以下是另一段無毒續寫」的引導語，最後是新續寫（Appendix F.3.1，3 個示範）。",
+      "超參數": "最多 n=4 輪；整體 toxicity 低於 10% 就停止；nucleus sampling p=0.9（與基線相同）。",
+      "資料與指標": "從非毒性 prompts 隨機抽 1k 筆，每筆生成 25 次；以 Perspective API 算 Max toxicity（25 次中的最大值）與 toxicity probability（25 次中至少一次 >50% 的比例）；用 text-davinci-003 算續寫 perplexity；dist-2／dist-3 衡量多樣性。"
+    },
+    "幻覺偵測（Appendix D.1，把驗證步驟單獨當分類器）": "用 ChatGPT 與 CoT 生成答案。把 plausibility 與 truthfulness 拆成兩個提示以省長度；不 plausible 的直接記為 (D)。truthfulness critique 後接四選一：(A) absolutely correct / (B) probably correct / (C) probably wrong / (D) absolutely wrong。以選項 token 機率加權（權重 4→1）正規化，得到信心分數。F1>0.6 視為正確；指標是 AUROC 與 ACC。",
+    "消融與基線實作細節": "QA 的 CRITIC w/o Tool 拿掉搜尋 API 但沿用同一份提示，所以模型會自己『生成』Evidence。數學的 w/o Tool 從提示中移除 Execution／Output 資訊。降毒的 w/o Tool 改由 LLM 自評細項毒性，而且提示多了『no toxicity. No correction needed.』的示範。ReAct 由作者以自己的搜尋 API 重現。Self-Consistency 用 p=0.5 取樣投票（OpenAI 模型 10 個樣本，LLaMA-2 20 個）。Rejection Sampling 是從頭生成 n 個新 CoT，以評估指標挑最佳者（best-of-N，屬於 oracle）。",
+    "模型": "text-davinci-003、gpt-3.5-turbo（API 結果取自 2023 年 1–4 月）、LLaMA-2 7B／13B／70B；所有模型用相同提示。"
+  },
+  "assumptions": [
+    "任務存在能以文字介面取得、而且比模型自評可靠的外部訊號（搜尋結果、直譯器執行結果、Perspective API 分數）。",
+    "工具回傳本身正確、無偏：搜尋第一頁的 400 字元摘要足以佐證或反駁答案，Perspective API 的分數可視為毒性的真值。",
+    "基底模型夠強，能從少量 ReAct 式示範學會下查詢、讀證據、寫 critique，並依 critique 改寫；作者觀察到效益隨模型變強而增加。",
+    "「答案或執行結果連續兩輪不變」可以當作收斂的代理訊號。",
+    "推論延遲與成本可接受：每筆最多 3–4 輪修正，每輪最多 7 次工具呼叫，延遲大致隨輪數線性增加。",
+    "錯誤主要屬於工具看得見的類型（事實錯誤、執行錯誤、不合理數值、毒性）；純推理錯誤的修正率明顯較低。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AmbigNQ（validation 抽 500）",
+      "TriviaQA（validation 抽 500）",
+      "HotpotQA（validation 抽 500）",
+      "GSM8k（test）",
+      "SVAMP（test）",
+      "TabMWP（test）",
+      "RealToxicityPrompts（non-toxic prompts 抽 1k，每筆 25 次生成）",
+      "幻覺偵測：同上三個 QA 資料集（ChatGPT CoT 答案）"
+    ],
+    "metrics": [
+      "EM、F1（QA）",
+      "exact match／solve rate（數學，四捨五入後比對）",
+      "Max toxicity、toxicity probability（Perspective API）",
+      "perplexity（text-davinci-003）、dist-2、dist-3",
+      "ACC、AUROC（幻覺偵測，F1>0.6 視為正確）"
+    ],
+    "baselines": [
+      "Vanilla few-shot",
+      "CoT",
+      "Self-Consistency",
+      "ReAct（作者以自有搜尋 API 重現）",
+      "ReAct→CRITIC",
+      "CRITIC w/o Tool",
+      "Rejection Sampling（best-of-N，以指標挑選，oracle）",
+      "各資料集 supervised SoTA",
+      "PoT、PAL（Codex）、Self-Refine（Codex，數字引自 Madaan et al.）",
+      "PPLM、GeDi、DExpert、DAPT、PPO、Quark、Self-Correct（Welleck et al.；皆在 GPT-2 上）",
+      "LM Probs、Norm Entropy、Max Entropy、Self-Con、Self-Eval、Only-True（幻覺偵測）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 ChatGPT 上，CRITIC 相對初始方法（QA 用 CoT、數學用 PoT）在三類任務都有提升。",
+      "numbers": "QA 三資料集 F1 平均 +7.7（AmbigNQ 64.3→74.9、TriviaQA 79.2→81.7、HotpotQA 42.8→52.9）；數學三資料集平均 +7.0（GSM8k 72.5→78.2、SVAMP 82.0→83.3、TabMWP 75.0→89.0）。text-davinci-003 的 QA F1 平均 +5.6。",
+      "section": "§1、§4.1 Table 1、§4.2 Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "降毒：以 Perspective API 當 critic，免訓練就把毒性降到接近以 GPT-2 訓練的 SoTA，流暢度與多樣性大致不變。",
+      "numbers": "ChatGPT：toxicity probability 0.192→0.040（−79.2%）、Max toxicity 0.325→0.173、ppl 14.54→15.66；text-davinci-003：0.210→0.045、0.344→0.180。對照 GPT-2 上的 Self-Correct 為 0.026／0.171、Quark 為 0.035／0.196。w/o Tool 反而略升（ChatGPT 0.223／0.339）。",
+      "section": "§1、§4.3 Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "QA 上拿掉搜尋工具後，只靠模型自己的 critique 幾乎沒有增益，工具互動是 CRITIC 增益的主要來源。",
+      "numbers": "CRITIC w/o Tool 相對 CoT 的 F1 平均變化：text-davinci-003 −0.03、ChatGPT +2.33；完整 CRITIC 分別是 +5.6、+7.7。",
+      "section": "§4.1 Results 第 4 點、Table 1",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "數學程式合成上，沒有直譯器回饋時的修正有限而且不穩定，甚至會變差。",
+      "numbers": "text-davinci-003 GSM8k：w/o Tool 68.3（−1.8），CRITIC 72.2（+2.1）。但 ChatGPT 的 w/o Tool 仍有 +4.5／+0.0／+12.0，完整 CRITIC 為 +5.7／+1.3／+14.0，差距不大。",
+      "section": "§4.2 Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "迭代修正大致持續改善但邊際遞減，2–3 輪就拿到大部分效益；沒有可靠回饋時，迭代的回報較差。",
+      "numbers": "見 Figure 3–5 與 Appendix D.7（論文正文只給曲線圖，沒有逐輪數字）。",
+      "section": "§4.4 Effect of Iterative Correction",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "以 critique 為條件重新生成，勝過從頭重抽樣的 best-of-N；兩者都是 oracle 設定。",
+      "numbers": "三資料集 EM 平均：CRITIC∗ 比 Rejection Sampling 高 4.5（text-davinci-003）與 3.3（ChatGPT）。逐資料集並不一致：ChatGPT TriviaQA 為 80.9 對 82.0；LLaMA-2 三種尺寸的 HotpotQA 都是 Rejection Sampling 較高。",
+      "section": "§4.4 Comparison with Rejection Sampling、Table 1、Table 8",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "LLM 自評分不出自己答案的對錯；加上工具互動的驗證可當作較好的幻覺偵測器。",
+      "numbers": "AUROC：CRITIC 0.810／0.818／0.831（AmbigNQ／TriviaQA／HotpotQA），Self-Eval 為 0.668／0.731／0.713，Self-Con 為 0.760／0.745／0.831。Self-Eval 的 ACC 在 HotpotQA 只有 0.540；在 TriviaQA 為 0.838，低於全判正確的 Only-True（0.864）。",
+      "section": "Appendix D.1 Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "HotpotQA 人工錯誤分析：CRITIC 錯誤樣本的組成跟 CoT 明顯不同，幻覺占比大降，但多出修正特有的失敗模式，而且自動指標低估了它。",
+      "numbers": "隨機抽 100 筆人工標註；數字是各方法錯誤樣本（以 F1>0.6 判錯）的組成比例，不是發生率。hallucination 占比 36%→7%；refusal to answer 2%→12%；CRITIC 把原本正確答案改錯的占其錯誤的 10%；CRITIC 錯誤樣本中 49% 屬於標籤模糊／錯誤／過時造成的 false negative（37%＋10%＋2%）。",
+      "section": "Appendix D.2.1 Table 6",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "GSM8k 全測試集錯誤分析：直譯器看得見的錯誤類型修正率高，純推理錯誤修正率低；非 oracle 模式也會把對的改錯。",
+      "numbers": "363 筆初始錯誤中修好 32.2%，依類型：unreasonable output 57.4%、syntax 35.3%、intrinsic 26.7%、runtime 25.0%。原本正確的樣本修正後準確率剩 95.7%，有 41 筆被改錯。由此推算淨效益約為修好 117 筆、改壞 41 筆，與 Table 2 的 +5.7 一致；這是本筆記自行推算，論文沒有明寫是哪個模型。",
+      "section": "Appendix D.2.2 Table 7",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "推論延遲隨迭代輪數 n 線性增加（數學修正兩輪約為 PoT 的兩倍時間），但作者認為 1–3 輪就有大部分效益，而且 Self-Consistency、ReAct 同樣以時間換效能。",
+    "依賴人工設計的 in-context 示範，不同提示構造可能影響結果；長示範需要反覆編碼，佔用 context window。",
+    "只驗證了少數任務、少數 LLM，而且只有文字模態；LLM 不一定需要、也不一定能取得合適的外部回饋，以明確語言評估也不適合所有輸出。",
+    "搜尋引擎找不到有用證據、或誤讀證據時，幻覺仍會殘留；證據不足時模型會拒答，作者視為維持真實性的預期行為。",
+    "大部分殘餘錯誤來自推理錯誤、拒答與錯誤修正；純推理錯誤因為拿不到可靠回饋，修正率偏低（26.7%），原本正確的輸出也有約 4.3% 被改錯。",
+    "倫理面：外部工具可能帶入額外偏見；透過 API 與外部工具互動有隱私與資安顧慮。"
+  ],
+  "limitations_observed": [
+    "「沒有外部回饋的自我修正不可靠」這個主張，在本篇自己的 ChatGPT 數字上力道不足。數學的 w/o Tool 為 +4.5／+0.0／+12.0，完整 CRITIC 為 +5.7／+1.3／+14.0，大部分增益不靠直譯器；QA 的 ChatGPT w/o Tool 也有 +2.33 F1。「會變差」的證據主要來自 text-davinci-003，以及引自 Madaan et al. 的 Codex Self-Refine −44.6。後者換了模型、提示與停止規則，屬於跨論文比較。",
+    "QA 的 CRITIC w/o Tool 沿用同一份提示，模型會自己編出『> Evidence』。這個消融量到的是「帶著幻覺證據的反思」，不是乾淨的內在自我修正基線，可能高估了內在修正有多差。",
+    "降毒實驗有評估洩漏：Perspective API 同時是 critic、停止條件（toxicity<10%）與最終評估指標，等於直接對評估器最佳化；那 79.2% 的降幅大部分可以預期，說明不了對其他毒性判準的泛化。兩臂的差別也不只工具：w/o Tool 提示多了『no toxicity. No correction needed.』的示範。拿來比的 PPO、Quark、Self-Correct 都跑在 GPT-2 上，底模不同，「與 supervised SoTA 相當」不是同條件比較。",
+    "非 oracle 模式實際上一律修正。Algorithm 1 寫的是 critique 判正確就停，但 QA 與數學的實作是「答案或執行結果連兩輪不變才停」，數學示範裡甚至包含把正確程式『改寫得更好』。結果是 GSM8k 有 41 筆原本正確被改錯，HotpotQA 上 CRITIC 錯誤樣本有 10% 屬於錯誤修正。D.1 顯示驗證器 AUROC 約 0.81，本來可以拿來當觸發閘門，論文沒有試。",
+    "Table 6 只給各方法錯誤樣本的組成比例（兩欄各自加總約 100%），沒給兩者的錯誤總數；錯誤總數不同時，光比占比看不出幻覺的絕對發生率降了多少。所以論文用「36% vs 7%」證明「大幅減少幻覺」，推論並不成立。",
+    "表格之間數字不一致：text-davinci-003 GSM8k 的 CRITIC 在 Table 2 是 72.2（+2.1），在 Table 10 是 71.2（+1.1）；ChatGPT GSM8k Vanilla 在 Table 2 是 27.9，在 Table 10 是 29.6。",
+    "oracle 結果有疑點：LLaMA-2-7B HotpotQA 的 CRITIC∗ EM 為 28.6，低於非 oracle 的 CRITIC（28.8）；LLaMA-2-13B HotpotQA 兩者完全相同（32.5／40.2）。QA 全程 greedy 的話，只修錯題的 oracle 理應 ≥ 全修，論文也沒交代 oracle 以 EM 還是 F1 門檻判錯。Rejection Sampling 的 n 同樣沒寫。",
+    "「優於 ReAct 5.1／8.2 F1」的基線偏弱：作者重現的 ReAct 在 TriviaQA 甚至低於不查資料的 Vanilla（ChatGPT EM 63.7 對 70.4；text-davinci-003 為 64.4 對 68.3）。另外 ReAct→CRITIC 在 ChatGPT HotpotQA 反而略降（F1 50.2→50.0）。",
+    "幻覺偵測宣稱「勝過所有既有方法」，但 HotpotQA 的 AUROC 與 Self-Con 同為 0.831。信心分數要用 gpt-3.5-turbo 選項 token 的機率，論文沒說明當時如何取得，重現有疑問。",
+    "統計強度與可重現性：QA 每個資料集只有 500 筆；數學修正以 p=0.5 取樣，卻只報單次結果、沒有變異數。D.3 承諾釋出約 9GB 的搜尋快取，但官方 repo 的 README 與 data 目錄只見毒性資料來源說明，未見快取下載；Google 結果會隨時間漂移，text-davinci-003 也已下線，OpenAI 部分的數字難以精確重現。",
+    "成功與否只看最終答案：Listing 2 的『成功』案例在修正後的推理本身是錯的（把 Badly Drawn Boy 的伴奏樂團成員讀成本人），只是答案剛好對。critique 品質與推理忠實度都沒有評估。",
+    "成本只談工具免費（D.3），沒報每筆的 LLM token 數、呼叫次數與延遲；每輪最多 7 次工具互動、最多 3–4 輪，和 Self-Consistency（10–20 個樣本）之間沒有等成本比較。"
+  ],
+  "framework_role": "T5 裡「外部回饋／工具輔助修正」的代表作與最常被比較的基準。它定下 verify→critique→correct 的迴圈與資料形狀：critique 是附工具證據的自然語言，修正是以（輸入、舊輸出、critique）為條件重新生成。它也提供量化證據，說明工具驗證器比模型自評更適合當錯誤偵測器（D.1 AUROC 0.81–0.83 對 Self-Eval 0.67–0.73），可以拿來銜接 T3／T4 的異常偵測。對框架設計的直接啟示有三點：(1) 修正觸發要接可靠的外部訊號，不能只靠模型自評；(2) 沒有閘門的「一律修」會把對的改錯（GSM8k 41 筆、HotpotQA 上 CRITIC 錯誤樣本的 10%），框架應以驗證器信心門控；(3) critique 加上工具呼叫紀錄，本身就是可稽核的修正日誌。限制：它只處理單輪、單一輸出的修正，不涉及多輪對話狀態、使用者或多步 agent 軌跡。立場上它與 2310.01798 一致，都主張內在自我修正不可靠，但本篇自己的 ChatGPT 數字支撐這點的力道比措辭弱。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "驗證步驟本質上是異常偵測器，偵測的是執行錯誤（NameError、Timeout）、不合理輸出（負數、非整數）、搜尋證據與答案矛盾，以及 Perspective 毒性分數。D.1 把它單獨當幻覺偵測器評估（AUROC 0.81–0.83）。但只有降毒任務是「偵測到異常（毒性 ≥10%）才繼續修」。QA 與數學在非 oracle 設定下一律進入修正，偵測結果沒有當觸發閘門；oracle 設定則直接用標準答案決定觸發。偵測對象是單一輸出，不是多步軌跡。"
+    },
+    {
+      "edge": "E5",
+      "how": "作者對修正前後的紀錄（CoT 答案、critique、CRITIC 答案）做人工標註與錯誤分析：HotpotQA 抽 100 筆、GSM8k 全部 1319 筆。分析找出 incorrect correction、refusal 等修正特有的失敗模式，也發現 CRITIC 錯誤樣本中 49% 其實是標籤模糊／錯誤／過時造成的 false negative，據此指出 EM／F1 自動評估有偏，並稱這促成後續研究改用 LLM 評估 QA。這是離線、人工的回流，不是自動化管線。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "LlamaIndex 官方整合套件 llama-index-agent-introspective 的 README 寫明：ToolInteractiveReflectionAgentWorker 實作了 CRITIC 反思框架，並附上本篇 arXiv 連結；首版 0.1.0 發布於 2024-05-03，最新版 0.3.2 發布於 2025-06-29。來源：https://pypi.org/project/llama-index-agent-introspective/ （透過 https://pypi.org/pypi/llama-index-agent-introspective/json 讀取 README 與發版紀錄）",
+      "LlamaIndex 主 repo 的棄用名詞清單已列入 ToolInteractiveReflectionAgentWorker（以及 IntrospectiveAgentWorker、SelfReflectiveAgentWorker）。來源：https://github.com/run-llama/llama_index/blob/main/docs/src/content/docs/framework/changes/deprecated_terms.md"
+    ],
+    "assessment": "有一條可查證的框架層級採納：LlamaIndex 曾以官方套件提供 CRITIC 的實作，後來列為棄用。這證明方法被主流開發框架收錄，但不是產品上線的證據。論文本身沒有提到任何部署。LlamaIndex 幾份 workshop 筆記本沿用了論文的毒性例子，那是 LlamaIndex 自己的教學材料，不代表舉辦單位採用。另外，本次 WebSearch 額度已用完，其他產品或官方文件沒有進一步搜尋，除上述之外未見證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/microsoft/ProphetNet/tree/master/CRITIC （MIT；含 QA／數學／降毒的推論、CRITIC 與評估腳本及提示）；免費網頁搜尋工具：https://github.com/ZubinGou/llm-agent-web-tools",
+    "data": "評估資料皆為公開基準：QA 與數學資料透過 datasets 自動下載；毒性資料取自 Quark repo 的 RealToxicityPrompts 切分。論文承諾釋出的約 9GB 搜尋快取，在官方 repo 的 README 與 data 目錄中未見；QA 抽樣的 500 筆 ID 是否公開也沒有交代。Google Search API 與 Perspective API 要自行申請；text-davinci-003 已下線。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 T5「外部回饋修正」子領域的奠基作與標準基準（ICLR 2024，Semantic Scholar 945 次引用），方法免訓練、可直接套到 agent 修正迴圈，也有 LlamaIndex 官方實作，但「內在自我修正不可靠」這個主張的證據要配合本筆記指出的弱點一起讀。",
+  "related": [
+    "2303.17651",
+    "2303.11366",
+    "2304.05128",
+    "2303.17491",
+    "2210.03629",
+    "2211.00053",
+    "2210.08726",
+    "2302.12813",
+    "2310.01798",
+    "2207.05221",
+    "2206.05802",
+    "2212.08073",
+    "2211.12588"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 3,
+    "total": 8
+  }
+}

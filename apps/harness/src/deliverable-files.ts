@@ -1,8 +1,8 @@
 /**
  * 讀一個**宣告過的**交付檔（[#452](https://github.com/DemianLi/nexus-agent/issues/452) 第二刀）。
  *
- * 兩條路由（預覽、下載）共用的那一半：把 `(seq, index)` 這個座標換成磁碟上的一個檔，或是一個
- * 講得出理由的拒絕。HTTP 那一半在 {@link ./wire-handler.ts}。
+ * 兩支方法（`deliverable.read`、`deliverable.readBytes`）共用的那一半：把 `(seq, index)` 這個座標換成磁碟上的一個檔，或是一個
+ * 講得出理由的拒絕。命令通道那一半在 {@link ./wire-handler.ts}（[#747](https://github.com/DemianLi/nexus-agent/issues/747)）。
  *
  * 照 dsh 的 `workspace-files`（`packages/api/workspace-files/src/index.ts`，`ddefc45`）。
  *
@@ -10,7 +10,7 @@
  *
  * 這個模組不挑錨，也不認得續接線。錨是呼叫端交出來的一個目錄
  * （{@link locateDeliverableFile} 的 `rootDir`），怎麼挑的寫在 `wire-handler.ts` 的
- * `locateRequested`——那是唯一挑得起的地方，因為線的位置（`storedCount`）與日誌 header 記下的
+ * `locateAt`——那是唯一挑得起的地方，因為線的位置（`storedCount`）與日誌 header 記下的
  * 根都只在那裡（[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
  *
  * **把它留在呼叫端不是成本考量，是正確性。** 從 `threadFor` 拿到的是**這一次組裝**的 backend；
@@ -25,7 +25,8 @@
  * dsh 的檔案本身沒有大小上限（`Config.maxBytes` 的檔頭：「The file itself has no size cap: a caller
  * pages through it」），因為它的 `read` 從 `streamText` 切頁，讀到頁尾之後的第一個字元就停。預覽
  * 照做（[#544](https://github.com/DemianLi/nexus-agent/issues/544)），見 {@link readDeliverablePage}。
- * **`maxFileBytes` 只管下載**，同 dsh 的 `readAll`。
+ * **`maxFileBytes` 只管整檔讀**（`deliverable.readBytes` 不給範圍），同 dsh：整檔讀是不帶範圍的 `readBytes`，上限同樣是 `maxFileBytes`
+ * （dsh `477b4f4` 的 `packages/api/workspace-files/src/index.ts:272-275`；那個版本的讀檔服務已經沒有 readAll 這支方法）。
  *
  * 從前這裡登記過一條偏離：「整檔讀進來再切頁，所以超過 `maxFileBytes` 的文字檔預覽不了」。那條
  * 偏離的理由是實作選擇，不是基礎建設表達不出來，#544 把它收掉了。
@@ -46,13 +47,15 @@
 
 import { createReadStream } from 'node:fs';
 import { lstat, open, realpath, stat } from 'node:fs/promises';
-import { basename, dirname, join, resolve, sep } from 'node:path';
+import { basename, dirname, resolve } from 'node:path';
 
+import { hostPathOf, virtualPathOf } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { virtualPathOf } from '@nexus/plugin-present';
 import type { DeliverableFilePage, DeliverableFileStat } from '@nexus/wire';
 
+import { isWithin } from './canonical-path.js';
 import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
+import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 
 /** 文字不會帶的那個位元組；它在就代表這個檔不是文字。照 dsh 的 `NUL`。 */
 const NUL = String.fromCharCode(0);
@@ -81,10 +84,23 @@ export type DeliverableRefusal =
 /** 成功，或一個講得出理由的拒絕。 */
 export type DeliverableResult<T> =
   | { readonly kind: 'ok'; readonly value: T }
-  | { readonly kind: 'refused'; readonly reason: DeliverableRefusal; readonly message: string };
+  | {
+      readonly kind: 'refused';
+      readonly reason: DeliverableRefusal;
+      readonly message: string;
+      /**
+       * `too-large` 才有：被超過的那個上限（位元組）。命令通道上 `deliverable/too-large` 帶它，照 dsh（#747）；
+       * 舊的 `GET` 路由只講 `message`，用不到。
+       */
+      readonly maxBytes?: number;
+    };
 
-function refuse<T>(reason: DeliverableRefusal, message: string): DeliverableResult<T> {
-  return { kind: 'refused', reason, message };
+function refuse<T>(
+  reason: DeliverableRefusal,
+  message: string,
+  maxBytes?: number,
+): DeliverableResult<T> {
+  return { kind: 'refused', reason, message, ...(maxBytes !== undefined && { maxBytes }) };
 }
 
 /**
@@ -132,8 +148,8 @@ export interface LocatedDeliverable {
  * 順序照 dsh 的 `locateFile`／`inspect`：**先擋路徑本身，再讓任何東西跟著它走**。
  *
  * - `virtualPathOf` 把模型給的原字串正規化成一條虛擬絕對路徑（`..` 在這一步被 `posix.normalize`
- *   吃掉，所以它不可能往上逃）。**這一份是從 `@nexus/plugin-present` 匯入的**，不是複製的：
- *   事件裡存的是原字串，正規化的結果不落庫，兩邊各寫一次的下場是有一天只有一邊擋。
+ *   吃掉，所以它不可能往上逃），接根那一步是 `hostPathOf`。**兩支都是 `@nexus/core` 的共用那一份**，
+ *   不是複製的：事件裡存的是原字串，正規化的結果不落庫，各寫一次的下場是有一天只有一邊擋。
  * - **父目錄先 `realpath`**，然後要求它落在工作區根的 realpath 之內。這一步擋的是中途某一層
  *   目錄是符號連結、指到工作區外的情況——`virtualMode` 的圍堵是 lexical 的（基座 `resolvePath`
  *   的檔頭自己寫著），lexical 擋不到它。
@@ -150,7 +166,7 @@ export async function locateDeliverableFile(
 ): Promise<DeliverableResult<LocatedDeliverable>> {
   const virtual = virtualPathOf(declaredPath);
   if (virtual === '/') return refuse('not-regular-file', `讀不到：${declaredPath} 是工作區根。`);
-  const lexical = join(rootDir, virtual);
+  const lexical = hostPathOf(rootDir, virtual);
   let root: string;
   let parent: string;
   try {
@@ -159,7 +175,7 @@ export async function locateDeliverableFile(
   } catch {
     return refuse('not-found', `讀不到：${declaredPath} 的所在目錄不在了。`);
   }
-  if (parent !== root && !parent.startsWith(`${root}${sep}`)) {
+  if (!isWithin(root, parent)) {
     return refuse('not-found', `讀不到：${declaredPath} 解出來落在工作區外。`);
   }
   const target = resolve(parent, basename(lexical));
@@ -201,7 +217,7 @@ export async function locateDeliverableFile(
 }
 
 /**
- * 讀整份位元組，**吃整檔上限**。只有下載走這裡，同 dsh 的 `readAll`；預覽串流，見
+ * 讀整份位元組，**吃整檔上限**。只有整檔讀（不帶範圍的 `readBytes`）走這裡，同 dsh；預覽串流，見
  * {@link readDeliverablePage}。
  *
  * ## 為什麼不經基座的 `readRaw`
@@ -238,11 +254,12 @@ export async function readDeliverableBytes(
       'too-large',
       `讀不到：${located.stat.path} 有 ${located.stat.bytes} 位元組，超過 ` +
         `${limits.maxFileBytes} 的上限。上限是拒絕，不是截斷。`,
+      limits.maxFileBytes,
     );
   }
   // **上限綁在讀本身，不是只綁在前面那次 stat 上。** 只看 stat 的話，兩次之間長大的檔就整份
   // 進記憶體了——這台機器是多人共用的。緩衝區開 `min(當時的大小, 上限) + 1`：那個 +1 就是
-  // 「它長大了」的偵測器。dsh 同樣把上限傳進讀裡（`readAll` 的 `maxFileBytes`）。
+  // 「它長大了」的偵測器。dsh 同樣把上限傳進讀裡（不帶範圍的 `readBytes` 的 `maxFileBytes`）。
   let handle: Awaited<ReturnType<typeof open>>;
   try {
     handle = await open(located.target, 'r');
@@ -257,6 +274,7 @@ export async function readDeliverableBytes(
       return refuse(
         'too-large',
         `讀不到：${located.stat.path} 讀的時候已經超過 ${limits.maxFileBytes} 的上限。`,
+        limits.maxFileBytes,
       );
     }
     return { kind: 'ok', value: buffer.subarray(0, bytesRead) };
@@ -267,36 +285,6 @@ export async function readDeliverableBytes(
 
 /** 一頁超過位元組上限時丟出來，在 {@link readDeliverablePage} 裡翻成拒絕。 */
 class PageTooLarge extends Error {}
-
-/** 讀到不是 UTF-8 的位元組時丟出來，在 {@link readDeliverablePage} 裡翻成 `not-text`。 */
-class NotUtf8 extends Error {}
-
-/**
- * 把檔案串流成 UTF-8 文字，**碰到不是 UTF-8 的位元組就停**，照 dsh 的 `streamText`（「decodes and
- * rejects non-UTF-8 as it goes」）。
- *
- * 用 `TextDecoder` 而不是 `createReadStream` 的 `encoding`：後者把壞位元組換成 U+FFFD、不會拒；
- * 而且 `TextDecoder` 預設吃掉開頭的 BOM，跟這條路從前整檔解碼時一樣。多位元組字元切在兩片之間
- * 由 `stream: true` 接住。
- *
- * 呼叫端提早收手時（`for await` 的 `return`），底下那個串流跟著關掉，檔案其餘部分不讀。
- *
- * @param path - 已經通過閘門的那條絕對路徑。
- * @throws {NotUtf8} 讀到的位元組不是 UTF-8。
- */
-async function* streamUtf8(path: string): AsyncGenerator<string> {
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const decode = (chunk?: Buffer): string => {
-    try {
-      return chunk === undefined ? decoder.decode() : decoder.decode(chunk, { stream: true });
-    } catch {
-      throw new NotUtf8();
-    }
-  };
-  for await (const chunk of createReadStream(path)) yield decode(chunk as Buffer);
-  const tail = decode();
-  if (tail.length > 0) yield tail;
-}
 
 /** 從串流切出來的一頁，還沒掃 NUL。 */
 interface CutPage {
@@ -315,7 +303,7 @@ interface CutPage {
  *
  * **最後一行後面的換行不算一行**：串流結束時手上沒有半行，就不補一行空的。
  *
- * @param chunks - 解碼過的文字片段，見 {@link streamUtf8}。
+ * @param chunks - 解碼過的文字片段，見 {@link streamUtf8}（`utf8-stream.ts`，預覽沿用 `TextDecoder` 預設，吃掉開頭的 BOM）。
  * @param offset - 從第幾行起，0 起算。
  * @param limit - 最多幾行。
  * @param maxBytes - 一頁的位元組上限，含行與行之間的換行。
@@ -371,10 +359,10 @@ async function cutPage(
  * 不是給到上限為止——同 dsh 的 `maxLines`（「a request asking for more is refused」）。
  *
  * **`limits.maxLines` 是雙用的**：這裡當「不准超過」的上限，而「呼叫端沒給 `limit` 時用什麼」
- * 是同一個數字，那一半在 `wire-handler.ts` 的 `handleDeliverableFile`。dsh 一樣
+ * 是同一個數字，那一半在 `wire-handler.ts` 的 `handleDeliverableCommand`。dsh 一樣
  * （`workspace-files/src/index.ts:371-373`，兩處讀同一個 `this.config.maxLines`）。**兩處必須
  * 一起吃到設定值**：只接一處的話兩個方向都會壞——設定高於這裡寫死的上限，不帶 `limit` 的請求
- * 全部 400；設定低於那邊寫死的預設，一樣。
+ * 全部被拒；設定低於那邊寫死的預設，一樣。
  *
  * **整檔沒有大小上限**，`limits.maxFileBytes` 不在這條路上（見檔頭）。**頁的上限照 dsh：拒絕，
  * 不截斷**——「a silently cut page reads as the whole page」。
@@ -403,13 +391,19 @@ export async function readDeliverablePage(
   let page: CutPage;
   try {
     // 提早 return 會讓 `for await` 呼叫迭代器的 `return`，串流隨之關掉，檔案其餘部分不讀。
-    page = await cutPage(streamUtf8(located.target), offset, limit, limits.maxBytes);
+    page = await cutPage(
+      streamUtf8(createReadStream(located.target)),
+      offset,
+      limit,
+      limits.maxBytes,
+    );
   } catch (error) {
     if (error instanceof PageTooLarge) {
       return refuse(
         'too-large',
         `讀不到：${located.stat.path} 從第 ${offset} 行起的這一頁超過 ${limits.maxBytes} 的上限。` +
           '上限是拒絕，不是截斷——切短的一頁看起來就是整頁。',
+        limits.maxBytes,
       );
     }
     if (error instanceof NotUtf8) {

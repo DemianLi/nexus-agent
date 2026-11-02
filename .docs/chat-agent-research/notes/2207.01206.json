@@ -1,0 +1,172 @@
+{
+  "id": "2207.01206",
+  "title": "WebShop: Towards Scalable Real-World Web Interaction with Grounded Language Agents",
+  "topic": "T7",
+  "subarea": "agent 基準與評估環境設計",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "建立一個含 118 萬件真實 Amazon 商品、12,087 條群眾外包購物指令的模擬電商網站環境，用程式化 reward 自動評分 agent 的「搜尋→瀏覽→選選項→購買」軌跡，並提供人類基準、IL／RL 基準、choice oracle 拆解與 Amazon／eBay 的 sim-to-real 驗證。",
+  "problem": "既有的語言互動環境不是缺少真實世界的語言（遊戲、3D 導航、MiniWoB 那類低階點擊任務），就是要靠人評或人類回饋才算得出分數（例如 WebGPT），難以擴大規模。要訓練與評估會在真實網頁上做長程決策的語言 agent，需要一個語言素材真實、可大量蒐集，而且任務回饋能完全自動計算的互動式環境。",
+  "core_idea": "把網站的轉移動態（搜尋引擎、頁面跳轉）和任務本身（指令與 reward）拆開設計。每條指令都由一件「目標商品」反推：把商品的隱藏屬性子集、選項子集與價格上限寫成自然語言指令，購買結束時再拿買到的商品與這份隱藏規格做程式化比對，給出 [0,1] 的部分給分。這樣評分完全不需要人參與，同一套環境就能同時支援 IL、RL 與人類基準的比較，也能換成真實網站的前端做外部效度檢查。",
+  "method": {
+    "environment": "POMDP。頁面分四型：搜尋頁、結果頁、商品頁、商品細節頁。動作只有兩類：search[query] 只能在搜尋頁使用；其他頁面只能 choose[按鈕]，按鈕包括 Back to search、Prev/Next page、商品標題、選項、Description/Overview、Previous、Buy（Table 1）。轉移是決定性的。以 Flask 加 OpenAI Gym 實作，提供兩種平行觀測：HTML 模式給人類操作；simple 模式去掉 HTML 雜訊只留文字與可點按鈕，所有模型都在這個模式訓練與評估。",
+    "data": "用 ScraperAPI 從 amazon.com 抓 5 大類的 1,181,436 件商品，依標題或 ID 去重（子類查詢數在 §3.2 寫 113、A.1 寫 313）。共 842,849 個唯一選項，平均每件 3.1 個屬性、0.67 個選項（Table 6）。",
+    "search_engine": "用 Pyserini 的 BM25 稀疏檢索，對標題、描述、overview、客製選項串接後的文字建離線索引。每次搜尋回傳前 50 筆，每頁 10 筆、共 5 頁；搜尋結果是決定性的。",
+    "attributes": "依類別對標題加描述計算 bi-gram 的 TF-IDF，每類人工檢視前 200 個，只保留可讀、能套進 IsGoodFor／HasA／WhichIs／IsA 四種用法之一的，彙整成 670 個屬性池並指派給商品。屬性對 agent 隱藏，只用來算 reward。",
+    "instructions": "在 AMT 上給工作者看目標商品的標題、類別、屬性與選項，請他勾選要包含的屬性／選項後寫一句給購物 agent 的指令，並要求不可照抄整個標題。資格測驗做 2–5 題，共 213 人合格，每題付 0.15 美元。最後得到 12,087 條指令，詞彙量 9,036，平均長度 15.9 字。形式上 U_att 是目標屬性的非空子集，U_opt 是目標選項的子集，u_price 高於目標價。據 repo 的 goal.py，價格上限是從目標價之上最多 4 個 10 美元整數倍中隨機抽兩個取較大者，以「price lower than X dollars」接在指令尾端；候選不足兩個時不加價格限制。",
+    "reward": "Eq.1：r = r_type ×（屬性命中數 ＋ 選項命中數 ＋ 1[價格 ≤ 上限]）÷（指令屬性數 ＋ 指令選項數 ＋ 1）。r_type 用類別與標題名詞重疊壓低「屬性相近但品類明顯不同」的商品（例如 butter 與 plant-based meat）。據 repo（自初版 commit 61e56dbb 起未改）的實際邏輯：r_type 預設 1；若「同一個爬取查詢」「類別鏈至少共享 2 層」「標題名詞重疊率 > 0.2」三者皆不成立則為 0.5；重疊率 < 0.1 為 0.1；重疊率為 0 則為 0。標題名詞用 spaCy 取 NOUN/PROPN。屬性比對：先對商品屬性清單做 fuzzy token_set_ratio > 85，不中就退回去檢查屬性字串是否出現在標題、條列特色或描述中。選項比對：顏色正規化後做 fuzzy > 85。",
+    "metrics": "Task Score = 100 × 平均 reward；Success Rate = r = 1 的比例。r = 1 不必是原目標商品，符合所有條件的其他商品也算。",
+    "splits_and_humans": "指令 i.i.d. 切成 10,587 / 1,000 / 500（train/dev/test）。從 train 抽樣收 1,012 條人類示範做 IL，dev 另收 54 條調參與挑 checkpoint，500 條 test 全部收人類軌跡。人類招募：5 題資格測驗、平均 reward > 0.75 才合格，共 13 人，取前半 7 人為 expert，每條軌跡付 0.7 美元。人類在 HTML 模式作答。",
+    "rule_baseline": "把指令原文直接拿去搜尋，點第一筆結果，不選任何選項就購買。",
+    "il_search": "BART 做 seq2seq，只以指令為輸入（不看歷史），用 1,012 條示範中的 1,421 組（指令, 搜尋詞）以負對數似然微調。推論時 beam search 取 top-5，再隨機挑一個。",
+    "il_choice": "12 層 BERT 分別編碼觀測 o 與每個候選動作 a。以 BiDAF 式 cross-attention（Seo et al.；α_ij = w1·o_i + w2·a_j + w3·(o_i⊙a_j)，再做 context-to-query 與 query-to-context 彙整、leakyReLU MLP）得到動作 token 的觀測條件化表示，mean-pool 後乘 w6 得到純量 S(o,a)，在可用動作上做 softmax，以示範動作的 NLL 訓練（9,558 筆）。影像部分：ResNet-50 抽 512 維特徵，線性映到 768 維後接在 BERT(o) 後面。推論時從 policy 取樣而非取 argmax；Table 9 顯示改成 top-1 choice 時 Score 會掉到 45.1。訓練超參數：batch 1、32 步梯度累積、lr 2e-5、10 epochs，在單張 RTX 2080 上約 2 小時。",
+    "il_rl": "凍結 BART，改成每次提供 top-10 搜尋詞，當作 choice 模型可選的候選，以避免直接用 RL 調生成器造成語言漂移。用 policy gradient 搭配 return-to-go 與學習的 value baseline（V(o) = W_v^T BERT(o)，和 policy 共用 BERT）；總損失 = PG ＋ L2 value ＋ entropy。4 個平行環境跑 100k 步，每 8 步 BPTT，Adam lr 1e-5（Transformer）／5e-4（RNN），在單張 RTX 3090 上約 27 小時。RNN 對照組用單層雙向 GRU（hidden 512）加同一種 attention，外加一個指令對動作的 cross-attention。",
+    "choice_oracle": "給定一個搜尋詞，窮舉每筆結果與所有選項組合，用隱藏的 reward 挑最大者，每集要數百到數千步。用它把「搜尋詞好不好」和「選擇做得對不對」兩個瓶頸拆開。搜尋詞來源比較四種：指令原文、IL BART 的 top-1、人類 expert 第一次搜尋、人類 expert 最後一次搜尋。",
+    "sim_to_real": "用腳本循環執行四步：以 ScraperAPI 抓真實 Amazon/eBay 頁面 HTML 並抽出標題、價格、選項；轉成 WebShop 的 HTML 再轉成 simple 文字觀測；依頁型給出合法動作集；把模型輸出的動作依規則映射回真實 URL。重複到模型選 Buy 為止。選項點擊與 Buy 不送到真實網站，只在介面層記錄後計分，所以真實網站上只做導覽。抽 100 條 test 指令，比較 rule、IL、IL+RL 三個模型，依 Eq.1 人工評分。"
+  },
+  "assumptions": [
+    "目標商品的隱藏屬性（670 個 bi-gram 屬性池）與選項欄位，足以代表使用者「想要的東西」；指令只描述這些欄位的子集，所以 reward 只檢查這些欄位。",
+    "字串層級的比對（fuzzy 比對、子字串、名詞重疊）能近似人類判斷「買到的東西是否符合指令」；A.7 以 200 條人類軌跡的人工重評支撐這一點。",
+    "價格上限只略高於目標價，而且指令一定能由單一商品滿足，所以任務可解；choice oracle 的 85–88% SR 是可達上限的近似。",
+    "simple 模式的文字觀測足以完成任務，而且任何真實 HTML 都能轉成這個格式，這是 sim-to-real 可行的前提。",
+    "BM25 搜尋引擎決定性、可重現，因此 IL 示範的搜尋結果在重放時一致。",
+    "i.i.d. 切分下，test 指令與 train 指令來自同一個商品分佈，能反映泛化能力（作者承認尚未做依類別切分的測試）。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WebShop test split（500 條指令，每個模型 3 次試驗）",
+      "Zero-shot sim-to-real：amazon.com 與 ebay.com 各 100 條指令，依 Eq.1 人工評分",
+      "Reward verification：一般與 expert 工作者軌跡各隨機抽 100 條，人工重評（A.7）"
+    ],
+    "metrics": [
+      "Task Score（100 × 平均 reward）",
+      "Success Rate（r = 1 的比例）",
+      "分項分數：Attribute、Option、Type、Price",
+      "軌跡統計：每集造訪狀態數、檢視商品數、搜尋次數（平均／最大／最小）",
+      "自動 reward 與人工評分的 Pearson 相關、差距在 10% 以內的比例",
+      "每集耗時（sim-to-real 的人類 vs agent）"
+    ],
+    "baselines": [
+      "Rule（指令原文搜尋、點第一筆、直接買）",
+      "IL（BART search ＋ BERT choice）",
+      "IL w/o LP Search（搜尋改用指令原文）",
+      "IL w/o LP Choice（choice 模型不用預訓練權重，從頭訓練 Transformer）",
+      "IL ＋ 歷史（加入前一個觀測與最近 5 個動作）",
+      "IL w/o image",
+      "RL（從預訓練 BERT 直接 RL、不經 IL）",
+      "RL (RNN)（GRU 編碼器）",
+      "IL+RL",
+      "人類：一般工作者（8 人，75.5 / 50.0%）與 expert（82.1 / 59.6%）",
+      "Choice oracle（可存取隱藏 reward 的上限）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "最佳模型的成功率只有人類 expert 的一半左右，但明顯高於規則基準，說明任務不 trivial，而且有很大的進步空間。",
+      "numbers": "摘要：最佳 SR 約 29%、規則 9.6%、人類 expert 約 59%。§5.2／Figure 4 細項：Rule 45.6 / 9.6%；IL 59.9 / 29.1%；IL+RL 62.4 / 28.7%；人類 expert 82.1 / 59.6%；一般人類 75.5 / 50.0%（A.6）。",
+      "section": "Abstract；§5.2、Figure 4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "choice 模型的語言預訓練是關鍵；拿掉之後 SR 掉約三分之二。搜尋詞生成的貢獻較小：改用指令原文當搜尋詞，Score 與 SR 都只掉約 3 分。",
+      "numbers": "IL w/o LP Choice 的 SR 降幅接近 2/3；IL w/o LP Search 的 Score 與 SR 各降約 3 分（Figure 4）",
+      "section": "§5.2 IL ablations、Figure 4",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "沒有 IL 暖啟動、直接從預訓練 BERT 做 RL，表現比規則基準還差；RNN 版 RL 的 SR 比 IL+RL 低超過 10%，而且變異大得多。",
+      "numbers": "RL（無 IL）< Rule（45.6 / 9.6%）；RL (RNN) 的 SR 比 IL+RL 低 >10%（Figure 4）",
+      "section": "§5.2 RL ablations",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "人類 expert 的四個分項分數都高於 agent，差距最大的是選項分數，顯示 agent 的主要弱點是把指令中的選項（尺寸、顏色）對應到頁面上帶雜訊的選項文字。",
+      "numbers": "Option：expert 73.9 vs IL 45.2 / IL+RL 38.9；Att：81.8 vs 69.3 / 74.0；Type：94.4 vs 86.4 / 89.7；Price：97.7 vs 84.0 / 88.7（Table 2）",
+      "section": "§5.3、Table 2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "RL 微調讓 IL 模型變得貪婪、少探索：軌跡變短、看的商品與搜尋次數都變少。屬性、類型、價格分數上升，選項分數下降。",
+      "numbers": "平均狀態數 9.4 → 4.5（Table 2；內文寫 4.8）；Option 45.2 → 38.9；Att 69.3 → 74.0；Score 59.9 → 62.4，但 SR 29.1% → 28.7%",
+      "section": "§5.3、Table 2",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "只要選擇完美，就算用最粗糙的搜尋詞 SR 也能到 85% 以上。「選擇」才是主要瓶頸；不過人類改寫過的最後一次搜尋詞仍然最好。",
+      "numbers": "Choice oracle 的 SR：指令原文 85.4%（Rule 原本 9.6%）、IL BART 84.2%、expert 第一次搜尋 85.6%、expert 最後一次搜尋 87.8%（expert 原本 59.6%）；Score 94.5–95.5（Table 4）",
+      "section": "§5.3、Table 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "在 WebShop 訓練的模型不經微調就搬到真實 Amazon／eBay，表現與模擬環境相近，而且都勝過「指令原文搜尋、點第一筆」的規則基準。例外是規則基準在 Amazon 上反而變好，可能是 Amazon 的搜尋引擎比 WebShop 的強。",
+      "numbers": "Amazon：IL+RL 65.9 / 25%、IL 61.5 / 27%、Rule 45.8 / 19%、人類 88.2 / 65%。eBay：IL+RL 62.3 / 21%、IL 58.2 / 21%、Rule 31.7 / 7%、人類 79.7 / 40%。人類每集約 815 秒，agent 不到 8 秒（Table 5）",
+      "section": "§5.4、Table 5、Appendix D",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "自動 reward 與人工評分高度相關，但系統性偏低；作者把它定位成實際表現的「相當接近的下界」，主要誤差來自同義詞與字面相近詞沒有被比對到。",
+      "numbers": "一般工作者軌跡：自動 74.9 vs 人工 76.3，Pearson 0.856，87.0% 的自動分數落在人工分數 10% 以內。expert 軌跡：自動 81.5 vs 人工 89.9，Pearson 0.773（Table 8）",
+      "section": "Appendix A.7、Table 8",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只做了 i.i.d. 切分；依商品類別等方式切分、泛化落差更大的設定留給未來。",
+    "資料偏向美國站與英文，只涵蓋 5 大類，只是使用者可能想買的商品的一個子集。",
+    "屬性由人工篩選，可能帶有標註者的知識偏差（例如較熟運動用品、較不熟化妝品）。",
+    "reward 採精確比對，會低估同義詞或字面相近的描述，系統性壓低分數（A.7）。",
+    "指令受限於屬性與選項：屬性有時太籠統（例如 easy to use），選項有時太具體，agent 可能只拿特殊選項字串當線索，忽略指令其他部分。",
+    "指令與 reward 只用文字，沒有用到圖片與使用者評論；拿掉圖片幾乎不影響分數。",
+    "把歷史資訊（前一個觀測、最近 5 個動作）直接加進模型反而使 Score 從 59.9 降到 57.3，需要更好的記憶機制；RL 微調會降低探索。",
+    "群眾外包工作者缺乏耐心與一致性，expert 之間也有明顯落差（最好 87.4 / 69.5%，最差 45.8 / 10%），人類分數因此偏低。",
+    "在真實網站部署 web agent 有安全疑慮；sim-to-real 實驗只允許導覽，不送出表單。"
+  ],
+  "limitations_observed": [
+    "論文的 r_type 公式（Appendix A.5 Eq.6）和釋出程式碼對不上。依印出的寫法，類別與標題都吻合時給 0.5，其餘給 1，邏輯是反的。repo 的 web_agent_site/engine/goal.py（初版 commit 61e56dbb，2022-07-17，比對邏輯至今未改）實際是：預設 1，三個吻合條件全不成立才給 0.5，而且多了論文沒提的條件「買到的商品與目標來自同一個爬取查詢」。只照論文重做 reward 會得到不同的分數。",
+    "A.7 把自動 reward 的偏低歸因於「精確比對」。但釋出程式碼從初版起就對屬性與選項用 fuzzy token_set_ratio > 85，屬性不中時還會退回去在標題、條列特色、描述裡做子字串比對。token_set_ratio 在一方 token 是另一方子集時會給高分，所以可能過度給分（偽陽性）。A.7 的人工重評協定只額外承認同義詞，設計上只抓得到漏給分；過度給分這個方向沒有被稽核過。",
+    "reward 稽核的 200 條樣本全部是人類軌跡，沒有 agent 軌跡。作者在 Appendix E 自己提到 agent 可能只拿選項字串當線索、忽略其他條件；agent 的錯誤分佈很可能和人類不同，所以相關係數 0.856／0.773 不一定能外推到模型評分。",
+    "自動 reward 的低估幅度會隨軌跡族群改變：一般工作者組只差 1.4 分（74.9 vs 76.3），expert 組差 8.4 分（81.5 vs 89.9），Pearson 也從 0.856 掉到 0.773。偏差既然不是固定的平移，就不能排除它在 IL 與 IL+RL 這兩種行為不同（後者更貪婪、軌跡更短）的 agent 之間也不同，而 A.7 沒有稽核任何 agent 軌跡。再加上 Table 9 中 IL 的 SR 括號值（3 個 seed）約 2.4 個百分點，§5.2 把 29.1% → 28.7% 解讀成「RL 稍微傷害 SR」並沒有統計上的意義。A.7 也只報 Score 的一致性，沒報 SR（r = 1 全有或全無）的一致性，而 SR 對單一欄位的誤判最敏感。",
+    "choice oracle 在這四種搜尋詞下的 SR 上限只有 85–88%（Table 4）。oracle 只窮舉給定搜尋詞的前 50 筆結果，所以這個上限是「給定搜尋詞」的上限，不是任務本身的上限。依 repo 的建構方式，指令的屬性與選項都取自目標商品，價格上限也高於目標價，目標商品只要出現在結果中，oracle 幾乎一定拿得到 r = 1；因此 12–15% 的缺口主要來自檢索（目標與等價商品都不在前 50 筆），而不是 reward 誤判。論文沒有量化這個檢索底線，expert 的 59.6% 也就難以解讀成「人類上限」。另外，A.3／Figure 2 說用指令原文搜尋時，目標商品有一半以上不在前 50 筆，但 Table 4 同樣用指令原文，oracle SR 仍有 85.4%。若兩者是同一批 test 指令（論文沒有交代 Figure 2 的母體），就表示相當比例的 r = 1 是由非目標商品拿到的，成功條件相當寬鬆。",
+    "sim-to-real 的證據偏弱：只有 100 條指令、單次執行、人工評分，也沒說明評分者是否知道是哪個模型。選項點擊與 Buy 都攔在介面層，真實網站上依選項變動的頁面、庫存等動態並沒有被測到。規則基準在 Amazon 的 SR（19%）比在 WebShop（9.6%）高一倍，說明 WebShop 的難度有一部分來自它比較弱的 BM25 引擎，「模擬與真實表現相近」同時混入了環境難度的差異。",
+    "人類與模型的觀測不對等：人類在 HTML 模式作答，看得到圖片與完整版面；模型只看 simple 模式文字。expert 又是依同一套 reward 的資格測驗（平均 > 0.75）篩出來的，有「用評估器挑出擅長該評估器的人」的循環性。",
+    "文內數字與稱呼有幾處對不上：子類查詢數 113（§3.2）vs 313（A.1）；IL+RL 軌跡長度 4.5（Table 2）vs 4.8（§5.3）；人類 Amazon 分數內文 88.0、Table 5 是 88.2；「最佳模型」在 §1 指 IL+RL（62.4 / 28.7%），§5.2 卻用 29.1%（IL）稱呼 best model 的成功率。C.3 還留著回覆審稿的措辭，而且 top-1 搜尋（61.96 / 30.8%）反而優於主流程的 top-5 隨機取樣（60.56 / 29.0%），和 §4.2「取樣能增加多樣性、比較有效」的說法相反。",
+    "repo 在 2024-05-25 的 commit d149d0d7 把 spaCy 從 en_core_web_lg 換成 en_core_web_sm。r_type 依賴 POS 標註取名詞，所以用今天的 master 重跑，分數可能和論文不同；要重現論文數字得釘在初版 commit。",
+    "「多模態」只是名義上的：指令與 reward 完全不用圖片，拿掉圖片後 60.6 → 60.3，只影響變異。這個 benchmark 實際上不測視覺理解。",
+    "任務是單輪指令加上一次購買：agent 不能反問，也沒有使用者回饋。對 dialogue completion 框架來說，它量的是單次目標執行，不是多輪對話中的目標釐清。另外，指令由標註者看著目標商品寫出，屬性怎麼措辭受標註者影響，而 reward 以隱藏屬性為準，指令沒講清楚的部分也會被扣分，混淆了「agent 能力」與「指令歧義」。"
+  ],
+  "framework_role": "T7 的核心參考：它是可執行 agent 基準的原型設計之一。網站動態與任務規格（指令加 reward）解耦；reward 完全程式化、不需人在迴路中；同時提供兩層人類基準（一般與 expert）、分項分數拆解、以 choice oracle 做瓶頸歸因、以人工重評稽核自動評分器，再用 sim-to-real 檢查外部效度。這一整套是設計「隱藏目標規格＋程式化檢查器」型評估時可直接參照的範本，它的評估器缺陷（公式與程式碼不符、稽核只看單一方向）也是反面教材。次要角色在 T8：部分給分的 reward 搭配二元 SR，以及屬性／選項／類型／價格的分項分數，本身就是一種可拆解的任務完成分數設計。它的指令設計（由隱藏的結構化目標生成自然語言指令）也讓 T1 的目標對齊可以被量化。",
+  "edges": [
+    {
+      "edge": "E1",
+      "how": "外部輸入是群眾外包工作者看著目標商品寫出的一次性自然語言指令，背後對應結構化的隱藏目標（U_att ⊆ 目標屬性、U_opt ⊆ 目標選項、u_price 價格上限）。agent 要從這段文字對齊到正確的商品與選項；結束時由 reward 事後量測買到的商品與隱藏目標的對齊程度（屬性、選項、價格、類型四個分項）。這裡沒有多輪澄清，也沒有使用者模擬器互動，只有單向的指令輸入。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Salesforce 官方 Hugging Face model card（xLAM 系列）在 Benchmark Results 中設有「Webshop and ToolQuery」段落，以 Table 2 列出各模型在 Webshop 上的成功率比較；授權 CC-BY-NC-4.0。來源：https://huggingface.co/Salesforce/xLAM-7b-r（已開啟 README 確認）",
+      "論文 §5.4 與 Appendix D 在 amazon.com、ebay.com 上做 zero-shot 轉移實驗，但只做導覽，選項與購買都攔在介面層；這是研究實驗，不是部署。"
+    ],
+    "assessment": "業界把它當評估基準的證據有一條可查證：Salesforce 在 xLAM 官方 model card 中用 WebShop 報告成功率。這屬於評估面的採納，不是產品部署，而且該模型是非商用授權。未見把 WebShop 環境或在其上訓練的 agent 部署到產品的證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/princeton-nlp/WebShop（MIT 授權；含環境、reward、rule/IL/RL/IL+RL 基準程式碼）；專案頁 https://webshop-pnlp.github.io",
+    "data": "公開。setup 腳本可下載商品與指令資料（完整 118 萬件，或 1,000 件的小子集），包含 12,087 條人類指令。人類示範軌跡與訓練好的 checkpoint 是否完整公開，這次沒有逐一核對。注意 2024-05 的 commit 把 spaCy 模型從 lg 換成 sm，可能影響 r_type。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它幾乎完整示範了「可執行 agent 基準」該有的評估元件：程式化 reward、兩層人類基準、分項拆解、oracle 瓶頸歸因、評估器對人評的稽核，以及 sim-to-real 外部效度。它的評估器缺陷（公式與程式碼不符、只稽核漏給分）對設計 T7／T8 同樣有直接參考價值。",
+  "related": [
+    "2112.09332",
+    "1802.08802",
+    "2202.08137",
+    "1812.09195",
+    "2105.13231",
+    "2111.02168",
+    "2010.02903",
+    "2102.10073"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

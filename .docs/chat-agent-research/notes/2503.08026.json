@@ -1,0 +1,222 @@
+{
+  "id": "2503.08026",
+  "title": "In Prospect and Retrospect: Reflective Memory Management for Long-term Personalized Dialogue Agents",
+  "topic": "T2",
+  "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 RMM（Reflective Memory Management）：每個 session 結束時用 LLM 把對話拆成「主題摘要＋原始對話片段」寫進記憶庫，並與既有記憶做 Add／Merge 整併（Prospective Reflection）；檢索時在固定的 dense retriever 後面接一個可學的輕量 reranker，以生成器回答時自己標的引用（有引用 +1、沒引用 −1）當獎勵，用 REINFORCE 線上更新（Retrospective Reflection）；在 MSC 與 LongMemEval 上勝過 RAG、MemoryBank、LD-Agent，並被 Google Cloud 官方部落格列為 Vertex AI Memory Bank 的研究基礎。",
+  "problem": "LLM 本身沒有跨 session 的狀態，長期個人化對話（客服、助理、醫療等）需要記得使用者過去說過的偏好與經歷。既有外部記憶系統有兩個問題：(1) 記憶顆粒度固定（以 turn、session 或時間區間切），跟對話實際的語意單位（主題轉換）對不上，同一件事會被切碎在多筆記憶裡，或一筆記憶混了太多無關內容；(2) 檢索器固定不變，無法適應不同對話領域與使用者的互動樣式，而要蒐集個人化的檢索標註又太貴。作者也指出檢索到無關記憶會讓 LLM 分心、降低回覆品質，所以「存得完整」與「取得精準」之間要取得平衡。",
+  "core_idea": "把記憶管理拆成兩個方向相反的反思：往前看（Prospective）是在寫入時就為未來檢索做準備——session 結束後由 LLM 依主題抽取摘要並附上對應的原始 turn，再與記憶庫中最相似的既有記憶比對，決定新增或合併，讓記憶的顆粒度由語意主題決定，而不是由 turn／session 邊界決定；往回看（Retrospective）是在讀取後檢討剛才取回的記憶有沒有用——讓生成器在同一次呼叫裡同時產生回覆與對每筆記憶的引用，把「有沒有被引用」當成免標註的獎勵，去線上訓練一個接在檢索器後面的小型 reranker，而不動檢索器本身。",
+  "method": {
+    "問題設定與資料結構（§3、§4）": "多 session 對話：每個 session 是一串 turn（使用者查詢＋agent 回覆），session 以閒置、使用者確認結束或新對話串為界。agent 唯一的跨 session 狀態是外部記憶庫 B。B 的每一筆是一個配對（topic summary, raw dialogue）：主題摘要是檢索用的鍵，原始對話片段是實際交給生成器的內容。當前 session 的訊息 S 直接放在上下文裡，不經過記憶庫。",
+    "主流程（Algorithm 1）": [
+      "輸入：查詢 q、當前 session 的訊息 S、記憶庫 B、檢索器 f_θ（凍結）、reranker g_φ（可學）、LLM。",
+      "1. Retrieve：用 f_θ(q, B) 取回 Top-K 筆記憶 M_K。",
+      "2. Rerank：用 g_φ(q, M_K) 從中選出 Top-M 筆 M_M。",
+      "3. Generate：一次 LLM 呼叫產生回覆 a 與對 M_M 每一筆的引用結果 R_M（每筆 +1 或 −1）。",
+      "4. 以 R_M 對 g_φ 做 RL 更新（Retrospective Reflection）。",
+      "5. 把 (q, a) 附加到 S。",
+      "6. 若 session 結束：ExtractMemory(S) 抽出主題記憶集合，逐筆 UpdateMemory(B, m)，然後清空 S（Prospective Reflection）。"
+    ],
+    "Prospective Reflection：記憶抽取（§5、Appendix D.1.1）": [
+      "時機：每個 session 結束時跑一次，不是每輪。",
+      "提示詞分兩個版本，分別抽 SPEAKER_1 與 SPEAKER_2 的「個人摘要」。輸出 JSON，頂層鍵為 extracted_memories，值是一串 {summary, reference}：summary 是一句簡潔的個人摘要（經歷、偏好、背景，可跨多個 turn 彙整），reference 是對應的 turn id 清單。抽不到就回傳 NO_TRAIT。提示詞附一個 6 turn 的完整示範（健身房／跑步機／天氣的對話與 5 條摘要）。",
+      "「主題」的粒度由 LLM 決定，可以細到單一意圖（例如問素食食譜），也可以粗到大主題（例如旅遊規劃）；每條摘要以 reference 連回一段或多段原始 turn，這就是論文說的「跨顆粒度」。"
+    ],
+    "Prospective Reflection：記憶更新（§5、Appendix D.1.2）": [
+      "對每條新抽出的記憶，先用檢索器在記憶庫中找 Top-K 筆語意最相近的既有記憶（此處的 K 論文沒有另外給值）。",
+      "把這些既有摘要（history_summaries）與新摘要（new_summary）以 JSON 交給 LLM，只允許兩種動作：Add()——新摘要與任何既有摘要都不相關時直接新增；Merge(index, merged_summary)——與第 index 筆討論的是同一面向的個人資訊時，改寫成一條合併後的摘要。可一次輸出多個動作，每行一個，不得附加解釋。",
+      "示範：既有「不太喜歡但仍會運動」＋新的「每週一、四運動」→ Merge(0, 合併成一句)。",
+      "沒有 Delete、沒有覆寫舊值的專用動作、也沒有時間戳欄位；新舊資訊矛盾時只能靠 Merge 的改寫來表達。合併後原始對話片段如何併存，論文沒有寫。"
+    ],
+    "Retrospective Reflection：reranker（§6.1）": [
+      "輸入是檢索器給的查詢嵌入 q 與 Top-K 筆記憶嵌入 m_i（對主題摘要做嵌入）。",
+      "嵌入調整：q' = q + W_q q、m_i' = m_i + W_m m_i（兩個線性層加 residual；附錄 A.1 則稱之為「帶 residual 的 MLP」，兩處描述不一致）。",
+      "相關分數：s_i = q'ᵀ m_i'。",
+      "Gumbel 取樣：s̃_i = s_i + g_i，g_i = −log(−log u_i)，u_i ~ Uniform(0,1)；p_i = softmax(s̃_i / τ)，τ 越低越接近照 s_i 取最大、越高越偏探索。從中選出 Top-M 筆。",
+      "檢索器本身完全不更新，所以可以接任何現成的嵌入模型。"
+    ],
+    "Retrospective Reflection：引用當獎勵（§6.2、Appendix D.2）": [
+      "生成提示詞：給使用者查詢與記憶清單（每筆記憶是主題摘要＋其原始 turn），要求產生自然的回覆，並以 [i] 標出有用的記憶索引、多筆用 [i,j,k]；沒有可用記憶就輸出 [NO_CITE]；不要引用沒用的記憶；記憶之間可能重複或矛盾，回覆必須由被引用的記憶直接支持；引用是否成立以「回覆是否用到原始 turn」而不是摘要來判斷。附兩個示範（全部有用、全部無用）。",
+      "回覆與引用在同一次呼叫中產生，引用是在回覆之後生成的（作者援引文獻說明這比先引用或事後另外歸因更有效）。",
+      "獎勵：M 筆中被引用的得 +1（Useful），沒被引用的得 −1（Not Useful）。"
+    ],
+    "Retrospective Reflection：更新（§6.3、Appendix A.1）": [
+      "REINFORCE：Δφ = η·(R − b)·∇_φ log P(M_M | q, M_K; φ)。",
+      "超參數：batch size 4、Gumbel 溫度 τ = 0.5、baseline b = 0.5（固定超參數，不是學出來的 value）、學習率 η = 1e-3、Top-K = 20、Top-M = 5。",
+      "注意：公式寫的是單一 R 乘上整組 M_M 的 log 機率，但 §6.2 的獎勵是逐筆 ±1；兩者怎麼接起來論文沒說。一種合理的實作解讀（推定，非原文）是逐筆加總 Σ_i (r_i − b)·∇ log p_i。以 b = 0.5 配 ±1 時，被引用的優勢是 +0.5、沒被引用的是 −1.5，梯度大半在把沒被引用的記憶往下壓。"
+    ],
+    "元件與實作設定（§7.1、Appendix A）": [
+      "生成器：Gemini-1.5-Flash（預設），另測 Gemini-1.5-Pro；上下文窗 128k tokens、temperature 0.0。",
+      "檢索器：Contriever（facebook/contriever，預設）、Stella（dunzhang/stella_en_1.5B_v5）、GTE（Alibaba-NLP/gte-Qwen2-7B-instruct）。",
+      "無 reranker 的設定 Top-K = 5；有 reranker 時 Top-K = 20、Top-M = 5；另測 Top-K = 50、Top-M = 10。",
+      "§8.6 的離線預訓練：GTE 以監督式對比學習預訓練，lr 1e-4、10 epochs、batch 32、Top-K 5；資料是 LongMemEval 扣掉 100 筆測試後的其餘題目。",
+      "軟體：Python 3.10.13、PyTorch 2.4.1+cu121、Transformers 4.44.2；硬體 16 張 A100。",
+      "基線 MemoryBank 與 LD-Agent 是以 LongMemEval 的程式碼庫重新實作，預設檢索器也是 Contriever（Appendix A.4）。"
+    ],
+    "評估協定（§7.2、Appendix B、D.3）": [
+      "MSC：沿用 LD-Agent 的切法，前 1000 個 session 當歷史、其餘當評估；以 METEOR（字面）與 BERTScore（語意）比對生成回覆與人工真實回覆；另以 Gemini-1.5-Pro 做二元 LLM-as-a-judge，並抽 100 筆請兩位非作者的 NLP 博士生以同一指令標 Yes／No。",
+      "LongMemEval：以 Recall@K 評估是否取回標註的證據 turn，以 Gemini-1.5-Pro 為評審、用 Appendix D.3 的通用提示詞判斷答案是否與真實答案一致（Accuracy）。論文沒寫用的是 LongMemEval 的哪個版本（S 或 M），也沒寫題數。",
+      "D.3 評審規則：回覆包含或直接吻合正確答案、或包含導出正確答案的所有必要中間步驟就判 Yes；只答對一部分或遺漏關鍵資訊就判 No。",
+      "引用分數驗證：在 LongMemEval 上請 Gemini-1.5-Pro 判斷被引用的記憶是否真的有用，計算 Precision／Recall／F1。"
+    ],
+    "論文沒說清楚、重做時要自己決定的地方": [
+      "reranker 權重 W_q、W_m 的初始化（若初始化為零，residual 會讓 reranker 起點等同檢索器的原排序——這是建議，不是原文）。",
+      "Top-M 如何從 Gumbel 擾動後的分布抽出（不放回取樣？直接取 s̃ 的前 M 名？），以及評估時是否仍帶 Gumbel 雜訊。",
+      "逐筆獎勵如何進入 Eq. 3（見上）、最佳化器種類。",
+      "reranker 是全資料集共用一顆、每位使用者一顆，還是每題重置；線上更新是否直接在評估題目上邊答邊學。附錄 Figure 6 顯示訓練到 1000 步（batch 4，約 4000 次查詢），但沒說在哪個資料集、跑了幾輪。",
+      "記憶更新時取 Top-K 相似記憶的 K、合併後原始 turn 如何保留、兩個說話者各自的記憶是否分庫。",
+      "Recall@5 對主題記憶（一條可連到多個 turn）怎麼計算。"
+    ],
+    "給框架工程師的重做要點": "若只想把 RMM 的寫入端搬進 T2：在每個 session（或任何能定義的「段落」）結束時，用 D.1.1 的 schema 讓模型輸出 {summary, reference[turn_id]} 清單，記憶條目存成（摘要嵌入當鍵、摘要＋原始 turn 當值）；再對每條新記憶取 Top-K 相似舊記憶，用 D.1.2 的 Add()／Merge(index, merged) 動作語法做整併。但應補上論文沒有的 Delete／覆寫動作與時間戳，否則「使用者改變主意」只能靠合併句的措辭表達。若要搬讀取端：凍結現成嵌入模型、Top-20 後接兩個帶 residual 的線性層做重排、Gumbel τ=0.5 取 Top-5；回覆提示詞照 D.2 要求 [i] 引用或 [NO_CITE]，被引用 +1、沒被引用 −1、b=0.5、lr 1e-3、batch 4 做 REINFORCE。上線前要先設計一個不依賴生成器本身的離線檢查（例如人工或另一個模型的有用性標註），避免 reranker 只學會挑「生成器喜歡引用」的記憶。"
+  },
+  "assumptions": [
+    "對話有清楚的 session 邊界，而且單一 session 的內容放得進上下文；記憶只在 session 結束時寫入，session 內部的狀態完全依賴原始上下文 S。",
+    "值得記住的是關於說話者的個人資訊（經歷、偏好、背景）；抽取提示詞只抽這類「個人摘要」，任務進度、工具結果、agent 自己的承諾不在設計範圍內。",
+    "主題摘要作為檢索鍵，足以讓固定的嵌入模型在未來查詢時對上正確的記憶；而且相關記憶一定落在檢索器的 Top-20 內（reranker 只能重排，不能撈回 Top-K 以外的東西）。",
+    "生成器的引用行為如實反映記憶的有用程度（被引用 ≈ 有用、沒被引用 ≈ 無用），且在訓練過程中穩定，不會被 reranker 反過來迎合。",
+    "部署中有足夠多的查詢讓線上 RL 收斂（附錄顯示約 1000 步、每步 4 筆）。",
+    "把相關摘要合併成一句就足以保留最新狀態；不需要刪除、版本或時間順序資訊。",
+    "檢索器輸出的是可取得的 dense 向量（reranker 直接在嵌入上加線性變換），因此只適用於能拿到查詢與記憶嵌入的檢索器。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "MSC（Multi-Session Chat；沿用 LD-Agent 的切法：前 1000 個 session 當歷史、其餘評估）",
+      "LongMemEval（論文未註明 S 或 M 版本與題數；§8.5、§8.6 另從中隨機抽 100 筆）",
+      "MSC 隨機 100 筆的人工評估（兩位標註者）"
+    ],
+    "metrics": [
+      "METEOR、BERTScore（MSC）",
+      "LLM-as-a-judge Yes%（MSC，Gemini-1.5-Pro）",
+      "Recall@5、Recall@10（LongMemEval）",
+      "Accuracy（LongMemEval，Gemini-1.5-Pro 評審，Appendix D.3 通用提示詞）",
+      "引用有用性的 Precision／Recall／F1（以 Gemini-1.5-Pro 為參照）",
+      "Cohen's κ（兩位人工與 LLM 評審之間）",
+      "usefulness ratio：RL 訓練過程中被引用記憶的比例（Figure 6）"
+    ],
+    "baselines": [
+      "No History（不給任何歷史）",
+      "Long Context（盡量塞入歷史，超過 128k 窗口時截掉較舊的 turn）",
+      "RAG（以 turn 為顆粒度檢索，Contriever／Stella／GTE 三種檢索器）",
+      "MemoryBank（以 LongMemEval 程式碼庫重新實作，Contriever）",
+      "LD-Agent（同上，含關鍵詞式檢索調整）",
+      "RAG + Oracle 檢索（直接給標註的證據 turn，當上限）",
+      "消融：RAG＋PR、RAG＋RR（不用 reranker、改以 RL 直接微調檢索器）、RAG＋RR（含 reranker）",
+      "顆粒度對照：固定 turn、固定 session、turn 與 session 混合池、逐題挑最佳顆粒度（oracle）",
+      "生成器對照：Gemini-1.5-Flash vs Gemini-1.5-Pro"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "RMM 在兩個資料集、所有指標上都拿到最高分；換用越強的檢索器分數越高，而且各檢索器下都高於同檢索器的 RAG。",
+      "numbers": "MSC METEOR／BERTScore、LongMemEval Recall@5／Acc：RMM-GTE 33.4／57.1／69.8／70.4；RMM-Stella 31.9／56.3／65.9／64.8；RMM-Contriever 30.8／55.4／60.4／61.2；RAG-GTE 27.5／52.1／62.4／63.6；RAG-Contriever 24.8／50.8／54.3／58.8；LD-Agent 25.4／51.5／56.8／59.2；MemoryBank 20.1／40.3／58.6／59.6；Long Context 14.8／31.9／–／57.4；No History 5.2／10.6／–／0.0；RAG-Oracle Recall 100.0、Acc 90.2。三次平均，未附標準差。摘要說在 LongMemEval 上比「沒有記憶管理的基線」高 10% 以上，但沒講比較對象：對 Long Context 是 +13.0 點（57.4→70.4），對 RAG-GTE 是 +6.8 點（相對提升約 10.7%）。",
+      "section": "§8.1、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "改用 LLM-as-a-judge 評 MSC，RMM 仍大幅勝過 Long Context；LLM 評審與人工的一致性達 substantial。",
+      "numbers": "Yes%：RMM-Flash 69.7 vs Long Context-Flash 25.4；RMM-Pro 65.4 vs Long Context-Pro 22.8。100 筆 MSC 的 Cohen's κ：人工 A vs B 0.82、LLM vs A 0.71、LLM vs B 0.69。此表只比 Long Context，沒有列 RAG、MemoryBank、LD-Agent。",
+      "section": "§8.8、Table 6、Table 7",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "消融：Prospective Reflection 與含 reranker 的 Retrospective Reflection 各自都有增益，合起來最好；但若不用 reranker、直接以 RL 微調檢索器，表現大幅崩壞。作者歸因於資料不足造成的災難性遺忘。",
+      "numbers": "（Contriever＋Gemini-1.5-Flash；MSC METEOR／BERT、LongMemEval Recall@5／Acc）RAG 24.8／50.8／54.3／58.8；+PR 28.6／53.3／57.4／59.6；+RR（無 reranker）20.3／31.8／34.2／31.0；+RR 27.5／52.2／58.8／60.2；RMM 30.8／55.4／60.4／61.2。LongMemEval 準確率的增益只有 +0.8（PR）、+1.4（RR）、+2.4（全部）。",
+      "section": "§8.2、Table 2",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "以 Gemini-1.5-Pro 為參照，生成器自己標的引用能相當準確地區分有用與無用的記憶，作者據此認定引用可以當獎勵。",
+      "numbers": "LongMemEval 上：有用記憶 P／R／F1 = 89.4／91.1／90.2；無用記憶 87.2／84.6／85.9；整體 87.6／85.8／86.7。數字在 Table 3，正文誤指為 Table 4。",
+      "section": "§8.3、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "在 RMM 中，較弱的 Gemini-1.5-Flash 反而勝過 Gemini-1.5-Pro；作者推測 Pro 因對齊調校較傾向拒答涉及個人資訊的問題，但沒有量測拒答率。",
+      "numbers": "RMM（Contriever）MSC METEOR／BERT、LongMemEval Acc：Flash 30.8／55.4／61.2；Pro 24.6／50.6／58.6。Long Context：Flash 14.8／31.9／57.4；Pro 17.4／36.1／56.6。正文說 Long Context 下 Pro 在所有指標都略好，但 LongMemEval Acc 其實是 Pro 56.6 低於 Flash 57.4。",
+      "section": "§8.4、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "顆粒度分析：固定 session 優於固定 turn，turn 與 session 混合的檢索池反而最差（作者歸因於搜尋空間變大、雜訊增加）；PR 產生的主題顆粒度接近「逐題挑最佳顆粒度」的 oracle。",
+      "numbers": "只以長條圖呈現，全文沒有數值；只用 LongMemEval 隨機 100 筆、GTE＋Gemini-1.5-Flash。實際是 Figure 4，正文誤指為 Figure 5。",
+      "section": "§8.5、Figure 4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "把取回與重排的數量從 K=20／M=5 放大到 K=50／M=10，三種檢索器的準確率都上升，強檢索器受益較多。",
+      "numbers": "Acc：Contriever 61.2→66.8、Stella 64.8→71.0、GTE 70.4→73.8。Recall 欄是 Recall@5（60.4／65.9／69.8）對 Recall@10（67.2／70.6／74.4），兩者本來就不是同一個指標，只有準確率的比較是同尺度的。數字在 Table 5，正文誤指為 Table 7。",
+      "section": "§8.7、Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "線上 RL 訓練過程中，被生成器引用的記憶比例穩定上升並收斂，作者以此說明 reranker 與生成器的使用行為逐漸對齊。",
+      "numbers": "usefulness ratio 從約 0.2 升到約 0.4（約第 1000 步收斂）。換算成 Top-5，就是收斂後平均仍有約 3 筆取回的記憶沒被引用。只以圖呈現，未說明是哪個資料集。",
+      "section": "Appendix A.5、Figure 6",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "記憶重排靠強化學習，在大規模資料或即時應用上計算成本可能很高。",
+    "目前只處理文字，無法直接用於包含影像、音訊、影片的多模態對話系統。",
+    "記憶更新機制在面對長期、持續變化的使用者互動時，可能還需要進一步最佳化效率。",
+    "直接以 RL 獎勵微調檢索器需要大量訓練資料，資料不足時會出現災難性遺忘（§8.2 用來解釋為何要另外接 reranker）。",
+    "歷史對話可能含敏感個資；作者建議採用加密、差分隱私或聯邦學習，並在部署時取得使用者同意、公開資料使用政策（Ethical Statement）。"
+  ],
+  "limitations_observed": [
+    "與 T2 最相關的缺口沒有被量到：記憶更新只有 Add／Merge，沒有 Delete、覆寫或時間戳，但 LongMemEval 本身就把資訊抽取、多 session 推理、時間推理、知識更新、拒答分成五種題型，論文卻只報總準確率、沒有分題型結果。「使用者改變主意」（知識更新）與「事件先後」（時間推理）正是 Add／Merge 最可能出錯的地方；附錄 C.2 的時間順序案例靠的是對話中剛好出現「two months ago」這種相對時間，論文對記憶條目完全沒有提到時間戳。LongMemEval 原論文就指出忽略時間的記憶設計在時間推理題上表現差，RMM 沒有回應這一點。",
+    "LongMemEval 的數字有無法自洽之處：LongMemEval 500 題中有 30 題是錯誤前提的拒答題，回答「不知道」才算對，但 Table 1 的 No History 準確率是 0.0%。一個沒有任何歷史的模型理應在這些題上答「不知道」而得分，所以要不是拒答題被排除了，就是評審提示詞（Appendix D.3 是通用的一套，而 LongMemEval 原論文針對部分題型另外設計了評審提示詞）判法不同——正文卻說「照原論文」。論文也沒寫用的是 S 還是 M 版本、評了幾題。",
+    "主要增益大多來自換檢索器，方法本身在 LongMemEval 上的增益很小，而且沒有變異量：消融中 PR、RR、兩者合用對 RAG-Contriever 的準確率只多 +0.8、+1.4、+2.4 點；RMM-Contriever（61.2）還低於不做任何記憶管理的 RAG-GTE（63.6）。宣稱跑了三次平均，卻沒給標準差或顯著性檢定，這幾個點的差距無法判斷是否超出雜訊。",
+    "基線比較的公平性有疑慮：Table 1 把 MemoryBank、LD-Agent 的檢索器標成各自的方法（Specific1／Specific2），但附錄 A.4 說兩者都是用 LongMemEval 程式碼庫重新實作、預設檢索器是 Contriever。若如此，同為 Contriever 時 RMM 對它們在 LongMemEval 上只多 1.6～2.0 點準確率。重新實作的保真度也沒有驗證（例如與原論文數字對照）。",
+    "Recall@K 在不同顆粒度之間不可比：一條主題記憶的 reference 可以連回多個 turn，5 條主題記憶涵蓋的原始 turn 天生多於 5 個 turn。論文沒定義主題記憶的 Recall@5 怎麼算，所以 PR 在 Recall 上的增益（+3.1 點）有一部分可能只是涵蓋面變大；§8.7 更把 Recall@5 與 Recall@10 放在一起說「recall 提升」，兩者本來就是不同指標。",
+    "獎勵訊號的有效性是自我參照的：引用由 Gemini-1.5-Flash 產生、由同家族的 Gemini-1.5-Pro 驗證（Table 3），沒有任何人工標註的引用正確性；人工 κ 只驗了 MSC 答案對錯，不是引用品質。reranker 被訓練去挑「生成器會引用的記憶」，這可能只是學會迎合生成器的偏好（例如字面相似），不一定是挑到正確的證據；Figure 6 的引用比例從 0.2 升到 0.4，但沒有同步畫出準確率，無法證明兩者一起上升。",
+    "線上 RL 的協定不透明，影響比較公平性：Figure 6 訓練到約 1000 步、batch 4，但沒寫是哪個資料集，也沒寫一步是以查詢還是以記憶條目計；若是在 LongMemEval 上以查詢計，約 4000 次查詢遠多於 500 題，意味著可能在評估題上反覆多輪更新，或用了未說明的資料（若是在 MSC 上，評估 session 的輪數多，這個量就說得通）。論文也沒說 reranker 是跨使用者共用還是每位使用者一顆，所以「適應個別使用者互動樣式」這個賣點其實沒被測過；若是在測試題上邊答邊學，就等於只有 RMM 享有測試期調適，其他基線沒有。",
+    "Eq. 3 與逐筆獎勵對不上（單一 R 乘整組 log 機率 vs 每筆 ±1），b=0.5 讓優勢值在 +0.5 與 −1.5 之間嚴重不對稱，τ、b、學習率都沒有消融，重做時結果可能對這些選擇很敏感。reranker 在 §6.1 是線性層、在 A.1 是 MLP，描述不一致。",
+    "論文校對不嚴，降低對細節數字的信任：正文三次把圖表編號指錯（引用分數→Table 4 實為 Table 3；顆粒度→Figure 5 實為 Figure 4，而 Figure 5 的圖說又指向自己；Top-K／M→Table 7 實為 Table 5）；§8.4 說 Long Context 下 Pro 所有指標都較好，但 LongMemEval Acc 是 56.6 < 57.4；§8.1 說記憶在 MSC 86%、LongMemEval 100% 的例子改善回覆品質，但沒說「改善」怎麼判定。",
+    "成本沒有量：作者說 RL 貴，但 reranker 只有兩個線性層、batch 4，真正的成本在 LLM 呼叫——每個 session 一次抽取、每條新記憶一次 Top-K 檢索加一次合併呼叫、每輪回覆帶 5 筆（摘要＋原始 turn）的記憶。論文沒有報 token 數、延遲或記憶庫成長曲線，無法評估在長期部署下的代價。",
+    "顆粒度分析（§8.5）與離線預訓練（§8.6）都只用 100 筆、只有圖沒有數字；§8.6 的「100 筆測試、其餘訓練」是在同一分布內切，無法說明跨領域的效果。Table 6 的 LLM 評審只比 Long Context，不比 RAG，而 Long Context 在 MSC 上本來就很弱（METEOR 14.8）。",
+    "Gemini-1.5-Pro 同時是所有實驗的評審與其中一個被評的生成器，§8.4 用「Pro 較會拒答」解釋 Pro 輸給 Flash，卻沒量拒答率；這也可能是評審偏好或提示詞格式（D.2 要求附引用標記）與 Pro 的相容性問題。",
+    "對 T2 的適用範圍有限：記憶只在 session 結束時寫入，session 內部完全靠原始上下文；對單一 session 內超長、多步的 agent 任務（多輪退化、指令保持）沒有任何處理，也沒有涵蓋任務狀態或 agent 自己的承諾，只處理使用者的個人資訊。"
+  ],
+  "framework_role": "T2 中「跨 session 的對話狀態怎麼表示、寫入、整併與讀取」的代表方法，而且有官方產品歸屬證據。它給框架的可搬用設計有三：(1) 狀態表示——記憶條目＝主題摘要（檢索鍵）＋原始對話片段（交給生成器的值），摘要以 turn id 連回原文，保留可追溯性；(2) 狀態寫入與整併——session 結束時抽取、對每條新記憶取最相近的舊記憶，讓 LLM 以受限動作語法（Add／Merge）決定新增或合併，與 Mem0 屬同一類「抽取＋整併」寫入端，並給出了完整提示詞；(3) 讀取端的回饋——讓生成器在回覆中標引用，把引用當成免標註的訊號去調整讀取策略。它不處理 session 內的狀態、沒有 Delete 與時間戳，對「狀態被新資訊推翻」的處理只靠合併措辭，這是本框架若採用時必須補上的地方。對 T7 而言，它也示範了用 LongMemEval（Recall@K＋LLM 評審準確率）與引用 P／R／F1 評估記憶系統的協定，但協定細節有缺漏，照抄前要先補清楚。",
+  "edges": [
+    {
+      "edge": "E2",
+      "how": "Retrospective Reflection 是一條「反思結果回寫狀態子系統」的資料流，但射程要講清楚：生成器在每輪回覆後對取回的記憶逐筆自評（有引用 +1、沒引用 −1），這個自評以 REINFORCE 更新接在檢索器後面的 reranker，改變的是之後「從記憶庫讀哪幾筆狀態」的讀取策略，而不是記憶內容本身。真正改寫狀態內容的是 Prospective Reflection 的 Merge，但它由 session 結束觸發，不是由 T5 式的錯誤偵測或修正觸發，所以不算這條邊。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "Google Cloud 官方部落格〈Vertex AI Memory Bank in public preview〉（2025-07-09，作者為 Vertex AI 軟體工程師 Kimberly Milam 與 Cloud AI Research 產品經理 George Lee；後者與本論文作者之一同名、同屬 Google Cloud AI Research，推定為同一人，論文本身沒寫職稱）明文表示 Memory Bank 的記憶處理流程以 Google 一項被 ACL 2025 接收的研究方法為基礎，超連結直接指向 arXiv 2503.08026 的 PDF，並描述為以主題為基礎的記憶學習與回想方式。來源：https://cloud.google.com/blog/products/ai-machine-learning/vertex-ai-memory-bank-in-public-preview（2026-09-26 以 WebFetch 打開確認）。",
+      "Google Cloud 官方文件的 Memory Bank 頁面描述產品機制為：從來源資料抽取有意義的資訊存成記憶（Extraction）、把新抽取的資訊與既有記憶整併讓記憶隨新資訊演變（Consolidation）、以限定在特定身分範圍內的相似度搜尋取回記憶。來源：https://docs.cloud.google.com/gemini-enterprise-agent-platform/scale/memory-bank（2026-09-26 打開確認）。此頁本身沒有引用這篇論文，只能佐證產品機制與 Prospective Reflection 的形狀一致，不能單獨當作歸屬證據。"
+    ],
+    "assessment": "有可查證的商用採納證據，但範圍要收窄：官方部落格把 Vertex AI Memory Bank 的「主題式記憶抽取與整併」歸於這篇論文，官方文件描述的抽取＋整併＋相似度檢索也與 Prospective Reflection 的形狀相符，因此可以認定 Prospective Reflection 的思路已被 Google Cloud 產品化。至於 Retrospective Reflection（以引用為獎勵、用 RL 線上訓練 reranker），官方部落格與文件都沒有提到，未見證據顯示它在產品中。產品的「記憶主題（memory topics）」設定與整併細節也可能已超出論文所述（例如是否支援刪除），我未能在打開的官方頁面上逐字確認，故不列為證據。"
+  },
+  "reproducibility": {
+    "code": null,
+    "data": "MSC 與 LongMemEval 皆為公開資料集；基線 MemoryBank、LD-Agent 是以 LongMemEval 的公開程式碼庫（https://github.com/xiaowu0162/LongMemEval）重新實作。論文附錄 D 完整列出記憶抽取、記憶更新、帶引用的生成與 LLM 評審四組提示詞，附錄 A.1 列出 reranker 與 RL 的主要超參數。2026-09-26 以 WebSearch 查詢，未找到作者釋出的 RMM 官方程式碼或訓練好的 reranker。重做需要 Gemini-1.5-Flash／Pro API，而且 reranker 初始化、Top-M 取樣方式、線上更新協定與主題記憶的 Recall 計算方式都沒寫清楚（見 method 中「論文沒說清楚」一節）。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是 Google Cloud 官方明文列為 Vertex AI Memory Bank 研究基礎的論文（ACL 2025），而且把長期對話記憶的寫入（主題抽取＋Add／Merge 整併）與讀取（以生成器引用為獎勵的線上 reranker）都講到可實作的程度，是 T2 對話記憶管理這條線上必讀的設計範本；但它的實驗支撐明顯弱於宣稱（LongMemEval 增益小且無變異量、分題型結果缺席、圖表編號多處錯指），讀的時候要搭配本筆記的批判一起看。",
+  "related": [
+    "2410.10813",
+    "2107.07567",
+    "2406.05925",
+    "2305.10250",
+    "2402.17753",
+    "2502.05589",
+    "2406.10996",
+    "2310.08560",
+    "2504.19413",
+    "2502.12110",
+    "2308.08239",
+    "2308.15022",
+    "2501.13956"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

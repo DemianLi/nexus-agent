@@ -6,57 +6,79 @@
  * `updatedAt = max(header.createdAt, 最後一則人類提示的時間)`，`blank` 是「還沒有任何 `turn/start`」
  * （`applySessionListMetadata`）。`running` 不在這裡：它來自活著的 agent，歸 `wire-handler.ts`。
  *
- * ## 唯讀，而且比續接更唯讀
+ * ## 唯讀，經過 `SessionStore`
  *
- * 不拿寫租約、不截撕裂的尾巴、不動 header。續接（`JsonlSessionStore.resume`）三件都做，所以列表
- * 不能借它——別的行程握著的那一條也要列得出來，而且列一次不能改到任何一個位元組。同 `eval/session-scan.ts`
- * 的 `readSessionLogs`，差在這裡在請求路徑上：**日誌逐行串流，只解析帶 `turn/start` 字樣的那幾行**，
- * 不整份讀進記憶體。
+ * 列走 `list`、讀本文走 `open(id, 'read')`，同 dsh 的列表走 `persistence.list`、冷讀走 `open(sessionId, 'read')`
+ * （[#665](https://github.com/DemianLi/nexus-agent/issues/665)）。**不拿寫租約、不截撕裂的尾巴、不動 header**：別的行程
+ * 握著的那一條也要列得出來，而且列一次不能改到任何一個位元組。檔名與 header 的規則只在後端
+ * （`jsonl-session-store.ts`），這裡一個都不認。
+ *
+ * **本文整份讀、整份解析**，不再逐行篩：dsh 的冷列讀投影快取，我們沒有那一層（[#725](https://github.com/DemianLi/nexus-agent/issues/725)），
+ * 讀的是日誌本身。#665 量過整份解析不比逐行篩慢（見 PR），換到的是標題規則只剩一份（{@link threadTitleOf}）。
+ *
+ * ## 分段讓出不採用，中止採用（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）
+ *
+ * dsh 在 `4402fa47e4c`／`ecc01b54a4d`（2026-09-29，對讀 `5badb15009a`）讓 `ApiSessionList.list()` 照 `listWorkSliceMs`
+ * （預設 16 ms）分段 `scheduler.yield`，並在每圈 `signal?.throwIfAborted()`。
+ *
+ * - **分段讓出不採用。** dsh 的 `summarizeCold` 是同步的（讀投影快取），所以工作要自己切段；我們每一份都先
+ *   `await readFile`，事件圈每讀完一份就回得去，本來就沒有「整次列表佔住事件圈」這件事。2026-10-04 實測
+ *   （`measure/thread-list-cli.ts`，M3 Pro、Node 25）：1000 份 × 1 MB 一次列表約 2.6 秒，事件圈延遲最大 9–16 ms、
+ *   p99 約 2.6 ms；停頓的上限是**單一份**的解析，約 1.7 ms／MB（50、200 份 × 10 MB 最大 17–33 ms，一份 100 MB 的最大
+ *   約 170 ms）。分段讓出切不進一份裡面，對這個上限沒有幫助；要降它得讓列表不讀本文，那是
+ *   [#725](https://github.com/DemianLi/nexus-agent/issues/725)（投影快取）的題目。
+ * - **中止採用。** 沒有它的話，客戶端放棄的請求照樣把整份掃完：放棄之後 2.6 秒的窗口內伺服器用掉 2.59 秒 CPU
+ *   （200 份 × 1 MB：0.52 秒窗口用掉 0.46 秒）。`listStoredThreads` 現在每份之前看一次 `signal`；`GET /threads`
+ *   把那個請求的 `request.signal` 交下來（`wire-handler.ts` 的 `listThreads(signal)`），同 `searchThreads`。
+ *   放棄之後的 CPU 從 2.59 秒降到中位 4 ms（1000 份 × 1 MB；`fetch` 中止與直接砍 socket 各 20 次，沒有一次整份掃完）。
+ *   **量到一個連帶的缺陷，也一併修了**：`wire-server.ts` 只留了 `request.signal`、沒留包著它的 Request，中止的轉送
+ *   靠的是 Request 內部的弱參照，所以有一部分放棄請求的 handler 永遠收不到中止（量測時看到 `close` 事件到了、
+ *   handler 的 signal 沒動）。現在 Request 由 `close` 的回呼抓著、關線才放手。機制是從 undici 的設計推的；
+ *   缺陷本身後來用 `measure/abort-delivery.ts`、`subscriber-leak.ts` 在 wire-server 這一層重現了，機制是完整的垃圾回收
+ *   收掉了沒人抓著的 Request（強制回收時修前真的下行路由漏 396–400／400，修後 0），並有回歸測試。這一條的列表量測：
+ *   修前 8／49 次整份掃完，修後 0／40。
  *
  * ## 列出來的每一列都要切得過去
  *
- * 切換走的是 serve 的續接路徑，所以會在那裡被擋的，這裡就不列：
+ * 切換走的是 serve 的續接路徑，所以會在那裡被擋的，這裡就不列（{@link isListedThread}）：
  *
- * - **header 帶 `parentSession` 的不列**：subagent 的 id 是 `<thread>/<task>`，不是一條 thread。dsh 會列、
- *   標 `origin: 'subagent'`；我們切不進去（#302 拍板的第 3 件）。
+ * - **子代理的不列**（{@link isSubagentSessionHeader}）：subagent 的 id 是 `<thread>/<task>`，不是一條 thread。dsh 會列、
+ *   標 `origin: 'subagent'`；我們切不進去（#302 拍板的第 3 件）。分叉帶 `parentSession` 但不是子代理，照列（#1579）。
  * - **`header.cwd` 不等於這一次的 `cwd` 就不列**，沒記的也不列。**不是按目錄判**：`projectKey` 是有損的，
  *   兩個目錄可能落在同一格，header 的 `cwd` 才是唯一分得開的東西（`resume-guards.ts` 的 `assertSameCwd`，
  *   續接時一樣比它）。dsh 只擋沒記的，因為它的列表跨專案。
- * - **header 讀不懂、版本比這一版新的不列，但數出來**（`unreadable`）。續接會拒絕這兩種；不數的話，
- *   畫面上「少了一條」跟「本來就沒有」分不出來。
+ * - **header 讀不懂、版本比這一版新的不列，但數出來**（`unreadable`，後端的 `list` 數的）。續接會拒絕這兩種；
+ *   不數的話，畫面上「少了一條」跟「本來就沒有」分不出來。
  *
- * **日誌本文壞在中間不在這裡擋**：要驗就得逐行解析整份，而這條路只讀需要的那幾行。那一列照樣列出來，
- * 點下去由續接那條路講出原因（`wire-handler.ts` 的 `threadOrError`）。
+ * **日誌本文壞在中間不在這裡擋**：讀的時候開撿回模式（`salvage`），讀得懂的照算。那一列照樣列出來，點下去由續接
+ * 那條路拒絕，原因進 serve 的日誌（`wire-handler.ts` 的 `threadOrError`）。
  *
  * ## 標題
  *
- * 照 dsh `session-title` 的內建回退（`packages/session/session-title/src/normalize.ts`）：第一則人打的字，
- * 去掉控制字元與方向控制字元、空白收成一格，取前 `maxWords` 個詞、再截到 `maxBytes` 個 UTF-8 位元組。
- * **方向控制字元那一條不是裝飾**：標題是使用者的原文，畫在瀏覽器的清單上，dsh 明說它們會讓顯示出來的標題
- * 騙人。**詞數對中文不起作用**（沒有空白，一整句就是一個詞），真正咬得住的是位元組上限。
- *
- * 人打的字＝`turn/start` 的 `kind: 'message'`；`goal` 那一種是機器排的，對到 dsh 那一側 `source.kind`
- * 不是 `user` 的 `user/message`，不算。
- *
- * **兩個上限都是必填參數，沒有預設值**——照 dsh「所有上限都是必填項」。值由清單上
- * `#settings/thread-title` 那一列講（[#531](https://github.com/DemianLi/nexus-agent/pull/531)），
- * `serve.ts` 在起動期解一次、往下傳進來。
+ * {@link threadTitleOf}：最後一顆 `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)），同 dsh 列表讀的
+ * `title` 投影（latest-wins）；一顆都沒有才照規則推。規則與偏離見 `session-title.ts`。
  *
  * @module
  */
 
-import { open, readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import {
+  isSubagentSessionHeader,
+  readColdSession,
+  SessionCorruptionError,
+  SessionFormatUnsupportedError,
+  SessionLogTooLargeError,
+  SessionNotFoundError,
+} from '@nexus/core';
+import type {
+  SessionEvent,
+  SessionStore,
+  StoredSessionHeader,
+  StoredSessionSnapshot,
+} from '@nexus/core';
 import type { ThreadSummary } from '@nexus/wire';
 
-/** 標題的兩個上限。見檔頭「標題」。 */
-export interface ThreadTitleLimits {
-  /** 取前幾個以空白分開的詞。 */
-  readonly maxWords: number;
-  /** UTF-8 位元組上限，不會切在一個字的中間。 */
-  readonly maxBytes: number;
-}
+import { assertThreadTitleLimits, threadTitleOf } from './session-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
 
 /** 從磁碟讀得出來的那一列：線上那一列少掉 `running`（它來自活著的 agent）。 */
 export type StoredThreadSummary = Omit<ThreadSummary, 'running'>;
@@ -68,154 +90,78 @@ export interface StoredThreadList {
   readonly unreadable: number;
 }
 
-/* eslint-disable no-control-regex -- 以下五條要擋的正是控制字元 */
-/** Operating-system-command 跳脫序列，含沒收尾的。以下五條逐字抄 dsh `normalize.ts`。 */
-const OSC_SEQUENCE = /(?:\u001B\]|\u009D)(?:(?!\u0007|\u001B\\)[\s\S])*(?:\u0007|\u001B\\|$)/gu;
-/** CSI 跳脫序列，例如 SGR 顏色碼。 */
-const CSI_SEQUENCE = /(?:\u001B\[|\u009B)[0-?]*[ -/]*[@-~]/gu;
-/** 其餘兩位元組的 ESC 序列。 */
-const ESC_SEQUENCE = /\u001B[@-_]/gu;
-/** 空白以外的 C0／C1 控制字元。 */
-const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu;
-/** 會讓顯示出來的標題騙人的方向控制與不可見字元。 */
-const DIRECTIONAL_CONTROL = /[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u206F\uFEFF]/gu;
-/* eslint-enable no-control-regex */
-
-function assertPositiveInteger(name: string, value: number): void {
-  if (!Number.isInteger(value) || value <= 0) {
-    throw new Error(`${name} 要是正整數，收到 ${String(value)}`);
-  }
-}
-
-function cleanTitleText(input: string): string {
-  return input
-    .replace(OSC_SEQUENCE, '')
-    .replace(CSI_SEQUENCE, '')
-    .replace(ESC_SEQUENCE, '')
-    .replace(CONTROL_CHARACTER, '')
-    .replace(DIRECTIONAL_CONTROL, '')
-    .replace(/\s+/gu, ' ')
-    .trim();
-}
-
-function truncateUtf8(input: string, maxBytes: number): string {
-  if (Buffer.byteLength(input, 'utf8') <= maxBytes) return input;
-  let used = 0;
-  let output = '';
-  for (const character of input) {
-    const bytes = Buffer.byteLength(character, 'utf8');
-    if (used + bytes > maxBytes) break;
-    output += character;
-    used += bytes;
-  }
-  return output;
-}
-
-/**
- * 第一則人打的字變成標題。同 dsh 的 `fallbackSessionTitle`。
- *
- * @returns 標題；清完或截完是空的就是空字串。
- */
-export function fallbackThreadTitle(input: string, limits: ThreadTitleLimits): string {
-  assertPositiveInteger('maxWords', limits.maxWords);
-  assertPositiveInteger('maxBytes', limits.maxBytes);
-  const words = cleanTitleText(input).split(' ').filter(Boolean).slice(0, limits.maxWords);
-  return truncateUtf8(words.join(' '), limits.maxBytes).trimEnd();
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-function isNotFound(error: unknown): boolean {
-  return (error as { code?: unknown } | null)?.code === 'ENOENT';
+/**
+ * 這份是子代理的會話嗎（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：core 的 `isSubagentSessionHeader`，
+ * 判準與偏離寫在那裡（[#1579](https://github.com/DemianLi/nexus-agent/issues/1579)）。
+ *
+ * **列表（{@link isListedThread}）和 serve 的續接閘（`serve.ts` 的 `createAgent`）共用這一支**，判準只有一份。
+ * #1544 時對到 dsh 的 headless 與 ACP（`origin === 'subagent' || parentSession !== undefined`），那兩支連分叉也擋，因為它們本來
+ * 就不驅動分叉；web 這條路照 dsh session-controller（`api/session-controller/src/agent.ts:115`）只認 `origin`，分叉是一條可以驅動的主對話。
+ */
+export { isSubagentSessionHeader };
+
+/**
+ * 一份列得出來嗎：root、`cwd` 對得上。判準見檔頭的「列出來的每一列都要切得過去」。
+ *
+ * 列表與內容搜尋（`thread-search.ts`，[#631](https://github.com/DemianLi/nexus-agent/issues/631)）共用這一支：
+ * **搜得到的一定列得出來**，同 dsh 的搜尋先拿列表的可見集合過濾（`packages/api/session-controller/src/list.ts:179-183`）。
+ */
+export function isListedThread(header: StoredSessionHeader, cwd: string): boolean {
+  return !isSubagentSessionHeader(header) && header.cwd === cwd;
 }
 
-/** header 裡列表要的那幾格。讀不懂或版本太新是 `undefined`。 */
-interface ListedHeader {
-  readonly id: string;
-  readonly createdAt: number;
-  readonly cwd?: string;
-  readonly parentSession?: string;
+/**
+ * `store` 裡**列得出來**的那幾份（{@link isListedThread}），照 `list` 的順序，與沒列的份數。
+ *
+ * @param store - serve 的那一個（`<會話根>/<projectKey(cwd)>` 那一格）。
+ * @param cwd - 這台 server 的工作目錄。
+ * @throws 存放處存在但讀不到；`signal` 中止時拋它的 `reason`。
+ */
+export async function listVisibleThreads(
+  store: SessionStore,
+  cwd: string,
+  signal?: AbortSignal,
+): Promise<{ readonly items: readonly StoredSessionSnapshot[]; readonly unreadable: number }> {
+  const { sessions, unreadable } = await store.list(signal === undefined ? {} : { signal });
+  return { items: sessions.filter(({ header }) => isListedThread(header, cwd)), unreadable };
 }
 
-function parseHeader(text: string): ListedHeader | undefined {
-  let value: unknown;
-  try {
-    value = JSON.parse(text);
-  } catch {
-    return undefined;
-  }
-  if (!isRecord(value)) return undefined;
-  const { id, createdAt, version, cwd, parentSession } = value;
-  if (typeof id !== 'string' || typeof createdAt !== 'number') return undefined;
-  if (
-    typeof version !== 'number' ||
-    !Number.isSafeInteger(version) ||
-    version < 1 ||
-    version > SESSION_LOG_FORMAT_VERSION
-  ) {
-    return undefined;
-  }
-  return {
-    id,
-    createdAt,
-    ...(typeof cwd === 'string' && { cwd }),
-    ...(typeof parentSession === 'string' && { parentSession }),
-  };
+/**
+ * 形狀對得上列表要的那幾格的事件。**`read` 只驗 `type`、`seq`、`time`**，`data` 長怎樣沒人擋，而一份壞掉的日誌
+ * 撿回來的更是什麼都有：{@link threadTitleOf} 直接讀 `data`，形狀不對的在這裡先濾掉，同以前逐行篩時的判斷。
+ */
+function listable(event: SessionEvent): boolean {
+  const data: unknown = event.data;
+  if (!isRecord(data)) return false;
+  if (event.type === 'session/title') return typeof data['title'] === 'string';
+  if (event.type === 'turn/start')
+    return data['kind'] !== 'message' || typeof data['text'] === 'string';
+  return true;
 }
 
 /** 一份日誌裡列表要的東西。 */
-interface PromptScan {
+export interface PromptScan {
   readonly blank: boolean;
   readonly title?: string;
   readonly lastPromptAt?: number;
 }
 
-const TURN_START = 'turn/start';
-
-/**
- * 逐行掃一份日誌，只解析帶 `turn/start` 字樣的行。**字樣只是篩子**：解析之後照樣比 `type`，所以一個工具參數
- * 裡提到這幾個字的行不會被當成一輪。
- *
- * 解析不動的行略過：最後一行寫到一半是當掉的常態（`parseJsonlSessionBody` 也不算它），中間壞掉的見檔頭。
- * 只有 header 沒有日誌是「還沒寫第一筆就當了」，讀成空白。
- */
-async function scanPrompts(file: string, limits: ThreadTitleLimits): Promise<PromptScan> {
-  let handle;
-  try {
-    handle = await open(file, 'r');
-  } catch (error: unknown) {
-    if (isNotFound(error)) return { blank: true };
-    throw error;
-  }
-  let blank = true;
-  let title: string | undefined;
+export function scanPrompts(
+  events: readonly SessionEvent[],
+  limits: ThreadTitleLimits,
+): PromptScan {
+  // `blank` 看的是有沒有任何一顆 `turn/start`，形狀對不對都算；其餘只看形狀對的。
+  const blank = !events.some((event) => event.type === 'turn/start');
+  const usable = events.filter(listable);
   let lastPromptAt: number | undefined;
-  try {
-    for await (const line of handle.readLines({ encoding: 'utf8' })) {
-      if (!line.includes(TURN_START)) continue;
-      let event: unknown;
-      try {
-        event = JSON.parse(line);
-      } catch {
-        continue;
-      }
-      if (!isRecord(event) || event['type'] !== TURN_START) continue;
-      blank = false;
-      const data = event['data'];
-      if (!isRecord(data) || data['kind'] !== 'message' || typeof data['text'] !== 'string') {
-        continue;
-      }
-      if (typeof event['time'] === 'number') lastPromptAt = event['time'];
-      if (title === undefined) {
-        const derived = fallbackThreadTitle(data['text'], limits);
-        if (derived !== '') title = derived;
-      }
-    }
-  } finally {
-    await handle.close().catch(() => undefined);
+  for (const event of usable) {
+    if (event.type === 'turn/start' && event.data.kind === 'message') lastPromptAt = event.time;
   }
+  const title = threadTitleOf(usable, limits);
   return {
     blank,
     ...(title !== undefined && { title }),
@@ -223,56 +169,92 @@ async function scanPrompts(file: string, limits: ThreadTitleLimits): Promise<Pro
   };
 }
 
-const HEADER_SUFFIX = '.header.json';
-const LOG_SUFFIX = '.jsonl';
-
 /**
- * 列出 `directory` 裡屬於 `cwd` 的 root thread。
+ * 讀一個背景子代理自己落盤的日誌（[#871](https://github.com/DemianLi/nexus-agent/issues/871)）：唯讀冷讀，`<thread>/<runId>`。
+ * 經 `@nexus/core` 的 `readColdSession`（[#1598](https://github.com/DemianLi/nexus-agent/issues/1598)），同列表不拿租約、不動檔；
+ * 死在一輪中間的那一份在記憶體補平，畫面上收成完成、沒結果的卡收成沒跑完，不永遠停在執行中。
  *
- * @param directory - serve 的 `<會話根>/<projectKey(cwd)>` 那一格。還不存在就是空的。
- * @param options - `cwd` 是這台 server 的工作目錄；`title` 的兩個上限必填。
- * @returns 由新到舊的列，與沒列的份數。
- * @throws 上限不是正整數；目錄存在但讀不到。
+ * **header 的 `parentSession` 必須是這條 thread**：id 是照 thread 組出來的所以本來就在它底下，這一道是萬一檔案被手動改名搬走時的
+ * 第二層，讀完才核。沒有這一份、或不屬於這條 thread：`undefined`。其他失敗（壞檔、版本太新）照拋，由呼叫端決定怎麼講——
+ * 不屬於這條 thread、本文又壞掉的那一份也是拋。
  */
-export async function listStoredThreads(
-  directory: string,
-  options: { readonly cwd: string; readonly title: ThreadTitleLimits },
-): Promise<StoredThreadList> {
-  // 先驗，不等到第一則人打的字：一份空的目錄不該讓錯的設定看起來是對的。
-  assertPositiveInteger('maxWords', options.title.maxWords);
-  assertPositiveInteger('maxBytes', options.title.maxBytes);
-  let names: string[];
+export async function readStoredSubagentSession(
+  store: SessionStore,
+  threadId: string,
+  runId: string,
+): Promise<readonly SessionEvent[] | undefined> {
   try {
-    names = await readdir(directory);
+    const stored = await readColdSession(store, `${threadId}/${runId}`);
+    if (stored.header.parentSession !== threadId) return undefined;
+    return stored.events;
   } catch (error: unknown) {
-    if (isNotFound(error)) return { items: [], unreadable: 0 };
+    if (error instanceof SessionNotFoundError) return undefined;
     throw error;
   }
+}
+
+/**
+ * 列出 `store` 裡屬於 `cwd` 的 root thread。
+ *
+ * **列與讀之間那一份變了**（別的行程刪掉、或以更新的版本續接過）：刪掉的不列，header 讀不懂了的算進 `unreadable`。
+ *
+ * @param store - serve 的那一個（`<會話根>/<projectKey(cwd)>` 那一格）。
+ * @param options - `cwd` 是這台 server 的工作目錄；`title` 的兩個上限必填。
+ * @returns 由新到舊的列，與沒列的份數。
+ * @throws 上限不是正整數；存放處存在但讀不到；`signal` 中止時拋它的 `reason`。
+ */
+export async function listStoredThreads(
+  store: SessionStore,
+  options: {
+    readonly cwd: string;
+    readonly title: ThreadTitleLimits;
+    /** 中止就在下一份之前拋它的 `reason`（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）。 */
+    readonly signal?: AbortSignal;
+  },
+): Promise<StoredThreadList> {
+  // 先驗，不等到第一則人打的字：一份空的存放處不該讓錯的設定看起來是對的。
+  assertThreadTitleLimits(options.title);
+  const { signal } = options;
+  const visible = await listVisibleThreads(store, options.cwd, signal);
   const items: StoredThreadSummary[] = [];
-  let unreadable = 0;
-  for (const name of names) {
-    if (!name.endsWith(HEADER_SUFFIX)) continue;
-    let headerText: string;
+  let { unreadable } = visible;
+  for (const { header } of visible.items) {
+    // 每份之前看一次：被放棄的請求不再多讀一份（#983）。
+    signal?.throwIfAborted();
+    let events: readonly SessionEvent[];
     try {
-      headerText = await readFile(join(directory, name), 'utf8');
+      events = await (await store.open(header.id, 'read')).read({ salvage: true });
     } catch (error: unknown) {
-      // 讀目錄與讀檔之間被刪掉：不是壞檔，就是不在了。
-      if (isNotFound(error)) continue;
+      if (error instanceof SessionNotFoundError) continue;
+      // 這個行程現在讀不進來（#2115：太大，或額度被開著的 thread 佔滿）：不是壞了，照樣列，只是不讀本文——沒有標題、
+      // `updatedAt` 退回建立時間；打開時才講為什麼開不了。
+      if (error instanceof SessionLogTooLargeError) {
+        items.push({
+          threadId: header.id,
+          updatedAt: header.createdAt,
+          blank: false,
+          ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
+        });
+        continue;
+      }
+      if (
+        error instanceof SessionCorruptionError ||
+        error instanceof SessionFormatUnsupportedError
+      ) {
+        unreadable += 1;
+        continue;
+      }
       throw error;
     }
-    const header = parseHeader(headerText);
-    if (header === undefined) {
-      unreadable += 1;
-      continue;
-    }
-    if (header.parentSession !== undefined || header.cwd !== options.cwd) continue;
-    const base = name.slice(0, -HEADER_SUFFIX.length);
-    const scan = await scanPrompts(join(directory, `${base}${LOG_SUFFIX}`), options.title);
+    const scan = scanPrompts(events, options.title);
     items.push({
       threadId: header.id,
       updatedAt: Math.max(header.createdAt, scan.lastPromptAt ?? 0),
       blank: scan.blank,
       ...(scan.title !== undefined && { title: scan.title }),
+      // 分叉的來源（#1580），照 dsh 列表的 `listFields`（`session-controller/src/list.ts:353-362`，`687f282e`）：header 有就帶。
+      // 列得出來的都不是子代理（`isListedThread`），所以這一格只會是分叉的來源。
+      ...(header.parentSession !== undefined && { parentThreadId: header.parentSession }),
     });
   }
   items.sort(

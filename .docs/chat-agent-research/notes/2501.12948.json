@@ -1,0 +1,222 @@
+{
+  "id": "2501.12948",
+  "title": "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning",
+  "topic": "T5",
+  "subarea": "訓練得到的自我修正、critique 模型與搜尋回溯",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 GRPO 搭配只看最終答案對錯與格式的規則式獎勵，直接對 DeepSeek-V3-Base 做大規模 RL（R1-Zero），觀察到長 CoT 內的自我檢查、反思與回溯行為隨訓練出現；再以「冷啟動 SFT → 推理 RL → 拒絕取樣 SFT → 全場景 RL」四段管線做出可讀、通用的 DeepSeek-R1，並把推理軌跡蒸餾到 1.5B–70B 的小模型。",
+  "problem": "既有的推理能力提升仰賴人工標註的 CoT 示範（SFT）：難以擴充、會帶入人類的認知偏誤，效能也被示範品質封頂；過程獎勵模型（PRM）與 MCTS 則難以在大規模 RL 中穩定使用。作者要回答：只給可驗證的結果獎勵、完全不監督推理過程時，LLM 能不能自己長出更強的推理策略，包括自我驗證與反思。對 T5 來說，這是「自我修正能不能不靠專門的修正目標或 critique 模型，純由結果導向 RL 長出來」的關鍵測試。",
+  "core_idea": "推理能力（含反思、驗證、改走其他解法）可以靠「難題＋可靠驗證器＋足夠的 RL 算力」誘發，而不是靠示範教出來：獎勵只看最終答案與格式、不約束思考內容，模型為了拿到獎勵會自己拉長思考，並在思考中插入自我檢查與回溯。為了可讀性與一般能力，再用少量人工整理的冷啟動資料與多段 SFT／RL 把這種能力包裝成產品可用的模型；長推理軌跡也能用純 SFT 蒸餾給小模型。",
+  "method": {
+    "版本說明": "本筆記的數字、章節與表號取自 arXiv v2（2026-01-04 版，附錄 A–J 大幅擴充）；與 2025-01 的 v1 可能對不上。",
+    "基座與輸入輸出": "基座為 DeepSeek-V3-Base（MoE，總參數 671B、每 token 啟用 37B，預訓練 14.8T token）。R1-Zero 的輸入是把題目套進固定模板（Table 1，轉述）：說明這是使用者與助理的對話，助理先在心裡想過推理過程再給答案，推理包在 <think></think>、答案包在 <answer></answer>。除了這個結構，刻意不加任何內容層面的約束。輸出為長 CoT 加答案；數學要求把最終答案放在指定格式（例如框內）以便規則比對，程式題交給編譯器跑預設測試案例。",
+    "GRPO 演算法": "對每題 q 從舊策略取樣一組 G 個輸出；每個輸出的 advantage＝(r_i − 組內平均)／組內標準差，因此不需要 value model。目標函式為 PPO 式的 clip 比值項（clip 到 1±ε）減去 β·KL(π_θ||π_ref)；KL 用無偏估計量 π_ref/π_θ − log(π_ref/π_θ) − 1 直接加在 loss 上，而不是像 PPO 那樣逐 token 當稠密懲罰（作者認為後者會隱性懲罰回應長度，阻礙 CoT 變長）。訓練中每 400 步把參考策略換成最新策略，在探索範圍與穩定性之間取平衡。附錄 A.3 的理由：長 CoT 中前面的內容常被後面反思推翻，用部分回應預測最終獎勵的 value model 特別難訓練。",
+    "R1-Zero 獎勵": "純規則式：準確度獎勵（數學答案比對、程式跑測試案例、STEM 選項比對，答對 1、答錯 0）＋格式獎勵（思考必須包在 think 標籤內），兩者等權相加。推理任務刻意不用任何神經獎勵模型（ORM 或 PRM），理由是大規模 RL 下容易被 reward hacking，且重訓獎勵模型成本高、讓管線變複雜。",
+    "R1-Zero 超參數（§2.1）": "lr 3e-6；KL 係數 0.001；rollout 溫度 1；每題取樣 16 個輸出；最大長度在第 8.2k 步之前為 32,768 token、之後為 65,536 token；共 10,400 步（約 1.6 epoch）；每步 32 題、訓練 batch 512；每次 rollout 產生 8,192 個輸出，隨機切成 16 個 mini-batch，只訓練一個 inner epoch。§2.1 沒有給 R1-Zero 的 clip ratio ε。",
+    "RL 資料（B.3.1、Table 4）": "全部是中文或英文。數學 26K（答案為數值、式子或方程，排除證明題，獎勵為與參考答案比對的 1/0）；程式 17K 演算法競賽題，另有 8K 從真實 GitHub issue 抽出的修 bug 題（給 issue 描述、有 bug 的原始碼與部分失敗的單元測試）；STEM 22K 選擇題（物理 15.5%、生物 30.7%、化學 46.5%、其他 7.3%）；邏輯 15K（網路蒐集的謎題，加上合成的 code-IO 題、密碼題、斑馬謎題、24 點等）；一般 66K（helpfulness，含創意寫作、編輯、事實問答、角色扮演）另加 12K harmlessness。程式題的測試案例由 DeepSeek-V2.5 依提示詞（Listing 2）撰寫隨機與對抗輸入產生器，再分兩階段過濾：先用正確解剔除會產生錯誤輸出的無效測試，再挑出能抓到錯誤解的子集。",
+    "DeepSeek-R1 四段管線（§3、B.3）": {
+      "① 冷啟動 SFT → Dev1": "對數千題高品質推理提示，用 R1-Zero 以溫度 1.0 取樣多條軌跡，只留最終答案正確（數學用 sympy 解析比對）且格式可讀的（重複偵測、混語過濾）；再請 DeepSeek-V3 把思考過程翻成與題目同一語言並潤飾，用 Listing 1 的摘要提示詞（要求忠於原思考過程、不得自行加入新推理、關鍵步驟用 LaTeX、最終答案放框內）產生乾淨解答。人工標註者先把部分軌跡改寫成第一人稱、口語對話式的風格，再拿這些當範例讓 LLM 改寫更多，最後人工二次審查。思考形式偏好「先理解題目，再進行帶有反思與驗證的詳細推理」。另用 few-shot 讓 V3 為「1+1」這類簡單題產生簡短 CoT（Listing 3）。程式部分蒐集 Codeforces 5,151 題、AtCoder 2,504 題並自建測試案例。",
+      "② 第一階段 RL（推理導向）→ Dev2": "設定與 R1-Zero 相同（lr 3e-6、KL 0.001、溫度 1、每題 16 個、最長 32,768、每步 32 題、每 400 步換參考模型），GRPO clip ratio ε 寫為 10（原文如此，遠大於常見的 0.2；作者名單的貢獻說明提到「大 PPO clipping 策略」）。另加語言一致性獎勵＝CoT 中目標語言詞數／總詞數，直接加到最終獎勵上，推理與非推理資料都適用。作者強調 clip ratio 太低會截斷大量 token 的梯度，太高則訓練不穩。",
+      "③ 拒絕取樣＋SFT → Dev3": "從第一階段 RL 的 checkpoint 對大量推理提示多次取樣，只留正確的回應。除了規則可驗證的題目，也納入用 DeepSeek-V3 當生成式判官的題目（Listing 4：給題目、參考答案與待評答案，要求先分析再判 correct/incorrect，以 JSON 輸出）。濾掉混語、長段落、含程式區塊的 CoT，得約 600k 筆推理資料；非推理資料約 200k（沿用 DeepSeek-V3 的 SFT 資料，另加程式修復與前端開發資料，部分由 V3 先產生 CoT，「hello」這類簡單問候不附 CoT）。思考風格原則：段落短、口語、不用 markdown，最重要的是先理解使用者的完整情境與未明說的需求。合計 804,745 筆（Table 5：數學 395,285、程式 211,129、STEM 10,124、邏輯 10,395、一般 177,812；平均約 5,355 token，平均輪數約 1.0，幾乎都是單輪）。注意 Dev3 是從 DeepSeek-V3-Base 重新微調，不是接續 Dev2 的權重；Dev2（第一階段 RL 的 checkpoint）只當拒絕取樣的來源（Figure 2 不在文字版內，此依 B.4.2 推定）。SFT 設定（B.4.2，冷啟動與第二次 SFT 相同）：對 DeepSeek-V3-Base 微調 2–3 epoch，cosine 學習率 5e-5 → 5e-6，context 32,768，batch 128。",
+      "④ 第二階段 RL（全場景）→ R1": "總獎勵＝推理獎勵（規則式）＋一般獎勵（獎勵模型＋格式）＋語言一致性獎勵。保留第一階段多數參數，但 rollout 溫度降到 0.7（較高溫度在這個階段會產生不連貫內容）。共 1,700 步，一般指令資料與偏好獎勵只在最後 400 步加入，因為作者觀察到偏好獎勵訓練越久越容易被 reward hacking（B.5）。"
+    },
+    "獎勵模型（§3.1）": "helpful RM：用 DeepSeek-V3 搭配 Arena-Hard 式判官提示詞（B.2，轉述：要求判官先自己作答，再對照兩個回答找錯、評估是否有幫助、相關、簡潔，最後輸出五級判決），每對回答評四次並隨機交換 A/B 位置以降低位置偏誤，取平均分，只留分差大於 1 的配對，並讓整個資料集中選中與落選回答的長度相近，共 66,000 對；提示全是非推理題，來自公開資料集或明確同意分享的使用者。架構與 DeepSeek-R1 相同，另加輸出純量偏好分數的 reward head；batch 256、lr 6e-6、1 epoch、訓練最長 8,192 token，推論時不設長度上限。只評最終摘要，不評思考過程。safety RM：106,000 筆依安全準則標註 safe／unsafe 的提示＋模型回應，逐點（point-wise）訓練，評整個回應（含思考過程）。每筆一般資料只屬於 helpful 或 safety 其中一個資料集，獎勵取對應的模型。",
+    "RL 基礎設施（B.1）": "四個模組：rollout（vLLM worker，MoE 跨節點 expert parallelism、熱門專家放冗餘副本，並用 MTP 做自我推測解碼以縮短最長樣本的完成時間）；inference（跑獎勵模型與參考模型的前向）；規則獎勵（程式執行器、答案比對、格式檢查共用統一介面，不佔 GPU 但很慢，以非同步排程與其他模組重疊）；training（支援 PPO、GRPO、DPO；整批先依長度排序分到各行程，再用 Best-Fit 打包成固定長度區塊減少 padding；整合 DualPipe 管線平行）。除規則獎勵模組外，每個模組跑完就把模型從 GPU 記憶體卸載到主記憶體或磁碟。",
+    "蒸餾（附錄 F、B.4.3）": "以同一份約 800k 資料對 Qwen2.5-Math-1.5B（初始 lr 1e-4）、Qwen2.5-Math-7B（8e-5）、Qwen2.5-14B（7e-5）、Qwen2.5-32B（6e-5）、Llama-3.1-8B（5e-5）、Llama-3.3-70B-Instruct（2e-5）做純 SFT 2–3 epoch，cosine 衰減到初始值的十分之一，context 32,768，batch 64；刻意不做 RL。對照組 Qwen2.5-32B-Zero 以數學、程式、STEM 資料直接對 Qwen2.5-32B-Base 做 10K 步以上的 RL（B.4.1：lr 2e-6、KL 0.001、溫度 1、每題 16 個、每步 32 題、每 400 步換參考模型；最大長度固定 32,768，沒有像 R1-Zero 在 8.2k 步後放寬到 65,536）。",
+    "評估協定（D.1）": "最大生成長度 32,768 token。不用 greedy decoding（長輸出重複率高、checkpoint 間變異大），改用溫度 0.6、top-p 0.95 取樣 k 次，pass@1＝k 次正確率的平均（AIME 與 GPQA k=64、MATH 與 Codeforces k=16、LiveCodeBench k=8），AIME 另報 64 次取樣的多數決 cons@64。AlpacaEval 2.0 與 ArenaHard 以 GPT-4-Turbo-1106 當判官，只給最終摘要以降低長度偏誤。Codeforces 用 10 場 Div.2 比賽加專家撰寫的測試案例換算 rating 與百分位；SWE-bench Verified 走 Agentless 框架；Aider 用 diff 格式；原本是 few-shot 的 MMLU-Pro、C-Eval、CLUEWSC 改成 zero-shot（few-shot 會傷 R1）。去污染：預訓練與後訓練資料都做 10-gram 比對過濾（光數學領域就移除約 600 萬篇預訓練文件），後訓練數學資料只取 2023 年以前的競賽。附錄 J 列出各基準的提示詞與判分方式（例如數學取框內答案用規則與 SymPy 比對、SimpleQA 用 CORRECT／INCORRECT／NOT_ATTEMPTED 三類判官）。",
+    "訓練成本（B.4.4、Table 7）": "R1-Zero 用 64×8 張 H800 約 198 小時（101K GPU 小時）；SFT 資料製作 5K GPU 小時；R1 約 80 小時（41K）；合計 147K GPU 小時，以每 GPU 小時 2 美元計約 29.4 萬美元。此數字不含 DeepSeek-V3-Base 的預訓練，也不含先在約 30B 規模做的前期實驗。",
+    "重做需要的元件": "夠大的基座（作者在 7B dense 與 16B MoE 上純 RL 失敗，32B dense、230B MoE、671B MoE 才有明顯進步）；可自動驗證的題庫與判定器（sympy、測試案例、選項比對，必要時 LLM 判官）；GRPO 訓練器（每題 16 個、組內標準化 advantage、k3 KL、定期換參考模型、長 rollout 支援）；冷啟動資料與約 800k SFT 資料的產生管線；helpful 與 safety 兩個獎勵模型。官方沒有釋出訓練程式碼，RL／SFT 資料也未見公開。"
+  },
+  "assumptions": [
+    "基座模型夠大，且預訓練已接觸大量數學、程式與推理軌跡（A.1 承認網頁語料含大量 OpenAI 模型產生的答案），RL 才能從基座的候選解中挑出並強化好的軌跡；小模型純 RL 會陷入重複、無法利用長 CoT。",
+    "任務有可靠、難以被鑽漏洞的驗證器（最終答案比對、測試案例、選項比對）；寫作等難以驗證的任務只能靠 SFT 與短期的獎勵模型訓練。",
+    "不需要過程監督：只給結果獎勵，反思、驗證、回溯等中間行為會因為提高答對率而被間接強化。",
+    "生成長度預算與算力足以支撐數萬 token 的 rollout（R1-Zero 後期上限 65,536 token）。",
+    "以 10 個人工挑選的反思詞出現次數當作「反思行為」的代理指標是合理的。",
+    "冷啟動資料注入的人類偏好風格（第一人稱、帶反思）不會破壞 RL 長出的推理能力，後續 RL 能把損失補回來。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "AIME 2024",
+      "AIME 2025",
+      "AMC 12 2024",
+      "MATH-500",
+      "CNMO 2024",
+      "2024 年 93 場數學競賽的 366 題（E.3、E.4）",
+      "MMLU",
+      "MMLU-Redux",
+      "MMLU-Pro",
+      "C-Eval",
+      "CMMLU",
+      "CLUEWSC",
+      "DROP",
+      "IF-Eval",
+      "GPQA Diamond",
+      "SimpleQA",
+      "C-SimpleQA",
+      "FRAMES（Oracle Prompt 設定）",
+      "AlpacaEval 2.0",
+      "ArenaHard",
+      "LiveCodeBench（2024-08 至 2025-01）",
+      "Codeforces（10 場 Div.2）",
+      "SWE-bench Verified",
+      "Aider-Polyglot",
+      "ChatbotArena（style control）",
+      "安全：SST、BBQ、Anthropic Red Team、XSTest、Do-Not-Answer、HarmBench",
+      "自建安全測試集 1,120 題（4 大類 28 子類，中英各半）",
+      "50 種語言的多語安全測試集 9,330 題",
+      "越獄測試（2,232 個越獄模板拼接自建安全題）"
+    ],
+    "metrics": [
+      "pass@1（k 次取樣正確率平均）",
+      "cons@16／cons@64（多數決）",
+      "pass@64",
+      "EM、F1、IF-Eval Prompt Strict",
+      "AlpacaEval 2.0 LC-winrate、ArenaHard 勝率",
+      "Codeforces rating 與百分位",
+      "SWE-bench Resolved、Aider 準確率",
+      "訓練中平均回應長度、解題所需思考 token 數",
+      "10 個反思詞的出現次數、「wait」在各訓練步的出現次數（Figure 9）",
+      "語言一致性（CoT 中目標語言詞的比例）",
+      "Unsafe ratio、Rejection ratio、多語安全分（safe 5 分、reject 4 分、unsafe 0 分）",
+      "ChatbotArena Elo 排名"
+    ],
+    "baselines": [
+      "DeepSeek-V3-Base",
+      "DeepSeek-V3",
+      "Claude-3.5-Sonnet-1022",
+      "GPT-4o-0513",
+      "OpenAI-o1-mini",
+      "OpenAI-o1-1217（數字取自官方報告，非自行重跑）",
+      "QwQ-32B-Preview",
+      "Qwen2.5-32B-Zero（同配方 RL 的對照）",
+      "Qwen2-Math-7B-Instruct 與 Qwen2-Math-7B-Zero",
+      "人類參賽者平均（AIME、Codeforces）與可上網的博士級人類（GPQA）",
+      "安全比較：Claude-3.7-Sonnet、o1（2024-12-17）、GPT-4o（2024-05-13）、Qwen2.5-72B-Instruct",
+      "PPO（A.3，在 DeepSeek-Coder-V2-Lite 上與 GRPO 比較 MATH）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "R1-Zero 只靠規則式結果獎勵的 RL，AIME 2024 的 pass@1 隨訓練大幅上升，再用自我一致性多數決還能更高，超過人類參賽者平均。",
+      "numbers": "R1-Zero 的 AIME 2024 pass@1 從 15.6% 升到 77.9%；cons@16 為 86.7%（這是 R1-Zero 的多數決，與 E.4 中 R1 的 86.7% 是不同模型、不同取樣數）；共 10,400 步。",
+      "section": "§2.3、Figure 1(a)",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "訓練過程中反思相關詞彙的使用逐步增加，且特定反思模式只在特定訓練階段才出現；作者據此稱反思是 RL 自發長出的行為。",
+      "numbers": "10 個反思詞（wait、mistake、however、but、retry、error、verify、wrong、evaluate、check，由 3 位人類專家各自列舉後合併）的出現次數比訓練初期增加 5–7 倍；「wait」在早期幾乎沒有，4000–7000 步偶爾出現，8000 步之後明顯激增。未對回應長度正規化。",
+      "section": "§C.2、Figure 9（§2.3、Table 2 的 aha moment 軼事）",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "多階段管線補回可讀性、指令遵循與一般能力，但冷啟動 SFT 先讓推理退步，最終 R1 在部分推理指標上仍低於 R1-Zero。",
+      "numbers": "AIME 2024 pass@1：R1-Zero 77.9 → Dev1 59.0 → Dev2 74.0 → Dev3 78.1 → R1 79.8；IF-Eval 46.6 → 83.3；AlpacaEval 2.0 LC 24.7 → 87.6；ArenaHard 53.6 → 92.3；Codeforces rating 1444 → 2029；但 GPQA Diamond 75.8 → 71.5、CNMO 2024 88.1 → 78.8。最後一段 RL（Dev3 → R1）讓 AlpacaEval 增加約 25 個百分點（62.1 → 87.6）、ArenaHard 約 17 個百分點（75.6 → 92.3）。",
+      "section": "§4、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "以模型為基礎的 helpful 獎勵在長時間訓練下出現 reward hacking：獎勵持續上升時 Codeforces 表現反而下降，因此偏好獎勵只放在第二階段 RL 的最後幾百步。",
+      "numbers": "Figure 6 只有曲線、沒有具體數值；第二階段 RL 共 1,700 步，一般資料與偏好獎勵只在最後 400 步加入。",
+      "section": "§B.5、Figure 6、§3.2.2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "R1 會依題目難度自行調整思考長度；非推理模型用多數決擴充推論算力也追不上，作者歸因於後者的樣本彼此獨立、不能回溯或自我修正。",
+      "numbers": "2024 年 366 題競賽集：R1 pass@1 61.8%，平均 8,793 個思考 token（簡單題少於 7,000、最難的題超過 18,000），極簡單的題少於 100 token；GPT-4o-0513 只有 24.7%、平均 711 token。AIME 2024 上 GPT-4o 多數決 64 次只從 9.3% 升到 13.4%，R1 為 79.8%、o1 為 79.2%。",
+      "section": "§E.4、Figure 18",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "單條長推理鏈內的自我修正並不完整：獨立多取樣仍能明顯提高命中率，傳統的多數決或 MCTS 可以和長推理互補。",
+      "numbers": "R1 在 AIME 2024 的 pass@64 為 90.0%，pass@1 為 79.8%；多數決把 R1 從 79.8% 提到 86.7%（E.4 沒有寫明取樣數；D.1 的 AIME 多數決設定為 64 次）。",
+      "section": "§E.4",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "對小模型而言，從 R1 蒸餾長推理軌跡遠比自己做大規模 RL 有效；最小的蒸餾模型在數學上已超過非推理的閉源模型。",
+      "numbers": "Qwen2.5-32B 基座：蒸餾版 AIME 2024 pass@1 72.6、cons@64 83.3、MATH-500 94.3、GPQA 62.1、LiveCodeBench 57.2；RL 10K 步以上的 Qwen2.5-32B-Zero 為 47.0、60.0、91.6、55.0、40.2（與 QwQ-32B-Preview 的 50.0、60.0、90.6、54.5、41.9 相當）。Distill-Qwen-1.5B 的 AIME 2024 為 28.9，高於 GPT-4o 的 9.3 與 Claude-3.5-Sonnet 的 16.0。",
+      "section": "§F、§F.1、Table 15、Table 16",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "用 PRM 引導與用 MCTS 自我搜尋提升推理的早期嘗試，在大規模訓練下都不划算；回溯與搜尋最後是由策略自己在長 CoT 裡完成。",
+      "numbers": "沒有量化數字。PRM 的三個障礙：一般推理難以定義細粒度步驟、步驟對錯難判（模型自動標註效果不佳、人工標註無法擴充）、模型式 PRM 必然引發 reward hacking 且重訓成本高；作者承認 PRM 用來重排 top-N 或輔助搜尋有效。MCTS 的障礙：token 搜尋空間呈指數級，設每個節點的擴展上限又會卡在局部最佳；引導搜尋的細粒度 value model 難訓練，迭代自我提升做不起來。",
+      "section": "§G.2",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "R1-Zero 可讀性差、會在同一段 CoT 混用中英文；加入語言一致性獎勵可維持語言一致，但程式基準會小幅下降（B.6）。",
+    "結構化輸出能力不如既有模型，也不能使用搜尋引擎、計算機等工具。",
+    "token 效率仍有改善空間，簡單題仍會過度思考。",
+    "只針對中英文最佳化，處理其他語言的提問時可能改用英文推理或回答。",
+    "對提示詞敏感，few-shot 會穩定降低表現，建議 zero-shot 直接描述問題與輸出格式。",
+    "軟體工程任務的評估太耗時，大規模 RL 用得少，SWE 相關基準相對 DeepSeek-V3 進步有限。",
+    "純 RL 的成敗取決於獎勵是否可靠；模型給的獎勵會隨訓練被鑽漏洞，寫作等難以建構可靠獎勵的任務無法單靠純 RL 擴充，只能用人工標註的 SFT 資料加上數百步 RL。",
+    "長推理鏈有時不夠周延，或陷入錯誤的邏輯路徑；獨立多取樣的 pass@64 明顯高於 pass@1。",
+    "越獄攻擊下不安全回應大增，模型本身安全性只在中等水準，需要外部風控系統；開源權重可被再微調移除安全保護。",
+    "純 RL 的成效高度依賴基座容量：7B dense 與 16B MoE 的實驗在 AIME 上沒有明顯改善，回應變長後傾向重複。",
+    "冷啟動資料中生動的第一人稱推理風格主要是 DeepSeek 設計的啟發式，不代表模型具備類人智慧，且可能讓使用者產生不當信任。",
+    "n-gram 去污染擋不住改寫過的測試題，2024 年以前發布的基準可能仍有污染。",
+    "SFT 資料幾乎都是單輪互動，可能限制多輪對話能力，留待未來擴充。",
+    "PRM 與 MCTS 的嘗試失敗，但作者說明這不代表那些方法無法做出好的推理模型。"
+  ],
+  "limitations_observed": [
+    "T5 的證據只是代理指標：反思行為的證據只有 10 個人工挑選詞的出現次數（Figure 9）和一則中間 checkpoint 的 aha moment 軼事（Table 2，回應被截斷，看不出重新檢查後是否改對）。全文沒有任何「反思後由錯變對／由對變錯」的轉移統計（像 SCoRe 的 Δ^{i→c}、Δ^{c→i}），也沒有截斷反思段落或壓抑反思詞的消融，所以「反思真的在修正錯誤」並未被量到。",
+    "詞頻成長很可能大半是長度效應：however、but、check 這類詞在一般論述中也很常見，同期平均回應長度大幅成長（Figure 1(b)），而 C.2 的 5–7 倍增幅沒有對長度正規化。",
+    "「wait 在 8000 步後激增」與一個設定變更撞期：§2.1 寫明最大生成長度在第 8.2k 步從 32,768 放寬到 65,536，作者自己也說效能與回應長度在 8.2k 步同時跳升。aha moment 出現的時間點因此和長度預算放寬混在一起，不能單純歸因於自發演化。",
+    "「湧現」也可能只是「引出」：A.1 承認 DeepSeek-V3-Base 的網頁語料含大量 OpenAI 模型產生的答案，而且接觸過大量推理軌跡，RL 可能只是放大預訓練中已有的反思模式。F.1 用 o1 發布前的 Qwen2-Math-7B 當對照，只排除了 o1 式軌跡，排除不了其他 CoT 或反思語料。",
+    "R1 的反思不是純 RL 長出來的：B.3.2 的冷啟動資料刻意挑選「帶反思與驗證」的思考過程，並由人工改寫成第一人稱口語風格。引用時要分清楚：只有 R1-Zero 能支撐「結果導向 RL 會長出自我修正」，R1 的反思有一部分是 SFT 注入的。",
+    "多階段管線對推理有代價且沒有分析原因：Table 3 中 GPQA Diamond 從 R1-Zero 的 75.8 掉到 R1 的 71.5、CNMO 2024 從 88.1 掉到 78.8、C-SimpleQA 從 66.4 掉到 63.7；論文只解釋 Dev1 的退步（冷啟動資料太少），沒有說明最終模型為何仍低於 R1-Zero。",
+    "E.4 的「非推理模型不能回溯、不能自我修正，所以多數決追不上」是斷言而非受控實驗：比較對象是 GPT-4o 與 R1，基座、訓練資料、規模全都不同；沒有在同一基座上比較「有／無長鏈反思」在相同 token 預算下的表現。",
+    "G.1 與 F.1 互相拉扯：G.1 說 7B dense 純 RL 在 AIME 上沒有明顯改善，F.1 的 Qwen2-Math-7B-Zero 卻在 AIME 2024 拿到 22.3%，高於 Qwen2-Math-7B-Instruct 的 7.9%（Table 17；論文沒給 base 本身的分數）。差異可能來自基座是否數學特化，但論文沒解釋，讓「需要大基座」這個結論的邊界不清楚。",
+    "reward hacking 的證據只有一張沒有數值的圖（Figure 6），「偏好獎勵只放最後 400 步」是由此得出的經驗做法，沒有不同步數的對照；GRPO clip ratio 寫成 ε=10 也沒有消融，只有一句「太低截斷梯度、太高不穩」。",
+    "鏈內的自我檢查完全不涵蓋安全：沒有風控時，R1 在越獄攻擊下的 unsafe 比例從 25.2% 升到 85.9%（Table 11），比 DeepSeek-V3 的 17.6% → 36.4% 嚴重得多。官方服務靠關鍵字比對加 DeepSeek-V3 判官事後撤回對話（D.3.1），這是外部撤回，不是模型自己修正。",
+    "外推到 agent 自我修正的落差：R1 不能使用工具、SFT 資料幾乎全是單輪，所有修正都發生在單次生成的思考區塊內；論文沒有任何證據顯示這種能力能吸收外部回饋（執行結果、使用者糾正）或在多輪對話中修正先前的回應。",
+    "常被引用的 29.4 萬美元只涵蓋後訓練的 RL 與 SFT 資料製作，不含 V3-Base 預訓練與前期約 30B 規模的實驗；o1-1217 的數字取自官方報告而非同一取樣協定重跑，AIME 79.8 對 79.2 的「持平」受協定差異影響；表中「粗體代表 t-test p<0.01」沒有說明檢定的配對單位與樣本數。"
+  ],
+  "framework_role": "在 T5 的「訓練得到的自我修正」子領域，這篇是「結果導向 RL 能讓單次生成內出現自我驗證、反思與回溯」這個說法的源頭與最常被引用的證據（尤其是 R1-Zero 與 aha moment），同時提供兩個負面結果：PRM 引導與 MCTS 自我搜尋在大規模 RL 下不划算，等於把「搜尋回溯」從外部演算法搬進策略本身的長 CoT。它不是 critique 模型或多輪修正方法：沒有獨立的批評者、沒有修正指令、沒有外部回饋迴路。對本框架有用的地方：(1) 可驗證獎勵加組內相對 advantage（GRPO）是訓練 T5 能力的實際配方，也提醒模型式獎勵會被鑽漏洞；(2) 反思詞頻與思考長度可以當 T5 行為的觀測指標，但必須做長度正規化；(3) pass@k 與 pass@1 的落差可用來量化單條推理鏈自我修正的上限；(4) 部署端以另一個模型做事後風險審查並撤回回應（D.3.1），是外部驗證器的產品實例，不過屬於撤回而不是修正。",
+  "edges": [
+    {
+      "edge": "E5",
+      "how": "附錄 C.2 把訓練 rollout 中的反思行為統計出來（10 個反思詞的出現次數、「wait」在各訓練步的分布），用來分析反思能力如何隨訓練演化；E.4 再用思考 token 數與 pass@1／pass@64 的落差評估鏈內修正的成效與上限。範圍限於訓練過程與基準評估的離線分析，不是部署中 agent 的修正紀錄回流評估。"
+    }
+  ],
+  "adoption": {
+    "evidence": [
+      "論文自述：R1 與 R1-Zero 權重及六個蒸餾模型已在 Hugging Face 公開（§1、附錄 I）；官方 DeepSeek 服務部署了以 DeepSeek-V3 做風險審查的風控系統（D.3.1）。",
+      "DeepSeek 官方 API 文件的發布公告（2025-01-20）：網站與 API 同步上線，API 以 model=deepseek-reasoner 使用 R1，網頁版以 DeepThink 開啟；程式碼與模型採 MIT 授權，允許蒸餾與商用。來源：https://api-docs.deepseek.com/news/news250120",
+      "Hugging Face 官方 model card：釋出 DeepSeek-R1、DeepSeek-R1-Zero（671B 總參數、37B 啟用、128K context）與六個蒸餾模型，MIT 授權可商用，並建議溫度 0.5–0.7、不用 system prompt、強制以 <think> 開頭。來源：https://huggingface.co/deepseek-ai/DeepSeek-R1",
+      "AWS What's New（2025-03-10）：DeepSeek-R1 在 Amazon Bedrock 以全代管、serverless 模型正式上線，AWS 稱是第一家提供全代管 GA 版本的雲端業者，可用區域為 US East（N. Virginia、Ohio）與 US West（Oregon）。來源：https://aws.amazon.com/about-aws/whats-new/2025/03/deepseek-r1-fully-managed-amazon-bedrock",
+      "Microsoft Azure 官方部落格（2025-01-29）：DeepSeek R1 進入 Azure AI Foundry 模型目錄（serverless endpoint）與 GitHub Models（public preview），蒸餾版可在 Copilot+ PC 上本機執行。來源：https://azure.microsoft.com/en-us/blog/deepseek-r1-is-now-available-on-azure-ai-foundry-and-github/"
+    ],
+    "assessment": "商用採納證據非常強：DeepSeek 自家網頁與 API 直接上線，AWS Bedrock、Azure AI Foundry、GitHub Models 等主要雲端平台都以正式產品提供，開放權重也以 MIT 授權允許商用與蒸餾。但被採納的是整個 R1 模型（含其長 CoT 推理），不是一個可以單獨抽出來的自我修正機制；沒有證據顯示任何產品把「鏈內反思」當成獨立的修正元件來使用或量測。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/deepseek-ai/DeepSeek-V3（僅推論程式碼；使用說明在 https://github.com/deepseek-ai/DeepSeek-R1；沒有 RL／SFT 訓練程式碼）",
+    "data": "模型權重公開（R1、R1-Zero、六個蒸餾模型，MIT 授權）；評估基準皆為公開資料集。RL 與 SFT 資料在附錄 I 只寫成「release at xxx」的佔位字串，並說審稿時以附件提供，未見公開下載。超參數、資料配方與提示詞在附錄 B 寫得相當完整。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是「RL 讓模型自發長出反思與自我驗證」這個說法的源頭，商用採納也極廣；但 T5 的證據只有反思詞頻與一則軼事，沒有量測反思是否真的把錯改對，主要貢獻是推理 RL 的配方，屬於 T5 的重要背景而非必讀核心。",
+  "related": [
+    "2402.03300",
+    "2409.12917",
+    "2305.20050",
+    "2408.03314",
+    "2303.17651",
+    "2305.11738",
+    "2211.00053",
+    "2203.11171",
+    "2203.14465",
+    "2210.10760",
+    "2312.08935",
+    "2412.19437"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 6,
+    "total": 8
+  }
+}

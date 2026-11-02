@@ -73,14 +73,14 @@
   .markdown :not(pre) > code {
     font-family: var(--font-mono);
     font-size: 0.9em;
-    background: var(--chip);
+    background: var(--muted);
     border-radius: var(--radius-sm);
     padding: 0.1em 0.35em;
   }
 
   .md-code {
-    background: var(--stage);
-    box-shadow: var(--stage-ring);
+    background: var(--hover-faint);
+    box-shadow: inset 0 0 0 1px var(--border);
     border-radius: var(--radius-2xl);
     overflow: hidden;
   }
@@ -89,6 +89,17 @@
     font-size: var(--text-micro);
     color: var(--muted-foreground);
     padding: 0.6rem 1rem 0;
+  }
+  /* 帶複製鈕的頭列（#1305）：高度固定成按鈕那麼高，串流中沒有按鈕也一樣，講完時不跳。 */
+  .md-code-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2rem;
+    padding: 0.25rem 0.25rem 0 1rem;
+  }
+  .md-code-head .md-code-lang {
+    padding: 0;
   }
   .md-code pre {
     font-family: var(--font-mono);
@@ -110,10 +121,41 @@
     padding: 0.35em 0.7em;
     text-align: start;
     vertical-align: top;
+    /*
+     * 不繼承上面的 anywhere（#1330）：anywhere 把斷點算進最小寬度，表格永遠擠得進框裡，窄螢幕上「1,204,388」被拆成
+     * 一字一行、框也從來不捲。break-word 只在真的放不下時才斷，不算進最小寬度：數字與英文字不拆，表格比框寬就在
+     * `.md-table-scroll` 裡橫捲。中文字之間本來就能換行，不受影響。
+     */
+    overflow-wrap: break-word;
   }
   .markdown th {
     font-weight: 500;
-    background: var(--chip);
+    background: var(--muted);
+  }
+  /* 數字欄（#1330，判定見 `lib/markdown/numeric-columns.ts`）：位數等寬、靠右。作者寫明的對齊是行內樣式，蓋得過這裡。 */
+  .markdown .md-num {
+    font-variant-numeric: tabular-nums;
+    text-align: end;
+  }
+  /*
+   * 中文格子（#1332，判定見 `lib/markdown/cjk-cells.ts`）：中文欄的最小寬度只有一個字，表格比框寬時人名被拆成一字一行。
+   * 短值（人名、部門、狀態）整格不斷行；長描述給 10em 的最小寬度照常換行（一行約八九個字；實測 8em 一行六七個字太碎、
+   * 12em 多撐寬表格）。只掛在含中日文字的格子上，數字、英文、網址維持上面的 break-word。
+   */
+  .markdown .md-cjk-short {
+    white-space: nowrap;
+  }
+  .markdown .md-cjk-prose {
+    min-width: 10em;
+  }
+  /*
+   * 整列 hover（#1330）：中性的 muted 疊一半（同 `bg-muted/50`），比表頭的 muted 淺，不會看成又一列表頭。
+   * 包在 (hover: hover) 裡跟 Tailwind 的 `hover:` 一樣：觸控點一下不會把底色卡住。
+   */
+  @media (hover: hover) {
+    .markdown tbody tr:hover {
+      background: color-mix(in oklab, var(--muted) 50%, transparent);
+    }
   }
 
   .markdown .md-image-alt {
@@ -146,17 +188,21 @@
 /*
  * 帶 \tag 的區塊公式：KaTeX 把編號絕對定位在右緣，公式放不下時編號疊在公式上、也捲不動。改成 flex：
  * 公式與編號並排，放不下就整塊橫向捲動；寬的時候兩邊的 auto 邊界讓公式大致置中、編號靠右。
+ *
+ * **只認新 class 名**：KaTeX 0.18 把內部的 `.tag`／`.base` 改名為 `.katex-tag`／`.katex-base`，我們已升到 0.18
+ * （#1152），舊名不再寫。換版時選擇器對不到元素，這三條會靜靜失效（編號疊回公式上、不能橫向捲動），畫面不報錯，
+ * 所以 `markdown-math.test.tsx` 用真的渲染結果鎖住「每條規則都對得到元素」。
  */
-.markdown .katex-display > .katex > .katex-html:has(> .tag) {
+.markdown .katex-display > .katex > .katex-html:has(> .katex-tag) {
   display: flex;
   align-items: baseline;
 }
 
-.markdown .katex-display > .katex > .katex-html:has(> .tag) > .base:first-child {
+.markdown .katex-display > .katex > .katex-html:has(> .katex-tag) > .katex-base:first-child {
   margin-left: auto;
 }
 
-.markdown .katex-display > .katex > .katex-html > .tag {
+.markdown .katex-display > .katex > .katex-html > .katex-tag {
   position: static;
   margin-left: auto;
   padding-left: 1em;

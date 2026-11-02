@@ -1,0 +1,136 @@
+{
+  "id": "2410.16464",
+  "title": "Beyond Browsing: API-Based Web Agents",
+  "topic": "T3",
+  "subarea": "感知／觀測空間（環境回饋的表徵、壓縮、GUI/網頁觀測、ACI）",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在 WebArena 上把靠 accessibility tree 操作 GUI 的瀏覽式 agent，換成寫 Python 直接呼叫網站 REST API 的 CodeAct 式 agent，再做一個每步可自由交錯 API 呼叫與瀏覽動作的 Hybrid Agent；同樣用 GPT-4o，成功率由 14.8% 升到 29.2%（API）與 38.9%（Hybrid），說明 agent 與環境之間的介面（ACI）選擇對表現影響極大。",
+  "problem": "現有 web agent 透過 accessibility tree 或截圖觀測為人類設計的 GUI，用模擬點擊與輸入操作。LLM 不熟悉 accessibility tree；需要動態載入或不在樹上立即可見的內容很難觀測；長列表要反覆捲動（Figure 2：數某位使用者在 a11yproject 的 commit 數，瀏覽 agent 走了 15 步仍拿不到答案，API agent 三行程式碼就解決）。網站其實早有為機器設計的介面：回傳 JSON 的 API。但 agent 能否有效用 API 完成真實網站任務、在什麼條件下可行，先前沒有人在同一批網站上直接比較過。對 T3 而言，這是在問：把觀測／動作通道從 GUI 換成結構化資料來源，能帶來多少。",
+  "core_idea": "把網頁任務的動作空間從「模擬滑鼠鍵盤」擴展成「在 Jupyter 裡寫 Python 呼叫網站 API」。觀測隨之從 accessibility tree 變成程式執行輸出（API 回傳的 JSON，或 agent 自己寫程式過濾、計數後的結果）。API 文件依大小處理：端點少就整份放進提示，端點多就先只給清單、再按需擷取單一端點的文件。API 覆蓋不足時，讓同一個 agent 在每一步自由選擇 API 或瀏覽動作（Hybrid），以瀏覽作為後備，並用瀏覽來驗證 API 得到的結果。",
+  "method": {
+    "基礎框架": "全部建在 OpenHands（原 OpenDevin）上，三個 agent 都用 GPT-4o。API-Based Agent 就是 CodeActAgent（沙箱 bash＋Jupyter IPython），另外加上 API 專用的指示與範例。Browsing Agent 是 OpenHands 的 BrowsingAgent：Playwright 驅動 Chromium，動作集取自 BrowserGym，觀測是 accessibility tree，約 14 種瀏覽動作。Hybrid Agent 是在 API-Based Agent 裡再接上 Playwright 瀏覽能力。三者都把完整的歷史動作與結果留在提示裡。",
+    "動作格式": "每回合最多一個 <execute_ipython>、<execute_browse> 或 <execute_bash> 區塊。API 呼叫用 Python requests 寫在 <execute_ipython> 裡。瀏覽動作以 Python 函式語法寫在 <execute_browse> 裡，用元素的 bid 定位，可用的有 goto、go_back、go_forward、scroll(delta_x, delta_y)、fill(bid, value)、select_option、focus、click（可指定左中右鍵與修飾鍵）、dblclick、hover、press(bid, key_comb)、clear、drag_and_drop、upload_file。結束時先輸出 Finish[答案]，再輸出 <finish></finish>，最後在 <execute_bash> 裡 exit()。",
+    "觀測": "API agent 的觀測就是 IPython 的執行輸出，也就是被 print 出來的 JSON 回應，或 agent 寫程式抽取後的值。Hybrid 每一步可以看到瀏覽器目前狀態（accessibility tree）、所有先前動作及其結果。論文沒有對 API 回應做截斷或摘要，只在提示裡提醒要注意分頁。",
+    "取得 API（§3.2、§5.2–5.3、A.3）": "分三種情境。(1) API 與文件都齊全，直接用：Gitlab 有 988 個端點，用官方 REST README；Map 有 53 個端點，來自 Nominatim（地理搜尋）、OSRM（路線）、OSM API v0.6（地圖資料庫）三組；Shopping 與 Shopping Admin 共用 Adobe Commerce 的 556 個端點，文件是 OpenAPI YAML，Admin 另需 admin token。(2) 有 API 沒文件：檢視網站前後端程式碼，抽出未文件化的 API，再把 API 的實作檔或 API 呼叫範例 trace 丟給 GPT-4o，生成含輸入參數、預期輸出與範例呼叫的 README 或 YAML。(3) API 不足：自己寫新 API。WebArena 的 Reddit（Postmill）原本只有 18 個端點，作者手動補了 13 個（含貼文投票），共 31 個，文件由 GPT-4o 從實作檔生成。",
+    "文件注入（§3.3、§5.3）": "以 100 個端點為門檻（作者說可依模型上下文長度調整）。少於 100 個（Map、Reddit）走 one-stage：整份文件直接放進提示。多於 100 個（Gitlab、Shopping、Shopping Admin）走 two-stage：第一階段，初始使用者提示只列出所有端點，每個配一句描述（例如「GET /api/{id}/commits → List commits in a project」）；第二階段，agent 需要細節時在 IPython 呼叫 utils.get_api_documentation(「<METHOD> <path>」)。這個工具背後是一個「端點→文件」的 dictionary，由 Python 樣式比對把整份 README 或 YAML 切成每個端點的子字串，回傳該端點的參數、輸出格式與範例。遇到 API 不合用或出錯時，agent 可以再查別的端點。",
+    "提示詞（A.5、A.6）": "完整 system prompt 由 System Prefix、API Prompt、（Hybrid 才有的）Browsing Prompt、System Suffix 組成。API Prompt 給三條使用提示：先實際看 API 回應，再寫程式解析；注意 HTTP header 與輸入參數；注意分頁，回應可能只含前幾筆，要看完全部。System Suffix：使用者給的資訊可能不完整或有歧義（例如「xyz」可能是商品、使用者或分類），要自己列舉所有可能解讀；明文禁止向使用者要求澄清；答案只放答案本身；每次只做少量事情。Initial User Prompt 提供任務意圖、site URL、API access token、使用者名稱與 API 清單，並要求使用任何 API 前先呼叫 get_api_documentation。Hybrid 另有兩條 IMPORTANT：一律先試 API，沒有可用的 API 才改用瀏覽；用過 API 之後，必須瀏覽到某個能驗證 API 結果的 URL。起始 URL 已經登入並開好。",
+    "多站任務": "把所有相關網站的 API 都給 agent，並標明每組 API 屬於哪個網站。OpenHands 的共用工作區讓資訊可以從一個網站帶到另一個網站。",
+    "預算與評估": "每題有固定的步數預算，但論文沒給數字（Figure 2 的例子是 15 步）。在 WebArena 全部 812 題上，以官方三種判準判定成功：答案比對、網站狀態檢查、URL 比對。外部 baseline（WebArena Base、AutoEval、AWM、SteP）的數字看起來取自各自的論文，論文沒交代它們的底層模型。"
+  },
+  "assumptions": [
+    "目標網站有 API，而且 agent 拿得到 access token 或 admin token（WebArena 是自架環境，可以直接發 token）",
+    "有人力逐站蒐集、整理甚至補寫 API 與文件；API 不足時願意自己實作（Reddit 補了 13 個）",
+    "LLM 看得懂 REST 文件、能寫出正確的 requests 程式；API 回傳的 JSON 夠短，可以直接 print 進上下文，否則 agent 會自己寫程式過濾",
+    "100 個端點以內的文件整份放得進上下文；超過時，每個端點一句描述就足以讓模型挑對端點",
+    "任務是純文字：作者因 WebArena 的 API 不支援影像而排除 VisualWebArena",
+    "使用者不能被詢問：提示明文禁止要求澄清，任務必須一次給足"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WebArena 全部 812 題：Gitlab 180、Map 109、Shopping 187、Shopping Admin 182、Reddit 106、Multi-site 48"
+    ],
+    "metrics": [
+      "Task success rate（WebArena 官方判準：答案比對、網站狀態、URL 比對）",
+      "每題平均步數",
+      "每題平均成本（美元）",
+      "Hybrid Agent 的動作類型分佈與各類型的準確率",
+      "API-Based Agent 在 100 題隨機樣本上的錯誤分類"
+    ],
+    "baselines": [
+      "Browsing Agent（OpenHands BrowsingAgent＋GPT-4o，觀測為 accessibility tree）",
+      "WebArena Base（Zhou et al., 2024）",
+      "AutoEval（Pan et al., 2024）",
+      "AWM（Agent Workflow Memory，Wang et al., 2024e）",
+      "SteP（Sodhi et al., 2024；使用針對 WebArena 任務設計的提示，作者因此不視為 task-agnostic）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Hybrid Agent 在 WebArena 平均成功率最高，作者稱是 task-agnostic agent 中的 SOTA",
+      "numbers": "平均 38.9%：比 Browsing Agent 的 14.8% 高 24.1 個百分點，比 API-Based Agent 的 29.2% 高 9.7 個百分點；同表 AWM 35.5%，SteP 36.5%（用 WebArena 專屬提示）。分站 Gitlab 44.4、Map 45.9、Shopping 25.7、Admin 41.2、Reddit 51.9、Multi 16.7",
+      "section": "Abstract、§6.1、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只靠 API 的 agent 平均勝過只靠瀏覽的 agent，但不是每站都贏",
+      "numbers": "平均 29.2% 對 14.8%。Gitlab 43.9 對 12.8、Map 45.4 對 20.2、Shopping 25.1 對 10.2、Reddit 18.9 對 10.4；Shopping Admin 20.3 對 22.0、Multi 8.3 對 10.4，這兩站反而是瀏覽較高",
+      "section": "§1、§6.1、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "API 的覆蓋與品質直接決定 API agent 的表現：Reddit 補上缺的端點後，準確率大約翻倍；API 支援最好的 Gitlab 與 Map 準確率也最高",
+      "numbers": "Reddit 端點數 18 → 31（作者手動補 13 個，含投票），API-Based Agent 準確率 9.4% → 18.9%",
+      "section": "§6.2、Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "API-Based Agent 的失敗主要來自「單靠 API 根本做不到」，而不是 API 用錯；API 做得到的題目，平均只需約兩次 API 呼叫",
+      "numbers": "100 題隨機樣本：33% 做對、50% 單靠 API 無解、6% 誤解任務、11% API 呼叫錯誤（格式錯、參數錯）；可解的 50 題中做對 66%。可解題平均 2.1 次 API 呼叫，但整體平均 7.8 步，多數步數花在查文件、修正前一步的錯誤、驗證輸出",
+      "section": "§6.3、Figure 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "Hybrid Agent 大多數任務同時用了 API 與瀏覽，而且用到 API 的任務準確率較高",
+      "numbers": "Table 3：Browsing+API 77.7%（準確率 42.0%）、只瀏覽 14.3%（25.0%）、只 API 8.0%（40.0%）。附錄 Table 5／6 以 812 題計算則是 80.0%／12.1%／7.9%，準確率 41.2%（268/650）、23.5%（23/98）、39.1%（25/64），與 Table 3 不一致",
+      "section": "§6.1、Table 3；A.4、Tables 5–6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "API 類 agent 步數略少或相當，但每題成本高一個數量級，成本主要來自 API 文件造成的長提示",
+      "numbers": "平均步數／成本：Browsing 8.4 步、$0.1；API-Based 7.8 步、$1.2；Hybrid 8.5 步、$1.4。Gitlab 有 988 個端點，API-Based 在 Gitlab 每題 $1.7；Reddit 文件最短，API-Based 與 Hybrid 都只要 $0.6",
+      "section": "A.4、Table 7、Figures 7–8",
+      "anchor_idx": 5
+    }
+  ],
+  "limitations_stated": [
+    "API 的可得性與覆蓋率因網站而異：即使是 Gitlab 也缺某些功能（例如從顯示名稱查正式 username，或取得使用者的 feed token），這類任務 API agent 做不到",
+    "每個網站都要人工把 API 文件整合進 agent 的動作空間，擴展性不如純瀏覽 agent；作者寄望用 AWM、SkillWeaver 這類方法自動誘導 API",
+    "API 是靠人工查官方文件取得的（§3.2），尚未自動化",
+    "只在 WebArena 上評估，任務數量與種類有限；其他 benchmark 不支援 API 呼叫，VisualWebArena 因為 API 不支援影像而沒測",
+    "API 類 agent 的成本遠高於瀏覽 agent，原因是提示很長；未來可改成即時只擷取相關 API 來降低（A.4）"
+  ],
+  "limitations_observed": [
+    "「API 勝過瀏覽」的對照組偏弱。自家 Browsing Agent 只有 14.8%，而同一張 Table 2 裡純瀏覽的 AWM（35.5%）與 SteP（36.5%）都高於 API-Based Agent 的 29.2%。所以這篇實際證明的是「API 勝過這一個特定的弱瀏覽 baseline」，並沒有控制瀏覽 agent 的品質。外部 baseline 的數字看起來是從原論文照抄的，底層模型與設定不同，論文也沒交代。",
+    "觀測與動作沒有拆開量。從 accessibility tree 換成 API，同時改了動作空間（寫程式或點擊）、觀測格式（JSON 或 a11y tree）、提示長度與內容（多了 API 文件），也改了 agent 能不能寫程式做過濾與計數（Figure 2 的 commit 計數正是靠這點）。因此增益沒辦法歸給「觀測表徵」這一項，對 T3 感知子題而言，它給的是介面整體的效果，不是觀測格式的效果。",
+    "Hybrid 的「自由選擇」與提示互相矛盾。§4 說 Hybrid 可以依信心自由選擇動作，還能用自然語言向人要求澄清；但 A.6 的提示明文規定一律先試 API，用過 API 後必須瀏覽到能驗證結果的 URL，System Suffix 又禁止要求澄清。所以 Table 3 的 77.7% Browsing+API，大半是提示規定出來的行為，不是 agent 自己學到的混合策略。另外，強制瀏覽到結果頁，可能剛好滿足 WebArena 以 URL 比對判定的導覽題；這部分增益與 API 無關，論文沒有拆開。A.5 的 API-Based 提示也同樣寫著可以直接瀏覽網站，並列出 <execute_browse>，但這個 agent 按定義沒有瀏覽能力，提示與能力對不上。",
+    "表格內部不一致。Table 3（14.3／8.0／77.7；準確率 25.0／40.0／42.0）與附錄以 812 題計的 Table 5／6（12.1／7.9／80.0；23.5／39.1／41.2）對不上。Table 5 的 Reddit 欄是 0＋0＋82.1，加起來不是 100；但 Table 6 顯示 Reddit 106 題全是 Browsing+API，應該是 100%。Table 6 的計數可以精確還原 Table 2 的 Hybrid 各站數字（例如 Gitlab (1+18+61)/180＝44.4%，全站 316/812＝38.9%），所以附錄較可信，Table 3 可能出自另一次執行或舊版本。",
+    "「Hybrid 在所有網站都勝過另外兩者」的差距，在三個站只有雜訊量級：Gitlab 44.4 對 43.9、Map 45.9 對 45.4、Shopping 25.7 對 25.1，都只差 0.5–0.6 個百分點，約等於一題。而且只跑一次，沒有報告變異數或信賴區間，這三站實質上是打平。相對 API-Based，真正的增益集中在 Shopping Admin（+20.9）、Reddit（+33.0）與 Multi（+8.4）。",
+    "Reddit 的數字有看過結果再改環境的疑慮。作者是在看到 API-Based Agent 在 Reddit 只有 9.4% 之後，才手動補 13 個 API（含投票）。雖然聲稱建構時是 task-agnostic、沒看 WebArena 任務，但補 API 的時點在看過結果之後。而 Hybrid 在 Reddit 的 51.9%，比 API-Based（18.9%）與 Browsing（10.4%）加起來還高，機制沒有解釋，卻是平均 38.9% 的主要貢獻之一。這種自己寫 API 的做法，也無法搬到拿不到後端的真實網站。",
+    "錯誤分析只做了 API-Based Agent 的 100 題，沒有分析 Hybrid，所以不知道 Hybrid 剩下 61% 的失敗是怎麼來的。「50% 單靠 API 無解」是人工判定的，論文沒說判定標準，也沒有標註者一致性。",
+    "成本分析缺消融。API 類 agent 每題成本是瀏覽的 12–14 倍（$1.2／$1.4 對 $0.1）。two-stage 擷取只縮短了詳細文件，Gitlab 988 個端點的一句摘要清單仍然很長。論文沒有做擷取方式或文件壓縮的消融，也沒有對 100 個端點的門檻做敏感度分析。",
+    "只用一個模型 GPT-4o，沒寫版本、溫度，也沒給步數上限的具體數字，沒有跨模型驗證。「LLM 不熟悉 accessibility tree」這個動機，在更強或專門訓練過 GUI 的模型上是否還成立，沒有檢驗。",
+    "對 T3 最相關的「長觀測處理」完全沒有機制：API 的 JSON 回應直接 print 進上下文，只靠一句提示提醒注意分頁，沒有截斷、摘要，也沒有量觀測長度。它證明了結構化觀測的價值，但沒告訴我們怎麼表徵或壓縮它。"
+  ],
+  "framework_role": "屬於 T3(a) 感知／觀測空間裡的 ACI 子題，是「換介面比調提示更有效」的實證資料點：同一個 GPT-4o、同一個 WebArena，觀測／動作介面從 accessibility tree 換成 API JSON，成功率大約翻倍，兩者混用再加近 10 個百分點。對對話完成框架的啟示有三點。一，agent 的觀測通道應優先選結構化、機器友善的來源（API 或工具回傳的 JSON），GUI 觀測當作後備。二，工具文件本身就是觀測上下文的一部分，要按需擷取，否則成本高一個數量級。三，Hybrid 提示裡「用 API 取得結果、再用瀏覽驗證」，可以視為輕量的跨通道觀測驗證。它不涉及 T3(b) 的可觀測性與監控，沒有執行期監控、異常偵測或行為記錄的設計；主要貢獻其實落在動作空間，觀測的改變是附帶結果。",
+  "edges": [],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文沒有寫任何部署或產品。官方專案頁（https://yueqis.github.io/API-Based-Agent/）與 GitHub repo（https://github.com/yueqis/API-Based-Agent，MIT）只提供研究用程式碼與 agent 軌跡；README 沒提到併入 OpenHands 主線或任何產品。程式碼公開與後續引用屬於可重現性與學術影響力，不算商用採納。論文收錄於 Findings of ACL 2025（ACL Anthology 2025.findings-acl.577）。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/yueqis/API-Based-Agent",
+    "data": "WebArena 是公開 benchmark，各站 API 文件來源都列在 A.3（Gitlab、Nominatim、OSRM、OSM、Adobe Commerce 官方文件）。專案頁列出 agent 輸出軌跡資料集 https://huggingface.co/datasets/yueqis/agent-output。作者自寫的 13 個 Reddit API 與 GPT-4o 生成的 Reddit 文件是否包含在 repo 內，未確認。實驗只跑一次，GPT-4o 的版本、溫度與步數上限都沒寫，精確重現有難度。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是 ACI 子題中「介面選擇對成功率影響極大」的有力資料點（14.8% → 29.2% → 38.9%），但主要貢獻在動作空間，而不是觀測表徵：觀測與動作沒拆開量，瀏覽 baseline 偏弱，表格也有內部不一致，所以有參考價值，但不是 T3 必讀。",
+  "related": [
+    "2307.13854",
+    "2402.01030",
+    "2407.16741",
+    "2409.07429",
+    "2310.03720",
+    "2404.06474",
+    "2403.07718",
+    "2504.07079",
+    "2305.15334",
+    "2307.16789",
+    "2401.13649",
+    "2407.00132"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 5,
+    "total": 8
+  }
+}

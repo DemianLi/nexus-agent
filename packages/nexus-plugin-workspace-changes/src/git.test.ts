@@ -3,13 +3,13 @@
  */
 
 import { existsSync } from 'node:fs';
-import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { GitRunner, resolveGitExecutable, scrubbedParentEnv } from './git.js';
+import { GitRunner, resolveGitExecutable } from './git.js';
 import { parseNumstat } from './numstat.js';
 
 const cleanup: string[] = [];
@@ -63,23 +63,6 @@ describe('parseNumstat', () => {
 });
 
 describe('環境淨化', () => {
-  it('拿掉名字像憑證的與 `NEXUS_*`，不分大小寫；其餘照留', () => {
-    expect(
-      scrubbedParentEnv({
-        PATH: '/bin',
-        HOME: '/h',
-        OPENAI_API_KEY: 'k',
-        GH_TOKEN: 't',
-        db_password: 'p',
-        MY_SECRET: 's',
-        GIT_CONFIG_KEY_0: 'core.hooksPath',
-        NEXUS_AGENT_HOME: '/n',
-        nexus_x: 'x',
-        UNDEFINED: undefined,
-      }),
-    ).toEqual({ PATH: '/bin', HOME: '/h' });
-  });
-
   it('子行程拿到的是淨化過的環境，外加 dsh 那四個 git 變數', async () => {
     vi.stubEnv('FAKE_API_TOKEN', 'leak');
     vi.stubEnv('NEXUS_AGENT_HOME', '/somewhere');
@@ -149,6 +132,110 @@ describe('GitRunner', () => {
     });
     controller.abort();
     await expect(running).rejects.toThrow('git add was aborted');
+  });
+
+  it('後代行程握著 stdout：直接子行程一結束，run 在排空期限內回來（#1560 N1110）', async () => {
+    const dir = await directory();
+    const pidFile = join(dir, 'grandchild.pid');
+    // 背景的 sleep 繼承 stdout／stderr，git 本身印一行就結束；只聽 'close' 的話要等 sleep 把管線關掉。
+    const executable = await script(
+      dir,
+      'git',
+      `sleep 30 &\necho $! > '${pidFile}'\necho snapshot-line\nexit 0`,
+    );
+    const started = Date.now();
+    try {
+      const result = await new GitRunner(executable, { ...LIMITS, timeoutMs: 20_000 }).run([], {
+        cwd: dir,
+        signal,
+      });
+      expect(result).toMatchObject({ exitCode: 0, stdout: 'snapshot-line\n', truncated: false });
+      // TERMINATE_GRACE_MS（2 秒）加餘裕；比 sleep 的 30 秒與逾時的 20 秒都早得多。
+      expect(Date.now() - started).toBeLessThan(2_000 + 1_000);
+    } finally {
+      const pid = Number((await readFile(pidFile, 'utf8').catch(() => '')).trim());
+      if (Number.isInteger(pid) && pid > 1) {
+        try {
+          process.kill(pid, 'SIGKILL');
+        } catch {
+          // 已經不在。
+        }
+      }
+    }
+  }, 15_000);
+
+  it('結束後的排空期限內，後代補寫的輸出照收；管線關了就立刻結算（#1560 N1110）', async () => {
+    const dir = await directory();
+    // 背景行程在 git 結束 300ms 後才補寫一行，遠短於排空期限：exit 一到就砍管線的話這一行會丟。
+    const executable = await script(dir, 'git', '(sleep 0.3; echo late) &\necho early\nexit 0');
+    const started = Date.now();
+    const result = await new GitRunner(executable, LIMITS).run([], { cwd: dir, signal });
+    expect(result).toMatchObject({ exitCode: 0, stdout: 'early\nlate\n' });
+    // 背景行程一結束管線就關了，'close' 先到，不必等滿排空期限。
+    expect(Date.now() - started).toBeLessThan(1_500);
+  });
+
+  describe('逾時與中止的歸因（#1569 N1561）', () => {
+    /** 忽略 SIGTERM 的假 git：要等 2 秒的 SIGKILL 寬限才會死，這段時間裡逾時的計時器可以先到期。 */
+    async function stubborn(dir: string): Promise<string> {
+      return script(
+        dir,
+        'git',
+        `exec '${process.execPath}' -e "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"`,
+      );
+    }
+
+    it('先被中止、逾時的計時器在 SIGKILL 寬限期間才到期：報「被中止」，不是「逾時」', async () => {
+      const dir = await directory();
+      const runner = new GitRunner(await stubborn(dir), { ...LIMITS, timeoutMs: 300 });
+      const controller = new AbortController();
+      const running = runner.run(['add'], { cwd: dir, signal: controller.signal });
+      const outcome = running.then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      setTimeout(() => controller.abort(), 50);
+      const error = await outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('git add was aborted');
+    }, 15_000);
+
+    it('對照：沒有人中止，逾時到了就報逾時', async () => {
+      const dir = await directory();
+      const runner = new GitRunner(await stubborn(dir), { ...LIMITS, timeoutMs: 300 });
+      await expect(runner.run(['add'], { cwd: dir, signal })).rejects.toThrow(
+        'git add timed out after 300ms',
+      );
+    }, 15_000);
+
+    it('跑完（成功、失敗、被中止）計時器都清掉，不留到到期', async () => {
+      const dir = await directory();
+      const timers = (): number =>
+        process.getActiveResourcesInfo().filter((type) => type === 'Timeout').length;
+      // 先讓上一條測試殘留的計時器離場，再量基準。
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const before = timers();
+      const ok = new GitRunner(await script(dir, 'git', 'echo hi'), {
+        ...LIMITS,
+        timeoutMs: 60_000,
+      });
+      await ok.run([], { cwd: dir, signal });
+      const failing = new GitRunner(await script(dir, 'git', 'exit 3'), {
+        ...LIMITS,
+        timeoutMs: 60_000,
+      });
+      await failing.run([], { cwd: dir, signal });
+      const aborted = new AbortController();
+      aborted.abort();
+      await expect(ok.run([], { cwd: dir, signal: aborted.signal })).rejects.toThrow('was aborted');
+      expect(timers()).toBeLessThanOrEqual(before);
+    });
+
+    it('timeoutMs 不是正數就拋，不會變成「永不逾時」', async () => {
+      const dir = await directory();
+      const runner = new GitRunner(await script(dir, 'git', 'exit 0'), { ...LIMITS, timeoutMs: 0 });
+      await expect(runner.run([], { cwd: dir, signal })).rejects.toThrow('timeoutMs 必須大於 0');
+    });
   });
 
   it('spawn 不起來就拋', async () => {

@@ -1,0 +1,160 @@
+{
+  "id": "2108.13264",
+  "title": "Deep Reinforcement Learning at the Edge of the Statistical Precipice",
+  "topic": "T8",
+  "subarea": "多次試驗的可靠性度量與統計嚴謹性",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "以 Atari 100k 上每個演算法各跑 100 次獨立訓練的實驗，證明少量 runs 下的跨任務彙總點估計（尤其中位數）既高變異又有偏，並提出分層 bootstrap 信賴區間、run 層級的分數分布（performance profile）、IQM／optimality gap／平均改進機率等彙總指標與開源函式庫 rliable，再用它們重新檢視 ALE、Procgen、DMC 上的既有比較。",
+  "problem": "深度 RL 以多任務基準上的跨任務平均或中位數點估計比較演算法，但受限於運算資源，每個任務通常只跑 3–10 次，而 RL 結果的變異很大（任務隨機性、探索、初始化、GPU 與框架的非決定性）。只報點估計會把抽樣雜訊當成進步、把較差的方法誤認為 SOTA、讓較好的方法因為隨機條件不利而被放棄，也讓結果只能在完全相同的隨機條件下重現；再加上有些論文改用「取最大值」的評估協定，跨論文比較直接失效。任何「M 個任務 × 少量重複試驗」的評分場景都有同樣的問題，包括 agent 的任務完成率。",
+  "core_idea": "把任何以有限 runs 算出的效能估計當成隨機變數處理：(1) 報區間估計而不是點估計，信賴區間以「每個任務各自重抽 runs」的分層 bootstrap 計算，讓 M×N 個樣本共同支撐彙總統計量的區間，而不是靠單一任務的 N 個樣本；(2) 用合併所有 runs 的分數分布曲線（performance profile）呈現跨任務與跨 run 的全貌；(3) 以統計效率較高又穩健的彙總指標取代 mean／median：IQM（合併 runs 後的 25% 截尾平均數）、optimality gap、平均改進機率；(4) 不用 p<0.05 的二分顯著性檢定，改看效應量與信賴區間；(5) 同一比較內評估協定必須一致，不得在 runs 之間或訓練過程中取最大值。",
+  "method": {
+    "input_output": "輸入：M 個任務 × N 次獨立 run 的純量分數矩陣 x[m,n]（比較兩個演算法時各有一份，run 數可以不同）。輸出：(a) 各彙總指標的點估計與 95% 信賴區間；(b) 附逐點信賴帶的分數分布曲線；(c) 兩兩演算法之間的平均改進機率與其信賴區間；(d) 兩個區間重疊時，差值 X−Y 的信賴區間。",
+    "score_definition": "一個 run 是一次完整的獨立訓練，不等同於固定一個 random seed：以相同的 Python／NumPy／JAX seed 各跑 100 runs 的 der，兩組之間的相關性很低，GPU 非決定性無法以 seed 控制（App. A.2, Fig. A.13）。單一 run 在單一任務上的分數＝訓練結束後 100 個評估 episode 的平均回報（end performance，不取訓練中的最大值）。再以兩個參考點線性正規化：Atari 以隨機 agent＝0、人類平均＝1；Procgen 建議改用估計的 min–max 正規化（PPO 正規化分數重尾，且只適合建在 PPO 上的方法）；DMC 除以最高分 1000。",
+    "stratified_bootstrap_ci": "重複 B 次：對每個任務 m 獨立地從該任務的 N 個 run 分數中放回抽出 N 個，組成一份 M×N 的 bootstrap 樣本，對它計算統計量（任一彙總指標）；取 B 個統計量的第 2.5 與第 97.5 百分位當 95% 信賴區間（percentile bootstrap）。B 的設定：彙總指標 50,000 次；逐點信賴帶與改進機率 2,000 次；DMC 排名分布 200,000 次。作者比較 basic、percentile、bias-corrected、BCa 四種非參數 bootstrap，少量 runs 下 percentile 的真實覆蓋率最好且區間窄，理論上較好的 BCa 反而不如 percentile。每任務只有 1–2 runs 時，可改成同時對任務與 runs 分層重抽，回答「換一組任務會怎樣」，區間會寬很多（App. A.5, Fig. A.22）。§3 計算中位數區間時另用 m-out-of-n bootstrap（腳註 5）。",
+    "performance_profile": "run-score distribution：F̂(τ) = (1/M) Σ_m (1/N) Σ_n 1[x_mn > τ]，即合併所有 runs 後分數大於 τ 的比例，對 τ 作圖（曲線越高越好），信賴帶以分層 bootstrap 逐點計算。與 ALE 慣用的 average-score distribution（先把每個任務的 runs 平均，再看有多少比例的任務超過 τ）相比：前者是底層分布的不偏估計，階梯寬度是 1/(MN) 而不是 1/M，單一離群 run 最多只讓曲線在任一 τ 變動 1/(MN)，變異數通常也較小。讀法：曲線與 y=0.5 的交點是中位數；分數非負時曲線下面積是平均；一條曲線處處不低於另一條即隨機優勢（stochastic dominance）。可選做法：依 runs 所在比例把 x 軸做非線性縮放，放大多數 runs 所在的區段（代價是隱含次線性效用，也無法再以面積讀出平均或 IQM）。",
+    "aggregate_metrics": "Mean、Median：先對每個任務的 runs 取平均，再取任務間的平均／中位數（作者指出前者容易被少數離群任務主導；後者變異大，近半任務得 0 分也不影響它）。IQM：把全部 M×N 個 run 分數合併排序，丟掉最低與最高各 25%，對中間 50%（⌊NM/2⌋ 個）取平均，即 25% 截尾平均數，介於 mean（0% 截尾）與 median（接近 50% 截尾）之間。Optimality gap：演算法距離門檻 γ 不足的量，即分數分布在 γ 以下的面積，等價於 γ − mean(min(x, γ))（此式是依 Fig. 8 的面積定義寫成的等價式，論文正文沒有列出公式），預設 γ=1（人類或 min–max 上限），越低越好；不想挑門檻時可畫 optimality gap／γ 對 γ 的曲線（App. A.7）。App. A.7 另建議 DP-25（最低 25% runs 的平均，看最難任務的進展）與 superhuman probability P(X>1)（以 run 計數，而不是以遊戲數計）。",
+    "probability_of_improvement": "單一任務：P(X_m > Y_m) = (1/(NK)) Σ_i Σ_j S(x_mi, y_mj)，S 在 x>y 時為 1、相等為 1/2、x<y 為 0（即 Mann–Whitney U 統計量，X、Y 分別有 N、K 個 runs）。平均改進機率 P(X>Y) = (1/M) Σ_m P(X_m > Y_m)，信賴區間以分層 bootstrap 2,000 次計算。判讀：點估計大於 0.5 且區間不含 0.5 視為統計顯著；區間上界大於 0.75 時，依 Bouthillier et al. 的 Neyman–Pearson 準則稱為統計上有意義。此指標不反映改進幅度。",
+    "comparing_two_algorithms": "兩個區間重疊時不能直接下結論，要對差值 X−Y 計算信賴區間（App. A.2, Fig. A.15）。例：5 runs 時，drq(ε) 相對 der 的中位數提升區間為 (0.01, 0.21)，SPR 相對 DrQ 為 (−0.09, 0.18)；SPR 對 DER 在 5–15 runs 時不顯著，但跑更多 runs 後就顯著，所以「不顯著」不能寫成「沒有改進」。",
+    "protocol_rules": "(1) 報信賴區間與效應量，不用 p<0.05 的二分判斷；(2) 同一比較內評估協定固定，不在 runs 之間或訓練過程中取最大值：對 N 個 runs 取最大等於在評估另一個演算法 A^N，而 A^N 本身也是隨機的，需要多次 A^N 的 runs；學習曲線不單調，訓練中取最大值的結果與 end performance 不可比；最大值本身又是正偏的估計（App. A.4）；(3) 不以固定 seed 解決重現性；(4) 論文應公開每一個 run 的分數，供後續統計分析。",
+    "validation_experiments": "(a) 變異：der、otr、drq、drq(ε)、curl、spr 在 26 款遊戲各跑 100 runs，放回抽出 3–100 runs、重算 100,000 次，觀察抽樣分布；(b) 偏差：比較不同 N 下的期望樣本中位數與期望 IQM（Fig. 3, Fig. A.17）；(c) 覆蓋率：der 額外再跑 100 runs 共 200 runs，以 200 runs 算出的估計當作真值，每個 K 從 200 runs 不放回抽 10,000 組 K runs，計算 95% 區間包含真值的比例（Fig. 6, A.18, A.19）；(d) 偵測能力：把同一個 N-run 的 spr 實驗複製成兩份，其中一份分數人為放大 ℓ%，看觀測到的 lift 的區間（ℓ=0 等於同一實驗換一組 runs）；(e) 效率：以 20,000 組 10-run 子樣本估計不同截尾比例估計量的 MSE（Fig. A.16）。",
+    "compute_and_implementation": "所有演算法建在 Rainbow 架構上並沿用原論文超參數；der 改用 n=10 的 n-step return；drq(ε) 改用標準 ε-greedy（訓練 ε 衰減到 0.01、評估 ε=0.001；原 drq 評估時 ε=0.05）。der、otr 以 Dopamine 重新實作，curl、spr 用作者公開的程式碼，drq 用作者提供的程式碼。Tesla P100，每 run 約 3–5 小時，共 18,200 runs，約 2,400–3,600 GPU 天。上述計算與繪圖全部由 rliable 提供（get_interval_estimates、IQM、optimality gap、probability_of_improvement、performance profile）。"
+  },
+  "assumptions": [
+    "同一任務的各 run 分數是同分布的獨立實現，不同任務之間也彼此獨立，分層 bootstrap 才能近似真實的抽樣分布。",
+    "線性正規化後的分數在任務之間可比，兩個參考點（隨機／人類、min–max）有實質意義；合併 runs 的 IQM 與分數分布曲線都依賴這個可比性。",
+    "任務集合視為固定：主要的信賴區間只反映 run 層級的隨機性，推論對象是這一組任務，不是任務母體。",
+    "每任務至少約 5–10 runs，且 M·N 夠大，bootstrap 重抽才近似真實抽樣；3 runs 時區間會低估。",
+    "評估的是超參數調好之後的演算法，超參數搜尋的成本與變異不在區間裡。",
+    "optimality gap 假設門檻 γ 以上的改進不重要。",
+    "以訓練結束時的表現為準，且單一 run 的分數是 100 個評估 episode 的平均，episode 之間的變異已先被平均掉。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "Atari 100k（26 款遊戲，100k 互動步；案例研究，每演算法每遊戲 100 runs，der 共 200 runs）",
+      "ALE Atari 200M（55 款遊戲，sticky actions）",
+      "Procgen（16 個任務，easy mode）",
+      "DeepMind Control Suite（6 個任務，100k 與 500k 步）"
+    ],
+    "metrics": [
+      "mean／median normalized score",
+      "IQM（25% trimmed mean over combined runs）",
+      "optimality gap（γ=1）",
+      "average probability of improvement（Mann–Whitney U）",
+      "run-score distribution（performance profile）與 average-score distribution",
+      "95% stratified percentile bootstrap CI、差值 CI",
+      "CI 真實覆蓋率、估計量的期望偏差與 MSE",
+      "DP-25、superhuman probability P(X>1)、rank distribution"
+    ],
+    "baselines": [
+      "評估方法的對照：點估計、單一任務的 bootstrap CI、basic／bias-corrected／BCa bootstrap、average-score distribution、Recht 以 Welch t-test 構成的 performance profile、二分顯著性檢定",
+      "Atari 100k 被分析的演算法：DER、OTRainbow、DrQ、DrQ(ε)、CURL、SPR、SimPLe",
+      "ALE 200M：DQN (Nature)、DQN (Adam)、C51、REM、Dopamine Rainbow、IQN、M-IQN、DreamerV2，以及 App. A.22 的 MuZero、Muesli",
+      "Procgen：PPO、MixReg、UCB-DrAC、PLR、PPG、IDAAC",
+      "DMC：SAC+AE、SLAC、Dreamer、CURL、RAD、DrQ、PISAC、SUNRISE、CURL-D2RL"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "少量 runs 下，文獻中報的樣本中位數本身是高變異的隨機量，足以顛倒演算法排序；重新抽樣後的分析顯示 der 可能其實優於 otr，與各自論文報的點估計相反。",
+      "numbers": "每個演算法 26 款遊戲各 100 次獨立 runs，放回抽出與原論文相同的 N 重算 100,000 次；原論文的 N：der、otr、drq 為 5，spr 為 10，curl 為 20",
+      "section": "§3, Fig. 2 左",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在 Atari 100k 上，要讓中位數的 95% 區間夠窄需要 50–100 runs，遠多於「20–30 runs 就夠」的經驗法則；以人為放大分數模擬已知較好的演算法時，中位數要很多 runs 才能可靠偵測提升，ℓ=0 時即使 100 runs 仍可能出現 20% 的偏離。",
+      "numbers": "中位數需 50–100 runs；可偵測 +25% 需 25 runs、+10% 需 100 runs；ℓ=0、100 runs 仍可有 20% 偏離",
+      "section": "§3, Fig. 2 右, Fig. 4（內文誤指為 Figure 6）",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "含取最大值的非標準評估協定會系統性灌分：用 curl 的協定（訓練中 10 次評估取最大）評估 der，得分遠高於 curl 自己報的分數；sunrise 相對 der 的提升大半可由「每款遊戲在多組超參數中取最大」解釋。",
+      "numbers": "curl 取訓練中 10 次評估的最大值；sunrise 每款遊戲在 8 組超參數（各 3 runs）中取最大；論文只以長條圖呈現，未給數值表",
+      "section": "§3, Fig. 5（內文誤指為 Figure 6）, App. A.4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "單一任務的 bootstrap 區間在少量 runs 下覆蓋率不足，跨任務分層 bootstrap 的彙總指標區間則在很少 runs 下就接近名目覆蓋率；四種 bootstrap 中 percentile 最好，BCa 在少量 runs 下不如 percentile，但 3 runs 時仍會低估。",
+      "numbers": "單一遊戲平均分數的區間需 20–30 runs／任務，許多遊戲在 30 runs 時仍低於 95%；分層 bootstrap 的彙總區間只需 5–10 runs；percentile 區間在 N=10 時對 median 與 IQM 都已足夠；覆蓋率以 200 runs 為真值、每個 K 抽 10,000 組估計",
+      "section": "§4.1, Fig. 6, App. A.3, A.5, Fig. A.18, Fig. A.19",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "IQM 的區間遠比中位數窄，偵測同一個提升所需的 runs 少得多；在截尾比例不同的估計量中，IQM 的 MSE 表現良好。",
+      "numbers": "論文以圖呈現區間寬度與 MSE，未給數值表；MSE 以 20,000 組 10-run 子樣本估計",
+      "section": "§4.3, Fig. 2 右, Fig. 4, App. A.2 Fig. A.15, A.16",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "在 Procgen 上，「宣稱有改進」其實只是機率性的：以宣稱較好的演算法對被比較者計算平均改進機率，多項宣稱的改進只有五到七成的機會成立，UCB-DrAC 勝過 PLR 的機率甚至不到一半。",
+      "numbers": "16 個任務、每任務 10 runs；UCB-DrAC 對 PLR 約 40–50%；多項既有改進只有 50–70%",
+      "section": "§5, Fig. 12 右",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "ALE 200M 上換彙總指標就換排名（median 與 IQM 的排序不同，optimality gap 與 IQM／median 的排序也不同）；M-IQN 對 Dopamine Rainbow、C51 對 DQN (Adam) 的區間估計大幅重疊；IQN 在 τ≥2 時優於 Rainbow、τ<2 時則較差。",
+      "numbers": "55 款遊戲、sticky actions；多數演算法 5 runs／遊戲，M-IQN 3 runs、DreamerV2 11 runs",
+      "section": "§5, Fig. 9, Fig. 10",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "樣本中位數是有偏估計量，偏差的大小與正負號隨演算法而異，可能大到主導演算法之間的比較；IQM 的小樣本偏差小一個數量級。",
+      "numbers": "spr 以 5 runs 與 100 runs 算出的樣本中位數差 +0.03，約為其相對 drq(ε) 平均提升 +0.08 的 36%；3 runs 對 100 runs 的期望差：SPR 的 median 為 0.05，IQM 只有 0.006",
+      "section": "§3 Fig. 3, App. A.2 Fig. A.17",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "最好的彙總指標仍是開放問題，且取決於正規化分數的分布；每個彙總指標只捕捉整體表現的某一面向，排名會隨指標改變（§4.3, §5）。",
+    "3 runs 時 bootstrap 區間會低估真實的 95% 區間，可能需要調高名目覆蓋率（Fig. 6）。",
+    "平均改進機率不反映改進幅度，所有任務一致提升 1% 與 100% 可能得到同樣的值（§4.3, §5）。",
+    "截尾平均數對較不重尾的分布（例如常態）效率比平均差（App. A.2 引 Tukey）。",
+    "只處理結果重現性（對報告結果的信心與解讀），不處理實驗資訊缺漏造成的方法重現性（§6）。",
+    "同時對任務分層重抽時不確定性大很多（App. A.5）；50 runs 以上覆蓋率超過 95% 很可能來自真值本身以有限 runs 近似的誤差（Fig. A.19）。",
+    "統計手法變複雜也可能帶來新的統計濫用；研究者缺乏採用更嚴謹評估的誘因（結論會變保守），需要會議與審稿要求（§6、Societal Impacts）。",
+    "x 軸非線性縮放隱含次線性效用，且無法再以面積讀出平均或 IQM（App. A.6）。"
+  ],
+  "limitations_observed": [
+    "覆蓋率驗證的真值與被測樣本重疊：Fig. 6 與 Fig. A.19 從同一批 200 runs 不放回抽 K runs，再與這 200 runs 算出的估計比較。K 越大，子樣本與參考集合重疊越多（K=100 時有一半相同），區間自然更常包含參考值；作者把 50 runs 以上覆蓋率超過 95% 歸因於真值的近似誤差，但結構性重疊本身就會把覆蓋率往上推，所以「percentile 區間在 N=10 已足夠」可能偏樂觀。",
+    "覆蓋率只在 der／Atari 100k（M=26）上驗證過，卻把分層 percentile bootstrap 推廣到 DMC（M=6）與 Procgen（M=16）。DMC 每個演算法只有 6×10=60 個 run 分數，IQM 只用其中 30 個，這種規模下的覆蓋率沒有被驗證；Fig. 11a 還把有個別 runs 的分層 bootstrap 區間，與只由報告的平均和標準差算出的 studentized 區間（CURL、CURL-D2RL、SUNRISE）放在同一張圖上比較，兩種區間的性質不同，重疊與否不宜直接對照。",
+    "論文在 App. A.2 自己強調「不顯著不等於沒有改進」，但 §5 卻根據 3–11 runs 下的區間重疊，下結論說 DMC 上許多改進是隨機造成的假改進。區間寬本身可能就是 runs 太少造成的，這個結論混淆了「沒有差異」與「沒有能力偵測差異」，而作者手上沒有像 Atari 100k 那樣的 100 runs 資料可以驗證。",
+    "IQM 與樣本中位數對應的是不同的估計目標：中位數的目標是各任務期望值的中位數 Median(E[X_1:M])，IQM 在 N→∞ 的極限則是「所有 runs 合併後的混合分布」的截尾平均數。Fig. A.17 說 IQM 的偏差小一個數量級（0.006 對 0.05），比的是各自相對於自己極限的偏差，不代表 IQM 更準確地估計了同一個量；把 IQM 當成 median 的替代品時，論文沒有把估計目標換了這件事講清楚。",
+    "IQM 合併 runs 後才截尾，被丟掉的最低 25% 在結構上集中在困難任務（探索困難、分數接近 0 的遊戲），所以 IQM 對最難任務的進展不敏感；作者靠 optimality gap 與 DP-25 補救，但 Table 1 的主要推薦只寫 IQM。",
+    "移植到 agent 任務完成分數時會退化：如果每次試驗的分數是 0／1 的成功與否，合併後截掉上下 25% 的 IQM 只是整體成功率 p 的截斷線性轉換 clip((p−0.25)/0.5, 0, 1)（這是我的推導，論文沒有討論），p≤0.25 時恆為 0、p≥0.75 時恆為 1，失去 IQM 的意義。論文的單位分數是 100 個評估 episode 的平均（連續值），所以它不必處理這件事；T8 引用時必須先把單位分數換成部分分數，或每任務多次試驗的成功率。",
+    "lift 實驗是把所有任務、所有 runs 乘上同一個比例 ℓ%，真實的改進通常只落在部分任務，也可能改變分布形狀；乘法放大對分數接近 0 的任務幾乎不產生差異。因此「median 要 25 runs 才能偵測 +25%」之類的數字只適用於均勻相乘的改進，不能當成一般的所需 runs 數。",
+    "論文反對二分的顯著性檢定，App. A.7 卻又以「改進機率的區間不含 0.5」定義統計顯著；Fig. 12 右、Fig. A.28、Fig. A.29 同時比較大量演算法配對，沒有做多重比較校正。另外平均改進機率在多個演算法之間可能不具遞移性（A 勝 B、B 勝 C、C 又勝 A），不能直接拿來排名，論文沒有提到。",
+    "單一 run 的分數先平均掉 100 個評估 episode，論文量的是訓練 run 之間的變異，完全不涉及同一個策略在同一任務重複執行時的一致性（例如 pass^k 那種每次都要成功的可靠性），Chan et al. 的可靠性指標在 App. A.3 被劃為不同問題。對固定模型的 LLM agent 而言，主要的隨機來源是解碼取樣與使用者模擬器而不是訓練，run 的概念要重新對應成獨立試驗。"
+  ],
+  "framework_role": "T8 的統計彙總層：它不定義「任務成功」本身，而是回答「M 個任務 × N 次重複試驗的分數要怎麼彙總、怎麼附誤差棒、怎麼比較兩個 agent」。可以直接移植的做法：(1) 報成功率或部分分數時，附上對每個任務各自重抽試驗的分層 bootstrap 95% 信賴區間，另外可對任務重抽，估計換一組任務時的不確定性；(2) 用分數分布曲線呈現 progress rate 這類部分分數的全貌；(3) 比較兩個 agent 時，對每個任務的試驗結果算 Mann–Whitney 改進機率再平均，區間重疊時改算差值的區間；(4) best-of-N 的評估（包括拿 pass@k 與別人的 pass@1 比）等於在評估另一個系統 A^N，必須明示，並且只和同協定的結果比較。移植時要注意：0／1 成功下 IQM 會退化；同一任務重複成功的一致性（pass^k）這篇沒有處理，需要其他論文補上。它和 T7 的評估方法論有重疊，但主要貢獻是分數的聚合與不確定性量化，歸在 T8 合理。論文的方法與實驗不涉及框架中的任何一條資料流邊。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "論文自述：釋出開源 Python 函式庫 rliable 與 Colab，公開全部個別 run 分數（gs://rl-benchmark-data，含 Atari 100k 每演算法每遊戲 100 runs、ALE、Procgen、DMC），Atari 100k 的實驗程式碼併入 Google 的 Dopamine 框架 labs/atari_100k（§6、App. A.1、App. A.2）。這是作者自己的釋出，不是第三方採用。",
+      "RL Baselines3 Zoo（DLR-RM 維護的 Stable-Baselines3 訓練框架）官方文件的繪圖章節寫明整合了 rliable 的部分功能，繪圖腳本提供 --iqm 選項：https://rl-baselines3-zoo.readthedocs.io/en/master/guide/plot.html（已開啟確認）。這是開源框架的整合，不是商用產品。",
+      "Google Research 官方部落格 2021-11-17〈RLiable: Towards Reliable Evaluation & Reporting in Reinforcement Learning〉（作者 Rishabh Agarwal、Pablo Samuel Castro）介紹此方法與函式庫：https://research.google/blog/rliable-towards-reliable-evaluation-reporting-in-reinforcement-learning/（已開啟確認）。內容是發布說明，沒有描述其他團隊的部署。"
+    ],
+    "assessment": "工具層面有可查證的開源採用：作者所屬的 Google 將實驗併入 Dopamine，第三方的 RL Baselines3 Zoo 官方文件整合 rliable 並提供 IQM 選項。商用產品、或 LLM agent 評估平台官方文件採用此方法的證據：未見證據（本次 WebSearch 額度已用完，無法再做更廣的查找）。NeurIPS 2021 Outstanding Paper Award 屬於學術肯定，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/google-research/rliable（另有 Atari 100k 實驗程式碼在 Dopamine 的 labs/atari_100k）",
+    "data": "公開：所有個別 run 分數放在 gs://rl-benchmark-data（atari_100k、ALE、procgen、dm_control）；部分演算法的 runs 由原作者提供後一併釋出。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "它是「少量重複試驗下如何彙總跨任務分數並附誤差棒」的方法論源頭，給出可照做的分層 bootstrap 信賴區間、分數分布曲線、IQM、改進機率與 best-of-N 陷阱；雖然領域是 RL、0／1 成功需要先調整單位分數，仍是 T8 可靠性子領域的必讀。",
+  "related": [
+    "1709.06560",
+    "1806.08295",
+    "1904.06979",
+    "1912.05663",
+    "2006.16958",
+    "2103.03098",
+    "2107.07002",
+    "1709.06009",
+    "1903.00374"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

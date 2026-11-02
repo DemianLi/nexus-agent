@@ -72,8 +72,10 @@ import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
+import { isMachineMessage } from './message-source.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
+import type { SessionLog } from './session-log.js';
 
 /** 提醒 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const REPEAT_REMINDER_MIDDLEWARE_NAME = 'nexusRepeatToolReminder';
@@ -87,28 +89,6 @@ export const REPEAT_REMINDER_MIDDLEWARE_NAME = 'nexusRepeatToolReminder';
  * （`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2471` 的 `lc_evicted_to`）。
  */
 export const REPEAT_REMINDER_MARKER = 'nexus_repeat_reminder';
-
-/**
- * goal 收尾指示在 `additional_kwargs` 上的記號。
- *
- * ## 為什麼一個 goal 的記號住在這個檔案裡
- *
- * **這個記號的全部作用是讓底下那條鏈走訪跳過它。** 造它的人在
- * `@nexus/plugin-goal`，讀它的人只有這裡——記號跟著讀的人住，同一條紀律讓
- * {@link REPEAT_REMINDER_MARKER} 也住在這裡。`@nexus/core` 反向依賴插件是不可能的，
- * 所以詞彙落在這一側是唯一走得通的擺法。
- *
- * ## 它擋的是什麼
- *
- * 收尾指示是一則 `HumanMessage`，而「真的使用者訊息清零計數」會把它當成人插了話。
- * 那正好發生在**模型剛被告知不要再叫工具**的時候：它若無視收尾指示繼續打轉，門檻 3
- * 的提醒會晚兩次才到——方向跟收尾指示本身相反。
- *
- * **一輪的頭不標記。** 續行輪次的 `turn/start` 也是一則素的 `HumanMessage`
- * （`apps/harness` 的 `thread-pump.ts`），它清零是**對的**：新的物理輪次是真的新脈絡。
- * 差別在「一輪的頭」與「一輪內部的注入」，不在哪個套件造的。
- */
-export const GOAL_WRAPUP_MARKER = 'nexus_goal_wrapup';
 
 /** 一則提醒訊息在記號底下帶的東西，對應 dsh 的 `source.summary`（`<tool> × <count>`）。 */
 export interface RepeatReminderMark {
@@ -298,8 +278,13 @@ export function resolveRepeatReminderSettings(
   return { ...merged, thresholds: [...merged.thresholds].sort((a, b) => a - b) };
 }
 
-/** 一則訊息是不是我們自己插進去的提醒。索引存取可能是 `undefined`，一併吃掉。 */
-function isReminder(message: BaseMessage | undefined): boolean {
+/**
+ * 一則訊息是不是重複提醒 middleware 插進去的那則提醒。收 `undefined`（例如越界的索引存取）回 `false`。
+ *
+ * @param message - 要判的那一則。
+ * @returns 帶 {@link REPEAT_REMINDER_MARKER} 的 `HumanMessage` 就 `true`。
+ */
+export function isReminder(message: BaseMessage | undefined): boolean {
   return (
     HumanMessage.isInstance(message) && message.additional_kwargs[REPEAT_REMINDER_MARKER] != null
   );
@@ -308,22 +293,27 @@ function isReminder(message: BaseMessage | undefined): boolean {
 /**
  * 一則 `HumanMessage` 是不是**插進去的**，而不是人講的話。
  *
+ * ## 判準：生產者宣告來源，這裡只認「人」
+ *
+ * 我們自己那則提醒（{@link REPEAT_REMINDER_MARKER}），或帶了 `source` 而且 kind 不是 `user` 的訊息
+ * （{@link isMachineMessage}）。**沒有白名單**：續行輪次的頭（`goal`）、結算通知、外掛注入的基線、
+ * 以後新增的生產者，各自在造訊息時宣告自己的來源，這裡不必改（#662，照 dsh
+ * `repeat-tool-reminder/src/index.ts:236-238`，`477b4f4`）。沒有來源的 `HumanMessage` 是人講的話——
+ * 見 `message-source.ts` 為什麼缺席的預設方向是「人」。
+ *
  * ## 為什麼這不是 {@link isReminder} 加寬一格
  *
  * 這兩個述詞問的是相反的問題，而下面有兩個呼叫點各要一個答案：
  *
- * - **重入護欄**問「這一輪的提醒貼過了嗎」，只有我們自己那則提醒算數。收尾指示注入
- *   之後正好落在最後一則 AI 訊息之後，把護欄的述詞加寬，那一輪的提醒就整個不發了。
- * - **鏈走訪**問「這是人插了話嗎」，兩種合成訊息都不算。
- *
- * 合成來源加進來時要加在這裡，不是加在 {@link isReminder}。
+ * - **重入護欄**問「這一輪的提醒貼過了嗎」，只有我們自己那則提醒算數。別的機器訊息（例如 goal 收尾指示）
+ *   注入之後正好落在最後一則 AI 訊息之後，把護欄的述詞加寬，那一輪的提醒就整個不發了。
+ * - **鏈走訪**問「這是人插了話嗎」，所有機器訊息都不算。
  *
  * @param message - 要判的那一則。
  * @returns 是我們插的就 `true`；不是 `HumanMessage` 也算 `false`。
  */
 function isSynthetic(message: BaseMessage | undefined): boolean {
-  if (isReminder(message)) return true;
-  return HumanMessage.isInstance(message) && message.additional_kwargs[GOAL_WRAPUP_MARKER] != null;
+  return isReminder(message) || isMachineMessage(message);
 }
 
 /** 一條鏈：上一次受追蹤呼叫的身分鍵，與它已經連續了幾次。 */
@@ -372,8 +362,8 @@ function pendingReminders(
 
   for (let i = 0; i <= lastAi; i += 1) {
     const message = messages[i];
-    // 真的使用者訊息會清零：人插了話就換了脈絡，跨過它的重複不是打轉。**插進去的那些
-    // 不算**——我們自己那則提醒，以及 goal 的收尾指示，見 {@link isSynthetic}。
+    // 真的使用者訊息會清零：人插了話就換了脈絡，跨過它的重複不是打轉。**機器造的那些
+    // 不算**——我們自己那則提醒、續行輪次的頭、各種注入，見 {@link isSynthetic}。
     if (HumanMessage.isInstance(message) && !isSynthetic(message)) {
       chain = undefined;
       continue;
@@ -408,11 +398,12 @@ function pendingReminders(
  * `beforeModel` 在 LangGraph 裡會變成迴圈裡的一個節點（`langchain@1.5.10`，
  * `dist/agents/ReactAgent.js:126-134`），所以掛上它之後每一輪是三格而不是兩格。
  * 2026-09-03 用 `LoopingChatModel` 在 `recursionLimit: 8` 上實測：裸組裝 3 輪、加上這個
- * middleware 之後 2 輪，換算從 `2 × 輪數 + 2` 變成 `3 × 輪數 + 2`。
+ * middleware 之後 2 輪。通式是 `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`，每輪格數
+ * 從兩格變三格。
  *
- * **後果是 `DEFAULT_RECURSION_LIMIT`（100）的預算從約 49 輪縮到 32 輪。** 方向是護欄
- * 變嚴不是變鬆，而它擋的那條線（正常基準任務最長 3 次工具呼叫 ≈ 8 個 super-step，
- * 換算後 ≈ 11）離 100 還很遠，所以那個常數沒有動。要拿回原本的預算就自己傳一個大的
+ * **後果是 `DEFAULT_RECURSION_LIMIT`（100）的預算從 49 輪縮到 33 輪。** 方向是護欄
+ * 變嚴不是變鬆，而它擋的那條線（正常基準任務最長 3 次工具呼叫，每輪兩格時 ≈ 8 個 super-step，
+ * 換成每輪三格 ≈ 12）離 100 還很遠，所以那個常數沒有動。要拿回原本的預算就自己傳一個大的
  * `recursionLimit`，或明著傳 `repeatReminder: false`。
  *
  * ## 塞進對話的也記進日誌（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）
@@ -420,7 +411,11 @@ function pendingReminders(
  * 給了 `sessions` 就把每一則提醒記成一顆 `user/message`，寫進這次呼叫所屬的那一份——模型看得到，
  * 推模型歷史的一側就得讀得到。照 dsh 的 `repeat-tool-reminder`（`agent/pre-step` 注入一則
  * `source: {kind: 'plugin'}` 的 user 訊息）。身分從 `runtime.configurable` 現算，同 `model-usage.ts`，
- * 所以共用一份實例照舊成立。記不進去就算了：提醒照樣送出。
+ * 所以共用一份實例照舊成立。
+ *
+ * **記不進去，這一步失敗**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）：提醒進模型歷史，照 dsh 不吞——
+ * dsh 把 `agent/pre-step` 交回的訊息在步驟裡直接 append（`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`），被拒就是那一步拋。吞掉的話提醒照樣進 state、日誌上沒有，續接後模型看到的
+ * 歷史跟之前不同。`beforeModel` 拋出去，節點失敗，state 不收它，兩邊一致。
  *
  * @param settings - 已經 {@link resolveRepeatReminderSettings} 驗過的設定。
  * @param sessions - 註冊表的 `sessions` 通道。**省略就不記**——單元測試走這條；產品組裝由
@@ -430,6 +425,7 @@ function pendingReminders(
 export function createRepeatReminder(
   settings: RepeatReminderSettings,
   sessions?: { forCall(config: unknown): SessionLookup },
+  notices?: StepNoticeSource,
 ): AgentMiddleware {
   const tracked = repeatReminderTracks(settings);
 
@@ -440,8 +436,9 @@ export function createRepeatReminder(
       runtime?: { readonly configurable?: unknown },
     ) => {
       const hits = pendingReminders(state.messages ?? [], settings, tracked);
-      if (hits.length === 0) return undefined;
-      const messages = hits.map(({ tool, count, canonical }) => {
+      const extra = stepNoticesFor(notices, sessions, runtime?.configurable);
+      if (hits.length === 0 && extra.length === 0) return undefined;
+      const reminders = hits.map(({ tool, count, canonical }) => {
         const text =
           count === settings.thresholds[0]
             ? GENTLE_REMINDER
@@ -455,13 +452,13 @@ export function createRepeatReminder(
           additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool, count } },
         });
       });
-      recordReminders(sessions, runtime?.configurable, messages);
-      return { messages };
+      recordReminders(sessions, runtime?.configurable, reminders);
+      return { messages: [...extra, ...reminders] };
     },
   }) as unknown as AgentMiddleware;
 }
 
-/** 把提醒記成 `user/message`。沒接會話、認不出屬於哪一份、或寫不進去，都不記。 */
+/** 把提醒記成 `user/message`。沒接會話、認不出屬於哪一份，都不記；寫不進去原錯往外拋（#1665）。 */
 function recordReminders(
   sessions: { forCall(config: unknown): SessionLookup } | undefined,
   configurable: unknown,
@@ -471,14 +468,11 @@ function recordReminders(
   const found = sessions.forCall({ configurable });
   if (found.kind !== 'ok') return;
   for (const message of messages) {
-    try {
-      found.log.append('user/message', {
-        message: toLoggedMessage(message),
-        source: { kind: 'plugin', plugin: REPEAT_REMINDER_MIDDLEWARE_NAME },
-      });
-    } catch {
-      // 見上面：提醒照樣送出。
-    }
+    // 寫不進去原錯往外拋，見上面。
+    found.log.append('user/message', {
+      message: toLoggedMessage(message),
+      source: { kind: 'plugin', plugin: REPEAT_REMINDER_MIDDLEWARE_NAME },
+    });
   }
 }
 
@@ -555,3 +549,49 @@ export const repeatReminderPlugin: NexusPlugin<RepeatReminderConfig> = {
 };
 
 export default repeatReminderPlugin;
+
+/**
+ * 一步開頭要附的通知（user 角色，機器造的）。**只對 root 呼叫**；回空陣列＝這一步沒有。
+ *
+ * 借重複提醒那顆 `beforeModel` 的節點，不另開一個——每一顆 `beforeModel` 是圖裡的一個節點、每一步多一個 super-step
+ * （見 {@link createRepeatReminder}）。第一個使用者是換模型的通知（`model-selection.ts`）。通知自己負責寫日誌：
+ * 這裡只管併進 state。
+ */
+export type StepNoticeSource = (log: SessionLog) => readonly HumanMessage[];
+
+/**
+ * 問通知來源這一步有沒有東西要附；不是 root、接不上日誌都是沒有。**來源拋的錯原樣往外拋**（#1665）：來源自己寫日誌，
+ * 寫不進去就是這一步失敗，同提醒那一側（{@link recordReminders}）。
+ */
+function stepNoticesFor(
+  notices: StepNoticeSource | undefined,
+  sessions: { forCall(config: unknown): SessionLookup } | undefined,
+  configurable: unknown,
+): readonly HumanMessage[] {
+  if (notices === undefined || sessions === undefined) return [];
+  const found = sessions.forCall({ configurable });
+  if (found.kind !== 'ok' || found.address.kind !== 'root') return [];
+  return notices(found.log);
+}
+
+/** 重複提醒被關掉時，通知自己掛的那一顆（付一個 super-step）。名字另取，不冒充提醒。 */
+export const STEP_NOTICE_MIDDLEWARE_NAME = 'nexusStepNotices';
+
+/**
+ * 只放通知的 `beforeModel`。**只在重複提醒關著、又有通知來源時才掛**（`fold.ts`）；提醒開著的時候通知借它的節點。
+ *
+ * @param notices - 通知來源。
+ * @param sessions - 註冊表的 `sessions` 通道。
+ */
+export function createStepNoticeMiddleware(
+  notices: StepNoticeSource,
+  sessions: { forCall(config: unknown): SessionLookup },
+): AgentMiddleware {
+  return createMiddleware({
+    name: STEP_NOTICE_MIDDLEWARE_NAME,
+    beforeModel: (_state: unknown, runtime?: { readonly configurable?: unknown }) => {
+      const messages = stepNoticesFor(notices, sessions, runtime?.configurable);
+      return messages.length === 0 ? undefined : { messages: [...messages] };
+    },
+  }) as unknown as AgentMiddleware;
+}

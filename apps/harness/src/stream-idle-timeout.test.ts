@@ -7,7 +7,7 @@
  * 那一輪照樣掛著，測試不會紅。
  *
  * 模型用的是 **`createLiveModel` 本身**（不是測試自己組的 `ChatOpenAI`），所以工廠有沒有把那一層
- * 接上、接的是不是設定裡的 `timeoutMs`，也一起在射程裡。
+ * 接上、接的是不是設定裡的 `streamIdleTimeoutMs`，也一起在射程裡。
  *
  * **零憑證**：對手方是本機的假 SSE 端點；金鑰是假的，只為了過工廠的「缺 key 當場失敗」。
  */
@@ -67,7 +67,10 @@ describe('供應商吐一段就停住（#521）', () => {
     const upstream = await stallingOpenAi();
     const built = await createNexusAgent({
       model: createLiveModel(
-        liveModelConfigSchema.parse({ baseUrl: upstream.baseUrl, timeoutMs: 300, maxRetries: 2 }),
+        liveModelConfigSchema.parse({
+          baseUrl: upstream.baseUrl,
+          streamIdleTimeoutMs: 300,
+        }),
       ),
       checkpointer: new MemorySaver(),
       plugins: [],
@@ -94,7 +97,7 @@ describe('供應商吐一段就停住（#521）', () => {
       const failed = events.filter((event) => event.type === 'turn/failed');
       expect(failed).toHaveLength(1);
       expect((failed[0]!.data as SessionEventMap['turn/failed']).message).toContain('串流閒置逾時');
-      // 中段逾時不重試：吐過內容的那一次作廢不了。
+      // 沒給 `streamRetry` 預算的組裝（這一檔的 `createNexusAgent`）不整次重打：只打一次。有預算的見 stream-retry.test.ts。
       expect(upstream.hits()).toBe(1);
       // 閒置逾時是 300 毫秒；修之前這一輪永遠不會結束，這裡是整條測試的逾時先到。
       expect(elapsed).toBeLessThan(5_000);

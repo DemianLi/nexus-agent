@@ -23,17 +23,48 @@
  * **措辭照抄，offset 的值不照抄。** dsh 的 `offset` 從 1 起算，deepagents 從 0 起算，所以下一頁的
  * `offset` 是**畫面上最後一行的行號**，不是它加一。照抄 `B+1` 會每翻一頁跳過一行。
  *
- * **預設行數不跟 dsh**（dsh 一次 2000 行、50 KiB）：這一張只補提示，預設留在基座的 100。
- * 改預設會讓每次讀大檔多吃到約兩萬 token，要先量上下文成本，demian 2026-09-25 拍板另議。
+ * ## 一頁多大：照 dsh（[#602](https://github.com/DemianLi/nexus-agent/issues/602)）
+ *
+ * dsh 的 `read` 一頁最多 2000 行，`limit` 預設就是上限、超過就拋；選到的行累計超過 50 KiB 就停在
+ * 前一行，結尾寫 `Output capped`（`packages/fs/tool-fs/src/read.ts:55-61`、`read-render.ts:111` 的
+ * `buildWindow`，`477b4f4`）。基座一頁預設 100 行、沒有上限、格式化後 80,000 字元才截。2026-09-25
+ * 在 nexus 自己的程式碼上量過（587 個檔，o200k）：100 行時 66.8% 的檔要翻頁；照 dsh 時 1.9%，
+ * 第一次讀的中位數 1,410 → 2,187 token，最大 16,930。demian 同日拍板照 dsh。三件事都在這一顆：
+ *
+ * - **預設與上限**：`limit` 沒給就填 {@link READ_LIMIT}，超過就拋 dsh 的原句（圍堵把它轉成工具錯誤）。
+ * - **位元組上限**：{@link readWithExtent} 切回去時累計 {@link READ_MAX_BYTES}，算法同 `buildWindow`
+ *   ——每行的 UTF-8 位元組，不是第一行的再加一個換行。
+ * - **模型看到的說明**：基座的描述寫死「reads up to 100 lines」、JSON schema 把 `limit` 列成必填且預設 100。
+ *   **描述**經 `customToolDescriptions` 換（`fs-tool-descriptions.ts`，[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）；
+ *   **schema**（`limit` 不再必填）由 `wrapModelCall` 把送給模型的那一份換掉，見 {@link modelFacingReadTool}。
+ *
+ * **偏離一（縮到只剩 schema）：`limit` 的 schema 在模型呼叫時換，不在工具上改。** 照 dsh 應該是工具自己的 schema。基座表達不出來
+ * （理由 1）：`limit` 是 `z.coerce.number().optional().default(100)`（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:2129`），被轉成
+ * 必填、預設 100 的 JSON schema；`createFilesystemMiddleware` 只收 `customToolDescriptions`（換描述）與 `tools`（基座工具的**名單**，不收實例），
+ * 沒有任何選項換 schema；換掉工具實例則會被 langchain 拒絕（`AgentNode.js` 約 250 行：同名不同實例的 client tool）。退到
+ * 最接近的：模型那一側換成一份 OpenAI 形狀的定義（不是 client tool，驗證不擋），執行的仍是基座的工具。
+ * （描述那一半以前也在這裡換，理由是 `customToolDescriptions` 沒有往下傳——那只對 `createDeepAgent` 成立，自有組裝收得到它（#1776 補正），#1563 收掉。）
+ *
+ * **偏離二：一行都塞不下時照樣給那一行。** dsh 先把單行截到 2000 字元，所以第一行永遠塞得下；
+ * 基座不截行（超過 5000 字元切成續行），所以第一行本身就超過 50 KiB 時不停在零行——給它，由基座
+ * 格式化後的 80,000 字元上限去截（下面「已知的界線」那一條）。**範圍縮到不自己建頁的 backend**：
+ * contained backend 自己建頁（下一段），每行先截到 2000 字元，第一行永遠塞得下，跟 dsh 一樣。
  *
  * **偏離：在工具外面補，不是在工具裡寫。** 基座的工具我們改不了，退到同
  * {@link ./fs-tool-errors.ts} 的做法——一顆貼著工具本體的 `wrapToolCall`，時刻是 dsh 的
  * `tools/execute`。它要的總行數從 backend 取：
  *
- * - {@link recordReadExtent} 包住交給基座的 backend。**在一次 `read_file` 裡**，它把 `read` 的
- *   `limit` 放開成讀到檔尾，自己數行，再照原本的 `limit` 切回去交給工具。工具拿到的內容與原本
- *   一字不差，backend 也只讀一次檔（`FilesystemBackend.read` 本來就整份讀進來）。
+ * - {@link recordReadExtent} 包住交給基座的 backend。**在一次 `read_file` 裡**，backend 可以用
+ *   {@link currentReadWindow} 領走這一頁的請求（offset、limit、行長與位元組上限），**自己讀、自己建頁**，
+ *   再用 {@link noteReadWindow} 把範圍與行回報回來；這時這裡只把它回的內容原樣交出（contained backend 走這條，
+ *   [#1530](https://github.com/DemianLi/nexus-agent/issues/1530)：檔案只讀一次、大檔串流、單行截到 2000 字元）。
+ * - **沒領請求的 backend**（`StateBackend`、`CompositeBackend`、plugin 自帶的）走原本的路：把 `read` 的 `limit` 放開成
+ *   讀到檔尾，自己數行，再照原本的 `limit` 切回去交給工具。工具拿到的內容與原本一字不差。
  * - middleware 讀這次記下的範圍，接在文字結果的最後。
+ *
+ * **偏離三（#1530 的偏離 1）：視窗經旁路回報，不經工具回傳值。** dsh 的 `read` 把頁與範圍當一個回傳值交出；
+ * 基座的 `read_file` 只收 `{ content }`，範圍放不進去，所以走 `AsyncLocalStorage` 的旁路（`currentReadWindow`／
+ * `noteReadWindow`），退到最接近的做法。
  *
  * 「這一次呼叫」同樣由 `AsyncLocalStorage` 界定；不在 `read_file` 裡的 `read`（摘要器、測試直接
  * 呼叫 backend）原樣轉交，參數不動。
@@ -53,9 +84,13 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ToolMessage } from '@langchain/core/messages';
+import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { readLangHintForPath } from './code-language.js';
 import { resolveToolName } from './containment.js';
+import { putToolResultMeta } from './tool-result-meta.js';
+import type { ReadResultMeta } from './tool-result-meta.js';
 
 /** 這個 middleware 的名字。排序斷言用得到。 */
 export const READ_CONTINUATION_MIDDLEWARE_NAME = 'nexusReadContinuation';
@@ -63,25 +98,84 @@ export const READ_CONTINUATION_MIDDLEWARE_NAME = 'nexusReadContinuation';
 /** 基座的讀檔工具。名字是 `deepagents@1.13.1` 取的，不是我們（同 `observation.ts` 的 `OBSERVED_*`）。 */
 const READ_TOOL = 'read_file';
 
-/** 基座空檔時回的那句（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:22`）。 */
-const EMPTY_CONTENT_WARNING = 'System reminder: File exists but has empty contents';
+/** 基座空檔（或全是空白）時回的那句（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:22`）。自己讀檔的 backend 要回同一句。 */
+export const EMPTY_CONTENT_WARNING = 'System reminder: File exists but has empty contents';
 
 /** 基座自己截斷時附的那段說明的開頭（`READ_FILE_TRUNCATION_MSG`，見檔頭）。 */
 const BASE_TRUNCATION_MARK = '[Output was truncated due to size limits.';
 
+/**
+ * 一頁最多幾行：`limit` 沒給時的預設，也是它的上限。同 dsh 的 `READ_LIMIT`（`packages/fs/tool-fs/src/read.ts:15`）。
+ */
+export const READ_LIMIT = 2000;
+
+/** 一頁選到的行累計最多幾個位元組。同 dsh 的 `READ_MAX_BYTES`（`read-render.ts:14`）。 */
+export const READ_MAX_BYTES = 50 * 1024;
+
+/**
+ * 一行最多幾個字元，超過截斷並接 {@link READ_LINE_TRUNCATION_SUFFIX}。同 dsh 的 `READ_MAX_LINE_LENGTH`
+ * （`packages/fs/tool-fs/src/read-render.ts:11`）。
+ */
+export const READ_MAX_LINE_LENGTH = 2000;
+
+/** 被截斷的行接的後綴，措辭同 dsh（`read-render.ts:69-71`）。 */
+export function readLineTruncationSuffix(maxLineLength: number = READ_MAX_LINE_LENGTH): string {
+  return `... (line truncated to ${maxLineLength} chars)`;
+}
+
+/**
+ * 一次 `read_file` 要 backend 建的那一頁（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。
+ * `offset` 從 0 起算（同基座），`limit` 是工具的 `limit`（已套預設與上限）。
+ */
+export interface ReadWindowRequest {
+  readonly offset: number;
+  readonly limit: number;
+  readonly maxLineLength: number;
+  readonly maxBytes: number;
+  /**
+   * 檔案大小達到這個位元組數就串流讀（`tool-fs` 的 `readStreamMinSize`，[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)）。
+   * **只有部署設定給了才有**；沒有的話 backend 用它自己的預設（建構子選項，再不然 10 MiB）。
+   */
+  readonly streamMinSize?: number;
+}
+
+/**
+ * 讀檔的上限，`tool-fs` 設定列的四格（[#1605](https://github.com/DemianLi/nexus-agent/issues/1605)，名字與意義照 dsh `tool-fs`
+ * 的 Config，`packages/fs/tool-fs/src/index.ts:20-98`）。**每一格缺席就用上面的常數**，所以不給任何一格的 middleware
+ * 與以前逐位元組相同。
+ */
+export interface ReadLimits {
+  /** 一頁最多幾行：`limit` 沒給的預設，也是上限。預設 {@link READ_LIMIT}。 */
+  readonly readLimit?: number;
+  /** 一行最多幾個字元。預設 {@link READ_MAX_LINE_LENGTH}。 */
+  readonly readMaxLineLength?: number;
+  /** 一頁選到的行累計最多幾個位元組。預設 {@link READ_MAX_BYTES}。 */
+  readonly readMaxBytes?: number;
+  /** 檔案大小達到幾個位元組就串流讀。缺席是 backend 的預設。 */
+  readonly readStreamMinSize?: number;
+}
+
 /** 一次 `read_file` 裡，backend 讀到的範圍。 */
-interface ReadExtent {
+export interface ReadExtent {
   /** 從第幾行讀起，0 起算，同基座的 `offset`。 */
   readonly offset: number;
   /** 交給工具的行數。 */
   readonly shown: number;
   /** 檔案總行數。結尾的換行不算一行，同基座的編號。 */
   readonly total: number;
+  /** 因為 {@link READ_MAX_BYTES} 少給了行（`limit` 與檔尾都還沒到）。 */
+  readonly cappedByBytes: boolean;
 }
 
 /** 一次工具呼叫裡記下的東西。`extent` 沒有 ＝ 這一次沒有讀到文字內容。 */
 interface CallRecord {
+  /** 這一次要 backend 建的頁；backend 用 {@link currentReadWindow} 領走（只領一次）。 */
+  request?: ReadWindowRequest;
+  /** `request` 被領走了沒。 */
+  requestTaken?: boolean;
   extent?: ReadExtent;
+  /** 交給工具的那幾行，原文（給 meta，見 {@link readResultMeta}）。跟 `extent` 同時寫。 */
+  lines?: readonly string[];
 }
 
 /** 正在跑的那一次 `read_file`。每次呼叫各 `run` 一份，平行的兩次不共用。 */
@@ -102,28 +196,109 @@ function countLines(lines: readonly string[]): number {
 }
 
 /**
- * 在一次 `read_file` 裡：讀到檔尾、數行、切回原本的 `limit`。
+ * 選到的行累計不超過 {@link READ_MAX_BYTES} 的話能給幾行。算法同 dsh 的 `buildWindow`：每行的 UTF-8
+ * 位元組，不是第一行的再加一個換行。**至少一行**，見檔頭的偏離二。
+ */
+function linesWithinBytes(lines: readonly string[], wanted: number, maxBytes: number): number {
+  let bytes = 0;
+  let shown = 0;
+  while (shown < wanted) {
+    const cost = Buffer.byteLength(lines[shown] ?? '') + (shown > 0 ? 1 : 0);
+    if (shown > 0 && bytes + cost > maxBytes) break;
+    bytes += cost;
+    shown += 1;
+  }
+  return shown;
+}
+
+/**
+ * backend 在 `read_file` 裡的第一次 `read` 領這一頁的請求：自己讀、自己建頁，不必交出整段讓外面切
+ * （[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)，偏離 1）。
  *
- * @returns 交給工具的那一份——跟不放開 `limit` 時一字不差。
+ * **只有 `read_file` 裡、這次呼叫的第一次 `read` 才有**，其餘回 `undefined`——摘要器、`agent-instructions` 的 `discover`、
+ * 測試直接呼叫 backend 時，backend 照基座的切片語意回，不截行、不套位元組上限。領了之後要叫 {@link noteReadWindow}
+ * 把頁回報回來；沒回報的話 {@link readWithExtent} 走原本的路。
+ *
+ * @returns 要建的頁；不在 `read_file` 裡、或已經領過是 `undefined`。
+ */
+export function currentReadWindow(): ReadWindowRequest | undefined {
+  const record = currentRead.getStore();
+  if (record?.request === undefined || record.requestTaken === true) return undefined;
+  record.requestTaken = true;
+  return record.request;
+}
+
+/**
+ * backend 建好頁之後回報：頁的範圍與交給工具的那幾行（已截行的版本）。回報了，{@link readWithExtent} 就把 backend 回的內容
+ * 原樣交出，不再 `split`、不再切。不在 `read_file` 裡時什麼都不做。
+ *
+ * @param extent - 這一頁的範圍；`total` 是整個檔的行數（結尾那個換行不算一行，同基座的編號）。
+ * @param lines - 交給工具的那幾行。
+ */
+export function noteReadWindow(extent: ReadExtent, lines: readonly string[]): void {
+  const record = currentRead.getStore();
+  if (record === undefined) return;
+  record.extent = extent;
+  record.lines = lines;
+}
+
+/**
+ * 在一次 `read_file` 裡：讀到檔尾、數行、切回原本的 `limit`，再照 {@link READ_MAX_BYTES} 收一次。
+ *
+ * **backend 自己建了頁的話**（它領了 {@link currentReadWindow} 的請求並叫了 {@link noteReadWindow}），這裡只交出它回的內容。
+ *
+ * @returns 交給工具的那一份——沒撞到位元組上限時，跟不放開 `limit` 時一字不差。
  */
 async function readWithExtent(
   read: (path: unknown, offset: number, limit: number) => unknown,
   record: CallRecord,
   args: readonly unknown[],
+  limits: ResolvedReadLimits,
 ): Promise<unknown> {
   const [path, rawOffset, limit] = args;
   // 基座的工具三個都會給；沒給 `limit` 的不是它，原樣轉交。
   if (typeof limit !== 'number') return read(...(args as [unknown, number, number]));
   const offset = typeof rawOffset === 'number' ? rawOffset : 0;
+  record.request = {
+    offset,
+    limit,
+    maxLineLength: limits.maxLineLength,
+    maxBytes: limits.maxBytes,
+    ...(limits.streamMinSize !== undefined && { streamMinSize: limits.streamMinSize }),
+  };
   const result = (await read(path, offset, Number.MAX_SAFE_INTEGER)) as ReadResultLike;
+  // backend 自己建了頁（#1530）：內容已經是那一頁，範圍也已經回報。
+  if (record.extent !== undefined) return result;
   if (typeof result !== 'object' || result === null || typeof result.content !== 'string') {
     return result;
   }
   if (result.content === EMPTY_CONTENT_WARNING) return result;
   const rest = result.content.split('\n');
   const remaining = countLines(rest);
-  record.extent = { offset, shown: Math.min(limit, remaining), total: offset + remaining };
-  return { ...result, content: rest.slice(0, limit).join('\n') };
+  const wanted = Math.min(limit, remaining);
+  const shown = linesWithinBytes(rest, wanted, limits.maxBytes);
+  const cappedByBytes = shown < wanted;
+  record.extent = { offset, shown, total: offset + remaining, cappedByBytes };
+  record.lines = rest.slice(0, shown);
+  // 沒撞到上限時照舊切 `limit`：檔尾那個換行留著，基座拿到的跟以前一字不差。
+  return { ...result, content: rest.slice(0, cappedByBytes ? shown : limit).join('\n') };
+}
+
+/** {@link ReadLimits} 填完預設之後的樣子。 */
+interface ResolvedReadLimits {
+  readonly limit: number;
+  readonly maxLineLength: number;
+  readonly maxBytes: number;
+  readonly streamMinSize: number | undefined;
+}
+
+function resolveReadLimits(limits: ReadLimits | undefined): ResolvedReadLimits {
+  return {
+    limit: limits?.readLimit ?? READ_LIMIT,
+    maxLineLength: limits?.readMaxLineLength ?? READ_MAX_LINE_LENGTH,
+    maxBytes: limits?.readMaxBytes ?? READ_MAX_BYTES,
+    streamMinSize: limits?.readStreamMinSize,
+  };
 }
 
 /**
@@ -135,7 +310,8 @@ async function readWithExtent(
  * @param backend - fold 折出來的那個。
  * @returns 交給基座的那一份。
  */
-export function recordReadExtent<T extends object>(backend: T): T {
+export function recordReadExtent<T extends object>(backend: T, limits?: ReadLimits): T {
+  const resolved = resolveReadLimits(limits);
   return new Proxy(backend, {
     get(target, property) {
       const value: unknown = Reflect.get(target, property, target);
@@ -146,7 +322,7 @@ export function recordReadExtent<T extends object>(backend: T): T {
         const record = currentRead.getStore();
         // 不在 `read_file` 裡，或這次呼叫已經讀過一次（工具只讀一次；第二次的不是它）：原樣轉交。
         if (record === undefined || record.extent !== undefined) return method(...args);
-        return readWithExtent(method as never, record, args);
+        return readWithExtent(method as never, record, args, resolved);
       };
     },
   });
@@ -182,9 +358,50 @@ export function continuationFooter(extent: ReadExtent, text: string): string {
       : `(Output capped. Use offset=${visible} to continue.)`;
   }
   const last = extent.offset + extent.shown;
+  if (extent.cappedByBytes) {
+    return `(Output capped. Showing lines ${first}-${last}. Use offset=${last} to continue.)`;
+  }
   return last < extent.total
     ? `(Showing lines ${first}-${last} of ${extent.total}. Use offset=${last} to continue.)`
     : `(End of file - total ${extent.total} lines)`;
+}
+
+/**
+ * 讀檔的 meta（[#617](https://github.com/DemianLi/nexus-agent/issues/617)），形狀同 dsh 的 `FsReadMeta`。
+ *
+ * **只放模型完整看到的那幾行**，判法同 {@link continuationFooter}：基座因為大小截斷時，最後看得到的
+ * 那一行可能只顯示了一半，它與它之後的都不放。一行都沒有完整顯示的話整格不給——畫一張空卡比 generic
+ * 更會讓人讀錯。
+ *
+ * @param path - 模型給的路徑。
+ * @param extent - backend 讀到的範圍。
+ * @param lines - 交給工具的那幾行。
+ * @param text - 模型收到的文字（接 footer 之前）。
+ * @returns meta；一行都沒有完整顯示就 `undefined`。
+ */
+export function readResultMeta(
+  path: string,
+  extent: ReadExtent,
+  lines: readonly string[],
+  text: string,
+): ReadResultMeta | undefined {
+  let count = extent.shown;
+  if (text.includes(BASE_TRUNCATION_MARK)) {
+    const visible = lastVisibleLine(text) ?? extent.offset + 1;
+    count = Math.max(0, visible - 1 - extent.offset);
+    if (count === 0) return undefined;
+  }
+  const lang = readLangHintForPath(path);
+  return {
+    path,
+    offset: extent.offset + 1,
+    lines: lines.slice(0, count).map((line, index) => ({
+      number: extent.offset + 1 + index,
+      text: line,
+    })),
+    totalLines: extent.total,
+    ...(lang === undefined ? {} : { lang }),
+  };
 }
 
 /** 把一行接在文字結果最後：字串直接接，文字塊陣列接在最後一個文字塊上。其餘原樣。 */
@@ -202,26 +419,136 @@ function appendFooter(
   return next;
 }
 
+/** `limit` 給模型看的定義，措辭照 dsh（`packages/fs/tool-fs/src/read.ts:83`）。沒有 `default`：預設由 middleware 填。 */
+function limitParameter(readLimit: number): {
+  readonly type: 'number';
+  readonly description: string;
+} {
+  return {
+    type: 'number',
+    description: `Maximum number of lines to return. Defaults to ${readLimit}.`,
+  };
+}
+
+/** OpenAI 形狀的工具定義，只取這裡動得到的幾格。 */
+interface FunctionParameters {
+  readonly properties?: Readonly<Record<string, unknown>>;
+  readonly required?: readonly string[];
+}
+
+/**
+ * 模型看到的 `read_file`：`limit` 換成 dsh 的定義、不再必填。**描述不在這裡換**（#1563）：預設行數 {@link READ_LIMIT} 與行號格式由
+ * `fs-tool-descriptions.ts` 經 `customToolDescriptions` 寫進工具自己的描述。
+ *
+ * **是 OpenAI 形狀的一份定義，不是工具**：`Runnable` 才算 client tool，langchain 對同名換了實例的
+ * client tool 會拒絕，定義則直接交給 `bindTools`。執行時 ToolNode 找的仍是基座那個實例。
+ *
+ * **帶一格不可列舉的 `name`**：基座的 `_ToolExclusionMiddleware` 排在最內層，用 `tool.name` 認
+ * 要拿掉的工具（`hasToolName`，`dist/langsmith-zm0ILQsV.js:5446-5462`）。沒有這一格的話，profile 拿掉
+ * 的 `read_file` 會以這個形狀溜回去。不可列舉，所以序列化進請求本體時不會多一格。
+ */
+function modelFacingReadTool(
+  tool: object,
+  modelFacing: WeakMap<object, object>,
+  readLimit: number,
+): object {
+  const cached = modelFacing.get(tool);
+  if (cached !== undefined) return cached;
+  const converted = convertToOpenAITool(tool as never);
+  const parameters = converted.function.parameters as FunctionParameters;
+  const definition = {
+    ...converted,
+    function: {
+      ...converted.function,
+      parameters: {
+        ...parameters,
+        properties: { ...parameters.properties, limit: limitParameter(readLimit) },
+        required: (parameters.required ?? []).filter((name) => name !== 'limit'),
+      },
+    },
+  };
+  Object.defineProperty(definition, 'name', { value: READ_TOOL, enumerable: false });
+  modelFacing.set(tool, definition);
+  // 已經換過的再進來（同一份請求被兩層看到）原樣留著。
+  modelFacing.set(definition, definition);
+  return definition;
+}
+
+/** 一個工具是不是基座的 `read_file`：工具實例或已經換過的那一份都叫這個名字。 */
+function isReadTool(tool: unknown): tool is object {
+  return (
+    typeof tool === 'object' &&
+    tool !== null &&
+    (tool as { readonly name?: unknown }).name === READ_TOOL
+  );
+}
+
+/**
+ * 呼叫要交給工具的參數：`limit` 沒給就填 {@link READ_LIMIT}，超過就拋 dsh 的原句
+ * （`packages/fs/tool-fs/src/read.ts:59`）。拋出去的由圍堵轉成工具錯誤。
+ *
+ * `null` 當成沒給：基座的 schema 是 `z.coerce.number()`，放過去會變成 0 行。
+ */
+function withReadLimit(args: unknown, readLimit: number): Record<string, unknown> {
+  const given = (args ?? {}) as Record<string, unknown>;
+  const limit = given.limit;
+  if (limit === undefined || limit === null) return { ...given, limit: readLimit };
+  if (Number(limit) > readLimit) {
+    throw new Error(`limit must be less than or equal to ${readLimit}`);
+  }
+  return given;
+}
+
 /**
  * 造一顆在讀檔結果最後補上讀到哪的 middleware。**無狀態**：記錄每次呼叫各一份，root 與每個
  * subagent 共用同一顆。
  *
+ * @param limits - `tool-fs` 設定列的上限（{@link ReadLimits}）；缺席或缺格用常數。**行數上限在這裡生效**（`limit` 的預設與天花板、
+ *   給模型看的定義）；其餘三格交給 backend 建頁（{@link recordReadExtent} 把它們放進 {@link ReadWindowRequest}）。
  * @returns 交給 fold 排位置的 middleware。
  */
-export function createReadContinuationMiddleware(): AgentMiddleware {
+export function createReadContinuationMiddleware(limits?: ReadLimits): AgentMiddleware {
+  const readLimit = limits?.readLimit ?? READ_LIMIT;
+  // 每顆 middleware 各一份：描述裡有這顆的行數上限，不同上限的兩顆不能共用同一個快取。
+  const modelFacing = new WeakMap<object, object>();
   return createMiddleware({
     name: READ_CONTINUATION_MIDDLEWARE_NAME,
+    wrapModelCall: (request, handler) => {
+      const tools = request.tools as readonly unknown[] | undefined;
+      if (!Array.isArray(tools) || !tools.some(isReadTool)) return handler(request);
+      return handler({
+        ...request,
+        tools: tools.map((tool) =>
+          isReadTool(tool) ? modelFacingReadTool(tool, modelFacing, readLimit) : tool,
+        ),
+      } as typeof request);
+    },
     wrapToolCall: async (request, handler) => {
       if (resolveToolName(request) !== READ_TOOL) return handler(request);
+      const args = withReadLimit(request.toolCall.args, readLimit);
+      const call =
+        args === request.toolCall.args
+          ? request
+          : { ...request, toolCall: { ...request.toolCall, args } };
       const record: CallRecord = {};
-      const result = await currentRead.run(record, () => handler(request));
+      const result = await currentRead.run(record, () => handler(call));
       const extent = record.extent;
       // 失敗的、沒讀到文字的（二進位、空檔）、包在 `Command` 裡的：原樣交出。
       if (extent === undefined || !ToolMessage.isInstance(result) || result.status === 'error') {
         return result;
       }
-      const content = appendFooter(result.content, (text) => continuationFooter(extent, text));
+      let shownText: string | undefined;
+      const content = appendFooter(result.content, (text) => {
+        shownText = text;
+        return continuationFooter(extent, text);
+      });
       if (content === undefined) return result;
+      const path = (request.toolCall.args as { readonly file_path?: unknown } | undefined)
+        ?.file_path;
+      if (typeof path === 'string' && shownText !== undefined && record.lines !== undefined) {
+        const meta = readResultMeta(path, extent, record.lines, shownText);
+        if (meta !== undefined) putToolResultMeta(READ_TOOL, meta);
+      }
       // 只換內容，其餘每一格原樣帶過去（id、狀態、別的 middleware 記在訊息上的東西）。
       return new ToolMessage({
         content,

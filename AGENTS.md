@@ -38,13 +38,20 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 
 ## PR 內文
 
-[`.github/pull_request_template.md`](.github/pull_request_template.md) 是唯一格式。
+兩種 PR，兩種格式。
 
-用 `gh pr create --body` 開 PR 時 CLI 不會自動套模板，要自己照模板的段落填。
+**feature → develop**：標準格式是 `mattpocock-skills:pr`，照 [`.github/pull_request_template.md`](.github/pull_request_template.md)。段落標題與欄位名照 `/pr` 原文用英文，內文寫中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md) 指到的領域詞彙。`/pr` 之外只加兩處：第一行的 `Refs #N`，與 Summary 裡的「對照 dsh」。骨架：
 
-`develop → main` 的 PR 內文會成為 main 上的 commit message，所以 gate 對這種 PR 強制要求 `## 變更內容` 與 `## 驗證方式` 兩個段落。feature PR 的內文不強制。
+- 第一行 `Refs #N`（不寫 Closes）；
+- `## Summary`：挑最小的一張圖（虛擬碼、呼叫樹、元件樹、檔案樹或 diff 草圖），配一兩句話；GitHub 上 Mermaid 只露出一小塊，優先用文字樹或 diff 草圖。涉及技術實現的 PR，圖之後接 `**對照 dsh：**`，照「技術實現標準」的三步寫：dsh 怎麼做與為什麼、比較了哪些做法、選了哪個與好在哪；做法跟 dsh 一樣的寫一行出處。純文件、純設定的 PR 刪掉這一段；
+- `## Evidence`：`**Before:**`／`**After:**` 兩項，截圖最好，其次是測試或指令的實際輸出，突變結果放這裡。**寫實際跑過的，沒跑過就寫沒跑過**，這一段的價值來自它是真的；
+- `## Merge Danger`：`**Door:**` 寫 one-way 或 two-way（one-way 指合了很難回頭：資料格式、落盤內容、出廠設定、對外協定），`**Blast Radius:**` 寫一個詞；檔案歸屬的同批適配（見「檔案歸屬」）也寫在這裡。
 
-「驗證方式」寫實際跑過的指令與結果。沒跑過就寫沒跑過 — 這一段的價值來自它是真的。
+用 `gh pr create --body` 開 PR 時 CLI 不會自動套模板，要自己照骨架填。feature PR 的內文 gate 不檢查。
+
+**開 PR 與每次推更新之前，對 diff 跑 [`comment-audit`](.agents/skills/comment-audit/SKILL.md)**（report 模式），照報告修完再推；判準見 [`docs/standards.md`](docs/standards.md)〈註解〉。
+
+**develop → main（發版）**：內文會成為 main 上的 commit message，所以 gate 對這種 PR 強制要求 `## 變更內容` 與 `## 驗證方式` 兩個段落（`.github/scripts/check_pr.py`），不用上面的骨架。「驗證方式」同樣寫實際跑過的指令與結果，沒跑過就寫沒跑過。
 
 ## 程式碼規範
 
@@ -52,7 +59,7 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 
 ## 技術實現標準
 
-凡技術實現方法的問題，一律以 **DeepSeek Harness**（[`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)，Cordis 插件框架、TypeScript、MIT）的實際做法為標準。
+凡技術實現方法的問題，以 **DeepSeek Harness**（[`deepseek-ai/deepseek-harness`](https://github.com/deepseek-ai/deepseek-harness)，Cordis 插件框架、TypeScript、MIT）為**參照**：先讀懂它的設計架構與實現方式，再選出對 nexus 最好的做法。目標是超越 dsh，不是複製它。選出來的做法可以跟 dsh 一樣，也可以不一樣，但都要說得出為什麼它對 nexus 比較好。
 
 **先讀原始碼，不要靠搜尋或記憶回答。** 那份 clone 不進版控（`.gitignore` 與 `.prettierignore` 都排除 `references/`），所以要自己拉一份：
 
@@ -62,11 +69,23 @@ git clone --depth 1 https://github.com/deepseek-ai/deepseek-harness.git referenc
 
 唯讀，不要改它。`docs/` 每份都有 `.zh.md` 中文版，入口是 `docs/architecture.zh.md`、`docs/cordis-primer.zh.md`、`docs/subsystems/*.zh.md`；房規在根目錄的 `AGENTS.md` 與 `packages/AGENTS.md`。
 
-**偏離規則**：一律照 dsh 的實際做法，**只有當現有基礎建設（deepagents / LangChain JS / LangGraph JS）表達不出來時**，才退到最接近的實作 —— 而且要在決議或 PR 內文裡明確標註是哪一條、為什麼表達不出來、退到什麼。不得因為「我們的形狀不同」就自由發揮。
+**怎麼選：**
+
+1. **先講清楚 dsh 怎麼做、為什麼這樣做。** 指到原始碼（`path:line`，並註明 SHA），說出它在解決什麼問題、付出什麼代價。講不出來，就還沒到可以選的時候。
+2. **再列出至少一種別的做法，用同一組標準比較：**
+   - 正確性；
+   - 失敗與恢復；
+   - 效能；
+   - 維護成本；
+   - nexus 的產品需求：企業內部聊天機器人、完全內網、多人共用主機、稽核、幾百人並行開發；
+   - 現有基座做不做得到：今天是 deepagents／LangChain JS／LangGraph JS，正遷往 vendor 的 Cordis，見 [`.docs/decisions-2026-10-11.md`](.docs/decisions-2026-10-11.md)。
+3. **選比較好的那一個，寫明它好在哪。** 比不出高下時照 dsh，因為它的做法已經在實際使用中驗證過。
+
+**記在哪：** 對照與取捨寫在 PR 內文 Summary 的「對照 dsh」，或 `docs/`、`.docs/` 的 md（決議、設計文件），不寫進程式碼與註解（見 [`docs/standards.md`](docs/standards.md)）。做法跟 dsh 一樣的，寫一行出處就好；不一樣的，寫完整的比較。
 
 這條規則撐起了 [`.docs/development-plan.md`](.docs/development-plan.md) 裡大半的設計決定；來龍去脈見已關閉的地圖 [#26](https://github.com/DemianLi/nexus-agent/issues/26)。
 
-**不在這條範圍內的：web 的 UI/UX**（視覺、設計 token、互動、動效）。這一塊以 **shadcn＋Tailwind 為基底**、[Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) 為模仿對象（元件多樣性、交互體驗、動效呈現），最後長成本專案自己的系統風格。dsh 在 UI/UX 上**最多只參考元件的多樣性**（有哪些元件、哪些面），不拿來當建議的依據，也不需要寫偏離標註。會動到執行語意的介面行為（例如按下去這一輪停不停）仍照上面的規則。來龍去脈見地圖 [#372](https://github.com/DemianLi/nexus-agent/issues/372) 的 Notes。
+**web 的 UI/UX**（視覺、設計 token、互動、動效）不在這條範圍內，規則見 [`apps/web/AGENTS.md`](apps/web/AGENTS.md)，碰 `apps/web` 的檔時自動載入。會動到執行語意的介面行為仍照上面的規則。
 
 ## 分支策略
 
@@ -80,7 +99,15 @@ feature/*  --squash-->  develop  --merge commit-->  main  --workflow_dispatch-->
 | `main` | 發佈分支。唯一能產出 GitHub Release 的分支。 |
 
 - **兩條分支都禁止直接 push**，一律走 Pull Request。
-- **`gate` CI 必須綠燈**才能合併。
+- **`gate` CI 必須綠燈**才能合併。功能分支 → `develop` 的 PR 走輕的模式，在 `plan` 裡只跑：PR 標題與格式、CI 腳本的測試、
+  lockfile 新版本的發布年齡、受影響套件（含下游）的型別檢查、異動檔的 format 與 lint、改到的測試檔加上改到的
+  原始檔同名的測試檔。全套測試、瀏覽器護欄、web build、packed-install、node-compat 在合併後那一輪跑；動到 `.github/workflows|scripts|actions` 的 PR 照樣全跑
+  （`.github/workflows/ci.yml` 檔頭）。只改 PR 內文不會重跑 gate，改標題會。
+- **合進 `develop` 之後，每個 commit 各跑一輪完整的 CI**（Actions 的「合併後完整一輪」，`.github/workflows/post-merge.yml`）。
+  它不擋合併，但合併的 dev session **開下一張 PR 之前，先確認自己那個合併 commit 的這一輪是綠的**。
+- **這一輪紅了，先只重跑失敗的 job 一次**（Actions 的 Re-run failed jobs）。轉綠、而且同一個 tree 在 PR 上是綠的，就當成偶發：
+  開 backlog 卡（已有的就在卡上記一筆），不撤回。還是紅，就**撤回再修**：該張 PR 的作者 session 開撤回 PR，讓 `develop` 先恢復綠，
+  修好再重新開 PR。
 - **`main` 只接受來自 `develop` 的 PR**，由 `gate` 檢查 head branch 強制執行。緊急修補同樣先進 `develop`。
 - **禁止 force push 與刪除分支**，無人可繞過規則（含 repo owner）。
 - **`develop` 要求分支與 base 同步（strict）**；**`main` 刻意不開 strict** —— 因為 `develop → main` 的
@@ -110,39 +137,15 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
 
 ### 一個明文例外：跨套件的型別收緊必須原子落地
 
-`packages/*` 的一次型別收緊會讓消費它的 `apps/*` **當場編不過**。拆成兩張 PR 的話，中間那段
-時間樹是紅的，而 `develop` 要求 gate 綠燈 —— 兩張都合不進去。
-
-**先確認拆不開。** 很多收緊其實拆得開，而拆開是預設：加一個必填欄位就是 —— 對方那一刀
-（把新欄位補進測試建構器之類）在**還沒有那個欄位的樹上**照樣編得過、照樣綠，先合它完全無害。
-判準是實測，不是直覺：把對方那一刀單獨套在今天的 `develop` 上，typecheck 與測試跑一遍。
-
-拆不開的長這樣：**聯集少一支、欄位改名、函式簽名換形狀** —— 對方的適配在舊樹上編不過，
-你的改動在對方適配之前也編不過，**沒有一個順序是綠的**。這一節管的就是這一類。
-
-那時候：**提出改動的那一方可以連同對方目錄裡那份最小機械適配一起送**，四個條件要全部成立：
-
-- **真的拆不開**，而且是上面那段的實測判準說拆不開，不是覺得麻煩。
-- **只做機械適配**，不做對方領域的設計判斷。分不出算不算「機械」的時候，它就不算 —— 停下來
-  交回去問。
-- **足跡取最小**。改一個共用的測試建構器，勝過改二十個呼叫點：對方正在改的東西撞上你的機會
-  跟著變小。
-- **PR 內文寫明動了哪個目錄、為什麼必須同批**，而且**當面知會那個 session**。
-
-這條例外只管「編不過」。對方領域裡**行為**要跟著改的那一類（畫面、互動、文案），不在射程內
-—— 那是一張自己的卡。
+`packages/*` 的型別收緊讓 `apps/*` 編不過，又實測拆不開時，可連同對方目錄的最小機械適配同批送。判準與四個條件見 [`docs/standards.md`](docs/standards.md#跨套件的型別收緊必須原子落地)。
 
 ## 發版
 
-到 Actions 頁面執行 **Release** workflow，branch 選 `main` 並輸入版號（`vX.Y.Z`）。workflow 會自行
-打 tag 並建立 GitHub Release。因為 `workflow_dispatch` 限定在 `main` 執行，「從 develop 發版」在機制上
-不可能發生。
+發版分兩段：版號 PR（`pnpm run release:bump`）合進 `develop`、`develop → main` 之後，到 Actions 跑 **Release** workflow（branch 選 `main`）。步驟與版號規則見 [`docs/release.md`](docs/release.md)。
 
-版號規則在 1.0 之前從簡：**完成一個 Phase 跳 minor，其餘一律 patch**。1.0 之前 semver 本來就不承諾
-相容性，此刻套用完整規則只是徒增判斷成本。
+### 升級指南
 
-不維護手寫的 CHANGELOG。release notes 由 `--generate-notes` 依 PR 標題自動生成，而 PR 標題規範已經
-強制每個變更都有一句可讀的中文描述 —— 那就是 changelog 的原料。
+**外部看得到的不相容變更，在引入它的那張 PR 裡就寫一份升級指南**，放 `docs/upgrade-guide/v<最近一個 Release tag>/<item>/guide.md`，不留到發版前。gate 只驗格式，不驗有沒有寫。範圍、格式、連結掃描範圍、和 dsh 不同的兩處與撤除條件見 [`docs/release.md`](docs/release.md#升級指南)。
 
 ## Agent skills
 
@@ -160,7 +163,7 @@ Issue 與 spec 都放在 GitHub Issues（`DemianLi/nexus-agent`），一律用 `
 
 ### Domain docs
 
-多 context 佈局：root 的 `CONTEXT-MAP.md` 指向 `apps/*` 各自的 `CONTEXT.md`。見 [`docs/agents/domain.md`](docs/agents/domain.md)。
+多 context 佈局：root 的 `GLOSSARY-MAP.md` 指向 `apps/*` 各自的 `GLOSSARY.md`。見 [`docs/agents/domain.md`](docs/agents/domain.md)。
 
 ### Code search
 

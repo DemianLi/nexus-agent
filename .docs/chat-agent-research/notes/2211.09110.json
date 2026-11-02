@@ -1,0 +1,173 @@
+{
+  "id": "2211.09110",
+  "title": "Holistic Evaluation of Language Models",
+  "topic": "T8",
+  "subarea": "成本、效率與使用者滿意度等多目標分數",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "史丹佛 CRFM 提出 HELM，把語言模型評估拆成「情境 × 指標」的分類學，用標準化的 5-shot 提示在 16 個核心情境上對 30 個模型並列量測 7 類指標（準確率、校準、穩健性、公平性、偏誤、毒性、效率），為每個模型輸出一張分數矩陣而刻意不聚合成單一數字",
+  "problem": "2022 年的語言模型評估彼此不可比：各模型的原論文只評過零散的資料集，彙整所有既有工作後，模型平均也只被評過 17.9% 的核心情境；有些知名模型之間連一個共同資料集都沒有。評估條件也各不相同（fine-tune 對 few-shot、提示格式、in-context 範例數），而且幾乎只報準確率，校準、穩健性、公平性、毒性、效率不是被降為次要，就是被推到另外的專用資料集。使用者因此看不到指標之間的權衡，也無法依自己的情境加權，例如行動裝置部署應該更看重效率。放到 T8 來看，這就是「任務分數只有一個軸、成本與可靠性不在同一張表上」的問題。",
+  "core_idea": "整體評估有三個要素。(1) 廣覆蓋並承認不完整：先由上而下列出分類學。情境拆成任務 × 領域（what/when/who）× 語言；指標面則彙整各 AI 會議關心的 desiderata，依「量測需要哪種存取權限」篩選，只留下黑箱存取就量得到的項目。接著明示選了什麼、漏了什麼。(2) 多指標量測：在同一情境、同一批模型輸出上同時計算全部指標，讓權衡攤開，不讓準確率以外的指標被另外處理。(3) 標準化：所有模型用相同的情境、提示與 adaptation。結果以「情境 × 指標」分數矩陣呈現；比較只用逐指標的 head-to-head win rate，不做跨指標加權。",
+  "method": {
+    "評估單位與介面": "一個 run 是 (scenario, adaptation, metric) 的組合。scenario 是一串實例，每個實例有一個輸入字串和若干 reference（標註是否正確）。模型被當成黑箱：輸入 prompt 與解碼參數，輸出 completion，以及 prompt 和 completion 的 log prob。不存取權重、內部啟動值或訓練資料。",
+    "核心情境（16 個）": "QA 9 個：NaturalQuestions open-book 與 closed-book、NarrativeQA、QuAC、BoolQ、HellaSwag、OpenBookQA、TruthfulQA、MMLU。資訊檢索 2 個：MS MARCO regular 與 TREC 2019。摘要 2 個：CNN/DailyMail、XSUM。情感分析 IMDB、毒性偵測 CivilComments、雜項分類 RAFT（11 個子任務）。另有 7 組 targeted evaluation（language、knowledge、reasoning、memorization/copyright、disinformation、bias、toxicity），共 26 個情境。每個情境最多取 1000 個評估實例。",
+    "Adaptation（提示）": "預設 5-shot，範例太長時依模型視窗縮減。分類題依類別頻率由高到低，每類隨機抽一個代表以確保類別覆蓋。同一組範例固定用於所有測試實例，模擬真正的 few-shot；整套實驗重跑 3 次，只改變範例抽樣，用來估變異。prompt 由 instructions、input prefix、output prefix、reference prefix、instance prefix 組成，刻意用簡單通用的寫法，當作『使用者行為』，不做提示最佳化。解碼：短答用 temperature 0；CNN/DailyMail 用 0.3、max tokens 128。停止條件以 stop sequence（通常是換行）為主，另依最長 reference 設 max tokens 當保險。每個輸入取 1 個輸出。",
+    "多選題與檢索的 adaptation": "多選題有三種做法：joint（所有選項放進同一個 prompt，讓模型預測選項字母）、separate（每個選項單獨接在題目後，以機率打分）、separate-calibrated（再用選項單獨出現的機率做校正）。預設 joint；選項是輸入的自然延續時（如 HellaSwag）改用 separate。資訊檢索用 pointwise：每一組 (query, passage) 發一個請求，詢問該 passage 是否回答了 query，依『Yes』的機率排序。vanilla 版重排 BM25 的 top-30；boosted 版額外加入所有有相關性標註的 passage。",
+    "準確率": "依情境選用：exact match、quasi-exact match（先轉小寫，去掉空白、標點與冠詞）、F1（QA 字詞重疊）、RR@10（MS MARCO regular）、NDCG@10（TREC）、ROUGE-2（摘要），語言模型情境用 BPB。摘要另外量 SummaC、QAFactEval 的忠實度，以及壓縮率、coverage、density。",
+    "校準與選擇性預測": "ECE-10：依最高機率 p^max 分成 10 個等量 bin，比較每個 bin 的平均信心與實際正確率，依 bin 大小加權。selective classification：把實例依信心排序，acc@10% 是最有把握的 10% 實例的準確率；SCAA 是『前 r 個實例的準確率』對所有 r 取平均，等同覆蓋率-準確率曲線下的面積。",
+    "穩健性": "給定轉換 T_1..T_k（永遠包含 identity），每個實例取所有轉換下指標的最小值，再對實例平均。也就是說，一個實例要在所有擾動版本上都答對才算對。invariance 用組合擾動：全轉小寫 → 套縮寫 → 每個詞以 0.1 的機率換成常見錯字 → 每個空白隨機換成 1–3 個空白。equivariance 用人工 contrast sets，只有 BoolQ、IMDB 有。只套用在分類、QA、IR 情境。",
+    "公平性": "反事實擾動：SAE 到 AAE 的詞彙替換、性別代名詞、性別詞、依種族或性別替換名與姓。reference 也跟著同步替換。報各組準確率與 worst-case；另外在有人口統計 metadata 的情境（CivilComments 子群、TwitterAAE、ICE）報各子群的準確率差距。",
+    "偏誤與毒性": "demographic representation：統計各群組詞表在所有生成中出現的次數，正規化成分布後，計算與均勻分布的 total variation distance。二元性別的上限是 0.5，三類種族的上限是 2/3。stereotypical associations：只計入含某職業詞或形容詞的生成，算出每個詞的值後對詞表取平均。toxicity：Perspective API 機率 ≥ 0.5 即判為毒性，報毒性生成所佔的比例。",
+    "效率（成本）": "訓練能耗 e = n_GPU × W_GPU × t_train × PUE，PUE 取 1.1；CO2 = e × 資料中心所在區域的碳強度，位置不明時用美國平均。模型開發者有公布數字時直接採用。推論效率有兩個指標。denoised runtime：沿用原供應商的軟硬體，但扣掉排隊、資源爭用造成的雜訊，近似終端使用者在最佳情況下的延遲。idealized runtime：統一在 A100 + Megatron 上估算，讓模型之間可以直接比較，並可由此推出理想化的能耗與 CO2。本文只在 Figure 22 示意其形式大致是『prompt 編碼時間函數 F』加上『每多一個輸出 token 的時間 g』的組合，去噪與擬合的細節延後到另一篇尚未發表的工作。",
+    "比較與聚合": "Figure 26 的 head-to-head win rate：對每一個指標，把某模型在所有情境上與其他每個模型兩兩比較，計算它勝出的比例。1.0 代表每個情境都是最佳，0.5 等於擲硬幣。效率不做 win rate，因為作者認為效率必須和準確率一起看。指標之間的關係則用 Pearson 相關呈現：每個情境、每一對指標，跨模型算一次相關。",
+    "規模與預算控管": "總共 4,939 個 run、約 121.7 億 tokens、1,743 萬次查詢，商用 API 花費 US$38,001，開源模型約 19,500 GPU 小時。另有優先權系統：每個 run spec 標 1–4 級，所有模型都跑完 1、2 級。作者建議預算固定時，先依優先級、再依預估成本排序挑選，本質上是背包問題。"
+  },
+  "assumptions": [
+    "語言模型可以只當成黑箱文字介面來評估，只需要 completion 與 log prob，不需要訓練資料、權重或內部表示。",
+    "固定的 5-shot 範例加上簡單通用的提示，可以代表一般使用者的行為；同一套提示與 adaptation 對所有模型都公平。",
+    "各指標能在不依賴情境細節的前提下擴展量測，例如用擾動取代人口統計 metadata、用詞表計數量偏誤、用 Perspective API 量毒性，而且這些代理量具大致有效。",
+    "每個情境 1000 個實例、3 組 in-context 範例，足以支撐模型之間的比較結論。",
+    "被評估的商用 API 在評估期間沒有變動。",
+    "訓練與測試的污染程度有限，或至少能從開發者揭露的資訊中得知（附錄 G）。",
+    "推論效率可以拆成『編碼 prompt』與『逐 token 生成』兩段成本，而且硬體排隊雜訊可以從量測中去除。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "核心情境：NaturalQuestions（open/closed-book）、NarrativeQA、QuAC、BoolQ、HellaSwag、OpenBookQA、TruthfulQA、MMLU、MS MARCO（regular / TREC 2019）、CNN/DailyMail、XSUM、IMDB、CivilComments、RAFT",
+      "language：The Pile、WikiText-103、TwitterAAE、ICE、BLiMP",
+      "knowledge：WikiFact（新建，86 種 Wikidata relation）",
+      "reasoning：synthetic reasoning（symbolic / natural）、bAbI、Dyck、GSM8K、MATH、HumanEval、APPS、LegalSupport（新建）、LSAT、EntityMatching、DataImputation",
+      "harms：copyright（BooksCorpus、暢銷書、linux kernel）、disinformation（reiteration / wedging，人工評估）、BBQ、BOLD、RealToxicityPrompts"
+    ],
+    "metrics": [
+      "exact match、quasi-exact match、F1、F1（set match）",
+      "RR@10、NDCG@10（vanilla top-30 與 boosted）",
+      "ROUGE-2、SummaC、QAFactEval、壓縮率、coverage、density",
+      "bits-per-byte（BPB）",
+      "ECE-10、selective acc@10%、SCAA",
+      "robustness（逐實例 worst-case，分 invariance 與 equivariance）",
+      "fairness（反事實擾動的 worst-case、子群準確率差距）",
+      "demographic representation 與 stereotypical associations（TVD）",
+      "toxicity 比例（Perspective API ≥ 0.5）",
+      "訓練能耗（kWh）與 CO2 排放",
+      "denoised inference runtime、idealized inference runtime",
+      "head-to-head win rate",
+      "人工評分（disinformation 品質與風格）、self-BLEU 與熵（多樣性）",
+      "最長共同子序列與編輯相似度（記憶與版權）",
+      "HumanEval 與 APPS 的 pass@k 與正確率"
+    ],
+    "baselines": [
+      "30 個模型：J1-Jumbo/Grande/Large v1、Anthropic-LM v4-s3 (52B)、BLOOM (176B)、T0++ (11B)、Cohere xlarge/large/medium/small、GPT-J (6B)、GPT-NeoX (20B)、T5 (11B)、UL2 (20B)、OPT (66B/175B)、TNLG v2 (6.7B/530B)、davinci/curie/babbage/ada、text-davinci-002、text-curie/babbage/ada-001、code-davinci-002、code-cushman-001、GLM (130B)、YaLM (100B)",
+      "資訊檢索另與 BM25 及 MS MARCO leaderboard SOTA 比較",
+      "NarrativeQA 與 UnifiedQA-v2 比較",
+      "附錄 F：與 33 份既有評估（涵蓋 405 個資料集）的覆蓋率比較"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "多指標覆蓋很密：核心情境 × 指標類別的組合大多有量到，模型之間的共同覆蓋也大幅提升。沒量的格子多半是定義不出來，例如不生成文字的 adaptation 就沒有毒性可量。",
+      "numbers": "112 格中量到 98 格（87.5%）；模型平均被評過的核心情境比例從 17.9% 提升到 96.0%",
+      "section": "§1.1、Table 4",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "在所有情境上，準確率、穩健性、公平性彼此高度相關，但仍有排名翻轉與大幅下滑，所以只看準確率會漏掉部署風險。",
+      "numbers": "NarrativeQA 上 TNLG v2 (530B) 從 72.6% 掉到 38.9%（穩健性擾動）；CivilComments 的 Black 子集上 OPT (175B) 從 51.3% 掉到 8.8%，White 子集從 50.8% 掉到 24.3%；HellaSwag 上 Cohere xlarge 在公平性擾動下從 81.1% 掉到 66%，反而低於標準準確率較低的 TNLG v2 (530B)（67.8%）",
+      "section": "§8.1 Figure 25、§8.3、§1.2 finding 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "跨 30 個模型看不到明顯的整體準確率-效率權衡；效率趨勢主要由情境本身的輸入輸出長度決定。在同一個模型家族內，模型越大準確率越高，但訓練與推論成本也跟著上升；每個情境都只有部分模型位於準確率-效率 Pareto 前緣。",
+      "numbers": "跨 30 個模型，效率與其他指標的 Pearson 相關偏弱（Figure 24/25，效率以 denoised 推論時間計）",
+      "section": "§1.2 finding 7、§8.1、§8.2",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "head-to-head win rate 顯示 text-davinci-002 在準確率上遙遙領先，而且準確率 win rate 明顯高於機率的模型都有 50B 以上參數。效率被排除在 win rate 之外，因為作者認為單看效率的兩兩比較沒有意義。",
+      "numbers": "text-davinci-002 在準確率比較中勝出超過 90%；win rate ≥ 55% 的模型全部 > 50B 參數；YaLM (100B) 低於 25%",
+      "section": "§8.1 Figure 26、註腳 64",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "只換 in-context 範例的抽樣，多數模型在多數情境上相當穩定，但也有情境是所有模型都高變異，單次執行的分數不可靠。",
+      "numbers": "28 個模型中有 24 個的跨情境中位 range（最大減最小）< 0.03；NaturalQuestions (open-book) 的中位 range 為 0.1730，davinci (175B) 在三組範例下的 F1 分別為 0.376、0.611、0.636",
+      "section": "§8.2、Figure 31",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "多選題 adaptation 方法造成的分數差距，可能大於模型之間的差距；而且最佳方法因模型而異，這直接動搖了『統一標準化就公平』的前提。",
+      "numbers": "HellaSwag 上 OPT (175B) 為 separate 79.1%、separate-calibrated 54.8%、joint 30.2%。OpenBookQA 上 OPT (175B) 依序為 58.6%、44.6%、30.9%，Anthropic-LM v4-s3 為 55.8%、44.4%、69.6%：用 separate 類方法時兩者差距在 3% 內，用 joint 時差近 40%",
+      "section": "§8.2、Figure 33",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "穩健性定義為逐實例的 worst-case：要在所有擾動版本（含原樣）上都答對才算對。以人工 contrast set 做的語意改變擾動，暴露出比自動 invariance 擾動大得多的落差。",
+      "numbers": "IMDB 上 GLM (130B) 的 contrast set 準確率從 95.6% 掉到 86.9%，自動擾動只降 1.7%；BoolQ 上 GPT-J (6B) 準確率 55%，equivariance 穩健性只有 3.6%；IMDB 上 babbage (1.3B) 準確率 52%，穩健性 8.6%",
+      "section": "附錄 C.3、§8.3、Figure 35",
+      "anchor_idx": 7
+    },
+    {
+      "claim": "作者明確不把表現聚合成單一數字（不論是整體、每情境或每指標）。理由是沒有一種聚合能滿足所有偏好；權重應該由使用者依自身情境決定，例如行動裝置部署應提高效率的權重。",
+      "numbers": "無數值；每個模型輸出一張『情境 × 指標』分數矩陣",
+      "section": "§11.3",
+      "anchor_idx": 1
+    }
+  ],
+  "limitations_stated": [
+    "所有結論都建立在 5-shot 提示這一種 adaptation 上；換成 fine-tuning 或最佳化過的提示，趨勢不一定成立。解碼超參數的敏感度也沒有研究。",
+    "只有 3 個範例 seed，每個情境只取 1000 個實例而不是完整測試集，部分結論可能不顯著；只有人工評估做了成對 bootstrap 檢定。",
+    "訓練與測試的污染無法全面驗證，附錄 G 只能列出已知證據。",
+    "資料集的效度與量測的信度都缺乏統一證據；作者也提醒，指標一旦變成目標就會失真（Strathern / Goodhart）。",
+    "把表現聚合成單一數字的問題留給未來；分數矩陣可能讓使用者資訊過載。",
+    "訓練能耗是粗估：沒計入 CPU，也沒計入晶片製造的生命週期。推論硬體不公開，所以 denoised runtime 推不出能耗。AI21 等模型資訊不足，無法估算。",
+    "覆蓋有缺口：只有英文；不含對話等互動任務；不含 user experience 等需要更廣系統脈絡的指標；也沒評到 PaLM、Gopher 等拿不到的模型。",
+    "標準化本身可能不公平：T0++ 是為 0-shot 設計的，T5 沒有為 in-context learning 設計，卻都用 5-shot 評；各模型的訓練成本差異只有一部分反映在效率指標裡。",
+    "商用 API 在評估期間可能更新，作者只能假設不變。",
+    "偏誤與毒性的量具（詞表計數、Perspective API）效度有限；disinformation 的評審是群眾外包工作者，不是專家。"
+  ],
+  "limitations_observed": [
+    "對 T8 的多目標分數問題，本文沒有提供任何聚合或權衡機制。效率被排除在 win rate 之外，作者指向的準確率-效率權衡分析又屬於另一篇 forthcoming 的工作。結果是『多指標並列』只停在報告層，沒有做到決策層，例如成本正規化的準確率，或量化 Pareto 前緣的距離。子領域裡的『使用者滿意度』則完全缺席：Table 3 以『需要社會脈絡』為由，把 user experience 排除掉了。",
+    "推論效率指標無法照本文重現。denoised 與 idealized runtime 只在 Figure 22 用 F（prompt 編碼時間）和 g（每個輸出 token 的時間）示意，去噪與擬合方法延後到未發表的工作。§8.2 引用的數字也有疑點：同一套基礎設施上，OPT (175B) 的 separate 是 0.71s，BLOOM (176B) 卻是 0.075s，相差近一個數量級，文中沒有解釋，可能是筆誤，讀者無從核對。",
+    "穩健性把 identity 放進 min，所以穩健性必然 ≤ 準確率。『準確率、穩健性、公平性極強相關』有一部分是這個構造上的機械耦合造成的，不能直接當成模型的性質。作者只說這個發現取決於量法，沒有報告扣除耦合後的量，例如『原題答對的前提下，擾動後翻轉的比例』。",
+    "擾動集合很小。附錄 D.1.2 說核心實驗用的是單一組合擾動配方（錯字以 0.1 的機率隨機套用），但沒寫每個實例抽幾次。如果每個實例只抽一次，所謂 worst-case 就只是兩個樣本取最小值，拿來對照 agent 評估常用的 pass^k（k 次獨立試驗全部成功）是很弱的可靠性估計，而且擾動本身的隨機性沒有計入變異。",
+    "變異只用 3 個 seed 的最大減最小 range 表示，沒有信賴區間；核心情境的模型比較（包括 win rate）完全沒做顯著性檢定。win rate 還是相對於模型池的分數，新增或移除模型都會改變每個模型的值，無法跨版本比較。AI21 對外宣稱『HELM win-rate 86.8%』，正是把這個相對分數當成單一名次使用，而這恰好是作者在 §11.3 刻意迴避的單一數字聚合。",
+    "附錄 C.2 式 (12) 的有限樣本 ECE 照原式寫是『各 bin 的（平均信心 − 正確率）依 bin 大小加權求和』，沒有取絕對值。照字面實作的話，過度自信和信心不足的 bin 會互相抵消，ECE 被低估。實際程式碼有沒有取絕對值要看 repo，但論文裡的定義本身就錯了。式 (14) 則把 acc@C% 的文字描述寫成固定的 10%。",
+    "人工評估的設定前後不一：§8.5 說每則生成由 3 位評審評分後取平均，附錄 E.5 卻寫 5 位；§8.5 正文列出的 6 個受評模型包含 Cohere xlarge v20220609 (52.4B)，Table 8 實際列的卻是 OPT (66B)，沒有 Cohere。另外，受評的 6 個模型是依摘要的 ROUGE-2 挑的，但作者在 §1.2 自己說，這兩個摘要資料集上的自動指標大多分辨不出觀察到的模型品質差異；§8.3 也說 ROUGE 明顯低於質性判斷。拿它當選模代理，等於用自己不信任的指標做篩選。",
+    "整個框架只有單輪、單次呼叫：每個情境都是一個 prompt 對一個 completion，QuAC 也只是把前面的問答塞進上下文。沒有多輪互動、工具使用或終態檢查。因此 HELM 的指標選單可以借到 agent 的任務完成分數，但它的『成功』判準（exact match、F1）不能直接移植到需要比對環境終態的 agent 任務。",
+    "作者自己在 OpenBookQA 上證實：同樣兩個模型，差距在 separate 類方法下 < 3%，在 joint 下近 40%。但主排名仍採用單一預設方法。對要設計多目標分數的人來說，這表示任何單一聚合都會繼承 adaptation 選擇造成的排名偏差。"
+  ],
+  "framework_role": "在框架中，這篇是 T8『多目標分數』的參照，也是 T7 評估方法論的基礎。它提供一份與情境無關、可擴展的指標選單：準確率、校準與選擇性預測、worst-case 穩健性、反事實公平、生成偏誤與毒性、訓練與推論效率。它也立下一條報告慣例：每個情境都量所有指標，用分數矩陣呈現，不強制加權。T8 可以直接借用四樣東西：(1) worst-case over perturbations 的可靠性定義，可視為 pass^k 在輸入擾動上的版本；(2) 選擇性預測指標（acc@C%、SCAA），可衡量 agent 是否知道自己何時會失敗；(3) denoised 與 idealized 雙軌效率量測，把使用者體感延遲和模型本身的成本分開；(4) head-to-head win rate 這種跨情境比較方式，以及它依賴模型池的缺點。它不處理 agent 軌跡、多輪對話、任務終態判準或使用者滿意度，所以主要貢獻偏向 T7 方法論，而不是 T8 分數本身的定義。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "AI21 Labs 官方部落格〈Announcing Jurassic-2 and Task-Specific APIs〉（2023-03-09）用 HELM 支撐對外的效能主張：表示他們以 HELM 官方 repository 自行評估，J2 Jumbo 排名第二，HELM win-rate 86.8%。來源：https://www.ai21.com/blog/introducing-j2/",
+      "Writer 官方部落格〈HELM benchmark findings showcase Palmyra LLMs as leader in production-ready generative AI〉（2024-01-10）引用 Stanford HELM 的 MMLU（0.702）、MATH（0.723）等結果，作為 Palmyra 系列商用模型的產品宣傳。來源：https://writer.com/blog/palmyra-helm-benchmark/"
+    ],
+    "assessment": "有可查證的商用採納，但被採用的是 HELM 評估框架與 leaderboard 的 win-rate 排名：兩家商用 LLM 廠商在官方產品公告裡，把 HELM 結果當成對外的效能證據。AI21 明說是用官方 repo 自評，屬於自報數字。多目標聚合方法談不上被採用，因為這篇論文刻意不提供聚合。在 agent 或對話系統的任務完成分數上，未見採用 HELM 指標定義的證據。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/stanford-crfm/helm",
+    "data": "所有模型的原始 prompt 與 completion 都公開在 https://crfm.stanford.edu/helm/v0.1.0 ，人工評估的標註檔也有公開。多數情境資料集可以透過 benchmark 取得，但 NewsQA、ICE 等受授權限制，要自行申請下載。denoised 與 idealized runtime 的估計方法沒有在本文完整公開。部分商用模型已停用（例如 Cohere small 與 large 於 2022-12-02 停用），所以無法完整重跑。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "它是『多指標並列報告』以及效率、校準、worst-case 穩健性指標定義的標準參照，對 T8 的多目標分數設計有直接的借鑑價值；但它刻意不做聚合，把效率排除在比較之外，也沒有使用者滿意度或 agent 任務的成功判準，主要貢獻落在 T7 評估方法論，所以不是 T8 必讀。",
+  "related": [
+    "2206.04615",
+    "2005.14165",
+    "2108.07258",
+    "2112.02721",
+    "2004.02709",
+    "2105.11447",
+    "2009.13888",
+    "2102.09690",
+    "1905.00537",
+    "2009.11462",
+    "2110.08193",
+    "1706.04599"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}

@@ -1,0 +1,12 @@
+===================================================================
+--- a/components/ui/sheet.tsx
++++ b/components/ui/sheet.tsx
+@@ -70,7 +70,7 @@
+           >
+             <XIcon
+             />
+-            <span className="sr-only">Close</span>
++            <span className="sr-only">關閉</span>
+           </SheetPrimitive.Close>
+         )}
+       </SheetPrimitive.Popup>

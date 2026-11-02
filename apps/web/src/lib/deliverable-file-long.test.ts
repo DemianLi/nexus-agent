@@ -1,15 +1,25 @@
-import type { DeliverableFileBytes, DeliverableFilePage } from '@nexus/wire';
+import type { DeliverableFilePage } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { DeliverableFileEntry, DeliverableFileStore } from '@/lib/deliverable-file';
 import { createDeliverableFileStore, isLongLine, isPage } from '@/lib/deliverable-file';
+import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
+import {
+  badRequestReply,
+  bytesReply,
+  deliverableFetch,
+  pageReply,
+  refuseReply,
+  tooLargeReply,
+} from '@/test/deliverable-commands';
 
 /**
  * 超過頁上限的行、中長的行太多（#555）。
  *
- * 假 server 照兩條路由的規則回應（`apps/harness/src/deliverable-files.ts`、`deliverable-window.ts`）：
- * 文字頁一頁超過 `maxBytes` 是 413（**拒絕不是截斷**）、`limit` 超過 `maxLines` 是 400、當頁含 NUL 或不是 UTF-8
- * 是 422、只有檔頭的 BOM 被吃掉；位元組窗口不解碼，`length` 預設且最多 `maxBytes`。**判準是把整個檔讀完、
+ * 假 server 照兩支命令的規則回應（`apps/harness/src/deliverable-files.ts`、`deliverable-window.ts`）：
+ * 文字頁一頁超過 `maxBytes` 是 `deliverable/too-large`（**拒絕不是截斷**）、`limit` 超過 `maxLines` 是協定錯誤
+ * `invalid_argument`、當頁含 NUL 或不是 UTF-8 是 `deliverable/not-text`、只有檔頭的 BOM 被吃掉；位元組窗口不解碼，
+ * `length` 預設且最多 `maxBytes`，**`offset` 與 `length` 都不給是整檔下載**（所以送窗口時 `offset` 一定要送，包括 0）。**判準是把整個檔讀完、
  * 接回來的文字跟原檔逐字相同**——位置算歪一個位元組，接出來的就不是原檔。
  */
 
@@ -38,43 +48,41 @@ function rawLines(bytes: Uint8Array): Uint8Array[] {
 
 const hasBom = (bytes: Uint8Array) => bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf;
 
-function respond(fake: Fake, url: string): Response {
-  const { pathname, searchParams } = new URL(url, 'http://x');
-  const num = (name: string) =>
-    searchParams.has(name) ? Number(searchParams.get(name)) : undefined;
+function respond(fake: Fake, call: DeliverableCall): Reply {
   const stat = { path: 'out/long.txt', version: fake.version, bytes: fake.bytes.length };
-  if (pathname.endsWith('/deliverables/bytes')) {
-    const offset = num('offset') ?? 0;
-    const length = num('length') ?? fake.maxBytes;
-    if (length === 0) return new Response('', { status: 400 });
-    if (length > fake.maxBytes) return new Response('', { status: 413 });
-    const slice = fake.bytes.subarray(offset, offset + length);
-    const body: DeliverableFileBytes = {
+  if (call.method === 'deliverable.readBytes') {
+    const { offset, length } = call.params;
+    // 都不給是整檔下載；這個假 server 不在乎 maxFileBytes。
+    const whole = offset === undefined && length === undefined;
+    const from = offset ?? 0;
+    const size = whole ? fake.bytes.length : (length ?? fake.maxBytes);
+    if (size === 0) return badRequestReply;
+    if (!whole && size > fake.maxBytes) return tooLargeReply(fake.maxBytes);
+    return bytesReply({
       ...stat,
-      offset,
-      data: btoa(String.fromCharCode(...slice)),
-      eof: offset + length >= fake.bytes.length,
-    };
-    return Response.json(body);
+      offset: from,
+      data: fake.bytes.slice(from, from + size),
+      eof: from + size >= fake.bytes.length,
+    });
   }
-  const offset = num('offset') ?? 0;
-  const limit = num('limit');
-  if (limit !== undefined && limit > fake.maxLines) return new Response('', { status: 400 });
+  const offset = call.params.offset ?? 0;
+  const { limit } = call.params;
+  if (limit !== undefined && limit > fake.maxLines) return badRequestReply;
   const lines = rawLines(fake.bytes);
   const take = lines.slice(offset, offset + (limit ?? fake.maxLines));
   const size = take.reduce((sum, line) => sum + line.length, 0) + Math.max(0, take.length - 1);
   const bom = offset === 0 && hasBom(fake.bytes) ? 3 : 0;
-  if (size - bom > fake.maxBytes) return new Response('', { status: 413 });
+  if (size - bom > fake.maxBytes) return tooLargeReply(fake.maxBytes);
   const decoded: string[] = [];
   for (const [i, line] of take.entries()) {
     try {
       const text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: !(offset + i === 0) }).decode(
         line,
       );
-      if (text.includes('\0')) return new Response('', { status: 422 });
+      if (text.includes('\0')) return refuseReply('deliverable/not-text');
       decoded.push(text);
     } catch {
-      return new Response('', { status: 422 });
+      return refuseReply('deliverable/not-text');
     }
   }
   const page: DeliverableFilePage = {
@@ -84,18 +92,14 @@ function respond(fake: Fake, url: string): Response {
     lines: take.length,
     eof: offset + take.length >= lines.length,
   };
-  return Response.json(page);
+  return pageReply(page);
 }
 
 function storeOn(fake: Fake) {
-  const urls: string[] = [];
-  const doFetch = vi.fn(async (input: RequestInfo | URL) => {
-    urls.push(String(input));
-    return respond(fake, String(input));
-  }) as unknown as typeof globalThis.fetch;
+  const { fetch: doFetch, calls } = deliverableFetch((call) => respond(fake, call));
   return {
     store: createDeliverableFileStore({ threadId: 't', baseUrl: '', fetch: doFetch }),
-    urls,
+    calls,
   };
 }
 
@@ -225,11 +229,24 @@ describe('超過頁上限的一行改走位元組窗口', () => {
     expect(store.read(1, 0, 0)).toBeUndefined();
   });
 
+  it('窗口一律送 offset，包括 0：都不給會悄悄變成整檔下載', async () => {
+    const text = `${'x'.repeat(300)}\nshort\n`;
+    const { store, calls } = storeOn(fake(text));
+    const { stop } = await readAll(store);
+    expect(stop).toBe('end');
+    const windows = calls.filter((call) => call.method === 'deliverable.readBytes');
+    expect(windows.length).toBeGreaterThan(0);
+    expect(windows[0]?.params.offset).toBe(0);
+    expect(windows.every((call) => call.params.offset !== undefined)).toBe(true);
+  });
+
   it('BOM 只查一次', async () => {
     const text = `\uFEFFa\n${'x'.repeat(200)}\nb\n${'y'.repeat(200)}\n`;
-    const { store, urls } = storeOn(fake(text));
+    const { store, calls } = storeOn(fake(text));
     await readAll(store);
-    expect(urls.filter((url) => url.includes('length=3'))).toHaveLength(1);
+    expect(
+      calls.filter((call) => call.method === 'deliverable.readBytes' && call.params.length === 3),
+    ).toHaveLength(1);
   });
 });
 
@@ -237,18 +254,20 @@ describe('中長的行太多：縮 limit 讀，不會變成「座標不對」', 
   it('第一頁就 413、maxLines 只有 3：整個檔讀得完，一次都沒停在 invalid', async () => {
     const line = 'm'.repeat(30);
     const text = `${Array(3).fill(line).join('\n')}\n${Array(40).fill('s').join('\n')}\n`;
-    const { store, urls } = storeOn(fake(text, 64, 3));
+    const { store, calls } = storeOn(fake(text, 64, 3));
     const { entries, stop } = await readAll(store);
     expect(stop).toBe('end');
     expect(joined(entries)).toBe(expected(text));
     expect(entries.some(isLongLine)).toBe(false);
-    expect(urls.some((url) => url.includes('limit='))).toBe(true);
+    expect(
+      calls.some((call) => call.method === 'deliverable.read' && call.params.limit !== undefined),
+    ).toBe(true);
   });
 
   it('沒有 413 就一次都不送 limit', async () => {
-    const { store, urls } = storeOn(fake('a\nb\nc'));
+    const { store, calls } = storeOn(fake('a\nb\nc'));
     expect((await readAll(store)).stop).toBe('end');
-    expect(urls.length).toBeGreaterThan(0);
-    expect(urls.some((url) => url.includes('limit='))).toBe(false);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls.some((call) => 'limit' in call.params)).toBe(false);
   });
 });

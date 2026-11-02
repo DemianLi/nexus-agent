@@ -1,0 +1,21 @@
+===================================================================
+--- a/components/ui/dialog.tsx
++++ b/components/ui/dialog.tsx
+@@ -70,7 +70,7 @@
+           >
+             <XIcon
+             />
+-            <span className="sr-only">Close</span>
++            <span className="sr-only">關閉</span>
+           </DialogPrimitive.Close>
+         )}
+       </DialogPrimitive.Popup>
+@@ -108,7 +108,7 @@
+       {children}
+       {showCloseButton && (
+         <DialogPrimitive.Close render={<Button variant="outline" />}>
+-          Close
++          關閉
+         </DialogPrimitive.Close>
+       )}
+     </div>
