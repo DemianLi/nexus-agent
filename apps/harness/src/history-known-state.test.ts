@@ -1,9 +1,9 @@
 /**
  * **讀歷史不從日誌開頭重算**（[#2117](https://github.com/DemianLi/nexus-agent/issues/2117)）：最新一頁的投影值拿 pump 的即時折疊，
- * `legacy` 在 root 日誌長度沒變時沿用上一次的值。大日誌每讀一頁都重折投影、重推整份對話，那段同步工作擋住同一個行程裡的
- * 每一條 thread。
+ * `legacy` 在 root 日誌長度沒變時沿用上一次的值。不帶已知值的話，大日誌每讀一頁都要重折投影、重推整份對話，這段同步工作
+ * 會擋住同一個行程裡的每一條 thread。
  *
- * 計次走真的 handler：拿掉 `handleHistory` 傳的那一格，熱讀的計次就會長。
+ * 計次走真的 handler：拿掉 `handleHistory` 傳的 `known`（或其中任一欄），熱讀的計次就會長。
  */
 
 import { createProjectionFold, SessionLog } from '@nexus/core';

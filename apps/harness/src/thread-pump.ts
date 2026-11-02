@@ -1634,9 +1634,9 @@ export class ThreadPump {
   }
 
   /**
-   * root 日誌此刻的投影值，同 `createProjectionFold(projectionUnits).fold(sessionLog.events)`：即時折疊每顆事件都在
-   * 寫日誌的同一個同步段裡推進，所以兩者對得上。歷史路由拿它當最新一頁的 baseline，不必每頁從頭折。
-   * 收線之後不再推進，回 `undefined`。
+   * root 日誌此刻的投影值，就是即時下行送出的那一份（`ProjectionSession.current()`）：每顆 root 事件都在 `append` 的
+   * 同一個同步段裡經 `#noteLogEvent` 推進。與從頭 `fold(sessionLog.events)` 只有一處不同：某個單元的 `view` 在中途
+   * 的狀態拋錯時，這裡從那顆起就停用。歷史路由拿它當最新一頁的值，不必每頁從頭折。收線之後不再推進，回 `undefined`。
    */
   get projectionValues(): readonly ProjectionValue[] | undefined {
     return this.#closed ? undefined : this.#projections?.current();
@@ -3781,6 +3781,9 @@ export class ThreadPump {
   #noteLogEvent(entry: SessionEntry, event: SessionEvent): void {
     // 會話累計（#574）：只收 root 的，同 dsh 的 `tokenUsage`／`sessionStats`；子代理是另一份日誌。值變了才送。
     if (entry.address.kind === 'root') {
+      // 投影先推進、照原位置送：前面哪一個拋了，即時折疊也不會漏掉這顆而從此跟日誌對不上——歷史的最新一頁讀的是它
+      // （{@link ThreadPump.projectionValues}）。
+      const projected = this.#projections?.push(event) ?? [];
       for (const data of this.#totals.apply(event)) this.#presentCustom(data);
       const goal = this.#goal.apply(event);
       if (goal !== undefined) this.#presentCustom(goal);
@@ -3790,7 +3793,7 @@ export class ThreadPump {
         if (event.data.operation === 'pause') this.#stopRunForHostPause();
       }
       // 插件投影：一個泛用呼叫，不是每種投影一個分支。變了的單元各送一顆 `projection` frame。
-      for (const value of this.#projections?.push(event) ?? []) {
+      for (const value of projected) {
         // 輪外（命令、接上時的 baseline）當場送；輪中才合併。
         this.#projectionOut.offer(value.key, projectionData(value), this.#current !== undefined);
       }

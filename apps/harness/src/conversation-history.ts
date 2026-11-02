@@ -150,7 +150,7 @@ import type { ToolTextConfig } from './settings/tool-text.js';
 import type {} from '@nexus/plugin-plan-mode';
 import type {} from '@nexus/plugin-workspace-changes';
 
-/** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link historyPage}。 */
+/** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link isLegacyLog}。 */
 const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
   'reply-missing',
   'result-missing',
@@ -1328,7 +1328,11 @@ function settledEvents(events: readonly SessionEvent[]): readonly SessionEvent[]
 /**
  * 這份 root 日誌是不是格式 9 以前寫的：{@link ThreadHistoryResult} 的 `legacy`，每一頁都是整份日誌的同一個值。
  *
- * 要把整份對話推一次（`replayConversation`），成本跟日誌一樣大。
+ * **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前寫的那一段；
+ * 哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，真的 v8 日誌會被判成
+ * 不是舊格式。切點對不上不算：畫面上不缺東西。
+ *
+ * 要把整份對話推一次（`replayConversation`），成本跟日誌長度成正比。
  *
  * @param events - 這條 thread 的 root 日誌，全部。
  */
@@ -1338,10 +1342,14 @@ export function isLegacyLog(events: readonly SessionEvent[]): boolean {
 }
 
 /**
- * 呼叫端手上已經算好的、跟傳進 {@link historyPage} 的 `events` 同一刻的值。有給的就不從日誌開頭重算。
+ * 呼叫端手上已經算好的、跟傳進 {@link historyPage} 的 `events` 同一刻的值。每一欄什麼時候採用見欄位說明，沒給的照
+ * `events` 現算。
  */
 export interface HistoryKnownState {
-  /** 整份日誌的投影值，照註冊順序，同 `ProjectionFold.fold(events)`。只用在涵蓋整份日誌的最新一頁。 */
+  /**
+   * `projections` 參數那組單元在 `events` 這一刻的即時折疊值，照註冊順序。與 `createProjectionFold(projections).fold(events)`
+   * 的差別見 `ThreadPump.projectionValues`。只用在涵蓋整份日誌的最新一頁。
+   */
   readonly projections?: readonly ProjectionValue[];
   /** 同 {@link isLegacyLog}`(events)`。 */
   readonly legacy?: boolean;
@@ -1442,7 +1450,8 @@ export function historyPage(
       : [];
   // 插件投影（#1026）：同標題與計劃模式，**只在最新一頁**、是目前的值，而且**每個註冊的單元都送**（包括沒折到任何事件的、
   // 空日誌的、折壞了的）——這一頁就是 baseline，web 的 `projections` 有哪些 key 由它定；即時那一側只送之後的變化。
-  // 折疊器與 pump 的即時折疊是同一個（`createProjectionFold`），frame 長相只寫在 `projection-wire.ts`。
+  // 折疊器與 pump 的即時折疊是同一個（`createProjectionFold`），涵蓋整份日誌時直接用 pump 那份（`known.projections`）；
+  // frame 長相只寫在 `projection-wire.ts`。
   // 子代理自己的投影（#1028）同一頁、同一個折疊器：宣告 `children` 的單元對 `projectionChildren` 裡每個子代理各折一份，
   // 集合與即時那一側讀的是同一份（`ThreadPump.projectionChildren`）。
   const projectionFrames =
@@ -1473,9 +1482,6 @@ export function historyPage(
   if (bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(bytes);
 
   return {
-    // **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前
-    // 寫的那一段；哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，
-    // 真的 v8 日誌會被判成不是舊格式。切點對不上不算：畫面上不缺東西。
     events: [
       ...historyFrames(
         [...carried, ...window.slice(cut, end)],
