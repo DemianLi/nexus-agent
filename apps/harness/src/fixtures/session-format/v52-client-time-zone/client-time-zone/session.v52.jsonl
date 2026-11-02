@@ -1,0 +1,6 @@
+{"type":"session","version":52,"id":"client-time-zone","createdAt":1793588538846,"cwd":"/private/var/tmp/nexus-session-format-cwd"}
+{"type":"turn/start","seq":0,"time":1793588538847,"data":{"kind":"message","text":"現在幾點","clientTimeZone":"Asia/Taipei"}}
+{"type":"model/start","seq":1,"time":1793588538847,"data":{}}
+{"type":"user/message","seq":2,"time":1793588538847,"data":{"message":{"type":"human","data":{"content":"順便看一下明天","additional_kwargs":{},"response_metadata":{},"id":"fixture-steer"}},"source":{"kind":"user","clientTimeZone":"Asia/Taipei"}}}
+{"type":"model/end","seq":3,"time":1793588538847,"data":{}}
+{"type":"turn/end","seq":4,"time":1793588538847,"data":{}}

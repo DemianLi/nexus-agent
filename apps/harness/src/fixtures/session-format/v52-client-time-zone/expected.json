@@ -1,0 +1,83 @@
+{
+  "writer": {
+    "rev": "54d5a80dbe6f64d0ad49f2a51c9e1be95d901172",
+    "commit": "54d5a80dbe6f64d0ad49f2a51c9e1be95d901172",
+    "formatVersion": 52,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "8e30d0933771385b134a23de1530a192a83c27a2",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 52,
+      "eventCount": 23,
+      "types": [
+        "approval/policy",
+        "turn/start",
+        "session/title",
+        "user/message",
+        "model/start",
+        "request/system",
+        "request/header",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "54d5a80dbe6f64d0ad49f2a51c9e1be95d901172",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    },
+    "client-time-zone": {
+      "headerVersion": 52,
+      "eventCount": 5,
+      "types": [
+        "turn/start",
+        "model/start",
+        "user/message",
+        "model/end",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "54d5a80dbe6f64d0ad49f2a51c9e1be95d901172",
+        "kind": "unreplayable",
+        "reason": "reply-missing"
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 49,
+      "session": "client-time-zone",
+      "computedBy": "today",
+      "browserTimeZone": {
+        "kind": "resolved",
+        "timeZone": "Asia/Taipei"
+      }
+    }
+  ]
+}
