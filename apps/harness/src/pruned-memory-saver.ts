@@ -109,13 +109,29 @@ function deepFreeze(root: unknown): void {
   }
 }
 
-/** 新進的訊息量層數並深凍結；已凍結的只看一眼就跳過。 */
+/** 層數已經由別處保證在上限內的訊息，見 {@link vouchCheckpointDepth}。 */
+const depthVouched = new WeakSet<object>();
+
+/**
+ * 登記一則訊息寫進存檔點一定不超過上限，`seal` 就不量它。只給推得出上限的呼叫端（續接時從日誌記下的層數推，
+ * `conversation-restore.ts`）；登記之後到 `seal` 之前，呼叫端不能讓它變深。登記的是這個物件本身，換成副本
+ * （例如 {@link withWritableLastAi}）就照常量。
+ *
+ * @param message - 要交進 graph state 的那一則。
+ */
+export function vouchCheckpointDepth(message: object): void {
+  depthVouched.add(message);
+}
+
+/** 新進的訊息量層數並深凍結；已凍結的只看一眼就跳過，登記過的（{@link vouchCheckpointDepth}）不量、照凍。 */
 function seal(messages: readonly unknown[]): void {
   for (const message of messages) {
     if (Object.isFrozen(message)) continue;
-    const depth =
-      checkpointDepth(message, CHECKPOINT_PRECHECK_DEPTH) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH;
-    if (depth > CHECKPOINT_MAX_DEPTH) throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH);
+    if (!depthVouched.has(message as object)) {
+      const depth =
+        checkpointDepth(message, CHECKPOINT_PRECHECK_DEPTH) + CHECKPOINT_MESSAGE_WRAPPER_DEPTH;
+      if (depth > CHECKPOINT_MAX_DEPTH) throw new CheckpointDepthError(depth, CHECKPOINT_MAX_DEPTH);
+    }
     deepFreeze(message);
   }
   Object.freeze(messages);

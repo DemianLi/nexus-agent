@@ -2132,7 +2132,7 @@ const sharedStoredEvents = new WeakSet<readonly SessionEvent[]>();
  * **只給從 JSON 解出來的事件用**：這裡只凍不拷，不檢查能不能無損表達成 JSON。
  */
 export function shareStoredEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
-  freezeGraph(events);
+  freezeStoredEvents(events);
   sharedStoredEvents.add(events);
   return events;
 }
@@ -2146,21 +2146,51 @@ export function appendSharedEvents(
   more: readonly SessionEvent[],
 ): readonly SessionEvent[] {
   if (!sharedStoredEvents.has(shared)) return [...shared, ...more];
-  freezeGraph(more);
+  freezeStoredEvents(more);
   const joined = Object.freeze([...shared, ...more]);
   sharedStoredEvents.add(joined);
   return joined;
 }
 
-/** 原地深凍一張無環的純 JSON 物件圖；迭代走訪，深巢狀不撞呼叫堆疊。不去重：有環會轉不完，只給從 JSON 解出來的值。 */
-function freezeGraph(root: object): void {
-  const pending: object[] = [root];
-  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
-    Object.freeze(current);
-    for (const child of Object.values(current)) {
-      if (child !== null && typeof child === 'object') pending.push(child as object);
+/** {@link shareStoredEvents}／{@link appendSharedEvents} 凍過的每一顆事件的層數，見 {@link storedEventDepth}。 */
+const storedEventDepths = new WeakMap<SessionEvent, number>();
+
+/**
+ * 一顆讀盤共用過的事件，`data`（與信封上其他物件欄位）巢狀幾層，算法同寫入時的上限檢查（`data` 本身是第 1 層，
+ * {@link SESSION_EVENT_MAX_DEPTH}）。
+ * 有值就表示這顆經過 {@link shareStoredEvents} 或 {@link appendSharedEvents}，整張深凍過；其餘的事件回 `undefined`。
+ *
+ * 讀方不設上限，上限出現之前寫下的舊日誌可能比上限深，這裡照實回。
+ */
+export function storedEventDepth(event: SessionEvent): number | undefined {
+  return storedEventDepths.get(event);
+}
+
+/**
+ * 原地深凍一批從 JSON 解出來的事件（連陣列本身），順便記下每一顆的層數（{@link storedEventDepth}）。迭代走訪，深巢狀不撞呼叫堆疊。
+ * 不去重：有環會轉不完，只給從 JSON 解出來的值。
+ */
+function freezeStoredEvents(events: readonly SessionEvent[]): void {
+  const nodes: object[] = [];
+  const depths: number[] = [];
+  for (const event of events) {
+    let most = 0;
+    nodes.push(event);
+    depths.push(0);
+    for (let node = nodes.pop(); node !== undefined; node = nodes.pop()) {
+      const depth = depths.pop()!;
+      if (depth > most) most = depth;
+      Object.freeze(node);
+      for (const child of Object.values(node)) {
+        if (child !== null && typeof child === 'object') {
+          nodes.push(child as object);
+          depths.push(depth + 1);
+        }
+      }
     }
+    storedEventDepths.set(event, most);
   }
+  Object.freeze(events);
 }
 
 /** 日誌的觀察者。**同步呼叫，在事件已經進到日誌之後**。 */

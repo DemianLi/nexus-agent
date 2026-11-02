@@ -331,7 +331,12 @@ export {
 } from './attachment-ref.js';
 
 export type { LoggedMessage } from './logged-message.js';
-export { fromLoggedMessage, toLoggedMessage, loggedContentBlocks } from './logged-message.js';
+export {
+  fromLoggedMessage,
+  toLoggedMessage,
+  loggedContentBlocks,
+  parsesLoggedToolCalls,
+} from './logged-message.js';
 
 export type {
   ConversationReplay,
@@ -821,6 +826,7 @@ export {
   SessionSeq,
   shareStoredEvents,
   snapshotJsonValue,
+  storedEventDepth,
   validateSessionEventData,
 } from './session-log.js';
 
