@@ -14,7 +14,7 @@
  * 5. `referencedFilePaths` 不比檔名（只用雜湊找同目錄的所有別名）→ 「檔名別名各自一條」紅。
  * 6. `agent-factory.ts` 的 `attachmentScope.bind(sessions.root)` 拿掉 → 產品路徑「A 的子代理讀得到」紅（綁不上就什麼都不露出）。
  * 7. `readRaw`、`downloadFiles` 的可見判斷各自拿掉 → 對應的「跟不存在逐字一樣」紅。
- * 8. `openCopySource` 的可見判斷拿掉（#2289）→ 「複製的來源」那兩條紅。
+ * 8. `ThreadScopedAttachmentBackend[COPY_SOURCE]` 的可見判斷拿掉（#2289）→ 「複製的來源」那兩條紅。
  *
  * **零憑證、零外部連線**：模型是腳本，儲存放 `/var/tmp`。
  */

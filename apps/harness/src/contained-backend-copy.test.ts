@@ -1,5 +1,5 @@
 /**
- * `ContainedFilesystemBackend.copy`（[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）：照位元組複製到還不存在的路徑。
+ * `ContainedFilesystemBackend` 的複製兩半（`[COPY_SOURCE]`、`[COPY_INTO]`，經 `copyFileOf`，[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）：照位元組複製到還不存在的路徑。
  *
  * 驗內容逐位元組相同（非 UTF-8、二進位、CRLF 與結尾換行）、目的地已存在就拒且不動它（含符號連結、暫存期間才出現的）、
  * 來源與目的地各自過讀取面與寫入面的圍堵。每一條都看磁碟，不只看回傳值。
@@ -76,7 +76,7 @@ async function stagingLeft(dir: string): Promise<string[]> {
   return (await readdir(dir)).filter((name) => name.endsWith('.tmpdir'));
 }
 
-describe('ContainedFilesystemBackend.copy：內容', () => {
+describe('ContainedFilesystemBackend 複製：內容', () => {
   it.each([
     ['Big5（不是合法 UTF-8）', Buffer.from([0x61, 0xb4, 0xfa, 0x0a])],
     [
@@ -101,7 +101,7 @@ describe('ContainedFilesystemBackend.copy：內容', () => {
   });
 });
 
-describe('ContainedFilesystemBackend.copy：目的地已存在', () => {
+describe('ContainedFilesystemBackend 複製：目的地已存在', () => {
   it('一般檔：拒絕，原檔不動', async () => {
     await writeFile(join(root, 'a.txt'), '新');
     await writeFile(join(root, 'b.txt'), '舊');
@@ -136,7 +136,7 @@ describe('ContainedFilesystemBackend.copy：目的地已存在', () => {
   });
 });
 
-describe('ContainedFilesystemBackend.copy：來源', () => {
+describe('ContainedFilesystemBackend 複製：來源', () => {
   it('不存在：回錯誤，不建目的地', async () => {
     const result = await contained().copy('/nope.txt', '/b.txt');
     expect(result.error).toMatch(/^Error copying '\/nope\.txt': ENOENT/u);
@@ -160,7 +160,7 @@ describe('ContainedFilesystemBackend.copy：來源', () => {
   });
 });
 
-describe('ContainedFilesystemBackend.copy：目的地的 fence', () => {
+describe('ContainedFilesystemBackend 複製：目的地的 fence', () => {
   it('read-only：拒絕，訊息同 write 的形狀', async () => {
     await writeFile(join(root, 'a.txt'), 'x');
     const result = await contained('read-only').copy('/a.txt', '/b.txt');
@@ -179,7 +179,7 @@ describe('ContainedFilesystemBackend.copy：目的地的 fence', () => {
   });
 });
 
-describe('ContainedFilesystemBackend.copy：發佈前核對', () => {
+describe('ContainedFilesystemBackend 複製：發佈前核對', () => {
   it.each([
     ['位元組數不同', (temp: string) => appendFile(temp, 'extra')],
     ['位元組數相同、內容不同', (temp: string) => writeFile(temp, 'abcX')],
@@ -211,7 +211,7 @@ describe('ContainedFilesystemBackend.copy：發佈前核對', () => {
   });
 });
 
-describe('ContainedFilesystemBackend.copy：permissions 規則比模型給的路徑', () => {
+describe('ContainedFilesystemBackend 複製：permissions 規則比模型給的路徑', () => {
   function ruled(): ContainedFilesystemBackend {
     const backend = new ContainedFilesystemBackend({ rootDir: root });
     backend.usePermissions([

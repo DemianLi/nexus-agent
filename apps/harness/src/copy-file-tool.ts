@@ -6,10 +6,10 @@
  * - 來源與目的地各自照路由交給子 backend 的兩半（`@nexus/core` 的 `copyFileOf`）；工作區、共用區、附件之間都能複製，唯讀的那幾格只能當來源。
  * - 目的地已經存在就拒絕，不覆蓋、不搬檔。
  * - 寫入與 `write_file` 走同一道 fence：唯讀、根外、保留的地方、`permissions` 規則照擋，被擋下時的升級也是同一條路。
- * - 發佈之前核對大小與 sha256，對不上就不發佈（`ContainedFilesystemBackend.copyInto`）。
+ * - 發佈之前核對大小與 sha256，對不上就不發佈（`ContainedFilesystemBackend` 的 `[COPY_INTO]`）。
  * - 成功時把來源、目的地、位元組數、sha256 記進 `tool/result` 的 `meta`，`workspace-changes` 也照這幾格記。
  *
- * 只在有工作區、而且 `tool-fs` 沒關掉寫檔時註冊（{@link copyFileEntry}）：沒有工作區時 default 是記憶體，沒有位元組可以照抄。
+ * 只在有工作區（`agent-factory.ts` 的組裝清單判）、而且 `tool-fs` 沒關掉寫檔（{@link copyFileEntry}）時註冊：沒有工作區時 default 是記憶體，沒有位元組可以照抄。
  *
  * @module
  */

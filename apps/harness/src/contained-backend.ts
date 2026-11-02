@@ -927,8 +927,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /**
    * 複製的目的地那一半：照 {@link write} 先過 fence（核准與升級跟 `write_file` 同一條路，摘要帶來源路徑），在逐目標鎖裡 `lstat`，
-   * 已經存在就拒，再把來源串流進暫存檔。發佈之前核對：讀到的位元組數要等於來源開檔時的大小，暫存檔重讀的 sha256 與大小要等於
-   * 讀進來的那一份；對不上就不發佈、回錯誤，目的地從頭到尾沒出現過。通過才用 hard link 發佈（{@link writeFileAtomic} 的
+   * 已經存在就拒，再把來源串流進暫存檔。發佈之前核對：讀到的位元組數要等於來源開檔時的大小，暫存檔重讀的 sha256 要等於讀進來的
+   * 那一份；對不上就不發佈、回錯誤，目的地從頭到尾沒出現過。通過才用 hard link 發佈（{@link writeFileAtomic} 的
    * `createIfAbsent`），鎖外同時建出來的那一份也不會被蓋掉。
    *
    * @param destinationPath - 這個 backend 座標系裡的目的地路徑。

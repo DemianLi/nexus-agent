@@ -9,6 +9,9 @@
  * 只有這兩份。有改的話，root 日誌寫一顆 `workspace/changes`，摘要與逐檔比較留在記錄器裡，經
  * {@link WorkspaceChanges} 服務到會話結束。模型看不到任何東西：這一條只寫日誌，web 讀。
  *
+ * `copy_file` 成功時，root 那一份 `tool/result` 的 `meta` 帶來源、位元組數與 sha256，列出目的地時一起帶上（`copiedFrom`，#2289）；
+ * 子代理的 `copy_file` 只寫在子代理自己的日誌，目的地照樣列出、沒有 `copiedFrom`。
+ *
  * ## 掛法：出貨清單的 serve 專屬層，一列；不合格由工作區根缺席表達
  *
  * - dsh 由 web-app bundle 出廠掛（`packages/bundle/web-app/cordis.patch.yml:300`），終端機那側不掛；我們同樣
@@ -24,9 +27,7 @@
  *
  * 1. **git 由組裝點注入的 {@link GIT_STARTER_SERVICE} 起**。環境淨化、逾時、輸出上限、找執行檔見 `git.ts` 檔頭。
  * 2. **事件不帶 `turn`**，時序因此另有要求；接上時重播的舊輪不拍快照。見 `recorder.ts` 檔頭。
- * 3. **擷取的工具換成我們基座的那三個，加上 `copy_file`**，見 `capture.ts` 的 `mutationPath`。`delete` 與 `copy_file` 是 dsh 沒有的工具；
- *    `copy_file` 成功時 root 那一份 `tool/result` 的 `meta` 帶來源、位元組數與 sha256，列出目的地時一起帶上（`copiedFrom`，#2289）。
- *    子代理的 `copy_file` 只寫在子代理自己的日誌，這裡收不到它的 `meta`：目的地照樣列出，沒有 `copiedFrom`。
+ * 3. **擷取的工具換成我們基座的那三個**，見 `capture.ts` 的 `mutationPath`。`delete` 是 dsh 沒有的工具。
  * 4. **掛點**：dsh 的 `tools/pre-execute`、`agent/turn-stopping` 與 `session/event`，在我們這裡是 middleware 的
  *    `wrapToolCall`、`afterAgent` 與 `sessions.join` 的 `observe`。`afterAgent` 是圖裡的一個節點，每一輪多走一步
  *    （root 與子代理都是，子代理那一步直接返回）；選它是因為它在輪內、在 pump 寫 `turn/end` 之前，而且只在

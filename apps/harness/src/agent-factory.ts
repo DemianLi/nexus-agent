@@ -950,7 +950,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(options.modelLimits !== undefined && { modelLimits: options.modelLimits }),
     });
     // `permissions` 規則也比經符號連結解開之後的位置（#2260）：規則 fold 完才有。子代理自己加的規則不在這份裡。
-    // 附件那一格也要：`copy_file` 從那裡開來源時拿它比模型給的路徑（#2289）。
+    // 附件那一格也要（#2289）：`copy_file` 開來源時拿它比模型給的路徑，讀取經連結解開後的重比也一起生效。
     for (const contained of [options.backend, sharedBackend, attachmentsBackend]) {
       if (contained instanceof ContainedFilesystemBackend) {
         contained.usePermissions(params.permissions ?? []);
