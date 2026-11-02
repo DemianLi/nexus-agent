@@ -306,23 +306,22 @@ describe('取不到窗口與明講位元組（驗收 B、F）', () => {
   });
 });
 
-describe('型錄沒有那一顆（選過、後來被拿掉）：這一格的 64 KiB 沒有人看得到', () => {
+describe('型錄沒有那一顆（選過、後來被拿掉）', () => {
   /**
-   * `session-reference-budget.ts` 檔頭說這一格「走不到供應商」，這條把它釘住：預算照 64 KiB 算了（沒有窗口），
-   * 但同一步換模型時 `instanceFor` 在打供應商之前就拋，這一輪失敗，假端點一個請求都沒收到，快照沒有送出去。
-   * `controller.select` 不驗證（驗證在 `host.select`），所以可以直接寫一個型錄沒有的路由，等於模擬「後來被從型錄拿掉」。
+   * 下一步退回部署預設，窗口就是部署預設那顆的。`controller.select` 不驗證（驗證在 `host.select`），所以可以直接寫一個型錄沒有的路由，
+   * 等於模擬「後來被從型錄拿掉」。
    */
-  it('這一輪在打供應商之前失敗，假端點沒收到任何請求', async () => {
+  it('窗口與請求都走部署預設，這一輪成功', async () => {
     const connection = connect({ modelId: 'small' });
     try {
       // 先開 thread、讓控制器接上日誌。
       expect(await connection.client.modelCatalog(THREAD)).toMatchObject({ kind: 'ok' });
       connection.host.controller.select({ model: 'ghost' });
-      expect(connection.host.nextContextWindow()).toBeUndefined();
+      expect(connection.host.nextContextWindow()).toBe(100_000);
 
       await ask(connection, 1);
-      expect(connection.events().some((e) => e.type === 'turn/failed')).toBe(true);
-      expect(requests).toHaveLength(0);
+      expect(connection.events().some((e) => e.type === 'turn/failed')).toBe(false);
+      expect(requests.map((request) => request.model)).toEqual(['small']);
     } finally {
       await connection.handler.close();
     }

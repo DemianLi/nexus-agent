@@ -494,3 +494,50 @@ describe('生摘要用哪一顆（#1377）：最近一次已送出的請求那�
     });
   });
 });
+
+describe('記著的模型不在型錄上', () => {
+  function withCatalog(known: readonly string[]) {
+    const subject = new ModelSelectionController({
+      defaultRoute: DEFAULT,
+      instanceFor: () => undefined,
+      inCatalog: (model) => known.includes(model),
+    });
+    const log = new SessionLog('selection');
+    subject.attach(log);
+    const used = (model: string) => log.append('model/start', { route: { model } });
+    return { subject, log, used };
+  }
+
+  it('最近一次走的不在型錄：下一步走部署預設', () => {
+    const { subject, used } = withCatalog(['default-model']);
+    used('old');
+    expect(subject.next()).toEqual(DEFAULT);
+  });
+
+  it('選的不在型錄：退到最近一次走的，再退到部署預設，選擇留在日誌', () => {
+    const { subject, used } = withCatalog(['default-model', 'other']);
+    used('other');
+    subject.select({ model: 'old', effort: 'off' });
+    expect(subject.next()).toEqual({ model: 'other' });
+    expect(subject.state().selected).toEqual({ model: 'old', effort: 'off' });
+
+    const { subject: bare } = withCatalog(['default-model']);
+    bare.select({ model: 'old', effort: 'off' });
+    expect(bare.next()).toEqual(DEFAULT);
+  });
+
+  it('型錄上有的照舊：選的優先，強度跟著', () => {
+    const { subject, used } = withCatalog(['default-model', 'old', 'other']);
+    used('old');
+    subject.select({ model: 'other', effort: 'off' });
+    expect(subject.next()).toEqual({ model: 'other', effort: 'off' });
+  });
+
+  it('退回時附換模型通知，下一步不重附；日誌不多記選擇', () => {
+    const { subject, log, used } = withCatalog(['default-model']);
+    used('old');
+    expect(subject.noticeFor(log)).toHaveLength(1);
+    expect(subject.noticeFor(log)).toHaveLength(0);
+    expect(log.events.some((event) => event.type === 'model/selection')).toBe(false);
+  });
+});

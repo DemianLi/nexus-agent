@@ -80,7 +80,7 @@ export interface ModelSelectionHost {
   select(selection: ModelSelection): ModelSelectResult;
   /**
    * 這條 thread **下一個請求**用的那顆收不收圖（[#732](https://github.com/DemianLi/nexus-agent/issues/732) 的收圖檢查）：
-   * 使用者選的那顆，沒選過是預設。型錄沒有那一筆（續接的會話選過、後來被拿掉的）是 `'undeclared'`，不替它拒。
+   * 使用者選的那顆，沒選過或那顆已不在型錄是預設。
    */
   imageSupport(): ImageSupport;
   /**
@@ -88,7 +88,7 @@ export interface ModelSelectionHost {
    *
    * 路由用控制器的 `next()`：使用者最後選的 → 最近一次請求走的 → 部署預設，**純讀日誌、不留快照**。不能用 `assembleStep()`：它會寫
    * `#assembled`，`takeStepRoute()` 下一次就吃那一份，`beforeModel` 被跳過的那一步會用上這裡留下的舊路由。**也不照 `imageSupport()` 只看
-   * 「選的」**：沒選過的會話走的是最近一次請求的那顆，不是部署預設。型錄沒有那一筆（續接的會話選過、後來被拿掉的）是 `undefined`。
+   * 「選的」**：沒選過的會話走的是最近一次請求的那顆，不是部署預設。
    */
   nextContextWindow(): number | undefined;
 }
@@ -113,14 +113,14 @@ export function createModelSelectionHost(options: {
 
   const controller = new ModelSelectionController({
     defaultRoute,
+    inCatalog: (model) => findModelEntry(liveModel.models, model) !== undefined,
     instanceFor: (route) => {
       // 預設那顆在組裝時建好、貼好標籤了，不為它另建（沒選過的會話逐欄與今天一致）。
       if (sameRoute(route, defaultRoute)) return undefined;
       const key = `${route.model}\u0000${route.effort ?? ''}`;
       let instance = instances.get(key);
       if (instance === undefined) {
-        // 型錄沒有這個 id（例如續接的會話選過、後來被從型錄拿掉的）會在這裡拋，訊息指名它與型錄；
-        // 使用者改選一顆型錄上有的就恢復。
+        // 型錄沒有這個 id 會在這裡拋，訊息指名它與型錄。下一步的路由已經跳過這種 id，走得到這裡的只有讀最近一次請求的摘要器，它接住了。
         instance = createLiveModel({ ...liveModel, modelId: route.model }, undefined, credentials, {
           ...(route.effort === 'off' && { thinkingOff: true }),
           ...(attachments !== undefined && { attachments }),
@@ -163,7 +163,9 @@ export function createModelSelectionHost(options: {
     },
     imageSupport() {
       const { selected } = controller.state();
-      const entry = findModelEntry(liveModel.models, (selected ?? defaultRoute).model);
+      const entry =
+        findModelEntry(liveModel.models, selected?.model ?? defaultRoute.model) ??
+        findModelEntry(liveModel.models, defaultRoute.model);
       return entry === undefined ? 'undeclared' : acceptsImages(entry);
     },
     nextContextWindow() {
