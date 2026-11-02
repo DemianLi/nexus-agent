@@ -39,7 +39,7 @@
 
 import type { ToolMessage } from '@langchain/core/messages';
 
-import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
+import { readLoggedMessage, toLoggedMessage } from './logged-message.js';
 import { closer, requestedCalls } from './conversation-replay.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
 import { appendSharedEvents, SessionSeq } from './session-log.js';
@@ -106,7 +106,7 @@ function scanOpenTurn(events: readonly SessionEvent[]): OpenTurnScan {
       }
       case 'assistant/message':
         if (open) {
-          for (const call of requestedCalls(fromLoggedMessage(event.data.message))) {
+          for (const call of requestedCalls(readLoggedMessage(event.data.message))) {
             unanswered.set(call.id, call.name);
           }
         }
