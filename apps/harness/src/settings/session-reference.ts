@@ -29,7 +29,7 @@
  * 2. **出廠的 `referenceContextFraction` 比 dsh 低**（理由 2，產品需求超出 dsh 的射程；demian 2026-10-17 拍板 Q4 (b)，
  *    [#1573 留言](https://github.com/DemianLi/nexus-agent/issues/1573#issuecomment-6235540587)）：dsh 的 web-app 出貨這一列不給 config，吃 0.2。
  *    dsh 的「每 token 4 位元組」是照英文調的；本產品以中文為主，nexus 自己的估算器（o200k）量中文是約 0.31 token／位元組，
- *    三條各 560,036 位元組的中文來源約占摘要門檻的 94%，乘上實測的真實÷o200k 1.10 就超過。出廠比例與量法見 `cordis.yml` 那一列。
+ *    三條各 627,495 位元組的中文來源約占摘要門檻的 94%，乘上實測的真實÷o200k 1.10 就超過。出廠比例與量法見 `cordis.yml` 那一列。
  *    schema 的預設仍是 dsh 的 0.2：預設值的家是 schema（同其他列），出廠那一列明寫另一個數字。
  *
  * @module
