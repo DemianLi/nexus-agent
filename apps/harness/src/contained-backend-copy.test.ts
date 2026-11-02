@@ -229,6 +229,24 @@ describe('ContainedFilesystemBackend.copy：permissions 規則比模型給的路
     await expect(readFile(join(root, 'out.txt'))).rejects.toThrow();
   });
 
+  it('來源經檔案連結指到被擋的檔（#2260 那道重比）：拒絕，不建目的地', async () => {
+    await mkdir(join(root, 'secret'));
+    await writeFile(join(root, 'secret', 'key.txt'), 'KEY');
+    await symlink('secret/key.txt', join(root, 'link.txt'));
+    const result = await copyWithin(ruled(), '/link.txt', '/out.txt');
+    expect(result.error).toBe('permission denied for read on /secret/key.txt');
+    await expect(readFile(join(root, 'out.txt'))).rejects.toThrow();
+  });
+
+  it('目的地經目錄連結落在被擋的地方（#2260 那道重比）：拒絕，磁碟上沒有多出檔', async () => {
+    await mkdir(join(root, 'secret'));
+    await symlink('secret', join(root, 'door'));
+    await writeFile(join(root, 'a.txt'), 'x');
+    const result = await copyWithin(ruled(), '/a.txt', '/door/new.txt');
+    expect(result.error).toBe('permission denied for write on /secret/new.txt');
+    await expect(readFile(join(root, 'secret', 'new.txt'))).rejects.toThrow();
+  });
+
   it('目的地被擋：不建檔', async () => {
     await writeFile(join(root, 'a.txt'), 'x');
     const result = await copyWithin(ruled(), '/a.txt', '/secret/new.txt');
