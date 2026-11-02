@@ -57,6 +57,10 @@ export interface AtomicWriteOptions {
    * 跟它同時建出來的那一份也保得住。省略即 `rename` 原子取代。
    */
   readonly createIfAbsent?: boolean;
+  /**
+   * 暫存檔寫完、`sync`、關檔之後，發佈之前的核對。丟錯就不發佈：目的地從頭到尾沒出現過，暫存目錄照失敗收掉，錯誤原樣往外。
+   */
+  readonly verify?: (tempPath: string) => Promise<void>;
 }
 
 /** `createIfAbsent` 發佈時目的地已經存在。 */
@@ -139,6 +143,7 @@ export async function writeFileAtomic(
     if (mode !== undefined) await handle.chmod(mode);
     await handle.close();
     handle = undefined;
+    await options.verify?.(tempPath);
 
     if (options.createIfAbsent === true) {
       try {

@@ -5,14 +5,24 @@
  * 來源與目的地各自過讀取面與寫入面的圍堵。每一條都看磁碟，不只看回傳值。
  */
 
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import {
+  appendFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
-import type { SandboxMode } from './contained-backend.js';
+import type { CopyResult, SandboxMode } from './contained-backend.js';
 
 let base: string;
 let root: string;
@@ -30,15 +40,36 @@ afterEach(async () => {
   await rm(base, { recursive: true, force: true });
 });
 
+/** 同一個 backend 裡從 `from` 複製到 `to`：先開來源、再寫目的地，最後關來源（core 的 `copyFileOf` 在同一格時的走法）。 */
+async function copyWithin(
+  backend: ContainedFilesystemBackend,
+  from: string,
+  to: string,
+): Promise<CopyResult> {
+  const request = { from, to };
+  const source = await backend.openCopySource(from, request);
+  if ('error' in source) return source;
+  try {
+    return await backend.copyInto(to, source, request);
+  } finally {
+    await source.close();
+  }
+}
+
 function contained(
   mode?: SandboxMode,
   atomicInternals?: AtomicWriteInternals,
-): ContainedFilesystemBackend {
-  return new ContainedFilesystemBackend({
+): { copy(from: string, to: string): Promise<CopyResult> } {
+  const backend = new ContainedFilesystemBackend({
     rootDir: root,
     ...(mode !== undefined && { mode }),
     ...(atomicInternals !== undefined && { atomicInternals }),
   });
+  return { copy: (from, to) => copyWithin(backend, from, to) };
+}
+
+function sha256Of(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 /** 目錄裡有沒有暫存目錄殘留。 */
@@ -49,13 +80,16 @@ async function stagingLeft(dir: string): Promise<string[]> {
 describe('ContainedFilesystemBackend.copy：內容', () => {
   it.each([
     ['Big5（不是合法 UTF-8）', Buffer.from([0x61, 0xb4, 0xfa, 0x0a])],
-    ['png 開頭（含 NUL）', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00])],
+    [
+      'png 開頭（含 NUL）',
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00]),
+    ],
     ['CRLF 與結尾換行', Buffer.from('甲\r\n  乙\t1\n丙\n', 'utf8')],
     ['空檔', Buffer.alloc(0)],
   ])('%s：逐位元組相同', async (_label, bytes) => {
     await writeFile(join(root, 'src.bin'), bytes);
     const result = await contained().copy('/src.bin', '/dst.bin');
-    expect(result).toEqual({ path: '/dst.bin' });
+    expect(result).toEqual({ path: '/dst.bin', bytes: bytes.length, sha256: sha256Of(bytes) });
     expect(await readFile(join(root, 'dst.bin'))).toEqual(bytes);
     expect(await readFile(join(root, 'src.bin'))).toEqual(bytes);
     expect(await stagingLeft(root)).toEqual([]);
@@ -63,7 +97,7 @@ describe('ContainedFilesystemBackend.copy：內容', () => {
 
   it('目的地的父目錄不存在就建', async () => {
     await writeFile(join(root, 'a.txt'), 'x');
-    expect(await contained().copy('/a.txt', '/deep/er/b.txt')).toEqual({ path: '/deep/er/b.txt' });
+    expect((await contained().copy('/a.txt', '/deep/er/b.txt')).path).toBe('/deep/er/b.txt');
     expect(await readFile(join(root, 'deep', 'er', 'b.txt'), 'utf8')).toBe('x');
   });
 });
@@ -73,7 +107,10 @@ describe('ContainedFilesystemBackend.copy：目的地已存在', () => {
     await writeFile(join(root, 'a.txt'), '新');
     await writeFile(join(root, 'b.txt'), '舊');
     const result = await contained().copy('/a.txt', '/b.txt');
-    expect(result).toEqual({ error: 'Cannot copy to /b.txt because it already exists', exists: true });
+    expect(result).toEqual({
+      error: 'Cannot copy to /b.txt because it already exists',
+      exists: true,
+    });
     expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('舊');
     expect(await stagingLeft(root)).toEqual([]);
   });
@@ -140,5 +177,37 @@ describe('ContainedFilesystemBackend.copy：目的地的 fence', () => {
     const result = await contained().copy('/a.txt', '/out/b.txt');
     expect(result.error).toMatch(/經符號連結解析之後落在可寫根之外/u);
     await expect(readFile(join(outside, 'b.txt'))).rejects.toThrow();
+  });
+});
+
+describe('ContainedFilesystemBackend.copy：發佈前核對', () => {
+  it.each([
+    ['位元組數不同', (temp: string) => appendFile(temp, 'extra')],
+    ['位元組數相同、內容不同', (temp: string) => writeFile(temp, 'abcX')],
+  ])('暫存檔跟讀到的來源對不上（%s）：不發佈，目的地沒出現過', async (_label, corrupt) => {
+    await writeFile(join(root, 'a.txt'), 'abcd');
+    const result = await contained(undefined, {
+      afterWrite: ({ tempPath }) => corrupt(tempPath),
+    }).copy('/a.txt', '/b.txt');
+    expect(result.error).toMatch(/^Error copying to '\/b\.txt': copy does not match the source/u);
+    await expect(readFile(join(root, 'b.txt'))).rejects.toThrow();
+    expect(await stagingLeft(root)).toEqual([]);
+  });
+
+  it('來源在開檔之後變長：不發佈，目的地沒出現過', async () => {
+    await writeFile(join(root, 'a.txt'), '開檔時的內容');
+    const backend = new ContainedFilesystemBackend({ rootDir: root });
+    const request = { from: '/a.txt', to: '/b.txt' };
+    const source = await backend.openCopySource('/a.txt', request);
+    if ('error' in source) throw new Error(source.error);
+    try {
+      await appendFile(join(root, 'a.txt'), '之後才寫進來的');
+      const result = await backend.copyInto('/b.txt', source, request);
+      expect(result.error).toMatch(/^Error copying to '\/b\.txt': source changed while copying/u);
+    } finally {
+      await source.close();
+    }
+    await expect(readFile(join(root, 'b.txt'))).rejects.toThrow();
+    expect(await stagingLeft(root)).toEqual([]);
   });
 });
