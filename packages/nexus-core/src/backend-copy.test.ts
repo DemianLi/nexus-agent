@@ -16,11 +16,13 @@ import { COPY_INTO, COPY_SOURCE, copyFileOf } from './backend-copy.js';
 import type { CopyCapable, CopyRequest, CopySource } from './backend-copy.js';
 import { ModifiedOrderCompositeBackend } from './modified-order-composite.js';
 
-/** 記憶體裡的兩半，記下每次收到的路徑與原路徑，以及交出去的串流。 */
+/** 記憶體裡的兩半，記下每次收到的路徑與原路徑，以及交出去的串流。關掉來源就毀掉串流，關早了目的地會讀不完。 */
 function bytesBackend(files: Record<string, Buffer> = {}) {
   const calls: { half: 'source' | 'into'; path: string; request: CopyRequest }[] = [];
   const opened: Readable[] = [];
-  const closed = vi.fn(async () => {});
+  const closed = vi.fn(async () => {
+    for (const stream of opened) stream.destroy();
+  });
   const backend: CopyCapable = {
     async [COPY_SOURCE](path, request) {
       calls.push({ half: 'source', path, request });
@@ -42,7 +44,7 @@ function bytesBackend(files: Record<string, Buffer> = {}) {
 
 const digest = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
 
-/** 不是 UTF-8 的位元組：經 `readRaw` 解碼再寫回就會變成 U+FFFD。 */
+/** 不是 UTF-8 的位元組：經 `readRaw` 解碼再寫回就會變成 U+FFFD（夾具路徑是 `.txt`，被判成文字）。 */
 const BYTES = Buffer.from([0xff, 0xfe, 0x00, 0x09, 0x20, 0x0a]);
 const COPIED = { bytes: BYTES.length, sha256: digest(BYTES) };
 
@@ -95,7 +97,7 @@ describe('copyFileOf 穿過組好的三層', () => {
       ...COPIED,
     });
     expect(plugin.files['/sub/out.bin']).toEqual(BYTES);
-    // 最內層的路由：前綴要穿過兩層外殼補回來，bytes 與 sha256 也要一路帶出來。這裡只驗前綴，產品的附件那一格唯讀、寫不進去。
+    // 最內層的路由：前綴在最內層補回，要原樣穿過外面兩層，其餘欄位一起帶出。
     expect(await copyFileOf(outer, '/a.txt', '/attachments/copy.bin')).toEqual({
       path: '/attachments/copy.bin',
       ...COPIED,
@@ -109,6 +111,13 @@ describe('copyFileOf 穿過組好的三層', () => {
     expect(await copyFileOf(outer, '/shared', '/plugin')).toEqual({ path: '/plugin', ...COPIED });
 
     expect(shared.calls.map((call) => call.path)).toEqual(['/']);
+    expect(plugin.calls.map((call) => call.path)).toEqual(['/']);
+  });
+
+  it('目的地是帶結尾斜線的前綴：同樣落到那一格的 /，回不帶結尾斜線的寫法', async () => {
+    const { outer, plugin } = assembled();
+
+    expect(await copyFileOf(outer, '/a.txt', '/plugin/')).toEqual({ path: '/plugin', ...COPIED });
     expect(plugin.calls.map((call) => call.path)).toEqual(['/']);
   });
 
@@ -194,5 +203,26 @@ describe('copyFileOf 穿過組好的三層', () => {
 
     await expect(copyFileOf(backend, '/shared/in.txt', '/out.txt')).rejects.toThrow('EIO');
     expect(workspace.calls).toEqual([]);
+  });
+
+  it('關掉來源時拋錯：往外的是 close 的錯，蓋掉目的地的結果與錯誤', async () => {
+    const failing = (into: CopyCapable[typeof COPY_INTO]) => ({
+      async [COPY_SOURCE]() {
+        return {
+          stream: Readable.from([BYTES]),
+          size: BYTES.length,
+          close: () => Promise.reject(new Error('EBADF')),
+        };
+      },
+      [COPY_INTO]: into,
+    });
+
+    const succeeded = failing(async (path, source) => {
+      await buffer(source.stream);
+      return { path };
+    });
+    await expect(copyFileOf(succeeded, '/a.txt', '/b.txt')).rejects.toThrow('EBADF');
+    const failed = failing(() => Promise.reject(new Error('disk full')));
+    await expect(copyFileOf(failed, '/a.txt', '/b.txt')).rejects.toThrow('EBADF');
   });
 });

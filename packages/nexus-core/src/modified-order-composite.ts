@@ -68,9 +68,9 @@ export class ModifiedOrderCompositeBackend extends CompositeBackend {
   /**
    * 基座建構時把每個子 backend 換成轉接物件（`adaptBackendProtocol`），{@link FILE_VERSION} 這類基座不認得的方法會掉。
    * 這裡記「轉接物件 → 交進來的原物件」，路由仍走基座的 `getBackendAndKey`，只在最後換回原物件。
-   * 讀的是基座私有的 `default`／`routes`。基座改了欄位名，這張表就是空的，寫前比對退回 `readRaw` 算內容雜湊，但 `read_file`
-   * 照樣回報 stat token，兩邊對不上：讀過再改一律被擋成 `FS_STALE_VERSION`（`contained-read-window.test.ts` 的驗收 2b 會紅）；
-   * 複製也一律回「不支援」（`backend-copy.test.ts` 的路由案例會紅）。
+   * 讀的是基座私有的 `default`／`routes`。基座改了 `routes` 的名字，建構時就拋；改了 `default` 的名字，落在 default 的路徑換不回原物件：
+   * 寫前比對退回 `readRaw` 算內容雜湊，但 `read_file` 照樣回報 stat token，兩邊對不上，讀過再改一律被擋成 `FS_STALE_VERSION`；
+   * 複製回「不支援」（`contained-read-window.test.ts` 的驗收 2b 與 `backend-copy.test.ts` 都會紅）。
    */
   private readonly originals = new Map<unknown, AnyBackendProtocol>();
 
@@ -146,7 +146,7 @@ export class ModifiedOrderCompositeBackend extends CompositeBackend {
 
   /**
    * 複製的目的地那一半照路由分派。子 backend 回的路徑是它自己座標系的，補回路由前綴再往上交，其餘欄位原樣帶出。
-   * 落在那一格的根（`/`）時補回的是不帶結尾斜線的前綴，跟 `getBackendAndKey` 收進來的寫法一樣。
+   * 落在那一格的根（`/`）時回不帶結尾斜線的前綴：模型給 `/plugin` 或 `/plugin/` 都回 `/plugin`。
    *
    * @param path - 這一層座標系的目的地路徑。
    * @param source - 開好的來源，可能來自另一個子 backend。

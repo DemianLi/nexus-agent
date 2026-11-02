@@ -6,8 +6,9 @@
  * 所以契約拆成兩半：來源那一半交出位元組串流（{@link COPY_SOURCE}），目的地那一半從串流建新檔（{@link COPY_INTO}）。
  * composite 兩半各自照路由往下轉，同一個子 backend 內的複製也走同一條路。
  *
- * 子 backend 少了任一半就回錯誤，**不退回 `readRaw` 加 `write`**：`readRaw` 對副檔名判成文字的檔照 UTF-8 解（非 UTF-8 的位元組變成 U+FFFD），
- * `write` 只收字串，接起來保不住原本的位元組。
+ * 子 backend 少了任一半就回錯誤，**不退回 `readRaw` 加 `write`**：`readRaw` 對副檔名判成文字的檔（含不認得的副檔名）
+ * 照 UTF-8 解，非 UTF-8 的位元組變成 U+FFFD，`write` 又只收字串，接起來保不住原本的位元組。也不退回 `downloadFiles` 加 `uploadFiles`：
+ * 整份放進記憶體，錯誤只有四個碼，說不出給模型的原因。
  *
  * 跟 `FILE_VERSION` 一樣掛在 `Symbol.for` 上：不跟基座日後的方法名撞，同一行程裡有兩份 `@nexus/core` 時仍是同一個。
  *
@@ -17,8 +18,8 @@
 import type { Readable } from 'node:stream';
 
 /**
- * 一次複製的兩條路徑，都是模型給的原路徑（最外層座標），兩半都會收到。交給模型的錯誤句與核准摘要裡的路徑用這一份；
- * 子 backend 自己座標系的路徑另外傳。
+ * 一次複製的兩條路徑，都是模型給的原路徑（最外層座標），兩半都會收到。子 backend 回給模型的句子裡用這一份路徑，
+ * 不用自己座標系的那一份（那一份另外傳）。
  */
 export interface CopyRequest {
   readonly from: string;
@@ -100,7 +101,7 @@ export async function copyIntoOf(
 
 /**
  * 把 `from` 照位元組複製到 `to`。開了來源就一定會關：目的地回錯誤或拋錯也一樣。任一半拋的錯原樣往外拋；
- * `close` 自己拋錯時蓋掉目的地的結果。
+ * `close` 自己拋錯時，往外的是 `close` 的錯，蓋掉目的地的結果或錯誤。
  *
  * @param backend - 工具實際讀寫的那個 backend（組好的最外層）。
  * @param from - 模型給的來源路徑。
