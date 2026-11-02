@@ -1,6 +1,6 @@
 # 工具 schema 目錄
 
-模型實際收到的每個工具的名稱、描述與參數 schema（共 24 個）。**這份檔案由程式產生，不要手改**：
+模型實際收到的每個工具的名稱、描述與參數 schema（共 25 個）。**這份檔案由程式產生，不要手改**：
 
 ```bash
 pnpm --filter @nexus/harness run gen-tool-catalog
@@ -363,6 +363,38 @@ Usage:
 ## 組裝點（harness）
 
 出廠組裝多綁的、不經 plugin 註冊點的工具。
+
+### `copy_file`
+
+描述：
+
+```text
+Copy an existing file to a new path byte for byte, without retyping its content. Use this instead of read_file followed by write_file when the new file should have the same content. The destination must not exist yet.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "source_path": {
+      "type": "string",
+      "description": "Path of the existing file to copy."
+    },
+    "destination_path": {
+      "type": "string",
+      "description": "Path of the new file. Must not exist yet."
+    }
+  },
+  "required": [
+    "source_path",
+    "destination_path"
+  ],
+  "additionalProperties": false
+}
+```
 
 ### `request_sandbox_escalation`
 
