@@ -121,7 +121,7 @@ import {
   SEARCH_FAILED,
   SEARCH_INVALID_PATTERN,
 } from '@nexus/core';
-import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
+import { DestinationExistsError, writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { BINARY_SAMPLE_BYTES } from './binary-read.js';
 import { canonicalize, isWithin } from './canonical-path.js';
@@ -518,7 +518,20 @@ const READ_PASSTHROUGH_CODES: ReadonlySet<string> = new Set([
 ]);
 
 /** 讀取面的圍堵擋的入口，出現在拒絕訊息裡。 */
-type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | RipgrepTool;
+type ReadOperation = 'read' | 'readRaw' | 'ls' | 'downloadFiles' | 'copy' | RipgrepTool;
+
+/** 寫入面的 fence 擋的入口，出現在拒絕訊息裡，也是升級摘要（{@link digestOf}）的一部分。 */
+type WriteOperation = 'write' | 'edit' | 'delete' | 'uploadFiles' | 'copy';
+
+/** {@link ContainedFilesystemBackend.copy} 的結果。 */
+export interface CopyResult {
+  /** 成功時：目的地的虛擬路徑（canonicalize 之後再表達回去的）。 */
+  readonly path?: string;
+  /** 失敗時交給模型的原因。 */
+  readonly error?: string;
+  /** `true`：失敗是因為目的地已經存在。 */
+  readonly exists?: boolean;
+}
 
 /** 讀取面的圍堵判完的結果：拒絕訊息，或比過根的實際位置。 */
 interface ReadScope {
@@ -816,6 +829,61 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     } catch (error: unknown) {
       noteErrno(error, false);
       return { error: `Error writing file '${checked}': ${await this.reasonFor(error)}` };
+    }
+  }
+
+  /**
+   * 照位元組複製一個檔到還不存在的路徑（`copy_file`，[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）。內容不經模型、不解碼，
+   * 二進位與非 UTF-8 的檔都原樣複製。
+   *
+   * 來源照 {@link read}：先過讀取面的圍堵（{@link readScope}），開比過根的那個實際位置，`O_RDONLY|O_NOFOLLOW`，不是一般檔就拒。
+   * 目的地照 {@link write}：先過 fence（核准與升級跟 `write_file` 同一條路，摘要帶來源路徑），在逐目標鎖裡 `lstat`，已經存在就拒，
+   * 再經暫存檔用 hard link 發佈（{@link writeFileAtomic} 的 `createIfAbsent`），鎖外同時建出來的那一份也不會被蓋掉。
+   * 內容從來源串流進暫存檔，不整份放進記憶體。
+   *
+   * @param sourcePath - 來源的虛擬路徑。
+   * @param destinationPath - 目的地的虛擬路徑。
+   * @returns 成功時是目的地的虛擬路徑；失敗時是錯誤結果，`exists` 表示目的地已經存在。
+   */
+  async copy(sourcePath: string, destinationPath: string): Promise<CopyResult> {
+    let source: FileHandle;
+    try {
+      const scope = await this.readScope(sourcePath, 'copy');
+      if (scope.denial !== undefined) return denied({ error: scope.denial });
+      const target = scope.realTarget ?? this.resolveVirtual(sourcePath);
+      if (!(await stat(target)).isFile()) {
+        noteFsError(FS_NOT_REGULAR_FILE);
+        return { error: `Error copying '${sourcePath}': not a regular file` };
+      }
+      source = await open(target, constants.O_RDONLY | constants.O_NOFOLLOW);
+    } catch (error: unknown) {
+      noteErrno(error, true);
+      return { error: `Error copying '${sourcePath}': ${await this.reasonFor(error)}` };
+    }
+    try {
+      const checked = await this.checkedPath(destinationPath, 'copy', [sourcePath]);
+      if (typeof checked !== 'string') return denied(checked);
+      const exists = { error: `Cannot copy to ${checked} because it already exists`, exists: true };
+      try {
+        const resolved = this.resolveVirtual(checked);
+        return await withTargetLock(await canonicalize(resolved), async () => {
+          if ((await lstat(resolved).catch(() => undefined)) !== undefined) return exists;
+          await writeFileAtomic(
+            resolved,
+            source.createReadStream({ start: 0, autoClose: false }),
+            undefined,
+            this.atomicInternals,
+            { createIfAbsent: true },
+          );
+          return { path: checked };
+        });
+      } catch (error: unknown) {
+        if (error instanceof DestinationExistsError) return exists;
+        noteErrno(error, false);
+        return { error: `Error copying to '${checked}': ${await this.reasonFor(error)}` };
+      }
+    } finally {
+      await source.close();
     }
   }
 
@@ -1348,7 +1416,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   private async checkedPath(
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
     payload: readonly unknown[],
   ): Promise<string | { error: string }> {
     // **一次呼叫解析一次**：底下有 `await`，來源在那之間變了的話，判斷與拒絕訊息就會
@@ -1402,7 +1470,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private async verdict(
     mode: SandboxMode,
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
   ): Promise<string | { error: string }> {
     if (mode === 'danger-full-access') return filePath;
     if (mode === 'read-only') {
@@ -1464,7 +1532,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private async reservedDenial(
     mode: SandboxMode,
     filePath: string,
-    operation: 'write' | 'edit' | 'delete' | 'uploadFiles',
+    operation: WriteOperation,
   ): Promise<string | undefined> {
     const reason = await this.reservedReason(filePath);
     return reason === undefined ? undefined : this.denial(mode, operation, filePath, reason);

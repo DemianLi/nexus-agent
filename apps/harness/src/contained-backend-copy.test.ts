@@ -1,0 +1,144 @@
+/**
+ * `ContainedFilesystemBackend.copy`（[#2289](https://github.com/DemianLi/nexus-agent/issues/2289)）：照位元組複製到還不存在的路徑。
+ *
+ * 驗內容逐位元組相同（非 UTF-8、二進位、CRLF 與結尾換行）、目的地已存在就拒且不動它（含符號連結、暫存期間才出現的）、
+ * 來源與目的地各自過讀取面與寫入面的圍堵。每一條都看磁碟，不只看回傳值。
+ */
+
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import type { AtomicWriteInternals } from './atomic-workspace-write.js';
+import { ContainedFilesystemBackend } from './contained-backend.js';
+import type { SandboxMode } from './contained-backend.js';
+
+let base: string;
+let root: string;
+let outside: string;
+
+beforeEach(async () => {
+  base = await mkdtemp(join(tmpdir(), 'nexus-copy-'));
+  root = join(base, 'root');
+  outside = join(base, 'outside');
+  await mkdir(root);
+  await mkdir(outside);
+});
+
+afterEach(async () => {
+  await rm(base, { recursive: true, force: true });
+});
+
+function contained(
+  mode?: SandboxMode,
+  atomicInternals?: AtomicWriteInternals,
+): ContainedFilesystemBackend {
+  return new ContainedFilesystemBackend({
+    rootDir: root,
+    ...(mode !== undefined && { mode }),
+    ...(atomicInternals !== undefined && { atomicInternals }),
+  });
+}
+
+/** 目錄裡有沒有暫存目錄殘留。 */
+async function stagingLeft(dir: string): Promise<string[]> {
+  return (await readdir(dir)).filter((name) => name.endsWith('.tmpdir'));
+}
+
+describe('ContainedFilesystemBackend.copy：內容', () => {
+  it.each([
+    ['Big5（不是合法 UTF-8）', Buffer.from([0x61, 0xb4, 0xfa, 0x0a])],
+    ['png 開頭（含 NUL）', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00])],
+    ['CRLF 與結尾換行', Buffer.from('甲\r\n  乙\t1\n丙\n', 'utf8')],
+    ['空檔', Buffer.alloc(0)],
+  ])('%s：逐位元組相同', async (_label, bytes) => {
+    await writeFile(join(root, 'src.bin'), bytes);
+    const result = await contained().copy('/src.bin', '/dst.bin');
+    expect(result).toEqual({ path: '/dst.bin' });
+    expect(await readFile(join(root, 'dst.bin'))).toEqual(bytes);
+    expect(await readFile(join(root, 'src.bin'))).toEqual(bytes);
+    expect(await stagingLeft(root)).toEqual([]);
+  });
+
+  it('目的地的父目錄不存在就建', async () => {
+    await writeFile(join(root, 'a.txt'), 'x');
+    expect(await contained().copy('/a.txt', '/deep/er/b.txt')).toEqual({ path: '/deep/er/b.txt' });
+    expect(await readFile(join(root, 'deep', 'er', 'b.txt'), 'utf8')).toBe('x');
+  });
+});
+
+describe('ContainedFilesystemBackend.copy：目的地已存在', () => {
+  it('一般檔：拒絕，原檔不動', async () => {
+    await writeFile(join(root, 'a.txt'), '新');
+    await writeFile(join(root, 'b.txt'), '舊');
+    const result = await contained().copy('/a.txt', '/b.txt');
+    expect(result).toEqual({ error: 'Cannot copy to /b.txt because it already exists', exists: true });
+    expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('舊');
+    expect(await stagingLeft(root)).toEqual([]);
+  });
+
+  it('指到根外的符號連結：拒絕，連結與它指的檔都不動', async () => {
+    await writeFile(join(root, 'a.txt'), '新');
+    await writeFile(join(outside, 'secret.txt'), '舊');
+    await symlink(join(outside, 'secret.txt'), join(root, 'link.txt'));
+    const result = await contained('danger-full-access').copy('/a.txt', '/link.txt');
+    expect(result.exists).toBe(true);
+    expect(await readFile(join(outside, 'secret.txt'), 'utf8')).toBe('舊');
+  });
+
+  it('鎖外在暫存期間建出來的：發佈時拒絕，那一份保得住', async () => {
+    await writeFile(join(root, 'a.txt'), '新');
+    const result = await contained(undefined, {
+      afterWrite: async () => {
+        await writeFile(join(root, 'b.txt'), '同時建的');
+      },
+    }).copy('/a.txt', '/b.txt');
+    expect(result.exists).toBe(true);
+    expect(await readFile(join(root, 'b.txt'), 'utf8')).toBe('同時建的');
+    expect(await stagingLeft(root)).toEqual([]);
+  });
+});
+
+describe('ContainedFilesystemBackend.copy：來源', () => {
+  it('不存在：回錯誤，不建目的地', async () => {
+    const result = await contained().copy('/nope.txt', '/b.txt');
+    expect(result.error).toMatch(/^Error copying '\/nope\.txt': ENOENT/u);
+    expect(result.error).not.toContain(root);
+    await expect(readFile(join(root, 'b.txt'))).rejects.toThrow();
+  });
+
+  it('是目錄：拒絕', async () => {
+    await mkdir(join(root, 'dir'));
+    expect(await contained().copy('/dir', '/b.txt')).toEqual({
+      error: "Error copying '/dir': not a regular file",
+    });
+  });
+
+  it('經符號連結落在根外：讀取面的圍堵拒絕，不建目的地', async () => {
+    await writeFile(join(outside, 'secret.txt'), 'key');
+    await symlink(join(outside, 'secret.txt'), join(root, 'leak.txt'));
+    const result = await contained().copy('/leak.txt', '/b.txt');
+    expect(result.error).toMatch(/^\[containment\] 拒絕 copy "\/leak\.txt"/u);
+    await expect(readFile(join(root, 'b.txt'))).rejects.toThrow();
+  });
+});
+
+describe('ContainedFilesystemBackend.copy：目的地的 fence', () => {
+  it('read-only：拒絕，訊息同 write 的形狀', async () => {
+    await writeFile(join(root, 'a.txt'), 'x');
+    const result = await contained('read-only').copy('/a.txt', '/b.txt');
+    expect(result.error).toBe(
+      '[containment] 拒絕 copy "/b.txt"：這個 backend 是唯讀的（mode: read-only）',
+    );
+    await expect(readFile(join(root, 'b.txt'))).rejects.toThrow();
+  });
+
+  it('經符號連結的父目錄落在根外：拒絕', async () => {
+    await writeFile(join(root, 'a.txt'), 'x');
+    await symlink(outside, join(root, 'out'));
+    const result = await contained().copy('/a.txt', '/out/b.txt');
+    expect(result.error).toMatch(/經符號連結解析之後落在可寫根之外/u);
+    await expect(readFile(join(outside, 'b.txt'))).rejects.toThrow();
+  });
+});
