@@ -3477,6 +3477,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         threadTitleLimits,
         thread.pump.projectionUnits,
         thread.pump.projectionChildren(),
+        { projections: thread.pump.projectionValues, legacy: thread.pump.legacyLog() },
       );
     } catch (error: unknown) {
       if (error instanceof HistoryQueryError) {
