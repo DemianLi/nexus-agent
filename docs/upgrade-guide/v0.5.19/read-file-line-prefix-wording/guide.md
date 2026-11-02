@@ -11,7 +11,7 @@ v0.5.19 的 `read_file` 描述寫行號後面是「two spaces」，並只說編�
 
 新版（[#2286](https://github.com/DemianLi/nexus-agent/issues/2286)）：描述改成行號後面是 tab，並寫明行號與 tab 不是檔案內容，不要放進 `write_file` 的 `content`、`edit_file` 的 `old_string` 或 `new_string`。`read_file` 的輸出形狀沒有變，舊會話日誌不受影響。
 
-**這是提示，不是防線。** 模型仍可能把前綴寫進檔案，寫入時沒有檢查。
+**這只是描述更正，模型照抄檔案不保證逐字。** 寫入時沒有檢查，模型仍可能把前綴寫進檔案，也可能弄丟開頭空白。出廠預設模型複製一份 8 行檔，更正前後各 5 次都沒有一次逐字相符，沒有量到改善。根因追在 [#2289](https://github.com/DemianLi/nexus-agent/issues/2289)。
 
 受影響的：逐字比對工具描述的外部工具；依工具定義算提示快取或 token 基準的部署（這一句變長，第一次請求不會命中舊快取）。
 

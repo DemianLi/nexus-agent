@@ -134,8 +134,8 @@ const READ_BETWEEN =
   '- Results are returned with line numbers starting at `offset` + 1 (1 by default), ';
 
 /**
- * 描述不同的工具：自有組裝那邊換上去的是哪一句、基座（`createDeepAgent`）那邊的原句、為什麼不同。
- * `restore` 把自有那邊換上去的句子換回基座的原句；換回之後兩邊要逐位元組相同。
+ * 描述不同的工具：自有組裝那邊換上去的是哪一段、基座（`createDeepAgent`）那邊的原文、為什麼不同。
+ * `restore` 把自有那邊換上去的那段換回基座的原文；換回之後兩邊要逐位元組相同。
  */
 const DESCRIPTION_EXCEPTIONS: Readonly<
   Record<

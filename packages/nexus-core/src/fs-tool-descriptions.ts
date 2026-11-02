@@ -12,6 +12,7 @@
  *
  * **講行號的那一句也換**（[#2286](https://github.com/DemianLi/nexus-agent/issues/2286)）：基座寫行號後面是「two spaces」、實際是 tab（`formatContentWithLineNumbers`，
  * `dist/langsmith-zm0ILQsV.js:155`），「Never include …」也只講 `when editing`，`write_file` 帶著前綴不會出錯，只會靜靜把檔案寫壞。
+ * 這只是描述更正：寫入時沒有檢查，模型照抄不保證逐字，根因追在 [#2289](https://github.com/DemianLi/nexus-agent/issues/2289)。
  *
  * **`write_file`／`edit_file` 的描述不換。** 先讀後改的規則照 dsh 寫在系統提示詞的 section（`observation.ts` 的 {@link observationGuidance}），
  * 不是工具描述；dsh 的工具描述只有一句 UTF-8 文字檔的說明。

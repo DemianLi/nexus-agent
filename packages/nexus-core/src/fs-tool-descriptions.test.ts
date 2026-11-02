@@ -1,10 +1,10 @@
 /**
- * `read_file` 描述的換法（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：看 middleware 在不在，換基座原文裡的**一句**。
+ * `read_file` 描述的換法（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）：看 middleware 在不在，換基座原文裡指定的片段。
  * 掛進整個 agent、模型實際收到什麼，在 `apps/harness/src/observation.test.ts`、`read-limits-openai.test.ts` 與 `assembly-parity.test.ts`。
  */
 
 import { createFilesystemMiddleware } from 'deepagents';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { filesystemToolDescriptions } from './fs-tool-descriptions.js';
 import { SEARCH_DESCRIPTIONS_MIDDLEWARE_NAME } from './search-descriptions.js';
@@ -62,6 +62,25 @@ describe('filesystemToolDescriptions', () => {
     expect(read).toContain('`edit_file` old_string or new_string');
     expect(read).not.toContain('two spaces');
     expect(read).not.toContain('when editing');
+  });
+
+  it('基座講行號的那一句改了就拋，不會悄悄兩套說法並存（#2286）', async () => {
+    vi.resetModules();
+    vi.doMock('deepagents', async (original) => ({
+      ...(await original<typeof import('deepagents')>()),
+      createFilesystemMiddleware: () => ({
+        tools: [{ name: 'read_file', description: 'By default, it reads up to 100 lines' }],
+      }),
+    }));
+    try {
+      const fresh = await import('./fs-tool-descriptions.js');
+      expect(() =>
+        fresh.filesystemToolDescriptions([{ name: READ_CONTINUATION_MIDDLEWARE_NAME }]),
+      ).toThrow('找不到「then two spaces');
+    } finally {
+      vi.doUnmock('deepagents');
+      vi.resetModules();
+    }
   });
 
   it('真的交給 createFilesystemMiddleware，建出來的工具就是換過的描述（拿掉 customToolDescriptions 這條就紅）', () => {
