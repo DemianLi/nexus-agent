@@ -2535,7 +2535,6 @@ async function resumeSite(
     read = {
       header,
       storedFormatVersion,
-      // 凍一次、標成可共用：接成 pump 的 seed 時不再逐顆拷、凍（#2117）。
       events: shareStoredEvents(events),
       bodyOffset,
       validBytes,

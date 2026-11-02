@@ -1,6 +1,6 @@
 /**
- * 可共用的 seed（[#2117](https://github.com/DemianLi/nexus-agent/issues/2117)）：`shareStoredEvents` 交出的陣列，`SessionLog` 照驗
- * 不照拷；沒標過的照舊逐顆拷、凍。標記跟著陣列，不跟著事件：複製一份就退回拷的那條路。
+ * 可共用的 seed（[#2117](https://github.com/DemianLi/nexus-agent/issues/2117)）：`shareStoredEvents` 交出的陣列，`SessionLog` 驗信封
+ * 與 `seq`、不拷；沒標過的逐顆拷、凍。標記跟著陣列，不跟著事件：複製一份就退回拷的那條路。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -8,15 +8,12 @@ import { describe, expect, it } from 'vitest';
 import { appendSharedEvents, SessionLog, shareStoredEvents } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 
-const COMMAND = { commandId: 'c', name: 'plan', source: { kind: 'user' } } as const;
-
 /** 從 JSON 解出來的樣子：純物件，沒凍。 */
 function decoded(count: number): SessionEvent[] {
-  const log = new SessionLog('source');
-  for (let index = 0; index < count; index += 1) {
-    log.append('command/run', { ...COMMAND, commandId: `c${String(index)}` });
-  }
-  return JSON.parse(JSON.stringify(log.events)) as SessionEvent[];
+  const lines = Array.from({ length: count }, (_, seq) =>
+    JSON.stringify({ type: 'model/usage', seq, time: 1, data: {} }),
+  );
+  return lines.map((line) => JSON.parse(line) as SessionEvent);
 }
 
 describe('shareStoredEvents', () => {
@@ -55,7 +52,7 @@ describe('shareStoredEvents', () => {
   it('不拷也照驗：信封不對照拋', () => {
     const [event] = decoded(1);
     const bad = shareStoredEvents([{ ...event!, time: 'later' } as unknown as SessionEvent]);
-    expect(() => new SessionLog('t', { seed: bad })).toThrow();
+    expect(() => new SessionLog('t', { seed: bad })).toThrow(/seed 第 0 顆/u);
   });
 });
 
@@ -70,11 +67,11 @@ describe('appendSharedEvents', () => {
     expect(log.events[1]).toBe(extra);
   });
 
-  it('前面那份沒標過就整份凍、照樣可共用', () => {
+  it('前面那份沒標過就是普通的串接：不凍，當 seed 時照拷', () => {
     const plain = decoded(2);
     const joined = appendSharedEvents(plain.slice(0, 1), plain.slice(1));
-    expect(Object.isFrozen(plain[0]!.data)).toBe(true);
+    expect(Object.isFrozen(plain[0]!.data)).toBe(false);
     const log = new SessionLog('t', { seed: joined });
-    expect(log.events[0]).toBe(plain[0]);
+    expect(log.events[0]).not.toBe(plain[0]);
   });
 });

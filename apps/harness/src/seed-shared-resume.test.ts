@@ -1,7 +1,7 @@
 /**
- * **續接交出的事件接成 seed 時不再逐顆拷**（[#2117](https://github.com/DemianLi/nexus-agent/issues/2117)）：store 解出來就凍一次、
- * 標成可共用（`shareStoredEvents`），`SessionLog` 照驗不照拷。大日誌的 seed 逐顆深拷、再凍一次，是打開一條 thread 時最長的
- * 那一段同步工作。
+ * **續接交出的事件接成 seed 時不拷**（[#2117](https://github.com/DemianLi/nexus-agent/issues/2117)）：store 解出來就凍一次、
+ * 標成可共用（`shareStoredEvents`），`SessionLog` 驗信封、資料規則與 `seq`，不拷不凍。大日誌逐顆深拷、凍是打開 thread 時的
+ * 長同步段（#2117 量測：s230 上 4.6 秒）。
  *
  * 釘的是物件身分：日誌裡的事件就是 store 交出的那一個。三條讀法（新讀、冷讀快取命中、舊兩檔遷移）加上補收尾各一條。
  */

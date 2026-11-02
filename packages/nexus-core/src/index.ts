@@ -815,7 +815,6 @@ export {
   SessionLog,
   SessionLogOffset,
   SessionSeq,
-  appendSharedEvents,
   shareStoredEvents,
   snapshotJsonValue,
   validateSessionEventData,

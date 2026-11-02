@@ -250,7 +250,8 @@ export async function readColdSession(
  *
  * @param store - 存放處。
  * @param id - 要續接的會話 id。
- * @returns 同 {@link SessionStore.resume}，`events` 多了補結。
+ * @returns 同 {@link SessionStore.resume}，`events` 多了補結。`resume` 交的是可共用的陣列（{@link shareStoredEvents}）時，
+ *   交回的也是，補結原地凍住。
  * @throws `store.resume` 拋的，或補結寫不進去。
  */
 export async function resumeClosingInterruptedTurn(
