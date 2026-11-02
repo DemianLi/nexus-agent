@@ -665,6 +665,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   /**
    * 交給這個 backend 一份 `permissions` 規則（fold 出來的那份）。經符號連結解開之後的位置跟給的路徑不同時，讀取面
    * （{@link readScope}）與變更（{@link checkedPath}）拿它再比一次，命中就拒（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）。
+   * 複製的兩半另外拿它比模型給的原路徑（{@link openCopySource}、{@link copyInto}）：`copy_file` 不是基座的工具，沒有人替它先比。
    * 規則要 fold 完才有，所以不在建構期給。不分模式：`danger-full-access` 也擋，同基座的 deny。
    *
    * @param rules - 規則表，形狀同基座的 `permissions`。
@@ -922,13 +923,15 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 開比過根的那個實際位置，`O_RDONLY|O_NOFOLLOW`，不是一般檔就拒。內容不解碼，二進位與非 UTF-8 的檔原樣交出。
    *
    * @param sourcePath - 這個 backend 座標系裡的來源路徑。
-   * @param request - 模型給的兩條原路徑，用在錯誤句。
+   * @param request - 模型給的兩條原路徑：`permissions` 規則比 `from`（讀），錯誤句也用它。
    * @returns 開好的來源，或錯誤結果。
    */
   async openCopySource(
     sourcePath: string,
     request: CopyRequest,
   ): Promise<CopySource | { error: string }> {
+    const ruled = permissionDenial(this.permissionRules, 'read', request.from);
+    if (ruled !== undefined) return { error: ruled };
     try {
       const scope = await this.readScope(sourcePath, 'copy');
       if (scope.denial !== undefined) return denied({ error: scope.denial });
@@ -958,7 +961,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * @param destinationPath - 這個 backend 座標系裡的目的地路徑。
    * @param source - {@link openCopySource} 開好的來源；這裡不關它。
-   * @param request - 模型給的兩條原路徑。
+   * @param request - 模型給的兩條原路徑：`permissions` 規則比 `to`（寫），`from` 進核准摘要，錯誤句用它們。
    * @returns 成功時是目的地的虛擬路徑、位元組數與 sha256；失敗時是錯誤結果，`exists` 表示目的地已經存在。
    */
   async copyInto(
@@ -966,6 +969,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     source: CopySource,
     request: CopyRequest,
   ): Promise<CopyResult> {
+    const ruled = permissionDenial(this.permissionRules, 'write', request.to);
+    if (ruled !== undefined) return { error: ruled };
     const checked = await this.checkedPath(destinationPath, 'copy', [request.from]);
     if (typeof checked !== 'string') return denied(checked);
     const exists = {

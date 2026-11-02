@@ -211,3 +211,28 @@ describe('ContainedFilesystemBackend.copy：發佈前核對', () => {
     expect(await stagingLeft(root)).toEqual([]);
   });
 });
+
+describe('ContainedFilesystemBackend.copy：permissions 規則比模型給的路徑', () => {
+  function ruled(): ContainedFilesystemBackend {
+    const backend = new ContainedFilesystemBackend({ rootDir: root });
+    backend.usePermissions([
+      { operations: ['read', 'write'], paths: ['/secret/**'], mode: 'deny' },
+    ]);
+    return backend;
+  }
+
+  it('來源被擋：不開檔、不建目的地', async () => {
+    await mkdir(join(root, 'secret'));
+    await writeFile(join(root, 'secret', 'key.txt'), 'KEY');
+    const result = await copyWithin(ruled(), '/secret/key.txt', '/out.txt');
+    expect(result).toEqual({ error: 'permission denied for read on /secret/key.txt' });
+    await expect(readFile(join(root, 'out.txt'))).rejects.toThrow();
+  });
+
+  it('目的地被擋：不建檔', async () => {
+    await writeFile(join(root, 'a.txt'), 'x');
+    const result = await copyWithin(ruled(), '/a.txt', '/secret/new.txt');
+    expect(result).toEqual({ error: 'permission denied for write on /secret/new.txt' });
+    await expect(readFile(join(root, 'secret', 'new.txt'))).rejects.toThrow();
+  });
+});
