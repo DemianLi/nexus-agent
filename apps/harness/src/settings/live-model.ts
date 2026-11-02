@@ -111,7 +111,7 @@
  * 欄位，形狀與逐欄的差異在 `model-catalog.ts` 的檔頭。
  *
  * - **`modelId` 必須在 `models` 裡**，不在就是載入期失敗，訊息指名 id（那一列的名字由 `startupSetting` 加上）。
- *   換 `modelId` 之前，先確認新那一筆的 `maxTokens` 吃得下：這顆預設模型是拿「吃不吃得下 16384」當淘汰門檻選出來的，
+ *   換 `modelId` 之前，先確認新那一筆的 `maxTokens` 吃得下：預設那顆量過吃得下 16384，
  *   吃不下的模型會每一次呼叫都失敗，沒有任何測試會紅。
  * - **`models` 是整份替換。** patch 只想改預設那一筆的 `maxTokens` 也要把整筆（連 `reasoningEfforts` 與 `compat`）
  *   重述，沒重述的欄位不會回到出貨值。

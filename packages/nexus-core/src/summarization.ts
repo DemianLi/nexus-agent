@@ -271,7 +271,7 @@ export function windowThreshold(limits: ModelContextLimits): number {
  * ## 與 dsh 的偏離（登記）
  *
  * - **配置的絕對值留著當上限，只往下夾。** dsh 的門檻只由窗口導出（沒有絕對值）。我們的 `100_000` 是量出來的（見
- *   {@link DEFAULT_SUMMARIZATION}：最小那顆 131,007 塞得進、預設那顆 700k 偏保守），拿掉它預設模型的摘要時機會從 10 萬跳到 56 萬，
+ *   {@link DEFAULT_SUMMARIZATION}：最小那顆 131,007 塞得進、預設那顆 784k 偏保守），拿掉它預設模型的摘要時機會從 10 萬跳到約 63 萬，
  *   是另一個行為決定。所以窗口只負責「更小的窗口不會來不及」，**預設模型與 131k 級的模型門檻不變**。
  * - **沒有型錄的模型不夾**：dsh 對解不出窗口的目標會 warn 一次然後不壓縮（`TargetPressureConfigError`，`index.ts:163-170`）；我們用
  *   配置的絕對門檻接住它，所以 `limits` 是 `undefined` 時原樣回。
@@ -466,13 +466,14 @@ export interface SummarizationSettings {
  * `thresholdRatio` 0.8。當時真實窗口在我們這棵樹裡取不到（`gpt-oss` 在整個
  * `node_modules/.pnpm/` 零命中），所以那一句寫的是「未經實測」。
  *
- * **現在兩顆都量到了，而它們差五倍以上**（[#165](https://github.com/DemianLi/nexus-agent/issues/165)，
+ * **現在都量到了，最大最小差五倍以上**（[#165](https://github.com/DemianLi/nexus-agent/issues/165)，
  * 做法見 `apps/harness/src/live-model.ts` 的 `DEFAULT_LIVE_MODEL_ID` 檔頭）：
  *
  * | 模型 | 量到的窗口 | `100_000` 佔它 |
  * | --- | --- | --- |
  * | `openai/gpt-oss-20b` | **131,007** | 76% |
- * | `nvidia/nemotron-3-super-120b-a12b`（今天的預設） | **≥ 700,045** | 14% |
+ * | `nvidia/nemotron-3-super-120b-a12b` | **≥ 700,045** | 14% |
+ * | `nvidia/nemotron-3.5-lightning-30b-a3b`（今天的預設） | **≥ 784,369** | 13% |
  *
  * **值不改，但理由換了。** 它不再是「假設 128k 取八成」，而是「量過的最小那一顆是
  * 131,007，而 100,000 塞得進去」。塞得進去的餘裕有多少要扣掉輸出：那條路恆定送
@@ -480,8 +481,8 @@ export interface SummarizationSettings {
  * 而 100,000 離它只有 **14,623** 的餘裕。這是量過的最緊的一格，不是全部——**窗口是逐顆
  * 的性質，不是端點的性質**，同一個端點上這兩顆差五倍。換模型要重量一次。
  *
- * **反過來，對今天的預設模型它是很保守的**：700k 的窗口上 100,000 是 1/7，所以一場長任務
- * 會在還剩六分之五空間時就摘要，而每摘一次就往 backend 寫一份原文。這不是錯的（方向是
+ * **反過來，對今天的預設模型它是很保守的**：784k 的窗口上 100,000 約 1/8，所以一場長任務
+ * 會在還剩約八分之七空間時就摘要，而每摘一次就往 backend 寫一份原文。這不是錯的（方向是
  * 安全的那一邊），但也不是**為它**挑的。要收緊得先讓窗口變成逐顆的設定而不是一個常數，
  * 那是另一張工——在那之前，這個數字守的是最小的那一顆。
  *

@@ -65,64 +65,59 @@ export const DEFAULT_LIVE_BASE_URL = 'https://integrate.api.nvidia.com/v1';
 /**
  * NVIDIA 閘道上的預設模型 id。
  *
- * ## 這是量出來的，不是挑出來的
+ * ## 這顆是指定的，不是盤點選出來的
  *
- * **2026-09-04 重選**（[#165](https://github.com/DemianLi/nexus-agent/issues/165)）。
- * 上一個 `openai/gpt-oss-120b` **下架了** —— 410、`end of life on 2026-09-03T08:00:00Z`，
- * 型錄上也沒有它了。所以它不是被比下去的，是**不能再打了**；重選是被迫的。
+ * 由 [#1974](https://github.com/DemianLi/nexus-agent/issues/1974)（#1827 D126）指定，不走盤點與決選：
+ * `nvidia/nemotron-3-super-120b-a12b` 已下架，這把 key 回 `404 Not found for account`。
  *
- * 重選照原本的方法走兩步。**第一步是盤點**（方法在 [`eval/tiers.ts`](./eval/tiers.ts) 檔頭）：
- * `GET /models` 列 **81** 個，逐一送一個帶 `tools` 的請求，回得出 `finish_reason: tool_calls`
- * 的只有 **9** 個（前一輪是 16 個，四個舊成員現在三次探測全逾時）。這一輪多加一道**免費的
- * 硬門檻**：吃不吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS} —— 我們每一次呼叫都送它，輸出上限比它
- * 小的模型會**每一次**都失敗，而入場探測用的 512 看不出這件事。
- *
- * **第二步是決選四個跑基準任務**（七題 × 3 次 = 84 次執行，零限流、零 `rejected`）：
+ * 它在 2026-09-04 的決選（[#165](https://github.com/DemianLi/nexus-agent/issues/165)，七題 × 3 次）裡是這一行：
  *
  * | | 難題 arg | 七題 arg | 多叫 | token | 秒 | 評到分 |
  * | --- | --- | --- | --- | --- | --- | --- |
  * | `google/gemma-4-31b-it` | 0.93 | 0.97 | 0.57 | 7639 | 17.5 | 21/21 |
- * | `nvidia/nemotron-3.5-lightning-30b-a3b` | 0.93 | 0.97 | 1.33 | 13530 | 38.4 | 21/21 |
- * | **這一個** | **0.98** | **0.99** | **0.29** | 10661 | **8.0** | 21/21 |
- * | `openai/gpt-oss-20b` | 0.92 | 0.96 | 0.45 | **7076** | 17.1 | 20/21 |
+ * | **這一個** | 0.93 | 0.97 | 1.33 | 13530 | 38.4 | 21/21 |
+ * | `nvidia/nemotron-3-super-120b-a12b` | 0.98 | 0.99 | 0.29 | 10661 | 8.0 | 21/21 |
+ * | `openai/gpt-oss-20b` | 0.92 | 0.96 | 0.45 | 7076 | 17.1 | 20/21 |
  *
- * **跟 2026-08-28 那次不同：品質這次沒有打平。** 上一次五階的參數正確性擠在 0.88–0.98，
- * 選型因此落回成本、延遲、失敗模式；這一次難題上是 **0.98 對 0.92–0.93**，而同一個候選**順帶**
- * 拿下延遲（8.0 秒，快一倍）與多叫次數（0.29）。**它唯一輸的是 token**：10661 比最省的
- * `gpt-oss-20b` 多五成。四軸拿三軸，而且贏的那三軸包含品質——所以這次不必在軸之間權衡。
+ * **它比 `nemotron-3-super-120b-a12b` 慢，也比較會多叫**。逾時與摘要門檻對這顆的量測（2026-11-02）：
+ *
+ * | 串流請求 | 首事件 | 段間最大間隔 | 全程 |
+ * | --- | --- | --- | --- |
+ * | 32 token 的中文問答 | 0.4 秒 | 1.0 秒 | 9.6 秒 |
+ * | 100,029 token（摘要門檻的大小） | 4.1 秒 | 0.5 秒 | 16.2 秒 |
+ *
+ * - {@link DEFAULT_LIVE_TIMEOUT_MS} 180 秒、{@link DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS} 90 秒都遠大於上表。
+ * - `turn-timeout` 30 分鐘：32 token 那題非串流量到過 58.2 秒，乘上 serve 一輪最多 23 次模型呼叫約 22 分鐘，蓋得過；這只是單次量到的最慢值。
+ * - 摘要門檻是絕對值 `tokens: 100_000`，約佔這顆窗口 1/8，塞得下。
  *
  * ## 窗口是量到的，而且大得離譜
  *
- * **≥ 700,045 token**（2026-09-04）。判準不是「沒回錯」——那分不出截斷：把一個唯一暗號放在
- * 提示詞**最前面**、再塞 140 萬個字、最後要求它唸回來，它唸對了，`usage.prompt_tokens` 也
- * 一路線性到 700,045。所以**不是截斷，是真的讀到了**。
+ * **≥ 784,369 token**（2026-11-02）。判準不是「沒回錯」——那分不出截斷：把一個唯一暗號放在提示詞**最前面**、再塞 400 萬
+ * 個字元、最後要求它唸回來，推理裡唸對了，`usage.prompt_tokens` 從 392,212 線性到 784,369，連同 `max_tokens` 16384
+ * 都收。所以**不是截斷，是真的讀到了**。那兩次答案都只在推理裡、正文是空的；`serve` 實跑與一般問答正文都有。
+ * 端點自己講的上限是 100 萬（1,098,060 token 回 `400 maximum context length is 1000000 tokens`），這段沒有唸回來量過，型錄記的是唸得回來的下限。
  *
- * 對照組 `openai/gpt-oss-20b` 在同一天量到的是 **131,007**（128K 扣掉約 65 個 template
+ * 對照組 `openai/gpt-oss-20b` 在 2026-09-04 量到的是 **131,007**（128K 扣掉約 65 個 template
  * overhead），做法是反解那個導出來的負 `max_tokens`（見 {@link isDerivedContextOverflow}）。
  * 同一個端點上兩顆模型差五倍以上——**窗口不能從端點推得，只能逐顆量**。
  *
  * **直接後果**：這一顆身上**逼不出上下文溢出**。`DEFAULT_SUMMARIZATION` 的 `tokens: 100_000`
- * 在 700k 的窗口上是 1/7，摘要會遠遠早於任何溢出發生。{@link isDerivedContextOverflow} 因此
+ * 在這個窗口上約 1/8，摘要會遠遠早於任何溢出發生。{@link isDerivedContextOverflow} 因此
  * 對**預設路徑**是備而不用的——它仍然要留著，因為 eval 會把 `gpt-oss-20b` 那一階逐一傳進
  * {@link createLiveModel}，而那一顆 131,007 就滿了。
  *
  * ## 邊界
  *
- * 它是「這把 key 上量得到的最划算的那個」，不是「這是最好的模型」。**候選集合綁在帳號上，
- * 也綁在時間上**：81 / 26 / 9 這三個數字在六天內從 84 / 29 / 14 走到這裡，成員也換過。
- *
- * **而 9 沒有過 [#85](https://github.com/DemianLi/nexus-agent/issues/85) 的十個門檻。**
- * 那張卡寫的退路是「停下來、回報數字、提醒 demian」，決定權在他 —— #165 因此**沒有**動
- * `survey.ts` 的候選清單，也沒有自己去接第二個端點。完整盤點見
- * [`.docs/model-inventory.md`](../../../.docs/model-inventory.md)。
+ * **候選集合綁在帳號上，也綁在時間上**：`GET /models` 列得出來不代表叫得動，同一把 key 幾輪盤點成員就換過。
+ * 盤點方法與 2026-09-04 的完整結果見 [`.docs/model-inventory.md`](../../../.docs/model-inventory.md)。
  *
  * 這是**預設**的 id：`cli:live` / `serve:live` 走 `live-model` 那一列（出貨值與它相同），
  * `spike:live` 直接吃 schema 預設，eval 的尺寸比較則把各道階梯的 id 逐一傳進 {@link createLiveModel}。
  *
- * **換它之前**：這顆是拿「吃不吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}」當淘汰門檻選出來的，
+ * **換它之前**：新的那顆要先量過吃得下 {@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，
  * 兩個是綁著的（`settings/live-model.ts` 的檔頭）。
  */
-export const DEFAULT_LIVE_MODEL_ID = 'nvidia/nemotron-3-super-120b-a12b';
+export const DEFAULT_LIVE_MODEL_ID = 'nvidia/nemotron-3.5-lightning-30b-a3b';
 
 /** 環境變數名。刻意不叫 `OPENAI_API_KEY`（`@langchain/openai` 的預設），免得這把 key 是誰的變模糊。 */
 export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
@@ -213,19 +208,26 @@ export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
  *
  * - `contextWindow`：見 {@link DEFAULT_LIVE_MODEL_ID} 的「窗口是量到的」，記的是量過的**下限**。
  * - `maxTokens`：{@link DEFAULT_LIVE_MAX_OUTPUT_TOKENS}，這顆每一次請求送出去的 `max_tokens`。
- * - `input`：只有文字。這顆收不收圖沒有量過，先不宣告收圖（#731 量 gemma 那一筆時一起看）。
+ * - `input`：只有文字。這顆收不收圖沒有量過，不宣告收圖。
  * - `reasoningEfforts` 與 `compat`：關推理的寫法，從原本的 `thinkingOffBody` 搬進來（#650）。**只宣告 `off` 與 `default`
  *   兩級**：這顆開著推理時有沒有分級沒在實際端點量過，`default` 是「不送任何東西、用模型自己的預設」，沒有線上的寫法要送。
- *   `enable_thinking` 那一格寫成 `thinking.enabled` 的佔位符，`off` 那一級把它解成 `false`。寫法照
- *   {@link DEFAULT_LIVE_MODEL_ID} 在 build.nvidia.com 的 model card（「Reasoning OFF」那段）。
+ *   `enable_thinking` 那一格寫成 `thinking.enabled` 的佔位符，`off` 那一級把它解成 `false`。寫法的出處見下面
+ *   「關推理的寫法是量出來的」。
+ * - `tokenizer`：數字逐位切詞，量法見下面。
  *
  * ## 關推理的寫法是量出來的
  *
- * 2026-09-26，預設模型、NVIDIA 閘道、非串流，送 dsh 逐字的標題請求（`maxOutputTokens: 64`），三句輸入各兩次：
+ * 2026-11-02，這顆、NVIDIA 閘道、非串流，標題形狀的請求（`maxOutputTokens: 64`）：
  *
- * - **不帶**：0/6。全部 `finish_reason: length`、64 個 token 用滿，推理 157～293 字，而且整段也出現在正文裡。
- * - **帶這一份**：6/6。全部 `stop`、推理 0、輸出 2～23 個 token。
- * - model card 另一個寫法 `low_effort: true`：3/5，有兩次照樣吃光。
+ * - **不帶**：0/1。`finish_reason: length`、64 個 token 全是推理、正文空。
+ * - **帶這一份**：2/2。`stop`、推理 0、輸出 9～10 個 token。
+ *
+ * 這格的寫法出自 `nemotron-3-super-120b-a12b` 的 model card（「Reasoning OFF」那段），那顆量到不帶 0/6、帶 6/6。
+ *
+ * ## 數字逐位切詞是量出來的
+ *
+ * 2026-11-02：6000 位隨機數字的 `prompt_tokens` 是 6019，比 `say ok` 的 18 多 6001，一位一個 token，所以條目宣告
+ * `tokenizer.digits: 'single'`。
  *
  * ## 它跟這一筆的 id 是綁著的
  *
@@ -241,7 +243,7 @@ export const DEFAULT_LIVE_MAX_OUTPUT_TOKENS = 16_384;
  */
 export const DEFAULT_LIVE_MODEL_ENTRY: ModelEntry = Object.freeze({
   id: DEFAULT_LIVE_MODEL_ID,
-  contextWindow: 700_045,
+  contextWindow: 784_369,
   maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
   input: Object.freeze(['text' as const]) as ModelEntry['input'],
   reasoningEfforts: Object.freeze({ off: null, default: 'default' }),
@@ -280,13 +282,12 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  *
  * ## 它對**預設模型**是備而不用的，而那不是拔掉它的理由
  *
- * 2026-09-04 換掉預設之後（見 {@link DEFAULT_LIVE_MODEL_ID}），這條路在預設模型上**逼不出來** ——
- * `nvidia/nemotron-3-super-120b-a12b` 吃到 700,045 token 都還是 `200`。留著是因為它守的不是
+ * 這條路在預設模型上**逼不出來**（見 {@link DEFAULT_LIVE_MODEL_ID}）——
+ * `nvidia/nemotron-3-super-120b-a12b` 吃到 700,045 token 都還是 `200`，今天的預設吃到 784,369 token 也是。留著是因為它守的不是
  * 預設那一條路：eval 把 `openai/gpt-oss-20b` 逐一傳進 {@link createLiveModel}，而那一顆
  * **131,007 就滿了**，滿了就是這個 body。**換一顆預設就換一個窗口**，而這個判別式跟預設是誰無關。
  *
- * **現況（#1437 M2，2026-10-14）：預設模型超過窗口時，端點回的是另一種 body，不是這一種。** 對
- * `nvidia/nemotron-3-super-120b-a12b` 送約 157 萬 token 的請求，端點回 `400`，信封是
+ * **現況（#1437 M2，2026-10-14）：`nvidia/nemotron-3-super-120b-a12b` 超過窗口時，端點回的是另一種 body，不是這一種。** 對它送約 157 萬 token 的請求，端點回 `400`，信封是
  * `This model's maximum context length is 1000000 tokens. However, your messages resulted in 1579695 tokens…`，
  * 沒有 `param`、也沒有導出的負 `max_tokens`——所以**這個判別式對它一個都不中**；它命中的是
  * `@langchain/openai` 自己的四個溢出字串之一（`maximum context length`），被包成 `ContextOverflowError`，

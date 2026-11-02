@@ -218,8 +218,8 @@ describe('live-model 的 schema', () => {
     // 字面值，不是讀常數：常數改掉的話兩邊一起動，這一條就量不到它。
     const [entry] = liveModelConfigSchema.parse({}).models;
     expect(entry).toEqual({
-      id: 'nvidia/nemotron-3-super-120b-a12b',
-      contextWindow: 700_045,
+      id: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+      contextWindow: 784_369,
       maxTokens: 16_384,
       input: ['text'],
       reasoningEfforts: { off: null, default: 'default' },
@@ -270,11 +270,11 @@ describe('live-model 的 schema', () => {
 
   it('modelId 必須在 models 裡，不在就失敗，訊息指名那個 id 與型錄有什麼', () => {
     expect(() => liveModelConfigSchema.parse({ modelId: 'nexus-test/not-in-catalog' })).toThrow(
-      /nexus-test\/not-in-catalog.*nvidia\/nemotron-3-super-120b-a12b/su,
+      /nexus-test\/not-in-catalog.*nvidia\/nemotron-3\.5-lightning-30b-a3b/su,
     );
     // 型錄整份取代：換掉 models 卻沒留預設那一筆，預設的 modelId 就指到型錄外。
     expect(() => liveModelConfigSchema.parse({ models: [{ ...OVERRIDE_ENTRY }] })).toThrow(
-      /nvidia\/nemotron-3-super-120b-a12b/u,
+      /nvidia\/nemotron-3\.5-lightning-30b-a3b/u,
     );
     expect(
       liveModelConfigSchema.parse({ modelId: OVERRIDE_ENTRY.id, models: [OVERRIDE_ENTRY] }).modelId,
