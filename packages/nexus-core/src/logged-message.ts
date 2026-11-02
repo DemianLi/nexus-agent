@@ -239,19 +239,15 @@ export function readLoggedMessage(logged: LoggedMessage): BaseMessage {
 
 /**
  * 推回這一則時，建構子會不會從字串解析出日誌裡沒有的新值：`AIMessage` 在沒有 `tool_calls` 時解析
- * `additional_kwargs.tool_calls` 的參數字串（舊格式），`AIMessageChunk` 收攏 `tool_call_chunks` 時也解析。解析出來的值
- * 可能比整顆事件還深，從事件的層數推不出它的上限。
+ * `additional_kwargs.tool_calls` 的參數字串（舊格式）。解析出來的值可能比整顆事件還深，從事件的層數推不出它的上限。
+ * 推回時建的一律是 `AIMessage`（`mapStoredMessagesToChatMessages`），`tool_call_chunks` 不會被解析。
  *
  * @param logged - 日誌裡記的那一則。
  */
 export function parsesLoggedToolCalls(logged: LoggedMessage): boolean {
   const data = logged.data as Record<string, unknown>;
   const kwargs = data.additional_kwargs as Record<string, unknown> | undefined;
-  const chunks = data.tool_call_chunks;
-  return (
-    (data.tool_calls === undefined && kwargs?.tool_calls != null) ||
-    (Array.isArray(chunks) && chunks.length > 0)
-  );
+  return data.tool_calls === undefined && kwargs?.tool_calls != null;
 }
 
 /**

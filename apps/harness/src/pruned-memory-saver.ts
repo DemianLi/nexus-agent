@@ -113,8 +113,9 @@ function deepFreeze(root: unknown): void {
 const depthVouched = new WeakSet<object>();
 
 /**
- * 登記一則訊息寫進存檔點一定不超過上限，`seal` 就不再量它。只給推得出上限的呼叫端：續接時從日誌記下的層數推
- * （`conversation-restore.ts`）。登記的是這個物件本身，換成副本（例如 {@link withWritableLastAi}）就照舊量。
+ * 登記一則訊息寫進存檔點一定不超過上限，`seal` 就不量它。只給推得出上限的呼叫端（續接時從日誌記下的層數推，
+ * `conversation-restore.ts`）；登記之後到 `seal` 之前，呼叫端不能讓它變深。登記的是這個物件本身，換成副本
+ * （例如 {@link withWritableLastAi}）就照常量。
  *
  * @param message - 要交進 graph state 的那一則。
  */

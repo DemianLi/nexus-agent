@@ -2152,7 +2152,7 @@ export function appendSharedEvents(
   return joined;
 }
 
-/** {@link shareStoredEvents}／{@link appendSharedEvents} 凍過的每一顆事件，`data` 巢狀幾層。 */
+/** {@link shareStoredEvents}／{@link appendSharedEvents} 凍過的每一顆事件的層數，見 {@link storedEventDepth}。 */
 const storedEventDepths = new WeakMap<SessionEvent, number>();
 
 /**

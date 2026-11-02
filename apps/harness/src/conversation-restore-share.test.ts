@@ -201,7 +201,7 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     expect(storedEventDepth(plain(text)[0]!)).toBeUndefined();
   });
 
-  it('上限一半那麼深的事件：四種日誌訊息推出來的，寫進存檔點只比事件深 3 層以內', () => {
+  it('上限一半那麼深的事件：回覆、工具結果、插話推出來的，寫進存檔點只比事件深 3 層以內', () => {
     const half = SESSION_EVENT_MAX_DEPTH / 2;
     // 每一則都在最深的那個欄位放一顆帶 `lc` 鍵的物件：`toJSON` 會把它多包一層 `__lc_escaped__`。
     const deep = (room: number): unknown => ({ lc: 1, v: nested(room) });

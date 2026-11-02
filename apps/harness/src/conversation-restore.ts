@@ -209,20 +209,20 @@ export function toolResultAsSeen(message: ToolMessage): ToolMessage {
 /* 灌回去                                                                        */
 /* -------------------------------------------------------------------------- */
 //
-// 推回的訊息巢狀的值與日誌共用（`shareStored`），不深拷：第一次存檔時 `seal` 本來就把整串深凍，拷出來的那份只在
-// 「推回 → 第一次存檔」這一段可寫，而這一段（都在 `updateState` 之內）沒有人就地改巢狀的值。日誌那份是凍的，有人改就當場拋。
+// 讀盤共用過的事件（`storedEventDepth` 有值）推回時，巢狀的值與日誌共用（`shareStored`）。日誌那份整張深凍：下游就地改巢狀的值
+// 當場拋，改不到日誌。推回到第一次存檔之間只換訊息頂層的欄位（`stampImageOrigin` 換 `additional_kwargs`，reducer 補 `id`），
+// 不碰共用的值；第一次存檔時 `seal` 把訊息本身也凍起來。
 //
-// 層數同理不再量第二次：讀盤時記下了每顆事件的層數（`storedEventDepth`），夠淺的就登記給 `seal`（`vouchCheckpointDepth`）。
+// 這類事件讀盤時記下了層數；夠淺、建構子也不從字串解析新值的，推出的訊息登記給 `seal`（`vouchCheckpointDepth`），`seal` 不量。
 
 /**
- * 事件不超過這個層數，推出來的訊息寫進存檔點就一定在上限內，`seal` 不必再量。
+ * 事件不超過這個層數、建構子也不從字串解析新值（`parsesLoggedToolCalls`）的，推出來的訊息寫進存檔點一定在上限內，`seal` 不必量。
  *
- * 推回的訊息裡，從日誌共用來的值在存檔點裡只比在事件裡深固定幾層：日誌訊息的欄位深 `CHECKPOINT_WRAPPER_DEPTH` 層
- * （`checkpoint-serde.ts`；四種事件都把訊息放在 `data` 底下同一層），`turn/start` 的附件包進內容區塊也只多固定幾層；
- * `toJSON` 的跳脫（帶 `lc` 鍵的物件包一層 `__lc_escaped__`，包了就不再往下）最多再多 1 層；建構子（`tool_call` 區塊、
- * v1 的 `contentBlocks`）與 {@link toolResultAsSeen} 在外面只包固定幾層。
- * 取上限的一半，留下的餘裕遠大於這幾層。建構子從字串解析出來的值不在此列（`parsesLoggedToolCalls`），照舊量；
- * 比這深的事件（上限之前寫下的舊日誌）也照舊量。
+ * 推出來的訊息在存檔點裡只比事件深固定幾層：日誌訊息的欄位在存檔點裡比在事件裡深 `CHECKPOINT_WRAPPER_DEPTH` 層
+ * （`checkpoint-serde.ts`；四種事件都把訊息放在 `data` 底下同一層）；`turn/start` 的附件包進內容區塊多固定幾層；
+ * `toJSON` 的跳脫（帶 `lc` 鍵的物件包一層 `__lc_escaped__`，包住的那顆裡面不再跳脫）最多多 1 層；建構子（`tool_call` 區塊、
+ * v1 的 `contentBlocks`）與 {@link toolResultAsSeen} 在外面只包固定幾層。取上限的一半，餘裕遠大於這幾層。
+ * 比這深的事件，與建構子會從字串解析的，`seal` 照常量。
  */
 const VOUCHED_EVENT_DEPTH = SESSION_EVENT_MAX_DEPTH / 2;
 
@@ -256,7 +256,8 @@ function depthBounded(event: SessionEvent): boolean {
  * @returns 推的結果，給入口披露用。
  * @throws `updateState` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
  *   [#1658](https://github.com/DemianLi/nexus-agent/issues/1658)）時換成一顆帶 `seq` 的：最深的那一則出自日誌哪一顆事件。
- *   那一則不截斷、不改寫——上限出現之前寫下的舊日誌才會有，要人看過再決定怎麼辦。
+ *   那一則不截斷、不改寫，要人看過再決定怎麼辦：上限之前寫下的舊日誌、剛好貼著上限又帶 `lc` 鍵（跳脫多一層）、
+ *   或舊格式 `additional_kwargs.tool_calls` 解析出來太深的，都會走到這裡。
  */
 export async function restoreConversation(
   agent: RestorableAgent,
