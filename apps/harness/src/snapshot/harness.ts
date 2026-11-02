@@ -7,7 +7,7 @@
  * - **正規化在比對時做**：時間歸零，隨機的識別碼依首次出現換成記號，
  *   主機路徑換成 `/{{cwd}}`／`{{src}}`。錄的時候只換路徑（夾具進版控，不放主機路徑），時間與識別碼照錄。
  *
- * 錄製見 `record.ts`，重放見 `snapshot.test.ts`。**web 那條（[#1602](https://github.com/DemianLi/nexus-agent/issues/1602)）的入口是
+ * 錄製見 `record.ts`，不打端點的寫回見 `refresh.ts`，重放見 `snapshot.test.ts`。**web 那條（[#1602](https://github.com/DemianLi/nexus-agent/issues/1602)）的入口是
  * {@link startReplayServe}**：給一份夾具目錄，起一台吐那份回覆的 serve。
  *
  * ## 界限
@@ -25,12 +25,18 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { generationLogFilename, parseGenerationLogFilename } from '@nexus/core';
 import type { LoggedMessage, SessionEvent, StoredSessionHeader } from '@nexus/core';
 import { uniformDecisions } from '@nexus/wire';
 import type { ConversationState, WireClient } from '@nexus/wire';
 
-import { TIME_CONTEXT_OFF_PATCH_ROWS, approvalAt, foldTurn } from '../fixtures.js';
-import { parseJsonlSessionBody, projectKey, readSessionEntryById } from '../jsonl-session-store.js';
+import { TIME_CONTEXT_OFF_PATCH_ROWS, approvalAt, foldTurn, serveClient } from '../fixtures.js';
+import {
+  parseJsonlSessionBody,
+  projectKey,
+  readSessionEntryById,
+  sessionPathsIn,
+} from '../jsonl-session-store.js';
 import { replayScriptFromEvents } from '../llm-replay.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
@@ -116,6 +122,9 @@ export const SNAPSHOT_COMMON_ROWS = `${TIME_CONTEXT_OFF_PATCH_ROWS}- id: thread-
   disabled: true
 `;
 
+/** 重放時真模型那一列的上游：本機 discard 埠，沒人聽，連線當場被拒。 */
+export const UNREACHABLE_UPSTREAM = 'http://127.0.0.1:9/v1';
+
 /**
  * 重放用的 patch：`insert` 重放提供者、把選擇列指過去，提供者自報的型號與系統提示詞的型號都寫死成錄的那一個。
  *
@@ -123,6 +132,9 @@ export const SNAPSHOT_COMMON_ROWS = `${TIME_CONTEXT_OFF_PATCH_ROWS}- id: thread-
  * `systemPromptVariables`）。不寫死的話重放的提示詞跟錄的差一個字，`request/system` 與 `context/measure` 的量都對不上。
  * 這一列的 patch 整份取代 config，三格照出貨值寫出來（`cordis.yml` 的 `system-prompt`）。提供者也報錄的型號：估算照型錄認模型，
  * 錄的那顆宣告數字逐位切詞的話，報別的名字 `context/measure` 的工具那一格就少算。
+ *
+ * **真模型那一列的上游指到 {@link UNREACHABLE_UPSTREAM}**：重放不帶 `--live`，不會建真模型；萬一帶上了（改壞或突變），
+ * 請求也只會撞上本機沒人聽的埠，送不到外網。
  *
  * @param script - 腳本（夾具的 `assistant/message`）。
  * @param modelId - 錄的型號。
@@ -140,6 +152,9 @@ export function replayPatchText(
 - id: agent-default-model
   config:
     provider: replay
+- id: live-model
+  config:
+    baseUrl: '${UNREACHABLE_UPSTREAM}'
 - id: system-prompt
   config:
     includeHarnessIdentity: true
@@ -370,4 +385,173 @@ export function scriptAlignmentProblem(events: readonly SessionEvent[]): string 
   return calls === replies
     ? undefined
     : `模型呼叫 ${String(calls)} 次（model/start），回覆卻落了 ${String(replies)} 則（assistant/message）：照位置重放會錯位`;
+}
+
+/**
+ * 夾具裡不該有的：金鑰、授權標頭、請求 id，與供應商錯誤本文裡的帳號（NVIDIA 的 404 帶 `for account '…'`）。
+ * 刻意寬：誤中由人看，漏掉的進了版控就收不回來。錄製寫入前核一次（`record.ts`），已提交的夾具由 `fixtures-secret.test.ts` 掃。
+ */
+export const SECRET_LIKE = /Bearer|api[_-]?key|nvapi-|authorization|x-request-id|for account/iu;
+
+/**
+ * header 裡正規化不比、重放又寫不出錄製那份的格子：refresh 留舊夾具的值。`modelEntryId` 只有帶 `--live` 才寫，重放給不出來。
+ * `version` 不在裡面：寫回的是這一版格式的世代檔，版本照重放的寫。
+ */
+const HEADER_KEPT = ['createdAt', 'build', 'configHash', 'modelEntryId'] as const;
+
+/** 只有真模型那條寫得出內容的事件格子：refresh 照同型事件的第幾筆從舊夾具搬回來。 */
+function liveOnlyField(type: unknown): string | undefined {
+  if (type === 'request/header') return 'header';
+  if (type === 'model/start') return 'route';
+  return undefined;
+}
+
+/** 每跑一次都會變的識別碼（{@link normalizeSnapshotLog} 換成記號的那幾格）。 */
+function copyVolatileIds(fresh: Record<string, unknown>, kept: Record<string, unknown>): void {
+  const data = fresh['data'] as Record<string, unknown> | undefined;
+  const old = kept['data'] as Record<string, unknown> | undefined;
+  if (data === undefined || old === undefined) return;
+  switch (fresh['type']) {
+    case 'inbox/spliced': {
+      const inserted = data['inserted'] as { id: string }[] | undefined;
+      const before = old['inserted'] as { id: string }[] | undefined;
+      if (inserted?.length === before?.length)
+        inserted?.forEach((item, index) => (item.id = before![index]!.id));
+      break;
+    }
+    case 'interrupt/raised':
+      data['interruptId'] = old['interruptId'];
+      break;
+    case 'approval/asked':
+    case 'approval/decided':
+      data['id'] = old['id'];
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * **refresh 寫回的夾具**：事件與 header 的內容以重放剛落盤的那份（`fresh`）為準；只有重放給不出來、或每跑一次都會變的格子
+ * 從舊夾具（`existing`）搬回來，所以兩份格式版本相同、夾具沒漂移時，不改任何一個位元組。
+ *
+ * - header：{@link HEADER_KEPT} 留舊的；外掛清單拿掉重放提供者那一列。
+ * - `request/header` 的內容與 `model/start` 的路由：照同型事件的第幾筆搬回。
+ * - 時間與隨機識別碼：只有兩份的事件種類逐筆對得上才搬回；對不上（產品多了或少了一顆事件）就留重放的值，正規化本來就不比。
+ *
+ * 兩份都要先換過主機路徑（{@link replaceHostPaths}）。
+ *
+ * @param existing - 已提交的夾具原文。
+ * @param fresh - 重放落盤的原文。
+ * @returns 要寫回的原文。
+ * @throws 任一份是空的；兩份的 `request/header` 或 `model/start` 筆數不同：模型呼叫次數變了，腳本跟呼叫對不上，
+ *   要用 `record.ts` 重錄。
+ */
+export function refreshFixtureText(existing: string, fresh: string): string {
+  const parse = (text: string): Record<string, unknown>[] =>
+    text
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const [oldHeader, ...oldEvents] = parse(existing);
+  const [newHeader, ...newEvents] = parse(fresh);
+  if (oldHeader === undefined || newHeader === undefined) throw new Error('夾具或重放的日誌是空的');
+
+  const header: Record<string, unknown> = {};
+  for (const key of Object.keys(oldHeader)) {
+    if (key in newHeader || (HEADER_KEPT as readonly string[]).includes(key))
+      header[key] = oldHeader[key];
+  }
+  for (const [key, value] of Object.entries(newHeader)) {
+    if (!(HEADER_KEPT as readonly string[]).includes(key)) header[key] = value;
+  }
+  if (Array.isArray(header['plugins'])) {
+    header['plugins'] = (header['plugins'] as { name?: unknown }[]).filter(
+      (row) => row.name !== REPLAY_ROW_NAME,
+    );
+  }
+
+  const byType = (events: Record<string, unknown>[], type: string) =>
+    events.filter((event) => event['type'] === type);
+  for (const type of ['request/header', 'model/start']) {
+    const before = byType(oldEvents, type);
+    const after = byType(newEvents, type);
+    if (before.length !== after.length) {
+      throw new Error(
+        `${type} 錄了 ${String(before.length)} 筆、重放落了 ${String(after.length)} 筆：模型呼叫次數變了，要用 record.ts 重錄`,
+      );
+    }
+    const field = liveOnlyField(type)!;
+    after.forEach((event, index) => {
+      const data = event['data'] as Record<string, unknown>;
+      const kept = (before[index]!['data'] as Record<string, unknown>)[field];
+      if (kept === undefined) delete data[field];
+      else data[field] = kept;
+    });
+  }
+
+  const aligned =
+    oldEvents.length === newEvents.length &&
+    oldEvents.every((event, index) => event['type'] === newEvents[index]!['type']);
+  if (aligned) {
+    newEvents.forEach((event, index) => {
+      const kept = oldEvents[index]!;
+      event['time'] = kept['time'];
+      copyVolatileIds(event, kept);
+    });
+  }
+  return [header, ...newEvents].map((line) => `${JSON.stringify(line)}\n`).join('');
+}
+
+/**
+ * 夾具那份世代檔的路徑：會話目錄裡最高的世代，同讀方的挑法（`jsonl-session-store.ts` 的 `locateSession`）。格式升版之後
+ * 夾具還是舊版本的檔名，不能用 `sessionPathsIn` 算（那是這一版寫的名字）。
+ */
+async function fixtureLogPath(dir: string): Promise<string> {
+  const { sessionDirectory } = sessionPathsIn(dir, SNAPSHOT_THREAD_ID);
+  const versions = (await readdir(sessionDirectory))
+    .map(parseGenerationLogFilename)
+    .filter((version) => version !== undefined);
+  if (versions.length === 0) throw new Error(`${sessionDirectory} 裡沒有世代檔`);
+  return join(sessionDirectory, generationLogFilename(Math.max(...versions)));
+}
+
+/**
+ * **refresh 一個場景**：用已提交夾具的回覆重放，把夾具寫成這一版產品落盤的樣子（{@link refreshFixtureText}），寫成這一版格式的
+ * 世代檔；格式升過版的話，舊版本的那份刪掉（一個場景只留一份夾具）。不帶 `--live`、不讀金鑰、不打端點；`recorded.json` 不動。
+ * 產品改了落盤形狀（多一顆事件、欄位改名、格式升版）而模型呼叫不變時用它，不必重錄。
+ *
+ * @param scenario - 場景（{@link loadScenario}）。
+ * @returns 夾具有沒有變。
+ * @throws 重放的位置對不上（{@link scriptAlignmentProblem}）、回覆數跟夾具不同，或模型呼叫次數變了：要重錄；
+ *   `input.json` 的核准答案用完（{@link driveScenario}）。
+ */
+export async function refreshScenario(scenario: Scenario): Promise<boolean> {
+  const fixturePath = await fixtureLogPath(scenario.dir);
+  const targetPath = sessionPathsIn(scenario.dir, SNAPSHOT_THREAD_ID).log;
+  const existing = await readFile(fixturePath, 'utf8');
+  const fixture = await readSnapshotLog(scenario.dir, SNAPSHOT_THREAD_ID);
+  const replay = await startReplayServe(scenario);
+  try {
+    await driveScenario(await serveClient(replay.running), scenario.input);
+    await replay.stop();
+    const { events } = await readSnapshotLog(replay.sessionDir, SNAPSHOT_THREAD_ID);
+    const problem = scriptAlignmentProblem(events);
+    if (problem !== undefined) throw new Error(`${scenario.name}：${problem}`);
+    const replies = (log: readonly SessionEvent[]) =>
+      log.filter((event) => event.type === 'assistant/message').length;
+    if (replies(events) !== replies(fixture.events)) {
+      throw new Error(
+        `${scenario.name}：夾具有 ${String(replies(fixture.events))} 則回覆、重放只落了 ${String(replies(events))} 則：要用 record.ts 重錄`,
+      );
+    }
+    const fresh = await readFile(sessionPathsIn(replay.sessionDir, SNAPSHOT_THREAD_ID).log, 'utf8');
+    const next = refreshFixtureText(existing, replaceHostPaths(fresh, process.cwd()));
+    if (next === existing && fixturePath === targetPath) return false;
+    await writeFile(targetPath, next, 'utf8');
+    if (fixturePath !== targetPath) await rm(fixturePath);
+    return true;
+  } finally {
+    await replay.close();
+  }
 }
