@@ -68,7 +68,9 @@ describe('子代理選模型的政策在 serve 上', () => {
 
     const events = await logOf(root, 'alpha');
     expect(policies(events)).toEqual([
-      expect.objectContaining({ data: { allowedModels: ['nvidia/nemotron-3.5-lightning-30b-a3b'] } }),
+      expect.objectContaining({
+        data: { allowedModels: ['nvidia/nemotron-3.5-lightning-30b-a3b'] },
+      }),
     ]);
     expect(events.findIndex((event) => event.type === POLICY)).toBeLessThan(
       events.findIndex((event) => event.type === 'turn/start'),
