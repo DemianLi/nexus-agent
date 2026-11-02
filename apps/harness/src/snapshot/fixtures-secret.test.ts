@@ -1,5 +1,5 @@
 /**
- * **已提交的快照夾具不帶金鑰與標頭**（[#1556](https://github.com/DemianLi/nexus-agent/issues/1556) C077）：用錄製寫入前核的同一個
+ * **已提交的快照夾具不帶金鑰、授權標頭與帳號**（[#1556](https://github.com/DemianLi/nexus-agent/issues/1556) C077）：用錄製寫入前核的同一個
  * {@link SECRET_LIKE} 掃 `scenarios/**` 的每一個檔。錄製那一關只看它自己寫的；這一條守的是之後手改或 refresh 寫回的。
  */
 
@@ -16,7 +16,9 @@ describe('已提交的快照夾具', () => {
       .filter((entry) => entry.isFile())
       .map((entry) => join(entry.parentPath, entry.name));
     // 每個場景至少有輸入、錄製紀錄與夾具三個檔：目錄讀錯時 `files` 是空的，整條照樣綠。
-    expect(files.length).toBeGreaterThanOrEqual((await listScenarios()).length * 3);
+    const scenarios = await listScenarios();
+    expect(scenarios.length).toBeGreaterThan(0);
+    expect(files.length).toBeGreaterThanOrEqual(scenarios.length * 3);
     const hits: string[] = [];
     for (const file of files) {
       for (const [index, line] of (await readFile(file, 'utf8')).split('\n').entries()) {
