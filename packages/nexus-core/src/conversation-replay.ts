@@ -88,9 +88,10 @@ import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 
 import { fromLoggedMessage, readLoggedMessage } from './logged-message.js';
+import type { LoggedMessage } from './logged-message.js';
 import { stampImageOrigin } from './image-offload.js';
 import { humanMessageForTurnStart } from './message-source.js';
-import { isModelVisibleEvent } from './session-log.js';
+import { isModelVisibleEvent, storedEventDepth } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolFeedback } from './tool-events.js';
 import {
@@ -184,6 +185,12 @@ export interface ReplayOptions {
    * 給判斷是不是舊日誌的讀者（`apps/harness` 的 `isLegacyLog`）。回傳串或 {@link origin} 交出的訊息要留下來、交給 graph state 或模型的，不能開。
    */
   readonly readOnly?: boolean;
+  /**
+   * 讀盤共用過的事件（{@link storedEventDepth} 有值，整張深凍過）改用 {@link readLoggedMessage} 推，巢狀的值與日誌共用、不深拷；
+   * 其餘的事件照舊拷。推出來的可以交給 graph state：下游就地改巢狀的值會當場拋，不會改到日誌。給續接灌回 graph state 的讀者
+   * （`apps/harness` 的 `restoreConversation`）。
+   */
+  readonly shareStored?: boolean;
 }
 
 /** 一則回覆要了、還在等結果的那一批。 */
@@ -272,7 +279,11 @@ export function replayConversation(
     // 切點是 state 的座標，空的助手訊息要等切完才濾（檔頭）。
     raw = raw.filter((message) => !isEmptyAssistant(message));
   };
-  const read = options.readOnly === true ? readLoggedMessage : fromLoggedMessage;
+  const read = (logged: LoggedMessage, event: SessionEvent): BaseMessage =>
+    options.readOnly === true ||
+    (options.shareStored === true && storedEventDepth(event) !== undefined)
+      ? readLoggedMessage(logged)
+      : fromLoggedMessage(logged);
   const asSeen = (message: BaseMessage): BaseMessage =>
     options.toolResultAsSeen !== undefined && ToolMessage.isInstance(message)
       ? options.toolResultAsSeen(message)
@@ -298,7 +309,7 @@ export function replayConversation(
         case 'assistant/message': {
           replied = true;
           if (turn !== undefined) turn.replied = true;
-          const message = from(read(event.data.message), event);
+          const message = from(read(event.data.message, event), event);
           const calls = requestedCalls(message);
           push(message);
           if (calls.length > 0) batch = { calls, results: new Map(), started: new Set() };
@@ -308,7 +319,7 @@ export function replayConversation(
           if (event.data.message === undefined) {
             return { kind: 'unreplayable', reason: 'result-missing', seq: event.seq };
           }
-          const message = from(asSeen(read(event.data.message)), event);
+          const message = from(asSeen(read(event.data.message, event)), event);
           if (batch?.calls.some((call) => call.id === event.data.callId) === true) {
             batch.results.set(event.data.callId, [message]);
           } else {
@@ -317,7 +328,7 @@ export function replayConversation(
           break;
         }
         case 'user/message': {
-          const message = from(read(event.data.message), event);
+          const message = from(read(event.data.message, event), event);
           const { source } = event.data;
           // 緊跟在一顆結果後面、而且是那顆工具注入的：跟著那顆結果走。其餘的（repeat-reminder 的提醒、人插的話）
           // 在那一批之後。人插的話（#710）不屬於任何一顆工具，連比對都不比。
@@ -341,7 +352,7 @@ export function replayConversation(
           if (raw.length + pendingCount() !== expected || cutoffIndex > messagesBefore) {
             return { kind: 'unreplayable', reason: 'compaction-misaligned', seq: event.seq };
           }
-          summary = { message: from(read(logged), event), cutoff: cutoffIndex };
+          summary = { message: from(read(logged, event), event), cutoff: cutoffIndex };
           break;
         }
         default:
