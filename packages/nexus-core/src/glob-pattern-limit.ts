@@ -4,9 +4,13 @@
  *
  * ## 為什麼要量
  *
- * 基座的工作區 `glob` 走 `fast-glob`（`deepagents@1.13.1`，`dist/src-C9o7b5C6.js:1035-1083`），比對之前會先做
- * 大括號展開，展開出幾個 pattern 由 pattern 本身決定。所以交給 backend 之前，用一次線性、非遞迴的掃描算出深度與
- * 展開數的上界。
+ * 基座的 `FilesystemBackend.glob` 走 `fast-glob`（`deepagents@1.13.1`，`dist/src-C9o7b5C6.js:1035-1083`），比對之前
+ * 先用 `braces` 做大括號展開，展開出幾個 pattern 由 pattern 本身決定：`{1..900}{1..900}` 是 81 萬個，128 MB 的 heap
+ * 撐不住、行程直接 OOM（[GHSA-55j4-x52c-xx23](https://github.com/DemianLi/nexus-agent/security/advisories/GHSA-55j4-x52c-xx23)）。
+ * 所以交給 backend 之前，用一次線性、非遞迴的掃描算出深度與展開數的上界。
+ *
+ * 出廠的兩條路徑都不經這段展開：有工作區時 `ContainedFilesystemBackend` 起 rg，沒有時 `StateBackend` 用 `micromatch` 逐檔
+ * 比對。會走到 `fast-glob` 的是插件用 `backend.mount()` 掛上的 `FilesystemBackend` 這類實作。
  *
  * ## 上界怎麼算（對 `braces@3.0.3` 的 `lib/parse.js` 與 `lib/expand.js`）
  *
