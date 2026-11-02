@@ -78,10 +78,10 @@ const OWNERS_CAP = 2000;
 
 /**
  * 歸屬表每塊最多幾筆。相鄰兩塊裝得下就併，所以任兩塊相鄰的筆數和都超過這個數，塊數不超過
- * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一筆只複製塊清單與它碰到的塊，成本跟著塊數與這個數走，
- * 不跟著整張表的筆數。
+ * `2 * OWNERS_CAP / OWNERS_CHUNK + 1`。記一批只複製一次塊清單與它碰到的塊（最後一塊一批只拷一次），
+ * 成本跟著塊數與這個數走，不跟著整張表的筆數。
  */
-const OWNERS_CHUNK = 128;
+const OWNERS_CHUNK = 32;
 
 /**
  * 一輪被單輪上限摺掉的東西的累計。**計數要含它們**（`callCount`／`toolCount`…不能因為摺掉而變小），所以摺掉的當下就把
@@ -453,7 +453,7 @@ function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectorySt
 
 /**
  * 工具表：把幾塊照傳入順序接成新的一塊。用無原型的物件：V8 讓它一開始就走字典模式，不必替每個不同的 id
- * 長一份隱藏類別。這張表每記一筆都換塊，打開長日誌時分配取樣裡 `noteOwners` 佔最大宗（量測 #2205：單獨折
+ * 長一份隱藏類別。這張表每記一批都換塊，打開長日誌時分配取樣裡 `noteOwners` 佔最大宗（量測 #2205：單獨折
  * s100 夾具，RSS 增量 +24 MiB，用一般物件是 +755 MiB）。
  */
 function ownerChunk(
@@ -511,6 +511,8 @@ function noteOwners(owners: OwnerTable, ids: readonly string[], owner: number | 
   if (ids.length === 0) return owners;
   const chunks = [...owners.chunks];
   let size = owners.size;
+  // 這一次呼叫自己建的最後一塊：還沒交出去，接著記的直接寫進去，不必每筆再拷一次。
+  let fresh: Record<string, number | null> | undefined;
   for (const id of ids) {
     const key = ownerKey(id);
     // 先刪再放：同一個 id 重新出現要排到最新。
@@ -520,9 +522,14 @@ function noteOwners(owners: OwnerTable, ids: readonly string[], owner: number | 
       size -= 1;
     }
     const last = chunks.at(-1);
-    if (last === undefined || Object.keys(last).length >= OWNERS_CHUNK)
-      chunks.push(ownerChunk({ [key]: owner }));
-    else chunks[chunks.length - 1] = ownerChunk(last, { [key]: owner });
+    if (last === undefined || Object.keys(last).length >= OWNERS_CHUNK) {
+      fresh = ownerChunk({ [key]: owner });
+      chunks.push(fresh);
+    } else if (last === fresh) fresh[key] = owner;
+    else {
+      fresh = ownerChunk(last, { [key]: owner });
+      chunks[chunks.length - 1] = fresh;
+    }
     size += 1;
   }
   while (size > OWNERS_CAP) {

@@ -1359,7 +1359,7 @@ describe('歸屬表分塊', () => {
       n % 128 === 0 ? `fresh_${n}` : `id_${n % 127}`,
     ]);
     const { owners } = stateOf(logOf(ids).events);
-    expect(owners.chunks.length).toBeLessThanOrEqual((2 * owners.size) / 128 + 1);
+    expect(owners.chunks.length).toBeLessThanOrEqual((2 * owners.size) / 32 + 1);
   });
 
   it('每一塊都是無原型的物件，歸屬表才走得到字典模式', () => {
@@ -1378,9 +1378,9 @@ describe('歸屬表分塊', () => {
   it('記一筆只動幾塊：其餘的塊在前後兩份狀態之間是同一個參照', () => {
     const log = logOf(serial(2600));
     const before = stateOf(log.events);
-    expect(before.owners.chunks.length).toBeLessThanOrEqual(17);
+    expect(before.owners.chunks.length).toBeLessThanOrEqual(Math.ceil(2000 / 32) + 1);
     for (const chunk of before.owners.chunks) {
-      expect(Object.keys(chunk).length).toBeLessThanOrEqual(128);
+      expect(Object.keys(chunk).length).toBeLessThanOrEqual(32);
     }
     const start = log.append('model/start', {});
     const message = log.append('assistant/message', reply(start.seq, '', 'id_new'));
@@ -1409,6 +1409,26 @@ describe('歸屬表分塊', () => {
     expect(entriesOf(left).at(-1)![0]).toBe('#id_new');
     expect(entriesOf(right).at(-1)![0]).toBe('#id_2200');
     expect(entriesOf(right).some(([key]) => key === '#id_new')).toBe(false);
+  });
+
+  it('已交出的塊一律不就地寫：舊狀態的每一塊都凍住，接著記各種批次也不拋、結果照整張表的算法', () => {
+    // 2010 筆：擠掉最舊的之後最後一塊沒滿，下一批的頭一筆會拷它、其餘寫進拷出來的那塊。
+    const log = logOf(serial(2010));
+    const base = stateOf(log.events);
+    expect(Object.keys(base.owners.chunks.at(-1)!).length).toBeLessThan(32);
+    for (const chunk of base.owners.chunks) Object.freeze(chunk);
+    const batches = [
+      ['n_1', 'n_2', 'n_3'],
+      ['n_4', 'n_4', 'id_2005', 'id_15'],
+      Array.from({ length: 40 }, (_, at) => `w_${at}`),
+    ];
+    let state = base;
+    for (const batch of batches) {
+      const start = log.append('model/start', {});
+      state = applyTrajectory(state, start);
+      state = applyTrajectory(state, log.append('assistant/message', reply(start.seq, '', ...batch)));
+    }
+    expect(entriesOf(state)).toEqual(referenceOwners(log.events));
   });
 
   it('`__proto__` 這種 id 照常歸屬', () => {
