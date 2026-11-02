@@ -1,12 +1,10 @@
 /**
  * **重放模型提供者**（[#1556](https://github.com/DemianLi/nexus-agent/issues/1556) C077）：把一份錄好的模型呼叫腳本當成一個可以被
- * `agent-default-model` 選到的提供者，形狀同 `scripted-model.ts`。不在出貨清單上；snapshot 場景用 patch `insert` 這一列、
+ * `agent-default-model` 選到的提供者，形狀同 `scripted-model.ts`；in-process，不起 HTTP 假端點。不在出貨清單上；snapshot 場景用 patch `insert` 這一列、
  * 再把選擇列指過去（`snapshot/harness.ts`）。
  *
  * 腳本是資料：每一次呼叫要吐的那一則 `assistant/message`（日誌裡的 `LoggedMessage`），由 harness 從夾具讀出來（走日誌的正式讀方），
  * 不在這裡讀檔——`createModel` 是同步的。
- *
- * 照 dsh 的重放提供者（`packages/test-support/llm-replay/src/index.ts`，`687f282e`）：in-process，不是 HTTP 假端點。
  *
  * @module
  */

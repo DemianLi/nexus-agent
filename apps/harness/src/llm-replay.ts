@@ -1,18 +1,14 @@
 /**
  * **重放模型**（[#1556](https://github.com/DemianLi/nexus-agent/issues/1556) C077）：照一份錄好的會話日誌，每一次模型呼叫吐回當時那一則
- * `assistant/message`，不連外、不讀金鑰。照 dsh `packages/test-support/llm-replay/src/index.ts`（`687f282e`）：
+ * `assistant/message`，in-process，不連外、不讀金鑰。
  *
- * - **腳本從日誌推**（dsh `:498-500`）：每一則 `assistant/message` 是一次呼叫，依日誌順序。夾具同時是重放的輸入與預期的落盤結果。
- * - **只照位置吐，不比對請求**（dsh `:1044-1099`）：走歪了由事後比對落盤日誌抓。
- * - **多叫一次就拋**（dsh `:1076-1080` 的 script exhausted）；少叫由 {@link ReplayModelState} 的游標交給呼叫端斷言
- *   （dsh `assertConsumed`，`:1107-1121`）。
- *
- * **跟 dsh 不同的一點（不比切塊）**：dsh 的日誌存精簡的 Assistant 串流片段，重放照片段吐；nexus 存的是組好的整則訊息
- * （`@nexus/core` 的 `logged-message.ts`，紀律是「記下來的推得回同一則」），串流切塊的邊界沒有記，重現不了。比對的是落盤日誌，
- * 不是線上的逐字 delta，所以不影響比對。
- *
- * 子代理不支援：重放的 serve 一條 thread 一顆模型，腳本只綁 root 那一份日誌。dsh 依第一次呼叫的順序把腳本綁到子會話
- * （`:820-851`、`:1040-1068`）；用得到時再補。
+ * - **腳本從日誌推**：每一則 `assistant/message` 是一次呼叫，依日誌順序。夾具同時是重放的輸入與預期的落盤結果。
+ * - **只照位置吐，不比對請求**：走歪了由事後比對落盤日誌抓。
+ * - **多叫一次就拋，腳本那一格不是 `ai` 也拋。** 少叫不在這裡擋：直接拿模型的呼叫端讀 {@link ReplayChatModel.consumed}；
+ *   走 serve 的快照比落盤的回覆數（`snapshot/snapshot.test.ts`）。
+ * - **不重現串流切塊**：日誌存的是組好的整則訊息（`@nexus/core` 的 `logged-message.ts`，紀律是「記下來的推得回同一則」），
+ *   切塊的邊界沒有記。每一塊只吐一顆 delta；比對的是落盤日誌，不受影響。
+ * - **子代理不支援**：重放的 serve 一條 thread 一顆模型，腳本只綁 root 那一份日誌。
  *
  * @module
  */
@@ -129,9 +125,9 @@ export class ReplayChatModel extends BaseChatModel {
   }
 
   /**
-   * v3 typed stream 那條（serve 走的就是它，`@langchain/core` `chat_models.js:231`）：直接吐事件，不經基座的
-   * `convertChunksToEvents`。那座橋把 `response_metadata` 丟掉、結束原因寫死 `stop`（`compat.js:310-314`），
-   * 吐片段的話落盤那則就少了模型名、真正的結束原因。基座組最後那一則的規則（`stream.js:441-489`）：id 取
+   * v3 typed stream 那條（serve 走的就是它：`BaseChatModel._generateUncached` 的 typed-stream 分支，`@langchain/core` 1.2.9）：
+   * 直接吐事件，不經基座的 `convertChunksToEvents`。那座橋把 `response_metadata` 丟掉、結束原因寫死 `stop`，
+   * 吐片段的話落盤那則就少了模型名、真正的結束原因。基座組最後那一則的規則（`ChatModelStream._assembleMessage`）：id 取
    * `message-start`、內容取每一塊的 `content-block-finish`、`response_metadata` 是 `message-finish` 的
    * `responseMetadata` 加上 `finish_reason`（取 `reason`）與 `output_version: v1`。照這個規則反推回去，
    * 落盤的就是錄的那一則，同 ChatOpenAI 自己覆寫這一格。

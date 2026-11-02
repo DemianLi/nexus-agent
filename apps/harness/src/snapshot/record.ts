@@ -67,7 +67,7 @@ if (
 const cwd = resolve(envDir);
 
 /**
- * 夾具裡不該有的：金鑰、授權標頭，與供應商錯誤本文裡的帳號（NVIDIA 的 404 帶 `for account '…'`）。
+ * 夾具裡不該有的：金鑰、授權標頭、請求 id，與供應商錯誤本文裡的帳號（NVIDIA 的 404 帶 `for account '…'`）。
  * 刻意寬：誤中由人看，漏掉的進了版控就收不回來。
  */
 const SECRET_LIKE = /Bearer|api[_-]?key|nvapi-|authorization|x-request-id|for account/iu;
@@ -108,7 +108,6 @@ try {
         forwardedPosts,
       };
 
-      // 先核、再寫進場景目錄：沒過的不進版控的樹，寫到 `--reject-dir`（本機證據目錄）給人看。
       const { events } = await readSnapshotLog(sessionDir, SNAPSHOT_THREAD_ID);
       const found: string[] = [];
       const alignment = scriptAlignmentProblem(events);

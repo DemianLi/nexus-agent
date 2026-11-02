@@ -30,7 +30,7 @@ afterEach(async () => {
 
 /**
  * 一則五樣都齊的回覆：推理、內文、工具呼叫、用量（含細項）、結束原因與模型名。形狀照 serve 走真模型落盤的那種
- * （nemotron-3-super，`~/.nexus-agent-evidence/2026-10-06-live-1103/logs/p1103-11.jsonl`）：content 是標準區塊，
+ * （`snapshot/scenarios/tool-round-trip/snapshot/session.v52.jsonl`）：content 是標準區塊，
  * `response_metadata` 帶 `output_version: v1`、兩格 `null`。
  */
 function reply(options: {

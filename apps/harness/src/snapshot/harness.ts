@@ -1,21 +1,20 @@
 /**
  * **錄製／重放快照**（[#1556](https://github.com/DemianLi/nexus-agent/issues/1556) C077）：一個場景用真模型錄一次，之後在真的 `runServe` 上把錄到的回覆
- * 照位置吐回去，落盤日誌正規化之後要跟錄的那份逐筆相同。照 dsh `packages/test-support/session-snapshot`（`687f282e`）：
+ * 照位置吐回去，落盤日誌正規化之後要跟錄的那份逐筆相同。
  *
- * - **夾具同時是輸入與預期**：腳本從夾具的 `assistant/message` 推（`llm-replay.ts`），比對的也是同一份夾具（dsh `suite.ts`）。
- * - **場景的輸入另放**：`input.json` 是依序的步驟與先進先出的核准答案（dsh `harness.ts:81-126` 的 `steps`／`permissionAnswers`）。
- * - **正規化在比對時做**（dsh `normalize.ts:483-502`、`identity.ts:48-135`）：時間歸零，隨機的識別碼依首次出現換成記號，
+ * - **夾具同時是輸入與預期**：腳本從夾具的 `assistant/message` 推（`llm-replay.ts`），比對的也是同一份夾具。
+ * - **場景的輸入另放**：`input.json` 是依序的步驟與先進先出的核准答案。
+ * - **正規化在比對時做**：時間歸零，隨機的識別碼依首次出現換成記號，
  *   主機路徑換成 `/{{cwd}}`／`{{src}}`。錄的時候只換路徑（夾具進版控，不放主機路徑），時間與識別碼照錄。
  *
  * 錄製見 `record.ts`，重放見 `snapshot.test.ts`。**web 那條（[#1602](https://github.com/DemianLi/nexus-agent/issues/1602)）的入口是
  * {@link startReplayServe}**：給一份夾具目錄，起一台吐那份回覆的 serve。
  *
- * ## 沒有照抄 dsh 的
+ * ## 界限
  *
- * - **一個場景一份夾具，不分 `session.vN`**：舊格式的讀法由會話格式夾具（`fixtures/session-format/`，#1529）守，版本邊目錄
- *   全是加性的，比對時拿掉 header 的版本即可。
- * - **不釘請求標頭、不做 refresh 的值穩定化**（dsh `HL:900-952`、`suite.ts:1131-1183`）：重放只照位置吐、不比對請求
- *   （dsh 也是），標頭釘死要的是 sidecar 那一套，目前用不到。
+ * - **一個場景只留一份夾具**：目錄裡是當下格式的世代檔，不為每個格式版本各留一份。讀舊格式由會話格式夾具
+ *   （`fixtures/session-format/`，#1529）守；版本邊目錄全是加性的，比對時拿掉 header 的版本即可。
+ * - **不比對請求、不釘請求標頭**：`request/header` 換成記號（{@link normalizeSnapshotLog}）。
  * - **子代理的日誌不比**：重放一條 thread 只綁 root 的腳本（見 `llm-replay.ts`）。
  *
  * @module
@@ -54,7 +53,7 @@ export interface ScenarioStep {
 /** `input.json`。 */
 export interface ScenarioInput {
   readonly steps: readonly ScenarioStep[];
-  /** 停在核准點時依序拿一個答（先進先出，同 dsh `permissionAnswers`）。拿完了還停就拋。 */
+  /** 停在核准點時依序拿一個答（先進先出）。拿完了還停就拋。 */
   readonly approvals?: readonly ('approve' | 'reject')[];
 }
 
@@ -110,9 +109,8 @@ export async function listScenarios(): Promise<string[]> {
 }
 
 /**
- * 錄製與重放共用的 patch 列：關掉帶牆鐘的時間讀數，關掉標題模型（同 dsh：錄與重放兩份 patch 都關
- * `session-title-llm`，`text-turn/cordis.yml:33-34`、`cordis.snapshot.yml:11-12`——那次呼叫不落 `assistant/message`，
- * 會讓腳本錯位）。
+ * 錄製與重放共用的 patch 列：關掉 `time-context`（帶牆鐘的時間讀數）。關掉 `thread-title-llm`：那次呼叫不經模型呼叫的
+ * middleware，不落 `model/start`、也不落 `assistant/message`，重放的腳本會錯位，錄製時代理的轉出數也對不上。
  */
 export const SNAPSHOT_COMMON_ROWS = `${TIME_CONTEXT_OFF_PATCH_ROWS}- id: thread-title-llm
   disabled: true
@@ -241,7 +239,7 @@ export async function startReplayServe(
  * @param client - 那台 serve 的 wire client。
  * @param input - 場景輸入。
  * @returns 最後的對話狀態。
- * @throws 停在核准點但答案用完了。
+ * @throws 停在核准點但答案用完了；`input.steps` 是空的。
  */
 export async function driveScenario(
   client: WireClient,
@@ -279,15 +277,15 @@ export async function driveScenario(
  */
 export const CWD_TOKEN = '/{{cwd}}';
 
-/** 主機路徑換成記號：錄的時候寫夾具前做一次，比對前兩邊各做一次（夾具那份已經換過，再換一次不變）。 */
+/**
+ * 主機路徑換成記號：錄的時候寫夾具前做一次，比對前兩邊各做一次（夾具那份已經換過，再換一次不變）。
+ * 先換 `HARNESS_SRC_DIR` 再換 `cwd`：跑測試時 src 在 cwd 底下，反過來 src 會變成 `/{{cwd}}/src`。
+ */
 export function replaceHostPaths(text: string, cwd: string): string {
   return text.replaceAll(HARNESS_SRC_DIR, '{{src}}').replaceAll(cwd, CWD_TOKEN);
 }
 
-/**
- * 隨機產生的識別碼：依首次出現換成 `{{id:N}}`（dsh `identity.ts` 的作法）。只換這幾格——訊息 id 與工具呼叫 id 來自腳本，
- * 重放會原樣重現，換掉就看不到它們走歪。
- */
+/** 隨機產生的識別碼：依首次出現換成 `{{id:N}}`。 */
 function identityTokens(): (value: string) => string {
   const seen = new Map<string, string>();
   return (value) => {
@@ -306,10 +304,10 @@ const REPLAY_ROW_NAME = '#settings/replay-model';
 /**
  * 正規化一份會話，比對用。
  *
- * - header：拿掉版本（版本邊全是加性，見模組說明）、建立時刻、建置資訊、設定雜湊（home 底下的金鑰簽的，每個 home 不同）、
- *   型錄 id（只有帶 `--live` 才寫）；
- *   外掛清單拿掉重放提供者那一列。
- * - 事件：時間歸零；送出佇列的 id、中斷 id 換成記號；路徑換成記號；只有真模型才有的路由與請求標頭拿掉。
+ * - header：拿掉版本（版本邊全是加性，見模組說明的〈界限〉）、建立時刻、建置資訊、設定雜湊（home 底下的金鑰簽的，
+ *   每個 home 不同）、型錄 id（只有帶 `--live` 才寫）；外掛清單拿掉重放提供者那一列。
+ * - 事件：時間歸零；送出佇列的 id、中斷 id、核准 id 換成記號；路徑換成記號；只有真模型才有的路由拿掉、請求標頭換成記號。
+ *   識別碼只換這幾格：訊息 id 與工具呼叫 id 來自腳本，重放會原樣重現，換掉就看不到它們走歪。
  */
 export function normalizeSnapshotLog(log: SnapshotLog): { header: unknown; events: unknown[] } {
   const cwd = log.header.cwd ?? '';
@@ -339,8 +337,8 @@ export function normalizeSnapshotLog(log: SnapshotLog): { header: unknown; event
       case 'approval/decided':
         data['id'] = token(data['id'] as string);
         break;
-      // 只有真模型那條才有的兩格（`live-model.ts` 的路由與請求參數、工具清單），重放的模型給不出來。照 dsh 換成記號
-      // （`normalize.ts` 的 `{{tools}}`／`{{system}}`），請求本身不比——重放只照位置吐，同 dsh。
+      // `model/start` 的 `route` 與 `request/header` 的內容只有 `live-model` 寫得出來（路由、請求參數、工具清單），重放的模型
+      // 給不出來：route 拿掉，header 換成記號。請求本身不比，重放只照位置吐。
       case 'model/start':
         delete data['route'];
         break;
@@ -361,8 +359,8 @@ export function normalizeSnapshotLog(log: SnapshotLog): { header: unknown; event
 }
 
 /**
- * 位置對齊的前提：每一次模型呼叫都落成一則 `assistant/message`。不成立的話（摘要器、走旁路的呼叫）腳本從那一格起全部錯一位，
- * 所以錄的時候與重放之前都核一次。
+ * 位置對齊的前提：每一次經 middleware 的模型呼叫都落成一則 `assistant/message`。不成立的話，腳本從那一格起全部錯一位。
+ * 不經 middleware 的呼叫這裡數不到，錄製時由代理的轉出數比對抓（`record.ts`）。
  *
  * @returns 對不上時的說明；對得上是 `undefined`。
  */
