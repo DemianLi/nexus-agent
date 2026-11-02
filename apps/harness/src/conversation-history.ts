@@ -131,6 +131,7 @@ import {
   TOOL_OUTCOME_UNKNOWN,
   tokenUsageUnit,
   type ProjectionUnit,
+  type ProjectionValue,
 } from '@nexus/core';
 
 import { agentMessageBody, runIdOfSession } from './background-run-id.js';
@@ -1325,6 +1326,28 @@ function settledEvents(events: readonly SessionEvent[]): readonly SessionEvent[]
 }
 
 /**
+ * 這份 root 日誌是不是格式 9 以前寫的：{@link ThreadHistoryResult} 的 `legacy`，每一頁都是整份日誌的同一個值。
+ *
+ * 要把整份對話推一次（`replayConversation`），成本跟日誌一樣大。
+ *
+ * @param events - 這條 thread 的 root 日誌，全部。
+ */
+export function isLegacyLog(events: readonly SessionEvent[]): boolean {
+  const replay = replayConversation(settledEvents(events));
+  return replay.kind === 'unreplayable' && LEGACY_REASONS.has(replay.reason);
+}
+
+/**
+ * 呼叫端手上已經算好的、跟傳進 {@link historyPage} 的 `events` 同一刻的值。有給的就不從日誌開頭重算。
+ */
+export interface HistoryKnownState {
+  /** 整份日誌的投影值，照註冊順序，同 `ProjectionFold.fold(events)`。只用在涵蓋整份日誌的最新一頁。 */
+  readonly projections?: readonly ProjectionValue[];
+  /** 同 {@link isLegacyLog}`(events)`。 */
+  readonly legacy?: boolean;
+}
+
+/**
  * 一頁歷史。
  *
  * @param events - 這條 thread 的 root 日誌，全部。
@@ -1332,6 +1355,7 @@ function settledEvents(events: readonly SessionEvent[]): readonly SessionEvent[]
  * @param awaitingInput - 有給就是這條 thread 現在停下來等人。只作用在最後一頁，見 {@link historyFrames}。
  * @param onOversize - 這一頁撐破了 {@link HISTORY_PAGE_MAX_BYTES} 時叫一次，帶秤到的位元組。單獨一輪就
  *   超標時會發生（輪邊界比上限強，見 {@link fitBytes}），而那件事在線上一點痕跡都沒有。
+ * @param known - 見 {@link HistoryKnownState}。省略的格子照 `events` 現算。
  * @throws {@link HistoryQueryError} 參數不合規，或 `beforeSeq` 超出 `throughSeq` 之後。
  */
 export function historyPage(
@@ -1343,6 +1367,7 @@ export function historyPage(
   titleLimits?: ThreadTitleLimits,
   projections: readonly ProjectionUnit[] = [],
   projectionChildren?: ProjectionChildren,
+  known: HistoryKnownState = {},
 ): ThreadHistoryResult {
   // **這是這條路上唯一的退路**：呼叫端沒講就用 schema 的預設，同 `createWireHandler` 對
   // `deliverableLimits` 的做法（#536）。底下每一層都是必填轉發，所以「忘了傳」不會變成
@@ -1423,9 +1448,10 @@ export function historyPage(
   const projectionFrames =
     end === window.length
       ? [
-          ...createProjectionFold(projections)
-            .fold(window)
-            .map((value) => customFrame(lastTime, projectionData(value))),
+          ...(window.length === events.length && known.projections !== undefined
+            ? known.projections
+            : createProjectionFold(projections).fold(window)
+          ).map((value) => customFrame(lastTime, projectionData(value))),
           ...childProjectionData(projections, projectionChildren ?? new Map()).map((data) =>
             customFrame(lastTime, data),
           ),
@@ -1446,7 +1472,6 @@ export function historyPage(
   // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
   if (bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(bytes);
 
-  const replay = replayConversation(settledEvents(events));
   return {
     // **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前
     // 寫的那一段；哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，
@@ -1465,6 +1490,6 @@ export function historyPage(
     firstSeq: cut,
     throughSeq,
     hasMore: window.slice(0, cut).some(isMessage),
-    legacy: replay.kind === 'unreplayable' && LEGACY_REASONS.has(replay.reason),
+    legacy: known.legacy ?? isLegacyLog(events),
   };
 }
