@@ -61,6 +61,7 @@ import {
   approvalPolicyOnResume,
   currentMessageFeedback,
   interruptedTurnClosers,
+  isSubagentSessionHeader,
   recordedApprovalPolicy,
   replayConversation,
 } from '../../packages/nexus-core/src/index.ts';
@@ -90,7 +91,8 @@ type Trigger =
   | 'workspace-root'
   | 'approval-policy-missing'
   | 'two-file-layout'
-  | 'client-time-zone';
+  | 'client-time-zone'
+  | 'subagent-header';
 
 interface Target {
   /** 夾具目錄名。 */
@@ -126,6 +128,14 @@ const TARGETS: readonly Target[] = [
     rev: 'v0.5.19',
     version: 14,
     triggers: ['open-turn', 'approval-policy-missing'],
+    ownReplay: true,
+  },
+  // `v14` 已凍，子代理另放一份：同一個 tag。
+  {
+    name: 'v14-subagent',
+    rev: 'v0.5.19',
+    version: 14,
+    triggers: ['subagent-header'],
     ownReplay: true,
   },
   // 今天的工作樹寫的是格式 52 的世代檔，所以 v49 釘在最後寫它的那個 commit（沒出過貨）。
@@ -320,9 +330,10 @@ function freeze(
     for (const file of frozenFilesOf(directory, id)) {
       files.set(file, readFileSync(join(directory, file), 'utf8'));
     }
-    const header = readRawHeader<{ version: number }>(directory, id);
+    const header = readRawHeader<{ id: string; version: number }>(directory, id);
     const events = readEvents(directory, id);
-    sessions[id] = {
+    // `id` 是檔名基底，子代理的 `/` 在那裡是編碼過的；`expected.json` 記真的 id，讀的人照它打開。
+    sessions[header.id] = {
       headerVersion: header.version,
       eventCount: events.length,
       types: events.map((event) => event.type),
@@ -449,6 +460,24 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
             ),
           },
         ];
+      case 'subagent-header': {
+        const session = 'dispatched/fixture-run';
+        const base = sessionsIn(directory).find(
+          (id) => readRawHeader<StoredSessionHeader>(directory, id).id === session,
+        );
+        if (base === undefined) throw new Error(`run 目錄裡沒有 ${session}。`);
+        const header = readRawHeader<StoredSessionHeader>(directory, base);
+        return [
+          {
+            edge: 51,
+            session,
+            computedBy: 'today',
+            parentSession: header.parentSession,
+            originRecorded: header.origin !== undefined,
+            subagent: isSubagentSessionHeader(header),
+          },
+        ];
+      }
       case 'approval-policy-missing': {
         const events = readEvents(directory, 'cli');
         return [
