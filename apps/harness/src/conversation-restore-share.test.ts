@@ -311,6 +311,42 @@ describe('層數：讀盤記下的夠淺就不再量，其餘照舊量', () => {
     expect(error?.depth).toBe(CHECKPOINT_MAX_DEPTH + 1);
   });
 
+  it.each([
+    ['不帶 `lc` 鍵', (room: number) => nested(room)],
+    ['`extra` 那顆帶 `lc` 鍵', (room: number) => ({ lc: 1, v: nested(room - 1) })],
+  ])(
+    '`turn/start` 的附件參照帶型別以外的深鍵、事件剛好 600 層（%s）：多出來的鍵不進訊息，照樣灌得回去，之後再寫一筆也成功（#2323）',
+    async (_, extra) => {
+      const agent = await realAgent();
+      const file = { attachmentId: `sha256:${'ab'.repeat(32)}`, name: 'a.txt', bytes: 1 };
+      const raw = oneTurn({});
+      // `data` → `attachments` → `[0]` → `extra` 是 4 層，`extra` 的值從第 4 層起算。
+      raw[0] = {
+        type: 'turn/start',
+        data: {
+          kind: 'message',
+          text: '看',
+          attachments: [{ type: 'file', ...file, extra: extra(SESSION_EVENT_MAX_DEPTH - 3) }],
+        },
+      } as Pick<SessionEvent, 'type' | 'data'>;
+      const events = readBack(lines(raw));
+      // 前提：日誌那一關收得下（剛好在上限上）。
+      expect(storedEventDepth(events[0]!)).toBe(SESSION_EVENT_MAX_DEPTH);
+
+      await restoreConversation(agent, THREAD, events);
+      const human = (await stateMessages(agent)).find((message) =>
+        HumanMessage.isInstance(message),
+      )!;
+      expect(human.content).toEqual([
+        { type: 'nexus-file', attachment: file },
+        { type: 'text', text: '看' },
+      ]);
+
+      await agent.updateState(config, { messages: [new HumanMessage('再一句')] });
+      expect((await stateMessages(agent)).at(-1)?.content).toBe('再一句');
+    },
+  );
+
   it('舊格式：只有 `additional_kwargs.tool_calls` 的參數字串，事件很淺，解析出來超過上限：照舊量、照舊拒', async () => {
     const agent = await realAgent();
     const argsJson = JSON.stringify({ v: nested(CHECKPOINT_MAX_DEPTH) });
