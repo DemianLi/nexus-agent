@@ -1,5 +1,5 @@
 /**
- * 真瀏覽器跑一整段對話（#1602 N1570）：真的 serve（模型換成腳本，見 `serve.ts`）、serve 供應的出貨網頁、本機 Chrome。
+ * 真瀏覽器跑一整段對話（#1602）：真的 serve（模型換成腳本，見 `serve.ts`）、serve 供應的出貨網頁、本機 Chrome。
  * 斷言 ARIA 的角色與名稱，不綁 class 或元件實作。跑法見 `package.json` 的 `test:e2e`（要先 build）。
  */
 import { chromium, type Browser, type Page } from 'playwright-core';
@@ -41,7 +41,7 @@ function transcript(page: Page) {
 describe('真瀏覽器的對話', () => {
   test('一般回覆串完', async () => {
     const reply = '這是一段分好幾塊串過來的腳本回覆。';
-    // 每個字隔 20 毫秒，回覆真的分段到網頁。
+    // 每個字隔 20 毫秒吐出，讓回覆分多塊串流，不是一次到齊。
     const page = await sendFirstMessage([{ content: reply, tokenDelayMs: 20 }], '你好');
     await expect.poll(() => transcript(page).getByText(reply).count(), { timeout: 30_000 }).toBe(1);
     await expect
