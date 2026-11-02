@@ -43,8 +43,8 @@ vi.mock('@nexus/core', async (importOriginal) => {
  * - **圖的節點**：middleware 的名稱與順序。
  *
  * **唯一的明文例外：`read_file` 的描述**（[#1563](https://github.com/DemianLi/nexus-agent/issues/1563)）。自有組裝經 `createFilesystemMiddleware` 的
- * `customToolDescriptions` 換掉預設行數那一句（`agent-assembly.ts`、`fs-tool-descriptions.ts`），`createDeepAgent` 不轉發那個選項，
- * 所以這個工具的描述兩邊**必然不同**，見 {@link DESCRIPTION_EXCEPTIONS}。**例外是收緊的**：把自有那邊換上去的那一句換回基座的原句，整份必須與基座逐位元組相同，
+ * `customToolDescriptions` 換掉預設行數與行號格式（`agent-assembly.ts`、`fs-tool-descriptions.ts`），`createDeepAgent` 不轉發那個選項，
+ * 所以這個工具的描述兩邊**必然不同**，見 {@link DESCRIPTION_EXCEPTIONS}。**例外是收緊的**：把自有那邊換上去的那段換回基座的原文，整份必須與基座逐位元組相同，
  * 所以組裝路徑上別的描述漂移（多一句、少一句）一樣抓得到。其餘一切——工具清單、每個工具的參數 schema、其他工具的描述、系統提示（先讀後改那兩句由
  * 同一顆 middleware 追加，兩邊都有）——仍逐位元組相同。
  *
@@ -128,6 +128,11 @@ function project(messages: readonly BaseMessage[]): unknown[] {
   }));
 }
 
+/** `read_file` 描述裡，預設行數與行號格式之間基座與我們相同的那一段。 */
+const READ_BETWEEN =
+  ' starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.\n' +
+  '- Results are returned with line numbers starting at `offset` + 1 (1 by default), ';
+
 /**
  * 描述不同的工具：自有組裝那邊換上去的是哪一句、基座（`createDeepAgent`）那邊的原句、為什麼不同。
  * `restore` 把自有那邊換上去的句子換回基座的原句；換回之後兩邊要逐位元組相同。
@@ -143,9 +148,15 @@ const DESCRIPTION_EXCEPTIONS: Readonly<
   >
 > = {
   read_file: {
-    own: 'By default, it reads up to 2000 lines',
-    base: 'By default, it reads up to 100 lines',
-    why: '一頁預設 2000 行（照 dsh，#602），預設值由 read-continuation 的 wrapToolCall 填；基座的原文寫死 100',
+    own:
+      `By default, it reads up to 2000 lines${READ_BETWEEN}then a tab, then the source line. ` +
+      'The number and the tab are not file content: never include them in `write_file` content or in `edit_file` old_string or new_string.',
+    base:
+      `By default, it reads up to 100 lines${READ_BETWEEN}then two spaces, then the source line. ` +
+      'Never include these line-number prefixes when editing.',
+    why:
+      '一頁預設 2000 行（照 dsh，#602），預設值由 read-continuation 的 wrapToolCall 填；基座的原文寫死 100。' +
+      '行號那一句照實際輸出寫 tab，並涵蓋 write_file（#2286）',
   },
   grep: {
     own: GREP_REGEXP_HEAD,

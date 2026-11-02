@@ -242,7 +242,7 @@ Reads a file from the filesystem. Assume any path the user provides is valid; re
 
 Usage:
 - By default, it reads up to 2000 lines starting from the beginning of the file. Use `offset`/`limit` to page through large files instead of reading them whole.
-- Results are returned with line numbers starting at `offset` + 1 (1 by default), then two spaces, then the source line. Never include these line-number prefixes when editing.
+- Results are returned with line numbers starting at `offset` + 1 (1 by default), then a tab, then the source line. The number and the tab are not file content: never include them in `write_file` content or in `edit_file` old_string or new_string.
 - Lines over 5,000 characters are split with continuation markers (e.g. 5.1, 5.2); `limit` counts source lines, so continuation rows do not consume the budget.
 - Speculatively batch multiple `read_file` calls in one response when several files may be useful.
 - An empty file returns a system-reminder warning in place of contents.
