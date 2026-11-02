@@ -117,10 +117,10 @@ describe('窗口取自 `next()`：使用者最後選的 → 最近一次請求�
     expect(host.nextContextWindow()).toBe(100_000);
   });
 
-  it('型錄沒有那一顆（選過、後來被拿掉）：`undefined`，預算退回 64 KiB', () => {
-    const { host } = hostWith('small');
+  it('型錄沒有那一顆（選過、後來被拿掉）：退回部署預設那顆的窗口', () => {
+    const { host } = hostWith('big');
     host.controller.select({ model: 'ghost' });
-    expect(host.nextContextWindow()).toBeUndefined();
+    expect(host.nextContextWindow()).toBe(WINDOW);
   });
 
   /**
