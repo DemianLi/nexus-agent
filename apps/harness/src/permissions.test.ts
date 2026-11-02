@@ -61,7 +61,7 @@
  * 「permissions 還在不在」就沒有人在看了。
  */
 
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PluginEntry } from '@nexus/core';
@@ -256,5 +256,82 @@ describe('全域 deny 併進 subagent', () => {
 
     expect(await readFile(join(root, '.env'), 'utf8')).toBe(SECRET);
     expect(await readFile(join(root, 'from-sub.md'), 'utf8')).toBe('subagent 寫的');
+  });
+});
+
+/**
+ * 經符號連結解開之後的位置也要過規則（[#2260](https://github.com/DemianLi/nexus-agent/issues/2260)）：基座比的是模型給的路徑，
+ * 根內一條連結指到被擋的檔就繞得過去。這一組驗組裝：`createNexusAgent` fold 完把規則交給工作區與共用區的 backend。
+ * 拿掉 `agent-factory.ts` 交規則的那幾行，這裡的讀寫會穿過連結。
+ */
+describe('連結指到被擋的路徑', () => {
+  const vault: PluginEntry = {
+    plugin: {
+      name: 'vault',
+      apply: (registry) => void registry.permissions.deny(['/secret/**', '/shared/secret/**']),
+    },
+  };
+
+  /** 一個根：`secret/key.txt` 被擋，`link.txt` 指到它，`door` 指到 `secret/`。 */
+  async function linkedRoot(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-perm-link-'));
+    await mkdir(join(root, 'secret'));
+    await writeFile(join(root, 'secret', 'key.txt'), SECRET);
+    await symlink('secret/key.txt', join(root, 'link.txt'));
+    await symlink('secret', join(root, 'door'));
+    return root;
+  }
+
+  async function toolTexts(
+    calls: { name: string; args: Record<string, unknown> }[],
+    options: { workspace?: string; shared?: string },
+  ): Promise<string[]> {
+    const model = new ScriptedChatModel({
+      turns: [{ content: '', toolCalls: calls }, { content: '試過了。' }],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      ...(options.workspace !== undefined && {
+        backend: new ContainedFilesystemBackend({ rootDir: options.workspace }),
+      }),
+      ...(options.shared !== undefined && { sharedWorkspace: { rootDir: options.shared } }),
+      plugins: [vault],
+    });
+    try {
+      const result = await agent.invoke(toAgentInvocation('試試看。'));
+      return result.messages
+        .filter((message) => message.getType() === 'tool')
+        .map((message) => message.text);
+    } finally {
+      await dispose();
+    }
+  }
+
+  it('工作區：經檔案連結讀、經目錄連結新建都被擋，磁碟不動', async () => {
+    const root = await linkedRoot();
+    const texts = await toolTexts(
+      [
+        { name: 'read_file', args: { file_path: '/link.txt' } },
+        { name: 'write_file', args: { file_path: '/door/new.txt', content: '新建' } },
+      ],
+      { workspace: root },
+    );
+    expect(texts).toEqual([
+      'Error: permission denied for read on /secret/key.txt',
+      'Error: permission denied for write on /secret/new.txt',
+    ]);
+    await expect(readFile(join(root, 'secret', 'new.txt'))).rejects.toThrow();
+    expect((await lstat(join(root, 'link.txt'))).isSymbolicLink()).toBe(true);
+  });
+
+  it('共用區：規則寫的是 /shared 底下的路徑，經連結讀照樣被擋', async () => {
+    const shared = await linkedRoot();
+    const texts = await toolTexts(
+      [{ name: 'read_file', args: { file_path: '/shared/link.txt' } }],
+      {
+        shared,
+      },
+    );
+    expect(texts).toEqual(['Error: permission denied for read on /shared/secret/key.txt']);
   });
 });
