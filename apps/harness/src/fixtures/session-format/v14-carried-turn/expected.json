@@ -1,0 +1,183 @@
+{
+  "writer": {
+    "rev": "v0.5.19",
+    "commit": "1e7fcd59a1e7b057d8738b1e4dd1d49e8edea934",
+    "formatVersion": 14,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "cae33a1a187c584a8d286ffc1dbfe5dea9269684",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 14,
+      "eventCount": 18,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    },
+    "crashed-in-model-resumed": {
+      "headerVersion": 14,
+      "eventCount": 3,
+      "types": [
+        "turn/start",
+        "model/start",
+        "session/end-seed"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "unreplayable",
+        "reason": "reply-missing"
+      }
+    },
+    "crashed-in-tool-resumed": {
+      "headerVersion": 14,
+      "eventCount": 6,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "session/end-seed"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool"
+        ]
+      }
+    },
+    "paused-resumed": {
+      "headerVersion": 14,
+      "eventCount": 8,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "interrupt/raised",
+        "turn/end",
+        "session/end-seed"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool"
+        ]
+      }
+    },
+    "resumed-new-turn": {
+      "headerVersion": 14,
+      "eventCount": 11,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "session/end-seed",
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool",
+          "human",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 29,
+      "session": "crashed-in-model-resumed",
+      "computedBy": "today",
+      "typesAfterResume": [
+        "turn/start",
+        "model/start",
+        "session/end-seed",
+        "model/end",
+        "turn/end"
+      ]
+    },
+    {
+      "edge": 29,
+      "session": "crashed-in-tool-resumed",
+      "computedBy": "today",
+      "typesAfterResume": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "session/end-seed",
+        "tool/result",
+        "turn/end"
+      ]
+    },
+    {
+      "edge": 29,
+      "session": "resumed-new-turn",
+      "computedBy": "today",
+      "typesAfterResume": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "session/end-seed",
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end"
+      ]
+    }
+  ]
+}
