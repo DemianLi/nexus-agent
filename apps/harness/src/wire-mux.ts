@@ -216,10 +216,10 @@ class MuxConnection {
     }
     const refused =
       !isMuxRoute(method, path) || (this.embed && !path.startsWith(`${EMBED_PATH_PREFIX}/`))
-      ? ROUTE_NOT_ALLOWED
-      : this.#streams.size >= (this.options.maxStreams ?? DEFAULT_MUX_MAX_STREAMS)
-        ? 'too many streams'
-        : undefined;
+        ? ROUTE_NOT_ALLOWED
+        : this.#streams.size >= (this.options.maxStreams ?? DEFAULT_MUX_MAX_STREAMS)
+          ? 'too many streams'
+          : undefined;
     if (refused !== undefined) {
       this.options.count(pathOf(path), refused === ROUTE_NOT_ALLOWED ? 404 : 429);
       // socket 已關：'close' 會收掉每一條。
@@ -371,9 +371,15 @@ export class WireMux {
     }
     this.#server.handleUpgrade(incoming, socket, head, (websocket) => {
       this.options.count(path, 101);
-      const connection: MuxConnection = new MuxConnection(websocket, headers, embed, this.options, () => {
-        this.#connections.delete(connection);
-      });
+      const connection: MuxConnection = new MuxConnection(
+        websocket,
+        headers,
+        embed,
+        this.options,
+        () => {
+          this.#connections.delete(connection);
+        },
+      );
       this.#connections.add(connection);
       this.#startHeartbeat();
     });

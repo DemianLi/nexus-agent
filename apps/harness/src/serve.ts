@@ -1441,12 +1441,12 @@ async function startServer(
             ...(profile === 'embed' && { profile }),
             ...(profile === 'full' &&
               backgroundSubagents.backgroundMode === 'continuable' && {
-              backgroundSubagents: {
-                maxActive: backgroundSubagents.maxActiveSubagents,
-                // 重啟之前派出的背景子代理，收到話才接回來（#1271）；落盤關掉（#612）就沒有東西可接。
-                ...(sessionStore !== undefined && { cold: createColdChildStore(sessionStore) }),
-              },
-            }),
+                backgroundSubagents: {
+                  maxActive: backgroundSubagents.maxActiveSubagents,
+                  // 重啟之前派出的背景子代理，收到話才接回來（#1271）；落盤關掉（#612）就沒有東西可接。
+                  ...(sessionStore !== undefined && { cold: createColdChildStore(sessionStore) }),
+                },
+              }),
             liveModel,
             ...(requestGate !== undefined && { requestGate }),
             credentials,
