@@ -50,6 +50,7 @@ import { downlinkPlugin } from './settings/downlink.js';
 import { goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { attachmentImagesPlugin } from './settings/attachment-images.js';
+import { hostToolsPlugin } from './settings/host-tools.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
@@ -95,6 +96,7 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   downlinkPlugin,
   loggerConsolePlugin,
   attachmentImagesPlugin,
+  hostToolsPlugin,
   goalRoundCapPlugin,
   turnTimeoutPlugin,
 ] as readonly NexusPlugin<unknown>[];

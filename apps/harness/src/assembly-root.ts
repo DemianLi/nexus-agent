@@ -39,6 +39,7 @@ import { composeAttachSessions } from './session-attach.js';
 import type { AttachSessions } from './session-attach.js';
 import type { SessionLookupRegistrar } from './thread-sessions.js';
 import type { ThreadProfile } from './embed-profile.js';
+import type { HostToolsSlot } from './host-tools.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { liveModelPlugin, streamRetryOptionsOf } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
@@ -962,6 +963,8 @@ export async function createCliAgent(
     readonly spillPolicy?: { readonly maxInlineTokens: number };
     /** 照哪一份設定檔組（#2367），原樣交給 `createNexusAgent`。省略即 `full`。 */
     readonly profile?: ThreadProfile;
+    /** 嵌入版的宿主頁工具（#2374），原樣交給 `createNexusAgent`。只有 serve 傳。 */
+    readonly hostTools?: { readonly exempt?: readonly string[]; readonly timeoutMs?: number };
     /**
      * 背景續行子代理的上限（[#841](https://github.com/DemianLi/nexus-agent/issues/841)）：**給了就是背景續行，省略就是一次性**。
      * 從 `background-subagents` 那一列解。**只有 serve 傳**：REPL 一行一輪、一次性模式答完就退出，背景子代理做完沒有
@@ -1078,6 +1081,8 @@ export async function createCliAgent(
   stepInbox: boolean;
   /** 這一次組裝的外溢存檔服務（#1553 N0948）；**沒給工具結果暫存是 `undefined`**。見 `createNexusAgent` 回的那一格。 */
   spillStore: SpillStore | undefined;
+  /** 這條 thread 的宿主頁工具插槽（#2374）；**不是嵌入版就是 `undefined`**。見 `createNexusAgent` 回的那一格。 */
+  hostTools: HostToolsSlot | undefined;
   /** 每會話模型選擇的組裝端（#723）；**沒帶 `--live` 是 `undefined`**（假模型沒有型錄）。 */
   modelSelection: ModelSelectionHost | undefined;
 }> {
@@ -1215,6 +1220,7 @@ export async function createCliAgent(
     onWarning,
     stepInbox,
     spillStore,
+    hostTools,
     subagentKinds,
     memorySources,
   } = await createNexusAgent({
@@ -1283,6 +1289,7 @@ export async function createCliAgent(
     ...(historyShadow !== undefined && { historyShadow }),
     systemPrompt: SYSTEM_PROMPT,
     ...(invocation.profile !== undefined && { profile: invocation.profile }),
+    ...(invocation.hostTools !== undefined && { hostTools: invocation.hostTools }),
     // **`--live` 時是 `live-model` 那一列的型號**，跟上面 `createCliModel` 讀的是同一份，兩邊不會漂移；
     // 假模型沒有型號，用 {@link SCRIPTED_MODEL_NAME}。
     systemPromptVariables: {
@@ -1436,6 +1443,7 @@ export async function createCliAgent(
     onWarning,
     stepInbox,
     spillStore,
+    hostTools,
     modelSelection,
   };
 }
