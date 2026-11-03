@@ -40,6 +40,8 @@ import {
 import type { SessionEvent, SessionFormatCatalog } from '@nexus/core';
 
 import { historyFrames } from './conversation-history.js';
+import { imageOffloadCalls } from './image-offload-calls.fixture.js';
+import type { ImageOffloadCall } from './image-offload-calls.fixture.js';
 import { ratingsByTurn } from './eval/session-scan.js';
 import { MEMORY_DURABILITY } from './feedback.fixture.js';
 import {
@@ -93,6 +95,7 @@ interface Expected {
     readonly approvalPolicyRecorded?: boolean;
     readonly approvalPolicyOnResume?: string;
     readonly browserTimeZone?: unknown;
+    readonly imageOffloadCalls?: readonly ImageOffloadCall[];
     readonly parentSession?: string;
     readonly originRecorded?: boolean;
     readonly subagent?: boolean;
@@ -389,6 +392,18 @@ describe.each(names)('夾具 %s', (name) => {
       }
       if (trigger.browserTimeZone !== undefined) {
         expect(deriveBrowserTimeZoneContext(events)).toEqual(trigger.browserTimeZone);
+      }
+      if (trigger.imageOffloadCalls !== undefined) {
+        const calls = imageOffloadCalls(events);
+        expect(calls).toEqual(trigger.imageOffloadCalls);
+        // 決定記在 `model/start` 之後的那次（#2354 定 (b)）：只有那一次推導與送出不同，下一次起每次都一樣。
+        const starts = events.filter((event) => event.type === 'model/start');
+        const offload = events.find((event) => event.type === 'image/offload')!;
+        const late = starts.filter((start) => start.seq < offload.seq).length - 1;
+        expect(late).toBeGreaterThanOrEqual(0);
+        expect(
+          calls.map((call) => JSON.stringify(call.derived) !== JSON.stringify(call.sent)),
+        ).toEqual(calls.map((_, index) => index === late));
       }
     });
   }
