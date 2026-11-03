@@ -32,6 +32,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+  HostToolDeclaration,
   Command,
   EventStreamRequest,
   FileReferenceListResponse,
@@ -72,6 +73,7 @@ import type {
   PermissionCatalog,
 } from '@nexus/wire';
 import {
+  hostToolResponseProblem,
   THREAD_FEED_PATH,
   THREAD_SEARCH_PATH,
   THREADS_PATH,
@@ -209,6 +211,8 @@ import type { LiveThread, ThreadSearchErrorKind } from './thread-search.js';
 import type { SkillCatalog } from './skill-catalog-wire.js';
 import { EMBED_COMMAND_METHODS, EMBED_ROUTE_KINDS, withoutEmbedPrefix } from './embed-profile.js';
 import type { ThreadProfile } from './embed-profile.js';
+import { hostToolsDeclarationProblem } from './host-tools.js';
+import type { HostToolsSlot } from './host-tools.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -291,6 +295,11 @@ export interface ThreadAgent {
    * `embed` 的 thread 沒有斜線命令、不能點名子代理；嵌入連線只准碰 `embed` 的 thread。
    */
   readonly profile?: ThreadProfile;
+  /**
+   * 這條 thread 的宿主頁工具插槽（[#2374](https://github.com/DemianLi/nexus-agent/issues/2374)，`createNexusAgent` 回的那一格），選配。
+   * **缺席就是不收宿主頁工具**：`run.start` 帶 `host_tools` 回 `not_supported`。只有嵌入版的組裝有。
+   */
+  readonly hostTools?: HostToolsSlot;
   /**
    * 這條 thread 用 `/名字` 叫得出的技能（[#1574](https://github.com/DemianLi/nexus-agent/issues/1574) N0929，`skill-catalog-wire.ts`），選配。
    * **缺席就是這個組裝沒有技能清單**（手搭的組裝），`skill.list` 回 `not_supported`；產品路徑（`serve.ts`）一律交，沒掛 `skills` 那一列時
@@ -1081,6 +1090,8 @@ interface ThreadState {
   readonly subagentKinds: readonly SubagentKind[] | undefined;
   /** 見 {@link ThreadAgent.profile}。 */
   readonly profile: ThreadProfile;
+  /** 見 {@link ThreadAgent.hostTools}。 */
+  readonly hostTools: HostToolsSlot | undefined;
   /** 見 {@link ThreadAgent.skillCatalog}。 */
   readonly skillCatalog: SkillCatalog | undefined;
   readonly modelSelection: ThreadModelSelection | undefined;
@@ -1236,6 +1247,24 @@ function pageContextOf(
     );
   }
   return { label };
+}
+
+/**
+ * `run.start` 的 `host_tools`（#2374）：省略＝這句話沒有宿主頁工具；沒有插槽的 thread（不是嵌入版）回 `not_supported`，
+ * 超過上限或形狀不合回 `invalid_argument`，不截。
+ */
+function hostToolsOf(
+  id: number,
+  slot: HostToolsSlot | undefined,
+  raw: unknown,
+): readonly HostToolDeclaration[] | undefined | Response {
+  if (raw === undefined) return undefined;
+  if (slot === undefined) {
+    return json(errorResponse(id, 'not_supported', '只有嵌入的對話框能宣告宿主頁工具'));
+  }
+  const problem = hostToolsDeclarationProblem(raw);
+  if (problem !== undefined) return json(errorResponse(id, 'invalid_argument', problem));
+  return raw as readonly HostToolDeclaration[];
 }
 
 /**
@@ -1984,6 +2013,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           options.turnClock,
           threadAgent.spillStore,
           referencePolicy,
+          threadAgent.hostTools,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -2089,6 +2119,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           permissionPresets: threadAgent.permissionPresets,
           subagentKinds: threadAgent.subagentKinds,
           profile: threadAgent.profile ?? 'full',
+          hostTools: threadAgent.hostTools,
           skillCatalog: threadAgent.skillCatalog,
           modelSelection: threadAgent.modelSelection,
           // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
@@ -2840,6 +2871,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           (params as { context?: unknown }).context,
         );
         if (context instanceof Response) return context;
+        // 宿主頁工具（#2374）：只有嵌入版的 thread 收，同樣排在收下附件之前。
+        const hostTools = hostToolsOf(
+          command.id,
+          thread.hostTools,
+          (params as { host_tools?: unknown }).host_tools,
+        );
+        if (hostTools instanceof Response) return hostTools;
         const text = firstHumanText(params.input);
         if (text === undefined) {
           return json(
@@ -2883,6 +2921,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           ...(admitted.length > 0 && { attachments: admitted }),
           ...(mention !== undefined && { mention }),
           ...(context !== undefined && { context }),
+          ...(hostTools !== undefined && { hostTools }),
         });
         return json(successResponse(command.id, { run_id: runId }));
       } finally {
@@ -2936,6 +2975,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           `這顆中斷要 ${pending.actionCount} 筆決定，收到 ${Array.isArray(decisions) ? decisions.length : 0} 筆`,
         ),
       );
+    }
+    if (pending.hostTool === true) {
+      // 宿主頁工具（#2374）：形狀不對就在這裡退回，那顆中斷照樣掛著，宿主頁可以再回一次。超過上限的照收，由工具交回模型（設計 `.docs/host-page-tools-2374-design-2026-11-03.md` Q3）。
+      const problem = hostToolResponseProblem(params.response);
+      if (problem !== undefined) {
+        return json(errorResponse(command.id, 'invalid_argument', problem));
+      }
     }
     if (pending.elicitation !== undefined) {
       // MCP 反問（#1098）：回覆要能翻成 adapter 的 `{ responses }`。翻不動就在這裡退回，**不是**讓 `start` 吞掉 pump 的拒絕——

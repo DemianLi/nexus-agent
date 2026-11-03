@@ -188,6 +188,21 @@ export { AUTH_FAILURE_CODE, AUTH_FAILURE_MESSAGE, turnFailureText } from './turn
 export { LLM_RETRY, LLM_RETRY_STARTED } from './llm-retry.js';
 export type { LlmRetryPayload, LlmRetryStartedPayload, WireLlmRetry } from './llm-retry.js';
 export { MESSAGE_DISCARD } from './message-discard.js';
+export {
+  HOST_TOOL_INTERRUPT_KIND,
+  HOST_TOOL_LIMITS,
+  HOST_TOOL_NAME_PATTERN,
+  HOST_TOOL_PREFIX,
+  HOST_TOOL_TIMEOUT_ERROR,
+  hostToolResponseProblem,
+  hostToolResultProblem,
+  hostToolsProblem,
+} from './host-tools.js';
+export type {
+  HostToolDeclaration,
+  HostToolInterruptPayload,
+  HostToolResponse,
+} from './host-tools.js';
 export type {
   PermissionCatalog,
   PermissionCatalogCommand,
@@ -397,6 +412,7 @@ export type {
   HumanEntry,
   NoticeEntry,
   PendingApproval,
+  PendingHostCall,
   PendingInput,
   PendingQuestion,
   QuestionOrigin,
@@ -421,6 +437,7 @@ export {
   declineResponse,
   appendDecision,
   emptyConversation,
+  settleHostCall,
   isApprovalPending,
   isQuestionPending,
   prependEntries,
