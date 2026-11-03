@@ -661,10 +661,16 @@ export interface ConversationState {
    */
   readonly pendings: readonly PendingInput[];
   /**
-   * 等宿主頁執行的宿主頁工具（#2374），發出的順序，同 id 覆寫。答掉（{@link settleHostCall}）、這一輪接著跑或被停止時收掉。
+   * 等宿主頁執行的宿主頁工具（#2374），發出的順序，同 id 覆寫。答掉（{@link settleHostCall}）、這一輪接著跑、失敗或被停止時收掉。
    * 收進來不改 `status`：這一輪在等宿主頁執行工具，不是在等人。它非空時 root 的 `completed` 不翻 `idle`、不把未結束的工具列收成失敗。
    */
   readonly hostCalls: readonly PendingHostCall[];
+  /**
+   * 宿主頁工具的結果已交回（{@link settleHostCall}），還沒看到這一輪接著跑的 `running`。這段時間 root 的 `completed` 同樣不收尾：
+   * 宿主頁同步回時，交回可能早於停下時的那顆 `completed` 到達。`running`、`failed` 與停止時清掉。
+   * `input.respond` 被拒時不會撤掉：標記留著，root 的 `completed` 都不收尾，直到下一次 `running`、`failed` 或停止。
+   */
+  readonly hostResumePending?: true;
   /** 收過的最大 seq。線上是單調的（server 端跨 run 重編過號），拿它擋重複與亂序。 */
   readonly lastSeq: number;
   /** `namespace[0]` → 那個 `task` 呼叫派出去的 subagent。 */
@@ -902,10 +908,15 @@ export function appendAnswers(
   };
 }
 
-/** 宿主頁工具的結果送出去之後，把那一支收掉（#2374）。認不得的 `interruptId` 原樣回傳。 */
+/**
+ * 交回宿主頁工具的結果時（送 `input.respond` 之前）呼叫：把那一支收掉、記下在等這一輪接著跑（{@link ConversationState.hostResumePending}，
+ * #2374）。先記下標記，停下時的那顆 `completed` 才不會在送出期間把這一輪收尾。認不得的 `interruptId` 原樣回傳。
+ */
 export function settleHostCall(state: ConversationState, interruptId: string): ConversationState {
   const rest = state.hostCalls.filter((candidate) => candidate.interruptId !== interruptId);
-  return rest.length === state.hostCalls.length ? state : { ...state, hostCalls: rest };
+  return rest.length === state.hostCalls.length
+    ? state
+    : { ...state, hostCalls: rest, hostResumePending: true };
 }
 
 /** 一組答案攤成 `ask_user_question` 要的那份回覆。 */
@@ -2397,6 +2408,7 @@ function reduceLifecycle(
       errorCode: undefined,
       pendings: [],
       hostCalls: [],
+      hostResumePending: undefined,
       stopCause: data.cause,
       entries: settleUnfinishedTools(state.entries, time).map((entry) =>
         entry.kind === 'ai' && entry.streaming
@@ -2421,6 +2433,7 @@ function reduceLifecycle(
       ...state,
       pendings: [],
       hostCalls: [],
+      hostResumePending: undefined,
       status: 'running',
       error: undefined,
       errorCode: undefined,
@@ -2430,6 +2443,8 @@ function reduceLifecycle(
   if (data.event === 'failed') {
     return {
       ...state,
+      hostCalls: [],
+      hostResumePending: undefined,
       status: 'failed',
       error: data.error ?? '未指名的錯誤',
       errorCode: data.code,
@@ -2438,8 +2453,14 @@ function reduceLifecycle(
   }
   if (data.event === 'completed') {
     // **中斷時 root 照樣發 completed**，所以停在核准點的那一輪不能被它翻成 idle，卡也不收——
-    // 那一輪還沒關，卡還在等人。停在宿主頁工具的同理：這一輪還沒關，不翻 idle，那顆工具列也不收成失敗。
-    if (state.status === 'awaiting-input' || state.hostCalls.length > 0) return state;
+    // 那一輪還沒關，卡還在等人。停在宿主頁工具的同理：這一輪還沒關，不翻 idle，那顆工具列也不收成失敗；結果已交回、還沒接著跑的也一樣。
+    if (
+      state.status === 'awaiting-input' ||
+      state.hostCalls.length > 0 ||
+      state.hostResumePending === true
+    ) {
+      return state;
+    }
     const settled = settleUnfinishedTools(state.entries, time);
     return {
       ...state,
