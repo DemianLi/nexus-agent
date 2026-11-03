@@ -19,6 +19,10 @@ interface NexusHostTool {
 
 /** `nexus-host-tool` 事件的 `detail`：模型叫了哪一支、帶什麼參數，執行完呼叫 `respond` 或 `fail`，只算第一次。 */
 interface NexusHostToolDetail {
+  /**
+   * 這次呼叫的身分，重新整理後補發同一次呼叫時不變。補發不會再出核准卡，不能重做的動作，宿主頁要以它記住做過了沒有。
+   */
+  readonly id: string;
   /** 宣告時的名字，不帶 `page__`。 */
   readonly name: string;
   /** 模型給的參數，server 已照宣告的 `parameters` 驗過。 */

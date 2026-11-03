@@ -135,6 +135,7 @@ function useHostCalls(
         void latest.current.conversation.respondHostCall(call, response);
       };
       hand({
+        id: call.interruptId,
         name: call.name,
         args: call.args,
         respond: (result) => settle(hostToolSuccess(result)),

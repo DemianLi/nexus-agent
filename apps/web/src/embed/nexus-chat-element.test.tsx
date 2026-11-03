@@ -272,12 +272,12 @@ describe('<nexus-chat> 的宿主頁工具（#2374）', () => {
     warn.mockRestore();
   });
 
-  test('模型叫了宣告過的一支：發事件帶名字與參數，respond 交回結果、第二次不送', async () => {
+  test('模型叫了宣告過的一支：發事件帶 id、名字與參數，respond 交回結果、第二次不送', async () => {
     const script = new Script();
     events = [script.running(), script.hostTool('h1', 'focus_device', { id: 'P-101' })];
     const { handed } = mountWithTools();
     await waitFor(() => expect(handed).toHaveLength(1));
-    expect(handed[0]).toMatchObject({ name: 'focus_device', args: { id: 'P-101' } });
+    expect(handed[0]).toMatchObject({ id: 'h1', name: 'focus_device', args: { id: 'P-101' } });
     await act(async () => {
       handed[0]?.respond({ focused: 'P-101' });
       handed[0]?.respond({ focused: 'again' });
@@ -348,7 +348,7 @@ describe('<nexus-chat> 的宿主頁工具（#2374）', () => {
     expect(handed.map((detail) => detail.name)).toEqual(['focus_device', 'highlight_device']);
   });
 
-  test('重新整理（整個重掛）之後補送的待決照常轉交', async () => {
+  test('重新整理（整個重掛）之後補送的待決照常轉交，id 跟上一次相同', async () => {
     const script = new Script();
     events = [script.running(), script.hostTool('h1', 'focus_device', { id: 'P-101' })];
     const first = mountWithTools();
@@ -358,6 +358,8 @@ describe('<nexus-chat> 的宿主頁工具（#2374）', () => {
     const second = mountWithTools();
     await waitFor(() => expect(second.handed).toHaveLength(1));
     expect(second.handed[0]?.args).toEqual({ id: 'P-101' });
+    expect(second.handed[0]?.id).toBe(first.handed[0]?.id);
+    expect(second.handed[0]?.id).toBe('h1');
   });
 
   test('server 不收（例如停止之後才回）：不寫狀態列', async () => {
