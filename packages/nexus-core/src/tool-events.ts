@@ -13,7 +13,7 @@
  * 照抄，不是漏分類。**核准被拒不在這句裡**：dsh 的核准拒絕也沒碼，我們自 #1029 起多給四個，理由見 {@link ./tool-error-codes.ts | APPROVAL_REJECTED_BY_USER}。
  * **拋出 {@link ./tool-error-codes.ts | HarnessError} 的有碼**，同 dsh：`{ name, code }` 原樣進
  * `tool/result`（`477b4f4` 的 `index.ts:661-668`；[#615](https://github.com/DemianLi/nexus-agent/issues/615)
- * 之前我們沒有這個基底類別，第一個用它的是 `@nexus/plugin-quickjs` 的 `CodeRunFailedError`）。
+ * 之前我們沒有這個基底類別）。`NexusTool` 回 `ok: false` 時碼在結果的 `error` 上，轉接器照同一個形狀掛上（`@nexus/tool-adapter`）。
  *
  * ## 碼怎麼從內層走到外層
  *

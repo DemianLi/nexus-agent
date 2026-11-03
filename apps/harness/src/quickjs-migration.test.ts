@@ -20,7 +20,7 @@ import { createCordisRoot } from './cordis-root.js';
 import type { CordisRoot } from './cordis-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';
-import { loadDefaultPlugins } from './plugin-config.js';
+import { isBridgeEntry, loadDefaultPlugins } from './plugin-config.js';
 import type { ScriptedChatModel } from './scripted-model.js';
 
 const BASELINE = new URL('./quickjs-migration.baseline.json', import.meta.url);
@@ -76,6 +76,11 @@ async function runOne(
     { tree: root.tree },
   );
   expect(loaded.dropped).toEqual([]);
+  // 遷出之後那一列是樹上函式插件的橋接列；錄對照組時它還是相容層的 `NexusPlugin`，這一條在那時不成立。
+  if (process.env.K3C_RECORD !== '1') {
+    const row = loaded.plugins.find((entry) => entry.id === 'quickjs');
+    expect(row !== undefined && isBridgeEntry(row)).toBe(true);
+  }
   const built = await createCliAgent({ live: false }, loaded.plugins);
   const sessions = new SessionRegistry('quickjs');
   const detach = built.attachSession(sessions);
