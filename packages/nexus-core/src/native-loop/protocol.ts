@@ -191,6 +191,7 @@ export class NativeStreamHandler extends BaseCallbackHandler {
   readonly #runs = new Map<string, { namespace: string[]; node: string | undefined }>();
   readonly #streamed = new Set<string>();
   readonly #tools = new Map<string, { namespace: string[]; toolCallId: string | undefined }>();
+  readonly #subgraphNodes = new Map<string, string[]>();
 
   /**
    * @param emitter - 這次 run 的事件出口。
@@ -252,6 +253,38 @@ export class NativeStreamHandler extends BaseCallbackHandler {
   override handleLLMError(_error: unknown, runId: string): void {
     this.#streamed.delete(runId);
     this.#runs.delete(runId);
+  }
+
+  /**
+   * 工具裡跑的子圖（前景子代理還是 LangGraph，K9 #2359 之前）：它的節點結束時補那一層的 `completed`。LangGraph 是看子圖的
+   * `updates` 補的，那份串流不經 callback，所以改看節點那顆 chain run（名字等於 `langgraph_node`）的收尾。
+   */
+  override handleChainStart(
+    _chain: unknown,
+    _inputs: unknown,
+    runId: string,
+    _parentRunId?: string,
+    _tags?: string[],
+    metadata?: Record<string, unknown>,
+    _runType?: string,
+    runName?: string,
+  ): void {
+    const ns = metadata?.[NS_KEY];
+    if (typeof ns !== 'string' || runName === undefined || runName !== metadata?.[NODE_KEY]) return;
+    const namespace = ns.split('|');
+    if (namespace.length < 2) return;
+    this.#subgraphNodes.set(runId, namespace);
+  }
+
+  override handleChainEnd(_outputs: unknown, runId: string): void {
+    const namespace = this.#subgraphNodes.get(runId);
+    if (namespace === undefined) return;
+    this.#subgraphNodes.delete(runId);
+    this.emitter.complete(namespace);
+  }
+
+  override handleChainError(_error: unknown, runId: string): void {
+    this.#subgraphNodes.delete(runId);
   }
 
   override handleToolStart(

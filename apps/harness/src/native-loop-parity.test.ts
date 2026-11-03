@@ -8,7 +8,11 @@
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
+import {
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  SessionRegistry,
+  SUBAGENT_DELEGATION_CONTEXT,
+} from '@nexus/core';
 import type { AgentLoopKind, PluginEntry, SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -46,6 +50,16 @@ const toolsPlugin: PluginEntry = {
   },
 };
 
+/** 前景委派的對象。 */
+const workerPlugin: PluginEntry = {
+  plugin: {
+    name: 'native-parity-worker',
+    apply(registry) {
+      registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
+  },
+};
+
 interface RawEvent {
   readonly method: string;
   readonly params: { readonly namespace: string[]; readonly node?: string; readonly data: unknown };
@@ -53,7 +67,7 @@ interface RawEvent {
 
 /** `tool-finished` 的 `output`：pump 的 `#toolData` 拿它判定，比 `status` 與 `content`。 */
 function toolOutputOf(output: unknown): string {
-  if (!ToolMessage.isInstance(output)) return `raw:${JSON.stringify(output)}`;
+  if (!ToolMessage.isInstance(output)) return `raw:${JSON.stringify(output).replace(UUID, '<uuid>')}`;
   return JSON.stringify({ status: output.status, content: output.content });
 }
 
@@ -112,11 +126,21 @@ function logShape(events: readonly SessionEvent[]): string[] {
   );
 }
 
+/**
+ * 登記過的差異（D189：中斷類，K8 #2358 收）：native 沒有存檔點，核准管道是 `no-channel`，前景子代理的委派聲明因此是「會自動被拒絕」
+ * 那一句（`subagent-delegation.ts` 的 `foregroundDelegationContext`）。換回 LangGraph 那一句再比，其餘一個字都不放過。
+ */
+function withKnownDifferences(log: string[][]): string[][] {
+  const from = JSON.stringify(SUBAGENT_DELEGATION_CONTEXT).slice(1, -1);
+  const to = JSON.stringify(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT).slice(1, -1);
+  return log.map((lines) => lines.map((line) => line.replaceAll(from, to)));
+}
+
 async function runOnce(loop: AgentLoopKind, turns: readonly ScriptedTurn[], prompt: string) {
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
-    plugins: [humanChannelPlugin(), toolsPlugin],
+    plugins: [humanChannelPlugin(), toolsPlugin, workerPlugin],
     agentLoop: loop,
   });
   const sessions = new SessionRegistry(THREAD);
@@ -137,8 +161,8 @@ async function runOnce(loop: AgentLoopKind, turns: readonly ScriptedTurn[], prom
       failure = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
     }
     if (process.env['PARITY_DUMP']) (await import('node:fs')).appendFileSync(process.env['PARITY_DUMP'], [...raw.map((e) => [loop, e.method, JSON.stringify(e.params.namespace), e.params.node, JSON.stringify(e.params.data).slice(0, 300)].join(' ')), `${loop} FAILURE ${failure}`, ...logShape(root0()).map((l) => `${loop} LOG ${l.slice(0, 300)}`)].join('\n') + '\n');
-    const root = sessions.list().find((entry) => entry.address.kind === 'root');
-    return { events: projected(raw), log: logShape(root?.log.events ?? []), failure };
+    const logs = sessions.list().map((entry) => [entry.address.kind, ...logShape(entry.log.events)]);
+    return { events: projected(raw), log: logs, failure };
   } finally {
     detach();
     await built.dispose();
@@ -174,13 +198,25 @@ describe('native loop 對照 LangGraph', () => {
       [{ content: '試試。', toolCalls: [{ name: 'nope', args: {} }] }, { content: '沒有。' }],
     ],
     ['模型出錯', [{ content: '', error: '供應商過載' }]],
+    [
+      '前景委派',
+      [
+        {
+          content: '委派。',
+          toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: 'worker' } }],
+        },
+        { content: '子代理動手。', toolCalls: [{ name: 'echo', args: { text: '子' } }] },
+        { content: '子代理收工。' },
+        { content: '收工。' },
+      ],
+    ],
   ];
   it.each(scenarios)('%s', async (_label, turns) => {
     const graph = await runOnce('langgraph', turns, '開始。');
     const native = await runOnce('native', turns, '開始。');
     expect(native.failure).toEqual(graph.failure);
     expect(native.events).toEqual(graph.events);
-    expect(native.log).toEqual(graph.log);
+    expect(withKnownDifferences(native.log)).toEqual(graph.log);
   });
 });
 
