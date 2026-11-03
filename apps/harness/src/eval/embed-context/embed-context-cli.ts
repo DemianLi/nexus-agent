@@ -5,18 +5,7 @@
  * 量嵌入的對話框附上「畫面上目前選取 X」之後，模型拿錯對象的比例。題目在 [`fixture.ts`](./fixture.ts)，判準在 [`rubric.ts`](./rubric.ts)。
  * 每題開一條新的 thread，經 `/embed` 前綴的 wire 送 `run.start` 帶 `context`，跟嵌入的頁面走同一條路。
  *
- * ## 上游與請求數
- *
- * serve 的 `live-model` 指到本機的計數轉接器（[`smoke/counting-proxy.ts`](../../smoke/counting-proxy.ts)），轉接器再轉給 `--upstream`。
- * 轉接器到 `--max-requests` 就不再轉出去；有任何一個請求不是 200，這支就不再開新題。重試關成 0、模型產生的標題關掉，一題的請求數只來自
- * 這一輪本身。
- *
- * ## 金鑰
- *
- * serve 是子行程，`cwd` 是 `--serve-cwd`（金鑰在那一層的 `.env`，由 serve 自己讀）。這支行程的環境裡的 `*_API_KEY` 不傳給子行程，
- * 也不讀、不印；serve 印出的網址帶登入用的 token，只在記憶體裡用，不寫進輸出。
- *
- * 離線驗量具：`--upstream` 指本機的假端點，`--fake-key` 給子行程一把假的 key（上游不是 127.0.0.1 就拒絕這個旗標）。
+ * 上游、請求數上限、金鑰與離線驗量具的做法見 [`../embed-serve.ts`](../embed-serve.ts)。
  *
  * 輸出在 `--out` 底下：`runs.jsonl`（一題一次一行，見 {@link RunRecord}）、`summary.md`（{@link renderSummary}）、`requests.jsonl`（轉接器記下的每個請求）。
  *
@@ -25,75 +14,25 @@
  * **不進 CI。** 會花錢也會花時間。
  */
 
-import { spawn } from 'node:child_process';
-import type { ChildProcess } from 'node:child_process';
-import { appendFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
-import { createWireClient, EMBED_PATH_PREFIX } from '@nexus/wire';
 import type { WireClient } from '@nexus/wire';
-import { stringify } from 'yaml';
 
 import { formatProportion, wilson } from '../citation/proportion.js';
-import { exchangeServeToken, fetchWithCookie, foldTurn } from '../../fixtures.js';
-import { shippedLiveModelConfig } from '../../log-derived-history.fixture.js';
+import { foldTurn } from '../../fixtures.js';
 import { startCountingProxy } from '../../smoke/counting-proxy.js';
-import type { CountingProxy } from '../../smoke/counting-proxy.js';
+import {
+  parseEmbedEvalArgs,
+  requestLines,
+  startEmbedServe,
+  stoppedBy,
+  withTimeout,
+} from '../embed-serve.js';
 import { CATEGORIES, QUESTIONS } from './fixture.js';
 import type { Category, Question } from './fixture.js';
 import { judge, leaksOf } from './rubric.js';
 import type { Leak, Verdict } from './rubric.js';
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const HARNESS = join(HERE, '..', '..', '..');
-const ROOT = join(HARNESS, '..', '..');
-
-interface Options {
-  readonly upstream: string;
-  readonly maxRequests: number;
-  readonly reps: number;
-  readonly out: string;
-  readonly serveCwd: string;
-  readonly fakeKey: boolean;
-  readonly timeoutMs: number;
-}
-
-function parseArgs(argv: readonly string[]): Options {
-  const get = (flag: string): string | undefined => {
-    const index = argv.indexOf(flag);
-    return index === -1 ? undefined : argv[index + 1];
-  };
-  const need = (flag: string): string => {
-    const value = get(flag);
-    if (value === undefined) throw new Error(`需要 ${flag}`);
-    return value;
-  };
-  const positive = (flag: string, fallback?: number): number => {
-    const raw = get(flag);
-    if (raw === undefined) {
-      if (fallback === undefined) throw new Error(`需要 ${flag}`);
-      return fallback;
-    }
-    const value = Number(raw);
-    if (!Number.isInteger(value) || value < 1) throw new Error(`${flag} 要正整數，拿到 ${raw}`);
-    return value;
-  };
-  const upstream = need('--upstream');
-  const fakeKey = argv.includes('--fake-key');
-  if (fakeKey && new URL(upstream).hostname !== '127.0.0.1') {
-    throw new Error('--fake-key 只能配本機的 --upstream：假 key 也會被送出去');
-  }
-  return {
-    upstream,
-    maxRequests: positive('--max-requests'),
-    reps: positive('--reps', 1),
-    out: need('--out'),
-    serveCwd: need('--serve-cwd'),
-    fakeKey,
-    timeoutMs: positive('--timeout-ms', 300_000),
-  };
-}
 
 /** 一題一次，寫進 `runs.jsonl` 的一行。 */
 export interface RunRecord {
@@ -112,83 +51,6 @@ export interface RunRecord {
   /** 回答讓使用者看到的情境區塊內容（#2380）；執行失敗的紀錄沒有這一格，#2380 之前寫的 runs.jsonl 也沒有。 */
   readonly leaks?: readonly Leak[];
   readonly error?: string;
-}
-
-function patchOf(proxy: string): string {
-  const shipped = shippedLiveModelConfig();
-  const retryPolicy = { ...(shipped['retryPolicy'] as Record<string, unknown>), maxRetries: 0 };
-  return `${stringify([{ id: 'live-model', config: { ...shipped, baseUrl: proxy, retryPolicy } }])}- id: thread-title-llm\n  disabled: true\n`;
-}
-
-interface Serve {
-  readonly child: ChildProcess;
-  readonly embed: WireClient;
-}
-
-async function startServe(options: Options, proxy: string): Promise<Serve> {
-  const home = await mkdtemp('/var/tmp/nexus-embed-eval-home-');
-  const ws = await mkdtemp('/var/tmp/nexus-embed-eval-ws-');
-  const patch = join(home, 'eval.patch.yml');
-  await writeFile(patch, patchOf(proxy));
-  const env: NodeJS.ProcessEnv = {
-    PATH: process.env['PATH'],
-    LANG: process.env['LANG'] ?? 'C.UTF-8',
-    HOME: home,
-    NEXUS_AGENT_HOME: home,
-    ...(options.fakeKey && { NVIDIA_API_KEY: 'fake-local-test' }),
-  };
-  const child = spawn(
-    join(HARNESS, 'node_modules', '.bin', 'tsx'),
-    [
-      '--tsconfig',
-      join(ROOT, 'tsconfig.runtime.json'),
-      join(HARNESS, 'src', 'serve.ts'),
-      '--live',
-      '--port',
-      '0',
-      '--workspace',
-      ws,
-      '--patch',
-      patch,
-    ],
-    { cwd: options.serveCwd, env, stdio: ['ignore', 'pipe', 'pipe'] },
-  );
-  const authenticated = await new Promise<string>((resolve, reject) => {
-    let seen = '';
-    const onData = (chunk: Buffer): void => {
-      seen += chunk.toString();
-      const match = /nexus-agent 在 (http\S+)/u.exec(seen);
-      if (match?.[1] !== undefined) resolve(match[1]);
-    };
-    child.stdout?.on('data', onData);
-    child.stderr?.on('data', onData);
-    child.once('exit', (code) => {
-      // 輸出可能帶網址上的 token：只印最後幾行、遮掉 token。
-      const tail = seen
-        .split('\n')
-        .slice(-15)
-        .join('\n')
-        .replace(/token=\S+/gu, 'token=…');
-      reject(new Error(`serve 沒起來就結束了（${String(code)}）：\n${tail}`));
-    });
-  });
-  const cookie = await exchangeServeToken(authenticated);
-  const origin = new URL(authenticated).origin;
-  return {
-    child,
-    embed: createWireClient({
-      baseUrl: `${origin}${EMBED_PATH_PREFIX}`,
-      fetch: fetchWithCookie(cookie),
-    }),
-  };
-}
-
-function withTimeout<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`${what} 逾時（${String(ms)} ms）`)), ms);
-  });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
 async function runOne(
@@ -256,13 +118,6 @@ export function renderSummary(records: readonly RunRecord[]): string {
   return lines.join('\n');
 }
 
-/** 轉接器看到不是 200 的請求（含超過上限被擋下的 429）：回第一個的描述，沒有就是 `undefined`。 */
-function stoppedBy(proxy: CountingProxy): string | undefined {
-  const bad = proxy.requests().find((request) => request.status !== 200);
-  if (bad === undefined) return undefined;
-  return bad.blocked ? '到請求上限' : `上游回 ${String(bad.status)}`;
-}
-
 async function readRecords(path: string): Promise<RunRecord[]> {
   return (await readFile(path, 'utf8'))
     .split('\n')
@@ -312,13 +167,13 @@ async function main(): Promise<void> {
     for (const record of leaked) console.log(`- ${record.id}：${(record.leaks ?? []).join('、')}`);
     return;
   }
-  const options = parseArgs(argv);
+  const options = parseEmbedEvalArgs(argv);
   await mkdir(options.out, { recursive: true });
   // session-file-exempt: 畫面情境量測每次執行的結果紀錄，不是會話日誌。
   const runsFile = join(options.out, 'runs.jsonl');
   await writeFile(runsFile, '');
   const proxy = await startCountingProxy({ upstream: options.upstream, cap: options.maxRequests });
-  const serve = await startServe(options, proxy.baseUrl);
+  const serve = await startEmbedServe(options, proxy.baseUrl);
   const records: RunRecord[] = [];
   try {
     for (let rep = 1; rep <= options.reps; rep += 1) {
@@ -372,13 +227,7 @@ async function main(): Promise<void> {
   await writeFile(join(options.out, 'summary.md'), `${summary}\n`);
   // session-file-exempt: 轉接器記下的每個請求（欄位見 `ProxiedRequest`），依記錄順序；核對請求數與哪一個不是 200 用，不是會話日誌（#2380）。
   const requestsFile = join(options.out, 'requests.jsonl');
-  await writeFile(
-    requestsFile,
-    proxy
-      .requests()
-      .map((request) => `${JSON.stringify(request)}\n`)
-      .join(''),
-  );
+  await writeFile(requestsFile, requestLines(proxy));
   console.log(`\n${summary}`);
 }
 
