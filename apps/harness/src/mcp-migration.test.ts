@@ -294,7 +294,12 @@ it('MCP 工具的定義、結果、中斷與日誌，與對照組逐字相同', 
   const root = createCordisRoot();
   cleanups.push(() => root.dispose());
   const now: Record<string, unknown> = {};
-  for (const [label, spec] of cases) now[label] = await runOne(root, label, spec);
+  // 逾時句講出實際等了幾毫秒，每次跑都不同；只把那個數字換掉。
+  for (const [label, spec] of cases) {
+    now[label] = JSON.parse(
+      JSON.stringify(await runOne(root, label, spec)).replace(/等了 \d+ms/gu, '等了 <ms>ms'),
+    ) as unknown;
+  }
   if (process.env.K3C_RECORD === '1') {
     writeFileSync(BASELINE, `${JSON.stringify(now, null, 2)}\n`);
     return;
