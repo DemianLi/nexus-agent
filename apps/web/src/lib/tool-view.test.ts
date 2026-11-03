@@ -75,6 +75,10 @@ describe('classifyTool', () => {
     expect(classifyTool(name)).toBe(variant);
   });
 
+  it('宿主頁工具（#2374）的標題是「頁面工具：」加上宣告時的名字，不是一句「工具」', () => {
+    expect(toolTitle('page__focus_device')).toBe('頁面工具：focus_device');
+  });
+
   it('`subagent` 跟 `task` 同標題（都是委派子代理）', () => {
     expect(toolTitle('subagent')).toBe('委派子代理');
     expect(toolTitle('subagent')).toBe(toolTitle('task'));

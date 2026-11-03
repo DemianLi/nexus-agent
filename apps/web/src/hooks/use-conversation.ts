@@ -12,7 +12,10 @@ import type {
   ConversationState,
   Event,
   GoalPauseResult,
+  HostToolDeclaration,
+  HostToolResponse,
   PageContext,
+  PendingHostCall,
   PromptAttachment,
   SubagentMention,
   SkillEntry,
@@ -40,6 +43,7 @@ import {
   QUEUE_ITEM_NOT_FOUND,
   reduceAll,
   reduceConversation,
+  settleHostCall,
   STEER_UNAVAILABLE,
   uniformDecisions,
   WireProtocolError,
@@ -313,6 +317,8 @@ export interface Conversation {
    * （`slash.run` 沒有編號，見 `docs/operations.md`）。
    *
    * `context` 是嵌入的對話框附的畫面情境（#2382），放進 `run.start`；斜線命令不看它。只有嵌入版開的 thread 收。
+   *
+   * `hostTools` 是嵌入的對話框替宿主頁宣告的工具（#2374），放進 `run.start`，規矩同 `context`。
    */
   send(
     text: string,
@@ -322,6 +328,7 @@ export interface Conversation {
     requestId?: string,
     route?: 'command' | 'sentence',
     context?: PageContext,
+    hostTools?: readonly HostToolDeclaration[],
   ): Promise<SendRejected | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
@@ -371,6 +378,15 @@ export interface Conversation {
    * 那條路」。認不得那顆 id、或那顆不是問答時，什麼都不做。
    */
   answer(interruptId: string, answers: AnswerEntry['answers']): Promise<void>;
+  /**
+   * 交回一支宿主頁工具的結果（#2374）：`input.respond`，送出的那一刻就從 `hostCalls` 收掉。拿的是轉交出去時的那一支，不是當下的
+   * `hostCalls`：一顆 `running` 會先清空、再由再度中斷接回來，宿主頁剛好在那個空檔回的話照樣要送到。
+   *
+   * 不寫狀態列：這一輪被停止之後宿主頁才回的，server 回 `no_such_interrupt`，那不是人要處理的錯。
+   *
+   * @returns server 收下了沒有。
+   */
+  respondHostCall(call: PendingHostCall, response: HostToolResponse): Promise<boolean>;
   /**
    * **關掉**指名的那一顆問答請求（送 `cancelled`，dsh 的 `ASK_CANCELLED`）：不回答，這一輪不停。計劃審核的「要求
    * 修改」走這一條（#654）——模型收到「停在這裡等使用者的訊息」，人接著在輸入框打意見。
@@ -936,6 +952,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       requestId?: string,
       route?: 'command' | 'sentence',
       context?: PageContext,
+      hostTools?: readonly HostToolDeclaration[],
     ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       const hasAttachments = attachments !== undefined && attachments.length > 0;
@@ -980,6 +997,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(mention === undefined ? {} : { mention }),
           ...(context === undefined ? {} : { context }),
+          ...(hostTools === undefined ? {} : { hostTools }),
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1079,6 +1097,23 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       );
     },
     [threadId, note, advance],
+  );
+
+  const respondHostCall = useCallback(
+    async (call: PendingHostCall, response: HostToolResponse) => {
+      advance((previous) => settleHostCall(previous, call.interruptId));
+      try {
+        const result = await clientRef.current.inputRespond(threadId, {
+          namespace: [...call.namespace],
+          interrupt_id: call.interruptId,
+          response,
+        });
+        return result.type !== 'error';
+      } catch {
+        return false;
+      }
+    },
+    [threadId, advance],
   );
 
   const dismissQuestion = useCallback(
@@ -1408,6 +1443,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     updateQueue,
     respond,
     answer,
+    respondHostCall,
     dismissQuestion,
     declineQuestion,
     cancel,
