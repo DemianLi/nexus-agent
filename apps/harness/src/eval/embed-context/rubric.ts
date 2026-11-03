@@ -58,8 +58,8 @@ const WHICH =
   /哪一?[台座部組]|(?:其他|特定)的?(?:機台|設備|機器)|(?:還是|或者|或是)\s*(?:\*\*)?\s*[A-Z]{1,3}-\d|是指.{0,24}[嗎吗]/u;
 
 /**
- * 反問了是哪一台：呼叫了 `ask_user_question`，或回答裡有一句同時合乎 {@link ASKING} 與 {@link WHICH}。問句後面還接著別的話也算
- * （#2380：只認問號收尾時，漏了 #2378 正式跑裡中段反問的那幾題）。「還是需要我查別的來源」這種不是在問是哪一台，不算。
+ * 反問了是哪一台：呼叫了 `ask_user_question`，或回答裡有一句同時合乎 {@link ASKING} 與 {@link WHICH}。問句後面還接著別的話也算：
+ * #2378 的正式跑裡，模型會在中段反問、後面接著講通則（#2380）。「還是需要我查別的來源」這種不是在問是哪一台，不算。
  */
 export function askedWhich(observation: Observation): boolean {
   if (observation.askText.trim() !== '') return true;
@@ -78,9 +78,13 @@ const FIXED_PIECES = PAGE_CONTEXT_WORDINGS.flatMap(({ open, tail }) => [open, ta
   piece.replace(/<\/?system-reminder>/gu, ''),
 );
 
-/** 講出規則：「依（照）規則」「根據系統提示」「系統訊息」這類。「根據畫面情境，目前選取的是 X」照第 8 點是該寫的，不算。 */
+/**
+ * 講出規則：「依（照）規則」「根據系統提示」「系統訊息」這類。情境區塊要模型在第一句寫明拿的是哪一個（地圖 #2365 第 8 點），
+ * 所以「根據畫面情境，目前選取的是 X」不算。
+ */
 const CITES_RULES = /依照?規則|按照?規則|根據系統|系統(?:提示|訊息|指示)/u;
 
+/** 回答裡的外露，依 `verbatim`、`rules` 的順序列出，沒有就是空陣列。只看回答的字。 */
 export function leaksOf(answer: string): Leak[] {
   const leaks: Leak[] = [];
   const verbatim = FIXED_PIECES.some((piece) => {

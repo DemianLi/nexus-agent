@@ -81,6 +81,9 @@ describe('工具', () => {
 
   it('冒號收尾的請求也算：請使用者講是哪一台（#2380）', () => {
     expect(askedWhich(said('想確認一下，您問的是下列哪一台：\n- P-301\n- P-302'))).toBe(true);
+  });
+
+  it('問要不要指定「特定機台」也算（#2380）', () => {
     expect(askedWhich(said('請問您是想詢問特定機台的保養時間？'))).toBe(true);
   });
 
@@ -91,7 +94,7 @@ describe('工具', () => {
 });
 
 describe('外露（#2380）', () => {
-  it('照抄區塊的原文：現在的字與以前的字都認得；只講選取的名字不算', () => {
+  it('照抄區塊的原文算；只講選取的名字不算', () => {
     for (const { tail } of PAGE_CONTEXT_WORDINGS) {
       expect(leaksOf(`好的。${tail.slice(1, 30)}`)).toContain('verbatim');
     }

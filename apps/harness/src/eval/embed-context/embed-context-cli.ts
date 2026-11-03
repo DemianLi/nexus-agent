@@ -107,7 +107,7 @@ export interface RunRecord {
   readonly requests: number;
   readonly durationMs: number;
   readonly verdict?: Verdict;
-  /** 回答讓使用者看到的情境區塊內容（#2380）；舊的紀錄沒有這一格。 */
+  /** 回答讓使用者看到的情境區塊內容（#2380）；執行失敗的紀錄沒有這一格，#2380 之前寫的 runs.jsonl 也沒有。 */
   readonly leaks?: readonly Leak[];
   readonly error?: string;
 }
@@ -281,7 +281,8 @@ function rejudge(records: readonly RunRecord[]): {
   const rejudged = records.map((record) => {
     if (record.error !== undefined) return record;
     const question = QUESTIONS.find((candidate) => candidate.id === record.question);
-    if (question === undefined) throw new Error(`紀錄 ${record.id} 的題目 ${record.question} 不在題庫裡`);
+    if (question === undefined)
+      throw new Error(`紀錄 ${record.id} 的題目 ${record.question} 不在題庫裡`);
     const verdict = judge(question, record);
     if (verdict !== record.verdict) {
       changed.push(`${record.id}：${record.verdict ?? '（沒判）'} → ${verdict}`);
