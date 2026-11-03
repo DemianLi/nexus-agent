@@ -7,8 +7,9 @@
  *
  * ## 上游與請求數
  *
- * serve 的 `live-model` 指到本機的計數轉接器（[`counting-proxy.ts`](./counting-proxy.ts)），轉接器再轉給 `--upstream`。
- * 到 `--max-requests` 或上游回了不是 200 就停，這支不再開新題。重試關成 0、模型產生的標題關掉，一題的請求數只來自這一輪本身。
+ * serve 的 `live-model` 指到本機的計數轉接器（[`smoke/counting-proxy.ts`](../../smoke/counting-proxy.ts)），轉接器再轉給 `--upstream`。
+ * 轉接器到 `--max-requests` 就不再轉出去；有任何一個請求不是 200，這支就不再開新題。重試關成 0、模型產生的標題關掉，一題的請求數只來自
+ * 這一輪本身。
  *
  * ## 金鑰
  *
@@ -33,7 +34,8 @@ import { stringify } from 'yaml';
 import { formatProportion, wilson } from '../citation/proportion.js';
 import { exchangeServeToken, fetchWithCookie, foldTurn } from '../../fixtures.js';
 import { shippedLiveModelConfig } from '../../log-derived-history.fixture.js';
-import { startCountingProxy } from './counting-proxy.js';
+import { startCountingProxy } from '../../smoke/counting-proxy.js';
+import type { CountingProxy } from '../../smoke/counting-proxy.js';
 import { CATEGORIES, QUESTIONS } from './fixture.js';
 import type { Category, Question } from './fixture.js';
 import { judge } from './rubric.js';
@@ -247,6 +249,13 @@ export function renderSummary(records: readonly RunRecord[]): string {
   return lines.join('\n');
 }
 
+/** 轉接器看到不是 200 的請求（含超過上限被擋下的 429）：回第一個的描述，沒有就是 `undefined`。 */
+function stoppedBy(proxy: CountingProxy): string | undefined {
+  const bad = proxy.requests().find((request) => request.status !== 200);
+  if (bad === undefined) return undefined;
+  return bad.blocked ? '到請求上限' : `上游回 ${String(bad.status)}`;
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv.includes('--summarize')) {
@@ -263,21 +272,21 @@ async function main(): Promise<void> {
   // session-file-exempt: 畫面情境量測每次執行的結果紀錄，不是會話日誌。
   const runsFile = join(options.out, 'runs.jsonl');
   await writeFile(runsFile, '');
-  const proxy = await startCountingProxy(options.upstream, options.maxRequests);
+  const proxy = await startCountingProxy({ upstream: options.upstream, cap: options.maxRequests });
   const serve = await startServe(options, proxy.baseUrl);
   const records: RunRecord[] = [];
   try {
     for (let rep = 1; rep <= options.reps; rep += 1) {
       for (const question of QUESTIONS) {
-        if (proxy.stopped() !== undefined) break;
-        const before = proxy.count();
+        if (stoppedBy(proxy) !== undefined) break;
+        const before = proxy.forwardedPosts();
         const started = Date.now();
         let record: RunRecord;
         try {
           const observed = await runOne(serve.embed, question, rep, options.timeoutMs);
           record = {
             ...observed,
-            requests: proxy.count() - before,
+            requests: proxy.forwardedPosts() - before,
             durationMs: Date.now() - started,
             ...(observed.error === undefined && { verdict: judge(question, observed) }),
           };
@@ -291,7 +300,7 @@ async function main(): Promise<void> {
             askText: '',
             toolCalls: [],
             status: 'run-failed',
-            requests: proxy.count() - before,
+            requests: proxy.forwardedPosts() - before,
             durationMs: Date.now() - started,
             error: error instanceof Error ? error.message : String(error),
           };
@@ -299,7 +308,7 @@ async function main(): Promise<void> {
         records.push(record);
         await appendFile(runsFile, `${JSON.stringify(record)}\n`);
         console.log(
-          `${record.id} ${record.verdict ?? `失敗：${record.error ?? ''}`}（請求 ${String(record.requests)}，累計 ${String(proxy.count())}）`,
+          `${record.id} ${record.verdict ?? `失敗：${record.error ?? ''}`}（請求 ${String(record.requests)}，累計 ${String(proxy.forwardedPosts())}）`,
         );
       }
     }
@@ -310,7 +319,7 @@ async function main(): Promise<void> {
   const summary = [
     renderSummary(records),
     '',
-    `請求共 ${String(proxy.count())} 個（上限 ${String(options.maxRequests)}）。${proxy.stopped() === undefined ? '' : `轉接器停下：${proxy.stopped() ?? ''}`}`,
+    `請求共 ${String(proxy.forwardedPosts())} 個（上限 ${String(options.maxRequests)}）。${stoppedBy(proxy) === undefined ? '' : `停下：${stoppedBy(proxy) ?? ''}`}`,
   ].join('\n');
   await writeFile(join(options.out, 'summary.md'), `${summary}\n`);
   console.log(`\n${summary}`);
