@@ -19,6 +19,7 @@
     "cli:live": "tsx --tsconfig ../../tsconfig.runtime.json src/cli.ts --live",
     "eval:citation": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/citation/citation-cli.ts",
     "eval:embed-context": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/embed-context/embed-context-cli.ts",
+    "eval:host-tools": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/host-tools/host-tools-cli.ts",
     "eval:compare": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/compare-cli.ts",
     "eval:sessions": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/sessions-cli.ts",
     "eval:survey": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/survey-cli.ts",
